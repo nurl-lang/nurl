@@ -1,0 +1,36 @@
+// fizzbuzz.nu — Classic FizzBuzz in NURL
+//
+// Demonstrates:
+//   - Functions with prefix notation
+//   - Conditionals (? cond then else)
+//   - While loops (~ cond { body })
+//   - Mutable variables (: ~ type name value)
+//   - String operations
+//
+// Build & run:
+//   ./build/nurlc examples/fizzbuzz.nu > /tmp/fizzbuzz.ll
+//   clang /tmp/fizzbuzz.ll stdlib/runtime.o -o /tmp/fizzbuzz
+//   /tmp/fizzbuzz
+
+@ fizzbuzz i n → v {
+    : ~ i i 1
+    ~ <= i n {
+        : b div3 == 0 % i 3
+        : b div5 == 0 % i 5
+
+        ? & div3 div5
+            { ( nurl_print `FizzBuzz\n` ) }
+            ? div3
+                { ( nurl_print `Fizz\n` ) }
+                ? div5
+                    { ( nurl_print `Buzz\n` ) }
+                    { ( nurl_print ( nurl_str_cat ( nurl_str_int i ) `\n` ) ) }
+
+        = i + i 1
+    }
+}
+
+@ main → i {
+    ( fizzbuzz 30 )
+    ^ 0
+}

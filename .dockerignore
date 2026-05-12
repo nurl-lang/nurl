@@ -1,0 +1,9 @@
+.git
+.gitignore
+**/__pycache__
+**/*.pyc
+build/
+api/__pycache__
+api/app/__pycache__
+tooling/vscode-nurl/*.vsix
+result-diff.txt

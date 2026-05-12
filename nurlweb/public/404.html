@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Not found · NURL</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="stylesheet" href="/styles.css" />
+<style>
+  .notfound {
+    min-height: 70vh;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    text-align: center; padding: 2rem;
+  }
+  .notfound .code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 5rem; font-weight: 700;
+    color: var(--accent); letter-spacing: -0.04em; line-height: 1;
+    margin-bottom: 0.5rem;
+  }
+  .notfound p { color: var(--fg-dim); margin: 0 0 2rem; max-width: 480px; }
+</style>
+</head>
+<body>
+<header class="site">
+  <div class="inner">
+    <a class="brand" href="/"><img src="/favicon.svg" alt="" /><span>NURL</span></a>
+    <nav>
+      <a class="btn-link" href="https://play.nurl-lang.org" target="_blank" rel="noopener">Playground →</a>
+    </nav>
+  </div>
+</header>
+
+<main class="notfound">
+  <div class="code">404</div>
+  <h1 style="margin: 0 0 0.5rem;">Page not found</h1>
+  <p>The route doesn't resolve. The compiler would have caught it.</p>
+  <div class="cta-row" style="display: flex; gap: 0.8rem; flex-wrap: wrap; justify-content: center;">
+    <a class="btn btn-primary" href="/">Back to home</a>
+    <a class="btn btn-secondary" href="https://github.com/nurl-lang/nurl" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</main>
+</body>
+</html>

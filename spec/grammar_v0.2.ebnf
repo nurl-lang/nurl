@@ -1,0 +1,615 @@
+(* ================================================================ *)
+(*  NURL — Neural Unified Representation Language                   *)
+(*  Grammar Specification v0.2 — target for next compiler version  *)
+(*                                                                  *)
+(*  This file defines what the NEXT version of nurlc (written in   *)
+(*  NURL) should implement. It extends v0.1 with new features       *)
+(*  while keeping full backwards compatibility: every valid v0.1    *)
+(*  program is a valid v0.2 program with identical semantics.       *)
+(*                                                                  *)
+(*  Notation: EBNF                                                  *)
+(*    rule = ...   definition                                       *)
+(*    A B          concatenation                                    *)
+(*    A | B        alternation                                       *)
+(*    A*           zero or more                                     *)
+(*    A+           one or more                                      *)
+(*    A?           optional                                          *)
+(*    'x'          literal token                                    *)
+(*    [A]          character class                                  *)
+(*    (* comment *)                                                 *)
+(*                                                                  *)
+(*  [NEW in v0.2]  marks every addition relative to v0.1.          *)
+(*  [planned]      marks features deferred beyond v0.2.            *)
+(* ================================================================ *)
+
+
+(* ── PROGRAM ───────────────────────────────────────────────────── *)
+
+program     = decl* EOF ;
+
+
+(* ── TOP-LEVEL DECLARATIONS ────────────────────────────────────── *)
+(*                                                                   *)
+(*  Sigil-based dispatch — the parser identifies the declaration     *)
+(*  kind from its first token with at most 2-token lookahead.        *)
+
+decl        = import_decl       (*  '$'         [NEW in v0.2]      *)
+            | ffi_decl          (*  '&'         [NEW in v0.2]      *)
+            | trait_decl        (*  '%' IDENT … [NEW in v0.2]      *)
+            | impl_decl         (*  '%' IDENT … [NEW in v0.2]      *)
+            | fn_decl           (*  '@'                             *)
+            | struct_decl       (*  ':' IDENT '{'                  *)
+            | enum_decl         (*  ':' '|'      [NEW in v0.2]     *)
+            | const_decl        (*  ':' type IDENT INT              *)
+            ;
+
+
+(*  Import:  $ `path` alias?                                        *)
+(*  Example: $ `stdlib/math` math                                   *)
+(*  Loads a module; the optional alias names it in the current      *)
+(*  namespace. Without an alias the module name is the last path    *)
+(*  component (without extension).                                  *)
+(*  Disambiguation: '$' is unique at top level — no conflict.       *)
+import_decl = '$' STR IDENT? ;                     (* [NEW in v0.2] *)
+
+
+(*  FFI:  & `libname` @ name param* → type                         *)
+(*  Example: & `libc` @ puts s msg → i                             *)
+(*  Declares an external C symbol. The body-less fn_header is       *)
+(*  compiled to an LLVM declare instead of define.                  *)
+(*  Disambiguation: '&' at top level — no conflict ('&' as          *)
+(*  bitwise AND only appears inside expressions, never at top       *)
+(*  level after a full decl boundary).                              *)
+ffi_decl    = '&' STR fn_header ;                  (* [NEW in v0.2] *)
+fn_header   = '@' IDENT type_params? param* '→' type ; (* [NEW v0.2: type_params?] *)
+
+
+(*  Type parameter list:  [ A B C ]                [NEW in v0.2]   *)
+(*  Introduces named type variables into a declaration's scope.     *)
+(*  The names are plain IDENTs; the '[' and ']' bracket them.       *)
+(*  '[' here is in declaration-header position, not type position,  *)
+(*  so it does not conflict with slice_type.                         *)
+(*  Example:  [T]     [K V]     [A B C]                            *)
+type_params = '[' IDENT+ ']' ;                     (* [NEW in v0.2] *)
+
+
+(*  Function:  @ name type_params? param* → return_type block       *)
+(*  type_params is optional; when absent, the function is not       *)
+(*  generic (identical to v0.1).                                     *)
+(*  Example:  @ id [T] T x → T { ^ x }                             *)
+(*            @ add i a i b → i { ^ + a b }   (* non-generic *)     *)
+fn_decl     = '@' IDENT type_params? param* '→' type block ; (* [NEW v0.2: type_params?] *)
+param       = type IDENT ;
+
+
+(*  Struct:  : IDENT type_params? { field* }                        *)
+(*  type_params is optional. When present, each field type may use  *)
+(*  any type variable declared in the list.                         *)
+(*  Disambiguation from const_decl: '{' (or '[') after IDENT.       *)
+(*  Disambiguation: ': IDENT [' → generic struct_decl;             *)
+(*                  ': IDENT {' → non-generic struct_decl;          *)
+(*                  ': TYPE_KW IDENT INT' → const_decl.             *)
+(*  Example:  : Vec [T] { [T data  i len }                         *)
+(*            : Point { i x  i y }       (* non-generic *)          *)
+struct_decl = ':' IDENT type_params? '{' field* '}' ; (* [NEW v0.2: type_params?] *)
+field       = type IDENT? ;
+
+
+(*  Enum:  : | IDENT { variant* }                                   *)
+(*  Example: : | Color { Red  Green  Blue }                         *)
+(*           : | Shape { Circle f       Square f f }                *)
+(*  Each variant has an optional payload type (one type only).      *)
+(*  '|' after ':' is unambiguous: '|' cannot start a type keyword   *)
+(*  (i u f b s v * ? ! @), so this is distinct from const_decl     *)
+(*  (which requires a TYPE_KW right after ':') and struct_decl      *)
+(*  (which requires an IDENT right after ':' then '{').             *)
+(*  Each variant payload type may reference the type variables.      *)
+(*  Example:  : | Option [T] { None  Some T }                      *)
+(*            : | Result [T E] { Ok T  Err E }                      *)
+(*            : | Color { Red  Green  Blue }  (* non-generic *)     *)
+enum_decl   = ':' '|' IDENT type_params? '{' enum_variant* '}' ; (* [NEW v0.2: type_params?] *)
+enum_variant = IDENT type? ;
+
+
+(*  Trait:  % IDENT type_params? { fn_header* }                     *)
+(*  Example: % Printable { @ to_str self → s }                     *)
+(*           % Comparable [T] { @ cmp T a T b → i }  (* generic *) *)
+(*  Disambiguation: after '%' IDENT type_params?:                   *)
+(*    next = '{'   → trait_decl                                     *)
+(*    next = type  → impl_decl                                      *)
+(*  One token of lookahead suffices: '{' vs any type-start token.   *)
+trait_decl  = '%' IDENT type_params? '{' fn_header* '}' ; (* [NEW v0.2: type_params?] *)
+
+
+(*  Impl:  % TraitName type_params? type { fn_decl* }               *)
+(*  Example: % Printable Point { @ to_str self → s { … } }         *)
+(*           % Comparable [T] ( Vec T ) { @ cmp T a T b → i { … } }*)
+(*  The implementing type may be a generic_inst when type_params are *)
+(*  present. fn_decls inside may reference the declared type vars.  *)
+impl_decl   = '%' IDENT type_params? type '{' fn_decl* '}' ; (* [NEW v0.2: type_params?] *)
+
+
+(*  Constant:  : type IDENT INT                                     *)
+(*  Unchanged from v0.1.                                            *)
+const_decl  = ':' type IDENT INT ;
+
+
+(* ── BLOCK & STATEMENTS ────────────────────────────────────────── *)
+
+block       = '{' stmt* '}' ;
+
+stmt        = let_stmt          (*  ':'  declare new local          *)
+            | set_stmt          (*  '='  mutate existing binding    *)
+            | defer_stmt        (*  ';'  deferred block [NEW v0.2]  *)
+            | loop_stmt         (*  '~'  while loop                 *)
+            | expr              (*  expression for side-effect      *)
+            ;
+
+
+(*  Let:  : type? IDENT expr                                        *)
+(*  Type annotation is now OPTIONAL when the type can be inferred   *)
+(*  from the expression. Inference works for:                       *)
+(*    - Literals: INT→i, FLOAT→f, STR→s, BOOL→b                   *)
+(*    - Function calls: return type from fn signature               *)
+(*    - Binary ops: same type as operands                           *)
+(*  When the first token after ':' is IDENT (not a TYPE_KW, '*',   *)
+(*  '?', '[', '!', '@'), the compiler reads it as the variable name *)
+(*  and infers the type from the following expression.              *)
+(*  [NEW in v0.2]: optional type annotation (inference).            *)
+(*  Example (explicit): : i n 0                                    *)
+(*  Example (inferred): : n ( add 1 2 )   — n inferred as i        *)
+let_stmt    = ':' type? IDENT expr ;               (* [NEW v0.2: type?] *)
+
+
+(*  Set:  = IDENT expr                                              *)
+(*  Unchanged from v0.1.                                            *)
+set_stmt    = '=' IDENT expr ;
+
+
+(*  Defer:  ; block                                                 *)
+(*  Executes block when the enclosing function returns.             *)
+(*  Multiple defers run in LIFO order.                              *)
+(*  ';' at statement position is unambiguous — it is not a token    *)
+(*  that can start any other statement or expression.               *)
+(*  Example:  ; { ( nurl_sym_pop syms ) }                          *)
+defer_stmt  = ';' block ;                          (* [NEW in v0.2] *)
+
+
+(*  Loop:  ~ cond_expr block                                        *)
+(*  Unchanged from v0.1. Only valid in statement position.         *)
+loop_stmt   = '~' expr block ;
+
+
+(* ── EXPRESSIONS ───────────────────────────────────────────────── *)
+(*                                                                   *)
+(*  All expressions use PREFIX NOTATION.                            *)
+(*  Every operator has a fixed, known arity — no grouping needed.   *)
+(*                                                                   *)
+(*  '~' in expression position is the complement operator (unary),  *)
+(*  NOT a loop. The distinction is purely positional.               *)
+(*                                                                   *)
+(*  New in v0.2: try_op '\', sizeof_op 'Z'.                        *)
+(*                                                                   *)
+(*  Arity summary:                                                   *)
+(*    binary  (2 args):  + - * / %  <  >  ==  !=  <=  >=  &  |    *)
+(*    unary   (1 arg):   !  ^  ~  \  Z                             *)
+(*    ternary (3 args):  ?                                           *)
+(*    special:           .  #  (…)  {…}                             *)
+
+expr        = literal
+            | IDENT
+            | bin_expr
+            | not_expr
+            | ret_expr
+            | complement_expr
+            | try_expr                             (* [NEW in v0.2] *)
+            | sizeof_expr                          (* [NEW in v0.2] *)
+            | agg_expr                             (* [NEW in v0.2] *)
+            | cond_expr
+            | block_expr
+            | call_expr
+            | member_expr
+            | cast_expr
+            ;
+
+
+(*  Binary operations — arity 2, prefix (unchanged from v0.1)     *)
+bin_expr    = BIN_OP expr expr ;
+
+BIN_OP      = '+'               (*  integer / float add            *)
+            | '-'               (*  integer / float subtract        *)
+            | '*'               (*  integer / float multiply        *)
+            | '/'               (*  integer sdiv / float fdiv       *)
+            | '%'               (*  integer srem / float frem       *)
+            | '<'               (*  less than              → b      *)
+            | '>'               (*  greater than           → b      *)
+            | '=='              (*  equal                  → b      *)
+            | '!='              (*  not equal              → b      *)
+            | '<='              (*  less or equal          → b      *)
+            | '>='              (*  greater or equal       → b      *)
+            | '&'               (*  bitwise/logical AND             *)
+            | '|'               (*  bitwise/logical OR              *)
+            ;
+
+(*  Logical NOT — arity 1 (unchanged from v0.1)                   *)
+not_expr    = '!' expr ;
+
+(*  Explicit return — arity 1 (unchanged from v0.1)               *)
+ret_expr    = '^' expr ;
+
+(*  Complement / negate — arity 1 (expression position only)      *)
+(*  Unchanged from v0.1.                                           *)
+complement_expr = '~' expr ;
+
+
+(*  Try / propagate — arity 1                   [NEW in v0.2]      *)
+(*  \ expr                                                          *)
+(*  If expr is Ok(v) / Some(v): unwraps to v.                      *)
+(*  If expr is Err(e) / None:   immediately returns the error/none  *)
+(*  from the enclosing function (early exit, like Rust '?').        *)
+(*  The enclosing function's return type must be compatible (! or ? *)
+(*  wrapped). No block variant in v0.2 (catch-form is [planned]).  *)
+(*  Disambiguation: '\' is a new sigil — no conflict with any      *)
+(*  existing token.                                                  *)
+try_expr    = '\\' expr ;                          (* [NEW in v0.2] *)
+
+
+(*  Sizeof — arity 0 (type operand)             [NEW in v0.2]      *)
+(*  Z type  →  i64 byte-size of the type                           *)
+(*  Example: Z i   → 8                                             *)
+(*           Z f   → 8                                             *)
+(*           Z Point → sizeof(Point struct)                        *)
+(*  'Z' is currently an unused IDENT token in v0.1; claimed here   *)
+(*  as a reserved keyword (lexer emits TT_SIZEOF for bare 'Z').    *)
+(*  No ambiguity: 'Z' was not valid as a type keyword or operator. *)
+sizeof_expr = 'Z' type ;                           (* [NEW in v0.2] *)
+
+
+(*  Conditional — arity 3 (unchanged from v0.1)                   *)
+cond_expr   = '?' expr expr expr ;
+
+(*  Block expression (unchanged from v0.1)                         *)
+block_expr  = '{' stmt* '}' ;
+
+(*  Function call — variable arity, parenthesised                  *)
+(*  First element after '(' is the callee name (IDENT).            *)
+(*  Unchanged from v0.1.                                            *)
+call_expr   = '(' IDENT expr* ')' ;
+
+(*  Aggregate construction — arity 0 + type + value list  [NEW v0.2] *)
+(*  @ T { v0 v1 … }  builds an aggregate of type T field by field.  *)
+(*  T must be a compound type (opt_type, slice_type, res_type).      *)
+(*  Each vi is an expression; fields are filled in order 0, 1, …    *)
+(*  Compiled to a chain of LLVM insertvalue instructions.            *)
+(*  Disambiguation: '@' in expression position → agg_expr; '@' at   *)
+(*  top level → fn_decl; '@' in type position is not valid (fn_type  *)
+(*  uses the parenthesized '(' '@' … ')' form).                     *)
+agg_expr    = '@' type '{' expr* '}' ;             (* [NEW in v0.2] *)
+
+
+(*  Member / field access — arity 1 + field selector                *)
+(*  Field may be named (IDENT) or numeric (INT index).  [NEW v0.2:  *)
+(*  INT selector for compound types; IDENT was the only form v0.1]  *)
+(*  INT selector compiles to LLVM extractvalue with correct field    *)
+(*  type determined from the aggregate's LLVM struct string.         *)
+(*  Example:  . opt 0  → extractvalue { i1, i64 } opt, 0  → i1     *)
+(*            . opt 1  → extractvalue { i1, i64 } opt, 1  → i64    *)
+member_expr = '.' expr ( IDENT | INT ) ;           (* [NEW v0.2: INT] *)
+
+(*  Type cast — arity 1 + target type (unchanged)                  *)
+cast_expr   = '#' type expr ;
+
+
+(* ── TYPES ─────────────────────────────────────────────────────── *)
+(*                                                                   *)
+(*  All v0.1 base types are unchanged.                              *)
+(*  New compound types: opt_type, slice_type, res_type, fn_type.   *)
+(*  Each is introduced by a sigil that cannot start a base_type or  *)
+(*  IDENT, so there is no ambiguity at any parse position.          *)
+
+type        = base_type         (*  i u f b s v                    *)
+            | ptr_type          (*  * T                             *)
+            | opt_type          (*  ? T         [NEW in v0.2]      *)
+            | slice_type        (*  [ T         [NEW in v0.2]      *)
+            | res_type          (*  ! T T       [NEW in v0.2]      *)
+            | fn_type           (*  ( @ R P* )  [NEW in v0.2]      *)
+            | generic_inst      (*  ( Name T+ ) [NEW in v0.2]      *)
+            | IDENT             (*  named / struct / enum / typevar *)
+            ;
+
+(*  Generic type instantiation — '(' IDENT type+ ')'  [NEW in v0.2] *)
+(*  Applies a generic type constructor to one or more type args.    *)
+(*  '(' in TYPE POSITION always means generic_inst.                 *)
+(*  '(' in EXPR POSITION always means call_expr.                    *)
+(*  These positions are always known to the parser — no conflict.   *)
+(*  Examples:                                                        *)
+(*    ( Vec i )            — Vec<i64>                               *)
+(*    ( Map s Point )      — Map<string, Point>                     *)
+(*    ( Result Point Err ) — Result<Point, Err>                     *)
+(*    ( Vec ( Vec i ) )    — Vec<Vec<i64>>   (nested)               *)
+(*    ( Option ? Point )   — Option<Option<Point>>                  *)
+generic_inst = '(' IDENT type+ ')' ;               (* [NEW in v0.2] *)
+
+(*  [planned] sized_type (i8, u32, f64 …) requires a lexer change  *)
+(*  because the current lexer emits TYPE_KW(i) + INT(8) for "i8".  *)
+
+base_type   = 'i'               (*  signed 64-bit integer  → i64   *)
+            | 'u'               (*  unsigned 64-bit integer → i64  *)
+            | 'f'               (*  64-bit IEEE 754 float → double  *)
+            | 'b'               (*  boolean                → i1    *)
+            | 's'               (*  UTF-8 string           → i8*   *)
+            | 'v'               (*  void                   → void  *)
+            ;
+
+ptr_type    = '*' type ;        (*  pointer to T           → T*    *)
+
+
+(*  Optional type — '?' type              [NEW in v0.2]            *)
+(*  ? T  is an optional value: Some(v) or None.                    *)
+(*  Compiled to a two-field struct: { i1 is_some, T value }.       *)
+(*  Disambiguation: '?' in type position is opt_type; '?' in        *)
+(*  expression position is cond_expr. The parser selects by         *)
+(*  syntactic position — same rule as '~' (loop vs complement).     *)
+opt_type    = '?' type ;                           (* [NEW in v0.2] *)
+
+
+(*  Slice type — '[' type               [NEW in v0.2]              *)
+(*  [ T  is a fat pointer: { T* ptr, i64 len }.                    *)
+(*  Example: [ i  is a slice of integers.                           *)
+(*  Disambiguation: '[' is currently unused — new token TT_LBRACK. *)
+(*  '['  starts slice_type in type position; in expression position *)
+(*  '[' has no role yet (array literals are [planned]).             *)
+slice_type  = '[' type ;                           (* [NEW in v0.2] *)
+
+
+(*  Result type — '!' ValueType ErrorType  [NEW in v0.2]           *)
+(*  ! T E  is either Ok(T) or Err(E).                              *)
+(*  Compiled to a tagged union: { i1 is_ok, max(sizeof T, sizeof E) *)
+(*  bytes of payload }.                                             *)
+(*  Disambiguation: '!' in type position is res_type; in expression *)
+(*  position '!' is the logical NOT operator (not_expr). Context    *)
+(*  (type vs expr position) is always known to the parser.          *)
+res_type    = '!' type type ;                      (* [NEW in v0.2] *)
+
+
+(*  Function type — '(' '@' ReturnType ParamType* ')'  [NEW in v0.2] *)
+(*  ( @ R P1 P2 … )  is the type of a function returning R.        *)
+(*  Example: (@ i i)   is the type of (i64) → i64.                 *)
+(*           (@ i i i) is the type of (i64, i64) → i64.            *)
+(*           (@ v)     is the type of () → void (nullary fn ptr).  *)
+(*  Parentheses are required to unambiguously terminate the param   *)
+(*  list: without them, an IDENT after the return type would be     *)
+(*  consumed as a param type, silently dropping named struct types. *)
+(*  '(' in type position dispatches to fn_type when '@' follows,    *)
+(*  and to generic_inst when IDENT follows (Group E, planned).      *)
+fn_type     = '(' '@' type type* ')' ;             (* [NEW in v0.2] *)
+
+
+(* ── LITERALS ──────────────────────────────────────────────────── *)
+
+literal     = INT
+            | FLOAT                                (* [NEW in v0.2] *)
+            | STR
+            | BOOL
+            ;
+
+
+(*  Integer: decimal digits, optional leading '-'.                  *)
+(*  Underscores allowed as separators.                              *)
+(*  Unchanged from v0.1.                                            *)
+INT         = '-'? DIGIT+ ( '_' DIGIT+ )* ;
+
+(*  Float: decimal digits, mandatory '.', optional exponent.        *)
+(*  New TT_FLOAT token; lexer prefers FLOAT over INT when '.'      *)
+(*  follows digits.                                                  *)
+(*  Example:  3.14   -2.5   1.0e10   6.022e23                       *)
+(*  Note: an INT immediately followed by '.' followed by a DIGIT    *)
+(*  is always lexed as FLOAT. The separator '_' is not allowed in   *)
+(*  v0.2 floats (may be added later).                               *)
+FLOAT       = '-'? DIGIT+ '.' DIGIT+ ( [eE] '-'? DIGIT+ )? ; (* [NEW] *)
+
+(*  String: backtick-delimited, raw content.                        *)
+(*  No escape sequences — all bytes pass through.                   *)
+(*  Unchanged from v0.1.                                            *)
+STR         = '`' [^`]* '`' ;
+
+(*  Boolean — single-character tokens (unchanged from v0.1).        *)
+BOOL        = 'T'               (*  true                           *)
+            | 'F'               (*  false                          *)
+            ;
+
+
+(* ── LEXICAL TOKENS ────────────────────────────────────────────── *)
+
+IDENT       = [a-zA-Z_] ( [a-zA-Z0-9_] )* ;
+(*  Reserved / classified single-token IDENT sequences:             *)
+(*    i u f b s v  → TT_TYPE_KW                                    *)
+(*    T F          → TT_BOOL                                        *)
+(*    Z            → TT_SIZEOF   [NEW in v0.2]                      *)
+(*  All other IDENTs → TT_IDENT                                     *)
+(*  Note: type variable names (e.g. T K V Elem) are plain TT_IDENT  *)
+(*  tokens — the compiler tracks them via scope, not via the lexer. *)
+
+(*  New punctuation tokens in v0.2:                                 *)
+(*    '['  → TT_LBRACK   (slice_type and type_params open)         *)
+(*    ']'  → TT_RBRACK   (type_params close)          [NEW in v0.2] *)
+(*  '[' was introduced as TT_LBRACK for slice_type; ']' is new and  *)
+(*  only appears as the closing bracket of a type_params list.      *)
+
+DIGIT       = [0-9] ;
+WHITESPACE  = ( ' ' | '\t' | '\n' | '\r' )+ ;   (* skip           *)
+COMMENT     = '//' [^\n]* ;                        (* skip           *)
+EOF         = (* end of input *) ;
+
+
+(* ── DISAMBIGUATION RULES ──────────────────────────────────────── *)
+(*                                                                   *)
+(*  Rules 1–5 from v0.1 are unchanged. New rules 6–12 added.        *)
+(*                                                                   *)
+(*  1. IDENT vs TYPE_KW vs BOOL vs SIZEOF                           *)
+(*     Lexer classifies single-token identifiers:                    *)
+(*       i u f b s v  →  TT_TYPE_KW                                *)
+(*       T F          →  TT_BOOL                                    *)
+(*       Z            →  TT_SIZEOF   [NEW in v0.2]                  *)
+(*       everything else → TT_IDENT                                  *)
+(*                                                                   *)
+(*  2. ':' at top level — const vs struct vs enum                   *)
+(*     After ':':                                                    *)
+(*       next = '|'                     →  enum_decl               *)
+(*       next = IDENT, then '[' or '{'  →  struct_decl             *)
+(*       next = TYPE_KW, next = IDENT   →  const_decl              *)
+(*     struct_decl disambiguation: after ': IDENT':                 *)
+(*       '[' → generic (read type_params then expect '{')           *)
+(*       '{' → non-generic                                          *)
+(*     Maximum 3-token lookahead from ':'.                          *)
+(*                                                                   *)
+(*  3. '~' — loop vs complement                                     *)
+(*     Statement position → loop_stmt  (~ expr block)               *)
+(*     Expression position → complement_expr  (~ expr)              *)
+(*     Position is always known from context.                        *)
+(*                                                                   *)
+(*  4. '?' — cond_expr vs opt_type                                  *)
+(*     Expression position → cond_expr  (? cond then else)          *)
+(*     Type position       → opt_type   (? type)   [NEW in v0.2]   *)
+(*     Position is always known from context.                        *)
+(*                                                                   *)
+(*  5. Punctuation                                                   *)
+(*     '(' always starts call_expr.                                  *)
+(*     '{' always starts a block.                                    *)
+(*     '→' is a single dedicated token.                              *)
+(*     '==' '!=' '<=' '>=' are single tokens.                       *)
+(*     '=' alone is set_stmt; never confused with '=='.             *)
+(*                                                                   *)
+(*  6. '$' — import_decl                         [NEW in v0.2]      *)
+(*     '$' at top level → import_decl. No other construct begins    *)
+(*     with '$'.                                                     *)
+(*                                                                   *)
+(*  7. '&' — ffi_decl vs binary AND              [NEW in v0.2]      *)
+(*     '&' at top-level decl boundary → ffi_decl.                   *)
+(*     '&' in expression position → BIN_OP (bitwise AND).           *)
+(*     Position is always known from context.                        *)
+(*                                                                   *)
+(*  8. '%' — trait_decl vs impl_decl             [NEW in v0.2]      *)
+(*     After '%' IDENT (and optional type_params):                  *)
+(*       next = '{'   → trait_decl                                  *)
+(*       next = type  → impl_decl                                   *)
+(*     When type_params ('[') is present, read until ']', then      *)
+(*     apply the same '{' vs type check.                             *)
+(*     One token of lookahead after IDENT (or ']') suffices.        *)
+(*                                                                   *)
+(*  9. '!' — not_expr vs res_type                [NEW in v0.2]      *)
+(*     Expression position → not_expr (! expr, arity 1).            *)
+(*     Type position       → res_type (! T E, two types).           *)
+(*     Position is always known from context.                        *)
+(*                                                                   *)
+(*  10. '[' — slice_type vs type_params open       [NEW in v0.2]   *)
+(*      Type position → slice_type ([ type).                        *)
+(*      Declaration-header position (after IDENT in fn/struct/      *)
+(*        enum/trait/impl) → type_params open ([ IDENT+ ]).         *)
+(*      Expression position → currently unused / [planned].         *)
+(*      These three positions are always structurally distinct.      *)
+(*                                                                   *)
+(*  11. '@' — fn_decl vs agg_expr               [NEW in v0.2]      *)
+(*      Top-level decl position → fn_decl.                          *)
+(*      Expression position     → agg_expr (@ type { expr* }).      *)
+(*      Type position: '@' does NOT appear directly in type position; *)
+(*      fn_type uses the '(' '@' … ')' parenthesized form (see #14). *)
+(*      Position is always known from context.                       *)
+(*                                                                   *)
+(*  12. '\' — try_expr                           [NEW in v0.2]      *)
+(*      '\' in expression position → try_expr (\ expr).             *)
+(*      '\' is a new token; it has no other meaning.                 *)
+(*                                                                   *)
+(*  13. ':' in let_stmt — type? inference        [NEW in v0.2]      *)
+(*      After ':' at statement position:                             *)
+(*        next = TYPE_KW | '*' | '?' | '[' | '!' | '@' | '(' → type*)
+(*        next = IDENT followed by expr-starting token → infer type *)
+(*      '(' now also starts a type (generic_inst), so it is added   *)
+(*      to the type-start set. Because all type-start tokens are     *)
+(*      lexer-classified, the parser decides with 1-token lookahead. *)
+(*                                                                   *)
+(*  14. '(' — call_expr vs fn_type vs generic_inst  [NEW in v0.2]  *)
+(*      Expression position → call_expr (( IDENT expr* )).          *)
+(*      Type position, next = '@' → fn_type (( '@' R P* )).         *)
+(*      Type position, next = IDENT → generic_inst (( IDENT T+ ))   *)
+(*        (Group E, planned).                                         *)
+(*      In type position, 1-token lookahead after '(' is sufficient  *)
+(*      to distinguish fn_type ('@') from generic_inst (IDENT).      *)
+(*      Expression vs type position is always known from context.   *)
+(*                                                                   *)
+(*  15. Type variable name resolution             [NEW in v0.2]      *)
+(*      Inside a fn/struct/enum/trait/impl body or signature that    *)
+(*      declares type_params [A B …], any IDENT in type position    *)
+(*      that matches one of the declared names is treated as a type  *)
+(*      variable. Resolution is purely by name lookup in scope;     *)
+(*      no special lexer token is required.                          *)
+(*      Outside a generic declaration, all IDENTs in type position   *)
+(*      are concrete named types (struct, enum, or FFI type).        *)
+
+
+(* ── FEATURES EXCLUDED FROM v0.2 ──────────────────────────────── *)
+(*                                                                   *)
+(*  The following features from spec/grammar.ebnf are intentionally  *)
+(*  deferred beyond v0.2 due to unresolvable conflicts or           *)
+(*  fundamental design gaps. They are NOT planned for v0.2.         *)
+(*                                                                   *)
+(*  match_expr '|' expr { … }                                       *)
+(*    '|' is already the bitwise OR binary operator. A '|' in        *)
+(*    expression position would require lookahead past arbitrary     *)
+(*    subexpressions to distinguish  | expr { … }  from  | expr expr *)
+(*    (bitwise OR). Not resolvable without a new sigil. Deferred.   *)
+(*                                                                   *)
+(*  struct_init  IDENT { expr* }                                     *)
+(*    'IDENT {' already appears in   ? cond IDENT { stmt* } { … }   *)
+(*    where IDENT is the then-expression. The parser would need to   *)
+(*    look ahead past the IDENT to determine if the next '{' begins  *)
+(*    a block (stmt*) or an initializer list (expr*). Ambiguous.     *)
+(*    Deferred — possible resolution: use a distinct sigil.         *)
+(*                                                                   *)
+(*  lambda_expr  \@ param* → type block                             *)
+(*    '\' is claimed for try_expr in v0.2. '\@' would require       *)
+(*    two-token lookahead after '\'. The closure type system is also  *)
+(*    not yet designed (captured variables, lifetimes). Deferred.   *)
+(*                                                                   *)
+(*  sized_type  i8, u32, f64 …                                      *)
+(*    The current lexer emits TYPE_KW(i) + INT(8) for "i8".         *)
+(*    Recognising sized types requires either a lexer change (new    *)
+(*    tokens TT_I8 … TT_F64) or 2-token lookahead in the type       *)
+(*    parser. A lexer change breaks no existing programs but needs   *)
+(*    careful implementation. Deferred to v0.3.                     *)
+(*                                                                   *)
+(*  loop_expr (loop as expression, returning a value)                *)
+(*    Currently '~' in statement position is always a loop_stmt and  *)
+(*    always returns void. Returning a value from a loop (like Rust  *)
+(*    'loop { break val }') requires a break statement / break-with- *)
+(*    value syntax not yet designed. Deferred.                       *)
+
+
+(* ── GRAMMAR PROPERTIES ────────────────────────────────────────── *)
+(*                                                                   *)
+(*  - LL(1) with the following bounded lookaheads:                   *)
+(*      ':' at top level: 3-token lookahead (as in v0.1)            *)
+(*      '%' at top level: 2-token lookahead after IDENT (or ']')    *)
+(*      ':' in let_stmt:  1-token lookahead (TYPE_KW/'('/'*'/… vs IDENT) *)
+(*      type_params:      ends at ']' — no lookahead needed          *)
+(*  - No left recursion.                                             *)
+(*  - Every expression has a deterministic parse from its first      *)
+(*    token.                                                          *)
+(*  - Every type has a deterministic parse from its first token.     *)
+(*  - Operators have fixed arity; no grouping parentheses needed.   *)
+(*  - Maximum context required to resolve any ambiguity: 3 tokens.  *)
+(*                                                                   *)
+(*  LLVM IR mapping (v0.2 additions):                               *)
+(*    ? T  → { i1, T }           (optional struct)                  *)
+(*    [ T  → { T*, i64 }         (slice struct)                     *)
+(*    ! T E → { i1, [max(T,E) x i8] }  (result union)              *)
+(*    (@ R Ps) → function pointer  R (*)(Ps…)                       *)
+(*    @ T { v… } → chain of insertvalue instructions                *)
+(*    . agg N → extractvalue T agg, N  (N = integer field index)    *)
+(*    ( Vec T ) → monomorphised concrete struct at compile time      *)
+(*    FLOAT  → double literal                                        *)
+(*    Z type → i64 constant (sizeof via getelementptr trick)        *)
+(*    defer  → emitted code at each function exit point             *)
+(*    ffi    → declare external @name                                *)
+(*    import → compiled module linked at link time                   *)
+

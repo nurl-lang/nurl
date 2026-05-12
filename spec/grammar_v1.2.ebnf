@@ -1,0 +1,598 @@
+(* NURL — Neural Unified Representation Language
+   Grammar v1.2 — complete language specification
+   File extension: .nu
+
+   All expressions use PREFIX NOTATION.
+   Every operator has fixed, known arity — no grouping parentheses needed.
+   The parser is LL(1) with at most 4-token lookahead (generic-header
+   disambiguation in scan_fn_sigs).
+   Tokens are separated by whitespace; there are no comma separators
+   anywhere in the language (params, fields, args, enum variants all use
+   whitespace).
+
+   Changes since v1.1:
+     * Negative numeric literals: a '-' immediately followed by a digit
+       (no intervening whitespace) is lexed as a single INT or FLOAT
+       token. Binary MINUS keeps its whitespace-separated prefix form.
+       See INT / FLOAT / bin_expr comments.
+
+   Changes since v1.0:
+     * import_decl: the optional alias IDENT is NO LONGER discarded — it
+       triggers name-mangling of all top-level @-functions in the imported
+       file to `alias__name` (see import_decl comment).
+     * New lexical rule: `ident::ident[::ident…]` is merged by the lexer
+       into a SINGLE IDENT with `__` as separator (see IDENT comment).
+       This is the syntactic form used to reach aliased names.
+     * Memory model — Phase 2D:
+         - user-defined `Drop` trait is recognised by convention:
+           `% Drop T { @ drop T self → v { … } }` — its `drop` method is
+           invoked by the compiler at scope exit on any owned binding of
+           type T (see § Memory Model).
+         - arm-local fall-through drop: values created only inside a
+           cond/match/loop/foreach arm whose result type is `v` are
+           released at arm exit.
+         - nested owned struct fields are dropped recursively via the
+           `.`-path + multi-index extractvalue chain.
+         - foreach elements are BORROWED from the iterated slice; no
+           transfer of ownership and no per-element drop. *)
+
+
+(* ── PROGRAM ──────────────────────────────────────────────────── *)
+
+program = decl* EOF ;
+
+
+(* ── TOP-LEVEL DECLARATIONS ───────────────────────────────────── *)
+
+decl = import_decl    (*  $              *)
+     | ffi_decl       (*  &              *)
+     | trait_decl     (*  %  IDENT  {    *)
+     | impl_decl      (*  %  IDENT  type *)
+     | fn_decl        (*  @              *)
+     | struct_decl    (*  :  IDENT   {   *)
+     | enum_decl      (*  :  |           *)
+     | const_decl     (*  :  type        *)
+     ;
+
+
+(* $ `path` IDENT?
+   Inline-compiles the .nu file at `path` into the current module. The
+   path is resolved relative to the compiler's current working directory,
+   NOT relative to the importing file. The same `path` is imported at most
+   once per compilation (duplicate-include guard).
+
+   Without alias:
+     All top-level names from the imported file land in the global
+     namespace unchanged.
+     Example:  $ `stdlib/core/string`
+
+   With alias:
+     Every top-level @-function defined in the imported file is renamed
+     to `alias__name` by a pre-tokenisation source rewrite; internal
+     cross-calls inside the imported file are rewritten to match. The
+     renamed functions are reached from the importer via `alias::name`,
+     which the lexer fuses into the same single IDENT `alias__name`.
+     FFI declarations (`& STR @ name …`), trait / impl methods and
+     struct / enum / const names are NOT renamed in this iteration —
+     they remain in the global namespace.
+     Example:  $ `stdlib/core/mem` m
+               ( m::alloc 16 )       — call alloc from the `m` module
+     Nested aliased imports compose: an alias applied here is in effect
+     only for names defined directly in `path`; any further `$` declared
+     inside `path` is handled by its own alias (or lack thereof). *)
+import_decl = '$' STR IDENT? ;
+
+
+(* & `libname` @ name ffi_param* → type
+   Declares an external C symbol (LLVM declare).
+   FFI parameters may omit the identifier (the name is cosmetic at
+   call sites — only the type matters for the IR declare).
+   Example:  & `libc` @ puts s msg → i
+   Example:  & `libm` @ sqrt f    → f                     — no param name *)
+ffi_decl   = '&' STR '@' IDENT ffi_param* '→' type ;
+ffi_param  = type IDENT? ;
+
+
+(* [T], [K V] — type variable list for generic declarations.
+   Declaration-site list of single-letter (or multi-letter) type names.
+   The type variable 'T' lexes as the boolean literal token and is
+   disambiguated by context (in a [...] list and in parameter position). *)
+type_params = '[' IDENT+ ']' ;
+
+
+(* @ name [T]? param* → ret { body }
+   Function parameters always bind an identifier.
+   Example:  @ add i a i b → i { ^ + a b }
+   Example:  @ id [T] T x → T { ^ x }          — generic *)
+fn_decl = '@' IDENT type_params? param* '→' type block ;
+param   = type IDENT ;
+
+
+(* : Name { field* }
+   Fields are written as  type IDENT?  (the name is optional when only
+   the type matters — rare, but supported).
+   Disambiguation from const_decl: IDENT after ':' (or ':' '~') then '{'.
+   Example:  : Point { i x  i y }
+   Example:  : String { s sb } *)
+struct_decl = ':' IDENT '{' field* '}' ;
+field       = type IDENT? ;
+
+
+(* : | Name { Variant payload* ... }
+   Each variant compiles to an i64 tag global named by the variant.
+   Enum values are represented as  { i64, ptr, ptr, ... }  sized for the
+   variant with the most payloads. Multiple payload types per variant
+   are supported; a payload is "anything that looks like a type" (type
+   keyword, sigil-prefixed type, or known struct name) encountered
+   before the next variant name.
+   Example:  : | Color { Red  Green  Blue }
+   Example:  : | Event { Click i i  KeyPress i s  Close }
+   Example:  : | Json { JNull  JBool b  JNum i } *)
+enum_decl    = ':' '|' IDENT '{' enum_variant* '}' ;
+enum_variant = IDENT type* ;
+
+
+(* : ~? type IDENT literal
+   Global variable with a compile-time literal initializer.
+   Optional ~ prefix makes it mutable (default immutable).
+   Supported types: i, u (i64), f (double), s (i8*), b (i1).
+   Mutable globals can be updated:  = Name expr.
+   Example:  : i MAX_CONN 100       — immutable global constant
+   Example:  : ~ i counter 0        — mutable global variable
+   Example:  : s GREETING `hello`   — immutable string
+   Example:  : ~ b debug_mode F     — mutable boolean flag *)
+const_decl = ':' '~'? type IDENT literal ;
+
+
+(* % Name [T]? { ( fn_header | fn_decl )* }
+   Interface definition. Produces no IR directly; registers method signatures.
+   Methods may be required (fn_header — just signature) or may provide a
+   DEFAULT implementation (fn_decl — header + body). An impl_decl that omits
+   a method with a default gets a monomorphised copy of the default body,
+   with the trait's type parameter substituted by the impl's type.
+   Required methods are a compile error if an impl doesn't provide them.
+   Example:  % Shape [T] {
+                 @ area T obj → i                  — required
+                 @ print_info T obj → i {          — default
+                   ( nurl_print ( nurl_str_int ( area obj ) ) )
+                   ^ ( area obj )
+                 }
+             } *)
+trait_decl = '%' IDENT type_params? '{' ( fn_header | fn_decl )* '}' ;
+fn_header  = '@' IDENT type_params? param* '→' type ;
+
+
+(* % TraitName [T]? impl_type { fn_decl* }
+   Monomorphised dispatch: each method is emitted as  method__TypeMangle.
+   Dispatch at call sites is based on the first argument's LLVM type.
+   Example:  % Stringify i { @ stringify i n → s { ^ ( nurl_str_int n ) } }
+             ( stringify 42 )  →  call @stringify__i64  *)
+impl_decl = '%' IDENT type_params? type '{' fn_decl* '}' ;
+
+
+(* ── BLOCK & STATEMENTS ───────────────────────────────────────── *)
+
+block = '{' stmt* '}' ;
+
+stmt = let_stmt      (*  :              *)
+     | set_stmt      (*  =              *)
+     | defer_stmt    (*  ;              *)
+     | tilde_stmt    (*  ~              *)
+     | expr          (*  side-effect    *)
+     ;
+
+
+(* : ~? type? IDENT expr
+   Optional ~ prefix makes the variable mutable (default immutable).
+   Type annotation is optional when inferable from the expression.
+   An IDENT that is already registered as a named type is taken as the
+   type annotation; otherwise the plain-IDENT form is type-inferred.
+   Example:  : i n 0            — immutable, explicit type
+   Example:  : ~ i x 0          — mutable, explicit type
+   Example:  : String s ( string_new )    — explicit named type
+   Example:  : n ( add 1 2 )    — immutable, inferred *)
+let_stmt = ':' '~'? type? IDENT expr ;
+
+
+(* = IDENT expr
+   = '.' expr index expr
+     where index ∈ ( IDENT | INT | expr )
+   Assigns to an existing binding (local or global), or to a struct field /
+   array / slice / pointer element via GEP + store.
+   Immutable locals, parameters and globals are rejected at compile time.
+   The index form is chosen by the object type:
+     - struct pointer '%T*' + IDENT field name
+     - raw pointer  'T*'   + INT literal → array slot
+     - raw pointer  'T*'   + expr       → array slot (variable idx)
+     - slice '{ T*, i64 }' + INT | expr → slice element via data-ptr
+   Example:  = n + n 1
+   Example:  = . p x 42          — p.x = 42       (struct field)
+   Example:  = . buf 0 val       — buf[0] = val   (pointer, literal idx)
+   Example:  = . xs i  val       — xs[i] = val    (slice element) *)
+set_stmt = '=' IDENT expr
+         | '=' '.' expr ( IDENT | INT | expr ) expr
+         ;
+
+
+(* ; { body }
+   Executes body when the enclosing function returns.
+   Multiple defers run in LIFO order.
+   Example:  ; { ( nurl_sym_pop syms ) } *)
+defer_stmt = ';' block ;
+
+
+(* ~ at statement position is speculatively parsed, in this order:
+     1. '~' IDENT IDENT …   →  foreach_stmt           (3-token lookahead)
+     2. '~' expr '{'         →  loop_stmt (while)
+     3. otherwise            →  complement_expr used as a statement
+   The grammar reflects this as a single tilde_stmt alternative whose
+   concrete shape depends on what follows. *)
+tilde_stmt   = loop_stmt | foreach_stmt | complement_expr ;
+
+(* ~ cond { body }
+   While loop: repeats body as long as cond is truthy. *)
+loop_stmt    = '~' expr block ;
+
+(* ~ IDENT expr { body }
+   For-each loop: iterates over a slice, binding each element to IDENT.
+   Disambiguation from while: two consecutive IDENTs after '~' → for-each.
+   The iterated expression must have slice type  [T (compiles to { T*, i64 }).
+   Example:  ~ val nums { = total + total val }
+   Example:  ~ w words { ( nurl_print w ) } *)
+foreach_stmt = '~' IDENT expr block ;
+
+
+(* ── EXPRESSIONS (all PREFIX notation) ───────────────────────── *)
+
+expr = literal
+     | IDENT
+     | bin_expr
+     | not_expr
+     | ret_expr
+     | complement_expr
+     | try_expr
+     | closure_expr
+     | sizeof_expr
+     | agg_expr
+     | slice_literal
+     | cond_expr
+     | block_expr
+     | call_expr
+     | member_expr
+     | cast_expr
+     | match_expr
+     ;
+
+
+(* OP left right
+   Operand types must match. Comparison ops yield b (i1).
+
+   '&' and '|' are dispatched by the LEFT operand's LLVM type:
+     - i1        →  logical with short-circuit evaluation
+     - i64 / i32 →  bitwise AND / OR
+   All other operand types are a compile error.
+
+   There are NO unary arithmetic operators, but negative literals ARE
+   directly supported at the lexer level: a '-' immediately followed by
+   a digit (no intervening whitespace) is lexed as a single negative
+   INT / FLOAT token. Binary MINUS is disambiguated by whitespace:
+        -5    →  INT token, value -5
+        - a b →  MINUS  IDENT a  IDENT b      (binary subtraction)
+   For non-literal negation use the pattern  - 0 x  or  ~ 0  (bit flip
+   of zero yields -1).
+
+   Example:  + a b    * x 2    == n 0
+   Example:  - x 5    — binary minus: x - 5
+   Example:  * -3 n   — unary negative literal (lexed as -3)
+   Example:  & > x 0 < x 10    — logical AND, short-circuits
+   Example:  & 255 n           — bitwise AND on i64 (hex literals not lexed) *)
+bin_expr = BIN_OP expr expr ;
+BIN_OP   = '+' | '-' | '*' | '/' | '%'
+         | '<' | '>' | '==' | '!=' | '<=' | '>='
+         | '&' | '|'
+         ;
+
+(* ! expr  — logical NOT, yields b *)
+not_expr        = '!' expr ;
+
+(* ^ expr  — explicit return from enclosing function
+   Example:  ^ + a b *)
+ret_expr        = '^' expr ;
+
+(* ~ expr  — bitwise complement for integers (xor -1); float negation for f.
+   '~' in expression position is always complement (not loop). At statement
+   position, a '~ expr' with no trailing '{' block is silently reinterpreted
+   as a complement expression used for side effects (see tilde_stmt).
+   Example:  ~ 0  →  -1    ~ 3.0  →  -3.0 *)
+complement_expr = '~' expr ;
+
+(* \ expr  — try / propagate
+   If expr is Some(v) / Ok(v): unwraps to v.
+   If expr is None / Err(e):   immediately returns the same shape from
+                               the enclosing function, propagating the
+                               error value unchanged.
+   For Result types, the error payload's NURL type is compared against
+   the enclosing function's declared error type; a mismatch is a compile
+   error.
+   Example:  : val \ ( find map key )        — Option propagation
+   Example:  : n   \ ( parse_int src )       — Result propagation
+
+   NOTE: '\' is overloaded and disambiguated by 1–3 token lookahead (see
+   closure_expr). If none of the closure-start patterns match, '\' is
+   a try-expression. *)
+try_expr = '\\' expr ;
+
+(* \ param* → type { body }  — closure / lambda expression
+   Creates a function value that captures variables from the enclosing
+   scope. Captures are stored in an environment struct allocated on the
+   heap. Closures compile to  { fn_ptr, env_ptr }  (16 bytes).
+
+   Disambiguation from try_expr uses the first 1–3 tokens after '\':
+     1. '→'                                        →  closure, zero params
+     2. TYPE_KW | '*' | '?' | '[' | '!'            →  closure, param types
+     3. '(' '@'                                    →  closure, fn-type param
+     4. IDENT IDENT '→'                            →  closure, one named param
+   Any other form is parsed as try_expr.
+
+   Zero parameters:   \ → type { body }
+   With parameters:   \ type name type name → type { body }
+
+   Example:  : (@ i i) square \ i x → i { * x x }
+   Example:  : (@ v) printer \ → v { ( nurl_print msg ) }   — captures 'msg'
+   Example:  : (@ i i) adder \ i y → i { + x y }            — captures 'x' *)
+closure_expr = '\\' param* '→' type block ;
+
+(* Z type  — byte size of type as i64
+   Base types fold to a constant (0 for v, 8 for i/u/f/s/any pointer,
+   1 for b). Named/aggregate types use a getelementptr-null trick so
+   LLVM computes the size at emission time.
+   Example:  Z i  →  8    Z Point  →  sizeof(Point) *)
+sizeof_expr = 'Z' type ;
+
+(* ? cond then else  — ternary conditional
+   'then' and 'else' are full expressions; a block expression { … } is
+   also a valid form and is commonly used as the "block" branch.
+   Example:  ? > x 0  `positive`  `non-positive`
+   Example:  ? > x 0  { ( nurl_print `+` ) }  {} *)
+cond_expr = '?' expr expr expr ;
+
+(* { stmt* }  — block used as expression, yields last value *)
+block_expr = '{' stmt* '}' ;
+
+(* ( fn [IDENT+]? arg* )  — function call; optional [IDENT+] for generic
+   instantiation. The type arguments in a call site are BASE IDENTs (type
+   keywords or named types), not arbitrary type expressions: the compiler
+   monomorphises by mangling on these identifier tokens.
+   Example:  ( add 3 4 )              ( nurl_print `hello\n` )
+   Example:  ( id [i] 42 )            — monomorphise generic id with T=i
+   Example:  ( alloc [Point] 16 )     — Point is a struct name *)
+call_expr = '(' IDENT ( '[' IDENT+ ']' )? expr* ')' ;
+
+(* [ type | expr* ]  — slice literal
+   Allocates a heap array, stores values, returns { T*, i64 } slice struct.
+   Layout: field 0 = T* ptr, field 1 = i64 length.
+   Example:  [ i | 10 20 30 ]   — slice of 3 i64 values
+   Access:   . slice ptr        — extractvalue 0 → T*
+             . slice length     — extractvalue 1 → i64 *)
+slice_literal = '[' type '|' expr* ']' ;
+
+(* @ type { expr* }  — aggregate / enum constructor
+   Builds a struct, enum value, opt_type, slice_type, or res_type field by
+   field. Compiles to a chain of LLVM insertvalue instructions.
+   Example:  @ ? i { T 42 }          — Some(42)
+   Example:  @ Rect { 3 7 }          — struct by field order
+   Example:  @ Rect { Pos 3 7 }      — enum variant with two payloads
+   Example:  @ Packet { Ping }       — enum variant with no payload *)
+agg_expr = '@' type '{' expr* '}' ;
+
+(* . obj index   — field access / array indexing
+   The compilation rule is chosen by the LLVM type of obj:
+
+     - struct pointer '%T*' + IDENT  →  GEP field lookup + load
+     - raw pointer 'T*'     + INT    →  GEP + load (array[literal])
+     - raw pointer 'T*'     + expr   →  GEP + load (array[variable])
+     - aggregate '{ i1, T }' (opt / res) + INT
+           idx 0 → whole value (tag consumed by ??)
+           idx 1 → payload via extractvalue
+     - slice '{ T*, i64 }' + INT
+           idx 0 → data pointer (T*)
+           idx 1 → length (i64)
+     - named struct  '%T'  + IDENT   →  extractvalue by registered field idx
+     - enum value    '%T'  + 0       →  whole value (for ?? match input)
+
+   Example:  . p x            — p.x (struct field)
+   Example:  . buf 0          — buf[0] (pointer, literal idx)
+   Example:  . data idx       — data[idx] (pointer, variable idx)
+   Example:  . slice ptr      — first slice field
+   Example:  . opt 1          — Option payload *)
+member_expr = '.' expr ( IDENT | INT | expr ) ;
+
+(* # target_type expr  — type cast
+   Used for explicit type coercion (e.g. cast nurl_alloc's i8* to *T).
+   Example:  # *Point ( nurl_alloc 16 )
+   Example:  # i ( some_fn ) *)
+cast_expr = '#' type expr ;
+
+(* ?? expr { match_arm* }
+   Pattern match on enum values, Option (?T), or Result (!T E).
+   Exhaustiveness is checked at compile time: every variant must be
+   covered OR a '_' wildcard arm must be present. Duplicate variant arms
+   (without literal constraints) are rejected at compile time.
+   Literal-constrained arms (e.g. `Ok 200 → …`) do NOT satisfy
+   exhaustiveness on their own — a catch-all arm for the same variant is
+   still required.
+
+   Each non-wildcard arm names a variant (or a BOOL for ?T tag) and then
+   up to 3 payload slots. A payload slot is either:
+     - IDENT   → binds the payload at that position
+     - INT     → compares equality with the payload value
+   The pattern name may be a BOOL literal (T/F) when matching an ?T whose
+   tag is i1 (Some / None).
+
+   Example:  ?? val {
+                 JNull        → `null`
+                 JNum n       → ( nurl_str_int n )
+                 KeyPress c m → ( key_event c m )     — 2-payload binding
+                 Ok 200       → `ok`                   — literal-constrained
+                 _            → `other`
+             }
+   Example:  ?? some_opt {
+                 T v → v
+                 F   → 0                               — BOOL pattern on ?T *)
+match_expr    = '??' expr '{' match_arm* '}' ;
+match_arm     = ( IDENT | BOOL | '_' ) match_payload* '→' expr ;
+match_payload = IDENT | INT ;
+
+
+(* ── TYPES ────────────────────────────────────────────────────── *)
+
+type = base_type     (*  i u f b s v                                  *)
+     | ptr_type      (*  * T           →  T*    (*void → i8*)         *)
+     | opt_type      (*  ? T           →  { i1, T }                   *)
+     | slice_type    (*  [ T           →  { T*, i64 }                 *)
+     | res_type      (*  ! T E         →  { i1, i64 }                 *)
+     | fn_type       (*  (@ R P*)      →  { R (i8*, P…)*, i8* }       *)
+     | generic_inst  (*  ( Name IDENT+ )  — generic type application   *)
+     | IDENT         (*  named struct, enum, or type variable         *)
+     ;
+
+base_type = 'i'  (*  signed 64-bit integer  →  i64    *)
+          | 'u'  (*  unsigned 64-bit int    →  i64    *)
+          | 'f'  (*  64-bit IEEE 754 float  →  double *)
+          | 'b'  (*  boolean                →  i1     *)
+          | 's'  (*  UTF-8 string           →  i8*    *)
+          | 'v'  (*  void                            *)
+          ;
+
+(* '* void' is rewritten to 'i8*' in the IR (LLVM forbids void*). *)
+ptr_type     = '*' type ;
+opt_type     = '?' type ;
+slice_type   = '[' type ;
+(* res_type: the success-payload T and error-payload E are stored in a
+   single i64 slot (integers direct, pointers via ptrtoint, enums via
+   extractvalue of their i64 tag). The source-level NURL types of T and
+   E are preserved separately for compile-time try-propagation checking. *)
+res_type     = '!' type type ;
+(* fn_type: values of function type are CLOSURES — a 16-byte struct
+   holding the function pointer and its environment pointer.
+   The function pointer takes an implicit leading i8* env argument. *)
+fn_type      = '(' '@' type type* ')' ;
+(* generic_inst: type application at TYPE position. The args are base
+   identifiers (type keywords or named types), monomorphised by name
+   mangling; arbitrary type expressions like '*T' are not accepted here
+   by the current compiler. *)
+generic_inst = '(' IDENT IDENT+ ')' ;
+
+
+(* ── LITERALS ─────────────────────────────────────────────────── *)
+
+literal = INT | FLOAT | STR | BOOL ;
+
+(* Decimal integer, one or more digits, with an optional leading '-'.
+   A '-' is consumed as part of the literal ONLY when it is immediately
+   followed by a digit with no intervening whitespace; otherwise the '-'
+   tokenises as the binary MINUS operator. Underscore separators are NOT
+   supported by the lexer.
+   Example:  0    42    -7
+   Non-literal negation:  - 0 x    (binary minus)    ~ 0  →  -1        *)
+INT   = '-'? DIGIT+ ;
+
+(* Floating-point: mandatory decimal point, optional exponent. The same
+   optional leading '-' rule as INT applies.
+   Example:  3.14    1.0e10    6.022e23    1.5e-3    -0.5 *)
+FLOAT = '-'? DIGIT+ '.' DIGIT+ ( [eE] ( '+' | '-' )? DIGIT+ )? ;
+
+(* Backtick-delimited string. The lexer recognises only three escape
+   sequences: \n  \t  \\ . Any other \X pair is passed through verbatim.
+   Backticks themselves cannot be escaped — the delimiter is unavoidable
+   inside a literal.
+   Example:  `hello\n`    `use \\ for a backslash` *)
+STR = '`' [^`]* '`' ;
+
+(* Boolean literals. The single-letter identifier 'T' also serves as the
+   conventional type-variable name in generics; disambiguation is
+   contextual (type-param list, param type position → type variable;
+   otherwise → boolean true). *)
+BOOL = 'T'    (*  true  *)
+     | 'F'    (*  false *)
+     ;
+
+
+(* ── LEXICAL ───────────────────────────────────────────────────── *)
+
+(* A plain identifier is alpha/underscore followed by alpha/digit/underscore.
+   Adjacent identifiers joined by `::` (with no intervening whitespace) are
+   MERGED by the lexer into a single IDENT with `__` as separator — this is
+   the syntactic form used to reach names imported through an alias:
+        alias::name        →  single IDENT token `alias__name`
+        outer::inner::leaf →  single IDENT token `outer__inner__leaf`
+   `::` produces no token on its own; it is purely a lexer glue for
+   identifier chains. Only identifiers (not type keywords / bool literals /
+   sizeof keyword) participate in the merge. *)
+IDENT_PLAIN = [a-zA-Z_] [a-zA-Z0-9_]* ;
+IDENT       = IDENT_PLAIN ( '::' IDENT_PLAIN )* ;
+
+(* Reserved single-letter identifiers (classified by the lexer, not
+   usable as variable names):
+     i u f b s v  →  type keywords       (TT_TYPE_KW)
+     T F          →  boolean literals    (TT_BOOL)
+     Z            →  sizeof keyword      (TT_SIZEOF) *)
+
+DIGIT      = [0-9] ;
+WHITESPACE = [ \t\n\r]+ ;     (* skipped *)
+COMMENT    = '//' [^\n]* ;    (* skipped *)
+EOF        = (* end of input *) ;
+
+
+(* ── MEMORY MODEL (informative — not a grammar rule) ───────────────
+
+   Single-owner with compiler-inserted auto-drop at scope exit.
+   A binding OWNS a value when it is produced by a fresh allocation
+   (string concat/slice/int/float, slice literal, aggregate with owned
+   fields, a call returning an owned value) and is released exactly once
+   at the end of the enclosing scope in reverse declaration order.
+
+   1. String + slice owners
+      : s s ( nurl_str_cat a b )     — owned string, freed at scope exit
+      : [ i  xs [ i | 1 2 3 ]        — owned slice, freed at scope exit
+
+   2. Struct-field owners
+      Owned fields reached through a `.`-path (including nested structs
+      via a multi-index extractvalue chain) are released recursively when
+      the enclosing binding goes out of scope.
+
+   3. Reassignment drop
+      `= x <owned-call>` frees the previous value of x before assigning
+      the new one. Parameters and immutable bindings cannot be reassigned.
+
+   4. Parameter ownership
+      Callers grant owned-string arguments to callees on a per-call basis.
+      The callee must `strdup` any argument it intends to retain; the
+      caller frees the temporary immediately after the call returns.
+
+   5. Arm-local fall-through drop
+      Values allocated inside a `?`, `??`, `~` (while) or `~ IDENT …`
+      (foreach) arm that are not part of the arm's result type (i.e. the
+      arm yields `v`) are dropped when control flows out of that arm.
+      Arms whose result type is non-`v` defer ownership transfer to the
+      enclosing binding per rule 2.
+
+   6. Foreach element borrow
+      In `~ IDENT expr { body }` the element IDENT is a BORROW from the
+      iterated slice. It is not owned, is not dropped at iteration end,
+      and the underlying slice owner remains responsible for freeing the
+      backing allocation.
+
+   7. User-defined Drop
+      An impl that implements the `Drop` trait (any trait named `Drop`
+      with an `@ drop T self → v` method) is recognised by convention:
+      whenever an owned binding of type T reaches its scope-exit point,
+      the compiler inserts a call to `drop__<T-mangle>(self)` before
+      freeing any owned fields of T. User `drop` methods must not panic
+      and should not free the self pointer themselves — that responsibility
+      belongs to the auto-drop machinery.
+
+   8. Return ownership transfer
+      Returning a fresh allocation transfers ownership to the caller. The
+      callee emits no drop for the returned value; the caller's binding
+      becomes the new owner.                                         *)

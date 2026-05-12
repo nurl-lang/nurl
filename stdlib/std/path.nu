@@ -1,0 +1,350 @@
+// stdlib/std/path.nu — path manipulation (cross-platform separators)
+//
+// All functions accept either '/' or '\\' as separators on input
+// (Windows users routinely mix the two). Output paths are emitted with
+// '/' — both Win32 CRT (fopen, mkdir) and POSIX accept this, and using
+// a single canonical separator keeps tests deterministic across hosts.
+//
+// All path inputs are raw `s` (i8*) — pass a literal directly, or use
+// `( string_data s )` to feed an owned `String`'s buffer. Returned
+// Strings are owned (caller frees / lets auto-drop run).
+//
+//   ( path_join a b )       → String  drops a trailing sep on `a`, leading sep on `b`
+//   ( path_basename p )     → String  segment after the last separator
+//   ( path_dirname p )      → String  everything before the last separator (no trailing sep)
+//   ( path_extension p )    → String  text after the last '.' in the basename, "" if none
+//   ( path_is_absolute p )  → b       starts with '/' / '\\' or matches X: drive prefix
+//   ( path_normalize p )    → String  collapses '.', '..', and duplicate separators
+
+$ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
+
+@ __is_sep i c → b {
+  ? == c 47 { ^ T } {}
+  ? == c 92 { ^ T } {}
+  ^ F
+}
+
+// Windows drive-letter prefix: ASCII letter followed by ':'.
+@ __has_drive s p → b {
+  : i n ( nurl_str_len p )
+  ? < n 2 { ^ F } {}
+  : i c0 ( nurl_str_get p 0 )
+  : i c1 ( nurl_str_get p 1 )
+  ? != c1 58 { ^ F } {}
+  ? & <= 65 c0 <= c0 90 { ^ T } {}
+  ? & <= 97 c0 <= c0 122 { ^ T } {}
+  ^ F
+}
+
+@ path_is_absolute s p → b {
+  : i n ( nurl_str_len p )
+  ? == n 0 { ^ F } {}
+  : i c0 ( nurl_str_get p 0 )
+  ? ( __is_sep c0 ) { ^ T } {}
+  ? ( __has_drive p ) { ^ T } {}
+  ^ F
+}
+
+// Last separator index, or -1 if none.
+@ __last_sep_idx s p → i {
+  : i n ( nurl_str_len p )
+  : ~ i i - n 1
+  : ~ i out - 0 1
+  : ~ b going T
+  ~ going {
+    ? < i 0 { = going F } {
+      : i c ( nurl_str_get p i )
+      ? ( __is_sep c ) {
+        = out i
+        = going F
+      } {
+        = i - i 1
+      }
+    }
+  }
+  ^ out
+}
+
+@ __substr_to_string s p i from i len → String {
+  : String out ( string_with_cap len )
+  : ~ i i 0
+  ~ < i len {
+    ( string_push_char out ( nurl_str_get p + from i ) )
+    = i + i 1
+  }
+  ^ out
+}
+
+@ path_basename s p → String {
+  : i n ( nurl_str_len p )
+  ? == n 0 { ^ ( string_new ) } {}
+  : i idx ( __last_sep_idx p )
+  ? < idx 0 {
+    ? ( __has_drive p ) {
+      ^ ( __substr_to_string p 2 - n 2 )
+    } {}
+    ^ ( __substr_to_string p 0 n )
+  } {}
+  : i start + idx 1
+  ^ ( __substr_to_string p start - n start )
+}
+
+@ path_dirname s p → String {
+  : i n ( nurl_str_len p )
+  ? == n 0 { ^ ( string_new ) } {}
+  : i idx ( __last_sep_idx p )
+  ? < idx 0 {
+    ? ( __has_drive p ) {
+      ^ ( __substr_to_string p 0 2 )
+    } {}
+    ^ ( string_new )
+  } {}
+  ? == idx 0 {
+    : String r ( string_with_cap 1 )
+    ( string_push_char r 47 )
+    ^ r
+  } {}
+  // Strip trailing separators ("a//b" → "a") but keep "C:/" → "C:/".
+  : ~ i end idx
+  : ~ b going T
+  ~ going {
+    ? <= end 0 { = going F } {
+      : i c ( nurl_str_get p - end 1 )
+      ? ( __is_sep c ) {
+        = end - end 1
+      } { = going F }
+    }
+  }
+  ? & == end 2 ( __has_drive p ) {
+    ^ ( __substr_to_string p 0 3 )
+  } {}
+  ^ ( __substr_to_string p 0 end )
+}
+
+@ path_extension s p → String {
+  : i n ( nurl_str_len p )
+  ? == n 0 { ^ ( string_new ) } {}
+  : i sep_idx ( __last_sep_idx p )
+  : i base_start + sep_idx 1
+  : i base_len - n base_start
+  ? == base_len 0 { ^ ( string_new ) } {}
+  : ~ i i - + base_start base_len 1
+  : ~ i found - 0 1
+  : ~ b going T
+  ~ going {
+    ? < i base_start { = going F } {
+      : i c ( nurl_str_get p i )
+      ? == c 46 {
+        = found i
+        = going F
+      } { = i - i 1 }
+    }
+  }
+  ? < found 0 { ^ ( string_new ) } {}
+  // Leading-dot files ("/x/.bashrc", ".") have no extension.
+  ? == found base_start { ^ ( string_new ) } {}
+  : i ext_start + found 1
+  : i ext_len - + base_start base_len ext_start
+  ^ ( __substr_to_string p ext_start ext_len )
+}
+
+@ path_join s a s b → String {
+  : i la ( nurl_str_len a )
+  : i lb ( nurl_str_len b )
+  ? == la 0 { ^ ( __substr_to_string b 0 lb ) } {}
+  ? == lb 0 { ^ ( __substr_to_string a 0 la ) } {}
+  ? ( path_is_absolute b ) { ^ ( __substr_to_string b 0 lb ) } {}
+  // Trim trailing separators from `a` (keep at least one byte).
+  : ~ i ae la
+  : ~ b going T
+  ~ going {
+    ? <= ae 1 { = going F } {
+      : i c ( nurl_str_get a - ae 1 )
+      ? ( __is_sep c ) { = ae - ae 1 } { = going F }
+    }
+  }
+  // Skip leading separators in `b`.
+  : ~ i bs 0
+  = going T
+  ~ going {
+    ? >= bs lb { = going F } {
+      : i c ( nurl_str_get b bs )
+      ? ( __is_sep c ) { = bs + bs 1 } { = going F }
+    }
+  }
+  : String out ( string_with_cap + + ae - lb bs 1 )
+  : ~ i i 0
+  ~ < i ae {
+    ( string_push_char out ( nurl_str_get a i ) )
+    = i + i 1
+  }
+  ( string_push_char out 47 )
+  : ~ i j bs
+  ~ < j lb {
+    ( string_push_char out ( nurl_str_get b j ) )
+    = j + j 1
+  }
+  ^ out
+}
+
+// Internal: split path into stack of owned segment Strings, after the
+// optional drive/root prefix. The caller passes `pos` = first byte after
+// any leading separators or drive letter that's already been handled.
+@ __collect_segments s p i pos → ( Vec String ) {
+  : i n ( nurl_str_len p )
+  : ( Vec String ) out ( vec_new [String] )
+  : ~ i i pos
+  : ~ b going T
+  ~ going {
+    ? > i n { = going F } {
+      : i s i
+      : ~ b in_seg T
+      ~ in_seg {
+        ? >= i n { = in_seg F } {
+          : i c ( nurl_str_get p i )
+          ? ( __is_sep c ) { = in_seg F } { = i + i 1 }
+        }
+      }
+      : i seg_len - i s
+      ? > seg_len 0 {
+        ( vec_push [String] out ( __substr_to_string p s seg_len ) )
+      } {}
+      ? >= i n { = going F } {
+        : ~ b skip_sep T
+        ~ skip_sep {
+          ? >= i n { = skip_sep F } {
+            : i c2 ( nurl_str_get p i )
+            ? ( __is_sep c2 ) { = i + i 1 } { = skip_sep F }
+          }
+        }
+      }
+    }
+  }
+  ^ out
+}
+
+@ __is_dot String s → b {
+  ? != ( string_len s ) 1 { ^ F } {}
+  ^ == ( string_get s 0 ) 46
+}
+
+@ __is_dotdot String s → b {
+  ? != ( string_len s ) 2 { ^ F } {}
+  ? != ( string_get s 0 ) 46 { ^ F } {}
+  ^ == ( string_get s 1 ) 46
+}
+
+@ path_normalize s p → String {
+  : (@ v String) drop_str \ String s → v { ( string_free s ) }
+  : i n ( nurl_str_len p )
+  ? == n 0 {
+    : String dot ( string_with_cap 1 )
+    ( string_push_char dot 46 )
+    ^ dot
+  } {}
+  : i drive_end ? ( __has_drive p ) 2 0
+  : ~ i pos drive_end
+  : ~ b absolute F
+  ? < pos n {
+    : i c ( nurl_str_get p pos )
+    ? ( __is_sep c ) {
+      = absolute T
+      = pos + pos 1
+      : ~ b skip_sep T
+      ~ skip_sep {
+        ? >= pos n { = skip_sep F } {
+          : i c2 ( nurl_str_get p pos )
+          ? ( __is_sep c2 ) { = pos + pos 1 } { = skip_sep F }
+        }
+      }
+    } {}
+  } {}
+  : ( Vec String ) segs ( __collect_segments p pos )
+  : ( Vec String ) stk ( vec_new [String] )
+  : i count ( vec_len [String] segs )
+  : ~ i k 0
+  ~ < k count {
+    : ? String seg_opt ( vec_get [String] segs k )
+    ?? seg_opt {
+      T seg → {
+        ? ( __is_dot seg ) {
+          // drop "." segment
+        } {
+          ? ( __is_dotdot seg ) {
+            : i sn ( vec_len [String] stk )
+            ? > sn 0 {
+              : ? String top_opt ( vec_get [String] stk - sn 1 )
+              ?? top_opt {
+                T t → {
+                  ? ( __is_dotdot t ) {
+                    ( vec_push [String] stk ( __substr_to_string `..` 0 2 ) )
+                  } {
+                    : ? String pop_opt ( vec_pop [String] stk )
+                    ?? pop_opt {
+                      T popped → ( string_free popped )
+                      F → {}
+                    }
+                  }
+                }
+                F → ( vec_push [String] stk ( __substr_to_string `..` 0 2 ) )
+              }
+            } {
+              ? absolute {
+                // ".." past root → drop
+              } {
+                ( vec_push [String] stk ( __substr_to_string `..` 0 2 ) )
+              }
+            }
+          } {
+            : i sl ( string_len seg )
+            : String copy ( string_with_cap sl )
+            : ~ i bi 0
+            ~ < bi sl {
+              ( string_push_char copy ( string_get seg bi ) )
+              = bi + bi 1
+            }
+            ( vec_push [String] stk copy )
+          }
+        }
+      }
+      F → {}
+    }
+    = k + k 1
+  }
+  ( vec_free_with [String] segs drop_str )
+  : String out ( string_with_cap n )
+  : ~ i di 0
+  ~ < di drive_end {
+    ( string_push_char out ( nurl_str_get p di ) )
+    = di + di 1
+  }
+  ? absolute { ( string_push_char out 47 ) } {}
+  : i sk ( vec_len [String] stk )
+  ? == sk 0 {
+    ? == ( string_len out ) 0 {
+      ( string_push_char out 46 )
+    } {}
+    ( vec_free_with [String] stk drop_str )
+    ^ out
+  } {}
+  : ~ i j 0
+  ~ < j sk {
+    ? > j 0 { ( string_push_char out 47 ) } {}
+    : ? String s_opt ( vec_get [String] stk j )
+    ?? s_opt {
+      T s → {
+        : i sl ( string_len s )
+        : ~ i bi 0
+        ~ < bi sl {
+          ( string_push_char out ( string_get s bi ) )
+          = bi + bi 1
+        }
+      }
+      F → {}
+    }
+    = j + j 1
+  }
+  ( vec_free_with [String] stk drop_str )
+  ^ out
+}

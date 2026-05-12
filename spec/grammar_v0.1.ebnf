@@ -1,0 +1,311 @@
+(* ================================================================ *)
+(*  NURL — Neural Unified Representation Language                   *)
+(*  Grammar Specification v0.1 — as implemented by nurlc.nu        *)
+(*                                                                  *)
+(*  This file describes the grammar that the bootstrapped compiler  *)
+(*  (nurlc.exe, built from compiler/nurlc.nu) actually accepts.    *)
+(*  Features marked [planned] exist in spec/grammar.ebnf but are   *)
+(*  not yet implemented.                                            *)
+(*                                                                  *)
+(*  Notation: EBNF                                                  *)
+(*    rule = ...   definition                                       *)
+(*    A B          concatenation                                    *)
+(*    A | B        alternation                                      *)
+(*    A*           zero or more                                     *)
+(*    A+           one or more                                      *)
+(*    A?           optional                                         *)
+(*    'x'          literal token                                    *)
+(*    [A]          character class                                  *)
+(*    (* comment *)                                                 *)
+(* ================================================================ *)
+
+
+(* ── PROGRAM ───────────────────────────────────────────────────── *)
+
+program     = decl* EOF ;
+
+
+(* ── TOP-LEVEL DECLARATIONS ────────────────────────────────────── *)
+(*                                                                   *)
+(*  All top-level constructs begin with a sigil; the parser         *)
+(*  identifies the kind with one-token lookahead.                   *)
+
+decl        = fn_decl
+            | struct_decl
+            | const_decl
+            ;
+
+(*  [planned] import_decl ('$'), ffi_decl ('&'), trait/impl ('%'), *)
+(*  enum (':|') are defined in spec/grammar.ebnf but not yet       *)
+(*  implemented in nurlc.nu.                                        *)
+
+
+(*  Function:  @ name param* → return_type block                    *)
+(*  Example:   @ add i a i b → i { ^ + a b }                       *)
+fn_decl     = '@' IDENT param* '→' type block ;
+param       = type IDENT ;
+
+(*  Struct:    : IDENT { field* }                                    *)
+(*  Example:   : Point { i x  i y }                                 *)
+(*  Disambiguated from const_decl by '{' immediately after IDENT.   *)
+struct_decl = ':' IDENT '{' field* '}' ;
+field       = type IDENT? ;
+
+(*  Constant:  : type IDENT INT                                      *)
+(*  Example:   : i TT_IDENT 1                                       *)
+(*  Currently only integer literals are accepted as the value.      *)
+(*  Emitted as a mutable LLVM global: @NAME = global TYPE VALUE     *)
+const_decl  = ':' type IDENT INT ;
+
+
+(* ── BLOCK & STATEMENTS ────────────────────────────────────────── *)
+
+block       = '{' stmt* '}' ;
+
+(*  A block used in expression position evaluates to the value of   *)
+(*  its last statement (like a Rust block expression).              *)
+
+stmt        = let_stmt          (*  declare new local binding       *)
+            | set_stmt          (*  mutate existing binding         *)
+            | loop_stmt         (*  while loop                      *)
+            | expr              (*  expression used for side-effect *)
+            ;
+
+(*  Let:       : type name expr                                      *)
+(*  Type annotation is required (inference [planned]).              *)
+(*  Example:   : i n 0                                              *)
+(*             : s msg `hello`                                       *)
+let_stmt    = ':' type IDENT expr ;
+
+(*  Set:       = name expr                                           *)
+(*  Assigns to an existing mutable local or module-level binding.   *)
+(*  Example:   = n + n 1                                           *)
+set_stmt    = '=' IDENT expr ;
+
+(*  Loop:      ~ cond_expr { body }                                  *)
+(*  Evaluates body repeatedly while cond_expr is true.              *)
+(*  Returns void.                                                    *)
+(*  NOTE: '~' in statement position is ALWAYS a loop — never the   *)
+(*  complement operator (which is only valid in expression position) *)
+(*  Example:   ~ != k n { = k + k 1 }                              *)
+loop_stmt   = '~' expr block ;
+
+
+(* ── EXPRESSIONS ───────────────────────────────────────────────── *)
+(*                                                                   *)
+(*  All expressions use PREFIX NOTATION.                            *)
+(*  Every operator has a fixed, known arity — no grouping needed.   *)
+(*                                                                   *)
+(*  '~' in expression position is the complement operator (unary),  *)
+(*  NOT a loop. The distinction is purely positional: stmt vs expr. *)
+(*                                                                   *)
+(*  Arity summary:                                                   *)
+(*    binary  (2 args):  + - * / %  <  >  ==  !=  <=  >=  &  |    *)
+(*    unary   (1 arg):   !  ^  ~                                    *)
+(*    ternary (3 args):  ?                                           *)
+(*    special:           .  #  (…)  {…}                             *)
+
+expr        = literal
+            | IDENT
+            | bin_expr
+            | not_expr
+            | ret_expr
+            | complement_expr
+            | cond_expr
+            | block_expr
+            | call_expr
+            | member_expr
+            | cast_expr
+            ;
+
+
+(*  Binary operations — arity 2, prefix                            *)
+(*  Example:  + a b      → a + b                                   *)
+(*            <= k n     → k ≤ n                                   *)
+(*            == x 0     → x == 0                                  *)
+bin_expr    = BIN_OP expr expr ;
+
+BIN_OP      = '+'               (*  integer / float add            *)
+            | '-'               (*  integer / float subtract        *)
+            | '*'               (*  integer / float multiply        *)
+            | '/'               (*  integer sdiv / float fdiv       *)
+            | '%'               (*  integer srem / float frem       *)
+            | '<'               (*  less than              → b      *)
+            | '>'               (*  greater than           → b      *)
+            | '=='              (*  equal                  → b      *)
+            | '!='              (*  not equal              → b      *)
+            | '<='              (*  less or equal          → b      *)
+            | '>='              (*  greater or equal       → b      *)
+            | '&'               (*  bitwise/logical AND             *)
+            | '|'               (*  bitwise/logical OR              *)
+            ;
+
+(*  Logical NOT — arity 1                                           *)
+(*  ! b  → true if b is false                                       *)
+not_expr    = '!' expr ;
+
+(*  Explicit return — arity 1                                       *)
+(*  ^ expr  — return value from the enclosing function              *)
+ret_expr    = '^' expr ;
+
+(*  Complement / negate — arity 1  (expression position only)      *)
+(*  On integer: bitwise NOT (xor -1)                               *)
+(*  On float:   arithmetic negate  (fneg)                          *)
+complement_expr = '~' expr ;
+
+(*  Conditional — arity 3                                           *)
+(*  ? cond then else                                                *)
+(*  Both branches must have compatible types.                       *)
+(*  Example:  ? > x 0  `positive`  `non-positive`                  *)
+(*            ? ( seq a b ) { … }  { … }                           *)
+cond_expr   = '?' expr expr expr ;
+
+(*  Block expression — zero or more stmts, returns last value      *)
+(*  Example:  { : i k 1  = k + k 1  k }                           *)
+block_expr  = '{' stmt* '}' ;
+
+(*  Function call — variable arity, parenthesised                  *)
+(*  First element after '(' is the callee name (IDENT).            *)
+(*  Example:  ( add 1 2 )                                           *)
+(*            ( nurl_print_int ( sumto 10 ) )                       *)
+call_expr   = '(' IDENT expr* ')' ;
+
+(*  Member / field access — arity 1 + field name                    *)
+(*  . obj field   → obj.field (extractvalue)                        *)
+(*  Example:  . p x                                                 *)
+member_expr = '.' expr IDENT ;
+
+(*  Type cast — arity 1 + target type                              *)
+(*  # type expr                                                     *)
+(*  Supported casts: i↔f (sitofp / fptosi), same-size noop.        *)
+(*  Example:  # f n     → (double) n                               *)
+cast_expr   = '#' type expr ;
+
+
+(* ── TYPES ─────────────────────────────────────────────────────── *)
+(*                                                                   *)
+(*  Base types are single-letter TYPE_KW tokens (see §Lexer).       *)
+(*  The only compound type currently implemented is a pointer.      *)
+
+type        = base_type
+            | ptr_type
+            | IDENT             (*  named / struct type             *)
+            ;
+
+(*  [planned]  slice_type '[' type, opt_type '?' type,             *)
+(*             res_type '!' type type, fn_type '@' type type+,     *)
+(*             sized_type (i8, u32, f64 …), generics.              *)
+
+base_type   = 'i'               (*  signed 64-bit integer  → i64   *)
+            | 'u'               (*  unsigned 64-bit integer → i64  *)
+            | 'f'               (*  64-bit IEEE 754 float → double  *)
+            | 'b'               (*  boolean                → i1    *)
+            | 's'               (*  UTF-8 string           → i8*   *)
+            | 'v'               (*  void                   → void  *)
+            ;
+
+ptr_type    = '*' type ;        (*  pointer to T           → T*    *)
+
+
+(* ── LITERALS ──────────────────────────────────────────────────── *)
+
+literal     = INT
+            | STR
+            | BOOL
+            ;
+(*  [planned] FLOAT literal — not yet implemented.                  *)
+
+
+(*  Integer: decimal digits, optional leading '-'.                  *)
+(*  Underscores allowed as separators: 1_000_000                   *)
+INT         = '-'? DIGIT+ ( '_' DIGIT+ )* ;
+
+(*  String: backtick-delimited, raw content.                        *)
+(*  No escape sequences in source — all bytes pass through.         *)
+(*  Multi-line strings are valid.                                   *)
+STR         = '`' [^`]* '`' ;
+
+(*  Boolean — single-character tokens distinct from IDENT.          *)
+BOOL        = 'T'               (*  true                           *)
+            | 'F'               (*  false                          *)
+            ;
+
+
+(* ── LEXICAL TOKENS ────────────────────────────────────────────── *)
+
+(*  Two identifier-like token classes:                              *)
+(*    TYPE_KW — reserved letters: i u f b s v                      *)
+(*              emitted when an identifier is exactly one of these  *)
+(*    IDENT   — all other identifiers                               *)
+(*  Both are accepted wherever the grammar says IDENT or type.      *)
+(*  The distinction allows the parser to recognise type annotations  *)
+(*  without reserved-word conflicts in expression/name positions.   *)
+
+IDENT       = [a-zA-Z_] ( [a-zA-Z0-9_] )* ;
+(*  If IDENT ∈ { i u f b s v } the lexer emits TYPE_KW.            *)
+(*  T and F are emitted as BOOL, not IDENT.                         *)
+
+DIGIT       = [0-9] ;
+
+(*  Whitespace is insignificant — used only as token separator.    *)
+WHITESPACE  = ( ' ' | '\t' | '\n' | '\r' )+ ;
+
+(*  Line comment — from // to end of line. Discarded by lexer.     *)
+COMMENT     = '//' [^\n]* ;
+
+EOF         = (* end of input *) ;
+
+
+(* ── DISAMBIGUATION RULES ──────────────────────────────────────── *)
+(*                                                                   *)
+(*  1. IDENT vs TYPE_KW vs BOOL                                      *)
+(*     The lexer classifies single-token identifiers:                *)
+(*       i u f b s v  →  TYPE_KW                                    *)
+(*       T F          →  BOOL                                        *)
+(*       everything else → IDENT                                     *)
+(*     Both IDENT and TYPE_KW are accepted in identifier position.   *)
+(*     TYPE_KW is also accepted in type position.                    *)
+(*                                                                   *)
+(*  2. ':' — const_decl vs struct_decl at top level                  *)
+(*     After ':' TYPE_KW_OR_IDENT:                                   *)
+(*       next = '{'  →  struct_decl                                  *)
+(*       next = IDENT →  const_decl (type keyword consumed, name     *)
+(*                        is next IDENT, value is INT)               *)
+(*                                                                   *)
+(*  3. '~' — loop vs complement                                      *)
+(*     Position determines interpretation — no lookahead required:   *)
+(*       statement position  →  always loop_stmt  (~ expr block)     *)
+(*       expression position →  always complement (~ expr)           *)
+(*     The parser dispatches on '~' before reading any argument.     *)
+(*                                                                   *)
+(*  4. '?' — conditional vs opt_type                                 *)
+(*     In expression position: always cond_expr (ternary).           *)
+(*     [planned] In type position: opt_type ('?' type).              *)
+(*     No ambiguity currently because opt_type is not implemented.   *)
+(*                                                                   *)
+(*  5. Punctuation                                                    *)
+(*     '(' always starts call_expr.                                  *)
+(*     '{' always starts a block (block_expr or loop body).          *)
+(*     '→' is a single dedicated token.                              *)
+(*     '==' and '!=' and '<=' and '>=' are single tokens.            *)
+(*     '=' (single) is set_stmt; never confused with '=='.           *)
+
+
+(* ── GRAMMAR PROPERTIES ────────────────────────────────────────── *)
+(*                                                                   *)
+(*  - LL(1) with the following bounded lookaheads:                   *)
+(*      ':' at top level: 2-token lookahead (type + '{' or IDENT)   *)
+(*  - No left recursion.                                             *)
+(*  - Every expression has a deterministic parse from its first      *)
+(*    token (sigil, literal, or IDENT).                              *)
+(*  - Operators have fixed arity; no grouping parentheses needed    *)
+(*    in expression position (call uses '(' … ')' explicitly).      *)
+(*  - '~' arity is resolved by syntactic position, not lookahead.   *)
+(*  - Maximum context required to resolve any ambiguity: 2 tokens.  *)
+(*                                                                   *)
+(*  LLVM IR mapping (for reference):                                 *)
+(*    i, u  → i64        b   → i1         f   → double              *)
+(*    s     → i8*        v   → void       *T  → T*                  *)
+(*    &, |  → and / or   ~i  → xor T -1  ~f  → fneg T              *)
+(*    /     → sdiv/fdiv  %   → srem/frem                            *)
+(*    <…>=… → icmp sXX / fcmp oXX        → result is i1            *)

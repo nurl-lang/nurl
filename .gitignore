@@ -1,0 +1,89 @@
+# ─── Build artefacts ──────────────────────────────────────────
+build/
+nurlc
+nurlc.wasm
+*.exe
+*.dll
+*.o
+*.obj
+*.ll
+*.wasm
+
+# Stdlib runtime objects (rebuilt per platform)
+stdlib/runtime.o
+stdlib/runtime.curl
+stdlib/runtime.wasm.o
+stdlib/canvas.o
+stdlib/canvas.sdl2
+
+# Test runner output
+compiler/tests/tmp/
+compiler/tests/testresults.txt
+*.test
+test_output/
+
+# ─── Language / package tooling ───────────────────────────────
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ─── Cloudflare Workers / Wrangler ────────────────────────────
+.wrangler/
+.dev.vars
+.dev.vars.*
+worker-configuration.d.ts
+
+# ─── VS Code extension packaging ──────────────────────────────
+tooling/vscode-nurl/*.vsix
+
+# ─── Editors & IDEs ───────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*~
+
+# ─── OS junk ──────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+*.tmp
+
+# ─── Local AI / agent helpers ─────────────────────────────────
+.claude/
+.gemini/
+.cursor/
+.aider*
+.windsurf/
+CLAUDE.local.md
+
+# ─── Logs & local config ──────────────────────────────────────
+*.log
+*.local
+
+# ─── Repository-specific scratch ──────────────────────────────
+# Stray dev outputs that have shown up at the repo root historically.
+/apireply.txt
+/buildreply.json
+result-diff.txt
+
+# Benchmark data outputs (data files in compare/ are large + regenerable)
+compare/*.csv
+compare/*.parquet
+compare/nurl_top10*.csv
+nurl_top10_arena.csv

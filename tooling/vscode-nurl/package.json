@@ -1,0 +1,31 @@
+{
+  "name": "nurl",
+  "displayName": "NURL Language",
+  "description": "Syntax highlighting for NURL (Neural Unified Representation Language)",
+  "version": "0.1.0",
+  "publisher": "nurl-lang",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Hindurable/nurl"
+  },
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [{
+      "id": "nurl",
+      "aliases": ["NURL", "nurl"],
+      "extensions": [".nu"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "nurl",
+      "scopeName": "source.nurl",
+      "path": "./syntaxes/nurl.tmLanguage.json"
+    }]
+  }
+}

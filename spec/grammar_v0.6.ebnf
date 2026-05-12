@@ -1,0 +1,321 @@
+(* NURL — Neural Unified Representation Language
+   Grammar v0.6 — complete language specification
+   File extension: .nu
+
+   All expressions use PREFIX NOTATION.
+   Every operator has fixed, known arity — no grouping parentheses needed.
+   The parser is LL(1) with at most 3-token lookahead. *)
+
+
+(* ── PROGRAM ──────────────────────────────────────────────────── *)
+
+program = decl* EOF ;
+
+
+(* ── TOP-LEVEL DECLARATIONS ───────────────────────────────────── *)
+
+decl = import_decl    (*  $          *)
+     | ffi_decl       (*  &          *)
+     | trait_decl     (*  %  …  {    *)
+     | impl_decl      (*  %  …  type *)
+     | fn_decl        (*  @          *)
+     | struct_decl    (*  :  IDENT { *)
+     | enum_decl      (*  :  |       *)
+     | const_decl     (*  :  type    *)
+     ;
+
+
+(* $ `path`
+   Inline-compiles the .nu file at path into the current module.
+   All names land in the global namespace.
+   Example:  $ `stdlib/math` *)
+import_decl = '$' STR ;
+
+
+(* & `libname` @ name param* → type
+   Declares an external C symbol (LLVM declare).
+   Example:  & `libc` @ puts s msg → i *)
+ffi_decl   = '&' STR fn_header ;
+fn_header  = '@' IDENT type_params? param* '→' type ;
+
+
+(* [T], [K V] — type variable list for generic declarations *)
+type_params = '[' IDENT+ ']' ;
+
+
+(* @ name [T]? param* → ret { body }
+   Example:  @ add i a i b → i { ^ + a b }
+   Example:  @ id [T] T x → T { ^ x }          — generic *)
+fn_decl = '@' IDENT type_params? param* '→' type block ;
+param   = type IDENT ;
+
+
+(* : Name { field* }
+   Example:  : Point { i x  i y }
+   Disambiguation from const_decl: IDENT after ':' then '{'. *)
+struct_decl = ':' IDENT '{' field* '}' ;
+field       = type IDENT? ;
+
+
+(* : | Name { Variant payload* ... }
+   Each variant compiles to an i64 tag global named by the variant.
+   Enum values are represented as structs: { i64, ptr* } sized for the
+   largest variant. Multiple payload types per variant are supported.
+   Example:  : | Color { Red  Green  Blue }
+   Example:  : | Event { Click i i  KeyPress i s  Close }
+   Example:  : | Json { JNull  JBool b  JNum i } *)
+enum_decl    = ':' '|' IDENT '{' enum_variant* '}' ;
+enum_variant = IDENT type* ;
+
+
+(* : type Name literal
+   Global mutable variable with a compile-time literal initializer.
+   Supported types: i, u (i64), f (double), s (i8*), b (i1).
+   Mutable: use = Name expr to update.
+   Example:  : i MAX_CONN 100    : f PI 3.14159
+   Example:  : s GREETING `hello`   : b VERBOSE T *)
+const_decl = ':' type IDENT literal ;
+
+
+(* % Name [T]? { fn_header* }
+   Interface definition. Produces no IR; registers method signatures.
+   Example:  % Stringify { @ stringify i n → s } *)
+trait_decl = '%' IDENT type_params? '{' fn_header* '}' ;
+
+
+(* % TraitName [T]? impl_type { fn_decl* }
+   Monomorphised dispatch: each method is emitted as  method__TypeMangle.
+   Dispatch at call sites is based on the first argument's LLVM type.
+   Example:  % Stringify i { @ stringify i n → s { ^ (nurl_str_int n) } }
+             (stringify 42)  →  call @stringify__i64  *)
+impl_decl = '%' IDENT type_params? type '{' fn_decl* '}' ;
+
+
+(* ── BLOCK & STATEMENTS ───────────────────────────────────────── *)
+
+block = '{' stmt* '}' ;
+
+stmt = let_stmt      (*  :          *)
+     | set_stmt      (*  =          *)
+     | defer_stmt    (*  ;          *)
+     | loop_stmt     (*  ~  expr    *)
+     | foreach_stmt  (*  ~  IDENT   *)
+     | expr          (*  side-effect *)
+     ;
+
+
+(* : type? IDENT expr
+   Type annotation is optional when inferable from the expression.
+   Inferable from: literals, function return types, binary op operands.
+   Example:  : i n 0            — explicit type
+   Example:  : n ( add 1 2 )    — inferred as i *)
+let_stmt = ':' type? IDENT expr ;
+
+
+(* = IDENT expr
+   = '.' expr ( IDENT | INT ) expr   — struct field or array element store
+   Assigns to an existing binding (local or global), or to a struct field
+   or array element via GEP + store.
+   Example:  = n + n 1
+   Example:  = . p x 42          — p.x = 42  (struct field)
+   Example:  = . buf 0 val       — buf[0] = val  (array element) *)
+set_stmt = '=' IDENT expr
+         | '=' '.' expr ( IDENT | INT ) expr
+         ;
+
+
+(* ; { body }
+   Executes body when the enclosing function returns.
+   Multiple defers run in LIFO order.
+   Example:  ; { ( nurl_sym_pop syms ) } *)
+defer_stmt = ';' block ;
+
+
+(* ~ cond { body }
+   While loop: repeats body as long as cond is truthy.
+   '~' in statement position is always a loop (not complement).
+   Example:  ~ < n 10 { = n + n 1 } *)
+loop_stmt = '~' expr block ;
+
+(* ~ IDENT slice { body }
+   For-each loop: iterates over a slice, binding each element to IDENT.
+   Disambiguation from while: two consecutive IDENTs after '~' → for-each.
+   The slice must have type [T (compiles to { T*, i64 }).
+   Example:  ~ val nums { = total + total val }
+   Example:  ~ w words { ( nurl_print w ) } *)
+foreach_stmt = '~' IDENT expr block ;
+
+
+(* ── EXPRESSIONS (all PREFIX notation) ───────────────────────── *)
+
+expr = literal
+     | IDENT
+     | bin_expr
+     | not_expr
+     | ret_expr
+     | complement_expr
+     | try_expr
+     | sizeof_expr
+     | agg_expr
+     | slice_literal
+     | cond_expr
+     | block_expr
+     | call_expr
+     | member_expr
+     | cast_expr
+     | match_expr
+     ;
+
+
+(* OP left right
+   Operand types must match. Comparison ops yield b (i1).
+   Example:  + a b    * x 2    == n 0 *)
+bin_expr = BIN_OP expr expr ;
+BIN_OP   = '+' | '-' | '*' | '/' | '%'
+         | '<' | '>' | '==' | '!=' | '<=' | '>='
+         | '&' | '|'
+         ;
+
+(* ! expr  — logical NOT, yields b *)
+not_expr        = '!' expr ;
+
+(* ^ expr  — explicit return from enclosing function
+   Example:  ^ + a b *)
+ret_expr        = '^' expr ;
+
+(* ~ expr  — bitwise complement for integers (xor -1); float negation for f.
+   '~' in expression position is always complement (not loop).
+   Example:  ~ 0  →  -1    ~ 3.0  →  -3.0 *)
+complement_expr = '~' expr ;
+
+(* \ expr  — try / propagate
+   If expr is Some(v): unwraps to v.
+   If expr is None:    immediately returns None from the enclosing function.
+   Example:  : val \ ( find map key ) *)
+try_expr = '\\' expr ;
+
+(* Z type  — byte size of type as i64
+   Example:  Z i  →  8    Z Point  →  sizeof(Point) *)
+sizeof_expr = 'Z' type ;
+
+(* ? cond then else  — ternary conditional
+   Example:  ? > x 0  `positive`  `non-positive` *)
+cond_expr = '?' expr expr expr ;
+
+(* { stmt* }  — block used as expression, yields last value *)
+block_expr = '{' stmt* '}' ;
+
+(* ( fn [T+]? arg* )  — function call; optional [T+] for generic instantiation
+   Example:  ( add 3 4 )    ( nurl_print `hello\n` )
+   Example:  ( id [i] 42 )  — monomorphise generic id with T=i *)
+call_expr = '(' IDENT ( '[' type+ ']' )? expr* ')' ;
+
+(* [ type | expr* ]  — slice literal
+   Allocates a heap array, stores values, returns { T*, i64 } slice struct.
+   Layout: field 0 = T* ptr, field 1 = i64 length.
+   Example:  [ i | 10 20 30 ]   — slice of 3 i64 values
+   Access:   . slice ptr        — extractvalue 0 → T*
+             . slice length     — extractvalue 1 → i64 *)
+slice_literal = '[' type '|' expr* ']' ;
+
+(* @ type { expr* }  — aggregate / enum constructor
+   Builds a struct, enum value, opt_type, slice_type, or res_type field by field.
+   Compiles to a chain of LLVM insertvalue instructions.
+   Example:  @ ? i { T 42 }          — Some(42)
+   Example:  @ Rect { Pos 3 7 }      — enum variant with two payloads
+   Example:  @ Packet { Ping }       — enum variant with no payload *)
+agg_expr = '@' type '{' expr* '}' ;
+
+(* . obj field_or_index  — field access / array indexing
+   Named field:    . p x       — struct field by name (→ extractvalue)
+   Literal index:  . opt 0     — aggregate index 0 (→ extractvalue)
+                   . opt 1     — aggregate index 1 (→ extractvalue)
+   Variable index: . data idx  — array[idx] (→ getelementptr + load)
+
+   Compilation depends on object type:
+   - Struct/aggregate types: extractvalue
+   - Pointer types: getelementptr + load *)
+member_expr = '.' expr ( IDENT | expr ) ;
+
+(* # target_type expr  — type cast
+   Example:  # i ( some_fn )   — cast result to i64 *)
+cast_expr = '#' type expr ;
+
+(* ?? expr { Variant binding* → expr ... }
+   Pattern match on enum values. Currently non-exhaustive at compile time
+   (missing arms produce undefined behaviour at runtime).
+   Each arm binds variant payloads by position (up to 2 variables per arm).
+   '_' as the pattern name is a wildcard: matches any remaining variant
+   without binding any payload, emitting an unconditional branch.
+   Example:  ?? val {
+                 JNull   → `null`
+                 JNum n  → ( nurl_str_int n )
+                 _       → `other`
+             } *)
+match_expr = '??' expr '{' match_arm* '}' ;
+match_arm  = ( IDENT | '_' ) IDENT* '→' expr ;
+
+
+(* ── TYPES ────────────────────────────────────────────────────── *)
+
+type = base_type     (*  i u f b s v                          *)
+     | ptr_type      (*  * T           →  T*                  *)
+     | opt_type      (*  ? T           →  { i1, T }           *)
+     | slice_type    (*  [ T           →  { T*, i64 }         *)
+     | res_type      (*  ! T E         →  { i1, [max(T,E) x i8] } *)
+     | fn_type       (*  (@ R P*)      →  R (*)(P…)           *)
+     | generic_inst  (*  ( Name T+ )   — generic type application *)
+     | IDENT         (*  named struct, enum, or type variable  *)
+     ;
+
+base_type = 'i'  (*  signed 64-bit integer  →  i64    *)
+          | 'u'  (*  unsigned 64-bit int    →  i64    *)
+          | 'f'  (*  64-bit IEEE 754 float  →  double *)
+          | 'b'  (*  boolean                →  i1     *)
+          | 's'  (*  UTF-8 string           →  i8*    *)
+          | 'v'  (*  void                            *)
+          ;
+
+ptr_type     = '*' type ;
+opt_type     = '?' type ;
+slice_type   = '[' type ;
+res_type     = '!' type type ;
+fn_type      = '(' '@' type type* ')' ;
+generic_inst = '(' IDENT type+ ')' ;
+
+
+(* ── LITERALS ─────────────────────────────────────────────────── *)
+
+literal = INT | FLOAT | STR | BOOL ;
+
+(* Decimal integer. Underscores allowed as separators: 1_000_000
+   Negative literals cannot be written directly; use - 0 n or ~ 0 for -1. *)
+INT   = DIGIT+ ( '_' DIGIT+ )* ;
+
+(* Floating-point: mandatory decimal point, optional exponent.
+   Example:  3.14    1.0e10    6.022e23 *)
+FLOAT = DIGIT+ '.' DIGIT+ ( [eE] '-'? DIGIT+ )? ;
+
+(* Backtick-delimited string. Escape sequences: \n  \t  \\
+   Example:  `hello\n`    `path\to\file` *)
+STR = '`' [^`]* '`' ;
+
+(* Boolean literals *)
+BOOL = 'T'    (*  true  *)
+     | 'F'    (*  false *)
+     ;
+
+
+(* ── LEXICAL ───────────────────────────────────────────────────── *)
+
+IDENT = [a-zA-Z_] [a-zA-Z0-9_]* ;
+
+(* Reserved identifiers (classified by the lexer, not usable as names):
+     i u f b s v  →  type keywords
+     T F          →  boolean literals
+     Z            →  sizeof keyword                                 *)
+
+DIGIT      = [0-9] ;
+WHITESPACE = [ \t\n\r]+ ;     (* skipped *)
+COMMENT    = '//' [^\n]* ;    (* skipped *)
+EOF        = (* end of input *) ;

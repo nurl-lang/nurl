@@ -1,0 +1,11 @@
+# Force LF for files that are executed inside Linux containers or by
+# /usr/bin/env bash. Without this, Windows clones with core.autocrlf=true
+# check these out with CRLF, which makes the Linux shebang line resolve
+# to `/usr/bin/env bash\r` and fail with "No such file or directory".
+*.sh      text eol=lf
+Dockerfile text eol=lf
+*.nu      text eol=lf
+
+# Keep Windows batch files as CRLF so cmd.exe is happy.
+*.bat     text eol=crlf
+*.cmd     text eol=crlf

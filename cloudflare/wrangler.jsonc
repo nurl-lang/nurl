@@ -1,0 +1,35 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nurl-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "NURL_API_URL": "https://play.nurl-lang.org"
+  },
+  "containers": [
+    {
+      "class_name": "NurlContainer",
+      "image": "./Dockerfile",
+      "max_instances": 3,
+      "instance_type": "standard-1"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "NurlContainer",
+        "name": "NURL_CONTAINER"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["NurlContainer"]
+    }
+  ]
+}

@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+# ============================================================
+#  run_tests.sh — for every .nu in this directory:
+#     1. compile with nurlc (to LLVM IR)
+#     2. if compile OK, link with clang + runtime.o
+#     3. if link OK, run the binary with a timeout and capture
+#        stdout+stderr + exit code
+#  A single snapshot file testresults.txt records the full
+#  outcome for each test (status, exit code, captured output).
+#
+#  Compared to correct.txt as baseline:
+#   - missing baseline → testresults.txt is copied over as the
+#     initial baseline
+#   - identical         → print "TESTS PASSED"
+#   - different         → print unified diff and exit 1
+#
+#  Add or remove tests simply by adding/removing .nu files.
+#  When the baseline legitimately needs updating: delete
+#  correct.txt (or overwrite it with testresults.txt) and
+#  commit the new version.
+# ============================================================
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+NURLC="$ROOT_DIR/build/nurlc"
+RUNTIME="$ROOT_DIR/stdlib/runtime.o"
+
+if [[ ! -x "$NURLC" ]]; then
+    echo "ERROR: nurlc not found at $NURLC" >&2
+    echo "       Run: ./build.sh" >&2
+    exit 2
+fi
+if [[ ! -f "$RUNTIME" ]]; then
+    echo "ERROR: runtime.o not found at $RUNTIME" >&2
+    exit 2
+fi
+
+CLANG="${CLANG:-clang}"
+if ! command -v "$CLANG" &>/dev/null; then
+    for c in /usr/lib/llvm/bin/clang /usr/local/bin/clang; do
+        [ -x "$c" ] && CLANG="$c" && break
+    done
+fi
+if ! command -v "$CLANG" &>/dev/null; then
+    echo "ERROR: clang not found" >&2
+    exit 2
+fi
+
+# Link -lcurl when build.sh detected libcurl. Programs that don't import
+# stdlib/ext/http.nu link cleanly either way; this just keeps http_basic.nu
+# resolvable when NURL_HTTP_TESTS=1 enables it.
+CURL_LIBS=""
+if [[ -f "$ROOT_DIR/stdlib/runtime.curl" ]]; then
+    if command -v pkg-config &>/dev/null && pkg-config --exists libcurl 2>/dev/null; then
+        CURL_LIBS=$(pkg-config --libs libcurl)
+    else
+        CURL_LIBS="-lcurl"
+    fi
+fi
+
+# HTTP tests require network egress, so they're opt-in. Default skips.
+ENABLE_HTTP_TESTS="${NURL_HTTP_TESTS:-0}"
+
+# Live-socket net tests (server listen + loopback round-trip) are opt-in
+# via NURL_NET_TESTS=1. The error-path-only `net_basic.nu` runs
+# unconditionally; loopback / live tests need the gate.
+ENABLE_NET_TESTS="${NURL_NET_TESTS:-0}"
+
+RESULTS="$SCRIPT_DIR/testresults.txt"
+BASELINE="$SCRIPT_DIR/correct.txt"
+WORKDIR="$ROOT_DIR/build/tests"
+
+# Cap captured output per-test so a runaway test can't balloon the baseline.
+MAX_OUT_LINES="${MAX_OUT_LINES:-200}"
+TIMEOUT="${TIMEOUT:-10}"
+
+: > "$RESULTS"
+mkdir -p "$WORKDIR"
+
+shopt -s nullglob
+tests=("$SCRIPT_DIR"/*.nu)
+shopt -u nullglob
+
+if [[ ${#tests[@]} -eq 0 ]]; then
+    echo "ERROR: no .nu files found in $SCRIPT_DIR" >&2
+    exit 2
+fi
+
+IFS=$'\n' tests=($(printf '%s\n' "${tests[@]}" | LC_ALL=C sort))
+unset IFS
+
+append_output_capped() {
+    local out_file="$1"
+    local lines
+    lines=$(wc -l < "$out_file")
+    if [[ $lines -le $MAX_OUT_LINES ]]; then
+        cat "$out_file" >> "$RESULTS"
+    else
+        head -n "$MAX_OUT_LINES" "$out_file" >> "$RESULTS"
+        printf '[... %d more lines truncated ...]\n' \
+            "$((lines - MAX_OUT_LINES))" >> "$RESULTS"
+    fi
+}
+
+for src in "${tests[@]}"; do
+    name="$(basename "$src" .nu)"
+    ll="$WORKDIR/$name.ll"
+    bin="$WORKDIR/$name"
+    out="$WORKDIR/$name.out"
+    rm -f "$ll" "$bin" "$out"
+
+    # Network-dependent HTTP tests are opt-in via NURL_HTTP_TESTS=1.
+    # Exemptions:
+    #   * `http_request_parser` / `http_response_builder` /
+    #     `http_router` — pure parser/builder/router, no socket;
+    #     run unconditionally.
+    #   * `http_server_seq` — opens a loopback listener (no remote
+    #     net), so gated by NURL_NET_TESTS=1 alongside the live TCP
+    #     tests rather than by NURL_HTTP_TESTS.
+    if [[ "$name" == http_* \
+          && "$name" != "http_request_parser" \
+          && "$name" != "http_response_builder" \
+          && "$name" != "http_router" \
+          && "$name" != "http_extras" \
+          && "$name" != "http_middleware" \
+          && "$name" != "http_form" \
+          && "$name" != "http_multipart" \
+          && "$name" != "http_proxy" \
+          && "$name" != "http_server_seq" \
+          && "$ENABLE_HTTP_TESTS" != "1" ]]; then
+        continue
+    fi
+
+    # http_server_seq behaves like a net_loopback test — gated by
+    # NURL_NET_TESTS=1. Skip when the gate is off.
+    if [[ "$name" == "http_server_seq" && "$ENABLE_NET_TESTS" != "1" ]]; then
+        continue
+    fi
+
+    # Live TCP loopback test (net_loopback.nu) is opt-in via
+    # NURL_NET_TESTS=1. The error-path `net_basic.nu` is exempt — it
+    # never opens a real socket.
+    if [[ "$name" == net_* && "$name" != "net_basic" \
+          && "$ENABLE_NET_TESTS" != "1" ]]; then
+        continue
+    fi
+
+    printf '=== %s ===\n' "$name" >> "$RESULTS"
+
+    if ! "$NURLC" "$src" > "$ll" 2>/dev/null; then
+        echo "COMPILE FAIL" >> "$RESULTS"
+        echo >> "$RESULTS"
+        continue
+    fi
+    echo "COMPILE OK" >> "$RESULTS"
+
+    # shellcheck disable=SC2086
+    if ! "$CLANG" -O2 "$ll" "$RUNTIME" -lm -lpthread $CURL_LIBS -o "$bin" 2>/dev/null; then
+        echo "LINK FAIL" >> "$RESULTS"
+        echo >> "$RESULTS"
+        continue
+    fi
+    echo "LINK OK" >> "$RESULTS"
+
+    # Run with cwd = WORKDIR and argv[0] = "./name" so argv-sensitive
+    # tests produce the same output regardless of the absolute path
+    # where the repo lives.  Braces + 2>/dev/null silence bash's own
+    # "Aborted" / "Segmentation fault" job-status message when the
+    # binary dies by signal; the binary's stderr is already merged
+    # into $out via 2>&1.
+    { ( cd "$WORKDIR" && timeout "${TIMEOUT}s" "./$name" > "$out" 2>&1 ); } 2>/dev/null
+    exit_code=$?
+    printf 'EXIT %d\n' "$exit_code" >> "$RESULTS"
+    echo "OUTPUT" >> "$RESULTS"
+    append_output_capped "$out"
+    echo >> "$RESULTS"
+done
+
+if [[ ! -f "$BASELINE" ]]; then
+    cp "$RESULTS" "$BASELINE"
+    echo "No baseline found — created correct.txt from current results."
+    echo "Review it and commit if it reflects the expected state."
+    exit 0
+fi
+
+if cmp -s "$RESULTS" "$BASELINE"; then
+    echo "TESTS PASSED"
+    exit 0
+fi
+
+echo "TESTS FAILED — testresults.txt differs from correct.txt:"
+echo
+diff -u "$BASELINE" "$RESULTS" || true
+exit 1

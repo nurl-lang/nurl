@@ -1,0 +1,1350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+<link rel="alternate icon" href="/favicon.ico" />
+<title>NURL Playground</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161a21;
+    --panel-2: #1d222b;
+    --border: #262c38;
+    --fg: #e6e8ee;
+    --fg-dim: #9aa3b2;
+    --accent: #7cc4ff;
+    --accent-2: #b4e197;
+    --err: #ff6b6b;
+    --warn: #f5c77e;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 1rem;
+    padding: .6rem 1rem; border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  header h1 { margin: 0; font-size: 1rem; font-weight: 600; letter-spacing: .02em; }
+  header .spacer { flex: 1; }
+  header a { color: var(--fg-dim); text-decoration: none; font-size: .85rem; margin-left: .75rem; }
+  header a:hover { color: var(--fg); }
+  .status-pill {
+    font-size: .75rem; color: var(--fg-dim);
+    padding: .2rem .5rem; border: 1px solid var(--border); border-radius: 999px;
+  }
+  .status-pill.ok { color: var(--accent-2); border-color: #2b4a2a; }
+  .status-pill.bad { color: var(--err); border-color: #4a2b2b; }
+
+  main {
+    flex: 1; display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 1px; background: var(--border);
+    min-height: 0;
+  }
+  .toolbar {
+    grid-column: 1 / -1;
+    display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+    padding: .5rem .75rem; background: var(--panel);
+  }
+  .toolbar label { font-size: .85rem; color: var(--fg-dim); }
+  .toolbar select, .toolbar button, .toolbar input[type="text"] {
+    background: var(--panel-2); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: .4rem .6rem; font-size: .85rem;
+    font-family: inherit;
+  }
+  .toolbar button { cursor: pointer; }
+  .toolbar button.primary { background: #1d3a5a; border-color: #2b5a8a; color: #dbeeff; }
+  .toolbar button.primary:hover { background: #214d78; }
+  .toolbar button.run { background: #244a24; border-color: #3a6d3a; color: #e6ffe0; }
+  .toolbar button.run:hover { background: #2e5a2e; }
+  .toolbar button:disabled { opacity: .5; cursor: not-allowed; }
+  .toolbar .spacer { flex: 1; }
+  .toolbar .info { font-size: .75rem; color: var(--fg-dim); }
+
+  .pane {
+    background: var(--panel); display: flex; flex-direction: column;
+    min-height: 0; min-width: 0;
+  }
+  .pane-header {
+    font-size: .75rem; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--fg-dim);
+    padding: .4rem .75rem; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .pane-header .tag { font-size: .7rem; color: var(--fg-dim); }
+  #editor {
+    flex: 1; width: 100%; resize: none;
+    background: transparent; color: var(--fg);
+    border: 0; outline: 0;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13px; line-height: 1.45;
+    padding: .75rem 1rem;
+    tab-size: 2;
+  }
+  #output {
+    flex: 1; overflow: auto;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12.5px; line-height: 1.5;
+    padding: .5rem 1rem;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  #output .section-title {
+    display: block; margin-top: .75rem; font-weight: 600;
+    color: var(--fg-dim); font-size: .7rem; text-transform: uppercase;
+    letter-spacing: .08em;
+  }
+  #output .section-title:first-child { margin-top: 0; }
+  #output .stderr { color: var(--err); }
+  #output .warn { color: var(--warn); }
+  #output .ok { color: var(--accent-2); }
+  #output .dim { color: var(--fg-dim); }
+  #output .line-stdout { color: var(--fg); }
+
+  /* Canvas pane shown above output when the program uses the canvas FFI. */
+  #canvasWrap {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: .4rem;
+    padding: .6rem;
+    border-bottom: 1px solid var(--border);
+    background: #0b0d11;
+  }
+  #canvasWrap.active { display: flex; }
+  #canvasWrap .hint {
+    font-size: .7rem; color: var(--fg-dim);
+    letter-spacing: .05em; text-transform: uppercase;
+  }
+  #nurlCanvas {
+    image-rendering: pixelated;
+    border: 1px solid var(--border);
+    background: #000;
+    max-width: 100%;
+    box-shadow: 0 0 20px rgba(124, 196, 255, 0.15);
+  }
+  .toolbar button.stop {
+    background: #4a2424; border-color: #7a3838; color: #ffdddd;
+  }
+  .toolbar button.stop:hover { background: #5a2e2e; }
+</style>
+</head>
+<body>
+<header>
+  <h1>NURL Playground</h1>
+  <span id="health" class="status-pill">checking…</span>
+  <div class="spacer"></div>
+  <a href="/readme" target="_blank" rel="noopener">README</a>
+  <a href="/roadmap" target="_blank" rel="noopener">Roadmap</a>
+  <a href="/gotchas" target="_blank" rel="noopener">Gotchas</a>
+  <a href="/grammar" target="_blank" rel="noopener">Grammar</a>
+  <a href="/stdlib-viewer" target="_blank" rel="noopener">Stdlib</a>
+  <a href="/tests-viewer" target="_blank" rel="noopener">Tests</a>
+  <a href="/license" target="_blank" rel="noopener">License</a>
+  <a href="/docs" target="_blank" rel="noopener">Swagger</a>
+  <a href="/health" target="_blank" rel="noopener">/health</a>
+</header>
+
+<main>
+  <div class="toolbar">
+    <label for="examples">Example:</label>
+    <select id="examples"><option value="">— choose —</option></select>
+    <input id="filename" type="text" value="main.nu" size="12" title="Filename used for diagnostics" />
+    <button id="build" class="primary" type="button">Build WASM ⌘B</button>
+    <button id="buildNative" type="button" title="Compile to a native Linux ELF via POST /build">Build native ⌘⇧B</button>
+    <button id="buildWindows" type="button" title="Cross-compile to a Windows .exe (mingw-w64) via POST /build_windows">Build Windows ⌘⌥B</button>
+    <button id="buildMacos" type="button" title="Cross-compile to a macOS Mach-O binary (zig cc) via POST /build_macos">Build macOS ⌘⌥⇧B</button>
+    <button id="run" class="run" type="button" disabled>Run ⌘R</button>
+    <button id="stop" class="stop" type="button" disabled>Stop</button>
+    <button id="download" type="button" disabled>Download .wasm</button>
+    <div class="spacer"></div>
+    <span id="buildinfo" class="info"></span>
+  </div>
+
+  <section class="pane">
+    <div class="pane-header">
+      <span>Source (NURL)</span>
+      <span class="tag" id="srcinfo">0 bytes</span>
+    </div>
+    <div id="editor"></div>
+    <textarea id="editor-fallback" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+  </section>
+
+  <section class="pane">
+    <div class="pane-header">
+      <span>Output</span>
+      <span class="tag" id="outinfo"></span>
+    </div>
+    <div id="canvasWrap">
+      <canvas id="nurlCanvas" width="160" height="90"></canvas>
+      <div class="hint">canvas · press Stop to halt</div>
+    </div>
+    <div id="output"><span class="dim">Press <strong>Build WASM</strong> to compile.
+Press <strong>Run</strong> to execute the compiled module in-browser via a WASI shim.
+Programs using the canvas FFI animate in a live pixel surface above.</span></div>
+  </section>
+</main>
+
+<!-- Monaco loader (AMD). Populates window.monaco. -->
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
+<script>
+  window.__monacoReady = new Promise((resolve) => {
+    require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs' } });
+    require(['vs/editor/editor.main'], () => resolve(window.monaco));
+  });
+</script>
+
+<script type="module">
+import { WASI, File, OpenFile, ConsoleStdout, PreopenDirectory }
+  from "https://esm.sh/@bjorn3/browser_wasi_shim@0.3.0";
+
+const $ = (sel) => document.querySelector(sel);
+const editorHost = $("#editor");
+const fallbackTA = $("#editor-fallback");
+const examples  = $("#examples");
+const filename  = $("#filename");
+const buildBtn  = $("#build");
+const buildNativeBtn = $("#buildNative");
+const buildWindowsBtn = $("#buildWindows");
+const buildMacosBtn = $("#buildMacos");
+const runBtn    = $("#run");
+const dlBtn     = $("#download");
+const output    = $("#output");
+const buildInfo = $("#buildinfo");
+const srcInfo   = $("#srcinfo");
+const outInfo   = $("#outinfo");
+const healthPill = $("#health");
+const stopBtn    = $("#stop");
+const canvasWrap = $("#canvasWrap");
+const nurlCanvas = $("#nurlCanvas");
+
+const DEFAULT_SOURCE = `// Welcome to the NURL playground.
+// Output is collected via nurl_print* and flushed to stdout at exit.
+
+@ main → i {
+  ( nurl_print_str \`Hello from NURL -> wasm32-wasi!\\n\` )
+  ( nurl_print_int 42 )
+  ^ 0
+}
+`;
+
+let currentWasm    = null;   // Uint8Array of last successful build
+let currentUsesCanvas = false;
+let currentUsesAudio  = false;
+let currentRun     = null;   // { stop: () => void }  while running
+
+// ── Microphone + Web Audio AnalyserNode host ─────────────────────
+//
+// NURL wasm programs that use the `audio_*` FFI import a small set
+// of synchronous pollers under the `audio` wasm module. `audioHost`
+// owns an AudioContext + AnalyserNode fed by the user's microphone
+// and exposes those pollers as plain JS functions. It is lazily
+// initialised the first time a program that needs audio is run and
+// stays alive across subsequent runs (reusing the same mic stream
+// avoids repeated permission prompts).
+const audioHost = {
+  ctx: null,
+  analyser: null,
+  stream: null,
+  timeBuf: null,
+  freqBuf: null,       // float dB, one entry per bin
+  freqLin: null,       // scratch: linearised 0..1 magnitudes
+  hasFrame: false,     // becomes true after the first successful sample
+  _pullingTime: false,
+  _pullingFreq: false,
+
+  async init(fftSize = 2048) {
+    if (this.analyser) return true;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      logLine("audio: this browser cannot access getUserMedia", "stderr");
+      return false;
+    }
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      logLine("audio: microphone permission denied (" + e.name + ")", "stderr");
+      return false;
+    }
+    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    this.analyser = this.ctx.createAnalyser();
+    this.analyser.fftSize = fftSize;
+    this.analyser.smoothingTimeConstant = 0.4;
+    this.ctx.createMediaStreamSource(this.stream).connect(this.analyser);
+    this.timeBuf = new Float32Array(this.analyser.fftSize);
+    this.freqBuf = new Float32Array(this.analyser.frequencyBinCount);
+    this.freqLin = new Float32Array(this.analyser.frequencyBinCount);
+    this.hasFrame = false;
+    logLine(
+      `audio: analyser ready (sampleRate=${this.ctx.sampleRate} Hz, ` +
+      `bins=${this.analyser.frequencyBinCount})`,
+      "ok"
+    );
+    return true;
+  },
+
+  _pullTime() {
+    if (!this.analyser) return false;
+    this.analyser.getFloatTimeDomainData(this.timeBuf);
+    this.hasFrame = true;
+    return true;
+  },
+  _pullFreq() {
+    if (!this.analyser) return false;
+    this.analyser.getFloatFrequencyData(this.freqBuf);
+    // dB (typically −100..0) → linear 0..1.
+    for (let i = 0; i < this.freqBuf.length; i++) {
+      const db = this.freqBuf[i];
+      this.freqLin[i] = Math.max(0, Math.min(1, (db + 100) / 100));
+    }
+    this.hasFrame = true;
+    return true;
+  },
+
+  level() {
+    if (!this._pullTime()) return 0;
+    let s = 0;
+    for (const v of this.timeBuf) s += v * v;
+    return Math.sqrt(s / this.timeBuf.length);
+  },
+  bin(i) {
+    if (!this._pullFreq()) return 0;
+    const n = Number(i);
+    if (n < 0 || n >= this.freqLin.length) return 0;
+    return this.freqLin[n];
+  },
+  binCount() {
+    return this.analyser ? this.analyser.frequencyBinCount : 0;
+  },
+  peakBin() {
+    if (!this._pullFreq()) return -1;
+    let best = -1, bestVal = -Infinity;
+    for (let i = 0; i < this.freqLin.length; i++) {
+      if (this.freqLin[i] > bestVal) { bestVal = this.freqLin[i]; best = i; }
+    }
+    return best;
+  },
+  centroid() {
+    if (!this._pullFreq()) return -1;
+    let num = 0, den = 0;
+    const sr = this.ctx.sampleRate;
+    const n  = this.freqLin.length;
+    for (let i = 0; i < n; i++) {
+      const m = this.freqLin[i];
+      const f = (i * sr) / (2 * n);
+      num += m * f;
+      den += m;
+    }
+    return den > 1e-6 ? num / den : -1;
+  },
+  freqOf(i) {
+    if (!this.analyser) return 0;
+    const n = Number(i);
+    return (n * this.ctx.sampleRate) / (2 * this.analyser.frequencyBinCount);
+  },
+  sampleRate() {
+    return this.ctx ? this.ctx.sampleRate : 0;
+  },
+  isSilent(thrPct) {
+    return this.level() * 100 < Number(thrPct) ? 1 : 0;
+  },
+  ready() {
+    return this.analyser && this.hasFrame ? 1 : 0;
+  },
+};
+
+// ── Editor abstraction (Monaco if available, textarea fallback) ──
+const editorAPI = {
+  _monaco: null,
+  _model:  null,
+  getValue() {
+    return this._monaco ? this._model.getValue() : fallbackTA.value;
+  },
+  setValue(v) {
+    if (this._monaco) this._model.setValue(v);
+    else fallbackTA.value = v;
+    updateSrcInfo();
+  },
+  focus() { this._monaco ? this._monaco.focus() : fallbackTA.focus(); },
+};
+
+function updateSrcInfo() {
+  const b = new TextEncoder().encode(editorAPI.getValue()).length;
+  srcInfo.textContent = `${b} bytes`;
+}
+fallbackTA.addEventListener("input", updateSrcInfo);
+
+function log(text, cls) {
+  const span = document.createElement("span");
+  if (cls) span.className = cls;
+  span.textContent = text;
+  output.appendChild(span);
+  output.scrollTop = output.scrollHeight;
+}
+function logLine(text, cls) { log(text + "\n", cls); }
+function section(title)    { log(title, "section-title"); log("\n"); }
+function clearOutput()     { output.textContent = ""; }
+
+function b64ToBytes(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+// ── Health ─────────────────────────────────────────────────────
+async function refreshHealth() {
+  try {
+    const r = await fetch("/health");
+    const j = await r.json();
+    const ok = j.nurlc_available && j.wasi_toolchain_available;
+    healthPill.textContent = ok
+      ? `nurlc ✓ · wasi ✓ · stdlib ${j.stdlib_modules?.length ?? 0}`
+      : `nurlc ${j.nurlc_available ? "✓" : "✗"} · wasi ${j.wasi_toolchain_available ? "✓" : "✗"}`;
+    healthPill.className = "status-pill " + (ok ? "ok" : "bad");
+  } catch (e) {
+    healthPill.textContent = "unreachable";
+    healthPill.className = "status-pill bad";
+  }
+}
+
+// ── Examples ───────────────────────────────────────────────────
+async function loadExamples() {
+  try {
+    const r = await fetch("/examples");
+    const list = await r.json();
+    for (const ex of list) {
+      const opt = document.createElement("option");
+      opt.value = ex.name;
+      opt.textContent = `${ex.name}  (${ex.bytes} B)`;
+      examples.appendChild(opt);
+    }
+  } catch (e) { /* no-op */ }
+}
+examples.addEventListener("change", async () => {
+  const name = examples.value;
+  if (!name) return;
+  const r = await fetch("/examples/" + encodeURIComponent(name));
+  if (!r.ok) { logLine(`failed to load example: ${name}`, "stderr"); return; }
+  const j = await r.json();
+  editorAPI.setValue(j.source);
+  filename.value = name.split("/").pop() || "main.nu";
+});
+
+// ── Build ──────────────────────────────────────────────────────
+async function build() {
+  clearOutput();
+  buildBtn.disabled = true;
+  runBtn.disabled = true;
+  dlBtn.disabled = true;
+  currentWasm = null;
+  buildInfo.textContent = "compiling…";
+
+  const t0 = performance.now();
+  let resp, body;
+  try {
+    resp = await fetch("/build_wasm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: editorAPI.getValue(),
+        filename: filename.value || "main.nu",
+        return_format: "json",
+        emit_ll: false,
+      }),
+    });
+    body = await resp.json();
+  } catch (e) {
+    logLine("network error: " + e.message, "stderr");
+    buildBtn.disabled = false;
+    buildInfo.textContent = "";
+    return;
+  }
+  const ms = Math.round(performance.now() - t0);
+
+  if (!resp.ok || body.status === "error") {
+    const d = body.detail ?? body;
+    section("BUILD FAILED");
+    if (typeof d === "object" && d !== null) {
+      if (d.stage) logLine(`stage: ${d.stage}`, "dim");
+      if (typeof d.returncode === "number") logLine(`exit: ${d.returncode}`, "dim");
+      if (d.stderr)        { section("stderr"); log(d.stderr, "stderr"); }
+      if (d.nurlc_stderr)  { section("nurlc stderr"); log(d.nurlc_stderr, "stderr"); }
+    } else {
+      logLine(String(d), "stderr");
+    }
+    buildInfo.textContent = `failed in ${ms} ms`;
+    buildBtn.disabled = false;
+    return;
+  }
+
+  currentWasm = b64ToBytes(body.wasm_base64);
+  currentUsesCanvas = !!body.uses_canvas;
+  currentUsesAudio  = !!body.uses_audio;
+  section("BUILD OK");
+  logLine(`wasm: ${body.wasm_bytes.toLocaleString()} bytes · compiled in ${ms} ms` +
+          (currentUsesCanvas ? " · canvas" : "") +
+          (currentUsesAudio  ? " · audio"  : ""), "ok");
+  if (body.nurlc_stderr) { section("nurlc stderr"); log(body.nurlc_stderr, "warn"); }
+  if (body.clang_stderr) { section("clang stderr"); log(body.clang_stderr, "warn"); }
+  buildInfo.textContent = `wasm ${body.wasm_bytes} B · ${ms} ms`;
+  runBtn.disabled  = false;
+  dlBtn.disabled   = false;
+  buildBtn.disabled = false;
+}
+
+// ── Canvas host: <canvas> element bound to wasm framebuffer ────
+//
+// NURL programs call into this via 5 FFI functions (module "canvas"):
+//   open(w, h, fbPtr)      — sizes the <canvas>, remembers the fb ptr
+//   present()              — read wasm memory at fbPtr and blit to canvas
+//   sleep(ms)              — async yield (Asyncify-wrapped)
+//   should_close() -> i64  — returns 1 once user pressed Stop
+//   close()                — detach
+//   mouse_x() -> i64       — cursor X in framebuffer pixels (0 if outside)
+//   mouse_y() -> i64       — cursor Y in framebuffer pixels
+//   mouse_btn() -> i64     — 1 while the left button is held, else 0
+class CanvasHost {
+  constructor(canvasEl) {
+    this.el = canvasEl;
+    this.ctx = null;
+    this.img = null;
+    this.memory = null;     // WebAssembly.Memory (set at instantiate)
+    this.fbPtr = 0;
+    this.w = 0; this.h = 0;
+    this.shouldClose = 0;
+    // Mouse state, kept up-to-date by DOM events. Coordinates are stored
+    // in framebuffer pixels (not CSS pixels) so the wasm side gets the
+    // same values the native SDL back-end would report.
+    this.mouseX = 0;
+    this.mouseY = 0;
+    this.mouseBtn = 0;
+    this._installMouseListeners();
+  }
+  attachMemory(memory) { this.memory = memory; }
+  show() { canvasWrap.classList.add("active"); }
+  hide() { canvasWrap.classList.remove("active"); }
+  requestClose() { this.shouldClose = 1; }
+  reset() {
+    this.fbPtr = 0; this.w = 0; this.h = 0; this.shouldClose = 0;
+    this.mouseX = this.mouseY = this.mouseBtn = 0;
+    if (this.ctx) {
+      this.ctx.clearRect(0, 0, this.el.width, this.el.height);
+    }
+  }
+  _updateMouseFromEvent(ev) {
+    if (this.w <= 0 || this.h <= 0) return;
+    const rect = this.el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    // Map CSS-pixel cursor position to framebuffer coordinates, matching
+    // the descaling the native SDL back-end performs via
+    // SDL_RenderWindowToLogical.
+    const fx = ((ev.clientX - rect.left) / rect.width)  * this.w;
+    const fy = ((ev.clientY - rect.top)  / rect.height) * this.h;
+    this.mouseX = Math.max(0, Math.min(this.w - 1, Math.floor(fx)));
+    this.mouseY = Math.max(0, Math.min(this.h - 1, Math.floor(fy)));
+  }
+  _installMouseListeners() {
+    this.el.addEventListener("mousemove", (ev) => {
+      this._updateMouseFromEvent(ev);
+    });
+    this.el.addEventListener("mousedown", (ev) => {
+      if (ev.button === 0) this.mouseBtn = 1;
+      this._updateMouseFromEvent(ev);
+    });
+    // Release on window so dragging off-canvas still clears the button.
+    window.addEventListener("mouseup", (ev) => {
+      if (ev.button === 0) this.mouseBtn = 0;
+    });
+    this.el.addEventListener("mouseleave", () => {
+      // Keep last-known coordinates but don't stick the button.
+      this.mouseBtn = 0;
+    });
+    // Basic touch support: treat a single touch as a held left button.
+    this.el.addEventListener("touchstart", (ev) => {
+      if (ev.touches.length > 0) {
+        this.mouseBtn = 1;
+        this._updateMouseFromEvent(ev.touches[0]);
+        ev.preventDefault();
+      }
+    }, { passive: false });
+    this.el.addEventListener("touchmove", (ev) => {
+      if (ev.touches.length > 0) {
+        this._updateMouseFromEvent(ev.touches[0]);
+        ev.preventDefault();
+      }
+    }, { passive: false });
+    const endTouch = () => { this.mouseBtn = 0; };
+    this.el.addEventListener("touchend",    endTouch);
+    this.el.addEventListener("touchcancel", endTouch);
+  }
+  open(w, h, fbPtr) {
+    this.w = Number(w); this.h = Number(h); this.fbPtr = fbPtr | 0;
+    this.el.width = this.w; this.el.height = this.h;
+    // CSS scaling for visibility on the page.
+    const scale = Math.max(1, Math.min(8, Math.floor(480 / Math.max(this.w, this.h))));
+    this.el.style.width  = (this.w * scale) + "px";
+    this.el.style.height = (this.h * scale) + "px";
+    this.ctx = this.el.getContext("2d");
+    this.img = this.ctx.createImageData(this.w, this.h);
+    this.show();
+  }
+  present() {
+    if (!this.ctx || !this.memory) return;
+    // NURL stores each pixel as an i64; its low 32 bits carry an
+    // ARGB8888 value (0xAARRGGBB) in wasm's little-endian memory.
+    // ImageData expects RGBA bytes, which as a little-endian uint32
+    // is 0xAABBGGRR. So for each source word we swap R↔B in place.
+    //
+    // Using typed-array views over the raw buffers lets V8/SpiderMonkey
+    // inline the whole loop to plain memory ops — ~3-4× faster than a
+    // DataView + byte-at-a-time write would be.
+    const n = this.w * this.h;
+    const src32 = new Uint32Array(this.memory.buffer, this.fbPtr, n * 2);
+    const dst32 = new Uint32Array(this.img.data.buffer);
+    for (let i = 0, j = 0; i < n; i++, j += 2) {
+      const argb = src32[j];                            // ignore the high-32
+      // 0xAARRGGBB → 0xAABBGGRR (keep alpha+green, swap red/blue)
+      dst32[i] = (argb & 0xff00ff00)
+               | ((argb & 0x00ff0000) >>> 16)
+               | ((argb & 0x000000ff) <<  16)
+               | 0xff000000;                            // force opaque alpha
+    }
+    this.ctx.putImageData(this.img, 0, 0);
+  }
+}
+const canvasHost = new CanvasHost(nurlCanvas);
+
+// ── Asyncify runtime ───────────────────────────────────────────
+//
+// wasm-opt --asyncify instruments the module so that any import we
+// designate as async can suspend the wasm module and yield back to
+// the JS event loop, then resume later. The runtime here handles the
+// three-state dance (normal → unwinding → rewinding → normal) and
+// wraps designated imports to trigger it.
+const ASY_NONE = 0, ASY_UNWINDING = 1, ASY_REWINDING = 2;
+
+class AsyncifyRuntime {
+  constructor() {
+    this.exports = null;
+    this.memory = null;
+    this.stackPtr = 0;
+    this.stackSize = 4096;
+    this.pendingResult = undefined;
+    this.pendingPromise = null;
+    this.stopped = false;
+  }
+  attach(instance) {
+    this.exports = instance.exports;
+    this.memory  = instance.exports.memory;
+  }
+  ensureStack() {
+    if (this.stackPtr) return;
+    // canvas_wasm.c exports a statically-allocated 4 KiB scratch buffer
+    // under the name __nurl_asyncify_stack_ptr — use it as the asyncify
+    // stack so we don't need a malloc export from the wasm module.
+    const getPtr  = this.exports.__nurl_asyncify_stack_ptr;
+    const getSize = this.exports.__nurl_asyncify_stack_size;
+    if (!getPtr || !getSize) {
+      throw new Error(
+        "asyncify: module is missing __nurl_asyncify_stack_* exports. " +
+        "Rebuild canvas_wasm.o from the current stdlib/canvas_wasm.c."
+      );
+    }
+    const base = getPtr() | 0;
+    this.stackSize = getSize() | 0;
+    this.stackPtr = base;
+    // Header: [startPtr, endPtr) as two little-endian i32s at the start
+    // of the buffer; the usable region follows.
+    const view = new DataView(this.memory.buffer);
+    view.setInt32(base,     base + 8,               true);
+    view.setInt32(base + 4, base + this.stackSize,  true);
+  }
+  // Wrap an async import function `fn` (returns a Promise<result>).
+  // Synchronous signature is preserved; wasm sees a normal call/return.
+  wrap(fn) {
+    const self = this;
+    return function (...args) {
+      const state = self.exports.asyncify_get_state();
+      if (state === ASY_NONE) {
+        self.ensureStack();
+        self.pendingPromise = Promise.resolve(fn(...args));
+        self.exports.asyncify_start_unwind(self.stackPtr);
+        return 0;   // dummy; wasm is unwinding
+      }
+      if (state === ASY_REWINDING) {
+        self.exports.asyncify_stop_rewind();
+        return self.pendingResult;
+      }
+      throw new Error("asyncify: unexpected state " + state);
+    };
+  }
+  // Drive the wasm module: call entrypoint, then as long as it unwound,
+  // await the pending async work and rewind.
+  async drive(entry) {
+    let exitCode = 0;
+    const runEntry = () => {
+      try { entry(); }
+      catch (e) {
+        if (typeof e === "number") { exitCode = e; return "exit"; }
+        if (e && typeof e.code === "number") { exitCode = e.code; return "exit"; }
+        throw e;
+      }
+      return "ok";
+    };
+    let res = runEntry();
+    while (res !== "exit"
+           && this.exports.asyncify_get_state() === ASY_UNWINDING) {
+      this.exports.asyncify_stop_unwind();
+      try {
+        this.pendingResult = await this.pendingPromise;
+      } catch (e) {
+        throw e;
+      }
+      if (this.stopped) { exitCode = 0; break; }
+      this.exports.asyncify_start_rewind(this.stackPtr);
+      res = runEntry();
+    }
+    return exitCode;
+  }
+}
+
+// ── Run (browser WASI, optional canvas + Asyncify) ─────────────
+async function run() {
+  if (!currentWasm) return;
+  runBtn.disabled  = true;
+  // Stop is meaningful for any long-running program — both canvas
+  // loops and audio-analysis polls typically run until stopped.
+  stopBtn.disabled = !(currentUsesCanvas || currentUsesAudio);
+  section("RUN");
+  outInfo.textContent = "running…";
+  canvasHost.reset();
+  if (currentUsesCanvas) canvasHost.show(); else canvasHost.hide();
+
+  // If the program uses the audio FFI we proactively request mic
+  // permission before instantiating the module. The NURL program sees
+  // a working analyser from the very first `audio_*` call this way;
+  // if permission is denied, audio_ready() returns 0 and all pollers
+  // return 0, so well-written programs still behave gracefully.
+  if (currentUsesAudio) {
+    const ok = await audioHost.init(2048);
+    if (!ok) logLine("audio: running without microphone input", "warn");
+  }
+  const t0 = performance.now();
+
+  const stdoutWriter = ConsoleStdout.lineBuffered((line) => logLine(line, "line-stdout"));
+  const stderrWriter = ConsoleStdout.lineBuffered((line) => logLine(line, "stderr"));
+  const fds = [
+    new OpenFile(new File(new Uint8Array())),
+    stdoutWriter,
+    stderrWriter,
+    new PreopenDirectory(".", new Map()),
+  ];
+  const wasi = new WASI([filename.value || "main.nu"], [], fds);
+
+  const asy = new AsyncifyRuntime();
+
+  // Canvas imports wired to the <canvas> element. Only `sleep` is
+  // async (Asyncify-wrapped); `present` is a synchronous blit into
+  // the 2D context — the actual browser paint happens during the
+  // following sleep yield.
+  const canvasImports = {
+    open: (w, h, fbPtr) => { canvasHost.open(w, h, fbPtr); },
+    present: () => { canvasHost.present(); },
+    sleep: asy.wrap((ms) => new Promise((r) => setTimeout(r, Number(ms)))),
+    should_close: () => BigInt(canvasHost.shouldClose | (asy.stopped ? 1 : 0)),
+    close: () => { canvasHost.hide(); },
+    mouse_x:   () => BigInt(canvasHost.mouseX   | 0),
+    mouse_y:   () => BigInt(canvasHost.mouseY   | 0),
+    mouse_btn: () => BigInt(canvasHost.mouseBtn | 0),
+  };
+
+  // Audio imports are plain synchronous pollers of the AnalyserNode;
+  // they return 0 until `audioHost` has a live frame, which is fine
+  // for visualiser-style programs that loop every frame.
+  const audioImports = {
+    level:       ()  => audioHost.level(),
+    bin:         (i) => audioHost.bin(i),
+    bin_count:   ()  => BigInt(audioHost.binCount()),
+    peak_bin:    ()  => BigInt(audioHost.peakBin()),
+    centroid:    ()  => audioHost.centroid(),
+    freq_of:     (i) => audioHost.freqOf(i),
+    sample_rate: ()  => audioHost.sampleRate(),
+    is_silent:   (t) => BigInt(audioHost.isSilent(t)),
+    ready:       ()  => BigInt(audioHost.ready()),
+  };
+
+  const imports = { wasi_snapshot_preview1: wasi.wasiImport };
+  if (currentUsesCanvas) imports.canvas = canvasImports;
+  if (currentUsesAudio)  imports.audio  = audioImports;
+
+  let module, instance;
+  try {
+    module = await WebAssembly.compile(currentWasm);
+    instance = await WebAssembly.instantiate(module, imports);
+  } catch (e) {
+    logLine("instantiation failed: " + e.message, "stderr");
+    runBtn.disabled = false; stopBtn.disabled = true;
+    outInfo.textContent = "";
+    return;
+  }
+
+  // browser_wasi_shim stashes argv/envp inside wasi.start(); to reuse
+  // its setup without losing control we call its helpers manually.
+  try {
+    if (typeof wasi.initialize === "function" && instance.exports._initialize) {
+      wasi.initialize(instance);
+    }
+  } catch (_) { /* optional */ }
+
+  // Expose an external Stop handle before driving.
+  canvasHost.shouldClose = 0;
+  canvasHost.attachMemory(instance.exports.memory);
+  asy.attach(instance);
+  currentRun = {
+    stop: () => {
+      canvasHost.requestClose();
+      asy.stopped = true;
+      logLine("\n[stop requested]", "warn");
+    },
+  };
+  stopBtn.disabled = false;
+
+  let exitCode = 0;
+  try {
+    if (currentUsesCanvas) {
+      exitCode = await asy.drive(() => wasi.start(instance));
+    } else if (currentUsesAudio) {
+      // Audio-only programs have no Asyncify instrumentation, but they
+      // typically run a frame loop that never returns on its own — so
+      // drive wasi.start in a microtask and let currentRun.stop() break
+      // the loop by making audioHost.ready() pivot (unused) or by the
+      // NURL program checking some sentinel. In practice programs use
+      // canvas + audio together, which is handled by the branch above.
+      try { wasi.start(instance); }
+      catch (e) {
+        if (typeof e === "number") exitCode = e;
+        else if (e && typeof e.code === "number") exitCode = e.code;
+        else throw e;
+      }
+    } else {
+      try { wasi.start(instance); }
+      catch (e) {
+        if (typeof e === "number") exitCode = e;
+        else if (e && typeof e.code === "number") exitCode = e.code;
+        else throw e;
+      }
+    }
+  } catch (e) {
+    logLine("runtime error: " + (e?.message ?? e), "stderr");
+  }
+
+  const ms = Math.round(performance.now() - t0);
+  logLine(`\n[exit ${exitCode} · ${ms} ms]`, exitCode === 0 ? "ok" : "stderr");
+  outInfo.textContent = `exit ${exitCode} · ${ms} ms`;
+  runBtn.disabled  = false;
+  stopBtn.disabled = true;
+  currentRun = null;
+}
+
+// Stop button: asks the running program to exit via should_close=1.
+stopBtn.addEventListener("click", () => {
+  if (currentRun) currentRun.stop();
+});
+
+// ── Build native (POST /build) ────────────────────────────────
+//
+// Compiles to an x86_64 ELF inside the container (mirrors nurl.sh) and
+// surfaces download links for the .ll and the binary. No in-browser run
+// path — this is for pulling artifacts off the server.
+async function buildNative() {
+  clearOutput();
+  buildNativeBtn.disabled = true;
+  buildBtn.disabled = true;
+  buildInfo.textContent = "compiling native…";
+
+  const t0 = performance.now();
+  let resp, body;
+  try {
+    resp = await fetch("/build", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: editorAPI.getValue(),
+        filename: filename.value || "main.nu",
+      }),
+    });
+    body = await resp.json();
+  } catch (e) {
+    logLine("network error: " + e.message, "stderr");
+    buildNativeBtn.disabled = false;
+    buildBtn.disabled = false;
+    buildInfo.textContent = "";
+    return;
+  }
+  const ms = Math.round(performance.now() - t0);
+
+  // /build always returns 200 with status=ok|error (except 4xx/5xx for
+  // toolchain-level failures — those still come through `detail`).
+  if (!resp.ok) {
+    section("BUILD FAILED");
+    logLine(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? body, null, 2), "stderr");
+    buildInfo.textContent = `failed in ${ms} ms`;
+    buildNativeBtn.disabled = false;
+    buildBtn.disabled = false;
+    return;
+  }
+
+  const ok = body.status === "ok";
+  section(ok ? "BUILD OK (native)" : "BUILD FAILED (native)");
+  if (body.message) logLine(body.message, ok ? "ok" : "stderr");
+  if (typeof body.clang_returncode === "number") {
+    logLine(`nurlc exit ${body.nurlc_returncode} · clang exit ${body.clang_returncode} · ${ms} ms`,
+            "dim");
+  } else {
+    logLine(`nurlc exit ${body.nurlc_returncode} · ${ms} ms`, "dim");
+  }
+  if (body.uses_canvas) logLine("program uses canvas FFI", "warn");
+  if (body.uses_audio)  logLine("program uses audio FFI (microphone)", "warn");
+
+  // Download links first — they're the whole point of this button.
+  if (body.ll_artifact || body.binary_artifact) {
+    section("DOWNLOADS");
+    const addLink = (art, label) => {
+      if (!art) return;
+      const a = document.createElement("a");
+      a.href = art.download_url;
+      a.download = art.name;
+      a.textContent = `↓ ${label}  (${art.name}, ${art.bytes.toLocaleString()} B)`;
+      a.style.color = "var(--accent)";
+      a.style.display = "block";
+      a.style.margin = ".15rem 0";
+      output.appendChild(a);
+    };
+    addLink(body.ll_artifact,     "LLVM IR (.ll)");
+    addLink(body.binary_artifact, "native binary");
+    log("\n");
+  }
+
+  if (body.stdout) { section("stdout"); log(body.stdout); log("\n"); }
+  if (body.stderr) { section("stderr"); log(body.stderr, ok ? "warn" : "stderr"); log("\n"); }
+  if (!body.stdout && !body.stderr && body.nurlc_stderr) {
+    section("nurlc stderr"); log(body.nurlc_stderr, "warn");
+  }
+
+  buildInfo.textContent = ok
+    ? `native ${body.binary_artifact?.bytes ?? 0} B · ${ms} ms`
+    : `failed in ${ms} ms`;
+  buildNativeBtn.disabled = false;
+  buildBtn.disabled = false;
+}
+buildNativeBtn.addEventListener("click", buildNative);
+
+// ── Build Windows .exe (POST /build_windows) ──────────────────
+//
+// Cross-compiles to a Windows x86_64 .exe via mingw-w64 inside the
+// container. Surface .ll + .exe download links. Canvas/audio FFI is
+// rejected server-side with a 400 — those have no Windows back-end.
+async function buildWindows() {
+  clearOutput();
+  buildWindowsBtn.disabled = true;
+  buildNativeBtn.disabled = true;
+  buildBtn.disabled = true;
+  buildInfo.textContent = "compiling windows…";
+
+  const t0 = performance.now();
+  let resp, body;
+  try {
+    resp = await fetch("/build_windows", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: editorAPI.getValue(),
+        filename: filename.value || "main.nu",
+      }),
+    });
+    body = await resp.json();
+  } catch (e) {
+    logLine("network error: " + e.message, "stderr");
+    buildWindowsBtn.disabled = false;
+    buildNativeBtn.disabled = false;
+    buildBtn.disabled = false;
+    buildInfo.textContent = "";
+    return;
+  }
+  const ms = Math.round(performance.now() - t0);
+
+  if (!resp.ok) {
+    section("BUILD FAILED (windows)");
+    logLine(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? body, null, 2), "stderr");
+    buildInfo.textContent = `failed in ${ms} ms`;
+    buildWindowsBtn.disabled = false;
+    buildNativeBtn.disabled = false;
+    buildBtn.disabled = false;
+    return;
+  }
+
+  const ok = body.status === "ok";
+  section(ok ? "BUILD OK (windows)" : "BUILD FAILED (windows)");
+  if (body.message) logLine(body.message, ok ? "ok" : "stderr");
+  if (typeof body.clang_returncode === "number") {
+    logLine(`nurlc exit ${body.nurlc_returncode} · clang exit ${body.clang_returncode} · ${ms} ms`,
+            "dim");
+  } else {
+    logLine(`nurlc exit ${body.nurlc_returncode} · ${ms} ms`, "dim");
+  }
+
+  if (body.ll_artifact || body.binary_artifact) {
+    section("DOWNLOADS");
+    const addLink = (art, label) => {
+      if (!art) return;
+      const a = document.createElement("a");
+      a.href = art.download_url;
+      a.download = art.name;
+      a.textContent = `↓ ${label}  (${art.name}, ${art.bytes.toLocaleString()} B)`;
+      a.style.color = "var(--accent)";
+      a.style.display = "block";
+      a.style.margin = ".15rem 0";
+      output.appendChild(a);
+    };
+    addLink(body.ll_artifact,     "LLVM IR (.ll)");
+    addLink(body.binary_artifact, "Windows .exe");
+    log("\n");
+  }
+
+  if (body.stdout) { section("stdout"); log(body.stdout); log("\n"); }
+  if (body.stderr) { section("stderr"); log(body.stderr, ok ? "warn" : "stderr"); log("\n"); }
+  if (!body.stdout && !body.stderr && body.nurlc_stderr) {
+    section("nurlc stderr"); log(body.nurlc_stderr, "warn");
+  }
+
+  buildInfo.textContent = ok
+    ? `windows ${body.binary_artifact?.bytes ?? 0} B · ${ms} ms`
+    : `failed in ${ms} ms`;
+  buildWindowsBtn.disabled = false;
+  buildNativeBtn.disabled = false;
+  buildBtn.disabled = false;
+}
+buildWindowsBtn.addEventListener("click", buildWindows);
+
+// ── Build macOS Mach-O (POST /build_macos) ────────────────────
+//
+// Cross-compiles to a macOS x86_64 Mach-O via zig cc inside the
+// container. Surface .ll + binary download links. canvas/audio FFI
+// is rejected server-side — same contract as the Windows path.
+// HTTP still links (via runtime stubs) but returns HttpErr::Other;
+// there's no libcurl on this target.
+async function buildMacos() {
+  clearOutput();
+  buildMacosBtn.disabled = true;
+  buildWindowsBtn.disabled = true;
+  buildNativeBtn.disabled = true;
+  buildBtn.disabled = true;
+  buildInfo.textContent = "compiling macos…";
+
+  const t0 = performance.now();
+  let resp, body;
+  try {
+    resp = await fetch("/build_macos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: editorAPI.getValue(),
+        filename: filename.value || "main.nu",
+      }),
+    });
+    body = await resp.json();
+  } catch (e) {
+    logLine("network error: " + e.message, "stderr");
+    buildMacosBtn.disabled = false;
+    buildWindowsBtn.disabled = false;
+    buildNativeBtn.disabled = false;
+    buildBtn.disabled = false;
+    buildInfo.textContent = "";
+    return;
+  }
+  const ms = Math.round(performance.now() - t0);
+
+  if (!resp.ok) {
+    section("BUILD FAILED (macos)");
+    logLine(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? body, null, 2), "stderr");
+    buildInfo.textContent = `failed in ${ms} ms`;
+    buildMacosBtn.disabled = false;
+    buildWindowsBtn.disabled = false;
+    buildNativeBtn.disabled = false;
+    buildBtn.disabled = false;
+    return;
+  }
+
+  const ok = body.status === "ok";
+  section(ok ? "BUILD OK (macos)" : "BUILD FAILED (macos)");
+  if (body.message) logLine(body.message, ok ? "ok" : "stderr");
+  if (typeof body.clang_returncode === "number") {
+    logLine(`nurlc exit ${body.nurlc_returncode} · zig cc exit ${body.clang_returncode} · ${ms} ms`,
+            ok ? "info" : "stderr");
+  }
+  if (body.nurlc_stderr) logLine(body.nurlc_stderr.trim(), "stderr");
+  if (body.clang_stderr) logLine(body.clang_stderr.trim(), "stderr");
+  if (body.stderr && body.stderr !== body.nurlc_stderr && body.stderr !== body.clang_stderr) {
+    logLine(body.stderr.trim(), "stderr");
+  }
+
+  if (body.ll_artifact || body.binary_artifact) {
+    log("\n");
+    const addLink = (a, label) => {
+      if (!a) return;
+      const row = document.createElement("div");
+      row.className = "line info";
+      row.textContent = `${label}: `;
+      const link = document.createElement("a");
+      link.href = a.download_url;
+      link.textContent = `${a.name} (${a.bytes} B)`;
+      link.download = a.name;
+      row.appendChild(link);
+      output.appendChild(row);
+    };
+    addLink(body.ll_artifact,     "LLVM IR (.ll)");
+    addLink(body.binary_artifact, "macOS binary");
+    log("\n");
+  }
+
+  if (ok && body.binary_artifact) {
+    logLine(
+      "note: macOS binary is unsigned. Before running, clear the Gatekeeper " +
+      "quarantine attribute:\n  xattr -d com.apple.quarantine " + body.binary_artifact.name +
+      "\n  chmod +x " + body.binary_artifact.name,
+      "info",
+    );
+  }
+
+  buildInfo.textContent = ok
+    ? `macos ${body.binary_artifact?.bytes ?? 0} B · ${ms} ms`
+    : `failed in ${ms} ms`;
+  buildMacosBtn.disabled = false;
+  buildWindowsBtn.disabled = false;
+  buildNativeBtn.disabled = false;
+  buildBtn.disabled = false;
+}
+buildMacosBtn.addEventListener("click", buildMacos);
+
+// ── Download ───────────────────────────────────────────────────
+dlBtn.addEventListener("click", () => {
+  if (!currentWasm) return;
+  const blob = new Blob([currentWasm], { type: "application/wasm" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = (filename.value || "main").replace(/\.nu$/, "") + ".wasm";
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+// ── Keybindings ────────────────────────────────────────────────
+document.addEventListener("keydown", (e) => {
+  const meta = e.metaKey || e.ctrlKey;
+  if (meta && e.key.toLowerCase() === "b") {
+    e.preventDefault();
+    if (e.altKey && e.shiftKey) buildMacos();
+    else if (e.altKey) buildWindows();
+    else if (e.shiftKey) buildNative();
+    else build();
+  }
+  if (meta && e.key.toLowerCase() === "r") { e.preventDefault(); if (!runBtn.disabled) run(); }
+});
+buildBtn.addEventListener("click", build);
+runBtn.addEventListener("click", run);
+
+// ── Monaco setup ───────────────────────────────────────────────
+// Monarch tokenizer for NURL (translated from tooling/vscode-nurl's
+// tmLanguage.json). Token names are picked to line up with the
+// vs-dark-plus theme so the result looks close to VS Code.
+const NURL_MONARCH = {
+  defaultToken: "",
+  tokenPostfix: ".nurl",
+  tokenizer: {
+    root: [
+      // line comments
+      [/\/\/.*$/, "comment"],
+
+      // backtick strings
+      [/`/, { token: "string.quote", bracket: "@open", next: "@string" }],
+
+      // import:  $ `...`    ffi:  & `...`
+      [/\$(?=\s*`)/, "keyword.control.import"],
+      [/&(?=\s*`)/,  "keyword.control.ffi"],
+
+      // function definition:  @ <lowercase_ident>
+      [/(@)(\s+)([a-z_][\w]*)/, ["keyword.other.func", "white", "entity.name.function"]],
+
+      // trait decl:  % <Name>
+      [/(%)(\s+)([A-Za-z_][\w]*)/, ["keyword.other.trait", "white", "type.identifier"]],
+
+      // enum decl:  : | <Name>
+      [/(:)(\s*)(\|)(\s*)([A-Za-z_][\w]*)/,
+        ["keyword", "white", "keyword", "white", "type.identifier"]],
+
+      // struct decl:  : <UpperName> {
+      [/(:)(\s+)([A-Z][\w]*)(\s*)(\{)/,
+        ["keyword", "white", "type.identifier", "white", "@brackets"]],
+
+      // numbers
+      [/\d+\.\d+([eE][+\-]?\d+)?/, "number.float"],
+      [/\d+/,                       "number"],
+
+      // boolean constants
+      [/\b(T|F)\b/, "constant.language.boolean"],
+
+      // primitive types
+      [/\b(i|u|f|b|s|v)\b/, "type"],
+
+      // uppercase-first identifiers → user types
+      [/\b[A-Z][\w]*\b/, "type.identifier"],
+
+      // operators
+      [/→/,              "keyword.operator"],
+      [/\^/,             "keyword.control.return"],
+      [/\?\?/,           "keyword.control"],
+      [/\?/,             "keyword.control"],
+      [/~/,              "keyword.control"],
+      [/;/,              "keyword"],
+      [/\\/,             "keyword"],
+      [/\bZ\b/,          "keyword"],
+      [/(==|!=|<=|>=)/,  "keyword.operator"],
+      [/[<>]/,           "keyword.operator"],
+      [/[+\-*/%]/,       "keyword.operator.arithmetic"],
+      [/[&|!]/,          "keyword.operator.logical"],
+      [/[=:]/,           "keyword.operator.assign"],
+      [/[.#@$]/,         "keyword.operator"],
+
+      // brackets & delimiters
+      [/[{}()\[\]]/, "@brackets"],
+      [/,/,          "delimiter"],
+
+      // identifiers (fallback)
+      [/[a-zA-Z_]\w*/, "identifier"],
+
+      // whitespace
+      [/\s+/, "white"],
+    ],
+
+    string: [
+      [/\\[ntr\\`]/,                                    "string.escape"],
+      [/[^\\`]+/,                                       "string"],
+      [/`/, { token: "string.quote", bracket: "@close", next: "@pop" }],
+    ],
+  },
+};
+
+async function initEditor() {
+  try {
+    const monaco = await window.__monacoReady;
+    monaco.languages.register({ id: "nurl" });
+    monaco.languages.setMonarchTokensProvider("nurl", NURL_MONARCH);
+    monaco.languages.setLanguageConfiguration("nurl", {
+      comments: { lineComment: "//" },
+      brackets: [["{","}"],["[","]"],["(",")"]],
+      autoClosingPairs: [
+        { open: "{", close: "}" },
+        { open: "[", close: "]" },
+        { open: "(", close: ")" },
+        { open: "`", close: "`" },
+      ],
+      surroundingPairs: [
+        { open: "{", close: "}" },
+        { open: "[", close: "]" },
+        { open: "(", close: ")" },
+        { open: "`", close: "`" },
+      ],
+    });
+
+    // Theme tuned to look like VS Code Dark+ on top of our panel color.
+    monaco.editor.defineTheme("nurl-dark", {
+      base: "vs-dark",
+      inherit: true,
+      rules: [
+        { token: "comment",                     foreground: "6A9955", fontStyle: "italic" },
+        { token: "string",                      foreground: "CE9178" },
+        { token: "string.quote",                foreground: "CE9178" },
+        { token: "string.escape",               foreground: "D7BA7D" },
+        { token: "number",                      foreground: "B5CEA8" },
+        { token: "number.float",                foreground: "B5CEA8" },
+        { token: "constant.language.boolean",   foreground: "569CD6" },
+        { token: "type",                        foreground: "4EC9B0" },
+        { token: "type.identifier",             foreground: "4EC9B0" },
+        { token: "entity.name.function",        foreground: "DCDCAA" },
+        { token: "keyword",                     foreground: "C586C0" },
+        { token: "keyword.control",             foreground: "C586C0" },
+        { token: "keyword.control.import",      foreground: "C586C0" },
+        { token: "keyword.control.ffi",         foreground: "C586C0" },
+        { token: "keyword.control.return",      foreground: "C586C0" },
+        { token: "keyword.other.func",          foreground: "569CD6" },
+        { token: "keyword.other.trait",         foreground: "569CD6" },
+        { token: "keyword.operator",            foreground: "D4D4D4" },
+        { token: "keyword.operator.arithmetic", foreground: "D4D4D4" },
+        { token: "keyword.operator.logical",    foreground: "D4D4D4" },
+        { token: "keyword.operator.assign",     foreground: "D4D4D4" },
+        { token: "identifier",                  foreground: "9CDCFE" },
+        { token: "delimiter",                   foreground: "D4D4D4" },
+      ],
+      colors: {
+        "editor.background":        "#161a21",
+        "editor.foreground":        "#e6e8ee",
+        "editorLineNumber.foreground": "#4b5366",
+        "editorCursor.foreground":  "#7cc4ff",
+        "editor.selectionBackground": "#264f78",
+        "editor.inactiveSelectionBackground": "#3a3d41",
+        "editorIndentGuide.background": "#262c38",
+      },
+    });
+
+    const inst = monaco.editor.create(editorHost, {
+      value: DEFAULT_SOURCE,
+      language: "nurl",
+      theme: "nurl-dark",
+      fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+      fontSize: 13,
+      lineHeight: 1.45,
+      minimap: { enabled: false },
+      scrollBeyondLastLine: false,
+      renderLineHighlight: "line",
+      tabSize: 2,
+      insertSpaces: true,
+      automaticLayout: true,
+      smoothScrolling: true,
+      fixedOverflowWidgets: true,
+    });
+    editorAPI._monaco = inst;
+    editorAPI._model  = inst.getModel();
+    editorAPI._model.onDidChangeContent(updateSrcInfo);
+
+    // Monaco swallows keydowns; wire ⌘/Ctrl+B and ⌘/Ctrl+R inside editor too.
+    const M = monaco.KeyMod, K = monaco.KeyCode;
+    inst.addCommand(M.CtrlCmd | K.KeyB, () => build());
+    inst.addCommand(M.CtrlCmd | M.Shift | K.KeyB, () => buildNative());
+    inst.addCommand(M.CtrlCmd | M.Alt | K.KeyB, () => buildWindows());
+    inst.addCommand(M.CtrlCmd | M.Alt | M.Shift | K.KeyB, () => buildMacos());
+    inst.addCommand(M.CtrlCmd | K.KeyR, () => { if (!runBtn.disabled) run(); });
+    updateSrcInfo();
+  } catch (e) {
+    // Monaco failed → show the textarea fallback.
+    console.warn("Monaco failed, falling back to textarea:", e);
+    editorHost.style.display   = "none";
+    fallbackTA.style.display   = "block";
+    fallbackTA.value           = DEFAULT_SOURCE;
+    updateSrcInfo();
+  }
+}
+
+// ── Init ───────────────────────────────────────────────────────
+initEditor();
+refreshHealth();
+loadExamples();
+</script>
+</body>
+</html>

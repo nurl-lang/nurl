@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nurl-web",
+  "compatibility_date": "2025-06-01",
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "./public",
+    "not_found_handling": "404-page"
+  },
+  "vars": {
+    "PLAYGROUND_URL": "https://play.nurl-lang.org",
+    "REPO_URL": "https://github.com/nurl-lang/nurl"
+  }
+}
