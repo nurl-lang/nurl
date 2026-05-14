@@ -2,6 +2,8 @@
 
 > A programming language designed exclusively for use by language models. Not meant to be human-readable — maximum information density, deterministic compilation, LLVM-based codegen.
 
+**Project site:** <https://nurl-lang.org> · **Live playground & MCP endpoint:** <https://play.nurl-lang.org>
+
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/gist/Hindurable/b2b5641328d23097048eef22bcac4a2d/nurl.ipynb)
 
 ---
@@ -124,6 +126,8 @@ A FastAPI container under `api/` exposes the compiler over HTTP and hosts a
 Monaco-based playground that builds and runs NURL programs as
 **WebAssembly (wasm32-wasi)** directly in the browser via
 [`@bjorn3/browser_wasi_shim`](https://github.com/bjorn3/browser_wasi_shim).
+The same container also serves the public **MCP endpoint** at `/mcp` — see
+the [MCP section below](#mcp-server--let-an-llm-drive-the-toolchain).
 
 ### Endpoints
 
@@ -200,6 +204,76 @@ without shipping a per-OS native build. Bootstrap is closed: `nurlc.wasm`
 re-compiling its own source produces byte-identical IR to the native
 `nurlc`, so the wasm path is a faithful copy of the compiler — useful as
 a lightweight regression check on cross-ABI codegen.
+
+---
+
+## MCP server — let an LLM drive the toolchain
+
+The playground container also exposes the NURL toolchain as a **public,
+unauthenticated [Model Context Protocol](https://modelcontextprotocol.io/)
+endpoint**, mounted at `/mcp` over Streamable HTTP. Point any
+MCP-aware client at it and the model can build, browse, and read NURL
+from inside its own loop — no local install required.
+
+**Public endpoint:** <https://play.nurl-lang.org/mcp>
+(implementation: [`api/app/mcp_server.py`](api/app/mcp_server.py); the
+playground is at <https://play.nurl-lang.org>, project home at
+<https://nurl-lang.org>.)
+
+### Add to Claude Code / Claude Desktop
+
+One-liner:
+
+```bash
+claude mcp add --transport http nurl https://play.nurl-lang.org/mcp
+```
+
+Cursor, Windsurf, Zed and other MCP-capable IDEs accept the same URL
+through their respective config UI (transport: `http` /
+`streamable-http`).
+
+### What's on offer
+
+**Tools** (14) — the model invokes these to act on NURL source:
+
+| Group | Tools |
+|---|---|
+| Build (compile + return artifact) | `nurl_build_native` (Linux x86_64 ELF), `nurl_build_windows` (Win64 `.exe`, mingw-w64), `nurl_build_macos` (macOS x86_64 Mach-O, zig cc), `nurl_build_wasm` (wasm32-wasi) |
+| Browse | `nurl_list_examples`, `nurl_list_stdlib`, `nurl_list_tests` |
+| Read | `nurl_read_example`, `nurl_read_stdlib`, `nurl_read_test`, `nurl_read_grammar`, `nurl_read_readme`, `nurl_read_roadmap`, `nurl_read_gotchas` |
+
+**Resources** (7) mirror the read-tools as `nurl://` URIs
+(`nurl://grammar`, `nurl://readme`, `nurl://roadmap`,
+`nurl://gotchas`, `nurl://stdlib/<path>`, `nurl://example/<name>`,
+`nurl://test/<name>`) for clients that prefer resource semantics.
+
+**Prompt** (1) — `nurl_coding_assistant`: a compact grammar +
+canonical example primer that grounds smaller models before they
+write or review NURL code.
+
+### Self-hosting
+
+The `/mcp` mount comes for free with the playground container:
+
+```bash
+docker build -f api/Dockerfile -t nurl-api:dev .
+docker run --rm -p 8000:8000 nurl-api:dev
+# → http://localhost:8000/mcp     (your private MCP endpoint)
+```
+
+Or run the FastAPI app directly with `uvicorn` from `api/` (see
+`api/README.md`) for non-Docker development.
+
+### Caveats
+
+- Open and unauthenticated. The hosted instance is a free public
+  endpoint. Don't push secrets through it; assume the source is
+  logged. For trust-sensitive use, self-host.
+- Build endpoints accept arbitrary NURL source and run it through
+  `clang` inside the container. Container-level sandboxing is the
+  only isolation; downstream binaries are returned, not executed.
+- Tool/resource catalog tracks `main`. Breaking changes to a tool
+  signature are announced in `CHANGELOG.md`.
 
 ---
 
@@ -673,6 +747,11 @@ NURL is designed so that:
 3. **Context window is sufficient** — a complete program fits in an LLM's context
 4. **Diffing is easy** — changes are small and localized
 5. **Round-trips work** — code → explanation → code preserves semantics
+
+The concrete delivery vehicle for (1)–(5) is the public **MCP server**
+at <https://play.nurl-lang.org/mcp> — Claude / Cursor / Windsurf / Zed
+can compile, browse and read NURL through it without any local toolchain.
+See [MCP server — let an LLM drive the toolchain](#mcp-server--let-an-llm-drive-the-toolchain).
 
 ---
 
