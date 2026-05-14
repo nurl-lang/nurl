@@ -1167,8 +1167,16 @@ static NurlToken lex_next_tok(NurlLex *lx) {
         if (strcmp(id, "F") == 0) { NurlToken t = make_tok(LTT_BOOL,   "F", 0, line); free(id); return t; }
         /* sizeof keyword */
         if (strcmp(id, "Z") == 0) { NurlToken t = make_tok(LTT_SIZEOF, "Z", 0, line); free(id); return t; }
-        /* type keywords */
+        /* type keywords — single-char (i u f b s v) plus fixed-width
+           variants i8 i16 i32 u16 u32 u64 f32 added in grammar v1.8.
+           No u8 alias: legacy `u` IS the unsigned-8-bit byte type. */
         if (strlen(id) == 1 && strchr("iufbsv", id[0])) {
+            NurlToken t = make_tok(LTT_TYPE_KW, id, 0, line); free(id); return t;
+        }
+        if (strcmp(id, "i8")  == 0 || strcmp(id, "i16") == 0 ||
+            strcmp(id, "i32") == 0 || strcmp(id, "u16") == 0 ||
+            strcmp(id, "u32") == 0 || strcmp(id, "u64") == 0 ||
+            strcmp(id, "f32") == 0) {
             NurlToken t = make_tok(LTT_TYPE_KW, id, 0, line); free(id); return t;
         }
         /* namespace syntax: a::b[::c...] is merged into a single IDENT

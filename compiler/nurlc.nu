@@ -130,7 +130,30 @@
   ? ( seq ty `b` ) `i1`
   ? ( seq ty `s` ) `i8*`
   ? ( seq ty `v` ) `void`
+  // Fixed-size integer types (grammar v1.8). LLVM doesn't carry
+  // signedness in the type — that's encoded in the binding's
+  // `__nurl_type` side-channel and consulted at cast / store /
+  // signed-op sites. `i*` is signed, `u*` is unsigned.
+  ? ( seq ty `i8`  ) `i8`
+  ? ( seq ty `i16` ) `i16`
+  ? ( seq ty `i32` ) `i32`
+  ? ( seq ty `u16` ) `i16`
+  ? ( seq ty `u32` ) `i32`
+  ? ( seq ty `u64` ) `i64`
+  ? ( seq ty `f32` ) `float`
   ( nurl_str_cat `%` ty )
+}
+
+// nurl_type_is_unsigned: predicate driving sext-vs-zext at cast / store
+// sites and unsigned-op selection in binops. Centralized here so the
+// list of unsigned NURL idents grows in one place.
+@ nurl_type_is_unsigned s nt → b {
+  ? == 0 ( nurl_str_len nt ) { ^ F } {}
+  ? ( seq nt `u` )   { ^ T } {}
+  ? ( seq nt `u16` ) { ^ T } {}
+  ? ( seq nt `u32` ) { ^ T } {}
+  ? ( seq nt `u64` ) { ^ T } {}
+  ^ F
 }
 
 @ parse_type i lex → s {
@@ -155,6 +178,13 @@
   ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s v ( nurl_lex_val lex )
       ( nurl_lex_advance lex )
+      // Side-channel: stash the NURL-source name of the base type so
+      // callers (let-stmt, gen_fn_param) can decide signedness for
+      // fixed-width integers. Overwritten on every base-type parse —
+      // the OUTERMOST base type wins, which is what we want for
+      // `: u32 x …` / `: ~ i16 c …` style bindings. Pointers, slices,
+      // option/result/etc wrappers don't carry signedness themselves.
+      ( nurl_sym_def g_res_type_syms `__last_nurl_type__` v )
       ^ ( llvm_type v )
     }
     { ( die lex `expected type` ) }
@@ -175,6 +205,9 @@
   ? ( seq lty `void` )   ^ 0
   ? ( seq lty `i64` )    ^ 8
   ? ( seq lty `double` ) ^ 8
+  ? ( seq lty `float` )  ^ 4
+  ? ( seq lty `i32` )    ^ 4
+  ? ( seq lty `i16` )    ^ 2
   ? ( seq lty `i1` )     ^ 1
   ? ( seq lty `i8` )     ^ 1
   ? ( seq lty `i8*` )    ^ 8
@@ -585,6 +618,12 @@
       : s ptr ( nurl_sym_get syms ( nurl_str_cat name `__ptr` ) )
       : s glb ( nurl_sym_get syms ( nurl_str_cat name `__global` ) )
       ( nurl_sym_def syms `__last_ident_name__` name )
+      // Propagate the binding's unsigned-ness as a side-channel so
+      // downstream casts / stores can choose sext vs zext correctly.
+      // Empty when the binding wasn't tagged (literals, struct fields,
+      // function returns — Phase 1A defaults those to signed).
+      : s u_flag ( nurl_sym_get syms ( nurl_str_cat name `__unsigned` ) )
+      ( nurl_sym_def syms `__last_unsigned__` u_flag )
       ^ ? != 0 ( nurl_str_len ptr )
           ( load_var cg lt ptr )
           ? != 0 ( nurl_str_len glb )
@@ -607,7 +646,7 @@
   : s lt  ( nurl_get_last_type )
   : s rv  ( gen_expr lex syms cg )
   : s res ( nurl_cg_reg cg )
-  : b isf ( seq lt `double` )
+  : b isf | ( seq lt `double` ) ( seq lt `float` )
   : b isu ( seq lt `i8` )
   : s ins ( binop_instr tt isf isu )
   ( nurl_print `  ` ) ( nurl_print res ) ( nurl_print ` = ` )
@@ -695,7 +734,7 @@
     }
     {}
   : s res ( nurl_cg_reg cg )
-  : b isf ( seq lt `double` )
+  : b isf | ( seq lt `double` ) ( seq lt `float` )
   : b isu ( seq lt `i8` )
   : s ins ( binop_instr tt isf isu )
   ( nurl_print `  ` ) ( nurl_print res ) ( nurl_print ` = ` )
@@ -2387,6 +2426,7 @@
     }
     // Explicit type annotation.
     { ( nurl_sym_def g_res_type_syms `__last_res_nurl__` `` )
+      ( nurl_sym_def g_res_type_syms `__last_nurl_type__` `` )
       : s ptype ( parse_type lex )
       // Capture the NURL form of `! T E` when present, so gen_match can
       // recover the inner T (e.g. `Json`) for struct-handle reconstruction.
@@ -2394,9 +2434,21 @@
       // outermost `! T E` form here; nested ones get overwritten but only
       // the outer one matters at this binding.
       : s let_res_nurl ( nurl_sym_get g_res_type_syms `__last_res_nurl__` )
+      : s let_nurl_type ( nurl_sym_get g_res_type_syms `__last_nurl_type__` )
       ? ( is_ident_tok ( nurl_lex_type lex ) )
         { : s name ( nurl_lex_val lex )
           ( nurl_lex_advance lex )
+          // Tag the binding with its NURL source type + signedness
+          // (consulted at gen_cast / coerce_store_val sites). Empty
+          // when ptype came from a non-base type (pointer / slice /
+          // closure / aggregate) — signedness only meaningfully
+          // applies to integer-and-float bases.
+          ? != 0 ( nurl_str_len let_nurl_type )
+            { ( nurl_sym_def syms ( nurl_str_cat name `__nurl_type` ) let_nurl_type )
+              ? ( nurl_type_is_unsigned let_nurl_type )
+                { ( nurl_sym_def syms ( nurl_str_cat name `__unsigned` ) `1` ) }
+                {} }
+            {}
           // Stash inner-T and inner-E NURL idents under
           // `<name>__res_nurl_T` / `<name>__res_nurl_E` for later retrieval
           // by gen_match's payload-binding logic. T is used for the Ok arm
@@ -2795,18 +2847,43 @@
         }
     }
     {}
-  ? & ( seq st `double` ) ! ( seq dt `double` )
+  // Float-side casts. NURL has two float widths: `f` → double, `f32` →
+  // float. The cast logic covers four cases involving floats:
+  //   * float ↔ double: fpext / fptrunc (shipped 2026-05-14 with f32).
+  //   * float-or-double → int: fptosi.
+  //   * int → float-or-double: sitofp.
+  // Helpers keep the `seq st …` chain readable.
+  : b src_is_double ( seq st `double` )
+  : b src_is_float  ( seq st `float`  )
+  : b dst_is_double ( seq dt `double` )
+  : b dst_is_float  ( seq dt `float`  )
+  : b src_is_fp | src_is_double src_is_float
+  : b dst_is_fp | dst_is_double dst_is_float
+  ? & src_is_fp dst_is_fp
+    { // float ↔ double conversions.
+      ? ( seq st dt )
+        { ( nurl_set_last_type dt ) ^ val }
+        { ( nurl_print `  ` ) ( nurl_print res )
+          ( nurl_print ? & src_is_float dst_is_double ` = fpext ` ` = fptrunc ` )
+          ( nurl_print st ) ( nurl_print ` ` ) ( nurl_print val )
+          ( nurl_print ` to ` ) ( nurl_print dt ) ( nurl_print `\n` )
+          ( nurl_set_last_type dt ) ^ res }
+    }
+    {}
+  ? & src_is_fp ! dst_is_fp
     { ( nurl_print `  ` ) ( nurl_print res )
-      ( nurl_print ` = fptosi double ` ) ( nurl_print val )
-      ( nurl_print ` to ` ) ( nurl_print dt ) ( nurl_print `\n` )
+      ( nurl_print ` = fptosi ` ) ( nurl_print st ) ( nurl_print ` ` )
+      ( nurl_print val ) ( nurl_print ` to ` ) ( nurl_print dt )
+      ( nurl_print `\n` )
       ( nurl_set_last_type dt )
       ^ res
     }
-    ? & ! ( seq st `double` ) ( seq dt `double` )
+    ? & ! src_is_fp dst_is_fp
       { ( nurl_print `  ` ) ( nurl_print res )
         ( nurl_print ` = sitofp ` ) ( nurl_print st )
-        ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print ` to double\n` )
-        ( nurl_set_last_type `double` )
+        ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print ` to ` )
+        ( nurl_print dt ) ( nurl_print `\n` )
+        ( nurl_set_last_type dt )
         ^ res
       }
       { ? & src_ptr ( seq dt `i64` )
@@ -2886,14 +2963,20 @@
                                 ^ `zeroinitializer` }
                           }
                       }
-                      { // Integer-width conversion (iN → iM).  zext if dst is
-                        // wider, trunc if narrower.  Falls through to no-op
-                        // when widths are equal or the types aren't integers.
+                      { // Integer-width conversion (iN → iM).  Three sub-cases:
+                        //   * Narrow (sw > dw): trunc.
+                        //   * Widen, source unsigned (`__last_unsigned__`
+                        //     side-channel set by gen_ident from the
+                        //     binding's `__unsigned` flag): zext.
+                        //   * Widen, source signed (default): sext.
+                        // Equal widths or non-integer types: no-op.
                         : i sw ( int_width st )
                         : i dw ( int_width dt )
                         ? & & > sw 0 > dw 0 != sw dw
-                          { ( nurl_print `  ` ) ( nurl_print res )
-                            ( nurl_print ? > dw sw ` = zext ` ` = trunc ` )
+                          { : s lu ( nurl_sym_get syms `__last_unsigned__` )
+                            : s widen_inst ? != 0 ( nurl_str_len lu ) ` = zext ` ` = sext `
+                            ( nurl_print `  ` ) ( nurl_print res )
+                            ( nurl_print ? > dw sw widen_inst ` = trunc ` )
                             ( nurl_print st ) ( nurl_print ` ` ) ( nurl_print val )
                             ( nurl_print ` to ` ) ( nurl_print dt ) ( nurl_print `\n` )
                             ( nurl_set_last_type dt )
@@ -3543,6 +3626,13 @@
   ? ( seq lt `i1` )     ^ `b`
   ? ( seq lt `double` ) ^ `f`
   ? ( seq lt `i8*` )    ^ `s`
+  // Fixed-size types — LLVM doesn't carry signedness, so the reverse
+  // map defaults to the signed name (i16 / i32) for diagnostic
+  // messages. Unsigned-variant names (u16 / u32 / u64) only appear
+  // when the binding's `__nurl_type` is consulted at the call site.
+  ? ( seq lt `i16` )    ^ `i16`
+  ? ( seq lt `i32` )    ^ `i32`
+  ? ( seq lt `float` )  ^ `f32`
   // struct/enum: strip leading '%'
   ? == ( nurl_str_get lt 0 ) 37
     { ^ ( nurl_str_slice lt 1 - ( nurl_str_len lt ) 1 ) }
@@ -3623,6 +3713,36 @@
           ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
           ^ r }
         {} }
+    {}
+  // Integer width adjustment for fixed-size types. Source and dest
+  // are both integer LLVM types (i8 / i16 / i32 / i64) and the widths
+  // differ. Three cases:
+  //   * Narrow (from > to): emit `trunc`.
+  //   * Widen, source unsigned (`__last_unsigned__` set by gen_ident
+  //     from binding's `__unsigned` flag): emit `zext`.
+  //   * Widen, source signed (default): emit `sext`.
+  // Shipped 2026-05-14 with the fixed-size types Phase 1 — `: i32 x 5`,
+  // `: i32 width  ( fn → i32 )`, and FFI-style narrow returns now store
+  // cleanly without manual `# T` casts. Float-width adjustment (f32 ↔
+  // double) lives in gen_cast since it needs explicit `#` syntax.
+  : i fw ( int_width from_ty )
+  : i tw ( int_width to_ty )
+  ? & & > fw 0 > tw 0 != fw tw
+    { ? > fw tw
+        { : s r ( nurl_cg_reg cg )
+          ( nurl_print `  ` ) ( nurl_print r )
+          ( nurl_print ` = trunc ` ) ( nurl_print from_ty )
+          ( nurl_print ` ` ) ( nurl_print val )
+          ( nurl_print ` to ` ) ( nurl_print to_ty ) ( nurl_print `\n` )
+          ^ r }
+        { : s lu ( nurl_sym_get syms `__last_unsigned__` )
+          : s inst ? != 0 ( nurl_str_len lu ) `zext` `sext`
+          : s r ( nurl_cg_reg cg )
+          ( nurl_print `  ` ) ( nurl_print r )
+          ( nurl_print ` = ` ) ( nurl_print inst ) ( nurl_print ` ` )
+          ( nurl_print from_ty ) ( nurl_print ` ` ) ( nurl_print val )
+          ( nurl_print ` to ` ) ( nurl_print to_ty ) ( nurl_print `\n` )
+          ^ r } }
     {}
   val
 }
@@ -5103,13 +5223,23 @@
 // Parse one parameter; return accumulated params_str via nurl_set_last_type.
 // parse_type handles base types, pointer types, and all compound types.
 @ gen_fn_param i lex i syms s cur_params i pct → v {
+  ( nurl_sym_def g_res_type_syms `__last_nurl_type__` `` )
   : s lt ( parse_type lex )
+  : s p_nurl_type ( nurl_sym_get g_res_type_syms `__last_nurl_type__` )
   ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s pname ( nurl_lex_val lex )
       ( nurl_lex_advance lex )
       ( nurl_sym_def syms pname lt )
       // Mark parameter as immutable by design
       ( nurl_sym_def syms ( nurl_str_cat pname `__param` ) `1` )
+      // Track NURL source type + signedness for fixed-width int/float
+      // parameters (consulted at cast / store sites).
+      ? != 0 ( nurl_str_len p_nurl_type )
+        { ( nurl_sym_def syms ( nurl_str_cat pname `__nurl_type` ) p_nurl_type )
+          ? ( nurl_type_is_unsigned p_nurl_type )
+            { ( nurl_sym_def syms ( nurl_str_cat pname `__unsigned` ) `1` ) }
+            {} }
+        {}
       // Append this param's name + LLVM type to the function's param
       // roster so gen_fn_decl_concrete can later (post-`entry:`) emit
       // alloca + store for struct params, enabling `= . p field val`

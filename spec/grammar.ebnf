@@ -1,5 +1,5 @@
 (* NURL — Neural Unified Representation Language
-   Grammar v1.7 — complete language specification
+   Grammar v1.8 — complete language specification
    File extension: .nu
 
    All expressions use PREFIX NOTATION.
@@ -9,6 +9,36 @@
    Tokens are separated by whitespace; there are no comma separators
    anywhere in the language (params, fields, args, enum variants all use
    whitespace).
+
+   Changes since v1.7:
+     * Fixed-size integer and float type keywords are now NATIVE
+       multi-char TYPE_KW tokens. The lexer recognises `i8`, `i16`,
+       `i32`, `u16`, `u32`, `u64`, `f32` in addition to the single-
+       char `i u f b s v`. LLVM mappings: i8/i16/i32 → iN, u16/u32 →
+       i16/i32 (signedness is carried in a per-binding `__nurl_type`
+       side-channel; LLVM IR has no unsigned types), u64 → i64,
+       f32 → float. `u` keeps its v1.6 semantics as the unsigned 8-
+       bit byte — there is no `u8` alias, `u` IS the 8-bit unsigned.
+
+       Cast (`#`), let-binding store, and function-parameter store
+       all consult the binding's `__unsigned` flag to choose between
+       `sext` (signed source) and `zext` (unsigned source) when
+       widening. Narrowing always emits `trunc`. Float ↔ double
+       conversions use `fpext` / `fptrunc`. `fptosi` / `sitofp`
+       cover both float widths.
+
+       Phase 1A limitations (documented for future v1.9 work):
+         - Arithmetic on `u16` / `u32` / `u64` operands still emits
+           the SIGNED LLVM op family (`sdiv`, `srem`, `ashr`,
+           `icmp slt` etc.) because `gen_binary`'s `isu` predicate
+           only matches the legacy 8-bit `u` (LLVM `i8`). Bit-level
+           ops (`+ - * & | <<`) produce identical results on signed
+           and unsigned operands of the same width, so the only
+           observable issue is division / modulo / right-shift /
+           ordered-comparison of values whose high bit is set.
+         - Variadic FFI does not yet promote `f32` to `double` or
+           narrow integers to `int` — declare FFI signatures with
+           the platform's exact ABI types.
 
    Changes since v1.6:
      * The cast operator `#` accepts an optional trailing INT (0 or 1)
@@ -614,11 +644,14 @@ BOOL = 'T'    (*  true  *)
 IDENT_PLAIN = [a-zA-Z_] [a-zA-Z0-9_]* ;
 IDENT       = IDENT_PLAIN ( '::' IDENT_PLAIN )* ;
 
-(* Reserved single-letter identifiers (classified by the lexer, not
-   usable as variable names):
-     i u f b s v  →  type keywords       (TT_TYPE_KW)
-     T F          →  boolean literals    (TT_BOOL)
-     Z            →  sizeof keyword      (TT_SIZEOF) *)
+(* Reserved identifiers (classified by the lexer, not usable as
+   variable names):
+     i u f b s v             →  single-char type keywords (TT_TYPE_KW)
+     i8 i16 i32              →  signed fixed-width ints   (TT_TYPE_KW)
+     u16 u32 u64             →  unsigned fixed-width ints (TT_TYPE_KW)
+     f32                     →  32-bit float              (TT_TYPE_KW)
+     T F                     →  boolean literals          (TT_BOOL)
+     Z                       →  sizeof keyword            (TT_SIZEOF) *)
 
 DIGIT      = [0-9] ;
 WHITESPACE = [ \t\n\r]+ ;     (* skipped *)
