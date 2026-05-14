@@ -3703,6 +3703,32 @@
 //
 // Returns the inline type string (e.g., "{ i64, i64, %Set__i64 }").
 // No named struct types — avoids LLVM forward-reference ordering issues.
+// Detect "capture by pointer" eligibility for a captured variable. A
+// captured var is taken by pointer when ALL of the following hold:
+//   * The binding was declared mutable (`: ~ T name init` — has
+//     `<name>__mutable` set in syms)
+//   * Its type is a named struct (`%T`, not an enum — no `__variants`
+//     entry, and not an opaque single-pointer-handle struct)
+//   * The struct has at least two fields (a `__idx_1__type` entry
+//     exists in syms) — single-field handle structs like %String /
+//     %Vec already share through their inner pointer, so capturing
+//     by value preserves mutation visibility.
+// Closes docs/GOTCHAS.md §2 — `=` writes through a captured Counter
+// land on the caller's alloca instead of a dead local copy.
+@ __is_capture_byref s var i syms → b {
+  : s mut ( nurl_sym_get syms ( nurl_str_cat var `__mutable` ) )
+  ? == 0 ( nurl_str_len mut ) { ^ F } {}
+  : s vt ( nurl_sym_get syms var )
+  ? == 0 ( nurl_str_len vt ) { ^ F } {}
+  ? != ( nurl_str_get vt 0 ) 37 { ^ F } {}
+  : s tname ( nurl_str_slice vt 1 - ( nurl_str_len vt ) 1 )
+  : s vlist ( nurl_sym_get syms ( nurl_str_cat tname `__variants` ) )
+  ? != 0 ( nurl_str_len vlist ) { ^ F } {}
+  : s f1 ( nurl_sym_get syms ( nurl_str_cat3 tname `__idx_1` `__type` ) )
+  ? == 0 ( nurl_str_len f1 ) { ^ F } {}
+  ^ T
+}
+
 @ gen_env_struct_type s struct_name s captured_vars i syms → s {
   ? == 0 ( count_words captured_vars )
     { ^ `` }  // No captures
@@ -3714,6 +3740,9 @@
     : s var ( str_first_word vars )
     : s vt ( nurl_sym_get syms var )
     ? == 0 ( nurl_str_len vt ) { = vt `i64` } {}
+    // Mutable multi-field structs are captured by pointer so writes
+    // through the closure observe the caller's alloca.
+    ? ( __is_capture_byref var syms ) { = vt ( nurl_str_cat vt `*` ) } {}
     = ty ( nurl_str_cat ty ( nurl_str_cat `, ` vt ) )
     = vars ( str_skip_word vars )
   }
@@ -3766,31 +3795,42 @@
 
   // Store each captured variable directly with its native type in
   // fields 1..N. No conversion: store T %val, T* %fp.
+  // Mutable multi-field structs (`__is_capture_byref`) store the
+  // ALLOCA POINTER itself — the env field type is `T*`, the body
+  // reads the pointer back and uses it as the var's `__ptr` so
+  // every read/write reaches the caller's alloca.
   : s vars captured_vars
   : i field_idx 1
   ~ != 0 ( nurl_str_len vars ) {
     : s var ( str_first_word vars )
     : s var_type ( nurl_sym_get syms var )
     : s var_alloca ( nurl_sym_get syms ( nurl_str_cat var `__ptr` ) )
+    : b cap_byref ( __is_capture_byref var syms )
 
-    // Load the variable's current value (native type).
+    // Effective env-field type and the value we store there.
+    : s eff_type ? cap_byref ( nurl_str_cat var_type `*` ) var_type
     : s loaded ( nurl_cg_reg cg )
-    ? != 0 ( nurl_str_len var_alloca )
-      { ( nurl_print `  ` ) ( nurl_print loaded )
-        ( nurl_print ` = load ` ) ( nurl_print var_type )
-        ( nurl_print `, ` ) ( nurl_print var_type )
-        ( nurl_print `* ` ) ( nurl_print var_alloca ) ( nurl_print `\n` ) }
-      { = loaded ( nurl_str_cat `%` var ) }
+    ? cap_byref
+      { // Store the alloca pointer itself — no load, no copy.
+        = loaded var_alloca }
+      { // Existing path: load the variable's current value.
+        ? != 0 ( nurl_str_len var_alloca )
+          { ( nurl_print `  ` ) ( nurl_print loaded )
+            ( nurl_print ` = load ` ) ( nurl_print var_type )
+            ( nurl_print `, ` ) ( nurl_print var_type )
+            ( nurl_print `* ` ) ( nurl_print var_alloca ) ( nurl_print `\n` ) }
+          { = loaded ( nurl_str_cat `%` var ) }
+      }
 
-    // GEP to field and store with native type.
+    // GEP to field and store with the effective type.
     : s store_ptr ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print store_ptr )
     ( nurl_print ` = getelementptr ` ) ( nurl_print struct_name )
     ( nurl_print `, ` ) ( nurl_print struct_name ) ( nurl_print `* ` )
     ( nurl_print typed_ptr ) ( nurl_print `, i32 0, i32 ` )
     ( nurl_print ( nurl_str_int field_idx ) ) ( nurl_print `\n` )
-    ( nurl_print `  store ` ) ( nurl_print var_type ) ( nurl_print ` ` )
-    ( nurl_print loaded ) ( nurl_print `, ` ) ( nurl_print var_type )
+    ( nurl_print `  store ` ) ( nurl_print eff_type ) ( nurl_print ` ` )
+    ( nurl_print loaded ) ( nurl_print `, ` ) ( nurl_print eff_type )
     ( nurl_print `* ` ) ( nurl_print store_ptr ) ( nurl_print `\n` )
 
     = vars ( str_skip_word vars )
@@ -4006,14 +4046,24 @@
       ( nurl_print ` = bitcast i8* %__env to ` ) ( nurl_print env_struct_name )
       ( nurl_print `*\n` )
       // Extract each captured variable (fields 1, 2, ... — field 0 is refcount).
-      // Load with native type, then alloca + store so the body sees a
-      // mutable local of type cap_type. No int<->ptr conversion.
+      // Two shapes:
+      //   * By-value (default): load with native type, alloca + store so the
+      //     body sees a mutable local of type cap_type. Mutations stay local.
+      //   * By-pointer (mutable multi-field structs, `__is_capture_byref`):
+      //     the env field IS the caller's alloca pointer. Load the pointer
+      //     and register it as the body's `<cap>__ptr` directly — every
+      //     read/write inside the closure body reaches the caller's
+      //     allocation through this shared pointer. The body sees the same
+      //     binding shape (`__ptr` + native type), so no other path needs
+      //     to special-case it. Closes docs/GOTCHAS.md §2.
       : s caps captured_vars
       : i cap_idx 1
       ~ != 0 ( nurl_str_len caps ) {
         : s cap_name ( str_first_word caps )
         : s cap_type ( nurl_sym_get syms cap_name )
         ? == 0 ( nurl_str_len cap_type ) { = cap_type `i64` } {}
+        : b cap_byref ( __is_capture_byref cap_name syms )
+        : s eff_type ? cap_byref ( nurl_str_cat cap_type `*` ) cap_type
         : s cap_gep ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print cap_gep )
         ( nurl_print ` = getelementptr ` ) ( nurl_print env_struct_name )
@@ -4022,19 +4072,24 @@
         ( nurl_print ( nurl_str_int cap_idx ) ) ( nurl_print `\n` )
         : s cap_val ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print cap_val )
-        ( nurl_print ` = load ` ) ( nurl_print cap_type )
-        ( nurl_print `, ` ) ( nurl_print cap_type )
+        ( nurl_print ` = load ` ) ( nurl_print eff_type )
+        ( nurl_print `, ` ) ( nurl_print eff_type )
         ( nurl_print `* ` ) ( nurl_print cap_gep ) ( nurl_print `\n` )
-        // Alloca for the captured var so it can be mutated/loaded normally
-        : s cap_ptr ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print cap_ptr )
-        ( nurl_print ` = alloca ` ) ( nurl_print cap_type ) ( nurl_print `\n` )
-        ( nurl_print `  store ` ) ( nurl_print cap_type ) ( nurl_print ` ` )
-        ( nurl_print cap_val ) ( nurl_print `, ` ) ( nurl_print cap_type )
-        ( nurl_print `* ` ) ( nurl_print cap_ptr ) ( nurl_print `\n` )
-        ( nurl_sym_def body_syms cap_name cap_type )
-        ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__ptr` ) cap_ptr )
-        ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__mutable` ) `1` )
+        ? cap_byref
+          { // The loaded value IS the caller's alloca pointer.
+            ( nurl_sym_def body_syms cap_name cap_type )
+            ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__ptr` ) cap_val )
+            ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__mutable` ) `1` ) }
+          { // Existing path: alloca + store so the body sees a local.
+            : s cap_ptr ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print cap_ptr )
+            ( nurl_print ` = alloca ` ) ( nurl_print cap_type ) ( nurl_print `\n` )
+            ( nurl_print `  store ` ) ( nurl_print cap_type ) ( nurl_print ` ` )
+            ( nurl_print cap_val ) ( nurl_print `, ` ) ( nurl_print cap_type )
+            ( nurl_print `* ` ) ( nurl_print cap_ptr ) ( nurl_print `\n` )
+            ( nurl_sym_def body_syms cap_name cap_type )
+            ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__ptr` ) cap_ptr )
+            ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__mutable` ) `1` ) }
         = caps ( str_skip_word caps )
         = cap_idx + cap_idx 1
       }

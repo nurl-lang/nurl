@@ -17,7 +17,7 @@ Limitations** table in [`../README.md`](../README.md).
 | # | Gotcha | One-line fix |
 |---|---|---|
 | 1 | `&` and `|` are **binary** — `& A B C` is a parse-arity error | Chain via parens: `& A & B C`, or extract a `__cond` helper |
-| 2 | Mutating a multi-field struct's `i` field via `=` does not propagate through closures | Back the state with a `Vec[i]` (heap handle); mutate via `vec_set` |
+| 2 | ~~Mutating a multi-field struct's `i` field via `=` does not propagate through closures~~ **Fixed 2026-05-14** — `: ~ T name init` for a multi-field T is now captured by pointer, so closure body writes reach the caller's alloca | — |
 | 3 | ~~`: ~ MyEnum x …` (mutable enum binding) miscompiles — i64 stored without `insertvalue`~~ **Fixed 2026-05-14** — `coerce_store_val` now wraps `i64 → %Enum` with an `insertvalue` before store; bare-variant-name reassignment (`= last_err NetTimeout`) works for narrow + wide enums | — |
 | 4 | ~~`vec_get [MultiFieldStruct]` returns a wrong default when index is out of bounds~~ **Fixed 2026-05-14** — the `# T 0` cast at the heart of the None synthesis now emits `zeroinitializer` when T's f0 is a non-pointer named type (e.g. `%String`); `vec_get`, `hashmap_get`, and the iter combinators all return a valid None for multi-field T | — |
 | 5 | Bare `@-fn` names don't auto-coerce to a `(@ R P*)` closure parameter | Wrap in `\ P* → R { ( fn args ) }` (same as `eq_int` / `c_int`) |
@@ -54,35 +54,65 @@ checks via four separate `?` arms instead of one big `&` expression.
 
 ---
 
-## 2. Multi-field struct field mutation does not survive closure capture
+## 2. Multi-field struct mutation through closures — fixed
+
+**Fixed 2026-05-14.** Opting a binding into mutability with `: ~` is now
+also an opt-in to **capture-by-pointer** for multi-field structs.
+Previously the closure machinery heap-malloc'd an env block, copied the
+struct value into it, then reconstructed a fresh alloca on every
+invocation — so `= . c field val` wrote to a dead local copy and the
+caller never saw the mutation.
+
+The new path: when a captured binding has `__mutable = 1` (set by `: ~`)
+AND its LLVM type is a named multi-field struct (named type with
+`__idx_1__type` registered, not an enum, not a single-pointer-handle),
+the env field type becomes `T*`, the value stored is the caller's
+alloca pointer, and the body uses that pointer directly as the
+binding's `__ptr`. Every read/write reaches the caller's alloca.
 
 ```nurl
-// ✗ Counter struct — `=` updates the local copy, not the captured one
-: Counter { i n, i max }
-@ make_inc Counter c → ( @ v ) {
-  ^ \ → v { = . c n + . c n 1 }   // .n stays at 0 from the caller's view
-}
+: Counter { i n  i max }
 
-// ✓ Back state with a Vec[i] handle (heap-allocated, mutations survive)
-: Counter { ( Vec i ) slots }     // slot 0 = n, slot 1 = max
-@ make_inc Counter c → ( @ v ) {
-  ^ \ → v {
-    : *i d ( vec_data [i] . c slots )
-    ( vec_set [i] . c slots 0 + . d 0 1 )
-  }
+// Works directly now:
+: ~ Counter c @ Counter { 0 10 }
+: (@ v) bump \ → v {
+  = . c n + . c n 1
 }
+( bump ) ( bump ) ( bump )
+// . c n is now 3 — the closure's writes reached the caller's c.
 ```
 
-**Why:** multi-field structs are passed by value. Closures snapshot
-captured values at construction. A `=` write to a struct field hits the
-*captured copy* on the closure's environment frame, not the caller's
-binding. `Vec[T]` is a 1-pointer handle to a heap buffer — the handle is
-copied, but the buffer is shared, so `vec_set` is observed by everyone.
+**Backward compatibility:**
+* Immutable bindings (`: Counter c …`) keep the value-snapshot
+  behaviour — closures see the value at capture time and any internal
+  mutations are local. Use this when you want a snapshot, e.g. to
+  freeze state before async work.
+* Single-pointer-handle structs (`%String`, `%Vec__T`) are unaffected:
+  they already share through the inner pointer; capturing by value
+  preserves mutation visibility.
+* Enums (`%NetErr`, `%Color`) are out of scope for this fix — bare
+  `__variants`-registered types stay captured by value, which is
+  consistent with their tag-only semantics.
 
-**Real example:** `stdlib/ext/http_middleware.nu:86–125` — `Metrics` is
-a single-field `{ ( Vec i ) counters }` heap-backed struct precisely
-because the original `{ i requests, i in_flight, ... }` shape was lost
-across the `with_metrics` closure boundary.
+**Lifetime caveat:** capturing by pointer means the closure holds a
+borrow of the caller's stack alloca. If the closure escapes the
+binding's scope (stored in a `Vec[Closure]`, returned from a function,
+detached onto a worker thread that outlives the caller), the pointer
+dangles. NURL does not have escape analysis to prevent this; the
+user opts in by writing `: ~`. For escaping closures, fall back to a
+heap-backed handle pattern (e.g. `( Vec i ) counters` like the
+`Metrics` example below).
+
+**Regression test:** `compiler/tests/multifield_struct_mut.nu` covers
+the closure-shared-mutation case, the immutable-snapshot baseline, and
+whole-struct reassignment through a captured pointer.
+
+**Real example (unchanged):** `stdlib/ext/http_middleware.nu:86–125` —
+`Metrics` is still a single-field `{ ( Vec i ) counters }` heap-backed
+struct. It predates this fix and ships through Prometheus exposition,
+so we kept the working shape; new code that wants metric-style
+mutation can use a plain `{ i requests, i in_flight, … }` struct with
+`: ~`-bound closures.
 
 ---
 

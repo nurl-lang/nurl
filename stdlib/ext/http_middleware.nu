@@ -85,9 +85,22 @@ $ `stdlib/core/vec.nu`
 
 // ── Metrics ───────────────────────────────────────────────────────────
 //
-// Backed by a 10-slot `Vec[i]` so mutations propagate through the
-// handle (a struct of plain `i` fields would be passed by value, and
-// `=` writes wouldn't survive past the inner closure). Slot indices:
+// Backed by a 10-slot `Vec[i]` so the entire Metrics struct fits in
+// a single pointer-handle slot (cheap to pass by value, mutations
+// through the inner pointer are observed by every holder of the
+// handle). Slot indices:
+//
+// Historical note: a plain `{ i requests, i in_flight, … }` struct
+// used to be impossible because closures captured multi-field structs
+// by value — `=` writes inside `with_metrics` would land on a dead
+// local copy. The 2026-05-14 fix to mutable multi-field-struct
+// captures (`: ~ Metrics m` is now captured by pointer, see
+// docs/GOTCHAS.md §2) makes the plain-fields shape viable for new
+// code. We keep the Vec[i] shape here because (a) it's already
+// shipped, tested, and exposed through `metrics_render` / Prometheus
+// exposition, and (b) the handle shape composes cleanly with
+// `! T E` and `Vec[Metrics]` without depending on the by-ref-capture
+// path.
 //
 //   0 requests_total       5 status_2xx
 //   1 in_flight            6 status_3xx
