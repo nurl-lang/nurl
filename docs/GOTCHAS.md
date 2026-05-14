@@ -1,14 +1,13 @@
 # NURL — Language Gotchas
 
-A single-page reference for the rough edges of the current self-hosted
-compiler (Grammar v1.7). Each entry is a real footgun that recurs often
-enough to be worth memorising — most have an inline workaround that is
-already used throughout `stdlib/`. If you are an LLM writing NURL, read
-this first: it will save you several compile-test cycles.
+A single-page reference for the rough edges of NURL (Grammar v1.8)
+that trip up code generation. If you are an LLM writing NURL, read
+this first — it saves several compile-test cycles.
 
-This page covers **active quirks** of the current compiler. For deliberate
-*scope* limitations (no GC, no sized types, etc.) see the **Known
-Limitations** table in [`../README.md`](../README.md).
+For deliberate *scope* limitations (no GC, no inheritance, no
+exceptions) see **Known Limitations** in
+[`../README.md`](../README.md). For shipped features and what they
+unlock, see [`../CHANGELOG.md`](../CHANGELOG.md).
 
 ---
 
@@ -16,16 +15,16 @@ Limitations** table in [`../README.md`](../README.md).
 
 | # | Gotcha | One-line fix |
 |---|---|---|
-| 1 | `&` and `|` are **binary** — `& A B C` is a parse-arity error | Chain via parens: `& A & B C`, or extract a `__cond` helper |
-| 2 | ~~Mutating a multi-field struct's `i` field via `=` does not propagate through closures~~ **Fixed 2026-05-14** — `: ~ T name init` for a multi-field T is now captured by pointer, so closure body writes reach the caller's alloca | — |
-| 3 | ~~`: ~ MyEnum x …` (mutable enum binding) miscompiles — i64 stored without `insertvalue`~~ **Fixed 2026-05-14** — `coerce_store_val` now wraps `i64 → %Enum` with an `insertvalue` before store; bare-variant-name reassignment (`= last_err NetTimeout`) works for narrow + wide enums | — |
-| 4 | ~~`vec_get [MultiFieldStruct]` returns a wrong default when index is out of bounds~~ **Fixed 2026-05-14** — the `# T 0` cast at the heart of the None synthesis now emits `zeroinitializer` when T's f0 is a non-pointer named type (e.g. `%String`); `vec_get`, `hashmap_get`, and the iter combinators all return a valid None for multi-field T | — |
-| 5 | Bare `@-fn` names don't auto-coerce to a `(@ R P*)` closure parameter | Wrap in `\ P* → R { ( fn args ) }` (same as `eq_int` / `c_int`) |
-| 6 | ~~Multi-field structs can't ride the `T` arm of `! T E` (Result)~~ **Fixed 2026-05-14** — multi-field T is heap-boxed transparently on construct + `??` destructure + `\` propagate | — |
-| 7 | Direct shadowing in the same `:` line: `: i z + z 719468` shadows the parameter `z` from that line forward | Rename to `zz` (or any new name) |
-| 8 | Function calls require parens — `__i_mod a b` parses as register-then-loose-tokens | Always: `( __i_mod a b )` |
-| 9 | Ternary nesting is arity-strict — a missing/extra operand cascades into "unexpected token" at the next statement | Count operands left-to-right; one wrong arity poisons the line + a few after |
-| 10 | `vec_clone` is deliberately absent — bitwise clone would alias owned heap buffers | Roll your own: `vec_each` + `vec_push` + per-element clone closure |
+| 1 | `&` and `|` are **binary** — `& A B C` is a parse-arity error | Chain via parens: `& A & B C` |
+| 2 | Bare `@-fn` names don't auto-coerce to a `(@ R P*)` closure parameter | Wrap in `\ P* → R { ( fn args ) }` |
+| 3 | Same-line shadowing: `: i z + z 7` shadows the parameter `z` from that line | Rename: `: i zz + z 7` |
+| 4 | Function calls require parens — `f a b` parses as register-then-loose-tokens | Always `( f a b )` |
+| 5 | Ternary arity errors cascade — diagnostic points at the *next* line | Count operands left-to-right on the previous line |
+| 6 | `vec_clone` is intentionally absent | Roll your own: `vec_each` + per-element clone |
+| 7 | Function-parameter struct mutation is **value-semantic** | Return the modified struct: `= c ( f c )` |
+| 8 | Mutable struct captured by closure (`: ~ T`) is a **borrow**, not a copy | Don't escape the closure; if you must, use a heap-backed handle |
+| 9 | Variadic FFI does not auto-promote `f32` or narrow ints | Declare the exact ABI types in `& \`libname\` @ fn ...` |
+| 10 | Multi-char namespace `alias::name` is merged into a single IDENT `alias__name` | Aliases only rename `@`-functions, not types or FFI decls |
 
 ---
 
@@ -46,205 +45,16 @@ Limitations** table in [`../README.md`](../README.md).
 
 **Why:** the parser greedily binds exactly two operands per `&` / `|`
 operator. There is no variadic form. Trailing operands become bare
-expressions in the surrounding context — and the parse error is reported
-at the *next* token, not at the operator, which is why this hides easily.
+expressions in the surrounding context — and the parse error is
+reported at the *next* token, not at the operator, which is why this
+hides easily.
 
-**Real example:** `stdlib/ext/http_middleware.nu:54` chains four range
-checks via four separate `?` arms instead of one big `&` expression.
-
----
-
-## 2. Multi-field struct mutation through closures — fixed
-
-**Fixed 2026-05-14.** Opting a binding into mutability with `: ~` is now
-also an opt-in to **capture-by-pointer** for multi-field structs.
-Previously the closure machinery heap-malloc'd an env block, copied the
-struct value into it, then reconstructed a fresh alloca on every
-invocation — so `= . c field val` wrote to a dead local copy and the
-caller never saw the mutation.
-
-The new path: when a captured binding has `__mutable = 1` (set by `: ~`)
-AND its LLVM type is a named multi-field struct (named type with
-`__idx_1__type` registered, not an enum, not a single-pointer-handle),
-the env field type becomes `T*`, the value stored is the caller's
-alloca pointer, and the body uses that pointer directly as the
-binding's `__ptr`. Every read/write reaches the caller's alloca.
-
-```nurl
-: Counter { i n  i max }
-
-// Works directly now:
-: ~ Counter c @ Counter { 0 10 }
-: (@ v) bump \ → v {
-  = . c n + . c n 1
-}
-( bump ) ( bump ) ( bump )
-// . c n is now 3 — the closure's writes reached the caller's c.
-```
-
-**Backward compatibility:**
-* Immutable bindings (`: Counter c …`) keep the value-snapshot
-  behaviour — closures see the value at capture time and any internal
-  mutations are local. Use this when you want a snapshot, e.g. to
-  freeze state before async work.
-* Single-pointer-handle structs (`%String`, `%Vec__T`) are unaffected:
-  they already share through the inner pointer; capturing by value
-  preserves mutation visibility.
-* Enums (`%NetErr`, `%Color`) are out of scope for this fix — bare
-  `__variants`-registered types stay captured by value, which is
-  consistent with their tag-only semantics.
-
-**Lifetime caveat:** capturing by pointer means the closure holds a
-borrow of the caller's stack alloca. If the closure escapes the
-binding's scope (stored in a `Vec[Closure]`, returned from a function,
-detached onto a worker thread that outlives the caller), the pointer
-dangles. NURL does not have escape analysis to prevent this; the
-user opts in by writing `: ~`. For escaping closures, fall back to a
-heap-backed handle pattern (e.g. `( Vec i ) counters` like the
-`Metrics` example below).
-
-**Regression test:** `compiler/tests/multifield_struct_mut.nu` covers
-the closure-shared-mutation case, the immutable-snapshot baseline, and
-whole-struct reassignment through a captured pointer.
-
-### Function-parameter field mutation — also fixed
-
-Symmetric fix in the same window: `= . p field val` on a function
-parameter previously emitted invalid IR (`getelementptr %T, %T* ,
-i32 0, i32 N` with an EMPTY GEP base) because `gen_fn_param` only
-registered the parameter type and never backed it with an alloca.
-`gen_field_store`'s "struct by value" branch reads `<obj>__ptr` as
-the GEP base, so it had nothing to write through.
-
-`gen_fn_decl_concrete` now invokes `__alloca_struct_params` right
-after the `entry:` label. The helper walks the parameter roster
-(collected by `gen_fn_param` under `__fn_params__`) and, for every
-parameter whose LLVM type is a multi-field named struct (predicate:
-starts with `%`, `__idx_1__type` set, not an enum), emits:
-
-```llvm
-%p_ptr = alloca %T
-store %T %p, %T* %p_ptr
-```
-
-and registers `<p>__ptr = %p_ptr`. Single-field handle structs
-(`%String`, `%Vec`) are skipped — their f0 IS already a pointer,
-so writes go through that pointer rather than through this alloca.
-
-**Semantics are unchanged**: VALUE semantics still apply. The
-function mutates a LOCAL copy of the struct; the caller's binding
-is untouched. To thread the mutation back, return the modified
-struct (the canonical pattern in NURL, since `&local` doesn't
-exist):
-
-```nurl
-@ inc_returning Counter c → Counter {
-  = . c n + . c n 1
-  ^ c
-}
-= c ( inc_returning c )
-```
-
-**Regression test:** `compiler/tests/function_param_mut.nu` covers
-field mutation visible inside the function, caller-side value-
-semantics preservation, and the return-the-modified-struct idiom.
-
-**Real example (unchanged):** `stdlib/ext/http_middleware.nu:86–125` —
-`Metrics` is still a single-field `{ ( Vec i ) counters }` heap-backed
-struct. It predates this fix and ships through Prometheus exposition,
-so we kept the working shape; new code that wants metric-style
-mutation can use a plain `{ i requests, i in_flight, … }` struct with
-`: ~`-bound closures.
+**Real example:** `stdlib/ext/http_middleware.nu` chains range checks
+via separate `?` arms instead of one big `&` expression.
 
 ---
 
-## 3. Mutable enum bindings — fixed
-
-**Fixed 2026-05-14.** A bare variant name (`Red`, `NetOther`, `NetTimeout`)
-resolves through `gen_ident`'s `__global` path to a loaded `i64` tag. The
-let-statement / assignment path needed to wrap that `i64` into the enum's
-`{ i64, ptr* }` aggregate before storing — previously it didn't, so
-`store %NetErr %r0, %NetErr* %slot` triggered a type mismatch in LLVM IR.
-`coerce_store_val` now detects when the destination is a registered enum
-(via the `<name>__variants` side-table written by `gen_enum_decl`) and
-emits `insertvalue %Enum undef, i64 val, 0` before the store.
-
-The symmetric immutable case (`: NetErr e NetOther`) was equally broken
-but went undocumented because the canonical idiom built through
-`@ NetErr { NetOther }` instead. Both shapes now work.
-
-```nurl
-: | NetErr { NetClosed NetAccept NetOther }
-
-// Works directly now:
-: ~ NetErr last_err NetOther
-= last_err NetAccept              // bare-variant reassignment
-?? last_err {
-  NetClosed → ...
-  NetAccept → ...
-  NetOther  → ...
-}
-
-// And wide enums (variants with payloads) still go through @ Foo {…}
-// for the payload-carrying case — bare names cover tag-only variants:
-: ~ Status s Idle                 // tag-only variant via bare name
-= s @ Status { Err 7 }            // payload variant via aggregate
-```
-
-**Regression test:** `compiler/tests/mutable_enum_binding.nu` covers
-narrow / wide enums, immutable / mutable bindings, bare-variant
-reassignment, and the http_server.nu pattern `: ~ NetishErr last_err
-NetOk` + `= last_err NetTimeout`.
-
-**Follow-up done:** `stdlib/ext/http_server.nu` `server_run` no longer
-needs the cheap-re-issue trick — `: ~ NetErr last_err NetClosed`
-sentinel + `= last_err e` direct assignment carry the failing variant
-all the way past the loop in a single accept call.
-
----
-
-## 4. `vec_get [MultiFieldStruct]` default — fixed
-
-**Fixed 2026-05-14.** `vec_get [T]`, `hashmap_get [K V]`, and the
-`stdlib/std/iter.nu` combinators all build their None case via the
-`@ ? T { F # T 0 }` idiom — a cast of `i64 0` into a fresh `T`. When
-T's first field was a non-pointer named type (`%String` inside
-`Header`, `%Vec__u` inside `MultipartPart`), the cast emitted
-`insertvalue %Header undef, i64 0, 0` which LLVM rejected as a type
-mismatch on field 0.
-
-The fix lives in `gen_cast`'s `i64 → struct/enum` branch: when f0 is
-neither a pointer (existing `inttoptr` + `insertvalue` path) nor `i64`
-(existing legacy `insertvalue undef, i64 val, 0` path), the cast now
-returns `zeroinitializer` directly. The standard None-payload idiom
-unblocks across stdlib without per-caller workarounds.
-
-```nurl
-: Header { String name, String value }
-
-// Works directly now:
-?? ( vec_get [Header] hs 99 ) {
-  T h → { ... never reached for out-of-bounds ... }
-  F   → { ... None path observed ... }
-}
-```
-
-**Regression tests:** `compiler/tests/option_multifield.nu` (construct
-+ `??` destructure, including `vec_get [Tagged]` for in-range and
-out-of-bounds), `compiler/tests/option_multifield_try.nu` (`\`
-propagate through multi-field T).
-
-**Note:** Option `? T` keeps its natural `{ i1, %T }` layout (T stored
-directly in the payload slot) — unlike `! T E` which lowers to
-`{ i1, i64 }` and heap-boxes multi-field T. The two encodings target
-the same use cases but differ at the IR layer because Option already
-has room for an inline T while Result's i64 slot has to encode every
-T uniformly. The shared abstraction is the `# T 0` cast for the
-dummy-zero payload, which both now handle correctly.
-
----
-
-## 5. Bare `@-fn` names don't auto-coerce to closure params
+## 2. Bare `@-fn` names don't auto-coerce to closure params
 
 ```nurl
 @ eq_int i a i b → b { ^ == a b }
@@ -254,7 +64,7 @@ dummy-zero payload, which both now handle correctly.
 // ✗ `eq_int` parses as a local register lookup → link-time miss
 ( vec_contains [i] v 42 eq_int )
 
-// ✓ Wrap in a thin closure
+// ✓ Wrap in a thin closure literal
 ( vec_contains [i] v 42 \ i a i b → b { ^ ( eq_int a b ) } )
 ```
 
@@ -264,64 +74,14 @@ local-symbol lookups, not as references to `@`-defined functions. The
 literal makes the intent explicit and adopts the right LLVM shape
 (`{ fn-ptr, env-ptr }`).
 
-**Helper convention:** a few ergonomic wrappers exist already —
-`eq_int`, `eq_string`, `cmp_int`, `cmp_string`, `c_int` (sort
-comparator) — but they all still need `\ ... { ( eq_int a b ) }` style
-wrapping when handed to a closure parameter.
-
-**Real example:** any `sort_by` / `vec_contains` / `binary_search`
-call site in `stdlib/`.
+**Helper convention:** wrappers like `eq_int` / `eq_string` /
+`cmp_int` / `cmp_string` / `c_int` exist, but they all still need
+`\ ... { ( eq_int a b ) }` style wrapping when handed to a closure
+parameter.
 
 ---
 
-## 6. Multi-field structs ride `! T E` Ok arms (heap-boxed)
-
-**Fixed 2026-05-14.** Multi-field T is now transparently heap-boxed
-through the full Result lifecycle: construction, `??` match
-destructure, and `\` try-propagate all alloc/store/load/free the
-payload behind the scenes.
-
-```nurl
-// Works directly now:
-: ParsedHead {
-  HttpRequest head
-  i consumed
-}
-@ parse_request_head ( Vec u ) buf → ! ParsedHead HttpReqErr { ... }
-
-// Caller threads `\` through chained Results without touching the
-// box explicitly:
-@ next_step ( Vec u ) buf → ! ParsedHead HttpReqErr {
-  : ParsedHead ph \ ( parse_request_head buf )
-  // ... use ph.head / ph.consumed directly ...
-  ^ @ ! ParsedHead HttpReqErr { T ph }
-}
-```
-
-**How it works:** `! T E` still lowers to `{ i1, i64 }`. When T is a
-multi-field struct (f0 is NOT a pointer) or a wide enum
-(`max_payloads > 0`), the i64 payload slot holds a heap-box `%T*`
-allocated by `nurl_alloc(sizeof T)` at construction. The receiving
-side (`??` arm or `\` propagate) issues `inttoptr → load → nurl_free`
-to recover the value and release the box. Single-pointer-handle
-structs (Vec, String, opaque-handle `{ s ctl }`) keep the cheaper
-ptrtoint path — no allocation, no free.
-
-**Opaque-handle pattern is still useful** for types whose identity
-should not be copyable (sockets, mutexes, channels): `Regex`,
-`Channel`, `Mutex`, `TcpListener`, `McpClient` continue to wrap a
-heap impl struct because their semantics demand shared ownership
-through a single handle. The heap-box payload is the right choice
-for value-typed multi-field structs (parser outputs, geometry,
-metric snapshots) where copy-on-construct is fine.
-
-**Regression cases:** `compiler/tests/result_multifield.nu`
-(construct + `??` destructure), `compiler/tests/result_multifield_try.nu`
-(`\` propagate through chained Results).
-
----
-
-## 7. Same-line shadowing of parameters
+## 3. Same-line shadowing of parameters
 
 ```nurl
 @ days_since_epoch i z → Time {
@@ -343,12 +103,9 @@ side is evaluated. The new name is in scope for the rest of the
 function, including any subsequent reads — which silently rebind to
 the new value. No warning.
 
-**Real example:** caught during `time_from_unix` development — see
-`stdlib/std/time.nu`.
-
 ---
 
-## 8. Function calls require parens
+## 4. Function calls require parens
 
 ```nurl
 // ✗ `__i_mod a b` parses as: register `__i_mod` plus stray tokens
@@ -360,13 +117,13 @@ the new value. No warning.
 
 **Why:** there is no implicit-call form. `( fn args )` is the only
 call syntax. A bare identifier is always a name lookup — and the
-following tokens are then parsed in the surrounding context (often as
-operator operands), so the error surfaces several tokens later as
+following tokens are then parsed in the surrounding context (often
+as operator operands), so the error surfaces several tokens later as
 "unexpected token".
 
 ---
 
-## 9. Ternary / prefix-arity is strict and silently cascading
+## 5. Ternary / prefix-arity is strict and silently cascading
 
 ```nurl
 // ✗ Missing one operand from a nested ternary
@@ -379,16 +136,16 @@ operator operands), so the error surfaces several tokens later as
 
 **Why:** prefix notation has no closing token. Parsers count operands
 left-to-right and a missing operand silently consumes the next token
-that should have started a new statement. The diagnostic always points
-at the wrong line.
+that should have started a new statement. The diagnostic always
+points at the wrong line.
 
 **Debugging tip:** when you see "unexpected token" on a line that
-*looks* fine, count operands on every `?`, `&`, `|`, `!`, `=`, `+` etc.
-on the **previous** line.
+*looks* fine, count operands on every `?`, `&`, `|`, `!`, `=`, `+`
+etc. on the **previous** line.
 
 ---
 
-## 10. `vec_clone` is intentionally absent
+## 6. `vec_clone` is intentionally absent
 
 ```nurl
 // ✗ No such function — would alias owned heap buffers
@@ -401,21 +158,185 @@ on the **previous** line.
 } )
 ```
 
-**Why:** `vec_clone` would do a bitwise copy of the underlying buffer,
-duplicating owned-pointer fields without telling the auto-drop
-machinery. The result would double-free every owned element at scope
-exit. Per-element clone is explicit and respects ownership.
+**Why:** `vec_clone` would do a bitwise copy of the underlying
+buffer, duplicating owned-pointer fields without telling the
+auto-drop machinery. The result would double-free every owned element
+at scope exit. Per-element clone is explicit and respects ownership.
+
+---
+
+## 7. Function-parameter struct mutation is value-semantic
+
+```nurl
+: Counter { i n  i max }
+
+@ inc Counter c → v {
+  = . c n + . c n 1   // mutates a LOCAL copy
+}
+
+@ main → i {
+  : Counter c @ Counter { 0 10 }
+  ( inc c )
+  ( inc c )
+  // . c n is STILL 0 from the caller's view.
+  ^ 0
+}
+```
+
+```nurl
+// ✓ Canonical share-mutation pattern: return the modified struct
+@ inc_returning Counter c → Counter {
+  = . c n + . c n 1
+  ^ c
+}
+= c ( inc_returning c )
+= c ( inc_returning c )
+// . c n is now 2.
+```
+
+**Why:** NURL passes struct parameters by value, like C, Go, Zig, and
+Rust-without-`&mut`. The compiler emits an `alloca + store` for each
+struct-typed parameter at function entry, so `= . p field val` writes
+to a fresh local backing — the caller's binding is untouched. NURL
+has no `&local` address-of operator, so the only ways to share
+mutation across a call boundary are:
+
+* **Return the modified struct** (idiomatic — copy is cheap for
+  small structs).
+* **Use `*T` parameters** explicitly — the function gets a pointer,
+  the caller passes the alloca address. Field writes through the
+  pointer reach the caller's memory.
+* **Wrap the state in a single-handle struct** (e.g.
+  `{ ( Vec i ) counters }`) — the handle is copied but the heap
+  buffer is shared. See `stdlib/ext/http_middleware.nu` `Metrics`.
+
+---
+
+## 8. Mutable struct captured by closure is a *borrow*
+
+```nurl
+: Counter { i n  i max }
+
+: ~ Counter c @ Counter { 0 10 }
+: (@ v) bump \ → v {
+  = . c n + . c n 1     // reaches the CALLER's alloca
+}
+( bump ) ( bump ) ( bump )
+// . c n is now 3.
+```
+
+When a `: ~`-bound multi-field struct is captured by a closure, the
+closure's environment stores the caller's alloca **pointer** rather
+than a value snapshot. Writes through the closure reach the caller's
+memory; the caller's writes are visible on the next closure call.
+
+This is exactly the right thing for in-place mutation patterns
+(metric accumulators, parser state, fold-builder closures). It is
+**not safe** when the closure outlives the binding's scope:
+
+```nurl
+// ✗ DON'T — the closure's pointer dangles after this function returns
+@ make_counter → (@ v) {
+  : ~ Counter c @ Counter { 0 10 }
+  ^ \ → v { = . c n + . c n 1 }
+}
+```
+
+NURL does not check for escaping captures. If the closure is stored
+in a `Vec[Closure]`, returned from a function, or detached onto a
+worker thread that outlives the caller, fall back to a heap-backed
+handle:
+
+```nurl
+// ✓ Heap-backed handle survives capture by escaping closures
+: Counter { ( Vec i ) slots }       // slot 0 = n, slot 1 = max
+```
+
+**Rule of thumb:** the closure must finish executing before the
+scope holding the captured `: ~` binding exits. Same lifetime
+discipline as a C function holding a pointer to a stack local.
+
+**Immutable captures snapshot** (backward-compatible): `: Counter c …`
+without `~` is captured by value. Mutations inside the closure are
+local. Single-pointer-handle structs (`%String`, `%Vec`) are also
+captured by value but share through their inner pointer.
+
+---
+
+## 9. Variadic FFI does not auto-promote
+
+C's variadic ABI promotes `float` to `double` and narrow integer
+types to `int` (or `unsigned int`) before the call. NURL's FFI
+emits the exact LLVM types declared in the signature.
+
+```nurl
+// ✗ Will mis-pass: f32 is sent as `float`, but C's printf reads `double`
+& `libc` @ printf i s fmt f32 x → i
+
+// ✓ Widen at the call site
+& `libc` @ printf i s fmt f val → i
+: f32 narrow # f32 0.5
+( printf `%g\n` # f narrow )
+```
+
+The same applies to `i8` / `i16` / `i32` passed through `...`:
+declare the parameter as `i` and widen the value before calling.
+
+**This is a known gap.** A future grammar revision (v1.9 candidate)
+may add automatic variadic promotion. Until then, treat the FFI
+boundary as exact.
+
+---
+
+## 10. Namespace syntax merges `alias::name` into one IDENT
+
+```nurl
+$ `stdlib/ext/json.nu` json
+// At source level you can write:
+: Json v ( json::parse `{"k":1}` )
+// The lexer merges `json::parse` into the single IDENT `json__parse`.
+```
+
+**Caveat:** the `$ path alias` import form only rewrites top-level
+`@`-function names. It does **not** rename struct types, enum
+variants, FFI decls, traits, or impls. Use plain `$ path` (no alias)
+when importing a module whose surface is mostly types — the alias
+mechanism doesn't reach them.
+
+---
+
+## Memory-model notes that catch newcomers
+
+NURL is single-owner with compiler-inserted auto-drop. No GC, no
+borrow checker. A few specifics worth pinning down:
+
+* **Owned strings and slices** (`( nurl_str_cat a b )`, `[ i | 1 2 3 ]`,
+  allocating calls) free at scope exit. Reassignment frees the
+  previous value first. Closures capturing owned bindings use RC.
+* **Struct-field auto-drop is conservative.** Only fields populated
+  from a fresh allocation directly inside the named-struct literal
+  get a drop. Copying an already-owned binding into a struct does
+  not double-free.
+* **`foreach` borrows.** Iterating with `~ x : T xs { ... }` borrows
+  each element from the slice — no transfer of ownership, no
+  per-element drop.
+* **Returning a fresh allocation transfers ownership** to the caller.
+* **The `Drop` trait** is recognised by convention. Any `impl Drop`
+  with `@ drop T self → v` runs at scope exit, before owned-field
+  cleanup.
 
 ---
 
 ## Cross-references
 
-- Source-level workarounds are commented in
-  `stdlib/ext/http_request.nu`, `http_response.nu`, `http_router.nu`,
-  `http_server.nu`, `http_middleware.nu`, `regex.nu`, `mcp_client.nu`.
-- Tracked compiler-side fixes live in [`../ROADMAP.md`](../ROADMAP.md)
-  §1 (multi-field Option Some-arm, generic propagation through
-  closures, multi-field struct mutability, mutable enum bindings).
-- The README's **Known Limitations** table covers *deliberate* scope
-  decisions (no GC, no sized types, …); this page covers *bugs and
-  quirks* you can stub your toe on today.
+* Source-level workarounds for any remaining ergonomic gaps are
+  commented in `stdlib/ext/http_request.nu`, `http_response.nu`,
+  `http_router.nu`, `http_server.nu`, `http_middleware.nu`,
+  `regex.nu`, `mcp_client.nu`.
+* Roadmap (compiler-side improvements still in flight):
+  [`../ROADMAP.md`](../ROADMAP.md) §1.
+* Per-release shipped features and breaking changes:
+  [`../CHANGELOG.md`](../CHANGELOG.md).
+* README's **Known Limitations** table covers deliberate scope
+  decisions (no GC, no exceptions, no inheritance); this page
+  covers bugs and quirks you can stub your toe on today.
