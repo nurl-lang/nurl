@@ -953,6 +953,7 @@ void nurl_map_free(long long handle) {
 #define LTT_QUESTQUEST 40
 #define LTT_SHL        41
 #define LTT_SHR        42
+#define LTT_ELLIPSIS   43
 
 typedef struct {
     int         type;
@@ -1200,6 +1201,18 @@ static NurlToken lex_next_tok(NurlLex *lx) {
             id = joined;
         }
         NurlToken t = make_tok(LTT_IDENT, id, 0, line); free(id); return t;
+    }
+
+    /* three-char operator: `...` ellipsis (grammar v1.9 variadic-FFI
+       marker). Must precede the single-char `.` branch below so that the
+       three dots merge into one ELLIPSIS token rather than three DOTs.
+       At this point the digit-led float lexer above has already consumed
+       any `digit . digit` sequence, so a `.` here is never the start of
+       a numeric literal. */
+    if (c == '.' && lx->pos + 2 < lx->len &&
+        lx->src[lx->pos + 1] == '.' && lx->src[lx->pos + 2] == '.') {
+        lx->pos += 3;
+        return make_tok(LTT_ELLIPSIS, "...", 0, line);
     }
 
     /* two-char operators */

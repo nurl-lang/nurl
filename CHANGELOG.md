@@ -10,6 +10,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Variadic FFI + automatic argument promotion** (grammar v1.9).
+  FFI declarations may end the param list with the literal `...`
+  token to mark the C function variadic. New `LTT_ELLIPSIS = 43`
+  in `stdlib/runtime.c`; `gen_ffi_decl` records `<fname>__variadic`
+  + `<fname>__variadic_fixed` side-channels; `gen_call` applies the
+  C default argument promotions (ISO C §6.5.2.2) to every argument
+  beyond the fixed count — `float → double` via `fpext`, narrow
+  ints (`i1` / `i8` / `i16`, signedness from the binding's
+  `__unsigned` flag) → `i32` via `sext` / `zext`. `i32` / `i64`
+  / `double` / pointers pass through unchanged. Unlocks direct
+  `printf` / `snprintf` / `fprintf` / `scanf` from NURL without
+  per-call hand-widening. Closes `docs/GOTCHAS.md` §9 — every
+  remaining §1-10 entry is now an intentional design choice rather
+  than a real bug. Canonical example:
+
+  ```nurl
+  & `libc` @ printf s fmt ... → i32
+
+  : i32 a 42
+  : f32 c # f32 3.5
+  ( printf `i32=%d f32=%g\n` a c )   // both args auto-promoted
+  ```
+
+  Regression: `compiler/tests/variadic_ffi.nu` (every promotion
+  rule in one exit-0 program). Bootstrap fixed point holds at
+  1 125 285 B (stage1 ≡ stage2 byte-identical, +11 426 B vs Phase
+  1B). `nurlfmt` round-trips `...` as a single OP token (added
+  6b branch in `tools/nurlfmt/tokenize.nu`). Snapshot:
+  [`spec/grammar_v1.9.ebnf`](spec/grammar_v1.9.ebnf).
 * **`nurlfmt` — canonical source formatter.** First-class tooling
   for deterministic NURL source layout. Written in NURL itself
   (eats its own dogfood) and built automatically by `./build.sh`

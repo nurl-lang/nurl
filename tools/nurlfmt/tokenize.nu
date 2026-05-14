@@ -258,6 +258,18 @@ $ `stdlib/core/vec.nu`
                                 = i + i 3
                             } {
 
+                            // 6b) Ellipsis `...` — grammar v1.9 variadic-FFI
+                            //     marker. Must precede the single-byte `.`
+                            //     fallback so three dots fuse into one OP
+                            //     token rather than three. nurl_str_get
+                            //     returns 0 for OOB indices, so the third-
+                            //     byte check is bounds-safe at end-of-input.
+                            ? & & == c 46 == c2 46 == ( nurl_str_get src + i 2 ) 46 {
+                                ( __fmt_emit toks src i + i 3 TT_FMT_OP nl_acc )
+                                = nl_acc 0
+                                = i + i 3
+                            } {
+
                                 // 7) Two-char operators
                                 ? & == c 61 == c2 61 {  // ==
                                     ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
@@ -302,7 +314,7 @@ $ `stdlib/core/vec.nu`
                                                             = nl_acc 0
                                                             = i + i 1
 
-                                                        } } } } } } } } } } } }
+                                                        } } } } } } } } } } } } }
         } {}
     }
 

@@ -1,5 +1,5 @@
 // nurlc.nu — NURL compiler written in NURL.
-// Grammar: v1.7
+// Grammar: v1.9
 //
 // Copyright (c) 2026 The NURL Project Developers
 // SPDX-License-Identifier: MIT OR Apache-2.0
@@ -71,6 +71,7 @@
 : i TT_QUESTQUEST 40
 : i TT_SHL 41
 : i TT_SHR 42
+: i TT_ELLIPSIS 43
 
 // ── Abort helpers ─────────────────────────────────────────────────
 
@@ -914,6 +915,58 @@
     { fn_ptr_type }  // Not a function pointer, return as-is
 }
 
+// ── Variadic FFI: C default argument promotions ──────────────────
+// When calling a variadic function, the C ABI requires that any
+// argument passed through the `...` undergoes "default argument
+// promotion": `float` widens to `double`, and any integer narrower
+// than `int` (i.e. `_Bool` / `char` / `short`) widens to `int`
+// (LLVM `i32` on every triple NURL currently targets). LLVM IR does
+// not auto-promote at the call site — we emit explicit `fpext` /
+// `sext` / `zext` for the variadic-position args here.
+//
+// Signedness of narrow ints comes from the `__last_unsigned__`
+// side-channel that `gen_ident` writes from the binding's
+// `__unsigned` flag (Phase 1B). For values that did not flow through
+// an ident load — call results, literals, arithmetic with mixed
+// signedness — `lu` is empty and we fall back to `sext`, matching the
+// signed-int default the grammar already applies elsewhere.
+
+@ variadic_promoted_type s at → s {
+    ? ( seq at `float` ) { ^ `double` } {}
+    ? ( seq at `i1` ) { ^ `i32` } {}
+    ? ( seq at `i8` ) { ^ `i32` } {}
+    ? ( seq at `i16` ) { ^ `i32` } {}
+    at
+}
+
+@ variadic_promote_arg i cg s at s av s lu → s {
+    ? ( seq at `float` )
+    { : s r ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print r )
+        ( nurl_print ` = fpext float ` ) ( nurl_print av )
+        ( nurl_print ` to double\n` )
+        ^ r }
+    {}
+    ? ( seq at `i1` )
+    { : s r ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print r )
+        ( nurl_print ` = zext i1 ` ) ( nurl_print av )
+        ( nurl_print ` to i32\n` )
+        ^ r }
+    {}
+    ? | ( seq at `i8` ) ( seq at `i16` )
+    { : s inst ? != 0 ( nurl_str_len lu ) `zext` `sext`
+        : s r ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print r )
+        ( nurl_print ` = ` ) ( nurl_print inst )
+        ( nurl_print ` ` ) ( nurl_print at )
+        ( nurl_print ` ` ) ( nurl_print av )
+        ( nurl_print ` to i32\n` )
+        ^ r }
+    {}
+    av
+}
+
 // Emit `call void @nurl_free(i8* %r)` for every register in `temps`
 // (space-separated). Called by gen_call after a callee returns to release
 // owned-string argument temporaries (Phase 2B parameter-ownership).
@@ -982,6 +1035,15 @@
     : s argstr ``
     : i first 1
     : s first_arg_type ``
+    // Variadic FFI (grammar v1.9): if gen_ffi_decl tagged this function
+    // with `<fname>__variadic`, apply C default argument promotions to
+    // every arg whose 0-based index is >= the fixed-param count. FFI
+    // decls are never generic, so the variadic flag is keyed on fname
+    // rather than the mangled call_name.
+    : b is_variadic ( seq ( nurl_sym_get syms ( nurl_str_cat fname `__variadic` ) ) `1` )
+    : s vf_str ( nurl_sym_get syms ( nurl_str_cat fname `__variadic_fixed` ) )
+    : i fixed_count ? == 0 ( nurl_str_len vf_str ) 0 ( nurl_str_to_int vf_str )
+    : i arg_idx 0
     // Phase 2B parameter-ownership: collect register values for arg expressions
     // whose result is a fresh owned-string allocation (e.g. `nurl_str_cat`),
     // then free them right after the call returns. Without this the temp is
@@ -991,8 +1053,19 @@
     : s owned_arg_temps ``
     ~ != ( nurl_lex_type lex ) TT_RPAREN {
         ( nurl_sym_def syms `__last_call_ret_owned__` `` )
+        ( nurl_sym_def syms `__last_unsigned__` `` )
         : s av ( gen_expr lex syms cg )
         : s at ( nurl_get_last_type )
+        : s lu_arg ( nurl_sym_get syms `__last_unsigned__` )
+        // Variadic position: promote BEFORE owned-temp tracking + argstr
+        // append, since promotion replaces (at, av) with the widened pair.
+        // i8*/i64/i32/double/pointers pass through variadic_promote_arg
+        // unchanged.
+        ? & is_variadic >= arg_idx fixed_count
+        { = av ( variadic_promote_arg cg at av lu_arg )
+            = at ( variadic_promoted_type at )
+        }
+        {}
         ? & & != 0 g_auto_drop_strings
         ( seq at `i8*` )
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
@@ -1006,6 +1079,7 @@
             = first_arg_type at
         }
         { = argstr ( nurl_str_cat argstr ( nurl_str_cat4 `, ` at ` ` av ) ) }
+        = arg_idx + arg_idx 1
     }
     ( expect lex TT_RPAREN )
     // Group F: impl method dispatch based on first arg's LLVM type
@@ -5493,8 +5567,19 @@
     { ( nurl_lex_advance lex ) }
 }
 
-// ── FFI declaration: & `lib` @ name params → type ─────────────────
+// ── FFI declaration: & `lib` @ name params... ('...')? → type ─────
 // Emits a `declare` for an external C function.
+//
+// Variadic FFI (grammar v1.9): when the param list ends with the literal
+// `...` token, the function is recorded as variadic. The fixed-param
+// count is stashed in `<fname>__variadic_fixed`; gen_call consults this
+// to apply C default argument promotions (float→double, narrow ints →
+// i32) to every arg beyond the fixed count. Example:
+//
+//   & `libc` @ printf s fmt ... → i32
+//
+// The fname-keyed flag `<fname>__variadic` is the predicate; the count
+// is needed because promotion applies ONLY to the variadic tail.
 
 @ gen_ffi_decl i lex i syms → v {
     ( nurl_lex_advance lex )  // consume '&'
@@ -5505,12 +5590,22 @@
     : s params_str ``
     : i pct 0
     ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF {
-        : s lt ( parse_type lex )
-        ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
-        ? == pct 0
-        { = params_str lt }
-        { = params_str ( nurl_str_cat params_str ( nurl_str_cat `, ` lt ) ) }
-        = pct + pct 1
+        ? == ( nurl_lex_type lex ) TT_ELLIPSIS
+        { ( nurl_lex_advance lex )  // consume '...'
+            // Register variadic side-channel: the predicate flag and the
+            // fixed-param count (decimal-stringified) drive the call-site
+            // promotion path in gen_call.
+            ( nurl_sym_def syms ( nurl_str_cat fname `__variadic` ) `1` )
+            ( nurl_sym_def syms ( nurl_str_cat fname `__variadic_fixed` ) ( nurl_str_int pct ) )
+            = params_str ? == pct 0 `...` ( nurl_str_cat params_str `, ...` )
+        }
+        { : s lt ( parse_type lex )
+            ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
+            ? == pct 0
+            { = params_str lt }
+            { = params_str ( nurl_str_cat params_str ( nurl_str_cat `, ` lt ) ) }
+            = pct + pct 1
+        }
     }
     ( expect lex TT_ARROW )
     : s ret_ty ( parse_type lex )

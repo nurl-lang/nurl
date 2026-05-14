@@ -1,6 +1,6 @@
 # NURL — Language Gotchas
 
-A single-page reference for the rough edges of NURL (Grammar v1.8)
+A single-page reference for the rough edges of NURL (Grammar v1.9)
 that trip up code generation. If you are an LLM writing NURL, read
 this first — it saves several compile-test cycles.
 
@@ -23,7 +23,7 @@ unlock, see [`../CHANGELOG.md`](../CHANGELOG.md).
 | 6 | `vec_clone` is intentionally absent | Roll your own: `vec_each` + per-element clone |
 | 7 | Function-parameter struct mutation is **value-semantic** | Return the modified struct: `= c ( f c )` |
 | 8 | Mutable struct captured by closure (`: ~ T`) is a **borrow**, not a copy | Don't escape the closure; if you must, use a heap-backed handle |
-| 9 | Variadic FFI does not auto-promote `f32` or narrow ints | Declare the exact ABI types in `& \`libname\` @ fn ...` |
+| 9 | ~~Variadic FFI does not auto-promote `f32` or narrow ints~~ — **fixed in v1.9** (auto-promotion via explicit `...` in FFI decl) | `& \`libc\` @ printf s fmt ... → i32` |
 | 10 | Multi-char namespace `alias::name` is merged into a single IDENT `alias__name` | Aliases only rename `@`-functions, not types or FFI decls |
 
 ---
@@ -263,28 +263,52 @@ captured by value but share through their inner pointer.
 
 ---
 
-## 9. Variadic FFI does not auto-promote
+## 9. Variadic FFI auto-promotion — **shipped in v1.9**
 
 C's variadic ABI promotes `float` to `double` and narrow integer
-types to `int` (or `unsigned int`) before the call. NURL's FFI
-emits the exact LLVM types declared in the signature.
+types (`_Bool` / `char` / `short`) to `int` before the call. Through
+grammar v1.8 NURL's FFI passed the exact LLVM types declared in the
+signature, so every variadic call site had to widen by hand.
+
+**Grammar v1.9** closes this. Declare the FFI signature with a
+trailing `...` to mark the function variadic; the compiler emits
+the appropriate `fpext` / `sext` / `zext` for every argument
+beyond the fixed-param count:
 
 ```nurl
-// ✗ Will mis-pass: f32 is sent as `float`, but C's printf reads `double`
-& `libc` @ printf i s fmt f32 x → i
+// ✓ v1.9 — auto-promotion at the call site
+& `libc` @ printf s fmt ... → i32
 
-// ✓ Widen at the call site
-& `libc` @ printf i s fmt f val → i
-: f32 narrow # f32 0.5
-( printf `%g\n` # f narrow )
+: i32 a 42
+: u32 b 12345
+: f32 c # f32 3.5
+: s   e `hello`
+( printf `i32=%d u32=%u f32=%g s=%s\n` a b c e )
 ```
 
-The same applies to `i8` / `i16` / `i32` passed through `...`:
-declare the parameter as `i` and widen the value before calling.
+Promotion rules at the call site (signedness from the binding's
+`__unsigned` flag, otherwise default `sext`):
 
-**This is a known gap.** A future grammar revision (v1.9 candidate)
-may add automatic variadic promotion. Until then, treat the FFI
-boundary as exact.
+| Source LLVM type | Promoted to | Instruction |
+|---|---|---|
+| `float`        | `double` | `fpext` |
+| `i1` (bool)    | `i32`    | `zext`  |
+| `i8`  signed   | `i32`    | `sext`  |
+| `i8`  unsigned (`u`) | `i32` | `zext` |
+| `i16` signed   | `i32`    | `sext`  |
+| `i16` unsigned (`u16`) | `i32` | `zext` |
+| `i32` / `i64` / `double` / pointers | unchanged | — |
+
+The fixed-param count is captured at FFI-decl time, so a function
+declared `& \`libc\` @ snprintf *u buf i n s fmt ... → i32` promotes
+only args 4+ (the variadic tail), leaving the named `*u`, `i`, `i`,
+`s` args alone.
+
+**Return type quirk:** the prelude pre-emits
+`declare i32 @printf(i8*, ...)`. If your FFI decl uses `→ i` (NURL
+i64), the call emits `call i64` which LLVM's verifier will reject as
+incompatible with the prelude's `i32`. Use `→ i32` for printf and
+the rest of the printf family.
 
 ---
 
