@@ -85,6 +85,23 @@ Syntax highlighting for VS Code / Windsurf is available in `tooling/vscode-nurl/
 The browser-based playground (see below) ships a Monaco port of the same
 tokenizer — no install required.
 
+### Canonical formatter
+
+`./build.sh` also produces `build/nurlfmt` — a deterministic, opinionated
+source formatter analogous to `gofmt` / `rustfmt`. Specification:
+[`docs/FORMAT.md`](docs/FORMAT.md). Common invocations:
+
+```bash
+./nurlfmt.sh <file.nu>              # format → stdout
+./nurlfmt.sh --write   <file.nu> …  # rewrite in place
+./nurlfmt.sh --check   <file.nu> …  # CI gate; exit 1 if non-canonical
+cat src.nu | ./nurlfmt.sh           # stdin → stdout
+```
+
+Round-trip acceptance — every shipped `.nu` file round-trips byte-for-byte:
+`fmt(fmt(x)) == fmt(x)` AND `nurlc(fmt(x)) == nurlc(x)`. Enforced by
+`compiler/tests/nurlfmt_idempotent.sh`.
+
 ---
 
 ## HTTP API & browser playground

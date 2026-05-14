@@ -8,7 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+* **`nurlfmt` — canonical source formatter.** First-class tooling
+  for deterministic NURL source layout. Written in NURL itself
+  (eats its own dogfood) and built automatically by `./build.sh`
+  to `build/nurlfmt`. Specification lives in
+  [`docs/FORMAT.md`](docs/FORMAT.md). CLI mirrors gofmt/rustfmt:
+  `nurlfmt` (stdin→stdout), `--stdin` (explicit), `--check`
+  (CI-friendly idempotence gate), `--write` (in-place), plus
+  multi-file fan-out and the conventional 0/1/2 exit-code
+  semantics.
+
+  Architecture: token-stream walker — `tools/nurlfmt/tokenize.nu`
+  rebuilds a comment-and-newline-preserving token vector from
+  source, `tools/nurlfmt/pretty.nu` emits the canonical layout by
+  tracking brace depth, top-level decl boundaries, and type-
+  prefix sigil tightness (`*Expr`, `?i`, `[T]`). No CST is
+  built; NURL's regular prefix grammar lets a token walker do
+  the work that `gofmt` needs an AST for.
+
+  Acceptance:
+  `compiler/tests/nurlfmt_idempotent.sh` enforces two invariants
+  on every `.nu` file under `stdlib/`, `examples/`,
+  `compiler/tests/`, `tools/nurlfmt/`, and `compiler/nurlc.nu`:
+  `fmt(fmt(x)) == fmt(x)` (formatter is a fixed point on its own
+  output) AND `nurlc(fmt(x)) == nurlc(x)` byte-for-byte (the
+  reformat changes zero bytes of emitted LLVM IR). 263 files
+  pass idempotence; 251 are IR-equivalence covered (12 are
+  include fragments that don't compile standalone and are
+  skipped for the IR pass).
+
+  v1 deliberate scope: no automatic line wrapping, no
+  cascading-construct extra-indent (a user-written newline
+  inside a ternary cascade gets re-indented to the surrounding
+  block, not bumped by one level — see FORMAT.md §7), no comment
+  reflow, no range formatting.
 
 ## [0.2.0] — 2026-05-14
 

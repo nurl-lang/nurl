@@ -123,6 +123,28 @@ fi
 cp build/nurlc_self2 build/nurlc
 ln -sf build/nurlc nurlc 2>/dev/null || cp build/nurlc nurlc
 
+# ── nurlfmt ──────────────────────────────────────────────────
+# Build the canonical source formatter on top of the freshly-
+# bootstrapped nurlc. Treated as a soft step: failure here logs a
+# warning but does not block the build, since the formatter is a
+# tooling concern rather than a compiler invariant.
+if bash "$SCRIPT_DIR/tools/nurlfmt/build.sh" >> "$LOG" 2>&1; then
+    log "[info] nurlfmt built → build/nurlfmt"
+    # Spot-check: a handful of representative files must still round-
+    # trip through the formatter without changing their LLVM IR. The
+    # full-tree gate lives in compiler/tests/nurlfmt_idempotent.sh
+    # — run that manually for a complete sweep.
+    if bash compiler/tests/nurlfmt_idempotent.sh \
+            examples/fizzbuzz.nu examples/calculator.nu \
+            stdlib/core/string.nu >> "$LOG" 2>&1; then
+        log "[info] nurlfmt round-trip spot-check passed"
+    else
+        log "[warn] nurlfmt round-trip spot-check FAILED — see log"
+    fi
+else
+    log "[warn] nurlfmt build failed; skipping"
+fi
+
 # ── Test suite ───────────────────────────────────────────────
 if TEST_OUT="$(compiler/tests/run_tests.sh 2>&1)"; then
     echo "BUILD SUCCESS & TESTS PASSED"

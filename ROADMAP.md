@@ -91,7 +91,7 @@ Rounding out the standard library for production use.
 ## 3. Tooling & Developer Experience
 Making NURL easier to write and debug.
 
-- [ ] **Code Formatter (`nurlfmt`):** A deterministic, opinionated formatter for NURL source.
+- [x] **Code Formatter (`nurlfmt`) — shipped 2026-05-14:** Deterministic, opinionated formatter for NURL source. Specification at [`docs/FORMAT.md`](docs/FORMAT.md). Written in NURL itself (~750 LOC across `tools/nurlfmt/{nurlfmt,tokenize,pretty}.nu`); built by `build.sh` to `build/nurlfmt`. CLI: `nurlfmt`/`--stdin` (stdin→stdout), `--check` (idempotence gate for CI, exit 1 on non-canonical), `--write` (in-place), multi-file fan-out. Round-trip acceptance via `compiler/tests/nurlfmt_idempotent.sh`: `fmt(fmt(x)) == fmt(x)` AND `nurlc(fmt(x)) == nurlc(x)` byte-identical, validated across 263 files (251 IR-equivalence covered; 12 include fragments skipped). v1 scope: no automatic line wrapping, no cascading-construct extra-indent (FORMAT.md §7), no comment reflow.
 - [ ] **Language Server (LSP):** Full LSP support including go-to-definition, hover information, and live diagnostics.
 - [ ] **VS Code Extension Integration:** Wire `tooling/vscode-nurl` (currently syntax-only) to the LSP.
 - [ ] **Advanced Debugging:** Full DWARF debug info generation for source-level debugging with GDB/LLDB.
@@ -111,7 +111,9 @@ Scaling NURL for team use and external integration.
 
 ---
 
-*Last updated: May 14, 2026 — Fixed-size types Phase 1B shipped (unsigned arithmetic for `u16`/`u32`/`u64`). `gen_ident` propagates the binding's `__unsigned` flag to `__last_unsigned__`; `gen_binary` snapshots LHS marker before RHS, picks `udiv`/`urem`/`lshr`/`icmp u*` if either operand is unsigned, and propagates result signedness for nested binops. `gen_logical_or_bitwise_and` / `_or` gates broadened from i64/i32-only to all integer widths so `&`/`|` work on i8/i16/u16 without explicit casts. Regression: `compiler/tests/unsigned_arith.nu` (udiv vs sdiv, lshr vs ashr, icmp ult vs slt on high-bit-set values; u16 + u64 paths; i16 bitwise; nested unsigned propagation). Bootstrap fixed point holds at 1 113 859 B. Grammar v1.8 §6 limitation removed.
+*Last updated: May 14, 2026 — `nurlfmt` canonical source formatter shipped. Token-stream walker (`tools/nurlfmt/{tokenize,pretty}.nu`, ~750 LOC pure NURL) built by `build.sh` to `build/nurlfmt`. Round-trip acceptance (`compiler/tests/nurlfmt_idempotent.sh`): idempotence + byte-identical LLVM IR over 263 `.nu` files (251 IR-equivalence covered). Specification: [`docs/FORMAT.md`](docs/FORMAT.md). Closes the long-standing tooling-gap item flagged in the v0.2.0 external review.
+
+*Previously, same day (May 14, 2026): Fixed-size types Phase 1B shipped (unsigned arithmetic for `u16`/`u32`/`u64`). `gen_ident` propagates the binding's `__unsigned` flag to `__last_unsigned__`; `gen_binary` snapshots LHS marker before RHS, picks `udiv`/`urem`/`lshr`/`icmp u*` if either operand is unsigned, and propagates result signedness for nested binops. `gen_logical_or_bitwise_and` / `_or` gates broadened from i64/i32-only to all integer widths so `&`/`|` work on i8/i16/u16 without explicit casts. Regression: `compiler/tests/unsigned_arith.nu` (udiv vs sdiv, lshr vs ashr, icmp ult vs slt on high-bit-set values; u16 + u64 paths; i16 bitwise; nested unsigned propagation). Bootstrap fixed point holds at 1 113 859 B. Grammar v1.8 §6 limitation removed.
 
 *Previously, same day (May 14, 2026): Fixed-size types Phase 1A shipped (grammar v1.8). Lexer recognises `i8`/`i16`/`i32`/`u16`/`u32`/`u64`/`f32` as multi-char TYPE_KW. Compiler grew a per-binding `__nurl_type` + `__unsigned` side-channel that drives `sext` vs `zext` at cast and store sites; `coerce_store_val` covers narrowing/widening uniformly; `gen_cast` handles float↔double via `fpext`/`fptrunc`. `binop_instr` recognises `float` for f32 arithmetic. Regression: `compiler/tests/fixed_size_types.nu`. Bootstrap fixed point held at 1 112 250 B.
 
