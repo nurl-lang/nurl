@@ -642,12 +642,30 @@
   ? == tt TT_PIPE ^ ( gen_logical_or_bitwise_or lex syms cg )
   // Original binary operation logic for other operators
   ( nurl_lex_advance lex )
+  // Phase 1B signedness propagation: `gen_ident` writes the loaded
+  // binding's `__unsigned` flag into `__last_unsigned__` so binops can
+  // pick `udiv`/`urem`/`lshr`/`icmp u*` over their signed equivalents
+  // when an operand was declared as a sized unsigned type (u16/u32/u64,
+  // or legacy `u` → i8). Clear the marker before LHS so a literal-LHS
+  // expression doesn't inherit stale state from a prior load.
+  ( nurl_sym_def syms `__last_unsigned__` `` )
   : s lv  ( gen_expr lex syms cg )
   : s lt  ( nurl_get_last_type )
+  : s lu_snap ( nurl_sym_get syms `__last_unsigned__` )
+  ( nurl_sym_def syms `__last_unsigned__` `` )
   : s rv  ( gen_expr lex syms cg )
+  : s ru_snap ( nurl_sym_get syms `__last_unsigned__` )
   : s res ( nurl_cg_reg cg )
   : b isf | ( seq lt `double` ) ( seq lt `float` )
-  : b isu ( seq lt `i8` )
+  // Unsigned operand path. Three triggers, OR-ed:
+  //   * Legacy 8-bit byte (`u` → i8): retained for v1.6 compatibility.
+  //   * Either operand carries the `__unsigned` flag (sized u types).
+  // NURL is strongly typed (no implicit conversions), so lt == rt
+  // always holds for arithmetic operands — the OR over both operands'
+  // flags is defensive against asymmetric loss along complex paths
+  // rather than meaningful signedness coercion.
+  : b isu | | ( seq lt `i8` ) != 0 ( nurl_str_len lu_snap )
+                                != 0 ( nurl_str_len ru_snap )
   : s ins ( binop_instr tt isf isu )
   ( nurl_print `  ` ) ( nurl_print res ) ( nurl_print ` = ` )
   ( nurl_print ins ) ( nurl_print ` ` )
@@ -656,6 +674,9 @@
   ? | & >= tt TT_LT <= tt TT_GE | == tt TT_EQEQ == tt TT_NE
     ( nurl_set_last_type `i1` )
     ( nurl_set_last_type lt )
+  // Propagate the result's signedness so a nested binop ( + a + b c )
+  // emits the right ops for the outer +.
+  ( nurl_sym_def syms `__last_unsigned__` ? isu `1` `` )
   res
 }
 
@@ -751,10 +772,14 @@
   : s lv  ( gen_expr lex syms cg )
   : s lt  ( nurl_get_last_type )
   : s left_lbl ( nurl_sym_get syms `__cur_lbl__` )
-  // Determine operation type based on left operand type
+  // Determine operation type based on left operand type.
+  // i1 → short-circuit boolean AND.
+  // Any integer width (i8/i16/i32/i64) → bitwise AND. `and` and `or`
+  // are sign-agnostic LLVM ops, so unsigned operands take the same
+  // path and `gen_bitwise_binary` doesn't need a signedness flag.
   ? ( seq lt `i1` )
     { ^ ( gen_logical_and lv left_lbl lex syms cg ) }
-    { ? | ( seq lt `i64` ) ( seq lt `i32` )
+    { ? > ( int_width lt ) 0
         { ^ ( gen_bitwise_binary lv lt lex syms cg TT_AMP ) }
         { : s msg ( nurl_str_cat `operator & requires matching types — got ` ( llvm_to_nurl lt ) )
           ( die lex ( nurl_str_cat msg ` and unknown` ) )
@@ -768,10 +793,10 @@
   : s lv  ( gen_expr lex syms cg )
   : s lt  ( nurl_get_last_type )
   : s left_lbl ( nurl_sym_get syms `__cur_lbl__` )
-  // Determine operation type based on left operand type
+  // i1 → short-circuit boolean OR; any integer width → bitwise OR.
   ? ( seq lt `i1` )
     { ^ ( gen_logical_or lv left_lbl lex syms cg ) }
-    { ? | ( seq lt `i64` ) ( seq lt `i32` )
+    { ? > ( int_width lt ) 0
         { ^ ( gen_bitwise_binary lv lt lex syms cg TT_PIPE ) }
         { : s msg ( nurl_str_cat `operator | requires matching types — got ` ( llvm_to_nurl lt ) )
           ( die lex ( nurl_str_cat msg ` and unknown` ) )
@@ -780,9 +805,14 @@
     }
 }
 
-// `isu` = unsigned-byte (i8) operand path: selects unsigned compare
-// predicates and logical (zero-fill) shift right. Equality predicates
-// (`==`, `!=`) are sign-agnostic, so they take the signed entry.
+// `isu` = unsigned-operand path: selects unsigned compare predicates,
+// logical (zero-fill) shift right, and unsigned div/rem. Set when
+// either operand is a sized unsigned type (`u`/`u16`/`u32`/`u64`)
+// via the `__last_unsigned__` side-channel propagated by `gen_ident`
+// and `gen_binary`. Equality predicates (`==`, `!=`) are sign-
+// agnostic, so they take the signed entry. `add`/`sub`/`mul`/`and`/
+// `or` produce identical results on signed and unsigned operands of
+// the same width, so they're keyed off `isf` only.
 @ binop_instr i tt b isf b isu → s {
   ? == tt TT_PLUS    ? isf `fadd` `add`
   ? == tt TT_MINUS   ? isf `fsub` `sub`
