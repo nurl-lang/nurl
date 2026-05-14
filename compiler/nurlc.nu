@@ -2426,7 +2426,7 @@
 
               // Widen i1 short-circuit / comparison results to the declared
               // integer width before storing (`: i can_l & …` etc.).
-              : s widened_val ( coerce_store_val val vt ptype cg )
+              : s widened_val ( coerce_store_val val vt ptype syms cg )
               // Handle closure to function pointer conversion
               : s store_val ( convert_closure_arg widened_val vt ptype cg )
 
@@ -2533,7 +2533,7 @@
       // Widen i1 short-circuit / comparison results to the LHS's
       // declared integer width, so `= myi64 & a b` stores cleanly.
       : s rhs_ty ( nurl_get_last_type )
-      : s store_val ( coerce_store_val val rhs_ty vt cg )
+      : s store_val ( coerce_store_val val rhs_ty vt syms cg )
       ? != 0 ( nurl_str_len ptr )
         { ( nurl_print `  store ` ) ( nurl_print vt ) ( nurl_print ` ` )
           ( nurl_print store_val ) ( nurl_print `, ` ) ( nurl_print vt )
@@ -3589,15 +3589,42 @@
 // source is i1 and the destination is a non-i1 integer type, and is a
 // no-op in every other case. Placed here so both the let-binding and
 // `=`-assign paths can share it.
-@ coerce_store_val s val s from_ty s to_ty i cg → s {
+@ coerce_store_val s val s from_ty s to_ty i syms i cg → s {
   ? & ( seq from_ty `i1` ) ! ( seq to_ty `i1` )
     { : s r ( nurl_cg_reg cg )
       ( nurl_print `  ` ) ( nurl_print r )
       ( nurl_print ` = zext i1 ` ) ( nurl_print val )
       ( nurl_print ` to ` ) ( nurl_print to_ty ) ( nurl_print `\n` )
-      r
+      ^ r
     }
-    { val }
+    {}
+  // i64 → %Enum: a bare variant name (`Red`, `Green`, `NetOther`, …)
+  // resolves through `gen_ident`'s `__global` path to a loaded i64 tag.
+  // When the declared LHS is the enum type itself (`: Color c Red` or
+  // `: ~ NetErr last_err NetOther`), the raw i64 has to be wrapped into
+  // the enum's `{ i64, ptr* }` shape before being stored — otherwise
+  // LLVM rejects `store %Color i64, %Color* …`.  Detect enum targets
+  // via the registered `<name>__variants` side-table; non-enum named
+  // types (structs) fall through unchanged.
+  //
+  // Closes docs/GOTCHAS.md §3 — `: ~ MyEnum x …` mutable enum binding
+  // and the symmetric immutable case. The earlier sentinel-flag-bool
+  // workaround in `stdlib/ext/http_server.nu:329–360` is no longer
+  // required.
+  ? & ( seq from_ty `i64` )
+      & != 0 ( nurl_str_len to_ty )
+        == ( nurl_str_get to_ty 0 ) 37
+    { : s tname ( nurl_str_slice to_ty 1 - ( nurl_str_len to_ty ) 1 )
+      : s vlist ( nurl_sym_get syms ( nurl_str_cat tname `__variants` ) )
+      ? != 0 ( nurl_str_len vlist )
+        { : s r ( nurl_cg_reg cg )
+          ( nurl_print `  ` ) ( nurl_print r )
+          ( nurl_print ` = insertvalue ` ) ( nurl_print to_ty )
+          ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+          ^ r }
+        {} }
+    {}
+  val
 }
 
 // Narrow a wider integer to i1 for use as a branch condition. The NURL

@@ -439,20 +439,18 @@ $ `stdlib/ext/http_response.nu`
 // server_stop), Err on infrastructure failure mid-flight.
 
 @ server_run HttpServer s → ! v NetErr {
-  // Loop forever (until either a clean stop or a real error). Two
-  // NURL compiler quirks shape this implementation:
-  //   * Mutable-enum bindings (`: ~ NetErr last_err …`) miscompile
-  //     (i64 stored without an `insertvalue` wrapper).
+  // Loop forever (until either a clean stop or a real error). One
+  // NURL compiler quirk still shapes this implementation:
   //   * Multiple early-`^`-returns inside `?? r { T → … F → … }` arms
   //     leave a phi-with-only-undef-incomings dangling before the
   //     loop_exit branch (terminator missing).
-  // The structure below works around both: stash a `done` boolean +
-  // `had_err` boolean and emit a single Result construction past the
-  // loop. When `had_err` is set we re-issue `server_run_once` to
-  // recover the error variant (cheap — the listener is already in a
-  // failing state, the second accept fails immediately).
+  // The structure below works around it: stash a `done` boolean plus
+  // a mutable `last_err` enum (now legal after the 2026-05-14 fix to
+  // mutable enum bindings) and emit a single Result construction past
+  // the loop.
   : ~ b done F
   : ~ b had_err F
+  : ~ NetErr last_err NetClosed
   ~ ! done {
     : ! v NetErr r ( server_run_once s )
     ?? r {
@@ -462,16 +460,16 @@ $ `stdlib/ext/http_response.nu`
         ? | != 0 ( nurl_str_eq nm `NetClosed` ) != 0 ( nurl_str_eq nm `NetAccept` ) {
           = done T
         } {
+          = last_err e
           = had_err T
           = done T
         }
       }
     }
   }
-  ? had_err {
-    : ! v NetErr r2 ( server_run_once s )
-    ^ r2
-  } {}
+  ? had_err
+    { ^ @ ! v NetErr { F last_err } }
+    {}
   ^ @ ! v NetErr { T 0 }
 }
 

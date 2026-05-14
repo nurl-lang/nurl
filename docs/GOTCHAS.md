@@ -18,7 +18,7 @@ Limitations** table in [`../README.md`](../README.md).
 |---|---|---|
 | 1 | `&` and `|` are **binary** — `& A B C` is a parse-arity error | Chain via parens: `& A & B C`, or extract a `__cond` helper |
 | 2 | Mutating a multi-field struct's `i` field via `=` does not propagate through closures | Back the state with a `Vec[i]` (heap handle); mutate via `vec_set` |
-| 3 | `: ~ MyEnum x …` (mutable enum binding) miscompiles — i64 stored without `insertvalue` | Use a sentinel-flag pattern: `: ~ b had_err F` + last-known plain field |
+| 3 | ~~`: ~ MyEnum x …` (mutable enum binding) miscompiles — i64 stored without `insertvalue`~~ **Fixed 2026-05-14** — `coerce_store_val` now wraps `i64 → %Enum` with an `insertvalue` before store; bare-variant-name reassignment (`= last_err NetTimeout`) works for narrow + wide enums | — |
 | 4 | ~~`vec_get [MultiFieldStruct]` returns a wrong default when index is out of bounds~~ **Fixed 2026-05-14** — the `# T 0` cast at the heart of the None synthesis now emits `zeroinitializer` when T's f0 is a non-pointer named type (e.g. `%String`); `vec_get`, `hashmap_get`, and the iter combinators all return a valid None for multi-field T | — |
 | 5 | Bare `@-fn` names don't auto-coerce to a `(@ R P*)` closure parameter | Wrap in `\ P* → R { ( fn args ) }` (same as `eq_int` / `c_int`) |
 | 6 | ~~Multi-field structs can't ride the `T` arm of `! T E` (Result)~~ **Fixed 2026-05-14** — multi-field T is heap-boxed transparently on construct + `??` destructure + `\` propagate | — |
@@ -86,40 +86,48 @@ across the `with_metrics` closure boundary.
 
 ---
 
-## 3. Mutable enum bindings miscompile
+## 3. Mutable enum bindings — fixed
+
+**Fixed 2026-05-14.** A bare variant name (`Red`, `NetOther`, `NetTimeout`)
+resolves through `gen_ident`'s `__global` path to a loaded `i64` tag. The
+let-statement / assignment path needed to wrap that `i64` into the enum's
+`{ i64, ptr* }` aggregate before storing — previously it didn't, so
+`store %NetErr %r0, %NetErr* %slot` triggered a type mismatch in LLVM IR.
+`coerce_store_val` now detects when the destination is a registered enum
+(via the `<name>__variants` side-table written by `gen_enum_decl`) and
+emits `insertvalue %Enum undef, i64 val, 0` before the store.
+
+The symmetric immutable case (`: NetErr e NetOther`) was equally broken
+but went undocumented because the canonical idiom built through
+`@ NetErr { NetOther }` instead. Both shapes now work.
 
 ```nurl
-: | NetErr { NetClosed | NetAccept | NetOther }
+: | NetErr { NetClosed NetAccept NetOther }
 
-// ✗ codegen emits an i64 store without the `insertvalue` wrapper —
-//   subsequent reads see garbage
+// Works directly now:
 : ~ NetErr last_err NetOther
-
-// ✓ Sentinel-flag pattern: track *whether* we have an error in a bool,
-//   then re-derive the variant on the recovery path
-: ~ b had_err F
-~ ! done {
-  : ! v NetErr r ( server_run_once s )
-  ?? r {
-    T _ → {}
-    F e → { = had_err T  = done T }
-  }
+= last_err NetAccept              // bare-variant reassignment
+?? last_err {
+  NetClosed → ...
+  NetAccept → ...
+  NetOther  → ...
 }
-? had_err {
-  // re-issue the failing call to recover the variant cheaply
-  : ! v NetErr r2 ( server_run_once s )
-  ^ r2
-} { ... }
+
+// And wide enums (variants with payloads) still go through @ Foo {…}
+// for the payload-carrying case — bare names cover tag-only variants:
+: ~ Status s Idle                 // tag-only variant via bare name
+= s @ Status { Err 7 }            // payload variant via aggregate
 ```
 
-**Why:** the codegen path for `: ~` (mutable binding) on enum values
-stores the i64 tag directly into the alloca instead of wrapping it in
-`insertvalue` for the enum's `{i64, [N x i8]}` LLVM shape. Reads then
-extract the wrong field.
+**Regression test:** `compiler/tests/mutable_enum_binding.nu` covers
+narrow / wide enums, immutable / mutable bindings, bare-variant
+reassignment, and the http_server.nu pattern `: ~ NetishErr last_err
+NetOk` + `= last_err NetTimeout`.
 
-**Real example:** `stdlib/ext/http_server.nu:329–360` — `server_run`'s
-loop uses `had_err: b` + a deliberate re-issue rather than carrying the
-last `NetErr` directly.
+**Follow-up done:** `stdlib/ext/http_server.nu` `server_run` no longer
+needs the cheap-re-issue trick — `: ~ NetErr last_err NetClosed`
+sentinel + `= last_err e` direct assignment carry the failing variant
+all the way past the loop in a single accept call.
 
 ---
 
