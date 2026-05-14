@@ -78,9 +78,23 @@ before the build is accepted.
 
 Syntax highlighting for VS Code / Windsurf is available in `tooling/vscode-nurl/`.
 
-**Install from VSIX:**
+**Direct install — one-liner** (Linux / macOS, requires the `code` CLI on
+your `PATH` — VS Code → Command Palette → "Shell Command: Install 'code'
+command"):
+
+```bash
+curl -L -o /tmp/nurl.vsix \
+    https://github.com/nurl-lang/nurl/raw/main/tooling/vscode-nurl/nurl-0.2.0.vsix \
+  && code --install-extension /tmp/nurl.vsix
+```
+
+**Direct download** —
+[nurl-0.2.0.vsix](https://github.com/nurl-lang/nurl/raw/main/tooling/vscode-nurl/nurl-0.2.0.vsix)
+(5.6 KB; click to download the packaged extension straight from main).
+
+**Manual install from a local checkout:**
 1. `Ctrl+Shift+P` → "Extensions: Install from VSIX..."
-2. Select `tooling/vscode-nurl/nurl-0.1.0.vsix`
+2. Select `tooling/vscode-nurl/nurl-0.2.0.vsix`
 
 The browser-based playground (see below) ships a Monaco port of the same
 tokenizer — no install required.

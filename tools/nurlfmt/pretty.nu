@@ -100,14 +100,14 @@ $ `tools/nurlfmt/tokenize.nu`
     : String out ( string_with_cap 4096 )
 
     : i n ( vec_len [FmtTok] toks )
-    : ~ i bd 0      // brace depth (drives indent)
-    : ~ i pd 0      // paren+bracket depth (informational)
-    : ~ i bk 0      // bracket depth `[...]` — content tight-spaced by rule
+    : ~ i bd 0  // brace depth (drives indent)
+    : ~ i pd 0  // paren+bracket depth (informational)
+    : ~ i bk 0  // bracket depth `[...]` — content tight-spaced by rule
     : ~ b emitted_any F
     : ~ s prev_text ``
     : ~ i prev_kind 0
-    : ~ s prev_top_starter ``   // first-token text of the most recent depth-0 decl
-    : ~ b last_line_open T      // true → current line has no content yet
+    : ~ s prev_top_starter ``  // first-token text of the most recent depth-0 decl
+    : ~ b last_line_open T  // true → current line has no content yet
     // type-prefix tightness: when `*T` / `?T` / `[T` appears as a TYPE,
     // the type-prefix sigil glues to the following type identifier with
     // no space between them. We approximate "is in type context" by
@@ -115,7 +115,7 @@ $ `tools/nurlfmt/tokenize.nu`
     // type-context-trigger (`:`, `→`, `(@` handled as `(` + `@`, `#`,
     // `Z`, `@` aggregate, or another type-prefix sigil) is considered
     // type position.
-    : ~ b prev_is_type_prefix F   // prev token was *,?,[,! in type pos
+    : ~ b prev_is_type_prefix F  // prev token was *,?,[,! in type pos
 
     : ~ i idx 0
     ~ < idx n {
@@ -152,9 +152,9 @@ $ `tools/nurlfmt/tokenize.nu`
                         // between two consecutive `$` imports (which
                         // stay packed by convention).
                         : b at_top_boundary & == bd 0
-                            & == pd 0
-                            & ( __pp_starts_top_decl text )
-                            ! == prev_kind TT_FMT_COMMENT
+                        & == pd 0
+                        & ( __pp_starts_top_decl text )
+                        ! == prev_kind TT_FMT_COMMENT
                         // A "compact chain" is two consecutive top-
                         // level decls of the same one-byte starter
                         // (`$` imports, `&` ffi decls, repeated `:`
@@ -163,10 +163,10 @@ $ `tools/nurlfmt/tokenize.nu`
                         // resulting block is the dense token-table
                         // style the codebase already uses.
                         : b compact_chain
-                            & ( __pp_text_eq text prev_top_starter )
-                            | ( __pp_text_eq text `$` )
-                            | ( __pp_text_eq text `&` )
-                                ( __pp_text_eq text `:` )
+                        & ( __pp_text_eq text prev_top_starter )
+                        | ( __pp_text_eq text `$` )
+                        | ( __pp_text_eq text `&` )
+                        ( __pp_text_eq text `:` )
                         ? & at_top_boundary ! compact_chain
                         {
                             = pre_newlines 2
@@ -283,15 +283,15 @@ $ `tools/nurlfmt/tokenize.nu`
                     // We materialise this as: flag = (curr is *,?,!) AND
                     //   (prev is in trigger set OR prev_is_type_prefix).
                     : b is_sigil
-                        | ( __pp_text_eq text `*` )
-                            | ( __pp_text_eq text `?` ) ( __pp_text_eq text `!` )
+                    | ( __pp_text_eq text `*` )
+                    | ( __pp_text_eq text `?` ) ( __pp_text_eq text `!` )
                     : b prev_is_trigger
-                        | ( __pp_text_eq prev_text `:` )
-                            | ( __pp_text_eq prev_text `→` )
-                                | ( __pp_text_eq prev_text `#` )
-                                    | ( __pp_text_eq prev_text `Z` )
-                                        | ( __pp_text_eq prev_text `@` )
-                                            ( __pp_text_eq prev_text `(@` )
+                    | ( __pp_text_eq prev_text `:` )
+                    | ( __pp_text_eq prev_text `→` )
+                    | ( __pp_text_eq prev_text `#` )
+                    | ( __pp_text_eq prev_text `Z` )
+                    | ( __pp_text_eq prev_text `@` )
+                    ( __pp_text_eq prev_text `(@` )
                     ? & is_sigil | prev_is_trigger prev_is_type_prefix {
                         = prev_is_type_prefix T
                     } {

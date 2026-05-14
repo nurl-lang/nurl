@@ -12,15 +12,15 @@
 : | Token {
     Num i
     Op s
-    Nested ? [ Token
+    Nested ? [Token
 }
 
 : State {
-    [ Token tokens
+    [Token tokens
     i pos
 }
 
-@ get_multiplier i factor → (@ i i) {
+@ get_multiplier i factor → ( @ i i ) {
     ^ \ i x → i { ^ * x factor }
 }
 
@@ -29,7 +29,7 @@
 
     // 1. Slice of Closures: Kääntäjän tulee osata varata oikea tila
     // closure-structeille { function_ptr, env_ptr } slicen sisään.
-    : [ (@ i i) ops [ (@ i i) | ( get_multiplier 2 ) ( get_multiplier 3 ) ]
+    : [( @ i i ) ops [( @ i i ) | ( get_multiplier 2 ) ( get_multiplier 3 )]
     ( nurl_print `[1] slice-of-closures ops.length=` )
     ( nurl_print ( nurl_str_int . ops length ) )
     ( nurl_print `\n` )
@@ -45,12 +45,12 @@
     : ~ i result 0
 
     = result ? > mask 0
-        ?? t {
-            Num n → * n 2
-            Op  s → 0
-            _     → ~ mask
-        }
-        ~ mask
+    ?? t {
+        Num n → *n 2
+        Op s → 0
+        _ → ~ mask
+    }
+    ~ mask
     ( nurl_print `[2] mask=` )
     ( nurl_print ( nurl_str_int mask ) )
     ( nurl_print ` result-after-match=` )
@@ -59,7 +59,7 @@
 
     // 3. Ketjutettu field access & mutaatio
     // Luodaan tila, jossa on slice enum-arvoja
-    : State st @ State { [ Token | @ Token { Num 1 } @ Token { Op `+` } ] 0 }
+    : State st @ State { [Token | @ Token { Num 1 } @ Token { Op `+` }] 0 }
 
     // Haetaan indeksi erilliseen muuttujaan (katso huomio 2 alempaa)
     : i current_pos . st pos
@@ -76,7 +76,7 @@
 
     // 4. Try-operaattori (\) epätavallisessa paikassa: loopin alustuksessa.
     // Purkaa 7:n suoraan loop_cnt-muuttujaan.
-    : ? i opt_num @ ? i { T 7 }
+    : ?i opt_num @ ?i { T 7 }
     : ~ i loop_cnt \ opt_num
     ( nurl_print `[4] loop_cnt start=` )
     ( nurl_print ( nurl_str_int loop_cnt ) )

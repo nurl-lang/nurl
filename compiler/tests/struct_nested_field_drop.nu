@@ -8,28 +8,28 @@
 // round-trip reads the right bytes.
 
 : Inner {
-  s msg
-  i n
+    s msg
+    i n
 }
 
 : Outer {
-  Inner inner
-  i tag
+    Inner inner
+    i tag
 }
 
 @ main → i {
-  : Outer o @ Outer { @ Inner { ( nurl_str_cat `hello ` `nested` ) 3 } 7 }
-  ( nurl_print . . o inner msg ) ( nurl_print `\n` )
-  ( nurl_print ( nurl_str_int . . o inner n ) ) ( nurl_print `\n` )
-  ( nurl_print ( nurl_str_int . o tag ) ) ( nurl_print `\n` )
+    : Outer o @ Outer { @ Inner { ( nurl_str_cat `hello ` `nested` ) 3 } 7 }
+    ( nurl_print . . o inner msg ) ( nurl_print `\n` )
+    ( nurl_print ( nurl_str_int . . o inner n ) ) ( nurl_print `\n` )
+    ( nurl_print ( nurl_str_int . o tag ) ) ( nurl_print `\n` )
 
-  // Second binding in a nested scope — drop must fire at each site.
-  ? 1
+    // Second binding in a nested scope — drop must fire at each site.
+    ? 1
     { : Outer o2 @ Outer { @ Inner { ( nurl_str_cat3 `a ` `b ` `c` ) 9 } 11 }
-      ( nurl_print . . o2 inner msg ) ( nurl_print `\n` )
-      ( nurl_print ( nurl_str_int . o2 tag ) ) ( nurl_print `\n` )
+        ( nurl_print . . o2 inner msg ) ( nurl_print `\n` )
+        ( nurl_print ( nurl_str_int . o2 tag ) ) ( nurl_print `\n` )
     }
     {}
 
-  ^ 0
+    ^ 0
 }

@@ -2,8 +2,8 @@
 // Test: Ownership of strings in foreach loop (Borrow).
 
 @ main → i {
-    : [ s ss [ s | `one` `two` `three` ]
-    
+    : [s ss [s | `one` `two` `three`]
+
     ( nurl_print `Start foreach\n` )
     ~ val ss {
         ( nurl_print `Val: ` )
@@ -11,6 +11,6 @@
         ( nurl_print `\n` )
     }
     ( nurl_print `End foreach\n` )
-    
+
     ^ 0
 }

@@ -23,65 +23,65 @@
 : | Status { Idle Busy Err i }
 
 @ name_color Color c → s {
-  ?? c {
-    Red   → `red`
-    Green → `green`
-    Blue  → `blue`
-  }
+    ?? c {
+        Red → `red`
+        Green → `green`
+        Blue → `blue`
+    }
 }
 
 @ main → i {
-  // ── Immutable narrow ──────────────────────────────────────────
-  : Color c1 Red
-  ( nurl_print `c1: ` ) ( nurl_print ( name_color c1 ) ) ( nurl_print `\n` )
+    // ── Immutable narrow ──────────────────────────────────────────
+    : Color c1 Red
+    ( nurl_print `c1: ` ) ( nurl_print ( name_color c1 ) ) ( nurl_print `\n` )
 
-  // ── Mutable narrow with reassignment ─────────────────────────
-  : ~ Color c2 Green
-  ( nurl_print `c2/init: ` ) ( nurl_print ( name_color c2 ) ) ( nurl_print `\n` )
-  = c2 Blue
-  ( nurl_print `c2/blue: ` ) ( nurl_print ( name_color c2 ) ) ( nurl_print `\n` )
-  = c2 Red
-  ( nurl_print `c2/red: ` ) ( nurl_print ( name_color c2 ) ) ( nurl_print `\n` )
+    // ── Mutable narrow with reassignment ─────────────────────────
+    : ~ Color c2 Green
+    ( nurl_print `c2/init: ` ) ( nurl_print ( name_color c2 ) ) ( nurl_print `\n` )
+    = c2 Blue
+    ( nurl_print `c2/blue: ` ) ( nurl_print ( name_color c2 ) ) ( nurl_print `\n` )
+    = c2 Red
+    ( nurl_print `c2/red: ` ) ( nurl_print ( name_color c2 ) ) ( nurl_print `\n` )
 
-  // ── http_server.nu-style sentinel pattern, now native ─────────
-  // Was: `: ~ b had_err F` + sentinel-flag dance.
-  // Now: real mutable enum binding for the error state.
-  : ~ NetishErr last_err NetOk
-  // ... simulate a step that updates the error variant directly ...
-  = last_err NetTimeout
-  ?? last_err {
-    NetOk      → ( nurl_print `last_err: ok?!\n` )
-    NetTimeout → ( nurl_print `last_err: timeout\n` )
-    NetDns     → ( nurl_print `last_err: dns\n` )
-    NetOther   → ( nurl_print `last_err: other\n` )
-  }
-  = last_err NetDns
-  ?? last_err {
-    NetOk      → ( nurl_print `last_err2: ok\n` )
-    NetTimeout → ( nurl_print `last_err2: timeout?!\n` )
-    NetDns     → ( nurl_print `last_err2: dns\n` )
-    NetOther   → ( nurl_print `last_err2: other?!\n` )
-  }
-
-  // ── Wide enum: tag-only variant via bare name still wraps cleanly ─
-  : ~ Status s Idle
-  = s Busy
-  ?? s {
-    Idle  → ( nurl_print `s: idle?!\n` )
-    Busy  → ( nurl_print `s: busy\n` )
-    Err _ → ( nurl_print `s: err?!\n` )
-  }
-
-  // Wide enum: payload-bearing variant goes through @ Foo { … } as before
-  = s @ Status { Err 7 }
-  ?? s {
-    Idle  → ( nurl_print `s2: idle?!\n` )
-    Busy  → ( nurl_print `s2: busy?!\n` )
-    Err n → {
-      ( nurl_print `s2: err=` )
-      ( nurl_print ( nurl_str_int n ) ) ( nurl_print `\n` )
+    // ── http_server.nu-style sentinel pattern, now native ─────────
+    // Was: `: ~ b had_err F` + sentinel-flag dance.
+    // Now: real mutable enum binding for the error state.
+    : ~ NetishErr last_err NetOk
+    // ... simulate a step that updates the error variant directly ...
+    = last_err NetTimeout
+    ?? last_err {
+        NetOk → ( nurl_print `last_err: ok?!\n` )
+        NetTimeout → ( nurl_print `last_err: timeout\n` )
+        NetDns → ( nurl_print `last_err: dns\n` )
+        NetOther → ( nurl_print `last_err: other\n` )
     }
-  }
+    = last_err NetDns
+    ?? last_err {
+        NetOk → ( nurl_print `last_err2: ok\n` )
+        NetTimeout → ( nurl_print `last_err2: timeout?!\n` )
+        NetDns → ( nurl_print `last_err2: dns\n` )
+        NetOther → ( nurl_print `last_err2: other?!\n` )
+    }
 
-  ^ 0
+    // ── Wide enum: tag-only variant via bare name still wraps cleanly ─
+    : ~ Status s Idle
+    = s Busy
+    ?? s {
+        Idle → ( nurl_print `s: idle?!\n` )
+        Busy → ( nurl_print `s: busy\n` )
+        Err _ → ( nurl_print `s: err?!\n` )
+    }
+
+    // Wide enum: payload-bearing variant goes through @ Foo { … } as before
+    = s @ Status { Err 7 }
+    ?? s {
+        Idle → ( nurl_print `s2: idle?!\n` )
+        Busy → ( nurl_print `s2: busy?!\n` )
+        Err n → {
+            ( nurl_print `s2: err=` )
+            ( nurl_print ( nurl_str_int n ) ) ( nurl_print `\n` )
+        }
+    }
+
+    ^ 0
 }

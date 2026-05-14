@@ -14,18 +14,18 @@
 }
 
 @ main → i {
-    : [ i nums [ i | 10 20 30 ]
-    
+    : [i nums [i | 10 20 30]
+
     ( nurl_print `Start foreach\n` )
     ~ n nums {
         ( nurl_print `Processing: ` )
         ( nurl_print ( nurl_str_int n ) )
         ( nurl_print `\n` )
-        
+
         // Luodaan omistettu Dropper lohkon sisällä - TÄMÄ pitäisi dropata joka kierroksella
         : Dropper inner @ Dropper { n }
     }
     ( nurl_print `End foreach\n` )
-    
+
     ^ 0
 }

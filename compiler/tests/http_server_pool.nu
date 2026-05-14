@@ -37,61 +37,61 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/core/string.nu`
 
 @ run_live_pool_test → v {
-  : ! TcpListener NetErr lr ( tcp_listen_with_backlog `127.0.0.1` 18799 16 )
-  ?? lr {
-    F e → {
-      ( nurl_print `listen failed: ` )
-      ( nurl_print ( net_err_name e ) )
-      ( nurl_print `\n` )
-    }
-    T listener → {
-      // Capture the listener by VALUE so the shutdown thread can
-      // soft-close the kernel FD while the runtime struct stays
-      // alive for worker threads to safely return from accept.
-      : TcpListener lst @ TcpListener { . listener raw }
-      : ( @ HttpResponse HttpRequest ) handler \ HttpRequest req → HttpResponse {
-        ^ ( response_text 200 `ok\n` )
-      }
-      : HttpServer srv ( server_new listener handler )
-
-      : ( @ v ) shutdown \ → v {
-        ( sleep_ms 200 )
-        ( tcp_shutdown_listener lst )
-      }
-      : ! Thread ThreadErr st ( thread_spawn shutdown )
-      ?? st {
-        T t → {
-          : ! v NetErr rp ( server_run_pool srv 4 )
-          ?? rp {
-            T _ → { ( nurl_print `pool: clean shutdown\n` ) }
-            F e → {
-              ( nurl_print `pool: ` )
-              ( nurl_print ( net_err_name e ) )
-              ( nurl_print `\n` )
-            }
-          }
-          ( thread_join t )
-          ( server_stop srv )    // Final free — no thread is still reading h.
-        }
+    : !TcpListener NetErr lr ( tcp_listen_with_backlog `127.0.0.1` 18799 16 )
+    ?? lr {
         F e → {
-          ( nurl_print `shutdown thread spawn failed: ` )
-          ( nurl_print ( thread_err_name e ) )
-          ( nurl_print `\n` )
-          ( server_stop srv )
+            ( nurl_print `listen failed: ` )
+            ( nurl_print ( net_err_name e ) )
+            ( nurl_print `\n` )
         }
-      }
+        T listener → {
+            // Capture the listener by VALUE so the shutdown thread can
+            // soft-close the kernel FD while the runtime struct stays
+            // alive for worker threads to safely return from accept.
+            : TcpListener lst @ TcpListener { . listener raw }
+            : ( @ HttpResponse HttpRequest ) handler \ HttpRequest req → HttpResponse {
+                ^ ( response_text 200 `ok\n` )
+            }
+            : HttpServer srv ( server_new listener handler )
+
+            : ( @ v ) shutdown \ → v {
+                ( sleep_ms 200 )
+                ( tcp_shutdown_listener lst )
+            }
+            : !Thread ThreadErr st ( thread_spawn shutdown )
+            ?? st {
+                T t → {
+                    : !v NetErr rp ( server_run_pool srv 4 )
+                    ?? rp {
+                        T _ → { ( nurl_print `pool: clean shutdown\n` ) }
+                        F e → {
+                            ( nurl_print `pool: ` )
+                            ( nurl_print ( net_err_name e ) )
+                            ( nurl_print `\n` )
+                        }
+                    }
+                    ( thread_join t )
+                    ( server_stop srv )  // Final free — no thread is still reading h.
+                }
+                F e → {
+                    ( nurl_print `shutdown thread spawn failed: ` )
+                    ( nurl_print ( thread_err_name e ) )
+                    ( nurl_print `\n` )
+                    ( server_stop srv )
+                }
+            }
+        }
     }
-  }
 }
 
 @ main → i {
-  : ? String gate ( env_get `NURL_NET_TESTS` )
-  ?? gate {
-    T s → {
-      ( string_free s )
-      ( run_live_pool_test )
+    : ?String gate ( env_get `NURL_NET_TESTS` )
+    ?? gate {
+        T s → {
+            ( string_free s )
+            ( run_live_pool_test )
+        }
+        F → { ( nurl_print `live pool test skipped (set NURL_NET_TESTS=1 to enable)\n` ) }
     }
-    F → { ( nurl_print `live pool test skipped (set NURL_NET_TESTS=1 to enable)\n` ) }
-  }
-  ^ 0
+    ^ 0
 }

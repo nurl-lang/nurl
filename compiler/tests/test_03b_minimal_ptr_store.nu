@@ -7,7 +7,7 @@
 //   100
 
 @ main → i {
-    : * i buf # * i ( malloc 16 )
+    : *i buf # *i ( malloc 16 )
 
     // Literaali-indeksi: tämä luultavasti toimii
     = . buf 0 42

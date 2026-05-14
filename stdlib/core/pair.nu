@@ -45,31 +45,31 @@
 : Pair [A B] { A first B second }
 
 @ pair_new [A B] A first B second → ( Pair A B ) {
-  ^ @ ( Pair A B ) { first second }
+    ^ @ ( Pair A B ) { first second }
 }
 
 @ pair_first [A B] ( Pair A B ) p → A {
-  ^ . p first
+    ^ . p first
 }
 
 @ pair_second [A B] ( Pair A B ) p → B {
-  ^ . p second
+    ^ . p second
 }
 
-@ pair_eq [A B] ( Pair A B ) a ( Pair A B ) b (@ b A A) eq_a (@ b B B) eq_b → b {
-  ? ! ( eq_a . a first . b first ) { ^ F } {}
-  ^ ( eq_b . a second . b second )
+@ pair_eq [A B] ( Pair A B ) a ( Pair A B ) b ( @ b A A ) eq_a ( @ b B B ) eq_b → b {
+    ? ! ( eq_a . a first . b first ) { ^ F } {}
+    ^ ( eq_b . a second . b second )
 }
 
-@ pair_free_with [A B] ( Pair A B ) p (@ v A) drop_a (@ v B) drop_b → v {
-  ( drop_a . p first )
-  ( drop_b . p second )
+@ pair_free_with [A B] ( Pair A B ) p ( @ v A ) drop_a ( @ v B ) drop_b → v {
+    ( drop_a . p first )
+    ( drop_b . p second )
 }
 
-@ pair_free_a [A B] ( Pair A B ) p (@ v A) drop_a → v {
-  ( drop_a . p first )
+@ pair_free_a [A B] ( Pair A B ) p ( @ v A ) drop_a → v {
+    ( drop_a . p first )
 }
 
-@ pair_free_b [A B] ( Pair A B ) p (@ v B) drop_b → v {
-  ( drop_b . p second )
+@ pair_free_b [A B] ( Pair A B ) p ( @ v B ) drop_b → v {
+    ( drop_b . p second )
 }

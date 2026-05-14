@@ -21,7 +21,7 @@ $ `stdlib/ext/csv.nu`
     ( nurl_print `   Cols: ` ) ( nurl_print ( nurl_str_int ( csv_table_n_cols tbl ) ) )
     ( nurl_print `\n` )
 
-    : ? i date_col ( csv_table_col_index tbl `date` )
+    : ?i date_col ( csv_table_col_index tbl `date` )
     ?? date_col {
         T col → {
             ( nurl_print `'date' column index: ` )
@@ -30,7 +30,7 @@ $ `stdlib/ext/csv.nu`
         F → { ( nurl_print `'date' column not found\n` ) }
     }
 
-    : ? String first_date ( csv_table_get_by_name tbl 0 `date` )
+    : ?String first_date ( csv_table_get_by_name tbl 0 `date` )
     ?? first_date {
         T s → {
             ( nurl_print `Row 0 date = ` ) ( nurl_print ( string_data s ) ) ( nurl_print `\n` )
@@ -39,11 +39,11 @@ $ `stdlib/ext/csv.nu`
     }
 
     ( nurl_print `\nFinding first row with text_words = 'juliet golf india'...\n` )
-    : ? i tw_col ( csv_table_col_index tbl `text_words` )
+    : ?i tw_col ( csv_table_col_index tbl `text_words` )
     ?? tw_col {
         T col → {
             : i tf0 ( monotonic_ns )
-            : ? i hit ( csv_table_find_first tbl col `juliet golf india` )
+            : ?i hit ( csv_table_find_first tbl col `juliet golf india` )
             : i el ( elapsed_ms_since tf0 )
             ?? hit {
                 T idx → {
@@ -73,7 +73,7 @@ $ `stdlib/ext/csv.nu`
     }
     ( nurl_print `Sorted in ` ) ( nurl_print ( nurl_str_int ( elapsed_ms_since ts ) ) ) ( nurl_print `ms\n` )
 
-    : ? String new_first ( csv_table_get_by_name tbl 0 `date` )
+    : ?String new_first ( csv_table_get_by_name tbl 0 `date` )
     ?? new_first {
         T s → { ( nurl_print `New row 0 date = ` ) ( nurl_print ( string_data s ) ) ( nurl_print `\n` ) }
         F → {}
@@ -97,7 +97,7 @@ $ `stdlib/ext/csv.nu`
     } { ( nurl_print `Write failed.\n` ) }
 
     ( csv_table_free proj )
-    : (@ v String) sd \ String s → v { ( string_free s ) }
+    : ( @ v String ) sd \ String s → v { ( string_free s ) }
     ( vec_free_with [String] cols sd )
     ( csv_table_free tbl )
 

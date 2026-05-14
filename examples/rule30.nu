@@ -23,8 +23,8 @@
     : ~ i x 0
     ~ < x w {
         ? == . row x 1
-            ( nurl_print `█` )
-            ( nurl_print ` ` )
+        ( nurl_print `█` )
+        ( nurl_print ` ` )
         = x + x 1
     }
     ( nurl_print `\n` )
@@ -34,9 +34,9 @@
     : ~ i j 0
     ~ < j w {
         // Toroidal edges: index -1 wraps to w-1, index w wraps to 0.
-        : i L . cur ? > j 0     - j 1  - w 1
+        : i L . cur ? > j 0 - j 1 - w 1
         : i C . cur j
-        : i R . cur ? < j - w 1 + j 1  0
+        : i R . cur ? < j - w 1 + j 1 0
         = . nxt j ( xor L | C R )
         = j + j 1
     }
@@ -52,10 +52,10 @@
 
 @ main → i {
     : i width 79
-    : i gens  40
+    : i gens 40
 
-    : * i cur # * i ( malloc * width 8 )
-    : * i nxt # * i ( malloc * width 8 )
+    : *i cur # *i ( malloc * width 8 )
+    : *i nxt # *i ( malloc * width 8 )
 
     // Zero both buffers, then plant a single live cell in the centre.
     : ~ i i 0

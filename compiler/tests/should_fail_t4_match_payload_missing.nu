@@ -5,13 +5,13 @@
 : | Json { JNull JBool b JNum i }
 
 @ json_str Json j → s {
-  ^ ?? j {
-    JNull   → `null`
-    JBool v → ? v `true` `false`
-  }
+    ^ ?? j {
+        JNull → `null`
+        JBool v → ?v `true` `false`
+    }
 }
 
 @ main → i {
-  ( nurl_print ( json_str @ Json { JNull } ) )
-  ^ 0
+    ( nurl_print ( json_str @ Json { JNull } ) )
+    ^ 0
 }

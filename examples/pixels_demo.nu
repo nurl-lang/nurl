@@ -14,15 +14,29 @@
 //     canvas_should_close— non-zero when the user closes the window
 //     canvas_close       — teardown
 
-& `canvas` @ canvas_open         i w i h → * i
-& `canvas` @ canvas_present      → v
-& `canvas` @ canvas_sleep        i ms → v
-& `canvas` @ canvas_should_close → i
-& `canvas` @ canvas_close        → v
+& `canvas`
 
-: i W     160
-: i H      90
-: i FPS    30
+@ canvas_open i w i h → *i
+
+& `canvas`
+
+@ canvas_present → v
+
+& `canvas`
+
+@ canvas_sleep i ms → v
+
+& `canvas`
+
+@ canvas_should_close → i
+
+& `canvas`
+
+@ canvas_close → v
+
+: i W 160
+: i H 90
+: i FPS 30
 
 // Sine look-up table: indexed by t in milliradians in [0, LUT_SIZE).
 // Populated once at startup from isin(); the inner render loop then
@@ -60,19 +74,19 @@
     //     pixel = lut_r[i1] | lut_g[i2] | lut_b[i3]
     // i.e. three loads, three ORs, one store — no multiplies on the
     // hot path, no trig, no division. ~150 KiB total table size.
-    : * i lut_r # * i ( malloc * LUT_SIZE 8 )
-    : * i lut_g # * i ( malloc * LUT_SIZE 8 )
-    : * i lut_b # * i ( malloc * LUT_SIZE 8 )
+    : *i lut_r # *i ( malloc * LUT_SIZE 8 )
+    : *i lut_g # *i ( malloc * LUT_SIZE 8 )
+    : *i lut_b # *i ( malloc * LUT_SIZE 8 )
     : ~ i k 0
     ~ < k LUT_SIZE {
         : i v + 128 / * ( isin k ) 120 1000
-        = . lut_r k + 4278190080 * v 65536    // 0xFF<<24 | v<<16
-        = . lut_g k * v 256                   //            v<<8
-        = . lut_b k v                         //            v<<0
+        = . lut_r k + 4278190080 * v 65536  // 0xFF<<24 | v<<16
+        = . lut_g k * v 256  //            v<<8
+        = . lut_b k v  //            v<<0
         = k + k 1
     }
 
-    : * i fb ( canvas_open W H )
+    : *i fb ( canvas_open W H )
     : i frame_ms / 1000 FPS
     : ~ i t 0
 
@@ -86,9 +100,9 @@
         ~ < y H {
             // Per-row base indices (positive mod once).
             // Channel 1 has no y term: base is constant across rows.
-            : i base1 ( pmod p1               LUT_SIZE )
-            : i base2 ( pmod + p2 * y  50     LUT_SIZE )
-            : i base3 ( pmod + p3 * y - 0 30  LUT_SIZE )
+            : i base1 ( pmod p1 LUT_SIZE )
+            : i base2 ( pmod + p2 * y 50 LUT_SIZE )
+            : i base3 ( pmod + p3 * y - 0 30 LUT_SIZE )
 
             // Per-x stride of each channel's sine argument.
             // Using straight add + conditional sub for cheap wrap-around.

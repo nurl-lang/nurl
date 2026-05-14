@@ -20,18 +20,18 @@
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/json.nu`
 
-@ http_post_json s url Json j → ! Response HttpErr {
-  : String body ( json_stringify j )
-  : ! Response HttpErr res
+@ http_post_json s url Json j → !Response HttpErr {
+    : String body ( json_stringify j )
+    : !Response HttpErr res
     ( http_post url ( string_data body ) `application/json` )
-  ( string_free body )
-  ^ res
+    ( string_free body )
+    ^ res
 }
 
-@ http_put_json s url Json j → ! Response HttpErr {
-  : String body ( json_stringify j )
-  : ! Response HttpErr res
+@ http_put_json s url Json j → !Response HttpErr {
+    : String body ( json_stringify j )
+    : !Response HttpErr res
     ( http_put url ( string_data body ) `application/json` )
-  ( string_free body )
-  ^ res
+    ( string_free body )
+    ^ res
 }

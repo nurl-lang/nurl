@@ -2,7 +2,7 @@
 // = x expr kun x on immutable → compile error
 
 @ main → i {
-  : i x 10
-  = x + x 1
-  ^ x
+    : i x 10
+    = x + x 1
+    ^ x
 }

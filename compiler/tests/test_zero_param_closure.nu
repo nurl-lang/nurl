@@ -2,6 +2,6 @@
 // Zero parameter closure test
 
 @ main → i {
-  : (@ i) thunk \ → i { ^ 42 }
-  ^ 0
+    : ( @ i ) thunk \ → i { ^ 42 }
+    ^ 0
 }

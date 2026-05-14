@@ -1,25 +1,41 @@
 // starfield.nu — 3D Warp Speed Starfield with Motion Blur
 // NURL Canvas demo.
 
-& `libc` @ rand → i
+& `libc`
 
-& `canvas` @ canvas_open         i w i h → * i
-& `canvas` @ canvas_present      → v
-& `canvas` @ canvas_sleep        i ms → v
-& `canvas` @ canvas_should_close → i
-& `canvas` @ canvas_close        → v
+@ rand → i
+
+& `canvas`
+
+@ canvas_open i w i h → *i
+
+& `canvas`
+
+@ canvas_present → v
+
+& `canvas`
+
+@ canvas_sleep i ms → v
+
+& `canvas`
+
+@ canvas_should_close → i
+
+& `canvas`
+
+@ canvas_close → v
 
 // Suurempi resoluutio ja 60 FPS
-: i W     640
-: i H     360
-: i FPS   60
+: i W 640
+: i H 360
+: i FPS 60
 : i NUM_STARS 1000
 
 @ main → i {
     // Varataan taulukot tähtien 3D-koordinaateille
-    : * i stars_x # * i ( malloc * NUM_STARS 8 )
-    : * i stars_y # * i ( malloc * NUM_STARS 8 )
-    : * i stars_z # * i ( malloc * NUM_STARS 8 )
+    : *i stars_x # *i ( malloc * NUM_STARS 8 )
+    : *i stars_y # *i ( malloc * NUM_STARS 8 )
+    : *i stars_z # *i ( malloc * NUM_STARS 8 )
 
     // Alustetaan tähdet satunnaisiin paikkoihin
     : ~ i init_idx 0
@@ -32,7 +48,7 @@
         = init_idx + init_idx 1
     }
 
-    : * i fb ( canvas_open W H )
+    : *i fb ( canvas_open W H )
     : i frame_ms / 1000 FPS
     : ~ i t 0
 
@@ -45,7 +61,7 @@
             : i old . fb px_idx
             // Maskataan 0x00FEFEFE (16711422) jotta kanavat eivät vuoda yli
             // ja jaetaan kahdella (bitti kerrallaan oikealle).
-            : i masked & old 16711422 
+            : i masked & old 16711422
             : i faded / masked 2
             // Palautetaan läpinäkymätön alpha (0xFF000000 = 4278190080)
             = . fb px_idx | 4278190080 faded
@@ -78,7 +94,7 @@
             ? & & >= sx 0 < sx W & >= sy 0 < sy H {
                 // Mitä lähempänä (pienempi z), sen kirkkaampi (0-255)
                 : i intensity - 255 / * z 255 1000
-                
+
                 // Generoidaan tähdille vähän väriä indeksin mukaan
                 : i c_mod % i 3
                 // Sinertävä
@@ -90,7 +106,7 @@
 
                 // ARGB-pakkaus: 0xFF000000 | (r<<16) | (g<<8) | b
                 : i color | 4278190080 | | * r 65536 * g 256 b
-                
+
                 = . fb + * sy W sx color
             } {}
 

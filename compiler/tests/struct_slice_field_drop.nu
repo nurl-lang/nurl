@@ -7,26 +7,26 @@
 // user-visible length + tag round-trip correctly.
 
 : Bag {
-  [ i items
-  i tag
+    [i items
+    i tag
 }
 
-@ build_slice → [ i {
-  // Bind the slice so Phase 2A can transfer ownership through the return.
-  : [i xs [ i | 10 20 30 ]
-  ^ xs
+@ build_slice → [i {
+    // Bind the slice so Phase 2A can transfer ownership through the return.
+    : [i xs [i | 10 20 30]
+    ^ xs
 }
 
 @ main → i {
-  : Bag b @ Bag { [ i | 1 2 3 4 ] 7 }
-  ( nurl_print ( nurl_str_int . . b items length ) ) ( nurl_print `\n` )
-  ( nurl_print ( nurl_str_int . b tag ) ) ( nurl_print `\n` )
+    : Bag b @ Bag { [i | 1 2 3 4] 7 }
+    ( nurl_print ( nurl_str_int . . b items length ) ) ( nurl_print `\n` )
+    ( nurl_print ( nurl_str_int . b tag ) ) ( nurl_print `\n` )
 
-  // Slice-returning-call path: build_slice's return value flows into
-  // the struct literal's slice field.
-  : Bag b2 @ Bag { ( build_slice ) 99 }
-  ( nurl_print ( nurl_str_int . . b2 items length ) ) ( nurl_print `\n` )
-  ( nurl_print ( nurl_str_int . b2 tag ) ) ( nurl_print `\n` )
+    // Slice-returning-call path: build_slice's return value flows into
+    // the struct literal's slice field.
+    : Bag b2 @ Bag { ( build_slice ) 99 }
+    ( nurl_print ( nurl_str_int . . b2 items length ) ) ( nurl_print `\n` )
+    ( nurl_print ( nurl_str_int . b2 tag ) ) ( nurl_print `\n` )
 
-  ^ 0
+    ^ 0
 }

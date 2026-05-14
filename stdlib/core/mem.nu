@@ -10,9 +10,9 @@
 // Release with ( nurl_free #s p ). Typed `drop`/`resize` may follow.
 
 @ alloc [T] i n → *T {
-  ^ #*T ( nurl_alloc * Z T n )
+    ^ # *T ( nurl_alloc * Z T n )
 }
 
 @ zalloc [T] i n → *T {
-  ^ #*T ( nurl_zalloc * Z T n )
+    ^ # *T ( nurl_zalloc * Z T n )
 }

@@ -9,45 +9,45 @@
 $ `stdlib/core/vec.nu`
 
 : | Json {
-  JNull
-  JBool b
-  JNum  i
-  JStr  s
-  JArr  ( Vec Json )
+    JNull
+    JBool b
+    JNum i
+    JStr s
+    JArr ( Vec Json )
 }
 
 @ tag_of Json j → i {
-  ^ ?? j {
-    JNull   → 0
-    JBool _ → 1
-    JNum  _ → 2
-    JStr  _ → 3
-    JArr  _ → 4
-  }
+    ^ ?? j {
+        JNull → 0
+        JBool _ → 1
+        JNum _ → 2
+        JStr _ → 3
+        JArr _ → 4
+    }
 }
 
 @ main → i {
-  : Json a @ Json { JNum 42 }
-  ( nurl_print `tag=` )
-  ( nurl_print ( nurl_str_int ( tag_of a ) ) )
-  ( nurl_print `\n` )
+    : Json a @ Json { JNum 42 }
+    ( nurl_print `tag=` )
+    ( nurl_print ( nurl_str_int ( tag_of a ) ) )
+    ( nurl_print `\n` )
 
-  : ( Vec Json ) v ( vec_new [Json] )
-  ( vec_push [Json] v @ Json { JNum 1 } )
-  ( vec_push [Json] v @ Json { JNum 2 } )
+    : ( Vec Json ) v ( vec_new [Json] )
+    ( vec_push [Json] v @ Json { JNum 1 } )
+    ( vec_push [Json] v @ Json { JNum 2 } )
 
-  : Json arr @ Json { JArr v }
-  ( nurl_print `tag=` )
-  ( nurl_print ( nurl_str_int ( tag_of arr ) ) )
+    : Json arr @ Json { JArr v }
+    ( nurl_print `tag=` )
+    ( nurl_print ( nurl_str_int ( tag_of arr ) ) )
 
-  // pluck the inner Vec back out and report its size
-  ?? arr {
-    JArr inner → {
-      ( nurl_print ` inner_count=` )
-      ( nurl_print ( nurl_str_int ( vec_len [Json] inner ) ) )
+    // pluck the inner Vec back out and report its size
+    ?? arr {
+        JArr inner → {
+            ( nurl_print ` inner_count=` )
+            ( nurl_print ( nurl_str_int ( vec_len [Json] inner ) ) )
+        }
+        _ → ( nurl_print ` (no arr)` )
     }
-    _ → ( nurl_print ` (no arr)` )
-  }
-  ( nurl_print `\n` )
-  ^ 0
+    ( nurl_print `\n` )
+    ^ 0
 }

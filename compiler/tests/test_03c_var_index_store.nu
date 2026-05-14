@@ -6,7 +6,7 @@
 //   100
 
 @ main → i {
-    : * i buf # * i ( malloc 16 )
+    : *i buf # *i ( malloc 16 )
     : ~ i i 0
 
     = . buf i 42

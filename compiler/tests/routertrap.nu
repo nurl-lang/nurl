@@ -13,8 +13,8 @@
 
 @ main → i {
     // Luodaan optionaalinen Node, esim. simuloitu tietokantahaku
-    : ? Node opt_node @ ? Node { T @ Node { 1 100 } }
-    
+    : ?Node opt_node @ ?Node { T @ Node { 1 100 } }
+
     // Luodaan toinen Node, eli oletusarvo tai uusi syöte
     : Node fallback_node @ Node { 2 50 }
 

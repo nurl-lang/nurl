@@ -42,30 +42,30 @@ $ `stdlib/core/errors.nu`
 // runtime.c (NotFound=0, PermissionDenied=1, AlreadyExists=2,
 // Interrupted=3, UnexpectedEof=4, WriteFailed=5, ReadFailed=6, Other=7).
 @ __io_err_of_kind i k → IoErr {
-  ? == k 0 { ^ @ IoErr { NotFound } } {}
-  ? == k 1 { ^ @ IoErr { PermissionDenied } } {}
-  ? == k 2 { ^ @ IoErr { AlreadyExists } } {}
-  ? == k 3 { ^ @ IoErr { Interrupted } } {}
-  ? == k 4 { ^ @ IoErr { UnexpectedEof } } {}
-  ? == k 5 { ^ @ IoErr { WriteFailed } } {}
-  ? == k 6 { ^ @ IoErr { ReadFailed } } {}
-  ^ @ IoErr { Other }
+    ? == k 0 { ^ @ IoErr { NotFound } } {}
+    ? == k 1 { ^ @ IoErr { PermissionDenied } } {}
+    ? == k 2 { ^ @ IoErr { AlreadyExists } } {}
+    ? == k 3 { ^ @ IoErr { Interrupted } } {}
+    ? == k 4 { ^ @ IoErr { UnexpectedEof } } {}
+    ? == k 5 { ^ @ IoErr { WriteFailed } } {}
+    ? == k 6 { ^ @ IoErr { ReadFailed } } {}
+    ^ @ IoErr { Other }
 }
 
 // `raw` is either the malloc'd file contents (owned) or NULL on failure.
 // Cast to i64 to detect NULL — calling nurl_str_len on NULL would crash.
-@ read_file s path → ! String IoErr {
-  : s raw ( nurl_read_file_safe path )
-  : i p # i raw
-  ? == p 0 {
-    : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
-    ^ @ ! String IoErr { F e }
-  } {}
-  // string_from copies into an SB-backed String; the malloc'd raw
-  // buffer is no longer needed.
-  : String out ( string_from raw )
-  ( nurl_free raw )
-  ^ @ ! String IoErr { T out }
+@ read_file s path → !String IoErr {
+    : s raw ( nurl_read_file_safe path )
+    : i p # i raw
+    ? == p 0 {
+        : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+        ^ @ !String IoErr { F e }
+    } {}
+    // string_from copies into an SB-backed String; the malloc'd raw
+    // buffer is no longer needed.
+    : String out ( string_from raw )
+    ( nurl_free raw )
+    ^ @ !String IoErr { T out }
 }
 
 // Always opens the file in binary mode (`wb`/`ab`). On POSIX this is a
@@ -78,67 +78,67 @@ $ `stdlib/core/errors.nu`
 // always want LF preserved exactly as written, so binary is the right
 // default. Callers that need CRLF must produce it explicitly in the
 // payload.
-@ write_file s path s content → ! v IoErr {
-  : i rc ( nurl_write_file_safe path content `wb` )
-  ? == rc 0 {
-    ^ @ ! v IoErr { T 0 }
-  } {}
-  : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
-  ^ @ ! v IoErr { F e }
+@ write_file s path s content → !v IoErr {
+    : i rc ( nurl_write_file_safe path content `wb` )
+    ? == rc 0 {
+        ^ @ !v IoErr { T 0 }
+    } {}
+    : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+    ^ @ !v IoErr { F e }
 }
 
-@ append_file s path s content → ! v IoErr {
-  : i rc ( nurl_write_file_safe path content `ab` )
-  ? == rc 0 {
-    ^ @ ! v IoErr { T 0 }
-  } {}
-  : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
-  ^ @ ! v IoErr { F e }
+@ append_file s path s content → !v IoErr {
+    : i rc ( nurl_write_file_safe path content `ab` )
+    ? == rc 0 {
+        ^ @ !v IoErr { T 0 }
+    } {}
+    : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+    ^ @ !v IoErr { F e }
 }
 
 @ file_exists s path → b {
-  ^ != 0 ( nurl_file_exists path )
+    ^ != 0 ( nurl_file_exists path )
 }
 
-@ file_size s path → ! i IoErr {
-  : i n ( nurl_file_size path )
-  ? < n 0 {
-    : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
-    ^ @ ! i IoErr { F e }
-  } {}
-  ^ @ ! i IoErr { T n }
+@ file_size s path → !i IoErr {
+    : i n ( nurl_file_size path )
+    ? < n 0 {
+        : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+        ^ @ !i IoErr { F e }
+    } {}
+    ^ @ !i IoErr { T n }
 }
 
 // Best-effort delete. `nurl_file_del` (libc `remove`) doesn't surface
 // errno reliably across platforms, so callers wanting to distinguish
 // "did not exist" from "still there" should call `file_exists` first.
-@ file_delete s path → ! v IoErr {
-  ? == ( nurl_file_exists path ) 0 {
-    ^ @ ! v IoErr { F @ IoErr { NotFound } }
-  } {}
-  ( nurl_file_del path )
-  ^ @ ! v IoErr { T 0 }
+@ file_delete s path → !v IoErr {
+    ? == ( nurl_file_exists path ) 0 {
+        ^ @ !v IoErr { F @ IoErr { NotFound } }
+    } {}
+    ( nurl_file_del path )
+    ^ @ !v IoErr { T 0 }
 }
 
-@ dir_create s path → ! v IoErr {
-  : i rc ( nurl_dir_create path )
-  ? == rc 0 {
-    ^ @ ! v IoErr { T 0 }
-  } {}
-  : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
-  ^ @ ! v IoErr { F e }
+@ dir_create s path → !v IoErr {
+    : i rc ( nurl_dir_create path )
+    ? == rc 0 {
+        ^ @ !v IoErr { T 0 }
+    } {}
+    : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+    ^ @ !v IoErr { F e }
 }
 
 // Remove an empty directory. Returns NotFound when missing, Other when
 // the directory is non-empty (errno = ENOTEMPTY) — the errno-kind table
 // folds the latter into Other rather than introducing a new variant.
-@ dir_remove s path → ! v IoErr {
-  : i rc ( nurl_dir_remove path )
-  ? == rc 0 {
-    ^ @ ! v IoErr { T 0 }
-  } {}
-  : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
-  ^ @ ! v IoErr { F e }
+@ dir_remove s path → !v IoErr {
+    : i rc ( nurl_dir_remove path )
+    ? == rc 0 {
+        ^ @ !v IoErr { T 0 }
+    } {}
+    : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+    ^ @ !v IoErr { F e }
 }
 
 // List directory entries (excluding "." and "..") as owned Strings.
@@ -146,26 +146,26 @@ $ `stdlib/core/errors.nu`
 // + string_free, then drop the Vec itself. Order is platform-defined
 // (POSIX returns the on-disk order; Windows returns FindFirstFile order).
 // Callers that want a stable order should sort_by cmp_string afterwards.
-@ dir_list s path → ! ( Vec String ) IoErr {
-  : i h ( nurl_dir_list_open path )
-  ? == h 0 {
-    : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
-    ^ @ ! ( Vec String ) IoErr { F e }
-  } {}
-  : ( Vec String ) out ( vec_new [String] )
-  : ~ b going T
-  ~ going {
-    : s raw ( nurl_dir_list_next h )
-    : i p # i raw
-    ? == p 0 {
-      = going F
-    } {
-      ( vec_push [String] out ( string_from raw ) )
-      ( nurl_free raw )
+@ dir_list s path → !( Vec String ) IoErr {
+    : i h ( nurl_dir_list_open path )
+    ? == h 0 {
+        : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+        ^ @ !( Vec String ) IoErr { F e }
+    } {}
+    : ( Vec String ) out ( vec_new [String] )
+    : ~ b going T
+    ~ going {
+        : s raw ( nurl_dir_list_next h )
+        : i p # i raw
+        ? == p 0 {
+            = going F
+        } {
+            ( vec_push [String] out ( string_from raw ) )
+            ( nurl_free raw )
+        }
     }
-  }
-  ( nurl_dir_list_close h )
-  ^ @ ! ( Vec String ) IoErr { T out }
+    ( nurl_dir_list_close h )
+    ^ @ !( Vec String ) IoErr { T out }
 }
 
 // ── Binary I/O ──────────────────────────────────────────────────────
@@ -179,45 +179,45 @@ $ `stdlib/core/errors.nu`
 // runtime buffer is freed inside read_file_bytes — callers never see it.
 // write_file_bytes BORROWS its byte buffer.
 
-@ read_file_bytes s path → ! ( Vec u ) IoErr {
-  : s raw ( nurl_read_file_bytes path )
-  : i p # i raw
-  ? == p 0 {
+@ read_file_bytes s path → !( Vec u ) IoErr {
+    : s raw ( nurl_read_file_bytes path )
+    : i p # i raw
+    ? == p 0 {
+        : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+        ^ @ !( Vec u ) IoErr { F e }
+    } {}
+    : i n ( nurl_last_bytes_len )
+    : ( Vec u ) v ( vec_with_cap [u] n )
+    : *u src # *u raw
+    : ~ i k 0
+    ~ < k n {
+        ( vec_push [u] v . src k )
+        = k + k 1
+    }
+    ( nurl_free raw )
+    ^ @ !( Vec u ) IoErr { T v }
+}
+
+@ write_file_bytes s path ( Vec u ) v → !v IoErr {
+    : i n ( vec_len [u] v )
+    : *u data ( vec_data [u] v )
+    : s raw # s data
+    : i rc ( nurl_write_file_bytes path raw n `wb` )
+    ? == rc 0 {
+        ^ @ !v IoErr { T 0 }
+    } {}
     : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
-    ^ @ ! ( Vec u ) IoErr { F e }
-  } {}
-  : i n ( nurl_last_bytes_len )
-  : ( Vec u ) v ( vec_with_cap [u] n )
-  : *u src #*u raw
-  : ~ i k 0
-  ~ < k n {
-    ( vec_push [u] v . src k )
-    = k + k 1
-  }
-  ( nurl_free raw )
-  ^ @ ! ( Vec u ) IoErr { T v }
+    ^ @ !v IoErr { F e }
 }
 
-@ write_file_bytes s path ( Vec u ) v → ! v IoErr {
-  : i n ( vec_len [u] v )
-  : *u data ( vec_data [u] v )
-  : s raw # s data
-  : i rc ( nurl_write_file_bytes path raw n `wb` )
-  ? == rc 0 {
-    ^ @ ! v IoErr { T 0 }
-  } {}
-  : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
-  ^ @ ! v IoErr { F e }
-}
-
-@ append_file_bytes s path ( Vec u ) v → ! v IoErr {
-  : i n ( vec_len [u] v )
-  : *u data ( vec_data [u] v )
-  : s raw # s data
-  : i rc ( nurl_write_file_bytes path raw n `ab` )
-  ? == rc 0 {
-    ^ @ ! v IoErr { T 0 }
-  } {}
-  : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
-  ^ @ ! v IoErr { F e }
+@ append_file_bytes s path ( Vec u ) v → !v IoErr {
+    : i n ( vec_len [u] v )
+    : *u data ( vec_data [u] v )
+    : s raw # s data
+    : i rc ( nurl_write_file_bytes path raw n `ab` )
+    ? == rc 0 {
+        ^ @ !v IoErr { T 0 }
+    } {}
+    : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+    ^ @ !v IoErr { F e }
 }

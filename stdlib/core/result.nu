@@ -29,34 +29,34 @@
 // types, E/G for error types.
 
 @ res_is_ok [A E] ! A E r → b {
-  ^ ?? r { T → T  F → F }
+    ^ ?? r { T → T F → F }
 }
 
 @ res_is_err [A E] ! A E r → b {
-  ^ ?? r { T → F  F → T }
+    ^ ?? r { T → F F → T }
 }
 
 @ res_unwrap_or [A E] ! A E r A default → A {
-  ^ ?? r { T v → v  F → default }
+    ^ ?? r { T v → v F → default }
 }
 
-@ res_map [A B E] ! A E r (@ B A) f → ! B E {
-  ^ ?? r {
-    T v → @ ! B E { T ( f v ) }
-    F   → @ ! B E { F . r 1 }
-  }
+@ res_map [A B E] ! A E r ( @ B A ) f → !B E {
+    ^ ?? r {
+        T v → @ !B E { T ( f v ) }
+        F → @ !B E { F . r 1 }
+    }
 }
 
-@ res_and_then [A B E] ! A E r (@ ! B E A) f → ! B E {
-  ^ ?? r {
-    T v → ( f v )
-    F   → @ ! B E { F . r 1 }
-  }
+@ res_and_then [A B E] ! A E r ( @ !B E A ) f → !B E {
+    ^ ?? r {
+        T v → ( f v )
+        F → @ !B E { F . r 1 }
+    }
 }
 
-@ res_map_err [A E G] ! A E r (@ G E) fe → ! A G {
-  ^ ?? r {
-    T v → @ ! A G { T v }
-    F e → @ ! A G { F ( fe # E e ) }
-  }
+@ res_map_err [A E G] ! A E r ( @ G E ) fe → !A G {
+    ^ ?? r {
+        T v → @ !A G { T v }
+        F e → @ !A G { F ( fe # E e ) }
+    }
 }

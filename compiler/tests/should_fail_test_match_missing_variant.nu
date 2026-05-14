@@ -4,14 +4,14 @@
 : | Color { Red Green Blue }
 
 @ color_name Color c → s {
-  ^ ?? c {
-    Red   → `red`
-    Green → `green`
-  }
+    ^ ?? c {
+        Red → `red`
+        Green → `green`
+    }
 }
 
 @ main → i {
-  : s r ( color_name @ Color { Red } )
-  ( nurl_print r )
-  ^ 0
+    : s r ( color_name @ Color { Red } )
+    ( nurl_print r )
+    ^ 0
 }

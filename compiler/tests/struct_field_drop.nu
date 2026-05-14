@@ -6,22 +6,22 @@
 // user-visible behaviour (field reads still return the right bytes).
 
 : Greeting {
-  s msg
-  i n
+    s msg
+    i n
 }
 
 @ main → i {
-  : Greeting g @ Greeting { ( nurl_str_cat `hello ` `world` ) 42 }
-  ( nurl_print . g msg ) ( nurl_print `\n` )
-  ( nurl_print ( nurl_str_int . g n ) ) ( nurl_print `\n` )
+    : Greeting g @ Greeting { ( nurl_str_cat `hello ` `world` ) 42 }
+    ( nurl_print . g msg ) ( nurl_print `\n` )
+    ( nurl_print ( nurl_str_int . g n ) ) ( nurl_print `\n` )
 
-  // A second struct in a nested scope ensures the drop fires at each
-  // binding site, not just at fn exit.
-  ? 1
+    // A second struct in a nested scope ensures the drop fires at each
+    // binding site, not just at fn exit.
+    ? 1
     { : Greeting g2 @ Greeting { ( nurl_str_cat3 `one ` `two ` `three` ) 7 }
-      ( nurl_print . g2 msg ) ( nurl_print `\n` )
+        ( nurl_print . g2 msg ) ( nurl_print `\n` )
     }
     {}
 
-  ^ 0
+    ^ 0
 }

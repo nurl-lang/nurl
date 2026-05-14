@@ -19,12 +19,12 @@
         : b div5 == 0 % i 5
 
         ? & div3 div5
-            { ( nurl_print `FizzBuzz\n` ) }
-            ? div3
-                { ( nurl_print `Fizz\n` ) }
-                ? div5
-                    { ( nurl_print `Buzz\n` ) }
-                    { ( nurl_print ( nurl_str_cat ( nurl_str_int i ) `\n` ) ) }
+        { ( nurl_print `FizzBuzz\n` ) }
+        ? div3
+        { ( nurl_print `Fizz\n` ) }
+        ? div5
+        { ( nurl_print `Buzz\n` ) }
+        { ( nurl_print ( nurl_str_cat ( nurl_str_int i ) `\n` ) ) }
 
         = i + i 1
     }

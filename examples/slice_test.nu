@@ -8,16 +8,16 @@
 : Point { i x i y }
 
 @ dist_squared Point p → i {
-    ^ + * . p x . p x 
-        * . p y . p y
+    ^ + * . p x . p x
+    * . p y . p y
 }
 
 @ main → i {
     // Luodaan slice-literaali Point-structeista
-    : [ Point points [ Point |
-        @ Point { 3 4 }    // 3^2 + 4^2 = 25
-        @ Point { 5 12 }   // 5^2 + 12^2 = 169
-        @ Point { 8 15 }   // 8^2 + 15^2 = 289
+    : [Point points [Point |
+    @ Point { 3 4 }  // 3^2 + 4^2 = 25
+    @ Point { 5 12 }  // 5^2 + 12^2 = 169
+    @ Point { 8 15 }  // 8^2 + 15^2 = 289
     ]
 
     : ~ i total_dist 0
@@ -27,7 +27,7 @@
     // Foreach-silmukka lainaa (borrow) elementin 'p'
     ~ p points {
         : i d ( dist_squared p )
-        
+
         ( nurl_print `- Point (` )
         ( nurl_print ( nurl_str_int . p x ) )
         ( nurl_print `, ` )

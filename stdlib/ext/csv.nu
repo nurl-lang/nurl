@@ -34,14 +34,17 @@ $ `stdlib/std/hashmap.nu`
 // ── Dialect ────────────────────────────────────────────────────────
 
 : CSVDialect {
-    i delimiter         // byte value, e.g. 44 (',') or 9 ('\t')
-    b crlf_terminator   // T = write '\r\n', F = write '\n'
-    i quote_char        // RFC 4180 quote byte (34 = `"`); 0 disables quoting
+    i delimiter  // byte value, e.g. 44 (',') or 9 ('\t')
+    b crlf_terminator  // T = write '\r\n', F = write '\n'
+    i quote_char  // RFC 4180 quote byte (34 = `"`); 0 disables quoting
 }
 
 @ csv_dialect_default → CSVDialect { ^ @ CSVDialect { 44 F 34 } }
+
 @ csv_dialect_excel → CSVDialect { ^ @ CSVDialect { 44 T 34 } }
+
 @ csv_dialect_excel_tab → CSVDialect { ^ @ CSVDialect { 9 T 34 } }
+
 @ csv_dialect_unix → CSVDialect { ^ @ CSVDialect { 44 F 34 } }
 // Unquoted dialect: every byte except delim/CR/LF is content. Use for
 // data sets that NEVER contain quoted fields — skips the per-cell
@@ -93,34 +96,34 @@ $ `stdlib/std/hashmap.nu`
     ^ r
 }
 
-@ csv_reader_free *CSVReader r → v {
+@ csv_reader_free * CSVReader r → v {
     ( string_free . r content )
     ( nurl_free # s r )
 }
 
-@ csv_reader_next *CSVReader r → ? ( Vec String ) {
+@ csv_reader_next * CSVReader r → ?( Vec String ) {
     : i clen ( string_len . r content )
     : ~ i p . r pos
-    ? >= p clen { ^ @ ? ( Vec String ) { F # ( Vec String ) 0 } } {}
+    ? >= p clen { ^ @ ?( Vec String ) { F # ( Vec String ) 0 } } {}
 
     : *u cd # *u ( string_data . r content )
     : i delim . . r dialect delimiter
     : i quote . . r dialect quote_char
-    
+
     : ( Vec String ) row ( vec_with_cap [String] 8 )
     : ~ b in_row T
-    
+
     ~ in_row {
         : ~ i cell_off 0
         : ~ i cell_len 0
         : ~ b is_quoted F
-        
+
         ? & != quote 0 < p clen {
             ? == # i . cd p quote { = is_quoted T } {}
         } {}
-        
+
         ? is_quoted {
-            = p + p 1 // skip opening quote
+            = p + p 1  // skip opening quote
             : i scan_start p
             : String cell_buf ( string_new )
             : ~ b had_escape F
@@ -162,7 +165,7 @@ $ `stdlib/std/hashmap.nu`
             }
             ( vec_push [String] row ( string_from_bytes # *u + # i cd field_start - p field_start ) )
         }
-        
+
         : ~ b sep_found F
         ~ & ! sep_found < p clen {
             : i c # i . cd p
@@ -189,7 +192,7 @@ $ `stdlib/std/hashmap.nu`
         }
         ? >= p clen { = in_row F } {}
     }
-    
+
     = . r pos p
     // Drop solitary empty trailing record
     ? == ( vec_len [String] row ) 1 {
@@ -199,29 +202,29 @@ $ `stdlib/std/hashmap.nu`
             ^ ( csv_reader_next r )
         } {}
     } {}
-    
-    ^ @ ? ( Vec String ) { T row }
+
+    ^ @ ?( Vec String ) { T row }
 }
 
 // ── CSVDictReader ──────────────────────────────────────────────────
 
 : CSVDictReader {
     ( Vec String ) header
-    *CSVReader reader
+    * CSVReader reader
 }
 
-@ csv_dict_reader_new *CSVReader r → *CSVDictReader {
-    : ? ( Vec String ) h_opt ( csv_reader_next r )
-    : ( Vec String ) h ( opt_unwrap_or [ ( Vec String ) ] h_opt ( vec_new [String] ) )
+@ csv_dict_reader_new * CSVReader r → *CSVDictReader {
+    : ?( Vec String ) h_opt ( csv_reader_next r )
+    : ( Vec String ) h ( opt_unwrap_or [( Vec String )] h_opt ( vec_new [String] ) )
     : *CSVDictReader dr # *CSVDictReader ( nurl_malloc Z CSVDictReader )
     = . dr header h
     = . dr reader r
     ^ dr
 }
 
-@ csv_dict_reader_next *CSVDictReader dr → ? ( HashMap s String ) {
+@ csv_dict_reader_next * CSVDictReader dr → ?( HashMap s String ) {
     : *CSVReader r . dr reader
-    : ? ( Vec String ) row_opt ( csv_reader_next r )
+    : ?( Vec String ) row_opt ( csv_reader_next r )
     ?? row_opt {
         T row → {
             : ( HashMap s String ) map ( map_new [s String] )
@@ -231,8 +234,8 @@ $ `stdlib/std/hashmap.nu`
             : i n ? < n_header n_row n_header n_row
             : ~ i i 0
             ~ < i n {
-                : ? String k_opt ( vec_get [String] hdr i )
-                : ? String v_opt ( vec_get [String] row i )
+                : ?String k_opt ( vec_get [String] hdr i )
+                : ?String v_opt ( vec_get [String] row i )
                 ?? k_opt {
                     T k → {
                         ?? v_opt {
@@ -247,13 +250,13 @@ $ `stdlib/std/hashmap.nu`
                 = i + i 1
             }
             ( __csv_row_free row )
-            ^ @ ? ( HashMap s String ) { T map }
+            ^ @ ?( HashMap s String ) { T map }
         }
-        F → { ^ @ ? ( HashMap s String ) { F # ( HashMap s String ) 0 } }
+        F → { ^ @ ?( HashMap s String ) { F # ( HashMap s String ) 0 } }
     }
 }
 
-@ csv_dict_reader_free *CSVDictReader dr → v {
+@ csv_dict_reader_free * CSVDictReader dr → v {
     ( __csv_row_free . dr header )
     ( csv_reader_free . dr reader )
     ( nurl_free dr )
@@ -262,7 +265,7 @@ $ `stdlib/std/hashmap.nu`
 // ── CSVWriter (per-row stream over a FILE*) ───────────────────────
 
 : CSVWriter {
-    *v f
+    * v f
     i delimiter
     b crlf_terminator
     i quote_char
@@ -286,7 +289,7 @@ $ `stdlib/std/hashmap.nu`
     ^ w
 }
 
-@ __csv_write_field *v file s data i delim i quote → v {
+@ __csv_write_field * v file s data i delim i quote → v {
     : ~ b need_quote F
     ? != quote 0 {
         : i len ( nurl_str_len data )
@@ -297,7 +300,7 @@ $ `stdlib/std/hashmap.nu`
             = i + i 1
         }
     } {}
-    
+
     ? need_quote {
         ( nurl_file_write_byte file quote )
         : i len ( nurl_str_len data )
@@ -314,20 +317,20 @@ $ `stdlib/std/hashmap.nu`
     }
 }
 
-@ csv_writer_writerow *CSVWriter w ( Vec String ) row → v {
+@ csv_writer_writerow * CSVWriter w ( Vec String ) row → v {
     : *v file . w f
     : i n ( vec_len [String] row )
     : i delim . w delimiter
     : i quote . w quote_char
-    
+
     : *u sep_buf # *u ( nurl_malloc 2 )
     = . sep_buf 0 # u delim
     = . sep_buf 1 # u 0
     : s sep # s sep_buf
-    
+
     : ~ i i 0
     ~ < i n {
-        : ? String s ( vec_get [String] row i )
+        : ?String s ( vec_get [String] row i )
         ?? s {
             T ss → ( __csv_write_field file ( string_data ss ) delim quote )
             F → {}
@@ -339,8 +342,7 @@ $ `stdlib/std/hashmap.nu`
     ( nurl_free sep_buf )
 }
 
-
-@ csv_writer_close *CSVWriter w → v {
+@ csv_writer_close * CSVWriter w → v {
     ( nurl_file_close . w f )
     ( nurl_free w )
 }
@@ -349,31 +351,31 @@ $ `stdlib/std/hashmap.nu`
 
 : CSVDictWriter {
     ( Vec String ) fieldnames
-    *CSVWriter writer
+    * CSVWriter writer
 }
 
-@ csv_dict_writer_new *CSVWriter w ( Vec String ) fieldnames → *CSVDictWriter {
+@ csv_dict_writer_new * CSVWriter w ( Vec String ) fieldnames → *CSVDictWriter {
     : *CSVDictWriter dw # *CSVDictWriter ( nurl_malloc Z CSVDictWriter )
     = . dw fieldnames fieldnames
     = . dw writer w
     ^ dw
 }
 
-@ csv_dict_writer_writeheader *CSVDictWriter dw → v {
+@ csv_dict_writer_writeheader * CSVDictWriter dw → v {
     ( csv_writer_writerow . dw writer . dw fieldnames )
 }
 
-@ csv_dict_writer_writerow *CSVDictWriter dw ( HashMap s String ) row → v {
+@ csv_dict_writer_writerow * CSVDictWriter dw ( HashMap s String ) row → v {
     : ( Vec String ) fns . dw fieldnames
     : *CSVWriter wr . dw writer
     : i n ( vec_len [String] fns )
     : ( Vec String ) line ( vec_with_cap [String] n )
     : ~ i i 0
     ~ < i n {
-        : ? String k_opt ( vec_get [String] fns i )
+        : ?String k_opt ( vec_get [String] fns i )
         ?? k_opt {
             T k → {
-                : ? String v_opt ( map_get [s String] row ( string_data k ) \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } )
+                : ?String v_opt ( map_get [s String] row ( string_data k ) \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } )
                 ?? v_opt {
                     T v → ( vec_push [String] line ( string_from ( string_data v ) ) )
                     F → ( vec_push [String] line ( string_new ) )
@@ -387,7 +389,7 @@ $ `stdlib/std/hashmap.nu`
     ( __csv_row_free line )
 }
 
-@ csv_dict_writer_close *CSVDictWriter dw → v {
+@ csv_dict_writer_close * CSVDictWriter dw → v {
     ( csv_writer_close . dw writer )
     ( nurl_free dw )
 }
@@ -422,36 +424,37 @@ $ `stdlib/std/hashmap.nu`
     ^ t
 }
 
-@ csv_table_free *CSVTable t → v {
+@ csv_table_free * CSVTable t → v {
     ( __csv_row_free . t headers )
     ( vec_free_with [CSVRow] . t rows \ CSVRow r → v { ( __csv_row_drop r ) } )
     ( nurl_free t )
 }
 
-@ csv_table_n_rows *CSVTable t → i { ^ ( vec_len [CSVRow] . t rows ) }
-@ csv_table_n_cols *CSVTable t → i { ^ ( vec_len [String] . t headers ) }
+@ csv_table_n_rows * CSVTable t → i { ^ ( vec_len [CSVRow] . t rows ) }
+
+@ csv_table_n_cols * CSVTable t → i { ^ ( vec_len [String] . t headers ) }
 
 // Borrow the cells of a row. Do NOT free; mutations propagate to the
 // table. None if `row` is out of range.
-@ csv_table_row_cells *CSVTable t i row → ? ( Vec String ) {
+@ csv_table_row_cells * CSVTable t i row → ?( Vec String ) {
     : i nr ( csv_table_n_rows t )
-    ? | < row 0 >= row nr { ^ @ ? ( Vec String ) { F # ( Vec String ) 0 } } {}
+    ? | < row 0 >= row nr { ^ @ ?( Vec String ) { F # ( Vec String ) 0 } } {}
     : *CSVRow rp ( vec_data [CSVRow] . t rows )
     : CSVRow r . rp row
-    ^ @ ? ( Vec String ) { T . r cells }
+    ^ @ ?( Vec String ) { T . r cells }
 }
 
 // Single cell. None if (row,col) out of range.
-@ csv_table_get *CSVTable t i row i col → ? String {
-    : ? ( Vec String ) cells_opt ( csv_table_row_cells t row )
+@ csv_table_get * CSVTable t i row i col → ?String {
+    : ?( Vec String ) cells_opt ( csv_table_row_cells t row )
     ?? cells_opt {
         T cells → { ^ ( vec_get [String] cells col ) }
-        F → { ^ @ ? String { F # String 0 } }
+        F → { ^ @ ?String { F # String 0 } }
     }
 }
 
 // Index of a named column. None if not present (case-sensitive).
-@ csv_table_col_index *CSVTable t s name → ? i {
+@ csv_table_col_index * CSVTable t s name → ?i {
     : ( Vec String ) hs . t headers
     : i n ( vec_len [String] hs )
     : *String hp ( vec_data [String] hs )
@@ -459,19 +462,19 @@ $ `stdlib/std/hashmap.nu`
     ~ < i n {
         : String h . hp i
         ? == ( nurl_str_eq ( string_data h ) name ) 1 {
-            ^ @ ? i { T i }
+            ^ @ ?i { T i }
         } {}
         = i + i 1
     }
-    ^ @ ? i { F 0 }
+    ^ @ ?i { F 0 }
 }
 
 // Cell by header name. None if the column is missing or out of range.
-@ csv_table_get_by_name *CSVTable t i row s name → ? String {
-    : ? i col_opt ( csv_table_col_index t name )
+@ csv_table_get_by_name * CSVTable t i row s name → ?String {
+    : ?i col_opt ( csv_table_col_index t name )
     ?? col_opt {
         T col → { ^ ( csv_table_get t row col ) }
-        F → { ^ @ ? String { F # String 0 } }
+        F → { ^ @ ?String { F # String 0 } }
     }
 }
 
@@ -483,7 +486,7 @@ $ `stdlib/std/hashmap.nu`
 // (single i64 cell). LF and CRLF both terminate. Empty trailing lines
 // are detected by the caller (a one-cell zero-length row when the file
 // ends with a newline).
-@ __csv_scan_row *u cd i clen ( Vec i ) pos_inout i delim i quote → ( Vec String ) {
+@ __csv_scan_row * u cd i clen ( Vec i ) pos_inout i delim i quote → ( Vec String ) {
     : *i pip ( vec_data [i] pos_inout )
     : ~ i p . pip 0
     : ( Vec String ) row ( vec_with_cap [String] 8 )
@@ -499,7 +502,7 @@ $ `stdlib/std/hashmap.nu`
         } {}
 
         ? is_quoted {
-            = p + p 1 // skip opening quote
+            = p + p 1  // skip opening quote
             : i scan_start p
             : String cell_buf ( string_new )
             : ~ b had_escape F
@@ -576,7 +579,7 @@ $ `stdlib/std/hashmap.nu`
 // Append rows parsed from `content` into `t`. The first record becomes
 // the header (replacing any existing one). Subsequent records become
 // rows. A solitary empty trailing line is dropped.
-@ csv_table_parse_content *CSVTable t String content CSVDialect dia → v {
+@ csv_table_parse_content * CSVTable t String content CSVDialect dia → v {
     : *u cd # *u ( string_data content )
     : i clen ( string_len content )
     : i delim . dia delimiter
@@ -610,7 +613,7 @@ $ `stdlib/std/hashmap.nu`
 }
 
 @ __csv_first_cell_len ( Vec String ) row → i {
-    : ? String s ( vec_get [String] row 0 )
+    : ?String s ( vec_get [String] row 0 )
     ?? s {
         T ss → { ^ ( string_len ss ) }
         F → { ^ 0 }
@@ -632,7 +635,7 @@ $ `stdlib/std/hashmap.nu`
 // Load a CSV file using the default dialect. Returns NULL on read
 // failure (use file_exists / read_file separately for diagnostics).
 @ csv_table_load s path → *CSVTable {
-    : ! String IoErr res ( read_file path )
+    : !String IoErr res ( read_file path )
     ?? res {
         F e → { ^ # *CSVTable 0 }
         T content → {
@@ -644,7 +647,7 @@ $ `stdlib/std/hashmap.nu`
 }
 
 @ csv_table_load_dialect s path CSVDialect dia → *CSVTable {
-    : ! String IoErr res ( read_file path )
+    : !String IoErr res ( read_file path )
     ?? res {
         F e → { ^ # *CSVTable 0 }
         T content → {
@@ -657,7 +660,7 @@ $ `stdlib/std/hashmap.nu`
 
 // ── Writing ────────────────────────────────────────────────────────
 
-@ __csv_write_one_row *v fh ( Vec String ) row s sep s eol → v {
+@ __csv_write_one_row * v fh ( Vec String ) row s sep s eol → v {
     : i n ( vec_len [String] row )
     : *String rp ( vec_data [String] row )
     : ~ i i 0
@@ -672,7 +675,7 @@ $ `stdlib/std/hashmap.nu`
 
 // Write the table to `path`. Returns T on success, F if the file could
 // not be opened.
-@ csv_table_write *CSVTable t s path CSVDialect dia → b {
+@ csv_table_write * CSVTable t s path CSVDialect dia → b {
     : *v fh ( nurl_file_open path `w` )
     ? == # i fh 0 { ^ F } {}
     : i delim . dia delimiter
@@ -700,40 +703,40 @@ $ `stdlib/std/hashmap.nu`
 
 // In-place sort by a single column, using string compare. asc=T sorts
 // ascending, F sorts descending. Out-of-range cells sort to one end.
-@ csv_table_sort_by *CSVTable t i col b asc → v {
+@ csv_table_sort_by * CSVTable t i col b asc → v {
     : i col_idx col
     : b ascending asc
     ( sort_by [CSVRow] . t rows
-        \ CSVRow ra CSVRow rb → i {
-            : ( Vec String ) ca . ra cells
-            : ( Vec String ) cb . rb cells
-            : ? String sa ( vec_get [String] ca col_idx )
-            : ? String sb ( vec_get [String] cb col_idx )
-            ?? sa {
-                T x → {
-                    ?? sb {
-                        T y → {
-                            : i c ( cmp_string x y )
-                            ? ascending { ^ c } { ^ - 0 c }
-                        }
-                        F → { ^ 1 }
+    \ CSVRow ra CSVRow rb → i {
+        : ( Vec String ) ca . ra cells
+        : ( Vec String ) cb . rb cells
+        : ?String sa ( vec_get [String] ca col_idx )
+        : ?String sb ( vec_get [String] cb col_idx )
+        ?? sa {
+            T x → {
+                ?? sb {
+                    T y → {
+                        : i c ( cmp_string x y )
+                        ? ascending { ^ c } { ^ - 0 c }
                     }
+                    F → { ^ 1 }
                 }
-                F → {
-                    ?? sb {
-                        T _ → { ^ -1 }
-                        F → { ^ 0 }
-                    }
+            }
+            F → {
+                ?? sb {
+                    T _ → { ^ -1 }
+                    F → { ^ 0 }
                 }
             }
         }
+    }
     )
 }
 
 // In-place sort with a custom row comparator. Comparator follows the
 // 3-way compare contract: <0, 0, >0. Argument types are CSVRow so
 // the comparator can read multiple cells without indirection.
-@ csv_table_sort_with *CSVTable t (@ i CSVRow CSVRow) cmp → v {
+@ csv_table_sort_with * CSVTable t ( @ i CSVRow CSVRow ) cmp → v {
     ( sort_by [CSVRow] . t rows cmp )
 }
 
@@ -741,7 +744,7 @@ $ `stdlib/std/hashmap.nu`
 // index of the source row that should land at position k. Old Vec[CSVRow]
 // is released without dropping the CSVRow handles — ownership of every
 // cell-buffer moves into the new vec via 8-byte ctl-pointer copies.
-@ __csv_permute_rows *CSVTable t ( Vec i ) order → v {
+@ __csv_permute_rows * CSVTable t ( Vec i ) order → v {
     : i n ( vec_len [i] order )
     : ( Vec CSVRow ) new_rows ( vec_with_cap [CSVRow] n )
     : *CSVRow rp ( vec_data [CSVRow] . t rows )
@@ -766,7 +769,7 @@ $ `stdlib/std/hashmap.nu`
 // Indexed: 1 parse per row + sort over an i64 key vec. Total cost is
 // O(N) parses + O(N log N) integer comparisons, vs. the naive
 // O(N log N) parses of the per-comparator approach.
-@ csv_table_sort_by_int *CSVTable t i col b asc → v {
+@ csv_table_sort_by_int * CSVTable t i col b asc → v {
     : i n ( csv_table_n_rows t )
     ? > n 1 {
         : i col_idx col
@@ -778,11 +781,11 @@ $ `stdlib/std/hashmap.nu`
         : ~ i ri 0
         ~ < ri n {
             : CSVRow r . rp ri
-            : ? String s_opt ( vec_get [String] . r cells col_idx )
+            : ?String s_opt ( vec_get [String] . r cells col_idx )
             : ~ i v 0
             ?? s_opt {
                 T s → {
-                    : ! i ParseErr p ( string_to_int s )
+                    : !i ParseErr p ( string_to_int s )
                     ?? p { T pv → { = v pv } F → {} }
                 }
                 F → {}
@@ -809,7 +812,7 @@ $ `stdlib/std/hashmap.nu`
 
 // Numeric sort by f64. Cells that fail to parse compare equal to 0.0.
 // NaN cells fall to the end (cmp_float treats NaN as "greater").
-@ csv_table_sort_by_float *CSVTable t i col b asc → v {
+@ csv_table_sort_by_float * CSVTable t i col b asc → v {
     : i n ( csv_table_n_rows t )
     ? > n 1 {
         : i col_idx col
@@ -820,11 +823,11 @@ $ `stdlib/std/hashmap.nu`
         : ~ i ri 0
         ~ < ri n {
             : CSVRow r . rp ri
-            : ? String s_opt ( vec_get [String] . r cells col_idx )
+            : ?String s_opt ( vec_get [String] . r cells col_idx )
             : ~ f v 0.0
             ?? s_opt {
                 T s → {
-                    : ? f p ( string_to_float s )
+                    : ?f p ( string_to_float s )
                     ?? p { T pv → { = v pv } F → {} }
                 }
                 F → {}
@@ -853,7 +856,7 @@ $ `stdlib/std/hashmap.nu`
 // the existing cell buffers) so the comparator skips the option-unwrap
 // and Vec[String] indirection on every call. Cells that are missing
 // (out-of-range column) sort to the end regardless of asc.
-@ csv_table_sort_by_string *CSVTable t i col b asc → v {
+@ csv_table_sort_by_string * CSVTable t i col b asc → v {
     : i n ( csv_table_n_rows t )
     ? > n 1 {
         : i col_idx col
@@ -864,7 +867,7 @@ $ `stdlib/std/hashmap.nu`
         : ~ i ri 0
         ~ < ri n {
             : CSVRow r . rp ri
-            : ? String s_opt ( vec_get [String] . r cells col_idx )
+            : ?String s_opt ( vec_get [String] . r cells col_idx )
             : ~ s v `\xff`
             ?? s_opt {
                 T ss → { = v ( string_data ss ) }
@@ -891,7 +894,7 @@ $ `stdlib/std/hashmap.nu`
 
 // Return a fresh table with deep copies of the first `n` rows. Headers
 // are deep-copied. n is clamped to [0, n_rows].
-@ csv_table_head *CSVTable src i n → *CSVTable {
+@ csv_table_head * CSVTable src i n → *CSVTable {
     : *CSVTable out ( csv_table_new )
     ( __csv_row_free . out headers )
     = . out headers ( __csv_clone_row . src headers )
@@ -912,7 +915,7 @@ $ `stdlib/std/hashmap.nu`
 
 // In-place truncate: keep only the first `n` rows, dropping (and
 // freeing) the rest. n is clamped to [0, current row count].
-@ csv_table_truncate *CSVTable t i n → v {
+@ csv_table_truncate * CSVTable t i n → v {
     : i nr ( csv_table_n_rows t )
     : ~ i keep n
     ? < keep 0 { = keep 0 } {}
@@ -930,34 +933,34 @@ $ `stdlib/std/hashmap.nu`
 
 // ── Find / filter / select ─────────────────────────────────────────
 
-@ csv_table_find_first *CSVTable t i col s target → ? i {
+@ csv_table_find_first * CSVTable t i col s target → ?i {
     : i nr ( csv_table_n_rows t )
     : *CSVRow rp ( vec_data [CSVRow] . t rows )
     : ~ i i 0
     ~ < i nr {
         : CSVRow r . rp i
-        : ? String s_opt ( vec_get [String] . r cells col )
+        : ?String s_opt ( vec_get [String] . r cells col )
         ?? s_opt {
             T s → {
                 ? == ( nurl_str_eq ( string_data s ) target ) 1 {
-                    ^ @ ? i { T i }
+                    ^ @ ?i { T i }
                 } {}
             }
             F → {}
         }
         = i + i 1
     }
-    ^ @ ? i { F 0 }
+    ^ @ ?i { F 0 }
 }
 
-@ csv_table_find_all *CSVTable t i col s target → ( Vec i ) {
+@ csv_table_find_all * CSVTable t i col s target → ( Vec i ) {
     : ( Vec i ) out ( vec_new [i] )
     : i nr ( csv_table_n_rows t )
     : *CSVRow rp ( vec_data [CSVRow] . t rows )
     : ~ i i 0
     ~ < i nr {
         : CSVRow r . rp i
-        : ? String s_opt ( vec_get [String] . r cells col )
+        : ?String s_opt ( vec_get [String] . r cells col )
         ?? s_opt {
             T s → {
                 ? == ( nurl_str_eq ( string_data s ) target ) 1 {
@@ -972,14 +975,14 @@ $ `stdlib/std/hashmap.nu`
 }
 
 // Count rows whose cell at `col` equals `target`.
-@ csv_table_count_where *CSVTable t i col s target → i {
+@ csv_table_count_where * CSVTable t i col s target → i {
     : ~ i count 0
     : i nr ( csv_table_n_rows t )
     : *CSVRow rp ( vec_data [CSVRow] . t rows )
     : ~ i i 0
     ~ < i nr {
         : CSVRow r . rp i
-        : ? String s_opt ( vec_get [String] . r cells col )
+        : ?String s_opt ( vec_get [String] . r cells col )
         ?? s_opt {
             T s → {
                 ? == ( nurl_str_eq ( string_data s ) target ) 1 {
@@ -995,7 +998,7 @@ $ `stdlib/std/hashmap.nu`
 
 // New CSVTable holding deep copies of headers and the rows where
 // `pred` returns T. Source remains valid.
-@ csv_table_filter *CSVTable src (@ b CSVRow) pred → *CSVTable {
+@ csv_table_filter * CSVTable src ( @ b CSVRow ) pred → *CSVTable {
     : *CSVTable out ( csv_table_new )
     ( __csv_row_free . out headers )
     = . out headers ( __csv_clone_row . src headers )
@@ -1016,7 +1019,7 @@ $ `stdlib/std/hashmap.nu`
 
 // New CSVTable containing only the columns named in `cols` (in the
 // given order). Missing column names are silently skipped.
-@ csv_table_select_cols *CSVTable src ( Vec String ) cols → *CSVTable {
+@ csv_table_select_cols * CSVTable src ( Vec String ) cols → *CSVTable {
     : *CSVTable out ( csv_table_new )
 
     // Resolve column names → source indices, dropping unknown columns.
@@ -1027,7 +1030,7 @@ $ `stdlib/std/hashmap.nu`
     : ~ i ci 0
     ~ < ci k {
         : String name . cp ci
-        : ? i col_opt ( csv_table_col_index src ( string_data name ) )
+        : ?i col_opt ( csv_table_col_index src ( string_data name ) )
         ?? col_opt {
             T col → {
                 ( vec_push [i] idx col )
@@ -1052,7 +1055,7 @@ $ `stdlib/std/hashmap.nu`
         : ~ i j 0
         ~ < j nidx {
             : i col . ip j
-            : ? String s_opt ( vec_get [String] src_cells col )
+            : ?String s_opt ( vec_get [String] src_cells col )
             ?? s_opt {
                 T s → ( vec_push [String] new_cells ( string_from ( string_data s ) ) )
                 F → ( vec_push [String] new_cells ( string_new ) )
@@ -1069,34 +1072,34 @@ $ `stdlib/std/hashmap.nu`
 // ── High-level API ─────────────────────────────────────────────────
 
 // Parse the whole content into a nested vector of rows.
-@ csv_parse String content → ! ( Vec ( Vec String ) ) ParseErr {
-    : ( Vec ( Vec String ) ) rows ( vec_new [ ( Vec String ) ] )
+@ csv_parse String content → !( Vec ( Vec String ) ) ParseErr {
+    : ( Vec ( Vec String ) ) rows ( vec_new [( Vec String )] )
     : *CSVReader r ( csv_reader_new content )
     : ~ b done F
     ~ ! done {
-        : ? ( Vec String ) row_opt ( csv_reader_next r )
+        : ?( Vec String ) row_opt ( csv_reader_next r )
         ?? row_opt {
-            T row → ( vec_push [ ( Vec String ) ] rows row )
+            T row → ( vec_push [( Vec String )] rows row )
             F → { = done T }
         }
     }
     ( csv_reader_free r )
-    ^ @ ! ( Vec ( Vec String ) ) ParseErr { T rows }
+    ^ @ !( Vec ( Vec String ) ) ParseErr { T rows }
 }
 
-@ csv_parse_dialect String content CSVDialect dia → ! ( Vec ( Vec String ) ) ParseErr {
-    : ( Vec ( Vec String ) ) rows ( vec_new [ ( Vec String ) ] )
+@ csv_parse_dialect String content CSVDialect dia → !( Vec ( Vec String ) ) ParseErr {
+    : ( Vec ( Vec String ) ) rows ( vec_new [( Vec String )] )
     : *CSVReader r ( csv_reader_new_dialect content dia )
     : ~ b done F
     ~ ! done {
-        : ? ( Vec String ) row_opt ( csv_reader_next r )
+        : ?( Vec String ) row_opt ( csv_reader_next r )
         ?? row_opt {
-            T row → ( vec_push [ ( Vec String ) ] rows row )
+            T row → ( vec_push [( Vec String )] rows row )
             F → { = done T }
         }
     }
     ( csv_reader_free r )
-    ^ @ ! ( Vec ( Vec String ) ) ParseErr { T rows }
+    ^ @ !( Vec ( Vec String ) ) ParseErr { T rows }
 }
 
 // Write a nested vector of rows into a single CSV String.
@@ -1109,17 +1112,17 @@ $ `stdlib/std/hashmap.nu`
     : i delim . dia delimiter
     : i quote . dia quote_char
     : b crlf . dia crlf_terminator
-    
-    : i nr ( vec_len [ ( Vec String ) ] rows )
+
+    : i nr ( vec_len [( Vec String )] rows )
     : ~ i i 0
     ~ < i nr {
-        : ? ( Vec String ) row_opt ( vec_get [ ( Vec String ) ] rows i )
+        : ?( Vec String ) row_opt ( vec_get [( Vec String )] rows i )
         ?? row_opt {
             T row → {
                 : i nc ( vec_len [String] row )
                 : ~ i j 0
                 ~ < j nc {
-                    : ? String s_opt ( vec_get [String] row j )
+                    : ?String s_opt ( vec_get [String] row j )
                     ?? s_opt {
                         T s → ( __csv_format_field out ( string_data s ) delim quote )
                         F → {}
@@ -1147,7 +1150,7 @@ $ `stdlib/std/hashmap.nu`
             = i + i 1
         }
     } {}
-    
+
     ? need_quote {
         ( string_push_char out quote )
         : i len ( nurl_str_len data )
@@ -1189,12 +1192,12 @@ $ `stdlib/std/hashmap.nu`
 : CSVTableA {
     String content
     ( Vec String ) headers
-    ( Vec i ) flat_cells       // [off0,len0,off1,len1,...]
-    ( Vec i ) row_starts       // length = n_rows; cell-index of row r
-    ( Vec i ) row_lens         // length = n_rows; cell count of row r
-    ( Vec u ) escape_buf       // unescaped quoted-cell bytes
-                               // off ≥ 0 → into content[]
-                               // off  < 0 → into escape_buf[-off-1..]
+    ( Vec i ) flat_cells  // [off0,len0,off1,len1,...]
+    ( Vec i ) row_starts  // length = n_rows; cell-index of row r
+    ( Vec i ) row_lens  // length = n_rows; cell count of row r
+    ( Vec u ) escape_buf  // unescaped quoted-cell bytes
+    // off ≥ 0 → into content[]
+    // off  < 0 → into escape_buf[-off-1..]
 }
 
 @ csv_table_a_new → *CSVTableA {
@@ -1208,7 +1211,7 @@ $ `stdlib/std/hashmap.nu`
     ^ t
 }
 
-@ csv_table_a_free *CSVTableA t → v {
+@ csv_table_a_free * CSVTableA t → v {
     ( string_free . t content )
     ( __csv_row_free . t headers )
     ( vec_free [i] . t flat_cells )
@@ -1218,11 +1221,11 @@ $ `stdlib/std/hashmap.nu`
     ( nurl_free t )
 }
 
-@ csv_table_a_n_rows *CSVTableA t → i { ^ ( vec_len [i] . t row_starts ) }
+@ csv_table_a_n_rows * CSVTableA t → i { ^ ( vec_len [i] . t row_starts ) }
 
-@ csv_table_a_n_cols *CSVTableA t → i { ^ ( vec_len [String] . t headers ) }
+@ csv_table_a_n_cols * CSVTableA t → i { ^ ( vec_len [String] . t headers ) }
 
-@ csv_table_a_n_cells_in_row *CSVTableA t i row → i {
+@ csv_table_a_n_cells_in_row * CSVTableA t i row → i {
     : i nr ( csv_table_a_n_rows t )
     ? | < row 0 >= row nr { ^ 0 } {}
     : *i rlp ( vec_data [i] . t row_lens )
@@ -1236,7 +1239,7 @@ $ `stdlib/std/hashmap.nu`
 // embedded `""` escapes — the materialized bytes live in
 // `t.escape_buf` at index `-off - 1`. Unquoted cells and quoted cells
 // without escapes both stay zero-copy into `t.content`.
-@ csv_table_a_view *CSVTableA t i row i col → s {
+@ csv_table_a_view * CSVTableA t i row i col → s {
     : i nr ( csv_table_a_n_rows t )
     ? | < row 0 >= row nr { ^ # s 0 } {}
     : *i rsp ( vec_data [i] . t row_starts )
@@ -1256,7 +1259,7 @@ $ `stdlib/std/hashmap.nu`
     ^ # s + # i eb esc_off
 }
 
-@ csv_table_a_view_len *CSVTableA t i row i col → i {
+@ csv_table_a_view_len * CSVTableA t i row i col → i {
     : i nr ( csv_table_a_n_rows t )
     ? | < row 0 >= row nr { ^ 0 } {}
     : *i rsp ( vec_data [i] . t row_starts )
@@ -1270,15 +1273,15 @@ $ `stdlib/std/hashmap.nu`
 }
 
 // Owned String copy of (row, col). One per call; caller frees.
-@ csv_table_a_get_string *CSVTableA t i row i col → ? String {
+@ csv_table_a_get_string * CSVTableA t i row i col → ?String {
     : s view ( csv_table_a_view t row col )
-    ? == # i view 0 { ^ @ ? String { F # String 0 } } {}
+    ? == # i view 0 { ^ @ ?String { F # String 0 } } {}
     : i len ( csv_table_a_view_len t row col )
-    ^ @ ? String { T ( string_from_bytes # *u view len ) }
+    ^ @ ?String { T ( string_from_bytes # *u view len ) }
 }
 
 // Index of a column by header name (case-sensitive). None if absent.
-@ csv_table_a_col_index *CSVTableA t s name → ? i {
+@ csv_table_a_col_index * CSVTableA t s name → ?i {
     : ( Vec String ) hs . t headers
     : i n ( vec_len [String] hs )
     : *String hp ( vec_data [String] hs )
@@ -1286,16 +1289,16 @@ $ `stdlib/std/hashmap.nu`
     ~ < i n {
         : String h . hp i
         ? == ( nurl_str_eq ( string_data h ) name ) 1 {
-            ^ @ ? i { T i }
+            ^ @ ?i { T i }
         } {}
         = i + i 1
     }
-    ^ @ ? i { F 0 }
+    ^ @ ?i { F 0 }
 }
 
 // Borrowed `s` view by column name. `# s 0` (NULL) on miss.
-@ csv_table_a_view_by_name *CSVTableA t i row s name → s {
-    : ? i col_opt ( csv_table_a_col_index t name )
+@ csv_table_a_view_by_name * CSVTableA t i row s name → s {
+    : ?i col_opt ( csv_table_a_col_index t name )
     ?? col_opt {
         T col → { ^ ( csv_table_a_view t row col ) }
         F → { ^ # s 0 }
@@ -1306,7 +1309,7 @@ $ `stdlib/std/hashmap.nu`
 // flat_cells. Returns the new `pos` (advanced past the LF/CRLF or
 // past clen). Cells are NOT copied; only their byte ranges into
 // `cd` are recorded.
-@ __csv_a_scan_row *CSVTableA t *u cd i clen i pos i delim → i {
+@ __csv_a_scan_row * CSVTableA t * u cd i clen i pos i delim → i {
     : ~ i p pos
     : ~ i field_start p
     : ~ b in_row T
@@ -1367,7 +1370,7 @@ $ `stdlib/std/hashmap.nu`
 // Both helpers stay in `stdlib/runtime.c` as Phase 3 infrastructure
 // for the typed-schema reader, where per-row FFI is amortized over
 // useful per-row typed parsing.
-@ __csv_a_parse_content *CSVTableA t CSVDialect dia → v {
+@ __csv_a_parse_content * CSVTableA t CSVDialect dia → v {
     : *u cd # *u ( string_data . t content )
     : i clen ( string_len . t content )
     : i delim . dia delimiter
@@ -1384,9 +1387,9 @@ $ `stdlib/std/hashmap.nu`
     : i row_est / clen 100
     ? < row_est 16 { = row_est 16 } {}
     ( vec_reserve [i] . t row_starts row_est )
-    ( vec_reserve [i] . t row_lens   row_est )
+    ( vec_reserve [i] . t row_lens row_est )
 
-    : ~ i row_w 0           // committed body-row count
+    : ~ i row_w 0  // committed body-row count
 
     : ~ i pos 0
     : ~ b first_row T
@@ -1401,7 +1404,7 @@ $ `stdlib/std/hashmap.nu`
         // their pointers stable for the inner body of this row.
         ( vec_reserve [i] . t flat_cells + row_first_i64 max_row_i64 )
         ( vec_reserve [i] . t row_starts + row_w 1 )
-        ( vec_reserve [i] . t row_lens   + row_w 1 )
+        ( vec_reserve [i] . t row_lens + row_w 1 )
         : *i fcp ( vec_data [i] . t flat_cells )
         : *i rsp_w ( vec_data [i] . t row_starts )
         : *i rlp_w ( vec_data [i] . t row_lens )
@@ -1425,7 +1428,7 @@ $ `stdlib/std/hashmap.nu`
             } {}
 
             ? is_quoted {
-                = p + p 1                   // skip opening quote
+                = p + p 1  // skip opening quote
                 : i scan_start p
                 : ~ b had_escape F
                 : ~ i esc_buf_start 0
@@ -1541,7 +1544,7 @@ $ `stdlib/std/hashmap.nu`
                 ~ < k n_cells {
                     : i off . fcp + row_first_i64 * k 2
                     : i len . fcp + + row_first_i64 * k 2 1
-                    : ~ *u src # *u 0
+                    : ~ * u src # *u 0
                     ? >= off 0 {
                         = src # *u + # i cd off
                     } {
@@ -1567,7 +1570,7 @@ $ `stdlib/std/hashmap.nu`
 
     // Commit raw row counters into the underlying Vec[i]'s len field.
     : b _r1 ( vec_set_len [i] . t row_starts row_w )
-    : b _r2 ( vec_set_len [i] . t row_lens   row_w )
+    : b _r2 ( vec_set_len [i] . t row_lens row_w )
 }
 
 @ csv_table_a_from_string String content → *CSVTableA {
@@ -1589,7 +1592,7 @@ $ `stdlib/std/hashmap.nu`
 // Load a CSV file using the default dialect, returning an arena
 // table. NULL on read failure.
 @ csv_table_a_load s path → *CSVTableA {
-    : ! String IoErr res ( read_file path )
+    : !String IoErr res ( read_file path )
     ?? res {
         F e → { ^ # *CSVTableA 0 }
         T content → { ^ ( csv_table_a_from_string content ) }
@@ -1597,7 +1600,7 @@ $ `stdlib/std/hashmap.nu`
 }
 
 @ csv_table_a_load_dialect s path CSVDialect dia → *CSVTableA {
-    : ! String IoErr res ( read_file path )
+    : !String IoErr res ( read_file path )
     ?? res {
         F e → { ^ # *CSVTableA 0 }
         T content → { ^ ( csv_table_a_from_string_dialect content dia ) }
@@ -1607,7 +1610,7 @@ $ `stdlib/std/hashmap.nu`
 // Promote an arena table to v1 CSVTable (deep-copies every cell).
 // Use only when independent lifetimes are needed; the per-cell malloc
 // cost is paid here.
-@ csv_table_a_to_table *CSVTableA src → *CSVTable {
+@ csv_table_a_to_table * CSVTableA src → *CSVTable {
     : *CSVTable out ( csv_table_new )
     ( __csv_row_free . out headers )
     : i nh ( vec_len [String] . src headers )
@@ -1638,7 +1641,7 @@ $ `stdlib/std/hashmap.nu`
             : i cell_idx + row_first ci
             : i off . fcp * cell_idx 2
             : i len . fcp + * cell_idx 2 1
-            : ~ *u src_p # *u 0
+            : ~ * u src_p # *u 0
             ? >= off 0 { = src_p # *u + # i cd off }
             { = src_p # *u + # i eb - 0 + off 1 }
             ( vec_push [String] cells ( string_from_bytes src_p len ) )
@@ -1658,7 +1661,7 @@ $ `stdlib/std/hashmap.nu`
 // the arena: everything downstream of load is essentially free.
 
 // Permute (row_starts, row_lens) in place by `order`.
-@ __csv_a_permute_rows *CSVTableA t ( Vec i ) order → v {
+@ __csv_a_permute_rows * CSVTableA t ( Vec i ) order → v {
     : i n ( vec_len [i] order )
     : ( Vec i ) new_starts ( vec_with_cap [i] n )
     : ( Vec i ) new_lens ( vec_with_cap [i] n )
@@ -1681,7 +1684,7 @@ $ `stdlib/std/hashmap.nu`
 // Numeric int sort: 1 parse per row + i64 sort over a permutation.
 // Parses cell at `col` as a signed decimal integer; unparseable cells
 // compare as 0.
-@ csv_table_a_sort_by_int *CSVTableA t i col b asc → v {
+@ csv_table_a_sort_by_int * CSVTableA t i col b asc → v {
     : i n ( csv_table_a_n_rows t )
     ? > n 1 {
         : b ascending asc
@@ -1727,7 +1730,7 @@ $ `stdlib/std/hashmap.nu`
 }
 
 // Numeric float sort. Unparseable cells compare as 0.0.
-@ csv_table_a_sort_by_float *CSVTableA t i col b asc → v {
+@ csv_table_a_sort_by_float * CSVTableA t i col b asc → v {
     : i n ( csv_table_a_n_rows t )
     ? > n 1 {
         : b ascending asc
@@ -1774,7 +1777,7 @@ $ `stdlib/std/hashmap.nu`
 
 // String sort by raw bytes (memcmp + tiebreak by length). Out-of-range
 // cells sort to the end.
-@ csv_table_a_sort_by_string *CSVTableA t i col b asc → v {
+@ csv_table_a_sort_by_string * CSVTableA t i col b asc → v {
     : i n ( csv_table_a_n_rows t )
     ? > n 1 {
         : b ascending asc
@@ -1862,7 +1865,7 @@ $ `stdlib/std/hashmap.nu`
 // rewrites the row index Vecs, never reloads flat_cells/content.
 // `compare/nurl_analysis_arena.nu` benchmarks at 157 ms (was 185 ms)
 // using this pattern — savings 12 M FFI calls per million rows.
-@ csv_table_a_filter *CSVTableA t (@ b *CSVTableA i) pred → v {
+@ csv_table_a_filter * CSVTableA t ( @ b * CSVTableA i ) pred → v {
     : i n ( csv_table_a_n_rows t )
     : ( Vec i ) new_starts ( vec_new [i] )
     : ( Vec i ) new_lens ( vec_new [i] )
@@ -1883,7 +1886,7 @@ $ `stdlib/std/hashmap.nu`
 }
 
 // In-place truncate to first `n` rows.
-@ csv_table_a_truncate *CSVTableA t i n → v {
+@ csv_table_a_truncate * CSVTableA t i n → v {
     : i nr ( csv_table_a_n_rows t )
     : ~ i keep n
     ? < keep 0 { = keep 0 } {}
@@ -1898,7 +1901,7 @@ $ `stdlib/std/hashmap.nu`
 // live in `escape_buf` (off < 0, only ever produced by the parser
 // for cells that contained `""` escapes) are ALWAYS emitted quoted —
 // they had embedded quotes by definition.
-@ __csv_a_write_cell *v fh *u src i len i delim i quote → v {
+@ __csv_a_write_cell * v fh * u src i len i delim i quote → v {
     ? == quote 0 {
         ( nurl_file_write_range fh # s src len )
     } {
@@ -1948,7 +1951,7 @@ $ `stdlib/std/hashmap.nu`
 // emits a quoted form with `""` escapes. Set `dia.quote_char = 0`
 // (`csv_dialect_unquoted`) to bypass the quote-detection scan and
 // match Phase 2a/2b raw-write speed exactly.
-@ csv_table_a_write *CSVTableA t s path CSVDialect dia → b {
+@ csv_table_a_write * CSVTableA t s path CSVDialect dia → b {
     : *v fh ( nurl_file_open path `w` )
     ? == # i fh 0 { ^ F } {}
     : i delim . dia delimiter
@@ -1986,7 +1989,7 @@ $ `stdlib/std/hashmap.nu`
             : i cell_idx + row_first ci
             : i off . fcp * cell_idx 2
             : i len . fcp + * cell_idx 2 1
-            : ~ *u sp # *u 0
+            : ~ * u sp # *u 0
             ? >= off 0 { = sp # *u + # i cd off }
             { = sp # *u + # i eb - 0 + off 1 }
             ( __csv_a_write_cell fh sp len delim quote )

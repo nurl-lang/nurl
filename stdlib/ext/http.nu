@@ -105,55 +105,55 @@ $ `stdlib/core/errors.nu`
 : Response { s raw }
 
 @ header_new s name s value → Header {
-  : String n ( string_from name )
-  : String v ( string_from value )
-  ^ @ Header { n v }
+    : String n ( string_from name )
+    : String v ( string_from value )
+    ^ @ Header { n v }
 }
 
 @ header_free Header h → v {
-  ( string_free . h name )
-  ( string_free . h value )
+    ( string_free . h name )
+    ( string_free . h value )
 }
 
 // Build a one-line "Name: Value\r\n" String. Useful for assembling a
 // blob with `string_concat` when the caller wants typed pieces but not
 // a full Vec[Header].
 @ header_blob_one s name s value → String {
-  : i nl ( nurl_str_len name )
-  : i vl ( nurl_str_len value )
-  : String b ( string_with_cap + + nl vl 4 )
-  ( string_push_str b name )
-  ( string_push_str b `: ` )
-  ( string_push_str b value )
-  ( string_push_str b `\r\n` )
-  ^ b
+    : i nl ( nurl_str_len name )
+    : i vl ( nurl_str_len value )
+    : String b ( string_with_cap + + nl vl 4 )
+    ( string_push_str b name )
+    ( string_push_str b `: ` )
+    ( string_push_str b value )
+    ( string_push_str b `\r\n` )
+    ^ b
 }
 
 // Internal: dispatch the runtime call result onto a NURL ! Response HttpErr.
 // `raw` is the i64 returned by `nurl_http_perform_full` — 0 means the
 // runtime couldn't even allocate; non-zero is a heap pointer whose
 // `err_kind` field tells us whether the transport succeeded.
-@ __http_dispatch i raw → ! Response HttpErr {
-  ? == raw 0 { ^ @ ! Response HttpErr { F # HttpErr HttpOther } } {}
-  : i ek ( nurl_http_response_err_kind raw )
-  ? != ek 0 {
-    ( nurl_http_response_free raw )
-    ? == ek 1 { ^ @ ! Response HttpErr { F # HttpErr HttpConnect    } } {}
-    ? == ek 2 { ^ @ ! Response HttpErr { F # HttpErr HttpTimeout    } } {}
-    ? == ek 3 { ^ @ ! Response HttpErr { F # HttpErr HttpTls        } } {}
-    ? == ek 4 { ^ @ ! Response HttpErr { F # HttpErr HttpDns        } } {}
-    ? == ek 5 { ^ @ ! Response HttpErr { F # HttpErr HttpInvalidUrl } } {}
-    ^ @ ! Response HttpErr { F # HttpErr HttpOther }
-  } {}
-  : s rp #s raw
-  : Response r @ Response { rp }
-  ^ @ ! Response HttpErr { T r }
+@ __http_dispatch i raw → !Response HttpErr {
+    ? == raw 0 { ^ @ !Response HttpErr { F # HttpErr HttpOther } } {}
+    : i ek ( nurl_http_response_err_kind raw )
+    ? != ek 0 {
+        ( nurl_http_response_free raw )
+        ? == ek 1 { ^ @ !Response HttpErr { F # HttpErr HttpConnect } } {}
+        ? == ek 2 { ^ @ !Response HttpErr { F # HttpErr HttpTimeout } } {}
+        ? == ek 3 { ^ @ !Response HttpErr { F # HttpErr HttpTls } } {}
+        ? == ek 4 { ^ @ !Response HttpErr { F # HttpErr HttpDns } } {}
+        ? == ek 5 { ^ @ !Response HttpErr { F # HttpErr HttpInvalidUrl } } {}
+        ^ @ !Response HttpErr { F # HttpErr HttpOther }
+    } {}
+    : s rp # s raw
+    : Response r @ Response { rp }
+    ^ @ !Response HttpErr { T r }
 }
 
 // Core entry point: every other wrapper funnels through here.
-@ http_request s method s url s body s headers_blob → ! Response HttpErr {
-  : i raw ( nurl_http_perform_full url method body headers_blob )
-  ^ ( __http_dispatch raw )
+@ http_request s method s url s body s headers_blob → !Response HttpErr {
+    : i raw ( nurl_http_perform_full url method body headers_blob )
+    ^ ( __http_dispatch raw )
 }
 
 // Same as http_request but with explicit per-call timeouts in
@@ -162,20 +162,20 @@ $ `stdlib/core/errors.nu`
 // LLM clients (Anthropic / OpenAI etc.) where a single request can
 // take a minute or more, far longer than the MVP HTTP budget.
 @ http_request_to s method s url s body s headers_blob i timeout_ms i connect_timeout_ms
-                  → ! Response HttpErr {
-  : i raw ( nurl_http_perform_full_to url method body headers_blob
-                                       timeout_ms connect_timeout_ms )
-  ^ ( __http_dispatch raw )
+→ !Response HttpErr {
+    : i raw ( nurl_http_perform_full_to url method body headers_blob
+    timeout_ms connect_timeout_ms )
+    ^ ( __http_dispatch raw )
 }
 
 // ── GET ─────────────────────────────────────────────────────────────
 
-@ http_get s url → ! Response HttpErr {
-  ^ ( http_request `GET` url `` `` )
+@ http_get s url → !Response HttpErr {
+    ^ ( http_request `GET` url `` `` )
 }
 
-@ http_get_with_headers s url s headers_blob → ! Response HttpErr {
-  ^ ( http_request `GET` url `` headers_blob )
+@ http_get_with_headers s url s headers_blob → !Response HttpErr {
+    ^ ( http_request `GET` url `` headers_blob )
 }
 
 // ── POST / PUT / PATCH (body + Content-Type) ───────────────────────
@@ -186,99 +186,99 @@ $ `stdlib/core/errors.nu`
 // override individual fields if desired.
 
 @ __with_ct s ct s headers_blob → String {
-  : i ctl ( nurl_str_len ct )
-  : i hbl ( nurl_str_len headers_blob )
-  : String b ( string_with_cap + + ctl hbl 32 )
-  ? > ctl 0 {
-    ( string_push_str b `Content-Type: ` )
-    ( string_push_str b ct )
-    ( string_push_str b `\r\n` )
-  } {}
-  ? > hbl 0 { ( string_push_str b headers_blob ) } {}
-  ^ b
+    : i ctl ( nurl_str_len ct )
+    : i hbl ( nurl_str_len headers_blob )
+    : String b ( string_with_cap + + ctl hbl 32 )
+    ? > ctl 0 {
+        ( string_push_str b `Content-Type: ` )
+        ( string_push_str b ct )
+        ( string_push_str b `\r\n` )
+    } {}
+    ? > hbl 0 { ( string_push_str b headers_blob ) } {}
+    ^ b
 }
 
-@ http_post s url s body s content_type → ! Response HttpErr {
-  : String hb ( __with_ct content_type `` )
-  : ! Response HttpErr res ( http_request `POST` url body ( string_data hb ) )
-  ( string_free hb )
-  ^ res
+@ http_post s url s body s content_type → !Response HttpErr {
+    : String hb ( __with_ct content_type `` )
+    : !Response HttpErr res ( http_request `POST` url body ( string_data hb ) )
+    ( string_free hb )
+    ^ res
 }
 
-@ http_post_with_headers s url s body s content_type s headers_blob → ! Response HttpErr {
-  : String hb ( __with_ct content_type headers_blob )
-  : ! Response HttpErr res ( http_request `POST` url body ( string_data hb ) )
-  ( string_free hb )
-  ^ res
+@ http_post_with_headers s url s body s content_type s headers_blob → !Response HttpErr {
+    : String hb ( __with_ct content_type headers_blob )
+    : !Response HttpErr res ( http_request `POST` url body ( string_data hb ) )
+    ( string_free hb )
+    ^ res
 }
 
-@ http_put s url s body s content_type → ! Response HttpErr {
-  : String hb ( __with_ct content_type `` )
-  : ! Response HttpErr res ( http_request `PUT` url body ( string_data hb ) )
-  ( string_free hb )
-  ^ res
+@ http_put s url s body s content_type → !Response HttpErr {
+    : String hb ( __with_ct content_type `` )
+    : !Response HttpErr res ( http_request `PUT` url body ( string_data hb ) )
+    ( string_free hb )
+    ^ res
 }
 
-@ http_patch s url s body s content_type → ! Response HttpErr {
-  : String hb ( __with_ct content_type `` )
-  : ! Response HttpErr res ( http_request `PATCH` url body ( string_data hb ) )
-  ( string_free hb )
-  ^ res
+@ http_patch s url s body s content_type → !Response HttpErr {
+    : String hb ( __with_ct content_type `` )
+    : !Response HttpErr res ( http_request `PATCH` url body ( string_data hb ) )
+    ( string_free hb )
+    ^ res
 }
 
-@ http_delete s url → ! Response HttpErr {
-  ^ ( http_request `DELETE` url `` `` )
+@ http_delete s url → !Response HttpErr {
+    ^ ( http_request `DELETE` url `` `` )
 }
 
 // ── Accessors (borrowed views) ─────────────────────────────────────
 
 @ http_status Response r → i {
-  : s rp . r raw
-  : i raw # i rp
-  ^ ( nurl_http_response_status raw )
+    : s rp . r raw
+    : i raw # i rp
+    ^ ( nurl_http_response_status raw )
 }
 
 @ http_body_str Response r → s {
-  : s rp . r raw
-  : i raw # i rp
-  ^ ( nurl_http_response_body raw )
+    : s rp . r raw
+    : i raw # i rp
+    ^ ( nurl_http_response_body raw )
 }
 
 @ http_header_count Response r → i {
-  : s rp . r raw
-  : i raw # i rp
-  ^ ( nurl_http_response_header_count raw )
+    : s rp . r raw
+    : i raw # i rp
+    ^ ( nurl_http_response_header_count raw )
 }
 
 @ http_header_name Response r i idx → s {
-  : s rp . r raw
-  : i raw # i rp
-  ^ ( nurl_http_response_header_name raw idx )
+    : s rp . r raw
+    : i raw # i rp
+    ^ ( nurl_http_response_header_name raw idx )
 }
 
 @ http_header_value Response r i idx → s {
-  : s rp . r raw
-  : i raw # i rp
-  ^ ( nurl_http_response_header_value raw idx )
+    : s rp . r raw
+    : i raw # i rp
+    ^ ( nurl_http_response_header_value raw idx )
 }
 
 @ response_free Response r → v {
-  : s rp . r raw
-  : i raw # i rp
-  ( nurl_http_response_free raw )
+    : s rp . r raw
+    : i raw # i rp
+    ( nurl_http_response_free raw )
 }
 
 // Render a HttpErr variant name. Useful for diagnostic messages without
 // a full match cascade at every call site.
 @ http_err_name HttpErr e → s {
-  ^ ?? e {
-    HttpConnect    → `HttpConnect`
-    HttpTimeout    → `HttpTimeout`
-    HttpTls        → `HttpTls`
-    HttpDns        → `HttpDns`
-    HttpInvalidUrl → `HttpInvalidUrl`
-    HttpOther      → `HttpOther`
-  }
+    ^ ?? e {
+        HttpConnect → `HttpConnect`
+        HttpTimeout → `HttpTimeout`
+        HttpTls → `HttpTls`
+        HttpDns → `HttpDns`
+        HttpInvalidUrl → `HttpInvalidUrl`
+        HttpOther → `HttpOther`
+    }
 }
 
 // ── HTTP streaming (pull-based) ─────────────────────────────────────
@@ -322,62 +322,62 @@ $ `stdlib/core/errors.nu`
 : HttpStream { i raw }
 
 @ http_stream_open_to s method s url s body s headers_blob
-                      i timeout_ms i connect_timeout_ms
-                      → ! HttpStream HttpErr {
-  : i raw ( nurl_http_stream_open_to method url body headers_blob
-                                     timeout_ms connect_timeout_ms )
-  ? == raw 0 {
-    ^ @ ! HttpStream HttpErr { F # HttpErr HttpOther }
-  } {}
-  // Probe err_kind in case open succeeded structurally but libcurl
-  // refused (e.g. malformed URL) — match the dispatch shape used by
-  // the synchronous wrapper so call sites stay symmetric.
-  : i ek ( nurl_http_stream_err_kind raw )
-  ? != ek 0 {
-    ( nurl_http_stream_close raw )
-    ? == ek 1 { ^ @ ! HttpStream HttpErr { F # HttpErr HttpConnect    } } {}
-    ? == ek 2 { ^ @ ! HttpStream HttpErr { F # HttpErr HttpTimeout    } } {}
-    ? == ek 3 { ^ @ ! HttpStream HttpErr { F # HttpErr HttpTls        } } {}
-    ? == ek 4 { ^ @ ! HttpStream HttpErr { F # HttpErr HttpDns        } } {}
-    ? == ek 5 { ^ @ ! HttpStream HttpErr { F # HttpErr HttpInvalidUrl } } {}
-    ^ @ ! HttpStream HttpErr { F # HttpErr HttpOther }
-  } {}
-  ^ @ ! HttpStream HttpErr { T @ HttpStream { raw } }
+i timeout_ms i connect_timeout_ms
+→ !HttpStream HttpErr {
+    : i raw ( nurl_http_stream_open_to method url body headers_blob
+    timeout_ms connect_timeout_ms )
+    ? == raw 0 {
+        ^ @ !HttpStream HttpErr { F # HttpErr HttpOther }
+    } {}
+    // Probe err_kind in case open succeeded structurally but libcurl
+    // refused (e.g. malformed URL) — match the dispatch shape used by
+    // the synchronous wrapper so call sites stay symmetric.
+    : i ek ( nurl_http_stream_err_kind raw )
+    ? != ek 0 {
+        ( nurl_http_stream_close raw )
+        ? == ek 1 { ^ @ !HttpStream HttpErr { F # HttpErr HttpConnect } } {}
+        ? == ek 2 { ^ @ !HttpStream HttpErr { F # HttpErr HttpTimeout } } {}
+        ? == ek 3 { ^ @ !HttpStream HttpErr { F # HttpErr HttpTls } } {}
+        ? == ek 4 { ^ @ !HttpStream HttpErr { F # HttpErr HttpDns } } {}
+        ? == ek 5 { ^ @ !HttpStream HttpErr { F # HttpErr HttpInvalidUrl } } {}
+        ^ @ !HttpStream HttpErr { F # HttpErr HttpOther }
+    } {}
+    ^ @ !HttpStream HttpErr { T @ HttpStream { raw } }
 }
 
 @ http_stream_open s method s url s body s headers_blob
-                   → ! HttpStream HttpErr {
-  ^ ( http_stream_open_to method url body headers_blob 0 0 )
+→ !HttpStream HttpErr {
+    ^ ( http_stream_open_to method url body headers_blob 0 0 )
 }
 
-@ http_stream_next HttpStream st → ? String {
-  : i raw . st raw
-  : s p ( nurl_http_stream_next raw )
-  ? == # i p 0 { ^ @ ? String { F # String 0 } } {}
-  : String s ( string_from p )
-  ^ @ ? String { T s }
+@ http_stream_next HttpStream st → ?String {
+    : i raw . st raw
+    : s p ( nurl_http_stream_next raw )
+    ? == # i p 0 { ^ @ ?String { F # String 0 } } {}
+    : String s ( string_from p )
+    ^ @ ?String { T s }
 }
 
 @ http_stream_status HttpStream st → i {
-  : i raw . st raw
-  ^ ( nurl_http_stream_status raw )
+    : i raw . st raw
+    ^ ( nurl_http_stream_status raw )
 }
 
-@ http_stream_err HttpStream st → ? HttpErr {
-  : i raw . st raw
-  : i ek ( nurl_http_stream_err_kind raw )
-  ? == ek 0 { ^ @ ? HttpErr { F # HttpErr HttpOther } } {}
-  ? == ek 1 { ^ @ ? HttpErr { T # HttpErr HttpConnect    } } {}
-  ? == ek 2 { ^ @ ? HttpErr { T # HttpErr HttpTimeout    } } {}
-  ? == ek 3 { ^ @ ? HttpErr { T # HttpErr HttpTls        } } {}
-  ? == ek 4 { ^ @ ? HttpErr { T # HttpErr HttpDns        } } {}
-  ? == ek 5 { ^ @ ? HttpErr { T # HttpErr HttpInvalidUrl } } {}
-  ^ @ ? HttpErr { T # HttpErr HttpOther }
+@ http_stream_err HttpStream st → ?HttpErr {
+    : i raw . st raw
+    : i ek ( nurl_http_stream_err_kind raw )
+    ? == ek 0 { ^ @ ?HttpErr { F # HttpErr HttpOther } } {}
+    ? == ek 1 { ^ @ ?HttpErr { T # HttpErr HttpConnect } } {}
+    ? == ek 2 { ^ @ ?HttpErr { T # HttpErr HttpTimeout } } {}
+    ? == ek 3 { ^ @ ?HttpErr { T # HttpErr HttpTls } } {}
+    ? == ek 4 { ^ @ ?HttpErr { T # HttpErr HttpDns } } {}
+    ? == ek 5 { ^ @ ?HttpErr { T # HttpErr HttpInvalidUrl } } {}
+    ^ @ ?HttpErr { T # HttpErr HttpOther }
 }
 
 @ http_stream_close HttpStream st → v {
-  : i raw . st raw
-  ( nurl_http_stream_close raw )
+    : i raw . st raw
+    ( nurl_http_stream_close raw )
 }
 
 // Pump the multi handle until the upstream response headers are
@@ -396,26 +396,26 @@ $ `stdlib/core/errors.nu`
 // upstream status + headers before deciding what to write back to the
 // downstream client.
 @ http_stream_pump_headers HttpStream st → i {
-  : i raw . st raw
-  ^ ( nurl_http_stream_pump_headers raw )
+    : i raw . st raw
+    ^ ( nurl_http_stream_pump_headers raw )
 }
 
 @ http_stream_header_count HttpStream st → i {
-  : i raw . st raw
-  ^ ( nurl_http_stream_header_count raw )
+    : i raw . st raw
+    ^ ( nurl_http_stream_header_count raw )
 }
 
 // BORROWED — lifetime tied to the HttpStream handle. Free not required
 // (and not allowed); copy with `string_from` if a long-lived String is
 // needed.
 @ http_stream_header_name HttpStream st i idx → s {
-  : i raw . st raw
-  ^ ( nurl_http_stream_header_name raw idx )
+    : i raw . st raw
+    ^ ( nurl_http_stream_header_name raw idx )
 }
 
 @ http_stream_header_value HttpStream st i idx → s {
-  : i raw . st raw
-  ^ ( nurl_http_stream_header_value raw idx )
+    : i raw . st raw
+    ^ ( nurl_http_stream_header_value raw idx )
 }
 
 // ── SSE parser (Server-Sent Events / W3C, Anthropic streaming) ──────
@@ -465,19 +465,19 @@ $ `stdlib/core/errors.nu`
 // Copy bytes [from, from+n) of a raw `s` into a fresh owned String.
 // Used internally by the SSE parser to materialise frame field tokens.
 @ __sse_substr s p i from i n → String {
-  : String out ( string_with_cap n )
-  : ~ i k 0
-  ~ < k n {
-    ( string_push_char out ( nurl_str_get p + from k ) )
-    = k + k 1
-  }
-  ^ out
+    : String out ( string_with_cap n )
+    : ~ i k 0
+    ~ < k n {
+        ( string_push_char out ( nurl_str_get p + from k ) )
+        = k + k 1
+    }
+    ^ out
 }
 
 @ sse_event_free SseEvent e → v {
-  ( string_free . e name )
-  ( string_free . e data )
-  ( string_free . e id )
+    ( string_free . e name )
+    ( string_free . e data )
+    ( string_free . e id )
 }
 
 // Find the first `\n\n` separator inside the accumulator buffer. Returns
@@ -485,79 +485,79 @@ $ `stdlib/core/errors.nu`
 // `acc[0 .. offset)` and the next frame starts at `offset + 2`). Returns
 // -1 when no complete frame is buffered yet.
 @ sse_frame_end s acc i acc_len → i {
-  : ~ i i 0
-  ~ < i - acc_len 1 {
-    ? & == ( nurl_str_get acc i ) 10 == ( nurl_str_get acc + i 1 ) 10 {
-      ^ i
-    } {}
-    = i + i 1
-  }
-  ^ -1
+    : ~ i i 0
+    ~ < i - acc_len 1 {
+        ? & == ( nurl_str_get acc i ) 10 == ( nurl_str_get acc + i 1 ) 10 {
+            ^ i
+        } {}
+        = i + i 1
+    }
+    ^ -1
 }
 
 // Parse a complete frame (the bytes up to but excluding the `\n\n`
 // separator). Returns an owned SseEvent — empty fields are valid (e.g.
 // no `event:` line → name = ""). Caller frees with `sse_event_free`.
 @ sse_parse_frame s frame i frame_len → SseEvent {
-  : String name ( string_new )
-  : String data ( string_new )
-  : String id   ( string_new )
-  : ~ b first_data_line T
+    : String name ( string_new )
+    : String data ( string_new )
+    : String id ( string_new )
+    : ~ b first_data_line T
 
-  : ~ i ls 0
-  : ~ i i 0
-  ~ <= i frame_len {
-    : i c ? < i frame_len ( nurl_str_get frame i ) 10
-    ? == c 10 {
-      : i llen - i ls
-      ? > llen 0 {
-        : i firstc ( nurl_str_get frame ls )
-        ? == firstc 58 {
-          // Comment line — skip.
-        } {
-          // Find the colon delimiter inside [ls, i).
-          : ~ i ci ls
-          : ~ b found F
-          ~ & ! found < ci i {
-            ? == ( nurl_str_get frame ci ) 58 { = found T } {
-              = ci + ci 1
-            }
-          }
-          : i fld_len - ci ls
-          : i vstart ? found + ci 1 i
-          ? & found < vstart i {
-            ? == ( nurl_str_get frame vstart ) 32 { = vstart + vstart 1 } {}
-          } {}
-          : i vlen ? found - i vstart 0
-          : String fld ( __sse_substr frame ls fld_len )
-          : String val ( __sse_substr frame vstart vlen )
+    : ~ i ls 0
+    : ~ i i 0
+    ~ <= i frame_len {
+        : i c ? < i frame_len ( nurl_str_get frame i ) 10
+        ? == c 10 {
+            : i llen - i ls
+            ? > llen 0 {
+                : i firstc ( nurl_str_get frame ls )
+                ? == firstc 58 {
+                    // Comment line — skip.
+                } {
+                    // Find the colon delimiter inside [ls, i).
+                    : ~ i ci ls
+                    : ~ b found F
+                    ~ & ! found < ci i {
+                        ? == ( nurl_str_get frame ci ) 58 { = found T } {
+                            = ci + ci 1
+                        }
+                    }
+                    : i fld_len - ci ls
+                    : i vstart ? found + ci 1 i
+                    ? & found < vstart i {
+                        ? == ( nurl_str_get frame vstart ) 32 { = vstart + vstart 1 } {}
+                    } {}
+                    : i vlen ? found - i vstart 0
+                    : String fld ( __sse_substr frame ls fld_len )
+                    : String val ( __sse_substr frame vstart vlen )
 
-          : s fp ( string_data fld )
-          ? != ( nurl_str_eq fp `event` ) 0 {
-            ( string_free name )
-            = name ( string_from ( string_data val ) )
-          } {
-            ? != ( nurl_str_eq fp `data` ) 0 {
-              ? first_data_line {
-                = first_data_line F
-              } {
-                ( string_push_str data `\n` )
-              }
-              ( string_push_str data ( string_data val ) )
-            } {
-              ? != ( nurl_str_eq fp `id` ) 0 {
-                ( string_free id )
-                = id ( string_from ( string_data val ) )
-              } {}
-            }
-          }
-          ( string_free fld )
-          ( string_free val )
-        }
-      } {}
-      = ls + i 1
-    } {}
-    = i + i 1
-  }
-  ^ @ SseEvent { name data id }
+                    : s fp ( string_data fld )
+                    ? != ( nurl_str_eq fp `event` ) 0 {
+                        ( string_free name )
+                        = name ( string_from ( string_data val ) )
+                    } {
+                        ? != ( nurl_str_eq fp `data` ) 0 {
+                            ? first_data_line {
+                                = first_data_line F
+                            } {
+                                ( string_push_str data `\n` )
+                            }
+                            ( string_push_str data ( string_data val ) )
+                        } {
+                            ? != ( nurl_str_eq fp `id` ) 0 {
+                                ( string_free id )
+                                = id ( string_from ( string_data val ) )
+                            } {}
+                        }
+                    }
+                    ( string_free fld )
+                    ( string_free val )
+                }
+            } {}
+            = ls + i 1
+        } {}
+        = i + i 1
+    }
+    ^ @ SseEvent { name data id }
 }

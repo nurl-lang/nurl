@@ -6,9 +6,9 @@
 
 @ describe_event Event e → s {
     ?? e {
-        Click x    → ( nurl_str_int x )
+        Click x → ( nurl_str_int x )
         KeyPress k → k
-        Close      → `closed`
+        Close → `closed`
     }
 }
 

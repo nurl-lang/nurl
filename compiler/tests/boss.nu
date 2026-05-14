@@ -7,19 +7,19 @@
 
 @ json_to_str Json val → s {
     ?? val {
-        JNull   → `null`
-        JBool b → ? b `true` `false`
-        JNum n  → ( nurl_str_int n )
-        JStr s  → s
+        JNull → `null`
+        JBool b → ?b `true` `false`
+        JNum n → ( nurl_str_int n )
+        JStr s → s
     }
 }
 
 @ json_is_truthy Json val → b {
     ?? val {
-        JNull   → F
+        JNull → F
         JBool b → b
-        JNum n  → != n 0
-        JStr s  → != ( nurl_str_len s ) 0
+        JNum n → != n 0
+        JStr s → != ( nurl_str_len s ) 0
     }
 }
 

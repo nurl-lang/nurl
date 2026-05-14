@@ -28,56 +28,51 @@
 
 : ~ i call_count 0
 
-
 // ── (1) Parametri-vapaa closure tallennettu muuttujaan ───────
-@ make_greeting → (@ s) {
+@ make_greeting → ( @ s ) {
     : s msg `hello`
-    : (@ s) g \ → s { ^ msg }
+    : ( @ s ) g \ → s { ^ msg }
     ^ g
 }
 
-
 // ── (2) Closure-tehdas: palauttaa add-N -funktion ────────────
-@ make_adder i n → (@ i i) {
-    : (@ i i) f \ i x → i { + x n }
+@ make_adder i n → ( @ i i ) {
+    : ( @ i i ) f \ i x → i { + x n }
     ^ f
 }
 
-
 // ── (3) Higher-order: ota closure ja sovella se sliceen ──────
-@ map_i [ i src (@ i i) f → [ i {
+@ map_i [i src ( @ i i ) f → [i {
     : i n . src length
-    : * i buf # * i ( malloc * n 8 )
+    : *i buf # *i ( malloc * n 8 )
     : ~ i i 0
     ~ < i n {
         : i v . src i
         = . buf i ( f v )
         = i + i 1
     }
-    ^ @ [ i { buf n }
+    ^ @ [i { buf n }
 }
 
-
 // ── (4) Closure joka mutatoi globaalia ───────────────────────
-@ make_counter → (@ i i) {
-    : (@ i i) f \ i x → i {
+@ make_counter → ( @ i i ) {
+    : ( @ i i ) f \ i x → i {
         = call_count + call_count 1
         ^ * x x
     }
     ^ f
 }
 
-
 @ main → i {
     // (1) Parametri-vapaa closure
-    : (@ s) greet ( make_greeting )
+    : ( @ s ) greet ( make_greeting )
     ( puts `greet=` )
     ( puts ( greet ) )
     ( puts `\n` )
 
     // (2) Closure kaappaa paikallisen ARVON
     : i x 10
-    : (@ s) show_x \ → s {
+    : ( @ s ) show_x \ → s {
         ( puts `captured x=` )
         ( puts ( nurl_str_int x ) )
         ( puts `\n` )
@@ -91,8 +86,8 @@
     = x 99
 
     // (3) Tehdas tuottaa kaksi riippumatonta closurea
-    : (@ i i) add5  ( make_adder 5 )
-    : (@ i i) add10 ( make_adder 10 )
+    : ( @ i i ) add5 ( make_adder 5 )
+    : ( @ i i ) add10 ( make_adder 10 )
 
     ( puts `add5(3)=` )
     ( puts ( nurl_str_int ( add5 3 ) ) )
@@ -113,16 +108,16 @@
     ( puts `\n` )
 
     // (5) Closure tallennettuna ja kutsuttuna myöhemmin
-    : (@ i i) sq \ i v → i { * v v }
+    : ( @ i i ) sq \ i v → i { * v v }
     : i r ( sq 7 )
     ( puts `stored closure: ` )
     ( puts ( nurl_str_int r ) )
     ( puts `\n` )
 
     // (6) Higher-order: map_i closurella
-    : [ i nums [ i | 1 2 3 4 5 ]
-    : (@ i i) bump \ i n → i { + n 10 }
-    : [ i mapped ( map_i nums bump )
+    : [i nums [i | 1 2 3 4 5]
+    : ( @ i i ) bump \ i n → i { + n 10 }
+    : [i mapped ( map_i nums bump )
     ( puts `mapped: ` )
     : i mn . mapped length
     : ~ i mi 0
@@ -134,7 +129,7 @@
     ( puts `\n` )
 
     // (7) Closure mutatoi globaalia → 3 kutsua → call_count=3
-    : (@ i i) cntr ( make_counter )
+    : ( @ i i ) cntr ( make_counter )
     ( cntr 2 )
     ( cntr 3 )
     ( cntr 4 )

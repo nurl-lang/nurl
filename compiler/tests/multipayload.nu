@@ -6,9 +6,9 @@
 
 @ area Rect r → i {
     ?? r {
-        Pos x y   → * x y
-        Size w h  → * w h
-        Empty     → 0
+        Pos x y → *x y
+        Size w h → *w h
+        Empty → 0
     }
 }
 

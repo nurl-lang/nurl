@@ -31,10 +31,10 @@ $ `tools/nurlfmt/pretty.nu`
 // Read the entire file at `path` into an owned String. Returns an
 // empty String on failure; the caller surfaces the error via stderr.
 @ __slurp_file s path → String {
-    : ! String IoErr rr ( read_file path )
+    : !String IoErr rr ( read_file path )
     ?? rr {
         T body → ^ body
-        F _    → ^ ( string_new )
+        F _ → ^ ( string_new )
     }
 }
 
@@ -107,7 +107,7 @@ $ `tools/nurlfmt/pretty.nu`
         ? same {
             ^ 0
         } {
-            : ! v IoErr wr ( write_file path out_view )
+            : !v IoErr wr ( write_file path out_view )
             ?? wr {
                 T → ^ 0
                 F _ → {
@@ -134,21 +134,21 @@ $ `tools/nurlfmt/pretty.nu`
     : ~ b check_mode F
     : ~ b write_mode F
     : ~ b stdin_mode F
-    : ~ b help_mode  F
+    : ~ b help_mode F
     : ( Vec String ) paths ( vec_with_cap [String] 4 )
 
     : ~ i idx 1
     ~ < idx argc {
         : s a ( nurl_argv_get idx )
-        ? != 0 ( nurl_str_eq a `--help` ) { = help_mode  T } {
-        ? != 0 ( nurl_str_eq a `--check` ) { = check_mode T } {
-        ? != 0 ( nurl_str_eq a `--write` ) { = write_mode T } {
-        ? != 0 ( nurl_str_eq a `--stdin` ) { = stdin_mode T } {
-            // Treat anything else as a file path. `string_from`
-            // copies into an owned String so the Vec keeps a stable
-            // handle after the argv slot rotates.
-            ( vec_push [String] paths ( string_from a ) )
-        }}}}
+        ? != 0 ( nurl_str_eq a `--help` ) { = help_mode T } {
+            ? != 0 ( nurl_str_eq a `--check` ) { = check_mode T } {
+                ? != 0 ( nurl_str_eq a `--write` ) { = write_mode T } {
+                    ? != 0 ( nurl_str_eq a `--stdin` ) { = stdin_mode T } {
+                        // Treat anything else as a file path. `string_from`
+                        // copies into an owned String so the Vec keeps a stable
+                        // handle after the argv slot rotates.
+                        ( vec_push [String] paths ( string_from a ) )
+                    } } } }
         = idx + idx 1
     }
 

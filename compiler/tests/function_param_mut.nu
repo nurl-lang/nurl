@@ -24,42 +24,42 @@
 //
 // Closes the parameter half of docs/GOTCHAS.md §2.
 
-: Counter { i n  i max }
+: Counter { i n i max }
 
 @ inc Counter c → v {
-  = . c n + . c n 1
-  // Read inside the same function call sees the local mutation:
-  ( nurl_print `inside inc: n=` )
-  ( nurl_print ( nurl_str_int . c n ) )
-  ( nurl_print `\n` )
+    = . c n + . c n 1
+    // Read inside the same function call sees the local mutation:
+    ( nurl_print `inside inc: n=` )
+    ( nurl_print ( nurl_str_int . c n ) )
+    ( nurl_print `\n` )
 }
 
 // Return the modified struct so the caller can rebind:
 @ inc_returning Counter c → Counter {
-  = . c n + . c n 1
-  ^ c
+    = . c n + . c n 1
+    ^ c
 }
 
 @ main → i {
-  : Counter c @ Counter { 0 10 }
+    : Counter c @ Counter { 0 10 }
 
-  // Three calls of `inc` — each mutates a separate local copy.
-  // Compiles cleanly (was invalid IR before the fix).
-  ( inc c )
-  ( inc c )
-  ( inc c )
+    // Three calls of `inc` — each mutates a separate local copy.
+    // Compiles cleanly (was invalid IR before the fix).
+    ( inc c )
+    ( inc c )
+    ( inc c )
 
-  // Caller's c is untouched: value semantics.
-  ( nurl_print `caller after inc x3: n=` )
-  ( nurl_print ( nurl_str_int . c n ) )
-  ( nurl_print `\n` )
+    // Caller's c is untouched: value semantics.
+    ( nurl_print `caller after inc x3: n=` )
+    ( nurl_print ( nurl_str_int . c n ) )
+    ( nurl_print `\n` )
 
-  // Returning-pattern threads the mutation back through the return value.
-  = c ( inc_returning c )
-  = c ( inc_returning c )
-  ( nurl_print `caller after inc_returning x2: n=` )
-  ( nurl_print ( nurl_str_int . c n ) )
-  ( nurl_print `\n` )
+    // Returning-pattern threads the mutation back through the return value.
+    = c ( inc_returning c )
+    = c ( inc_returning c )
+    ( nurl_print `caller after inc_returning x2: n=` )
+    ( nurl_print ( nurl_str_int . c n ) )
+    ( nurl_print `\n` )
 
-  ^ 0
+    ^ 0
 }

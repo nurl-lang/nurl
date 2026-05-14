@@ -13,23 +13,23 @@
 //   55
 
 @ double i n → i {
-  ^ + n n
+    ^ + n n
 }
 
 @ sumto i n → i {
-  : i acc 0
-  : i k   1
-  ~ <= k n {
-    = acc + acc k
-    = k   + k   1
-  }
-  ^ acc
+    : i acc 0
+    : i k 1
+    ~ <= k n {
+        = acc + acc k
+        = k + k 1
+    }
+    ^ acc
 }
 
 @ main → v {
-  ( nurl_print_str `Hello, NURL!` )
-  ( nurl_print_int ( double 21 ) )
-  ( nurl_print_bool T )
-  ( nurl_print_bool F )
-  ( nurl_print_int ( sumto 10 ) )
+    ( nurl_print_str `Hello, NURL!` )
+    ( nurl_print_int ( double 21 ) )
+    ( nurl_print_bool T )
+    ( nurl_print_bool F )
+    ( nurl_print_int ( sumto 10 ) )
 }

@@ -42,13 +42,13 @@
 $ `stdlib/std/net.nu`
 
 @ signal_install_shutdown TcpListener listener → v {
-  : s raw . listener raw
-  : i h # i raw
-  ( nurl_signal_install_shutdown h )
+    : s raw . listener raw
+    : i h # i raw
+    ( nurl_signal_install_shutdown h )
 }
 
 @ signal_clear_shutdown → v {
-  ( nurl_signal_install_shutdown 0 )
+    ( nurl_signal_install_shutdown 0 )
 }
 
 // For tests / dev: trigger the same shutdown path the OS-level
@@ -56,5 +56,5 @@ $ `stdlib/std/net.nu`
 // Windows can't be delivered programmatically and on POSIX could
 // kill the test runner if the registration order is wrong).
 @ signal_trigger_shutdown → v {
-  ( nurl_signal_trigger_shutdown )
+    ( nurl_signal_trigger_shutdown )
 }

@@ -102,12 +102,12 @@ $ `stdlib/core/vec.nu`
 // JNull when the request was unparseable (no id available).
 
 @ __mcp_http_jsonrpc_error i code s message → HttpResponse {
-  : Json id_null @ Json { JNull }
-  : Json env ( mcp_response_error id_null code message )
-  : HttpResponse r ( response_json 200 env )
-  ( json_free id_null )
-  ( json_free env )
-  ^ r
+    : Json id_null @ Json { JNull }
+    : Json env ( mcp_response_error id_null code message )
+    : HttpResponse r ( response_json 200 env )
+    ( json_free id_null )
+    ( json_free env )
+    ^ r
 }
 
 // Permissive CORS layer. Always added by mcp_server_run_http for
@@ -116,9 +116,9 @@ $ `stdlib/core/vec.nu`
 // spec recommends, plus Mcp-Session-Id (forward compat for sessions).
 
 @ __mcp_http_apply_cors HttpResponse r → v {
-  ( response_set_header r `Access-Control-Allow-Origin`  `*` )
-  ( response_set_header r `Access-Control-Allow-Headers` `Content-Type, Authorization, Mcp-Session-Id` )
-  ( response_set_header r `Access-Control-Expose-Headers` `Mcp-Session-Id` )
+    ( response_set_header r `Access-Control-Allow-Origin` `*` )
+    ( response_set_header r `Access-Control-Allow-Headers` `Content-Type, Authorization, Mcp-Session-Id` )
+    ( response_set_header r `Access-Control-Expose-Headers` `Mcp-Session-Id` )
 }
 
 // ── mcp_http_handler ─────────────────────────────────────────────────
@@ -139,86 +139,86 @@ $ `stdlib/core/vec.nu`
 // JSON-RPC convention) for `parse error` and `invalid request`.
 
 @ mcp_http_handler
-  ( @ ? Json Json ) dispatch
-  → ( @ HttpResponse HttpRequest ) {
-  ^ \ HttpRequest req → HttpResponse {
-    : s rm ( string_data . req method )
+( @ ?Json Json ) dispatch
+→ ( @ HttpResponse HttpRequest ) {
+    ^ \ HttpRequest req → HttpResponse {
+        : s rm ( string_data . req method )
 
-    // OPTIONS preflight: short-circuit with permissive CORS.
-    ? != 0 ( nurl_str_eq rm `OPTIONS` ) {
-      : HttpResponse pre ( response_status_only 204 )
-      ( response_set_header pre `Access-Control-Allow-Methods` `POST, GET, DELETE, OPTIONS` )
-      ( response_set_header pre `Access-Control-Max-Age`       `86400` )
-      ( __mcp_http_apply_cors pre )
-      ^ pre
-    } {}
+        // OPTIONS preflight: short-circuit with permissive CORS.
+        ? != 0 ( nurl_str_eq rm `OPTIONS` ) {
+            : HttpResponse pre ( response_status_only 204 )
+            ( response_set_header pre `Access-Control-Allow-Methods` `POST, GET, DELETE, OPTIONS` )
+            ( response_set_header pre `Access-Control-Max-Age` `86400` )
+            ( __mcp_http_apply_cors pre )
+            ^ pre
+        } {}
 
-    // GET: SSE stream not implemented in MVP.
-    ? != 0 ( nurl_str_eq rm `GET` ) {
-      : HttpResponse r ( response_text 405 `MCP HTTP server does not push notifications (no SSE stream)\n` )
-      ( response_set_header r `Allow` `POST, DELETE, OPTIONS` )
-      ( __mcp_http_apply_cors r )
-      ^ r
-    } {}
-
-    // DELETE: stateless — nothing to free.
-    ? != 0 ( nurl_str_eq rm `DELETE` ) {
-      : HttpResponse r ( response_status_only 204 )
-      ( __mcp_http_apply_cors r )
-      ^ r
-    } {}
-
-    // Anything other than POST: 405.
-    ? != 0 ( nurl_str_eq rm `POST` ) {} {
-      : HttpResponse r ( response_text 405 `Method Not Allowed\n` )
-      ( response_set_header r `Allow` `POST, GET, DELETE, OPTIONS` )
-      ( __mcp_http_apply_cors r )
-      ^ r
-    }
-
-    // POST body must be non-empty.
-    : i bn ( vec_len [u] . req body )
-    ? <= bn 0 {
-      : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_invalid_request `empty request body` )
-      ( __mcp_http_apply_cors r )
-      ^ r
-    } {}
-
-    // Decode body as UTF-8 String. bytes_to_str adds a NUL terminator
-    // so json_parse (which reads via raw `s`) sees a clean string.
-    : String body_str ( bytes_to_str . req body )
-    : ! Json ParseErr pj ( json_parse ( string_data body_str ) )
-    ( string_free body_str )
-
-    ?? pj {
-      T jreq → {
-        // Hand the parsed request off to the user dispatcher.
-        : ? Json reply ( dispatch jreq )
-        ( json_free jreq )
-
-        ?? reply {
-          T resp_json → {
-            : HttpResponse r ( response_json 200 resp_json )
-            ( json_free resp_json )
+        // GET: SSE stream not implemented in MVP.
+        ? != 0 ( nurl_str_eq rm `GET` ) {
+            : HttpResponse r ( response_text 405 `MCP HTTP server does not push notifications (no SSE stream)\n` )
+            ( response_set_header r `Allow` `POST, DELETE, OPTIONS` )
             ( __mcp_http_apply_cors r )
             ^ r
-          }
-          F empty → {
-            ( json_free empty )
-            // Notification consumed — no body, 202 Accepted.
-            : HttpResponse r ( response_status_only 202 )
+        } {}
+
+        // DELETE: stateless — nothing to free.
+        ? != 0 ( nurl_str_eq rm `DELETE` ) {
+            : HttpResponse r ( response_status_only 204 )
             ( __mcp_http_apply_cors r )
             ^ r
-          }
+        } {}
+
+        // Anything other than POST: 405.
+        ? != 0 ( nurl_str_eq rm `POST` ) {} {
+            : HttpResponse r ( response_text 405 `Method Not Allowed\n` )
+            ( response_set_header r `Allow` `POST, GET, DELETE, OPTIONS` )
+            ( __mcp_http_apply_cors r )
+            ^ r
         }
-      }
-      F _ → {
-        : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_parse_error `request body is not valid JSON` )
-        ( __mcp_http_apply_cors r )
-        ^ r
-      }
+
+        // POST body must be non-empty.
+        : i bn ( vec_len [u] . req body )
+        ? <= bn 0 {
+            : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_invalid_request `empty request body` )
+            ( __mcp_http_apply_cors r )
+            ^ r
+        } {}
+
+        // Decode body as UTF-8 String. bytes_to_str adds a NUL terminator
+        // so json_parse (which reads via raw `s`) sees a clean string.
+        : String body_str ( bytes_to_str . req body )
+        : !Json ParseErr pj ( json_parse ( string_data body_str ) )
+        ( string_free body_str )
+
+        ?? pj {
+            T jreq → {
+                // Hand the parsed request off to the user dispatcher.
+                : ?Json reply ( dispatch jreq )
+                ( json_free jreq )
+
+                ?? reply {
+                    T resp_json → {
+                        : HttpResponse r ( response_json 200 resp_json )
+                        ( json_free resp_json )
+                        ( __mcp_http_apply_cors r )
+                        ^ r
+                    }
+                    F empty → {
+                        ( json_free empty )
+                        // Notification consumed — no body, 202 Accepted.
+                        : HttpResponse r ( response_status_only 202 )
+                        ( __mcp_http_apply_cors r )
+                        ^ r
+                    }
+                }
+            }
+            F _ → {
+                : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_parse_error `request body is not valid JSON` )
+                ( __mcp_http_apply_cors r )
+                ^ r
+            }
+        }
     }
-  }
 }
 
 // ── mcp_server_run_http ──────────────────────────────────────────────
@@ -240,18 +240,18 @@ $ `stdlib/core/vec.nu`
 // register it on a `Router` via `router_post path mcp_h`.
 
 @ mcp_server_run_http
-  s host i port
-  ( @ ? Json Json ) dispatch
-  → ! v NetErr {
-  : ! TcpListener NetErr lr ( tcp_listen host port )
-  ?? lr {
-    T listener → {
-      : ( @ HttpResponse HttpRequest ) handler ( mcp_http_handler dispatch )
-      : HttpServer srv ( server_new listener handler )
-      : ! v NetErr rr ( server_run srv )
-      ( server_stop srv )
-      ^ rr
+s host i port
+( @ ?Json Json ) dispatch
+→ !v NetErr {
+    : !TcpListener NetErr lr ( tcp_listen host port )
+    ?? lr {
+        T listener → {
+            : ( @ HttpResponse HttpRequest ) handler ( mcp_http_handler dispatch )
+            : HttpServer srv ( server_new listener handler )
+            : !v NetErr rr ( server_run srv )
+            ( server_stop srv )
+            ^ rr
+        }
+        F e → ^ @ !v NetErr { F e }
     }
-    F e → ^ @ ! v NetErr { F e }
-  }
 }

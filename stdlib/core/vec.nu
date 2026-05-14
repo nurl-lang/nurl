@@ -90,145 +90,145 @@ $ `stdlib/core/mem.nu`
 // ── Internal helpers ────────────────────────────────────────────────
 
 @ __vec_data_raw s ctl → s {
-  ^ #s ( nurl_peek ctl 0 )
+    ^ # s ( nurl_peek ctl 0 )
 }
 
 @ __vec_len_raw s ctl → i {
-  ^ ( nurl_peek ctl 1 )
+    ^ ( nurl_peek ctl 1 )
 }
 
 @ __vec_cap_raw s ctl → i {
-  ^ ( nurl_peek ctl 2 )
+    ^ ( nurl_peek ctl 2 )
 }
 
 // Grow the underlying buffer so that cap >= need. Uses nurl_realloc;
 // safe to call when the current data pointer is null (cap == 0).
 @ __vec_grow [A] s ctl i need → v {
-  : i cap ( __vec_cap_raw ctl )
-  ? < cap need {
-    : ~ i new_cap ? == cap 0 4 cap
-    ~ < new_cap need { = new_cap * new_cap 2 }
-    : s cur ( __vec_data_raw ctl )
-    : s fresh ( nurl_realloc cur * Z A new_cap )
-    ( nurl_poke ctl 0 # i fresh )
-    ( nurl_poke ctl 2 new_cap )
-  } {}
+    : i cap ( __vec_cap_raw ctl )
+    ? < cap need {
+        : ~ i new_cap ? == cap 0 4 cap
+        ~ < new_cap need { = new_cap * new_cap 2 }
+        : s cur ( __vec_data_raw ctl )
+        : s fresh ( nurl_realloc cur * Z A new_cap )
+        ( nurl_poke ctl 0 # i fresh )
+        ( nurl_poke ctl 2 new_cap )
+    } {}
 }
 
 // ── Constructors ────────────────────────────────────────────────────
 
 @ vec_new [A] → ( Vec A ) {
-  : s ctl ( nurl_zalloc 24 )
-  ^ @ ( Vec A ) { ctl }
+    : s ctl ( nurl_zalloc 24 )
+    ^ @ ( Vec A ) { ctl }
 }
 
 @ vec_with_cap [A] i n → ( Vec A ) {
-  : s ctl ( nurl_zalloc 24 )
-  : i want ? > n 0 n 0
-  ? > want 0 { ( __vec_grow [A] ctl want ) } {}
-  ^ @ ( Vec A ) { ctl }
+    : s ctl ( nurl_zalloc 24 )
+    : i want ? > n 0 n 0
+    ? > want 0 { ( __vec_grow [A] ctl want ) } {}
+    ^ @ ( Vec A ) { ctl }
 }
 
 // ── Inspectors ──────────────────────────────────────────────────────
 
 @ vec_len [A] ( Vec A ) v → i {
-  ^ ( __vec_len_raw . v ctl )
+    ^ ( __vec_len_raw . v ctl )
 }
 
 @ vec_cap [A] ( Vec A ) v → i {
-  ^ ( __vec_cap_raw . v ctl )
+    ^ ( __vec_cap_raw . v ctl )
 }
 
 @ vec_is_empty [A] ( Vec A ) v → b {
-  ^ == ( __vec_len_raw . v ctl ) 0
+    ^ == ( __vec_len_raw . v ctl ) 0
 }
 
 @ vec_data [A] ( Vec A ) v → *A {
-  ^ #*A ( nurl_peek . v ctl 0 )
+    ^ # *A ( nurl_peek . v ctl 0 )
 }
 
 // ── Access ──────────────────────────────────────────────────────────
 
-@ vec_get [A] ( Vec A ) v i idx → ? A {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  ? | < idx 0 >= idx len { ^ @ ? A { F # A 0 } } {}
-  : *A data #*A ( nurl_peek ctl 0 )
-  : A x . data idx
-  ^ @ ? A { T x }
+@ vec_get [A] ( Vec A ) v i idx → ?A {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? | < idx 0 >= idx len { ^ @ ?A { F # A 0 } } {}
+    : *A data # *A ( nurl_peek ctl 0 )
+    : A x . data idx
+    ^ @ ?A { T x }
 }
 
 @ vec_set [A] ( Vec A ) v i idx A x → b {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  ? | < idx 0 >= idx len { ^ F } {}
-  : *A data #*A ( nurl_peek ctl 0 )
-  = . data idx x
-  ^ T
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? | < idx 0 >= idx len { ^ F } {}
+    : *A data # *A ( nurl_peek ctl 0 )
+    = . data idx x
+    ^ T
 }
 
 // ── Mutation ────────────────────────────────────────────────────────
 
 @ vec_push [A] ( Vec A ) v A x → v {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  ( __vec_grow [A] ctl + len 1 )
-  : *A data #*A ( nurl_peek ctl 0 )
-  = . data len x
-  ( nurl_poke ctl 1 + len 1 )
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ( __vec_grow [A] ctl + len 1 )
+    : *A data # *A ( nurl_peek ctl 0 )
+    = . data len x
+    ( nurl_poke ctl 1 + len 1 )
 }
 
 // Insert `x` at index `idx`, shifting existing [idx..len) right by one.
 // Valid indices: [0..len]. idx == len behaves like vec_push. Returns
 // false if idx is out of range. Out-of-range insert is a no-op.
 @ vec_insert [A] ( Vec A ) v i idx A x → b {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  ? | < idx 0 > idx len { ^ F } {}
-  ( __vec_grow [A] ctl + len 1 )
-  : *A data #*A ( nurl_peek ctl 0 )
-  // Shift right [idx..len) → [idx+1..len+1). Walk from the tail to
-  // keep adjacent slots from clobbering each other.
-  : ~ i i len
-  ~ > i idx {
-    = . data i . data - i 1
-    = i - i 1
-  }
-  = . data idx x
-  ( nurl_poke ctl 1 + len 1 )
-  ^ T
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? | < idx 0 > idx len { ^ F } {}
+    ( __vec_grow [A] ctl + len 1 )
+    : *A data # *A ( nurl_peek ctl 0 )
+    // Shift right [idx..len) → [idx+1..len+1). Walk from the tail to
+    // keep adjacent slots from clobbering each other.
+    : ~ i i len
+    ~ > i idx {
+        = . data i . data - i 1
+        = i - i 1
+    }
+    = . data idx x
+    ( nurl_poke ctl 1 + len 1 )
+    ^ T
 }
 
 // Remove the element at `idx`, shifting the tail down by one. Returns
 // the removed element wrapped in Some, or None if idx is out of range.
-@ vec_remove [A] ( Vec A ) v i idx → ? A {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  ? | < idx 0 >= idx len { ^ @ ? A { F # A 0 } } {}
-  : *A data #*A ( nurl_peek ctl 0 )
-  : A x . data idx
-  : ~ i i idx
-  ~ < i - len 1 {
-    = . data i . data + i 1
-    = i + i 1
-  }
-  ( nurl_poke ctl 1 - len 1 )
-  ^ @ ? A { T x }
+@ vec_remove [A] ( Vec A ) v i idx → ?A {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? | < idx 0 >= idx len { ^ @ ?A { F # A 0 } } {}
+    : *A data # *A ( nurl_peek ctl 0 )
+    : A x . data idx
+    : ~ i i idx
+    ~ < i - len 1 {
+        = . data i . data + i 1
+        = i + i 1
+    }
+    ( nurl_poke ctl 1 - len 1 )
+    ^ @ ?A { T x }
 }
 
-@ vec_pop [A] ( Vec A ) v → ? A {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  ? == len 0 { ^ @ ? A { F # A 0 } } {}
-  : i last - len 1
-  : *A data #*A ( nurl_peek ctl 0 )
-  : A x . data last
-  ( nurl_poke ctl 1 last )
-  ^ @ ? A { T x }
+@ vec_pop [A] ( Vec A ) v → ?A {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? == len 0 { ^ @ ?A { F # A 0 } } {}
+    : i last - len 1
+    : *A data # *A ( nurl_peek ctl 0 )
+    : A x . data last
+    ( nurl_poke ctl 1 last )
+    ^ @ ?A { T x }
 }
 
 @ vec_clear [A] ( Vec A ) v → v {
-  ( nurl_poke . v ctl 1 0 )
+    ( nurl_poke . v ctl 1 0 )
 }
 
 // Commit a raw write that the caller performed via `vec_data` directly
@@ -240,12 +240,12 @@ $ `stdlib/core/mem.nu`
 // Caller is responsible for ensuring slots [0..n) are initialised
 // before calling — `vec_set_len` does NOT zero-fill.
 @ vec_set_len [A] ( Vec A ) v i n → b {
-  ? < n 0 { ^ F } {}
-  : s ctl . v ctl
-  : i cap ( __vec_cap_raw ctl )
-  ? > n cap { ^ F } {}
-  ( nurl_poke ctl 1 n )
-  ^ T
+    ? < n 0 { ^ F } {}
+    : s ctl . v ctl
+    : i cap ( __vec_cap_raw ctl )
+    ? > n cap { ^ F } {}
+    ( nurl_poke ctl 1 n )
+    ^ T
 }
 
 // Fresh Vec[i] pre-filled with [lo, lo+1, ..., hi-1]. hi <= lo is a
@@ -257,49 +257,49 @@ $ `stdlib/core/mem.nu`
 // forward reference here corrupts return-type specialization (the
 // callee is treated as i64-returning and downstream stores then mismatch).
 @ vec_iota i lo i hi → ( Vec i ) {
-  : i n ? > hi lo - hi lo 0
-  : ( Vec i ) v ( vec_with_cap [i] n )
-  ? > n 0 {
-    : *i data ( vec_data [i] v )
-    : ~ i k 0
-    ~ < k n {
-      = . data k + lo k
-      = k + k 1
-    }
-    : b _ok ( vec_set_len [i] v n )
-  } {}
-  ^ v
+    : i n ? > hi lo - hi lo 0
+    : ( Vec i ) v ( vec_with_cap [i] n )
+    ? > n 0 {
+        : *i data ( vec_data [i] v )
+        : ~ i k 0
+        ~ < k n {
+            = . data k + lo k
+            = k + k 1
+        }
+        : b _ok ( vec_set_len [i] v n )
+    } {}
+    ^ v
 }
 
 @ vec_swap [A] ( Vec A ) v i i_idx i j_idx → b {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  ? | | | < i_idx 0 >= i_idx len < j_idx 0 >= j_idx len { ^ F } {}
-  ? == i_idx j_idx { ^ T } {}
-  : *A data #*A ( nurl_peek ctl 0 )
-  : A a . data i_idx
-  : A b . data j_idx
-  = . data i_idx b
-  = . data j_idx a
-  ^ T
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? | | | < i_idx 0 >= i_idx len < j_idx 0 >= j_idx len { ^ F } {}
+    ? == i_idx j_idx { ^ T } {}
+    : *A data # *A ( nurl_peek ctl 0 )
+    : A a . data i_idx
+    : A b . data j_idx
+    = . data i_idx b
+    = . data j_idx a
+    ^ T
 }
 
 @ vec_reverse [A] ( Vec A ) v → v {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  ? > len 1 {
-    : *A data #*A ( nurl_peek ctl 0 )
-    : ~ i i 0
-    : ~ i j - len 1
-    ~ < i j {
-      : A a . data i
-      : A b . data j
-      = . data i b
-      = . data j a
-      = i + i 1
-      = j - j 1
-    }
-  } {}
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? > len 1 {
+        : *A data # *A ( nurl_peek ctl 0 )
+        : ~ i i 0
+        : ~ i j - len 1
+        ~ < i j {
+            : A a . data i
+            : A b . data j
+            = . data i b
+            = . data j a
+            = i + i 1
+            = j - j 1
+        }
+    } {}
 }
 
 // ── Capacity ────────────────────────────────────────────────────────
@@ -307,32 +307,32 @@ $ `stdlib/core/mem.nu`
 // Ensure cap ≥ len + n. n ≤ 0 is a no-op. Allocates lazily; safe on a
 // fresh Vec with cap == 0.
 @ vec_reserve [A] ( Vec A ) v i n → v {
-  ? > n 0 {
-    : s ctl . v ctl
-    : i len ( __vec_len_raw ctl )
-    ( __vec_grow [A] ctl + len n )
-  } {}
+    ? > n 0 {
+        : s ctl . v ctl
+        : i len ( __vec_len_raw ctl )
+        ( __vec_grow [A] ctl + len n )
+    } {}
 }
 
 // Release any unused capacity. If len == 0 the buffer is freed entirely
 // (cap → 0, data → null). Otherwise the buffer is realloc'd down to len.
 @ vec_shrink_to_fit [A] ( Vec A ) v → v {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  : i cap ( __vec_cap_raw ctl )
-  ? == len 0 {
-    : s data ( __vec_data_raw ctl )
-    ? != 0 # i data { ( nurl_free data ) } {}
-    ( nurl_poke ctl 0 0 )
-    ( nurl_poke ctl 2 0 )
-  } {
-    ? < len cap {
-      : s cur ( __vec_data_raw ctl )
-      : s fresh ( nurl_realloc cur * Z A len )
-      ( nurl_poke ctl 0 # i fresh )
-      ( nurl_poke ctl 2 len )
-    } {}
-  }
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    : i cap ( __vec_cap_raw ctl )
+    ? == len 0 {
+        : s data ( __vec_data_raw ctl )
+        ? != 0 # i data { ( nurl_free data ) } {}
+        ( nurl_poke ctl 0 0 )
+        ( nurl_poke ctl 2 0 )
+    } {
+        ? < len cap {
+            : s cur ( __vec_data_raw ctl )
+            : s fresh ( nurl_realloc cur * Z A len )
+            ( nurl_poke ctl 0 # i fresh )
+            ( nurl_poke ctl 2 len )
+        } {}
+    }
 }
 
 // Append every element of `src` to `dst` (bitwise). Like vec_map, this
@@ -341,30 +341,30 @@ $ `stdlib/core/mem.nu`
 // vec_push and an explicit element clone, otherwise the dst would alias
 // src's heap buffers and break the single-owner invariant.
 @ vec_extend [A] ( Vec A ) dst ( Vec A ) src → v {
-  : s sctl . src ctl
-  : i n ( __vec_len_raw sctl )
-  ? > n 0 {
-    : s dctl . dst ctl
-    : i dlen ( __vec_len_raw dctl )
-    ( __vec_grow [A] dctl + dlen n )
-    : *A ddata #*A ( nurl_peek dctl 0 )
-    : *A sdata #*A ( nurl_peek sctl 0 )
-    : ~ i i 0
-    ~ < i n {
-      = . ddata + dlen i . sdata i
-      = i + i 1
-    }
-    ( nurl_poke dctl 1 + dlen n )
-  } {}
+    : s sctl . src ctl
+    : i n ( __vec_len_raw sctl )
+    ? > n 0 {
+        : s dctl . dst ctl
+        : i dlen ( __vec_len_raw dctl )
+        ( __vec_grow [A] dctl + dlen n )
+        : *A ddata # *A ( nurl_peek dctl 0 )
+        : *A sdata # *A ( nurl_peek sctl 0 )
+        : ~ i i 0
+        ~ < i n {
+            = . ddata + dlen i . sdata i
+            = i + i 1
+        }
+        ( nurl_poke dctl 1 + dlen n )
+    } {}
 }
 
 // ── Cleanup ─────────────────────────────────────────────────────────
 
 @ vec_free [A] ( Vec A ) v → v {
-  : s ctl . v ctl
-  : s data ( __vec_data_raw ctl )
-  ? != 0 # i data { ( nurl_free data ) } {}
-  ( nurl_free ctl )
+    : s ctl . v ctl
+    : s data ( __vec_data_raw ctl )
+    ? != 0 # i data { ( nurl_free data ) } {}
+    ( nurl_free ctl )
 }
 
 // Drop-aware free: invokes `drop` for every live element in [0..len)
@@ -373,49 +373,49 @@ $ `stdlib/core/mem.nu`
 // (`string_free`, nested `vec_free`, `map_free`, …). For trivial
 // element types use the bare `vec_free` instead — calling
 // `vec_free_with` with a no-op closure works but is wasteful.
-@ vec_free_with [A] ( Vec A ) v (@ v A) drop → v {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  : s data ( __vec_data_raw ctl )
-  ? != 0 # i data {
-    : *A buf #*A data
-    : ~ i i 0
-    ~ < i len {
-      ( drop . buf i )
-      = i + i 1
-    }
-    ( nurl_free data )
-  } {}
-  ( nurl_free ctl )
+@ vec_free_with [A] ( Vec A ) v ( @ v A ) drop → v {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    : s data ( __vec_data_raw ctl )
+    ? != 0 # i data {
+        : *A buf # *A data
+        : ~ i i 0
+        ~ < i len {
+            ( drop . buf i )
+            = i + i 1
+        }
+        ( nurl_free data )
+    } {}
+    ( nurl_free ctl )
 }
 
 // ── Higher-order ────────────────────────────────────────────────────
 
-@ vec_each [A] ( Vec A ) v (@ v A) f → v {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  ? > len 0 {
-    : *A data #*A ( nurl_peek ctl 0 )
-    : ~ i i 0
-    ~ < i len {
-      ( f . data i )
-      = i + i 1
-    }
-  } {}
+@ vec_each [A] ( Vec A ) v ( @ v A ) f → v {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? > len 0 {
+        : *A data # *A ( nurl_peek ctl 0 )
+        : ~ i i 0
+        ~ < i len {
+            ( f . data i )
+            = i + i 1
+        }
+    } {}
 }
 
-@ vec_fold [A B] ( Vec A ) v B init (@ B B A) f → B {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  : *A data #*A ( nurl_peek ctl 0 )
-  : ~ B acc init
-  : ~ i i 0
-  ~ < i len {
-    : A x . data i
-    = acc ( f acc x )
-    = i + i 1
-  }
-  ^ acc
+@ vec_fold [A B] ( Vec A ) v B init ( @ B B A ) f → B {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    : *A data # *A ( nurl_peek ctl 0 )
+    : ~ B acc init
+    : ~ i i 0
+    ~ < i len {
+        : A x . data i
+        = acc ( f acc x )
+        = i + i 1
+    }
+    ^ acc
 }
 
 // Map every element through `f` into a fresh Vec[B]. The source Vec is
@@ -424,126 +424,126 @@ $ `stdlib/core/mem.nu`
 // slices). For owned types like String, vec_map would alias buffers
 // across two Vecs and break the single-owner invariant; build a Vec
 // manually with vec_each + vec_push and an explicit clone.
-@ vec_map [A B] ( Vec A ) v (@ B A) f → ( Vec B ) {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  : ( Vec B ) out ( vec_with_cap [B] len )
-  : *A data #*A ( nurl_peek ctl 0 )
-  : ~ i i 0
-  ~ < i len {
-    : A x . data i
-    ( vec_push [B] out ( f x ) )
-    = i + i 1
-  }
-  ^ out
+@ vec_map [A B] ( Vec A ) v ( @ B A ) f → ( Vec B ) {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    : ( Vec B ) out ( vec_with_cap [B] len )
+    : *A data # *A ( nurl_peek ctl 0 )
+    : ~ i i 0
+    ~ < i len {
+        : A x . data i
+        ( vec_push [B] out ( f x ) )
+        = i + i 1
+    }
+    ^ out
 }
 
 // Keep elements where `pred` returns T. Same trivial-element caveat as
 // vec_map: the kept elements are bitwise-copied into the output Vec.
-@ vec_filter [A] ( Vec A ) v (@ b A) pred → ( Vec A ) {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  : ( Vec A ) out ( vec_new [A] )
-  : *A data #*A ( nurl_peek ctl 0 )
-  : ~ i i 0
-  ~ < i len {
-    : A x . data i
-    ? ( pred x ) { ( vec_push [A] out x ) } {}
-    = i + i 1
-  }
-  ^ out
+@ vec_filter [A] ( Vec A ) v ( @ b A ) pred → ( Vec A ) {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    : ( Vec A ) out ( vec_new [A] )
+    : *A data # *A ( nurl_peek ctl 0 )
+    : ~ i i 0
+    ~ < i len {
+        : A x . data i
+        ? ( pred x ) { ( vec_push [A] out x ) } {}
+        = i + i 1
+    }
+    ^ out
 }
 
 // First element matching `pred`, or None.
-@ vec_find [A] ( Vec A ) v (@ b A) pred → ? A {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  : *A data #*A ( nurl_peek ctl 0 )
-  : ~ i i 0
-  ~ < i len {
-    : A x . data i
-    ? ( pred x ) { ^ @ ? A { T x } } {}
-    = i + i 1
-  }
-  ^ @ ? A { F # A 0 }
+@ vec_find [A] ( Vec A ) v ( @ b A ) pred → ?A {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    : *A data # *A ( nurl_peek ctl 0 )
+    : ~ i i 0
+    ~ < i len {
+        : A x . data i
+        ? ( pred x ) { ^ @ ?A { T x } } {}
+        = i + i 1
+    }
+    ^ @ ?A { F # A 0 }
 }
 
 // True if any element satisfies `pred`. Short-circuits.
-@ vec_any [A] ( Vec A ) v (@ b A) pred → b {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  : *A data #*A ( nurl_peek ctl 0 )
-  : ~ i i 0
-  ~ < i len {
-    : A x . data i
-    ? ( pred x ) { ^ T } {}
-    = i + i 1
-  }
-  ^ F
+@ vec_any [A] ( Vec A ) v ( @ b A ) pred → b {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    : *A data # *A ( nurl_peek ctl 0 )
+    : ~ i i 0
+    ~ < i len {
+        : A x . data i
+        ? ( pred x ) { ^ T } {}
+        = i + i 1
+    }
+    ^ F
 }
 
 // True if `target` is present in `v` (according to `eq_fn`). Short-circuits.
 // Use the same eq closures HashMap takes (`eq_int`, `eq_string`) or a custom
 // one. For trivial element types the closure body is just `== a b`.
-@ vec_contains [A] ( Vec A ) v A target (@ b A A) eq_fn → b {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  : *A data #*A ( nurl_peek ctl 0 )
-  : ~ i i 0
-  ~ < i len {
-    : A x . data i
-    ? ( eq_fn x target ) { ^ T } {}
-    = i + i 1
-  }
-  ^ F
+@ vec_contains [A] ( Vec A ) v A target ( @ b A A ) eq_fn → b {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    : *A data # *A ( nurl_peek ctl 0 )
+    : ~ i i 0
+    ~ < i len {
+        : A x . data i
+        ? ( eq_fn x target ) { ^ T } {}
+        = i + i 1
+    }
+    ^ F
 }
 
 // First byte index where `target` occurs in `v`, or None. Same eq_fn
 // convention as vec_contains.
-@ vec_index_of [A] ( Vec A ) v A target (@ b A A) eq_fn → ? i {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  : *A data #*A ( nurl_peek ctl 0 )
-  : ~ i i 0
-  ~ < i len {
-    : A x . data i
-    ? ( eq_fn x target ) { ^ @ ? i { T i } } {}
-    = i + i 1
-  }
-  ^ @ ? i { F 0 }
+@ vec_index_of [A] ( Vec A ) v A target ( @ b A A ) eq_fn → ?i {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    : *A data # *A ( nurl_peek ctl 0 )
+    : ~ i i 0
+    ~ < i len {
+        : A x . data i
+        ? ( eq_fn x target ) { ^ @ ?i { T i } } {}
+        = i + i 1
+    }
+    ^ @ ?i { F 0 }
 }
 
 // Length-equal + element-wise equality under `eq_fn`. Short-circuits.
-@ vec_eq [A] ( Vec A ) a ( Vec A ) b (@ b A A) eq_fn → b {
-  : s actl . a ctl
-  : s bctl . b ctl
-  : i la ( __vec_len_raw actl )
-  : i lb ( __vec_len_raw bctl )
-  ? != la lb { ^ F } {}
-  : *A da #*A ( nurl_peek actl 0 )
-  : *A db #*A ( nurl_peek bctl 0 )
-  : ~ i i 0
-  ~ < i la {
-    : A x . da i
-    : A y . db i
-    : b ok ( eq_fn x y )
-    ? ! ok { ^ F } {}
-    = i + i 1
-  }
-  ^ T
+@ vec_eq [A] ( Vec A ) a ( Vec A ) b ( @ b A A ) eq_fn → b {
+    : s actl . a ctl
+    : s bctl . b ctl
+    : i la ( __vec_len_raw actl )
+    : i lb ( __vec_len_raw bctl )
+    ? != la lb { ^ F } {}
+    : *A da # *A ( nurl_peek actl 0 )
+    : *A db # *A ( nurl_peek bctl 0 )
+    : ~ i i 0
+    ~ < i la {
+        : A x . da i
+        : A y . db i
+        : b ok ( eq_fn x y )
+        ? ! ok { ^ F } {}
+        = i + i 1
+    }
+    ^ T
 }
 
 // True if every element satisfies `pred`. Short-circuits on first F.
-@ vec_all [A] ( Vec A ) v (@ b A) pred → b {
-  : s ctl . v ctl
-  : i len ( __vec_len_raw ctl )
-  : *A data #*A ( nurl_peek ctl 0 )
-  : ~ i i 0
-  ~ < i len {
-    : A x . data i
-    : b ok ( pred x )
-    ? ! ok { ^ F } {}
-    = i + i 1
-  }
-  ^ T
+@ vec_all [A] ( Vec A ) v ( @ b A ) pred → b {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    : *A data # *A ( nurl_peek ctl 0 )
+    : ~ i i 0
+    ~ < i len {
+        : A x . data i
+        : b ok ( pred x )
+        ? ! ok { ^ F } {}
+        = i + i 1
+    }
+    ^ T
 }

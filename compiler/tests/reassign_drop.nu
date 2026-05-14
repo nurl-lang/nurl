@@ -5,11 +5,11 @@
 // reassignment still produces correct values for the user.
 
 @ main → i {
-  : ~ s greeting ( nurl_str_cat `hello ` `world` )
-  ( nurl_print greeting ) ( nurl_print `\n` )
-  = greeting ( nurl_str_cat `goodbye ` `world` )
-  ( nurl_print greeting ) ( nurl_print `\n` )
-  = greeting ( nurl_str_cat3 `one ` `two ` `three` )
-  ( nurl_print greeting ) ( nurl_print `\n` )
-  ^ 0
+    : ~ s greeting ( nurl_str_cat `hello ` `world` )
+    ( nurl_print greeting ) ( nurl_print `\n` )
+    = greeting ( nurl_str_cat `goodbye ` `world` )
+    ( nurl_print greeting ) ( nurl_print `\n` )
+    = greeting ( nurl_str_cat3 `one ` `two ` `three` )
+    ( nurl_print greeting ) ( nurl_print `\n` )
+    ^ 0
 }

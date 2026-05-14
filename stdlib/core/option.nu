@@ -18,23 +18,23 @@
 // whole struct so `??` can do its own tag extract. Use `??` here instead.
 
 @ opt_is_some [A] ? A o → b {
-  ^ ?? o { T → T  F → F }
+    ^ ?? o { T → T F → F }
 }
 
 @ opt_is_none [A] ? A o → b {
-  ^ ?? o { T → F  F → T }
+    ^ ?? o { T → F F → T }
 }
 
 @ opt_unwrap_or [A] ? A o A default → A {
-  ^ ?? o { T v → v  F → default }
+    ^ ?? o { T v → v F → default }
 }
 
-@ opt_map [A B] ? A o (@ B A) f → ? B {
-  : A v \ o
-  ^ @ ? B { T ( f v ) }
+@ opt_map [A B] ? A o ( @ B A ) f → ?B {
+    : A v \ o
+    ^ @ ?B { T ( f v ) }
 }
 
-@ opt_and_then [A B] ? A o (@ ? B A) f → ? B {
-  : A v \ o
-  ^ ( f v )
+@ opt_and_then [A B] ? A o ( @ ?B A ) f → ?B {
+    : A v \ o
+    ^ ( f v )
 }

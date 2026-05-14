@@ -60,10 +60,10 @@ $ `stdlib/core/vec.nu`
 // ── Internal heap-allocated state ──────────────────────────────────
 
 : ChannelImpl {
-  Mutex     m
-  Cond      c
-  ( Vec i ) q          // FIFO: push back, pop front
-  i         closed     // 0 = open, 1 = closed
+    Mutex m
+    Cond c
+    ( Vec i ) q  // FIFO: push back, pop front
+    i closed  // 0 = open, 1 = closed
 }
 
 : Channel { s ctl }
@@ -71,12 +71,12 @@ $ `stdlib/core/vec.nu`
 // ── Constructor ────────────────────────────────────────────────────
 
 @ chan_new → Channel {
-  : *ChannelImpl impl # *ChannelImpl ( nurl_alloc Z ChannelImpl )
-  =. impl m ( mutex_new )
-  =. impl c ( cond_new )
-  =. impl q ( vec_new [i] )
-  =. impl closed 0
-  ^ @ Channel { #s impl }
+    : *ChannelImpl impl # *ChannelImpl ( nurl_alloc Z ChannelImpl )
+    = . impl m ( mutex_new )
+    = . impl c ( cond_new )
+    = . impl q ( vec_new [i] )
+    = . impl closed 0
+    ^ @ Channel { # s impl }
 }
 
 // ── Send / receive ─────────────────────────────────────────────────
@@ -86,88 +86,88 @@ $ `stdlib/core/vec.nu`
 // inherent ownership; if it carried a heap pointer the caller must
 // release it themselves on the F branch).
 @ chan_send Channel ch i v → b {
-  : *ChannelImpl impl #*ChannelImpl . ch ctl
-  ( mutex_lock . impl m )
-  ? != 0 . impl closed {
+    : *ChannelImpl impl # *ChannelImpl . ch ctl
+    ( mutex_lock . impl m )
+    ? != 0 . impl closed {
+        ( mutex_unlock . impl m )
+        ^ F
+    } {}
+    ( vec_push [i] . impl q v )
+    ( cond_signal . impl c )
     ( mutex_unlock . impl m )
-    ^ F
-  } {}
-  ( vec_push [i] . impl q v )
-  ( cond_signal . impl c )
-  ( mutex_unlock . impl m )
-  ^ T
+    ^ T
 }
 
 // Pop the front of the queue, blocking until either an item arrives
 // or the channel is closed (and drained). Returns None only when the
 // channel is closed AND empty.
-@ chan_recv Channel ch → ? i {
-  : *ChannelImpl impl #*ChannelImpl . ch ctl
-  ( mutex_lock . impl m )
-  ~ & == ( vec_len [i] . impl q ) 0 == . impl closed 0 {
-    ( cond_wait . impl c . impl m )
-  }
-  ? == ( vec_len [i] . impl q ) 0 {
-    // Closed AND empty.
+@ chan_recv Channel ch → ?i {
+    : *ChannelImpl impl # *ChannelImpl . ch ctl
+    ( mutex_lock . impl m )
+    ~ & == ( vec_len [i] . impl q ) 0 == . impl closed 0 {
+        ( cond_wait . impl c . impl m )
+    }
+    ? == ( vec_len [i] . impl q ) 0 {
+        // Closed AND empty.
+        ( mutex_unlock . impl m )
+        ^ @ ?i { F 0 }
+    } {}
+    // Pop front element. vec_pop pops from the BACK; for FIFO we want
+    // the front. vec_remove [i] 0 shifts the rest left — O(n) but the
+    // queue depth is typically small. (For high-throughput a ring
+    // buffer would be better; defer until profiling motivates it.)
+    : ?i opt ( vec_remove [i] . impl q 0 )
     ( mutex_unlock . impl m )
-    ^ @ ? i { F 0 }
-  } {}
-  // Pop front element. vec_pop pops from the BACK; for FIFO we want
-  // the front. vec_remove [i] 0 shifts the rest left — O(n) but the
-  // queue depth is typically small. (For high-throughput a ring
-  // buffer would be better; defer until profiling motivates it.)
-  : ? i opt ( vec_remove [i] . impl q 0 )
-  ( mutex_unlock . impl m )
-  ^ opt
+    ^ opt
 }
 
 // Non-blocking variant: returns None immediately when the queue is
 // empty (regardless of closed state). Useful for poll-style consumers
 // that interleave channel reads with other work.
-@ chan_try_recv Channel ch → ? i {
-  : *ChannelImpl impl #*ChannelImpl . ch ctl
-  ( mutex_lock . impl m )
-  ? == ( vec_len [i] . impl q ) 0 {
+@ chan_try_recv Channel ch → ?i {
+    : *ChannelImpl impl # *ChannelImpl . ch ctl
+    ( mutex_lock . impl m )
+    ? == ( vec_len [i] . impl q ) 0 {
+        ( mutex_unlock . impl m )
+        ^ @ ?i { F 0 }
+    } {}
+    : ?i opt ( vec_remove [i] . impl q 0 )
     ( mutex_unlock . impl m )
-    ^ @ ? i { F 0 }
-  } {}
-  : ? i opt ( vec_remove [i] . impl q 0 )
-  ( mutex_unlock . impl m )
-  ^ opt
+    ^ opt
 }
 
 // ── Close + introspection ──────────────────────────────────────────
 
 @ chan_close Channel ch → v {
-  : *ChannelImpl impl #*ChannelImpl . ch ctl
-  ( mutex_lock . impl m )
-  =. impl closed 1
-  ( cond_broadcast . impl c )
-  ( mutex_unlock . impl m )
+    : *ChannelImpl impl # *ChannelImpl . ch ctl
+    ( mutex_lock . impl m )
+    = . impl closed 1
+    ( cond_broadcast . impl c )
+    ( mutex_unlock . impl m )
 }
 
 @ chan_len Channel ch → i {
-  : *ChannelImpl impl #*ChannelImpl . ch ctl
-  ( mutex_lock . impl m )
-  : i n ( vec_len [i] . impl q )
-  ( mutex_unlock . impl m )
-  ^ n
+    : *ChannelImpl impl # *ChannelImpl . ch ctl
+    ( mutex_lock . impl m )
+    : i n ( vec_len [i] . impl q )
+    ( mutex_unlock . impl m )
+    ^ n
 }
 
 @ chan_is_closed Channel ch → b {
-  : *ChannelImpl impl #*ChannelImpl . ch ctl
-  ( mutex_lock . impl m )
-  : b cl != 0 . impl closed
-  ( mutex_unlock . impl m )
-  ^ cl
+    : *ChannelImpl impl # *ChannelImpl . ch ctl
+    ( mutex_lock . impl m )
+    : b cl != 0 . impl closed
+    ( mutex_unlock . impl m )
+    ^ cl
 }
 
 // ── Cleanup ────────────────────────────────────────────────────────
 
 @ chan_free Channel ch → v {
-  : *ChannelImpl impl #*ChannelImpl . ch ctl
-  ( vec_free [i] . impl q )
-  ( cond_free . impl c )
-  ( mutex_free . impl m )
-  ( nurl_free #s impl )
+    : *ChannelImpl impl # *ChannelImpl . ch ctl
+    ( vec_free [i] . impl q )
+    ( cond_free . impl c )
+    ( mutex_free . impl m )
+    ( nurl_free # s impl )
 }

@@ -45,20 +45,20 @@
 @ main → i {
     // (1) Vertailut palauttavat b:n
     : b a == 5 5
-    : b c <  3 7
+    : b c < 3 7
     : b d >= 2 9
     : b e != 1 2
 
-    ( show_b a )    // T
-    ( show_b d )    // F   (2 >= 9 on epätosi)
+    ( show_b a )  // T
+    ( show_b d )  // F   (2 >= 9 on epätosi)
     ( show_b ! a )  // F   (NOT T)
     ( show_b ! d )  // T   (NOT F)
-    ( show_b c )    // T
+    ( show_b c )  // T
     ( show_b ! e )  // F   (NOT T)
 
     // (2) Vertailutulos suoraan ?-ehdoksi (ei väli-muuttujaa)
-    ( puts ? < 3 5 `yes\n` `no\n` )    // yes
-    ( puts ? > 3 5 `yes\n` `no\n` )    // no
+    ( puts ? < 3 5 `yes\n` `no\n` )  // yes
+    ( puts ? > 3 5 `yes\n` `no\n` )  // no
 
     // (3) Loogiset & ja |. Tämä paljastaa oikosulun:
     //   & T (tally) → tally suoritetaan
@@ -72,15 +72,15 @@
     //
     // Tulosta vain ettei testi pakota toista semantiikkaa,
     // mutta tarkista ettei ohjelma kaadu.
-    : b r1 & T ( tally_true )      // T  (tally suoritetaan)
-    : b r2 & F ( tally_true )      // F  (riippuu oikosulusta)
-    : b r3 | T ( tally_false )     // T  (riippuu oikosulusta)
-    : b r4 | F ( tally_false )     // F  (tally suoritetaan)
+    : b r1 & T ( tally_true )  // T  (tally suoritetaan)
+    : b r2 & F ( tally_true )  // F  (riippuu oikosulusta)
+    : b r3 | T ( tally_false )  // T  (riippuu oikosulusta)
+    : b r4 | F ( tally_false )  // F  (tally suoritetaan)
 
-    ( show_b r1 )   // T
-    ( show_b r2 )   // F
-    ( show_b r3 )   // T
-    ( show_b r4 )   // F
+    ( show_b r1 )  // T
+    ( show_b r2 )  // F
+    ( show_b r3 )  // T
+    ( show_b r4 )  // F
 
     ( puts `side_effects=` )
     ( puts ( nurl_str_int side_effects ) )
@@ -89,8 +89,8 @@
     // (4) Vertailujen ketjuttaminen loogisilla operaattoreilla
     // 5 < 10 AND 10 < 20  → T
     : b chain & < 5 10 < 10 20
-    ( show_b chain )    // odotettu T... mutta jätetään pois `expected` rivistä
-                        // jos haluat tarkistaa ehdottomasti, lisää alle:
+    ( show_b chain )  // odotettu T... mutta jätetään pois `expected` rivistä
+    // jos haluat tarkistaa ehdottomasti, lisää alle:
 
     // (5) Vertailutulos käytettävissä aritmetiikan ehdossa
     // ? < 3 5 (a + b) (a - b) jossa a=10 b=5 → 15

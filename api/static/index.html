@@ -1161,8 +1161,12 @@ buildBtn.addEventListener("click", build);
 runBtn.addEventListener("click", run);
 
 // ── Monaco setup ───────────────────────────────────────────────
-// Monarch tokenizer for NURL (translated from tooling/vscode-nurl's
-// tmLanguage.json). Token names are picked to line up with the
+// Monarch tokenizer for NURL — kept in lock-step with
+// tooling/vscode-nurl/syntaxes/nurl.tmLanguage.json. Any new
+// grammar token (sized type, shift op, escape sequence, …) needs to
+// be added BOTH HERE AND in the VS Code grammar; the
+// tooling/vscode-nurl/CHANGELOG.md and this comment block exist so
+// neither side drifts. Token names are picked to line up with the
 // vs-dark-plus theme so the result looks close to VS Code.
 const NURL_MONARCH = {
   defaultToken: "",
@@ -1193,12 +1197,18 @@ const NURL_MONARCH = {
       [/(:)(\s+)([A-Z][\w]*)(\s*)(\{)/,
         ["keyword", "white", "type.identifier", "white", "@brackets"]],
 
-      // numbers
-      [/\d+\.\d+([eE][+\-]?\d+)?/, "number.float"],
-      [/\d+/,                       "number"],
+      // numbers — leading `-` is part of the literal only when not
+      // preceded by an ident-char (grammar v1.1 negative-literal rule)
+      [/(?<![A-Za-z0-9_])-?\d+\.\d+([eE][+\-]?\d+)?/, "number.float"],
+      [/(?<![A-Za-z0-9_])-?\d+/,                     "number"],
 
       // boolean constants
       [/\b(T|F)\b/, "constant.language.boolean"],
+
+      // fixed-size primitive types (grammar v1.8). MUST precede the
+      // single-letter rule below so `i8` is not partially captured as
+      // the bare `i`.
+      [/\b(i8|i16|i32|u16|u32|u64|f32)\b/, "type"],
 
       // primitive types
       [/\b(i|u|f|b|s|v)\b/, "type"],
@@ -1215,6 +1225,8 @@ const NURL_MONARCH = {
       [/;/,              "keyword"],
       [/\\/,             "keyword"],
       [/\bZ\b/,          "keyword"],
+      // shift ops (v1.4) — must precede the single-char `<`/`>` rule.
+      [/(<<|>>)/,        "keyword.operator"],
       [/(==|!=|<=|>=)/,  "keyword.operator"],
       [/[<>]/,           "keyword.operator"],
       [/[+\-*/%]/,       "keyword.operator.arithmetic"],

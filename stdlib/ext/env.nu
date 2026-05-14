@@ -19,76 +19,76 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/errors.nu`
 
 @ env_args_count → i {
-  ^ ( nurl_argv_count )
+    ^ ( nurl_argv_count )
 }
 
 @ env_arg i idx → String {
-  : s raw ( nurl_argv_get idx )
-  : String out ( string_from raw )
-  ^ out
+    : s raw ( nurl_argv_get idx )
+    : String out ( string_from raw )
+    ^ out
 }
 
 @ env_args_list → ( Vec String ) {
-  : ( Vec String ) out ( vec_new [String] )
-  : i n ( nurl_argv_count )
-  : ~ i i 0
-  ~ < i n {
-    : s raw ( nurl_argv_get i )
-    ( vec_push [String] out ( string_from raw ) )
-    = i + i 1
-  }
-  ^ out
+    : ( Vec String ) out ( vec_new [String] )
+    : i n ( nurl_argv_count )
+    : ~ i i 0
+    ~ < i n {
+        : s raw ( nurl_argv_get i )
+        ( vec_push [String] out ( string_from raw ) )
+        = i + i 1
+    }
+    ^ out
 }
 
-@ env_get s name → ? String {
-  : s raw ( nurl_env_get name )
-  : i p # i raw
-  ? == p 0 { ^ @ ? String { F # String 0 } } {}
-  : String out ( string_from raw )
-  ( nurl_free raw )
-  ^ @ ? String { T out }
+@ env_get s name → ?String {
+    : s raw ( nurl_env_get name )
+    : i p # i raw
+    ? == p 0 { ^ @ ?String { F # String 0 } } {}
+    : String out ( string_from raw )
+    ( nurl_free raw )
+    ^ @ ?String { T out }
 }
 
 @ env_var_or s name s default → String {
-  : ? String got ( env_get name )
-  ^ ?? got {
-    T s → s
-    F → ( string_from default )
-  }
+    : ?String got ( env_get name )
+    ^ ?? got {
+        T s → s
+        F → ( string_from default )
+    }
 }
 
-@ env_set s name s value → ! v IoErr {
-  : i rc ( nurl_env_set name value )
-  ? == rc 0 { ^ @ ! v IoErr { T 0 } } {}
-  ^ @ ! v IoErr { F @ IoErr { Other } }
+@ env_set s name s value → !v IoErr {
+    : i rc ( nurl_env_set name value )
+    ? == rc 0 { ^ @ !v IoErr { T 0 } } {}
+    ^ @ !v IoErr { F @ IoErr { Other } }
 }
 
-@ env_unset s name → ! v IoErr {
-  : i rc ( nurl_env_unset name )
-  ? == rc 0 { ^ @ ! v IoErr { T 0 } } {}
-  ^ @ ! v IoErr { F @ IoErr { Other } }
+@ env_unset s name → !v IoErr {
+    : i rc ( nurl_env_unset name )
+    ? == rc 0 { ^ @ !v IoErr { T 0 } } {}
+    ^ @ !v IoErr { F @ IoErr { Other } }
 }
 
-@ env_cwd → ! String IoErr {
-  : s raw ( nurl_cwd )
-  : i p # i raw
-  ? == p 0 {
-    ^ @ ! String IoErr { F @ IoErr { Other } }
-  } {}
-  : String out ( string_from raw )
-  ( nurl_free raw )
-  ^ @ ! String IoErr { T out }
+@ env_cwd → !String IoErr {
+    : s raw ( nurl_cwd )
+    : i p # i raw
+    ? == p 0 {
+        ^ @ !String IoErr { F @ IoErr { Other } }
+    } {}
+    : String out ( string_from raw )
+    ( nurl_free raw )
+    ^ @ !String IoErr { T out }
 }
 
-@ env_chdir s path → ! v IoErr {
-  : i rc ( nurl_chdir path )
-  ? == rc 0 { ^ @ ! v IoErr { T 0 } } {}
-  : i k ( nurl_errno_kind )
-  ? == k 0 { ^ @ ! v IoErr { F @ IoErr { NotFound } } } {}
-  ? == k 1 { ^ @ ! v IoErr { F @ IoErr { PermissionDenied } } } {}
-  ^ @ ! v IoErr { F @ IoErr { Other } }
+@ env_chdir s path → !v IoErr {
+    : i rc ( nurl_chdir path )
+    ? == rc 0 { ^ @ !v IoErr { T 0 } } {}
+    : i k ( nurl_errno_kind )
+    ? == k 0 { ^ @ !v IoErr { F @ IoErr { NotFound } } } {}
+    ? == k 1 { ^ @ !v IoErr { F @ IoErr { PermissionDenied } } } {}
+    ^ @ !v IoErr { F @ IoErr { Other } }
 }
 
 @ env_exit i code → v {
-  ( nurl_exit code )
+    ( nurl_exit code )
 }

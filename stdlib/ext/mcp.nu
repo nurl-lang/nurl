@@ -111,19 +111,19 @@ $ `stdlib/ext/json.nu`
 // negative-int form `: i FOO -32700` works thanks to grammar v1.2's
 // negative-literal lexing.
 
-: i mcp_err_parse_error      -32700
-: i mcp_err_invalid_request  -32600
+: i mcp_err_parse_error -32700
+: i mcp_err_invalid_request -32600
 : i mcp_err_method_not_found -32601
-: i mcp_err_invalid_params   -32602
-: i mcp_err_internal_error   -32603
+: i mcp_err_invalid_params -32602
+: i mcp_err_internal_error -32603
 
 // ── Logging ─────────────────────────────────────────────────────────
 
 @ mcp_log s text → v {
-  ( nurl_eprint `[mcp] ` )
-  ( nurl_eprint text )
-  ( nurl_eprint `\n` )
-  ( eflush )
+    ( nurl_eprint `[mcp] ` )
+    ( nurl_eprint text )
+    ( nurl_eprint `\n` )
+    ( eflush )
 }
 
 // ── Reading ─────────────────────────────────────────────────────────
@@ -132,146 +132,146 @@ $ `stdlib/ext/json.nu`
 // logs to stderr and keeps reading. Only returns None on stdin EOF
 // so the user's main loop can use `?? msg` as the termination signal.
 
-@ mcp_read_request → ? Json {
-  : ~ b looking T
-  ~ looking {
-    : String line ( read_line )
+@ mcp_read_request → ?Json {
+    : ~ b looking T
+    ~ looking {
+        : String line ( read_line )
 
-    ? ( stdin_eof ) {
-      ( string_free line )
-      ^ @ ? Json { F @ Json { JNull } }
-    } {}
+        ? ( stdin_eof ) {
+            ( string_free line )
+            ^ @ ?Json { F @ Json { JNull } }
+        } {}
 
-    : i ll ( string_len line )
-    ? == ll 0 {
-      ( string_free line )
-    } {
-      : ! Json ParseErr pj ( json_parse ( string_data line ) )
-      ?? pj {
-        T j → {
-          ( string_free line )
-          ^ @ ? Json { T j }
+        : i ll ( string_len line )
+        ? == ll 0 {
+            ( string_free line )
+        } {
+            : !Json ParseErr pj ( json_parse ( string_data line ) )
+            ?? pj {
+                T j → {
+                    ( string_free line )
+                    ^ @ ?Json { T j }
+                }
+                F _ → {
+                    ( mcp_log `parse error, skipping line` )
+                    ( string_free line )
+                }
+            }
         }
-        F _ → {
-          ( mcp_log `parse error, skipping line` )
-          ( string_free line )
-        }
-      }
     }
-  }
-  ^ @ ? Json { F @ Json { JNull } }
+    ^ @ ?Json { F @ Json { JNull } }
 }
 
 // ── Writing ─────────────────────────────────────────────────────────
 
 @ mcp_send_message Json msg → v {
-  : String s ( json_stringify msg )
-  ( nurl_print ( string_data s ) )
-  ( nurl_print `\n` )
-  ( flush )
-  ( string_free s )
-  ( json_free msg )
+    : String s ( json_stringify msg )
+    ( nurl_print ( string_data s ) )
+    ( nurl_print `\n` )
+    ( flush )
+    ( string_free s )
+    ( json_free msg )
 }
 
 // ── JSON-RPC envelopes ──────────────────────────────────────────────
 
 @ mcp_response_result Json id Json result → Json {
-  : Json out ( json_obj_new )
-  ( json_obj_set out `jsonrpc` ( json_str_lit `2.0` ) )
-  ( json_obj_set out `id`      ( json_clone id ) )
-  ( json_obj_set out `result`  result )
-  ^ out
+    : Json out ( json_obj_new )
+    ( json_obj_set out `jsonrpc` ( json_str_lit `2.0` ) )
+    ( json_obj_set out `id` ( json_clone id ) )
+    ( json_obj_set out `result` result )
+    ^ out
 }
 
 @ mcp_response_error Json id i code s message → Json {
-  : Json err ( json_obj_new )
-  ( json_obj_set err `code`    ( json_int code ) )
-  ( json_obj_set err `message` ( json_str_lit message ) )
-  : Json out ( json_obj_new )
-  ( json_obj_set out `jsonrpc` ( json_str_lit `2.0` ) )
-  ( json_obj_set out `id`      ( json_clone id ) )
-  ( json_obj_set out `error`   err )
-  ^ out
+    : Json err ( json_obj_new )
+    ( json_obj_set err `code` ( json_int code ) )
+    ( json_obj_set err `message` ( json_str_lit message ) )
+    : Json out ( json_obj_new )
+    ( json_obj_set out `jsonrpc` ( json_str_lit `2.0` ) )
+    ( json_obj_set out `id` ( json_clone id ) )
+    ( json_obj_set out `error` err )
+    ^ out
 }
 
 @ mcp_notification s method Json params → Json {
-  : Json out ( json_obj_new )
-  ( json_obj_set out `jsonrpc` ( json_str_lit `2.0` ) )
-  ( json_obj_set out `method`  ( json_str_lit method ) )
-  ( json_obj_set out `params`  params )
-  ^ out
+    : Json out ( json_obj_new )
+    ( json_obj_set out `jsonrpc` ( json_str_lit `2.0` ) )
+    ( json_obj_set out `method` ( json_str_lit method ) )
+    ( json_obj_set out `params` params )
+    ^ out
 }
 
 // ── MCP-specific result shapes ──────────────────────────────────────
 
 @ mcp_text_content s text → Json {
-  : Json c ( json_obj_new )
-  ( json_obj_set c `type` ( json_str_lit `text` ) )
-  ( json_obj_set c `text` ( json_str_lit text ) )
-  ^ c
+    : Json c ( json_obj_new )
+    ( json_obj_set c `type` ( json_str_lit `text` ) )
+    ( json_obj_set c `text` ( json_str_lit text ) )
+    ^ c
 }
 
 @ __mcp_tool_result_envelope s text b is_err → Json {
-  : Json arr ( json_arr_new )
-  ( json_arr_push arr ( mcp_text_content text ) )
-  : Json out ( json_obj_new )
-  ( json_obj_set out `content` arr )
-  ( json_obj_set out `isError` ( json_bool is_err ) )
-  ^ out
+    : Json arr ( json_arr_new )
+    ( json_arr_push arr ( mcp_text_content text ) )
+    : Json out ( json_obj_new )
+    ( json_obj_set out `content` arr )
+    ( json_obj_set out `isError` ( json_bool is_err ) )
+    ^ out
 }
 
 @ mcp_tool_result_text s text → Json {
-  ^ ( __mcp_tool_result_envelope text F )
+    ^ ( __mcp_tool_result_envelope text F )
 }
 
 @ mcp_tool_result_error s message → Json {
-  ^ ( __mcp_tool_result_envelope message T )
+    ^ ( __mcp_tool_result_envelope message T )
 }
 
 @ mcp_tool_descriptor s name s desc Json schema → Json {
-  : Json out ( json_obj_new )
-  ( json_obj_set out `name`        ( json_str_lit name ) )
-  ( json_obj_set out `description` ( json_str_lit desc ) )
-  ( json_obj_set out `inputSchema` schema )
-  ^ out
+    : Json out ( json_obj_new )
+    ( json_obj_set out `name` ( json_str_lit name ) )
+    ( json_obj_set out `description` ( json_str_lit desc ) )
+    ( json_obj_set out `inputSchema` schema )
+    ^ out
 }
 
 // CONSUMES the Vec[Json]: every element is moved into the wrapped
 // JArr. After this call the caller must not vec_free the input — the
 // Json envelope owns it.
 @ mcp_tools_list_result ( Vec Json ) tools → Json {
-  : Json arr ( json_arr_new )
-  : i n ( vec_len [Json] tools )
-  : ~ i k 0
-  ~ < k n {
-    : ? Json e ( vec_get [Json] tools k )
-    ?? e {
-      T jv → ( json_arr_push arr jv )
-      F    → {}
+    : Json arr ( json_arr_new )
+    : i n ( vec_len [Json] tools )
+    : ~ i k 0
+    ~ < k n {
+        : ?Json e ( vec_get [Json] tools k )
+        ?? e {
+            T jv → ( json_arr_push arr jv )
+            F → {}
+        }
+        = k + k 1
     }
-    = k + k 1
-  }
-  // Drop the now-emptied Vec — JArr keeps a fresh one inside.
-  ( vec_free [Json] tools )
-  : Json out ( json_obj_new )
-  ( json_obj_set out `tools` arr )
-  ^ out
+    // Drop the now-emptied Vec — JArr keeps a fresh one inside.
+    ( vec_free [Json] tools )
+    : Json out ( json_obj_new )
+    ( json_obj_set out `tools` arr )
+    ^ out
 }
 
 @ mcp_initialize_result s name s version → Json {
-  : Json info ( json_obj_new )
-  ( json_obj_set info `name`    ( json_str_lit name ) )
-  ( json_obj_set info `version` ( json_str_lit version ) )
+    : Json info ( json_obj_new )
+    ( json_obj_set info `name` ( json_str_lit name ) )
+    ( json_obj_set info `version` ( json_str_lit version ) )
 
-  // Declare only the `tools` capability for now. Empty object means
-  // "supported, no extra options" per the MCP spec.
-  : Json tools_cap ( json_obj_new )
-  : Json caps      ( json_obj_new )
-  ( json_obj_set caps `tools` tools_cap )
+    // Declare only the `tools` capability for now. Empty object means
+    // "supported, no extra options" per the MCP spec.
+    : Json tools_cap ( json_obj_new )
+    : Json caps ( json_obj_new )
+    ( json_obj_set caps `tools` tools_cap )
 
-  : Json out ( json_obj_new )
-  ( json_obj_set out `protocolVersion` ( json_str_lit `2024-11-05` ) )
-  ( json_obj_set out `capabilities`    caps )
-  ( json_obj_set out `serverInfo`      info )
-  ^ out
+    : Json out ( json_obj_new )
+    ( json_obj_set out `protocolVersion` ( json_str_lit `2024-11-05` ) )
+    ( json_obj_set out `capabilities` caps )
+    ( json_obj_set out `serverInfo` info )
+    ^ out
 }

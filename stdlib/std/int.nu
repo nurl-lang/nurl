@@ -27,23 +27,23 @@ $ `stdlib/core/errors.nu`
 // exposed as a niladic function that evaluates the two's-complement
 // minimum at call time.
 @ int_min_val → i {
-  ^ - -9223372036854775807 1
+    ^ - -9223372036854775807 1
 }
 
 // ── Operations ─────────────────────────────────────────────────────
 
 @ int_abs i n → i {
-  ^ ( nurl_iabs n )
+    ^ ( nurl_iabs n )
 }
 
 @ int_pow i x i y → i {
-  ^ ( nurl_ipow x y )
+    ^ ( nurl_ipow x y )
 }
 
 @ int_sign i n → i {
-  ? < n 0 { ^ -1 } {}
-  ? > n 0 { ^ 1 }  {}
-  ^ 0
+    ? < n 0 { ^ -1 } {}
+    ? > n 0 { ^ 1 } {}
+    ^ 0
 }
 
 // Strict decimal parse from raw `s`. Accepts optional leading '-' or '+'
@@ -51,25 +51,25 @@ $ `stdlib/core/errors.nu`
 // `string_to_int` (which takes an owned String) but accepts a raw `i8*`
 // directly, matching `float_parse`'s shape so CLI args / env vars can be
 // parsed without a String round-trip.
-@ int_parse s str → ! i ParseErr {
-  : i len ( nurl_str_len str )
-  ? == len 0 { ^ @ ! i ParseErr { F @ ParseErr { Empty } } } {}
+@ int_parse s str → !i ParseErr {
+    : i len ( nurl_str_len str )
+    ? == len 0 { ^ @ !i ParseErr { F @ ParseErr { Empty } } } {}
 
-  : ~ i idx 0
-  : i first ( nurl_str_get str 0 )
-  // '-' = 45, '+' = 43
-  ? | == first 45 == first 43 { = idx 1 } {}
+    : ~ i idx 0
+    : i first ( nurl_str_get str 0 )
+    // '-' = 45, '+' = 43
+    ? | == first 45 == first 43 { = idx 1 } {}
 
-  // bare sign with no digits
-  ? == idx len { ^ @ ! i ParseErr { F @ ParseErr { Empty } } } {}
+    // bare sign with no digits
+    ? == idx len { ^ @ !i ParseErr { F @ ParseErr { Empty } } } {}
 
-  ~ < idx len {
-    : i c ( nurl_str_get str idx )
-    ? == ( nurl_is_digit c ) 0 {
-      ^ @ ! i ParseErr { F @ ParseErr { BadFormat } }
-    } {}
-    = idx + idx 1
-  }
+    ~ < idx len {
+        : i c ( nurl_str_get str idx )
+        ? == ( nurl_is_digit c ) 0 {
+            ^ @ !i ParseErr { F @ ParseErr { BadFormat } }
+        } {}
+        = idx + idx 1
+    }
 
-  ^ @ ! i ParseErr { T ( nurl_str_to_int str ) }
+    ^ @ !i ParseErr { T ( nurl_str_to_int str ) }
 }

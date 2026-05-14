@@ -19,7 +19,7 @@
 @ main → i {
     ( nurl_print `For-each test...\n` )
 
-    : [i nums [ i | 3 7 1 9 4 2 8 5 ]
+    : [i nums [i | 3 7 1 9 4 2 8 5]
 
     ( nurl_print `Sum: ` )
     ( nurl_print ( nurl_str_int ( sum nums ) ) )
@@ -39,7 +39,7 @@
     ( nurl_print `\n` )
 
     // String slice
-    : [s words [ s | `hello` `world` `from` `nurl` ]
+    : [s words [s | `hello` `world` `from` `nurl`]
     ( nurl_print `Words: ` )
     ~ w words {
         ( nurl_print w )

@@ -6,8 +6,13 @@
 // ============================================================
 
 // FFI-liitännät libc:hen
-& `libc` @ strlen s str → i
-& `libc` @ write i fd s buf i count → i
+& `libc`
+
+@ strlen s str → i
+
+& `libc`
+
+@ write i fd s buf i count → i
 
 // 1. Määritellään Fat Pointer -merkkijono, sama layout kuin slicellä!
 : String {
@@ -34,10 +39,10 @@
 @ char_at String str i index → i {
     // Bounds check: Jos index >= len, palautetaan -1 (eli ~0)
     ^ ? >= index . str len
-        ~ 0
-        // cast_expr (#): raw pointer luetaan (. ptr idx), ja 
-        // tuloksena oleva i8 pakotetaan i:ksi (i64)
-        # i . . str ptr index
+    ~ 0
+    // cast_expr (#): raw pointer luetaan (. ptr idx), ja 
+    // tuloksena oleva i8 pakotetaan i:ksi (i64)
+    # i . . str ptr index
 }
 
 @ main → i {
@@ -53,9 +58,9 @@
     // Haetaan merkkejä (ASCII-arvot)
     : i char1 ( char_at s1 0 )  // 'h' = 104
     : i char2 ( char_at s2 4 )  // '!' = 33
-    
+
     // Yritetään lukea yli rajojen
-    : i char3 ( char_at s2 10 ) // Out of bounds = -1 (~0)
+    : i char3 ( char_at s2 10 )  // Out of bounds = -1 (~0)
 
     ( nurl_print `char1 ('h'): ` )
     ( nurl_print ( nurl_str_int char1 ) )
@@ -78,5 +83,5 @@
     ( nurl_print `\n` )
 
     // Palautetaan 0 jos kaikki OK
-    ^ ? == sum 146  0  1
+    ^ ? == sum 146 0 1
 }

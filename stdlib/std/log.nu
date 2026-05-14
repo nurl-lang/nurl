@@ -62,152 +62,159 @@ $ `stdlib/std/fmt.nu`
 //    accepts literal RHS; using functions also avoids prelude clashes) ─
 
 @ log_level_debug → i { ^ 0 }
-@ log_level_info  → i { ^ 1 }
-@ log_level_warn  → i { ^ 2 }
+
+@ log_level_info → i { ^ 1 }
+
+@ log_level_warn → i { ^ 2 }
+
 @ log_level_error → i { ^ 3 }
-@ log_level_off   → i { ^ 4 }
+
+@ log_level_off → i { ^ 4 }
 
 // ── Threshold accessors ─────────────────────────────────────────────
 
 @ log_set_level i lvl → v {
-  ( nurl_log_level_set lvl )
+    ( nurl_log_level_set lvl )
 }
 
 @ log_get_level → i {
-  ^ ( nurl_log_level_get )
+    ^ ( nurl_log_level_get )
 }
 
 // ── Internal emit ───────────────────────────────────────────────────
 
 @ __log_tag i level → s {
-  ? == level 0 { ^ `[DEBUG] ` } {}
-  ? == level 1 { ^ `[INFO]  ` } {}
-  ? == level 2 { ^ `[WARN]  ` } {}
-  ? == level 3 { ^ `[ERROR] ` } {}
-  ^ `[?]     `
+    ? == level 0 { ^ `[DEBUG] ` } {}
+    ? == level 1 { ^ `[INFO]  ` } {}
+    ? == level 2 { ^ `[WARN]  ` } {}
+    ? == level 3 { ^ `[ERROR] ` } {}
+    ^ `[?]     `
 }
 
 @ __log_emit i level s msg → v {
-  : i thr ( nurl_log_level_get )
-  ? >= level thr {
-    ( nurl_eprint ( __log_tag level ) )
-    ( nurl_eprint msg )
-    ( nurl_eprint `\n` )
-  } {}
+    : i thr ( nurl_log_level_get )
+    ? >= level thr {
+        ( nurl_eprint ( __log_tag level ) )
+        ( nurl_eprint msg )
+        ( nurl_eprint `\n` )
+    } {}
 }
 
 @ __log_emitf i level s tmpl ( Vec s ) args → v {
-  : i thr ( nurl_log_level_get )
-  ? >= level thr {
-    : String r ( fmt tmpl args )
-    ( nurl_eprint ( __log_tag level ) )
-    ( nurl_eprint ( string_data r ) )
-    ( nurl_eprint `\n` )
-    ( string_free r )
-  } {}
+    : i thr ( nurl_log_level_get )
+    ? >= level thr {
+        : String r ( fmt tmpl args )
+        ( nurl_eprint ( __log_tag level ) )
+        ( nurl_eprint ( string_data r ) )
+        ( nurl_eprint `\n` )
+        ( string_free r )
+    } {}
 }
 
 // ── Raw-message variants ────────────────────────────────────────────
 
 @ log_debug s msg → v { ( __log_emit 0 msg ) }
-@ log_info  s msg → v { ( __log_emit 1 msg ) }
-@ log_warn  s msg → v { ( __log_emit 2 msg ) }
+
+@ log_info s msg → v { ( __log_emit 1 msg ) }
+
+@ log_warn s msg → v { ( __log_emit 2 msg ) }
+
 @ log_error s msg → v { ( __log_emit 3 msg ) }
 
 // ── Formatted variants (1..3 args; build a Vec[s] then dispatch) ────
 
 @ log_debugf1 s tmpl s a → v {
-  : ( Vec s ) v ( vec_with_cap [s] 1 )
-  ( vec_push [s] v a )
-  ( __log_emitf 0 tmpl v )
-  ( vec_free [s] v )
+    : ( Vec s ) v ( vec_with_cap [s] 1 )
+    ( vec_push [s] v a )
+    ( __log_emitf 0 tmpl v )
+    ( vec_free [s] v )
 }
 
 @ log_debugf2 s tmpl s a s b → v {
-  : ( Vec s ) v ( vec_with_cap [s] 2 )
-  ( vec_push [s] v a )
-  ( vec_push [s] v b )
-  ( __log_emitf 0 tmpl v )
-  ( vec_free [s] v )
+    : ( Vec s ) v ( vec_with_cap [s] 2 )
+    ( vec_push [s] v a )
+    ( vec_push [s] v b )
+    ( __log_emitf 0 tmpl v )
+    ( vec_free [s] v )
 }
 
 @ log_debugf3 s tmpl s a s b s c → v {
-  : ( Vec s ) v ( vec_with_cap [s] 3 )
-  ( vec_push [s] v a )
-  ( vec_push [s] v b )
-  ( vec_push [s] v c )
-  ( __log_emitf 0 tmpl v )
-  ( vec_free [s] v )
+    : ( Vec s ) v ( vec_with_cap [s] 3 )
+    ( vec_push [s] v a )
+    ( vec_push [s] v b )
+    ( vec_push [s] v c )
+    ( __log_emitf 0 tmpl v )
+    ( vec_free [s] v )
 }
 
 @ log_infof1 s tmpl s a → v {
-  : ( Vec s ) v ( vec_with_cap [s] 1 )
-  ( vec_push [s] v a )
-  ( __log_emitf 1 tmpl v )
-  ( vec_free [s] v )
+    : ( Vec s ) v ( vec_with_cap [s] 1 )
+    ( vec_push [s] v a )
+    ( __log_emitf 1 tmpl v )
+    ( vec_free [s] v )
 }
 
 @ log_infof2 s tmpl s a s b → v {
-  : ( Vec s ) v ( vec_with_cap [s] 2 )
-  ( vec_push [s] v a )
-  ( vec_push [s] v b )
-  ( __log_emitf 1 tmpl v )
-  ( vec_free [s] v )
+    : ( Vec s ) v ( vec_with_cap [s] 2 )
+    ( vec_push [s] v a )
+    ( vec_push [s] v b )
+    ( __log_emitf 1 tmpl v )
+    ( vec_free [s] v )
 }
 
 @ log_infof3 s tmpl s a s b s c → v {
-  : ( Vec s ) v ( vec_with_cap [s] 3 )
-  ( vec_push [s] v a )
-  ( vec_push [s] v b )
-  ( vec_push [s] v c )
-  ( __log_emitf 1 tmpl v )
-  ( vec_free [s] v )
+    : ( Vec s ) v ( vec_with_cap [s] 3 )
+    ( vec_push [s] v a )
+    ( vec_push [s] v b )
+    ( vec_push [s] v c )
+    ( __log_emitf 1 tmpl v )
+    ( vec_free [s] v )
 }
 
 @ log_warnf1 s tmpl s a → v {
-  : ( Vec s ) v ( vec_with_cap [s] 1 )
-  ( vec_push [s] v a )
-  ( __log_emitf 2 tmpl v )
-  ( vec_free [s] v )
+    : ( Vec s ) v ( vec_with_cap [s] 1 )
+    ( vec_push [s] v a )
+    ( __log_emitf 2 tmpl v )
+    ( vec_free [s] v )
 }
 
 @ log_warnf2 s tmpl s a s b → v {
-  : ( Vec s ) v ( vec_with_cap [s] 2 )
-  ( vec_push [s] v a )
-  ( vec_push [s] v b )
-  ( __log_emitf 2 tmpl v )
-  ( vec_free [s] v )
+    : ( Vec s ) v ( vec_with_cap [s] 2 )
+    ( vec_push [s] v a )
+    ( vec_push [s] v b )
+    ( __log_emitf 2 tmpl v )
+    ( vec_free [s] v )
 }
 
 @ log_warnf3 s tmpl s a s b s c → v {
-  : ( Vec s ) v ( vec_with_cap [s] 3 )
-  ( vec_push [s] v a )
-  ( vec_push [s] v b )
-  ( vec_push [s] v c )
-  ( __log_emitf 2 tmpl v )
-  ( vec_free [s] v )
+    : ( Vec s ) v ( vec_with_cap [s] 3 )
+    ( vec_push [s] v a )
+    ( vec_push [s] v b )
+    ( vec_push [s] v c )
+    ( __log_emitf 2 tmpl v )
+    ( vec_free [s] v )
 }
 
 @ log_errorf1 s tmpl s a → v {
-  : ( Vec s ) v ( vec_with_cap [s] 1 )
-  ( vec_push [s] v a )
-  ( __log_emitf 3 tmpl v )
-  ( vec_free [s] v )
+    : ( Vec s ) v ( vec_with_cap [s] 1 )
+    ( vec_push [s] v a )
+    ( __log_emitf 3 tmpl v )
+    ( vec_free [s] v )
 }
 
 @ log_errorf2 s tmpl s a s b → v {
-  : ( Vec s ) v ( vec_with_cap [s] 2 )
-  ( vec_push [s] v a )
-  ( vec_push [s] v b )
-  ( __log_emitf 3 tmpl v )
-  ( vec_free [s] v )
+    : ( Vec s ) v ( vec_with_cap [s] 2 )
+    ( vec_push [s] v a )
+    ( vec_push [s] v b )
+    ( __log_emitf 3 tmpl v )
+    ( vec_free [s] v )
 }
 
 @ log_errorf3 s tmpl s a s b s c → v {
-  : ( Vec s ) v ( vec_with_cap [s] 3 )
-  ( vec_push [s] v a )
-  ( vec_push [s] v b )
-  ( vec_push [s] v c )
-  ( __log_emitf 3 tmpl v )
-  ( vec_free [s] v )
+    : ( Vec s ) v ( vec_with_cap [s] 3 )
+    ( vec_push [s] v a )
+    ( vec_push [s] v b )
+    ( vec_push [s] v c )
+    ( __log_emitf 3 tmpl v )
+    ( vec_free [s] v )
 }

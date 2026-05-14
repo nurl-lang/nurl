@@ -21,13 +21,13 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 // ── Token kinds ─────────────────────────────────────────────────
-: i TT_FMT_IDENT    1   // identifier, type keyword, T/F bool, ::-merged
-: i TT_FMT_INT      2   // decimal integer (possibly leading '-')
-: i TT_FMT_FLOAT    3   // decimal float   (possibly leading '-')
-: i TT_FMT_STR      4   // `...` backtick string (text includes the backticks)
-: i TT_FMT_OP       5   // any operator / punctuation token (single- or multi-char)
-: i TT_FMT_COMMENT  6   // // ... line comment (text includes the leading //)
-: i TT_FMT_EOF      7   // sentinel; emitted exactly once at end of stream
+: i TT_FMT_IDENT 1  // identifier, type keyword, T/F bool, ::-merged
+: i TT_FMT_INT 2  // decimal integer (possibly leading '-')
+: i TT_FMT_FLOAT 3  // decimal float   (possibly leading '-')
+: i TT_FMT_STR 4  // `...` backtick string (text includes the backticks)
+: i TT_FMT_OP 5  // any operator / punctuation token (single- or multi-char)
+: i TT_FMT_COMMENT 6  // // ... line comment (text includes the leading //)
+: i TT_FMT_EOF 7  // sentinel; emitted exactly once at end of stream
 
 : FmtTok {
     i kind
@@ -62,34 +62,34 @@ $ `stdlib/core/vec.nu`
 // for anything not in this list, so the formatter degrades
 // gracefully on syntax it does not yet recognise.
 @ fmt_is_op_byte i c → b {
-    ? == c 64  { ^ T } {}    // @
-    ? == c 58  { ^ T } {}    // :
-    ? == c 61  { ^ T } {}    // =
-    ? == c 94  { ^ T } {}    // ^
-    ? == c 63  { ^ T } {}    // ?
-    ? == c 126 { ^ T } {}    // ~
-    ? == c 40  { ^ T } {}    // (
-    ? == c 41  { ^ T } {}    // )
-    ? == c 123 { ^ T } {}    // {
-    ? == c 125 { ^ T } {}    // }
-    ? == c 46  { ^ T } {}    // .
-    ? == c 35  { ^ T } {}    // #
-    ? == c 33  { ^ T } {}    // !
-    ? == c 43  { ^ T } {}    // +
-    ? == c 45  { ^ T } {}    // -
-    ? == c 42  { ^ T } {}    // *
-    ? == c 47  { ^ T } {}    // /
-    ? == c 37  { ^ T } {}    // %
-    ? == c 38  { ^ T } {}    // &
-    ? == c 124 { ^ T } {}    // |
-    ? == c 60  { ^ T } {}    // <
-    ? == c 62  { ^ T } {}    // >
-    ? == c 91  { ^ T } {}    // [
-    ? == c 93  { ^ T } {}    // ]
-    ? == c 92  { ^ T } {}    // \
-    ? == c 36  { ^ T } {}    // $
-    ? == c 59  { ^ T } {}    // ;
-    ? == c 90  { ^ T } {}    // Z (sizeof)
+    ? == c 64 { ^ T } {}  // @
+    ? == c 58 { ^ T } {}  // :
+    ? == c 61 { ^ T } {}  // =
+    ? == c 94 { ^ T } {}  // ^
+    ? == c 63 { ^ T } {}  // ?
+    ? == c 126 { ^ T } {}  // ~
+    ? == c 40 { ^ T } {}  // (
+    ? == c 41 { ^ T } {}  // )
+    ? == c 123 { ^ T } {}  // {
+    ? == c 125 { ^ T } {}  // }
+    ? == c 46 { ^ T } {}  // .
+    ? == c 35 { ^ T } {}  // #
+    ? == c 33 { ^ T } {}  // !
+    ? == c 43 { ^ T } {}  // +
+    ? == c 45 { ^ T } {}  // -
+    ? == c 42 { ^ T } {}  // *
+    ? == c 47 { ^ T } {}  // /
+    ? == c 37 { ^ T } {}  // %
+    ? == c 38 { ^ T } {}  // &
+    ? == c 124 { ^ T } {}  // |
+    ? == c 60 { ^ T } {}  // <
+    ? == c 62 { ^ T } {}  // >
+    ? == c 91 { ^ T } {}  // [
+    ? == c 93 { ^ T } {}  // ]
+    ? == c 92 { ^ T } {}  // \
+    ? == c 36 { ^ T } {}  // $
+    ? == c 59 { ^ T } {}  // ;
+    ? == c 90 { ^ T } {}  // Z (sizeof)
     ^ F
 }
 
@@ -104,15 +104,15 @@ $ `stdlib/core/vec.nu`
 @ __fmt_emit ( Vec FmtTok ) toks s src i start i end i kind i nl_acc → v {
     : i nl_clamped ? > nl_acc 2 2 nl_acc
     ( vec_push [FmtTok] toks
-        @ FmtTok { kind ( nurl_str_slice src start - end start ) nl_clamped } )
+    @ FmtTok { kind ( nurl_str_slice src start - end start ) nl_clamped } )
 }
 
 // Match a UTF-8 `→` (E2 86 92) at index i. Out-of-range slots read
 // as 0 from nurl_str_get so the bounds check is implicit.
 @ __fmt_is_arrow s src i i → b {
     & == 226 ( nurl_str_get src i )
-        & == 134 ( nurl_str_get src + i 1 )
-            == 146 ( nurl_str_get src + i 2 )
+    & == 134 ( nurl_str_get src + i 1 )
+    == 146 ( nurl_str_get src + i 2 )
 }
 
 // ── Main tokenise driver ───────────────────────────────────────
@@ -154,155 +154,155 @@ $ `stdlib/core/vec.nu`
                 = i j
             } {
 
-            // 3) Backtick string with \X escapes.
-            //    Match the runtime lexer (stdlib/runtime.c §lex_next):
-            //    a backslash advances TWO bytes ONLY when followed by
-            //    one of n / t / r / \. For any other `\X` pair the
-            //    backslash itself is a raw byte (grammar §LEXICAL: "any
-            //    other \X is passed through verbatim"), which means the
-            //    following byte CAN be the closing backtick (e.g. the
-            //    literal `\` on its own — backslash, then end of
-            //    string).
-            ? == c 96 {
-                : ~ i j + i 1
-                : ~ b done F
-                ~ ! done {
-                    ? >= j n {
-                        = done T
-                    } {
-                        : i ch ( nurl_str_get src j )
-                        ? & == ch 92 < + j 1 n {
-                            : i nx ( nurl_str_get src + j 1 )
-                            ? | | | == nx 110 == nx 116 == nx 114 == nx 92 {
-                                = j + j 2
-                            } {
-                                = j + j 1
-                            }
-                        } {
-                        ? == ch 96 {
-                            = j + j 1
+                // 3) Backtick string with \X escapes.
+                //    Match the runtime lexer (stdlib/runtime.c §lex_next):
+                //    a backslash advances TWO bytes ONLY when followed by
+                //    one of n / t / r / \. For any other `\X` pair the
+                //    backslash itself is a raw byte (grammar §LEXICAL: "any
+                //    other \X is passed through verbatim"), which means the
+                //    following byte CAN be the closing backtick (e.g. the
+                //    literal `\` on its own — backslash, then end of
+                //    string).
+                ? == c 96 {
+                    : ~ i j + i 1
+                    : ~ b done F
+                    ~ ! done {
+                        ? >= j n {
                             = done T
                         } {
-                            = j + j 1
-                        }}
+                            : i ch ( nurl_str_get src j )
+                            ? & == ch 92 < + j 1 n {
+                                : i nx ( nurl_str_get src + j 1 )
+                                ? | | | == nx 110 == nx 116 == nx 114 == nx 92 {
+                                    = j + j 2
+                                } {
+                                    = j + j 1
+                                }
+                            } {
+                                ? == ch 96 {
+                                    = j + j 1
+                                    = done T
+                                } {
+                                    = j + j 1
+                                } }
+                        }
                     }
-                }
-                ( __fmt_emit toks src i j TT_FMT_STR nl_acc )
-                = nl_acc 0
-                = i j
-            } {
+                    ( __fmt_emit toks src i j TT_FMT_STR nl_acc )
+                    = nl_acc 0
+                    = i j
+                } {
 
-            // 4) Numeric literal: digit, or `-` immediately followed by digit
-            ? | ( fmt_is_digit c )
-                & == c 45 ( fmt_is_digit c2 )
-            {
-                : ~ i j i
-                ? == c 45 {
-                    = j + j 1
-                } {}
-                ~ & < j n ( fmt_is_digit ( nurl_str_get src j ) ) {
-                    = j + j 1
-                }
-                : ~ i kind TT_FMT_INT
-                // FLOAT requires `.` followed by another digit.
-                ? & == ( nurl_str_get src j ) 46
-                    ( fmt_is_digit ( nurl_str_get src + j 1 ) )
-                {
-                    = kind TT_FMT_FLOAT
-                    = j + j 1
-                    ~ & < j n ( fmt_is_digit ( nurl_str_get src j ) ) {
-                        = j + j 1
-                    }
-                    : i ec ( nurl_str_get src j )
-                    ? | == ec 101 == ec 69 {
-                        = j + j 1
-                        : i es ( nurl_str_get src j )
-                        ? | == es 43 == es 45 {
+                    // 4) Numeric literal: digit, or `-` immediately followed by digit
+                    ? | ( fmt_is_digit c )
+                    & == c 45 ( fmt_is_digit c2 )
+                    {
+                        : ~ i j i
+                        ? == c 45 {
                             = j + j 1
                         } {}
                         ~ & < j n ( fmt_is_digit ( nurl_str_get src j ) ) {
                             = j + j 1
                         }
-                    } {}
-                } {}
-                ( __fmt_emit toks src i j kind nl_acc )
-                = nl_acc 0
-                = i j
-            } {
+                        : ~ i kind TT_FMT_INT
+                        // FLOAT requires `.` followed by another digit.
+                        ? & == ( nurl_str_get src j ) 46
+                        ( fmt_is_digit ( nurl_str_get src + j 1 ) )
+                        {
+                            = kind TT_FMT_FLOAT
+                            = j + j 1
+                            ~ & < j n ( fmt_is_digit ( nurl_str_get src j ) ) {
+                                = j + j 1
+                            }
+                            : i ec ( nurl_str_get src j )
+                            ? | == ec 101 == ec 69 {
+                                = j + j 1
+                                : i es ( nurl_str_get src j )
+                                ? | == es 43 == es 45 {
+                                    = j + j 1
+                                } {}
+                                ~ & < j n ( fmt_is_digit ( nurl_str_get src j ) ) {
+                                    = j + j 1
+                                }
+                            } {}
+                        } {}
+                        ( __fmt_emit toks src i j kind nl_acc )
+                        = nl_acc 0
+                        = i j
+                    } {
 
-            // 5) Identifier (folds in type keywords and T/F bool).
-            //    IDENT_PLAIN [ '::' IDENT_PLAIN ]*
-            ? ( fmt_is_ident_start c ) {
-                : ~ i j + i 1
-                ~ & < j n ( fmt_is_ident_cont ( nurl_str_get src j ) ) {
-                    = j + j 1
-                }
-                ~ & & < + j 1 n
-                      == ( nurl_str_get src j ) 58
-                      == ( nurl_str_get src + j 1 ) 58
-                {
-                    = j + j 2
-                    ~ & < j n ( fmt_is_ident_cont ( nurl_str_get src j ) ) {
-                        = j + j 1
-                    }
-                }
-                ( __fmt_emit toks src i j TT_FMT_IDENT nl_acc )
-                = nl_acc 0
-                = i j
-            } {
+                        // 5) Identifier (folds in type keywords and T/F bool).
+                        //    IDENT_PLAIN [ '::' IDENT_PLAIN ]*
+                        ? ( fmt_is_ident_start c ) {
+                            : ~ i j + i 1
+                            ~ & < j n ( fmt_is_ident_cont ( nurl_str_get src j ) ) {
+                                = j + j 1
+                            }
+                            ~ & & < + j 1 n
+                            == ( nurl_str_get src j ) 58
+                            == ( nurl_str_get src + j 1 ) 58
+                            {
+                                = j + j 2
+                                ~ & < j n ( fmt_is_ident_cont ( nurl_str_get src j ) ) {
+                                    = j + j 1
+                                }
+                            }
+                            ( __fmt_emit toks src i j TT_FMT_IDENT nl_acc )
+                            = nl_acc 0
+                            = i j
+                        } {
 
-            // 6) Multi-byte arrow `→` (E2 86 92)
-            ? ( __fmt_is_arrow src i ) {
-                ( __fmt_emit toks src i + i 3 TT_FMT_OP nl_acc )
-                = nl_acc 0
-                = i + i 3
-            } {
+                            // 6) Multi-byte arrow `→` (E2 86 92)
+                            ? ( __fmt_is_arrow src i ) {
+                                ( __fmt_emit toks src i + i 3 TT_FMT_OP nl_acc )
+                                = nl_acc 0
+                                = i + i 3
+                            } {
 
-            // 7) Two-char operators
-            ? & == c 61 == c2 61 {                  // ==
-                ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
-                = nl_acc 0
-                = i + i 2
-            } {
-            ? & == c 33 == c2 61 {                  // !=
-                ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
-                = nl_acc 0
-                = i + i 2
-            } {
-            ? & == c 60 == c2 61 {                  // <=
-                ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
-                = nl_acc 0
-                = i + i 2
-            } {
-            ? & == c 62 == c2 61 {                  // >=
-                ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
-                = nl_acc 0
-                = i + i 2
-            } {
-            ? & == c 60 == c2 60 {                  // <<
-                ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
-                = nl_acc 0
-                = i + i 2
-            } {
-            ? & == c 62 == c2 62 {                  // >>
-                ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
-                = nl_acc 0
-                = i + i 2
-            } {
-            ? & == c 63 == c2 63 {                  // ??
-                ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
-                = nl_acc 0
-                = i + i 2
-            } {
+                                // 7) Two-char operators
+                                ? & == c 61 == c2 61 {  // ==
+                                    ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                    = nl_acc 0
+                                    = i + i 2
+                                } {
+                                    ? & == c 33 == c2 61 {  // !=
+                                        ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                        = nl_acc 0
+                                        = i + i 2
+                                    } {
+                                        ? & == c 60 == c2 61 {  // <=
+                                            ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                            = nl_acc 0
+                                            = i + i 2
+                                        } {
+                                            ? & == c 62 == c2 61 {  // >=
+                                                ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                                = nl_acc 0
+                                                = i + i 2
+                                            } {
+                                                ? & == c 60 == c2 60 {  // <<
+                                                    ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                                    = nl_acc 0
+                                                    = i + i 2
+                                                } {
+                                                    ? & == c 62 == c2 62 {  // >>
+                                                        ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                                        = nl_acc 0
+                                                        = i + i 2
+                                                    } {
+                                                        ? & == c 63 == c2 63 {  // ??
+                                                            ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                                            = nl_acc 0
+                                                            = i + i 2
+                                                        } {
 
-            // 8) Fallback: emit any single byte as an OP token. Whitelisted
-            //    grammar bytes go through this path; unknown bytes too,
-            //    so the round-trip test catches any mismatch.
-            ( __fmt_emit toks src i + i 1 TT_FMT_OP nl_acc )
-            = nl_acc 0
-            = i + i 1
+                                                            // 8) Fallback: emit any single byte as an OP token. Whitelisted
+                                                            //    grammar bytes go through this path; unknown bytes too,
+                                                            //    so the round-trip test catches any mismatch.
+                                                            ( __fmt_emit toks src i + i 1 TT_FMT_OP nl_acc )
+                                                            = nl_acc 0
+                                                            = i + i 1
 
-            }}}}}}}}}}}}
+                                                        } } } } } } } } } } } }
         } {}
     }
 

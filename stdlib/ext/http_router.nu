@@ -93,37 +93,37 @@ $ `stdlib/ext/http_response.nu`
 // fine.
 
 : Params {
-  ( Vec QueryPair ) entries
+    ( Vec QueryPair ) entries
 }
 
 @ params_new → Params {
-  ^ @ Params { ( vec_new [QueryPair] ) }
+    ^ @ Params { ( vec_new [QueryPair] ) }
 }
 
 @ params_free Params p → v {
-  ( query_pairs_free . p entries )
+    ( query_pairs_free . p entries )
 }
 
 @ params_count Params p → i {
-  ^ ( vec_len [QueryPair] . p entries )
+    ^ ( vec_len [QueryPair] . p entries )
 }
 
 // Case-SENSITIVE lookup. Path-capture names come from the route author,
 // not the client, so canonical casing is up to them — case-sensitivity
 // matches NURL's everyday `vec_*` / `map_*` semantics.
-@ params_get Params p s key → ? String {
-  : i n ( vec_len [QueryPair] . p entries )
-  : *QueryPair data ( vec_data [QueryPair] . p entries )
-  : ~ i k 0
-  ~ < k n {
-    : QueryPair entry . data k
-    ? != 0 ( nurl_str_eq ( string_data . entry key ) key ) {
-      : String copy ( string_from ( string_data . entry value ) )
-      ^ @ ? String { T copy }
-    } {}
-    = k + k 1
-  }
-  ^ @ ? String { F ( string_new ) }
+@ params_get Params p s key → ?String {
+    : i n ( vec_len [QueryPair] . p entries )
+    : *QueryPair data ( vec_data [QueryPair] . p entries )
+    : ~ i k 0
+    ~ < k n {
+        : QueryPair entry . data k
+        ? != 0 ( nurl_str_eq ( string_data . entry key ) key ) {
+            : String copy ( string_from ( string_data . entry value ) )
+            ^ @ ?String { T copy }
+        } {}
+        = k + k 1
+    }
+    ^ @ ?String { F ( string_new ) }
 }
 
 // ── Route ─────────────────────────────────────────────────────────────
@@ -140,36 +140,36 @@ $ `stdlib/ext/http_response.nu`
 // and `McpClient` already work.
 
 : RouteImpl {
-  String method
-  String pattern
-  ( @ HttpResponse HttpRequest Params ) handler
+    String method
+    String pattern
+    ( @ HttpResponse HttpRequest Params ) handler
 }
 
 : Route { s ctl }
 
 @ __route_free Route route → v {
-  : *RouteImpl impl # *RouteImpl . route ctl
-  ( string_free . impl method  )
-  ( string_free . impl pattern )
-  ( nurl_free #s impl )
+    : *RouteImpl impl # *RouteImpl . route ctl
+    ( string_free . impl method )
+    ( string_free . impl pattern )
+    ( nurl_free # s impl )
 }
 
 // ── Router ────────────────────────────────────────────────────────────
 
 : Router {
-  ( Vec Route ) routes
+    ( Vec Route ) routes
 }
 
 @ router_new → Router {
-  ^ @ Router { ( vec_new [Route] ) }
+    ^ @ Router { ( vec_new [Route] ) }
 }
 
 @ router_free Router r → v {
-  ( vec_free_with [Route] . r routes \ Route route → v { ( __route_free route ) } )
+    ( vec_free_with [Route] . r routes \ Route route → v { ( __route_free route ) } )
 }
 
 @ router_count Router r → i {
-  ^ ( vec_len [Route] . r routes )
+    ^ ( vec_len [Route] . r routes )
 }
 
 // Register a (method, pattern, handler) tuple. Both `method` and
@@ -178,28 +178,32 @@ $ `stdlib/ext/http_response.nu`
 // allocated `RouteImpl`; the `Route` handle stored in the vec is a
 // single pointer.
 @ router_any Router r s method s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
-  : *RouteImpl impl # *RouteImpl ( nurl_alloc Z RouteImpl )
-  =. impl method  ( string_from method  )
-  =. impl pattern ( string_from pattern )
-  =. impl handler handler
-  : Route route @ Route { #s impl }
-  ( vec_push [Route] . r routes route )
+    : *RouteImpl impl # *RouteImpl ( nurl_alloc Z RouteImpl )
+    = . impl method ( string_from method )
+    = . impl pattern ( string_from pattern )
+    = . impl handler handler
+    : Route route @ Route { # s impl }
+    ( vec_push [Route] . r routes route )
 }
 
-@ router_get    Router r s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
-  ( router_any r `GET`    pattern handler )
+@ router_get Router r s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+    ( router_any r `GET` pattern handler )
 }
-@ router_post   Router r s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
-  ( router_any r `POST`   pattern handler )
+
+@ router_post Router r s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+    ( router_any r `POST` pattern handler )
 }
-@ router_put    Router r s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
-  ( router_any r `PUT`    pattern handler )
+
+@ router_put Router r s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+    ( router_any r `PUT` pattern handler )
 }
-@ router_patch  Router r s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
-  ( router_any r `PATCH`  pattern handler )
+
+@ router_patch Router r s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+    ( router_any r `PATCH` pattern handler )
 }
+
 @ router_delete Router r s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
-  ( router_any r `DELETE` pattern handler )
+    ( router_any r `DELETE` pattern handler )
 }
 
 // ── Pattern matcher ───────────────────────────────────────────────────
@@ -216,120 +220,120 @@ $ `stdlib/ext/http_response.nu`
 // a F return, `params` may have been partially populated; the caller
 // must free + reallocate it before trying the next route.
 @ __match_pattern s pattern s path Params params → b {
-  : i pn ( nurl_str_len pattern )
-  : i sn ( nurl_str_len path    )
-  : ~ i pi 0
-  : ~ i si 0
-  : ~ b ok T
-  : ~ b done F
+    : i pn ( nurl_str_len pattern )
+    : i sn ( nurl_str_len path )
+    : ~ i pi 0
+    : ~ i si 0
+    : ~ b ok T
+    : ~ b done F
 
-  ~ & ok ! done {
-    ? >= pi pn {
-      = done T
-    } {
-      // Pattern-segment bounds: pi → p_end (not inclusive of '/').
-      : ~ i p_end pi
-      ~ & < p_end pn != ( nurl_str_get pattern p_end ) 47 {
-        = p_end + p_end 1
-      }
-      // First byte of pattern segment classifies its kind.
-      : i first ? < pi p_end ( nurl_str_get pattern pi ) 0
-
-      ? == first 42 {
-        // Wildcard tail: pattern[pi+1..p_end] is the capture name,
-        // path[si..sn] is the value. Wildcard MUST be the final
-        // pattern segment — anything after it would be unreachable.
-        : String name  ( __subraw_to_string pattern + pi 1 p_end )
-        : String value ( __subraw_to_string path si sn )
-        : QueryPair qp @ QueryPair { name value }
-        ( vec_push [QueryPair] . params entries qp )
-        = pi pn
-        = si sn
-        = done T
-      } {
-        // Path-segment bounds: si → s_end.
-        : ~ i s_end si
-        ~ & < s_end sn != ( nurl_str_get path s_end ) 47 {
-          = s_end + s_end 1
-        }
-
-        ? == first 58 {
-          // Named capture. The path segment must be non-empty (we
-          // refuse to match :id against a "//" gap).
-          ? <= s_end si {
-            = ok F
-          } {
-            : String name  ( __subraw_to_string pattern + pi 1 p_end )
-            : String value ( __subraw_to_string path si s_end )
-            : QueryPair qp @ QueryPair { name value }
-            ( vec_push [QueryPair] . params entries qp )
-            = pi p_end
-            = si s_end
-          }
+    ~ & ok ! done {
+        ? >= pi pn {
+            = done T
         } {
-          // Literal. Lengths must match, then bytewise compare.
-          : i p_len - p_end pi
-          : i s_len - s_end si
-          ? != p_len s_len {
-            = ok F
-          } {
-            : ~ i k 0
-            ~ & ok < k p_len {
-              ? != ( nurl_str_get pattern + pi k ) ( nurl_str_get path + si k ) {
-                = ok F
-              } {}
-              = k + k 1
+            // Pattern-segment bounds: pi → p_end (not inclusive of '/').
+            : ~ i p_end pi
+            ~ & < p_end pn != ( nurl_str_get pattern p_end ) 47 {
+                = p_end + p_end 1
             }
-            ? ok {
-              = pi p_end
-              = si s_end
-            } {}
-          }
-        }
+            // First byte of pattern segment classifies its kind.
+            : i first ? < pi p_end ( nurl_str_get pattern pi ) 0
 
-        // After consuming a segment, advance over the joining '/' if
-        // present in BOTH strings, or fail if one has '/' and the
-        // other doesn't (mismatched segment counts).
-        ? ok {
-          : b p_has_slash & < pi pn == ( nurl_str_get pattern pi ) 47
-          : b s_has_slash & < si sn == ( nurl_str_get path si ) 47
-          ? p_has_slash {
-            ? s_has_slash {
-              = pi + pi 1
-              = si + si 1
+            ? == first 42 {
+                // Wildcard tail: pattern[pi+1..p_end] is the capture name,
+                // path[si..sn] is the value. Wildcard MUST be the final
+                // pattern segment — anything after it would be unreachable.
+                : String name ( __subraw_to_string pattern + pi 1 p_end )
+                : String value ( __subraw_to_string path si sn )
+                : QueryPair qp @ QueryPair { name value }
+                ( vec_push [QueryPair] . params entries qp )
+                = pi pn
+                = si sn
+                = done T
             } {
-              = ok F
+                // Path-segment bounds: si → s_end.
+                : ~ i s_end si
+                ~ & < s_end sn != ( nurl_str_get path s_end ) 47 {
+                    = s_end + s_end 1
+                }
+
+                ? == first 58 {
+                    // Named capture. The path segment must be non-empty (we
+                    // refuse to match :id against a "//" gap).
+                    ? <= s_end si {
+                        = ok F
+                    } {
+                        : String name ( __subraw_to_string pattern + pi 1 p_end )
+                        : String value ( __subraw_to_string path si s_end )
+                        : QueryPair qp @ QueryPair { name value }
+                        ( vec_push [QueryPair] . params entries qp )
+                        = pi p_end
+                        = si s_end
+                    }
+                } {
+                    // Literal. Lengths must match, then bytewise compare.
+                    : i p_len - p_end pi
+                    : i s_len - s_end si
+                    ? != p_len s_len {
+                        = ok F
+                    } {
+                        : ~ i k 0
+                        ~ & ok < k p_len {
+                            ? != ( nurl_str_get pattern + pi k ) ( nurl_str_get path + si k ) {
+                                = ok F
+                            } {}
+                            = k + k 1
+                        }
+                        ? ok {
+                            = pi p_end
+                            = si s_end
+                        } {}
+                    }
+                }
+
+                // After consuming a segment, advance over the joining '/' if
+                // present in BOTH strings, or fail if one has '/' and the
+                // other doesn't (mismatched segment counts).
+                ? ok {
+                    : b p_has_slash & < pi pn == ( nurl_str_get pattern pi ) 47
+                    : b s_has_slash & < si sn == ( nurl_str_get path si ) 47
+                    ? p_has_slash {
+                        ? s_has_slash {
+                            = pi + pi 1
+                            = si + si 1
+                        } {
+                            = ok F
+                        }
+                    } {
+                        ? s_has_slash {
+                            = ok F
+                        } {}
+                    }
+                } {}
             }
-          } {
-            ? s_has_slash {
-              = ok F
-            } {}
-          }
-        } {}
-      }
+        }
     }
-  }
 
-  // Pattern fully consumed but path has trailing bytes → strict-trailing
-  // mismatch.
-  ? & ok < si sn { = ok F } {}
+    // Pattern fully consumed but path has trailing bytes → strict-trailing
+    // mismatch.
+    ? & ok < si sn { = ok F } {}
 
-  ^ ok
+    ^ ok
 }
 
 // Internal helper: copy bytes `raw[from..to)` into a fresh owned String.
 // Used by the pattern matcher to extract capture names + values. Empty
 // or inverted ranges yield an empty String.
 @ __subraw_to_string s raw i from i to → String {
-  : i len - to from
-  ? <= len 0 { ^ ( string_new ) } {}
-  : String out ( string_with_cap len )
-  : ~ i k from
-  ~ < k to {
-    ( string_push_char out ( nurl_str_get raw k ) )
-    = k + k 1
-  }
-  ^ out
+    : i len - to from
+    ? <= len 0 { ^ ( string_new ) } {}
+    : String out ( string_with_cap len )
+    : ~ i k from
+    ~ < k to {
+        ( string_push_char out ( nurl_str_get raw k ) )
+        = k + k 1
+    }
+    ^ out
 }
 
 // ── Dispatch ──────────────────────────────────────────────────────────
@@ -346,33 +350,33 @@ $ `stdlib/ext/http_response.nu`
 // `! response_text 404` and substitutes its own.
 
 @ router_handle Router r HttpRequest req → HttpResponse {
-  : i n ( vec_len [Route] . r routes )
-  : *Route data ( vec_data [Route] . r routes )
-  : s req_method ( string_data . req method )
-  : s req_path   ( string_data . req path   )
-  : ~ i k 0
+    : i n ( vec_len [Route] . r routes )
+    : *Route data ( vec_data [Route] . r routes )
+    : s req_method ( string_data . req method )
+    : s req_path ( string_data . req path )
+    : ~ i k 0
 
-  ~ < k n {
-    : Route route . data k
-    : *RouteImpl impl # *RouteImpl . route ctl
-    : s rmethod ( string_data . impl method  )
-    : b method_ok | != 0 ( nurl_str_eq rmethod `*` ) != 0 ( nurl_str_eq rmethod req_method )
-    ? method_ok {
-      : Params params ( params_new )
-      : s pattern ( string_data . impl pattern )
-      ? ( __match_pattern pattern req_path params ) {
-        : ( @ HttpResponse HttpRequest Params ) f . impl handler
-        : HttpResponse resp ( f req params )
-        ( params_free params )
-        ^ resp
-      } {
-        ( params_free params )
-      }
-    } {}
-    = k + k 1
-  }
+    ~ < k n {
+        : Route route . data k
+        : *RouteImpl impl # *RouteImpl . route ctl
+        : s rmethod ( string_data . impl method )
+        : b method_ok | != 0 ( nurl_str_eq rmethod `*` ) != 0 ( nurl_str_eq rmethod req_method )
+        ? method_ok {
+            : Params params ( params_new )
+            : s pattern ( string_data . impl pattern )
+            ? ( __match_pattern pattern req_path params ) {
+                : ( @ HttpResponse HttpRequest Params ) f . impl handler
+                : HttpResponse resp ( f req params )
+                ( params_free params )
+                ^ resp
+            } {
+                ( params_free params )
+            }
+        } {}
+        = k + k 1
+    }
 
-  ^ ( response_text 404 `not found\n` )
+    ^ ( response_text 404 `not found\n` )
 }
 
 // ── Middleware combinators ────────────────────────────────────────────
@@ -399,24 +403,24 @@ $ `stdlib/ext/http_response.nu`
 // no allocation, no log-level gate (callers can swap in a custom
 // logger by wrapping `with_log_requests` themselves).
 @ with_log_requests
-  ( @ HttpResponse HttpRequest ) inner
-  → ( @ HttpResponse HttpRequest ) {
-  ^ \ HttpRequest req → HttpResponse {
-    ( nurl_eprint `[req] ` )
-    ( nurl_eprint ( string_data . req method ) )
-    ( nurl_eprint ` ` )
-    ( nurl_eprint ( string_data . req path   ) )
-    ( nurl_eprint `\n` )
-    : HttpResponse resp ( inner req )
-    ( nurl_eprint `[req] ` )
-    ( nurl_eprint ( string_data . req method ) )
-    ( nurl_eprint ` ` )
-    ( nurl_eprint ( string_data . req path   ) )
-    ( nurl_eprint ` → ` )
-    ( nurl_eprint ( nurl_str_int . resp status ) )
-    ( nurl_eprint `\n` )
-    ^ resp
-  }
+( @ HttpResponse HttpRequest ) inner
+→ ( @ HttpResponse HttpRequest ) {
+    ^ \ HttpRequest req → HttpResponse {
+        ( nurl_eprint `[req] ` )
+        ( nurl_eprint ( string_data . req method ) )
+        ( nurl_eprint ` ` )
+        ( nurl_eprint ( string_data . req path ) )
+        ( nurl_eprint `\n` )
+        : HttpResponse resp ( inner req )
+        ( nurl_eprint `[req] ` )
+        ( nurl_eprint ( string_data . req method ) )
+        ( nurl_eprint ` ` )
+        ( nurl_eprint ( string_data . req path ) )
+        ( nurl_eprint ` → ` )
+        ( nurl_eprint ( nurl_str_int . resp status ) )
+        ( nurl_eprint `\n` )
+        ^ resp
+    }
 }
 
 // Permissive CORS middleware. Adds `Access-Control-Allow-Origin: *`
@@ -425,21 +429,21 @@ $ `stdlib/ext/http_response.nu`
 // 204. Suitable for development; production deployments should pin a
 // specific origin.
 @ with_cors_default
-  ( @ HttpResponse HttpRequest ) inner
-  → ( @ HttpResponse HttpRequest ) {
-  ^ \ HttpRequest req → HttpResponse {
-    : s rm ( string_data . req method )
-    ? != 0 ( nurl_str_eq rm `OPTIONS` ) {
-      : HttpResponse pre ( response_status_only 204 )
-      ( response_set_header pre `Access-Control-Allow-Origin`  `*` )
-      ( response_set_header pre `Access-Control-Allow-Methods` `GET, POST, PUT, PATCH, DELETE, OPTIONS` )
-      ( response_set_header pre `Access-Control-Allow-Headers` `Content-Type, Authorization` )
-      ( response_set_header pre `Access-Control-Max-Age`       `86400` )
-      ^ pre
-    } {}
-    : HttpResponse resp ( inner req )
-    ( response_set_header resp `Access-Control-Allow-Origin`  `*` )
-    ( response_set_header resp `Access-Control-Allow-Headers` `Content-Type, Authorization` )
-    ^ resp
-  }
+( @ HttpResponse HttpRequest ) inner
+→ ( @ HttpResponse HttpRequest ) {
+    ^ \ HttpRequest req → HttpResponse {
+        : s rm ( string_data . req method )
+        ? != 0 ( nurl_str_eq rm `OPTIONS` ) {
+            : HttpResponse pre ( response_status_only 204 )
+            ( response_set_header pre `Access-Control-Allow-Origin` `*` )
+            ( response_set_header pre `Access-Control-Allow-Methods` `GET, POST, PUT, PATCH, DELETE, OPTIONS` )
+            ( response_set_header pre `Access-Control-Allow-Headers` `Content-Type, Authorization` )
+            ( response_set_header pre `Access-Control-Max-Age` `86400` )
+            ^ pre
+        } {}
+        : HttpResponse resp ( inner req )
+        ( response_set_header resp `Access-Control-Allow-Origin` `*` )
+        ( response_set_header resp `Access-Control-Allow-Headers` `Content-Type, Authorization` )
+        ^ resp
+    }
 }

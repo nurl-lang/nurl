@@ -69,34 +69,34 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/errors.nu`
 
 : | NetErr {
-  NetBind
-  NetAddrInUse
-  NetAccept
-  NetRead
-  NetWrite
-  NetClosed
-  NetTimeout
-  NetOther
+    NetBind
+    NetAddrInUse
+    NetAccept
+    NetRead
+    NetWrite
+    NetClosed
+    NetTimeout
+    NetOther
 }
 
 // Listener and connection are intentionally distinct types — the
 // compiler refuses to mix them at call sites, which catches the
 // classic "passed listener to read" mistake at type-check time.
 : TcpListener { s raw }
-: TcpConn     { s raw }
+: TcpConn { s raw }
 
 // Render a NetErr variant name as a raw `s` for log lines.
 @ net_err_name NetErr e → s {
-  ^ ?? e {
-    NetBind      → `NetBind`
-    NetAddrInUse → `NetAddrInUse`
-    NetAccept    → `NetAccept`
-    NetRead      → `NetRead`
-    NetWrite     → `NetWrite`
-    NetClosed    → `NetClosed`
-    NetTimeout   → `NetTimeout`
-    NetOther     → `NetOther`
-  }
+    ^ ?? e {
+        NetBind → `NetBind`
+        NetAddrInUse → `NetAddrInUse`
+        NetAccept → `NetAccept`
+        NetRead → `NetRead`
+        NetWrite → `NetWrite`
+        NetClosed → `NetClosed`
+        NetTimeout → `NetTimeout`
+        NetOther → `NetOther`
+    }
 }
 
 // Internal: classify the runtime err_kind into a NetErr variant.
@@ -104,41 +104,41 @@ $ `stdlib/core/errors.nu`
 // caller-controlled because read/write/listen each have a different
 // "natural" fallback).
 @ __net_err_of i ek → NetErr {
-  ? == ek 1 { ^ # NetErr NetBind      } {}
-  ? == ek 2 { ^ # NetErr NetAddrInUse } {}
-  ? == ek 3 { ^ # NetErr NetAccept    } {}
-  ? == ek 4 { ^ # NetErr NetRead      } {}
-  ? == ek 5 { ^ # NetErr NetWrite     } {}
-  ? == ek 6 { ^ # NetErr NetClosed    } {}
-  ? == ek 7 { ^ # NetErr NetTimeout   } {}
-  ^ # NetErr NetOther
+    ? == ek 1 { ^ # NetErr NetBind } {}
+    ? == ek 2 { ^ # NetErr NetAddrInUse } {}
+    ? == ek 3 { ^ # NetErr NetAccept } {}
+    ? == ek 4 { ^ # NetErr NetRead } {}
+    ? == ek 5 { ^ # NetErr NetWrite } {}
+    ? == ek 6 { ^ # NetErr NetClosed } {}
+    ? == ek 7 { ^ # NetErr NetTimeout } {}
+    ^ # NetErr NetOther
 }
 
 // ── Listener lifecycle ─────────────────────────────────────────────
 
 // Bind on host:port and start listening with the given backlog.
-@ tcp_listen_with_backlog s host i port i backlog → ! TcpListener NetErr {
-  : i raw ( nurl_tcp_listen host port backlog )
-  ? == raw 0 { ^ @ ! TcpListener NetErr { F # NetErr NetOther } } {}
-  : i ek ( nurl_tcp_err_kind raw )
-  ? != ek 0 {
-    ( nurl_tcp_close raw )
-    ^ @ ! TcpListener NetErr { F ( __net_err_of ek ) }
-  } {}
-  : s rp #s raw
-  : TcpListener l @ TcpListener { rp }
-  ^ @ ! TcpListener NetErr { T l }
+@ tcp_listen_with_backlog s host i port i backlog → !TcpListener NetErr {
+    : i raw ( nurl_tcp_listen host port backlog )
+    ? == raw 0 { ^ @ !TcpListener NetErr { F # NetErr NetOther } } {}
+    : i ek ( nurl_tcp_err_kind raw )
+    ? != ek 0 {
+        ( nurl_tcp_close raw )
+        ^ @ !TcpListener NetErr { F ( __net_err_of ek ) }
+    } {}
+    : s rp # s raw
+    : TcpListener l @ TcpListener { rp }
+    ^ @ !TcpListener NetErr { T l }
 }
 
 // Convenience: same as tcp_listen_with_backlog with backlog = 128.
-@ tcp_listen s host i port → ! TcpListener NetErr {
-  ^ ( tcp_listen_with_backlog host port 128 )
+@ tcp_listen s host i port → !TcpListener NetErr {
+    ^ ( tcp_listen_with_backlog host port 128 )
 }
 
 @ tcp_close_listener TcpListener l → v {
-  : s rp . l raw
-  : i raw # i rp
-  ( nurl_tcp_close raw )
+    : s rp . l raw
+    : i raw # i rp
+    ( nurl_tcp_close raw )
 }
 
 // Soft-shutdown: close the underlying socket but KEEP the handle's
@@ -150,44 +150,44 @@ $ `stdlib/core/errors.nu`
 // at exit on Windows). Pair this with a final `tcp_close_listener`
 // after every worker has joined to release the runtime struct.
 @ tcp_shutdown_listener TcpListener l → v {
-  : s rp . l raw
-  : i raw # i rp
-  ( nurl_tcp_shutdown raw )
+    : s rp . l raw
+    : i raw # i rp
+    ( nurl_tcp_shutdown raw )
 }
 
 // ── Connection acceptance ──────────────────────────────────────────
 
-@ tcp_accept TcpListener l → ! TcpConn NetErr {
-  : s lrp . l raw
-  : i lraw # i lrp
-  : i craw ( nurl_tcp_accept lraw )
-  ? == craw 0 { ^ @ ! TcpConn NetErr { F # NetErr NetOther } } {}
-  : i ek ( nurl_tcp_err_kind craw )
-  ? != ek 0 {
-    ( nurl_tcp_close craw )
-    ^ @ ! TcpConn NetErr { F ( __net_err_of ek ) }
-  } {}
-  : s crp #s craw
-  : TcpConn c @ TcpConn { crp }
-  ^ @ ! TcpConn NetErr { T c }
+@ tcp_accept TcpListener l → !TcpConn NetErr {
+    : s lrp . l raw
+    : i lraw # i lrp
+    : i craw ( nurl_tcp_accept lraw )
+    ? == craw 0 { ^ @ !TcpConn NetErr { F # NetErr NetOther } } {}
+    : i ek ( nurl_tcp_err_kind craw )
+    ? != ek 0 {
+        ( nurl_tcp_close craw )
+        ^ @ !TcpConn NetErr { F ( __net_err_of ek ) }
+    } {}
+    : s crp # s craw
+    : TcpConn c @ TcpConn { crp }
+    ^ @ !TcpConn NetErr { T c }
 }
 
 @ tcp_close_conn TcpConn c → v {
-  : s rp . c raw
-  : i raw # i rp
-  ( nurl_tcp_close raw )
+    : s rp . c raw
+    : i raw # i rp
+    ( nurl_tcp_close raw )
 }
 
 @ tcp_peer_addr TcpConn c → s {
-  : s rp . c raw
-  : i raw # i rp
-  ^ ( nurl_tcp_peer_addr raw )
+    : s rp . c raw
+    : i raw # i rp
+    ^ ( nurl_tcp_peer_addr raw )
 }
 
 @ tcp_set_timeout TcpConn c i ms → v {
-  : s rp . c raw
-  : i raw # i rp
-  ( nurl_tcp_set_timeout raw ms )
+    : s rp . c raw
+    : i raw # i rp
+    ( nurl_tcp_set_timeout raw ms )
 }
 
 // ── Reading ────────────────────────────────────────────────────────
@@ -195,59 +195,59 @@ $ `stdlib/core/errors.nu`
 // Issue ONE recv(2). The returned Vec[u] holds 0..max bytes. EOF is
 // surfaced as `Err(NetClosed)` so empty Ok-vectors are never confused
 // with a clean peer shutdown. Caller frees the Vec on the Ok path.
-@ tcp_read_chunk TcpConn c i max → ! ( Vec u ) NetErr {
-  : s rp . c raw
-  : i raw # i rp
-  ? <= max 0 {
-    : ( Vec u ) v ( vec_new [u] )
-    ^ @ ! ( Vec u ) NetErr { T v }
-  } {}
-  : ( Vec u ) v ( vec_with_cap [u] max )
-  : *u p ( vec_data [u] v )
-  : s pbuf #s p
-  : i n ( nurl_tcp_read raw pbuf max )
-  ? < n 0 {
-    ( vec_free [u] v )
-    : i ek ( nurl_tcp_err_kind raw )
-    ^ @ ! ( Vec u ) NetErr { F ( __net_err_of ek ) }
-  } {}
-  ? == n 0 {
-    ( vec_free [u] v )
-    ^ @ ! ( Vec u ) NetErr { F # NetErr NetClosed }
-  } {}
-  ( vec_set_len [u] v n )
-  ^ @ ! ( Vec u ) NetErr { T v }
+@ tcp_read_chunk TcpConn c i max → !( Vec u ) NetErr {
+    : s rp . c raw
+    : i raw # i rp
+    ? <= max 0 {
+        : ( Vec u ) v ( vec_new [u] )
+        ^ @ !( Vec u ) NetErr { T v }
+    } {}
+    : ( Vec u ) v ( vec_with_cap [u] max )
+    : *u p ( vec_data [u] v )
+    : s pbuf # s p
+    : i n ( nurl_tcp_read raw pbuf max )
+    ? < n 0 {
+        ( vec_free [u] v )
+        : i ek ( nurl_tcp_err_kind raw )
+        ^ @ !( Vec u ) NetErr { F ( __net_err_of ek ) }
+    } {}
+    ? == n 0 {
+        ( vec_free [u] v )
+        ^ @ !( Vec u ) NetErr { F # NetErr NetClosed }
+    } {}
+    ( vec_set_len [u] v n )
+    ^ @ !( Vec u ) NetErr { T v }
 }
 
 // ── Writing ────────────────────────────────────────────────────────
 
-@ tcp_write_all TcpConn c ( Vec u ) bytes → ! v NetErr {
-  : s rp . c raw
-  : i raw # i rp
-  : i n ( vec_len [u] bytes )
-  ? <= n 0 { ^ @ ! v NetErr { T 0 } } {}
-  : *u p ( vec_data [u] bytes )
-  : s pbuf #s p
-  : i wn ( nurl_tcp_write raw pbuf n )
-  ? < wn 0 {
-    : i ek ( nurl_tcp_err_kind raw )
-    ^ @ ! v NetErr { F ( __net_err_of ek ) }
-  } {}
-  ^ @ ! v NetErr { T 0 }
+@ tcp_write_all TcpConn c ( Vec u ) bytes → !v NetErr {
+    : s rp . c raw
+    : i raw # i rp
+    : i n ( vec_len [u] bytes )
+    ? <= n 0 { ^ @ !v NetErr { T 0 } } {}
+    : *u p ( vec_data [u] bytes )
+    : s pbuf # s p
+    : i wn ( nurl_tcp_write raw pbuf n )
+    ? < wn 0 {
+        : i ek ( nurl_tcp_err_kind raw )
+        ^ @ !v NetErr { F ( __net_err_of ek ) }
+    } {}
+    ^ @ !v NetErr { T 0 }
 }
 
 // Convenience: write a NUL-terminated `s` (the typical HTTP header /
 // status-line case). The bytes [0..len) are sent — the trailing NUL is
 // NOT transmitted.
-@ tcp_write_str TcpConn c s text → ! v NetErr {
-  : s rp . c raw
-  : i raw # i rp
-  : i n ( nurl_str_len text )
-  ? <= n 0 { ^ @ ! v NetErr { T 0 } } {}
-  : i wn ( nurl_tcp_write raw text n )
-  ? < wn 0 {
-    : i ek ( nurl_tcp_err_kind raw )
-    ^ @ ! v NetErr { F ( __net_err_of ek ) }
-  } {}
-  ^ @ ! v NetErr { T 0 }
+@ tcp_write_str TcpConn c s text → !v NetErr {
+    : s rp . c raw
+    : i raw # i rp
+    : i n ( nurl_str_len text )
+    ? <= n 0 { ^ @ !v NetErr { T 0 } } {}
+    : i wn ( nurl_tcp_write raw text n )
+    ? < wn 0 {
+        : i ek ( nurl_tcp_err_kind raw )
+        ^ @ !v NetErr { F ( __net_err_of ek ) }
+    } {}
+    ^ @ !v NetErr { T 0 }
 }

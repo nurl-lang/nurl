@@ -2,8 +2,8 @@
 // b & i → compile error, tyypit eivät sovi yhteen
 
 @ main → i {
-  : b flag T
-  : i mask 255
-  : result & flag mask
-  ^ 0
+    : b flag T
+    : i mask 255
+    : result & flag mask
+    ^ 0
 }

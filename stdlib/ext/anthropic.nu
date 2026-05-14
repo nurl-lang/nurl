@@ -188,52 +188,52 @@ $ `stdlib/ext/http.nu`
 $ `stdlib/ext/json.nu`
 
 : | ClaudeErr {
-  ClaudeAuth
-  ClaudeHttpConnect
-  ClaudeHttpTimeout
-  ClaudeHttpTls
-  ClaudeHttpDns
-  ClaudeHttpInvalidUrl
-  ClaudeHttpOther
-  ClaudeJson
-  ClaudeApi
-  ClaudeShape
+    ClaudeAuth
+    ClaudeHttpConnect
+    ClaudeHttpTimeout
+    ClaudeHttpTls
+    ClaudeHttpDns
+    ClaudeHttpInvalidUrl
+    ClaudeHttpOther
+    ClaudeJson
+    ClaudeApi
+    ClaudeShape
 }
 
 @ claude_err_name ClaudeErr e → s {
-  ^ ?? e {
-    ClaudeAuth           → `ClaudeAuth`
-    ClaudeHttpConnect    → `ClaudeHttpConnect`
-    ClaudeHttpTimeout    → `ClaudeHttpTimeout`
-    ClaudeHttpTls        → `ClaudeHttpTls`
-    ClaudeHttpDns        → `ClaudeHttpDns`
-    ClaudeHttpInvalidUrl → `ClaudeHttpInvalidUrl`
-    ClaudeHttpOther      → `ClaudeHttpOther`
-    ClaudeJson           → `ClaudeJson`
-    ClaudeApi            → `ClaudeApi`
-    ClaudeShape          → `ClaudeShape`
-  }
+    ^ ?? e {
+        ClaudeAuth → `ClaudeAuth`
+        ClaudeHttpConnect → `ClaudeHttpConnect`
+        ClaudeHttpTimeout → `ClaudeHttpTimeout`
+        ClaudeHttpTls → `ClaudeHttpTls`
+        ClaudeHttpDns → `ClaudeHttpDns`
+        ClaudeHttpInvalidUrl → `ClaudeHttpInvalidUrl`
+        ClaudeHttpOther → `ClaudeHttpOther`
+        ClaudeJson → `ClaudeJson`
+        ClaudeApi → `ClaudeApi`
+        ClaudeShape → `ClaudeShape`
+    }
 }
 
 @ __claude_map_http HttpErr e → ClaudeErr {
-  ^ ?? e {
-    HttpConnect    → @ ClaudeErr { ClaudeHttpConnect }
-    HttpTimeout    → @ ClaudeErr { ClaudeHttpTimeout }
-    HttpTls        → @ ClaudeErr { ClaudeHttpTls }
-    HttpDns        → @ ClaudeErr { ClaudeHttpDns }
-    HttpInvalidUrl → @ ClaudeErr { ClaudeHttpInvalidUrl }
-    HttpOther      → @ ClaudeErr { ClaudeHttpOther }
-  }
+    ^ ?? e {
+        HttpConnect → @ ClaudeErr { ClaudeHttpConnect }
+        HttpTimeout → @ ClaudeErr { ClaudeHttpTimeout }
+        HttpTls → @ ClaudeErr { ClaudeHttpTls }
+        HttpDns → @ ClaudeErr { ClaudeHttpDns }
+        HttpInvalidUrl → @ ClaudeErr { ClaudeHttpInvalidUrl }
+        HttpOther → @ ClaudeErr { ClaudeHttpOther }
+    }
 }
 
 // ── Message builders ────────────────────────────────────────────────
 
 // Plain {role: "user", content: "text"} message.
 @ claude_msg_user_text s text → Json {
-  : Json m ( json_obj_new )
-  ( json_obj_set m `role`    ( json_str_lit `user` ) )
-  ( json_obj_set m `content` ( json_str_lit text ) )
-  ^ m
+    : Json m ( json_obj_new )
+    ( json_obj_set m `role` ( json_str_lit `user` ) )
+    ( json_obj_set m `content` ( json_str_lit text ) )
+    ^ m
 }
 
 // Plain {role: "assistant", content: "text"} message — useful for
@@ -241,50 +241,50 @@ $ `stdlib/ext/json.nu`
 // Use `claude_msg_assistant_response` when feeding back a real Claude
 // turn (which may include tool_use blocks).
 @ claude_msg_assistant_text s text → Json {
-  : Json m ( json_obj_new )
-  ( json_obj_set m `role`    ( json_str_lit `assistant` ) )
-  ( json_obj_set m `content` ( json_str_lit text ) )
-  ^ m
+    : Json m ( json_obj_new )
+    ( json_obj_set m `role` ( json_str_lit `assistant` ) )
+    ( json_obj_set m `content` ( json_str_lit text ) )
+    ^ m
 }
 
 // Wrap a response's full content array (text + tool_use blocks) as the
 // assistant's turn for the next call. Clones the array so the original
 // response stays independently owned.
 @ claude_msg_assistant_response Json r → Json {
-  : Json m ( json_obj_new )
-  ( json_obj_set m `role` ( json_str_lit `assistant` ) )
-  : ? Json content ( json_obj_get r `content` )
-  ?? content {
-    T cv → {
-      ( json_obj_set m `content` ( json_clone cv ) )
+    : Json m ( json_obj_new )
+    ( json_obj_set m `role` ( json_str_lit `assistant` ) )
+    : ?Json content ( json_obj_get r `content` )
+    ?? content {
+        T cv → {
+            ( json_obj_set m `content` ( json_clone cv ) )
+        }
+        F → {
+            ( json_obj_set m `content` ( json_arr_new ) )
+        }
     }
-    F → {
-      ( json_obj_set m `content` ( json_arr_new ) )
-    }
-  }
-  ^ m
+    ^ m
 }
 
 // {role: "user", content: [<blocks>]} — typically the tool_result reply
 // turn. CONSUMES the Vec; each element is moved into the wrapped JArr.
 @ claude_msg_user_blocks ( Vec Json ) blocks → Json {
-  : Json arr ( json_arr_new )
-  : i n ( vec_len [Json] blocks )
-  : ~ i k 0
-  ~ < k n {
-    : ? Json e ( vec_get [Json] blocks k )
-    ?? e {
-      T jv → ( json_arr_push arr jv )
-      F    → {}
+    : Json arr ( json_arr_new )
+    : i n ( vec_len [Json] blocks )
+    : ~ i k 0
+    ~ < k n {
+        : ?Json e ( vec_get [Json] blocks k )
+        ?? e {
+            T jv → ( json_arr_push arr jv )
+            F → {}
+        }
+        = k + k 1
     }
-    = k + k 1
-  }
-  // Drop the now-emptied Vec; the JArr owns the moved elements.
-  ( vec_free [Json] blocks )
-  : Json m ( json_obj_new )
-  ( json_obj_set m `role`    ( json_str_lit `user` ) )
-  ( json_obj_set m `content` arr )
-  ^ m
+    // Drop the now-emptied Vec; the JArr owns the moved elements.
+    ( vec_free [Json] blocks )
+    : Json m ( json_obj_new )
+    ( json_obj_set m `role` ( json_str_lit `user` ) )
+    ( json_obj_set m `content` arr )
+    ^ m
 }
 
 // Single tool_result content block. Push these into a Vec[Json] then
@@ -292,14 +292,14 @@ $ `stdlib/ext/json.nu`
 // `is_error = T` flags the result as an error so the model knows to
 // adjust strategy rather than treat the text as authoritative.
 @ claude_tool_result_block s tool_use_id s text b is_error → Json {
-  : Json block ( json_obj_new )
-  ( json_obj_set block `type`        ( json_str_lit `tool_result` ) )
-  ( json_obj_set block `tool_use_id` ( json_str_lit tool_use_id ) )
-  ( json_obj_set block `content`     ( json_str_lit text ) )
-  ? is_error {
-    ( json_obj_set block `is_error` ( json_bool T ) )
-  } {}
-  ^ block
+    : Json block ( json_obj_new )
+    ( json_obj_set block `type` ( json_str_lit `tool_result` ) )
+    ( json_obj_set block `tool_use_id` ( json_str_lit tool_use_id ) )
+    ( json_obj_set block `content` ( json_str_lit text ) )
+    ? is_error {
+        ( json_obj_set block `is_error` ( json_bool T ) )
+    } {}
+    ^ block
 }
 
 // ── Prompt caching helpers ──────────────────────────────────────────
@@ -318,9 +318,9 @@ $ `stdlib/ext/json.nu`
 // `__claude_cache_ephemeral` returns a fresh ephemeral marker that can
 // be moved into any Json block via `json_obj_set X "cache_control" ...`.
 @ __claude_cache_ephemeral → Json {
-  : Json m ( json_obj_new )
-  ( json_obj_set m `type` ( json_str_lit `ephemeral` ) )
-  ^ m
+    : Json m ( json_obj_new )
+    ( json_obj_set m `type` ( json_str_lit `ephemeral` ) )
+    ^ m
 }
 
 // User message that injects a cache breakpoint at the end of the text.
@@ -328,31 +328,31 @@ $ `stdlib/ext/json.nu`
 // {role:"user", content:[{type:"text", text:..., cache_control:{...}}]}
 // so Anthropic treats this exact prefix as a cache point.
 @ claude_msg_user_text_cached s text → Json {
-  : Json block ( json_obj_new )
-  ( json_obj_set block `type`          ( json_str_lit `text` ) )
-  ( json_obj_set block `text`          ( json_str_lit text ) )
-  ( json_obj_set block `cache_control` ( __claude_cache_ephemeral ) )
-  : Json arr ( json_arr_new )
-  ( json_arr_push arr block )
-  : Json m ( json_obj_new )
-  ( json_obj_set m `role`    ( json_str_lit `user` ) )
-  ( json_obj_set m `content` arr )
-  ^ m
+    : Json block ( json_obj_new )
+    ( json_obj_set block `type` ( json_str_lit `text` ) )
+    ( json_obj_set block `text` ( json_str_lit text ) )
+    ( json_obj_set block `cache_control` ( __claude_cache_ephemeral ) )
+    : Json arr ( json_arr_new )
+    ( json_arr_push arr block )
+    : Json m ( json_obj_new )
+    ( json_obj_set m `role` ( json_str_lit `user` ) )
+    ( json_obj_set m `content` arr )
+    ^ m
 }
 
 // Same idea for assistant prefills: rare but useful for few-shot
 // scaffolding where the assistant turn is long and reused.
 @ claude_msg_assistant_text_cached s text → Json {
-  : Json block ( json_obj_new )
-  ( json_obj_set block `type`          ( json_str_lit `text` ) )
-  ( json_obj_set block `text`          ( json_str_lit text ) )
-  ( json_obj_set block `cache_control` ( __claude_cache_ephemeral ) )
-  : Json arr ( json_arr_new )
-  ( json_arr_push arr block )
-  : Json m ( json_obj_new )
-  ( json_obj_set m `role`    ( json_str_lit `assistant` ) )
-  ( json_obj_set m `content` arr )
-  ^ m
+    : Json block ( json_obj_new )
+    ( json_obj_set block `type` ( json_str_lit `text` ) )
+    ( json_obj_set block `text` ( json_str_lit text ) )
+    ( json_obj_set block `cache_control` ( __claude_cache_ephemeral ) )
+    : Json arr ( json_arr_new )
+    ( json_arr_push arr block )
+    : Json m ( json_obj_new )
+    ( json_obj_set m `role` ( json_str_lit `assistant` ) )
+    ( json_obj_set m `content` arr )
+    ^ m
 }
 
 // ── Multimodal content blocks (vision + documents) ──────────────────
@@ -376,23 +376,23 @@ $ `stdlib/ext/json.nu`
 // Plain text content block — symmetric to claude_image_*_block, useful
 // when assembling a mixed text + image / text + document user turn.
 @ claude_text_block s text → Json {
-  : Json b ( json_obj_new )
-  ( json_obj_set b `type` ( json_str_lit `text` ) )
-  ( json_obj_set b `text` ( json_str_lit text ) )
-  ^ b
+    : Json b ( json_obj_new )
+    ( json_obj_set b `type` ( json_str_lit `text` ) )
+    ( json_obj_set b `text` ( json_str_lit text ) )
+    ^ b
 }
 
 // Image content block — URL source. Anthropic fetches the URL on the
 // server side and decodes the image; no preprocessing on the caller.
 //   {"type":"image","source":{"type":"url","url":"https://..."}}
 @ claude_image_url_block s url → Json {
-  : Json src ( json_obj_new )
-  ( json_obj_set src `type` ( json_str_lit `url` ) )
-  ( json_obj_set src `url`  ( json_str_lit url ) )
-  : Json b ( json_obj_new )
-  ( json_obj_set b `type`   ( json_str_lit `image` ) )
-  ( json_obj_set b `source` src )
-  ^ b
+    : Json src ( json_obj_new )
+    ( json_obj_set src `type` ( json_str_lit `url` ) )
+    ( json_obj_set src `url` ( json_str_lit url ) )
+    : Json b ( json_obj_new )
+    ( json_obj_set b `type` ( json_str_lit `image` ) )
+    ( json_obj_set b `source` src )
+    ^ b
 }
 
 // Image content block — base64-encoded inline data. `media_type` is one
@@ -402,27 +402,27 @@ $ `stdlib/ext/json.nu`
 //   {"type":"image","source":{"type":"base64",
 //                              "media_type":"image/png","data":"..."}}
 @ claude_image_b64_block s media_type s data_b64 → Json {
-  : Json src ( json_obj_new )
-  ( json_obj_set src `type`       ( json_str_lit `base64` ) )
-  ( json_obj_set src `media_type` ( json_str_lit media_type ) )
-  ( json_obj_set src `data`       ( json_str_lit data_b64 ) )
-  : Json b ( json_obj_new )
-  ( json_obj_set b `type`   ( json_str_lit `image` ) )
-  ( json_obj_set b `source` src )
-  ^ b
+    : Json src ( json_obj_new )
+    ( json_obj_set src `type` ( json_str_lit `base64` ) )
+    ( json_obj_set src `media_type` ( json_str_lit media_type ) )
+    ( json_obj_set src `data` ( json_str_lit data_b64 ) )
+    : Json b ( json_obj_new )
+    ( json_obj_set b `type` ( json_str_lit `image` ) )
+    ( json_obj_set b `source` src )
+    ^ b
 }
 
 // Document content block — URL source. Use for PDFs hosted online.
 // media_type is fixed to "application/pdf" by Anthropic.
 //   {"type":"document","source":{"type":"url","url":"https://..."}}
 @ claude_document_url_block s url → Json {
-  : Json src ( json_obj_new )
-  ( json_obj_set src `type` ( json_str_lit `url` ) )
-  ( json_obj_set src `url`  ( json_str_lit url ) )
-  : Json b ( json_obj_new )
-  ( json_obj_set b `type`   ( json_str_lit `document` ) )
-  ( json_obj_set b `source` src )
-  ^ b
+    : Json src ( json_obj_new )
+    ( json_obj_set src `type` ( json_str_lit `url` ) )
+    ( json_obj_set src `url` ( json_str_lit url ) )
+    : Json b ( json_obj_new )
+    ( json_obj_set b `type` ( json_str_lit `document` ) )
+    ( json_obj_set b `source` src )
+    ^ b
 }
 
 // Document content block — base64-encoded inline PDF.
@@ -430,14 +430,14 @@ $ `stdlib/ext/json.nu`
 //                                 "media_type":"application/pdf",
 //                                 "data":"..."}}
 @ claude_document_b64_block s data_b64 → Json {
-  : Json src ( json_obj_new )
-  ( json_obj_set src `type`       ( json_str_lit `base64` ) )
-  ( json_obj_set src `media_type` ( json_str_lit `application/pdf` ) )
-  ( json_obj_set src `data`       ( json_str_lit data_b64 ) )
-  : Json b ( json_obj_new )
-  ( json_obj_set b `type`   ( json_str_lit `document` ) )
-  ( json_obj_set b `source` src )
-  ^ b
+    : Json src ( json_obj_new )
+    ( json_obj_set src `type` ( json_str_lit `base64` ) )
+    ( json_obj_set src `media_type` ( json_str_lit `application/pdf` ) )
+    ( json_obj_set src `data` ( json_str_lit data_b64 ) )
+    : Json b ( json_obj_new )
+    ( json_obj_set b `type` ( json_str_lit `document` ) )
+    ( json_obj_set b `source` src )
+    ^ b
 }
 
 // ── Tool definition builder ─────────────────────────────────────────
@@ -445,71 +445,71 @@ $ `stdlib/ext/json.nu`
 // Anthropic uses snake_case `input_schema` (MCP uses camelCase
 // `inputSchema` — see stdlib/ext/mcp.nu#mcp_tool_descriptor).
 @ claude_tool_def s name s description Json input_schema → Json {
-  : Json t ( json_obj_new )
-  ( json_obj_set t `name`         ( json_str_lit name ) )
-  ( json_obj_set t `description`  ( json_str_lit description ) )
-  ( json_obj_set t `input_schema` input_schema )
-  ^ t
+    : Json t ( json_obj_new )
+    ( json_obj_set t `name` ( json_str_lit name ) )
+    ( json_obj_set t `description` ( json_str_lit description ) )
+    ( json_obj_set t `input_schema` input_schema )
+    ^ t
 }
 
 // ── tool_choice parser ──────────────────────────────────────────────
 
-@ __claude_parse_tool_choice s tc → ? Json {
-  : i n ( nurl_str_len tc )
-  ? == n 0 {
-    ^ @ ? Json { F @ Json { JNull } }
-  } {}
+@ __claude_parse_tool_choice s tc → ?Json {
+    : i n ( nurl_str_len tc )
+    ? == n 0 {
+        ^ @ ?Json { F @ Json { JNull } }
+    } {}
 
-  ? != ( nurl_str_eq tc `auto` ) 0 {
-    : Json o ( json_obj_new )
-    ( json_obj_set o `type` ( json_str_lit `auto` ) )
-    ^ @ ? Json { T o }
-  } {}
-  ? != ( nurl_str_eq tc `any` ) 0 {
-    : Json o ( json_obj_new )
-    ( json_obj_set o `type` ( json_str_lit `any` ) )
-    ^ @ ? Json { T o }
-  } {}
-  ? != ( nurl_str_eq tc `none` ) 0 {
-    : Json o ( json_obj_new )
-    ( json_obj_set o `type` ( json_str_lit `none` ) )
-    ^ @ ? Json { T o }
-  } {}
-  ? != ( nurl_str_starts tc `tool:` ) 0 {
-    // Extract the suffix via String to get clean ownership; the literal
-    // 5 is the byte length of "tool:". Empty NAME yields "" and the
-    // server will reject the request with 400 — caller's fault for
-    // passing "tool:" with no name.
-    : String full ( string_from tc )
-    : i suffix_n - n 5
-    : String name ( string_substr full 5 suffix_n )
-    : Json o ( json_obj_new )
-    ( json_obj_set o `type` ( json_str_lit `tool` ) )
-    ( json_obj_set o `name` ( json_str_lit ( string_data name ) ) )
-    ( string_free name )
-    ( string_free full )
-    ^ @ ? Json { T o }
-  } {}
+    ? != ( nurl_str_eq tc `auto` ) 0 {
+        : Json o ( json_obj_new )
+        ( json_obj_set o `type` ( json_str_lit `auto` ) )
+        ^ @ ?Json { T o }
+    } {}
+    ? != ( nurl_str_eq tc `any` ) 0 {
+        : Json o ( json_obj_new )
+        ( json_obj_set o `type` ( json_str_lit `any` ) )
+        ^ @ ?Json { T o }
+    } {}
+    ? != ( nurl_str_eq tc `none` ) 0 {
+        : Json o ( json_obj_new )
+        ( json_obj_set o `type` ( json_str_lit `none` ) )
+        ^ @ ?Json { T o }
+    } {}
+    ? != ( nurl_str_starts tc `tool:` ) 0 {
+        // Extract the suffix via String to get clean ownership; the literal
+        // 5 is the byte length of "tool:". Empty NAME yields "" and the
+        // server will reject the request with 400 — caller's fault for
+        // passing "tool:" with no name.
+        : String full ( string_from tc )
+        : i suffix_n - n 5
+        : String name ( string_substr full 5 suffix_n )
+        : Json o ( json_obj_new )
+        ( json_obj_set o `type` ( json_str_lit `tool` ) )
+        ( json_obj_set o `name` ( json_str_lit ( string_data name ) ) )
+        ( string_free name )
+        ( string_free full )
+        ^ @ ?Json { T o }
+    } {}
 
-  // Unknown shape — fall through and omit the field.
-  ^ @ ? Json { F @ Json { JNull } }
+    // Unknown shape — fall through and omit the field.
+    ^ @ ?Json { F @ Json { JNull } }
 }
 
 // ── Internal: clone Vec[Json] so the body owns disjoint copies ──────
 
 @ __claude_clone_vec_json ( Vec Json ) src → ( Vec Json ) {
-  : ( Vec Json ) out ( vec_new [Json] )
-  : i n ( vec_len [Json] src )
-  : ~ i k 0
-  ~ < k n {
-    : ? Json e ( vec_get [Json] src k )
-    ?? e {
-      T jv → ( vec_push [Json] out ( json_clone jv ) )
-      F    → {}
+    : ( Vec Json ) out ( vec_new [Json] )
+    : i n ( vec_len [Json] src )
+    : ~ i k 0
+    ~ < k n {
+        : ?Json e ( vec_get [Json] src k )
+        ?? e {
+            T jv → ( vec_push [Json] out ( json_clone jv ) )
+            F → {}
+        }
+        = k + k 1
     }
-    = k + k 1
-  }
-  ^ out
+    ^ out
 }
 
 // ── Build the full request body ─────────────────────────────────────
@@ -534,91 +534,91 @@ $ `stdlib/ext/json.nu`
 // extended thinking with the given token budget. 0 disables thinking.
 
 @ __claude_build_body_full_ex
-    s model s system_prompt
-    ( Vec Json ) messages
-    ( Vec Json ) tools
-    s tool_choice
-    i max_tokens
-    b cache_system
-    b cache_tools
-    i thinking_budget → Json {
-  : Json body ( json_obj_new )
-  ( json_obj_set body `model`      ( json_str_lit model ) )
-  ( json_obj_set body `max_tokens` ( json_int max_tokens ) )
+s model s system_prompt
+( Vec Json ) messages
+( Vec Json ) tools
+s tool_choice
+i max_tokens
+b cache_system
+b cache_tools
+i thinking_budget → Json {
+    : Json body ( json_obj_new )
+    ( json_obj_set body `model` ( json_str_lit model ) )
+    ( json_obj_set body `max_tokens` ( json_int max_tokens ) )
 
-  ? > ( nurl_str_len system_prompt ) 0 {
-    ? cache_system {
-      // Array form lets us attach cache_control. The single text block
-      // mirrors what Anthropic returns for the bare-string form.
-      : Json sblock ( json_obj_new )
-      ( json_obj_set sblock `type` ( json_str_lit `text` ) )
-      ( json_obj_set sblock `text` ( json_str_lit system_prompt ) )
-      ( json_obj_set sblock `cache_control` ( __claude_cache_ephemeral ) )
-      : Json sarr ( json_arr_new )
-      ( json_arr_push sarr sblock )
-      ( json_obj_set body `system` sarr )
-    } {
-      ( json_obj_set body `system` ( json_str_lit system_prompt ) )
-    }
-  } {}
-
-  // Extended thinking — emit when budget is positive. Anthropic
-  // requires thinking before any tool_use blocks, so this is fine to
-  // combine with the tools array below.
-  ? > thinking_budget 0 {
-    : Json th ( json_obj_new )
-    ( json_obj_set th `type`          ( json_str_lit `enabled` ) )
-    ( json_obj_set th `budget_tokens` ( json_int thinking_budget ) )
-    ( json_obj_set body `thinking` th )
-  } {}
-
-  // Messages array (always required, even if empty — but the API rejects
-  // empty messages, so we just trust the caller here).
-  : ( Vec Json ) msgs_cloned ( __claude_clone_vec_json messages )
-  ( json_obj_set body `messages` ( json_arr msgs_cloned ) )
-
-  // Tools array — only emit when the caller supplied at least one.
-  : i tn ( vec_len [Json] tools )
-  ? > tn 0 {
-    : ( Vec Json ) tools_cloned ( __claude_clone_vec_json tools )
-    ? cache_tools {
-      // Attach cache_control to the LAST tool — the longest cacheable
-      // prefix the API can reuse on the next call when the tools array
-      // is unchanged.
-      : i last_idx - tn 1
-      : ? Json last_e ( vec_get [Json] tools_cloned last_idx )
-      ?? last_e {
-        T last_t → {
-          ( json_obj_set last_t `cache_control` ( __claude_cache_ephemeral ) )
+    ? > ( nurl_str_len system_prompt ) 0 {
+        ? cache_system {
+            // Array form lets us attach cache_control. The single text block
+            // mirrors what Anthropic returns for the bare-string form.
+            : Json sblock ( json_obj_new )
+            ( json_obj_set sblock `type` ( json_str_lit `text` ) )
+            ( json_obj_set sblock `text` ( json_str_lit system_prompt ) )
+            ( json_obj_set sblock `cache_control` ( __claude_cache_ephemeral ) )
+            : Json sarr ( json_arr_new )
+            ( json_arr_push sarr sblock )
+            ( json_obj_set body `system` sarr )
+        } {
+            ( json_obj_set body `system` ( json_str_lit system_prompt ) )
         }
-        F → {}
-      }
     } {}
-    ( json_obj_set body `tools` ( json_arr tools_cloned ) )
-  } {}
 
-  // tool_choice — only meaningful when tools are present.
-  ? > tn 0 {
-    : ? Json tc ( __claude_parse_tool_choice tool_choice )
-    ?? tc {
-      T j → ( json_obj_set body `tool_choice` j )
-      F   → {}
-    }
-  } {}
+    // Extended thinking — emit when budget is positive. Anthropic
+    // requires thinking before any tool_use blocks, so this is fine to
+    // combine with the tools array below.
+    ? > thinking_budget 0 {
+        : Json th ( json_obj_new )
+        ( json_obj_set th `type` ( json_str_lit `enabled` ) )
+        ( json_obj_set th `budget_tokens` ( json_int thinking_budget ) )
+        ( json_obj_set body `thinking` th )
+    } {}
 
-  ^ body
+    // Messages array (always required, even if empty — but the API rejects
+    // empty messages, so we just trust the caller here).
+    : ( Vec Json ) msgs_cloned ( __claude_clone_vec_json messages )
+    ( json_obj_set body `messages` ( json_arr msgs_cloned ) )
+
+    // Tools array — only emit when the caller supplied at least one.
+    : i tn ( vec_len [Json] tools )
+    ? > tn 0 {
+        : ( Vec Json ) tools_cloned ( __claude_clone_vec_json tools )
+        ? cache_tools {
+            // Attach cache_control to the LAST tool — the longest cacheable
+            // prefix the API can reuse on the next call when the tools array
+            // is unchanged.
+            : i last_idx - tn 1
+            : ?Json last_e ( vec_get [Json] tools_cloned last_idx )
+            ?? last_e {
+                T last_t → {
+                    ( json_obj_set last_t `cache_control` ( __claude_cache_ephemeral ) )
+                }
+                F → {}
+            }
+        } {}
+        ( json_obj_set body `tools` ( json_arr tools_cloned ) )
+    } {}
+
+    // tool_choice — only meaningful when tools are present.
+    ? > tn 0 {
+        : ?Json tc ( __claude_parse_tool_choice tool_choice )
+        ?? tc {
+            T j → ( json_obj_set body `tool_choice` j )
+            F → {}
+        }
+    } {}
+
+    ^ body
 }
 
 // Backward-compat shim — same shape as before, no caching, no thinking.
 @ __claude_build_body_full
-    s model s system_prompt
-    ( Vec Json ) messages
-    ( Vec Json ) tools
-    s tool_choice
-    i max_tokens → Json {
-  ^ ( __claude_build_body_full_ex
-        model system_prompt messages tools tool_choice max_tokens
-        F F 0 )
+s model s system_prompt
+( Vec Json ) messages
+( Vec Json ) tools
+s tool_choice
+i max_tokens → Json {
+    ^ ( __claude_build_body_full_ex
+    model system_prompt messages tools tool_choice max_tokens
+    F F 0 )
 }
 
 // Total request budget. The Anthropic SDK defaults to 600 s (10 min)
@@ -630,25 +630,25 @@ $ `stdlib/ext/json.nu`
 // `ANTHROPIC_TIMEOUT_MS` env override lets callers tune this without
 // recompiling. Out-of-range / unparseable values fall back to 600 000.
 @ __claude_timeout_ms → i {
-  : ? String env ( env_get `ANTHROPIC_TIMEOUT_MS` )
-  ?? env {
-    T s → {
-      : ! i ParseErr p ( int_parse ( string_data s ) )
-      ( string_free s )
-      ?? p {
-        T n → {
-          ? > n 0 { ^ n } {}
+    : ?String env ( env_get `ANTHROPIC_TIMEOUT_MS` )
+    ?? env {
+        T s → {
+            : !i ParseErr p ( int_parse ( string_data s ) )
+            ( string_free s )
+            ?? p {
+                T n → {
+                    ? > n 0 { ^ n } {}
+                }
+                F _ → {}
+            }
         }
-        F _ → {}
-      }
+        F → {}
     }
-    F → {}
-  }
-  ^ 600000
+    ^ 600000
 }
 
 @ __claude_connect_timeout_ms → i {
-  ^ 15000
+    ^ 15000
 }
 
 // Build the CRLF-delimited headers blob. `x-api-key` carries the secret;
@@ -656,13 +656,13 @@ $ `stdlib/ext/json.nu`
 // even though http_post_with_headers also injects it, so the blob is
 // self-describing if a future caller switches to http_request directly.
 @ __claude_headers s api_key → String {
-  : String b ( string_with_cap 256 )
-  ( string_push_str b `x-api-key: ` )
-  ( string_push_str b api_key )
-  ( string_push_str b `\r\n` )
-  ( string_push_str b `anthropic-version: 2023-06-01\r\n` )
-  ( string_push_str b `content-type: application/json\r\n` )
-  ^ b
+    : String b ( string_with_cap 256 )
+    ( string_push_str b `x-api-key: ` )
+    ( string_push_str b api_key )
+    ( string_push_str b `\r\n` )
+    ( string_push_str b `anthropic-version: 2023-06-01\r\n` )
+    ( string_push_str b `content-type: application/json\r\n` )
+    ^ b
 }
 
 // ── Public: full multi-turn + tool-use entry point with caching/thinking ─
@@ -682,85 +682,85 @@ $ `stdlib/ext/json.nu`
 // Both Vec[Json] inputs are BORROWED — caller still owns and frees
 // them after the call.
 @ claude_messages_full_ex
-    s api_key s model s system_prompt
-    ( Vec Json ) messages
-    ( Vec Json ) tools
-    s tool_choice
-    i max_tokens
-    b cache_system
-    b cache_tools
-    i thinking_budget
-    → ! Json ClaudeErr {
-  ? == ( nurl_str_len api_key ) 0 {
-    ^ @ ! Json ClaudeErr { F @ ClaudeErr { ClaudeAuth } }
-  } {}
+s api_key s model s system_prompt
+( Vec Json ) messages
+( Vec Json ) tools
+s tool_choice
+i max_tokens
+b cache_system
+b cache_tools
+i thinking_budget
+→ !Json ClaudeErr {
+    ? == ( nurl_str_len api_key ) 0 {
+        ^ @ !Json ClaudeErr { F @ ClaudeErr { ClaudeAuth } }
+    } {}
 
-  : Json body
+    : Json body
     ( __claude_build_body_full_ex
-        model system_prompt messages tools tool_choice max_tokens
-        cache_system cache_tools thinking_budget )
-  : String body_str ( json_stringify body )
-  ( json_free body )
+    model system_prompt messages tools tool_choice max_tokens
+    cache_system cache_tools thinking_budget )
+    : String body_str ( json_stringify body )
+    ( json_free body )
 
-  : String headers ( __claude_headers api_key )
+    : String headers ( __claude_headers api_key )
 
-  // Use http_request_to so the per-call timeout is configurable. Claude
-  // turns regularly run 30+ seconds on opus-class models with long
-  // contexts; the MVP HTTP layer's 30-second total budget would
-  // otherwise time out the second turn of every multi-turn agent loop.
-  : ! Response HttpErr res
+    // Use http_request_to so the per-call timeout is configurable. Claude
+    // turns regularly run 30+ seconds on opus-class models with long
+    // contexts; the MVP HTTP layer's 30-second total budget would
+    // otherwise time out the second turn of every multi-turn agent loop.
+    : !Response HttpErr res
     ( http_request_to `POST`
-                      `https://api.anthropic.com/v1/messages`
-                      ( string_data body_str )
-                      ( string_data headers )
-                      ( __claude_timeout_ms )
-                      ( __claude_connect_timeout_ms ) )
-  ( string_free body_str )
-  ( string_free headers )
+    `https://api.anthropic.com/v1/messages`
+    ( string_data body_str )
+    ( string_data headers )
+    ( __claude_timeout_ms )
+    ( __claude_connect_timeout_ms ) )
+    ( string_free body_str )
+    ( string_free headers )
 
-  ?? res {
-    T r → {
-      : i st ( http_status r )
-      : String body_owned ( string_from ( http_body_str r ) )
-      ( response_free r )
+    ?? res {
+        T r → {
+            : i st ( http_status r )
+            : String body_owned ( string_from ( http_body_str r ) )
+            ( response_free r )
 
-      : ! Json ParseErr pj ( json_parse ( string_data body_owned ) )
-      ( string_free body_owned )
+            : !Json ParseErr pj ( json_parse ( string_data body_owned ) )
+            ( string_free body_owned )
 
-      ?? pj {
-        T j → {
-          ? != st 200 {
-            ( json_free j )
-            ^ @ ! Json ClaudeErr { F @ ClaudeErr { ClaudeApi } }
-          } {}
-          ^ @ ! Json ClaudeErr { T j }
+            ?? pj {
+                T j → {
+                    ? != st 200 {
+                        ( json_free j )
+                        ^ @ !Json ClaudeErr { F @ ClaudeErr { ClaudeApi } }
+                    } {}
+                    ^ @ !Json ClaudeErr { T j }
+                }
+                F _ → {
+                    ^ @ !Json ClaudeErr { F @ ClaudeErr { ClaudeJson } }
+                }
+            }
         }
-        F _ → {
-          ^ @ ! Json ClaudeErr { F @ ClaudeErr { ClaudeJson } }
+        F he → {
+            ^ @ !Json ClaudeErr { F ( __claude_map_http # HttpErr he ) }
         }
-      }
     }
-    F he → {
-      ^ @ ! Json ClaudeErr { F ( __claude_map_http # HttpErr he ) }
-    }
-  }
-  // All arms above terminate; this is unreachable but keeps the
-  // codegen happy if it can't yet prove total coverage.
-  ^ @ ! Json ClaudeErr { F @ ClaudeErr { ClaudeShape } }
+    // All arms above terminate; this is unreachable but keeps the
+    // codegen happy if it can't yet prove total coverage.
+    ^ @ !Json ClaudeErr { F @ ClaudeErr { ClaudeShape } }
 }
 
 // Backward-compatible shim: same signature as before, no caching, no
 // thinking. Existing callers keep working unchanged.
 @ claude_messages_full
-    s api_key s model s system_prompt
-    ( Vec Json ) messages
-    ( Vec Json ) tools
-    s tool_choice
-    i max_tokens
-    → ! Json ClaudeErr {
-  ^ ( claude_messages_full_ex
-        api_key model system_prompt messages tools tool_choice max_tokens
-        F F 0 )
+s api_key s model s system_prompt
+( Vec Json ) messages
+( Vec Json ) tools
+s tool_choice
+i max_tokens
+→ !Json ClaudeErr {
+    ^ ( claude_messages_full_ex
+    api_key model system_prompt messages tools tool_choice max_tokens
+    F F 0 )
 }
 
 // ── Streaming entry point ───────────────────────────────────────────
@@ -803,67 +803,67 @@ $ `stdlib/ext/json.nu`
 // like claude_messages_full_ex. The returned HttpStream is OWNED — the
 // caller MUST `http_stream_close` it.
 @ claude_messages_stream_ex
-    s api_key s model s system_prompt
-    ( Vec Json ) messages
-    ( Vec Json ) tools
-    s tool_choice
-    i max_tokens
-    b cache_system
-    b cache_tools
-    i thinking_budget
-    → ! HttpStream ClaudeErr {
-  ? == ( nurl_str_len api_key ) 0 {
-    ^ @ ! HttpStream ClaudeErr { F @ ClaudeErr { ClaudeAuth } }
-  } {}
+s api_key s model s system_prompt
+( Vec Json ) messages
+( Vec Json ) tools
+s tool_choice
+i max_tokens
+b cache_system
+b cache_tools
+i thinking_budget
+→ !HttpStream ClaudeErr {
+    ? == ( nurl_str_len api_key ) 0 {
+        ^ @ !HttpStream ClaudeErr { F @ ClaudeErr { ClaudeAuth } }
+    } {}
 
-  : Json body
+    : Json body
     ( __claude_build_body_full_ex
-        model system_prompt messages tools tool_choice max_tokens
-        cache_system cache_tools thinking_budget )
-  ( json_obj_set body `stream` ( json_bool T ) )
-  : String body_str ( json_stringify body )
-  ( json_free body )
+    model system_prompt messages tools tool_choice max_tokens
+    cache_system cache_tools thinking_budget )
+    ( json_obj_set body `stream` ( json_bool T ) )
+    : String body_str ( json_stringify body )
+    ( json_free body )
 
-  // Add accept: text/event-stream so the server picks the SSE format.
-  : String headers ( __claude_headers api_key )
-  ( string_push_str headers `accept: text/event-stream\r\n` )
+    // Add accept: text/event-stream so the server picks the SSE format.
+    : String headers ( __claude_headers api_key )
+    ( string_push_str headers `accept: text/event-stream\r\n` )
 
-  : ! HttpStream HttpErr s
+    : !HttpStream HttpErr s
     ( http_stream_open_to `POST`
-                          `https://api.anthropic.com/v1/messages`
-                          ( string_data body_str )
-                          ( string_data headers )
-                          ( __claude_timeout_ms )
-                          ( __claude_connect_timeout_ms ) )
-  ( string_free body_str )
-  ( string_free headers )
+    `https://api.anthropic.com/v1/messages`
+    ( string_data body_str )
+    ( string_data headers )
+    ( __claude_timeout_ms )
+    ( __claude_connect_timeout_ms ) )
+    ( string_free body_str )
+    ( string_free headers )
 
-  ?? s {
-    T st → { ^ @ ! HttpStream ClaudeErr { T st } }
-    F he → {
-      ^ @ ! HttpStream ClaudeErr { F ( __claude_map_http # HttpErr he ) }
+    ?? s {
+        T st → { ^ @ !HttpStream ClaudeErr { T st } }
+        F he → {
+            ^ @ !HttpStream ClaudeErr { F ( __claude_map_http # HttpErr he ) }
+        }
     }
-  }
-  // Unreachable — both arms returned.
-  ^ @ ! HttpStream ClaudeErr { F @ ClaudeErr { ClaudeShape } }
+    // Unreachable — both arms returned.
+    ^ @ !HttpStream ClaudeErr { F @ ClaudeErr { ClaudeShape } }
 }
 
 // Streaming convenience: single-turn, no tools, no caching.
 @ claude_messages_stream s api_key s model s system_prompt s user_text i max_tokens
-                         → ! HttpStream ClaudeErr {
-  : ( Vec Json ) msgs  ( vec_new [Json] )
-  ( vec_push [Json] msgs ( claude_msg_user_text user_text ) )
-  : ( Vec Json ) tools ( vec_new [Json] )
+→ !HttpStream ClaudeErr {
+    : ( Vec Json ) msgs ( vec_new [Json] )
+    ( vec_push [Json] msgs ( claude_msg_user_text user_text ) )
+    : ( Vec Json ) tools ( vec_new [Json] )
 
-  : ! HttpStream ClaudeErr r
+    : !HttpStream ClaudeErr r
     ( claude_messages_stream_ex
-        api_key model system_prompt msgs tools `` max_tokens
-        F F 0 )
+    api_key model system_prompt msgs tools `` max_tokens
+    F F 0 )
 
-  : (@ v Json) drop_json \ Json e → v { ( json_free e ) }
-  ( vec_free_with [Json] msgs  drop_json )
-  ( vec_free_with [Json] tools drop_json )
-  ^ r
+    : ( @ v Json ) drop_json \ Json e → v { ( json_free e ) }
+    ( vec_free_with [Json] msgs drop_json )
+    ( vec_free_with [Json] tools drop_json )
+    ^ r
 }
 
 // ── SSE event extractors (Anthropic streaming) ─────────────────────
@@ -923,43 +923,43 @@ $ `stdlib/ext/json.nu`
 //
 // `data` is BORROWED — passes the JSON parser internally. Returns
 // owned String for the delta text.
-@ claude_stream_event_text_delta SseEvent ev → ? String {
-  : s en ( string_data . ev name )
-  ? == ( nurl_str_eq en `content_block_delta` ) 0 {
-    ^ @ ? String { F # String 0 }
-  } {}
-  : ! Json ParseErr pj ( json_parse ( string_data . ev data ) )
-  ?? pj {
-    T j → {
-      : ? Json delta ( json_obj_get j `delta` )
-      ?? delta {
-        T d → {
-          : ? Json typ ( json_obj_get d `type` )
-          ?? typ {
-            T tj → {
-              : s tname ( json_str_data tj )
-              ? != ( nurl_str_eq tname `text_delta` ) 0 {
-                : ? Json text_j ( json_obj_get d `text` )
-                ?? text_j {
-                  T tx → {
-                    : String out ( string_from ( json_str_data tx ) )
-                    ( json_free j )
-                    ^ @ ? String { T out }
-                  }
-                  F → {}
+@ claude_stream_event_text_delta SseEvent ev → ?String {
+    : s en ( string_data . ev name )
+    ? == ( nurl_str_eq en `content_block_delta` ) 0 {
+        ^ @ ?String { F # String 0 }
+    } {}
+    : !Json ParseErr pj ( json_parse ( string_data . ev data ) )
+    ?? pj {
+        T j → {
+            : ?Json delta ( json_obj_get j `delta` )
+            ?? delta {
+                T d → {
+                    : ?Json typ ( json_obj_get d `type` )
+                    ?? typ {
+                        T tj → {
+                            : s tname ( json_str_data tj )
+                            ? != ( nurl_str_eq tname `text_delta` ) 0 {
+                                : ?Json text_j ( json_obj_get d `text` )
+                                ?? text_j {
+                                    T tx → {
+                                        : String out ( string_from ( json_str_data tx ) )
+                                        ( json_free j )
+                                        ^ @ ?String { T out }
+                                    }
+                                    F → {}
+                                }
+                            } {}
+                        }
+                        F → {}
+                    }
                 }
-              } {}
+                F → {}
             }
-            F → {}
-          }
+            ( json_free j )
         }
-        F → {}
-      }
-      ( json_free j )
+        F _ → {}
     }
-    F _ → {}
-  }
-  ^ @ ? String { F # String 0 }
+    ^ @ ?String { F # String 0 }
 }
 
 // `content_block_delta` SSE frame whose payload carries
@@ -971,167 +971,167 @@ $ `stdlib/ext/json.nu`
 // Symmetric to `claude_stream_event_text_delta` but for the tool-use
 // stream — the missing half that turns NURL's existing streaming
 // surface into a complete production chat-with-tools UX.
-@ claude_stream_event_input_json_delta SseEvent ev → ? String {
-  : s en ( string_data . ev name )
-  ? == ( nurl_str_eq en `content_block_delta` ) 0 {
-    ^ @ ? String { F # String 0 }
-  } {}
-  : ! Json ParseErr pj ( json_parse ( string_data . ev data ) )
-  ?? pj {
-    T j → {
-      : ? Json delta ( json_obj_get j `delta` )
-      ?? delta {
-        T d → {
-          : ? Json typ ( json_obj_get d `type` )
-          ?? typ {
-            T tj → {
-              : s tname ( json_str_data tj )
-              ? != ( nurl_str_eq tname `input_json_delta` ) 0 {
-                : ? Json pjf ( json_obj_get d `partial_json` )
-                ?? pjf {
-                  T pjs → {
-                    : String out ( string_from ( json_str_data pjs ) )
-                    ( json_free j )
-                    ^ @ ? String { T out }
-                  }
-                  F → {}
+@ claude_stream_event_input_json_delta SseEvent ev → ?String {
+    : s en ( string_data . ev name )
+    ? == ( nurl_str_eq en `content_block_delta` ) 0 {
+        ^ @ ?String { F # String 0 }
+    } {}
+    : !Json ParseErr pj ( json_parse ( string_data . ev data ) )
+    ?? pj {
+        T j → {
+            : ?Json delta ( json_obj_get j `delta` )
+            ?? delta {
+                T d → {
+                    : ?Json typ ( json_obj_get d `type` )
+                    ?? typ {
+                        T tj → {
+                            : s tname ( json_str_data tj )
+                            ? != ( nurl_str_eq tname `input_json_delta` ) 0 {
+                                : ?Json pjf ( json_obj_get d `partial_json` )
+                                ?? pjf {
+                                    T pjs → {
+                                        : String out ( string_from ( json_str_data pjs ) )
+                                        ( json_free j )
+                                        ^ @ ?String { T out }
+                                    }
+                                    F → {}
+                                }
+                            } {}
+                        }
+                        F → {}
+                    }
                 }
-              } {}
+                F → {}
             }
-            F → {}
-          }
+            ( json_free j )
         }
-        F → {}
-      }
-      ( json_free j )
+        F _ → {}
     }
-    F _ → {}
-  }
-  ^ @ ? String { F # String 0 }
+    ^ @ ?String { F # String 0 }
 }
 
 // Block index for `content_block_start` / `content_block_delta` /
 // `content_block_stop` frames. None for other event types or malformed
 // frames. Anthropic streams interleave blocks (text + several tool_use)
 // at distinct indices, so callers keep a per-index state map.
-@ claude_stream_event_index SseEvent ev → ? i {
-  : s en ( string_data . ev name )
-  : i ea ( nurl_str_eq en `content_block_start` )
-  : i eb ( nurl_str_eq en `content_block_delta` )
-  : i ec ( nurl_str_eq en `content_block_stop` )
-  ? & == ea 0 & == eb 0 == ec 0 {
-    ^ @ ? i { F 0 }
-  } {}
-  : ! Json ParseErr pj ( json_parse ( string_data . ev data ) )
-  ?? pj {
-    T j → {
-      : ? Json idx ( json_obj_get j `index` )
-      ?? idx {
-        T ij → {
-          : ? i n ( json_num_as_i ij )
-          ?? n {
-            T x → {
-              ( json_free j )
-              ^ @ ? i { T x }
+@ claude_stream_event_index SseEvent ev → ?i {
+    : s en ( string_data . ev name )
+    : i ea ( nurl_str_eq en `content_block_start` )
+    : i eb ( nurl_str_eq en `content_block_delta` )
+    : i ec ( nurl_str_eq en `content_block_stop` )
+    ? & == ea 0 & == eb 0 == ec 0 {
+        ^ @ ?i { F 0 }
+    } {}
+    : !Json ParseErr pj ( json_parse ( string_data . ev data ) )
+    ?? pj {
+        T j → {
+            : ?Json idx ( json_obj_get j `index` )
+            ?? idx {
+                T ij → {
+                    : ?i n ( json_num_as_i ij )
+                    ?? n {
+                        T x → {
+                            ( json_free j )
+                            ^ @ ?i { T x }
+                        }
+                        F → {}
+                    }
+                }
+                F → {}
             }
-            F → {}
-          }
+            ( json_free j )
         }
-        F → {}
-      }
-      ( json_free j )
+        F _ → {}
     }
-    F _ → {}
-  }
-  ^ @ ? i { F 0 }
+    ^ @ ?i { F 0 }
 }
 
 // `content_block_start.content_block.type` — typically "text" or
 // "tool_use" (also "thinking" when extended thinking is enabled).
 // Owned String, or None for non-`content_block_start` events.
-@ claude_stream_event_block_kind SseEvent ev → ? String {
-  : s en ( string_data . ev name )
-  ? == ( nurl_str_eq en `content_block_start` ) 0 {
-    ^ @ ? String { F # String 0 }
-  } {}
-  : ! Json ParseErr pj ( json_parse ( string_data . ev data ) )
-  ?? pj {
-    T j → {
-      : ? Json cb ( json_obj_get j `content_block` )
-      ?? cb {
-        T cbj → {
-          : ? Json typ ( json_obj_get cbj `type` )
-          ?? typ {
-            T tj → {
-              : String out ( string_from ( json_str_data tj ) )
-              ( json_free j )
-              ^ @ ? String { T out }
+@ claude_stream_event_block_kind SseEvent ev → ?String {
+    : s en ( string_data . ev name )
+    ? == ( nurl_str_eq en `content_block_start` ) 0 {
+        ^ @ ?String { F # String 0 }
+    } {}
+    : !Json ParseErr pj ( json_parse ( string_data . ev data ) )
+    ?? pj {
+        T j → {
+            : ?Json cb ( json_obj_get j `content_block` )
+            ?? cb {
+                T cbj → {
+                    : ?Json typ ( json_obj_get cbj `type` )
+                    ?? typ {
+                        T tj → {
+                            : String out ( string_from ( json_str_data tj ) )
+                            ( json_free j )
+                            ^ @ ?String { T out }
+                        }
+                        F → {}
+                    }
+                }
+                F → {}
             }
-            F → {}
-          }
+            ( json_free j )
         }
-        F → {}
-      }
-      ( json_free j )
+        F _ → {}
     }
-    F _ → {}
-  }
-  ^ @ ? String { F # String 0 }
+    ^ @ ?String { F # String 0 }
 }
 
 // Internal: extract the named string field from
 // `content_block_start.content_block` when content_block.type == "tool_use".
 // Returns owned String, or None when the event is the wrong kind, the
 // content_block isn't a tool_use, or the field is missing.
-@ __claude_stream_tool_use_field SseEvent ev s field → ? String {
-  : s en ( string_data . ev name )
-  ? == ( nurl_str_eq en `content_block_start` ) 0 {
-    ^ @ ? String { F # String 0 }
-  } {}
-  : ! Json ParseErr pj ( json_parse ( string_data . ev data ) )
-  ?? pj {
-    T j → {
-      : ? Json cb ( json_obj_get j `content_block` )
-      ?? cb {
-        T cbj → {
-          : ? Json typ ( json_obj_get cbj `type` )
-          ?? typ {
-            T tj → {
-              : s tname ( json_str_data tj )
-              ? != ( nurl_str_eq tname `tool_use` ) 0 {
-                : ? Json fj ( json_obj_get cbj field )
-                ?? fj {
-                  T fjs → {
-                    : String out ( string_from ( json_str_data fjs ) )
-                    ( json_free j )
-                    ^ @ ? String { T out }
-                  }
-                  F → {}
+@ __claude_stream_tool_use_field SseEvent ev s field → ?String {
+    : s en ( string_data . ev name )
+    ? == ( nurl_str_eq en `content_block_start` ) 0 {
+        ^ @ ?String { F # String 0 }
+    } {}
+    : !Json ParseErr pj ( json_parse ( string_data . ev data ) )
+    ?? pj {
+        T j → {
+            : ?Json cb ( json_obj_get j `content_block` )
+            ?? cb {
+                T cbj → {
+                    : ?Json typ ( json_obj_get cbj `type` )
+                    ?? typ {
+                        T tj → {
+                            : s tname ( json_str_data tj )
+                            ? != ( nurl_str_eq tname `tool_use` ) 0 {
+                                : ?Json fj ( json_obj_get cbj field )
+                                ?? fj {
+                                    T fjs → {
+                                        : String out ( string_from ( json_str_data fjs ) )
+                                        ( json_free j )
+                                        ^ @ ?String { T out }
+                                    }
+                                    F → {}
+                                }
+                            } {}
+                        }
+                        F → {}
+                    }
                 }
-              } {}
+                F → {}
             }
-            F → {}
-          }
+            ( json_free j )
         }
-        F → {}
-      }
-      ( json_free j )
+        F _ → {}
     }
-    F _ → {}
-  }
-  ^ @ ? String { F # String 0 }
+    ^ @ ?String { F # String 0 }
 }
 
 // Tool-use id from a `content_block_start` frame whose content_block is
 // a tool_use block. Owned String, or None for any other shape.
-@ claude_stream_event_tool_use_id SseEvent ev → ? String {
-  ^ ( __claude_stream_tool_use_field ev `id` )
+@ claude_stream_event_tool_use_id SseEvent ev → ?String {
+    ^ ( __claude_stream_tool_use_field ev `id` )
 }
 
 // Tool-use name from a `content_block_start` frame whose content_block
 // is a tool_use block. Owned String, or None for any other shape.
-@ claude_stream_event_tool_use_name SseEvent ev → ? String {
-  ^ ( __claude_stream_tool_use_field ev `name` )
+@ claude_stream_event_tool_use_name SseEvent ev → ?String {
+    ^ ( __claude_stream_tool_use_field ev `name` )
 }
 
 // `message_delta.delta.stop_reason` — finalised on the second-to-last
@@ -1140,77 +1140,77 @@ $ `stdlib/ext/json.nu`
 // kinds. Distinct from the synchronous response's `stop_reason` field
 // because in streaming mode the value lives on the message_delta
 // envelope rather than the top-level response object.
-@ claude_stream_event_stop_reason SseEvent ev → ? String {
-  : s en ( string_data . ev name )
-  ? == ( nurl_str_eq en `message_delta` ) 0 {
-    ^ @ ? String { F # String 0 }
-  } {}
-  : ! Json ParseErr pj ( json_parse ( string_data . ev data ) )
-  ?? pj {
-    T j → {
-      : ? Json delta ( json_obj_get j `delta` )
-      ?? delta {
-        T d → {
-          : ? Json sr ( json_obj_get d `stop_reason` )
-          ?? sr {
-            T srj → {
-              : String out ( string_from ( json_str_data srj ) )
-              ( json_free j )
-              ^ @ ? String { T out }
+@ claude_stream_event_stop_reason SseEvent ev → ?String {
+    : s en ( string_data . ev name )
+    ? == ( nurl_str_eq en `message_delta` ) 0 {
+        ^ @ ?String { F # String 0 }
+    } {}
+    : !Json ParseErr pj ( json_parse ( string_data . ev data ) )
+    ?? pj {
+        T j → {
+            : ?Json delta ( json_obj_get j `delta` )
+            ?? delta {
+                T d → {
+                    : ?Json sr ( json_obj_get d `stop_reason` )
+                    ?? sr {
+                        T srj → {
+                            : String out ( string_from ( json_str_data srj ) )
+                            ( json_free j )
+                            ^ @ ?String { T out }
+                        }
+                        F → {}
+                    }
+                }
+                F → {}
             }
-            F → {}
-          }
+            ( json_free j )
         }
-        F → {}
-      }
-      ( json_free j )
+        F _ → {}
     }
-    F _ → {}
-  }
-  ^ @ ? String { F # String 0 }
+    ^ @ ?String { F # String 0 }
 }
 
 // Internal: extract `error.<field>` for streaming `error` frames.
-@ __claude_stream_error_field SseEvent ev s field → ? String {
-  : s en ( string_data . ev name )
-  ? == ( nurl_str_eq en `error` ) 0 {
-    ^ @ ? String { F # String 0 }
-  } {}
-  : ! Json ParseErr pj ( json_parse ( string_data . ev data ) )
-  ?? pj {
-    T j → {
-      : ? Json err ( json_obj_get j `error` )
-      ?? err {
-        T ej → {
-          : ? Json fj ( json_obj_get ej field )
-          ?? fj {
-            T fjs → {
-              : String out ( string_from ( json_str_data fjs ) )
-              ( json_free j )
-              ^ @ ? String { T out }
+@ __claude_stream_error_field SseEvent ev s field → ?String {
+    : s en ( string_data . ev name )
+    ? == ( nurl_str_eq en `error` ) 0 {
+        ^ @ ?String { F # String 0 }
+    } {}
+    : !Json ParseErr pj ( json_parse ( string_data . ev data ) )
+    ?? pj {
+        T j → {
+            : ?Json err ( json_obj_get j `error` )
+            ?? err {
+                T ej → {
+                    : ?Json fj ( json_obj_get ej field )
+                    ?? fj {
+                        T fjs → {
+                            : String out ( string_from ( json_str_data fjs ) )
+                            ( json_free j )
+                            ^ @ ?String { T out }
+                        }
+                        F → {}
+                    }
+                }
+                F → {}
             }
-            F → {}
-          }
+            ( json_free j )
         }
-        F → {}
-      }
-      ( json_free j )
+        F _ → {}
     }
-    F _ → {}
-  }
-  ^ @ ? String { F # String 0 }
+    ^ @ ?String { F # String 0 }
 }
 
 // Streaming `error` event — `error.type` (e.g. "overloaded_error",
 // "rate_limit_error"). Owned String, or None for non-error events.
-@ claude_stream_event_error_type SseEvent ev → ? String {
-  ^ ( __claude_stream_error_field ev `type` )
+@ claude_stream_event_error_type SseEvent ev → ?String {
+    ^ ( __claude_stream_error_field ev `type` )
 }
 
 // Streaming `error` event — `error.message` (human-readable text).
 // Owned String, or None for non-error events.
-@ claude_stream_event_error_message SseEvent ev → ? String {
-  ^ ( __claude_stream_error_field ev `message` )
+@ claude_stream_event_error_message SseEvent ev → ?String {
+    ^ ( __claude_stream_error_field ev `message` )
 }
 
 // ── Public: single-turn convenience wrapper ─────────────────────────
@@ -1218,18 +1218,18 @@ $ `stdlib/ext/json.nu`
 // Thin shim over `claude_messages_full` that builds a one-message
 // conversation [{role:"user", content:user_text}] with no tools.
 @ claude_messages s api_key s model s system_prompt s user_text i max_tokens
-                  → ! Json ClaudeErr {
-  : ( Vec Json ) msgs  ( vec_new [Json] )
-  ( vec_push [Json] msgs ( claude_msg_user_text user_text ) )
-  : ( Vec Json ) tools ( vec_new [Json] )
+→ !Json ClaudeErr {
+    : ( Vec Json ) msgs ( vec_new [Json] )
+    ( vec_push [Json] msgs ( claude_msg_user_text user_text ) )
+    : ( Vec Json ) tools ( vec_new [Json] )
 
-  : ! Json ClaudeErr r
+    : !Json ClaudeErr r
     ( claude_messages_full api_key model system_prompt msgs tools `` max_tokens )
 
-  : (@ v Json) drop_json \ Json e → v { ( json_free e ) }
-  ( vec_free_with [Json] msgs  drop_json )
-  ( vec_free_with [Json] tools drop_json )
-  ^ r
+    : ( @ v Json ) drop_json \ Json e → v { ( json_free e ) }
+    ( vec_free_with [Json] msgs drop_json )
+    ( vec_free_with [Json] tools drop_json )
+    ^ r
 }
 
 // ── Response inspection ─────────────────────────────────────────────
@@ -1238,102 +1238,102 @@ $ `stdlib/ext/json.nu`
 // `{type:"text"}` block. Returns "" when the response holds only
 // non-text blocks (e.g. tool_use), or when shape doesn't match.
 @ claude_text Json r → s {
-  : ? Json content ( json_obj_get r `content` )
-  ?? content {
-    T arr → {
-      : i n ( json_arr_len arr )
-      : ~ i k 0
-      ~ < k n {
-        : ? Json item ( json_arr_get arr k )
-        ?? item {
-          T b → {
-            : ? Json typ ( json_obj_get b `type` )
-            ?? typ {
-              T tj → {
-                : s tname ( json_str_data tj )
-                ? != ( nurl_str_eq tname `text` ) 0 {
-                  : ? Json tx ( json_obj_get b `text` )
-                  ?? tx {
-                    T tjv → { ^ ( json_str_data tjv ) }
-                    F     → {}
-                  }
-                } {}
-              }
-              F → {}
+    : ?Json content ( json_obj_get r `content` )
+    ?? content {
+        T arr → {
+            : i n ( json_arr_len arr )
+            : ~ i k 0
+            ~ < k n {
+                : ?Json item ( json_arr_get arr k )
+                ?? item {
+                    T b → {
+                        : ?Json typ ( json_obj_get b `type` )
+                        ?? typ {
+                            T tj → {
+                                : s tname ( json_str_data tj )
+                                ? != ( nurl_str_eq tname `text` ) 0 {
+                                    : ?Json tx ( json_obj_get b `text` )
+                                    ?? tx {
+                                        T tjv → { ^ ( json_str_data tjv ) }
+                                        F → {}
+                                    }
+                                } {}
+                            }
+                            F → {}
+                        }
+                    }
+                    F → {}
+                }
+                = k + k 1
             }
-          }
-          F → {}
         }
-        = k + k 1
-      }
+        F → {}
     }
-    F → {}
-  }
-  ^ ``
+    ^ ``
 }
 
 @ claude_stop_reason Json r → s {
-  : ? Json sr ( json_obj_get r `stop_reason` )
-  ?? sr {
-    T j → { ^ ( json_str_data j ) }
-    F   → { ^ `` }
-  }
-  ^ ``
+    : ?Json sr ( json_obj_get r `stop_reason` )
+    ?? sr {
+        T j → { ^ ( json_str_data j ) }
+        F → { ^ `` }
+    }
+    ^ ``
 }
 
 @ claude_model Json r → s {
-  : ? Json m ( json_obj_get r `model` )
-  ?? m {
-    T j → { ^ ( json_str_data j ) }
-    F   → { ^ `` }
-  }
-  ^ ``
+    : ?Json m ( json_obj_get r `model` )
+    ?? m {
+        T j → { ^ ( json_str_data j ) }
+        F → { ^ `` }
+    }
+    ^ ``
 }
 
 @ __claude_usage_int Json r s field → i {
-  : ? Json u ( json_obj_get r `usage` )
-  ?? u {
-    T uo → {
-      : ? Json it ( json_obj_get uo field )
-      ?? it {
-        T j → {
-          : ? i n ( json_num_as_i j )
-          ?? n {
-            T x → { ^ x }
-            F   → { ^ 0 }
-          }
+    : ?Json u ( json_obj_get r `usage` )
+    ?? u {
+        T uo → {
+            : ?Json it ( json_obj_get uo field )
+            ?? it {
+                T j → {
+                    : ?i n ( json_num_as_i j )
+                    ?? n {
+                        T x → { ^ x }
+                        F → { ^ 0 }
+                    }
+                }
+                F → { ^ 0 }
+            }
         }
         F → { ^ 0 }
-      }
     }
-    F → { ^ 0 }
-  }
-  ^ 0
+    ^ 0
 }
 
 @ claude_input_tokens Json r → i {
-  ^ ( __claude_usage_int r `input_tokens` )
+    ^ ( __claude_usage_int r `input_tokens` )
 }
 
 @ claude_output_tokens Json r → i {
-  ^ ( __claude_usage_int r `output_tokens` )
+    ^ ( __claude_usage_int r `output_tokens` )
 }
 
 // Tokens written into the prompt cache on this call. Non-zero only when
 // at least one cache_control breakpoint was sent and the prefix wasn't
 // already cached. Charged at full price (no discount on creation).
 @ claude_cache_creation_tokens Json r → i {
-  ^ ( __claude_usage_int r `cache_creation_input_tokens` )
+    ^ ( __claude_usage_int r `cache_creation_input_tokens` )
 }
 
 // Tokens served from the prompt cache on this call. Charged at ~10% of
 // the normal input rate — the savings signal you check for caching wins.
 @ claude_cache_read_tokens Json r → i {
-  ^ ( __claude_usage_int r `cache_read_input_tokens` )
+    ^ ( __claude_usage_int r `cache_read_input_tokens` )
 }
 
 @ claude_response_free Json r → v {
-  ( json_free r )
+    ( json_free r )
 }
 
 // ── Tool-use extractors ─────────────────────────────────────────────
@@ -1342,8 +1342,8 @@ $ `stdlib/ext/json.nu`
 // assistant wants you to run one or more tools and feed the results
 // back as the next message.
 @ claude_has_tool_use Json r → b {
-  : s sr ( claude_stop_reason r )
-  ^ != ( nurl_str_eq sr `tool_use` ) 0
+    : s sr ( claude_stop_reason r )
+    ^ != ( nurl_str_eq sr `tool_use` ) 0
 }
 
 // Walk the response's content array and return owned CLONES of every
@@ -1354,61 +1354,61 @@ $ `stdlib/ext/json.nu`
 // Cloning lets the caller free the response Json early without
 // invalidating the tool_use handles.
 @ claude_tool_calls Json r → ( Vec Json ) {
-  : ( Vec Json ) out ( vec_new [Json] )
-  : ? Json content ( json_obj_get r `content` )
-  ?? content {
-    T arr → {
-      : i n ( json_arr_len arr )
-      : ~ i k 0
-      ~ < k n {
-        : ? Json item ( json_arr_get arr k )
-        ?? item {
-          T b → {
-            : ? Json typ ( json_obj_get b `type` )
-            ?? typ {
-              T tj → {
-                : s tname ( json_str_data tj )
-                ? != ( nurl_str_eq tname `tool_use` ) 0 {
-                  ( vec_push [Json] out ( json_clone b ) )
-                } {}
-              }
-              F → {}
+    : ( Vec Json ) out ( vec_new [Json] )
+    : ?Json content ( json_obj_get r `content` )
+    ?? content {
+        T arr → {
+            : i n ( json_arr_len arr )
+            : ~ i k 0
+            ~ < k n {
+                : ?Json item ( json_arr_get arr k )
+                ?? item {
+                    T b → {
+                        : ?Json typ ( json_obj_get b `type` )
+                        ?? typ {
+                            T tj → {
+                                : s tname ( json_str_data tj )
+                                ? != ( nurl_str_eq tname `tool_use` ) 0 {
+                                    ( vec_push [Json] out ( json_clone b ) )
+                                } {}
+                            }
+                            F → {}
+                        }
+                    }
+                    F → {}
+                }
+                = k + k 1
             }
-          }
-          F → {}
         }
-        = k + k 1
-      }
+        F → {}
     }
-    F → {}
-  }
-  ^ out
+    ^ out
 }
 
 // Borrowed view of a tool_use block's "id" field. Returns "" if `tu`
 // is not a tool_use block or the field is missing.
 @ claude_tool_use_id Json tu → s {
-  : ? Json id ( json_obj_get tu `id` )
-  ?? id {
-    T j → { ^ ( json_str_data j ) }
-    F   → { ^ `` }
-  }
-  ^ ``
+    : ?Json id ( json_obj_get tu `id` )
+    ?? id {
+        T j → { ^ ( json_str_data j ) }
+        F → { ^ `` }
+    }
+    ^ ``
 }
 
 // Borrowed view of a tool_use block's "name" field.
 @ claude_tool_use_name Json tu → s {
-  : ? Json n ( json_obj_get tu `name` )
-  ?? n {
-    T j → { ^ ( json_str_data j ) }
-    F   → { ^ `` }
-  }
-  ^ ``
+    : ?Json n ( json_obj_get tu `name` )
+    ?? n {
+        T j → { ^ ( json_str_data j ) }
+        F → { ^ `` }
+    }
+    ^ ``
 }
 
 // Borrowed view of a tool_use block's "input" field (an object Json).
 // None when `tu` is not a tool_use block or "input" is missing. Use
 // `json_clone` if you need it to outlive `tu`.
-@ claude_tool_use_input Json tu → ? Json {
-  ^ ( json_obj_get tu `input` )
+@ claude_tool_use_input Json tu → ?Json {
+    ^ ( json_obj_get tu `input` )
 }

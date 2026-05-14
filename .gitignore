@@ -48,9 +48,6 @@ venv/
 .dev.vars.*
 worker-configuration.d.ts
 
-# ─── VS Code extension packaging ──────────────────────────────
-tooling/vscode-nurl/*.vsix
-
 # ─── Editors & IDEs ───────────────────────────────────────────
 .vscode/
 .idea/

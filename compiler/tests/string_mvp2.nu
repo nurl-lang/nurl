@@ -16,10 +16,10 @@ $ `stdlib/core/string.nu`
     // starts_with / ends_with / contains
     ( nurl_print ? ( string_starts_with s `hello` ) `sw1\n` `sw0\n` )
     ( nurl_print ? ( string_starts_with s `world` ) `sw1\n` `sw0\n` )
-    ( nurl_print ? ( string_ends_with   s `world` ) `ew1\n` `ew0\n` )
-    ( nurl_print ? ( string_ends_with   s `hello` ) `ew1\n` `ew0\n` )
-    ( nurl_print ? ( string_contains    s `lo wo` ) `ct1\n` `ct0\n` )
-    ( nurl_print ? ( string_contains    s `zzz`   ) `ct1\n` `ct0\n` )
+    ( nurl_print ? ( string_ends_with s `world` ) `ew1\n` `ew0\n` )
+    ( nurl_print ? ( string_ends_with s `hello` ) `ew1\n` `ew0\n` )
+    ( nurl_print ? ( string_contains s `lo wo` ) `ct1\n` `ct0\n` )
+    ( nurl_print ? ( string_contains s `zzz` ) `ct1\n` `ct0\n` )
 
     // substr
     : String m ( string_substr s 6 5 )

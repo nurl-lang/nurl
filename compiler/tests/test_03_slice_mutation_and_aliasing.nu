@@ -32,7 +32,7 @@
     ( puts ` ` )
 }
 
-@ print_slice [ i s → v {
+@ print_slice [i s → v {
     : i n . s length
     : ~ i i 0
     ~ < i n {
@@ -43,7 +43,7 @@
     ( puts `\n` )
 }
 
-@ sum_slice [ i s → i {
+@ sum_slice [i s → i {
     : i n . s length
     : ~ i i 0
     : ~ i acc 0
@@ -57,34 +57,34 @@
 
 // Rakentaa slice manuaalisesti mallocilla — testaa että
 // raaka muistialue käyttäytyy yhtenevästi literaalin kanssa.
-@ build_slice i n → [ i {
-    : * i buf # * i ( malloc * n 8 )
+@ build_slice i n → [i {
+    : *i buf # *i ( malloc * n 8 )
     : ~ i i 0
     ~ < i n {
         // täytä arvoilla 0, 5, 10, 15, ...
         = . buf i * i 5
         = i + i 1
     }
-    ^ @ [ i { buf n }
+    ^ @ [i { buf n }
 }
 
 // Palauttaa uuden slicen jossa jokainen alkio on tuplattu.
 // Testaa että slicen length-kenttä säilyy palautusarvossa.
-@ double_slice [ i src → [ i {
+@ double_slice [i src → [i {
     : i n . src length
-    : * i buf # * i ( malloc * n 8 )
+    : *i buf # *i ( malloc * n 8 )
     : ~ i i 0
     ~ < i n {
         : i v . src i
         = . buf i * v 2
         = i + i 1
     }
-    ^ @ [ i { buf n }
+    ^ @ [i { buf n }
 }
 
 @ main → i {
     // (1) Slice-literaali ja length
-    : [ i nums [ i | 10 20 30 40 50 ]
+    : [i nums [i | 10 20 30 40 50]
     ( puts `len=` )
     ( puts ( nurl_str_int . nums length ) )
     ( puts `\n` )
@@ -100,7 +100,7 @@
         = . nums i * v 10
         = i + i 1
     }
-    ( print_slice nums )      // 100 200 300 400 500
+    ( print_slice nums )  // 100 200 300 400 500
 
     // (4) Summa mutaation jälkeen
     ( puts `sum=` )
@@ -114,12 +114,12 @@
         : i opp - - n 1 j
         : i a . nums j
         : i b . nums opp
-        = . nums j   b
+        = . nums j b
         = . nums opp a
         = j + j 1
     }
     ( puts `reversed: ` )
-    ( print_slice nums )      // 500 400 300 200 100
+    ( print_slice nums )  // 500 400 300 200 100
 
     // (6) Struct-kentän mutaatio — varmista ettei slice-mutaatio
     //     ole sotkenut viereistä stack/heap-muistia
@@ -133,7 +133,7 @@
     ( puts `\n` )
 
     // (7) Heap-rakennettu slice
-    : [ i built ( build_slice 4 )
+    : [i built ( build_slice 4 )
     ( puts `built len=` )
     ( puts ( nurl_str_int . built length ) )
     ( puts ` sum=` )
@@ -144,10 +144,10 @@
     // Korjaan odotetun: sum=30. Päivitä header alla jos haluat.
 
     // (8) Funktion palauttama slice — double
-    : [ i ten [ i | 0 1 2 3 4 5 6 7 8 9 ]
-    : [ i dbl ( double_slice ten )
+    : [i ten [i | 0 1 2 3 4 5 6 7 8 9]
+    : [i dbl ( double_slice ten )
     ( puts `doubled: ` )
-    ( print_slice dbl )       // 0 2 4 6 8 10 12 14 16 18
+    ( print_slice dbl )  // 0 2 4 6 8 10 12 14 16 18
 
     ^ 0
 }

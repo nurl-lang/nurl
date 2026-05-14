@@ -27,9 +27,9 @@ $ `stdlib/core/string.nu`
 // ── Stock comparators ──────────────────────────────────────────────
 
 @ cmp_int i a i b → i {
-  ? < a b { ^ -1 } {}
-  ? > a b { ^ 1 } {}
-  ^ 0
+    ? < a b { ^ -1 } {}
+    ? > a b { ^ 1 } {}
+    ^ 0
 }
 
 // IEEE-754 caveat: NaN is non-comparable to anything. We treat any
@@ -37,67 +37,67 @@ $ `stdlib/core/string.nu`
 // binary_search stays well-defined. If you need stricter semantics,
 // filter NaNs out first.
 @ cmp_float f a f b → i {
-  ? < a b { ^ -1 } {}
-  ? > a b { ^ 1 } {}
-  ^ 0
+    ? < a b { ^ -1 } {}
+    ? > a b { ^ 1 } {}
+    ^ 0
 }
 
 @ cmp_str s a s b → i {
-  ^ ( nurl_str_cmp a b )
+    ^ ( nurl_str_cmp a b )
 }
 
 @ cmp_string String a String b → i {
-  ^ ( nurl_str_cmp ( string_data a ) ( string_data b ) )
+    ^ ( nurl_str_cmp ( string_data a ) ( string_data b ) )
 }
 
 // ── Generic min/max/clamp via comparator ───────────────────────────
 
-@ min_by [A] A a A b (@ i A A) cmp → A {
-  ? <= ( cmp a b ) 0 { ^ a } {}
-  ^ b
+@ min_by [A] A a A b ( @ i A A ) cmp → A {
+    ? <= ( cmp a b ) 0 { ^ a } {}
+    ^ b
 }
 
-@ max_by [A] A a A b (@ i A A) cmp → A {
-  ? >= ( cmp a b ) 0 { ^ a } {}
-  ^ b
+@ max_by [A] A a A b ( @ i A A ) cmp → A {
+    ? >= ( cmp a b ) 0 { ^ a } {}
+    ^ b
 }
 
-@ clamp_by [A] A x A lo A hi (@ i A A) cmp → A {
-  ? < ( cmp x lo ) 0 { ^ lo } {}
-  ? > ( cmp x hi ) 0 { ^ hi } {}
-  ^ x
+@ clamp_by [A] A x A lo A hi ( @ i A A ) cmp → A {
+    ? < ( cmp x lo ) 0 { ^ lo } {}
+    ? > ( cmp x hi ) 0 { ^ hi } {}
+    ^ x
 }
 
 // ── Scalar specialisations ─────────────────────────────────────────
 
 @ min_i i a i b → i {
-  ? < a b { ^ a } {}
-  ^ b
+    ? < a b { ^ a } {}
+    ^ b
 }
 
 @ max_i i a i b → i {
-  ? > a b { ^ a } {}
-  ^ b
+    ? > a b { ^ a } {}
+    ^ b
 }
 
 @ clamp_i i x i lo i hi → i {
-  ? < x lo { ^ lo } {}
-  ? > x hi { ^ hi } {}
-  ^ x
+    ? < x lo { ^ lo } {}
+    ? > x hi { ^ hi } {}
+    ^ x
 }
 
 @ min_f f a f b → f {
-  ? < a b { ^ a } {}
-  ^ b
+    ? < a b { ^ a } {}
+    ^ b
 }
 
 @ max_f f a f b → f {
-  ? > a b { ^ a } {}
-  ^ b
+    ? > a b { ^ a } {}
+    ^ b
 }
 
 @ clamp_f f x f lo f hi → f {
-  ? < x lo { ^ lo } {}
-  ? > x hi { ^ hi } {}
-  ^ x
+    ? < x lo { ^ lo } {}
+    ? > x hi { ^ hi } {}
+    ^ x
 }

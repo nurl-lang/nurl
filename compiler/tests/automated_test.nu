@@ -27,8 +27,8 @@ $ `stdlib/core/string.nu`
 @ test_result b passed s test_name → v {
     ( nurl_print `[` )
     ? passed
-        { ( nurl_print `PASS` ) }
-        { ( nurl_print `FAIL` ) }
+    { ( nurl_print `PASS` ) }
+    { ( nurl_print `FAIL` ) }
     ( nurl_print `] ` )
     ( nurl_print test_name )
     ( nurl_print `\n` )
@@ -39,17 +39,17 @@ $ `stdlib/core/string.nu`
 // ══════════════════════════════════════════════════════════════════════
 
 @ double i n → i {
-  ^ + n n
+    ^ + n n
 }
 
 @ sumto i n → i {
-  : i acc 0
-  : i k   1
-  ~ <= k n {
-    = acc + acc k
-    = k   + k   1
-  }
-  ^ acc
+    : i acc 0
+    : i k 1
+    ~ <= k n {
+        = acc + acc k
+        = k + k 1
+    }
+    ^ acc
 }
 
 @ test_basic → b {
@@ -80,9 +80,9 @@ $ `stdlib/core/string.nu`
 
 @ color_to_str Color c → s {
     ^ ?? c {
-        Red   → `red`
+        Red → `red`
         Green → `green`
-        Blue  → `blue`
+        Blue → `blue`
     }
 }
 
@@ -90,9 +90,9 @@ $ `stdlib/core/string.nu`
     ( test_header `Pattern Matching` )
 
     // Testaa värien nimet
-    : s red_name   ( color_to_str @ Color { Red } )
+    : s red_name ( color_to_str @ Color { Red } )
     : s green_name ( color_to_str @ Color { Green } )
-    : s blue_name  ( color_to_str @ Color { Blue } )
+    : s blue_name ( color_to_str @ Color { Blue } )
 
     ( test_result T `Pattern matching: Red -> red` )
     ( test_result T `Pattern matching: Green -> green` )
@@ -109,17 +109,17 @@ $ `stdlib/core/string.nu`
     ( test_header `Boolean Logic` )
 
     // Testaa boolean arvot
-    : b true_test  == T T
+    : b true_test == T T
     : b false_test == F F
-    : b and_test   & T T
-    : b or_test    | T F
-    : b not_test   ! F
+    : b and_test & T T
+    : b or_test | T F
+    : b not_test ! F
 
-    ( test_result true_test  `Boolean T equals T` )
+    ( test_result true_test `Boolean T equals T` )
     ( test_result false_test `Boolean F equals F` )
-    ( test_result and_test   `Boolean AND: T & T = T` )
-    ( test_result or_test    `Boolean OR: T | F = T` )
-    ( test_result not_test   `Boolean NOT: !F = T` )
+    ( test_result and_test `Boolean AND: T & T = T` )
+    ( test_result or_test `Boolean OR: T | F = T` )
+    ( test_result not_test `Boolean NOT: !F = T` )
 
     ^ & & & & true_test false_test and_test or_test not_test
 }
@@ -147,10 +147,10 @@ $ `stdlib/core/string.nu`
     ( test_result sub_result `Subtraction: 20 - 8 = 12` )
     ( test_result mul_result `Multiplication: 6 * 7 = 42` )
     ( test_result div_result `Division: 21 / 3 = 7` )
-    ( test_result gt_test    `Greater than: 10 > 5` )
-    ( test_result lt_test    `Less than: 3 < 8` )
-    ( test_result eq_test    `Equality: 42 = 42` )
-    ( test_result neq_test   `Inequality: 1 != 2` )
+    ( test_result gt_test `Greater than: 10 > 5` )
+    ( test_result lt_test `Less than: 3 < 8` )
+    ( test_result eq_test `Equality: 42 = 42` )
+    ( test_result neq_test `Inequality: 1 != 2` )
 
     ^ & & & & & & & add_result sub_result mul_result div_result gt_test lt_test eq_test neq_test
 }
@@ -425,33 +425,33 @@ $ `stdlib/core/string.nu`
     ( nurl_print `(self-hosted)\n` )
 
     // Suorita kaikki testit
-    : b test1_result  ( test_basic )
-    : b test2_result  ( test_pattern_matching )
-    : b test3_result  ( test_boolean_logic )
-    : b test4_result  ( test_arithmetic )
-    : b test5_result  ( test_loops )
-    : b test6_result  ( test_foreach )
-    : b test7_result  ( test_strings )
-    : b test8_result  ( test_stringbuilder )
-    : b test9_result  ( test_hashmap )
+    : b test1_result ( test_basic )
+    : b test2_result ( test_pattern_matching )
+    : b test3_result ( test_boolean_logic )
+    : b test4_result ( test_arithmetic )
+    : b test5_result ( test_loops )
+    : b test6_result ( test_foreach )
+    : b test7_result ( test_strings )
+    : b test8_result ( test_stringbuilder )
+    : b test9_result ( test_hashmap )
     : b test10_result ( test_memory )
     : b test11_result ( test_sizeof )
     : b test12_result ( test_floats )
 
     // Laske onnistuneet testit
     : i passed_count 0
-    ? test1_result  { = passed_count + passed_count 1 } { }
-    ? test2_result  { = passed_count + passed_count 1 } { }
-    ? test3_result  { = passed_count + passed_count 1 } { }
-    ? test4_result  { = passed_count + passed_count 1 } { }
-    ? test5_result  { = passed_count + passed_count 1 } { }
-    ? test6_result  { = passed_count + passed_count 1 } { }
-    ? test7_result  { = passed_count + passed_count 1 } { }
-    ? test8_result  { = passed_count + passed_count 1 } { }
-    ? test9_result  { = passed_count + passed_count 1 } { }
-    ? test10_result { = passed_count + passed_count 1 } { }
-    ? test11_result { = passed_count + passed_count 1 } { }
-    ? test12_result { = passed_count + passed_count 1 } { }
+    ? test1_result { = passed_count + passed_count 1 } {}
+    ? test2_result { = passed_count + passed_count 1 } {}
+    ? test3_result { = passed_count + passed_count 1 } {}
+    ? test4_result { = passed_count + passed_count 1 } {}
+    ? test5_result { = passed_count + passed_count 1 } {}
+    ? test6_result { = passed_count + passed_count 1 } {}
+    ? test7_result { = passed_count + passed_count 1 } {}
+    ? test8_result { = passed_count + passed_count 1 } {}
+    ? test9_result { = passed_count + passed_count 1 } {}
+    ? test10_result { = passed_count + passed_count 1 } {}
+    ? test11_result { = passed_count + passed_count 1 } {}
+    ? test12_result { = passed_count + passed_count 1 } {}
 
     // Lopputulos
     ( nurl_print `\n========================================\n` )
@@ -462,14 +462,14 @@ $ `stdlib/core/string.nu`
     ( nurl_print `/12\n` )
 
     ? == passed_count 12
-        {
-            ( nurl_print `✓ KAIKKI TESTIT ONNISTUIVAT!\n` )
-            ( nurl_print `✓ NURL kääntäjä toimii oikein.\n` )
-            ^ 0
-        }
-        {
-            ( nurl_print `✗ TESTEJÄ EPÄONNISTUI!\n` )
-            ( nurl_print `✗ Tarkista kääntäjä.\n` )
-            ^ 1
-        }
+    {
+        ( nurl_print `✓ KAIKKI TESTIT ONNISTUIVAT!\n` )
+        ( nurl_print `✓ NURL kääntäjä toimii oikein.\n` )
+        ^ 0
+    }
+    {
+        ( nurl_print `✗ TESTEJÄ EPÄONNISTUI!\n` )
+        ( nurl_print `✗ Tarkista kääntäjä.\n` )
+        ^ 1
+    }
 }

@@ -18,19 +18,19 @@
 // Määritellään trait Shape, joka on parametrisoitu tyypillä [T].
 // T edustaa sitä structia, jolle trait lopulta implementoidaan (esim. Rect).
 % Shape [T] {
-    
+
     // 1. Vaadittu rajapinta (vain header)
     @ area T obj → i
-    
+
     // 2. Oletustoteutus (täysi funktio blockin kera)
     @ print_info T obj → i {
         // Kutsutaan saman traitin area-metodia
         : i a ( area obj )
-        
+
         ( nurl_print `[Default] Shape area: ` )
         ( nurl_print ( nurl_str_int a ) )
         ( nurl_print `\n` )
-        
+
         ^ a
     }
 }
@@ -81,11 +81,11 @@
 
     // Tarkistussumma: 20 + 36 = 56
     : i total + res1 res2
-    
+
     ( nurl_print `\nTotal area: ` )
     ( nurl_print ( nurl_str_int total ) )
     ( nurl_print `\n` )
 
     // Palauttaa 0 (success) jos summa on 56, muuten 1 (error)
-    ^ ? == total 56  0  1
+    ^ ? == total 56 0 1
 }

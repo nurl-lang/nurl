@@ -88,12 +88,12 @@ $ `stdlib/ext/http_server.nu`
 // ── ProxyOpts ─────────────────────────────────────────────────────────
 
 : ProxyOpts {
-  i timeout_ms
-  i connect_timeout_ms
-  b strip_hop_by_hop
-  b preserve_host_header
-  b strip_content_encoding
-  b strip_content_length
+    i timeout_ms
+    i connect_timeout_ms
+    b strip_hop_by_hop
+    b preserve_host_header
+    b strip_content_encoding
+    b strip_content_length
 }
 
 // 60 s total / 10 s connect — LLM streaming endpoints can take a
@@ -101,7 +101,7 @@ $ `stdlib/ext/http_server.nu`
 // strip flags default ON because they match the chunked-response
 // re-encoding we always apply.
 @ proxy_default_opts → ProxyOpts {
-  ^ @ ProxyOpts { 60000 10000 T F T T }
+    ^ @ ProxyOpts { 60000 10000 T F T T }
 }
 
 // ── ProxyErr ──────────────────────────────────────────────────────────
@@ -111,17 +111,17 @@ $ `stdlib/ext/http_server.nu`
 // ProxyClientWrite), or surface a 500 (catch-all → ProxyOther).
 
 : | ProxyErr {
-  ProxyUpstream
-  ProxyClientWrite
-  ProxyOther
+    ProxyUpstream
+    ProxyClientWrite
+    ProxyOther
 }
 
 @ proxy_err_name ProxyErr e → s {
-  ^ ?? e {
-    ProxyUpstream    → `ProxyUpstream`
-    ProxyClientWrite → `ProxyClientWrite`
-    ProxyOther       → `ProxyOther`
-  }
+    ^ ?? e {
+        ProxyUpstream → `ProxyUpstream`
+        ProxyClientWrite → `ProxyClientWrite`
+        ProxyOther → `ProxyOther`
+    }
 }
 
 // ── Hop-by-hop classification ─────────────────────────────────────────
@@ -131,96 +131,96 @@ $ `stdlib/ext/http_server.nu`
 // hand-rolled set in middleware code (none today), this central helper
 // makes the policy auditable in one place.
 @ __is_hop_by_hop s name_lc → b {
-  ? != 0 ( nurl_str_eq name_lc `connection` )           { ^ T } {}
-  ? != 0 ( nurl_str_eq name_lc `keep-alive` )           { ^ T } {}
-  ? != 0 ( nurl_str_eq name_lc `proxy-authenticate` )   { ^ T } {}
-  ? != 0 ( nurl_str_eq name_lc `proxy-authorization` )  { ^ T } {}
-  ? != 0 ( nurl_str_eq name_lc `te` )                   { ^ T } {}
-  ? != 0 ( nurl_str_eq name_lc `trailer` )              { ^ T } {}
-  ? != 0 ( nurl_str_eq name_lc `transfer-encoding` )    { ^ T } {}
-  ? != 0 ( nurl_str_eq name_lc `upgrade` )              { ^ T } {}
-  ^ F
+    ? != 0 ( nurl_str_eq name_lc `connection` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name_lc `keep-alive` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name_lc `proxy-authenticate` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name_lc `proxy-authorization` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name_lc `te` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name_lc `trailer` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name_lc `transfer-encoding` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name_lc `upgrade` ) { ^ T } {}
+    ^ F
 }
 
 // Build the upstream URL by joining `base` with `req.path` + `?` +
 // `req.query`. If `base` ends with `/` AND `req.path` starts with `/`
 // we strip one to avoid `https://api.example.com//v1/foo`.
 @ __build_upstream_url s base HttpRequest req → String {
-  : i bn ( nurl_str_len base )
-  : i pn ( string_len . req path )
-  : i qn ( string_len . req query )
-  : String url ( string_with_cap + + + bn pn qn 4 )
-  ( string_push_str url base )
-  : ~ b base_slash F
-  ? > bn 0 { ? == ( nurl_str_get base - bn 1 ) 47 { = base_slash T } {} } {}
-  : ~ b path_slash F
-  ? > pn 0 { ? == ( string_get . req path 0 ) 47 { = path_slash T } {} } {}
-  : ~ i path_start 0
-  ? & base_slash path_slash { = path_start 1 } {}
-  ? > pn path_start {
-    : ~ i k path_start
-    ~ < k pn {
-      ( string_push_char url ( string_get . req path k ) )
-      = k + k 1
-    }
-  } {}
-  ? > qn 0 {
-    ( string_push_str url `?` )
-    ( string_push_str url ( string_data . req query ) )
-  } {}
-  ^ url
+    : i bn ( nurl_str_len base )
+    : i pn ( string_len . req path )
+    : i qn ( string_len . req query )
+    : String url ( string_with_cap + + + bn pn qn 4 )
+    ( string_push_str url base )
+    : ~ b base_slash F
+    ? > bn 0 { ? == ( nurl_str_get base - bn 1 ) 47 { = base_slash T } {} } {}
+    : ~ b path_slash F
+    ? > pn 0 { ? == ( string_get . req path 0 ) 47 { = path_slash T } {} } {}
+    : ~ i path_start 0
+    ? & base_slash path_slash { = path_start 1 } {}
+    ? > pn path_start {
+        : ~ i k path_start
+        ~ < k pn {
+            ( string_push_char url ( string_get . req path k ) )
+            = k + k 1
+        }
+    } {}
+    ? > qn 0 {
+        ( string_push_str url `?` )
+        ( string_push_str url ( string_data . req query ) )
+    } {}
+    ^ url
 }
 
 // Build a libcurl-style headers blob ("Name: Value\r\n…") from the
 // request's headers, applying the request-side filter rules described
 // in the module-header policy block. Caller frees the returned String.
 @ __build_request_headers_blob HttpRequest req ProxyOpts opts → String {
-  : String blob ( string_new )
-  : i n ( vec_len [Header] . req headers )
-  : *Header data ( vec_data [Header] . req headers )
-  : ~ i k 0
-  ~ < k n {
-    : Header h . data k
-    : String name_lc ( string_to_lower . h name )
-    : s nm_lc ( string_data name_lc )
-    : ~ b drop F
-    ? & . opts strip_hop_by_hop ( __is_hop_by_hop nm_lc ) { = drop T } {}
-    ? & ! . opts preserve_host_header != 0 ( nurl_str_eq nm_lc `host` ) {
-      = drop T
-    } {}
-    ? != 0 ( nurl_str_eq nm_lc `content-length` ) { = drop T } {}
-    ? ! drop {
-      ( string_push_str blob ( string_data . h name ) )
-      ( string_push_str blob `: ` )
-      ( string_push_str blob ( string_data . h value ) )
-      ( string_push_str blob `\r\n` )
-    } {}
-    ( string_free name_lc )
-    = k + k 1
-  }
-  ^ blob
+    : String blob ( string_new )
+    : i n ( vec_len [Header] . req headers )
+    : *Header data ( vec_data [Header] . req headers )
+    : ~ i k 0
+    ~ < k n {
+        : Header h . data k
+        : String name_lc ( string_to_lower . h name )
+        : s nm_lc ( string_data name_lc )
+        : ~ b drop F
+        ? & . opts strip_hop_by_hop ( __is_hop_by_hop nm_lc ) { = drop T } {}
+        ? & ! . opts preserve_host_header != 0 ( nurl_str_eq nm_lc `host` ) {
+            = drop T
+        } {}
+        ? != 0 ( nurl_str_eq nm_lc `content-length` ) { = drop T } {}
+        ? ! drop {
+            ( string_push_str blob ( string_data . h name ) )
+            ( string_push_str blob `: ` )
+            ( string_push_str blob ( string_data . h value ) )
+            ( string_push_str blob `\r\n` )
+        } {}
+        ( string_free name_lc )
+        = k + k 1
+    }
+    ^ blob
 }
 
 // Decide whether an upstream-response header should ride back to the
 // downstream client. Inputs are NUL-terminated raw-`s` (the runtime's
 // view) so we lower into a temporary String, compare, and free it.
 @ __response_header_dropped s name ProxyOpts opts → b {
-  : i nl ( nurl_str_len name )
-  ? <= nl 0 { ^ T } {}
-  : String name_s ( string_from name )
-  : String lc ( string_to_lower name_s )
-  : s lcr ( string_data lc )
-  : ~ b drop F
-  ? & . opts strip_hop_by_hop ( __is_hop_by_hop lcr ) { = drop T } {}
-  ? & . opts strip_content_length != 0 ( nurl_str_eq lcr `content-length` ) {
-    = drop T
-  } {}
-  ? & . opts strip_content_encoding != 0 ( nurl_str_eq lcr `content-encoding` ) {
-    = drop T
-  } {}
-  ( string_free lc )
-  ( string_free name_s )
-  ^ drop
+    : i nl ( nurl_str_len name )
+    ? <= nl 0 { ^ T } {}
+    : String name_s ( string_from name )
+    : String lc ( string_to_lower name_s )
+    : s lcr ( string_data lc )
+    : ~ b drop F
+    ? & . opts strip_hop_by_hop ( __is_hop_by_hop lcr ) { = drop T } {}
+    ? & . opts strip_content_length != 0 ( nurl_str_eq lcr `content-length` ) {
+        = drop T
+    } {}
+    ? & . opts strip_content_encoding != 0 ( nurl_str_eq lcr `content-encoding` ) {
+        = drop T
+    } {}
+    ( string_free lc )
+    ( string_free name_s )
+    ^ drop
 }
 
 // ── Streaming proxy ───────────────────────────────────────────────────
@@ -239,17 +239,17 @@ $ `stdlib/ext/http_server.nu`
 // ProxyUpstream we may have written nothing OR the status line + some
 // headers — either way close-and-move-on is the right disposition.
 
-@ proxy_stream_to_conn TcpConn conn HttpRequest req s upstream_url → ! v ProxyErr {
-  ^ ( proxy_stream_to_conn_with conn req upstream_url ( proxy_default_opts ) )
+@ proxy_stream_to_conn TcpConn conn HttpRequest req s upstream_url → !v ProxyErr {
+    ^ ( proxy_stream_to_conn_with conn req upstream_url ( proxy_default_opts ) )
 }
 
-@ proxy_stream_to_conn_with TcpConn conn HttpRequest req s upstream_url ProxyOpts opts → ! v ProxyErr {
-  : String headers_blob ( __build_request_headers_blob req opts )
-  : i bn ( vec_len [u] . req body )
-  : *u bdata ( vec_data [u] . req body )
-  : String body_s ( string_from_bytes bdata bn )
+@ proxy_stream_to_conn_with TcpConn conn HttpRequest req s upstream_url ProxyOpts opts → !v ProxyErr {
+    : String headers_blob ( __build_request_headers_blob req opts )
+    : i bn ( vec_len [u] . req body )
+    : *u bdata ( vec_data [u] . req body )
+    : String body_s ( string_from_bytes bdata bn )
 
-  : ! HttpStream HttpErr or ( http_stream_open_to
+    : !HttpStream HttpErr or ( http_stream_open_to
     ( string_data . req method )
     upstream_url
     ( string_data body_s )
@@ -257,97 +257,97 @@ $ `stdlib/ext/http_server.nu`
     . opts timeout_ms
     . opts connect_timeout_ms )
 
-  ( string_free headers_blob )
-  ( string_free body_s )
+    ( string_free headers_blob )
+    ( string_free body_s )
 
-  ?? or {
-    T st → {
-      : i status ( http_stream_pump_headers st )
-      ? <= status 0 {
-        ( http_stream_close st )
-        ^ @ ! v ProxyErr { F # ProxyErr ProxyUpstream }
-      } {}
-
-      // Build the header set we forward to the client.
-      : ( Vec Header ) hs ( vec_new [Header] )
-      : i hcount ( http_stream_header_count st )
-      : ~ i k 0
-      ~ < k hcount {
-        : s name  ( http_stream_header_name  st k )
-        : s value ( http_stream_header_value st k )
-        ? ! ( __response_header_dropped name opts ) {
-          ( vec_push [Header] hs ( header_new name value ) )
-        } {}
-        = k + k 1
-      }
-
-      // Status + headers + chunked TE in one write.
-      : ! v NetErr beg ( response_begin_chunked conn status hs )
-      ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
-      ?? beg {
-        T _ → {}
-        F _ → {
-          ( http_stream_close st )
-          ^ @ ! v ProxyErr { F # ProxyErr ProxyClientWrite }
-        }
-      }
-
-      // Pull body chunks until EOF / upstream error.
-      : ~ b done F
-      : ~ i status_local 0   // 0 = ok, 1 = client_write, 2 = upstream
-      ~ ! done {
-        : ? String chunk_opt ( http_stream_next st )
-        ?? chunk_opt {
-          T chunk → {
-            : i clen ( string_len chunk )
-            ? > clen 0 {
-              : ( Vec u ) cb ( vec_with_cap [u] clen )
-              ( bytes_extend_str cb ( string_data chunk ) )
-              : ! v NetErr wr ( response_write_chunk conn cb )
-              ( vec_free [u] cb )
-              ?? wr {
-                T _ → {}
-                F _ → { = status_local 1 = done T }
-              }
+    ?? or {
+        T st → {
+            : i status ( http_stream_pump_headers st )
+            ? <= status 0 {
+                ( http_stream_close st )
+                ^ @ !v ProxyErr { F # ProxyErr ProxyUpstream }
             } {}
-            ( string_free chunk )
-          }
-          F _ → { = done T }
+
+            // Build the header set we forward to the client.
+            : ( Vec Header ) hs ( vec_new [Header] )
+            : i hcount ( http_stream_header_count st )
+            : ~ i k 0
+            ~ < k hcount {
+                : s name ( http_stream_header_name st k )
+                : s value ( http_stream_header_value st k )
+                ? ! ( __response_header_dropped name opts ) {
+                    ( vec_push [Header] hs ( header_new name value ) )
+                } {}
+                = k + k 1
+            }
+
+            // Status + headers + chunked TE in one write.
+            : !v NetErr beg ( response_begin_chunked conn status hs )
+            ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
+            ?? beg {
+                T _ → {}
+                F _ → {
+                    ( http_stream_close st )
+                    ^ @ !v ProxyErr { F # ProxyErr ProxyClientWrite }
+                }
+            }
+
+            // Pull body chunks until EOF / upstream error.
+            : ~ b done F
+            : ~ i status_local 0  // 0 = ok, 1 = client_write, 2 = upstream
+            ~ ! done {
+                : ?String chunk_opt ( http_stream_next st )
+                ?? chunk_opt {
+                    T chunk → {
+                        : i clen ( string_len chunk )
+                        ? > clen 0 {
+                            : ( Vec u ) cb ( vec_with_cap [u] clen )
+                            ( bytes_extend_str cb ( string_data chunk ) )
+                            : !v NetErr wr ( response_write_chunk conn cb )
+                            ( vec_free [u] cb )
+                            ?? wr {
+                                T _ → {}
+                                F _ → { = status_local 1 = done T }
+                            }
+                        } {}
+                        ( string_free chunk )
+                    }
+                    F _ → { = done T }
+                }
+            }
+
+            // Decide upstream-success vs. upstream-error from the stream's
+            // err_kind (set when the multi handle reported done).
+            ? == status_local 0 {
+                : ?HttpErr eo ( http_stream_err st )
+                ?? eo {
+                    T _ → { = status_local 2 }
+                    F _ → {}
+                }
+            } {}
+
+            ( http_stream_close st )
+
+            ? == status_local 1 {
+                ^ @ !v ProxyErr { F # ProxyErr ProxyClientWrite }
+            } {}
+            ? == status_local 2 {
+                // Upstream broke mid-stream. We've already begun chunked, so
+                // the wire is unrecoverable — terminate the chunk stream and
+                // surface the error so the caller knows to close.
+                : !v NetErr _end ( response_end_chunked conn )
+                ?? _end { T _ → {} F _ → {} }
+                ^ @ !v ProxyErr { F # ProxyErr ProxyUpstream }
+            } {}
+
+            : !v NetErr endr ( response_end_chunked conn )
+            ?? endr {
+                T _ → ^ @ !v ProxyErr { T 0 }
+                F _ → ^ @ !v ProxyErr { F # ProxyErr ProxyClientWrite }
+            }
         }
-      }
-
-      // Decide upstream-success vs. upstream-error from the stream's
-      // err_kind (set when the multi handle reported done).
-      ? == status_local 0 {
-        : ? HttpErr eo ( http_stream_err st )
-        ?? eo {
-          T _ → { = status_local 2 }
-          F _ → {}
-        }
-      } {}
-
-      ( http_stream_close st )
-
-      ? == status_local 1 {
-        ^ @ ! v ProxyErr { F # ProxyErr ProxyClientWrite }
-      } {}
-      ? == status_local 2 {
-        // Upstream broke mid-stream. We've already begun chunked, so
-        // the wire is unrecoverable — terminate the chunk stream and
-        // surface the error so the caller knows to close.
-        : ! v NetErr _end ( response_end_chunked conn )
-        ?? _end { T _ → {} F _ → {} }
-        ^ @ ! v ProxyErr { F # ProxyErr ProxyUpstream }
-      } {}
-
-      : ! v NetErr endr ( response_end_chunked conn )
-      ?? endr {
-        T _ → ^ @ ! v ProxyErr { T 0 }
-        F _ → ^ @ ! v ProxyErr { F # ProxyErr ProxyClientWrite }
-      }
+        F _ → ^ @ !v ProxyErr { F # ProxyErr ProxyUpstream }
     }
-    F _ → ^ @ ! v ProxyErr { F # ProxyErr ProxyUpstream }
-  }
 }
 
 // ── proxy_serve_run — dedicated streaming proxy server ────────────────
@@ -356,79 +356,79 @@ $ `stdlib/ext/http_server.nu`
 // No auth, no routing — that's what custom loops are for. Returns
 // when the listener is closed (typically via signal_install_shutdown).
 
-@ proxy_serve_run TcpListener listener s upstream_base → ! v NetErr {
-  ^ ( proxy_serve_run_with listener upstream_base ( proxy_default_opts ) )
+@ proxy_serve_run TcpListener listener s upstream_base → !v NetErr {
+    ^ ( proxy_serve_run_with listener upstream_base ( proxy_default_opts ) )
 }
 
-@ proxy_serve_run_with TcpListener listener s upstream_base ProxyOpts opts → ! v NetErr {
-  : ~ b done F
-  : ~ b had_err F
-  ~ ! done {
-    : ! TcpConn NetErr ar ( tcp_accept listener )
-    ?? ar {
-      T conn → {
-        // Match http_server's defaults: 30 s recv idle so a slow
-        // client can't pin us forever.
-        ( tcp_set_timeout conn 30000 )
-        : ParsedHead ph ( __read_request_head conn )
-        ? . ph ok {
-          : HttpRequest req . ph head
-          : b body_ok ( __finish_body conn req )
-          ? body_ok {
-            : String url ( __build_upstream_url upstream_base req )
-            : ! v ProxyErr pr ( proxy_stream_to_conn_with conn req
-                                                          ( string_data url ) opts )
-            ( string_free url )
-            ?? pr {
-              T _ → {}
-              F _ → {}
+@ proxy_serve_run_with TcpListener listener s upstream_base ProxyOpts opts → !v NetErr {
+    : ~ b done F
+    : ~ b had_err F
+    ~ ! done {
+        : !TcpConn NetErr ar ( tcp_accept listener )
+        ?? ar {
+            T conn → {
+                // Match http_server's defaults: 30 s recv idle so a slow
+                // client can't pin us forever.
+                ( tcp_set_timeout conn 30000 )
+                : ParsedHead ph ( __read_request_head conn )
+                ? . ph ok {
+                    : HttpRequest req . ph head
+                    : b body_ok ( __finish_body conn req )
+                    ? body_ok {
+                        : String url ( __build_upstream_url upstream_base req )
+                        : !v ProxyErr pr ( proxy_stream_to_conn_with conn req
+                        ( string_data url ) opts )
+                        ( string_free url )
+                        ?? pr {
+                            T _ → {}
+                            F _ → {}
+                        }
+                    } {
+                        : HttpResponse er ( response_text 400 `malformed body\n` )
+                        ( response_set_header er `Connection` `close` )
+                        : ( Vec u ) wire ( response_serialize er )
+                        : !v NetErr _wr ( tcp_write_all conn wire )
+                        ?? _wr { T _ → {} F _ → {} }
+                        ( vec_free [u] wire )
+                        ( http_response_free er )
+                    }
+                    ( request_free req )
+                } {
+                    // Don't silently drop a syntactically-bad request — the
+                    // 4xx response helps developers debugging through curl.
+                    : s nm ( http_req_err_name . ph err )
+                    ? != 0 ( nurl_str_eq nm `HttpReqIo` ) {
+                        ( parsed_head_free ph )
+                    } {
+                        : HttpResponse er ( __parse_err_response . ph err )
+                        ( response_set_header er `Connection` `close` )
+                        : ( Vec u ) wire ( response_serialize er )
+                        : !v NetErr _wr ( tcp_write_all conn wire )
+                        ?? _wr { T _ → {} F _ → {} }
+                        ( vec_free [u] wire )
+                        ( http_response_free er )
+                        ( parsed_head_free ph )
+                    }
+                }
+                ( tcp_close_conn conn )
             }
-          } {
-            : HttpResponse er ( response_text 400 `malformed body\n` )
-            ( response_set_header er `Connection` `close` )
-            : ( Vec u ) wire ( response_serialize er )
-            : ! v NetErr _wr ( tcp_write_all conn wire )
-            ?? _wr { T _ → {} F _ → {} }
-            ( vec_free [u] wire )
-            ( http_response_free er )
-          }
-          ( request_free req )
-        } {
-          // Don't silently drop a syntactically-bad request — the
-          // 4xx response helps developers debugging through curl.
-          : s nm ( http_req_err_name . ph err )
-          ? != 0 ( nurl_str_eq nm `HttpReqIo` ) {
-            ( parsed_head_free ph )
-          } {
-            : HttpResponse er ( __parse_err_response . ph err )
-            ( response_set_header er `Connection` `close` )
-            : ( Vec u ) wire ( response_serialize er )
-            : ! v NetErr _wr ( tcp_write_all conn wire )
-            ?? _wr { T _ → {} F _ → {} }
-            ( vec_free [u] wire )
-            ( http_response_free er )
-            ( parsed_head_free ph )
-          }
+            F e → {
+                : s nm ( net_err_name e )
+                ? | != 0 ( nurl_str_eq nm `NetClosed` ) != 0 ( nurl_str_eq nm `NetAccept` ) {
+                    = done T
+                } {
+                    = had_err T
+                    = done T
+                }
+            }
         }
-        ( tcp_close_conn conn )
-      }
-      F e → {
-        : s nm ( net_err_name e )
-        ? | != 0 ( nurl_str_eq nm `NetClosed` ) != 0 ( nurl_str_eq nm `NetAccept` ) {
-          = done T
-        } {
-          = had_err T
-          = done T
+    }
+    ? had_err {
+        : !TcpConn NetErr ar2 ( tcp_accept listener )
+        ?? ar2 {
+            T c → { ( tcp_close_conn c ) }
+            F e → ^ @ !v NetErr { F e }
         }
-      }
-    }
-  }
-  ? had_err {
-    : ! TcpConn NetErr ar2 ( tcp_accept listener )
-    ?? ar2 {
-      T c → { ( tcp_close_conn c ) }
-      F e → ^ @ ! v NetErr { F e }
-    }
-  } {}
-  ^ @ ! v NetErr { T 0 }
+    } {}
+    ^ @ !v NetErr { T 0 }
 }

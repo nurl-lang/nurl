@@ -2,7 +2,7 @@
   "name": "nurl",
   "displayName": "NURL Language",
   "description": "Syntax highlighting for NURL (Neural Unified Representation Language)",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "nurl-lang",
   "license": "MIT",
   "repository": {

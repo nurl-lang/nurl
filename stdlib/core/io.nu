@@ -13,9 +13,9 @@
 $ `stdlib/core/string.nu`
 
 @ read_line → String {
-  : s raw ( nurl_read_line )
-  : String out ( string_from raw )
-  ^ out
+    : s raw ( nurl_read_line )
+    : String out ( string_from raw )
+    ^ out
 }
 
 // Read everything from stdin until EOF and return it as a single owned
@@ -24,24 +24,24 @@ $ `stdlib/core/string.nu`
 // String on allocation failure too — the runtime falls back to NULL which
 // `string_from` turns into "" rather than crashing.
 @ read_all_stdin → String {
-  : s raw ( nurl_read_all_stdin )
-  : i p # i raw
-  ? == p 0 {
-    ^ ( string_new )
-  } {}
-  : String out ( string_from raw )
-  ( nurl_free raw )
-  ^ out
+    : s raw ( nurl_read_all_stdin )
+    : i p # i raw
+    ? == p 0 {
+        ^ ( string_new )
+    } {}
+    : String out ( string_from raw )
+    ( nurl_free raw )
+    ^ out
 }
 
 @ stdin_eof → b {
-  ^ != 0 ( nurl_stdin_eof )
+    ^ != 0 ( nurl_stdin_eof )
 }
 
 @ flush → v {
-  ( nurl_flush_stdout )
+    ( nurl_flush_stdout )
 }
 
 @ eflush → v {
-  ( nurl_flush_stderr )
+    ( nurl_flush_stderr )
 }

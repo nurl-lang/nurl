@@ -18,21 +18,21 @@
         // Tarkan literaalin osumat
         Ok 200 → 10
         Ok 201 → 15
-        
+
         // ClientErr literaaleilla
         ClientErr 404 → 20
         ClientErr 403 → 25
-        
+
         // "Fallthrough" - jos tagi on ClientErr, mutta literaali ei ollut 404 tai 403,
         // sen on osuttava tähän ja sidottava arvo muuttujaan 'code'.
         ClientErr code → 30
-        
+
         // Pelkkä muuttujasidonta (kaikki palvelinvirheet)
         ServerErr code → 40
-        
+
         // Wildcard (catch-all). Tähän ei pitäisi tässä testissä koskaan osua,
         // mutta kääntäjän exhaustiveness-check vaatii sen.
-        _             → 0
+        _ → 0
     }
 }
 
@@ -72,5 +72,5 @@
     ( nurl_print `\n` )
 
     // Palautetaan 0 jos kaikki meni oikein
-    ^ ? == total 115  0  1
+    ^ ? == total 115 0 1
 }

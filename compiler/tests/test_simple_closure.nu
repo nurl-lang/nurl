@@ -2,6 +2,6 @@
 // Very simple closure test
 
 @ main → i {
-  : (@ i i) square \ i x → i { * x x }
-  ^ 0
+    : ( @ i i ) square \ i x → i { * x x }
+    ^ 0
 }

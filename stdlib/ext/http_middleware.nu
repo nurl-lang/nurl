@@ -51,36 +51,36 @@ $ `stdlib/core/vec.nu`
 // ── with_access_log ───────────────────────────────────────────────────
 
 @ __status_class i status → i {
-  ? & >= status 100 < status 200 { ^ 1 } {}
-  ? & >= status 200 < status 300 { ^ 2 } {}
-  ? & >= status 300 < status 400 { ^ 3 } {}
-  ? & >= status 400 < status 500 { ^ 4 } {}
-  ? & >= status 500 < status 600 { ^ 5 } {}
-  ^ 0
+    ? & >= status 100 < status 200 { ^ 1 } {}
+    ? & >= status 200 < status 300 { ^ 2 } {}
+    ? & >= status 300 < status 400 { ^ 3 } {}
+    ? & >= status 400 < status 500 { ^ 4 } {}
+    ? & >= status 500 < status 600 { ^ 5 } {}
+    ^ 0
 }
 
 @ with_access_log ( @ HttpResponse HttpRequest ) inner → ( @ HttpResponse HttpRequest ) {
-  : ( @ HttpResponse HttpRequest ) wrapped \ HttpRequest req → HttpResponse {
-    : i t0 ( monotonic_ns )
-    : HttpResponse resp ( inner req )
-    : i dt_ns - ( monotonic_ns ) t0
-    : i dt_ms / dt_ns 1000000
+    : ( @ HttpResponse HttpRequest ) wrapped \ HttpRequest req → HttpResponse {
+        : i t0 ( monotonic_ns )
+        : HttpResponse resp ( inner req )
+        : i dt_ns - ( monotonic_ns ) t0
+        : i dt_ms / dt_ns 1000000
 
-    ( nurl_eprint `[req] ` )
-    ( nurl_eprint ( string_data . req method ) )
-    ( nurl_eprint ` ` )
-    ( nurl_eprint ( string_data . req path ) )
-    ( nurl_eprint ` → ` )
-    ( nurl_eprint ( nurl_str_int . resp status ) )
-    ( nurl_eprint ` ` )
-    ( nurl_eprint ( nurl_str_int ( vec_len [u] . resp body ) ) )
-    ( nurl_eprint `B ` )
-    ( nurl_eprint ( nurl_str_int dt_ms ) )
-    ( nurl_eprint `ms\n` )
+        ( nurl_eprint `[req] ` )
+        ( nurl_eprint ( string_data . req method ) )
+        ( nurl_eprint ` ` )
+        ( nurl_eprint ( string_data . req path ) )
+        ( nurl_eprint ` → ` )
+        ( nurl_eprint ( nurl_str_int . resp status ) )
+        ( nurl_eprint ` ` )
+        ( nurl_eprint ( nurl_str_int ( vec_len [u] . resp body ) ) )
+        ( nurl_eprint `B ` )
+        ( nurl_eprint ( nurl_str_int dt_ms ) )
+        ( nurl_eprint `ms\n` )
 
-    ^ resp
-  }
-  ^ wrapped
+        ^ resp
+    }
+    ^ wrapped
 }
 
 // ── Metrics ───────────────────────────────────────────────────────────
@@ -113,142 +113,146 @@ $ `stdlib/core/vec.nu`
 @ metrics_slot_count → i { ^ 10 }
 
 @ metrics_new → Metrics {
-  : ( Vec i ) v ( vec_with_cap [i] 10 )
-  : ~ i k 0
-  ~ < k 10 {
-    ( vec_push [i] v 0 )
-    = k + k 1
-  }
-  ^ @ Metrics { v }
+    : ( Vec i ) v ( vec_with_cap [i] 10 )
+    : ~ i k 0
+    ~ < k 10 {
+        ( vec_push [i] v 0 )
+        = k + k 1
+    }
+    ^ @ Metrics { v }
 }
 
 @ metrics_free Metrics m → v {
-  ( vec_free [i] . m counters )
+    ( vec_free [i] . m counters )
 }
 
 @ __m_inc Metrics m i idx i delta → v {
-  : *i data ( vec_data [i] . m counters )
-  : i cur . data idx
-  ( vec_set [i] . m counters idx + cur delta )
+    : *i data ( vec_data [i] . m counters )
+    : i cur . data idx
+    ( vec_set [i] . m counters idx + cur delta )
 }
 
 @ __m_get Metrics m i idx → i {
-  : *i data ( vec_data [i] . m counters )
-  ^ . data idx
+    : *i data ( vec_data [i] . m counters )
+    ^ . data idx
 }
 
-@ metrics_requests_total  Metrics m → i { ^ ( __m_get m 0 ) }
-@ metrics_in_flight       Metrics m → i { ^ ( __m_get m 1 ) }
+@ metrics_requests_total Metrics m → i { ^ ( __m_get m 0 ) }
+
+@ metrics_in_flight Metrics m → i { ^ ( __m_get m 1 ) }
+
 @ metrics_bytes_out_total Metrics m → i { ^ ( __m_get m 2 ) }
+
 @ metrics_latency_ms_total Metrics m → i { ^ ( __m_get m 3 ) }
-@ metrics_errors_total    Metrics m → i { ^ ( __m_get m 9 ) }
+
+@ metrics_errors_total Metrics m → i { ^ ( __m_get m 9 ) }
 
 @ __metrics_record Metrics m i status i bytes i dt_ms → v {
-  ( __m_inc m 0 1 )
-  ( __m_inc m 2 bytes )
-  ( __m_inc m 3 dt_ms )
-  : i cls ( __status_class status )
-  ? == cls 1 { ( __m_inc m 4 1 ) } {}
-  ? == cls 2 { ( __m_inc m 5 1 ) } {}
-  ? == cls 3 { ( __m_inc m 6 1 ) } {}
-  ? == cls 4 { ( __m_inc m 7 1 ) } {}
-  ? == cls 5 { ( __m_inc m 8 1 ) } {}
-  ? >= status 500 { ( __m_inc m 9 1 ) } {}
+    ( __m_inc m 0 1 )
+    ( __m_inc m 2 bytes )
+    ( __m_inc m 3 dt_ms )
+    : i cls ( __status_class status )
+    ? == cls 1 { ( __m_inc m 4 1 ) } {}
+    ? == cls 2 { ( __m_inc m 5 1 ) } {}
+    ? == cls 3 { ( __m_inc m 6 1 ) } {}
+    ? == cls 4 { ( __m_inc m 7 1 ) } {}
+    ? == cls 5 { ( __m_inc m 8 1 ) } {}
+    ? >= status 500 { ( __m_inc m 9 1 ) } {}
 }
 
 @ with_metrics Metrics m ( @ HttpResponse HttpRequest ) inner → ( @ HttpResponse HttpRequest ) {
-  : ( @ HttpResponse HttpRequest ) wrapped \ HttpRequest req → HttpResponse {
-    ( __m_inc m 1 1 )
-    : i t0 ( monotonic_ns )
-    : HttpResponse resp ( inner req )
-    : i dt_ms / - ( monotonic_ns ) t0 1000000
-    ( __m_inc m 1 -1 )
-    ( __metrics_record m . resp status ( vec_len [u] . resp body ) dt_ms )
-    ^ resp
-  }
-  ^ wrapped
+    : ( @ HttpResponse HttpRequest ) wrapped \ HttpRequest req → HttpResponse {
+        ( __m_inc m 1 1 )
+        : i t0 ( monotonic_ns )
+        : HttpResponse resp ( inner req )
+        : i dt_ms / - ( monotonic_ns ) t0 1000000
+        ( __m_inc m 1 -1 )
+        ( __metrics_record m . resp status ( vec_len [u] . resp body ) dt_ms )
+        ^ resp
+    }
+    ^ wrapped
 }
 
 // ── Prometheus text-exposition rendering ──────────────────────────────
 
 @ __push_metric String out s name s help s ty i value → v {
-  ( string_push_str out `# HELP ` )
-  ( string_push_str out name )
-  ( string_push_str out ` ` )
-  ( string_push_str out help )
-  ( string_push_char out 10 )
-  ( string_push_str out `# TYPE ` )
-  ( string_push_str out name )
-  ( string_push_str out ` ` )
-  ( string_push_str out ty )
-  ( string_push_char out 10 )
-  ( string_push_str out name )
-  ( string_push_char out 32 )
-  ( string_push_int out value )
-  ( string_push_char out 10 )
+    ( string_push_str out `# HELP ` )
+    ( string_push_str out name )
+    ( string_push_str out ` ` )
+    ( string_push_str out help )
+    ( string_push_char out 10 )
+    ( string_push_str out `# TYPE ` )
+    ( string_push_str out name )
+    ( string_push_str out ` ` )
+    ( string_push_str out ty )
+    ( string_push_char out 10 )
+    ( string_push_str out name )
+    ( string_push_char out 32 )
+    ( string_push_int out value )
+    ( string_push_char out 10 )
 }
 
 @ __push_status_bucket String out s name s help s code i value → v {
-  ( string_push_str out `# HELP ` )
-  ( string_push_str out name )
-  ( string_push_str out ` ` )
-  ( string_push_str out help )
-  ( string_push_char out 10 )
-  ( string_push_str out `# TYPE ` )
-  ( string_push_str out name )
-  ( string_push_str out ` counter\n` )
-  ( string_push_str out name )
-  ( string_push_str out `{class="` )
-  ( string_push_str out code )
-  ( string_push_str out `"} ` )
-  ( string_push_int out value )
-  ( string_push_char out 10 )
+    ( string_push_str out `# HELP ` )
+    ( string_push_str out name )
+    ( string_push_str out ` ` )
+    ( string_push_str out help )
+    ( string_push_char out 10 )
+    ( string_push_str out `# TYPE ` )
+    ( string_push_str out name )
+    ( string_push_str out ` counter\n` )
+    ( string_push_str out name )
+    ( string_push_str out `{class="` )
+    ( string_push_str out code )
+    ( string_push_str out `"} ` )
+    ( string_push_int out value )
+    ( string_push_char out 10 )
 }
 
 @ metrics_render Metrics m → String {
-  : String out ( string_with_cap 1024 )
-  ( __push_metric out `nurl_http_requests_total`
-                  `Total HTTP requests dispatched` `counter`
-                  ( __m_get m 0 ) )
-  ( __push_metric out `nurl_http_in_flight`
-                  `Currently in-flight HTTP requests` `gauge`
-                  ( __m_get m 1 ) )
-  ( __push_metric out `nurl_http_bytes_out_total`
-                  `Total bytes written to response bodies` `counter`
-                  ( __m_get m 2 ) )
-  ( __push_metric out `nurl_http_latency_ms_total`
-                  `Cumulative dispatcher latency in ms` `counter`
-                  ( __m_get m 3 ) )
-  ( __push_metric out `nurl_http_errors_total`
-                  `Total responses with status >= 500` `counter`
-                  ( __m_get m 9 ) )
+    : String out ( string_with_cap 1024 )
+    ( __push_metric out `nurl_http_requests_total`
+    `Total HTTP requests dispatched` `counter`
+    ( __m_get m 0 ) )
+    ( __push_metric out `nurl_http_in_flight`
+    `Currently in-flight HTTP requests` `gauge`
+    ( __m_get m 1 ) )
+    ( __push_metric out `nurl_http_bytes_out_total`
+    `Total bytes written to response bodies` `counter`
+    ( __m_get m 2 ) )
+    ( __push_metric out `nurl_http_latency_ms_total`
+    `Cumulative dispatcher latency in ms` `counter`
+    ( __m_get m 3 ) )
+    ( __push_metric out `nurl_http_errors_total`
+    `Total responses with status >= 500` `counter`
+    ( __m_get m 9 ) )
 
-  // Status-class breakdown — labelled, single metric.
-  ( string_push_str out `# HELP nurl_http_responses_class Total responses by status class\n` )
-  ( string_push_str out `# TYPE nurl_http_responses_class counter\n` )
-  ( string_push_str out `nurl_http_responses_class{class="1xx"} ` )
-  ( string_push_int out ( __m_get m 4 ) )
-  ( string_push_char out 10 )
-  ( string_push_str out `nurl_http_responses_class{class="2xx"} ` )
-  ( string_push_int out ( __m_get m 5 ) )
-  ( string_push_char out 10 )
-  ( string_push_str out `nurl_http_responses_class{class="3xx"} ` )
-  ( string_push_int out ( __m_get m 6 ) )
-  ( string_push_char out 10 )
-  ( string_push_str out `nurl_http_responses_class{class="4xx"} ` )
-  ( string_push_int out ( __m_get m 7 ) )
-  ( string_push_char out 10 )
-  ( string_push_str out `nurl_http_responses_class{class="5xx"} ` )
-  ( string_push_int out ( __m_get m 8 ) )
-  ( string_push_char out 10 )
-  ^ out
+    // Status-class breakdown — labelled, single metric.
+    ( string_push_str out `# HELP nurl_http_responses_class Total responses by status class\n` )
+    ( string_push_str out `# TYPE nurl_http_responses_class counter\n` )
+    ( string_push_str out `nurl_http_responses_class{class="1xx"} ` )
+    ( string_push_int out ( __m_get m 4 ) )
+    ( string_push_char out 10 )
+    ( string_push_str out `nurl_http_responses_class{class="2xx"} ` )
+    ( string_push_int out ( __m_get m 5 ) )
+    ( string_push_char out 10 )
+    ( string_push_str out `nurl_http_responses_class{class="3xx"} ` )
+    ( string_push_int out ( __m_get m 6 ) )
+    ( string_push_char out 10 )
+    ( string_push_str out `nurl_http_responses_class{class="4xx"} ` )
+    ( string_push_int out ( __m_get m 7 ) )
+    ( string_push_char out 10 )
+    ( string_push_str out `nurl_http_responses_class{class="5xx"} ` )
+    ( string_push_int out ( __m_get m 8 ) )
+    ( string_push_char out 10 )
+    ^ out
 }
 
 @ metrics_handler Metrics m HttpRequest req → HttpResponse {
-  : String body ( metrics_render m )
-  : HttpResponse r ( response_new 200 )
-  ( response_set_header r `Content-Type` `text/plain; version=0.0.4; charset=utf-8` )
-  ( response_set_body_str r ( string_data body ) )
-  ( string_free body )
-  ^ r
+    : String body ( metrics_render m )
+    : HttpResponse r ( response_new 200 )
+    ( response_set_header r `Content-Type` `text/plain; version=0.0.4; charset=utf-8` )
+    ( response_set_body_str r ( string_data body ) )
+    ( string_free body )
+    ^ r
 }

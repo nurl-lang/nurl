@@ -8,21 +8,21 @@
 $ `stdlib/core/io.nu`
 
 @ main → i {
-  : ~ b never F
+    : ~ b never F
 
-  ? never {
-    : String line ( read_line )
-    ( nurl_print ( string_data line ) )
-  } {}
+    ? never {
+        : String line ( read_line )
+        ( nurl_print ( string_data line ) )
+    } {}
 
-  ( nurl_print `before flush\n` )
-  ( flush )
-  ( nurl_print `before eflush\n` )
-  ( eflush )
+    ( nurl_print `before flush\n` )
+    ( flush )
+    ( nurl_print `before eflush\n` )
+    ( eflush )
 
-  : b eof ( stdin_eof )
-  ? eof { ( nurl_print `eof=T\n` ) } { ( nurl_print `eof=F\n` ) }
+    : b eof ( stdin_eof )
+    ? eof { ( nurl_print `eof=T\n` ) } { ( nurl_print `eof=F\n` ) }
 
-  ( nurl_print `done\n` )
-  ^ 0
+    ( nurl_print `done\n` )
+    ^ 0
 }

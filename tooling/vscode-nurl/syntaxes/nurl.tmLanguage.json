@@ -24,7 +24,7 @@
       "name": "string.quoted.backtick.nurl",
       "patterns": [
         {
-          "match": "\\\\[nt\\\\]",
+          "match": "\\\\[nrt\\\\]",
           "name": "constant.character.escape.nurl"
         }
       ]
@@ -36,11 +36,11 @@
           "name": "constant.language.boolean.nurl"
         },
         {
-          "match": "\\b[0-9]+\\.[0-9]+([eE][\\+\\-]?[0-9]+)?\\b",
+          "match": "(?<![A-Za-z0-9_])-?[0-9]+\\.[0-9]+([eE][\\+\\-]?[0-9]+)?\\b",
           "name": "constant.numeric.float.nurl"
         },
         {
-          "match": "\\b[0-9]+\\b",
+          "match": "(?<![A-Za-z0-9_])-?[0-9]+\\b",
           "name": "constant.numeric.integer.nurl"
         }
       ]
@@ -110,6 +110,10 @@
     "types": {
       "patterns": [
         {
+          "match": "\\b(i8|i16|i32|u16|u32|u64|f32)\\b",
+          "name": "storage.type.primitive.sized.nurl"
+        },
+        {
           "match": "\\b(i|u|f|b|s|v)\\b",
           "name": "storage.type.primitive.nurl"
         },
@@ -152,6 +156,10 @@
         {
           "match": "Z\\b",
           "name": "keyword.operator.sizeof.nurl"
+        },
+        {
+          "match": "(<<|>>)",
+          "name": "keyword.operator.shift.nurl"
         },
         {
           "match": "(==|!=|<=|>=|<|>)",

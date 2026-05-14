@@ -24,78 +24,78 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/io.nu`
 
 @ println_str s prefix s value → v {
-  ( nurl_print prefix )
-  ( nurl_print value )
-  ( nurl_print `\n` )
+    ( nurl_print prefix )
+    ( nurl_print value )
+    ( nurl_print `\n` )
 }
 
 // Always-on smoke check: register / clear does not crash.
 @ run_register_smoke → v {
-  ( nurl_print `── register smoke ──\n` )
-  ( signal_clear_shutdown )
-  ( signal_clear_shutdown )
-  ( nurl_print `  cleared twice = ok\n` )
+    ( nurl_print `── register smoke ──\n` )
+    ( signal_clear_shutdown )
+    ( signal_clear_shutdown )
+    ( nurl_print `  cleared twice = ok\n` )
 }
 
 @ run_live_shutdown → v {
-  ( nurl_print `── live shutdown ──\n` )
-  : ! TcpListener NetErr lr ( tcp_listen_with_backlog `127.0.0.1` 0 16 )
-  ?? lr {
-    T listener → {
-      ( signal_install_shutdown listener )
+    ( nurl_print `── live shutdown ──\n` )
+    : !TcpListener NetErr lr ( tcp_listen_with_backlog `127.0.0.1` 0 16 )
+    ?? lr {
+        T listener → {
+            ( signal_install_shutdown listener )
 
-      // Worker blocks in accept. The captured listener handle stays
-      // alive because the main thread holds `listener` until join.
-      : ( @ v ) worker \ → v {
-        : ! TcpConn NetErr ar ( tcp_accept listener )
-        ?? ar {
-          T conn → {
-            ( nurl_print `  worker UNEXPECTED conn\n` )
-            ( tcp_close_conn conn )
-          }
-          F e → {
+            // Worker blocks in accept. The captured listener handle stays
+            // alive because the main thread holds `listener` until join.
+            : ( @ v ) worker \ → v {
+                : !TcpConn NetErr ar ( tcp_accept listener )
+                ?? ar {
+                    T conn → {
+                        ( nurl_print `  worker UNEXPECTED conn\n` )
+                        ( tcp_close_conn conn )
+                    }
+                    F e → {
+                        : s nm ( net_err_name e )
+                        ( println_str `  worker err = ` nm )
+                    }
+                }
+            }
+
+            : !Thread ThreadErr tr ( thread_spawn worker )
+            ?? tr {
+                T t → {
+                    // Give the worker a moment to enter accept.
+                    ( sleep_ms 50 )
+                    ( signal_trigger_shutdown )
+                    ( thread_join t )
+                    ( nurl_print `  joined\n` )
+                }
+                F _ → ( nurl_print `  spawn failed\n` )
+            }
+            ( signal_clear_shutdown )
+            ( tcp_close_listener listener )
+        }
+        F e → {
             : s nm ( net_err_name e )
-            ( println_str `  worker err = ` nm )
-          }
+            ( println_str `  listen err = ` nm )
         }
-      }
-
-      : ! Thread ThreadErr tr ( thread_spawn worker )
-      ?? tr {
-        T t → {
-          // Give the worker a moment to enter accept.
-          ( sleep_ms 50 )
-          ( signal_trigger_shutdown )
-          ( thread_join t )
-          ( nurl_print `  joined\n` )
-        }
-        F _ → ( nurl_print `  spawn failed\n` )
-      }
-      ( signal_clear_shutdown )
-      ( tcp_close_listener listener )
     }
-    F e → {
-      : s nm ( net_err_name e )
-      ( println_str `  listen err = ` nm )
-    }
-  }
 }
 
 @ main → i {
-  ( run_register_smoke )
+    ( run_register_smoke )
 
-  : ? String live ( env_get `NURL_NET_TESTS` )
-  ?? live {
-    T v → {
-      ? != 0 ( nurl_str_eq ( string_data v ) `1` ) {
-        ( run_live_shutdown )
-      } { ( nurl_print `live signal tests skipped (NURL_NET_TESTS != 1)\n` ) }
-      ( string_free v )
+    : ?String live ( env_get `NURL_NET_TESTS` )
+    ?? live {
+        T v → {
+            ? != 0 ( nurl_str_eq ( string_data v ) `1` ) {
+                ( run_live_shutdown )
+            } { ( nurl_print `live signal tests skipped (NURL_NET_TESTS != 1)\n` ) }
+            ( string_free v )
+        }
+        F e → {
+            ( string_free e )
+            ( nurl_print `live signal tests skipped (set NURL_NET_TESTS=1 to enable)\n` )
+        }
     }
-    F e → {
-      ( string_free e )
-      ( nurl_print `live signal tests skipped (set NURL_NET_TESTS=1 to enable)\n` )
-    }
-  }
-  ^ 0
+    ^ 0
 }

@@ -13,10 +13,10 @@
 }
 
 @ main → i {
-    ( puts ( nurl_str_int counter ) )    // 0
+    ( puts ( nurl_str_int counter ) )  // 0
     ( bump )
-    ( puts ( nurl_str_int counter ) )    // 1
+    ( puts ( nurl_str_int counter ) )  // 1
     ( bump )
-    ( puts ( nurl_str_int counter ) )    // 2
+    ( puts ( nurl_str_int counter ) )  // 2
     ^ 0
 }

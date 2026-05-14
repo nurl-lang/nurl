@@ -19,34 +19,48 @@
 // so AC (red + blue) draws purple, ABCD draws all-channel-on = white,
 // and so on. Catalysts punch bright white pixels through the soup.
 
-& `canvas` @ canvas_open         i w i h → * i
-& `canvas` @ canvas_present      → v
-& `canvas` @ canvas_sleep        i ms → v
-& `canvas` @ canvas_should_close → i
-& `canvas` @ canvas_close        → v
+& `canvas`
+
+@ canvas_open i w i h → *i
+
+& `canvas`
+
+@ canvas_present → v
+
+& `canvas`
+
+@ canvas_sleep i ms → v
+
+& `canvas`
+
+@ canvas_should_close → i
+
+& `canvas`
+
+@ canvas_close → v
 
 // ── Config ────────────────────────────────────────────────────
-: i W            180
-: i H            100
-: i SLOTS        360
-: i PARTICLES    240
-: i CATALYSTS     24
-: i FPS           30
+: i W 180
+: i H 100
+: i SLOTS 360
+: i PARTICLES 240
+: i CATALYSTS 24
+: i FPS 30
 
 // Bit masks
-: i BIT_A   1
-: i BIT_B   2
-: i BIT_C   4
-: i BIT_D   8
-: i BIT_X  16
+: i BIT_A 1
+: i BIT_B 2
+: i BIT_C 4
+: i BIT_D 8
+: i BIT_X 16
 
 // Background and particle colours (0xAARRGGBB)
-: i COL_BG      4279769112    // 0xFF181a20 — matches playground panel
-: i COL_A       4294901760    // 0xFFff0000 red
-: i COL_B       4278222848    // 0xFF00d040 green
-: i COL_C       4281784574    // 0xFF2090fe blue
-: i COL_D       4294964035    // 0xFFfff143 yellow
-: i COL_X       4294967295    // 0xFFffffff white
+: i COL_BG 4279769112  // 0xFF181a20 — matches playground panel
+: i COL_A 4294901760  // 0xFFff0000 red
+: i COL_B 4278222848  // 0xFF00d040 green
+: i COL_C 4281784574  // 0xFF2090fe blue
+: i COL_D 4294964035  // 0xFFfff143 yellow
+: i COL_X 4294967295  // 0xFFffffff white
 
 // ── RNG ───────────────────────────────────────────────────────
 : ~ i RNG 305419896
@@ -77,7 +91,7 @@
 
 // Compose a colour from a compound bitmask by OR'ing per-bit colours.
 @ colour_of i b → i {
-    ? != 0 & b BIT_X { ^ COL_X } {}           // catalyst dominates
+    ? != 0 & b BIT_X { ^ COL_X } {}  // catalyst dominates
     : ~ i c COL_BG
     ? != 0 & b BIT_A { = c | c COL_A } {}
     ? != 0 & b BIT_B { = c | c COL_B } {}
@@ -177,9 +191,9 @@
 }
 
 @ main → i {
-    : * i xs # * i ( malloc * SLOTS 8 )
-    : * i ys # * i ( malloc * SLOTS 8 )
-    : * i bs # * i ( malloc * SLOTS 8 )
+    : *i xs # *i ( malloc * SLOTS 8 )
+    : *i ys # *i ( malloc * SLOTS 8 )
+    : *i bs # *i ( malloc * SLOTS 8 )
 
     : ~ i k 0
     ~ < k SLOTS {
@@ -208,7 +222,7 @@
         = c + c 1
     }
 
-    : * i fb ( canvas_open W H )
+    : *i fb ( canvas_open W H )
     : i frame_ms / 1000 FPS
 
     ~ == 0 ( canvas_should_close ) {

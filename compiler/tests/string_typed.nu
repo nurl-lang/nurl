@@ -5,10 +5,10 @@ $ `stdlib/core/string.nu`
     // Build a greeting by pushing pieces
     : String s ( string_new )
     ( string_push_str s `Hello` )
-    ( string_push_char s 44 )   // ','
-    ( string_push_char s 32 )   // ' '
+    ( string_push_char s 44 )  // ','
+    ( string_push_char s 32 )  // ' '
     ( string_push_str s `world` )
-    ( string_push_char s 33 )   // '!'
+    ( string_push_char s 33 )  // '!'
     ( nurl_print ( string_data s ) ) ( nurl_print `\n` )
     ( nurl_print `len=` )
     ( nurl_print ( nurl_str_int ( string_len s ) ) ) ( nurl_print `\n` )

@@ -35,21 +35,21 @@
 
 // ─── Config ───────────────────────────────────────────────────
 
-: i W            60      // grid width  (display cells per row)
-: i H            18      // grid height (rows)
-: i SLOTS       128      // particle slots (>= PARTICLES + CATALYSTS,
-                         //                  plus room for scatter)
-: i PARTICLES    56      // live particles at t=0 (A/B/C/D mix)
-: i CATALYSTS     6      // extra X particles mixed in
-: i TICKS       120      // total simulation ticks
-: i FRAME_EVERY  20      // snapshot every N ticks
+: i W 60  // grid width  (display cells per row)
+: i H 18  // grid height (rows)
+: i SLOTS 128  // particle slots (>= PARTICLES + CATALYSTS,
+//                  plus room for scatter)
+: i PARTICLES 56  // live particles at t=0 (A/B/C/D mix)
+: i CATALYSTS 6  // extra X particles mixed in
+: i TICKS 120  // total simulation ticks
+: i FRAME_EVERY 20  // snapshot every N ticks
 
 // Bit masks
-: i BIT_A   1
-: i BIT_B   2
-: i BIT_C   4
-: i BIT_D   8
-: i BIT_X  16
+: i BIT_A 1
+: i BIT_B 2
+: i BIT_C 4
+: i BIT_D 8
+: i BIT_X 16
 
 // ─── RNG: 31-bit LCG ──────────────────────────────────────────
 
@@ -96,17 +96,17 @@
 @ glyph i b → s {
     ? == b 0 { ^ ` ` } {}
     ? != 0 & b BIT_X { ^ `✦` } {}
-    ? == b 1  { ^ `>` } {}
-    ? == b 2  { ^ `<` } {}
-    ? == b 4  { ^ `v` } {}
-    ? == b 8  { ^ `^` } {}
-    ? == b 3  { ^ `─` } {}
+    ? == b 1 { ^ `>` } {}
+    ? == b 2 { ^ `<` } {}
+    ? == b 4 { ^ `v` } {}
+    ? == b 8 { ^ `^` } {}
+    ? == b 3 { ^ `─` } {}
     ? == b 12 { ^ `│` } {}
-    ? == b 5  { ^ `↘` } {}
-    ? == b 9  { ^ `↗` } {}
-    ? == b 6  { ^ `↙` } {}
+    ? == b 5 { ^ `↘` } {}
+    ? == b 9 { ^ `↗` } {}
+    ? == b 6 { ^ `↙` } {}
     ? == b 10 { ^ `↖` } {}
-    ? == b 7  { ^ `⇓` } {}
+    ? == b 7 { ^ `⇓` } {}
     ? == b 11 { ^ `⇑` } {}
     ? == b 13 { ^ `⇒` } {}
     ? == b 14 { ^ `⇐` } {}
@@ -193,7 +193,7 @@
 
 @ render i tick_no * i xs * i ys * i bs i N → v {
     // Cell bitmask buffer
-    : * i grid # * i ( malloc * * W H 8 )
+    : *i grid # *i ( malloc * * W H 8 )
     : ~ i g 0
     ~ < g * W H {
         = . grid g 0
@@ -220,7 +220,7 @@
     }
     ( nurl_print `\n┌` )
     : ~ i d2 0
-    ~ < d2 W { ( nurl_print `─` )  = d2 + d2 1 }
+    ~ < d2 W { ( nurl_print `─` ) = d2 + d2 1 }
     ( nurl_print `┐\n` )
 
     : ~ i y 0
@@ -237,16 +237,16 @@
 
     ( nurl_print `└` )
     : ~ i d3 0
-    ~ < d3 W { ( nurl_print `─` )  = d3 + d3 1 }
+    ~ < d3 W { ( nurl_print `─` ) = d3 + d3 1 }
     ( nurl_print `┘\n` )
 }
 
 // ─── Init + main loop ─────────────────────────────────────────
 
 @ main → i {
-    : * i xs # * i ( malloc * SLOTS 8 )
-    : * i ys # * i ( malloc * SLOTS 8 )
-    : * i bs # * i ( malloc * SLOTS 8 )
+    : *i xs # *i ( malloc * SLOTS 8 )
+    : *i ys # *i ( malloc * SLOTS 8 )
+    : *i bs # *i ( malloc * SLOTS 8 )
 
     : ~ i k 0
     ~ < k SLOTS {

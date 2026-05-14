@@ -19,15 +19,15 @@
 $ `stdlib/core/string.nu`
 
 @ sha256_hex s str → String {
-  : s digest ( nurl_sha256_hex str )
-  : String out ( string_from digest )
-  ( nurl_free digest )
-  ^ out
+    : s digest ( nurl_sha256_hex str )
+    : String out ( string_from digest )
+    ( nurl_free digest )
+    ^ out
 }
 
 @ hmac_sha256_hex s key s msg → String {
-  : s digest ( nurl_hmac_sha256_hex key msg )
-  : String out ( string_from digest )
-  ( nurl_free digest )
-  ^ out
+    : s digest ( nurl_hmac_sha256_hex key msg )
+    : String out ( string_from digest )
+    ( nurl_free digest )
+    ^ out
 }

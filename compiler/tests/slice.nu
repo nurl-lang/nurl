@@ -5,7 +5,7 @@
 }
 
 // --- Slice-tyyppi määritelmä (valinnainen) ---
-: Slice { * i data  i length }
+: Slice { * i data i length }
 
 // --- Slice-logiikka: KAKSI SYNTAKSIA! ---
 
@@ -28,7 +28,7 @@
     : i total 0
     : i index 0
     : i length . slice length
-    : * i data . slice data
+    : *i data . slice data
 
     ~ < index length {
         // Haetaan arvo: data[index]
@@ -46,8 +46,8 @@
 
     : i count 5
     // 1. Varataan tilaa 5:lle i64-luvulle (5 * 8 tavua)
-    : * i raw_ptr # * i ( nurl_malloc * count Z i )
-    
+    : *i raw_ptr # *i ( nurl_malloc * count Z i )
+
     // 2. Täytetään taulukko (esim. 10, 20, 30, 40, 50)
     = . raw_ptr 0 10
     = . raw_ptr 1 20
@@ -71,8 +71,8 @@
     ( nurl_print `Molemmat toimivat - valitse tarpeesi mukaan!\n` )
 
     // 5. Muistin siivous
-    ; { 
-        ( nurl_free # * v raw_ptr ) 
+    ; {
+        ( nurl_free # *v raw_ptr )
         ( nurl_print `Dynaaminen muisti vapautettu.\n` )
     }
 

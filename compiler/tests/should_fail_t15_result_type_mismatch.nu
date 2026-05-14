@@ -4,16 +4,16 @@
 
 : | MathErr { DivZero }
 
-@ string_err i x → ! i s {
-  ^ @ ! i s { T x }
+@ string_err i x → !i s {
+    ^ @ !i s { T x }
 }
 
-@ mismatched → ! i MathErr {
-  : i val \ ( string_err 5 )
-  ^ @ ! i MathErr { T val }
+@ mismatched → !i MathErr {
+    : i val \ ( string_err 5 )
+    ^ @ !i MathErr { T val }
 }
 
 @ main → i {
-  : ! i MathErr res ( mismatched )
-  ^ 0
+    : !i MathErr res ( mismatched )
+    ^ 0
 }

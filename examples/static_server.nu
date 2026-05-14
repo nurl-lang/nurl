@@ -48,28 +48,28 @@ $ `stdlib/std/fs.nu`
 // written, we proceed and let serve_static's 404 path handle it.
 
 @ setup_public_dir → v {
-  ? ! ( file_exists `public/index.html` ) {
-    : ! v IoErr dr ( dir_create `public` )
-    ?? dr { T → {} F _ → {} }
-    : s body `<!doctype html>\n<html><head><meta charset="utf-8"><title>NURL static server</title></head>\n<body>\n<h1>NURL static server is running.</h1>\n<p>Try <a href="/api/health">/api/health</a> or <a href="/metrics">/metrics</a>.</p>\n<p>Drop more files into <code>./public/</code> and refresh.</p>\n</body></html>\n`
-    : ! v IoErr wr ( write_file `public/index.html` body )
-    ?? wr {
-      T → { ( nurl_eprint `[boot] wrote public/index.html\n` ) }
-      F _ → { ( nurl_eprint `[boot] could not write public/index.html (continuing)\n` ) }
-    }
-  } {}
+    ? ! ( file_exists `public/index.html` ) {
+        : !v IoErr dr ( dir_create `public` )
+        ?? dr { T → {} F _ → {} }
+        : s body `<!doctype html>\n<html><head><meta charset="utf-8"><title>NURL static server</title></head>\n<body>\n<h1>NURL static server is running.</h1>\n<p>Try <a href="/api/health">/api/health</a> or <a href="/metrics">/metrics</a>.</p>\n<p>Drop more files into <code>./public/</code> and refresh.</p>\n</body></html>\n`
+        : !v IoErr wr ( write_file `public/index.html` body )
+        ?? wr {
+            T → { ( nurl_eprint `[boot] wrote public/index.html\n` ) }
+            F _ → { ( nurl_eprint `[boot] could not write public/index.html (continuing)\n` ) }
+        }
+    } {}
 }
 
 // ── Route handlers ───────────────────────────────────────────────────
 
 @ h_health HttpRequest req Params params → HttpResponse {
-  // Start from the text-response shape, then override Content-Type.
-  // `response_set_header` deduplicates by name (case-insensitive), so
-  // the second call REPLACES the `text/plain` default rather than
-  // appending a duplicate header.
-  : HttpResponse r ( response_text 200 `{"ok":true,"server":"nurl-static-demo"}\n` )
-  ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
-  ^ r
+    // Start from the text-response shape, then override Content-Type.
+    // `response_set_header` deduplicates by name (case-insensitive), so
+    // the second call REPLACES the `text/plain` default rather than
+    // appending a duplicate header.
+    : HttpResponse r ( response_text 200 `{"ok":true,"server":"nurl-static-demo"}\n` )
+    ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
+    ^ r
 }
 
 // `/` and `/*path` both fall through to serve_static. The router only
@@ -78,89 +78,89 @@ $ `stdlib/std/fs.nu`
 // segments, picks Content-Type from the extension, returns 404 if the
 // file is missing.
 @ h_static HttpRequest req Params params → HttpResponse {
-  ^ ( serve_static `public` req )
+    ^ ( serve_static `public` req )
 }
 
 // ── main ─────────────────────────────────────────────────────────────
 
 @ main → i {
-  ( setup_public_dir )
+    ( setup_public_dir )
 
-  : ! TcpListener NetErr lr ( tcp_listen `127.0.0.1` 18080 )
-  ?? lr {
-    T listener → {
-      // Counter bag — captured by `with_metrics` AND by the
-      // `/metrics` route handler. Both keep the same handle alive.
-      : Metrics m ( metrics_new )
+    : !TcpListener NetErr lr ( tcp_listen `127.0.0.1` 18080 )
+    ?? lr {
+        T listener → {
+            // Counter bag — captured by `with_metrics` AND by the
+            // `/metrics` route handler. Both keep the same handle alive.
+            : Metrics m ( metrics_new )
 
-      // Router build-up.
-      : Router r ( router_new )
+            // Router build-up.
+            : Router r ( router_new )
 
-      ( router_get r `/metrics`
-        \ HttpRequest req Params params → HttpResponse { ^ ( metrics_handler m req ) } )
+            ( router_get r `/metrics`
+            \ HttpRequest req Params params → HttpResponse { ^ ( metrics_handler m req ) } )
 
-      ( router_get r `/api/health`
-        \ HttpRequest req Params params → HttpResponse { ^ ( h_health req params ) } )
+            ( router_get r `/api/health`
+            \ HttpRequest req Params params → HttpResponse { ^ ( h_health req params ) } )
 
-      // Static fallback — `/` first so it picks up index.html, then
-      // `/*path` for any deeper file under public/.
-      ( router_get r `/`
-        \ HttpRequest req Params params → HttpResponse { ^ ( h_static req params ) } )
-      ( router_get r `/*path`
-        \ HttpRequest req Params params → HttpResponse { ^ ( h_static req params ) } )
+            // Static fallback — `/` first so it picks up index.html, then
+            // `/*path` for any deeper file under public/.
+            ( router_get r `/`
+            \ HttpRequest req Params params → HttpResponse { ^ ( h_static req params ) } )
+            ( router_get r `/*path`
+            \ HttpRequest req Params params → HttpResponse { ^ ( h_static req params ) } )
 
-      // Middleware compose, innermost-first:
-      //     base    →  router_handle (dispatch)
-      //     cors    →  CORS headers + OPTIONS preflight
-      //     metered →  Prometheus counters update
-      //     logged  →  one stderr line per request
-      // The OUTERMOST wrapper (`logged`) is what the server sees.
-      : ( @ HttpResponse HttpRequest ) base
-        \ HttpRequest req → HttpResponse { ^ ( router_handle r req ) }
-      : ( @ HttpResponse HttpRequest ) cors    ( with_cors_default base    )
-      : ( @ HttpResponse HttpRequest ) metered ( with_metrics      m  cors )
-      : ( @ HttpResponse HttpRequest ) logged  ( with_access_log   metered )
+            // Middleware compose, innermost-first:
+            //     base    →  router_handle (dispatch)
+            //     cors    →  CORS headers + OPTIONS preflight
+            //     metered →  Prometheus counters update
+            //     logged  →  one stderr line per request
+            // The OUTERMOST wrapper (`logged`) is what the server sees.
+            : ( @ HttpResponse HttpRequest ) base
+            \ HttpRequest req → HttpResponse { ^ ( router_handle r req ) }
+            : ( @ HttpResponse HttpRequest ) cors ( with_cors_default base )
+            : ( @ HttpResponse HttpRequest ) metered ( with_metrics m cors )
+            : ( @ HttpResponse HttpRequest ) logged ( with_access_log metered )
 
-      // Wire Ctrl+C / SIGTERM to a clean listener shutdown. Must come
-      // AFTER tcp_listen so the runtime sees a valid handle.
-      ( signal_install_shutdown listener )
+            // Wire Ctrl+C / SIGTERM to a clean listener shutdown. Must come
+            // AFTER tcp_listen so the runtime sees a valid handle.
+            ( signal_install_shutdown listener )
 
-      ( nurl_print `static server listening on http://127.0.0.1:18080/\n` )
-      ( nurl_print `  • /                  → public/index.html\n` )
-      ( nurl_print `  • /<path>            → public/<path>\n` )
-      ( nurl_print `  • /api/health        → JSON\n` )
-      ( nurl_print `  • /metrics           → Prometheus text-exposition\n` )
-      ( nurl_print `Ctrl+C to shut down cleanly.\n` )
+            ( nurl_print `static server listening on http://127.0.0.1:18080/\n` )
+            ( nurl_print `  • /                  → public/index.html\n` )
+            ( nurl_print `  • /<path>            → public/<path>\n` )
+            ( nurl_print `  • /api/health        → JSON\n` )
+            ( nurl_print `  • /metrics           → Prometheus text-exposition\n` )
+            ( nurl_print `Ctrl+C to shut down cleanly.\n` )
 
-      : HttpServer srv ( server_new listener logged )
-      : ! v NetErr rr ( server_run srv )
+            : HttpServer srv ( server_new listener logged )
+            : !v NetErr rr ( server_run srv )
 
-      // Cleanup. Order matters — clear the signal slot first so a
-      // late signal doesn't dereference a freed listener handle, then
-      // free everything else.
-      ( signal_clear_shutdown )
-      ( server_stop srv )
-      ( router_free r )
-      ( metrics_free m )
+            // Cleanup. Order matters — clear the signal slot first so a
+            // late signal doesn't dereference a freed listener handle, then
+            // free everything else.
+            ( signal_clear_shutdown )
+            ( server_stop srv )
+            ( router_free r )
+            ( metrics_free m )
 
-      ?? rr {
-        T _ → {
-          ( nurl_print `static server: clean shutdown\n` )
-          ^ 0
+            ?? rr {
+                T _ → {
+                    ( nurl_print `static server: clean shutdown\n` )
+                    ^ 0
+                }
+                F e → {
+                    ( nurl_eprint `[srv] runtime error: ` )
+                    ( nurl_eprint ( net_err_name e ) )
+                    ( nurl_eprint `\n` )
+                    ^ 1
+                }
+            }
         }
         F e → {
-          ( nurl_eprint `[srv] runtime error: ` )
-          ( nurl_eprint ( net_err_name e ) )
-          ( nurl_eprint `\n` )
-          ^ 1
+            ( nurl_eprint `[boot] could not bind 127.0.0.1:18080: ` )
+            ( nurl_eprint ( net_err_name e ) )
+            ( nurl_eprint `\n` )
+            ^ 1
         }
-      }
     }
-    F e → {
-      ( nurl_eprint `[boot] could not bind 127.0.0.1:18080: ` )
-      ( nurl_eprint ( net_err_name e ) )
-      ( nurl_eprint `\n` )
-      ^ 1
-    }
-  }
 }

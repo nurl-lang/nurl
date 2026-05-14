@@ -12,11 +12,11 @@ $ `stdlib/ext/csv.nu`
     ^ t
 }
 
-@ print_col *CSVTable t i col → v {
+@ print_col * CSVTable t i col → v {
     : i n ( csv_table_n_rows t )
     : ~ i i 0
     ~ < i n {
-        : ? String s_opt ( csv_table_get t i col )
+        : ?String s_opt ( csv_table_get t i col )
         ?? s_opt {
             T s → { ( nurl_print ( string_data s ) ) ( nurl_print ` ` ) }
             F → { ( nurl_print `? ` ) }

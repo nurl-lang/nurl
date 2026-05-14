@@ -22,32 +22,32 @@
 // ── Rendering helpers ───────────────────────────────────────────────
 
 @ parse_err_msg ParseErr e → s {
-  ^ ?? e {
-    BadFormat       → `bad format`
-    Overflow        → `overflow`
-    Underflow       → `underflow`
-    Empty           → `empty input`
-    TrailingGarbage → `trailing garbage`
-  }
+    ^ ?? e {
+        BadFormat → `bad format`
+        Overflow → `overflow`
+        Underflow → `underflow`
+        Empty → `empty input`
+        TrailingGarbage → `trailing garbage`
+    }
 }
 
 @ io_err_msg IoErr e → s {
-  ^ ?? e {
-    NotFound         → `not found`
-    PermissionDenied → `permission denied`
-    AlreadyExists    → `already exists`
-    Interrupted      → `interrupted`
-    UnexpectedEof    → `unexpected eof`
-    WriteFailed      → `write failed`
-    ReadFailed       → `read failed`
-    Other            → `i/o error`
-  }
+    ^ ?? e {
+        NotFound → `not found`
+        PermissionDenied → `permission denied`
+        AlreadyExists → `already exists`
+        Interrupted → `interrupted`
+        UnexpectedEof → `unexpected eof`
+        WriteFailed → `write failed`
+        ReadFailed → `read failed`
+        Other → `i/o error`
+    }
 }
 
 @ bounds_err_msg BoundsErr e → s {
-  ^ ?? e {
-    IndexOutOfRange  → `index out of range`
-    NegativeIndex    → `negative index`
-    EmptyCollection  → `empty collection`
-  }
+    ^ ?? e {
+        IndexOutOfRange → `index out of range`
+        NegativeIndex → `negative index`
+        EmptyCollection → `empty collection`
+    }
 }

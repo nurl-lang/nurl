@@ -66,303 +66,303 @@ $ `stdlib/core/vec.nu`
 // ── McpStdioClient ──────────────────────────────────────────────────
 
 : McpStdioClient {
-  ProcChild child
-  i         default_timeout_ms
+    ProcChild child
+    i default_timeout_ms
 }
 
 // ── McpStdioErr ─────────────────────────────────────────────────────
 
 : | McpStdioErr {
-  McpStdioSpawn      // child failed to start (cmd missing, fork/exec err)
-  McpStdioIo         // pipe write/read failure mid-conversation
-  McpStdioTimeout    // no response inside the call's deadline
-  McpStdioEof        // child closed its stdout (server crash / clean exit)
-  McpStdioJson       // server replied with non-JSON / malformed JSON
-  McpStdioProtocol   // missing jsonrpc/id/result/error envelope fields
-  McpStdioOther
+    McpStdioSpawn  // child failed to start (cmd missing, fork/exec err)
+    McpStdioIo  // pipe write/read failure mid-conversation
+    McpStdioTimeout  // no response inside the call's deadline
+    McpStdioEof  // child closed its stdout (server crash / clean exit)
+    McpStdioJson  // server replied with non-JSON / malformed JSON
+    McpStdioProtocol  // missing jsonrpc/id/result/error envelope fields
+    McpStdioOther
 }
 
 @ mcp_stdio_err_name McpStdioErr e → s {
-  ^ ?? e {
-    McpStdioSpawn    → `McpStdioSpawn`
-    McpStdioIo       → `McpStdioIo`
-    McpStdioTimeout  → `McpStdioTimeout`
-    McpStdioEof      → `McpStdioEof`
-    McpStdioJson     → `McpStdioJson`
-    McpStdioProtocol → `McpStdioProtocol`
-    McpStdioOther    → `McpStdioOther`
-  }
+    ^ ?? e {
+        McpStdioSpawn → `McpStdioSpawn`
+        McpStdioIo → `McpStdioIo`
+        McpStdioTimeout → `McpStdioTimeout`
+        McpStdioEof → `McpStdioEof`
+        McpStdioJson → `McpStdioJson`
+        McpStdioProtocol → `McpStdioProtocol`
+        McpStdioOther → `McpStdioOther`
+    }
 }
 
 @ __mcp_stdio_proc_to_err ProcessErr pe → McpStdioErr {
-  ^ ?? pe {
-    ProcessNotFound   → @ McpStdioErr { McpStdioSpawn }
-    ProcessExecFailed → @ McpStdioErr { McpStdioSpawn }
-    ProcessIo         → @ McpStdioErr { McpStdioIo    }
-    ProcessOther      → @ McpStdioErr { McpStdioOther }
-  }
+    ^ ?? pe {
+        ProcessNotFound → @ McpStdioErr { McpStdioSpawn }
+        ProcessExecFailed → @ McpStdioErr { McpStdioSpawn }
+        ProcessIo → @ McpStdioErr { McpStdioIo }
+        ProcessOther → @ McpStdioErr { McpStdioOther }
+    }
 }
 
 // ── Spawn ───────────────────────────────────────────────────────────
 
-@ mcp_stdio_spawn s cmd ( Vec s ) args → ! McpStdioClient McpStdioErr {
-  : ! ProcChild ProcessErr res ( process_spawn cmd args )
-  ?? res {
-    T child → {
-      : McpStdioClient cli @ McpStdioClient { child 30000 }
-      ^ @ ! McpStdioClient McpStdioErr { T cli }
+@ mcp_stdio_spawn s cmd ( Vec s ) args → !McpStdioClient McpStdioErr {
+    : !ProcChild ProcessErr res ( process_spawn cmd args )
+    ?? res {
+        T child → {
+            : McpStdioClient cli @ McpStdioClient { child 30000 }
+            ^ @ !McpStdioClient McpStdioErr { T cli }
+        }
+        F pe → {
+            : McpStdioErr me ( __mcp_stdio_proc_to_err pe )
+            ^ @ !McpStdioClient McpStdioErr { F me }
+        }
     }
-    F pe → {
-      : McpStdioErr me ( __mcp_stdio_proc_to_err pe )
-      ^ @ ! McpStdioClient McpStdioErr { F me }
-    }
-  }
 }
 
-@ mcp_stdio_spawn0 s cmd → ! McpStdioClient McpStdioErr {
-  : ( Vec s ) av ( vec_new [s] )
-  : ! McpStdioClient McpStdioErr r ( mcp_stdio_spawn cmd av )
-  ( vec_free [s] av )
-  ^ r
+@ mcp_stdio_spawn0 s cmd → !McpStdioClient McpStdioErr {
+    : ( Vec s ) av ( vec_new [s] )
+    : !McpStdioClient McpStdioErr r ( mcp_stdio_spawn cmd av )
+    ( vec_free [s] av )
+    ^ r
 }
 
-@ mcp_stdio_spawn1 s cmd s a0 → ! McpStdioClient McpStdioErr {
-  : ( Vec s ) av ( vec_with_cap [s] 1 )
-  ( vec_push [s] av a0 )
-  : ! McpStdioClient McpStdioErr r ( mcp_stdio_spawn cmd av )
-  ( vec_free [s] av )
-  ^ r
+@ mcp_stdio_spawn1 s cmd s a0 → !McpStdioClient McpStdioErr {
+    : ( Vec s ) av ( vec_with_cap [s] 1 )
+    ( vec_push [s] av a0 )
+    : !McpStdioClient McpStdioErr r ( mcp_stdio_spawn cmd av )
+    ( vec_free [s] av )
+    ^ r
 }
 
-@ mcp_stdio_spawn2 s cmd s a0 s a1 → ! McpStdioClient McpStdioErr {
-  : ( Vec s ) av ( vec_with_cap [s] 2 )
-  ( vec_push [s] av a0 )
-  ( vec_push [s] av a1 )
-  : ! McpStdioClient McpStdioErr r ( mcp_stdio_spawn cmd av )
-  ( vec_free [s] av )
-  ^ r
+@ mcp_stdio_spawn2 s cmd s a0 s a1 → !McpStdioClient McpStdioErr {
+    : ( Vec s ) av ( vec_with_cap [s] 2 )
+    ( vec_push [s] av a0 )
+    ( vec_push [s] av a1 )
+    : !McpStdioClient McpStdioErr r ( mcp_stdio_spawn cmd av )
+    ( vec_free [s] av )
+    ^ r
 }
 
 @ mcp_stdio_free McpStdioClient c → v {
-  ( proc_free . c child )
+    ( proc_free . c child )
 }
 
 // ── Envelope construction ───────────────────────────────────────────
 
 @ __mcp_stdio_envelope i id s method ? Json params → Json {
-  : Json out ( json_obj_new )
-  ( json_obj_set out `jsonrpc` ( json_str_lit `2.0` ) )
-  ( json_obj_set out `id`      ( json_int id ) )
-  ( json_obj_set out `method`  ( json_str_lit method ) )
-  ?? params {
-    T p → ( json_obj_set out `params` p )
-    F _ → {}
-  }
-  ^ out
+    : Json out ( json_obj_new )
+    ( json_obj_set out `jsonrpc` ( json_str_lit `2.0` ) )
+    ( json_obj_set out `id` ( json_int id ) )
+    ( json_obj_set out `method` ( json_str_lit method ) )
+    ?? params {
+        T p → ( json_obj_set out `params` p )
+        F _ → {}
+    }
+    ^ out
 }
 
 // ── Single round-trip ───────────────────────────────────────────────
 
-@ mcp_stdio_call McpStdioClient c s method ? Json params i timeout_ms → ! Json McpStdioErr {
-  // Millisecond clock as the JSON-RPC id — round-trips for one call,
-  // human-readable in logs. Collisions matter only if a single client
-  // fires more than one call inside the same millisecond AND the server
-  // pipelines responses out of order; not a realistic MCP pattern.
-  : i id ( now_ms )
-  : i to ? > timeout_ms 0 timeout_ms . c default_timeout_ms
+@ mcp_stdio_call McpStdioClient c s method ? Json params i timeout_ms → !Json McpStdioErr {
+    // Millisecond clock as the JSON-RPC id — round-trips for one call,
+    // human-readable in logs. Collisions matter only if a single client
+    // fires more than one call inside the same millisecond AND the server
+    // pipelines responses out of order; not a realistic MCP pattern.
+    : i id ( now_ms )
+    : i to ? > timeout_ms 0 timeout_ms . c default_timeout_ms
 
-  // Build & write the request line.
-  : Json req ( __mcp_stdio_envelope id method params )
-  : String body ( json_stringify req )
-  ( json_free req )
-  : i wn ( proc_write_line . c child ( string_data body ) )
-  ( string_free body )
-  ? < wn 0 {
-    ^ @ ! Json McpStdioErr { F @ McpStdioErr { McpStdioIo } }
-  } {}
+    // Build & write the request line.
+    : Json req ( __mcp_stdio_envelope id method params )
+    : String body ( json_stringify req )
+    ( json_free req )
+    : i wn ( proc_write_line . c child ( string_data body ) )
+    ( string_free body )
+    ? < wn 0 {
+        ^ @ !Json McpStdioErr { F @ McpStdioErr { McpStdioIo } }
+    } {}
 
-  // Read response lines until we find one whose `id` matches our request.
-  // MCP servers may interleave server→client notifications (no `id`
-  // field) or unrelated notifications — skip those without erroring.
-  // Practical loop bound: 64 frames per call. Most servers reply directly.
-  : ~ i tries 64
-  ~ > tries 0 {
-    = tries - tries 1
-    : ? String line_o ( proc_read_line . c child to )
-    ?? line_o {
-      T line → {
-        : ! Json ParseErr pj ( json_parse ( string_data line ) )
-        ( string_free line )
-        ?? pj {
-          T j → {
-            // Match on id field. Only return when ids align so we
-            // don't surface a stale notification for the wrong call.
-            : ? Json idj ( json_obj_get j `id` )
-            ?? idj {
-              T idjv → {
-                : ? i idn ( json_num_as_i idjv )
-                ?? idn {
-                  T n → {
-                    ? == n id {
-                      ^ @ ! Json McpStdioErr { T j }
-                    } {
-                      // Different id — skip and keep reading.
-                      ( json_free j )
+    // Read response lines until we find one whose `id` matches our request.
+    // MCP servers may interleave server→client notifications (no `id`
+    // field) or unrelated notifications — skip those without erroring.
+    // Practical loop bound: 64 frames per call. Most servers reply directly.
+    : ~ i tries 64
+    ~ > tries 0 {
+        = tries - tries 1
+        : ?String line_o ( proc_read_line . c child to )
+        ?? line_o {
+            T line → {
+                : !Json ParseErr pj ( json_parse ( string_data line ) )
+                ( string_free line )
+                ?? pj {
+                    T j → {
+                        // Match on id field. Only return when ids align so we
+                        // don't surface a stale notification for the wrong call.
+                        : ?Json idj ( json_obj_get j `id` )
+                        ?? idj {
+                            T idjv → {
+                                : ?i idn ( json_num_as_i idjv )
+                                ?? idn {
+                                    T n → {
+                                        ? == n id {
+                                            ^ @ !Json McpStdioErr { T j }
+                                        } {
+                                            // Different id — skip and keep reading.
+                                            ( json_free j )
+                                        }
+                                    }
+                                    F _ → ( json_free j )
+                                }
+                            }
+                            F _ → {
+                                // No id ⇒ server-initiated notification. Drop it.
+                                ( json_free j )
+                            }
+                        }
                     }
-                  }
-                  F _ → ( json_free j )
+                    F _ → {
+                        // Malformed line. Surface as a JSON error rather than try
+                        // to recover — MCP servers must emit one valid JSON object
+                        // per line.
+                        ^ @ !Json McpStdioErr { F @ McpStdioErr { McpStdioJson } }
+                    }
                 }
-              }
-              F _ → {
-                // No id ⇒ server-initiated notification. Drop it.
-                ( json_free j )
-              }
             }
-          }
-          F _ → {
-            // Malformed line. Surface as a JSON error rather than try
-            // to recover — MCP servers must emit one valid JSON object
-            // per line.
-            ^ @ ! Json McpStdioErr { F @ McpStdioErr { McpStdioJson } }
-          }
+            F _ → {
+                // None ⇒ either timeout or EOF on stdout. proc_eof tells us which.
+                ? ( proc_eof . c child ) {
+                    ^ @ !Json McpStdioErr { F @ McpStdioErr { McpStdioEof } }
+                } {
+                    ^ @ !Json McpStdioErr { F @ McpStdioErr { McpStdioTimeout } }
+                }
+            }
         }
-      }
-      F _ → {
-        // None ⇒ either timeout or EOF on stdout. proc_eof tells us which.
-        ? ( proc_eof . c child ) {
-          ^ @ ! Json McpStdioErr { F @ McpStdioErr { McpStdioEof } }
-        } {
-          ^ @ ! Json McpStdioErr { F @ McpStdioErr { McpStdioTimeout } }
-        }
-      }
     }
-  }
-  ^ @ ! Json McpStdioErr { F @ McpStdioErr { McpStdioProtocol } }
+    ^ @ !Json McpStdioErr { F @ McpStdioErr { McpStdioProtocol } }
 }
 
 // ── Convenience wrappers ────────────────────────────────────────────
 
-@ mcp_stdio_initialize McpStdioClient c s client_name s client_version → ! Json McpStdioErr {
-  : Json caps ( json_obj_new )
-  : Json info ( json_obj_new )
-  ( json_obj_set info `name`    ( json_str_lit client_name ) )
-  ( json_obj_set info `version` ( json_str_lit client_version ) )
-  : Json params ( json_obj_new )
-  ( json_obj_set params `protocolVersion` ( json_str_lit `2024-11-05` ) )
-  ( json_obj_set params `capabilities`    caps )
-  ( json_obj_set params `clientInfo`      info )
-  ^ ( mcp_stdio_call c `initialize` @ ? Json { T params } 0 )
+@ mcp_stdio_initialize McpStdioClient c s client_name s client_version → !Json McpStdioErr {
+    : Json caps ( json_obj_new )
+    : Json info ( json_obj_new )
+    ( json_obj_set info `name` ( json_str_lit client_name ) )
+    ( json_obj_set info `version` ( json_str_lit client_version ) )
+    : Json params ( json_obj_new )
+    ( json_obj_set params `protocolVersion` ( json_str_lit `2024-11-05` ) )
+    ( json_obj_set params `capabilities` caps )
+    ( json_obj_set params `clientInfo` info )
+    ^ ( mcp_stdio_call c `initialize` @ ?Json { T params } 0 )
 }
 
-@ mcp_stdio_ping McpStdioClient c → ! Json McpStdioErr {
-  ^ ( mcp_stdio_call c `ping` @ ? Json { F ( json_null ) } 0 )
+@ mcp_stdio_ping McpStdioClient c → !Json McpStdioErr {
+    ^ ( mcp_stdio_call c `ping` @ ?Json { F ( json_null ) } 0 )
 }
 
 @ __mcp_stdio_extract_array Json r s field → ( Vec Json ) {
-  : ( Vec Json ) out ( vec_new [Json] )
-  : ? Json result ( json_obj_get r `result` )
-  ?? result {
-    T res → {
-      : ? Json arr_o ( json_obj_get res field )
-      ?? arr_o {
-        T arr → {
-          ( json_arr_each arr \ Json el → v {
-            ( vec_push [Json] out ( json_clone el ) )
-          } )
+    : ( Vec Json ) out ( vec_new [Json] )
+    : ?Json result ( json_obj_get r `result` )
+    ?? result {
+        T res → {
+            : ?Json arr_o ( json_obj_get res field )
+            ?? arr_o {
+                T arr → {
+                    ( json_arr_each arr \ Json el → v {
+                        ( vec_push [Json] out ( json_clone el ) )
+                    } )
+                }
+                F _ → {}
+            }
         }
         F _ → {}
-      }
     }
-    F _ → {}
-  }
-  ^ out
+    ^ out
 }
 
-@ mcp_stdio_tools_list McpStdioClient c → ! ( Vec Json ) McpStdioErr {
-  : ! Json McpStdioErr r ( mcp_stdio_call c `tools/list` @ ? Json { F ( json_null ) } 0 )
-  ?? r {
-    T resp → {
-      : ( Vec Json ) tools ( __mcp_stdio_extract_array resp `tools` )
-      ( json_free resp )
-      ^ @ ! ( Vec Json ) McpStdioErr { T tools }
+@ mcp_stdio_tools_list McpStdioClient c → !( Vec Json ) McpStdioErr {
+    : !Json McpStdioErr r ( mcp_stdio_call c `tools/list` @ ?Json { F ( json_null ) } 0 )
+    ?? r {
+        T resp → {
+            : ( Vec Json ) tools ( __mcp_stdio_extract_array resp `tools` )
+            ( json_free resp )
+            ^ @ !( Vec Json ) McpStdioErr { T tools }
+        }
+        F e → ^ @ !( Vec Json ) McpStdioErr { F e }
     }
-    F e → ^ @ ! ( Vec Json ) McpStdioErr { F e }
-  }
 }
 
-@ mcp_stdio_prompts_list McpStdioClient c → ! ( Vec Json ) McpStdioErr {
-  : ! Json McpStdioErr r ( mcp_stdio_call c `prompts/list` @ ? Json { F ( json_null ) } 0 )
-  ?? r {
-    T resp → {
-      : ( Vec Json ) ps ( __mcp_stdio_extract_array resp `prompts` )
-      ( json_free resp )
-      ^ @ ! ( Vec Json ) McpStdioErr { T ps }
+@ mcp_stdio_prompts_list McpStdioClient c → !( Vec Json ) McpStdioErr {
+    : !Json McpStdioErr r ( mcp_stdio_call c `prompts/list` @ ?Json { F ( json_null ) } 0 )
+    ?? r {
+        T resp → {
+            : ( Vec Json ) ps ( __mcp_stdio_extract_array resp `prompts` )
+            ( json_free resp )
+            ^ @ !( Vec Json ) McpStdioErr { T ps }
+        }
+        F e → ^ @ !( Vec Json ) McpStdioErr { F e }
     }
-    F e → ^ @ ! ( Vec Json ) McpStdioErr { F e }
-  }
 }
 
-@ mcp_stdio_resources_list McpStdioClient c → ! ( Vec Json ) McpStdioErr {
-  : ! Json McpStdioErr r ( mcp_stdio_call c `resources/list` @ ? Json { F ( json_null ) } 0 )
-  ?? r {
-    T resp → {
-      : ( Vec Json ) rs ( __mcp_stdio_extract_array resp `resources` )
-      ( json_free resp )
-      ^ @ ! ( Vec Json ) McpStdioErr { T rs }
+@ mcp_stdio_resources_list McpStdioClient c → !( Vec Json ) McpStdioErr {
+    : !Json McpStdioErr r ( mcp_stdio_call c `resources/list` @ ?Json { F ( json_null ) } 0 )
+    ?? r {
+        T resp → {
+            : ( Vec Json ) rs ( __mcp_stdio_extract_array resp `resources` )
+            ( json_free resp )
+            ^ @ !( Vec Json ) McpStdioErr { T rs }
+        }
+        F e → ^ @ !( Vec Json ) McpStdioErr { F e }
     }
-    F e → ^ @ ! ( Vec Json ) McpStdioErr { F e }
-  }
 }
 
-@ mcp_stdio_tools_call McpStdioClient c s name Json args → ! Json McpStdioErr {
-  : Json params ( json_obj_new )
-  ( json_obj_set params `name`      ( json_str_lit name ) )
-  ( json_obj_set params `arguments` args )
-  ^ ( mcp_stdio_call c `tools/call` @ ? Json { T params } 0 )
+@ mcp_stdio_tools_call McpStdioClient c s name Json args → !Json McpStdioErr {
+    : Json params ( json_obj_new )
+    ( json_obj_set params `name` ( json_str_lit name ) )
+    ( json_obj_set params `arguments` args )
+    ^ ( mcp_stdio_call c `tools/call` @ ?Json { T params } 0 )
 }
 
 // ── Response inspection ─────────────────────────────────────────────
 
 @ mcp_stdio_response_is_error Json r → b {
-  : ? Json e ( json_obj_get r `error` )
-  ?? e {
-    T _ → ^ T
-    F _ → ^ F
-  }
+    : ?Json e ( json_obj_get r `error` )
+    ?? e {
+        T _ → ^ T
+        F _ → ^ F
+    }
 }
 
 @ mcp_stdio_response_error_code Json r → i {
-  : ? Json e ( json_obj_get r `error` )
-  ?? e {
-    T err → {
-      : ? Json codeo ( json_obj_get err `code` )
-      ?? codeo {
-        T j → {
-          : ? i n ( json_num_as_i j )
-          ?? n {
-            T x → { ^ x }
-            F _ → { ^ 0 }
-          }
+    : ?Json e ( json_obj_get r `error` )
+    ?? e {
+        T err → {
+            : ?Json codeo ( json_obj_get err `code` )
+            ?? codeo {
+                T j → {
+                    : ?i n ( json_num_as_i j )
+                    ?? n {
+                        T x → { ^ x }
+                        F _ → { ^ 0 }
+                    }
+                }
+                F _ → { ^ 0 }
+            }
         }
         F _ → { ^ 0 }
-      }
     }
-    F _ → { ^ 0 }
-  }
-  ^ 0
+    ^ 0
 }
 
 @ mcp_stdio_response_error_message Json r → s {
-  : ? Json e ( json_obj_get r `error` )
-  ?? e {
-    T err → {
-      : ? Json m ( json_obj_get err `message` )
-      ?? m {
-        T j → ^ ( json_str_data j )
+    : ?Json e ( json_obj_get r `error` )
+    ?? e {
+        T err → {
+            : ?Json m ( json_obj_get err `message` )
+            ?? m {
+                T j → ^ ( json_str_data j )
+                F _ → ^ ``
+            }
+        }
         F _ → ^ ``
-      }
     }
-    F _ → ^ ``
-  }
-  ^ ``
+    ^ ``
 }

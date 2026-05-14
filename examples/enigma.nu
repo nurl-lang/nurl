@@ -6,14 +6,16 @@
 // - Prefix hell and literal-match fallthrough
 // - Borrowed foreach slices
 
-& `libc` @ malloc i → *v
+& `libc`
+
+@ malloc i → *v
 
 : O { i _ i __ }
-: P { O ___ [ i ____ }
+: P { O ___ [i ____ }
 
 : | N {
     A i i
-    B *N
+    B * N
     C i
 }
 
@@ -27,8 +29,8 @@
 % X P {
     @ x P p i v → i {
         ^ ? > . . p ___ _ v
-            . . p ___ __
-            . . p ____ length
+        . . p ___ __
+        . . p ____ length
     }
 }
 
@@ -38,20 +40,20 @@
     ^ p
 }
 
-@ sys::e *N n i a → ! i i {
+@ sys::e * N n i a → !i i {
     ^ ?? . n 0 {
-        A 0 y → @ ! i i { F y }
-        A x y → @ ! i i { T + * x y a }
-        B p   → {
+        A 0 y → @ !i i { F y }
+        A x y → @ !i i { T + * x y a }
+        B p → {
             : i r \ ( sys::e p a )
-            ^ @ ! i i { T ~ r }
+            ^ @ !i i { T ~ r }
         }
-        C v   → @ ! i i { T + v a }
-        _     → @ ! i i { F ~ 0 }
+        C v → @ !i i { T + v a }
+        _ → @ !i i { F ~ 0 }
     }
 }
 
-@ alg::r [ i s (@ i i i i) m i z → i {
+@ alg::r [i s ( @ i i i i ) m i z → i {
     : ~ i o z
     : ~ i i 0
     : i n . s length
@@ -65,7 +67,7 @@
 
 @ main → i {
     : ~ i q 0
-    : [ i s [ i | 2 3 5 7 11 ]
+    : [i s [i | 2 3 5 7 11]
 
     // Create an owned struct. Will trigger auto-drop at scope exit!
     : P p @ P { @ O { 8 4 } s }
@@ -78,25 +80,25 @@
     : *N n2 ( sys::b @ N { B n1 } )
     : *N n3 ( sys::b @ N { C 9 } )
 
-    : ! i i r1 ( sys::e n2 2 )
-    : ! i i r2 ( sys::e n3 5 )
+    : !i i r1 ( sys::e n2 2 )
+    : !i i r2 ( sys::e n3 5 )
 
     // Unpack results with literal match fallthrough
     = q ?? r1 {
         T v → v
-        F e → * e - 0 1
+        F e → *e - 0 1
     }
 
     : ~ i k ?? r2 {
         T v → v
-        _   → 0
+        _ → 0
     }
 
     // A closure doing chaotic math via prefix-notation
-    : (@ i i i i) cl \ i a i e → i {
+    : ( @ i i i i ) cl \ i a i e → i {
         ^ ? > e 4
-            + a * e 2
-            - a e
+        + a * e 2
+        - a e
     }
 
     // Fold over the slice with the closure

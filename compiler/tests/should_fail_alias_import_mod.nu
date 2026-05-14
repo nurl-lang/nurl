@@ -5,13 +5,13 @@
 // with their definitions and stay linked after mangling.
 
 @ ai_add i a i b → i {
-  ^ + a b
+    ^ + a b
 }
 
 @ ai_mul i a i b → i {
-  ^ * a b
+    ^ * a b
 }
 
 @ ai_double i x → i {
-  ^ ( ai_add x x )
+    ^ ( ai_add x x )
 }
