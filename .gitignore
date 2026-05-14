@@ -19,6 +19,7 @@ stdlib/canvas.sdl2
 # Test runner output
 compiler/tests/tmp/
 compiler/tests/testresults.txt
+compiler/tests/correct.txt
 *.test
 test_output/
 
