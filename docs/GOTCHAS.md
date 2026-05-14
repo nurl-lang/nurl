@@ -107,6 +107,48 @@ heap-backed handle pattern (e.g. `( Vec i ) counters` like the
 the closure-shared-mutation case, the immutable-snapshot baseline, and
 whole-struct reassignment through a captured pointer.
 
+### Function-parameter field mutation — also fixed
+
+Symmetric fix in the same window: `= . p field val` on a function
+parameter previously emitted invalid IR (`getelementptr %T, %T* ,
+i32 0, i32 N` with an EMPTY GEP base) because `gen_fn_param` only
+registered the parameter type and never backed it with an alloca.
+`gen_field_store`'s "struct by value" branch reads `<obj>__ptr` as
+the GEP base, so it had nothing to write through.
+
+`gen_fn_decl_concrete` now invokes `__alloca_struct_params` right
+after the `entry:` label. The helper walks the parameter roster
+(collected by `gen_fn_param` under `__fn_params__`) and, for every
+parameter whose LLVM type is a multi-field named struct (predicate:
+starts with `%`, `__idx_1__type` set, not an enum), emits:
+
+```llvm
+%p_ptr = alloca %T
+store %T %p, %T* %p_ptr
+```
+
+and registers `<p>__ptr = %p_ptr`. Single-field handle structs
+(`%String`, `%Vec`) are skipped — their f0 IS already a pointer,
+so writes go through that pointer rather than through this alloca.
+
+**Semantics are unchanged**: VALUE semantics still apply. The
+function mutates a LOCAL copy of the struct; the caller's binding
+is untouched. To thread the mutation back, return the modified
+struct (the canonical pattern in NURL, since `&local` doesn't
+exist):
+
+```nurl
+@ inc_returning Counter c → Counter {
+  = . c n + . c n 1
+  ^ c
+}
+= c ( inc_returning c )
+```
+
+**Regression test:** `compiler/tests/function_param_mut.nu` covers
+field mutation visible inside the function, caller-side value-
+semantics preservation, and the return-the-modified-struct idiom.
+
 **Real example (unchanged):** `stdlib/ext/http_middleware.nu:86–125` —
 `Metrics` is still a single-field `{ ( Vec i ) counters }` heap-backed
 struct. It predates this fix and ships through Prometheus exposition,

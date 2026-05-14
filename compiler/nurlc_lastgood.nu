@@ -4945,6 +4945,11 @@
         {}
       : s params_str ``
       : i pct 0
+      // Reset the param roster before parsing — gen_fn_param appends
+      // (name,type) pairs as `name\ttype|name\ttype|…` so
+      // __alloca_struct_params can iterate them after `entry:` is
+      // emitted and back struct-typed params with alloca slots.
+      ( nurl_sym_def syms `__fn_params__` `` )
       // Guard against EOF too: without this, a malformed header that
       // never produces TT_ARROW (e.g. ASCII `->` instead of `→`) hangs
       // the compiler in an infinite loop, because gen_fn_param on EOF
@@ -4972,6 +4977,11 @@
       ( nurl_sym_def syms `__cur_lbl__` `entry` )
       = g_did_ret 0
       = g_defer_count 0
+      // Back struct-typed params with entry-block alloca + store so
+      // `= . p field val` inside the body works (gen_field_store needs
+      // a pointer base via `<obj>__ptr`). See `__alloca_struct_params`
+      // for the predicate (multi-field named struct, not enum).
+      ( __alloca_struct_params syms cg )
       : s fn_cleanup ( nurl_cg_lbl cg `fn_cleanup` )
       ( nurl_sym_def syms `__fn_cleanup__` fn_cleanup )
       ( nurl_sym_def syms `__defer_top__` `` )
@@ -5100,12 +5110,79 @@
       ( nurl_sym_def syms pname lt )
       // Mark parameter as immutable by design
       ( nurl_sym_def syms ( nurl_str_cat pname `__param` ) `1` )
+      // Append this param's name + LLVM type to the function's param
+      // roster so gen_fn_decl_concrete can later (post-`entry:`) emit
+      // alloca + store for struct params, enabling `= . p field val`
+      // inside the body. Format: space-separated `name type name type ...`
+      // since param types may contain spaces (`{ i1, i64 }`)? No —
+      // closures decompose to `{ R(i8*…)*, i8* }` which DOES contain
+      // commas + spaces. Use a pipe separator between (name,type) pairs.
+      : s roster ( nurl_sym_get syms `__fn_params__` )
+      : s pair ( nurl_str_cat3 pname `\t` lt )
+      : s next ? == 0 ( nurl_str_len roster ) pair ( nurl_str_cat3 roster `|` pair )
+      ( nurl_sym_def syms `__fn_params__` next )
       : s entry ( nurl_str_cat3 lt ` %` pname )
       ? == pct 0
         ( nurl_set_last_type entry )
         ( nurl_set_last_type ( nurl_str_cat3 cur_params `, ` entry ) )
     }
     { ( die lex `expected parameter name after type` ) }
+}
+
+// Iterate __fn_params__ at function entry and emit alloca + store for
+// every parameter whose LLVM type is a multi-field named struct
+// (`%T` with `__idx_1__type` registered and not an enum). The store
+// gives the parameter a backing pointer so `= . p field val` (handled
+// by gen_field_store's "struct by value" branch) can GEP through it
+// instead of producing an invalid IR with an empty GEP base.
+//
+// Single-field handle structs (%String, %Vec) are skipped — their
+// f0 IS already a pointer, and the mutations the body would emit
+// land through that pointer rather than through this alloca.
+//
+// Enums are skipped — bare-variant assignment on a parameter would
+// reassign the whole binding, which is currently forbidden anyway
+// (`__param=1` triggers the "cannot assign to immutable parameter"
+// error in gen_assign), and field-on-enum syntax isn't valid.
+//
+// Closes the field-mutation half of docs/GOTCHAS.md §2 for the
+// function-parameter case (previously the closure capture half was
+// closed by the by-pointer capture fix earlier today).
+@ __alloca_struct_params i syms i cg → v {
+  : s roster ( nurl_sym_get syms `__fn_params__` )
+  ~ != 0 ( nurl_str_len roster ) {
+    // Take one (name,type) pair: everything up to the next '|'.
+    : i rlen ( nurl_str_len roster )
+    : i pi 0
+    ~ & < pi rlen != ( nurl_str_get roster pi ) 124 { = pi + pi 1 }
+    : s pair ( nurl_str_slice roster 0 pi )
+    = roster ? < pi rlen ( nurl_str_slice roster + pi 1 - rlen - pi 1 ) ``
+    // Split pair on '\t'.
+    : i plen ( nurl_str_len pair )
+    : i ti 0
+    ~ & < ti plen != ( nurl_str_get pair ti ) 9 { = ti + ti 1 }
+    : s pname ( nurl_str_slice pair 0 ti )
+    : s ptype ? < ti plen ( nurl_str_slice pair + ti 1 - plen - ti 1 ) ``
+    // Multi-field named struct test: starts with '%', __idx_1__type set,
+    // not an enum.
+    ? & != 0 ( nurl_str_len ptype ) == ( nurl_str_get ptype 0 ) 37
+      { : s tname ( nurl_str_slice ptype 1 - ( nurl_str_len ptype ) 1 )
+        : s vlist ( nurl_sym_get syms ( nurl_str_cat tname `__variants` ) )
+        ? == 0 ( nurl_str_len vlist )
+          { : s f1 ( nurl_sym_get syms ( nurl_str_cat3 tname `__idx_1` `__type` ) )
+            ? != 0 ( nurl_str_len f1 )
+              { : s pp ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print pp )
+                ( nurl_print ` = alloca ` ) ( nurl_print ptype ) ( nurl_print `\n` )
+                ( nurl_print `  store ` ) ( nurl_print ptype ) ( nurl_print ` %` )
+                ( nurl_print pname ) ( nurl_print `, ` ) ( nurl_print ptype )
+                ( nurl_print `* ` ) ( nurl_print pp ) ( nurl_print `\n` )
+                ( nurl_sym_def syms ( nurl_str_cat pname `__ptr` ) pp ) }
+              {} }
+          {} }
+      {}
+  }
+  ( nurl_sym_def syms `__fn_params__` `` )
 }
 
 @ emit_main_wrapper s ret_ty → v {
