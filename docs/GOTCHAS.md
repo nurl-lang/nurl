@@ -19,7 +19,7 @@ Limitations** table in [`../README.md`](../README.md).
 | 1 | `&` and `|` are **binary** — `& A B C` is a parse-arity error | Chain via parens: `& A & B C`, or extract a `__cond` helper |
 | 2 | Mutating a multi-field struct's `i` field via `=` does not propagate through closures | Back the state with a `Vec[i]` (heap handle); mutate via `vec_set` |
 | 3 | `: ~ MyEnum x …` (mutable enum binding) miscompiles — i64 stored without `insertvalue` | Use a sentinel-flag pattern: `: ~ b had_err F` + last-known plain field |
-| 4 | `vec_get [MultiFieldStruct]` returns a wrong default when index is out of bounds | Iterate via `vec_data [T]` + pointer indexing (`*T data`, `. data k`) |
+| 4 | ~~`vec_get [MultiFieldStruct]` returns a wrong default when index is out of bounds~~ **Fixed 2026-05-14** — the `# T 0` cast at the heart of the None synthesis now emits `zeroinitializer` when T's f0 is a non-pointer named type (e.g. `%String`); `vec_get`, `hashmap_get`, and the iter combinators all return a valid None for multi-field T | — |
 | 5 | Bare `@-fn` names don't auto-coerce to a `(@ R P*)` closure parameter | Wrap in `\ P* → R { ( fn args ) }` (same as `eq_int` / `c_int`) |
 | 6 | ~~Multi-field structs can't ride the `T` arm of `! T E` (Result)~~ **Fixed 2026-05-14** — multi-field T is heap-boxed transparently on construct + `??` destructure + `\` propagate | — |
 | 7 | Direct shadowing in the same `:` line: `: i z + z 719468` shadows the parameter `z` from that line forward | Rename to `zz` (or any new name) |
@@ -123,36 +123,44 @@ last `NetErr` directly.
 
 ---
 
-## 4. `vec_get [MultiFieldStruct]` default is wrong
+## 4. `vec_get [MultiFieldStruct]` default — fixed
+
+**Fixed 2026-05-14.** `vec_get [T]`, `hashmap_get [K V]`, and the
+`stdlib/std/iter.nu` combinators all build their None case via the
+`@ ? T { F # T 0 }` idiom — a cast of `i64 0` into a fresh `T`. When
+T's first field was a non-pointer named type (`%String` inside
+`Header`, `%Vec__u` inside `MultipartPart`), the cast emitted
+`insertvalue %Header undef, i64 0, 0` which LLVM rejected as a type
+mismatch on field 0.
+
+The fix lives in `gen_cast`'s `i64 → struct/enum` branch: when f0 is
+neither a pointer (existing `inttoptr` + `insertvalue` path) nor `i64`
+(existing legacy `insertvalue undef, i64 val, 0` path), the cast now
+returns `zeroinitializer` directly. The standard None-payload idiom
+unblocks across stdlib without per-caller workarounds.
 
 ```nurl
 : Header { String name, String value }
 
-// ✗ When `k` is out-of-bounds, the default `# Header 0` emits an
-//   `i64 0` into the first %String slot — caller sees an invalid handle
-?? ( vec_get [Header] hs k ) {
-  T h → { ... }
-  F → { ... }
-}
-
-// ✓ Iterate via raw pointer + length
-: i n ( vec_len [Header] hs )
-: *Header data ( vec_data [Header] hs )
-: ~ i k 0
-~ < k n {
-  : Header h . data k
-  ...
-  = k + k 1
+// Works directly now:
+?? ( vec_get [Header] hs 99 ) {
+  T h → { ... never reached for out-of-bounds ... }
+  F   → { ... None path observed ... }
 }
 ```
 
-**Why:** `vec_get [T]` returns `? T`, and the None branch synthesises
-a zero `T` for the payload slot. For single-int / single-pointer T this
-is fine; for multi-field structs the synthesised zero is a flat `i64 0`
-where a `{%String, %String}` is expected.
+**Regression tests:** `compiler/tests/option_multifield.nu` (construct
++ `??` destructure, including `vec_get [Tagged]` for in-range and
+out-of-bounds), `compiler/tests/option_multifield_try.nu` (`\`
+propagate through multi-field T).
 
-**Real example:** `stdlib/ext/http_request.nu:291–305` (`header_get`)
-and `stdlib/ext/http_router.nu:69` both note the workaround.
+**Note:** Option `? T` keeps its natural `{ i1, %T }` layout (T stored
+directly in the payload slot) — unlike `! T E` which lowers to
+`{ i1, i64 }` and heap-boxes multi-field T. The two encodings target
+the same use cases but differ at the IR layer because Option already
+has room for an inline T while Result's i64 slot has to encode every
+T uniformly. The shared abstraction is the `# T 0` cast for the
+dummy-zero payload, which both now handle correctly.
 
 ---
 

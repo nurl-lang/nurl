@@ -2836,15 +2836,33 @@
                   }
                   { ? & ( seq st `i64` ) == ( nurl_str_get dt 0 ) 37
                       { // i64 → struct/enum: reconstruct by inserting val
-                        // as field 0. Look up field 0's actual type — for
-                        // structs whose first field is a pointer (e.g.
-                        // %String { s sb }), we must inttoptr before the
-                        // insertvalue, otherwise LLVM sees an i64 in a
-                        // ptr slot and rejects the IR.
+                        // as field 0. Look up field 0's actual type — three
+                        // sub-cases keyed on the shape of f0:
+                        //   (a) f0 is a pointer (e.g. %String { s sb }, %Vec):
+                        //       inttoptr i64 → ptr, then insertvalue at f0.
+                        //   (b) f0 is i64 (e.g. %Pt2 { i64, i64 }, all enums
+                        //       whose tag slot is the first field):
+                        //       insertvalue undef, i64 val, 0 directly.
+                        //   (c) f0 is anything else — a named struct (%String
+                        //       inside %Header, %Pt2 inside %Tagged), or a
+                        //       primitive like double / i32: packing an
+                        //       arbitrary i64 into that slot is not
+                        //       meaningful, so emit zeroinitializer. This
+                        //       services the standard `@ ? T { F # T 0 }`
+                        //       dummy-payload idiom used throughout stdlib
+                        //       (vec_get, hashmap, iter combinators) for
+                        //       multi-field T whose f0 isn't i64-shaped.
+                        //       Closes docs/GOTCHAS.md §4 — vec_get on
+                        //       multi-field T no longer miscompiles.
                         : s sname ( nurl_str_slice dt 1 - dtlen 1 )
                         : s f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_0` `__type` ) )
                         : b f0_is_ptr & != 0 ( nurl_str_len f0_ty )
                                        == ( nurl_str_get f0_ty - ( nurl_str_len f0_ty ) 1 ) 42
+                        : b f0_is_i64 ( seq f0_ty `i64` )
+                        // Empty f0_ty: struct not fully registered — fall
+                        // through to legacy insertvalue (preserves prior
+                        // behaviour for anon / partially-known types).
+                        : b f0_unknown == 0 ( nurl_str_len f0_ty )
                         ? f0_is_ptr
                           { : s pv ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print pv )
@@ -2853,12 +2871,20 @@
                             ( nurl_print `  ` ) ( nurl_print res )
                             ( nurl_print ` = insertvalue ` ) ( nurl_print dt )
                             ( nurl_print ` undef, ` ) ( nurl_print f0_ty )
-                            ( nurl_print ` ` ) ( nurl_print pv ) ( nurl_print `, 0\n` ) }
-                          { ( nurl_print `  ` ) ( nurl_print res )
-                            ( nurl_print ` = insertvalue ` ) ( nurl_print dt )
-                            ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` ) }
-                        ( nurl_set_last_type dt )
-                        ^ res
+                            ( nurl_print ` ` ) ( nurl_print pv ) ( nurl_print `, 0\n` )
+                            ( nurl_set_last_type dt )
+                            ^ res }
+                          { ? | f0_is_i64 f0_unknown
+                              { ( nurl_print `  ` ) ( nurl_print res )
+                                ( nurl_print ` = insertvalue ` ) ( nurl_print dt )
+                                ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+                                ( nurl_set_last_type dt )
+                                ^ res }
+                              { // f0 is neither pointer, i64, nor unknown —
+                                // produce a zero-initialised whole struct.
+                                ( nurl_set_last_type dt )
+                                ^ `zeroinitializer` }
+                          }
                       }
                       { // Integer-width conversion (iN → iM).  zext if dst is
                         // wider, trunc if narrower.  Falls through to no-op
@@ -4389,8 +4415,17 @@
   ? is_res
     { = inner_nurl ( str_first_word ( str_skip_word call_nurl2 ) ) } {}
   : s struct_ty ( nurl_sym_get syms inner_nurl )
+  // Three reconstruction shapes when inner is i64 and T resolves to %X:
+  //   (a) X is a struct whose f0 is a pointer (Vec / String / opaque-handle):
+  //       i64 IS f0 — inttoptr + insertvalue at field 0.
+  //   (b) X is a struct whose f0 is NOT a pointer (multi-field like ParsedHead,
+  //       Pt2, Tagged): i64 is a heap-box %X* — inttoptr + load + nurl_free.
+  //   (c) X is a wide enum (max_payloads > 0): same heap-box unbox as (b).
+  // Mirrors gen_match's match-arm reconstruction at lines ~1442–1502.
   : b is_struct_handle F
-  : s f0_ty ``
+  : b is_heapbox_struct F
+  : b is_heapbox_enum   F
+  : s f0_ty   ``
   ? & ( seq inner_ty `i64` ) & != 0 ( nurl_str_len struct_ty ) == ( nurl_str_get struct_ty 0 ) 37
     { : s sname ( nurl_str_slice struct_ty 1 - ( nurl_str_len struct_ty ) 1 )
       : s vlist ( nurl_sym_get syms ( nurl_str_cat sname `__variants` ) )
@@ -4398,8 +4433,12 @@
         { = f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_0` `__type` ) )
           ? & != 0 ( nurl_str_len f0_ty )
                == ( nurl_str_get f0_ty - ( nurl_str_len f0_ty ) 1 ) 42
-            { = is_struct_handle T } {} }
-        {} }
+            { = is_struct_handle T }
+            { ? != 0 ( nurl_str_len f0_ty )
+                { = is_heapbox_struct T } {} } }
+        { : s mp_r ( nurl_sym_get syms ( nurl_str_cat sname `__max_payloads` ) )
+          : i mp_rn ? != 0 ( nurl_str_len mp_r ) ( nurl_str_to_int mp_r ) 0
+          ? > mp_rn 0 { = is_heapbox_enum T } {} } }
     {}
   ? is_struct_handle
     { : s pcv ( nurl_cg_reg cg )
@@ -4413,6 +4452,23 @@
       ( nurl_print ` ` ) ( nurl_print pcv ) ( nurl_print `, 0\n` )
       ( nurl_set_last_type struct_ty )
       ^ sv } {}
+  ? | is_heapbox_struct is_heapbox_enum
+    { : s ubp ( nurl_cg_reg cg )
+      ( nurl_print `  ` ) ( nurl_print ubp )
+      ( nurl_print ` = inttoptr i64 ` ) ( nurl_print res )
+      ( nurl_print ` to ` ) ( nurl_print struct_ty ) ( nurl_print `*\n` )
+      : s ubv ( nurl_cg_reg cg )
+      ( nurl_print `  ` ) ( nurl_print ubv )
+      ( nurl_print ` = load ` ) ( nurl_print struct_ty )
+      ( nurl_print `, ` ) ( nurl_print struct_ty )
+      ( nurl_print `* ` ) ( nurl_print ubp ) ( nurl_print `\n` )
+      : s ubraw ( nurl_cg_reg cg )
+      ( nurl_print `  ` ) ( nurl_print ubraw )
+      ( nurl_print ` = bitcast ` ) ( nurl_print struct_ty )
+      ( nurl_print `* ` ) ( nurl_print ubp ) ( nurl_print ` to i8*\n` )
+      ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print ubraw ) ( nurl_print `)\n` )
+      ( nurl_set_last_type struct_ty )
+      ^ ubv } {}
   ( nurl_set_last_type inner_ty )
   res
 }

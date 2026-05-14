@@ -2836,15 +2836,33 @@
                   }
                   { ? & ( seq st `i64` ) == ( nurl_str_get dt 0 ) 37
                       { // i64 → struct/enum: reconstruct by inserting val
-                        // as field 0. Look up field 0's actual type — for
-                        // structs whose first field is a pointer (e.g.
-                        // %String { s sb }), we must inttoptr before the
-                        // insertvalue, otherwise LLVM sees an i64 in a
-                        // ptr slot and rejects the IR.
+                        // as field 0. Look up field 0's actual type — three
+                        // sub-cases keyed on the shape of f0:
+                        //   (a) f0 is a pointer (e.g. %String { s sb }, %Vec):
+                        //       inttoptr i64 → ptr, then insertvalue at f0.
+                        //   (b) f0 is i64 (e.g. %Pt2 { i64, i64 }, all enums
+                        //       whose tag slot is the first field):
+                        //       insertvalue undef, i64 val, 0 directly.
+                        //   (c) f0 is anything else — a named struct (%String
+                        //       inside %Header, %Pt2 inside %Tagged), or a
+                        //       primitive like double / i32: packing an
+                        //       arbitrary i64 into that slot is not
+                        //       meaningful, so emit zeroinitializer. This
+                        //       services the standard `@ ? T { F # T 0 }`
+                        //       dummy-payload idiom used throughout stdlib
+                        //       (vec_get, hashmap, iter combinators) for
+                        //       multi-field T whose f0 isn't i64-shaped.
+                        //       Closes docs/GOTCHAS.md §4 — vec_get on
+                        //       multi-field T no longer miscompiles.
                         : s sname ( nurl_str_slice dt 1 - dtlen 1 )
                         : s f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_0` `__type` ) )
                         : b f0_is_ptr & != 0 ( nurl_str_len f0_ty )
                                        == ( nurl_str_get f0_ty - ( nurl_str_len f0_ty ) 1 ) 42
+                        : b f0_is_i64 ( seq f0_ty `i64` )
+                        // Empty f0_ty: struct not fully registered — fall
+                        // through to legacy insertvalue (preserves prior
+                        // behaviour for anon / partially-known types).
+                        : b f0_unknown == 0 ( nurl_str_len f0_ty )
                         ? f0_is_ptr
                           { : s pv ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print pv )
@@ -2853,12 +2871,20 @@
                             ( nurl_print `  ` ) ( nurl_print res )
                             ( nurl_print ` = insertvalue ` ) ( nurl_print dt )
                             ( nurl_print ` undef, ` ) ( nurl_print f0_ty )
-                            ( nurl_print ` ` ) ( nurl_print pv ) ( nurl_print `, 0\n` ) }
-                          { ( nurl_print `  ` ) ( nurl_print res )
-                            ( nurl_print ` = insertvalue ` ) ( nurl_print dt )
-                            ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` ) }
-                        ( nurl_set_last_type dt )
-                        ^ res
+                            ( nurl_print ` ` ) ( nurl_print pv ) ( nurl_print `, 0\n` )
+                            ( nurl_set_last_type dt )
+                            ^ res }
+                          { ? | f0_is_i64 f0_unknown
+                              { ( nurl_print `  ` ) ( nurl_print res )
+                                ( nurl_print ` = insertvalue ` ) ( nurl_print dt )
+                                ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+                                ( nurl_set_last_type dt )
+                                ^ res }
+                              { // f0 is neither pointer, i64, nor unknown —
+                                // produce a zero-initialised whole struct.
+                                ( nurl_set_last_type dt )
+                                ^ `zeroinitializer` }
+                          }
                       }
                       { // Integer-width conversion (iN → iM).  zext if dst is
                         // wider, trunc if narrower.  Falls through to no-op
