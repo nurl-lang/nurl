@@ -21,7 +21,7 @@ Limitations** table in [`../README.md`](../README.md).
 | 3 | `: ~ MyEnum x …` (mutable enum binding) miscompiles — i64 stored without `insertvalue` | Use a sentinel-flag pattern: `: ~ b had_err F` + last-known plain field |
 | 4 | `vec_get [MultiFieldStruct]` returns a wrong default when index is out of bounds | Iterate via `vec_data [T]` + pointer indexing (`*T data`, `. data k`) |
 | 5 | Bare `@-fn` names don't auto-coerce to a `(@ R P*)` closure parameter | Wrap in `\ P* → R { ( fn args ) }` (same as `eq_int` / `c_int`) |
-| 6 | Multi-field structs can't ride the `T` arm of `! T E` (Result) | Use a tagged-struct workaround (`{ T value, b ok, E err }`) — see `ParsedHead` |
+| 6 | ~~Multi-field structs can't ride the `T` arm of `! T E` (Result)~~ **Fixed 2026-05-14** — multi-field T is heap-boxed transparently on construct + `??` destructure + `\` propagate | — |
 | 7 | Direct shadowing in the same `:` line: `: i z + z 719468` shadows the parameter `z` from that line forward | Rename to `zz` (or any new name) |
 | 8 | Function calls require parens — `__i_mod a b` parses as register-then-loose-tokens | Always: `( __i_mod a b )` |
 | 9 | Ternary nesting is arity-strict — a missing/extra operand cascades into "unexpected token" at the next statement | Count operands left-to-right; one wrong arity poisons the line + a few after |
@@ -186,32 +186,50 @@ call site in `stdlib/`.
 
 ---
 
-## 6. Multi-field structs can't ride `! T E` Ok arms
+## 6. Multi-field structs ride `! T E` Ok arms (heap-boxed)
+
+**Fixed 2026-05-14.** Multi-field T is now transparently heap-boxed
+through the full Result lifecycle: construction, `??` match
+destructure, and `\` try-propagate all alloc/store/load/free the
+payload behind the scenes.
 
 ```nurl
-// ✗ Multi-field T — `! ParsedHead HttpReqErr` works at the type level
-//   but the Ok payload codegen emits a wrong `extractvalue`
-@ parse_request_head ( Vec u ) buf → ! ParsedHead HttpReqErr { ... }
-
-// ✓ Tagged-struct workaround — both payloads always present
+// Works directly now:
 : ParsedHead {
   HttpRequest head
   i consumed
-  b ok
-  HttpReqErr err
 }
-@ parse_request_head ( Vec u ) buf → ParsedHead { ... }
+@ parse_request_head ( Vec u ) buf → ! ParsedHead HttpReqErr { ... }
+
+// Caller threads `\` through chained Results without touching the
+// box explicitly:
+@ next_step ( Vec u ) buf → ! ParsedHead HttpReqErr {
+  : ParsedHead ph \ ( parse_request_head buf )
+  // ... use ph.head / ph.consumed directly ...
+  ^ @ ! ParsedHead HttpReqErr { T ph }
+}
 ```
 
-**Why:** the `! T E` enum is encoded as `{i1, i64}` — payloads must
-fit in an i64. Single ints, single pointers, opaque-handle
-(`{ s ctl }` 1-field) structs work; multi-field structs don't.
+**How it works:** `! T E` still lowers to `{ i1, i64 }`. When T is a
+multi-field struct (f0 is NOT a pointer) or a wide enum
+(`max_payloads > 0`), the i64 payload slot holds a heap-box `%T*`
+allocated by `nurl_alloc(sizeof T)` at construction. The receiving
+side (`??` arm or `\` propagate) issues `inttoptr → load → nurl_free`
+to recover the value and release the box. Single-pointer-handle
+structs (Vec, String, opaque-handle `{ s ctl }`) keep the cheaper
+ptrtoint path — no allocation, no free.
 
-**Standard escape hatch:** wrap the multi-field type in an
-opaque handle (`{ s raw }` or `{ s ctl }`) backed by a heap-allocated
-impl struct. This is what `Regex`, `Channel`, `Mutex`, `TcpListener`,
-`McpClient` all do — see `stdlib/ext/regex.nu` for the canonical
-pattern.
+**Opaque-handle pattern is still useful** for types whose identity
+should not be copyable (sockets, mutexes, channels): `Regex`,
+`Channel`, `Mutex`, `TcpListener`, `McpClient` continue to wrap a
+heap impl struct because their semantics demand shared ownership
+through a single handle. The heap-box payload is the right choice
+for value-typed multi-field structs (parser outputs, geometry,
+metric snapshots) where copy-on-construct is fine.
+
+**Regression cases:** `compiler/tests/result_multifield.nu`
+(construct + `??` destructure), `compiler/tests/result_multifield_try.nu`
+(`\` propagate through chained Results).
 
 ---
 

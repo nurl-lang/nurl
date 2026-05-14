@@ -4389,8 +4389,17 @@
   ? is_res
     { = inner_nurl ( str_first_word ( str_skip_word call_nurl2 ) ) } {}
   : s struct_ty ( nurl_sym_get syms inner_nurl )
+  // Three reconstruction shapes when inner is i64 and T resolves to %X:
+  //   (a) X is a struct whose f0 is a pointer (Vec / String / opaque-handle):
+  //       i64 IS f0 — inttoptr + insertvalue at field 0.
+  //   (b) X is a struct whose f0 is NOT a pointer (multi-field like ParsedHead,
+  //       Pt2, Tagged): i64 is a heap-box %X* — inttoptr + load + nurl_free.
+  //   (c) X is a wide enum (max_payloads > 0): same heap-box unbox as (b).
+  // Mirrors gen_match's match-arm reconstruction at lines ~1442–1502.
   : b is_struct_handle F
-  : s f0_ty ``
+  : b is_heapbox_struct F
+  : b is_heapbox_enum   F
+  : s f0_ty   ``
   ? & ( seq inner_ty `i64` ) & != 0 ( nurl_str_len struct_ty ) == ( nurl_str_get struct_ty 0 ) 37
     { : s sname ( nurl_str_slice struct_ty 1 - ( nurl_str_len struct_ty ) 1 )
       : s vlist ( nurl_sym_get syms ( nurl_str_cat sname `__variants` ) )
@@ -4398,8 +4407,12 @@
         { = f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_0` `__type` ) )
           ? & != 0 ( nurl_str_len f0_ty )
                == ( nurl_str_get f0_ty - ( nurl_str_len f0_ty ) 1 ) 42
-            { = is_struct_handle T } {} }
-        {} }
+            { = is_struct_handle T }
+            { ? != 0 ( nurl_str_len f0_ty )
+                { = is_heapbox_struct T } {} } }
+        { : s mp_r ( nurl_sym_get syms ( nurl_str_cat sname `__max_payloads` ) )
+          : i mp_rn ? != 0 ( nurl_str_len mp_r ) ( nurl_str_to_int mp_r ) 0
+          ? > mp_rn 0 { = is_heapbox_enum T } {} } }
     {}
   ? is_struct_handle
     { : s pcv ( nurl_cg_reg cg )
@@ -4413,6 +4426,23 @@
       ( nurl_print ` ` ) ( nurl_print pcv ) ( nurl_print `, 0\n` )
       ( nurl_set_last_type struct_ty )
       ^ sv } {}
+  ? | is_heapbox_struct is_heapbox_enum
+    { : s ubp ( nurl_cg_reg cg )
+      ( nurl_print `  ` ) ( nurl_print ubp )
+      ( nurl_print ` = inttoptr i64 ` ) ( nurl_print res )
+      ( nurl_print ` to ` ) ( nurl_print struct_ty ) ( nurl_print `*\n` )
+      : s ubv ( nurl_cg_reg cg )
+      ( nurl_print `  ` ) ( nurl_print ubv )
+      ( nurl_print ` = load ` ) ( nurl_print struct_ty )
+      ( nurl_print `, ` ) ( nurl_print struct_ty )
+      ( nurl_print `* ` ) ( nurl_print ubp ) ( nurl_print `\n` )
+      : s ubraw ( nurl_cg_reg cg )
+      ( nurl_print `  ` ) ( nurl_print ubraw )
+      ( nurl_print ` = bitcast ` ) ( nurl_print struct_ty )
+      ( nurl_print `* ` ) ( nurl_print ubp ) ( nurl_print ` to i8*\n` )
+      ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print ubraw ) ( nurl_print `)\n` )
+      ( nurl_set_last_type struct_ty )
+      ^ ubv } {}
   ( nurl_set_last_type inner_ty )
   res
 }
