@@ -85,3 +85,6 @@ compare/*.csv
 compare/*.parquet
 compare/nurl_top10*.csv
 nurl_top10_arena.csv
+
+# Critic notes
+critic.md
