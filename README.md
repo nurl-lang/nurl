@@ -736,6 +736,17 @@ defaults, etc.) see [`docs/GOTCHAS.md`](docs/GOTCHAS.md).
 | No automatic memory management — heap-allocated values (slice literals, `strcat` results, etc.) are not freed | Call `free` via FFI when needed; keep values on the stack where possible |
 | Import is inline-include only: no namespaces; alias rewrites only top-level `@`-functions, not types/enums/FFI/traits. Path-string dedup with leading `./` normalisation is in place — same file imported twice (or through a diamond) emits one set of decls | Stick to a single canonical import path per file; prefix names manually for types/enums when collisions matter |
 
+### HTTPS / TLS
+
+| Capability | Notes |
+|---|---|
+| **TLS server-side shipped 2026-05-15** via `tcp_listen_tls host port cert_path key_path → !TcpListener NetErr` | Build-time dependency: `libssl` (pkg-config). HttpServer integrates without code changes — just swap `tcp_listen` for `tcp_listen_tls`. |
+| TLS 1.2 minimum | TLS 1.0 / 1.1 / SSL 3.0 disabled in the SSL_CTX |
+| No SNI in v1 (single cert per listener) | Follow-up item |
+| No ALPN in v1 (no HTTP/2 to negotiate yet anyway) | Follow-up item |
+| No client-cert auth | Follow-up item |
+| No live cert reload | Follow-up item — would need a `tcp_set_tls_cert` runtime fn |
+
 ---
 
 ## LLM integration

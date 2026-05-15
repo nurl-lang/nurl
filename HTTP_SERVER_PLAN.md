@@ -482,9 +482,28 @@ Optional but expected.
 
 ## Phase 9 — Optional / later
 
-- [ ] **TLS via libssl/OpenSSL.** Adds `nurl_tls_wrap_conn` runtime
-      function. Significant: cert loading, SNI, ALPN. Easier to require
-      the user to put NURL behind nginx/caddy for HTTPS in v1.
+- [x] **TLS via libssl/OpenSSL — SHIPPED 2026-05-15 (server-side).**
+      `nurl_tcp_listen_tls(host, port, backlog, cert_path, key_path)`
+      in `stdlib/runtime.c` composes the plain socket listen with an
+      `SSL_CTX` configured from PEM cert + private-key files (TLS 1.2
+      minimum). `NurlTcp` gained two optional fields (`SSL *ssl`,
+      `SSL_CTX *ssl_ctx`) that make the handle polymorphic —
+      `nurl_tcp_read` / `_write` / `_close` dispatch via libssl when
+      `ssl` is set. HttpServer and every existing TcpConn consumer get
+      HTTPS without code changes — callers just swap
+      `tcp_listen` → `tcp_listen_tls`. Build-time dependency detected
+      via `pkg-config --exists openssl` in `build.sh` (mirrors libcurl
+      pattern); when absent, every TLS call returns `NetTlsCtxInit`.
+      NURL surface: `tcp_listen_tls` / `_with_backlog` in
+      `stdlib/std/net.nu`; new `NetErr` variants `NetTlsCtxInit` /
+      `NetTlsCertLoad` / `NetTlsKeyLoad` / `NetTlsHandshake`. v1 scope
+      deferred for later: no SNI (single cert per listener), no ALPN,
+      no client-cert auth, no live cert reload, no session-resumption
+      tuning. Regression: `compiler/tests/http_server_tls.nu`
+      (NURL_NET_TESTS=1) — generates a self-signed cert at runtime
+      via `openssl req`, runs `server_run_once` with TLS, verifies an
+      HTTPS GET round-trips correctly through python's
+      `ssl.create_default_context()`-wrapped client.
 - [ ] **HTTP/2.** Major undertaking — separate planning doc.
 - [ ] **WebSocket upgrade.** Frame parser + writer; reuse Phase 1
       sockets. Probably ~400 LOC.

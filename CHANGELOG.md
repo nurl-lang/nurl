@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **TLS (server-side) via libssl/OpenSSL.** `tcp_listen_tls host port
+  cert_path key_path → !TcpListener NetErr` in `stdlib/std/net.nu` is a
+  drop-in replacement for `tcp_listen`; `NurlTcp` runtime struct made
+  polymorphic via `SSL *ssl` + `SSL_CTX *ssl_ctx` fields, so
+  `nurl_tcp_read` / `_write` / `_close` dispatch via libssl when the
+  handle was wrapped at listen time. **HttpServer integration is zero
+  code changes** — callers just swap the listener constructor. TLS
+  1.2 minimum. Build-time dependency detected via `pkg-config --exists
+  openssl`; without it, calls return `NetTlsCtxInit`. v1 scope: no
+  SNI, no ALPN, no client-cert auth, no live cert reload. New `NetErr`
+  variants: `NetTlsCtxInit` / `NetTlsCertLoad` / `NetTlsKeyLoad` /
+  `NetTlsHandshake`. Regression:
+  `compiler/tests/http_server_tls.nu` (NURL_NET_TESTS=1; generates a
+  self-signed cert at setup time).
+
 * **HTTP server Phase 8 closed out.** Two production-hardening items
   shipped:
   - *Configurable parser limits* via new `HttpLimits { i head_max_bytes,

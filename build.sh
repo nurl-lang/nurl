@@ -64,8 +64,26 @@ else
     log "[info] libcurl not found — http_get/http_post will return HttpErr::Other"
 fi
 
+# ── libssl detection ─────────────────────────────────────────
+# Same pattern as libcurl. With openssl present, the runtime's
+# tcp_listen_tls / accept-with-handshake / SSL_read / SSL_write
+# paths compile in; without it, the symbols still exist but every
+# call returns NetErr::TLS_CONTEXT_INIT and the link line skips
+# -lssl -lcrypto.
+OPENSSL_CFLAGS=""
+OPENSSL_LIBS=""
+if pkg-config --exists openssl 2>/dev/null; then
+    OPENSSL_CFLAGS="-DNURL_HAVE_OPENSSL $(pkg-config --cflags openssl)"
+    OPENSSL_LIBS="$(pkg-config --libs openssl)"
+    echo 1 > stdlib/runtime.openssl
+    log "[info] openssl detected — TLS transport enabled (server-side)"
+else
+    rm -f stdlib/runtime.openssl
+    log "[info] openssl not found — tcp_listen_tls will return NetErr::TLS_CONTEXT_INIT"
+fi
+
 # ── Build stages ─────────────────────────────────────────────
-step "runtime"       bash -c "'$CLANG' $CURL_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
+step "runtime"       bash -c "'$CLANG' $CURL_CFLAGS $OPENSSL_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
 
 # Always build canvas.o. With SDL2 headers present we get the real
 # native back-end (-DNURL_HAVE_SDL2); otherwise we compile a stub that
@@ -96,10 +114,10 @@ step "clean"         rm -f build/nurlc_py.ll build/nurlc_py \
                           build/nurlc
 
 step "stage0 ir"     bash -c 'python compiler/nurlc.py --llvm compiler/nurlc.nu > build/nurlc_py.ll'
-step "stage0 link"   "$CLANG" -O2 build/nurlc_py.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS -o build/nurlc_py
+step "stage0 link"   "$CLANG" -O2 build/nurlc_py.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS -o build/nurlc_py
 
 step "stage1 ir"     bash -c './build/nurlc_py compiler/nurlc.nu > build/nurlc_self.ll'
-step "stage1 link"   "$CLANG" -O2 build/nurlc_self.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS -o build/nurlc_self
+step "stage1 link"   "$CLANG" -O2 build/nurlc_self.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS -o build/nurlc_self
 
 # Informational: python vs nurlc_py IR (not fatal).
 if cmp -s build/nurlc_py.ll build/nurlc_self.ll; then
@@ -109,7 +127,7 @@ else
 fi
 
 step "stage2 ir"     bash -c './build/nurlc_self compiler/nurlc.nu > build/nurlc_self2.ll'
-step "stage2 link"   "$CLANG" -O2 build/nurlc_self2.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS -o build/nurlc_self2
+step "stage2 link"   "$CLANG" -O2 build/nurlc_self2.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS -o build/nurlc_self2
 
 # Fixed-point: nurlc_self must match nurlc_self2.
 if ! cmp -s build/nurlc_self.ll build/nurlc_self2.ll; then

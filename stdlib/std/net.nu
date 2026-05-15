@@ -48,6 +48,10 @@
 //   NetClosed       6   peer reset / clean EOF on read
 //   NetTimeout      7   EAGAIN/EWOULDBLOCK after SO_*TIMEO
 //   NetOther        8   anything else / unsupported target (WASI)
+//   NetTlsCtxInit   9   SSL_CTX_new failed OR build lacks openssl
+//   NetTlsCertLoad  10  SSL_CTX_use_certificate_chain_file failed
+//   NetTlsKeyLoad   11  SSL_CTX_use_PrivateKey_file / check_private_key failed
+//   NetTlsHandshake 12  SSL_accept failed on a freshly-accepted conn
 //
 // Platform notes:
 //
@@ -77,6 +81,10 @@ $ `stdlib/core/errors.nu`
     NetClosed
     NetTimeout
     NetOther
+    NetTlsCtxInit
+    NetTlsCertLoad
+    NetTlsKeyLoad
+    NetTlsHandshake
 }
 
 // Listener and connection are intentionally distinct types — the
@@ -96,6 +104,10 @@ $ `stdlib/core/errors.nu`
         NetClosed → `NetClosed`
         NetTimeout → `NetTimeout`
         NetOther → `NetOther`
+        NetTlsCtxInit → `NetTlsCtxInit`
+        NetTlsCertLoad → `NetTlsCertLoad`
+        NetTlsKeyLoad → `NetTlsKeyLoad`
+        NetTlsHandshake → `NetTlsHandshake`
     }
 }
 
@@ -111,6 +123,10 @@ $ `stdlib/core/errors.nu`
     ? == ek 5 { ^ # NetErr NetWrite } {}
     ? == ek 6 { ^ # NetErr NetClosed } {}
     ? == ek 7 { ^ # NetErr NetTimeout } {}
+    ? == ek 9 { ^ # NetErr NetTlsCtxInit } {}
+    ? == ek 10 { ^ # NetErr NetTlsCertLoad } {}
+    ? == ek 11 { ^ # NetErr NetTlsKeyLoad } {}
+    ? == ek 12 { ^ # NetErr NetTlsHandshake } {}
     ^ # NetErr NetOther
 }
 
@@ -133,6 +149,34 @@ $ `stdlib/core/errors.nu`
 // Convenience: same as tcp_listen_with_backlog with backlog = 128.
 @ tcp_listen s host i port → !TcpListener NetErr {
     ^ ( tcp_listen_with_backlog host port 128 )
+}
+
+// TLS listener — binds and starts listening exactly like tcp_listen,
+// then configures an SSL_CTX from the given PEM cert + private key
+// files. On accept the per-conn SSL handshake runs transparently;
+// the returned TcpConn is polymorphic — `tcp_read_chunk` /
+// `tcp_write_all` dispatch via libssl underneath, so HttpServer
+// (and any other code that consumed TcpConn) gets HTTPS without
+// changes. Cert and key are loaded once at listener creation; v1
+// has no SNI, no ALPN, no client-cert-auth, no live cert reload.
+//
+// Build-time dependency: openssl detected via pkg-config in build.sh.
+// When absent, every call here returns NetTlsCtxInit unconditionally.
+@ tcp_listen_tls_with_backlog s host i port i backlog s cert_path s key_path → !TcpListener NetErr {
+    : i raw ( nurl_tcp_listen_tls host port backlog cert_path key_path )
+    ? == raw 0 { ^ @ !TcpListener NetErr { F # NetErr NetOther } } {}
+    : i ek ( nurl_tcp_err_kind raw )
+    ? != ek 0 {
+        ( nurl_tcp_close raw )
+        ^ @ !TcpListener NetErr { F ( __net_err_of ek ) }
+    } {}
+    : s rp # s raw
+    : TcpListener l @ TcpListener { rp }
+    ^ @ !TcpListener NetErr { T l }
+}
+
+@ tcp_listen_tls s host i port s cert_path s key_path → !TcpListener NetErr {
+    ^ ( tcp_listen_tls_with_backlog host port 128 cert_path key_path )
 }
 
 @ tcp_close_listener TcpListener l → v {

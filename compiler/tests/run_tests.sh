@@ -60,6 +60,18 @@ if [[ -f "$ROOT_DIR/stdlib/runtime.curl" ]]; then
     fi
 fi
 
+# Link -lssl -lcrypto when build.sh detected openssl. Same model — the
+# TLS symbols compile in unconditionally; without the link flags the
+# runtime would fail at link time the first time anything calls them.
+OPENSSL_LIBS=""
+if [[ -f "$ROOT_DIR/stdlib/runtime.openssl" ]]; then
+    if command -v pkg-config &>/dev/null && pkg-config --exists openssl 2>/dev/null; then
+        OPENSSL_LIBS=$(pkg-config --libs openssl)
+    else
+        OPENSSL_LIBS="-lssl -lcrypto"
+    fi
+fi
+
 # HTTP tests require network egress, so they're opt-in. Default skips.
 ENABLE_HTTP_TESTS="${NURL_HTTP_TESTS:-0}"
 
@@ -131,6 +143,7 @@ for src in "${tests[@]}"; do
           && "$name" != "http_server_seq" \
           && "$name" != "http_server_pipelined" \
           && "$name" != "http_server_limits" \
+          && "$name" != "http_server_tls" \
           && "$ENABLE_HTTP_TESTS" != "1" ]]; then
         continue
     fi
@@ -139,7 +152,8 @@ for src in "${tests[@]}"; do
     # treatment as net_loopback. Skip when the gate is off.
     if [[ ( "$name" == "http_server_seq" \
             || "$name" == "http_server_pipelined" \
-            || "$name" == "http_server_limits" ) \
+            || "$name" == "http_server_limits" \
+            || "$name" == "http_server_tls" ) \
           && "$ENABLE_NET_TESTS" != "1" ]]; then
         continue
     fi
@@ -186,7 +200,7 @@ for src in "${tests[@]}"; do
     fi
 
     # shellcheck disable=SC2086
-    if ! "$CLANG" -O2 "$ll" "$RUNTIME" -lm -lpthread $CURL_LIBS -o "$bin" 2>/dev/null; then
+    if ! "$CLANG" -O2 "$ll" "$RUNTIME" -lm -lpthread $CURL_LIBS $OPENSSL_LIBS -o "$bin" 2>/dev/null; then
         echo "LINK FAIL" >> "$RESULTS"
         echo >> "$RESULTS"
         continue

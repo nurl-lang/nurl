@@ -6269,6 +6269,7 @@
     ( emit `declare i64  @nurl_write_file_bytes(i8*, i8*, i64, i8*)` )
     ( emit `declare i64  @nurl_last_bytes_len()` )
     ( emit `declare i64  @nurl_tcp_listen(i8*, i64, i64)` )
+    ( emit `declare i64  @nurl_tcp_listen_tls(i8*, i64, i64, i8*, i8*)` )
     ( emit `declare i64  @nurl_tcp_accept(i64)` )
     ( emit `declare i64  @nurl_tcp_read(i64, i8*, i64)` )
     ( emit `declare i64  @nurl_tcp_write(i64, i8*, i64)` )
@@ -6514,6 +6515,7 @@
     // so it is intentionally NOT __ret_owned-marked (caller copies via
     // string_from when a long-lived String is required).
     ( nurl_sym_def syms `nurl_tcp_listen` `i64` )
+    ( nurl_sym_def syms `nurl_tcp_listen_tls` `i64` )
     ( nurl_sym_def syms `nurl_tcp_accept` `i64` )
     ( nurl_sym_def syms `nurl_tcp_read` `i64` )
     ( nurl_sym_def syms `nurl_tcp_write` `i64` )

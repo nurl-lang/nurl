@@ -4391,15 +4391,27 @@ const char* nurl_rand_bytes_hex(long long n) {
  *   - TLS: handled by Phase 9 — left to nginx/caddy in front for v1.
  */
 
-#define NURL_NET_ERR_OK         0
-#define NURL_NET_ERR_BIND       1
-#define NURL_NET_ERR_ADDRINUSE  2
-#define NURL_NET_ERR_ACCEPT     3
-#define NURL_NET_ERR_READ       4
-#define NURL_NET_ERR_WRITE      5
-#define NURL_NET_ERR_CLOSED     6
-#define NURL_NET_ERR_TIMEOUT    7
-#define NURL_NET_ERR_OTHER      8
+#define NURL_NET_ERR_OK             0
+#define NURL_NET_ERR_BIND           1
+#define NURL_NET_ERR_ADDRINUSE      2
+#define NURL_NET_ERR_ACCEPT         3
+#define NURL_NET_ERR_READ           4
+#define NURL_NET_ERR_WRITE          5
+#define NURL_NET_ERR_CLOSED         6
+#define NURL_NET_ERR_TIMEOUT        7
+#define NURL_NET_ERR_OTHER          8
+/* TLS-specific errors (Phase 9). Only meaningful when NURL_HAVE_OPENSSL
+ * was defined at compile time — otherwise tcp_listen_tls returns
+ * TLS_CTX_INIT unconditionally. */
+#define NURL_NET_ERR_TLS_CTX_INIT   9
+#define NURL_NET_ERR_TLS_CERT_LOAD  10
+#define NURL_NET_ERR_TLS_KEY_LOAD   11
+#define NURL_NET_ERR_TLS_HANDSHAKE  12
+
+#ifdef NURL_HAVE_OPENSSL
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#endif
 
 #define NURL_TCP_KIND_LISTENER  0
 #define NURL_TCP_KIND_CONN      1
@@ -4427,6 +4439,18 @@ typedef struct NurlTcp {
     long long     err_kind;
     int           kind;     /* NURL_TCP_KIND_* */
     char         *peer;     /* "ip:port" or "" — owned heap copy */
+#ifdef NURL_HAVE_OPENSSL
+    /* TLS state. Non-NULL fields turn this handle into a TLS-aware
+     * variant — read/write/close dispatch via libssl in that case.
+     *  * ssl_ctx is set on a LISTENER created via nurl_tcp_listen_tls;
+     *    on accept(), a per-conn SSL is spun up from this context and
+     *    stored in the new conn handle's `ssl` field.
+     *  * ssl is set on a CONN whose handshake completed; nurl_tcp_read
+     *    / nurl_tcp_write then call SSL_read / SSL_write instead of
+     *    recv / send. SSL_shutdown + SSL_free fire on close. */
+    SSL_CTX      *ssl_ctx;
+    SSL          *ssl;
+#endif
 } NurlTcp;
 
 /* Map host errno → NetErr tag for a generic operation. Specific
@@ -4608,7 +4632,96 @@ long long nurl_tcp_accept(long long listener) {
     c->fd       = fd;
     c->err_kind = NURL_NET_ERR_OK;
     c->peer     = nurl__net_format_peer(&peer);
+#ifdef NURL_HAVE_OPENSSL
+    /* If the listener carries an SSL_CTX (i.e. came from
+     * nurl_tcp_listen_tls), spin up a per-conn SSL and run the server-
+     * side handshake before handing the conn back. A handshake failure
+     * is reported as TLS_HANDSHAKE; the TCP fd is closed so we don't
+     * leak a half-open peer. */
+    if (l->ssl_ctx) {
+        SSL *s = SSL_new(l->ssl_ctx);
+        if (!s) {
+            nurl_close_sock(c->fd);
+            c->fd = NURL_INVALID_SOCK;
+            c->err_kind = NURL_NET_ERR_TLS_HANDSHAKE;
+            return (long long)(uintptr_t)c;
+        }
+        if (SSL_set_fd(s, (int)c->fd) != 1) {
+            SSL_free(s);
+            nurl_close_sock(c->fd);
+            c->fd = NURL_INVALID_SOCK;
+            c->err_kind = NURL_NET_ERR_TLS_HANDSHAKE;
+            return (long long)(uintptr_t)c;
+        }
+        int rv = SSL_accept(s);
+        if (rv != 1) {
+            SSL_free(s);
+            nurl_close_sock(c->fd);
+            c->fd = NURL_INVALID_SOCK;
+            c->err_kind = NURL_NET_ERR_TLS_HANDSHAKE;
+            return (long long)(uintptr_t)c;
+        }
+        c->ssl = s;
+    }
+#endif
     return (long long)(uintptr_t)c;
+}
+
+/* TLS listener — POSIX/Win32 path. Composes the existing socket
+ * listen() with an SSL_CTX configured against the given cert + key
+ * files. On any failure (ctx create, cert load, key load, listen), we
+ * still return a valid handle so the caller can inspect err_kind.
+ * The underlying socket fd is closed if the TLS phase fails after
+ * listen() succeeded, so no FD leak. */
+long long nurl_tcp_listen_tls(const char *host, long long port,
+                              long long backlog,
+                              const char *cert_path, const char *key_path) {
+#ifndef NURL_HAVE_OPENSSL
+    (void)host; (void)port; (void)backlog;
+    (void)cert_path; (void)key_path;
+    NurlTcp *h = nurl__tcp_new_handle(NURL_TCP_KIND_LISTENER);
+    if (!h) return 0;
+    h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+    return (long long)(uintptr_t)h;
+#else
+    long long lh = nurl_tcp_listen(host, port, backlog);
+    NurlTcp *h = (NurlTcp*)(uintptr_t)lh;
+    if (!h || h->err_kind != NURL_NET_ERR_OK) return lh;
+    /* TLS 1.2+ server context. SSL_CTX_set_min_proto_version is the
+     * canonical knob since OpenSSL 1.1.0; we ignore its return for
+     * brevity (only fails on truly broken OpenSSL builds). */
+    SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
+    if (!ctx) {
+        nurl_close_sock(h->fd);
+        h->fd = NURL_INVALID_SOCK;
+        h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+        return lh;
+    }
+    SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+    if (SSL_CTX_use_certificate_chain_file(ctx, cert_path) != 1) {
+        SSL_CTX_free(ctx);
+        nurl_close_sock(h->fd);
+        h->fd = NURL_INVALID_SOCK;
+        h->err_kind = NURL_NET_ERR_TLS_CERT_LOAD;
+        return lh;
+    }
+    if (SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) != 1) {
+        SSL_CTX_free(ctx);
+        nurl_close_sock(h->fd);
+        h->fd = NURL_INVALID_SOCK;
+        h->err_kind = NURL_NET_ERR_TLS_KEY_LOAD;
+        return lh;
+    }
+    if (SSL_CTX_check_private_key(ctx) != 1) {
+        SSL_CTX_free(ctx);
+        nurl_close_sock(h->fd);
+        h->fd = NURL_INVALID_SOCK;
+        h->err_kind = NURL_NET_ERR_TLS_KEY_LOAD;
+        return lh;
+    }
+    h->ssl_ctx = ctx;
+    return lh;
+#endif
 }
 
 long long nurl_tcp_read(long long handle, const char *buf, long long n) {
@@ -4623,6 +4736,27 @@ long long nurl_tcp_read(long long handle, const char *buf, long long n) {
         h->err_kind = NURL_NET_ERR_READ;
         return -1;
     }
+#ifdef NURL_HAVE_OPENSSL
+    if (h->ssl) {
+        int max = n > 0x40000000 ? 0x40000000 : (int)n;
+        int rd = SSL_read(h->ssl, (void*)buf, max);
+        if (rd > 0) { h->err_kind = NURL_NET_ERR_OK; return (long long)rd; }
+        int err = SSL_get_error(h->ssl, rd);
+        if (err == SSL_ERROR_ZERO_RETURN) {
+            /* clean TLS close_notify */
+            return 0;
+        }
+        /* WANT_READ / WANT_WRITE after a blocking SSL_read with a fd
+         * that has SO_RCVTIMEO set surfaces here as well; map to
+         * timeout so the keep-alive loop's idle-timeout path triggers. */
+        if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+            h->err_kind = NURL_NET_ERR_TIMEOUT;
+            return -1;
+        }
+        h->err_kind = NURL_NET_ERR_READ;
+        return -1;
+    }
+#endif
 #ifdef _WIN32
     int rd = recv(h->fd, (char*)buf, (n > 0x40000000 ? 0x40000000 : (int)n), 0);
 #else
@@ -4660,6 +4794,23 @@ long long nurl_tcp_write(long long handle, const char *buf, long long n) {
         h->err_kind = NURL_NET_ERR_WRITE;
         return -1;
     }
+#ifdef NURL_HAVE_OPENSSL
+    if (h->ssl) {
+        long long total = 0;
+        while (total < n) {
+            long long want = n - total;
+            int chunk = (int)(want > 0x40000000 ? 0x40000000 : want);
+            int wn = SSL_write(h->ssl, buf + total, chunk);
+            if (wn <= 0) {
+                h->err_kind = NURL_NET_ERR_WRITE;
+                return -1;
+            }
+            total += (long long)wn;
+        }
+        h->err_kind = NURL_NET_ERR_OK;
+        return total;
+    }
+#endif
     long long total = 0;
     while (total < n) {
         long long want = n - total;
@@ -4695,6 +4846,23 @@ long long nurl_tcp_write(long long handle, const char *buf, long long n) {
 void nurl_tcp_close(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return;
+#ifdef NURL_HAVE_OPENSSL
+    /* Per-conn TLS session: best-effort SSL_shutdown (single one-way
+     * close_notify; we deliberately skip the bidirectional close to
+     * keep the worker fast). SSL_free does not close the underlying
+     * fd — we still nurl_close_sock below. */
+    if (h->ssl) {
+        SSL_shutdown(h->ssl);
+        SSL_free(h->ssl);
+        h->ssl = NULL;
+    }
+    /* Per-listener TLS context: drop the SSL_CTX. New conns can no
+     * longer be wrapped from this listener. */
+    if (h->ssl_ctx) {
+        SSL_CTX_free(h->ssl_ctx);
+        h->ssl_ctx = NULL;
+    }
+#endif
     if (h->fd != NURL_INVALID_SOCK) {
         nurl_close_sock(h->fd);
         h->fd = NURL_INVALID_SOCK;
@@ -4759,6 +4927,11 @@ void nurl_tcp_set_timeout(long long handle, long long ms) {
 
 long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
     (void)host; (void)port; (void)backlog;
+    return 0;
+}
+long long nurl_tcp_listen_tls(const char *host, long long port, long long backlog,
+                              const char *cert, const char *key) {
+    (void)host; (void)port; (void)backlog; (void)cert; (void)key;
     return 0;
 }
 long long nurl_tcp_accept(long long listener) { (void)listener; return 0; }
