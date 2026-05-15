@@ -10,6 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **HTTP server Phase 8 closed out.** Two production-hardening items
+  shipped:
+  - *Configurable parser limits* via new `HttpLimits { i head_max_bytes,
+    i header_max_count, i body_default_max }` struct + `http_default_limits`
+    ctor in `stdlib/ext/http_request.nu`. `parse_request_head_with` /
+    `__parse_headers` / `__finish_body` plumbed; `HttpServer` extended
+    with an `HttpLimits limits` field; new `server_new_complete`
+    constructor exposes every knob. Existing `server_new` / `_with_timeout`
+    / `_full` keep v0.3.0 defaults so every existing call site builds
+    unchanged.
+  - *Per-request total timeout* via new `HttpServer.request_total_timeout_ms`
+    field (0 = disabled). `__serve_keepalive_loop` snapshots `now_ms`
+    after each head parse; if the handler runs over budget, its response
+    is dropped and a stock 504 sent instead with forced `Connection:
+    close`. Enforcement is post-handler only (NURL has no thread-
+    cancellation primitives) — per-conn idle timeout still covers slow
+    reads.
+
+  Acceptance: `compiler/tests/http_server_limits.nu` (NURL_NET_TESTS=1).
+  Mirror call site in `stdlib/ext/http_proxy.nu` uses
+  `http_default_limits`.
+
 * **Compiler warnings for `docs/GOTCHAS.md` items 3 + 8.** Two
   non-fatal `warning:` diagnostics now surface the two soundness-
   adjacent foot-guns flagged by the v0.3.0 external review:

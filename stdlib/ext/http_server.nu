@@ -96,6 +96,7 @@
 $ `stdlib/std/net.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/thread.nu`
+$ `stdlib/std/time.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/http.nu`
@@ -103,12 +104,31 @@ $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 
 // ── HttpServer struct + lifecycle ─────────────────────────────────────
+//
+// Six knobs at v2.1+:
+//   * idle_timeout_ms          — per-conn recv deadline. 0 = OS default.
+//   * max_keepalive_requests   — per-conn request reuse cap. 0 = no keep-alive.
+//   * limits                   — head / header-count / body byte caps
+//                                (consulted by parse_request_head_with /
+//                                 __finish_body's body-byte loop).
+//   * request_total_timeout_ms — wall-clock budget for a single request,
+//                                measured from "head parsed" to "response
+//                                serialised". On overrun the handler's
+//                                response is dropped, a stock 504 is sent
+//                                instead, and the connection is closed.
+//                                0 = disabled. Cannot interrupt a slow
+//                                handler mid-flight (NURL has no thread
+//                                cancellation primitives) — enforcement is
+//                                post-handler only; the per-conn idle
+//                                timeout covers slow reads.
 
 : HttpServer {
     TcpListener listener
     ( @ HttpResponse HttpRequest ) handler
     i idle_timeout_ms
     i max_keepalive_requests
+    HttpLimits limits
+    i request_total_timeout_ms
 }
 
 // Default 30 s recv/send timeout per accepted connection — slowloris
@@ -125,16 +145,36 @@ $ `stdlib/ext/http_response.nu`
 // matching pre-Phase-5.4 behaviour).
 @ server_default_max_keepalive_requests → i { ^ 1000 }
 
+// Per-request total timeout default. 0 = disabled (matches pre-Phase-8
+// behaviour; the per-conn idle timeout still bounds slow reads).
+@ server_default_request_total_timeout_ms → i { ^ 0 }
+
 @ server_new TcpListener listener ( @ HttpResponse HttpRequest ) handler → HttpServer {
-    ^ @ HttpServer { listener handler ( server_default_idle_timeout_ms ) ( server_default_max_keepalive_requests ) }
+    ^ @ HttpServer { listener handler
+        ( server_default_idle_timeout_ms )
+        ( server_default_max_keepalive_requests )
+        ( http_default_limits )
+        ( server_default_request_total_timeout_ms ) }
 }
 
 @ server_new_with_timeout TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms → HttpServer {
-    ^ @ HttpServer { listener handler idle_timeout_ms ( server_default_max_keepalive_requests ) }
+    ^ @ HttpServer { listener handler idle_timeout_ms
+        ( server_default_max_keepalive_requests )
+        ( http_default_limits )
+        ( server_default_request_total_timeout_ms ) }
 }
 
 @ server_new_full TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms i max_keepalive_requests → HttpServer {
-    ^ @ HttpServer { listener handler idle_timeout_ms max_keepalive_requests }
+    ^ @ HttpServer { listener handler idle_timeout_ms max_keepalive_requests
+        ( http_default_limits )
+        ( server_default_request_total_timeout_ms ) }
+}
+
+// `server_new_complete` — every knob explicit. Use when overriding
+// parser limits and/or per-request total timeout. See the struct comment
+// for what each field controls.
+@ server_new_complete TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms i max_keepalive_requests HttpLimits limits i request_total_timeout_ms → HttpServer {
+    ^ @ HttpServer { listener handler idle_timeout_ms max_keepalive_requests limits request_total_timeout_ms }
 }
 
 @ server_stop HttpServer s → v {
@@ -188,7 +228,7 @@ $ `stdlib/ext/http_response.nu`
 // On socket error or unrecoverable parse error: returns a ParsedHead
 // with .ok=F; carry's state is unspecified (caller is about to close).
 
-@ __read_request_head TcpConn conn ( Vec u ) carry → ParsedHead {
+@ __read_request_head TcpConn conn ( Vec u ) carry HttpLimits limits → ParsedHead {
     : ~ ParsedHead result ( __parsed_head_err # HttpReqErr HttpReqIo )
     : ~ b done F
 
@@ -196,7 +236,7 @@ $ `stdlib/ext/http_response.nu`
         // First try parsing whatever's already in carry (might be the
         // pipelined successor's full head from the previous request's
         // read).
-        : ParsedHead ph ( parse_request_head carry )
+        : ParsedHead ph ( parse_request_head_with carry limits )
         ? . ph ok {
             : i used . ph consumed
             ( __vec_drop_front_u carry used )
@@ -249,7 +289,7 @@ $ `stdlib/ext/http_response.nu`
 //
 // Returns T on success, F on transport / format error.
 
-@ __finish_body TcpConn conn HttpRequest req ( Vec u ) carry → b {
+@ __finish_body TcpConn conn HttpRequest req ( Vec u ) carry i body_max → b {
     : ?String cl ( header_get . req headers `Content-Length` )
     ?? cl {
         T clv → {
@@ -258,6 +298,7 @@ $ `stdlib/ext/http_response.nu`
             ?? nr {
                 T clen → {
                     ? < clen 0 { ^ F } {}
+                    ? > clen body_max { ^ F } {}
                     // Drain carry's front into req.body, up to clen bytes.
                     : i avail ( vec_len [u] carry )
                     : i take ? < clen avail clen avail
@@ -431,6 +472,9 @@ $ `stdlib/ext/http_response.nu`
 
 @ __serve_keepalive_loop HttpServer s TcpConn conn → v {
     : i max_req . s max_keepalive_requests
+    : HttpLimits lim . s limits
+    : i body_max . lim body_default_max
+    : i req_timeout_ms . s request_total_timeout_ms
     // One connection-level carry buffer, owned here, freed at the
     // bottom. Survives across keep-alive iterations so a pipelined
     // successor's bytes (or any leftover past a request's body) are
@@ -440,19 +484,40 @@ $ `stdlib/ext/http_response.nu`
     : ~ b done F
     : ~ i n_served 0
     ~ ! done {
-        : ParsedHead ph ( __read_request_head conn carry )
+        : ParsedHead ph ( __read_request_head conn carry lim )
         ? . ph ok {
+            // Snapshot the request-start wall-clock right after the head
+            // is parsed. If the handler + body-completion exceed
+            // `request_total_timeout_ms`, we drop the handler's response
+            // and emit a stock 504 instead. The check is post-handler
+            // only — NURL has no thread-cancellation primitives, so a
+            // genuinely runaway handler runs to completion regardless.
+            : i req_start_ms ? > req_timeout_ms 0 ( now_ms ) 0
             : HttpRequest req . ph head
-            : b body_ok ( __finish_body conn req carry )
+            : b body_ok ( __finish_body conn req carry body_max )
             ? body_ok {
                 : b req_close ( __request_says_close req )
                 : ( @ HttpResponse HttpRequest ) f . s handler
                 : HttpResponse resp ( f req )
-                : b resp_close ( __response_says_close resp )
+                // Per-request total timeout enforcement: free the
+                // handler's response and substitute 504 if we blew the
+                // budget. `should_close` forces `Connection: close` so
+                // the client doesn't reuse a possibly-corrupted state.
+                : ~ HttpResponse final_resp resp
+                : ~ b timed_out F
+                ? > req_timeout_ms 0 {
+                    : i elapsed - ( now_ms ) req_start_ms
+                    ? > elapsed req_timeout_ms {
+                        ( http_response_free resp )
+                        = final_resp ( response_text 504 `request total-timeout exceeded\n` )
+                        = timed_out T
+                    } {}
+                } {}
+                : b resp_close ( __response_says_close final_resp )
                 = n_served + n_served 1
                 : b at_cap ? > max_req 0 >= n_served max_req T
-                : b should_close | | req_close resp_close at_cap
-                : !v NetErr wr ( __write_response conn resp should_close )
+                : b should_close | | | req_close resp_close at_cap timed_out
+                : !v NetErr wr ( __write_response conn final_resp should_close )
                 ( request_free req )
                 ?? wr {
                     T _ → {

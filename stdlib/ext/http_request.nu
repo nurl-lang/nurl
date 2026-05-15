@@ -277,12 +277,41 @@ $ `stdlib/ext/http.nu`
 }
 
 // ── Limits ────────────────────────────────────────────────────────────
+//
+// Three knobs that bound a single request's resource consumption.
+// Through Phase 8.0 these were hard-coded constants in this file; the
+// HttpLimits struct lets each `HttpServer` carry its own override set
+// while keeping the no-arg legacy entry points working unchanged.
+//
+//   * `head_max_bytes` — request line + headers (everything before
+//     the empty CRLF). Anything past the limit returns HttpReqTooLarge
+//     → server emits 413. Slowloris defence works hand in hand with
+//     the per-conn idle timeout (`tcp_set_timeout`).
+//   * `header_max_count` — per-request header line cap. Same 413 on
+//     overflow.
+//   * `body_default_max` — Content-Length / chunked body upper bound
+//     after the head is parsed. Defaults match the v0.3.0 hardcoded
+//     constants so existing callers behave identically.
+
+: HttpLimits {
+    i head_max_bytes
+    i header_max_count
+    i body_default_max
+}
 
 @ http_req_head_max_bytes → i { ^ 8192 }
 
 @ http_req_header_max_count → i { ^ 100 }
 
 @ http_req_body_default_max → i { ^ 10485760 }
+
+@ http_default_limits → HttpLimits {
+    ^ @ HttpLimits {
+        ( http_req_head_max_bytes )
+        ( http_req_header_max_count )
+        ( http_req_body_default_max )
+    }
+}
 
 // ── Headers helpers ───────────────────────────────────────────────────
 
@@ -578,7 +607,7 @@ $ `stdlib/ext/http.nu`
     i status
 }
 
-@ __parse_headers ( Vec u ) buf i from i head_end → ParsedHeaders {
+@ __parse_headers ( Vec u ) buf i from i head_end i header_max → ParsedHeaders {
     : ( Vec Header ) hs ( vec_new [Header] )
     : ~ i pos from
     : ~ i status 1  // 1 = ok, 0 = malformed, 2 = too-large
@@ -595,7 +624,7 @@ $ `stdlib/ext/http.nu`
                         // trim trailing ws before CRLF.
                         : i v_start ( __skip_ows buf + name_end 1 nl )
                         : i v_end ( __trim_ows_end buf v_start nl )
-                        ? > ( vec_len [Header] hs ) ( http_req_header_max_count ) {
+                        ? > ( vec_len [Header] hs ) header_max {
                             = status 2 = done T
                         } {
                             : String name ( __bsubstr buf pos name_end )
@@ -637,15 +666,21 @@ $ `stdlib/ext/http.nu`
 // ── parse_request_head ────────────────────────────────────────────────
 
 @ parse_request_head ( Vec u ) buf → ParsedHead {
+    ^ ( parse_request_head_with buf ( http_default_limits ) )
+}
+
+@ parse_request_head_with ( Vec u ) buf HttpLimits limits → ParsedHead {
+    : i head_max . limits head_max_bytes
+    : i header_max . limits header_max_count
     : i blen ( vec_len [u] buf )
     : i head_end ( __find_head_end buf 0 )
     ? < head_end 0 {
-        ? > blen ( http_req_head_max_bytes ) {
+        ? > blen head_max {
             ^ ( __parsed_head_err # HttpReqErr HttpReqTooLarge )
         } {}
         ^ ( __parsed_head_err # HttpReqErr HttpReqIncomplete )
     } {}
-    ? > + head_end 4 ( http_req_head_max_bytes ) {
+    ? > + head_end 4 head_max {
         ^ ( __parsed_head_err # HttpReqErr HttpReqTooLarge )
     } {}
 
@@ -672,7 +707,7 @@ $ `stdlib/ext/http.nu`
     // \r\n\r\n — i.e., the trailing CRLF of the last header line. The
     // header parser scans up to (but not including) the empty CRLF,
     // which starts at `head_end + 2`.
-    : ParsedHeaders hr ( __parse_headers buf + line_end 2 + head_end 2 )
+    : ParsedHeaders hr ( __parse_headers buf + line_end 2 + head_end 2 header_max )
     : i hstatus . hr status
     ? != hstatus 1 {
         ( __req_line_parts_free rl )

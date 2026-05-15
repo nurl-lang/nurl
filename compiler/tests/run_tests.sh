@@ -130,13 +130,16 @@ for src in "${tests[@]}"; do
           && "$name" != "http_proxy" \
           && "$name" != "http_server_seq" \
           && "$name" != "http_server_pipelined" \
+          && "$name" != "http_server_limits" \
           && "$ENABLE_HTTP_TESTS" != "1" ]]; then
         continue
     fi
 
-    # http_server_seq + http_server_pipelined behave like net_loopback
-    # tests — gated by NURL_NET_TESTS=1. Skip when the gate is off.
-    if [[ ( "$name" == "http_server_seq" || "$name" == "http_server_pipelined" ) \
+    # Live-socket http_server tests gated by NURL_NET_TESTS=1 — same
+    # treatment as net_loopback. Skip when the gate is off.
+    if [[ ( "$name" == "http_server_seq" \
+            || "$name" == "http_server_pipelined" \
+            || "$name" == "http_server_limits" ) \
           && "$ENABLE_NET_TESTS" != "1" ]]; then
         continue
     fi

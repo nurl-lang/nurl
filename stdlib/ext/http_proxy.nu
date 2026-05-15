@@ -374,11 +374,16 @@ $ `stdlib/ext/http_server.nu`
                 // __read_request_head + __finish_body still take a carry
                 // Vec[u] — pipelining-correct head/body framing applies
                 // regardless of whether we serve more than one request.
+                // Limits: proxy uses the stdlib defaults; per-request
+                // total timeout isn't enforced here (proxy is dominated
+                // by upstream latency, which `ProxyOpts.timeout_ms`
+                // already bounds).
                 : ( Vec u ) carry ( vec_with_cap [u] 4096 )
-                : ParsedHead ph ( __read_request_head conn carry )
+                : HttpLimits lim ( http_default_limits )
+                : ParsedHead ph ( __read_request_head conn carry lim )
                 ? . ph ok {
                     : HttpRequest req . ph head
-                    : b body_ok ( __finish_body conn req carry )
+                    : b body_ok ( __finish_body conn req carry . lim body_default_max )
                     ? body_ok {
                         : String url ( __build_upstream_url upstream_base req )
                         : !v ProxyErr pr ( proxy_stream_to_conn_with conn req
