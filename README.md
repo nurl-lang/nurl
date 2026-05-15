@@ -725,8 +725,8 @@ defaults, etc.) see [`docs/GOTCHAS.md`](docs/GOTCHAS.md).
 | Limitation | Workaround |
 |---|---|
 | `import_decl` is a static inline-include (like `#include`) — the imported file is compiled into the same LLVM module | Avoid importing files that define `main`; avoid circular imports |
-| Import alias (`` $ `path` alias ``) is parsed but ignored — all imported names land in the global namespace | Prefix imported names manually (e.g. `math_sin`, `math_cos`) |
-| No duplicate-include guard — importing the same file twice emits duplicate definitions | Import each file at most once |
+| Import alias (`` $ `path` alias ``) only rewrites top-level `@`-functions to `alias__name`; types, enum variants, FFI decls, traits, impls, and consts stay in the global namespace | Prefix the unaliased decls manually if collision is a risk |
+| `$`-import dedup is keyed on the path string with a small normalisation (leading `./` is stripped). Symlink-equivalent paths still collide as separate imports | Stick to the project-root-relative form (`stdlib/foo.nu`, no `./` prefix). Use `realpath`-true canonicalisation is on the roadmap if a real case needs it |
 
 ### Grammar
 
@@ -734,7 +734,7 @@ defaults, etc.) see [`docs/GOTCHAS.md`](docs/GOTCHAS.md).
 |---|---|
 | Negative integer literals cannot be written directly — `-1` tokenises as `MINUS INT(1)` | Use `~ 0` (bitwise complement) for `-1`; compute negatives as `- 0 n` |
 | No automatic memory management — heap-allocated values (slice literals, `strcat` results, etc.) are not freed | Call `free` via FFI when needed; keep values on the stack where possible |
-| Import is inline-include only: no namespaces, no duplicate guard, alias parsed but ignored | Import each file at most once; prefix names manually |
+| Import is inline-include only: no namespaces; alias rewrites only top-level `@`-functions, not types/enums/FFI/traits. Path-string dedup with leading `./` normalisation is in place — same file imported twice (or through a diamond) emits one set of decls | Stick to a single canonical import path per file; prefix names manually for types/enums when collisions matter |
 
 ---
 

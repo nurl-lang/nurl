@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+* **`$`-import dedup keys are now canonicalised.** Pre-existing dedup
+  tables in three compiler passes (`scan_generic_structs`,
+  `scan_fn_sigs`, `gen_import_decl`) keyed on the raw path string, so
+  `$ \`stdlib/x.nu\`` and `$ \`./stdlib/x.nu\`` (same physical file,
+  different strings) defeated the dedup and produced `redefinition of
+  type` errors at link. New `__norm_import_path` helper strips leading
+  `./` segments at every `$`-path read site. Symlink-equivalent paths
+  still collide as separate imports (no realpath FFI yet —
+  intentionally deferred). Acceptance:
+  `compiler/tests/import_dedup.nu`. README "Known Limitations" updated
+  to drop the stale "no duplicate-include guard" / "alias parsed but
+  ignored" claims (alias DOES rewrite top-level `@`-fns; dedup HAS
+  worked for exact-string matches since the original `$`-import
+  implementation).
+
 * **HTTP server pipelining correctness.** The keep-alive request loop
   previously copied all bytes past a parsed head wholesale into
   `req.body`, which silently corrupted req1 and dropped req2 entirely

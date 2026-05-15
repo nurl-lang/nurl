@@ -5894,7 +5894,7 @@
 
 @ gen_import_decl i lex i syms i cg → v {
     ( nurl_lex_advance lex )  // consume '$'
-    : s path ( nurl_lex_val lex )
+    : s path ( __norm_import_path ( nurl_lex_val lex ) )
     ( nurl_lex_advance lex )  // consume path STR
     : s alias ``
     ? ( is_ident_tok ( nurl_lex_type lex ) )
@@ -6187,6 +6187,27 @@
 }
 
 // ── Pre-register runtime functions returning i8* ──────────────────
+
+// Normalise an import-path string so the dedup logic treats `./x` and
+// `x` as the same file. Strips one or more leading "./" segments. We
+// deliberately do NOT call realpath — that would require a runtime FFI
+// and exposes symlink / cwd quirks that are unlikely to matter in
+// practice. The 99% case is a user typing `./stdlib/foo.nu` once and
+// `stdlib/foo.nu` elsewhere in the same project; this catches it.
+// Called at every `$`-import path read site (scan_generic_structs,
+// scan_fn_sigs, gen_import_decl) so all three dedup tables key on the
+// same canonical form.
+@ __norm_import_path s path → s {
+    : ~ s cur path
+    : ~ b done F
+    ~ ! done {
+        : i n ( nurl_str_len cur )
+        ? & >= n 2 & == ( nurl_str_get cur 0 ) 46 == ( nurl_str_get cur 1 ) 47
+        { = cur ( nurl_str_slice cur 2 - n 2 ) }
+        { = done T }
+    }
+    ^ cur
+}
 
 @ mem_is_imported i syms s path → b {
     : s list ( nurl_sym_get syms `__imported_files__` )
@@ -6834,7 +6855,7 @@
         ? & ! handled == tt TT_DOLLAR {
             ( nurl_lex_advance lex )
             ? == ( nurl_lex_type lex ) TT_STR {
-                : s path ( nurl_lex_val lex )
+                : s path ( __norm_import_path ( nurl_lex_val lex ) )
                 ( nurl_lex_advance lex )
                 ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
                 : s marker ( nurl_sym_get g_generic_struct_syms `__scanned__` )
@@ -6916,7 +6937,7 @@
         // import_decl: $ `path` alias?  — scan the imported file too
         ? == tt TT_DOLLAR
         { ( nurl_lex_advance lex )  // skip '$'
-            : s path ( nurl_lex_val lex )
+            : s path ( __norm_import_path ( nurl_lex_val lex ) )
             ( nurl_lex_advance lex )  // skip path STR
             : s alias ``
             ? ( is_ident_tok ( nurl_lex_type lex ) )
