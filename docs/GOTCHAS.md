@@ -268,6 +268,25 @@ without `~` is captured by value. Mutations inside the closure are
 local. Single-pointer-handle structs (`%String`, `%Vec`) are also
 captured by value but share through their inner pointer.
 
+**Recover-with-typed-result idiom** (2026-05-15): the byref-capture
+path is what makes `recover` usable for typed returns. The closure
+must return void, so the canonical shape is:
+
+```nurl
+: ~ HttpResponse out ( response_text 500 `default\n` )
+: !v PanicInfo r ( recover \ → v { = out ( risky_handler req ) } )
+?? r {
+  T _ → { /* `out` carries risky_handler's actual return */ }
+  F p → { /* `out` keeps its default; `p.msg` has the reason */ }
+}
+```
+
+The multi-field-struct + `: ~` combination triggers the byref path so
+the assignment inside the closure reaches the caller's alloca. For
+scalars or single-handle structs, writes inside the closure stay
+local — use a wrapper struct if you need recover-with-result on a
+scalar payload.
+
 **Compiler-warned (2026-05-15):** `^`-returning a closure that
 captures a `: ~`-mutable multi-field struct by pointer now emits a
 non-fatal `warning:` line. Both shapes trip the check — a named

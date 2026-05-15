@@ -97,6 +97,7 @@ $ `stdlib/std/net.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
+$ `stdlib/std/panic.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/http.nu`
@@ -498,7 +499,23 @@ $ `stdlib/ext/http_response.nu`
             ? body_ok {
                 : b req_close ( __request_says_close req )
                 : ( @ HttpResponse HttpRequest ) f . s handler
-                : HttpResponse resp ( f req )
+                // Wrap the handler in `recover` so a panic inside the
+                // handler doesn't kill the worker thread. On panic the
+                // default `resp` (500) flows out to the client; the
+                // captured message is logged to stderr. Owned
+                // allocations inside the handler that didn't run their
+                // auto-drop leak — see stdlib/std/panic.nu's header for
+                // the cost model. The `recover` substitute is a net win
+                // vs. aborting the worker on a buggy handler.
+                : ~ HttpResponse resp ( response_text 500 `internal server error\n` )
+                : !v PanicInfo pr ( recover \ → v { = resp ( f req ) } )
+                ?? pr {
+                    T _ → {}
+                    F p → {
+                        ( nurl_eprintln ( nurl_str_cat `[panic] HTTP handler: ` ( string_data . p msg ) ) )
+                        ( panic_info_free p )
+                    }
+                }
                 // Per-request total timeout enforcement: free the
                 // handler's response and substitute 504 if we blew the
                 // budget. `should_close` forces `Connection: close` so

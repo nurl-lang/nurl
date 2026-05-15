@@ -736,6 +736,16 @@ defaults, etc.) see [`docs/GOTCHAS.md`](docs/GOTCHAS.md).
 | No automatic memory management — heap-allocated values (slice literals, `strcat` results, etc.) are not freed | Call `free` via FFI when needed; keep values on the stack where possible |
 | Import is inline-include only: no namespaces; alias rewrites only top-level `@`-functions, not types/enums/FFI/traits. Path-string dedup with leading `./` normalisation is in place — same file imported twice (or through a diamond) emits one set of decls | Stick to a single canonical import path per file; prefix names manually for types/enums when collisions matter |
 
+### Panic / recover
+
+| Capability | Notes |
+|---|---|
+| **`panic s msg → v`** (`stdlib/std/panic.nu`) | Halts execution. If a `recover` frame is active on this thread, longjmps to it; otherwise prints to stderr and aborts. Setjmp/longjmp-based — does NOT run destructors during unwind. |
+| **`recover ( @ v ) closure → ! v PanicInfo`** | Run closure under a recover guard. Returns Ok(0) on normal completion, Err(PanicInfo) if the closure called `panic`. Use a `: ~`-mutable multi-field struct + byref-capture for typed returns. |
+| Owned heap allocations made inside a recover scope **leak** if their auto-drop didn't fire | Recover is for crash mitigation, NOT routine error handling. Always prefer `! T E` + `\` for expected errors. |
+| SIGSEGV / SIGFPE / SIGBUS / SIGABRT are NOT caught | Signal faults remain process-aborts. Async-signal-safety constraints make signal-bridging infeasible without making every runtime function async-signal-safe. |
+| HTTP server `handler` invocations are auto-recovered | A handler that panics → worker logs the message to stderr + returns 500 to the client + keeps serving. Worker thread stays alive. |
+
 ### HTTPS / TLS
 
 | Capability | Notes |

@@ -4620,6 +4620,22 @@
                                 { ( die lex ( nurl_str_cat `cannot mutate immutable variable: ` target_var ) ) }
                                 {}
                             }
+                            // Assignment counts as a USE of `target_var`
+                            // from the outer scope — the env block must
+                            // carry the binding's pointer so the closure
+                            // body can store through it. Without this the
+                            // body emits `store … %rNN` referencing the
+                            // outer's alloca register directly, producing
+                            // invalid IR (use of undefined value).
+                            : b is_clo_param_t ( str_contains closure_params target_var )
+                            ? ! is_clo_param_t {
+                                ? ! ( str_contains captured_vars target_var ) {
+                                    = captured_vars ? == 0 captured_count
+                                    target_var
+                                    ( nurl_str_cat ( nurl_str_cat captured_vars ` ` ) target_var )
+                                    = captured_count + captured_count 1
+                                } {}
+                            } {}
                         }
                         {}
                     }
@@ -6292,6 +6308,9 @@
     ( emit `declare void @nurl_cond_free(i64)` )
     ( emit `declare void @nurl_signal_install_shutdown(i64)` )
     ( emit `declare void @nurl_signal_trigger_shutdown()` )
+    ( emit `declare void @nurl_panic(i8*)` )
+    ( emit `declare i64  @nurl_recover(i8*, i8*)` )
+    ( emit `declare i8*  @nurl_panic_last_msg()` )
     ( emit `` )
 }
 
@@ -6541,6 +6560,9 @@
     ( nurl_sym_def syms `nurl_cond_free` `void` )
     ( nurl_sym_def syms `nurl_signal_install_shutdown` `void` )
     ( nurl_sym_def syms `nurl_signal_trigger_shutdown` `void` )
+    ( nurl_sym_def syms `nurl_panic` `void` )
+    ( nurl_sym_def syms `nurl_recover` `i64` )
+    ( nurl_sym_def syms `nurl_panic_last_msg` `i8*` )
     // void runtime functions
     ( nurl_sym_def syms `nurl_print` `void` )
     ( nurl_sym_def syms `nurl_eprint` `void` )

@@ -471,9 +471,23 @@ Optional but expected.
 - [ ] Slowloris defence: header-read deadline + max idle time.
 - [ ] Request size limits (head + body), configurable per-server.
 - [ ] Header count limit (default 100).
-- [ ] Handler panic recovery — middleware catches via Result-typed
-      `(@ ! HttpResponse HandlerErr HttpRequest Params)` so a buggy
-      handler returns 500 instead of crashing the worker.
+- [x] **Handler panic recovery — SHIPPED 2026-05-15** (closes Phase 8
+      end-to-end). New panic model in `stdlib/std/panic.nu`:
+      `panic s msg → v` for explicit aborts, `recover ( @ v ) closure
+      → ! v PanicInfo` for setjmp/longjmp-based catch. Built on
+      `nurl_recover` / `nurl_panic` / `nurl_panic_last_msg` runtime
+      primitives (thread-local jmp_buf stack). `__serve_keepalive_loop`
+      wraps the handler call in `recover`; on panic, logs the captured
+      message to stderr via `nurl_eprintln` and substitutes a stock 500
+      "internal server error" response. Worker thread keeps running —
+      next accept proceeds normally. v1 cost model: owned heap
+      allocations made inside the handler that didn't run their auto-
+      drop LEAK; signal faults (SIGSEGV/SIGFPE/SIGBUS/SIGABRT) are NOT
+      caught (kept as process aborts, async-signal-safety constraints).
+      Regression: `compiler/tests/recover_basic.nu` (offline — Ok arm,
+      Err arm, multi-field-struct typed return via byref-capture) and
+      `compiler/tests/http_server_panic.nu` (NURL_NET_TESTS=1 — handler
+      panic → 500 on the wire, server alive after).
 - [ ] Access log middleware (NCSA combined or JSON, env-toggleable).
 - [ ] Metrics middleware (Prometheus-shaped `/metrics` endpoint via
       simple counter map).

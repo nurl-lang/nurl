@@ -49,6 +49,7 @@
 #include <errno.h>
 #include <math.h>
 #include <time.h>
+#include <setjmp.h>
 #ifdef _WIN32
 #  define WIN32_LEAN_AND_MEAN
 #  include <winsock2.h>
@@ -5294,4 +5295,109 @@ void nurl_signal_trigger_shutdown(void) {
 void nurl_signal_install_shutdown(long long listener) { (void)listener; }
 void nurl_signal_trigger_shutdown(void)               {}
 #endif
+
+
+/* ── §20  Panic / recover (Phase 8 handler-panic recovery) ──────── */
+/*
+ * NURL's panic model is intentionally narrow: an explicit `panic` form
+ * is an unwind to the nearest `recover` frame (setjmp/longjmp-based),
+ * NOT an attempt at exception-style stack unwinding. The auto-drop
+ * machinery does NOT participate — owned heap allocations made inside
+ * a recover scope that don't run their destructors LEAK. This is the
+ * fundamental trade-off setjmp/longjmp imposes; we accept it because:
+ *
+ *   (a) recover is intended for crash-mitigation (HTTP handler bug,
+ *       LLM-generated test scaffold that hit an unexpected branch),
+ *       NOT routine error handling — `! T E` + `\` remains the
+ *       canonical path for expected errors;
+ *   (b) the alternative (Rust-style unwind with destructor calls)
+ *       requires Itanium EH tables + an aliasing model strong enough
+ *       to know when destructors are safe to run during unwind —
+ *       essentially as much engineering as a borrow checker;
+ *   (c) the leak is bounded per panic (whatever the closure scope had
+ *       allocated), and for a worker-thread design the OS reclaims
+ *       the entire thread stack on thread exit anyway.
+ *
+ * Hard rule: `panic` ONLY responds to an explicit `nurl_panic` call.
+ * SIGSEGV / SIGFPE / SIGBUS / SIGABRT are NOT bridged into the panic
+ * model — async-signal-safety on POSIX would force every async-signal-
+ * unsafe operation in the runtime (malloc, fprintf, …) into a "may run
+ * during panic" contract that's both onerous and easy to break. Signal
+ * faults remain process-aborts.
+ *
+ * Thread-local stack of frames: a fresh recover frame is pushed at
+ * `nurl_recover` entry, popped on either exit path (closure-returned
+ * normally OR closure-panicked). Frames live on the C stack of the
+ * `nurl_recover` invocation, so jmp_buf addresses stay valid for the
+ * lifetime of that call. A panic with no frame above it aborts the
+ * process via the existing `fprintf(stderr, ...); abort()` path —
+ * same behavioural class as an unhandled fault.
+ */
+
+typedef struct NurlPanicFrame {
+    jmp_buf                  jb;
+    char                    *msg;   /* heap-owned panic message or NULL */
+    struct NurlPanicFrame   *prev;
+} NurlPanicFrame;
+
+/* GCC/Clang __thread is supported on Linux, macOS, mingw-w64. WASI
+ * targets are single-threaded today, so __thread degrades to a plain
+ * global, which is exactly the semantics we want. */
+static __thread NurlPanicFrame *nurl__panic_top = NULL;
+/* Captured message from the most-recent panic, ownership transferred
+ * to nurl_panic_last_msg's caller via strdup-and-take. The slot itself
+ * is freed by the next recover-exit-with-panic. */
+static __thread char *nurl__panic_last_msg = NULL;
+
+/* Entry point for `recover closure` in NURL. `fn_ptr` is a closure
+ * function pointer with signature `void(void *env)`; `env_ptr` is the
+ * closure's environment block. Returns 0 if the closure ran to
+ * completion, 1 if it called nurl_panic (and was therefore longjmped
+ * back here). The captured message — if any — lands in
+ * nurl__panic_last_msg, retrievable via nurl_panic_last_msg(). */
+long long nurl_recover(void *fn_ptr, void *env_ptr) {
+    if (!fn_ptr) return 0;
+    NurlPanicFrame frame;
+    frame.msg  = NULL;
+    frame.prev = nurl__panic_top;
+    nurl__panic_top = &frame;
+    if (setjmp(frame.jb) == 0) {
+        ((void (*)(void *))fn_ptr)(env_ptr);
+        nurl__panic_top = frame.prev;
+        return 0;
+    }
+    /* Panicked. Stash the captured message in the thread-local slot,
+     * freeing any prior unread one so concurrent panics from sibling
+     * threads don't trample each other's storage. */
+    nurl__panic_top = frame.prev;
+    free(nurl__panic_last_msg);
+    nurl__panic_last_msg = frame.msg ? frame.msg : strdup("(no panic message)");
+    return 1;
+}
+
+/* Read out the captured panic message from the most-recent recover-
+ * with-panic exit on this thread. Returns "" if no panic is currently
+ * captured. Ownership: BORROWED — the storage is owned by the runtime
+ * and overwritten by the next panic. NURL callers typically copy via
+ * `string_from` to capture the value past the lifetime of the slot. */
+const char *nurl_panic_last_msg(void) {
+    return nurl__panic_last_msg ? nurl__panic_last_msg : "";
+}
+
+/* Trigger a panic. If a recover frame is active on this thread,
+ * longjmp to it; the caller will observe a return of 1 from
+ * nurl_recover, plus the captured message via nurl_panic_last_msg.
+ * Otherwise this is a hard-failure: print to stderr and abort, which
+ * is the v0.3.0 status-quo for any unrecoverable condition. */
+void nurl_panic(const char *msg) {
+    if (!nurl__panic_top) {
+        fprintf(stderr, "nurl panic: %s\n",
+                msg && *msg ? msg : "(no message)");
+        fflush(stderr);
+        abort();
+    }
+    nurl__panic_top->msg = (msg && *msg) ? strdup(msg)
+                                         : strdup("(no message)");
+    longjmp(nurl__panic_top->jb, 1);
+}
 

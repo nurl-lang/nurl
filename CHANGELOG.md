@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Panic model + HTTP handler panic recovery.** New
+  `stdlib/std/panic.nu` module: `panic s msg → v` for explicit aborts,
+  `recover ( @ v ) closure → ! v PanicInfo` for setjmp/longjmp-based
+  catch. Built on `nurl_recover` / `nurl_panic` / `nurl_panic_last_msg`
+  runtime primitives (`stdlib/runtime.c` §20, thread-local jmp_buf
+  stack). NOT Rust-style stack unwinding — owned allocations inside a
+  recover scope that don't run their auto-drop **leak**. Signal faults
+  (SIGSEGV / SIGFPE / SIGBUS) are NOT caught. Recover is crash-
+  mitigation, not a routine error path. HttpServer's
+  `__serve_keepalive_loop` wraps the handler call in `recover`: panic
+  in the handler → server logs the message to stderr + substitutes
+  a stock 500 response + keeps serving. Compiler fix bundled:
+  `simple_capture_analysis` now captures assignment targets as well
+  as read references — the recover-with-byref-capture pattern depended
+  on it (pre-fix the closure body referenced the outer's alloca
+  register directly, producing invalid IR). Regressions:
+  `compiler/tests/recover_basic.nu` (offline; Ok / panic / typed-byref
+  round-trip cases) and `compiler/tests/http_server_panic.nu`
+  (NURL_NET_TESTS=1).
+
 * **TLS (server-side) via libssl/OpenSSL.** `tcp_listen_tls host port
   cert_path key_path → !TcpListener NetErr` in `stdlib/std/net.nu` is a
   drop-in replacement for `tcp_listen`; `NurlTcp` runtime struct made

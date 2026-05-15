@@ -144,6 +144,7 @@ for src in "${tests[@]}"; do
           && "$name" != "http_server_pipelined" \
           && "$name" != "http_server_limits" \
           && "$name" != "http_server_tls" \
+          && "$name" != "http_server_panic" \
           && "$ENABLE_HTTP_TESTS" != "1" ]]; then
         continue
     fi
@@ -153,7 +154,8 @@ for src in "${tests[@]}"; do
     if [[ ( "$name" == "http_server_seq" \
             || "$name" == "http_server_pipelined" \
             || "$name" == "http_server_limits" \
-            || "$name" == "http_server_tls" ) \
+            || "$name" == "http_server_tls" \
+            || "$name" == "http_server_panic" ) \
           && "$ENABLE_NET_TESTS" != "1" ]]; then
         continue
     fi
