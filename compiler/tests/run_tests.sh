@@ -129,13 +129,15 @@ for src in "${tests[@]}"; do
           && "$name" != "http_multipart" \
           && "$name" != "http_proxy" \
           && "$name" != "http_server_seq" \
+          && "$name" != "http_server_pipelined" \
           && "$ENABLE_HTTP_TESTS" != "1" ]]; then
         continue
     fi
 
-    # http_server_seq behaves like a net_loopback test — gated by
-    # NURL_NET_TESTS=1. Skip when the gate is off.
-    if [[ "$name" == "http_server_seq" && "$ENABLE_NET_TESTS" != "1" ]]; then
+    # http_server_seq + http_server_pipelined behave like net_loopback
+    # tests — gated by NURL_NET_TESTS=1. Skip when the gate is off.
+    if [[ ( "$name" == "http_server_seq" || "$name" == "http_server_pipelined" ) \
+          && "$ENABLE_NET_TESTS" != "1" ]]; then
         continue
     fi
 

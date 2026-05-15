@@ -370,10 +370,15 @@ $ `stdlib/ext/http_server.nu`
                 // Match http_server's defaults: 30 s recv idle so a slow
                 // client can't pin us forever.
                 ( tcp_set_timeout conn 30000 )
-                : ParsedHead ph ( __read_request_head conn )
+                // One-shot connection (no keep-alive on this path) but
+                // __read_request_head + __finish_body still take a carry
+                // Vec[u] — pipelining-correct head/body framing applies
+                // regardless of whether we serve more than one request.
+                : ( Vec u ) carry ( vec_with_cap [u] 4096 )
+                : ParsedHead ph ( __read_request_head conn carry )
                 ? . ph ok {
                     : HttpRequest req . ph head
-                    : b body_ok ( __finish_body conn req )
+                    : b body_ok ( __finish_body conn req carry )
                     ? body_ok {
                         : String url ( __build_upstream_url upstream_base req )
                         : !v ProxyErr pr ( proxy_stream_to_conn_with conn req
@@ -410,6 +415,7 @@ $ `stdlib/ext/http_server.nu`
                         ( parsed_head_free ph )
                     }
                 }
+                ( vec_free [u] carry )
                 ( tcp_close_conn conn )
             }
             F e → {

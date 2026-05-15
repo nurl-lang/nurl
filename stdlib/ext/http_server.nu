@@ -68,15 +68,27 @@
 //     for the next request between calls. So a connection that
 //     idles past the deadline auto-closes, freeing the worker.
 //
-// Limitations (all addressed in later phases):
+// Pipelining (HTTP/1.1 §6.3.2):
 //
-//   * Pipelining is NOT supported. The buffer used by
-//     `__read_request_head` is fresh per request; bytes belonging
-//     to a pipelined req2 that already arrived during req1's read
-//     are still safely in the kernel socket buffer and are picked
-//     up on the next iteration — UNLESS req1's read pulled them
-//     into the same Vec[u] chunk, in which case they are silently
-//     dropped (rare; nearly all clients wait for req1's response).
+//   * The keep-alive loop owns one connection-level `Vec[u] carry`
+//     that survives across requests. `__read_request_head` reads
+//     into carry until `parse_request_head` succeeds, then drops
+//     the consumed-by-the-head bytes from carry's front — anything
+//     past the head (request body + a pipelined successor's bytes)
+//     stays in carry. `__finish_body` then drains exactly
+//     Content-Length bytes off carry's front into `req.body`,
+//     topping up from the socket if short. Any remaining bytes in
+//     carry feed the next iteration's `__read_request_head`
+//     without a fresh tcp_read.
+//   * Net effect: a peer that pipelines two requests in one send()
+//     is processed correctly — both reach the handler with the
+//     right body, both get a response in order. We do not promise
+//     out-of-order pipelined-response delivery (the spec doesn't
+//     either) — responses ride the same TCP stream in request
+//     order.
+//
+// Other limitations (Phase 9):
+//
 //   * Single-threaded per accept loop — concurrency comes from
 //     `server_run_pool`'s worker count, which is fixed at startup.
 //   * No HTTP/2, no TLS — Phase 9.
@@ -129,93 +141,115 @@ $ `stdlib/ext/http_response.nu`
     ( tcp_close_listener . s listener )
 }
 
+// ── In-place "drop first N bytes from a Vec[u]" helper ───────────────
+//
+// Used by the carry-buffer pipeline below. After `parse_request_head`
+// reports `.consumed` bytes for the head, we shift the remainder of the
+// carry buffer down so a future parse_request_head call on the same
+// carry sees the next request's bytes starting at index 0. Implementation
+// copies the tail [n..total) into a fresh Vec[u], vec_clears the input,
+// and vec_extends the tail back — O(remaining), and `remaining` is zero
+// in the non-pipelined common case (single TCP read containing exactly
+// one head + body). Public Vec[u] API only — no peek/poke into the
+// control block.
+@ __vec_drop_front_u ( Vec u ) buf i n → v {
+    : i total ( vec_len [u] buf )
+    ? <= n 0 {} {
+        ? >= n total {
+            ( vec_clear [u] buf )
+        } {
+            : i remaining - total n
+            : ( Vec u ) tail ( vec_with_cap [u] remaining )
+            : *u p ( vec_data [u] buf )
+            : ~ i k 0
+            ~ < k remaining {
+                ( vec_push [u] tail . p + n k )
+                = k + k 1
+            }
+            ( vec_clear [u] buf )
+            ( vec_extend [u] buf tail )
+            ( vec_free [u] tail )
+        }
+    }
+}
+
 // ── Read the full request head off the socket ─────────────────────────
 //
-// Reads in a loop, accumulating bytes in a buffer, until
-// `parse_request_head` succeeds or returns a non-Incomplete error.
-// On success: any bytes already past the head are transferred into
-// the request's body field (so the body reader only needs to top up
-// from Content-Length). On socket error or unrecoverable parse error:
-// the returned ParsedHead has .ok = F.
+// Operates on a connection-level `carry` buffer owned by the keep-alive
+// loop. Loops parse_request_head(carry) → top-up-from-socket until the
+// parse succeeds or hits a non-Incomplete error.
+//
+// On success: `.consumed` bytes are dropped off carry's front, leaving
+// any further bytes (this request's body + pipelined successor) for
+// `__finish_body` / the next iteration to consume. The returned
+// ParsedHead's `.head.body` is left untouched (empty) — the body lives
+// in carry until `__finish_body` drains it.
+//
+// On socket error or unrecoverable parse error: returns a ParsedHead
+// with .ok=F; carry's state is unspecified (caller is about to close).
 
-@ __read_request_head TcpConn conn → ParsedHead {
-    : ( Vec u ) buf ( vec_with_cap [u] 4096 )
-    // `result` is a mutable tagged-struct slot. Each assignment must
-    // free the previous placeholder first (the ParsedHead returned by
-    // `__parsed_head_err` always carries a fresh-empty HttpRequest
-    // allocation, so dropping the slot drops a real allocation). The
-    // explicit free-before-reassign discipline below keeps ASan clean.
+@ __read_request_head TcpConn conn ( Vec u ) carry → ParsedHead {
     : ~ ParsedHead result ( __parsed_head_err # HttpReqErr HttpReqIo )
     : ~ b done F
 
     ~ ! done {
-        : !( Vec u ) NetErr r ( tcp_read_chunk conn 4096 )
-        ?? r {
-            T chunk → {
-                : i got ( vec_len [u] chunk )
-                ( vec_extend [u] buf chunk )
-                ( vec_free [u] chunk )
-                ? <= got 0 {
-                    // 0 bytes can't happen (NetClosed is returned as Err) but
-                    // guard against runtime bugs by exiting.
-                    ( parsed_head_free result )
-                    = result ( __parsed_head_err # HttpReqErr HttpReqIo )
-                    = done T
-                } {
-                    : ParsedHead ph ( parse_request_head buf )
-                    ? . ph ok {
-                        // Transfer overlapping body bytes into ph.head.body so
-                        // read_body's Content-Length path sees them.
-                        : i used . ph consumed
-                        : i bn ( vec_len [u] buf )
-                        ? > bn used {
-                            : *u bdata ( vec_data [u] buf )
-                            : HttpRequest req . ph head
-                            : ~ i k used
-                            ~ < k bn {
-                                ( vec_push [u] . req body . bdata k )
-                                = k + k 1
-                            }
-                        } {}
-                        ( parsed_head_free result )
-                        = result ph
-                        = done T
-                    } {
-                        // Incomplete = keep reading (drop ph + keep result's
-                        // current placeholder). Anything else = surface ph and
-                        // close. We map via the diagnostic name (no enum
-                        // wildcard support yet).
-                        : s nm ( http_req_err_name . ph err )
-                        ? != 0 ( nurl_str_eq nm `HttpReqIncomplete` ) {
-                            ( parsed_head_free ph )
-                        } {
+        // First try parsing whatever's already in carry (might be the
+        // pipelined successor's full head from the previous request's
+        // read).
+        : ParsedHead ph ( parse_request_head carry )
+        ? . ph ok {
+            : i used . ph consumed
+            ( __vec_drop_front_u carry used )
+            ( parsed_head_free result )
+            = result ph
+            = done T
+        } {
+            : s nm ( http_req_err_name . ph err )
+            ? != 0 ( nurl_str_eq nm `HttpReqIncomplete` ) {
+                // Incomplete = keep reading. Drop ph + top up carry.
+                ( parsed_head_free ph )
+                : !( Vec u ) NetErr r ( tcp_read_chunk conn 4096 )
+                ?? r {
+                    T chunk → {
+                        : i got ( vec_len [u] chunk )
+                        ( vec_extend [u] carry chunk )
+                        ( vec_free [u] chunk )
+                        ? <= got 0 {
+                            // 0 bytes can't happen (NetClosed is returned as
+                            // Err) but guard against runtime bugs by exiting.
                             ( parsed_head_free result )
-                            = result ph
+                            = result ( __parsed_head_err # HttpReqErr HttpReqIo )
                             = done T
-                        }
+                        } {}
+                    }
+                    F _ → {
+                        // NetClosed mid-head OR transport error. result is
+                        // already an HttpReqIo placeholder.
+                        = done T
                     }
                 }
-            }
-            F _ → {
-                // NetClosed mid-head OR any transport error → io. The
-                // current placeholder is already an HttpReqIo result;
-                // re-stamping it via __parsed_head_err would just churn an
-                // allocation. Just exit the loop.
+            } {
+                // Real parse error — surface it and close.
+                ( parsed_head_free result )
+                = result ph
                 = done T
             }
         }
     }
-    ( vec_free [u] buf )
     ^ result
 }
 
-// ── Top up body from Content-Length, accounting for pre-loaded bytes ─
+// ── Top up body from Content-Length, draining carry first ─────────────
 //
-// `req.body` may already contain bytes that arrived in the same TCP
-// segment as the head. Read just the remainder (Content-Length - existing
-// length). Returns T on success, F on transport / format error.
+// `carry` holds whatever bytes arrived past the head (body bytes that
+// rode in the same TCP read as the head, plus any pipelined successor's
+// bytes). We take up to Content-Length bytes off carry's front into
+// req.body, then top up from the socket if short. Excess bytes (a
+// pipelined successor) stay in carry for the next iteration.
+//
+// Returns T on success, F on transport / format error.
 
-@ __finish_body TcpConn conn HttpRequest req → b {
+@ __finish_body TcpConn conn HttpRequest req ( Vec u ) carry → b {
     : ?String cl ( header_get . req headers `Content-Length` )
     ?? cl {
         T clv → {
@@ -224,6 +258,18 @@ $ `stdlib/ext/http_response.nu`
             ?? nr {
                 T clen → {
                     ? < clen 0 { ^ F } {}
+                    // Drain carry's front into req.body, up to clen bytes.
+                    : i avail ( vec_len [u] carry )
+                    : i take ? < clen avail clen avail
+                    ? > take 0 {
+                        : *u cdata ( vec_data [u] carry )
+                        : ~ i k 0
+                        ~ < k take {
+                            ( vec_push [u] . req body . cdata k )
+                            = k + k 1
+                        }
+                        ( __vec_drop_front_u carry take )
+                    } {}
                     : i have ( vec_len [u] . req body )
                     ? >= have clen { ^ T } {}
                     : i need - clen have
@@ -385,13 +431,19 @@ $ `stdlib/ext/http_response.nu`
 
 @ __serve_keepalive_loop HttpServer s TcpConn conn → v {
     : i max_req . s max_keepalive_requests
+    // One connection-level carry buffer, owned here, freed at the
+    // bottom. Survives across keep-alive iterations so a pipelined
+    // successor's bytes (or any leftover past a request's body) are
+    // visible to the next __read_request_head call without re-reading
+    // from the socket.
+    : ( Vec u ) carry ( vec_with_cap [u] 4096 )
     : ~ b done F
     : ~ i n_served 0
     ~ ! done {
-        : ParsedHead ph ( __read_request_head conn )
+        : ParsedHead ph ( __read_request_head conn carry )
         ? . ph ok {
             : HttpRequest req . ph head
-            : b body_ok ( __finish_body conn req )
+            : b body_ok ( __finish_body conn req carry )
             ? body_ok {
                 : b req_close ( __request_says_close req )
                 : ( @ HttpResponse HttpRequest ) f . s handler
@@ -430,6 +482,7 @@ $ `stdlib/ext/http_response.nu`
             = done T
         }
     }
+    ( vec_free [u] carry )
 }
 
 // ── server_run ───────────────────────────────────────────────────────

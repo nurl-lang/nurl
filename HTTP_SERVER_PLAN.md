@@ -345,9 +345,30 @@ joined thread is guaranteed before the captured state is dropped.
       `server_stop` (which calls `nurl_tcp_close`, full free) exactly
       once. Documented as the canonical shutdown protocol in
       `compiler/tests/http_server_pool.nu`.
-- [ ] **Keep-alive:** same connection serves multiple requests until
-      `Connection: close` or 5 s idle timeout. Phase 7/8 — needs
-      per-connection request-loop refactor inside `server_run_once`.
+- [x] **Keep-alive — SHIPPED 2026-05-07 (Phase 5.4):** same connection
+      serves multiple requests until `Connection: close`, idle timeout
+      (default 30 s), or the per-conn `max_keepalive_requests` cap
+      (default 1000). `server_run_once` walks a `__serve_keepalive_loop`
+      that performs request → handler → response until any of those
+      fires. Bench: 100 sequential `/api/health` requests dropped from
+      5152 ms → 136 ms (~38× speedup) on the canonical
+      `examples/static_server.nu`.
+- [x] **Pipelining correctness — SHIPPED 2026-05-15:** request framing
+      now survives the pipelined case where a client puts req2 in the
+      same `send()` as req1 (HTTP/1.1 §6.3.2). `__serve_keepalive_loop`
+      owns a connection-level `Vec[u] carry` buffer that survives
+      across iterations; `__read_request_head` reads into carry and
+      drops only the consumed-by-the-head bytes after a successful
+      parse; `__finish_body` drains exactly Content-Length bytes off
+      carry's front before topping up from the socket. The previous
+      design stuffed all trailing bytes wholesale into `req.body`,
+      which silently corrupted req1's body AND dropped req2 entirely
+      (the next iteration's fresh-buf read saw the socket empty).
+      Acceptance: `compiler/tests/http_server_pipelined.nu` sends two
+      POSTs in one TCP `sendall` and verifies both handler
+      invocations + both responses. We do NOT promise out-of-order
+      pipelined-response delivery (the spec doesn't require it) —
+      responses ride the same TCP stream in request order.
 - [ ] **Stress acceptance test:** 100 concurrent curl connections, all
       return 200, ASan-clean. Deferred to Phase 8 hardening sprint —
       MVP test (`compiler/tests/http_server_pool.nu`) covers the

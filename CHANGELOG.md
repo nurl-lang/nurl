@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+* **HTTP server pipelining correctness.** The keep-alive request loop
+  previously copied all bytes past a parsed head wholesale into
+  `req.body`, which silently corrupted req1 and dropped req2 entirely
+  when a peer pipelined two requests in one `send()`. The fix
+  introduces a connection-level `Vec[u] carry` buffer that survives
+  across keep-alive iterations: `__read_request_head` drops only the
+  `.consumed` bytes off the front after a successful parse;
+  `__finish_body` drains exactly Content-Length bytes off carry's
+  front before topping up from the socket; any remaining bytes feed
+  the next iteration. Mirror call site in `stdlib/ext/http_proxy.nu`
+  also updated. Acceptance:
+  `compiler/tests/http_server_pipelined.nu` (NURL_NET_TESTS=1).
+
 ## [0.3.0] — 2026-05-15
 
 Grammar moved from v1.9 → **v2.0**: visibility control with `pub` is
