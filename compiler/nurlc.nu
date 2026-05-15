@@ -72,6 +72,7 @@
 : i TT_SHL 41
 : i TT_SHR 42
 : i TT_ELLIPSIS 43
+: i TT_PUB 44
 
 // ── Abort helpers ─────────────────────────────────────────────────
 
@@ -352,6 +353,54 @@
 // safely, so nurlc.nu disables the pass for itself via a file-level pragma.
 // See main() for the opt-out marker.
 : i g_auto_drop_strings 1
+
+// Visibility (grammar v2.0). Tracks the source-file of every @-defined
+// function and per-file strict-mode opt-in.
+// g_vis_syms is a nurl_sym map (handle stored as i64) with these keys:
+//   __current_src_file__        — path passed to the current nurl_lex_new
+//                                 (saved/restored across nested imports)
+//   <fname>__src_file           — origin path of an @-defined function
+//   <fname>__pub                — "1" when the @-decl was marked pub
+//   <path>__strict              — "1" once any pub decl appears in <path>
+// g_pending_pub is set by parse_program / scan_fn_sigs when a TT_PUB
+// token is consumed; the next fn/struct/enum/const/ffi/trait/impl
+// handler reads-and-clears it and records the public flag.
+// Stored in nurl_sym rather than as a top-level `: s` global because
+// the Python bootstrap compiler does not yet handle string globals.
+: i g_pending_pub 0
+: i g_vis_syms 0
+
+@ vis_current_src_file → s {
+    ^ ( nurl_sym_get g_vis_syms `__current_src_file__` )
+}
+
+@ vis_set_current_src_file s path → v {
+    ( nurl_sym_def g_vis_syms `__current_src_file__` path )
+}
+
+// vis_take_pending_pub: read-and-clear g_pending_pub. Used by every
+// top-level decl handler to learn whether the immediately preceding
+// token stream consumed a `pub` prefix. The flag is cleared regardless
+// of whether the caller cares about it, so a stray pub never sticks.
+@ vis_take_pending_pub → b {
+    : b was != 0 g_pending_pub
+    = g_pending_pub 0
+    ^ was
+}
+
+// vis_record_fn: register the source-file origin of an @-defined
+// function and, if was_pub, mark it public + flip the current file
+// into strict-mode. Called from gen_fn_decl (after fname is read)
+// and from scan_fn_sigs's @ branch.
+@ vis_record_fn s fname b was_pub → v {
+    : s sf ( vis_current_src_file )
+    ( nurl_sym_def g_vis_syms ( nurl_str_cat fname `__src_file` ) sf )
+    ? was_pub
+    { ( nurl_sym_def g_vis_syms ( nurl_str_cat fname `__pub` ) `1` )
+        ( nurl_sym_def g_vis_syms ( nurl_str_cat sf `__strict` ) `1` )
+    }
+    {}
+}
 
 @ hex_digit i d → s {
     ? == d 10 `A`
@@ -983,6 +1032,23 @@
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
+    // Visibility check (grammar v2.0). If the base fname is an @-defined
+    // function registered by scan_fn_sigs, we know its source-file of
+    // origin. A cross-file call is rejected when the callee's file is in
+    // strict-mode AND the callee was not marked `pub`. Symbols without a
+    // __src_file entry (FFI, trait/impl methods, runtime helpers, generic
+    // mangled call_names) skip the check.
+    : s callee_sf ( nurl_sym_get g_vis_syms ( nurl_str_cat fname `__src_file` ) )
+    : s here_sf ( vis_current_src_file )
+    ? & != 0 ( nurl_str_len callee_sf ) ! ( seq callee_sf here_sf )
+    { : s strict ( nurl_sym_get g_vis_syms ( nurl_str_cat callee_sf `__strict` ) )
+        : s is_pub ( nurl_sym_get g_vis_syms ( nurl_str_cat fname `__pub` ) )
+        ? & ( seq strict `1` ) ! ( seq is_pub `1` )
+        { ( die lex ( nurl_str_cat4
+            `private function '` fname `' is not visible across files; defined in '` callee_sf ) ) }
+        {}
+    }
+    {}
     // Generic instantiation: ( fname [T1 T2...] args... )
     : s call_name fname
     ? == ( nurl_lex_type lex ) TT_LBRACK
@@ -5125,6 +5191,11 @@
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s fname ( nurl_lex_val lex )
         ( nurl_lex_advance lex )
+        // Grammar v2.0: re-record (idempotent) the source-file + public
+        // flag during the parse_program pass. scan_fn_sigs has already
+        // populated g_vis_syms; calling here ensures g_pending_pub is
+        // cleared so a stray `pub` doesn't leak to a later decl.
+        ( vis_record_fn fname ( vis_take_pending_pub ) )
         // Generic declaration: store template, emit no IR now.
         // Disambiguation: [T] / [K V] are generic, [ T name / [i x are slice param.
         // Generic param list ends with ']' shortly. Slice never has ']' in its type.
@@ -5841,10 +5912,17 @@
             ( alias_rewrite_source src names ( nurl_str_cat alias `__` ) )
         }
         src
+        // Save / restore the current source-file across the nested scan
+        // + parse passes so vis_record_fn and gen_call attribute decls
+        // (and visibility checks) to the imported file's path, not the
+        // importer's.
+        : s saved_sf ( vis_current_src_file )
+        ( vis_set_current_src_file path )
         : i lex2 ( nurl_lex_new eff_src path )
         ( scan_fn_sigs lex2 syms )
         : i lex3 ( nurl_lex_new eff_src path )
         ( parse_program lex3 syms cg )
+        ( vis_set_current_src_file saved_sf )
     }
 }
 
@@ -6779,12 +6857,27 @@
 // scan_fn_sigs: register return types of all @ and & declarations.
 @ scan_fn_sigs i lex i syms → v {
     ~ != ( nurl_lex_type lex ) TT_EOF {
+        // Grammar v2.0: a top-level decl may be prefixed by `pub` to
+        // mark it public. The flag is recorded in g_pending_pub and
+        // consumed by vis_record_fn / vis_take_pending_pub at the
+        // matching @-decl. Pre-step BEFORE reading tt so the dispatch
+        // ternary chain below sees the post-pub token.
+        ? == ( nurl_lex_type lex ) TT_PUB
+        { ( nurl_lex_advance lex )
+            = g_pending_pub 1
+        }
+        {}
         : i tt ( nurl_lex_type lex )
         ? == tt TT_AT
         { ( nurl_lex_advance lex )
             ? ( is_ident_tok ( nurl_lex_type lex ) )
             { : s fname ( nurl_lex_val lex )
                 ( nurl_lex_advance lex )
+                // Grammar v2.0: record per-fn source-file origin and (if the
+                // preceding token was `pub`) the public flag. Strict-mode for
+                // the current file flips to "1" the first time a pub @ is
+                // seen, which gen_call later consults to enforce visibility.
+                ( vis_record_fn fname ( vis_take_pending_pub ) )
                 // Generic function [T U ...]: skip type params, mark as generic.
                 // Slice type param [type name]: treat like regular params (not generic).
                 // Must match the disambiguation in gen_fn_decl: accept IDENT *or*
@@ -6845,7 +6938,13 @@
                 }
                 src2
                 : i lex2 ( nurl_lex_new eff_src2 path )
+                // Save / restore the current source-file across the nested
+                // scan so vis_record_fn attributes decls in the imported
+                // file to that file's path, not the importer's.
+                : s saved_sf ( vis_current_src_file )
+                ( vis_set_current_src_file path )
                 ( scan_fn_sigs lex2 syms )
+                ( vis_set_current_src_file saved_sf )
             }
         }
 
@@ -6879,6 +6978,16 @@
 
 @ parse_program i lex i syms i cg → v {
     ~ != ( nurl_lex_type lex ) TT_EOF {
+        // Grammar v2.0: consume an optional `pub` visibility prefix
+        // before dispatching to the matching decl handler. The pending
+        // flag is read-and-cleared by vis_take_pending_pub at the @-
+        // decl site (gen_fn_decl). Other decl kinds parse the prefix
+        // for forward-compat but enforcement is fn-only in v2.0.
+        ? == ( nurl_lex_type lex ) TT_PUB
+        { ( nurl_lex_advance lex )
+            = g_pending_pub 1
+        }
+        {}
         : i tt ( nurl_lex_type lex )
         ? == tt TT_AT { ( gen_fn_decl lex syms cg ) }
         ? == tt TT_COLON { ( gen_const_or_struct lex syms ) }
@@ -6918,6 +7027,8 @@
     = g_func_count 0
     = g_closure_emit_base 0
     = g_type_emit_base 0
+    = g_vis_syms ( nurl_sym_new )
+    ( vis_set_current_src_file path )
     ( emit_header )
     ( init_syms syms )
     : i lex0 ( nurl_lex_new src path )

@@ -8,7 +8,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-15
+
+Grammar moved from v1.9 → **v2.0**: visibility control with `pub` is
+the headline feature. `printf`-family direct-call (variadic FFI)
+shipped in the same window. `nurlfmt` learned the canonical layout
+and ships as `build/nurlfmt`. Bootstrap fixed point holds with
+byte-identical LLVM IR across stages 1 and 2.
+
 ### Added
+
+* **Visibility control with `pub`** (grammar v2.0). A top-level decl
+  may carry a leading `pub` keyword to mark it public:
+
+  ```nurl
+  pub @ greet → v { ( nurl_print `hello\n` ) }
+  @ __priv   → v { ( nurl_print `internal\n` ) }
+  ```
+
+  Per-file strict-vis mode is OPT-IN: a source file enters strict
+  mode the first time any of its decls carries `pub`. In strict
+  mode, every unmarked `@`-function is private to that file; calls
+  from another file are rejected with
+  `private function 'X' is not visible across files; defined in 'Y'`.
+  Files without any `pub` decl stay in legacy mode — the entire
+  existing stdlib + test corpus continues to build unchanged.
+
+  Implementation: `LTT_PUB = 44` in `stdlib/runtime.c` (the lexer
+  recognises the bare identifier `pub`); `compiler/nurlc.nu` tracks
+  per-fn origin + per-file strict-mode in a new `g_vis_syms` map,
+  the current source file is saved/restored across nested
+  `$`-imports, and `gen_call` enforces the rule at @-fn dispatch
+  sites. Forward-compat parse paths for `pub` on `:` / `&` / `%`
+  decls accept the prefix but do not yet enforce — wider
+  enforcement is on the roadmap. `nurlfmt` learned to glue `pub`
+  onto the following decl-starter so `pub @ greet` stays on one
+  line through the formatter. Regression tests:
+  `compiler/tests/pub_visibility.nu` (positive, runs `hello from pub`
+  + `hello from priv`) and `compiler/tests/should_fail_pub_visibility_neg.nu`
+  (negative, expected `COMPILE FAIL`). Bootstrap fixed point holds
+  with byte-identical IR across stages 1 and 2.
 
 * **Variadic FFI + automatic argument promotion** (grammar v1.9).
   FFI declarations may end the param list with the literal `...`

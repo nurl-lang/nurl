@@ -87,6 +87,11 @@ $ `tools/nurlfmt/tokenize.nu`
     ? ( __pp_text_eq text `&` ) { ^ T } {}
     ? ( __pp_text_eq text `%` ) { ^ T } {}
     ? ( __pp_text_eq text `:` ) { ^ T } {}
+    // Grammar v2.0 visibility prefix. Treated as a top-decl starter so
+    // it gets the inter-decl blank line above it, and the following
+    // sigil (`@`/`:`/`&`/`%`) suppresses its own blank line because
+    // `pub` has already claimed the slot.
+    ? ( __pp_text_eq text `pub` ) { ^ T } {}
     ^ F
 }
 
@@ -116,6 +121,7 @@ $ `tools/nurlfmt/tokenize.nu`
     // `Z`, `@` aggregate, or another type-prefix sigil) is considered
     // type position.
     : ~ b prev_is_type_prefix F  // prev token was *,?,[,! in type pos
+    : ~ b prev_was_pub F  // prev token at bd=0/pd=0 was the `pub` keyword
 
     : ~ i idx 0
     ~ < idx n {
@@ -151,9 +157,17 @@ $ `tools/nurlfmt/tokenize.nu`
                         // token at the same indent), OR the boundary is
                         // between two consecutive `$` imports (which
                         // stay packed by convention).
+                        // Grammar v2.0: `pub` glues to its decl-starter.
+                        // When the previous top-level token was `pub`,
+                        // the following `@`/`:`/`&`/`%`/`$` is part of
+                        // the same logical decl, so we suppress the
+                        // top-boundary blank line that would normally
+                        // appear here. The user's original nl_before is
+                        // respected (typically 0 → single space).
                         : b at_top_boundary & == bd 0
                         & == pd 0
                         & ( __pp_starts_top_decl text )
+                        & ! prev_was_pub
                         ! == prev_kind TT_FMT_COMMENT
                         // A "compact chain" is two consecutive top-
                         // level decls of the same one-byte starter
@@ -304,6 +318,16 @@ $ `tools/nurlfmt/tokenize.nu`
                     ? & ( __pp_starts_top_decl text ) == bd 0 {
                         = prev_top_starter text
                     } {}
+
+                    // Track whether the just-emitted token is `pub`
+                    // at depth 0 so the following decl-starter knows
+                    // to glue. `pub` inside a comment/string never
+                    // reaches this path (those are non-IDENT kinds).
+                    ? & & == bd 0 == pd 0 ( __pp_text_eq text `pub` ) {
+                        = prev_was_pub T
+                    } {
+                        = prev_was_pub F
+                    }
 
                     = prev_text text
                     = prev_kind kind

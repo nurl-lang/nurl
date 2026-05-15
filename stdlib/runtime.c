@@ -954,6 +954,7 @@ void nurl_map_free(long long handle) {
 #define LTT_SHL        41
 #define LTT_SHR        42
 #define LTT_ELLIPSIS   43
+#define LTT_PUB        44
 
 typedef struct {
     int         type;
@@ -1168,6 +1169,13 @@ static NurlToken lex_next_tok(NurlLex *lx) {
         if (strcmp(id, "F") == 0) { NurlToken t = make_tok(LTT_BOOL,   "F", 0, line); free(id); return t; }
         /* sizeof keyword */
         if (strcmp(id, "Z") == 0) { NurlToken t = make_tok(LTT_SIZEOF, "Z", 0, line); free(id); return t; }
+        /* visibility keyword `pub` (grammar v2.0). Reserved — when the
+           parser is at top-level decl position, a `pub` prefix marks the
+           following @, :, &, or % decl as public. In legacy files (no
+           `pub` anywhere) every top-level symbol stays public; the
+           moment any decl is marked `pub` the file enters strict-vis
+           mode and unmarked @-functions become private to that file. */
+        if (strcmp(id, "pub") == 0) { NurlToken t = make_tok(LTT_PUB, "pub", 0, line); free(id); return t; }
         /* type keywords — single-char (i u f b s v) plus fixed-width
            variants i8 i16 i32 u16 u32 u64 f32 added in grammar v1.8.
            No u8 alias: legacy `u` IS the unsigned-8-bit byte type. */
