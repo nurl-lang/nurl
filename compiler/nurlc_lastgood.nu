@@ -6315,6 +6315,7 @@
     ( emit `declare void @nurl_print_bool(i1)` )
     ( emit `declare i64  @nurl_read_int()` )
     ( emit `declare i8*  @nurl_read_line()` )
+    ( emit `declare i8*  @nurl_read_n_bytes(i64)` )
     ( emit `declare i64  @nurl_stdin_eof()` )
     ( emit `declare void @nurl_flush_stdout()` )
     ( emit `declare void @nurl_flush_stderr()` )
@@ -6595,6 +6596,7 @@
     ( nurl_sym_def syms `nurl_argv_get` `i8*` )
     ( nurl_sym_def syms `nurl_read_file` `i8*` )
     ( nurl_sym_def syms `nurl_read_line` `i8*` )
+    ( nurl_sym_def syms `nurl_read_n_bytes` `i8*` )
     ( nurl_sym_def syms `nurl_str_cat` `i8*` )
     ( nurl_sym_def syms `nurl_str_cat3` `i8*` )
     ( nurl_sym_def syms `nurl_str_cat4` `i8*` )
@@ -6614,6 +6616,7 @@
         ( nurl_sym_def syms `nurl_str_slice__ret_owned` `str` )
         ( nurl_sym_def syms `nurl_read_file__ret_owned` `str` )
         ( nurl_sym_def syms `nurl_read_line__ret_owned` `str` )
+        ( nurl_sym_def syms `nurl_read_n_bytes__ret_owned` `str` )
     }
     {}
     ( nurl_sym_def syms `malloc` `i8*` )

@@ -86,6 +86,7 @@ _BUILTINS: Dict[str, FnType] = {
 
     # ── File & process ──
     'nurl_read_file':  FnType(ret=TS, params=[TS]),
+    'nurl_read_n_bytes': FnType(ret=TS, params=[TI]),
     'nurl_exit':       FnType(ret=TV, params=[TI]),
     'nurl_argc':       FnType(ret=TI, params=[]),
     'nurl_argv':       FnType(ret=TS, params=[TI]),

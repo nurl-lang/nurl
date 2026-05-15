@@ -192,6 +192,7 @@ _BUILTIN_DECLS: Dict[str, Tuple[str, str]] = {
     'print_bool': ('nurl_print_bool', 'declare void @nurl_print_bool(i1)'),
     'read_int':   ('nurl_read_int',   'declare i64  @nurl_read_int()'),
     'nurl_read_line':    ('nurl_read_line',    'declare i8*  @nurl_read_line()'),
+    'nurl_read_n_bytes': ('nurl_read_n_bytes', 'declare i8*  @nurl_read_n_bytes(i64)'),
     'nurl_stdin_eof':    ('nurl_stdin_eof',    'declare i64  @nurl_stdin_eof()'),
     'nurl_flush_stdout': ('nurl_flush_stdout', 'declare void @nurl_flush_stdout()'),
     'nurl_flush_stderr': ('nurl_flush_stderr', 'declare void @nurl_flush_stderr()'),

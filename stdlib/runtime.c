@@ -113,6 +113,34 @@ long long nurl_stdin_eof(void) { return g_stdin_eof_flag ? 1 : 0; }
 void nurl_flush_stdout(void) { fflush(stdout); }
 void nurl_flush_stderr(void) { fflush(stderr); }
 
+/* Forward declaration: defined in §4 alongside nurl_read_file_bytes.
+ * `nurl_read_n_bytes` uses the same side-channel to expose the actual
+ * count read on a short EOF. */
+static long long g_last_bytes_len;
+
+/* Read EXACTLY `n` bytes from stdin (or fewer on EOF). Used by framed
+ * protocols (LSP `Content-Length: N\r\n\r\n<body>`, DAP, raw JSON-RPC
+ * over stdio) where the body is binary and may contain '\n' or NUL
+ * bytes so `read_line` is wrong. Returns a heap-owned buffer with one
+ * extra trailing NUL byte; the actual count read lives in the
+ * `g_last_bytes_len` side-channel that `nurl_last_bytes_len()` exposes.
+ * On EOF before any byte: returns a 1-byte NUL buffer with length 0;
+ * the EOF flag is also raised so callers can distinguish "short read"
+ * from "clean close". */
+const char *nurl_read_n_bytes(long long n) {
+    g_last_bytes_len = 0;
+    if (n <= 0) { return strdup(""); }
+    char *buf = (char*)malloc((size_t)n + 1);
+    if (!buf) return strdup("");
+    size_t got = fread(buf, 1, (size_t)n, stdin);
+    if (got == 0 && feof(stdin)) {
+        g_stdin_eof_flag = 1;
+    }
+    buf[got] = '\0';
+    g_last_bytes_len = (long long)got;
+    return buf;
+}
+
 /* ── Output buffer for deferred emission (closure bodies etc.) ── */
 #define OUTBUF_SIZE (8*1024*1024)  /* 8 MB deferred output buffer */
 static char  *g_outbuf      = NULL;
