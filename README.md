@@ -726,6 +726,7 @@ defaults, etc.) see [`docs/GOTCHAS.md`](docs/GOTCHAS.md).
 |---|---|
 | `import_decl` is a static inline-include (like `#include`) — the imported file is compiled into the same LLVM module | Avoid importing files that define `main`; avoid circular imports |
 | Import alias (`` $ `path` alias ``) only rewrites top-level `@`-functions to `alias__name`; types, enum variants, FFI decls, traits, impls, and consts stay in the global namespace | Prefix the unaliased decls manually if collision is a risk |
+| `pub` visibility covers `@`-functions, struct/enum types, enum variants (inheriting their enum's flag), and global `:` constants. Files with no `pub` decl stay in legacy mode (everything public, backwards-compat). FFI and trait/impl decls accept `pub` forward-compat but do not enforce — FFI symbols are linker-level ABI globals; trait dispatch is type-mangled | Mark each cross-file API entry with `pub`; the diagnostic `private X 'Y' is not visible across files` points at the leaked-private use site |
 | `$`-import dedup is keyed on the path string with a small normalisation (leading `./` is stripped). Symlink-equivalent paths still collide as separate imports | Stick to the project-root-relative form (`stdlib/foo.nu`, no `./` prefix). Use `realpath`-true canonicalisation is on the roadmap if a real case needs it |
 
 ### Grammar

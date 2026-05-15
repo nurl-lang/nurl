@@ -201,7 +201,16 @@
         // `: u32 x …` / `: ~ i16 c …` style bindings. Pointers, slices,
         // option/result/etc wrappers don't carry signedness themselves.
         ( nurl_sym_def g_res_type_syms `__last_nurl_type__` v )
-        ^ ( llvm_type v )
+        : s lt ( llvm_type v )
+        // Cross-file visibility check (grammar v2.0+). If the resolved
+        // LLVM type is `%Name` (i.e. user-defined struct/enum, not a
+        // builtin), look up the recorded origin in g_vis_syms. The
+        // check is a no-op for builtins (their __src_file is unset)
+        // and for same-file references.
+        ? & != 0 ( nurl_str_len lt ) == ( nurl_str_get lt 0 ) 37
+        { ( vis_check_xref lex v `type` ) }
+        {}
+        ^ lt
     }
     { ( die lex `expected type` ) }
 }
@@ -414,6 +423,58 @@
         ( nurl_sym_def g_vis_syms ( nurl_str_cat sf `__strict` ) `1` )
     }
     {}
+}
+
+// vis_record_type: register source-file origin of a struct/enum
+// declaration. `pub :` / `pub : |` marks the name itself public AND
+// flips the file into strict-mode (same gate as `pub @`). Enforcement
+// at the use site reads `<sname>__src_file` + `<sname>__pub` + the
+// file's `__strict` marker. Mirrors vis_record_fn's shape.
+@ vis_record_type s sname b was_pub → v {
+    : s sf ( vis_current_src_file )
+    ( nurl_sym_def g_vis_syms ( nurl_str_cat sname `__src_file` ) sf )
+    ? was_pub
+    { ( nurl_sym_def g_vis_syms ( nurl_str_cat sname `__pub` ) `1` )
+        ( nurl_sym_def g_vis_syms ( nurl_str_cat sf `__strict` ) `1` )
+    }
+    {}
+}
+
+// vis_record_const: register source-file origin of a `:` global
+// constant (or `: ~` mutable global). Identical bookkeeping shape
+// as vis_record_type — the use site reads via the same lookup.
+@ vis_record_const s cname b was_pub → v {
+    : s sf ( vis_current_src_file )
+    ( nurl_sym_def g_vis_syms ( nurl_str_cat cname `__src_file` ) sf )
+    ? was_pub
+    { ( nurl_sym_def g_vis_syms ( nurl_str_cat cname `__pub` ) `1` )
+        ( nurl_sym_def g_vis_syms ( nurl_str_cat sf `__strict` ) `1` )
+    }
+    {}
+}
+
+// vis_check_xref: shared enforcement helper for cross-file references
+// to anything tracked in g_vis_syms (@-fn, type, const, enum variant).
+// `kind_label` is the human-readable noun for the diagnostic
+// ("function" / "type" / "constant" / "enum variant"). Triggers `die`
+// when the callee's defining file is strict AND the callee was not
+// marked pub. Same shape as the gen_call check; lifted here so the
+// type / const sites stay terse.
+@ vis_check_xref i lex s name s kind_label → v {
+    : s callee_sf ( nurl_sym_get g_vis_syms ( nurl_str_cat name `__src_file` ) )
+    ? == 0 ( nurl_str_len callee_sf ) {} {
+        : s here_sf ( vis_current_src_file )
+        ? ( seq callee_sf here_sf ) {} {
+            : s strict ( nurl_sym_get g_vis_syms ( nurl_str_cat callee_sf `__strict` ) )
+            : s is_pub ( nurl_sym_get g_vis_syms ( nurl_str_cat name `__pub` ) )
+            ? & ( seq strict `1` ) ! ( seq is_pub `1` )
+            { ( die lex ( nurl_str_cat4
+                `private ` kind_label
+                ( nurl_str_cat3 ` '` name `' is not visible across files; defined in '` )
+                ( nurl_str_cat callee_sf `'` ) ) ) }
+            {}
+        }
+    }
 }
 
 @ hex_digit i d → s {
@@ -702,6 +763,14 @@
         ( nurl_set_last_type ? == 0 ( nurl_str_len lt ) `i64` lt )
         : s ptr ( nurl_sym_get syms ( nurl_str_cat name `__ptr` ) )
         : s glb ( nurl_sym_get syms ( nurl_str_cat name `__global` ) )
+        // Cross-file visibility check for globals (consts + enum
+        // variants). Locals have a `__ptr` entry and skip this entirely
+        // — the strict-mode rule is global-symbol-only. The check is a
+        // no-op for same-file references and for builtins whose
+        // __src_file is unset.
+        ? != 0 ( nurl_str_len glb )
+        { ( vis_check_xref lex name `global` ) }
+        {}
         ( nurl_sym_def syms `__last_ident_name__` name )
         // Propagate the binding's unsigned-ness as a side-channel so
         // downstream casts / stores can choose sext vs zext correctly.
@@ -5659,6 +5728,10 @@
 
 @ gen_struct_decl s sname i lex i syms → v {
     ( nurl_lex_advance lex )
+    // Grammar v2.0+: consume the parse-program-staged `pub` flag and
+    // record per-file origin / public marker so cross-file references
+    // can be checked at parse_type_base / gen_agg_lit time.
+    ( vis_record_type sname ( vis_take_pending_pub ) )
     ( nurl_print `%` ) ( nurl_print sname ) ( nurl_print ` = type { ` )
     : i first 1
     : i fidx 0
@@ -5697,8 +5770,13 @@
 
 @ gen_const_decl s ty_tok b is_mutable i lex i syms → v {
     : s lt ( llvm_type ty_tok )
+    // Grammar v2.0+: consume staged `pub` flag, record origin + public
+    // marker. Read BEFORE the cname is known so a stray pub on a
+    // malformed const decl still clears.
+    : b const_pub ( vis_take_pending_pub )
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s cname ( nurl_lex_val lex )
+        ( vis_record_const cname const_pub )
         ( nurl_lex_advance lex )
         : i tt ( nurl_lex_type lex )
         ? == tt TT_INT
@@ -5777,6 +5855,10 @@
 // is needed because promotion applies ONLY to the variadic tail.
 
 @ gen_ffi_decl i lex i syms → v {
+    // Grammar v2.0+: `pub` on FFI decls is accepted at parse time
+    // (forward-compat) but not enforced — FFI symbols are linker-
+    // level ABI globals, the linker doesn't know about NURL files.
+    ( vis_take_pending_pub )
     ( nurl_lex_advance lex )  // consume '&'
     ( nurl_lex_advance lex )  // skip library STR (linker concern, not IR)
     ( expect lex TT_AT )  // consume '@'
@@ -5839,6 +5921,11 @@
     ( nurl_lex_advance lex )  // consume '|'
     : s ename ( nurl_lex_val lex )
     ( nurl_lex_advance lex )  // consume enum name
+    // Grammar v2.0+: consume the staged `pub` flag for the whole
+    // enum. Variants inherit the parent enum's visibility — there is
+    // no per-variant `pub` syntax.
+    : b enum_pub ( vis_take_pending_pub )
+    ( vis_record_type ename enum_pub )
     ( nurl_print `; enum ` ) ( nurl_print ename ) ( nurl_print `\n` )
     ( expect lex TT_LBRACE )
     : i tag 0
@@ -5855,6 +5942,10 @@
         ( nurl_print ( nurl_str_int tag ) ) ( nurl_print `\n` )
         ( nurl_sym_def syms vname `i64` )
         ( nurl_sym_def syms ( nurl_str_cat vname `__global` ) `1` )
+        // Per-variant visibility = enum's visibility. Records origin so
+        // a bare-variant use site (`# NetErr NetBind`) can be cross-
+        // file-checked the same way @-fn calls are.
+        ( vis_record_const vname enum_pub )
         = tag + tag 1
         // Collect payload types indexed: vname__payload__0, vname__payload__1, ...
         // TYPE_KW / sigils → always a type, never a variant name.
@@ -6819,6 +6910,11 @@
 // Trait decls emit no IR directly. Impl decls emit explicit methods and then
 // synthesize specialised copies of any trait default methods the impl omitted.
 @ gen_trait_or_impl i lex i syms i cg → v {
+    // Grammar v2.0+: `pub` on trait/impl decls is accepted (forward-
+    // compat) but not yet enforced — trait methods are mangled at
+    // emission so cross-file dispatch is type-driven, not name-
+    // driven. v2 may revisit if there's a real interop case.
+    ( vis_take_pending_pub )
     ( nurl_lex_advance lex )  // skip '%'
     : s tname ( nurl_lex_val lex )
     ( nurl_lex_advance lex )  // skip trait name

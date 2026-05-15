@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* **`pub` visibility for structs, enums, and global constants.**
+  Extends the v2.0 `pub @ greet` rule that already covered `@`-fns to
+  cover `pub :`, `pub : |`, and `pub : i FOO 7` declarations. Enum
+  variants inherit the parent enum's visibility (no per-variant
+  syntax). Enforcement at parse_type_base (cross-file `%Name`
+  resolutions) and gen_ident (cross-file `__global` loads). FFI and
+  trait/impl decls accept `pub` forward-compat but don't enforce
+  (FFI is an ABI contract; trait dispatch is type-mangled, not name-
+  routed). Diagnostic: `private type 'X' is not visible across files;
+  defined in 'Y'` (and the `global` / `function` variants on the same
+  template). Regressions: `pub_type_visibility.nu` (positive) +
+  `should_fail_pub_type_neg` / `_const_neg` / `_variant_neg` +
+  `should_fail_pub_type_helper.nu` (shared helper).
+
+  **Strategic value:** package management now has the public API
+  surface it requires.
+
 ### Changed
 
 * **`parse_request_head` now returns `! ParsedHeadOk HttpReqErr`**
