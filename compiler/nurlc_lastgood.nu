@@ -5854,13 +5854,52 @@
 // The fname-keyed flag `<fname>__variadic` is the predicate; the count
 // is needed because promotion applies ONLY to the variadic tail.
 
+// __ffi_lib_check: enforce that every external `&`-FFI library has a
+// corresponding build-time sentinel `stdlib/runtime.<name>` so a
+// missing dev package surfaces as a clear compile-time error instead
+// of a cryptic `undefined reference to PQconnectdb` from the linker.
+//
+// Normalisation: strip a leading `lib` prefix so `libcurl` matches
+// the build.sh convention `stdlib/runtime.curl`. Whitelist: `c` /
+// `libc` / `m` / `pthread` / `dl` are always linked (default link
+// line in `build.sh` / `run_tests.sh`) and skip the check.
+@ __ffi_lib_check i lex s lib → v {
+    : i llen ( nurl_str_len lib )
+    ? > llen 0 {
+        // Strip a leading `lib` prefix if present (`libcurl` → `curl`).
+        : ~ s norm lib
+        ? & >= llen 3
+          & == ( nurl_str_get lib 0 ) 108
+          & == ( nurl_str_get lib 1 ) 105
+            == ( nurl_str_get lib 2 ) 98
+        { = norm ( nurl_str_slice lib 3 - llen 3 ) } {}
+        // Whitelist of always-linked system libraries.
+        : b in_whitelist | | | ( seq norm `c` ) ( seq norm `m` ) ( seq norm `pthread` ) ( seq norm `dl` )
+        ? in_whitelist {} {
+            : s sentinel ( nurl_str_cat `stdlib/runtime.` norm )
+            ? == ( nurl_file_exists sentinel ) 1 {} {
+                : s msg ( nurl_str_cat4
+                    `FFI library '` lib `' is required but no build-time sentinel '`
+                    ( nurl_str_cat sentinel `' found - install lib` ) )
+                : s msg2 ( nurl_str_cat3 msg norm `-dev (or equivalent) and run build.sh again` )
+                ( die lex msg2 )
+            }
+        }
+    } {}
+}
+
 @ gen_ffi_decl i lex i syms → v {
     // Grammar v2.0+: `pub` on FFI decls is accepted at parse time
     // (forward-compat) but not enforced — FFI symbols are linker-
     // level ABI globals, the linker doesn't know about NURL files.
     ( vis_take_pending_pub )
     ( nurl_lex_advance lex )  // consume '&'
-    ( nurl_lex_advance lex )  // skip library STR (linker concern, not IR)
+    // Library STR: skipped for IR emission (LLVM declare carries no
+    // library name) but used for the build-time sentinel check so a
+    // missing dev package fails fast at compile rather than at link.
+    : s lib ( nurl_lex_val lex )
+    ( __ffi_lib_check lex lib )
+    ( nurl_lex_advance lex )  // skip library STR
     ( expect lex TT_AT )  // consume '@'
     : s fname ( nurl_lex_val lex )
     ( nurl_lex_advance lex )

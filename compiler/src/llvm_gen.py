@@ -228,7 +228,8 @@ _BUILTIN_DECLS: Dict[str, Tuple[str, str]] = {
     'nurl_is_alnum_': ('nurl_is_alnum_', 'declare i64  @nurl_is_alnum_(i64)'),
 
     # file & process
-    'nurl_read_file': ('nurl_read_file', 'declare i8*  @nurl_read_file(i8*)'),
+    'nurl_read_file':   ('nurl_read_file',   'declare i8*  @nurl_read_file(i8*)'),
+    'nurl_file_exists': ('nurl_file_exists', 'declare i64  @nurl_file_exists(i8*)'),
     'nurl_exit':      ('nurl_exit',      'declare void @nurl_exit(i64)'),
     'nurl_argc':       ('nurl_argc',       'declare i64  @nurl_argc()'),
     'nurl_argv':       ('nurl_argv',       'declare i8*  @nurl_argv(i64)'),

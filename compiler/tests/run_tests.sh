@@ -82,6 +82,16 @@ if [[ -f "$ROOT_DIR/stdlib/runtime.sqlite3" ]]; then
     fi
 fi
 
+# Link -lpq when build.sh detected libpq. Same model.
+PQ_LIBS=""
+if [[ -f "$ROOT_DIR/stdlib/runtime.pq" ]]; then
+    if command -v pkg-config &>/dev/null && pkg-config --exists libpq 2>/dev/null; then
+        PQ_LIBS=$(pkg-config --libs libpq)
+    else
+        PQ_LIBS="-lpq"
+    fi
+fi
+
 # HTTP tests require network egress, so they're opt-in. Default skips.
 ENABLE_HTTP_TESTS="${NURL_HTTP_TESTS:-0}"
 
@@ -212,7 +222,7 @@ for src in "${tests[@]}"; do
     fi
 
     # shellcheck disable=SC2086
-    if ! "$CLANG" -O2 "$ll" "$RUNTIME" -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS -o "$bin" 2>/dev/null; then
+    if ! "$CLANG" -O2 "$ll" "$RUNTIME" -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS -o "$bin" 2>/dev/null; then
         echo "LINK FAIL" >> "$RESULTS"
         echo >> "$RESULTS"
         continue

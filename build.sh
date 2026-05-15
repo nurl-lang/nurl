@@ -99,6 +99,25 @@ else
     log "[info] sqlite3 not found — stdlib/ext/sqlite.nu will return SqliteUnsupported"
 fi
 
+# ── libpq detection ──────────────────────────────────────────
+# PostgreSQL FFI is PURE NURL — `stdlib/ext/postgres.nu` declares
+# every libpq symbol via `& `pq` @ ...` without any runtime.c bridge.
+# Detection here exists only to (a) extend the default link line with
+# -lpq so `nurlc` itself can build (it doesn't import postgres.nu —
+# safe) and (b) emit the `stdlib/runtime.pq` sentinel that the new
+# compile-time FFI-lib check consults: an attempt to compile a NURL
+# program that uses postgres.nu without libpq-dev installed fails at
+# compile time with a clear diagnostic, not a cryptic linker error.
+PQ_LIBS=""
+if pkg-config --exists libpq 2>/dev/null; then
+    PQ_LIBS="$(pkg-config --libs libpq)"
+    echo 1 > stdlib/runtime.pq
+    log "[info] libpq detected — PostgreSQL FFI enabled"
+else
+    rm -f stdlib/runtime.pq
+    log "[info] libpq not found — stdlib/ext/postgres.nu will fail at compile time"
+fi
+
 # ── Build stages ─────────────────────────────────────────────
 step "runtime"       bash -c "'$CLANG' $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
 
@@ -131,10 +150,10 @@ step "clean"         rm -f build/nurlc_py.ll build/nurlc_py \
                           build/nurlc
 
 step "stage0 ir"     bash -c 'python compiler/nurlc.py --llvm compiler/nurlc.nu > build/nurlc_py.ll'
-step "stage0 link"   "$CLANG" -O2 build/nurlc_py.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS -o build/nurlc_py
+step "stage0 link"   "$CLANG" -O2 build/nurlc_py.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS -o build/nurlc_py
 
 step "stage1 ir"     bash -c './build/nurlc_py compiler/nurlc.nu > build/nurlc_self.ll'
-step "stage1 link"   "$CLANG" -O2 build/nurlc_self.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS -o build/nurlc_self
+step "stage1 link"   "$CLANG" -O2 build/nurlc_self.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS -o build/nurlc_self
 
 # Informational: python vs nurlc_py IR (not fatal).
 if cmp -s build/nurlc_py.ll build/nurlc_self.ll; then
@@ -144,7 +163,7 @@ else
 fi
 
 step "stage2 ir"     bash -c './build/nurlc_self compiler/nurlc.nu > build/nurlc_self2.ll'
-step "stage2 link"   "$CLANG" -O2 build/nurlc_self2.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS -o build/nurlc_self2
+step "stage2 link"   "$CLANG" -O2 build/nurlc_self2.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS -o build/nurlc_self2
 
 # Fixed-point: nurlc_self must match nurlc_self2.
 if ! cmp -s build/nurlc_self.ll build/nurlc_self2.ll; then

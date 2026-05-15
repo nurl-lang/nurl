@@ -38,7 +38,7 @@ Rounding out the standard library for production use.
 
 ### Data & Filesystem
 - [x] **SQLite FFI — shipped 2026-05-15:** `stdlib/ext/sqlite.nu`. Thin wrapper over libsqlite3 with idiomatic `! T SqliteErr` returns. Surface: `sqlite_open / _close / _exec / _prepare / _bind_int / _bind_text / _bind_null / _step / _column_count / _column_int / _column_text / _column_type / _reset / _finalize`. `:memory:` and file-based connections; in-process only (no networking). MVP scope deliberately narrow: no BLOB / double / transaction helpers / statement cache / ATTACH / WAL tuning — callers compose those with SQL or with the existing primitives. Build-time dep detected via `pkg-config --exists sqlite3` (mirrors libcurl / openssl pattern); without it every call returns `SqliteUnsupported` at runtime. Regression: `compiler/tests/sqlite_basic.nu` (in-memory CRUD round-trip with prepared statement reuse).
-- [ ] **PostgreSQL FFI:** deferred — would mirror SQLite's shape but the libpq surface is larger; revisit when a real consumer asks.
+- [x] **PostgreSQL FFI — shipped 2026-05-15 (pure-NURL model):** `stdlib/ext/postgres.nu` declares every libpq symbol directly via `& \`pq\` @ ... → ...` — **zero `runtime.c` changes**. Surface: `pg_connect / _close / _err_msg / _exec / _exec_params / _result_status / _result_is_ok / _ntuples / _nfields / _get_value / _get_is_null / _field_name / _clear`. Connection / PgResult value handles wrap raw `s` pointers. `pg_exec_params` builds a parallel `char *` array from a `Vec[String]` and passes it as the libpq parameter pointer. Build-time dep detected via `pkg-config --exists libpq` (mirrors libcurl / openssl / sqlite3 patterns). Regression: `compiler/tests/postgres_basic.nu` (NURL_PG_TESTS=1 + PG_CONNINFO=... to enable; default prints the skip notice). **First example of the pure-NURL FFI model** — future stdlib bindings should default to this shape unless they need runtime-level state caching that NURL can't express idiomatically (sqlite3's `column_text` snapshot or `bind_text` TRANSIENT-flag bookkeeping).
 - [ ] **Advanced Filesystem Ops:** Recursive directory creation/removal (`dir_create_all`, `dir_remove_all`), file handles for chunked reading (`file_read_chunk h n`, `file_readline h`).
 - [ ] **Serialization (Serde):** General-purpose `Serialize[T]` and `Deserialize[T]` traits for JSON, MsgPack, and TOML.
 - [ ] **Compression:** Standard library support for Gzip and Zstd via FFI.
@@ -114,7 +114,29 @@ Scaling NURL for team use and external integration.
 
 ---
 
-*Last updated: May 15, 2026 — **SQLite FFI shipped — first Tier D piece.** Closes the v0.3.0 review's "None ship — sqlite/postgres on ROADMAP unchecked" callout for the SQLite half. Single iteration; same `pkg-config`-detected, conditional-compile pattern as libcurl and OpenSSL.
+*Last updated: May 15, 2026 — **PostgreSQL FFI shipped + compile-time FFI lib-check.** Two complementary additions, both designed to keep `stdlib/runtime.c` from growing for every new external library:
+
+**`__ffi_lib_check` (`compiler/nurlc.nu`).** Every `&`-FFI declaration's library name is now normalised (strip leading `lib`) and checked against a build-time sentinel `stdlib/runtime.<normalised>`. Whitelist of always-linked system libraries (`c` / `libc` / `m` / `pthread` / `dl`) skips the check. Cross-platform `nurl_file_exists` already in the runtime; Python stage-0 declaration added to `compiler/src/llvm_gen.py`. Missing sentinel → `die` at the `&`-decl site with:
+
+> `FFI library 'pq' is required but no build-time sentinel 'stdlib/runtime.pq' found - install libpq-dev (or equivalent) and run build.sh again`
+
+Replaces the cryptic linker `undefined reference to PQconnectdb` with a compile-time error that tells the user exactly what to do. Smoke-tested by moving `stdlib/runtime.pq` aside and compiling a postgres-using program — fires correctly.
+
+**`stdlib/ext/postgres.nu` — pure-NURL FFI.** All libpq calls (`PQconnectdb`, `PQfinish`, `PQerrorMessage`, `PQexec`, `PQexecParams`, `PQclear`, `PQresultStatus`, `PQntuples`, `PQnfields`, `PQgetvalue`, `PQgetisnull`, `PQfname`, `PQstatus`) declared directly via `& \`pq\` @ ... → ...`. **No `runtime.c` bridge** — the `&`-FFI lowers each declaration to an LLVM `declare` line that the linker resolves against the libpq shared library, identical shape to a `nurl_*` runtime function from NURL's perspective. NURL-side wrapper types `Connection { s raw }` / `PgResult { s raw }` carry the raw libpq pointers; idiomatic Result-returning surface (`! T PgErr`) layered on top. `pg_exec_params` builds a parallel `char *` array from a `Vec[String]` via `nurl_alloc` + `nurl_poke` and passes it through to libpq's parameter-pointer slot. Memory model documented in the module header — same `! T E` conventions as `sqlite.nu`.
+
+**Comparison: SQLite vs PostgreSQL FFI shape.** The SQLite binding (shipped earlier today) routes through ~360 lines of `runtime.c §21` wrapper code that snapshots libsqlite3's borrowed-view pointers into per-handle strdup'd buffers, conditional-compiles on `NURL_HAVE_SQLITE3`, and provides graceful `SqliteUnsupported` fallbacks. The PostgreSQL binding is purely NURL + linker. The runtime-bridge model is justified for SQLite by `column_text`'s overwrite-on-next-call semantics and `bind_text`'s `SQLITE_TRANSIENT` flag bookkeeping — those don't have a clean NURL equivalent. PostgreSQL's API is simpler (every borrowed view is owned by the PGresult and survives until `PQclear`), so the pure-NURL model is a clean fit. **Going forward**: prefer pure-NURL FFI; reach for runtime.c only when a binding needs the kind of state caching NURL can't express idiomatically.
+
+**v1 scope NOT covered (intentional follow-ups for postgres.nu):**
+- Binary protocol (`PQexecParams` always uses text format here).
+- COPY-FROM / COPY-TO streaming.
+- Async / non-blocking mode (`PQsendQuery` + `PQconsumeInput`).
+- LISTEN / NOTIFY notification channels.
+- Prepared statements named on server (`PQprepare`, `PQexecPrepared`).
+- Large objects (`lo_*`).
+
+**Acceptance.** `compiler/tests/postgres_basic.nu` — `NURL_PG_TESTS=1 PG_CONNINFO=...` enables the live round-trip (CREATE TEMP TABLE, 3× INSERT via `pg_exec_params`, SELECT walk). Default run prints the skip notice — baseline captures that path. Bootstrap fixed point holds (stage1 ≡ stage2 byte-identical IR at 1 184 466 B, +5 459 B vs the SQLite ship — covers `__ffi_lib_check` + python stage-0 file-exists decl).
+
+*Previously: May 15, 2026 — **SQLite FFI shipped — first Tier D piece.** Closes the v0.3.0 review's "None ship — sqlite/postgres on ROADMAP unchecked" callout for the SQLite half. Single iteration; same `pkg-config`-detected, conditional-compile pattern as libcurl and OpenSSL.
 
 **Runtime (`stdlib/runtime.c` §21).** `NurlSqliteDb` + `NurlSqliteStmt` heap handles addressed as `long long`. 16 FFI entry points (`nurl_sqlite_open / _close / _err_kind / _errmsg / _exec / _prepare / _stmt_err_kind / _bind_int / _bind_text / _bind_null / _step / _column_count / _column_type / _column_int / _column_text / _finalize / _reset`). `nurl_sqlite_step` maps SQLite return codes to a small NURL-facing enum: 100=ROW, 101=DONE; all other codes pass through unchanged for the surface to classify. `column_text` snapshots into a per-stmt strdup'd slot so the borrowed view stays valid even after the next step. `bind_text` uses `SQLITE_TRANSIENT` (sqlite copies its input) so the NURL caller can free the source String immediately.
 

@@ -10,6 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **PostgreSQL FFI in `stdlib/ext/postgres.nu` (pure-NURL).** First
+  example of the **runtime-less FFI model**: every libpq symbol is
+  declared directly via `& `pq` @ ... → ...` — no `runtime.c` bridge.
+  Surface: `pg_connect / _close / _err_msg / _exec / _exec_params /
+  _result_status / _result_is_ok / _ntuples / _nfields / _get_value /
+  _get_is_null / _field_name / _clear`. `pg_exec_params` accepts a
+  `Vec[String]` and builds the parallel `char **` pointer array for
+  libpq. v1 scope: text format only, no async, no LISTEN/NOTIFY, no
+  COPY streaming. Build-time dep detected via `pkg-config --exists
+  libpq`; missing → clear compile-time error from the new lib-check
+  (below). Regression: `compiler/tests/postgres_basic.nu`
+  (NURL_PG_TESTS=1 + PG_CONNINFO=... to enable).
+
+* **Compile-time FFI library presence check
+  (`__ffi_lib_check`).** Every `&`-FFI library name is normalised
+  (strip `lib`-prefix, whitelist always-linked system libs `c` / `m` /
+  `pthread` / `dl`) and checked against `stdlib/runtime.<lib>`
+  sentinels written by `build.sh`. Missing sentinel → die at the
+  `&`-decl site with `FFI library '<name>' is required but no
+  build-time sentinel '...' found - install lib<name>-dev (or
+  equivalent) and run build.sh again`. Replaces cryptic linker errors
+  like `undefined reference to PQconnectdb`. Smoke-validated by moving
+  `stdlib/runtime.pq` aside and recompiling a postgres-using program.
+
 * **SQLite FFI in `stdlib/ext/sqlite.nu`.** Thin wrapper over
   libsqlite3 with idiomatic `! T SqliteErr` returns. Surface:
   `sqlite_open / _close / _exec / _prepare / _bind_int / _bind_text /

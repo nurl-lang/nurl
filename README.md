@@ -746,6 +746,15 @@ defaults, etc.) see [`docs/GOTCHAS.md`](docs/GOTCHAS.md).
 | No automatic memory management — heap-allocated values (slice literals, `strcat` results, etc.) are not freed | Call `free` via FFI when needed; keep values on the stack where possible |
 | Import is inline-include only: no namespaces; alias rewrites only top-level `@`-functions, not types/enums/FFI/traits. Path-string dedup with leading `./` normalisation is in place — same file imported twice (or through a diamond) emits one set of decls | Stick to a single canonical import path per file; prefix names manually for types/enums when collisions matter |
 
+### PostgreSQL
+
+| Capability | Notes |
+|---|---|
+| **PostgreSQL via libpq** in `stdlib/ext/postgres.nu` (`pg_connect` / `_exec` / `_exec_params` / `_get_value` / `_clear` / `_close`) | Pure-NURL FFI — no `runtime.c` changes. Build-time dep: `libpq-dev` (pkg-config). When absent, the compile-time FFI lib-check fires with a clear "install libpq-dev" diagnostic, not a cryptic linker error. |
+| Text format only (no binary protocol in v1) | `pg_exec_params` always passes text-formatted params + returns text rows. |
+| `Connection` and `PgResult` value handles | Caller must `pg_close` each Connection and `pg_clear` each PgResult — even on Err arms. |
+| No async / no LISTEN/NOTIFY / no COPY streaming in v1 | Synchronous query model only. |
+
 ### SQLite
 
 | Capability | Notes |
