@@ -17,12 +17,12 @@ unlock, see [`../CHANGELOG.md`](../CHANGELOG.md).
 |---|---|---|
 | 1 | `&` and `|` are **binary** — `& A B C` is a parse-arity error | Chain via parens: `& A & B C` |
 | 2 | Bare `@-fn` names don't auto-coerce to a `(@ R P*)` closure parameter | Wrap in `\ P* → R { ( fn args ) }` |
-| 3 | Same-line shadowing: `: i z + z 7` shadows the parameter `z` from that line | Rename: `: i zz + z 7` |
+| 3 | Same-line shadowing: `: i z + z 7` shadows the parameter `z` from that line. **Compiler-warned 2026-05-15** — non-fatal `warning:` line at the binding site | Rename: `: i zz + z 7` |
 | 4 | Function calls require parens — `f a b` parses as register-then-loose-tokens | Always `( f a b )` |
 | 5 | Ternary arity errors cascade — diagnostic points at the *next* line | Count operands left-to-right on the previous line |
 | 6 | `vec_clone` is intentionally absent | Roll your own: `vec_each` + per-element clone |
 | 7 | Function-parameter struct mutation is **value-semantic** | Return the modified struct: `= c ( f c )` |
-| 8 | Mutable struct captured by closure (`: ~ T`) is a **borrow**, not a copy | Don't escape the closure; if you must, use a heap-backed handle |
+| 8 | Mutable struct captured by closure (`: ~ T`) is a **borrow**, not a copy. **Compiler-warned 2026-05-15** for `^`-return escapes; vec_push / thread_spawn escapes are not yet detected | Don't escape the closure; if you must, use a heap-backed handle |
 | 9 | ~~Variadic FFI does not auto-promote `f32` or narrow ints~~ — **fixed in v1.9** (auto-promotion via explicit `...` in FFI decl) | `& \`libc\` @ printf s fmt ... → i32` |
 | 10 | Multi-char namespace `alias::name` is merged into a single IDENT `alias__name` | Aliases only rename `@`-functions, not types or FFI decls |
 
@@ -101,7 +101,14 @@ parameter.
 **Why:** `:` introduces a new binding immediately after the right-hand
 side is evaluated. The new name is in scope for the rest of the
 function, including any subsequent reads — which silently rebind to
-the new value. No warning.
+the new value.
+
+**Compiler-warned (2026-05-15):** a `:` binding that matches one of
+the enclosing function's (or closure's) parameter names now emits a
+non-fatal `warning:` line pointing at the binding site. The check is
+scoped to parameter shadowing only — block-local `:`-to-`:` shadowing
+(occasionally intentional in loop accumulators) is silent. Regression:
+`compiler/tests/should_warn_param_shadow.nu`.
 
 ---
 
@@ -260,6 +267,16 @@ discipline as a C function holding a pointer to a stack local.
 without `~` is captured by value. Mutations inside the closure are
 local. Single-pointer-handle structs (`%String`, `%Vec`) are also
 captured by value but share through their inner pointer.
+
+**Compiler-warned (2026-05-15):** `^`-returning a closure that
+captures a `: ~`-mutable multi-field struct by pointer now emits a
+non-fatal `warning:` line. Both shapes trip the check — a named
+closure binding (`^ bump`) and a closure literal (`^ \ → v { ... c ... }`).
+Closures captured by-value (no `: ~`) and closures used locally (not
+returned, not stored, not thread_spawn'd) stay silent. Not yet
+detected: `vec_push` / `vec_insert` / `vec_set` / `thread_spawn` of
+the closure — those escapes are a follow-up item. Regression:
+`compiler/tests/should_warn_closure_escape.nu`.
 
 ---
 

@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* **Compiler warnings for `docs/GOTCHAS.md` items 3 + 8.** Two
+  non-fatal `warning:` diagnostics now surface the two soundness-
+  adjacent foot-guns flagged by the v0.3.0 external review:
+  - *Same-line parameter shadowing* (`: i z + z 7` where `z` is a
+    function parameter): per-fn `__fn_param_names__` roster shadowed
+    inside closure bodies so the check stays scoped. Zero false
+    positives across the entire stdlib + compiler + test corpus.
+  - *Closure-byref escape on `^`-return*: closures that take a
+    `: ~`-mutable multi-field capture by pointer (via the existing
+    `__is_capture_byref` predicate) get tagged with
+    `__last_closure_byref__` at the closure-literal site; the tag is
+    propagated onto the binding (`<name>__captures_byref`) by
+    `gen_let_or_struct`; `gen_ret` reads either form and emits the
+    warning. `vec_push` / `thread_spawn` escape sites are NOT yet
+    checked (documented as follow-up).
+
+  New `should_warn_*` test category in `compiler/tests/run_tests.sh`:
+  compile stderr is captured into a `WARNINGS` block (absolute paths
+  stripped via `sed $ROOT_DIR/`). Regressions:
+  `compiler/tests/should_warn_param_shadow.nu` and
+  `compiler/tests/should_warn_closure_escape.nu`. `docs/GOTCHAS.md`
+  items 3 + 8 marked "Compiler-warned 2026-05-15" in the quick-ref
+  table.
+
 ### Fixed
 
 * **`$`-import dedup keys are now canonicalised.** Pre-existing dedup

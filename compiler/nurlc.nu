@@ -94,6 +94,20 @@
     ( nurl_exit 1 )
 }
 
+// Soft diagnostic — same format as `die` but does not exit. Used for
+// non-fatal compiler-detected pitfalls (shadowing, escaping by-ref
+// closure captures) so the user sees the gotcha during compile rather
+// than at debugger-attached runtime.
+@ warn i lex s msg → v {
+    : i col ( nurl_lex_col lex )
+    : s loc ( nurl_str_cat ( nurl_lex_filename lex )
+    ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int ( nurl_lex_line lex ) )
+    ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` msg ) )
+    ( nurl_eprintln ( nurl_lex_line_text lex ) )
+    ( nurl_eprintln ( nurl_diag_caret col ) )
+}
+
 @ expect i lex i tt → v {
     ? != ( nurl_lex_type lex ) tt
     { ( die lex ( nurl_str_cat `unexpected token, expected tt=` ( nurl_str_int tt ) ) ) }
@@ -523,8 +537,28 @@
     ( nurl_lex_advance lex )
     // Reset __last_ident_name__ so we observe what gen_expr sets below
     ( nurl_sym_def syms `__last_ident_name__` `` )
+    // Reset the closure-byref flag so we can tell whether the returned
+    // expression is itself a closure literal that captures a stack
+    // binding by pointer (docs/GOTCHAS.md item 8).
+    ( nurl_sym_def syms `__last_closure_byref__` `` )
     : s val ( gen_expr lex syms cg )
     : s lt ( nurl_get_last_type )
+    // Escape check: warn if the returned value is a closure that
+    // captures a `: ~`-mutable multi-field struct by pointer. Two
+    // shapes trip the check:
+    //   (a) returning a fresh closure literal that captures byref
+    //       (the explicit `^ \ → v { ... c ... }` case), via
+    //       `__last_closure_byref__`.
+    //   (b) returning a binding that holds such a closure, via
+    //       `<ret_ident>__captures_byref` set by gen_let_or_struct.
+    : s ret_ident_for_byref ( nurl_sym_get syms `__last_ident_name__` )
+    : b returns_byref_closure ( seq ( nurl_sym_get syms `__last_closure_byref__` ) `1` )
+    ? & ! returns_byref_closure != 0 ( nurl_str_len ret_ident_for_byref )
+    { = returns_byref_closure ( seq ( nurl_sym_get syms ( nurl_str_cat ret_ident_for_byref `__captures_byref` ) ) `1` ) }
+    {}
+    ? returns_byref_closure
+    { ( warn lex `returning a closure that captures a stack binding by pointer - it will dangle after this function returns (use a heap-backed handle instead; see docs/GOTCHAS.md item 8)` ) }
+    {}
     // Diagnose cases where gen_expr produced no usable value (last_type =
     // void, e.g. a `? cond then else` whose two arms have incompatible
     // types so gen_cond degrades silently to void) while the function
@@ -2535,6 +2569,28 @@
     ( gen_expr lex syms cg )
 }
 
+// Soft check for the docs/GOTCHAS.md §3 pattern: a `:` binding declares
+// a name that already names a parameter of the enclosing function (or
+// closure). The classic foot-gun is `: i z + z 719468` where `z` is a
+// parameter; the new `z` shadows the parameter from this line forward
+// and any later read silently rebinds to the new value.
+//
+// Scope is the nearest @-decl OR closure body — `__fn_param_names__`
+// is reset to the closure's own param list inside gen_closure_expr via
+// nurl_sym_push, so a `:` inside a closure body checks against the
+// closure's params (which is the correct lexical scope).
+//
+// We deliberately do NOT warn on shadowing of a `:` binding from an
+// outer block — local-by-local shadowing is sometimes intentional
+// (loop accumulators, two unrelated locals with the same generic
+// name like `n` or `i`). Parameter shadowing is almost always a bug.
+@ __warn_if_shadows_param i lex i syms s name → v {
+    : s param_names ( nurl_sym_get syms `__fn_param_names__` )
+    ? & != 0 ( nurl_str_len param_names ) ( str_contains_word param_names name )
+    { ( warn lex ( nurl_str_cat3 `'` name `' shadows the enclosing function's parameter - rename (see docs/GOTCHAS.md item 3)` ) ) }
+    {}
+}
+
 @ gen_let_or_struct i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     // Check for optional ~ (mutable) token
@@ -2545,13 +2601,22 @@
     ? & == ( nurl_lex_type lex ) TT_IDENT == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_lex_val lex ) ) )
     {  // Type inference: plain IDENT that's not a known type
         : s name ( nurl_lex_val lex )
+        ( __warn_if_shadows_param lex syms name )
         ( nurl_lex_advance lex )
         : b rhs_is_slice_lit == ( nurl_lex_type lex ) TT_LBRACK
         ( nurl_sym_def syms `__last_call_ret_owned__` `` )
         ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
+        ( nurl_sym_def syms `__last_closure_byref__` `` )
         : s val ( gen_expr lex syms cg )
         : s vt ( nurl_get_last_type )
         : b rhs_is_owned_call != 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_owned__` ) )
+        // Propagate the closure-byref flag from the RHS onto the binding
+        // so gen_ret / future use-site checks can see it (docs/GOTCHAS.md
+        // item 8: a closure that captures a `: ~ MultiFieldStruct` by
+        // pointer must not outlive that struct's stack frame).
+        ? ( seq ( nurl_sym_get syms `__last_closure_byref__` ) `1` )
+        { ( nurl_sym_def syms ( nurl_str_cat name `__captures_byref` ) `1` ) }
+        {}
         : s ptr ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print ptr )
         ( nurl_print ` = alloca ` ) ( nurl_print vt ) ( nurl_print `\n` )
@@ -2608,6 +2673,7 @@
         : s let_nurl_type ( nurl_sym_get g_res_type_syms `__last_nurl_type__` )
         ? ( is_ident_tok ( nurl_lex_type lex ) )
         { : s name ( nurl_lex_val lex )
+            ( __warn_if_shadows_param lex syms name )
             ( nurl_lex_advance lex )
             // Tag the binding with its NURL source type + signedness
             // (consulted at gen_cast / coerce_store_val sites). Empty
@@ -2640,9 +2706,14 @@
             { : b rhs_is_slice_lit == ( nurl_lex_type lex ) TT_LBRACK
                 ( nurl_sym_def syms `__last_call_ret_owned__` `` )
                 ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
+                ( nurl_sym_def syms `__last_closure_byref__` `` )
                 : s val ( gen_expr lex syms cg )
                 : s vt ( nurl_get_last_type )
                 : b rhs_is_owned_call != 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_owned__` ) )
+                // Propagate closure-byref flag (item 8 escape detection).
+                ? ( seq ( nurl_sym_get syms `__last_closure_byref__` ) `1` )
+                { ( nurl_sym_def syms ( nurl_str_cat name `__captures_byref` ) `1` ) }
+                {}
 
                 // Debug: show types being converted
                 ( nurl_print `  ; DEBUG: val=` ) ( nurl_print val ) ( nurl_print ` vt=` ) ( nurl_print vt ) ( nurl_print ` ptype=` ) ( nurl_print ptype ) ( nurl_print `\n` )
@@ -4306,6 +4377,10 @@
     ( nurl_sym_def body_syms `__owned_slices__` `` )
     // Defers don't cross closure boundaries — clear shadow too
     ( nurl_sym_def body_syms `__defer_top__` `` )
+    // Reset the shadow-check roster so a `:` inside the closure body
+    // checks against the closure's OWN params, not the enclosing
+    // function's. Restored on sym_pop at the bottom of this function.
+    ( nurl_sym_def body_syms `__fn_param_names__` `` )
 
     // Register closure parameters
     : s bp_types param_types
@@ -4324,12 +4399,22 @@
         ( nurl_sym_def body_syms bpname bptype )
         ( nurl_sym_def body_syms ( nurl_str_cat bpname `__ptr` ) bpptr )
         ( nurl_sym_def body_syms ( nurl_str_cat bpname `__param` ) `1` )
+        // Mirror into the closure-local shadow-check roster.
+        : s c_name_roster ( nurl_sym_get body_syms `__fn_param_names__` )
+        : s c_name_next ? == 0 ( nurl_str_len c_name_roster ) bpname ( nurl_str_cat3 c_name_roster ` ` bpname )
+        ( nurl_sym_def body_syms `__fn_param_names__` c_name_next )
         = bp_types ( str_skip_word bp_types )
         = bp_names ( str_skip_word bp_names )
         = bpi + bpi 1
     }
 
     // Register captured variables via environment struct
+    // Track whether ANY capture is by-pointer (mutable multi-field
+    // struct). If yes, this closure carries a pointer into the
+    // enclosing function's stack and must NOT outlive that stack
+    // frame. We tag the closure value so gen_let / gen_ret can warn
+    // at escape sites (docs/GOTCHAS.md §8).
+    : ~ b any_byref_capture F
     ? > captured_count 0
     {
         : s typed_env ( nurl_cg_reg cg )
@@ -4354,6 +4439,7 @@
             : s cap_type ( nurl_sym_get syms cap_name )
             ? == 0 ( nurl_str_len cap_type ) { = cap_type `i64` } {}
             : b cap_byref ( __is_capture_byref cap_name syms )
+            ? cap_byref { = any_byref_capture T } {}
             : s eff_type ? cap_byref ( nurl_str_cat cap_type `*` ) cap_type
             : s cap_gep ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print cap_gep )
@@ -4453,6 +4539,16 @@
     ( nurl_print env_ptr ) ( nurl_print `, 1\n` )
 
     ( nurl_set_last_type fn_ptr_type )
+
+    // Tag this closure as "captures a stack binding by pointer" if any
+    // of its captures came in through the byref path. gen_let_or_struct
+    // copies the flag onto the binding (`<name>__captures_byref`) and
+    // gen_ret reads either form to emit the §8 escape warning at
+    // `^`-return sites. Cleared by gen_let / gen_ret after consumption
+    // so it never bleeds into the next sibling expression.
+    ? any_byref_capture
+    { ( nurl_sym_def syms `__last_closure_byref__` `1` ) }
+    {}
 
     result2
 }
@@ -5246,6 +5342,12 @@
     // __alloca_struct_params can iterate them after `entry:` is
     // emitted and back struct-typed params with alloca slots.
     ( nurl_sym_def syms `__fn_params__` `` )
+    // Also reset the space-separated name-only roster consulted by
+    // gen_let_or_struct's shadow check (docs/GOTCHAS.md §3). Closures
+    // shadow this key inside their own body via the `nurl_sym_push`
+    // / `nurl_sym_pop` scope, so a `:` inside a closure body checks
+    // against the closure's params — not the enclosing function's.
+    ( nurl_sym_def syms `__fn_param_names__` `` )
     // Guard against EOF too: without this, a malformed header that
     // never produces TT_ARROW (e.g. ASCII `->` instead of `→`) hangs
     // the compiler in an infinite loop, because gen_fn_param on EOF
@@ -5427,6 +5529,12 @@
         : s pair ( nurl_str_cat3 pname `\t` lt )
         : s next ? == 0 ( nurl_str_len roster ) pair ( nurl_str_cat3 roster `|` pair )
         ( nurl_sym_def syms `__fn_params__` next )
+        // Mirror the param name into the name-only roster used by
+        // gen_let_or_struct's shadow check. Space-separated; matches
+        // `str_contains_word` semantics.
+        : s name_roster ( nurl_sym_get syms `__fn_param_names__` )
+        : s name_next ? == 0 ( nurl_str_len name_roster ) pname ( nurl_str_cat3 name_roster ` ` pname )
+        ( nurl_sym_def syms `__fn_param_names__` name_next )
         : s entry ( nurl_str_cat3 lt ` %` pname )
         ? == pct 0
         ( nurl_set_last_type entry )

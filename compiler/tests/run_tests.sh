@@ -151,12 +151,36 @@ for src in "${tests[@]}"; do
 
     printf '=== %s ===\n' "$name" >> "$RESULTS"
 
-    if ! "$NURLC" "$src" > "$ll" 2>/dev/null; then
-        echo "COMPILE FAIL" >> "$RESULTS"
-        echo >> "$RESULTS"
-        continue
+    # `should_warn_*` tests intentionally trip a compiler diagnostic
+    # that is non-fatal (warning, not error). For those, capture the
+    # compile stderr into a WARNINGS block so the baseline records the
+    # exact diagnostic text; for everything else, compile stderr is
+    # dropped to keep results deterministic across machines whose tool
+    # versions vary.
+    werr=""
+    if [[ "$name" == should_warn_* ]]; then
+        werr="$WORKDIR/$name.werr"
+        if ! "$NURLC" "$src" > "$ll" 2>"$werr"; then
+            echo "COMPILE FAIL" >> "$RESULTS"
+            echo >> "$RESULTS"
+            continue
+        fi
+    else
+        if ! "$NURLC" "$src" > "$ll" 2>/dev/null; then
+            echo "COMPILE FAIL" >> "$RESULTS"
+            echo >> "$RESULTS"
+            continue
+        fi
     fi
     echo "COMPILE OK" >> "$RESULTS"
+    if [[ -n "$werr" && -s "$werr" ]]; then
+        echo "WARNINGS" >> "$RESULTS"
+        # Strip the absolute repo prefix from warning paths so the
+        # baseline is machine-portable. Anything before
+        # `compiler/tests/…` becomes a relative path.
+        sed -i "s|$ROOT_DIR/||g" "$werr"
+        append_output_capped "$werr"
+    fi
 
     # shellcheck disable=SC2086
     if ! "$CLANG" -O2 "$ll" "$RUNTIME" -lm -lpthread $CURL_LIBS -o "$bin" 2>/dev/null; then
