@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **SQLite FFI in `stdlib/ext/sqlite.nu`.** Thin wrapper over
+  libsqlite3 with idiomatic `! T SqliteErr` returns. Surface:
+  `sqlite_open / _close / _exec / _prepare / _bind_int / _bind_text /
+  _bind_null / _step / _column_count / _column_type / _column_int /
+  _column_text / _reset / _finalize`. `: Database` / `: Statement`
+  value handles, `: | SqliteErr` with 9 variants. `sqlite_step`
+  returns `!b SqliteErr` (T=Row, F=Done). v1 scope: int64 + text
+  binds/columns only (no BLOB / double), no transaction helpers, no
+  statement cache, no ATTACH — those compose with raw SQL. Build-
+  time dep detected via `pkg-config --exists sqlite3`; without it,
+  every entry returns `SqliteUnsupported`. Runtime side at
+  `stdlib/runtime.c §21`. Regression: `compiler/tests/sqlite_basic.nu`
+  (in-memory CRUD round-trip with prepared statement reuse).
+
 * **Import alias rewriting extended to types, enum variants, and
   global constants.** `$ `path` alias` now renames every top-level
   decl in the imported file to `alias__name`, not just `@`-functions.

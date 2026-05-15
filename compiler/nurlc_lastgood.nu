@@ -6086,20 +6086,25 @@
                                             ? == ( nurl_lex_type lx ) TT_RBRACE { ( nurl_lex_advance lx ) } {}
                                         } {}
                                     }
-                                    { ? ( is_ident_tok tt2 )
-                                        {  // `: Name { ... }` (struct) OR `: Name [tparams] { ... }` (generic struct).
-                                            : s sn ( nurl_lex_val lx )
-                                            = names ? == 0 ( nurl_str_len names ) sn ( nurl_str_cat3 names ` ` sn )
-                                            ( nurl_lex_advance lx )
+                                    { ? == tt2 TT_TYPE_KW
+                                        {  // `: TYPE_KW NAME value` (global const).
+                                            // Checked BEFORE the IDENT branch because
+                                            // is_ident_tok matches TYPE_KW too — a
+                                            // bare `i` / `s` / `f` etc. would otherwise
+                                            // be mistaken for a struct name.
+                                            ( nurl_lex_advance lx )  // consume type kw
+                                            ? ( is_ident_tok ( nurl_lex_type lx ) )
+                                            { : s cn ( nurl_lex_val lx )
+                                                = names ? == 0 ( nurl_str_len names ) cn ( nurl_str_cat3 names ` ` cn )
+                                                ( nurl_lex_advance lx )
+                                            } {}
                                         }
-                                        { ? == tt2 TT_TYPE_KW
-                                            {  // `: TYPE_KW NAME value` (global const).
-                                                ( nurl_lex_advance lx )  // consume type kw
-                                                ? ( is_ident_tok ( nurl_lex_type lx ) )
-                                                { : s cn ( nurl_lex_val lx )
-                                                    = names ? == 0 ( nurl_str_len names ) cn ( nurl_str_cat3 names ` ` cn )
-                                                    ( nurl_lex_advance lx )
-                                                } {}
+                                        { ? == tt2 TT_IDENT
+                                            {  // `: Name { ... }` (struct) OR
+                                               // `: Name [tparams] { ... }` (generic struct).
+                                                : s sn ( nurl_lex_val lx )
+                                                = names ? == 0 ( nurl_str_len names ) sn ( nurl_str_cat3 names ` ` sn )
+                                                ( nurl_lex_advance lx )
                                             }
                                             {}
                                         }
@@ -6479,6 +6484,23 @@
     ( emit `declare void @nurl_panic(i8*)` )
     ( emit `declare i64  @nurl_recover(i8*, i8*)` )
     ( emit `declare i8*  @nurl_panic_last_msg()` )
+    ( emit `declare i64  @nurl_sqlite_open(i8*)` )
+    ( emit `declare void @nurl_sqlite_close(i64)` )
+    ( emit `declare i64  @nurl_sqlite_err_kind(i64)` )
+    ( emit `declare i8*  @nurl_sqlite_errmsg(i64)` )
+    ( emit `declare i64  @nurl_sqlite_exec(i64, i8*)` )
+    ( emit `declare i64  @nurl_sqlite_prepare(i64, i8*)` )
+    ( emit `declare i64  @nurl_sqlite_stmt_err_kind(i64)` )
+    ( emit `declare i64  @nurl_sqlite_bind_int(i64, i64, i64)` )
+    ( emit `declare i64  @nurl_sqlite_bind_text(i64, i64, i8*)` )
+    ( emit `declare i64  @nurl_sqlite_bind_null(i64, i64)` )
+    ( emit `declare i64  @nurl_sqlite_step(i64)` )
+    ( emit `declare i64  @nurl_sqlite_column_count(i64)` )
+    ( emit `declare i64  @nurl_sqlite_column_type(i64, i64)` )
+    ( emit `declare i64  @nurl_sqlite_column_int(i64, i64)` )
+    ( emit `declare i8*  @nurl_sqlite_column_text(i64, i64)` )
+    ( emit `declare void @nurl_sqlite_finalize(i64)` )
+    ( emit `declare i64  @nurl_sqlite_reset(i64)` )
     ( emit `` )
 }
 
@@ -6731,6 +6753,23 @@
     ( nurl_sym_def syms `nurl_panic` `void` )
     ( nurl_sym_def syms `nurl_recover` `i64` )
     ( nurl_sym_def syms `nurl_panic_last_msg` `i8*` )
+    ( nurl_sym_def syms `nurl_sqlite_open` `i64` )
+    ( nurl_sym_def syms `nurl_sqlite_close` `void` )
+    ( nurl_sym_def syms `nurl_sqlite_err_kind` `i64` )
+    ( nurl_sym_def syms `nurl_sqlite_errmsg` `i8*` )
+    ( nurl_sym_def syms `nurl_sqlite_exec` `i64` )
+    ( nurl_sym_def syms `nurl_sqlite_prepare` `i64` )
+    ( nurl_sym_def syms `nurl_sqlite_stmt_err_kind` `i64` )
+    ( nurl_sym_def syms `nurl_sqlite_bind_int` `i64` )
+    ( nurl_sym_def syms `nurl_sqlite_bind_text` `i64` )
+    ( nurl_sym_def syms `nurl_sqlite_bind_null` `i64` )
+    ( nurl_sym_def syms `nurl_sqlite_step` `i64` )
+    ( nurl_sym_def syms `nurl_sqlite_column_count` `i64` )
+    ( nurl_sym_def syms `nurl_sqlite_column_type` `i64` )
+    ( nurl_sym_def syms `nurl_sqlite_column_int` `i64` )
+    ( nurl_sym_def syms `nurl_sqlite_column_text` `i8*` )
+    ( nurl_sym_def syms `nurl_sqlite_finalize` `void` )
+    ( nurl_sym_def syms `nurl_sqlite_reset` `i64` )
     // void runtime functions
     ( nurl_sym_def syms `nurl_print` `void` )
     ( nurl_sym_def syms `nurl_eprint` `void` )

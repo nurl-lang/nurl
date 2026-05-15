@@ -37,7 +37,8 @@ Enhancing the type system and compiler efficiency.
 Rounding out the standard library for production use.
 
 ### Data & Filesystem
-- [ ] **Database Integration:** SQLite FFI wrapper (`stdlib/ext/sqlite.nu`) and PostgreSQL support.
+- [x] **SQLite FFI — shipped 2026-05-15:** `stdlib/ext/sqlite.nu`. Thin wrapper over libsqlite3 with idiomatic `! T SqliteErr` returns. Surface: `sqlite_open / _close / _exec / _prepare / _bind_int / _bind_text / _bind_null / _step / _column_count / _column_int / _column_text / _column_type / _reset / _finalize`. `:memory:` and file-based connections; in-process only (no networking). MVP scope deliberately narrow: no BLOB / double / transaction helpers / statement cache / ATTACH / WAL tuning — callers compose those with SQL or with the existing primitives. Build-time dep detected via `pkg-config --exists sqlite3` (mirrors libcurl / openssl pattern); without it every call returns `SqliteUnsupported` at runtime. Regression: `compiler/tests/sqlite_basic.nu` (in-memory CRUD round-trip with prepared statement reuse).
+- [ ] **PostgreSQL FFI:** deferred — would mirror SQLite's shape but the libpq surface is larger; revisit when a real consumer asks.
 - [ ] **Advanced Filesystem Ops:** Recursive directory creation/removal (`dir_create_all`, `dir_remove_all`), file handles for chunked reading (`file_read_chunk h n`, `file_readline h`).
 - [ ] **Serialization (Serde):** General-purpose `Serialize[T]` and `Deserialize[T]` traits for JSON, MsgPack, and TOML.
 - [ ] **Compression:** Standard library support for Gzip and Zstd via FFI.
@@ -113,7 +114,25 @@ Scaling NURL for team use and external integration.
 
 ---
 
-*Last updated: May 15, 2026 — **GOTCHAS doc cleanup: §6 (alias) closed, §1 (n-ary `&`/`|`) judged infeasible.** Two `docs/GOTCHAS.md` quirks attempted as part of the "shrink the gotcha doc" cleanup; one closed via a real fix, one rolled back as out-of-scope.
+*Last updated: May 15, 2026 — **SQLite FFI shipped — first Tier D piece.** Closes the v0.3.0 review's "None ship — sqlite/postgres on ROADMAP unchecked" callout for the SQLite half. Single iteration; same `pkg-config`-detected, conditional-compile pattern as libcurl and OpenSSL.
+
+**Runtime (`stdlib/runtime.c` §21).** `NurlSqliteDb` + `NurlSqliteStmt` heap handles addressed as `long long`. 16 FFI entry points (`nurl_sqlite_open / _close / _err_kind / _errmsg / _exec / _prepare / _stmt_err_kind / _bind_int / _bind_text / _bind_null / _step / _column_count / _column_type / _column_int / _column_text / _finalize / _reset`). `nurl_sqlite_step` maps SQLite return codes to a small NURL-facing enum: 100=ROW, 101=DONE; all other codes pass through unchanged for the surface to classify. `column_text` snapshots into a per-stmt strdup'd slot so the borrowed view stays valid even after the next step. `bind_text` uses `SQLITE_TRANSIENT` (sqlite copies its input) so the NURL caller can free the source String immediately.
+
+**NURL surface (`stdlib/ext/sqlite.nu`).** Idiomatic Result-returning API: `: Database { s raw }` / `: Statement { s raw }` value handles; `: | SqliteErr` enum with 9 variants (Unsupported / Open / Syntax / Busy / Locked / Constraint / Misuse / Io / Other). The two cursor states (ROW / DONE) ride a `! b SqliteErr` rather than a tag-only enum — `?? sr { T → … F → … }` is cleaner than the `?? enum { Row → … Done → … }` we'd have wanted, and the latter currently miscompiles when wrapped inside `! T E`. Documented in the module header.
+
+**Build wiring.** `build.sh` detects libsqlite3 via `pkg-config --exists sqlite3`, emits `-DNURL_HAVE_SQLITE3 $(pkg-config --cflags sqlite3)` on the runtime compile and `-lsqlite3` on every link line; touches `stdlib/runtime.sqlite3` sentinel for `compiler/tests/run_tests.sh` to pick up. Without the dev package every entry returns `SqliteUnsupported` and the test runner skips linking against sqlite cleanly.
+
+**v1 scope deferred (all explicit follow-ups):**
+- BLOB columns / bindings (text + int64 only — callers stringify or encode as hex).
+- Floating-point columns (use `column_text` + `string_to_float`).
+- Transaction helpers (caller issues `BEGIN` / `COMMIT` via `sqlite_exec`).
+- Prepared statement cache (caller manages the Statement lifetime).
+- ATTACH, PRAGMA tuning, WAL setup (pure-SQL recipes via `sqlite_exec`).
+- PostgreSQL: same shape would work; libpq surface is larger; deferred until a real consumer asks.
+
+**Acceptance.** `compiler/tests/sqlite_basic.nu` — in-memory database, CREATE TABLE via `sqlite_exec`, parameterised INSERT (prepared statement reused across three bind/step/reset cycles), SELECT walking rows with `sqlite_step` + `sqlite_column_int` / `_text`. Output snapshots three rows in id order plus a final `nrows=3` summary. Offline (no network gate); skips cleanly when `stdlib/runtime.sqlite3` sentinel is absent. Bootstrap fixed point holds (stage1 ≡ stage2 byte-identical IR at 1 179 007 B, +9 956 B vs the alias-rewrite ship — covers the 16 FFI decls + symbol-table entries + the runtime §21 bridge).
+
+*Previously: May 15, 2026 — **GOTCHAS doc cleanup: §6 (alias) closed, §1 (n-ary `&`/`|`) judged infeasible.** Two `docs/GOTCHAS.md` quirks attempted as part of the "shrink the gotcha doc" cleanup; one closed via a real fix, one rolled back as out-of-scope.
 
 **§6 — alias rewrite extended (closed).** Original behaviour: `$ `path` alias` renamed only top-level `@`-functions, leaving types / enum variants / consts in the global namespace. Use sites `alias::PubStruct` and `alias::PUB_CONST` therefore failed to resolve. New behaviour: `collect_alias_targets` walks the imported source and registers every top-level `@`-fn, `:`-struct, `: |`-enum (including its variants), and `:`-const name; `alias_rewrite_source` then substitutes whole-identifier occurrences of those names with `alias__`-prefixed versions. `pub` prefix is also consumed so `pub :` / `pub : |` / `pub :` are recognised before the underlying decl shape. FFI declarations and trait/impl methods are intentionally not renamed — FFI symbols resolve at the linker by literal C-ABI name; trait methods are mangled by impl-target type, not name-routed across files. One bug bundled and fixed: `is_ident_tok` accepts both TT_IDENT and TT_TYPE_KW, so the const-vs-struct disambiguation had to check TT_TYPE_KW *before* the IDENT branch (`: i PI_FIXED 314` was otherwise mis-classified as a struct named `i` and added to the alias list). Regression: `compiler/tests/alias_rewrite_types.nu` + `_mod.nu` helper. Bootstrap fixed point holds (stage1 ≡ stage2 byte-identical IR at 1 169 051 B, +8 272 B vs Tier-C ship).
 

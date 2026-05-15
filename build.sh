@@ -82,8 +82,25 @@ else
     log "[info] openssl not found — tcp_listen_tls will return NetErr::TLS_CONTEXT_INIT"
 fi
 
+# ── libsqlite3 detection ─────────────────────────────────────
+# Same pattern as libcurl / openssl. With sqlite3 present, the
+# runtime's `nurl_sqlite_*` bridge compiles in; without it, the
+# symbols still exist but every call returns SqliteUnsupported and
+# the link line skips -lsqlite3.
+SQLITE3_CFLAGS=""
+SQLITE3_LIBS=""
+if pkg-config --exists sqlite3 2>/dev/null; then
+    SQLITE3_CFLAGS="-DNURL_HAVE_SQLITE3 $(pkg-config --cflags sqlite3)"
+    SQLITE3_LIBS="$(pkg-config --libs sqlite3)"
+    echo 1 > stdlib/runtime.sqlite3
+    log "[info] sqlite3 detected — SQLite FFI enabled"
+else
+    rm -f stdlib/runtime.sqlite3
+    log "[info] sqlite3 not found — stdlib/ext/sqlite.nu will return SqliteUnsupported"
+fi
+
 # ── Build stages ─────────────────────────────────────────────
-step "runtime"       bash -c "'$CLANG' $CURL_CFLAGS $OPENSSL_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
+step "runtime"       bash -c "'$CLANG' $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
 
 # Always build canvas.o. With SDL2 headers present we get the real
 # native back-end (-DNURL_HAVE_SDL2); otherwise we compile a stub that
@@ -114,10 +131,10 @@ step "clean"         rm -f build/nurlc_py.ll build/nurlc_py \
                           build/nurlc
 
 step "stage0 ir"     bash -c 'python compiler/nurlc.py --llvm compiler/nurlc.nu > build/nurlc_py.ll'
-step "stage0 link"   "$CLANG" -O2 build/nurlc_py.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS -o build/nurlc_py
+step "stage0 link"   "$CLANG" -O2 build/nurlc_py.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS -o build/nurlc_py
 
 step "stage1 ir"     bash -c './build/nurlc_py compiler/nurlc.nu > build/nurlc_self.ll'
-step "stage1 link"   "$CLANG" -O2 build/nurlc_self.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS -o build/nurlc_self
+step "stage1 link"   "$CLANG" -O2 build/nurlc_self.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS -o build/nurlc_self
 
 # Informational: python vs nurlc_py IR (not fatal).
 if cmp -s build/nurlc_py.ll build/nurlc_self.ll; then
@@ -127,7 +144,7 @@ else
 fi
 
 step "stage2 ir"     bash -c './build/nurlc_self compiler/nurlc.nu > build/nurlc_self2.ll'
-step "stage2 link"   "$CLANG" -O2 build/nurlc_self2.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS -o build/nurlc_self2
+step "stage2 link"   "$CLANG" -O2 build/nurlc_self2.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS -o build/nurlc_self2
 
 # Fixed-point: nurlc_self must match nurlc_self2.
 if ! cmp -s build/nurlc_self.ll build/nurlc_self2.ll; then

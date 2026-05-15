@@ -72,6 +72,16 @@ if [[ -f "$ROOT_DIR/stdlib/runtime.openssl" ]]; then
     fi
 fi
 
+# Link -lsqlite3 when build.sh detected libsqlite3. Same model.
+SQLITE3_LIBS=""
+if [[ -f "$ROOT_DIR/stdlib/runtime.sqlite3" ]]; then
+    if command -v pkg-config &>/dev/null && pkg-config --exists sqlite3 2>/dev/null; then
+        SQLITE3_LIBS=$(pkg-config --libs sqlite3)
+    else
+        SQLITE3_LIBS="-lsqlite3"
+    fi
+fi
+
 # HTTP tests require network egress, so they're opt-in. Default skips.
 ENABLE_HTTP_TESTS="${NURL_HTTP_TESTS:-0}"
 
@@ -202,7 +212,7 @@ for src in "${tests[@]}"; do
     fi
 
     # shellcheck disable=SC2086
-    if ! "$CLANG" -O2 "$ll" "$RUNTIME" -lm -lpthread $CURL_LIBS $OPENSSL_LIBS -o "$bin" 2>/dev/null; then
+    if ! "$CLANG" -O2 "$ll" "$RUNTIME" -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS -o "$bin" 2>/dev/null; then
         echo "LINK FAIL" >> "$RESULTS"
         echo >> "$RESULTS"
         continue

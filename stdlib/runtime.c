@@ -5401,3 +5401,334 @@ void nurl_panic(const char *msg) {
     longjmp(nurl__panic_top->jb, 1);
 }
 
+
+/* ── §21  SQLite FFI bridge ─────────────────────────────────────── */
+/*
+ * Thin wrapper over libsqlite3 (TIER 3 stdlib). The NURL surface
+ * (`stdlib/ext/sqlite.nu`) builds typed Result-returning APIs on top
+ * of these entry points. Two handle kinds:
+ *
+ *   NurlSqliteDb   — wraps `sqlite3 *`        (one per connection)
+ *   NurlSqliteStmt — wraps `sqlite3_stmt *`   (one per prepared SQL)
+ *
+ * Both are heap-allocated and addressed as `long long` from NURL,
+ * mirroring NurlTcp / NurlThread / etc. `err_kind = 0` means OK; any
+ * other value is the most recent SQLite error code (`SQLITE_*`).
+ *
+ * MVP scope kept narrow on purpose:
+ *   * Bind: int64, text, NULL. No blob, no double (callers stringify).
+ *   * Column: int64, text, type-tag, count. No blob, no double.
+ *   * No transaction helpers — caller issues `BEGIN`/`COMMIT` via exec.
+ *   * No statement cache, no ATTACH, no WAL/PRAGMA wrappers — those
+ *     are pure-SQL recipes the caller assembles.
+ *
+ * When NURL_HAVE_SQLITE3 is unset (build host lacks libsqlite3-dev),
+ * every entry returns a sentinel (NULL handle / err_kind=99
+ * = SqliteUnsupported) so callers fail gracefully rather than at
+ * link time.
+ */
+
+#define NURL_SQLITE_ERR_OK            0
+#define NURL_SQLITE_ERR_ROW           100  /* sqlite_step: got a row */
+#define NURL_SQLITE_ERR_DONE          101  /* sqlite_step: no more rows */
+#define NURL_SQLITE_ERR_UNSUPPORTED   99   /* build had no libsqlite3 */
+/* For every other code the runtime forwards the raw SQLite errcode
+ * (1..28, see sqlite3.h SQLITE_ERROR / _BUSY / _LOCKED / _MISUSE etc).
+ * NURL surface re-classifies into a small `SqliteErr` enum. */
+
+#ifdef NURL_HAVE_SQLITE3
+#include <sqlite3.h>
+#endif
+
+typedef struct NurlSqliteDb {
+#ifdef NURL_HAVE_SQLITE3
+    sqlite3 *db;
+#else
+    void *db_unused;
+#endif
+    long long err_kind;
+    /* errmsg slot — strdup'd on each error so the borrowed view
+     * surfaced via nurl_sqlite_errmsg lives at least until the next
+     * operation on this handle. Freed at handle close. */
+    char *errmsg;
+} NurlSqliteDb;
+
+typedef struct NurlSqliteStmt {
+#ifdef NURL_HAVE_SQLITE3
+    sqlite3_stmt *stmt;
+#else
+    void *stmt_unused;
+#endif
+    long long err_kind;
+    /* Backing strdup'd buffer for the most-recent column_text read.
+     * SQLite's `sqlite3_column_text` returns a borrowed pointer whose
+     * lifetime ends at the next step/finalize, which is a hostile API
+     * for a single-owner caller. We snapshot into our own slot so the
+     * NURL surface can consistently `string_from` it. Freed at
+     * finalize. */
+    char *text_buf;
+} NurlSqliteStmt;
+
+#ifdef NURL_HAVE_SQLITE3
+static void nurl__sqlite_set_errmsg(NurlSqliteDb *h) {
+    free(h->errmsg);
+    const char *m = sqlite3_errmsg(h->db);
+    h->errmsg = m ? strdup(m) : NULL;
+}
+#endif
+
+long long nurl_sqlite_open(const char *path) {
+    NurlSqliteDb *h = (NurlSqliteDb*)calloc(1, sizeof(NurlSqliteDb));
+    if (!h) return 0;
+#ifdef NURL_HAVE_SQLITE3
+    int rc = sqlite3_open(path ? path : ":memory:", &h->db);
+    if (rc != SQLITE_OK) {
+        h->err_kind = rc ? rc : 1;
+        nurl__sqlite_set_errmsg(h);
+        /* keep the handle so the caller can inspect err_kind / errmsg */
+    } else {
+        h->err_kind = NURL_SQLITE_ERR_OK;
+    }
+#else
+    (void)path;
+    h->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
+#endif
+    return (long long)(uintptr_t)h;
+}
+
+void nurl_sqlite_close(long long handle) {
+    NurlSqliteDb *h = (NurlSqliteDb*)(uintptr_t)handle;
+    if (!h) return;
+#ifdef NURL_HAVE_SQLITE3
+    if (h->db) sqlite3_close(h->db);
+#endif
+    free(h->errmsg);
+    free(h);
+}
+
+long long nurl_sqlite_err_kind(long long handle) {
+    NurlSqliteDb *h = (NurlSqliteDb*)(uintptr_t)handle;
+    return h ? h->err_kind : NURL_SQLITE_ERR_UNSUPPORTED;
+}
+
+const char *nurl_sqlite_errmsg(long long handle) {
+    NurlSqliteDb *h = (NurlSqliteDb*)(uintptr_t)handle;
+    if (!h || !h->errmsg) return "";
+    return h->errmsg;
+}
+
+/* sqlite3_exec convenience — accepts a script of one or more
+ * semicolon-separated statements. No result-set extraction; returns
+ * the row-count (`sqlite3_changes`) on OK, -1 on error (err_kind +
+ * errmsg populated). DDL and INSERT/UPDATE/DELETE land here; for
+ * SELECT use prepare + step. */
+long long nurl_sqlite_exec(long long handle, const char *sql) {
+    NurlSqliteDb *h = (NurlSqliteDb*)(uintptr_t)handle;
+    if (!h) return -1;
+#ifdef NURL_HAVE_SQLITE3
+    if (!h->db) { h->err_kind = NURL_SQLITE_ERR_UNSUPPORTED; return -1; }
+    char *err = NULL;
+    int rc = sqlite3_exec(h->db, sql ? sql : "", NULL, NULL, &err);
+    if (rc != SQLITE_OK) {
+        h->err_kind = rc;
+        free(h->errmsg);
+        h->errmsg = err ? strdup(err) : strdup("sqlite_exec failed");
+        sqlite3_free(err);
+        return -1;
+    }
+    h->err_kind = NURL_SQLITE_ERR_OK;
+    return (long long)sqlite3_changes(h->db);
+#else
+    (void)sql;
+    h->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
+    return -1;
+#endif
+}
+
+long long nurl_sqlite_prepare(long long handle, const char *sql) {
+    NurlSqliteDb *h = (NurlSqliteDb*)(uintptr_t)handle;
+    if (!h) return 0;
+    NurlSqliteStmt *s = (NurlSqliteStmt*)calloc(1, sizeof(NurlSqliteStmt));
+    if (!s) return 0;
+#ifdef NURL_HAVE_SQLITE3
+    if (!h->db) {
+        s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
+        return (long long)(uintptr_t)s;
+    }
+    int rc = sqlite3_prepare_v2(h->db, sql ? sql : "", -1, &s->stmt, NULL);
+    if (rc != SQLITE_OK) {
+        s->err_kind = rc;
+        h->err_kind = rc;
+        nurl__sqlite_set_errmsg(h);
+    } else {
+        s->err_kind = NURL_SQLITE_ERR_OK;
+    }
+#else
+    (void)sql;
+    s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
+#endif
+    return (long long)(uintptr_t)s;
+}
+
+long long nurl_sqlite_stmt_err_kind(long long handle) {
+    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
+    return s ? s->err_kind : NURL_SQLITE_ERR_UNSUPPORTED;
+}
+
+long long nurl_sqlite_bind_int(long long handle, long long idx, long long val) {
+    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
+    if (!s) return NURL_SQLITE_ERR_UNSUPPORTED;
+#ifdef NURL_HAVE_SQLITE3
+    if (!s->stmt) { s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED; return s->err_kind; }
+    int rc = sqlite3_bind_int64(s->stmt, (int)idx, (sqlite3_int64)val);
+    s->err_kind = (rc == SQLITE_OK) ? NURL_SQLITE_ERR_OK : rc;
+    return s->err_kind;
+#else
+    (void)idx; (void)val;
+    s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
+    return s->err_kind;
+#endif
+}
+
+long long nurl_sqlite_bind_text(long long handle, long long idx, const char *val) {
+    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
+    if (!s) return NURL_SQLITE_ERR_UNSUPPORTED;
+#ifdef NURL_HAVE_SQLITE3
+    if (!s->stmt) { s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED; return s->err_kind; }
+    /* SQLITE_TRANSIENT → SQLite copies, so the caller's `s` may be
+     * freed immediately after this call. SQLITE_STATIC would be
+     * faster but contradicts NURL's single-owner contract. */
+    int rc = sqlite3_bind_text(s->stmt, (int)idx, val ? val : "", -1,
+                               SQLITE_TRANSIENT);
+    s->err_kind = (rc == SQLITE_OK) ? NURL_SQLITE_ERR_OK : rc;
+    return s->err_kind;
+#else
+    (void)idx; (void)val;
+    s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
+    return s->err_kind;
+#endif
+}
+
+long long nurl_sqlite_bind_null(long long handle, long long idx) {
+    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
+    if (!s) return NURL_SQLITE_ERR_UNSUPPORTED;
+#ifdef NURL_HAVE_SQLITE3
+    if (!s->stmt) { s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED; return s->err_kind; }
+    int rc = sqlite3_bind_null(s->stmt, (int)idx);
+    s->err_kind = (rc == SQLITE_OK) ? NURL_SQLITE_ERR_OK : rc;
+    return s->err_kind;
+#else
+    (void)idx;
+    s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
+    return s->err_kind;
+#endif
+}
+
+/* Drives one cursor advance. Returns ROW (100) when a row is
+ * available, DONE (101) on end-of-result. Any other return is an
+ * error code passed through; the surface enum maps the common
+ * SQLITE_BUSY / _LOCKED / _MISUSE to its variants. */
+long long nurl_sqlite_step(long long handle) {
+    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
+    if (!s) return NURL_SQLITE_ERR_UNSUPPORTED;
+#ifdef NURL_HAVE_SQLITE3
+    if (!s->stmt) { s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED; return s->err_kind; }
+    int rc = sqlite3_step(s->stmt);
+    if (rc == SQLITE_ROW) {
+        s->err_kind = NURL_SQLITE_ERR_OK;
+        return NURL_SQLITE_ERR_ROW;
+    }
+    if (rc == SQLITE_DONE) {
+        s->err_kind = NURL_SQLITE_ERR_OK;
+        return NURL_SQLITE_ERR_DONE;
+    }
+    s->err_kind = rc;
+    return rc;
+#else
+    s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
+    return s->err_kind;
+#endif
+}
+
+long long nurl_sqlite_column_count(long long handle) {
+    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
+    if (!s) return 0;
+#ifdef NURL_HAVE_SQLITE3
+    if (!s->stmt) return 0;
+    return (long long)sqlite3_column_count(s->stmt);
+#else
+    return 0;
+#endif
+}
+
+/* SQLite column-type ids: 1=INTEGER, 2=FLOAT, 3=TEXT, 4=BLOB, 5=NULL.
+ * Forwarded verbatim so the NURL surface can decide. */
+long long nurl_sqlite_column_type(long long handle, long long idx) {
+    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
+    if (!s) return 5;
+#ifdef NURL_HAVE_SQLITE3
+    if (!s->stmt) return 5;
+    return (long long)sqlite3_column_type(s->stmt, (int)idx);
+#else
+    (void)idx;
+    return 5;
+#endif
+}
+
+long long nurl_sqlite_column_int(long long handle, long long idx) {
+    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
+    if (!s) return 0;
+#ifdef NURL_HAVE_SQLITE3
+    if (!s->stmt) return 0;
+    return (long long)sqlite3_column_int64(s->stmt, (int)idx);
+#else
+    (void)idx;
+    return 0;
+#endif
+}
+
+/* Returns a borrowed view that's stable until the next call into
+ * this statement (step / finalize / column_text on another index).
+ * NURL callers `string_from` it on the spot. */
+const char *nurl_sqlite_column_text(long long handle, long long idx) {
+    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
+    if (!s) return "";
+#ifdef NURL_HAVE_SQLITE3
+    if (!s->stmt) return "";
+    const unsigned char *raw = sqlite3_column_text(s->stmt, (int)idx);
+    free(s->text_buf);
+    s->text_buf = raw ? strdup((const char*)raw) : strdup("");
+    return s->text_buf ? s->text_buf : "";
+#else
+    (void)idx;
+    return "";
+#endif
+}
+
+void nurl_sqlite_finalize(long long handle) {
+    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
+    if (!s) return;
+#ifdef NURL_HAVE_SQLITE3
+    if (s->stmt) sqlite3_finalize(s->stmt);
+#endif
+    free(s->text_buf);
+    free(s);
+}
+
+/* Helper for callers that want to reuse a prepared statement across
+ * multiple binding sets. Resets the cursor + clears bindings. */
+long long nurl_sqlite_reset(long long handle) {
+    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
+    if (!s) return NURL_SQLITE_ERR_UNSUPPORTED;
+#ifdef NURL_HAVE_SQLITE3
+    if (!s->stmt) { s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED; return s->err_kind; }
+    int rc = sqlite3_reset(s->stmt);
+    if (rc == SQLITE_OK) sqlite3_clear_bindings(s->stmt);
+    s->err_kind = (rc == SQLITE_OK) ? NURL_SQLITE_ERR_OK : rc;
+    return s->err_kind;
+#else
+    s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
+    return s->err_kind;
+#endif
+}
+

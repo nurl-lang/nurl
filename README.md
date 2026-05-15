@@ -746,6 +746,16 @@ defaults, etc.) see [`docs/GOTCHAS.md`](docs/GOTCHAS.md).
 | No automatic memory management — heap-allocated values (slice literals, `strcat` results, etc.) are not freed | Call `free` via FFI when needed; keep values on the stack where possible |
 | Import is inline-include only: no namespaces; alias rewrites only top-level `@`-functions, not types/enums/FFI/traits. Path-string dedup with leading `./` normalisation is in place — same file imported twice (or through a diamond) emits one set of decls | Stick to a single canonical import path per file; prefix names manually for types/enums when collisions matter |
 
+### SQLite
+
+| Capability | Notes |
+|---|---|
+| **In-process SQLite via `stdlib/ext/sqlite.nu`** (`sqlite_open` / `_exec` / `_prepare` / `_bind_*` / `_step` / `_column_*` / `_finalize`) | Build-time dep: `libsqlite3-dev` (pkg-config). When absent, every call returns `SqliteUnsupported`. |
+| `:memory:` and file-based databases | No network connection (use `http_post` for remote DBs). |
+| `int64` and `text` binds + columns | `BLOB` and `double` deferred — stringify or hex-encode for v1. |
+| Transactions are pure SQL (`BEGIN` / `COMMIT` via `sqlite_exec`) | No dedicated transaction helper. |
+| Statement lifecycle is caller-managed | `sqlite_prepare` → `sqlite_bind_*` → `sqlite_step` (loop) → `sqlite_finalize`. Reuse a Statement across bind sets with `sqlite_reset`. |
+
 ### Panic / recover
 
 | Capability | Notes |
