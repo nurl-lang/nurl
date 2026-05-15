@@ -49,7 +49,16 @@
 #include <errno.h>
 #include <math.h>
 #include <time.h>
+#ifndef __wasi__
+/* WASI's libc currently rejects <setjmp.h> unless the program was
+ * compiled with the Wasm Exception Handling proposal enabled
+ * (`-mllvm -wasm-enable-sjlj`). NURL's panic model degrades on WASI
+ * to "every panic aborts the program" — single-threaded, no recovery —
+ * which is in line with the other WASI fallbacks (signals,
+ * processes, threads). The §20 implementation is wrapped in the same
+ * guard. */
 #include <setjmp.h>
+#endif
 #ifdef _WIN32
 #  define WIN32_LEAN_AND_MEAN
 #  include <winsock2.h>
@@ -4283,7 +4292,14 @@ static int nurl_rand_fill(uint8_t *buf, size_t n) {
     }
 #endif
     /* Last-resort degraded fallback. NOT cryptographically strong. */
+#ifdef __wasi__
+    /* `clock()` is deprecated on wasi-sdk (would need
+     * `_WASI_EMULATED_PROCESS_CLOCKS`); drop it from the entropy mix —
+     * the buf-address XOR is enough variance for a degraded path. */
+    uint64_t t = (uint64_t)time(NULL) ^ (uint64_t)(uintptr_t)buf;
+#else
     uint64_t t = (uint64_t)time(NULL) ^ (uint64_t)(uintptr_t)buf ^ (uint64_t)clock();
+#endif
     for (size_t i = 0; i < n; i++) {
         t = t * 6364136223846793005ULL + 1442695040888963407ULL;
         buf[i] = (uint8_t)(t >> 33);
@@ -5334,15 +5350,15 @@ void nurl_signal_trigger_shutdown(void)               {}
  * same behavioural class as an unhandled fault.
  */
 
+#ifndef __wasi__
+
 typedef struct NurlPanicFrame {
     jmp_buf                  jb;
     char                    *msg;   /* heap-owned panic message or NULL */
     struct NurlPanicFrame   *prev;
 } NurlPanicFrame;
 
-/* GCC/Clang __thread is supported on Linux, macOS, mingw-w64. WASI
- * targets are single-threaded today, so __thread degrades to a plain
- * global, which is exactly the semantics we want. */
+/* GCC/Clang __thread is supported on Linux, macOS, mingw-w64. */
 static __thread NurlPanicFrame *nurl__panic_top = NULL;
 /* Captured message from the most-recent panic, ownership transferred
  * to nurl_panic_last_msg's caller via strdup-and-take. The slot itself
@@ -5400,6 +5416,32 @@ void nurl_panic(const char *msg) {
                                          : strdup("(no message)");
     longjmp(nurl__panic_top->jb, 1);
 }
+
+#else  /* __wasi__: setjmp/longjmp unavailable until the wasm
+        * Exception Handling proposal is standardised. Stub the panic
+        * model to run-and-abort:
+        *   - nurl_recover runs fn(env) inline and returns 0 (no
+        *     unwind on panic — process aborts).
+        *   - nurl_panic prints to stderr and aborts unconditionally,
+        *     identical to the no-frame path on native targets.
+        *   - nurl_panic_last_msg always returns "". */
+
+long long nurl_recover(void *fn_ptr, void *env_ptr) {
+    if (!fn_ptr) return 0;
+    ((void (*)(void *))fn_ptr)(env_ptr);
+    return 0;
+}
+
+const char *nurl_panic_last_msg(void) { return ""; }
+
+void nurl_panic(const char *msg) {
+    fprintf(stderr, "nurl panic (wasi: no recover): %s\n",
+            msg && *msg ? msg : "(no message)");
+    fflush(stderr);
+    abort();
+}
+
+#endif  /* __wasi__ panic stubs */
 
 
 /* ── §21  SQLite FFI bridge ─────────────────────────────────────── */

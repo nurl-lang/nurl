@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-05-15
+
+### Fixed
+
+* **WASI build: gate setjmp/longjmp + clock() that wasi-sdk rejects.**
+  The v0.4.0 panic model `#include <setjmp.h>` made `runtime.c`
+  unbuildable under `--target=wasm32-wasi` (wasi-sdk's setjmp.h
+  errors out unless `-mllvm -wasm-enable-sjlj` is set against the
+  unfinalised Wasm Exception Handling proposal). Same for `clock()`,
+  which is deprecated on wasi-sdk without `_WASI_EMULATED_PROCESS_CLOCKS`.
+  Both are now `#ifndef __wasi__`-guarded. On WASI, `nurl_recover`
+  degrades to "run-the-closure-inline, return 0"; `nurl_panic` prints
+  the message and aborts (same shape as the no-frame path on native
+  targets); `nurl_panic_last_msg` returns `""`. The degraded recover
+  semantics line up with WASI's other single-threaded fallbacks
+  (signals, processes, threads). Native builds unchanged — bootstrap
+  fixed point still at 1 184 466 B.
+
 ## [0.4.0] — 2026-05-15
 
 Tier A correctness/safety holes from the v0.3.0 external review all
