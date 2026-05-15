@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-15
+
+Tier A correctness/safety holes from the v0.3.0 external review all
+closed; Tier B HTTP production-hardening complete end-to-end (TLS
+1.2+, per-request timeout, configurable parser limits, handler panic
+recovery); Tier C module-system extended (`pub` for types/enums/
+consts, alias rewrite for everything); Tier D ecosystem advanced
+(SQLite + PostgreSQL FFI, compile-time FFI library check).
+
+The full per-feature breakdown follows; ROADMAP.md keeps an
+engineering-narrative log per ship.
+
 ### Added
 
 * **PostgreSQL FFI in `stdlib/ext/postgres.nu` (pure-NURL).** First
