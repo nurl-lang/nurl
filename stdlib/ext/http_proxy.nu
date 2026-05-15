@@ -15,10 +15,12 @@
 // runs a dedicated accept loop that streams every request to a fixed
 // upstream base URL.
 //
-// A buffered (`! HttpResponse HttpErr`) API is intentionally not
-// provided in v1 — multi-field struct payloads inside `! T E` trip a
-// known compiler heap-boxing bug (see http_request.nu:119 ParsedHead
-// note). Streaming is also the only mode that matters for AI gateways.
+// A buffered (`! HttpResponse HttpErr`) API is not provided in v1 —
+// streaming is the only mode that matters for AI gateways and the
+// streaming path is plenty for the proxy use case. The multi-field
+// Result Ok-arm heap-boxing fix shipped 2026-05-14 has unblocked this
+// shape, so adding a buffered variant later is a clean follow-up if
+// a real consumer asks for it.
 //
 // API (this revision):
 //
@@ -380,44 +382,44 @@ $ `stdlib/ext/http_server.nu`
                 // already bounds).
                 : ( Vec u ) carry ( vec_with_cap [u] 4096 )
                 : HttpLimits lim ( http_default_limits )
-                : ParsedHead ph ( __read_request_head conn carry lim )
-                ? . ph ok {
-                    : HttpRequest req . ph head
-                    : b body_ok ( __finish_body conn req carry . lim body_default_max )
-                    ? body_ok {
-                        : String url ( __build_upstream_url upstream_base req )
-                        : !v ProxyErr pr ( proxy_stream_to_conn_with conn req
-                        ( string_data url ) opts )
-                        ( string_free url )
-                        ?? pr {
-                            T _ → {}
-                            F _ → {}
+                : ! ParsedHeadOk HttpReqErr ph ( __read_request_head conn carry lim )
+                ?? ph {
+                    T pho → {
+                        : HttpRequest req . pho head
+                        : b body_ok ( __finish_body conn req carry . lim body_default_max )
+                        ? body_ok {
+                            : String url ( __build_upstream_url upstream_base req )
+                            : !v ProxyErr pr ( proxy_stream_to_conn_with conn req
+                            ( string_data url ) opts )
+                            ( string_free url )
+                            ?? pr {
+                                T _ → {}
+                                F _ → {}
+                            }
+                        } {
+                            : HttpResponse er ( response_text 400 `malformed body\n` )
+                            ( response_set_header er `Connection` `close` )
+                            : ( Vec u ) wire ( response_serialize er )
+                            : !v NetErr _wr ( tcp_write_all conn wire )
+                            ?? _wr { T _ → {} F _ → {} }
+                            ( vec_free [u] wire )
+                            ( http_response_free er )
                         }
-                    } {
-                        : HttpResponse er ( response_text 400 `malformed body\n` )
-                        ( response_set_header er `Connection` `close` )
-                        : ( Vec u ) wire ( response_serialize er )
-                        : !v NetErr _wr ( tcp_write_all conn wire )
-                        ?? _wr { T _ → {} F _ → {} }
-                        ( vec_free [u] wire )
-                        ( http_response_free er )
+                        ( request_free req )
                     }
-                    ( request_free req )
-                } {
-                    // Don't silently drop a syntactically-bad request — the
-                    // 4xx response helps developers debugging through curl.
-                    : s nm ( http_req_err_name . ph err )
-                    ? != 0 ( nurl_str_eq nm `HttpReqIo` ) {
-                        ( parsed_head_free ph )
-                    } {
-                        : HttpResponse er ( __parse_err_response . ph err )
-                        ( response_set_header er `Connection` `close` )
-                        : ( Vec u ) wire ( response_serialize er )
-                        : !v NetErr _wr ( tcp_write_all conn wire )
-                        ?? _wr { T _ → {} F _ → {} }
-                        ( vec_free [u] wire )
-                        ( http_response_free er )
-                        ( parsed_head_free ph )
+                    F e → {
+                        // Don't silently drop a syntactically-bad request — the
+                        // 4xx response helps developers debugging through curl.
+                        : s nm ( http_req_err_name e )
+                        ? != 0 ( nurl_str_eq nm `HttpReqIo` ) {} {
+                            : HttpResponse er ( __parse_err_response e )
+                            ( response_set_header er `Connection` `close` )
+                            : ( Vec u ) wire ( response_serialize er )
+                            : !v NetErr _wr ( tcp_write_all conn wire )
+                            ?? _wr { T _ → {} F _ → {} }
+                            ( vec_free [u] wire )
+                            ( http_response_free er )
+                        }
                     }
                 }
                 ( vec_free [u] carry )

@@ -73,28 +73,29 @@ $ `stdlib/ext/http.nu`
     }
 }
 
-// Run a parse + dump on a single buffer literal. Frees the buffer +
-// the ParsedHead unconditionally (request_free is empty-safe).
+// Run a parse + dump on a single buffer literal. On Ok we free the
+// owned `head`; on Err the variant carries no allocation.
 @ run_case s label s raw → v {
     ( nurl_print `── ` ) ( nurl_print label ) ( nurl_print ` ──\n` )
     : ( Vec u ) buf ( buf_from_raw raw )
-    : ParsedHead ph ( parse_request_head buf )
-    ? . ph ok {
-        : HttpRequest req . ph head
-        ( println_str `  method=` ( string_data . req method ) )
-        ( println_str `  path=` ( string_data . req path ) )
-        ( println_str `  query=` ( string_data . req query ) )
-        ( println_str `  version=` ( string_data . req version ) )
-        ( println_int `  consumed=` . ph consumed )
-        ( println_int `  headers=` ( vec_len [Header] . req headers ) )
-        ( show_header `host` ( header_get . req headers `Host` ) )
-        ( show_header `HOST` ( header_get . req headers `HOST` ) )
-        ( show_header `X-Multi` ( header_get . req headers `X-Multi` ) )
-        ( show_header `Missing` ( header_get . req headers `Missing` ) )
-    } {
-        ( println_str `  err=` ( http_req_err_name . ph err ) )
+    : ! ParsedHeadOk HttpReqErr ph ( parse_request_head buf )
+    ?? ph {
+        T pho → {
+            : HttpRequest req . pho head
+            ( println_str `  method=` ( string_data . req method ) )
+            ( println_str `  path=` ( string_data . req path ) )
+            ( println_str `  query=` ( string_data . req query ) )
+            ( println_str `  version=` ( string_data . req version ) )
+            ( println_int `  consumed=` . pho consumed )
+            ( println_int `  headers=` ( vec_len [Header] . req headers ) )
+            ( show_header `host` ( header_get . req headers `Host` ) )
+            ( show_header `HOST` ( header_get . req headers `HOST` ) )
+            ( show_header `X-Multi` ( header_get . req headers `X-Multi` ) )
+            ( show_header `Missing` ( header_get . req headers `Missing` ) )
+            ( request_free req )
+        }
+        F e → ( println_str `  err=` ( http_req_err_name e ) )
     }
-    ( parsed_head_free ph )
     ( vec_free [u] buf )
 }
 
@@ -113,13 +114,14 @@ $ `stdlib/ext/http.nu`
         ( vec_push [u] buf # u 65 )
         = k + k 1
     }
-    : ParsedHead ph ( parse_request_head buf )
-    ? . ph ok {
-        ( println_lit `  unexpected Ok` )
-    } {
-        ( println_str `  err=` ( http_req_err_name . ph err ) )
+    : ! ParsedHeadOk HttpReqErr ph ( parse_request_head buf )
+    ?? ph {
+        T pho → {
+            ( println_lit `  unexpected Ok` )
+            ( request_free . pho head )
+        }
+        F e → ( println_str `  err=` ( http_req_err_name e ) )
     }
-    ( parsed_head_free ph )
     ( vec_free [u] buf )
 }
 

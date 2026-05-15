@@ -36,12 +36,11 @@
 //
 //   ( request_new )                         → HttpRequest  fully empty
 //   ( request_free HttpRequest req )        → v            cascades
-//   ( parse_request_head ( Vec u ) buf )    → ParsedHead   tagged
-//                                                          struct: read
-//                                                          .ok, then
-//                                                          .head/.consumed
-//                                                          or .err.
-//   ( parsed_head_free ParsedHead p )       → v
+//   ( parse_request_head ( Vec u ) buf )    → ! ParsedHeadOk HttpReqErr
+//                                                Ok arm: { head, consumed };
+//                                                Err arm: HttpReqIncomplete
+//                                                (caller tops up + retries)
+//                                                or terminal parse error.
 //   ( http_req_err_name HttpReqErr e )      → s            diagnostic
 //
 //   ( read_body  TcpConn HttpRequest )      → ! ( Vec u ) HttpReqErr
@@ -49,12 +48,12 @@
 //
 // Memory model:
 //
-//   * `parse_request_head` BORROWS its input buffer. It allocates a
-//     fresh `HttpRequest` (inside ParsedHead) whose String fields and
-//     `( Vec Header )` headers are all OWNED — the caller must call
-//     `parsed_head_free` (or `request_free` after extracting `.head`)
-//     exactly once on the Result-Ok path. The Err arms produced by
-//     this parser carry NO live allocation.
+//   * `parse_request_head` BORROWS its input buffer. On the Ok arm it
+//     yields a `ParsedHeadOk { HttpRequest head, i consumed }` whose
+//     `head` is OWNED (Strings + `( Vec Header )` headers are all
+//     fresh allocations) — the caller must call `request_free` on the
+//     `head` field exactly once. The Err arms carry NO live
+//     allocation; just drop the `HttpReqErr` enum value.
 //   * `parse_url` returns an OWNED `UrlSplit` whose `path` and `query`
 //     are independent owned strings. Free both with `string_free`,
 //     or use `url_split_free` for the cascade.
@@ -116,21 +115,22 @@ $ `stdlib/ext/http.nu`
     ( Vec u ) body
 }
 
-// `parse_request_head` would naturally return `! ParsedHead HttpReqErr`,
-// but the NURL `! T E` encoding (`{ i1, i64 }`) only carries `T` values
-// that fit in an i64. Multi-field structs like `ParsedHead` can't be
-// boxed inline, and the compiler currently emits a wrong `extractvalue`
-// for them. The workaround is the tagged-struct pattern below: callers
-// branch on `.ok`, then read either `.head` + `.consumed` or `.err`.
-// The `head` field is ALWAYS initialised (with empty String / Vec
-// handles on the failure path) so a single `parsed_head_free` is safe
-// regardless of `ok`. See HTTP_SERVER_PLAN.md "Cross-cutting
-// prerequisites" for the language-side follow-up.
-: ParsedHead {
+// `parse_request_head` returns `! ParsedHeadOk HttpReqErr`. The Ok arm
+// carries the parsed `HttpRequest` head (body still empty — `__finish_body`
+// drains it from the keep-alive carry buffer) plus `consumed`, the byte
+// count covered by the head + closing CRLF. The Err arm carries an
+// `HttpReqErr` variant — distinguishing `HttpReqIncomplete` (caller can
+// top up the buffer and retry) from terminal parse errors.
+//
+// Note: multi-field `! T E` Ok payloads were heap-boxed by the
+// 2026-05-14 compiler fix, so this signature is no longer the
+// tagged-struct workaround that v0.3.0 had to keep around — every
+// `!`-construction allocates a small payload box at the parse site
+// which `??` / `\` unbox at the match. For v1 the allocation cost is
+// acceptable (one extra small malloc per request).
+: ParsedHeadOk {
     HttpRequest head
     i consumed
-    b ok
-    HttpReqErr err
 }
 
 // Result of `parse_url`: a path/query split. Both fields are owned
@@ -319,10 +319,11 @@ $ `stdlib/ext/http.nu`
     ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
 }
 
-// Direct-pointer iteration via `vec_data` + `*Header`. The shorter
-// `vec_get [Header]` form would be cleaner but currently miscompiles
-// (`# Header 0` default-construction emits `i64 0` into a `%String`
-// field). See HTTP_SERVER_PLAN.md "Cross-cutting prerequisites".
+// Direct-pointer iteration via `vec_data` + `*Header`. `vec_get
+// [Header]` is now compiler-correct (since the multi-field Option
+// Some-arm fix shipped 2026-05-14) — kept as direct iteration here
+// only because the loop avoids the per-iter Some/None unwrap, not
+// because vec_get itself misbehaves.
 @ header_get ( Vec Header ) hs s name → ?String {
     : i n ( vec_len [Header] hs )
     : *Header data ( vec_data [Header] hs )
@@ -358,17 +359,6 @@ $ `stdlib/ext/http.nu`
     ( string_free . req version )
     ( headers_free . req headers )
     ( vec_free [u] . req body )
-}
-
-@ parsed_head_free ParsedHead p → v {
-    ( request_free . p head )
-}
-
-// Convenience constructor for the failure path. Allocates an empty
-// HttpRequest so the `head` field is always safely freeable, sets the
-// HttpReqErr discriminant, and zeroes `consumed`.
-@ __parsed_head_err HttpReqErr e → ParsedHead {
-    ^ @ ParsedHead { ( request_new ) 0 F e }
 }
 
 // ── Percent codec (RFC 3986 §2.1) ─────────────────────────────────────
@@ -630,9 +620,11 @@ $ `stdlib/ext/http.nu`
                             : String name ( __bsubstr buf pos name_end )
                             : String value ( __bsubstr buf v_start v_end )
                             // Folding: if a prior header has the same case-insens
-                            // name, append ", " + value to its value field. Direct
-                            // *Header iteration — see header_get's note re. the
-                            // `vec_get [Header]` miscompile.
+                            // name, append ", " + value to its value field.
+                            // Direct *Header iteration — `vec_get` would copy
+                            // the Header VALUE, breaking the in-place
+                            // string_push_str on the existing entry. The
+                            // pointer view is required here, not a workaround.
                             : ~ b folded F
                             : i hcount ( vec_len [Header] hs )
                             : *Header hdata ( vec_data [Header] hs )
@@ -665,34 +657,34 @@ $ `stdlib/ext/http.nu`
 
 // ── parse_request_head ────────────────────────────────────────────────
 
-@ parse_request_head ( Vec u ) buf → ParsedHead {
+@ parse_request_head ( Vec u ) buf → ! ParsedHeadOk HttpReqErr {
     ^ ( parse_request_head_with buf ( http_default_limits ) )
 }
 
-@ parse_request_head_with ( Vec u ) buf HttpLimits limits → ParsedHead {
+@ parse_request_head_with ( Vec u ) buf HttpLimits limits → ! ParsedHeadOk HttpReqErr {
     : i head_max . limits head_max_bytes
     : i header_max . limits header_max_count
     : i blen ( vec_len [u] buf )
     : i head_end ( __find_head_end buf 0 )
     ? < head_end 0 {
         ? > blen head_max {
-            ^ ( __parsed_head_err # HttpReqErr HttpReqTooLarge )
+            ^ @ ! ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqTooLarge }
         } {}
-        ^ ( __parsed_head_err # HttpReqErr HttpReqIncomplete )
+        ^ @ ! ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqIncomplete }
     } {}
     ? > + head_end 4 head_max {
-        ^ ( __parsed_head_err # HttpReqErr HttpReqTooLarge )
+        ^ @ ! ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqTooLarge }
     } {}
 
     : i line_end ( __bindex_crlf buf 0 head_end )
     ? < line_end 0 {
-        ^ ( __parsed_head_err # HttpReqErr HttpReqMalformed )
+        ^ @ ! ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
     } {}
 
     : ReqLineParts rl ( __parse_request_line buf 0 line_end )
     ? ! . rl ok {
         ( __req_line_parts_free rl )
-        ^ ( __parsed_head_err # HttpReqErr HttpReqMalformed )
+        ^ @ ! ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
     } {}
 
     : s vraw ( string_data . rl version )
@@ -700,7 +692,7 @@ $ `stdlib/ext/http.nu`
     : b v11 != 0 ( nurl_str_eq vraw `HTTP/1.1` )
     ? ! | v10 v11 {
         ( __req_line_parts_free rl )
-        ^ ( __parsed_head_err # HttpReqErr HttpReqUnsupportedVersion )
+        ^ @ ! ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqUnsupportedVersion }
     } {}
 
     // `head_end` is the position of the FIRST CRLF in the closing
@@ -713,9 +705,9 @@ $ `stdlib/ext/http.nu`
         ( __req_line_parts_free rl )
         ( headers_free . hr headers )
         ? == hstatus 2 {
-            ^ ( __parsed_head_err # HttpReqErr HttpReqTooLarge )
+            ^ @ ! ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqTooLarge }
         } {}
-        ^ ( __parsed_head_err # HttpReqErr HttpReqMalformed )
+        ^ @ ! ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
     } {}
 
     : HttpRequest req @ HttpRequest {
@@ -726,7 +718,7 @@ $ `stdlib/ext/http.nu`
         . hr headers
         ( vec_new [u] )
     }
-    ^ @ ParsedHead { req + head_end 4 T # HttpReqErr HttpReqMalformed }
+    ^ @ ! ParsedHeadOk HttpReqErr { T @ ParsedHeadOk { req + head_end 4 } }
 }
 
 // ── Body reader (Phase 2.3) ───────────────────────────────────────────

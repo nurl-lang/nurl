@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+* **`parse_request_head` now returns `! ParsedHeadOk HttpReqErr`**
+  (was `ParsedHead { head, consumed, ok, err }`). The v0.3.0-era
+  tagged-struct workaround for the multi-field-Result-Ok-arm hole is
+  gone — heap-boxing of multi-field Ok payloads shipped 2026-05-14
+  unblocked the idiomatic shape. Callers in `stdlib/ext/http_server.nu`
+  (`__read_request_head` + keep-alive loop), `stdlib/ext/http_proxy.nu`
+  (`proxy_serve_run_with`), and `compiler/tests/http_request_parser.nu`
+  migrated from `? . ph ok / .ph err` branching to `?? ph { T pho → ...
+  F e → ... }`. `parsed_head_free` and `__parsed_head_err` removed —
+  the new shape needs neither. Bundled cleanup: stale `vec_get [Header]`
+  miscompile comments in `header_get` / `__parse_headers` updated to
+  reflect current reality (the miscompile shipped a fix May 14;
+  direct-pointer iteration is retained where it's still the right
+  shape, not as a workaround).
+
 ### Added
 
 * **Panic model + HTTP handler panic recovery.** New

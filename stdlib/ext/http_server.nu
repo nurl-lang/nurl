@@ -217,67 +217,72 @@ $ `stdlib/ext/http_response.nu`
 // ── Read the full request head off the socket ─────────────────────────
 //
 // Operates on a connection-level `carry` buffer owned by the keep-alive
-// loop. Loops parse_request_head(carry) → top-up-from-socket until the
-// parse succeeds or hits a non-Incomplete error.
+// loop. Loops parse_request_head_with(carry) → top-up-from-socket until
+// the parse succeeds or hits a non-Incomplete error.
 //
-// On success: `.consumed` bytes are dropped off carry's front, leaving
-// any further bytes (this request's body + pipelined successor) for
-// `__finish_body` / the next iteration to consume. The returned
-// ParsedHead's `.head.body` is left untouched (empty) — the body lives
-// in carry until `__finish_body` drains it.
+// On success: returns Ok(ParsedHeadOk { head, consumed }). `consumed`
+// bytes are dropped off carry's front, leaving any further bytes (this
+// request's body + pipelined successor) for `__finish_body` / the next
+// iteration to consume. The returned `head.body` is left untouched
+// (empty) — the body lives in carry until `__finish_body` drains it.
 //
-// On socket error or unrecoverable parse error: returns a ParsedHead
-// with .ok=F; carry's state is unspecified (caller is about to close).
+// On socket error: returns Err(HttpReqIo). On unrecoverable parse
+// error: returns the matching HttpReqErr (TooLarge / Malformed /
+// UnsupportedVersion). Carry's state is unspecified on Err (caller is
+// about to close).
 
-@ __read_request_head TcpConn conn ( Vec u ) carry HttpLimits limits → ParsedHead {
-    : ~ ParsedHead result ( __parsed_head_err # HttpReqErr HttpReqIo )
+@ __read_request_head TcpConn conn ( Vec u ) carry HttpLimits limits → ! ParsedHeadOk HttpReqErr {
     : ~ b done F
+    : ~ b had_err F
+    : ~ HttpReqErr err # HttpReqErr HttpReqIo
 
     ~ ! done {
         // First try parsing whatever's already in carry (might be the
         // pipelined successor's full head from the previous request's
         // read).
-        : ParsedHead ph ( parse_request_head_with carry limits )
-        ? . ph ok {
-            : i used . ph consumed
-            ( __vec_drop_front_u carry used )
-            ( parsed_head_free result )
-            = result ph
-            = done T
-        } {
-            : s nm ( http_req_err_name . ph err )
-            ? != 0 ( nurl_str_eq nm `HttpReqIncomplete` ) {
-                // Incomplete = keep reading. Drop ph + top up carry.
-                ( parsed_head_free ph )
-                : !( Vec u ) NetErr r ( tcp_read_chunk conn 4096 )
-                ?? r {
-                    T chunk → {
-                        : i got ( vec_len [u] chunk )
-                        ( vec_extend [u] carry chunk )
-                        ( vec_free [u] chunk )
-                        ? <= got 0 {
-                            // 0 bytes can't happen (NetClosed is returned as
-                            // Err) but guard against runtime bugs by exiting.
-                            ( parsed_head_free result )
-                            = result ( __parsed_head_err # HttpReqErr HttpReqIo )
-                            = done T
-                        } {}
-                    }
-                    F _ → {
-                        // NetClosed mid-head OR transport error. result is
-                        // already an HttpReqIo placeholder.
-                        = done T
-                    }
-                }
-            } {
-                // Real parse error — surface it and close.
-                ( parsed_head_free result )
-                = result ph
+        : ! ParsedHeadOk HttpReqErr ph ( parse_request_head_with carry limits )
+        ?? ph {
+            T pho → {
+                : i used . pho consumed
+                ( __vec_drop_front_u carry used )
                 = done T
+                ^ @ ! ParsedHeadOk HttpReqErr { T pho }
+            }
+            F e → {
+                : s nm ( http_req_err_name e )
+                ? != 0 ( nurl_str_eq nm `HttpReqIncomplete` ) {
+                    // Incomplete = keep reading. Top up carry.
+                    : !( Vec u ) NetErr r ( tcp_read_chunk conn 4096 )
+                    ?? r {
+                        T chunk → {
+                            : i got ( vec_len [u] chunk )
+                            ( vec_extend [u] carry chunk )
+                            ( vec_free [u] chunk )
+                            ? <= got 0 {
+                                // 0 bytes can't happen (NetClosed is returned
+                                // as Err) but guard against runtime bugs.
+                                = had_err T
+                                = err # HttpReqErr HttpReqIo
+                                = done T
+                            } {}
+                        }
+                        F _ → {
+                            // NetClosed mid-head OR transport error.
+                            = had_err T
+                            = err # HttpReqErr HttpReqIo
+                            = done T
+                        }
+                    }
+                } {
+                    // Real parse error — surface it and close.
+                    = had_err T
+                    = err e
+                    = done T
+                }
             }
         }
     }
-    ^ result
+    ^ @ ! ParsedHeadOk HttpReqErr { F err }
 }
 
 // ── Top up body from Content-Length, draining carry first ─────────────
@@ -485,83 +490,85 @@ $ `stdlib/ext/http_response.nu`
     : ~ b done F
     : ~ i n_served 0
     ~ ! done {
-        : ParsedHead ph ( __read_request_head conn carry lim )
-        ? . ph ok {
-            // Snapshot the request-start wall-clock right after the head
-            // is parsed. If the handler + body-completion exceed
-            // `request_total_timeout_ms`, we drop the handler's response
-            // and emit a stock 504 instead. The check is post-handler
-            // only — NURL has no thread-cancellation primitives, so a
-            // genuinely runaway handler runs to completion regardless.
-            : i req_start_ms ? > req_timeout_ms 0 ( now_ms ) 0
-            : HttpRequest req . ph head
-            : b body_ok ( __finish_body conn req carry body_max )
-            ? body_ok {
-                : b req_close ( __request_says_close req )
-                : ( @ HttpResponse HttpRequest ) f . s handler
-                // Wrap the handler in `recover` so a panic inside the
-                // handler doesn't kill the worker thread. On panic the
-                // default `resp` (500) flows out to the client; the
-                // captured message is logged to stderr. Owned
-                // allocations inside the handler that didn't run their
-                // auto-drop leak — see stdlib/std/panic.nu's header for
-                // the cost model. The `recover` substitute is a net win
-                // vs. aborting the worker on a buggy handler.
-                : ~ HttpResponse resp ( response_text 500 `internal server error\n` )
-                : !v PanicInfo pr ( recover \ → v { = resp ( f req ) } )
-                ?? pr {
-                    T _ → {}
-                    F p → {
-                        ( nurl_eprintln ( nurl_str_cat `[panic] HTTP handler: ` ( string_data . p msg ) ) )
-                        ( panic_info_free p )
+        : ! ParsedHeadOk HttpReqErr ph ( __read_request_head conn carry lim )
+        ?? ph {
+            T pho → {
+                // Snapshot the request-start wall-clock right after the
+                // head is parsed. If the handler + body-completion
+                // exceed `request_total_timeout_ms`, we drop the
+                // handler's response and emit a stock 504 instead. The
+                // check is post-handler only — NURL has no thread-
+                // cancellation primitives, so a genuinely runaway
+                // handler runs to completion regardless.
+                : i req_start_ms ? > req_timeout_ms 0 ( now_ms ) 0
+                : HttpRequest req . pho head
+                : b body_ok ( __finish_body conn req carry body_max )
+                ? body_ok {
+                    : b req_close ( __request_says_close req )
+                    : ( @ HttpResponse HttpRequest ) f . s handler
+                    // Wrap the handler in `recover` so a panic inside
+                    // the handler doesn't kill the worker thread. On
+                    // panic the default `resp` (500) flows out to the
+                    // client; the captured message is logged to stderr.
+                    // Owned allocations inside the handler that didn't
+                    // run their auto-drop leak — see
+                    // stdlib/std/panic.nu's header for the cost model.
+                    : ~ HttpResponse resp ( response_text 500 `internal server error\n` )
+                    : !v PanicInfo pr ( recover \ → v { = resp ( f req ) } )
+                    ?? pr {
+                        T _ → {}
+                        F p → {
+                            ( nurl_eprintln ( nurl_str_cat `[panic] HTTP handler: ` ( string_data . p msg ) ) )
+                            ( panic_info_free p )
+                        }
                     }
-                }
-                // Per-request total timeout enforcement: free the
-                // handler's response and substitute 504 if we blew the
-                // budget. `should_close` forces `Connection: close` so
-                // the client doesn't reuse a possibly-corrupted state.
-                : ~ HttpResponse final_resp resp
-                : ~ b timed_out F
-                ? > req_timeout_ms 0 {
-                    : i elapsed - ( now_ms ) req_start_ms
-                    ? > elapsed req_timeout_ms {
-                        ( http_response_free resp )
-                        = final_resp ( response_text 504 `request total-timeout exceeded\n` )
-                        = timed_out T
+                    // Per-request total timeout enforcement: free the
+                    // handler's response and substitute 504 if we blew
+                    // the budget. `should_close` forces `Connection:
+                    // close` so the client doesn't reuse possibly-
+                    // corrupted state.
+                    : ~ HttpResponse final_resp resp
+                    : ~ b timed_out F
+                    ? > req_timeout_ms 0 {
+                        : i elapsed - ( now_ms ) req_start_ms
+                        ? > elapsed req_timeout_ms {
+                            ( http_response_free resp )
+                            = final_resp ( response_text 504 `request total-timeout exceeded\n` )
+                            = timed_out T
+                        } {}
                     } {}
-                } {}
-                : b resp_close ( __response_says_close final_resp )
-                = n_served + n_served 1
-                : b at_cap ? > max_req 0 >= n_served max_req T
-                : b should_close | | | req_close resp_close at_cap timed_out
-                : !v NetErr wr ( __write_response conn final_resp should_close )
-                ( request_free req )
-                ?? wr {
-                    T _ → {
-                        ? should_close { = done T } {}
+                    : b resp_close ( __response_says_close final_resp )
+                    = n_served + n_served 1
+                    : b at_cap ? > max_req 0 >= n_served max_req T
+                    : b should_close | | | req_close resp_close at_cap timed_out
+                    : !v NetErr wr ( __write_response conn final_resp should_close )
+                    ( request_free req )
+                    ?? wr {
+                        T _ → {
+                            ? should_close { = done T } {}
+                        }
+                        F _ → { = done T }
                     }
-                    F _ → { = done T }
+                } {
+                    : HttpResponse er ( response_text 400 `malformed body\n` )
+                    : !v NetErr _wr ( __write_response conn er T )
+                    ( request_free req )
+                    = done T
                 }
-            } {
-                : HttpResponse er ( response_text 400 `malformed body\n` )
-                : !v NetErr _wr ( __write_response conn er T )
-                ( request_free req )
+            }
+            F e → {
+                // Distinguish "peer closed cleanly with no request
+                // bytes" from "got bytes but they didn't parse". The
+                // former is normal (browser closing an idle keep-
+                // alive), the latter deserves a 4xx so the client knows
+                // we rejected the syntax.
+                : s nm ( http_req_err_name e )
+                ? != 0 ( nurl_str_eq nm `HttpReqIo` ) {} {
+                    : HttpResponse er ( __parse_err_response e )
+                    : !v NetErr _wr ( __write_response conn er T )
+                }
                 = done T
             }
-        } {
-            // Distinguish "peer closed cleanly with no request bytes" from
-            // "got bytes but they didn't parse". The former is normal
-            // (browser closing an idle keep-alive), the latter deserves a
-            // 4xx so the client knows we rejected the syntax.
-            : s nm ( http_req_err_name . ph err )
-            ? != 0 ( nurl_str_eq nm `HttpReqIo` ) {
-                ( parsed_head_free ph )
-            } {
-                : HttpResponse er ( __parse_err_response . ph err )
-                : !v NetErr _wr ( __write_response conn er T )
-                ( parsed_head_free ph )
-            }
-            = done T
         }
     }
     ( vec_free [u] carry )
