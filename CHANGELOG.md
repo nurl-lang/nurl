@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Import alias rewriting extended to types, enum variants, and
+  global constants.** `$ `path` alias` now renames every top-level
+  decl in the imported file to `alias__name`, not just `@`-functions.
+  Use sites reach them with `alias::Name`, which the lexer merges into
+  the single IDENT `alias__Name`. FFI declarations and trait/impl
+  methods are NOT renamed — FFI is linker-level ABI, trait dispatch is
+  type-mangled. `collect_alias_targets` grew handling for `:` /
+  `: |` / `: TYPE_KW` / `pub` prefixes. Regression:
+  `compiler/tests/alias_rewrite_types.nu` + helper module.
+
 * **`pub` visibility for structs, enums, and global constants.**
   Extends the v2.0 `pub @ greet` rule that already covered `@`-fns to
   cover `pub :`, `pub : |`, and `pub : i FOO 7` declarations. Enum

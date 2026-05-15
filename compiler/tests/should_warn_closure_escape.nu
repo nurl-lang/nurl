@@ -1,4 +1,4 @@
-// should_warn_closure_escape.nu — exercises the docs/GOTCHAS.md item 8
+// should_warn_closure_escape.nu — exercises the docs/GOTCHAS.md item 5
 // foot-gun: a closure that captures a `: ~`-mutable multi-field struct
 // is captured by POINTER into the enclosing function's stack frame. If
 // the closure is returned (or stored elsewhere that outlives the

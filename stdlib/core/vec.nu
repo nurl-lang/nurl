@@ -82,6 +82,20 @@
 //   ( vec_find [A] v pred )        → ? A        first match or None
 //   ( vec_any  [A] v pred )        → b          short-circuit
 //   ( vec_all  [A] v pred )        → b          short-circuit on first F
+//
+// No `vec_clone` is provided. A bitwise clone would duplicate owned-
+// pointer fields (Strings, nested Vecs) without telling the auto-drop
+// machinery, and every owned element would double-free at scope exit.
+// The single-owner rule has no language-level escape — clone the
+// elements explicitly:
+//
+//   : ( Vec String ) copy ( vec_with_cap [String] ( vec_len [String] src ) )
+//   ( vec_each [String] src \ String s → v {
+//     ( vec_push [String] copy ( string_clone s ) )
+//   } )
+//
+// For trivial element types (`i`, `f`, `b`, raw `s`, slice) the same
+// pattern works with bare `vec_push` and no clone step.
 
 $ `stdlib/core/mem.nu`
 

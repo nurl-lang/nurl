@@ -355,6 +355,12 @@ $  — import decl
 ( dist myPoint )
 ```
 
+Parens are **mandatory** around every call — `( fn args )` is the only
+call form. A bare identifier `fn` is a name lookup, never a call. The
+following tokens land in the surrounding expression rather than as
+implicit arguments, which is why a missing pair of parens typically
+surfaces as an "unexpected token" several tokens later.
+
 ### Example: mutability (default immutable)
 ```
 : i x 10            // immutable — reassignment is a compile error
@@ -448,6 +454,7 @@ The current compiler is deliberately minimal:
 - **No garbage collector** — values live on the stack by default; heap allocation goes through the C runtime (`malloc` / `free` via FFI). No GC pauses, no hidden boxing.
 - **Slices and strings are fat pointers** — `[T` compiles to `{ T*, i64 }` (pointer + length); the string type `s` is currently a C-style `i8*` pointer, but user code can wrap it in a `{ s ptr, i len }` struct for bounds-safe operations (see `tests/test_11_fat_strings.nu`).
 - **Option-style nullability via `?T`** — compiles to `{ i1, T }`, checked with `??` pattern matching.
+- **Struct parameters pass by value, like C / Go / Zig** — the compiler emits `alloca + store` for each struct-typed parameter at function entry, so `= . p field val` inside the callee writes to a fresh local backing. NURL has no `&local` address-of operator; the three ways to share mutation across a call boundary are **(a)** return the modified struct (idiomatic — copy is cheap for small structs), **(b)** declare a `*T` parameter and pass the alloca address, or **(c)** wrap the state in a single-handle struct (`{ ( Vec i ) counters }`) so the heap buffer is shared even though the handle is copied. See `stdlib/ext/http_middleware.nu` `Metrics` for the (c) pattern.
 - **Single-owner + compiler-inserted auto-drop, no borrow checker** — the compiler tracks ownership of heap-allocated slices and strings and emits `nurl_free` at scope exit automatically. Closures still use RC for captured env.
   - Phase 1 — slice-literal ownership with auto-drop at function exit.
   - Phase 2A — slice-returning function calls transfer ownership to the caller's binding.
@@ -709,6 +716,8 @@ defaults, etc.) see [`docs/GOTCHAS.md`](docs/GOTCHAS.md).
 
 | Limitation | Workaround |
 |---|---|
+| Calls require explicit parens — `( f a b )` is the only call form; a bare identifier is always a name lookup, never a call | Wrap every callsite: `( puts s )` |
+| Struct parameters are passed by **value** (C/Go/Zig semantics) — `= . p field val` inside the callee writes a local copy; the caller's struct is unchanged | Return the modified struct (`= c ( inc_returning c )`) — copy is cheap for small structs; or use `*T` parameters explicitly; or wrap state in a single-handle struct (`{ ( Vec i ) slots }`) so the heap buffer is shared |
 | Variadic functions (e.g. `printf`) cannot be declared via `ffi_decl` — LLVM IR varargs syntax (`...`) is not generated | Use `nurl_print_*` builtins; declare specific non-variadic wrappers in C |
 | No tail-call optimisation — deep recursion may stack-overflow | Use explicit loops (`~`) |
 | Closures capture by value (snapshot at construction); mutating an enclosing local after the closure is built does not affect the captured copy | Keep mutation explicit; pass the current value as a parameter or return the new state |
@@ -725,7 +734,7 @@ defaults, etc.) see [`docs/GOTCHAS.md`](docs/GOTCHAS.md).
 | Limitation | Workaround |
 |---|---|
 | `import_decl` is a static inline-include (like `#include`) — the imported file is compiled into the same LLVM module | Avoid importing files that define `main`; avoid circular imports |
-| Import alias (`` $ `path` alias ``) only rewrites top-level `@`-functions to `alias__name`; types, enum variants, FFI decls, traits, impls, and consts stay in the global namespace | Prefix the unaliased decls manually if collision is a risk |
+| Import alias (`` $ `path` alias ``) rewrites top-level `@`-functions, struct/enum types, enum variants, and global `:` constants to `alias__name`. FFI decls (`& "lib" @ name`) and trait/impl methods are intentionally NOT renamed — FFI symbols resolve at the linker by literal C-ABI name, and trait methods are mangled by the impl-target type | Use `pub` to scope FFI declarations to the importing file if collision is a risk |
 | `pub` visibility covers `@`-functions, struct/enum types, enum variants (inheriting their enum's flag), and global `:` constants. Files with no `pub` decl stay in legacy mode (everything public, backwards-compat). FFI and trait/impl decls accept `pub` forward-compat but do not enforce — FFI symbols are linker-level ABI globals; trait dispatch is type-mangled | Mark each cross-file API entry with `pub`; the diagnostic `private X 'Y' is not visible across files` points at the leaked-private use site |
 | `$`-import dedup is keyed on the path string with a small normalisation (leading `./` is stripped). Symlink-equivalent paths still collide as separate imports | Stick to the project-root-relative form (`stdlib/foo.nu`, no `./` prefix). Use `realpath`-true canonicalisation is on the roadmap if a real case needs it |
 

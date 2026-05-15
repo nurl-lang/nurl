@@ -600,7 +600,7 @@
     ( nurl_sym_def syms `__last_ident_name__` `` )
     // Reset the closure-byref flag so we can tell whether the returned
     // expression is itself a closure literal that captures a stack
-    // binding by pointer (docs/GOTCHAS.md item 8).
+    // binding by pointer (docs/GOTCHAS.md item 5).
     ( nurl_sym_def syms `__last_closure_byref__` `` )
     : s val ( gen_expr lex syms cg )
     : s lt ( nurl_get_last_type )
@@ -618,7 +618,7 @@
     { = returns_byref_closure ( seq ( nurl_sym_get syms ( nurl_str_cat ret_ident_for_byref `__captures_byref` ) ) `1` ) }
     {}
     ? returns_byref_closure
-    { ( warn lex `returning a closure that captures a stack binding by pointer - it will dangle after this function returns (use a heap-backed handle instead; see docs/GOTCHAS.md item 8)` ) }
+    { ( warn lex `returning a closure that captures a stack binding by pointer - it will dangle after this function returns (use a heap-backed handle instead; see docs/GOTCHAS.md item 5)` ) }
     {}
     // Diagnose cases where gen_expr produced no usable value (last_type =
     // void, e.g. a `? cond then else` whose two arms have incompatible
@@ -5986,20 +5986,36 @@
 
 // ── Import declaration: $ `path` alias? ───────────────────────────
 // Reads and compiles the referenced .nu file inline (static include).
-// When an alias is present, every top-level `@` function defined in the
-// imported file is renamed in the file's source to `alias__name` before
-// compilation. Callers can then reach those functions via the namespace
-// syntax `alias::name`, which the lexer merges into a single IDENT
-// `alias__name`. FFI declarations (`& "lib" @ name ...`), struct / enum /
-// const names and trait/impl methods are NOT renamed in this iteration.
-
-// collect_alias_targets: walk `src` and return the set of top-level `@`
-// function names as a space-separated list. The FFI `@ name` that follows
-// `& STR` is skipped, as are nested imports' optional alias idents.
+// When an alias is present, every top-level decl name defined in the
+// imported file is renamed in the file's source to `alias__name`
+// before compilation. Callers can then reach those decls via the
+// namespace syntax `alias::name`, which the lexer merges into a single
+// IDENT `alias__name`.
+//
+// Names that ARE rewritten by `collect_alias_targets`:
+//   * top-level `@ name`           — function definitions
+//   * top-level `: Name { ... }`   — struct types
+//   * top-level `: | Name { ... }` — enum types + every variant inside
+//   * top-level `: TYPE_KW NAME …` — global constants
+//
+// Names that are NOT rewritten (intentional):
+//   * `& "lib" @ name`             — FFI declarations. The linker resolves
+//                                    the C-side ABI symbol by literal name;
+//                                    renaming would either break the link
+//                                    (if applied to the FFI side too) or
+//                                    leave use sites referencing an undefined
+//                                    symbol (if applied only at the call site).
+//                                    Use `pub` instead if you want to keep
+//                                    FFI scoped to the importing file.
+//   * `% Trait [T] { ... }`        — trait methods are mangled by the
+//                                    impl-target type at emission time;
+//                                    they aren't looked up by name across
+//                                    files in the first place.
+//   * struct-field names, closure params, locals — never top-level decls.
 @ collect_alias_targets s src s path → s {
     : i lx ( nurl_lex_new src path )
-    : s names ``
-    : i depth 0
+    : ~ s names ``
+    : ~ i depth 0
     ~ != ( nurl_lex_type lx ) TT_EOF {
         : i tt ( nurl_lex_type lx )
         ? == tt TT_LBRACE
@@ -6030,7 +6046,68 @@
                             }
                             {}
                         }
-                        { ( nurl_lex_advance lx ) }
+                        { ? & == depth 0 == tt TT_PUB
+                            {  // `pub` prefix on any decl — skip the keyword,
+                               // the following decl will be picked up by its
+                               // own branch on the next iteration.
+                                ( nurl_lex_advance lx )
+                            }
+                            { ? & == depth 0 == tt TT_COLON
+                                { ( nurl_lex_advance lx )  // consume ':'
+                                    // Optional mutable marker on a const.
+                                    ? == ( nurl_lex_type lx ) TT_TILDE { ( nurl_lex_advance lx ) } {}
+                                    : i tt2 ( nurl_lex_type lx )
+                                    ? == tt2 TT_PIPE
+                                    {  // `: | Name { Variant1 Variant2(payload?) ... }`
+                                        ( nurl_lex_advance lx )  // consume '|'
+                                        ? ( is_ident_tok ( nurl_lex_type lx ) )
+                                        { : s en ( nurl_lex_val lx )
+                                            = names ? == 0 ( nurl_str_len names ) en ( nurl_str_cat3 names ` ` en )
+                                            ( nurl_lex_advance lx )
+                                        } {}
+                                        // Walk into the body and collect variant
+                                        // names. Each variant is `Name optional-payload-tys`;
+                                        // a TYPE_KW or sigil token (`*`, `?`, `[`,
+                                        // `!`, `(`) introduces a payload type, not
+                                        // a variant — skip those. IDENTs that are
+                                        // already on `names` (e.g. nested struct
+                                        // type appearing as a payload) are noticed
+                                        // by alias_rewrite_source's whole-identifier
+                                        // dedup.
+                                        ? == ( nurl_lex_type lx ) TT_LBRACE
+                                        { ( nurl_lex_advance lx )
+                                            ~ & != ( nurl_lex_type lx ) TT_RBRACE != ( nurl_lex_type lx ) TT_EOF {
+                                                ? ( is_ident_tok ( nurl_lex_type lx ) )
+                                                { : s vn ( nurl_lex_val lx )
+                                                    = names ? == 0 ( nurl_str_len names ) vn ( nurl_str_cat3 names ` ` vn )
+                                                    ( nurl_lex_advance lx )
+                                                } { ( nurl_lex_advance lx ) }
+                                            }
+                                            ? == ( nurl_lex_type lx ) TT_RBRACE { ( nurl_lex_advance lx ) } {}
+                                        } {}
+                                    }
+                                    { ? ( is_ident_tok tt2 )
+                                        {  // `: Name { ... }` (struct) OR `: Name [tparams] { ... }` (generic struct).
+                                            : s sn ( nurl_lex_val lx )
+                                            = names ? == 0 ( nurl_str_len names ) sn ( nurl_str_cat3 names ` ` sn )
+                                            ( nurl_lex_advance lx )
+                                        }
+                                        { ? == tt2 TT_TYPE_KW
+                                            {  // `: TYPE_KW NAME value` (global const).
+                                                ( nurl_lex_advance lx )  // consume type kw
+                                                ? ( is_ident_tok ( nurl_lex_type lx ) )
+                                                { : s cn ( nurl_lex_val lx )
+                                                    = names ? == 0 ( nurl_str_len names ) cn ( nurl_str_cat3 names ` ` cn )
+                                                    ( nurl_lex_advance lx )
+                                                } {}
+                                            }
+                                            {}
+                                        }
+                                    }
+                                }
+                                { ( nurl_lex_advance lx ) }
+                            }
+                        }
                     }
                 }
             }

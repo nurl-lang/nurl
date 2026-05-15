@@ -1,6 +1,6 @@
 # NURL — Language Gotchas
 
-A single-page reference for the rough edges of NURL (Grammar v1.9)
+A single-page reference for the rough edges of NURL (Grammar v2.1)
 that trip up code generation. If you are an LLM writing NURL, read
 this first — it saves several compile-test cycles.
 
@@ -17,14 +17,9 @@ unlock, see [`../CHANGELOG.md`](../CHANGELOG.md).
 |---|---|---|
 | 1 | `&` and `|` are **binary** — `& A B C` is a parse-arity error | Chain via parens: `& A & B C` |
 | 2 | Bare `@-fn` names don't auto-coerce to a `(@ R P*)` closure parameter | Wrap in `\ P* → R { ( fn args ) }` |
-| 3 | Same-line shadowing: `: i z + z 7` shadows the parameter `z` from that line. **Compiler-warned 2026-05-15** — non-fatal `warning:` line at the binding site | Rename: `: i zz + z 7` |
-| 4 | Function calls require parens — `f a b` parses as register-then-loose-tokens | Always `( f a b )` |
-| 5 | Ternary arity errors cascade — diagnostic points at the *next* line | Count operands left-to-right on the previous line |
-| 6 | `vec_clone` is intentionally absent | Roll your own: `vec_each` + per-element clone |
-| 7 | Function-parameter struct mutation is **value-semantic** | Return the modified struct: `= c ( f c )` |
-| 8 | Mutable struct captured by closure (`: ~ T`) is a **borrow**, not a copy. **Compiler-warned 2026-05-15** for `^`-return escapes; vec_push / thread_spawn escapes are not yet detected | Don't escape the closure; if you must, use a heap-backed handle |
-| 9 | ~~Variadic FFI does not auto-promote `f32` or narrow ints~~ — **fixed in v1.9** (auto-promotion via explicit `...` in FFI decl) | `& \`libc\` @ printf s fmt ... → i32` |
-| 10 | Multi-char namespace `alias::name` is merged into a single IDENT `alias__name` | Aliases only rename `@`-functions, not types or FFI decls |
+| 3 | Same-line shadowing: `: i z + z 7` shadows the parameter `z` from that line (compiler emits a non-fatal `warning:`) | Rename: `: i zz + z 7` |
+| 4 | Ternary arity errors cascade — diagnostic points at the *next* line | Count operands left-to-right on the previous line |
+| 5 | Mutable struct captured by closure (`: ~ T`) is a **borrow**, not a copy (compiler warns for `^`-return escapes; `vec_push` / `thread_spawn` escapes still slip past) | Don't escape the closure; if you must, use a heap-backed handle |
 
 ---
 
@@ -103,34 +98,15 @@ side is evaluated. The new name is in scope for the rest of the
 function, including any subsequent reads — which silently rebind to
 the new value.
 
-**Compiler-warned (2026-05-15):** a `:` binding that matches one of
-the enclosing function's (or closure's) parameter names now emits a
-non-fatal `warning:` line pointing at the binding site. The check is
-scoped to parameter shadowing only — block-local `:`-to-`:` shadowing
-(occasionally intentional in loop accumulators) is silent. Regression:
-`compiler/tests/should_warn_param_shadow.nu`.
+**Compiler help:** a `:` binding that matches one of the enclosing
+function's (or closure's) parameter names emits a non-fatal `warning:`
+line at the binding site. The check is scoped to parameter shadowing
+only — block-local `:`-to-`:` shadowing (occasionally intentional in
+loop accumulators) is silent.
 
 ---
 
-## 4. Function calls require parens
-
-```nurl
-// ✗ `__i_mod a b` parses as: register `__i_mod` plus stray tokens
-: i d __i_mod a b
-
-// ✓ Always
-: i d ( __i_mod a b )
-```
-
-**Why:** there is no implicit-call form. `( fn args )` is the only
-call syntax. A bare identifier is always a name lookup — and the
-following tokens are then parsed in the surrounding context (often
-as operator operands), so the error surfaces several tokens later as
-"unexpected token".
-
----
-
-## 5. Ternary / prefix-arity is strict and silently cascading
+## 4. Ternary / prefix-arity is strict and silently cascading
 
 ```nurl
 // ✗ Missing one operand from a nested ternary
@@ -152,74 +128,7 @@ etc. on the **previous** line.
 
 ---
 
-## 6. `vec_clone` is intentionally absent
-
-```nurl
-// ✗ No such function — would alias owned heap buffers
-: ( Vec String ) copy ( vec_clone [String] src )
-
-// ✓ Shallow clone via vec_each + per-element clone closure
-: ( Vec String ) copy ( vec_with_cap [String] ( vec_len [String] src ) )
-( vec_each [String] src \ String s → v {
-  ( vec_push [String] copy ( string_clone s ) )
-} )
-```
-
-**Why:** `vec_clone` would do a bitwise copy of the underlying
-buffer, duplicating owned-pointer fields without telling the
-auto-drop machinery. The result would double-free every owned element
-at scope exit. Per-element clone is explicit and respects ownership.
-
----
-
-## 7. Function-parameter struct mutation is value-semantic
-
-```nurl
-: Counter { i n  i max }
-
-@ inc Counter c → v {
-  = . c n + . c n 1   // mutates a LOCAL copy
-}
-
-@ main → i {
-  : Counter c @ Counter { 0 10 }
-  ( inc c )
-  ( inc c )
-  // . c n is STILL 0 from the caller's view.
-  ^ 0
-}
-```
-
-```nurl
-// ✓ Canonical share-mutation pattern: return the modified struct
-@ inc_returning Counter c → Counter {
-  = . c n + . c n 1
-  ^ c
-}
-= c ( inc_returning c )
-= c ( inc_returning c )
-// . c n is now 2.
-```
-
-**Why:** NURL passes struct parameters by value, like C, Go, Zig, and
-Rust-without-`&mut`. The compiler emits an `alloca + store` for each
-struct-typed parameter at function entry, so `= . p field val` writes
-to a fresh local backing — the caller's binding is untouched. NURL
-has no `&local` address-of operator, so the only ways to share
-mutation across a call boundary are:
-
-* **Return the modified struct** (idiomatic — copy is cheap for
-  small structs).
-* **Use `*T` parameters** explicitly — the function gets a pointer,
-  the caller passes the alloca address. Field writes through the
-  pointer reach the caller's memory.
-* **Wrap the state in a single-handle struct** (e.g.
-  `{ ( Vec i ) counters }`) — the handle is copied but the heap
-  buffer is shared. See `stdlib/ext/http_middleware.nu` `Metrics`.
-
----
-
-## 8. Mutable struct captured by closure is a *borrow*
+## 5. Mutable struct captured by closure is a *borrow*
 
 ```nurl
 : Counter { i n  i max }
@@ -249,10 +158,9 @@ This is exactly the right thing for in-place mutation patterns
 }
 ```
 
-NURL does not check for escaping captures. If the closure is stored
-in a `Vec[Closure]`, returned from a function, or detached onto a
-worker thread that outlives the caller, fall back to a heap-backed
-handle:
+If the closure is stored in a `Vec[Closure]`, returned from a
+function, or detached onto a worker thread that outlives the caller,
+fall back to a heap-backed handle:
 
 ```nurl
 // ✓ Heap-backed handle survives capture by escaping closures
@@ -263,14 +171,23 @@ handle:
 scope holding the captured `: ~` binding exits. Same lifetime
 discipline as a C function holding a pointer to a stack local.
 
+**Compiler help:** `^`-returning a closure that captures a
+`: ~`-mutable multi-field struct by pointer emits a non-fatal
+`warning:` line. Both shapes trip the check — a named closure binding
+(`^ bump`) and a closure literal (`^ \ → v { ... c ... }`). Closures
+captured by-value (no `: ~`) and closures used locally stay silent.
+The check does NOT yet detect escapes via `vec_push` /
+`vec_insert` / `vec_set` / `thread_spawn`; those remain programmer
+responsibility.
+
 **Immutable captures snapshot** (backward-compatible): `: Counter c …`
 without `~` is captured by value. Mutations inside the closure are
 local. Single-pointer-handle structs (`%String`, `%Vec`) are also
 captured by value but share through their inner pointer.
 
-**Recover-with-typed-result idiom** (2026-05-15): the byref-capture
-path is what makes `recover` usable for typed returns. The closure
-must return void, so the canonical shape is:
+**Recover-with-typed-result idiom:** the byref-capture path is what
+makes `recover` usable for typed returns. The closure must return
+void, so the canonical shape is:
 
 ```nurl
 : ~ HttpResponse out ( response_text 500 `default\n` )
@@ -286,82 +203,6 @@ the assignment inside the closure reaches the caller's alloca. For
 scalars or single-handle structs, writes inside the closure stay
 local — use a wrapper struct if you need recover-with-result on a
 scalar payload.
-
-**Compiler-warned (2026-05-15):** `^`-returning a closure that
-captures a `: ~`-mutable multi-field struct by pointer now emits a
-non-fatal `warning:` line. Both shapes trip the check — a named
-closure binding (`^ bump`) and a closure literal (`^ \ → v { ... c ... }`).
-Closures captured by-value (no `: ~`) and closures used locally (not
-returned, not stored, not thread_spawn'd) stay silent. Not yet
-detected: `vec_push` / `vec_insert` / `vec_set` / `thread_spawn` of
-the closure — those escapes are a follow-up item. Regression:
-`compiler/tests/should_warn_closure_escape.nu`.
-
----
-
-## 9. Variadic FFI auto-promotion — **shipped in v1.9**
-
-C's variadic ABI promotes `float` to `double` and narrow integer
-types (`_Bool` / `char` / `short`) to `int` before the call. Through
-grammar v1.8 NURL's FFI passed the exact LLVM types declared in the
-signature, so every variadic call site had to widen by hand.
-
-**Grammar v1.9** closes this. Declare the FFI signature with a
-trailing `...` to mark the function variadic; the compiler emits
-the appropriate `fpext` / `sext` / `zext` for every argument
-beyond the fixed-param count:
-
-```nurl
-// ✓ v1.9 — auto-promotion at the call site
-& `libc` @ printf s fmt ... → i32
-
-: i32 a 42
-: u32 b 12345
-: f32 c # f32 3.5
-: s   e `hello`
-( printf `i32=%d u32=%u f32=%g s=%s\n` a b c e )
-```
-
-Promotion rules at the call site (signedness from the binding's
-`__unsigned` flag, otherwise default `sext`):
-
-| Source LLVM type | Promoted to | Instruction |
-|---|---|---|
-| `float`        | `double` | `fpext` |
-| `i1` (bool)    | `i32`    | `zext`  |
-| `i8`  signed   | `i32`    | `sext`  |
-| `i8`  unsigned (`u`) | `i32` | `zext` |
-| `i16` signed   | `i32`    | `sext`  |
-| `i16` unsigned (`u16`) | `i32` | `zext` |
-| `i32` / `i64` / `double` / pointers | unchanged | — |
-
-The fixed-param count is captured at FFI-decl time, so a function
-declared `& \`libc\` @ snprintf *u buf i n s fmt ... → i32` promotes
-only args 4+ (the variadic tail), leaving the named `*u`, `i`, `i`,
-`s` args alone.
-
-**Return type quirk:** the prelude pre-emits
-`declare i32 @printf(i8*, ...)`. If your FFI decl uses `→ i` (NURL
-i64), the call emits `call i64` which LLVM's verifier will reject as
-incompatible with the prelude's `i32`. Use `→ i32` for printf and
-the rest of the printf family.
-
----
-
-## 10. Namespace syntax merges `alias::name` into one IDENT
-
-```nurl
-$ `stdlib/ext/json.nu` json
-// At source level you can write:
-: Json v ( json::parse `{"k":1}` )
-// The lexer merges `json::parse` into the single IDENT `json__parse`.
-```
-
-**Caveat:** the `$ path alias` import form only rewrites top-level
-`@`-function names. It does **not** rename struct types, enum
-variants, FFI decls, traits, or impls. Use plain `$ path` (no alias)
-when importing a module whose surface is mostly types — the alias
-mechanism doesn't reach them.
 
 ---
 
@@ -384,6 +225,10 @@ borrow checker. A few specifics worth pinning down:
 * **The `Drop` trait** is recognised by convention. Any `impl Drop`
   with `@ drop T self → v` runs at scope exit, before owned-field
   cleanup.
+
+For the wider memory-model story (default-immutable bindings,
+value-semantic struct parameters, single-owner auto-drop phases),
+see README's **Memory model** section.
 
 ---
 
