@@ -4,6 +4,24 @@ All notable changes to the "nurl" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.3.0] — 2026-05-16
+
+### Added
+
+- **Language Server client**. The extension now spawns the
+  `nurl-lsp` binary over stdio via `vscode-languageclient` and
+  surfaces diagnostics (errors + warnings) live as you type. Server
+  binary is resolved in order: `nurl.server.path` setting →
+  `<workspaceFolder>/build/nurl-lsp` → PATH lookup for `nurl-lsp`.
+  When no binary is found, the extension stays in syntax-only mode
+  and shows a one-shot notification with build instructions.
+
+### Configuration
+
+- `nurl.server.path` — absolute path override
+- `nurl.server.trace` — `off` / `messages` / `verbose` to log the
+  LSP wire to the Output channel
+
 ## [0.2.0] — 2026-05-14
 
 Catches the grammar up from v1.1-era highlighting (where `0.1.0`

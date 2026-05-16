@@ -1,20 +1,21 @@
 {
   "name": "nurl",
   "displayName": "NURL Language",
-  "description": "Syntax highlighting for NURL (Neural Unified Representation Language)",
-  "version": "0.2.0",
+  "description": "Syntax highlighting + Language Server for NURL (Neural Unified Representation Language)",
+  "version": "0.3.0",
   "publisher": "nurl-lang",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Hindurable/nurl"
+    "url": "https://github.com/nurl-lang/nurl"
   },
   "engines": {
-    "vscode": "^1.60.0"
+    "vscode": "^1.75.0"
   },
   "categories": [
     "Programming Languages"
   ],
+  "main": "./extension.js",
   "contributes": {
     "languages": [{
       "id": "nurl",
@@ -26,6 +27,26 @@
       "language": "nurl",
       "scopeName": "source.nurl",
       "path": "./syntaxes/nurl.tmLanguage.json"
-    }]
+    }],
+    "configuration": {
+      "type": "object",
+      "title": "NURL",
+      "properties": {
+        "nurl.server.path": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the nurl-lsp binary. Empty string falls back to <workspace>/build/nurl-lsp, then a PATH lookup for 'nurl-lsp'."
+        },
+        "nurl.server.trace": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Trace LSP messages exchanged with the server (Output → 'NURL Language Server')."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
   }
 }
