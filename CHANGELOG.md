@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4] — 2026-05-16
+
+LSP server gains the last three "quick win" features and the
+Language Server protocol surface is now feature-complete enough
+for daily editor use without falling back to other tooling.
+
+### Added
+
+* **`textDocument/formatting`** — pipes the active buffer through
+  `build/nurlfmt --stdin` and returns a single TextEdit covering
+  the entire document. `Shift+Alt+F` in VS Code triggers it. Uses
+  `process_run`'s stdin_str parameter — no temp file needed.
+
+* **`workspace/symbol`** — fuzzy-search across every indexed
+  top-level symbol (functions, struct/enum types, enum variants,
+  global constants, FFI symbols). Case-insensitive substring
+  match, empty query returns the full set. `Ctrl+T` / `Cmd+T` in
+  VS Code. Reuses the `g_all_names :list` TSV index built by the
+  decl scanner.
+
+* **`textDocument/foldingRange`** — emits FoldingRange for every
+  multi-line `{ … }` block. Backtick strings and `//` comments are
+  skipped so braces inside them don't confuse the matcher.
+  Single-line blocks (e.g. `{ ^ 0 }`) are filtered out. Nested
+  blocks each get their own range so the editor can fold any
+  level independently.
+
 ## [0.4.3] — 2026-05-16
 
 Tier D ecosystem advances on two axes: a working **Language Server**

@@ -78,13 +78,16 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ( json_obj_set comp `resolveProvider` ( json_bool F ) )
     ( json_obj_set comp `triggerCharacters` ( json_arr_new ) )
     ( json_obj_set caps `completionProvider` comp )
+    ( json_obj_set caps `documentFormattingProvider` ( json_bool T ) )
+    ( json_obj_set caps `workspaceSymbolProvider` ( json_bool T ) )
+    ( json_obj_set caps `foldingRangeProvider` ( json_bool T ) )
     ^ caps
 }
 
 @ __build_server_info → Json {
     : Json info ( json_obj_new )
     ( json_obj_set info `name` ( json_str_lit `nurl-lsp` ) )
-    ( json_obj_set info `version` ( json_str_lit `0.4.3` ) )
+    ( json_obj_set info `version` ( json_str_lit `0.4.4` ) )
     ^ info
 }
 
@@ -1400,6 +1403,231 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ( json_free resp )
 }
 
+// ── Formatting (textDocument/formatting) ─────────────────────────
+//
+// Pipes the current buffer through `build/nurlfmt --stdin` and
+// returns a single TextEdit covering the whole document. The
+// `--stdin` mode is the project-canonical entry point — same code
+// path as `git diff | nurlfmt --stdin --check` in CI.
+//
+// LSP TextEdit range semantics: `start` inclusive, `end` exclusive.
+// To replace the whole document we point `end` at the position
+// immediately past the last character — line N+1, char 0 — which
+// VS Code interprets as "everything up to the end of file".
+
+@ __count_lines s content → i {
+    : i n ( nurl_str_len content )
+    : ~ i k 0
+    : ~ i lines 0
+    ~ < k n {
+        ? == ( nurl_str_get content k ) 10 { = lines + lines 1 } {}
+        = k + k 1
+    }
+    ^ lines
+}
+
+@ __handle_formatting Json id Json params → v {
+    : Json edits ( json_arr_new )
+    : s uri ( __extract_uri params )
+    ? > ( nurl_str_len uri ) 0 {
+        : s content ( nurl_sym_get g_docs uri )
+        ? > ( nurl_str_len content ) 0 {
+            // Call nurlfmt --stdin; feed the buffer via process_run's
+            // stdin_str parameter. nurlfmt: 1 arg = `--stdin`.
+            : ( Vec s ) args ( vec_with_cap [s] 1 )
+            ( vec_push [s] args `--stdin` )
+            : !Output ProcessErr pr ( process_run `build/nurlfmt` args content )
+            ( vec_free [s] args )
+            ?? pr {
+                F _ → {}
+                T out → {
+                    ? ( output_success out ) {
+                        : s formatted ( output_stdout out )
+                        // Build a single TextEdit covering the full
+                        // document. end-of-file position = (linecount, 0).
+                        : i nl ( __count_lines content )
+                        : Json range ( json_obj_new )
+                        ( json_obj_set range `start` ( __build_position 0 0 ) )
+                        ( json_obj_set range `end` ( __build_position nl 0 ) )
+                        : Json edit ( json_obj_new )
+                        ( json_obj_set edit `range` range )
+                        ( json_obj_set edit `newText` ( json_str_lit formatted ) )
+                        ( json_arr_push edits edit )
+                    } {}
+                    ( output_free out )
+                }
+            }
+        } {}
+    } {}
+    : Json resp ( __make_response id edits )
+    ( write_message resp )
+    ( json_free resp )
+}
+
+// ── Workspace symbol search (workspace/symbol) ───────────────────
+//
+// `Ctrl+T` in VS Code / `Cmd+T` on macOS: fuzzy-search across every
+// known top-level symbol in the workspace + transitive imports.
+// Empty query returns the full set so the user can browse; non-empty
+// queries filter by case-insensitive substring match.
+
+@ __byte_lower i c → i {
+    ? & >= c 65 <= c 90 { ^ + c 32 } {}
+    ^ c
+}
+
+// Case-insensitive substring search. Empty `needle` matches anything.
+@ __ci_contains s hay s needle → b {
+    : i nn ( nurl_str_len needle )
+    ? == nn 0 { ^ T } {}
+    : i nh ( nurl_str_len hay )
+    ? > nn nh { ^ F } {}
+    : i limit + - nh nn 1
+    : ~ i i 0
+    ~ < i limit {
+        : ~ b match T
+        : ~ i j 0
+        ~ & match < j nn {
+            : i hc ( __byte_lower ( nurl_str_get hay + i j ) )
+            : i nc ( __byte_lower ( nurl_str_get needle j ) )
+            ? != hc nc { = match F } {}
+            = j + j 1
+        }
+        ? match { ^ T } {}
+        = i + i 1
+    }
+    ^ F
+}
+
+@ __handle_workspace_symbol Json id Json params → v {
+    : Json items ( json_arr_new )
+    // Extract `query` (a JSON string). Spec says it's always present.
+    : ?Json q_o ( json_obj_get params `query` )
+    : s query ``
+    ?? q_o {
+        T qj → = query ( json_str_data qj )
+        F _ → {}
+    }
+    : s tsv ( nurl_sym_get g_all_names `:list` )
+    : i nt ( nurl_str_len tsv )
+    : ~ i tpos 0
+    ~ < tpos nt {
+        : i tend ( __index_of_byte tsv tpos nt 9 )
+        : i sep ? >= tend 0 tend nt
+        : String name ( __substr tsv tpos sep )
+        ? ( __ci_contains ( string_data name ) query ) {
+            : s defs_val ( nurl_sym_get g_defs ( string_data name ) )
+            ? > ( nurl_str_len defs_val ) 0 {
+                : i dn ( nurl_str_len defs_val )
+                : i t1 ( __index_of_byte defs_val 0 dn 9 )
+                : i t2 ( __index_of_byte defs_val + t1 1 dn 9 )
+                ? & >= t1 0 >= t2 0 {
+                    : String def_uri ( __substr defs_val 0 t1 )
+                    : String line_s ( __substr defs_val + t1 1 t2 )
+                    : String kind_s ( __substr defs_val + t2 1 dn )
+                    : !i ParseErr lr ( string_to_int line_s )
+                    : !i ParseErr kr ( string_to_int kind_s )
+                    ?? lr {
+                        T def_line → {
+                            ?? kr {
+                                T def_kind → {
+                                    : Json sym ( __build_symbol_information ( string_data name ) ( string_data def_uri ) def_line def_kind )
+                                    ( json_arr_push items sym )
+                                }
+                                F _ → {}
+                            }
+                        }
+                        F _ → {}
+                    }
+                    ( string_free def_uri )
+                    ( string_free line_s )
+                    ( string_free kind_s )
+                } {}
+            } {}
+        } {}
+        ( string_free name )
+        = tpos ? >= tend 0 + tend 1 nt
+    }
+    : Json resp ( __make_response id items )
+    ( write_message resp )
+    ( json_free resp )
+}
+
+// ── Folding ranges (textDocument/foldingRange) ───────────────────
+//
+// Char-by-char walker that pairs `{ … }` blocks and emits a
+// FoldingRange per multi-line pair. Comments (`//`) and backtick
+// strings are skipped so braces inside them don't confuse the
+// matcher. Stack of open-line numbers kept in a Vec[i] — vec_push
+// on `{`, vec_pop on `}`. Single-line blocks (`{ a b }` on one row)
+// are filtered out so the editor doesn't list useless one-row folds.
+//
+// LSP FoldingRange semantics: startLine + endLine are inclusive,
+// both fold-targets. We emit endLine = (close-row - 1) so the
+// closing `}` stays visible after the fold collapses.
+
+@ __handle_folding_range Json id Json params → v {
+    : Json ranges ( json_arr_new )
+    : s uri ( __extract_uri params )
+    ? > ( nurl_str_len uri ) 0 {
+        : s content ( nurl_sym_get g_docs uri )
+        : i n ( nurl_str_len content )
+        : ( Vec i ) stack ( vec_new [i] )
+        : ~ i pos 0
+        : ~ i line 0
+        : ~ i in_string 0
+        : ~ i in_comment 0
+        ~ < pos n {
+            : i c ( nurl_str_get content pos )
+            ? != in_string 0 {
+                ? == c 96 { = in_string 0 } {}
+                ? == c 10 { = line + line 1 } {}
+                = pos + pos 1
+            } {
+                ? != in_comment 0 {
+                    ? == c 10 { = in_comment 0  = line + line 1 } {}
+                    = pos + pos 1
+                } {
+                    ? == c 96 { = in_string 1  = pos + pos 1 } {
+                        ? & == c 47 & < + pos 1 n == ( nurl_str_get content + pos 1 ) 47 {
+                            = in_comment 1
+                            = pos + pos 2
+                        } {
+                            ? == c 123 {
+                                ( vec_push [i] stack line )
+                                = pos + pos 1
+                            } {
+                                ? == c 125 {
+                                    : ?i op ( vec_pop [i] stack )
+                                    ?? op {
+                                        T open_line → {
+                                            ? > line open_line {
+                                                : Json r ( json_obj_new )
+                                                ( json_obj_set r `startLine` ( json_int open_line ) )
+                                                ( json_obj_set r `endLine` ( json_int - line 1 ) )
+                                                ( json_arr_push ranges r )
+                                            } {}
+                                        }
+                                        F _ → {}
+                                    }
+                                    = pos + pos 1
+                                } {
+                                    ? == c 10 { = line + line 1 } {}
+                                    = pos + pos 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        ( vec_free [i] stack )
+    } {}
+    : Json resp ( __make_response id ranges )
+    ( write_message resp )
+    ( json_free resp )
+}
+
 // ── Request / notification dispatch ────────────────────────────────
 
 @ __handle_initialize Json id Json params → v {
@@ -1522,7 +1750,43 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                 }
                                             }
                                         } {
-                                            ( __handle_unknown_request id method )
+                                            ? ( nurl_str_eq method `textDocument/formatting` ) {
+                                                : ?Json params_o ( json_obj_get msg `params` )
+                                                ?? params_o {
+                                                    T params_j → ( __handle_formatting id params_j )
+                                                    F _ → {
+                                                        : Json resp ( __make_response id ( json_arr_new ) )
+                                                        ( write_message resp )
+                                                        ( json_free resp )
+                                                    }
+                                                }
+                                            } {
+                                                ? ( nurl_str_eq method `workspace/symbol` ) {
+                                                    : ?Json params_o ( json_obj_get msg `params` )
+                                                    ?? params_o {
+                                                        T params_j → ( __handle_workspace_symbol id params_j )
+                                                        F _ → {
+                                                            : Json resp ( __make_response id ( json_arr_new ) )
+                                                            ( write_message resp )
+                                                            ( json_free resp )
+                                                        }
+                                                    }
+                                                } {
+                                                    ? ( nurl_str_eq method `textDocument/foldingRange` ) {
+                                                        : ?Json params_o ( json_obj_get msg `params` )
+                                                        ?? params_o {
+                                                            T params_j → ( __handle_folding_range id params_j )
+                                                            F _ → {
+                                                                : Json resp ( __make_response id ( json_arr_new ) )
+                                                                ( write_message resp )
+                                                                ( json_free resp )
+                                                            }
+                                                        }
+                                                    } {
+                                                        ( __handle_unknown_request id method )
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
