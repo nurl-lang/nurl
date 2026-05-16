@@ -5873,8 +5873,14 @@
           & == ( nurl_str_get lib 1 ) 105
             == ( nurl_str_get lib 2 ) 98
         { = norm ( nurl_str_slice lib 3 - llen 3 ) } {}
-        // Whitelist of always-linked system libraries.
-        : b in_whitelist | | | ( seq norm `c` ) ( seq norm `m` ) ( seq norm `pthread` ) ( seq norm `dl` )
+        // Whitelist: always-linked system libs (`c`/`m`/`pthread`/`dl`) plus
+        // NURL-shipped FFI bridges (`canvas`, `audio`) whose backing C lives
+        // in `stdlib/canvas*.c` / `stdlib/audio_wasm.c` and is linked by
+        // `nurl.sh` / `wasmnurl.sh` — they have no `stdlib/runtime.*` sentinel.
+        : b is_sys | ( seq norm `c` ) ( seq norm `m` )
+        : b is_thr | ( seq norm `pthread` ) ( seq norm `dl` )
+        : b is_brg | ( seq norm `canvas` ) ( seq norm `audio` )
+        : b in_whitelist | | is_sys is_thr is_brg
         ? in_whitelist {} {
             : s sentinel ( nurl_str_cat `stdlib/runtime.` norm )
             ? == ( nurl_file_exists sentinel ) 1 {} {
