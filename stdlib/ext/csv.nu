@@ -527,6 +527,95 @@ $ `stdlib/std/hashmap.nu`
     }
 }
 
+// ── Typed column extraction ────────────────────────────────────────
+//
+// One-shot single-column type coercion. Returns an owned Vec[i] /
+// Vec[f] indexed by ORIGINAL row order — same indexing as the row
+// argument to a `csv_table_filter` predicate. Caller frees with the
+// usual `vec_free [i] / [f]`.
+//
+// Use case: hot per-row predicates. Caller pre-parses the numeric
+// column once, then the predicate does a single load instead of
+// `nurl_parse_float_range` per call. Lifecycle: extract → use
+// inside the filter closure → free.
+//
+// Unparseable cells coerce to 0 / 0.0 (matches `csv_table_sort_by_*`
+// semantics). Out-of-range `col` yields a Vec of zeros (no error).
+
+@ csv_table_extract_col_i64 * CSVTable t i col → ( Vec i ) {
+    : i n ( csv_table_n_rows t )
+    : ( Vec i ) out ( vec_with_cap [i] n )
+    ? <= n 0 { ^ out } {}
+    ( vec_reserve [i] out n )
+    : *i outp ( vec_data [i] out )
+    : *u cd # *u ( string_data . t content )
+    : *u eb ( vec_data [u] . t escape_buf )
+    : *i fcp ( vec_data [i] . t flat_cells )
+    : *i rsp ( vec_data [i] . t row_starts )
+    : *i rlp ( vec_data [i] . t row_lens )
+    : b col_neg < col 0
+    : ~ i ri 0
+    ~ < ri n {
+        : ~ i v 0
+        ? col_neg {} {
+            : i row_count . rlp ri
+            ? < col row_count {
+                : i row_first . rsp ri
+                : i cell_idx + row_first col
+                : i off . fcp * cell_idx 2
+                : i len . fcp + * cell_idx 2 1
+                ? > len 0 {
+                    : ~ s src # s 0
+                    ? >= off 0 { = src # s + # i cd off }
+                    { = src # s + # i eb - 0 + off 1 }
+                    = v ( nurl_parse_int_range src len )
+                } {}
+            } {}
+        }
+        = . outp ri v
+        = ri + ri 1
+    }
+    : b _r ( vec_set_len [i] out n )
+    ^ out
+}
+
+@ csv_table_extract_col_f64 * CSVTable t i col → ( Vec f ) {
+    : i n ( csv_table_n_rows t )
+    : ( Vec f ) out ( vec_with_cap [f] n )
+    ? <= n 0 { ^ out } {}
+    ( vec_reserve [f] out n )
+    : *f outp ( vec_data [f] out )
+    : *u cd # *u ( string_data . t content )
+    : *u eb ( vec_data [u] . t escape_buf )
+    : *i fcp ( vec_data [i] . t flat_cells )
+    : *i rsp ( vec_data [i] . t row_starts )
+    : *i rlp ( vec_data [i] . t row_lens )
+    : b col_neg < col 0
+    : ~ i ri 0
+    ~ < ri n {
+        : ~ f v 0.0
+        ? col_neg {} {
+            : i row_count . rlp ri
+            ? < col row_count {
+                : i row_first . rsp ri
+                : i cell_idx + row_first col
+                : i off . fcp * cell_idx 2
+                : i len . fcp + * cell_idx 2 1
+                ? > len 0 {
+                    : ~ s src # s 0
+                    ? >= off 0 { = src # s + # i cd off }
+                    { = src # s + # i eb - 0 + off 1 }
+                    = v ( nurl_parse_float_range src len )
+                } {}
+            } {}
+        }
+        = . outp ri v
+        = ri + ri 1
+    }
+    : b _r ( vec_set_len [f] out n )
+    ^ out
+}
+
 // ── Parsing ────────────────────────────────────────────────────────
 //
 // Single-pass arena parser. Cells are written as (offset, length)
