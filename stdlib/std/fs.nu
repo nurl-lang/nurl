@@ -129,6 +129,26 @@ $ `stdlib/core/errors.nu`
     ^ @ !v IoErr { F e }
 }
 
+// POSIX symlink(2) — `target` is what the link points TO (stored
+// verbatim in the symlink), `linkpath` is the new symlink entry to
+// create. Returns 0 on success, -1 on failure with errno set.
+// Windows is NOT supported here; CreateSymbolicLinkW needs a privilege
+// (`SeCreateSymbolicLinkPrivilege`) most accounts lack — Win32 users
+// of nurlpkg should fall back to copying.
+& `c` @ symlink s target s linkpath → i32
+
+// Create a symbolic link at `linkpath` pointing to `target`. Returns
+// IoErr {AlreadyExists} if the entry already exists (errno = EEXIST),
+// {PermissionDenied} on EACCES, {Other} for everything else.
+@ fs_symlink s target s linkpath → !v IoErr {
+    : i32 rc ( symlink target linkpath )
+    ? == rc 0 {
+        ^ @ !v IoErr { T 0 }
+    } {}
+    : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+    ^ @ !v IoErr { F e }
+}
+
 // Remove an empty directory. Returns NotFound when missing, Other when
 // the directory is non-empty (errno = ENOTEMPTY) — the errno-kind table
 // folds the latter into Other rather than introducing a new variant.
