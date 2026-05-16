@@ -230,3 +230,31 @@ fact a 13 % load improvement and a 23 % sort improvement.
 | sort   |       55 |       56 |          9 |          9 |             6.2× |
 | write  |        0 |        0 |          2 |          2 |             0.0× |
 | total  |      477 |      488 |         83 |         85 |             5.7× |
+
+## 2026-05-16 16:51:23Z — 666d7e1+dirty — baseline-no-LTO
+- CPU: Intel(R) Core(TM) i7-5930K CPU @ 3.50GHz
+- Kernel: Linux 6.17.0-23-generic x86_64
+- Fixture: test_data.csv (1 M rows × 8 cols, 106756536 B, sha256=d00a0fd4509ea4a5…)
+- Runs: 5 per implementation
+
+| Stage  | NURL min | NURL med | Polars min | Polars med | NURL/Polars (med) |
+|--------|---------:|---------:|-----------:|-----------:|------------------:|
+| load   |      302 |      315 |         64 |         65 |             4.8× |
+| filter |      144 |      146 |         18 |         18 |             8.1× |
+| sort   |       63 |       65 |         11 |         11 |             5.9× |
+| write  |        0 |        0 |          2 |          2 |             0.0× |
+| total  |      517 |      529 |         95 |         96 |             5.5× |
+
+## 2026-05-16 16:55:44Z — 666d7e1+dirty — LTO-runtime
+- CPU: Intel(R) Core(TM) i7-5930K CPU @ 3.50GHz
+- Kernel: Linux 6.17.0-23-generic x86_64
+- Fixture: test_data.csv (1 M rows × 8 cols, 106756536 B, sha256=d00a0fd4509ea4a5…)
+- Runs: 5 per implementation
+
+| Stage  | NURL min | NURL med | Polars min | Polars med | NURL/Polars (med) |
+|--------|---------:|---------:|-----------:|-----------:|------------------:|
+| load   |      270 |      272 |         61 |         63 |             4.3× |
+| filter |      135 |      139 |         17 |         19 |             7.3× |
+| sort   |       36 |       40 |         10 |         11 |             3.6× |
+| write  |        0 |        0 |          2 |          2 |             0.0× |
+| total  |      446 |      451 |         92 |         95 |             4.7× |

@@ -21,24 +21,23 @@ $ `stdlib/core/string.nu`
     : i nr ( csv_table_n_rows t )
     = i 0
     ~ < i nr {
-        : ?( Vec String ) row_opt ( csv_table_row_cells t i )
-        ?? row_opt {
-            T row → {
-                ( nurl_print `Row ` ) ( nurl_print ( nurl_str_int + i 1 ) ) ( nurl_print `: ` )
-                : i nc ( vec_len [String] row )
-                : ~ i j 0
-                ~ < j nc {
-                    : ?String s_opt ( vec_get [String] row j )
-                    ?? s_opt { T s → { ( nurl_print `[` ) ( nurl_print ( string_data s ) ) ( nurl_print `] ` ) } F → {} }
-                    = j + j 1
+        ( nurl_print `Row ` ) ( nurl_print ( nurl_str_int + i 1 ) ) ( nurl_print `: ` )
+        : i nc ( csv_table_n_cells_in_row t i )
+        : ~ i j 0
+        ~ < j nc {
+            : ?String s_opt ( csv_table_get t i j )
+            ?? s_opt {
+                T s → {
+                    ( nurl_print `[` ) ( nurl_print ( string_data s ) ) ( nurl_print `] ` )
+                    ( string_free s )
                 }
-                ( nurl_print `\n` )
+                F → {}
             }
-            F → {}
+            = j + j 1
         }
+        ( nurl_print `\n` )
         = i + i 1
     }
 
     ( csv_table_free t )
-    ( string_free content )
 }

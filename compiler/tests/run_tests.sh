@@ -143,6 +143,15 @@ for src in "${tests[@]}"; do
     out="$WORKDIR/$name.out"
     rm -f "$ll" "$bin" "$out"
 
+    # Skip helper modules: files imported by other tests via `$`-import
+    # have no `main` function, so the test framework would record them
+    # as `COMPILE OK / LINK FAIL` (no `main` symbol). They are not real
+    # test cases — only here to satisfy import paths. Convention:
+    # `*_mod.nu`, `*_helper.nu`, `*_lib.nu`.
+    case "$name" in
+        *_mod|*_helper|*_lib) continue ;;
+    esac
+
     # Network-dependent HTTP tests are opt-in via NURL_HTTP_TESTS=1.
     # Exemptions:
     #   * `http_request_parser` / `http_response_builder` /
@@ -222,7 +231,9 @@ for src in "${tests[@]}"; do
     fi
 
     # shellcheck disable=SC2086
-    if ! "$CLANG" -O2 "$ll" "$RUNTIME" -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS -o "$bin" 2>/dev/null; then
+    # `-flto` matches build.sh: runtime.o ships as LLVM bitcode and the
+    # link-time LTO pipeline inlines runtime symbols into the test binary.
+    if ! "$CLANG" -O2 -flto "$ll" "$RUNTIME" -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS -o "$bin" 2>/dev/null; then
         echo "LINK FAIL" >> "$RESULTS"
         echo >> "$RESULTS"
         continue

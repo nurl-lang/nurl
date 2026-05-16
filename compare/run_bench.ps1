@@ -29,7 +29,7 @@ Set-Location $ScriptDir
 $AppendHistory = -not $NoHistory
 
 $Py = "$ScriptDir\.venv\Scripts\python.exe"
-$NurlBin = "$ScriptDir\nurl_analysis_arena.exe"
+$NurlBin = "$ScriptDir\nurl_analysis.exe"
 $Data = "$ScriptDir\test_data.csv"
 
 # Tarkistetaan vaaditut tiedostot

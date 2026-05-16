@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
 # compare/run_bench.sh — reproducible CSV benchmark harness.
 #
-# Runs ./nurl_analysis_arena and ./.venv/bin/python polars_analysis.py
+# Runs ./nurl_analysis and ./.venv/bin/python polars_analysis.py
 # N times each, parses their stage timings, reports min/median per
 # stage, and appends one block to compare/HISTORY.md.
 #
-# The arena binary is what HISTORY.md tracks (Phase 2a+ pipeline);
-# `nurl_analysis` (v1 CSVTable path) is kept beside it for legacy
-# regression checks. Use `--v1` to point at the v1 binary explicitly.
-# `run_bench.ps1` on Windows points at the same arena binary.
+# `nurl_analysis` runs the unified `csv_table_*` pipeline (arena
+# layout is now the stdlib default; the legacy `CSVTable v1 path`
+# / `nurl_analysis_arena.exe` split is gone — both files compiled
+# the same parser after the consolidation).
 #
 # Usage:  ./run_bench.sh [N]            # default 5
 #         ./run_bench.sh --no-history   # skip HISTORY.md append
 #         ./run_bench.sh --label "phase1-indexed-sort"
-#         ./run_bench.sh --v1           # bench legacy CSVTable path
 #
 # Re-run between two no-op commits and confirm variance < 3 % on
 # every stage before claiming a phase is gated.
@@ -26,13 +25,12 @@ cd "$SCRIPT_DIR"
 N=5
 APPEND_HISTORY=1
 LABEL=""
-BINARY="nurl_analysis_arena"
+BINARY="nurl_analysis"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --no-history)  APPEND_HISTORY=0; shift ;;
         --label)       LABEL="$2"; shift 2 ;;
         --label=*)     LABEL="${1#--label=}"; shift ;;
-        --v1)          BINARY="nurl_analysis"; shift ;;
         [0-9]*)        N="$1"; shift ;;
         *)             echo "unknown arg: $1" >&2; exit 2 ;;
     esac

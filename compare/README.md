@@ -39,7 +39,7 @@ cd compare
 | `nurl_analysis.nu`     | NURL pipeline: load → filter → sort → top-10 → write      |
 | `polars_analysis.py`   | Same pipeline in Polars                                    |
 | `sort_data.py`         | Vanilla Python `csv` module sort baseline                 |
-| `csv_demo.nu`          | Smoke-test of every public API                             |
+| `test_quoting.nu`      | RFC 4180 quoting round-trip cases                          |
 | `test_split.nu`        | Edge cases for the row scanner                             |
 
 The fixture file `test_data.csv` is **not** committed — it is 102 MB.

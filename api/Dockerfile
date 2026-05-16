@@ -109,9 +109,11 @@ COPY . /src
 # is read as `bash\r` and the build fails with "No such file or directory".
 RUN find . -type f \( -name '*.sh' -o -name '*.nu' \) -exec sed -i 's/\r$//' {} +
 
-# Run the full bootstrap. If tests fail the image build fails too.
-RUN chmod +x verbosebuild.sh \
-    && ./verbosebuild.sh
+# Run the bootstrap. Skip the test suite — the image build is for the
+# API container, not a CI test stage; tests run elsewhere and would
+# slow down image construction significantly.
+RUN chmod +x build.sh \
+    && ./build.sh --no-tests
 
 # Compile the NURL runtime for wasm32-wasi so linking later is a
 # single clang invocation inside the API container. The canvas object

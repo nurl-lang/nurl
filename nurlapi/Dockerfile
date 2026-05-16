@@ -76,12 +76,12 @@ WORKDIR /src
 COPY . /src
 RUN find . -type f \( -name '*.sh' -o -name '*.nu' \) -exec sed -i 's/\r$//' {} +
 
-# Bootstrap nurlc
-RUN chmod +x verbosebuild.sh && ./verbosebuild.sh
+# Bootstrap nurlc (image build skips tests; they run in CI elsewhere)
+RUN chmod +x build.sh && ./build.sh --no-tests
 
 # Compile runtime objects
 # 1. Native Linux
-# (Already exists as stdlib/runtime.o after verbosebuild.sh)
+# (Already exists as stdlib/runtime.o after build.sh --no-tests)
 
 # 2. wasm32-wasi
 RUN /opt/wasi-sdk/bin/clang --target=wasm32-wasi -O2 \

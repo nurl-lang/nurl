@@ -10,11 +10,24 @@
 #
 #  On any failure, the full build log or test-runner diff is
 #  printed so the cause is visible.
+#
+#  Flags:
+#    --no-tests  Skip the test suite at the end (Docker images, CI
+#                stages that test elsewhere). Bootstrap fixed point
+#                still has to hold or the build fails.
 # ============================================================
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+RUN_TESTS=1
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --no-tests) RUN_TESTS=0; shift ;;
+        *) echo "unknown arg: $1" >&2; exit 2 ;;
+    esac
+done
 
 LOG="$(mktemp)"
 trap 'rm -f "$LOG"' EXIT
@@ -119,7 +132,12 @@ else
 fi
 
 # ── Build stages ─────────────────────────────────────────────
-step "runtime"       bash -c "'$CLANG' $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
+# `-flto` makes runtime.o emit LLVM bitcode so vec/string/io FFI calls
+# inline across the runtime ↔ user-code boundary at link time. The
+# matching `-flto` on every clang invocation that consumes runtime.o
+# (this script, nurl.sh, compiler/tests/run_tests.sh, tools/*/build.sh)
+# triggers the LTO link pipeline.
+step "runtime"       bash -c "'$CLANG' -O2 -flto $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
 
 # Always build canvas.o. With SDL2 headers present we get the real
 # native back-end (-DNURL_HAVE_SDL2); otherwise we compile a stub that
@@ -150,10 +168,10 @@ step "clean"         rm -f build/nurlc_py.ll build/nurlc_py \
                           build/nurlc
 
 step "stage0 ir"     bash -c 'python compiler/nurlc.py --llvm compiler/nurlc.nu > build/nurlc_py.ll'
-step "stage0 link"   "$CLANG" -O2 build/nurlc_py.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS -o build/nurlc_py
+step "stage0 link"   "$CLANG" -O2 -flto build/nurlc_py.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS -o build/nurlc_py
 
 step "stage1 ir"     bash -c './build/nurlc_py compiler/nurlc.nu > build/nurlc_self.ll'
-step "stage1 link"   "$CLANG" -O2 build/nurlc_self.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS -o build/nurlc_self
+step "stage1 link"   "$CLANG" -O2 -flto build/nurlc_self.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS -o build/nurlc_self
 
 # Informational: python vs nurlc_py IR (not fatal).
 if cmp -s build/nurlc_py.ll build/nurlc_self.ll; then
@@ -163,7 +181,7 @@ else
 fi
 
 step "stage2 ir"     bash -c './build/nurlc_self compiler/nurlc.nu > build/nurlc_self2.ll'
-step "stage2 link"   "$CLANG" -O2 build/nurlc_self2.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS -o build/nurlc_self2
+step "stage2 link"   "$CLANG" -O2 -flto build/nurlc_self2.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS -o build/nurlc_self2
 
 # Fixed-point: nurlc_self must match nurlc_self2.
 if ! cmp -s build/nurlc_self.ll build/nurlc_self2.ll; then
@@ -200,6 +218,11 @@ else
 fi
 
 # ── Test suite ───────────────────────────────────────────────
+if (( RUN_TESTS == 0 )); then
+    echo "BUILD SUCCESS (tests skipped via --no-tests)"
+    exit 0
+fi
+
 if TEST_OUT="$(compiler/tests/run_tests.sh 2>&1)"; then
     echo "BUILD SUCCESS & TESTS PASSED"
     cp compiler/nurlc.nu compiler/nurlc_lastgood.nu

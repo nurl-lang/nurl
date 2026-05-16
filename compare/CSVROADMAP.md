@@ -49,6 +49,7 @@ implementations once equivalence is proven.
 | P2a   | ≤ 750 ms   | Arena loader: kill 8 M cell-mallocs           | ✓ shipped — total 731 ms med, load 445 ms med |
 | P2b   | ≤ 600 ms   | Drop FFI from per-cell hot path               | ✓ shipped — total 610 ms med, load 333 ms med |
 | P3a   | ≤ 600 ms   | RFC 4180 quoting (read + write)               | ✓ shipped — total 505 ms med (Linux i7-5930K, 2c51f7c), load 285 ms; auto-quote on write; no regression vs P2b |
+| API consolidation | (no perf) | Arena is the only CSVTable; `csv_table_a_*` deleted | ✓ shipped 2026-05-16 — v1 `CSVTable` / `CSVRow` removed; `csv_table_*` now reaches the arena directly; RFC 4180 quoting is the default for every CSVTable load/write |
 | P2c   | ≤ 400 ms   | Hoist 3 vec_reserve + 3 vec_data out of per-row loop | candidate next — see Phase 2c below; ~6 M FFI ≈ 90–180 ms savings projected |
 | P3b   | ≤ 350 ms   | Schema-typed parse                            | next-after-P2c — build atop quoted-cell support |
 | P4    | ≤ 180 ms   | Columnar layout + vectorized aggregates       |        |
@@ -720,3 +721,40 @@ Append entries here as items complete, with date and benchmark numbers.
   load 1016 ms was running the legacy `nurl_analysis` v1 binary by
   accident — see retroactive note in HISTORY.md. Phase 2c (hoist 6
   FFI/row from arena loader) added as the next perf candidate.
+- 2026-05-16 — **API consolidation**: `csv_table_a_*` deleted; arena
+  is the only CSVTable. The v1 per-cell-malloc `CSVTable` / `CSVRow`
+  layout is gone — `csv_table_*` calls now reach the arena parser
+  directly and RFC 4180 quoting is the default for every load/write.
+  New surface: `csv_table_view` / `csv_table_view_len` /
+  `csv_table_view_by_name` (zero-copy borrowed `s`) +
+  `csv_table_get` / `csv_table_get_by_name` (owned `?String`).
+  Sort/filter/truncate/find/select_cols all wired through the arena.
+  `compare/nurl_analysis_arena.nu` + `compiler/tests/csv_sort_indexed.nu`
+  + `stdlib/ext/csv_hoist_test.nu` removed (now redundant). Bootstrap
+  fixed point holds at 1 185 386 B (stage1 ≡ stage2 byte-identical).
+  `csv_arena`, `repro_csv_quotes`, `repro_csv_table_quotes`, and
+  `test_csv_full` all green.
+- 2026-05-16 — **Runtime LTO** (`-flto` on `stdlib/runtime.o` compile
+  + every clang invocation that consumes it: `build.sh`, `nurl.sh`,
+  `compiler/tests/run_tests.sh`, `tools/{nurlfmt,nurl-lsp,nurlpkg}/build.sh`).
+  Vec / string / io FFI now inlines into user code at link time. On
+  the 1 M-row × 8-col `test_data.csv` bench (Linux i7-5930K, 5 runs):
+
+  | Stage  | no LTO median | LTO median | Δ      | Δ %    |
+  |--------|--------------:|-----------:|-------:|-------:|
+  | load   | 315 ms        | 272 ms     | -43 ms | -14 %  |
+  | filter | 146 ms        | 139 ms     |  -7 ms |  -5 %  |
+  | sort   |  65 ms        |  40 ms     | -25 ms | -38 %  |
+  | total  | 529 ms        | 451 ms     | -78 ms | -15 %  |
+
+  Sort wins the most because the sort_by inner comparator was
+  dominated by un-inlinable `nurl_parse_int_range` / `cmp_int` /
+  `vec_data` calls. Load wins from `vec_push` / `vec_data` /
+  `vec_reserve` inlining in `__csv_parse_content`. Filter was already
+  cached-pointer-optimised so the residual FFI was small. Bootstrap
+  fixed point preserved (IR generation runs at compile time, LTO is
+  link-only). Native binary size for `compare/nurl_analysis` dropped
+  172 888 → 25 408 B (-85 %) as LTO drops unused runtime symbols.
+  Phase 2c (FFI hoist in the row loop) remains an open candidate —
+  with LTO that 90–180 ms ceiling is smaller since the residual FFI
+  cost is mostly absorbed.

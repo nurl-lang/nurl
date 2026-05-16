@@ -34,6 +34,7 @@ $ `stdlib/ext/csv.nu`
     ?? first_date {
         T s → {
             ( nurl_print `Row 0 date = ` ) ( nurl_print ( string_data s ) ) ( nurl_print `\n` )
+            ( string_free s )
         }
         F → {}
     }
@@ -68,14 +69,17 @@ $ `stdlib/ext/csv.nu`
     ( nurl_print `\nSorting by 'date' ascending...\n` )
     : i ts ( monotonic_ns )
     ?? date_col {
-        T col → ( csv_table_sort_by tbl col T )
+        T col → ( csv_table_sort_by_string tbl col T )
         F → {}
     }
     ( nurl_print `Sorted in ` ) ( nurl_print ( nurl_str_int ( elapsed_ms_since ts ) ) ) ( nurl_print `ms\n` )
 
     : ?String new_first ( csv_table_get_by_name tbl 0 `date` )
     ?? new_first {
-        T s → { ( nurl_print `New row 0 date = ` ) ( nurl_print ( string_data s ) ) ( nurl_print `\n` ) }
+        T s → {
+            ( nurl_print `New row 0 date = ` ) ( nurl_print ( string_data s ) ) ( nurl_print `\n` )
+            ( string_free s )
+        }
         F → {}
     }
 

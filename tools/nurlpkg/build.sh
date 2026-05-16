@@ -81,7 +81,7 @@ if [[ -f "$ROOT_DIR/stdlib/runtime.pq" ]]; then
 fi
 
 echo "[2/2] build/nurlpkg.ll → build/nurlpkg"
-"$CLANG" -O2 "$ROOT_DIR/build/nurlpkg.ll" "$RUNTIME" -lm -lpthread "${EXTRA_LIBS[@]}" -o "$ROOT_DIR/build/nurlpkg"
+"$CLANG" -O2 -flto "$ROOT_DIR/build/nurlpkg.ll" "$RUNTIME" -lm -lpthread "${EXTRA_LIBS[@]}" -o "$ROOT_DIR/build/nurlpkg"
 
 echo ""
 echo "Done: $ROOT_DIR/build/nurlpkg"

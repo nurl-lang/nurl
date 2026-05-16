@@ -333,9 +333,10 @@ Tähän asti NURL on käyttökelpoinen yleiskieli. Nämä tekevät siitä kilpai
 - [x] `HttpErr` enum: `HttpConnect|HttpTimeout|HttpTls|HttpDns|
       HttpInvalidUrl|HttpOther` (prefiksoitu välttämään törmäys
       `IoErr`:n `Other/NotFound`-varianttien kanssa flat-namespacessa).
-- [x] **Build-pipeline:** `build.sh`/`verbosebuild.sh`/`nurl.sh`/
-      `compiler/tests/run_tests.sh` detektoi libcurl pkg-configilla,
-      merkkitiedosto `stdlib/runtime.curl` ohjaa linkkausta `-lcurl`.
+- [x] **Build-pipeline:** `build.sh` (`--no-tests` ohittaa testit
+      Docker-imagessa), `nurl.sh`, `compiler/tests/run_tests.sh`
+      detektoivat libcurlin pkg-configilla; merkkitiedosto
+      `stdlib/runtime.curl` ohjaa linkkausta `-lcurl`.
       Ilman libcurlia symbolit yhä resolvoituvat ja palauttavat
       `HttpOther`. **Linux-kontti** (`api/Dockerfile`) saa
       `libcurl4-openssl-dev` + `pkg-config` molempiin vaiheisiin.
@@ -570,8 +571,9 @@ HTTP_SERVER_PLAN.md ohjaa toteutusta vaiheittain. Phase 1–4 + Phase 6 valmiit;
 ### 31. `csv` — taulukkomuotoiset tiedostot
 - [x] `csv_parse s` → `! [[String ParseErr` (NURL)
 - [x] `csv_write rows` → `String` (NURL)
-- [x] RFC 4180 -yhteensopiva lainaus-tuki (Quoting) kaikissa rajapinnoissa (Reader/Writer/Table/Arena)
-- [ ] Header-tuki (NURL)
+- [x] RFC 4180 -yhteensopiva lainaus-tuki (Quoting) kaikissa rajapinnoissa (Reader/Writer/Table)
+- [x] `CSVTable` arena-pohjainen: yksi `content`-puskuri + `flat_cells` (off,len)-parit, zero-copy `csv_table_view` ja owned-copy `csv_table_get`. `csv_table_a_*`-rajapinta poistettu konsolidoinnissa 2026-05-16 — kaikki kutsut `csv_table_*`:n läpi.
+- [x] Header-tuki: `csv_table_col_index name → ?i`, `csv_table_get_by_name`, `csv_table_view_by_name`.
 
 ### 33. `mcp` — Model Context Protocol stdio server primitives (`stdlib/ext/mcp.nu`, MVP 2026-05-01)
 LLM-host-pinon parityvuoro: NURL voi nyt tarjota itse työkaluja Claude Desktopille / claude.ai:lle MCP-protokollalla. Stdio-transport vaatii pelkät `read_line` + `nurl_print` + JSON — ei HTTP-server-riippuvuutta — joten pieni ohut framing-kerros riittää. HTTP/SSE-transport jää Tier 4 §25:n (HTTP-server) jälkeen.
