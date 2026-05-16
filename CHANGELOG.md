@@ -8,6 +8,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] — 2026-05-16
+
+Tier D ecosystem advances on two axes: a working **Language Server**
+(`nurl-lsp`) with the five most-used IDE features wired end-to-end,
+and a small but generally-useful binary-stdin primitive in core/io.
+
+### Added
+
+* **NURL Language Server (`tools/nurl-lsp/`).** Stdio JSON-RPC server
+  written in NURL itself, wired to VS Code / Windsurf through the
+  refreshed `tooling/vscode-nurl` extension (v0.3.0). Features:
+  - Live compile-driven **diagnostics** on `didOpen` / `didChange`
+    (errors + warnings stream from `nurlc` stderr into LSP
+    `publishDiagnostics`).
+  - **Go-to-definition** across files. Transitive `$`-import index
+    populated per workspace; jump works for `@`-functions,
+    struct/enum types, enum variants, global `:` constants, and
+    `& \`lib\`` FFI symbols.
+  - **Document outline** (`textDocument/documentSymbol`) with the
+    right `SymbolKind` per decl shape — visible in VS Code's
+    Outline panel and via `Ctrl+Shift+O`.
+  - **Hover** popups (`textDocument/hover`) showing the symbol's
+    kind label, signature line (Markdown-formatted code block),
+    and source location.
+  - **Completion** (`textDocument/completion`) filtered by the
+    IDENT-prefix immediately left of the cursor. `CompletionItemKind`
+    mapping covers the same five decl shapes.
+
+  Build: `./tools/nurl-lsp/build.sh` produces `build/nurl-lsp`.
+
+* **`stdlib/core/io.nu read_n_bytes i n → ( Vec u )`.** Owned-Vec
+  binary stdin reader. Used by the LSP server's `Content-Length`
+  framing; useful for any framed-protocol consumer (DAP, raw
+  JSON-RPC, length-prefixed RPC). Backed by `nurl_read_n_bytes` in
+  `runtime.c §1` — single `fread` + side-channel byte count via
+  the existing `nurl_last_bytes_len`.
+
+* **`tooling/vscode-nurl` extension v0.3.0.** Spawns `nurl-lsp` over
+  stdio via `vscode-languageclient`. Server-path fallback order:
+  `nurl.server.path` setting → `<workspaceFolder>/build/nurl-lsp` →
+  PATH lookup for `nurl-lsp`. Graceful syntax-only fallback when no
+  binary resolves. New configuration knobs `nurl.server.path` and
+  `nurl.server.trace`. Packaged as `nurl-0.3.0.vsix`.
+
+### Fixed
+
+* **`tools/nurlfmt/build.sh` linker line.** The formatter's build
+  script was matching only the libcurl sentinel; missing
+  openssl / sqlite3 / libpq linker flags led to `undefined reference
+  to TLS_server_method` once OpenSSL was wired into the runtime.
+  Now mirrors `tools/nurl-lsp/build.sh` and the central `build.sh`
+  by checking all four runtime sentinels (`stdlib/runtime.{curl,
+  openssl,sqlite3,pq}`) and appending the corresponding `pkg-config
+  --libs` to the link line. Same pattern that breaks when a new
+  runtime dependency is added across multiple build scripts —
+  centralising into `tools/_link_flags.sh` is a follow-up.
+
 ## [0.4.1] — 2026-05-15
 
 ### Fixed

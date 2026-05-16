@@ -29,11 +29,25 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 // copies both, so callers can free their inputs.
 : ~ i g_docs 0
 
-// name → "uri\tline" decl index, populated by the per-line scanner.
-// Same-name collisions across files survive only as the last write —
-// good enough for the MVP; namespacing improves this in a later
-// iteration.
+// name → "uri\tline\tkind" decl index, populated by the per-line
+// scanner. `kind` is the LSP SymbolKind integer: 12=Function,
+// 23=Struct, 10=Enum, 22=EnumMember, 14=Constant. Same-name
+// collisions across files survive only as the last write — good
+// enough for the MVP; namespacing improves this in a later iteration.
 : ~ i g_defs 0
+
+// uri → TSV of (name, line, kind) triplets — one entry per decl
+// found in that URI, in source order. Used by textDocument/
+// documentSymbol so the editor outline view is a single sym_get
+// + parse instead of scanning the file again.
+: ~ i g_defs_by_uri 0
+
+// Dual-purpose name-set + TSV iterator. Keys:
+//   name → "1"   — membership marker for O(1) dedup
+//   :list → tab-separated unique names — drives completion enumeration
+// Two roles in one handle so iteration and existence both fit in
+// the same sym table without inventing a second one.
+: ~ i g_all_names 0
 
 // Set of absolute filesystem paths already indexed in this session,
 // for dedup during transitive `$`-import walks. Value is "1" for any
@@ -55,13 +69,22 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     // Full document sync: every didChange carries the whole buffer.
     ( json_obj_set caps `textDocumentSync` ( json_int 1 ) )
     ( json_obj_set caps `definitionProvider` ( json_bool T ) )
+    ( json_obj_set caps `documentSymbolProvider` ( json_bool T ) )
+    ( json_obj_set caps `hoverProvider` ( json_bool T ) )
+    // Completion: no trigger characters — VS Code invokes completion
+    // on every keystroke by default. resolveProvider:false because we
+    // pack everything (label, kind, detail) into the initial response.
+    : Json comp ( json_obj_new )
+    ( json_obj_set comp `resolveProvider` ( json_bool F ) )
+    ( json_obj_set comp `triggerCharacters` ( json_arr_new ) )
+    ( json_obj_set caps `completionProvider` comp )
     ^ caps
 }
 
 @ __build_server_info → Json {
     : Json info ( json_obj_new )
     ( json_obj_set info `name` ( json_str_lit `nurl-lsp` ) )
-    ( json_obj_set info `version` ( json_str_lit `0.4.1` ) )
+    ( json_obj_set info `version` ( json_str_lit `0.4.3` ) )
     ^ info
 }
 
@@ -339,13 +362,55 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 // line, matching the editor's view). Same-name collisions are
 // last-write-wins for the MVP.
 
-@ __register_def s name s uri i line → v {
+// LSP SymbolKind values used by this server:
+//   12 = Function   23 = Struct   10 = Enum   22 = EnumMember
+//   14 = Constant
+@ __register_def s name s uri i line i kind → v {
+    // g_defs entry: "uri\tline\tkind"
     : String val ( string_with_cap 64 )
     ( string_push_str val uri )
-    ( string_push_char val 9 )  // tab separator
+    ( string_push_char val 9 )
     ( string_push_str val ( nurl_str_int line ) )
+    ( string_push_char val 9 )
+    ( string_push_str val ( nurl_str_int kind ) )
     ( nurl_sym_def g_defs name ( string_data val ) )
     ( string_free val )
+
+    // g_defs_by_uri entry: append "name\tline\tkind" triplet to the
+    // existing TSV (or seed it). Same-line idempotence isn't worth the
+    // bookkeeping — a re-index of an already-indexed URI is gated by
+    // __index_uri clearing g_indexed[path] first, so a fresh listing
+    // starts from an empty slot anyway.
+    : s prev ( nurl_sym_get g_defs_by_uri uri )
+    : String acc ( string_with_cap + ( nurl_str_len prev ) 64 )
+    ? > ( nurl_str_len prev ) 0 {
+        ( string_push_str acc prev )
+        ( string_push_char acc 9 )
+    } {}
+    ( string_push_str acc name )
+    ( string_push_char acc 9 )
+    ( string_push_str acc ( nurl_str_int line ) )
+    ( string_push_char acc 9 )
+    ( string_push_str acc ( nurl_str_int kind ) )
+    ( nurl_sym_def g_defs_by_uri uri ( string_data acc ) )
+    ( string_free acc )
+
+    // First-time-seen → append to the all-names TSV. Skipped on
+    // duplicates so the iterator stays linear-bounded by distinct
+    // names rather than register-call count.
+    : s seen ( nurl_sym_get g_all_names name )
+    ? == 0 ( nurl_str_len seen ) {
+        ( nurl_sym_def g_all_names name `1` )
+        : s prev_list ( nurl_sym_get g_all_names `:list` )
+        : String list_acc ( string_with_cap + ( nurl_str_len prev_list ) + 8 ( nurl_str_len name ) )
+        ? > ( nurl_str_len prev_list ) 0 {
+            ( string_push_str list_acc prev_list )
+            ( string_push_char list_acc 9 )
+        } {}
+        ( string_push_str list_acc name )
+        ( nurl_sym_def g_all_names `:list` ( string_data list_acc ) )
+        ( string_free list_acc )
+    } {}
 }
 
 // Skip leading whitespace; return new position.
@@ -442,12 +507,12 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                             ? < p n {
                                                 : i c2 ( nurl_str_get content p )
                                                 ? == c2 64 {
-                                                    // `@ name` — fn decl
+                                                    // `@ name` — fn decl (SymbolKind 12 Function)
                                                     : i ai ( __skip_ws content + p 1 n )
                                                     : i ae ( __scan_ident content ai n )
                                                     ? > ae ai {
                                                         : String nm ( __substr content ai ae )
-                                                        ( __register_def ( string_data nm ) uri line )
+                                                        ( __register_def ( string_data nm ) uri line 12 )
                                                         ( string_free nm )
                                                     } {}
                                                 } {
@@ -461,12 +526,12 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                         ? < cp n {
                                                             : i c3 ( nurl_str_get content cp )
                                                             ? == c3 124 {
-                                                                // `: | Name { variants }` enum
+                                                                // `: | Name { variants }` enum (SymbolKind 10)
                                                                 : i ep ( __skip_ws content + cp 1 n )
                                                                 : i ee ( __scan_ident content ep n )
                                                                 ? > ee ep {
                                                                     : String nm ( __substr content ep ee )
-                                                                    ( __register_def ( string_data nm ) uri line )
+                                                                    ( __register_def ( string_data nm ) uri line 10 )
                                                                     ( string_free nm )
                                                                     // Walk the body for variant names.
                                                                     : i bb ( __skip_ws content ee n )
@@ -483,7 +548,8 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                                                             : i ve ( __scan_ident content wp n )
                                                                                             ? > ve wp {
                                                                                                 : String vn ( __substr content wp ve )
-                                                                                                ( __register_def ( string_data vn ) uri body_line )
+                                                                                                // SymbolKind 22 EnumMember
+                                                                                                ( __register_def ( string_data vn ) uri body_line 22 )
                                                                                                 ( string_free vn )
                                                                                                 = wp ve
                                                                                             } { = wp + wp 1 }
@@ -500,17 +566,17 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                                 ? > ne cp {
                                                                     : String tok ( __substr content cp ne )
                                                                     ? ( __is_type_kw ( string_data tok ) ) {
-                                                                        // const: `: TYPE NAME ...`
+                                                                        // const: `: TYPE NAME ...` (SymbolKind 14)
                                                                         : i np ( __skip_ws content ne n )
                                                                         : i ke ( __scan_ident content np n )
                                                                         ? > ke np {
                                                                             : String nm ( __substr content np ke )
-                                                                            ( __register_def ( string_data nm ) uri line )
+                                                                            ( __register_def ( string_data nm ) uri line 14 )
                                                                             ( string_free nm )
                                                                         } {}
                                                                     } {
-                                                                        // struct: `: Name { ... }`
-                                                                        ( __register_def ( string_data tok ) uri line )
+                                                                        // struct: `: Name { ... }` (SymbolKind 23)
+                                                                        ( __register_def ( string_data tok ) uri line 23 )
                                                                     }
                                                                     ( string_free tok )
                                                                 } {}
@@ -518,14 +584,14 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                         } {}
                                                     } {
                                                         ? == c2 38 {
-                                                            // `& \`lib\` @ name` FFI
+                                                            // `& \`lib\` @ name` FFI (SymbolKind 12 Function)
                                                             : i ap ( __index_of_byte content + p 1 n 64 )
                                                             ? >= ap 0 {
                                                                 : i nm_s ( __skip_ws content + ap 1 n )
                                                                 : i nm_e ( __scan_ident content nm_s n )
                                                                 ? > nm_e nm_s {
                                                                     : String nm ( __substr content nm_s nm_e )
-                                                                    ( __register_def ( string_data nm ) uri line )
+                                                                    ( __register_def ( string_data nm ) uri line 12 )
                                                                     ( string_free nm )
                                                                 } {}
                                                             } {}
@@ -676,8 +742,11 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 @ __index_uri s uri → v {
     : String path ( __uri_to_path uri )
     // Force re-index of this file (didChange) by clearing its dedup
-    // flag first; imports remain cached.
+    // flag first; imports remain cached. Also reset the TSV slot so
+    // re-indexing replaces rather than appends — otherwise outline
+    // entries would double on every keystroke.
     ( nurl_sym_def g_indexed ( string_data path ) `` )
+    ( nurl_sym_def g_defs_by_uri uri `` )
     ( __index_path ( string_data path ) )
     ( string_free path )
 }
@@ -859,7 +928,10 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                                 : i tab ( __index_of_byte defs_val 0 n 9 )
                                                                 ? >= tab 0 {
                                                                     : String def_uri ( __substr defs_val 0 tab )
-                                                                    : String line_str ( __substr defs_val + tab 1 n )
+                                                                    // line ends at the next tab (kind follows) or at EOS
+                                                                    : i tab2 ( __index_of_byte defs_val + tab 1 n 9 )
+                                                                    : i line_end ? >= tab2 0 tab2 n
+                                                                    : String line_str ( __substr defs_val + tab 1 line_end )
                                                                     : !i ParseErr lr ( string_to_int line_str )
                                                                     ( string_free line_str )
                                                                     ?? lr {
@@ -901,6 +973,429 @@ $ `tools/nurl-lsp/jsonrpc.nu`
         }
     } {}
     : Json resp ( __make_response id result )
+    ( write_message resp )
+    ( json_free resp )
+}
+
+// ── Document outline (textDocument/documentSymbol) ──────────────
+//
+// Reads the precomputed g_defs_by_uri TSV ("name\tline\tkind" triplets,
+// one per top-level decl in source order) and emits a flat
+// SymbolInformation[] array. We pick the flat form over the recursive
+// DocumentSymbol[] because (a) NURL's decls are uniformly top-level,
+// (b) flat SymbolInformation has been supported by every LSP client
+// since the protocol's first revision, and (c) the editor's outline
+// renders both identically for a single-file structure.
+
+@ __build_symbol_information s name s uri i line i kind → Json {
+    : Json range ( json_obj_new )
+    // Convert compiler 1-based to LSP 0-based.
+    : i lz - line 1
+    ( json_obj_set range `start` ( __build_position lz 0 ) )
+    ( json_obj_set range `end` ( __build_position lz 0 ) )
+    : Json loc ( json_obj_new )
+    ( json_obj_set loc `uri` ( json_str_lit uri ) )
+    ( json_obj_set loc `range` range )
+    : Json sym ( json_obj_new )
+    ( json_obj_set sym `name` ( json_str_lit name ) )
+    ( json_obj_set sym `kind` ( json_int kind ) )
+    ( json_obj_set sym `location` loc )
+    ^ sym
+}
+
+@ __handle_document_symbol Json id Json params → v {
+    : Json result ( json_arr_new )
+    : s uri ( __extract_uri params )
+    ? > ( nurl_str_len uri ) 0 {
+        : s tsv ( nurl_sym_get g_defs_by_uri uri )
+        : i n ( nurl_str_len tsv )
+        : ~ i pos 0
+        ~ < pos n {
+            // Each triplet = name \t line \t kind separated by tabs;
+            // triplets in the TSV are also tab-separated. Read three
+            // tab-delimited fields, build a SymbolInformation, append.
+            : i t1 ( __index_of_byte tsv pos n 9 )
+            ? < t1 0 { = pos n } {
+                : i t2 ( __index_of_byte tsv + t1 1 n 9 )
+                ? < t2 0 { = pos n } {
+                    : i t3 ( __index_of_byte tsv + t2 1 n 9 )
+                    : i end ? >= t3 0 t3 n
+                    : String name ( __substr tsv pos t1 )
+                    : String line_s ( __substr tsv + t1 1 t2 )
+                    : String kind_s ( __substr tsv + t2 1 end )
+                    : !i ParseErr lr ( string_to_int line_s )
+                    : !i ParseErr kr ( string_to_int kind_s )
+                    ?? lr {
+                        T ln → {
+                            ?? kr {
+                                T kn → {
+                                    : Json sym ( __build_symbol_information ( string_data name ) uri ln kn )
+                                    ( json_arr_push result sym )
+                                }
+                                F _ → {}
+                            }
+                        }
+                        F _ → {}
+                    }
+                    ( string_free name )
+                    ( string_free line_s )
+                    ( string_free kind_s )
+                    = pos ? >= t3 0 + t3 1 n
+                }
+            }
+        }
+    } {}
+    : Json resp ( __make_response id result )
+    ( write_message resp )
+    ( json_free resp )
+}
+
+// ── Hover (textDocument/hover) ───────────────────────────────────
+//
+// Same token-at-cursor + g_defs lookup as go-to-def, but the
+// response carries a Markdown popup with the decl kind, the
+// signature line from the source, and the file:line location. The
+// signature is pulled live from the def-file via nurl_read_file
+// (cheap; the file was already indexed once on didOpen so the OS
+// page cache is warm).
+
+@ __kind_label i kind → s {
+    ? == kind 12 { ^ `function` } {}
+    ? == kind 23 { ^ `struct` } {}
+    ? == kind 10 { ^ `enum` } {}
+    ? == kind 22 { ^ `enum variant` } {}
+    ? == kind 14 { ^ `constant` } {}
+    ^ `symbol`
+}
+
+// Extract the LSP-spec line `line0` (0-based) from `content`. Returns
+// the line with any leading whitespace and the trailing newline
+// stripped, so the result drops cleanly into a fenced code block.
+@ __extract_source_line s content i line0 → String {
+    : i n ( nurl_str_len content )
+    : ~ i pos 0
+    : ~ i cur 0
+    ~ & < pos n < cur line0 {
+        ? == ( nurl_str_get content pos ) 10 { = cur + cur 1 } {}
+        = pos + pos 1
+    }
+    // Trim leading spaces / tabs.
+    ~ & < pos n | == ( nurl_str_get content pos ) 32 == ( nurl_str_get content pos ) 9 {
+        = pos + pos 1
+    }
+    : ~ i ep pos
+    ~ & < ep n != ( nurl_str_get content ep ) 10 {
+        = ep + ep 1
+    }
+    // Also trim trailing \r if present (CRLF files).
+    ? & > ep pos == ( nurl_str_get content - ep 1 ) 13 { = ep - ep 1 } {}
+    ^ ( __substr content pos ep )
+}
+
+// Find the basename slot in `path` (everything after the last '/').
+// Returns an OWNED String. For `file:///x/y/lib.nu` the caller should
+// __uri_to_path first.
+@ __basename s path → String {
+    : i n ( nurl_str_len path )
+    : ~ i last - 0 1
+    : ~ i k 0
+    ~ < k n {
+        ? == ( nurl_str_get path k ) 47 { = last k } {}
+        = k + k 1
+    }
+    : i start ? >= last 0 + last 1 0
+    ^ ( __substr path start n )
+}
+
+@ __handle_hover Json id Json params → v {
+    : Json result ( json_null )
+    : s uri ( __extract_uri params )
+    ? > ( nurl_str_len uri ) 0 {
+        : ?Json pos_o ( json_obj_get params `position` )
+        ?? pos_o {
+            T pos_j → {
+                : ?Json ln_o ( json_obj_get pos_j `line` )
+                : ?Json ch_o ( json_obj_get pos_j `character` )
+                ?? ln_o {
+                    T ln_j → {
+                        ?? ch_o {
+                            T ch_j → {
+                                : ?i line_p ( json_num_as_i ln_j )
+                                : ?i col_p ( json_num_as_i ch_j )
+                                ?? line_p {
+                                    T ln → {
+                                        ?? col_p {
+                                            T cn → {
+                                                : s content ( nurl_sym_get g_docs uri )
+                                                ? > ( nurl_str_len content ) 0 {
+                                                    : ?String tk ( __token_at content ln cn )
+                                                    ?? tk {
+                                                        T name → {
+                                                            : s defs_val ( nurl_sym_get g_defs ( string_data name ) )
+                                                            ? > ( nurl_str_len defs_val ) 0 {
+                                                                : i dn ( nurl_str_len defs_val )
+                                                                : i t1 ( __index_of_byte defs_val 0 dn 9 )
+                                                                : i t2 ( __index_of_byte defs_val + t1 1 dn 9 )
+                                                                ? & >= t1 0 >= t2 0 {
+                                                                    : String def_uri ( __substr defs_val 0 t1 )
+                                                                    : String line_s ( __substr defs_val + t1 1 t2 )
+                                                                    : String kind_s ( __substr defs_val + t2 1 dn )
+                                                                    : !i ParseErr lr ( string_to_int line_s )
+                                                                    : !i ParseErr kr ( string_to_int kind_s )
+                                                                    ?? lr {
+                                                                        T def_line → {
+                                                                            ?? kr {
+                                                                                T def_kind → {
+                                                                                    // Read def-file content, pull the
+                                                                                    // signature line, format Markdown.
+                                                                                    : String def_path ( __uri_to_path ( string_data def_uri ) )
+                                                                                    : s def_content ( nurl_read_file ( string_data def_path ) )
+                                                                                    : String sig ( __extract_source_line def_content - def_line 1 )
+                                                                                    : String base ( __basename ( string_data def_path ) )
+
+                                                                                    // Build Markdown popup. Backtick (96)
+                                                                                    // and newline (10) added via
+                                                                                    // string_push_char because backticks
+                                                                                    // delimit NURL string literals.
+                                                                                    : String md ( string_with_cap 256 )
+                                                                                    ( string_push_str md `**` )
+                                                                                    ( string_push_str md ( __kind_label def_kind ) )
+                                                                                    ( string_push_str md `** ` )
+                                                                                    ( string_push_char md 96 )
+                                                                                    ( string_push_str md ( string_data name ) )
+                                                                                    ( string_push_char md 96 )
+                                                                                    ( string_push_char md 10 )
+                                                                                    ( string_push_char md 10 )
+                                                                                    ( string_push_char md 96 )
+                                                                                    ( string_push_char md 96 )
+                                                                                    ( string_push_char md 96 )
+                                                                                    ( string_push_str md `nurl` )
+                                                                                    ( string_push_char md 10 )
+                                                                                    ( string_push_str md ( string_data sig ) )
+                                                                                    ( string_push_char md 10 )
+                                                                                    ( string_push_char md 96 )
+                                                                                    ( string_push_char md 96 )
+                                                                                    ( string_push_char md 96 )
+                                                                                    ( string_push_char md 10 )
+                                                                                    ( string_push_char md 10 )
+                                                                                    ( string_push_str md `*Defined in ` )
+                                                                                    ( string_push_char md 96 )
+                                                                                    ( string_push_str md ( string_data base ) )
+                                                                                    ( string_push_char md 58 )
+                                                                                    ( string_push_str md ( nurl_str_int def_line ) )
+                                                                                    ( string_push_char md 96 )
+                                                                                    ( string_push_char md 42 )
+
+                                                                                    : Json contents ( json_obj_new )
+                                                                                    ( json_obj_set contents `kind` ( json_str_lit `markdown` ) )
+                                                                                    ( json_obj_set contents `value` ( json_str_lit ( string_data md ) ) )
+                                                                                    : Json hov ( json_obj_new )
+                                                                                    ( json_obj_set hov `contents` contents )
+                                                                                    = result hov
+
+                                                                                    ( string_free def_path )
+                                                                                    ( string_free sig )
+                                                                                    ( string_free base )
+                                                                                    ( string_free md )
+                                                                                }
+                                                                                F _ → {}
+                                                                            }
+                                                                        }
+                                                                        F _ → {}
+                                                                    }
+                                                                    ( string_free def_uri )
+                                                                    ( string_free line_s )
+                                                                    ( string_free kind_s )
+                                                                } {}
+                                                            } {}
+                                                            ( string_free name )
+                                                        }
+                                                        F _ → {}
+                                                    }
+                                                } {}
+                                            }
+                                            F _ → {}
+                                        }
+                                    }
+                                    F _ → {}
+                                }
+                            }
+                            F _ → {}
+                        }
+                    }
+                    F _ → {}
+                }
+            }
+            F _ → {}
+        }
+    } {}
+    : Json resp ( __make_response id result )
+    ( write_message resp )
+    ( json_free resp )
+}
+
+// ── Completion (textDocument/completion) ────────────────────────
+//
+// Returns every known symbol whose name starts with the IDENT-prefix
+// immediately to the left of the cursor (or every symbol when the
+// cursor is at an ident boundary). The editor filters further on its
+// side as the user keeps typing.
+//
+// CompletionItemKind differs from SymbolKind despite the close
+// resemblance — both enums are part of the LSP spec but the integer
+// values aren't aligned. `__completion_kind` maps SymbolKind →
+// CompletionItemKind for the five kinds we emit.
+
+@ __completion_kind i symbol_kind → i {
+    ? == symbol_kind 12 { ^ 3 } {}    // Function
+    ? == symbol_kind 23 { ^ 22 } {}   // Struct
+    ? == symbol_kind 10 { ^ 13 } {}   // Enum
+    ? == symbol_kind 22 { ^ 20 } {}   // EnumMember
+    ? == symbol_kind 14 { ^ 21 } {}   // Constant
+    ^ 1                                // Text fallback
+}
+
+// Extract the IDENT-prefix immediately left of `(line, col)`.
+// Returns "" when the cursor is on whitespace or after a non-ident
+// byte — the LSP client treats an empty prefix as "show everything".
+@ __prefix_at s content i line i col → String {
+    : i n ( nurl_str_len content )
+    : ~ i pos 0
+    : ~ i cur_line 0
+    ~ & < pos n < cur_line line {
+        ? == ( nurl_str_get content pos ) 10 { = cur_line + cur_line 1 } {}
+        = pos + pos 1
+    }
+    : i line_start pos
+    : ~ i k 0
+    ~ & & < pos n != ( nurl_str_get content pos ) 10 < k col {
+        = pos + pos 1
+        = k + k 1
+    }
+    : ~ i lo pos
+    ~ & > lo line_start ( __is_ident_byte ( nurl_str_get content - lo 1 ) ) {
+        = lo - lo 1
+    }
+    ^ ( __substr content lo pos )
+}
+
+@ __starts_with s str s prefix → b {
+    : i np ( nurl_str_len prefix )
+    ? == np 0 { ^ T } {}
+    : i ns ( nurl_str_len str )
+    ? > np ns { ^ F } {}
+    : ~ i k 0
+    ~ < k np {
+        ? != ( nurl_str_get str k ) ( nurl_str_get prefix k ) { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+@ __build_completion_item s name s uri i line i symbol_kind → Json {
+    : Json item ( json_obj_new )
+    ( json_obj_set item `label` ( json_str_lit name ) )
+    ( json_obj_set item `kind` ( json_int ( __completion_kind symbol_kind ) ) )
+    : String path ( __uri_to_path uri )
+    : String base ( __basename ( string_data path ) )
+    : String detail ( string_with_cap 64 )
+    ( string_push_str detail ( __kind_label symbol_kind ) )
+    ( string_push_str detail ` (` )
+    ( string_push_str detail ( string_data base ) )
+    ( string_push_char detail 58 )
+    ( string_push_str detail ( nurl_str_int line ) )
+    ( string_push_char detail 41 )
+    ( json_obj_set item `detail` ( json_str_lit ( string_data detail ) ) )
+    ( string_free path )
+    ( string_free base )
+    ( string_free detail )
+    ^ item
+}
+
+@ __handle_completion Json id Json params → v {
+    : Json items ( json_arr_new )
+    : s uri ( __extract_uri params )
+    ? > ( nurl_str_len uri ) 0 {
+        : ?Json pos_o ( json_obj_get params `position` )
+        ?? pos_o {
+            T pos_j → {
+                : ?Json ln_o ( json_obj_get pos_j `line` )
+                : ?Json ch_o ( json_obj_get pos_j `character` )
+                ?? ln_o {
+                    T ln_j → {
+                        ?? ch_o {
+                            T ch_j → {
+                                : ?i line_p ( json_num_as_i ln_j )
+                                : ?i col_p ( json_num_as_i ch_j )
+                                ?? line_p {
+                                    T ln → {
+                                        ?? col_p {
+                                            T cn → {
+                                                : s content ( nurl_sym_get g_docs uri )
+                                                : String prefix ( __prefix_at content ln cn )
+                                                : s tsv ( nurl_sym_get g_all_names `:list` )
+                                                : i nt ( nurl_str_len tsv )
+                                                : ~ i tpos 0
+                                                ~ < tpos nt {
+                                                    : i tend ( __index_of_byte tsv tpos nt 9 )
+                                                    : i sep ? >= tend 0 tend nt
+                                                    : String name ( __substr tsv tpos sep )
+                                                    ? ( __starts_with ( string_data name ) ( string_data prefix ) ) {
+                                                        : s defs_val ( nurl_sym_get g_defs ( string_data name ) )
+                                                        ? > ( nurl_str_len defs_val ) 0 {
+                                                            : i dn ( nurl_str_len defs_val )
+                                                            : i t1 ( __index_of_byte defs_val 0 dn 9 )
+                                                            : i t2 ( __index_of_byte defs_val + t1 1 dn 9 )
+                                                            ? & >= t1 0 >= t2 0 {
+                                                                : String def_uri ( __substr defs_val 0 t1 )
+                                                                : String line_s ( __substr defs_val + t1 1 t2 )
+                                                                : String kind_s ( __substr defs_val + t2 1 dn )
+                                                                : !i ParseErr lr ( string_to_int line_s )
+                                                                : !i ParseErr kr ( string_to_int kind_s )
+                                                                ?? lr {
+                                                                    T def_line → {
+                                                                        ?? kr {
+                                                                            T def_kind → {
+                                                                                : Json it ( __build_completion_item ( string_data name ) ( string_data def_uri ) def_line def_kind )
+                                                                                ( json_arr_push items it )
+                                                                            }
+                                                                            F _ → {}
+                                                                        }
+                                                                    }
+                                                                    F _ → {}
+                                                                }
+                                                                ( string_free def_uri )
+                                                                ( string_free line_s )
+                                                                ( string_free kind_s )
+                                                            } {}
+                                                        } {}
+                                                    } {}
+                                                    ( string_free name )
+                                                    = tpos ? >= tend 0 + tend 1 nt
+                                                }
+                                                ( string_free prefix )
+                                            }
+                                            F _ → {}
+                                        }
+                                    }
+                                    F _ → {}
+                                }
+                            }
+                            F _ → {}
+                        }
+                    }
+                    F _ → {}
+                }
+            }
+            F _ → {}
+        }
+    } {}
+    // CompletionList envelope. isIncomplete=false tells the editor
+    // the full set is already in `items`, no need to retrigger.
+    : Json clist ( json_obj_new )
+    ( json_obj_set clist `isIncomplete` ( json_bool F ) )
+    ( json_obj_set clist `items` items )
+    : Json resp ( __make_response id clist )
     ( write_message resp )
     ( json_free resp )
 }
@@ -994,7 +1489,43 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                     }
                                 }
                             } {
-                                ( __handle_unknown_request id method )
+                                ? ( nurl_str_eq method `textDocument/documentSymbol` ) {
+                                    : ?Json params_o ( json_obj_get msg `params` )
+                                    ?? params_o {
+                                        T params_j → ( __handle_document_symbol id params_j )
+                                        F _ → {
+                                            : Json resp ( __make_response id ( json_arr_new ) )
+                                            ( write_message resp )
+                                            ( json_free resp )
+                                        }
+                                    }
+                                } {
+                                    ? ( nurl_str_eq method `textDocument/hover` ) {
+                                        : ?Json params_o ( json_obj_get msg `params` )
+                                        ?? params_o {
+                                            T params_j → ( __handle_hover id params_j )
+                                            F _ → {
+                                                : Json resp ( __make_response id ( json_null ) )
+                                                ( write_message resp )
+                                                ( json_free resp )
+                                            }
+                                        }
+                                    } {
+                                        ? ( nurl_str_eq method `textDocument/completion` ) {
+                                            : ?Json params_o ( json_obj_get msg `params` )
+                                            ?? params_o {
+                                                T params_j → ( __handle_completion id params_j )
+                                                F _ → {
+                                                    : Json resp ( __make_response id ( json_arr_new ) )
+                                                    ( write_message resp )
+                                                    ( json_free resp )
+                                                }
+                                            }
+                                        } {
+                                            ( __handle_unknown_request id method )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1035,6 +1566,8 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 @ main → i {
     = g_docs ( nurl_sym_new )
     = g_defs ( nurl_sym_new )
+    = g_defs_by_uri ( nurl_sym_new )
+    = g_all_names ( nurl_sym_new )
     = g_indexed ( nurl_sym_new )
     : ~ b done F
     ~ ! done {
