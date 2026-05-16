@@ -8,6 +8,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-05-16
+
+CSV stdlib consolidates around the arena layout, runtime link-time
+optimization lands across the toolchain, and a couple of long-running
+infrastructure papercuts get resolved.
+
+### Added
+
+* **`build.sh --no-tests` flag.** Bootstraps the compiler (with the
+  byte-identical-IR fixed-point gate still enforced) and exits before
+  the test suite. Replaces the older `verbosebuild.sh` script that
+  Docker images relied on. `api/Dockerfile` and `nurlapi/Dockerfile`
+  both updated to `./build.sh --no-tests`.
+
+* **`nurl.sh` link line — full runtime-feature parity.** The user-
+  facing wrapper now auto-links `-lssl -lcrypto` (when
+  `stdlib/runtime.openssl` sentinel present), `-lsqlite3`
+  (`stdlib/runtime.sqlite3`), and `-lpq` (`stdlib/runtime.pq`) in
+  addition to the existing `-lcurl` auto-detection. Mirrors the
+  central `build.sh` link line; closes the v0.4.3 follow-up to
+  centralise the link-flag set across multiple build scripts.
+
+### Changed
+
+* **Runtime LTO** — `stdlib/runtime.o` is now compiled with `-O2
+  -flto`, and every clang invocation that consumes it (`build.sh`,
+  `nurl.sh`, `compiler/tests/run_tests.sh`,
+  `tools/{nurlfmt,nurl-lsp,nurlpkg}/build.sh`) carries the matching
+  `-flto` flag. The LTO link pipeline inlines Vec / String / IO FFI
+  calls (`vec_push`, `vec_data`, `vec_reserve`, `nurl_peek/poke`,
+  `nurl_parse_int_range`, `cmp_int`, …) across the runtime ↔ user-
+  code boundary. Measured on the 1 M-row × 8-col CSV bench (Linux
+  i7-5930K, 5 runs median):
+
+  | Stage  | no LTO | LTO    | Δ       |
+  |--------|-------:|-------:|--------:|
+  | load   | 315 ms | 272 ms | **-14 %** |
+  | filter | 146 ms | 139 ms |  -5 %   |
+  | sort   |  65 ms |  40 ms | **-38 %** |
+  | total  | 529 ms | 451 ms | **-15 %** |
+
+  Sort wins the most because the indexed-permutation comparator was
+  bottlenecked on un-inlinable `nurl_parse_int_range` / `cmp_int` /
+  `vec_data`. Native binary size dropped 172 888 → 25 408 B (-85 %)
+  as LTO drops unused runtime symbols. Bootstrap fixed-point IR
+  unchanged (LTO runs at link time only — `nurlc`'s LLVM IR
+  generation is invariant) — stage1 ≡ stage2 still at 1 185 386 B.
+
+* **`stdlib/ext/csv.nu` API consolidation.** The legacy v1
+  `CSVTable` / `CSVRow` per-cell-malloc layout is gone. The arena-
+  backed `CSVTableA` is now THE `CSVTable` — every `csv_table_*`
+  call reaches the (offset, length) arena parser directly, and
+  RFC 4180 quoting is the default for every load/write. New
+  accessor surface:
+
+  - `csv_table_view t row col → s` — zero-copy borrowed pointer
+    into the content / escape buffer. NOT NUL-terminated; pair with
+    `csv_table_view_len`.
+  - `csv_table_view_by_name`, `csv_table_view_len`.
+  - `csv_table_get t row col → ?String` — owned-String fallback for
+    callers that want an independent lifetime.
+  - `csv_table_get_by_name`.
+
+  All sort / filter / truncate / find / select_cols paths wired
+  through the arena. Predicate signature for `csv_table_filter` is
+  now `( @ b *CSVTable i ) → b` (table + row index) instead of the
+  old CSVRow-based shape — match the closure-cached-pointer pattern
+  used by `compare/nurl_analysis.nu`. `csv_table_a_*` functions and
+  `CSVTableA` deleted outright (no deprecation cycle — NURL is not
+  yet in wide enough use). Removed files:
+  `stdlib/ext/csv_hoist_test.nu`, `compare/nurl_analysis_arena.nu`,
+  `compiler/tests/csv_sort_indexed.nu`, `compare/csv_demo.nu`
+  (latter two were duplicates of `csv_arena` / `examples/csv_demo.nu`).
+  Callers updated: `examples/csv_demo.nu`, `compare/nurl_analysis.nu`,
+  `compare/test_quoting.nu`, `compiler/tests/{csv_arena,
+  repro_csv_table_quotes}.nu`. CSV bench at 451 ms (post-LTO) vs
+  Polars 95 ms (~4.7×). RFC 4180 quoting verified across read +
+  write round-trips.
+
+* **Test framework: skip helper modules.** `compiler/tests/run_tests.sh`
+  now skips files matching `*_mod.nu`, `*_helper.nu`, `*_lib.nu` —
+  they are imported by other tests and have no `main` function, so
+  the old framework recorded them as `COMPILE OK / LINK FAIL` in
+  the baseline. Five stale entries removed from `correct.txt`:
+  `alias_rewrite_types_mod`, `should_fail_alias_import_mod`,
+  `should_fail_group_d_lib`, `should_fail_pub_helper`,
+  `should_fail_pub_type_helper`.
+
+### Removed
+
+* **`verbosebuild.sh`** — duplicated `build.sh`'s logic without
+  test execution. Folded into `build.sh --no-tests`.
+
+* **`CSVTableA` + every `csv_table_a_*` function** in
+  `stdlib/ext/csv.nu` (see "API consolidation" above).
+
+* **`stdlib/ext/csv_hoist_test.nu`** — stranded Phase 2c hoist
+  experiment, never imported by any caller.
+
 ## [0.5.0] — 2026-05-16
 
 The package manager lands. `nurlpkg` is a Cargo-shaped CLI that
