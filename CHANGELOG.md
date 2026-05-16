@@ -8,6 +8,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-05-16
+
+The package manager lands. `nurlpkg` is a Cargo-shaped CLI that
+covers the full dependency lifecycle: scaffold a manifest, declare
+dependencies, resolve them transitively, lock the resolution, and
+verify the lockfile hasn't drifted. This release also ships the
+TOML and Manifest stdlib modules that back the package manager,
+plus a new `fs_symlink` primitive in `stdlib/std/fs.nu`.
+
+### Added
+
+* **`tools/nurlpkg/` — NURL package manager.** Single-binary CLI
+  with ten subcommands:
+
+  - `nurlpkg init <name>` — write a `nurl.toml` skeleton (refuses
+    to overwrite an existing one).
+  - `nurlpkg info` — pretty-print the typed manifest fields.
+  - `nurlpkg deps` — list each `[dependencies]` entry, one per
+    tab-separated line (pipe-friendly).
+  - `nurlpkg add <name> [--path P] [--version V]` — append a
+    dependency to `[dependencies]` via surgical text edit
+    (preserves user comments and formatting; refuses duplicates).
+  - `nurlpkg remove <name>` — delete a dependency entry the same
+    way (errors if the name isn't declared).
+  - `nurlpkg install` — BFS-resolve every path-based dependency
+    transitively, create `deps/<name>` symlinks via libc's
+    `symlink(2)`, regenerate `nurl.lock` as a side effect.
+    Idempotent: rerunning on a fully-installed tree returns 0
+    silently. Diamond dependencies dedupe.
+  - `nurlpkg lock` — regenerate `nurl.lock` from the on-disk
+    `deps/` tree without reinstalling.
+  - `nurlpkg verify` — compare `deps/` against `nurl.lock` and
+    exit 1 on any drift (missing entries OR unexpected entries).
+    Intended for CI / pre-build gates.
+  - `nurlpkg version` / `--version` — print the nurlpkg version.
+  - `nurlpkg help` — usage.
+
+* **`stdlib/ext/toml.nu` — TOML parser.** Recursive-descent parser
+  producing a `TomlValue` tagged-union tree (`TStr` / `TInt` /
+  `TBool` / `TArr` / `TTable`). Handles both `[section]` headers
+  and `[[array.of.tables]]`, inline tables, dotted keys, and
+  comments. Used internally by the package manager but also
+  available to any stdlib consumer.
+
+* **`stdlib/ext/manifest.nu` — typed manifest view.** Pulls the
+  well-known `[package]` and `[dependencies]` fields out of a
+  TomlValue tree into a typed `Manifest { name, version,
+  description, license, Vec[Dep] dependencies }`. Single-table
+  inline-table dep form and bare-string version form both
+  supported. Returns `! Manifest ManifestErr` with a small set of
+  named error variants (ReadFailed / ParseFailed / MissingName /
+  MissingVersion / BadShape).
+
+* **`fs_symlink s target s linkpath → !v IoErr` (stdlib/std/fs.nu).**
+  Thin wrapper over libc's `symlink(2)` exposed via pure-NURL FFI
+  (`& \`c\` @ symlink → i32`). POSIX-only; Windows callers should
+  fall back to copying since `CreateSymbolicLinkW` needs a
+  privilege most accounts lack.
+
+* **Regression tests.** `compiler/tests/toml_basic.nu` covers the
+  parser; `compiler/tests/manifest_basic.nu` covers the typed
+  manifest extraction (well-formed + missing-required-field
+  cases).
+
+### Compiler quirks documented (workarounds in place)
+
+Two codegen issues surfaced while writing the package manager and
+remain as quirks until separately addressed:
+
+* **Nested `??` on an enum value extracted from `! T E`** emits
+  `extractvalue` on an `i64`, which is invalid LLVM. Workaround:
+  flatten with `?` + `==`, or restructure to avoid needing the
+  inner match (`__cmd_install` checks `file_exists` before
+  `dir_create` to skip the `AlreadyExists` arm entirely).
+
+* **Width-suffixed FFI return bindings** (`: i64 n ( ffi_call … )`)
+  emit `store i64 %n, …` before the call defines `%n`, producing
+  "use of undefined value." Workaround: bind FFI integer returns
+  to `: i n (…)` (the default 64-bit type).
+
 ## [0.4.4] — 2026-05-16
 
 LSP server gains the last three "quick win" features and the

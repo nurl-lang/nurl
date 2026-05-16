@@ -12,10 +12,21 @@
 //                              Regenerates nurl.lock as a side-effect.
 //   nurlpkg lock             — regenerate `nurl.lock` from the current
 //                              on-disk `deps/` tree.
+//   nurlpkg add <name> ...   — append a `[dependencies]` entry. Accepts
+//                              `--path P` and/or `--version V`. Refuses
+//                              if the name is already declared.
+//   nurlpkg remove <name>    — delete the `[dependencies]` entry. Errors
+//                              if the name is not declared.
+//   nurlpkg verify           — compare `deps/` against `nurl.lock` and
+//                              exit 1 on any drift (missing or extra).
+//                              Intended for CI / pre-build gates.
+//   nurlpkg version          — print the nurlpkg version. `--version`
+//                              also accepted for consistency with other
+//                              CLIs in the toolchain.
 //   nurlpkg help             — usage.
 //
 // Subcommands deferred to later iterations:
-//   add / remove / build / publish / verify
+//   build / publish
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
@@ -36,6 +47,11 @@ $ `stdlib/ext/manifest.nu`
     ( nurl_print `  nurlpkg deps           List dependencies, one per line.\n` )
     ( nurl_print `  nurlpkg install        Resolve path-deps and symlink them under ./deps/.\n` )
     ( nurl_print `  nurlpkg lock           Regenerate nurl.lock from the current deps/ tree.\n` )
+    ( nurl_print `  nurlpkg add <name> [--path P] [--version V]\n` )
+    ( nurl_print `                         Add a dependency entry to nurl.toml.\n` )
+    ( nurl_print `  nurlpkg remove <name>  Delete a dependency entry from nurl.toml.\n` )
+    ( nurl_print `  nurlpkg verify         Check that deps/ matches nurl.lock; exit 1 if drift.\n` )
+    ( nurl_print `  nurlpkg version        Print the nurlpkg version.\n` )
     ( nurl_print `  nurlpkg help           Show this message.\n` )
 }
 
@@ -104,6 +120,378 @@ $ `stdlib/ext/manifest.nu`
             : i nd ( vec_len [Dep] . m dependencies )
             ( nurl_print `dependencies: ` ) ( nurl_print ( nurl_str_int nd ) ) ( nurl_print `\n` )
             ( manifest_free m )
+        }
+    }
+    ^ rc
+}
+
+// ── add / remove (manifest mutation) ────────────────────────────
+//
+// Surgical text-level edits to nurl.toml: preserves user formatting
+// and comments. We do NOT round-trip through the TOML parser — that
+// would drop comments and renormalise whitespace. The trade-off is
+// that our edits are line-oriented: an inline-table spanning
+// multiple lines (`name = {\n  path = "..."\n}`) isn't recognised
+// for remove. v1 manifests use single-line entries, so this is
+// acceptable; `cargo add`/`remove` make the same line-oriented
+// trade-off.
+
+// True iff `line`, after stripping leading spaces/tabs, starts with
+// `[` (any section header — handles both `[dep]` and `[[package]]`).
+@ __is_section_header String line → b {
+    : s raw ( string_data line )
+    : i n ( string_len line )
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_get raw k )
+        ? | == c 32 == c 9 { = k + k 1 } { ^ == c 91 }
+    }
+    ^ F
+}
+
+// True iff `line` (trimmed) is exactly `[dependencies]`.
+@ __is_dependencies_header String line → b {
+    : String t ( string_trim line )
+    : b out ( string_eq t ( string_from `[dependencies]` ) )
+    ^ out
+}
+
+// True iff `line` declares dependency `name` (i.e. trimmed line
+// starts with `<name>` followed by whitespace and `=`). Matches
+// the v1 single-line inline-table or bare-string form.
+@ __dep_line_matches String line s name → b {
+    : String t ( string_trim_start line )
+    : s s ( string_data t )
+    : i tlen ( string_len t )
+    : i nlen ( nurl_str_len name )
+    ? < tlen + nlen 1 { ^ F } {}
+    : ~ i k 0
+    ~ < k nlen {
+        ? != ( nurl_str_get s k ) ( nurl_str_get name k ) { ^ F } {}
+        = k + k 1
+    }
+    // After matching `<name>`, skip whitespace and require `=`.
+    : ~ i p nlen
+    ~ < p tlen {
+        : i c ( nurl_str_get s p )
+        ? | == c 32 == c 9 { = p + p 1 } {
+            ^ == c 61
+        }
+    }
+    ^ F
+}
+
+// Build the dependency value string. v1 forms:
+//   * Both path and version → { path = "<P>", version = "<V>" }
+//   * Path only             → { path = "<P>" }
+//   * Version only          → "<V>"
+//   * Neither               → "" (empty bare-string; useless but legal)
+@ __dep_value_text s path s version → String {
+    : i plen ( nurl_str_len path )
+    : i vlen ( nurl_str_len version )
+    : String out ( string_with_cap 64 )
+    ? > plen 0 {
+        ( string_push_str out `{ path = "` )
+        ( string_push_str out path )
+        ( string_push_str out `"` )
+        ? > vlen 0 {
+            ( string_push_str out `, version = "` )
+            ( string_push_str out version )
+            ( string_push_str out `"` )
+        } {}
+        ( string_push_str out ` }` )
+    } {
+        ( string_push_str out `"` )
+        ? > vlen 0 { ( string_push_str out version ) } {}
+        ( string_push_str out `"` )
+    }
+    ^ out
+}
+
+// Join a Vec[String] back into a single String with `\n` separators.
+// Used to reassemble after line-oriented mutation.
+@ __join_lines ( Vec String ) lines → String {
+    : String out ( string_with_cap 256 )
+    : i n ( vec_len [String] lines )
+    : ~ i k 0
+    ~ < k n {
+        : ?String lk ( vec_get [String] lines k )
+        ?? lk {
+            T l → ( string_push_str out ( string_data l ) )
+            F _ → {}
+        }
+        ? < k - n 1 { ( string_push_char out 10 ) } {}
+        = k + k 1
+    }
+    ^ out
+}
+
+@ __cmd_add s name s path s version → i {
+    ? == 0 ( nurl_str_len name ) {
+        ( nurl_eprintln `nurlpkg: 'add' requires a package name` )
+        ( nurl_eprintln `Usage: nurlpkg add <name> [--path <path>] [--version <version>]` )
+        ^ 2
+    } {}
+    ? ! ( file_exists `nurl.toml` ) {
+        ( nurl_eprintln `nurlpkg: no nurl.toml in the current directory` )
+        ^ 1
+    } {}
+    : !String IoErr rr ( read_file `nurl.toml` )
+    : ~ String src ( string_new )
+    ?? rr {
+        T s → = src s
+        F _ → {
+            ( nurl_eprintln `nurlpkg: failed to read nurl.toml` )
+            ^ 1
+        }
+    }
+    : ( Vec String ) lines ( string_split src `\n` )
+    ( string_free src )
+
+    // First pass: locate the [dependencies] header. Also scan the
+    // section for a duplicate <name> entry.
+    : ~ i dep_hdr_idx -1
+    : ~ i dep_end_idx -1
+    : i nlines ( vec_len [String] lines )
+    : ~ i k 0
+    ~ < k nlines {
+        : ?String lk ( vec_get [String] lines k )
+        ?? lk {
+            T line → {
+                ? ( __is_dependencies_header line ) {
+                    = dep_hdr_idx k
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ? >= dep_hdr_idx 0 {
+        // Find the end of the [dependencies] section: the next
+        // section header, or EOF.
+        : ~ i p + dep_hdr_idx 1
+        : ~ b done F
+        ~ ! done {
+            ? >= p nlines { = done T = dep_end_idx nlines } {
+                : ?String lk ( vec_get [String] lines p )
+                ?? lk {
+                    T line → {
+                        ? ( __is_section_header line ) {
+                            = done T = dep_end_idx p
+                        } { = p + p 1 }
+                    }
+                    F _ → = p + p 1
+                }
+            }
+        }
+        // Duplicate-name guard.
+        : ~ i j + dep_hdr_idx 1
+        ~ < j dep_end_idx {
+            : ?String lk ( vec_get [String] lines j )
+            ?? lk {
+                T line → {
+                    ? ( __dep_line_matches line name ) {
+                        ( nurl_eprint `nurlpkg: '` )
+                        ( nurl_eprint name )
+                        ( nurl_eprintln `' is already declared under [dependencies]` )
+                        ( nurl_eprintln `Run 'nurlpkg remove <name>' first.` )
+                        : i fn ( vec_len [String] lines )
+                        : ~ i fk 0
+                        ~ < fk fn {
+                            : ?String fpk ( vec_get [String] lines fk )
+                            ?? fpk { T s → ( string_free s )  F _ → {} }
+                            = fk + fk 1
+                        }
+                        ( vec_free [String] lines )
+                        ^ 1
+                    } {}
+                }
+                F _ → {}
+            }
+            = j + j 1
+        }
+    } {}
+
+    // Build the new dependency line.
+    : String value_text ( __dep_value_text path version )
+    : String new_line ( string_from name )
+    ( string_push_str new_line ` = ` )
+    ( string_push_str new_line ( string_data value_text ) )
+    ( string_free value_text )
+
+    : ( Vec String ) out_lines ( vec_new [String] )
+    ? >= dep_hdr_idx 0 {
+        // Copy lines [0, dep_end_idx), then insert new_line, then
+        // copy the rest.
+        : ~ i j 0
+        ~ < j dep_end_idx {
+            : ?String lk ( vec_get [String] lines j )
+            ?? lk {
+                T line → ( vec_push [String] out_lines ( string_from ( string_data line ) ) )
+                F _ → {}
+            }
+            = j + j 1
+        }
+        ( vec_push [String] out_lines new_line )
+        ~ < j nlines {
+            : ?String lk ( vec_get [String] lines j )
+            ?? lk {
+                T line → ( vec_push [String] out_lines ( string_from ( string_data line ) ) )
+                F _ → {}
+            }
+            = j + j 1
+        }
+    } {
+        // No [dependencies] section — append both header and entry.
+        : ~ i j 0
+        ~ < j nlines {
+            : ?String lk ( vec_get [String] lines j )
+            ?? lk {
+                T line → ( vec_push [String] out_lines ( string_from ( string_data line ) ) )
+                F _ → {}
+            }
+            = j + j 1
+        }
+        // Trailing blank line so the new section is visually
+        // separated from whatever preceded it.
+        ( vec_push [String] out_lines ( string_new ) )
+        ( vec_push [String] out_lines ( string_from `[dependencies]` ) )
+        ( vec_push [String] out_lines new_line )
+    }
+    // Free the input lines.
+    : i fn ( vec_len [String] lines )
+    : ~ i fk 0
+    ~ < fk fn {
+        : ?String fpk ( vec_get [String] lines fk )
+        ?? fpk { T s → ( string_free s )  F _ → {} }
+        = fk + fk 1
+    }
+    ( vec_free [String] lines )
+
+    : String joined ( __join_lines out_lines )
+    : i jfn ( vec_len [String] out_lines )
+    : ~ i jfk 0
+    ~ < jfk jfn {
+        : ?String fpk ( vec_get [String] out_lines jfk )
+        ?? fpk { T s → ( string_free s )  F _ → {} }
+        = jfk + jfk 1
+    }
+    ( vec_free [String] out_lines )
+
+    : !v IoErr wr ( write_file `nurl.toml` ( string_data joined ) )
+    ( string_free joined )
+    : ~ i rc 0
+    ?? wr {
+        T _ → {
+            ( nurl_print `added '` )
+            ( nurl_print name )
+            ( nurl_print `' to [dependencies]\n` )
+        }
+        F _ → {
+            ( nurl_eprintln `nurlpkg: failed to write nurl.toml` )
+            = rc 1
+        }
+    }
+    ^ rc
+}
+
+@ __cmd_remove s name → i {
+    ? == 0 ( nurl_str_len name ) {
+        ( nurl_eprintln `nurlpkg: 'remove' requires a package name` )
+        ( nurl_eprintln `Usage: nurlpkg remove <name>` )
+        ^ 2
+    } {}
+    ? ! ( file_exists `nurl.toml` ) {
+        ( nurl_eprintln `nurlpkg: no nurl.toml in the current directory` )
+        ^ 1
+    } {}
+    : !String IoErr rr ( read_file `nurl.toml` )
+    : ~ String src ( string_new )
+    ?? rr {
+        T s → = src s
+        F _ → {
+            ( nurl_eprintln `nurlpkg: failed to read nurl.toml` )
+            ^ 1
+        }
+    }
+    : ( Vec String ) lines ( string_split src `\n` )
+    ( string_free src )
+
+    : i nlines ( vec_len [String] lines )
+    : ~ b in_deps F
+    : ~ b removed F
+    : ( Vec String ) out_lines ( vec_new [String] )
+    : ~ i k 0
+    ~ < k nlines {
+        : ?String lk ( vec_get [String] lines k )
+        ?? lk {
+            T line → {
+                ? ( __is_section_header line ) {
+                    = in_deps ( __is_dependencies_header line )
+                    ( vec_push [String] out_lines ( string_from ( string_data line ) ) )
+                } {
+                    ? in_deps {
+                        ? ( __dep_line_matches line name ) {
+                            = removed T
+                            // Drop this line.
+                        } {
+                            ( vec_push [String] out_lines ( string_from ( string_data line ) ) )
+                        }
+                    } {
+                        ( vec_push [String] out_lines ( string_from ( string_data line ) ) )
+                    }
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    // Free the input lines.
+    : ~ i fk 0
+    ~ < fk nlines {
+        : ?String fpk ( vec_get [String] lines fk )
+        ?? fpk { T s → ( string_free s )  F _ → {} }
+        = fk + fk 1
+    }
+    ( vec_free [String] lines )
+
+    ? ! removed {
+        ( nurl_eprint `nurlpkg: '` )
+        ( nurl_eprint name )
+        ( nurl_eprintln `' is not declared under [dependencies]` )
+        : i jfn ( vec_len [String] out_lines )
+        : ~ i jfk 0
+        ~ < jfk jfn {
+            : ?String fpk ( vec_get [String] out_lines jfk )
+            ?? fpk { T s → ( string_free s )  F _ → {} }
+            = jfk + jfk 1
+        }
+        ( vec_free [String] out_lines )
+        ^ 1
+    } {}
+
+    : String joined ( __join_lines out_lines )
+    : i jfn ( vec_len [String] out_lines )
+    : ~ i jfk 0
+    ~ < jfk jfn {
+        : ?String fpk ( vec_get [String] out_lines jfk )
+        ?? fpk { T s → ( string_free s )  F _ → {} }
+        = jfk + jfk 1
+    }
+    ( vec_free [String] out_lines )
+
+    : !v IoErr wr ( write_file `nurl.toml` ( string_data joined ) )
+    ( string_free joined )
+    : ~ i rc 0
+    ?? wr {
+        T _ → {
+            ( nurl_print `removed '` )
+            ( nurl_print name )
+            ( nurl_print `' from [dependencies]\n` )
+        }
+        F _ → {
+            ( nurl_eprintln `nurlpkg: failed to write nurl.toml` )
+            = rc 1
         }
     }
     ^ rc
@@ -438,6 +826,166 @@ $ `stdlib/ext/manifest.nu`
     ^ rc
 }
 
+// ── verify ──────────────────────────────────────────────────────
+//
+// Drift detection between `nurl.lock` and the current `deps/` tree.
+// Reports each kind of mismatch and exits 1 if any are present. This
+// is the CI-grade "is the install reproducible from the lockfile"
+// check; intentionally does NOT mutate anything.
+
+// Pull a string field out of a [[package]] TomlValue (TTable). Returns
+// empty String if the field is missing or non-string.
+@ __pkg_field_str TomlValue pkg s key → String {
+    : ?TomlValue v ( toml_get pkg key )
+    ?? v {
+        T tv → {
+            : ?String sv ( toml_as_str tv )
+            ?? sv {
+                T s → ^ s
+                F empty → { ( string_free empty ) ^ ( string_new ) }
+            }
+        }
+        F _ → {}
+    }
+    ^ ( string_new )
+}
+
+@ __cmd_verify → i {
+    ? ! ( file_exists `nurl.lock` ) {
+        ( nurl_eprintln `nurlpkg: no nurl.lock (run 'nurlpkg install' first)` )
+        ^ 1
+    } {}
+    : s lock_src ( nurl_read_file `nurl.lock` )
+    ? == 0 ( nurl_str_len lock_src ) {
+        ( nurl_eprintln `nurlpkg: failed to read nurl.lock` )
+        ^ 1
+    } {}
+    : ! TomlValue TomlErr tr ( toml_parse lock_src )
+    : ~ i rc 0
+    ?? tr {
+        F _ → {
+            ( nurl_eprintln `nurlpkg: nurl.lock is not valid TOML` )
+            = rc 1
+        }
+        T root → {
+            // Collect expected names from [[package]] entries.
+            : ( Vec String ) expected ( vec_new [String] )
+            : ?TomlValue pkgs ( toml_get root `package` )
+            ?? pkgs {
+                T pv → {
+                    ?? pv {
+                        TArr arr → {
+                            : i np ( vec_len [TomlValue] arr )
+                            : ~ i k 0
+                            ~ < k np {
+                                : ?TomlValue pe ( vec_get [TomlValue] arr k )
+                                ?? pe {
+                                    T pkg → {
+                                        : String name ( __pkg_field_str pkg `name` )
+                                        ? > ( string_len name ) 0 {
+                                            ( vec_push [String] expected name )
+                                        } { ( string_free name ) }
+                                    }
+                                    F _ → {}
+                                }
+                                = k + k 1
+                            }
+                        }
+                        _ → {}
+                    }
+                }
+                F _ → {}
+            }
+
+            // Collect actual entries from deps/.
+            : ( Vec String ) actual ( vec_new [String] )
+            ? ( file_exists `deps` ) {
+                : !( Vec String ) IoErr dr ( dir_list `deps` )
+                ?? dr {
+                    T entries → {
+                        : i na ( vec_len [String] entries )
+                        : ~ i k 0
+                        ~ < k na {
+                            : ?String ek ( vec_get [String] entries k )
+                            ?? ek {
+                                T n → ( vec_push [String] actual ( string_from ( string_data n ) ) )
+                                F _ → {}
+                            }
+                            = k + k 1
+                        }
+                        : i fn ( vec_len [String] entries )
+                        : ~ i fk 0
+                        ~ < fk fn {
+                            : ?String pk ( vec_get [String] entries fk )
+                            ?? pk { T s → ( string_free s )  F _ → {} }
+                            = fk + fk 1
+                        }
+                        ( vec_free [String] entries )
+                    }
+                    F _ → {}
+                }
+            } {}
+
+            // Missing: expected ∖ actual.
+            : i ne ( vec_len [String] expected )
+            : ~ i j 0
+            ~ < j ne {
+                : ?String ek ( vec_get [String] expected j )
+                ?? ek {
+                    T name → {
+                        ? ! ( __seen_contains actual ( string_data name ) ) {
+                            ( nurl_eprint `  missing: ` )
+                            ( nurl_eprint ( string_data name ) )
+                            ( nurl_eprintln ` (in lockfile but not in deps/)` )
+                            = rc 1
+                        } {}
+                    }
+                    F _ → {}
+                }
+                = j + j 1
+            }
+
+            // Unexpected: actual ∖ expected.
+            : i na ( vec_len [String] actual )
+            : ~ i ja 0
+            ~ < ja na {
+                : ?String ak ( vec_get [String] actual ja )
+                ?? ak {
+                    T name → {
+                        ? ! ( __seen_contains expected ( string_data name ) ) {
+                            ( nurl_eprint `  unexpected: ` )
+                            ( nurl_eprint ( string_data name ) )
+                            ( nurl_eprintln ` (in deps/ but not in lockfile)` )
+                            = rc 1
+                        } {}
+                    }
+                    F _ → {}
+                }
+                = ja + ja 1
+            }
+
+            // Tidy up.
+            : ~ i fk 0
+            ~ < fk ne {
+                : ?String pk ( vec_get [String] expected fk )
+                ?? pk { T s → ( string_free s )  F _ → {} }
+                = fk + fk 1
+            }
+            ( vec_free [String] expected )
+            : ~ i fa 0
+            ~ < fa na {
+                : ?String pk ( vec_get [String] actual fa )
+                ?? pk { T s → ( string_free s )  F _ → {} }
+                = fa + fa 1
+            }
+            ( vec_free [String] actual )
+            ( toml_value_free root )
+        }
+    }
+    ? == rc 0 { ( nurl_print `nurl.lock matches deps/\n` ) } {}
+    ^ rc
+}
+
 @ __cmd_lock → i {
     ? ! ( file_exists `nurl.toml` ) {
         ( nurl_eprintln `nurlpkg: no nurl.toml in the current directory` )
@@ -667,6 +1215,63 @@ $ `stdlib/ext/manifest.nu`
     ? != 0 ( nurl_str_eq s_sub `lock` ) {
         ( string_free sub )
         ^ ( __cmd_lock )
+    } {}
+    ? != 0 ( nurl_str_eq s_sub `add` ) {
+        // Parse: nurlpkg add <name> [--path P] [--version V]
+        : ~ String name ( string_new )
+        : ~ String path ( string_new )
+        : ~ String version ( string_new )
+        ? >= argc 3 { = name ( env_arg 2 ) } {}
+        : ~ i ai 3
+        ~ < ai argc {
+            : String flag ( env_arg ai )
+            : s flag_s ( string_data flag )
+            ? != 0 ( nurl_str_eq flag_s `--path` ) {
+                ? < + ai 1 argc {
+                    ( string_free path )
+                    = path ( env_arg + ai 1 )
+                    = ai + ai 2
+                } { = ai + ai 1 }
+            } {
+                ? != 0 ( nurl_str_eq flag_s `--version` ) {
+                    ? < + ai 1 argc {
+                        ( string_free version )
+                        = version ( env_arg + ai 1 )
+                        = ai + ai 2
+                    } { = ai + ai 1 }
+                } { = ai + ai 1 }
+            }
+            ( string_free flag )
+        }
+        : i rc ( __cmd_add ( string_data name ) ( string_data path ) ( string_data version ) )
+        ( string_free version )
+        ( string_free path )
+        ( string_free name )
+        ( string_free sub )
+        ^ rc
+    } {}
+    ? != 0 ( nurl_str_eq s_sub `remove` ) {
+        : ~ String name ( string_new )
+        ? >= argc 3 { = name ( env_arg 2 ) } {}
+        : i rc ( __cmd_remove ( string_data name ) )
+        ( string_free name )
+        ( string_free sub )
+        ^ rc
+    } {}
+    ? != 0 ( nurl_str_eq s_sub `verify` ) {
+        ( string_free sub )
+        ^ ( __cmd_verify )
+    } {}
+    ? != 0 ( nurl_str_eq s_sub `version` ) {
+        ( string_free sub )
+        ( nurl_print `nurlpkg 0.5.0\n` )
+        ^ 0
+    } {}
+    // Accept --version as the conventional spelling too.
+    ? != 0 ( nurl_str_eq s_sub `--version` ) {
+        ( string_free sub )
+        ( nurl_print `nurlpkg 0.5.0\n` )
+        ^ 0
     } {}
     ? != 0 ( nurl_str_eq s_sub `help` ) {
         ( string_free sub )

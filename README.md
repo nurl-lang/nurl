@@ -118,6 +118,33 @@ Round-trip acceptance — every shipped `.nu` file round-trips byte-for-byte:
 `fmt(fmt(x)) == fmt(x)` AND `nurlc(fmt(x)) == nurlc(x)`. Enforced by
 `compiler/tests/nurlfmt_idempotent.sh`.
 
+### Package manager
+
+`./tools/nurlpkg/build.sh` produces `build/nurlpkg` — a Cargo-shaped
+package manager that covers the full dependency lifecycle for
+path-based dependencies (registry-style version resolution is not in
+scope for v1). Manifests use a TOML subset compatible with the
+`stdlib/ext/toml.nu` parser.
+
+```bash
+build/nurlpkg init demo-app                  # write nurl.toml skeleton
+cd demo-app
+build/nurlpkg add http-router --path ../router --version 0.2.0
+build/nurlpkg install                        # symlink deps/, write nurl.lock
+build/nurlpkg verify                         # CI gate: exit 1 on lockfile drift
+```
+
+Subcommands: `init`, `info`, `deps`, `add`, `remove`, `install`,
+`lock`, `verify`, `version`, `help`. Run `nurlpkg help` for usage.
+
+### Language Server (LSP)
+
+`./tools/nurl-lsp/build.sh` produces `build/nurl-lsp` — a stdio
+JSON-RPC server with diagnostics, go-to-definition, hover, document
+symbols, completion, formatting, workspace symbol search, and
+folding ranges. Wired to VS Code / Windsurf via the
+`tooling/vscode-nurl` extension.
+
 ---
 
 ## HTTP API & browser playground
