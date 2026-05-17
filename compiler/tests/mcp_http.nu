@@ -242,5 +242,14 @@ s label s method s path s body → v {
 
     ( run_case handler `put_endpoint` `PUT` `/mcp` `whatever` )
 
+    // ── Batch (JSON-RPC 2.0 array-of-requests) ─────────────────────────
+    ( run_case handler `batch_mixed` `POST` `/mcp`
+    `[{"jsonrpc":"2.0","id":10,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":11,"method":"frobnicate"}]` )
+
+    ( run_case handler `batch_all_notifications` `POST` `/mcp`
+    `[{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","method":"notifications/initialized"}]` )
+
+    ( run_case handler `batch_empty` `POST` `/mcp` `[]` )
+
     ^ 0
 }

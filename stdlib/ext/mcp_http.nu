@@ -9,10 +9,12 @@
 // **Transport summary** (per the MCP "Streamable HTTP" spec, see
 // https://spec.modelcontextprotocol.io/specification/2024-11-05/basic/transports/):
 //
-//   POST /mcp     — client sends one JSON-RPC request; server replies
-//                   with a JSON-RPC response (HTTP 200, application/
-//                   json) OR — for a notification with no `id` field —
-//                   an empty 202 Accepted body.
+//   POST /mcp     — client sends a JSON-RPC request OR a top-level
+//                   array of requests (batch); server replies with the
+//                   matching JSON-RPC response (HTTP 200, application/
+//                   json), an array of non-notification responses for
+//                   a batch, OR — for a notification or batch of pure
+//                   notifications — an empty 202 Accepted body.
 //   GET  /mcp     — opens a server-to-client SSE stream. Used for
 //                   server-initiated notifications. The MVP here
 //                   answers 405 Method Not Allowed because tools-only
@@ -73,9 +75,10 @@
 //     streaming primitives from `http_response.nu` (already shipped).
 //   * Mcp-Session-Id header for stateful sessions — would need a
 //     session-id → state map + per-session dispatcher closure.
-//   * Batch requests (top-level `[req1, req2]` arrays) — protocol
-//     allows it, but the canonical MCP clients (Claude Desktop,
-//     claude.ai) send single requests today.
+//   * (BATCH NOW SHIPPED) Top-level `[req1, req2, ...]` arrays route
+//     through `dispatch` per element; non-notification responses are
+//     collected into an array response; pure-notification batches
+//     return 202; empty batches return invalid_request per JSON-RPC.
 //   * `Accept: text/event-stream` content-negotiation upgrade for
 //     POST — fall back to JSON for simplicity. The mainstream clients
 //     accept either.
@@ -192,7 +195,55 @@ $ `stdlib/core/vec.nu`
 
         ?? pj {
             T jreq → {
-                // Hand the parsed request off to the user dispatcher.
+                // JSON-RPC 2.0 batch: top-level array routes through the
+                // dispatcher per-element, collecting non-notification
+                // responses into a new array. Empty batch → invalid
+                // request per the spec. Explicit while-loop avoids a
+                // nested closure inside the outer handler closure (the
+                // compiler's capture analysis emits a duplicate body for
+                // closures captured from within another closure body).
+                ? ( json_is_arr jreq ) {
+                    : i bn ( json_arr_len jreq )
+                    ? <= bn 0 {
+                        ( json_free jreq )
+                        : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_invalid_request `empty batch` )
+                        ( __mcp_http_apply_cors r )
+                        ^ r
+                    } {}
+                    : ( Vec Json ) resps ( vec_new [Json] )
+                    : ~ i bi 0
+                    ~ < bi bn {
+                        : ?Json elem ( json_arr_get jreq bi )
+                        ?? elem {
+                            T el → {
+                                : ?Json reply ( dispatch el )
+                                ?? reply {
+                                    T resp → ( vec_push [Json] resps resp )
+                                    F empty → ( json_free empty )
+                                }
+                            }
+                            F _ → {}
+                        }
+                        = bi + bi 1
+                    }
+                    ( json_free jreq )
+
+                    : i nr ( vec_len [Json] resps )
+                    ? > nr 0 {
+                        : Json resp_arr ( json_arr resps )
+                        : HttpResponse r ( response_json 200 resp_arr )
+                        ( json_free resp_arr )
+                        ( __mcp_http_apply_cors r )
+                        ^ r
+                    } {
+                        ( vec_free [Json] resps )
+                        : HttpResponse r ( response_status_only 202 )
+                        ( __mcp_http_apply_cors r )
+                        ^ r
+                    }
+                } {}
+
+                // Single request — original path.
                 : ?Json reply ( dispatch jreq )
                 ( json_free jreq )
 
