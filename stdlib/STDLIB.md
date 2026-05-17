@@ -496,15 +496,18 @@ Nämä ovat tärkeitä mutta eivät kaikille käyttäjille. Voidaan toteuttaa ri
 - [ ] Zero-copy slice-näkymä — vaatisi `BytesView { *u ptr, i len }` -tyypin Vec[u]:n päälle; jätetty kun caller-pattern on `bytes_slice` + `vec_free`
 - **Suunnittelupäätös:** Bytes ei ole oma struct vaan pelkkä convention layer Vec[u]:n päällä. Tämä pitää nimiavaruuden pienenä (vec_*-perhe käytettävissä) ja on linjassa "yksi tapa tehdä asia" -periaatteen kanssa. Endianness-muunnokset jäävät myöhempään koska ne tarvitsevat sized-unsigned-tyypit (u16/u32/u64).
 
-### 23. `arena` — bulk-free bumpparikko
-Tarvitaan vain kun single-owner + auto-drop ei riitä: parseri/AST/regex-NFA jossa
+### 23. `arena` — bulk-free bumpparikko (`stdlib/std/arena.nu`, 2026-05-17)
+Tarvitaan kun single-owner + auto-drop ei riitä: parseri/AST/regex-NFA jossa
 allokoit tuhansia lyhytikäisiä solmuja ja haluat vapauttaa ne yhdellä kutsulla.
-- [ ] `Arena { s cur, i used, i cap, s blocks_head }` — linkitetty lista blokkeja (NURL)
-- [ ] `arena_new`, `arena_new_with_block_size n` (NURL)
-- [ ] `arena_alloc a bytes` → `s` — bump, uusi blokki jos täyttyy (NURL)
-- [ ] `arena_alloc_t [T] a n` → `*T` — tyypitetty wrapperi (NURL)
-- [ ] `arena_reset a` — nollaa käyttö, säilytä blokit (NURL)
-- [ ] `arena_free a` — vapauta kaikki blokit (NURL)
+- [x] `Arena { s ctl }` opaque-handle, taustalla `ArenaImpl { *u data, i used, i cap }` (yksi puskuri). Linkitetty lista blokkeja jäi v2-työksi (säilyttäisi pointterit aktiivisina growthissa).
+- [x] `arena_new` (cap=0), `arena_with_cap n` (preallokoitu)
+- [x] `arena_alloc a n → *u` — 8-byte-aligned bump, NULL OOM:ssa (kutsuja tarkistaa)
+- [x] `arena_alloc_aligned a n align → *u` — SIMD / byte-tight kasit (power-of-two alignment)
+- [x] `arena_used a / arena_cap a / arena_remaining a` — introspect
+- [x] `arena_reset a` — nollaa käyttö, säilytä puskuri (mitätöi kaikki ulkonaolevat pointterit)
+- [x] `arena_free a` — vapauta puskuri + handle
+- [ ] *(v2)* `arena_alloc_n [T] a count → *T` — tyypitetty wrapper
+- [ ] *(v2)* Chained-chunk arena — linkitetty lista blokkeja growthia varten
 
 ### 24. `fmt` — string-formatointi (`stdlib/std/fmt.nu`, MVP 2026-04-30)
 - [x] `fmt tmpl ( Vec s ) args → String` — runtime-arity entry point, `{}` substituoi seuraavan argumentin vasemmalta oikealle. `{{` / `}}` escaping, surplus-args silently dropped, missing-args emit literal `{}` jotta bugi näkyy.
