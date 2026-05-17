@@ -50,7 +50,7 @@ $ `stdlib/ext/manifest.nu`
     ( nurl_print `  nurlpkg add <name> [--path P] [--version V]\n` )
     ( nurl_print `                         Add a dependency entry to nurl.toml.\n` )
     ( nurl_print `  nurlpkg remove <name>  Delete a dependency entry from nurl.toml.\n` )
-    ( nurl_print `  nurlpkg verify         Check that deps/ matches nurl.lock; exit 1 if drift.\n` )
+    ( nurl_print `  nurlpkg verify         Check deps/ matches nurl.lock (names + versions); exit 1 if drift.\n` )
     ( nurl_print `  nurlpkg version        Print the nurlpkg version.\n` )
     ( nurl_print `  nurlpkg help           Show this message.\n` )
 }
@@ -868,7 +868,8 @@ $ `stdlib/ext/manifest.nu`
             = rc 1
         }
         T root → {
-            // Collect expected names from [[package]] entries.
+            // Collect expected names from [[package]] entries; check
+            // version-drift inline against deps/<name>/nurl.toml.
             : ( Vec String ) expected ( vec_new [String] )
             : ?TomlValue pkgs ( toml_get root `package` )
             ?? pkgs {
@@ -882,9 +883,34 @@ $ `stdlib/ext/manifest.nu`
                                 ?? pe {
                                     T pkg → {
                                         : String name ( __pkg_field_str pkg `name` )
+                                        : String lock_ver ( __pkg_field_str pkg `version` )
                                         ? > ( string_len name ) 0 {
+                                            : String mfpath ( string_from `deps/` )
+                                            ( string_push_str mfpath ( string_data name ) )
+                                            ( string_push_str mfpath `/nurl.toml` )
+                                            ? ( file_exists ( string_data mfpath ) ) {
+                                                : !Manifest ManifestErr mr ( manifest_load ( string_data mfpath ) )
+                                                ?? mr {
+                                                    T m → {
+                                                        ? & > ( string_len lock_ver ) 0 == 0 ( nurl_str_eq ( string_data lock_ver ) ( string_data . m version ) ) {
+                                                            ( nurl_eprint `  version drift: ` )
+                                                            ( nurl_eprint ( string_data name ) )
+                                                            ( nurl_eprint ` lock=` )
+                                                            ( nurl_eprint ( string_data lock_ver ) )
+                                                            ( nurl_eprint ` deps=` )
+                                                            ( nurl_eprint ( string_data . m version ) )
+                                                            ( nurl_eprintln `` )
+                                                            = rc 1
+                                                        } {}
+                                                        ( manifest_free m )
+                                                    }
+                                                    F _ → {}
+                                                }
+                                            } {}
+                                            ( string_free mfpath )
                                             ( vec_push [String] expected name )
                                         } { ( string_free name ) }
+                                        ( string_free lock_ver )
                                     }
                                     F _ → {}
                                 }

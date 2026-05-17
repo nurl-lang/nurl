@@ -107,7 +107,7 @@ Making NURL easier to write and debug.
 ## 4. Ecosystem & Distribution
 Scaling NURL for team use and external integration.
 
-- [ ] **Package Management:** Implement a minimal manifest format and dependency resolution (local and remote).
+- [x] **Package Management — shipped 2026-05-16 (Phases 1–6):** `tools/nurlpkg/main.nu`. Cargo-shaped CLI: `init` / `info` / `deps` / `install` / `lock` / `add` / `remove` / `verify` / `version` / `help`. Phase 1 TOML parser (`stdlib/ext/toml.nu`) + Phase 1b typed `Manifest` (`stdlib/ext/manifest.nu`); Phase 2 read-only commands; Phase 3 BFS-transitive install via `fs_symlink`; Phase 4 lockfile generator; Phase 5 surgical `add`/`remove` (preserves comments + formatting in `nurl.toml`); Phase 6 verify with name-drift AND version-drift detection (reads `deps/<name>/nurl.toml` through the symlink, compares `version` field against the lockfile `[[package]]` entry; reports `version drift: lib1 lock=X deps=Y` and exits 1). Registry-hosted deps deferred (current scope: local path-deps only). Symlink target-path verification deferred (no `readlink` FFI yet; `file_exists` after the symlink is the durable presence check).
 - [ ] **CI/CD Pipeline:** Establish GitHub Actions for automated builds, tests, and ASan/UBSan checks.
 - [ ] **Mobile & Embedded Targets:** Cross-compilation support for Android, iOS, and no_std embedded profiles.
 - [ ] **Extended Documentation:** Formal language specification (`docs/spec.md`) and ownership/auto-drop guidelines (`docs/MEMORY.md`).
