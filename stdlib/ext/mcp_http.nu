@@ -15,12 +15,19 @@
 //                   json), an array of non-notification responses for
 //                   a batch, OR — for a notification or batch of pure
 //                   notifications — an empty 202 Accepted body.
-//   GET  /mcp     — opens a server-to-client SSE stream. Used for
-//                   server-initiated notifications. The MVP here
-//                   answers 405 Method Not Allowed because tools-only
-//                   servers don't push notifications. Easy to extend
-//                   later by swapping the handler with one that
-//                   `response_begin_chunked`s an event-stream.
+//   GET  /mcp     — opens a server-to-client SSE channel. v2 ships
+//                   a single-event stub (HTTP 200, Content-Type
+//                   `text/event-stream`, body = one `event: ready`
+//                   frame, then connection close) so clients can
+//                   detect the protocol. A real continuous stream
+//                   requires a notification queue + custom accept
+//                   loop with `response_begin_chunked` — tracked as
+//                   the next-after-v2 extension.
+//   Mcp-Session-Id — Forward-compat session header. If the client
+//                   sends `Mcp-Session-Id: <opaque>` on a request,
+//                   the handler echoes it back on the response. No
+//                   per-session state store yet — the value is
+//                   round-tripped verbatim.
 //   DELETE /mcp   — client closes a session. Stateless MVP returns
 //                   204 No Content with no bookkeeping.
 //
@@ -70,11 +77,14 @@
 //
 // Limitations / not yet implemented (each is straight-line work, just
 // outside the MVP):
-//   * GET /mcp SSE stream for server-initiated notifications — needs
-//     a notification queue + Last-Event-ID resumption + the chunked
-//     streaming primitives from `http_response.nu` (already shipped).
-//   * Mcp-Session-Id header for stateful sessions — would need a
-//     session-id → state map + per-session dispatcher closure.
+//   * GET /mcp continuous SSE stream — v2 returns a single ready
+//     event then closes the connection. Pushing notifications over
+//     time needs a notification queue + Last-Event-ID resumption + a
+//     custom accept loop using the chunked streaming primitives
+//     (`response_begin_chunked` / `_write_chunk` / `_end_chunked`).
+//   * Mcp-Session-Id state pinning — v2 echoes the header but stores
+//     no per-session state. Stateful dispatch needs a session-id →
+//     state map + per-session dispatcher closure.
 //   * (BATCH NOW SHIPPED) Top-level `[req1, req2, ...]` arrays route
 //     through `dispatch` per element; non-notification responses are
 //     collected into an array response; pure-notification batches
@@ -124,6 +134,23 @@ $ `stdlib/core/vec.nu`
     ( response_set_header r `Access-Control-Expose-Headers` `Mcp-Session-Id` )
 }
 
+// Echo the client-supplied Mcp-Session-Id back on the response. v1
+// forwards the header verbatim — there is no per-session state store
+// yet, so the field is forward-compat surface for clients that begin
+// sending session ids before the server implements pinning.
+@ __mcp_http_echo_session HttpRequest req HttpResponse r → v {
+    : ?String sid ( header_get . req headers `Mcp-Session-Id` )
+    ?? sid {
+        T s → {
+            ? > ( string_len s ) 0 {
+                ( response_set_header r `Mcp-Session-Id` ( string_data s ) )
+            } {}
+            ( string_free s )
+        }
+        F _ → {}
+    }
+}
+
 // ── mcp_http_handler ─────────────────────────────────────────────────
 //
 // Build an HTTP handler closure from a dispatch closure. Usable as a
@@ -153,21 +180,32 @@ $ `stdlib/core/vec.nu`
             ( response_set_header pre `Access-Control-Allow-Methods` `POST, GET, DELETE, OPTIONS` )
             ( response_set_header pre `Access-Control-Max-Age` `86400` )
             ( __mcp_http_apply_cors pre )
+            ( __mcp_http_echo_session req pre )
             ^ pre
         } {}
 
-        // GET: SSE stream not implemented in MVP.
+        // GET: single-event SSE stub. A real notification stream would
+        // need a queue + chunked writes from a custom accept loop — this
+        // path advertises the wire protocol (`text/event-stream` + an
+        // initial `ready` event) so clients can open the endpoint
+        // without a 405. Connection is closed immediately after the
+        // single event. v2 extension point.
         ? != 0 ( nurl_str_eq rm `GET` ) {
-            : HttpResponse r ( response_text 405 `MCP HTTP server does not push notifications (no SSE stream)\n` )
-            ( response_set_header r `Allow` `POST, DELETE, OPTIONS` )
+            : HttpResponse r ( response_text 200 `event: ready\ndata: {"server":"nurl-mcp","streaming":"single-event"}\n\n` )
+            ( response_set_header r `Content-Type` `text/event-stream` )
+            ( response_set_header r `Cache-Control` `no-cache` )
+            ( response_set_header r `Connection` `close` )
             ( __mcp_http_apply_cors r )
+            ( __mcp_http_echo_session req r )
             ^ r
         } {}
 
-        // DELETE: stateless — nothing to free.
+        // DELETE: stateless — nothing to free. (Forward compat: real
+        // session teardown would invalidate the Mcp-Session-Id state.)
         ? != 0 ( nurl_str_eq rm `DELETE` ) {
             : HttpResponse r ( response_status_only 204 )
             ( __mcp_http_apply_cors r )
+            ( __mcp_http_echo_session req r )
             ^ r
         } {}
 
@@ -176,6 +214,7 @@ $ `stdlib/core/vec.nu`
             : HttpResponse r ( response_text 405 `Method Not Allowed\n` )
             ( response_set_header r `Allow` `POST, GET, DELETE, OPTIONS` )
             ( __mcp_http_apply_cors r )
+            ( __mcp_http_echo_session req r )
             ^ r
         }
 
@@ -184,6 +223,7 @@ $ `stdlib/core/vec.nu`
         ? <= bn 0 {
             : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_invalid_request `empty request body` )
             ( __mcp_http_apply_cors r )
+            ( __mcp_http_echo_session req r )
             ^ r
         } {}
 
@@ -208,6 +248,7 @@ $ `stdlib/core/vec.nu`
                         ( json_free jreq )
                         : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_invalid_request `empty batch` )
                         ( __mcp_http_apply_cors r )
+                        ( __mcp_http_echo_session req r )
                         ^ r
                     } {}
                     : ( Vec Json ) resps ( vec_new [Json] )
@@ -234,11 +275,13 @@ $ `stdlib/core/vec.nu`
                         : HttpResponse r ( response_json 200 resp_arr )
                         ( json_free resp_arr )
                         ( __mcp_http_apply_cors r )
+                        ( __mcp_http_echo_session req r )
                         ^ r
                     } {
                         ( vec_free [Json] resps )
                         : HttpResponse r ( response_status_only 202 )
                         ( __mcp_http_apply_cors r )
+                        ( __mcp_http_echo_session req r )
                         ^ r
                     }
                 } {}
@@ -252,6 +295,7 @@ $ `stdlib/core/vec.nu`
                         : HttpResponse r ( response_json 200 resp_json )
                         ( json_free resp_json )
                         ( __mcp_http_apply_cors r )
+                        ( __mcp_http_echo_session req r )
                         ^ r
                     }
                     F empty → {
@@ -259,6 +303,7 @@ $ `stdlib/core/vec.nu`
                         // Notification consumed — no body, 202 Accepted.
                         : HttpResponse r ( response_status_only 202 )
                         ( __mcp_http_apply_cors r )
+                        ( __mcp_http_echo_session req r )
                         ^ r
                     }
                 }
@@ -266,6 +311,7 @@ $ `stdlib/core/vec.nu`
             F _ → {
                 : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_parse_error `request body is not valid JSON` )
                 ( __mcp_http_apply_cors r )
+                ( __mcp_http_echo_session req r )
                 ^ r
             }
         }

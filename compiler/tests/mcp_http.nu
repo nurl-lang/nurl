@@ -251,5 +251,43 @@ s label s method s path s body → v {
 
     ( run_case handler `batch_empty` `POST` `/mcp` `[]` )
 
+    // ── Mcp-Session-Id echo (v2 forward-compat surface) ────────────────
+    ( nurl_print `── session_echo_post ──\n` )
+    : HttpRequest sreq ( make_req `POST` `/mcp` `{"jsonrpc":"2.0","id":99,"method":"ping"}` )
+    : Header sh @ Header { ( string_from `Mcp-Session-Id` ) ( string_from `sess-abc-123` ) }
+    ( vec_push [Header] . sreq headers sh )
+    : HttpResponse sresp ( handler sreq )
+    : ?String sout ( header_get . sresp headers `Mcp-Session-Id` )
+    ?? sout {
+        T s → { ( println_str `  echoed=` ( string_data s ) ) ( string_free s ) }
+        F e → { ( println_str `  echoed=` `<absent>` ) ( string_free e ) }
+    }
+    ( http_response_free sresp )
+    ( request_free sreq )
+
+    ( nurl_print `── session_echo_get ──\n` )
+    : HttpRequest sreq2 ( make_req `GET` `/mcp` `` )
+    : Header sh2 @ Header { ( string_from `Mcp-Session-Id` ) ( string_from `sess-xyz-789` ) }
+    ( vec_push [Header] . sreq2 headers sh2 )
+    : HttpResponse sresp2 ( handler sreq2 )
+    : ?String sout2 ( header_get . sresp2 headers `Mcp-Session-Id` )
+    ?? sout2 {
+        T s → { ( println_str `  echoed=` ( string_data s ) ) ( string_free s ) }
+        F e → { ( println_str `  echoed=` `<absent>` ) ( string_free e ) }
+    }
+    ( http_response_free sresp2 )
+    ( request_free sreq2 )
+
+    ( nurl_print `── session_absent ──\n` )
+    : HttpRequest noreq ( make_req `POST` `/mcp` `{"jsonrpc":"2.0","id":100,"method":"ping"}` )
+    : HttpResponse noresp ( handler noreq )
+    : ?String noout ( header_get . noresp headers `Mcp-Session-Id` )
+    ?? noout {
+        T s → { ( println_str `  echoed=` ( string_data s ) ) ( string_free s ) }
+        F e → { ( println_str `  echoed=` `<absent>` ) ( string_free e ) }
+    }
+    ( http_response_free noresp )
+    ( request_free noreq )
+
     ^ 0
 }
