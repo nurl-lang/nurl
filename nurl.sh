@@ -195,6 +195,22 @@ if [[ -f "$SCRIPT_DIR/stdlib/runtime.pq" ]]; then
         EXTRA_LIBS+=( -lpq )
     fi
 fi
+if [[ -f "$SCRIPT_DIR/stdlib/runtime.z" ]]; then
+    if pkg-config --exists zlib 2>/dev/null; then
+        # shellcheck disable=SC2046
+        EXTRA_LIBS+=( $(pkg-config --libs zlib) )
+    else
+        EXTRA_LIBS+=( -lz )
+    fi
+fi
+if [[ -f "$SCRIPT_DIR/stdlib/runtime.zstd" ]]; then
+    if pkg-config --exists libzstd 2>/dev/null; then
+        # shellcheck disable=SC2046
+        EXTRA_LIBS+=( $(pkg-config --libs libzstd) )
+    else
+        EXTRA_LIBS+=( -lzstd )
+    fi
+fi
 
 echo "[2/2] $LLFILE → $OUTBASE  ($OPT -flto${DEBUG_FLAGS[*]:+ ${DEBUG_FLAGS[*]}}${EXTRA_LIBS[*]:+ ${EXTRA_LIBS[*]}})"
 # `-flto` is required because stdlib/runtime.o is compiled with -flto

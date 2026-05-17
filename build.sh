@@ -131,6 +131,31 @@ else
     log "[info] libpq not found — stdlib/ext/postgres.nu will fail at compile time"
 fi
 
+# ── zlib detection ──────────────────────────────────────────
+# Gzip FFI is PURE NURL (`stdlib/ext/gzip.nu`); the sentinel below
+# satisfies the compile-time FFI-lib check and the link line picks up
+# -lz so user programs that include gzip.nu link cleanly.
+ZLIB_LIBS=""
+if pkg-config --exists zlib 2>/dev/null; then
+    ZLIB_LIBS="$(pkg-config --libs zlib)"
+    echo 1 > stdlib/runtime.z
+    log "[info] zlib detected — Gzip FFI enabled"
+else
+    rm -f stdlib/runtime.z
+    log "[info] zlib not found — stdlib/ext/gzip.nu will fail at compile time"
+fi
+
+# ── libzstd detection ──────────────────────────────────────
+ZSTD_LIBS=""
+if pkg-config --exists libzstd 2>/dev/null; then
+    ZSTD_LIBS="$(pkg-config --libs libzstd)"
+    echo 1 > stdlib/runtime.zstd
+    log "[info] libzstd detected — Zstd FFI enabled"
+else
+    rm -f stdlib/runtime.zstd
+    log "[info] libzstd not found — stdlib/ext/zstd.nu will fail at compile time"
+fi
+
 # ── Build stages ─────────────────────────────────────────────
 # `-flto` makes runtime.o emit LLVM bitcode so vec/string/io FFI calls
 # inline across the runtime ↔ user-code boundary at link time. The

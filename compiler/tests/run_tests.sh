@@ -92,6 +92,24 @@ if [[ -f "$ROOT_DIR/stdlib/runtime.pq" ]]; then
     fi
 fi
 
+# Link -lz / -lzstd when build.sh detected compression libs.
+ZLIB_LIBS=""
+if [[ -f "$ROOT_DIR/stdlib/runtime.z" ]]; then
+    if command -v pkg-config &>/dev/null && pkg-config --exists zlib 2>/dev/null; then
+        ZLIB_LIBS=$(pkg-config --libs zlib)
+    else
+        ZLIB_LIBS="-lz"
+    fi
+fi
+ZSTD_LIBS=""
+if [[ -f "$ROOT_DIR/stdlib/runtime.zstd" ]]; then
+    if command -v pkg-config &>/dev/null && pkg-config --exists libzstd 2>/dev/null; then
+        ZSTD_LIBS=$(pkg-config --libs libzstd)
+    else
+        ZSTD_LIBS="-lzstd"
+    fi
+fi
+
 # HTTP tests require network egress, so they're opt-in. Default skips.
 ENABLE_HTTP_TESTS="${NURL_HTTP_TESTS:-0}"
 
@@ -233,7 +251,7 @@ for src in "${tests[@]}"; do
     # shellcheck disable=SC2086
     # `-flto` matches build.sh: runtime.o ships as LLVM bitcode and the
     # link-time LTO pipeline inlines runtime symbols into the test binary.
-    if ! "$CLANG" -O2 -flto "$ll" "$RUNTIME" -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS -o "$bin" 2>/dev/null; then
+    if ! "$CLANG" -O2 -flto "$ll" "$RUNTIME" -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o "$bin" 2>/dev/null; then
         echo "LINK FAIL" >> "$RESULTS"
         echo >> "$RESULTS"
         continue

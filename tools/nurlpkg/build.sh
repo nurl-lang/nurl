@@ -79,6 +79,22 @@ if [[ -f "$ROOT_DIR/stdlib/runtime.pq" ]]; then
         EXTRA_LIBS+=( -lpq )
     fi
 fi
+if [[ -f "$ROOT_DIR/stdlib/runtime.z" ]]; then
+    if pkg-config --exists zlib 2>/dev/null; then
+        # shellcheck disable=SC2207
+        EXTRA_LIBS+=( $(pkg-config --libs zlib) )
+    else
+        EXTRA_LIBS+=( -lz )
+    fi
+fi
+if [[ -f "$ROOT_DIR/stdlib/runtime.zstd" ]]; then
+    if pkg-config --exists libzstd 2>/dev/null; then
+        # shellcheck disable=SC2207
+        EXTRA_LIBS+=( $(pkg-config --libs libzstd) )
+    else
+        EXTRA_LIBS+=( -lzstd )
+    fi
+fi
 
 echo "[2/2] build/nurlpkg.ll → build/nurlpkg"
 "$CLANG" -O2 -flto "$ROOT_DIR/build/nurlpkg.ll" "$RUNTIME" -lm -lpthread "${EXTRA_LIBS[@]}" -o "$ROOT_DIR/build/nurlpkg"
