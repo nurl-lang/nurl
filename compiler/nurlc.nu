@@ -5285,6 +5285,17 @@
                     = ta_r2 ( str_skip_word ta_r2 )
                     = subst ( subst_source_raw subst tp ta )
                 }
+                // Recursively materialise nested generic-struct refs in
+                // the substituted body — the outer typedef line about to
+                // be emitted must reference fully-sized inner types, not
+                // opaque forward decls. (LLVM allows forward `%Name` refs
+                // but won't size a struct whose layout depends on an
+                // unresolved-at-parse-time element type, which breaks any
+                // downstream `getelementptr` of the outer struct.) The
+                // `__done` dedup marker for `mangled` was set above, so
+                // a self-referential struct won't recurse infinitely.
+                : i lex_inner ( nurl_lex_new subst ( nurl_str_cat `<inst-rescan:` ( nurl_str_cat mangled `>` ) ) )
+                ( scan_generic_structs lex_inner syms )
                 // Re-lex, skip outer '{', parse each field via parse_type + IDENT.
                 : i lex2 ( nurl_lex_new subst ( nurl_str_cat `<inst:` ( nurl_str_cat mangled `>` ) ) )
                 ? == ( nurl_lex_type lex2 ) TT_LBRACE { ( nurl_lex_advance lex2 ) } {}
@@ -6270,6 +6281,16 @@
 
 // ── Generic instantiation flush (Group E) ────────────────────────────
 // emit_one_instantiation: build and emit one monomorphised function.
+//
+// Substitutes T → ConcreteTy in the stored template source, then re-lexes
+// twice: once to scan for nested generic-struct instantiations whose type
+// args are now concrete (so the corresponding `%Name__Tconcrete` named
+// types + field metadata exist before the body references them — fixes
+// the "two generic structs side-by-side" case where a generic function
+// returns `( B T )` but internally allocates `*( A T )` and writes its
+// fields), then again to actually emit the function. The two passes
+// share `syms` so the rescan's emitted instantiations are visible to
+// the body-parsing pass.
 @ emit_one_instantiation s fname s mangled s type_args i syms i cg → v {
     : s tparams ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__tparams` ) )
     : s gsrc ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__gsrc` ) )
@@ -6284,6 +6305,8 @@
         = subst_src ( subst_source subst_src tp ta )
     }
     : s full_src ( nurl_str_cat `@ ` ( nurl_str_cat mangled ( nurl_str_cat ` ` subst_src ) ) )
+    : i lex_scan ( nurl_lex_new full_src `<generic-scan>` )
+    ( scan_generic_structs lex_scan syms )
     : i lex2 ( nurl_lex_new full_src `<generic>` )
     ( gen_fn_decl lex2 syms cg )
 }

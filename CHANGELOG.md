@@ -8,6 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* **Generic propagation through nested structs.** Two generic structs
+  side-by-side compose freely: a generic function that returns
+  `( Outer A )` while internally allocating `*( Inner A )` and writing
+  its fields now compiles, and a generic struct whose field types
+  reference another generic (e.g. `Wrap[A] { ( Vec A ) items, … }`)
+  emits its inner instantiation before the outer typedef. Fix is in
+  `compiler/nurlc.nu` — `emit_one_instantiation` re-scans the
+  substituted generic-function body so concrete inner refs trigger
+  `ensure_struct_instantiated`, and `ensure_struct_instantiated`
+  itself re-scans the substituted generic-struct body for the same
+  reason. Bootstrap fixed point holds (stage1 ≡ stage2 byte-identical
+  IR at 1 187 843 B). Regression: `compiler/tests/generic_nested_struct.nu`
+  (Inner/Outer + Wrap/Vec, both `[i]` and `[s]` instantiations).
+
+* **`Channel[A]` — generic over the element type.** `stdlib/std/channel.nu`
+  rewritten on top of the nested-generic fix. `Channel[A] { s ctl }`
+  wraps `ChannelImpl[A] { Mutex m, Cond c, ( Vec A ) q, i closed }`;
+  every call site supplies the element type via `[A]`
+  (`chan_new [i]`, `chan_send [s] ch "hello"`, `chan_recv [i] ch → ?i`,
+  etc.). Closes the long-standing v0.3.0 roadmap item that previously
+  forced i64-only channels with `# i ptr` for handle payloads.
+  `compiler/tests/channel_basic.nu` migrated to the new API (still
+  exercises `[i]` so behaviour-equivalent); the regression test above
+  exercises both `[i]` and `[s]`. Naming: uses `[A]` (the existing
+  stdlib tparam convention) — `T` is the boolean true literal in NURL
+  so cannot be a tparam name.
+
+### Changed
+
+* **`Channel` is no longer a type alias for the i64 channel.** All
+  callers must specify the element type at use site. The single
+  in-tree caller (`compiler/tests/channel_basic.nu`) was updated.
+
 ## [0.6.0] — 2026-05-16
 
 CSV stdlib consolidates around the arena layout, runtime link-time
