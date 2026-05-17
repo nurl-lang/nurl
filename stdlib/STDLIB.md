@@ -141,8 +141,7 @@ heap-pointerin läpi). MVP toteutettu 2026-04-25 (`stdlib/core/vec.nu`).
       `compiler/tests/vec_insert_remove.nu`)
 - [ ] `vec_from_array *A n` (pointer + len → Vec, kopioi; FFI ja stdlib-helperit)
 - [ ] `vec_clone` (vaatii Clone-trait-päätöksen; shallow-memcpy ei riitä `Vec[String]`:lle)
-- [ ] `vec_slice from to` → `Slice[A]` (vaatii `Slice[A] = { ptr, len }` -tyypin —
-      iso suunnittelupäätös, ei pelkkä lisäys; korvaisi vuotavan `vec_data`:n)
+- [x] `Slice[A]` shipped 2026-05-17 (`stdlib/core/slice.nu`): `Slice[A] { *A data, i len }`, constructors `slice_from_vec` / `slice_sub` / `slice_from_raw`, inspectors `slice_len` / `slice_is_empty` / `slice_data` / `slice_get` / `slice_first` / `slice_last`. Korvaa `vec_data`-pattenrin hot-loopeissa.
 - [ ] `vec_map f`, `vec_filter pred` (allokoivat uuden Vec:n; lähde koskemattomaksi)
 - [x] `vec_find pred`, `vec_any pred`, `vec_all pred` (predikaattipohjaiset)
 - [x] `vec_contains target eq_fn`, `vec_index_of target eq_fn`,
