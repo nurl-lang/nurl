@@ -723,21 +723,19 @@ Anything beyond the bootstrap subset must be compiled with the self-hosted
 
 ## Known Limitations
 
-The following are known limitations of the current compiler (`nurlc.nu`, grammar v1.7).
+The following are known limitations of the current compiler (`nurlc.nu`, grammar v2.1).
 They reflect deliberate scope decisions rather than bugs, and are tracked for future work.
 
 For *active compiler quirks* (workarounds you'll hit while writing real
-code — multi-field struct mutation, mutable enum bindings, `vec_get`
-defaults, etc.) see [`docs/GOTCHAS.md`](docs/GOTCHAS.md).
+code — binary `&` / `|` arity, bare `@-fn` closure coercion, same-line
+parameter shadowing, ternary cascading, `: ~` closure-borrow escape)
+see [`docs/GOTCHAS.md`](docs/GOTCHAS.md).
 
 ### Type system
 
 | Limitation | Workaround |
 |---|---|
 | Single-letter type keywords (`i u f b s v`) cannot be used as variable names with type inference | Use an explicit type annotation: `: i n expr` |
-| No sized types (`i8`, `u32`, `f64` …) — lexer emits `i` + `8` as two tokens | Use base types (`i`, `f`) and cast with `#` |
-| `zext` / `trunc` casts not implemented — `i1` cannot be widened to `i64` directly | Use `nurl_print_bool` for boolean output; avoid mixing `i1` and `i64` |
-| `! T E` payload is stored as `i64`; complex T/E types (structs with payloads > 8 bytes) may not round-trip correctly through `#` cast | Use base types and simple enums (tag-only) as T and E |
 
 ### Functions and calls
 
@@ -745,16 +743,15 @@ defaults, etc.) see [`docs/GOTCHAS.md`](docs/GOTCHAS.md).
 |---|---|
 | Calls require explicit parens — `( f a b )` is the only call form; a bare identifier is always a name lookup, never a call | Wrap every callsite: `( puts s )` |
 | Struct parameters are passed by **value** (C/Go/Zig semantics) — `= . p field val` inside the callee writes a local copy; the caller's struct is unchanged | Return the modified struct (`= c ( inc_returning c )`) — copy is cheap for small structs; or use `*T` parameters explicitly; or wrap state in a single-handle struct (`{ ( Vec i ) slots }`) so the heap buffer is shared |
-| Variadic functions (e.g. `printf`) cannot be declared via `ffi_decl` — LLVM IR varargs syntax (`...`) is not generated | Use `nurl_print_*` builtins; declare specific non-variadic wrappers in C |
 | No tail-call optimisation — deep recursion may stack-overflow | Use explicit loops (`~`) |
-| Closures capture by value (snapshot at construction); mutating an enclosing local after the closure is built does not affect the captured copy | Keep mutation explicit; pass the current value as a parameter or return the new state |
+| Closures capture by value (snapshot at construction) by default. The `: ~` mutable-struct byref capture path (`stdlib/std/panic.nu` recover-with-typed-result) shares the caller's alloca — see [`docs/GOTCHAS.md` §5](docs/GOTCHAS.md) for the lifetime rule | Use `: ~ MultiFieldStruct` for shared-mutation closures; for value semantics keep the binding immutable |
 
 ### Enums
 
 | Limitation | Workaround |
 |---|---|
 | Enum variants with a named-struct payload require the struct to be declared **before** the enum in the same file — forward references are not supported | Order declarations: structs first, enums after |
-| Pattern matching binds at most 2 payload variables per arm — variants with 3+ payloads cannot fully destructure in a single arm | Access additional payload fields via separate `.` extraction after matching |
+| Pattern matching binds at most 3 payload variables per arm — variants with 4+ payloads cannot fully destructure in a single arm | Access additional payload fields via separate `.` extraction after matching |
 
 ### Imports
 
@@ -769,9 +766,7 @@ defaults, etc.) see [`docs/GOTCHAS.md`](docs/GOTCHAS.md).
 
 | Limitation | Workaround |
 |---|---|
-| Negative integer literals cannot be written directly — `-1` tokenises as `MINUS INT(1)` | Use `~ 0` (bitwise complement) for `-1`; compute negatives as `- 0 n` |
-| No automatic memory management — heap-allocated values (slice literals, `strcat` results, etc.) are not freed | Call `free` via FFI when needed; keep values on the stack where possible |
-| Import is inline-include only: no namespaces; alias rewrites only top-level `@`-functions, not types/enums/FFI/traits. Path-string dedup with leading `./` normalisation is in place — same file imported twice (or through a diamond) emits one set of decls | Stick to a single canonical import path per file; prefix names manually for types/enums when collisions matter |
+| Import is inline-include only: no namespaces. Alias rewriting (`` $ `path` alias ``) now covers `@`-functions, struct/enum types, enum variants, and global `:` constants; FFI decls and trait/impl methods are deliberately not renamed — FFI symbols resolve at the linker by C-ABI name, and trait methods are mangled by impl-target type. Path-string dedup with leading `./` normalisation; same file imported twice (or through a diamond) emits one set of decls | Stick to a single canonical import path per file; prefix FFI names manually when collisions matter |
 
 ### PostgreSQL
 

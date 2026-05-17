@@ -19,6 +19,19 @@
 //   ( bytes_find_byte v t )    → ? i               first index of byte t
 //   ( bytes_extend_str v raw ) → v                 append from NUL string
 //
+//   ( bytes_read_u16_be v off ) → ? u16             load 2 bytes, big-endian
+//   ( bytes_read_u16_le v off ) → ? u16             load 2 bytes, little-endian
+//   ( bytes_read_u32_be v off ) → ? u32
+//   ( bytes_read_u32_le v off ) → ? u32
+//   ( bytes_read_u64_be v off ) → ? u64
+//   ( bytes_read_u64_le v off ) → ? u64
+//   ( bytes_push_u16_be v n )   → v                 append 2 bytes
+//   ( bytes_push_u16_le v n )   → v
+//   ( bytes_push_u32_be v n )   → v
+//   ( bytes_push_u32_le v n )   → v
+//   ( bytes_push_u64_be v n )   → v
+//   ( bytes_push_u64_le v n )   → v
+//
 // Memory model: byte buffers are owned heap allocations; free with
 // `( vec_free [u] v )`. Borrowed pointers (e.g. `bytes_data`) must not
 // outlive the Vec.
@@ -245,6 +258,178 @@ $ `stdlib/core/errors.nu`
         = k + k 1
     }
     ^ T
+}
+
+// ── Fixed-width integer read / write ───────────────────────────────
+//
+// Endianness-aware load and store helpers for u16 / u32 / u64. Reads
+// return `?T` so callers can detect out-of-range offsets without a
+// die. Writes append N bytes in the chosen order and return `v` so
+// callers can chain.
+//
+// Conventions:
+//   * Big-endian (`_be`): byte 0 is most-significant (network byte
+//     order, used by gzip CRC, MessagePack, BSON, IP/TCP/UDP).
+//   * Little-endian (`_le`): byte 0 is least-significant (gzip ISIZE,
+//     PE/COFF headers, x86 wire formats, Bitcoin protocol).
+//   * Offset bounds: a read of N bytes at offset `off` succeeds iff
+//     `off >= 0 && off + N <= ( vec_len v )`. Otherwise None.
+//
+// Implementation note: bytes are loaded as `i` (i64) via the `# i ( . p k )`
+// cast. The compiler's `gen_member` now propagates the source pointer's
+// unsigned-ness through `__last_unsigned__`, so a load from `*u` emits
+// `zext i8 → i64` (not `sext`). Without that propagation, a high-bit-set
+// byte like 0x89 would sign-extend to 0xFFFFFFFFFFFFFF89 and corrupt
+// every subsequent shift+add — fixed at the compiler level 2026-05-17.
+
+@ bytes_read_u16_be ( Vec u ) v i off → ?u16 {
+    : i n ( vec_len [u] v )
+    : i end + off 2
+    ? | < off 0 > end n { ^ @ ?u16 { F # u16 0 } } {}
+    : *u p ( vec_data [u] v )
+    : i b0 # i . p off
+    : i b1 # i . p + off 1
+    : i r + << b0 8 b1
+    ^ @ ?u16 { T # u16 r }
+}
+
+@ bytes_read_u16_le ( Vec u ) v i off → ?u16 {
+    : i n ( vec_len [u] v )
+    : i end + off 2
+    ? | < off 0 > end n { ^ @ ?u16 { F # u16 0 } } {}
+    : *u p ( vec_data [u] v )
+    : i b0 # i . p off
+    : i b1 # i . p + off 1
+    : i r + b0 << b1 8
+    ^ @ ?u16 { T # u16 r }
+}
+
+@ bytes_read_u32_be ( Vec u ) v i off → ?u32 {
+    : i n ( vec_len [u] v )
+    : i end + off 4
+    ? | < off 0 > end n { ^ @ ?u32 { F # u32 0 } } {}
+    : *u p ( vec_data [u] v )
+    : i b0 # i . p off
+    : i b1 # i . p + off 1
+    : i b2 # i . p + off 2
+    : i b3 # i . p + off 3
+    : i hi + << b0 24 << b1 16
+    : i lo + << b2 8 b3
+    : i r + hi lo
+    ^ @ ?u32 { T # u32 r }
+}
+
+@ bytes_read_u32_le ( Vec u ) v i off → ?u32 {
+    : i n ( vec_len [u] v )
+    : i end + off 4
+    ? | < off 0 > end n { ^ @ ?u32 { F # u32 0 } } {}
+    : *u p ( vec_data [u] v )
+    : i b0 # i . p off
+    : i b1 # i . p + off 1
+    : i b2 # i . p + off 2
+    : i b3 # i . p + off 3
+    : i hi + << b3 24 << b2 16
+    : i lo + << b1 8 b0
+    : i r + hi lo
+    ^ @ ?u32 { T # u32 r }
+}
+
+@ bytes_read_u64_be ( Vec u ) v i off → ?u64 {
+    : i n ( vec_len [u] v )
+    : i end + off 8
+    ? | < off 0 > end n { ^ @ ?u64 { F # u64 0 } } {}
+    : *u p ( vec_data [u] v )
+    : i b0 # i . p off
+    : i b1 # i . p + off 1
+    : i b2 # i . p + off 2
+    : i b3 # i . p + off 3
+    : i b4 # i . p + off 4
+    : i b5 # i . p + off 5
+    : i b6 # i . p + off 6
+    : i b7 # i . p + off 7
+    : i hi0 + << b0 56 << b1 48
+    : i hi1 + << b2 40 << b3 32
+    : i lo0 + << b4 24 << b5 16
+    : i lo1 + << b6 8 b7
+    : i hi + hi0 hi1
+    : i lo + lo0 lo1
+    : i r + hi lo
+    ^ @ ?u64 { T # u64 r }
+}
+
+@ bytes_read_u64_le ( Vec u ) v i off → ?u64 {
+    : i n ( vec_len [u] v )
+    : i end + off 8
+    ? | < off 0 > end n { ^ @ ?u64 { F # u64 0 } } {}
+    : *u p ( vec_data [u] v )
+    : i b0 # i . p off
+    : i b1 # i . p + off 1
+    : i b2 # i . p + off 2
+    : i b3 # i . p + off 3
+    : i b4 # i . p + off 4
+    : i b5 # i . p + off 5
+    : i b6 # i . p + off 6
+    : i b7 # i . p + off 7
+    : i hi0 + << b7 56 << b6 48
+    : i hi1 + << b5 40 << b4 32
+    : i lo0 + << b3 24 << b2 16
+    : i lo1 + << b1 8 b0
+    : i hi + hi0 hi1
+    : i lo + lo0 lo1
+    : i r + hi lo
+    ^ @ ?u64 { T # u64 r }
+}
+
+@ bytes_push_u16_be ( Vec u ) v u16 n → v {
+    : i x # i n
+    ( vec_push [u] v # u & >> x 8 255 )
+    ( vec_push [u] v # u & x 255 )
+}
+
+@ bytes_push_u16_le ( Vec u ) v u16 n → v {
+    : i x # i n
+    ( vec_push [u] v # u & x 255 )
+    ( vec_push [u] v # u & >> x 8 255 )
+}
+
+@ bytes_push_u32_be ( Vec u ) v u32 n → v {
+    : i x # i n
+    ( vec_push [u] v # u & >> x 24 255 )
+    ( vec_push [u] v # u & >> x 16 255 )
+    ( vec_push [u] v # u & >> x 8 255 )
+    ( vec_push [u] v # u & x 255 )
+}
+
+@ bytes_push_u32_le ( Vec u ) v u32 n → v {
+    : i x # i n
+    ( vec_push [u] v # u & x 255 )
+    ( vec_push [u] v # u & >> x 8 255 )
+    ( vec_push [u] v # u & >> x 16 255 )
+    ( vec_push [u] v # u & >> x 24 255 )
+}
+
+@ bytes_push_u64_be ( Vec u ) v u64 n → v {
+    : i x # i n
+    ( vec_push [u] v # u & >> x 56 255 )
+    ( vec_push [u] v # u & >> x 48 255 )
+    ( vec_push [u] v # u & >> x 40 255 )
+    ( vec_push [u] v # u & >> x 32 255 )
+    ( vec_push [u] v # u & >> x 24 255 )
+    ( vec_push [u] v # u & >> x 16 255 )
+    ( vec_push [u] v # u & >> x 8 255 )
+    ( vec_push [u] v # u & x 255 )
+}
+
+@ bytes_push_u64_le ( Vec u ) v u64 n → v {
+    : i x # i n
+    ( vec_push [u] v # u & x 255 )
+    ( vec_push [u] v # u & >> x 8 255 )
+    ( vec_push [u] v # u & >> x 16 255 )
+    ( vec_push [u] v # u & >> x 24 255 )
+    ( vec_push [u] v # u & >> x 32 255 )
+    ( vec_push [u] v # u & >> x 40 255 )
+    ( vec_push [u] v # u & >> x 48 255 )
+    ( vec_push [u] v # u & >> x 56 255 )
 }
 
 // ── Slice (copy) ───────────────────────────────────────────────────

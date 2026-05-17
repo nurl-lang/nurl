@@ -1221,9 +1221,9 @@ static NurlToken lex_next_tok(NurlLex *lx) {
             NurlToken t = make_tok(LTT_TYPE_KW, id, 0, line); free(id); return t;
         }
         if (strcmp(id, "i8")  == 0 || strcmp(id, "i16") == 0 ||
-            strcmp(id, "i32") == 0 || strcmp(id, "u16") == 0 ||
-            strcmp(id, "u32") == 0 || strcmp(id, "u64") == 0 ||
-            strcmp(id, "f32") == 0) {
+            strcmp(id, "i32") == 0 || strcmp(id, "i64") == 0 ||
+            strcmp(id, "u16") == 0 || strcmp(id, "u32") == 0 ||
+            strcmp(id, "u64") == 0 || strcmp(id, "f32") == 0) {
             NurlToken t = make_tok(LTT_TYPE_KW, id, 0, line); free(id); return t;
         }
         /* namespace syntax: a::b[::c...] is merged into a single IDENT

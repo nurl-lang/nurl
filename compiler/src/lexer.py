@@ -102,6 +102,7 @@ _SINGLE: dict[str, TT] = {
 }
 
 _TYPE_KWS  = frozenset('iufbsv')
+_MULTI_TYPE_KWS = frozenset(('i8', 'i16', 'i32', 'i64', 'u16', 'u32', 'u64', 'f32'))
 _BOOL_KWS  = frozenset(('T', 'F'))
 
 
@@ -324,8 +325,13 @@ class Lexer:
             buf.append(self._advance())
         name = ''.join(buf)
 
-        # Single-character type keywords are reserved
+        # Single-character type keywords are reserved (i u f b s v).
         if len(name) == 1 and name in _TYPE_KWS:
+            return Token(TT.TYPE_KW, name, ln, cl)
+
+        # Multi-char fixed-width type keywords (grammar v1.8 + i64
+        # added 2026-05-17 to close gotcha #7). Mirrors stdlib/runtime.c.
+        if name in _MULTI_TYPE_KWS:
             return Token(TT.TYPE_KW, name, ln, cl)
 
         if name in _BOOL_KWS:

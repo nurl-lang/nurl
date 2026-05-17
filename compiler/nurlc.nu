@@ -153,6 +153,7 @@
     ? ( seq ty `i8` ) `i8`
     ? ( seq ty `i16` ) `i16`
     ? ( seq ty `i32` ) `i32`
+    ? ( seq ty `i64` ) `i64`
     ? ( seq ty `u16` ) `i16`
     ? ( seq ty `u32` ) `i32`
     ? ( seq ty `u64` ) `i64`
@@ -1635,11 +1636,18 @@
                 }
                 // T/F: bool pattern matching i1 tag of Option — no global load needed
                 : b is_bool_pat | ( seq pattern_name `T` ) ( seq pattern_name `F` )
-                // If match_val is already a bare i1 (e.g. `?? some_bool_var`), use it as
-                // the tag directly — no extractvalue needed (i1 is not an aggregate).
-                : b match_is_i1 ( seq match_type `i1` )
-                : s tag_reg ? match_is_i1 match_val ( nurl_cg_reg cg )
-                ? match_is_i1 {} {
+                // If match_val is already a bare scalar tag (i1 from
+                // `?? some_bool`; i64 from a nested `?? e` where `e` was
+                // bound from an `F`-arm of `! T E` and is the enum's
+                // raw i64 tag), use it directly — extractvalue is only
+                // valid on aggregate types (`%Enum`, `{ i1, T }`,
+                // `{ i64, ptr }` etc.). Without the i64 skip, the inner
+                // emit `extractvalue i64 %tag, 0` triggered LLVM's
+                // "extractvalue operand must be aggregate type". Closes
+                // docs/GOTCHAS.md item 6 / memory gotcha #6.
+                : b match_is_bare_tag | ( seq match_type `i1` ) ( seq match_type `i64` )
+                : s tag_reg ? match_is_bare_tag match_val ( nurl_cg_reg cg )
+                ? match_is_bare_tag {} {
                     ( nurl_print `  ` ) ( nurl_print tag_reg )
                     ( nurl_print ` = extractvalue ` ) ( nurl_print match_type )
                     ( nurl_print ` ` ) ( nurl_print match_val ) ( nurl_print `, 0\n` )
@@ -2998,14 +3006,35 @@
                 : s st ( nurl_str_slice pt 0 - ptlen 1 )
                 ? == ( nurl_str_get st 0 ) 37
                 {  // Struct pointer "%T*": next token is either a field
-                    // name or a variable used as array index (e.g. data[i]
-                    // where data: *Struct). Prioritize field name if it exists.
+                    // name or a variable used as array index (e.g.
+                    // `= . data idx x` where data: *Match, idx is the
+                    // index var). When an IDENT is BOTH a local int var
+                    // AND a struct field name, the array-store path is
+                    // the default — this matches how `stdlib/core/vec.nu`
+                    // writes elements with index vars whose names (`len`,
+                    // `idx`, `i`) happen to coincide with struct fields.
+                    //
+                    // EXCEPTION: when the IDENT is a function PARAMETER
+                    // that shadows a field of the same name, the user
+                    // almost certainly meant the field — the "store the
+                    // `cap` argument into `impl.cap`" pattern in
+                    // `stdlib/std/arena.nu` is the canonical case. Pre-
+                    // 2026-05-17 the param branch silently took the
+                    // array-store path and emitted `getelementptr %S, %S*
+                    // %impl, i64 %cap` (value-as-index, no field offset).
+                    // Closes docs/GOTCHAS.md item 10.
                     : i stlen ( nurl_str_len st )
                     : s sname ( nurl_str_slice st 1 - stlen 1 )
                     : s fname ( nurl_lex_val lex )
+                    : s fidx_s ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__idx` ) ) ) )
+                    : b is_field_ident ( is_ident_tok ( nurl_lex_type lex ) )
+                    : b is_field_match & is_field_ident != 0 ( nurl_str_len fidx_s )
+                    : s is_param ( nurl_sym_get syms ( nurl_str_cat fname `__param` ) )
+                    : b field_wins & is_field_match != 0 ( nurl_str_len is_param )
                     : s var_t ( nurl_sym_get syms fname )
-                    ? > ( int_width var_t ) 0
-                    {  // IDENT is an integer variable: array-style store *T[idx] = rhs
+                    ? & ! field_wins > ( int_width var_t ) 0
+                    {  // IDENT is an integer variable (and not a param
+                        // shadowing a field) — array-style store *T[idx] = rhs.
                         : s idx_val ( gen_expr lex syms cg )
                         : s idx_type ( nurl_get_last_type )
                         : s rhs ( gen_expr lex syms cg )
@@ -3021,8 +3050,7 @@
                         ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
                         ^ rhs
                     }
-                    {  // Not an integer variable: check if it is a field name
-                        : s fidx_s ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__idx` ) ) ) )
+                    {  // Not an integer variable (or shadowed by a field): try field.
                         ? != 0 ( nurl_str_len fidx_s )
                         {  // IDENT is a field name: struct field access
                             ( nurl_lex_advance lex )
@@ -3307,6 +3335,17 @@
     ( nurl_lex_advance lex )
     : s ov ( gen_expr lex syms cg )
     : s ot ( nurl_get_last_type )
+    // Snapshot the object pointer's unsigned-ness BEFORE we parse the
+    // index (which may itself clobber `__last_unsigned__` via gen_ident).
+    // For raw-pointer loads `*X p`, the let-stmt tags the binding with
+    // `<name>__unsigned = 1` when X is u/u16/u32/u64 (parse_type_ptr
+    // recurses through parse_type_base, which exposes the element NURL
+    // type to gen_let_or_struct), and gen_ident copies that flag into
+    // `__last_unsigned__` after loading the pointer. We snapshot here
+    // and restore after the load so downstream `# i …` casts pick zext
+    // — without this, a high-bit-set byte (`0x89`) sign-extends to
+    // `0xFFFFFFFFFFFFFF89` and corrupts every subsequent shift+add.
+    : s obj_unsigned_snap ( nurl_sym_get syms `__last_unsigned__` )
 
     // Check object type first to determine access method
     : i otlen ( nurl_str_len ot )
@@ -3335,6 +3374,9 @@
             ( nurl_print `, ` ) ( nurl_print elem_type )
             ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
             ( nurl_set_last_type elem_type )
+            // Restore unsigned flag from object pointer — for raw-ptr
+            // loads, the element shares the pointer's NURL signedness.
+            ( nurl_sym_def syms `__last_unsigned__` obj_unsigned_snap )
             ^ res
         }
         { : s elem_type ( nurl_str_slice ot 0 - otlen 1 )
@@ -3393,6 +3435,8 @@
                 ( nurl_print `, ` ) ( nurl_print elem_type )
                 ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
                 ( nurl_set_last_type elem_type )
+                // Restore — see obj_unsigned_snap comment above.
+                ( nurl_sym_def syms `__last_unsigned__` obj_unsigned_snap )
                 ^ res
             }
         }

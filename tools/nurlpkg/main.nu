@@ -1290,13 +1290,13 @@ $ `stdlib/ext/manifest.nu`
     } {}
     ? != 0 ( nurl_str_eq s_sub `version` ) {
         ( string_free sub )
-        ( nurl_print `nurlpkg 0.6.0\n` )
+        ( nurl_print `nurlpkg 0.6.1\n` )
         ^ 0
     } {}
     // Accept --version as the conventional spelling too.
     ? != 0 ( nurl_str_eq s_sub `--version` ) {
         ( string_free sub )
-        ( nurl_print `nurlpkg 0.6.0\n` )
+        ( nurl_print `nurlpkg 0.6.1\n` )
         ^ 0
     } {}
     ? != 0 ( nurl_str_eq s_sub `help` ) {

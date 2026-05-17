@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2025-10-19
+
 ### Added
 
 * **Generic propagation through nested structs.** Two generic structs
@@ -36,6 +38,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exercises both `[i]` and `[s]`. Naming: uses `[A]` (the existing
   stdlib tparam convention) — `T` is the boolean true literal in NURL
   so cannot be a tparam name.
+
+* **Bytes endianness primitives.** `stdlib/std/bytes.nu` gained six
+  read helpers and six write helpers covering u16 / u32 / u64 in
+  both big-endian (network) and little-endian byte orders:
+  `bytes_read_uN_be/_le → ?T` (None when offset is negative or runs
+  off the end of the buffer), and `bytes_push_uN_be/_le → v` for the
+  symmetric appends. Unblocks binary protocol work (gzip CRC-32 +
+  ISIZE trailers, MessagePack header bytes, BSON length prefixes,
+  raw network packet headers). Regression:
+  `compiler/tests/bytes_endian.nu` (round-trip + boundary values +
+  byte-layout sanity + OOB + negative-offset rejection).
+
+### Fixed
+
+* **Nested `??` on a bare-enum value from an `F` arm of `! T E` now
+  compiles.** `gen_match` was always emitting `extractvalue` to recover
+  the discriminant tag, even when the matched value was already a bare
+  scalar (e.g. an `IoErr` bound by `?? r { F e → ?? e { … } }`, where
+  `e` is just i64). The pre-existing i1 short-circuit is generalised
+  to cover both `i1` AND `i64` match types — `extractvalue` is only
+  emitted on aggregate types now. Closes gotcha #6. Regression:
+  `compiler/tests/nested_match_enum.nu` (direct `??` on Color, nested
+  `??` per-variant on DbErr-from-`! i DbErr`, plus the wildcard arm).
+
+* **Param name shadowing struct field name no longer miscompiles.**
+  `gen_field_store`'s struct-pointer branch now routes `= . obj field
+  val` to the field-store path when the IDENT after `.` is a
+  function parameter AND a registered field of the destination
+  struct. Pre-fix the int-width check ran first and treated the
+  param as an array index, emitting `getelementptr %S, %S* %obj, i64
+  %field` (value-as-index, no field offset). Local non-param int
+  variables that coincide with field names — like vec.nu's
+  `len`/`idx`/`i` array-store kernels — still route through the
+  array path. Closes gotcha #10. Regression:
+  `compiler/tests/param_field_shadow.nu` (Box param-shadow positive +
+  Pt array-store negative control).
+
+* **`i64` recognised as a type keyword.** The C and Python lexers'
+  multi-char TYPE_KW whitelists already covered
+  `i8`/`i16`/`i32`/`u16`/`u32`/`u64`/`f32` but not `i64`, so any
+  source line writing `: i64 name …` silently took the inferred-type
+  branch (`i64` as the binding name, the rest as the value) and
+  produced IR with undefined SSA names. `llvm_type` was missing the
+  `i64 → i64` row symmetrically — even after the lexer fix, the chain
+  fell through to the `%i64` named-type fallback and LLVM rejected the
+  resulting `alloca %i64` as unsized. Both ends fixed; closes gotcha
+  #7. Regression: `compiler/tests/sized_int_binding.nu` covers
+  literal + FFI-call RHS for every sized integer width.
+
+* **Sign-extension when loading bytes from `*u` pointers.**
+  `gen_member` now snapshots `__last_unsigned__` before parsing the
+  index expression and restores it after the load, so a subsequent
+  `# i ( . p k )` cast emits `zext i8 → i64` instead of `sext`. Prior
+  to this, a byte with the high bit set (`0x89`, `0xFF`, …) would
+  sign-extend to `0xFFFFFFFFFFFFFF89` and silently corrupt
+  shift-and-add accumulators in the byte-decoding code that triggered
+  the discovery. Covers both the literal-index and variable-index
+  load paths; struct-field loads not affected.
 
 ### Changed
 
