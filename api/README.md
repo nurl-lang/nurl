@@ -1,51 +1,51 @@
-# NURL API
+  # NURL - Neural Unified Representation Language (Or **N**on h**U**man **R**eadable **L**anguage)
 
-FastAPI-based HTTP interface to the NURL compiler (grammar **v1.1**),
-bundled with a Monaco-based browser playground that runs compiled wasm
-in-page via [`@bjorn3/browser_wasi_shim`](https://github.com/bjorn3/browser_wasi_shim).
+  Self-hosted compiler for the **NURL** programming language, packaged with a FastAPI HTTP API, a Monaco-based browser playground, and a Model
+  Context Protocol (MCP) server — all in one image.
 
-The container bootstraps the NURL compiler from source (via the repo's
-`build.sh`), installs the WASI SDK, and ships both alongside the Python API.
+  NURL is a terse prefix-notation systems language that lowers to LLVM IR. See
+  [github.com/nurl-lang/nurl](https://github.com/nurl-lang/nurl) for the language reference.
 
-## Endpoints
+  ## What's inside
 
-### Playground & UI
-- `GET /` — Monaco-based NURL playground: editor with syntax highlighting,
-  examples dropdown, build-to-wasm + run-in-browser + download buttons.
-- `GET /favicon.svg` — favicon.
-- `GET /static/*` — playground assets.
+  - **`nurlc`** — the self-hosted NURL compiler (bootstrapped `python → nurlc_py → nurlc_self → nurlc_self2`).
+  - **Cross-compilation toolchains**, all preinstalled:
+    - **Linux** ELF — `clang-16` + glibc
+    - **Windows** `.exe` — `mingw-w64` + statically-linked `libcurl` (Schannel TLS, no DLLs to ship)
+    - **macOS** x86_64 Mach-O — `zig cc` with bundled libSystem stubs (libSystem only; no Cocoa/AudioToolbox)
+    - **WebAssembly** — WASI SDK 24 + `wasm-opt` (binaryen) for Asyncify
+  - **FastAPI HTTP API** with `/build`, `/build_wasm`, `/build_windows`, `/build_macos` endpoints.
+  - **Browser playground** at `/` — Monaco editor, examples dropdown, build+run in-page via
+  [`@bjorn3/browser_wasi_shim`](https://github.com/bjorn3/browser_wasi_shim).
+  - **MCP server** at `/mcp` (Streamable HTTP) — tools, resources, prompts for Claude Desktop, Cursor, Windsurf, Zed.
+  - **Bundled assets**: stdlib, examples, compiler test suite, EBNF grammar, README, ROADMAP, GOTCHAS.
+  - **OpenAPI** at `/docs` (Swagger UI), `/redoc`, `/openapi.json`.
 
-### Compiler
-- `POST /build_wasm` — compile NURL source to `wasm32-wasi`.
-  Body: `{"source":"...","filename":"main.nu","return_format":"json"|"binary","emit_ll":false}`.
-  JSON mode returns base64-encoded wasm + compile logs; binary mode returns
-  raw `application/wasm` bytes. `emit_ll: true` also returns the intermediate
-  (post-rewrite) LLVM IR for debugging.
-- `POST /build` — compile NURL source to a **native** Linux binary (mirrors
-  `nurl.sh` inside the container). Body:
-  `{"source":"...","filename":"main.nu","opt":"-O2"}`. Artifacts (`.ll` and
-  the binary) are written to `/app/output` and returned as download URLs
-  along with `stdout`/`stderr` from `nurlc` and `clang`.
-- `GET /download/{token}` — download an artifact produced by `/build`.
-  Tokens expire after `NURL_DOWNLOAD_TTL_SEC` (default 1 h).
+  ## Quick start
 
-### Examples & docs
-- `GET /examples` — JSON list of bundled `.nu` examples.
-- `GET /examples/{name}` — source of a specific example (e.g. `enigma.nu`).
-- `GET /grammar` — current grammar rendered as HTML (from `spec/grammar.ebnf`).
-- `GET /readme` — the repo's top-level `README.md` rendered as HTML.
+  ```bash
+  docker run --rm -p 8000:8000 <your-namespace>/nurl:latest
+  ```
 
-### MCP (Model Context Protocol)
-- `POST /mcp` — Streamable HTTP endpoint for MCP clients (Claude Desktop,
-  Cursor, Windsurf, Zed, etc.). Exposes:
-  - **Tools**: `nurl_build_native`, `nurl_build_wasm`, `nurl_list_examples`,
-    `nurl_read_example`, `nurl_list_stdlib`.
-  - **Resources**: `nurl://grammar`, `nurl://readme`,
-    `nurl://stdlib/{path}`, `nurl://example/{name}`.
-  - **Prompts**: `nurl_coding_assistant`.
+  Then open:
 
-  Example client config (Claude Desktop / Cursor / Windsurf
-  `mcp.json`):
+  - <http://localhost:8000/> — playground
+  - <http://localhost:8000/docs> — Swagger UI
+  - <http://localhost:8000/health> — liveness probe
+  - <http://localhost:8000/mcp> — MCP endpoint
+
+  ## Build a binary via HTTP
+
+  ```bash
+  curl -s -X POST http://localhost:8000/build_wasm \
+    -H 'Content-Type: application/json' \
+    -d '{"source":"@ main → i { ^ 0 }\n","return_format":"binary"}' \
+    -o main.wasm
+  wasmtime main.wasm
+  ```
+
+  ## MCP client config
+
   ```json
   {
     "mcpServers": {
@@ -57,91 +57,36 @@ The container bootstraps the NURL compiler from source (via the repo's
   }
   ```
 
-### Introspection
-- `GET /health` — liveness probe; reports whether `nurlc` is available.
-- `GET /docs` — Swagger UI.
-- `GET /redoc` — ReDoc.
-- `GET /openapi.json` — OpenAPI schema.
+  ## Image details
 
-## Build & run
+  | | |
+  |---|---|
+  | **Base image** | `python:3.12-slim-bookworm` |
+  | **Exposed port** | `8000` |
+  | **User** | non-root (`nurl`, uid 1001) |
+  | **Healthcheck** | `GET /health` every 30 s |
+  | **Supported arch** | `linux/amd64` |
+  | **WASI SDK** | 24.0 |
+  | **Zig** | 0.13.0 |
+  | **libcurl (mingw)** | 8.10.1, static, Schannel |
 
-From the **repository root** (the build context must be the repo root so
-the Dockerfile can access `build.sh`, `compiler/`, `stdlib/`, `examples/`,
-`spec/`, `README.md`, `favicon.svg`):
+  ## Environment variables
 
-```bash
-docker build -f api/Dockerfile -t nurl-api:dev .
-docker run --rm -p 8000:8000 nurl-api:dev
-```
+  Common overrides — full list in the [api README](https://github.com/nurl-lang/nurl/blob/main/api/README.md):
 
-Then open:
+  | Var | Default | Purpose |
+  |---|---|---|
+  | `NURL_API_URL` | `http://localhost:8000` | API base URL for MCP server |
+  | `NURLC_PATH` | `/opt/nurl/build/nurlc` | Self-hosted compiler |
+  | `NURL_WORK_ROOT` | `/opt/nurl` | Temp/working files |
+  | `NURL_DOWNLOAD_TTL_SEC` | `3600` | Artifact download TTL |
 
-- http://localhost:8000/         — playground
-- http://localhost:8000/health   — liveness
-- http://localhost:8000/docs     — Swagger UI
-- http://localhost:8000/grammar  — grammar v1.1
-- http://localhost:8000/readme   — rendered top-level README
+  ## Tags
 
-## Example
+  - `latest` — latest stable release
+  - `vX.Y.Z` — pinned release (matches NURL `vX.Y.Z`)
 
-```bash
-curl -s http://localhost:8000/health | jq
+  ## Source & license
 
-curl -s -X POST http://localhost:8000/build_wasm \
-  -H 'Content-Type: application/json' \
-  -d '{"source":"@ main → i { return 0 }\n","filename":"main.nu"}' | jq
-
-# Download the raw .wasm directly:
-curl -s -X POST http://localhost:8000/build_wasm \
-  -H 'Content-Type: application/json' \
-  -d '{"source":"@ main → i { return 0 }\n","return_format":"binary"}' \
-  -o main.wasm
-wasmtime main.wasm
-
-# Native build (ELF binary, runs inside the container's glibc):
-RESP=$(curl -s -X POST http://localhost:8000/build \
-  -H 'Content-Type: application/json' \
-  -d '{"source":"@ main → i { return 0 }\n","filename":"main.nu"}')
-echo "$RESP" | jq
-BIN_URL=$(echo "$RESP" | jq -r '.binary_artifact.download_url')
-LL_URL=$(echo  "$RESP" | jq -r '.ll_artifact.download_url')
-curl -s -o main    "$BIN_URL" && chmod +x main
-curl -s -o main.ll "$LL_URL"
-```
-
-## Pipeline
-
-1. `nurlc <file.nu>` → LLVM IR on stdout.
-2. The API rewrites the IR to match the `wasm32-wasi` ABI:
-   - renames `@main` → `@__main_argc_argv` (WASI entry-point convention),
-   - injects the `wasm32-wasi` target triple,
-   - inserts i32/i64 shims for `malloc` and `puts` so NURL's i64-centric
-     signatures line up with libc's i32 wasm ABI.
-3. `clang --target=wasm32-wasi -O2 <ir>.ll /opt/nurl/stdlib/runtime.wasm.o -o out.wasm`
-   using the WASI SDK (24.0) bundled into the image.
-
-The wasm-compiled NURL runtime (`stdlib/runtime.wasm.o`) is baked into the
-image at build time.
-
-## Environment variables
-
-The API reads these at startup (defaults shown match the Dockerfile):
-
-| Var | Default | Purpose |
-|---|---|---|
-| `NURLC_PATH` | `/opt/nurl/build/nurlc` | Self-hosted compiler binary |
-| `WASI_CLANG` | `/opt/wasi-sdk/bin/clang` | Clang from the bundled WASI SDK |
-| `NURL_RUNTIME_WASM_O` | `/opt/nurl/stdlib/runtime.wasm.o` | Pre-built wasm runtime object |
-| `NURL_WORK_ROOT` | `/opt/nurl` | Working root for temp files |
-| `NURL_STDLIB_DIR` | `/opt/nurl/stdlib` | Stdlib source dir |
-| `NURL_EXAMPLES_DIR` | `/opt/nurl/examples` | Served by `/examples` |
-| `NURL_GRAMMAR_PATH` | `/opt/nurl/spec/grammar.ebnf` | Served by `/grammar` |
-| `NURL_README_PATH` | `/opt/nurl/README.md` | Served by `/readme` |
-| `STATIC_DIR` | `/opt/nurl/api/static` | Playground assets |
-
-## Local dev (without Docker)
-
-```bash
-pip install -r api/requirements.txt
-NURLC_PATH="$PWD/build/nurlc" uvicorn app.main:app --reload --app-dir api
-```
+  - **Source**: <https://github.com/nurl-lang/nurl>
+  - **License**: dual-licensed **MIT OR Apache-2.0**
