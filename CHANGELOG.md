@@ -10,6 +10,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **DoS connection caps for the HTTP server.** Two-axis protection
+  against connection-exhaustion attacks:
+    - `DosLimits { max_concurrent_conns, max_conns_per_ip }` declares
+      the caps. `dos_default_limits → DosLimits { 1024 16 }` covers
+      the typical single-VM-public-HTTPS shape; CG-NAT'd clients
+      (10s of users behind one public IP) stay under 16 in real usage.
+    - `server_new_with_dos listener handler limits` constructs an
+      HttpServer with a runtime-side `NurlDosState` (mutex-protected
+      counter + linear per-IP table, up to 256 distinct active IPs).
+    - At accept time, `server_run_once` calls
+      `nurl_dos_state_try_acquire`. Over-cap conns are closed
+      immediately at the TCP layer (no canned 503 response — cheapest
+      possible rejection, keeps the server's per-cap cost low).
+    - Per-connection cleanup releases the counter on conn end;
+      multi-worker pools (`server_run_pool`) share the same state via
+      the shared HttpServer handle.
+    - `server_active_conn_count` exposes the live counter for
+      `/metrics`-style observability endpoints.
+
+  Runtime additions in `runtime.c` §23: `NurlDosState` struct + four
+  public entry points (`nurl_dos_state_new` / `_try_acquire` /
+  `_release` / `_free`) + `_active` accessor. Cross-platform mutex
+  (`pthread_mutex_t` POSIX, `CRITICAL_SECTION` Win32). Linear scan
+  with O(1) last-element-swap eviction on count→0 keeps the IP
+  table compact under steady churn.
+
+  Verified live (NURL_NET_TESTS=1):
+  `compiler/tests/http_server_dos.nu` opens 4 concurrent TCP conns
+  from 127.0.0.1 against a server with `max_per_ip=2`; the first
+  two complete the handshake + handler, the last two are rejected
+  pre-handshake → 2 accepted + 2 rejected.
+
 * **TLS extras: SNI + live cert reload + mTLS.** Three additions
   that close the critical-path tuotantopuutteet in the TLS stack
   identified by `critic.md` §10. All built on top of the existing

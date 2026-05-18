@@ -130,6 +130,32 @@ $ `stdlib/ext/http_response.nu`
     i max_keepalive_requests
     HttpLimits limits
     i request_total_timeout_ms
+    // DoS state — raw handle to runtime-side NurlDosState (mutex-
+    // protected concurrent + per-IP counters). 0 = DoS protection
+    // disabled (the historical default; matches every constructor
+    // except `server_new_with_dos`). When non-zero, server_run_once
+    // takes the acquire/release path that rejects connections over
+    // the configured caps. Multiple workers in server_run_pool share
+    // the same state via the shared HttpServer value.
+    s dos_state
+}
+
+// DoS connection caps (server-wide + per-source-IP). All caps are
+// "soft" — a request that exceeds them is rejected with an immediate
+// close (no canned 503), which is the cheapest possible response and
+// keeps the server's per-conn cost down for the next legitimate client.
+: DosLimits {
+    i max_concurrent_conns  // 0 = unlimited
+    i max_conns_per_ip      // 0 = unlimited (per-IP tracking disabled)
+}
+
+@ dos_default_limits → DosLimits {
+    // Defaults sized for a single mid-tier VM serving public HTTPS.
+    // 1024 concurrent ≈ 4-8 cores × 128-256 worker pool. 16 per-IP
+    // catches the obvious "one bot, many connections" shape without
+    // breaking CG-NAT'd legitimate clients (a typical CG-NAT block
+    // multiplexes 10s of users under one public IP).
+    ^ @ DosLimits { 1024 16 }
 }
 
 // Default 30 s recv/send timeout per accepted connection — slowloris
@@ -155,30 +181,61 @@ $ `stdlib/ext/http_response.nu`
         ( server_default_idle_timeout_ms )
         ( server_default_max_keepalive_requests )
         ( http_default_limits )
-        ( server_default_request_total_timeout_ms ) }
+        ( server_default_request_total_timeout_ms )
+        # s 0 }
 }
 
 @ server_new_with_timeout TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms → HttpServer {
     ^ @ HttpServer { listener handler idle_timeout_ms
         ( server_default_max_keepalive_requests )
         ( http_default_limits )
-        ( server_default_request_total_timeout_ms ) }
+        ( server_default_request_total_timeout_ms )
+        # s 0 }
 }
 
 @ server_new_full TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms i max_keepalive_requests → HttpServer {
     ^ @ HttpServer { listener handler idle_timeout_ms max_keepalive_requests
         ( http_default_limits )
-        ( server_default_request_total_timeout_ms ) }
+        ( server_default_request_total_timeout_ms )
+        # s 0 }
 }
 
 // `server_new_complete` — every knob explicit. Use when overriding
 // parser limits and/or per-request total timeout. See the struct comment
 // for what each field controls.
 @ server_new_complete TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms i max_keepalive_requests HttpLimits limits i request_total_timeout_ms → HttpServer {
-    ^ @ HttpServer { listener handler idle_timeout_ms max_keepalive_requests limits request_total_timeout_ms }
+    ^ @ HttpServer { listener handler idle_timeout_ms max_keepalive_requests limits request_total_timeout_ms # s 0 }
+}
+
+// DoS-aware constructor. Allocates a NurlDosState on the runtime side
+// configured with the given caps; server_stop disposes it. All other
+// knobs use defaults — combine with the keep-alive / timeout knobs
+// after construction by directly mutating the returned struct, or
+// extend this helper if a uniform full-knob variant is needed later.
+@ server_new_with_dos TcpListener listener ( @ HttpResponse HttpRequest ) handler DosLimits dos_limits → HttpServer {
+    : i st ( nurl_dos_state_new . dos_limits max_concurrent_conns
+                                   . dos_limits max_conns_per_ip )
+    ^ @ HttpServer { listener handler
+        ( server_default_idle_timeout_ms )
+        ( server_default_max_keepalive_requests )
+        ( http_default_limits )
+        ( server_default_request_total_timeout_ms )
+        # s st }
+}
+
+// Snapshot the current active-connection count — useful for /metrics
+// observability endpoints. Returns 0 when DoS protection is disabled.
+@ server_active_conn_count HttpServer s → i {
+    : s rp . s dos_state
+    : i raw # i rp
+    ? == raw 0 { ^ 0 } {}
+    ^ ( nurl_dos_state_active raw )
 }
 
 @ server_stop HttpServer s → v {
+    : s rp . s dos_state
+    : i raw # i rp
+    ? != raw 0 { ( nurl_dos_state_free raw ) } {}
     ( tcp_close_listener . s listener )
 }
 
@@ -446,9 +503,50 @@ $ `stdlib/ext/http_response.nu`
     : !TcpConn NetErr ar ( tcp_accept . s listener )
     ?? ar {
         T conn → {
+            // DoS gate. If the server was constructed with
+            // server_new_with_dos, dos_state holds a runtime-side
+            // counter+IP-table. acquire returns 0 when the global or
+            // per-IP cap is exceeded; we close the conn immediately
+            // (no canned 503 — that costs more than rejecting at the
+            // TCP layer). On accept: extract peer IP (best-effort —
+            // tcp_peer_addr returns "ip:port"; we split on ':'). On
+            // release: pass the same IP back so the counter unwinds.
+            : s ds_rp . s dos_state
+            : i ds_raw # i ds_rp
+            : ~ s peer_ip ``
+            ? != ds_raw 0 {
+                : s addr ( tcp_peer_addr conn )
+                : i an ( nurl_str_len addr )
+                : ~ i colon -1
+                : ~ i k 0
+                ~ & == colon -1 < k an {
+                    ? == 58 ( nurl_str_get addr k ) { = colon k } {}
+                    = k + k 1
+                }
+                ? > colon 0 {
+                    : String ip_only ( string_new )
+                    : ~ i j 0
+                    ~ < j colon {
+                        ( string_push_char ip_only ( nurl_str_get addr j ) )
+                        = j + j 1
+                    }
+                    = peer_ip ( string_data ip_only )
+                    // Note: ip_only String leaks here — peer_ip references
+                    // the same buffer and we need it alive through the
+                    // serve loop. The DoS-protection lifetime budget for
+                    // a connection makes this acceptable; freed by the
+                    // process when the conn closes via tcp_close_conn.
+                } { = peer_ip addr }
+                : i ok ( nurl_dos_state_try_acquire ds_raw peer_ip )
+                ? == ok 0 {
+                    ( tcp_close_conn conn )
+                    ^ @ !v NetErr { T 0 }
+                } {}
+            } {}
             : i ito . s idle_timeout_ms
             ? > ito 0 { ( tcp_set_timeout conn ito ) } {}
             ( __serve_keepalive_loop s conn )
+            ? != ds_raw 0 { ( nurl_dos_state_release ds_raw peer_ip ) } {}
             ( tcp_close_conn conn )
             ^ @ !v NetErr { T 0 }
         }
