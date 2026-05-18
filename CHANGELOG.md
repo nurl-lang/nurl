@@ -10,6 +10,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **MCP server framework with closure-based registry.**
+  `stdlib/ext/mcp_registry.nu` (~550 LOC) replaces the previous
+  "write your own JSON-RPC dispatch loop" workflow with a uniform
+  `register-tool-with-handler` API. The Channel[A] generic-propagation
+  fix (2026-05-17) unlocked closure-in-Vec storage, which is what
+  makes this possible.
+
+  Three first-class entity types:
+    - `McpTool { name, description, input_schema, ( @ Json Json ) handler }`
+    - `McpPrompt { name, description, arguments_schema, ( @ Json Json ) handler }`
+    - `McpResource { uri, name, mime_type, description, ( @ Json ) handler }`
+
+  Surface:
+    - `mcp_registry_new name version → McpRegistry`
+    - `mcp_registry_add_tool / _add_prompt / _add_resource` —
+      register entities with closure handlers.
+    - `mcp_registry_dispatch r method ?params → Json` — single entry
+      point routing JSON-RPC method names through the per-method
+      dispatchers. Covers `initialize`, `tools/list`, `tools/call`,
+      `prompts/list`, `prompts/get`, `resources/list`,
+      `resources/read`, `ping`. Unknown methods return an
+      `{__error__: "method not found"}` envelope.
+    - `mcp_registry_envelope r req → ?Json` — transport-agnostic
+      single-request adapter. Notifications (no `id`) return None.
+
+  Transports:
+    - **stdio server** — `mcp_serve_stdio r → ! v McpServeErr`
+      reads JSON-RPC frames off stdin (line-delimited per spec),
+      dispatches via the registry, writes responses to stdout. NURL
+      is now a complete bidirectional MCP party (server-side stdio
+      pairs with the existing client-side stdio from `mcp_stdio.nu`).
+    - **HTTP adapter** —
+      `mcp_http_dispatch_for_registry r → ( @ ? Json Json )` returns
+      a closure that plugs straight into the existing
+      `mcp_http_handler` from `stdlib/ext/mcp_http.nu` (batch
+      requests + CORS + session-id echo + SSE stub already covered
+      there).
+    - **Bearer-auth middleware** —
+      `mcp_http_with_bearer_auth handler expected_token` decorates
+      any HTTP handler with `Authorization: Bearer <token>`
+      enforcement. Missing or mismatched → 401 with
+      `WWW-Authenticate: Bearer realm="mcp"`.
+
+  Spec out-of-scope for v1 (tracked):
+    * `resources/subscribe` + change notifications (needs an SSE
+      push channel from a custom accept loop).
+    * `completion/complete` (rarely-used spec feature).
+    * `sampling/createMessage` (server→client reverse RPC).
+
+  Regression: `compiler/tests/mcp_registry.nu` exercises every
+  dispatch path including 2 tool invocations (echo + add(17,25)=42),
+  prompt rendering with arguments, resource read, unknown-method
+  error envelope, and ping.
+
+* **`json_as_str` / `json_as_int` / `json_as_bool` accessors** in
+  `stdlib/ext/json.nu`. Convenience extractors for the leaf-typed
+  variants of `Json`, returning the unwrapped value (or empty/zero
+  for the wrong variant). `json_as_str` returns a BORROWED view
+  into the underlying JStr's String backing buffer — copy via
+  `string_from` for longer-lived references.
+
 * **DoS connection caps for the HTTP server.** Two-axis protection
   against connection-exhaustion attacks:
     - `DosLimits { max_concurrent_conns, max_conns_per_ip }` declares

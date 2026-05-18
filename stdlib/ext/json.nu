@@ -1105,6 +1105,38 @@ $ `stdlib/core/result.nu`
     ^ ( string_from ( string_data src ) )
 }
 
+// ── Accessors ────────────────────────────────────────────────────────
+//
+// Return the unwrapped value of the leaf-typed variants. Empty/default
+// for the wrong variant — these are convenience extractors, not
+// type-checked unwrappers. Use `json_is_*` first if strictness matters.
+//
+// json_as_str returns a BORROWED view into the underlying JStr's
+// String backing buffer — valid only while the source Json lives.
+// Copy via `string_from` if you need a longer-lived String.
+
+@ json_as_str Json j → s {
+    ^ ?? j {
+        JStr s → ( string_data s )
+        _      → ``
+    }
+}
+
+@ json_as_int Json j → i {
+    ^ ?? j {
+        JNum s → ( nurl_str_to_int ( string_data s ) )
+        JBool b → ? b 1 0
+        _      → 0
+    }
+}
+
+@ json_as_bool Json j → b {
+    ^ ?? j {
+        JBool b → b
+        _       → F
+    }
+}
+
 @ json_clone Json j → Json {
     ^ ?? j {
         JNull → @ Json { JNull }
