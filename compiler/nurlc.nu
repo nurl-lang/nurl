@@ -310,9 +310,19 @@
 }
 
 // ? T  →  { i1, T }
+// Side-channel: "__last_opt_nurl_t__" stashes T's NURL source token
+// (e.g. "u" / "i32" / "String") so gen_let_or_struct can propagate
+// the signedness flag down to the binding for the T-arm payload.
+// Single-token T only — paren-compound T (e.g. `( Vec u )`) records the
+// leading `(` here and would need the same `__opt_t_llvm__` fallback
+// that parse_type_res uses; not yet needed because no `? ( Vec u )`
+// site has surfaced.
 @ parse_type_opt i lex → s {
     ( nurl_lex_advance lex )
+    : s inner_tok ( nurl_lex_val lex )
     : s inner ( parse_type lex )
+    ( nurl_sym_def g_res_type_syms `__last_opt_nurl_t__` inner_tok )
+    ( nurl_sym_def g_res_type_syms `__last_opt_t_llvm__` inner )
     ( nurl_str_cat `{ i1, ` ( nurl_str_cat inner ` }` ) )
 }
 
@@ -329,6 +339,11 @@
 // NURL source types are stored in g_res_type_syms under keys:
 //   "__last_res_nurl__"     → e.g. "! i s"
 //   "__last_res_err_llvm__" → LLVM type of E
+//   "__last_res_t_llvm__"   → LLVM type of T (used by gen_match's Ok-arm
+//                             reconstruction when T's NURL source name
+//                             is a parenthesised compound like `( Vec u )`
+//                             whose first lexer token is `(` and can't
+//                             be looked up directly)
 // for compile-time try-propagation type checking.
 @ parse_type_res i lex → s {
     ( nurl_lex_advance lex )
@@ -338,6 +353,7 @@
     : s le ( parse_type lex )
     ( nurl_sym_def g_res_type_syms `__last_res_nurl__` ( nurl_str_cat4 `! ` lt_tok ` ` le_tok ) )
     ( nurl_sym_def g_res_type_syms `__last_res_err_llvm__` le )
+    ( nurl_sym_def g_res_type_syms `__last_res_t_llvm__` lt )
     `{ i1, i64 }`
 }
 
@@ -1746,7 +1762,17 @@
                         = did_reconstruct T
                     } {}
                     ? != 0 ( nurl_str_len nurl_inner_t )
-                    { : s nurl_inner_llvm ( nurl_sym_get syms nurl_inner_t )
+                    { : ~ s nurl_inner_llvm ( nurl_sym_get syms nurl_inner_t )
+                        // Fallback for paren-compound T (e.g. `( Vec u )`):
+                        // `nurl_inner_t` was the literal `(` token from
+                        // parse_type_res's `nurl_lex_val`-before-parse capture,
+                        // which doesn't look up to anything. Use the saved
+                        // LLVM type instead (T-arm only — F-arm reconstruction
+                        // uses single-token enum names like NetErr/WsErr that
+                        // round-trip through the NURL-source path fine).
+                        ? & == 0 ( nurl_str_len nurl_inner_llvm ) ( seq pattern_name `T` )
+                        { = nurl_inner_llvm ( nurl_sym_get syms ( nurl_str_cat match_var_name `__res_t_llvm` ) ) }
+                        {}
                         ? & != 0 ( nurl_str_len nurl_inner_llvm )
                         == ( nurl_str_get nurl_inner_llvm 0 ) 37
                         { : s sname_r ( nurl_str_slice nurl_inner_llvm 1 - ( nurl_str_len nurl_inner_llvm ) 1 )
@@ -1875,6 +1901,19 @@
                 ( nurl_print `* ` ) ( nurl_print vp0 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv0 pt0_eff )
                 ( nurl_sym_def syms ( nurl_str_cat pv0 `__ptr` ) vp0 )
+                // Propagate unsigned flag for `?u` / `?u16` / `?u32` /
+                // `?u64` matches. T-arm only (F-arm has no payload).
+                // Without this, the alloca drops the unsigned-ness and a
+                // downstream `# i b` cast in the arm body emits sext
+                // instead of zext for high-bit-set bytes (bit us in
+                // bytes_to_hex over SHA-1 digests printing the wrong
+                // nibbles).
+                ? & pt0_is_opt_bool & ( seq pattern_name `T` ) != 0 ( nurl_str_len match_var_name )
+                { : s opt_t ( nurl_sym_get syms ( nurl_str_cat match_var_name `__opt_nurl_T` ) )
+                    ? ( nurl_type_is_unsigned opt_t )
+                    { ( nurl_sym_def syms ( nurl_str_cat pv0 `__unsigned` ) `1` ) }
+                    {} }
+                {}
             } {}
             // Bind second payload variable (enum field 2)
             ? != 0 ( nurl_str_len pv1 ) {
@@ -2774,6 +2813,26 @@
                 ( nurl_sym_def syms ( nurl_str_cat name `__res_nurl_T` ) inner_t )
                 ( nurl_sym_def syms ( nurl_str_cat name `__res_nurl_E` ) inner_e ) }
             {}
+            // ALSO stash the LLVM form of T so gen_match can reconstruct
+            // single-pointer-handle structs (Vec/String/Channel/Thread)
+            // whose NURL source is a parenthesised compound like
+            // `( Vec u )` — `inner_t` above is just `(` in that case
+            // and won't look up to anything useful.
+            : s let_res_t_llvm ( nurl_sym_get g_res_type_syms `__last_res_t_llvm__` )
+            ? != 0 ( nurl_str_len let_res_t_llvm )
+            { ( nurl_sym_def syms ( nurl_str_cat name `__res_t_llvm` ) let_res_t_llvm ) }
+            {}
+            // Mirror for `? T`: stash inner-T's NURL token + LLVM type
+            // so gen_match's T-arm payload binding can propagate the
+            // unsigned flag to the alloca for `?u` / `?u16` / `?u32` /
+            // `?u64` matches. Without this the alloca drops the flag
+            // and a downstream `# i b` cast sign-extends high-bit-set
+            // bytes (bit us in bytes_to_hex over SHA-1 digests).
+            : s let_opt_nurl_t ( nurl_sym_get g_res_type_syms `__last_opt_nurl_t__` )
+            ? != 0 ( nurl_str_len let_opt_nurl_t )
+            { ( nurl_sym_def syms ( nurl_str_cat name `__opt_nurl_T` ) let_opt_nurl_t )
+                ( nurl_sym_def g_res_type_syms `__last_opt_nurl_t__` `` ) }
+            {}
             ? == ( nurl_lex_type lex ) TT_LBRACE
             { ( nurl_lex_advance lex )
                 ~ != ( nurl_lex_type lex ) TT_RBRACE { ( nurl_lex_advance lex ) }
@@ -2917,6 +2976,15 @@
             }
             {}
         }
+        // Publish the LHS type as the assignment's result type. If the
+        // assignment lands as the last expression of a match arm or block
+        // ( `?? r { F e → { = err e } }` ), gen_match's phi-typing logic
+        // queries nurl_get_last_type to decide arm_type — without this it
+        // would see whatever coerce_store_val's RHS-evaluation last set,
+        // which can be the un-coerced value type (e.g. raw i64 for the
+        // RHS expression) and disagree with the stored register's actual
+        // type (`%WsErr` post-coercion), producing a phi type mismatch.
+        ( nurl_set_last_type vt )
         ^ store_val
     }
     { ( die lex `expected name after =` ) }
@@ -4067,7 +4135,34 @@
             ( nurl_print ` = insertvalue ` ) ( nurl_print to_ty )
             ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
             ^ r }
-        {} }
+        {  // Single-pointer-handle struct (`{ s ctl }`-shape — Vec[A],
+           // String, Channel[A], Thread, ArenaImpl). When a Result Ok-arm
+           // extract returns the raw i64 payload and the LHS is the
+           // handle struct itself, wrap via inttoptr + insertvalue at
+           // field 0. Without this, code that does
+           //   `: ( Vec u ) v <result-ok-payload>`
+           // emits `store %Vec__i8 i64`, an IR type mismatch.
+           // Skip if the struct has more than one field (multi-field
+           // Result T is heap-boxed at construction so the i64 slot is
+           // a heap pointer, not the f0 field value) — those go through
+           // the gen_match reconstruction path above.
+            : s f0_ty ( nurl_sym_get syms ( nurl_str_cat3 tname `__idx_0` `__type` ) )
+            : s f1_ty ( nurl_sym_get syms ( nurl_str_cat3 tname `__idx_1` `__type` ) )
+            : b is_single_handle & & != 0 ( nurl_str_len f0_ty )
+            == ( nurl_str_get f0_ty - ( nurl_str_len f0_ty ) 1 ) 42
+            == 0 ( nurl_str_len f1_ty )
+            ? is_single_handle
+            { : s p ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print p )
+                ( nurl_print ` = inttoptr i64 ` ) ( nurl_print val )
+                ( nurl_print ` to ` ) ( nurl_print f0_ty ) ( nurl_print `\n` )
+                : s r ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print r )
+                ( nurl_print ` = insertvalue ` ) ( nurl_print to_ty )
+                ( nurl_print ` undef, ` ) ( nurl_print f0_ty )
+                ( nurl_print ` ` ) ( nurl_print p ) ( nurl_print `, 0\n` )
+                ^ r }
+            {} } }
     {}
     // Integer width adjustment for fixed-size types. Source and dest
     // are both integer LLVM types (i8 / i16 / i32 / i64) and the widths

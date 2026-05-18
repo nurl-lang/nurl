@@ -124,18 +124,17 @@ $ `stdlib/core/errors.nu`
 @ bytes_to_hex ( Vec u ) v → String {
     : i n ( vec_len [u] v )
     : String out ( string_with_cap * n 2 )
-    : *u p ( vec_data [u] v )
     : ~ i k 0
     ~ < k n {
-        // Direct pointer load: `# i . p k` goes through gen_member's
-        // post-2026-05-17 zext path so high-bit-set bytes (0x80–0xFF)
-        // load as 128–255 not as their sign-extended negatives.
-        // (The vec_get [u] path still routes the u8 through a match
-        // alloca that doesn't carry the unsigned flag — bug tracked
-        // separately; this hot loop avoids it.)
-        : i b # i . p k
-        ( string_push_char out ( __byte_hex_hi b ) )
-        ( string_push_char out ( __byte_hex_lo b ) )
+        : ?u got ( vec_get [u] v k )
+        ?? got {
+            T b → {
+                : i ib # i b
+                ( string_push_char out ( __byte_hex_hi ib ) )
+                ( string_push_char out ( __byte_hex_lo ib ) )
+            }
+            F _ → {}
+        }
         = k + k 1
     }
     ^ out

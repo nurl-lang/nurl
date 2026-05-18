@@ -557,14 +557,7 @@ $ `stdlib/ext/http_response.nu`
             }
             ( vec_free [u] hdr )
         }
-        F e → {
-            = err e
-            // Trailing void call: keeps the match in statement context
-            // (without it, gen_match tries to phi the F-arm's `= err e`
-            // result against the T-arm's `vec_free` result and the
-            // resulting IR fails verification).
-            ( nurl_print `` )
-        }
+        F e → { = err e }
     }
     ? ! ok { ^ @ ! WsFrame WsErr { F err } } {}
     // Opcode validity
@@ -630,37 +623,26 @@ $ `stdlib/ext/http_response.nu`
     ? > payload_len . lim max_frame_bytes {
         ^ @ ! WsFrame WsErr { F WsFrameTooLarge }
     } {}
-    // Masking key + payload (helper avoids a mutable Vec[u] binding
-    // that the current gen_match's Result-payload extraction mishandles).
     : !( Vec u ) WsErr ppr ( __ws_read_masked_payload conn payload_len )
     ?? ppr {
-        T pb → {
-            // Copy through a fresh Vec[u] — the Result Ok-arm payload
-            // for single-pointer-handle types like `( Vec u )` is
-            // extracted as raw i64 and gen_let_or_struct doesn't yet
-            // emit the `i64 → { ptr }` coercion. Copying via
-            // vec_extend + vec_free sidesteps that until the compiler
-            // path is fixed.
-            : i pblen ( vec_len [u] pb )
-            : ( Vec u ) payload ( vec_with_cap [u] pblen )
-            ( vec_extend [u] payload pb )
-            ( vec_free [u] pb )
+        T payload → {
             ^ @ ! WsFrame WsErr { T @ WsFrame { opcode fin payload } }
         }
         F e → { ^ @ ! WsFrame WsErr { F e } }
     }
 }
 
-// Read the 4-byte masking key + N-byte payload in sequence, then
-// XOR-unmask the payload in place per RFC 6455 §5.3. Returns the
-// OWNED unmasked payload Vec[u].
-// Bitwise XOR of two byte-sized ints. NURL has no XOR operator (`^` is
-// the return keyword), so the identity `a XOR b = (a OR b) - (a AND b)`
+// Bitwise XOR of two byte-sized ints. NURL has no infix XOR operator
+// (`^` is the return keyword), so the identity
+//   `a XOR b = (a OR b) - (a AND b)`
 // is used. Both inputs MUST be in 0..255; result is in 0..255.
 @ __ws_xor8 i a i b → i {
     ^ - | a b & a b
 }
 
+// Read the 4-byte masking key + N-byte payload in sequence, then
+// XOR-unmask the payload in place per RFC 6455 §5.3. Returns the
+// OWNED unmasked payload Vec[u].
 @ __ws_read_masked_payload TcpConn conn i payload_len → !( Vec u ) WsErr {
     : !( Vec u ) WsErr mk_r ( __ws_read_exact conn 4 )
     : ~ i m0 0

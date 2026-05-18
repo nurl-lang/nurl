@@ -77,15 +77,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-* **`stdlib/std/bytes.nu#bytes_to_hex`** switched from the `vec_get [u]`
-  + match-arm path to a direct pointer load. The match-arm path routes
-  the u8 payload through an alloca that does not carry the binding's
-  `__unsigned` flag, so high-bit-set bytes (0x80-0xFF) sign-extended
-  during the `# i b` cast and corrupted the hex output (sha1 / sha256
-  digests printed with the wrong nibbles). The pointer-load path
-  (`# i . p k`) goes through the post-2026-05-17 `gen_member` zext path
-  and is correct. Compiler-level fix for the `?u → T b` match-arm
-  signedness propagation is tracked separately.
+* **Compiler: `?u → T b →` match-arm now propagates the unsigned flag
+  to the payload binding.** `parse_type_opt` stashes the inner-T NURL
+  token in `__last_opt_nurl_t__`; `gen_let_or_struct` copies it to
+  `<name>__opt_nurl_T`; `gen_match`'s T-arm payload binding tags
+  `<pv0>__unsigned = 1` when the inner T is `u` / `u16` / `u32` / `u64`.
+  Without this fix the alloca dropped the unsigned-ness and a
+  downstream `# i b` cast in the arm body emitted `sext` instead of
+  `zext` for high-bit-set bytes, surfacing as wrong hex nibbles in
+  `bytes_to_hex` over SHA-1 / SHA-256 digests. `bytes_to_hex` reverted
+  from its temporary direct-pointer workaround back to the natural
+  `vec_get [u]` + match-arm path.
+
+* **Compiler: `! (Vec u) E` Ok-arm now coerces the i64 payload to the
+  `{ ptr }`-shaped single-handle struct.** Two-part fix:
+  `parse_type_res` stashes `__last_res_t_llvm__` (LLVM type of T) so
+  `gen_let_or_struct` can store `<name>__res_t_llvm` for paren-compound
+  T like `( Vec u )` whose NURL-source name is just `(`;
+  `gen_match`'s reconstruction path uses it as a fallback after the
+  NURL-name lookup fails. Additionally, `coerce_store_val` gained an
+  `i64 → single-pointer-handle-struct` case (one-field struct whose
+  field 0 is a pointer — covers `Vec[A]`, `String`, `Channel[A]`,
+  `Thread`, `Arena`) that wraps via `inttoptr` + `insertvalue` at
+  field 0. Without these, `?? r { T pb → @ Frame { … pb } }` over
+  `! ( Vec u ) E` generated invalid IR (`insertvalue %Frame, i64`)
+  forcing callers into `vec_with_cap + vec_extend` copy workarounds.
+  `ws_read_frame` reverted from the copy workaround back to the
+  direct payload pass-through.
+
+* **Compiler: `gen_assign` now publishes the LHS type via
+  `nurl_set_last_type`.** Without this, an `=`-assignment as the last
+  expression of a match arm (`F e → { = err e }`) reported the
+  RHS-expression's pre-coerce type to the surrounding `gen_match`,
+  causing the phi to be typed for the RHS while the actual stored
+  register held the coerced LHS type. LLVM verifier rejected the
+  mismatch. Surfaced in `ws_read_frame`'s `?? hdr_r { T … F e → { = err e } }`
+  which previously needed a trailing `( nurl_print `` )` to push the
+  arm's last-expression type back to void; that workaround removed.
 
 * **Gzip wire format (RFC 1952).** `stdlib/ext/compress.nu` gains
   `gzip_compress` / `gzip_compress_at level` / `gzip_decompress` —
