@@ -179,6 +179,35 @@ $ `stdlib/core/errors.nu`
     ^ ( tcp_listen_tls_with_backlog host port 128 cert_path key_path )
 }
 
+// TLS listener WITH ALPN (Application-Layer Protocol Negotiation, RFC 7301).
+// `alpn_protocols` is a space-separated list in server-preference order,
+// e.g. "h2 http/1.1". HTTP/2 over TLS (h2) REQUIRES ALPN per RFC 9113
+// §3.3 — without it h2-aware clients (curl, Chrome, …) fall back to
+// HTTP/1.1 silently. Pair with `tcp_alpn_protocol` post-accept to learn
+// what the peer agreed to.
+@ tcp_listen_tls_with_alpn s host i port i backlog s cert_path s key_path s alpn_protocols → !TcpListener NetErr {
+    : i raw ( nurl_tcp_listen_tls_alpn host port backlog cert_path key_path alpn_protocols )
+    : i ek ( nurl_tcp_err_kind raw )
+    ? != 0 ek {
+        ( nurl_tcp_close raw )
+        ^ @ !TcpListener NetErr { F ( __net_err_of ek ) }
+    } {}
+    : TcpListener l @ TcpListener { # s raw }
+    ^ @ !TcpListener NetErr { T l }
+}
+
+// Read the negotiated ALPN protocol off an accepted TLS conn. Returns
+// the empty string for non-TLS conns or when ALPN was not negotiated
+// (peer didn't offer any protocol from the listener's list).
+@ tcp_alpn_protocol TcpConn c → String {
+    : s rp . c raw
+    : i raw # i rp
+    : s sel ( nurl_tcp_alpn_selected raw )
+    : String out ( string_from sel )
+    ( nurl_free sel )
+    ^ out
+}
+
 @ tcp_close_listener TcpListener l → v {
     : s rp . l raw
     : i raw # i rp

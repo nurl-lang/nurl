@@ -10,6 +10,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **HTTP/2 server-side (RFC 9113 + RFC 7541).** Four pure-NURL modules
+  plus one runtime extension for ALPN. Same `( @ HttpResponse HttpRequest )`
+  handler contract as HTTP/1.1 — application code unchanged.
+
+  Modules:
+    - `stdlib/ext/http2_frame.nu` (~360 LOC) — binary framing: 9-byte
+      header + all 10 frame types + connection preface validation +
+      pure round-trip helpers + socket I/O + one-shot senders for
+      SETTINGS / PING / GOAWAY / WINDOW_UPDATE / RST_STREAM.
+    - `stdlib/ext/http2_hpack.nu` (~900 LOC) — RFC 7541 header
+      compression: 61-entry static table + dynamic table with FIFO +
+      size-based eviction + N-bit prefix integer codec + string codec
+      (literal or Huffman) + all 6 header-field representations +
+      complete Huffman decoder covering all 257 Appendix B codes
+      across 21 length buckets (5..30 bits).
+    - `stdlib/ext/http2_conn.nu` (~770 LOC) — connection + stream
+      state machine: SETTINGS exchange + apply, stream state diagram
+      per RFC 9113 §5.1 (idle → open → half-closed → closed),
+      HEADERS+CONTINUATION assembly with §6.10 interleaving check,
+      DATA flow control with connection-level WINDOW_UPDATE
+      replenishment, PING/GOAWAY/RST_STREAM dispatch, request
+      assembly from HTTP/2 pseudo-headers (:method/:path/:scheme/:authority)
+      to the existing HttpRequest shape, response emission with §8.2.2
+      hop-by-hop header stripping.
+    - `stdlib/ext/http2_server.nu` (~100 LOC) — `http2_serve` +
+      `server_run_h2_capable`. The latter accepts a connection,
+      checks ALPN selection via `tcp_alpn_protocol`, and routes to
+      h2 OR the existing HTTP/1.1 keep-alive loop transparently.
+
+  Runtime extension:
+    - `nurl_tcp_listen_tls_alpn(host, port, backlog, cert, key,
+      "h2 http/1.1")` — wraps `SSL_CTX_set_alpn_select_cb` over the
+      existing TLS listener. Wire-format packing of the server's
+      preference list happens C-side. NurlTcp handle gained
+      `alpn_wire` + `alpn_wire_len` fields.
+    - `nurl_tcp_alpn_selected(handle)` — reads
+      `SSL_get0_alpn_selected` post-handshake, returns heap-owned
+      NUL-terminated string ("h2" / "http/1.1" / "").
+    - NURL surface: `tcp_listen_tls_with_alpn` + `tcp_alpn_protocol`
+      in `std/net.nu`.
+
+  v1 scope intentionally excludes:
+    * Client-side h2 (symmetric to server; ship when a consumer asks).
+    * h2c (HTTP/1.1 → h2 cleartext upgrade — TLS+ALPN is the
+      universal modern shape).
+    * PUSH_PROMISE / server push (deprecated by RFC 9113 §8.4).
+    * PRIORITY frames (obsoleted by RFC 9218 — default ordering OK).
+
+  Verified offline against RFC 9113 §4 framing vectors and
+  RFC 7541 Appendix C / C.4.1 HPACK + Huffman vectors via
+  `compiler/tests/http2_basic.nu`. Bootstrap fixed point holds.
+  ASan + UBSan: 0 SAN_FAIL across the 208-test corpus.
+
+  Usage:
+  ```
+  : !TcpListener NetErr ll
+    ( tcp_listen_tls_with_alpn `127.0.0.1` 8443 16
+                               `cert.pem` `key.pem`
+                               `h2 http/1.1` )
+  ?? ll {
+      T listener → {
+          : HttpServer s ( server_new listener my_handler )
+          ( server_run_h2_capable s )
+      }
+      ...
+  }
+  ```
+
 * **Compiler: integer-literal match arms.** `?? value { 1 → ... 42 → ... -1 → ... _ → ... }`
   is now valid wherever `value` has an integer LLVM type (i / i8/16/32/64,
   u/u16/u32/u64). Each arm emits a single `icmp eq <match_type>` and

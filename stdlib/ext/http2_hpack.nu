@@ -323,7 +323,7 @@ $ `stdlib/ext/http.nu`
         ^ @ ! HpackInt HpackErr { F HpackTruncated }
     } {}
     ^ @ ! HpackInt HpackErr {
-        T @ HpackInt { value - + k 1 from }
+        T @ HpackInt { value - k from }
     }
 }
 
@@ -607,7 +607,11 @@ $ `stdlib/ext/http.nu`
                     = ok F
                 } {
                     ( string_push_char out sym )
-                    = bit_window << bit_window used
+                    // Mask to 32-bit window — left-shifting an i64 lets
+                    // data bits escape past bit 31 and probe_bits then
+                    // reads stale high bits. Keep the window aligned in
+                    // the low 32.
+                    = bit_window & << bit_window used 4294967295
                     = bits_avail - bits_avail used
                 }
             } {

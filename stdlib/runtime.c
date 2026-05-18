@@ -4607,6 +4607,13 @@ typedef struct NurlTcp {
      *    recv / send. SSL_shutdown + SSL_free fire on close. */
     SSL_CTX      *ssl_ctx;
     SSL          *ssl;
+    /* ALPN protocol list, wire-format (per RFC 7301): a sequence of
+     * length-prefixed entries, e.g. "\x02h2\x08http/1.1". Owned. NULL
+     * means ALPN was not configured on this listener — the selected
+     * protocol per-conn is left blank and the server defaults to
+     * HTTP/1.1 handling. Freed at handle close. */
+    unsigned char *alpn_wire;
+    size_t         alpn_wire_len;
 #endif
 } NurlTcp;
 
@@ -4830,6 +4837,71 @@ long long nurl_tcp_accept(long long listener) {
  * still return a valid handle so the caller can inspect err_kind.
  * The underlying socket fd is closed if the TLS phase fails after
  * listen() succeeded, so no FD leak. */
+/* ── ALPN (RFC 7301) — server-side protocol selection ─────────────
+ *
+ * Server-side ALPN allows the client + server to negotiate which
+ * application-layer protocol (h2, http/1.1, ...) runs over the TLS
+ * connection. Required by RFC 9113 §3.3 for HTTP/2 over TLS.
+ *
+ * NURL's API uses a space-separated protocol list in server-preference
+ * order, e.g. "h2 http/1.1". We convert it to ALPN wire format
+ * (length-prefixed entries) once at listener-create time, stash the
+ * blob on the NurlTcp handle, and the callback below picks the first
+ * server-preferred match.
+ *
+ * Build-time gated on NURL_HAVE_OPENSSL (matches the rest of the TLS
+ * surface). */
+#ifdef NURL_HAVE_OPENSSL
+
+/* Convert "h2 http/1.1" → "\x02h2\x08http/1.1" (heap-owned, caller
+ * frees). Returns NULL on allocation failure or malformed input
+ * (single token longer than 255 bytes — ALPN length prefix is u8).
+ * `out_len` is set to the wire-format byte count. */
+static unsigned char *nurl__alpn_pack(const char *spec, size_t *out_len) {
+    if (!spec) { *out_len = 0; return NULL; }
+    size_t cap = strlen(spec) + 1;
+    unsigned char *buf = (unsigned char*)malloc(cap);
+    if (!buf) { *out_len = 0; return NULL; }
+    size_t w = 0;
+    const char *p = spec;
+    while (*p) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        const char *tok = p;
+        while (*p && *p != ' ') p++;
+        size_t tlen = (size_t)(p - tok);
+        if (tlen == 0 || tlen > 255) { free(buf); *out_len = 0; return NULL; }
+        buf[w++] = (unsigned char)tlen;
+        memcpy(buf + w, tok, tlen);
+        w += tlen;
+    }
+    *out_len = w;
+    return buf;
+}
+
+static int nurl__alpn_select_cb(SSL *ssl, const unsigned char **out,
+                                unsigned char *outlen,
+                                const unsigned char *in, unsigned int inlen,
+                                void *arg) {
+    (void)ssl;
+    NurlTcp *listener = (NurlTcp*)arg;
+    if (!listener || !listener->alpn_wire || listener->alpn_wire_len == 0) {
+        return SSL_TLSEXT_ERR_NOACK;
+    }
+    /* SSL_select_next_proto returns OPENSSL_NPN_NEGOTIATED (1) on a
+     * server-preferred match, OPENSSL_NPN_NO_OVERLAP (0) otherwise.
+     * The (unsigned char **) cast strips the const because the
+     * OpenSSL prototype is mutable; the data isn't actually written. */
+    int rv = SSL_select_next_proto((unsigned char **)out, outlen,
+                                   listener->alpn_wire,
+                                   (unsigned int)listener->alpn_wire_len,
+                                   in, inlen);
+    if (rv == OPENSSL_NPN_NEGOTIATED) return SSL_TLSEXT_ERR_OK;
+    return SSL_TLSEXT_ERR_NOACK;
+}
+
+#endif
+
 long long nurl_tcp_listen_tls(const char *host, long long port,
                               long long backlog,
                               const char *cert_path, const char *key_path) {
@@ -4878,6 +4950,66 @@ long long nurl_tcp_listen_tls(const char *host, long long port,
     }
     h->ssl_ctx = ctx;
     return lh;
+#endif
+}
+
+/* TLS listener WITH ALPN protocol negotiation. Functionally identical
+ * to nurl_tcp_listen_tls except for the trailing `alpn_protocols`
+ * arg, a space-separated server-preference list ("h2 http/1.1"). On
+ * accept(), the per-conn SSL handle inherits the listener's SSL_CTX
+ * + ALPN callback; clients that don't offer any of the listed
+ * protocols still complete the handshake (SSL_TLSEXT_ERR_NOACK) —
+ * server should treat them as the default (HTTP/1.1). */
+long long nurl_tcp_listen_tls_alpn(const char *host, long long port,
+                                   long long backlog,
+                                   const char *cert_path, const char *key_path,
+                                   const char *alpn_protocols) {
+#ifndef NURL_HAVE_OPENSSL
+    (void)host; (void)port; (void)backlog;
+    (void)cert_path; (void)key_path; (void)alpn_protocols;
+    NurlTcp *h = nurl__tcp_new_handle(NURL_TCP_KIND_LISTENER);
+    if (!h) return 0;
+    h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+    return (long long)(uintptr_t)h;
+#else
+    long long lh = nurl_tcp_listen_tls(host, port, backlog, cert_path, key_path);
+    NurlTcp *h = (NurlTcp*)(uintptr_t)lh;
+    if (!h || h->err_kind != NURL_NET_ERR_OK || !h->ssl_ctx) return lh;
+    size_t wlen = 0;
+    unsigned char *wire = nurl__alpn_pack(alpn_protocols, &wlen);
+    if (!wire || wlen == 0) {
+        /* Empty or malformed list — silently skip ALPN setup; the
+         * connection still works as a non-ALPN TLS listener. */
+        free(wire);
+        return lh;
+    }
+    h->alpn_wire = wire;
+    h->alpn_wire_len = wlen;
+    SSL_CTX_set_alpn_select_cb(h->ssl_ctx, nurl__alpn_select_cb, h);
+    return lh;
+#endif
+}
+
+/* Read the negotiated ALPN protocol from a TLS conn handle. Returns a
+ * heap-owned NUL-terminated string ("h2" / "http/1.1" / ...); empty
+ * when ALPN was not negotiated or the handle is non-TLS. Caller frees
+ * via nurl_free. */
+const char *nurl_tcp_alpn_selected(long long handle) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return strdup("");
+#ifdef NURL_HAVE_OPENSSL
+    if (!h->ssl) return strdup("");
+    const unsigned char *data = NULL;
+    unsigned int len = 0;
+    SSL_get0_alpn_selected(h->ssl, &data, &len);
+    if (!data || len == 0) return strdup("");
+    char *out = (char*)malloc((size_t)len + 1);
+    if (!out) return strdup("");
+    memcpy(out, data, len);
+    out[len] = '\0';
+    return out;
+#else
+    return strdup("");
 #endif
 }
 
@@ -5019,6 +5151,12 @@ void nurl_tcp_close(long long handle) {
         SSL_CTX_free(h->ssl_ctx);
         h->ssl_ctx = NULL;
     }
+    /* ALPN wire blob shipped with the listener — free regardless of
+     * which side (listener vs conn) owns this handle; conn handles
+     * never set alpn_wire, so it's a no-op on those. */
+    free(h->alpn_wire);
+    h->alpn_wire = NULL;
+    h->alpn_wire_len = 0;
 #endif
     if (h->fd != NURL_INVALID_SOCK) {
         nurl_close_sock(h->fd);

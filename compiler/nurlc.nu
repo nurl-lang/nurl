@@ -6692,6 +6692,8 @@
     ( emit `declare i64  @nurl_last_bytes_len()` )
     ( emit `declare i64  @nurl_tcp_listen(i8*, i64, i64)` )
     ( emit `declare i64  @nurl_tcp_listen_tls(i8*, i64, i64, i8*, i8*)` )
+    ( emit `declare i64  @nurl_tcp_listen_tls_alpn(i8*, i64, i64, i8*, i8*, i8*)` )
+    ( emit `declare i8*  @nurl_tcp_alpn_selected(i64)` )
     ( emit `declare i64  @nurl_tcp_accept(i64)` )
     ( emit `declare i64  @nurl_tcp_read(i64, i8*, i64)` )
     ( emit `declare i64  @nurl_tcp_write(i64, i8*, i64)` )
@@ -6961,6 +6963,8 @@
     // string_from when a long-lived String is required).
     ( nurl_sym_def syms `nurl_tcp_listen` `i64` )
     ( nurl_sym_def syms `nurl_tcp_listen_tls` `i64` )
+    ( nurl_sym_def syms `nurl_tcp_listen_tls_alpn` `i64` )
+    ( nurl_sym_def syms `nurl_tcp_alpn_selected` `i8*` )
     ( nurl_sym_def syms `nurl_tcp_accept` `i64` )
     ( nurl_sym_def syms `nurl_tcp_read` `i64` )
     ( nurl_sym_def syms `nurl_tcp_write` `i64` )
