@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-05-18
+
+Headline: **full HTTP/2 server stack (RFC 9113 + RFC 7541)** lands
+alongside **WebSocket (RFC 6455)**, **gzip wire format (RFC 1952)**,
+and an **AddressSanitizer + UndefinedBehaviorSanitizer quality gate**.
+Three compiler fixes (single-pointer-handle Result coercion, `?u`
+match-arm unsigned propagation, `gen_assign` last-type publishing) +
+one new language feature (integer-literal match arms) round out the
+release. Bootstrap fixed point holds; 0 SAN_FAIL across the 208-test
+sanitized corpus.
+
 ### Added
 
 * **HTTP/2 server-side (RFC 9113 + RFC 7541).** Four pure-NURL modules
