@@ -208,6 +208,74 @@ $ `stdlib/core/errors.nu`
     ^ out
 }
 
+// Register a per-hostname cert/key pair on a TLS listener for Server
+// Name Indication (RFC 6066 §3). The cert presented to the client is
+// selected at handshake time based on the client's SNI extension:
+// matching hostname → its dedicated SSL_CTX; no match → falls through
+// to the listener's default cert. May be called repeatedly; in-flight
+// connections are unaffected. Idempotent on re-add (replaces the
+// stored cert/key for an existing hostname). Required for multi-tenant
+// HTTPS where one listener serves several virtual hosts.
+@ tcp_tls_add_sni TcpListener l s hostname s cert_path s key_path → !v NetErr {
+    : s rp . l raw
+    : i raw # i rp
+    : i rc ( nurl_tcp_tls_add_sni raw hostname cert_path key_path )
+    ? != 0 rc {
+        ^ @ !v NetErr { F ( __net_err_of rc ) }
+    } {}
+    ^ @ !v NetErr { T 0 }
+}
+
+// Reload the cert/key on a live TLS listener without dropping pending
+// connections. `hostname` selects the target:
+//   * empty string → the listener's DEFAULT cert (set at listen time)
+//   * any other value → the matching SNI entry (Err if not registered)
+// Implementation: build a fresh SSL_CTX from the new cert/key, swap
+// it in atomically under a per-listener mutex, and SSL_CTX_free the
+// old one. OpenSSL refcounts SSL_CTX internally, so any in-flight
+// SSL_read / SSL_write on the old ctx survives until close. Standard
+// use case: Let's Encrypt cert rotation triggered from a control
+// endpoint or SIGHUP handler.
+@ tcp_tls_reload TcpListener l s hostname s cert_path s key_path → !v NetErr {
+    : s rp . l raw
+    : i raw # i rp
+    : i rc ( nurl_tcp_tls_reload raw hostname cert_path key_path )
+    ? != 0 rc {
+        ^ @ !v NetErr { F ( __net_err_of rc ) }
+    } {}
+    ^ @ !v NetErr { T 0 }
+}
+
+// Require (mTLS) or request (opportunistic) client-cert authentication.
+// `ca_bundle_path` points to a PEM file with the trust roots used to
+// verify peer certificates. When `strict` is true, the handshake fails
+// outright if the client doesn't present a cert; when false, the
+// handshake completes regardless and the application reads
+// `tcp_peer_cert_subject` to decide what to do.
+@ tcp_tls_require_client_cert TcpListener l s ca_bundle_path b strict → !v NetErr {
+    : s rp . l raw
+    : i raw # i rp
+    : i rc ( nurl_tcp_tls_require_client_cert raw ca_bundle_path ? strict 1 0 )
+    ? != 0 rc {
+        ^ @ !v NetErr { F ( __net_err_of rc ) }
+    } {}
+    ^ @ !v NetErr { T 0 }
+}
+
+// Read the peer's certificate Distinguished Name (OpenSSL one-line
+// format, e.g. "/CN=client.example.com/O=Acme/C=US") off a completed
+// TLS conn. Empty when no cert was presented OR the conn is non-TLS.
+// Caller compares against an expected allow-list — this is the
+// primary identity hook for mTLS-authenticated requests.
+@ tcp_peer_cert_subject TcpConn c → String {
+    : s rp . c raw
+    : i raw # i rp
+    : s sub ( nurl_tcp_peer_cert_subject raw )
+    : String out ( string_from sub )
+    ( nurl_free sub )
+    ^ out
+}
+
 @ tcp_close_listener TcpListener l → v {
     : s rp . l raw
     : i raw # i rp

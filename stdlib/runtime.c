@@ -4591,6 +4591,17 @@ typedef int nurl_sockfd_t;
 #    define nurl_close_sock(fd) close(fd)
 #  endif
 
+#ifdef NURL_HAVE_OPENSSL
+/* SNI registry entry — pairs a lowercase hostname with the SSL_CTX
+ * that holds its cert + private key. The SSL_CTX is owned (caller
+ * adds via nurl_tcp_tls_add_sni); freed via SSL_CTX_free which is
+ * refcounted in OpenSSL so in-flight conns survive a reload. */
+typedef struct NurlSniEntry {
+    char    *hostname;
+    SSL_CTX *ctx;
+} NurlSniEntry;
+#endif
+
 typedef struct NurlTcp {
     nurl_sockfd_t fd;
     long long     err_kind;
@@ -4614,8 +4625,97 @@ typedef struct NurlTcp {
      * HTTP/1.1 handling. Freed at handle close. */
     unsigned char *alpn_wire;
     size_t         alpn_wire_len;
+    /* SNI registry — per-hostname cert/key. Empty (NULL) on listeners
+     * that only serve the default ssl_ctx. The SNI callback picks an
+     * entry based on the client's TLS extension; falls through to
+     * ssl_ctx when no entry matches. */
+    NurlSniEntry  *sni_entries;
+    size_t         sni_count;
+    size_t         sni_cap;
+    /* Mutex protects ssl_ctx swap + sni_entries growth during live
+     * cert reload. Init-on-first-TLS-use; lazily because plain TCP
+     * listeners don't need it. */
+  #ifdef _WIN32
+    CRITICAL_SECTION tls_lock;
+  #else
+    pthread_mutex_t  tls_lock;
+  #endif
+    int             tls_lock_init;
 #endif
 } NurlTcp;
+
+#ifdef NURL_HAVE_OPENSSL
+static void nurl__tls_lock_ensure(NurlTcp *h) {
+    if (!h || h->tls_lock_init) return;
+  #ifdef _WIN32
+    InitializeCriticalSection(&h->tls_lock);
+  #else
+    pthread_mutex_init(&h->tls_lock, NULL);
+  #endif
+    h->tls_lock_init = 1;
+}
+static void nurl__tls_lock(NurlTcp *h) {
+    if (!h || !h->tls_lock_init) return;
+  #ifdef _WIN32
+    EnterCriticalSection(&h->tls_lock);
+  #else
+    pthread_mutex_lock(&h->tls_lock);
+  #endif
+}
+static void nurl__tls_unlock(NurlTcp *h) {
+    if (!h || !h->tls_lock_init) return;
+  #ifdef _WIN32
+    LeaveCriticalSection(&h->tls_lock);
+  #else
+    pthread_mutex_unlock(&h->tls_lock);
+  #endif
+}
+static void nurl__tls_lock_destroy(NurlTcp *h) {
+    if (!h || !h->tls_lock_init) return;
+  #ifdef _WIN32
+    DeleteCriticalSection(&h->tls_lock);
+  #else
+    pthread_mutex_destroy(&h->tls_lock);
+  #endif
+    h->tls_lock_init = 0;
+}
+
+/* Case-insensitive ASCII strcmp. Inlined here to keep the SNI lookup
+ * self-contained — runtime.c has a couple of similar one-offs. */
+static int nurl__hostname_ieq(const char *a, const char *b) {
+    if (!a || !b) return 0;
+    while (*a && *b) {
+        unsigned char ca = (unsigned char)*a++;
+        unsigned char cb = (unsigned char)*b++;
+        if (ca >= 'A' && ca <= 'Z') ca = (unsigned char)(ca + 32);
+        if (cb >= 'A' && cb <= 'Z') cb = (unsigned char)(cb + 32);
+        if (ca != cb) return 0;
+    }
+    return *a == 0 && *b == 0;
+}
+
+/* SNI callback (RFC 6066 §3). Invoked by OpenSSL during the client
+ * hello; we look the client-sent servername up in the listener's
+ * sni_entries and call SSL_set_SSL_CTX if it matches. Returns OK
+ * either way — a no-match leaves the conn on the listener's default
+ * ssl_ctx, which is the spec-compliant fallback. */
+static int nurl__sni_select_cb(SSL *ssl, int *al, void *arg) {
+    (void)al;
+    NurlTcp *listener = (NurlTcp*)arg;
+    if (!listener) return SSL_TLSEXT_ERR_OK;
+    const char *name = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
+    if (!name) return SSL_TLSEXT_ERR_OK;
+    nurl__tls_lock(listener);
+    for (size_t i = 0; i < listener->sni_count; i++) {
+        if (nurl__hostname_ieq(listener->sni_entries[i].hostname, name)) {
+            SSL_set_SSL_CTX(ssl, listener->sni_entries[i].ctx);
+            break;
+        }
+    }
+    nurl__tls_unlock(listener);
+    return SSL_TLSEXT_ERR_OK;
+}
+#endif
 
 /* Map host errno → NetErr tag for a generic operation. Specific
  * call-sites override (e.g. read distinguishes EOF/timeout). */
@@ -4990,6 +5090,235 @@ long long nurl_tcp_listen_tls_alpn(const char *host, long long port,
 #endif
 }
 
+/* Build a fresh SSL_CTX configured with the given cert + private key.
+ * Caller owns the returned ctx (SSL_CTX_free). Returns NULL + sets
+ * h->err_kind on failure. Used by nurl_tcp_tls_add_sni + reload. */
+#ifdef NURL_HAVE_OPENSSL
+static SSL_CTX *nurl__tls_build_ctx(NurlTcp *h, const char *cert_path,
+                                    const char *key_path) {
+    SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
+    if (!ctx) {
+        if (h) h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+        return NULL;
+    }
+    SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+    if (SSL_CTX_use_certificate_chain_file(ctx, cert_path) != 1) {
+        SSL_CTX_free(ctx);
+        if (h) h->err_kind = NURL_NET_ERR_TLS_CERT_LOAD;
+        return NULL;
+    }
+    if (SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) != 1) {
+        SSL_CTX_free(ctx);
+        if (h) h->err_kind = NURL_NET_ERR_TLS_KEY_LOAD;
+        return NULL;
+    }
+    if (SSL_CTX_check_private_key(ctx) != 1) {
+        SSL_CTX_free(ctx);
+        if (h) h->err_kind = NURL_NET_ERR_TLS_KEY_LOAD;
+        return NULL;
+    }
+    return ctx;
+}
+#endif
+
+/* Register an additional SNI hostname → cert/key pair on a TLS
+ * listener. The default ssl_ctx (set at listen time) is used when
+ * the client offers no SNI extension OR offers one that doesn't
+ * match any registered hostname — that matches the RFC 6066 §3
+ * "this server does not have an SNI configured for the requested
+ * hostname" fallback.
+ *
+ * Returns 0 on success; non-zero NurlNetErr otherwise (cert/key
+ * load failure most commonly). May be called repeatedly to grow
+ * the registry; existing in-flight conns are unaffected. */
+long long nurl_tcp_tls_add_sni(long long handle, const char *hostname,
+                               const char *cert_path, const char *key_path) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return NURL_NET_ERR_OTHER;
+#ifdef NURL_HAVE_OPENSSL
+    if (!h->ssl_ctx) {
+        h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+        return NURL_NET_ERR_TLS_CTX_INIT;
+    }
+    if (!hostname || !*hostname) {
+        h->err_kind = NURL_NET_ERR_OTHER;
+        return NURL_NET_ERR_OTHER;
+    }
+    SSL_CTX *ctx = nurl__tls_build_ctx(h, cert_path, key_path);
+    if (!ctx) return h->err_kind;
+    nurl__tls_lock_ensure(h);
+    nurl__tls_lock(h);
+    /* Replace if hostname is already registered (idempotent re-add). */
+    int replaced = 0;
+    for (size_t i = 0; i < h->sni_count; i++) {
+        if (nurl__hostname_ieq(h->sni_entries[i].hostname, hostname)) {
+            SSL_CTX *old = h->sni_entries[i].ctx;
+            h->sni_entries[i].ctx = ctx;
+            SSL_CTX_free(old);
+            replaced = 1;
+            break;
+        }
+    }
+    if (!replaced) {
+        /* Grow */
+        if (h->sni_count == h->sni_cap) {
+            size_t newcap = h->sni_cap ? h->sni_cap * 2 : 4;
+            NurlSniEntry *grown = (NurlSniEntry*)realloc(h->sni_entries,
+                newcap * sizeof(NurlSniEntry));
+            if (!grown) {
+                SSL_CTX_free(ctx);
+                nurl__tls_unlock(h);
+                h->err_kind = NURL_NET_ERR_OTHER;
+                return NURL_NET_ERR_OTHER;
+            }
+            h->sni_entries = grown;
+            h->sni_cap = newcap;
+        }
+        h->sni_entries[h->sni_count].hostname = strdup(hostname);
+        h->sni_entries[h->sni_count].ctx = ctx;
+        h->sni_count++;
+    }
+    /* Install the SNI callback on the default ctx (idempotent). */
+    SSL_CTX_set_tlsext_servername_callback(h->ssl_ctx, nurl__sni_select_cb);
+    SSL_CTX_set_tlsext_servername_arg(h->ssl_ctx, h);
+    nurl__tls_unlock(h);
+    h->err_kind = NURL_NET_ERR_OK;
+    return NURL_NET_ERR_OK;
+#else
+    (void)hostname; (void)cert_path; (void)key_path;
+    h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+    return NURL_NET_ERR_TLS_CTX_INIT;
+#endif
+}
+
+/* Live cert reload. `hostname` selects which entry to reload:
+ *   * NULL or empty → swap the listener's DEFAULT ssl_ctx
+ *   * any other value → swap the matching SNI entry; FAIL if no match
+ * The old SSL_CTX is SSL_CTX_free()'d — OpenSSL refcounts internally,
+ * so in-flight conns that already wrapped an SSL from it stay valid
+ * until they close. New accepts immediately use the new ctx.
+ *
+ * Returns 0 on success, NetErr code on failure. */
+long long nurl_tcp_tls_reload(long long handle, const char *hostname,
+                              const char *cert_path, const char *key_path) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return NURL_NET_ERR_OTHER;
+#ifdef NURL_HAVE_OPENSSL
+    if (!h->ssl_ctx) {
+        h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+        return NURL_NET_ERR_TLS_CTX_INIT;
+    }
+    SSL_CTX *new_ctx = nurl__tls_build_ctx(h, cert_path, key_path);
+    if (!new_ctx) return h->err_kind;
+    nurl__tls_lock_ensure(h);
+    nurl__tls_lock(h);
+    if (!hostname || !*hostname) {
+        SSL_CTX *old = h->ssl_ctx;
+        h->ssl_ctx = new_ctx;
+        /* Re-install ALPN + SNI hooks on the new ctx — these were set
+         * on the old ctx and don't carry through. */
+        if (h->alpn_wire && h->alpn_wire_len > 0) {
+            SSL_CTX_set_alpn_select_cb(new_ctx, nurl__alpn_select_cb, h);
+        }
+        if (h->sni_count > 0) {
+            SSL_CTX_set_tlsext_servername_callback(new_ctx, nurl__sni_select_cb);
+            SSL_CTX_set_tlsext_servername_arg(new_ctx, h);
+        }
+        SSL_CTX_free(old);
+        nurl__tls_unlock(h);
+        h->err_kind = NURL_NET_ERR_OK;
+        return NURL_NET_ERR_OK;
+    }
+    /* Per-SNI-entry reload */
+    for (size_t i = 0; i < h->sni_count; i++) {
+        if (nurl__hostname_ieq(h->sni_entries[i].hostname, hostname)) {
+            SSL_CTX *old = h->sni_entries[i].ctx;
+            h->sni_entries[i].ctx = new_ctx;
+            SSL_CTX_free(old);
+            nurl__tls_unlock(h);
+            h->err_kind = NURL_NET_ERR_OK;
+            return NURL_NET_ERR_OK;
+        }
+    }
+    /* No matching SNI entry */
+    SSL_CTX_free(new_ctx);
+    nurl__tls_unlock(h);
+    h->err_kind = NURL_NET_ERR_OTHER;
+    return NURL_NET_ERR_OTHER;
+#else
+    (void)hostname; (void)cert_path; (void)key_path;
+    h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+    return NURL_NET_ERR_TLS_CTX_INIT;
+#endif
+}
+
+/* Require client-cert authentication (mTLS). `ca_bundle_path` points
+ * to a PEM file with the trust roots used to verify peer certs.
+ * `strict` (non-zero) means SSL_VERIFY_FAIL_IF_NO_PEER_CERT is set,
+ * making mTLS mandatory; otherwise the handshake completes with an
+ * unauthenticated peer and the application can decide what to do
+ * via `nurl_tcp_peer_cert_subject`.
+ *
+ * Returns 0 on success, NetErr code on failure. */
+long long nurl_tcp_tls_require_client_cert(long long handle,
+                                            const char *ca_bundle_path,
+                                            long long strict) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return NURL_NET_ERR_OTHER;
+#ifdef NURL_HAVE_OPENSSL
+    if (!h->ssl_ctx) {
+        h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+        return NURL_NET_ERR_TLS_CTX_INIT;
+    }
+    if (SSL_CTX_load_verify_locations(h->ssl_ctx, ca_bundle_path, NULL) != 1) {
+        h->err_kind = NURL_NET_ERR_TLS_CERT_LOAD;
+        return NURL_NET_ERR_TLS_CERT_LOAD;
+    }
+    int mode = SSL_VERIFY_PEER;
+    if (strict) mode |= SSL_VERIFY_FAIL_IF_NO_PEER_CERT;
+    SSL_CTX_set_verify(h->ssl_ctx, mode, NULL);
+    /* Also configure the client-CA list sent in the CertificateRequest
+     * so well-behaved clients pick the right cert when they hold
+     * multiple. SSL_load_client_CA_file reads the same PEM bundle. */
+    STACK_OF(X509_NAME) *list = SSL_load_client_CA_file(ca_bundle_path);
+    if (list) SSL_CTX_set_client_CA_list(h->ssl_ctx, list);
+    h->err_kind = NURL_NET_ERR_OK;
+    return NURL_NET_ERR_OK;
+#else
+    (void)ca_bundle_path; (void)strict;
+    h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+    return NURL_NET_ERR_TLS_CTX_INIT;
+#endif
+}
+
+/* Read the peer's certificate subject (DN in OpenSSL one-line format)
+ * off a completed TLS conn. Returns a heap-owned NUL-terminated
+ * string. Empty when no peer cert was presented or the conn is
+ * non-TLS. Caller frees via nurl_free. */
+const char *nurl_tcp_peer_cert_subject(long long handle) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return strdup("");
+#ifdef NURL_HAVE_OPENSSL
+    if (!h->ssl) return strdup("");
+    X509 *cert = SSL_get_peer_certificate(h->ssl);
+    if (!cert) return strdup("");
+    X509_NAME *subj = X509_get_subject_name(cert);
+    if (!subj) { X509_free(cert); return strdup(""); }
+    char *line = X509_NAME_oneline(subj, NULL, 0);
+    char *out;
+    if (line) {
+        out = strdup(line);
+        OPENSSL_free(line);
+    } else {
+        out = strdup("");
+    }
+    X509_free(cert);
+    return out ? out : strdup("");
+#else
+    return strdup("");
+#endif
+}
+
 /* Read the negotiated ALPN protocol from a TLS conn handle. Returns a
  * heap-owned NUL-terminated string ("h2" / "http/1.1" / ...); empty
  * when ALPN was not negotiated or the handle is non-TLS. Caller frees
@@ -5157,6 +5486,21 @@ void nurl_tcp_close(long long handle) {
     free(h->alpn_wire);
     h->alpn_wire = NULL;
     h->alpn_wire_len = 0;
+    /* SNI registry — only listeners populate this. Each entry owns
+     * its hostname (strdup'd) and SSL_CTX (refcounted; free here
+     * decrements). */
+    if (h->sni_entries) {
+        for (size_t i = 0; i < h->sni_count; i++) {
+            free(h->sni_entries[i].hostname);
+            if (h->sni_entries[i].ctx) SSL_CTX_free(h->sni_entries[i].ctx);
+        }
+        free(h->sni_entries);
+        h->sni_entries = NULL;
+        h->sni_count = 0;
+        h->sni_cap = 0;
+    }
+    /* TLS lock — only initialised if SNI / reload was ever called. */
+    nurl__tls_lock_destroy(h);
 #endif
     if (h->fd != NURL_INVALID_SOCK) {
         nurl_close_sock(h->fd);

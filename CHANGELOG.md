@@ -8,6 +8,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* **TLS extras: SNI + live cert reload + mTLS.** Three additions
+  that close the critical-path tuotantopuutteet in the TLS stack
+  identified by `critic.md` §10. All built on top of the existing
+  `tcp_listen_tls` listener — the new operations attach to an
+  already-created listener and take effect on subsequent handshakes.
+
+    - `tcp_tls_add_sni listener hostname cert_path key_path → !v NetErr`
+      Registers a per-virtual-host cert/key against the listener
+      using OpenSSL's `SSL_CTX_set_tlsext_servername_callback`.
+      Clients that offer no SNI extension OR offer an unknown
+      hostname fall through to the default cert (set at listen
+      time) — matches RFC 6066 §3 server semantics. Idempotent
+      on re-add (replaces the stored pair for an existing host).
+      Required for multi-tenant HTTPS where one listener serves
+      multiple virtual hosts.
+
+    - `tcp_tls_reload listener ?hostname cert_path key_path → !v NetErr`
+      Atomically swaps the listener's default SSL_CTX (empty
+      hostname) OR a matching SNI entry's SSL_CTX with one built
+      from the new cert/key files. Per-listener mutex serialises
+      the swap against the concurrent accept loop; OpenSSL refcounts
+      the old SSL_CTX so in-flight conns that already wrapped an
+      SSL handle from it stay valid until they close. Natural
+      shape for Let's Encrypt cert rotation triggered from SIGHUP
+      or a control endpoint.
+
+    - `tcp_tls_require_client_cert listener ca_bundle_path b strict → !v NetErr`
+      Sets `SSL_VERIFY_PEER` on the listener; when `strict` is true,
+      adds `SSL_VERIFY_FAIL_IF_NO_PEER_CERT` so the handshake fails
+      outright for unauthenticated clients (mTLS-mandatory).
+      `tcp_peer_cert_subject TcpConn → String` reads the peer's
+      X509 DN in OpenSSL one-line format (e.g.
+      "/CN=test-client/O=NURL/C=FI") for the application's
+      authorisation decisions.
+
+  Verified live (NURL_NET_TESTS=1):
+  `compiler/tests/http_server_tls_extras.nu` runs three sections —
+  SNI hostname dispatch (api.example.com → CN=api cert,
+  www.example.com → CN=www cert, unknown.example.com → fallback to
+  CN=localhost default), live reload (CN=localhost → swap →
+  CN=reloaded.example.com), and mTLS (no client cert → rejected,
+  valid client cert → 200 OK). All probes driven via `openssl
+  s_client` shell-outs.
+
+  Runtime additions in `runtime.c` §18: `NurlTcp` grew
+  `sni_entries` + `sni_count` + `sni_cap` + a per-listener
+  cross-platform mutex (`pthread_mutex_t` on POSIX,
+  `CRITICAL_SECTION` on Windows). Four new C entry points
+  (`nurl_tcp_tls_add_sni`, `nurl_tcp_tls_reload`,
+  `nurl_tcp_tls_require_client_cert`, `nurl_tcp_peer_cert_subject`).
+  `tcp_close` extended to free the SNI registry + destroy the
+  mutex; in-flight SSL_CTX refs are released via SSL_CTX_free's
+  refcount decrement, so cleanup is safe under concurrent shutdown.
+
 ## [0.7.0] — 2026-05-18
 
 Headline: **full HTTP/2 server stack (RFC 9113 + RFC 7541)** lands
