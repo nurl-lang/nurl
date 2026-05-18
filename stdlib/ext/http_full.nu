@@ -34,6 +34,13 @@
 //                                                                 (ext/http_middleware)
 //   * Phase 9 multipart        ─ MultipartPart, parse_multipart_form,
 //                                request_multipart_parts          (ext/http_multipart)
+//   * Phase 9 WebSocket        ─ ws_is_upgrade, ws_accept_key,
+//                                ws_perform_handshake,
+//                                ws_read_frame / ws_write_frame,
+//                                ws_send_text / _binary / _ping /
+//                                _pong / _close,
+//                                ws_read_message, ws_serve_messages,
+//                                ws_validate_utf8                 (ext/websocket)
 //   * HTTP client + JSON       ─ http_get, http_post, http_post_json,
 //                                http_put_json                    (ext/http, ext/http_json)
 //
@@ -78,3 +85,4 @@ $ `stdlib/ext/http_static.nu`
 $ `stdlib/ext/http_auth.nu`
 $ `stdlib/ext/http_middleware.nu`
 $ `stdlib/ext/http_multipart.nu`
+$ `stdlib/ext/websocket.nu`

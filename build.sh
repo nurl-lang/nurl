@@ -132,17 +132,25 @@ else
 fi
 
 # ── zlib detection ──────────────────────────────────────────
-# Gzip FFI is PURE NURL (`stdlib/ext/gzip.nu`); the sentinel below
-# satisfies the compile-time FFI-lib check and the link line picks up
-# -lz so user programs that include gzip.nu link cleanly.
+# `stdlib/ext/compress.nu`'s `zlib_*` helpers (RFC 1950 stream format)
+# are pure-NURL `& `z` @ compress2 / uncompress` calls. The `gzip_*`
+# helpers (RFC 1952 file format) need libz's streaming API whose
+# `z_stream` layout is platform-specific, so they go through the thin
+# `nurl_gzip_compress` / `nurl_gzip_decompress` bridge in runtime.c §22
+# — that path is enabled by `-DNURL_HAVE_ZLIB`. The sentinel below
+# also satisfies the compile-time FFI-lib check so a NURL program that
+# imports compress.nu without zlib1g-dev installed fails with a clear
+# diagnostic rather than a cryptic linker error.
+ZLIB_CFLAGS=""
 ZLIB_LIBS=""
 if pkg-config --exists zlib 2>/dev/null; then
+    ZLIB_CFLAGS="-DNURL_HAVE_ZLIB $(pkg-config --cflags zlib)"
     ZLIB_LIBS="$(pkg-config --libs zlib)"
     echo 1 > stdlib/runtime.z
     log "[info] zlib detected — Gzip FFI enabled"
 else
     rm -f stdlib/runtime.z
-    log "[info] zlib not found — stdlib/ext/gzip.nu will fail at compile time"
+    log "[info] zlib not found — stdlib/ext/compress.nu's gzip_* will return CompressOther"
 fi
 
 # ── libzstd detection ──────────────────────────────────────
@@ -153,7 +161,7 @@ if pkg-config --exists libzstd 2>/dev/null; then
     log "[info] libzstd detected — Zstd FFI enabled"
 else
     rm -f stdlib/runtime.zstd
-    log "[info] libzstd not found — stdlib/ext/zstd.nu will fail at compile time"
+    log "[info] libzstd not found — stdlib/ext/compress.nu's zstd_* will return CompressOther"
 fi
 
 # ── Build stages ─────────────────────────────────────────────
@@ -162,7 +170,7 @@ fi
 # matching `-flto` on every clang invocation that consumes runtime.o
 # (this script, nurl.sh, compiler/tests/run_tests.sh, tools/*/build.sh)
 # triggers the LTO link pipeline.
-step "runtime"       bash -c "'$CLANG' -O2 -flto $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
+step "runtime"       bash -c "'$CLANG' -O2 -flto $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $ZLIB_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
 
 # Always build canvas.o. With SDL2 headers present we get the real
 # native back-end (-DNURL_HAVE_SDL2); otherwise we compile a stub that

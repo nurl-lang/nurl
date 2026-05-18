@@ -8,6 +8,140 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* **WebSocket server-side (RFC 6455).** `stdlib/ext/websocket.nu`
+  (~570 LOC pure NURL). Composes on the HTTP/1.1 stack: client sends
+  `Upgrade: websocket` + `Sec-WebSocket-Key` + `Sec-WebSocket-Version: 13`,
+  server validates via `ws_perform_handshake[_with]` and writes the
+  `101 Switching Protocols` response, both sides switch to the binary
+  frame protocol over the SAME `TcpConn`. TLS works transparently —
+  `wss://` routes through `tcp_listen_tls` + the polymorphic `TcpConn`
+  SSL dispatch with zero additional code in this module.
+
+  **Surface:**
+    - Handshake: `ws_is_upgrade`, `ws_accept_key`,
+      `ws_handshake_response_for`, `ws_perform_handshake[_with]`
+      (`_with` accepts an optional subprotocol echo).
+    - Low-level frame I/O: `ws_serialize_frame` (pure, testable builder),
+      `ws_read_frame`, `ws_write_frame`.
+    - Convenience writers (server-side, never masked per RFC §5.1):
+      `ws_send_text`, `ws_send_binary`, `ws_send_ping`, `ws_send_pong`,
+      `ws_send_close i code s reason`.
+    - Message reader: `ws_read_message` assembles continuation frames
+      per RFC §5.4, auto-pongs incoming pings, surfaces peer close as
+      `WsClosedByPeer`. Text payloads validated UTF-8 before return.
+    - Serve loop: `ws_serve_messages` reads messages, dispatches to a
+      `( @ ! v WsErr WsMessage )` handler, performs the full close
+      handshake on exit (mapping errors to RFC §7.4 close codes:
+      `WsInvalidUtf8 → 1007`, `WsProtocol*  → 1002`, `WsMessageTooLarge → 1009`,
+      everything else `→ 1011`).
+    - `WsLimits { max_frame_bytes, max_message_bytes, read_timeout_ms,
+      fragment_max_count }`; defaults are 16 MiB / 64 MiB / 60 s / 128.
+    - `ws_validate_utf8` (RFC 3629 strict) is exposed publicly — useful
+      outside the WebSocket context too.
+
+  **Validation rigour:** RSV1–3 bits must be 0 → `WsProtocolReservedBit`;
+  opcode must be in {0,1,2,8,9,10} → `WsProtocolBadOpcode`; control frames
+  MUST have FIN=1 (`WsProtocolControlFragmented`) and payload ≤125 B
+  (`WsProtocolControlTooLarge`); client→server frames MUST be masked
+  (`WsProtocolUnmasked`); text payloads MUST be valid UTF-8 — overlongs,
+  UTF-16 surrogates (U+D800-U+DFFF), and codepoints above U+10FFFF all
+  rejected; close codes constrained to 1000–4999; the fragment-count
+  cap defends against a ping-flood interleaved with continuation frames.
+
+  **Verified against RFC 6455 vectors:**
+    - §1.3 accept-key worked example
+      (`dGhlIHNhbXBsZSBub25jZQ==` → `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=`).
+    - §5.7 unmasked text frame `"Hello"` round-trips to
+      `81 05 48 65 6c 6c 6f`.
+    - Length-encoding transitions: 126-byte payload triggers the 16-bit
+      extended-length header; 65536-byte triggers the 64-bit form
+      (with the spec-required MSB-clear check on the top byte).
+
+  Regression: `compiler/tests/websocket_basic.nu` (6 sections, 30
+  assertions). v1 scope is server-side only — a symmetric client-side
+  API is tracked for follow-on work if a real consumer asks. No
+  `permessage-deflate` extension; subprotocol header echo is the only
+  negotiation surface.
+
+* **SHA-1 in runtime §17** (RFC 3174 self-contained, ~80 LOC). Added to
+  enable the WebSocket handshake's `Sec-WebSocket-Accept` derivation;
+  exposed via new `sha1_bytes` (length-aware, binary-safe → 20 raw
+  bytes) and `sha1_hex` (→ 40-char lowercase) in `stdlib/std/hash.nu`.
+  SHA-1 is documented as protocol-compatibility-only — not recommended
+  for new security-sensitive code; use `sha256_hex` for that.
+
+* **`stdlib/ext/http_full.nu`** now imports `ext/websocket.nu` so one
+  `$`-include brings the full HTTP stack including WebSockets in scope.
+
+### Fixed
+
+* **`stdlib/std/bytes.nu#bytes_to_hex`** switched from the `vec_get [u]`
+  + match-arm path to a direct pointer load. The match-arm path routes
+  the u8 payload through an alloca that does not carry the binding's
+  `__unsigned` flag, so high-bit-set bytes (0x80-0xFF) sign-extended
+  during the `# i b` cast and corrupted the hex output (sha1 / sha256
+  digests printed with the wrong nibbles). The pointer-load path
+  (`# i . p k`) goes through the post-2026-05-17 `gen_member` zext path
+  and is correct. Compiler-level fix for the `?u → T b` match-arm
+  signedness propagation is tracked separately.
+
+* **Gzip wire format (RFC 1952).** `stdlib/ext/compress.nu` gains
+  `gzip_compress` / `gzip_compress_at level` / `gzip_decompress` —
+  byte-identical interop with the `gzip` / `gunzip` CLI tools and HTTP
+  `Content-Encoding: gzip`. Magic + 10-byte header, raw deflate body,
+  CRC-32 + ISIZE trailer, all per RFC 1952. Decompress auto-detects
+  gzip OR zlib wire format on the input side (libz's
+  `inflateInit2_(windowBits=15+32)`), so a single helper handles both
+  shapes coming back from heterogeneous peers. Decompress also reads
+  the ISIZE trailer to pre-size the output buffer, avoiding the
+  grow-and-retry loop on the common path (sub-4 GB inputs).
+  Errors map to the existing `CompressErr` enum
+  (`CompressData` / `CompressMemory` / `CompressBufTooSmall` /
+  `CompressOther`). Empty input passes through to an empty `Vec[u]`
+  with no magic-byte production, matching the zlib/zstd shape.
+  Regression: `compiler/tests/compress_gzip.nu` (round-trip + magic
+  bytes 0x1f 0x8b 0x08 + level-0 store-only + empty + auto-detect
+  zlib + garbage rejection).
+
+* **`runtime.c` §22 — gzip bridge.** `nurl_gzip_compress` /
+  `nurl_gzip_decompress` wrap libz's streaming
+  `deflateInit2_(windowBits=15+16)` / `inflateInit2_(windowBits=15+32)`
+  + `deflate(Z_FINISH)` / `inflate(Z_FINISH)` + matching `End`. ABI
+  mirrors `compress2` / `uncompress` (in/out `dst_len`, return 0 on
+  success or libz error code on failure; sentinel `-98` when the build
+  lacked zlib). The C-side bridge stays because `z_stream`'s sizeof
+  and field layout are platform-specific (88 B on Win64 LLP64, 112 B
+  on Linux/macOS x64 LP64), and `deflateInit2_` checks an exact-sizeof
+  match — mirroring the struct from NURL would be brittle across
+  toolchains. Same architectural pattern as the sqlite3 borrowed-view
+  bridge: thin, ABI-faithful, no state caching beyond what libz needs.
+
+### Changed
+
+* **`stdlib/ext/compress.nu` header comment** updated: the
+  zlib-vs-gzip wire-format gap section now documents the gzip helpers
+  shipped alongside, with a pointer to `runtime.c` §22 for the bridge
+  rationale.
+
+* **`build.sh`** zlib detection now sets
+  `ZLIB_CFLAGS="-DNURL_HAVE_ZLIB ..."` and threads it into the runtime
+  compile step so the §22 bridge compiles in when zlib1g-dev is
+  present. Without zlib, `nurl_gzip_*` short-circuit to the
+  `NURL_GZIP_ERR_UNSUPPORTED` sentinel which the NURL surface maps to
+  `CompressOther` — graceful runtime degradation rather than a link
+  error.
+
+### Fixed
+
+* **Stale "Quoted CSV Support" roadmap entry closed.** `stdlib/ext/csv.nu`
+  has implemented RFC 4180 quoting via the `CSVDialect { delimiter,
+  crlf, quote_char }` struct (and the matching `CSVTable` arena's
+  `escape_buf`) since the v2 arena rewrite. The roadmap line was a
+  leftover from the pre-arena CSV prototype; surfaced and removed
+  during the critic-cleanup sweep.
+
 ## [0.6.1] - 2025-10-19
 
 ### Added

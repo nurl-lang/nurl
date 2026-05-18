@@ -6565,6 +6565,7 @@
     ( emit `declare void @nurl_proc_spawn_free(i64)` )
     ( emit `declare i8*  @nurl_sha256_hex(i8*)` )
     ( emit `declare i8*  @nurl_hmac_sha256_hex(i8*, i8*)` )
+    ( emit `declare void @nurl_sha1_bytes(i8*, i64, i8*)` )
     ( emit `declare i64  @nurl_rand_u64()` )
     ( emit `declare i8*  @nurl_rand_bytes_hex(i64)` )
     ( emit `declare i8*  @nurl_read_file_bytes(i8*)` )
@@ -6825,6 +6826,7 @@
     // their own copy + free.
     ( nurl_sym_def syms `nurl_sha256_hex` `i8*` )
     ( nurl_sym_def syms `nurl_hmac_sha256_hex` `i8*` )
+    ( nurl_sym_def syms `nurl_sha1_bytes` `void` )
     ( nurl_sym_def syms `nurl_rand_u64` `i64` )
     ( nurl_sym_def syms `nurl_rand_bytes_hex` `i8*` )
     // Binary file I/O (runtime §4 extension). Read returns a heap buffer +

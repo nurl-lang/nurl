@@ -4360,6 +4360,105 @@ const char* nurl_rand_bytes_hex(long long n) {
     return out;
 }
 
+/* ── SHA-1 (RFC 3174) — self-contained for WebSocket handshake ─────
+ *
+ * RFC 6455 §4.2.2 mandates SHA-1 in the Sec-WebSocket-Accept derivation;
+ * no security guarantee is implied by the algorithm choice — it is a
+ * fixed handshake hashing step. Implementation style mirrors the SHA-256
+ * block above (public-domain transform + init/update/final + a length-
+ * aware public entry). 80 rounds, 4 round functions, 4 K-constants per
+ * RFC 3174 §6.1.
+ *
+ * Public ABI:
+ *   void nurl_sha1_bytes(const unsigned char *data, long long len,
+ *                        unsigned char out[20]);
+ */
+
+typedef struct {
+    uint32_t state[5];
+    uint64_t bitlen;
+    uint8_t  data[64];
+    size_t   datalen;
+} NurlSha1Ctx;
+
+static void nurl_sha1_transform(NurlSha1Ctx *ctx, const uint8_t *data) {
+    uint32_t w[80];
+    for (int i = 0, j = 0; i < 16; i++, j += 4) {
+        w[i] = ((uint32_t)data[j] << 24) | ((uint32_t)data[j+1] << 16)
+             | ((uint32_t)data[j+2] << 8) | ((uint32_t)data[j+3]);
+    }
+    for (int i = 16; i < 80; i++) {
+        uint32_t x = w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16];
+        w[i] = (x << 1) | (x >> 31);
+    }
+    uint32_t a = ctx->state[0], b = ctx->state[1], c = ctx->state[2];
+    uint32_t d = ctx->state[3], e = ctx->state[4];
+    for (int i = 0; i < 80; i++) {
+        uint32_t f, k;
+        if (i < 20)       { f = (b & c) | ((~b) & d);            k = 0x5A827999u; }
+        else if (i < 40)  { f = b ^ c ^ d;                       k = 0x6ED9EBA1u; }
+        else if (i < 60)  { f = (b & c) | (b & d) | (c & d);     k = 0x8F1BBCDCu; }
+        else              { f = b ^ c ^ d;                       k = 0xCA62C1D6u; }
+        uint32_t t = ((a << 5) | (a >> 27)) + f + e + k + w[i];
+        e = d; d = c; c = (b << 30) | (b >> 2); b = a; a = t;
+    }
+    ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c;
+    ctx->state[3] += d; ctx->state[4] += e;
+}
+
+static void nurl_sha1_init(NurlSha1Ctx *ctx) {
+    ctx->datalen = 0;
+    ctx->bitlen = 0;
+    ctx->state[0] = 0x67452301u;
+    ctx->state[1] = 0xEFCDAB89u;
+    ctx->state[2] = 0x98BADCFEu;
+    ctx->state[3] = 0x10325476u;
+    ctx->state[4] = 0xC3D2E1F0u;
+}
+
+static void nurl_sha1_update(NurlSha1Ctx *ctx, const uint8_t *data, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        ctx->data[ctx->datalen++] = data[i];
+        if (ctx->datalen == 64) {
+            nurl_sha1_transform(ctx, ctx->data);
+            ctx->bitlen += 512;
+            ctx->datalen = 0;
+        }
+    }
+}
+
+static void nurl_sha1_final(NurlSha1Ctx *ctx, uint8_t out[20]) {
+    size_t i = ctx->datalen;
+    if (ctx->datalen < 56) {
+        ctx->data[i++] = 0x80;
+        while (i < 56) ctx->data[i++] = 0;
+    } else {
+        ctx->data[i++] = 0x80;
+        while (i < 64) ctx->data[i++] = 0;
+        nurl_sha1_transform(ctx, ctx->data);
+        memset(ctx->data, 0, 56);
+    }
+    ctx->bitlen += (uint64_t)ctx->datalen * 8;
+    for (int k = 0; k < 8; k++)
+        ctx->data[63 - k] = (uint8_t)(ctx->bitlen >> (8 * k));
+    nurl_sha1_transform(ctx, ctx->data);
+    for (int k = 0; k < 4; k++) {
+        for (int j = 0; j < 5; j++) {
+            out[k + j*4] = (uint8_t)(ctx->state[j] >> (24 - k*8));
+        }
+    }
+}
+
+void nurl_sha1_bytes(const unsigned char *data, long long len,
+                     unsigned char out[20]) {
+    NurlSha1Ctx ctx;
+    nurl_sha1_init(&ctx);
+    if (data && len > 0) {
+        nurl_sha1_update(&ctx, data, (size_t)len);
+    }
+    nurl_sha1_final(&ctx, out);
+}
+
 /* ── §18  TCP sockets (HTTP server foundation) ──────────────────── */
 /*
  * Minimum viable TCP layer used by stdlib/std/net.nu and the upcoming
@@ -5799,6 +5898,84 @@ long long nurl_sqlite_reset(long long handle) {
 #else
     s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
     return s->err_kind;
+#endif
+}
+
+/* ── §22  Gzip wire format (libz stream API) ───────────────────────
+ *
+ * NURL surface (`stdlib/ext/compress.nu`) ships zlib-stream helpers as
+ * pure-NURL `& \`z\` @ compress2 / uncompress` calls — those work fine
+ * because libz's `compress2` is a self-contained one-shot ABI. The
+ * gzip file format (RFC 1952, `1f 8b` magic + CRC-32 + ISIZE trailer)
+ * requires the streaming API (`deflateInit2_` / `deflate` / `deflateEnd`)
+ * whose `z_stream` struct has a platform-specific size — 88 bytes on
+ * 64-bit Windows (LLP64, `uLong` is 4) vs 112 on Linux/macOS 64-bit
+ * (LP64, `uLong` is 8). Mirroring that layout from NURL would be
+ * brittle, so this thin ABI bridge keeps z_stream entirely C-side.
+ * Behaviour mirrors libz's `compress2` / `uncompress`: `dst_len` is
+ * in/out, return 0 on success / negative on failure. */
+
+#define NURL_GZIP_ERR_UNSUPPORTED -98
+
+#ifdef NURL_HAVE_ZLIB
+#include <zlib.h>
+#endif
+
+int nurl_gzip_compress(unsigned char *dst, long long *dst_len,
+                       unsigned char *src, long long src_len, int level) {
+#ifdef NURL_HAVE_ZLIB
+    z_stream s;
+    s.zalloc = Z_NULL;
+    s.zfree  = Z_NULL;
+    s.opaque = Z_NULL;
+    s.next_in   = src;
+    s.avail_in  = (uInt)src_len;
+    s.next_out  = dst;
+    s.avail_out = (uInt)*dst_len;
+    /* windowBits 15 + 16 → wrap raw deflate in the gzip file format. */
+    int rc = deflateInit2(&s, level, Z_DEFLATED, 15 + 16, 8,
+                          Z_DEFAULT_STRATEGY);
+    if (rc != Z_OK) return rc;
+    rc = deflate(&s, Z_FINISH);
+    if (rc != Z_STREAM_END) {
+        deflateEnd(&s);
+        return (rc == Z_OK) ? Z_BUF_ERROR : rc;
+    }
+    *dst_len = (long long)s.total_out;
+    return deflateEnd(&s);
+#else
+    (void)dst; (void)dst_len; (void)src; (void)src_len; (void)level;
+    return NURL_GZIP_ERR_UNSUPPORTED;
+#endif
+}
+
+int nurl_gzip_decompress(unsigned char *dst, long long *dst_len,
+                         unsigned char *src, long long src_len) {
+#ifdef NURL_HAVE_ZLIB
+    z_stream s;
+    s.zalloc = Z_NULL;
+    s.zfree  = Z_NULL;
+    s.opaque = Z_NULL;
+    s.next_in   = src;
+    s.avail_in  = (uInt)src_len;
+    s.next_out  = dst;
+    s.avail_out = (uInt)*dst_len;
+    /* windowBits 15 + 32 → auto-detect gzip OR zlib. Accepting both
+     * shapes here is harmless and matches what every real-world gzip
+     * decoder does (HTTP `Content-Encoding: gzip` peers occasionally
+     * ship raw deflate; auto-detect smooths over that). */
+    int rc = inflateInit2(&s, 15 + 32);
+    if (rc != Z_OK) return rc;
+    rc = inflate(&s, Z_FINISH);
+    if (rc != Z_STREAM_END) {
+        inflateEnd(&s);
+        return (rc == Z_OK) ? Z_BUF_ERROR : rc;
+    }
+    *dst_len = (long long)s.total_out;
+    return inflateEnd(&s);
+#else
+    (void)dst; (void)dst_len; (void)src; (void)src_len;
+    return NURL_GZIP_ERR_UNSUPPORTED;
 #endif
 }
 
