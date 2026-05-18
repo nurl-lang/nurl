@@ -1229,6 +1229,23 @@
     : b is_variadic ( seq ( nurl_sym_get syms ( nurl_str_cat fname `__variadic` ) ) `1` )
     : s vf_str ( nurl_sym_get syms ( nurl_str_cat fname `__variadic_fixed` ) )
     : i fixed_count ? == 0 ( nurl_str_len vf_str ) 0 ( nurl_str_to_int vf_str )
+    // Closure-escape gate (docs/GOTCHAS.md item 8 / memory gotcha #8).
+    // These four callees take ownership of an argument that outlives the
+    // current scope — pushing into a heap-backed container or detaching
+    // onto a worker thread. A `: ~`-mutable multi-field-struct closure
+    // captured by pointer (set by `gen_closure_expr` and propagated by
+    // `gen_let_or_struct` as `<name>__captures_byref`) MUST NOT escape
+    // through any of these without first being moved to a heap-backed
+    // handle, or the captured stack alloca will dangle the moment its
+    // owning function returns. We warn — not die — because (a) the
+    // analysis is a pure name+flag check that misses heap-allocated
+    // closure-builder helpers, and (b) `warn` is consistent with the
+    // existing `^`-return escape check from 2026-05-15.
+    : b is_escape_call | | |
+        ( seq fname `vec_push` )
+        ( seq fname `vec_insert` )
+        ( seq fname `vec_set` )
+        ( seq fname `thread_spawn` )
     : i arg_idx 0
     // Phase 2B parameter-ownership: collect register values for arg expressions
     // whose result is a fresh owned-string allocation (e.g. `nurl_str_cat`),
@@ -1240,9 +1257,28 @@
     ~ != ( nurl_lex_type lex ) TT_RPAREN {
         ( nurl_sym_def syms `__last_call_ret_owned__` `` )
         ( nurl_sym_def syms `__last_unsigned__` `` )
+        // Reset __last_ident_name__ so the post-gen_expr check below
+        // sees an ident only when this argument actually loaded one.
+        ( nurl_sym_def syms `__last_ident_name__` `` )
         : s av ( gen_expr lex syms cg )
         : s at ( nurl_get_last_type )
         : s lu_arg ( nurl_sym_get syms `__last_unsigned__` )
+        // Escape check (closes docs/GOTCHAS.md item 8). If this call is
+        // one of the four ownership-taking helpers AND this argument
+        // names a binding tagged `<name>__captures_byref`, warn — the
+        // captured stack alloca will dangle the moment the surrounding
+        // function returns.
+        ? is_escape_call {
+            : s arg_id ( nurl_sym_get syms `__last_ident_name__` )
+            ? != 0 ( nurl_str_len arg_id ) {
+                : s caps ( nurl_sym_get syms ( nurl_str_cat arg_id `__captures_byref` ) )
+                ? ( seq caps `1` ) {
+                    ( warn lex ( nurl_str_cat4
+                        `closure '` arg_id `' captures a stack binding by pointer and would escape via '`
+                        ( nurl_str_cat3 fname `' - move to a heap-backed handle (see docs/GOTCHAS.md item 8)` `` ) ) )
+                } {}
+            } {}
+        } {}
         // Variadic position: promote BEFORE owned-temp tracking + argstr
         // append, since promotion replaces (at, av) with the widened pair.
         // i8*/i64/i32/double/pointers pass through variadic_promote_arg

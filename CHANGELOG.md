@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Compiler: closure-escape warnings for `vec_push` / `vec_insert` /
+  `vec_set` / `thread_spawn`.** Extends the existing 2026-05-15
+  `^`-return escape check (`gen_ret` reading `__last_closure_byref__`
+  + `<name>__captures_byref`) to four more sites where a closure
+  takes ownership across a scope boundary. `gen_call` snapshots
+  `__last_ident_name__` per-argument; when the callee's `fname` is
+  one of the four AND the argument names a binding tagged
+  `__captures_byref = 1`, emits a soft `warning:` line consistent
+  with the existing escape diagnostic. By-name only — struct-wrapping
+  (`@ Slot { cb }` then push the slot) passes through silently, which
+  is acceptable: we catch the obvious one-line foot-gun rather than
+  every conceivable indirection. Closes gotcha #8 to the same scope
+  as #5. Regression: `compiler/tests/should_warn_closure_escape_vec.nu`
+  (positive `thread_spawn` + 2 negative controls).
+
+  `docs/GOTCHAS.md` §5 updated to document the extended coverage;
+  the `vec_push [(@ v)]` form remains untested because anonymous
+  closure types aren't yet accepted as generic-arg type names — a
+  separate `parse_type_paren` extension would unlock it.
+
 * **MCP server framework with closure-based registry.**
   `stdlib/ext/mcp_registry.nu` (~550 LOC) replaces the previous
   "write your own JSON-RPC dispatch loop" workflow with a uniform

@@ -19,7 +19,7 @@ unlock, see [`../CHANGELOG.md`](../CHANGELOG.md).
 | 2 | Bare `@-fn` names don't auto-coerce to a `(@ R P*)` closure parameter | Wrap in `\ P* → R { ( fn args ) }` |
 | 3 | Same-line shadowing: `: i z + z 7` shadows the parameter `z` from that line (compiler emits a non-fatal `warning:`) | Rename: `: i zz + z 7` |
 | 4 | Ternary arity errors cascade — diagnostic points at the *next* line | Count operands left-to-right on the previous line |
-| 5 | Mutable struct captured by closure (`: ~ T`) is a **borrow**, not a copy (compiler warns for `^`-return escapes; `vec_push` / `thread_spawn` escapes still slip past) | Don't escape the closure; if you must, use a heap-backed handle |
+| 5 | Mutable struct captured by closure (`: ~ T`) is a **borrow**, not a copy (compiler warns for `^`-return AND `vec_push` / `vec_insert` / `vec_set` / `thread_spawn` escapes; struct-wrapped indirection slips past) | Don't escape the closure; if you must, use a heap-backed handle |
 
 ---
 
@@ -176,9 +176,13 @@ discipline as a C function holding a pointer to a stack local.
 `warning:` line. Both shapes trip the check — a named closure binding
 (`^ bump`) and a closure literal (`^ \ → v { ... c ... }`). Closures
 captured by-value (no `: ~`) and closures used locally stay silent.
-The check does NOT yet detect escapes via `vec_push` /
-`vec_insert` / `vec_set` / `thread_spawn`; those remain programmer
-responsibility.
+The check ALSO catches escapes via `vec_push` / `vec_insert` /
+`vec_set` / `thread_spawn` (shipped 2026-05-18) — passing a
+byref-capturing closure binding to any of these four ownership-taking
+helpers emits the same `warning:` line. The check is by-name only:
+wrapping the closure in a struct (`@ Slot { cb }` then push the slot)
+silently passes through, so the warning catches the obvious one-line
+foot-gun rather than every conceivable indirection.
 
 **Immutable captures snapshot** (backward-compatible): `: Counter c …`
 without `~` is captured by value. Mutations inside the closure are
