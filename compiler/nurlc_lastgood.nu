@@ -1590,13 +1590,21 @@
     // Process all match arms
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         : i pat_tt ( nurl_lex_type lex )
-        ? | ( is_ident_tok pat_tt ) == pat_tt TT_BOOL {
-            // Parse pattern name (IDENT, TYPE_KW, or BOOL for T/F option patterns)
+        ? | | ( is_ident_tok pat_tt ) == pat_tt TT_BOOL == pat_tt TT_INT {
+            // Parse pattern. Three shapes:
+            //   * IDENT / TYPE_KW — enum variant name (Some/None/Ok/Err/...).
+            //   * BOOL — `T` / `F` for Option/Result Ok/Err arms.
+            //   * INT — `?? n { 1 → ... 2 → ... _ → ... }` — direct equality
+            //     check against the match value. Skips payload-binding,
+            //     exhaustiveness tracking, and enum-variant lookup paths;
+            //     a wildcard arm is required to cover the residual.
+            : b is_int_pat == pat_tt TT_INT
             : s pattern_name ( nurl_lex_val lex )
             ( nurl_lex_advance lex )
 
             // Collect up to 3 payload slots before the arrow.  Each slot is either
             // an identifier (binds the payload) or an integer literal (compared).
+            // Int-literal patterns carry no payload — skip the loop entirely.
             : s pv0 ``
             : s pv1 ``
             : s pv2 ``
@@ -1604,7 +1612,7 @@
             : s lit1 ``
             : s lit2 ``
             : i pvc 0
-            ~ != ( nurl_lex_type lex ) TT_ARROW {
+            ~ & ! is_int_pat != ( nurl_lex_type lex ) TT_ARROW {
                 : i pst ( nurl_lex_type lex )
                 ? ( is_ident_tok pst ) {
                     ? == pvc 0 { = pv0 ( nurl_lex_val lex ) } {}
@@ -1638,6 +1646,22 @@
                 // Wildcard: unconditional branch — no tag load, no icmp
                 = has_wildcard 1
                 ( nurl_print `  br label %` ) ( nurl_print arm_label ) ( nurl_print `\n` )
+            } { ? is_int_pat {
+                // Integer-literal arm: direct equality compare against
+                // the match value. No enum tag, no payload, no
+                // exhaustiveness contribution. `match_type` must be an
+                // integer LLVM type — we don't currently validate that,
+                // a non-integer match would produce invalid IR LLVM
+                // catches at link time.
+                = next_label ( nurl_cg_lbl cg `next` )
+                : s cmp_reg ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print cmp_reg )
+                ( nurl_print ` = icmp eq ` ) ( nurl_print match_type )
+                ( nurl_print ` ` ) ( nurl_print match_val )
+                ( nurl_print `, ` ) ( nurl_print pattern_name ) ( nurl_print `\n` )
+                ( nurl_print `  br i1 ` ) ( nurl_print cmp_reg )
+                ( nurl_print `, label %` ) ( nurl_print arm_label )
+                ( nurl_print `, label %` ) ( nurl_print next_label ) ( nurl_print `\n` )
             } {
                 // Named variant.  Literal-constrained arms (e.g. `Ok 200`) do NOT
                 // exhaustively cover the variant — only catch-all arms (no literals)
@@ -1701,7 +1725,7 @@
                     ( emit_lit_check cg syms match_val match_type pattern_name 2 lit2 next_label )
                     ( nurl_print `  br label %` ) ( nurl_print arm_label ) ( nurl_print `\n` )
                 } {}
-            }
+            } }
 
             // Generate the arm code
             ( nurl_print arm_label ) ( nurl_print `:\n` )

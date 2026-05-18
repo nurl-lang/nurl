@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Compiler: integer-literal match arms.** `?? value { 1 → ... 42 → ... -1 → ... _ → ... }`
+  is now valid wherever `value` has an integer LLVM type (i / i8/16/32/64,
+  u/u16/u32/u64). Each arm emits a single `icmp eq <match_type>` and
+  branches; the wildcard `_` arm catches the residual (required —
+  exhaustiveness is not statically checked across the full integer
+  domain). Skips the enum-variant lookup, payload-binding, and
+  duplicate-arm tracking paths that named-variant arms exercise.
+  `stdlib/ext/http2_hpack.nu`'s 280+ line `? == x N { ^ Y } {}`
+  cascade for the HPACK static table + Huffman per-length lookup
+  tables was rewritten on top of this and is significantly more
+  readable. Regression: `compiler/tests/match_int_literal.nu`.
+
 * **AddressSanitizer + UndefinedBehaviorSanitizer quality gate.** Two
   manual entry points:
     - `./build.sh --san` rebuilds the runtime + every bootstrap stage
