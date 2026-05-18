@@ -10,6 +10,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **AddressSanitizer + UndefinedBehaviorSanitizer quality gate.** Two
+  manual entry points:
+    - `./build.sh --san` rebuilds the runtime + every bootstrap stage
+      with `-fsanitize=address,undefined -fsanitize-address-use-after-scope
+      -fno-omit-frame-pointer -fno-sanitize-recover=all`. LTO is
+      dropped because clang's LTO+sanitizer combo produces opaque
+      link-time errors on NURL's cross-module function pointers (the
+      runtime/user-code inline win isn't the point of a san run).
+      LeakSanitizer is disabled during the bootstrap itself
+      (`ASAN_OPTIONS=detect_leaks=0`) because nurlc_py/nurlc_self
+      intentionally don't free their process-lifetime str-pool /
+      sym-arena globals at exit.
+    - `compiler/tests/run_san_tests.sh` runs the full .nu corpus
+      under the sanitized runtime, captures stdout / stderr per-test
+      separately, scans stderr for ASan/UBSan/LeakSanitizer markers,
+      and reports `PASS` / `SAN_FAIL` / `COMPILE_FAIL` / `LINK_FAIL`.
+      Non-zero exit codes without sanitizer markers count as PASS
+      (several tests in the corpus deliberately return computed values
+      as exit codes — `native_sum` returns 55, `test_immutable_assign_error`
+      aborts to prove the runtime check fires, etc.). Skips
+      `should_fail_*` compile-negatives and helper modules without
+      `main()`. Leak detection is opt-in via `LSAN_DETECT_LEAKS=1`.
+
+  First sweep result: 188 PASS, 0 SAN_FAIL across 206 tests. The
+  infrastructure stays manual — invoke when validating a release
+  candidate or triaging a memory-shape bug, not on every build.
+
 * **WebSocket server-side (RFC 6455).** `stdlib/ext/websocket.nu`
   (~570 LOC pure NURL). Composes on the HTTP/1.1 stack: client sends
   `Upgrade: websocket` + `Sec-WebSocket-Key` + `Sec-WebSocket-Version: 13`,
@@ -76,6 +103,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `$`-include brings the full HTTP stack including WebSockets in scope.
 
 ### Fixed
+
+* **`signal_basic.nu` — F-arm pattern no longer binds the undef
+  Option payload.** The previous `F e → { ( string_free e ) ... }`
+  shape passed the F-tag's undef String handle to `string_free`,
+  which deep-dispatched into `nurl_peek(NULL, 0)` and tripped UBSan's
+  "applying zero offset to null pointer". Replaced with bare `F → ...`
+  (Option's None arm carries no data). Surfaced by the first sanitized
+  run of the corpus and was a silent crash even outside of ASan
+  (`EXIT 139` / `dumped core` in the baseline — now `EXIT 0` cleanly).
+
+* **`stdlib/runtime.c` `nurl_peek` / `nurl_poke` defensively handle
+  NULL base.** `nurl_peek` returns 0 instead of dereferencing;
+  `nurl_poke` silently no-ops. Safety net for the same caller-side
+  mistake the `signal_basic` fix patched at source — a future stdlib
+  binding that hands an Option-F-arm payload to a vec-style API will
+  log a soft warning under ASan/UBSan but not crash the process.
 
 * **Compiler: `?u → T b →` match-arm now propagates the unsigned flag
   to the payload binding.** `parse_type_opt` stashes the inner-T NURL

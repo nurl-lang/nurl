@@ -15,6 +15,17 @@
 #    --no-tests  Skip the test suite at the end (Docker images, CI
 #                stages that test elsewhere). Bootstrap fixed point
 #                still has to hold or the build fails.
+#    --san       Build runtime.o + every stage binary with
+#                AddressSanitizer + UndefinedBehaviorSanitizer. Catches
+#                use-after-free, double-free, OOB reads/writes, integer
+#                overflow, null deref, etc. that the conservative
+#                single-owner / auto-drop model cannot statically rule
+#                out. ~3× slower at runtime; off by default. Exports
+#                NURL_SAN=1 so run_tests.sh / nurl.sh / tools build
+#                scripts pick up the same flags transparently.
+#                Use ASAN_OPTIONS=detect_leaks=1 to enable leak checks
+#                (off by default because some intentional stdlib globals
+#                live until process exit).
 # ============================================================
 set -uo pipefail
 
@@ -22,12 +33,62 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 RUN_TESTS=1
+SAN=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --no-tests) RUN_TESTS=0; shift ;;
+        --san)      SAN=1; shift ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
     esac
 done
+
+# Sanitized builds skip the standard baseline-diff test runner — the
+# baseline assumes plain output, and sanitizer reports would balloon
+# it. The dedicated runner ./compiler/tests/run_san_tests.sh handles
+# the sanitized corpus separately.
+if (( SAN == 1 )); then
+    RUN_TESTS=0
+fi
+
+# Sanitizer toolchain. -fno-omit-frame-pointer keeps stack traces
+# readable; -fno-sanitize-recover=all turns soft UBSan diagnostics into
+# hard fail-on-detection (so a single overflow exits the test binary
+# instead of just printing to stderr); -fsanitize-address-use-after-scope
+# catches use-after-scope on stack allocas, which matches NURL's
+# closure-captures-stack-alloca pattern that we want to break loudly.
+SAN_CFLAGS=""
+SAN_LDFLAGS=""
+if (( SAN == 1 )); then
+    SAN_CFLAGS="-fsanitize=address,undefined -fsanitize-address-use-after-scope -fno-omit-frame-pointer -fno-sanitize-recover=all"
+    SAN_LDFLAGS="-fsanitize=address,undefined"
+    # LTO and sanitizers are theoretically compatible but in practice
+    # clang's combination produces opaque link-time diagnostics for
+    # NURL's pattern of cross-module function pointers. Disable LTO in
+    # sanitized builds — the runtime/user-code inline win we lose isn't
+    # the point of a san run anyway (we're after correctness, not perf).
+    NO_LTO_IN_SAN=1
+    export NURL_SAN=1
+    # Disable LSan during the BUILD itself: nurlc_py / nurlc_self run
+    # to completion and exit without freeing their str-pool / sym-arena
+    # globals (an intentional process-lifetime allocation strategy).
+    # LSan would flag every one as a leak and tank the build with
+    # exit-1-on-detect. run_san_tests.sh re-enables leak detection on
+    # demand via LSAN_DETECT_LEAKS=1 for the test corpus, where the
+    # release-and-cleanup discipline is meaningfully different.
+    export ASAN_OPTIONS="detect_leaks=0:abort_on_error=0:halt_on_error=0:print_stacktrace=1"
+    export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=0"
+else
+    NO_LTO_IN_SAN=0
+fi
+
+# Helper that mints the right `-flto` or `-fno-lto` flag depending on
+# sanitizer mode. Used in every clang invocation that compiles or links
+# runtime.o-consuming code.
+if (( NO_LTO_IN_SAN == 1 )); then
+    LTO_FLAG=""
+else
+    LTO_FLAG="-flto"
+fi
 
 LOG="$(mktemp)"
 trap 'rm -f "$LOG"' EXIT
@@ -170,7 +231,7 @@ fi
 # matching `-flto` on every clang invocation that consumes runtime.o
 # (this script, nurl.sh, compiler/tests/run_tests.sh, tools/*/build.sh)
 # triggers the LTO link pipeline.
-step "runtime"       bash -c "'$CLANG' -O2 -flto $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $ZLIB_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
+step "runtime"       bash -c "'$CLANG' -O2 $LTO_FLAG $SAN_CFLAGS $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $ZLIB_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
 
 # Always build canvas.o. With SDL2 headers present we get the real
 # native back-end (-DNURL_HAVE_SDL2); otherwise we compile a stub that
@@ -201,10 +262,10 @@ step "clean"         rm -f build/nurlc_py.ll build/nurlc_py \
                           build/nurlc
 
 step "stage0 ir"     bash -c 'python compiler/nurlc.py --llvm compiler/nurlc.nu > build/nurlc_py.ll'
-step "stage0 link"   "$CLANG" -O2 -flto build/nurlc_py.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS -o build/nurlc_py
+step "stage0 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS build/nurlc_py.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_py
 
 step "stage1 ir"     bash -c './build/nurlc_py compiler/nurlc.nu > build/nurlc_self.ll'
-step "stage1 link"   "$CLANG" -O2 -flto build/nurlc_self.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS -o build/nurlc_self
+step "stage1 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS build/nurlc_self.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_self
 
 # Informational: python vs nurlc_py IR (not fatal).
 if cmp -s build/nurlc_py.ll build/nurlc_self.ll; then
@@ -214,7 +275,7 @@ else
 fi
 
 step "stage2 ir"     bash -c './build/nurlc_self compiler/nurlc.nu > build/nurlc_self2.ll'
-step "stage2 link"   "$CLANG" -O2 -flto build/nurlc_self2.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS -o build/nurlc_self2
+step "stage2 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS build/nurlc_self2.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_self2
 
 # Fixed-point: nurlc_self must match nurlc_self2.
 if ! cmp -s build/nurlc_self.ll build/nurlc_self2.ll; then
@@ -252,7 +313,11 @@ fi
 
 # ── Test suite ───────────────────────────────────────────────
 if (( RUN_TESTS == 0 )); then
-    echo "BUILD SUCCESS (tests skipped via --no-tests)"
+    if (( SAN == 1 )); then
+        echo "BUILD SUCCESS (sanitized — run ./compiler/tests/run_san_tests.sh next)"
+    else
+        echo "BUILD SUCCESS (tests skipped via --no-tests)"
+    fi
     exit 0
 fi
 

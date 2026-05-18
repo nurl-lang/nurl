@@ -92,8 +92,13 @@ $ `stdlib/core/io.nu`
             } { ( nurl_print `live signal tests skipped (NURL_NET_TESTS != 1)\n` ) }
             ( string_free v )
         }
-        F e → {
-            ( string_free e )
+        F → {
+            // Option's F arm carries no payload — DON'T bind `e` here.
+            // The previous `F e → ( string_free e ) ...` shape passed
+            // the F-tag's undef payload slot to string_free, which
+            // triggered UBSan's "applying zero offset to null pointer"
+            // inside nurl_peek. Runtime is now defensive against this
+            // (see runtime.c §9), but the cleanest fix is to not bind.
             ( nurl_print `live signal tests skipped (set NURL_NET_TESTS=1 to enable)\n` )
         }
     }

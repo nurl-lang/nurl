@@ -118,6 +118,14 @@ ENABLE_HTTP_TESTS="${NURL_HTTP_TESTS:-0}"
 # unconditionally; loopback / live tests need the gate.
 ENABLE_NET_TESTS="${NURL_NET_TESTS:-0}"
 
+# Sanitizer mode: separate runner (run_san_tests.sh) handles ASan/UBSan
+# instrumented runs because the output shape and pass/fail semantics
+# differ from the baseline-diff model below.
+if [[ "${NURL_SAN:-0}" == "1" ]]; then
+    echo "NURL_SAN=1 set — use ./compiler/tests/run_san_tests.sh for sanitized runs." >&2
+    exit 2
+fi
+
 RESULTS="$SCRIPT_DIR/testresults.txt"
 BASELINE="$SCRIPT_DIR/correct.txt"
 WORKDIR="$ROOT_DIR/build/tests"

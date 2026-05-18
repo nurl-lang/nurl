@@ -1676,12 +1676,25 @@ void  nurl_memset(void *dst, long long byte, long long bytes) {
     memset(dst, (int)byte, (size_t)bytes);
 }
 
-/* Read i64 at index idx in a raw byte buffer */
+/* Read i64 at index idx in a raw byte buffer.
+ * Defensive NULL check: returns 0 when base is NULL instead of
+ * dereferencing. This matters for Option/Result-shaped data where a
+ * F-arm pattern binding (`F e → ...` over a `?T`) extracts the
+ * payload slot, which is undef/zero on the F path; callers that pass
+ * the resulting handle to a `vec_free` / `string_free` would
+ * otherwise hit `nurl_peek(NULL, 0)` and trip UBSan
+ * "applying zero offset to null pointer". This is technically a
+ * caller bug (the F-arm of `?T` carries no data), but a hardened
+ * runtime should not crash the program because of it. */
 long long nurl_peek(const void *base, long long idx) {
+    if (!base) return 0;
     return ((const long long*)base)[(size_t)idx];
 }
-/* Write i64 val at index idx in a raw byte buffer */
+/* Write i64 val at index idx in a raw byte buffer.
+ * Defensive NULL check: silently no-op when base is NULL. Same
+ * rationale as nurl_peek above — F-arm payload-undef from `?T`. */
 void nurl_poke(void *base, long long idx, long long val) {
+    if (!base) return;
     ((long long*)base)[(size_t)idx] = val;
 }
 
