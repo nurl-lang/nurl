@@ -10,6 +10,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Tail-call optimisation in the @-fn dispatch path.** `gen_ret`
+  now flags the upcoming return-value expression as
+  tail-position; `gen_call` snapshots + clears the flag on entry,
+  so only the outermost call in the return expression is treated
+  as tail (argument-evaluation recursions stay non-tail). In the
+  regular @-fn dispatch path the LLVM `call` becomes `tail call`
+  when (a) the flag was set, (b) `rlt == fn_ret_ty` so LLVM
+  accepts the marker, (c) the callee is not variadic, and (d)
+  `gen_ret` saw no pending owned-string / owned-slice / owned-
+  struct-field / user-drop / defer in scope at flag-set time
+  (any of those would emit drop calls between the tail call and
+  `ret`, which LLVM would silently demote).
+
+  Deliberately chose `tail` over `musttail`: `tail` is a hint
+  LLVM may drop when its safety analysis can't confirm the
+  rewrite (alloca-escape through an arg, etc.), so a
+  misclassification only costs an optimisation. `musttail` is
+  verifier-enforced and would fail on NURL's owning ABI where
+  the same source-level signature lowers to different LLVM
+  types across call sites.
+
+  Effect: tail-recursive functions no longer blow the stack —
+  `compiler/tests/tco_deep_recursion.nu` runs a 5_000_000-deep
+  countdown in O(1) stack (~7 ms wall-clock). Trait/impl,
+  closure-loaded var, and fn-pointer-parameter dispatch paths
+  intentionally still emit a plain `call` (different shapes; not
+  the deep-recursion targets TCO exists for).
+
+  Coexists with `--g` DWARF emission: `tools/dwarf_test.sh` still
+  passes all five phases.
+
 * **DWARF Phase 6 composite-type rendering.** User structs and
   generic-instantiation handles (`%Vec__u8`, `%String`, `%FmtTok`,
   user `% Point`, …) now resolve under `nurlc --g` to a
