@@ -8,6 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* **DWARF Phase 6 composite-type rendering.** User structs and
+  generic-instantiation handles (`%Vec__u8`, `%String`, `%FmtTok`,
+  user `% Point`, …) now resolve under `nurlc --g` to a
+  `!DICompositeType(tag: DW_TAG_structure_type, …)` carrying one
+  `!DIDerivedType(tag: DW_TAG_member, …)` per field — instead of
+  the previous i64 placeholder. `gdb ptype Point` lists the fields
+  with their NURL names + base types; `print p` renders the value
+  as `{x = 3, y = 7}`; `print p.x` evaluates a single field.
+
+  Field roster lives in the existing symbol table next to the
+  per-field `__idx_N__type` entries — `gen_struct_decl` and the
+  generic-instantiation emitter now also record
+  `<sname>__field_count` and `<sname>__idx_N__name`. New helpers
+  `dbg_size_bits` / `dbg_align_bits` / `dbg_align_up` compute
+  LLVM-natural cumulative field offsets so the emitted
+  `!DIDerivedType` member offsets match the actual layout
+  clang/LLVM uses. Self-referential structs (a cell holding a
+  pointer to itself, etc.) are safe — the composite id is interned
+  in `g_dbg_type_syms` before the per-field recursion descends
+  through `dbg_type_id_for`, so a back-edge returns the cached id
+  instead of looping.
+
+  Regression: `compiler/tests/dwarf_struct.nu` exercises the
+  codegen path in the standard test corpus; `tools/dwarf_test.sh`
+  picks up a fifth phase that drives gdb in batch mode to assert
+  `ptype` + `print` + field-access over the new test. Bootstrap
+  fixed point holds — non-debug IR is byte-identical.
+
+  Closes the open Phase 6 follow-up in `DWARF.md`. Phase 7
+  (per-instantiation source-line precision for generics) remains
+  deferred.
+
 ## [0.7.2] — 2026-05-19
 
 ### Added

@@ -1,14 +1,16 @@
 # DWARF Debug Info — Phased Implementation Plan
 
-> **Status (2026-05-19): Phases 0, 1, 2+3, 4, 5, 6, 8, 9, 10 landed.**
+> **Status (2026-05-19): Phases 0, 1, 2+3, 4, 5, 6 (incl. composites), 8, 9, 10 landed.**
 > Phase 7 (generic + trait subprogram-line-number refinement) deferred —
 > the basic generic path already produces per-instantiation
 > `!DISubprogram` entries with mangled names via the existing
 > `gen_fn_decl_concrete` path; only the original-decl source line is
 > still pointed at `<generic>:1` instead of the source file.
-> Composite-type rendering (`!DICompositeType` for `%Vec` / `%String`
-> / user structs) is the open Phase 6 follow-up; base types
-> (`i`/`u8`/`b`/`f`/`s`) render correctly today.
+> Composite-type rendering (`!DICompositeType` + per-field
+> `!DIDerivedType DW_TAG_member`) shipped 2026-05-19; user structs +
+> generic-monomorphisation handles (`%Vec__u8` etc.) now appear in
+> `gdb ptype` with NURL field names + base types. Base types
+> (`i`/`u8`/`b`/`f`/`s`) continue to render as before.
 >
 > Build a debug binary with `./nurl.sh --debug foo.nu`, then drive
 > with `gdb` / `lldb`. End-to-end regression: `./tools/dwarf_test.sh`.
@@ -585,5 +587,8 @@ Four sessions × 8-10h each.
 
 ---
 
-*Status: Phases 0/1/2+3/4/5/6/8/9/10 landed; Phase 7 deferred; Phase 6
-composite types are the open follow-up. Last updated 2026-05-19.*
+*Status: Phases 0/1/2+3/4/5/6 (incl. composites)/8/9/10 landed; Phase 7
+deferred. Phase 6 composite-type rendering closed 2026-05-19 —
+`!DICompositeType` + `!DIDerivedType DW_TAG_member` now emitted for
+user structs and generic-instantiation handles. Last updated
+2026-05-19.*
