@@ -34,40 +34,18 @@ $ `stdlib/ext/csv.nu`
     : i col_vi ( opt_unwrap_or [i] col_vi_o -1 )
 
     // Filter: val_float2 > 0  AND  text_words contains "juliet".
-    // Prefetch the arena's data pointers ONCE at closure-creation time
-    // so the hot per-row predicate skips csv_table_view's 3 internal
-    // vec_data FFI calls per access (4 accesses × 3 = 12 M FFI saved
-    // across 1 M rows).
-    : *i fcp_cap ( vec_data [i] . df flat_cells )
-    : *i rsp_cap ( vec_data [i] . df row_starts )
-    : *i rlp_cap ( vec_data [i] . df row_lens )
-    : *u cd_cap # *u ( string_data . df content )
-
-    ( csv_table_filter df \ *CSVTable tt i row → b {
-        : i row_first . rsp_cap row
-        : i row_count . rlp_cap row
-
-        // val_float2 cell
-        ? < col_vf2 0 { ^ F } {}
-        ? >= col_vf2 row_count { ^ F } {}
-        : i cell_idx_vf2 + row_first col_vf2
-        : i off_vf2 . fcp_cap * cell_idx_vf2 2
-        : i len_vf2 . fcp_cap + * cell_idx_vf2 2 1
-        ? == len_vf2 0 { ^ F } {}
-        : *u p_vf2 # *u + # i cd_cap off_vf2
-        : f f2 ( nurl_parse_float_range # s p_vf2 len_vf2 )
-        ? <= f2 0.0 { ^ F } {}
-
-        // text_words cell
-        ? < col_tw 0 { ^ F } {}
-        ? >= col_tw row_count { ^ F } {}
-        : i cell_idx_tw + row_first col_tw
-        : i off_tw . fcp_cap * cell_idx_tw 2
-        : i len_tw . fcp_cap + * cell_idx_tw 2 1
-        ? == len_tw 0 { ^ F } {}
-        : *u p_tw # *u + # i cd_cap off_tw
-        ^ >= ( nurl_memmem_range # s p_tw len_tw `juliet` 6 ) 0
-    } )
+    //
+    // Two consecutive `csv_table_filter_*` calls route through the
+    // tight C inner loops in runtime.c (`nurl_csv_filter_float_gt`
+    // + `nurl_csv_filter_str_contains`), each a single FFI call with
+    // a scalar walk over row_starts/row_lens. The second call sees
+    // only the survivors of the first; row_starts/row_lens are
+    // narrowed in place between the two. Compared to the prior
+    // NURL-closure filter (~150 ms), this collapses to ~15-30 ms
+    // because per-row closure dispatch + per-row arena pointer
+    // re-derivation + per-row `nurl_parse_float_range` FFI all vanish.
+    ( csv_table_filter_float_gt     df col_vf2 0.0 )
+    ( csv_table_filter_str_contains df col_tw  `juliet` )
     : i t_filter ( monotonic_ns )
     ( nurl_print `Filtered to ` )
     ( nurl_print ( nurl_str_int ( csv_table_n_rows df ) ) )

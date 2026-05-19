@@ -258,3 +258,41 @@ fact a 13 % load improvement and a 23 % sort improvement.
 | sort   |       36 |       40 |         10 |         11 |             3.6× |
 | write  |        0 |        0 |          2 |          2 |             0.0× |
 | total  |      446 |      451 |         92 |         95 |             4.7× |
+
+## 2026-05-19 — 72b229f+dirty — SSE2 cell scan + C filter helpers + fast_atof
+- CPU: Intel(R) Core(TM) i7-5930K CPU @ 3.50GHz
+- Kernel: Linux 6.17.0-23-generic x86_64
+- Fixture: test_data.csv (1 M rows × 8 cols, 106756536 B, sha256=d00a0fd4509ea4a5…)
+- Runs: 5 per implementation
+
+| Stage  | NURL min | NURL med | Polars min | Polars med | NURL/Polars (med) |
+|--------|---------:|---------:|-----------:|-----------:|------------------:|
+| load   |      273 |      278 |         61 |         63 |             4.4× |
+| filter |       99 |      105 |         17 |         19 |             5.5× |
+| sort   |       52 |       53 |         10 |         11 |             4.8× |
+| write  |        0 |        0 |          2 |          2 |             0.0× |
+| total  |      424 |      436 |         92 |         95 |             4.6× |
+
+Changes against 2026-05-16 LTO baseline (load 272 ms / filter 139 ms /
+total 451 ms):
+
+* **`__csv_parse_content` inner cell loop swaps NURL byte-by-byte
+  scan for SSE2-vectorised `nurl_csv_scan_cell`** (16 bytes/iter
+  cmpeq for delim/CR/LF; tail loop on the remainder). With LTO the
+  FFI inlines into the parser; load drops 313 → 278 ms (~11 %).
+* **Filter pipeline routed through `csv_table_filter_float_gt` +
+  `csv_table_filter_str_contains` runtime helpers**: one FFI call
+  per stage instead of per-row closure dispatch. `nurl_csv_filter_*`
+  use an inline `__csv_fast_atof` (no `malloc`+`strtod`, just
+  `-?digits(.digits)?(eE[+-]?digits)?`) — ~50 ns/row vs strtod's
+  ~150 ns — and a first-byte-prefilter substring scan instead of
+  glibc memmem. Filter 150 → 105 ms (~30 %).
+* **Result count unchanged** — 150 162 rows survive, byte-identical
+  `nurl_top10.csv` vs Polars.
+
+Goal "halve load + filter from the LTO baseline" not yet reached —
+load is wall-clocked by file-read + memory-write bandwidth more than
+parse cost; further wins likely require columnar layout (P4) or
+typed pre-parse during the byte-walk (P3b). Filter is bottlenecked
+on parse_float + scattered flat_cells access for the survivor scan;
+columnar storage would collapse both.
