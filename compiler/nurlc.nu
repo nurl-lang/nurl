@@ -505,13 +505,53 @@
         ( nurl_str_int g_dbg_placeholder_ty ) )
 }
 
+// Phase 6 layout helpers: LLVM "natural" alignment + size in BITS for
+// the field types NURL actually emits. Used by composite-type emission
+// in dbg_type_id_for to compute cumulative field offsets and the total
+// struct size. Mapping follows the x86_64 / aarch64 SysV ABI defaults
+// LLVM applies absent an explicit DataLayout override: each primitive
+// is naturally aligned to its own byte size; pointers + i64 are 8 B;
+// i1 occupies one byte in a struct slot.
+//
+// Unknown / aggregate types (any leading `%`, raw `*`, `[N x …]`)
+// fall back to pointer width (64 bits) — they are always either
+// pointer-handles or by-pointer references in NURL's lowering.
+@ dbg_size_bits s vt → i {
+    ? ( seq vt `i1` )     { ^ 8 } {}
+    ? ( seq vt `i8` )     { ^ 8 } {}
+    ? ( seq vt `i16` )    { ^ 16 } {}
+    ? ( seq vt `i32` )    { ^ 32 } {}
+    ? ( seq vt `i64` )    { ^ 64 } {}
+    ? ( seq vt `float` )  { ^ 32 } {}
+    ? ( seq vt `double` ) { ^ 64 } {}
+    ^ 64
+}
+
+@ dbg_align_bits s vt → i {
+    ? ( seq vt `i1` )     { ^ 8 } {}
+    ? ( seq vt `i8` )     { ^ 8 } {}
+    ? ( seq vt `i16` )    { ^ 16 } {}
+    ? ( seq vt `i32` )    { ^ 32 } {}
+    ? ( seq vt `i64` )    { ^ 64 } {}
+    ? ( seq vt `float` )  { ^ 32 } {}
+    ? ( seq vt `double` ) { ^ 64 } {}
+    ^ 64
+}
+
+// Round `off` up to the next multiple of `align`. Both bit-valued.
+@ dbg_align_up i off i align → i {
+    ? <= align 1 { ^ off } {}
+    : i rem % off align
+    ? == rem 0 { ^ off } {}
+    ^ + off - align rem
+}
+
 // Phase 6: look up (or lazily create) the metadata id corresponding to
 // an LLVM type string. The first call for a given `vt` emits a
-// !DIBasicType / !DIDerivedType into the blob and caches the id; later
-// calls return the cached id without re-emitting. Aggregate / struct
-// types fall back to the i64 placeholder so the verifier accepts the
-// DILocalVariable; full struct-member rendering (`ptype Foo`) lands
-// when this path learns to emit !DICompositeType.
+// !DIBasicType / !DIDerivedType / !DICompositeType into the blob and
+// caches the id; later calls return the cached id without re-emitting.
+// Self-referential structs are safe — the id is interned before the
+// per-field recursion descends back through dbg_type_id_for.
 @ dbg_type_id_for s vt → i {
     : s hit ( nurl_sym_get g_dbg_type_syms vt )
     ? != 0 ( nurl_str_len hit ) { ^ ( nurl_str_to_int hit ) } {}
