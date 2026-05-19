@@ -2015,6 +2015,34 @@ void nurl_dir_list_close(long long handle) {
     free(it);
 }
 
+/* POSIX `symlink(target, linkpath)` shim. stdlib/std/fs.nu declares
+ * `symlink` as an `& \`c\` @ symlink ...` FFI import from libc; MSVCRT
+ * has no such symbol, so without this stub every program that imports
+ * std/fs.nu (nurlfmt, nurlpkg, nurl-lsp, …) fails to link on Windows.
+ *
+ * We try CreateSymbolicLinkA first — it works when the account holds
+ * SeCreateSymbolicLinkPrivilege or Developer Mode is on, mapping the
+ * unprivileged failure path back onto the POSIX-style -1/errno return
+ * that fs_symlink expects. The SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
+ * bit (0x2) makes it work in Developer Mode without elevation. */
+int symlink(const char *target, const char *linkpath) {
+    if (!target || !linkpath) { errno = EINVAL; return -1; }
+    DWORD flags = 0x2 /* allow unprivileged create (Developer Mode) */;
+    /* Mark directory symlinks correctly when the target exists and is a dir. */
+    DWORD attrs = GetFileAttributesA(target);
+    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
+        flags |= 0x1;
+    if (CreateSymbolicLinkA(linkpath, target, flags)) return 0;
+    DWORD e = GetLastError();
+    if      (e == ERROR_ALREADY_EXISTS)  errno = EEXIST;
+    else if (e == ERROR_ACCESS_DENIED ||
+             e == ERROR_PRIVILEGE_NOT_HELD) errno = EACCES;
+    else if (e == ERROR_PATH_NOT_FOUND ||
+             e == ERROR_FILE_NOT_FOUND)  errno = ENOENT;
+    else                                  errno = EIO;
+    return -1;
+}
+
 #else  /* POSIX */
 
 long long nurl_dir_list_open(const char *path) {
