@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* **One-command developer install (`./install.sh`).** Bootstraps the
+  compiler (skipped if `build/nurlc` already exists), builds
+  `nurl-lsp`, symlinks it into `~/.local/bin/nurl-lsp` so VS Code /
+  Cursor / Windsurf find it without any settings tweak, packages
+  the VS Code extension (`vsce package`) and installs it via the
+  editor's CLI when one is on PATH. Idempotent: re-run any time to
+  pick up a newer checkout. Flags: `--no-vscode`, `--no-path`,
+  `--force`, `--uninstall`, `--help`.
+
+### Changed
+
+* **`tooling/vscode-nurl` bumped 0.3.0 → 0.4.4** (matches the
+  `nurl-lsp` server version it pairs with). README rewritten to
+  document the actual feature set — go-to-definition (single +
+  cross-file via `$ `path`` imports), hover, document outline,
+  workspace-wide IDENT completion, `Ctrl-T` symbol search, folding
+  ranges, and `nurlfmt`-backed formatting — replacing the stale
+  "coming in later iterations" line that misrepresented an
+  already-shipped server. New packaged extension:
+  `tooling/vscode-nurl/nurl-0.4.4.vsix`.
+
 ## [0.7.1] — 2026-05-19
 
 ### Changed

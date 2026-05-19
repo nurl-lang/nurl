@@ -78,25 +78,31 @@ before the build is accepted.
 
 ## Editor support
 
-Syntax highlighting for VS Code / Windsurf is available in `tooling/vscode-nurl/`.
+Syntax highlighting **plus a full Language Server** (go-to-definition,
+hover, document outline, completion, workspace symbol search, folding,
+`nurlfmt`-backed formatting, live compile diagnostics) for VS Code,
+Cursor, and Windsurf is available in `tooling/vscode-nurl/`.
 
-**Direct install — one-liner** (Linux / macOS, requires the `code` CLI on
-your `PATH` — VS Code → Command Palette → "Shell Command: Install 'code'
-command"):
+**One-command install from a checkout:**
 
 ```bash
-curl -L -o /tmp/nurl.vsix \
-    https://github.com/nurl-lang/nurl/raw/main/tooling/vscode-nurl/nurl-0.2.0.vsix \
-  && code --install-extension /tmp/nurl.vsix
+git clone https://github.com/nurl-lang/nurl.git
+cd nurl
+./install.sh
 ```
 
-**Direct download** —
-[nurl-0.2.0.vsix](https://github.com/nurl-lang/nurl/raw/main/tooling/vscode-nurl/nurl-0.2.0.vsix)
-(5.6 KB; click to download the packaged extension straight from main).
+`install.sh` is idempotent — re-run any time. It bootstraps the
+compiler, builds `nurl-lsp`, symlinks it into `~/.local/bin/`,
+packages the VS Code extension, and installs it via the editor's
+CLI (`code` / `cursor` / `windsurf`, whichever is on PATH). Flags:
+`--no-vscode` (skip the extension step), `--no-path` (don't touch
+`~/.local/bin`), `--force` (rebuild even when artefacts exist),
+`--uninstall` (remove the symlink + extension).
 
 **Manual install from a local checkout:**
-1. `Ctrl+Shift+P` → "Extensions: Install from VSIX..."
-2. Select `tooling/vscode-nurl/nurl-0.2.0.vsix`
+1. `./build.sh` then `./tools/nurl-lsp/build.sh`
+2. `Ctrl+Shift+P` → "Extensions: Install from VSIX..."
+3. Select `tooling/vscode-nurl/nurl-0.4.4.vsix`
 
 The browser-based playground (see below) ships a Monaco port of the same
 tokenizer — no install required.

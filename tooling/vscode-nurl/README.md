@@ -8,20 +8,45 @@ VS Code and Windsurf.
 * Syntax highlighting for `.nu` files
 * Comment toggling (`//`)
 * Bracket matching and auto-closing
-* **Language Server** (`nurl-lsp`, v0.4.1+):
+* **Language Server** (`nurl-lsp`, v0.4.4+):
   * Live compile-error / warning diagnostics on save and on type
   * Document tracking via `textDocumentSync` (full sync)
-  * Go-to-definition, hover, document outline, completion: coming
-    in later iterations
+  * **Go-to-definition** — `gf` / `F12` jumps from a call site or
+    type reference to the `@`-fn, `:`-struct, `: |`-enum, enum
+    variant, or `& \`lib\` @`-FFI decl. Resolves across files
+    through `$ \`path\`` import edges (transitively indexed).
+  * **Hover** — function signature, type name, or constant value
+    snapshot for any IDENT under the cursor.
+  * **Document outline** — `Ctrl-Shift-O` lists every top-level
+    decl with its source line and SymbolKind (Function/Struct/
+    Enum/EnumMember/Constant).
+  * **Completion** — IDENT-prefix completion across the indexed
+    workspace; kind-tagged so the editor renders the right icon.
+  * **Workspace symbol search** — `Ctrl-T` case-insensitive
+    substring match against every indexed decl.
+  * **Folding ranges** — brace-balanced + `// ──` banner-comment
+    folds.
+  * **Formatting** — `textDocument/formatting` shells out to
+    `nurlfmt` for canonical NURL formatting.
 
 ## Setup
 
-The Language Server is a separate native binary (`build/nurl-lsp`)
-that the extension launches over stdio. Build it once:
+**Recommended (one command):**
 
 ```bash
 git clone https://github.com/nurl-lang/nurl.git
 cd nurl
+./install.sh                     # bootstrap, build LSP, install ext
+```
+
+`install.sh` is idempotent — re-run any time to pick up a newer
+checkout. It bootstraps the compiler if needed, builds `nurl-lsp`,
+copies it to `~/.local/bin/`, packages the VS Code extension, and
+installs it via the `code` (or `windsurf`) CLI when one is on PATH.
+
+**Manual:**
+
+```bash
 ./build.sh                       # bootstrap the compiler
 ./tools/nurl-lsp/build.sh        # build the LSP server
 ```
@@ -62,7 +87,7 @@ matching and highlighting keep working independently of the LSP.
    ```
 
 2. In VS Code / Windsurf: `Ctrl+Shift+P` → "Extensions: Install from
-   VSIX..." → pick the newly built `nurl-0.3.0.vsix`.
+   VSIX..." → pick the newly built `nurl-0.4.4.vsix`.
 
 ### Manual development install
 
@@ -90,6 +115,15 @@ Then run `npm install` inside that folder so the
   prefix-arity errors sometimes report the wrong line.
 
 ## Release Notes
+
+### 0.4.4
+
+* Server feature set documented to match reality: go-to-definition
+  (single + cross-file via `$ `path``), hover, document outline,
+  completion, workspace symbol search, folding ranges, and
+  `nurlfmt`-backed formatting are all live. Version bumped to
+  match the `nurl-lsp` server it pairs with. Recommended install
+  path is now the top-level `./install.sh`.
 
 ### 0.3.0
 
