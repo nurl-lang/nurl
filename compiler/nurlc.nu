@@ -1026,7 +1026,31 @@
     // expression is itself a closure literal that captures a stack
     // binding by pointer (docs/GOTCHAS.md item 5).
     ( nurl_sym_def syms `__last_closure_byref__` `` )
+    // Tail-call optimisation: mark the upcoming expression as
+    // "tail-position" so gen_call can emit `tail call` (the LLVM
+    // optimiser then converts a self-recursive tail call into a jump,
+    // unblocking deep recursion). The flag is consumed BY gen_call as
+    // soon as it enters — argument evaluation happens AFTER the
+    // consume, so nested calls inside the argument list do NOT
+    // observe the flag and stay non-tail. Eligibility is re-checked
+    // in gen_call (matching return types, no closure / FFI dispatch
+    // shape, no variadic). The flag is ONLY set when there are no
+    // pending owned-resource drops to perform after the call: an
+    // owned-slice / owned-string / user-drop in scope would emit
+    // extra calls between the tail-call and `ret`, which LLVM would
+    // silently degrade. defer chains likewise force a non-tail call.
+    ? & & & ( seq ( nurl_sym_get syms `__owned_strings__` ) `` )
+             ( seq ( nurl_sym_get syms `__owned_slices__` ) `` )
+             ( seq ( nurl_sym_get syms `__owned_struct_fields__` ) `` )
+        & ( seq ( nurl_sym_get syms `__user_drops__` ) `` )
+          ( seq ( nurl_sym_get syms `__defer_top__` ) `` )
+    { ( nurl_sym_def syms `__tail_call_pending__` `1` ) }
+    {}
     : s val ( gen_expr lex syms cg )
+    // Defensive: clear any residual pending flag (gen_expr may have
+    // taken a different path — e.g. a literal or operator — that
+    // never reached gen_call to consume it).
+    ( nurl_sym_def syms `__tail_call_pending__` `` )
     : s lt ( nurl_get_last_type )
     // Escape check: warn if the returned value is a closure that
     // captures a `: ~`-mutable multi-field struct by pointer. Two
@@ -1578,6 +1602,13 @@
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
+    // Tail-call optimisation: snapshot + consume the tail-position
+    // flag at function entry. Argument evaluation below recurses
+    // through gen_expr → gen_call; clearing the flag here means
+    // those nested calls don't get treated as tail (they aren't —
+    // we're still building the outermost call's argument list).
+    : b is_tail_position ( seq ( nurl_sym_get syms `__tail_call_pending__` ) `1` )
+    ( nurl_sym_def syms `__tail_call_pending__` `` )
     // Visibility check (grammar v2.0). If the base fname is an @-defined
     // function registered by scan_fn_sigs, we know its source-file of
     // origin. A cross-file call is rejected when the callee's file is in
@@ -1847,6 +1878,27 @@
         }
         {
             // Regular function call
+            // Tail-call optimisation: prepend `tail ` to the call
+            // instruction when we're in tail position AND the callee's
+            // return type matches the caller's. LLVM's `tail` marker
+            // is a hint — the optimiser will silently drop it if it
+            // can't safely turn the call into a jump (e.g. caller
+            // alloca-pointer escapes through an arg), so this is
+            // optimisation-only; correctness can't regress. `musttail`
+            // would force the rewrite but adds stricter requirements
+            // (identical signatures, no varargs, no caller-allocas in
+            // args) — too brittle for NURL's owning ABI. Variadic FFI
+            // is excluded since the C default-arg promotions would
+            // make the callee signature differ from the caller's
+            // declared one. Cross-file callees with unknown returns
+            // (rlt == "i64" fallback at line above) still benefit
+            // when the caller's return type also happens to be i64.
+            : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
+            : b tail_ok & & & is_tail_position
+                ! ( seq rlt `void` )
+                ! is_variadic
+                ( seq rlt fn_rt )
+            : s tail_kw ? tail_ok `tail ` ``
             ? ( seq rlt `void` )
             { ( nurl_print `  call void @` ) ( nurl_print call_name )
                 ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
@@ -1856,7 +1908,8 @@
             }
             { : s res ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print res )
-                ( nurl_print ` = call ` ) ( nurl_print rlt )
+                ( nurl_print ` = ` ) ( nurl_print tail_kw )
+                ( nurl_print `call ` ) ( nurl_print rlt )
                 ( nurl_print ` @` ) ( nurl_print call_name )
                 ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
                 ( mem_drop_arg_temps owned_arg_temps )
