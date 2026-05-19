@@ -7,7 +7,7 @@
 // to read and write `\n`-delimited JSON-RPC.
 //
 // **Transport summary** (per the MCP "Streamable HTTP" spec, see
-// https://spec.modelcontextprotocol.io/specification/2024-11-05/basic/transports/):
+// https://modelcontextprotocol.io/specification/2025-11-25/basic/transports):
 //
 //   POST /mcp     — client sends a JSON-RPC request OR a top-level
 //                   array of requests (batch); server replies with the

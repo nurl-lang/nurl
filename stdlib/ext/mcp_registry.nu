@@ -14,7 +14,8 @@
 // registry struct as Vec[McpTool] / Vec[McpPrompt] / Vec[McpResource]
 // and dispatched by name lookup at request time.
 //
-// Spec coverage (Model Context Protocol 2024-11-05):
+// Spec coverage (Model Context Protocol — latest stable revision per
+// `mcp_protocol_version`, currently 2025-11-25):
 //   * initialize / initialized
 //   * tools/list, tools/call
 //   * prompts/list, prompts/get
@@ -233,7 +234,7 @@ $ `stdlib/ext/http_response.nu`
     { ( json_obj_set caps `resources` ( json_obj_new ) ) } {}
 
     : Json out ( json_obj_new )
-    ( json_obj_set out `protocolVersion` ( json_str_lit `2024-11-05` ) )
+    ( json_obj_set out `protocolVersion` ( json_str_lit ( mcp_protocol_version ) ) )
     ( json_obj_set out `capabilities` caps )
     ( json_obj_set out `serverInfo` info )
     ^ out

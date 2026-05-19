@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+* **MCP `protocolVersion` bumped from `2024-11-05` to `2025-11-25`
+  (current stable revision)** + centralized + drift-check tooling.
+  All seven hardcoded pinnings across `stdlib/ext/mcp.nu`,
+  `mcp_registry.nu`, `mcp_client.nu`, `mcp_stdio.nu` now route
+  through a single `mcp_protocol_version → s` helper. A companion
+  `mcp_protocol_version_legacy → s` returns `2024-11-05` for
+  callers that need to explicitly negotiate the older shape
+  (server MAY agree to whatever the client requests as long as
+  it's a revision the server supports).
+
+  MCP revisions only bump on backwards-incompatible changes per
+  the spec's versioning page, so a server advertising the latest
+  revision serves earlier clients fine — pinning to an old date
+  pushes negotiation the wrong way.
+
+  New helper: `tools/mcp_spec_drift_check.sh` fetches the spec
+  site's versioning page, parses the current revision, compares
+  to NURL's pinned value, exits 1 on drift with a pointer at the
+  changelog URL. Drop-in for CI or a weekly cron. Closes
+  critic.md #4 ("MCP spec governance shifted ... continuous
+  integration against the moving spec is not yet automated").
+
 ### Added
 
 * **Compiler: closure-escape warnings for `vec_push` / `vec_insert` /

@@ -60,6 +60,7 @@
 $ `stdlib/std/process.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/ext/mcp.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
@@ -248,7 +249,7 @@ $ `stdlib/core/vec.nu`
     ( json_obj_set info `name` ( json_str_lit client_name ) )
     ( json_obj_set info `version` ( json_str_lit client_version ) )
     : Json params ( json_obj_new )
-    ( json_obj_set params `protocolVersion` ( json_str_lit `2024-11-05` ) )
+    ( json_obj_set params `protocolVersion` ( json_str_lit ( mcp_protocol_version ) ) )
     ( json_obj_set params `capabilities` caps )
     ( json_obj_set params `clientInfo` info )
     ^ ( mcp_stdio_call c `initialize` @ ?Json { T params } 0 )

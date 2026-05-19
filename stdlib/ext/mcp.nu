@@ -96,9 +96,17 @@
 //   `initialize` handshake completes; servers should accept and
 //   ignore it.
 // * `ping` requests get an empty result `{}`.
-// * `protocolVersion` defaults to `2024-11-05` here for broad client
-//   compatibility. Override by passing your own initialize result if
-//   you need a newer revision.
+// * `protocolVersion` defaults to the value returned by
+//   `mcp_protocol_version` — currently the latest stable revision
+//   (`2025-11-25`). MCP revisions only bump on backwards-incompatible
+//   changes, so a server advertising the latest revision serves older
+//   clients fine — but pinning to an old revision pushes negotiation
+//   the wrong way. `tools/mcp_spec_drift_check.sh` verifies the
+//   pinned version matches the spec site's "current".
+// * `mcp_protocol_version_legacy` returns `2024-11-05` — the previous
+//   pinned revision. Useful for serving clients that explicitly
+//   negotiate that version (a server MAY agree to whatever the
+//   client requests, as long as it's a revision the server supports).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/option.nu`
@@ -116,6 +124,30 @@ $ `stdlib/ext/json.nu`
 : i mcp_err_method_not_found -32601
 : i mcp_err_invalid_params -32602
 : i mcp_err_internal_error -32603
+
+// ── Protocol version ────────────────────────────────────────────────
+//
+// MCP revisions are dated YYYY-MM-DD per
+// https://modelcontextprotocol.io/specification/versioning. The version
+// only bumps on backwards-incompatible changes, so a server that
+// advertises the LATEST revision serves earlier clients correctly —
+// pinning to an old date pushes negotiation the wrong way.
+//
+// `tools/mcp_spec_drift_check.sh` verifies the pinned version below
+// matches the spec site's "current" version; CI integration would
+// fail fast when the spec drifts.
+
+@ mcp_protocol_version → s {
+    // Latest stable revision (as of 2026-05-19; verified via spec site).
+    ^ `2025-11-25`
+}
+
+@ mcp_protocol_version_legacy → s {
+    // Previous pinned revision — kept exported for callers that want
+    // to explicitly negotiate the older shape (e.g. for compatibility
+    // with a fixed older client).
+    ^ `2024-11-05`
+}
 
 // ── Logging ─────────────────────────────────────────────────────────
 
@@ -270,7 +302,7 @@ $ `stdlib/ext/json.nu`
     ( json_obj_set caps `tools` tools_cap )
 
     : Json out ( json_obj_new )
-    ( json_obj_set out `protocolVersion` ( json_str_lit `2024-11-05` ) )
+    ( json_obj_set out `protocolVersion` ( json_str_lit ( mcp_protocol_version ) ) )
     ( json_obj_set out `capabilities` caps )
     ( json_obj_set out `serverInfo` info )
     ^ out
