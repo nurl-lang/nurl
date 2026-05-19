@@ -13,13 +13,18 @@ unlock, see [`../CHANGELOG.md`](../CHANGELOG.md).
 
 ## Quick reference
 
-| # | Gotcha | One-line fix |
-|---|---|---|
-| 1 | `&` and `|` are **binary** — `& A B C` is a parse-arity error | Chain via parens: `& A & B C` |
-| 2 | Bare `@-fn` names don't auto-coerce to a `(@ R P*)` closure parameter | Wrap in `\ P* → R { ( fn args ) }` |
-| 3 | Same-line shadowing: `: i z + z 7` shadows the parameter `z` from that line (compiler emits a non-fatal `warning:`) | Rename: `: i zz + z 7` |
-| 4 | Ternary arity errors cascade — diagnostic points at the *next* line | Count operands left-to-right on the previous line |
-| 5 | Mutable struct captured by closure (`: ~ T`) is a **borrow**, not a copy (compiler warns for `^`-return AND `vec_push` / `vec_insert` / `vec_set` / `thread_spawn` escapes; struct-wrapped indirection slips past) | Don't escape the closure; if you must, use a heap-backed handle |
+| # | Gotcha | One-line fix | Auto-diagnosed? |
+|---|---|---|---|
+| 1 | `&` and `|` are **binary** — `& A B C` is a parse-arity error | Chain via parens: `& A & B C` | parser surfaces the stray-token error |
+| 2 | Bare `@-fn` names don't auto-coerce to a `(@ R P*)` closure parameter | Wrap in `\ P* → R { ( fn args ) }` | no |
+| 3 | Same-line shadowing: `: i z + z 7` shadows the parameter `z` from that line | Rename: `: i zz + z 7` | **compiler `warning:`** |
+| 4 | Ternary arity errors cascade — diagnostic points at the *next* line | Count operands left-to-right on the previous line | no |
+| 5 | Mutable struct captured by closure (`: ~ T`) is a **borrow**, not a copy | Don't escape the closure; if you must, use a heap-backed handle | **`warning:` for `^`-return + `vec_push`/`vec_insert`/`vec_set`/`thread_spawn` escapes** |
+| 6 | `^ ?? v { F e → { ^ … } T m → { ^ … } }` — outer `^` has no value when arms contain `^` | `: ~ T rc init / ?? mr { … = rc v } / ^ rc` | **compiler `error:`** with cure |
+| 7 | `nurl_str_len` (libc, expects `s`) vs `string_len` (stdlib, expects `%String`) — silent UB if confused | Use `string_len` for `String`, `nurl_str_len` for raw `i8*` | **compiler `error:`** at call site |
+| 8 | Parameter name `entry` collides with LLVM's reserved `entry:` block label | Rename to `ent` / `tab_entry` / etc. | **compiler `error:`** at param parse |
+| 9 | `# T { ... }` parses as cast-to-T applied to a block, **not** a struct/enum literal | Use `@ T { ... }` for literals | **compiler `error:`** at cast site |
+| 10 | Mutable `: ~ *T` pointer bindings miscompile in long-running write loops (~tens of thousands of iters) | Use immutable `: *T` + re-fetch on grow, or carry as i64 and cast per use | **compiler `warning:`** at decl |
 
 ---
 
@@ -207,6 +212,145 @@ the assignment inside the closure reaches the caller's alloca. For
 scalars or single-handle structs, writes inside the closure stay
 local — use a wrapper struct if you need recover-with-result on a
 scalar payload.
+
+---
+
+## 6. `^ ?? v { ... }` with `^`-arms is statement-form, not expression
+
+```nurl
+// ✗ Looks like "return a match expression", silently fails to type
+@ try_parse s src → !i ParseErr {
+  ^ ?? ( parse_int src ) {
+    T n → { ^ @ ! ! Ok n }      // these `^` make `??` statement-form
+    F e → { ^ @ ! ! Err e }
+  }
+}
+```
+
+The compiler raises `error: return expression has no value (expected
+…) — match arms contain '^' so '?? …' is statement-form, not an
+expression`.
+
+Fix via a mutable result-carrier:
+
+```nurl
+@ try_parse s src → !i ParseErr {
+  : ~ !i ParseErr rc @ ! ! Err ParseErrInit
+  ?? ( parse_int src ) {
+    T n → { = rc @ ! ! Ok n }
+    F e → { = rc @ ! ! Err e }
+  }
+  ^ rc
+}
+```
+
+---
+
+## 7. `nurl_str_len` vs `string_len`
+
+```nurl
+: String s ( string_from_cstr `abc` )
+
+// ✗ silent UB — reads the struct bytes as a pointer
+: i bad ( nurl_str_len s )
+
+// ✓ stdlib wrapper that knows the struct layout
+: i ok  ( string_len s )
+```
+
+`nurl_str_len` is a direct FFI to libc `strlen` and takes `s` (an
+i8* C-string). `string_len` is the stdlib counterpart and takes a
+`%String` struct. The compiler refuses to compile the wrong shape:
+
+```
+foo.nu:5:28: nurl_str_len expects 's' (i8* C-string), got %String.
+             Use 'string_len' for String values.
+```
+
+The reverse (`string_len` on a raw `i8*`) is rejected the same way.
+
+---
+
+## 8. Parameter name `entry` collides with LLVM `entry:`
+
+```nurl
+// ✗ collides with the entry: basic block emitted at every fn header
+@ takes i entry → v { ( nurl_print_int entry ) }
+```
+
+The compiler emits:
+
+```
+foo.nu:1:17: parameter name 'entry' collides with LLVM's reserved
+             entry: block label. Rename (e.g. 'ent', 'tab_entry').
+```
+
+Same applies to any future LLVM-reserved label — only `entry` is
+specifically flagged today; if a future check fires elsewhere, the
+diagnostic message will name the offending label.
+
+---
+
+## 9. `# T { ... }` is a cast, not a struct/enum literal
+
+```nurl
+: Point { i x  i y }
+
+// ✗ parses as cast-to-Point applied to a block expression
+: Point p # Point { 1 2 }
+
+// ✓ struct/enum literals use @
+: Point p @ Point { 1 2 }
+```
+
+The compiler refuses the misuse with a pointing diagnostic and the
+suggested replacement:
+
+```
+foo.nu:4:23: '#' is the cast operator; struct/enum literals use '@'.
+             Write '@ Point { ... }' instead.
+```
+
+`#` remains valid for explicit casts (`# i ( . p k )`, `# u8 x`,
+`# MyEnum SomeVariant`) — the check only fires when `#` is followed
+by a registered struct or enum type AND `{`.
+
+---
+
+## 10. Mutable `: ~ *T` pointer bindings miscompile in long loops
+
+```nurl
+// ✗ deterministic crash at ~tens of thousands of iterations
+: ~ * i p ( vec_data v )
+~ < i n {
+  ( poke_i64 p i some_value )
+  = i + i 1
+}
+```
+
+The bug reproduces in long-running write loops (confirmed in CSV
+parsing at ~row 66k) but trivial isolated cases work, so the
+compiler warns instead of failing:
+
+```
+foo.nu:3:7: warning: mutable pointer binding ': ~ *T' miscompiles
+            in long-running write loops … Prefer immutable ': *T' +
+            re-fetch on grow, or carry the address as an i64 and
+            cast per use.
+```
+
+Workarounds:
+
+* Immutable `: *T` with pre-reservation generous enough that
+  `vec_reserve` re-grow never fires — the load-bearing pattern in
+  the CSV path post-LTO.
+* Re-fetch the pointer per iteration (defeats the hoist, but safe
+  for short inner loops).
+* Carry the address in an `i` (i64 raw address) mutable binding,
+  cast to `*T` per use — untested but plausible.
+
+Root cause unknown — not yet tracked to a specific `gen_*` function.
+A real isolation reproducer would be welcome.
 
 ---
 

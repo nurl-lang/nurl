@@ -892,6 +892,13 @@
 
 @ gen_ret i lex i syms i cg → s {
     ( nurl_lex_advance lex )
+    // GOTCHAS.md item 1: `^ ?? value { F e → {…} T m → {…} }` looks
+    // like "return a match expression", but when ANY arm contains its
+    // own `^`, the `??` becomes statement-form and yields `void`, so
+    // the outer `^` has nothing to return. Snapshot whether the next
+    // token is `??` so the post-gen_expr void-value diagnostic can
+    // augment its message with the actual cure.
+    : b returning_match == ( nurl_lex_type lex ) TT_QUESTQUEST
     // Reset __last_ident_name__ so we observe what gen_expr sets below
     ( nurl_sym_def syms `__last_ident_name__` `` )
     // Reset the closure-byref flag so we can tell whether the returned
@@ -925,9 +932,11 @@
     // type" error.
     : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
     ? & & ( seq lt `void` ) != 0 ( nurl_str_len fn_rt ) ! ( seq fn_rt `void` )
-    { ( die lex ( nurl_str_cat `return expression has no value (expected `
-        ( nurl_str_cat ( llvm_to_nurl fn_rt )
-        `) — likely a conditional with incompatible branch types` ) ) ) }
+    { : s hint ? returning_match
+        `) — match arms contain '^' so '?? …' is statement-form, not an expression. Refactor to ': ~ T rc init / ?? mr { … = rc v } / ^ rc'. See docs/GOTCHAS.md item 6.`
+        `) — likely a conditional with incompatible branch types`
+        ( die lex ( nurl_str_cat `return expression has no value (expected `
+            ( nurl_str_cat ( llvm_to_nurl fn_rt ) hint ) ) ) }
     {}
     : s dtop ( nurl_sym_get syms `__defer_top__` )
     // Determine which owned-slice binding (if any) is escaping as the return value.
@@ -1542,6 +1551,24 @@
         : s av ( gen_expr lex syms cg )
         : s at ( nurl_get_last_type )
         : s lu_arg ( nurl_sym_get syms `__last_unsigned__` )
+        // GOTCHAS.md item 2: `nurl_str_len` vs `string_len` confusion.
+        // `nurl_str_len` is the FFI to libc strlen and expects `s`
+        // (i8*); passing a `%String` struct reads the struct bytes as
+        // a pointer and returns garbage (bit us in manifest_parse).
+        // `string_len` is the stdlib wrapper and expects a `%String`;
+        // passing a raw i8* misreads the C-string pointer as a struct
+        // handle. Both shapes are pure type mismatches detectable at
+        // call time. Die — the result is silent UB otherwise.
+        ? & == arg_idx 0 ( seq fname `nurl_str_len` )
+        { ? ( seq at `%String` )
+            { ( die lex `nurl_str_len expects 's' (i8* C-string), got %String. Use 'string_len' for String values. See docs/GOTCHAS.md item 7.` ) }
+            {} }
+        {}
+        ? & == arg_idx 0 ( seq fname `string_len` )
+        { ? ( seq at `i8*` )
+            { ( die lex `string_len expects %String, got 'i8*' (raw C-string). Use 'nurl_str_len' for raw C-string pointers. See docs/GOTCHAS.md item 7.` ) }
+            {} }
+        {}
         // Escape check (closes docs/GOTCHAS.md item 8). If this call is
         // one of the four ownership-taking helpers AND this argument
         // names a binding tagged `<name>__captures_byref`, warn — the
@@ -3062,6 +3089,15 @@
     : b had_mutability_check | == ( nurl_lex_type lex ) TT_TILDE ( is_type_start ( nurl_lex_type lex ) )
     : b is_mutable == ( nurl_lex_type lex ) TT_TILDE
     ? is_mutable { ( nurl_lex_advance lex ) } {}
+    // GOTCHAS.md item 6: `: ~ * T name init` (mutable pointer to T)
+    // miscompiles in long-running write loops — confirmed via the CSV
+    // P2c hoist attempt where writes started segfaulting at ~row 66k.
+    // Warn (don't `die`) because trivial isolated cases work and the
+    // warning is advisory; suggest the immutable `: *T` alternative
+    // or re-fetching the pointer per iteration.
+    ? & is_mutable == ( nurl_lex_type lex ) TT_STAR
+    { ( warn lex `mutable pointer binding ': ~ *T' miscompiles in long-running write loops (deterministic crash ~tens-of-thousands of iterations). Prefer immutable ': *T' + re-fetch on grow, or carry the address as an i64 and cast per use. See docs/GOTCHAS.md item 10.` ) }
+    {}
     // Check if first token could be a type name by looking it up in symbol table
     ? & == ( nurl_lex_type lex ) TT_IDENT == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_lex_val lex ) ) )
     {  // Type inference: plain IDENT that's not a known type
@@ -3567,6 +3603,23 @@
 @ gen_cast i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s dt ( parse_type lex )
+    // GOTCHAS.md item 4: `# T { ... }` parses as cast-to-T applied to a
+    // block expression, NOT as a struct/enum literal. Users coming
+    // from Rust / TypeScript reflexively write `#` here and silently
+    // get wrong shapes. Detect the unambiguous pattern (target is a
+    // registered struct OR enum, next token is `{`) and stop with a
+    // pointing diagnostic.
+    ? & == ( nurl_lex_type lex ) TT_LBRACE & > ( nurl_str_len dt ) 1 == ( nurl_str_get dt 0 ) 37
+    { : s tname ( nurl_str_slice dt 1 - ( nurl_str_len dt ) 1 )
+        : s is_enum ( nurl_sym_get syms ( nurl_str_cat tname `__variants` ) )
+        : s is_struct ( nurl_sym_get syms ( nurl_str_cat3 tname `__idx_1` `__type` ) )
+        ? | != 0 ( nurl_str_len is_enum ) != 0 ( nurl_str_len is_struct )
+        { ( die lex ( nurl_str_cat3
+            `'#' is the cast operator; struct/enum literals use '@'. Write '@ `
+            tname ` { ... }' instead. See docs/GOTCHAS.md item 9.` ) ) }
+        {}
+    }
+    {}
     : s val ( gen_expr lex syms cg )
     : s st ( nurl_get_last_type )
     : s res ( nurl_cg_reg cg )
@@ -6152,6 +6205,15 @@
     : s p_nurl_type ( nurl_sym_get g_res_type_syms `__last_nurl_type__` )
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s pname ( nurl_lex_val lex )
+        // Reject parameter names that collide with LLVM reserved basic-
+        // block labels. Every NURL function emits an `entry:` block as
+        // its first label; a param named `entry` then collides at
+        // `%entry` lookup time and the bootstrap compiler emits a
+        // cryptic "unable to create block named 'entry'" LLVM error
+        // far from the source. Close GOTCHAS.md item 3.
+        ? ( seq pname `entry` )
+        { ( die lex `parameter name 'entry' collides with LLVM's reserved entry: block label. Rename (e.g. 'ent', 'tab_entry'). See docs/GOTCHAS.md item 8.` ) }
+        {}
         ( nurl_lex_advance lex )
         ( nurl_sym_def syms pname lt )
         // Mark parameter as immutable by design

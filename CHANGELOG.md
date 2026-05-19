@@ -10,6 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Source-level compiler diagnostics for five language gotchas.**
+  Previously each surfaced as either silent UB or a cryptic LLVM /
+  arity error far from the source. Each now emits a
+  `file:line:col` diagnostic with a caret + the concrete cure, and
+  is mirrored in `docs/GOTCHAS.md` items 6-10 (the Quick-reference
+  table gained an "Auto-diagnosed?" column).
+    * `^ ?? value { ... }` with `^`-arms — `error:` augments the
+      existing `return expression has no value` message with the
+      `: ~ T rc init / ?? { … = rc v } / ^ rc` refactor (item 6).
+    * `nurl_str_len` (libc, expects `s`) called on a `%String`,
+      and `string_len` (stdlib, expects `%String`) called on a
+      raw `i8*` — both `error:` at the call site (item 7).
+    * Parameter named `entry` — `error:` at the param parse,
+      naming the LLVM `entry:` block-label collision (item 8).
+    * `# T { ... }` where T is a registered struct/enum — `error:`
+      at the cast site suggesting `@ T { ... }` (item 9).
+    * `: ~ *T` mutable pointer bindings — `warning:` at the decl
+      pointing at the long-loop miscompile (item 10). Warn rather
+      than die because trivial isolated cases work; the advisory
+      catches the hoist patterns that crash deterministically
+      ~tens of thousands of iterations in.
+
 * **One-command developer install (`./install.sh`).** Bootstraps the
   compiler (skipped if `build/nurlc` already exists), builds
   `nurl-lsp`, symlinks it into `~/.local/bin/nurl-lsp` so VS Code /
