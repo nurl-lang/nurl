@@ -1127,6 +1127,10 @@ void nurl_munmap_file(const char *ptr, long long sz) {
 #endif
 }
 
+/* Forward declaration — used by the WASI/MSVC fallback below before
+ * the full definition appears further down in the file. */
+const char* nurl_read_file_safe(const char *path);
+
 const char* nurl_read_file_mmap(const char *path) {
 #if defined(__unix__) || defined(__APPLE__)
     int fd = open(path, O_RDONLY);
@@ -7077,7 +7081,7 @@ typedef struct NurlDosState {
     size_t    ip_cap;
 #ifdef _WIN32
     CRITICAL_SECTION lock;
-#else
+#elif !defined(__wasi__)
     pthread_mutex_t  lock;
 #endif
     int       lock_init;
@@ -7087,16 +7091,20 @@ static void nurl__dos_lock(NurlDosState *s) {
     if (!s || !s->lock_init) return;
 #ifdef _WIN32
     EnterCriticalSection(&s->lock);
-#else
+#elif !defined(__wasi__)
     pthread_mutex_lock(&s->lock);
+#else
+    (void)s;  /* wasi: single-threaded, no lock */
 #endif
 }
 static void nurl__dos_unlock(NurlDosState *s) {
     if (!s || !s->lock_init) return;
 #ifdef _WIN32
     LeaveCriticalSection(&s->lock);
-#else
+#elif !defined(__wasi__)
     pthread_mutex_unlock(&s->lock);
+#else
+    (void)s;
 #endif
 }
 
@@ -7110,7 +7118,7 @@ long long nurl_dos_state_new(long long max_concurrent, long long max_per_ip) {
     s->ip_entries = NULL;
 #ifdef _WIN32
     InitializeCriticalSection(&s->lock);
-#else
+#elif !defined(__wasi__)
     pthread_mutex_init(&s->lock, NULL);
 #endif
     s->lock_init = 1;
@@ -7210,7 +7218,7 @@ void nurl_dos_state_free(long long state) {
     if (s->lock_init) {
 #ifdef _WIN32
         DeleteCriticalSection(&s->lock);
-#else
+#elif !defined(__wasi__)
         pthread_mutex_destroy(&s->lock);
 #endif
     }

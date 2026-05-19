@@ -437,3 +437,17 @@ iteration.
 
 Result count unchanged (150 162 rows); nurl_top10.csv byte-identical
 with Polars output.
+
+## 2026-05-19 17:59:04Z — 702f74b+dirty
+- CPU: Intel(R) Core(TM) i7-5930K CPU @ 3.50GHz
+- Kernel: Linux 6.17.0-23-generic x86_64
+- Fixture: test_data.csv (1 M rows × 8 cols, 106756536 B, sha256=d00a0fd4509ea4a5…)
+- Runs: 50 per implementation
+
+| Stage  | NURL min | NURL med | Polars min | Polars med | NURL/Polars (med) |
+|--------|---------:|---------:|-----------:|-----------:|------------------:|
+| load   |      209 |      217 |         68 |         74 |             2.9× |
+| filter |       44 |       47 |         20 |         23 |             2.0× |
+| sort   |       47 |       51 |         11 |         13 |             3.9× |
+| write  |        0 |        0 |          2 |          3 |             0.0× |
+| total  |      307 |      317 |        102 |        114 |             2.8× |
