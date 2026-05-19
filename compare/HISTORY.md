@@ -312,3 +312,33 @@ columnar storage would collapse both.
 | total  |      375 |      392 |         92 |         95 |             4.1× |
 
 * **Combined-predicate filter helper**: `csv_table_filter_float_gt_and_str_contains` collapses the two filter stages into one FFI call with row-level short-circuit (float check first; ~85 % of rows skip the substring scan entirely). Filter drops 105 → 50 ms — **filter time halved relative to the LTO baseline (150 → 50 ms = -67 %)**. Load unchanged (parse cost is memory-bandwidth-bound).
+
+## 2026-05-19 — 70be61e — final state after FFI-hoist revert
+- CPU: Intel(R) Core(TM) i7-5930K CPU @ 3.50GHz
+- Kernel: Linux 6.17.0-23-generic x86_64
+- Fixture: test_data.csv (1 M rows × 8 cols, 106756536 B, sha256=d00a0fd4509ea4a5…)
+- Runs: 5 per implementation
+
+| Stage  | NURL min | NURL med | Polars min | Polars med | NURL/Polars (med) |
+|--------|---------:|---------:|-----------:|-----------:|------------------:|
+| load   |      278 |      282 |         61 |         63 |             4.5× |
+| filter |       47 |       48 |         17 |         19 |             2.5× |
+| sort   |       50 |       55 |         10 |         11 |             5.0× |
+| write  |        0 |        0 |          2 |          2 |             0.0× |
+| total  |      378 |      386 |         92 |         95 |             4.1× |
+
+Session goal "puolitettu load + filter" — partial:
+- Filter — **achieved**: 139 ms (LTO baseline) → 48 ms = **-65 %**.
+- Load — **not achieved**: 272 ms (LTO baseline) → 282 ms = flat
+  within run-to-run noise.
+
+The FFI-hoist + pre-count experiment for the load path was attempted
+on top of SSE2 + combined-filter; it segfaulted on the 1 M-row
+fixture (re-grow + pointer-refresh edge in the row-loop body),
+reverted to keep the tree green. Per CSVROADMAP.md's P2c notes the
+hoist's ~30 ms theoretical ceiling collapsed to single-digit ms
+post-LTO anyway. Load is memory-bandwidth + parser-write bound;
+reaching `≤ 156 ms` requires either P3b (typed pre-parse during
+the byte-walk) or P4 (columnar layout — `flat_cells` / `row_starts`
+/ `row_lens` traded for one `Vec[T]` per column). Both require a
+schema parameter through the load signature and new APIs on top.
