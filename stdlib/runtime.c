@@ -523,6 +523,37 @@ long long nurl_csv_filter_float_gt_and_str_contains(
     return w;
 }
 
+/* P3b: filter using pre-parsed typed_floats cache. typed_floats[r]
+ * holds the parsed double for body row r; the filter narrows the
+ * parallel row_starts/row_lens in place by reading typed_floats[r]
+ * instead of re-parsing the cell text via fast_atof. ~2-5 ns/row,
+ * an order of magnitude faster than `nurl_csv_filter_float_gt` on
+ * the same data. Returns the surviving row count.
+ *
+ * Caller MUST ensure typed_floats has exactly n_rows entries — the
+ * cache is indexed by ORIGINAL body-row order, so prior filters
+ * that narrowed row_starts break the alignment. csv.nu's
+ * `csv_table_filter_typed_float_gt` enforces this with a length
+ * check + cache invalidation. */
+long long nurl_csv_filter_typed_float_gt(
+    const double *typed_floats,
+    long long *row_starts,
+    long long *row_lens,
+    long long n_rows,
+    double threshold)
+{
+    if (!typed_floats || !row_starts || !row_lens) return 0;
+    long long w = 0;
+    for (long long r = 0; r < n_rows; r++) {
+        if (typed_floats[r] > threshold) {
+            row_starts[w] = row_starts[r];
+            row_lens[w]   = row_lens[r];
+            w++;
+        }
+    }
+    return w;
+}
+
 long long nurl_csv_filter_float_gt(
     const char *content,
     const unsigned char *escape_buf,

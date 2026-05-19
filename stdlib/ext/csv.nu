@@ -410,6 +410,16 @@ $ `stdlib/std/hashmap.nu`
     ( Vec u ) escape_buf  // unescaped quoted-cell bytes
     // off ≥ 0 → into content[]
     // off  < 0 → into escape_buf[-off-1..]
+    //
+    // P3b: schema-typed pre-parse caches. When a load path is told
+    // a column is float-typed, that column's per-row parsed double
+    // is appended to typed_floats during the byte-walk (cache-hot,
+    // no second pass). typed_float_col is the column index whose
+    // values typed_floats holds; -1 means the cache is unused.
+    // Filter / aggregate APIs that recognise the cache read the
+    // pre-parsed value instead of re-parsing the cell text.
+    ( Vec f ) typed_floats
+    i typed_float_col
 }
 
 @ csv_table_new → *CSVTable {
@@ -420,6 +430,8 @@ $ `stdlib/std/hashmap.nu`
     = . t row_starts ( vec_new [i] )
     = . t row_lens ( vec_new [i] )
     = . t escape_buf ( vec_new [u] )
+    = . t typed_floats ( vec_new [f] )
+    = . t typed_float_col - 0 1
     ^ t
 }
 
@@ -430,6 +442,7 @@ $ `stdlib/std/hashmap.nu`
     ( vec_free [i] . t row_starts )
     ( vec_free [i] . t row_lens )
     ( vec_free [u] . t escape_buf )
+    ( vec_free [f] . t typed_floats )
     ( nurl_free t )
 }
 
@@ -830,6 +843,30 @@ $ `stdlib/std/hashmap.nu`
                 : b _r ( vec_set_len [i] . t flat_cells wi )
                 = . rsp_w row_w row_first_cell
                 = . rlp_w row_w n_cells
+                // P3b: if a typed-float column is configured, parse
+                // its cell inline and push the value into the
+                // typed_floats cache. Cells are still HOT in L1 at
+                // this point (just finished writing them via fcp),
+                // so the parse pays mostly its own compute cost
+                // (~30-50 ns/row) and the filter side later skips
+                // the per-row strtod entirely.
+                : i tf_col . t typed_float_col
+                ? >= tf_col 0 {
+                    : ~ f tf_v 0.0
+                    ? < tf_col n_cells {
+                        : i tf_cell_idx + row_first_cell tf_col
+                        : i tf_off . fcp * tf_cell_idx 2
+                        : i tf_len . fcp + * tf_cell_idx 2 1
+                        ? > tf_len 0 {
+                            : ~ s tf_src # s 0
+                            ? >= tf_off 0
+                            { = tf_src # s + # i cd tf_off }
+                            { = tf_src # s + # i ( vec_data [u] . t escape_buf ) - 0 + tf_off 1 }
+                            = tf_v ( nurl_csv_fast_float_range tf_src tf_len )
+                        } {}
+                    } {}
+                    ( vec_push [f] . t typed_floats tf_v )
+                } {}
                 = row_w + row_w 1
             }
             = pos p
@@ -849,6 +886,32 @@ $ `stdlib/std/hashmap.nu`
     = . t content content
     ( __csv_parse_content t ( csv_dialect_default ) )
     ^ t
+}
+
+// P3b: load + pre-parse ONE float column in one byte-walk. The parsed
+// values land in `t.typed_floats[r]` for body row r; downstream
+// filters / aggregates use `csv_table_filter_typed_float_gt` (and
+// friends) which read the cache instead of re-parsing per row.
+@ csv_table_from_string_typed_f String content i typed_float_col → *CSVTable {
+    : *CSVTable t ( csv_table_new )
+    ( string_free . t content )
+    = . t content content
+    = . t typed_float_col typed_float_col
+    // Pre-reserve typed_floats to a generous estimate (newline count
+    // gives an upper bound for body rows; +2 padding for the
+    // headerless edge cases the parser handles).
+    : i nl_n ( nurl_count_byte # s ( string_data . t content ) ( string_len . t content ) 10 )
+    ( vec_reserve [f] . t typed_floats + nl_n 2 )
+    ( __csv_parse_content t ( csv_dialect_default ) )
+    ^ t
+}
+
+@ csv_table_load_typed_f s path i typed_float_col → *CSVTable {
+    : !String IoErr res ( read_file path )
+    ?? res {
+        F e → { ^ # *CSVTable 0 }
+        T content → { ^ ( csv_table_from_string_typed_f content typed_float_col ) }
+    }
 }
 
 @ csv_table_from_string_dialect String content CSVDialect dia → *CSVTable {
@@ -1263,6 +1326,35 @@ $ `stdlib/std/hashmap.nu`
         : i kept ( nurl_csv_filter_float_gt_and_str_contains # s cd # s eb fcp rsp rlp n col_f threshold col_s needle nlen )
         : b _a ( vec_set_len [i] . t row_starts kept )
         : b _b ( vec_set_len [i] . t row_lens kept )
+    } {}
+}
+
+// P3b: filter using the pre-parsed typed_floats cache. Skips the
+// per-row strtod entirely — values were parsed once during load.
+// Must run BEFORE any other filter on the same table: it consumes
+// the cache (after this call, typed_floats / typed_float_col are
+// cleared, since the row-index alignment with row_starts is gone
+// once row_starts is narrowed). Subsequent filters chain via
+// row_starts/row_lens narrowing as usual.
+@ csv_table_filter_typed_float_gt * CSVTable t f threshold → v {
+    : i n ( csv_table_n_rows t )
+    ? > n 0 {
+        : i tf_n ( vec_len [f] . t typed_floats )
+        ? == tf_n n {
+            : *f tfp ( vec_data [f] . t typed_floats )
+            : *i rsp ( vec_data [i] . t row_starts )
+            : *i rlp ( vec_data [i] . t row_lens )
+            : i kept ( nurl_csv_filter_typed_float_gt tfp rsp rlp n threshold )
+            : b _a ( vec_set_len [i] . t row_starts kept )
+            : b _b ( vec_set_len [i] . t row_lens kept )
+        } {}
+        // Clear the cache — row_starts no longer aligns with
+        // typed_floats whether or not we ran the narrow path
+        // (mismatched cache size means a prior filter already
+        // broke alignment; cleared run means it's now consumed).
+        ( vec_free [f] . t typed_floats )
+        = . t typed_floats ( vec_new [f] )
+        = . t typed_float_col - 0 1
     } {}
 }
 

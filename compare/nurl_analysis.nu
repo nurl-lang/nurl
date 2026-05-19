@@ -35,11 +35,13 @@ $ `stdlib/ext/csv.nu`
 
     // Filter: val_float2 > 0  AND  text_words contains "juliet".
     //
-    // Single FFI call routes through the combined-predicate helper:
-    // each row pays the cheap fast_atof check first, and only the
-    // rows that pass it pay the substring scan. On the canonical
-    // test (~85 % of rows fail the float check), this short-circuits
-    // most of the per-row substring scan cost.
+    // Combined-predicate helper does both checks in a single C call
+    // with row-level short-circuit (float check first; ~85 % of
+    // rows skip the substring scan). For one-shot filter use this
+    // beats the P3b pre-parse path because no inline parse is
+    // added to load — see `csv_table_load_typed_f` for the
+    // pre-parse alternative when the float column is consumed
+    // multiple times (aggregations, multi-pass filters).
     ( csv_table_filter_float_gt_and_str_contains df col_vf2 0.0 col_tw `juliet` )
     : i t_filter ( monotonic_ns )
     ( nurl_print `Filtered to ` )

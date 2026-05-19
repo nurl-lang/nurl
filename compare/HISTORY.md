@@ -342,3 +342,49 @@ reaching `≤ 156 ms` requires either P3b (typed pre-parse during
 the byte-walk) or P4 (columnar layout — `flat_cells` / `row_starts`
 / `row_lens` traded for one `Vec[T]` per column). Both require a
 schema parameter through the load signature and new APIs on top.
+
+## 2026-05-19 — 56017b1+dirty — P3b typed pre-parse infrastructure
+- CPU: Intel(R) Core(TM) i7-5930K CPU @ 3.50GHz
+- Kernel: Linux 6.17.0-23-generic x86_64
+- Fixture: test_data.csv (1 M rows × 8 cols, 106756536 B, sha256=d00a0fd4509ea4a5…)
+- Runs: 5 per implementation
+
+| Stage  | NURL min | NURL med | Polars min | Polars med | NURL/Polars (med) |
+|--------|---------:|---------:|-----------:|-----------:|------------------:|
+| load   |      275 |      277 |         61 |         63 |             4.4× |
+| filter |       46 |       48 |         17 |         19 |             2.5× |
+| sort   |       50 |       55 |         10 |         11 |             5.0× |
+| write  |        0 |        0 |          2 |          2 |             0.0× |
+| total  |      375 |      379 |         92 |         95 |             4.0× |
+
+P3b landed as new public API + on-table cache without disturbing the
+hot path:
+
+* **`CSVTable` gained `( Vec f ) typed_floats` + `i typed_float_col`**
+  (default: empty vec + col = -1 = no cache).
+* **`csv_table_load_typed_f s path i col → *CSVTable`** runs the
+  same parser but inlines `nurl_csv_fast_float_range` on the target
+  column's cell during the byte-walk (cache-hot bytes; ~30 ns/row
+  added to load).
+* **`csv_table_filter_typed_float_gt t threshold`** routes through
+  the new `nurl_csv_filter_typed_float_gt` C helper — a tight i64
+  scan over typed_floats + row_starts narrowing. ~5 ns/row.
+* **Cache is consumed on filter** — typed_floats is freed and
+  typed_float_col reset to -1 because narrowing row_starts breaks
+  the original row-index alignment with the cache. Documented in
+  csv.nu.
+* **Bench restored to `csv_table_filter_float_gt_and_str_contains`**
+  (the combined-predicate helper from the prior commit). The P3b
+  path is NOT a win on this benchmark because the combined helper
+  already runs the float check at near-optimal speed (single C call
+  with row-level short-circuit on the ~85 % rows that fail the
+  float predicate). The inline parse during load (+27 ms) exceeds
+  the dedicated parse it would replace (~50 ms for the chained
+  helpers, but only ~25 ms-equivalent inside the combined version's
+  short-circuit). P3b wins when the float column is consumed
+  multiple times — aggregations, multi-pass filters, sort-then-
+  filter pipelines — not on the canonical single-shot filter
+  bench. Regression: `compiler/tests/csv_typed_float.nu`.
+
+Total load+filter: 277 + 48 = 325 ms (vs LTO baseline 272 + 139 =
+411 ms, -21 %). Filter halved (-65 %); load remains memory-bound.
