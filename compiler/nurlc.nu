@@ -5916,6 +5916,9 @@
                         ( nurl_sym_def syms
                         ( nurl_str_cat3 mangled `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__type` ) )
                         flt )
+                        ( nurl_sym_def syms
+                        ( nurl_str_cat3 mangled `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__name` ) )
+                        fname )
                     }
                     {}
                     ? != first 0
@@ -5926,6 +5929,7 @@
                 ( nurl_print ` }\n\n` )
                 ( nurl_sym_def syms mangled ( nurl_str_cat `%` mangled ) )
                 ( nurl_sym_def syms ( nurl_str_cat mangled `__is_type` ) `1` )
+                ( nurl_sym_def syms ( nurl_str_cat mangled `__field_count` ) ( nurl_str_int fidx ) )
             } {}
         } {}
     } {}
@@ -6395,6 +6399,9 @@
             //   sname__fname__type  → LLVM type string (by name)
             //   sname__idx_N__type  → LLVM type string (by index, used by
             //                          Phase 2C struct-field drop for slices)
+            //   sname__idx_N__name  → field name (used by DWARF Phase 6
+            //                          composite-type emission to label
+            //                          each !DIDerivedType DW_TAG_member)
             ( nurl_sym_def syms
             ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__idx` ) ) )
             ( nurl_str_int fidx ) )
@@ -6404,6 +6411,9 @@
             ( nurl_sym_def syms
             ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__type` ) )
             flt )
+            ( nurl_sym_def syms
+            ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__name` ) )
+            fname )
         }
         {}
         ? != first 0
@@ -6416,6 +6426,7 @@
     // Register struct name so it is recognised as a named type in enum payloads etc.
     ( nurl_sym_def syms sname ( nurl_str_cat `%` sname ) )
     ( nurl_sym_def syms ( nurl_str_cat sname `__is_type` ) `1` )
+    ( nurl_sym_def syms ( nurl_str_cat sname `__field_count` ) ( nurl_str_int fidx ) )
 }
 
 @ gen_const_decl s ty_tok b is_mutable i lex i syms → v {
