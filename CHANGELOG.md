@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Serde-style `JsonSerialize` trait + decoder helpers
+  (`stdlib/serde.nu`).** A NURL trait `JsonSerialize [T] { @ to_json
+  T x → Json }` with first-arg dispatch and impls for `i` / `b` /
+  `f` / `s` / `String`, paired with per-type `from_json_<T>` helpers
+  (`from_json_i` / `_b` / `_f` / `_string` / `_str_borrow`) that
+  return `!T ParseErr`. User types add their own `% JsonSerialize
+  MyStruct { @ to_json MyStruct x → Json { ... } }` impl and a
+  hand-written `mystruct_from_json`. The shape mirrors Serde:
+  format-specific traits (JsonSerialize stands alone today; TOML /
+  MsgPack get their own trait when those formats land) and a
+  Deserialize-by-naming-convention because NURL's first-arg-dispatch
+  cannot carry a trait whose receiver is `Json` — every impl would
+  collide. Demo: `examples/serde_demo.nu` round-trips a `Point`
+  through JSON text. Regression: `compiler/tests/serde_basic.nu`.
+
 * **docs/GOTCHAS.md folded back into the compiler + grammar +
   README — empty stub now.** The historical "gotchas" list existed
   to compensate for compile errors that lacked enough context to
