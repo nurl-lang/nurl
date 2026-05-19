@@ -1068,6 +1068,23 @@
         ( nurl_set_last_type ? == 0 ( nurl_str_len lt ) `i64` lt )
         : s ptr ( nurl_sym_get syms ( nurl_str_cat name `__ptr` ) )
         : s glb ( nurl_sym_get syms ( nurl_str_cat name `__global` ) )
+        // GOTCHAS.md item 11: bare `@-fn` names don't auto-coerce to a
+        // `(@ R P*)` closure parameter. A bare @-fn ident used as a
+        // value (i.e. NOT as a call's callee — gen_call's own path
+        // consumes the name before reaching here) currently emits IR
+        // that clang rejects with `use of undefined value '%name'`,
+        // because nurlc's fallback returns `%name` rather than a
+        // closure struct. Detect: name has `__src_file` set (i.e. is
+        // a @-fn) AND no `__ptr` (not a local) AND no `__global`
+        // (not a const / enum variant). Die with the canonical
+        // wrap-in-closure-literal cure.
+        ? & & == 0 ( nurl_str_len ptr ) == 0 ( nurl_str_len glb ) != 0 ( nurl_str_len ( nurl_sym_get g_vis_syms ( nurl_str_cat name `__src_file` ) ) )
+        { : s tail ( nurl_str_cat name ` args ) }'. See docs/GOTCHAS.md item 11.` )
+            ( die lex ( nurl_str_cat4
+                `bare '@-fn' name '` name
+                `' does not auto-coerce to a closure value. Wrap it: '\ args → R { ( `
+                tail ) ) }
+        {}
         // Cross-file visibility check for globals (consts + enum
         // variants). Locals have a `__ptr` entry and skip this entirely
         // — the strict-mode rule is global-symbol-only. The check is a
@@ -1812,6 +1829,16 @@
     // `br`, producing label cascades with no terminators (LLVM error
     // "expected instruction opcode").
     ? & != 0 tdr != 0 edr { ( emit_call_term `unreachable` ) = g_did_ret 1 } { = g_did_ret 0 }
+    // GOTCHAS.md item 1 + grammar: `?` consumed bare expressions for
+    // then/else, but the very next token is `{`. Almost always the
+    // n-ary `&`/`|` foot-gun: user wrote `? & a b c d { then } { else }`
+    // intending an n-ary AND, but `& a b` only takes 2 operands so
+    // `c` and `d` got consumed as the bare then/else, and the
+    // `{ ... }` blocks then run as side-effect statements. Warn —
+    // the program compiles but the conditional logic is wrong.
+    ? == ( nurl_lex_type lex ) TT_LBRACE
+    { ( warn lex `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary). See docs/GOTCHAS.md item 1.` ) }
+    {}
     // pick a consistent phi type: prefer the non-void live branch type;
     // if both live and types differ, fall back to void (no phi needed).
     : s phi_ty ? != 0 tdr et2 tt2

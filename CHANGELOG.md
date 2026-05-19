@@ -10,6 +10,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **docs/GOTCHAS.md folded back into the compiler + grammar +
+  README — empty stub now.** The historical "gotchas" list existed
+  to compensate for compile errors that lacked enough context to
+  fix the source. As of v0.7.1+ that gap is closed: every old item
+  now surfaces as a `file:line:col:` `error:` / `warning:` with a
+  pointing caret + concrete cure inline (see "Source-level compiler
+  diagnostics" below for the seven new emit sites + the four shipped
+  prior). The residual edges — prefix-arity strictness, `^` not
+  being XOR — are grammar properties, not surprises; they live in
+  README's Known Limitations → Grammar table next to the existing
+  imports / FFI limitations, and grammar.ebnf's `bin_expr` /
+  `ret_expr` productions now carry explanatory comments. The
+  GOTCHAS.md file is preserved as a redirect stub so external
+  links (and the MCP `nurl_read_gotchas` resource) keep working,
+  but new code should not add items there — extend the compiler
+  diagnostics or the grammar comments instead.
+
+* **Two more compiler diagnostics on top of the prior five.**
+  Bare `@-fn` used as a closure value (`error:` at the use site
+  with the `\ args → R { ( fn args ) }` wrap), and the
+  `? cond bare-then bare-else { … } { … }` shape (`warning:` —
+  the n-ary `&`/`|` foot-gun where `&` only consumed 2 of the
+  operands and the `{ … }` blocks became side-effect statements).
+  Both ride on the same `die`/`warn` infrastructure; verified via
+  the `bare '@-fn'` / `?-with-{` smoke programs.
+
 * **Source-level compiler diagnostics for five language gotchas.**
   Previously each surfaced as either silent UB or a cryptic LLVM /
   arity error far from the source. Each now emits a

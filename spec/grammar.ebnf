@@ -488,6 +488,17 @@ expr = literal
    Example:  & 255 n           — bitwise AND on i64 (hex literals not lexed)
    Example:  << 1 n            — 2^n  (n < 63)
    Example:  >> x 8             — arithmetic shift right by 8 *)
+(* Every operator below is STRICTLY BINARY (exactly 2 operands). For
+   n-ary boolean chains use n-1 operators:
+
+       & a & b & c d        — (a && b && c && d)
+       | | | a b c d        — (a || b || c || d)
+
+   The compiler warns on the most common foot-gun shape — `? & a b c d
+   { ... } { ... }` — where the bare `c`/`d` were consumed as the
+   ternary's then/else and the `{ ... }` blocks became side-effect
+   statements. Other contexts (function args, while conditions) still
+   need user awareness — count operands left-to-right. *)
 bin_expr = BIN_OP expr expr ;
 BIN_OP   = '+' | '-' | '*' | '/' | '%'
          | '<' | '>' | '==' | '!=' | '<=' | '>='
@@ -498,7 +509,17 @@ BIN_OP   = '+' | '-' | '*' | '/' | '%'
 (* ! expr  — logical NOT, yields b *)
 not_expr        = '!' expr ;
 
-(* ^ expr  — explicit return from enclosing function
+(* ^ expr  — explicit RETURN from the enclosing function. NURL has
+   NO infix XOR operator; `^ a b` always parses as `return (a b …)`.
+   For bitwise XOR use the identity `a XOR b = (a OR b) - (a AND b)`:
+
+       @ __xor8 i a i b → i { ^ - | a b & a b }
+
+   The compiler does have `xor` internally for bitwise NOT (`~`) and
+   for the i1 logical-not via `! expr`, but neither is exposed as a
+   binary surface syntax. Symptom of mis-typing `^` as XOR: LLVM
+   error "value doesn't match function result type" because `^` ate
+   the rest of the expression and returned a wrong-typed value.
    Example:  ^ + a b *)
 ret_expr        = '^' expr ;
 
