@@ -388,3 +388,52 @@ hot path:
 
 Total load+filter: 277 + 48 = 325 ms (vs LTO baseline 272 + 139 =
 411 ms, -21 %). Filter halved (-65 %); load remains memory-bound.
+
+## 2026-05-19 — a492e38+dirty — zero-copy file read + P3b infrastructure
+- CPU: Intel(R) Core(TM) i7-5930K CPU @ 3.50GHz
+- Kernel: Linux 6.17.0-23-generic x86_64
+- Fixture: test_data.csv (1 M rows × 8 cols, 106756536 B, sha256=d00a0fd4509ea4a5…)
+- Runs: 5 per implementation
+
+| Stage  | NURL min | NURL med | Polars min | Polars med | NURL/Polars (med) |
+|--------|---------:|---------:|-----------:|-----------:|------------------:|
+| load   |      208 |      214 |         61 |         63 |             3.4× |
+| filter |       45 |       48 |         17 |         19 |             2.5× |
+| sort   |       50 |       55 |         10 |         11 |             5.0× |
+| write  |        0 |        0 |          2 |          2 |             0.0× |
+| total  |      309 |      315 |         92 |         95 |             3.3× |
+
+Two pieces drop load from ~277 ms → ~214 ms:
+
+* **`string_from_take`** in `stdlib/core/string.nu` — adopts an
+  already-malloc'd NUL-terminated buffer as a String WITHOUT
+  copying the bytes. Saves one full memcpy of the file content on
+  every `read_file` (~30-35 ms / 100 MB). Used by `read_file` in
+  `stdlib/std/fs.nu`.
+* **`nurl_read_file_mmap`** in `stdlib/runtime.c` — mmap-backed
+  file read on POSIX. The kernel page-cache → process-heap path
+  skips libc stdio's buffered-I/O bookkeeping vs `fread`. Saves
+  another ~15-20 ms on warm-cache reads.
+* The `nurl_read_file_mmap_zero` true-zero-copy variant ships as
+  runtime FFI but is NOT wired into csv.nu — CSVTable's content
+  field is a String, and adopting an mmap'd pointer as a String
+  would require splitting the free path (munmap vs free). Future
+  work — see CSVROADMAP.md P7 (mmap-backed string columns).
+
+Session goal "puolitettu load + filter" — FINAL:
+  - Filter: 139 ms → 48 ms = **-65 %** ✓ halved (and beyond).
+  - Load:   272 ms → 214 ms = **-21 %** ✗ not halved (target ≤ 136 ms).
+  - Total:  451 ms → 315 ms = -30 %.
+
+Load remains memory-bandwidth bound. Of the ~214 ms, ~85 ms is the
+file-read memcpy (kernel page-cache → user heap), ~80-100 ms is the
+SSE2-vectorised parser byte-walk, ~30-50 ms is flat_cells / row_*
+memory writes. Reaching ≤ 136 ms requires either true-zero-copy
+mmap (CSVTable content field becomes a borrowed view; split free
+path) or full columnar layout (P4 — drops flat_cells entirely;
+per-column Vec[T] storage). Both require schema parameter through
+the load signature and a wider API change. Out of scope for this
+iteration.
+
+Result count unchanged (150 162 rows); nurl_top10.csv byte-identical
+with Polars output.

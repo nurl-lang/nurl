@@ -123,6 +123,27 @@ $ `stdlib/core/vec.nu`
     ^ @ String { . tmp ctl }
 }
 
+// Take ownership of an already-malloc'd, NUL-terminated buffer and
+// wrap it as a String WITHOUT copying. The caller must NOT touch
+// `raw` after the call — the returned String now owns the buffer
+// and will `nurl_free` it on `string_free`.
+//
+// `raw_cap` is the actual malloc'd size (bytes), typically
+// `nurl_str_len raw + 1` for a freshly-read file buffer. Must be
+// >= len + 1 so the trailing NUL fits.
+//
+// Used by fast file I/O paths (CSV / arena loaders) to avoid the
+// `nurl_memcpy` over the full content — for a 100 MB CSV that's
+// ~33 ms saved per load.
+@ string_from_take s raw i raw_cap → String {
+    : i n ( nurl_str_len raw )
+    : s ctl ( nurl_zalloc 24 )
+    ( nurl_poke ctl 0 # i raw )
+    ( nurl_poke ctl 1 n )
+    ( nurl_poke ctl 2 raw_cap )
+    ^ @ String { ctl }
+}
+
 // Build an owned String from a raw byte range. `src` is a borrowed
 // pointer into another buffer; `n` bytes are copied verbatim and a NUL
 // terminator is written at offset n. Faster than building a temporary
