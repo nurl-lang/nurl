@@ -363,6 +363,10 @@
 
 @ emiti s line → v { ( nurl_print `  ` ) ( nurl_print line ) ( nurl_print `\n` ) }
 
+// DWARF-aware emit helpers live further down (after g_dbg_* globals
+// have been declared) — see `emit_dbg_eol` / `emit_call` /
+// `emit_call_term` / `emit_inst` below.
+
 // ── String literal encoding ───────────────────────────────────────
 
 : i g_str_idx 0
@@ -386,6 +390,281 @@
 : i g_func_count 0  // Count of closure functions stored
 : i g_closure_emit_base 0  // Next func index to emit (watermark)
 : i g_type_emit_base 0  // Next type index to emit
+
+// ── DWARF debug-info state (see DWARF.md) ────────────────────────
+// All zero/empty when --g is OFF; emit helpers then produce IR that
+// is byte-identical to a pre-DWARF build. Toggled in main().
+: i g_dbg_enabled 0  // 1 when --g passed on the CLI
+: i g_dbg_next_id 100  // metadata-id allocator; starts above any
+                       //  module-flag id we might add later
+: i g_dbg_blob_syms 0  // sym handle holding queued !N = !DI… lines;
+                       //  flushed at end-of-module by dbg_flush
+: i g_dbg_file_id 0  // !DIFile id (allocated once at startup)
+: i g_dbg_cu_id 0  // !DICompileUnit id
+: i g_dbg_current_subprogram 0  // current function's !DISubprogram id
+                                 //  (0 outside any function)
+: i g_dbg_current_loc 0  // current !DILocation id (0 = no location;
+                          //  emit_dbg_eol then omits `, !dbg !N`)
+: i g_dbg_subroutine_ty 0  // shared !DISubroutineType id; allocated by
+                            //  dbg_init and reused for every fn. Phase 6
+                            //  will replace with per-fn signature types.
+: i g_dbg_placeholder_ty 0  // shared !DIBasicType id (i64-signed) used as
+                             //  the type for every local until Phase 6
+                             //  lays down per-LLVM-type DIBasicType
+                             //  entries indexed by `vt`.
+: i g_dbg_override_line 0  // Phase 7: when non-zero, gen_fn_decl_concrete
+                            //  uses this instead of `nurl_lex_line` for
+                            //  the !DISubprogram source line. Set by
+                            //  emit_one_instantiation so per-mono
+                            //  subprograms point at the original generic
+                            //  decl line, not synthetic `<generic>:1`.
+: i g_dbg_type_syms 0  // Phase 6 type-id cache: LLVM type string
+                        //  (e.g. `i64`, `i8*`, `%String`) → metadata id
+                        //  of its DIBasicType / DIDerivedType /
+                        //  DICompositeType. Populated lazily by
+                        //  dbg_type_id_for on first reference.
+
+// End-of-line for an instruction that may need a `!dbg` attachment
+// (calls + terminators under a !DISubprogram). When DWARF is off, or
+// no DILocation has been set, emits a plain `\n` — IR stays byte-
+// identical to a pre-DWARF build. Used by emit_call / emit_call_term,
+// and inlined at the tail of legacy multi-print call/ret/br sites.
+@ emit_dbg_eol → v {
+    ? & != g_dbg_enabled 0 != g_dbg_current_loc 0
+    { ( nurl_print `, !dbg !` )
+      ( nurl_print ( nurl_str_int g_dbg_current_loc ) ) }
+    {}
+    ( nurl_print `\n` )
+}
+
+// Single-string call emitter. `body` excludes the leading two-space
+// indent and the trailing newline. Equivalent to `emiti body` when
+// DWARF is off, and `  body, !dbg !N\n` when on.
+@ emit_call s body → v {
+    ( nurl_print `  ` ) ( nurl_print body ) ( emit_dbg_eol )
+}
+
+// Same shape as emit_call but semantically for terminators (`ret`,
+// conditional `br`, `unreachable`). Verifier requires `!dbg` on these
+// under a !DISubprogram, so they share emit_dbg_eol.
+@ emit_call_term s body → v {
+    ( nurl_print `  ` ) ( nurl_print body ) ( emit_dbg_eol )
+}
+
+// Non-call non-terminator instructions (alloca / load / store / gep /
+// phi / arithmetic / icmp / extractvalue / insertvalue). Currently a
+// thin wrapper around `emiti`; later phases may decide to attach
+// `!dbg` to some of these too (for column-precise stepping), at which
+// point this helper is the single integration point.
+@ emit_inst s body → v { ( emiti body ) }
+
+// ── DWARF helpers (see DWARF.md) ─────────────────────────────────
+// Allocate the next metadata id; ids start at 100 (see g_dbg_next_id)
+// and increment monotonically. Returned ids are emitted at end-of-
+// module by dbg_flush in numeric order.
+@ dbg_alloc_id → i {
+    : i id g_dbg_next_id
+    = g_dbg_next_id + g_dbg_next_id 1
+    ^ id
+}
+
+// Buffer one `!N = !DI…(…)` definition keyed by its id. The key is
+// the decimal id as a string; dbg_flush walks 100..g_dbg_next_id-1
+// and emits whichever keys are populated.
+@ dbg_buffer_meta i id s def → v {
+    ( nurl_sym_def g_dbg_blob_syms ( nurl_str_int id ) def )
+}
+
+// One-shot initialisation called from main when --g is on. Allocates
+// the file + compile-unit metadata ids, stashes them in globals, and
+// buffers the corresponding `!DIFile` / `!DICompileUnit` definitions.
+// Subsequent phases (DISubprogram per fn, DILocation per stmt, …)
+// reference these ids via `scope: !<g_dbg_file_id>` etc.
+@ dbg_init s path → v {
+    = g_dbg_blob_syms ( nurl_sym_new )
+    = g_dbg_file_id ( dbg_alloc_id )
+    = g_dbg_cu_id ( dbg_alloc_id )
+    = g_dbg_subroutine_ty ( dbg_alloc_id )
+    ( dbg_buffer_meta g_dbg_file_id
+        ( nurl_str_cat3
+            `!DIFile(filename: "` path `", directory: ".")` ) )
+    ( dbg_buffer_meta g_dbg_cu_id
+        ( nurl_str_cat3
+            `distinct !DICompileUnit(language: DW_LANG_C, file: !`
+            ( nurl_str_int g_dbg_file_id )
+            `, producer: "nurlc", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)` ) )
+    // One shared !DISubroutineType for every function until Phase 6
+    // emits per-signature variants. `!{null}` means "no params, void
+    // return"; the verifier accepts it as a placeholder.
+    ( dbg_buffer_meta g_dbg_subroutine_ty `!DISubroutineType(types: !{null})` )
+    = g_dbg_placeholder_ty ( dbg_alloc_id )
+    ( dbg_buffer_meta g_dbg_placeholder_ty
+        `!DIBasicType(name: "i", size: 64, encoding: DW_ATE_signed)` )
+    = g_dbg_type_syms ( nurl_sym_new )
+    ( nurl_sym_def g_dbg_type_syms `i64`
+        ( nurl_str_int g_dbg_placeholder_ty ) )
+}
+
+// Phase 6: look up (or lazily create) the metadata id corresponding to
+// an LLVM type string. The first call for a given `vt` emits a
+// !DIBasicType / !DIDerivedType into the blob and caches the id; later
+// calls return the cached id without re-emitting. Aggregate / struct
+// types fall back to the i64 placeholder so the verifier accepts the
+// DILocalVariable; full struct-member rendering (`ptype Foo`) lands
+// when this path learns to emit !DICompositeType.
+@ dbg_type_id_for s vt → i {
+    : s hit ( nurl_sym_get g_dbg_type_syms vt )
+    ? != 0 ( nurl_str_len hit ) { ^ ( nurl_str_to_int hit ) } {}
+    : i id 0
+    // Base types we render with NURL-flavoured names so `print x` in
+    // gdb shows "i" / "u8" / "b" instead of "i64" / "i8" / "i1".
+    ? ( seq vt `i64` )
+        { = id ( dbg_alloc_id )
+          ( dbg_buffer_meta id `!DIBasicType(name: "i", size: 64, encoding: DW_ATE_signed)` ) }
+    ? ( seq vt `i32` )
+        { = id ( dbg_alloc_id )
+          ( dbg_buffer_meta id `!DIBasicType(name: "i32", size: 32, encoding: DW_ATE_signed)` ) }
+    ? ( seq vt `i16` )
+        { = id ( dbg_alloc_id )
+          ( dbg_buffer_meta id `!DIBasicType(name: "i16", size: 16, encoding: DW_ATE_signed)` ) }
+    ? ( seq vt `i8` )
+        { = id ( dbg_alloc_id )
+          ( dbg_buffer_meta id `!DIBasicType(name: "u8", size: 8, encoding: DW_ATE_unsigned)` ) }
+    ? ( seq vt `i1` )
+        { = id ( dbg_alloc_id )
+          ( dbg_buffer_meta id `!DIBasicType(name: "b", size: 8, encoding: DW_ATE_boolean)` ) }
+    ? ( seq vt `double` )
+        { = id ( dbg_alloc_id )
+          ( dbg_buffer_meta id `!DIBasicType(name: "f", size: 64, encoding: DW_ATE_float)` ) }
+    ? ( seq vt `float` )
+        { = id ( dbg_alloc_id )
+          ( dbg_buffer_meta id `!DIBasicType(name: "f32", size: 32, encoding: DW_ATE_float)` ) }
+    ? ( seq vt `i8*` )
+        { = id ( dbg_alloc_id )
+          : i u8_id ( dbg_type_id_for `i8` )
+          ( dbg_buffer_meta id
+            ( nurl_str_cat3
+                `!DIDerivedType(tag: DW_TAG_pointer_type, baseType: !`
+                ( nurl_str_int u8_id )
+                `, size: 64)` ) ) }
+    // Everything else (named structs, vectors, closures, slices): fall
+    // back to the placeholder. Phase 6 follow-up replaces these with
+    // proper !DICompositeType entries so `ptype Vec[u]` shows fields.
+    ? == id 0 { = id g_dbg_placeholder_ty } {}
+    ( nurl_sym_def g_dbg_type_syms vt ( nurl_str_int id ) )
+    ^ id
+}
+
+// Allocate + buffer a !DISubprogram for one function. Caller stashes
+// the returned id on the `define` line via `!dbg !N` and sets
+// g_dbg_current_subprogram / g_dbg_current_loc so emit_dbg_eol can
+// attach `!dbg` to every call/ret/br inside the body.
+//   `lname` — the LLVM symbol after `@`. Usually identical to the
+//             NURL source name, but `main` is rewritten to
+//             `_nurl_main` (the C-side wrapper takes the bare name).
+//   `line` — source line of the function header (1-based; 0 = unknown).
+@ dbg_emit_subprogram s lname i line → i {
+    : i sp_id ( dbg_alloc_id )
+    : s ls ( nurl_str_int line )
+    : s fid ( nurl_str_int g_dbg_file_id )
+    : s cu  ( nurl_str_int g_dbg_cu_id )
+    : s part1 ( nurl_str_cat3 `distinct !DISubprogram(name: "` lname `"` )
+    : s part2 ( nurl_str_cat3 `, scope: !` fid `, file: !` )
+    : s part3 ( nurl_str_cat3 fid `, line: ` ls )
+    : s part4 ( nurl_str_cat3 `, scopeLine: ` ls `, unit: !` )
+    : s ty  ( nurl_str_int g_dbg_subroutine_ty )
+    : s body
+        ( nurl_str_cat4
+            part1 part2 part3
+            ( nurl_str_cat4 part4 cu `, type: !`
+                ( nurl_str_cat3 ty `, spFlags: DISPFlagDefinition` `)` ) ) )
+    ( dbg_buffer_meta sp_id body )
+    ^ sp_id
+}
+
+// Phase 5: declare a local (or function param) for gdb's `info locals`
+// and `print x`. `argk` is 0 for `:` locals, 1..N for fn parameters.
+// `ptr` must be a register holding the alloca pointer for `name`;
+// `vt` is the LLVM type of the slot. Until Phase 6 lands, the
+// DILocalVariable.type field always points at the shared
+// `g_dbg_placeholder_ty` (i64); gdb still prints the value, just not
+// rendered as `String` / `Vec[u]` / etc.
+@ dbg_declare_local s name s ptr s vt i line i argk → v {
+    ? & != g_dbg_enabled 0 != g_dbg_current_subprogram 0
+    {
+        : i var_id ( dbg_alloc_id )
+        : s sp ( nurl_str_int g_dbg_current_subprogram )
+        : s fi ( nurl_str_int g_dbg_file_id )
+        : s lns ( nurl_str_int line )
+        : s ty_s ( nurl_str_int ( dbg_type_id_for vt ) )
+        : s body
+            ( nurl_str_cat4
+                ( nurl_str_cat3 `!DILocalVariable(name: "` name `"` )
+                ( nurl_str_cat3 `, arg: ` ( nurl_str_int argk ) `, scope: !` )
+                ( nurl_str_cat4 sp `, file: !` fi `, line: ` )
+                ( nurl_str_cat4 lns `, type: !` ty_s `)` ) )
+        ( dbg_buffer_meta var_id body )
+        ( nurl_print `  call void @llvm.dbg.declare(metadata ` )
+        ( nurl_print vt ) ( nurl_print `* ` ) ( nurl_print ptr )
+        ( nurl_print `, metadata !` ) ( nurl_print ( nurl_str_int var_id ) )
+        ( nurl_print `, metadata !DIExpression())` ) ( emit_dbg_eol )
+    }
+    {}
+}
+
+// Allocate + buffer a !DILocation referencing the given subprogram.
+// `line` is the 1-based source line; `col` is the 1-based column
+// (0 = unknown). Returns the metadata id; caller assigns it to
+// g_dbg_current_loc so emit_dbg_eol attaches `!dbg !N` to following
+// instructions.
+@ dbg_emit_location i line i col i sp_id → i {
+    : i loc_id ( dbg_alloc_id )
+    : s body
+        ( nurl_str_cat4
+            `!DILocation(line: ` ( nurl_str_int line )
+            `, column: ` ( nurl_str_cat4
+                ( nurl_str_int col )
+                `, scope: !` ( nurl_str_int sp_id ) `)` ) )
+    ( dbg_buffer_meta loc_id body )
+    ^ loc_id
+}
+
+// End-of-module flush. Emits the named-metadata directives
+// (`!llvm.dbg.cu`, `!llvm.module.flags`) followed by every buffered
+// `!N = !DI…` definition in id order. No-op when --g is off.
+@ dbg_flush → v {
+    ? != g_dbg_enabled 0 {
+        // Module flags — DWARF Version 4 + Debug Info Version 3 +
+        // wchar_size 4. clang's default DWARF version on Linux is 4
+        // and Debug Info Version 3 has been stable since LLVM 11.
+        : i fv ( dbg_alloc_id )
+        : i fd ( dbg_alloc_id )
+        : i fw ( dbg_alloc_id )
+        ( dbg_buffer_meta fv `!{i32 7, !"Dwarf Version", i32 4}` )
+        ( dbg_buffer_meta fd `!{i32 2, !"Debug Info Version", i32 3}` )
+        ( dbg_buffer_meta fw `!{i32 1, !"wchar_size", i32 4}` )
+        ( emit `` )
+        ( nurl_print `!llvm.dbg.cu = !{!` )
+        ( nurl_print ( nurl_str_int g_dbg_cu_id ) )
+        ( nurl_print `}\n` )
+        ( nurl_print `!llvm.module.flags = !{!` )
+        ( nurl_print ( nurl_str_int fv ) )
+        ( nurl_print `, !` )
+        ( nurl_print ( nurl_str_int fd ) )
+        ( nurl_print `, !` )
+        ( nurl_print ( nurl_str_int fw ) )
+        ( nurl_print `}\n` )
+        : ~ i mi 100
+        ~ < mi g_dbg_next_id {
+            : s def ( nurl_sym_get g_dbg_blob_syms ( nurl_str_int mi ) )
+            ? != 0 ( nurl_str_len def )
+            { ( nurl_print `!` ) ( nurl_print ( nurl_str_int mi ) )
+              ( nurl_print ` = ` ) ( nurl_print def ) ( nurl_print `\n` ) }
+            {}
+            = mi + mi 1
+        }
+    } {}
+}
 
 // Phase 2B auto-drop-strings feature flag. Default ON. Compiler's own source
 // uses patterns (strings stored via nurl_set_last_type, passed to nurl_lex_new,
@@ -686,7 +965,7 @@
             ( nurl_print `* ` ) ( nurl_print rvp ) ( nurl_print `\n` )
         }
         {}
-        ( nurl_print `  br label %` ) ( nurl_print dtop ) ( nurl_print `\n` )
+        ( nurl_print `  br label %` ) ( nurl_print dtop ) ( emit_dbg_eol )
     }
     {  // no defers: drop owned slices then direct return
         ( mem_drop_owned syms cg skip )
@@ -697,9 +976,9 @@
         }
         {}
         ? ( seq lt `void` )
-        { ( emiti `ret void` ) }
+        { ( emit_call_term `ret void` ) }
         { ( nurl_print `  ret ` ) ( nurl_print lt )
-            ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `\n` ) }
+            ( nurl_print ` ` ) ( nurl_print val ) ( emit_dbg_eol ) }
     }
     ( nurl_set_last_type `void` )
     = g_did_ret 1
@@ -858,7 +1137,7 @@
     // Short-circuit: if left is false, skip right evaluation
     ( nurl_print `  br i1 ` ) ( nurl_print lv )
     ( nurl_print `, label %` ) ( nurl_print lright )
-    ( nurl_print `, label %` ) ( nurl_print lend ) ( nurl_print `\n` )
+    ( nurl_print `, label %` ) ( nurl_print lend ) ( emit_dbg_eol )
     // Right branch: evaluate right operand
     ( emit ( nurl_str_cat lright `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lright )
@@ -869,7 +1148,7 @@
     ( die lex `operator & requires matching types — right operand must be b` )
     {}
     : s right_lbl ( nurl_sym_get syms `__cur_lbl__` )
-    ( nurl_print `  br label %` ) ( nurl_print lend ) ( nurl_print `\n` )
+    ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
     // End: phi node to select result
     ( emit ( nurl_str_cat lend `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lend )
@@ -889,7 +1168,7 @@
     // Short-circuit: if left is true, skip right evaluation
     ( nurl_print `  br i1 ` ) ( nurl_print lv )
     ( nurl_print `, label %` ) ( nurl_print lend )
-    ( nurl_print `, label %` ) ( nurl_print lright ) ( nurl_print `\n` )
+    ( nurl_print `, label %` ) ( nurl_print lright ) ( emit_dbg_eol )
     // Right branch: evaluate right operand
     ( emit ( nurl_str_cat lright `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lright )
@@ -900,7 +1179,7 @@
     ( die lex `operator | requires matching types — right operand must be b` )
     {}
     : s right_lbl ( nurl_sym_get syms `__cur_lbl__` )
-    ( nurl_print `  br label %` ) ( nurl_print lend ) ( nurl_print `\n` )
+    ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
     // End: phi node to select result
     ( emit ( nurl_str_cat lend `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lend )
@@ -1144,7 +1423,7 @@
     ~ != 0 ( nurl_str_len rest ) {
         : s reg ( str_first_word rest )
         = rest ( str_skip_word rest )
-        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print reg ) ( nurl_print `)\n` )
+        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print reg ) ( nurl_print `)` ) ( emit_dbg_eol )
     }
 }
 
@@ -1312,7 +1591,7 @@
         : s impl_name ( nurl_str_cat fname ( nurl_str_cat `__` impl_mangle_key ) )
         ? ( seq impl_ret `void` )
         { ( nurl_print `  call void @` ) ( nurl_print impl_name )
-            ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)\n` )
+            ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
             ( mem_drop_arg_temps owned_arg_temps )
             ( nurl_set_last_type `void` )
             ^ `undef`
@@ -1321,7 +1600,7 @@
             ( nurl_print `  ` ) ( nurl_print res )
             ( nurl_print ` = call ` ) ( nurl_print impl_ret )
             ( nurl_print ` @` ) ( nurl_print impl_name )
-            ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)\n` )
+            ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
             ( mem_drop_arg_temps owned_arg_temps )
             ( nurl_set_last_type impl_ret )
             ^ res
@@ -1373,7 +1652,7 @@
             ( nurl_print `  ` ) ( nurl_print res )
             ( nurl_print ` = call ` ) ( nurl_print fn_ret_type )
             ( nurl_print ` ` ) ( nurl_print loaded_closure )
-            ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)\n` )
+            ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
             ( nurl_set_last_type fn_ret_type )
             = final_result res
         }
@@ -1394,7 +1673,7 @@
                 ( nurl_print `  ` ) ( nurl_print res )
                 ( nurl_print ` = call ` ) ( nurl_print fn_return_type )
                 ( nurl_print ` ` ) ( nurl_print var_llvm_val )
-                ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)\n` )
+                ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
                 ( nurl_set_last_type fn_return_type )
                 = final_result res
             }
@@ -1405,7 +1684,7 @@
             // Regular function call
             ? ( seq rlt `void` )
             { ( nurl_print `  call void @` ) ( nurl_print call_name )
-                ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)\n` )
+                ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
                 ( mem_drop_arg_temps owned_arg_temps )
                 ( nurl_set_last_type `void` )
                 `undef`
@@ -1414,7 +1693,7 @@
                 ( nurl_print `  ` ) ( nurl_print res )
                 ( nurl_print ` = call ` ) ( nurl_print rlt )
                 ( nurl_print ` @` ) ( nurl_print call_name )
-                ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)\n` )
+                ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
                 ( mem_drop_arg_temps owned_arg_temps )
                 ( nurl_set_last_type rlt )
                 res
@@ -1437,7 +1716,7 @@
     : s lend ( nurl_cg_lbl cg `end` )
     ( nurl_print `  br i1 ` ) ( nurl_print cv )
     ( nurl_print `, label %` ) ( nurl_print lt )
-    ( nurl_print `, label %` ) ( nurl_print le ) ( nurl_print `\n` )
+    ( nurl_print `, label %` ) ( nurl_print le ) ( emit_dbg_eol )
     ( emit ( nurl_str_cat lt `:` ) )
     // Push a symtab scope around each arm so that `:` bindings inside an arm
     // (notably their `__owned_strings__` entries) cannot leak into the sibling
@@ -1469,7 +1748,7 @@
         { ( mem_drop_new_strings syms cg old_strs_t )
             ( mem_drop_new_struct_fields syms cg old_structs_t )
             ( mem_drop_new_user_drops syms cg old_user_t ) } {}
-        ( nurl_print `  br label %` ) ( nurl_print lend ) ( nurl_print `\n` )
+        ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
     } {}
     ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
     ( emit ( nurl_str_cat le `:` ) )
@@ -1493,7 +1772,7 @@
         { ( mem_drop_new_strings syms cg old_strs_e )
             ( mem_drop_new_struct_fields syms cg old_structs_e )
             ( mem_drop_new_user_drops syms cg old_user_e ) } {}
-        ( nurl_print `  br label %` ) ( nurl_print lend ) ( nurl_print `\n` )
+        ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
     } {}
     ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
     ( emit ( nurl_str_cat lend `:` ) )
@@ -1505,7 +1784,7 @@
     // patterns leave g_did_ret=1 on the way out and the parent skips its
     // `br`, producing label cascades with no terminators (LLVM error
     // "expected instruction opcode").
-    ? & != 0 tdr != 0 edr { ( emiti `unreachable` ) = g_did_ret 1 } { = g_did_ret 0 }
+    ? & != 0 tdr != 0 edr { ( emit_call_term `unreachable` ) = g_did_ret 1 } { = g_did_ret 0 }
     // pick a consistent phi type: prefer the non-void live branch type;
     // if both live and types differ, fall back to void (no phi needed).
     : s phi_ty ? != 0 tdr et2 tt2
@@ -1569,7 +1848,7 @@
         : s ok_label ( nurl_cg_lbl cg `litok` )
         ( nurl_print `  br i1 ` ) ( nurl_print cmp_reg )
         ( nurl_print `, label %` ) ( nurl_print ok_label )
-        ( nurl_print `, label %` ) ( nurl_print fail_label ) ( nurl_print `\n` )
+        ( nurl_print `, label %` ) ( nurl_print fail_label ) ( emit_dbg_eol )
         ( nurl_print ok_label ) ( nurl_print `:\n` )
     }
 }
@@ -1681,7 +1960,7 @@
             ? ( seq pattern_name `_` ) {
                 // Wildcard: unconditional branch — no tag load, no icmp
                 = has_wildcard 1
-                ( nurl_print `  br label %` ) ( nurl_print arm_label ) ( nurl_print `\n` )
+                ( nurl_print `  br label %` ) ( nurl_print arm_label ) ( emit_dbg_eol )
             } { ? is_int_pat {
                 // Integer-literal arm: direct equality compare against
                 // the match value. No enum tag, no payload, no
@@ -1697,7 +1976,7 @@
                 ( nurl_print `, ` ) ( nurl_print pattern_name ) ( nurl_print `\n` )
                 ( nurl_print `  br i1 ` ) ( nurl_print cmp_reg )
                 ( nurl_print `, label %` ) ( nurl_print arm_label )
-                ( nurl_print `, label %` ) ( nurl_print next_label ) ( nurl_print `\n` )
+                ( nurl_print `, label %` ) ( nurl_print next_label ) ( emit_dbg_eol )
             } {
                 // Named variant.  Literal-constrained arms (e.g. `Ok 200`) do NOT
                 // exhaustively cover the variant — only catch-all arms (no literals)
@@ -1751,7 +2030,7 @@
                 : s tag_ok_label ? has_lit ( nurl_cg_lbl cg `litchk` ) arm_label
                 ( nurl_print `  br i1 ` ) ( nurl_print cmp_reg )
                 ( nurl_print `, label %` ) ( nurl_print tag_ok_label )
-                ( nurl_print `, label %` ) ( nurl_print next_label ) ( nurl_print `\n` )
+                ( nurl_print `, label %` ) ( nurl_print next_label ) ( emit_dbg_eol )
                 // Emit chained literal comparisons.  Each failure jumps to next_label;
                 // the last successful check falls through to arm_label.
                 ? has_lit {
@@ -1759,7 +2038,7 @@
                     ( emit_lit_check cg syms match_val match_type pattern_name 0 lit0 next_label )
                     ( emit_lit_check cg syms match_val match_type pattern_name 1 lit1 next_label )
                     ( emit_lit_check cg syms match_val match_type pattern_name 2 lit2 next_label )
-                    ( nurl_print `  br label %` ) ( nurl_print arm_label ) ( nurl_print `\n` )
+                    ( nurl_print `  br label %` ) ( nurl_print arm_label ) ( emit_dbg_eol )
                 } {}
             } }
 
@@ -1877,7 +2156,7 @@
                                     ( nurl_print `  ` ) ( nurl_print ubraw_s )
                                     ( nurl_print ` = bitcast ` ) ( nurl_print nurl_inner_llvm )
                                     ( nurl_print `* ` ) ( nurl_print ubp_s ) ( nurl_print ` to i8*\n` )
-                                    ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print ubraw_s ) ( nurl_print `)\n` )
+                                    ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print ubraw_s ) ( nurl_print `)` ) ( emit_dbg_eol )
                                     = pt0_eff nurl_inner_llvm
                                     = pr0_eff ubv_s
                                     = did_reconstruct T }
@@ -1901,7 +2180,7 @@
                                     ( nurl_print `  ` ) ( nurl_print ubraw )
                                     ( nurl_print ` = bitcast ` ) ( nurl_print nurl_inner_llvm )
                                     ( nurl_print `* ` ) ( nurl_print ubp ) ( nurl_print ` to i8*\n` )
-                                    ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print ubraw ) ( nurl_print `)\n` )
+                                    ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print ubraw ) ( nurl_print `)` ) ( emit_dbg_eol )
                                     = pt0_eff nurl_inner_llvm
                                     = pr0_eff ubv
                                     = did_reconstruct T
@@ -2083,7 +2362,7 @@
                     entry
                     ( nurl_str_cat phi_entries ( nurl_str_cat `, ` entry ) )
                 }
-                ( nurl_print `  br label %` ) ( nurl_print end_label ) ( nurl_print `\n` )
+                ( nurl_print `  br label %` ) ( nurl_print end_label ) ( emit_dbg_eol )
             } {}
 
             // Continue to next arm (skipped for wildcard arms)
@@ -2117,7 +2396,7 @@
     // edge into end_label isn't recorded in the phi — that breaks LLVM's
     // unreachable-block removal pass.
     ? != 0 ( nurl_str_len fallback_pred )
-    { ( nurl_print `  br label %` ) ( nurl_print end_label ) ( nurl_print `\n` ) }
+    { ( nurl_print `  br label %` ) ( nurl_print end_label ) ( emit_dbg_eol ) }
     {}
 
     // End label
@@ -2129,7 +2408,7 @@
     // so no real path arrives. Emit unreachable + flag did_ret so the
     // function epilogue doesn't try to ret void into a non-void return.
     ? & & > arms_total 0 == arms_ret arms_total != 0 ( nurl_str_len fallback_pred )
-    { ( emiti `unreachable` ) = g_did_ret 1 } { = g_did_ret 0 }
+    { ( emit_call_term `unreachable` ) = g_did_ret 1 } { = g_did_ret 0 }
 
     // Emit phi if every live arm produced a value of one consistent
     // non-void type.  Otherwise the match is treated as a statement.
@@ -2186,20 +2465,20 @@
     : s lc ( nurl_cg_lbl cg `foreach_check` )
     : s lb ( nurl_cg_lbl cg `foreach_body` )
     : s le ( nurl_cg_lbl cg `foreach_exit` )
-    ( nurl_print `  br label %` ) ( nurl_print lc ) ( nurl_print `\n` )
+    ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
     // Check: idx < len
     ( emit ( nurl_str_cat lc `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lc )
     : s idx_cur ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print idx_cur )
-    ( nurl_print ` = load i64, i64* ` ) ( nurl_print idx_ptr ) ( nurl_print `\n` )
+    ( nurl_print ` = load i64, i64* ` ) ( nurl_print idx_ptr ) ( emit_dbg_eol )
     : s cond ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print cond )
     ( nurl_print ` = icmp slt i64 ` ) ( nurl_print idx_cur )
     ( nurl_print `, ` ) ( nurl_print len_val ) ( nurl_print `\n` )
     ( nurl_print `  br i1 ` ) ( nurl_print cond )
     ( nurl_print `, label %` ) ( nurl_print lb )
-    ( nurl_print `, label %` ) ( nurl_print le ) ( nurl_print `\n` )
+    ( nurl_print `, label %` ) ( nurl_print le ) ( emit_dbg_eol )
     // Body: load element at idx, store to var alloca, run block
     ( emit ( nurl_str_cat lb `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lb )
@@ -2239,7 +2518,7 @@
         ( nurl_print ` = add i64 ` ) ( nurl_print idx_cur ) ( nurl_print `, 1\n` )
         ( nurl_print `  store i64 ` ) ( nurl_print next_idx )
         ( nurl_print `, i64* ` ) ( nurl_print idx_ptr ) ( nurl_print `\n` )
-        ( nurl_print `  br label %` ) ( nurl_print lc ) ( nurl_print `\n` )
+        ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
     }
     {}
     ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
@@ -2275,7 +2554,7 @@
         ( nurl_lex_set_pos lex start_pos )
         ( nurl_lex_advance lex )
 
-        ( nurl_print `  br label %` ) ( nurl_print lc ) ( nurl_print `\n` )
+        ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
         ( emit ( nurl_str_cat lc `:` ) )
         ( nurl_sym_def syms `__cur_lbl__` lc )
         = cv ( gen_expr lex syms cg )
@@ -2283,7 +2562,7 @@
         = cv ( coerce_to_i1 cv ( nurl_get_last_type ) cg )
         ( nurl_print `  br i1 ` ) ( nurl_print cv )
         ( nurl_print `, label %` ) ( nurl_print lb )
-        ( nurl_print `, label %` ) ( nurl_print le ) ( nurl_print `\n` )
+        ( nurl_print `, label %` ) ( nurl_print le ) ( emit_dbg_eol )
         ( emit ( nurl_str_cat lb `:` ) )
         // Scope the loop body so `:` bindings don't leak into the outer
         // `__owned_strings__` list (see gen_cond for the same reasoning).
@@ -2301,7 +2580,7 @@
         { ? != 0 g_auto_drop_strings
             { ( mem_drop_new_strings syms cg old_strs_lp )
                 ( mem_drop_new_struct_fields syms cg old_structs_lp ) } {}
-            ( nurl_print `  br label %` ) ( nurl_print lc ) ( nurl_print `\n` )
+            ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
         } {}
         ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
         ( emit ( nurl_str_cat le `:` ) )
@@ -2331,7 +2610,7 @@
     ( nurl_sym_def syms `__defer_top__` ldefer )
     = g_defer_count + g_defer_count 1
     // Skip over the defer block during normal execution
-    ( nurl_print `  br label %` ) ( nurl_print lafter ) ( nurl_print `\n` )
+    ( nurl_print `  br label %` ) ( nurl_print lafter ) ( emit_dbg_eol )
     // Emit the defer block
     ( emit ( nurl_str_cat ldefer `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` ldefer )
@@ -2340,9 +2619,9 @@
     // After the defer block: chain to previous defer or to fn_cleanup
     ? == g_did_ret 0
     { ? != 0 ( nurl_str_len prev_top )
-        { ( nurl_print `  br label %` ) ( nurl_print prev_top ) ( nurl_print `\n` ) }
+        { ( nurl_print `  br label %` ) ( nurl_print prev_top ) ( emit_dbg_eol ) }
         { : s fc ( nurl_sym_get syms `__fn_cleanup__` )
-            ( nurl_print `  br label %` ) ( nurl_print fc ) ( nurl_print `\n` )
+            ( nurl_print `  br label %` ) ( nurl_print fc ) ( emit_dbg_eol )
         }
     }
     {}
@@ -2437,7 +2716,7 @@
                 ( nurl_print `  ` ) ( nurl_print raw )
                 ( nurl_print ` = bitcast ` ) ( nurl_print tptr )
                 ( nurl_print ` ` ) ( nurl_print dp ) ( nurl_print ` to i8*\n` )
-                ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print raw ) ( nurl_print `)\n` )
+                ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print raw ) ( nurl_print `)` ) ( emit_dbg_eol )
             }
             {}
         }
@@ -2469,7 +2748,7 @@
             { : s v ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print v )
                 ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
-                ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)\n` )
+                ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
             }
             {}
         }
@@ -2571,7 +2850,7 @@
         ( nurl_print ` = extractvalue ` ) ( nurl_print agg_ty )
         ( nurl_print ` ` ) ( nurl_print sv ) ( nurl_print idx_list )
         ( nurl_print `\n` )
-        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print fv ) ( nurl_print `)\n` )
+        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print fv ) ( nurl_print `)` ) ( emit_dbg_eol )
     }
     { : s slice_ty ( nurl_sym_get syms ( nurl_str_cat3 leaf_sname `__idx_` ( nurl_str_cat leaf_idx `__type` ) ) )
         : i slen ( nurl_str_len slice_ty )
@@ -2589,7 +2868,7 @@
         ( nurl_print `  ` ) ( nurl_print raw )
         ( nurl_print ` = bitcast ` ) ( nurl_print tptr )
         ( nurl_print ` ` ) ( nurl_print dp ) ( nurl_print ` to i8*\n` )
-        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print raw ) ( nurl_print `)\n` )
+        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print raw ) ( nurl_print `)` ) ( emit_dbg_eol )
     }
 }
 
@@ -2635,7 +2914,7 @@
                 : s v ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print v )
                 ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
-                ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)\n` )
+                ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
             }
         }
         {}
@@ -2694,7 +2973,7 @@
                     ( nurl_print ` = load ` ) ( nurl_print vt ) ( nurl_print `, ` ) ( nurl_print vt )
                     ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
                     ( nurl_print `  call void @` ) ( nurl_print impl_name )
-                    ( nurl_print `(` ) ( nurl_print vt ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)\n` )
+                    ( nurl_print `(` ) ( nurl_print vt ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
                 }
                 {}
             }
@@ -2724,7 +3003,7 @@
                     ( nurl_print ` = load ` ) ( nurl_print vt ) ( nurl_print `, ` ) ( nurl_print vt )
                     ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
                     ( nurl_print `  call void @` ) ( nurl_print impl_name )
-                    ( nurl_print `(` ) ( nurl_print vt ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)\n` )
+                    ( nurl_print `(` ) ( nurl_print vt ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
                 }
                 {}
             }
@@ -2737,6 +3016,16 @@
 // ── Statement ──────────────────────────────────────────────────────
 
 @ gen_stmt i lex i syms i cg → s {
+    // DWARF Phase 4: snapshot the source line/col of this statement's
+    // first token and seed a fresh DILocation. emit_dbg_eol attaches
+    // it to every call/ret/br emitted by the dispatched gen_* below,
+    // so gdb's `step` / `next` advance one NURL source line at a time
+    // and `break foo.nu:N` resolves to the right block.
+    ? & != g_dbg_enabled 0 != g_dbg_current_subprogram 0
+    { = g_dbg_current_loc ( dbg_emit_location
+        ( nurl_lex_line lex ) ( nurl_lex_col lex )
+        g_dbg_current_subprogram ) }
+    {}
     : i tt ( nurl_lex_type lex )
     ? == tt TT_COLON ( gen_let_or_struct lex syms cg )
     ? == tt TT_EQ ( gen_assign lex syms cg )
@@ -2799,6 +3088,7 @@
         ( nurl_print `  store ` ) ( nurl_print vt ) ( nurl_print ` ` )
         ( nurl_print val ) ( nurl_print `, ` ) ( nurl_print vt )
         ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+        ( dbg_declare_local name ptr vt ( nurl_lex_line lex ) 0 )
         ( nurl_sym_def syms name vt )
         ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
         // Only mark mutability if explicitly specified with ~
@@ -2926,6 +3216,7 @@
                 ( nurl_print `  store ` ) ( nurl_print ptype ) ( nurl_print ` ` )
                 ( nurl_print store_val ) ( nurl_print `, ` ) ( nurl_print ptype )
                 ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+                ( dbg_declare_local name ptr ptype ( nurl_lex_line lex ) 0 )
                 ( nurl_sym_def syms name ptype )
                 ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
                 // Only mark mutability if explicitly specified with ~
@@ -3017,7 +3308,7 @@
         { : s old_reg ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print old_reg )
             ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
-            ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print old_reg ) ( nurl_print `)\n` )
+            ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print old_reg ) ( nurl_print `)` ) ( emit_dbg_eol )
         }
         {}
         // Widen i1 short-circuit / comparison results to the LHS's
@@ -3823,7 +4114,7 @@
                                 ( nurl_print `* ` ) ( nurl_print sz_reg ) ( nurl_print ` to i64\n` )
                                 : s box_raw ( nurl_cg_reg cg )
                                 ( nurl_print `  ` ) ( nurl_print box_raw )
-                                ( nurl_print ` = call i8* @nurl_alloc(i64 ` ) ( nurl_print sz_int ) ( nurl_print `)\n` )
+                                ( nurl_print ` = call i8* @nurl_alloc(i64 ` ) ( nurl_print sz_int ) ( nurl_print `)` ) ( emit_dbg_eol )
                                 : s box_ptr ( nurl_cg_reg cg )
                                 ( nurl_print `  ` ) ( nurl_print box_ptr )
                                 ( nurl_print ` = bitcast i8* ` ) ( nurl_print box_raw )
@@ -3866,7 +4157,7 @@
                                 ( nurl_print `* ` ) ( nurl_print sz_reg ) ( nurl_print ` to i64\n` )
                                 : s box_raw ( nurl_cg_reg cg )
                                 ( nurl_print `  ` ) ( nurl_print box_raw )
-                                ( nurl_print ` = call i8* @nurl_alloc(i64 ` ) ( nurl_print sz_int ) ( nurl_print `)\n` )
+                                ( nurl_print ` = call i8* @nurl_alloc(i64 ` ) ( nurl_print sz_int ) ( nurl_print `)` ) ( emit_dbg_eol )
                                 : s box_ptr ( nurl_cg_reg cg )
                                 ( nurl_print `  ` ) ( nurl_print box_ptr )
                                 ( nurl_print ` = bitcast i8* ` ) ( nurl_print box_raw )
@@ -4063,7 +4354,7 @@
     : s raw_ptr ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print raw_ptr )
     ( nurl_print ` = call i8* @nurl_malloc(i64 ` )
-    ( nurl_print sz_i ) ( nurl_print `)\n` )
+    ( nurl_print sz_i ) ( nurl_print `)` ) ( emit_dbg_eol )
     // Bitcast i8* → elem_ty*
     : s typed_ptr ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print typed_ptr )
@@ -4408,7 +4699,7 @@
     : s env_ptr ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print env_ptr )
     ( nurl_print ` = call i8* @nurl_malloc(i64 ` )
-    ( nurl_print size_i64 ) ( nurl_print `)\n` )
+    ( nurl_print size_i64 ) ( nurl_print `)` ) ( emit_dbg_eol )
 
     : s typed_ptr ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print typed_ptr )
@@ -4545,12 +4836,12 @@
         // Branch based on reference count
         ( nurl_print `  br i1 ` ) ( nurl_print is_zero )
         ( nurl_print `, label %` ) ( nurl_print dealloc_label )
-        ( nurl_print `, label %` ) ( nurl_print continue_label ) ( nurl_print `\n` )
+        ( nurl_print `, label %` ) ( nurl_print continue_label ) ( emit_dbg_eol )
 
         // Deallocation block
         ( nurl_print dealloc_label ) ( nurl_print `:\n` )
-        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print env_ptr ) ( nurl_print `)\n` )
-        ( nurl_print `  br label %` ) ( nurl_print continue_label ) ( nurl_print `\n` )
+        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print env_ptr ) ( nurl_print `)` ) ( emit_dbg_eol )
+        ( nurl_print `  br label %` ) ( nurl_print continue_label ) ( emit_dbg_eol )
 
         // Continue block
         ( nurl_print continue_label ) ( nurl_print `:\n` )
@@ -4621,6 +4912,21 @@
     ( nurl_print_buf_reset )
     ( nurl_print_buf_start )
 
+    // DWARF: enter a fresh subprogram scope for the closure. The
+    // closure's own DISubprogram references the enclosing fn's
+    // subprogram so backtraces resolve a closure call through the
+    // surrounding scope. Saved subprogram/loc are restored after the
+    // body is buffered; the enclosing fn's instructions resume with
+    // their original `!dbg !N` attachments.
+    : i saved_dbg_sp g_dbg_current_subprogram
+    : i saved_dbg_loc g_dbg_current_loc
+    : i closure_sp_id 0
+    ? != g_dbg_enabled 0
+    { = closure_sp_id ( dbg_emit_subprogram closure_fn_name ( nurl_lex_line lex ) )
+        = g_dbg_current_subprogram closure_sp_id
+        = g_dbg_current_loc ( dbg_emit_location ( nurl_lex_line lex ) 1 closure_sp_id ) }
+    {}
+
     // Emit function header
     ( nurl_print `\ndefine ` ) ( nurl_print ret_type ) ( nurl_print ` @` )
     ( nurl_print closure_fn_name ) ( nurl_print `(i8* %__env` )
@@ -4636,7 +4942,11 @@
         = body_param_names ( str_skip_word body_param_names )
         = bi + bi 1
     }
-    ( nurl_print `) {\nentry:\n` )
+    ( nurl_print `)` )
+    ? != g_dbg_enabled 0
+    { ( nurl_print ` !dbg !` ) ( nurl_print ( nurl_str_int closure_sp_id ) ) }
+    {}
+    ( nurl_print ` {\nentry:\n` )
 
     // Build closure body symtable: copy outer scope + add params + captured vars
     ( nurl_sym_push syms )
@@ -4751,9 +5061,9 @@
     ? == g_did_ret 0
     {
         ? ( seq ret_type `void` )
-        { ( nurl_print `  ret void\n` ) }
+        { ( nurl_print `  ret void` ) ( emit_dbg_eol ) }
         { ( nurl_print `  ret ` ) ( nurl_print ret_type ) ( nurl_print ` ` )
-            ( nurl_print body_val ) ( nurl_print `\n` )
+            ( nurl_print body_val ) ( emit_dbg_eol )
         }
     }
     {}
@@ -4765,6 +5075,10 @@
     // Stop capturing and store as deferred closure function
     : s funcdef ( nurl_print_buf_stop )
     ( store_closure_func funcdef )
+    // Restore the enclosing function's DWARF context — subsequent
+    // instructions emitted by gen_stmt continue under its DISubprogram.
+    = g_dbg_current_subprogram saved_dbg_sp
+    = g_dbg_current_loc saved_dbg_loc
 
     // Return a function pointer constant
     : s fn_ptr_type ( nurl_str_cat `{ ` ( nurl_str_cat ret_type `(` ) )
@@ -5123,7 +5437,7 @@
     : s lfail ( nurl_cg_lbl cg `try_fail` )
     ( nurl_print `  br i1 ` ) ( nurl_print tag )
     ( nurl_print `, label %` ) ( nurl_print lok )
-    ( nurl_print `, label %` ) ( nurl_print lfail ) ( nurl_print `\n` )
+    ( nurl_print `, label %` ) ( nurl_print lfail ) ( emit_dbg_eol )
     // Fail path: propagate the Err/None value, routing through defer chain if active.
     // For res_type: return val (preserves original error payload).
     // For opt_type: return zeroinitializer (None = { false, 0 }).
@@ -5140,12 +5454,12 @@
             ( nurl_print fn_rt ) ( nurl_print `* ` ) ( nurl_print rvp ) ( nurl_print `\n` )
         }
         {}
-        ( nurl_print `  br label %` ) ( nurl_print dtop ) ( nurl_print `\n` )
+        ( nurl_print `  br label %` ) ( nurl_print dtop ) ( emit_dbg_eol )
     }
     { ? ( seq fn_rt `void` )
-        { ( emiti `ret void` ) }
+        { ( emit_call_term `ret void` ) }
         { ( nurl_print `  ret ` ) ( nurl_print fn_rt )
-            ( nurl_print ` ` ) ( nurl_print fail_val ) ( nurl_print `\n` )
+            ( nurl_print ` ` ) ( nurl_print fail_val ) ( emit_dbg_eol )
         }
     }
     // Ok path: extract inner value (field 1)
@@ -5219,7 +5533,7 @@
         ( nurl_print `  ` ) ( nurl_print ubraw )
         ( nurl_print ` = bitcast ` ) ( nurl_print struct_ty )
         ( nurl_print `* ` ) ( nurl_print ubp ) ( nurl_print ` to i8*\n` )
-        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print ubraw ) ( nurl_print `)\n` )
+        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print ubraw ) ( nurl_print `)` ) ( emit_dbg_eol )
         ( nurl_set_last_type struct_ty )
         ^ ubv } {}
     ( nurl_set_last_type inner_ty )
@@ -5357,6 +5671,13 @@
 // Called when '[' is seen after the function name in gen_fn_decl.
 // Stores source template in g_generic_syms; emits no IR.
 @ gen_generic_fn_store i lex i syms s fname → v {
+    // DWARF Phase 7: snapshot the declaration line BEFORE consuming
+    // template tokens so every later instantiation can attach its
+    // !DISubprogram to the original source location, not the line
+    // of the synthetic `<generic>` lex emit_one_instantiation uses.
+    : i src_line ( nurl_lex_line lex )
+    ( nurl_sym_def g_generic_syms
+        ( nurl_str_cat fname `__src_line` ) ( nurl_str_int src_line ) )
     ( expect lex TT_LBRACK )
     : s tparams ``
     ~ != ( nurl_lex_type lex ) TT_RBRACK {
@@ -5619,6 +5940,17 @@
 
 @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_cg_reset cg )
+    // Snapshot the lex position for DWARF DISubprogram.line / scopeLine
+    // before we consume any tokens — by the time we reach the `define`
+    // emit, the lexer has advanced past the param list and `→`, so a
+    // later snapshot would point inside the body instead of the header.
+    // For generic instantiations, emit_one_instantiation pre-seeds
+    // `g_dbg_override_line` with the ORIGINAL generic-decl source line
+    // so the mono's subprogram points there instead of the synthetic
+    // `<generic>:1` of the inflated source.
+    : i fn_src_line ? != g_dbg_enabled 0
+        ? != g_dbg_override_line 0 g_dbg_override_line ( nurl_lex_line lex )
+        0
     ( nurl_sym_push syms )
     ( nurl_sym_def syms `__owned_slices__` `` )
     ( nurl_sym_def syms `__last_ident_name__` `` )
@@ -5665,7 +5997,19 @@
     : s lname ? ( seq fname `main` ) `_nurl_main` fname
     ( nurl_print `define ` ) ( nurl_print ret_ty )
     ( nurl_print ` @` ) ( nurl_print lname )
-    ( nurl_print `(` ) ( nurl_print params_str ) ( nurl_print `) {\n` )
+    ( nurl_print `(` ) ( nurl_print params_str ) ( nurl_print `)` )
+    // DWARF: attach `!dbg !N` to the define line (referencing this fn's
+    // !DISubprogram) and seed g_dbg_current_loc with a DILocation at
+    // fn-entry. emit_dbg_eol then attaches `!dbg` to every call/ret/br
+    // inside the body. Both globals reset to 0 after the closing `}`.
+    ? != g_dbg_enabled 0
+    { : i sp_id ( dbg_emit_subprogram lname fn_src_line )
+        : i loc_id ( dbg_emit_location fn_src_line 1 sp_id )
+        = g_dbg_current_subprogram sp_id
+        = g_dbg_current_loc loc_id
+        ( nurl_print ` !dbg !` ) ( nurl_print ( nurl_str_int sp_id ) ) }
+    {}
+    ( nurl_print ` {\n` )
     ( emit `entry:` )
     ( nurl_sym_def syms `__cur_lbl__` `entry` )
     = g_did_ret 0
@@ -5722,7 +6066,7 @@
     ? ( seq ret_ty `void` )
     { ? == g_did_ret 0
         { ? != 0 ( nurl_str_len dtop )
-            { ( nurl_print `  br label %` ) ( nurl_print dtop ) ( nurl_print `\n` ) }
+            { ( nurl_print `  br label %` ) ( nurl_print dtop ) ( emit_dbg_eol ) }
             { ( mem_drop_owned syms cg skip )
                 ? != 0 g_auto_drop_strings
                 { ( mem_drop_owned_strings syms cg skip_str_ptr )
@@ -5730,7 +6074,7 @@
                     ( mem_drop_user_drops syms cg skip_user_ptr )
                 }
                 {}
-                ( emiti `ret void` ) }
+                ( emit_call_term `ret void` ) }
         }
         {}
     }
@@ -5739,7 +6083,7 @@
             { ( nurl_print `  store ` ) ( nurl_print ret_ty ) ( nurl_print ` ` )
                 ( nurl_print last ) ( nurl_print `, ` ) ( nurl_print ret_ty )
                 ( nurl_print `* ` ) ( nurl_print ret_val_ptr ) ( nurl_print `\n` )
-                ( nurl_print `  br label %` ) ( nurl_print dtop ) ( nurl_print `\n` )
+                ( nurl_print `  br label %` ) ( nurl_print dtop ) ( emit_dbg_eol )
             }
             { ( mem_drop_owned syms cg skip )
                 ? != 0 g_auto_drop_strings
@@ -5749,7 +6093,7 @@
                 }
                 {}
                 ( nurl_print `  ret ` ) ( nurl_print ret_ty )
-                ( nurl_print ` ` ) ( nurl_print last ) ( nurl_print `\n` ) }
+                ( nurl_print ` ` ) ( nurl_print last ) ( emit_dbg_eol ) }
         }
         {}
     }
@@ -5763,12 +6107,19 @@
             ( nurl_print `, ` ) ( nurl_print ret_ty )
             ( nurl_print `* ` ) ( nurl_print ret_val_ptr ) ( nurl_print `\n` )
             ( nurl_print `  ret ` ) ( nurl_print ret_ty )
-            ( nurl_print ` ` ) ( nurl_print rv ) ( nurl_print `\n` )
+            ( nurl_print ` ` ) ( nurl_print rv ) ( emit_dbg_eol )
         }
-        { ( emiti `ret void` ) }
+        { ( emit_call_term `ret void` ) }
     }
     {}
     ( emit `}` ) ( emit `` )
+    // Clear DWARF state — subsequent module-scope code (string globals,
+    // closure defs, the next function's metadata) must not inherit
+    // this function's DILocation, or its calls would attach `!dbg !N`
+    // referencing a stale scope. Reset to 0; emit_dbg_eol then degrades
+    // to a plain `\n` until the next function sets it again.
+    = g_dbg_current_subprogram 0
+    = g_dbg_current_loc 0
     ( emit_str_globals base_str g_str_idx )
     ( emit_closure_globals )
     // Snapshot owned-return flags BEFORE pop: nurl_sym_get returns a pointer
@@ -6507,7 +6858,17 @@
     : i lex_scan ( nurl_lex_new full_src `<generic-scan>` )
     ( scan_generic_structs lex_scan syms )
     : i lex2 ( nurl_lex_new full_src `<generic>` )
+    // DWARF Phase 7: stash the original generic-decl line so
+    // gen_fn_decl_concrete points this mono's !DISubprogram at the
+    // real source, not the synthetic `<generic>:1`. Cleared in a
+    // `defer`-ish trailing assignment after the recursive call.
+    : i saved_override g_dbg_override_line
+    : s sl_s ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__src_line` ) )
+    ? != 0 ( nurl_str_len sl_s )
+    { = g_dbg_override_line ( nurl_str_to_int sl_s ) }
+    {}
     ( gen_fn_decl lex2 syms cg )
+    = g_dbg_override_line saved_override
 }
 
 // flush_deferred_instantiations: emit all queued generic instantiations.
@@ -6530,6 +6891,11 @@
     ( emit `; NURL compiler output (nurlc.nu)` )
     ( emit `; link: clang <this.ll> stdlib/runtime.o -o out` )
     ( emit `` )
+    // DWARF Phase 5: the dbg.declare intrinsic that pins a local
+    // variable's storage to its !DILocalVariable metadata. Emitted
+    // unconditionally; with --g off the compiler never calls it, so
+    // the unused declaration is dead and the optimizer drops it.
+    ( emit `declare void @llvm.dbg.declare(metadata, metadata, metadata)` )
     ( emit `declare i32  @puts(i8*)` )
     ( emit `declare i32  @printf(i8*, ...)` )
     ( emit `declare i8*  @malloc(i64)` )
@@ -7660,10 +8026,14 @@
 // ── Entry point ────────────────────────────────────────────────────
 
 @ main → v {
-    ? != ( nurl_argc ) 2
-    { ( nurl_eprintln `usage: nurlc <file.nu>` ) ( nurl_exit 1 ) }
-    {}
-    : s path ( nurl_argv 1 )
+    // CLI: `nurlc [--g] <file.nu>`. The single optional `--g` (or
+    // `-g`) toggles DWARF emission; everything else is the source
+    // path. Driver script nurl.sh forwards --debug → --g.
+    : ~ s path ``
+    ? & == ( nurl_argc ) 3 | ( seq ( nurl_argv 1 ) `--g` ) ( seq ( nurl_argv 1 ) `-g` )
+    { = g_dbg_enabled 1 = path ( nurl_argv 2 ) }
+    { ? == ( nurl_argc ) 2 { = path ( nurl_argv 1 ) }
+        { ( nurl_eprintln `usage: nurlc [--g] <file.nu>` ) ( nurl_exit 1 ) } }
     : s src ( nurl_read_file path )
     : s marker ( nurl_str_cat `@@nurl-disable` `-autodrop-strings@@` )
     ? >= ( nurl_str_find src marker ) 0
@@ -7689,6 +8059,7 @@
     = g_vis_syms ( nurl_sym_new )
     ( vis_set_current_src_file path )
     ( emit_header )
+    ? != g_dbg_enabled 0 { ( dbg_init path ) } {}
     ( init_syms syms )
     : i lex0 ( nurl_lex_new src path )
     ( scan_generic_structs lex0 syms )
@@ -7698,4 +8069,5 @@
     ( parse_program lex syms cg )
     // Emit all deferred generic instantiations collected during compilation.
     ( flush_deferred_instantiations syms cg )
+    ( dbg_flush )
 }

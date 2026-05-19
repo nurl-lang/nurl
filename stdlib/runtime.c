@@ -65,6 +65,17 @@
 #  include <ws2tcpip.h>
 #  include <windows.h>
 #endif
+/* DWARF/glibc backtrace — used by nurl_panic to print a stack of
+ * pointers when a panic propagates past the outermost recover.
+ * Symbol resolution (function names) comes from backtrace_symbols_fd
+ * when the binary still carries its symbol table; source-line
+ * resolution requires `addr2line -e <binary> <addr>` and the binary
+ * to have been built with --debug (DWARF .debug_info). On WASI and
+ * MSVC the API is absent; we silently degrade to "no backtrace". */
+#if defined(__GLIBC__) && !defined(__wasi__) && !defined(_MSC_VER)
+#  include <execinfo.h>
+#  define NURL_HAVE_EXECINFO 1
+#endif
 
 /* ── §1  Basic I/O ─────────────────────────────────────────────── */
 
@@ -6031,6 +6042,20 @@ void nurl_panic(const char *msg) {
     if (!nurl__panic_top) {
         fprintf(stderr, "nurl panic: %s\n",
                 msg && *msg ? msg : "(no message)");
+#if NURL_HAVE_EXECINFO
+        /* Drop a stack trace before aborting. With --debug, every frame
+         * line ends in `+0xNNN`; pipe the binary path + offsets through
+         * `addr2line` to recover `.nu:LINE` source locations. The
+         * skip-first-frame heuristic (i=1) hides this helper itself
+         * from the dump; the panic-call frame still appears at top. */
+        void *bt[64];
+        int n = backtrace(bt, 64);
+        if (n > 1) {
+            fprintf(stderr, "stack backtrace:\n");
+            fflush(stderr);
+            backtrace_symbols_fd(bt + 1, n - 1, fileno(stderr));
+        }
+#endif
         fflush(stderr);
         abort();
     }

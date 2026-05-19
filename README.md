@@ -706,6 +706,37 @@ myprogram.exe
 
 ---
 
+### Debugging with `gdb` / `lldb` (DWARF)
+
+NURL ships DWARF debug-info support so a NURL binary can be driven by
+`gdb` / `lldb` like any other C-toolchain ELF: source-level break-
+points, single-step by `.nu` line, `info locals`, `print x` with the
+correct NURL-flavoured type name (`i`, `b`, `f`, …).
+
+```sh
+./nurl.sh --debug examples/fizzbuzz.nu          # builds fizzbuzz with DWARF
+gdb -ex 'break fizzbuzz' -ex run ./fizzbuzz     # break by name
+gdb -ex 'break examples/fizzbuzz.nu:18' …       # break by source line
+```
+
+Two knobs cooperate:
+- `nurlc --g <file>` emits `!DICompileUnit` / `!DISubprogram` /
+  `!DILocation` / `!DILocalVariable` metadata into the LLVM IR.
+- `nurl.sh --debug` forwards `--g` to nurlc AND links with `-g
+  -rdynamic` on a freshly-built non-LTO `runtime_debug.o`. (LTO
+  silently drops DWARF in the current LLVM/gcc-ld pipeline, hence
+  the side-by-side runtime build.)
+
+Runtime panics print a stack backtrace before aborting; pipe each
+frame's `binary+0xOFFSET` through `addr2line -e <binary>` to recover
+`.nu:LINE` source locations. ASan / UBSan reports under
+`./build.sh --san` already render `.nu` source locations directly.
+
+End-to-end regression test: `./tools/dwarf_test.sh` (no-op when
+`gdb` isn't installed). See `DWARF.md` for the phased work-list.
+
+---
+
 ### Python reference compiler vs self-hosting compiler
 
 The Python reference compiler (`compiler/nurlc.py`) exists solely to bootstrap the

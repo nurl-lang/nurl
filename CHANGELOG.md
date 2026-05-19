@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-05-19
+
 ### Changed
 
 * **MCP `protocolVersion` bumped from `2024-11-05` to `2025-11-25`
@@ -33,6 +35,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   integration against the moving spec is not yet automated").
 
 ### Added
+
+* **DWARF debug-info support (compiler + driver, phased per
+  `DWARF.md`).** `nurlc --g foo.nu` now emits LLVM `!DICompileUnit` /
+  `!DIFile` / per-fn `!DISubprogram` / per-stmt `!DILocation` /
+  per-`:`-binding `!DILocalVariable` + `llvm.dbg.declare` metadata.
+  `nurl.sh --debug foo.nu` forwards `--g`, drops `-flto` (which
+  silently strips DWARF in the current LLVM/gcc-ld pipeline), and
+  side-by-side rebuilds `stdlib/runtime_debug.o` with `-g` so the
+  link preserves `.debug_info` end-to-end. `gdb` then resolves
+  `break fizzbuzz`, `break foo.nu:42`, `print x`, `whatis x` (with
+  NURL type names — `i`/`u8`/`b`/`f`/`s`/...), and `backtrace` with
+  source file + line for every NURL frame. Closures and generic
+  monomorphisations get their own subprograms with mangled names.
+  `nurl_panic` now dumps a stack trace via libc's `backtrace_*` API
+  before aborting; pipe each frame's offset through `addr2line -e
+  <binary>` to recover `.nu:LINE`. End-to-end regression:
+  `./tools/dwarf_test.sh` (gracefully skipped if `gdb` is absent).
+  Composite-type rendering (`!DICompositeType` for `%Vec` /
+  user structs) and per-instantiation source-line precision for
+  generics are tracked in `DWARF.md` as Phase 6 / 7 follow-ups.
 
 * **Compiler: closure-escape warnings for `vec_push` / `vec_insert` /
   `vec_set` / `thread_spawn`.** Extends the existing 2026-05-15

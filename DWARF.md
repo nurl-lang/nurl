@@ -1,5 +1,18 @@
 # DWARF Debug Info — Phased Implementation Plan
 
+> **Status (2026-05-19): Phases 0, 1, 2+3, 4, 5, 6, 8, 9, 10 landed.**
+> Phase 7 (generic + trait subprogram-line-number refinement) deferred —
+> the basic generic path already produces per-instantiation
+> `!DISubprogram` entries with mangled names via the existing
+> `gen_fn_decl_concrete` path; only the original-decl source line is
+> still pointed at `<generic>:1` instead of the source file.
+> Composite-type rendering (`!DICompositeType` for `%Vec` / `%String`
+> / user structs) is the open Phase 6 follow-up; base types
+> (`i`/`u8`/`b`/`f`/`s`) render correctly today.
+>
+> Build a debug binary with `./nurl.sh --debug foo.nu`, then drive
+> with `gdb` / `lldb`. End-to-end regression: `./tools/dwarf_test.sh`.
+
 This document is the work-list for landing full DWARF debug-info
 support in NURL. It is sized to be picked up across multiple sessions
 — each phase is independently testable, leaves the tree green, and
@@ -572,4 +585,5 @@ Four sessions × 8-10h each.
 
 ---
 
-*Status: not yet started. Last updated 2026-05-19.*
+*Status: Phases 0/1/2+3/4/5/6/8/9/10 landed; Phase 7 deferred; Phase 6
+composite types are the open follow-up. Last updated 2026-05-19.*

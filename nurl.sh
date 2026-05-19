@@ -98,7 +98,14 @@ if [[ $EMIT_IR -eq 1 ]]; then
 else
     echo "[1/2] $SRCFILE → $LLFILE"
 fi
-"$NURLC" "$SRCFILE" > "$LLFILE"
+# When --debug is on, also forward --g to nurlc so it emits DWARF
+# !DICompileUnit / !DISubprogram / !DILocation metadata that clang's
+# -g pulls into the final .debug_info section.
+NURLC_ARGS=()
+if [[ $DEBUG_INFO -eq 1 ]]; then
+    NURLC_ARGS+=(--g)
+fi
+"$NURLC" "${NURLC_ARGS[@]}" "$SRCFILE" > "$LLFILE"
 
 if [[ $EMIT_IR -eq 1 ]]; then
     echo ""
@@ -122,7 +129,11 @@ fi
 # debuggers for frame isolation and symbol demangling.
 DEBUG_FLAGS=()
 if [[ $DEBUG_INFO -eq 1 ]]; then
-    DEBUG_FLAGS=(-g)
+    # -g: DWARF debug info (nurlc --g emitted the metadata; clang
+    #   resolves it into .debug_info on a non-LTO link — see below).
+    # -rdynamic: export dynamic symbols so libc's backtrace_symbols
+    #   used by nurl_panic can render function names (vs. raw addrs).
+    DEBUG_FLAGS=(-g -rdynamic)
 fi
 
 # --emit-asm: stop after clang -S, skip linking (no runtime needed for .s).
@@ -212,13 +223,39 @@ if [[ -f "$SCRIPT_DIR/stdlib/runtime.zstd" ]]; then
     fi
 fi
 
-echo "[2/2] $LLFILE → $OUTBASE  ($OPT -flto${DEBUG_FLAGS[*]:+ ${DEBUG_FLAGS[*]}}${EXTRA_LIBS[*]:+ ${EXTRA_LIBS[*]}})"
+# In --debug mode, drop -flto: the LTO link pipeline strips DWARF
+# debug info from .ll input when the matching runtime.o bitcode has
+# no DI counterpart (current build.sh compiles runtime.o without -g).
+# A side-by-side non-LTO build of runtime.c restores .debug_info in
+# the final binary; the LTO inline win for stdlib FFI is gone, but
+# that's the right trade for a debug build.
+LTO_FLAG="-flto"
+RUNTIME_TO_LINK="$RUNTIME"
+if [[ $DEBUG_INFO -eq 1 ]]; then
+    LTO_FLAG=""
+    DBG_RUNTIME="$SCRIPT_DIR/stdlib/runtime_debug.o"
+    if [[ ! -f "$DBG_RUNTIME" || "$SCRIPT_DIR/stdlib/runtime.c" -nt "$DBG_RUNTIME" ]]; then
+        echo "[runtime-debug] rebuilding stdlib/runtime_debug.o (non-LTO, with -g)"
+        CFLAGS_DBG="-O0 -g"
+        for sentinel_flag in NURL_HAVE_LIBCURL:libcurl NURL_HAVE_OPENSSL:openssl NURL_HAVE_SQLITE3:sqlite3 NURL_HAVE_ZLIB:zlib; do
+            d="${sentinel_flag%%:*}"; p="${sentinel_flag##*:}"
+            if pkg-config --exists "$p" 2>/dev/null; then
+                CFLAGS_DBG="$CFLAGS_DBG -D$d $(pkg-config --cflags "$p")"
+            fi
+        done
+        # shellcheck disable=SC2086
+        clang $CFLAGS_DBG -c "$SCRIPT_DIR/stdlib/runtime.c" -o "$DBG_RUNTIME"
+    fi
+    RUNTIME_TO_LINK="$DBG_RUNTIME"
+fi
+echo "[2/2] $LLFILE → $OUTBASE  ($OPT${LTO_FLAG:+ $LTO_FLAG}${DEBUG_FLAGS[*]:+ ${DEBUG_FLAGS[*]}}${EXTRA_LIBS[*]:+ ${EXTRA_LIBS[*]}})"
 # `-flto` is required because stdlib/runtime.o is compiled with -flto
 # (build.sh) and therefore carries LLVM bitcode instead of native code.
 # The matching link-time flag here drives the LTO pipeline, inlining
 # every vec_data / nurl_peek / nurl_poke / nurl_print across the
 # runtime ↔ user-code boundary.
-clang $OPT -flto "${DEBUG_FLAGS[@]}" "$LLFILE" "$RUNTIME" "${EXTRA_OBJS[@]}" -o "$OUTBASE" -lm -lpthread "${EXTRA_LIBS[@]}"
+# shellcheck disable=SC2086
+clang $OPT $LTO_FLAG "${DEBUG_FLAGS[@]}" "$LLFILE" "$RUNTIME_TO_LINK" "${EXTRA_OBJS[@]}" -o "$OUTBASE" -lm -lpthread "${EXTRA_LIBS[@]}"
 
 echo ""
 echo "Done: $OUTBASE"
