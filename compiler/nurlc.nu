@@ -552,7 +552,13 @@
 // caches the id; later calls return the cached id without re-emitting.
 // Self-referential structs are safe — the id is interned before the
 // per-field recursion descends back through dbg_type_id_for.
-@ dbg_type_id_for s vt → i {
+//
+// `syms` is the active symbol table (function-local for `:` bindings,
+// module-level for params). The composite-type path reads field name
+// + type + count keys (<sname>__field_count, <sname>__idx_N__name,
+// <sname>__idx_N__type) recorded by gen_struct_decl / the generic
+// instantiation emitter. Base / pointer types don't consult syms.
+@ dbg_type_id_for s vt i syms → i {
     : s hit ( nurl_sym_get g_dbg_type_syms vt )
     ? != 0 ( nurl_str_len hit ) { ^ ( nurl_str_to_int hit ) } {}
     : i id 0
@@ -581,17 +587,92 @@
           ( dbg_buffer_meta id `!DIBasicType(name: "f32", size: 32, encoding: DW_ATE_float)` ) }
     ? ( seq vt `i8*` )
         { = id ( dbg_alloc_id )
-          : i u8_id ( dbg_type_id_for `i8` )
+          : i u8_id ( dbg_type_id_for `i8` syms )
           ( dbg_buffer_meta id
             ( nurl_str_cat3
                 `!DIDerivedType(tag: DW_TAG_pointer_type, baseType: !`
                 ( nurl_str_int u8_id )
                 `, size: 64)` ) ) }
-    // Everything else (named structs, vectors, closures, slices): fall
-    // back to the placeholder. Phase 6 follow-up replaces these with
-    // proper !DICompositeType entries so `ptype Vec[u]` shows fields.
+    // Named structs (handle: '%' prefix). Try the composite-type path
+    // — if syms knows the struct, emit !DICompositeType + per-field
+    // !DIDerivedType DW_TAG_member entries. Otherwise fall through.
+    ? & == id 0 == 37 ( nurl_str_get vt 0 )
+        { = id ( dbg_emit_composite vt syms ) }
+    // Everything else (closures, slices, [N x T] arrays, unknown):
+    // i64 placeholder so the verifier accepts the DILocalVariable.
     ? == id 0 { = id g_dbg_placeholder_ty } {}
     ( nurl_sym_def g_dbg_type_syms vt ( nurl_str_int id ) )
+    ^ id
+}
+
+// Phase 6 helper: try to render a `%Name`-prefixed LLVM type string as
+// a !DICompositeType with one !DIDerivedType DW_TAG_member per field.
+// Returns 0 (caller falls back to the placeholder) when the struct
+// is unknown to syms — e.g. an anonymous closure record, an unresolved
+// forward decl, or an enum that doesn't carry a field roster.
+//
+// Self-referential structs (e.g. linked-list cells holding a pointer
+// to themselves) are safe: the id is interned in g_dbg_type_syms BEFORE
+// the per-field recursion descends — a back-edge through
+// dbg_type_id_for returns the cached id instead of recursing forever.
+@ dbg_emit_composite s vt i syms → i {
+    : s base ( nurl_str_slice vt 1 - ( nurl_str_len vt ) 1 )
+    : s is_t ( nurl_sym_get syms ( nurl_str_cat base `__is_type` ) )
+    ? == 0 ( nurl_str_len is_t ) { ^ 0 } {}
+    : s fc_s ( nurl_sym_get syms ( nurl_str_cat base `__field_count` ) )
+    ? == 0 ( nurl_str_len fc_s ) { ^ 0 } {}
+    : i n ( nurl_str_to_int fc_s )
+    ? <= n 0 { ^ 0 } {}
+    // Reserve + intern the composite id BEFORE recursing into fields
+    // (self-referential cycle break).
+    : i id ( dbg_alloc_id )
+    ( nurl_sym_def g_dbg_type_syms vt ( nurl_str_int id ) )
+    // First pass: compute layout (cumulative offset + struct size) and
+    // emit one !DIDerivedType DW_TAG_member per field. The member-list
+    // string is assembled as `!M0, !M1, ...` for the elements: tuple.
+    : ~ i off 0
+    : ~ i max_align 8
+    : ~ s elems ``
+    : ~ i fidx 0
+    ~ < fidx n {
+        : s fname ( nurl_sym_get syms
+            ( nurl_str_cat3 base `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__name` ) ) )
+        : s ftype ( nurl_sym_get syms
+            ( nurl_str_cat3 base `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__type` ) ) )
+        ? == 0 ( nurl_str_len ftype ) { = ftype `i64` } {}
+        ? == 0 ( nurl_str_len fname )
+            { = fname ( nurl_str_cat `f` ( nurl_str_int fidx ) ) } {}
+        : i fsize ( dbg_size_bits ftype )
+        : i falign ( dbg_align_bits ftype )
+        = off ( dbg_align_up off falign )
+        ? > falign max_align { = max_align falign } {}
+        : i base_ty_id ( dbg_type_id_for ftype syms )
+        : i mid ( dbg_alloc_id )
+        ( dbg_buffer_meta mid
+            ( nurl_str_cat
+                ( nurl_str_cat4
+                    `!DIDerivedType(tag: DW_TAG_member, name: "`
+                    fname `", baseType: !` ( nurl_str_int base_ty_id ) )
+                ( nurl_str_cat4
+                    `, size: ` ( nurl_str_int fsize )
+                    `, offset: ` ( nurl_str_cat ( nurl_str_int off ) `)` ) ) ) )
+        ? == fidx 0
+            { = elems ( nurl_str_cat `!` ( nurl_str_int mid ) ) }
+            { = elems ( nurl_str_cat3 elems `, !` ( nurl_str_int mid ) ) }
+        = off + off fsize
+        = fidx + fidx 1
+    }
+    // Round total size up to the strictest field alignment (LLVM does
+    // the same so sizeof(struct) is align-multiple).
+    : i total ( dbg_align_up off max_align )
+    ( dbg_buffer_meta id
+        ( nurl_str_cat
+            ( nurl_str_cat4
+                `!DICompositeType(tag: DW_TAG_structure_type, name: "`
+                base `", file: !` ( nurl_str_int g_dbg_file_id ) )
+            ( nurl_str_cat4
+                `, size: ` ( nurl_str_int total )
+                `, elements: !{` ( nurl_str_cat elems `})` ) ) ) )
     ^ id
 }
 
@@ -629,14 +710,14 @@
 // DILocalVariable.type field always points at the shared
 // `g_dbg_placeholder_ty` (i64); gdb still prints the value, just not
 // rendered as `String` / `Vec[u]` / etc.
-@ dbg_declare_local s name s ptr s vt i line i argk → v {
+@ dbg_declare_local s name s ptr s vt i line i argk i syms → v {
     ? & != g_dbg_enabled 0 != g_dbg_current_subprogram 0
     {
         : i var_id ( dbg_alloc_id )
         : s sp ( nurl_str_int g_dbg_current_subprogram )
         : s fi ( nurl_str_int g_dbg_file_id )
         : s lns ( nurl_str_int line )
-        : s ty_s ( nurl_str_int ( dbg_type_id_for vt ) )
+        : s ty_s ( nurl_str_int ( dbg_type_id_for vt syms ) )
         : s body
             ( nurl_str_cat4
                 ( nurl_str_cat3 `!DILocalVariable(name: "` name `"` )
@@ -3191,7 +3272,7 @@
         ( nurl_print `  store ` ) ( nurl_print vt ) ( nurl_print ` ` )
         ( nurl_print val ) ( nurl_print `, ` ) ( nurl_print vt )
         ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
-        ( dbg_declare_local name ptr vt ( nurl_lex_line lex ) 0 )
+        ( dbg_declare_local name ptr vt ( nurl_lex_line lex ) 0 syms )
         ( nurl_sym_def syms name vt )
         ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
         // Only mark mutability if explicitly specified with ~
@@ -3319,7 +3400,7 @@
                 ( nurl_print `  store ` ) ( nurl_print ptype ) ( nurl_print ` ` )
                 ( nurl_print store_val ) ( nurl_print `, ` ) ( nurl_print ptype )
                 ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
-                ( dbg_declare_local name ptr ptype ( nurl_lex_line lex ) 0 )
+                ( dbg_declare_local name ptr ptype ( nurl_lex_line lex ) 0 syms )
                 ( nurl_sym_def syms name ptype )
                 ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
                 // Only mark mutability if explicitly specified with ~
