@@ -348,14 +348,69 @@ long long nurl_memmem_range(const char *hay, long long hlen,
  * never quoted data can pass NULL for escape_buf.
  *
  * Return value: new committed row count (= n_rows survivors). */
-/* Fast CSV-numeric float parser. Inlined into nurl_csv_filter_float_gt
- * because glibc strtod dominates per-row cost (~150 ns/call mostly
- * spent on locale + special-case handling we don't need). This
- * recognises the regular numeric grammar `-?digits(.digits)?(eE[+-]?digits)?`
- * — which covers every cell produced by csv.nu writers, pandas, and
- * Polars — at ~40-60 ns/call on typical 5-10 char cells. Rejects on
- * empty / non-numeric (returns 0.0). Does NOT honour locale-specific
- * decimal separators; CSV cells are by spec C-locale anyway. */
+/* Fast CSV-numeric float parser. Exposed via FFI as
+ * `nurl_csv_fast_float_range` for callers that want strtod's
+ * semantics for CSV numeric cells without the per-call cost
+ * (glibc strtod ~150 ns/call mostly spent on locale + NaN/Inf
+ * special cases we don't need). Recognises the regular numeric
+ * grammar `-?digits(.digits)?(eE[+-]?digits)?` — which covers
+ * every cell produced by csv.nu writers, pandas, and Polars —
+ * at ~40-60 ns/call on typical 5-10 char cells. Rejects on
+ * empty / non-numeric (returns 0.0). Does NOT honour locale-
+ * specific decimal separators; CSV cells are by spec C-locale.
+ *
+ * Use over `nurl_parse_float_range` when the input is known to
+ * be plain decimal (no NaN/Inf, no locale comma). */
+double nurl_csv_fast_float_range(const char *p, long long len) {
+    if (!p || len <= 0) return 0.0;
+    long long i = 0;
+    int neg = 0;
+    if (p[0] == '-')      { neg = 1; i = 1; }
+    else if (p[0] == '+') {           i = 1; }
+    double r = 0.0;
+    while (i < len) {
+        unsigned char c = (unsigned char)p[i];
+        if (c < '0' || c > '9') break;
+        r = r * 10.0 + (c - '0');
+        i++;
+    }
+    if (i < len && p[i] == '.') {
+        i++;
+        double scale = 0.1;
+        while (i < len) {
+            unsigned char c = (unsigned char)p[i];
+            if (c < '0' || c > '9') break;
+            r += (c - '0') * scale;
+            scale *= 0.1;
+            i++;
+        }
+    }
+    if (i < len && (p[i] == 'e' || p[i] == 'E')) {
+        i++;
+        int eneg = 0;
+        if (i < len) {
+            if (p[i] == '-')      { eneg = 1; i++; }
+            else if (p[i] == '+') {            i++; }
+        }
+        int ev = 0;
+        while (i < len) {
+            unsigned char c = (unsigned char)p[i];
+            if (c < '0' || c > '9') break;
+            ev = ev * 10 + (c - '0');
+            i++;
+        }
+        double base = 10.0;
+        double mult = 1.0;
+        while (ev > 0) {
+            if (ev & 1) mult *= base;
+            base *= base;
+            ev >>= 1;
+        }
+        if (eneg) r /= mult; else r *= mult;
+    }
+    return neg ? -r : r;
+}
+
 static double __csv_fast_atof(const char *p, long long len) {
     if (len <= 0) return 0.0;
     long long i = 0;
@@ -404,6 +459,68 @@ static double __csv_fast_atof(const char *p, long long len) {
         if (eneg) r /= mult; else r *= mult;
     }
     return neg ? -r : r;
+}
+
+/* Combined-predicate filter: `col_f > threshold` AND
+ * `col_s contains needle`. Walks every row once, short-circuiting
+ * the str scan when the float check fails. Saves ~30-40 ms on the
+ * 1 M-row test_data.csv bench vs running the two filters
+ * sequentially (the float-failing rows — ~85 % of input on the
+ * canonical test — never pay the cell-offset reload + substring
+ * scan that the chained version would). */
+long long nurl_csv_filter_float_gt_and_str_contains(
+    const char *content,
+    const unsigned char *escape_buf,
+    const long long *flat_cells,
+    long long *row_starts,
+    long long *row_lens,
+    long long n_rows,
+    long long col_f, double threshold,
+    long long col_s, const char *needle, long long nlen)
+{
+    if (col_f < 0 || col_s < 0 || !content || !flat_cells || !row_starts || !row_lens) return 0;
+    if (!needle || nlen <= 0) return 0;
+    unsigned char n0 = (unsigned char)needle[0];
+    long long w = 0;
+    for (long long r = 0; r < n_rows; r++) {
+        long long row_first = row_starts[r];
+        long long row_count = row_lens[r];
+        if (col_f >= row_count || col_s >= row_count) continue;
+        /* Float check first — drops 85 % of rows on the canonical
+         * bench, skipping the costlier substring scan. */
+        long long cf_idx = row_first + col_f;
+        long long fo = flat_cells[cf_idx * 2];
+        long long fl = flat_cells[cf_idx * 2 + 1];
+        if (fl <= 0) continue;
+        const char *fsrc;
+        if (fo >= 0) fsrc = content + fo;
+        else if (escape_buf) fsrc = (const char *)(escape_buf + (-(fo + 1)));
+        else continue;
+        if (!(__csv_fast_atof(fsrc, fl) > threshold)) continue;
+        /* Substring scan on the str column. */
+        long long cs_idx = row_first + col_s;
+        long long so = flat_cells[cs_idx * 2];
+        long long sl = flat_cells[cs_idx * 2 + 1];
+        if (sl < nlen) continue;
+        const char *ssrc;
+        if (so >= 0) ssrc = content + so;
+        else if (escape_buf) ssrc = (const char *)(escape_buf + (-(so + 1)));
+        else continue;
+        long long last = sl - nlen;
+        int hit = 0;
+        for (long long i = 0; i <= last; i++) {
+            if ((unsigned char)ssrc[i] != n0) continue;
+            if (nlen == 1 || memcmp(ssrc + i, needle, (size_t)nlen) == 0) {
+                hit = 1; break;
+            }
+        }
+        if (hit) {
+            row_starts[w] = row_first;
+            row_lens[w]   = row_count;
+            w++;
+        }
+    }
+    return w;
 }
 
 long long nurl_csv_filter_float_gt(

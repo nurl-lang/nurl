@@ -35,17 +35,12 @@ $ `stdlib/ext/csv.nu`
 
     // Filter: val_float2 > 0  AND  text_words contains "juliet".
     //
-    // Two consecutive `csv_table_filter_*` calls route through the
-    // tight C inner loops in runtime.c (`nurl_csv_filter_float_gt`
-    // + `nurl_csv_filter_str_contains`), each a single FFI call with
-    // a scalar walk over row_starts/row_lens. The second call sees
-    // only the survivors of the first; row_starts/row_lens are
-    // narrowed in place between the two. Compared to the prior
-    // NURL-closure filter (~150 ms), this collapses to ~15-30 ms
-    // because per-row closure dispatch + per-row arena pointer
-    // re-derivation + per-row `nurl_parse_float_range` FFI all vanish.
-    ( csv_table_filter_float_gt     df col_vf2 0.0 )
-    ( csv_table_filter_str_contains df col_tw  `juliet` )
+    // Single FFI call routes through the combined-predicate helper:
+    // each row pays the cheap fast_atof check first, and only the
+    // rows that pass it pay the substring scan. On the canonical
+    // test (~85 % of rows fail the float check), this short-circuits
+    // most of the per-row substring scan cost.
+    ( csv_table_filter_float_gt_and_str_contains df col_vf2 0.0 col_tw `juliet` )
     : i t_filter ( monotonic_ns )
     ( nurl_print `Filtered to ` )
     ( nurl_print ( nurl_str_int ( csv_table_n_rows df ) ) )

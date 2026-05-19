@@ -605,7 +605,7 @@ $ `stdlib/std/hashmap.nu`
                     : ~ s src # s 0
                     ? >= off 0 { = src # s + # i cd off }
                     { = src # s + # i eb - 0 + off 1 }
-                    = v ( nurl_parse_float_range src len )
+                    = v ( nurl_csv_fast_float_range src len )
                 } {}
             } {}
         }
@@ -1083,7 +1083,7 @@ $ `stdlib/std/hashmap.nu`
                     : ~ s src # s 0
                     ? >= off 0 { = src # s + # i cd off }
                     { = src # s + # i eb - 0 + off 1 }
-                    = v ( nurl_parse_float_range src len )
+                    = v ( nurl_csv_fast_float_range src len )
                 } {}
             } {}
             ( vec_push [f] keys v )
@@ -1241,6 +1241,26 @@ $ `stdlib/std/hashmap.nu`
         : *i rsp ( vec_data [i] . t row_starts )
         : *i rlp ( vec_data [i] . t row_lens )
         : i kept ( nurl_csv_filter_float_gt # s cd # s eb fcp rsp rlp n col threshold )
+        : b _a ( vec_set_len [i] . t row_starts kept )
+        : b _b ( vec_set_len [i] . t row_lens kept )
+    } {}
+}
+
+// Combined predicate: `col_f > threshold` AND `col_s contains needle`.
+// Single FFI call with row-level short-circuit: rows that fail the
+// float check skip the substring scan entirely. Saves ~30-40 ms on
+// the 1 M-row × 8-col compare/test_data.csv bench (where 85 % of
+// rows fail the float check) vs chaining two separate filter helpers.
+@ csv_table_filter_float_gt_and_str_contains * CSVTable t i col_f f threshold i col_s s needle → v {
+    : i n ( csv_table_n_rows t )
+    ? > n 0 {
+        : i nlen ( nurl_str_len needle )
+        : *u cd # *u ( string_data . t content )
+        : *u eb ( vec_data [u] . t escape_buf )
+        : *i fcp ( vec_data [i] . t flat_cells )
+        : *i rsp ( vec_data [i] . t row_starts )
+        : *i rlp ( vec_data [i] . t row_lens )
+        : i kept ( nurl_csv_filter_float_gt_and_str_contains # s cd # s eb fcp rsp rlp n col_f threshold col_s needle nlen )
         : b _a ( vec_set_len [i] . t row_starts kept )
         : b _b ( vec_set_len [i] . t row_lens kept )
     } {}

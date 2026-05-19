@@ -296,3 +296,19 @@ parse cost; further wins likely require columnar layout (P4) or
 typed pre-parse during the byte-walk (P3b). Filter is bottlenecked
 on parse_float + scattered flat_cells access for the survivor scan;
 columnar storage would collapse both.
+
+## 2026-05-19 — f4a44f3+dirty — combined predicate filter
+- CPU: Intel(R) Core(TM) i7-5930K CPU @ 3.50GHz
+- Kernel: Linux 6.17.0-23-generic x86_64
+- Fixture: test_data.csv (1 M rows × 8 cols, 106756536 B, sha256=d00a0fd4509ea4a5…)
+- Runs: 5 per implementation
+
+| Stage  | NURL min | NURL med | Polars min | Polars med | NURL/Polars (med) |
+|--------|---------:|---------:|-----------:|-----------:|------------------:|
+| load   |      278 |      287 |         61 |         63 |             4.6× |
+| filter |       46 |       50 |         17 |         19 |             2.6× |
+| sort   |       53 |       55 |         10 |         11 |             5.0× |
+| write  |        0 |        0 |          2 |          2 |             0.0× |
+| total  |      375 |      392 |         92 |         95 |             4.1× |
+
+* **Combined-predicate filter helper**: `csv_table_filter_float_gt_and_str_contains` collapses the two filter stages into one FFI call with row-level short-circuit (float check first; ~85 % of rows skip the substring scan entirely). Filter drops 105 → 50 ms — **filter time halved relative to the LTO baseline (150 → 50 ms = -67 %)**. Load unchanged (parse cost is memory-bandwidth-bound).
