@@ -1,9 +1,8 @@
-// should_warn_closure_escape_vec.nu — exercises gotcha #8 closure-
-// escape coverage extended to the ownership-taking helpers
-// (vec_push / vec_insert / vec_set / thread_spawn). These four
-// callees take a value that outlives the current scope, so a `: ~`-
-// mutable multi-field-struct closure captured by pointer escapes
-// when handed to any of them.
+// borrow_escape_vec.nu — BORROW.md Phase 3: escape analysis covers
+// the ownership-taking helpers (vec_push / vec_insert / vec_set /
+// thread_spawn). These four callees take a value that outlives the
+// current scope, so a `: ~`-mutable multi-field-struct closure
+// captured by pointer escapes when handed to any of them.
 //
 // Only `thread_spawn` is exercised here because Vec[(@ v)] isn't a
 // valid NURL type — generic-arg type lists don't yet accept anonymous
@@ -12,7 +11,7 @@
 // warning fires for vec_push/insert/set as for thread_spawn — adding
 // type-list support for closures would unlock those test cases.
 //
-// Two negative controls confirm the warning is closure-binding-only.
+// Two negative controls confirm the warning is stack-reference-only.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

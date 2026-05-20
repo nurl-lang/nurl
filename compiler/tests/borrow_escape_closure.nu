@@ -1,17 +1,15 @@
-// should_warn_closure_escape.nu — exercises the docs/GOTCHAS.md item 5
-// foot-gun: a closure that captures a `: ~`-mutable multi-field struct
-// is captured by POINTER into the enclosing function's stack frame. If
-// the closure is returned (or stored elsewhere that outlives the
-// caller's scope), the pointer dangles and any subsequent invocation
-// is use-after-free.
+// borrow_escape_closure.nu — BORROW.md Phase 3 escape analysis.
+// docs/GOTCHAS.md item 5 foot-gun: a closure that captures a
+// `: ~`-mutable multi-field struct is captured by POINTER into the
+// enclosing function's stack frame. Returning it (or storing it
+// somewhere that outlives the caller) dangles the pointer — any
+// later invocation is use-after-free.
 //
-// Post-fix (compiler v2.1+): gen_closure_expr tags the closure value
-// with `__last_closure_byref__` whenever any capture takes the byref
-// path; gen_let_or_struct copies the flag onto the binding
-// (`<name>__captures_byref`); gen_ret reads either form and emits a
-// `warning:` line. Compile + link + run still succeed (this is a SOFT
-// diagnostic) — the actual behaviour the warning describes is what
-// the code does anyway. The point is to alert at compile time.
+// The borrow checker tags such a closure value with a referent depth
+// (the scope frame it points into) and rejects `^`-returning it past
+// that frame. The harness compiles `borrow_*` tests with --borrowck
+// and records the diagnostic in the baseline; the check is inert
+// without the flag (it moves to on-by-default in BORROW.md Phase 8).
 //
 // Two positive cases (both warn) + two negative controls (no warning).
 

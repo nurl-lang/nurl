@@ -1040,10 +1040,10 @@
     : b returning_match == ( nurl_lex_type lex ) TT_QUESTQUEST
     // Reset __last_ident_name__ so we observe what gen_expr sets below
     ( nurl_sym_def syms `__last_ident_name__` `` )
-    // Reset the closure-byref flag so we can tell whether the returned
-    // expression is itself a closure literal that captures a stack
-    // binding by pointer (docs/GOTCHAS.md item 5).
-    ( nurl_sym_def syms `__last_closure_byref__` `` )
+    // Reset the escape side-channel so we can tell whether the
+    // returned expression is itself a stack reference — a closure
+    // literal capturing a binding by pointer (docs/GOTCHAS.md item 5).
+    ( nurl_sym_def syms `__last_expr_refdepth__` `` )
     // Tail-call optimisation: mark the upcoming expression as
     // "tail-position" so gen_call can emit `tail call` (the LLVM
     // optimiser then converts a self-recursive tail call into a jump,
@@ -1072,22 +1072,16 @@
     // never reached gen_call to consume it).
     ( nurl_sym_def syms `__tail_call_pending__` `` )
     : s lt ( nurl_get_last_type )
-    // Escape check: warn if the returned value is a closure that
-    // captures a `: ~`-mutable multi-field struct by pointer. Two
-    // shapes trip the check:
-    //   (a) returning a fresh closure literal that captures byref
-    //       (the explicit `^ \ → v { ... c ... }` case), via
-    //       `__last_closure_byref__`.
-    //   (b) returning a binding that holds such a closure, via
-    //       `<ret_ident>__captures_byref` set by gen_let_or_struct.
-    : s ret_ident_for_byref ( nurl_sym_get syms `__last_ident_name__` )
-    : b returns_byref_closure ( seq ( nurl_sym_get syms `__last_closure_byref__` ) `1` )
-    ? & ! returns_byref_closure != 0 ( nurl_str_len ret_ident_for_byref )
-    { = returns_byref_closure ( seq ( nurl_sym_get syms ( nurl_str_cat ret_ident_for_byref `__captures_byref` ) ) `1` ) }
-    {}
-    ? returns_byref_closure
-    { ( warn lex `returning a closure that captures a stack binding by pointer - it will dangle after this function returns (use a heap-backed handle instead; see docs/GOTCHAS.md item 5)` ) }
-    {}
+    // Escape analysis (BORROW.md Phase 3): warn if the returned value
+    // is a stack reference — a closure capturing a binding by pointer,
+    // an aggregate holding one, or a binding holding either. The
+    // referent is a local / parameter of THIS function, so returning
+    // it past the function frame always dangles. Covers the bare
+    // closure literal (`^ \ → v { ... c ... }`), the bound closure
+    // (`^ binding`), and the struct wrapper (`^ @ Slot { cb }`)
+    // uniformly. Only consulted when --borrowck is on.
+    ( bck_esc_check_return lex syms bck_line
+        ( nurl_sym_get syms `__last_ident_name__` ) )
     // Diagnose cases where gen_expr produced no usable value (last_type =
     // void, e.g. a `? cond then else` whose two arms have incompatible
     // types so gen_cond degrades silently to void) while the function
@@ -1708,18 +1702,18 @@
     : b is_variadic ( seq ( nurl_sym_get syms ( nurl_str_cat fname `__variadic` ) ) `1` )
     : s vf_str ( nurl_sym_get syms ( nurl_str_cat fname `__variadic_fixed` ) )
     : i fixed_count ? == 0 ( nurl_str_len vf_str ) 0 ( nurl_str_to_int vf_str )
-    // Closure-escape gate (docs/GOTCHAS.md item 8 / memory gotcha #8).
-    // These four callees take ownership of an argument that outlives the
-    // current scope — pushing into a heap-backed container or detaching
-    // onto a worker thread. A `: ~`-mutable multi-field-struct closure
-    // captured by pointer (set by `gen_closure_expr` and propagated by
-    // `gen_let_or_struct` as `<name>__captures_byref`) MUST NOT escape
-    // through any of these without first being moved to a heap-backed
-    // handle, or the captured stack alloca will dangle the moment its
-    // owning function returns. We warn — not die — because (a) the
-    // analysis is a pure name+flag check that misses heap-allocated
-    // closure-builder helpers, and (b) `warn` is consistent with the
-    // existing `^`-return escape check from 2026-05-15.
+    // Closure-escape gate (docs/GOTCHAS.md item 8 / BORROW.md Phase 3).
+    // These four callees take an argument that outlives the current
+    // scope — pushing into a heap-backed container or detaching onto a
+    // worker thread. A value that is a *stack reference* (a closure
+    // capturing a binding by pointer, or an aggregate / binding
+    // holding one — see the escape-analysis section near
+    // borrowck_fn_end) MUST NOT escape through any of these without
+    // first being moved to a heap-backed handle, or the captured
+    // stack slot dangles the moment its owning function returns. The
+    // check is --borrowck-gated and warns (not dies) — BORROW.md
+    // watch #3: a new rule ships as a warning until proven
+    // false-positive-free across the whole corpus.
     : b is_escape_call | | |
         ( seq fname `vec_push` )
         ( seq fname `vec_insert` )
@@ -1728,7 +1722,7 @@
     // Phase 1 borrow: a `*_free` destructor consumes (frees) its first
     // argument. `nurl_free` is excluded — it frees raw *T / i8* FFI
     // memory, which BORROW.md item 5 leaves unchecked.
-    : b is_consume_call & ( bck_ends_free fname )
+    : b is_consume_call & ( bck_is_destructor_name fname )
         ! ( seq fname `nurl_free` )
     : i arg_idx 0
     // Phase 2B parameter-ownership: collect register values for arg expressions
@@ -1746,11 +1740,15 @@
         // the binding the loaded ident names.
         : i bck_arg_tt ( nurl_lex_type lex )
         : s bck_arg_val ( nurl_lex_val lex )
+        : i bck_arg_line ( nurl_lex_line lex )
         ( nurl_sym_def syms `__last_call_ret_owned__` `` )
         ( nurl_sym_def syms `__last_unsigned__` `` )
         // Reset __last_ident_name__ so the post-gen_expr check below
         // sees an ident only when this argument actually loaded one.
         ( nurl_sym_def syms `__last_ident_name__` `` )
+        // Reset the escape side-channel so the escape check observes
+        // only what THIS argument expression publishes.
+        ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         : s av ( gen_expr lex syms cg )
         : s at ( nurl_get_last_type )
         : s lu_arg ( nurl_sym_get syms `__last_unsigned__` )
@@ -1772,22 +1770,16 @@
             { ( die lex `string_len expects %String, got 'i8*' (raw C-string). Use 'nurl_str_len' for raw C-string pointers. See docs/GOTCHAS.md item 7.` ) }
             {} }
         {}
-        // Escape check (closes docs/GOTCHAS.md item 8). If this call is
-        // one of the four ownership-taking helpers AND this argument
-        // names a binding tagged `<name>__captures_byref`, warn — the
-        // captured stack alloca will dangle the moment the surrounding
-        // function returns.
-        ? is_escape_call {
-            : s arg_id ( nurl_sym_get syms `__last_ident_name__` )
-            ? != 0 ( nurl_str_len arg_id ) {
-                : s caps ( nurl_sym_get syms ( nurl_str_cat arg_id `__captures_byref` ) )
-                ? ( seq caps `1` ) {
-                    ( warn lex ( nurl_str_cat4
-                        `closure '` arg_id `' captures a stack binding by pointer and would escape via '`
-                        ( nurl_str_cat3 fname `' - move to a heap-backed handle (see docs/GOTCHAS.md item 8)` `` ) ) )
-                } {}
-            } {}
-        } {}
+        // Escape analysis (BORROW.md Phase 3, closes docs/GOTCHAS.md
+        // item 8). If this call is one of the four ownership-taking
+        // helpers AND this argument is a stack reference — a closure
+        // literal capturing a binding by pointer, or a binding /
+        // aggregate holding one — warn: the captured stack slot will
+        // dangle the moment the surrounding function returns.
+        ? is_escape_call
+        { ( bck_esc_check_call_arg lex syms bck_arg_line
+            ( nurl_sym_get syms `__last_ident_name__` ) fname ) }
+        {}
         // Phase 1 borrow: a `*_free` destructor's first argument, when
         // it is a bare identifier, names a binding being consumed —
         // stash it as a move (flushed after the enclosing statement).
@@ -1819,6 +1811,12 @@
         = arg_idx + arg_idx 1
     }
     ( expect lex TT_RPAREN )
+    // Escape analysis: a call's RESULT is never a stack reference —
+    // returning a borrow into a parameter is interprocedural (BORROW.md
+    // Phase 7, not yet implemented). Clear the side-channel an argument
+    // closure / aggregate literal may have left set, so the enclosing
+    // gen_let / gen_ret does not mis-read `( f \ → v {…} )` as one.
+    ( nurl_sym_def syms `__last_expr_refdepth__` `` )
     // Group F: impl method dispatch based on first arg's LLVM type
     : s impl_key ( nurl_str_cat fname ( nurl_str_cat `##` first_arg_type ) )
     : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
@@ -3467,8 +3465,13 @@
 // analyze walk transitions the binding Owned -> Moved; a `let` / `=`
 // of the binding revives it to Owned.
 
-// True when `name` ends with the literal suffix `_free`.
-@ bck_ends_free s name → b {
+// True when `name` ends with the literal suffix `_free` — i.e. the
+// callee is a typed heap destructor. NB: this predicate must NOT
+// itself be named with a `_free` (or `..._is_free`) suffix — the
+// Phase 1 move rule keys on a `_free`-suffixed callee, so such a
+// helper would be misread as a destructor and flag its own
+// bare-identifier argument as moved (a false positive in nurlc.nu).
+@ bck_is_destructor_name s name → b {
     : i len ( nurl_str_len name )
     ? < len 5 { ^ F } {}
     ( seq ( nurl_str_slice name - len 5 5 ) `_free` )
@@ -3991,6 +3994,127 @@
     }
 }
 
+// ── Borrow checker — escape analysis (BORROW.md Phase 3) ───────────
+//
+// Phase 3 replaces the old five-shape `__captures_byref` name+flag
+// closure-escape check with a sound *region* check. A region is a
+// scope frame; `g_bck_depth` (the borrowck block-nesting counter,
+// maintained by bck_block_enter / bck_block_exit) names it — the
+// function body is depth 1, every `?` / `~` / `??` / `{ }` block one
+// deeper. An outer (shallower) region outlives every inner one; the
+// caller outlives the whole function (conceptually depth 0).
+//
+// A value is a *stack reference* when it carries a pointer into some
+// binding's stack slot. Today the only such values are closures that
+// capture a `: ~`-mutable multi-field struct by pointer (the
+// `__is_capture_byref` shape) — and, transitively, any closure /
+// struct / copy that holds one. A stack reference is tagged with the
+// **referent depth**: the deepest (largest) block depth among the
+// bindings it points into. The reference must not outlive that depth.
+//
+// Escape analysis is deliberately *flow-insensitive* and runs at
+// parse time: a reference is always created before it can flow
+// anywhere, and a reference that can reach an escaping sink on ANY
+// path is a bug, so the Phase 0 CFG / lattice buys nothing here.
+// Each binding gets two side-table entries (scoped in `syms`, so they
+// vanish with the binding — no leak across sibling blocks, the bug
+// the old global-ish `__captures_byref` flag had):
+//
+//   <name>__bdepth    — the block depth the binding was declared at
+//   <name>__refdepth  — present iff the binding holds a stack
+//                       reference; its value is the referent depth
+//
+// and one transient side-channel, `__last_expr_refdepth__`, that a
+// producer (closure literal / aggregate literal) sets to advertise
+// "the expression just evaluated is a stack reference of depth N".
+// Consumers reset it before `gen_expr` and read it after, exactly
+// like `__last_ident_name__`. The whole pass is inert when
+// --borrowck is off (g_bck_depth stays 0, every entry point below
+// is a no-op), so emitted IR is byte-identical and the bootstrap
+// fixed point is unaffected.
+//
+// Known boundary (documented, not a bug): `*T` raw pointers stay
+// unchecked (BORROW.md watch #5 — `*T` is NURL's `unsafe` FFI ABI),
+// and a reference passed *through a helper function* needs an
+// interprocedural summary (Phase 7) — a per-function pass cannot see
+// whether the callee retains it.
+
+// Referent depth of the expression just evaluated by gen_expr: the
+// transient `__last_expr_refdepth__` (set by a closure / aggregate
+// literal), else — when the expression was a bare identifier — that
+// binding's `<name>__refdepth`. 0 means "not a stack reference"
+// (a real referent depth is always >= 1, the function body).
+@ bck_expr_refdepth i syms s ident → i {
+    ? == g_borrowck 0 { ^ 0 } {}
+    : s d ( nurl_sym_get syms `__last_expr_refdepth__` )
+    ? != 0 ( nurl_str_len d ) { ^ ( nurl_str_to_int d ) } {}
+    ? != 0 ( nurl_str_len ident ) {
+        : s rd ( nurl_sym_get syms ( nurl_str_cat ident `__refdepth` ) )
+        ? != 0 ( nurl_str_len rd ) { ^ ( nurl_str_to_int rd ) } {}
+    } {}
+    0
+}
+
+// Emit one escape `warning:` as `file:line: warning: <msg>`. The
+// check fires parse-time but away from the offending token (after
+// `gen_expr` has consumed the whole sub-expression), so — like the
+// Phase 1/2 `bck_diag` — it carries the source line explicitly and
+// omits the caret rather than pointing at the wrong token.
+@ bck_esc_warn i lex i line s msg → v {
+    : s loc ( nurl_str_cat3 ( nurl_lex_filename lex ) `:`
+        ( nurl_str_int line ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` msg ) )
+}
+
+// Record a freshly-declared binding's region (its block depth) and,
+// when its initialiser was a stack reference, its referent depth.
+// Called from gen_let_or_struct for every `:` binding.
+@ bck_esc_let i syms s name i refdepth → v {
+    ? == g_borrowck 0 {} {
+        ( nurl_sym_def syms ( nurl_str_cat name `__bdepth` )
+            ( nurl_str_int g_bck_depth ) )
+        ( nurl_sym_def syms ( nurl_str_cat name `__refdepth` )
+            ? > refdepth 0 ( nurl_str_int refdepth ) `` )
+    }
+}
+
+// Re-target an existing binding via `=`. The binding inherits (or
+// loses) stack-reference-ness from the RHS; if it now references a
+// region deeper than its own declaration the reference outlives the
+// referent — an escape.
+@ bck_esc_assign i lex i syms i line s name i refdepth → v {
+    ? == g_borrowck 0 {} {
+        ( nurl_sym_def syms ( nurl_str_cat name `__refdepth` )
+            ? > refdepth 0 ( nurl_str_int refdepth ) `` )
+        ? > refdepth 0 {
+            : s bd ( nurl_sym_get syms ( nurl_str_cat name `__bdepth` ) )
+            : i bdv ? == 0 ( nurl_str_len bd ) 1 ( nurl_str_to_int bd )
+            ? < bdv refdepth
+            { ( bck_esc_warn lex line ( nurl_str_cat3
+                `assigning to '` name
+                `' a value that references a more deeply scoped binding by pointer - it dangles once that inner scope exits (see docs/GOTCHAS.md item 8)` ) ) }
+            {}
+        } {}
+    }
+}
+
+// A stack reference reaching `^`-return or an ownership-taking helper
+// escapes the current frame unconditionally (the caller / a heap
+// container / a worker thread all outlive every in-function region).
+@ bck_esc_check_return i lex i syms i line s ident → v {
+    ? & != g_borrowck 0 > ( bck_expr_refdepth syms ident ) 0
+    { ( bck_esc_warn lex line `returning a value that references a stack binding by pointer - it dangles after this function returns (move the captured data to a heap-backed handle; see docs/GOTCHAS.md item 5)` ) }
+    {}
+}
+
+@ bck_esc_check_call_arg i lex i syms i line s ident s fname → v {
+    ? & != g_borrowck 0 > ( bck_expr_refdepth syms ident ) 0
+    { ( bck_esc_warn lex line ( nurl_str_cat3
+        `passing a value that references a stack binding by pointer to '` fname
+        `' - it escapes the current stack frame and dangles (move it to a heap-backed handle; see docs/GOTCHAS.md item 8)` ) ) }
+    {}
+}
+
 // ── Statement ──────────────────────────────────────────────────────
 
 @ gen_stmt i lex i syms i cg → s {
@@ -4077,20 +4201,21 @@
         : s bck_rhs_val ( nurl_lex_val lex )
         ( nurl_sym_def syms `__last_call_ret_owned__` `` )
         ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
-        ( nurl_sym_def syms `__last_closure_byref__` `` )
+        ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         : s val ( gen_expr lex syms cg )
         : s vt ( nurl_get_last_type )
         // Borrow checker: record this binding (inference path).
         ( bck_record `let` name bck_line )
         ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
         : b rhs_is_owned_call != 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_owned__` ) )
-        // Propagate the closure-byref flag from the RHS onto the binding
-        // so gen_ret / future use-site checks can see it (docs/GOTCHAS.md
-        // item 8: a closure that captures a `: ~ MultiFieldStruct` by
-        // pointer must not outlive that struct's stack frame).
-        ? ( seq ( nurl_sym_get syms `__last_closure_byref__` ) `1` )
-        { ( nurl_sym_def syms ( nurl_str_cat name `__captures_byref` ) `1` ) }
-        {}
+        // Escape analysis (BORROW.md Phase 3): stamp this binding's
+        // region (block depth) and, when the initialiser was a stack
+        // reference — a closure literal capturing a binding by
+        // pointer, an aggregate holding one, or a copy of such a
+        // binding — its referent depth, so gen_ret / gen_assign /
+        // gen_call reject escapes (docs/GOTCHAS.md item 8).
+        ( bck_esc_let syms name ( bck_expr_refdepth syms
+            ? ( is_ident_tok bck_rhs_tt ) bck_rhs_val `` ) )
         : s ptr ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print ptr )
         ( nurl_print ` = alloca ` ) ( nurl_print vt ) ( nurl_print `\n` )
@@ -4196,6 +4321,11 @@
             { ( nurl_lex_advance lex )
                 ~ != ( nurl_lex_type lex ) TT_RBRACE { ( nurl_lex_advance lex ) }
                 ( nurl_lex_advance lex )
+                // Escape analysis: a `{ }` zero-init binding is never a
+                // stack reference, but still record its region so a
+                // later `=` of a reference into it compares depths
+                // correctly.
+                ( bck_esc_let syms name 0 )
                 ^ `undef`
             }
             { : b rhs_is_slice_lit == ( nurl_lex_type lex ) TT_LBRACK
@@ -4205,17 +4335,17 @@
                 : s bck_rhs_val ( nurl_lex_val lex )
                 ( nurl_sym_def syms `__last_call_ret_owned__` `` )
                 ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
-                ( nurl_sym_def syms `__last_closure_byref__` `` )
+                ( nurl_sym_def syms `__last_expr_refdepth__` `` )
                 : s val ( gen_expr lex syms cg )
                 : s vt ( nurl_get_last_type )
                 // Borrow checker: record this binding (typed path).
                 ( bck_record `let` name bck_line )
                 ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
                 : b rhs_is_owned_call != 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_owned__` ) )
-                // Propagate closure-byref flag (item 8 escape detection).
-                ? ( seq ( nurl_sym_get syms `__last_closure_byref__` ) `1` )
-                { ( nurl_sym_def syms ( nurl_str_cat name `__captures_byref` ) `1` ) }
-                {}
+                // Escape analysis (BORROW.md Phase 3): stamp region +
+                // referent depth — see the type-inference path above.
+                ( bck_esc_let syms name ( bck_expr_refdepth syms
+                    ? ( is_ident_tok bck_rhs_tt ) bck_rhs_val `` ) )
 
                 // Debug: show types being converted
                 ( nurl_print `  ; DEBUG: val=` ) ( nurl_print val ) ( nurl_print ` vt=` ) ( nurl_print vt ) ( nurl_print ` ptype=` ) ( nurl_print ptype ) ( nurl_print `\n` )
@@ -4319,9 +4449,21 @@
         ( seq vt `i8*` )
         ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) ptr )
         ? lhs_is_owned_str { ( nurl_sym_def syms `__last_call_ret_owned__` `` ) } {}
+        // Escape analysis (BORROW.md Phase 3): snapshot the RHS's
+        // first token (a bare identifier may copy a stack reference)
+        // and clear the side-channel a closure / aggregate literal
+        // RHS would publish.
+        : i bck_rhs_tt ( nurl_lex_type lex )
+        : s bck_rhs_val ( nurl_lex_val lex )
+        ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         : s val ( gen_expr lex syms cg )
         // Borrow checker: record this assignment.
         ( bck_record `assign` name bck_line )
+        // Escape analysis: re-target `name`. If the RHS is a stack
+        // reference into a region deeper than `name`'s own, the
+        // reference outlives its referent — an escape.
+        ( bck_esc_assign lex syms bck_line name ( bck_expr_refdepth syms
+            ? ( is_ident_tok bck_rhs_tt ) bck_rhs_val `` ) )
         : b rhs_is_owned_call & lhs_is_owned_str
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
         ? rhs_is_owned_call
@@ -5024,23 +5166,24 @@
     ? == ( nurl_str_get agg_ty 0 ) 37
     { = cur_sname ( nurl_str_slice agg_ty 1 - ( nurl_str_len agg_ty ) 1 ) }
     {}
-    // Closure-escape (docs/GOTCHAS.md item 5/8): track whether any field
-    // value is a closure that captures a stack binding by pointer —
-    // either a closure literal (`__last_closure_byref__`) or a binding
-    // already tagged `<name>__captures_byref`. If so, the whole
-    // aggregate inherits the taint so `gen_let_or_struct` / `gen_ret`
-    // see it; otherwise wrapping a byref closure in a struct would
-    // silently defeat the `^`-return + escape-call checks.
-    : ~ b agg_has_byref F
+    // Closure-escape (docs/GOTCHAS.md item 5/8 / BORROW.md Phase 3):
+    // track the deepest referent depth among the field values. A field
+    // that is a stack reference (a closure capturing a binding by
+    // pointer, or a binding / aggregate transitively holding one)
+    // makes the WHOLE aggregate a stack reference of that depth, so
+    // `gen_let_or_struct` / `gen_ret` reject the escape — otherwise
+    // wrapping a byref closure in a struct would silently defeat the
+    // `^`-return + escape-call checks.
+    : ~ i agg_refdepth 0
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         ? != 0 g_auto_drop_strings
         { ( nurl_sym_def syms `__last_call_ret_owned__` `` )
             ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
         }
         {}
-        // Reset the byref + ident-name side-channels so the post-gen_expr
+        // Reset the escape + ident-name side-channels so the post-gen_expr
         // check observes only what THIS field expression sets.
-        ( nurl_sym_def syms `__last_closure_byref__` `` )
+        ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         ( nurl_sym_def syms `__last_ident_name__` `` )
         // Snapshot whether this field expr is a slice literal before gen_expr
         // consumes the token. Slice literals don't go through gen_call so
@@ -5048,16 +5191,12 @@
         : b fld_is_slice_lit == ( nurl_lex_type lex ) TT_LBRACK
         : s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
-        // Field is a byref-capturing closure if gen_closure_expr just set
-        // the flag (closure literal in field position) OR the field named
-        // a binding previously tagged `<name>__captures_byref`.
-        ? ( seq ( nurl_sym_get syms `__last_closure_byref__` ) `1` )
-        { = agg_has_byref T }
-        { : s fld_id ( nurl_sym_get syms `__last_ident_name__` )
-            ? & != 0 ( nurl_str_len fld_id )
-                ( seq ( nurl_sym_get syms ( nurl_str_cat fld_id `__captures_byref` ) ) `1` )
-            { = agg_has_byref T }
-            {} }
+        // Field is a stack reference if gen_closure_expr / a nested
+        // gen_agg_lit just advertised one, or the field named a binding
+        // tagged `<name>__refdepth`. Carry up the deepest such depth.
+        : i fld_refdepth ( bck_expr_refdepth syms
+            ( nurl_sym_get syms `__last_ident_name__` ) )
+        ? > fld_refdepth agg_refdepth { = agg_refdepth fld_refdepth } {}
         : s ret_owned ( nurl_sym_get syms `__last_call_ret_owned__` )
         : b is_str_fresh & ( seq fty `i8*` ) ( seq ret_owned `str` )
         : b is_slice_fresh & ( mem_is_slice_ty fty ) | fld_is_slice_lit ( seq ret_owned `1` )
@@ -5378,14 +5517,15 @@
         { ( nurl_sym_def syms `__last_agg_owned_fields__` `` ) }
     }
     {}
-    // Closure-escape: publish the aggregate-level byref taint. A struct
-    // holding a byref-capturing closure must, when bound or returned,
-    // be treated exactly like a bare byref closure — `gen_let_or_struct`
-    // copies `__last_closure_byref__` onto `<name>__captures_byref`, and
-    // `gen_ret` consults it directly for `^ @ T { ... }`. Composes
-    // through nesting: an outer aggregate's field loop sees an inner
-    // aggregate's published flag the same way.
-    ( nurl_sym_def syms `__last_closure_byref__` ? agg_has_byref `1` `` )
+    // Closure-escape: publish the aggregate-level referent depth. A
+    // struct holding a stack-reference field must, when bound or
+    // returned, be treated exactly like a bare stack reference —
+    // `gen_let_or_struct` copies the depth onto `<name>__refdepth`,
+    // and `gen_ret` consults it directly for `^ @ T { ... }`.
+    // Composes through nesting: an outer aggregate's field loop sees
+    // an inner aggregate's published depth the same way.
+    ( nurl_sym_def syms `__last_expr_refdepth__`
+        ? > agg_refdepth 0 ( nurl_str_int agg_refdepth ) `` )
     result
 }
 
@@ -6053,13 +6193,15 @@
         = bpi + bpi 1
     }
 
-    // Register captured variables via environment struct
-    // Track whether ANY capture is by-pointer (mutable multi-field
-    // struct). If yes, this closure carries a pointer into the
-    // enclosing function's stack and must NOT outlive that stack
-    // frame. We tag the closure value so gen_let / gen_ret can warn
-    // at escape sites (docs/GOTCHAS.md §8).
-    : ~ b any_byref_capture F
+    // Register captured variables via environment struct.
+    // A by-pointer capture (mutable multi-field struct) makes this
+    // closure carry a pointer into the enclosing function's stack,
+    // so it must NOT outlive that frame. The borrow checker's escape
+    // analysis (BORROW.md Phase 3) tags the closure value with a
+    // *referent depth* — the deepest block scope it points into — so
+    // gen_let / gen_assign / gen_ret / gen_call reject escapes
+    // (docs/GOTCHAS.md §8).
+    : ~ i closure_refdepth 0
     ? > captured_count 0
     {
         : s typed_env ( nurl_cg_reg cg )
@@ -6084,7 +6226,26 @@
             : s cap_type ( nurl_sym_get syms cap_name )
             ? == 0 ( nurl_str_len cap_type ) { = cap_type `i64` } {}
             : b cap_byref ( __is_capture_byref cap_name syms )
-            ? cap_byref { = any_byref_capture T } {}
+            // Escape analysis: a by-pointer capture references
+            // `cap_name`'s stack slot — its declaration depth
+            // (`<cap>__bdepth`, defaulting to the function body, 1,
+            // for a parameter) constrains this closure's lifetime.
+            // Capturing a binding that is ITSELF a stack reference
+            // (`<cap>__refdepth`) propagates that depth transitively
+            // (a closure-of-a-closure). The closure's referent depth
+            // is the deepest such constraint.
+            ? & != g_borrowck 0 cap_byref {
+                : s cbd ( nurl_sym_get syms ( nurl_str_cat cap_name `__bdepth` ) )
+                : i cbdv ? == 0 ( nurl_str_len cbd ) 1 ( nurl_str_to_int cbd )
+                ? > cbdv closure_refdepth { = closure_refdepth cbdv } {}
+            } {}
+            ? != g_borrowck 0 {
+                : s crd ( nurl_sym_get syms ( nurl_str_cat cap_name `__refdepth` ) )
+                ? != 0 ( nurl_str_len crd ) {
+                    : i crdv ( nurl_str_to_int crd )
+                    ? > crdv closure_refdepth { = closure_refdepth crdv } {}
+                } {}
+            } {}
             : s eff_type ? cap_byref ( nurl_str_cat cap_type `*` ) cap_type
             : s cap_gep ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print cap_gep )
@@ -6194,14 +6355,17 @@
 
     ( nurl_set_last_type fn_ptr_type )
 
-    // Tag this closure as "captures a stack binding by pointer" if any
-    // of its captures came in through the byref path. gen_let_or_struct
-    // copies the flag onto the binding (`<name>__captures_byref`) and
-    // gen_ret reads either form to emit the §8 escape warning at
-    // `^`-return sites. Cleared by gen_let / gen_ret after consumption
-    // so it never bleeds into the next sibling expression.
-    ? any_byref_capture
-    { ( nurl_sym_def syms `__last_closure_byref__` `1` ) }
+    // Escape analysis (BORROW.md Phase 3): advertise this closure
+    // value's referent depth on `__last_expr_refdepth__` whenever it
+    // captures a stack binding by pointer (directly, or transitively
+    // via another captured reference). The consuming gen_let /
+    // gen_assign / gen_ret / gen_call resets this side-channel before
+    // `gen_expr` and reads it after, so it never bleeds into a
+    // sibling expression. No-op when --borrowck is off
+    // (closure_refdepth stays 0).
+    ? > closure_refdepth 0
+    { ( nurl_sym_def syms `__last_expr_refdepth__`
+        ( nurl_str_int closure_refdepth ) ) }
     {}
 
     result2

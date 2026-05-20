@@ -1,18 +1,16 @@
-// should_warn_closure_escape_struct.nu — closure-escape detection must
+// borrow_escape_struct.nu — BORROW.md Phase 3: escape analysis must
 // see through a struct wrapper.
 //
 // docs/GOTCHAS.md item 5 / item 8: a closure that captures a
 // `: ~`-mutable multi-field struct is captured BY POINTER into the
-// enclosing frame. The existing escape check warns when such a
-// closure is returned directly (`^ closure`). Before this fix, putting
-// the closure into a struct literal first (`@ Slot { cb }`) and then
-// returning the STRUCT silently passed the check — the
-// `__captures_byref` taint was not propagated through `gen_agg_lit`.
+// enclosing frame. The escape check rejects returning such a closure
+// directly (`^ closure`); it must also reject wrapping it in a struct
+// literal first (`@ Slot { cb }`) and returning the STRUCT.
 //
-// Fix: gen_agg_lit now sets `__last_closure_byref__` when any field of
-// the aggregate is a byref-capturing closure (literal or binding), so
-// the struct binding inherits `<name>__captures_byref` and the
-// `^`-return / escape-call checks fire as they do for a bare closure.
+// gen_agg_lit carries the deepest field referent depth up to the
+// aggregate (`__last_expr_refdepth__`), so a Slot holding a stack-
+// reference closure is itself a stack reference and the `^`-return
+// check fires exactly as it does for a bare closure.
 //
 // One positive case (warns) + one negative control (no warning).
 

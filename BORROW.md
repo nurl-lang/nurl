@@ -1,21 +1,25 @@
 # Borrow Checking — Preliminary Investigation & Phased Implementation Plan
 
-> **Status (2026-05-20): Phases 0–2 landed; Phase 3 next.**
+> **Status (2026-05-20): Phases 0–3 landed; Phase 4 gated on the
+> Part III decision.**
 > This document is the feasibility study + work-list for adding static
 > aliasing / borrow analysis to NURL. Phase 0 (the analysis substrate),
-> Phase 1 (move checking / use-after-move) and Phase 2 (alias /
-> double-free) are implemented behind the `--borrowck` flag — see the
-> per-phase sections below for what each landed. Phase 3 (escape
-> analysis) is the next high-value no-new-syntax piece; Phase 4 carries
-> the one irreversible design decision (reference types vs. mutable
-> value semantics) and should not start until that decision is
-> explicitly made.
+> Phase 1 (move checking / use-after-move), Phase 2 (alias /
+> double-free) and Phase 3 (escape analysis) are implemented behind the
+> `--borrowck` flag — see the per-phase sections below for what each
+> landed. Phases 0–3 form the recommended first deliverable: no new
+> syntax, bug classes 1/2/3 closed. Phase 4 carries the one
+> irreversible design decision (reference types vs. mutable value
+> semantics) and should not start until that decision is explicitly
+> made.
 >
-> Phases 1 and 2 emit `warning:` (not `error:`) for now — BORROW.md
+> Phases 1, 2 and 3 emit `warning:` (not `error:`) for now — BORROW.md
 > watch #3: a new rule ships as a warning and is promoted to an error
-> only once proven false-positive-free. Both are: `--borrowck` over the
-> whole compiler + stdlib + test + example corpus emits zero
-> warnings, i.e. the codebase is move-clean and alias-clean.
+> only once proven false-positive-free. All three are clean:
+> `--borrowck` over the whole compiler + stdlib + test + example
+> corpus (253 files) emits zero warnings outside the deliberate
+> `borrow_*` regression tests — the codebase is move-clean,
+> alias-clean and escape-clean.
 >
 > The whole feature is designed as a **diagnostic-only analysis pass**:
 > it emits `error:` / `warning:` and never changes emitted IR. A
@@ -393,6 +397,33 @@ classified as a move; bug class 2 closed.
 
 ## Phase 3 — Escape analysis (sound replacement for the `__captures_byref` hack)
 
+> **LANDED 2026-05-20.** The five-shape `__captures_byref` /
+> `__last_closure_byref__` name+flag hack is deleted; escape analysis
+> is now a `--borrowck`-gated, parse-time, region-based check.
+> *Region* = the borrowck block-nesting depth `g_bck_depth`: the
+> function body is depth 1, every `?`/`~`/`??`/`{ }` block one deeper;
+> the caller is depth 0. A *stack reference* is a closure that
+> captures a `: ~`-mutable multi-field struct by pointer
+> (`__is_capture_byref`), tagged with a **referent depth** — the
+> deepest binding it points into. Reference-ness propagates through
+> closure / aggregate literals, `let` copies and `=` assignments via
+> two `syms`-scoped side-tables (`<name>__bdepth`, `<name>__refdepth`)
+> and one transient channel (`__last_expr_refdepth__`). A reference
+> reaching `^`-return, `vec_push`/`vec_insert`/`vec_set`/
+> `thread_spawn`, or an `=` into a shallower (longer-lived) binding is
+> a `warning:`. This subsumes the old hack and additionally catches
+> `let`-copy propagation and the within-function `=`-to-outer region
+> escape it could not see. Escape analysis is deliberately
+> flow-insensitive (a reference is always created before it flows; a
+> reference that escapes on *any* path is a bug), so it runs
+> parse-time and does not use the Phase 0 CFG. Diagnostics still emit
+> `warning:` (not `error:`) — uniform with Phases 1/2 and BORROW.md
+> watch #3: a new rule soaks as a warning before promotion. Regression
+> tests `compiler/tests/borrow_escape_{closure,struct,vec,assign}.nu`.
+> Known boundary: `*T` raw pointers stay unchecked (watch #5), and a
+> reference passed *through a helper* needs the interprocedural
+> summary of Phase 7 — a per-function pass cannot see callee retention.
+
 **Goal:** replace the five-shape name-match `warning:` with a sound
 region check, and promote provable escapes to `error:`.
 
@@ -661,11 +692,15 @@ the Phase 4 grammar change.
 
 ---
 
-*Status: Phases 0, 1, 2 implemented behind `--borrowck` (2026-05-20).
-Next: Phase 3 (escape analysis) — note it is a delete-and-replace of
-the existing `__captures_byref` / five-shape closure-escape check, and
-BORROW.md expects the `should_warn_closure_escape*` tests to be
-upgraded as part of it, so it is best done as its own focused session.
-Phase 4 remains gated on the Part III reference-surface decision
-(recommendation on file: Option B, mutable value semantics).
+*Status: Phases 0, 1, 2, 3 implemented behind `--borrowck`
+(2026-05-20). Phases 0–3 are the recommended first deliverable — no
+new syntax, bug classes 1/2/3 closed, the corpus is move/alias/escape
+clean. Next: Phase 8-partial (production diagnostics + flip
+`--borrowck` to on-by-default) could ship now to retire the README's
+"no memory-safety story" admission; or Phase 4, which remains gated on
+the Part III reference-surface decision (recommendation on file:
+Option B, mutable value semantics) and must not start until that
+decision is explicitly made. Phase 3 promotion of escape `warning:` to
+`error:` is deferred to Phase 8, after the warning has soaked
+false-positive-free (BORROW.md watch #3).
 Last updated 2026-05-20.*
