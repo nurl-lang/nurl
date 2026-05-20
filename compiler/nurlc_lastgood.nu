@@ -1816,6 +1816,20 @@
             ? is_inout_arg
             { = p5_inout_seen ? == 0 ( nurl_str_len p5_inout_seen )
                 bck_arg_val ( nurl_str_cat3 p5_inout_seen ` ` bck_arg_val ) }
+            {}
+            // BORROW.md Phase 6: iterator invalidation. If this
+            // bare-identifier argument names a container currently
+            // being iterated by an enclosing `~` foreach, and the
+            // call mutates it — the receiver (arg 0) of a stdlib
+            // container mutator, or any `inout` argument — the loop's
+            // borrowed cursor would be invalidated.
+            : b fe_iterated ( str_contains_word
+                ( nurl_sym_get g_bck `iter_containers` ) bck_arg_val )
+            : b fe_mutates & == arg_idx 0 ( bck_is_container_mutator fname )
+            ? & fe_iterated | is_inout_arg fe_mutates
+            { ( bck_esc_warn lex bck_arg_line ( nurl_str_cat3
+                `cannot mutate '` bck_arg_val
+                `' while iterating over it - the '~' loop holds a borrow of the container; move the mutation out of the loop body` ) ) }
             {} }
         {}
         : ~ s av ``
@@ -2827,6 +2841,10 @@
 @ gen_foreach i lex i syms i cg → s {
     : s var_name ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
+    // BORROW.md Phase 6: snapshot the iterated container's name (when
+    // it is a bare binding) before gen_expr consumes the token, so
+    // the loop body can be checked for mutation of it.
+    : s fe_cont ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_lex_val lex ) ``
     : s slice_val ( gen_expr lex syms cg )
     : s slice_ty ( nurl_get_last_type )
     // slice_ty = "{ T*, i64 }" — extract ptr_ty (T*) then elem_ty (T)
@@ -2899,10 +2917,14 @@
         ( nurl_sym_push syms )
     } {}
     = g_did_ret 0
-    // Borrow checker (Phase 0c): a `~ x : T xs` body is a back-edge,
-    // and additionally borrows the iterated container (Phase 6).
+    // Borrow checker (Phase 0c): a `~ x xs` body is a back-edge, and
+    // (Phase 6) borrows the iterated container `xs` for the body's
+    // duration — bck_iter_enter records it so gen_call rejects any
+    // mutation of it inside the body; restored after the body.
     ( bck_set_block_kind `foreach` )
+    : s fe_iter_saved ( bck_iter_enter fe_cont )
     ( gen_block_stmts lex syms cg )
+    ( bck_iter_exit fe_iter_saved )
     ? == g_did_ret 0
     { ? != 0 g_auto_drop_strings
         { ( mem_drop_new_strings syms cg old_strs_fe )
@@ -3563,6 +3585,44 @@
     : i len ( nurl_str_len name )
     ? < len 5 { ^ F } {}
     ( seq ( nurl_str_slice name - len 5 5 ) `_free` )
+}
+
+// ── Borrow checker — iterator invalidation (BORROW.md Phase 6) ─────
+//
+// A `~ x xs { ... }` foreach loop borrows the container `xs` for the
+// body's duration — gen_foreach snapshots the buffer pointer + length
+// once, up front, so a `vec_push` that reallocs (or a `vec_free`)
+// inside the body leaves the loop cursor pointing at freed memory.
+// gen_foreach brackets the body with bck_iter_enter / bck_iter_exit,
+// pushing the iterated binding onto `g_bck`'s `iter_containers` list
+// (a save/restore stack — nested foreach loops compose). gen_call
+// then rejects mutating that container from inside the body.
+
+// True when `fname` is a stdlib container operation that mutates its
+// receiver's backing buffer (reallocates, frees, or rewrites
+// elements) — the receiver is always the first value argument.
+@ bck_is_container_mutator s fname → b {
+    ( str_contains_word
+        `vec_push vec_insert vec_remove vec_pop vec_clear vec_set vec_set_len vec_reserve vec_shrink_to_fit vec_extend vec_free vec_free_with vec_swap vec_reverse`
+        fname )
+}
+
+// Push `cont` onto the iterated-container stack; return the prior
+// value so the caller can restore it once the loop body is parsed.
+// No-op (returns ``) when --borrowck is off.
+@ bck_iter_enter s cont → s {
+    ? == g_borrowck 0 { ^ `` } {}
+    : s saved ( nurl_sym_get g_bck `iter_containers` )
+    ? != 0 ( nurl_str_len cont )
+    { ( nurl_sym_def g_bck `iter_containers`
+        ? == 0 ( nurl_str_len saved ) cont
+        ( nurl_str_cat3 saved ` ` cont ) ) }
+    {}
+    saved
+}
+
+@ bck_iter_exit s saved → v {
+    ? == g_borrowck 0 {} { ( nurl_sym_def g_bck `iter_containers` saved ) }
 }
 
 // True when LLVM type `lty` is a heap-owned aggregate the borrow

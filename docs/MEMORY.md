@@ -177,6 +177,29 @@ cross-statement aliasing to track). A binding read through a *nested*
 argument expression — `( f inout c (g c) )`, `( f inout c . c n )` —
 is a known gap, not yet flagged.
 
+### 2.5 Iterator invalidation
+
+A `~ x xs { ... }` foreach loop borrows the container `xs` for the
+body's duration — the loop snapshots `xs`'s buffer pointer and length
+once, up front. Mutating `xs` inside the body would leave the loop
+cursor pointing at a stale or freed buffer (`vec_push` may
+reallocate; `vec_free` releases the buffer outright), so it is
+reported:
+
+```
+~ x xs { ( vec_push xs x ) }   // warning: cannot mutate 'xs'
+                               //          while iterating over it
+```
+
+The check fires for a stdlib container mutator applied to the
+iterated container (`vec_push` / `vec_insert` / `vec_remove` /
+`vec_pop` / `vec_clear` / `vec_set` / `vec_set_len` / `vec_reserve` /
+`vec_shrink_to_fit` / `vec_extend` / `vec_free` / `vec_free_with` /
+`vec_swap` / `vec_reverse`) and for any `inout` argument naming it.
+A counter loop (`~ k 0 ...`, a while-loop) borrows nothing, so
+`( vec_set xs k v )` in an index loop stays legal — only the
+element-borrowing `~ x xs` foreach form is guarded.
+
 ## 3. What is NOT checked
 
 The borrow checker targets the bug classes that ordinary NURL code
@@ -187,9 +210,6 @@ hits in practice. It deliberately does **not** yet cover:
   binding read through a *nested* sub-expression argument, and any
   longer-range aliased-mutation analysis, is not yet done — BORROW.md
   Phase 5 (remainder).
-- **Full iterator invalidation.** Mutating a container while a
-  `~`-foreach borrows its elements is a planned check (Phase 6), not
-  yet implemented.
 - **`*T` raw pointers.** `*T` is the FFI ABI escape hatch — NURL's
   `unsafe`. A `*T` taken of a local, stored, returned, or captured is
   *not* checked. Treat `*T` lifetimes as your responsibility.
@@ -225,8 +245,8 @@ hits in practice. It deliberately does **not** yet cover:
 | Alias double-free | yes (`warning:`) | Phase 2 |
 | Closure / stack-reference escape | yes (`warning:`) | Phase 3 |
 | `inout` exclusive access (call-site aliasing) | yes (`warning:`) | Phases 4-5 |
+| Iterator invalidation (mutate container in `~`-foreach) | yes (`warning:`) | Phase 6 |
 | Aliased mutation via nested-argument reads | no | Phase 5 (remainder) |
-| Iterator invalidation | no | Phase 6 |
 | Returned borrows / lifetime inference | no | Phase 7 |
 | `*T` raw pointers | no (by design) | n/a |
 

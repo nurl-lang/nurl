@@ -35,17 +35,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   argument path to its value at that call — passing it again, as a
   second `inout` or a plain by-value argument, is a `warning:`.
 
-* **Static borrow checker, on by default (BORROW.md Phases 0-3 +
+* **Static borrow checker, on by default (BORROW.md Phases 0-3 + 6 +
   8-partial).** A diagnostic analysis pass (disable with
   `--no-borrowck`) that never changes generated code — a
-  borrow-clean program compiles to byte-identical IR. Closes three
+  borrow-clean program compiles to byte-identical IR. Closes four
   bug classes with `warning:` diagnostics: use-after-move (a binding
   read after its ownership moved), alias double-free (`: T b a` of an
-  owned heap value moves `a`), and stack-reference escape (a closure
+  owned heap value moves `a`), stack-reference escape (a closure
   capturing a `: ~`-mutable struct by pointer that is returned,
   pushed into a container, spawned onto a thread, or assigned into a
-  longer-lived binding — a region-based check). Ownership + borrow
-  rules documented in the new [`docs/MEMORY.md`](docs/MEMORY.md).
+  longer-lived binding — a region-based check), and iterator
+  invalidation (mutating a container — `vec_push`/`vec_free`/… — from
+  inside a `~`-foreach that iterates it). Ownership + borrow rules
+  documented in the new [`docs/MEMORY.md`](docs/MEMORY.md).
 
 * **Tail-call optimisation in the @-fn dispatch path.** `gen_ret`
   now flags the upcoming return-value expression as

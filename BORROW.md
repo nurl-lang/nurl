@@ -1,8 +1,8 @@
 # Borrow Checking — Preliminary Investigation & Phased Implementation Plan
 
 > **Status (2026-05-20): Phases 0–3 + 8-partial + 4-partial (`inout`)
-> + 5-partial landed; the borrow checker is ON by default. Part III
-> decided: Option B (mutable value semantics).**
+> + 5-partial + 6 landed; the borrow checker is ON by default.
+> Part III decided: Option B (mutable value semantics).**
 > This document is the feasibility study + work-list for adding static
 > aliasing / borrow analysis to NURL. Phase 0 (the analysis substrate),
 > Phase 1 (move checking / use-after-move), Phase 2 (alias /
@@ -12,8 +12,9 @@
 > shipped the user-facing rules doc [`docs/MEMORY.md`](docs/MEMORY.md).
 > Phase 4-partial added the `inout` parameter convention (Option B;
 > `sink` pending); Phase 5-partial enforces exclusive access for
-> `inout` arguments at a call site. Bug classes 1/2/3 are closed; bug
-> class 6 (aliased mutation) is closed for the call-site case.
+> `inout` arguments at a call site; Phase 6 closes iterator
+> invalidation. Bug classes 1/2/3/5 are closed; bug class 6 (aliased
+> mutation) is closed for the call-site case.
 >
 > Phases 1, 2 and 3 emit `warning:` (not `error:`) for now — BORROW.md
 > watch #3: a new rule ships as a warning and is promoted to an error
@@ -589,6 +590,26 @@ accepted; stdlib/compiler clean.
 
 ## Phase 6 — Iterator invalidation
 
+> **LANDED 2026-05-20.** `gen_foreach` brackets the loop body with
+> `bck_iter_enter` / `bck_iter_exit`, which push the iterated bare
+> binding onto `g_bck`'s `iter_containers` save/restore stack (nested
+> foreach loops compose). `gen_call` then warns when a body call
+> would mutate that container: the receiver argument (arg 0) of a
+> stdlib container mutator — `bck_is_container_mutator`: `vec_push`,
+> `vec_insert`, `vec_remove`, `vec_pop`, `vec_clear`, `vec_set`,
+> `vec_set_len`, `vec_reserve`, `vec_shrink_to_fit`, `vec_extend`,
+> `vec_free`, `vec_free_with`, `vec_swap`, `vec_reverse` — or any
+> `inout` argument naming the iterated container. `warning:` (watch
+> #3, uniform with Phases 1-5). Index loops (`~ i k 0 …`) are
+> while-loops, not foreach, so they record no container and stay
+> legal — exactly the BORROW.md carve-out. Regression test
+> `borrow_iter_invalidation.nu`; the corpus is clean. Known limits:
+> the mutator set is a fixed name list (a generic stdlib container
+> added later must be added to it), and a foreach whose container is
+> spelled with a single type-keyword letter (`~ x v`) is not a
+> foreach at all — `gen_loop` needs `peek == IDENT`, and `v` lexes as
+> the void keyword — so it is neither checked nor, in fact, a loop.
+
 **Goal:** mutating a container while a `~`-foreach borrows its
 elements is an `error:`.
 
@@ -780,14 +801,13 @@ the Phase 4 grammar change.
 ---
 
 *Status: Phases 0, 1, 2, 3 + 8-partial + 4-partial (`inout`) +
-5-partial shipped (2026-05-20). The borrow checker is ON by default
-(`--no-borrowck` disables it); bug classes 1/2/3 are closed and bug
-class 6 (aliased mutation) is closed for the call-site case; the
-corpus is move/alias/escape clean; `docs/MEMORY.md` documents the
-model. Part III decided: Option B (mutable value semantics) — the
-`inout` parameter convention is live, and a binding passed `inout`
-must be the exclusive argument path to its value. Next: finish
+5-partial + 6 shipped (2026-05-20). The borrow checker is ON by
+default (`--no-borrowck` disables it); bug classes 1/2/3/5 are closed
+and bug class 6 (aliased mutation) is closed for the call-site case;
+the corpus is move/alias/escape/iter clean; `docs/MEMORY.md`
+documents the model. Part III decided: Option B (mutable value
+semantics) — the `inout` parameter convention is live. Next: finish
 Phase 4 (`sink` convention; `inout` on generics / field targets /
-impl methods), extend Phase 5 to nested-subexpression reads, Phase 6
-(iterator invalidation), and full Phase 8 (promote `warning:` to
-`error:` after the on-by-default soak). Last updated 2026-05-20.*
+impl methods), extend Phase 5 to nested-subexpression reads, then
+full Phase 8 (promote `warning:` to `error:` after the on-by-default
+soak). Last updated 2026-05-20.*
