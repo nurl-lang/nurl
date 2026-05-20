@@ -420,6 +420,16 @@
 // type mismatch — loud, never silent).
 : i g_fn_inout 0
 
+// BORROW.md Phase 4 (Option B): per-function sink-parameter map.
+// `g_fn_sink[fname]` is the space-separated list of 0-based indices
+// of `sink` parameters. A `sink` parameter consumes (moves) its
+// argument: codegen is an ordinary by-value pass (no IR change), and
+// gen_call records the argument binding as borrow-checker-moved so
+// the caller cannot use it afterwards. Unlike g_fn_inout, a forward
+// call needs no guard — it merely misses the move diagnostic, it is
+// never miscompiled. Allocated in main().
+: i g_fn_sink 0
+
 // ── DWARF debug-info state (see DWARF.md) ────────────────────────
 // All zero/empty when --g is OFF; emit helpers then produce IR that
 // is byte-identical to a pre-DWARF build. Toggled in main().
@@ -1749,6 +1759,9 @@
     // one of these positions is passed by address — see the
     // per-argument handling below. Empty for an ordinary function.
     : s callee_inout ( nurl_sym_get g_fn_inout call_name )
+    // BORROW.md Phase 4: indices of the callee's `sink` parameters —
+    // an argument there is consumed (move-checked at the call site).
+    : s callee_sink ( nurl_sym_get g_fn_sink call_name )
     // If the callee is known (scan_fn_sigs) to have `inout` parameters
     // but g_fn_inout has no entry, it is being called BEFORE its
     // definition was compiled — passing the argument by value would
@@ -1887,6 +1900,25 @@
         // stash it as a move (flushed after the enclosing statement).
         ? & & is_consume_call == arg_idx 0 ( is_ident_tok bck_arg_tt )
         { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) ) }
+        {}
+        // BORROW.md Phase 4: a `sink` parameter consumes its argument.
+        // When the argument is a bare-identifier binding, record it as
+        // moved so any later use is a use-after-move. A binding that
+        // the compiler auto-drops (owned slice / string / Drop value /
+        // struct with owned fields) cannot yet be `sink`-passed — that
+        // needs drop-ownership transfer to the callee (deferred); it
+        // is rejected here rather than risking a double free.
+        ? & ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+             ( is_ident_tok bck_arg_tt )
+        { : s sink_ptr ( nurl_sym_get syms ( nurl_str_cat bck_arg_val `__ptr` ) )
+            ? | | ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) bck_arg_val )
+                  ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) sink_ptr )
+                | ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) sink_ptr )
+                  ( str_contains_word ( nurl_sym_get syms `__owned_struct_fields__` ) sink_ptr )
+            { ( die lex ( nurl_str_cat3
+                `'` bck_arg_val
+                `' is a compiler-auto-dropped value; passing it to a 'sink' parameter is not yet supported (BORROW.md Phase 4) - pass a Vec or other manually-managed handle, or pass it as an ordinary parameter` ) ) }
+            { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) ) } }
         {}
         // Variadic position: promote BEFORE owned-temp tracking + argstr
         // append, since promotion replaces (at, av) with the widened pair.
@@ -7355,9 +7387,11 @@
     : s params_str ``
     : i pct 0
     // BORROW.md Phase 4: accumulate the 0-based indices of `inout`
-    // parameters as gen_fn_param reports them, then publish the set
-    // to g_fn_inout so call sites can pass those arguments by address.
+    // (and `sink`) parameters as gen_fn_param reports them, then
+    // publish the sets to g_fn_inout / g_fn_sink so call sites can
+    // pass `inout` arguments by address and move-mark `sink` ones.
     : ~ s inout_acc ``
+    : ~ s sink_acc ``
     // Reset the param roster before parsing — gen_fn_param appends
     // (name,type) pairs as `name\ttype|name\ttype|…` so
     // __alloca_struct_params can iterate them after `entry:` is
@@ -7380,13 +7414,19 @@
             ( nurl_str_int pct )
             ( nurl_str_cat3 inout_acc ` ` ( nurl_str_int pct ) ) }
         {}
+        ? ( seq ( nurl_sym_get syms `__last_param_sink__` ) `1` )
+        { = sink_acc ? == 0 ( nurl_str_len sink_acc )
+            ( nurl_str_int pct )
+            ( nurl_str_cat3 sink_acc ` ` ( nurl_str_int pct ) ) }
+        {}
         = params_str ( nurl_get_last_type )
         = pct + pct 1
     }
-    // BORROW.md Phase 4: publish this function's inout-parameter set
-    // (empty for an ordinary function — harmless, gen_call treats an
-    // empty / absent entry the same).
+    // BORROW.md Phase 4: publish this function's inout / sink
+    // parameter sets (empty for an ordinary function — harmless,
+    // gen_call treats an empty / absent entry the same).
     ( nurl_sym_def g_fn_inout fname inout_acc )
+    ( nurl_sym_def g_fn_sink fname sink_acc )
     ( expect lex TT_ARROW )
     // Reset last_res_nurl so we can detect if parse_type_res was called for this return type
     ( nurl_sym_def g_res_type_syms `__last_res_nurl__` `` )
@@ -7576,15 +7616,18 @@
 
 @ gen_fn_param i lex i syms s cur_params i pct → v {
     ( nurl_sym_def g_res_type_syms `__last_nurl_type__` `` )
-    // BORROW.md Phase 4: `__last_param_inout__` reports back to
-    // gen_fn_decl_concrete whether this parameter was `inout`, so it
-    // can record the function's inout-index set in g_fn_inout.
+    // BORROW.md Phase 4: `__last_param_inout__` / `__last_param_sink__`
+    // report back to gen_fn_decl_concrete which convention this
+    // parameter used, so it can record the function's inout / sink
+    // index sets in g_fn_inout / g_fn_sink.
     ( nurl_sym_def syms `__last_param_inout__` `` )
+    ( nurl_sym_def syms `__last_param_sink__` `` )
     // BORROW.md Phase 4: optional in/inout/sink convention marker.
+    // A `sink` parameter consumes its argument; codegen-wise it is an
+    // ordinary by-value parameter (the convention is enforced at the
+    // call site — gen_call move-marks the argument), so it needs no
+    // special handling here beyond the side-channel below.
     : i pconv ( parse_param_marker lex )
-    ? == pconv 2
-    { ( die lex `'sink' parameter convention is not yet implemented - see BORROW.md Phase 4 (use a plain by-value parameter; the callee already takes ownership of a passed owned value)` ) }
-    {}
     : s lt ( parse_type lex )
     : s p_nurl_type ( nurl_sym_get g_res_type_syms `__last_nurl_type__` )
     ? ( is_ident_tok ( nurl_lex_type lex ) )
@@ -7623,6 +7666,12 @@
             ( nurl_sym_def syms ( nurl_str_cat pname `__ptr` ) ( nurl_str_cat `%` pname ) )
             ( nurl_sym_def syms ( nurl_str_cat pname `__inout` ) `1` )
             ( nurl_sym_def syms `__last_param_inout__` `1` ) }
+        {}
+        // A `sink` parameter is an ordinary by-value parameter here;
+        // only the side-channel is set so gen_fn_decl_concrete records
+        // the index. The consume is enforced at the call site.
+        ? == pconv 2
+        { ( nurl_sym_def syms `__last_param_sink__` `1` ) }
         {}
         // Track NURL source type + signedness for fixed-width int/float
         // parameters (consulted at cast / store sites).
@@ -9582,6 +9631,7 @@
     = g_closure_defs ( nurl_sym_new )
     = g_closure_types ( nurl_sym_new )
     = g_fn_inout ( nurl_sym_new )
+    = g_fn_sink ( nurl_sym_new )
     = g_type_count 0
     = g_func_count 0
     = g_closure_emit_base 0

@@ -20,20 +20,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Grammar (`spec/grammar.ebnf`) and `nurlfmt` updated; regression
   tests `xor_op.nu` + `should_fail_xor_float.nu`.
 
-* **`inout` parameter convention (BORROW.md Phase 4, Option B —
-  mutable value semantics).** A parameter marked `inout` is an
-  exclusive mutable borrow: the callee mutates the caller's binding
-  in place. `in` / `inout` / `sink` are contextual keywords
-  recognised only as a parameter's leading token (no lexer change);
-  `in` is the default, `sink` is reserved (not yet implemented).
-  `inout T` lowers to a by-address `<T>*` parameter — the body
-  reads/writes the caller's storage with no local copy — replacing
-  the `*T`-parameter and return-the-struct mutation idioms. The
-  argument must be a mutable (`: ~`) binding; an `inout` function
-  must be defined before it is called. Exclusive-access check
-  (BORROW.md Phase 5): a binding passed `inout` must be the only
-  argument path to its value at that call — passing it again, as a
-  second `inout` or a plain by-value argument, is a `warning:`.
+* **`inout` and `sink` parameter conventions (BORROW.md Phase 4,
+  Option B — mutable value semantics).** `in` / `inout` / `sink` are
+  contextual keywords recognised only as a parameter's leading token
+  (no lexer change); `in` is the default.
+  A parameter marked **`inout`** is an exclusive mutable borrow: the
+  callee mutates the caller's binding in place. `inout T` lowers to a
+  by-address `<T>*` parameter — the body reads/writes the caller's
+  storage with no local copy — replacing the `*T`-parameter and
+  return-the-struct mutation idioms. The argument must be a mutable
+  (`: ~`) binding; an `inout` function must be defined before it is
+  called. Exclusive-access check (BORROW.md Phase 5): a binding
+  passed `inout` must be the only argument path to its value at that
+  call — passing it again, as a second `inout` or a plain by-value
+  argument, is a `warning:`.
+  A parameter marked **`sink`** consumes (takes ownership of) its
+  argument: it lowers to an ordinary by-value parameter, and the
+  borrow checker records the argument binding as moved so a later
+  use is a use-after-move. `sink` v1 applies to `Vec` and other
+  manually-managed handles; passing a compiler-auto-dropped value
+  (owned string / slice / `Drop` value / struct with owned fields)
+  to a `sink` parameter is rejected pending drop-ownership transfer.
 
 * **Static borrow checker, on by default (BORROW.md Phases 0-3 + 6 +
   8-partial).** A diagnostic analysis pass (disable with

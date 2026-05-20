@@ -79,8 +79,26 @@ callee's writes land on the caller's storage. `inout` is the
 preferred replacement for the three older mutation idioms — returning
 the modified struct, a `*T` parameter, or a single-handle struct
 wrapper — though all three still work. An `inout` function must be
-defined before it is called. The `sink` (consume / move) convention
-is reserved but not yet implemented.
+defined before it is called.
+
+A **`sink`** parameter consumes (takes ownership of) its argument —
+the callee owns the value, and the caller may not use the argument
+binding afterwards (the borrow checker reports a later use as a
+use-after-move):
+
+```
+@ give_away sink ( Vec i ) g → v { ( vec_free [i] g ) }
+...
+: ( Vec i ) xs ( vec_new [i] )
+( give_away xs )                 // xs is consumed; using it now is a move error
+```
+
+`sink` lowers to an ordinary by-value parameter (no IR change). In
+this version it applies to `Vec` and other manually-managed handles;
+passing a *compiler-auto-dropped* value (an owned string, an owned
+slice, a `Drop`-trait value, a struct with owned fields) to a `sink`
+parameter is rejected — transferring the auto-drop obligation to the
+callee is a future step.
 
 ## 2. The borrow checker
 

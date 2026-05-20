@@ -10,11 +10,11 @@
 > per-phase sections below for what each landed. Phase 8-partial
 > flipped the analysis ON by default (`--no-borrowck` disables it) and
 > shipped the user-facing rules doc [`docs/MEMORY.md`](docs/MEMORY.md).
-> Phase 4-partial added the `inout` parameter convention (Option B;
-> `sink` pending); Phase 5-partial enforces exclusive access for
-> `inout` arguments at a call site; Phase 6 closes iterator
-> invalidation. Bug classes 1/2/3/5 are closed; bug class 6 (aliased
-> mutation) is closed for the call-site case.
+> Phase 4-partial added the `inout` and `sink` parameter conventions
+> (Option B); Phase 5-partial enforces exclusive access for `inout`
+> arguments at a call site; Phase 6 closes iterator invalidation. Bug
+> classes 1/2/3/5 are closed; bug class 6 (aliased mutation) is closed
+> for the call-site case.
 >
 > Phases 1, 2 and 3 emit `warning:` (not `error:`) for now — BORROW.md
 > watch #3: a new rule ships as a warning and is promoted to an error
@@ -465,9 +465,8 @@ deleted; no false positives across stdlib/compiler.
 ## Phase 4 — Reference / borrow surface (the Part III decision)
 
 > **PARTIAL LANDED 2026-05-20.** Part III decided: **Option B (mutable
-> value semantics)**. The `inout` parameter convention is implemented;
-> `in` is the default (and accepted explicitly); `sink` is parsed but
-> `die`s "not yet implemented".
+> value semantics)**. The `inout` and `sink` parameter conventions are
+> implemented; `in` is the default (and accepted explicitly).
 >
 > An `inout` parameter is an exclusive mutable borrow. It is a
 > *contextual keyword* — recognised only as a parameter's leading
@@ -493,14 +492,28 @@ deleted; no false positives across stdlib/compiler.
 > updated (`param_conv`). Regression tests: `inout_basic.nu`,
 > `should_fail_inout_immut.nu`, `should_fail_inout_forward.nu`.
 >
-> **Still pending for full Phase 4:** the `sink` (consume/move)
-> convention — it changes drop *ownership*, so it needs the auto-drop
-> (`mem_*`) machinery to transfer the drop to the callee, a more
-> intricate and double-free-prone change than `inout` (which is
-> drop-neutral); `inout` on generic functions (deferred instantiation
-> means the call site precedes the body — currently rejected by the
-> forward-reference guard); `inout` field targets (`= . obj fld`) and
-> `inout` on impl methods / closures.
+> A `sink` parameter consumes (moves) its argument. `sink` lowers to
+> an ordinary by-value parameter — **zero IR change** — and the
+> convention is enforced purely in the borrow checker: `gen_call`
+> records a bare-identifier `sink` argument as moved (via the Phase 1
+> `bck_stash_move` machinery), so any later use is a use-after-move.
+> `g_fn_sink` records each function's sink-index set; no
+> forward-reference guard is needed (a forward `sink` call merely
+> misses the move diagnostic — it is never miscompiled, since codegen
+> is unchanged). Regression tests: `sink_basic.nu`,
+> `borrow_sink_use_after.nu`, `should_fail_sink_autodrop.nu`.
+>
+> **Still pending for full Phase 4:** `sink` of a *compiler-auto-
+> dropped* argument (an owned string / slice / `Drop` value / struct
+> with owned fields) — transferring the auto-drop obligation to the
+> callee needs `mem_*` surgery and is double-free-prone; `sink` v1
+> rejects such an argument at the call site rather than risk it, so
+> `sink` currently applies to `Vec` and other manually-managed
+> handles. Also: `inout`/`sink` on generic functions (deferred
+> instantiation means the call site precedes the body — `inout` is
+> rejected by the forward-reference guard, `sink` silently misses the
+> move diagnostic); `inout` field targets (`= . obj fld`) and
+> `inout`/`sink` on impl methods / closures.
 
 **Goal:** give the language a way to *name* a non-owning borrow, so
 Phase 5 can enforce exclusivity. **Do not start until Part III is
@@ -800,14 +813,14 @@ the Phase 4 grammar change.
 
 ---
 
-*Status: Phases 0, 1, 2, 3 + 8-partial + 4-partial (`inout`) +
-5-partial + 6 shipped (2026-05-20). The borrow checker is ON by
+*Status: Phases 0, 1, 2, 3 + 8-partial + 4-partial (`inout` + `sink`)
++ 5-partial + 6 shipped (2026-05-20). The borrow checker is ON by
 default (`--no-borrowck` disables it); bug classes 1/2/3/5 are closed
 and bug class 6 (aliased mutation) is closed for the call-site case;
 the corpus is move/alias/escape/iter clean; `docs/MEMORY.md`
 documents the model. Part III decided: Option B (mutable value
-semantics) — the `inout` parameter convention is live. Next: finish
-Phase 4 (`sink` convention; `inout` on generics / field targets /
-impl methods), extend Phase 5 to nested-subexpression reads, then
-full Phase 8 (promote `warning:` to `error:` after the on-by-default
-soak). Last updated 2026-05-20.*
+semantics) — the `inout` and `sink` parameter conventions are live.
+Next: `sink` of compiler-auto-dropped arguments (needs `mem_*`
+drop-ownership transfer), `inout`/`sink` on generics / field targets
+/ impl methods, then full Phase 8 (promote `warning:` to `error:`
+after the on-by-default soak). Last updated 2026-05-20.*
