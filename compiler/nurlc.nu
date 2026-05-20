@@ -3443,16 +3443,25 @@
     } {}
 }
 
-// ── Phase 1: move-site capture ─────────────────────────────────────
+// ── Phase 1/2: move-site capture ───────────────────────────────────
 //
-// A *move* consumes an owned binding. Phase 1's move source is a
-// bare-identifier argument passed to a `*_free` destructor (the typed
-// NURL heap destructors — `vec_free`, `string_free`, … — but NOT the
-// raw `nurl_free`, which operates on `*T`/i8* FFI memory that BORROW.md
-// leaves unchecked). gen_call detects it and stashes the binding in
-// `pmoves`; gen_stmt then flushes the stash into `move` rows AFTER the
-// enclosing statement's own row, so the consuming statement itself —
-// which legitimately reads the binding one last time — is not flagged.
+// A *move* consumes an owned binding. There are two move sources:
+//
+//   Phase 1 — a bare-identifier argument passed to a `*_free`
+//   destructor (the typed NURL heap destructors `vec_free`,
+//   `string_free`, … but NOT raw `nurl_free`, which frees `*T`/i8*
+//   FFI memory that BORROW.md leaves unchecked). gen_call detects it.
+//
+//   Phase 2 — a binding-to-binding copy `: T b a` of an owned heap
+//   value. `b` becomes the value's owner; `a` is moved. This makes
+//   the silent-alias double-free (`: T b a` then both freed)
+//   impossible: any later use of `a` is a use-after-move. gen_let
+//   detects it. Scalars (Copy) and parameters (borrowed) are excluded.
+//
+// Either way the consumed binding is stashed in `pmoves`; gen_stmt
+// flushes the stash into `move` rows AFTER the enclosing statement's
+// own row, so the consuming statement itself — which legitimately
+// reads the binding one last time — is not flagged.
 //
 // A `move` row is `move \t <binding> \t \t <line> \t <depth>`. The
 // analyze walk transitions the binding Owned -> Moved; a `let` / `=`
@@ -3463,6 +3472,36 @@
     : i len ( nurl_str_len name )
     ? < len 5 { ^ F } {}
     ( seq ( nurl_str_slice name - len 5 5 ) `_free` )
+}
+
+// True when LLVM type `lty` is a heap-owned aggregate the borrow
+// checker tracks — a named struct/enum (`%Name`) or an anonymous
+// aggregate / slice (`{ … }`). Pointers (`*T`, trailing `*`) are
+// FFI-shaped and unchecked; raw `i8*` strings are excluded for now
+// (their auto-drop double-free is already conservatively avoided —
+// explicit string-alias checking is a Phase 2 follow-up); scalars
+// (`i64` / `i1` / `double` / `iN`) are Copy and never move.
+@ bck_is_heap_lty s lty → b {
+    : i len ( nurl_str_len lty )
+    ? == 0 len { ^ F } {}
+    ? == ( nurl_str_get lty - len 1 ) 42 { ^ F } {}
+    : i c0 ( nurl_str_get lty 0 )
+    | == c0 37 == c0 123
+}
+
+// Phase 2: an immutable `: T b a` whose RHS is a bare identifier
+// naming a non-parameter heap binding moves `a` — its ownership
+// passes to `b`. The new binding must be immutable: a `: ~` copy is
+// the cursor idiom (a mutable working alias that walks a structure
+// while the source stays the owner — e.g. toml.nu's `current`), a
+// borrow, not a move. Distinguishing borrow from move in the general
+// case is the job of a later reference-surface phase; until then the
+// immutability of the destination is the heuristic.
+@ bck_let_alias i syms b is_mut i rhs_tt s rhs_val s vt i line → v {
+    ? & & & ! is_mut ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt )
+        ! ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) rhs_val )
+    { ( bck_stash_move rhs_val line ) }
+    {}
 }
 
 // Stash `name` (consumed at `line`) for the current statement.
@@ -4032,6 +4071,10 @@
         ( __warn_if_shadows_param lex syms name )
         ( nurl_lex_advance lex )
         : b rhs_is_slice_lit == ( nurl_lex_type lex ) TT_LBRACK
+        // Borrow checker (Phase 2): snapshot the RHS's first token —
+        // a bare identifier RHS is a binding-to-binding alias copy.
+        : i bck_rhs_tt ( nurl_lex_type lex )
+        : s bck_rhs_val ( nurl_lex_val lex )
         ( nurl_sym_def syms `__last_call_ret_owned__` `` )
         ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
         ( nurl_sym_def syms `__last_closure_byref__` `` )
@@ -4039,6 +4082,7 @@
         : s vt ( nurl_get_last_type )
         // Borrow checker: record this binding (inference path).
         ( bck_record `let` name bck_line )
+        ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
         : b rhs_is_owned_call != 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_owned__` ) )
         // Propagate the closure-byref flag from the RHS onto the binding
         // so gen_ret / future use-site checks can see it (docs/GOTCHAS.md
@@ -4155,6 +4199,10 @@
                 ^ `undef`
             }
             { : b rhs_is_slice_lit == ( nurl_lex_type lex ) TT_LBRACK
+                // Borrow checker (Phase 2): snapshot the RHS's first
+                // token — a bare-identifier RHS is an alias copy.
+                : i bck_rhs_tt ( nurl_lex_type lex )
+                : s bck_rhs_val ( nurl_lex_val lex )
                 ( nurl_sym_def syms `__last_call_ret_owned__` `` )
                 ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
                 ( nurl_sym_def syms `__last_closure_byref__` `` )
@@ -4162,6 +4210,7 @@
                 : s vt ( nurl_get_last_type )
                 // Borrow checker: record this binding (typed path).
                 ( bck_record `let` name bck_line )
+                ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
                 : b rhs_is_owned_call != 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_owned__` ) )
                 // Propagate closure-byref flag (item 8 escape detection).
                 ? ( seq ( nurl_sym_get syms `__last_closure_byref__` ) `1` )
