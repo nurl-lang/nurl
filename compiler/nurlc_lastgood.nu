@@ -392,12 +392,14 @@
 : i g_type_emit_base 0  // Next type index to emit
 
 // ── Borrow-checker state (see BORROW.md) ─────────────────────────
-// g_borrowck is 1 when --borrowck is passed on the CLI. The borrow
+// g_borrowck is 1 (ON) by default — BORROW.md Phase 8 flipped the
+// default once Phases 1/2/3 were proven false-positive-free across
+// the whole corpus; `--no-borrowck` turns it back off. The borrow
 // checker is a diagnostic-only analysis pass: it never emits IR, so
 // a borrow-clean program produces byte-identical IR whether the flag
-// is on or off. All borrowck_* state below is untouched when the
-// flag is 0. Phase 0 (the analysis substrate) carries no rules yet.
-: i g_borrowck 0  // 1 when --borrowck passed on the CLI
+// is on or off (the bootstrap fixed point is unaffected). All
+// borrowck_* state below is untouched when the flag is 0.
+: i g_borrowck 1  // 0 when --no-borrowck passed on the CLI
 : i g_bck 0       // sym handle for the borrow checker's per-function
                   //  data (statement list etc.); allocated in main()
                   //  only when --borrowck is set
@@ -9304,10 +9306,13 @@
 // ── Entry point ────────────────────────────────────────────────────
 
 @ main → v {
-    // CLI: `nurlc [--g] [--borrowck] <file.nu>`. Optional flags in any
-    // order; the lone non-flag argument is the source path.
-    //   --g / -g     toggle DWARF emission (nurl.sh forwards --debug)
-    //   --borrowck   run the borrow-checker analysis pass (BORROW.md)
+    // CLI: `nurlc [--g] [--no-borrowck] <file.nu>`. Optional flags in
+    // any order; the lone non-flag argument is the source path.
+    //   --g / -g       toggle DWARF emission (nurl.sh forwards --debug)
+    //   --no-borrowck  disable the borrow-checker analysis pass; it is
+    //                  ON by default (BORROW.md Phase 8)
+    //   --borrowck     accepted for compatibility — now a no-op, since
+    //                  the pass is on by default
     : ~ s path ``
     : ~ i ai 1
     ~ < ai ( nurl_argc ) {
@@ -9316,11 +9321,13 @@
         { = g_dbg_enabled 1 }
         { ? ( seq a `--borrowck` )
             { = g_borrowck 1 }
-            { = path a } }
+            { ? ( seq a `--no-borrowck` )
+                { = g_borrowck 0 }
+                { = path a } } }
         = ai + ai 1
     }
     ? == 0 ( nurl_str_len path )
-    { ( nurl_eprintln `usage: nurlc [--g] [--borrowck] <file.nu>` ) ( nurl_exit 1 ) }
+    { ( nurl_eprintln `usage: nurlc [--g] [--no-borrowck] <file.nu>` ) ( nurl_exit 1 ) }
     {}
     : s src ( nurl_read_file path )
     : s marker ( nurl_str_cat `@@nurl-disable` `-autodrop-strings@@` )

@@ -20,7 +20,7 @@
 > | bare `@-fn` used as a closure value                        | `error:` + `\ args → R { ( fn args ) }` wrap |
 > | `?` with bare then/else followed by `{ ... }` block        | `warning:` (the n-ary `&`/`|` trap) |
 > | `:`-binding shadowing a parameter                          | `warning:` |
-> | closure capturing `: ~`-multi-field struct, escaping       | `warning:` under `--borrowck` (region escape analysis) on `^`-return / `vec_push`/`vec_insert`/`vec_set`/`thread_spawn` / assignment into a longer-lived binding |
+> | closure capturing `: ~`-multi-field struct, escaping       | `warning:` (borrow-checker region escape analysis, on by default; `--no-borrowck` disables) on `^`-return / `vec_push`/`vec_insert`/`vec_set`/`thread_spawn` / assignment into a longer-lived binding |
 >
 > If you are an LLM and hit a NURL compile error not listed above,
 > the diagnostic itself is the source of truth — quote it verbatim

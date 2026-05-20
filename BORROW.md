@@ -1,25 +1,28 @@
 # Borrow Checking — Preliminary Investigation & Phased Implementation Plan
 
-> **Status (2026-05-20): Phases 0–3 landed; Phase 4 gated on the
-> Part III decision.**
+> **Status (2026-05-20): Phases 0–3 + Phase 8-partial landed; the
+> borrow checker is ON by default. Phase 4 gated on the Part III
+> decision.**
 > This document is the feasibility study + work-list for adding static
 > aliasing / borrow analysis to NURL. Phase 0 (the analysis substrate),
 > Phase 1 (move checking / use-after-move), Phase 2 (alias /
-> double-free) and Phase 3 (escape analysis) are implemented behind the
-> `--borrowck` flag — see the per-phase sections below for what each
-> landed. Phases 0–3 form the recommended first deliverable: no new
-> syntax, bug classes 1/2/3 closed. Phase 4 carries the one
-> irreversible design decision (reference types vs. mutable value
-> semantics) and should not start until that decision is explicitly
-> made.
+> double-free) and Phase 3 (escape analysis) are implemented — see the
+> per-phase sections below for what each landed. Phase 8-partial
+> flipped the analysis ON by default (`--no-borrowck` disables it) and
+> shipped the user-facing rules doc [`docs/MEMORY.md`](docs/MEMORY.md).
+> Phases 0–3 form the shipped first deliverable: no new syntax, bug
+> classes 1/2/3 closed. Phase 4 carries the one irreversible design
+> decision (reference types vs. mutable value semantics) and should
+> not start until that decision is explicitly made.
 >
 > Phases 1, 2 and 3 emit `warning:` (not `error:`) for now — BORROW.md
 > watch #3: a new rule ships as a warning and is promoted to an error
 > only once proven false-positive-free. All three are clean:
-> `--borrowck` over the whole compiler + stdlib + test + example
+> the analysis over the whole compiler + stdlib + test + example
 > corpus (253 files) emits zero warnings outside the deliberate
 > `borrow_*` regression tests — the codebase is move-clean,
-> alias-clean and escape-clean.
+> alias-clean and escape-clean. Promotion to `error:` is deferred to
+> full Phase 8, after the warnings have soaked on-by-default.
 >
 > The whole feature is designed as a **diagnostic-only analysis pass**:
 > it emits `error:` / `warning:` and never changes emitted IR. A
@@ -577,6 +580,33 @@ DWARF Phase 7.
 
 ## Phase 8 — Diagnostics polish, docs, flip the default
 
+> **PARTIAL LANDED 2026-05-20.** The subset of Phase 8 that the
+> Phases 0–3 milestone can ship without the Phase 4–6 work:
+> - `g_borrowck` now defaults to **1** (on); `--no-borrowck` disables
+>   it; `--borrowck` is kept as an accepted no-op for compatibility.
+>   The usage string and CLI comments are updated.
+> - `docs/MEMORY.md` written — the single user-facing reference for
+>   the ownership model, the three borrow rules, and an explicit
+>   *not-yet-checked* list (aliased mutation, iterator invalidation,
+>   `*T`, interprocedural escape).
+> - `README` "no borrow checker" line removed; a "Static borrow
+>   checker, on by default" bullet added pointing at `docs/MEMORY.md`.
+> - `critic.md` §4's central complaint (no use-after-free / double-
+>   free / escape detection — a "vibes-based memory model") is now
+>   answered for bug classes 1/2/3; `critic.md` itself is left as the
+>   external critique it is.
+>
+> Bootstrap fixed point holds (the checker is diagnostic-only — IR is
+> byte-identical with `--no-borrowck`, verified); `build.sh` +
+> `run_tests.sh` green with the checker on by default. `run_san_tests.sh`
+> is unaffected by construction: borrowck emits no IR, so a sanitized
+> run is identical to the pre-flip one.
+>
+> **Still pending for full Phase 8** (needs Phases 4–6 first): promote
+> the `warning:`s to `error:` once soaked false-positive-free; pointing
+> carets on the post-parse diagnostics; the `should_fail_borrow_*`
+> baseline category for the hard errors.
+
 **Goal:** make `--borrowck` the default; production-quality messages;
 documentation.
 
@@ -692,15 +722,13 @@ the Phase 4 grammar change.
 
 ---
 
-*Status: Phases 0, 1, 2, 3 implemented behind `--borrowck`
-(2026-05-20). Phases 0–3 are the recommended first deliverable — no
-new syntax, bug classes 1/2/3 closed, the corpus is move/alias/escape
-clean. Next: Phase 8-partial (production diagnostics + flip
-`--borrowck` to on-by-default) could ship now to retire the README's
-"no memory-safety story" admission; or Phase 4, which remains gated on
-the Part III reference-surface decision (recommendation on file:
-Option B, mutable value semantics) and must not start until that
-decision is explicitly made. Phase 3 promotion of escape `warning:` to
-`error:` is deferred to Phase 8, after the warning has soaked
-false-positive-free (BORROW.md watch #3).
-Last updated 2026-05-20.*
+*Status: Phases 0, 1, 2, 3 + Phase 8-partial shipped (2026-05-20).
+The borrow checker is ON by default (`--no-borrowck` disables it);
+bug classes 1/2/3 are closed; the corpus is move/alias/escape clean;
+`docs/MEMORY.md` documents the model. Next: Phase 4, gated on the
+Part III reference-surface decision (recommendation on file: Option B,
+mutable value semantics) — it carries the one irreversible syntax
+choice and must not start until that decision is explicitly made.
+Phases 5 (N-readers-XOR-1-writer), 6 (iterator invalidation) and full
+Phase 8 (promote `warning:` to `error:` after the on-by-default soak)
+follow it. Last updated 2026-05-20.*
