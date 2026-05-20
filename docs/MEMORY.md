@@ -54,14 +54,33 @@ double-free of its own accord. This conservatism is why the auto-drop
 layer is safe on its own; the borrow checker (below) is what catches
 the mistakes a *programmer* can still write.
 
-### Struct parameters pass by value
+### Parameter passing conventions
 
-A struct-typed parameter is copied into a fresh `alloca` at function
-entry (C/Go/Zig semantics). `= . p field val` inside the callee writes
-the local copy; the caller's struct is unchanged. To share mutation
-across a call boundary: return the modified struct, declare a `*T`
-parameter, or wrap the state in a single-handle struct (`{ (Vec i) xs }`)
-so the heap buffer is shared even though the handle is copied.
+A parameter is an **immutable borrow by default** (the `in`
+convention — it may be written explicitly but is normally omitted): a
+struct-typed parameter is copied into a fresh `alloca` at function
+entry (C/Go/Zig semantics), and `= . p field val` inside the callee
+writes that local copy, leaving the caller's struct unchanged.
+
+To let a callee mutate the caller's value in place, mark the
+parameter **`inout`** (BORROW.md Phase 4, Option B — mutable value
+semantics):
+
+```
+@ bump inout Counter c → v { = . c n + . c n 1 }
+...
+: ~ Counter c @ Counter { 0 10 }
+( bump c )                       // c.n is now 1, in the caller
+```
+
+`inout` lowers to a by-address (`<T>*`) parameter. The argument must
+be a mutable (`: ~`) binding; it is passed by address, so the
+callee's writes land on the caller's storage. `inout` is the
+preferred replacement for the three older mutation idioms — returning
+the modified struct, a `*T` parameter, or a single-handle struct
+wrapper — though all three still work. An `inout` function must be
+defined before it is called. The `sink` (consume / move) convention
+is reserved but not yet implemented.
 
 ## 2. The borrow checker
 
@@ -146,9 +165,10 @@ hits in practice. It deliberately does **not** yet cover:
 
 - **Exclusive access / aliased mutation.** Two mutable paths to the
   same data, where a write through one breaks an invariant the other
-  relies on, is not detected. Enforcing "N readers XOR 1 writer"
-  needs a way to *name* a borrow in the surface syntax — BORROW.md
-  Phase 4 (reference / passing-convention surface) and Phase 5.
+  relies on, is not yet detected. The `inout` convention (Phase 4)
+  gives the language the exclusive mutable borrow this check needs;
+  enforcing "N readers XOR 1 writer" on top of it is BORROW.md
+  Phase 5.
 - **Full iterator invalidation.** Mutating a container while a
   `~`-foreach borrows its elements is a planned check (Phase 6), not
   yet implemented.

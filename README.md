@@ -780,7 +780,7 @@ see [`docs/GOTCHAS.md`](docs/GOTCHAS.md).
 | Limitation | Workaround |
 |---|---|
 | Calls require explicit parens — `( f a b )` is the only call form; a bare identifier is always a name lookup, never a call | Wrap every callsite: `( puts s )` |
-| Struct parameters are passed by **value** (C/Go/Zig semantics) — `= . p field val` inside the callee writes a local copy; the caller's struct is unchanged | Return the modified struct (`= c ( inc_returning c )`) — copy is cheap for small structs; or use `*T` parameters explicitly; or wrap state in a single-handle struct (`{ ( Vec i ) slots }`) so the heap buffer is shared |
+| Struct parameters are passed by **value** by default (C/Go/Zig semantics) — `= . p field val` inside the callee writes a local copy; the caller's struct is unchanged | Mark the parameter `inout` (`@ bump inout Counter c → v`) — an exclusive mutable borrow, the callee mutates the caller's binding in place (see [`docs/MEMORY.md`](docs/MEMORY.md)). Or return the modified struct (`= c ( inc_returning c )`); or use a `*T` parameter; or wrap state in a single-handle struct (`{ ( Vec i ) slots }`) |
 | No tail-call optimisation — deep recursion may stack-overflow | Use explicit loops (`~`) |
 | Closures capture by value (snapshot at construction) by default. The `: ~` mutable-struct byref capture path (`stdlib/std/panic.nu` recover-with-typed-result) shares the caller's alloca — see [`docs/GOTCHAS.md` §5](docs/GOTCHAS.md) for the lifetime rule | Use `: ~ MultiFieldStruct` for shared-mutation closures; for value semantics keep the binding immutable |
 

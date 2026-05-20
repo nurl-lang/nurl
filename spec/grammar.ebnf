@@ -284,11 +284,25 @@ type_params = '[' IDENT+ ']' ;
 
 
 (* @ name [T]? param* → ret { body }
-   Function parameters always bind an identifier.
+   Function parameters always bind an identifier. A parameter may
+   carry an optional passing-convention marker (BORROW.md Phase 4,
+   Option B — mutable value semantics):
+     in     — immutable borrow, by value (the default; may be omitted)
+     inout  — exclusive mutable borrow: the callee mutates the
+              caller's binding in place. Lowers to a `<T>*` parameter;
+              the argument must be a mutable (`: ~`) binding and is
+              passed by address. An `inout` function must be defined
+              before it is called.
+     sink   — move/consume (reserved; not yet implemented)
+   `in` / `inout` / `sink` are contextual keywords: recognised only as
+   a parameter's leading token. `inout` is additionally banned as a
+   parameter name.
    Example:  @ add i a i b → i { ^ + a b }
-   Example:  @ id [T] T x → T { ^ x }          — generic *)
-fn_decl = '@' IDENT type_params? param* '→' type block ;
-param   = type IDENT ;
+   Example:  @ id [T] T x → T { ^ x }          — generic
+   Example:  @ bump inout Counter c → v { = . c n + . c n 1 } *)
+fn_decl   = '@' IDENT type_params? param* '→' type block ;
+param     = param_conv? type IDENT ;
+param_conv = 'in' | 'inout' | 'sink' ;
 
 
 (* : Name type_params? { field* }

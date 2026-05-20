@@ -409,6 +409,16 @@
                   //  inline into the enclosing function's list
                   //  (BORROW.md Phase 1: segregate closure scopes)
 
+// BORROW.md Phase 4 (Option B): per-function inout-parameter map.
+// `g_fn_inout[fname]` is the space-separated list of 0-based indices
+// of `inout` parameters, recorded by gen_fn_decl_concrete as each
+// function is compiled. gen_call consults it to pass those arguments
+// by address. Allocated in main(). It is a *codegen-order* table:
+// an `inout` function must be defined before it is called (a forward
+// call would pass the argument by value and LLVM would reject the
+// type mismatch — loud, never silent).
+: i g_fn_inout 0
+
 // ── DWARF debug-info state (see DWARF.md) ────────────────────────
 // All zero/empty when --g is OFF; emit helpers then produce IR that
 // is byte-identical to a pre-DWARF build. Toggled in main().
@@ -1727,6 +1737,22 @@
     : b is_consume_call & ( bck_is_destructor_name fname )
         ! ( seq fname `nurl_free` )
     : i arg_idx 0
+    // BORROW.md Phase 4: space-separated 0-based indices of the
+    // callee's `inout` parameters (recorded into g_fn_inout by
+    // gen_fn_decl_concrete as the callee is compiled). An argument at
+    // one of these positions is passed by address — see the
+    // per-argument handling below. Empty for an ordinary function.
+    : s callee_inout ( nurl_sym_get g_fn_inout call_name )
+    // If the callee is known (scan_fn_sigs) to have `inout` parameters
+    // but g_fn_inout has no entry, it is being called BEFORE its
+    // definition was compiled — passing the argument by value would
+    // mismatch the `<T>*` parameter and miscompile silently. Reject it.
+    ? & == 0 ( nurl_str_len callee_inout )
+          ( seq ( nurl_sym_get syms ( nurl_str_cat fname `__has_inout` ) ) `1` )
+    { ( die lex ( nurl_str_cat3
+        `function '` fname
+        `' has 'inout' parameters and must be defined before it is called - move its definition above this call site (inout on generic functions is not yet supported)` ) ) }
+    {}
     // Phase 2B parameter-ownership: collect register values for arg expressions
     // whose result is a fresh owned-string allocation (e.g. `nurl_str_cat`),
     // then free them right after the call returns. Without this the temp is
@@ -1751,8 +1777,34 @@
         // Reset the escape side-channel so the escape check observes
         // only what THIS argument expression publishes.
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
-        : s av ( gen_expr lex syms cg )
-        : s at ( nurl_get_last_type )
+        // BORROW.md Phase 4: an argument at an `inout` parameter
+        // position is passed BY ADDRESS, not by value. It must be a
+        // bare mutable (`: ~`) binding — the callee mutates it in
+        // place. Pass the binding's backing pointer (`__ptr`) typed
+        // `<T>*`; emit no value load. Everything else is the ordinary
+        // by-value path.
+        : b is_inout_arg ( str_contains_word callee_inout ( nurl_str_int arg_idx ) )
+        : ~ s av ``
+        : ~ s at ``
+        ? is_inout_arg
+        { ? ! ( is_ident_tok bck_arg_tt )
+            { ( die lex ( nurl_str_cat3 `inout argument to '` fname `' must be a mutable ': ~' binding, not an expression` ) ) }
+            {}
+            : s iptr ( nurl_sym_get syms ( nurl_str_cat bck_arg_val `__ptr` ) )
+            : s ity ( nurl_sym_get syms bck_arg_val )
+            ? == 0 ( nurl_str_len iptr )
+            { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' is not a binding in scope` ) ) }
+            {}
+            ? == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat bck_arg_val `__mutable` ) ) )
+            { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' must be a mutable ': ~' binding - the callee mutates it in place` ) ) }
+            {}
+            ( nurl_lex_advance lex )
+            = av iptr
+            = at ( nurl_str_cat ity `*` )
+        }
+        { = av ( gen_expr lex syms cg )
+            = at ( nurl_get_last_type )
+        }
         : s lu_arg ( nurl_sym_get syms `__last_unsigned__` )
         // GOTCHAS.md item 2: `nurl_str_len` vs `string_len` confusion.
         // `nurl_str_len` is the FFI to libc strlen and expects `s`
@@ -7208,6 +7260,10 @@
     {}
     : s params_str ``
     : i pct 0
+    // BORROW.md Phase 4: accumulate the 0-based indices of `inout`
+    // parameters as gen_fn_param reports them, then publish the set
+    // to g_fn_inout so call sites can pass those arguments by address.
+    : ~ s inout_acc ``
     // Reset the param roster before parsing — gen_fn_param appends
     // (name,type) pairs as `name\ttype|name\ttype|…` so
     // __alloca_struct_params can iterate them after `entry:` is
@@ -7225,9 +7281,18 @@
     // cannot advance past the end.
     ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF {
         ( gen_fn_param lex syms params_str pct )
+        ? ( seq ( nurl_sym_get syms `__last_param_inout__` ) `1` )
+        { = inout_acc ? == 0 ( nurl_str_len inout_acc )
+            ( nurl_str_int pct )
+            ( nurl_str_cat3 inout_acc ` ` ( nurl_str_int pct ) ) }
+        {}
         = params_str ( nurl_get_last_type )
         = pct + pct 1
     }
+    // BORROW.md Phase 4: publish this function's inout-parameter set
+    // (empty for an ordinary function — harmless, gen_call treats an
+    // empty / absent entry the same).
+    ( nurl_sym_def g_fn_inout fname inout_acc )
     ( expect lex TT_ARROW )
     // Reset last_res_nurl so we can detect if parse_type_res was called for this return type
     ( nurl_sym_def g_res_type_syms `__last_res_nurl__` `` )
@@ -7394,8 +7459,38 @@
 
 // Parse one parameter; return accumulated params_str via nurl_set_last_type.
 // parse_type handles base types, pointer types, and all compound types.
+// Consume an optional parameter-convention marker (BORROW.md Phase 4,
+// Option B — mutable value semantics). Returns the convention:
+//   0 — default / explicit `in` : immutable borrow, by value (today's
+//       behaviour — a parameter is immutable unless mutated through a
+//       handle's shared buffer)
+//   1 — `inout`                 : exclusive mutable borrow — the
+//       callee mutates the caller's value in place
+//   2 — `sink`                  : the callee consumes (moves) the value
+// The markers are *contextual keywords*: recognised only as the first
+// token of a parameter, where no type can legally be named
+// `in`/`inout`/`sink`. A parameter NAMED `in`/`inout`/`sink` is still
+// fine — the marker check looks only at a parameter's leading token.
+@ parse_param_marker i lex → i {
+    ? ! ( is_ident_tok ( nurl_lex_type lex ) ) { ^ 0 } {}
+    : s v ( nurl_lex_val lex )
+    ? ( seq v `inout` ) { ( nurl_lex_advance lex ) ^ 1 } {}
+    ? ( seq v `sink` ) { ( nurl_lex_advance lex ) ^ 2 } {}
+    ? ( seq v `in` ) { ( nurl_lex_advance lex ) ^ 0 } {}
+    0
+}
+
 @ gen_fn_param i lex i syms s cur_params i pct → v {
     ( nurl_sym_def g_res_type_syms `__last_nurl_type__` `` )
+    // BORROW.md Phase 4: `__last_param_inout__` reports back to
+    // gen_fn_decl_concrete whether this parameter was `inout`, so it
+    // can record the function's inout-index set in g_fn_inout.
+    ( nurl_sym_def syms `__last_param_inout__` `` )
+    // BORROW.md Phase 4: optional in/inout/sink convention marker.
+    : i pconv ( parse_param_marker lex )
+    ? == pconv 2
+    { ( die lex `'sink' parameter convention is not yet implemented - see BORROW.md Phase 4 (use a plain by-value parameter; the callee already takes ownership of a passed owned value)` ) }
+    {}
     : s lt ( parse_type lex )
     : s p_nurl_type ( nurl_sym_get g_res_type_syms `__last_nurl_type__` )
     ? ( is_ident_tok ( nurl_lex_type lex ) )
@@ -7409,10 +7504,32 @@
         ? ( seq pname `entry` )
         { ( die lex `parameter name 'entry' collides with LLVM's reserved entry: block label. Rename (e.g. 'ent', 'tab_entry'). See docs/GOTCHAS.md item 8.` ) }
         {}
+        // BORROW.md Phase 4: `inout` is a parameter-convention keyword;
+        // banning it as a parameter NAME keeps the scan_fn_sigs
+        // forward-reference check (`<fname>__has_inout`) exact.
+        ? ( seq pname `inout` )
+        { ( die lex `parameter name 'inout' is a reserved convention keyword (BORROW.md Phase 4) - rename it` ) }
+        {}
         ( nurl_lex_advance lex )
         ( nurl_sym_def syms pname lt )
         // Mark parameter as immutable by design
         ( nurl_sym_def syms ( nurl_str_cat pname `__param` ) `1` )
+        // BORROW.md Phase 4: an `inout` parameter is an exclusive
+        // mutable borrow. It lowers to exactly today's `*T`-by-address
+        // mechanism: the LLVM parameter is `<T>* %name`, and the body
+        // sees it as a mutable place whose backing pointer (`__ptr`) is
+        // the incoming pointer argument itself — no local alloca, so
+        // reads and `=` writes land on the caller's storage. This is
+        // the same shape as a by-pointer closure capture. The caller
+        // passes the argument binding's address (see gen_call). For a
+        // borrow-clean program that uses no `inout`, nothing here runs
+        // and emitted IR is byte-identical.
+        ? == pconv 1
+        { ( nurl_sym_def syms ( nurl_str_cat pname `__mutable` ) `1` )
+            ( nurl_sym_def syms ( nurl_str_cat pname `__ptr` ) ( nurl_str_cat `%` pname ) )
+            ( nurl_sym_def syms ( nurl_str_cat pname `__inout` ) `1` )
+            ( nurl_sym_def syms `__last_param_inout__` `1` ) }
+        {}
         // Track NURL source type + signedness for fixed-width int/float
         // parameters (consulted at cast / store sites).
         ? != 0 ( nurl_str_len p_nurl_type )
@@ -7428,17 +7545,24 @@
         // since param types may contain spaces (`{ i1, i64 }`)? No —
         // closures decompose to `{ R(i8*…)*, i8* }` which DOES contain
         // commas + spaces. Use a pipe separator between (name,type) pairs.
-        : s roster ( nurl_sym_get syms `__fn_params__` )
-        : s pair ( nurl_str_cat3 pname `\t` lt )
-        : s next ? == 0 ( nurl_str_len roster ) pair ( nurl_str_cat3 roster `|` pair )
-        ( nurl_sym_def syms `__fn_params__` next )
+        // An `inout` parameter is skipped — its `__ptr` is already the
+        // incoming pointer, so __alloca_struct_params must NOT alloca it.
+        ? == pconv 1 {} {
+            : s roster ( nurl_sym_get syms `__fn_params__` )
+            : s pair ( nurl_str_cat3 pname `\t` lt )
+            : s next ? == 0 ( nurl_str_len roster ) pair ( nurl_str_cat3 roster `|` pair )
+            ( nurl_sym_def syms `__fn_params__` next )
+        }
         // Mirror the param name into the name-only roster used by
         // gen_let_or_struct's shadow check. Space-separated; matches
         // `str_contains_word` semantics.
         : s name_roster ( nurl_sym_get syms `__fn_param_names__` )
         : s name_next ? == 0 ( nurl_str_len name_roster ) pname ( nurl_str_cat3 name_roster ` ` pname )
         ( nurl_sym_def syms `__fn_param_names__` name_next )
-        : s entry ( nurl_str_cat3 lt ` %` pname )
+        // An `inout` parameter's LLVM type is a pointer to T.
+        : s entry ? == pconv 1
+            ( nurl_str_cat4 lt `* %` pname `` )
+            ( nurl_str_cat3 lt ` %` pname )
         ? == pct 0
         ( nurl_set_last_type entry )
         ( nurl_set_last_type ( nurl_str_cat3 cur_params `, ` entry ) )
@@ -9205,8 +9329,24 @@
                     ( nurl_sym_def syms ( nurl_str_cat fname `__generic` ) `1` )
                     ( skip_balanced lex )
                 }
-                { ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF
-                    { ( nurl_lex_advance lex ) }
+                { // BORROW.md Phase 4: blind-advance the parameter
+                  // region (robust against any header shape) but note
+                  // whether the marker token `inout` appears. `inout`
+                  // is banned as a parameter NAME (see gen_fn_param),
+                  // so its presence here is exact: `<fname>__has_inout`
+                  // lets a forward call site reject calling an
+                  // `inout` function before its definition is compiled
+                  // (g_fn_inout would otherwise be empty and the
+                  // argument silently passed by value).
+                    : ~ b saw_inout F
+                    ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF
+                    { ? & ( is_ident_tok ( nurl_lex_type lex ) )
+                          ( seq ( nurl_lex_val lex ) `inout` )
+                        { = saw_inout T } {}
+                        ( nurl_lex_advance lex ) }
+                    ? saw_inout
+                    { ( nurl_sym_def syms ( nurl_str_cat fname `__has_inout` ) `1` ) }
+                    {}
                     ? == ( nurl_lex_type lex ) TT_ARROW
                     { ( nurl_lex_advance lex )
                         : s ret_ty ( parse_type lex )
@@ -9347,6 +9487,7 @@
     = g_res_type_syms ( nurl_sym_new )
     = g_closure_defs ( nurl_sym_new )
     = g_closure_types ( nurl_sym_new )
+    = g_fn_inout ( nurl_sym_new )
     = g_type_count 0
     = g_func_count 0
     = g_closure_emit_base 0

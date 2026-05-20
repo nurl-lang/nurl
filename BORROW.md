@@ -1,8 +1,8 @@
 # Borrow Checking — Preliminary Investigation & Phased Implementation Plan
 
-> **Status (2026-05-20): Phases 0–3 + Phase 8-partial landed; the
-> borrow checker is ON by default. Phase 4 gated on the Part III
-> decision.**
+> **Status (2026-05-20): Phases 0–3 + Phase 8-partial + Phase 4-partial
+> (`inout`) landed; the borrow checker is ON by default. Part III
+> decided: Option B (mutable value semantics).**
 > This document is the feasibility study + work-list for adding static
 > aliasing / borrow analysis to NURL. Phase 0 (the analysis substrate),
 > Phase 1 (move checking / use-after-move), Phase 2 (alias /
@@ -10,10 +10,8 @@
 > per-phase sections below for what each landed. Phase 8-partial
 > flipped the analysis ON by default (`--no-borrowck` disables it) and
 > shipped the user-facing rules doc [`docs/MEMORY.md`](docs/MEMORY.md).
-> Phases 0–3 form the shipped first deliverable: no new syntax, bug
-> classes 1/2/3 closed. Phase 4 carries the one irreversible design
-> decision (reference types vs. mutable value semantics) and should
-> not start until that decision is explicitly made.
+> Phase 4-partial added the `inout` parameter convention (Option B);
+> `sink` remains pending. Bug classes 1/2/3 are closed.
 >
 > Phases 1, 2 and 3 emit `warning:` (not `error:`) for now — BORROW.md
 > watch #3: a new rule ships as a warning and is promoted to an error
@@ -463,6 +461,44 @@ deleted; no false positives across stdlib/compiler.
 
 ## Phase 4 — Reference / borrow surface (the Part III decision)
 
+> **PARTIAL LANDED 2026-05-20.** Part III decided: **Option B (mutable
+> value semantics)**. The `inout` parameter convention is implemented;
+> `in` is the default (and accepted explicitly); `sink` is parsed but
+> `die`s "not yet implemented".
+>
+> An `inout` parameter is an exclusive mutable borrow. It is a
+> *contextual keyword* — recognised only as a parameter's leading
+> token (`parse_param_marker`), so no lexer change was needed; `inout`
+> is banned as a parameter name to keep the forward-reference scan
+> exact. Codegen lowers `inout T` to a `<T>*` parameter whose backing
+> pointer (`__ptr`) is the incoming argument itself — the same shape
+> as a by-pointer closure capture — so the body reads/writes the
+> caller's storage with no local copy. At the call site (`gen_call`)
+> an `inout` argument must be a mutable (`: ~`) binding and is passed
+> by address. For a borrow-clean program that uses no `inout`, emitted
+> IR is byte-identical (the compiler + stdlib use none), so the
+> bootstrap fixed point holds.
+>
+> Forward references: `g_fn_inout` records each function's inout-index
+> set as it is *compiled*, so an `inout` function must be defined
+> before it is called. `scan_fn_sigs` records a cheap, purely lexical
+> `<fname>__has_inout` flag (no `parse_type` — an earlier
+> parse_type-based parameter walk desynced the scan and is the
+> grammar risk this file flagged), which lets a forward call `die`
+> cleanly instead of miscompiling silently. `nurlfmt` round-trips
+> `inout` for free (it is just an identifier token). Grammar EBNF
+> updated (`param_conv`). Regression tests: `inout_basic.nu`,
+> `should_fail_inout_immut.nu`, `should_fail_inout_forward.nu`.
+>
+> **Still pending for full Phase 4:** the `sink` (consume/move)
+> convention — it changes drop *ownership*, so it needs the auto-drop
+> (`mem_*`) machinery to transfer the drop to the callee, a more
+> intricate and double-free-prone change than `inout` (which is
+> drop-neutral); `inout` on generic functions (deferred instantiation
+> means the call site precedes the body — currently rejected by the
+> forward-reference guard); `inout` field targets (`= . obj fld`) and
+> `inout` on impl methods / closures.
+
 **Goal:** give the language a way to *name* a non-owning borrow, so
 Phase 5 can enforce exclusivity. **Do not start until Part III is
 decided.** Scope below assumes the recommended **Option B (mutable
@@ -722,13 +758,14 @@ the Phase 4 grammar change.
 
 ---
 
-*Status: Phases 0, 1, 2, 3 + Phase 8-partial shipped (2026-05-20).
-The borrow checker is ON by default (`--no-borrowck` disables it);
-bug classes 1/2/3 are closed; the corpus is move/alias/escape clean;
-`docs/MEMORY.md` documents the model. Next: Phase 4, gated on the
-Part III reference-surface decision (recommendation on file: Option B,
-mutable value semantics) — it carries the one irreversible syntax
-choice and must not start until that decision is explicitly made.
-Phases 5 (N-readers-XOR-1-writer), 6 (iterator invalidation) and full
-Phase 8 (promote `warning:` to `error:` after the on-by-default soak)
-follow it. Last updated 2026-05-20.*
+*Status: Phases 0, 1, 2, 3 + Phase 8-partial + Phase 4-partial
+(`inout`) shipped (2026-05-20). The borrow checker is ON by default
+(`--no-borrowck` disables it); bug classes 1/2/3 are closed; the
+corpus is move/alias/escape clean; `docs/MEMORY.md` documents the
+model. Part III decided: Option B (mutable value semantics) — the
+`inout` parameter convention is live. Next: finish Phase 4 (`sink`
+convention; `inout` on generics / field targets / impl methods),
+then Phase 5 (N-readers-XOR-1-writer — `inout` gives it the exclusive
+borrow to enforce), Phase 6 (iterator invalidation) and full Phase 8
+(promote `warning:` to `error:` after the on-by-default soak).
+Last updated 2026-05-20.*
