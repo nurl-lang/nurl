@@ -158,17 +158,35 @@ Closures that capture by *value* (the snapshot case — an immutable
 `:` capture, or a single-handle struct) never escape and are not
 flagged.
 
+### 2.4 Exclusive access for `inout` arguments
+
+An `inout` argument (section 1) is an *exclusive* mutable borrow for
+the duration of its call. A binding passed `inout` must therefore be
+the only argument path to its value at that call site: passing the
+same binding again — as a second `inout`, or as a plain by-value
+argument — is reported.
+
+```
+( swap_counters c c )    // warning: 'c' is both mutably borrowed
+                         //          and aliased by another argument
+```
+
+This is the "N readers XOR 1 writer" rule, scoped to a single call
+(an `inout` borrow does not outlive its call, so there is no
+cross-statement aliasing to track). A binding read through a *nested*
+argument expression — `( f inout c (g c) )`, `( f inout c . c n )` —
+is a known gap, not yet flagged.
+
 ## 3. What is NOT checked
 
 The borrow checker targets the bug classes that ordinary NURL code
 hits in practice. It deliberately does **not** yet cover:
 
-- **Exclusive access / aliased mutation.** Two mutable paths to the
-  same data, where a write through one breaks an invariant the other
-  relies on, is not yet detected. The `inout` convention (Phase 4)
-  gives the language the exclusive mutable borrow this check needs;
-  enforcing "N readers XOR 1 writer" on top of it is BORROW.md
-  Phase 5.
+- **Aliased mutation beyond a single call.** The exclusive-access
+  check (2.4) covers a binding aliased among one call's arguments. A
+  binding read through a *nested* sub-expression argument, and any
+  longer-range aliased-mutation analysis, is not yet done — BORROW.md
+  Phase 5 (remainder).
 - **Full iterator invalidation.** Mutating a container while a
   `~`-foreach borrows its elements is a planned check (Phase 6), not
   yet implemented.
@@ -206,7 +224,8 @@ hits in practice. It deliberately does **not** yet cover:
 | Use-after-move | yes (`warning:`) | Phase 1 |
 | Alias double-free | yes (`warning:`) | Phase 2 |
 | Closure / stack-reference escape | yes (`warning:`) | Phase 3 |
-| Aliased mutation (exclusive access) | no | Phases 4-5 |
+| `inout` exclusive access (call-site aliasing) | yes (`warning:`) | Phases 4-5 |
+| Aliased mutation via nested-argument reads | no | Phase 5 (remainder) |
 | Iterator invalidation | no | Phase 6 |
 | Returned borrows / lifetime inference | no | Phase 7 |
 | `*T` raw pointers | no (by design) | n/a |

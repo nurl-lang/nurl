@@ -30,7 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads/writes the caller's storage with no local copy — replacing
   the `*T`-parameter and return-the-struct mutation idioms. The
   argument must be a mutable (`: ~`) binding; an `inout` function
-  must be defined before it is called.
+  must be defined before it is called. Exclusive-access check
+  (BORROW.md Phase 5): a binding passed `inout` must be the only
+  argument path to its value at that call — passing it again, as a
+  second `inout` or a plain by-value argument, is a `warning:`.
 
 * **Static borrow checker, on by default (BORROW.md Phases 0-3 +
   8-partial).** A diagnostic analysis pass (disable with

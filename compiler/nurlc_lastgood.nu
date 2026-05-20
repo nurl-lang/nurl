@@ -1766,6 +1766,14 @@
     // Convention: callees borrow i8* args and must `strdup` if they retain
     // (see runtime.c hardening for nurl_set_last_type, nurl_sym_get, ...).
     : s owned_arg_temps ``
+    // BORROW.md Phase 5 (N-readers-XOR-1-writer): a binding passed to
+    // this call as `inout` is mutably borrowed for the call's
+    // duration; it must be the *exclusive* path to that value at the
+    // call. `p5_seen` accumulates every bare-identifier argument and
+    // `p5_inout_seen` the `inout` ones, so a binding that is both
+    // mutably borrowed and aliased by another argument is flagged.
+    : ~ s p5_seen ``
+    : ~ s p5_inout_seen ``
     ~ != ( nurl_lex_type lex ) TT_RPAREN {
         // Phase 1 borrow: snapshot this argument's first token. A move
         // is recorded only when the consumed argument is a bare
@@ -1790,6 +1798,26 @@
         // `<T>*`; emit no value load. Everything else is the ordinary
         // by-value path.
         : b is_inout_arg ( str_contains_word callee_inout ( nurl_str_int arg_idx ) )
+        // BORROW.md Phase 5: exclusive-access check. A bare-identifier
+        // argument that is mutably borrowed (`inout`) here must not be
+        // aliased by another bare-identifier argument of the SAME call
+        // (whether that other one is `inout` or a plain by-value read)
+        // — N readers XOR 1 writer. Reading a binding through a nested
+        // sub-expression argument is a known gap (a later phase).
+        ? & != g_borrowck 0 ( is_ident_tok bck_arg_tt )
+        { ? | & is_inout_arg ( str_contains_word p5_seen bck_arg_val )
+              & ! is_inout_arg ( str_contains_word p5_inout_seen bck_arg_val )
+            { ( bck_esc_warn lex bck_arg_line ( nurl_str_cat3
+                `'` bck_arg_val
+                `' is both mutably borrowed (passed as 'inout') and aliased by another argument of the same call - exclusive access is violated` ) ) }
+            {}
+            = p5_seen ? == 0 ( nurl_str_len p5_seen )
+                bck_arg_val ( nurl_str_cat3 p5_seen ` ` bck_arg_val )
+            ? is_inout_arg
+            { = p5_inout_seen ? == 0 ( nurl_str_len p5_inout_seen )
+                bck_arg_val ( nurl_str_cat3 p5_inout_seen ` ` bck_arg_val ) }
+            {} }
+        {}
         : ~ s av ``
         : ~ s at ``
         ? is_inout_arg

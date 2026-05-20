@@ -1,7 +1,7 @@
 # Borrow Checking — Preliminary Investigation & Phased Implementation Plan
 
-> **Status (2026-05-20): Phases 0–3 + Phase 8-partial + Phase 4-partial
-> (`inout`) landed; the borrow checker is ON by default. Part III
+> **Status (2026-05-20): Phases 0–3 + 8-partial + 4-partial (`inout`)
+> + 5-partial landed; the borrow checker is ON by default. Part III
 > decided: Option B (mutable value semantics).**
 > This document is the feasibility study + work-list for adding static
 > aliasing / borrow analysis to NURL. Phase 0 (the analysis substrate),
@@ -10,8 +10,10 @@
 > per-phase sections below for what each landed. Phase 8-partial
 > flipped the analysis ON by default (`--no-borrowck` disables it) and
 > shipped the user-facing rules doc [`docs/MEMORY.md`](docs/MEMORY.md).
-> Phase 4-partial added the `inout` parameter convention (Option B);
-> `sink` remains pending. Bug classes 1/2/3 are closed.
+> Phase 4-partial added the `inout` parameter convention (Option B;
+> `sink` pending); Phase 5-partial enforces exclusive access for
+> `inout` arguments at a call site. Bug classes 1/2/3 are closed; bug
+> class 6 (aliased mutation) is closed for the call-site case.
 >
 > Phases 1, 2 and 3 emit `warning:` (not `error:`) for now — BORROW.md
 > watch #3: a new rule ships as a warning and is promoted to an error
@@ -537,9 +539,28 @@ need the new token.
 
 ## Phase 5 — Borrow rules: N-readers-XOR-1-writer
 
-**Goal:** the actual borrow checker — at any program point, a value
-has either any number of shared borrows or exactly one mutable
-borrow, never both.
+> **PARTIAL LANDED 2026-05-20.** The Option B surface makes this far
+> smaller than the CFG/NLL design sketched below: a borrow is not a
+> long-lived named binding, it is a **call argument** — an `inout`
+> argument is a mutable borrow that lives exactly for that call, an
+> ordinary argument a shared borrow. So "N readers XOR 1 writer"
+> reduces to a per-call-site check with no cross-statement dataflow:
+> at one call, a binding passed `inout` must be the *exclusive* path
+> to its value. `gen_call` accumulates the bare-identifier arguments
+> (`p5_seen`) and the `inout` ones (`p5_inout_seen`); a binding that
+> is mutably borrowed and also aliased by another argument of the
+> same call — a second `inout`, or a plain by-value read — is a
+> `warning:` (watch #3 — uniform with Phases 1-3). Regression test
+> `borrow_aliased_mut.nu`.
+>
+> The compiler + stdlib are trivially clean (they use no `inout`, so
+> no `inout` argument exists to alias). **Known gap:** a binding read
+> through a *non-bare-identifier* argument of the same call (a field
+> access `. c n`, a nested call `( g c )`) is not yet flagged —
+> catching it needs per-argument read tracking that survives the
+> `reads`-accumulator reset a `?`/`~`/`??` argument triggers. The
+> NLL / cross-statement-liveness machinery the scope below describes
+> is unnecessary under Option B and is not built.
 
 **Scope:**
 - Track, per resource, the set of *live borrows* and their kind
@@ -758,14 +779,15 @@ the Phase 4 grammar change.
 
 ---
 
-*Status: Phases 0, 1, 2, 3 + Phase 8-partial + Phase 4-partial
-(`inout`) shipped (2026-05-20). The borrow checker is ON by default
-(`--no-borrowck` disables it); bug classes 1/2/3 are closed; the
+*Status: Phases 0, 1, 2, 3 + 8-partial + 4-partial (`inout`) +
+5-partial shipped (2026-05-20). The borrow checker is ON by default
+(`--no-borrowck` disables it); bug classes 1/2/3 are closed and bug
+class 6 (aliased mutation) is closed for the call-site case; the
 corpus is move/alias/escape clean; `docs/MEMORY.md` documents the
 model. Part III decided: Option B (mutable value semantics) — the
-`inout` parameter convention is live. Next: finish Phase 4 (`sink`
-convention; `inout` on generics / field targets / impl methods),
-then Phase 5 (N-readers-XOR-1-writer — `inout` gives it the exclusive
-borrow to enforce), Phase 6 (iterator invalidation) and full Phase 8
-(promote `warning:` to `error:` after the on-by-default soak).
-Last updated 2026-05-20.*
+`inout` parameter convention is live, and a binding passed `inout`
+must be the exclusive argument path to its value. Next: finish
+Phase 4 (`sink` convention; `inout` on generics / field targets /
+impl methods), extend Phase 5 to nested-subexpression reads, Phase 6
+(iterator invalidation), and full Phase 8 (promote `warning:` to
+`error:` after the on-by-default soak). Last updated 2026-05-20.*
