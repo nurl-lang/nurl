@@ -1,12 +1,21 @@
 # Borrow Checking — Preliminary Investigation & Phased Implementation Plan
 
-> **Status (2026-05-20): investigation only — nothing implemented.**
+> **Status (2026-05-20): Phases 0–2 landed; Phase 3 next.**
 > This document is the feasibility study + work-list for adding static
-> aliasing / borrow analysis to NURL. No phase has landed. Phase 0 is
-> the prerequisite refactor; Phases 1–3 are the high-value core that
-> needs no new surface syntax; Phase 4 carries the one irreversible
-> design decision (reference types vs. mutable value semantics) and
-> should not start until that decision is explicitly made.
+> aliasing / borrow analysis to NURL. Phase 0 (the analysis substrate),
+> Phase 1 (move checking / use-after-move) and Phase 2 (alias /
+> double-free) are implemented behind the `--borrowck` flag — see the
+> per-phase sections below for what each landed. Phase 3 (escape
+> analysis) is the next high-value no-new-syntax piece; Phase 4 carries
+> the one irreversible design decision (reference types vs. mutable
+> value semantics) and should not start until that decision is
+> explicitly made.
+>
+> Phases 1 and 2 emit `warning:` (not `error:`) for now — BORROW.md
+> watch #3: a new rule ships as a warning and is promoted to an error
+> only once proven false-positive-free. Both are: `--borrowck` over the
+> whole compiler + stdlib + test + example corpus emits zero
+> warnings, i.e. the codebase is move-clean and alias-clean.
 >
 > The whole feature is designed as a **diagnostic-only analysis pass**:
 > it emits `error:` / `warning:` and never changes emitted IR. A
@@ -252,6 +261,15 @@ deferred without blocking the high-value work.
 
 ## Phase 0 — Analysis substrate: per-function CFG + ownership lattice
 
+> **LANDED 2026-05-20** (commits `016768a` 0a, `ae550d0` 0b,
+> `b032d91` 0c, `41f897b` 0d). `--borrowck` CLI flag; a per-function
+> statement list captured by guarded `gen_*` hooks; block-kind tags
+> (`cond-then` / `cond-else` / `match-arm` / `loop` / `foreach` /
+> `plain`) plus `cond`/`endcond` and `match`/`endmatch` structural
+> markers; the ownership lattice + `bck_join`; and the structured
+> analyze walk (`bck_walk_seq` — sequential flow, `?`/`??` fork-join,
+> `~` loop fixpoint). Zero rules, zero diagnostics, IR byte-identical.
+
 **Goal:** a reusable per-function representation the checker walks,
 and the lattice it threads — without changing a single byte of emitted
 IR.
@@ -289,6 +307,15 @@ foundation everything else stands on.
 
 ## Phase 1 — Move checking (use-after-move)
 
+> **LANDED 2026-05-20** (commit `af55b61`). A move = a bare-identifier
+> argument to a `*_free` destructor (not raw `nurl_free`). The walk
+> transitions the binding Owned → Moved; `let` / `=` revive it; a read
+> of a *definitely*-Moved binding warns (MaybeMoved is not flagged, to
+> stay false-positive-free). Closure bodies are segregated from the
+> enclosing list. Known gap: use-after-move *inside* a `??` arm (the
+> flat name-keyed state cannot scope-qualify arm payloads). Regression
+> test `compiler/tests/borrow_use_after_move.nu`; emits `warning:`.
+
 **Goal:** reading a binding after its ownership has moved is an
 `error:`.
 
@@ -321,6 +348,18 @@ any phase — no new syntax, closes bug class 1.
 ---
 
 ## Phase 2 — Alias & double-free detection
+
+> **LANDED 2026-05-20** (commit `9c2ef1f`). Taken as the "classified
+> as a move" outcome: an immutable binding-to-binding copy `: T b a`
+> of an owned heap aggregate moves `a` into `b` — any later use of `a`
+> is then the Phase 1 use-after-move warning, which closes the
+> silent-alias double-free. Gated to a bare-identifier RHS, a `%`/`{`
+> heap type, a non-parameter source, and an immutable destination (a
+> `: ~` copy is the cursor idiom — a borrow, not a move). Reuses the
+> Phase 1 walk/lattice/diagnostic wholesale — no provenance graph.
+> Known follow-ups: explicit i8*-string aliasing; the genuine
+> immutable-borrow case. Regression test
+> `compiler/tests/borrow_double_free.nu`; emits `warning:`.
 
 **Goal:** detect when two live bindings own the same heap resource;
 reject the explicit-alias double-free.
@@ -622,8 +661,11 @@ the Phase 4 grammar change.
 
 ---
 
-*Status: investigation complete 2026-05-20; no phase implemented.
-Recommended first deliverable: Phases 0–3 (+ Phase 8 partial) — the
-no-new-syntax core. Phase 4 gated on the Part III reference-surface
-decision (recommendation on file: Option B, mutable value semantics).
+*Status: Phases 0, 1, 2 implemented behind `--borrowck` (2026-05-20).
+Next: Phase 3 (escape analysis) — note it is a delete-and-replace of
+the existing `__captures_byref` / five-shape closure-escape check, and
+BORROW.md expects the `should_warn_closure_escape*` tests to be
+upgraded as part of it, so it is best done as its own focused session.
+Phase 4 remains gated on the Part III reference-surface decision
+(recommendation on file: Option B, mutable value semantics).
 Last updated 2026-05-20.*
