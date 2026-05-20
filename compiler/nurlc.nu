@@ -1970,6 +1970,8 @@
     } {}
     ( nurl_sym_def syms `__cur_lbl__` lt )
     = g_did_ret 0
+    // Borrow checker (Phase 0c): the then-arm `{` is a forward join.
+    ( bck_set_block_kind `cond-then` )
     : s tv ( gen_expr lex syms cg )
     : s tt2 ( nurl_get_last_type )
     : s tlbl ( nurl_sym_get syms `__cur_lbl__` )
@@ -1999,6 +2001,10 @@
     } {}
     ( nurl_sym_def syms `__cur_lbl__` le )
     = g_did_ret 0
+    // Borrow checker (Phase 0c): the else-arm `{` is a forward join.
+    // Setting this also re-arms over any `cond-then` left pending by a
+    // bare (block-less) then-arm.
+    ( bck_set_block_kind `cond-else` )
     : s ev ( gen_expr lex syms cg )
     : s et2 ( nurl_get_last_type )
     : s elbl ( nurl_sym_get syms `__cur_lbl__` )
@@ -2011,6 +2017,9 @@
         ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
     } {}
     ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
+    // Borrow checker (Phase 0c): disarm — a block-less else-arm would
+    // otherwise leak `cond-else` onto the next sibling block.
+    ( bck_set_block_kind `` )
     ( emit ( nurl_str_cat lend `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lend )
     // The whole conditional only "did_ret" if BOTH branches did. If either
@@ -2572,6 +2581,11 @@
             } {}
 
             = g_did_ret 0
+            // Borrow checker (Phase 0c): a `??` arm `{` is a forward
+            // join. A bare (block-less) arm leaves this armed; the
+            // next arm re-arms it, and the post-loop disarm clears a
+            // trailing bare arm's residue.
+            ( bck_set_block_kind `match-arm` )
             : s arm_result ( gen_stmt lex syms cg )
             : s arm_type ( nurl_get_last_type )
             : s arm_lbl ( nurl_sym_get syms `__cur_lbl__` )
@@ -2627,6 +2641,10 @@
     }
 
     ( expect lex TT_RBRACE )  // expect '}'
+
+    // Borrow checker (Phase 0c): disarm — a trailing block-less arm
+    // would otherwise leak `match-arm` onto the next sibling block.
+    ( bck_set_block_kind `` )
 
     // Exhaustive match check
     : i mtype_len ( nurl_str_len match_type )
@@ -2753,6 +2771,9 @@
         ( nurl_sym_push syms )
     } {}
     = g_did_ret 0
+    // Borrow checker (Phase 0c): a `~ x : T xs` body is a back-edge,
+    // and additionally borrows the iterated container (Phase 6).
+    ( bck_set_block_kind `foreach` )
     ( gen_block_stmts lex syms cg )
     ? == g_did_ret 0
     { ? != 0 g_auto_drop_strings
@@ -2821,6 +2842,9 @@
         } {}
         ( nurl_sym_def syms `__cur_lbl__` lb )
         = g_did_ret 0
+        // Borrow checker (Phase 0c): a `~` while-body is a back-edge —
+        // the analyze walk must iterate it to a fixpoint.
+        ( bck_set_block_kind `loop` )
         ( gen_block_stmts lex syms cg )
         ? == g_did_ret 0
         { ? != 0 g_auto_drop_strings
@@ -3294,19 +3318,35 @@
 //   <kind> \t <wname> \t <reads> \t <line> \t <depth>
 //
 //   kind   — let | assign | ret | expr | block | endblock
-//   wname  — the binding written (let/assign), else empty
+//   wname  — the binding written (let/assign); for a `block` marker
+//            the block's kind (Phase 0c — see below); else empty
 //   reads  — space-separated identifiers read by the statement;
 //            for a `block` marker, the controlling condition's reads
 //   line   — 1-based source line
 //   depth  — block-nesting depth (function body is depth 1)
 //
-// Records are newline-separated. Phase 0c parses this into a CFG.
-// The capture is inert unless --borrowck is set, and never emits IR,
-// so the bootstrap fixed point is unaffected.
+// Records are newline-separated. The capture is inert unless
+// --borrowck is set, and never emits IR, so the bootstrap fixed point
+// is unaffected.
+//
+// Phase 0c — block kinds. Every `block` row carries, in its wname
+// field, the kind of `{` that opened it, so the analyze walk can tell
+// a back-edge from a forward join without re-deriving control flow:
+//
+//   cond-then  — the then-arm of a `?`            (forward join)
+//   cond-else  — the else-arm of a `?`            (forward join)
+//   match-arm  — one arm of a `??` match          (forward join)
+//   loop       — the body of a `~` while-loop     (back-edge, fixpoint)
+//   foreach    — the body of a `~ x : T xs` loop  (back-edge, fixpoint)
+//   plain      — function body / defer / bare `{ }` block-expr
+//
+// Phase 0d turns this tagged list into the lattice-threading walk.
 //
 // Known Phase 0 imprecision (refined in Phase 1): a closure literal's
 // body is parsed through the same gen_block_ret path, so its
-// statements land inline in the enclosing function's list. Harmless
+// statements land inline in the enclosing function's list — and a
+// bare closure literal used directly as a `?`/`??` arm has its body
+// block tagged with that arm's kind rather than `plain`. Harmless
 // while there are no rules; Phase 1 must segregate closure scopes.
 
 // Reset the per-function capture state. Called at function entry.
@@ -3314,6 +3354,7 @@
     ? != g_borrowck 0 {
         ( nurl_sym_def g_bck `stmts` `` )
         ( nurl_sym_def g_bck `reads` `` )
+        ( nurl_sym_def g_bck `pending_kind` `` )
         = g_bck_depth 0
     } {}
 }
@@ -3343,12 +3384,37 @@
     } {}
 }
 
+// ── Phase 0c: block-kind tagging ───────────────────────────────────
+//
+// A bare `block` row says "a `{` opened here" but not WHAT kind of
+// block — and a sound analysis must tell a `~`-loop body (a back-edge
+// the lattice has to iterate to a fixpoint) apart from a `?`/`??` arm
+// (a forward join). gen_cond / gen_loop / gen_foreach / gen_match each
+// arm a `pending_kind` slot just before they invoke a block parser;
+// the next bck_block_enter consumes it into the `block` row's wname
+// field, then disarms the slot. A block parser reached with no armed
+// kind (function body, defer block, bare `{ }` block-expr) records
+// `plain`.
+//
+// The slot is one-shot: gen_cond/gen_match also disarm it after their
+// arms so a bare-expression arm (which opens no block) cannot leak its
+// kind onto an unrelated sibling block. gen_loop/gen_foreach need no
+// disarm — their body parser always opens a block, always consuming.
+@ bck_set_block_kind s kind → v {
+    ? != g_borrowck 0 { ( nurl_sym_def g_bck `pending_kind` kind ) } {}
+}
+
 // Block-boundary markers. enter records a `block` row (carrying any
-// pending reads — i.e. the controlling `?`/`~`/`??` condition) then
+// pending reads — i.e. the controlling `?`/`~`/`??` condition — in the
+// reads field, and the armed block kind in the wname field) then
 // descends a level; exit ascends then records `endblock`.
 @ bck_block_enter i line → v {
     ? != g_borrowck 0 {
-        ( bck_record `block` `` line )
+        : s kind ( nurl_sym_get g_bck `pending_kind` )
+        ( bck_record `block`
+            ? == 0 ( nurl_str_len kind ) `plain` kind
+            line )
+        ( nurl_sym_def g_bck `pending_kind` `` )
         = g_bck_depth + g_bck_depth 1
     } {}
 }

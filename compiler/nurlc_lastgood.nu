@@ -391,6 +391,18 @@
 : i g_closure_emit_base 0  // Next func index to emit (watermark)
 : i g_type_emit_base 0  // Next type index to emit
 
+// ── Borrow-checker state (see BORROW.md) ─────────────────────────
+// g_borrowck is 1 when --borrowck is passed on the CLI. The borrow
+// checker is a diagnostic-only analysis pass: it never emits IR, so
+// a borrow-clean program produces byte-identical IR whether the flag
+// is on or off. All borrowck_* state below is untouched when the
+// flag is 0. Phase 0 (the analysis substrate) carries no rules yet.
+: i g_borrowck 0  // 1 when --borrowck passed on the CLI
+: i g_bck 0       // sym handle for the borrow checker's per-function
+                  //  data (statement list etc.); allocated in main()
+                  //  only when --borrowck is set
+: i g_bck_depth 0 // block-nesting depth during the statement walk
+
 // ── DWARF debug-info state (see DWARF.md) ────────────────────────
 // All zero/empty when --g is OFF; emit helpers then produce IR that
 // is byte-identical to a pre-DWARF build. Toggled in main().
@@ -505,14 +517,60 @@
         ( nurl_str_int g_dbg_placeholder_ty ) )
 }
 
+// Phase 6 layout helpers: LLVM "natural" alignment + size in BITS for
+// the field types NURL actually emits. Used by composite-type emission
+// in dbg_type_id_for to compute cumulative field offsets and the total
+// struct size. Mapping follows the x86_64 / aarch64 SysV ABI defaults
+// LLVM applies absent an explicit DataLayout override: each primitive
+// is naturally aligned to its own byte size; pointers + i64 are 8 B;
+// i1 occupies one byte in a struct slot.
+//
+// Unknown / aggregate types (any leading `%`, raw `*`, `[N x …]`)
+// fall back to pointer width (64 bits) — they are always either
+// pointer-handles or by-pointer references in NURL's lowering.
+@ dbg_size_bits s vt → i {
+    ? ( seq vt `i1` )     { ^ 8 } {}
+    ? ( seq vt `i8` )     { ^ 8 } {}
+    ? ( seq vt `i16` )    { ^ 16 } {}
+    ? ( seq vt `i32` )    { ^ 32 } {}
+    ? ( seq vt `i64` )    { ^ 64 } {}
+    ? ( seq vt `float` )  { ^ 32 } {}
+    ? ( seq vt `double` ) { ^ 64 } {}
+    ^ 64
+}
+
+@ dbg_align_bits s vt → i {
+    ? ( seq vt `i1` )     { ^ 8 } {}
+    ? ( seq vt `i8` )     { ^ 8 } {}
+    ? ( seq vt `i16` )    { ^ 16 } {}
+    ? ( seq vt `i32` )    { ^ 32 } {}
+    ? ( seq vt `i64` )    { ^ 64 } {}
+    ? ( seq vt `float` )  { ^ 32 } {}
+    ? ( seq vt `double` ) { ^ 64 } {}
+    ^ 64
+}
+
+// Round `off` up to the next multiple of `align`. Both bit-valued.
+@ dbg_align_up i off i align → i {
+    ? <= align 1 { ^ off } {}
+    : i rem % off align
+    ? == rem 0 { ^ off } {}
+    ^ + off - align rem
+}
+
 // Phase 6: look up (or lazily create) the metadata id corresponding to
 // an LLVM type string. The first call for a given `vt` emits a
-// !DIBasicType / !DIDerivedType into the blob and caches the id; later
-// calls return the cached id without re-emitting. Aggregate / struct
-// types fall back to the i64 placeholder so the verifier accepts the
-// DILocalVariable; full struct-member rendering (`ptype Foo`) lands
-// when this path learns to emit !DICompositeType.
-@ dbg_type_id_for s vt → i {
+// !DIBasicType / !DIDerivedType / !DICompositeType into the blob and
+// caches the id; later calls return the cached id without re-emitting.
+// Self-referential structs are safe — the id is interned before the
+// per-field recursion descends back through dbg_type_id_for.
+//
+// `syms` is the active symbol table (function-local for `:` bindings,
+// module-level for params). The composite-type path reads field name
+// + type + count keys (<sname>__field_count, <sname>__idx_N__name,
+// <sname>__idx_N__type) recorded by gen_struct_decl / the generic
+// instantiation emitter. Base / pointer types don't consult syms.
+@ dbg_type_id_for s vt i syms → i {
     : s hit ( nurl_sym_get g_dbg_type_syms vt )
     ? != 0 ( nurl_str_len hit ) { ^ ( nurl_str_to_int hit ) } {}
     : i id 0
@@ -541,17 +599,92 @@
           ( dbg_buffer_meta id `!DIBasicType(name: "f32", size: 32, encoding: DW_ATE_float)` ) }
     ? ( seq vt `i8*` )
         { = id ( dbg_alloc_id )
-          : i u8_id ( dbg_type_id_for `i8` )
+          : i u8_id ( dbg_type_id_for `i8` syms )
           ( dbg_buffer_meta id
             ( nurl_str_cat3
                 `!DIDerivedType(tag: DW_TAG_pointer_type, baseType: !`
                 ( nurl_str_int u8_id )
                 `, size: 64)` ) ) }
-    // Everything else (named structs, vectors, closures, slices): fall
-    // back to the placeholder. Phase 6 follow-up replaces these with
-    // proper !DICompositeType entries so `ptype Vec[u]` shows fields.
+    // Named structs (handle: '%' prefix). Try the composite-type path
+    // — if syms knows the struct, emit !DICompositeType + per-field
+    // !DIDerivedType DW_TAG_member entries. Otherwise fall through.
+    ? & == id 0 == 37 ( nurl_str_get vt 0 )
+        { = id ( dbg_emit_composite vt syms ) }
+    // Everything else (closures, slices, [N x T] arrays, unknown):
+    // i64 placeholder so the verifier accepts the DILocalVariable.
     ? == id 0 { = id g_dbg_placeholder_ty } {}
     ( nurl_sym_def g_dbg_type_syms vt ( nurl_str_int id ) )
+    ^ id
+}
+
+// Phase 6 helper: try to render a `%Name`-prefixed LLVM type string as
+// a !DICompositeType with one !DIDerivedType DW_TAG_member per field.
+// Returns 0 (caller falls back to the placeholder) when the struct
+// is unknown to syms — e.g. an anonymous closure record, an unresolved
+// forward decl, or an enum that doesn't carry a field roster.
+//
+// Self-referential structs (e.g. linked-list cells holding a pointer
+// to themselves) are safe: the id is interned in g_dbg_type_syms BEFORE
+// the per-field recursion descends — a back-edge through
+// dbg_type_id_for returns the cached id instead of recursing forever.
+@ dbg_emit_composite s vt i syms → i {
+    : s base ( nurl_str_slice vt 1 - ( nurl_str_len vt ) 1 )
+    : s is_t ( nurl_sym_get syms ( nurl_str_cat base `__is_type` ) )
+    ? == 0 ( nurl_str_len is_t ) { ^ 0 } {}
+    : s fc_s ( nurl_sym_get syms ( nurl_str_cat base `__field_count` ) )
+    ? == 0 ( nurl_str_len fc_s ) { ^ 0 } {}
+    : i n ( nurl_str_to_int fc_s )
+    ? <= n 0 { ^ 0 } {}
+    // Reserve + intern the composite id BEFORE recursing into fields
+    // (self-referential cycle break).
+    : i id ( dbg_alloc_id )
+    ( nurl_sym_def g_dbg_type_syms vt ( nurl_str_int id ) )
+    // First pass: compute layout (cumulative offset + struct size) and
+    // emit one !DIDerivedType DW_TAG_member per field. The member-list
+    // string is assembled as `!M0, !M1, ...` for the elements: tuple.
+    : ~ i off 0
+    : ~ i max_align 8
+    : ~ s elems ``
+    : ~ i fidx 0
+    ~ < fidx n {
+        : s fname ( nurl_sym_get syms
+            ( nurl_str_cat3 base `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__name` ) ) )
+        : s ftype ( nurl_sym_get syms
+            ( nurl_str_cat3 base `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__type` ) ) )
+        ? == 0 ( nurl_str_len ftype ) { = ftype `i64` } {}
+        ? == 0 ( nurl_str_len fname )
+            { = fname ( nurl_str_cat `f` ( nurl_str_int fidx ) ) } {}
+        : i fsize ( dbg_size_bits ftype )
+        : i falign ( dbg_align_bits ftype )
+        = off ( dbg_align_up off falign )
+        ? > falign max_align { = max_align falign } {}
+        : i base_ty_id ( dbg_type_id_for ftype syms )
+        : i mid ( dbg_alloc_id )
+        ( dbg_buffer_meta mid
+            ( nurl_str_cat
+                ( nurl_str_cat4
+                    `!DIDerivedType(tag: DW_TAG_member, name: "`
+                    fname `", baseType: !` ( nurl_str_int base_ty_id ) )
+                ( nurl_str_cat4
+                    `, size: ` ( nurl_str_int fsize )
+                    `, offset: ` ( nurl_str_cat ( nurl_str_int off ) `)` ) ) ) )
+        ? == fidx 0
+            { = elems ( nurl_str_cat `!` ( nurl_str_int mid ) ) }
+            { = elems ( nurl_str_cat3 elems `, !` ( nurl_str_int mid ) ) }
+        = off + off fsize
+        = fidx + fidx 1
+    }
+    // Round total size up to the strictest field alignment (LLVM does
+    // the same so sizeof(struct) is align-multiple).
+    : i total ( dbg_align_up off max_align )
+    ( dbg_buffer_meta id
+        ( nurl_str_cat
+            ( nurl_str_cat4
+                `!DICompositeType(tag: DW_TAG_structure_type, name: "`
+                base `", file: !` ( nurl_str_int g_dbg_file_id ) )
+            ( nurl_str_cat4
+                `, size: ` ( nurl_str_int total )
+                `, elements: !{` ( nurl_str_cat elems `})` ) ) ) )
     ^ id
 }
 
@@ -589,14 +722,14 @@
 // DILocalVariable.type field always points at the shared
 // `g_dbg_placeholder_ty` (i64); gdb still prints the value, just not
 // rendered as `String` / `Vec[u]` / etc.
-@ dbg_declare_local s name s ptr s vt i line i argk → v {
+@ dbg_declare_local s name s ptr s vt i line i argk i syms → v {
     ? & != g_dbg_enabled 0 != g_dbg_current_subprogram 0
     {
         : i var_id ( dbg_alloc_id )
         : s sp ( nurl_str_int g_dbg_current_subprogram )
         : s fi ( nurl_str_int g_dbg_file_id )
         : s lns ( nurl_str_int line )
-        : s ty_s ( nurl_str_int ( dbg_type_id_for vt ) )
+        : s ty_s ( nurl_str_int ( dbg_type_id_for vt syms ) )
         : s body
             ( nurl_str_cat4
                 ( nurl_str_cat3 `!DILocalVariable(name: "` name `"` )
@@ -891,6 +1024,8 @@
 }
 
 @ gen_ret i lex i syms i cg → s {
+    // Borrow checker: source line of the `^` token.
+    : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
     // GOTCHAS.md item 1: `^ ?? value { F e → {…} T m → {…} }` looks
     // like "return a match expression", but when ANY arm contains its
@@ -905,7 +1040,33 @@
     // expression is itself a closure literal that captures a stack
     // binding by pointer (docs/GOTCHAS.md item 5).
     ( nurl_sym_def syms `__last_closure_byref__` `` )
+    // Tail-call optimisation: mark the upcoming expression as
+    // "tail-position" so gen_call can emit `tail call` (the LLVM
+    // optimiser then converts a self-recursive tail call into a jump,
+    // unblocking deep recursion). The flag is consumed BY gen_call as
+    // soon as it enters — argument evaluation happens AFTER the
+    // consume, so nested calls inside the argument list do NOT
+    // observe the flag and stay non-tail. Eligibility is re-checked
+    // in gen_call (matching return types, no closure / FFI dispatch
+    // shape, no variadic). The flag is ONLY set when there are no
+    // pending owned-resource drops to perform after the call: an
+    // owned-slice / owned-string / user-drop in scope would emit
+    // extra calls between the tail-call and `ret`, which LLVM would
+    // silently degrade. defer chains likewise force a non-tail call.
+    ? & & & ( seq ( nurl_sym_get syms `__owned_strings__` ) `` )
+             ( seq ( nurl_sym_get syms `__owned_slices__` ) `` )
+             ( seq ( nurl_sym_get syms `__owned_struct_fields__` ) `` )
+        & ( seq ( nurl_sym_get syms `__user_drops__` ) `` )
+          ( seq ( nurl_sym_get syms `__defer_top__` ) `` )
+    { ( nurl_sym_def syms `__tail_call_pending__` `1` ) }
+    {}
     : s val ( gen_expr lex syms cg )
+    // Borrow checker: record this return statement.
+    ( bck_record `ret` `` bck_line )
+    // Defensive: clear any residual pending flag (gen_expr may have
+    // taken a different path — e.g. a literal or operator — that
+    // never reached gen_call to consume it).
+    ( nurl_sym_def syms `__tail_call_pending__` `` )
     : s lt ( nurl_get_last_type )
     // Escape check: warn if the returned value is a closure that
     // captures a `: ~`-mutable multi-field struct by pointer. Two
@@ -1064,6 +1225,8 @@
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s name ( nurl_lex_val lex )
         ( nurl_lex_advance lex )
+        // Borrow checker: every value-position identifier is a read.
+        ( bck_note_read name )
         : s lt ( nurl_sym_get syms name )
         ( nurl_set_last_type ? == 0 ( nurl_str_len lt ) `i64` lt )
         : s ptr ( nurl_sym_get syms ( nurl_str_cat name `__ptr` ) )
@@ -1457,6 +1620,13 @@
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
+    // Tail-call optimisation: snapshot + consume the tail-position
+    // flag at function entry. Argument evaluation below recurses
+    // through gen_expr → gen_call; clearing the flag here means
+    // those nested calls don't get treated as tail (they aren't —
+    // we're still building the outermost call's argument list).
+    : b is_tail_position ( seq ( nurl_sym_get syms `__tail_call_pending__` ) `1` )
+    ( nurl_sym_def syms `__tail_call_pending__` `` )
     // Visibility check (grammar v2.0). If the base fname is an @-defined
     // function registered by scan_fn_sigs, we know its source-file of
     // origin. A cross-file call is rejected when the callee's file is in
@@ -1726,6 +1896,27 @@
         }
         {
             // Regular function call
+            // Tail-call optimisation: prepend `tail ` to the call
+            // instruction when we're in tail position AND the callee's
+            // return type matches the caller's. LLVM's `tail` marker
+            // is a hint — the optimiser will silently drop it if it
+            // can't safely turn the call into a jump (e.g. caller
+            // alloca-pointer escapes through an arg), so this is
+            // optimisation-only; correctness can't regress. `musttail`
+            // would force the rewrite but adds stricter requirements
+            // (identical signatures, no varargs, no caller-allocas in
+            // args) — too brittle for NURL's owning ABI. Variadic FFI
+            // is excluded since the C default-arg promotions would
+            // make the callee signature differ from the caller's
+            // declared one. Cross-file callees with unknown returns
+            // (rlt == "i64" fallback at line above) still benefit
+            // when the caller's return type also happens to be i64.
+            : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
+            : b tail_ok & & & is_tail_position
+                ! ( seq rlt `void` )
+                ! is_variadic
+                ( seq rlt fn_rt )
+            : s tail_kw ? tail_ok `tail ` ``
             ? ( seq rlt `void` )
             { ( nurl_print `  call void @` ) ( nurl_print call_name )
                 ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
@@ -1735,7 +1926,8 @@
             }
             { : s res ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print res )
-                ( nurl_print ` = call ` ) ( nurl_print rlt )
+                ( nurl_print ` = ` ) ( nurl_print tail_kw )
+                ( nurl_print `call ` ) ( nurl_print rlt )
                 ( nurl_print ` @` ) ( nurl_print call_name )
                 ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
                 ( mem_drop_arg_temps owned_arg_temps )
@@ -1778,6 +1970,8 @@
     } {}
     ( nurl_sym_def syms `__cur_lbl__` lt )
     = g_did_ret 0
+    // Borrow checker (Phase 0c): the then-arm `{` is a forward join.
+    ( bck_set_block_kind `cond-then` )
     : s tv ( gen_expr lex syms cg )
     : s tt2 ( nurl_get_last_type )
     : s tlbl ( nurl_sym_get syms `__cur_lbl__` )
@@ -1807,6 +2001,10 @@
     } {}
     ( nurl_sym_def syms `__cur_lbl__` le )
     = g_did_ret 0
+    // Borrow checker (Phase 0c): the else-arm `{` is a forward join.
+    // Setting this also re-arms over any `cond-then` left pending by a
+    // bare (block-less) then-arm.
+    ( bck_set_block_kind `cond-else` )
     : s ev ( gen_expr lex syms cg )
     : s et2 ( nurl_get_last_type )
     : s elbl ( nurl_sym_get syms `__cur_lbl__` )
@@ -1819,6 +2017,9 @@
         ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
     } {}
     ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
+    // Borrow checker (Phase 0c): disarm — a block-less else-arm would
+    // otherwise leak `cond-else` onto the next sibling block.
+    ( bck_set_block_kind `` )
     ( emit ( nurl_str_cat lend `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lend )
     // The whole conditional only "did_ret" if BOTH branches did. If either
@@ -2380,6 +2581,11 @@
             } {}
 
             = g_did_ret 0
+            // Borrow checker (Phase 0c): a `??` arm `{` is a forward
+            // join. A bare (block-less) arm leaves this armed; the
+            // next arm re-arms it, and the post-loop disarm clears a
+            // trailing bare arm's residue.
+            ( bck_set_block_kind `match-arm` )
             : s arm_result ( gen_stmt lex syms cg )
             : s arm_type ( nurl_get_last_type )
             : s arm_lbl ( nurl_sym_get syms `__cur_lbl__` )
@@ -2435,6 +2641,10 @@
     }
 
     ( expect lex TT_RBRACE )  // expect '}'
+
+    // Borrow checker (Phase 0c): disarm — a trailing block-less arm
+    // would otherwise leak `match-arm` onto the next sibling block.
+    ( bck_set_block_kind `` )
 
     // Exhaustive match check
     : i mtype_len ( nurl_str_len match_type )
@@ -2561,6 +2771,9 @@
         ( nurl_sym_push syms )
     } {}
     = g_did_ret 0
+    // Borrow checker (Phase 0c): a `~ x : T xs` body is a back-edge,
+    // and additionally borrows the iterated container (Phase 6).
+    ( bck_set_block_kind `foreach` )
     ( gen_block_stmts lex syms cg )
     ? == g_did_ret 0
     { ? != 0 g_auto_drop_strings
@@ -2629,6 +2842,9 @@
         } {}
         ( nurl_sym_def syms `__cur_lbl__` lb )
         = g_did_ret 0
+        // Borrow checker (Phase 0c): a `~` while-body is a back-edge —
+        // the analyze walk must iterate it to a fixpoint.
+        ( bck_set_block_kind `loop` )
         ( gen_block_stmts lex syms cg )
         ? == g_did_ret 0
         { ? != 0 g_auto_drop_strings
@@ -2690,31 +2906,44 @@
 // ── Block expression { stmts... } ─────────────────────────────────
 
 @ gen_block_expr i lex i syms i cg → s {
+    : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
+    ( bck_block_enter bck_line )
     : s last `undef`
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         = last ( gen_stmt lex syms cg )
     }
     ( nurl_lex_advance lex )
+    ( bck_block_exit )
     last
 }
 
 @ gen_block_stmts i lex i syms i cg → v {
+    : i bck_line ( nurl_lex_line lex )
     ( expect lex TT_LBRACE )
+    ( bck_block_enter bck_line )
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         ( gen_stmt lex syms cg )
     }
     ( expect lex TT_RBRACE )
+    ( bck_block_exit )
 }
 
 // gen_block_ret: like gen_block_stmts but returns the last stmt value.
 @ gen_block_ret i lex i syms i cg → s {
+    : i bck_line ( nurl_lex_line lex )
     ( expect lex TT_LBRACE )
+    // Borrow checker: a `{` opens a block — record the boundary and
+    // descend a nesting level. The `block` row carries whatever the
+    // read-accumulator holds, i.e. the controlling `?`/`~`/`??`
+    // condition that was evaluated just before this arm.
+    ( bck_block_enter bck_line )
     : s last `undef`
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         = last ( gen_stmt lex syms cg )
     }
     ( expect lex TT_RBRACE )
+    ( bck_block_exit )
     last
 }
 
@@ -3067,6 +3296,144 @@
     {}
 }
 
+// ── Borrow checker — analysis substrate (BORROW.md Phase 0) ─────────
+//
+// The borrow checker is a diagnostic-only pass: it inspects the
+// program and may emit `error:` / `warning:`, but it NEVER emits IR.
+// A borrow-clean program therefore compiles to byte-identical IR
+// whether --borrowck is on or off, and the bootstrap fixed point is
+// unaffected. Every entry point below is a no-op when g_borrowck is 0.
+//
+// Phase 0 lands the substrate only — there are no borrow rules yet,
+// so even with --borrowck on the pass emits nothing. Later phases
+// (move checking, alias/double-free, escape analysis) hang their
+// rules off the per-function CFG + ownership lattice built here.
+
+// ── Phase 0b: per-function statement-list capture ──────────────────
+//
+// As each function body is parsed, guarded hooks in the gen_* walk
+// append a flat statement list into g_bck. Each record is a single
+// tab-delimited line:
+//
+//   <kind> \t <wname> \t <reads> \t <line> \t <depth>
+//
+//   kind   — let | assign | ret | expr | block | endblock
+//   wname  — the binding written (let/assign); for a `block` marker
+//            the block's kind (Phase 0c — see below); else empty
+//   reads  — space-separated identifiers read by the statement;
+//            for a `block` marker, the controlling condition's reads
+//   line   — 1-based source line
+//   depth  — block-nesting depth (function body is depth 1)
+//
+// Records are newline-separated. The capture is inert unless
+// --borrowck is set, and never emits IR, so the bootstrap fixed point
+// is unaffected.
+//
+// Phase 0c — block kinds. Every `block` row carries, in its wname
+// field, the kind of `{` that opened it, so the analyze walk can tell
+// a back-edge from a forward join without re-deriving control flow:
+//
+//   cond-then  — the then-arm of a `?`            (forward join)
+//   cond-else  — the else-arm of a `?`            (forward join)
+//   match-arm  — one arm of a `??` match          (forward join)
+//   loop       — the body of a `~` while-loop     (back-edge, fixpoint)
+//   foreach    — the body of a `~ x : T xs` loop  (back-edge, fixpoint)
+//   plain      — function body / defer / bare `{ }` block-expr
+//
+// Phase 0d turns this tagged list into the lattice-threading walk.
+//
+// Known Phase 0 imprecision (refined in Phase 1): a closure literal's
+// body is parsed through the same gen_block_ret path, so its
+// statements land inline in the enclosing function's list — and a
+// bare closure literal used directly as a `?`/`??` arm has its body
+// block tagged with that arm's kind rather than `plain`. Harmless
+// while there are no rules; Phase 1 must segregate closure scopes.
+
+// Reset the per-function capture state. Called at function entry.
+@ bck_fn_begin → v {
+    ? != g_borrowck 0 {
+        ( nurl_sym_def g_bck `stmts` `` )
+        ( nurl_sym_def g_bck `reads` `` )
+        ( nurl_sym_def g_bck `pending_kind` `` )
+        = g_bck_depth 0
+    } {}
+}
+
+// Note that the current statement reads identifier `name`. Hooked
+// into gen_ident, so it fires for every value-position identifier.
+@ bck_note_read s name → v {
+    ? != g_borrowck 0 {
+        : s cur ( nurl_sym_get g_bck `reads` )
+        ( nurl_sym_def g_bck `reads`
+            ? == 0 ( nurl_str_len cur ) name ( nurl_str_cat3 cur ` ` name ) )
+    } {}
+}
+
+// Append one statement record, then clear the read accumulator so the
+// next statement starts fresh.
+@ bck_record s kind s wname i line → v {
+    ? != g_borrowck 0 {
+        : s reads ( nurl_sym_get g_bck `reads` )
+        : s head ( nurl_str_cat4 kind `\t` wname `\t` )
+        : s body ( nurl_str_cat4 head reads `\t` ( nurl_str_int line ) )
+        : s rec ( nurl_str_cat3 body `\t` ( nurl_str_int g_bck_depth ) )
+        : s cur ( nurl_sym_get g_bck `stmts` )
+        ( nurl_sym_def g_bck `stmts`
+            ? == 0 ( nurl_str_len cur ) rec ( nurl_str_cat3 cur `\n` rec ) )
+        ( nurl_sym_def g_bck `reads` `` )
+    } {}
+}
+
+// ── Phase 0c: block-kind tagging ───────────────────────────────────
+//
+// A bare `block` row says "a `{` opened here" but not WHAT kind of
+// block — and a sound analysis must tell a `~`-loop body (a back-edge
+// the lattice has to iterate to a fixpoint) apart from a `?`/`??` arm
+// (a forward join). gen_cond / gen_loop / gen_foreach / gen_match each
+// arm a `pending_kind` slot just before they invoke a block parser;
+// the next bck_block_enter consumes it into the `block` row's wname
+// field, then disarms the slot. A block parser reached with no armed
+// kind (function body, defer block, bare `{ }` block-expr) records
+// `plain`.
+//
+// The slot is one-shot: gen_cond/gen_match also disarm it after their
+// arms so a bare-expression arm (which opens no block) cannot leak its
+// kind onto an unrelated sibling block. gen_loop/gen_foreach need no
+// disarm — their body parser always opens a block, always consuming.
+@ bck_set_block_kind s kind → v {
+    ? != g_borrowck 0 { ( nurl_sym_def g_bck `pending_kind` kind ) } {}
+}
+
+// Block-boundary markers. enter records a `block` row (carrying any
+// pending reads — i.e. the controlling `?`/`~`/`??` condition — in the
+// reads field, and the armed block kind in the wname field) then
+// descends a level; exit ascends then records `endblock`.
+@ bck_block_enter i line → v {
+    ? != g_borrowck 0 {
+        : s kind ( nurl_sym_get g_bck `pending_kind` )
+        ( bck_record `block`
+            ? == 0 ( nurl_str_len kind ) `plain` kind
+            line )
+        ( nurl_sym_def g_bck `pending_kind` `` )
+        = g_bck_depth + g_bck_depth 1
+    } {}
+}
+
+@ bck_block_exit → v {
+    ? != g_borrowck 0 {
+        ? > g_bck_depth 0 { = g_bck_depth - g_bck_depth 1 } {}
+        ( bck_record `endblock` `` 0 )
+    } {}
+}
+
+// borrowck_fn_end: called from gen_fn_decl_concrete once a function
+// body is fully parsed. Phase 0b — the statement list is built but
+// not yet consumed; Phase 0c/0d grow this into CFG construction +
+// the lattice-threading analyze walk.
+@ borrowck_fn_end s fname → v {
+    ? == g_borrowck 0 {} {}
+}
+
 // ── Statement ──────────────────────────────────────────────────────
 
 @ gen_stmt i lex i syms i cg → s {
@@ -3081,11 +3448,19 @@
         g_dbg_current_subprogram ) }
     {}
     : i tt ( nurl_lex_type lex )
+    : i bck_line ( nurl_lex_line lex )
     ? == tt TT_COLON ( gen_let_or_struct lex syms cg )
     ? == tt TT_EQ ( gen_assign lex syms cg )
     ? == tt TT_TILDE ( gen_loop lex syms cg )
     ? == tt TT_SEMICOL ( gen_defer lex syms cg )
-    ( gen_expr lex syms cg )
+    {  // Bare expression in statement position. Record a `call`-shaped
+       // statement only for a parenthesised call `( fn ... )`; `?` / `??`
+       // control flow is captured by the gen_block_ret depth markers
+       // instead, so it is not double-recorded here.
+        : s bck_ev ( gen_expr lex syms cg )
+        ? == tt TT_LPAREN { ( bck_record `expr` `` bck_line ) } {}
+        bck_ev
+    }
 }
 
 // Soft check for the docs/GOTCHAS.md §3 pattern: a `:` binding declares
@@ -3111,6 +3486,8 @@
 }
 
 @ gen_let_or_struct i lex i syms i cg → s {
+    // Borrow checker: source line of the `:` token, for the record.
+    : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
     // Check for optional ~ (mutable) token
     : b had_mutability_check | == ( nurl_lex_type lex ) TT_TILDE ( is_type_start ( nurl_lex_type lex ) )
@@ -3137,6 +3514,8 @@
         ( nurl_sym_def syms `__last_closure_byref__` `` )
         : s val ( gen_expr lex syms cg )
         : s vt ( nurl_get_last_type )
+        // Borrow checker: record this binding (inference path).
+        ( bck_record `let` name bck_line )
         : b rhs_is_owned_call != 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_owned__` ) )
         // Propagate the closure-byref flag from the RHS onto the binding
         // so gen_ret / future use-site checks can see it (docs/GOTCHAS.md
@@ -3151,7 +3530,7 @@
         ( nurl_print `  store ` ) ( nurl_print vt ) ( nurl_print ` ` )
         ( nurl_print val ) ( nurl_print `, ` ) ( nurl_print vt )
         ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
-        ( dbg_declare_local name ptr vt ( nurl_lex_line lex ) 0 )
+        ( dbg_declare_local name ptr vt ( nurl_lex_line lex ) 0 syms )
         ( nurl_sym_def syms name vt )
         ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
         // Only mark mutability if explicitly specified with ~
@@ -3258,6 +3637,8 @@
                 ( nurl_sym_def syms `__last_closure_byref__` `` )
                 : s val ( gen_expr lex syms cg )
                 : s vt ( nurl_get_last_type )
+                // Borrow checker: record this binding (typed path).
+                ( bck_record `let` name bck_line )
                 : b rhs_is_owned_call != 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_owned__` ) )
                 // Propagate closure-byref flag (item 8 escape detection).
                 ? ( seq ( nurl_sym_get syms `__last_closure_byref__` ) `1` )
@@ -3279,7 +3660,7 @@
                 ( nurl_print `  store ` ) ( nurl_print ptype ) ( nurl_print ` ` )
                 ( nurl_print store_val ) ( nurl_print `, ` ) ( nurl_print ptype )
                 ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
-                ( dbg_declare_local name ptr ptype ( nurl_lex_line lex ) 0 )
+                ( dbg_declare_local name ptr ptype ( nurl_lex_line lex ) 0 syms )
                 ( nurl_sym_def syms name ptype )
                 ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
                 // Only mark mutability if explicitly specified with ~
@@ -3321,6 +3702,8 @@
 }
 
 @ gen_assign i lex i syms i cg → s {
+    // Borrow checker: source line of the `=` token.
+    : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
     // Field store: = . obj field val
     ? == ( nurl_lex_type lex ) TT_DOT
@@ -3365,6 +3748,8 @@
         ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) ptr )
         ? lhs_is_owned_str { ( nurl_sym_def syms `__last_call_ret_owned__` `` ) } {}
         : s val ( gen_expr lex syms cg )
+        // Borrow checker: record this assignment.
+        ( bck_record `assign` name bck_line )
         : b rhs_is_owned_call & lhs_is_owned_str
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
         ? rhs_is_owned_call
@@ -4067,18 +4452,40 @@
     ? == ( nurl_str_get agg_ty 0 ) 37
     { = cur_sname ( nurl_str_slice agg_ty 1 - ( nurl_str_len agg_ty ) 1 ) }
     {}
+    // Closure-escape (docs/GOTCHAS.md item 5/8): track whether any field
+    // value is a closure that captures a stack binding by pointer —
+    // either a closure literal (`__last_closure_byref__`) or a binding
+    // already tagged `<name>__captures_byref`. If so, the whole
+    // aggregate inherits the taint so `gen_let_or_struct` / `gen_ret`
+    // see it; otherwise wrapping a byref closure in a struct would
+    // silently defeat the `^`-return + escape-call checks.
+    : ~ b agg_has_byref F
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         ? != 0 g_auto_drop_strings
         { ( nurl_sym_def syms `__last_call_ret_owned__` `` )
             ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
         }
         {}
+        // Reset the byref + ident-name side-channels so the post-gen_expr
+        // check observes only what THIS field expression sets.
+        ( nurl_sym_def syms `__last_closure_byref__` `` )
+        ( nurl_sym_def syms `__last_ident_name__` `` )
         // Snapshot whether this field expr is a slice literal before gen_expr
         // consumes the token. Slice literals don't go through gen_call so
         // `__last_call_ret_owned__` is never set for them.
         : b fld_is_slice_lit == ( nurl_lex_type lex ) TT_LBRACK
         : s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
+        // Field is a byref-capturing closure if gen_closure_expr just set
+        // the flag (closure literal in field position) OR the field named
+        // a binding previously tagged `<name>__captures_byref`.
+        ? ( seq ( nurl_sym_get syms `__last_closure_byref__` ) `1` )
+        { = agg_has_byref T }
+        { : s fld_id ( nurl_sym_get syms `__last_ident_name__` )
+            ? & != 0 ( nurl_str_len fld_id )
+                ( seq ( nurl_sym_get syms ( nurl_str_cat fld_id `__captures_byref` ) ) `1` )
+            { = agg_has_byref T }
+            {} }
         : s ret_owned ( nurl_sym_get syms `__last_call_ret_owned__` )
         : b is_str_fresh & ( seq fty `i8*` ) ( seq ret_owned `str` )
         : b is_slice_fresh & ( mem_is_slice_ty fty ) | fld_is_slice_lit ( seq ret_owned `1` )
@@ -4399,6 +4806,14 @@
         { ( nurl_sym_def syms `__last_agg_owned_fields__` `` ) }
     }
     {}
+    // Closure-escape: publish the aggregate-level byref taint. A struct
+    // holding a byref-capturing closure must, when bound or returned,
+    // be treated exactly like a bare byref closure — `gen_let_or_struct`
+    // copies `__last_closure_byref__` onto `<name>__captures_byref`, and
+    // `gen_ret` consults it directly for `^ @ T { ... }`. Composes
+    // through nesting: an outer aggregate's field loop sees an inner
+    // aggregate's published flag the same way.
+    ( nurl_sym_def syms `__last_closure_byref__` ? agg_has_byref `1` `` )
     result
 }
 
@@ -5916,6 +6331,9 @@
                         ( nurl_sym_def syms
                         ( nurl_str_cat3 mangled `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__type` ) )
                         flt )
+                        ( nurl_sym_def syms
+                        ( nurl_str_cat3 mangled `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__name` ) )
+                        fname )
                     }
                     {}
                     ? != first 0
@@ -5926,6 +6344,7 @@
                 ( nurl_print ` }\n\n` )
                 ( nurl_sym_def syms mangled ( nurl_str_cat `%` mangled ) )
                 ( nurl_sym_def syms ( nurl_str_cat mangled `__is_type` ) `1` )
+                ( nurl_sym_def syms ( nurl_str_cat mangled `__field_count` ) ( nurl_str_int fidx ) )
             } {}
         } {}
     } {}
@@ -6020,6 +6439,8 @@
 
 @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_cg_reset cg )
+    // Borrow checker: start a fresh per-function statement list.
+    ( bck_fn_begin )
     // Snapshot the lex position for DWARF DISubprogram.line / scopeLine
     // before we consume any tokens — by the time we reach the `define`
     // emit, the lexer has advanced past the param list and `→`, so a
@@ -6202,6 +6623,10 @@
     = g_dbg_current_loc 0
     ( emit_str_globals base_str g_str_idx )
     ( emit_closure_globals )
+    // Borrow checker (BORROW.md): the function body is fully parsed —
+    // run the analysis pass before the scope is popped. No-op unless
+    // --borrowck is set; never emits IR.
+    ( borrowck_fn_end fname )
     // Snapshot owned-return flags BEFORE pop: nurl_sym_get returns a pointer
     // into the current scope's entry, which nurl_sym_pop then frees.
     : i fn_ret_owned_flag ? != 0 ( nurl_str_len ( nurl_sym_get syms `__fn_ret_owned__` ) ) 1 0
@@ -6395,6 +6820,9 @@
             //   sname__fname__type  → LLVM type string (by name)
             //   sname__idx_N__type  → LLVM type string (by index, used by
             //                          Phase 2C struct-field drop for slices)
+            //   sname__idx_N__name  → field name (used by DWARF Phase 6
+            //                          composite-type emission to label
+            //                          each !DIDerivedType DW_TAG_member)
             ( nurl_sym_def syms
             ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__idx` ) ) )
             ( nurl_str_int fidx ) )
@@ -6404,6 +6832,9 @@
             ( nurl_sym_def syms
             ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__type` ) )
             flt )
+            ( nurl_sym_def syms
+            ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__name` ) )
+            fname )
         }
         {}
         ? != first 0
@@ -6416,6 +6847,7 @@
     // Register struct name so it is recognised as a named type in enum payloads etc.
     ( nurl_sym_def syms sname ( nurl_str_cat `%` sname ) )
     ( nurl_sym_def syms ( nurl_str_cat sname `__is_type` ) `1` )
+    ( nurl_sym_def syms ( nurl_str_cat sname `__field_count` ) ( nurl_str_int fidx ) )
 }
 
 @ gen_const_decl s ty_tok b is_mutable i lex i syms → v {
@@ -8131,14 +8563,24 @@
 // ── Entry point ────────────────────────────────────────────────────
 
 @ main → v {
-    // CLI: `nurlc [--g] <file.nu>`. The single optional `--g` (or
-    // `-g`) toggles DWARF emission; everything else is the source
-    // path. Driver script nurl.sh forwards --debug → --g.
+    // CLI: `nurlc [--g] [--borrowck] <file.nu>`. Optional flags in any
+    // order; the lone non-flag argument is the source path.
+    //   --g / -g     toggle DWARF emission (nurl.sh forwards --debug)
+    //   --borrowck   run the borrow-checker analysis pass (BORROW.md)
     : ~ s path ``
-    ? & == ( nurl_argc ) 3 | ( seq ( nurl_argv 1 ) `--g` ) ( seq ( nurl_argv 1 ) `-g` )
-    { = g_dbg_enabled 1 = path ( nurl_argv 2 ) }
-    { ? == ( nurl_argc ) 2 { = path ( nurl_argv 1 ) }
-        { ( nurl_eprintln `usage: nurlc [--g] <file.nu>` ) ( nurl_exit 1 ) } }
+    : ~ i ai 1
+    ~ < ai ( nurl_argc ) {
+        : s a ( nurl_argv ai )
+        ? | ( seq a `--g` ) ( seq a `-g` )
+        { = g_dbg_enabled 1 }
+        { ? ( seq a `--borrowck` )
+            { = g_borrowck 1 }
+            { = path a } }
+        = ai + ai 1
+    }
+    ? == 0 ( nurl_str_len path )
+    { ( nurl_eprintln `usage: nurlc [--g] [--borrowck] <file.nu>` ) ( nurl_exit 1 ) }
+    {}
     : s src ( nurl_read_file path )
     : s marker ( nurl_str_cat `@@nurl-disable` `-autodrop-strings@@` )
     ? >= ( nurl_str_find src marker ) 0
@@ -8162,6 +8604,7 @@
     = g_closure_emit_base 0
     = g_type_emit_base 0
     = g_vis_syms ( nurl_sym_new )
+    ? != g_borrowck 0 { = g_bck ( nurl_sym_new ) } {}
     ( vis_set_current_src_file path )
     ( emit_header )
     ? != g_dbg_enabled 0 { ( dbg_init path ) } {}
