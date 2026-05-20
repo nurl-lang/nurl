@@ -85,6 +85,41 @@ borrow checker closes, ranked by how often real NURL code hits them:
    through one breaks an invariant the other relies on. NURL has no
    notion of exclusive access at all.
 
+### I.2a  Empirical confirmation (2026-05-20)
+
+The bug classes above are not theoretical. Each was reproduced with a
+minimal ordinary-looking NURL program, compiled with the current
+`nurlc`, and run under AddressSanitizer:
+
+| # | Repro shape | `nurlc` | Result |
+|---|---|---|---|
+| 1 | own `Vec`, pass to a `vec_free`-ing callee, then `vec_get` it | `rc=0`, no diag | ASan **heap-use-after-free** |
+| 2 | `: (Vec i) b a` alias, then `vec_free` both | `rc=0`, no diag | ASan **heap-use-after-free** (2nd free) |
+| 3 | closure captures `: ~` local, wrapped in a struct, struct returned | `rc=0`, **no warning** | silent garbage — closure read a dead stack frame (`1313` not `4242`) |
+| 4 | `*i p` from `vec_data`, `vec_free` the Vec, deref `p` | `rc=0`, no diag | ASan **heap-use-after-free** |
+
+Two observations sharpen the case:
+
+- **Repro 3 is the worst case.** The escape went through a struct
+  wrapper, so the five-shape `__captures_byref` check never fired —
+  no warning at all — and the corruption is *silent* (a wrong value,
+  not a crash). This is precisely the "vibes-based memory model"
+  failure mode, and it is reachable with completely idiomatic code.
+- **The auto-drop double-free is partly self-defended.** A plain
+  `: s b a` string alias did *not* double-free, because the compiler
+  only registers a drop for a *fresh* allocation — `b` is not fresh,
+  so it is untracked. Conservatism saves the auto-drop path. It does
+  **nothing** for explicit `vec_free` / `free` (repro 2) and nothing
+  for the use-after-free direction (an untracked alias read after
+  the tracked owner is freed).
+- **Side-finding (separate concern):** `nurlc` does not emit the
+  `sanitize_address` function attribute, so clang's ASan pass skips
+  every NURL-generated function. `run_san_tests.sh` therefore only
+  catches faults whose faulting access lands *inside* `runtime.c`
+  (repros 1, 2, 4). A fault in NURL-generated code (repro 3) is
+  invisible to the current sanitizer harness. Worth a roadmap item
+  independent of borrow checking.
+
 ### I.3  Is this worth doing? — honest scoping
 
 `critic.md` §4 is blunt: NURL's model is "approximately C-with-RAII",
