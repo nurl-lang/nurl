@@ -1941,6 +1941,9 @@
 // ── Conditional ? cond then else ──────────────────────────────────
 
 @ gen_cond i lex i syms i cg → s {
+    // Borrow checker (Phase 0d): source line of the `?`, for the
+    // `cond`/`endcond` structural markers bracketing this conditional.
+    : i bck_cline ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
     : s cv ( gen_expr lex syms cg )
     : s ct ( nurl_get_last_type )
@@ -1970,7 +1973,10 @@
     } {}
     ( nurl_sym_def syms `__cur_lbl__` lt )
     = g_did_ret 0
-    // Borrow checker (Phase 0c): the then-arm `{` is a forward join.
+    // Borrow checker: open the conditional (Phase 0d) — the `cond` row
+    // carries the just-parsed condition's reads — then arm the then-arm
+    // `{` as a forward join (Phase 0c).
+    ( bck_record `cond` `` bck_cline )
     ( bck_set_block_kind `cond-then` )
     : s tv ( gen_expr lex syms cg )
     : s tt2 ( nurl_get_last_type )
@@ -2017,9 +2023,11 @@
         ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
     } {}
     ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
-    // Borrow checker (Phase 0c): disarm — a block-less else-arm would
-    // otherwise leak `cond-else` onto the next sibling block.
+    // Borrow checker: disarm — a block-less else-arm would otherwise
+    // leak `cond-else` onto the next sibling block (Phase 0c) — then
+    // close the conditional with its `endcond` marker (Phase 0d).
     ( bck_set_block_kind `` )
+    ( bck_record `endcond` `` bck_cline )
     ( emit ( nurl_str_cat lend `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lend )
     // The whole conditional only "did_ret" if BOTH branches did. If either
@@ -2109,6 +2117,9 @@
 }
 
 @ gen_match i lex i syms i cg → s {
+    // Borrow checker (Phase 0d): source line of the `??`, for the
+    // `match`/`endmatch` structural markers bracketing this match.
+    : i bck_mline ( nurl_lex_line lex )
     ( nurl_lex_advance lex )  // consume '??'
 
     // Peek the variable name (if any) BEFORE gen_expr consumes it, so we
@@ -2156,6 +2167,13 @@
     // Exhaustive match tracking
     : s seen_variants ``
     : i has_wildcard 0
+
+    // Borrow checker (Phase 0d): open the match — the `match` row
+    // carries the scrutinee's reads. `endmatch` closes it after the
+    // arm loop. The arms in between are `match-arm` blocks (braced
+    // arms) interleaved with block-less bare arms; the bracket lets
+    // the analyze walk scope them unambiguously.
+    ( bck_record `match` `` bck_mline )
 
     // Process all match arms
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
@@ -2642,9 +2660,11 @@
 
     ( expect lex TT_RBRACE )  // expect '}'
 
-    // Borrow checker (Phase 0c): disarm — a trailing block-less arm
-    // would otherwise leak `match-arm` onto the next sibling block.
+    // Borrow checker: disarm — a trailing block-less arm would
+    // otherwise leak `match-arm` onto the next sibling block (Phase
+    // 0c) — then close the match with its `endmatch` marker (0d).
     ( bck_set_block_kind `` )
+    ( bck_record `endmatch` `` bck_mline )
 
     // Exhaustive match check
     : i mtype_len ( nurl_str_len match_type )
@@ -3318,10 +3338,14 @@
 //   <kind> \t <wname> \t <reads> \t <line> \t <depth>
 //
 //   kind   — let | assign | ret | expr | block | endblock
+//            | cond | endcond | match | endmatch  (Phase 0d markers)
 //   wname  — the binding written (let/assign); for a `block` marker
 //            the block's kind (Phase 0c — see below); else empty
-//   reads  — space-separated identifiers read by the statement;
-//            for a `block` marker, the controlling condition's reads
+//   reads  — space-separated identifiers read by the statement; for a
+//            `cond`/`match` marker the controlling condition / match
+//            scrutinee reads; for a `loop`/`foreach` block the loop
+//            condition / iterated-slice reads; empty for `cond-then` /
+//            `cond-else` / `match-arm` / `plain` block rows
 //   line   — 1-based source line
 //   depth  — block-nesting depth (function body is depth 1)
 //
@@ -3340,7 +3364,18 @@
 //   foreach    — the body of a `~ x : T xs` loop  (back-edge, fixpoint)
 //   plain      — function body / defer / bare `{ }` block-expr
 //
-// Phase 0d turns this tagged list into the lattice-threading walk.
+// Phase 0d — structural markers + the analyze walk. `?` and `??`
+// group several arm-blocks (and bare, block-less arms), and plain
+// block adjacency cannot say which arms belong to which construct —
+// `? a {t} bare` followed by `? b bare {e}` puts a lone `cond-then`
+// next to a lone `cond-else` that belong to different `?`s. gen_cond
+// and gen_match therefore bracket each construct with explicit
+// `cond`/`endcond` and `match`/`endmatch` rows. These do NOT move the
+// block-depth counter (only `block`/`endblock` do); they are a second,
+// independently balanced bracket system the analyze walk uses to scope
+// a conditional / match and find its direct-child arm blocks while
+// skipping nested constructs. bck_analyze then threads the ownership
+// lattice through this tree.
 //
 // Known Phase 0 imprecision (refined in Phase 1): a closure literal's
 // body is parsed through the same gen_block_ret path, so its
@@ -3426,12 +3461,352 @@
     } {}
 }
 
+// ── Phase 0d: ownership lattice + the analyze walk ─────────────────
+//
+// The lattice each binding's state moves through:
+//
+//   Uninit < Owned < { Moved, BorrowedShared, BorrowedMut } < Invalid
+//
+// with MaybeMoved sitting above Owned/Moved as the join of a value
+// moved on one control-flow path and live on another. The join
+// (bck_join) is the least upper bound used at every forward merge;
+// Uninit is the bottom element, Invalid the top.
+//
+// Phase 0d lands the lattice + the structured analyze walk and
+// nothing else. The walk threads a per-binding state map through the
+// CFG — sequential flow, `?`/`??` fork-and-join, `~` loop back-edge
+// to a fixpoint — but carries NO rules: it transitions a binding only
+// on its `let` (Uninit -> Owned) and emits zero diagnostics. Phases
+// 1+ hang move / alias / escape rules off this walk.
+: i BCK_UNINIT 0
+: i BCK_OWNED 1
+: i BCK_MOVED 2
+: i BCK_BORROWED_SHARED 3
+: i BCK_BORROWED_MUT 4
+: i BCK_MAYBE_MOVED 5
+: i BCK_INVALID 6
+
+// Lattice join — least upper bound of two per-binding states meeting
+// at a control-flow merge point.
+@ bck_join i a i b → i {
+    ? == a b { ^ a } {}
+    ? | == a BCK_INVALID == b BCK_INVALID { ^ BCK_INVALID } {}
+    ? == a BCK_UNINIT { ^ b } {}
+    ? == b BCK_UNINIT { ^ a } {}
+    // Owned / Moved / MaybeMoved family: any disagreement collapses to
+    // MaybeMoved — a conditional move, which a later phase rejects on
+    // use. Borrow-state disagreements are not produced until a later
+    // phase; treat them conservatively as the top element.
+    : b af | | == a BCK_OWNED == a BCK_MOVED == a BCK_MAYBE_MOVED
+    : b bf | | == b BCK_OWNED == b BCK_MOVED == b BCK_MAYBE_MOVED
+    ? & af bf { ^ BCK_MAYBE_MOVED } {}
+    BCK_INVALID
+}
+
+// ── Per-binding state — a space-separated `name=digit` map ─────────
+// The analysis analogue of the mem_* owned-resource lists, but it
+// records a lattice digit per binding (not mere membership) and is
+// forked / joined at branches rather than scoped on a stack.
+
+// Name part of a `name=digit` token (all but the last 2 chars).
+// Every path returns a fresh owned string so callers free it once.
+@ bck_tok_name s tok → s {
+    : i len ( nurl_str_len tok )
+    ? < len 2 { ^ ( nurl_str_cat tok `` ) } {}
+    ( nurl_str_slice tok 0 - len 2 )
+}
+
+// Lattice digit of a `name=digit` token — its last character.
+@ bck_tok_val s tok → i {
+    : i len ( nurl_str_len tok )
+    ? < len 1 { ^ BCK_UNINIT } {}
+    - ( nurl_str_get tok - len 1 ) 48
+}
+
+// State lookup — BCK_UNINIT when the binding is absent.
+@ bck_st_get s state s name → i {
+    : ~ s rest state
+    ~ != 0 ( nurl_str_len rest ) {
+        : s tok ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ( seq ( bck_tok_name tok ) name ) { ^ ( bck_tok_val tok ) } {}
+    }
+    BCK_UNINIT
+}
+
+// State update — a new state with `name` set to `val` (any prior
+// entry dropped; the binding lands at the end). Every `= out ...`
+// builds a fresh string rather than aliasing the loop-local `tok`,
+// which would be a double-free once both are auto-dropped.
+@ bck_st_set s state s name i val → s {
+    : ~ s out ( nurl_str_cat `` `` )
+    : ~ s rest state
+    ~ != 0 ( nurl_str_len rest ) {
+        : s tok ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ( seq ( bck_tok_name tok ) name ) {} {
+            = out ? == 0 ( nurl_str_len out )
+                ( nurl_str_cat tok `` )
+                ( nurl_str_cat3 out ` ` tok )
+        }
+    }
+    : s nt ( nurl_str_cat3 name `=` ( nurl_str_int val ) )
+    ? == 0 ( nurl_str_len out ) { ^ nt } {}
+    ( nurl_str_cat3 out ` ` nt )
+}
+
+// State join — least upper bound of two states, binding by binding.
+// A binding present on only one side joins against BCK_UNINIT on the
+// other (and bck_join of UNINIT with x is x, so it carries through).
+// `out` starts fresh and every `= out ...` builds a fresh string —
+// aliasing a loop-local would double-free at auto-drop.
+@ bck_join_state s a s b → s {
+    : ~ s out ( nurl_str_cat `` `` )
+    : ~ s rest a
+    ~ != 0 ( nurl_str_len rest ) {
+        : s tok ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s nm ( bck_tok_name tok )
+        : i vj ( bck_join ( bck_tok_val tok ) ( bck_st_get b nm ) )
+        : s nt ( nurl_str_cat3 nm `=` ( nurl_str_int vj ) )
+        = out ? == 0 ( nurl_str_len out )
+            ( nurl_str_cat nt `` )
+            ( nurl_str_cat3 out ` ` nt )
+    }
+    : ~ s rest2 b
+    ~ != 0 ( nurl_str_len rest2 ) {
+        : s tok ( str_first_word rest2 )
+        = rest2 ( str_skip_word rest2 )
+        ? == BCK_UNINIT ( bck_st_get a ( bck_tok_name tok ) ) {
+            = out ? == 0 ( nurl_str_len out )
+                ( nurl_str_cat tok `` )
+                ( nurl_str_cat3 out ` ` tok )
+        } {}
+    }
+    out
+}
+
+// ── Record access ─────────────────────────────────────────────────
+// bck_explode splits the captured statement list into individually
+// addressable rows r0..r<n-1> on g_bck and records the count in `rn`.
+
+@ bck_rec i idx → s {
+    ( nurl_sym_get g_bck ( nurl_str_cat `r` ( nurl_str_int idx ) ) )
+}
+
+// idx-th tab-delimited field of a record (0=kind .. 4=depth).
+@ bck_field s rec i idx → s {
+    : i len ( nurl_str_len rec )
+    : ~ i start 0
+    : ~ i fno 0
+    : ~ i pos 0
+    ~ < pos len {
+        ? == ( nurl_str_get rec pos ) 9 {
+            ? == fno idx { ^ ( nurl_str_slice rec start - pos start ) } {}
+            = fno + fno 1
+            = start + pos 1
+        } {}
+        = pos + pos 1
+    }
+    ? == fno idx { ^ ( nurl_str_slice rec start - len start ) } {}
+    // No such field — return a fresh empty string (consistent owned
+    // return so callers free the result exactly once).
+    ( nurl_str_cat `` `` )
+}
+
+@ bck_explode → i {
+    : s txt ( nurl_sym_get g_bck `stmts` )
+    : i len ( nurl_str_len txt )
+    : ~ i start 0
+    : ~ i n 0
+    : ~ i pos 0
+    ~ < pos len {
+        ? == ( nurl_str_get txt pos ) 10 {
+            ( nurl_sym_def g_bck ( nurl_str_cat `r` ( nurl_str_int n ) )
+                ( nurl_str_slice txt start - pos start ) )
+            = n + n 1
+            = start + pos 1
+        } {}
+        = pos + pos 1
+    }
+    ? > len start {
+        ( nurl_sym_def g_bck ( nurl_str_cat `r` ( nurl_str_int n ) )
+            ( nurl_str_slice txt start - len start ) )
+        = n + n 1
+    } {}
+    ( nurl_sym_def g_bck `rn` ( nurl_str_int n ) )
+    n
+}
+
+// Index of the close marker matching the open marker at `idx`. The
+// three bracket systems (block/endblock, cond/endcond, match/endmatch)
+// are each independently balanced, so counting only the requested
+// pair steps over any nested constructs of the other two kinds.
+@ bck_match_close i idx s openk s closek → i {
+    : i n ( nurl_str_to_int ( nurl_sym_get g_bck `rn` ) )
+    : ~ i d 1
+    : ~ i j + idx 1
+    ~ & < j n > d 0 {
+        : s k ( bck_field ( bck_rec j ) 0 )
+        ? ( seq k openk ) { = d + d 1 } {}
+        ? ( seq k closek ) { = d - d 1 } {}
+        ? == d 0 { ^ j } {}
+        = j + j 1
+    }
+    j
+}
+
+// ── The analyze walk ──────────────────────────────────────────────
+// bck_walk_seq threads `state` through the records in [lo, hi):
+// sequential rows update the state; `?`/`??` fork the entry state
+// across arms and join the results; `~` loops re-enter their body to
+// a fixpoint. It returns the state holding at `hi`.
+@ bck_walk_seq i lo i hi s state → s {
+    : ~ s st ( nurl_str_cat state `` )
+    : ~ i p lo
+    ~ < p hi {
+        : s rec ( bck_rec p )
+        : s kind ( bck_field rec 0 )
+        : ~ b done F
+        ? ( seq kind `let` ) {
+            = st ( bck_st_set st ( bck_field rec 1 ) BCK_OWNED )
+            = p + p 1
+            = done T
+        } {}
+        ? & ! done ( seq kind `cond` ) {
+            : i ec ( bck_match_close p `cond` `endcond` )
+            = st ( bck_handle_cond p ec st )
+            = p + ec 1
+            = done T
+        } {}
+        ? & ! done ( seq kind `match` ) {
+            : i em ( bck_match_close p `match` `endmatch` )
+            = st ( bck_handle_match p em st )
+            = p + em 1
+            = done T
+        } {}
+        ? & ! done ( seq kind `block` ) {
+            : i eb ( bck_match_close p `block` `endblock` )
+            : s bk ( bck_field rec 1 )
+            ? | ( seq bk `loop` ) ( seq bk `foreach` ) {
+                = st ( bck_loop + p 1 eb st )
+            } {
+                = st ( bck_walk_seq + p 1 eb st )
+            }
+            = p + eb 1
+            = done T
+        } {}
+        // assign / ret / expr / stray end-marker — no Phase 0d rule
+        ? ! done { = p + p 1 } {}
+    }
+    st
+}
+
+// `?` — walk the then-arm and the else-arm each from the conditional's
+// entry state, then join. A block-less (bare) arm contributes the
+// entry state unchanged. Nested `cond`/`match` inside a bare arm are
+// stepped over wholesale so their arm-blocks are not mistaken for this
+// conditional's arms.
+@ bck_handle_cond i ci i ec s state → s {
+    : ~ s s_then state
+    : ~ s s_else state
+    : ~ i j + ci 1
+    ~ < j ec {
+        : s rec ( bck_rec j )
+        : s k ( bck_field rec 0 )
+        : ~ b adv F
+        ? ( seq k `cond` ) {
+            = j + ( bck_match_close j `cond` `endcond` ) 1
+            = adv T
+        } {}
+        ? & ! adv ( seq k `match` ) {
+            = j + ( bck_match_close j `match` `endmatch` ) 1
+            = adv T
+        } {}
+        ? & ! adv ( seq k `block` ) {
+            : i eb ( bck_match_close j `block` `endblock` )
+            : s bk ( bck_field rec 1 )
+            ? ( seq bk `cond-then` )
+                { = s_then ( bck_walk_seq + j 1 eb state ) } {}
+            ? ( seq bk `cond-else` )
+                { = s_else ( bck_walk_seq + j 1 eb state ) } {}
+            = j + eb 1
+            = adv T
+        } {}
+        ? ! adv { = j + j 1 } {}
+    }
+    ( bck_join_state s_then s_else )
+}
+
+// `??` — walk each `match-arm` block from the match's entry state and
+// join them. `acc` starts at the entry state, which conservatively
+// covers any block-less bare arms (Phase 1 refines bare-arm
+// modelling). Nested constructs inside a bare arm are stepped over.
+@ bck_handle_match i mi i em s state → s {
+    : ~ s acc ( nurl_str_cat state `` )
+    : ~ i j + mi 1
+    ~ < j em {
+        : s rec ( bck_rec j )
+        : s k ( bck_field rec 0 )
+        : ~ b adv F
+        ? ( seq k `match` ) {
+            = j + ( bck_match_close j `match` `endmatch` ) 1
+            = adv T
+        } {}
+        ? & ! adv ( seq k `cond` ) {
+            = j + ( bck_match_close j `cond` `endcond` ) 1
+            = adv T
+        } {}
+        ? & ! adv ( seq k `block` ) {
+            : i eb ( bck_match_close j `block` `endblock` )
+            ? ( seq ( bck_field rec 1 ) `match-arm` )
+                { = acc ( bck_join_state acc ( bck_walk_seq + j 1 eb state ) ) } {}
+            = j + eb 1
+            = adv T
+        } {}
+        ? ! adv { = j + j 1 } {}
+    }
+    acc
+}
+
+// `~` loop — the body carries a back-edge, so re-enter it until the
+// state at the loop head stops changing (the join of the head state
+// with the body's exit state). The 16-iteration cap is a safety
+// bound; the height-7 lattice converges in far fewer.
+@ bck_loop i lo i hi s pre → s {
+    : ~ s head ( nurl_str_cat pre `` )
+    : ~ i iter 0
+    : ~ b done F
+    ~ & ! done < iter 16 {
+        : s post ( bck_walk_seq lo hi head )
+        : s merged ( bck_join_state head post )
+        // Copy `merged` into `head` — aliasing the loop-local `merged`
+        // would double-free it (iteration drop + function-exit drop).
+        ? ( seq merged head ) { = done T } { = head ( nurl_str_cat merged `` ) }
+        = iter + iter 1
+    }
+    head
+}
+
+// bck_analyze: consume the per-function statement list captured by
+// the gen_* hooks — explode it into addressable rows, then thread the
+// ownership lattice through the whole function from an empty state.
+// Phase 0d carries no rules, so this walks and emits nothing.
+@ bck_analyze → v {
+    : i n ( bck_explode )
+    // Walk from an empty state. n == 0 (no records) walks nothing.
+    : s final ( bck_walk_seq 0 n `` )
+    // `final` is the function's exit state; Phase 0d inspects it no
+    // further (no rules). Reference it in a void `?` so the body
+    // type-checks as `v` without a spurious unused binding.
+    ? != 0 ( nurl_str_len final ) {} {}
+}
+
 // borrowck_fn_end: called from gen_fn_decl_concrete once a function
-// body is fully parsed. Phase 0b — the statement list is built but
-// not yet consumed; Phase 0c/0d grow this into CFG construction +
-// the lattice-threading analyze walk.
+// body is fully parsed — runs the analyze walk over the captured
+// statement list. No-op when --borrowck is off.
 @ borrowck_fn_end s fname → v {
-    ? == g_borrowck 0 {} {}
+    ? == g_borrowck 0 {} { ( bck_analyze ) }
 }
 
 // ── Statement ──────────────────────────────────────────────────────
