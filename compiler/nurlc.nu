@@ -4241,18 +4241,40 @@
     ? == ( nurl_str_get agg_ty 0 ) 37
     { = cur_sname ( nurl_str_slice agg_ty 1 - ( nurl_str_len agg_ty ) 1 ) }
     {}
+    // Closure-escape (docs/GOTCHAS.md item 5/8): track whether any field
+    // value is a closure that captures a stack binding by pointer —
+    // either a closure literal (`__last_closure_byref__`) or a binding
+    // already tagged `<name>__captures_byref`. If so, the whole
+    // aggregate inherits the taint so `gen_let_or_struct` / `gen_ret`
+    // see it; otherwise wrapping a byref closure in a struct would
+    // silently defeat the `^`-return + escape-call checks.
+    : ~ b agg_has_byref F
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         ? != 0 g_auto_drop_strings
         { ( nurl_sym_def syms `__last_call_ret_owned__` `` )
             ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
         }
         {}
+        // Reset the byref + ident-name side-channels so the post-gen_expr
+        // check observes only what THIS field expression sets.
+        ( nurl_sym_def syms `__last_closure_byref__` `` )
+        ( nurl_sym_def syms `__last_ident_name__` `` )
         // Snapshot whether this field expr is a slice literal before gen_expr
         // consumes the token. Slice literals don't go through gen_call so
         // `__last_call_ret_owned__` is never set for them.
         : b fld_is_slice_lit == ( nurl_lex_type lex ) TT_LBRACK
         : s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
+        // Field is a byref-capturing closure if gen_closure_expr just set
+        // the flag (closure literal in field position) OR the field named
+        // a binding previously tagged `<name>__captures_byref`.
+        ? ( seq ( nurl_sym_get syms `__last_closure_byref__` ) `1` )
+        { = agg_has_byref T }
+        { : s fld_id ( nurl_sym_get syms `__last_ident_name__` )
+            ? & != 0 ( nurl_str_len fld_id )
+                ( seq ( nurl_sym_get syms ( nurl_str_cat fld_id `__captures_byref` ) ) `1` )
+            { = agg_has_byref T }
+            {} }
         : s ret_owned ( nurl_sym_get syms `__last_call_ret_owned__` )
         : b is_str_fresh & ( seq fty `i8*` ) ( seq ret_owned `str` )
         : b is_slice_fresh & ( mem_is_slice_ty fty ) | fld_is_slice_lit ( seq ret_owned `1` )
@@ -4573,6 +4595,14 @@
         { ( nurl_sym_def syms `__last_agg_owned_fields__` `` ) }
     }
     {}
+    // Closure-escape: publish the aggregate-level byref taint. A struct
+    // holding a byref-capturing closure must, when bound or returned,
+    // be treated exactly like a bare byref closure — `gen_let_or_struct`
+    // copies `__last_closure_byref__` onto `<name>__captures_byref`, and
+    // `gen_ret` consults it directly for `^ @ T { ... }`. Composes
+    // through nesting: an outer aggregate's field loop sees an inner
+    // aggregate's published flag the same way.
+    ( nurl_sym_def syms `__last_closure_byref__` ? agg_has_byref `1` `` )
     result
 }
 
