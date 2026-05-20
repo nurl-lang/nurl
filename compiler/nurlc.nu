@@ -391,6 +391,14 @@
 : i g_closure_emit_base 0  // Next func index to emit (watermark)
 : i g_type_emit_base 0  // Next type index to emit
 
+// ── Borrow-checker state (see BORROW.md) ─────────────────────────
+// g_borrowck is 1 when --borrowck is passed on the CLI. The borrow
+// checker is a diagnostic-only analysis pass: it never emits IR, so
+// a borrow-clean program produces byte-identical IR whether the flag
+// is on or off. All borrowck_* state below is untouched when the
+// flag is 0. Phase 0 (the analysis substrate) carries no rules yet.
+: i g_borrowck 0  // 1 when --borrowck passed on the CLI
+
 // ── DWARF debug-info state (see DWARF.md) ────────────────────────
 // All zero/empty when --g is OFF; emit helpers then produce IR that
 // is byte-identical to a pre-DWARF build. Toggled in main().
@@ -3239,6 +3247,26 @@
         {}
     }
     {}
+}
+
+// ── Borrow checker — analysis substrate (BORROW.md Phase 0) ─────────
+//
+// The borrow checker is a diagnostic-only pass: it inspects the
+// program and may emit `error:` / `warning:`, but it NEVER emits IR.
+// A borrow-clean program therefore compiles to byte-identical IR
+// whether --borrowck is on or off, and the bootstrap fixed point is
+// unaffected. Every entry point below is a no-op when g_borrowck is 0.
+//
+// Phase 0 lands the substrate only — there are no borrow rules yet,
+// so even with --borrowck on the pass emits nothing. Later phases
+// (move checking, alias/double-free, escape analysis) hang their
+// rules off the per-function CFG + ownership lattice built here.
+
+// borrowck_fn_end: called from gen_fn_decl_concrete once a function
+// body is fully parsed. Phase 0a stub — wired but inert; Phase 0c/0d
+// grow it into CFG construction + the lattice-threading analyze walk.
+@ borrowck_fn_end s fname → v {
+    ? == g_borrowck 0 {} {}
 }
 
 // ── Statement ──────────────────────────────────────────────────────
@@ -6410,6 +6438,10 @@
     = g_dbg_current_loc 0
     ( emit_str_globals base_str g_str_idx )
     ( emit_closure_globals )
+    // Borrow checker (BORROW.md): the function body is fully parsed —
+    // run the analysis pass before the scope is popped. No-op unless
+    // --borrowck is set; never emits IR.
+    ( borrowck_fn_end fname )
     // Snapshot owned-return flags BEFORE pop: nurl_sym_get returns a pointer
     // into the current scope's entry, which nurl_sym_pop then frees.
     : i fn_ret_owned_flag ? != 0 ( nurl_str_len ( nurl_sym_get syms `__fn_ret_owned__` ) ) 1 0
@@ -8346,14 +8378,24 @@
 // ── Entry point ────────────────────────────────────────────────────
 
 @ main → v {
-    // CLI: `nurlc [--g] <file.nu>`. The single optional `--g` (or
-    // `-g`) toggles DWARF emission; everything else is the source
-    // path. Driver script nurl.sh forwards --debug → --g.
+    // CLI: `nurlc [--g] [--borrowck] <file.nu>`. Optional flags in any
+    // order; the lone non-flag argument is the source path.
+    //   --g / -g     toggle DWARF emission (nurl.sh forwards --debug)
+    //   --borrowck   run the borrow-checker analysis pass (BORROW.md)
     : ~ s path ``
-    ? & == ( nurl_argc ) 3 | ( seq ( nurl_argv 1 ) `--g` ) ( seq ( nurl_argv 1 ) `-g` )
-    { = g_dbg_enabled 1 = path ( nurl_argv 2 ) }
-    { ? == ( nurl_argc ) 2 { = path ( nurl_argv 1 ) }
-        { ( nurl_eprintln `usage: nurlc [--g] <file.nu>` ) ( nurl_exit 1 ) } }
+    : ~ i ai 1
+    ~ < ai ( nurl_argc ) {
+        : s a ( nurl_argv ai )
+        ? | ( seq a `--g` ) ( seq a `-g` )
+        { = g_dbg_enabled 1 }
+        { ? ( seq a `--borrowck` )
+            { = g_borrowck 1 }
+            { = path a } }
+        = ai + ai 1
+    }
+    ? == 0 ( nurl_str_len path )
+    { ( nurl_eprintln `usage: nurlc [--g] [--borrowck] <file.nu>` ) ( nurl_exit 1 ) }
+    {}
     : s src ( nurl_read_file path )
     : s marker ( nurl_str_cat `@@nurl-disable` `-autodrop-strings@@` )
     ? >= ( nurl_str_find src marker ) 0
