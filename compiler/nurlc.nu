@@ -398,6 +398,10 @@
 // is on or off. All borrowck_* state below is untouched when the
 // flag is 0. Phase 0 (the analysis substrate) carries no rules yet.
 : i g_borrowck 0  // 1 when --borrowck passed on the CLI
+: i g_bck 0       // sym handle for the borrow checker's per-function
+                  //  data (statement list etc.); allocated in main()
+                  //  only when --borrowck is set
+: i g_bck_depth 0 // block-nesting depth during the statement walk
 
 // ── DWARF debug-info state (see DWARF.md) ────────────────────────
 // All zero/empty when --g is OFF; emit helpers then produce IR that
@@ -1020,6 +1024,8 @@
 }
 
 @ gen_ret i lex i syms i cg → s {
+    // Borrow checker: source line of the `^` token.
+    : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
     // GOTCHAS.md item 1: `^ ?? value { F e → {…} T m → {…} }` looks
     // like "return a match expression", but when ANY arm contains its
@@ -1055,6 +1061,8 @@
     { ( nurl_sym_def syms `__tail_call_pending__` `1` ) }
     {}
     : s val ( gen_expr lex syms cg )
+    // Borrow checker: record this return statement.
+    ( bck_record `ret` `` bck_line )
     // Defensive: clear any residual pending flag (gen_expr may have
     // taken a different path — e.g. a literal or operator — that
     // never reached gen_call to consume it).
@@ -1217,6 +1225,8 @@
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s name ( nurl_lex_val lex )
         ( nurl_lex_advance lex )
+        // Borrow checker: every value-position identifier is a read.
+        ( bck_note_read name )
         : s lt ( nurl_sym_get syms name )
         ( nurl_set_last_type ? == 0 ( nurl_str_len lt ) `i64` lt )
         : s ptr ( nurl_sym_get syms ( nurl_str_cat name `__ptr` ) )
@@ -2872,31 +2882,44 @@
 // ── Block expression { stmts... } ─────────────────────────────────
 
 @ gen_block_expr i lex i syms i cg → s {
+    : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
+    ( bck_block_enter bck_line )
     : s last `undef`
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         = last ( gen_stmt lex syms cg )
     }
     ( nurl_lex_advance lex )
+    ( bck_block_exit )
     last
 }
 
 @ gen_block_stmts i lex i syms i cg → v {
+    : i bck_line ( nurl_lex_line lex )
     ( expect lex TT_LBRACE )
+    ( bck_block_enter bck_line )
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         ( gen_stmt lex syms cg )
     }
     ( expect lex TT_RBRACE )
+    ( bck_block_exit )
 }
 
 // gen_block_ret: like gen_block_stmts but returns the last stmt value.
 @ gen_block_ret i lex i syms i cg → s {
+    : i bck_line ( nurl_lex_line lex )
     ( expect lex TT_LBRACE )
+    // Borrow checker: a `{` opens a block — record the boundary and
+    // descend a nesting level. The `block` row carries whatever the
+    // read-accumulator holds, i.e. the controlling `?`/`~`/`??`
+    // condition that was evaluated just before this arm.
+    ( bck_block_enter bck_line )
     : s last `undef`
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         = last ( gen_stmt lex syms cg )
     }
     ( expect lex TT_RBRACE )
+    ( bck_block_exit )
     last
 }
 
@@ -3262,9 +3285,85 @@
 // (move checking, alias/double-free, escape analysis) hang their
 // rules off the per-function CFG + ownership lattice built here.
 
+// ── Phase 0b: per-function statement-list capture ──────────────────
+//
+// As each function body is parsed, guarded hooks in the gen_* walk
+// append a flat statement list into g_bck. Each record is a single
+// tab-delimited line:
+//
+//   <kind> \t <wname> \t <reads> \t <line> \t <depth>
+//
+//   kind   — let | assign | ret | expr | block | endblock
+//   wname  — the binding written (let/assign), else empty
+//   reads  — space-separated identifiers read by the statement;
+//            for a `block` marker, the controlling condition's reads
+//   line   — 1-based source line
+//   depth  — block-nesting depth (function body is depth 1)
+//
+// Records are newline-separated. Phase 0c parses this into a CFG.
+// The capture is inert unless --borrowck is set, and never emits IR,
+// so the bootstrap fixed point is unaffected.
+//
+// Known Phase 0 imprecision (refined in Phase 1): a closure literal's
+// body is parsed through the same gen_block_ret path, so its
+// statements land inline in the enclosing function's list. Harmless
+// while there are no rules; Phase 1 must segregate closure scopes.
+
+// Reset the per-function capture state. Called at function entry.
+@ bck_fn_begin → v {
+    ? != g_borrowck 0 {
+        ( nurl_sym_def g_bck `stmts` `` )
+        ( nurl_sym_def g_bck `reads` `` )
+        = g_bck_depth 0
+    } {}
+}
+
+// Note that the current statement reads identifier `name`. Hooked
+// into gen_ident, so it fires for every value-position identifier.
+@ bck_note_read s name → v {
+    ? != g_borrowck 0 {
+        : s cur ( nurl_sym_get g_bck `reads` )
+        ( nurl_sym_def g_bck `reads`
+            ? == 0 ( nurl_str_len cur ) name ( nurl_str_cat3 cur ` ` name ) )
+    } {}
+}
+
+// Append one statement record, then clear the read accumulator so the
+// next statement starts fresh.
+@ bck_record s kind s wname i line → v {
+    ? != g_borrowck 0 {
+        : s reads ( nurl_sym_get g_bck `reads` )
+        : s head ( nurl_str_cat4 kind `\t` wname `\t` )
+        : s body ( nurl_str_cat4 head reads `\t` ( nurl_str_int line ) )
+        : s rec ( nurl_str_cat3 body `\t` ( nurl_str_int g_bck_depth ) )
+        : s cur ( nurl_sym_get g_bck `stmts` )
+        ( nurl_sym_def g_bck `stmts`
+            ? == 0 ( nurl_str_len cur ) rec ( nurl_str_cat3 cur `\n` rec ) )
+        ( nurl_sym_def g_bck `reads` `` )
+    } {}
+}
+
+// Block-boundary markers. enter records a `block` row (carrying any
+// pending reads — i.e. the controlling `?`/`~`/`??` condition) then
+// descends a level; exit ascends then records `endblock`.
+@ bck_block_enter i line → v {
+    ? != g_borrowck 0 {
+        ( bck_record `block` `` line )
+        = g_bck_depth + g_bck_depth 1
+    } {}
+}
+
+@ bck_block_exit → v {
+    ? != g_borrowck 0 {
+        ? > g_bck_depth 0 { = g_bck_depth - g_bck_depth 1 } {}
+        ( bck_record `endblock` `` 0 )
+    } {}
+}
+
 // borrowck_fn_end: called from gen_fn_decl_concrete once a function
-// body is fully parsed. Phase 0a stub — wired but inert; Phase 0c/0d
-// grow it into CFG construction + the lattice-threading analyze walk.
+// body is fully parsed. Phase 0b — the statement list is built but
+// not yet consumed; Phase 0c/0d grow this into CFG construction +
+// the lattice-threading analyze walk.
 @ borrowck_fn_end s fname → v {
     ? == g_borrowck 0 {} {}
 }
@@ -3283,11 +3382,19 @@
         g_dbg_current_subprogram ) }
     {}
     : i tt ( nurl_lex_type lex )
+    : i bck_line ( nurl_lex_line lex )
     ? == tt TT_COLON ( gen_let_or_struct lex syms cg )
     ? == tt TT_EQ ( gen_assign lex syms cg )
     ? == tt TT_TILDE ( gen_loop lex syms cg )
     ? == tt TT_SEMICOL ( gen_defer lex syms cg )
-    ( gen_expr lex syms cg )
+    {  // Bare expression in statement position. Record a `call`-shaped
+       // statement only for a parenthesised call `( fn ... )`; `?` / `??`
+       // control flow is captured by the gen_block_ret depth markers
+       // instead, so it is not double-recorded here.
+        : s bck_ev ( gen_expr lex syms cg )
+        ? == tt TT_LPAREN { ( bck_record `expr` `` bck_line ) } {}
+        bck_ev
+    }
 }
 
 // Soft check for the docs/GOTCHAS.md §3 pattern: a `:` binding declares
@@ -3313,6 +3420,8 @@
 }
 
 @ gen_let_or_struct i lex i syms i cg → s {
+    // Borrow checker: source line of the `:` token, for the record.
+    : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
     // Check for optional ~ (mutable) token
     : b had_mutability_check | == ( nurl_lex_type lex ) TT_TILDE ( is_type_start ( nurl_lex_type lex ) )
@@ -3339,6 +3448,8 @@
         ( nurl_sym_def syms `__last_closure_byref__` `` )
         : s val ( gen_expr lex syms cg )
         : s vt ( nurl_get_last_type )
+        // Borrow checker: record this binding (inference path).
+        ( bck_record `let` name bck_line )
         : b rhs_is_owned_call != 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_owned__` ) )
         // Propagate the closure-byref flag from the RHS onto the binding
         // so gen_ret / future use-site checks can see it (docs/GOTCHAS.md
@@ -3460,6 +3571,8 @@
                 ( nurl_sym_def syms `__last_closure_byref__` `` )
                 : s val ( gen_expr lex syms cg )
                 : s vt ( nurl_get_last_type )
+                // Borrow checker: record this binding (typed path).
+                ( bck_record `let` name bck_line )
                 : b rhs_is_owned_call != 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_owned__` ) )
                 // Propagate closure-byref flag (item 8 escape detection).
                 ? ( seq ( nurl_sym_get syms `__last_closure_byref__` ) `1` )
@@ -3523,6 +3636,8 @@
 }
 
 @ gen_assign i lex i syms i cg → s {
+    // Borrow checker: source line of the `=` token.
+    : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
     // Field store: = . obj field val
     ? == ( nurl_lex_type lex ) TT_DOT
@@ -3567,6 +3682,8 @@
         ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) ptr )
         ? lhs_is_owned_str { ( nurl_sym_def syms `__last_call_ret_owned__` `` ) } {}
         : s val ( gen_expr lex syms cg )
+        // Borrow checker: record this assignment.
+        ( bck_record `assign` name bck_line )
         : b rhs_is_owned_call & lhs_is_owned_str
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
         ? rhs_is_owned_call
@@ -6256,6 +6373,8 @@
 
 @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_cg_reset cg )
+    // Borrow checker: start a fresh per-function statement list.
+    ( bck_fn_begin )
     // Snapshot the lex position for DWARF DISubprogram.line / scopeLine
     // before we consume any tokens — by the time we reach the `define`
     // emit, the lexer has advanced past the param list and `→`, so a
@@ -8419,6 +8538,7 @@
     = g_closure_emit_base 0
     = g_type_emit_base 0
     = g_vis_syms ( nurl_sym_new )
+    ? != g_borrowck 0 { = g_bck ( nurl_sym_new ) } {}
     ( vis_set_current_src_file path )
     ( emit_header )
     ? != g_dbg_enabled 0 { ( dbg_init path ) } {}
