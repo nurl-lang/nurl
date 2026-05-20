@@ -232,6 +232,26 @@ for src in "${tests[@]}"; do
     # dropped to keep results deterministic across machines whose tool
     # versions vary.
     werr=""
+    # `borrow_*` tests exercise the --borrowck analysis pass (BORROW.md).
+    # They are compiled WITH --borrowck, their diagnostic is captured
+    # into the baseline, and they are compile-only — a use-after-move
+    # demo must not actually run (the run would be a real fault).
+    if [[ "$name" == borrow_* ]]; then
+        werr="$WORKDIR/$name.werr"
+        if ! "$NURLC" --borrowck "$src" > "$ll" 2>"$werr"; then
+            echo "COMPILE FAIL" >> "$RESULTS"
+            echo >> "$RESULTS"
+            continue
+        fi
+        echo "COMPILE OK" >> "$RESULTS"
+        if [[ -s "$werr" ]]; then
+            echo "WARNINGS" >> "$RESULTS"
+            sed -i "s|$ROOT_DIR/||g" "$werr"
+            append_output_capped "$werr"
+        fi
+        echo >> "$RESULTS"
+        continue
+    fi
     if [[ "$name" == should_warn_* ]]; then
         werr="$WORKDIR/$name.werr"
         if ! "$NURLC" "$src" > "$ll" 2>"$werr"; then

@@ -402,6 +402,10 @@
                   //  data (statement list etc.); allocated in main()
                   //  only when --borrowck is set
 : i g_bck_depth 0 // block-nesting depth during the statement walk
+: i g_bck_closure_depth 0 // >0 while parsing a closure body — the bck
+                  //  capture hooks no-op so closure statements do not
+                  //  inline into the enclosing function's list
+                  //  (BORROW.md Phase 1: segregate closure scopes)
 
 // ── DWARF debug-info state (see DWARF.md) ────────────────────────
 // All zero/empty when --g is OFF; emit helpers then produce IR that
@@ -1721,6 +1725,11 @@
         ( seq fname `vec_insert` )
         ( seq fname `vec_set` )
         ( seq fname `thread_spawn` )
+    // Phase 1 borrow: a `*_free` destructor consumes (frees) its first
+    // argument. `nurl_free` is excluded — it frees raw *T / i8* FFI
+    // memory, which BORROW.md item 5 leaves unchecked.
+    : b is_consume_call & ( bck_ends_free fname )
+        ! ( seq fname `nurl_free` )
     : i arg_idx 0
     // Phase 2B parameter-ownership: collect register values for arg expressions
     // whose result is a fresh owned-string allocation (e.g. `nurl_str_cat`),
@@ -1730,6 +1739,13 @@
     // (see runtime.c hardening for nurl_set_last_type, nurl_sym_get, ...).
     : s owned_arg_temps ``
     ~ != ( nurl_lex_type lex ) TT_RPAREN {
+        // Phase 1 borrow: snapshot this argument's first token. A move
+        // is recorded only when the consumed argument is a bare
+        // identifier (first token IDENT/TYPE_KW) — `. h name` and other
+        // compound expressions merely load an ident, they do not move
+        // the binding the loaded ident names.
+        : i bck_arg_tt ( nurl_lex_type lex )
+        : s bck_arg_val ( nurl_lex_val lex )
         ( nurl_sym_def syms `__last_call_ret_owned__` `` )
         ( nurl_sym_def syms `__last_unsigned__` `` )
         // Reset __last_ident_name__ so the post-gen_expr check below
@@ -1772,6 +1788,12 @@
                 } {}
             } {}
         } {}
+        // Phase 1 borrow: a `*_free` destructor's first argument, when
+        // it is a bare identifier, names a binding being consumed —
+        // stash it as a move (flushed after the enclosing statement).
+        ? & & is_consume_call == arg_idx 0 ( is_ident_tok bck_arg_tt )
+        { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) ) }
+        {}
         // Variadic position: promote BEFORE owned-temp tracking + argstr
         // append, since promotion replaces (at, av) with the widened pair.
         // i8*/i64/i32/double/pointers pass through variadic_promote_arg
@@ -3339,6 +3361,7 @@
 //
 //   kind   — let | assign | ret | expr | block | endblock
 //            | cond | endcond | match | endmatch  (Phase 0d markers)
+//            | move  (Phase 1 — wname is the consumed binding)
 //   wname  — the binding written (let/assign); for a `block` marker
 //            the block's kind (Phase 0c — see below); else empty
 //   reads  — space-separated identifiers read by the statement; for a
@@ -3390,6 +3413,7 @@
         ( nurl_sym_def g_bck `stmts` `` )
         ( nurl_sym_def g_bck `reads` `` )
         ( nurl_sym_def g_bck `pending_kind` `` )
+        ( nurl_sym_def g_bck `pmoves` `` )
         = g_bck_depth 0
     } {}
 }
@@ -3397,7 +3421,7 @@
 // Note that the current statement reads identifier `name`. Hooked
 // into gen_ident, so it fires for every value-position identifier.
 @ bck_note_read s name → v {
-    ? != g_borrowck 0 {
+    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
         : s cur ( nurl_sym_get g_bck `reads` )
         ( nurl_sym_def g_bck `reads`
             ? == 0 ( nurl_str_len cur ) name ( nurl_str_cat3 cur ` ` name ) )
@@ -3407,7 +3431,7 @@
 // Append one statement record, then clear the read accumulator so the
 // next statement starts fresh.
 @ bck_record s kind s wname i line → v {
-    ? != g_borrowck 0 {
+    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
         : s reads ( nurl_sym_get g_bck `reads` )
         : s head ( nurl_str_cat4 kind `\t` wname `\t` )
         : s body ( nurl_str_cat4 head reads `\t` ( nurl_str_int line ) )
@@ -3416,6 +3440,58 @@
         ( nurl_sym_def g_bck `stmts`
             ? == 0 ( nurl_str_len cur ) rec ( nurl_str_cat3 cur `\n` rec ) )
         ( nurl_sym_def g_bck `reads` `` )
+    } {}
+}
+
+// ── Phase 1: move-site capture ─────────────────────────────────────
+//
+// A *move* consumes an owned binding. Phase 1's move source is a
+// bare-identifier argument passed to a `*_free` destructor (the typed
+// NURL heap destructors — `vec_free`, `string_free`, … — but NOT the
+// raw `nurl_free`, which operates on `*T`/i8* FFI memory that BORROW.md
+// leaves unchecked). gen_call detects it and stashes the binding in
+// `pmoves`; gen_stmt then flushes the stash into `move` rows AFTER the
+// enclosing statement's own row, so the consuming statement itself —
+// which legitimately reads the binding one last time — is not flagged.
+//
+// A `move` row is `move \t <binding> \t \t <line> \t <depth>`. The
+// analyze walk transitions the binding Owned -> Moved; a `let` / `=`
+// of the binding revives it to Owned.
+
+// True when `name` ends with the literal suffix `_free`.
+@ bck_ends_free s name → b {
+    : i len ( nurl_str_len name )
+    ? < len 5 { ^ F } {}
+    ( seq ( nurl_str_slice name - len 5 5 ) `_free` )
+}
+
+// Stash `name` (consumed at `line`) for the current statement.
+@ bck_stash_move s name i line → v {
+    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
+        : s cur ( nurl_sym_get g_bck `pmoves` )
+        : s add ( nurl_str_cat3 name ` ` ( nurl_str_int line ) )
+        ( nurl_sym_def g_bck `pmoves`
+            ? == 0 ( nurl_str_len cur ) add ( nurl_str_cat3 cur ` ` add ) )
+    } {}
+}
+
+// Drain the per-statement move stash into `move` rows. Called by
+// gen_stmt once the enclosing statement's own record is in place.
+@ bck_flush_moves → v {
+    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
+        : ~ s rest ( nurl_sym_get g_bck `pmoves` )
+        ( nurl_sym_def g_bck `pmoves` `` )
+        // A statement that recorded no row of its own leaves stray
+        // reads in the accumulator — clear them so `move` rows, which
+        // carry no reads, are not mislabelled.
+        ( nurl_sym_def g_bck `reads` `` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s nm ( str_first_word rest )
+            = rest ( str_skip_word rest )
+            : s ln ( str_first_word rest )
+            = rest ( str_skip_word rest )
+            ( bck_record `move` nm ( nurl_str_to_int ln ) )
+        }
     } {}
 }
 
@@ -3436,7 +3512,8 @@
 // kind onto an unrelated sibling block. gen_loop/gen_foreach need no
 // disarm — their body parser always opens a block, always consuming.
 @ bck_set_block_kind s kind → v {
-    ? != g_borrowck 0 { ( nurl_sym_def g_bck `pending_kind` kind ) } {}
+    ? & != g_borrowck 0 == g_bck_closure_depth 0
+        { ( nurl_sym_def g_bck `pending_kind` kind ) } {}
 }
 
 // Block-boundary markers. enter records a `block` row (carrying any
@@ -3444,7 +3521,7 @@
 // reads field, and the armed block kind in the wname field) then
 // descends a level; exit ascends then records `endblock`.
 @ bck_block_enter i line → v {
-    ? != g_borrowck 0 {
+    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
         : s kind ( nurl_sym_get g_bck `pending_kind` )
         ( bck_record `block`
             ? == 0 ( nurl_str_len kind ) `plain` kind
@@ -3455,7 +3532,7 @@
 }
 
 @ bck_block_exit → v {
-    ? != g_borrowck 0 {
+    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
         ? > g_bck_depth 0 { = g_bck_depth - g_bck_depth 1 } {}
         ( bck_record `endblock` `` 0 )
     } {}
@@ -3491,15 +3568,25 @@
 @ bck_join i a i b → i {
     ? == a b { ^ a } {}
     ? | == a BCK_INVALID == b BCK_INVALID { ^ BCK_INVALID } {}
-    ? == a BCK_UNINIT { ^ b } {}
-    ? == b BCK_UNINIT { ^ a } {}
-    // Owned / Moved / MaybeMoved family: any disagreement collapses to
-    // MaybeMoved — a conditional move, which a later phase rejects on
-    // use. Borrow-state disagreements are not produced until a later
-    // phase; treat them conservatively as the top element.
-    : b af | | == a BCK_OWNED == a BCK_MOVED == a BCK_MAYBE_MOVED
-    : b bf | | == b BCK_OWNED == b BCK_MOVED == b BCK_MAYBE_MOVED
-    ? & af bf { ^ BCK_MAYBE_MOVED } {}
+    // Owned and Uninit are both "not moved here"; Moved and MaybeMoved
+    // are "moved-ish". Any merge of a not-moved state with a moved-ish
+    // one — or of two differing moved-ish states — is a conditional
+    // move: MaybeMoved (which the use-after-move rule does NOT flag,
+    // so a binding moved on only one branch never false-positives).
+    // Two differing not-moved states (Owned vs Uninit) settle to
+    // Owned. Crucially Uninit-joined-with-Moved is MaybeMoved, NOT
+    // Moved — a parameter / match-payload binding that is Uninit in
+    // the walk's state must not be reported as definitely moved just
+    // because one branch consumed it.
+    : b a_mv | == a BCK_MOVED == a BCK_MAYBE_MOVED
+    : b b_mv | == b BCK_MOVED == b BCK_MAYBE_MOVED
+    : b a_nm | == a BCK_OWNED == a BCK_UNINIT
+    : b b_nm | == b BCK_OWNED == b BCK_UNINIT
+    ? & a_mv b_mv { ^ BCK_MAYBE_MOVED } {}
+    ? & a_mv b_nm { ^ BCK_MAYBE_MOVED } {}
+    ? & a_nm b_mv { ^ BCK_MAYBE_MOVED } {}
+    ? & a_nm b_nm { ^ BCK_OWNED } {}
+    // Borrow-state disagreements are not produced until a later phase.
     BCK_INVALID
 }
 
@@ -3656,11 +3743,49 @@
     j
 }
 
+// ── Phase 1: the use-after-move rule ──────────────────────────────
+
+// Emit `file:line: warning: use of moved value`. The analyze walk
+// runs after the function is fully parsed, so `lex` no longer points
+// at the use site — the line is carried explicitly and the filename
+// is stashed on g_bck by borrowck_fn_end. Deduplicated per (line,
+// name) via `warnset` so a loop body's fixpoint re-walk does not
+// repeat the same warning.
+@ bck_diag s name i useline → v {
+    : s tag ( nurl_str_cat3 ( nurl_str_int useline ) `:` name )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) {} {
+        ( nurl_sym_def g_bck `warnset`
+            ? == 0 ( nurl_str_len ws ) tag ( nurl_str_cat3 ws ` ` tag ) )
+        : s ml ( nurl_sym_get g_bck ( nurl_str_cat `ml_` name ) )
+        : s loc ( nurl_str_cat3 ( nurl_sym_get g_bck `file` ) `:`
+            ( nurl_str_int useline ) )
+        : s msg ( nurl_str_cat4 `: warning: use of moved value '` name
+            `' - it was consumed at line ` ( nurl_str_cat3 ml
+            ` (pass a fresh value or rebind it before reuse)` `` ) )
+        ( nurl_eprintln ( nurl_str_cat loc msg ) )
+    }
+}
+
+// Flag any read of a definitely-Moved binding as a use-after-move.
+// MaybeMoved (a conditional move at a CFG join) is deliberately NOT
+// flagged — erroring only on a definite move keeps this first cut
+// false-positive-free (BORROW.md watch #3: warn before you promote).
+@ bck_check_moved_reads s reads i line s state → v {
+    : ~ s rest reads
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? == BCK_MOVED ( bck_st_get state w ) { ( bck_diag w line ) } {}
+    }
+}
+
 // ── The analyze walk ──────────────────────────────────────────────
 // bck_walk_seq threads `state` through the records in [lo, hi):
 // sequential rows update the state; `?`/`??` fork the entry state
 // across arms and join the results; `~` loops re-enter their body to
-// a fixpoint. It returns the state holding at `hi`.
+// a fixpoint. It returns the state holding at `hi`. Phase 1: every
+// row's reads are checked for use-after-move before its writes apply.
 @ bck_walk_seq i lo i hi s state → s {
     : ~ s st ( nurl_str_cat state `` )
     : ~ i p lo
@@ -3668,8 +3793,29 @@
         : s rec ( bck_rec p )
         : s kind ( bck_field rec 0 )
         : ~ b done F
+        // Phase 1: a read of a Moved binding is a use-after-move.
+        // Checked before this row's own writes so a consuming call
+        // (move flushed AFTER it) reads its arg while still Owned.
+        ( bck_check_moved_reads ( bck_field rec 2 )
+            ( nurl_str_to_int ( bck_field rec 3 ) ) st )
         ? ( seq kind `let` ) {
+            // A `let` (re)binds the name — Owned, reviving a Moved one.
             = st ( bck_st_set st ( bck_field rec 1 ) BCK_OWNED )
+            = p + p 1
+            = done T
+        } {}
+        ? & ! done ( seq kind `assign` ) {
+            // `= x ...` gives x a fresh value — Owned, reviving x.
+            = st ( bck_st_set st ( bck_field rec 1 ) BCK_OWNED )
+            = p + p 1
+            = done T
+        } {}
+        ? & ! done ( seq kind `move` ) {
+            // A consumed binding: Owned -> Moved; remember where.
+            : s mvn ( bck_field rec 1 )
+            = st ( bck_st_set st mvn BCK_MOVED )
+            ( nurl_sym_def g_bck ( nurl_str_cat `ml_` mvn )
+                ( bck_field rec 3 ) )
             = p + p 1
             = done T
         } {}
@@ -3696,7 +3842,7 @@
             = p + eb 1
             = done T
         } {}
-        // assign / ret / expr / stray end-marker — no Phase 0d rule
+        // ret / expr / stray end-marker — reads already checked above
         ? ! done { = p + p 1 } {}
     }
     st
@@ -3738,35 +3884,17 @@
     ( bck_join_state s_then s_else )
 }
 
-// `??` — walk each `match-arm` block from the match's entry state and
-// join them. `acc` starts at the entry state, which conservatively
-// covers any block-less bare arms (Phase 1 refines bare-arm
-// modelling). Nested constructs inside a bare arm are stepped over.
+// `??` — Phase 1 does NOT descend into match arms. A `??` arm binds
+// payload variables (`T v -> ...`) that have no `let` row, so the
+// flat name-keyed state cannot tell an arm's `v` from a same-named
+// binding in an enclosing scope — analysing the arm would conflate
+// them and false-positive. The whole match is therefore treated as a
+// state-preserving black box: its scrutinee is still move-checked (on
+// the `match` row, before this is called), but nothing inside the
+// arms is. Use-after-move *within* a `??` arm is a known Phase 1 gap
+// — closing it needs scope-qualified state (a later phase).
 @ bck_handle_match i mi i em s state → s {
-    : ~ s acc ( nurl_str_cat state `` )
-    : ~ i j + mi 1
-    ~ < j em {
-        : s rec ( bck_rec j )
-        : s k ( bck_field rec 0 )
-        : ~ b adv F
-        ? ( seq k `match` ) {
-            = j + ( bck_match_close j `match` `endmatch` ) 1
-            = adv T
-        } {}
-        ? & ! adv ( seq k `cond` ) {
-            = j + ( bck_match_close j `cond` `endcond` ) 1
-            = adv T
-        } {}
-        ? & ! adv ( seq k `block` ) {
-            : i eb ( bck_match_close j `block` `endblock` )
-            ? ( seq ( bck_field rec 1 ) `match-arm` )
-                { = acc ( bck_join_state acc ( bck_walk_seq + j 1 eb state ) ) } {}
-            = j + eb 1
-            = adv T
-        } {}
-        ? ! adv { = j + j 1 } {}
-    }
-    acc
+    ( nurl_str_cat state `` )
 }
 
 // `~` loop — the body carries a back-edge, so re-enter it until the
@@ -3790,23 +3918,38 @@
 
 // bck_analyze: consume the per-function statement list captured by
 // the gen_* hooks — explode it into addressable rows, then thread the
-// ownership lattice through the whole function from an empty state.
-// Phase 0d carries no rules, so this walks and emits nothing.
-@ bck_analyze → v {
+// ownership lattice through the whole function. The walk emits a
+// use-after-move warning per Moved read. `params` (space-separated)
+// seed the initial state as Owned: a parameter moved on one branch of
+// a `?` then joins to MaybeMoved (not Moved) at the merge, rather than
+// joining a bare Uninit on the other branch straight back to Moved.
+@ bck_analyze s params → v {
+    ( nurl_sym_def g_bck `warnset` `` )
     : i n ( bck_explode )
-    // Walk from an empty state. n == 0 (no records) walks nothing.
-    : s final ( bck_walk_seq 0 n `` )
-    // `final` is the function's exit state; Phase 0d inspects it no
-    // further (no rules). Reference it in a void `?` so the body
-    // type-checks as `v` without a spurious unused binding.
+    : ~ s seed ``
+    : ~ s prest params
+    ~ != 0 ( nurl_str_len prest ) {
+        : s pn ( str_first_word prest )
+        = prest ( str_skip_word prest )
+        = seed ( bck_st_set seed pn BCK_OWNED )
+    }
+    // Walk from the seeded state. n == 0 (no records) walks nothing.
+    : s final ( bck_walk_seq 0 n seed )
+    // `final` is the function's exit state; the walk inspects it no
+    // further. Reference it in a void `?` so the body type-checks as
+    // `v` without a spurious unused binding.
     ? != 0 ( nurl_str_len final ) {} {}
 }
 
 // borrowck_fn_end: called from gen_fn_decl_concrete once a function
 // body is fully parsed — runs the analyze walk over the captured
-// statement list. No-op when --borrowck is off.
-@ borrowck_fn_end s fname → v {
-    ? == g_borrowck 0 {} { ( bck_analyze ) }
+// statement list. No-op when --borrowck is off. `lex` gives the
+// source filename; `syms` gives the function's parameter names.
+@ borrowck_fn_end i lex i syms s fname → v {
+    ? == g_borrowck 0 {} {
+        ( nurl_sym_def g_bck `file` ( nurl_lex_filename lex ) )
+        ( bck_analyze ( nurl_sym_get syms `__fn_param_names__` ) )
+    }
 }
 
 // ── Statement ──────────────────────────────────────────────────────
@@ -3824,7 +3967,7 @@
     {}
     : i tt ( nurl_lex_type lex )
     : i bck_line ( nurl_lex_line lex )
-    ? == tt TT_COLON ( gen_let_or_struct lex syms cg )
+    : s gs_rv ? == tt TT_COLON ( gen_let_or_struct lex syms cg )
     ? == tt TT_EQ ( gen_assign lex syms cg )
     ? == tt TT_TILDE ( gen_loop lex syms cg )
     ? == tt TT_SEMICOL ( gen_defer lex syms cg )
@@ -3836,6 +3979,11 @@
         ? == tt TT_LPAREN { ( bck_record `expr` `` bck_line ) } {}
         bck_ev
     }
+    // Borrow checker (Phase 1): drain this statement's move stash into
+    // `move` rows — placed AFTER the statement's own record so the
+    // consuming call itself reads the binding while still Owned.
+    ( bck_flush_moves )
+    gs_rv
 }
 
 // Soft check for the docs/GOTCHAS.md §3 pattern: a `:` binding declares
@@ -5925,7 +6073,12 @@
     ( nurl_lex_set_pos lex body_start_pos )
     : i outer_did_ret g_did_ret
     = g_did_ret 0
+    // Borrow checker (Phase 1): suppress capture inside the closure
+    // body — its statements must not inline into the enclosing
+    // function's list (where they would conflate same-named bindings).
+    = g_bck_closure_depth + g_bck_closure_depth 1
     : s body_val ( gen_stmt lex body_syms cg )
+    = g_bck_closure_depth - g_bck_closure_depth 1
 
     // Emit return
     ? == g_did_ret 0
@@ -7001,7 +7154,7 @@
     // Borrow checker (BORROW.md): the function body is fully parsed —
     // run the analysis pass before the scope is popped. No-op unless
     // --borrowck is set; never emits IR.
-    ( borrowck_fn_end fname )
+    ( borrowck_fn_end lex syms fname )
     // Snapshot owned-return flags BEFORE pop: nurl_sym_get returns a pointer
     // into the current scope's entry, which nurl_sym_pop then frees.
     : i fn_ret_owned_flag ? != 0 ( nurl_str_len ( nurl_sym_get syms `__fn_ret_owned__` ) ) 1 0
