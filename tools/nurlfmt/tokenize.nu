@@ -306,6 +306,11 @@ $ `stdlib/core/vec.nu`
                                                             = nl_acc 0
                                                             = i + i 2
                                                         } {
+                                                          ? & == c 94 == c2 94 {  // ^^
+                                                            ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                                            = nl_acc 0
+                                                            = i + i 2
+                                                          } {
 
                                                             // 8) Fallback: emit any single byte as an OP token. Whitelisted
                                                             //    grammar bytes go through this path; unknown bytes too,
@@ -314,7 +319,7 @@ $ `stdlib/core/vec.nu`
                                                             = nl_acc 0
                                                             = i + i 1
 
-                                                        } } } } } } } } } } } } }
+                                                          } } } } } } } } } } } } } }
         } {}
     }
 

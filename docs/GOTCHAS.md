@@ -2,11 +2,12 @@
 > **The historical "language gotchas" list is empty as of v0.7.1+.**
 > Every trap that previously needed memorisation now surfaces as a
 > compiler `error:` / `warning:` with a pointing caret and the
-> concrete cure inline. The remaining edges — prefix-arity strictness,
-> `^` not being XOR — are documented in README's **Known Limitations
-> → Grammar** section, since they're grammar properties (no closing
-> token, every operator has fixed arity), not surprises the model
-> can't predict from the spec.
+> concrete cure inline. The remaining edge — prefix-arity strictness
+> — is documented in README's **Known Limitations → Grammar**
+> section, since it is a grammar property (no closing token, every
+> operator has fixed arity), not a surprise the model can't predict
+> from the spec. (`^` is the return operator; XOR is the distinct
+> `^^` operator — see `spec/grammar.ebnf`.)
 >
 > Diagnostics shipped (see `compiler/nurlc.nu` for the emit sites):
 >

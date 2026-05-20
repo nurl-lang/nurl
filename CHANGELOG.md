@@ -10,6 +10,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Native `^^` XOR operator.** Two adjacent carets lex as a single
+  `^^` token (the lexer pairs them only when adjacent — `^ ^` with a
+  space is still two return tokens). `^^` is a strictly-binary
+  operator lowered to LLVM `xor`: bitwise XOR on integer operands,
+  logical XOR on `b` operands. Float operands are a compile error
+  (LLVM has no float `xor`). Replaces the old `(a | b) - (a & b)`
+  identity workaround. `^` alone remains the return operator.
+  Grammar (`spec/grammar.ebnf`) and `nurlfmt` updated; regression
+  tests `xor_op.nu` + `should_fail_xor_float.nu`.
+
+* **`inout` parameter convention (BORROW.md Phase 4, Option B —
+  mutable value semantics).** A parameter marked `inout` is an
+  exclusive mutable borrow: the callee mutates the caller's binding
+  in place. `in` / `inout` / `sink` are contextual keywords
+  recognised only as a parameter's leading token (no lexer change);
+  `in` is the default, `sink` is reserved (not yet implemented).
+  `inout T` lowers to a by-address `<T>*` parameter — the body
+  reads/writes the caller's storage with no local copy — replacing
+  the `*T`-parameter and return-the-struct mutation idioms. The
+  argument must be a mutable (`: ~`) binding; an `inout` function
+  must be defined before it is called.
+
+* **Static borrow checker, on by default (BORROW.md Phases 0-3 +
+  8-partial).** A diagnostic analysis pass (disable with
+  `--no-borrowck`) that never changes generated code — a
+  borrow-clean program compiles to byte-identical IR. Closes three
+  bug classes with `warning:` diagnostics: use-after-move (a binding
+  read after its ownership moved), alias double-free (`: T b a` of an
+  owned heap value moves `a`), and stack-reference escape (a closure
+  capturing a `: ~`-mutable struct by pointer that is returned,
+  pushed into a container, spawned onto a thread, or assigned into a
+  longer-lived binding — a region-based check). Ownership + borrow
+  rules documented in the new [`docs/MEMORY.md`](docs/MEMORY.md).
+
 * **Tail-call optimisation in the @-fn dispatch path.** `gen_ret`
   now flags the upcoming return-value expression as
   tail-position; `gen_call` snapshots + clears the flag on entry,

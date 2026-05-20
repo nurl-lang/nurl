@@ -73,6 +73,7 @@
 : i TT_SHR 42
 : i TT_ELLIPSIS 43
 : i TT_PUB 44
+: i TT_CARETCARET 45  // `^^` — bitwise / logical XOR (lexer pairs `^^`)
 
 // ── Abort helpers ─────────────────────────────────────────────────
 
@@ -1179,7 +1180,7 @@
 @ is_binop_tt i tt → b {
     | | & >= tt TT_PLUS <= tt TT_PIPE
     | == tt TT_LT | == tt TT_GT | == tt TT_EQEQ | == tt TT_NE | == tt TT_LE == tt TT_GE
-    | == tt TT_SHL == tt TT_SHR
+    | | == tt TT_SHL == tt TT_SHR == tt TT_CARETCARET
 }
 
 @ gen_expr i lex i syms i cg → s {
@@ -1306,6 +1307,10 @@
     : s ru_snap ( nurl_sym_get syms `__last_unsigned__` )
     : s res ( nurl_cg_reg cg )
     : b isf | ( seq lt `double` ) ( seq lt `float` )
+    // `^^` (XOR) is integer/bool-only — LLVM has no float `xor`.
+    ? & == tt TT_CARETCARET isf
+    { ( die lex `operator '^^' (XOR) requires integer or bool operands, not a float` ) }
+    {}
     // Unsigned operand path. Three triggers, OR-ed:
     //   * Legacy 8-bit byte (`u` → i8): retained for v1.6 compatibility.
     //   * Either operand carries the `__unsigned` flag (sized u types).
@@ -1470,6 +1475,7 @@
     ? == tt TT_PERCENT ? isf `frem` ? isu `urem` `srem`
     ? == tt TT_AMP `and`
     ? == tt TT_PIPE `or`
+    ? == tt TT_CARETCARET `xor`
     ? == tt TT_SHL `shl`
     ? == tt TT_SHR ? isu `lshr` `ashr`
     ? == tt TT_LT ? isf `fcmp olt` ? isu `icmp ult` `icmp slt`

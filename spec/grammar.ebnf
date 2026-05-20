@@ -486,6 +486,13 @@ expr = literal
    for i64 operands. Behaviour for negative or out-of-range counts
    matches LLVM's `shl`/`ashr` (poison for >= bitwidth).
 
+   '^^' (XOR) maps directly to LLVM `xor`:
+     - integer operands →  bitwise XOR
+     - b (i1) operands  →  logical XOR (no short-circuit — XOR cannot)
+     - a float operand is a compile error.
+   Unlike '&' / '|', '^^' has no logical-vs-bitwise dispatch: `xor` is
+   the same instruction for both, so it is always a plain binary op.
+
    There are NO unary arithmetic operators, but negative literals ARE
    directly supported at the lexer level: a '-' immediately followed by
    a digit (no intervening whitespace) is lexed as a single negative
@@ -501,7 +508,8 @@ expr = literal
    Example:  & > x 0 < x 10    — logical AND, short-circuits
    Example:  & 255 n           — bitwise AND on i64 (hex literals not lexed)
    Example:  << 1 n            — 2^n  (n < 63)
-   Example:  >> x 8             — arithmetic shift right by 8 *)
+   Example:  >> x 8             — arithmetic shift right by 8
+   Example:  ^^ a b             — bitwise / logical XOR *)
 (* Every operator below is STRICTLY BINARY (exactly 2 operands). For
    n-ary boolean chains use n-1 operators:
 
@@ -517,23 +525,26 @@ bin_expr = BIN_OP expr expr ;
 BIN_OP   = '+' | '-' | '*' | '/' | '%'
          | '<' | '>' | '==' | '!=' | '<=' | '>='
          | '<<' | '>>'
-         | '&' | '|'
+         | '&' | '|' | '^^'
          ;
 
 (* ! expr  — logical NOT, yields b *)
 not_expr        = '!' expr ;
 
-(* ^ expr  — explicit RETURN from the enclosing function. NURL has
-   NO infix XOR operator; `^ a b` always parses as `return (a b …)`.
-   For bitwise XOR use the identity `a XOR b = (a OR b) - (a AND b)`:
+(* '^^' expr expr  — XOR. The native bitwise / logical exclusive-or
+   operator (LLVM `xor`): on integer operands it is bitwise XOR, on
+   `b` operands it is logical XOR. Integer/bool only — there is no
+   float `xor`. The lexer pairs two adjacent carets into one `^^`
+   token, so `^^` (no space) is XOR while `^ ^` (with a space, never
+   meaningful) is two return tokens.
+   Example:  ^^ a b           — XOR of a and b
+   Example:  ^^ flag1 flag2    — logical XOR of two b values
 
-       @ __xor8 i a i b → i { ^ - | a b & a b }
+   NOTE: `^` alone is still the RETURN operator (ret_expr below); it
+   is NOT XOR. `^ a b` parses as `return (a b …)`. *)
 
-   The compiler does have `xor` internally for bitwise NOT (`~`) and
-   for the i1 logical-not via `! expr`, but neither is exposed as a
-   binary surface syntax. Symptom of mis-typing `^` as XOR: LLVM
-   error "value doesn't match function result type" because `^` ate
-   the rest of the expression and returned a wrong-typed value.
+(* ^ expr  — explicit RETURN from the enclosing function. Distinct
+   from the XOR operator `^^` above — a single `^` is return.
    Example:  ^ + a b *)
 ret_expr        = '^' expr ;
 

@@ -1516,6 +1516,7 @@ void nurl_map_free(long long handle) {
 #define LTT_SHR        42
 #define LTT_ELLIPSIS   43
 #define LTT_PUB        44
+#define LTT_CARETCARET 45   /* `^^` — bitwise / logical XOR operator */
 
 typedef struct {
     int         type;
@@ -1794,6 +1795,7 @@ static NurlToken lex_next_tok(NurlLex *lx) {
         if (c == '<' && c2 == '<') { lx->pos += 2; return make_tok(LTT_SHL,       "<<", 0, line); }
         if (c == '>' && c2 == '>') { lx->pos += 2; return make_tok(LTT_SHR,       ">>", 0, line); }
         if (c == '?' && c2 == '?') { lx->pos += 2; return make_tok(LTT_QUESTQUEST, "??", 0, line); }
+        if (c == '^' && c2 == '^') { lx->pos += 2; return make_tok(LTT_CARETCARET, "^^", 0, line); }
     }
 
     /* single-char operators */
