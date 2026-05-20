@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-05-20
+
 ### Added
 
 * **Native `^^` XOR operator.** Two adjacent carets lex as a single
@@ -1551,6 +1553,7 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/nurl-lang/nurl/compare/v0.7.3...v0.8.0
 [0.2.0]: https://github.com/nurl-lang/nurl/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nurl-lang/nurl/releases/tag/v0.1.0

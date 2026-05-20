@@ -23,6 +23,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         make \
         libsdl2-dev \
         libcurl4-openssl-dev \
+        libssl-dev \
+        zlib1g-dev \
+        libsqlite3-dev \
+        libpq-dev \
+        libzstd-dev \
         pkg-config \
         binaryen \
         gcc-mingw-w64-x86-64 \
@@ -35,7 +40,7 @@ RUN ln -sf /usr/bin/python3 /usr/local/bin/python
 # --- WASI SDK (clang + libc for wasm32-wasi) -------------------
 ARG WASI_SDK_VERSION=24
 ARG WASI_SDK_FULL=24.0
-RUN curl -fsSL -o /tmp/wasi-sdk.tar.gz \
+RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/wasi-sdk.tar.gz \
         "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_FULL}-x86_64-linux.tar.gz" \
     && mkdir -p /opt/wasi-sdk \
     && tar -xzf /tmp/wasi-sdk.tar.gz -C /opt/wasi-sdk --strip-components=1 \
@@ -55,7 +60,7 @@ RUN curl -fsSL -o /tmp/wasi-sdk.tar.gz \
 # Static + Schannel means the final .exe produced by /build_windows is
 # fully self-contained — no libcurl.dll to ship alongside.
 ARG CURL_VERSION=8.10.1
-RUN curl -fsSL -o /tmp/curl.tar.xz \
+RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/curl.tar.xz \
         "https://curl.se/download/curl-${CURL_VERSION}.tar.xz" \
     && mkdir -p /tmp/curl-src \
     && tar -xJf /tmp/curl.tar.xz -C /tmp/curl-src --strip-components=1 \
@@ -89,7 +94,7 @@ RUN curl -fsSL -o /tmp/curl.tar.xz \
 # (Cocoa / AudioToolbox frameworks) are explicitly unsupported on this
 # path — a macOS binary from the playground links *only* libSystem.
 ARG ZIG_VERSION=0.13.0
-RUN curl -fsSL -o /tmp/zig.tar.xz \
+RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/zig.tar.xz \
         "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
     && mkdir -p /opt/zig \
     && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1 \
@@ -170,11 +175,21 @@ FROM python:3.12-slim-bookworm AS runtime
 # like `call i64 @puts(i8* %r)`). The default `clang` package on Debian
 # bookworm is clang-14 and still enforces typed pointers, which rejects
 # that IR with `error: expected type` / `defined with type … but expected`.
+# The FFI -dev packages must match stage 1: build.sh enables curl / openssl /
+# sqlite3 / libpq / zlib / zstd in runtime.o based on which `*.pc` files it
+# sees, and the native /build link here must then resolve the matching
+# -lcurl / -lssl / -lsqlite3 / -lpq / -lz / -lzstd. Keeping both stages in
+# sync is what stops `ld: cannot find -lz` at link time.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         binaryen \
         clang-16 \
         libc6-dev \
         libcurl4-openssl-dev \
+        libssl-dev \
+        zlib1g-dev \
+        libsqlite3-dev \
+        libpq-dev \
+        libzstd-dev \
         pkg-config \
         gcc-mingw-w64-x86-64 \
         binutils-mingw-w64-x86-64 \

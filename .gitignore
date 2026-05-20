@@ -11,6 +11,7 @@ nurlc.wasm
 
 # Stdlib runtime objects (rebuilt per platform)
 stdlib/runtime.o
+stdlib/runtime.native.o
 stdlib/runtime.curl
 stdlib/runtime.wasm.o
 stdlib/canvas.o

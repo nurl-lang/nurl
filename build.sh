@@ -233,6 +233,20 @@ fi
 # triggers the LTO link pipeline.
 step "runtime"       bash -c "'$CLANG' -O2 $LTO_FLAG $SAN_CFLAGS $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $ZLIB_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
 
+# Under `-flto` the `runtime.o` above is LLVM bitcode, which a plain GNU
+# `ld` cannot link. The LTO consumers (this script, nurl.sh, the test
+# runner) pair it with `-flto` and are fine — but the playground's
+# native-build endpoint links user IR with a stock `clang` + `ld` and
+# needs a real ELF object. Emit `runtime.native.o` for that path: run
+# codegen over the already-built bitcode (cheap — no C front-end re-run)
+# so the feature defines stay identical to `runtime.o`. With LTO off
+# `runtime.o` is already an ELF object, so just copy it.
+if [ -n "$LTO_FLAG" ]; then
+    step "runtime-native" "$CLANG" -O2 -c -x ir stdlib/runtime.o -o stdlib/runtime.native.o
+else
+    step "runtime-native" cp stdlib/runtime.o stdlib/runtime.native.o
+fi
+
 # Always build canvas.o. With SDL2 headers present we get the real
 # native back-end (-DNURL_HAVE_SDL2); otherwise we compile a stub that
 # prints a clear diagnostic and exits if the program actually calls

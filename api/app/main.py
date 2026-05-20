@@ -72,7 +72,16 @@ NATIVE_CLANG   = os.environ.get(
     "NURL_NATIVE_CLANG",
     "/usr/bin/clang" if Path("/usr/bin/clang").exists() else "clang",
 )
-RUNTIME_O      = os.environ.get("NURL_RUNTIME_O",  "/opt/nurl/stdlib/runtime.o")
+# build.sh emits runtime.o as LLVM bitcode (it builds the compiler under
+# `-flto`); a stock `clang` + GNU `ld` link — which is what /build does —
+# rejects bitcode with "file format not recognized". build.sh also writes
+# a plain-ELF `runtime.native.o` next to it for exactly this link path, so
+# prefer that when present and only fall back to runtime.o otherwise.
+def _default_runtime_o() -> str:
+    native = "/opt/nurl/stdlib/runtime.native.o"
+    return native if Path(native).is_file() else "/opt/nurl/stdlib/runtime.o"
+
+RUNTIME_O      = os.environ.get("NURL_RUNTIME_O",  _default_runtime_o())
 CANVAS_O       = os.environ.get("NURL_CANVAS_O",   "/opt/nurl/stdlib/canvas.o")
 
 # Windows cross-compile pipeline. clang consumes the LLVM IR with an explicit
@@ -998,6 +1007,18 @@ def build_native(req: BuildRequest, request: Request) -> BuildResponse:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"native runtime object missing at {RUNTIME_O}",
         )
+    # An LLVM-bitcode runtime.o (build.sh's -flto artifact) would only fail
+    # deep in the link with a cryptic ld "file format not recognized". Catch
+    # it here — it means the image lacks the plain-ELF runtime.native.o.
+    if Path(RUNTIME_O).open("rb").read(4) == b"BC\xc0\xde":
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"native runtime object {RUNTIME_O} is LLVM bitcode, not an "
+                "ELF object — GNU ld cannot link it. Rebuild the image so "
+                "build.sh produces stdlib/runtime.native.o."
+            ),
+        )
 
     _gc_downloads()
 
@@ -1091,14 +1112,24 @@ def build_native(req: BuildRequest, request: Request) -> BuildResponse:
             NATIVE_CLANG, opt_flag, "-Wno-override-module",
             str(ll_path), RUNTIME_O,
         ]
-        # runtime.o uses libm (sqrt/sin/cos/log/exp/pow/...) since 2026-04-27.
-        # On Linux glibc these live in a separate library; Windows/macOS
-        # link them implicitly. The container is Debian, so always -lm.
-        # libcurl is appended when the runtime was built with HTTP support
-        # (build.sh / verbosebuild.sh drop a stdlib/runtime.curl marker).
-        extra_libs: list[str] = ["-lm"]
-        if Path(os.path.join(os.path.dirname(RUNTIME_O), "runtime.curl")).is_file():
-            extra_libs.append("-lcurl")
+        # runtime.native.o is a single object file, so the linker pulls in
+        # *every* symbol it references — including the optional FFI libraries
+        # build.sh detected at image-build time, even for user programs that
+        # never touch them. build.sh drops a stdlib/runtime.<name> marker for
+        # each one it compiled in; mirror nurl.sh and add the matching libs.
+        # -lm (libm: sqrt/sin/cos/...) and -lpthread are always needed.
+        extra_libs: list[str] = ["-lm", "-lpthread"]
+        runtime_dir = os.path.dirname(RUNTIME_O)
+        for marker, libs in (
+            ("runtime.curl",    ["-lcurl"]),
+            ("runtime.openssl", ["-lssl", "-lcrypto"]),
+            ("runtime.sqlite3", ["-lsqlite3"]),
+            ("runtime.pq",      ["-lpq"]),
+            ("runtime.z",       ["-lz"]),
+            ("runtime.zstd",    ["-lzstd"]),
+        ):
+            if Path(os.path.join(runtime_dir, marker)).is_file():
+                extra_libs += libs
         if uses_canvas:
             if not Path(CANVAS_O).is_file():
                 # Clean up the .ll we wrote so we don't leak a dangling artifact.

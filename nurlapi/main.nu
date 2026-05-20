@@ -301,7 +301,7 @@ $ `stdlib/ext/regex.nu`
                 ( write_file ( string_data ll_path ) ( output_stdout n_out ) )
                 : ( Vec s ) clang_args ( vec_new [s] )
                 ( vec_push [s] clang_args opt ) ( vec_push [s] clang_args `-Wno-override-module` ) ( vec_push [s] clang_args ( string_data ll_path ) )
-                : String runtime_o ( path_join ( string_data ( get_stdlib_dir ) ) `runtime.o` )
+                : String runtime_o ( path_join ( string_data ( get_stdlib_dir ) ) `runtime.native.o` )
                 ( vec_push [s] clang_args ( string_data runtime_o ) ) ( vec_push [s] clang_args `-o` ) ( vec_push [s] clang_args ( string_data bin_path ) )
                 ( vec_push [s] clang_args `-lm` ) ( vec_push [s] clang_args `-lpthread` ) ( vec_push [s] clang_args `-lcurl` )
 
