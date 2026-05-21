@@ -10,11 +10,15 @@
 
   - **`nurlc`** — the self-hosted NURL compiler (bootstrapped `python → nurlc_py → nurlc_self → nurlc_self2`).
   - **Cross-compilation toolchains**, all preinstalled:
-    - **Linux** ELF — `clang-16` + glibc
+    - **Linux** x86_64 ELF — `clang-16` + glibc, full FFI (HTTP / sqlite / canvas)
+    - **Linux** cross — `zig cc`: `x86_64` / `aarch64` / `riscv64` musl (static),
+      `aarch64` glibc. libc only; no HTTP/canvas/audio
+    - **macOS** Mach-O — `zig cc`, Intel **and** Apple Silicon (libSystem only; no Cocoa/AudioToolbox)
     - **Windows** `.exe` — `mingw-w64` + statically-linked `libcurl` (Schannel TLS, no DLLs to ship)
-    - **macOS** x86_64 Mach-O — `zig cc` with bundled libSystem stubs (libSystem only; no Cocoa/AudioToolbox)
     - **WebAssembly** — WASI SDK 24 + `wasm-opt` (binaryen) for Asyncify
-  - **FastAPI HTTP API** with `/build`, `/build_wasm`, `/build_windows`, `/build_macos` endpoints.
+  - **FastAPI HTTP API** with `/build`, `/build_wasm`, `/build_windows`,
+    `/build_macos`, `/build_target` build endpoints and `/targets` (the
+    cross-compile target registry the playground's dropdown is built from).
   - **Browser playground** at `/` — Monaco editor, examples dropdown, build+run in-page via
   [`@bjorn3/browser_wasi_shim`](https://github.com/bjorn3/browser_wasi_shim).
   - **MCP server** at `/mcp` (Streamable HTTP) — tools, resources, prompts for Claude Desktop, Cursor, Windsurf, Zed.
