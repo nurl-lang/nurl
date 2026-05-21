@@ -108,18 +108,48 @@ step() {
     "$@" >> "$LOG" 2>&1 || fail "$label"
 }
 
-# ── Locate clang ─────────────────────────────────────────────
-CLANG="clang"
-if ! command -v clang &>/dev/null; then
-    for candidate in /usr/lib/llvm/bin/clang /usr/local/bin/clang; do
-        if [ -x "$candidate" ]; then CLANG="$candidate"; break; fi
-    done
-    if ! command -v "$CLANG" &>/dev/null; then
-        echo "ERROR: clang not found"; exit 1
+# ── Locate the C toolchain driver ────────────────────────────
+# NURL_CC selects the compiler+linker driver used to build runtime.o
+# and to link every bootstrap stage. Defaults to clang. Set
+# NURL_CC="zig cc" to drive the whole build through Zig's bundled
+# clang + lld + libc — one pinned toolchain, reproducible, and the
+# same driver that cross-compiles every release target. Multi-word
+# values (e.g. "zig cc") are supported.
+read -r -a CC <<< "${NURL_CC:-clang}"
+if ! command -v "${CC[0]}" &>/dev/null; then
+    # Only the bare default `clang` gets the legacy install-dir probe;
+    # an explicit NURL_CC is taken at face value.
+    if [[ "${NURL_CC:-clang}" == "clang" ]]; then
+        for candidate in /usr/lib/llvm/bin/clang /usr/local/bin/clang; do
+            if [ -x "$candidate" ]; then CC=("$candidate"); break; fi
+        done
+    fi
+    if ! command -v "${CC[0]}" &>/dev/null; then
+        echo "ERROR: C driver '${CC[*]}' not found"; exit 1
     fi
 fi
 
 mkdir -p build
+
+# ── LTO capability probe ─────────────────────────────────────
+# -flto makes runtime.o LLVM bitcode so stdlib FFI inlines into user
+# code at link time — a perf win, not a correctness requirement. Some
+# drivers can't honor it: `zig cc` targeting native macOS links via
+# ld64 (not LLD) and rejects -flto. Probe the actual driver; on failure
+# fall back to a plain native object and record stdlib/runtime.nolto so
+# the link-side consumers (nurl.sh, run_tests.sh) drop -flto to match.
+if [ -n "$LTO_FLAG" ]; then
+    if echo 'int _nurl_lto_probe(void){return 0;}' \
+        | "${CC[@]}" -O2 -flto -x c -c - -o /dev/null 2>/dev/null; then
+        rm -f stdlib/runtime.nolto
+    else
+        LTO_FLAG=""
+        echo 1 > stdlib/runtime.nolto
+        log "[info] ${CC[*]} cannot honor -flto here — runtime.o built as a native object (no cross-boundary inlining)"
+    fi
+else
+    echo 1 > stdlib/runtime.nolto
+fi
 
 # ── libcurl detection ────────────────────────────────────────
 # When pkg-config knows about libcurl, build the runtime with the
@@ -231,7 +261,7 @@ fi
 # matching `-flto` on every clang invocation that consumes runtime.o
 # (this script, nurl.sh, compiler/tests/run_tests.sh, tools/*/build.sh)
 # triggers the LTO link pipeline.
-step "runtime"       bash -c "'$CLANG' -O2 $LTO_FLAG $SAN_CFLAGS $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $ZLIB_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
+step "runtime"       "${CC[@]}" -O2 $LTO_FLAG $SAN_CFLAGS $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $ZLIB_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o
 
 # Under `-flto` the `runtime.o` above is LLVM bitcode, which a plain GNU
 # `ld` cannot link. The LTO consumers (this script, nurl.sh, the test
@@ -242,7 +272,7 @@ step "runtime"       bash -c "'$CLANG' -O2 $LTO_FLAG $SAN_CFLAGS $CURL_CFLAGS $O
 # so the feature defines stay identical to `runtime.o`. With LTO off
 # `runtime.o` is already an ELF object, so just copy it.
 if [ -n "$LTO_FLAG" ]; then
-    step "runtime-native" "$CLANG" -O2 -c -x ir stdlib/runtime.o -o stdlib/runtime.native.o
+    step "runtime-native" "${CC[@]}" -O2 -c -x ir stdlib/runtime.o -o stdlib/runtime.native.o
 else
     step "runtime-native" cp stdlib/runtime.o stdlib/runtime.native.o
 fi
@@ -263,10 +293,10 @@ elif pkg-config --exists sdl2 2>/dev/null; then
     SDL2_INC="${SDL2_INC%/SDL2}"
 fi
 if [ -n "$SDL2_INC" ]; then
-    step "canvas"    "$CLANG" -c stdlib/canvas.c -DNURL_HAVE_SDL2 -I"$SDL2_INC" -o stdlib/canvas.o
+    step "canvas"    "${CC[@]}" -c stdlib/canvas.c -DNURL_HAVE_SDL2 -I"$SDL2_INC" -o stdlib/canvas.o
     echo 1 > stdlib/canvas.sdl2
 else
-    step "canvas"    "$CLANG" -c stdlib/canvas.c -o stdlib/canvas.o
+    step "canvas"    "${CC[@]}" -c stdlib/canvas.c -o stdlib/canvas.o
     rm -f stdlib/canvas.sdl2
     log "[info] libsdl2-dev not found — built canvas.o as a stub (canvas demos will link but abort at runtime)"
 fi
@@ -276,10 +306,10 @@ step "clean"         rm -f build/nurlc_py.ll build/nurlc_py \
                           build/nurlc
 
 step "stage0 ir"     bash -c 'python compiler/nurlc.py --llvm compiler/nurlc.nu > build/nurlc_py.ll'
-step "stage0 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS build/nurlc_py.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_py
+step "stage0 link"   "${CC[@]}" -O2 $LTO_FLAG $SAN_LDFLAGS build/nurlc_py.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_py
 
 step "stage1 ir"     bash -c './build/nurlc_py compiler/nurlc.nu > build/nurlc_self.ll'
-step "stage1 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS build/nurlc_self.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_self
+step "stage1 link"   "${CC[@]}" -O2 $LTO_FLAG $SAN_LDFLAGS build/nurlc_self.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_self
 
 # Informational: python vs nurlc_py IR (not fatal).
 if cmp -s build/nurlc_py.ll build/nurlc_self.ll; then
@@ -289,7 +319,7 @@ else
 fi
 
 step "stage2 ir"     bash -c './build/nurlc_self compiler/nurlc.nu > build/nurlc_self2.ll'
-step "stage2 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS build/nurlc_self2.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_self2
+step "stage2 link"   "${CC[@]}" -O2 $LTO_FLAG $SAN_LDFLAGS build/nurlc_self2.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_self2
 
 # Fixed-point: nurlc_self must match nurlc_self2.
 if ! cmp -s build/nurlc_self.ll build/nurlc_self2.ll; then

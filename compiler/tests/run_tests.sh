@@ -37,15 +37,31 @@ if [[ ! -f "$RUNTIME" ]]; then
     exit 2
 fi
 
-CLANG="${CLANG:-clang}"
-if ! command -v "$CLANG" &>/dev/null; then
-    for c in /usr/lib/llvm/bin/clang /usr/local/bin/clang; do
-        [ -x "$c" ] && CLANG="$c" && break
-    done
+# build.sh drops stdlib/runtime.nolto when runtime.o is a plain native
+# object (e.g. built by `zig cc` on macOS, which can't LTO) rather than
+# LLVM bitcode. Match it at link time: pass -flto only when runtime.o
+# actually carries bitcode.
+if [[ -f "$ROOT_DIR/stdlib/runtime.nolto" ]]; then
+    LTO_FLAG=""
+else
+    LTO_FLAG="-flto"
 fi
-if ! command -v "$CLANG" &>/dev/null; then
-    echo "ERROR: clang not found" >&2
-    exit 2
+
+# C toolchain driver. NURL_CC (preferred, supports multi-word like
+# "zig cc") falls back to the legacy CLANG var, then to plain clang.
+# Must match the driver build.sh used for runtime.o so the LTO bitcode
+# versions agree at link time.
+read -r -a CC <<< "${NURL_CC:-${CLANG:-clang}}"
+if ! command -v "${CC[0]}" &>/dev/null; then
+    if [[ "${#CC[@]}" -eq 1 && "${CC[0]}" == "clang" ]]; then
+        for c in /usr/lib/llvm/bin/clang /usr/local/bin/clang; do
+            [ -x "$c" ] && CC=("$c") && break
+        done
+    fi
+    if ! command -v "${CC[0]}" &>/dev/null; then
+        echo "ERROR: C driver '${CC[*]}' not found" >&2
+        exit 2
+    fi
 fi
 
 # Link -lcurl when build.sh detected libcurl. Programs that don't import
@@ -279,7 +295,7 @@ for src in "${tests[@]}"; do
     # shellcheck disable=SC2086
     # `-flto` matches build.sh: runtime.o ships as LLVM bitcode and the
     # link-time LTO pipeline inlines runtime symbols into the test binary.
-    if ! "$CLANG" -O2 -flto "$ll" "$RUNTIME" -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o "$bin" 2>/dev/null; then
+    if ! "${CC[@]}" -O2 $LTO_FLAG "$ll" "$RUNTIME" -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o "$bin" 2>/dev/null; then
         echo "LINK FAIL" >> "$RESULTS"
         echo >> "$RESULTS"
         continue

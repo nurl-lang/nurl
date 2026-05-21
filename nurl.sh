@@ -51,6 +51,13 @@ if [[ ! -f "$RUNTIME" ]]; then
     exit 1
 fi
 
+# ── Locate the C toolchain driver ────────────────────────────
+# NURL_CC selects the compiler+linker driver. Defaults to clang; set
+# NURL_CC="zig cc" to compile and link through Zig's bundled toolchain
+# (must match the driver build.sh used for stdlib/runtime.o so the LTO
+# bitcode versions agree). Multi-word values (e.g. "zig cc") supported.
+read -r -a CC <<< "${NURL_CC:-clang}"
+
 # ── Parse arguments ───────────────────────────────────────────
 EMIT_IR=0
 EMIT_ASM=0
@@ -105,7 +112,9 @@ NURLC_ARGS=()
 if [[ $DEBUG_INFO -eq 1 ]]; then
     NURLC_ARGS+=(--g)
 fi
-"$NURLC" "${NURLC_ARGS[@]}" "$SRCFILE" > "$LLFILE"
+# ${arr[@]+...} guard: expanding an empty array under `set -u` is an
+# "unbound variable" error on bash 3.2 (macOS's stock shell).
+"$NURLC" ${NURLC_ARGS[@]+"${NURLC_ARGS[@]}"} "$SRCFILE" > "$LLFILE"
 
 if [[ $EMIT_IR -eq 1 ]]; then
     echo ""
@@ -139,7 +148,7 @@ fi
 # --emit-asm: stop after clang -S, skip linking (no runtime needed for .s).
 if [[ $EMIT_ASM -eq 1 ]]; then
     echo "[2/2] $LLFILE → $SFILE  ($OPT${DEBUG_FLAGS[*]:+ ${DEBUG_FLAGS[*]}} -S)"
-    clang $OPT "${DEBUG_FLAGS[@]}" -S "$LLFILE" -o "$SFILE"
+    "${CC[@]}" $OPT ${DEBUG_FLAGS[@]+"${DEBUG_FLAGS[@]}"} -S "$LLFILE" -o "$SFILE"
     echo ""
     echo "Done: $SFILE"
     exit 0
@@ -229,7 +238,15 @@ fi
 # A side-by-side non-LTO build of runtime.c restores .debug_info in
 # the final binary; the LTO inline win for stdlib FFI is gone, but
 # that's the right trade for a debug build.
-LTO_FLAG="-flto"
+# build.sh drops stdlib/runtime.nolto when it built runtime.o as a plain
+# native object (e.g. `zig cc` on macOS, which can't LTO) instead of LLVM
+# bitcode. In that case the link must NOT pass -flto, or the driver may
+# reject it / find no bitcode to inline.
+if [[ -f "$SCRIPT_DIR/stdlib/runtime.nolto" ]]; then
+    LTO_FLAG=""
+else
+    LTO_FLAG="-flto"
+fi
 RUNTIME_TO_LINK="$RUNTIME"
 if [[ $DEBUG_INFO -eq 1 ]]; then
     LTO_FLAG=""
@@ -244,7 +261,7 @@ if [[ $DEBUG_INFO -eq 1 ]]; then
             fi
         done
         # shellcheck disable=SC2086
-        clang $CFLAGS_DBG -c "$SCRIPT_DIR/stdlib/runtime.c" -o "$DBG_RUNTIME"
+        "${CC[@]}" $CFLAGS_DBG -c "$SCRIPT_DIR/stdlib/runtime.c" -o "$DBG_RUNTIME"
     fi
     RUNTIME_TO_LINK="$DBG_RUNTIME"
 fi
@@ -255,7 +272,7 @@ echo "[2/2] $LLFILE → $OUTBASE  ($OPT${LTO_FLAG:+ $LTO_FLAG}${DEBUG_FLAGS[*]:+
 # every vec_data / nurl_peek / nurl_poke / nurl_print across the
 # runtime ↔ user-code boundary.
 # shellcheck disable=SC2086
-clang $OPT $LTO_FLAG "${DEBUG_FLAGS[@]}" "$LLFILE" "$RUNTIME_TO_LINK" "${EXTRA_OBJS[@]}" -o "$OUTBASE" -lm -lpthread "${EXTRA_LIBS[@]}"
+"${CC[@]}" $OPT $LTO_FLAG ${DEBUG_FLAGS[@]+"${DEBUG_FLAGS[@]}"} "$LLFILE" "$RUNTIME_TO_LINK" ${EXTRA_OBJS[@]+"${EXTRA_OBJS[@]}"} -o "$OUTBASE" -lm -lpthread ${EXTRA_LIBS[@]+"${EXTRA_LIBS[@]}"}
 
 echo ""
 echo "Done: $OUTBASE"
