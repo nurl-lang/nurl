@@ -32,58 +32,13 @@ if [[ ! -f "$RUNTIME" ]]; then
     exit 1
 fi
 
-CLANG="${CLANG:-clang}"
-if ! command -v "$CLANG" >/dev/null 2>&1; then
-    echo "ERROR: clang not on PATH (set CLANG=/path/to/clang to override)." >&2
-    exit 1
-fi
-
 mkdir -p "$ROOT_DIR/build"
 
 echo "[1/2] $SRC → build/nurlfmt.ll"
 "$NURLC" "$SRC" > "$ROOT_DIR/build/nurlfmt.ll"
 
-# nurlfmt itself uses none of these libraries, but stdlib/runtime.o is
-# always built with the back-ends it found at build.sh time, so we must
-# match the link line that ./build.sh used. The marker files
-# stdlib/runtime.{curl,openssl,sqlite3,pq} tell us which libraries
-# the runtime expects.
-EXTRA_LIBS=()
-if [[ -f "$ROOT_DIR/stdlib/runtime.curl" ]]; then
-    if pkg-config --exists libcurl 2>/dev/null; then
-        # shellcheck disable=SC2207
-        EXTRA_LIBS+=( $(pkg-config --libs libcurl) )
-    else
-        EXTRA_LIBS+=( -lcurl )
-    fi
-fi
-if [[ -f "$ROOT_DIR/stdlib/runtime.openssl" ]]; then
-    if pkg-config --exists openssl 2>/dev/null; then
-        # shellcheck disable=SC2207
-        EXTRA_LIBS+=( $(pkg-config --libs openssl) )
-    else
-        EXTRA_LIBS+=( -lssl -lcrypto )
-    fi
-fi
-if [[ -f "$ROOT_DIR/stdlib/runtime.sqlite3" ]]; then
-    if pkg-config --exists sqlite3 2>/dev/null; then
-        # shellcheck disable=SC2207
-        EXTRA_LIBS+=( $(pkg-config --libs sqlite3) )
-    else
-        EXTRA_LIBS+=( -lsqlite3 )
-    fi
-fi
-if [[ -f "$ROOT_DIR/stdlib/runtime.pq" ]]; then
-    if pkg-config --exists libpq 2>/dev/null; then
-        # shellcheck disable=SC2207
-        EXTRA_LIBS+=( $(pkg-config --libs libpq) )
-    else
-        EXTRA_LIBS+=( -lpq )
-    fi
-fi
-
 echo "[2/2] build/nurlfmt.ll → build/nurlfmt"
-"$CLANG" -O2 -flto "$ROOT_DIR/build/nurlfmt.ll" "$RUNTIME" -lm -lpthread "${EXTRA_LIBS[@]}" -o "$ROOT_DIR/build/nurlfmt"
+"$ROOT_DIR/tools/nurl-build/run.sh" "$ROOT_DIR" "$ROOT_DIR/build/nurlfmt.ll" "$ROOT_DIR/build/nurlfmt"
 
 echo ""
 echo "Done: $ROOT_DIR/build/nurlfmt"

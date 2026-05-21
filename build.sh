@@ -129,6 +129,20 @@ if ! command -v "${CC[0]}" &>/dev/null; then
     fi
 fi
 
+if [[ -n "${PYTHON:-}" ]]; then
+    if ! command -v "$PYTHON" &>/dev/null; then
+        echo "ERROR: Python interpreter '$PYTHON' not found"; exit 1
+    fi
+else
+    if command -v python3 &>/dev/null; then
+        PYTHON="python3"
+    elif command -v python &>/dev/null; then
+        PYTHON="python"
+    else
+        echo "ERROR: python3 or python not found"; exit 1
+    fi
+fi
+
 mkdir -p build
 
 # ── LTO capability probe ─────────────────────────────────────
@@ -305,7 +319,7 @@ step "clean"         rm -f build/nurlc_py.ll build/nurlc_py \
                           build/nurlc_self2.ll build/nurlc_self2 \
                           build/nurlc
 
-step "stage0 ir"     bash -c 'python compiler/nurlc.py --llvm compiler/nurlc.nu > build/nurlc_py.ll'
+step "stage0 ir"     env PYTHON="$PYTHON" bash -c '"$PYTHON" compiler/nurlc.py --llvm compiler/nurlc.nu > build/nurlc_py.ll'
 step "stage0 link"   "${CC[@]}" -O2 $LTO_FLAG $SAN_LDFLAGS build/nurlc_py.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_py
 
 step "stage1 ir"     bash -c './build/nurlc_py compiler/nurlc.nu > build/nurlc_self.ll'

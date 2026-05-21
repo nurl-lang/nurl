@@ -32,56 +32,13 @@ if [[ ! -f "$RUNTIME" ]]; then
     exit 1
 fi
 
-CLANG="${CLANG:-clang}"
-if ! command -v "$CLANG" >/dev/null 2>&1; then
-    echo "ERROR: clang not on PATH (set CLANG=/path/to/clang to override)." >&2
-    exit 1
-fi
-
 mkdir -p "$ROOT_DIR/build"
 
 echo "[1/2] $SRC → build/nurl-lsp.ll"
 "$NURLC" "$SRC" > "$ROOT_DIR/build/nurl-lsp.ll"
 
-# Match build.sh's link line — runtime.o was compiled with whatever
-# back-ends were detected at build time; the marker files tell us
-# which libs we need to add.
-EXTRA_LIBS=()
-if [[ -f "$ROOT_DIR/stdlib/runtime.curl" ]]; then
-    if pkg-config --exists libcurl 2>/dev/null; then
-        # shellcheck disable=SC2207
-        EXTRA_LIBS+=( $(pkg-config --libs libcurl) )
-    else
-        EXTRA_LIBS+=( -lcurl )
-    fi
-fi
-if [[ -f "$ROOT_DIR/stdlib/runtime.openssl" ]]; then
-    if pkg-config --exists openssl 2>/dev/null; then
-        # shellcheck disable=SC2207
-        EXTRA_LIBS+=( $(pkg-config --libs openssl) )
-    else
-        EXTRA_LIBS+=( -lssl -lcrypto )
-    fi
-fi
-if [[ -f "$ROOT_DIR/stdlib/runtime.sqlite3" ]]; then
-    if pkg-config --exists sqlite3 2>/dev/null; then
-        # shellcheck disable=SC2207
-        EXTRA_LIBS+=( $(pkg-config --libs sqlite3) )
-    else
-        EXTRA_LIBS+=( -lsqlite3 )
-    fi
-fi
-if [[ -f "$ROOT_DIR/stdlib/runtime.pq" ]]; then
-    if pkg-config --exists libpq 2>/dev/null; then
-        # shellcheck disable=SC2207
-        EXTRA_LIBS+=( $(pkg-config --libs libpq) )
-    else
-        EXTRA_LIBS+=( -lpq )
-    fi
-fi
-
 echo "[2/2] build/nurl-lsp.ll → build/nurl-lsp"
-"$CLANG" -O2 -flto "$ROOT_DIR/build/nurl-lsp.ll" "$RUNTIME" -lm -lpthread "${EXTRA_LIBS[@]}" -o "$ROOT_DIR/build/nurl-lsp"
+"$ROOT_DIR/tools/nurl-build/run.sh" "$ROOT_DIR" "$ROOT_DIR/build/nurl-lsp.ll" "$ROOT_DIR/build/nurl-lsp"
 
 echo ""
 echo "Done: $ROOT_DIR/build/nurl-lsp"

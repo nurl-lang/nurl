@@ -74,6 +74,8 @@ CLAUDE.local.md
 # ─── Logs & local config ──────────────────────────────────────
 *.log
 *.local
+.zig-cache/
+.zig-cache-global/
 
 # ─── Repository-specific scratch ──────────────────────────────
 # Stray dev outputs that have shown up at the repo root historically.
