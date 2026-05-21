@@ -10,6 +10,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **`inout` / `sink` parameter conventions on generic functions.**
+  A generic function may now mark a parameter `inout` (exclusive
+  mutable borrow) or `sink` (the callee consumes it), exactly like an
+  ordinary function:
+
+  ```
+  @ store_g [A] inout i slot  A item → v { = slot + slot 1 }
+  ( store_g [i] n 7 )    // n is mutated in place
+  ```
+
+  A parameter convention is a property of parameter *position*, not of
+  the type arguments, so the `inout` / `sink` index sets are computed
+  once from the generic template (the new `compute_generic_inout_sink`,
+  keyed by the generic name) and a call site resolves them by that
+  name — the mangled-instantiation entry only appears once the
+  deferred monomorphisation is compiled, which is too late for the
+  call that triggered it. Previously a generic `inout` argument was
+  passed by value into a `<T>*` parameter (an LLVM type mismatch). A
+  forward call to a generic `inout` function is rejected with the same
+  define-before-call diagnostic as the non-generic case. Regression
+  tests `compiler/tests/inout_generic.nu` and
+  `should_fail_inout_generic_forward.nu`. See `BORROW.md` Phase 4.
+
 * **Forward references for enum-variant payload types.** An enum
   variant whose payload is a struct or enum declared *later* in the
   same file now parses correctly:

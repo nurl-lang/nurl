@@ -503,16 +503,33 @@ deleted; no false positives across stdlib/compiler.
 > is unchanged). Regression tests: `sink_basic.nu`,
 > `borrow_sink_use_after.nu`, `should_fail_sink_autodrop.nu`.
 >
+> **`inout` / `sink` on generic functions — LANDED 2026-05-21.** A
+> parameter convention is a property of parameter POSITION, not of the
+> type arguments, so the index sets are type-independent. The new
+> helper `compute_generic_inout_sink` walks the stored generic
+> template once (substituting every tparam with a concrete primitive,
+> since a bare tparam letter like `T` lexes as a bool token and would
+> trip `parse_type`), and publishes `g_fn_inout` / `g_fn_sink` keyed by
+> the GENERIC name — `gen_generic_fn_store` calls it at decl time.
+> `gen_call` resolves a generic call's conventions via that
+> generic-name key, since the mangled-name entry only appears once the
+> deferred instantiation is itself compiled (too late for the call
+> that triggered it). `scan_fn_sigs`'s generic branch now also scans
+> the parameter region for the `inout` marker, recording
+> `<fname>__has_inout` so a *forward* call to a generic `inout`
+> function is rejected with the same clear diagnostic as the ordinary
+> case (define-before-call, consistent with non-generic `inout`).
+> Regressions: `inout_generic.nu` (generic `inout` scalar + generic
+> `inout` struct + generic `sink`, two instantiations) and
+> `should_fail_inout_generic_forward.nu`.
+>
 > **Still pending for full Phase 4:** `sink` of a *compiler-auto-
 > dropped* argument (an owned string / slice / `Drop` value / struct
 > with owned fields) — transferring the auto-drop obligation to the
 > callee needs `mem_*` surgery and is double-free-prone; `sink` v1
 > rejects such an argument at the call site rather than risk it, so
 > `sink` currently applies to `Vec` and other manually-managed
-> handles. Also: `inout`/`sink` on generic functions (deferred
-> instantiation means the call site precedes the body — `inout` is
-> rejected by the forward-reference guard, `sink` silently misses the
-> move diagnostic); `inout` field targets (`= . obj fld`) and
+> handles. Also: `inout` field targets (`= . obj fld`) and
 > `inout`/`sink` on impl methods / closures.
 
 **Goal:** give the language a way to *name* a non-owning borrow, so
@@ -819,8 +836,9 @@ default (`--no-borrowck` disables it); bug classes 1/2/3/5 are closed
 and bug class 6 (aliased mutation) is closed for the call-site case;
 the corpus is move/alias/escape/iter clean; `docs/MEMORY.md`
 documents the model. Part III decided: Option B (mutable value
-semantics) — the `inout` and `sink` parameter conventions are live.
-Next: `sink` of compiler-auto-dropped arguments (needs `mem_*`
-drop-ownership transfer), `inout`/`sink` on generics / field targets
-/ impl methods, then full Phase 8 (promote `warning:` to `error:`
-after the on-by-default soak). Last updated 2026-05-20.*
+semantics) — the `inout` and `sink` parameter conventions are live,
+and (2026-05-21) work on generic functions. Next: `sink` of
+compiler-auto-dropped arguments (needs `mem_*` drop-ownership
+transfer), `inout`/`sink` on impl methods and `inout` field targets
+(`= . obj fld`), then full Phase 8 (promote `warning:` to `error:`
+after the on-by-default soak). Last updated 2026-05-21.*

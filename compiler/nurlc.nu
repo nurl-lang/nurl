@@ -1758,19 +1758,34 @@
     // gen_fn_decl_concrete as the callee is compiled). An argument at
     // one of these positions is passed by address — see the
     // per-argument handling below. Empty for an ordinary function.
-    : s callee_inout ( nurl_sym_get g_fn_inout call_name )
+    : ~ s callee_inout ( nurl_sym_get g_fn_inout call_name )
     // BORROW.md Phase 4: indices of the callee's `sink` parameters —
     // an argument there is consumed (move-checked at the call site).
-    : s callee_sink ( nurl_sym_get g_fn_sink call_name )
+    : ~ s callee_sink ( nurl_sym_get g_fn_sink call_name )
+    // Generic call: g_fn_inout / g_fn_sink for a generic function are
+    // keyed by the GENERIC name (the index sets are type-independent,
+    // computed once by compute_generic_inout_sink). The mangled
+    // call_name gets its own entry only once the deferred
+    // instantiation is compiled — too late for this call site. When
+    // call_name is a mangled generic name (call_name != fname) with no
+    // direct entry, fall back to the generic-name lookup.
+    ? & == 0 ( nurl_str_len callee_inout ) ! ( seq call_name fname )
+    { = callee_inout ( nurl_sym_get g_fn_inout fname ) }
+    {}
+    ? & == 0 ( nurl_str_len callee_sink ) ! ( seq call_name fname )
+    { = callee_sink ( nurl_sym_get g_fn_sink fname ) }
+    {}
     // If the callee is known (scan_fn_sigs) to have `inout` parameters
-    // but g_fn_inout has no entry, it is being called BEFORE its
+    // but g_fn_inout still has no entry, it is being called BEFORE its
     // definition was compiled — passing the argument by value would
-    // mismatch the `<T>*` parameter and miscompile silently. Reject it.
+    // mismatch the `<T>*` parameter and miscompile silently. Holds for
+    // both ordinary and generic functions: scan_fn_sigs records
+    // `<fname>__has_inout` for either. Reject it.
     ? & == 0 ( nurl_str_len callee_inout )
           ( seq ( nurl_sym_get syms ( nurl_str_cat fname `__has_inout` ) ) `1` )
     { ( die lex ( nurl_str_cat3
         `function '` fname
-        `' has 'inout' parameters and must be defined before it is called - move its definition above this call site (inout on generic functions is not yet supported)` ) ) }
+        `' has 'inout' parameters and must be defined before it is called - move its definition above this call site` ) ) }
     {}
     // Phase 2B parameter-ownership: collect register values for arg expressions
     // whose result is a fresh owned-string allocation (e.g. `nurl_str_cat`),
@@ -7201,6 +7216,68 @@
     result
 }
 
+// compute_generic_inout_sink: derive a generic function's `inout` and
+// `sink` parameter index sets from its stored template and publish
+// them under the GENERIC name in g_fn_inout / g_fn_sink.
+//
+// A parameter convention is a property of parameter POSITION, not of
+// the type arguments, so one computation serves every instantiation.
+// A call site looks the sets up by the generic name (see gen_call):
+// the mangled-name entry only appears once the deferred instantiation
+// is itself compiled, which is too late for the call site that
+// triggered it.
+//
+// parse_type and its helpers emit no IR and trigger no struct
+// instantiation — the scan_generic_structs pre-pass owns that — so
+// walking the raw template here, tparam tokens (`A` / `T` …) and all,
+// is side-effect-free.
+@ compute_generic_inout_sink s fname → v {
+    : s gsrc ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__gsrc` ) )
+    ? != 0 ( nurl_str_len gsrc )
+    { // Substitute every type parameter with a concrete primitive (`i`)
+      // before parsing. A bare tparam letter such as `T` or `F` lexes
+      // as TT_BOOL, which parse_type rejects with `expected type`; the
+      // real instantiation path dodges this because emit_one_instantiation
+      // substitutes the tparams away first. The substitution is
+      // type-irrelevant here — only parameter POSITIONS are read.
+        : ~ s probe gsrc
+        : ~ s tpr ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__tparams` ) )
+        ~ != 0 ( nurl_str_len tpr )
+        { : s tp ( str_first_word tpr )
+            = tpr ( str_skip_word tpr )
+            = probe ( subst_source probe tp `i` )
+        }
+        : i lexp ( nurl_lex_new probe `<gsig>` )
+        : ~ s ia ``
+        : ~ s sa ``
+        : ~ i pc 0
+        // Walk the parameter region only — stop at `→` (or, defensively,
+        // at the body `{` if a malformed template lacks the arrow).
+        ~ & & != ( nurl_lex_type lexp ) TT_ARROW != ( nurl_lex_type lexp ) TT_EOF
+                != ( nurl_lex_type lexp ) TT_LBRACE
+        { : i mk ( parse_param_marker lexp )
+            ? == mk 1
+            { = ia ? == 0 ( nurl_str_len ia )
+                ( nurl_str_int pc )
+                ( nurl_str_cat3 ia ` ` ( nurl_str_int pc ) ) }
+            {}
+            ? == mk 2
+            { = sa ? == 0 ( nurl_str_len sa )
+                ( nurl_str_int pc )
+                ( nurl_str_cat3 sa ` ` ( nurl_str_int pc ) ) }
+            {}
+            ( parse_type lexp )
+            ? ( is_ident_tok ( nurl_lex_type lexp ) )
+            { ( nurl_lex_advance lexp ) }
+            {}
+            = pc + pc 1
+        }
+        ( nurl_sym_def g_fn_inout fname ia )
+        ( nurl_sym_def g_fn_sink fname sa )
+    }
+    {}
+}
+
 // gen_generic_fn_store: record a generic function declaration.
 // Called when '[' is seen after the function name in gen_fn_decl.
 // Stores source template in g_generic_syms; emits no IR.
@@ -7233,6 +7310,11 @@
     ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__tparams` ) tparams )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__gsrc` ) src )
     ( nurl_sym_def syms ( nurl_str_cat fname `__generic` ) `1` )
+    // BORROW.md Phase 4: record this generic function's `inout` / `sink`
+    // parameter index sets (keyed by the generic name) so a call site
+    // can pass `inout` arguments by address and move-mark `sink` ones
+    // without waiting for the deferred instantiation to be compiled.
+    ( compute_generic_inout_sink fname )
 }
 
 // compute_generic_ret_ty: determine return type of a generic instantiation
@@ -9588,6 +9670,24 @@
                 { ~ != ( nurl_lex_type lex ) TT_RBRACK { ( nurl_lex_advance lex ) }
                     ( nurl_lex_advance lex )  // consume ']'
                     ( nurl_sym_def syms ( nurl_str_cat fname `__generic` ) `1` )
+                    // BORROW.md Phase 4: scan the parameter region (from
+                    // here to the body `{`) for the `inout` marker, just
+                    // as the non-generic branch below does. `inout` is
+                    // banned as a parameter NAME so a bare `inout` token
+                    // here is exact. This lets a forward call to a
+                    // generic `inout` function be rejected cleanly — the
+                    // index set itself is computed by
+                    // compute_generic_inout_sink at gen_generic_fn_store.
+                    : ~ b g_saw_inout F
+                    ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF
+                    { ? & ( is_ident_tok ( nurl_lex_type lex ) )
+                          ( seq ( nurl_lex_val lex ) `inout` )
+                        { = g_saw_inout T }
+                        {}
+                        ( nurl_lex_advance lex ) }
+                    ? g_saw_inout
+                    { ( nurl_sym_def syms ( nurl_str_cat fname `__has_inout` ) `1` ) }
+                    {}
                     ( skip_balanced lex )
                 }
                 { // BORROW.md Phase 4: blind-advance the parameter
