@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **`stdlib/std/time.nu` calendar completion.** On top of the existing
+  `Time` struct and Hinnant `civil_from_days` conversions:
+
+  * `is_leap_year`, `days_in_month` (leap-aware), `time_yday` (1..366).
+  * `time_make Y Mo D H Mi S` — range-checked civil-time constructor
+    (rejects e.g. 2023-02-29 and month 13).
+  * `time_cmp` / `time_eq` / `time_before` / `time_after` — order
+    timestamps (by Unix-second value).
+  * `time_add_seconds` / `time_add_days` (negative subtracts; rolls
+    month/year/leap-day over) / `time_diff_seconds`.
+  * `time_format t fmt` — strftime subset (`%Y %y %m %d %H %M %S %j
+    %a %A %b %B %%`), alongside the fixed `time_format_iso` /
+    `time_format_http`.
+
+  Regression `compiler/tests/time_calendar.nu`; `calendar_time.nu`
+  updated. All pure NURL arithmetic, ASan/UBSan/leak-clean.
+
 * **Buffered streaming reader — `stdlib/std/bufio.nu`.** `BufReader` pulls
   a file (or stdin) through a 64 KiB buffer one `fread` at a time, so an
   input far larger than RAM is processed without ever being fully
@@ -130,6 +147,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   struct / enum / generic-struct name before the main compile pass,
   following `$`-imports. Regression test
   `compiler/tests/forward_enum_payload.nu`.
+
+### Changed
+
+* **`time_parse_iso` now returns `! i ParseErr`** (Unix seconds), not
+  `! Time ParseErr`. A wide value-struct `! T E` payload is silently
+  truncated when the result is matched directly as `?? ( call ) { … }`
+  — a compiler bug; binding it to a `:` variable first is sound, but
+  the narrow `i` payload is immune either way. Convert with
+  `time_from_unix` for the broken-down `Time`. `time_make` (new) uses
+  the same `! i ParseErr` shape for consistency.
 
 ### Fixed
 

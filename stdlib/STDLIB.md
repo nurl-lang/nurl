@@ -317,11 +317,23 @@ Tähän asti NURL on käyttökelpoinen yleiskieli. Nämä tekevät siitä kilpai
 - [x] `monotonic_ns` → `i` (`stdlib/std/time.nu`, 2026-04-27 — `CLOCK_MONOTONIC`, fallback REALTIME jos ei tuettu)
 - [x] `sleep_ms ms` (`stdlib/std/time.nu`, 2026-04-27 — `nanosleep` Linuxilla, `Sleep` Windowsilla; signaalisuojattu retry-silmukka EINTR:lle)
 - [x] `elapsed_ms_since t0` → `i` (`stdlib/std/time.nu`, 2026-04-27 — convenience benchmark-helper)
-- [ ] `Time { i year, i month, i day, i hour, i min, i sec, i ns }` (NURL)
-- [ ] `time_from_unix t` → `Time` (NURL — laske NURL:ssa)
-- [ ] `time_format t fmt` → `String` (NURL, fmt-pattern käsin)
-- [ ] `time_parse s fmt` → `! Time ParseErr` (NURL)
-- Testi: `compiler/tests/time_basic.nu` (8 invarianttia — kaikki epädeterministiset arvot maskataan totuusarvoiksi: positiivisuus, monotonic-järjestys, sleep ≥ 30 ms, no-op nollasleep).
+- [x] `Time { year month day hour min sec ns wday }` + `time_from_unix` /
+      `time_to_unix` / `time_now` (`stdlib/std/time.nu` — Howard Hinnantin
+      `civil_from_days` / `days_from_civil`, UTC, koko i64-alue).
+- [x] Kalenteri (`stdlib/std/time.nu`, 2026-05-21): `is_leap_year`,
+      `days_in_month`, `time_make` (validoiva konstruktori), `time_yday`,
+      vertailu `time_cmp` / `time_eq` / `time_before` / `time_after`,
+      aritmetiikka `time_add_seconds` / `time_add_days` / `time_diff_seconds`.
+- [x] `time_format t fmt` → `String` — strftime-osajoukko (`%Y %y %m %d %H
+      %M %S %j %a %A %b %B %%`) + kiinteät `time_format_iso` / `time_format_http`.
+- [x] `time_parse_iso s` → `! i ParseErr` (Unix-sekunnit; ISO 8601 +
+      offset). Palauttaa `i`:n eikä `Time`:ä — leveä `! T E`-payload
+      katkeaa suorassa `?? ( kutsu )`-matchissa (kääntäjäbugi), kapea `i`
+      on immuuni. `time_make` palauttaa samoin `! i ParseErr`. Konvertoi
+      `time_from_unix`:llä.
+- Testit: `compiler/tests/time_basic.nu` (kellot/sleep) + `calendar_time.nu`
+      (referenssipisteet, round-trip, ISO-parse) + `time_calendar.nu`
+      (`time_make` / leap / vertailu / aritmetiikka / `time_format`).
 
 ### 13. `regex` — säännölliset lausekkeet (`stdlib/ext/regex.nu`, MVP 2026-04-28)
 - [x] `regex_compile pattern` → `! Regex ParseErr` (NURL — Thompson NFA-konstruktio)

@@ -13,9 +13,23 @@
 //   ( time_from_unix i secs )      → Time         civil_from_days alg.
 //   ( time_to_unix Time t )        → i            inverse, days_from_civil
 //   ( time_now )                   → Time         convenience for now_seconds
-//   ( time_format_iso  Time t )    → String       "2026-05-06T17:30:45Z"
-//   ( time_format_http Time t )    → String       "Wed, 06 May 2026 17:30:45 GMT"
-//   ( time_parse_iso s txt )       → ! Time ParseErr
+//   ( time_make Y Mo D H Mi S )    → ! i ParseErr   validated → Unix secs
+//   ( is_leap_year i y )           → b
+//   ( days_in_month i y i m )      → i             leap-aware month length
+//   ( time_yday Time t )           → i             day of year, 1..365/366
+//   ( time_cmp a b )               → i             -1 / 0 / 1
+//   ( time_eq / time_before / time_after a b ) → b
+//   ( time_add_seconds Time t i n )  → Time         (negative subtracts)
+//   ( time_add_days    Time t i n )  → Time         rolls month/year over
+//   ( time_diff_seconds a b )      → i             signed a − b
+//   ( time_format Time t s fmt )   → String        strftime subset
+//   ( time_format_iso  Time t )    → String        "2026-05-06T17:30:45Z"
+//   ( time_format_http Time t )    → String        "Wed, 06 May 2026 17:30:45 GMT"
+//   ( time_parse_iso s txt )       → ! i ParseErr   parsed → Unix secs
+//
+// time_make / time_parse_iso yield the Unix timestamp (an `i`), not a
+// `Time` — a narrow `i` payload is immune to the wide-`! T E`-payload
+// truncation bug. Convert with `time_from_unix` when you need fields.
 //
 // Typical benchmark pattern:
 //   : i t0 ( monotonic_ns )
@@ -141,6 +155,105 @@ $ `stdlib/core/errors.nu`
     ^ ( time_from_unix ( now_seconds ) )
 }
 
+// ── Calendar helpers ─────────────────────────────────────────────────
+
+// Proleptic Gregorian leap year: divisible by 4, except centuries,
+// except every 400th.
+@ is_leap_year i y → b {
+    ? != ( __i_mod y 4 ) 0 { ^ F } {}
+    ? != ( __i_mod y 100 ) 0 { ^ T } {}
+    ^ == ( __i_mod y 400 ) 0
+}
+
+// Number of days in month `m` (1..12) of year `y`. February is
+// leap-year aware. `m` outside 1..12 yields 31 (callers validate).
+@ days_in_month i y i m → i {
+    ? == m 2 { ^ ? ( is_leap_year y ) 29 28 } {}
+    ? | | | == m 4 == m 6 == m 9 == m 11 { ^ 30 } {}
+    ^ 31
+}
+
+// Validated civil-time constructor. Every field is range-checked (day
+// against the actual month length, so 2023-02-29 is rejected but
+// 2024-02-29 is accepted); out-of-range input → `ParseErr.BadFormat`.
+//
+// Returns the **Unix timestamp** (seconds), not a `Time`. A wide-payload
+// `! T E` value is silently truncated when matched directly as
+// `?? ( call ) { … }` (a compiler bug — binding the result to a `:`
+// variable first is the working form); an `! i ParseErr` carries a
+// narrow `i` payload and is immune. Pass the result to `time_from_unix`
+// for the broken-down fields:
+//   : !i ParseErr r ( time_make 2026 5 21 14 39 0 )
+//   ?? r {
+//     T secs → { : Time t ( time_from_unix secs )  … }
+//     F e → …
+//   }
+@ time_make i year i month i day i hour i min i sec → !i ParseErr {
+    ? | < month 1 > month 12
+        { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? | < day 1 > day ( days_in_month year month )
+        { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? | < hour 0 > hour 23
+        { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? | < min 0 > min 59
+        { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? | < sec 0 > sec 59
+        { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
+    ^ @ !i ParseErr { T ( time_to_unix @ Time { year month day hour min sec 0 0 } ) }
+}
+
+// Day of year, 1 (Jan 1) .. 365/366 (Dec 31).
+@ time_yday Time t → i {
+    : i d0 ( __days_from_civil . t year 1 1 )
+    : i dn ( __days_from_civil . t year . t month . t day )
+    ^ + - dn d0 1
+}
+
+// ── Comparison ───────────────────────────────────────────────────────
+//
+// All comparisons are by Unix-second value (sub-second `ns` is ignored
+// — `time_from_unix` never populates it). Suitable for sorting /
+// filtering timestamp columns in ETL.
+
+@ time_cmp Time a Time b → i {
+    : i ua ( time_to_unix a )
+    : i ub ( time_to_unix b )
+    ? < ua ub { ^ -1 } {}
+    ? > ua ub { ^ 1 } {}
+    ^ 0
+}
+
+@ time_eq Time a Time b → b {
+    ^ == ( time_to_unix a ) ( time_to_unix b )
+}
+
+@ time_before Time a Time b → b {
+    ^ < ( time_to_unix a ) ( time_to_unix b )
+}
+
+@ time_after Time a Time b → b {
+    ^ > ( time_to_unix a ) ( time_to_unix b )
+}
+
+// ── Arithmetic ───────────────────────────────────────────────────────
+//
+// Add/subtract via the Unix-second axis, then re-derive the calendar
+// fields — so `time_add_days t 1` correctly rolls over month and year
+// boundaries (and leap days). Negative arguments subtract.
+
+@ time_add_seconds Time t i secs → Time {
+    ^ ( time_from_unix + ( time_to_unix t ) secs )
+}
+
+@ time_add_days Time t i days → Time {
+    ^ ( time_from_unix + ( time_to_unix t ) * days 86400 )
+}
+
+// Signed second difference a − b.
+@ time_diff_seconds Time a Time b → i {
+    ^ - ( time_to_unix a ) ( time_to_unix b )
+}
+
 // ── Formatting ───────────────────────────────────────────────────────
 
 @ __push_2digit String out i n → v {
@@ -224,6 +337,88 @@ $ `stdlib/core/errors.nu`
     ^ out
 }
 
+@ __push_3digit String out i n → v {
+    ( string_push_char out + 48 / n 100 )
+    ( string_push_char out + 48 / ( __i_mod n 100 ) 10 )
+    ( string_push_char out + 48 ( __i_mod n 10 ) )
+}
+
+@ __wday_full i w → s {
+    ? == w 0 { ^ `Sunday` } {}
+    ? == w 1 { ^ `Monday` } {}
+    ? == w 2 { ^ `Tuesday` } {}
+    ? == w 3 { ^ `Wednesday` } {}
+    ? == w 4 { ^ `Thursday` } {}
+    ? == w 5 { ^ `Friday` } {}
+    ? == w 6 { ^ `Saturday` } {}
+    ^ `???`
+}
+
+@ __month_full i m → s {
+    ? == m 1 { ^ `January` } {}
+    ? == m 2 { ^ `February` } {}
+    ? == m 3 { ^ `March` } {}
+    ? == m 4 { ^ `April` } {}
+    ? == m 5 { ^ `May` } {}
+    ? == m 6 { ^ `June` } {}
+    ? == m 7 { ^ `July` } {}
+    ? == m 8 { ^ `August` } {}
+    ? == m 9 { ^ `September` } {}
+    ? == m 10 { ^ `October` } {}
+    ? == m 11 { ^ `November` } {}
+    ? == m 12 { ^ `December` } {}
+    ^ `???`
+}
+
+// Emit one strftime directive byte `d` into `out`. Returns T if `d` is
+// a recognised directive, F otherwise (the caller then emits the `%`
+// and the byte verbatim). Supported: %Y %y %m %d %H %M %S %j %a %A
+// %b %B %%.
+@ __time_emit_directive String out Time t i d → b {
+    ? == d 37 { ( string_push_char out 37 ) ^ T } {}
+    ? == d 89 { ( __push_4digit out . t year ) ^ T } {}
+    ? == d 121 { ( __push_2digit out ( __i_mod . t year 100 ) ) ^ T } {}
+    ? == d 109 { ( __push_2digit out . t month ) ^ T } {}
+    ? == d 100 { ( __push_2digit out . t day ) ^ T } {}
+    ? == d 72 { ( __push_2digit out . t hour ) ^ T } {}
+    ? == d 77 { ( __push_2digit out . t min ) ^ T } {}
+    ? == d 83 { ( __push_2digit out . t sec ) ^ T } {}
+    ? == d 106 { ( __push_3digit out ( time_yday t ) ) ^ T } {}
+    ? == d 97 { ( string_push_str out ( __wday_name . t wday ) ) ^ T } {}
+    ? == d 65 { ( string_push_str out ( __wday_full . t wday ) ) ^ T } {}
+    ? == d 98 { ( string_push_str out ( __month_name . t month ) ) ^ T } {}
+    ? == d 66 { ( string_push_str out ( __month_full . t month ) ) ^ T } {}
+    ^ F
+}
+
+// strftime-style formatter. `fmt` is a borrowed raw `s`; the result is
+// a fresh owned String. Directives: %Y (4-digit year), %y (2-digit
+// year), %m %d %H %M %S (zero-padded 2-digit), %j (3-digit day of
+// year), %a/%A (abbreviated/full weekday), %b/%B (abbreviated/full
+// month), %% (literal percent). An unrecognised %X is copied verbatim.
+// For the two common fixed shapes prefer `time_format_iso` /
+// `time_format_http` — they skip the directive scan.
+@ time_format Time t s fmt → String {
+    : String out ( string_with_cap 32 )
+    : i n ( nurl_str_len fmt )
+    : ~ i i 0
+    ~ < i n {
+        : i c ( nurl_str_get fmt i )
+        ? & == c 37 < + i 1 n {
+            : i d ( nurl_str_get fmt + i 1 )
+            ? ( __time_emit_directive out t d ) {} {
+                ( string_push_char out 37 )
+                ( string_push_char out d )
+            }
+            = i + i 2
+        } {
+            ( string_push_char out c )
+            = i + i 1
+        }
+    }
+    ^ out
+}
+
 // ── Parsing ───────────────────────────────────────────────────────────
 //
 // Strict ISO 8601 reader: "YYYY-MM-DDTHH:MM:SS[Z|+HH:MM|-HH:MM]".
@@ -254,30 +449,30 @@ $ `stdlib/core/errors.nu`
     ^ acc
 }
 
-@ time_parse_iso s p → !Time ParseErr {
+@ time_parse_iso s p → !i ParseErr {
     : i n ( nurl_str_len p )
-    ? < n 19 { ^ @ !Time ParseErr { F @ ParseErr { Empty } } } {}
+    ? < n 19 { ^ @ !i ParseErr { F @ ParseErr { Empty } } } {}
 
     : i y ( __take_ndigits p 0 4 n )
-    ? < y 0 { ^ @ !Time ParseErr { F @ ParseErr { BadFormat } } } {}
-    ? ! ( __char_at_eq p 4 45 ) { ^ @ !Time ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? < y 0 { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? ! ( __char_at_eq p 4 45 ) { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
     : i mo ( __take_ndigits p 5 2 n )
-    ? < mo 0 { ^ @ !Time ParseErr { F @ ParseErr { BadFormat } } } {}
-    ? ! ( __char_at_eq p 7 45 ) { ^ @ !Time ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? < mo 0 { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? ! ( __char_at_eq p 7 45 ) { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
     : i d ( __take_ndigits p 8 2 n )
-    ? < d 0 { ^ @ !Time ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? < d 0 { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
 
     : i sep ( nurl_str_get p 10 )
-    ? & != sep 84 != sep 116 { ^ @ !Time ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? & != sep 84 != sep 116 { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
 
     : i hh ( __take_ndigits p 11 2 n )
-    ? < hh 0 { ^ @ !Time ParseErr { F @ ParseErr { BadFormat } } } {}
-    ? ! ( __char_at_eq p 13 58 ) { ^ @ !Time ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? < hh 0 { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? ! ( __char_at_eq p 13 58 ) { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
     : i mm ( __take_ndigits p 14 2 n )
-    ? < mm 0 { ^ @ !Time ParseErr { F @ ParseErr { BadFormat } } } {}
-    ? ! ( __char_at_eq p 16 58 ) { ^ @ !Time ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? < mm 0 { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? ! ( __char_at_eq p 16 58 ) { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
     : i ss ( __take_ndigits p 17 2 n )
-    ? < ss 0 { ^ @ !Time ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? < ss 0 { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
 
     : ~ i k 19
     // Optional fractional seconds (ignored, just consume).
@@ -298,19 +493,19 @@ $ `stdlib/core/errors.nu`
                 : i sign ? == tc 45 -1 1
                 = k + k 1
                 : i oh ( __take_ndigits p k 2 n )
-                ? < oh 0 { ^ @ !Time ParseErr { F @ ParseErr { BadFormat } } } {}
+                ? < oh 0 { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
                 = k + k 2
                 ? & < k n == ( nurl_str_get p k ) 58 { = k + k 1 } {}
                 : i om ( __take_ndigits p k 2 n )
-                ? < om 0 { ^ @ !Time ParseErr { F @ ParseErr { BadFormat } } } {}
+                ? < om 0 { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
                 = k + k 2
                 = offset_min * sign + * oh 60 om
-            } { ^ @ !Time ParseErr { F @ ParseErr { BadFormat } } }
+            } { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } }
         }
     } {}
-    ? != k n { ^ @ !Time ParseErr { F @ ParseErr { TrailingGarbage } } } {}
+    ? != k n { ^ @ !i ParseErr { F @ ParseErr { TrailingGarbage } } } {}
 
     : i unix_local ( time_to_unix @ Time { y mo d hh mm ss 0 0 } )
     : i unix_utc - unix_local * offset_min 60
-    ^ @ !Time ParseErr { T ( time_from_unix unix_utc ) }
+    ^ @ !i ParseErr { T unix_utc }
 }

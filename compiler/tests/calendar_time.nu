@@ -101,33 +101,35 @@ $ `stdlib/core/io.nu`
 
 @ run_parse_roundtrip → v {
     ( nurl_print `── parse round-trip ──\n` )
-    : !Time ParseErr r ( time_parse_iso `2024-02-29T12:34:56Z` )
+    // time_parse_iso yields the Unix timestamp; time_from_unix rebuilds
+    // the broken-down Time.
+    : !i ParseErr r ( time_parse_iso `2024-02-29T12:34:56Z` )
     ?? r {
-        T t → {
-            ( println_int `  parsed → unix=` ( time_to_unix t ) )
-            ( print_time `  reform   ` t )
+        T secs → {
+            ( println_int `  parsed → unix=` secs )
+            ( print_time `  reform   ` ( time_from_unix secs ) )
         }
         F _ → ( nurl_print `  unexpected error\n` )
     }
 
     // Lowercase 't' separator + fractional seconds
-    : !Time ParseErr r2 ( time_parse_iso `2024-02-29t12:34:56.789Z` )
+    : !i ParseErr r2 ( time_parse_iso `2024-02-29t12:34:56.789Z` )
     ?? r2 {
-        T t → ( println_int `  lowert+frac → unix=` ( time_to_unix t ) )
+        T secs → ( println_int `  lowert+frac → unix=` secs )
         F _ → ( nurl_print `  lowert+frac err\n` )
     }
 
     // +05:30 offset → expect 12:34:56 - 05:30 = 07:04:56 UTC
-    : !Time ParseErr r3 ( time_parse_iso `2024-02-29T12:34:56+05:30` )
+    : !i ParseErr r3 ( time_parse_iso `2024-02-29T12:34:56+05:30` )
     ?? r3 {
-        T t → ( println_int `  +05:30 → unix=` ( time_to_unix t ) )
+        T secs → ( println_int `  +05:30 → unix=` secs )
         F _ → ( nurl_print `  +05:30 err\n` )
     }
 
     // -08:00 offset → expect 12:34:56 + 08:00 = 20:34:56 UTC
-    : !Time ParseErr r4 ( time_parse_iso `2024-02-29T12:34:56-08:00` )
+    : !i ParseErr r4 ( time_parse_iso `2024-02-29T12:34:56-08:00` )
     ?? r4 {
-        T t → ( println_int `  -08:00 → unix=` ( time_to_unix t ) )
+        T secs → ( println_int `  -08:00 → unix=` secs )
         F _ → ( nurl_print `  -08:00 err\n` )
     }
 }
@@ -146,22 +148,22 @@ $ `stdlib/core/io.nu`
 
 @ run_parse_errors → v {
     ( nurl_print `── parse errors ──\n` )
-    : !Time ParseErr e1 ( time_parse_iso `short` )
+    : !i ParseErr e1 ( time_parse_iso `short` )
     ?? e1 {
         T _ → ( nurl_print `  short UNEXPECTED Some\n` )
         F e → ( println_str `  short → ` ( describe_err e ) )
     }
-    : !Time ParseErr e2 ( time_parse_iso `2024X02X29T12:34:56Z` )
+    : !i ParseErr e2 ( time_parse_iso `2024X02X29T12:34:56Z` )
     ?? e2 {
         T _ → ( nurl_print `  bad-sep UNEXPECTED Some\n` )
         F e → ( println_str `  bad-sep → ` ( describe_err e ) )
     }
-    : !Time ParseErr e3 ( time_parse_iso `2024-02-29 12:34:56Z` )
+    : !i ParseErr e3 ( time_parse_iso `2024-02-29 12:34:56Z` )
     ?? e3 {
         T _ → ( nurl_print `  space-sep UNEXPECTED Some\n` )
         F e → ( println_str `  space-sep → ` ( describe_err e ) )
     }
-    : !Time ParseErr e4 ( time_parse_iso `2024-02-29T12:34:56Zextra` )
+    : !i ParseErr e4 ( time_parse_iso `2024-02-29T12:34:56Zextra` )
     ?? e4 {
         T _ → ( nurl_print `  trailing UNEXPECTED Some\n` )
         F e → ( println_str `  trailing → ` ( describe_err e ) )
