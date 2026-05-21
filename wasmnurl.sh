@@ -23,7 +23,7 @@
 #  Requires:
 #    - wasmtime in PATH (or $WASMTIME)
 #    - nurlc.wasm next to this script (or $NURLC_WASM)
-#    - stdlib/runtime.o (build via ./build.sh)
+#    - stdlib/runtime.o (build via `zig build bootstrap`)
 # ============================================================
 set -euo pipefail
 
@@ -61,7 +61,7 @@ fi
 RUNTIME="$SCRIPT_DIR/stdlib/runtime.o"
 if [[ ! -f "$RUNTIME" ]]; then
     echo "ERROR: stdlib/runtime.o not found at $RUNTIME" >&2
-    echo "       Run: ./build.sh" >&2
+    echo "       Run: zig build bootstrap" >&2
     exit 1
 fi
 
@@ -154,7 +154,7 @@ if grep -qE '@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mous
     CANVAS_O="$SCRIPT_DIR/stdlib/canvas.o"
     if [[ ! -f "$CANVAS_O" ]]; then
         echo "ERROR: program uses canvas FFI but $CANVAS_O is missing." >&2
-        echo "       Run ./build.sh first." >&2
+        echo "       Run zig build bootstrap first." >&2
         exit 1
     fi
     EXTRA_OBJS+=("$CANVAS_O")

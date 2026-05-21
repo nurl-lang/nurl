@@ -57,6 +57,12 @@ if [[ ! -f "$RUNTIME" ]]; then
     exit 2
 fi
 
+LINK_HELPER="$ROOT_DIR/tools/nurl-build/run.sh"
+if [[ ! -x "$LINK_HELPER" ]]; then
+    echo "ERROR: link helper not found at $LINK_HELPER" >&2
+    exit 2
+fi
+
 # Sanitizer-instrumented runtime.o has the `__asan_init` reference;
 # a plain runtime.o does not. nm-grep is a cheap pre-flight check that
 # saves a confusing per-test link failure later.
@@ -77,21 +83,6 @@ if ! command -v "$CLANG" &>/dev/null; then
     exit 2
 fi
 
-# Library link flags — same shape as run_tests.sh. Each is only emitted
-# when build.sh dropped the corresponding sentinel.
-CURL_LIBS=""
-[[ -f "$ROOT_DIR/stdlib/runtime.curl" ]]   && CURL_LIBS="$(pkg-config --libs libcurl 2>/dev/null || echo -lcurl)"
-OPENSSL_LIBS=""
-[[ -f "$ROOT_DIR/stdlib/runtime.openssl" ]] && OPENSSL_LIBS="$(pkg-config --libs openssl 2>/dev/null || echo '-lssl -lcrypto')"
-SQLITE3_LIBS=""
-[[ -f "$ROOT_DIR/stdlib/runtime.sqlite3" ]] && SQLITE3_LIBS="$(pkg-config --libs sqlite3 2>/dev/null || echo -lsqlite3)"
-PQ_LIBS=""
-[[ -f "$ROOT_DIR/stdlib/runtime.pq" ]]      && PQ_LIBS="$(pkg-config --libs libpq 2>/dev/null || echo -lpq)"
-ZLIB_LIBS=""
-[[ -f "$ROOT_DIR/stdlib/runtime.z" ]]       && ZLIB_LIBS="$(pkg-config --libs zlib 2>/dev/null || echo -lz)"
-ZSTD_LIBS=""
-[[ -f "$ROOT_DIR/stdlib/runtime.zstd" ]]    && ZSTD_LIBS="$(pkg-config --libs libzstd 2>/dev/null || echo -lzstd)"
-
 WORKDIR="$ROOT_DIR/build/tests-san"
 LOGDIR="$WORKDIR/logs"
 SUMMARY="$WORKDIR/SUMMARY.txt"
@@ -109,6 +100,50 @@ tests=("$SCRIPT_DIR"/*.nu)
 shopt -u nullglob
 IFS=$'\n' tests=($(printf '%s\n' "${tests[@]}" | LC_ALL=C sort))
 unset IFS
+
+run_with_timeout() {
+    local cwd="$1"
+    local bin_name="$2"
+    local out_file="$3"
+    local err_file="$4"
+    local timeout_sec="$5"
+
+    if command -v timeout >/dev/null 2>&1; then
+        { ( cd "$cwd" && timeout "${timeout_sec}s" "./$bin_name" > "$out_file" 2> "$err_file" ); } 2>/dev/null
+        return $?
+    fi
+    if command -v gtimeout >/dev/null 2>&1; then
+        { ( cd "$cwd" && gtimeout "${timeout_sec}s" "./$bin_name" > "$out_file" 2> "$err_file" ); } 2>/dev/null
+        return $?
+    fi
+
+    local marker="${err_file}.timeout"
+    rm -f "$marker"
+    (
+        cd "$cwd" || exit 125
+        "./$bin_name" > "$out_file" 2> "$err_file"
+    ) &
+    local child=$!
+    (
+        sleep "$timeout_sec"
+        if kill -0 "$child" 2>/dev/null; then
+            : > "$marker"
+            kill -TERM "$child" 2>/dev/null || true
+            sleep 1
+            kill -KILL "$child" 2>/dev/null || true
+        fi
+    ) &
+    local watcher=$!
+    wait "$child"
+    local status=$?
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+    if [[ -f "$marker" ]]; then
+        rm -f "$marker"
+        return 124
+    fi
+    return $status
+}
 
 n_total=0
 n_pass=0
@@ -147,6 +182,10 @@ for src in "${tests[@]}"; do
         printf '%-44s %s\n' "$name" "SKIP"
         continue
     fi
+    if [[ "$name" == "postgres_basic" && ! -f "$ROOT_DIR/stdlib/runtime.pq" ]]; then
+        printf '%-44s %s\n' "$name" "SKIP"
+        continue
+    fi
 
     ll="$WORKDIR/$name.ll"
     bin="$WORKDIR/$name"
@@ -163,18 +202,19 @@ for src in "${tests[@]}"; do
         continue
     fi
 
-    # shellcheck disable=SC2086
-    if ! "$CLANG" -O1 -fsanitize=address,undefined -fno-omit-frame-pointer \
-            "$ll" "$RUNTIME" -lm -lpthread \
-            $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS \
-            -o "$bin" 2>"$stderr_log"; then
+    if ! env NURL_CC="$CLANG" \
+            "$LINK_HELPER" \
+            --opt -O1 \
+            --flag "-fsanitize=address,undefined" \
+            --flag "-fno-omit-frame-pointer" \
+            "$ROOT_DIR" "$ll" "$bin" 2>"$stderr_log"; then
         printf '%-44s %s\n' "$name" "LINK_FAIL"
         echo "LINK_FAIL $name" >> "$SUMMARY"
         n_link_fail=$((n_link_fail + 1))
         continue
     fi
 
-    ( cd "$WORKDIR" && timeout "${TIMEOUT}s" "./$name" >"$stdout_log" 2>"$stderr_log" )
+    run_with_timeout "$WORKDIR" "$name" "$stdout_log" "$stderr_log" "$TIMEOUT"
     exit_code=$?
 
     # Sanitizer-marker scan. ASan writes "AddressSanitizer:", UBSan

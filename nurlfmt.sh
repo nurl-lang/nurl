@@ -7,7 +7,7 @@
 #  Usage:  ./nurlfmt.sh [OPTIONS] [FILE...]
 #
 #  Forwards all arguments to ./build/nurlfmt. Builds the binary on
-#  first run via tools/nurlfmt/build.sh if it is missing.
+#  first run via `zig build nurlfmt` if it is missing.
 #
 #  See docs/FORMAT.md for the formatting specification and the full
 #  CLI surface.
@@ -19,7 +19,7 @@ NURLFMT="$SCRIPT_DIR/build/nurlfmt"
 
 if [[ ! -x "$NURLFMT" ]]; then
     echo "[nurlfmt.sh] build/nurlfmt missing — bootstrapping..." >&2
-    bash "$SCRIPT_DIR/tools/nurlfmt/build.sh"
+    zig build nurlfmt
 fi
 
 exec "$NURLFMT" "$@"

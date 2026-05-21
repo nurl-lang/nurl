@@ -74,11 +74,13 @@ The compiler (`nurlc.nu`) is written in NURL itself. The bootstrap runs it
 twice over its own source and requires byte-identical LLVM IR on both rounds
 before the build is accepted.
 
-`build.sh` and `nurl.sh` default to `clang`, but honor `NURL_CC` to select the
-C compiler/linker driver. Set `NURL_CC="zig cc"` to drive the whole build
-through Zig's bundled clang + lld + libc — one pinned toolchain that also
-cross-compiles every release target. (Zig can't LTO on native macOS, where
-`build.sh` automatically falls back to a plain-object runtime.)
+`zig build` is now the canonical Linux/macOS build entrypoint; `build.sh`
+remains as a compatibility wrapper. The runtime/toolchain defaults to `clang`,
+but honors `NURL_CC` to select the C compiler/linker driver. Set
+`NURL_CC="zig cc"` to drive the whole build through Zig's bundled clang + lld +
+libc — one pinned toolchain that also cross-compiles every release target.
+(Zig can't LTO on native macOS, where the build automatically falls back to a
+plain-object runtime.)
 
 ---
 
@@ -106,7 +108,7 @@ CLI (`code` / `cursor` / `windsurf`, whichever is on PATH). Flags:
 `--uninstall` (remove the symlink + extension).
 
 **Manual install from a local checkout:**
-1. `./build.sh` then `./tools/nurl-lsp/build.sh`
+1. `zig build check` (or `./build.sh` as a compatibility wrapper)
 2. `Ctrl+Shift+P` → "Extensions: Install from VSIX..."
 3. Select `tooling/vscode-nurl/nurl-0.4.4.vsix`
 
@@ -115,7 +117,7 @@ tokenizer — no install required.
 
 ### Canonical formatter
 
-`./build.sh` also produces `build/nurlfmt` — a deterministic, opinionated
+`zig build nurlfmt` (and `zig build check`) produces `build/nurlfmt` — a deterministic, opinionated
 source formatter analogous to `gofmt` / `rustfmt`. Specification:
 [`docs/FORMAT.md`](docs/FORMAT.md). Common invocations:
 
@@ -132,7 +134,7 @@ Round-trip acceptance — every shipped `.nu` file round-trips byte-for-byte:
 
 ### Package manager
 
-`./tools/nurlpkg/build.sh` produces `build/nurlpkg` — a Cargo-shaped
+`zig build nurlpkg` produces `build/nurlpkg` — a Cargo-shaped
 package manager that covers the full dependency lifecycle for
 path-based dependencies (registry-style version resolution is not in
 scope for v1). Manifests use a TOML subset compatible with the
@@ -151,7 +153,7 @@ Subcommands: `init`, `info`, `deps`, `add`, `remove`, `install`,
 
 ### Language Server (LSP)
 
-`./tools/nurl-lsp/build.sh` produces `build/nurl-lsp` — a stdio
+`zig build nurl-lsp` produces `build/nurl-lsp` — a stdio
 JSON-RPC server with diagnostics, go-to-definition, hover, document
 symbols, completion, formatting, workspace symbol search, and
 folding ranges. Wired to VS Code / Windsurf via the
@@ -520,7 +522,7 @@ exercised by the build scripts today.
 
 | Platform          | Backend      | Status                                   |
 |---|---|---|
-| Linux x86_64      | LLVM         | primary dev target — `build.sh` + tests  |
+| Linux x86_64      | LLVM         | primary dev target — `zig build check`   |
 | Windows x86_64    | LLVM         | fully supported — `build.bat` runs the same bootstrap + snapshot test suite as `build.sh`. Playground cross-compiles via `zig cc -target x86_64-windows-gnu` (static libcurl + Schannel) |
 | macOS x86_64      | LLVM + zig cc | cross-compiled from the `api/` container via `POST /build_macos`; Mach-O binary links only libSystem (no Apple SDK needed). Runs on Apple Silicon via Rosetta 2. canvas/audio/libcurl-HTTP not supported on this target. |
 | macOS ARM64       | LLVM         | should work via clang; untested          |
@@ -575,7 +577,8 @@ nurl/
 │   ├── nurlc_self(.ll)        — stage 1: self-compiled
 │   ├── nurlc_self2(.ll)       — stage 2: fixed-point check
 │   └── nurlc                  — final self-hosting binary
-├── build.sh / build.bat       — full bootstrap + test-suite driver
+├── build.zig                  — canonical Linux/macOS build graph
+├── build.sh / build.bat       — compatibility wrapper / Windows driver
 ├── clean.sh / clean.bat       — remove build artefacts
 ├── nurl.sh  / nurl.bat        — convenience wrapper to compile a `.nu` file
 └── nurlc                      — symlink to build/nurlc (Linux/macOS)
@@ -597,8 +600,9 @@ The detailed development plan and status are maintained in [ROADMAP.md](ROADMAP.
 
 | Tool | Purpose |
 |---|---|
+| Zig 0.16.0+ | Canonical build entrypoint (`zig build`, `zig build check`) |
 | Python 3.8+ | Python reference compiler (`compiler/nurlc.py`) |
-| clang / LLVM 14+ | Compile LLVM IR (`.ll`) to native binary |
+| clang / LLVM 14+ or `NURL_CC="zig cc"` | Compile LLVM IR (`.ll`) to native binary |
 
 #### Windows
 
@@ -629,33 +633,23 @@ export PATH="$(brew --prefix llvm)/bin:$PATH"
 
 ---
 
-### Step 1 — Build the C runtime (once)
+### Step 1 — Bootstrap the self-hosting compiler
+
+Use the root Zig build to bootstrap the compiler, build the toolchain, and
+verify stability:
 
 ```sh
 # Linux / macOS
-clang -c stdlib/runtime.c -o stdlib/runtime.o
+zig build check
 
-# Windows (CMD / PowerShell)
-clang -c stdlib\runtime.c -o stdlib\runtime.o
-```
-
-> `stdlib/runtime.o` is already checked in; rebuild it only if you modify `runtime.c`.
-
----
-
-### Step 2 — Bootstrap the self-hosting compiler
-
-Use the automated build scripts to bootstrap the compiler and verify stability:
-
-```sh
-# Linux / macOS
+# Compatibility wrapper (same as above)
 ./build.sh
 
 # Windows (CMD / PowerShell)
 build.bat
 ```
 
-The build script performs a complete bootstrap process:
+The Linux/macOS build graph performs a complete bootstrap process:
 1. Compiles `nurlc.nu` with the Python reference compiler → `build/nurlc_py`
 2. Compiles `nurlc.nu` with the stage-0 binary → `build/nurlc_self` (stage 1)
 3. Compiles `nurlc.nu` with stage 1 → `build/nurlc_self2` (stage 2)
@@ -665,6 +659,17 @@ The build script performs a complete bootstrap process:
 
 All build artefacts are stored under `build/`. The run prints
 `BUILD SUCCESS & TESTS PASSED` on success, or the full log / diff on failure.
+
+Useful sub-steps on Linux/macOS:
+
+```sh
+zig build              # bootstrap compiler + build nurlfmt/nurlpkg/nurl-lsp
+zig build bootstrap    # stop after compiler/runtime bootstrap
+zig build nurlfmt      # build only the formatter
+zig build nurlpkg      # build only the package manager
+zig build nurl-lsp     # build only the language server
+zig build san-test -Dsan=true
+```
 
 **Clean build artifacts:**
 ```sh
@@ -743,7 +748,9 @@ Two knobs cooperate:
 Runtime panics print a stack backtrace before aborting; pipe each
 frame's `binary+0xOFFSET` through `addr2line -e <binary>` to recover
 `.nu:LINE` source locations. ASan / UBSan reports under
-`./build.sh --san` already render `.nu` source locations directly.
+`zig build -Dsan=true` (or `./build.sh --san`) already render `.nu`
+source locations directly. Use `zig build san-test -Dsan=true` to run the
+sanitizer-specific regression suite.
 
 End-to-end regression test: `./tools/dwarf_test.sh` (no-op when
 `gdb` isn't installed). See `DWARF.md` for the phased work-list.

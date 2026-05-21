@@ -7,8 +7,8 @@
 #                experience.
 #
 #  Stages (each skippable; idempotent on re-run):
-#    1. Bootstrap the compiler  (./build.sh if build/nurlc missing)
-#    2. Build the LSP server    (./tools/nurl-lsp/build.sh)
+#    1. Bootstrap the compiler  (zig build bootstrap if build/nurlc missing)
+#    2. Build the LSP server    (zig build nurl-lsp)
 #    3. Symlink build/nurl-lsp into ~/.local/bin/nurl-lsp so VS Code
 #       and Windsurf find it on $PATH without any setting tweaks.
 #    4. Package + install the VS Code extension via the `code` CLI
@@ -87,10 +87,10 @@ fi
 # ── 1. Bootstrap compiler ────────────────────────────────────
 banner "1/4 Compiler bootstrap"
 if (( FORCE == 1 )) || [[ ! -x build/nurlc ]]; then
-    echo "  ./build.sh (this can take a minute)..."
-    if ! ./build.sh --no-tests >/tmp/nurl_install_build.log 2>&1; then
+    echo "  zig build bootstrap (this can take a minute)..."
+    if ! zig build bootstrap >/tmp/nurl_install_build.log 2>&1; then
         tail -30 /tmp/nurl_install_build.log
-        die "./build.sh failed (full log: /tmp/nurl_install_build.log)"
+        die "zig build bootstrap failed (full log: /tmp/nurl_install_build.log)"
     fi
     ok "build/nurlc ready"
 else
@@ -100,9 +100,9 @@ fi
 # ── 2. Build LSP ─────────────────────────────────────────────
 banner "2/4 Language Server"
 if (( FORCE == 1 )) || [[ ! -x build/nurl-lsp ]]; then
-    if ! bash tools/nurl-lsp/build.sh >/tmp/nurl_install_lsp.log 2>&1; then
+    if ! zig build nurl-lsp >/tmp/nurl_install_lsp.log 2>&1; then
         tail -30 /tmp/nurl_install_lsp.log
-        die "tools/nurl-lsp/build.sh failed (full log: /tmp/nurl_install_lsp.log)"
+        die "zig build nurl-lsp failed (full log: /tmp/nurl_install_lsp.log)"
     fi
     ok "build/nurl-lsp built"
 else

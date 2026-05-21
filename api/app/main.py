@@ -86,6 +86,7 @@ def _default_runtime_o() -> str:
 
 RUNTIME_O      = os.environ.get("NURL_RUNTIME_O",  _default_runtime_o())
 CANVAS_O       = os.environ.get("NURL_CANVAS_O",   "/opt/nurl/stdlib/canvas.o")
+NURL_LINK_HELPER = os.environ.get("NURL_LINK_HELPER", "/opt/nurl/tools/nurl-build/run.sh")
 
 # Windows cross-compile pipeline. `zig cc -target x86_64-windows-gnu` consumes
 # the LLVM IR in one step: it bundles the mingw-w64 CRT, libgcc equivalents,
@@ -574,7 +575,13 @@ def health() -> HealthResponse:
     )
 
 
-def _run(cmd: list[str], *, cwd: str, stdin: bytes | None = None) -> subprocess.CompletedProcess:
+def _run(
+    cmd: list[str],
+    *,
+    cwd: str,
+    stdin: bytes | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(
             cmd,
@@ -583,6 +590,7 @@ def _run(cmd: list[str], *, cwd: str, stdin: bytes | None = None) -> subprocess.
             capture_output=True,
             timeout=BUILD_TIMEOUT_SEC,
             check=False,
+            env=env,
         )
     except subprocess.TimeoutExpired as e:
         raise HTTPException(
@@ -1015,6 +1023,11 @@ def build_native(req: BuildRequest, request: Request) -> BuildResponse:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"native runtime object missing at {RUNTIME_O}",
         )
+    if not _is_executable(NURL_LINK_HELPER):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"link helper not found at '{NURL_LINK_HELPER}'",
+        )
     # An LLVM-bitcode runtime.o (build.sh's -flto artifact) would only fail
     # deep in the link with a cryptic ld "file format not recognized". Catch
     # it here — it means the image lacks the plain-ELF runtime.native.o.
@@ -1112,32 +1125,19 @@ def build_native(req: BuildRequest, request: Request) -> BuildResponse:
             )
         )
 
-        # 2) clang link (mirrors nurl.sh).
-        # -Wno-override-module silences the cosmetic
-        #   "overriding the module target triple with x86_64-pc-linux-gnu"
-        # warning that clang emits because nurlc's IR has no explicit triple.
-        clang_cmd: list[str] = [
-            NATIVE_CLANG, opt_flag, "-Wno-override-module",
-            str(ll_path), RUNTIME_O,
+        # 2) native link through the shared repo helper. The API still owns
+        # request/response shaping and artifact management; the helper owns
+        # runtime marker → library policy, canvas extras, and driver flags.
+        link_cmd: list[str] = [
+            NURL_LINK_HELPER,
+            "--opt", opt_flag,
+            "--runtime", RUNTIME_O,
+            "--no-lto",
+            "--flag", "-Wno-override-module",
+            NURL_WORK_ROOT,
+            str(ll_path),
+            str(bin_path),
         ]
-        # runtime.native.o is a single object file, so the linker pulls in
-        # *every* symbol it references — including the optional FFI libraries
-        # build.sh detected at image-build time, even for user programs that
-        # never touch them. build.sh drops a stdlib/runtime.<name> marker for
-        # each one it compiled in; mirror nurl.sh and add the matching libs.
-        # -lm (libm: sqrt/sin/cos/...) and -lpthread are always needed.
-        extra_libs: list[str] = ["-lm", "-lpthread"]
-        runtime_dir = os.path.dirname(RUNTIME_O)
-        for marker, libs in (
-            ("runtime.curl",    ["-lcurl"]),
-            ("runtime.openssl", ["-lssl", "-lcrypto"]),
-            ("runtime.sqlite3", ["-lsqlite3"]),
-            ("runtime.pq",      ["-lpq"]),
-            ("runtime.z",       ["-lz"]),
-            ("runtime.zstd",    ["-lzstd"]),
-        ):
-            if Path(os.path.join(runtime_dir, marker)).is_file():
-                extra_libs += libs
         if uses_canvas:
             if not Path(CANVAS_O).is_file():
                 # Clean up the .ll we wrote so we don't leak a dangling artifact.
@@ -1153,18 +1153,21 @@ def build_native(req: BuildRequest, request: Request) -> BuildResponse:
                         "Rebuild the container with canvas.c compiled."
                     ),
                 )
-            clang_cmd.append(CANVAS_O)
+            link_cmd += ["--extra-obj", CANVAS_O]
             if Path(CANVAS_SDL2_MARKER).is_file():
-                extra_libs.append("-lSDL2")
-        clang_cmd += ["-o", str(bin_path), *extra_libs]
+                link_cmd += ["--extra-lib", "-lSDL2"]
 
-        clang_proc = _run(clang_cmd, cwd=str(tmpdir))
+        clang_proc = _run(
+            link_cmd,
+            cwd=str(tmpdir),
+            env={**os.environ, "NURL_CC": NATIVE_CLANG},
+        )
         clang_stdout = clang_proc.stdout.decode("utf-8", "replace")
         clang_stderr = clang_proc.stderr.decode("utf-8", "replace")
         if clang_stdout:
-            stdout_log.append(f"[clang] {clang_stdout}")
+            stdout_log.append(f"[link] {clang_stdout}")
         if clang_stderr:
-            stderr_log.append(f"[clang] {clang_stderr}")
+            stderr_log.append(f"[link] {clang_stderr}")
 
     # Register whatever artifacts actually landed on disk.
     ll_artifact: BuildArtifact | None = None
