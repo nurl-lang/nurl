@@ -83,6 +83,12 @@ defined before it is called. Generic functions may take `inout`
 parameters too (`@ store [A] inout ( Box A ) b → v`); the
 define-before-call rule applies to them as well.
 
+An `inout` argument may also be a *field target* — `. obj field`
+passes the address of that single struct field, so the callee
+mutates exactly that field of the caller's struct in place
+(`( add100 . g turns )`). `obj` must be a mutable (`: ~`) struct
+binding; the field may itself be a struct.
+
 A **`sink`** parameter consumes (takes ownership of) its argument —
 the callee owns the value, and the caller may not use the argument
 binding afterwards (the borrow checker reports a later use as a

@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **`inout` field targets.** An argument of the form `. obj field` at
+  an `inout` parameter now passes the *address of that struct field*,
+  so the callee mutates exactly that field of the caller's struct in
+  place — finer-grained than passing the whole struct `inout`:
+
+  ```
+  @ add100 inout i x → v { = x + x 100 }
+  : ~ Game g @ Game { @ Counter { 1 99 } 0 }
+  ( add100 . g turns )    // g.turns is mutated in place
+  ```
+
+  `obj` must be a mutable (`: ~`) struct binding — or an `inout`
+  struct parameter, which carries the same backing-pointer shape. The
+  field's address is a `getelementptr` resolved through the
+  `<sname>__<field>__idx` roster, so plain and generic structs both
+  work; the field may itself be a struct (`( bump . g score )`).
+  Single-level access (`. obj field`) only. Regression test
+  `compiler/tests/inout_field.nu` (+ `should_fail_inout_field_immut.nu`).
+  See `BORROW.md` Phase 4.
+
 * **`inout` / `sink` parameter conventions on generic functions.**
   A generic function may now mark a parameter `inout` (exclusive
   mutable borrow) or `sink` (the callee consumes it), exactly like an

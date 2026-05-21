@@ -1642,6 +1642,68 @@
     }
 }
 
+// gen_inout_field_addr: lex is positioned at the TT_DOT of an
+// `inout . obj field` call argument. Emits a `getelementptr` to the
+// named field of the struct binding `obj` and returns that
+// field-pointer register, with the last-type side-channel set to
+// `<fieldtype>*` so gen_call passes it as the `inout` pointer.
+//
+// `obj` must be a bare mutable (`: ~`) struct binding — or an `inout`
+// struct parameter, which carries the same `__ptr` / `__mutable`
+// shape. Single-level access only (`. obj field`); `.` is dyadic so
+// the argument is exactly three tokens and the next token always
+// begins the following argument. The field-name → index / type
+// lookup uses the `<sname>__<field>__idx` / `__type` entries
+// gen_struct_decl (and the generic-instantiation emitter) register
+// for every struct, so this works for plain and generic structs.
+@ gen_inout_field_addr i lex i syms i cg s fname → s {
+    ( nurl_lex_advance lex )  // consume '.'
+    ? ! ( is_ident_tok ( nurl_lex_type lex ) )
+    { ( die lex ( nurl_str_cat3
+        `inout field argument to '` fname
+        `' must be '. <binding> <field>' naming a plain struct binding` ) ) }
+    {}
+    : s obj ( nurl_lex_val lex )
+    ( nurl_lex_advance lex )
+    : s objptr ( nurl_sym_get syms ( nurl_str_cat obj `__ptr` ) )
+    : s objty ( nurl_sym_get syms obj )
+    ? == 0 ( nurl_str_len objptr )
+    { ( die lex ( nurl_str_cat3
+        `inout field argument: '` obj `' is not a struct binding in scope` ) ) }
+    {}
+    ? == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat obj `__mutable` ) ) )
+    { ( die lex ( nurl_str_cat3
+        `inout field argument: binding '` obj
+        `' must be mutable ': ~' - the callee mutates its field in place` ) ) }
+    {}
+    ? | == 0 ( nurl_str_len objty ) ! == 37 ( nurl_str_get objty 0 )
+    { ( die lex ( nurl_str_cat3
+        `inout field argument: '` obj `' is not a named-struct binding` ) ) }
+    {}
+    ? ! ( is_ident_tok ( nurl_lex_type lex ) )
+    { ( die lex ( nurl_str_cat3
+        `inout field argument: expected a field name after '. ` obj `'` ) ) }
+    {}
+    : s fld ( nurl_lex_val lex )
+    ( nurl_lex_advance lex )
+    : s sname ( nurl_str_slice objty 1 - ( nurl_str_len objty ) 1 )
+    : s idx_s ( nurl_sym_get syms
+        ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fld `__idx` ) ) ) )
+    : s fty ( nurl_sym_get syms
+        ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fld `__type` ) ) ) )
+    ? == 0 ( nurl_str_len idx_s )
+    { ( die lex ( nurl_str_cat4
+        `inout field argument: struct '` sname `' has no field '` fld ) ) }
+    {}
+    : s gep ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print gep )
+    ( nurl_print ` = getelementptr ` ) ( nurl_print objty )
+    ( nurl_print `, ` ) ( nurl_print objty ) ( nurl_print `* ` ) ( nurl_print objptr )
+    ( nurl_print `, i32 0, i32 ` ) ( nurl_print idx_s ) ( nurl_print `\n` )
+    ( nurl_set_last_type ( nurl_str_cat fty `*` ) )
+    ^ gep
+}
+
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
@@ -1863,20 +1925,28 @@
         : ~ s av ``
         : ~ s at ``
         ? is_inout_arg
-        { ? ! ( is_ident_tok bck_arg_tt )
-            { ( die lex ( nurl_str_cat3 `inout argument to '` fname `' must be a mutable ': ~' binding, not an expression` ) ) }
-            {}
-            : s iptr ( nurl_sym_get syms ( nurl_str_cat bck_arg_val `__ptr` ) )
-            : s ity ( nurl_sym_get syms bck_arg_val )
-            ? == 0 ( nurl_str_len iptr )
-            { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' is not a binding in scope` ) ) }
-            {}
-            ? == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat bck_arg_val `__mutable` ) ) )
-            { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' must be a mutable ': ~' binding - the callee mutates it in place` ) ) }
-            {}
-            ( nurl_lex_advance lex )
-            = av iptr
-            = at ( nurl_str_cat ity `*` )
+        { ? == bck_arg_tt TT_DOT
+            { // BORROW.md Phase 4: `inout` field target — `. obj field`.
+              // Pass the field's address so the callee mutates exactly
+              // that field of the caller's struct in place.
+                = av ( gen_inout_field_addr lex syms cg fname )
+                = at ( nurl_get_last_type )
+            }
+            { ? ! ( is_ident_tok bck_arg_tt )
+                { ( die lex ( nurl_str_cat3 `inout argument to '` fname `' must be a mutable ': ~' binding or a '. binding field' field target, not an expression` ) ) }
+                {}
+                : s iptr ( nurl_sym_get syms ( nurl_str_cat bck_arg_val `__ptr` ) )
+                : s ity ( nurl_sym_get syms bck_arg_val )
+                ? == 0 ( nurl_str_len iptr )
+                { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' is not a binding in scope` ) ) }
+                {}
+                ? == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat bck_arg_val `__mutable` ) ) )
+                { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' must be a mutable ': ~' binding - the callee mutates it in place` ) ) }
+                {}
+                ( nurl_lex_advance lex )
+                = av iptr
+                = at ( nurl_str_cat ity `*` )
+            }
         }
         { = av ( gen_expr lex syms cg )
             = at ( nurl_get_last_type )

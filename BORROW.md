@@ -523,14 +523,32 @@ deleted; no false positives across stdlib/compiler.
 > `inout` struct + generic `sink`, two instantiations) and
 > `should_fail_inout_generic_forward.nu`.
 >
+> **`inout` field targets — LANDED 2026-05-21.** An argument of the
+> form `. obj field` at an `inout` parameter passes the *address* of
+> that struct field — the callee mutates exactly that field of the
+> caller's struct in place, finer-grained than passing the whole
+> struct `inout`. The new helper `gen_inout_field_addr` emits a
+> `getelementptr` to the field (index + LLVM type resolved through the
+> `<sname>__<field>__idx` / `__type` roster `gen_struct_decl` and the
+> generic-instantiation emitter register for every struct, so plain
+> and generic structs both work); `gen_call`'s per-argument handler
+> routes a TT_DOT-leading argument at an `inout` position through it.
+> `obj` must be a mutable (`: ~`) struct binding or an `inout` struct
+> parameter (same `__ptr` shape); the field may itself be a struct.
+> Single-level (`. obj field`) only — `.` is dyadic, so the argument
+> is exactly three tokens and the next token unambiguously begins the
+> following argument. `sink` field targets are deliberately *not*
+> supported: moving a field out of a struct is a partial move, a
+> separate and harder analysis. Regressions: `inout_field.nu` +
+> `should_fail_inout_field_immut.nu`.
+>
 > **Still pending for full Phase 4:** `sink` of a *compiler-auto-
 > dropped* argument (an owned string / slice / `Drop` value / struct
 > with owned fields) — transferring the auto-drop obligation to the
 > callee needs `mem_*` surgery and is double-free-prone; `sink` v1
 > rejects such an argument at the call site rather than risk it, so
 > `sink` currently applies to `Vec` and other manually-managed
-> handles. Also: `inout` field targets (`= . obj fld`) and
-> `inout`/`sink` on impl methods / closures.
+> handles. Also: `inout`/`sink` on impl methods / closures.
 
 **Goal:** give the language a way to *name* a non-owning borrow, so
 Phase 5 can enforce exclusivity. **Do not start until Part III is
@@ -837,8 +855,8 @@ and bug class 6 (aliased mutation) is closed for the call-site case;
 the corpus is move/alias/escape/iter clean; `docs/MEMORY.md`
 documents the model. Part III decided: Option B (mutable value
 semantics) — the `inout` and `sink` parameter conventions are live,
-and (2026-05-21) work on generic functions. Next: `sink` of
-compiler-auto-dropped arguments (needs `mem_*` drop-ownership
-transfer), `inout`/`sink` on impl methods and `inout` field targets
-(`= . obj fld`), then full Phase 8 (promote `warning:` to `error:`
-after the on-by-default soak). Last updated 2026-05-21.*
+and (2026-05-21) work on generic functions and `inout` field targets
+(`. obj field`). Next: `sink` of compiler-auto-dropped arguments
+(needs `mem_*` drop-ownership transfer), `inout`/`sink` on impl
+methods, then full Phase 8 (promote `warning:` to `error:` after the
+on-by-default soak). Last updated 2026-05-21.*
