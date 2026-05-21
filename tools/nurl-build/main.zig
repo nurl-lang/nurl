@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const LibrarySpec = struct {
     marker: []const u8,
@@ -89,7 +90,7 @@ fn run(init: std.process.Init) !void {
     try ensureExists(io, runtime_path, "runtime.o");
 
     const nolto_marker_path = try std.fs.path.join(arena, &.{ root, "stdlib", "runtime.nolto" });
-    const use_lto = !force_no_lto and !pathExists(io, nolto_marker_path);
+    const use_lto = !force_no_lto and builtin.os.tag != .windows and !pathExists(io, nolto_marker_path);
 
     var driver_parts = try splitDriver(gpa, init);
     defer driver_parts.deinit(gpa);
@@ -109,8 +110,7 @@ fn run(init: std.process.Init) !void {
         try ensureExists(io, extra_obj, "extra object");
         try child_argv.append(gpa, extra_obj);
     }
-    try child_argv.append(gpa, "-lm");
-    try child_argv.append(gpa, "-lpthread");
+    try appendDefaultSystemLibs(gpa, &child_argv);
 
     const pkg_config_exe = init.environ_map.get("PKG_CONFIG") orelse "pkg-config";
     for (library_specs) |lib| {
@@ -224,6 +224,21 @@ fn appendFallback(
 ) !void {
     for (fallback) |arg| {
         try argv.append(gpa, arg);
+    }
+}
+
+fn appendDefaultSystemLibs(
+    gpa: std.mem.Allocator,
+    argv: *std.ArrayList([]const u8),
+) !void {
+    switch (builtin.os.tag) {
+        .windows => {
+            try argv.append(gpa, "-lwinhttp");
+        },
+        else => {
+            try argv.append(gpa, "-lm");
+            try argv.append(gpa, "-lpthread");
+        },
     }
 }
 

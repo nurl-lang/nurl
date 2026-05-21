@@ -3,10 +3,13 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
 # Shared link helper for repo-local NURL tooling binaries.
-# Prefers the Zig implementation when `zig` is available; otherwise
-# falls back to a shell implementation with the same link policy.
+# Prefers the compiled `build/nurl-build` helper; otherwise it
+# bootstraps/runs the Zig implementation, and finally falls back to
+# the legacy shell policy when Zig itself is unavailable.
 
 set -euo pipefail
+
+ORIG_ARGS=("$@")
 
 OPT="-O2"
 RUNTIME=""
@@ -69,12 +72,27 @@ if [[ ! -f "$LLVM_IR" ]]; then
 fi
 if [[ ! -f "$RUNTIME" ]]; then
     echo "ERROR: runtime.o not found at $RUNTIME" >&2
-    echo "       Run ./build.sh first to compile the runtime." >&2
+    echo "       Run zig build bootstrap first to compile the runtime." >&2
     exit 1
 fi
 
 ZIG_BIN="${NURL_ZIG:-zig}"
+HELPER_BIN="${NURL_BUILD_BIN:-$ROOT_DIR/build/nurl-build}"
+if [[ -x "$HELPER_BIN" ]]; then
+    exec "$HELPER_BIN" "${ORIG_ARGS[@]}"
+fi
+
 if command -v "$ZIG_BIN" >/dev/null 2>&1; then
+    if [[ -f "$ROOT_DIR/build.zig" ]]; then
+        if (
+            cd "$ROOT_DIR"
+            "$ZIG_BIN" build nurl-build
+        ); then
+            if [[ -x "$HELPER_BIN" ]]; then
+                exec "$HELPER_BIN" "${ORIG_ARGS[@]}"
+            fi
+        fi
+    fi
     mkdir -p "$ROOT_DIR/.zig-cache" "$ROOT_DIR/.zig-cache-global"
     HELPER_ARGS=()
     [[ "$OPT" != "-O2" ]] && HELPER_ARGS+=(--opt "$OPT")

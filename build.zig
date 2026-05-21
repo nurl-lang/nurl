@@ -8,7 +8,6 @@ const FeatureState = struct {
 const RuntimeConfig = struct {
     python: []const u8,
     env_exe: []const u8,
-    helper_path: []const u8,
     root_path: []const u8,
     san: bool,
     use_lto: bool,
@@ -80,8 +79,19 @@ const py_compare_files =
 pub fn build(b: *std.Build) !void {
     const san = b.option(bool, "san", "Build the compiler/runtime with AddressSanitizer + UBSan") orelse false;
     const cfg = detectRuntimeConfig(b, san);
+    const nurl_build_exe = b.addExecutable(.{
+        .name = "nurl-build",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/nurl-build/main.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseSafe,
+        }),
+    });
 
     const ensure_build_dir = addPythonStep(b, cfg.python, py_mkdir, &.{"build"}, true);
+    const helper_copy = addPythonCopyLazyStep(b, cfg.python, nurl_build_exe.getEmittedBin(), "build/nurl-build", true);
+    helper_copy.step.dependOn(&ensure_build_dir.step);
+    helper_copy.step.dependOn(&nurl_build_exe.step);
     const sync_runtime_nolto = addMarkerSyncStep(b, cfg.python, "stdlib/runtime.nolto", !cfg.use_lto);
     const sync_runtime_curl = addMarkerSyncStep(b, cfg.python, "stdlib/runtime.curl", cfg.curl.enabled);
     const sync_runtime_openssl = addMarkerSyncStep(b, cfg.python, "stdlib/runtime.openssl", cfg.openssl.enabled);
@@ -146,7 +156,7 @@ pub fn build(b: *std.Build) !void {
     stage0_ll_copy.step.dependOn(&ensure_build_dir.step);
     stage0_ll_copy.step.dependOn(&stage0_ir.step);
 
-    const stage0_link = addLinkStep(b, cfg, stage0_ll, "build/nurlc_py", .{});
+    const stage0_link = addLinkStep(b, cfg, nurl_build_exe, stage0_ll, "build/nurlc_py", .{});
     stage0_link.step.dependOn(&ensure_build_dir.step);
     stage0_link.step.dependOn(&runtime_cmd.step);
     stage0_link.step.dependOn(&stage0_ir.step);
@@ -160,7 +170,7 @@ pub fn build(b: *std.Build) !void {
     stage1_ll_copy.step.dependOn(&ensure_build_dir.step);
     stage1_ll_copy.step.dependOn(&stage1_ir.step);
 
-    const stage1_link = addLinkStep(b, cfg, stage1_ll, "build/nurlc_self", .{});
+    const stage1_link = addLinkStep(b, cfg, nurl_build_exe, stage1_ll, "build/nurlc_self", .{});
     stage1_link.step.dependOn(&ensure_build_dir.step);
     stage1_link.step.dependOn(&runtime_cmd.step);
     stage1_link.step.dependOn(&stage1_ir.step);
@@ -174,7 +184,7 @@ pub fn build(b: *std.Build) !void {
     stage2_ll_copy.step.dependOn(&ensure_build_dir.step);
     stage2_ll_copy.step.dependOn(&stage2_ir.step);
 
-    const stage2_link = addLinkStep(b, cfg, stage2_ll, "build/nurlc_self2", .{});
+    const stage2_link = addLinkStep(b, cfg, nurl_build_exe, stage2_ll, "build/nurlc_self2", .{});
     stage2_link.step.dependOn(&ensure_build_dir.step);
     stage2_link.step.dependOn(&runtime_cmd.step);
     stage2_link.step.dependOn(&stage2_ir.step);
@@ -194,6 +204,7 @@ pub fn build(b: *std.Build) !void {
     root_compiler_copy.step.dependOn(&final_compiler_copy.step);
 
     const bootstrap_step = b.step("bootstrap", "Build the runtime and self-hosted compiler");
+    bootstrap_step.dependOn(&helper_copy.step);
     bootstrap_step.dependOn(&runtime_native_cmd.step);
     bootstrap_step.dependOn(&canvas_cmd.step);
     bootstrap_step.dependOn(&stage0_ll_copy.step);
@@ -201,9 +212,13 @@ pub fn build(b: *std.Build) !void {
     bootstrap_step.dependOn(&stage2_ll_copy.step);
     bootstrap_step.dependOn(&root_compiler_copy.step);
 
+    const helper_step = b.step("nurl-build", "Build build/nurl-build");
+    helper_step.dependOn(&helper_copy.step);
+
     const nurlfmt_link = addToolBuildStep(
         b,
         cfg,
+        nurl_build_exe,
         &root_compiler_copy.step,
         &ensure_build_dir.step,
         &runtime_cmd.step,
@@ -215,6 +230,7 @@ pub fn build(b: *std.Build) !void {
     const nurlpkg_link = addToolBuildStep(
         b,
         cfg,
+        nurl_build_exe,
         &root_compiler_copy.step,
         &ensure_build_dir.step,
         &runtime_cmd.step,
@@ -226,6 +242,7 @@ pub fn build(b: *std.Build) !void {
     const nurllsp_link = addToolBuildStep(
         b,
         cfg,
+        nurl_build_exe,
         &root_compiler_copy.step,
         &ensure_build_dir.step,
         &runtime_cmd.step,
@@ -245,6 +262,7 @@ pub fn build(b: *std.Build) !void {
     lsp_step.dependOn(&nurllsp_link.step);
 
     const tools_step = b.step("tools", "Build nurlfmt, nurlpkg, and nurl-lsp");
+    tools_step.dependOn(&helper_copy.step);
     tools_step.dependOn(&nurlfmt_link.step);
     tools_step.dependOn(&nurlpkg_link.step);
     tools_step.dependOn(&nurllsp_link.step);
@@ -273,7 +291,6 @@ pub fn build(b: *std.Build) !void {
 fn detectRuntimeConfig(b: *std.Build, san: bool) RuntimeConfig {
     const python = resolvePython(b);
     const env_exe = resolveProgram(b, null, &.{ "env" }, &.{ "/usr/bin", "/bin" });
-    const helper_path = b.path("tools/nurl-build/run.sh").getPath(b);
     const root_path = b.build_root.path orelse ".";
     const cc_tokens = resolveCcTokens(b);
     const host_is_macos = b.graph.host.result.os.tag == .macos;
@@ -282,7 +299,6 @@ fn detectRuntimeConfig(b: *std.Build, san: bool) RuntimeConfig {
     return .{
         .python = python,
         .env_exe = env_exe,
-        .helper_path = helper_path,
         .root_path = root_path,
         .san = san,
         .use_lto = use_lto,
@@ -461,6 +477,7 @@ fn addPythonCopyLazyStep(
 fn addLinkStep(
     b: *std.Build,
     cfg: RuntimeConfig,
+    helper_exe: *std.Build.Step.Compile,
     llvm_ir: std.Build.LazyPath,
     output_path: []const u8,
     opts: struct {
@@ -469,7 +486,7 @@ fn addLinkStep(
         opt_flag: []const u8 = "-O2",
     },
 ) *std.Build.Step.Run {
-    const cmd = b.addSystemCommand(&.{ cfg.helper_path });
+    const cmd = b.addRunArtifact(helper_exe);
     cmd.setCwd(b.path("."));
     cmd.has_side_effects = true;
     cmd.addArgs(&.{ "--opt", opts.opt_flag });
@@ -491,6 +508,7 @@ fn addLinkStep(
 fn addToolBuildStep(
     b: *std.Build,
     cfg: RuntimeConfig,
+    helper_exe: *std.Build.Step.Compile,
     compiler_ready: *std.Build.Step,
     ensure_build_dir: *std.Build.Step,
     runtime_ready: *std.Build.Step,
@@ -509,7 +527,7 @@ fn addToolBuildStep(
     copy_ll.step.dependOn(ensure_build_dir);
     copy_ll.step.dependOn(&ir.step);
 
-    const link = addLinkStep(b, cfg, ll, bin_output_path, .{});
+    const link = addLinkStep(b, cfg, helper_exe, ll, bin_output_path, .{});
     link.step.dependOn(ensure_build_dir);
     link.step.dependOn(runtime_ready);
     link.step.dependOn(&ir.step);

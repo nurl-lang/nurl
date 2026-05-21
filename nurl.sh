@@ -37,7 +37,7 @@ if [[ ! -x "$NURLC" ]]; then
             NURLC="nurlc"
         else
             echo "ERROR: nurlc not found in build/, next to this script, or in PATH" >&2
-            echo "       Run: ./build.sh to build the compiler" >&2
+            echo "       Run: zig build bootstrap" >&2
             exit 1
         fi
     fi
@@ -47,7 +47,7 @@ fi
 RUNTIME="$SCRIPT_DIR/stdlib/runtime.o"
 if [[ ! -f "$RUNTIME" ]]; then
     echo "ERROR: stdlib/runtime.o not found at $RUNTIME" >&2
-    echo "       Run: clang -c stdlib/runtime.c -o stdlib/runtime.o" >&2
+    echo "       Run: zig build bootstrap" >&2
     exit 1
 fi
 
@@ -162,7 +162,7 @@ if grep -qE '@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mous
     CANVAS_O="$SCRIPT_DIR/stdlib/canvas.o"
     if [[ ! -f "$CANVAS_O" ]]; then
         echo "ERROR: program uses canvas FFI but $CANVAS_O is missing." >&2
-        echo "       Run ./build.sh to build the NURL stdlib first." >&2
+        echo "       Run zig build bootstrap first." >&2
         exit 1
     fi
     EXTRA_OBJS+=("$CANVAS_O")
@@ -212,6 +212,27 @@ if [[ $DEBUG_INFO -eq 1 ]]; then
     fi
     RUNTIME_TO_LINK="$DBG_RUNTIME"
 fi
+
+LINK_HELPER="$SCRIPT_DIR/build/nurl-build"
+if [[ ! -x "$LINK_HELPER" ]]; then
+    ZIG_BIN="${NURL_ZIG:-zig}"
+    if command -v "$ZIG_BIN" >/dev/null 2>&1 && [[ -f "$SCRIPT_DIR/build.zig" ]]; then
+        echo "[nurl.sh] build/nurl-build missing — bootstrapping..." >&2
+        (
+            cd "$SCRIPT_DIR"
+            "$ZIG_BIN" build nurl-build
+        )
+    fi
+fi
+if [[ ! -x "$LINK_HELPER" ]]; then
+    LINK_HELPER="$SCRIPT_DIR/tools/nurl-build/run.sh"
+fi
+if [[ ! -x "$LINK_HELPER" ]]; then
+    echo "ERROR: nurl-build helper not found at $SCRIPT_DIR/build/nurl-build" >&2
+    echo "       Run: zig build nurl-build" >&2
+    exit 1
+fi
+
 echo "[2/2] $LLFILE → $OUTBASE  ($OPT${LTO_FLAG:+ $LTO_FLAG}${DEBUG_FLAGS[*]:+ ${DEBUG_FLAGS[*]}}${EXTRA_LIBS[*]:+ ${EXTRA_LIBS[*]}})"
 LINK_ARGS=( --opt "$OPT" )
 if [[ $DEBUG_INFO -eq 1 ]]; then
@@ -230,7 +251,7 @@ if [[ ${#EXTRA_LIBS[@]} -gt 0 ]]; then
         LINK_ARGS+=( --extra-lib "$lib" )
     done
 fi
-"$SCRIPT_DIR/tools/nurl-build/run.sh" "${LINK_ARGS[@]}" "$SCRIPT_DIR" "$LLFILE" "$OUTBASE"
+"$LINK_HELPER" "${LINK_ARGS[@]}" "$SCRIPT_DIR" "$LLFILE" "$OUTBASE"
 
 echo ""
 echo "Done: $OUTBASE"

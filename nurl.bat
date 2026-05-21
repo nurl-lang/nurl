@@ -101,8 +101,23 @@ REM ── Locate runtime.o ─────────────────�
 set "RUNTIME=%SCRIPTDIR%stdlib\runtime.o"
 if not exist "%RUNTIME%" (
     echo ERROR: stdlib\runtime.o not found at %RUNTIME%
-    echo        Run: clang -c stdlib\runtime.c -o stdlib\runtime.o
+    echo        Run: build.bat
     exit /b 1
+)
+
+REM ── Locate or build nurl-build.exe ──────────────────────────
+set "NURLBUILD=%SCRIPTDIR%build\nurl-build.exe"
+if not exist "%NURLBUILD%" (
+    if defined NURL_ZIG (
+        set "ZIG=%NURL_ZIG%"
+    ) else (
+        set "ZIG=zig"
+    )
+    where "%ZIG%" >nul 2>&1
+    if not errorlevel 1 (
+        if not exist "%SCRIPTDIR%build" mkdir "%SCRIPTDIR%build"
+        "%ZIG%" build-exe "%SCRIPTDIR%tools\nurl-build\main.zig" -O ReleaseSafe -femit-bin="%NURLBUILD%" >nul 2>&1
+    )
 )
 
 REM ── Step 1: .nu → LLVM IR ────────────────────────────────────
@@ -207,11 +222,40 @@ REM The runtime's HTTP client uses WinHTTP on Windows (stdlib/runtime.c §14),
 REM so every program linked against runtime.o needs winhttp.lib even if it
 REM doesn't import stdlib/ext/http.nu — unreferenced functions still end up
 REM in runtime.o and their WinHttp* calls must resolve at link time.
-echo [2/2] %LLFILE% → %EXEFILE%  (%NURL_OPT% %DEBUG_FLAG% %EXTRA_LIBS%)
-"%CLANG%" %NURL_OPT% %DEBUG_FLAG% "%LLFILE%" "%RUNTIME%" %EXTRA_OBJS% -o "%EXEFILE%" %EXTRA_LIBS% -lwinhttp
-if !errorlevel! neq 0 (
-    echo ERROR: clang linking failed
-    exit /b 1
+if exist "%NURLBUILD%" (
+    echo [2/2] %LLFILE% → %EXEFILE%  (%NURL_OPT% %DEBUG_FLAG% %EXTRA_LIBS% via nurl-build)
+    if defined EXTRA_OBJS (
+        if defined SDL2_LIBDIR (
+            if defined DEBUG_FLAG (
+                "%NURLBUILD%" --opt "%NURL_OPT%" --flag "%DEBUG_FLAG%" --extra-obj "!CANVAS_O!" --extra-lib "-L!SDL2_LIBDIR!" --extra-lib "-lSDL2" "%SCRIPTDIR%" "%LLFILE%" "%EXEFILE%"
+            ) else (
+                "%NURLBUILD%" --opt "%NURL_OPT%" --extra-obj "!CANVAS_O!" --extra-lib "-L!SDL2_LIBDIR!" --extra-lib "-lSDL2" "%SCRIPTDIR%" "%LLFILE%" "%EXEFILE%"
+            )
+        ) else (
+            if defined DEBUG_FLAG (
+                "%NURLBUILD%" --opt "%NURL_OPT%" --flag "%DEBUG_FLAG%" --extra-obj "!CANVAS_O!" "%SCRIPTDIR%" "%LLFILE%" "%EXEFILE%"
+            ) else (
+                "%NURLBUILD%" --opt "%NURL_OPT%" --extra-obj "!CANVAS_O!" "%SCRIPTDIR%" "%LLFILE%" "%EXEFILE%"
+            )
+        )
+    ) else (
+        if defined DEBUG_FLAG (
+            "%NURLBUILD%" --opt "%NURL_OPT%" --flag "%DEBUG_FLAG%" "%SCRIPTDIR%" "%LLFILE%" "%EXEFILE%"
+        ) else (
+            "%NURLBUILD%" --opt "%NURL_OPT%" "%SCRIPTDIR%" "%LLFILE%" "%EXEFILE%"
+        )
+    )
+    if !errorlevel! neq 0 (
+        echo ERROR: nurl-build linking failed
+        exit /b 1
+    )
+) else (
+    echo [2/2] %LLFILE% → %EXEFILE%  (%NURL_OPT% %DEBUG_FLAG% %EXTRA_LIBS%)
+    "%CLANG%" %NURL_OPT% %DEBUG_FLAG% "%LLFILE%" "%RUNTIME%" %EXTRA_OBJS% -o "%EXEFILE%" %EXTRA_LIBS% -lwinhttp
+    if !errorlevel! neq 0 (
+        echo ERROR: clang linking failed
+        exit /b 1
+    )
 )
 
 REM Copy SDL2.dll next to the produced exe so it runs without PATH tweaks.
