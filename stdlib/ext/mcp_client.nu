@@ -204,7 +204,7 @@ $ `stdlib/core/vec.nu`
     ^ ``
 }
 
-@ mcp_response_result Json r → ?Json {
+@ mcp_response_result_field Json r → ?Json {
     ^ ( json_obj_get r `result` )
 }
 

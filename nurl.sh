@@ -179,59 +179,6 @@ if grep -qE '@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mous
     fi
 fi
 
-# Auto-link libcurl / OpenSSL / sqlite3 / libpq when the runtime was
-# built with the matching feature (build.sh drops stdlib/runtime.<name>
-# sentinels). Programs that don't pull those modules still link cleanly
-# without them because the symbols only resolve at link time.
-if [[ -f "$SCRIPT_DIR/stdlib/runtime.curl" ]]; then
-    if pkg-config --exists libcurl 2>/dev/null; then
-        # shellcheck disable=SC2046
-        EXTRA_LIBS+=( $(pkg-config --libs libcurl) )
-    else
-        EXTRA_LIBS+=( -lcurl )
-    fi
-fi
-if [[ -f "$SCRIPT_DIR/stdlib/runtime.openssl" ]]; then
-    if pkg-config --exists openssl 2>/dev/null; then
-        # shellcheck disable=SC2046
-        EXTRA_LIBS+=( $(pkg-config --libs openssl) )
-    else
-        EXTRA_LIBS+=( -lssl -lcrypto )
-    fi
-fi
-if [[ -f "$SCRIPT_DIR/stdlib/runtime.sqlite3" ]]; then
-    if pkg-config --exists sqlite3 2>/dev/null; then
-        # shellcheck disable=SC2046
-        EXTRA_LIBS+=( $(pkg-config --libs sqlite3) )
-    else
-        EXTRA_LIBS+=( -lsqlite3 )
-    fi
-fi
-if [[ -f "$SCRIPT_DIR/stdlib/runtime.pq" ]]; then
-    if pkg-config --exists libpq 2>/dev/null; then
-        # shellcheck disable=SC2046
-        EXTRA_LIBS+=( $(pkg-config --libs libpq) )
-    else
-        EXTRA_LIBS+=( -lpq )
-    fi
-fi
-if [[ -f "$SCRIPT_DIR/stdlib/runtime.z" ]]; then
-    if pkg-config --exists zlib 2>/dev/null; then
-        # shellcheck disable=SC2046
-        EXTRA_LIBS+=( $(pkg-config --libs zlib) )
-    else
-        EXTRA_LIBS+=( -lz )
-    fi
-fi
-if [[ -f "$SCRIPT_DIR/stdlib/runtime.zstd" ]]; then
-    if pkg-config --exists libzstd 2>/dev/null; then
-        # shellcheck disable=SC2046
-        EXTRA_LIBS+=( $(pkg-config --libs libzstd) )
-    else
-        EXTRA_LIBS+=( -lzstd )
-    fi
-fi
-
 # In --debug mode, drop -flto: the LTO link pipeline strips DWARF
 # debug info from .ll input when the matching runtime.o bitcode has
 # no DI counterpart (current build.sh compiles runtime.o without -g).
@@ -266,13 +213,24 @@ if [[ $DEBUG_INFO -eq 1 ]]; then
     RUNTIME_TO_LINK="$DBG_RUNTIME"
 fi
 echo "[2/2] $LLFILE → $OUTBASE  ($OPT${LTO_FLAG:+ $LTO_FLAG}${DEBUG_FLAGS[*]:+ ${DEBUG_FLAGS[*]}}${EXTRA_LIBS[*]:+ ${EXTRA_LIBS[*]}})"
-# `-flto` is required because stdlib/runtime.o is compiled with -flto
-# (build.sh) and therefore carries LLVM bitcode instead of native code.
-# The matching link-time flag here drives the LTO pipeline, inlining
-# every vec_data / nurl_peek / nurl_poke / nurl_print across the
-# runtime ↔ user-code boundary.
-# shellcheck disable=SC2086
-"${CC[@]}" $OPT $LTO_FLAG ${DEBUG_FLAGS[@]+"${DEBUG_FLAGS[@]}"} "$LLFILE" "$RUNTIME_TO_LINK" ${EXTRA_OBJS[@]+"${EXTRA_OBJS[@]}"} -o "$OUTBASE" -lm -lpthread ${EXTRA_LIBS[@]+"${EXTRA_LIBS[@]}"}
+LINK_ARGS=( --opt "$OPT" )
+if [[ $DEBUG_INFO -eq 1 ]]; then
+    LINK_ARGS+=( --no-lto --runtime "$RUNTIME_TO_LINK" )
+    for flag in "${DEBUG_FLAGS[@]}"; do
+        LINK_ARGS+=( --flag "$flag" )
+    done
+fi
+if [[ ${#EXTRA_OBJS[@]} -gt 0 ]]; then
+    for obj in "${EXTRA_OBJS[@]}"; do
+        LINK_ARGS+=( --extra-obj "$obj" )
+    done
+fi
+if [[ ${#EXTRA_LIBS[@]} -gt 0 ]]; then
+    for lib in "${EXTRA_LIBS[@]}"; do
+        LINK_ARGS+=( --extra-lib "$lib" )
+    done
+fi
+"$SCRIPT_DIR/tools/nurl-build/run.sh" "${LINK_ARGS[@]}" "$SCRIPT_DIR" "$LLFILE" "$OUTBASE"
 
 echo ""
 echo "Done: $OUTBASE"

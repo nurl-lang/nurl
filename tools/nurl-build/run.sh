@@ -8,15 +8,60 @@
 
 set -euo pipefail
 
+OPT="-O2"
+RUNTIME=""
+FORCE_NO_LTO=0
+EXTRA_FLAGS=()
+EXTRA_OBJS=()
+EXTRA_LIBS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --opt)
+            OPT="${2:?missing value for --opt}"
+            shift 2
+            ;;
+        --runtime)
+            RUNTIME="${2:?missing value for --runtime}"
+            shift 2
+            ;;
+        --no-lto)
+            FORCE_NO_LTO=1
+            shift
+            ;;
+        --flag)
+            EXTRA_FLAGS+=("${2:?missing value for --flag}")
+            shift 2
+            ;;
+        --extra-obj)
+            EXTRA_OBJS+=("${2:?missing value for --extra-obj}")
+            shift 2
+            ;;
+        --extra-lib)
+            EXTRA_LIBS+=("${2:?missing value for --extra-lib}")
+            shift 2
+            ;;
+        --*)
+            echo "unknown option: $1" >&2
+            exit 2
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
 if [[ $# -ne 3 ]]; then
-    echo "usage: $0 <repo-root> <llvm-ir> <output-bin>" >&2
+    echo "usage: $0 [--opt <flag>] [--runtime <path>] [--no-lto] [--flag <arg>] [--extra-obj <path>] [--extra-lib <arg>] <repo-root> <llvm-ir> <output-bin>" >&2
     exit 2
 fi
 
 ROOT_DIR="$1"
 LLVM_IR="$2"
 OUTPUT_BIN="$3"
-RUNTIME="$ROOT_DIR/stdlib/runtime.o"
+if [[ -z "$RUNTIME" ]]; then
+    RUNTIME="$ROOT_DIR/stdlib/runtime.o"
+fi
 
 if [[ ! -f "$LLVM_IR" ]]; then
     echo "ERROR: LLVM IR not found at $LLVM_IR" >&2
@@ -31,10 +76,29 @@ fi
 ZIG_BIN="${NURL_ZIG:-zig}"
 if command -v "$ZIG_BIN" >/dev/null 2>&1; then
     mkdir -p "$ROOT_DIR/.zig-cache" "$ROOT_DIR/.zig-cache-global"
+    HELPER_ARGS=()
+    [[ "$OPT" != "-O2" ]] && HELPER_ARGS+=(--opt "$OPT")
+    [[ -n "$RUNTIME" && "$RUNTIME" != "$ROOT_DIR/stdlib/runtime.o" ]] && HELPER_ARGS+=(--runtime "$RUNTIME")
+    [[ $FORCE_NO_LTO -eq 1 ]] && HELPER_ARGS+=(--no-lto)
+    if [[ ${#EXTRA_FLAGS[@]} -gt 0 ]]; then
+        for flag in "${EXTRA_FLAGS[@]}"; do
+            HELPER_ARGS+=(--flag "$flag")
+        done
+    fi
+    if [[ ${#EXTRA_OBJS[@]} -gt 0 ]]; then
+        for extra_obj in "${EXTRA_OBJS[@]}"; do
+            HELPER_ARGS+=(--extra-obj "$extra_obj")
+        done
+    fi
+    if [[ ${#EXTRA_LIBS[@]} -gt 0 ]]; then
+        for extra_lib in "${EXTRA_LIBS[@]}"; do
+            HELPER_ARGS+=(--extra-lib "$extra_lib")
+        done
+    fi
     exec env \
         ZIG_LOCAL_CACHE_DIR="$ROOT_DIR/.zig-cache" \
         ZIG_GLOBAL_CACHE_DIR="$ROOT_DIR/.zig-cache-global" \
-        "$ZIG_BIN" run "$ROOT_DIR/tools/nurl-build/main.zig" -- "$ROOT_DIR" "$LLVM_IR" "$OUTPUT_BIN"
+        "$ZIG_BIN" run "$ROOT_DIR/tools/nurl-build/main.zig" -- ${HELPER_ARGS[@]+"${HELPER_ARGS[@]}"} "$ROOT_DIR" "$LLVM_IR" "$OUTPUT_BIN"
 fi
 
 read -r -a CC <<< "${NURL_CC:-${CLANG:-clang}}"
@@ -44,11 +108,10 @@ if ! command -v "${CC[0]}" >/dev/null 2>&1; then
 fi
 
 LTO_FLAG="-flto"
-if [[ -f "$ROOT_DIR/stdlib/runtime.nolto" ]]; then
+if [[ $FORCE_NO_LTO -eq 1 || -f "$ROOT_DIR/stdlib/runtime.nolto" ]]; then
     LTO_FLAG=""
 fi
 
-EXTRA_LIBS=()
 append_libs_from_marker() {
     local marker="$1"
     local pkg="$2"
@@ -71,4 +134,13 @@ append_libs_from_marker "runtime.pq" "libpq" -lpq
 append_libs_from_marker "runtime.z" "zlib" -lz
 append_libs_from_marker "runtime.zstd" "libzstd" -lzstd
 
-"${CC[@]}" -O2 ${LTO_FLAG:+$LTO_FLAG} "$LLVM_IR" "$RUNTIME" -lm -lpthread "${EXTRA_LIBS[@]}" -o "$OUTPUT_BIN"
+if [[ ${#EXTRA_OBJS[@]} -gt 0 ]]; then
+    for extra_obj in "${EXTRA_OBJS[@]}"; do
+        if [[ ! -f "$extra_obj" ]]; then
+            echo "ERROR: extra object not found at $extra_obj" >&2
+            exit 1
+        fi
+    done
+fi
+
+"${CC[@]}" "$OPT" ${LTO_FLAG:+$LTO_FLAG} ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"} "$LLVM_IR" "$RUNTIME" ${EXTRA_OBJS[@]+"${EXTRA_OBJS[@]}"} -o "$OUTPUT_BIN" -lm -lpthread ${EXTRA_LIBS[@]+"${EXTRA_LIBS[@]}"}

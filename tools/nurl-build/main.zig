@@ -28,25 +28,68 @@ fn run(init: std.process.Init) !void {
     const io = init.io;
 
     const args = try init.minimal.args.toSlice(arena);
-    if (args.len != 4) {
+    var i: usize = 1;
+    var opt: []const u8 = "-O2";
+    var runtime_override: ?[]const u8 = null;
+    var force_no_lto = false;
+
+    var extra_flags: std.ArrayList([]const u8) = .empty;
+    defer extra_flags.deinit(gpa);
+    var extra_objs: std.ArrayList([]const u8) = .empty;
+    defer extra_objs.deinit(gpa);
+    var extra_libs: std.ArrayList([]const u8) = .empty;
+    defer extra_libs.deinit(gpa);
+
+    while (i < args.len and std.mem.startsWith(u8, args[i], "--")) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--opt")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            opt = args[i];
+        } else if (std.mem.eql(u8, arg, "--runtime")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            runtime_override = args[i];
+        } else if (std.mem.eql(u8, arg, "--flag")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            try extra_flags.append(gpa, args[i]);
+        } else if (std.mem.eql(u8, arg, "--extra-obj")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            try extra_objs.append(gpa, args[i]);
+        } else if (std.mem.eql(u8, arg, "--extra-lib")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            try extra_libs.append(gpa, args[i]);
+        } else if (std.mem.eql(u8, arg, "--no-lto")) {
+            force_no_lto = true;
+        } else {
+            std.debug.print("nurl-build: unknown arg: {s}\n", .{arg});
+            return error.InvalidArgs;
+        }
+        i += 1;
+    }
+
+    if (args.len - i != 3) {
         std.debug.print(
-            "usage: {s} <repo-root> <llvm-ir> <output-bin>\n",
+            "usage: {s} [--opt <flag>] [--runtime <path>] [--no-lto] [--flag <arg>] [--extra-obj <path>] [--extra-lib <arg>] <repo-root> <llvm-ir> <output-bin>\n",
             .{args[0]},
         );
         return error.InvalidArgs;
     }
 
-    const root = args[1];
-    const ll_path = args[2];
-    const output_path = args[3];
+    const root = args[i];
+    const ll_path = args[i + 1];
+    const output_path = args[i + 2];
 
     try ensureExists(io, ll_path, "LLVM IR");
 
-    const runtime_path = try std.fs.path.join(arena, &.{ root, "stdlib", "runtime.o" });
+    const runtime_path = runtime_override orelse try std.fs.path.join(arena, &.{ root, "stdlib", "runtime.o" });
     try ensureExists(io, runtime_path, "runtime.o");
 
     const nolto_marker_path = try std.fs.path.join(arena, &.{ root, "stdlib", "runtime.nolto" });
-    const use_lto = !pathExists(io, nolto_marker_path);
+    const use_lto = !force_no_lto and !pathExists(io, nolto_marker_path);
 
     var driver_parts = try splitDriver(gpa, init);
     defer driver_parts.deinit(gpa);
@@ -55,12 +98,17 @@ fn run(init: std.process.Init) !void {
     defer child_argv.deinit(gpa);
 
     try child_argv.appendSlice(gpa, driver_parts.items);
-    try child_argv.append(gpa, "-O2");
+    try child_argv.append(gpa, opt);
     if (use_lto) {
         try child_argv.append(gpa, "-flto");
     }
+    try child_argv.appendSlice(gpa, extra_flags.items);
     try child_argv.append(gpa, ll_path);
     try child_argv.append(gpa, runtime_path);
+    for (extra_objs.items) |extra_obj| {
+        try ensureExists(io, extra_obj, "extra object");
+        try child_argv.append(gpa, extra_obj);
+    }
     try child_argv.append(gpa, "-lm");
     try child_argv.append(gpa, "-lpthread");
 
@@ -70,6 +118,7 @@ fn run(init: std.process.Init) !void {
         if (!pathExists(io, marker_path)) continue;
         try appendPkgConfigOrFallback(gpa, arena, io, &child_argv, pkg_config_exe, lib);
     }
+    try child_argv.appendSlice(gpa, extra_libs.items);
 
     try child_argv.append(gpa, "-o");
     try child_argv.append(gpa, output_path);
@@ -186,6 +235,10 @@ fn ensureExists(io: std.Io, absolute_path: []const u8, label: []const u8) !void 
 }
 
 fn pathExists(io: std.Io, absolute_path: []const u8) bool {
-    std.Io.Dir.accessAbsolute(io, absolute_path, .{}) catch return false;
+    if (std.fs.path.isAbsolute(absolute_path)) {
+        std.Io.Dir.accessAbsolute(io, absolute_path, .{}) catch return false;
+        return true;
+    }
+    std.Io.Dir.cwd().access(io, absolute_path, .{}) catch return false;
     return true;
 }
