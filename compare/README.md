@@ -24,6 +24,9 @@ zig build bootstrap
 
 # 4. run the harness (builds compare/nurl_analysis, runs 5x each, appends HISTORY.md)
 zig build bench-csv
+
+# 5. optional: reproduce the pure-CSV sort baseline in Zig
+zig build sort-csv
 ```
 
 ## What's in here
@@ -36,7 +39,7 @@ zig build bench-csv
 | `generate_data.py`     | Deterministic 1 M-row generator (seed `0xC0FFEE`)         |
 | `nurl_analysis.nu`     | NURL pipeline: load → filter → sort → top-10 → write      |
 | `polars_analysis.py`   | Same pipeline in Polars                                    |
-| `sort_data.py`         | Vanilla Python `csv` module sort baseline                 |
+| `zig build sort-csv`   | Zig CSV sort baseline over `compare/test_data.csv`         |
 | `test_quoting.nu`      | RFC 4180 quoting round-trip cases                          |
 | `test_split.nu`        | Edge cases for the row scanner                             |
 

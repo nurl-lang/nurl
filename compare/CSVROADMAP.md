@@ -75,12 +75,13 @@ speedup without a regression-resistant measurement.
 - [ ] **Add `compare/HISTORY.md`** — append-only log: date, commit SHA,
       stage timings, machine info (`uname -a`, CPU model from
       `/proc/cpuinfo`), build flags. One line per run.
-- [ ] **Add `compare/run_bench.sh`** — runs `nurl_analysis` and
-      `polars_analysis.py` 5× each, reports min/median, writes to
-      `HISTORY.md`. Single command for reproducibility.
-- [ ] **Add `compare/README.md`** — `python compare/generate_data.py`
-      to regenerate `test_data.csv` (current is 106 MB, gitignore it),
-      then `./run_bench.sh`. Document seed for determinism.
+- [x] **Add a single benchmark harness** — `zig build bench-csv`
+      runs `nurl_analysis` and `polars_analysis.py` 5× each, reports
+      min/median, writes to `HISTORY.md`. Single command for
+      reproducibility.
+- [x] **Add `compare/README.md`** — keep `python compare/generate_data.py`
+      for the deterministic fixture generator, then use
+      `zig build bench-csv`. Seed and expected SHA are documented.
 - [ ] **Profile load with `perf record` / `perf report`** on
       `nurl_analysis` (Linux):
       ```
@@ -99,10 +100,10 @@ speedup without a regression-resistant measurement.
       seed. Add a row count / SHA-256 sentinel to `compare/README.md`
       so anyone re-running can verify.
 - [ ] **gitignore** the giant CSVs (`compare/test_data.csv`,
-      `compare/python_sorted_data.csv` if generated). Keep
+      `compare/sorted_data.csv` if generated). Keep
       `compare/{nurl,polars}_top10.csv` as round-trip fixtures.
 
-Exit criterion: re-running `./run_bench.sh` between two no-op commits
+Exit criterion: re-running `zig build bench-csv` between two no-op commits
 produces variance < 3 % on each stage.
 
 ---
@@ -176,7 +177,7 @@ The shape we want:
       unwrap and branch tax.
 - [ ] **Multi-key sort**: `csv_table_sort_by_keys *CSVTable t ( Vec i ) cols ( Vec b ) asc → v`
       precomputes a `Vec[i]` (or `Vec[String]`) per key, then runs a
-      stable comparator. This is what `compare/sort_data.py` does (8
+      stable comparator. This is what `zig build sort-csv` does (8
       keys); without it we are not feature-parity with `csv.DictReader`.
 - [ ] **Tests** in `compiler/tests/csv_sort_indexed.nu`:
       - 100 k random ints, asc + desc, verify monotone after sort
@@ -185,8 +186,8 @@ The shape we want:
       - empty table, single row
       - unparseable cells: must not crash, must compare as 0 (or
         as documented sentinel)
-      - multi-key sort matching `compare/sort_data.py`'s 8-key result
-- [ ] **Re-run** `./run_bench.sh`. Sort must drop below 150 ms; ideally
+      - multi-key sort matching `zig build sort-csv`'s 8-key result
+- [ ] **Re-run** `zig build bench-csv`. Sort must drop below 150 ms; ideally
       below 100 ms (parse cost alone is what's left).
 - [ ] **Update baseline table** above + `compare/HISTORY.md`.
 

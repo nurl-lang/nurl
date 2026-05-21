@@ -424,6 +424,13 @@ pub fn build(b: *std.Build) !void {
     const bench_csv_step = b.step("bench-csv", "Run the CSV benchmark harness and optionally append compare/HISTORY.md");
     bench_csv_step.dependOn(&bench_csv_cmd.step);
 
+    const sort_csv_cmd = addHelperStep(b, nurl_build_exe, &.{"sort-csv"}, true);
+    if (b.args) |args| {
+        sort_csv_cmd.addArgs(args);
+    }
+    const sort_csv_step = b.step("sort-csv", "Sort compare/test_data.csv with the Zig baseline comparator");
+    sort_csv_step.dependOn(&sort_csv_cmd.step);
+
     const install_dev_cmd = addHelperStep(b, nurl_build_exe, &.{"install"}, true);
     if (b.args) |args| {
         install_dev_cmd.addArgs(args);

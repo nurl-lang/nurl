@@ -33,6 +33,7 @@ const Command = enum {
     compare,
     buildwasm,
     bench_csv,
+    sort_csv,
     install,
     mcp_spec_drift,
     clean,
@@ -78,6 +79,7 @@ fn run(init: std.process.Init) !void {
             .compare => runCompare(init, io, args[2..]),
             .buildwasm => runBuildWasm(init, args[2..]),
             .bench_csv => runBenchCsv(init, args[2..]),
+            .sort_csv => runSortCsv(init, args[2..]),
             .install => runInstall(init, args[2..]),
             .mcp_spec_drift => runMcpSpecDrift(init, args[2..]),
             .clean => runClean(init, args[2..]),
@@ -96,6 +98,7 @@ fn parseCommand(name: []const u8) ?Command {
     if (std.mem.eql(u8, name, "snapshot-test")) return .snapshot_test;
     if (std.mem.eql(u8, name, "dwarf-test")) return .dwarf_test;
     if (std.mem.eql(u8, name, "bench-csv")) return .bench_csv;
+    if (std.mem.eql(u8, name, "sort-csv")) return .sort_csv;
     if (std.mem.eql(u8, name, "mcp-spec-drift")) return .mcp_spec_drift;
     return std.meta.stringToEnum(Command, name);
 }
@@ -1303,6 +1306,12 @@ const BenchRun = struct {
     total: i64,
 };
 
+const CsvSortRow = struct {
+    index: usize,
+    line: []const u8,
+    fields: [8][]const u8,
+};
+
 fn runBenchCsv(init: std.process.Init, args: []const []const u8) !void {
     const arena = init.arena.allocator();
     const gpa = init.gpa;
@@ -1461,6 +1470,152 @@ fn printBenchCsvUsage() void {
         "usage: nurl-build bench-csv [--root <path>] [--no-history] [--label <text>] [--binary <path>] [--python <path>] [--data <path>] [runs]\n",
         .{},
     );
+}
+
+fn runSortCsv(init: std.process.Init, args: []const []const u8) !void {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var root: []const u8 = ".";
+    var input_path_arg: ?[]const u8 = null;
+    var output_path_arg: ?[]const u8 = null;
+
+    var i: usize = 0;
+    while (i < args.len) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--root")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            root = args[i];
+        } else if (std.mem.eql(u8, arg, "--input")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            input_path_arg = args[i];
+        } else if (std.mem.eql(u8, arg, "--output")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            output_path_arg = args[i];
+        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            std.debug.print(
+                "usage: nurl-build sort-csv [--root <path>] [--input <path>] [--output <path>]\n",
+                .{},
+            );
+            std.process.exit(0);
+        } else {
+            std.debug.print("nurl-build: unknown sort-csv arg: {s}\n", .{arg});
+            return error.InvalidArgs;
+        }
+        i += 1;
+    }
+
+    const root_abs = try absolutePath(arena, root);
+    const compare_dir = try std.fs.path.join(arena, &.{ root_abs, "compare" });
+    const input_path = if (input_path_arg) |path|
+        try resolvePathFromRoot(arena, root_abs, path)
+    else
+        try std.fs.path.join(arena, &.{ compare_dir, "test_data.csv" });
+    const output_path = if (output_path_arg) |path|
+        try resolvePathFromRoot(arena, root_abs, path)
+    else
+        try std.fs.path.join(arena, &.{ compare_dir, "sorted_data.csv" });
+
+    try ensureExists(io, input_path, "compare/test_data.csv");
+
+    const removed_existing = pathExists(io, output_path);
+    try deleteFileIfExists(io, output_path);
+    if (removed_existing) {
+        std.debug.print("Removed existing {s}\n", .{output_path});
+    }
+
+    const total_start = std.Io.Clock.Timestamp.now(io, .boot);
+    std.debug.print("Starting sort process\n", .{});
+
+    const csv_bytes = try std.Io.Dir.cwd().readFileAlloc(io, input_path, gpa, .unlimited);
+    defer gpa.free(csv_bytes);
+    const read_done = std.Io.Clock.Timestamp.now(io, .boot);
+    const read_ms = total_start.durationTo(read_done).raw.toMilliseconds();
+
+    const first_newline = std.mem.indexOfScalar(u8, csv_bytes, '\n') orelse return error.InvalidData;
+    const header_line = csv_bytes[0..first_newline];
+    const body = csv_bytes[first_newline + 1 ..];
+
+    var rows: std.ArrayList(CsvSortRow) = .empty;
+    defer rows.deinit(gpa);
+
+    var row_start: usize = 0;
+    var row_index: usize = 0;
+    while (row_start < body.len) {
+        const rel_end = std.mem.indexOfScalarPos(u8, body, row_start, '\n') orelse body.len;
+        const raw_line = body[row_start..rel_end];
+        if (raw_line.len != 0) {
+            try rows.append(gpa, try parseCsvSortRow(raw_line, row_index));
+            row_index += 1;
+        }
+        if (rel_end == body.len) break;
+        row_start = rel_end + 1;
+    }
+
+    std.debug.print("Read {d} rows in {d}ms.\n", .{ rows.items.len, read_ms });
+
+    const sort_start = std.Io.Clock.Timestamp.now(io, .boot);
+    std.sort.heap(CsvSortRow, rows.items, {}, lessThanCsvSortRow);
+    const sort_ms = sort_start.durationTo(std.Io.Clock.Timestamp.now(io, .boot)).raw.toMilliseconds();
+    std.debug.print("Sort completed in {d}ms.\n", .{sort_ms});
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    try out.appendSlice(gpa, header_line);
+    try out.append(gpa, '\n');
+    for (rows.items) |row| {
+        try out.appendSlice(gpa, row.line);
+        try out.append(gpa, '\n');
+    }
+
+    const write_start = std.Io.Clock.Timestamp.now(io, .boot);
+    try ensureParentDir(io, output_path);
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = output_path,
+        .data = out.items,
+    });
+    const write_ms = write_start.durationTo(std.Io.Clock.Timestamp.now(io, .boot)).raw.toMilliseconds();
+    std.debug.print("Write completed in {d}ms.\n", .{write_ms});
+    std.debug.print("\nTotal time elapsed: {d}ms\n", .{total_start.durationTo(std.Io.Clock.Timestamp.now(io, .boot)).raw.toMilliseconds()});
+    std.debug.print("Finished: {s}\n", .{output_path});
+}
+
+fn parseCsvSortRow(line: []const u8, index: usize) !CsvSortRow {
+    var fields: [8][]const u8 = undefined;
+    var field_idx: usize = 0;
+    var start: usize = 0;
+
+    for (line, 0..) |ch, pos| {
+        if (ch != ',') continue;
+        if (field_idx >= fields.len) return error.InvalidData;
+        fields[field_idx] = line[start..pos];
+        field_idx += 1;
+        start = pos + 1;
+    }
+    if (field_idx != fields.len - 1) return error.InvalidData;
+    fields[field_idx] = std.mem.trim(u8, line[start..], "\r");
+
+    return .{
+        .index = index,
+        .line = line,
+        .fields = fields,
+    };
+}
+
+fn lessThanCsvSortRow(_: void, lhs: CsvSortRow, rhs: CsvSortRow) bool {
+    const order = [_]usize{ 7, 6, 5, 4, 3, 2, 1, 0 };
+    inline for (order) |field_idx| {
+        switch (std.mem.order(u8, lhs.fields[field_idx], rhs.fields[field_idx])) {
+            .lt => return false,
+            .gt => return true,
+            .eq => {},
+        }
+    }
+    return lhs.index < rhs.index;
 }
 
 fn runInstall(init: std.process.Init, args: []const []const u8) !void {
