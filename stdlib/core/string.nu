@@ -33,6 +33,7 @@
 //   ( string_eq a b )          → b           content equality
 //
 //   ( string_with_cap n )      → String      empty, cap-preallocated
+//   ( string_clone s )         → String      independent deep copy
 //   ( string_concat a b )      → String      new owned concatenation
 //   ( string_starts_with s p ) → b           prefix check
 //   ( string_ends_with s p )   → b           suffix check
@@ -160,6 +161,22 @@ $ `stdlib/core/vec.nu`
     : u zero # u 0
     = . dst len zero
     ^ @ String { . tmp ctl }
+}
+
+// Deep copy of `str` into a fresh owned String. The two Strings share
+// no storage — mutating or freeing one never affects the other. Embedded
+// NUL bytes in [0, len) are preserved verbatim.
+//
+// This is the stock element-clone for owned-String containers: pass it
+// to `vec_clone_with` / `map_clone_with` wrapped in a `\`-closure (NURL
+// hands closure values, not @-function names, to higher-order params):
+//
+//   ( vec_clone_with [String] src \ String s → String { ^ ( string_clone s ) } )
+@ string_clone String str → String {
+    : ( Vec u ) b ( __sbuf str )
+    : i n ( vec_len [u] b )
+    : *u src ( vec_data [u] b )
+    ^ ( string_from_bytes src n )
 }
 
 // ── Inspectors ──────────────────────────────────────────────────────

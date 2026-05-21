@@ -46,11 +46,15 @@
 //   ( map_values     [K V] m )                                   → ( Vec V )
 //   ( map_iter       [K V] m )                                   → ( Iter ( Pair K V ) )
 //   ( map_free       [K V] m )                                   → v
+//   ( map_clone      [K V] m )                  → ( HashMap K V )  bitwise — trivial K/V
+//   ( map_clone_with [K V] m clone_k clone_v )  → ( HashMap K V )  deep copy
 //
 // map_keys / map_values walk occupied slots and bitwise-copy keys/values
 // into a fresh Vec. Trivial element types only — for owned keys/values
 // (e.g. HashMap[String i]) the result aliases the map's storage; iterate
-// with map_each and clone each key explicitly instead.
+// with map_each and clone each key explicitly instead. To duplicate a
+// whole owned-key/value map use `map_clone_with` with per-key/value
+// clone closures.
 //
 // Stock hash + eq:
 //   ( hash_string s )      → i        djb2-style hash over bytes
@@ -447,6 +451,79 @@ $ `stdlib/core/pair.nu`
             {}
             = i + i 1
         }
+    } {}
+    ^ out
+}
+
+// ── Clone ───────────────────────────────────────────────────────────
+
+// Bitwise shallow copy of the whole map. The clone keeps the source's
+// slot layout verbatim (same cap, same probe positions, tombstones and
+// all), so no rehash is needed and lookups behave identically. Safe ONLY
+// for trivial K and V (i, f, b, raw s, slice) — for owned keys/values
+// this aliases every heap pointer and double-frees on cleanup; use
+// `map_clone_with` then. Mirrors the vec_clone / vec_clone_with split.
+@ map_clone [K V] ( HashMap K V ) m → ( HashMap K V ) {
+    : s sctl . m ctl
+    : ( HashMap K V ) out ( map_new [K V] )
+    : s dctl . out ctl
+    : i cap ( __map_cap_raw sctl )
+    ? > cap 0 {
+        ( __map_alloc_buffers [K V] dctl cap )
+        : *K skeys # *K ( nurl_peek sctl 0 )
+        : *V svals # *V ( nurl_peek sctl 1 )
+        : *i sstates # *i ( nurl_peek sctl 2 )
+        : *K dkeys # *K ( nurl_peek dctl 0 )
+        : *V dvals # *V ( nurl_peek dctl 1 )
+        : *i dstates # *i ( nurl_peek dctl 2 )
+        : ~ i i 0
+        ~ < i cap {
+            = . dstates i . sstates i
+            ? == . sstates i 1 {
+                = . dkeys i . skeys i
+                = . dvals i . svals i
+            } {}
+            = i + i 1
+        }
+        ( nurl_poke dctl 3 ( __map_len_raw sctl ) )
+        ( nurl_poke dctl 5 ( __map_tomb_raw sctl ) )
+    } {}
+    ^ out
+}
+
+// Deep copy of the whole map: every occupied key is run through
+// `clone_k` and every value through `clone_v`, and the results are
+// stored at the SAME slot index as the source. The slot layout is
+// preserved verbatim, so no rehash is needed — the clone closures only
+// have to produce independently-owned keys/values (for String keys pass
+// `\ String s → String { ^ ( string_clone s ) }`, etc.). The source map
+// is left untouched; the caller owns both maps.
+@ map_clone_with [K V] ( HashMap K V ) m ( @ K K ) clone_k ( @ V V ) clone_v → ( HashMap K V ) {
+    : s sctl . m ctl
+    : ( HashMap K V ) out ( map_new [K V] )
+    : s dctl . out ctl
+    : i cap ( __map_cap_raw sctl )
+    ? > cap 0 {
+        ( __map_alloc_buffers [K V] dctl cap )
+        : *K skeys # *K ( nurl_peek sctl 0 )
+        : *V svals # *V ( nurl_peek sctl 1 )
+        : *i sstates # *i ( nurl_peek sctl 2 )
+        : *K dkeys # *K ( nurl_peek dctl 0 )
+        : *V dvals # *V ( nurl_peek dctl 1 )
+        : *i dstates # *i ( nurl_peek dctl 2 )
+        : ~ i i 0
+        ~ < i cap {
+            = . dstates i . sstates i
+            ? == . sstates i 1 {
+                : K k . skeys i
+                : V v . svals i
+                = . dkeys i ( clone_k k )
+                = . dvals i ( clone_v v )
+            } {}
+            = i + i 1
+        }
+        ( nurl_poke dctl 3 ( __map_len_raw sctl ) )
+        ( nurl_poke dctl 5 ( __map_tomb_raw sctl ) )
     } {}
     ^ out
 }

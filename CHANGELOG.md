@@ -10,6 +10,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Standard-library Clone story.** Owned containers can now be deep-copied
+  without hand-rolling a per-type clone. NURL has no type-class dispatch,
+  so — exactly like the existing `vec_free` / `vec_free_with` split — the
+  clone is delivered as a per-call closure rather than a language-level
+  `Clone` trait:
+
+  * `string_clone String → String` (`stdlib/core/string.nu`) — independent
+    deep copy of an owned String; embedded NUL bytes preserved verbatim.
+    The stock element-clone for owned-String containers.
+  * `vec_clone [A] v → ( Vec A )` — bitwise shallow copy, trivial element
+    types only. `vec_clone_with [A] v ( @ A A ) clone → ( Vec A )` — deep
+    copy that runs `clone` per element; use for `Vec[String]`, nested
+    `Vec`, `Vec[HashMap]`.
+  * `vec_filter_with [A] v ( @ b A ) pred ( @ A A ) clone → ( Vec A )` —
+    owned-safe filter: kept elements are *cloned* into the result instead
+    of bitwise-aliased, so source and result can both be freed with
+    `vec_free_with` without a double-free. Plain `vec_filter` stays the
+    fast path for trivial elements.
+  * `map_clone [K V] m → ( HashMap K V )` — bitwise, trivial K/V.
+    `map_clone_with [K V] m ( @ K K ) clone_k ( @ V V ) clone_v` — deep
+    copy. Both preserve the source slot layout verbatim (same cap, probe
+    positions, tombstones), so the clone needs no rehash.
+
+  Before this, `vec_filter` / `vec_extend` / `map_keys` / `map_values`
+  bitwise-copied elements — silent UB / double-free for any owned element
+  type (`Vec[String]`, `HashMap[String _]`, nested containers), an unsafe
+  copy the borrow checker cannot see because it happens inside a
+  monomorphised generic. The `_with` variants close that hole. Regression
+  `compiler/tests/clone_basic.nu` — verified independence (mutate source →
+  clone unaffected) and ASan + UBSan + leak-detection clean.
+
 * **`inout` field targets.** An argument of the form `. obj field` at
   an `inout` parameter now passes the *address of that struct field*,
   so the callee mutates exactly that field of the caller's struct in

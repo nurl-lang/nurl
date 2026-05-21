@@ -76,26 +76,28 @@
 //   to element types: bitwise-copy is safe for i/f/b/raw-s/slice, NOT
 //   for owned String/Vec/HashMap; for those build manually):
 //   ( vec_map [A B] v f )          → ( Vec B )  f : (@ B A)
-//   ( vec_filter [A] v pred )      → ( Vec A )  pred : (@ b A)
+//   ( vec_filter [A] v pred )      → ( Vec A )  pred : (@ b A); trivial
+//   ( vec_filter_with [A] v pred clone ) → ( Vec A )  owned-safe filter —
+//                                                clone : (@ A A) clones
+//                                                every kept element
 //
 //   Higher-order (search — no allocation):
 //   ( vec_find [A] v pred )        → ? A        first match or None
 //   ( vec_any  [A] v pred )        → b          short-circuit
 //   ( vec_all  [A] v pred )        → b          short-circuit on first F
 //
-// No `vec_clone` is provided. A bitwise clone would duplicate owned-
-// pointer fields (Strings, nested Vecs) without telling the auto-drop
-// machinery, and every owned element would double-free at scope exit.
-// The single-owner rule has no language-level escape — clone the
-// elements explicitly:
+//   Clone (mirrors the vec_free / vec_free_with split):
+//   ( vec_clone [A] v )            → ( Vec A )  bitwise shallow copy;
+//                                                trivial elements only
+//   ( vec_clone_with [A] v clone ) → ( Vec A )  deep copy; clone : (@ A A)
+//                                                runs per element. Use for
+//                                                Vec[String] / nested Vec.
 //
-//   : ( Vec String ) copy ( vec_with_cap [String] ( vec_len [String] src ) )
-//   ( vec_each [String] src \ String s → v {
-//     ( vec_push [String] copy ( string_clone s ) )
-//   } )
-//
-// For trivial element types (`i`, `f`, `b`, raw `s`, slice) the same
-// pattern works with bare `vec_push` and no clone step.
+// A bare `vec_clone` over an owned element type aliases every heap
+// pointer and double-frees at scope exit — the same trap as bare
+// `vec_free` over Vec[String]. Use `vec_clone_with` whenever the element
+// owns heap storage; pass a closure that returns an independently-owned
+// element (e.g. wrap `string_clone` in a `\`).
 
 $ `stdlib/core/mem.nu`
 
@@ -403,6 +405,54 @@ $ `stdlib/core/mem.nu`
     ( nurl_free ctl )
 }
 
+// ── Clone ───────────────────────────────────────────────────────────
+
+// Shallow bitwise copy: a fresh Vec with the same length whose elements
+// are copied verbatim. Safe ONLY for trivial element types (i, f, b,
+// raw s pointers, fat-ptr slices). For an owned element type this would
+// alias every heap buffer across two Vecs and double-free at scope exit
+// — use `vec_clone_with` instead. Mirrors the `vec_free` / `vec_free_with`
+// split: bare = trivial, `_with` = owned.
+@ vec_clone [A] ( Vec A ) v → ( Vec A ) {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    : ( Vec A ) out ( vec_with_cap [A] len )
+    ? > len 0 {
+        : *A src # *A ( nurl_peek ctl 0 )
+        : *A dst ( vec_data [A] out )
+        : ~ i i 0
+        ~ < i len {
+            = . dst i . src i
+            = i + i 1
+        }
+        : b _ok ( vec_set_len [A] out len )
+    } {}
+    ^ out
+}
+
+// Deep copy: a fresh Vec whose elements are produced by calling `clone`
+// on every element of `v` in order. `clone` must return an element that
+// owns its own heap storage independently of the source — for Vec[String]
+// pass `\ String s → String { ^ ( string_clone s ) }`, for Vec[Json]
+// `\ Json j → Json { ^ ( json_clone j ) }`, etc. The source Vec is left
+// untouched; the caller owns both Vecs and frees each with the matching
+// `vec_free_with`.
+@ vec_clone_with [A] ( Vec A ) v ( @ A A ) clone → ( Vec A ) {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    : ( Vec A ) out ( vec_with_cap [A] len )
+    ? > len 0 {
+        : *A src # *A ( nurl_peek ctl 0 )
+        : ~ i i 0
+        ~ < i len {
+            : A x . src i
+            ( vec_push [A] out ( clone x ) )
+            = i + i 1
+        }
+    } {}
+    ^ out
+}
+
 // ── Higher-order ────────────────────────────────────────────────────
 
 @ vec_each [A] ( Vec A ) v ( @ v A ) f → v {
@@ -463,6 +513,26 @@ $ `stdlib/core/mem.nu`
     ~ < i len {
         : A x . data i
         ? ( pred x ) { ( vec_push [A] out x ) } {}
+        = i + i 1
+    }
+    ^ out
+}
+
+// Owned-safe filter: keep elements where `pred` returns T, but push a
+// `clone` of each kept element into the output instead of a bitwise
+// alias. The result Vec owns its elements independently of `v`, so both
+// can be freed with `vec_free_with` without a double-free. Use this for
+// Vec[String] / Vec[Json] / nested containers; `vec_filter` stays the
+// faster path for trivial element types.
+@ vec_filter_with [A] ( Vec A ) v ( @ b A ) pred ( @ A A ) clone → ( Vec A ) {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    : ( Vec A ) out ( vec_new [A] )
+    : *A data # *A ( nurl_peek ctl 0 )
+    : ~ i i 0
+    ~ < i len {
+        : A x . data i
+        ? ( pred x ) { ( vec_push [A] out ( clone x ) ) } {}
         = i + i 1
     }
     ^ out

@@ -140,9 +140,18 @@ heap-pointerin läpi). MVP toteutettu 2026-04-25 (`stdlib/core/vec.nu`).
 - [x] `vec_insert i x`, `vec_remove i` (memmove keskeltä; testi:
       `compiler/tests/vec_insert_remove.nu`)
 - [ ] `vec_from_array *A n` (pointer + len → Vec, kopioi; FFI ja stdlib-helperit)
-- [ ] `vec_clone` (vaatii Clone-trait-päätöksen; shallow-memcpy ei riitä `Vec[String]`:lle)
+- [x] `vec_clone` / `vec_clone_with` (`stdlib/core/vec.nu`, 2026-05-21). Clone-päätös:
+      ei kieli-tason Clone-traitia vaan closure-välitys, sama kuvio kuin
+      `vec_free` / `vec_free_with`. `vec_clone` = bitwise shallow copy (triviaalit
+      alkiot); `vec_clone_with [A] v ( @ A A ) clone` = syväkopio, ajaa `clone`-
+      closuren per alkio (`Vec[String]` / sisäkkäiset). Stock-alkioklooni
+      `string_clone` (`stdlib/core/string.nu`). Testi: `compiler/tests/clone_basic.nu`
+      (ASan + UBSan + leak-detection puhdas).
 - [x] `Slice[A]` shipped 2026-05-17 (`stdlib/core/slice.nu`): `Slice[A] { *A data, i len }`, constructors `slice_from_vec` / `slice_sub` / `slice_from_raw`, inspectors `slice_len` / `slice_is_empty` / `slice_data` / `slice_get` / `slice_first` / `slice_last`. Korvaa `vec_data`-pattenrin hot-loopeissa.
-- [ ] `vec_map f`, `vec_filter pred` (allokoivat uuden Vec:n; lähde koskemattomaksi)
+- [x] `vec_map f`, `vec_filter pred` (allokoivat uuden Vec:n; lähde koskemattomaksi).
+      `vec_map`/`vec_filter` bitwise-kopioivat → triviaalit alkiot; omistaville
+      tyypeille `vec_filter_with [A] v pred ( @ A A ) clone` kloonaa säilytetyt
+      alkiot (`stdlib/core/vec.nu`, 2026-05-21).
 - [x] `vec_find pred`, `vec_any pred`, `vec_all pred` (predikaattipohjaiset)
 - [x] `vec_contains target eq_fn`, `vec_index_of target eq_fn`,
       `vec_eq a b eq_fn` (closure-pohjainen tasa-arvo, sama eq-konvention kuin
@@ -220,6 +229,11 @@ Nykyinen `nurl_map_*` on rajoittunut (string→i64).
       kopio, sama trivial-only-rajoitus kuin `vec_map`:lla; järjestys host-
       määrittelevä — sortteeraa jos tarvitset deterministisen järjestyksen.
       Testi: `compiler/tests/hashmap_keys_values.nu`, 2026-04-28)
+- [x] `map_clone` / `map_clone_with` (`stdlib/std/hashmap.nu`, 2026-05-21).
+      Säilyttävät lähteen slot-layoutin verbatim → ei rehashia, kloonin haut
+      käyttäytyvät identtisesti. `map_clone` = bitwise (triviaalit K/V);
+      `map_clone_with [K V] m ( @ K K ) clone_k ( @ V V ) clone_v` = syväkopio.
+      Testi: `compiler/tests/clone_basic.nu`.
 
 ### 8. `int` ja `float` — numeeriset operaatiot
 - [x] `int_to_string` (RT — `nurl_str_int`)
