@@ -168,6 +168,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type: `trunc` into a narrower field, `sext` into a wider one.
   Regression test `compiler/tests/struct_narrow_field.nu`.
 
+### Fixed
+
+* **`mcp_stdio_call` write-failure classification was racy.** Pinging a
+  server that had already exited surfaced either `McpStdioEof` or
+  `McpStdioIo` depending on whether the write hit `EPIPE` before the
+  child's exit was observed — a non-deterministic result (and a flaky
+  `mcp_stdio_basic` test). On a failed write `mcp_stdio_call` now
+  consults `proc_eof`: if the child's stdout is also at EOF the server
+  is simply gone (`McpStdioEof`, matching the write-lands-then-reads-EOF
+  path), otherwise it is a genuine transient pipe fault (`McpStdioIo`).
+  The dead-server outcome is now deterministic.
+
 ## [0.8.0] — 2026-05-20
 
 ### Added

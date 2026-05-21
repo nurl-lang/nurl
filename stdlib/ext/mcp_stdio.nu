@@ -179,7 +179,18 @@ $ `stdlib/core/vec.nu`
     : i wn ( proc_write_line . c child ( string_data body ) )
     ( string_free body )
     ? < wn 0 {
-        ^ @ !Json McpStdioErr { F @ McpStdioErr { McpStdioIo } }
+        // A failed write almost always means the child exited and
+        // closed its stdin read-end (EPIPE). Disambiguate: if its
+        // stdout is also at EOF the server is simply gone (McpStdioEof,
+        // same as a write that lands then reads EOF); otherwise it is a
+        // genuine transient pipe fault (McpStdioIo). Without this the
+        // dead-server outcome races between the two depending on
+        // whether the write or the child exit wins.
+        ? ( proc_eof . c child ) {
+            ^ @ !Json McpStdioErr { F @ McpStdioErr { McpStdioEof } }
+        } {
+            ^ @ !Json McpStdioErr { F @ McpStdioErr { McpStdioIo } }
+        }
     } {}
 
     // Read response lines until we find one whose `id` matches our request.
