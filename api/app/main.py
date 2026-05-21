@@ -276,6 +276,10 @@ def _is_executable(path: str) -> bool:
     return p.is_file() and os.access(p, os.X_OK)
 
 
+def _link_helper_available() -> bool:
+    return _is_executable(NURL_LINK_HELPER)
+
+
 def _nurlc_available() -> bool:
     return _is_executable(NURLC_PATH) or shutil.which("nurlc") is not None
 
@@ -655,6 +659,11 @@ def build_wasm(req: BuildWasmRequest):
                 f"(zig={NURL_ZIG}, runtime={RUNTIME_WASM_O})"
             ),
         )
+    if not _link_helper_available():
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"link helper not found at '{NURL_LINK_HELPER}'",
+        )
 
     basename = "main"
     if req.filename:
@@ -712,15 +721,20 @@ def build_wasm(req: BuildWasmRequest):
         )
 
         # 2) LLVM IR + runtime.wasm.o (+ canvas.wasm.o / audio.wasm.o) → .wasm
-        #    `zig cc -target wasm32-wasi` bundles wasi-libc + lld, so this is a
-        #    single host-arch-independent step (no separate WASI SDK).
-        clang_cmd = [
-            NURL_ZIG, "cc",
-            f"--target={WASM_TARGET}",
-            "-O2",
-            "-Wno-override-module",
+        #    via the shared Zig helper. Python keeps the wasm-specific IR prep
+        #    and Asyncify pass; the helper owns driver/target invocation.
+        link_cmd = [
+            NURL_LINK_HELPER,
+            "--driver", f"{NURL_ZIG} cc",
+            "--target", WASM_TARGET,
+            "--opt", "-O2",
+            "--runtime", RUNTIME_WASM_O,
+            "--no-lto",
+            "--no-marker-libs",
+            "--flag", "-Wno-override-module",
+            NURL_WORK_ROOT,
             str(ll_path),
-            RUNTIME_WASM_O,
+            str(wasm_path),
         ]
         if uses_canvas:
             if not Path(CANVAS_WASM_O).is_file():
@@ -731,7 +745,7 @@ def build_wasm(req: BuildWasmRequest):
                         "Rebuild the container with canvas_wasm.c compiled."
                     ),
                 )
-            clang_cmd.append(CANVAS_WASM_O)
+            link_cmd += ["--extra-obj", CANVAS_WASM_O]
         if uses_audio:
             if not Path(AUDIO_WASM_O).is_file():
                 raise HTTPException(
@@ -741,25 +755,22 @@ def build_wasm(req: BuildWasmRequest):
                         "Rebuild the container with audio_wasm.c compiled."
                     ),
                 )
-            clang_cmd.append(AUDIO_WASM_O)
+            link_cmd += ["--extra-obj", AUDIO_WASM_O]
         if uses_canvas or uses_audio:
             # Allow undefined `canvas.*` / `audio.*` imports — they're
             # supplied by the browser host, not present in wasi-libc.
-            clang_cmd += [
-                "-Wl,--allow-undefined",
-            ]
+            link_cmd += ["--flag", "-Wl,--allow-undefined"]
         # runtime.wasm.o pulls in libm symbols (sqrt/sin/cos/...).
         # wasi-libc 24.0 ships libm.a in the sysroot.
-        clang_cmd += ["-lm"]
-        clang_cmd += ["-o", str(wasm_path)]
+        link_cmd += ["--extra-lib", "-lm"]
 
-        clang_proc = _run(clang_cmd, cwd=str(tmpdir))
+        clang_proc = _run(link_cmd, cwd=str(tmpdir))
         if clang_proc.returncode != 0 or not wasm_path.exists():
             nurlc_stderr_txt = nurlc_proc.stderr.decode("utf-8", "replace")
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
-                    "stage": "zig-cc-wasm",
+                    "stage": "nurl-build-wasm",
                     "returncode": clang_proc.returncode,
                     "stderr": clang_proc.stderr.decode("utf-8", "replace"),
                     "nurlc_stderr": nurlc_stderr_txt,
@@ -1023,7 +1034,7 @@ def build_native(req: BuildRequest, request: Request) -> BuildResponse:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"native runtime object missing at {RUNTIME_O}",
         )
-    if not _is_executable(NURL_LINK_HELPER):
+    if not _link_helper_available():
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"link helper not found at '{NURL_LINK_HELPER}'",
@@ -1130,6 +1141,7 @@ def build_native(req: BuildRequest, request: Request) -> BuildResponse:
         # runtime marker → library policy, canvas extras, and driver flags.
         link_cmd: list[str] = [
             NURL_LINK_HELPER,
+            "--driver", NATIVE_CLANG,
             "--opt", opt_flag,
             "--runtime", RUNTIME_O,
             "--no-lto",
@@ -1160,7 +1172,6 @@ def build_native(req: BuildRequest, request: Request) -> BuildResponse:
         clang_proc = _run(
             link_cmd,
             cwd=str(tmpdir),
-            env={**os.environ, "NURL_CC": NATIVE_CLANG},
         )
         clang_stdout = clang_proc.stdout.decode("utf-8", "replace")
         clang_stderr = clang_proc.stderr.decode("utf-8", "replace")
@@ -1289,6 +1300,11 @@ def build_windows(req: BuildRequest, request: Request) -> BuildResponse:
                 "Rebuild the container so the build stage produces runtime.win.o."
             ),
         )
+    if not _link_helper_available():
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"link helper not found at '{NURL_LINK_HELPER}'",
+        )
 
     _gc_downloads()
 
@@ -1383,17 +1399,21 @@ def build_windows(req: BuildRequest, request: Request) -> BuildResponse:
                 ),
             )
 
-        # Single-step: `zig cc -target x86_64-windows-gnu` consumes the IR
-        # directly and drives its bundled lld to emit the .exe, linking the
-        # prebuilt runtime.win.o. Zig ships the mingw-w64 CRT + libgcc
-        # equivalents, so unlike the old clang→mingw-gcc handoff there's no
-        # external sysroot to coordinate and no separate link stage.
+        # Route the Windows cross-link through the shared Zig helper so the
+        # target/driver orchestration lives next to the rest of the build
+        # policy instead of inside this endpoint.
         zig_cmd: list[str] = [
-            NURL_ZIG, "cc",
-            f"--target={WINDOWS_TARGET}",
-            opt_flag, "-Wno-override-module",
-            str(ll_path), RUNTIME_WIN_O,
-            "-o", str(exe_path),
+            NURL_LINK_HELPER,
+            "--driver", f"{NURL_ZIG} cc",
+            "--target", WINDOWS_TARGET,
+            "--opt", opt_flag,
+            "--runtime", RUNTIME_WIN_O,
+            "--no-lto",
+            "--no-marker-libs",
+            "--flag", "-Wno-override-module",
+            NURL_WORK_ROOT,
+            str(ll_path),
+            str(exe_path),
         ]
         # When the Windows runtime was built with -DNURL_HAVE_LIBCURL
         # (Dockerfile drops a stdlib/runtime.win.curl marker), link the
@@ -1401,10 +1421,14 @@ def build_windows(req: BuildRequest, request: Request) -> BuildResponse:
         # winsock require. Static + schannel keeps the .exe self-contained.
         if Path(os.path.join(os.path.dirname(RUNTIME_WIN_O), "runtime.win.curl")).is_file():
             zig_cmd.extend([
-                f"-L{MINGW_CURL_PREFIX}/lib",
-                "-lcurl",
-                "-lws2_32", "-lcrypt32", "-lbcrypt", "-lncrypt",
-                "-lsecur32", "-ladvapi32",
+                "--extra-lib", f"-L{MINGW_CURL_PREFIX}/lib",
+                "--extra-lib", "-lcurl",
+                "--extra-lib", "-lws2_32",
+                "--extra-lib", "-lcrypt32",
+                "--extra-lib", "-lbcrypt",
+                "--extra-lib", "-lncrypt",
+                "--extra-lib", "-lsecur32",
+                "--extra-lib", "-ladvapi32",
             ])
         clang_proc = _run(zig_cmd, cwd=str(tmpdir))
         clang_stdout = clang_proc.stdout.decode("utf-8", "replace")
@@ -1532,6 +1556,11 @@ def build_macos(req: BuildRequest, request: Request) -> BuildResponse:
                 "Rebuild the container so the build stage produces runtime.mac.o."
             ),
         )
+    if not _link_helper_available():
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"link helper not found at '{NURL_LINK_HELPER}'",
+        )
 
     _gc_downloads()
 
@@ -1626,21 +1655,20 @@ def build_macos(req: BuildRequest, request: Request) -> BuildResponse:
                 ),
             )
 
-        # Single-step: zig cc consumes the IR directly, picks its
-        # bundled darwin libc stubs for the target triple, and drives
-        # its internal lld to produce a Mach-O binary. No separate
-        # link stage (unlike mingw, where Debian's sysroot layout
-        # requires handing the link off to mingw-gcc).
-        #
-        # Zig sets HOME / cache dirs under $XDG_CACHE_HOME or $HOME.
-        # The non-root container user's HOME is /app, which is writable
-        # by that user, so zig can write its (tiny) global cache there.
+        # Route the macOS cross-link through the shared Zig helper so target
+        # selection and driver invocation stay centralized.
         zig_cmd: list[str] = [
-            NURL_ZIG, "cc",
-            f"--target={MACOS_TARGET}",
-            opt_flag, "-Wno-override-module",
-            str(ll_path), RUNTIME_MAC_O,
-            "-o", str(bin_path),
+            NURL_LINK_HELPER,
+            "--driver", f"{NURL_ZIG} cc",
+            "--target", MACOS_TARGET,
+            "--opt", opt_flag,
+            "--runtime", RUNTIME_MAC_O,
+            "--no-lto",
+            "--no-marker-libs",
+            "--flag", "-Wno-override-module",
+            NURL_WORK_ROOT,
+            str(ll_path),
+            str(bin_path),
         ]
         # runtime.c links libm calls on POSIX; on macOS those live in
         # libSystem (which zig links implicitly), so no -lm needed.

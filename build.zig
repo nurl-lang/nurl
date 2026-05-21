@@ -7,7 +7,6 @@ const FeatureState = struct {
 
 const RuntimeConfig = struct {
     python: []const u8,
-    env_exe: []const u8,
     root_path: []const u8,
     san: bool,
     use_lto: bool,
@@ -21,61 +20,6 @@ const RuntimeConfig = struct {
     cc_tokens: []const []const u8,
 };
 
-const py_mkdir =
-    \\import os, sys
-    \\os.makedirs(sys.argv[1], exist_ok=True)
-;
-
-const py_copy_file =
-    \\import shutil, sys
-    \\shutil.copyfile(sys.argv[1], sys.argv[2])
-;
-
-const py_copy_exec =
-    \\import os, shutil, sys
-    \\shutil.copyfile(sys.argv[1], sys.argv[2])
-    \\os.chmod(sys.argv[2], 0o755)
-;
-
-const py_symlink =
-    \\from pathlib import Path
-    \\import os, sys
-    \\src = Path(sys.argv[1])
-    \\dest = Path(sys.argv[2])
-    \\target = os.path.relpath(src, dest.parent)
-    \\try:
-    \\    dest.unlink(missing_ok=True)
-    \\except IsADirectoryError:
-    \\    raise SystemExit(f"{dest} is a directory; refusing to replace it")
-    \\try:
-    \\    dest.symlink_to(target)
-    \\except FileExistsError:
-    \\    dest.unlink(missing_ok=True)
-    \\    dest.symlink_to(target)
-;
-
-const py_marker_on =
-    \\from pathlib import Path
-    \\import sys
-    \\Path(sys.argv[1]).write_text("1\n")
-;
-
-const py_marker_off =
-    \\from pathlib import Path
-    \\import sys
-    \\Path(sys.argv[1]).unlink(missing_ok=True)
-;
-
-const py_compare_files =
-    \\from pathlib import Path
-    \\import sys
-    \\lhs = Path(sys.argv[1]).read_bytes()
-    \\rhs = Path(sys.argv[2]).read_bytes()
-    \\if lhs != rhs:
-    \\    print("Fixed point NOT reached - nurlc_self and nurlc_self2 differ.", file=sys.stderr)
-    \\    sys.exit(1)
-;
-
 pub fn build(b: *std.Build) !void {
     const san = b.option(bool, "san", "Build the compiler/runtime with AddressSanitizer + UBSan") orelse false;
     const cfg = detectRuntimeConfig(b, san);
@@ -88,18 +32,18 @@ pub fn build(b: *std.Build) !void {
         }),
     });
 
-    const ensure_build_dir = addPythonStep(b, cfg.python, py_mkdir, &.{"build"}, true);
-    const helper_copy = addPythonCopyLazyStep(b, cfg.python, nurl_build_exe.getEmittedBin(), "build/nurl-build", true);
+    const ensure_build_dir = addHelperStep(b, nurl_build_exe, &.{ "mkdir", "build" }, true);
+    const helper_copy = addHelperCopyLazyStep(b, nurl_build_exe, nurl_build_exe.getEmittedBin(), "build/nurl-build", true);
     helper_copy.step.dependOn(&ensure_build_dir.step);
     helper_copy.step.dependOn(&nurl_build_exe.step);
-    const sync_runtime_nolto = addMarkerSyncStep(b, cfg.python, "stdlib/runtime.nolto", !cfg.use_lto);
-    const sync_runtime_curl = addMarkerSyncStep(b, cfg.python, "stdlib/runtime.curl", cfg.curl.enabled);
-    const sync_runtime_openssl = addMarkerSyncStep(b, cfg.python, "stdlib/runtime.openssl", cfg.openssl.enabled);
-    const sync_runtime_sqlite3 = addMarkerSyncStep(b, cfg.python, "stdlib/runtime.sqlite3", cfg.sqlite3.enabled);
-    const sync_runtime_pq = addMarkerSyncStep(b, cfg.python, "stdlib/runtime.pq", cfg.pq_enabled);
-    const sync_runtime_z = addMarkerSyncStep(b, cfg.python, "stdlib/runtime.z", cfg.zlib.enabled);
-    const sync_runtime_zstd = addMarkerSyncStep(b, cfg.python, "stdlib/runtime.zstd", cfg.zstd_enabled);
-    const sync_canvas_sdl2 = addMarkerSyncStep(b, cfg.python, "stdlib/canvas.sdl2", cfg.sdl2_include != null);
+    const sync_runtime_nolto = addMarkerSyncStep(b, nurl_build_exe, "stdlib/runtime.nolto", !cfg.use_lto);
+    const sync_runtime_curl = addMarkerSyncStep(b, nurl_build_exe, "stdlib/runtime.curl", cfg.curl.enabled);
+    const sync_runtime_openssl = addMarkerSyncStep(b, nurl_build_exe, "stdlib/runtime.openssl", cfg.openssl.enabled);
+    const sync_runtime_sqlite3 = addMarkerSyncStep(b, nurl_build_exe, "stdlib/runtime.sqlite3", cfg.sqlite3.enabled);
+    const sync_runtime_pq = addMarkerSyncStep(b, nurl_build_exe, "stdlib/runtime.pq", cfg.pq_enabled);
+    const sync_runtime_z = addMarkerSyncStep(b, nurl_build_exe, "stdlib/runtime.z", cfg.zlib.enabled);
+    const sync_runtime_zstd = addMarkerSyncStep(b, nurl_build_exe, "stdlib/runtime.zstd", cfg.zstd_enabled);
+    const sync_canvas_sdl2 = addMarkerSyncStep(b, nurl_build_exe, "stdlib/canvas.sdl2", cfg.sdl2_include != null);
 
     const runtime_cmd = addCcCommand(b, cfg.cc_tokens);
     runtime_cmd.setCwd(b.path("."));
@@ -133,7 +77,7 @@ pub fn build(b: *std.Build) !void {
         cmd.addArgs(&.{ "-O2", "-c", "-x", "ir", "stdlib/runtime.o", "-o", "stdlib/runtime.native.o" });
         break :blk cmd;
     } else blk: {
-        const cmd = addPythonCopyStep(b, cfg.python, "stdlib/runtime.o", "stdlib/runtime.native.o", false);
+        const cmd = addHelperCopyStep(b, nurl_build_exe, "stdlib/runtime.o", "stdlib/runtime.native.o", false);
         cmd.step.dependOn(&runtime_cmd.step);
         break :blk cmd;
     };
@@ -152,7 +96,7 @@ pub fn build(b: *std.Build) !void {
     const stage0_ir = b.addSystemCommand(&.{ cfg.python, "compiler/nurlc.py", "--llvm", "compiler/nurlc.nu" });
     stage0_ir.setCwd(b.path("."));
     const stage0_ll = stage0_ir.captureStdOut(.{ .basename = "nurlc_py.ll" });
-    const stage0_ll_copy = addPythonCopyLazyStep(b, cfg.python, stage0_ll, "build/nurlc_py.ll", false);
+    const stage0_ll_copy = addHelperCopyLazyStep(b, nurl_build_exe, stage0_ll, "build/nurlc_py.ll", false);
     stage0_ll_copy.step.dependOn(&ensure_build_dir.step);
     stage0_ll_copy.step.dependOn(&stage0_ir.step);
 
@@ -161,12 +105,12 @@ pub fn build(b: *std.Build) !void {
     stage0_link.step.dependOn(&runtime_cmd.step);
     stage0_link.step.dependOn(&stage0_ir.step);
 
-    const stage1_ir = b.addSystemCommand(&.{ cfg.env_exe, "./build/nurlc_py", "compiler/nurlc.nu" });
+    const stage1_ir = b.addSystemCommand(&.{ "./build/nurlc_py", "compiler/nurlc.nu" });
     stage1_ir.setCwd(b.path("."));
     stage1_ir.step.dependOn(&stage0_link.step);
     applySanBuildEnv(stage1_ir, cfg.san);
     const stage1_ll = stage1_ir.captureStdOut(.{ .basename = "nurlc_self.ll" });
-    const stage1_ll_copy = addPythonCopyLazyStep(b, cfg.python, stage1_ll, "build/nurlc_self.ll", false);
+    const stage1_ll_copy = addHelperCopyLazyStep(b, nurl_build_exe, stage1_ll, "build/nurlc_self.ll", false);
     stage1_ll_copy.step.dependOn(&ensure_build_dir.step);
     stage1_ll_copy.step.dependOn(&stage1_ir.step);
 
@@ -175,12 +119,12 @@ pub fn build(b: *std.Build) !void {
     stage1_link.step.dependOn(&runtime_cmd.step);
     stage1_link.step.dependOn(&stage1_ir.step);
 
-    const stage2_ir = b.addSystemCommand(&.{ cfg.env_exe, "./build/nurlc_self", "compiler/nurlc.nu" });
+    const stage2_ir = b.addSystemCommand(&.{ "./build/nurlc_self", "compiler/nurlc.nu" });
     stage2_ir.setCwd(b.path("."));
     stage2_ir.step.dependOn(&stage1_link.step);
     applySanBuildEnv(stage2_ir, cfg.san);
     const stage2_ll = stage2_ir.captureStdOut(.{ .basename = "nurlc_self2.ll" });
-    const stage2_ll_copy = addPythonCopyLazyStep(b, cfg.python, stage2_ll, "build/nurlc_self2.ll", false);
+    const stage2_ll_copy = addHelperCopyLazyStep(b, nurl_build_exe, stage2_ll, "build/nurlc_self2.ll", false);
     stage2_ll_copy.step.dependOn(&ensure_build_dir.step);
     stage2_ll_copy.step.dependOn(&stage2_ir.step);
 
@@ -189,18 +133,15 @@ pub fn build(b: *std.Build) !void {
     stage2_link.step.dependOn(&runtime_cmd.step);
     stage2_link.step.dependOn(&stage2_ir.step);
 
-    const fixed_point = b.addSystemCommand(&.{ cfg.python, "-c", py_compare_files });
-    fixed_point.setCwd(b.path("."));
+    const fixed_point = addHelperCompareStep(b, nurl_build_exe, stage1_ll, stage2_ll);
     fixed_point.step.dependOn(&stage1_ir.step);
     fixed_point.step.dependOn(&stage2_ir.step);
-    fixed_point.addFileArg(stage1_ll);
-    fixed_point.addFileArg(stage2_ll);
 
-    const final_compiler_copy = addPythonCopyStep(b, cfg.python, "build/nurlc_self2", "build/nurlc", true);
+    const final_compiler_copy = addHelperCopyStep(b, nurl_build_exe, "build/nurlc_self2", "build/nurlc", true);
     final_compiler_copy.step.dependOn(&stage2_link.step);
     final_compiler_copy.step.dependOn(&fixed_point.step);
 
-    const root_compiler_copy = addPythonSymlinkStep(b, cfg.python, "build/nurlc", "nurlc");
+    const root_compiler_copy = addHelperSymlinkStep(b, nurl_build_exe, "build/nurlc", "nurlc");
     root_compiler_copy.step.dependOn(&final_compiler_copy.step);
 
     const bootstrap_step = b.step("bootstrap", "Build the runtime and self-hosted compiler");
@@ -269,18 +210,18 @@ pub fn build(b: *std.Build) !void {
 
     b.getInstallStep().dependOn(tools_step);
 
-    const tests = b.addSystemCommand(&.{ b.path("compiler/tests/run_tests.sh").getPath(b) });
+    const tests = b.addSystemCommand(&.{b.path("compiler/tests/run_tests.sh").getPath(b)});
     tests.setCwd(b.path("."));
     tests.has_side_effects = true;
     tests.step.dependOn(tools_step);
 
-    const update_lastgood = addPythonCopyStep(b, cfg.python, "compiler/nurlc.nu", "compiler/nurlc_lastgood.nu", false);
+    const update_lastgood = addHelperCopyStep(b, nurl_build_exe, "compiler/nurlc.nu", "compiler/nurlc_lastgood.nu", false);
     update_lastgood.step.dependOn(&tests.step);
 
     const check_step = b.step("check", "Bootstrap the project, build tools, and run compiler/tests/run_tests.sh");
     check_step.dependOn(&update_lastgood.step);
 
-    const san_tests = b.addSystemCommand(&.{ b.path("compiler/tests/run_san_tests.sh").getPath(b) });
+    const san_tests = b.addSystemCommand(&.{b.path("compiler/tests/run_san_tests.sh").getPath(b)});
     san_tests.setCwd(b.path("."));
     san_tests.has_side_effects = true;
     san_tests.step.dependOn(tools_step);
@@ -290,7 +231,6 @@ pub fn build(b: *std.Build) !void {
 
 fn detectRuntimeConfig(b: *std.Build, san: bool) RuntimeConfig {
     const python = resolvePython(b);
-    const env_exe = resolveProgram(b, null, &.{ "env" }, &.{ "/usr/bin", "/bin" });
     const root_path = b.build_root.path orelse ".";
     const cc_tokens = resolveCcTokens(b);
     const host_is_macos = b.graph.host.result.os.tag == .macos;
@@ -298,7 +238,6 @@ fn detectRuntimeConfig(b: *std.Build, san: bool) RuntimeConfig {
 
     return .{
         .python = python,
-        .env_exe = env_exe,
         .root_path = root_path,
         .san = san,
         .use_lto = use_lto,
@@ -417,14 +356,13 @@ fn addCcCommand(b: *std.Build, cc_tokens: []const []const u8) *std.Build.Step.Ru
     return cmd;
 }
 
-fn addPythonStep(
+fn addHelperStep(
     b: *std.Build,
-    python: []const u8,
-    script: []const u8,
+    helper_exe: *std.Build.Step.Compile,
     args: []const []const u8,
     side_effects: bool,
 ) *std.Build.Step.Run {
-    const cmd = b.addSystemCommand(&.{ python, "-c", script });
+    const cmd = b.addRunArtifact(helper_exe);
     cmd.setCwd(b.path("."));
     cmd.has_side_effects = side_effects;
     cmd.addArgs(args);
@@ -433,44 +371,54 @@ fn addPythonStep(
 
 fn addMarkerSyncStep(
     b: *std.Build,
-    python: []const u8,
+    helper_exe: *std.Build.Step.Compile,
     path: []const u8,
     enabled: bool,
 ) *std.Build.Step.Run {
-    return addPythonStep(b, python, if (enabled) py_marker_on else py_marker_off, &.{path}, true);
+    return addHelperStep(b, helper_exe, &.{ "marker", if (enabled) "--on" else "--off", path }, true);
 }
 
-fn addPythonCopyStep(
+fn addHelperCopyStep(
     b: *std.Build,
-    python: []const u8,
+    helper_exe: *std.Build.Step.Compile,
     src: []const u8,
     dest: []const u8,
     executable: bool,
 ) *std.Build.Step.Run {
-    return addPythonStep(b, python, if (executable) py_copy_exec else py_copy_file, &.{ src, dest }, true);
+    return addHelperStep(b, helper_exe, if (executable) &.{ "copy", "--exec", src, dest } else &.{ "copy", src, dest }, true);
 }
 
-fn addPythonSymlinkStep(
+fn addHelperSymlinkStep(
     b: *std.Build,
-    python: []const u8,
+    helper_exe: *std.Build.Step.Compile,
     src: []const u8,
     dest: []const u8,
 ) *std.Build.Step.Run {
-    return addPythonStep(b, python, py_symlink, &.{ src, dest }, true);
+    return addHelperStep(b, helper_exe, &.{ "symlink", src, dest }, true);
 }
 
-fn addPythonCopyLazyStep(
+fn addHelperCopyLazyStep(
     b: *std.Build,
-    python: []const u8,
+    helper_exe: *std.Build.Step.Compile,
     src: std.Build.LazyPath,
     dest: []const u8,
     executable: bool,
 ) *std.Build.Step.Run {
-    const cmd = b.addSystemCommand(&.{ python, "-c", if (executable) py_copy_exec else py_copy_file });
-    cmd.setCwd(b.path("."));
-    cmd.has_side_effects = true;
+    const cmd = addHelperStep(b, helper_exe, if (executable) &.{ "copy", "--exec" } else &.{"copy"}, true);
     cmd.addFileArg(src);
     cmd.addArg(dest);
+    return cmd;
+}
+
+fn addHelperCompareStep(
+    b: *std.Build,
+    helper_exe: *std.Build.Step.Compile,
+    lhs: std.Build.LazyPath,
+    rhs: std.Build.LazyPath,
+) *std.Build.Step.Run {
+    const cmd = addHelperStep(b, helper_exe, &.{"compare"}, false);
+    cmd.addFileArg(lhs);
+    cmd.addFileArg(rhs);
     return cmd;
 }
 
@@ -517,13 +465,13 @@ fn addToolBuildStep(
     bin_output_path: []const u8,
     ll_basename: []const u8,
 ) *std.Build.Step.Run {
-    const ir = b.addSystemCommand(&.{ cfg.env_exe, "./build/nurlc", source_path });
+    const ir = b.addSystemCommand(&.{ "./build/nurlc", source_path });
     ir.setCwd(b.path("."));
     ir.step.dependOn(compiler_ready);
     applySanBuildEnv(ir, cfg.san);
     const ll = ir.captureStdOut(.{ .basename = ll_basename });
 
-    const copy_ll = addPythonCopyLazyStep(b, cfg.python, ll, ll_output_path, false);
+    const copy_ll = addHelperCopyLazyStep(b, helper_exe, ll, ll_output_path, false);
     copy_ll.step.dependOn(ensure_build_dir);
     copy_ll.step.dependOn(&ir.step);
 
