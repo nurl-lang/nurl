@@ -8,7 +8,10 @@ Minimal FastAPI service exposing:
   - POST /build          compiles NURL source to a native Linux ELF
   - POST /build_windows  cross-compiles NURL source to a Windows .exe (mingw-w64)
   - POST /build_macos    cross-compiles NURL source to a macOS Mach-O binary (zig cc)
+  - POST /build_target   cross-compiles to a registered zig target — RISC-V
+                         (musl) / ARM64 (musl + glibc) Linux, macOS arm64, …
   - POST /build_wasm     compiles NURL source to wasm32-wasi WebAssembly
+  - GET  /targets        lists the compile targets the playground offers
 
 Swagger UI is served automatically at /docs, ReDoc at /redoc,
 and the OpenAPI schema at /openapi.json.
@@ -26,7 +29,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from contextlib import asynccontextmanager
 
@@ -98,19 +101,77 @@ RUNTIME_WIN_O  = os.environ.get("NURL_RUNTIME_WIN_O", "/opt/nurl/stdlib/runtime.
 # the Windows system libs that schannel/winsock pull in.
 MINGW_CURL_PREFIX = os.environ.get("NURL_MINGW_CURL_PREFIX", "/opt/curl-mingw")
 
-# macOS cross-compile pipeline. zig ships darwin libc stubs for
-# `x86_64-macos-none` / `aarch64-macos-none`, so `zig cc` can lower the
-# IR to a Mach-O object and link it against the prebuilt `runtime.mac.o`
-# (cross-compiled once at image build time) without Apple's SDK. The
-# resulting binary links *only* libSystem — canvas/audio FFIs that need
-# Cocoa/AudioToolbox frameworks are rejected up-front, and HTTP is
-# served by the runtime's no-op stub path (no libcurl on this target).
+# Cross-compile pipeline via `zig cc`. zig bundles musl, glibc and the
+# darwin libSystem stubs for every arch it supports, so a single
+# `zig cc --target=<triple>` lowers NURL's (target-neutral) LLVM IR and
+# links it against a prebuilt `runtime.<id>.o` — no per-target base
+# image cost beyond that small object. Every such target is described
+# once in ZIG_TARGETS below; /build_target and /build_macos share the
+# `_build_zig_cross` pipeline. canvas/audio FFIs (Cocoa/AudioToolbox,
+# SDL2) are rejected up-front, and HTTP falls back to the runtime's
+# no-op stubs — there is no libcurl on these targets.
 NURL_ZIG        = os.environ.get("NURL_ZIG",         "/opt/zig/zig")
-MACOS_TARGET    = os.environ.get("NURL_MACOS_TARGET","x86_64-macos-none")
-RUNTIME_MAC_O   = os.environ.get("NURL_RUNTIME_MAC_O","/opt/nurl/stdlib/runtime.mac.o")
 CANVAS_SDL2_MARKER = os.environ.get(
     "NURL_CANVAS_SDL2_MARKER", "/opt/nurl/stdlib/canvas.sdl2"
 )
+
+
+class ZigTarget(NamedTuple):
+    """A cross-compile target driven by the shared `zig cc` pipeline.
+
+    `triple` is the zig `--target` value; glibc targets pin a minimum
+    glibc version (e.g. `aarch64-linux-gnu.2.31`) so the binary keeps
+    running on older distros. `static` links musl fully-statically.
+    `runtime.<id>.o` is cross-compiled once per target by the Dockerfile
+    build stage and lives next to the other runtime objects in stdlib/.
+    """
+    id: str
+    label: str
+    group: str
+    triple: str
+    static: bool
+    link_libs: tuple[str, ...]
+    media_type: str
+    notes: str
+
+
+# Linux variants first, then macOS — the order the playground groups
+# them in. x86_64 Linux's glibc+full-FFI build is `/build` (native),
+# not here; this registry only adds the musl-static and other-arch
+# cross targets. Adding a row + a `runtime.<id>.o` Dockerfile step is
+# the whole cost of a new target.
+_LINUX_MUSL_NOTES = "static ELF · no HTTP/canvas/audio"
+_LINUX_GNU_NOTES  = "dynamic ELF (glibc 2.31+) · no HTTP/canvas/audio"
+_MAC_NOTES        = "libSystem only · no HTTP/canvas/audio"
+_LINUX_LIBS       = ("-lm", "-lpthread")
+
+ZIG_TARGETS: dict[str, ZigTarget] = {
+    t.id: t for t in (
+        ZigTarget("linux-x64-musl",     "Linux x86_64 · musl (static)",
+                  "Linux", "x86_64-linux-musl",      True,  _LINUX_LIBS,
+                  "application/octet-stream",  _LINUX_MUSL_NOTES),
+        ZigTarget("linux-arm64-musl",   "Linux ARM64 · musl (static)",
+                  "Linux", "aarch64-linux-musl",     True,  _LINUX_LIBS,
+                  "application/octet-stream",  _LINUX_MUSL_NOTES),
+        ZigTarget("linux-arm64-gnu",    "Linux ARM64 · glibc",
+                  "Linux", "aarch64-linux-gnu.2.31", False, _LINUX_LIBS,
+                  "application/octet-stream",  _LINUX_GNU_NOTES),
+        ZigTarget("linux-riscv64-musl", "Linux RISC-V 64 · musl (static)",
+                  "Linux", "riscv64-linux-musl",     True,  _LINUX_LIBS,
+                  "application/octet-stream",  _LINUX_MUSL_NOTES),
+        # NB: no riscv64 *glibc* target — zig 0.13's bundled glibc for
+        # riscv64 is incomplete (missing `gnu/stubs-lp64d.h`; its glibc
+        # crt startup .S uses a `.cfi_label` directive zig 0.13's
+        # assembler rejects). riscv64 musl (static) covers RISC-V; a
+        # glibc variant can be added once the image moves to zig ≥ 0.14.
+        ZigTarget("macos-x64",          "macOS x86_64 · Intel",
+                  "macOS", "x86_64-macos-none",      False, (),
+                  "application/x-mach-binary", _MAC_NOTES),
+        ZigTarget("macos-arm64",        "macOS ARM64 · Apple Silicon",
+                  "macOS", "aarch64-macos-none",     False, (),
+                  "application/x-mach-binary", _MAC_NOTES),
+    )
+}
 OUTPUT_DIR     = os.environ.get("NURL_OUTPUT_DIR", "/app/output")
 # How long a download token stays valid. Expired artifacts are cleaned up
 # lazily on the next /build or /download call.
@@ -914,6 +975,18 @@ class BuildRequest(BaseModel):
     )
 
 
+class BuildTargetRequest(BuildRequest):
+    """`/build_target` payload — a `BuildRequest` plus the target id."""
+    target: str = Field(
+        ...,
+        description=(
+            "Target id to cross-compile for. See `GET /targets` for the "
+            "full list (e.g. `linux-riscv64-musl`, `macos-arm64`)."
+        ),
+        examples=["linux-arm64-musl"],
+    )
+
+
 class BuildArtifact(BaseModel):
     name: str
     bytes: int
@@ -946,6 +1019,21 @@ class BuildResponse(BaseModel):
     )
     ll_artifact: BuildArtifact | None = None
     binary_artifact: BuildArtifact | None = None
+
+
+class TargetInfo(BaseModel):
+    """One selectable compile target, as surfaced by `GET /targets`.
+
+    The playground builds its target dropdown from this list: `endpoint`
+    tells the UI which POST route to hit, `runnable` marks the one
+    target (wasm) that also executes in-browser.
+    """
+    id: str
+    label: str
+    group: str
+    endpoint: str
+    runnable: bool = False
+    notes: str = ""
 
 
 def _sanitize_basename(raw: str | None) -> str:
@@ -1480,44 +1568,34 @@ def build_windows(req: BuildRequest, request: Request) -> BuildResponse:
     )
 
 
-# ── macOS cross-compile (POST /build_macos) ──────────────────────
+# ── Cross-compile via zig cc (/build_target, /build_macos) ───────
 #
-# Mirrors /build_windows but uses `zig cc` to target Mach-O. Zig bundles
-# darwin libc stubs (`.tbd` files for libSystem) so the link succeeds
-# without Apple's SDK — and crucially without redistributing any of
-# Apple's files. The resulting binary links *only* libSystem, which is
-# the playground's stated contract for macOS support:
-# "simple standalone binary, nothing bundled".
-#
-# canvas/audio FFI is rejected up-front (those need Cocoa/AudioToolbox
-# framework linkage, which the zig-cc-only path cannot provide). HTTP
-# uses the runtime's stub fallback — it links but every call reports
-# HttpErr::Other. This intentionally mirrors the "no oheistiedostoja"
-# rule documented for macOS.
+# `_build_zig_cross` is the shared pipeline for every ZIG_TARGETS
+# entry: RISC-V / ARM64 Linux (musl + glibc), Intel / Apple-Silicon
+# macOS. zig owns the libc (musl / glibc / libSystem stubs) and the
+# linker, so a single `zig cc --target=` invocation lowers the IR and
+# links the prebuilt `runtime.<id>.o` — no Apple SDK, no extra
+# base-image packages. canvas/audio FFI is rejected up-front (no cross
+# back-end) and HTTP links against the runtime's no-op stubs.
 
-@app.post(
-    "/build_macos",
-    response_model=BuildResponse,
-    tags=["build"],
-    summary="Cross-compile NURL source to a macOS Mach-O binary (zig cc)",
-    responses={
-        200: {"description": "Compilation attempted; see stdout/stderr and artifacts."},
-        400: {"description": "Empty source, oversized source, or unsupported FFI."},
-        500: {"description": "zig toolchain unavailable."},
-        504: {"description": "Compilation timed out."},
-    },
-)
-def build_macos(req: BuildRequest, request: Request) -> BuildResponse:
-    """Compile NURL source to a macOS Mach-O binary via `zig cc`.
+def _zig_runtime_o(tgt: ZigTarget) -> str:
+    """Path of the prebuilt runtime object for `tgt` (Dockerfile-produced)."""
+    return str(Path(NURL_STDLIB_DIR) / f"runtime.{tgt.id}.o")
+
+
+def _build_zig_cross(req: BuildRequest, request: Request, tgt: ZigTarget) -> BuildResponse:
+    """Compile NURL source to a cross target via the shared `zig cc` pipeline.
 
     Pipeline:
       1. Write `source` to a temp `.nu` file.
       2. `nurlc <file.nu>` → LLVM IR (`.ll`).
-      3. `zig cc --target=<MACOS_TARGET> -O2 <ll> runtime.mac.o -o <bin>`.
+      3. `zig cc --target=<tgt.triple> -O2 [-static] <ll> runtime.<id>.o
+         [-lm -lpthread] -o <bin>`.
 
-    The binary is unsigned — users will need to clear the quarantine
-    attribute (`xattr -d com.apple.quarantine <bin>`) or allow it via
-    Gatekeeper. Only libSystem is linked: canvas/audio FFIs are rejected.
+    NURL's IR carries no target triple, so the same IR feeds every
+    target — only `--target` and the prebuilt `runtime.<id>.o` differ.
+    canvas/audio FFIs are rejected (no cross back-end). macOS binaries
+    are unsigned: clear quarantine with `xattr -d com.apple.quarantine`.
     """
     if not req.source.strip():
         raise HTTPException(
@@ -1543,12 +1621,13 @@ def build_macos(req: BuildRequest, request: Request) -> BuildResponse:
                 "Rebuild the container so the build stage installs zig."
             ),
         )
-    if not Path(RUNTIME_MAC_O).is_file():
+    runtime_o = _zig_runtime_o(tgt)
+    if not Path(runtime_o).is_file():
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=(
-                f"macOS runtime object missing at {RUNTIME_MAC_O}. "
-                "Rebuild the container so the build stage produces runtime.mac.o."
+                f"runtime object for target '{tgt.id}' missing at {runtime_o}. "
+                "Rebuild the container so the build stage cross-compiles it."
             ),
         )
 
@@ -1559,7 +1638,7 @@ def build_macos(req: BuildRequest, request: Request) -> BuildResponse:
 
     output_root = Path(OUTPUT_DIR)
     output_root.mkdir(parents=True, exist_ok=True)
-    build_dir = output_root / f"buildmac-{uuid.uuid4().hex[:12]}"
+    build_dir = output_root / f"buildx-{uuid.uuid4().hex[:12]}"
     build_dir.mkdir(parents=True, exist_ok=False)
 
     ll_path = build_dir / f"{basename}.ll"
@@ -1568,7 +1647,7 @@ def build_macos(req: BuildRequest, request: Request) -> BuildResponse:
     stdout_log: list[str] = []
     stderr_log: list[str] = []
 
-    with tempfile.TemporaryDirectory(prefix="nurl-build-macos-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="nurl-build-x-") as tmp:
         tmpdir = Path(tmp)
         nu_path = tmpdir / f"{basename}.nu"
         nu_path.write_bytes(src_bytes)
@@ -1627,7 +1706,7 @@ def build_macos(req: BuildRequest, request: Request) -> BuildResponse:
         )
         uses_audio = bool(re.search(rb"@audio_[a-z_]+\b", nurlc_proc.stdout))
 
-        # Reject FFIs that have no macOS back-end in this container.
+        # Reject FFIs that have no back-end on the cross targets.
         if uses_canvas or uses_audio:
             try:
                 ll_path.unlink()
@@ -1640,29 +1719,31 @@ def build_macos(req: BuildRequest, request: Request) -> BuildResponse:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    f"macOS build does not support FFI: {', '.join(unsupported)}. "
-                    "Use Build WASM for canvas/audio programs."
+                    f"{tgt.label} build does not support FFI: {', '.join(unsupported)}. "
+                    "Use the WebAssembly target for canvas/audio programs."
                 ),
             )
 
-        # Single-step: zig cc consumes the IR directly, picks its
-        # bundled darwin libc stubs for the target triple, and drives
-        # its internal lld to produce a Mach-O binary. No separate
-        # link stage (unlike mingw, where Debian's sysroot layout
-        # requires handing the link off to mingw-gcc).
-        #
-        # Zig sets HOME / cache dirs under $XDG_CACHE_HOME or $HOME.
-        # The non-root container user's HOME is /app, which is writable
-        # by that user, so zig can write its (tiny) global cache there.
+        # Single-step: zig cc consumes the IR directly, picks the
+        # bundled libc (musl / glibc / libSystem stubs) for the target
+        # triple, and drives its internal lld to produce the binary —
+        # no separate link stage (unlike mingw, where Debian's sysroot
+        # layout requires handing the link off to mingw-gcc). The libc
+        # for each target is pre-warmed into ZIG_GLOBAL_CACHE_DIR at
+        # image-build time, so this stays a fast cache hit.
         zig_cmd: list[str] = [
-            NURL_ZIG, "cc",
-            f"--target={MACOS_TARGET}",
+            NURL_ZIG, "cc", f"--target={tgt.triple}",
             opt_flag, "-Wno-override-module",
-            str(ll_path), RUNTIME_MAC_O,
-            "-o", str(bin_path),
         ]
-        # runtime.c links libm calls on POSIX; on macOS those live in
-        # libSystem (which zig links implicitly), so no -lm needed.
+        # musl links cleanly fully-static; glibc/macOS stay dynamic.
+        if tgt.static:
+            zig_cmd.append("-static")
+        zig_cmd += [str(ll_path), runtime_o]
+        # runtime.c's libm calls live in libSystem on macOS (linked
+        # implicitly); Linux needs -lm/-lpthread — zig satisfies both
+        # from its own bundled libc.
+        zig_cmd += list(tgt.link_libs)
+        zig_cmd += ["-o", str(bin_path)]
         clang_proc = _run(zig_cmd, cwd=str(tmpdir))
         clang_stdout = clang_proc.stdout.decode("utf-8", "replace")
         clang_stderr = clang_proc.stderr.decode("utf-8", "replace")
@@ -1687,7 +1768,7 @@ def build_macos(req: BuildRequest, request: Request) -> BuildResponse:
             bin_path.chmod(0o755)
         except OSError:
             pass
-        token = _register_download(bin_path, "application/x-mach-binary")
+        token = _register_download(bin_path, tgt.media_type)
         bin_artifact = BuildArtifact(
             name=bin_path.name,
             bytes=bin_path.stat().st_size,
@@ -1699,9 +1780,9 @@ def build_macos(req: BuildRequest, request: Request) -> BuildResponse:
     return BuildResponse(
         status="ok" if ok else "error",
         message=(
-            f"compiled nurl → macOS Mach-O ({MACOS_TARGET})"
+            f"compiled nurl → {tgt.label} ({tgt.triple})"
             if ok
-            else "macos build failed (see stderr)"
+            else f"{tgt.id} build failed (see stderr)"
         ),
         filename=req.filename,
         uses_canvas=False,
@@ -1717,6 +1798,103 @@ def build_macos(req: BuildRequest, request: Request) -> BuildResponse:
         ll_artifact=ll_artifact,
         binary_artifact=bin_artifact,
     )
+
+
+@app.post(
+    "/build_macos",
+    response_model=BuildResponse,
+    tags=["build"],
+    summary="Cross-compile NURL source to a macOS x86_64 Mach-O binary (zig cc)",
+    responses={
+        200: {"description": "Compilation attempted; see stdout/stderr and artifacts."},
+        400: {"description": "Empty source, oversized source, or unsupported FFI."},
+        500: {"description": "zig toolchain unavailable."},
+        504: {"description": "Compilation timed out."},
+    },
+)
+def build_macos(req: BuildRequest, request: Request) -> BuildResponse:
+    """Cross-compile to a macOS x86_64 Mach-O binary.
+
+    Thin wrapper over `_build_zig_cross`, kept for backward compatibility
+    (MCP's `nurl_build_macos`, older clients). New code should prefer
+    `POST /build_target` — pass `macos-arm64` for Apple Silicon, or any
+    RISC-V / ARM64 Linux id from `GET /targets`.
+    """
+    return _build_zig_cross(req, request, ZIG_TARGETS["macos-x64"])
+
+
+@app.post(
+    "/build_target",
+    response_model=BuildResponse,
+    tags=["build"],
+    summary="Cross-compile NURL source to a registered zig target",
+    responses={
+        200: {"description": "Compilation attempted; see stdout/stderr and artifacts."},
+        400: {"description": "Empty/oversized source, unsupported FFI, or unknown target."},
+        500: {"description": "zig toolchain unavailable."},
+        504: {"description": "Compilation timed out."},
+    },
+)
+def build_target(req: BuildTargetRequest, request: Request) -> BuildResponse:
+    """Cross-compile NURL source for one of the `GET /targets` ids.
+
+    RISC-V 64 / ARM64 Linux (musl + glibc) and Intel / Apple-Silicon
+    macOS all share one `zig cc` pipeline — see `_build_zig_cross`.
+    """
+    tgt = ZIG_TARGETS.get(req.target)
+    if tgt is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"unknown target '{req.target}'. "
+                f"Known zig targets: {', '.join(sorted(ZIG_TARGETS))}."
+            ),
+        )
+    return _build_zig_cross(req, request, tgt)
+
+
+def _all_targets() -> list[TargetInfo]:
+    """Every target the playground can build for, in UI display order."""
+    out: list[TargetInfo] = [
+        TargetInfo(
+            id="wasm", label="WebAssembly · wasm32-wasi", group="WebAssembly",
+            endpoint="/build_wasm", runnable=True,
+            notes="runs in-browser · full canvas/audio FFI",
+        ),
+        TargetInfo(
+            id="linux-x64", label="Linux x86_64 · native (glibc)", group="Linux",
+            endpoint="/build", runnable=False,
+            notes="full FFI: HTTP / sqlite / canvas",
+        ),
+    ]
+    out += [
+        TargetInfo(
+            id=t.id, label=t.label, group=t.group,
+            endpoint="/build_target", runnable=False, notes=t.notes,
+        )
+        for t in ZIG_TARGETS.values()
+    ]
+    out.append(TargetInfo(
+        id="windows-x64", label="Windows x86_64 · .exe (mingw-w64)", group="Windows",
+        endpoint="/build_windows", runnable=False,
+        notes="static libcurl HTTP · no canvas/audio",
+    ))
+    return out
+
+
+@app.get(
+    "/targets",
+    response_model=list[TargetInfo],
+    tags=["build"],
+    summary="List the compile targets the playground can build for",
+)
+def list_targets() -> list[TargetInfo]:
+    """Enumerate every selectable compile target.
+
+    The browser playground builds its target dropdown straight from
+    this list — wasm, native Linux, the zig cross targets, and Windows.
+    """
+    return _all_targets()
 
 
 @app.get(

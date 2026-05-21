@@ -149,17 +149,41 @@ RUN x86_64-w64-mingw32-gcc -O2 \
         -c stdlib/runtime.c -o stdlib/runtime.win.o \
     && echo 1 > stdlib/runtime.win.curl
 
-# Cross-compile the NURL runtime for macOS x86_64 (Mach-O). Zig's clang
-# targets `x86_64-macos-none` with its bundled libSystem stubs; the
-# resulting runtime.mac.o will be linked at request time against user
-# IR to produce a standalone Mach-O executable.
+# Cross-compile the NURL runtime for every zig target the playground
+# offers — Intel / Apple-Silicon macOS, x86_64 / ARM64 / RISC-V 64
+# Linux musl (static), and ARM64 Linux glibc. (No riscv64 glibc: zig
+# 0.13's bundled glibc for RISC-V is incomplete.) zig bundles musl,
+# glibc and the darwin libSystem stubs for all of these arches, with
+# the linker too, so each target costs only one small
+# `runtime.<id>.o` (≈125 KB) — no extra base-image packages. None are
+# built with -DNURL_HAVE_LIBCURL: HTTP takes runtime.c's no-op `#else`
+# stubs, the same "no oheistiedostoja" contract macOS already had.
+# These objects ride into the runtime stage via the `COPY .../stdlib`
+# below; the API resolves them as `runtime.<id>.o` per ZIG_TARGETS.
 #
-# HTTP: built WITHOUT -DNURL_HAVE_LIBCURL. runtime.c's #else path
-# provides no-op stubs that make the symbols link and report
-# HttpErr::Other at runtime — same "no oheistiedostoja" rule the
-# playground advertises for macOS.
-RUN /opt/zig/zig cc -target x86_64-macos-none -O2 \
-        -c stdlib/runtime.c -o stdlib/runtime.mac.o
+# Each target is also PRE-WARMED: zig builds + caches that target's
+# libc / compiler-rt into ZIG_GLOBAL_CACHE_DIR (baked into the image
+# and copied to the runtime stage), so the first playground build per
+# target is a fast cache hit, not a multi-second cold libc compile.
+# The warm link doubles as a build-time smoke test — a target that
+# cannot link fails `docker build` here, not later at request time.
+ENV ZIG_GLOBAL_CACHE_DIR=/opt/zig-cache
+RUN set -eux; \
+    mkdir -p /opt/zig-cache; \
+    printf 'int main(void){return 0;}\n' > /tmp/warm.c; \
+    build_zig_target() { \
+        /opt/zig/zig cc -target "$2" -O2 -c stdlib/runtime.c \
+            -o "stdlib/runtime.$1.o"; \
+        /opt/zig/zig cc -target "$2" -O2 $3 /tmp/warm.c \
+            "stdlib/runtime.$1.o" $4 -o "/tmp/warm-$1"; \
+    }; \
+    build_zig_target macos-x64          x86_64-macos-none        ""        ""; \
+    build_zig_target macos-arm64        aarch64-macos-none       ""        ""; \
+    build_zig_target linux-x64-musl     x86_64-linux-musl        "-static" "-lm -lpthread"; \
+    build_zig_target linux-arm64-musl   aarch64-linux-musl       "-static" "-lm -lpthread"; \
+    build_zig_target linux-arm64-gnu    aarch64-linux-gnu.2.31   ""        "-lm -lpthread"; \
+    build_zig_target linux-riscv64-musl riscv64-linux-musl       "-static" "-lm -lpthread"; \
+    rm -f /tmp/warm.c /tmp/warm-*
 
 # ---------------------------------------------------------------
 # Stage 2: slim runtime image with Python + FastAPI + the
@@ -216,8 +240,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     NURL_RUNTIME_WIN_O=/opt/nurl/stdlib/runtime.win.o \
     NURL_MINGW_CURL_PREFIX=/opt/curl-mingw \
     NURL_ZIG=/opt/zig/zig \
-    NURL_MACOS_TARGET=x86_64-macos-none \
-    NURL_RUNTIME_MAC_O=/opt/nurl/stdlib/runtime.mac.o \
+    ZIG_GLOBAL_CACHE_DIR=/opt/zig-cache \
     PATH=/opt/nurl/build:/opt/wasi-sdk/bin:$PATH
 
 WORKDIR /app
@@ -234,8 +257,12 @@ COPY --from=nurl-build /src/stdlib/runtime.wasm.o   /opt/nurl/stdlib/runtime.was
 COPY --from=nurl-build /src/stdlib/runtime.win.o    /opt/nurl/stdlib/runtime.win.o
 COPY --from=nurl-build /src/stdlib/runtime.win.curl /opt/nurl/stdlib/runtime.win.curl
 COPY --from=nurl-build /opt/curl-mingw              /opt/curl-mingw
-COPY --from=nurl-build /src/stdlib/runtime.mac.o    /opt/nurl/stdlib/runtime.mac.o
 COPY --from=nurl-build /opt/zig                     /opt/zig
+# Pre-warmed zig cache (libc / compiler-rt per cross target). Without
+# it the first /build_target per target is a cold multi-second libc
+# build; with it that work is a cache hit. The per-target
+# runtime.<id>.o objects themselves ride in via the stdlib COPY below.
+COPY --from=nurl-build /opt/zig-cache               /opt/zig-cache
 COPY --from=nurl-build /src/stdlib/canvas.wasm.o    /opt/nurl/stdlib/canvas.wasm.o
 COPY --from=nurl-build /src/stdlib/audio.wasm.o     /opt/nurl/stdlib/audio.wasm.o
 COPY --from=nurl-build /src/stdlib                  /opt/nurl/stdlib
@@ -265,7 +292,7 @@ EXPOSE 8000
 
 # Non-root user.
 RUN useradd --system --uid 1001 --home-dir /app nurl \
-    && chown -R nurl:nurl /app /opt/nurl
+    && chown -R nurl:nurl /app /opt/nurl /opt/zig-cache
 USER nurl
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

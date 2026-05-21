@@ -10,6 +10,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Playground multi-target cross-compilation.** The `api/` browser
+  playground replaces its four fixed build buttons (WASM / native /
+  Windows / macOS) with a grouped **Target** dropdown + one **Build**
+  button. New compile targets, all driven by the `zig cc` pipeline
+  already shipped for macOS:
+
+  * `linux-x64-musl`, `linux-arm64-musl`, `linux-riscv64-musl` —
+    fully-static ELF (runs on any Linux of that arch, no libc pin).
+  * `linux-arm64-gnu` — dynamic glibc 2.31+ ELF.
+  * `macos-x64`, `macos-arm64` — Mach-O; Apple Silicon was previously
+    unreachable (the only macOS target was Intel).
+
+  Backed by `POST /build_target` (target id in the body) and
+  `GET /targets` (the registry the UI builds its dropdown from); the
+  three near-duplicate build endpoints now share one `_build_zig_cross`
+  helper. `POST /build_macos` is kept as a thin wrapper for MCP / older
+  clients. canvas/audio FFI is rejected on the cross targets and HTTP
+  falls back to the runtime's no-op stubs — same contract macOS had.
+
+  Image cost is ~negligible: zig already bundles musl / glibc /
+  libSystem for every arch, so each target adds only one ≈125 KB
+  `runtime.<id>.o`. The Dockerfile cross-compiles those at build time
+  and **pre-warms** each target's libc/compiler-rt into a baked
+  `ZIG_GLOBAL_CACHE_DIR`, so the first build per target is a fast
+  cache hit rather than a cold multi-second libc compile; the warm
+  link doubles as a build-time smoke test. No `riscv64` glibc target —
+  zig 0.13's bundled glibc for RISC-V is incomplete; `riscv64-musl`
+  covers RISC-V until the image moves to zig ≥ 0.14.
+
 * **`stdlib/std/time.nu` calendar completion.** On top of the existing
   `Time` struct and Hinnant `civil_from_days` conversions:
 
