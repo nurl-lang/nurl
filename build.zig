@@ -393,6 +393,14 @@ pub fn build(b: *std.Build) !void {
     const fmt_idempotent_step = b.step("fmt-idempotent", "Verify nurlfmt idempotence and IR transparency");
     fmt_idempotent_step.dependOn(&fmt_idempotent_cmd.step);
 
+    const dwarf_test_cmd = addHelperStep(b, nurl_build_exe, &.{"dwarf-test"}, true);
+    if (b.args) |args| {
+        dwarf_test_cmd.addArgs(args);
+    }
+    dwarf_test_cmd.step.dependOn(bootstrap_step);
+    const dwarf_test_step = b.step("dwarf-test", "Run the DWARF debug-info behavioural regression harness");
+    dwarf_test_step.dependOn(&dwarf_test_cmd.step);
+
     const test_42_cmd = addHelperStep(b, nurl_build_exe, &.{"test-42"}, true);
     if (b.args) |args| {
         test_42_cmd.addArgs(args);

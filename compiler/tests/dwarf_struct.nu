@@ -4,7 +4,7 @@
 //  1. As an entry in compiler/tests/, it exercises straightforward
 //     struct codegen (named struct, multi-field literal, dotted reads)
 //     and contributes to the baseline diff like every other .nu test.
-//  2. As the second input to tools/dwarf_test.sh, it provides a known
+//  2. As the second input to `zig build dwarf-test`, it provides a known
 //     set of struct field names so the gdb-batch harness can assert
 //     `ptype` + `print` over a composite value resolve to NURL names
 //     instead of falling back to the raw i64 placeholder.

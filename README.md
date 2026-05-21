@@ -735,7 +735,7 @@ frame's `binary+0xOFFSET` through `addr2line -e <binary>` to recover
 Use `zig build san-test -Dsan=true` to run the
 sanitizer-specific regression suite.
 
-End-to-end regression test: `./tools/dwarf_test.sh` (no-op when
+End-to-end regression test: `zig build dwarf-test` (no-op when
 `gdb` isn't installed). See `DWARF.md` for the phased work-list.
 
 ---

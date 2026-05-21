@@ -25,6 +25,7 @@ const Command = enum {
     test_42,
     san_test,
     snapshot_test,
+    dwarf_test,
     mkdir,
     copy,
     symlink,
@@ -69,6 +70,7 @@ fn run(init: std.process.Init) !void {
             .test_42 => runTest42(init, args[2..]),
             .san_test => runSanTest(init, args[2..]),
             .snapshot_test => runSnapshotTest(init, args[2..]),
+            .dwarf_test => runDwarfTest(init, args[2..]),
             .mkdir => runMkdir(io, args[2..]),
             .copy => runCopy(init.gpa, arena, io, args[2..]),
             .symlink => runSymlink(arena, init, io, args[2..]),
@@ -92,6 +94,7 @@ fn parseCommand(name: []const u8) ?Command {
     if (std.mem.eql(u8, name, "test-42")) return .test_42;
     if (std.mem.eql(u8, name, "san-test")) return .san_test;
     if (std.mem.eql(u8, name, "snapshot-test")) return .snapshot_test;
+    if (std.mem.eql(u8, name, "dwarf-test")) return .dwarf_test;
     if (std.mem.eql(u8, name, "bench-csv")) return .bench_csv;
     if (std.mem.eql(u8, name, "mcp-spec-drift")) return .mcp_spec_drift;
     return std.meta.stringToEnum(Command, name);
@@ -1036,6 +1039,168 @@ fn runSnapshotBinary(
         .term = run_result.term,
         .output = try std.mem.concat(gpa, u8, &.{ run_result.stdout, run_result.stderr }),
     };
+}
+
+fn runDwarfTest(init: std.process.Init, args: []const []const u8) !void {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var root: []const u8 = ".";
+    var i: usize = 0;
+    while (i < args.len and std.mem.startsWith(u8, args[i], "--")) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--root")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            root = args[i];
+        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            std.debug.print("usage: nurl-build dwarf-test [--root <path>]\n", .{});
+            std.process.exit(0);
+        } else {
+            std.debug.print("nurl-build: unknown dwarf-test arg: {s}\n", .{arg});
+            return error.InvalidArgs;
+        }
+        i += 1;
+    }
+    if (i != args.len) return error.InvalidArgs;
+
+    const gdb = try firstAvailableCommand(arena, gpa, io, &.{"gdb"}, &.{"--version"});
+    if (gdb == null) {
+        std.debug.print("SKIP: gdb not found on PATH — DWARF behavioural test skipped\n", .{});
+        return;
+    }
+
+    const root_abs = try absolutePath(arena, root);
+    const basic_src = try std.fs.path.join(arena, &.{ root_abs, "compiler", "tests", "dwarf_basic.nu" });
+    const basic_bin = try std.fs.path.join(arena, &.{ root_abs, "build", "dwarf_basic_dbg" });
+    const struct_src = try std.fs.path.join(arena, &.{ root_abs, "compiler", "tests", "dwarf_struct.nu" });
+    const struct_bin = try std.fs.path.join(arena, &.{ root_abs, "build", "dwarf_struct_dbg" });
+
+    try ensureExists(io, basic_src, "compiler/tests/dwarf_basic.nu");
+
+    std.debug.print("[1/5] building {s} with --debug\n", .{basic_src});
+    try compileDwarfFixture(init, root_abs, basic_src, basic_bin);
+
+    std.debug.print("[2/5] checking DWARF debug info is present\n", .{});
+    try verifyDwarfDebugInfo(init, basic_bin);
+    std.debug.print("  ok: debug info present\n", .{});
+
+    std.debug.print("[3/5] gdb-batch: break + run + info locals + print\n", .{});
+    const basic_gdb = try runCombinedCapture(init, &.{
+        gdb.?,
+        "-batch",
+        "-ex",
+        "set debuginfod enabled off",
+        "-ex",
+        "break square",
+        "-ex",
+        "run",
+        "-ex",
+        "info args",
+        "-ex",
+        "info locals",
+        "-ex",
+        "next",
+        "-ex",
+        "print sq",
+        "-ex",
+        "backtrace",
+        "-ex",
+        "quit",
+        basic_bin,
+    }, null);
+    defer gpa.free(basic_gdb);
+
+    if (std.mem.indexOf(u8, basic_gdb, "Breakpoint 1") == null or std.mem.indexOf(u8, basic_gdb, "square") == null) {
+        return dwarfFail("breakpoint did not resolve to function 'square'");
+    }
+    std.debug.print("  ok: break square resolved to source\n", .{});
+
+    if (std.mem.indexOf(u8, basic_gdb, "dwarf_basic.nu") == null) {
+        return dwarfFail("gdb did not associate frames with dwarf_basic.nu");
+    }
+    std.debug.print("  ok: frames carry source-file association\n", .{});
+
+    if (std.mem.indexOf(u8, basic_gdb, "sq = 49") == null and std.mem.indexOf(u8, basic_gdb, "sq = 0x31") == null) {
+        return dwarfFail("print sq did not return 49 (expected square(7) = 49)");
+    }
+    std.debug.print("  ok: print sq returned 49\n", .{});
+
+    std.debug.print("[4/5] llvm-dwarfdump (optional)\n", .{});
+    if (try firstAvailableCommand(arena, gpa, io, &.{"llvm-dwarfdump"}, &.{"--version"})) |llvm_dwarfdump| {
+        const result = try std.process.run(gpa, io, .{
+            .argv = &.{ llvm_dwarfdump, "--verify", basic_bin },
+        });
+        defer gpa.free(result.stdout);
+        defer gpa.free(result.stderr);
+        if (!runResultSucceeded(result.term)) {
+            if (result.stdout.len != 0) std.debug.print("{s}", .{result.stdout});
+            if (result.stderr.len != 0) std.debug.print("{s}", .{result.stderr});
+            return dwarfFail("llvm-dwarfdump --verify rejected the binary");
+        }
+        std.debug.print("  ok: llvm-dwarfdump --verify clean\n", .{});
+    } else {
+        std.debug.print("  skip: llvm-dwarfdump not on PATH\n", .{});
+    }
+
+    if (!pathExists(io, struct_src)) {
+        std.debug.print("WARN: {s} not present — skipping struct phase\n", .{struct_src});
+    } else {
+        std.debug.print("[5/5] Phase 6 composite types — ptype + print over %Point\n", .{});
+        try compileDwarfFixture(init, root_abs, struct_src, struct_bin);
+        std.debug.print("  ok: dwarf_struct.nu built with --debug\n", .{});
+
+        const struct_gdb = try runCombinedCapture(init, &.{
+            gdb.?,
+            "-batch",
+            "-ex",
+            "set debuginfod enabled off",
+            "-ex",
+            "break _nurl_main",
+            "-ex",
+            "run",
+            "-ex",
+            "next",
+            "-ex",
+            "print p",
+            "-ex",
+            "print p.x",
+            "-ex",
+            "print p.y",
+            "-ex",
+            "ptype p",
+            "-ex",
+            "quit",
+            struct_bin,
+        }, null);
+        defer gpa.free(struct_gdb);
+
+        if (std.mem.indexOf(u8, struct_gdb, "x = 3") == null or std.mem.indexOf(u8, struct_gdb, "y = 7") == null) {
+            return dwarfFail("print p did not show {x = 3, y = 7}");
+        }
+        std.debug.print("  ok: print p renders composite as {{x = 3, y = 7}}\n", .{});
+
+        if (std.mem.indexOf(u8, struct_gdb, "= 3") == null) {
+            return dwarfFail("print p.x did not return 3");
+        }
+        std.debug.print("  ok: print p.x resolved to 3\n", .{});
+
+        if (std.mem.indexOf(u8, struct_gdb, "struct Point") == null) {
+            return dwarfFail("ptype p did not show 'struct Point'");
+        }
+        std.debug.print("  ok: ptype p shows 'struct Point'\n", .{});
+
+        if (std.mem.indexOf(u8, struct_gdb, "\tx;") == null and std.mem.indexOf(u8, struct_gdb, " x;") == null and std.mem.indexOf(u8, struct_gdb, "\tx =") == null and std.mem.indexOf(u8, struct_gdb, " x =") == null) {
+            return dwarfFail("ptype p did not list field 'x'");
+        }
+        if (std.mem.indexOf(u8, struct_gdb, "\ty;") == null and std.mem.indexOf(u8, struct_gdb, " y;") == null and std.mem.indexOf(u8, struct_gdb, "\ty =") == null and std.mem.indexOf(u8, struct_gdb, " y =") == null) {
+            return dwarfFail("ptype p did not list field 'y'");
+        }
+        std.debug.print("  ok: ptype p lists fields x and y by name\n", .{});
+    }
+
+    std.debug.print("\nDWARF TEST PASSED\n", .{});
 }
 
 fn runMcpSpecDrift(init: std.process.Init, args: []const []const u8) !void {
@@ -3455,6 +3620,111 @@ fn runInherited(init: std.process.Init, argv: []const []const u8) !void {
             std.process.exit(1);
         },
     }
+}
+
+fn firstAvailableCommand(
+    arena: std.mem.Allocator,
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    candidates: []const []const u8,
+    probe_args: []const []const u8,
+) !?[]const u8 {
+    for (candidates) |candidate| {
+        if (try commandAvailable(gpa, io, candidate, probe_args)) {
+            const dup: []const u8 = try arena.dupe(u8, candidate);
+            return dup;
+        }
+    }
+    return null;
+}
+
+fn compileDwarfFixture(
+    init: std.process.Init,
+    root_abs: []const u8,
+    src_path: []const u8,
+    out_path: []const u8,
+) !void {
+    try runUserCompile(init, .{
+        .root = root_abs,
+        .srcfile = src_path,
+        .outbase = out_path,
+        .emit_ir = false,
+        .emit_asm = false,
+        .debug_info = true,
+        .opt = "-O0",
+    }, .native);
+}
+
+fn verifyDwarfDebugInfo(init: std.process.Init, bin_path: []const u8) !void {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+    const io = init.io;
+
+    if (try firstAvailableCommand(arena, gpa, io, &.{ "readelf", "llvm-readelf" }, &.{"--version"})) |reader| {
+        const result = try std.process.run(gpa, io, .{
+            .argv = &.{ reader, "-S", bin_path },
+        });
+        defer gpa.free(result.stdout);
+        defer gpa.free(result.stderr);
+        if (!runResultSucceeded(result.term)) {
+            if (result.stdout.len != 0) std.debug.print("{s}", .{result.stdout});
+            if (result.stderr.len != 0) std.debug.print("{s}", .{result.stderr});
+            return dwarfFail("failed to inspect binary sections");
+        }
+        if (std.mem.indexOf(u8, result.stdout, ".debug_info") == null) {
+            return dwarfFail("binary has no .debug_info section");
+        }
+        return;
+    }
+
+    if (try firstAvailableCommand(arena, gpa, io, &.{ "dwarfdump", "llvm-dwarfdump" }, &.{"--help"})) |dwarfdump| {
+        const result = try std.process.run(gpa, io, .{
+            .argv = &.{ dwarfdump, "--debug-info", bin_path },
+        });
+        defer gpa.free(result.stdout);
+        defer gpa.free(result.stderr);
+        if (!runResultSucceeded(result.term)) {
+            if (result.stdout.len != 0) std.debug.print("{s}", .{result.stdout});
+            if (result.stderr.len != 0) std.debug.print("{s}", .{result.stderr});
+            return dwarfFail("dwarfdump could not read debug info");
+        }
+        if (std.mem.indexOf(u8, result.stdout, "DW_TAG_compile_unit") == null and
+            std.mem.indexOf(u8, result.stdout, "Compile Unit") == null)
+        {
+            return dwarfFail("debug info dump did not contain a compile unit");
+        }
+        return;
+    }
+
+    return dwarfFail("no readelf/dwarfdump tool available to verify debug info");
+}
+
+fn runCombinedCapture(
+    init: std.process.Init,
+    argv: []const []const u8,
+    cwd: ?[]const u8,
+) ![]u8 {
+    const gpa = init.gpa;
+    const io = init.io;
+    const child_cwd: std.process.Child.Cwd = if (cwd) |path| .{ .path = path } else .inherit;
+    const result = try std.process.run(gpa, io, .{
+        .argv = argv,
+        .cwd = child_cwd,
+    });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    if (!runResultSucceeded(result.term)) {
+        if (result.stdout.len != 0) std.debug.print("{s}", .{result.stdout});
+        if (result.stderr.len != 0) std.debug.print("{s}", .{result.stderr});
+        std.debug.print("FAIL: command failed\n", .{});
+        return error.TestFailed;
+    }
+    return std.mem.concat(gpa, u8, &.{ result.stdout, result.stderr });
+}
+
+fn dwarfFail(message: []const u8) !void {
+    std.debug.print("FAIL: {s}\n", .{message});
+    return error.TestFailed;
 }
 
 fn splitDriver(
