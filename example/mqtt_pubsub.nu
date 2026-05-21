@@ -80,6 +80,16 @@ $ `stdlib/ext/mqtt.nu`
                 }
             }
 
+            : !v NetErr q2 ( mqtt_publish2 cl `nurl/pubsub/qwerty/qos2` `qos2 payload` )
+            ?? q2 {
+                T → { ( nurl_print `published (QoS 2) — PUBCOMP received.\n` ) }
+                F q2e → {
+                    ( nurl_eprint `QoS 2 publish failed: ` )
+                    ( nurl_eprint ( net_err_name q2e ) ) ( nurl_eprint `\n` )
+                    ( mqtt_disconnect cl ) ^ 1
+                }
+            }
+
             : !v NetErr pg ( mqtt_ping cl )
             ?? pg {
                 T → { ( nurl_print `keep-alive ping → PINGRESP OK.\n` ) }
@@ -101,7 +111,7 @@ $ `stdlib/ext/mqtt.nu`
             }
 
             ( mqtt_disconnect cl )
-            ( nurl_print `ALL OK — connect · sub · pub QoS0+1 · receive · ping · unsub.\n` )
+            ( nurl_print `ALL OK — connect · sub · pub QoS0/1/2 · receive · ping · unsub.\n` )
             ^ 0
         }
         F e → {

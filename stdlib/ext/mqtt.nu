@@ -19,6 +19,7 @@
 //   ( mqtt_connect s host i port s client_id s user s pass )  → ! MqttClient NetErr
 //   ( mqtt_publish      MqttClient s topic s payload )        → ! v NetErr   (QoS 0)
 //   ( mqtt_publish1     MqttClient s topic s payload )        → ! v NetErr   (QoS 1 + PUBACK)
+//   ( mqtt_publish2     MqttClient s topic s payload )        → ! v NetErr   (QoS 2, 4-way)
 //   ( mqtt_subscribe    MqttClient s topic )                  → ! v NetErr
 //   ( mqtt_unsubscribe  MqttClient s topic )                  → ! v NetErr
 //   ( mqtt_ping         MqttClient )                          → ! v NetErr
@@ -29,8 +30,8 @@
 // consuming PINGRESP and acking inbound QoS 1 with PUBACK). Plain TCP
 // (`tcp_connect`) and the CONNACK-reason helper are also exported.
 //
-// Not yet implemented: QoS 2, Will messages, MQTT 5 user properties,
-// automatic keep-alive scheduling, and reconnection — see MQTT_PLAN.md.
+// Not yet implemented: Will messages, MQTT 5 user properties, automatic
+// keep-alive scheduling, and reconnection — see MQTT_PLAN.md.
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/bytes.nu`
@@ -393,6 +394,62 @@ $ `stdlib/core/vec.nu`
     ^ @ !v NetErr { F # NetErr NetOther }
 }
 
+// PUBLISH at QoS 2 (exactly-once): the four-way handshake
+// PUBLISH → PUBREC → PUBREL → PUBCOMP. The call blocks until PUBCOMP.
+@ mqtt_publish2 MqttClient cl s topic s payload → !v NetErr {
+    : ( Vec u ) vh ( vec_with_cap [u] 40 )
+    ( __mqtt_put_str vh topic )
+    ( bytes_push_u16_be vh 1 )
+    ( vec_push [u] vh # u 0 )
+    : i plen ( nurl_str_len payload )
+
+    : ( Vec u ) pkt ( vec_with_cap [u] 72 )
+    ( vec_push [u] pkt # u 52 )
+    : i remlen + ( vec_len [u] vh ) plen
+    ( __mqtt_put_varint pkt remlen )
+    ( vec_extend [u] pkt vh )
+    ( bytes_extend_str pkt payload )
+
+    : !v NetErr w ( tcp_write_all . cl conn pkt )
+    ( vec_free [u] vh )
+    ( vec_free [u] pkt )
+    ?? w { T → {} F we → { ^ @ !v NetErr { F we } } }
+
+    // wait for PUBREC (type 5)
+    : ~ i g1 0
+    : ~ b got_rec F
+    ~ & ! got_rec < g1 50 {
+        = g1 + g1 1
+        : !( Vec u ) NetErr rp ( __mqtt_read_packet cl )
+        ?? rp {
+            T p → {
+                : i pt & >> ( __mqtt_byte p 0 ) 4 15
+                ( vec_free [u] p )
+                ? == pt 5 { = got_rec T } {}
+            }
+            F e → { ^ @ !v NetErr { F e } }
+        }
+    }
+    ? ! got_rec { ^ @ !v NetErr { F # NetErr NetOther } } {}
+
+    // PUBREL (0x62), then wait for PUBCOMP (type 7)
+    ( __mqtt_send_ack2 cl 98 1 )
+    : ~ i g2 0
+    ~ < g2 50 {
+        = g2 + g2 1
+        : !( Vec u ) NetErr rp ( __mqtt_read_packet cl )
+        ?? rp {
+            T p → {
+                : i pt & >> ( __mqtt_byte p 0 ) 4 15
+                ( vec_free [u] p )
+                ? == pt 7 { ^ @ !v NetErr { T 0 } } {}
+            }
+            F e → { ^ @ !v NetErr { F e } }
+        }
+    }
+    ^ @ !v NetErr { F # NetErr NetOther }
+}
+
 // ── subscribe / unsubscribe ──────────────────────────────────────────
 
 // SUBSCRIBE to one topic filter at QoS 0, then read + check the SUBACK.
@@ -505,15 +562,39 @@ $ `stdlib/core/vec.nu`
 
 // ── receive ──────────────────────────────────────────────────────────
 
-// Send a PUBACK for an inbound QoS 1 PUBLISH.
-@ __mqtt_send_puback MqttClient cl i pid → v {
+// Send a 2-byte-payload acknowledgement packet (PUBACK / PUBREC /
+// PUBREL / PUBCOMP all share the shape `<first> 0x02 <pid-hi> <pid-lo>`,
+// reason code + properties omitted = Success). `first` is the complete
+// fixed-header first byte (PUBREL needs its reserved bits, 0x62).
+@ __mqtt_send_ack2 MqttClient cl i first i pid → v {
     : ( Vec u ) pkt ( vec_with_cap [u] 4 )
-    ( vec_push [u] pkt # u 64 )
+    ( vec_push [u] pkt # u first )
     ( vec_push [u] pkt # u 2 )
     ( bytes_push_u16_be pkt pid )
     : !v NetErr w ( tcp_write_all . cl conn pkt )
     ?? w { T → {} F _ → {} }
     ( vec_free [u] pkt )
+}
+
+// Finish the receiver side of a QoS 2 exchange for an inbound PUBLISH:
+// PUBREC out, wait for PUBREL, PUBCOMP out.
+@ __mqtt_qos2_inbound MqttClient cl i pid → v {
+    ( __mqtt_send_ack2 cl 80 pid )
+    : ~ i guard 0
+    : ~ b done F
+    ~ & ! done < guard 50 {
+        = guard + guard 1
+        : !( Vec u ) NetErr rp ( __mqtt_read_packet cl )
+        ?? rp {
+            T pkt → {
+                : i pt & >> ( __mqtt_byte pkt 0 ) 4 15
+                ( vec_free [u] pkt )
+                ? == pt 6 { = done T } {}
+            }
+            F _ → { = done T }
+        }
+    }
+    ( __mqtt_send_ack2 cl 112 pid )
 }
 
 // Read the next inbound application message. PINGRESP and other control
@@ -560,9 +641,9 @@ $ `stdlib/core/vec.nu`
                         = k + k 1
                     }
                     ( vec_free [u] pkt )
-                    ? == qos 1 {
-                        ( __mqtt_send_puback cl + * pidhi 256 pidlo )
-                    } {}
+                    : i inpid + * pidhi 256 pidlo
+                    ? == qos 1 { ( __mqtt_send_ack2 cl 64 inpid ) } {}
+                    ? == qos 2 { ( __mqtt_qos2_inbound cl inpid ) } {}
                     ^ @ !MqttMessage NetErr { T @ MqttMessage { topic payload } }
                 } {
                     ( vec_free [u] pkt )
