@@ -182,6 +182,20 @@ pub fn build(b: *std.Build) !void {
     const clean_tree_step = b.step("clean-tree", "Remove build artifacts, legacy IRs, and Python caches");
     clean_tree_step.dependOn(&clean_tree_cmd.step);
 
+    const startdev_cmd = addHelperStep(b, nurl_build_exe, &.{"startdev"}, true);
+    if (b.args) |args| {
+        startdev_cmd.addArgs(args);
+    }
+    const startdev_step = b.step("startdev", "Build and run the local NURL API Docker image");
+    startdev_step.dependOn(&startdev_cmd.step);
+
+    const dockerpush_cmd = addHelperStep(b, nurl_build_exe, &.{"dockerpush"}, true);
+    if (b.args) |args| {
+        dockerpush_cmd.addArgs(args);
+    }
+    const dockerpush_step = b.step("dockerpush", "Build and push the local NURL API Docker image");
+    dockerpush_step.dependOn(&dockerpush_cmd.step);
+
     const nurlfmt_link = addToolBuildStep(
         b,
         cfg,

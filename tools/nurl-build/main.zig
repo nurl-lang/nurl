@@ -25,6 +25,8 @@ const Command = enum {
     compare,
     buildwasm,
     clean,
+    startdev,
+    dockerpush,
 };
 
 const SystemLibMode = enum {
@@ -57,6 +59,8 @@ fn run(init: std.process.Init) !void {
             .compare => runCompare(init, io, args[2..]),
             .buildwasm => runBuildWasm(init, args[2..]),
             .clean => runClean(init, args[2..]),
+            .startdev => runStartDev(init, args[2..]),
+            .dockerpush => runDockerPush(init, args[2..]),
         };
     }
 
@@ -517,6 +521,122 @@ fn runClean(init: std.process.Init, args: []const []const u8) !void {
     std.debug.print("Clean complete!\n", .{});
 }
 
+fn runStartDev(init: std.process.Init, args: []const []const u8) !void {
+    const arena = init.arena.allocator();
+
+    var docker_cmd: []const u8 = init.environ_map.get("DOCKER") orelse "docker";
+    var image: []const u8 = "hindurable/nurl:latest";
+    var dockerfile: []const u8 = "api/Dockerfile";
+    var host_port: []const u8 = "8000";
+    var container_port: []const u8 = "8000";
+    var dry_run = false;
+
+    var i: usize = 0;
+    while (i < args.len and std.mem.startsWith(u8, args[i], "--")) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--docker")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            docker_cmd = args[i];
+        } else if (std.mem.eql(u8, arg, "--image")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            image = args[i];
+        } else if (std.mem.eql(u8, arg, "--dockerfile")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            dockerfile = args[i];
+        } else if (std.mem.eql(u8, arg, "--host-port")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            host_port = args[i];
+        } else if (std.mem.eql(u8, arg, "--container-port")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            container_port = args[i];
+        } else if (std.mem.eql(u8, arg, "--dry-run")) {
+            dry_run = true;
+        } else {
+            std.debug.print("nurl-build: unknown startdev arg: {s}\n", .{arg});
+            return error.InvalidArgs;
+        }
+        i += 1;
+    }
+
+    if (args.len != i) {
+        std.debug.print(
+            "usage: nurl-build startdev [--docker <cmd>] [--image <name>] [--dockerfile <path>] [--host-port <port>] [--container-port <port>] [--dry-run]\n",
+            .{},
+        );
+        return error.InvalidArgs;
+    }
+
+    const port_mapping = try std.fmt.allocPrint(arena, "{s}:{s}", .{ host_port, container_port });
+
+    const build_argv = [_][]const u8{ docker_cmd, "build", "-f", dockerfile, "-t", image, "." };
+    const run_argv = [_][]const u8{ docker_cmd, "run", "--rm", "-p", port_mapping, image };
+
+    if (dry_run) {
+        printCommand("build", &build_argv);
+        printCommand("run", &run_argv);
+        return;
+    }
+
+    try runInherited(init, &build_argv);
+    try runInherited(init, &run_argv);
+}
+
+fn runDockerPush(init: std.process.Init, args: []const []const u8) !void {
+    var docker_cmd: []const u8 = init.environ_map.get("DOCKER") orelse "docker";
+    var image: []const u8 = "hindurable/nurl:latest";
+    var dockerfile: []const u8 = "api/Dockerfile";
+    var dry_run = false;
+
+    var i: usize = 0;
+    while (i < args.len and std.mem.startsWith(u8, args[i], "--")) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--docker")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            docker_cmd = args[i];
+        } else if (std.mem.eql(u8, arg, "--image")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            image = args[i];
+        } else if (std.mem.eql(u8, arg, "--dockerfile")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            dockerfile = args[i];
+        } else if (std.mem.eql(u8, arg, "--dry-run")) {
+            dry_run = true;
+        } else {
+            std.debug.print("nurl-build: unknown dockerpush arg: {s}\n", .{arg});
+            return error.InvalidArgs;
+        }
+        i += 1;
+    }
+
+    if (args.len != i) {
+        std.debug.print(
+            "usage: nurl-build dockerpush [--docker <cmd>] [--image <name>] [--dockerfile <path>] [--dry-run]\n",
+            .{},
+        );
+        return error.InvalidArgs;
+    }
+
+    const build_argv = [_][]const u8{ docker_cmd, "build", "-f", dockerfile, "-t", image, "." };
+    const push_argv = [_][]const u8{ docker_cmd, "push", image };
+
+    if (dry_run) {
+        printCommand("build", &build_argv);
+        printCommand("push", &push_argv);
+        return;
+    }
+
+    try runInherited(init, &build_argv);
+    try runInherited(init, &push_argv);
+}
+
 fn absolutePath(arena: std.mem.Allocator, path: []const u8) ![]const u8 {
     if (std.fs.path.isAbsolute(path)) return arena.dupe(u8, path);
     return std.fs.path.resolve(arena, &.{ ".", path });
@@ -572,6 +692,48 @@ fn deleteTreeIfExists(io: std.Io, path: []const u8) !void {
 fn freePathList(gpa: std.mem.Allocator, paths: *std.ArrayList([]const u8)) void {
     for (paths.items) |path| gpa.free(path);
     paths.deinit(gpa);
+}
+
+fn printCommand(label: []const u8, argv: []const []const u8) void {
+    std.debug.print("[{s}]", .{label});
+    for (argv) |arg| {
+        std.debug.print(" {s}", .{arg});
+    }
+    std.debug.print("\n", .{});
+}
+
+fn runInherited(init: std.process.Init, argv: []const []const u8) !void {
+    var child = std.process.spawn(init.io, .{
+        .argv = argv,
+        .stdin = .inherit,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    }) catch |err| {
+        if (err == error.FileNotFound) {
+            std.debug.print("nurl-build: command not found: {s}\n", .{argv[0]});
+        }
+        return err;
+    };
+    errdefer child.kill(init.io);
+
+    const term = try child.wait(init.io);
+    switch (term) {
+        .exited => |code| {
+            if (code != 0) std.process.exit(code);
+        },
+        .signal => |sig| {
+            std.debug.print("nurl-build: child terminated by signal {d}\n", .{@intFromEnum(sig)});
+            std.process.exit(128 + @as(u8, @intCast(@intFromEnum(sig))));
+        },
+        .stopped => |sig| {
+            std.debug.print("nurl-build: child stopped by signal {d}\n", .{@intFromEnum(sig)});
+            std.process.exit(128 + @as(u8, @intCast(@intFromEnum(sig))));
+        },
+        .unknown => |status| {
+            std.debug.print("nurl-build: child exited with unknown status {d}\n", .{status});
+            std.process.exit(1);
+        },
+    }
 }
 
 fn splitDriver(

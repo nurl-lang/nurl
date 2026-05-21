@@ -3,9 +3,14 @@
 # Run from the repo root. Requires `docker login` to have been done once.
 set -euo pipefail
 
-IMAGE="hindurable/nurl:latest"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+HELPER_BIN="${NURL_BUILD_BIN:-$SCRIPT_DIR/build/nurl-build}"
+ZIG_BIN="${NURL_ZIG:-zig}"
 
-cd "$(dirname "$0")"
+cd "$SCRIPT_DIR"
 
-docker build -f api/Dockerfile -t "$IMAGE" .
-docker push "$IMAGE"
+if [[ ! -x "$HELPER_BIN" ]]; then
+    "$ZIG_BIN" build nurl-build
+fi
+
+exec "$HELPER_BIN" dockerpush "$@"
