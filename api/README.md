@@ -11,9 +11,9 @@
   - **`nurlc`** — the self-hosted NURL compiler (bootstrapped `python → nurlc_py → nurlc_self → nurlc_self2`).
   - **Cross-compilation toolchains**, all preinstalled:
     - **Linux** ELF — `clang-16` + glibc
-    - **Windows** `.exe` — `mingw-w64` + statically-linked `libcurl` (Schannel TLS, no DLLs to ship)
+    - **Windows** `.exe` — `zig cc` (x86_64-windows-gnu) + statically-linked `libcurl` (Schannel TLS, no DLLs to ship)
     - **macOS** x86_64 Mach-O — `zig cc` with bundled libSystem stubs (libSystem only; no Cocoa/AudioToolbox)
-    - **WebAssembly** — WASI SDK 24 + `wasm-opt` (binaryen) for Asyncify
+    - **WebAssembly** — `zig cc` (wasm32-wasi) + `wasm-opt` (binaryen) for Asyncify
   - **FastAPI HTTP API** with `/build`, `/build_wasm`, `/build_windows`, `/build_macos` endpoints.
   - **Browser playground** at `/` — Monaco editor, examples dropdown, build+run in-page via
   [`@bjorn3/browser_wasi_shim`](https://github.com/bjorn3/browser_wasi_shim).
@@ -65,10 +65,9 @@
   | **Exposed port** | `8000` |
   | **User** | non-root (`nurl`, uid 1001) |
   | **Healthcheck** | `GET /health` every 30 s |
-  | **Supported arch** | `linux/amd64` |
-  | **WASI SDK** | 24.0 |
-  | **Zig** | 0.13.0 |
-  | **libcurl (mingw)** | 8.10.1, static, Schannel |
+  | **Supported arch** | `linux/amd64`, `linux/arm64` |
+  | **Zig** | 0.16.0 (unified cross-compiler: Windows / macOS / wasm) |
+  | **libcurl** | 8.10.1, static, Schannel (cross-built with `zig cc`) |
 
   ## Environment variables
 

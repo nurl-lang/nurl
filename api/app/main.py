@@ -6,9 +6,9 @@
 Minimal FastAPI service exposing:
   - GET  /health         liveness probe
   - POST /build          compiles NURL source to a native Linux ELF
-  - POST /build_windows  cross-compiles NURL source to a Windows .exe (mingw-w64)
+  - POST /build_windows  cross-compiles NURL source to a Windows .exe (zig cc)
   - POST /build_macos    cross-compiles NURL source to a macOS Mach-O binary (zig cc)
-  - POST /build_wasm     compiles NURL source to wasm32-wasi WebAssembly
+  - POST /build_wasm     compiles NURL source to wasm32-wasi WebAssembly (zig cc)
 
 Swagger UI is served automatically at /docs, ReDoc at /redoc,
 and the OpenAPI schema at /openapi.json.
@@ -38,7 +38,10 @@ from pydantic import BaseModel, Field
 import markdown as _md
 
 NURLC_PATH = os.environ.get("NURLC_PATH", "/opt/nurl/build/nurlc")
-WASI_CLANG = os.environ.get("WASI_CLANG", "/opt/wasi-sdk/bin/clang")
+# wasm32-wasi is produced by `zig cc -target wasm32-wasi` (NURL_ZIG, defined
+# below) — Zig bundles wasi-libc, so no separate WASI SDK is needed and the
+# build runs natively on any host arch.
+WASM_TARGET = os.environ.get("NURL_WASM_TARGET", "wasm32-wasi")
 RUNTIME_WASM_O = os.environ.get(
     "NURL_RUNTIME_WASM_O", "/opt/nurl/stdlib/runtime.wasm.o"
 )
@@ -65,9 +68,9 @@ BUILD_TIMEOUT_SEC = int(os.environ.get("NURL_BUILD_TIMEOUT_SEC", "30"))
 MAX_SOURCE_BYTES = int(os.environ.get("NURL_MAX_SOURCE_BYTES", str(1 * 1024 * 1024)))
 
 # Native build pipeline (mirrors nurl.sh): plain clang + stdlib/runtime.o.
-# Use an absolute path by default so PATH (which contains /opt/wasi-sdk/bin
-# first) doesn't accidentally route /build through the WASI SDK clang — that
-# clang has a wasm32-wasi default triple and rejects the native runtime.o.
+# The container points this at clang-16 (NURL_NATIVE_CLANG); Debian bookworm's
+# stock `clang` is clang-14, which still enforces typed pointers and rejects
+# the opaque-pointer IR modern nurlc emits.
 NATIVE_CLANG   = os.environ.get(
     "NURL_NATIVE_CLANG",
     "/usr/bin/clang" if Path("/usr/bin/clang").exists() else "clang",
@@ -84,13 +87,13 @@ def _default_runtime_o() -> str:
 RUNTIME_O      = os.environ.get("NURL_RUNTIME_O",  _default_runtime_o())
 CANVAS_O       = os.environ.get("NURL_CANVAS_O",   "/opt/nurl/stdlib/canvas.o")
 
-# Windows cross-compile pipeline. clang consumes the LLVM IR with an explicit
-# `--target=x86_64-w64-mingw32` and mingw-w64's gcc supplies the linker, CRT,
-# libgcc, and the prebuilt Windows-native `runtime.win.o` (compiled by the
-# Dockerfile build stage). This path is fully separate from the Linux/wasm
+# Windows cross-compile pipeline. `zig cc -target x86_64-windows-gnu` consumes
+# the LLVM IR in one step: it bundles the mingw-w64 CRT, libgcc equivalents,
+# and lld, and links the prebuilt Windows-native `runtime.win.o` (compiled by
+# the Dockerfile build stage with the same zig target). No external mingw-w64
+# toolchain is involved. This path is fully separate from the Linux/wasm
 # pipelines — neither is touched.
-MINGW_TARGET   = os.environ.get("NURL_MINGW_TARGET", "x86_64-w64-mingw32")
-MINGW_GCC      = os.environ.get("NURL_MINGW_GCC",   "/usr/bin/x86_64-w64-mingw32-gcc")
+WINDOWS_TARGET = os.environ.get("NURL_WINDOWS_TARGET", "x86_64-windows-gnu")
 RUNTIME_WIN_O  = os.environ.get("NURL_RUNTIME_WIN_O", "/opt/nurl/stdlib/runtime.win.o")
 # Static libcurl cross-build (Schannel TLS) installed by the Dockerfile under
 # /opt/curl-mingw. When stdlib/runtime.win.curl is present the runtime was
@@ -277,7 +280,10 @@ def _nurlc_available() -> bool:
 
 
 def _wasi_toolchain_available() -> bool:
-    return _is_executable(WASI_CLANG) and Path(RUNTIME_WASM_O).is_file()
+    return (
+        (shutil.which(NURL_ZIG) is not None or _is_executable(NURL_ZIG))
+        and Path(RUNTIME_WASM_O).is_file()
+    )
 
 
 # ── IR rewriting for wasm32-wasi ABI ────────────────────────────
@@ -637,8 +643,8 @@ def build_wasm(req: BuildWasmRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=(
-                f"WASI toolchain unavailable "
-                f"(clang={WASI_CLANG}, runtime={RUNTIME_WASM_O})"
+                f"wasm toolchain unavailable "
+                f"(zig={NURL_ZIG}, runtime={RUNTIME_WASM_O})"
             ),
         )
 
@@ -698,9 +704,11 @@ def build_wasm(req: BuildWasmRequest):
         )
 
         # 2) LLVM IR + runtime.wasm.o (+ canvas.wasm.o / audio.wasm.o) → .wasm
+        #    `zig cc -target wasm32-wasi` bundles wasi-libc + lld, so this is a
+        #    single host-arch-independent step (no separate WASI SDK).
         clang_cmd = [
-            WASI_CLANG,
-            "--target=wasm32-wasi",
+            NURL_ZIG, "cc",
+            f"--target={WASM_TARGET}",
             "-O2",
             "-Wno-override-module",
             str(ll_path),
@@ -743,7 +751,7 @@ def build_wasm(req: BuildWasmRequest):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
-                    "stage": "wasi-clang",
+                    "stage": "zig-cc-wasm",
                     "returncode": clang_proc.returncode,
                     "stderr": clang_proc.stderr.decode("utf-8", "replace"),
                     "nurlc_stderr": nurlc_stderr_txt,
@@ -1209,11 +1217,11 @@ def build_native(req: BuildRequest, request: Request) -> BuildResponse:
 
 # ── Windows cross-compile (POST /build_windows) ──────────────────
 #
-# Mirrors /build but routes through clang's mingw-w64 target to produce a
-# PE/COFF .exe. The pipeline is intentionally a copy rather than a flag on
-# /build — keeps the Linux ELF path untouched and lets the Windows path
-# evolve (extra link flags, sysroot tweaks, future SDL2-mingw support)
-# without risking regressions on the well-trodden Linux build.
+# Mirrors /build but routes through `zig cc -target x86_64-windows-gnu` to
+# produce a PE/COFF .exe. The pipeline is intentionally a copy rather than a
+# flag on /build — keeps the Linux ELF path untouched and lets the Windows
+# path evolve (extra link flags, future SDL2-windows support) without risking
+# regressions on the well-trodden Linux build.
 #
 # canvas/audio FFI is rejected up-front: the Windows-side SDL2 and
 # microphone bridges aren't compiled into the container.
@@ -1222,26 +1230,26 @@ def build_native(req: BuildRequest, request: Request) -> BuildResponse:
     "/build_windows",
     response_model=BuildResponse,
     tags=["build"],
-    summary="Cross-compile NURL source to a Windows .exe (mingw-w64)",
+    summary="Cross-compile NURL source to a Windows .exe (zig cc)",
     responses={
         200: {"description": "Compilation attempted; see stdout/stderr and artifacts."},
         400: {"description": "Empty source, oversized source, or unsupported FFI."},
-        500: {"description": "mingw-w64 toolchain unavailable."},
+        500: {"description": "zig toolchain unavailable."},
         504: {"description": "Compilation timed out."},
     },
 )
 def build_windows(req: BuildRequest, request: Request) -> BuildResponse:
-    """Compile NURL source to a Windows x86_64 .exe via mingw-w64.
+    """Compile NURL source to a Windows x86_64 .exe via `zig cc`.
 
     Pipeline:
       1. Write `source` to a temp `.nu` file.
       2. `nurlc <file.nu>` → LLVM IR (`.ll`).
-      3. `clang --target=x86_64-w64-mingw32 -O2 <ll> runtime.win.o -o <exe>`.
+      3. `zig cc -target x86_64-windows-gnu -O2 <ll> runtime.win.o -o <exe>`.
 
-    The runtime is a precompiled `runtime.win.o` produced once at image
-    build time with `x86_64-w64-mingw32-gcc`. clang's mingw driver finds
-    the matching CRT/libgcc/binutils linker via the standard sysroot
-    layout that `gcc-mingw-w64-x86-64` installs under `/usr/x86_64-w64-mingw32/`.
+    The runtime is a precompiled `runtime.win.o` produced once at image build
+    time with the same zig target. Zig bundles the mingw-w64 CRT, libgcc
+    equivalents, and lld, so the compile + link happen in one invocation with
+    no external mingw-w64 toolchain to coordinate.
     """
     if not req.source.strip():
         raise HTTPException(
@@ -1259,19 +1267,15 @@ def build_windows(req: BuildRequest, request: Request) -> BuildResponse:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"nurlc not found at {NURLC_PATH}",
         )
-    # We use clang as the IR consumer + driver, but mingw's gcc must be
-    # present so its sysroot (CRT, libgcc, ld) is discoverable by clang.
-    if shutil.which(NATIVE_CLANG) is None and not _is_executable(NATIVE_CLANG):
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"clang not found at '{NATIVE_CLANG}'",
-        )
-    if shutil.which(MINGW_GCC) is None and not _is_executable(MINGW_GCC):
+    # `zig cc -target x86_64-windows-gnu` is a single-step driver: it bundles
+    # the mingw-w64 CRT, libgcc equivalents, and lld, so no separate mingw-w64
+    # toolchain is required and the link happens in one invocation.
+    if shutil.which(NURL_ZIG) is None and not _is_executable(NURL_ZIG):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=(
-                f"mingw-w64 toolchain not found at '{MINGW_GCC}'. "
-                "Install gcc-mingw-w64-x86-64 and rebuild the container."
+                f"zig not found at '{NURL_ZIG}'. "
+                "Install Zig and rebuild the container."
             ),
         )
     if not Path(RUNTIME_WIN_O).is_file():
@@ -1376,57 +1380,36 @@ def build_windows(req: BuildRequest, request: Request) -> BuildResponse:
                 ),
             )
 
-        # Two-step: clang lowers IR → COFF object with the mingw triple,
-        # then mingw-gcc drives the link. We can't let clang link directly
-        # because Debian's mingw packages install libgcc.a/libgcc_eh.a under
-        # `/usr/lib/gcc/x86_64-w64-mingw32/<ver>-{posix,win32}/` rather than
-        # the upstream-mingw layout clang's driver searches; mingw-gcc knows
-        # its own `-print-libgcc-file-name` path and links cleanly.
-        obj_path = build_dir / f"{basename}.o"
-        clang_cmd: list[str] = [
-            NATIVE_CLANG, opt_flag, "-Wno-override-module",
-            f"--target={MINGW_TARGET}",
-            "-c", str(ll_path),
-            "-o", str(obj_path),
+        # Single-step: `zig cc -target x86_64-windows-gnu` consumes the IR
+        # directly and drives its bundled lld to emit the .exe, linking the
+        # prebuilt runtime.win.o. Zig ships the mingw-w64 CRT + libgcc
+        # equivalents, so unlike the old clang→mingw-gcc handoff there's no
+        # external sysroot to coordinate and no separate link stage.
+        zig_cmd: list[str] = [
+            NURL_ZIG, "cc",
+            f"--target={WINDOWS_TARGET}",
+            opt_flag, "-Wno-override-module",
+            str(ll_path), RUNTIME_WIN_O,
+            "-o", str(exe_path),
         ]
-        clang_proc = _run(clang_cmd, cwd=str(tmpdir))
+        # When the Windows runtime was built with -DNURL_HAVE_LIBCURL
+        # (Dockerfile drops a stdlib/runtime.win.curl marker), link the
+        # static libcurl bundle plus the Windows system libs schannel /
+        # winsock require. Static + schannel keeps the .exe self-contained.
+        if Path(os.path.join(os.path.dirname(RUNTIME_WIN_O), "runtime.win.curl")).is_file():
+            zig_cmd.extend([
+                f"-L{MINGW_CURL_PREFIX}/lib",
+                "-lcurl",
+                "-lws2_32", "-lcrypt32", "-lbcrypt", "-lncrypt",
+                "-lsecur32", "-ladvapi32",
+            ])
+        clang_proc = _run(zig_cmd, cwd=str(tmpdir))
         clang_stdout = clang_proc.stdout.decode("utf-8", "replace")
         clang_stderr = clang_proc.stderr.decode("utf-8", "replace")
         if clang_stdout:
-            stdout_log.append(f"[clang] {clang_stdout}")
+            stdout_log.append(f"[zig cc] {clang_stdout}")
         if clang_stderr:
-            stderr_log.append(f"[clang] {clang_stderr}")
-
-        link_proc = None
-        if clang_proc.returncode == 0 and obj_path.is_file():
-            link_cmd: list[str] = [
-                MINGW_GCC, opt_flag,
-                str(obj_path), RUNTIME_WIN_O,
-                "-o", str(exe_path),
-            ]
-            # When the Windows runtime was built with -DNURL_HAVE_LIBCURL
-            # (Dockerfile drops a stdlib/runtime.win.curl marker), link the
-            # static libcurl bundle plus the Windows system libs schannel /
-            # winsock require. Static + schannel keeps the .exe self-contained.
-            if Path(os.path.join(os.path.dirname(RUNTIME_WIN_O), "runtime.win.curl")).is_file():
-                link_cmd.extend([
-                    f"-L{MINGW_CURL_PREFIX}/lib",
-                    "-lcurl",
-                    "-lws2_32", "-lcrypt32", "-lbcrypt", "-lncrypt",
-                    "-lsecur32", "-ladvapi32",
-                ])
-            link_proc = _run(link_cmd, cwd=str(tmpdir))
-            link_stdout = link_proc.stdout.decode("utf-8", "replace")
-            link_stderr = link_proc.stderr.decode("utf-8", "replace")
-            if link_stdout:
-                stdout_log.append(f"[mingw-gcc] {link_stdout}")
-            if link_stderr:
-                stderr_log.append(f"[mingw-gcc] {link_stderr}")
-            # Clean intermediate object — only .ll and .exe are downloadable.
-            try:
-                obj_path.unlink()
-            except OSError:
-                pass
+            stderr_log.append(f"[zig cc] {clang_stderr}")
 
     ll_artifact: BuildArtifact | None = None
     if ll_path.is_file():
@@ -1448,19 +1431,14 @@ def build_windows(req: BuildRequest, request: Request) -> BuildResponse:
             token=token,
         )
 
-    link_rc = link_proc.returncode if link_proc is not None else None
-    ok = (
-        clang_proc.returncode == 0
-        and link_rc == 0
-        and exe_artifact is not None
-    )
-    # Surface the failing stage's exit code via clang_returncode so the
-    # playground's existing rendering ("clang exit N") still tells the truth.
-    reported_rc = clang_proc.returncode if clang_proc.returncode != 0 else (link_rc if link_rc is not None else clang_proc.returncode)
+    # Single zig cc invocation compiles + links, so its exit code is the
+    # whole story (no separate link stage to reconcile).
+    ok = clang_proc.returncode == 0 and exe_artifact is not None
+    reported_rc = clang_proc.returncode
     return BuildResponse(
         status="ok" if ok else "error",
         message=(
-            "compiled nurl → Windows .exe (mingw-w64)"
+            "compiled nurl → Windows .exe (zig cc)"
             if ok
             else "windows build failed (see stderr)"
         ),

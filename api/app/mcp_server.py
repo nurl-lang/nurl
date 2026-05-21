@@ -48,9 +48,9 @@ mcp = FastMCP(
     streamable_http_path="/mcp",
     instructions=(
         "NURL language toolchain. Use `nurl_build_native` (Linux ELF), "
-        "`nurl_build_windows` (Windows .exe via mingw-w64), "
+        "`nurl_build_windows` (Windows .exe via zig cc), "
         "`nurl_build_macos` (macOS Mach-O via zig cc), or "
-        "`nurl_build_wasm` to compile source. The language uses a "
+        "`nurl_build_wasm` (wasm32-wasi via zig cc) to compile source. The language uses a "
         "terse prefix notation: functions are declared with "
         "`@ name → ret_ty { body }`, return via `^ expr`, and call "
         "functions with parenthesised prefix form like `( puts `hello` )`. "
@@ -100,11 +100,11 @@ async def nurl_build_native(source: str, filename: str = "main.nu") -> dict:
 
 @mcp.tool(
     description=(
-        "Cross-compile NURL source to a Windows x86_64 .exe via mingw-w64. "
-        "Returns build status, nurlc+clang+mingw-gcc return codes and "
-        "stderr, plus download URLs for the generated `.ll` (LLVM IR) and "
-        "the `.exe`. canvas/audio FFI is not supported on this target. "
-        "Equivalent to `POST /build_windows`."
+        "Cross-compile NURL source to a Windows x86_64 .exe via zig cc "
+        "(x86_64-windows-gnu). Returns build status, nurlc + zig cc return "
+        "codes and stderr, plus download URLs for the generated `.ll` (LLVM "
+        "IR) and the `.exe`. canvas/audio FFI is not supported on this "
+        "target. Equivalent to `POST /build_windows`."
     ),
 )
 async def nurl_build_windows(source: str, filename: str = "main.nu") -> dict:

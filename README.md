@@ -67,12 +67,18 @@ NURL source (.nu)
    ┌────┴────────────┐
    ▼                 ▼
 native            wasm32-wasi
-(Linux/Win/macOS) (via WASI SDK)
+(Linux/Win/macOS) (via zig cc)
 ```
 
 The compiler (`nurlc.nu`) is written in NURL itself. The bootstrap runs it
 twice over its own source and requires byte-identical LLVM IR on both rounds
 before the build is accepted.
+
+`build.sh` and `nurl.sh` default to `clang`, but honor `NURL_CC` to select the
+C compiler/linker driver. Set `NURL_CC="zig cc"` to drive the whole build
+through Zig's bundled clang + lld + libc — one pinned toolchain that also
+cross-compiles every release target. (Zig can't LTO on native macOS, where
+`build.sh` automatically falls back to a plain-object runtime.)
 
 ---
 
@@ -174,8 +180,8 @@ the [MCP section below](#mcp-server--let-an-llm-drive-the-toolchain).
   (clang + `stdlib/runtime.o`). Returns structured build logs plus one-shot
   download tokens for the generated `.ll` and the binary.
 - `POST /build_windows` — cross-compile to a Windows **x86_64 `.exe`** via
-  mingw-w64 (`clang --target=x86_64-w64-mingw32` + `x86_64-w64-mingw32-gcc`
-  link). Runtime is pre-built with static libcurl (Schannel TLS) so HTTP
+  `zig cc --target=x86_64-windows-gnu` (single-step: zig bundles the mingw-w64
+  CRT + lld). Runtime is pre-built with static libcurl (Schannel TLS) so HTTP
   works end-to-end; canvas/audio FFIs are rejected up-front.
 - `POST /build_macos`   — cross-compile to a macOS **x86_64 Mach-O** binary
   via `zig cc --target=x86_64-macos-none`. Links only libSystem (no Apple
@@ -211,8 +217,8 @@ docker run --rm -p 8000:8000 nurl-api:dev
 2. The API rewrites the IR to match the `wasm32-wasi` ABI
    (renames `@main` → `@__main_argc_argv`, injects the target triple,
    inserts i32/i64 shims for `malloc`/`puts` to match libc signatures).
-3. `clang --target=wasm32-wasi -O2 <ir>.ll /opt/nurl/stdlib/runtime.wasm.o -o out.wasm`
-   using the WASI SDK (24.0) bundled into the image.
+3. `zig cc -target wasm32-wasi -O2 <ir>.ll /opt/nurl/stdlib/runtime.wasm.o -o out.wasm`
+   — `zig cc` bundles wasi-libc, so no separate WASI SDK is needed.
 
 The wasm-compiled NURL runtime (`stdlib/runtime.wasm.o`) is baked into the
 image at build time. See `api/README.md` for local-dev instructions without
@@ -271,7 +277,7 @@ through their respective config UI (transport: `http` /
 
 | Group | Tools |
 |---|---|
-| Build (compile + return artifact) | `nurl_build_native` (Linux x86_64 ELF), `nurl_build_windows` (Win64 `.exe`, mingw-w64), `nurl_build_macos` (macOS x86_64 Mach-O, zig cc), `nurl_build_wasm` (wasm32-wasi) |
+| Build (compile + return artifact) | `nurl_build_native` (Linux x86_64 ELF), `nurl_build_windows` (Win64 `.exe`, zig cc), `nurl_build_macos` (macOS x86_64 Mach-O, zig cc), `nurl_build_wasm` (wasm32-wasi, zig cc) |
 | Browse | `nurl_list_examples`, `nurl_list_stdlib`, `nurl_list_tests` |
 | Read | `nurl_read_example`, `nurl_read_stdlib`, `nurl_read_test`, `nurl_read_grammar`, `nurl_read_readme`, `nurl_read_roadmap`, `nurl_read_gotchas` |
 
@@ -515,10 +521,10 @@ exercised by the build scripts today.
 | Platform          | Backend      | Status                                   |
 |---|---|---|
 | Linux x86_64      | LLVM         | primary dev target — `build.sh` + tests  |
-| Windows x86_64    | LLVM         | fully supported — `build.bat` runs the same bootstrap + snapshot test suite as `build.sh` |
+| Windows x86_64    | LLVM         | fully supported — `build.bat` runs the same bootstrap + snapshot test suite as `build.sh`. Playground cross-compiles via `zig cc -target x86_64-windows-gnu` (static libcurl + Schannel) |
 | macOS x86_64      | LLVM + zig cc | cross-compiled from the `api/` container via `POST /build_macos`; Mach-O binary links only libSystem (no Apple SDK needed). Runs on Apple Silicon via Rosetta 2. canvas/audio/libcurl-HTTP not supported on this target. |
 | macOS ARM64       | LLVM         | should work via clang; untested          |
-| WebAssembly       | wasm32-wasi  | supported via the `api/` container (WASI SDK 24.0); browser execution via `browser_wasi_shim`. The self-hosting compiler itself also builds to wasm — see `buildwasm.sh` / `wasmnurl.sh` below |
+| WebAssembly       | wasm32-wasi  | supported via the `api/` container (`zig cc -target wasm32-wasi`, bundled wasi-libc); browser execution via `browser_wasi_shim`. The self-hosting compiler itself also builds to wasm — see `buildwasm.sh` / `wasmnurl.sh` below |
 | Android / iOS     | LLVM cross   | planned                                  |
 | Embedded (no_std) | LLVM         | planned                                  |
 | JVM               | JVM bytecode | future                                   |
@@ -558,7 +564,7 @@ nurl/
 │   ├── showcase.nu  calculator.nu  fizzbuzz.nu  collatz.nu  wordcount.nu
 │   └── enigma.nu  slice_test.nu  test_05_closures_and_capture.nu …
 ├── api/                       — FastAPI container (compiler-as-a-service + playground)
-│   ├── Dockerfile             — multi-stage build; installs WASI SDK; bootstraps nurlc
+│   ├── Dockerfile             — multi-stage build; installs Zig (unified cross-compiler); bootstraps nurlc
 │   ├── app/main.py            — endpoints, IR-rewrite shims, docs rendering
 │   ├── static/index.html      — Monaco-based playground, runs wasm in-browser
 │   └── requirements.txt

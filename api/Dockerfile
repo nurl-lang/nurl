@@ -30,21 +30,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libzstd-dev \
         pkg-config \
         binaryen \
-        gcc-mingw-w64-x86-64 \
         binutils-mingw-w64-x86-64 \
-        mingw-w64-tools \
     && rm -rf /var/lib/apt/lists/*
 
 RUN ln -sf /usr/bin/python3 /usr/local/bin/python
 
-# --- WASI SDK (clang + libc for wasm32-wasi) -------------------
-ARG WASI_SDK_VERSION=24
-ARG WASI_SDK_FULL=24.0
-RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/wasi-sdk.tar.gz \
-        "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_FULL}-x86_64-linux.tar.gz" \
-    && mkdir -p /opt/wasi-sdk \
-    && tar -xzf /tmp/wasi-sdk.tar.gz -C /opt/wasi-sdk --strip-components=1 \
-    && rm /tmp/wasi-sdk.tar.gz
+# wasm32-wasi is built with `zig cc` (installed below), which bundles
+# wasi-libc — no separate WASI SDK download is required.
 
 # ---------------------------------------------------------------
 # Source-independent toolchain steps. These only depend on ARGs and
@@ -54,11 +46,52 @@ RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/wasi-sdk.tar
 # as long as the version pins below stay constant.
 # ---------------------------------------------------------------
 
-# --- Cross-build a static libcurl for mingw-w64 with Schannel TLS ------
-# Debian ships no mingw libcurl package, so we build one from upstream
+# --- Zig toolchain ---------------------------------------------------
+# Zig is the single cross-compiler for the whole release matrix: macOS
+# (Mach-O via bundled libSystem stubs), Windows (x86_64-windows-gnu via
+# bundled mingw-w64 headers + ucrt + lld), and wasm32-wasi (bundled
+# wasi-libc). It also cross-builds the static libcurl below, so every
+# target shares one toolchain and one Windows CRT (ucrt). Downloaded
+# before the curl build because that build now uses `zig cc`.
+ARG ZIG_VERSION=0.16.0
+# TARGETARCH is supplied automatically by BuildKit (amd64 / arm64). Map it
+# to Zig's arch naming and fetch the matching native Zig. Zig cross-compiles
+# to every release target regardless of host arch, so this only decides
+# which native Zig binary runs the build — the image builds natively on
+# x86_64 (production) and arm64 (Apple Silicon dev) alike.
+# NB: Zig's 0.14+ archive naming is `zig-<arch>-linux-<ver>` (arch first),
+# the reverse of the pre-0.14 `zig-linux-<arch>-<ver>` layout.
+ARG TARGETARCH
+RUN case "${TARGETARCH:-amd64}" in \
+        amd64) ZIG_ARCH=x86_64 ;; \
+        arm64) ZIG_ARCH=aarch64 ;; \
+        *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/zig.tar.xz \
+        "https://ziglang.org/download/${ZIG_VERSION}/zig-${ZIG_ARCH}-linux-${ZIG_VERSION}.tar.xz" \
+    && mkdir -p /opt/zig \
+    && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1 \
+    && rm /tmp/zig.tar.xz
+
+# Single-word `zig cc`/`zig ar` wrappers targeting Windows — autoconf
+# wants CC/AR to be single tokens, and these are reused by the libcurl
+# cross-build below.
+RUN printf '#!/bin/sh\nexec /opt/zig/zig cc -target x86_64-windows-gnu "$@"\n' > /usr/local/bin/zig-windows-cc \
+    && printf '#!/bin/sh\nexec /opt/zig/zig ar "$@"\n' > /usr/local/bin/zig-ar \
+    && chmod +x /usr/local/bin/zig-windows-cc /usr/local/bin/zig-ar
+
+# --- Cross-build a static libcurl for Windows with Schannel TLS ------
+# Debian ships no Windows libcurl package, so we build one from upstream
 # source against Windows' built-in Schannel (no OpenSSL DLL required).
 # Static + Schannel means the final .exe produced by /build_windows is
 # fully self-contained — no libcurl.dll to ship alongside.
+#
+# Compiled with `zig cc` (ucrt) so it shares the exact CRT /build_windows
+# links against. A libcurl built by the older msvcrt-based mingw-gcc
+# references `sys_errlist`/`sys_nerr`, which ucrtbase.dll does not provide
+# — that mismatch is what breaks the link. mingw-w64's `windres` (the one
+# remaining mingw tool) compiles curl's version-resource .rc; it emits a
+# standard COFF object that zig's lld links cleanly.
 ARG CURL_VERSION=8.10.1
 RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/curl.tar.xz \
         "https://curl.se/download/curl-${CURL_VERSION}.tar.xz" \
@@ -82,23 +115,13 @@ RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/curl.tar.xz 
         --without-zstd \
         --without-nghttp2 \
         --without-librtmp \
-    && make -j"$(nproc)" \
-    && make install \
+        CC=zig-windows-cc AR=zig-ar RANLIB=true STRIP=true \
+        RC=x86_64-w64-mingw32-windres \
+    && make -C lib -j"$(nproc)" \
+    && make -C lib install \
+    && make -C include install \
     && cd / \
     && rm -rf /tmp/curl.tar.xz /tmp/curl-src
-
-# --- Zig toolchain (for macOS x86_64 cross-compile) ------------------
-# Zig ships its own darwin libc stubs (`.tbd` files for libSystem) under
-# `lib/libc/darwin/`, so we can produce Mach-O binaries without Apple's
-# SDK and without any Apple-owned redistributables. Canvas/audio FFIs
-# (Cocoa / AudioToolbox frameworks) are explicitly unsupported on this
-# path — a macOS binary from the playground links *only* libSystem.
-ARG ZIG_VERSION=0.13.0
-RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/zig.tar.xz \
-        "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
-    && mkdir -p /opt/zig \
-    && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1 \
-    && rm /tmp/zig.tar.xz
 
 # ---------------------------------------------------------------
 # From here on every step depends on the repo source. Keep this
@@ -120,22 +143,24 @@ RUN find . -type f \( -name '*.sh' -o -name '*.nu' \) -exec sed -i 's/\r$//' {} 
 RUN chmod +x build.sh \
     && ./build.sh --no-tests
 
-# Compile the NURL runtime for wasm32-wasi so linking later is a
-# single clang invocation inside the API container. The canvas object
-# is compiled in a second step — it forwards to host imports under
-# the "canvas" wasm module (wired up in the browser playground).
-RUN /opt/wasi-sdk/bin/clang --target=wasm32-wasi -O2 \
+# Compile the NURL runtime for wasm32-wasi so linking later is a single
+# `zig cc` invocation inside the API container. `zig cc -target wasm32-wasi`
+# bundles wasi-libc, so no WASI SDK is needed. The canvas/audio objects are
+# compiled in further steps — they forward to host imports under the
+# "canvas"/"audio" wasm modules (wired up in the browser playground).
+RUN /opt/zig/zig cc -target wasm32-wasi -O2 \
         -c stdlib/runtime.c -o stdlib/runtime.wasm.o \
-    && /opt/wasi-sdk/bin/clang --target=wasm32-wasi -O2 \
+    && /opt/zig/zig cc -target wasm32-wasi -O2 \
         -c stdlib/canvas_wasm.c -o stdlib/canvas.wasm.o \
-    && /opt/wasi-sdk/bin/clang --target=wasm32-wasi -O2 \
+    && /opt/zig/zig cc -target wasm32-wasi -O2 \
         -c stdlib/audio_wasm.c -o stdlib/audio.wasm.o
 
-# Cross-compile the NURL runtime for Windows (x86_64-w64-mingw32) so /build_windows
-# can link user IR against a Windows-native runtime.o without rebuilding the runtime
-# per request. We use mingw-w64's own gcc as the compiler — it owns the headers
-# (`<direct.h>`, `<sys/stat.h>`, …) and the matching CRT/libgcc that the linker
-# pulls in later.
+# Cross-compile the NURL runtime for Windows (x86_64-windows-gnu) so
+# /build_windows can link user IR against a Windows-native runtime.o without
+# rebuilding the runtime per request. `zig cc -target x86_64-windows-gnu`
+# bundles the mingw-w64 headers (`<direct.h>`, `<sys/stat.h>`, …) and the CRT
+# + libgcc equivalents, so no external mingw-w64 toolchain is involved — this
+# matches the driver /build_windows uses at request time.
 #
 # HTTP: built with -DNURL_HAVE_LIBCURL against the static libcurl cross-build
 # above. CURL_STATICLIB suppresses libcurl's default __declspec(dllimport)
@@ -143,7 +168,7 @@ RUN /opt/wasi-sdk/bin/clang --target=wasm32-wasi -O2 \
 # A `stdlib/runtime.win.curl` marker tells /build_windows to append the
 # required Windows system libs (ws2_32, crypt32, bcrypt, ncrypt, secur32,
 # advapi32) at link time.
-RUN x86_64-w64-mingw32-gcc -O2 \
+RUN /opt/zig/zig cc -target x86_64-windows-gnu -O2 \
         -DNURL_HAVE_LIBCURL -DCURL_STATICLIB \
         -I/opt/curl-mingw/include \
         -c stdlib/runtime.c -o stdlib/runtime.win.o \
@@ -191,15 +216,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq-dev \
         libzstd-dev \
         pkg-config \
-        gcc-mingw-w64-x86-64 \
-        binutils-mingw-w64-x86-64 \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/clang-16 /usr/local/bin/clang
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     NURLC_PATH=/opt/nurl/build/nurlc \
-    WASI_CLANG=/opt/wasi-sdk/bin/clang \
     NURL_RUNTIME_WASM_O=/opt/nurl/stdlib/runtime.wasm.o \
     NURL_CANVAS_WASM_O=/opt/nurl/stdlib/canvas.wasm.o \
     NURL_AUDIO_WASM_O=/opt/nurl/stdlib/audio.wasm.o \
@@ -212,13 +234,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     NURL_ROADMAP_PATH=/opt/nurl/ROADMAP.md \
     NURL_GOTCHAS_PATH=/opt/nurl/docs/GOTCHAS.md \
     NURL_NATIVE_CLANG=/usr/bin/clang-16 \
-    NURL_MINGW_GCC=/usr/bin/x86_64-w64-mingw32-gcc \
     NURL_RUNTIME_WIN_O=/opt/nurl/stdlib/runtime.win.o \
     NURL_MINGW_CURL_PREFIX=/opt/curl-mingw \
     NURL_ZIG=/opt/zig/zig \
+    NURL_WINDOWS_TARGET=x86_64-windows-gnu \
     NURL_MACOS_TARGET=x86_64-macos-none \
     NURL_RUNTIME_MAC_O=/opt/nurl/stdlib/runtime.mac.o \
-    PATH=/opt/nurl/build:/opt/wasi-sdk/bin:$PATH
+    PATH=/opt/nurl/build:$PATH
 
 WORKDIR /app
 
@@ -249,10 +271,6 @@ COPY --from=nurl-build /src/docs/GOTCHAS.md         /opt/nurl/docs/GOTCHAS.md
 COPY --from=nurl-build /src/LICENSE-MIT             /opt/nurl/LICENSE-MIT
 COPY --from=nurl-build /src/LICENSE-APACHE          /opt/nurl/LICENSE-APACHE
 COPY --from=nurl-build /src/NOTICE                  /opt/nurl/NOTICE
-
-# WASI SDK (clang + wasm32-wasi sysroot). Needed at runtime to link
-# NURL-generated LLVM IR against the wasm build of the runtime.
-COPY --from=nurl-build /opt/wasi-sdk /opt/wasi-sdk
 
 # API source (includes static playground).
 COPY api/app    /app/app
