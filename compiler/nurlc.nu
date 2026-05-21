@@ -3101,35 +3101,35 @@
 // ── Loop ~ cond { body } ──────────────────────────────────────────
 
 @ gen_loop i lex i syms i cg → s {
-    : i start_pos ( nurl_lex_cur_start lex )
     ( nurl_lex_advance lex )
     // For-each: ~ IDENT(var) IDENT(slice) { body }
     ? & == ( nurl_lex_type lex ) TT_IDENT == ( nurl_lex_peek_type lex ) TT_IDENT
     { ^ ( gen_foreach lex syms cg ) }
     {}
 
-    // While loop: ~ cond { body }
-    // We need to see if a block follows. If not, this was a complement expression.
+    // While loop `~ cond { body }`, or a complement expression used as
+    // a statement (grammar alternative 3 — `~ expr`). Emit the
+    // condition straight into `lc`, a re-enterable block, then look for
+    // the `{`. The condition is therefore parsed exactly once and
+    // evaluated once per iteration — there is no speculative parse
+    // whose IR would have to be discarded, so a side-effecting
+    // condition runs exactly (bodies + 1) times. If no `{` follows it
+    // was a complement expression: `lc` stays as a harmless
+    // single-predecessor block, the value is complemented, returned.
     : s lc ( nurl_cg_lbl cg `loop_check` )
     : s lb ( nurl_cg_lbl cg `loop_body` )
     : s le ( nurl_cg_lbl cg `loop_exit` )
 
-    // Speculatively parse condition
+    ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
+    ( emit ( nurl_str_cat lc `:` ) )
+    ( nurl_sym_def syms `__cur_lbl__` lc )
     : s cv ( gen_expr lex syms cg )
+    : s cvt ( nurl_get_last_type )
     ? == ( nurl_lex_type lex ) TT_LBRACE
     {
-        // It's a loop! Emit the control flow.
-        // We already emitted some expression IR into the current block, but we need it in lc.
-        // Easiest is to re-parse it in the right place.
-        ( nurl_lex_set_pos lex start_pos )
-        ( nurl_lex_advance lex )
-
-        ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
-        ( emit ( nurl_str_cat lc `:` ) )
-        ( nurl_sym_def syms `__cur_lbl__` lc )
-        = cv ( gen_expr lex syms cg )
+        // It's a loop.
         // Narrow non-i1 integer loop conditions (see gen_cond).
-        = cv ( coerce_to_i1 cv ( nurl_get_last_type ) cg )
+        = cv ( coerce_to_i1 cv cvt cg )
         ( nurl_print `  br i1 ` ) ( nurl_print cv )
         ( nurl_print `, label %` ) ( nurl_print lb )
         ( nurl_print `, label %` ) ( nurl_print le ) ( emit_dbg_eol )
@@ -3162,10 +3162,19 @@
         ^ `undef`
     }
     {
-        // No block follows, must be a complement expression.
-        // Backtrack and let gen_expr handle it.
-        ( nurl_lex_set_pos lex start_pos )
-        ^ ( gen_expr lex syms cg )
+        // No block — a complement expression `~ cond` used as a
+        // statement (grammar alternative 3). `cv` already holds the
+        // operand value (emitted into `lc`); apply the complement and
+        // return it. `lc` stays as a harmless single-predecessor block.
+        : s res_c ( nurl_cg_reg cg )
+        ? ( seq cvt `double` )
+        { ( nurl_print `  ` ) ( nurl_print res_c )
+            ( nurl_print ` = fneg double ` ) ( nurl_print cv ) ( nurl_print `\n` ) }
+        { ( nurl_print `  ` ) ( nurl_print res_c )
+            ( nurl_print ` = xor ` ) ( nurl_print cvt )
+            ( nurl_print ` ` ) ( nurl_print cv ) ( nurl_print `, -1\n` ) }
+        ( nurl_set_last_type cvt )
+        ^ res_c
     }
 }
 

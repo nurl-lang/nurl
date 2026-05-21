@@ -160,6 +160,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+* **A side-effecting `~` while-loop condition no longer drops an
+  iteration.** `gen_loop` speculatively parsed the condition (to tell a
+  while loop from a complement expression used as a statement) and left
+  that speculative IR in the output — so the condition was evaluated
+  one extra time up front. For a pure condition this was harmless dead
+  code; for a side-effecting condition (`~ ( read_next x ) { … }`) the
+  first evaluation's side effects happened with no matching body run,
+  silently dropping one iteration's work. `gen_loop` now emits the
+  condition straight into the loop-check block and only then looks for
+  the `{` — the condition is parsed exactly once and evaluated exactly
+  (bodies + 1) times; no speculative IR. Regression
+  `compiler/tests/loop_cond_sideeffect.nu`.
+
 * **`?? ( call )` on a wide-payload `! T E` result no longer truncates.**
   Matching directly on a function-call expression whose Result payload
   is a wide value struct (a multi-field `Time`-like type) silently
