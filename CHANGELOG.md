@@ -8,6 +8,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* **Forward references for enum-variant payload types.** An enum
+  variant whose payload is a struct or enum declared *later* in the
+  same file now parses correctly:
+
+  ```
+  : | Shape { Dot  Box Geom }   // Geom used before it is declared
+  : Geom { i w  i h }
+  ```
+
+  Previously the compiler only recognised a payload type already
+  registered in the symbol table, so a forward-referenced payload was
+  misread as a phantom extra variant — and any `??` match over the
+  enum then failed with a bogus non-exhaustive-match error. A new
+  linear pre-pass (`scan_type_names`) registers every top-level
+  struct / enum / generic-struct name before the main compile pass,
+  following `$`-imports. Regression test
+  `compiler/tests/forward_enum_payload.nu`.
+
+### Fixed
+
+* **Enum variant with a struct or enum payload now constructs and
+  pattern-matches correctly.** Building `@ E { Variant structValue }`
+  used to store the struct value straight into the variant's pointer
+  slot (an LLVM type error: a multi-field struct is not a pointer),
+  and the matching `??` arm mis-unboxed it. Both sites are fixed:
+  construction heap-boxes the `%Name` payload (`nurl_alloc` + `store`)
+  and the match arm `load`s it back through the slot pointer. Pointer
+  payloads (`*Ast`) and single-pointer-handle structs (`String`,
+  `Vec`) keep their existing direct-store path. This bug was
+  independent of forward references — it affected backward-declared
+  payload types too — but went unnoticed because no test constructed
+  such a value.
+
+* **`#`-cast from an enum value to an integer now works.**
+  `# i someEnum` (or any sized integer destination) recovers the
+  variant tag — an enum's layout is `{ i64, ... }` with field 0 the
+  tag. Previously the cast emitted no instruction, so the i64-typed
+  use site (a return, `nurl_print_int`, arithmetic) failed the LLVM
+  verifier. `gen_cast` now `extractvalue`s field 0 and truncs the
+  i64 tag to a narrower destination. Regression test
+  `compiler/tests/enum_to_int_cast.nu`.
+
 ## [0.8.0] — 2026-05-20
 
 ### Added

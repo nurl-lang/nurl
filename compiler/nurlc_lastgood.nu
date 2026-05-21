@@ -2648,8 +2648,18 @@
                             ( nurl_print ` undef, ` ) ( nurl_print pt0_f0_ty )
                             ( nurl_print ` ` ) ( nurl_print pr0 ) ( nurl_print `, 0\n` ) }
                         { ( nurl_print `  ` ) ( nurl_print cv0 )
-                            ? == ( nurl_str_get pt0 0 ) 123
-                            {  // Anonymous aggregate (e.g., { i1, i64 }): load value from ptr
+                            ? | == ( nurl_str_get pt0 0 ) 123
+                                & == ( nurl_str_get pt0 0 ) 37
+                                  != ( nurl_str_get pt0 - ( nurl_str_len pt0 ) 1 ) 42
+                            {  // Anonymous aggregate (`{ i1, i64 }`) OR a named
+                               // non-pointer type (`%Geom` multi-field struct /
+                               // `%Color` enum) — the payload slot holds a
+                               // heap-box pointer to the whole value (see the
+                               // symmetric heap-box in gen_agg_lit's enum-
+                               // construction path). Load the value back
+                               // through it. A pointer payload (`%Ast*`) keeps
+                               // the bitcast-fallthrough below — the slot holds
+                               // the pointer itself, not a box.
                                 ( nurl_print ` = load ` ) ( nurl_print pt0 )
                                 ( nurl_print `, ptr ` ) ( nurl_print pr0 ) ( nurl_print `\n` )
                             }
@@ -4964,6 +4974,28 @@
         }
     }
     {}
+    // Enum → integer. An enum value's LLVM type is `%Name = { i64, ... }`
+    // whose field 0 is the variant tag, so `# i someEnum` (or any sized
+    // integer dst) extracts that tag; a narrower dst integer truncs the
+    // i64 tag down. Restricted to enums (a `__variants` entry exists) —
+    // a struct → int cast is intentionally not serviced here.
+    : b src_is_enum & & > stlen 1 == ( nurl_str_get st 0 ) 37
+        != 0 ( nurl_str_len ( nurl_sym_get syms
+            ( nurl_str_cat ( nurl_str_slice st 1 - stlen 1 ) `__variants` ) ) )
+    : i enum_dst_iw ( int_width dt )
+    ? & src_is_enum > enum_dst_iw 0
+    { : s tagv ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print tagv )
+        ( nurl_print ` = extractvalue ` ) ( nurl_print st )
+        ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+        ? ( seq dt `i64` )
+        { ( nurl_set_last_type dt ) ^ tagv }
+        { ( nurl_print `  ` ) ( nurl_print res )
+            ( nurl_print ` = trunc i64 ` ) ( nurl_print tagv )
+            ( nurl_print ` to ` ) ( nurl_print dt ) ( nurl_print `\n` )
+            ( nurl_set_last_type dt ) ^ res }
+    }
+    {}
     // Float-side casts. NURL has two float widths: `f` → double, `f32` →
     // float. The cast logic covers four cases involving floats:
     //   * float ↔ double: fpext / fptrunc (shipped 2026-05-14 with f32).
@@ -5640,31 +5672,62 @@
                         = actual_fval conv_reg
                         = actual_fty `ptr`
                     }
-                    ? == ( nurl_str_get fty 0 ) 37
-                    {  // Named struct handle (e.g. %Vec__Json, %String):
-                        // extract field 0 (a pointer) and bitcast to ptr.
-                        // Match-arm payload binding does the inverse via
-                        // insertvalue. Skipped when the named type is an
-                        // enum — enum variants get extractvalue+ptrtoint
-                        // by the i64-tag branch above.
+                    ? & == ( nurl_str_get fty 0 ) 37
+                        != ( nurl_str_get fty - ( nurl_str_len fty ) 1 ) 42
+                    {  // Named NON-POINTER payload (`%Geom`, `%Color`, `%Vec__T`).
+                        // A pointer payload (`%Ast*`) is left untouched — the
+                        // pointer goes straight into the enum's ptr slot.
+                        // (a) single-pointer-handle struct (%Vec__Json,
+                        //     %String): field 0 IS a pointer — extract it and
+                        //     stash the bare pointer. The match arm rebuilds
+                        //     it via insertvalue.
+                        // (b) multi-field / non-pointer-f0 struct OR an enum
+                        //     (narrow or wide): heap-box the whole value and
+                        //     stash the box pointer in the slot. gen_match's
+                        //     payload binding loads it back.
                         : s sname3 ( nurl_str_slice fty 1 - ( nurl_str_len fty ) 1 )
                         : s vlist3 ( nurl_sym_get syms ( nurl_str_cat sname3 `__variants` ) )
-                        ? == 0 ( nurl_str_len vlist3 ) {
-                            : s f0_ty3 ( nurl_sym_get syms ( nurl_str_cat3 sname3 `__idx_0` `__type` ) )
-                            ? & != 0 ( nurl_str_len f0_ty3 )
+                        : s f0_ty3 ( nurl_sym_get syms ( nurl_str_cat3 sname3 `__idx_0` `__type` ) )
+                        : b is_handle & & == 0 ( nurl_str_len vlist3 )
+                            != 0 ( nurl_str_len f0_ty3 )
                             == ( nurl_str_get f0_ty3 - ( nurl_str_len f0_ty3 ) 1 ) 42
-                            { : s xv3 ( nurl_cg_reg cg )
-                                ( nurl_print `  ` ) ( nurl_print xv3 )
-                                ( nurl_print ` = extractvalue ` ) ( nurl_print fty )
-                                ( nurl_print ` ` ) ( nurl_print fval ) ( nurl_print `, 0\n` )
-                                : s pcast ( nurl_cg_reg cg )
-                                ( nurl_print `  ` ) ( nurl_print pcast )
-                                ( nurl_print ` = bitcast ` ) ( nurl_print f0_ty3 )
-                                ( nurl_print ` ` ) ( nurl_print xv3 ) ( nurl_print ` to ptr\n` )
-                                = actual_fval pcast
-                                = actual_fty `ptr` }
-                            {} }
-                        {}
+                        ? is_handle
+                        { : s xv3 ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print xv3 )
+                            ( nurl_print ` = extractvalue ` ) ( nurl_print fty )
+                            ( nurl_print ` ` ) ( nurl_print fval ) ( nurl_print `, 0\n` )
+                            : s pcast ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print pcast )
+                            ( nurl_print ` = bitcast ` ) ( nurl_print f0_ty3 )
+                            ( nurl_print ` ` ) ( nurl_print xv3 ) ( nurl_print ` to ptr\n` )
+                            = actual_fval pcast
+                            = actual_fty `ptr` }
+                        { : s sz_reg ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print sz_reg )
+                            ( nurl_print ` = getelementptr ` ) ( nurl_print fty )
+                            ( nurl_print `, ` ) ( nurl_print fty )
+                            ( nurl_print `* null, i32 1\n` )
+                            : s sz_int ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print sz_int )
+                            ( nurl_print ` = ptrtoint ` ) ( nurl_print fty )
+                            ( nurl_print `* ` ) ( nurl_print sz_reg ) ( nurl_print ` to i64\n` )
+                            : s box_raw ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print box_raw )
+                            ( nurl_print ` = call i8* @nurl_alloc(i64 ` ) ( nurl_print sz_int ) ( nurl_print `)` ) ( emit_dbg_eol )
+                            : s box_ptr ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print box_ptr )
+                            ( nurl_print ` = bitcast i8* ` ) ( nurl_print box_raw )
+                            ( nurl_print ` to ` ) ( nurl_print fty ) ( nurl_print `*\n` )
+                            ( nurl_print `  store ` ) ( nurl_print fty )
+                            ( nurl_print ` ` ) ( nurl_print fval )
+                            ( nurl_print `, ` ) ( nurl_print fty )
+                            ( nurl_print `* ` ) ( nurl_print box_ptr ) ( nurl_print `\n` )
+                            : s box_cast ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print box_cast )
+                            ( nurl_print ` = bitcast ` ) ( nurl_print fty )
+                            ( nurl_print `* ` ) ( nurl_print box_ptr ) ( nurl_print ` to ptr\n` )
+                            = actual_fval box_cast
+                            = actual_fty `ptr` }
                     }
                     {}
                 }
@@ -9562,6 +9625,89 @@
     }
 }
 
+// scan_type_names: linear pre-pass that registers every top-level type
+// NAME into `syms` as `Name → %Name` — struct `: Name { ... }`, generic
+// struct `: Name [T+] { ... }`, and enum `: | Name { ... }` — and
+// follows `$`-imports. Runs before parse_program so gen_enum_decl's
+// could_be_payload_type can recognise a struct/enum used as a variant
+// payload even when that type is declared LATER in the file (a forward
+// reference). Without it a forward-referenced payload type is misparsed
+// as a phantom extra variant.
+//
+// Purely lexical + brace-depth-tracked — no parse_type call (the
+// scan_fn_sigs param-walk desync lesson, BORROW.md Phase 4). Only
+// depth-0 `:` decls are inspected; variant names live inside the `{}`
+// body at depth > 0 and are never registered here. A constant
+// (`: ~? Type name value`) carries its name in 2nd position with no
+// `{`/`[` after the 1st token, so it is correctly skipped.
+@ scan_type_names i lex i syms → v {
+    : ~ i depth 0
+    ~ != ( nurl_lex_type lex ) TT_EOF {
+        : i tt ( nurl_lex_type lex )
+        ? == tt TT_LBRACE
+        { = depth + depth 1 ( nurl_lex_advance lex ) }
+        { ? == tt TT_RBRACE
+            { = depth - depth 1 ( nurl_lex_advance lex ) }
+            { ? & == depth 0 == tt TT_DOLLAR
+                {  // Nested import: register its type names too, applying
+                   // alias rewriting so an aliased import's types resolve
+                   // under their `alias__` prefix (mirrors scan_fn_sigs).
+                    ( nurl_lex_advance lex )
+                    ? == ( nurl_lex_type lex ) TT_STR
+                    { : s path ( __norm_import_path ( nurl_lex_val lex ) )
+                        ( nurl_lex_advance lex )
+                        : ~ s alias ``
+                        ? ( is_ident_tok ( nurl_lex_type lex ) )
+                        { = alias ( nurl_lex_val lex ) ( nurl_lex_advance lex ) }
+                        {}
+                        : s marker ( nurl_sym_get syms `__tn_scanned__` )
+                        ? ( str_contains_word marker path )
+                        {}
+                        { : s new_marker ? == 0 ( nurl_str_len marker ) path
+                            ( nurl_str_cat3 marker ` ` path )
+                            ( nurl_sym_def syms `__tn_scanned__` new_marker )
+                            : s src2 ( nurl_read_file path )
+                            : s eff_src2 ? != 0 ( nurl_str_len alias )
+                            { : s names ( collect_alias_targets src2 path )
+                                ( alias_rewrite_source src2 names ( nurl_str_cat alias `__` ) )
+                            }
+                            src2
+                            : i lex2 ( nurl_lex_new eff_src2 path )
+                            ( scan_type_names lex2 syms )
+                        }
+                    }
+                    {}
+                }
+                { ? & == depth 0 == tt TT_COLON
+                    { ( nurl_lex_advance lex )  // consume ':'
+                        ? == ( nurl_lex_type lex ) TT_TILDE { ( nurl_lex_advance lex ) } {}
+                        ? == ( nurl_lex_type lex ) TT_PIPE
+                        {  // enum `: | Name { ... }` — name follows the `|`
+                            ( nurl_lex_advance lex )
+                            ? == ( nurl_lex_type lex ) TT_IDENT
+                            { ( nurl_sym_def syms ( nurl_lex_val lex )
+                                ( nurl_str_cat `%` ( nurl_lex_val lex ) ) ) }
+                            {}
+                        }
+                        {  // struct iff a pure IDENT is immediately followed
+                           // by `{` (struct body) or `[` (generic params).
+                            ? == ( nurl_lex_type lex ) TT_IDENT
+                            { : i nxt ( nurl_lex_peek_type lex )
+                                ? | == nxt TT_LBRACE == nxt TT_LBRACK
+                                { ( nurl_sym_def syms ( nurl_lex_val lex )
+                                    ( nurl_str_cat `%` ( nurl_lex_val lex ) ) ) }
+                                {}
+                            }
+                            {}
+                        }
+                    }
+                    { ( nurl_lex_advance lex ) }
+                }
+            }
+        }
+    }
+}
+
 // ── Top-level loop ─────────────────────────────────────────────────
 
 @ parse_program i lex i syms i cg → v {
@@ -9646,6 +9792,8 @@
     ( scan_generic_structs lex0 syms )
     : i lex1 ( nurl_lex_new src path )
     ( scan_fn_sigs lex1 syms )
+    : i lex_tn ( nurl_lex_new src path )
+    ( scan_type_names lex_tn syms )
     : i lex ( nurl_lex_new src path )
     ( parse_program lex syms cg )
     // Emit all deferred generic instantiations collected during compilation.
