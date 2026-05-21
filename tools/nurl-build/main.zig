@@ -28,6 +28,7 @@ const Command = enum {
     marker,
     compare,
     buildwasm,
+    bench_csv,
     mcp_spec_drift,
     clean,
     startdev,
@@ -67,6 +68,7 @@ fn run(init: std.process.Init) !void {
             .marker => runMarker(io, args[2..]),
             .compare => runCompare(init, io, args[2..]),
             .buildwasm => runBuildWasm(init, args[2..]),
+            .bench_csv => runBenchCsv(init, args[2..]),
             .mcp_spec_drift => runMcpSpecDrift(init, args[2..]),
             .clean => runClean(init, args[2..]),
             .startdev => runStartDev(init, args[2..]),
@@ -79,6 +81,7 @@ fn run(init: std.process.Init) !void {
 
 fn parseCommand(name: []const u8) ?Command {
     if (std.mem.eql(u8, name, "fmt-idempotent")) return .fmt_idempotent;
+    if (std.mem.eql(u8, name, "bench-csv")) return .bench_csv;
     if (std.mem.eql(u8, name, "mcp-spec-drift")) return .mcp_spec_drift;
     return std.meta.stringToEnum(Command, name);
 }
@@ -374,6 +377,435 @@ fn runMcpSpecDrift(init: std.process.Init, args: []const []const u8) !void {
     std.debug.print("  https://modelcontextprotocol.io/specification/{s}/changelog\n", .{current});
     std.debug.print("\nTo re-pin, edit stdlib/ext/mcp.nu's mcp_protocol_version helper.\n", .{});
     std.process.exit(1);
+}
+
+const BenchStage = enum {
+    load,
+    filter,
+    sort,
+    write,
+    total,
+};
+
+const BenchRun = struct {
+    load: i64,
+    filter: i64,
+    sort: i64,
+    write: i64,
+    total: i64,
+};
+
+fn runBenchCsv(init: std.process.Init, args: []const []const u8) !void {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var root: []const u8 = ".";
+    var runs: usize = 5;
+    var append_history = true;
+    var label: ?[]const u8 = null;
+    var binary_path_arg: ?[]const u8 = null;
+    var python_path_arg: ?[]const u8 = null;
+    var data_path_arg: ?[]const u8 = null;
+
+    var i: usize = 0;
+    while (i < args.len) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--root")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            root = args[i];
+        } else if (std.mem.eql(u8, arg, "--no-history")) {
+            append_history = false;
+        } else if (std.mem.eql(u8, arg, "--label")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            label = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--label=")) {
+            label = arg["--label=".len..];
+        } else if (std.mem.eql(u8, arg, "--binary")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            binary_path_arg = args[i];
+        } else if (std.mem.eql(u8, arg, "--python")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            python_path_arg = args[i];
+        } else if (std.mem.eql(u8, arg, "--data")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            data_path_arg = args[i];
+        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            printBenchCsvUsage();
+            std.process.exit(0);
+        } else if (std.ascii.isDigit(arg[0])) {
+            runs = try std.fmt.parseUnsigned(usize, arg, 10);
+        } else {
+            std.debug.print("nurl-build: unknown bench-csv arg: {s}\n", .{arg});
+            return error.InvalidArgs;
+        }
+        i += 1;
+    }
+
+    if (runs == 0) {
+        std.debug.print("nurl-build: bench-csv run count must be >= 1\n", .{});
+        return error.InvalidArgs;
+    }
+
+    const root_abs = try absolutePath(arena, root);
+    const compare_dir = try std.fs.path.join(arena, &.{ root_abs, "compare" });
+    const nurl_binary_name = if (builtin.os.tag == .windows) "nurl_analysis.exe" else "nurl_analysis";
+    const nurl_binary = if (binary_path_arg) |path|
+        try resolvePathFromRoot(arena, root_abs, path)
+    else
+        try std.fs.path.join(arena, &.{ compare_dir, nurl_binary_name });
+    const python_path = if (python_path_arg) |path|
+        try resolvePathFromRoot(arena, root_abs, path)
+    else if (builtin.os.tag == .windows)
+        try std.fs.path.join(arena, &.{ compare_dir, ".venv", "Scripts", "python.exe" })
+    else
+        try std.fs.path.join(arena, &.{ compare_dir, ".venv", "bin", "python" });
+    const data_path = if (data_path_arg) |path|
+        try resolvePathFromRoot(arena, root_abs, path)
+    else
+        try std.fs.path.join(arena, &.{ compare_dir, "test_data.csv" });
+    const polars_script = try std.fs.path.join(arena, &.{ compare_dir, "polars_analysis.py" });
+    const history_path = try std.fs.path.join(arena, &.{ compare_dir, "HISTORY.md" });
+
+    if (!pathExists(io, nurl_binary)) {
+        std.debug.print("missing {s} — build with zig build bench-csv\n", .{nurl_binary});
+        return error.FileNotFound;
+    }
+    if (!pathExists(io, python_path)) {
+        std.debug.print("missing {s} — create venv and pip install polars\n", .{python_path});
+        return error.FileNotFound;
+    }
+    if (!pathExists(io, data_path)) {
+        std.debug.print("missing {s} — run: {s} compare/generate_data.py\n", .{ data_path, python_path });
+        return error.FileNotFound;
+    }
+    try ensureExists(io, polars_script, "compare/polars_analysis.py");
+
+    const data_bytes = try std.Io.Dir.cwd().readFileAlloc(io, data_path, gpa, .unlimited);
+    defer gpa.free(data_bytes);
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(data_bytes, &digest, .{});
+
+    var nurl_runs: std.ArrayList(BenchRun) = .empty;
+    defer nurl_runs.deinit(gpa);
+    var polars_runs: std.ArrayList(BenchRun) = .empty;
+    defer polars_runs.deinit(gpa);
+
+    std.debug.print("Running NURL {d}x ...\n", .{runs});
+    for (0..runs) |run_idx| {
+        const result = try std.process.run(gpa, io, .{
+            .argv = &.{nurl_binary},
+            .cwd = .{ .path = compare_dir },
+        });
+        defer {
+            gpa.free(result.stdout);
+            gpa.free(result.stderr);
+        }
+        try ensureSuccessWithStderr(result, "NURL benchmark run failed");
+        const parsed = try parseBenchRun(result.stdout, "NURL");
+        try nurl_runs.append(gpa, parsed);
+        printBenchRunLine(run_idx + 1, parsed);
+    }
+
+    std.debug.print("Running Polars {d}x ...\n", .{runs});
+    for (0..runs) |run_idx| {
+        const result = try std.process.run(gpa, io, .{
+            .argv = &.{ python_path, polars_script },
+            .cwd = .{ .path = compare_dir },
+        });
+        defer {
+            gpa.free(result.stdout);
+            gpa.free(result.stderr);
+        }
+        try ensureSuccessWithStderr(result, "Polars benchmark run failed");
+        const parsed = try parseBenchRun(result.stdout, "Polars");
+        try polars_runs.append(gpa, parsed);
+        printBenchRunLine(run_idx + 1, parsed);
+    }
+
+    std.debug.print("\n-- NURL --------------------------------------\n", .{});
+    try printBenchStats(gpa, "load", nurl_runs.items, .load);
+    try printBenchStats(gpa, "filter", nurl_runs.items, .filter);
+    try printBenchStats(gpa, "sort", nurl_runs.items, .sort);
+    try printBenchStats(gpa, "write", nurl_runs.items, .write);
+    try printBenchStats(gpa, "total", nurl_runs.items, .total);
+
+    std.debug.print("\n-- Polars ------------------------------------\n", .{});
+    try printBenchStats(gpa, "load", polars_runs.items, .load);
+    try printBenchStats(gpa, "filter", polars_runs.items, .filter);
+    try printBenchStats(gpa, "sort", polars_runs.items, .sort);
+    try printBenchStats(gpa, "write", polars_runs.items, .write);
+    try printBenchStats(gpa, "total", polars_runs.items, .total);
+
+    if (append_history) {
+        try appendBenchHistory(init, history_path, label, data_bytes.len, digest, runs, nurl_runs.items, polars_runs.items);
+        std.debug.print("\nAppended block to {s}\n", .{history_path});
+    }
+}
+
+fn printBenchCsvUsage() void {
+    std.debug.print(
+        "usage: nurl-build bench-csv [--root <path>] [--no-history] [--label <text>] [--binary <path>] [--python <path>] [--data <path>] [runs]\n",
+        .{},
+    );
+}
+
+fn parseBenchRun(output: []const u8, label: []const u8) !BenchRun {
+    var parsed = BenchRun{
+        .load = -1,
+        .filter = -1,
+        .sort = -1,
+        .write = -1,
+        .total = -1,
+    };
+
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \t\r");
+        if (line.len == 0) continue;
+        if (std.mem.startsWith(u8, line, "Loaded ")) {
+            parsed.load = try parseTrailingMs(line);
+        } else if (std.mem.startsWith(u8, line, "Filtered")) {
+            parsed.filter = try parseTrailingMs(line);
+        } else if (std.mem.startsWith(u8, line, "Sorted ")) {
+            parsed.sort = try parseTrailingMs(line);
+        } else if (std.mem.startsWith(u8, line, "Top-10 ")) {
+            parsed.write = try parseTrailingMs(line);
+        } else if (std.mem.startsWith(u8, line, "Total: ")) {
+            parsed.total = try parseTrailingMs(line);
+        }
+    }
+
+    if (parsed.load >= 0 and parsed.filter >= 0 and parsed.sort >= 0 and parsed.write >= 0 and parsed.total >= 0) {
+        return parsed;
+    }
+
+    std.debug.print("{s} benchmark output was missing one or more stage timings:\n{s}\n", .{ label, output });
+    return error.InvalidData;
+}
+
+fn parseTrailingMs(line: []const u8) !i64 {
+    var it = std.mem.tokenizeAny(u8, line, " \t");
+    var last_ms: ?[]const u8 = null;
+    while (it.next()) |token| {
+        if (std.mem.endsWith(u8, token, "ms")) {
+            last_ms = token;
+        }
+    }
+    const token = last_ms orelse return error.InvalidData;
+    return std.fmt.parseInt(i64, token[0 .. token.len - 2], 10);
+}
+
+fn printBenchRunLine(run_idx: usize, bench_run: BenchRun) void {
+    std.debug.print(
+        "  run {d}: load={d}ms filter={d}ms sort={d}ms write={d}ms total={d}ms\n",
+        .{ run_idx, bench_run.load, bench_run.filter, bench_run.sort, bench_run.write, bench_run.total },
+    );
+}
+
+fn printBenchStats(gpa: std.mem.Allocator, name: []const u8, runs: []const BenchRun, stage: BenchStage) !void {
+    const values = try collectBenchStageValues(gpa, runs, stage);
+    defer gpa.free(values);
+    std.debug.print("{s} min={d}ms median={d}ms\n", .{ name, minI64(values), medianI64(values) });
+}
+
+fn collectBenchStageValues(gpa: std.mem.Allocator, runs: []const BenchRun, stage: BenchStage) ![]i64 {
+    const values = try gpa.alloc(i64, runs.len);
+    for (runs, 0..) |bench_run, idx| {
+        values[idx] = benchStageValue(bench_run, stage);
+    }
+    return values;
+}
+
+fn benchStageValue(bench_run: BenchRun, stage: BenchStage) i64 {
+    return switch (stage) {
+        .load => bench_run.load,
+        .filter => bench_run.filter,
+        .sort => bench_run.sort,
+        .write => bench_run.write,
+        .total => bench_run.total,
+    };
+}
+
+fn minI64(values: []const i64) i64 {
+    var min_value = values[0];
+    for (values[1..]) |value| {
+        if (value < min_value) min_value = value;
+    }
+    return min_value;
+}
+
+fn medianI64(values: []i64) i64 {
+    std.sort.heap(i64, values, {}, lessThanI64);
+    if (values.len % 2 == 1) return values[values.len / 2];
+    return @divTrunc(values[(values.len / 2) - 1] + values[values.len / 2], 2);
+}
+
+fn lessThanI64(_: void, lhs: i64, rhs: i64) bool {
+    return lhs < rhs;
+}
+
+fn appendBenchHistory(
+    init: std.process.Init,
+    history_path: []const u8,
+    label: ?[]const u8,
+    data_bytes: usize,
+    digest: [32]u8,
+    runs: usize,
+    nurl_runs: []const BenchRun,
+    polars_runs: []const BenchRun,
+) !void {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+    const io = init.io;
+    const history_dir = std.fs.path.dirname(history_path) orelse return error.BadPathName;
+    const root_abs = try absolutePath(arena, ".");
+
+    const date = (try captureTrimmedCommandOutput(arena, gpa, io, &.{ "date", "-u", "+%Y-%m-%d %H:%M:%SZ" }, null)) orelse "unknown-date";
+    const sha = (try captureTrimmedCommandOutput(arena, gpa, io, &.{ "git", "-C", root_abs, "rev-parse", "--short", "HEAD" }, null)) orelse "no-git";
+    const dirty = try isGitDirty(gpa, io, root_abs);
+    const kernel = (try captureTrimmedCommandOutput(arena, gpa, io, &.{ "uname", "-srm" }, null)) orelse @tagName(builtin.os.tag);
+    const cpu = try detectCpuDescription(arena, gpa, io);
+    const digest_hex = std.fmt.bytesToHex(digest, .lower);
+
+    var block: std.Io.Writer.Allocating = .init(gpa);
+    defer block.deinit();
+
+    try block.writer.print("\n## {s} -- {s}{s}", .{ date, sha, if (dirty) "+dirty" else "" });
+    if (label) |text| {
+        try block.writer.print(" -- {s}", .{text});
+    }
+    try block.writer.print(
+        "\n- CPU: {s}\n- Kernel: {s}\n- Fixture: test_data.csv ({d} B, sha256={s}...)\n- Runs: {d} per implementation\n\n",
+        .{ cpu, kernel, data_bytes, digest_hex[0..16], runs },
+    );
+    try block.writer.writeAll("| Stage  | NURL min | NURL med | Polars min | Polars med | NURL/Polars med |\n");
+    try block.writer.writeAll("|--------|---------:|---------:|-----------:|-----------:|----------------:|\n");
+
+    inline for ([_]BenchStage{ .load, .filter, .sort, .write, .total }) |stage| {
+        const stage_name = switch (stage) {
+            .load => "load",
+            .filter => "filter",
+            .sort => "sort",
+            .write => "write",
+            .total => "total",
+        };
+        const nurl_values = try collectBenchStageValues(gpa, nurl_runs, stage);
+        defer gpa.free(nurl_values);
+        const polars_values = try collectBenchStageValues(gpa, polars_runs, stage);
+        defer gpa.free(polars_values);
+        const nurl_min = minI64(nurl_values);
+        const nurl_med = medianI64(nurl_values);
+        const polars_min = minI64(polars_values);
+        const polars_med = medianI64(polars_values);
+
+        if (polars_med > 0) {
+            const ratio_tenths = @divTrunc((nurl_med * 10) + @divTrunc(polars_med, 2), polars_med);
+            try block.writer.print(
+                "| {s:<6} | {d:>8} | {d:>8} | {d:>10} | {d:>10} | {d}.{d}x |\n",
+                .{ stage_name, nurl_min, nurl_med, polars_min, polars_med, @divTrunc(ratio_tenths, 10), @mod(ratio_tenths, 10) },
+            );
+        } else {
+            try block.writer.print(
+                "| {s:<6} | {d:>8} | {d:>8} | {d:>10} | {d:>10} | n/a |\n",
+                .{ stage_name, nurl_min, nurl_med, polars_min, polars_med },
+            );
+        }
+    }
+
+    const prior = if (pathExists(io, history_path))
+        try std.Io.Dir.cwd().readFileAlloc(io, history_path, gpa, .unlimited)
+    else
+        try gpa.dupe(u8, "");
+    defer gpa.free(prior);
+
+    try ensureDirPath(io, history_dir);
+    var merged: std.ArrayList(u8) = .empty;
+    defer merged.deinit(gpa);
+    try merged.appendSlice(gpa, prior);
+    try merged.appendSlice(gpa, block.written());
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = history_path,
+        .data = merged.items,
+    });
+}
+
+fn captureTrimmedCommandOutput(
+    arena: std.mem.Allocator,
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    argv: []const []const u8,
+    cwd: ?[]const u8,
+) !?[]const u8 {
+    const child_cwd: std.process.Child.Cwd = if (cwd) |path| .{ .path = path } else .inherit;
+    const result = std.process.run(gpa, io, .{
+        .argv = argv,
+        .cwd = child_cwd,
+    }) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    switch (result.term) {
+        .exited => |code| {
+            if (code != 0) return null;
+        },
+        else => return null,
+    }
+
+    const trimmed = std.mem.trim(u8, result.stdout, " \t\r\n");
+    const dup = try arena.dupe(u8, trimmed);
+    return dup;
+}
+
+fn isGitDirty(gpa: std.mem.Allocator, io: std.Io, root_abs: []const u8) !bool {
+    const result = std.process.run(gpa, io, .{
+        .argv = &.{ "git", "-C", root_abs, "diff", "--quiet" },
+    }) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    return switch (result.term) {
+        .exited => |code| code != 0,
+        else => false,
+    };
+}
+
+fn detectCpuDescription(
+    arena: std.mem.Allocator,
+    gpa: std.mem.Allocator,
+    io: std.Io,
+) ![]const u8 {
+    if (builtin.os.tag == .macos) {
+        if (try captureTrimmedCommandOutput(arena, gpa, io, &.{ "sysctl", "-n", "machdep.cpu.brand_string" }, null)) |cpu| {
+            return cpu;
+        }
+    }
+    if (builtin.os.tag == .linux) {
+        const cpuinfo = std.Io.Dir.cwd().readFileAlloc(io, "/proc/cpuinfo", gpa, .unlimited) catch null;
+        if (cpuinfo) |bytes| {
+            defer gpa.free(bytes);
+            var lines = std.mem.splitScalar(u8, bytes, '\n');
+            while (lines.next()) |line| {
+                if (std.mem.startsWith(u8, line, "model name")) {
+                    if (std.mem.indexOf(u8, line, ":")) |idx| {
+                        return try arena.dupe(u8, std.mem.trim(u8, line[idx + 1 ..], " \t\r"));
+                    }
+                }
+            }
+        }
+    }
+    return @tagName(builtin.cpu.arch);
 }
 
 fn lessThanString(_: void, lhs: []const u8, rhs: []const u8) bool {
@@ -1546,9 +1978,10 @@ fn ensureDirPath(io: std.Io, path: []const u8) !void {
     if (path.len == 0 or std.mem.eql(u8, path, ".")) return;
     if (pathExists(io, path)) return;
 
-    const parent = std.fs.path.dirname(path) orelse return error.BadPathName;
-    if (!std.mem.eql(u8, parent, path)) {
-        try ensureDirPath(io, parent);
+    if (std.fs.path.dirname(path)) |parent| {
+        if (parent.len != 0 and !std.mem.eql(u8, parent, path)) {
+            try ensureDirPath(io, parent);
+        }
     }
 
     if (std.fs.path.isAbsolute(path)) {

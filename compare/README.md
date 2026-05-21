@@ -18,13 +18,12 @@ python3 -m venv .venv
 sha256sum test_data.csv
 # expected: d00a0fd4509ea4a5c98ae4ff8c898a99a2abda8bbaf2a60e535d57aa611cec0b
 
-# 3. build the NURL benchmark binary
-cd .. && ./build.sh
-./nurl.sh -O2 compare/nurl_analysis.nu compare/nurl_analysis
-cd compare
+# 3. bootstrap the compiler/toolchain
+cd ..
+zig build bootstrap
 
-# 4. run the harness (5× each, appends a block to HISTORY.md)
-./run_bench.sh
+# 4. run the harness (builds compare/nurl_analysis, runs 5x each, appends HISTORY.md)
+zig build bench-csv
 ```
 
 ## What's in here
@@ -32,9 +31,9 @@ cd compare
 | File                   | Purpose                                                   |
 |------------------------|-----------------------------------------------------------|
 | `CSVROADMAP.md`        | Phased plan to make `csv.nu` production-ready             |
-| `HISTORY.md`           | Append-only bench log, one block per `run_bench.sh` call  |
+| `HISTORY.md`           | Append-only bench log, one block per `zig build bench-csv` call |
 | `PROFILE.md`           | `perf record/report` snapshots — top hot symbols          |
-| `run_bench.sh`         | Reproducible harness; computes min/median; appends history |
+| `run_bench.sh`         | Thin compatibility wrapper around `zig build bench-csv -- ...` |
 | `generate_data.py`     | Deterministic 1 M-row generator (seed `0xC0FFEE`)         |
 | `nurl_analysis.nu`     | NURL pipeline: load → filter → sort → top-10 → write      |
 | `polars_analysis.py`   | Same pipeline in Polars                                    |
@@ -53,7 +52,7 @@ Before pasting a comparison into a PR or commit:
    data is different — comparisons across runs are meaningless).
 2. The machine name appears in the `HISTORY.md` block. Bench numbers
    are not transferable across CPUs.
-3. `./run_bench.sh` was run *at least* 5 times in succession; report
+3. `zig build bench-csv` was run *at least* 5 times in succession; report
    the median, not the first run (which warms caches).
 4. No other CPU-bound process was running. `pidstat 1` should show the
    harness as the dominant consumer.
@@ -80,7 +79,7 @@ print-out cost). Polars's `total` is the same.
 ## Adding a new comparator
 
 If you add e.g. `pandas_analysis.py`, follow the existing output
-contract so `run_bench.sh` can parse it:
+contract so `zig build bench-csv` can parse it:
 
 ```
 Loaded N rows x M cols in <ms>ms

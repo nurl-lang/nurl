@@ -25,9 +25,11 @@ pushd "%SCRIPT_DIR%\..\.." >nul
 set "ROOT_DIR=%CD%"
 popd >nul
 
-set "NURLC=%ROOT_DIR%\build\nurlc.exe"
-set "RUNTIME=%ROOT_DIR%\stdlib\runtime.o"
-set "NURLBUILD=%ROOT_DIR%\build\nurl-build.exe"
+if not defined NURLC set "NURLC=%ROOT_DIR%\build\nurlc.exe"
+if not defined NURL_RUNTIME set "NURL_RUNTIME=%ROOT_DIR%\stdlib\runtime.o"
+if not defined NURL_LINK_HELPER set "NURL_LINK_HELPER=%ROOT_DIR%\build\nurl-build.exe"
+set "RUNTIME=%NURL_RUNTIME%"
+set "NURLBUILD=%NURL_LINK_HELPER%"
 
 if not exist "%NURLC%" (
     echo ERROR: nurlc not found at %NURLC% 1>&2

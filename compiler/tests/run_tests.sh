@@ -24,8 +24,8 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-NURLC="$ROOT_DIR/build/nurlc"
-RUNTIME="$ROOT_DIR/stdlib/runtime.o"
+NURLC="${NURLC:-$ROOT_DIR/build/nurlc}"
+RUNTIME="${NURL_RUNTIME:-$ROOT_DIR/stdlib/runtime.o}"
 
 if [[ ! -x "$NURLC" ]]; then
     echo "ERROR: nurlc not found at $NURLC" >&2
@@ -37,7 +37,7 @@ if [[ ! -f "$RUNTIME" ]]; then
     exit 2
 fi
 
-LINK_HELPER="$ROOT_DIR/build/nurl-build"
+LINK_HELPER="${NURL_LINK_HELPER:-$ROOT_DIR/build/nurl-build}"
 if [[ ! -x "$LINK_HELPER" ]]; then
     echo "ERROR: link helper not found at $LINK_HELPER" >&2
     echo "       Run: zig build nurl-build" >&2

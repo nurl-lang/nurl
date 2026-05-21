@@ -29,6 +29,12 @@ pub fn build(b: *std.Build) !void {
     const stage1_bin_path = buildBinaryPath(b, "nurlc_self", host_is_windows);
     const stage2_bin_path = buildBinaryPath(b, "nurlc_self2", host_is_windows);
     const final_compiler_path = buildBinaryPath(b, "nurlc", host_is_windows);
+    const lastgood_runtime_path = "stdlib/runtime.lastgood.o";
+    const lastgood_stage0_bin_path = buildBinaryPath(b, "nurlc_py_lastgood", host_is_windows);
+    const lastgood_stage1_bin_path = buildBinaryPath(b, "nurlc_self_lastgood", host_is_windows);
+    const lastgood_stage2_bin_path = buildBinaryPath(b, "nurlc_self2_lastgood", host_is_windows);
+    const lastgood_compiler_path = buildBinaryPath(b, "nurlc_lastgood", host_is_windows);
+    const compare_nurl_analysis_path = b.fmt("compare/nurl_analysis{s}", .{if (host_is_windows) ".exe" else ""});
     const root_compiler_path = rootBinaryPath(b, "nurlc", host_is_windows);
     const nurlfmt_path = buildBinaryPath(b, "nurlfmt", host_is_windows);
     const nurlpkg_path = buildBinaryPath(b, "nurlpkg", host_is_windows);
@@ -93,6 +99,28 @@ pub fn build(b: *std.Build) !void {
         cmd.step.dependOn(&runtime_cmd.step);
         break :blk cmd;
     };
+
+    const lastgood_runtime_cmd = addCcCommand(b, cfg.cc_tokens);
+    lastgood_runtime_cmd.setCwd(b.path("."));
+    lastgood_runtime_cmd.has_side_effects = true;
+    lastgood_runtime_cmd.step.dependOn(&sync_runtime_curl.step);
+    lastgood_runtime_cmd.step.dependOn(&sync_runtime_openssl.step);
+    lastgood_runtime_cmd.step.dependOn(&sync_runtime_sqlite3.step);
+    lastgood_runtime_cmd.step.dependOn(&sync_runtime_pq.step);
+    lastgood_runtime_cmd.step.dependOn(&sync_runtime_z.step);
+    lastgood_runtime_cmd.step.dependOn(&sync_runtime_zstd.step);
+    lastgood_runtime_cmd.addArg("-O2");
+    if (cfg.san) lastgood_runtime_cmd.addArgs(&.{
+        "-fsanitize=address,undefined",
+        "-fsanitize-address-use-after-scope",
+        "-fno-omit-frame-pointer",
+        "-fno-sanitize-recover=all",
+    });
+    lastgood_runtime_cmd.addArgs(cfg.curl.cflags);
+    lastgood_runtime_cmd.addArgs(cfg.openssl.cflags);
+    lastgood_runtime_cmd.addArgs(cfg.sqlite3.cflags);
+    lastgood_runtime_cmd.addArgs(cfg.zlib.cflags);
+    lastgood_runtime_cmd.addArgs(&.{ "-c", "stdlib/runtime.c", "-o", lastgood_runtime_path });
 
     const canvas_cmd = addCcCommand(b, cfg.cc_tokens);
     canvas_cmd.setCwd(b.path("."));
@@ -170,6 +198,78 @@ pub fn build(b: *std.Build) !void {
 
     const helper_step = b.step("nurl-build", b.fmt("Build {s}", .{helper_path}));
     helper_step.dependOn(&helper_copy.step);
+
+    const lastgood_stage0_ir = b.addSystemCommand(&.{ cfg.python, "compiler/nurlc.py", "--llvm", "compiler/nurlc_lastgood.nu" });
+    lastgood_stage0_ir.setCwd(b.path("."));
+    const lastgood_stage0_ll = lastgood_stage0_ir.captureStdOut(.{ .basename = "nurlc_py_lastgood.ll" });
+    const lastgood_stage0_ll_copy = addHelperCopyLazyStep(b, nurl_build_exe, lastgood_stage0_ll, "build/nurlc_py_lastgood.ll", false);
+    lastgood_stage0_ll_copy.step.dependOn(&ensure_build_dir.step);
+    lastgood_stage0_ll_copy.step.dependOn(&lastgood_stage0_ir.step);
+
+    const lastgood_stage0_link = addLinkStep(b, cfg, nurl_build_exe, lastgood_stage0_ll, lastgood_stage0_bin_path, .{
+        .runtime_override = lastgood_runtime_path,
+        .disable_lto = true,
+    });
+    lastgood_stage0_link.step.dependOn(&ensure_build_dir.step);
+    lastgood_stage0_link.step.dependOn(&lastgood_runtime_cmd.step);
+    lastgood_stage0_link.step.dependOn(&lastgood_stage0_ir.step);
+
+    const lastgood_stage1_ir = b.addSystemCommand(&.{ lastgood_stage0_bin_path, "compiler/nurlc_lastgood.nu" });
+    lastgood_stage1_ir.setCwd(b.path("."));
+    lastgood_stage1_ir.step.dependOn(&lastgood_stage0_link.step);
+    applySanBuildEnv(lastgood_stage1_ir, cfg.san);
+    const lastgood_stage1_ll = lastgood_stage1_ir.captureStdOut(.{ .basename = "nurlc_self_lastgood.ll" });
+    const lastgood_stage1_ll_copy = addHelperCopyLazyStep(b, nurl_build_exe, lastgood_stage1_ll, "build/nurlc_self_lastgood.ll", false);
+    lastgood_stage1_ll_copy.step.dependOn(&ensure_build_dir.step);
+    lastgood_stage1_ll_copy.step.dependOn(&lastgood_stage1_ir.step);
+
+    const lastgood_stage1_link = addLinkStep(b, cfg, nurl_build_exe, lastgood_stage1_ll, lastgood_stage1_bin_path, .{
+        .runtime_override = lastgood_runtime_path,
+        .disable_lto = true,
+    });
+    lastgood_stage1_link.step.dependOn(&ensure_build_dir.step);
+    lastgood_stage1_link.step.dependOn(&lastgood_runtime_cmd.step);
+    lastgood_stage1_link.step.dependOn(&lastgood_stage1_ir.step);
+
+    const lastgood_stage2_ir = b.addSystemCommand(&.{ lastgood_stage1_bin_path, "compiler/nurlc_lastgood.nu" });
+    lastgood_stage2_ir.setCwd(b.path("."));
+    lastgood_stage2_ir.step.dependOn(&lastgood_stage1_link.step);
+    applySanBuildEnv(lastgood_stage2_ir, cfg.san);
+    const lastgood_stage2_ll = lastgood_stage2_ir.captureStdOut(.{ .basename = "nurlc_self2_lastgood.ll" });
+    const lastgood_stage2_ll_copy = addHelperCopyLazyStep(b, nurl_build_exe, lastgood_stage2_ll, "build/nurlc_self2_lastgood.ll", false);
+    lastgood_stage2_ll_copy.step.dependOn(&ensure_build_dir.step);
+    lastgood_stage2_ll_copy.step.dependOn(&lastgood_stage2_ir.step);
+
+    const lastgood_stage2_link = addLinkStep(b, cfg, nurl_build_exe, lastgood_stage2_ll, lastgood_stage2_bin_path, .{
+        .runtime_override = lastgood_runtime_path,
+        .disable_lto = true,
+    });
+    lastgood_stage2_link.step.dependOn(&ensure_build_dir.step);
+    lastgood_stage2_link.step.dependOn(&lastgood_runtime_cmd.step);
+    lastgood_stage2_link.step.dependOn(&lastgood_stage2_ir.step);
+
+    const lastgood_fixed_point = addHelperCompareStep(b, nurl_build_exe, lastgood_stage1_ll, lastgood_stage2_ll);
+    lastgood_fixed_point.step.dependOn(&lastgood_stage1_ir.step);
+    lastgood_fixed_point.step.dependOn(&lastgood_stage2_ir.step);
+
+    const lastgood_compiler_copy = addHelperCopyStep(b, nurl_build_exe, lastgood_stage2_bin_path, lastgood_compiler_path, true);
+    lastgood_compiler_copy.step.dependOn(&lastgood_stage2_link.step);
+    lastgood_compiler_copy.step.dependOn(&lastgood_fixed_point.step);
+
+    const lastgood_tests = addScriptCommand(b, tests_runner, host_is_windows);
+    lastgood_tests.setCwd(b.path("."));
+    lastgood_tests.has_side_effects = true;
+    lastgood_tests.setEnvironmentVariable("NURLC", lastgood_compiler_path);
+    lastgood_tests.setEnvironmentVariable("NURL_RUNTIME", lastgood_runtime_path);
+    lastgood_tests.setEnvironmentVariable("NURL_LINK_HELPER", helper_path);
+    lastgood_tests.step.dependOn(&helper_copy.step);
+    lastgood_tests.step.dependOn(&lastgood_stage0_ll_copy.step);
+    lastgood_tests.step.dependOn(&lastgood_stage1_ll_copy.step);
+    lastgood_tests.step.dependOn(&lastgood_stage2_ll_copy.step);
+    lastgood_tests.step.dependOn(&lastgood_compiler_copy.step);
+
+    const bootstrap_lastgood_step = b.step("bootstrap-lastgood", "Bootstrap compiler/nurlc_lastgood.nu and run tests against it");
+    bootstrap_lastgood_step.dependOn(&lastgood_tests.step);
 
     const nurl_cmd = addHelperStep(b, nurl_build_exe, &.{"nurl"}, true);
     if (b.args) |args| {
@@ -251,6 +351,19 @@ pub fn build(b: *std.Build) !void {
         "nurl-lsp.ll",
         final_compiler_path,
     );
+    const compare_nurl_analysis_link = addToolBuildStep(
+        b,
+        cfg,
+        nurl_build_exe,
+        &root_compiler_copy.step,
+        &ensure_build_dir.step,
+        &runtime_cmd.step,
+        "compare/nurl_analysis.nu",
+        "build/nurl_analysis.ll",
+        compare_nurl_analysis_path,
+        "nurl_analysis.ll",
+        final_compiler_path,
+    );
 
     const fmt_step = b.step("nurlfmt", b.fmt("Build {s}", .{nurlfmt_path}));
     fmt_step.dependOn(&nurlfmt_link.step);
@@ -291,6 +404,14 @@ pub fn build(b: *std.Build) !void {
     }
     const mcp_spec_drift_step = b.step("mcp-spec-drift", "Check the pinned MCP protocol revision against the current spec");
     mcp_spec_drift_step.dependOn(&mcp_spec_drift_cmd.step);
+
+    const bench_csv_cmd = addHelperStep(b, nurl_build_exe, &.{"bench-csv"}, true);
+    if (b.args) |args| {
+        bench_csv_cmd.addArgs(args);
+    }
+    bench_csv_cmd.step.dependOn(&compare_nurl_analysis_link.step);
+    const bench_csv_step = b.step("bench-csv", "Run the CSV benchmark harness and optionally append compare/HISTORY.md");
+    bench_csv_step.dependOn(&bench_csv_cmd.step);
 
     b.getInstallStep().dependOn(tools_step);
 
@@ -518,12 +639,20 @@ fn addLinkStep(
         extra_obj: ?[]const u8 = null,
         extra_libs: []const []const u8 = &.{},
         opt_flag: []const u8 = "-O2",
+        runtime_override: ?[]const u8 = null,
+        disable_lto: bool = false,
     },
 ) *std.Build.Step.Run {
     const cmd = b.addRunArtifact(helper_exe);
     cmd.setCwd(b.path("."));
     cmd.has_side_effects = true;
     cmd.addArgs(&.{ "--opt", opts.opt_flag });
+    if (opts.disable_lto) {
+        cmd.addArg("--no-lto");
+    }
+    if (opts.runtime_override) |runtime_path| {
+        cmd.addArgs(&.{ "--runtime", runtime_path });
+    }
     if (cfg.san) {
         cmd.addArgs(&.{ "--flag", "-fsanitize=address,undefined" });
     }
