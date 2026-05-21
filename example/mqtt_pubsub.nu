@@ -1,12 +1,11 @@
-// example/mqtt_pubsub.nu — MQTT v5 publish + subscribe round-trip.
+// example/mqtt_pubsub.nu — MQTT v5 client end-to-end exercise.
 //
-// Connects to the broker, SUBSCRIBEs to a topic, PUBLISHes a message
-// to that same topic, then reads the message the broker echoes back
-// to us as a subscriber — proving publish and subscribe both work.
+// connect → subscribe → publish QoS 0 → receive the echo → publish
+// QoS 1 (PUBACK) → keep-alive ping → unsubscribe → disconnect, all
+// against a live broker.
 //
-//   broker   : emqx.homecloud.fi:8883  (TLS)
-//   topic    : nurl/pubsub/qwerty
-//   protocol : MQTT 5.0
+//   broker : emqx.homecloud.fi:8883  (TLS)
+//   topic  : nurl/pubsub/qwerty
 //
 // Build & run:
 //   ./nurl.sh example/mqtt_pubsub.nu example/mqtt_pubsub
@@ -20,62 +19,90 @@ $ `stdlib/ext/mqtt.nu`
 
     ( nurl_print `MQTT v5 pub/sub → emqx.homecloud.fi:8883 (TLS)\n` )
 
-    : !TcpConn NetErr o ( mqtt_open
+    : !MqttClient NetErr o ( mqtt_connect
         `emqx.homecloud.fi` 8883 `qwerty` `qwerty` `qwerty` )
     ?? o {
-        T c → {
+        T cl → {
             ( nurl_print `connected.\n` )
 
-            : !v NetErr sr ( mqtt_subscribe c topic )
+            : !v NetErr sr ( mqtt_subscribe cl topic )
             ?? sr {
-                T → {
-                    ( nurl_print `subscribed: ` ) ( nurl_print topic ) ( nurl_print `\n` )
-                }
+                T → { ( nurl_print `subscribed: ` ) ( nurl_print topic ) ( nurl_print `\n` ) }
                 F se → {
                     ( nurl_eprint `subscribe failed: ` )
                     ( nurl_eprint ( net_err_name se ) ) ( nurl_eprint `\n` )
-                    ( mqtt_disconnect c )
-                    ^ 1
+                    ( mqtt_disconnect cl ) ^ 1
                 }
             }
 
-            : !v NetErr pr ( mqtt_publish c topic msg )
+            : !v NetErr pr ( mqtt_publish cl topic msg )
             ?? pr {
-                T → {
-                    ( nurl_print `published: ` ) ( nurl_print msg ) ( nurl_print `\n` )
-                }
+                T → { ( nurl_print `published (QoS 0): ` ) ( nurl_print msg ) ( nurl_print `\n` ) }
                 F pe → {
                     ( nurl_eprint `publish failed: ` )
                     ( nurl_eprint ( net_err_name pe ) ) ( nurl_eprint `\n` )
-                    ( mqtt_disconnect c )
-                    ^ 1
+                    ( mqtt_disconnect cl ) ^ 1
                 }
             }
 
-            : !String NetErr rr ( mqtt_read_publish c )
+            : !MqttMessage NetErr rr ( mqtt_receive cl )
             ?? rr {
-                T payload → {
-                    ( nurl_print `received: ` )
-                    ( nurl_print ( string_data payload ) )
+                T m → {
+                    ( nurl_print `received [` )
+                    ( nurl_print ( string_data . m topic ) )
+                    ( nurl_print `]: ` )
+                    ( nurl_print ( string_data . m payload ) )
                     ( nurl_print `\n` )
-                    : i same ( nurl_str_eq ( string_data payload ) msg )
-                    ( string_free payload )
-                    ( mqtt_disconnect c )
+                    : i same ( nurl_str_eq ( string_data . m payload ) msg )
+                    ( string_free . m topic )
+                    ( string_free . m payload )
                     ? != 0 same {
-                        ( nurl_print `ROUND-TRIP OK — publish + subscribe verified.\n` )
-                        ^ 0
+                        ( nurl_print `QoS 0 round-trip OK.\n` )
                     } {
                         ( nurl_print `payload mismatch.\n` )
-                        ^ 1
+                        ( mqtt_disconnect cl ) ^ 1
                     }
                 }
                 F re → {
                     ( nurl_eprint `receive failed: ` )
                     ( nurl_eprint ( net_err_name re ) ) ( nurl_eprint `\n` )
-                    ( mqtt_disconnect c )
-                    ^ 1
+                    ( mqtt_disconnect cl ) ^ 1
                 }
             }
+
+            : !v NetErr q1 ( mqtt_publish1 cl `nurl/pubsub/qwerty/qos1` `qos1 payload` )
+            ?? q1 {
+                T → { ( nurl_print `published (QoS 1) — PUBACK received.\n` ) }
+                F qe → {
+                    ( nurl_eprint `QoS 1 publish failed: ` )
+                    ( nurl_eprint ( net_err_name qe ) ) ( nurl_eprint `\n` )
+                    ( mqtt_disconnect cl ) ^ 1
+                }
+            }
+
+            : !v NetErr pg ( mqtt_ping cl )
+            ?? pg {
+                T → { ( nurl_print `keep-alive ping → PINGRESP OK.\n` ) }
+                F ge → {
+                    ( nurl_eprint `ping failed: ` )
+                    ( nurl_eprint ( net_err_name ge ) ) ( nurl_eprint `\n` )
+                    ( mqtt_disconnect cl ) ^ 1
+                }
+            }
+
+            : !v NetErr us ( mqtt_unsubscribe cl topic )
+            ?? us {
+                T → { ( nurl_print `unsubscribed.\n` ) }
+                F ue → {
+                    ( nurl_eprint `unsubscribe failed: ` )
+                    ( nurl_eprint ( net_err_name ue ) ) ( nurl_eprint `\n` )
+                    ( mqtt_disconnect cl ) ^ 1
+                }
+            }
+
+            ( mqtt_disconnect cl )
+            ( nurl_print `ALL OK — connect · sub · pub QoS0+1 · receive · ping · unsub.\n` )
+            ^ 0
         }
         F e → {
             ( nurl_eprint `connect failed: ` )
