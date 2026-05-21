@@ -3,23 +3,28 @@
 // Copyright (c) 2026 The NURL Project Developers
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
-// Scope (this revision): open a TLS connection to a broker, send an
-// MQTT 5.0 CONNECT packet, read CONNACK, and report the reason code.
-// That is the "can we reach and authenticate against a broker" core;
-// PUBLISH / SUBSCRIBE / keep-alive build on the same packet codec and
-// are left for a later revision.
+// Scope (this revision): connect (TLS) + CONNECT/CONNACK, then
+// PUBLISH and SUBSCRIBE at QoS 0 plus reading inbound PUBLISH packets.
+// QoS 1/2 acknowledgement state machines and keep-alive PINGREQ build
+// on the same codec and are left for a later revision.
 //
 // MQTT runs over a single TCP connection (1883 plain, 8883 TLS). The
 // client dials OUT to the broker, so it needs client-side connect —
 // `nurl_tcp_connect` / `nurl_tcp_connect_tls`, runtime.c §18b/§18c,
 // declared below via the `&` FFI. Everything else (packet framing,
-// varint length, CONNACK parse) is pure NURL on `( Vec u )`.
+// varint length, CONNACK / PUBLISH parse) is pure NURL on `( Vec u )`.
 //
 // API:
 //   ( tcp_connect_tls   s host i port b verify )                → ! TcpConn NetErr
 //   ( mqtt_connect_tls  s host i port s client_id s user s pass) → ! i NetErr
-//                       the Ok value is the CONNACK reason code
-//                       (0 = Success; 0x80.. = broker refused).
+//                       Ok = CONNACK reason code; connection closed.
+//   ( mqtt_open         s host i port s client_id s user s pass) → ! TcpConn NetErr
+//                       connect + handshake, connection LEFT OPEN.
+//   ( mqtt_subscribe    TcpConn c s topic )                      → ! v NetErr
+//   ( mqtt_publish      TcpConn c s topic s payload )            → ! v NetErr   (QoS 0)
+//   ( mqtt_read_publish TcpConn c )                              → ! String NetErr
+//                       Ok = payload of the next inbound PUBLISH.
+//   ( mqtt_disconnect   TcpConn c )                              → v
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/bytes.nu`
@@ -202,4 +207,188 @@ $ `stdlib/core/vec.nu`
         }
         F e → { ^ @ !i NetErr { F e } }
     }
+}
+
+// ── pub / sub ────────────────────────────────────────────────────────
+
+// Decoded MQTT Variable Byte Integer: the value plus how many bytes it
+// occupied on the wire (so the caller can advance its cursor).
+: MqttVarint { i value i nbytes }
+
+// Decode a Variable Byte Integer from `v` starting at byte `off`.
+@ __mqtt_decode_varint ( Vec u ) v i off → MqttVarint {
+    : ~ i value 0
+    : ~ i mult 1
+    : ~ i pos off
+    : ~ i count 0
+    : ~ b done F
+    ~ ! done {
+        : i b ( __mqtt_byte v pos )
+        ? < b 0 {
+            = done T
+        } {
+            : i digit & b 127
+            = value + value * digit mult
+            = mult * mult 128
+            = pos + pos 1
+            = count + count 1
+            ? == & b 128 0 { = done T } {}
+            ? > count 4 { = done T } {}
+        }
+    }
+    ^ @ MqttVarint { value count }
+}
+
+// Connect to a broker over TLS and run the MQTT 5.0 CONNECT handshake,
+// leaving the connection OPEN for publish / subscribe. A non-zero
+// CONNACK reason code is surfaced as Err(NetOther) — the Ok value is a
+// live, authenticated connection.
+@ mqtt_open s host i port s client_id s username s password → !TcpConn NetErr {
+    : !TcpConn NetErr cr ( tcp_connect_tls host port F )
+    ?? cr {
+        T c → {
+            ( tcp_set_timeout c 10000 )
+            : ( Vec u ) pkt ( vec_with_cap [u] 80 )
+            ( mqtt_encode_connect pkt client_id username password 60 )
+            : !v NetErr wr ( tcp_write_all c pkt )
+            ( vec_free [u] pkt )
+            ?? wr {
+                T → {}
+                F we → { ( tcp_close_conn c ) ^ @ !TcpConn NetErr { F we } }
+            }
+            : !( Vec u ) NetErr rd ( tcp_read_chunk c 256 )
+            ?? rd {
+                T resp → {
+                    : i reason ( mqtt_connack_reason resp )
+                    ( vec_free [u] resp )
+                    ? == reason 0 {
+                        ^ @ !TcpConn NetErr { T c }
+                    } {
+                        ( tcp_close_conn c )
+                        ^ @ !TcpConn NetErr { F # NetErr NetOther }
+                    }
+                }
+                F re → { ( tcp_close_conn c ) ^ @ !TcpConn NetErr { F re } }
+            }
+        }
+        F e → { ^ @ !TcpConn NetErr { F e } }
+    }
+}
+
+// SUBSCRIBE to a single topic filter at QoS 0, then read + check the
+// SUBACK. Variable header: packet id (1) + property length (0).
+// Payload: topic filter + one subscription-options byte (0 = QoS 0).
+@ mqtt_subscribe TcpConn c s topic → !v NetErr {
+    : ( Vec u ) vh ( vec_with_cap [u] 8 )
+    ( bytes_push_u16_be vh 1 )
+    ( vec_push [u] vh # u 0 )
+
+    : ( Vec u ) pl ( vec_with_cap [u] 32 )
+    ( __mqtt_put_str pl topic )
+    ( vec_push [u] pl # u 0 )
+
+    : ( Vec u ) pkt ( vec_with_cap [u] 48 )
+    ( vec_push [u] pkt # u 130 )
+    : i remlen + ( vec_len [u] vh ) ( vec_len [u] pl )
+    ( __mqtt_put_varint pkt remlen )
+    ( vec_extend [u] pkt vh )
+    ( vec_extend [u] pkt pl )
+
+    : !v NetErr w ( tcp_write_all c pkt )
+    ( vec_free [u] vh )
+    ( vec_free [u] pl )
+    ( vec_free [u] pkt )
+    ?? w {
+        T → {}
+        F we → { ^ @ !v NetErr { F we } }
+    }
+
+    : !( Vec u ) NetErr rd ( tcp_read_chunk c 64 )
+    ?? rd {
+        T resp → {
+            : i b0 ( __mqtt_byte resp 0 )
+            : i n ( vec_len [u] resp )
+            : i rc ? > n 0 ( __mqtt_byte resp - n 1 ) 255
+            ( vec_free [u] resp )
+            // SUBACK type is 9 (0x90); trailing reason code < 0x80 = granted.
+            ? & == & b0 240 144 < rc 128 {
+                ^ @ !v NetErr { T 0 }
+            } {
+                ^ @ !v NetErr { F # NetErr NetOther }
+            }
+        }
+        F re → { ^ @ !v NetErr { F re } }
+    }
+}
+
+// PUBLISH `payload` to `topic` at QoS 0 (fire-and-forget, no PUBACK).
+// Fixed header 0x30; variable header = topic name + property length 0;
+// the payload is the rest of the packet (no length prefix).
+@ mqtt_publish TcpConn c s topic s payload → !v NetErr {
+    : ( Vec u ) vh ( vec_with_cap [u] 32 )
+    ( __mqtt_put_str vh topic )
+    ( vec_push [u] vh # u 0 )
+
+    : i plen ( nurl_str_len payload )
+    : ( Vec u ) pkt ( vec_with_cap [u] 64 )
+    ( vec_push [u] pkt # u 48 )
+    : i remlen + ( vec_len [u] vh ) plen
+    ( __mqtt_put_varint pkt remlen )
+    ( vec_extend [u] pkt vh )
+    ( bytes_extend_str pkt payload )
+
+    : !v NetErr w ( tcp_write_all c pkt )
+    ( vec_free [u] vh )
+    ( vec_free [u] pkt )
+    ^ w
+}
+
+// Read the next inbound PUBLISH packet and return its payload. Parses
+// the fixed header, Remaining Length, topic name, the (QoS>0-only)
+// packet id, and the v5 property block — whatever the broker tacks on
+// — to land precisely on the payload bytes.
+@ mqtt_read_publish TcpConn c → !String NetErr {
+    : !( Vec u ) NetErr rd ( tcp_read_chunk c 2048 )
+    ?? rd {
+        T pkt → {
+            : i n ( vec_len [u] pkt )
+            : i b0 ( __mqtt_byte pkt 0 )
+            // type 3 (PUBLISH) = high nibble 0x30
+            ? | < n 2 != & b0 240 48 {
+                ( vec_free [u] pkt )
+                ^ @ !String NetErr { F # NetErr NetOther }
+            } {}
+            : i qos & >> b0 1 3
+            : MqttVarint rl ( __mqtt_decode_varint pkt 1 )
+            : i hdr + 1 . rl nbytes
+            : i end + hdr . rl value
+            // topic name: 2-byte big-endian length + bytes
+            : i th ( __mqtt_byte pkt hdr )
+            : i tl ( __mqtt_byte pkt + hdr 1 )
+            : i tlen + * th 256 tl
+            : ~ i p + + hdr 2 tlen
+            // packet identifier — present only at QoS > 0
+            ? > qos 0 { = p + p 2 } {}
+            // v5 property block: length varint + that many bytes
+            : MqttVarint pr ( __mqtt_decode_varint pkt p )
+            = p + p + . pr nbytes . pr value
+            // payload = [p, end)
+            : String out ( string_with_cap 32 )
+            : ~ i k p
+            ~ < k end {
+                : i byte ( __mqtt_byte pkt k )
+                ? >= byte 0 { ( string_push_char out byte ) } {}
+                = k + k 1
+            }
+            ( vec_free [u] pkt )
+            ^ @ !String NetErr { T out }
+        }
+        F e → { ^ @ !String NetErr { F e } }
+    }
+}
+
+// Send a Normal-disconnection DISCONNECT and close the socket.
+@ mqtt_disconnect TcpConn c → v {
+    ( __mqtt_send_disconnect c )
+    ( tcp_close_conn c )
 }
