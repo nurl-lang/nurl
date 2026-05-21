@@ -88,16 +88,12 @@ set "DO_BUILD=0"
 if "%FORCE%"=="1" set "DO_BUILD=1"
 if not exist "%SCRIPT_DIR%\build\nurlc.exe" set "DO_BUILD=1"
 if "%DO_BUILD%"=="1" (
-    echo   build.bat ^(this can take a minute^)...
+    echo   zig build bootstrap ^(this can take a minute^)...
     set "BUILD_LOG=%TEMP%\nurl_install_build_%RANDOM%%RANDOM%.log"
-    call "%SCRIPT_DIR%\build.bat" > "!BUILD_LOG!" 2>&1
-    REM build.bat exits non-zero when the variadic_ffi snapshot drifts,
-    REM but still produces build\nurlc.exe. Accept the build as long as
-    REM the artefact exists; the test diff is platform-non-determinism
-    REM that install.bat shouldn't gate on.
+    zig build bootstrap > "!BUILD_LOG!" 2>&1
     if not exist "%SCRIPT_DIR%\build\nurlc.exe" (
         powershell -NoProfile -Command "Get-Content -LiteralPath '!BUILD_LOG!' -Tail 30"
-        call :die "build.bat failed (full log: !BUILD_LOG!)"
+        call :die "zig build bootstrap failed (full log: !BUILD_LOG!)"
         popd >nul
         exit /b 1
     )
@@ -114,10 +110,10 @@ if "%FORCE%"=="1" set "DO_LSP=1"
 if not exist "%SCRIPT_DIR%\build\nurl-lsp.exe" set "DO_LSP=1"
 if "%DO_LSP%"=="1" (
     set "LSP_LOG=%TEMP%\nurl_install_lsp_%RANDOM%%RANDOM%.log"
-    call "%SCRIPT_DIR%\tools\nurl-lsp\build.bat" > "!LSP_LOG!" 2>&1
+    zig build nurl-lsp > "!LSP_LOG!" 2>&1
     if errorlevel 1 (
         powershell -NoProfile -Command "Get-Content -LiteralPath '!LSP_LOG!' -Tail 30"
-        call :die "tools\nurl-lsp\build.bat failed (full log: !LSP_LOG!)"
+        call :die "zig build nurl-lsp failed (full log: !LSP_LOG!)"
         popd >nul
         exit /b 1
     )

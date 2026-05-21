@@ -23,6 +23,18 @@ const RuntimeConfig = struct {
 pub fn build(b: *std.Build) !void {
     const san = b.option(bool, "san", "Build the compiler/runtime with AddressSanitizer + UBSan") orelse false;
     const cfg = detectRuntimeConfig(b, san);
+    const host_is_windows = b.graph.host.result.os.tag == .windows;
+    const helper_path = buildBinaryPath(b, "nurl-build", host_is_windows);
+    const stage0_bin_path = buildBinaryPath(b, "nurlc_py", host_is_windows);
+    const stage1_bin_path = buildBinaryPath(b, "nurlc_self", host_is_windows);
+    const stage2_bin_path = buildBinaryPath(b, "nurlc_self2", host_is_windows);
+    const final_compiler_path = buildBinaryPath(b, "nurlc", host_is_windows);
+    const root_compiler_path = rootBinaryPath(b, "nurlc", host_is_windows);
+    const nurlfmt_path = buildBinaryPath(b, "nurlfmt", host_is_windows);
+    const nurlpkg_path = buildBinaryPath(b, "nurlpkg", host_is_windows);
+    const nurllsp_path = buildBinaryPath(b, "nurl-lsp", host_is_windows);
+    const tests_runner = if (host_is_windows) "compiler/tests/run_tests.bat" else "compiler/tests/run_tests.sh";
+    const san_tests_runner = "compiler/tests/run_san_tests.sh";
     const nurl_build_exe = b.addExecutable(.{
         .name = "nurl-build",
         .root_module = b.createModule(.{
@@ -33,7 +45,7 @@ pub fn build(b: *std.Build) !void {
     });
 
     const ensure_build_dir = addHelperStep(b, nurl_build_exe, &.{ "mkdir", "build" }, true);
-    const helper_copy = addHelperCopyLazyStep(b, nurl_build_exe, nurl_build_exe.getEmittedBin(), "build/nurl-build", true);
+    const helper_copy = addHelperCopyLazyStep(b, nurl_build_exe, nurl_build_exe.getEmittedBin(), helper_path, true);
     helper_copy.step.dependOn(&ensure_build_dir.step);
     helper_copy.step.dependOn(&nurl_build_exe.step);
     const sync_runtime_nolto = addMarkerSyncStep(b, nurl_build_exe, "stdlib/runtime.nolto", !cfg.use_lto);
@@ -100,12 +112,12 @@ pub fn build(b: *std.Build) !void {
     stage0_ll_copy.step.dependOn(&ensure_build_dir.step);
     stage0_ll_copy.step.dependOn(&stage0_ir.step);
 
-    const stage0_link = addLinkStep(b, cfg, nurl_build_exe, stage0_ll, "build/nurlc_py", .{});
+    const stage0_link = addLinkStep(b, cfg, nurl_build_exe, stage0_ll, stage0_bin_path, .{});
     stage0_link.step.dependOn(&ensure_build_dir.step);
     stage0_link.step.dependOn(&runtime_cmd.step);
     stage0_link.step.dependOn(&stage0_ir.step);
 
-    const stage1_ir = b.addSystemCommand(&.{ "./build/nurlc_py", "compiler/nurlc.nu" });
+    const stage1_ir = b.addSystemCommand(&.{ stage0_bin_path, "compiler/nurlc.nu" });
     stage1_ir.setCwd(b.path("."));
     stage1_ir.step.dependOn(&stage0_link.step);
     applySanBuildEnv(stage1_ir, cfg.san);
@@ -114,12 +126,12 @@ pub fn build(b: *std.Build) !void {
     stage1_ll_copy.step.dependOn(&ensure_build_dir.step);
     stage1_ll_copy.step.dependOn(&stage1_ir.step);
 
-    const stage1_link = addLinkStep(b, cfg, nurl_build_exe, stage1_ll, "build/nurlc_self", .{});
+    const stage1_link = addLinkStep(b, cfg, nurl_build_exe, stage1_ll, stage1_bin_path, .{});
     stage1_link.step.dependOn(&ensure_build_dir.step);
     stage1_link.step.dependOn(&runtime_cmd.step);
     stage1_link.step.dependOn(&stage1_ir.step);
 
-    const stage2_ir = b.addSystemCommand(&.{ "./build/nurlc_self", "compiler/nurlc.nu" });
+    const stage2_ir = b.addSystemCommand(&.{ stage1_bin_path, "compiler/nurlc.nu" });
     stage2_ir.setCwd(b.path("."));
     stage2_ir.step.dependOn(&stage1_link.step);
     applySanBuildEnv(stage2_ir, cfg.san);
@@ -128,7 +140,7 @@ pub fn build(b: *std.Build) !void {
     stage2_ll_copy.step.dependOn(&ensure_build_dir.step);
     stage2_ll_copy.step.dependOn(&stage2_ir.step);
 
-    const stage2_link = addLinkStep(b, cfg, nurl_build_exe, stage2_ll, "build/nurlc_self2", .{});
+    const stage2_link = addLinkStep(b, cfg, nurl_build_exe, stage2_ll, stage2_bin_path, .{});
     stage2_link.step.dependOn(&ensure_build_dir.step);
     stage2_link.step.dependOn(&runtime_cmd.step);
     stage2_link.step.dependOn(&stage2_ir.step);
@@ -137,11 +149,14 @@ pub fn build(b: *std.Build) !void {
     fixed_point.step.dependOn(&stage1_ir.step);
     fixed_point.step.dependOn(&stage2_ir.step);
 
-    const final_compiler_copy = addHelperCopyStep(b, nurl_build_exe, "build/nurlc_self2", "build/nurlc", true);
+    const final_compiler_copy = addHelperCopyStep(b, nurl_build_exe, stage2_bin_path, final_compiler_path, true);
     final_compiler_copy.step.dependOn(&stage2_link.step);
     final_compiler_copy.step.dependOn(&fixed_point.step);
 
-    const root_compiler_copy = addHelperSymlinkStep(b, nurl_build_exe, "build/nurlc", "nurlc");
+    const root_compiler_copy = if (host_is_windows)
+        addHelperCopyStep(b, nurl_build_exe, final_compiler_path, root_compiler_path, true)
+    else
+        addHelperSymlinkStep(b, nurl_build_exe, final_compiler_path, root_compiler_path);
     root_compiler_copy.step.dependOn(&final_compiler_copy.step);
 
     const bootstrap_step = b.step("bootstrap", "Build the runtime and self-hosted compiler");
@@ -153,7 +168,7 @@ pub fn build(b: *std.Build) !void {
     bootstrap_step.dependOn(&stage2_ll_copy.step);
     bootstrap_step.dependOn(&root_compiler_copy.step);
 
-    const helper_step = b.step("nurl-build", "Build build/nurl-build");
+    const helper_step = b.step("nurl-build", b.fmt("Build {s}", .{helper_path}));
     helper_step.dependOn(&helper_copy.step);
 
     const nurlfmt_link = addToolBuildStep(
@@ -165,8 +180,9 @@ pub fn build(b: *std.Build) !void {
         &runtime_cmd.step,
         "tools/nurlfmt/nurlfmt.nu",
         "build/nurlfmt.ll",
-        "build/nurlfmt",
+        nurlfmt_path,
         "nurlfmt.ll",
+        final_compiler_path,
     );
     const nurlpkg_link = addToolBuildStep(
         b,
@@ -177,8 +193,9 @@ pub fn build(b: *std.Build) !void {
         &runtime_cmd.step,
         "tools/nurlpkg/main.nu",
         "build/nurlpkg.ll",
-        "build/nurlpkg",
+        nurlpkg_path,
         "nurlpkg.ll",
+        final_compiler_path,
     );
     const nurllsp_link = addToolBuildStep(
         b,
@@ -189,17 +206,18 @@ pub fn build(b: *std.Build) !void {
         &runtime_cmd.step,
         "tools/nurl-lsp/main.nu",
         "build/nurl-lsp.ll",
-        "build/nurl-lsp",
+        nurllsp_path,
         "nurl-lsp.ll",
+        final_compiler_path,
     );
 
-    const fmt_step = b.step("nurlfmt", "Build build/nurlfmt");
+    const fmt_step = b.step("nurlfmt", b.fmt("Build {s}", .{nurlfmt_path}));
     fmt_step.dependOn(&nurlfmt_link.step);
 
-    const pkg_step = b.step("nurlpkg", "Build build/nurlpkg");
+    const pkg_step = b.step("nurlpkg", b.fmt("Build {s}", .{nurlpkg_path}));
     pkg_step.dependOn(&nurlpkg_link.step);
 
-    const lsp_step = b.step("nurl-lsp", "Build build/nurl-lsp");
+    const lsp_step = b.step("nurl-lsp", b.fmt("Build {s}", .{nurllsp_path}));
     lsp_step.dependOn(&nurllsp_link.step);
 
     const tools_step = b.step("tools", "Build nurlfmt, nurlpkg, and nurl-lsp");
@@ -210,7 +228,7 @@ pub fn build(b: *std.Build) !void {
 
     b.getInstallStep().dependOn(tools_step);
 
-    const tests = b.addSystemCommand(&.{b.path("compiler/tests/run_tests.sh").getPath(b)});
+    const tests = addScriptCommand(b, tests_runner, host_is_windows);
     tests.setCwd(b.path("."));
     tests.has_side_effects = true;
     tests.step.dependOn(tools_step);
@@ -218,15 +236,17 @@ pub fn build(b: *std.Build) !void {
     const update_lastgood = addHelperCopyStep(b, nurl_build_exe, "compiler/nurlc.nu", "compiler/nurlc_lastgood.nu", false);
     update_lastgood.step.dependOn(&tests.step);
 
-    const check_step = b.step("check", "Bootstrap the project, build tools, and run compiler/tests/run_tests.sh");
+    const check_step = b.step("check", b.fmt("Bootstrap the project, build tools, and run {s}", .{tests_runner}));
     check_step.dependOn(&update_lastgood.step);
 
-    const san_tests = b.addSystemCommand(&.{b.path("compiler/tests/run_san_tests.sh").getPath(b)});
-    san_tests.setCwd(b.path("."));
-    san_tests.has_side_effects = true;
-    san_tests.step.dependOn(tools_step);
-    const san_test_step = b.step("san-test", "Run compiler/tests/run_san_tests.sh after a sanitized build (-Dsan=true)");
-    san_test_step.dependOn(&san_tests.step);
+    if (!host_is_windows) {
+        const san_tests = addScriptCommand(b, san_tests_runner, false);
+        san_tests.setCwd(b.path("."));
+        san_tests.has_side_effects = true;
+        san_tests.step.dependOn(tools_step);
+        const san_test_step = b.step("san-test", b.fmt("Run {s} after a sanitized build (-Dsan=true)", .{san_tests_runner}));
+        san_test_step.dependOn(&san_tests.step);
+    }
 }
 
 fn detectRuntimeConfig(b: *std.Build, san: bool) RuntimeConfig {
@@ -464,8 +484,9 @@ fn addToolBuildStep(
     ll_output_path: []const u8,
     bin_output_path: []const u8,
     ll_basename: []const u8,
+    compiler_bin_path: []const u8,
 ) *std.Build.Step.Run {
-    const ir = b.addSystemCommand(&.{ "./build/nurlc", source_path });
+    const ir = b.addSystemCommand(&.{ compiler_bin_path, source_path });
     ir.setCwd(b.path("."));
     ir.step.dependOn(compiler_ready);
     applySanBuildEnv(ir, cfg.san);
@@ -493,4 +514,20 @@ fn applySanBuildEnv(cmd: *std.Build.Step.Run, san: bool) void {
 fn fail(comptime fmt: []const u8, args: anytype) noreturn {
     std.debug.print(fmt ++ "\n", args);
     std.process.exit(1);
+}
+
+fn buildBinaryPath(b: *std.Build, name: []const u8, host_is_windows: bool) []const u8 {
+    return b.fmt("build/{s}{s}", .{ name, if (host_is_windows) ".exe" else "" });
+}
+
+fn rootBinaryPath(b: *std.Build, name: []const u8, host_is_windows: bool) []const u8 {
+    return b.fmt("{s}{s}", .{ name, if (host_is_windows) ".exe" else "" });
+}
+
+fn addScriptCommand(b: *std.Build, relative_path: []const u8, host_is_windows: bool) *std.Build.Step.Run {
+    if (host_is_windows) {
+        const cmd_exe = resolveProgram(b, null, &.{ "cmd.exe", "cmd" }, &.{});
+        return b.addSystemCommand(&.{ cmd_exe, "/c", b.path(relative_path).getPath(b) });
+    }
+    return b.addSystemCommand(&.{b.path(relative_path).getPath(b)});
 }

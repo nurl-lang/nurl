@@ -8,7 +8,7 @@ REM
 REM  Usage:  nurlfmt.bat [OPTIONS] [FILE...]
 REM
 REM  Forwards all arguments to build\nurlfmt.exe. Builds the binary
-REM  on first run via tools\nurlfmt\build.bat if it is missing.
+REM  on first run via `zig build nurlfmt` if it is missing.
 REM
 REM  See docs/FORMAT.md for the formatting specification and the
 REM  full CLI surface.
@@ -23,8 +23,11 @@ set "NURLFMT=%SCRIPT_DIR%\build\nurlfmt.exe"
 
 if not exist "%NURLFMT%" (
     echo [nurlfmt.bat] build\nurlfmt.exe missing - bootstrapping... 1>&2
-    call "%SCRIPT_DIR%\tools\nurlfmt\build.bat"
-    if errorlevel 1 (
+    pushd "%SCRIPT_DIR%" >nul
+    zig build nurlfmt
+    set "RC=%ERRORLEVEL%"
+    popd >nul
+    if not "%RC%"=="0" (
         echo [nurlfmt.bat] bootstrap failed 1>&2
         exit /b 1
     )
