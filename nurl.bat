@@ -25,8 +25,7 @@ REM
 REM  Note: cmd.exe splits on `=`, so `--emit-ir` is the canonical form.
 REM  `--emit=ir` also works if quoted: nurl.bat "--emit=ir" file.nu
 REM
-REM  Requires nurlc.exe and stdlib\runtime.o in the same
-REM  directory as this script (or nurlc.exe in PATH).
+REM  Requires zig on PATH for first-run bootstrap of build\nurl-build.exe.
 REM ============================================================
 
 REM ── Parse leading flags ──────────────────────────────────────
@@ -114,10 +113,25 @@ if not exist "%NURLBUILD%" (
         set "ZIG=zig"
     )
     where "%ZIG%" >nul 2>&1
-    if not errorlevel 1 (
-        if not exist "%SCRIPTDIR%build" mkdir "%SCRIPTDIR%build"
-        "%ZIG%" build-exe "%SCRIPTDIR%tools\nurl-build\main.zig" -O ReleaseSafe -femit-bin="%NURLBUILD%" >nul 2>&1
+    if errorlevel 1 (
+        echo ERROR: %NURLBUILD% missing and zig not found on PATH
+        echo        Run: zig build nurl-build
+        exit /b 1
     )
+    echo [nurl.bat] build\nurl-build.exe missing - bootstrapping... 1>&2
+    pushd "%SCRIPTDIR%" >nul
+    "%ZIG%" build nurl-build
+    set "RC=%ERRORLEVEL%"
+    popd >nul
+    if not "%RC%"=="0" (
+        echo ERROR: zig build nurl-build failed
+        exit /b 1
+    )
+)
+if not exist "%NURLBUILD%" (
+    echo ERROR: nurl-build helper not found at %NURLBUILD%
+    echo        Run: zig build nurl-build
+    exit /b 1
 )
 
 REM ── Step 1: .nu → LLVM IR ────────────────────────────────────
@@ -218,44 +232,31 @@ if not errorlevel 1 (
     )
 )
 
-REM The runtime's HTTP client uses WinHTTP on Windows (stdlib/runtime.c §14),
-REM so every program linked against runtime.o needs winhttp.lib even if it
-REM doesn't import stdlib/ext/http.nu — unreferenced functions still end up
-REM in runtime.o and their WinHttp* calls must resolve at link time.
-if exist "%NURLBUILD%" (
-    echo [2/2] %LLFILE% → %EXEFILE%  (%NURL_OPT% %DEBUG_FLAG% %EXTRA_LIBS% via nurl-build)
-    if defined EXTRA_OBJS (
-        if defined SDL2_LIBDIR (
-            if defined DEBUG_FLAG (
-                "%NURLBUILD%" --opt "%NURL_OPT%" --flag "%DEBUG_FLAG%" --extra-obj "!CANVAS_O!" --extra-lib "-L!SDL2_LIBDIR!" --extra-lib "-lSDL2" "%SCRIPTDIR%" "%LLFILE%" "%EXEFILE%"
-            ) else (
-                "%NURLBUILD%" --opt "%NURL_OPT%" --extra-obj "!CANVAS_O!" --extra-lib "-L!SDL2_LIBDIR!" --extra-lib "-lSDL2" "%SCRIPTDIR%" "%LLFILE%" "%EXEFILE%"
-            )
+echo [2/2] %LLFILE% → %EXEFILE%  (%NURL_OPT% %DEBUG_FLAG% %EXTRA_LIBS% via nurl-build)
+if defined EXTRA_OBJS (
+    if defined SDL2_LIBDIR (
+        if defined DEBUG_FLAG (
+            "%NURLBUILD%" --driver "%CLANG%" --opt "%NURL_OPT%" --runtime "%RUNTIME%" --no-lto --flag "%DEBUG_FLAG%" --extra-obj "!CANVAS_O!" --extra-lib "-L!SDL2_LIBDIR!" --extra-lib "-lSDL2" "%SCRIPTDIR%" "%LLFILE%" "%EXEFILE%"
         ) else (
-            if defined DEBUG_FLAG (
-                "%NURLBUILD%" --opt "%NURL_OPT%" --flag "%DEBUG_FLAG%" --extra-obj "!CANVAS_O!" "%SCRIPTDIR%" "%LLFILE%" "%EXEFILE%"
-            ) else (
-                "%NURLBUILD%" --opt "%NURL_OPT%" --extra-obj "!CANVAS_O!" "%SCRIPTDIR%" "%LLFILE%" "%EXEFILE%"
-            )
+            "%NURLBUILD%" --driver "%CLANG%" --opt "%NURL_OPT%" --runtime "%RUNTIME%" --no-lto --extra-obj "!CANVAS_O!" --extra-lib "-L!SDL2_LIBDIR!" --extra-lib "-lSDL2" "%SCRIPTDIR%" "%LLFILE%" "%EXEFILE%"
         )
     ) else (
         if defined DEBUG_FLAG (
-            "%NURLBUILD%" --opt "%NURL_OPT%" --flag "%DEBUG_FLAG%" "%SCRIPTDIR%" "%LLFILE%" "%EXEFILE%"
+            "%NURLBUILD%" --driver "%CLANG%" --opt "%NURL_OPT%" --runtime "%RUNTIME%" --no-lto --flag "%DEBUG_FLAG%" --extra-obj "!CANVAS_O!" "%SCRIPTDIR%" "%LLFILE%" "%EXEFILE%"
         ) else (
-            "%NURLBUILD%" --opt "%NURL_OPT%" "%SCRIPTDIR%" "%LLFILE%" "%EXEFILE%"
+            "%NURLBUILD%" --driver "%CLANG%" --opt "%NURL_OPT%" --runtime "%RUNTIME%" --no-lto --extra-obj "!CANVAS_O!" "%SCRIPTDIR%" "%LLFILE%" "%EXEFILE%"
         )
     )
-    if !errorlevel! neq 0 (
-        echo ERROR: nurl-build linking failed
-        exit /b 1
-    )
 ) else (
-    echo [2/2] %LLFILE% → %EXEFILE%  (%NURL_OPT% %DEBUG_FLAG% %EXTRA_LIBS%)
-    "%CLANG%" %NURL_OPT% %DEBUG_FLAG% "%LLFILE%" "%RUNTIME%" %EXTRA_OBJS% -o "%EXEFILE%" %EXTRA_LIBS% -lwinhttp
-    if !errorlevel! neq 0 (
-        echo ERROR: clang linking failed
-        exit /b 1
+    if defined DEBUG_FLAG (
+        "%NURLBUILD%" --driver "%CLANG%" --opt "%NURL_OPT%" --runtime "%RUNTIME%" --no-lto --flag "%DEBUG_FLAG%" "%SCRIPTDIR%" "%LLFILE%" "%EXEFILE%"
+    ) else (
+        "%NURLBUILD%" --driver "%CLANG%" --opt "%NURL_OPT%" --runtime "%RUNTIME%" --no-lto "%SCRIPTDIR%" "%LLFILE%" "%EXEFILE%"
     )
+)
+if !errorlevel! neq 0 (
+    echo ERROR: nurl-build linking failed
+    exit /b 1
 )
 
 REM Copy SDL2.dll next to the produced exe so it runs without PATH tweaks.

@@ -2,7 +2,7 @@
 REM ============================================================
 REM  run_tests.bat - for every .nu in this directory:
 REM     1. compile with nurlc (to LLVM IR)
-REM     2. if compile OK, link with clang + runtime.o
+REM     2. if compile OK, link with build\nurl-build.exe
 REM     3. if link OK, run the binary with a timeout and capture
 REM        stdout+stderr + exit code
 REM  A single snapshot file testresults.txt records the full
@@ -27,6 +27,7 @@ popd >nul
 
 set "NURLC=%ROOT_DIR%\build\nurlc.exe"
 set "RUNTIME=%ROOT_DIR%\stdlib\runtime.o"
+set "NURLBUILD=%ROOT_DIR%\build\nurl-build.exe"
 
 if not exist "%NURLC%" (
     echo ERROR: nurlc not found at %NURLC% 1>&2
@@ -35,6 +36,31 @@ if not exist "%NURLC%" (
 )
 if not exist "%RUNTIME%" (
     echo ERROR: runtime.o not found at %RUNTIME% 1>&2
+    exit /b 2
+)
+if not exist "%NURLBUILD%" (
+    if defined NURL_ZIG (
+        set "ZIG=%NURL_ZIG%"
+    ) else (
+        set "ZIG=zig"
+    )
+    where "%ZIG%" >nul 2>&1
+    if errorlevel 1 (
+        echo ERROR: nurl-build helper not found at %NURLBUILD% 1>&2
+        echo        Run: zig build nurl-build 1>&2
+        exit /b 2
+    )
+    pushd "%ROOT_DIR%" >nul
+    "%ZIG%" build nurl-build >nul 2>&1
+    set "RC=%ERRORLEVEL%"
+    popd >nul
+    if not "%RC%"=="0" (
+        echo ERROR: zig build nurl-build failed 1>&2
+        exit /b 2
+    )
+)
+if not exist "%NURLBUILD%" (
+    echo ERROR: nurl-build helper not found at %NURLBUILD% 1>&2
     exit /b 2
 )
 
@@ -114,7 +140,7 @@ for /f "usebackq delims=" %%F in ("%FILELIST%") do (
             >>"%RESULTS%" echo.
         ) else (
             >>"%RESULTS%" echo COMPILE OK
-            "%CLANG%" -O2 "!ll!" "%RUNTIME%" -lwinhttp -o "!bin!" 2>nul
+            "%NURLBUILD%" --driver "%CLANG%" --opt -O2 --runtime "%RUNTIME%" --no-lto "%ROOT_DIR%" "!ll!" "!bin!" 2>nul
             if errorlevel 1 (
                 >>"%RESULTS%" echo LINK FAIL
                 >>"%RESULTS%" echo.

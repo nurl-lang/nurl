@@ -171,6 +171,17 @@ pub fn build(b: *std.Build) !void {
     const helper_step = b.step("nurl-build", b.fmt("Build {s}", .{helper_path}));
     helper_step.dependOn(&helper_copy.step);
 
+    const buildwasm_cmd = addHelperStep(b, nurl_build_exe, &.{"buildwasm"}, true);
+    if (b.args) |args| {
+        buildwasm_cmd.addArgs(args);
+    }
+    const buildwasm_step = b.step("buildwasm", "Build compiler/nurlc.nu to nurlc.wasm via the local NURL API");
+    buildwasm_step.dependOn(&buildwasm_cmd.step);
+
+    const clean_tree_cmd = addHelperStep(b, nurl_build_exe, &.{"clean"}, true);
+    const clean_tree_step = b.step("clean-tree", "Remove build artifacts, legacy IRs, and Python caches");
+    clean_tree_step.dependOn(&clean_tree_cmd.step);
+
     const nurlfmt_link = addToolBuildStep(
         b,
         cfg,

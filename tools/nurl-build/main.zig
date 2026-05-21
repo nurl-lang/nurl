@@ -23,6 +23,8 @@ const Command = enum {
     symlink,
     marker,
     compare,
+    buildwasm,
+    clean,
 };
 
 const SystemLibMode = enum {
@@ -53,6 +55,8 @@ fn run(init: std.process.Init) !void {
             .symlink => runSymlink(arena, init, io, args[2..]),
             .marker => runMarker(io, args[2..]),
             .compare => runCompare(init, io, args[2..]),
+            .buildwasm => runBuildWasm(init, args[2..]),
+            .clean => runClean(init, args[2..]),
         };
     }
 
@@ -336,9 +340,238 @@ fn runCompare(init: std.process.Init, io: std.Io, args: []const []const u8) !voi
     }
 }
 
+fn runBuildWasm(init: std.process.Init, args: []const []const u8) !void {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var api_url: ?[]const u8 = null;
+    var src_path: ?[]const u8 = null;
+    var out_path: ?[]const u8 = null;
+    var positional_out: ?[]const u8 = null;
+
+    var i: usize = 0;
+    while (i < args.len and std.mem.startsWith(u8, args[i], "--")) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--api-url")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            api_url = args[i];
+        } else if (std.mem.eql(u8, arg, "--src")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            src_path = args[i];
+        } else if (std.mem.eql(u8, arg, "--out")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            out_path = args[i];
+        } else {
+            std.debug.print("nurl-build: unknown buildwasm arg: {s}\n", .{arg});
+            return error.InvalidArgs;
+        }
+        i += 1;
+    }
+
+    if (args.len - i > 1) {
+        std.debug.print("usage: nurl-build buildwasm [--api-url <url>] [--src <path>] [--out <path>] [output-path]\n", .{});
+        return error.InvalidArgs;
+    }
+    if (args.len - i == 1) positional_out = args[i];
+
+    const api_url_raw = api_url orelse init.environ_map.get("NURL_API_URL") orelse "http://localhost:8000";
+    const normalized_api_url = trimTrailingSlashes(api_url_raw);
+    const final_src_path = src_path orelse init.environ_map.get("NURL_SRC") orelse "compiler/nurlc.nu";
+    const final_out_path = out_path orelse positional_out orelse "nurlc.wasm";
+
+    try ensureExists(io, final_src_path, "source file");
+
+    var client: std.http.Client = .{
+        .allocator = gpa,
+        .io = io,
+    };
+    defer client.deinit();
+
+    const health_url = try std.fmt.allocPrint(arena, "{s}/health", .{normalized_api_url});
+    const health_result = client.fetch(.{
+        .location = .{ .url = health_url },
+    }) catch {
+        std.debug.print("ERROR: NURL API not reachable at {s}\n", .{normalized_api_url});
+        std.debug.print("       Start it first: ./startdev.sh\n", .{});
+        std.debug.print("       (or set NURL_API_URL to a running instance)\n", .{});
+        return error.ConnectionRefused;
+    };
+    if (health_result.status != .ok) {
+        std.debug.print("ERROR: NURL API health probe returned HTTP {d} at {s}\n", .{ @intFromEnum(health_result.status), health_url });
+        return error.UnexpectedHttpStatus;
+    }
+
+    const src_bytes = try std.Io.Dir.cwd().readFileAlloc(io, final_src_path, gpa, .unlimited);
+    defer gpa.free(src_bytes);
+
+    const RequestPayload = struct {
+        source: []const u8,
+        filename: []const u8,
+        return_format: []const u8,
+    };
+
+    var request_json: std.Io.Writer.Allocating = .init(gpa);
+    defer request_json.deinit();
+    try std.json.Stringify.value(RequestPayload{
+        .source = src_bytes,
+        .filename = std.fs.path.basename(final_src_path),
+        .return_format = "binary",
+    }, .{}, &request_json.writer);
+
+    var response_body: std.Io.Writer.Allocating = .init(gpa);
+    defer response_body.deinit();
+
+    std.debug.print("[1/1] {s} -> {s}  (via {s}/build_wasm)\n", .{ final_src_path, final_out_path, normalized_api_url });
+
+    const build_url = try std.fmt.allocPrint(arena, "{s}/build_wasm", .{normalized_api_url});
+    const headers = [_]std.http.Header{
+        .{ .name = "Content-Type", .value = "application/json" },
+        .{ .name = "Accept", .value = "application/wasm" },
+    };
+    const build_result = try client.fetch(.{
+        .location = .{ .url = build_url },
+        .method = .POST,
+        .payload = request_json.written(),
+        .extra_headers = &headers,
+        .response_writer = &response_body.writer,
+    });
+
+    const response_bytes = response_body.written();
+    if (build_result.status != .ok) {
+        std.debug.print("ERROR: build failed (HTTP {d})\n", .{@intFromEnum(build_result.status)});
+        emitJsonOrRaw(io, gpa, response_bytes);
+        return error.UnexpectedHttpStatus;
+    }
+    if (response_bytes.len < 4 or !std.mem.eql(u8, response_bytes[0..4], "\x00asm")) {
+        std.debug.print("ERROR: response is not a wasm module\n", .{});
+        emitJsonOrRaw(io, gpa, response_bytes[0..@min(response_bytes.len, 512)]);
+        return error.InvalidData;
+    }
+
+    if (std.fs.path.dirname(final_out_path)) |parent| {
+        try std.Io.Dir.cwd().createDirPath(io, parent);
+    }
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = final_out_path,
+        .data = response_bytes,
+    });
+
+    std.debug.print("\nDone: {s}  ({d} bytes)\n", .{ final_out_path, response_bytes.len });
+    std.debug.print("\nTry:\n  ./wasmnurl.sh examples/showcase.nu\n", .{});
+}
+
+fn runClean(init: std.process.Init, args: []const []const u8) !void {
+    const gpa = init.gpa;
+    const io = init.io;
+
+    if (args.len != 0) {
+        std.debug.print("usage: nurl-build clean\n", .{});
+        return error.InvalidArgs;
+    }
+
+    std.debug.print("Cleaning NURL build artifacts...\n", .{});
+
+    deleteTreeIfExists(io, "build") catch |err| return err;
+
+    var root_files: std.ArrayList([]const u8) = .empty;
+    defer freePathList(gpa, &root_files);
+    var pyc_files: std.ArrayList([]const u8) = .empty;
+    defer freePathList(gpa, &pyc_files);
+    var pycache_dirs: std.ArrayList([]const u8) = .empty;
+    defer freePathList(gpa, &pycache_dirs);
+
+    var root_dir = try std.Io.Dir.cwd().openDir(io, ".", .{ .iterate = true });
+    defer root_dir.close(io);
+    var walker = try root_dir.walk(gpa);
+    defer walker.deinit();
+
+    while (try walker.next(io)) |entry| {
+        if (entry.kind == .directory and std.mem.eql(u8, entry.basename, "__pycache__")) {
+            try pycache_dirs.append(gpa, try gpa.dupe(u8, entry.path));
+            continue;
+        }
+
+        if (entry.kind != .directory and std.mem.endsWith(u8, entry.basename, ".pyc")) {
+            try pyc_files.append(gpa, try gpa.dupe(u8, entry.path));
+        }
+
+        if (entry.depth() == 1 and entry.kind != .directory and shouldRemoveLegacyRootArtifact(entry.basename)) {
+            try root_files.append(gpa, try gpa.dupe(u8, entry.path));
+        }
+    }
+
+    for (root_files.items) |path| {
+        deleteFileIfExists(io, path) catch |err| return err;
+    }
+    for (pyc_files.items) |path| {
+        deleteFileIfExists(io, path) catch |err| return err;
+    }
+    for (pycache_dirs.items) |path| {
+        deleteTreeIfExists(io, path) catch |err| return err;
+    }
+
+    std.debug.print("Clean complete!\n", .{});
+}
+
 fn absolutePath(arena: std.mem.Allocator, path: []const u8) ![]const u8 {
     if (std.fs.path.isAbsolute(path)) return arena.dupe(u8, path);
     return std.fs.path.resolve(arena, &.{ ".", path });
+}
+
+fn trimTrailingSlashes(input: []const u8) []const u8 {
+    var end = input.len;
+    while (end > 0 and input[end - 1] == '/') : (end -= 1) {}
+    return if (end == 0) input else input[0..end];
+}
+
+fn emitJsonOrRaw(io: std.Io, gpa: std.mem.Allocator, body: []const u8) void {
+    const trimmed = std.mem.trim(u8, body, " \t\r\n");
+    if (trimmed.len == 0) return;
+
+    var stderr_buffer: [4096]u8 = undefined;
+    var stderr_writer = std.Io.File.stderr().writerStreaming(io, &stderr_buffer);
+    defer stderr_writer.flush() catch {};
+
+    if (std.json.parseFromSlice(std.json.Value, gpa, trimmed, .{})) |parsed| {
+        defer parsed.deinit();
+        std.json.Stringify.value(parsed.value, .{ .whitespace = .indent_2 }, &stderr_writer.interface) catch {
+            stderr_writer.interface.writeAll(trimmed) catch {};
+        };
+    } else |_| {
+        stderr_writer.interface.writeAll(trimmed) catch {};
+    }
+    stderr_writer.interface.writeByte('\n') catch {};
+}
+
+fn shouldRemoveLegacyRootArtifact(name: []const u8) bool {
+    if (std.mem.endsWith(u8, name, ".ll")) return true;
+    if (std.mem.endsWith(u8, name, ".tmp")) return true;
+    if (std.mem.eql(u8, name, "nurlc")) return true;
+    if (std.mem.eql(u8, name, "nurlc.exe")) return true;
+    if (std.mem.startsWith(u8, name, "nurlc_py")) return true;
+    if (std.mem.startsWith(u8, name, "nurlc_self")) return true;
+    return false;
+}
+
+fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
+    std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => |e| return e,
+    };
+}
+
+fn deleteTreeIfExists(io: std.Io, path: []const u8) !void {
+    if (!pathExists(io, path)) return;
+    try std.Io.Dir.cwd().deleteTree(io, path);
+}
+
+fn freePathList(gpa: std.mem.Allocator, paths: *std.ArrayList([]const u8)) void {
+    for (paths.items) |path| gpa.free(path);
+    paths.deinit(gpa);
 }
 
 fn splitDriver(

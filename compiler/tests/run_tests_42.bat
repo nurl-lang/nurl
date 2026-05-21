@@ -1,10 +1,39 @@
 @echo off
 setlocal enabledelayedexpansion
 
-set "ROOT=%~dp0..\.."
+set "SCRIPT_DIR=%~dp0"
+if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+pushd "%SCRIPT_DIR%\..\.." >nul
+set "ROOT=%CD%"
+popd >nul
+
 set "NURLC=%ROOT%\build\nurlc.exe"
+set "NURLBUILD=%ROOT%\build\nurl-build.exe"
 set "TESTS=%ROOT%\compiler\tests"
 set "BUILD=%ROOT%\build"
+set "RUNTIME=%ROOT%\stdlib\runtime.o"
+
+if not exist "%NURLBUILD%" (
+    if defined NURL_ZIG (
+        set "ZIG=%NURL_ZIG%"
+    ) else (
+        set "ZIG=zig"
+    )
+    where "%ZIG%" >nul 2>&1
+    if errorlevel 1 (
+        echo ERROR: nurl-build helper not found at %NURLBUILD%
+        echo        Run: zig build nurl-build
+        exit /b 2
+    )
+    pushd "%ROOT%" >nul
+    "%ZIG%" build nurl-build >nul 2>&1
+    set "RC=%ERRORLEVEL%"
+    popd >nul
+    if not "%RC%"=="0" (
+        echo ERROR: zig build nurl-build failed
+        exit /b 2
+    )
+)
 
 set PASS=0
 set FAIL=0
@@ -22,7 +51,7 @@ if !errorlevel! neq 0 (
     type "%BUILD%\t8_err.txt"
     set /a FAIL+=1
 ) else (
-    clang "%BUILD%\t8.ll" "%ROOT%\stdlib\runtime.o" -lwinhttp -o "%BUILD%\t8.exe" >nul 2>&1
+    "%NURLBUILD%" --driver clang --opt -O2 --runtime "%RUNTIME%" --no-lto "%ROOT%" "%BUILD%\t8.ll" "%BUILD%\t8.exe" >nul 2>&1
     "%BUILD%\t8.exe" > "%BUILD%\t8_out.txt" 2>&1
     findstr /c:"PASS" "%BUILD%\t8_out.txt" >nul 2>&1
     if !errorlevel! equ 0 (
@@ -50,7 +79,7 @@ if !errorlevel! neq 0 (
     type "%BUILD%\t9_err.txt"
     set /a FAIL+=1
 ) else (
-    clang "%BUILD%\t9.ll" "%ROOT%\stdlib\runtime.o" -lwinhttp -o "%BUILD%\t9.exe" >nul 2>&1
+    "%NURLBUILD%" --driver clang --opt -O2 --runtime "%RUNTIME%" --no-lto "%ROOT%" "%BUILD%\t9.ll" "%BUILD%\t9.exe" >nul 2>&1
     "%BUILD%\t9.exe" > "%BUILD%\t9_out.txt" 2>&1
     findstr /c:"PASS" "%BUILD%\t9_out.txt" >nul 2>&1
     if !errorlevel! equ 0 (
@@ -78,7 +107,7 @@ if !errorlevel! neq 0 (
     type "%BUILD%\t10_err.txt"
     set /a FAIL+=1
 ) else (
-    clang "%BUILD%\t10.ll" "%ROOT%\stdlib\runtime.o" -lwinhttp -o "%BUILD%\t10.exe" >nul 2>&1
+    "%NURLBUILD%" --driver clang --opt -O2 --runtime "%RUNTIME%" --no-lto "%ROOT%" "%BUILD%\t10.ll" "%BUILD%\t10.exe" >nul 2>&1
     "%BUILD%\t10.exe" > "%BUILD%\t10_out.txt" 2>&1
     findstr /c:"PASS" "%BUILD%\t10_out.txt" >nul 2>&1
     if !errorlevel! equ 0 (
@@ -106,7 +135,7 @@ if !errorlevel! neq 0 (
     type "%BUILD%\t11_err.txt"
     set /a FAIL+=1
 ) else (
-    clang "%BUILD%\t11.ll" "%ROOT%\stdlib\runtime.o" -lwinhttp -o "%BUILD%\t11.exe" >nul 2>&1
+    "%NURLBUILD%" --driver clang --opt -O2 --runtime "%RUNTIME%" --no-lto "%ROOT%" "%BUILD%\t11.ll" "%BUILD%\t11.exe" >nul 2>&1
     "%BUILD%\t11.exe" > "%BUILD%\t11_out.txt" 2>&1
     findstr /c:"PASS" "%BUILD%\t11_out.txt" >nul 2>&1
     if !errorlevel! equ 0 (
@@ -134,7 +163,7 @@ if !errorlevel! neq 0 (
     type "%BUILD%\t12_err.txt"
     set /a FAIL+=1
 ) else (
-    clang "%BUILD%\t12.ll" "%ROOT%\stdlib\runtime.o" -lwinhttp -o "%BUILD%\t12.exe" >nul 2>&1
+    "%NURLBUILD%" --driver clang --opt -O2 --runtime "%RUNTIME%" --no-lto "%ROOT%" "%BUILD%\t12.ll" "%BUILD%\t12.exe" >nul 2>&1
     "%BUILD%\t12.exe" > "%BUILD%\t12_out.txt" 2>&1
     findstr /c:"PASS" "%BUILD%\t12_out.txt" >nul 2>&1
     if !errorlevel! equ 0 (
@@ -162,7 +191,7 @@ if !errorlevel! neq 0 (
     type "%BUILD%\t13_err.txt"
     set /a FAIL+=1
 ) else (
-    clang "%BUILD%\t13.ll" "%ROOT%\stdlib\runtime.o" -lwinhttp -o "%BUILD%\t13.exe" >nul 2>&1
+    "%NURLBUILD%" --driver clang --opt -O2 --runtime "%RUNTIME%" --no-lto "%ROOT%" "%BUILD%\t13.ll" "%BUILD%\t13.exe" >nul 2>&1
     "%BUILD%\t13.exe" > "%BUILD%\t13_out.txt" 2>&1
     findstr /c:"PASS" "%BUILD%\t13_out.txt" >nul 2>&1
     if !errorlevel! equ 0 (
