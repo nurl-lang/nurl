@@ -5129,6 +5129,7 @@ void nurl_sha1_bytes(const unsigned char *data, long long len,
 #if !defined(__wasi__)
 #  ifdef _WIN32
 #    pragma comment(lib, "ws2_32.lib")
+#    include <ws2tcpip.h>          /* getaddrinfo — client-side connect */
 typedef SOCKET nurl_sockfd_t;
 #    define NURL_INVALID_SOCK INVALID_SOCKET
 #    define nurl_close_sock(fd) closesocket(fd)
@@ -5136,6 +5137,7 @@ typedef SOCKET nurl_sockfd_t;
 #    include <sys/socket.h>
 #    include <netinet/in.h>
 #    include <arpa/inet.h>
+#    include <netdb.h>             /* getaddrinfo — client-side connect */
 #    include <unistd.h>
 #    include <fcntl.h>
 #    include <sys/time.h>
@@ -5421,6 +5423,65 @@ long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
     return (long long)(uintptr_t)h;
 }
 
+/* §18b — client-side TCP connect. Resolves `host` (DNS name or IP
+ * literal, v4 or v6) via getaddrinfo, opens a socket, and connect()s
+ * to `port`. Returns a CONN-kind NurlTcp handle — read/write/close/
+ * set_timeout consume it exactly like an accept()ed connection. The
+ * handle is always non-zero; callers probe nurl_tcp_err_kind. The
+ * server half of the runtime is listen/accept only; this is what an
+ * MQTT / outbound client needs. */
+long long nurl_tcp_connect(const char *host, long long port) {
+#ifdef _WIN32
+    if (!nurl__net_wsa_init()) {
+        NurlTcp *h = nurl__tcp_new_handle(NURL_TCP_KIND_CONN);
+        if (!h) return 0;
+        h->err_kind = NURL_NET_ERR_OTHER;
+        return (long long)(uintptr_t)h;
+    }
+#endif
+    NurlTcp *h = nurl__tcp_new_handle(NURL_TCP_KIND_CONN);
+    if (!h) return 0;
+    if (!host || !*host || port <= 0 || port > 65535) {
+        h->err_kind = NURL_NET_ERR_OTHER;
+        return (long long)(uintptr_t)h;
+    }
+
+    char portstr[16];
+    snprintf(portstr, sizeof(portstr), "%ld", (long)port);
+
+    struct addrinfo hints, *res = NULL, *ai;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_UNSPEC;        /* accept IPv4 or IPv6 */
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) {
+        h->err_kind = NURL_NET_ERR_OTHER;
+        return (long long)(uintptr_t)h;
+    }
+
+    nurl_sockfd_t fd = NURL_INVALID_SOCK;
+    for (ai = res; ai; ai = ai->ai_next) {
+        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd == NURL_INVALID_SOCK) continue;
+        if (connect(fd, ai->ai_addr, (int)ai->ai_addrlen) == 0) break;
+        nurl_close_sock(fd);
+        fd = NURL_INVALID_SOCK;
+    }
+    freeaddrinfo(res);
+
+    if (fd == NURL_INVALID_SOCK) {
+#ifdef _WIN32
+        h->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_OTHER);
+#else
+        h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_OTHER);
+#endif
+        return (long long)(uintptr_t)h;
+    }
+
+    h->fd       = fd;
+    h->err_kind = NURL_NET_ERR_OK;
+    return (long long)(uintptr_t)h;
+}
+
 long long nurl_tcp_accept(long long listener) {
     NurlTcp *l = (NurlTcp*)(uintptr_t)listener;
     NurlTcp *c = nurl__tcp_new_handle(NURL_TCP_KIND_CONN);
@@ -5603,6 +5664,68 @@ long long nurl_tcp_listen_tls(const char *host, long long port,
     }
     h->ssl_ctx = ctx;
     return lh;
+#endif
+}
+
+/* §18c — client-side TLS connect. Plain connect() to host:port, then a
+ * TLS client handshake over it. The resulting CONN handle carries
+ * `ssl`/`ssl_ctx`, so nurl_tcp_read / _write / _close already dispatch
+ * through libssl — no other code path changes. `verify` != 0 turns on
+ * peer-certificate + hostname verification against the system trust
+ * store; 0 completes the handshake regardless of the chain (still
+ * encrypted — the choice an MQTT client's `--insecure` makes). SNI is
+ * always sent so brokers behind a shared IP route correctly. */
+long long nurl_tcp_connect_tls(const char *host, long long port,
+                               long long verify) {
+#ifndef NURL_HAVE_OPENSSL
+    (void)host; (void)port; (void)verify;
+    NurlTcp *h = nurl__tcp_new_handle(NURL_TCP_KIND_CONN);
+    if (!h) return 0;
+    h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+    return (long long)(uintptr_t)h;
+#else
+    long long ch = nurl_tcp_connect(host, port);
+    NurlTcp *h = (NurlTcp*)(uintptr_t)ch;
+    if (!h || h->err_kind != NURL_NET_ERR_OK) return ch;
+
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    if (!ctx) {
+        nurl_close_sock(h->fd); h->fd = NURL_INVALID_SOCK;
+        h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+        return ch;
+    }
+    SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+    if (verify) {
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+        SSL_CTX_set_default_verify_paths(ctx);
+    } else {
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
+    }
+
+    SSL *ssl = SSL_new(ctx);
+    if (!ssl) {
+        SSL_CTX_free(ctx);
+        nurl_close_sock(h->fd); h->fd = NURL_INVALID_SOCK;
+        h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+        return ch;
+    }
+    /* SNI — required by most multi-tenant brokers. */
+    SSL_set_tlsext_host_name(ssl, host);
+    if (verify) SSL_set1_host(ssl, host);   /* cert must match hostname */
+    SSL_set_fd(ssl, (int)h->fd);
+
+    if (SSL_connect(ssl) != 1) {
+        SSL_free(ssl);
+        SSL_CTX_free(ctx);
+        nurl_close_sock(h->fd); h->fd = NURL_INVALID_SOCK;
+        h->err_kind = NURL_NET_ERR_TLS_HANDSHAKE;
+        return ch;
+    }
+
+    h->ssl      = ssl;
+    h->ssl_ctx  = ctx;
+    h->err_kind = NURL_NET_ERR_OK;
+    return ch;
 #endif
 }
 
