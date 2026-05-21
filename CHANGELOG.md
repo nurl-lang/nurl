@@ -151,12 +151,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 * **`time_parse_iso` now returns `! i ParseErr`** (Unix seconds), not
-  `! Time ParseErr`. A wide value-struct `! T E` payload is silently
-  truncated when the result is matched directly as `?? ( call ) { … }`
-  — a compiler bug; binding it to a `:` variable first is sound, but
-  the narrow `i` payload is immune either way. Convert with
-  `time_from_unix` for the broken-down `Time`. `time_make` (new) uses
-  the same `! i ParseErr` shape for consistency.
+  `! Time ParseErr`. A Unix timestamp is the more composable parse
+  result — directly sortable, comparable and storable — and
+  `time_from_unix` reconstructs the broken-down `Time` when its fields
+  are needed. The new `time_make` constructor uses the same
+  `! i ParseErr` shape for consistency.
 
 ### Fixed
 
