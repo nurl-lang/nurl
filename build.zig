@@ -40,7 +40,6 @@ pub fn build(b: *std.Build) !void {
     const nurlpkg_path = buildBinaryPath(b, "nurlpkg", host_is_windows);
     const nurllsp_path = buildBinaryPath(b, "nurl-lsp", host_is_windows);
     const tests_runner = if (host_is_windows) "compiler/tests/run_tests.bat" else "compiler/tests/run_tests.sh";
-    const san_tests_runner = "compiler/tests/run_san_tests.sh";
     const nurl_build_exe = b.addExecutable(.{
         .name = "nurl-build",
         .root_module = b.createModule(.{
@@ -398,6 +397,14 @@ pub fn build(b: *std.Build) !void {
     const fmt_idempotent_step = b.step("fmt-idempotent", "Verify nurlfmt idempotence and IR transparency");
     fmt_idempotent_step.dependOn(&fmt_idempotent_cmd.step);
 
+    const test_42_cmd = addHelperStep(b, nurl_build_exe, &.{"test-42"}, true);
+    if (b.args) |args| {
+        test_42_cmd.addArgs(args);
+    }
+    test_42_cmd.step.dependOn(tools_step);
+    const test_42_step = b.step("test-42", "Run the 4.2 Result/try propagation regression tests");
+    test_42_step.dependOn(&test_42_cmd.step);
+
     const mcp_spec_drift_cmd = addHelperStep(b, nurl_build_exe, &.{"mcp-spec-drift"}, false);
     if (b.args) |args| {
         mcp_spec_drift_cmd.addArgs(args);
@@ -441,12 +448,13 @@ pub fn build(b: *std.Build) !void {
     check_step.dependOn(&update_lastgood.step);
 
     if (!host_is_windows) {
-        const san_tests = addScriptCommand(b, san_tests_runner, false);
-        san_tests.setCwd(b.path("."));
-        san_tests.has_side_effects = true;
-        san_tests.step.dependOn(tools_step);
-        const san_test_step = b.step("san-test", b.fmt("Run {s} after a sanitized build (-Dsan=true)", .{san_tests_runner}));
-        san_test_step.dependOn(&san_tests.step);
+        const san_test_cmd = addHelperStep(b, nurl_build_exe, &.{"san-test"}, true);
+        if (b.args) |args| {
+            san_test_cmd.addArgs(args);
+        }
+        san_test_cmd.step.dependOn(tools_step);
+        const san_test_step = b.step("san-test", "Run the sanitizer corpus after a sanitized build (-Dsan=true)");
+        san_test_step.dependOn(&san_test_cmd.step);
     }
 }
 

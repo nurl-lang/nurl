@@ -22,6 +22,8 @@ const Command = enum {
     wasmnurl,
     fmt,
     fmt_idempotent,
+    test_42,
+    san_test,
     mkdir,
     copy,
     symlink,
@@ -63,6 +65,8 @@ fn run(init: std.process.Init) !void {
             .wasmnurl => runWasmNurl(init, args[2..]),
             .fmt => runFmt(init, args[2..]),
             .fmt_idempotent => runFmtIdempotent(init, args[2..]),
+            .test_42 => runTest42(init, args[2..]),
+            .san_test => runSanTest(init, args[2..]),
             .mkdir => runMkdir(io, args[2..]),
             .copy => runCopy(init.gpa, arena, io, args[2..]),
             .symlink => runSymlink(arena, init, io, args[2..]),
@@ -83,6 +87,8 @@ fn run(init: std.process.Init) !void {
 
 fn parseCommand(name: []const u8) ?Command {
     if (std.mem.eql(u8, name, "fmt-idempotent")) return .fmt_idempotent;
+    if (std.mem.eql(u8, name, "test-42")) return .test_42;
+    if (std.mem.eql(u8, name, "san-test")) return .san_test;
     if (std.mem.eql(u8, name, "bench-csv")) return .bench_csv;
     if (std.mem.eql(u8, name, "mcp-spec-drift")) return .mcp_spec_drift;
     return std.meta.stringToEnum(Command, name);
@@ -295,6 +301,451 @@ fn runFmtIdempotent(init: std.process.Init, args: []const []const u8) !void {
     }
 
     std.process.exit(1);
+}
+
+const Test42Expectation = union(enum) {
+    run_contains: []const []const u8,
+    compile_error_contains: []const u8,
+};
+
+const Test42Case = struct {
+    label: []const u8,
+    source: []const u8,
+    expectation: Test42Expectation,
+};
+
+const test_42_cases = [_]Test42Case{
+    .{
+        .label = "R1",
+        .source = "compiler/tests/result_multifield.nu",
+        .expectation = .{ .run_contains = &.{
+            "pt: x=3 y=4",
+            "pt-neg: err",
+            "quad: 7 11 13 17",
+            "tagged: hello count=42",
+        } },
+    },
+    .{
+        .label = "R2",
+        .source = "compiler/tests/result_multifield_try.nu",
+        .expectation = .{ .run_contains = &.{
+            "pt: 13 24",
+            "pt-neg: propagated",
+            "tag: hello/7",
+        } },
+    },
+    .{
+        .label = "E1",
+        .source = "compiler/tests/should_fail_t14_try_non_result.nu",
+        .expectation = .{ .compile_error_contains = "try operator" },
+    },
+    .{
+        .label = "E2",
+        .source = "compiler/tests/should_fail_t15_result_type_mismatch.nu",
+        .expectation = .{ .compile_error_contains = "try propagation type mismatch" },
+    },
+};
+
+fn runTest42(init: std.process.Init, args: []const []const u8) !void {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var root: []const u8 = ".";
+    var driver: ?[]const u8 = null;
+    var runtime_override: ?[]const u8 = null;
+    var opt: []const u8 = "-O2";
+    var disable_lto = true;
+
+    var i: usize = 0;
+    while (i < args.len and std.mem.startsWith(u8, args[i], "--")) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--root")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            root = args[i];
+        } else if (std.mem.eql(u8, arg, "--driver")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            driver = args[i];
+        } else if (std.mem.eql(u8, arg, "--runtime")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            runtime_override = args[i];
+        } else if (std.mem.eql(u8, arg, "--opt")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            opt = args[i];
+        } else if (std.mem.eql(u8, arg, "--lto")) {
+            disable_lto = false;
+        } else if (std.mem.eql(u8, arg, "--no-lto")) {
+            disable_lto = true;
+        } else {
+            std.debug.print("nurl-build: unknown test-42 arg: {s}\n", .{arg});
+            return error.InvalidArgs;
+        }
+        i += 1;
+    }
+
+    if (args.len != i) {
+        std.debug.print(
+            "usage: nurl-build test-42 [--root <path>] [--driver <cmd>] [--runtime <path>] [--opt <-O2>] [--lto|--no-lto]\n",
+            .{},
+        );
+        return error.InvalidArgs;
+    }
+
+    const root_abs = try absolutePath(arena, root);
+    const nurlc_path = try resolveNurlc(init, root_abs);
+    const runtime_path = runtime_override orelse try std.fs.path.join(arena, &.{ root_abs, "stdlib", "runtime.o" });
+    const workdir = try std.fs.path.join(arena, &.{ root_abs, "build", "test-42" });
+    try ensureExists(io, nurlc_path, "nurlc");
+    try ensureExists(io, runtime_path, "runtime.o");
+    try ensureDirPath(io, workdir);
+
+    var pass_count: usize = 0;
+    var fail_count: usize = 0;
+
+    std.debug.print("============================================\n", .{});
+    std.debug.print("  4.2 Result-type and try-propagation tests\n", .{});
+    std.debug.print("============================================\n\n", .{});
+
+    for (test_42_cases) |case| {
+        const basename = std.fs.path.basename(case.source);
+        const stem = basename[0 .. basename.len - ".nu".len];
+        const ll_name = try std.fmt.allocPrint(arena, "{s}.ll", .{stem});
+        const stderr_name = try std.fmt.allocPrint(arena, "{s}.stderr", .{stem});
+        const stdout_name = try std.fmt.allocPrint(arena, "{s}.stdout", .{stem});
+        const ll_path = try std.fs.path.join(arena, &.{ workdir, ll_name });
+        const bin_path = try testBinaryPath(arena, workdir, stem);
+        const stdout_log = try std.fs.path.join(arena, &.{ workdir, stdout_name });
+        const stderr_log = try std.fs.path.join(arena, &.{ workdir, stderr_name });
+
+        std.debug.print("[{s}] {s}\n", .{ case.label, basename });
+
+        const compile_result = try std.process.run(gpa, io, .{
+            .argv = &.{ nurlc_path, case.source },
+            .cwd = .{ .path = root_abs },
+        });
+        defer {
+            gpa.free(compile_result.stdout);
+            gpa.free(compile_result.stderr);
+        }
+        try std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = stderr_log,
+            .data = compile_result.stderr,
+        });
+
+        switch (case.expectation) {
+            .compile_error_contains => |needle| {
+                if (runResultSucceeded(compile_result.term) or std.mem.indexOf(u8, compile_result.stderr, needle) == null) {
+                    std.debug.print("  FAIL: wrong compiler error\n", .{});
+                    if (compile_result.stderr.len != 0) std.debug.print("{s}\n", .{compile_result.stderr});
+                    fail_count += 1;
+                } else {
+                    std.debug.print("  PASS\n", .{});
+                    pass_count += 1;
+                }
+            },
+            .run_contains => |needles| {
+                if (!runResultSucceeded(compile_result.term)) {
+                    std.debug.print("  FAIL: compilation failed\n", .{});
+                    if (compile_result.stderr.len != 0) std.debug.print("{s}\n", .{compile_result.stderr});
+                    fail_count += 1;
+                    continue;
+                }
+
+                try std.Io.Dir.cwd().writeFile(io, .{
+                    .sub_path = ll_path,
+                    .data = compile_result.stdout,
+                });
+
+                var link_args: std.ArrayList([]const u8) = .empty;
+                defer link_args.deinit(gpa);
+                try link_args.appendSlice(gpa, &.{ "--opt", opt, "--runtime", runtime_path });
+                if (driver) |driver_override| {
+                    try link_args.appendSlice(gpa, &.{ "--driver", driver_override });
+                }
+                if (disable_lto) {
+                    try link_args.append(gpa, "--no-lto");
+                }
+                try link_args.appendSlice(gpa, &.{ root_abs, ll_path, bin_path });
+
+                const link_result = try runLinkCapture(init, link_args.items);
+                defer {
+                    gpa.free(link_result.stdout);
+                    gpa.free(link_result.stderr);
+                }
+                if (!runResultSucceeded(link_result.term)) {
+                    std.debug.print("  FAIL: link failed\n", .{});
+                    if (link_result.stderr.len != 0) std.debug.print("{s}\n", .{link_result.stderr});
+                    fail_count += 1;
+                    continue;
+                }
+
+                const run_result = try std.process.run(gpa, io, .{
+                    .argv = &.{bin_path},
+                    .cwd = .{ .path = workdir },
+                });
+                defer {
+                    gpa.free(run_result.stdout);
+                    gpa.free(run_result.stderr);
+                }
+                try std.Io.Dir.cwd().writeFile(io, .{
+                    .sub_path = stdout_log,
+                    .data = run_result.stdout,
+                });
+                try std.Io.Dir.cwd().writeFile(io, .{
+                    .sub_path = stderr_log,
+                    .data = run_result.stderr,
+                });
+
+                if (!runResultSucceeded(run_result.term) or !containsAll(run_result.stdout, needles)) {
+                    std.debug.print("  FAIL: wrong output\n", .{});
+                    if (run_result.stdout.len != 0) std.debug.print("{s}\n", .{run_result.stdout});
+                    if (run_result.stderr.len != 0) std.debug.print("{s}\n", .{run_result.stderr});
+                    fail_count += 1;
+                    continue;
+                }
+
+                std.debug.print("  PASS\n", .{});
+                pass_count += 1;
+            },
+        }
+    }
+
+    std.debug.print("\n============================================\n", .{});
+    std.debug.print("  Results: {d} PASS  /  {d} FAIL  (of {d})\n", .{ pass_count, fail_count, test_42_cases.len });
+    std.debug.print("============================================\n", .{});
+
+    if (fail_count != 0) return error.ChildProcessFailed;
+}
+
+fn runSanTest(init: std.process.Init, args: []const []const u8) !void {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var root: []const u8 = ".";
+    var timeout_seconds: u32 = 30;
+    var driver = try resolveSanTestDriver(init);
+
+    var i: usize = 0;
+    while (i < args.len and std.mem.startsWith(u8, args[i], "--")) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--root")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            root = args[i];
+        } else if (std.mem.eql(u8, arg, "--timeout")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            timeout_seconds = try std.fmt.parseInt(u32, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--driver")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            driver = args[i];
+        } else {
+            std.debug.print("nurl-build: unknown san-test arg: {s}\n", .{arg});
+            return error.InvalidArgs;
+        }
+        i += 1;
+    }
+
+    if (args.len != i) {
+        std.debug.print("usage: nurl-build san-test [--root <path>] [--timeout <seconds>] [--driver <cmd>]\n", .{});
+        return error.InvalidArgs;
+    }
+
+    if (init.environ_map.get("TIMEOUT")) |timeout_env| {
+        timeout_seconds = std.fmt.parseInt(u32, timeout_env, 10) catch timeout_seconds;
+    }
+
+    const root_abs = try absolutePath(arena, root);
+    const nurlc_path = try resolveNurlc(init, root_abs);
+    const runtime_path = try std.fs.path.join(arena, &.{ root_abs, "stdlib", "runtime.o" });
+    const pq_marker_path = try std.fs.path.join(arena, &.{ root_abs, "stdlib", "runtime.pq" });
+    const workdir = try std.fs.path.join(arena, &.{ root_abs, "build", "tests-san" });
+    const logdir = try std.fs.path.join(arena, &.{ workdir, "logs" });
+    const summary_path = try std.fs.path.join(arena, &.{ workdir, "SUMMARY.txt" });
+
+    try ensureExists(io, nurlc_path, "nurlc");
+    try ensureExists(io, runtime_path, "runtime.o");
+    try ensureDirPath(io, logdir);
+    try ensureSanitizedRuntime(init, runtime_path);
+
+    var test_files: std.ArrayList([]const u8) = .empty;
+    defer freePathList(gpa, &test_files);
+    try appendNuFilesFromDir(gpa, io, root_abs, "compiler/tests", &test_files);
+    std.sort.heap([]const u8, test_files.items, {}, lessThanString);
+
+    var summary: std.ArrayList(u8) = .empty;
+    defer summary.deinit(gpa);
+    var san_fails: std.ArrayList([]const u8) = .empty;
+    defer freePathList(gpa, &san_fails);
+
+    var san_env = try buildSanTestEnv(init);
+    defer san_env.deinit();
+
+    var n_total: usize = 0;
+    var n_pass: usize = 0;
+    var n_san_fail: usize = 0;
+    var n_compile_fail: usize = 0;
+    var n_link_fail: usize = 0;
+
+    std.debug.print("{s: <44} {s}\n", .{ "TEST", "VERDICT" });
+    std.debug.print("{s: <44} {s}\n", .{ "----", "-------" });
+
+    for (test_files.items) |rel_src| {
+        const basename = std.fs.path.basename(rel_src);
+        const name = basename[0 .. basename.len - ".nu".len];
+        n_total += 1;
+
+        if (isSanSkipName(name) or (std.mem.eql(u8, name, "postgres_basic") and !pathExists(io, pq_marker_path))) {
+            std.debug.print("{s: <44} SKIP\n", .{name});
+            continue;
+        }
+
+        const ll_name = try std.fmt.allocPrint(arena, "{s}.ll", .{name});
+        const stdout_name = try std.fmt.allocPrint(arena, "{s}.stdout", .{name});
+        const stderr_name = try std.fmt.allocPrint(arena, "{s}.stderr", .{name});
+        const ll_path = try std.fs.path.join(arena, &.{ workdir, ll_name });
+        const bin_path = try testBinaryPath(arena, workdir, name);
+        const stdout_log = try std.fs.path.join(arena, &.{ logdir, stdout_name });
+        const stderr_log = try std.fs.path.join(arena, &.{ logdir, stderr_name });
+
+        const compile_result = try std.process.run(gpa, io, .{
+            .argv = &.{ nurlc_path, rel_src },
+            .cwd = .{ .path = root_abs },
+        });
+        defer {
+            gpa.free(compile_result.stdout);
+            gpa.free(compile_result.stderr);
+        }
+        if (!runResultSucceeded(compile_result.term)) {
+            std.debug.print("{s: <44} COMPILE_FAIL\n", .{name});
+            try appendSummaryLine(gpa, &summary, "COMPILE_FAIL {s}\n", .{name});
+            n_compile_fail += 1;
+            continue;
+        }
+
+        try std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = ll_path,
+            .data = compile_result.stdout,
+        });
+
+        var link_args: std.ArrayList([]const u8) = .empty;
+        defer link_args.deinit(gpa);
+        try link_args.appendSlice(gpa, &.{
+            "--opt",
+            "-O1",
+            "--driver",
+            driver,
+            "--runtime",
+            runtime_path,
+            "--flag",
+            "-fsanitize=address,undefined",
+            "--flag",
+            "-fno-omit-frame-pointer",
+            "--no-lto",
+            root_abs,
+            ll_path,
+            bin_path,
+        });
+
+        const link_result = try runLinkCapture(init, link_args.items);
+        defer {
+            gpa.free(link_result.stdout);
+            gpa.free(link_result.stderr);
+        }
+        try std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = stderr_log,
+            .data = link_result.stderr,
+        });
+        if (!runResultSucceeded(link_result.term)) {
+            std.debug.print("{s: <44} LINK_FAIL\n", .{name});
+            try appendSummaryLine(gpa, &summary, "LINK_FAIL {s}\n", .{name});
+            n_link_fail += 1;
+            continue;
+        }
+
+        const run_result = std.process.run(gpa, io, .{
+            .argv = &.{bin_path},
+            .cwd = .{ .path = workdir },
+            .environ_map = &san_env,
+            .timeout = .{ .duration = .{
+                .clock = .boot,
+                .raw = .fromSeconds(timeout_seconds),
+            } },
+        }) catch |err| switch (err) {
+            error.Timeout => {
+                try std.Io.Dir.cwd().writeFile(io, .{
+                    .sub_path = stderr_log,
+                    .data = "timeout\n",
+                });
+                std.debug.print("{s: <44} PASS (exit=124, no sanitizer report)\n", .{name});
+                n_pass += 1;
+                continue;
+            },
+            else => return err,
+        };
+        defer {
+            gpa.free(run_result.stdout);
+            gpa.free(run_result.stderr);
+        }
+        try std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = stdout_log,
+            .data = run_result.stdout,
+        });
+        try std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = stderr_log,
+            .data = run_result.stderr,
+        });
+
+        if (containsSanitizerMarker(run_result.stderr)) {
+            const exit_code = childExitCodeOr(run_result.term, 1);
+            std.debug.print("{s: <44} SAN_FAIL (exit={d})\n", .{ name, exit_code });
+            try appendSummaryLine(gpa, &summary, "SAN_FAIL {s} exit={d}\n", .{ name, exit_code });
+            try san_fails.append(gpa, try gpa.dupe(u8, name));
+            n_san_fail += 1;
+            continue;
+        }
+
+        const exit_code = childExitCodeOr(run_result.term, 1);
+        if (exit_code != 0) {
+            std.debug.print("{s: <44} PASS (exit={d}, no sanitizer report)\n", .{ name, exit_code });
+        } else {
+            std.debug.print("{s: <44} PASS\n", .{name});
+        }
+        n_pass += 1;
+    }
+
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = summary_path,
+        .data = summary.items,
+    });
+
+    std.debug.print("\n── Sanitized run summary ──\n", .{});
+    std.debug.print("  total      : {d}\n", .{n_total});
+    std.debug.print("  PASS       : {d}     (includes tests with non-zero deliberate exit)\n", .{n_pass});
+    std.debug.print("  SAN_FAIL   : {d}     (AddressSanitizer / UBSan / LSan caught a problem)\n", .{n_san_fail});
+    std.debug.print("  COMPILE    : {d}\n", .{n_compile_fail});
+    std.debug.print("  LINK       : {d}\n", .{n_link_fail});
+    std.debug.print("  logs       : {s}\n\n", .{logdir});
+
+    if (n_san_fail != 0) {
+        std.debug.print("── First sanitizer report from each SAN_FAIL test ──\n", .{});
+        for (san_fails.items) |name| {
+            const stderr_name = try std.fmt.allocPrint(arena, "{s}.stderr", .{name});
+            const stderr_log = try std.fs.path.join(arena, &.{ logdir, stderr_name });
+            const bytes = try std.Io.Dir.cwd().readFileAlloc(io, stderr_log, gpa, .unlimited);
+            defer gpa.free(bytes);
+            std.debug.print("\n▶ {s}\n", .{name});
+            printFirstLines(bytes, 40);
+            std.debug.print("  …(see {s} for the full report)\n", .{stderr_log});
+        }
+        return error.ChildProcessFailed;
+    }
 }
 
 fn runMcpSpecDrift(init: std.process.Init, args: []const []const u8) !void {
@@ -1707,6 +2158,63 @@ fn ensureSuccessWithStderr(result: std.process.RunResult, label: []const u8) !vo
 }
 
 fn runLink(init: std.process.Init, args: []const []const u8) !void {
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var child_argv = try buildLinkArgv(init, args);
+    defer child_argv.deinit(gpa);
+
+    var child = std.process.spawn(io, .{
+        .argv = child_argv.items,
+        .stdin = .inherit,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    }) catch |err| {
+        if (err == error.FileNotFound) {
+            std.debug.print("nurl-build: C driver not found: {s}\n", .{child_argv.items[0]});
+        }
+        return err;
+    };
+    errdefer child.kill(io);
+
+    const term = try child.wait(io);
+    switch (term) {
+        .exited => |code| {
+            if (code != 0) std.process.exit(code);
+        },
+        .signal => |sig| {
+            std.debug.print("nurl-build: linker terminated by signal {d}\n", .{@intFromEnum(sig)});
+            std.process.exit(128 + @as(u8, @intCast(@intFromEnum(sig))));
+        },
+        .stopped => |sig| {
+            std.debug.print("nurl-build: linker stopped by signal {d}\n", .{@intFromEnum(sig)});
+            std.process.exit(128 + @as(u8, @intCast(@intFromEnum(sig))));
+        },
+        .unknown => |status| {
+            std.debug.print("nurl-build: linker exited with unknown status {d}\n", .{status});
+            std.process.exit(1);
+        },
+    }
+}
+
+fn runLinkCapture(init: std.process.Init, args: []const []const u8) !std.process.RunResult {
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var child_argv = try buildLinkArgv(init, args);
+    defer child_argv.deinit(gpa);
+
+    return std.process.run(gpa, io, .{
+        .argv = child_argv.items,
+    }) catch |err| {
+        if (err == error.FileNotFound) {
+            std.debug.print("nurl-build: C driver not found: {s}\n", .{child_argv.items[0]});
+        }
+        return err;
+    };
+}
+
+fn buildLinkArgv(init: std.process.Init, args: []const []const u8) !std.ArrayList([]const u8) {
     const arena = init.arena.allocator();
     const gpa = init.gpa;
     const io = init.io;
@@ -1791,7 +2299,6 @@ fn runLink(init: std.process.Init, args: []const []const u8) !void {
     defer driver_parts.deinit(gpa);
 
     var child_argv: std.ArrayList([]const u8) = .empty;
-    defer child_argv.deinit(gpa);
 
     try child_argv.appendSlice(gpa, driver_parts.items);
     if (target_override) |target| {
@@ -1823,38 +2330,7 @@ fn runLink(init: std.process.Init, args: []const []const u8) !void {
     try ensureParentDir(io, output_path);
     try child_argv.append(gpa, "-o");
     try child_argv.append(gpa, output_path);
-
-    var child = std.process.spawn(io, .{
-        .argv = child_argv.items,
-        .stdin = .inherit,
-        .stdout = .inherit,
-        .stderr = .inherit,
-    }) catch |err| {
-        if (err == error.FileNotFound) {
-            std.debug.print("nurl-build: C driver not found: {s}\n", .{driver_parts.items[0]});
-        }
-        return err;
-    };
-    errdefer child.kill(io);
-
-    const term = try child.wait(io);
-    switch (term) {
-        .exited => |code| {
-            if (code != 0) std.process.exit(code);
-        },
-        .signal => |sig| {
-            std.debug.print("nurl-build: linker terminated by signal {d}\n", .{@intFromEnum(sig)});
-            std.process.exit(128 + @as(u8, @intCast(@intFromEnum(sig))));
-        },
-        .stopped => |sig| {
-            std.debug.print("nurl-build: linker stopped by signal {d}\n", .{@intFromEnum(sig)});
-            std.process.exit(128 + @as(u8, @intCast(@intFromEnum(sig))));
-        },
-        .unknown => |status| {
-            std.debug.print("nurl-build: linker exited with unknown status {d}\n", .{status});
-            std.process.exit(1);
-        },
-    }
+    return child_argv;
 }
 
 fn runMkdir(io: std.Io, args: []const []const u8) !void {
@@ -2377,6 +2853,129 @@ fn deleteTreeIfExists(io: std.Io, path: []const u8) !void {
 fn freePathList(gpa: std.mem.Allocator, paths: *std.ArrayList([]const u8)) void {
     for (paths.items) |path| gpa.free(path);
     paths.deinit(gpa);
+}
+
+fn testBinaryPath(arena: std.mem.Allocator, workdir: []const u8, stem: []const u8) ![]const u8 {
+    const name = if (builtin.os.tag == .windows)
+        try std.fmt.allocPrint(arena, "{s}.exe", .{stem})
+    else
+        try arena.dupe(u8, stem);
+    return std.fs.path.join(arena, &.{ workdir, name });
+}
+
+fn resolveSanTestDriver(init: std.process.Init) ![]const u8 {
+    const gpa = init.gpa;
+    const io = init.io;
+
+    if (init.environ_map.get("CLANG")) |path| {
+        if (path.len != 0) return path;
+    }
+    if (init.environ_map.get("NURL_CC")) |path| {
+        if (path.len != 0) return path;
+    }
+    if (try commandAvailable(gpa, io, "clang", &.{"--version"})) return "clang";
+
+    const fallbacks = [_][]const u8{
+        "/usr/lib/llvm/bin/clang",
+        "/usr/local/bin/clang",
+    };
+    for (fallbacks) |path| {
+        if (pathExists(io, path)) return path;
+    }
+
+    std.debug.print("ERROR: clang not found\n", .{});
+    return error.FileNotFound;
+}
+
+fn ensureSanitizedRuntime(init: std.process.Init, runtime_path: []const u8) !void {
+    const gpa = init.gpa;
+    const io = init.io;
+
+    const result = std.process.run(gpa, io, .{
+        .argv = &.{ "nm", runtime_path },
+    }) catch |err| {
+        if (err == error.FileNotFound) {
+            std.debug.print("ERROR: nm not found\n", .{});
+        }
+        return err;
+    };
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    if (std.mem.indexOf(u8, result.stdout, "__asan_init") != null) return;
+    if (std.mem.indexOf(u8, result.stdout, "asan_init") != null) return;
+
+    std.debug.print("ERROR: {s} was not built with -fsanitize=address.\n", .{runtime_path});
+    std.debug.print("       Run zig build -Dsan=true bootstrap to rebuild it.\n", .{});
+    return error.InvalidData;
+}
+
+fn buildSanTestEnv(init: std.process.Init) !std.process.Environ.Map {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+
+    var env_map = try init.environ_map.clone(gpa);
+    if (env_map.get("ASAN_OPTIONS") == null) {
+        const detect_leaks = init.environ_map.get("LSAN_DETECT_LEAKS") orelse "0";
+        const asan_options = try std.fmt.allocPrint(
+            arena,
+            "detect_leaks={s}:abort_on_error=0:halt_on_error=0:print_stacktrace=1",
+            .{detect_leaks},
+        );
+        try env_map.put("ASAN_OPTIONS", asan_options);
+    }
+    if (env_map.get("UBSAN_OPTIONS") == null) {
+        try env_map.put("UBSAN_OPTIONS", "print_stacktrace=1:halt_on_error=0");
+    }
+    return env_map;
+}
+
+fn isSanSkipName(name: []const u8) bool {
+    return std.mem.indexOf(u8, name, "should_fail_") != null or
+        std.mem.indexOf(u8, name, "nurlfmt_idempotent") != null or
+        std.mem.indexOf(u8, name, "alias_rewrite_types_mod") != null;
+}
+
+fn appendSummaryLine(
+    gpa: std.mem.Allocator,
+    summary: *std.ArrayList(u8),
+    comptime fmt: []const u8,
+    args: anytype,
+) !void {
+    const line = try std.fmt.allocPrint(gpa, fmt, args);
+    defer gpa.free(line);
+    try summary.appendSlice(gpa, line);
+}
+
+fn containsAll(haystack: []const u8, needles: []const []const u8) bool {
+    for (needles) |needle| {
+        if (std.mem.indexOf(u8, haystack, needle) == null) return false;
+    }
+    return true;
+}
+
+fn containsSanitizerMarker(stderr_bytes: []const u8) bool {
+    return std.mem.indexOf(u8, stderr_bytes, "AddressSanitizer") != null or
+        std.mem.indexOf(u8, stderr_bytes, "UndefinedBehaviorSanitizer") != null or
+        std.mem.indexOf(u8, stderr_bytes, "runtime error:") != null or
+        std.mem.indexOf(u8, stderr_bytes, "LeakSanitizer") != null;
+}
+
+fn childExitCodeOr(term: std.process.Child.Term, fallback: u8) u8 {
+    return switch (term) {
+        .exited => |code| code,
+        else => fallback,
+    };
+}
+
+fn printFirstLines(bytes: []const u8, max_lines: usize) void {
+    var it = std.mem.splitScalar(u8, bytes, '\n');
+    var lines: usize = 0;
+    while (it.next()) |line| {
+        if (lines >= max_lines) break;
+        std.debug.print("{s}\n", .{line});
+        lines += 1;
+    }
 }
 
 fn runResultSucceeded(term: std.process.Child.Term) bool {
