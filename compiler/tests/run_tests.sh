@@ -29,7 +29,7 @@ RUNTIME="${NURL_RUNTIME:-$ROOT_DIR/stdlib/runtime.o}"
 
 if [[ ! -x "$NURLC" ]]; then
     echo "ERROR: nurlc not found at $NURLC" >&2
-    echo "       Run: ./build.sh" >&2
+    echo "       Run: zig build bootstrap" >&2
     exit 2
 fi
 if [[ ! -f "$RUNTIME" ]]; then
@@ -55,11 +55,11 @@ ENABLE_NET_TESTS="${NURL_NET_TESTS:-0}"
 HOST_OS="$(uname -s)"
 HOST_ARCH="$(uname -m)"
 
-# Sanitizer mode: separate runner (run_san_tests.sh) handles ASan/UBSan
+# Sanitizer mode: separate `zig build san-test -Dsan=true` runner handles ASan/UBSan
 # instrumented runs because the output shape and pass/fail semantics
 # differ from the baseline-diff model below.
 if [[ "${NURL_SAN:-0}" == "1" ]]; then
-    echo "NURL_SAN=1 set — use ./compiler/tests/run_san_tests.sh for sanitized runs." >&2
+    echo "NURL_SAN=1 set — use: zig build san-test -Dsan=true" >&2
     exit 2
 fi
 

@@ -33,7 +33,7 @@ set "NURLBUILD=%NURL_LINK_HELPER%"
 
 if not exist "%NURLC%" (
     echo ERROR: nurlc not found at %NURLC% 1>&2
-    echo        Run: build.bat 1>&2
+    echo        Run: zig build bootstrap 1>&2
     exit /b 2
 )
 if not exist "%RUNTIME%" (

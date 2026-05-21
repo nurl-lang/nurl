@@ -67,7 +67,7 @@ STATIC_DIR = os.environ.get("NURL_API_STATIC_DIR", str(Path(__file__).resolve().
 BUILD_TIMEOUT_SEC = int(os.environ.get("NURL_BUILD_TIMEOUT_SEC", "30"))
 MAX_SOURCE_BYTES = int(os.environ.get("NURL_MAX_SOURCE_BYTES", str(1 * 1024 * 1024)))
 
-# Native build pipeline (mirrors nurl.sh): plain clang + stdlib/runtime.o.
+# Native build pipeline (mirrors `zig build nurl -- ...`): plain clang + stdlib/runtime.o.
 # The container points this at clang-16 (NURL_NATIVE_CLANG); Debian bookworm's
 # stock `clang` is clang-14, which still enforces typed pointers and rejects
 # the opaque-pointer IR modern nurlc emits.
@@ -75,9 +75,9 @@ NATIVE_CLANG   = os.environ.get(
     "NURL_NATIVE_CLANG",
     "/usr/bin/clang" if Path("/usr/bin/clang").exists() else "clang",
 )
-# build.sh emits runtime.o as LLVM bitcode (it builds the compiler under
+# `zig build` emits runtime.o as LLVM bitcode (it builds the compiler under
 # `-flto`); a stock `clang` + GNU `ld` link — which is what /build does —
-# rejects bitcode with "file format not recognized". build.sh also writes
+# rejects bitcode with "file format not recognized". `zig build` also writes
 # a plain-ELF `runtime.native.o` next to it for exactly this link path, so
 # prefer that when present and only fall back to runtime.o otherwise.
 def _default_runtime_o() -> str:
@@ -853,7 +853,7 @@ def build_wasm(req: BuildWasmRequest):
 
 # ── Native build + download registry ─────────────────────────────
 #
-# /build mirrors what `nurl.sh` does: nurlc → .ll → clang → native
+# /build mirrors what `zig build nurl -- ...` does: nurlc → .ll → clang → native
 # binary, with both artifacts written to OUTPUT_DIR. Each artifact gets
 # an opaque URL-safe token; /download/{token} streams the file back.
 # Tokens are kept in-process, so they're lost on restart — that's fine
@@ -936,7 +936,7 @@ class BuildRequest(BaseModel):
     )
     opt: str | None = Field(
         default=None,
-        description="Clang optimisation flag. Defaults to -O2 (matches nurl.sh).",
+        description="Clang optimisation flag. Defaults to -O2 (matches `zig build nurl`).",
         examples=["-O0", "-O2"],
     )
 
@@ -987,7 +987,7 @@ def _sanitize_basename(raw: str | None) -> str:
     "/build",
     response_model=BuildResponse,
     tags=["build"],
-    summary="Compile NURL source to a native binary (mirrors nurl.sh)",
+    summary="Compile NURL source to a native binary (mirrors `zig build nurl`)",
     responses={
         200: {"description": "Compilation attempted; see stdout/stderr and artifacts."},
         400: {"description": "Empty source or input validation error."},
@@ -999,7 +999,7 @@ def _sanitize_basename(raw: str | None) -> str:
 def build_native(req: BuildRequest, request: Request) -> BuildResponse:
     """Compile NURL source to a native ELF binary.
 
-    Pipeline (identical to `nurl.sh`):
+    Pipeline (identical to `zig build nurl -- ...`):
       1. Write `source` to a temp `.nu` file.
       2. `nurlc <file.nu>` → LLVM IR (`.ll`), saved to `/app/output/...`.
       3. `clang -O2 <ll> stdlib/runtime.o [stdlib/canvas.o [-lSDL2]] -o <bin>`.
@@ -1039,7 +1039,7 @@ def build_native(req: BuildRequest, request: Request) -> BuildResponse:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"link helper not found at '{NURL_LINK_HELPER}'",
         )
-    # An LLVM-bitcode runtime.o (build.sh's -flto artifact) would only fail
+    # An LLVM-bitcode runtime.o (`zig build`'s -flto artifact) would only fail
     # deep in the link with a cryptic ld "file format not recognized". Catch
     # it here — it means the image lacks the plain-ELF runtime.native.o.
     if Path(RUNTIME_O).open("rb").read(4) == b"BC\xc0\xde":
@@ -1048,7 +1048,7 @@ def build_native(req: BuildRequest, request: Request) -> BuildResponse:
             detail=(
                 f"native runtime object {RUNTIME_O} is LLVM bitcode, not an "
                 "ELF object — GNU ld cannot link it. Rebuild the image so "
-                "build.sh produces stdlib/runtime.native.o."
+                "`zig build` produces stdlib/runtime.native.o."
             ),
         )
 

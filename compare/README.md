@@ -33,7 +33,6 @@ zig build bench-csv
 | `CSVROADMAP.md`        | Phased plan to make `csv.nu` production-ready             |
 | `HISTORY.md`           | Append-only bench log, one block per `zig build bench-csv` call |
 | `PROFILE.md`           | `perf record/report` snapshots — top hot symbols          |
-| `run_bench.sh`         | Thin compatibility wrapper around `zig build bench-csv -- ...` |
 | `generate_data.py`     | Deterministic 1 M-row generator (seed `0xC0FFEE`)         |
 | `nurl_analysis.nu`     | NURL pipeline: load → filter → sort → top-10 → write      |
 | `polars_analysis.py`   | Same pipeline in Polars                                    |

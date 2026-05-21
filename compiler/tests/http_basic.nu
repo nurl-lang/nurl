@@ -10,8 +10,8 @@
 //   * http_post_json    — JSON convenience wrapper
 //
 // Manual run:
-//   NURL_HTTP_TESTS=1 ./build.sh         (Linux/macOS)
-//   set NURL_HTTP_TESTS=1 & build.bat    (Windows cmd)
+//   NURL_HTTP_TESTS=1 zig build check
+//   set NURL_HTTP_TESTS=1 && zig build check   (Windows cmd)
 
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_json.nu`

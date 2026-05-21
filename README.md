@@ -74,8 +74,7 @@ The compiler (`nurlc.nu`) is written in NURL itself. The bootstrap runs it
 twice over its own source and requires byte-identical LLVM IR on both rounds
 before the build is accepted.
 
-`zig build` is now the canonical Linux/macOS build entrypoint; `build.sh`
-remains as a compatibility wrapper. The runtime/toolchain defaults to `clang`,
+`zig build` is now the canonical build entrypoint. The runtime/toolchain defaults to `clang`,
 but honors `NURL_CC` to select the C compiler/linker driver. Set
 `NURL_CC="zig cc"` to drive the whole build through Zig's bundled clang + lld +
 libc — one pinned toolchain that also cross-compiles every release target.
@@ -106,11 +105,10 @@ CLI (`code` / `cursor` / `windsurf`, whichever is on PATH). Flags:
 `--no-vscode` (skip the extension step), `--no-path` (don't touch
 `~/.local/bin`), `--force` (rebuild even when artefacts exist),
 `--uninstall` (remove the symlink + extension), `--dry-run`
-(show actions without mutating anything). `./install.sh` remains as a
-compatibility wrapper around the same Zig entrypoint.
+(show actions without mutating anything).
 
 **Manual install from a local checkout:**
-1. `zig build check` (or `./build.sh` as a compatibility wrapper)
+1. `zig build check`
 2. `Ctrl+Shift+P` → "Extensions: Install from VSIX..."
 3. Select `tooling/vscode-nurl/nurl-0.4.4.vsix`
 
@@ -525,7 +523,7 @@ exercised by the build scripts today.
 | Platform          | Backend      | Status                                   |
 |---|---|---|
 | Linux x86_64      | LLVM         | primary dev target — `zig build check`   |
-| Windows x86_64    | LLVM         | fully supported — `build.bat` runs the same bootstrap + snapshot test suite as `build.sh`. Playground cross-compiles via `zig cc -target x86_64-windows-gnu` (static libcurl + Schannel) |
+| Windows x86_64    | LLVM         | fully supported — `zig build check` runs the same bootstrap + snapshot test suite on Windows. Playground cross-compiles via `zig cc -target x86_64-windows-gnu` (static libcurl + Schannel) |
 | macOS x86_64      | LLVM + zig cc | cross-compiled from the `api/` container via `POST /build_macos`; Mach-O binary links only libSystem (no Apple SDK needed). Runs on Apple Silicon via Rosetta 2. canvas/audio/libcurl-HTTP not supported on this target. |
 | macOS ARM64       | LLVM         | should work via clang; untested          |
 | WebAssembly       | wasm32-wasi  | supported via the `api/` container (`zig cc -target wasm32-wasi`, bundled wasi-libc); browser execution via `browser_wasi_shim`. The self-hosting compiler itself also builds to wasm — see `zig build buildwasm` / `zig build wasmnurl -- ...` below |
@@ -580,8 +578,6 @@ nurl/
 │   ├── nurlc_self2(.ll)       — stage 2: fixed-point check
 │   └── nurlc                  — final self-hosting binary
 ├── build.zig                  — canonical build graph and top-level steps
-├── build.sh / build.bat       — compatibility wrapper / Windows driver
-├── nurl.sh  / nurl.bat        — convenience wrapper to compile a `.nu` file
 └── nurlc                      — symlink to build/nurlc (Linux/macOS)
 ```
 
@@ -640,14 +636,7 @@ Use the root Zig build to bootstrap the compiler, build the toolchain, and
 verify stability:
 
 ```sh
-# Linux / macOS
 zig build check
-
-# Compatibility wrapper (same as above)
-./build.sh
-
-# Windows (CMD / PowerShell)
-build.bat
 ```
 
 The Linux/macOS build graph performs a complete bootstrap process:
@@ -703,12 +692,6 @@ clang build\nurlc.ll stdlib\runtime.o -o build\nurlc.exe  # Windows
 # Canonical Zig entrypoint
 zig build nurl -- myprogram.nu              # Creates myprogram binary
 zig build nurl -- myprogram.nu myoutput     # Creates myoutput binary
-
-# Compatibility wrappers
-nurl.sh myprogram.nu                        # Linux / macOS wrapper
-nurl.sh myprogram.nu myoutput
-nurl.bat myprogram.nu               # Creates myprogram.exe
-nurl.bat myprogram.nu myoutput      # Creates myoutput.exe  
 ```
 
 **Manual (two-step):**
@@ -750,8 +733,8 @@ Two knobs cooperate:
 Runtime panics print a stack backtrace before aborting; pipe each
 frame's `binary+0xOFFSET` through `addr2line -e <binary>` to recover
 `.nu:LINE` source locations. ASan / UBSan reports under
-`zig build -Dsan=true` (or `./build.sh --san`) already render `.nu`
-source locations directly. Use `zig build san-test -Dsan=true` to run the
+`zig build -Dsan=true` already render `.nu` source locations directly.
+Use `zig build san-test -Dsan=true` to run the
 sanitizer-specific regression suite.
 
 End-to-end regression test: `./tools/dwarf_test.sh` (no-op when

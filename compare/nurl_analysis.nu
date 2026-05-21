@@ -1,6 +1,6 @@
 // nurl_analysis.nu — load → filter → sort → top-10 → write pipeline
 // over `compare/test_data.csv`. Output format is shared with
-// `compare/polars_analysis.py` so `run_bench.sh` can diff timings.
+// `compare/polars_analysis.py` so `zig build bench-csv` can diff timings.
 //
 // Hot predicate uses cached `vec_data` pointers captured into the
 // closure: each csv_table_view call would otherwise pay three FFI

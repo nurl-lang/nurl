@@ -861,7 +861,7 @@ stopBtn.addEventListener("click", () => {
 
 // ── Build native (POST /build) ────────────────────────────────
 //
-// Compiles to an x86_64 ELF inside the container (mirrors nurl.sh) and
+// Compiles to an x86_64 ELF inside the container (mirrors `zig build nurl`) and
 // surfaces download links for the .ll and the binary. No in-browser run
 // path — this is for pulling artifacts off the server.
 async function buildNative() {

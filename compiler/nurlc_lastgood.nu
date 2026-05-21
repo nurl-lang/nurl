@@ -16,8 +16,7 @@
 //   | a b , & a b    — logical ops, args must be b
 //
 // Bootstrap (automated):
-//   ./build.sh           (Linux/macOS)
-//   build.bat            (Windows)
+//   zig build check
 //
 // Manual bootstrap:
 //   python compiler/nurlc.py --llvm compiler/nurlc.nu > build/nurlc.ll
@@ -8015,9 +8014,9 @@
 // of a cryptic `undefined reference to PQconnectdb` from the linker.
 //
 // Normalisation: strip a leading `lib` prefix so `libcurl` matches
-// the build.sh convention `stdlib/runtime.curl`. Whitelist: `c` /
-// `libc` / `m` / `pthread` / `dl` are always linked (default link
-// line in `build.sh` / `run_tests.sh`) and skip the check.
+// the build-graph convention `stdlib/runtime.curl`. Whitelist: `c` /
+// `libc` / `m` / `pthread` / `dl` are always linked (default native
+// link line in `zig build` / `run_tests.sh`) and skip the check.
 @ __ffi_lib_check i lex s lib → v {
     : i llen ( nurl_str_len lib )
     ? > llen 0 {
@@ -8031,7 +8030,8 @@
         // Whitelist: always-linked system libs (`c`/`m`/`pthread`/`dl`) plus
         // NURL-shipped FFI bridges (`canvas`, `audio`) whose backing C lives
         // in `stdlib/canvas*.c` / `stdlib/audio_wasm.c` and is linked by
-        // `nurl.sh` / `wasmnurl.sh` — they have no `stdlib/runtime.*` sentinel.
+        // `zig build nurl` / `zig build wasmnurl` — they have no
+        // `stdlib/runtime.*` sentinel.
         : b is_sys | ( seq norm `c` ) ( seq norm `m` )
         : b is_thr | ( seq norm `pthread` ) ( seq norm `dl` )
         : b is_brg | ( seq norm `canvas` ) ( seq norm `audio` )
@@ -8042,7 +8042,7 @@
                 : s msg ( nurl_str_cat4
                     `FFI library '` lib `' is required but no build-time sentinel '`
                     ( nurl_str_cat sentinel `' found - install lib` ) )
-                : s msg2 ( nurl_str_cat3 msg norm `-dev (or equivalent) and run build.sh again` )
+                : s msg2 ( nurl_str_cat3 msg norm `-dev (or equivalent) and run zig build bootstrap again` )
                 ( die lex msg2 )
             }
         }
@@ -9737,7 +9737,7 @@
 @ main → v {
     // CLI: `nurlc [--g] [--no-borrowck] <file.nu>`. Optional flags in
     // any order; the lone non-flag argument is the source path.
-    //   --g / -g       toggle DWARF emission (nurl.sh forwards --debug)
+    //   --g / -g       toggle DWARF emission (`zig build nurl -- --debug`)
     //   --no-borrowck  disable the borrow-checker analysis pass; it is
     //                  ON by default (BORROW.md Phase 8)
     //   --borrowck     accepted for compatibility — now a no-op, since

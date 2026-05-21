@@ -43,7 +43,6 @@ zig build install-dev            # bootstrap, build LSP, install ext
 checkout. It bootstraps the compiler if needed, builds `nurl-lsp`,
 copies it to `~/.local/bin/`, packages the VS Code extension, and
 installs it via the `code` (or `windsurf`) CLI when one is on PATH.
-`./install.sh` remains as a compatibility wrapper.
 
 **Manual:**
 
