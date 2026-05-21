@@ -4974,24 +4974,55 @@
         }
     }
     {}
-    // Enum → integer. An enum value's LLVM type is `%Name = { i64, ... }`
-    // whose field 0 is the variant tag, so `# i someEnum` (or any sized
-    // integer dst) extracts that tag; a narrower dst integer truncs the
-    // i64 tag down. Restricted to enums (a `__variants` entry exists) —
-    // a struct → int cast is intentionally not serviced here.
-    : b src_is_enum & & > stlen 1 == ( nurl_str_get st 0 ) 37
-        != 0 ( nurl_str_len ( nurl_sym_get syms
-            ( nurl_str_cat ( nurl_str_slice st 1 - stlen 1 ) `__variants` ) ) )
-    : i enum_dst_iw ( int_width dt )
-    ? & src_is_enum > enum_dst_iw 0
-    { : s tagv ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print tagv )
+    // Named non-pointer source → integer. Enums and structs both lower
+    // to `{ field0, ... }`; `# <int> someAggregate` recovers field 0:
+    //   * enum   → field 0 is the i64 variant tag.
+    //   * struct → field 0 is the first declared field.
+    // The extracted value is normalised to i64 (sext for a narrow int,
+    // ptrtoint for a pointer field 0) and then truncated to a narrower
+    // dst; a float field 0 goes straight through `fptosi`. A field 0
+    // that is itself an aggregate cannot be reduced to an integer.
+    : b src_is_named & > stlen 1 == ( nurl_str_get st 0 ) 37
+    : i named_dst_iw ( int_width dt )
+    ? & & src_is_named > named_dst_iw 0 != ( nurl_str_get st - stlen 1 ) 42
+    { : s sname_c ( nurl_str_slice st 1 - stlen 1 )
+        : s is_enum_c ( nurl_sym_get syms ( nurl_str_cat sname_c `__variants` ) )
+        : s f0t ? != 0 ( nurl_str_len is_enum_c ) `i64`
+            ( nurl_sym_get syms ( nurl_str_cat3 sname_c `__idx_0` `__type` ) )
+        ? == 0 ( nurl_str_len f0t )
+        { ( die lex ( nurl_str_cat3 `cannot cast '` st `' to an integer` ) ) }
+        {}
+        : s xv ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print xv )
         ( nurl_print ` = extractvalue ` ) ( nurl_print st )
         ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
-        ? ( seq dt `i64` )
-        { ( nurl_set_last_type dt ) ^ tagv }
+        : i f0iw ( int_width f0t )
+        : b f0_is_ptr == ( nurl_str_get f0t - ( nurl_str_len f0t ) 1 ) 42
+        : b f0_is_fp | ( seq f0t `double` ) ( seq f0t `float` )
+        ? f0_is_fp
         { ( nurl_print `  ` ) ( nurl_print res )
-            ( nurl_print ` = trunc i64 ` ) ( nurl_print tagv )
+            ( nurl_print ` = fptosi ` ) ( nurl_print f0t )
+            ( nurl_print ` ` ) ( nurl_print xv ) ( nurl_print ` to ` )
+            ( nurl_print dt ) ( nurl_print `\n` )
+            ( nurl_set_last_type dt ) ^ res }
+        {}
+        ? & & ! f0_is_fp ! f0_is_ptr == f0iw 0
+        { ( die lex ( nurl_str_cat3 `cannot cast '` st `' to an integer: field 0 is an aggregate` ) ) }
+        {}
+        : s norm ? & ! f0_is_ptr == f0iw 64 xv ( nurl_cg_reg cg )
+        ? f0_is_ptr
+        { ( nurl_print `  ` ) ( nurl_print norm )
+            ( nurl_print ` = ptrtoint ` ) ( nurl_print f0t )
+            ( nurl_print ` ` ) ( nurl_print xv ) ( nurl_print ` to i64\n` ) }
+        { ? != f0iw 64
+            { ( nurl_print `  ` ) ( nurl_print norm )
+                ( nurl_print ` = sext ` ) ( nurl_print f0t )
+                ( nurl_print ` ` ) ( nurl_print xv ) ( nurl_print ` to i64\n` ) }
+            {} }
+        ? ( seq dt `i64` )
+        { ( nurl_set_last_type dt ) ^ norm }
+        { ( nurl_print `  ` ) ( nurl_print res )
+            ( nurl_print ` = trunc i64 ` ) ( nurl_print norm )
             ( nurl_print ` to ` ) ( nurl_print dt ) ( nurl_print `\n` )
             ( nurl_set_last_type dt ) ^ res }
     }
@@ -5736,6 +5767,30 @@
                 }
             }
         }
+        {}
+
+        // Named-struct field: coerce an integer-width mismatch between
+        // the value and the field's declared type — e.g. an i64 literal
+        // placed in an `i8` / `i16` / `i32` field at construction.
+        // `trunc` to a narrower field, `sext` to a wider one. Enum and
+        // opt/res aggregates ran their own payload coercion above; an
+        // enum has no `__idx_N__type` roster so the lookup is empty and
+        // this is skipped. Pointer / float / struct-typed field
+        // mismatches are left for an explicit `#`-cast.
+        : s decl_fty ? != 0 ( nurl_str_len cur_sname )
+            ( nurl_sym_get syms ( nurl_str_cat3 cur_sname
+                ( nurl_str_cat `__idx_` idx_str ) `__type` ) )
+            ``
+        : i decl_iw ( int_width decl_fty )
+        : i have_iw ( int_width actual_fty )
+        ? & & > decl_iw 0 > have_iw 0 != decl_iw have_iw
+        { : s cv ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print cv )
+            ( nurl_print ? > decl_iw have_iw ` = sext ` ` = trunc ` )
+            ( nurl_print actual_fty ) ( nurl_print ` ` ) ( nurl_print actual_fval )
+            ( nurl_print ` to ` ) ( nurl_print decl_fty ) ( nurl_print `\n` )
+            = actual_fval cv
+            = actual_fty decl_fty }
         {}
 
         : s r ( nurl_cg_reg cg )

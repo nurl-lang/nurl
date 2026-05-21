@@ -43,14 +43,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   payload types too — but went unnoticed because no test constructed
   such a value.
 
-* **`#`-cast from an enum value to an integer now works.**
-  `# i someEnum` (or any sized integer destination) recovers the
-  variant tag — an enum's layout is `{ i64, ... }` with field 0 the
-  tag. Previously the cast emitted no instruction, so the i64-typed
-  use site (a return, `nurl_print_int`, arithmetic) failed the LLVM
-  verifier. `gen_cast` now `extractvalue`s field 0 and truncs the
-  i64 tag to a narrower destination. Regression test
-  `compiler/tests/enum_to_int_cast.nu`.
+* **`#`-cast from a named aggregate (enum or struct) to an integer
+  now works.** `# i someEnumOrStruct` (or any sized integer
+  destination) recovers field 0 — an enum's variant tag, or a
+  struct's first field. Previously the cast emitted no instruction,
+  so the i64-typed use site (a return, `nurl_print_int`, arithmetic)
+  failed the LLVM verifier. `gen_cast` now has one unified branch:
+  `extractvalue` field 0, normalise it to i64 (`sext` a narrow
+  integer field, `ptrtoint` a pointer field, `fptosi` a float
+  field), then `trunc` to a narrower destination. A struct whose
+  field 0 is itself an aggregate is a hard error. Regression tests
+  `compiler/tests/enum_to_int_cast.nu` and
+  `compiler/tests/struct_to_int_cast.nu`.
+
+* **Struct construction coerces narrow integer fields.** `@ S { v }`
+  where `S`'s field is `i8` / `i16` / `i32` and `v` is a wider value
+  (e.g. an i64 literal) used to emit `insertvalue ... i64 …` into the
+  narrow field — an LLVM verifier error — forcing an explicit
+  `# i8` / `# i16`-cast at every construction site. `gen_agg_lit`
+  now coerces each named-struct field value to its declared field
+  type: `trunc` into a narrower field, `sext` into a wider one.
+  Regression test `compiler/tests/struct_narrow_field.nu`.
 
 ## [0.8.0] — 2026-05-20
 
