@@ -98,7 +98,7 @@ line, optionally suffixed `ms`.
 
 ```sh
 # 1. build with debug info (so symbol names survive)
-cd .. && ./nurl.sh -O2 -g compare/nurl_analysis.nu compare/nurl_analysis
+cd .. && zig build nurl -- -O2 -g compare/nurl_analysis.nu compare/nurl_analysis
 cd compare
 
 # 2. record + report

@@ -82,7 +82,7 @@ gcc -O2 -shared -fPIC -ldl -o /tmp/malloc_count.so /tmp/malloc_count.c
 
 # build a debug binary
 cd ~/dev/nurl
-./nurl.sh -O2 -g compare/nurl_analysis.nu compare/nurl_analysis
+zig build nurl -- -O2 -g compare/nurl_analysis.nu compare/nurl_analysis
 
 # count allocations
 LD_PRELOAD=/tmp/malloc_count.so ./compare/nurl_analysis 2>&1 | tail -1

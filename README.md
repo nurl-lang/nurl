@@ -700,11 +700,13 @@ clang build\nurlc.ll stdlib\runtime.o -o build\nurlc.exe  # Windows
 
 **Recommended (automated):**
 ```sh
-# Linux / macOS
-./nurl.sh myprogram.nu              # Creates myprogram binary
-./nurl.sh myprogram.nu myoutput     # Creates myoutput binary  
+# Canonical Zig entrypoint
+zig build nurl -- myprogram.nu              # Creates myprogram binary
+zig build nurl -- myprogram.nu myoutput     # Creates myoutput binary
 
-# Windows
+# Compatibility wrappers
+nurl.sh myprogram.nu                        # Linux / macOS wrapper
+nurl.sh myprogram.nu myoutput
 nurl.bat myprogram.nu               # Creates myprogram.exe
 nurl.bat myprogram.nu myoutput      # Creates myoutput.exe  
 ```
@@ -732,7 +734,7 @@ points, single-step by `.nu` line, `info locals`, `print x` with the
 correct NURL-flavoured type name (`i`, `b`, `f`, …).
 
 ```sh
-./nurl.sh --debug examples/fizzbuzz.nu          # builds fizzbuzz with DWARF
+zig build nurl -- --debug examples/fizzbuzz.nu  # builds fizzbuzz with DWARF
 gdb -ex 'break fizzbuzz' -ex run ./fizzbuzz     # break by name
 gdb -ex 'break examples/fizzbuzz.nu:18' …       # break by source line
 ```
@@ -740,7 +742,7 @@ gdb -ex 'break examples/fizzbuzz.nu:18' …       # break by source line
 Two knobs cooperate:
 - `nurlc --g <file>` emits `!DICompileUnit` / `!DISubprogram` /
   `!DILocation` / `!DILocalVariable` metadata into the LLVM IR.
-- `nurl.sh --debug` forwards `--g` to nurlc AND links with `-g
+- `zig build nurl -- --debug ...` forwards `--g` to nurlc AND links with `-g
   -rdynamic` on a freshly-built non-LTO `runtime_debug.o`. (LTO
   silently drops DWARF in the current LLVM/gcc-ld pipeline, hence
   the side-by-side runtime build.)
