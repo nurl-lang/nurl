@@ -80,6 +80,7 @@ CLAUDE.local.md
 /apireply.txt
 /buildreply.json
 result-diff.txt
+duo/
 
 # Benchmark data outputs (data files in compare/ are large + regenerable)
 compare/*.csv

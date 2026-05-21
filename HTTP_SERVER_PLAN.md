@@ -521,8 +521,12 @@ Optional but expected.
 - [ ] **HTTP/2.** Major undertaking — separate planning doc.
 - [ ] **WebSocket upgrade.** Frame parser + writer; reuse Phase 1
       sockets. Probably ~400 LOC.
-- [ ] **Multipart/form-data.** Boundary-delimited parser; needed for
-      file uploads.
+- [x] **Multipart/form-data — SHIPPED 2026-05-12.** Boundary-delimited
+      parser `stdlib/ext/http_multipart.nu` — `parse_multipart_form` plus
+      the `request_multipart_parts` convenience. Buffered: the whole body
+      and a per-part copy both live in RAM. The streaming variant that
+      lifts that memory ceiling is §9.1 below. Regression:
+      `compiler/tests/http_multipart.nu` (offline).
 - [x] **Reverse-proxy / streaming pass-through — SHIPPED 2026-05-07:**
       `stdlib/ext/http_proxy.nu`. Wires libcurl multi streaming
       (runtime §14b) into the chunked response writer — every upstream
@@ -537,6 +541,101 @@ Optional but expected.
       HttpResponse HttpErr`) path intentionally not exposed — multi-
       field-struct payloads inside `! T E` trip a compiler heap-boxing
       bug. Streaming is the only mode AI gateways need anyway.
+
+### 9.1 Streaming uploads — O(chunk) memory
+
+*Roadmap entry, drafted 2026-05-22 — surfaced while building the
+`duo/` Milk-V CMS. Not yet scheduled.*
+
+**Motivation.** The whole request-body path is buffer-everything.
+`__read_n_bytes` (`http_request.nu`) accumulates the full Content-Length
+body into `req.body : ( Vec u )`; `parse_multipart_form` then *copies*
+each part's bytes into a fresh `( Vec u )`. Peak RSS ≈ body + Σ
+part-copies ≈ **2× the upload size** — which is why
+`http_req_body_default_max` is a hard 10 MB cap. On small hosts it bites
+hard: the `duo/` CMS on a 29 MB-RAM Milk-V Duo SIGSEGVs (OOM) above
+~4 MB and had to cap request bodies at 2 MB. Every NURL service that
+accepts real file uploads — the playground itself, the FastAPI
+replacement — hits the same wall.
+
+**Goal.** Accept a multipart upload of arbitrary size with memory
+bounded by the *chunk* size, not the body size. Bytes flow socket →
+parser → file as they arrive; neither the whole body nor a whole part is
+ever resident.
+
+**Piece 1 — streaming body access (server layer).** Today `__finish_body`
+reads the entire body into `req.body` before the handler runs. Add an
+opt-out path: a handler marked streaming is invoked with the body *not*
+pre-read and handed a reader over the live connection.
+
+```
+: BodyReader { TcpConn conn  i remaining  ( Vec u ) carry }
+( request_body_reader HttpRequest req )            → ? BodyReader
+( body_read BodyReader r ( Vec u ) buf i max )     → ! i NetErr   // bytes read; 0 = body end
+```
+
+`carry` seeds the reader with bytes already pulled past the head during
+head-parsing; `remaining` tracks Content-Length. A new `server_*`
+constructor (or a per-route streaming flag) tells `server_run_once` to
+skip `__finish_body`'s buffering for streaming routes.
+
+**Piece 2 — streaming multipart parser (state machine).** Replace
+"whole body in → all parts out" with a chunk-fed push/pull parser:
+
+```
+( multipart_stream_new s boundary )                  → MultipartStream
+( multipart_stream_push MultipartStream ( Vec u ) )   → v             // feed a chunk
+( multipart_stream_next MultipartStream )             → MultipartEvent // pull events
+```
+
+`MultipartEvent` ∈ { `PartStart { String name, String filename, String
+content_type }`, `PartData { ( Vec u ) chunk }` (borrowed view into the
+parser scratch, valid until the next `next`), `PartEnd`, `NeedMore`,
+`Done`, `Bad` }.
+
+State machine: `Preamble → BoundaryLine → PartHeaders → PartBody →
+PartEnd → (BoundaryLine | Epilogue) → Done`. `PartBody` scans incoming
+bytes for `CRLF "--" boundary`; the only retained buffer is a
+`len(boundary)+6`-byte window straddling chunk edges, so a boundary
+split across two `push`es is still found. Memory is O(boundary), never
+O(body).
+
+**Handler shape.**
+
+```
+@ h_upload_stream HttpRequest req ... → HttpResponse {
+  ?? ( request_body_reader req ) { T br → {
+    : MultipartStream ms ( multipart_stream_new boundary )
+    // loop: body_read → multipart_stream_push → drain multipart_stream_next:
+    //   PartStart(filename) → open a BufWriter on public/<basename>
+    //   PartData            → bufwriter_write   (buffered write — its real home)
+    //   PartEnd             → flush + close
+  } ... }
+}
+```
+
+Buffered *writing* belongs exactly here: many small `PartData` chunks
+coalesced into block-sized disk writes via the already-shipped buffered
+streaming-IO `BufWriter`. Buffered write alone does NOT cut peak memory
+— only streaming does; the two compose.
+
+**Coexistence.** `parse_multipart_form` stays as the convenience for
+small bodies / "I want every part in memory at once"; the streaming API
+is the large/unbounded path. Chosen per route.
+
+**Acceptance.**
+- Offline: `multipart_stream_*` fed hand-built bodies in adversarial
+  chunk splits — boundary split across `push` calls, a header split
+  mid-line — must emit identical events to a whole-body parse.
+- Gated (`NURL_NET_TESTS=1`): `compiler/tests/http_server_upload_stream.nu`
+  — a streaming `/upload` route; a backgrounded curl POSTs a file larger
+  than `http_req_body_default_max` (e.g. 32 MB); the server streams it to
+  a temp file; the test asserts the on-disk byte-count + checksum match
+  AND that server RSS stayed flat (no body-proportional growth).
+
+**Scope.** ~300–400 LOC (streaming parser ~250, server body-reader path
+~100) plus tests. Independent of HTTP/2 and WebSocket — can land any
+time after the buffered multipart parser above.
 
 ---
 

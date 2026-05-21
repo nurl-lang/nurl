@@ -377,7 +377,12 @@ $ `stdlib/ext/http_response.nu`
                     : i have ( vec_len [u] . req body )
                     ? >= have clen { ^ T } {}
                     : i need - clen have
-                    : !( Vec u ) HttpReqErr more ( read_body_to conn req need )
+                    // `carry` already drained `have` body bytes into req.body;
+                    // exactly `need` more sit on the socket. Read precisely
+                    // that — NOT read_body_to, which re-derives the length
+                    // from Content-Length and would try to read the whole
+                    // `clen` again (and rejects need<clen as HttpReqTooLarge).
+                    : !( Vec u ) HttpReqErr more ( __read_n_bytes conn need )
                     ?? more {
                         T extra → {
                             ( vec_extend [u] . req body extra )
