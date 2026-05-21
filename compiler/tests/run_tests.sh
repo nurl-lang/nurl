@@ -37,9 +37,10 @@ if [[ ! -f "$RUNTIME" ]]; then
     exit 2
 fi
 
-LINK_HELPER="$ROOT_DIR/tools/nurl-build/run.sh"
+LINK_HELPER="$ROOT_DIR/build/nurl-build"
 if [[ ! -x "$LINK_HELPER" ]]; then
     echo "ERROR: link helper not found at $LINK_HELPER" >&2
+    echo "       Run: zig build nurl-build" >&2
     exit 2
 fi
 

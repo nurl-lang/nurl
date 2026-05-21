@@ -66,7 +66,7 @@ function activate(context) {
     const serverPath = resolveServerPath(context);
     if (!serverPath) {
         vscode.window.showWarningMessage(
-            "NURL: 'nurl-lsp' binary not found. Run ./tools/nurl-lsp/build.sh, " +
+            "NURL: 'nurl-lsp' binary not found. Run 'zig build nurl-lsp', " +
             "or set 'nurl.server.path' in settings. Syntax highlighting still works."
         );
         return;

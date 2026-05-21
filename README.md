@@ -203,7 +203,7 @@ the [MCP section below](#mcp-server--let-an-llm-drive-the-toolchain).
 ### Build & run the container
 
 From the **repository root** (the build context must be the repo root so
-the Dockerfile can access `build.sh`, `compiler/`, `stdlib/`, `examples/`,
+the Dockerfile can access `build.zig`, `compiler/`, `stdlib/`, `examples/`,
 `spec/`, `README.md`):
 
 ```bash
@@ -232,9 +232,9 @@ The same `POST /build_wasm` pipeline can be pointed at `compiler/nurlc.nu`
 itself, producing a ~390 KB `nurlc.wasm` that **is** the NURL compiler:
 
 ```bash
-./startdev.sh        # one terminal: bring up the API container
-./buildwasm.sh       # → ./nurlc.wasm  (POSTs nurlc.nu to /build_wasm)
-./wasmnurl.sh examples/showcase.nu   # uses nurlc.wasm under wasmtime
+zig build startdev
+zig build buildwasm       # → ./nurlc.wasm  (POSTs nurlc.nu to /build_wasm)
+zig build wasmnurl -- examples/showcase.nu
 ```
 
 Once built, `nurlc.wasm` runs anywhere a WASI host does — `wasmtime`,
@@ -526,7 +526,7 @@ exercised by the build scripts today.
 | Windows x86_64    | LLVM         | fully supported — `build.bat` runs the same bootstrap + snapshot test suite as `build.sh`. Playground cross-compiles via `zig cc -target x86_64-windows-gnu` (static libcurl + Schannel) |
 | macOS x86_64      | LLVM + zig cc | cross-compiled from the `api/` container via `POST /build_macos`; Mach-O binary links only libSystem (no Apple SDK needed). Runs on Apple Silicon via Rosetta 2. canvas/audio/libcurl-HTTP not supported on this target. |
 | macOS ARM64       | LLVM         | should work via clang; untested          |
-| WebAssembly       | wasm32-wasi  | supported via the `api/` container (`zig cc -target wasm32-wasi`, bundled wasi-libc); browser execution via `browser_wasi_shim`. The self-hosting compiler itself also builds to wasm — see `buildwasm.sh` / `wasmnurl.sh` below |
+| WebAssembly       | wasm32-wasi  | supported via the `api/` container (`zig cc -target wasm32-wasi`, bundled wasi-libc); browser execution via `browser_wasi_shim`. The self-hosting compiler itself also builds to wasm — see `zig build buildwasm` / `zig build wasmnurl -- ...` below |
 | Android / iOS     | LLVM cross   | planned                                  |
 | Embedded (no_std) | LLVM         | planned                                  |
 | JVM               | JVM bytecode | future                                   |
@@ -577,9 +577,8 @@ nurl/
 │   ├── nurlc_self(.ll)        — stage 1: self-compiled
 │   ├── nurlc_self2(.ll)       — stage 2: fixed-point check
 │   └── nurlc                  — final self-hosting binary
-├── build.zig                  — canonical Linux/macOS build graph
+├── build.zig                  — canonical build graph and top-level steps
 ├── build.sh / build.bat       — compatibility wrapper / Windows driver
-├── clean.sh / clean.bat       — remove build artefacts
 ├── nurl.sh  / nurl.bat        — convenience wrapper to compile a `.nu` file
 └── nurlc                      — symlink to build/nurlc (Linux/macOS)
 ```
@@ -673,11 +672,7 @@ zig build san-test -Dsan=true
 
 **Clean build artifacts:**
 ```sh
-# Linux / macOS
-./clean.sh
-
-# Windows (CMD / PowerShell)  
-clean.bat
+zig build clean-tree
 ```
 
 **Manual build (if needed):**

@@ -45,7 +45,7 @@ NURLFMT="$ROOT_DIR/build/nurlfmt"
 NURLC="$ROOT_DIR/build/nurlc"
 
 if [[ ! -x "$NURLFMT" ]]; then
-    echo "ERROR: $NURLFMT not found. Run ./tools/nurlfmt/build.sh first." >&2
+    echo "ERROR: $NURLFMT not found. Run: zig build nurlfmt" >&2
     exit 2
 fi
 if [[ ! -x "$NURLC" ]]; then

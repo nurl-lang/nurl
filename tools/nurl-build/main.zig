@@ -18,6 +18,8 @@ const library_specs = [_]LibrarySpec{
 
 const Command = enum {
     link,
+    nurl,
+    wasmnurl,
     mkdir,
     copy,
     symlink,
@@ -52,6 +54,8 @@ fn run(init: std.process.Init) !void {
     if (std.meta.stringToEnum(Command, args[1])) |cmd| {
         return switch (cmd) {
             .link => runLink(init, args[2..]),
+            .nurl => runNurl(init, args[2..]),
+            .wasmnurl => runWasmNurl(init, args[2..]),
             .mkdir => runMkdir(io, args[2..]),
             .copy => runCopy(init.gpa, arena, io, args[2..]),
             .symlink => runSymlink(arena, init, io, args[2..]),
@@ -65,6 +69,439 @@ fn run(init: std.process.Init) !void {
     }
 
     return runLink(init, args[1..]);
+}
+
+const CompileFlavor = enum {
+    native,
+    wasm,
+};
+
+const UserCompileConfig = struct {
+    root: []const u8,
+    srcfile: []const u8,
+    outbase: []const u8,
+    emit_ir: bool,
+    emit_asm: bool,
+    debug_info: bool,
+    opt: []const u8,
+};
+
+fn runNurl(init: std.process.Init, args: []const []const u8) !void {
+    const cfg = try parseUserCompileArgs(init, args, .native);
+    try runUserCompile(init, cfg, .native);
+}
+
+fn runWasmNurl(init: std.process.Init, args: []const []const u8) !void {
+    const cfg = try parseUserCompileArgs(init, args, .wasm);
+    try runUserCompile(init, cfg, .wasm);
+}
+
+fn parseUserCompileArgs(init: std.process.Init, args: []const []const u8, flavor: CompileFlavor) !UserCompileConfig {
+    const arena = init.arena.allocator();
+    var i: usize = 0;
+    var root: []const u8 = ".";
+    var emit_ir = false;
+    var emit_asm = false;
+    var debug_info = false;
+    var cli_opt: ?[]const u8 = null;
+
+    while (i < args.len) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--root")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            root = args[i];
+        } else if (std.mem.eql(u8, arg, "--emit-ir") or std.mem.eql(u8, arg, "--emit=ir")) {
+            emit_ir = true;
+        } else if (std.mem.eql(u8, arg, "--emit-asm") or std.mem.eql(u8, arg, "--emit=asm")) {
+            emit_asm = true;
+        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            printUserCompileUsage(flavor);
+            std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "-g") or std.mem.eql(u8, arg, "--debug")) {
+            debug_info = true;
+        } else if (std.mem.eql(u8, arg, "-O0") or std.mem.eql(u8, arg, "-O1") or std.mem.eql(u8, arg, "-O2") or std.mem.eql(u8, arg, "-O3")) {
+            cli_opt = arg;
+        } else if (std.mem.startsWith(u8, arg, "--")) {
+            std.debug.print("nurl-build: unknown {s} arg: {s}\n", .{ @tagName(flavor), arg });
+            return error.InvalidArgs;
+        } else break;
+        i += 1;
+    }
+
+    if (args.len - i == 0 or args.len - i > 2) {
+        printUserCompileUsage(flavor);
+        return error.InvalidArgs;
+    }
+
+    const srcfile = args[i];
+    const outbase = if (args.len - i == 2)
+        args[i + 1]
+    else if (std.mem.endsWith(u8, srcfile, ".nu"))
+        srcfile[0 .. srcfile.len - ".nu".len]
+    else
+        srcfile;
+
+    return .{
+        .root = try absolutePath(arena, root),
+        .srcfile = srcfile,
+        .outbase = outbase,
+        .emit_ir = emit_ir,
+        .emit_asm = emit_asm,
+        .debug_info = debug_info,
+        .opt = cli_opt orelse init.environ_map.get("NURL_OPT") orelse "-O2",
+    };
+}
+
+fn printUserCompileUsage(flavor: CompileFlavor) void {
+    switch (flavor) {
+        .native => std.debug.print("usage: nurl-build nurl [--root <path>] [--emit-ir|--emit=ir] [--emit-asm|--emit=asm] [-O0|-O1|-O2|-O3] [-g|--debug] <file.nu> [output_name]\n", .{}),
+        .wasm => std.debug.print("usage: nurl-build wasmnurl [--root <path>] [--emit-ir|--emit=ir] [--emit-asm|--emit=asm] [-O0|-O1|-O2|-O3] [-g|--debug] <file.nu> [output_name]\n", .{}),
+    }
+}
+
+fn runUserCompile(init: std.process.Init, cfg: UserCompileConfig, flavor: CompileFlavor) !void {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+    const io = init.io;
+
+    try ensureExists(io, cfg.srcfile, "source file");
+
+    const llfile = try std.fmt.allocPrint(arena, "{s}.ll", .{cfg.outbase});
+    const sfile = try std.fmt.allocPrint(arena, "{s}.s", .{cfg.outbase});
+
+    if (cfg.emit_ir) {
+        std.debug.print("[1/1] {s} -> {s}\n", .{ cfg.srcfile, llfile });
+    } else if (flavor == .wasm) {
+        std.debug.print("[1/2] {s} -> {s}  (via nurlc.wasm)\n", .{ cfg.srcfile, llfile });
+    } else {
+        std.debug.print("[1/2] {s} -> {s}\n", .{ cfg.srcfile, llfile });
+    }
+
+    const ir_bytes = switch (flavor) {
+        .native => try compileToLlViaNurlc(init, cfg),
+        .wasm => try compileToLlViaWasm(init, cfg),
+    };
+    defer gpa.free(ir_bytes);
+
+    try ensureParentDir(io, llfile);
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = llfile,
+        .data = ir_bytes,
+    });
+
+    if (cfg.emit_ir) {
+        std.debug.print("\nDone: {s}\n", .{llfile});
+        return;
+    }
+
+    const driver_override = init.environ_map.get("NURL_CC") orelse init.environ_map.get("CLANG") orelse "clang";
+
+    if (cfg.emit_asm) {
+        try emitAssembly(init, driver_override, cfg, llfile, sfile);
+        std.debug.print("\nDone: {s}\n", .{sfile});
+        return;
+    }
+
+    var extra_objs: std.ArrayList([]const u8) = .empty;
+    defer extra_objs.deinit(gpa);
+    var extra_libs: std.ArrayList([]const u8) = .empty;
+    defer extra_libs.deinit(gpa);
+    try collectCanvasLinkExtras(gpa, io, cfg.root, ir_bytes, &extra_objs, &extra_libs);
+
+    var runtime_override: ?[]const u8 = null;
+    if (cfg.debug_info and builtin.os.tag != .windows) {
+        runtime_override = try ensureDebugRuntime(init, cfg.root, driver_override);
+    }
+
+    std.debug.print("[2/2] {s} -> {s}\n", .{ llfile, cfg.outbase });
+
+    var link_args: std.ArrayList([]const u8) = .empty;
+    defer link_args.deinit(gpa);
+    try link_args.append(gpa, "--opt");
+    try link_args.append(gpa, cfg.opt);
+    if (runtime_override) |runtime| {
+        try link_args.appendSlice(gpa, &.{ "--no-lto", "--runtime", runtime });
+    }
+    if (cfg.debug_info) {
+        try link_args.appendSlice(gpa, &.{ "--flag", "-g" });
+        if (builtin.os.tag != .windows) {
+            try link_args.appendSlice(gpa, &.{ "--flag", "-rdynamic" });
+        }
+    }
+    for (extra_objs.items) |obj| {
+        try link_args.appendSlice(gpa, &.{ "--extra-obj", obj });
+    }
+    for (extra_libs.items) |lib| {
+        try link_args.appendSlice(gpa, &.{ "--extra-lib", lib });
+    }
+    try link_args.appendSlice(gpa, &.{ "--driver", driver_override, cfg.root, llfile, cfg.outbase });
+    try runLink(init, link_args.items);
+
+    std.debug.print("\nDone: {s}\n", .{cfg.outbase});
+}
+
+fn compileToLlViaNurlc(init: std.process.Init, cfg: UserCompileConfig) ![]u8 {
+    const gpa = init.gpa;
+    const io = init.io;
+
+    const nurlc_path = try resolveNurlc(init, cfg.root);
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(gpa);
+    try argv.append(gpa, nurlc_path);
+    if (cfg.debug_info) try argv.append(gpa, "--g");
+    try argv.append(gpa, cfg.srcfile);
+
+    const result = try std.process.run(gpa, io, .{ .argv = argv.items });
+    errdefer {
+        gpa.free(result.stdout);
+        gpa.free(result.stderr);
+    }
+    try ensureSuccessWithStderr(result, "NURL compilation failed");
+    gpa.free(result.stderr);
+    return result.stdout;
+}
+
+fn compileToLlViaWasm(init: std.process.Init, cfg: UserCompileConfig) ![]u8 {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+    const io = init.io;
+
+    const wasmtime = try resolveWasmtime(init);
+    const nurlc_wasm = try resolveNurlcWasm(init, cfg.root);
+    const src_abs = try absolutePath(arena, cfg.srcfile);
+    const src_dir = std.fs.path.dirname(src_abs) orelse ".";
+
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(gpa);
+    try argv.appendSlice(gpa, &.{ wasmtime, "run", "--dir=." });
+    if (!std.mem.eql(u8, src_dir, ".")) {
+        const cwd_abs = try std.fs.path.resolve(arena, &.{"."});
+        if (!std.mem.eql(u8, src_dir, cwd_abs)) {
+            try argv.append(gpa, try std.fmt.allocPrint(arena, "--dir={s}", .{src_dir}));
+        }
+    }
+    try argv.appendSlice(gpa, &.{ nurlc_wasm, cfg.srcfile });
+
+    const result = try std.process.run(gpa, io, .{ .argv = argv.items });
+    errdefer {
+        gpa.free(result.stdout);
+        gpa.free(result.stderr);
+    }
+    try ensureSuccessWithStderr(result, "wasmtime nurlc.wasm failed");
+    gpa.free(result.stderr);
+    return result.stdout;
+}
+
+fn emitAssembly(
+    init: std.process.Init,
+    driver_override: []const u8,
+    cfg: UserCompileConfig,
+    llfile: []const u8,
+    sfile: []const u8,
+) !void {
+    const gpa = init.gpa;
+    const io = init.io;
+    var driver_parts = try splitDriver(gpa, driver_override, init);
+    defer driver_parts.deinit(gpa);
+
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(gpa);
+    try argv.appendSlice(gpa, driver_parts.items);
+    try argv.appendSlice(gpa, &.{cfg.opt});
+    if (cfg.debug_info) {
+        try argv.append(gpa, "-g");
+    }
+    try argv.appendSlice(gpa, &.{ "-S", llfile, "-o", sfile });
+
+    try ensureParentDir(io, sfile);
+
+    const result = try std.process.run(gpa, io, .{ .argv = argv.items });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    try ensureSuccessWithStderr(result, "clang -S failed");
+}
+
+fn resolveNurlc(init: std.process.Init, root: []const u8) ![]const u8 {
+    const arena = init.arena.allocator();
+    const io = init.io;
+
+    const build_nurlc = try std.fs.path.join(arena, &.{ root, "build", if (builtin.os.tag == .windows) "nurlc.exe" else "nurlc" });
+    if (pathExists(io, build_nurlc)) return build_nurlc;
+
+    const root_nurlc = try std.fs.path.join(arena, &.{ root, if (builtin.os.tag == .windows) "nurlc.exe" else "nurlc" });
+    if (pathExists(io, root_nurlc)) return root_nurlc;
+
+    return if (builtin.os.tag == .windows) "nurlc.exe" else "nurlc";
+}
+
+fn resolveNurlcWasm(init: std.process.Init, root: []const u8) ![]const u8 {
+    const arena = init.arena.allocator();
+    const io = init.io;
+    if (init.environ_map.get("NURLC_WASM")) |path| {
+        if (pathExists(io, path)) return path;
+    }
+
+    const root_wasm = try std.fs.path.join(arena, &.{ root, "nurlc.wasm" });
+    if (pathExists(io, root_wasm)) return root_wasm;
+
+    const build_wasm = try std.fs.path.join(arena, &.{ root, "build", "nurlc.wasm" });
+    if (pathExists(io, build_wasm)) return build_wasm;
+
+    std.debug.print("ERROR: nurlc.wasm not found under {s}\n", .{root});
+    std.debug.print("       Run: zig build buildwasm\n", .{});
+    return error.FileNotFound;
+}
+
+fn resolveWasmtime(init: std.process.Init) ![]const u8 {
+    const arena = init.arena.allocator();
+
+    if (init.environ_map.get("WASMTIME")) |path| {
+        return path;
+    }
+    if (init.environ_map.get("HOME")) |home| {
+        const fallback = try std.fs.path.join(arena, &.{ home, ".wasmtime", "bin", "wasmtime" });
+        if (pathExists(init.io, fallback)) return fallback;
+    }
+    return "wasmtime";
+}
+
+fn collectCanvasLinkExtras(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    root: []const u8,
+    ir_bytes: []const u8,
+    extra_objs: *std.ArrayList([]const u8),
+    extra_libs: *std.ArrayList([]const u8),
+) !void {
+    if (!containsAny(ir_bytes, &.{
+        "@canvas_open",
+        "@canvas_present",
+        "@canvas_sleep",
+        "@canvas_should_close",
+        "@canvas_close",
+        "@canvas_mouse_x",
+        "@canvas_mouse_y",
+        "@canvas_mouse_btn",
+    })) return;
+
+    const canvas_o = try std.fs.path.join(std.heap.page_allocator, &.{ root, "stdlib", "canvas.o" });
+    defer std.heap.page_allocator.free(canvas_o);
+    if (!pathExists(io, canvas_o)) {
+        std.debug.print("ERROR: program uses canvas FFI but {s} is missing.\n", .{canvas_o});
+        std.debug.print("       Run zig build bootstrap first.\n", .{});
+        return error.FileNotFound;
+    }
+    try extra_objs.append(gpa, try gpa.dupe(u8, canvas_o));
+
+    const canvas_marker = try std.fs.path.join(std.heap.page_allocator, &.{ root, "stdlib", "canvas.sdl2" });
+    defer std.heap.page_allocator.free(canvas_marker);
+    if (pathExists(io, canvas_marker)) {
+        try extra_libs.append(gpa, "-lSDL2");
+    } else {
+        std.debug.print("[info] canvas.o is a stub build (no SDL2 at build time).\n", .{});
+    }
+}
+
+fn ensureDebugRuntime(init: std.process.Init, root: []const u8, driver_override: []const u8) ![]const u8 {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+    const io = init.io;
+    const runtime_c = try std.fs.path.join(arena, &.{ root, "stdlib", "runtime.c" });
+    const debug_runtime = try std.fs.path.join(arena, &.{ root, "stdlib", "runtime_debug.o" });
+
+    const needs_rebuild = blk: {
+        if (!pathExists(io, debug_runtime)) break :blk true;
+        const runtime_stat = try std.Io.Dir.cwd().statFile(io, runtime_c, .{});
+        const debug_stat = try std.Io.Dir.cwd().statFile(io, debug_runtime, .{});
+        break :blk runtime_stat.mtime.nanoseconds > debug_stat.mtime.nanoseconds;
+    };
+    if (!needs_rebuild) return debug_runtime;
+
+    var driver_parts = try splitDriver(gpa, driver_override, init);
+    defer driver_parts.deinit(gpa);
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(gpa);
+    try argv.appendSlice(gpa, driver_parts.items);
+    try argv.appendSlice(gpa, &.{ "-O0", "-g" });
+    try appendRuntimeCompileFlags(gpa, arena, io, &argv, root);
+    try argv.appendSlice(gpa, &.{ "-c", runtime_c, "-o", debug_runtime });
+
+    const result = try std.process.run(gpa, io, .{ .argv = argv.items });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    try ensureSuccessWithStderr(result, "runtime debug rebuild failed");
+    return debug_runtime;
+}
+
+fn appendRuntimeCompileFlags(
+    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    io: std.Io,
+    argv: *std.ArrayList([]const u8),
+    root: []const u8,
+) !void {
+    const compile_specs = [_]struct {
+        marker: []const u8,
+        define_flag: []const u8,
+        pkg: []const u8,
+    }{
+        .{ .marker = "runtime.curl", .define_flag = "-DNURL_HAVE_LIBCURL", .pkg = "libcurl" },
+        .{ .marker = "runtime.openssl", .define_flag = "-DNURL_HAVE_OPENSSL", .pkg = "openssl" },
+        .{ .marker = "runtime.sqlite3", .define_flag = "-DNURL_HAVE_SQLITE3", .pkg = "sqlite3" },
+        .{ .marker = "runtime.z", .define_flag = "-DNURL_HAVE_ZLIB", .pkg = "zlib" },
+    };
+
+    const pkg_config = "pkg-config";
+    for (compile_specs) |spec| {
+        const marker_path = try std.fs.path.join(arena, &.{ root, "stdlib", spec.marker });
+        if (!pathExists(io, marker_path)) continue;
+        try argv.append(gpa, spec.define_flag);
+
+        const result = std.process.run(gpa, io, .{
+            .argv = &.{ pkg_config, "--cflags", spec.pkg },
+        }) catch |err| {
+            if (err == error.FileNotFound) continue;
+            return err;
+        };
+        defer gpa.free(result.stdout);
+        defer gpa.free(result.stderr);
+        switch (result.term) {
+            .exited => |code| {
+                if (code != 0) continue;
+                var it = std.mem.tokenizeAny(u8, result.stdout, " \t\r\n");
+                while (it.next()) |token| {
+                    try argv.append(gpa, try arena.dupe(u8, token));
+                }
+            },
+            else => {},
+        }
+    }
+}
+
+fn containsAny(haystack: []const u8, needles: []const []const u8) bool {
+    for (needles) |needle| {
+        if (std.mem.indexOf(u8, haystack, needle) != null) return true;
+    }
+    return false;
+}
+
+fn ensureSuccessWithStderr(result: std.process.RunResult, label: []const u8) !void {
+    switch (result.term) {
+        .exited => |code| {
+            if (code == 0) return;
+            if (result.stderr.len != 0) std.debug.print("{s}", .{result.stderr});
+            if (result.stdout.len != 0) std.debug.print("{s}", .{result.stdout});
+            std.debug.print("ERROR: {s}\n", .{label});
+            return error.ChildProcessFailed;
+        },
+        else => {
+            if (result.stderr.len != 0) std.debug.print("{s}", .{result.stderr});
+            if (result.stdout.len != 0) std.debug.print("{s}", .{result.stdout});
+            std.debug.print("ERROR: {s}\n", .{label});
+            return error.ChildProcessFailed;
+        },
+    }
 }
 
 fn runLink(init: std.process.Init, args: []const []const u8) !void {
@@ -181,6 +618,7 @@ fn runLink(init: std.process.Init, args: []const []const u8) !void {
     }
     try child_argv.appendSlice(gpa, extra_libs.items);
 
+    try ensureParentDir(io, output_path);
     try child_argv.append(gpa, "-o");
     try child_argv.append(gpa, output_path);
 
@@ -222,7 +660,7 @@ fn runMkdir(io: std.Io, args: []const []const u8) !void {
         std.debug.print("usage: nurl-build mkdir <path>\n", .{});
         return error.InvalidArgs;
     }
-    try std.Io.Dir.cwd().createDirPath(io, args[0]);
+    try ensureDirPath(io, args[0]);
 }
 
 fn runCopy(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
@@ -246,9 +684,7 @@ fn runCopy(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, args: [
 
     const src_abs = try absolutePath(arena, args[i]);
     const dest_abs = try absolutePath(arena, args[i + 1]);
-    if (std.fs.path.dirname(dest_abs)) |parent| {
-        try std.Io.Dir.cwd().createDirPath(io, parent);
-    }
+    try ensureParentDir(io, dest_abs);
 
     var src_file = try std.Io.Dir.cwd().openFile(io, src_abs, .{});
     defer src_file.close(io);
@@ -282,9 +718,7 @@ fn runSymlink(
     const dest_parent_abs = try absolutePath(arena, dest_parent);
     const rel_target = try std.fs.path.relative(arena, ".", init.environ_map, dest_parent_abs, src_abs);
 
-    if (std.fs.path.dirname(dest)) |parent| {
-        try std.Io.Dir.cwd().createDirPath(io, parent);
-    }
+    try ensureParentDir(io, dest);
 
     std.Io.Dir.cwd().deleteFile(io, dest) catch |err| switch (err) {
         error.FileNotFound => {},
@@ -400,7 +834,7 @@ fn runBuildWasm(init: std.process.Init, args: []const []const u8) !void {
         .location = .{ .url = health_url },
     }) catch {
         std.debug.print("ERROR: NURL API not reachable at {s}\n", .{normalized_api_url});
-        std.debug.print("       Start it first: ./startdev.sh\n", .{});
+        std.debug.print("       Start it first: zig build startdev\n", .{});
         std.debug.print("       (or set NURL_API_URL to a running instance)\n", .{});
         return error.ConnectionRefused;
     };
@@ -456,16 +890,14 @@ fn runBuildWasm(init: std.process.Init, args: []const []const u8) !void {
         return error.InvalidData;
     }
 
-    if (std.fs.path.dirname(final_out_path)) |parent| {
-        try std.Io.Dir.cwd().createDirPath(io, parent);
-    }
+    try ensureParentDir(io, final_out_path);
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = final_out_path,
         .data = response_bytes,
     });
 
     std.debug.print("\nDone: {s}  ({d} bytes)\n", .{ final_out_path, response_bytes.len });
-    std.debug.print("\nTry:\n  ./wasmnurl.sh examples/showcase.nu\n", .{});
+    std.debug.print("\nTry:\n  zig build wasmnurl -- examples/showcase.nu\n", .{});
 }
 
 fn runClean(init: std.process.Init, args: []const []const u8) !void {
@@ -640,6 +1072,33 @@ fn runDockerPush(init: std.process.Init, args: []const []const u8) !void {
 fn absolutePath(arena: std.mem.Allocator, path: []const u8) ![]const u8 {
     if (std.fs.path.isAbsolute(path)) return arena.dupe(u8, path);
     return std.fs.path.resolve(arena, &.{ ".", path });
+}
+
+fn ensureParentDir(io: std.Io, file_path: []const u8) !void {
+    const parent = std.fs.path.dirname(file_path) orelse return;
+    try ensureDirPath(io, parent);
+}
+
+fn ensureDirPath(io: std.Io, path: []const u8) !void {
+    if (path.len == 0 or std.mem.eql(u8, path, ".")) return;
+    if (pathExists(io, path)) return;
+
+    const parent = std.fs.path.dirname(path) orelse return error.BadPathName;
+    if (!std.mem.eql(u8, parent, path)) {
+        try ensureDirPath(io, parent);
+    }
+
+    if (std.fs.path.isAbsolute(path)) {
+        std.Io.Dir.createDirAbsolute(io, path, .default_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => |e| return e,
+        };
+    } else {
+        std.Io.Dir.cwd().createDir(io, path, .default_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => |e| return e,
+        };
+    }
 }
 
 fn trimTrailingSlashes(input: []const u8) []const u8 {

@@ -69,10 +69,10 @@ RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/curl.tar.xz 
     && cd / \
     && rm -rf /tmp/curl.tar.xz /tmp/curl-src
 
-# --- Zig toolchain (for macOS cross-compile) ------------------
-ARG ZIG_VERSION=0.13.0
+# --- Zig toolchain (for macOS cross-compile + repo build graph) -----
+ARG ZIG_VERSION=0.16.0
 RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/zig.tar.xz \
-        "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
+        "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
     && mkdir -p /opt/zig \
     && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1 \
     && rm /tmp/zig.tar.xz
@@ -82,11 +82,11 @@ COPY . /src
 RUN find . -type f \( -name '*.sh' -o -name '*.nu' \) -exec sed -i 's/\r$//' {} +
 
 # Bootstrap nurlc (image build skips tests; they run in CI elsewhere)
-RUN chmod +x build.sh && ./build.sh --no-tests
+RUN /opt/zig/zig build bootstrap
 
 # Compile runtime objects
 # 1. Native Linux
-# build.sh --no-tests already produced stdlib/runtime.native.o (a plain
+# zig build bootstrap already produced stdlib/runtime.native.o (a plain
 # ELF object — runtime.o itself is LLVM bitcode under -flto and won't
 # link with a stock clang/ld). The whole stdlib/ dir is copied below.
 
@@ -110,12 +110,12 @@ RUN /opt/zig/zig cc -target x86_64-macos-none -O2 \
         -c stdlib/runtime.c -o stdlib/runtime.mac.o
 
 # Compile the NURL API binary itself
-RUN ./nurl.sh nurlapi/main.nu nurlapi/nurlapi
+RUN /opt/zig/zig build nurl -- nurlapi/main.nu nurlapi/nurlapi
 
 # Stage 2: Final runtime image
 FROM debian:bookworm-slim
 
-# FFI -dev packages must match the builder stage above: build.sh enables
+# FFI -dev packages must match the builder stage above: zig build bootstrap enables
 # curl / openssl / sqlite3 / libpq / zlib / zstd in runtime.o from the
 # `*.pc` files it sees, and the native build link here must resolve the
 # matching -lcurl / -lssl / -lsqlite3 / -lpq / -lz / -lzstd. Keeping both

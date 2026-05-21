@@ -47,8 +47,8 @@ installs it via the `code` (or `windsurf`) CLI when one is on PATH.
 **Manual:**
 
 ```bash
-./build.sh                       # bootstrap the compiler
-./tools/nurl-lsp/build.sh        # build the LSP server
+zig build bootstrap
+zig build nurl-lsp
 ```
 
 This produces `build/nurl-lsp`. When you open a `.nu` file in a

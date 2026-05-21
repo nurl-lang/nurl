@@ -4,7 +4,7 @@
 # Dual-licensed under MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE) at your option.
 # ---------------------------------------------------------------
 # Stage 1: bootstrap the NURL compiler (python -> nurlc_py ->
-# nurlc_self -> nurlc_self2) using the repo's build.sh.
+# nurlc_self -> nurlc_self2) using the repo's Zig build graph.
 # ---------------------------------------------------------------
 FROM debian:bookworm-slim AS nurl-build
 
@@ -129,7 +129,7 @@ RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/curl.tar.xz 
 # files doesn't rebuild any of the toolchain layers above.
 # ---------------------------------------------------------------
 WORKDIR /src
-# Copy the whole repo so build.sh can run its full bootstrap + tests.
+# Copy the whole repo so zig build can run the full bootstrap graph.
 COPY . /src
 
 # Strip any CRLF line endings that may have crept in via Windows git
@@ -140,8 +140,7 @@ RUN find . -type f \( -name '*.sh' -o -name '*.nu' \) -exec sed -i 's/\r$//' {} 
 # Run the bootstrap. Skip the test suite — the image build is for the
 # API container, not a CI test stage; tests run elsewhere and would
 # slow down image construction significantly.
-RUN chmod +x build.sh \
-    && ./build.sh --no-tests
+RUN /opt/zig/zig build bootstrap
 
 # Compile the NURL runtime for wasm32-wasi so linking later is a single
 # `zig cc` invocation inside the API container. `zig cc -target wasm32-wasi`
@@ -200,7 +199,7 @@ FROM python:3.12-slim-bookworm AS runtime
 # like `call i64 @puts(i8* %r)`). The default `clang` package on Debian
 # bookworm is clang-14 and still enforces typed pointers, which rejects
 # that IR with `error: expected type` / `defined with type … but expected`.
-# The FFI -dev packages must match stage 1: build.sh enables curl / openssl /
+# The FFI -dev packages must match stage 1: zig build bootstrap enables curl / openssl /
 # sqlite3 / libpq / zlib / zstd in runtime.o based on which `*.pc` files it
 # sees, and the native /build link here must then resolve the matching
 # -lcurl / -lssl / -lsqlite3 / -lpq / -lz / -lzstd. Keeping both stages in
@@ -250,6 +249,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 # Bring in the compiler artifacts and runtime objects.
 RUN mkdir -p /opt/nurl/build /opt/nurl/stdlib /opt/nurl/compiler
 COPY --from=nurl-build /src/build/nurlc             /opt/nurl/build/nurlc
+COPY --from=nurl-build /src/build/nurl-build        /opt/nurl/build/nurl-build
 COPY --from=nurl-build /src/stdlib/runtime.o        /opt/nurl/stdlib/runtime.o
 COPY --from=nurl-build /src/stdlib/canvas.o         /opt/nurl/stdlib/canvas.o
 COPY --from=nurl-build /src/stdlib/runtime.wasm.o   /opt/nurl/stdlib/runtime.wasm.o

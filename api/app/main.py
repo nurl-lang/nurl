@@ -86,7 +86,7 @@ def _default_runtime_o() -> str:
 
 RUNTIME_O      = os.environ.get("NURL_RUNTIME_O",  _default_runtime_o())
 CANVAS_O       = os.environ.get("NURL_CANVAS_O",   "/opt/nurl/stdlib/canvas.o")
-NURL_LINK_HELPER = os.environ.get("NURL_LINK_HELPER", "/opt/nurl/tools/nurl-build/run.sh")
+NURL_LINK_HELPER = os.environ.get("NURL_LINK_HELPER", "/opt/nurl/build/nurl-build")
 
 # Windows cross-compile pipeline. `zig cc -target x86_64-windows-gnu` consumes
 # the LLVM IR in one step: it bundles the mingw-w64 CRT, libgcc equivalents,

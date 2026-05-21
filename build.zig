@@ -171,6 +171,22 @@ pub fn build(b: *std.Build) !void {
     const helper_step = b.step("nurl-build", b.fmt("Build {s}", .{helper_path}));
     helper_step.dependOn(&helper_copy.step);
 
+    const nurl_cmd = addHelperStep(b, nurl_build_exe, &.{"nurl"}, true);
+    if (b.args) |args| {
+        nurl_cmd.addArgs(args);
+    }
+    nurl_cmd.step.dependOn(bootstrap_step);
+    const nurl_step = b.step("nurl", "Compile a .nu file to a native binary via nurl-build");
+    nurl_step.dependOn(&nurl_cmd.step);
+
+    const wasmnurl_cmd = addHelperStep(b, nurl_build_exe, &.{"wasmnurl"}, true);
+    if (b.args) |args| {
+        wasmnurl_cmd.addArgs(args);
+    }
+    wasmnurl_cmd.step.dependOn(bootstrap_step);
+    const wasmnurl_step = b.step("wasmnurl", "Compile a .nu file using nurlc.wasm under wasmtime");
+    wasmnurl_step.dependOn(&wasmnurl_cmd.step);
+
     const buildwasm_cmd = addHelperStep(b, nurl_build_exe, &.{"buildwasm"}, true);
     if (b.args) |args| {
         buildwasm_cmd.addArgs(args);
