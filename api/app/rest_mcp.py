@@ -74,9 +74,11 @@ async def _get_client() -> httpx.AsyncClient:
 
 INSTRUCTIONS = (
     "NURL language toolchain over plain REST (companion to /mcp). "
-    "Build with `nurl_build_native` (Linux ELF), `nurl_build_windows` "
-    "(.exe via mingw-w64), `nurl_build_macos` (Mach-O via zig cc), "
-    "or `nurl_build_wasm`. NURL syntax is terse "
+    "Build with `nurl_build_native` (Linux x86_64 ELF), "
+    "`nurl_build_windows` (.exe via mingw-w64), `nurl_build_macos` "
+    "(macOS x86_64 Mach-O), `nurl_build_target` (cross-compile to "
+    "RISC-V / ARM64 Linux or ARM64 macOS), or `nurl_build_wasm`. "
+    "NURL syntax is terse "
     "prefix: declare with `@ name → ret_ty { body }`, return via "
     "`^ expr`, call with `( fname args… )`, strings in backticks. "
     "Read `nurl://grammar` and `nurl://readme` for the full spec; "
@@ -130,6 +132,32 @@ _BUILD_WASM_REQ_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+# `target` is an inline enum (mirror of ZIG_TARGETS in app/main.py) so
+# GET /rmcp/tools fully describes the valid targets — no separate
+# "list targets" tool / round-trip. /build_target validates the value
+# server-side regardless, so drift here only costs the enum hint.
+_BUILD_TARGET_REQ_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "source":   {"type": "string", "description": "NURL source code."},
+        "target":   {
+            "type": "string",
+            "enum": [
+                "linux-x64-musl", "linux-arm64-musl", "linux-arm64-gnu",
+                "linux-riscv64-musl", "macos-x64", "macos-arm64",
+            ],
+            "description": (
+                "Cross-compile target: `*-musl` → fully-static ELF, "
+                "`linux-arm64-gnu` → dynamic glibc ELF, `macos-*` → "
+                "unsigned Mach-O."
+            ),
+        },
+        "filename": {"type": "string", "description": "Logical name (default main.nu)."},
+    },
+    "required": ["source", "target"],
+    "additionalProperties": False,
+}
+
 _NAME_ARG_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {"name": {"type": "string"}},
@@ -169,6 +197,19 @@ TOOLS: list[ToolSpec] = [
             "quarantine attribute (`xattr -d com.apple.quarantine <bin>`) to run it."
         ),
         input_schema=_BUILD_REQ_SCHEMA,
+    ),
+    ToolSpec(
+        name="nurl_build_target",
+        description=(
+            "Cross-compile NURL source to one of several extra targets via "
+            "zig cc — x86_64 / ARM64 / RISC-V 64 Linux and Intel / Apple-"
+            "Silicon macOS; `target` selects which (see the input schema's "
+            "enum). `*-musl` → fully-static ELF, `linux-arm64-gnu` → "
+            "dynamic glibc ELF, `macos-*` → unsigned Mach-O. canvas/audio "
+            "FFI and libcurl HTTP are not supported on these targets — for "
+            "x86_64 Linux with full FFI use nurl_build_native."
+        ),
+        input_schema=_BUILD_TARGET_REQ_SCHEMA,
     ),
     ToolSpec(
         name="nurl_build_wasm",
@@ -345,6 +386,17 @@ async def _tool_build_macos(args: dict[str, Any]) -> dict[str, Any]:
     return r.json()
 
 
+async def _tool_build_target(args: dict[str, Any]) -> dict[str, Any]:
+    client = await _get_client()
+    r = await client.post("/build_target", json={
+        "source":   args["source"],
+        "target":   args["target"],
+        "filename": args.get("filename", "main.nu"),
+    })
+    r.raise_for_status()
+    return r.json()
+
+
 async def _tool_build_wasm(args: dict[str, Any]) -> dict[str, Any]:
     client = await _get_client()
     r = await client.post("/build_wasm", json={
@@ -444,6 +496,7 @@ _TOOL_HANDLERS = {
     "nurl_build_native":  _tool_build_native,
     "nurl_build_windows": _tool_build_windows,
     "nurl_build_macos":   _tool_build_macos,
+    "nurl_build_target":  _tool_build_target,
     "nurl_build_wasm":    _tool_build_wasm,
     "nurl_list_examples": _tool_list_examples,
     "nurl_read_example":  _tool_read_example,

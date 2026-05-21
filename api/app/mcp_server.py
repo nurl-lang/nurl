@@ -24,6 +24,7 @@ directly from disk.
 
 import os
 from pathlib import Path
+from typing import Literal
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -47,9 +48,10 @@ mcp = FastMCP(
     # HTTP 307, which loses the POST body and breaks MCP clients.
     streamable_http_path="/mcp",
     instructions=(
-        "NURL language toolchain. Use `nurl_build_native` (Linux ELF), "
-        "`nurl_build_windows` (Windows .exe via mingw-w64), "
-        "`nurl_build_macos` (macOS Mach-O via zig cc), or "
+        "NURL language toolchain. Use `nurl_build_native` (Linux x86_64 "
+        "ELF), `nurl_build_windows` (Windows .exe via mingw-w64), "
+        "`nurl_build_macos` (macOS x86_64 Mach-O), `nurl_build_target` "
+        "(cross-compile to RISC-V / ARM64 Linux or ARM64 macOS), or "
         "`nurl_build_wasm` to compile source. The language uses a "
         "terse prefix notation: functions are declared with "
         "`@ name → ret_ty { body }`, return via `^ expr`, and call "
@@ -128,6 +130,50 @@ async def nurl_build_windows(source: str, filename: str = "main.nu") -> dict:
 async def nurl_build_macos(source: str, filename: str = "main.nu") -> dict:
     client = await _get_client()
     r = await client.post("/build_macos", json={"source": source, "filename": filename})
+    r.raise_for_status()
+    return r.json()
+
+
+# Cross-compile target ids accepted by `POST /build_target`. Kept as a
+# literal (mirror of ZIG_TARGETS in app/main.py) rather than imported:
+# it makes `target` a schema-level enum the client sees up-front — no
+# extra "list targets" round-trip — and avoids an import cycle with
+# app.main. /build_target validates server-side regardless, so a drift
+# here only costs the enum hint, never correctness.
+BuildTargetId = Literal[
+    "linux-x64-musl",
+    "linux-arm64-musl",
+    "linux-arm64-gnu",
+    "linux-riscv64-musl",
+    "macos-x64",
+    "macos-arm64",
+]
+
+
+@mcp.tool(
+    description=(
+        "Cross-compile NURL source to one of several extra targets via "
+        "`zig cc`. `target` selects which (see the enum): `*-musl` ids "
+        "produce a fully-static ELF (x86_64 / ARM64 / RISC-V 64 Linux), "
+        "`linux-arm64-gnu` a dynamic glibc ELF, `macos-x64` / "
+        "`macos-arm64` an unsigned Mach-O. canvas/audio FFI and "
+        "libcurl-backed HTTP are NOT supported on these targets — for "
+        "x86_64 Linux with full FFI use `nurl_build_native`, for "
+        "Windows use `nurl_build_windows`. Returns build status, "
+        "nurlc+zig return codes and stderr, plus download URLs for the "
+        "`.ll` and the binary. Equivalent to `POST /build_target`."
+    ),
+)
+async def nurl_build_target(
+    source: str,
+    target: BuildTargetId,
+    filename: str = "main.nu",
+) -> dict:
+    client = await _get_client()
+    r = await client.post(
+        "/build_target",
+        json={"source": source, "target": target, "filename": filename},
+    )
     r.raise_for_status()
     return r.json()
 

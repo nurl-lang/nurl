@@ -183,7 +183,15 @@ the [MCP section below](#mcp-server--let-an-llm-drive-the-toolchain).
   Gatekeeper quarantine attribute (`xattr -d com.apple.quarantine <bin>`)
   before running. canvas/audio FFIs are rejected; HTTP links against
   runtime stubs that return `HttpErr::Other` (no libcurl on this target).
-  Works on both Intel Macs and Apple Silicon via Rosetta 2.
+  Kept as a thin wrapper over `/build_target` for backward compatibility.
+- `POST /build_target`  — cross-compile to any registered **zig target**:
+  `linux-{x64,arm64,riscv64}-musl` (fully-static ELF), `linux-arm64-gnu`
+  (dynamic glibc ELF), `macos-{x64,arm64}` (Mach-O — incl. native Apple
+  Silicon). Body adds `"target":"<id>"`. NURL's IR carries no target
+  triple, so one `zig cc --target=` drives them all; canvas/audio/HTTP
+  are unsupported on these targets, same contract as `/build_macos`.
+- `GET /targets`        — list every selectable compile target (the
+  playground builds its **Target** dropdown from this).
 - `GET /download/{token}` — stream a build artifact registered by one of the
   `/build*` endpoints. Tokens expire automatically.
 - `GET /examples`    — list bundled examples (`examples/*.nu`).
@@ -267,11 +275,11 @@ through their respective config UI (transport: `http` /
 
 ### What's on offer
 
-**Tools** (14) — the model invokes these to act on NURL source:
+**Tools** (15) — the model invokes these to act on NURL source:
 
 | Group | Tools |
 |---|---|
-| Build (compile + return artifact) | `nurl_build_native` (Linux x86_64 ELF), `nurl_build_windows` (Win64 `.exe`, mingw-w64), `nurl_build_macos` (macOS x86_64 Mach-O, zig cc), `nurl_build_wasm` (wasm32-wasi) |
+| Build (compile + return artifact) | `nurl_build_native` (Linux x86_64 ELF), `nurl_build_windows` (Win64 `.exe`, mingw-w64), `nurl_build_macos` (macOS x86_64 Mach-O, zig cc), `nurl_build_target` (cross-compile to RISC-V / ARM64 Linux or ARM64 macOS — `target` id is a schema enum), `nurl_build_wasm` (wasm32-wasi) |
 | Browse | `nurl_list_examples`, `nurl_list_stdlib`, `nurl_list_tests` |
 | Read | `nurl_read_example`, `nurl_read_stdlib`, `nurl_read_test`, `nurl_read_grammar`, `nurl_read_readme`, `nurl_read_roadmap`, `nurl_read_gotchas` |
 

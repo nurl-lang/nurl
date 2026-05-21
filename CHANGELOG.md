@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-05-21
+
 ### Added
 
 * **Playground multi-target cross-compilation.** The `api/` browser
@@ -26,8 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GET /targets` (the registry the UI builds its dropdown from); the
   three near-duplicate build endpoints now share one `_build_zig_cross`
   helper. `POST /build_macos` is kept as a thin wrapper for MCP / older
-  clients. canvas/audio FFI is rejected on the cross targets and HTTP
-  falls back to the runtime's no-op stubs — same contract macOS had.
+  clients. The MCP server (both `/mcp` and the REST companion) gains a
+  `nurl_build_target` tool — valid target ids are inlined as a schema
+  enum so clients need no separate lookup; the existing per-OS build
+  tools are unchanged. canvas/audio FFI is rejected on the cross
+  targets and HTTP falls back to the runtime's no-op stubs — same
+  contract macOS had.
 
   Image cost is ~negligible: zig already bundles musl / glibc /
   libSystem for every arch, so each target adds only one ≈125 KB
@@ -1806,7 +1812,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/nurl-lang/nurl/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/nurl-lang/nurl/compare/v0.7.3...v0.8.0
 [0.2.0]: https://github.com/nurl-lang/nurl/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nurl-lang/nurl/releases/tag/v0.1.0
