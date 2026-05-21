@@ -36,13 +36,14 @@ VS Code and Windsurf.
 ```bash
 git clone https://github.com/nurl-lang/nurl.git
 cd nurl
-./install.sh                     # bootstrap, build LSP, install ext
+zig build install-dev            # bootstrap, build LSP, install ext
 ```
 
-`install.sh` is idempotent — re-run any time to pick up a newer
+`zig build install-dev` is idempotent — re-run any time to pick up a newer
 checkout. It bootstraps the compiler if needed, builds `nurl-lsp`,
 copies it to `~/.local/bin/`, packages the VS Code extension, and
 installs it via the `code` (or `windsurf`) CLI when one is on PATH.
+`./install.sh` remains as a compatibility wrapper.
 
 **Manual:**
 
@@ -123,7 +124,7 @@ Then run `npm install` inside that folder so the
   completion, workspace symbol search, folding ranges, and
   `nurlfmt`-backed formatting are all live. Version bumped to
   match the `nurl-lsp` server it pairs with. Recommended install
-  path is now the top-level `./install.sh`.
+  path is now `zig build install-dev`.
 
 ### 0.3.0
 

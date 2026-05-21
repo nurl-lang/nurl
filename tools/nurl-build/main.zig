@@ -29,6 +29,7 @@ const Command = enum {
     compare,
     buildwasm,
     bench_csv,
+    install,
     mcp_spec_drift,
     clean,
     startdev,
@@ -69,6 +70,7 @@ fn run(init: std.process.Init) !void {
             .compare => runCompare(init, io, args[2..]),
             .buildwasm => runBuildWasm(init, args[2..]),
             .bench_csv => runBenchCsv(init, args[2..]),
+            .install => runInstall(init, args[2..]),
             .mcp_spec_drift => runMcpSpecDrift(init, args[2..]),
             .clean => runClean(init, args[2..]),
             .startdev => runStartDev(init, args[2..]),
@@ -553,6 +555,333 @@ fn printBenchCsvUsage() void {
         "usage: nurl-build bench-csv [--root <path>] [--no-history] [--label <text>] [--binary <path>] [--python <path>] [--data <path>] [runs]\n",
         .{},
     );
+}
+
+fn runInstall(init: std.process.Init, args: []const []const u8) !void {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var root: []const u8 = ".";
+    var no_vscode = false;
+    var no_path = false;
+    var force = false;
+    var uninstall = false;
+    var dry_run = false;
+
+    var i: usize = 0;
+    while (i < args.len) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--root")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            root = args[i];
+        } else if (std.mem.eql(u8, arg, "--no-vscode")) {
+            no_vscode = true;
+        } else if (std.mem.eql(u8, arg, "--no-path")) {
+            no_path = true;
+        } else if (std.mem.eql(u8, arg, "--force")) {
+            force = true;
+        } else if (std.mem.eql(u8, arg, "--uninstall")) {
+            uninstall = true;
+        } else if (std.mem.eql(u8, arg, "--dry-run")) {
+            dry_run = true;
+        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            printInstallUsage();
+            std.process.exit(0);
+        } else {
+            std.debug.print("nurl-build: unknown install arg: {s}\n", .{arg});
+            return error.InvalidArgs;
+        }
+        i += 1;
+    }
+
+    const root_abs = try absolutePath(arena, root);
+    const zig_bin = init.environ_map.get("NURL_ZIG") orelse "zig";
+    const compiler_name = if (builtin.os.tag == .windows) "nurlc.exe" else "nurlc";
+    const lsp_name = if (builtin.os.tag == .windows) "nurl-lsp.exe" else "nurl-lsp";
+    const compiler_path = try std.fs.path.join(arena, &.{ root_abs, "build", compiler_name });
+    const lsp_path = try std.fs.path.join(arena, &.{ root_abs, "build", lsp_name });
+    const home = try resolveHomeDir(init);
+    const bindir = if (builtin.os.tag == .windows)
+        try std.fs.path.join(arena, &.{ home, ".local", "bin" })
+    else
+        try std.fs.path.join(arena, &.{ home, ".local", "bin" });
+    const path_dest = try std.fs.path.join(arena, &.{ bindir, lsp_name });
+    const editor_cli = try detectEditorCli(arena, gpa, io);
+
+    if (uninstall) {
+        std.debug.print("== Uninstall ==\n", .{});
+        if (pathExists(io, path_dest)) {
+            if (dry_run) {
+                std.debug.print("DRY-RUN delete {s}\n", .{path_dest});
+            } else {
+                try std.Io.Dir.deleteFileAbsolute(io, path_dest);
+                std.debug.print("removed {s}\n", .{path_dest});
+            }
+        } else {
+            std.debug.print("skip missing {s}\n", .{path_dest});
+        }
+
+        if (editor_cli) |editor| {
+            if (dry_run) {
+                std.debug.print("DRY-RUN {s} --uninstall-extension nurl-lang.nurl\n", .{editor});
+            } else if ((try installedExtensionVersion(arena, gpa, io, editor)) != null) {
+                try runMaybeDry(init, false, root_abs, &.{ editor, "--uninstall-extension", "nurl-lang.nurl" });
+            } else {
+                std.debug.print("skip extension uninstall; nurl-lang.nurl not present\n", .{});
+            }
+        } else {
+            std.debug.print("skip extension uninstall; no editor CLI found\n", .{});
+        }
+        return;
+    }
+
+    std.debug.print("== 1/4 Compiler bootstrap ==\n", .{});
+    if (force or !pathExists(io, compiler_path)) {
+        try runMaybeDry(init, dry_run, root_abs, &.{ zig_bin, "build", "bootstrap" });
+    } else {
+        std.debug.print("build/{s} already present\n", .{compiler_name});
+    }
+
+    std.debug.print("\n== 2/4 Language Server ==\n", .{});
+    if (force or !pathExists(io, lsp_path)) {
+        try runMaybeDry(init, dry_run, root_abs, &.{ zig_bin, "build", "nurl-lsp" });
+    } else {
+        std.debug.print("build/{s} already present\n", .{lsp_name});
+    }
+
+    if (!no_path) {
+        std.debug.print("\n== 3/4 PATH install ==\n", .{});
+        if (dry_run) {
+            std.debug.print("DRY-RUN ensure dir {s}\n", .{bindir});
+        } else {
+            try ensureDirPath(io, bindir);
+        }
+        if (builtin.os.tag == .windows) {
+            if (dry_run) {
+                std.debug.print("DRY-RUN copy {s} -> {s}\n", .{ lsp_path, path_dest });
+            } else {
+                try std.Io.Dir.copyFileAbsolute(lsp_path, path_dest, io, .{
+                    .permissions = .executable_file,
+                    .make_path = true,
+                    .replace = true,
+                });
+                std.debug.print("copied {s} -> {s}\n", .{ lsp_path, path_dest });
+            }
+        } else {
+            if (dry_run) {
+                std.debug.print("DRY-RUN symlink {s} -> {s}\n", .{ path_dest, lsp_path });
+            } else {
+                std.Io.Dir.deleteFileAbsolute(io, path_dest) catch |err| switch (err) {
+                    error.FileNotFound => {},
+                    else => |e| return e,
+                };
+                try std.Io.Dir.symLinkAbsolute(io, lsp_path, path_dest, .{});
+                std.debug.print("linked {s} -> {s}\n", .{ path_dest, lsp_path });
+            }
+        }
+
+        if (pathEnvContains(init, bindir)) {
+            std.debug.print("{s} is already on PATH\n", .{bindir});
+        } else if (builtin.os.tag == .windows) {
+            std.debug.print("{s} is not on PATH; add it with setx PATH \"%%PATH%%;{s}\"\n", .{ bindir, bindir });
+        } else {
+            std.debug.print("{s} is not on PATH; add: export PATH=\"$HOME/.local/bin:$PATH\"\n", .{bindir});
+        }
+    } else {
+        std.debug.print("\n== 3/4 PATH install skipped (--no-path) ==\n", .{});
+    }
+
+    if (no_vscode) {
+        std.debug.print("\n== 4/4 VS Code extension skipped (--no-vscode) ==\n", .{});
+        return;
+    }
+
+    std.debug.print("\n== 4/4 VS Code extension ==\n", .{});
+    const editor = editor_cli orelse {
+        std.debug.print("skip extension install; no editor CLI found\n", .{});
+        return;
+    };
+    if (!try commandAvailable(gpa, io, "npx", &.{"--version"})) {
+        std.debug.print("skip extension install; npx not found\n", .{});
+        return;
+    }
+
+    const package_json_path = try std.fs.path.join(arena, &.{ root_abs, "tooling", "vscode-nurl", "package.json" });
+    const package_json = try std.Io.Dir.cwd().readFileAlloc(io, package_json_path, gpa, .unlimited);
+    defer gpa.free(package_json);
+    const version = extractJsonStringField(package_json, "version") orelse {
+        std.debug.print("nurl-build: failed to parse version from {s}\n", .{package_json_path});
+        return error.InvalidData;
+    };
+    const vsix_name = try std.fmt.allocPrint(arena, "nurl-{s}.vsix", .{version});
+    const vscode_dir = try std.fs.path.join(arena, &.{ root_abs, "tooling", "vscode-nurl" });
+    const vsix_path = try std.fs.path.join(arena, &.{ vscode_dir, vsix_name });
+    const node_modules_path = try std.fs.path.join(arena, &.{ vscode_dir, "node_modules" });
+
+    if (force or !pathExists(io, vsix_path)) {
+        if (!pathExists(io, node_modules_path)) {
+            if (try commandAvailable(gpa, io, "npm", &.{"--version"})) {
+                try runMaybeDry(init, dry_run, vscode_dir, &.{ "npm", "install", "--silent" });
+            } else {
+                std.debug.print("skip VSIX packaging; npm not found and node_modules missing\n", .{});
+                return;
+            }
+        }
+        try runMaybeDry(init, dry_run, vscode_dir, &.{ "npx", "--yes", "vsce", "package", "-o", vsix_name });
+    } else {
+        std.debug.print("{s} already present\n", .{vsix_path});
+    }
+
+    const installed = if (dry_run) null else try installedExtensionVersion(arena, gpa, io, editor);
+    if (!force and installed != null and std.mem.eql(u8, installed.?, version)) {
+        std.debug.print("{s} already has nurl-lang.nurl@{s}\n", .{ editor, version });
+        return;
+    }
+    try runMaybeDry(init, dry_run, root_abs, &.{ editor, "--install-extension", vsix_path, "--force" });
+}
+
+fn printInstallUsage() void {
+    std.debug.print(
+        "usage: nurl-build install [--root <path>] [--no-vscode] [--no-path] [--force] [--uninstall] [--dry-run]\n",
+        .{},
+    );
+}
+
+fn resolveHomeDir(init: std.process.Init) ![]const u8 {
+    if (builtin.os.tag == .windows) {
+        if (init.environ_map.get("USERPROFILE")) |home| return home;
+    }
+    if (init.environ_map.get("HOME")) |home| return home;
+    return error.EnvironmentVariableMissing;
+}
+
+fn runMaybeDry(init: std.process.Init, dry_run: bool, cwd: []const u8, argv: []const []const u8) !void {
+    if (dry_run) {
+        std.debug.print("DRY-RUN", .{});
+        if (cwd.len != 0) std.debug.print(" [cwd={s}]", .{cwd});
+        for (argv) |arg| std.debug.print(" {s}", .{arg});
+        std.debug.print("\n", .{});
+        return;
+    }
+    try runInheritedInCwd(init, cwd, argv);
+}
+
+fn runInheritedInCwd(init: std.process.Init, cwd: []const u8, argv: []const []const u8) !void {
+    var child = std.process.spawn(init.io, .{
+        .argv = argv,
+        .cwd = .{ .path = cwd },
+        .stdin = .inherit,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    }) catch |err| {
+        if (err == error.FileNotFound) {
+            std.debug.print("nurl-build: command not found: {s}\n", .{argv[0]});
+        }
+        return err;
+    };
+    errdefer child.kill(init.io);
+
+    const term = try child.wait(init.io);
+    switch (term) {
+        .exited => |code| {
+            if (code != 0) std.process.exit(code);
+        },
+        .signal => |sig| {
+            std.debug.print("nurl-build: child terminated by signal {d}\n", .{@intFromEnum(sig)});
+            std.process.exit(128 + @as(u8, @intCast(@intFromEnum(sig))));
+        },
+        .stopped => |sig| {
+            std.debug.print("nurl-build: child stopped by signal {d}\n", .{@intFromEnum(sig)});
+            std.process.exit(128 + @as(u8, @intCast(@intFromEnum(sig))));
+        },
+        .unknown => |status| {
+            std.debug.print("nurl-build: child exited with unknown status {d}\n", .{status});
+            std.process.exit(1);
+        },
+    }
+}
+
+fn commandAvailable(gpa: std.mem.Allocator, io: std.Io, name: []const u8, probe_args: []const []const u8) !bool {
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(gpa);
+    try argv.append(gpa, name);
+    try argv.appendSlice(gpa, probe_args);
+
+    const result = std.process.run(gpa, io, .{ .argv = argv.items }) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    return true;
+}
+
+fn detectEditorCli(arena: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io) !?[]const u8 {
+    const candidates = [_][]const u8{ "code", "cursor", "windsurf" };
+    for (candidates) |candidate| {
+        if (try commandAvailable(gpa, io, candidate, &.{"--version"})) {
+            const dup = try arena.dupe(u8, candidate);
+            return dup;
+        }
+    }
+    return null;
+}
+
+fn installedExtensionVersion(arena: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, editor: []const u8) !?[]const u8 {
+    const result = std.process.run(gpa, io, .{
+        .argv = &.{ editor, "--list-extensions", "--show-versions" },
+    }) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    switch (result.term) {
+        .exited => |code| if (code != 0) return null,
+        else => return null,
+    }
+
+    var lines = std.mem.splitScalar(u8, result.stdout, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (std.mem.startsWith(u8, trimmed, "nurl-lang.nurl@")) {
+            const dup = try arena.dupe(u8, trimmed["nurl-lang.nurl@".len..]);
+            return dup;
+        }
+    }
+    return null;
+}
+
+fn extractJsonStringField(source: []const u8, key: []const u8) ?[]const u8 {
+    const needle = std.fmt.allocPrint(std.heap.page_allocator, "\"{s}\"", .{key}) catch return null;
+    defer std.heap.page_allocator.free(needle);
+    const start = std.mem.indexOf(u8, source, needle) orelse return null;
+    const after_key = source[start + needle.len ..];
+    const colon = std.mem.indexOfScalar(u8, after_key, ':') orelse return null;
+    const after_colon = std.mem.trim(u8, after_key[colon + 1 ..], " \t\r\n");
+    if (after_colon.len < 2 or after_colon[0] != '"') return null;
+    const rest = after_colon[1..];
+    const end = std.mem.indexOfScalar(u8, rest, '"') orelse return null;
+    return rest[0..end];
+}
+
+fn pathEnvContains(init: std.process.Init, target: []const u8) bool {
+    const path_env = init.environ_map.get("PATH") orelse return false;
+    const separator: u8 = if (builtin.os.tag == .windows) ';' else ':';
+    var it = std.mem.splitScalar(u8, path_env, separator);
+    while (it.next()) |entry| {
+        const trimmed = std.mem.trim(u8, entry, " \t");
+        if (trimmed.len == 0) continue;
+        if (builtin.os.tag == .windows) {
+            if (std.ascii.eqlIgnoreCase(trimmed, target)) return true;
+        } else if (std.mem.eql(u8, trimmed, target)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn parseBenchRun(output: []const u8, label: []const u8) !BenchRun {
@@ -1944,7 +2273,8 @@ fn runDockerPush(init: std.process.Init, args: []const []const u8) !void {
 
 fn absolutePath(arena: std.mem.Allocator, path: []const u8) ![]const u8 {
     if (std.fs.path.isAbsolute(path)) return arena.dupe(u8, path);
-    return std.fs.path.resolve(arena, &.{ ".", path });
+    const cwd = try std.process.currentPathAlloc(std.Io.Threaded.global_single_threaded.io(), arena);
+    return std.fs.path.resolve(arena, &.{ cwd, path });
 }
 
 fn resolvePathFromRoot(arena: std.mem.Allocator, root: []const u8, path: []const u8) ![]const u8 {

@@ -413,6 +413,20 @@ pub fn build(b: *std.Build) !void {
     const bench_csv_step = b.step("bench-csv", "Run the CSV benchmark harness and optionally append compare/HISTORY.md");
     bench_csv_step.dependOn(&bench_csv_cmd.step);
 
+    const install_dev_cmd = addHelperStep(b, nurl_build_exe, &.{"install"}, true);
+    if (b.args) |args| {
+        install_dev_cmd.addArgs(args);
+    }
+    const install_dev_step = b.step("install-dev", "Install the local NURL developer experience via nurl-build");
+    install_dev_step.dependOn(&install_dev_cmd.step);
+
+    const uninstall_dev_cmd = addHelperStep(b, nurl_build_exe, &.{ "install", "--uninstall" }, true);
+    if (b.args) |args| {
+        uninstall_dev_cmd.addArgs(args);
+    }
+    const uninstall_dev_step = b.step("uninstall-dev", "Remove the local NURL developer install via nurl-build");
+    uninstall_dev_step.dependOn(&uninstall_dev_cmd.step);
+
     b.getInstallStep().dependOn(tools_step);
 
     const tests = addScriptCommand(b, tests_runner, host_is_windows);

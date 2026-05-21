@@ -96,16 +96,18 @@ Cursor, and Windsurf is available in `tooling/vscode-nurl/`.
 ```bash
 git clone https://github.com/nurl-lang/nurl.git
 cd nurl
-./install.sh
+zig build install-dev
 ```
 
-`install.sh` is idempotent — re-run any time. It bootstraps the
+`zig build install-dev` is idempotent — re-run any time. It bootstraps the
 compiler, builds `nurl-lsp`, symlinks it into `~/.local/bin/`,
 packages the VS Code extension, and installs it via the editor's
 CLI (`code` / `cursor` / `windsurf`, whichever is on PATH). Flags:
 `--no-vscode` (skip the extension step), `--no-path` (don't touch
 `~/.local/bin`), `--force` (rebuild even when artefacts exist),
-`--uninstall` (remove the symlink + extension).
+`--uninstall` (remove the symlink + extension), `--dry-run`
+(show actions without mutating anything). `./install.sh` remains as a
+compatibility wrapper around the same Zig entrypoint.
 
 **Manual install from a local checkout:**
 1. `zig build check` (or `./build.sh` as a compatibility wrapper)
