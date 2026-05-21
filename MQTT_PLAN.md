@@ -51,18 +51,23 @@ Verified end to end against a live broker — `example/mqtt_pubsub.nu`.
 - [ ] **Reason codes** — surface MQTT 5 reason codes (a typed `MqttErr`)
       instead of collapsing failures to `NetOther`.
 
-## Phase 4 — Long-lived connections — TODO
+## Phase 4 — Long-lived connections — PARTLY SHIPPED
 
-- [ ] **Automatic keep-alive** — track the keep-alive deadline with
-      `now_ms` and emit PINGREQ from the receive loop without the caller
-      having to call `mqtt_ping`.
+- [x] **Keep-alive timer** — `MqttClient` tracks a `now_ms` ping
+      deadline; `mqtt_keepalive_tick` emits a PINGREQ only when the
+      deadline is due (no-op otherwise). The caller ticks it from an
+      idle loop. Fully-background pinging waits on the receive thread.
+- [x] **Reconnection** — `mqtt_reconnect` closes a dropped connection
+      and re-runs TLS + CONNECT, leaving the `MqttClient` reusable.
+- [ ] **Reconnect polish** — automatic drop detection + backoff, and
+      remembering subscriptions to re-issue them (today the caller
+      re-subscribes).
 - [ ] **Packet-id allocator** — rotating 1..65535 ids so multiple QoS
       1/2 messages can be in flight (today: fixed id 1, correct only for
       strictly synchronous use).
-- [ ] **Reconnection** — detect a dropped connection and reconnect with
-      backoff; re-subscribe.
 - [ ] **Background receive** — a reader thread (`std/thread.nu`) so
-      inbound PUBLISH is handled while the app does other work.
+      inbound PUBLISH is handled — and keep-alive pings emitted —
+      while the app does other work.
 
 ## Phase 5 — Quality — TODO
 

@@ -27,20 +27,25 @@
 //   ( mqtt_subscribe_qos MqttClient s topic i qos )            → ! v NetErr
 //   ( mqtt_unsubscribe  MqttClient s topic )                   → ! v NetErr
 //   ( mqtt_ping         MqttClient )                           → ! v NetErr
+//   ( mqtt_keepalive_tick MqttClient )                         → ! v NetErr
+//   ( mqtt_reconnect    MqttClient s host i port MqttConfig cfg ) → ! v NetErr
 //   ( mqtt_receive      MqttClient )                           → ! MqttMessage NetErr
 //   ( mqtt_disconnect   MqttClient )                           → v
 //
 // `mqtt_connect_cfg` takes a MqttConfig — will message, session expiry,
 // clean-start, keep-alive. `mqtt_receive` returns the next inbound
 // PUBLISH (transparently consuming PINGRESP and acking inbound QoS 1/2).
-// Plain TCP (`tcp_connect`) and the CONNACK-reason helper are exported.
+// `mqtt_keepalive_tick` pings only when the keep-alive deadline has
+// passed; `mqtt_reconnect` re-establishes a dropped connection. Plain
+// TCP (`tcp_connect`) and the CONNACK-reason helper are also exported.
 //
 // Not yet implemented: MQTT 5 user properties on pub/receive, typed
-// reason codes, automatic keep-alive scheduling, multi-message packet-id
-// allocation, and reconnection — see MQTT_PLAN.md.
+// reason codes, multi-message packet-id allocation, and a background
+// receive thread — see MQTT_PLAN.md.
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/std/time.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
@@ -88,9 +93,16 @@ $ `stdlib/core/vec.nu`
 // ── client handle + message ──────────────────────────────────────────
 
 // `rxbuf` holds bytes already pulled off the socket but not yet
-// consumed — leftover past a packet boundary. The framed reader drains
-// from its front; the connection's lifetime owns it.
-: MqttClient { TcpConn conn  ( Vec u ) rxbuf }
+// consumed — leftover past a packet boundary; the framed reader drains
+// from its front. `ping_deadline` is the now_ms timestamp by which the
+// next PINGREQ must go out to satisfy the broker's keep-alive;
+// `keepalive_ms` 0 disables keep-alive.
+: MqttClient {
+    TcpConn   conn
+    ( Vec u ) rxbuf
+    i         ping_deadline
+    i         keepalive_ms
+}
 
 // An inbound application message.
 : MqttMessage { String topic  String payload }
@@ -353,7 +365,8 @@ $ `stdlib/core/vec.nu`
     ?? cr {
         T conn → {
             ( tcp_set_timeout conn 15000 )
-            : MqttClient cl @ MqttClient { conn ( vec_new [u] ) }
+            : i kams * . cfg keepalive 1000
+            : MqttClient cl @ MqttClient { conn ( vec_new [u] ) + ( now_ms ) kams kams }
 
             : ( Vec u ) pkt ( vec_with_cap [u] 96 )
             ( __mqtt_encode_connect pkt cfg )
@@ -608,12 +621,68 @@ $ `stdlib/core/vec.nu`
             T resp → {
                 : i pt & >> ( __mqtt_byte resp 0 ) 4 15
                 ( vec_free [u] resp )
-                ? == pt 13 { ^ @ !v NetErr { T 0 } } {}
+                ? == pt 13 {
+                    = . cl ping_deadline + ( now_ms ) . cl keepalive_ms
+                    ^ @ !v NetErr { T 0 }
+                } {}
             }
             F e → { ^ @ !v NetErr { F e } }
         }
     }
     ^ @ !v NetErr { F # NetErr NetOther }
+}
+
+// ── keep-alive + reconnection ────────────────────────────────────────
+
+// Send PINGREQ only if the keep-alive deadline has passed. Call this
+// from an idle loop — the library decides when a ping is actually due.
+// A no-op (Ok) when keep-alive is disabled or the deadline is not yet
+// reached.
+@ mqtt_keepalive_tick MqttClient cl → !v NetErr {
+    ? <= . cl keepalive_ms 0 { ^ @ !v NetErr { T 0 } } {}
+    ? >= ( now_ms ) . cl ping_deadline {
+        ^ ( mqtt_ping cl )
+    } {}
+    ^ @ !v NetErr { T 0 }
+}
+
+// Re-establish a dropped connection: close the old socket, open a fresh
+// TLS connection to `host:port`, and run the CONNECT handshake with
+// `cfg` again. On success the MqttClient is reusable; the caller must
+// re-issue any SUBSCRIBEs (the broker starts a fresh subscription set
+// unless the session was resumed via session-expiry + clean-start F).
+@ mqtt_reconnect MqttClient cl s host i port MqttConfig cfg → !v NetErr {
+    ( tcp_close_conn . cl conn )
+    : !TcpConn NetErr cr ( tcp_connect_tls host port F )
+    ?? cr {
+        T nc → {
+            ( tcp_set_timeout nc 15000 )
+            = . cl conn nc
+            ( vec_clear [u] . cl rxbuf )
+
+            : ( Vec u ) pkt ( vec_with_cap [u] 96 )
+            ( __mqtt_encode_connect pkt cfg )
+            : !v NetErr wr ( tcp_write_all nc pkt )
+            ( vec_free [u] pkt )
+            ?? wr { T → {} F we → { ^ @ !v NetErr { F we } } }
+
+            : !( Vec u ) NetErr rd ( __mqtt_read_packet cl )
+            ?? rd {
+                T resp → {
+                    : i reason ( mqtt_connack_reason resp )
+                    ( vec_free [u] resp )
+                    ? == reason 0 {
+                        = . cl ping_deadline + ( now_ms ) . cl keepalive_ms
+                        ^ @ !v NetErr { T 0 }
+                    } {
+                        ^ @ !v NetErr { F # NetErr NetOther }
+                    }
+                }
+                F re → { ^ @ !v NetErr { F re } }
+            }
+        }
+        F e → { ^ @ !v NetErr { F e } }
+    }
 }
 
 // ── receive ──────────────────────────────────────────────────────────
