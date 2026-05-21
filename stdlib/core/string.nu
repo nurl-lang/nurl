@@ -27,6 +27,7 @@
 //   ( string_get s idx )       → i           byte at index (0 out of range)
 //   ( string_push_char s c )   → v           append one byte
 //   ( string_push_str s raw )  → v           append raw i8*
+//   ( string_push_bytes s src n ) → v        append n raw bytes (no strlen)
 //   ( string_push_int s n )    → v           append decimal integer
 //   ( string_clear s )         → v           reset to empty
 //   ( string_free s )          → v           release buffer, invalidates handle
@@ -218,6 +219,24 @@ $ `stdlib/core/vec.nu`
 
 @ string_push_str String str s raw → v {
     ( __string_append_raw str raw )
+    ( __string_seal str )
+}
+
+// Append exactly `n` raw bytes from `src` onto str's buffer. Unlike
+// string_push_str this needs no strlen scan and preserves embedded NUL
+// bytes verbatim — the range-append a streaming reader wants when it
+// already knows the line length. `src` is borrowed; the bytes are
+// copied, str keeps no reference.
+@ string_push_bytes String str * u src i n → v {
+    ? > n 0 {
+        : ( Vec u ) b ( __sbuf str )
+        : i len ( vec_len [u] b )
+        ( vec_reserve [u] b + n 1 )
+        : *u dst ( vec_data [u] b )
+        : *u dst_at # *u + # i dst len
+        ( nurl_memcpy dst_at src n )
+        : b _ok ( vec_set_len [u] b + len n )
+    } {}
     ( __string_seal str )
 }
 

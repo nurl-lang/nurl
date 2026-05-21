@@ -212,8 +212,18 @@ API-pinta (`std/fs.nu`, MVP 2026-04-26):
 - [x] `path_join a b`, `path_basename`, `path_dirname`, `path_extension` (`stdlib/std/path.nu`, 2026-04-28). Hyväksyy sekä `/` että `\\` -erotinta sisään, tulostaa aina `/`-erottimella. Drive-letter prefix (`C:`) tunnistetaan absoluuttiseksi. Argumenttityyppi raaka `s` → kirjoita literaali suoraan tai välitä `( string_data str )`. Testi: `compiler/tests/path_basic.nu`.
 - [x] `path_is_absolute`, `path_normalize` (`stdlib/std/path.nu`, 2026-04-28). `path_normalize` collapsee `.`, `..` ja kaksoiserottimet; `..` juuren yli pudotetaan hiljaisesti.
 - [x] File handles: `file_open`, `file_close`, `file_write` (RT)
-- [ ] `file_read_chunk h n` → `! String IoErr` (RT — `fread`)
-- [ ] `file_readline h` → `?String` (RT — `fgets`-wrapperi)
+- [x] Bufferoitu streaming-luku — `stdlib/std/bufio.nu` (`BufReader`), 2026-05-21.
+      Korvaa `file_read_chunk` / `file_readline` -aikeet: streaming-rivinluku
+      tiedostosta tai stdinistä lataamatta koko sisältöä (vrt. `read_file` /
+      `csv_reader_new` jotka lataavat kerralla). 64 KiB puskuri, `fread` per
+      refill, `memchr`-rivinjako. `bufreader_open` / `bufreader_stdin` /
+      `bufreader_read_line` (owned `?String`) / `bufreader_read_line_into`
+      (uudelleenkäytä caller-String → zero-alloc ETL-silmukka) / `bufreader_eof`
+      / `bufreader_close`. Puhdas-NURL `& \`c\``-FFI (fread/memchr/memmove/
+      fdopen), ei runtime.c-muutoksia. Tukifunktio `string_push_bytes`
+      (`stdlib/core/string.nu`). Testit: `compiler/tests/bufio_basic.nu` +
+      `bufio_stream.nu` (50001 riviä, chunk-rajat + puskurin kasvu; ASan/
+      UBSan/leak puhdas).
 
 ### 7. `hashmap` — geneerinen hash-kartta
 Nykyinen `nurl_map_*` on rajoittunut (string→i64).

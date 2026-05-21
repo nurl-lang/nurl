@@ -10,6 +10,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Buffered streaming reader — `stdlib/std/bufio.nu`.** `BufReader` pulls
+  a file (or stdin) through a 64 KiB buffer one `fread` at a time, so an
+  input far larger than RAM is processed without ever being fully
+  resident — the streaming counterpart to `read_file` / `csv_reader_new`,
+  which load the whole file first. Built for fast ETL over logs / CSV /
+  JSONL:
+
+  * `bufreader_open path → ! BufReader IoErr`, `bufreader_stdin → BufReader`.
+  * `bufreader_read_line br → ? String` — a fresh owned line each call,
+    `\n` / `\r\n` stripped; `None` at EOF.
+  * `bufreader_read_line_into br dst → b` — refills the *caller's* String
+    with the next line, so a steady-state read loop allocates nothing
+    after warm-up (one `memcpy` per line, no `malloc`). The recommended
+    ETL hot path.
+  * `bufreader_eof`, `bufreader_close`.
+
+  Line terminators are found with `memchr` (glibc SIMD), not a byte loop.
+  Lines longer than the buffer grow it; lines straddling a refill
+  boundary are compacted with `memmove`. Neither read entry point hands
+  back a pointer into the internal buffer, so there is no
+  invalidated-view foot-gun. Implemented as pure-NURL `& \`c\`` FFI
+  (`fread` / `memchr` / `memmove` / `fdopen`) — no `runtime.c` change.
+  New supporting primitive `string_push_bytes` (`stdlib/core/string.nu`)
+  appends a known-length raw byte range to a String. Regressions
+  `compiler/tests/bufio_basic.nu` (mixed terminators, empty + trailing
+  unterminated line, missing-file error) and `bufio_stream.nu` (50 001
+  lines across ~17 refills + a 200 000-byte line forcing buffer growth);
+  both ASan + UBSan + leak-detection clean.
+
 * **Standard-library Clone story.** Owned containers can now be deep-copied
   without hand-rolling a per-type clone. NURL has no type-class dispatch,
   so — exactly like the existing `vec_free` / `vec_free_with` split — the
