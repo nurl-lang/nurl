@@ -2364,11 +2364,37 @@
     // Peek the variable name (if any) BEFORE gen_expr consumes it, so we
     // can later look up `<name>__res_nurl_T` (set by gen_let_or_struct)
     // to know the source-level NURL T of an `! T E` value being matched.
-    : s match_var_name ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_lex_val lex ) ``
+    : ~ s match_var_name ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_lex_val lex ) ``
 
-    // Generate the value to match against
+    // Generate the value to match against. Clear __last_nurl_call__
+    // first: for a non-binding scrutinee, a non-empty value afterwards
+    // means the scrutinee's outermost operation was a call, and the
+    // value is that callee's NURL return type (`! T E`).
+    ( nurl_sym_def syms `__last_nurl_call__` `` )
     : s match_val ( gen_expr lex syms cg )
     : s match_type ( nurl_get_last_type )
+
+    // A `?? ( f … )` whose scrutinee is a direct call has no binding
+    // name, so the wide-payload reconstruction below (keyed on
+    // `<name>__res_nurl_T` / `__res_t_llvm`) would be skipped — and a
+    // wide `! T E` payload (a multi-field value struct) would be read
+    // as its raw heap-box pointer (silent garbage). Synthesise a
+    // binding name and populate those keys from the call's NURL return
+    // type so the direct-call form reconstructs identically to `?? r`.
+    ? & == 0 ( nurl_str_len match_var_name )
+          != 0 ( nurl_str_len ( nurl_sym_get syms `__last_nurl_call__` ) )
+    { : s mcall_nurl ( nurl_sym_get syms `__last_nurl_call__` )
+        : s msynth ( nurl_str_cat `__matchtmp` ( nurl_cg_lbl cg `mt` ) )
+        : s minner_t ( str_first_word ( str_skip_word mcall_nurl ) )
+        : s minner_e ( str_first_word ( str_skip_word ( str_skip_word mcall_nurl ) ) )
+        ( nurl_sym_def syms ( nurl_str_cat msynth `__res_nurl_T` ) minner_t )
+        ( nurl_sym_def syms ( nurl_str_cat msynth `__res_nurl_E` ) minner_e )
+        : s minner_llvm ( nurl_sym_get syms minner_t )
+        ? != 0 ( nurl_str_len minner_llvm )
+        { ( nurl_sym_def syms ( nurl_str_cat msynth `__res_t_llvm` ) minner_llvm ) }
+        {}
+        = match_var_name msynth }
+    {}
 
     ( expect lex TT_LBRACE )  // expect '{'
 

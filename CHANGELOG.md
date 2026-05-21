@@ -160,6 +160,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+* **`?? ( call )` on a wide-payload `! T E` result no longer truncates.**
+  Matching directly on a function-call expression whose Result payload
+  is a wide value struct (a multi-field `Time`-like type) silently
+  produced garbage fields: `gen_match`'s heap-box-unboxing
+  reconstruction was keyed on `<name>__res_nurl_T`, which only exists
+  when the scrutinee is a named binding — so `?? ( f … )` skipped it and
+  the `T`-arm binding received the raw heap-box pointer reinterpreted as
+  the struct. `gen_match` now synthesises the binding metadata from the
+  callee's NURL return type (`__last_nurl_call__`, cleared before the
+  scrutinee is evaluated), so the direct-call form reconstructs exactly
+  like `?? r`. Narrow payloads (`i`, pointers, handle structs) were
+  always fine. Regression `compiler/tests/match_call_wide.nu`.
+
 * **Enum variant with a struct or enum payload now constructs and
   pattern-matches correctly.** Building `@ E { Variant structValue }`
   used to store the struct value straight into the variant's pointer
