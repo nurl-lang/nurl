@@ -24,6 +24,7 @@ const Command = enum {
     fmt_idempotent,
     test_42,
     san_test,
+    snapshot_test,
     mkdir,
     copy,
     symlink,
@@ -67,6 +68,7 @@ fn run(init: std.process.Init) !void {
             .fmt_idempotent => runFmtIdempotent(init, args[2..]),
             .test_42 => runTest42(init, args[2..]),
             .san_test => runSanTest(init, args[2..]),
+            .snapshot_test => runSnapshotTest(init, args[2..]),
             .mkdir => runMkdir(io, args[2..]),
             .copy => runCopy(init.gpa, arena, io, args[2..]),
             .symlink => runSymlink(arena, init, io, args[2..]),
@@ -89,6 +91,7 @@ fn parseCommand(name: []const u8) ?Command {
     if (std.mem.eql(u8, name, "fmt-idempotent")) return .fmt_idempotent;
     if (std.mem.eql(u8, name, "test-42")) return .test_42;
     if (std.mem.eql(u8, name, "san-test")) return .san_test;
+    if (std.mem.eql(u8, name, "snapshot-test")) return .snapshot_test;
     if (std.mem.eql(u8, name, "bench-csv")) return .bench_csv;
     if (std.mem.eql(u8, name, "mcp-spec-drift")) return .mcp_spec_drift;
     return std.meta.stringToEnum(Command, name);
@@ -746,6 +749,293 @@ fn runSanTest(init: std.process.Init, args: []const []const u8) !void {
         }
         return error.ChildProcessFailed;
     }
+}
+
+fn runSnapshotTest(init: std.process.Init, args: []const []const u8) !void {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var root: []const u8 = ".";
+    var baseline_override: ?[]const u8 = null;
+    var results_override: ?[]const u8 = null;
+    var workdir_override: ?[]const u8 = null;
+    var timeout_seconds: u32 = 10;
+    var max_output_lines: usize = 200;
+    var opt: []const u8 = "-O2";
+
+    var i: usize = 0;
+    while (i < args.len and std.mem.startsWith(u8, args[i], "--")) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--root")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            root = args[i];
+        } else if (std.mem.eql(u8, arg, "--baseline")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            baseline_override = args[i];
+        } else if (std.mem.eql(u8, arg, "--results")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            results_override = args[i];
+        } else if (std.mem.eql(u8, arg, "--workdir")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            workdir_override = args[i];
+        } else if (std.mem.eql(u8, arg, "--timeout")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            timeout_seconds = try std.fmt.parseInt(u32, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--max-output-lines")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            max_output_lines = try std.fmt.parseInt(usize, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--opt")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            opt = args[i];
+        } else {
+            std.debug.print("nurl-build: unknown snapshot-test arg: {s}\n", .{arg});
+            return error.InvalidArgs;
+        }
+        i += 1;
+    }
+
+    if (args.len != i) {
+        std.debug.print(
+            "usage: nurl-build snapshot-test [--root <path>] [--baseline <path>] [--results <path>] [--workdir <path>] [--timeout <seconds>] [--max-output-lines <n>] [--opt <-O2>]\n",
+            .{},
+        );
+        return error.InvalidArgs;
+    }
+
+    if (init.environ_map.get("TIMEOUT")) |timeout_env| {
+        timeout_seconds = std.fmt.parseInt(u32, timeout_env, 10) catch timeout_seconds;
+    }
+    if (init.environ_map.get("MAX_OUT_LINES")) |max_out_env| {
+        max_output_lines = std.fmt.parseInt(usize, max_out_env, 10) catch max_output_lines;
+    }
+    if (init.environ_map.get("NURL_SAN")) |san_mode| {
+        if (std.mem.eql(u8, san_mode, "1")) {
+            std.debug.print("NURL_SAN=1 set — use: zig build san-test -Dsan=true\n", .{});
+            std.process.exit(2);
+        }
+    }
+
+    const root_abs = try absolutePath(arena, root);
+    const workdir = try resolvePathFromRoot(arena, root_abs, workdir_override orelse "build/tests");
+    const results_path = try resolvePathFromRoot(arena, root_abs, results_override orelse "compiler/tests/testresults.txt");
+    const baseline_path = try resolvePathFromRoot(arena, root_abs, baseline_override orelse "compiler/tests/correct.txt");
+    const nurlc_path = init.environ_map.get("NURLC") orelse try resolveNurlc(init, root_abs);
+    const runtime_path = init.environ_map.get("NURL_RUNTIME") orelse try std.fs.path.join(arena, &.{ root_abs, "stdlib", "runtime.o" });
+    const enable_http_tests = init.environ_map.get("NURL_HTTP_TESTS") orelse "0";
+    const enable_net_tests = init.environ_map.get("NURL_NET_TESTS") orelse "0";
+    const pq_marker_path = try std.fs.path.join(arena, &.{ root_abs, "stdlib", "runtime.pq" });
+
+    try ensureExists(io, nurlc_path, "nurlc");
+    try ensureExists(io, runtime_path, "runtime.o");
+    try ensureDirPath(io, workdir);
+
+    var test_files: std.ArrayList([]const u8) = .empty;
+    defer freePathList(gpa, &test_files);
+    try appendNuFilesFromDir(gpa, io, root_abs, "compiler/tests", &test_files);
+    std.sort.heap([]const u8, test_files.items, {}, lessThanString);
+
+    var results: std.ArrayList(u8) = .empty;
+    defer results.deinit(gpa);
+
+    for (test_files.items) |rel_src| {
+        const basename = std.fs.path.basename(rel_src);
+        const name = basename[0 .. basename.len - ".nu".len];
+        if (isSnapshotHelperModule(name)) continue;
+        if (shouldSkipSnapshotTest(name, enable_http_tests, enable_net_tests, pathExists(io, pq_marker_path))) continue;
+
+        const ll_name = try std.fmt.allocPrint(arena, "{s}.ll", .{name});
+        const out_name = try std.fmt.allocPrint(arena, "{s}.out", .{name});
+        const warn_name = try std.fmt.allocPrint(arena, "{s}.werr", .{name});
+        const ll_path = try std.fs.path.join(arena, &.{ workdir, ll_name });
+        const bin_path = try testBinaryPath(arena, workdir, name);
+        const out_path = try std.fs.path.join(arena, &.{ workdir, out_name });
+        const warn_path = try std.fs.path.join(arena, &.{ workdir, warn_name });
+
+        try deleteFileIfExists(io, ll_path);
+        try deleteFileIfExists(io, bin_path);
+        try deleteFileIfExists(io, out_path);
+        try deleteFileIfExists(io, warn_path);
+
+        try appendSummaryLine(gpa, &results, "=== {s} ===\n", .{name});
+
+        const compile_result = if (std.mem.startsWith(u8, name, "borrow_"))
+            try std.process.run(gpa, io, .{
+                .argv = &.{ nurlc_path, "--borrowck", rel_src },
+                .cwd = .{ .path = root_abs },
+            })
+        else
+            try std.process.run(gpa, io, .{
+                .argv = &.{ nurlc_path, rel_src },
+                .cwd = .{ .path = root_abs },
+            });
+        defer {
+            gpa.free(compile_result.stdout);
+            gpa.free(compile_result.stderr);
+        }
+
+        if (!runResultSucceeded(compile_result.term)) {
+            try appendSummaryLine(gpa, &results, "COMPILE FAIL\n\n", .{});
+            continue;
+        }
+
+        try std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = ll_path,
+            .data = compile_result.stdout,
+        });
+        try appendSummaryLine(gpa, &results, "COMPILE OK\n", .{});
+
+        if (std.mem.startsWith(u8, name, "borrow_")) {
+            if (compile_result.stderr.len != 0) {
+                const stripped = try stripRepoPrefixAlloc(gpa, compile_result.stderr, root_abs);
+                defer gpa.free(stripped);
+                try appendSummaryLine(gpa, &results, "WARNINGS\n", .{});
+                try appendOutputCapped(gpa, &results, stripped, max_output_lines);
+            }
+            try appendSummaryLine(gpa, &results, "\n", .{});
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, name, "should_warn_") and compile_result.stderr.len != 0) {
+            const stripped = try stripRepoPrefixAlloc(gpa, compile_result.stderr, root_abs);
+            defer gpa.free(stripped);
+            try appendSummaryLine(gpa, &results, "WARNINGS\n", .{});
+            try appendOutputCapped(gpa, &results, stripped, max_output_lines);
+        }
+
+        var link_args: std.ArrayList([]const u8) = .empty;
+        defer link_args.deinit(gpa);
+        try link_args.appendSlice(gpa, &.{ "--opt", opt, "--runtime", runtime_path, root_abs, ll_path, bin_path });
+
+        const link_result = try runLinkCapture(init, link_args.items);
+        defer {
+            gpa.free(link_result.stdout);
+            gpa.free(link_result.stderr);
+        }
+        if (!runResultSucceeded(link_result.term)) {
+            try appendSummaryLine(gpa, &results, "LINK FAIL\n\n", .{});
+            continue;
+        }
+
+        try appendSummaryLine(gpa, &results, "LINK OK\n", .{});
+
+        const run_result = try runSnapshotBinary(init, workdir, name, timeout_seconds);
+        defer gpa.free(run_result.output);
+        try std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = out_path,
+            .data = run_result.output,
+        });
+
+        try appendSummaryLine(gpa, &results, "EXIT {d}\n", .{childExitCodeOr(run_result.term, 1)});
+        try appendSummaryLine(gpa, &results, "OUTPUT\n", .{});
+        try appendOutputCapped(gpa, &results, run_result.output, max_output_lines);
+        try appendSummaryLine(gpa, &results, "\n", .{});
+    }
+
+    try ensureParentDir(io, results_path);
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = results_path,
+        .data = results.items,
+    });
+
+    if (!pathExists(io, baseline_path)) {
+        try ensureParentDir(io, baseline_path);
+        try std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = baseline_path,
+            .data = results.items,
+        });
+        std.debug.print("No baseline found — created correct.txt from current results.\n", .{});
+        std.debug.print("Review it and commit if it reflects the expected state.\n", .{});
+        return;
+    }
+
+    const baseline_bytes = try std.Io.Dir.cwd().readFileAlloc(io, baseline_path, gpa, .unlimited);
+    defer gpa.free(baseline_bytes);
+
+    if (std.mem.eql(u8, results.items, baseline_bytes)) {
+        std.debug.print("TESTS PASSED\n", .{});
+        return;
+    }
+
+    std.debug.print("TESTS FAILED — testresults.txt differs from correct.txt:\n\n", .{});
+    try printBaselineDiff(init, baseline_path, results_path);
+    return error.FilesDiffer;
+}
+
+const SnapshotRunResult = struct {
+    term: std.process.Child.Term,
+    output: []u8,
+};
+
+fn runSnapshotBinary(
+    init: std.process.Init,
+    workdir: []const u8,
+    name: []const u8,
+    timeout_seconds: u32,
+) !SnapshotRunResult {
+    const gpa = init.gpa;
+    const io = init.io;
+    const timeout: std.Io.Timeout = .{ .duration = .{
+        .clock = .boot,
+        .raw = .fromSeconds(timeout_seconds),
+    } };
+
+    if (builtin.os.tag == .windows) {
+        const rel_bin = try std.fmt.allocPrint(gpa, ".\\{s}.exe", .{name});
+        defer gpa.free(rel_bin);
+
+        const run_result: std.process.RunResult = std.process.run(gpa, io, .{
+            .argv = &.{rel_bin},
+            .cwd = .{ .path = workdir },
+            .timeout = timeout,
+        }) catch |err| switch (err) {
+            error.Timeout => return .{
+                .term = .{ .exited = 124 },
+                .output = try gpa.dupe(u8, ""),
+            },
+            else => return err,
+        };
+        defer {
+            gpa.free(run_result.stdout);
+            gpa.free(run_result.stderr);
+        }
+
+        return .{
+            .term = run_result.term,
+            .output = try std.mem.concat(gpa, u8, &.{ run_result.stdout, run_result.stderr }),
+        };
+    }
+
+    const shell_command = try std.fmt.allocPrint(gpa, "exec ./{s} 2>&1", .{name});
+    defer gpa.free(shell_command);
+
+    const run_result: std.process.RunResult = std.process.run(gpa, io, .{
+        .argv = &.{ "sh", "-c", shell_command },
+        .cwd = .{ .path = workdir },
+        .timeout = timeout,
+    }) catch |err| switch (err) {
+        error.Timeout => return .{
+            .term = .{ .exited = 124 },
+            .output = try gpa.dupe(u8, ""),
+        },
+        else => return err,
+    };
+    defer {
+        gpa.free(run_result.stdout);
+        gpa.free(run_result.stderr);
+    }
+
+    return .{
+        .term = run_result.term,
+        .output = try std.mem.concat(gpa, u8, &.{ run_result.stdout, run_result.stderr }),
+    };
 }
 
 fn runMcpSpecDrift(init: std.process.Init, args: []const []const u8) !void {
@@ -2853,6 +3143,146 @@ fn deleteTreeIfExists(io: std.Io, path: []const u8) !void {
 fn freePathList(gpa: std.mem.Allocator, paths: *std.ArrayList([]const u8)) void {
     for (paths.items) |path| gpa.free(path);
     paths.deinit(gpa);
+}
+
+fn isSnapshotHelperModule(name: []const u8) bool {
+    return std.mem.endsWith(u8, name, "_mod") or
+        std.mem.endsWith(u8, name, "_helper") or
+        std.mem.endsWith(u8, name, "_lib");
+}
+
+fn shouldSkipSnapshotTest(
+    name: []const u8,
+    enable_http_tests: []const u8,
+    enable_net_tests: []const u8,
+    has_pq_marker: bool,
+) bool {
+    if (std.mem.startsWith(u8, name, "http_") and
+        !pathEqNormalized(name, "http_request_parser") and
+        !pathEqNormalized(name, "http_response_builder") and
+        !pathEqNormalized(name, "http_router") and
+        !pathEqNormalized(name, "http_extras") and
+        !pathEqNormalized(name, "http_middleware") and
+        !pathEqNormalized(name, "http_form") and
+        !pathEqNormalized(name, "http_multipart") and
+        !pathEqNormalized(name, "http_proxy") and
+        !pathEqNormalized(name, "http_server_seq") and
+        !pathEqNormalized(name, "http_server_pipelined") and
+        !pathEqNormalized(name, "http_server_limits") and
+        !pathEqNormalized(name, "http_server_tls") and
+        !pathEqNormalized(name, "http_server_panic") and
+        !std.mem.eql(u8, enable_http_tests, "1"))
+    {
+        return true;
+    }
+
+    if ((pathEqNormalized(name, "http_server_seq") or
+        pathEqNormalized(name, "http_server_pipelined") or
+        pathEqNormalized(name, "http_server_limits") or
+        pathEqNormalized(name, "http_server_tls") or
+        pathEqNormalized(name, "http_server_panic")) and
+        !std.mem.eql(u8, enable_net_tests, "1"))
+    {
+        return true;
+    }
+
+    if (std.mem.startsWith(u8, name, "net_") and
+        !pathEqNormalized(name, "net_basic") and
+        !std.mem.eql(u8, enable_net_tests, "1"))
+    {
+        return true;
+    }
+
+    if (pathEqNormalized(name, "postgres_basic") and !has_pq_marker) return true;
+    if (pathEqNormalized(name, "variadic_ffi") and builtin.os.tag == .macos and builtin.cpu.arch == .aarch64) return true;
+    return false;
+}
+
+fn stripRepoPrefixAlloc(gpa: std.mem.Allocator, bytes: []const u8, root_abs: []const u8) ![]u8 {
+    const unix_prefix = try std.fmt.allocPrint(gpa, "{s}/", .{root_abs});
+    defer gpa.free(unix_prefix);
+    var stripped = try std.mem.replaceOwned(u8, gpa, bytes, unix_prefix, "");
+
+    if (builtin.os.tag == .windows) {
+        const windows_prefix = try std.fmt.allocPrint(gpa, "{s}\\", .{root_abs});
+        defer gpa.free(windows_prefix);
+        const replaced = try std.mem.replaceOwned(u8, gpa, stripped, windows_prefix, "");
+        gpa.free(stripped);
+        stripped = replaced;
+    }
+
+    return stripped;
+}
+
+fn appendOutputCapped(
+    gpa: std.mem.Allocator,
+    results: *std.ArrayList(u8),
+    bytes: []const u8,
+    max_output_lines: usize,
+) !void {
+    if (bytes.len == 0) return;
+
+    var total_lines: usize = 0;
+    for (bytes) |ch| {
+        if (ch == '\n') total_lines += 1;
+    }
+
+    if (total_lines <= max_output_lines) {
+        try results.appendSlice(gpa, bytes);
+        return;
+    }
+
+    var seen_lines: usize = 0;
+    var cutoff: usize = bytes.len;
+    for (bytes, 0..) |ch, idx| {
+        if (ch == '\n') {
+            seen_lines += 1;
+            if (seen_lines == max_output_lines) {
+                cutoff = idx + 1;
+                break;
+            }
+        }
+    }
+
+    try results.appendSlice(gpa, bytes[0..cutoff]);
+    try appendSummaryLine(gpa, results, "[... {d} more lines truncated ...]\n", .{total_lines - max_output_lines});
+}
+
+fn printBaselineDiff(init: std.process.Init, baseline_path: []const u8, results_path: []const u8) !void {
+    const gpa = init.gpa;
+    const io = init.io;
+
+    if (builtin.os.tag == .windows) {
+        const cmd_exe = "cmd.exe";
+        const result = std.process.run(gpa, io, .{
+            .argv = &.{ cmd_exe, "/c", "fc", baseline_path, results_path },
+        }) catch |err| switch (err) {
+            error.FileNotFound => {
+                std.debug.print("baseline: {s}\nresults : {s}\n", .{ baseline_path, results_path });
+                return;
+            },
+            else => return err,
+        };
+        defer gpa.free(result.stdout);
+        defer gpa.free(result.stderr);
+        if (result.stdout.len != 0) std.debug.print("{s}", .{result.stdout});
+        if (result.stderr.len != 0) std.debug.print("{s}", .{result.stderr});
+        return;
+    }
+
+    const result = std.process.run(gpa, io, .{
+        .argv = &.{ "diff", "-u", baseline_path, results_path },
+    }) catch |err| switch (err) {
+        error.FileNotFound => {
+            std.debug.print("baseline: {s}\nresults : {s}\n", .{ baseline_path, results_path });
+            return;
+        },
+        else => return err,
+    };
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    if (result.stdout.len != 0) std.debug.print("{s}", .{result.stdout});
+    if (result.stderr.len != 0) std.debug.print("{s}", .{result.stderr});
 }
 
 fn testBinaryPath(arena: std.mem.Allocator, workdir: []const u8, stem: []const u8) ![]const u8 {

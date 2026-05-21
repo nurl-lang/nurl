@@ -39,7 +39,6 @@ pub fn build(b: *std.Build) !void {
     const nurlfmt_path = buildBinaryPath(b, "nurlfmt", host_is_windows);
     const nurlpkg_path = buildBinaryPath(b, "nurlpkg", host_is_windows);
     const nurllsp_path = buildBinaryPath(b, "nurl-lsp", host_is_windows);
-    const tests_runner = if (host_is_windows) "compiler/tests/run_tests.bat" else "compiler/tests/run_tests.sh";
     const nurl_build_exe = b.addExecutable(.{
         .name = "nurl-build",
         .root_module = b.createModule(.{
@@ -255,12 +254,9 @@ pub fn build(b: *std.Build) !void {
     lastgood_compiler_copy.step.dependOn(&lastgood_stage2_link.step);
     lastgood_compiler_copy.step.dependOn(&lastgood_fixed_point.step);
 
-    const lastgood_tests = addScriptCommand(b, tests_runner, host_is_windows);
-    lastgood_tests.setCwd(b.path("."));
-    lastgood_tests.has_side_effects = true;
+    const lastgood_tests = addHelperStep(b, nurl_build_exe, &.{"snapshot-test"}, true);
     lastgood_tests.setEnvironmentVariable("NURLC", lastgood_compiler_path);
     lastgood_tests.setEnvironmentVariable("NURL_RUNTIME", lastgood_runtime_path);
-    lastgood_tests.setEnvironmentVariable("NURL_LINK_HELPER", helper_path);
     lastgood_tests.step.dependOn(&helper_copy.step);
     lastgood_tests.step.dependOn(&lastgood_stage0_ll_copy.step);
     lastgood_tests.step.dependOn(&lastgood_stage1_ll_copy.step);
@@ -436,15 +432,16 @@ pub fn build(b: *std.Build) !void {
 
     b.getInstallStep().dependOn(tools_step);
 
-    const tests = addScriptCommand(b, tests_runner, host_is_windows);
-    tests.setCwd(b.path("."));
-    tests.has_side_effects = true;
-    tests.step.dependOn(tools_step);
+    const snapshot_test_cmd = addHelperStep(b, nurl_build_exe, &.{"snapshot-test"}, true);
+    if (b.args) |args| {
+        snapshot_test_cmd.addArgs(args);
+    }
+    snapshot_test_cmd.step.dependOn(tools_step);
 
     const update_lastgood = addHelperCopyStep(b, nurl_build_exe, "compiler/nurlc.nu", "compiler/nurlc_lastgood.nu", false);
-    update_lastgood.step.dependOn(&tests.step);
+    update_lastgood.step.dependOn(&snapshot_test_cmd.step);
 
-    const check_step = b.step("check", b.fmt("Bootstrap the project, build tools, and run {s}", .{tests_runner}));
+    const check_step = b.step("check", "Bootstrap the project, build tools, and run the snapshot test suite");
     check_step.dependOn(&update_lastgood.step);
 
     if (!host_is_windows) {
@@ -739,12 +736,4 @@ fn buildBinaryPath(b: *std.Build, name: []const u8, host_is_windows: bool) []con
 
 fn rootBinaryPath(b: *std.Build, name: []const u8, host_is_windows: bool) []const u8 {
     return b.fmt("{s}{s}", .{ name, if (host_is_windows) ".exe" else "" });
-}
-
-fn addScriptCommand(b: *std.Build, relative_path: []const u8, host_is_windows: bool) *std.Build.Step.Run {
-    if (host_is_windows) {
-        const cmd_exe = resolveProgram(b, null, &.{ "cmd.exe", "cmd" }, &.{});
-        return b.addSystemCommand(&.{ cmd_exe, "/c", b.path(relative_path).getPath(b) });
-    }
-    return b.addSystemCommand(&.{b.path(relative_path).getPath(b)});
 }

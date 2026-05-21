@@ -553,9 +553,7 @@ nurl/
 │   │   ├── typechecker.py
 │   │   ├── ir_gen.py
 │   │   └── llvm_gen.py
-│   └── tests/                 — 80+ `.nu` test programs + snapshot runner
-│       ├── run_tests.sh       — Linux/macOS test runner
-│       ├── run_tests.bat      — Windows test runner
+│   └── tests/                 — 80+ `.nu` test programs + snapshot baseline
 │       ├── correct.txt        — golden baseline (status + output per test)
 │       └── *.nu               — positive and negative tests
 ├── stdlib/
@@ -645,7 +643,7 @@ The Linux/macOS build graph performs a complete bootstrap process:
 3. Compiles `nurlc.nu` with stage 1 → `build/nurlc_self2` (stage 2)
 4. Verifies stages 1 and 2 produce byte-identical LLVM IR (bootstrap fixed point)
 5. Copies stage 2 to `build/nurlc` and symlinks it at the repo root
-6. Runs the snapshot test suite (`compiler/tests/run_tests.sh` on Linux/macOS, `compiler/tests/run_tests.bat` on Windows) and diffs against `correct.txt`
+6. Runs the snapshot test suite via `nurl-build snapshot-test` and diffs against `correct.txt`
 
 All build artefacts are stored under `build/`. The run prints
 `BUILD SUCCESS & TESTS PASSED` on success, or the full log / diff on failure.
