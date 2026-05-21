@@ -64,7 +64,10 @@ async def _get_client() -> httpx.AsyncClient:
         from app.main import app as fastapi_app  # local import breaks cycle
         _client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=fastapi_app),
-            base_url="http://nurl.local",
+            # Use the real public origin (NURL_API_URL, injected by the
+            # Cloudflare worker) so request.url_for() in /build* yields a
+            # routable URL; fall back to the nurl.local sentinel locally.
+            base_url=os.environ.get("NURL_API_URL", "").rstrip("/") or "http://nurl.local",
             timeout=60.0,
         )
     return _client

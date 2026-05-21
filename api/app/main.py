@@ -944,15 +944,26 @@ def _register_download(path: Path, media_type: str) -> str:
 
 def _download_url(request: Request | None, token: str) -> str:
     path = f"/download/{token}"
-    # Prefer the explicit public URL when the deployment sets it —
-    # this is the only thing that works when the request arrived
-    # through the in-process ASGI transport used by the MCP server
+    # Prefer an explicitly configured public origin. This is the only
+    # thing that works when the request arrived through the in-process
+    # ASGI transport used by the MCP / REST-MCP server
     # (base_url="http://nurl.local"), where request.url_for() would
     # otherwise synthesise an unroutable internal URL.
-    public = os.environ.get("NURL_PUBLIC_URL", "").rstrip("/")
+    # NURL_API_URL is the origin the Cloudflare worker injects into the
+    # container (wrangler.jsonc → vars); NURL_PUBLIC_URL overrides it.
+    public = (
+        os.environ.get("NURL_PUBLIC_URL", "")
+        or os.environ.get("NURL_API_URL", "")
+    ).rstrip("/")
     if public:
         return f"{public}{path}"
     if request is None:
+        return path
+    # The in-process MCP/REST client uses the sentinel host nurl.local;
+    # an absolute URL built from it is unroutable. Fall back to a
+    # host-relative path the caller can resolve against the real origin
+    # rather than handing back a broken http://nurl.local/... URL.
+    if "nurl.local" in str(request.base_url):
         return path
     return str(request.url_for("download_artifact", token=token))
 
