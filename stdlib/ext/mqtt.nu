@@ -16,22 +16,28 @@
 // you can leave running.
 //
 // API:
-//   ( mqtt_connect s host i port s client_id s user s pass )  → ! MqttClient NetErr
-//   ( mqtt_publish      MqttClient s topic s payload )        → ! v NetErr   (QoS 0)
-//   ( mqtt_publish1     MqttClient s topic s payload )        → ! v NetErr   (QoS 1 + PUBACK)
-//   ( mqtt_publish2     MqttClient s topic s payload )        → ! v NetErr   (QoS 2, 4-way)
-//   ( mqtt_subscribe    MqttClient s topic )                  → ! v NetErr
-//   ( mqtt_unsubscribe  MqttClient s topic )                  → ! v NetErr
-//   ( mqtt_ping         MqttClient )                          → ! v NetErr
-//   ( mqtt_receive      MqttClient )                          → ! MqttMessage NetErr
-//   ( mqtt_disconnect   MqttClient )                          → v
+//   ( mqtt_config       s client_id s user s pass )           → MqttConfig
+//   ( mqtt_connect      s host i port s client_id s user s pass ) → ! MqttClient NetErr
+//   ( mqtt_connect_cfg  s host i port MqttConfig cfg )         → ! MqttClient NetErr
+//   ( mqtt_publish      MqttClient s topic s payload )         → ! v NetErr   (QoS 0)
+//   ( mqtt_publish1     MqttClient s topic s payload )         → ! v NetErr   (QoS 1 + PUBACK)
+//   ( mqtt_publish2     MqttClient s topic s payload )         → ! v NetErr   (QoS 2, 4-way)
+//   ( mqtt_publish_retain MqttClient s topic s payload i qos ) → ! v NetErr
+//   ( mqtt_subscribe    MqttClient s topic )                   → ! v NetErr
+//   ( mqtt_subscribe_qos MqttClient s topic i qos )            → ! v NetErr
+//   ( mqtt_unsubscribe  MqttClient s topic )                   → ! v NetErr
+//   ( mqtt_ping         MqttClient )                           → ! v NetErr
+//   ( mqtt_receive      MqttClient )                           → ! MqttMessage NetErr
+//   ( mqtt_disconnect   MqttClient )                           → v
 //
-// `mqtt_receive` returns the next inbound PUBLISH (transparently
-// consuming PINGRESP and acking inbound QoS 1 with PUBACK). Plain TCP
-// (`tcp_connect`) and the CONNACK-reason helper are also exported.
+// `mqtt_connect_cfg` takes a MqttConfig — will message, session expiry,
+// clean-start, keep-alive. `mqtt_receive` returns the next inbound
+// PUBLISH (transparently consuming PINGRESP and acking inbound QoS 1/2).
+// Plain TCP (`tcp_connect`) and the CONNACK-reason helper are exported.
 //
-// Not yet implemented: Will messages, MQTT 5 user properties, automatic
-// keep-alive scheduling, and reconnection — see MQTT_PLAN.md.
+// Not yet implemented: MQTT 5 user properties on pub/receive, typed
+// reason codes, automatic keep-alive scheduling, multi-message packet-id
+// allocation, and reconnection — see MQTT_PLAN.md.
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/bytes.nu`
@@ -88,6 +94,27 @@ $ `stdlib/core/vec.nu`
 
 // An inbound application message.
 : MqttMessage { String topic  String payload }
+
+// CONNECT configuration. An empty `will_topic` means no will message;
+// a `session_expiry` of 0 with `clean_start` T is a clean session.
+: MqttConfig {
+    s client_id
+    s username
+    s password
+    i keepalive
+    b clean_start
+    s will_topic
+    s will_payload
+    i will_qos
+    i session_expiry
+}
+
+// Common-case config: keep-alive 60 s, clean start, no will, no session
+// expiry. For a will message / session resume, build a MqttConfig
+// literally and call mqtt_connect_cfg.
+@ mqtt_config s client_id s username s password → MqttConfig {
+    ^ @ MqttConfig { client_id username password 60 T `` `` 0 0 }
+}
 
 // ── low-level codec ──────────────────────────────────────────────────
 
@@ -179,20 +206,54 @@ $ `stdlib/core/vec.nu`
     ^ result
 }
 
-// Build an MQTT 5.0 CONNECT packet into `out`.
-// Connect flags 0xC2 = username | password | cleanStart.
-@ mqtt_encode_connect ( Vec u ) out s client_id s username s password i keepalive → v {
-    : ( Vec u ) vh ( vec_with_cap [u] 16 )
+// Emit a v5 property block: a Variable Byte Integer length followed by
+// the property bytes. An empty `props` yields a single 0x00 byte.
+@ __mqtt_emit_props ( Vec u ) out ( Vec u ) props → v {
+    ( __mqtt_put_varint out ( vec_len [u] props ) )
+    ( vec_extend [u] out props )
+}
+
+// Build an MQTT 5.0 CONNECT packet from `cfg` into `out`. Connect flags
+// carry username / password / will / will-QoS / clean-start; the
+// CONNECT property block carries Session Expiry Interval (0x11) when
+// set; the payload appends the will topic + payload when a will exists.
+@ __mqtt_encode_connect ( Vec u ) out MqttConfig cfg → v {
+    : ( Vec u ) vh ( vec_with_cap [u] 32 )
     ( __mqtt_put_str vh `MQTT` )
     ( vec_push [u] vh # u 5 )
-    ( vec_push [u] vh # u 194 )
-    ( bytes_push_u16_be vh keepalive )
-    ( vec_push [u] vh # u 0 )
 
-    : ( Vec u ) pl ( vec_with_cap [u] 48 )
-    ( __mqtt_put_str pl client_id )
-    ( __mqtt_put_str pl username )
-    ( __mqtt_put_str pl password )
+    : i ulen ( nurl_str_len . cfg username )
+    : i plen ( nurl_str_len . cfg password )
+    : i wlen ( nurl_str_len . cfg will_topic )
+    : ~ i flags 0
+    ? > ulen 0 { = flags | flags 128 } {}
+    ? > plen 0 { = flags | flags 64 } {}
+    ? > wlen 0 {
+        : i wq & . cfg will_qos 3
+        = flags | flags 4
+        = flags | flags << wq 3
+    } {}
+    ? . cfg clean_start { = flags | flags 2 } {}
+    ( vec_push [u] vh # u flags )
+    ( bytes_push_u16_be vh . cfg keepalive )
+
+    : ( Vec u ) cprops ( vec_new [u] )
+    ? > . cfg session_expiry 0 {
+        ( vec_push [u] cprops # u 17 )
+        ( bytes_push_u32_be cprops . cfg session_expiry )
+    } {}
+    ( __mqtt_emit_props vh cprops )
+    ( vec_free [u] cprops )
+
+    : ( Vec u ) pl ( vec_with_cap [u] 64 )
+    ( __mqtt_put_str pl . cfg client_id )
+    ? > wlen 0 {
+        ( vec_push [u] pl # u 0 )
+        ( __mqtt_put_str pl . cfg will_topic )
+        ( __mqtt_put_str pl . cfg will_payload )
+    } {}
+    ? > ulen 0 { ( __mqtt_put_str pl . cfg username ) } {}
+    ? > plen 0 { ( __mqtt_put_str pl . cfg password ) } {}
 
     ( vec_push [u] out # u 16 )
     : i remlen + ( vec_len [u] vh ) ( vec_len [u] pl )
@@ -283,18 +344,19 @@ $ `stdlib/core/vec.nu`
 
 // ── connect ──────────────────────────────────────────────────────────
 
-// Connect to an MQTT 5.0 broker over TLS and run the CONNECT handshake.
-// A non-zero CONNACK reason code is logged to stderr and surfaced as
-// Err(NetOther); the Ok value is a live, authenticated client.
-@ mqtt_connect s host i port s client_id s username s password → !MqttClient NetErr {
+// Connect to an MQTT 5.0 broker over TLS with full control via `cfg`
+// (will message, session expiry, clean-start, keep-alive). A non-zero
+// CONNACK reason code is logged to stderr and surfaced as Err(NetOther);
+// the Ok value is a live, authenticated client.
+@ mqtt_connect_cfg s host i port MqttConfig cfg → !MqttClient NetErr {
     : !TcpConn NetErr cr ( tcp_connect_tls host port F )
     ?? cr {
         T conn → {
             ( tcp_set_timeout conn 15000 )
             : MqttClient cl @ MqttClient { conn ( vec_new [u] ) }
 
-            : ( Vec u ) pkt ( vec_with_cap [u] 80 )
-            ( mqtt_encode_connect pkt client_id username password 60 )
+            : ( Vec u ) pkt ( vec_with_cap [u] 96 )
+            ( __mqtt_encode_connect pkt cfg )
             : !v NetErr wr ( tcp_write_all conn pkt )
             ( vec_free [u] pkt )
             ?? wr {
@@ -333,51 +395,16 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-// ── publish ──────────────────────────────────────────────────────────
-
-// PUBLISH `payload` to `topic` at QoS 0 — fire-and-forget, no ack.
-@ mqtt_publish MqttClient cl s topic s payload → !v NetErr {
-    : ( Vec u ) vh ( vec_with_cap [u] 40 )
-    ( __mqtt_put_str vh topic )
-    ( vec_push [u] vh # u 0 )
-    : i plen ( nurl_str_len payload )
-
-    : ( Vec u ) pkt ( vec_with_cap [u] 72 )
-    ( vec_push [u] pkt # u 48 )
-    : i remlen + ( vec_len [u] vh ) plen
-    ( __mqtt_put_varint pkt remlen )
-    ( vec_extend [u] pkt vh )
-    ( bytes_extend_str pkt payload )
-
-    : !v NetErr w ( tcp_write_all . cl conn pkt )
-    ( vec_free [u] vh )
-    ( vec_free [u] pkt )
-    ^ w
+// Connect with the common-case defaults — keep-alive 60 s, clean start,
+// no will. For will messages or session resume, use mqtt_connect_cfg.
+@ mqtt_connect s host i port s client_id s username s password → !MqttClient NetErr {
+    ^ ( mqtt_connect_cfg host port ( mqtt_config client_id username password ) )
 }
 
-// PUBLISH at QoS 1 (at-least-once): a packet identifier rides the
-// variable header, and the call blocks for the broker's PUBACK. A
-// synchronous client keeps one packet in flight, so a fixed id (1) is
-// safe. Inbound packets other than the PUBACK are skipped.
-@ mqtt_publish1 MqttClient cl s topic s payload → !v NetErr {
-    : ( Vec u ) vh ( vec_with_cap [u] 40 )
-    ( __mqtt_put_str vh topic )
-    ( bytes_push_u16_be vh 1 )
-    ( vec_push [u] vh # u 0 )
-    : i plen ( nurl_str_len payload )
+// ── publish ──────────────────────────────────────────────────────────
 
-    : ( Vec u ) pkt ( vec_with_cap [u] 72 )
-    ( vec_push [u] pkt # u 50 )
-    : i remlen + ( vec_len [u] vh ) plen
-    ( __mqtt_put_varint pkt remlen )
-    ( vec_extend [u] pkt vh )
-    ( bytes_extend_str pkt payload )
-
-    : !v NetErr w ( tcp_write_all . cl conn pkt )
-    ( vec_free [u] vh )
-    ( vec_free [u] pkt )
-    ?? w { T → {} F we → { ^ @ !v NetErr { F we } } }
-
+// Block until the broker's PUBACK (QoS 1). Non-PUBACK packets skipped.
+@ __mqtt_await_puback MqttClient cl → !v NetErr {
     : ~ i guard 0
     ~ < guard 50 {
         = guard + guard 1
@@ -394,28 +421,8 @@ $ `stdlib/core/vec.nu`
     ^ @ !v NetErr { F # NetErr NetOther }
 }
 
-// PUBLISH at QoS 2 (exactly-once): the four-way handshake
-// PUBLISH → PUBREC → PUBREL → PUBCOMP. The call blocks until PUBCOMP.
-@ mqtt_publish2 MqttClient cl s topic s payload → !v NetErr {
-    : ( Vec u ) vh ( vec_with_cap [u] 40 )
-    ( __mqtt_put_str vh topic )
-    ( bytes_push_u16_be vh 1 )
-    ( vec_push [u] vh # u 0 )
-    : i plen ( nurl_str_len payload )
-
-    : ( Vec u ) pkt ( vec_with_cap [u] 72 )
-    ( vec_push [u] pkt # u 52 )
-    : i remlen + ( vec_len [u] vh ) plen
-    ( __mqtt_put_varint pkt remlen )
-    ( vec_extend [u] pkt vh )
-    ( bytes_extend_str pkt payload )
-
-    : !v NetErr w ( tcp_write_all . cl conn pkt )
-    ( vec_free [u] vh )
-    ( vec_free [u] pkt )
-    ?? w { T → {} F we → { ^ @ !v NetErr { F we } } }
-
-    // wait for PUBREC (type 5)
+// Finish a QoS 2 publish: await PUBREC, send PUBREL, await PUBCOMP.
+@ __mqtt_await_qos2 MqttClient cl → !v NetErr {
     : ~ i g1 0
     : ~ b got_rec F
     ~ & ! got_rec < g1 50 {
@@ -432,7 +439,6 @@ $ `stdlib/core/vec.nu`
     }
     ? ! got_rec { ^ @ !v NetErr { F # NetErr NetOther } } {}
 
-    // PUBREL (0x62), then wait for PUBCOMP (type 7)
     ( __mqtt_send_ack2 cl 98 1 )
     : ~ i g2 0
     ~ < g2 50 {
@@ -450,17 +456,62 @@ $ `stdlib/core/vec.nu`
     ^ @ !v NetErr { F # NetErr NetOther }
 }
 
+// Core PUBLISH — any QoS (0/1/2) and the retain flag. A synchronous
+// client keeps one packet in flight, so a fixed id (1) is safe. QoS 1
+// blocks for PUBACK, QoS 2 for the full PUBREC/PUBREL/PUBCOMP exchange.
+@ __mqtt_do_publish MqttClient cl s topic s payload i qos b retain → !v NetErr {
+    : ~ i b0 48
+    ? == qos 1 { = b0 | b0 2 } {}
+    ? == qos 2 { = b0 | b0 4 } {}
+    ? retain   { = b0 | b0 1 } {}
+
+    : ( Vec u ) vh ( vec_with_cap [u] 40 )
+    ( __mqtt_put_str vh topic )
+    ? > qos 0 { ( bytes_push_u16_be vh 1 ) } {}
+    ( vec_push [u] vh # u 0 )
+    : i plen ( nurl_str_len payload )
+
+    : ( Vec u ) pkt ( vec_with_cap [u] 72 )
+    ( vec_push [u] pkt # u b0 )
+    : i remlen + ( vec_len [u] vh ) plen
+    ( __mqtt_put_varint pkt remlen )
+    ( vec_extend [u] pkt vh )
+    ( bytes_extend_str pkt payload )
+
+    : !v NetErr w ( tcp_write_all . cl conn pkt )
+    ( vec_free [u] vh )
+    ( vec_free [u] pkt )
+    ?? w { T → {} F we → { ^ @ !v NetErr { F we } } }
+
+    ? == qos 1 { ^ ( __mqtt_await_puback cl ) } {}
+    ? == qos 2 { ^ ( __mqtt_await_qos2 cl ) } {}
+    ^ @ !v NetErr { T 0 }
+}
+
+// PUBLISH at QoS 0 / 1 / 2 — fire-and-forget, at-least-once, exactly-once.
+@ mqtt_publish  MqttClient cl s topic s payload → !v NetErr { ^ ( __mqtt_do_publish cl topic payload 0 F ) }
+@ mqtt_publish1 MqttClient cl s topic s payload → !v NetErr { ^ ( __mqtt_do_publish cl topic payload 1 F ) }
+@ mqtt_publish2 MqttClient cl s topic s payload → !v NetErr { ^ ( __mqtt_do_publish cl topic payload 2 F ) }
+
+// PUBLISH with the retain flag — the broker stores the message and
+// hands it to every future subscriber of `topic`.
+@ mqtt_publish_retain MqttClient cl s topic s payload i qos → !v NetErr {
+    ^ ( __mqtt_do_publish cl topic payload qos T )
+}
+
 // ── subscribe / unsubscribe ──────────────────────────────────────────
 
-// SUBSCRIBE to one topic filter at QoS 0, then read + check the SUBACK.
-@ mqtt_subscribe MqttClient cl s topic → !v NetErr {
+// SUBSCRIBE to one topic filter at max QoS `qos` (0/1/2), then read +
+// check the SUBACK. The subscription-options byte's low 2 bits are the
+// maximum QoS the broker may deliver on this filter.
+@ mqtt_subscribe_qos MqttClient cl s topic i qos → !v NetErr {
     : ( Vec u ) vh ( vec_with_cap [u] 8 )
     ( bytes_push_u16_be vh 1 )
     ( vec_push [u] vh # u 0 )
 
     : ( Vec u ) pl ( vec_with_cap [u] 32 )
     ( __mqtt_put_str pl topic )
-    ( vec_push [u] pl # u 0 )
+    ( vec_push [u] pl # u & qos 3 )
 
     : ( Vec u ) pkt ( vec_with_cap [u] 48 )
     ( vec_push [u] pkt # u 130 )
@@ -492,6 +543,11 @@ $ `stdlib/core/vec.nu`
         }
         F re → { ^ @ !v NetErr { F re } }
     }
+}
+
+// SUBSCRIBE to one topic filter at QoS 0.
+@ mqtt_subscribe MqttClient cl s topic → !v NetErr {
+    ^ ( mqtt_subscribe_qos cl topic 0 )
 }
 
 // UNSUBSCRIBE from one topic filter, then read + check the UNSUBACK.

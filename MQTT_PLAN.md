@@ -33,19 +33,21 @@ pure NURL on `( Vec u )`.
 
 Verified end to end against a live broker — `example/mqtt_pubsub.nu`.
 
-## Phase 3 — Production hardening — TODO
+## Phase 3 — Production hardening — PARTLY SHIPPED
 
-- [ ] **Configurable connect** — clean-start vs resume, session expiry,
-      a `MqttConfig` struct instead of fixed keep-alive 60 / clean start.
-- [ ] **Last Will & Testament** — will flag, will topic/payload/QoS in
-      CONNECT so the broker announces an ungraceful disconnect.
-- [ ] **MQTT 5 properties** — currently every property block is empty
-      (length 0). Surface at least: session-expiry, receive-maximum,
-      user properties, content-type, response-topic; parse inbound
-      property blocks (the reader already skips them correctly).
-- [ ] **Subscribe options** — max-QoS 1/2, no-local, retain-handling
-      (the options byte is hardcoded 0).
-- [ ] **Retain flag** on publish.
+- [x] **Configurable connect** — `MqttConfig` struct + `mqtt_connect_cfg`
+      (clean-start, keep-alive, will, session expiry). `mqtt_connect`
+      keeps the common-case 3-string signature.
+- [x] **Last Will & Testament** — will flag + will-QoS in the connect
+      flags; will topic / payload in the payload.
+- [x] **Session Expiry Interval** — emitted as CONNECT property 0x11.
+- [x] **Subscribe max-QoS** — `mqtt_subscribe_qos` (subscription-options
+      QoS bits). no-local / retain-handling bits still default 0.
+- [x] **Retain flag** — `mqtt_publish_retain`; unified `__mqtt_do_publish`
+      drives every QoS + retain.
+- [ ] **MQTT 5 properties on pub / receive** — user properties,
+      content-type, response-topic; parse inbound property blocks into
+      `MqttMessage` (the reader already skips them, just doesn't expose).
 - [ ] **Reason codes** — surface MQTT 5 reason codes (a typed `MqttErr`)
       instead of collapsing failures to `NetOther`.
 
