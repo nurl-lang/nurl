@@ -101,7 +101,7 @@
 //   (`2025-11-25`). MCP revisions only bump on backwards-incompatible
 //   changes, so a server advertising the latest revision serves older
 //   clients fine — but pinning to an old revision pushes negotiation
-//   the wrong way. `tools/mcp_spec_drift_check.sh` verifies the
+//   the wrong way. `zig build mcp-spec-drift` verifies the
 //   pinned version matches the spec site's "current".
 // * `mcp_protocol_version_legacy` returns `2024-11-05` — the previous
 //   pinned revision. Useful for serving clients that explicitly
@@ -133,7 +133,7 @@ $ `stdlib/ext/json.nu`
 // advertises the LATEST revision serves earlier clients correctly —
 // pinning to an old date pushes negotiation the wrong way.
 //
-// `tools/mcp_spec_drift_check.sh` verifies the pinned version below
+// `zig build mcp-spec-drift` verifies the pinned version below
 // matches the spec site's "current" version; CI integration would
 // fail fast when the spec drifts.
 

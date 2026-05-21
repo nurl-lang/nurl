@@ -223,7 +223,7 @@ same way: `-7`, `-3.14`. Binary minus stays separated: `- a b` for
 
 `nurlfmt(nurlfmt(x)) == nurlfmt(x)` byte-for-byte for every legal
 NURL source `x`. This is enforced by
-`compiler/tests/nurlfmt_idempotent.sh`, which runs the formatter
+`zig build fmt-idempotent`, which runs the formatter
 twice over the entire `stdlib/`, `examples/`, `compiler/tests/`, and
 `compiler/nurlc.nu` source tree and diffs the second pass against
 the first.

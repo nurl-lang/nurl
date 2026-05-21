@@ -255,6 +255,16 @@ pub fn build(b: *std.Build) !void {
     const fmt_step = b.step("nurlfmt", b.fmt("Build {s}", .{nurlfmt_path}));
     fmt_step.dependOn(&nurlfmt_link.step);
 
+    const fmt_cmd = b.addSystemCommand(&.{nurlfmt_path});
+    fmt_cmd.setCwd(b.path("."));
+    fmt_cmd.has_side_effects = true;
+    if (b.args) |args| {
+        fmt_cmd.addArgs(args);
+    }
+    fmt_cmd.step.dependOn(&nurlfmt_link.step);
+    const fmt_run_step = b.step("fmt", b.fmt("Run {s} with forwarded args", .{nurlfmt_path}));
+    fmt_run_step.dependOn(&fmt_cmd.step);
+
     const pkg_step = b.step("nurlpkg", b.fmt("Build {s}", .{nurlpkg_path}));
     pkg_step.dependOn(&nurlpkg_link.step);
 
@@ -266,6 +276,21 @@ pub fn build(b: *std.Build) !void {
     tools_step.dependOn(&nurlfmt_link.step);
     tools_step.dependOn(&nurlpkg_link.step);
     tools_step.dependOn(&nurllsp_link.step);
+
+    const fmt_idempotent_cmd = addHelperStep(b, nurl_build_exe, &.{"fmt-idempotent"}, true);
+    if (b.args) |args| {
+        fmt_idempotent_cmd.addArgs(args);
+    }
+    fmt_idempotent_cmd.step.dependOn(tools_step);
+    const fmt_idempotent_step = b.step("fmt-idempotent", "Verify nurlfmt idempotence and IR transparency");
+    fmt_idempotent_step.dependOn(&fmt_idempotent_cmd.step);
+
+    const mcp_spec_drift_cmd = addHelperStep(b, nurl_build_exe, &.{"mcp-spec-drift"}, false);
+    if (b.args) |args| {
+        mcp_spec_drift_cmd.addArgs(args);
+    }
+    const mcp_spec_drift_step = b.step("mcp-spec-drift", "Check the pinned MCP protocol revision against the current spec");
+    mcp_spec_drift_step.dependOn(&mcp_spec_drift_cmd.step);
 
     b.getInstallStep().dependOn(tools_step);
 

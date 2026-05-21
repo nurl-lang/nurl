@@ -122,15 +122,15 @@ source formatter analogous to `gofmt` / `rustfmt`. Specification:
 [`docs/FORMAT.md`](docs/FORMAT.md). Common invocations:
 
 ```bash
-./nurlfmt.sh <file.nu>              # format → stdout
-./nurlfmt.sh --write   <file.nu> …  # rewrite in place
-./nurlfmt.sh --check   <file.nu> …  # CI gate; exit 1 if non-canonical
-cat src.nu | ./nurlfmt.sh           # stdin → stdout
+zig build fmt -- <file.nu>              # format → stdout
+zig build fmt -- --write   <file.nu> …  # rewrite in place
+zig build fmt -- --check   <file.nu> …  # CI gate; exit 1 if non-canonical
+cat src.nu | build/nurlfmt             # stdin → stdout
 ```
 
 Round-trip acceptance — every shipped `.nu` file round-trips byte-for-byte:
 `fmt(fmt(x)) == fmt(x)` AND `nurlc(fmt(x)) == nurlc(x)`. Enforced by
-`compiler/tests/nurlfmt_idempotent.sh`.
+`zig build fmt-idempotent`.
 
 ### Package manager
 
@@ -665,8 +665,11 @@ Useful sub-steps on Linux/macOS:
 zig build              # bootstrap compiler + build nurlfmt/nurlpkg/nurl-lsp
 zig build bootstrap    # stop after compiler/runtime bootstrap
 zig build nurlfmt      # build only the formatter
+zig build fmt -- --check stdlib/core/string.nu
+zig build fmt-idempotent
 zig build nurlpkg      # build only the package manager
 zig build nurl-lsp     # build only the language server
+zig build mcp-spec-drift
 zig build san-test -Dsan=true
 ```
 

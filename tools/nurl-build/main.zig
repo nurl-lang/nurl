@@ -20,12 +20,15 @@ const Command = enum {
     link,
     nurl,
     wasmnurl,
+    fmt,
+    fmt_idempotent,
     mkdir,
     copy,
     symlink,
     marker,
     compare,
     buildwasm,
+    mcp_spec_drift,
     clean,
     startdev,
     dockerpush,
@@ -51,17 +54,20 @@ fn run(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(arena);
     if (args.len < 2) return error.InvalidArgs;
 
-    if (std.meta.stringToEnum(Command, args[1])) |cmd| {
+    if (parseCommand(args[1])) |cmd| {
         return switch (cmd) {
             .link => runLink(init, args[2..]),
             .nurl => runNurl(init, args[2..]),
             .wasmnurl => runWasmNurl(init, args[2..]),
+            .fmt => runFmt(init, args[2..]),
+            .fmt_idempotent => runFmtIdempotent(init, args[2..]),
             .mkdir => runMkdir(io, args[2..]),
             .copy => runCopy(init.gpa, arena, io, args[2..]),
             .symlink => runSymlink(arena, init, io, args[2..]),
             .marker => runMarker(io, args[2..]),
             .compare => runCompare(init, io, args[2..]),
             .buildwasm => runBuildWasm(init, args[2..]),
+            .mcp_spec_drift => runMcpSpecDrift(init, args[2..]),
             .clean => runClean(init, args[2..]),
             .startdev => runStartDev(init, args[2..]),
             .dockerpush => runDockerPush(init, args[2..]),
@@ -69,6 +75,12 @@ fn run(init: std.process.Init) !void {
     }
 
     return runLink(init, args[1..]);
+}
+
+fn parseCommand(name: []const u8) ?Command {
+    if (std.mem.eql(u8, name, "fmt-idempotent")) return .fmt_idempotent;
+    if (std.mem.eql(u8, name, "mcp-spec-drift")) return .mcp_spec_drift;
+    return std.meta.stringToEnum(Command, name);
 }
 
 const CompileFlavor = enum {
@@ -94,6 +106,444 @@ fn runNurl(init: std.process.Init, args: []const []const u8) !void {
 fn runWasmNurl(init: std.process.Init, args: []const []const u8) !void {
     const cfg = try parseUserCompileArgs(init, args, .wasm);
     try runUserCompile(init, cfg, .wasm);
+}
+
+fn runFmt(init: std.process.Init, args: []const []const u8) !void {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+
+    const root_abs = try absolutePath(arena, ".");
+    const nurlfmt_path = try resolveBuildOrRootBinary(init, root_abs, "nurlfmt");
+
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(gpa);
+    try argv.append(gpa, nurlfmt_path);
+    try argv.appendSlice(gpa, args);
+    try runInherited(init, argv.items);
+}
+
+fn runFmtIdempotent(init: std.process.Init, args: []const []const u8) !void {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var root: []const u8 = ".";
+    var i: usize = 0;
+    while (i < args.len and std.mem.startsWith(u8, args[i], "--")) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--root")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            root = args[i];
+        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            std.debug.print("usage: nurl-build fmt-idempotent [--root <path>] [file.nu ...]\n", .{});
+            std.process.exit(0);
+        } else {
+            std.debug.print("nurl-build: unknown fmt-idempotent arg: {s}\n", .{arg});
+            return error.InvalidArgs;
+        }
+        i += 1;
+    }
+
+    const root_abs = try absolutePath(arena, root);
+    const nurlfmt_path = try resolveBuildOrRootBinary(init, root_abs, "nurlfmt");
+    const nurlc_path = try resolveNurlc(init, root_abs);
+    try ensureExists(io, nurlfmt_path, "nurlfmt");
+    try ensureExists(io, nurlc_path, "nurlc");
+
+    var files: std.ArrayList([]const u8) = .empty;
+    defer freePathList(gpa, &files);
+
+    if (i < args.len) {
+        for (args[i..]) |arg| {
+            try files.append(gpa, try gpa.dupe(u8, arg));
+        }
+    } else {
+        try collectFmtCandidateFiles(gpa, io, root_abs, &files);
+    }
+
+    if (files.items.len == 0) {
+        std.debug.print("ERROR: no .nu files selected for fmt-idempotent\n", .{});
+        return error.FileNotFound;
+    }
+    std.sort.heap([]const u8, files.items, {}, lessThanString);
+
+    const tmp_dir = try std.fs.path.join(arena, &.{ root_abs, "build", "fmt-idempotent.tmp" });
+    try deleteTreeIfExists(io, tmp_dir);
+    try ensureDirPath(io, tmp_dir);
+    defer deleteTreeIfExists(io, tmp_dir) catch {};
+
+    const pass1_path = try std.fs.path.join(arena, &.{ tmp_dir, "pass1.nu" });
+    const pass2_path = try std.fs.path.join(arena, &.{ tmp_dir, "pass2.nu" });
+
+    var fail_idemp: std.ArrayList([]const u8) = .empty;
+    defer freePathList(gpa, &fail_idemp);
+    var fail_ir: std.ArrayList([]const u8) = .empty;
+    defer freePathList(gpa, &fail_ir);
+
+    var first_idemp_diff: ?[]const u8 = null;
+    defer if (first_idemp_diff) |msg| gpa.free(msg);
+    var first_ir_diff: ?[]const u8 = null;
+    defer if (first_ir_diff) |msg| gpa.free(msg);
+
+    var checked: usize = 0;
+    var skipped_ir: usize = 0;
+
+    for (files.items) |file_path| {
+        checked += 1;
+        const file_abs = try resolvePathFromRoot(arena, root_abs, file_path);
+        if (!pathExists(io, file_abs)) continue;
+
+        const pass1 = try std.process.run(gpa, io, .{ .argv = &.{ nurlfmt_path, file_abs } });
+        defer {
+            gpa.free(pass1.stdout);
+            gpa.free(pass1.stderr);
+        }
+        if (!runResultSucceeded(pass1.term)) {
+            try fail_idemp.append(gpa, try std.fmt.allocPrint(gpa, "{s}  (pass 1 failed to format)", .{file_path}));
+            continue;
+        }
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = pass1_path, .data = pass1.stdout });
+
+        const pass2 = try std.process.run(gpa, io, .{ .argv = &.{ nurlfmt_path, pass1_path } });
+        defer {
+            gpa.free(pass2.stdout);
+            gpa.free(pass2.stderr);
+        }
+        if (!runResultSucceeded(pass2.term)) {
+            try fail_idemp.append(gpa, try std.fmt.allocPrint(gpa, "{s}  (pass 2 failed to format)", .{file_path}));
+            continue;
+        }
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = pass2_path, .data = pass2.stdout });
+
+        if (!std.mem.eql(u8, pass1.stdout, pass2.stdout)) {
+            try fail_idemp.append(gpa, try gpa.dupe(u8, file_path));
+            if (first_idemp_diff == null) {
+                first_idemp_diff = try firstMismatchSummary(gpa, pass1.stdout, pass2.stdout, "fmt(x)", "fmt(fmt(x))");
+            }
+            continue;
+        }
+
+        if (isFmtIrSkipPath(file_path)) {
+            skipped_ir += 1;
+            continue;
+        }
+
+        const ir_orig = try std.process.run(gpa, io, .{ .argv = &.{ nurlc_path, file_abs } });
+        defer {
+            gpa.free(ir_orig.stdout);
+            gpa.free(ir_orig.stderr);
+        }
+        if (!runResultSucceeded(ir_orig.term)) {
+            skipped_ir += 1;
+            continue;
+        }
+
+        const ir_fmt = try std.process.run(gpa, io, .{ .argv = &.{ nurlc_path, pass1_path } });
+        defer {
+            gpa.free(ir_fmt.stdout);
+            gpa.free(ir_fmt.stderr);
+        }
+        if (!runResultSucceeded(ir_fmt.term)) {
+            try fail_ir.append(gpa, try std.fmt.allocPrint(gpa, "{s}  (formatted source failed to compile)", .{file_path}));
+            continue;
+        }
+
+        if (!std.mem.eql(u8, ir_orig.stdout, ir_fmt.stdout)) {
+            try fail_ir.append(gpa, try gpa.dupe(u8, file_path));
+            if (first_ir_diff == null) {
+                first_ir_diff = try firstMismatchSummary(gpa, ir_orig.stdout, ir_fmt.stdout, "orig.ll", "fmt.ll");
+            }
+        }
+    }
+
+    std.debug.print("nurlfmt round-trip:\n", .{});
+    std.debug.print("  checked         : {d} files\n", .{checked});
+    std.debug.print("  ir-equiv covered: {d}\n", .{checked - fail_idemp.items.len - skipped_ir});
+    std.debug.print("  ir-equiv skipped: {d}\n", .{skipped_ir});
+    std.debug.print("  idempotence FAIL: {d}\n", .{fail_idemp.items.len});
+    std.debug.print("  ir-equiv    FAIL: {d}\n", .{fail_ir.items.len});
+
+    if (fail_idemp.items.len == 0 and fail_ir.items.len == 0) {
+        std.debug.print("OK — nurlfmt is idempotent and IR-transparent across the covered tree.\n", .{});
+        return;
+    }
+
+    if (fail_idemp.items.len > 0) {
+        std.debug.print("\n── Idempotence failures (top 20) ─────────────────────\n", .{});
+        for (fail_idemp.items[0..@min(fail_idemp.items.len, 20)]) |item| {
+            std.debug.print("  {s}\n", .{item});
+        }
+        if (first_idemp_diff) |msg| {
+            std.debug.print("\n  diff sample:\n{s}", .{msg});
+        }
+    }
+
+    if (fail_ir.items.len > 0) {
+        std.debug.print("\n── IR-equivalence failures (top 20) ──────────────────\n", .{});
+        for (fail_ir.items[0..@min(fail_ir.items.len, 20)]) |item| {
+            std.debug.print("  {s}\n", .{item});
+        }
+        if (first_ir_diff) |msg| {
+            std.debug.print("\n  diff sample:\n{s}", .{msg});
+        }
+    }
+
+    std.process.exit(1);
+}
+
+fn runMcpSpecDrift(init: std.process.Init, args: []const []const u8) !void {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var root: []const u8 = ".";
+    var mcp_file: ?[]const u8 = null;
+    var html_file: ?[]const u8 = null;
+    var spec_url: []const u8 = "https://modelcontextprotocol.io/specification/versioning";
+
+    var i: usize = 0;
+    while (i < args.len and std.mem.startsWith(u8, args[i], "--")) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--root")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            root = args[i];
+        } else if (std.mem.eql(u8, arg, "--mcp-file")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            mcp_file = args[i];
+        } else if (std.mem.eql(u8, arg, "--html-file")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            html_file = args[i];
+        } else if (std.mem.eql(u8, arg, "--url")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            spec_url = args[i];
+        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            std.debug.print("usage: nurl-build mcp-spec-drift [--root <path>] [--mcp-file <path>] [--html-file <path>] [--url <url>]\n", .{});
+            std.process.exit(0);
+        } else {
+            std.debug.print("nurl-build: unknown mcp-spec-drift arg: {s}\n", .{arg});
+            return error.InvalidArgs;
+        }
+        i += 1;
+    }
+
+    if (args.len != i) return error.InvalidArgs;
+
+    const root_abs = try absolutePath(arena, root);
+    const mcp_path = if (mcp_file) |path|
+        try resolvePathFromRoot(arena, root_abs, path)
+    else
+        try std.fs.path.join(arena, &.{ root_abs, "stdlib", "ext", "mcp.nu" });
+    try ensureExists(io, mcp_path, "mcp.nu");
+
+    const mcp_source = try std.Io.Dir.cwd().readFileAlloc(io, mcp_path, gpa, .unlimited);
+    defer gpa.free(mcp_source);
+    const pinned = extractPinnedMcpVersionFromSource(mcp_source) orelse {
+        std.debug.print("ERROR: could not extract pinned version from {s}\n", .{mcp_path});
+        return error.InvalidData;
+    };
+
+    const html_bytes = if (html_file) |path| blk: {
+        const html_path = try resolvePathFromRoot(arena, root_abs, path);
+        try ensureExists(io, html_path, "HTML input");
+        break :blk try std.Io.Dir.cwd().readFileAlloc(io, html_path, gpa, .unlimited);
+    } else blk: {
+        break :blk try fetchUrlBody(init, spec_url);
+    };
+    defer gpa.free(html_bytes);
+
+    const current = extractCurrentMcpVersionFromHtml(html_bytes) orelse {
+        std.debug.print("ERROR: could not parse current version from {s}\n", .{if (html_file == null) spec_url else html_file.?});
+        return error.InvalidData;
+    };
+
+    std.debug.print("NURL pinned : {s}\n", .{pinned});
+    std.debug.print("Spec current: {s}\n", .{current});
+
+    if (std.mem.eql(u8, pinned, current)) {
+        std.debug.print("OK: NURL is up-to-date with the current MCP spec revision.\n", .{});
+        return;
+    }
+
+    std.debug.print("\nDRIFT: NURL pins '{s}' but the spec current is '{s}'.\n", .{ pinned, current });
+    std.debug.print("Review the changelog for breaking changes:\n", .{});
+    std.debug.print("  https://modelcontextprotocol.io/specification/{s}/changelog\n", .{current});
+    std.debug.print("\nTo re-pin, edit stdlib/ext/mcp.nu's mcp_protocol_version helper.\n", .{});
+    std.process.exit(1);
+}
+
+fn lessThanString(_: void, lhs: []const u8, rhs: []const u8) bool {
+    return std.mem.lessThan(u8, lhs, rhs);
+}
+
+fn collectFmtCandidateFiles(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    root_abs: []const u8,
+    out: *std.ArrayList([]const u8),
+) !void {
+    try appendNuFilesFromDir(gpa, io, root_abs, "stdlib", out);
+    try appendNuFilesFromDir(gpa, io, root_abs, "examples", out);
+    try appendNuFilesFromDir(gpa, io, root_abs, "compiler/tests", out);
+    try appendNuFilesFromDir(gpa, io, root_abs, "tools/nurlfmt", out);
+    try out.append(gpa, try gpa.dupe(u8, "compiler/nurlc.nu"));
+    try out.append(gpa, try gpa.dupe(u8, "compiler/nurlc_lastgood.nu"));
+}
+
+fn appendNuFilesFromDir(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    root_abs: []const u8,
+    rel_dir: []const u8,
+    out: *std.ArrayList([]const u8),
+) !void {
+    var root_dir = try std.Io.Dir.openDirAbsolute(io, root_abs, .{});
+    defer root_dir.close(io);
+    var sub_dir = try root_dir.openDir(io, rel_dir, .{ .iterate = true });
+    defer sub_dir.close(io);
+    var walker = try sub_dir.walk(gpa);
+    defer walker.deinit();
+
+    while (try walker.next(io)) |entry| {
+        if (entry.kind == .directory) continue;
+        if (!std.mem.endsWith(u8, entry.basename, ".nu")) continue;
+        try out.append(gpa, try std.fs.path.join(gpa, &.{ rel_dir, entry.path }));
+    }
+}
+
+fn isFmtIrSkipPath(path: []const u8) bool {
+    return pathEqNormalized(path, "tools/nurlfmt/tokenize.nu") or
+        pathEqNormalized(path, "tools/nurlfmt/pretty.nu");
+}
+
+fn pathEqNormalized(lhs: []const u8, rhs: []const u8) bool {
+    if (lhs.len != rhs.len) return false;
+    for (lhs, rhs) |a, b| {
+        const na: u8 = if (a == '\\') '/' else a;
+        const nb: u8 = if (b == '\\') '/' else b;
+        if (na != nb) return false;
+    }
+    return true;
+}
+
+fn firstMismatchSummary(
+    gpa: std.mem.Allocator,
+    lhs: []const u8,
+    rhs: []const u8,
+    lhs_label: []const u8,
+    rhs_label: []const u8,
+) ![]u8 {
+    var lhs_it = std.mem.splitScalar(u8, lhs, '\n');
+    var rhs_it = std.mem.splitScalar(u8, rhs, '\n');
+    var line_no: usize = 1;
+
+    while (true) {
+        const lhs_line_opt = lhs_it.next();
+        const rhs_line_opt = rhs_it.next();
+        if (lhs_line_opt == null and rhs_line_opt == null) break;
+
+        const lhs_line = std.mem.trimEnd(u8, lhs_line_opt orelse "<EOF>", "\r");
+        const rhs_line = std.mem.trimEnd(u8, rhs_line_opt orelse "<EOF>", "\r");
+        if (!std.mem.eql(u8, lhs_line, rhs_line)) {
+            return std.fmt.allocPrint(
+                gpa,
+                "    first differing line {d}\n    {s}: {s}\n    {s}: {s}\n",
+                .{ line_no, lhs_label, lhs_line, rhs_label, rhs_line },
+            );
+        }
+        line_no += 1;
+    }
+
+    return gpa.dupe(u8, "    buffers differ, but no line-oriented mismatch was found\n");
+}
+
+fn extractPinnedMcpVersionFromSource(source: []const u8) ?[]const u8 {
+    const start = std.mem.indexOf(u8, source, "@ mcp_protocol_version") orelse return null;
+    var lines = std.mem.splitScalar(u8, source[start..], '\n');
+    _ = lines.next() orelse return null;
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+        if (trimmed[0] == '}') break;
+        if (trimmed[0] == '^') {
+            return findFirstIsoDate(trimmed);
+        }
+    }
+    return null;
+}
+
+fn extractCurrentMcpVersionFromHtml(html: []const u8) ?[]const u8 {
+    var start: usize = 0;
+    while (std.mem.indexOfPos(u8, html, start, "current")) |idx| {
+        const end = @min(html.len, idx + 128);
+        if (findFirstIsoDate(html[idx..end])) |date| return date;
+        start = idx + "current".len;
+    }
+    start = 0;
+    while (std.mem.indexOfPos(u8, html, start, "Current")) |idx| {
+        const end = @min(html.len, idx + 128);
+        if (findFirstIsoDate(html[idx..end])) |date| return date;
+        start = idx + "Current".len;
+    }
+    return findFirstIsoDate(html);
+}
+
+fn findFirstIsoDate(input: []const u8) ?[]const u8 {
+    if (input.len < 10) return null;
+    var i: usize = 0;
+    while (i + 10 <= input.len) : (i += 1) {
+        if (isIsoDateAt(input, i)) {
+            return input[i .. i + 10];
+        }
+    }
+    return null;
+}
+
+fn isIsoDateAt(input: []const u8, start: usize) bool {
+    if (start + 10 > input.len) return false;
+    const s = input[start .. start + 10];
+    return std.ascii.isDigit(s[0]) and
+        std.ascii.isDigit(s[1]) and
+        std.ascii.isDigit(s[2]) and
+        std.ascii.isDigit(s[3]) and
+        s[4] == '-' and
+        std.ascii.isDigit(s[5]) and
+        std.ascii.isDigit(s[6]) and
+        s[7] == '-' and
+        std.ascii.isDigit(s[8]) and
+        std.ascii.isDigit(s[9]);
+}
+
+fn fetchUrlBody(init: std.process.Init, url: []const u8) ![]u8 {
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var client: std.http.Client = .{
+        .allocator = gpa,
+        .io = io,
+    };
+    defer client.deinit();
+
+    var response_body: std.Io.Writer.Allocating = .init(gpa);
+    defer response_body.deinit();
+
+    const result = client.fetch(.{
+        .location = .{ .url = url },
+        .response_writer = &response_body.writer,
+    }) catch |err| {
+        std.debug.print("ERROR: could not fetch {s}\n", .{url});
+        return err;
+    };
+    if (result.status != .ok) {
+        std.debug.print("ERROR: fetch {s} returned HTTP {d}\n", .{ url, @intFromEnum(result.status) });
+        return error.UnexpectedHttpStatus;
+    }
+
+    return gpa.dupe(u8, response_body.written());
 }
 
 fn parseUserCompileArgs(init: std.process.Init, args: []const []const u8, flavor: CompileFlavor) !UserCompileConfig {
@@ -323,16 +773,7 @@ fn emitAssembly(
 }
 
 fn resolveNurlc(init: std.process.Init, root: []const u8) ![]const u8 {
-    const arena = init.arena.allocator();
-    const io = init.io;
-
-    const build_nurlc = try std.fs.path.join(arena, &.{ root, "build", if (builtin.os.tag == .windows) "nurlc.exe" else "nurlc" });
-    if (pathExists(io, build_nurlc)) return build_nurlc;
-
-    const root_nurlc = try std.fs.path.join(arena, &.{ root, if (builtin.os.tag == .windows) "nurlc.exe" else "nurlc" });
-    if (pathExists(io, root_nurlc)) return root_nurlc;
-
-    return if (builtin.os.tag == .windows) "nurlc.exe" else "nurlc";
+    return resolveBuildOrRootBinary(init, root, "nurlc");
 }
 
 fn resolveNurlcWasm(init: std.process.Init, root: []const u8) ![]const u8 {
@@ -1074,6 +1515,28 @@ fn absolutePath(arena: std.mem.Allocator, path: []const u8) ![]const u8 {
     return std.fs.path.resolve(arena, &.{ ".", path });
 }
 
+fn resolvePathFromRoot(arena: std.mem.Allocator, root: []const u8, path: []const u8) ![]const u8 {
+    if (std.fs.path.isAbsolute(path)) return arena.dupe(u8, path);
+    return std.fs.path.join(arena, &.{ root, path });
+}
+
+fn resolveBuildOrRootBinary(init: std.process.Init, root: []const u8, base_name: []const u8) ![]const u8 {
+    const arena = init.arena.allocator();
+    const io = init.io;
+    const binary_name = if (builtin.os.tag == .windows)
+        try std.fmt.allocPrint(arena, "{s}.exe", .{base_name})
+    else
+        base_name;
+
+    const build_path = try std.fs.path.join(arena, &.{ root, "build", binary_name });
+    if (pathExists(io, build_path)) return build_path;
+
+    const root_path = try std.fs.path.join(arena, &.{ root, binary_name });
+    if (pathExists(io, root_path)) return root_path;
+
+    return binary_name;
+}
+
 fn ensureParentDir(io: std.Io, file_path: []const u8) !void {
     const parent = std.fs.path.dirname(file_path) orelse return;
     try ensureDirPath(io, parent);
@@ -1151,6 +1614,13 @@ fn deleteTreeIfExists(io: std.Io, path: []const u8) !void {
 fn freePathList(gpa: std.mem.Allocator, paths: *std.ArrayList([]const u8)) void {
     for (paths.items) |path| gpa.free(path);
     paths.deinit(gpa);
+}
+
+fn runResultSucceeded(term: std.process.Child.Term) bool {
+    return switch (term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
 }
 
 fn printCommand(label: []const u8, argv: []const []const u8) void {
