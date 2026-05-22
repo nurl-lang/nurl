@@ -558,7 +558,8 @@ nurl/
 │       └── *.nu               — positive and negative tests
 ├── stdlib/
 │   ├── runtime.c              ✓ remaining C runtime core / platform fallbacks
-│   ├── runtime_fs_env.zig     ✓ Zig runtime slice (fs/env/lexer/string/csv/core runtime)
+│   ├── runtime_fs_env.zig     ✓ Zig runtime slice (fs/env/string/csv/core runtime)
+│   ├── runtime_compiler_support.zig ✓ Zig runtime slice (symtab/lexer/codegen)
 │   ├── runtime_crypto_threads.zig ✓ Zig runtime slice (crypto/thread/DoS)
 │   ├── runtime_http.zig       ✓ Zig runtime slice (http client/streaming)
 │   ├── runtime_process.zig    ✓ Zig runtime slice (process run/spawn)
