@@ -23,7 +23,6 @@ import secrets
 import shutil
 import subprocess
 import tempfile
-import threading
 import time
 import uuid
 from pathlib import Path
@@ -37,6 +36,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import markdown as _md
+from app.artifacts import ArtifactStore, BuildArtifact, sanitize_basename
 
 NURLC_PATH = os.environ.get("NURLC_PATH", "/opt/nurl/build/nurlc")
 # wasm32-wasi is produced by `zig cc -target wasm32-wasi` (NURL_ZIG, defined
@@ -120,6 +120,7 @@ OUTPUT_DIR     = os.environ.get("NURL_OUTPUT_DIR", "/app/output")
 # How long a download token stays valid. Expired artifacts are cleaned up
 # lazily on the next /build or /download call.
 DOWNLOAD_TTL_SEC = int(os.environ.get("NURL_DOWNLOAD_TTL_SEC", str(60 * 60)))
+_artifact_store = ArtifactStore(OUTPUT_DIR, DOWNLOAD_TTL_SEC)
 
 # Lazy import: app.mcp_server imports from app.main, so keep the import
 # local to the lifespan factory below.
@@ -455,78 +456,6 @@ def build_wasm(req: BuildWasmRequest):
     return _run_api_build_wasm_helper(req)
 
 
-# ── Native build + download registry ─────────────────────────────
-#
-# /build mirrors what `zig build nurl -- ...` does: nurlc → .ll → clang → native
-# binary, with both artifacts written to OUTPUT_DIR. Each artifact gets
-# an opaque URL-safe token; /download/{token} streams the file back.
-# Tokens are kept in-process, so they're lost on restart — that's fine
-# for an artifact cache.
-
-class _DownloadEntry:
-    __slots__ = ("path", "filename", "media_type", "expires_at")
-
-    def __init__(self, path: Path, filename: str, media_type: str, expires_at: float) -> None:
-        self.path = path
-        self.filename = filename
-        self.media_type = media_type
-        self.expires_at = expires_at
-
-
-_download_registry: dict[str, _DownloadEntry] = {}
-_download_lock = threading.Lock()
-
-
-def _gc_downloads(now: float | None = None) -> None:
-    now = now if now is not None else time.time()
-    with _download_lock:
-        expired = [t for t, e in _download_registry.items() if e.expires_at <= now]
-        for t in expired:
-            entry = _download_registry.pop(t, None)
-            if entry is None:
-                continue
-            try:
-                if entry.path.is_file():
-                    entry.path.unlink()
-                # Clean the parent build dir if it's empty.
-                parent = entry.path.parent
-                if parent.is_dir() and parent.parent == Path(OUTPUT_DIR).resolve():
-                    try:
-                        next(parent.iterdir())
-                    except StopIteration:
-                        parent.rmdir()
-            except OSError:
-                pass
-
-
-def _register_download(path: Path, media_type: str) -> str:
-    token = secrets.token_urlsafe(24)
-    entry = _DownloadEntry(
-        path=path,
-        filename=path.name,
-        media_type=media_type,
-        expires_at=time.time() + DOWNLOAD_TTL_SEC,
-    )
-    with _download_lock:
-        _download_registry[token] = entry
-    return token
-
-
-def _download_url(request: Request | None, token: str) -> str:
-    path = f"/download/{token}"
-    # Prefer the explicit public URL when the deployment sets it —
-    # this is the only thing that works when the request arrived
-    # through the in-process ASGI transport used by the MCP server
-    # (base_url="http://nurl.local"), where request.url_for() would
-    # otherwise synthesise an unroutable internal URL.
-    public = os.environ.get("NURL_PUBLIC_URL", "").rstrip("/")
-    if public:
-        return f"{public}{path}"
-    if request is None:
-        return path
-    return str(request.url_for("download_artifact", token=token))
-
-
 class BuildRequest(BaseModel):
     source: str = Field(
         ...,
@@ -543,13 +472,6 @@ class BuildRequest(BaseModel):
         description="Clang optimisation flag. Defaults to -O2 (matches `zig build nurl`).",
         examples=["-O0", "-O2"],
     )
-
-
-class BuildArtifact(BaseModel):
-    name: str
-    bytes: int
-    download_url: str
-    token: str
 
 
 class BuildResponse(BaseModel):
@@ -578,38 +500,6 @@ class BuildResponse(BaseModel):
     ll_artifact: BuildArtifact | None = None
     binary_artifact: BuildArtifact | None = None
 
-
-def _sanitize_basename(raw: str | None) -> str:
-    if not raw:
-        return "main"
-    stem = Path(raw).stem
-    cleaned = "".join(c for c in stem if c.isalnum() or c in "._-")
-    return cleaned or "main"
-
-
-def _register_build_artifact(
-    path: Path,
-    media_type: str,
-    request: Request,
-    *,
-    executable: bool = False,
-) -> BuildArtifact | None:
-    if not path.is_file():
-        return None
-    if executable:
-        try:
-            path.chmod(0o755)
-        except OSError:
-            pass
-    token = _register_download(path, media_type)
-    return BuildArtifact(
-        name=path.name,
-        bytes=path.stat().st_size,
-        download_url=_download_url(request, token),
-        token=token,
-    )
-
-
 def _run_api_build_helper(
     req: BuildRequest,
     request: Request,
@@ -623,10 +513,10 @@ def _run_api_build_helper(
     canvas_obj: str | None = None,
     canvas_sdl2_marker: str | None = None,
 ) -> BuildResponse:
-    _gc_downloads()
+    _artifact_store.gc()
 
     opt_flag = req.opt if req.opt and req.opt.startswith("-O") else "-O2"
-    output_root = Path(OUTPUT_DIR)
+    output_root = _artifact_store.output_dir
     output_root.mkdir(parents=True, exist_ok=True)
     build_prefix = {
         "native": "build",
@@ -638,7 +528,7 @@ def _run_api_build_helper(
 
     with tempfile.TemporaryDirectory(prefix=f"nurl-build-{kind}-") as tmp:
         tmpdir = Path(tmp)
-        nu_path = tmpdir / f"{_sanitize_basename(req.filename)}.nu"
+        nu_path = tmpdir / f"{sanitize_basename(req.filename)}.nu"
         nu_path.write_bytes(req.source.encode("utf-8"))
 
         helper_cmd = [
@@ -691,7 +581,7 @@ def _run_api_build_helper(
 
     ll_artifact = None
     if payload.get("ll_path"):
-        ll_artifact = _register_build_artifact(
+        ll_artifact = _artifact_store.register_build_artifact(
             Path(payload["ll_path"]),
             "text/plain",
             request,
@@ -699,7 +589,7 @@ def _run_api_build_helper(
 
     binary_artifact = None
     if payload.get("binary_path"):
-        binary_artifact = _register_build_artifact(
+        binary_artifact = _artifact_store.register_build_artifact(
             Path(payload["binary_path"]),
             binary_media_type,
             request,
@@ -727,7 +617,7 @@ def _run_api_build_helper(
 
 
 def _run_api_build_wasm_helper(req: BuildWasmRequest):
-    basename = _sanitize_basename(req.filename)
+    basename = sanitize_basename(req.filename)
 
     with tempfile.TemporaryDirectory(prefix="nurl-build-wasm-") as tmp:
         tmpdir = Path(tmp)
@@ -1094,9 +984,8 @@ def build_macos(req: BuildRequest, request: Request) -> BuildResponse:
     },
 )
 def download_artifact(token: str) -> FileResponse:
-    _gc_downloads()
-    with _download_lock:
-        entry = _download_registry.get(token)
+    _artifact_store.gc()
+    entry = _artifact_store.get(token)
     if entry is None or not entry.path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown or expired token")
     return FileResponse(
