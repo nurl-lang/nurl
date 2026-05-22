@@ -3836,6 +3836,11 @@ fn httpStreamCaptureDone(stream: *NurlHttpStream) void {
     }
 }
 
+fn httpResponseHandle(handle: c_longlong) ?*NurlHttpResponse {
+    if (handle == 0) return null;
+    return @ptrFromInt(@as(usize, @intCast(handle)));
+}
+
 pub export fn nurl_http_perform_full_to(
     url: ?[*:0]const u8,
     method: ?[*:0]const u8,
@@ -4103,6 +4108,57 @@ pub export fn nurl_http_stream_close(handle: c_longlong) void {
     httpHeaderBufFree(&stream.hdr_buf);
     if (stream.body_buf.data) |buf| c.free(buf);
     c.free(stream);
+}
+
+pub export fn nurl_http_response_status(handle: c_longlong) c_longlong {
+    const resp = httpResponseHandle(handle) orelse return 0;
+    return resp.status;
+}
+
+pub export fn nurl_http_response_err_kind(handle: c_longlong) c_longlong {
+    const resp = httpResponseHandle(handle) orelse return nurl_http_err_other;
+    return resp.err_kind;
+}
+
+pub export fn nurl_http_response_body(handle: c_longlong) ?[*:0]const u8 {
+    const resp = httpResponseHandle(handle) orelse return "";
+    return resp.body orelse "";
+}
+
+pub export fn nurl_http_response_body_len(handle: c_longlong) c_longlong {
+    const resp = httpResponseHandle(handle) orelse return 0;
+    return resp.body_len;
+}
+
+pub export fn nurl_http_response_header_count(handle: c_longlong) c_longlong {
+    const resp = httpResponseHandle(handle) orelse return 0;
+    return resp.header_count;
+}
+
+pub export fn nurl_http_response_header_name(handle: c_longlong, idx: c_longlong) ?[*:0]const u8 {
+    const resp = httpResponseHandle(handle) orelse return "";
+    if (idx < 0 or idx >= resp.header_count or resp.headers == null) return "";
+    return resp.headers.?[@intCast(idx)].name orelse "";
+}
+
+pub export fn nurl_http_response_header_value(handle: c_longlong, idx: c_longlong) ?[*:0]const u8 {
+    const resp = httpResponseHandle(handle) orelse return "";
+    if (idx < 0 or idx >= resp.header_count or resp.headers == null) return "";
+    return resp.headers.?[@intCast(idx)].value orelse "";
+}
+
+pub export fn nurl_http_response_free(handle: c_longlong) void {
+    const resp = httpResponseHandle(handle) orelse return;
+    if (resp.headers) |headers| {
+        var i: usize = 0;
+        while (i < @as(usize, @intCast(resp.header_count))) : (i += 1) {
+            if (headers[i].name) |name| c.free(name);
+            if (headers[i].value) |value| c.free(value);
+        }
+        c.free(@ptrCast(headers));
+    }
+    if (resp.body) |body| c.free(body);
+    c.free(resp);
 }
 
 pub export fn nurl_str_len(input: ?[*:0]const u8) c_longlong {

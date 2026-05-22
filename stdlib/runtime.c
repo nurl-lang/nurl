@@ -3672,6 +3672,8 @@ void      nurl_http_stream_close(long long h)     { (void)h; }
  * NurlHttpResponse struct, so the same code serves both the real and
  * stub builds. */
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
+
 long long nurl_http_response_status(long long resp) {
     NurlHttpResponse *r = (NurlHttpResponse*)(uintptr_t)resp;
     return r ? r->status : 0;
@@ -3722,6 +3724,8 @@ void nurl_http_response_free(long long resp) {
     free(r->body);
     free(r);
 }
+
+#endif
 
 /* ── §15  Logging level (mutable global) ───────────────────────── */
 /* Single process-wide level used by stdlib/std/log.nu.            */
