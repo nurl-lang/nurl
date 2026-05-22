@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<title>NURL Tests · Browser</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161a21;
+    --panel-2: #1d222b;
+    --border: #262c38;
+    --fg: #e6e8ee;
+    --fg-dim: #9aa3b2;
+    --accent: #7cc4ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 1rem;
+    padding: .55rem 1rem; border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  header h1 { margin: 0; font-size: 1rem; font-weight: 600; }
+  header .spacer { flex: 1; }
+  header a { color: var(--fg-dim); text-decoration: none; font-size: .85rem; margin-left: .75rem; }
+  header a:hover { color: var(--fg); }
+  header .crumb { font-size: .85rem; color: var(--fg-dim); }
+  header .crumb b { color: var(--fg); font-weight: 600; }
+  main {
+    flex: 1; display: grid;
+    grid-template-columns: 260px 1fr;
+    gap: 1px; background: var(--border);
+    min-height: 0;
+  }
+  aside {
+    background: var(--panel); overflow: auto;
+    padding: .5rem 0; min-width: 0;
+  }
+  aside .group {
+    font-size: .7rem; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--fg-dim); padding: .65rem .85rem .25rem;
+  }
+  aside ul { list-style: none; margin: 0; padding: 0; }
+  aside li a {
+    display: block; padding: .25rem .85rem .25rem 1.4rem;
+    color: var(--fg); text-decoration: none;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: .82rem; line-height: 1.4;
+    border-left: 2px solid transparent;
+  }
+  aside li a:hover { background: var(--panel-2); }
+  aside li a.active {
+    background: var(--panel-2);
+    border-left-color: var(--accent);
+    color: var(--accent);
+  }
+  aside li a .size {
+    color: var(--fg-dim); float: right; font-size: .72rem;
+  }
+  section.viewer {
+    background: var(--panel); display: flex; flex-direction: column;
+    min-height: 0; min-width: 0;
+  }
+  .viewer-header {
+    font-size: .75rem;
+    color: var(--fg-dim);
+    padding: .4rem .85rem; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: .75rem;
+  }
+  .viewer-header .path {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color: var(--fg); font-size: .82rem;
+  }
+  .viewer-header .spacer { flex: 1; }
+  .viewer-header a, .viewer-header button {
+    color: var(--fg-dim); text-decoration: none; font-size: .78rem;
+    background: transparent; border: 1px solid var(--border);
+    border-radius: 6px; padding: .25rem .55rem; cursor: pointer;
+    font-family: inherit;
+  }
+  .viewer-header a:hover, .viewer-header button:hover {
+    color: var(--fg); border-color: var(--fg-dim);
+  }
+  #editor { flex: 1; width: 100%; min-height: 0; display: none; }
+  #editor.ready { display: block; }
+  .empty {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    color: var(--fg-dim); font-size: .9rem;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>NURL Tests</h1>
+  <span class="crumb" id="crumb">— pick a module —</span>
+  <div class="spacer"></div>
+  <a href="/" target="_self">← Playground</a>
+  <a href="/readme" target="_blank" rel="noopener">README</a>
+  <a href="/grammar" target="_blank" rel="noopener">Grammar</a>
+</header>
+
+<main>
+  <aside id="tree"></aside>
+  <section class="viewer">
+    <div class="viewer-header">
+      <span class="path" id="currentPath">(no file)</span>
+      <span class="spacer"></span>
+      <a id="rawLink" href="#" target="_blank" rel="noopener" hidden>raw</a>
+      <button id="copyBtn" type="button" hidden>copy</button>
+    </div>
+    <div id="editor"></div>
+    <div id="emptyMsg" class="empty">Select a compiler test on the left to view it.</div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
+<script>
+  window.__monacoReady = new Promise((resolve) => {
+    require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs' } });
+    require(['vs/editor/editor.main'], () => resolve(window.monaco));
+  });
+</script>
+
+<script type="module">
+const NURL_MONARCH = {
+  defaultToken: "",
+  tokenPostfix: ".nurl",
+  tokenizer: {
+    root: [
+      [/\/\/.*$/, "comment"],
+      [/`/, { token: "string.quote", bracket: "@open", next: "@string" }],
+      [/\$(?=\s*`)/, "keyword.control.import"],
+      [/&(?=\s*`)/,  "keyword.control.ffi"],
+      [/(@)(\s+)([a-z_][\w]*)/, ["keyword.other.func", "white", "entity.name.function"]],
+      [/(%)(\s+)([A-Za-z_][\w]*)/, ["keyword.other.trait", "white", "type.identifier"]],
+      [/(:)(\s*)(\|)(\s*)([A-Za-z_][\w]*)/,
+        ["keyword", "white", "keyword", "white", "type.identifier"]],
+      [/(:)(\s+)([A-Z][\w]*)(\s*)(\{)/,
+        ["keyword", "white", "type.identifier", "white", "@brackets"]],
+      [/\d+\.\d+([eE][+\-]?\d+)?/, "number.float"],
+      [/\d+/,                       "number"],
+      [/\b(T|F)\b/, "constant.language.boolean"],
+      [/\b(i|u|f|b|s|v)\b/, "type"],
+      [/\b[A-Z][\w]*\b/, "type.identifier"],
+      [/→/,              "keyword.operator"],
+      [/\^/,             "keyword.control.return"],
+      [/\?\?/,           "keyword.control"],
+      [/\?/,             "keyword.control"],
+      [/~/,              "keyword.control"],
+      [/;/,              "keyword"],
+      [/\\/,             "keyword"],
+      [/\bZ\b/,          "keyword"],
+      [/(==|!=|<=|>=)/,  "keyword.operator"],
+      [/[<>]/,           "keyword.operator"],
+      [/[+\-*/%]/,       "keyword.operator.arithmetic"],
+      [/[&|!]/,          "keyword.operator.logical"],
+      [/[=:]/,           "keyword.operator.assign"],
+      [/[.#@$]/,         "keyword.operator"],
+      [/[{}()\[\]]/, "@brackets"],
+      [/,/,          "delimiter"],
+      [/[a-zA-Z_]\w*/, "identifier"],
+      [/\s+/, "white"],
+    ],
+    string: [
+      [/\\[ntr\\`]/,                                    "string.escape"],
+      [/[^\\`]+/,                                       "string"],
+      [/`/, { token: "string.quote", bracket: "@close", next: "@pop" }],
+    ],
+  },
+};
+
+const NURL_THEME_RULES = [
+  { token: "comment",                     foreground: "6A9955", fontStyle: "italic" },
+  { token: "string",                      foreground: "CE9178" },
+  { token: "string.quote",                foreground: "CE9178" },
+  { token: "string.escape",               foreground: "D7BA7D" },
+  { token: "number",                      foreground: "B5CEA8" },
+  { token: "number.float",                foreground: "B5CEA8" },
+  { token: "constant.language.boolean",   foreground: "569CD6" },
+  { token: "type",                        foreground: "4EC9B0" },
+  { token: "type.identifier",             foreground: "4EC9B0" },
+  { token: "entity.name.function",        foreground: "DCDCAA" },
+  { token: "keyword",                     foreground: "C586C0" },
+  { token: "keyword.control",             foreground: "C586C0" },
+  { token: "keyword.control.import",      foreground: "C586C0" },
+  { token: "keyword.control.ffi",         foreground: "C586C0" },
+  { token: "keyword.control.return",      foreground: "C586C0" },
+  { token: "keyword.other.func",          foreground: "569CD6" },
+  { token: "keyword.other.trait",         foreground: "569CD6" },
+  { token: "keyword.operator",            foreground: "D4D4D4" },
+  { token: "keyword.operator.arithmetic", foreground: "D4D4D4" },
+  { token: "keyword.operator.logical",    foreground: "D4D4D4" },
+  { token: "keyword.operator.assign",     foreground: "D4D4D4" },
+  { token: "identifier",                  foreground: "9CDCFE" },
+  { token: "delimiter",                   foreground: "D4D4D4" },
+];
+
+const $ = (sel) => document.querySelector(sel);
+const tree = $("#tree");
+const crumb = $("#crumb");
+const currentPath = $("#currentPath");
+const rawLink = $("#rawLink");
+const copyBtn = $("#copyBtn");
+const editorHost = $("#editor");
+const emptyMsg = $("#emptyMsg");
+
+let editor = null;
+let allFiles = [];
+
+function groupFiles(files) {
+  const groups = new Map();
+  for (const f of files) {
+    const i = f.path.indexOf("/");
+    const top = i < 0 ? "(root)" : f.path.slice(0, i);
+    if (!groups.has(top)) groups.set(top, []);
+    groups.get(top).push(f);
+  }
+  return groups;
+}
+
+function renderTree(files) {
+  tree.innerHTML = "";
+  const groups = groupFiles(files);
+  for (const [top, items] of groups) {
+    const h = document.createElement("div");
+    h.className = "group";
+    h.textContent = top + "/";
+    tree.appendChild(h);
+    const ul = document.createElement("ul");
+    for (const f of items) {
+      const li = document.createElement("li");
+      const a = document.createElement("a");
+      a.href = "?path=" + encodeURIComponent(f.path);
+      a.dataset.path = f.path;
+      const labelLeaf = f.path.includes("/") ? f.path.slice(f.path.lastIndexOf("/") + 1) : f.path;
+      const labelSpan = document.createElement("span");
+      labelSpan.textContent = labelLeaf;
+      const sizeSpan = document.createElement("span");
+      sizeSpan.className = "size";
+      sizeSpan.textContent = f.bytes + " B";
+      a.appendChild(labelSpan);
+      a.appendChild(sizeSpan);
+      a.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        selectPath(f.path, true);
+      });
+      li.appendChild(a);
+      ul.appendChild(li);
+    }
+    tree.appendChild(ul);
+  }
+}
+
+function highlightActive(path) {
+  for (const a of tree.querySelectorAll("a")) {
+    a.classList.toggle("active", a.dataset.path === path);
+  }
+}
+
+async function ensureEditor() {
+  if (editor) return editor;
+  const monaco = await window.__monacoReady;
+  if (!monaco.languages.getLanguages().some((l) => l.id === "nurl")) {
+    monaco.languages.register({ id: "nurl" });
+    monaco.languages.setMonarchTokensProvider("nurl", NURL_MONARCH);
+    monaco.languages.setLanguageConfiguration("nurl", {
+      comments: { lineComment: "//" },
+      brackets: [["{","}"],["[","]"],["(",")"]],
+    });
+    monaco.editor.defineTheme("nurl-dark", {
+      base: "vs-dark",
+      inherit: true,
+      rules: NURL_THEME_RULES,
+      colors: {
+        "editor.background": "#161a21",
+        "editor.foreground": "#e6e8ee",
+        "editorLineNumber.foreground": "#4b5366",
+        "editorCursor.foreground": "#7cc4ff",
+      },
+    });
+  }
+  editor = monaco.editor.create(editorHost, {
+    value: "",
+    language: "nurl",
+    theme: "nurl-dark",
+    fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+    fontSize: 13,
+    lineHeight: 1.45,
+    minimap: { enabled: true },
+    scrollBeyondLastLine: false,
+    readOnly: true,
+    domReadOnly: true,
+    automaticLayout: true,
+    smoothScrolling: true,
+    tabSize: 2,
+    insertSpaces: true,
+  });
+  return editor;
+}
+
+async function selectPath(path, push) {
+  if (!path) return;
+  const r = await fetch("/tests/" + path.split("/").map(encodeURIComponent).join("/"));
+  if (!r.ok) {
+    crumb.textContent = "load failed: " + path;
+    return;
+  }
+  const j = await r.json();
+  const ed = await ensureEditor();
+  emptyMsg.style.display = "none";
+  editorHost.classList.add("ready");
+  ed.setValue(j.source);
+  ed.setScrollTop(0);
+  currentPath.textContent = "compiler/tests/" + path;
+  crumb.innerHTML = "compiler/tests / <b>" + path.replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</b>";
+  rawLink.href = "/tests/" + path.split("/").map(encodeURIComponent).join("/");
+  rawLink.hidden = false;
+  copyBtn.hidden = false;
+  document.title = "NURL · " + path;
+  highlightActive(path);
+  if (push) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("path", path);
+    history.pushState({ path }, "", url);
+  }
+}
+
+copyBtn.addEventListener("click", async () => {
+  if (!editor) return;
+  try {
+    await navigator.clipboard.writeText(editor.getValue());
+    const old = copyBtn.textContent;
+    copyBtn.textContent = "copied";
+    setTimeout(() => { copyBtn.textContent = old; }, 900);
+  } catch (e) {}
+});
+
+window.addEventListener("popstate", () => {
+  const p = new URLSearchParams(window.location.search).get("path");
+  if (p) selectPath(p, false);
+});
+
+(async function init() {
+  try {
+    const r = await fetch("/tests");
+    allFiles = await r.json();
+  } catch (e) {
+    crumb.textContent = "failed to load /tests index";
+    return;
+  }
+  renderTree(allFiles);
+  const initialPath = new URLSearchParams(window.location.search).get("path");
+  if (initialPath) {
+    selectPath(initialPath, false);
+  }
+})();
+</script>
+</body>
+</html>
