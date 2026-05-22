@@ -19,11 +19,9 @@ import base64
 import json
 import os
 import re
-import secrets
 import shutil
 import subprocess
 import tempfile
-import time
 import uuid
 from pathlib import Path
 from typing import Literal
@@ -31,7 +29,7 @@ from typing import Literal
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -978,6 +976,8 @@ if Path(STATIC_DIR).is_dir():
 # would shadow `/rmcp/*`.
 from app.rest_mcp import router as _rest_mcp_router  # noqa: E402 — post-route include
 app.include_router(_rest_mcp_router)
+from app.mcp_compat import mcp_client_compat_middleware, router as _mcp_compat_router  # noqa: E402
+app.include_router(_mcp_compat_router)
 
 
 # ── MCP (Model Context Protocol) sub-app ─────────────────────────
@@ -991,171 +991,5 @@ app.include_router(_rest_mcp_router)
 # strips the request body and breaks MCP clients like Claude Desktop).
 from app.mcp_server import mcp as _mcp  # noqa: E402 — post-route mount
 
-
-# ── OAuth 2.0 / OIDC stubs for MCP client compatibility ─────────
-_OAUTH_PUBLIC_URL = os.environ.get("NURL_PUBLIC_URL", "").rstrip("/")
-
-
-def _public_base_url(request: Request) -> str:
-    if _OAUTH_PUBLIC_URL:
-        return _OAUTH_PUBLIC_URL
-    return str(request.base_url).rstrip("/")
-
-
-@app.get("/.well-known/oauth-protected-resource", include_in_schema=False)
-@app.get("/.well-known/oauth-protected-resource/mcp", include_in_schema=False)
-def _oauth_protected_resource_metadata(request: Request):
-    # RFC 9728 — tells the client which auth servers (if any) guard
-    # this resource. We list ourselves so the client follows up with
-    # the auth-server discovery below, and registration/token flow.
-    base = _public_base_url(request)
-    return JSONResponse({
-        "resource": f"{base}/mcp",
-        "authorization_servers": [base],
-        "bearer_methods_supported": ["header"],
-        "scopes_supported": [],
-    })
-
-
-@app.get("/.well-known/oauth-authorization-server", include_in_schema=False)
-@app.get("/.well-known/openid-configuration", include_in_schema=False)
-def _oauth_auth_server_metadata(request: Request):
-    base = _public_base_url(request)
-    # RFC 8414 — Authorization Server Metadata. Advertises the minimal
-    # set of endpoints needed for an unauthenticated Dynamic-Client-
-    # Registration → access-token dance.
-    return JSONResponse({
-        "issuer": base,
-        "authorization_endpoint":    f"{base}/authorize",
-        "token_endpoint":             f"{base}/token",
-        "registration_endpoint":      f"{base}/register",
-        "response_types_supported":  ["code"],
-        "grant_types_supported":     ["authorization_code", "client_credentials"],
-        "token_endpoint_auth_methods_supported": ["none"],
-        "code_challenge_methods_supported":      ["S256", "plain"],
-        "scopes_supported":          [],
-    })
-
-
-@app.post("/register", include_in_schema=False)
-async def _oauth_register(request: Request):
-    # RFC 7591 Dynamic Client Registration — rubber-stamp any request.
-    # No secret is returned because token_endpoint_auth_method is "none".
-    # We echo back every client-submitted metadata field so strict
-    # clients (Claude.ai) recognise the registration as valid.
-    body: dict = {}
-    try:
-        body = await request.json()
-    except Exception:
-        pass
-    # Log the incoming body so we can see what the client actually sent
-    # if something goes wrong with the handshake downstream.
-    print(f"[oauth/register] body={body!r}", flush=True)
-
-    client_id = f"nurl-mcp-{secrets.token_urlsafe(8)}"
-    # Baseline + sensible defaults, then overlay any caller-supplied
-    # metadata so it's echoed verbatim.
-    response = {
-        "client_id": client_id,
-        "client_id_issued_at": int(time.time()),
-        "grant_types":     ["authorization_code"],
-        "response_types":  ["code"],
-        "redirect_uris":   [],
-        "token_endpoint_auth_method": "none",
-    }
-    # Pass through any standard DCR metadata field the client sent.
-    for key in (
-        "redirect_uris", "grant_types", "response_types",
-        "token_endpoint_auth_method", "client_name", "client_uri",
-        "logo_uri", "scope", "contacts", "tos_uri", "policy_uri",
-        "jwks_uri", "jwks", "software_id", "software_version",
-        "software_statement", "application_type",
-    ):
-        if key in body:
-            response[key] = body[key]
-    return JSONResponse(response, status_code=201)
-
-
-@app.get("/authorize", include_in_schema=False)
-def _oauth_authorize(
-    request: Request,
-    client_id: str | None = None,
-    redirect_uri: str | None = None,
-    state: str | None = None,
-    code_challenge: str | None = None,
-    code_challenge_method: str | None = None,
-    response_type: str | None = None,
-    scope: str | None = None,
-):
-    # Instantly redirect back with a dummy authorisation code; no
-    # consent UI and no user interaction — effectively "always allow".
-    if not redirect_uri:
-        raise HTTPException(status_code=400, detail="redirect_uri required")
-    from urllib.parse import urlencode
-    params = {"code": secrets.token_urlsafe(16)}
-    if state:
-        params["state"] = state
-    sep = "&" if "?" in redirect_uri else "?"
-    return Response(status_code=302, headers={"Location": redirect_uri + sep + urlencode(params)})
-
-
-@app.post("/token", include_in_schema=False)
-async def _oauth_token(request: Request):
-    # Accepts any grant — returns an opaque bearer the /mcp handler
-    # never actually checks. Long expiry so clients don't refresh.
-    return JSONResponse({
-        "access_token": secrets.token_urlsafe(32),
-        "token_type":   "Bearer",
-        "expires_in":   60 * 60 * 24 * 365,
-        "scope":        "",
-    })
-
-
 app.mount("/", _mcp.streamable_http_app())
-
-
-# MCP client-compatibility shim for the FastMCP Streamable HTTP endpoint.
-#
-# Two quirks are smoothed over here so third-party clients (Claude
-# Desktop, some IDE bridges) can connect without a custom transport:
-#
-#   1. FastMCP mounts its handler via `Mount("/mcp", …)`, which makes
-#      Starlette 307-redirect bare `/mcp` to `/mcp/`. That redirect
-#      drops the POST body and many clients abandon the handshake.
-#      We rewrite the scope path in place before routing, so `/mcp`
-#      and `/mcp/` are both accepted without ever emitting a redirect.
-#
-#   2. The Streamable HTTP spec (and thus the mcp SDK) requires the
-#      client's `Accept` header to list BOTH `application/json` and
-#      `text/event-stream`; otherwise the server answers 406. Older
-#      Claude builds only send one of the two. We transparently add
-#      whichever is missing so both the strict mcp check and the
-#      client's actual expectations are satisfied.
-@app.middleware("http")
-async def _mcp_client_compat(request: Request, call_next):
-    path = request.scope.get("path", "")
-    if path == "/mcp" or path.startswith("/mcp/"):
-        if path == "/mcp":
-            request.scope["path"] = "/mcp/"
-            request.scope["raw_path"] = b"/mcp/"
-
-        # Normalise the Accept header in the raw ASGI headers list so
-        # the downstream mcp SDK (which reads request.headers) sees it.
-        headers = list(request.scope.get("headers") or [])
-        accept_val = ""
-        for i, (k, v) in enumerate(headers):
-            if k == b"accept":
-                accept_val = v.decode("latin-1")
-                headers.pop(i)
-                break
-        parts = [p.strip() for p in accept_val.split(",") if p.strip()]
-        has_json = any(p.startswith("application/json") for p in parts)
-        has_sse  = any(p.startswith("text/event-stream") for p in parts)
-        if not has_json:
-            parts.append("application/json")
-        if not has_sse:
-            parts.append("text/event-stream")
-        headers.append((b"accept", ", ".join(parts).encode("latin-1")))
-        request.scope["headers"] = headers
-
-    return await call_next(request)
+app.middleware("http")(mcp_client_compat_middleware)
