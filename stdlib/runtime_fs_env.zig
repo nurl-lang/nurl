@@ -1293,7 +1293,7 @@ fn alpnPack(spec: ?[*:0]const u8, out_len: *usize) ?[*]u8 {
 }
 
 fn tlsBuildCtx(tcp: ?*NurlTcp, cert_path: ?[*:0]const u8, key_path: ?[*:0]const u8) ?*openssl.SSL_CTX {
-    if (!comptime have_posix_openssl) return null;
+    if (!have_posix_openssl) return null;
     const cert = cert_path orelse {
         if (tcp) |value| value.err_kind = nurl_net_err_tls_cert_load;
         return null;
@@ -1326,6 +1326,53 @@ fn tlsBuildCtx(tcp: ?*NurlTcp, cert_path: ?[*:0]const u8, key_path: ?[*:0]const 
     return ctx;
 }
 
+fn tlsLockEnsure(tcp: *NurlTcp) void {
+    if (!have_posix_openssl) return;
+    if (tcp.tls_lock_init != 0) return;
+    _ = pthread.pthread_mutex_init(&tcp.tls_lock, null);
+    tcp.tls_lock_init = 1;
+}
+
+fn tlsLock(tcp: *NurlTcp) void {
+    if (!have_posix_openssl) return;
+    if (tcp.tls_lock_init == 0) return;
+    _ = pthread.pthread_mutex_lock(&tcp.tls_lock);
+}
+
+fn tlsUnlock(tcp: *NurlTcp) void {
+    if (!have_posix_openssl) return;
+    if (tcp.tls_lock_init == 0) return;
+    _ = pthread.pthread_mutex_unlock(&tcp.tls_lock);
+}
+
+fn hostnameIeq(a: ?[*:0]const u8, b: ?[*:0]const u8) bool {
+    const lhs = a orelse return false;
+    const rhs = b orelse return false;
+    const a_bytes = std.mem.span(lhs);
+    const b_bytes = std.mem.span(rhs);
+    if (a_bytes.len != b_bytes.len) return false;
+    var i: usize = 0;
+    while (i < a_bytes.len) : (i += 1) {
+        var ca = a_bytes[i];
+        var cb = b_bytes[i];
+        if (ca >= 'A' and ca <= 'Z') ca += 32;
+        if (cb >= 'A' and cb <= 'Z') cb += 32;
+        if (ca != cb) return false;
+    }
+    return true;
+}
+
+fn tlsInstallSniCallback(ctx: ?*openssl.SSL_CTX, tcp: *NurlTcp) void {
+    if (!have_posix_openssl) return;
+    if (ctx == null) return;
+    _ = openssl.SSL_CTX_callback_ctrl(
+        ctx,
+        openssl.SSL_CTRL_SET_TLSEXT_SERVERNAME_CB,
+        @ptrCast(&nurlTcpSniSelectCb),
+    );
+    _ = openssl.SSL_CTX_set_tlsext_servername_arg(ctx, tcp);
+}
+
 fn nurlTcpAlpnSelectCb(
     ssl: ?*openssl.SSL,
     out: [*c]?*const u8,
@@ -1349,6 +1396,26 @@ fn nurlTcpAlpnSelectCb(
     );
     if (rv == openssl.OPENSSL_NPN_NEGOTIATED) return openssl.SSL_TLSEXT_ERR_OK;
     return openssl.SSL_TLSEXT_ERR_NOACK;
+}
+
+fn nurlTcpSniSelectCb(ssl: ?*openssl.SSL, al: [*c]c_int, arg: ?*anyopaque) callconv(.c) c_int {
+    _ = al;
+    if (!have_posix_openssl) return openssl.SSL_TLSEXT_ERR_OK;
+    const tcp: *NurlTcp = @ptrCast(@alignCast(arg orelse return openssl.SSL_TLSEXT_ERR_OK));
+    const server_name = openssl.SSL_get_servername(ssl, openssl.TLSEXT_NAMETYPE_host_name);
+    if (server_name == null) return openssl.SSL_TLSEXT_ERR_OK;
+
+    tlsLock(tcp);
+    defer tlsUnlock(tcp);
+    const entries_ptr = tcp.sni_entries orelse return openssl.SSL_TLSEXT_ERR_OK;
+    const entries = entries_ptr[0..tcp.sni_count];
+    for (entries) |entry| {
+        if (hostnameIeq(entry.hostname, server_name)) {
+            _ = openssl.SSL_set_SSL_CTX(ssl, entry.ctx);
+            break;
+        }
+    }
+    return openssl.SSL_TLSEXT_ERR_OK;
 }
 
 fn sqliteDbHandle(handle: c_longlong) ?*NurlSqliteDb {
@@ -3603,6 +3670,154 @@ fn nurl_tcp_listen_tls_alpn_impl(
     return handle;
 }
 
+fn nurl_tcp_tls_add_sni_impl(
+    handle: c_longlong,
+    hostname: ?[*:0]const u8,
+    cert_path: ?[*:0]const u8,
+    key_path: ?[*:0]const u8,
+) callconv(.c) c_longlong {
+    const tcp = tcpHandle(handle) orelse return nurl_net_err_other;
+    if (!have_posix_openssl) {
+        tcp.err_kind = nurl_net_err_tls_ctx_init;
+        return nurl_net_err_tls_ctx_init;
+    }
+    if (tcp.ssl_ctx == null) {
+        tcp.err_kind = nurl_net_err_tls_ctx_init;
+        return nurl_net_err_tls_ctx_init;
+    }
+    if (hostname == null or hostname.?[0] == 0) {
+        tcp.err_kind = nurl_net_err_other;
+        return nurl_net_err_other;
+    }
+
+    const ctx = tlsBuildCtx(tcp, cert_path, key_path) orelse return tcp.err_kind;
+    tlsLockEnsure(tcp);
+    tlsLock(tcp);
+    defer tlsUnlock(tcp);
+
+    if (tcp.sni_entries) |entries_ptr| {
+        const entries = entries_ptr[0..tcp.sni_count];
+        for (entries) |*entry| {
+            if (hostnameIeq(entry.hostname, hostname)) {
+                if (entry.ctx) |old| openssl.SSL_CTX_free(old);
+                entry.ctx = ctx;
+                tlsInstallSniCallback(tcp.ssl_ctx, tcp);
+                tcp.err_kind = nurl_net_err_ok;
+                return nurl_net_err_ok;
+            }
+        }
+    }
+
+    if (tcp.sni_count == tcp.sni_cap) {
+        const new_cap: usize = if (tcp.sni_cap != 0) tcp.sni_cap * 2 else 4;
+        const grown = c.realloc(tcp.sni_entries, new_cap * @sizeOf(NurlSniEntry)) orelse {
+            openssl.SSL_CTX_free(ctx);
+            tcp.err_kind = nurl_net_err_other;
+            return nurl_net_err_other;
+        };
+        tcp.sni_entries = @ptrCast(@alignCast(grown));
+        tcp.sni_cap = new_cap;
+    }
+
+    const hostname_copy = dupZ(hostname.?) orelse {
+        openssl.SSL_CTX_free(ctx);
+        tcp.err_kind = nurl_net_err_other;
+        return nurl_net_err_other;
+    };
+    const entries = tcp.sni_entries.?;
+    entries[tcp.sni_count] = .{
+        .hostname = hostname_copy,
+        .ctx = ctx,
+    };
+    tcp.sni_count += 1;
+    tlsInstallSniCallback(tcp.ssl_ctx, tcp);
+    tcp.err_kind = nurl_net_err_ok;
+    return nurl_net_err_ok;
+}
+
+fn nurl_tcp_tls_reload_impl(
+    handle: c_longlong,
+    hostname: ?[*:0]const u8,
+    cert_path: ?[*:0]const u8,
+    key_path: ?[*:0]const u8,
+) callconv(.c) c_longlong {
+    const tcp = tcpHandle(handle) orelse return nurl_net_err_other;
+    if (!have_posix_openssl) {
+        tcp.err_kind = nurl_net_err_tls_ctx_init;
+        return nurl_net_err_tls_ctx_init;
+    }
+    if (tcp.ssl_ctx == null) {
+        tcp.err_kind = nurl_net_err_tls_ctx_init;
+        return nurl_net_err_tls_ctx_init;
+    }
+
+    const new_ctx = tlsBuildCtx(tcp, cert_path, key_path) orelse return tcp.err_kind;
+    tlsLockEnsure(tcp);
+    tlsLock(tcp);
+    defer tlsUnlock(tcp);
+
+    if (hostname == null or hostname.?[0] == 0) {
+        const old = tcp.ssl_ctx;
+        tcp.ssl_ctx = new_ctx;
+        if (tcp.alpn_wire != null and tcp.alpn_wire_len > 0) {
+            openssl.SSL_CTX_set_alpn_select_cb(new_ctx, nurlTcpAlpnSelectCb, tcp);
+        }
+        if (tcp.sni_count > 0) {
+            tlsInstallSniCallback(new_ctx, tcp);
+        }
+        if (old) |ctx| openssl.SSL_CTX_free(ctx);
+        tcp.err_kind = nurl_net_err_ok;
+        return nurl_net_err_ok;
+    }
+
+    if (tcp.sni_entries) |entries_ptr| {
+        const entries = entries_ptr[0..tcp.sni_count];
+        for (entries) |*entry| {
+            if (hostnameIeq(entry.hostname, hostname)) {
+                if (entry.ctx) |old| openssl.SSL_CTX_free(old);
+                entry.ctx = new_ctx;
+                tcp.err_kind = nurl_net_err_ok;
+                return nurl_net_err_ok;
+            }
+        }
+    }
+
+    openssl.SSL_CTX_free(new_ctx);
+    tcp.err_kind = nurl_net_err_other;
+    return nurl_net_err_other;
+}
+
+fn nurl_tcp_tls_require_client_cert_impl(
+    handle: c_longlong,
+    ca_bundle_path: ?[*:0]const u8,
+    strict: c_longlong,
+) callconv(.c) c_longlong {
+    const tcp = tcpHandle(handle) orelse return nurl_net_err_other;
+    if (!have_posix_openssl) {
+        tcp.err_kind = nurl_net_err_tls_ctx_init;
+        return nurl_net_err_tls_ctx_init;
+    }
+    if (tcp.ssl_ctx == null) {
+        tcp.err_kind = nurl_net_err_tls_ctx_init;
+        return nurl_net_err_tls_ctx_init;
+    }
+    const ca_path = ca_bundle_path orelse {
+        tcp.err_kind = nurl_net_err_tls_cert_load;
+        return nurl_net_err_tls_cert_load;
+    };
+    if (openssl.SSL_CTX_load_verify_locations(tcp.ssl_ctx, ca_path, null) != 1) {
+        tcp.err_kind = nurl_net_err_tls_cert_load;
+        return nurl_net_err_tls_cert_load;
+    }
+    var mode: c_int = openssl.SSL_VERIFY_PEER;
+    if (strict != 0) mode |= openssl.SSL_VERIFY_FAIL_IF_NO_PEER_CERT;
+    openssl.SSL_CTX_set_verify(tcp.ssl_ctx, mode, null);
+    const list = openssl.SSL_load_client_CA_file(ca_path);
+    if (list != null) openssl.SSL_CTX_set_client_CA_list(tcp.ssl_ctx, list);
+    tcp.err_kind = nurl_net_err_ok;
+    return nurl_net_err_ok;
+}
+
 fn nurl_tcp_accept_impl(listener_handle: c_longlong) callconv(.c) c_longlong {
     const listener = tcpHandle(listener_handle);
     const conn = tcpAllocHandle(1) orelse return 0;
@@ -3868,6 +4083,9 @@ comptime {
         @export(&nurl_tcp_listen_impl, .{ .name = "nurl_tcp_listen" });
         @export(&nurl_tcp_listen_tls_impl, .{ .name = "nurl_tcp_listen_tls" });
         @export(&nurl_tcp_listen_tls_alpn_impl, .{ .name = "nurl_tcp_listen_tls_alpn" });
+        @export(&nurl_tcp_tls_add_sni_impl, .{ .name = "nurl_tcp_tls_add_sni" });
+        @export(&nurl_tcp_tls_reload_impl, .{ .name = "nurl_tcp_tls_reload" });
+        @export(&nurl_tcp_tls_require_client_cert_impl, .{ .name = "nurl_tcp_tls_require_client_cert" });
         @export(&nurl_tcp_accept_impl, .{ .name = "nurl_tcp_accept" });
         @export(&nurl_tcp_peer_cert_subject_impl, .{ .name = "nurl_tcp_peer_cert_subject" });
         @export(&nurl_tcp_alpn_selected_impl, .{ .name = "nurl_tcp_alpn_selected" });

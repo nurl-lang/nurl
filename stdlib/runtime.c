@@ -5792,6 +5792,7 @@ static SSL_CTX *nurl__tls_build_ctx(NurlTcp *h, const char *cert_path,
  * Returns 0 on success; non-zero NurlNetErr otherwise (cert/key
  * load failure most commonly). May be called repeatedly to grow
  * the registry; existing in-flight conns are unaffected. */
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 long long nurl_tcp_tls_add_sni(long long handle, const char *hostname,
                                const char *cert_path, const char *key_path) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
@@ -5851,6 +5852,7 @@ long long nurl_tcp_tls_add_sni(long long handle, const char *hostname,
     return NURL_NET_ERR_TLS_CTX_INIT;
 #endif
 }
+#endif
 
 /* Live cert reload. `hostname` selects which entry to reload:
  *   * NULL or empty → swap the listener's DEFAULT ssl_ctx
@@ -5860,6 +5862,7 @@ long long nurl_tcp_tls_add_sni(long long handle, const char *hostname,
  * until they close. New accepts immediately use the new ctx.
  *
  * Returns 0 on success, NetErr code on failure. */
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 long long nurl_tcp_tls_reload(long long handle, const char *hostname,
                               const char *cert_path, const char *key_path) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
@@ -5912,6 +5915,7 @@ long long nurl_tcp_tls_reload(long long handle, const char *hostname,
     return NURL_NET_ERR_TLS_CTX_INIT;
 #endif
 }
+#endif
 
 /* Require client-cert authentication (mTLS). `ca_bundle_path` points
  * to a PEM file with the trust roots used to verify peer certs.
@@ -5921,6 +5925,7 @@ long long nurl_tcp_tls_reload(long long handle, const char *hostname,
  * via `nurl_tcp_peer_cert_subject`.
  *
  * Returns 0 on success, NetErr code on failure. */
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 long long nurl_tcp_tls_require_client_cert(long long handle,
                                             const char *ca_bundle_path,
                                             long long strict) {
@@ -5951,6 +5956,7 @@ long long nurl_tcp_tls_require_client_cert(long long handle,
     return NURL_NET_ERR_TLS_CTX_INIT;
 #endif
 }
+#endif
 
 /* Read the peer's certificate subject (DN in OpenSSL one-line format)
  * off a completed TLS conn. Returns a heap-owned NUL-terminated
