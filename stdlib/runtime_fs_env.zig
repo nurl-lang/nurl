@@ -373,6 +373,22 @@ const NurlLex = struct {
     peek4_valid: bool,
 };
 
+const NurlThreadFn = *const fn (?*anyopaque) callconv(.c) void;
+
+const NurlThread = struct {
+    handle: std.Thread,
+    fn_ptr: NurlThreadFn,
+    env: ?*anyopaque,
+};
+
+const NurlMutex = struct {
+    mutex: std.Io.Mutex = .init,
+};
+
+const NurlCond = struct {
+    cond: std.Io.Condition = .init,
+};
+
 const max_cgs = 8;
 
 const NurlCG = struct {
@@ -753,6 +769,25 @@ fn getLex(handle: c_longlong) *NurlLex {
     return g_lexers[@intCast(idx)].?;
 }
 
+fn handleToThread(handle: c_longlong) ?*NurlThread {
+    if (handle == 0) return null;
+    return @ptrFromInt(@as(usize, @intCast(handle)));
+}
+
+fn handleToMutex(handle: c_longlong) ?*NurlMutex {
+    if (handle == 0) return null;
+    return @ptrFromInt(@as(usize, @intCast(handle)));
+}
+
+fn handleToCond(handle: c_longlong) ?*NurlCond {
+    if (handle == 0) return null;
+    return @ptrFromInt(@as(usize, @intCast(handle)));
+}
+
+fn nurlThreadTrampoline(thread: *NurlThread) void {
+    thread.fn_ptr(thread.env);
+}
+
 fn csvCellPtr(content: [*]const u8, escape_buf: ?[*]const u8, off: c_longlong) ?[*]const u8 {
     if (off >= 0) return content + @as(usize, @intCast(off));
     const escaped = escape_buf orelse return null;
@@ -764,6 +799,34 @@ fn csvCellContains(hay_ptr: [*]const u8, hay_len: c_longlong, needle: []const u8
     if (hay_len < 0) return false;
     const hay = hay_ptr[0..@intCast(hay_len)];
     return std.mem.indexOf(u8, hay, needle) != null;
+}
+
+fn hexEncodeInto(bytes: []const u8, out: []u8) void {
+    const alphabet = "0123456789abcdef";
+    for (bytes, 0..) |byte, i| {
+        out[i * 2] = alphabet[byte >> 4];
+        out[i * 2 + 1] = alphabet[byte & 0x0f];
+    }
+    out[bytes.len * 2] = 0;
+}
+
+fn nurlIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
+fn fillRandomBytes(buf: []u8) bool {
+    std.Io.randomSecure(nurlIo(), buf) catch {
+        const now = std.Io.Clock.now(.real, nurlIo());
+        var state: u64 = @bitCast(std.Io.Timestamp.toMilliseconds(now));
+        state ^= @intFromPtr(buf.ptr);
+        state ^= (@as(u64, buf.len) << 17);
+        for (buf, 0..) |*byte, i| {
+            state = state *% 6364136223846793005 +% 1442695040888963407;
+            byte.* = @truncate((state >> @as(u6, @intCast((i & 7) * 8))) ^ state >> 33);
+        }
+        return false;
+    };
+    return true;
 }
 
 var g_cgs: [max_cgs]?*NurlCG = .{null} ** max_cgs;
@@ -2770,4 +2833,148 @@ pub export fn nurl_sleep_ms(ms: c_longlong) void {
         .nsec = @intCast(@mod(ms, 1000) * 1_000_000),
     };
     while (c.nanosleep(&req, &req) != 0 and c._errno().* == @intFromEnum(c.E.INTR)) {}
+}
+
+pub export fn nurl_sha256_hex(text: ?[*:0]const u8) ?[*:0]u8 {
+    const input = std.mem.span(text orelse "");
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(input);
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    hasher.final(&digest);
+
+    const raw = c.malloc(digest.len * 2 + 1) orelse return dupSliceZ("");
+    const out: [*]u8 = @ptrCast(raw);
+    hexEncodeInto(&digest, out[0 .. digest.len * 2 + 1]);
+    return @ptrCast(out);
+}
+
+pub export fn nurl_hmac_sha256_hex(key_ptr: ?[*:0]const u8, msg_ptr: ?[*:0]const u8) ?[*:0]u8 {
+    const key = std.mem.span(key_ptr orelse "");
+    const msg = std.mem.span(msg_ptr orelse "");
+    var mac: [std.crypto.auth.hmac.sha2.HmacSha256.mac_length]u8 = undefined;
+    std.crypto.auth.hmac.sha2.HmacSha256.create(&mac, msg, key);
+
+    const raw = c.malloc(mac.len * 2 + 1) orelse return dupSliceZ("");
+    const out: [*]u8 = @ptrCast(raw);
+    hexEncodeInto(&mac, out[0 .. mac.len * 2 + 1]);
+    return @ptrCast(out);
+}
+
+pub export fn nurl_rand_u64() c_longlong {
+    var buf: [8]u8 = undefined;
+    _ = fillRandomBytes(&buf);
+    const value = std.mem.readInt(u64, &buf, .big);
+    return @bitCast(value);
+}
+
+pub export fn nurl_rand_bytes_hex(n: c_longlong) ?[*:0]u8 {
+    if (n <= 0) return dupSliceZ("");
+    const clamped_n: usize = @intCast(@min(n, 4096));
+    const raw = c.malloc(clamped_n) orelse return dupSliceZ("");
+    defer c.free(raw);
+    const buf: [*]u8 = @ptrCast(raw);
+    _ = fillRandomBytes(buf[0..clamped_n]);
+
+    const out_raw = c.malloc(clamped_n * 2 + 1) orelse return dupSliceZ("");
+    const out: [*]u8 = @ptrCast(out_raw);
+    hexEncodeInto(buf[0..clamped_n], out[0 .. clamped_n * 2 + 1]);
+    return @ptrCast(out);
+}
+
+pub export fn nurl_sha1_bytes(data_ptr: ?[*]const u8, len: c_longlong, out_ptr: ?[*]u8) void {
+    const out = out_ptr orelse return;
+    var hasher = std.crypto.hash.Sha1.init(.{});
+    if (data_ptr) |data| {
+        if (len > 0) hasher.update(data[0..@intCast(len)]);
+    }
+    var digest: [std.crypto.hash.Sha1.digest_length]u8 = undefined;
+    hasher.final(&digest);
+    @memcpy(out[0..digest.len], &digest);
+}
+
+pub export fn nurl_thread_spawn(fn_ptr: ?*anyopaque, env: ?*anyopaque) c_longlong {
+    if (builtin.os.tag == .wasi or fn_ptr == null) return 0;
+    const raw = c.calloc(1, @sizeOf(NurlThread)) orelse return 0;
+    const thread: *NurlThread = @ptrCast(@alignCast(raw));
+    thread.fn_ptr = @ptrFromInt(@intFromPtr(fn_ptr.?));
+    thread.env = env;
+    thread.handle = std.Thread.spawn(.{}, nurlThreadTrampoline, .{thread}) catch {
+        c.free(thread);
+        return 0;
+    };
+    return @intCast(@intFromPtr(thread));
+}
+
+pub export fn nurl_thread_join(handle: c_longlong) c_longlong {
+    if (builtin.os.tag == .wasi) return -1;
+    const thread = handleToThread(handle) orelse return -1;
+    thread.handle.join();
+    c.free(thread);
+    return 0;
+}
+
+pub export fn nurl_thread_detach(handle: c_longlong) void {
+    if (builtin.os.tag == .wasi) return;
+    const thread = handleToThread(handle) orelse return;
+    thread.handle.detach();
+    c.free(thread);
+}
+
+pub export fn nurl_mutex_new() c_longlong {
+    if (builtin.os.tag == .wasi) return 0;
+    const raw = c.calloc(1, @sizeOf(NurlMutex)) orelse return 0;
+    const mutex: *NurlMutex = @ptrCast(@alignCast(raw));
+    mutex.* = .{};
+    return @intCast(@intFromPtr(mutex));
+}
+
+pub export fn nurl_mutex_lock(handle: c_longlong) void {
+    if (builtin.os.tag == .wasi) return;
+    const mutex = handleToMutex(handle) orelse return;
+    mutex.mutex.lockUncancelable(nurlIo());
+}
+
+pub export fn nurl_mutex_unlock(handle: c_longlong) void {
+    if (builtin.os.tag == .wasi) return;
+    const mutex = handleToMutex(handle) orelse return;
+    mutex.mutex.unlock(nurlIo());
+}
+
+pub export fn nurl_mutex_free(handle: c_longlong) void {
+    if (builtin.os.tag == .wasi) return;
+    const mutex = handleToMutex(handle) orelse return;
+    c.free(mutex);
+}
+
+pub export fn nurl_cond_new() c_longlong {
+    if (builtin.os.tag == .wasi) return 0;
+    const raw = c.calloc(1, @sizeOf(NurlCond)) orelse return 0;
+    const cond: *NurlCond = @ptrCast(@alignCast(raw));
+    cond.* = .{};
+    return @intCast(@intFromPtr(cond));
+}
+
+pub export fn nurl_cond_wait(cond_handle: c_longlong, mutex_handle: c_longlong) void {
+    if (builtin.os.tag == .wasi) return;
+    const cond = handleToCond(cond_handle) orelse return;
+    const mutex = handleToMutex(mutex_handle) orelse return;
+    cond.cond.waitUncancelable(nurlIo(), &mutex.mutex);
+}
+
+pub export fn nurl_cond_signal(handle: c_longlong) void {
+    if (builtin.os.tag == .wasi) return;
+    const cond = handleToCond(handle) orelse return;
+    cond.cond.signal(nurlIo());
+}
+
+pub export fn nurl_cond_broadcast(handle: c_longlong) void {
+    if (builtin.os.tag == .wasi) return;
+    const cond = handleToCond(handle) orelse return;
+    cond.cond.broadcast(nurlIo());
+}
+
+pub export fn nurl_cond_free(handle: c_longlong) void {
+    if (builtin.os.tag == .wasi) return;
+    const cond = handleToCond(handle) orelse return;
+    c.free(cond);
 }

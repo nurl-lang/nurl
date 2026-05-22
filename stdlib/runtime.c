@@ -4757,6 +4757,7 @@ void nurl_proc_spawn_free(long long h) {
  * variants when bytes/Vec[u8] is wired up.
  */
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 #ifdef _WIN32
 #  include <bcrypt.h>
 #  pragma comment(lib, "bcrypt.lib")
@@ -5094,6 +5095,7 @@ void nurl_sha1_bytes(const unsigned char *data, long long len,
     }
     nurl_sha1_final(&ctx, out);
 }
+#endif
 
 /* ── §18  TCP sockets (HTTP server foundation) ──────────────────── */
 /*
@@ -6234,6 +6236,7 @@ void nurl_tcp_set_timeout(long long h, long long ms) { (void)h; (void)ms; }
  * is a regular NURL function whose first argument is an i8* env pointer.
  */
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 #if !defined(__wasi__)
 
 #  if defined(_WIN32)
@@ -6455,6 +6458,7 @@ void      nurl_cond_broadcast(long long h)         { (void)h; }
 void      nurl_cond_free(long long h)              { (void)h; }
 
 #endif /* __wasi__ guard for §19 */
+#endif /* NURL_RUNTIME_ZIG_FS_ENV */
 
 /* ============================================================
  * §20 — Signal-driven graceful shutdown
@@ -7143,6 +7147,10 @@ typedef struct NurlDosIpEntry {
     char     *ip;        /* owned strdup */
     long long count;
 } NurlDosIpEntry;
+
+#if !defined(_WIN32) && !defined(__wasi__)
+#include <pthread.h>
+#endif
 
 typedef struct NurlDosState {
     long long max_concurrent;    /* 0 = unlimited */
