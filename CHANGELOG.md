@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Extended hash family — SHA-512, MD5, HMAC-SHA-512.**
+  `stdlib/std/hash.nu` gained `sha512_bytes` / `sha512_hex` (FIPS 180-4
+  SHA-512, 64-byte digest), `md5_bytes` / `md5_hex` (RFC 1321 MD5,
+  16-byte digest) and `hmac_sha512_bytes` / `hmac_sha512_hex` (RFC 2104
+  HMAC over SHA-512). All are binary-clean — they take `( Vec u )` and
+  are length-aware, so NUL bytes are preserved — mirroring the existing
+  `sha1_bytes`. The three algorithms are self-contained in
+  `runtime.c` §17 (no libsodium / OpenSSL dependency) and are reached
+  through the pure-NURL `& \`c\`` FFI model, so the compiler is
+  unchanged and the bootstrap fixed point is byte-identical. MD5 and
+  SHA-1 are documented as compatibility-only — both are collision-broken
+  and must not authenticate data or hash secrets. Regression
+  `compiler/tests/hash_extended.nu` checks every algorithm against
+  published vectors (RFC 1321 §A.5, FIPS 180-4, RFC 4231 HMAC cases
+  1/2/6); verified leak-free under ASan/UBSan/LSan.
+* **Runtime hash primitives** — `nurl_md5_bytes`, `nurl_sha512_bytes`,
+  `nurl_hmac_sha512_bytes` in `stdlib/runtime.c`.
 * **Advanced filesystem operations.** `stdlib/std/fs.nu` gained
   recursive directory operations and a streaming file reader:
   `dir_create_all` is mkdir -p — it creates every missing parent

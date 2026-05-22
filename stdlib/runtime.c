@@ -5085,6 +5085,305 @@ void nurl_sha1_bytes(const unsigned char *data, long long len,
     nurl_sha1_final(&ctx, out);
 }
 
+/* ── MD5 (RFC 1321) — self-contained ───────────────────────────────
+ *
+ * MD5 is broken for collision resistance and MUST NOT be used to
+ * authenticate data or hash secrets — it is provided only for
+ * compatibility with legacy formats and protocols that mandate it
+ * (file checksums, S3 ETags, old APIs). Same implementation style as
+ * the SHA blocks above: public-domain transform + init/update/final +
+ * a length-aware binary-clean public entry. 64 rounds; the message
+ * length is appended little-endian and the digest words are emitted
+ * little-endian (MD5's byte order, opposite to the SHA family).
+ *
+ * Public ABI:
+ *   void nurl_md5_bytes(const unsigned char *data, long long len,
+ *                       unsigned char out[16]);
+ */
+
+typedef struct {
+    uint32_t state[4];
+    uint64_t bitlen;
+    uint8_t  data[64];
+    size_t   datalen;
+} NurlMd5Ctx;
+
+static const uint32_t NURL_MD5_K[64] = {
+    0xd76aa478u,0xe8c7b756u,0x242070dbu,0xc1bdceeeu,0xf57c0fafu,0x4787c62au,0xa8304613u,0xfd469501u,
+    0x698098d8u,0x8b44f7afu,0xffff5bb1u,0x895cd7beu,0x6b901122u,0xfd987193u,0xa679438eu,0x49b40821u,
+    0xf61e2562u,0xc040b340u,0x265e5a51u,0xe9b6c7aau,0xd62f105du,0x02441453u,0xd8a1e681u,0xe7d3fbc8u,
+    0x21e1cde6u,0xc33707d6u,0xf4d50d87u,0x455a14edu,0xa9e3e905u,0xfcefa3f8u,0x676f02d9u,0x8d2a4c8au,
+    0xfffa3942u,0x8771f681u,0x6d9d6122u,0xfde5380cu,0xa4beea44u,0x4bdecfa9u,0xf6bb4b60u,0xbebfbc70u,
+    0x289b7ec6u,0xeaa127fau,0xd4ef3085u,0x04881d05u,0xd9d4d039u,0xe6db99e5u,0x1fa27cf8u,0xc4ac5665u,
+    0xf4292244u,0x432aff97u,0xab9423a7u,0xfc93a039u,0x655b59c3u,0x8f0ccc92u,0xffeff47du,0x85845dd1u,
+    0x6fa87e4fu,0xfe2ce6e0u,0xa3014314u,0x4e0811a1u,0xf7537e82u,0xbd3af235u,0x2ad7d2bbu,0xeb86d391u
+};
+
+static const uint8_t NURL_MD5_S[64] = {
+    7,12,17,22, 7,12,17,22, 7,12,17,22, 7,12,17,22,
+    5, 9,14,20, 5, 9,14,20, 5, 9,14,20, 5, 9,14,20,
+    4,11,16,23, 4,11,16,23, 4,11,16,23, 4,11,16,23,
+    6,10,15,21, 6,10,15,21, 6,10,15,21, 6,10,15,21
+};
+
+#define NURL_MD5_ROTL(x,c) (((x) << (c)) | ((x) >> (32 - (c))))
+
+static void nurl_md5_transform(NurlMd5Ctx *ctx, const uint8_t *data) {
+    uint32_t m[16];
+    for (int i = 0, j = 0; i < 16; i++, j += 4) {
+        m[i] = ((uint32_t)data[j]) | ((uint32_t)data[j+1] << 8)
+             | ((uint32_t)data[j+2] << 16) | ((uint32_t)data[j+3] << 24);
+    }
+    uint32_t a = ctx->state[0], b = ctx->state[1];
+    uint32_t c = ctx->state[2], d = ctx->state[3];
+    for (int i = 0; i < 64; i++) {
+        uint32_t f; int g;
+        if (i < 16)      { f = (b & c) | ((~b) & d);  g = i; }
+        else if (i < 32) { f = (d & b) | ((~d) & c);  g = (5*i + 1) & 15; }
+        else if (i < 48) { f = b ^ c ^ d;             g = (3*i + 5) & 15; }
+        else             { f = c ^ (b | (~d));        g = (7*i) & 15; }
+        uint32_t tmp = d;
+        d = c;
+        c = b;
+        uint32_t x = a + f + NURL_MD5_K[i] + m[g];
+        b = b + NURL_MD5_ROTL(x, NURL_MD5_S[i]);
+        a = tmp;
+    }
+    ctx->state[0] += a; ctx->state[1] += b;
+    ctx->state[2] += c; ctx->state[3] += d;
+}
+
+static void nurl_md5_init(NurlMd5Ctx *ctx) {
+    ctx->datalen = 0;
+    ctx->bitlen = 0;
+    ctx->state[0] = 0x67452301u;
+    ctx->state[1] = 0xefcdab89u;
+    ctx->state[2] = 0x98badcfeu;
+    ctx->state[3] = 0x10325476u;
+}
+
+static void nurl_md5_update(NurlMd5Ctx *ctx, const uint8_t *data, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        ctx->data[ctx->datalen++] = data[i];
+        if (ctx->datalen == 64) {
+            nurl_md5_transform(ctx, ctx->data);
+            ctx->bitlen += 512;
+            ctx->datalen = 0;
+        }
+    }
+}
+
+static void nurl_md5_final(NurlMd5Ctx *ctx, uint8_t out[16]) {
+    size_t i = ctx->datalen;
+    if (ctx->datalen < 56) {
+        ctx->data[i++] = 0x80;
+        while (i < 56) ctx->data[i++] = 0;
+    } else {
+        ctx->data[i++] = 0x80;
+        while (i < 64) ctx->data[i++] = 0;
+        nurl_md5_transform(ctx, ctx->data);
+        memset(ctx->data, 0, 56);
+    }
+    ctx->bitlen += (uint64_t)ctx->datalen * 8;
+    /* MD5 appends the bit length little-endian. */
+    for (int k = 0; k < 8; k++)
+        ctx->data[56 + k] = (uint8_t)(ctx->bitlen >> (8 * k));
+    nurl_md5_transform(ctx, ctx->data);
+    for (int k = 0; k < 4; k++) {
+        out[k*4]   = (uint8_t)(ctx->state[k]);
+        out[k*4+1] = (uint8_t)(ctx->state[k] >> 8);
+        out[k*4+2] = (uint8_t)(ctx->state[k] >> 16);
+        out[k*4+3] = (uint8_t)(ctx->state[k] >> 24);
+    }
+}
+
+void nurl_md5_bytes(const unsigned char *data, long long len,
+                    unsigned char out[16]) {
+    NurlMd5Ctx ctx;
+    nurl_md5_init(&ctx);
+    if (data && len > 0) {
+        nurl_md5_update(&ctx, data, (size_t)len);
+    }
+    nurl_md5_final(&ctx, out);
+}
+
+/* ── SHA-512 (FIPS 180-4) — self-contained ─────────────────────────
+ *
+ * 64-bit-word SHA-2: 128-byte blocks, 80 rounds, a 128-bit length
+ * field. The single uint64_t bit counter holds inputs up to 2^61
+ * bytes — the high 64 bits of the length field are always written
+ * zero, the same practical bound the SHA-1/SHA-256 blocks above
+ * accept. Suitable for new security-sensitive use.
+ *
+ * Public ABI:
+ *   void nurl_sha512_bytes(const unsigned char *data, long long len,
+ *                          unsigned char out[64]);
+ *   void nurl_hmac_sha512_bytes(const unsigned char *key, long long klen,
+ *                               const unsigned char *msg, long long mlen,
+ *                               unsigned char out[64]);
+ */
+
+typedef struct {
+    uint64_t state[8];
+    uint64_t bitlen;
+    uint8_t  data[128];
+    size_t   datalen;
+} NurlSha512Ctx;
+
+static const uint64_t NURL_SHA512_K[80] = {
+    0x428a2f98d728ae22ULL,0x7137449123ef65cdULL,0xb5c0fbcfec4d3b2fULL,0xe9b5dba58189dbbcULL,
+    0x3956c25bf348b538ULL,0x59f111f1b605d019ULL,0x923f82a4af194f9bULL,0xab1c5ed5da6d8118ULL,
+    0xd807aa98a3030242ULL,0x12835b0145706fbeULL,0x243185be4ee4b28cULL,0x550c7dc3d5ffb4e2ULL,
+    0x72be5d74f27b896fULL,0x80deb1fe3b1696b1ULL,0x9bdc06a725c71235ULL,0xc19bf174cf692694ULL,
+    0xe49b69c19ef14ad2ULL,0xefbe4786384f25e3ULL,0x0fc19dc68b8cd5b5ULL,0x240ca1cc77ac9c65ULL,
+    0x2de92c6f592b0275ULL,0x4a7484aa6ea6e483ULL,0x5cb0a9dcbd41fbd4ULL,0x76f988da831153b5ULL,
+    0x983e5152ee66dfabULL,0xa831c66d2db43210ULL,0xb00327c898fb213fULL,0xbf597fc7beef0ee4ULL,
+    0xc6e00bf33da88fc2ULL,0xd5a79147930aa725ULL,0x06ca6351e003826fULL,0x142929670a0e6e70ULL,
+    0x27b70a8546d22ffcULL,0x2e1b21385c26c926ULL,0x4d2c6dfc5ac42aedULL,0x53380d139d95b3dfULL,
+    0x650a73548baf63deULL,0x766a0abb3c77b2a8ULL,0x81c2c92e47edaee6ULL,0x92722c851482353bULL,
+    0xa2bfe8a14cf10364ULL,0xa81a664bbc423001ULL,0xc24b8b70d0f89791ULL,0xc76c51a30654be30ULL,
+    0xd192e819d6ef5218ULL,0xd69906245565a910ULL,0xf40e35855771202aULL,0x106aa07032bbd1b8ULL,
+    0x19a4c116b8d2d0c8ULL,0x1e376c085141ab53ULL,0x2748774cdf8eeb99ULL,0x34b0bcb5e19b48a8ULL,
+    0x391c0cb3c5c95a63ULL,0x4ed8aa4ae3418acbULL,0x5b9cca4f7763e373ULL,0x682e6ff3d6b2b8a3ULL,
+    0x748f82ee5defb2fcULL,0x78a5636f43172f60ULL,0x84c87814a1f0ab72ULL,0x8cc702081a6439ecULL,
+    0x90befffa23631e28ULL,0xa4506cebde82bde9ULL,0xbef9a3f7b2c67915ULL,0xc67178f2e372532bULL,
+    0xca273eceea26619cULL,0xd186b8c721c0c207ULL,0xeada7dd6cde0eb1eULL,0xf57d4f7fee6ed178ULL,
+    0x06f067aa72176fbaULL,0x0a637dc5a2c898a6ULL,0x113f9804bef90daeULL,0x1b710b35131c471bULL,
+    0x28db77f523047d84ULL,0x32caab7b40c72493ULL,0x3c9ebe0a15c9bebcULL,0x431d67c49c100d4cULL,
+    0x4cc5d4becb3e42b6ULL,0x597f299cfc657e2aULL,0x5fcb6fab3ad6faecULL,0x6c44198c4a475817ULL
+};
+
+#define NURL_SHA512_ROTR(x,n) (((x) >> (n)) | ((x) << (64 - (n))))
+
+static void nurl_sha512_transform(NurlSha512Ctx *ctx, const uint8_t *data) {
+    uint64_t w[80];
+    for (int i = 0, j = 0; i < 16; i++, j += 8) {
+        w[i] = ((uint64_t)data[j]   << 56) | ((uint64_t)data[j+1] << 48)
+             | ((uint64_t)data[j+2] << 40) | ((uint64_t)data[j+3] << 32)
+             | ((uint64_t)data[j+4] << 24) | ((uint64_t)data[j+5] << 16)
+             | ((uint64_t)data[j+6] << 8)  | ((uint64_t)data[j+7]);
+    }
+    for (int i = 16; i < 80; i++) {
+        uint64_t s0 = NURL_SHA512_ROTR(w[i-15],1) ^ NURL_SHA512_ROTR(w[i-15],8)
+                    ^ (w[i-15] >> 7);
+        uint64_t s1 = NURL_SHA512_ROTR(w[i-2],19) ^ NURL_SHA512_ROTR(w[i-2],61)
+                    ^ (w[i-2] >> 6);
+        w[i] = w[i-16] + s0 + w[i-7] + s1;
+    }
+    uint64_t a=ctx->state[0],b=ctx->state[1],c=ctx->state[2],d=ctx->state[3];
+    uint64_t e=ctx->state[4],f=ctx->state[5],g=ctx->state[6],h=ctx->state[7];
+    for (int i = 0; i < 80; i++) {
+        uint64_t S1 = NURL_SHA512_ROTR(e,14) ^ NURL_SHA512_ROTR(e,18)
+                    ^ NURL_SHA512_ROTR(e,41);
+        uint64_t ch = (e & f) ^ ((~e) & g);
+        uint64_t t1 = h + S1 + ch + NURL_SHA512_K[i] + w[i];
+        uint64_t S0 = NURL_SHA512_ROTR(a,28) ^ NURL_SHA512_ROTR(a,34)
+                    ^ NURL_SHA512_ROTR(a,39);
+        uint64_t maj = (a & b) ^ (a & c) ^ (b & c);
+        uint64_t t2 = S0 + maj;
+        h=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;
+    }
+    ctx->state[0]+=a; ctx->state[1]+=b; ctx->state[2]+=c; ctx->state[3]+=d;
+    ctx->state[4]+=e; ctx->state[5]+=f; ctx->state[6]+=g; ctx->state[7]+=h;
+}
+
+static void nurl_sha512_init(NurlSha512Ctx *ctx) {
+    ctx->datalen = 0;
+    ctx->bitlen = 0;
+    ctx->state[0] = 0x6a09e667f3bcc908ULL;
+    ctx->state[1] = 0xbb67ae8584caa73bULL;
+    ctx->state[2] = 0x3c6ef372fe94f82bULL;
+    ctx->state[3] = 0xa54ff53a5f1d36f1ULL;
+    ctx->state[4] = 0x510e527fade682d1ULL;
+    ctx->state[5] = 0x9b05688c2b3e6c1fULL;
+    ctx->state[6] = 0x1f83d9abfb41bd6bULL;
+    ctx->state[7] = 0x5be0cd19137e2179ULL;
+}
+
+static void nurl_sha512_update(NurlSha512Ctx *ctx, const uint8_t *data, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        ctx->data[ctx->datalen++] = data[i];
+        if (ctx->datalen == 128) {
+            nurl_sha512_transform(ctx, ctx->data);
+            ctx->bitlen += 1024;
+            ctx->datalen = 0;
+        }
+    }
+}
+
+static void nurl_sha512_final(NurlSha512Ctx *ctx, uint8_t out[64]) {
+    size_t i = ctx->datalen;
+    if (ctx->datalen < 112) {
+        ctx->data[i++] = 0x80;
+        while (i < 112) ctx->data[i++] = 0;
+    } else {
+        ctx->data[i++] = 0x80;
+        while (i < 128) ctx->data[i++] = 0;
+        nurl_sha512_transform(ctx, ctx->data);
+        memset(ctx->data, 0, 112);
+    }
+    ctx->bitlen += (uint64_t)ctx->datalen * 8;
+    /* 128-bit big-endian length: high 64 bits are always zero. */
+    for (int k = 0; k < 8; k++) ctx->data[112 + k] = 0;
+    for (int k = 0; k < 8; k++)
+        ctx->data[127 - k] = (uint8_t)(ctx->bitlen >> (8 * k));
+    nurl_sha512_transform(ctx, ctx->data);
+    for (int k = 0; k < 8; k++) {
+        for (int j = 0; j < 8; j++) {
+            out[k*8 + j] = (uint8_t)(ctx->state[k] >> (56 - j*8));
+        }
+    }
+}
+
+void nurl_sha512_bytes(const unsigned char *data, long long len,
+                       unsigned char out[64]) {
+    NurlSha512Ctx ctx;
+    nurl_sha512_init(&ctx);
+    if (data && len > 0) {
+        nurl_sha512_update(&ctx, data, (size_t)len);
+    }
+    nurl_sha512_final(&ctx, out);
+}
+
+/* HMAC-SHA-512 (RFC 2104) — block size B = 128 bytes for SHA-512.
+ * A key longer than B is replaced by its own SHA-512 digest; any key
+ * is then zero-padded to B before the ipad/opad XOR. */
+void nurl_hmac_sha512_bytes(const unsigned char *key, long long klen,
+                            const unsigned char *msg, long long mlen,
+                            unsigned char out[64]) {
+    size_t kl = (klen > 0) ? (size_t)klen : 0;
+    size_t ml = (mlen > 0) ? (size_t)mlen : 0;
+    uint8_t kbuf[128];
+    if (kl > 128) {
+        NurlSha512Ctx kctx;
+        nurl_sha512_init(&kctx);
+        nurl_sha512_update(&kctx, key, kl);
+        uint8_t kd[64];
+        nurl_sha512_final(&kctx, kd);
+        memcpy(kbuf, kd, 64);
+        memset(kbuf + 64, 0, 64);
+    } else {
+        if (key && kl) memcpy(kbuf, key, kl);
+        memset(kbuf + kl, 0, 128 - kl);
+    }
+    uint8_t ipad[128], opad[128];
+    for (int i = 0; i < 128; i++) {
+        ipad[i] = (uint8_t)(kbuf[i] ^ 0x36);
+        opad[i] = (uint8_t)(kbuf[i] ^ 0x5c);
+    }
+    NurlSha512Ctx ictx;
+    nurl_sha512_init(&ictx);
+    nurl_sha512_update(&ictx, ipad, 128);
+    if (msg && ml) nurl_sha512_update(&ictx, msg, ml);
+    uint8_t inner[64];
+    nurl_sha512_final(&ictx, inner);
+    NurlSha512Ctx octx;
+    nurl_sha512_init(&octx);
+    nurl_sha512_update(&octx, opad, 128);
+    nurl_sha512_update(&octx, inner, 64);
+    nurl_sha512_final(&octx, out);
+}
+
 /* ── §18  TCP sockets (HTTP server foundation) ──────────────────── */
 /*
  * Minimum viable TCP layer used by stdlib/std/net.nu and the upcoming
