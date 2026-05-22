@@ -2869,6 +2869,7 @@ static struct curl_slist *nurl__http_build_slist(const char *blob) {
     return list;
 }
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 long long nurl_http_perform_full_to(const char *url, const char *method,
                                     const char *body, const char *headers_blob,
                                     long long timeout_ms,
@@ -2953,6 +2954,7 @@ long long nurl_http_perform_full_to(const char *url, const char *method,
     r->header_count = (long long)hdr_buf.len;
     return (long long)(uintptr_t)r;
 }
+#endif
 
 #elif defined(_WIN32) && !defined(__wasi__)
 /* ── WinHTTP backend — native Windows, no external deps ──────── */
@@ -3313,11 +3315,13 @@ long long nurl_http_perform_full_to(const char *url, const char *method,
 
 /* Backwards-compatible 4-arg wrapper. Keeps existing call sites and the
  * older NURL surface working with the historical 30 s / 10 s budget. */
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || !defined(NURL_HAVE_LIBCURL) || defined(_WIN32) || defined(__wasi__)
 long long nurl_http_perform_full(const char *url, const char *method,
                                  const char *body, const char *headers_blob) {
     return nurl_http_perform_full_to(url, method, body, headers_blob,
                                      30000, 10000);
 }
+#endif
 
 /* ── §14b: HTTP streaming (pull-based, libcurl multi) ─────────────────
  *

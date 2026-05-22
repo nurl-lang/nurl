@@ -10,6 +10,9 @@ const zlib = if (runtime_features.have_zlib) @cImport({
 const sqlite = if (runtime_features.have_sqlite3) @cImport({
     @cInclude("sqlite3.h");
 }) else struct {};
+const curl = if (runtime_features.have_libcurl and builtin.os.tag != .windows and builtin.os.tag != .wasi) @cImport({
+    @cInclude("curl/curl.h");
+}) else struct {};
 
 const c = std.c;
 const windows = std.os.windows;
@@ -455,6 +458,32 @@ const NurlSqliteStmt = struct {
     bound_text_cap: usize,
 };
 
+const NurlHttpHeader = extern struct {
+    name: ?[*:0]u8,
+    value: ?[*:0]u8,
+};
+
+const NurlHttpResponse = extern struct {
+    status: c_longlong,
+    err_kind: c_longlong,
+    header_count: c_longlong,
+    headers: ?[*]NurlHttpHeader,
+    body: ?[*:0]u8,
+    body_len: c_longlong,
+};
+
+const NurlHttpBuf = struct {
+    data: ?[*:0]u8,
+    len: usize,
+    cap: usize,
+};
+
+const NurlHttpHeaderBuf = struct {
+    items: ?[*]NurlHttpHeader,
+    len: usize,
+    cap: usize,
+};
+
 const NurlProcResult = extern struct {
     exit_code: c_longlong,
     err_kind: c_longlong,
@@ -514,6 +543,13 @@ const nurl_sqlite_err_ok: c_longlong = 0;
 const nurl_sqlite_err_row: c_longlong = 100;
 const nurl_sqlite_err_done: c_longlong = 101;
 const nurl_sqlite_err_unsupported: c_longlong = 99;
+const nurl_http_err_ok: c_longlong = 0;
+const nurl_http_err_connect: c_longlong = 1;
+const nurl_http_err_timeout: c_longlong = 2;
+const nurl_http_err_tls: c_longlong = 3;
+const nurl_http_err_dns: c_longlong = 4;
+const nurl_http_err_invalid: c_longlong = 5;
+const nurl_http_err_other: c_longlong = 6;
 
 fn readFileAlloc(path: [*:0]const u8, nul_terminate: bool, empty_alloc_one: bool) ?[*]u8 {
     const file = c.fopen(path, "rb") orelse return null;
@@ -1158,6 +1194,104 @@ fn sqliteRememberBoundText(stmt: *NurlSqliteStmt, text: [*:0]u8) bool {
     stmt.bound_texts.?[stmt.bound_text_count] = text;
     stmt.bound_text_count += 1;
     return true;
+}
+
+fn httpBufAppend(buf: *NurlHttpBuf, src: [*]const u8, n: usize) bool {
+    if (buf.len + n + 1 > buf.cap) {
+        var new_cap: usize = if (buf.cap != 0) buf.cap else 256;
+        while (new_cap < buf.len + n + 1) new_cap *= 2;
+        const resized = if (buf.data) |existing|
+            c.realloc(existing, new_cap)
+        else
+            c.malloc(new_cap);
+        if (resized == null) return false;
+        buf.data = @ptrCast(@alignCast(resized));
+        buf.cap = new_cap;
+    }
+    const data = buf.data.?;
+    @memcpy(data[buf.len .. buf.len + n], src[0..n]);
+    buf.len += n;
+    data[buf.len] = 0;
+    return true;
+}
+
+fn httpMapErr(rc: curl.CURLcode) c_longlong {
+    if (!runtime_features.have_libcurl or builtin.os.tag == .windows or builtin.os.tag == .wasi) return nurl_http_err_other;
+    return switch (rc) {
+        curl.CURLE_OK => nurl_http_err_ok,
+        curl.CURLE_COULDNT_RESOLVE_HOST => nurl_http_err_dns,
+        curl.CURLE_COULDNT_CONNECT => nurl_http_err_connect,
+        curl.CURLE_OPERATION_TIMEDOUT => nurl_http_err_timeout,
+        curl.CURLE_SSL_CONNECT_ERROR, curl.CURLE_PEER_FAILED_VERIFICATION => nurl_http_err_tls,
+        curl.CURLE_URL_MALFORMAT, curl.CURLE_UNSUPPORTED_PROTOCOL => nurl_http_err_invalid,
+        else => nurl_http_err_other,
+    };
+}
+
+fn httpHeaderPush(hdrs: *NurlHttpHeaderBuf, name: [*:0]u8, value: [*:0]u8) bool {
+    if (hdrs.len + 1 > hdrs.cap) {
+        const new_cap: usize = if (hdrs.cap != 0) hdrs.cap * 2 else 8;
+        const bytes = new_cap * @sizeOf(NurlHttpHeader);
+        const resized = if (hdrs.items) |existing|
+            c.realloc(existing, bytes)
+        else
+            c.malloc(bytes);
+        if (resized == null) return false;
+        hdrs.items = @ptrCast(@alignCast(resized));
+        hdrs.cap = new_cap;
+    }
+    hdrs.items.?[hdrs.len] = .{ .name = name, .value = value };
+    hdrs.len += 1;
+    return true;
+}
+
+fn httpHeaderBufFree(hdrs: *NurlHttpHeaderBuf) void {
+    if (hdrs.items) |items| {
+        var i: usize = 0;
+        while (i < hdrs.len) : (i += 1) {
+            if (items[i].name) |name| c.free(name);
+            if (items[i].value) |value| c.free(value);
+        }
+        c.free(@ptrCast(items));
+    }
+    hdrs.* = .{ .items = null, .len = 0, .cap = 0 };
+}
+
+fn httpBuildSlist(blob: ?[*:0]const u8) ?*curl.struct_curl_slist {
+    if (!runtime_features.have_libcurl or builtin.os.tag == .windows or builtin.os.tag == .wasi) return null;
+    const raw = blob orelse return null;
+    if (raw[0] == 0) return null;
+
+    var list: ?*curl.struct_curl_slist = null;
+    var p: [*:0]const u8 = raw;
+    while (p[0] != 0) {
+        var q: [*:0]const u8 = p;
+        while (q[0] != 0 and q[0] != '\n') : (q += 1) {}
+        var n: usize = @intFromPtr(q) - @intFromPtr(p);
+        while (n > 0 and p[n - 1] == '\r') n -= 1;
+        if (n > 0) {
+            var has_colon = false;
+            var i: usize = 0;
+            while (i < n) : (i += 1) {
+                if (p[i] == ':') {
+                    has_colon = true;
+                    break;
+                }
+            }
+            if (has_colon) {
+                const line = c.malloc(n + 1) orelse break;
+                const line_bytes: [*]u8 = @ptrCast(line);
+                @memcpy(line_bytes[0..n], p[0..n]);
+                line_bytes[n] = 0;
+                const next = curl.curl_slist_append(list, @ptrCast(line_bytes));
+                c.free(line);
+                if (next != null) list = next;
+            }
+        }
+        if (q[0] == 0) break;
+        p = q + 1;
+    }
+    return list;
 }
 
 var g_cgs: [max_cgs]?*NurlCG = .{null} ** max_cgs;
@@ -3543,6 +3677,160 @@ pub export fn nurl_sqlite_reset(handle: c_longlong) c_longlong {
     }
     stmt.err_kind = if (rc == sqlite.SQLITE_OK) nurl_sqlite_err_ok else rc;
     return stmt.err_kind;
+}
+
+fn nurlHttpWriteBody(ptr: [*c]u8, size: usize, nmemb: usize, user: ?*anyopaque) callconv(.c) usize {
+    const total = size * nmemb;
+    const buf: *NurlHttpBuf = @ptrCast(@alignCast(user orelse return 0));
+    const src: [*]const u8 = @ptrCast(ptr);
+    if (!httpBufAppend(buf, src, total)) return 0;
+    return total;
+}
+
+fn nurlHttpWriteHeader(ptr: [*c]u8, size: usize, nmemb: usize, user: ?*anyopaque) callconv(.c) usize {
+    const total = size * nmemb;
+    const hdrs: *NurlHttpHeaderBuf = @ptrCast(@alignCast(user orelse return 0));
+    const line: [*]u8 = @ptrCast(ptr);
+    var n = total;
+    while (n > 0 and (line[n - 1] == '\n' or line[n - 1] == '\r')) n -= 1;
+    if (n == 0) return total;
+
+    var colon_idx: ?usize = null;
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        if (line[i] == ':') {
+            colon_idx = i;
+            break;
+        }
+    }
+    const name_len = colon_idx orelse return total;
+    var val_off = name_len + 1;
+    while (val_off < n and (line[val_off] == ' ' or line[val_off] == '\t')) val_off += 1;
+    const val_len = n - val_off;
+
+    const name = c.malloc(name_len + 1) orelse return 0;
+    const value = c.malloc(val_len + 1) orelse {
+        c.free(name);
+        return 0;
+    };
+    const name_bytes: [*]u8 = @ptrCast(name);
+    const value_bytes: [*]u8 = @ptrCast(value);
+    @memcpy(name_bytes[0..name_len], line[0..name_len]);
+    @memcpy(value_bytes[0..val_len], line[val_off .. val_off + val_len]);
+    name_bytes[name_len] = 0;
+    value_bytes[val_len] = 0;
+    if (!httpHeaderPush(hdrs, @ptrCast(name_bytes), @ptrCast(value_bytes))) {
+        c.free(name);
+        c.free(value);
+        return 0;
+    }
+    return total;
+}
+
+pub export fn nurl_http_perform_full_to(
+    url: ?[*:0]const u8,
+    method: ?[*:0]const u8,
+    body: ?[*:0]const u8,
+    headers_blob: ?[*:0]const u8,
+    timeout_ms: c_longlong,
+    connect_timeout_ms: c_longlong,
+) c_longlong {
+    if (!runtime_features.have_libcurl or builtin.os.tag == .windows or builtin.os.tag == .wasi) return 0;
+
+    const raw = c.calloc(1, @sizeOf(NurlHttpResponse)) orelse return 0;
+    const resp: *NurlHttpResponse = @ptrCast(@alignCast(raw));
+    resp.* = .{
+        .status = 0,
+        .err_kind = nurl_http_err_ok,
+        .header_count = 0,
+        .headers = null,
+        .body = null,
+        .body_len = 0,
+    };
+
+    if (url == null or url.?[0] == 0) {
+        resp.err_kind = nurl_http_err_invalid;
+        resp.body = dupSliceZ("");
+        return @intCast(@intFromPtr(resp));
+    }
+
+    const total_timeout: c_long = @intCast(if (timeout_ms > 0) timeout_ms else 30000);
+    const connect_timeout: c_long = @intCast(if (connect_timeout_ms > 0) connect_timeout_ms else 10000);
+
+    const easy = curl.curl_easy_init() orelse {
+        resp.err_kind = nurl_http_err_other;
+        resp.body = dupSliceZ("");
+        return @intCast(@intFromPtr(resp));
+    };
+    defer curl.curl_easy_cleanup(easy);
+
+    var body_buf = NurlHttpBuf{ .data = null, .len = 0, .cap = 0 };
+    var hdr_buf = NurlHttpHeaderBuf{ .items = null, .len = 0, .cap = 0 };
+    errdefer {
+        if (body_buf.data) |buf| c.free(buf);
+        httpHeaderBufFree(&hdr_buf);
+    }
+
+    _ = curl.curl_easy_setopt(easy, curl.CURLOPT_URL, url.?);
+    _ = curl.curl_easy_setopt(easy, curl.CURLOPT_FOLLOWLOCATION, @as(c_long, 1));
+    _ = curl.curl_easy_setopt(easy, curl.CURLOPT_NOSIGNAL, @as(c_long, 1));
+    _ = curl.curl_easy_setopt(easy, curl.CURLOPT_TIMEOUT_MS, total_timeout);
+    _ = curl.curl_easy_setopt(easy, curl.CURLOPT_CONNECTTIMEOUT_MS, connect_timeout);
+    _ = curl.curl_easy_setopt(easy, curl.CURLOPT_WRITEFUNCTION, &nurlHttpWriteBody);
+    _ = curl.curl_easy_setopt(easy, curl.CURLOPT_WRITEDATA, &body_buf);
+    _ = curl.curl_easy_setopt(easy, curl.CURLOPT_HEADERFUNCTION, &nurlHttpWriteHeader);
+    _ = curl.curl_easy_setopt(easy, curl.CURLOPT_HEADERDATA, &hdr_buf);
+    _ = curl.curl_easy_setopt(easy, curl.CURLOPT_USERAGENT, "nurl-http/0.1");
+    _ = curl.curl_easy_setopt(easy, curl.CURLOPT_ACCEPT_ENCODING, "");
+
+    const req_headers = httpBuildSlist(headers_blob);
+    defer if (req_headers != null) curl.curl_slist_free_all(req_headers);
+    if (req_headers != null) _ = curl.curl_easy_setopt(easy, curl.CURLOPT_HTTPHEADER, req_headers);
+
+    const m = method orelse "GET";
+    if (std.mem.eql(u8, std.mem.span(m), "POST")) {
+        _ = curl.curl_easy_setopt(easy, curl.CURLOPT_POST, @as(c_long, 1));
+        _ = curl.curl_easy_setopt(easy, curl.CURLOPT_POSTFIELDS, body orelse "");
+        _ = curl.curl_easy_setopt(easy, curl.CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(std.mem.len(body orelse ""))));
+    } else if (std.mem.eql(u8, std.mem.span(m), "PUT") or
+        std.mem.eql(u8, std.mem.span(m), "DELETE") or
+        std.mem.eql(u8, std.mem.span(m), "PATCH"))
+    {
+        _ = curl.curl_easy_setopt(easy, curl.CURLOPT_CUSTOMREQUEST, m);
+        if (body != null and body.?[0] != 0) {
+            _ = curl.curl_easy_setopt(easy, curl.CURLOPT_POSTFIELDS, body.?);
+            _ = curl.curl_easy_setopt(easy, curl.CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(std.mem.len(body.?))));
+        }
+    }
+
+    const rc = curl.curl_easy_perform(easy);
+    if (rc != curl.CURLE_OK) {
+        resp.err_kind = httpMapErr(rc);
+    } else {
+        var http_code: c_long = 0;
+        _ = curl.curl_easy_getinfo(easy, curl.CURLINFO_RESPONSE_CODE, &http_code);
+        resp.status = http_code;
+    }
+
+    if (body_buf.data) |buf| {
+        resp.body = buf;
+        resp.body_len = @intCast(body_buf.len);
+    } else {
+        resp.body = dupSliceZ("");
+        resp.body_len = 0;
+    }
+    resp.headers = hdr_buf.items;
+    resp.header_count = @intCast(hdr_buf.len);
+    return @intCast(@intFromPtr(resp));
+}
+
+pub export fn nurl_http_perform_full(
+    url: ?[*:0]const u8,
+    method: ?[*:0]const u8,
+    body: ?[*:0]const u8,
+    headers_blob: ?[*:0]const u8,
+) c_longlong {
+    return nurl_http_perform_full_to(url, method, body, headers_blob, 30000, 10000);
 }
 
 pub export fn nurl_str_len(input: ?[*:0]const u8) c_longlong {
