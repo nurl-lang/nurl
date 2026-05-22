@@ -60,10 +60,11 @@ pub fn build(b: *std.Build) !void {
     const sync_runtime_z = addMarkerSyncStep(b, nurl_build_exe, "stdlib/runtime.z", cfg.zlib.enabled);
     const sync_runtime_zstd = addMarkerSyncStep(b, nurl_build_exe, "stdlib/runtime.zstd", cfg.zstd_enabled);
     const sync_canvas_sdl2 = addMarkerSyncStep(b, nurl_build_exe, "stdlib/canvas.sdl2", cfg.sdl2_include != null);
+    const cc_driver = joinTokens(b.allocator, cfg.cc_tokens);
 
-    const runtime_cmd = addCcCommand(b, cfg.cc_tokens);
-    runtime_cmd.setCwd(b.path("."));
-    runtime_cmd.has_side_effects = true;
+    const runtime_cmd = addHelperStep(b, nurl_build_exe, &.{ "runtime-obj", "--out", "stdlib/runtime.o" }, true);
+    runtime_cmd.setEnvironmentVariable("NURL_CC", cc_driver);
+    runtime_cmd.setEnvironmentVariable("NURL_ZIG", b.graph.zig_exe);
     runtime_cmd.step.dependOn(&sync_runtime_nolto.step);
     runtime_cmd.step.dependOn(&sync_runtime_curl.step);
     runtime_cmd.step.dependOn(&sync_runtime_openssl.step);
@@ -71,54 +72,21 @@ pub fn build(b: *std.Build) !void {
     runtime_cmd.step.dependOn(&sync_runtime_pq.step);
     runtime_cmd.step.dependOn(&sync_runtime_z.step);
     runtime_cmd.step.dependOn(&sync_runtime_zstd.step);
-    runtime_cmd.addArg("-O2");
-    if (cfg.use_lto) runtime_cmd.addArg("-flto");
-    if (cfg.san) runtime_cmd.addArgs(&.{
-        "-fsanitize=address,undefined",
-        "-fsanitize-address-use-after-scope",
-        "-fno-omit-frame-pointer",
-        "-fno-sanitize-recover=all",
-    });
-    runtime_cmd.addArgs(cfg.curl.cflags);
-    runtime_cmd.addArgs(cfg.openssl.cflags);
-    runtime_cmd.addArgs(cfg.sqlite3.cflags);
-    runtime_cmd.addArgs(cfg.zlib.cflags);
-    runtime_cmd.addArgs(&.{ "-c", "stdlib/runtime.c", "-o", "stdlib/runtime.o" });
+    if (cfg.san) runtime_cmd.addArg("--san");
 
-    const runtime_native_cmd = if (cfg.use_lto) blk: {
-        const cmd = addCcCommand(b, cfg.cc_tokens);
-        cmd.setCwd(b.path("."));
-        cmd.has_side_effects = true;
-        cmd.step.dependOn(&runtime_cmd.step);
-        cmd.addArgs(&.{ "-O2", "-c", "-x", "ir", "stdlib/runtime.o", "-o", "stdlib/runtime.native.o" });
-        break :blk cmd;
-    } else blk: {
-        const cmd = addHelperCopyStep(b, nurl_build_exe, "stdlib/runtime.o", "stdlib/runtime.native.o", false);
-        cmd.step.dependOn(&runtime_cmd.step);
-        break :blk cmd;
-    };
+    const runtime_native_cmd = addHelperCopyStep(b, nurl_build_exe, "stdlib/runtime.o", "stdlib/runtime.native.o", false);
+    runtime_native_cmd.step.dependOn(&runtime_cmd.step);
 
-    const lastgood_runtime_cmd = addCcCommand(b, cfg.cc_tokens);
-    lastgood_runtime_cmd.setCwd(b.path("."));
-    lastgood_runtime_cmd.has_side_effects = true;
+    const lastgood_runtime_cmd = addHelperStep(b, nurl_build_exe, &.{ "runtime-obj", "--out", lastgood_runtime_path }, true);
+    lastgood_runtime_cmd.setEnvironmentVariable("NURL_CC", cc_driver);
+    lastgood_runtime_cmd.setEnvironmentVariable("NURL_ZIG", b.graph.zig_exe);
     lastgood_runtime_cmd.step.dependOn(&sync_runtime_curl.step);
     lastgood_runtime_cmd.step.dependOn(&sync_runtime_openssl.step);
     lastgood_runtime_cmd.step.dependOn(&sync_runtime_sqlite3.step);
     lastgood_runtime_cmd.step.dependOn(&sync_runtime_pq.step);
     lastgood_runtime_cmd.step.dependOn(&sync_runtime_z.step);
     lastgood_runtime_cmd.step.dependOn(&sync_runtime_zstd.step);
-    lastgood_runtime_cmd.addArg("-O2");
-    if (cfg.san) lastgood_runtime_cmd.addArgs(&.{
-        "-fsanitize=address,undefined",
-        "-fsanitize-address-use-after-scope",
-        "-fno-omit-frame-pointer",
-        "-fno-sanitize-recover=all",
-    });
-    lastgood_runtime_cmd.addArgs(cfg.curl.cflags);
-    lastgood_runtime_cmd.addArgs(cfg.openssl.cflags);
-    lastgood_runtime_cmd.addArgs(cfg.sqlite3.cflags);
-    lastgood_runtime_cmd.addArgs(cfg.zlib.cflags);
-    lastgood_runtime_cmd.addArgs(&.{ "-c", "stdlib/runtime.c", "-o", lastgood_runtime_path });
+    if (cfg.san) lastgood_runtime_cmd.addArg("--san");
 
     const canvas_cmd = addCcCommand(b, cfg.cc_tokens);
     canvas_cmd.setCwd(b.path("."));
@@ -536,6 +504,15 @@ fn splitWhitespaceDup(allocator: std.mem.Allocator, text: []const u8) []const []
     var it = std.mem.tokenizeAny(u8, text, " \t\r\n");
     while (it.next()) |part| {
         out.append(allocator, allocator.dupe(u8, part) catch @panic("OOM")) catch @panic("OOM");
+    }
+    return out.toOwnedSlice(allocator) catch @panic("OOM");
+}
+
+fn joinTokens(allocator: std.mem.Allocator, tokens: []const []const u8) []const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (tokens, 0..) |token, idx| {
+        if (idx != 0) out.append(allocator, ' ') catch @panic("OOM");
+        out.appendSlice(allocator, token) catch @panic("OOM");
     }
     return out.toOwnedSlice(allocator) catch @panic("OOM");
 }

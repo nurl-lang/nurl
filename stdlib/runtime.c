@@ -1031,9 +1031,9 @@ long long nurl_is_alnum_(long long c) {
 
 /* ── §4  File & process ────────────────────────────────────────── */
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 static int   g_argc = 0;
 static char **g_argv = NULL;
-
 /* Called from the generated C main() to stash argv. */
 void nurl_init(int argc, char **argv) { g_argc = argc; g_argv = argv; }
 
@@ -1053,7 +1053,9 @@ const char* nurl_argv_get(long long i)    {
 }
 
 void nurl_exit(long long code) { exit((int)code); }
+#endif
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 /* Read entire file into a malloc'd string; exit on error. */
 const char* nurl_read_file(const char *path) {
     FILE *f = fopen(path, "rb");
@@ -1070,6 +1072,7 @@ const char* nurl_read_file(const char *path) {
     fclose(f);
     return buf;
 }
+#endif
 
 /* mmap-based file read. Returns a freshly malloc'd, NUL-terminated
  * buffer with the file contents. Compared to nurl_read_file_safe's
@@ -1096,6 +1099,7 @@ const char* nurl_read_file(const char *path) {
  * is itself a bottleneck. CSV loader gates this on a separate
  * cleanup field on CSVTable since the deallocator differs from
  * malloc/free. */
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 static long long g_nurl_mmap_size = 0;
 long long nurl_read_file_mmap_size_out(void) { return g_nurl_mmap_size; }
 
@@ -1164,10 +1168,12 @@ const char* nurl_read_file_mmap(const char *path) {
     return nurl_read_file_safe(path);
 #endif
 }
+#endif
 
 /* Non-fatal variant: returns NULL on error instead of exiting.
  * Used by stdlib/std/fs.nu to surface failures as `! String IoErr`.
  * The errno classification is left to the caller (see nurl_errno_kind). */
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 const char* nurl_read_file_safe(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
@@ -1229,7 +1235,6 @@ void nurl_file_close(void *h) {
 const char* nurl_file_read(const char *path) {
     return nurl_read_file(path);
 }
-
 long long nurl_file_exists(const char *path) {
     struct stat st;
     return (stat(path, &st) == 0) ? 1 : 0;
@@ -1320,6 +1325,7 @@ long long nurl_write_file_bytes(const char *path, const char *data, long long le
     if (fclose(f) != 0) return -1;
     return 0;
 }
+#endif
 
 /* Create a directory with mode 0755. Non-fatal — returns 0 on success,
  * -1 with errno set on failure. errno = EEXIST if the directory (or any
@@ -1333,11 +1339,13 @@ long long nurl_write_file_bytes(const char *path, const char *data, long long le
 #  define MKDIR_2(p, m) mkdir((p), (m))
 #endif
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 long long nurl_dir_create(const char *path) {
     if (!path) { errno = EINVAL; return -1; }
     if (MKDIR_2(path, 0755) != 0) return -1;
     return 0;
 }
+#endif
 
 /* Remove an empty directory. Non-fatal — returns 0 on success, -1 with
  * errno set on failure (typically ENOENT or ENOTEMPTY). The caller maps
@@ -1348,11 +1356,13 @@ long long nurl_dir_create(const char *path) {
 #  define RMDIR_1(p) rmdir(p)
 #endif
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 long long nurl_dir_remove(const char *path) {
     if (!path) { errno = EINVAL; return -1; }
     if (RMDIR_1(path) != 0) return -1;
     return 0;
 }
+#endif
 
 
 /* ── §5  HashMap (string → i64) ────────────────────────────────── */
@@ -1376,6 +1386,7 @@ static unsigned nurl_map_hash(const char *s) {
     return h % NURL_MAP_BUCKETS;
 }
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 long long nurl_map_new(void) {
     NurlMap *m = (NurlMap*)calloc(1, sizeof(NurlMap));
     return (long long)(uintptr_t)m;
@@ -1454,6 +1465,7 @@ void nurl_map_free(long long handle) {
     }
     free(m);
 }
+#endif
 
 
 /* ── §6  Lexer ─────────────────────────────────────────────────── */
@@ -2119,6 +2131,7 @@ void nurl_sym_pop(long long h) {
 
 /* ── §7  Codegen helpers ───────────────────────────────────────── */
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 typedef struct { int reg; int lbl; } NurlCG;
 
 #define MAX_CGS 8
@@ -2225,6 +2238,7 @@ void nurl_poke(void *base, long long idx, long long val) {
 
 /* nurl_malloc kept as alias for backward compatibility */
 void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
+#endif
 
 
 /* ── §10 String Builder — REMOVED 2026-05-01 ────────────────────────
@@ -2379,6 +2393,7 @@ void nurl_sleep_ms(long long ms) {
 #  include <dirent.h>      /* opendir, readdir, closedir */
 #endif
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 const char* nurl_env_get(const char *name) {
     if (!name) return NULL;
     const char *v = getenv(name);
@@ -2438,9 +2453,11 @@ long long nurl_chdir(const char *path) {
     return chdir(path) == 0 ? 0 : -1;
 #endif
 }
+#endif
 
 /* Slurp stdin to EOF. Always returns a heap-owned C string (possibly empty).
  * On allocation failure returns NULL. */
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 const char* nurl_read_all_stdin(void) {
     size_t cap = 4096, len = 0;
     char *buf = (char*)malloc(cap);
@@ -2464,11 +2481,13 @@ const char* nurl_read_all_stdin(void) {
     buf[len] = '\0';
     return buf;
 }
+#endif
 
 /* Directory listing — opaque handle (i64) + skip-dots iteration.
  * The "." and ".." entries are filtered so callers don't have to. */
 
 #ifdef _WIN32
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 typedef struct {
     HANDLE          h;
     WIN32_FIND_DATAA fd;
@@ -2528,6 +2547,7 @@ void nurl_dir_list_close(long long handle) {
     if (!it->closed && it->h != INVALID_HANDLE_VALUE) FindClose(it->h);
     free(it);
 }
+#endif
 
 /* POSIX `symlink(target, linkpath)` shim. stdlib/std/fs.nu declares
  * `symlink` as an `& \`c\` @ symlink ...` FFI import from libc; MSVCRT
@@ -2559,6 +2579,7 @@ int symlink(const char *target, const char *linkpath) {
 
 #else  /* POSIX */
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 long long nurl_dir_list_open(const char *path) {
     if (!path) { errno = EINVAL; return 0; }
     DIR *d = opendir(path);
@@ -2583,6 +2604,7 @@ void nurl_dir_list_close(long long handle) {
     DIR *d = (DIR*)(uintptr_t)handle;
     if (d) closedir(d);
 }
+#endif
 
 #endif
 
@@ -3650,9 +3672,11 @@ void nurl_http_response_free(long long resp) {
 /* ── §15  Logging level (mutable global) ───────────────────────── */
 /* Single process-wide level used by stdlib/std/log.nu.            */
 /* Encoding: 0=Debug 1=Info 2=Warn 3=Error 4=Off. Default Info(1). */
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 static long long g_log_level = 1;
 long long nurl_log_level_get(void) { return g_log_level; }
 void nurl_log_level_set(long long lvl) { g_log_level = lvl; }
+#endif
 
 /* ── §16  Process execution ───────────────────────────────────── */
 /*

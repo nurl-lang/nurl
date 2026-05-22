@@ -18,6 +18,7 @@ const library_specs = [_]LibrarySpec{
 
 const Command = enum {
     link,
+    runtime_obj,
     api_build,
     api_build_wasm,
     api_runtime_objs,
@@ -67,6 +68,7 @@ fn run(init: std.process.Init) !void {
     if (parseCommand(args[1])) |cmd| {
         return switch (cmd) {
             .link => runLink(init, args[2..]),
+            .runtime_obj => runRuntimeObj(init, args[2..]),
             .api_build => runApiBuild(init, args[2..]),
             .api_build_wasm => runApiBuildWasm(init, args[2..]),
             .api_runtime_objs => runApiRuntimeObjs(init, args[2..]),
@@ -98,6 +100,7 @@ fn run(init: std.process.Init) !void {
 }
 
 fn parseCommand(name: []const u8) ?Command {
+    if (std.mem.eql(u8, name, "runtime-obj")) return .runtime_obj;
     if (std.mem.eql(u8, name, "api-build")) return .api_build;
     if (std.mem.eql(u8, name, "api-build-wasm")) return .api_build_wasm;
     if (std.mem.eql(u8, name, "api-runtime-objs")) return .api_runtime_objs;
@@ -121,6 +124,19 @@ const ApiBuildKind = enum {
     native,
     windows,
     macos,
+};
+
+const RuntimeObjConfig = struct {
+    root: []const u8,
+    out_path: []const u8,
+    zig_bin: []const u8,
+    driver: ?[]const u8,
+    target: ?[]const u8,
+    opt: []const u8,
+    san: bool,
+    debug_info: bool,
+    use_marker_cflags: bool,
+    extra_cflags: []const []const u8,
 };
 
 const ApiBuildWasmConfig = struct {
@@ -2788,32 +2804,33 @@ fn collectCanvasLinkExtras(
 
 fn ensureDebugRuntime(init: std.process.Init, root: []const u8, driver_override: []const u8) ![]const u8 {
     const arena = init.arena.allocator();
-    const gpa = init.gpa;
     const io = init.io;
     const runtime_c = try std.fs.path.join(arena, &.{ root, "stdlib", "runtime.c" });
+    const runtime_zig = try std.fs.path.join(arena, &.{ root, "stdlib", "runtime_fs_env.zig" });
     const debug_runtime = try std.fs.path.join(arena, &.{ root, "stdlib", "runtime_debug.o" });
 
     const needs_rebuild = blk: {
         if (!pathExists(io, debug_runtime)) break :blk true;
         const runtime_stat = try std.Io.Dir.cwd().statFile(io, runtime_c, .{});
+        const runtime_zig_stat = try std.Io.Dir.cwd().statFile(io, runtime_zig, .{});
         const debug_stat = try std.Io.Dir.cwd().statFile(io, debug_runtime, .{});
-        break :blk runtime_stat.mtime.nanoseconds > debug_stat.mtime.nanoseconds;
+        break :blk runtime_stat.mtime.nanoseconds > debug_stat.mtime.nanoseconds or
+            runtime_zig_stat.mtime.nanoseconds > debug_stat.mtime.nanoseconds;
     };
     if (!needs_rebuild) return debug_runtime;
 
-    var driver_parts = try splitDriver(gpa, driver_override, init);
-    defer driver_parts.deinit(gpa);
-    var argv: std.ArrayList([]const u8) = .empty;
-    defer argv.deinit(gpa);
-    try argv.appendSlice(gpa, driver_parts.items);
-    try argv.appendSlice(gpa, &.{ "-O0", "-g" });
-    try appendRuntimeCompileFlags(gpa, arena, io, &argv, root);
-    try argv.appendSlice(gpa, &.{ "-c", runtime_c, "-o", debug_runtime });
-
-    const result = try std.process.run(gpa, io, .{ .argv = argv.items });
-    defer gpa.free(result.stdout);
-    defer gpa.free(result.stderr);
-    try ensureSuccessWithStderr(result, "runtime debug rebuild failed");
+    try buildRuntimeObject(init, .{
+        .root = root,
+        .out_path = debug_runtime,
+        .zig_bin = init.environ_map.get("NURL_ZIG") orelse "zig",
+        .driver = driver_override,
+        .target = null,
+        .opt = "-O0",
+        .san = false,
+        .debug_info = true,
+        .use_marker_cflags = true,
+        .extra_cflags = &.{},
+    });
     return debug_runtime;
 }
 
@@ -2860,6 +2877,199 @@ fn appendRuntimeCompileFlags(
             else => {},
         }
     }
+}
+
+fn runRuntimeObj(init: std.process.Init, args: []const []const u8) !void {
+    const cfg = try parseRuntimeObjArgs(init, args);
+    try buildRuntimeObject(init, cfg);
+}
+
+fn parseRuntimeObjArgs(init: std.process.Init, args: []const []const u8) !RuntimeObjConfig {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+
+    var root: []const u8 = ".";
+    var out_path: ?[]const u8 = null;
+    var zig_bin: []const u8 = init.environ_map.get("NURL_ZIG") orelse "zig";
+    var driver: ?[]const u8 = null;
+    var target: ?[]const u8 = null;
+    var opt: []const u8 = "-O2";
+    var san = false;
+    var debug_info = false;
+    var use_marker_cflags = true;
+
+    var extra_cflags: std.ArrayList([]const u8) = .empty;
+    defer extra_cflags.deinit(gpa);
+
+    var i: usize = 0;
+    while (i < args.len) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--root")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            root = args[i];
+        } else if (std.mem.eql(u8, arg, "--out")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            out_path = args[i];
+        } else if (std.mem.eql(u8, arg, "--zig")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            zig_bin = args[i];
+        } else if (std.mem.eql(u8, arg, "--driver")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            driver = args[i];
+        } else if (std.mem.eql(u8, arg, "--target")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            target = args[i];
+        } else if (std.mem.eql(u8, arg, "--opt")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            opt = args[i];
+        } else if (std.mem.eql(u8, arg, "--cflag")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            try extra_cflags.append(gpa, args[i]);
+        } else if (std.mem.eql(u8, arg, "--san")) {
+            san = true;
+        } else if (std.mem.eql(u8, arg, "--debug")) {
+            debug_info = true;
+        } else if (std.mem.eql(u8, arg, "--no-marker-cflags")) {
+            use_marker_cflags = false;
+        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            std.debug.print(
+                "usage: nurl-build runtime-obj [--root <path>] --out <path> [--zig <path>] [--driver <cmd>] [--target <triple>] [--opt <-O2>] [--san] [--debug] [--no-marker-cflags] [--cflag <arg> ...]\n",
+                .{},
+            );
+            std.process.exit(0);
+        } else {
+            std.debug.print("nurl-build: unknown runtime-obj arg: {s}\n", .{arg});
+            return error.InvalidArgs;
+        }
+        i += 1;
+    }
+
+    return .{
+        .root = try absolutePath(arena, root),
+        .out_path = try absolutePath(arena, out_path orelse return error.InvalidArgs),
+        .zig_bin = zig_bin,
+        .driver = driver,
+        .target = target,
+        .opt = opt,
+        .san = san,
+        .debug_info = debug_info,
+        .use_marker_cflags = use_marker_cflags,
+        .extra_cflags = try arena.dupe([]const u8, extra_cflags.items),
+    };
+}
+
+fn buildRuntimeObject(init: std.process.Init, cfg: RuntimeObjConfig) !void {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+    const io = init.io;
+    const pid: u64 = if (builtin.os.tag == .windows)
+        std.os.windows.GetCurrentProcessId()
+    else
+        @intCast(std.c.getpid());
+
+    const runtime_c = try std.fs.path.join(arena, &.{ cfg.root, "stdlib", "runtime.c" });
+    const runtime_zig = try std.fs.path.join(arena, &.{ cfg.root, "stdlib", "runtime_fs_env.zig" });
+    const core_obj = try std.fmt.allocPrint(arena, "{s}.core.{d}.o", .{ cfg.out_path, pid });
+    const zig_obj = try std.fmt.allocPrint(arena, "{s}.zig.{d}.o", .{ cfg.out_path, pid });
+    const zig_emit = try std.fmt.allocPrint(arena, "-femit-bin={s}", .{zig_obj});
+
+    try ensureExists(io, runtime_c, "stdlib/runtime.c");
+    try ensureExists(io, runtime_zig, "stdlib/runtime_fs_env.zig");
+    try ensureParentDir(io, cfg.out_path);
+
+    var cleanup = false;
+    defer {
+        if (cleanup) {
+            std.Io.Dir.cwd().deleteFile(io, core_obj) catch {};
+            std.Io.Dir.cwd().deleteFile(io, zig_obj) catch {};
+        }
+    }
+
+    var driver_parts = try splitDriver(gpa, cfg.driver, init);
+    defer driver_parts.deinit(gpa);
+
+    var c_argv: std.ArrayList([]const u8) = .empty;
+    defer c_argv.deinit(gpa);
+    try c_argv.appendSlice(gpa, driver_parts.items);
+    if (cfg.target) |target| {
+        try c_argv.appendSlice(gpa, &.{ "-target", target });
+    }
+    try c_argv.append(gpa, cfg.opt);
+    if (cfg.debug_info) try c_argv.append(gpa, "-g");
+    if (cfg.san) {
+        try c_argv.appendSlice(gpa, &.{
+            "-fsanitize=address,undefined",
+            "-fsanitize-address-use-after-scope",
+            "-fno-omit-frame-pointer",
+            "-fno-sanitize-recover=all",
+        });
+    }
+    if (cfg.use_marker_cflags) {
+        try appendRuntimeCompileFlags(gpa, arena, io, &c_argv, cfg.root);
+    }
+    try c_argv.appendSlice(gpa, cfg.extra_cflags);
+    try c_argv.appendSlice(gpa, &.{
+        "-DNURL_RUNTIME_ZIG_FS_ENV",
+        "-c",
+        runtime_c,
+        "-o",
+        core_obj,
+    });
+
+    const c_result = try std.process.run(gpa, io, .{
+        .argv = c_argv.items,
+        .cwd = .{ .path = cfg.root },
+    });
+    defer gpa.free(c_result.stdout);
+    defer gpa.free(c_result.stderr);
+    try ensureSuccessWithStderr(c_result, "runtime core compile failed");
+
+    var zig_argv: std.ArrayList([]const u8) = .empty;
+    defer zig_argv.deinit(gpa);
+    try zig_argv.appendSlice(gpa, &.{ cfg.zig_bin, "build-obj", runtime_zig, "-lc" });
+    if (cfg.target) |target| {
+        try zig_argv.appendSlice(gpa, &.{ "-target", target });
+    }
+    try zig_argv.appendSlice(gpa, &.{ "-O", zigOptimizeForRuntime(cfg.opt, cfg.debug_info), zig_emit });
+
+    const zig_result = try std.process.run(gpa, io, .{
+        .argv = zig_argv.items,
+        .cwd = .{ .path = cfg.root },
+    });
+    defer gpa.free(zig_result.stdout);
+    defer gpa.free(zig_result.stderr);
+    try ensureSuccessWithStderr(zig_result, "runtime fs/env zig compile failed");
+
+    var relink_argv: std.ArrayList([]const u8) = .empty;
+    defer relink_argv.deinit(gpa);
+    try relink_argv.appendSlice(gpa, driver_parts.items);
+    if (cfg.target) |target| {
+        try relink_argv.appendSlice(gpa, &.{ "-target", target });
+    }
+    try relink_argv.appendSlice(gpa, &.{ "-r", core_obj, zig_obj, "-o", cfg.out_path });
+
+    const relink_result = try std.process.run(gpa, io, .{
+        .argv = relink_argv.items,
+        .cwd = .{ .path = cfg.root },
+    });
+    defer gpa.free(relink_result.stdout);
+    defer gpa.free(relink_result.stderr);
+    try ensureSuccessWithStderr(relink_result, "runtime object relink failed");
+
+    cleanup = true;
+}
+
+fn zigOptimizeForRuntime(opt: []const u8, debug_info: bool) []const u8 {
+    if (debug_info or std.mem.eql(u8, opt, "-O0")) return "Debug";
+    if (std.mem.eql(u8, opt, "-O1")) return "ReleaseSafe";
+    return "ReleaseFast";
 }
 
 fn containsAny(haystack: []const u8, needles: []const []const u8) bool {
@@ -3398,10 +3608,22 @@ fn runApiRuntimeObjs(init: std.process.Init, args: []const []const u8) !void {
 
     const runtime_c = try std.fs.path.join(arena, &.{ root_abs, "stdlib", "runtime.c" });
     try ensureExists(io, runtime_c, "stdlib/runtime.c");
+    const zig_cc_driver = try std.fmt.allocPrint(arena, "{s} cc", .{zig_bin});
 
     if (!skip_wasm) {
         std.debug.print("[wasm] compiling runtime.wasm.o, canvas.wasm.o, audio.wasm.o\n", .{});
-        try runInheritedInCwd(init, root_abs, &.{ zig_bin, "cc", "-target", wasm_target, "-O2", "-c", "stdlib/runtime.c", "-o", "stdlib/runtime.wasm.o" });
+        try buildRuntimeObject(init, .{
+            .root = root_abs,
+            .out_path = try std.fs.path.join(arena, &.{ root_abs, "stdlib", "runtime.wasm.o" }),
+            .zig_bin = zig_bin,
+            .driver = zig_cc_driver,
+            .target = wasm_target,
+            .opt = "-O2",
+            .san = false,
+            .debug_info = false,
+            .use_marker_cflags = false,
+            .extra_cflags = &.{},
+        });
         try runInheritedInCwd(init, root_abs, &.{ zig_bin, "cc", "-target", wasm_target, "-O2", "-c", "stdlib/canvas_wasm.c", "-o", "stdlib/canvas.wasm.o" });
         try runInheritedInCwd(init, root_abs, &.{ zig_bin, "cc", "-target", wasm_target, "-O2", "-c", "stdlib/audio_wasm.c", "-o", "stdlib/audio.wasm.o" });
     }
@@ -3409,19 +3631,17 @@ fn runApiRuntimeObjs(init: std.process.Init, args: []const []const u8) !void {
     if (!skip_windows) {
         const curl_include = try std.fmt.allocPrint(arena, "-I{s}/include", .{curl_prefix});
         std.debug.print("[windows] compiling runtime.win.o\n", .{});
-        try runInheritedInCwd(init, root_abs, &.{
-            zig_bin,
-            "cc",
-            "-target",
-            windows_target,
-            "-O2",
-            "-DNURL_HAVE_LIBCURL",
-            "-DCURL_STATICLIB",
-            curl_include,
-            "-c",
-            "stdlib/runtime.c",
-            "-o",
-            "stdlib/runtime.win.o",
+        try buildRuntimeObject(init, .{
+            .root = root_abs,
+            .out_path = try std.fs.path.join(arena, &.{ root_abs, "stdlib", "runtime.win.o" }),
+            .zig_bin = zig_bin,
+            .driver = zig_cc_driver,
+            .target = windows_target,
+            .opt = "-O2",
+            .san = false,
+            .debug_info = false,
+            .use_marker_cflags = false,
+            .extra_cflags = &.{ "-DNURL_HAVE_LIBCURL", "-DCURL_STATICLIB", curl_include },
         });
         try std.Io.Dir.cwd().writeFile(io, .{
             .sub_path = try std.fs.path.join(arena, &.{ root_abs, "stdlib", "runtime.win.curl" }),
@@ -3431,7 +3651,18 @@ fn runApiRuntimeObjs(init: std.process.Init, args: []const []const u8) !void {
 
     if (!skip_macos) {
         std.debug.print("[macos] compiling runtime.mac.o\n", .{});
-        try runInheritedInCwd(init, root_abs, &.{ zig_bin, "cc", "-target", macos_target, "-O2", "-c", "stdlib/runtime.c", "-o", "stdlib/runtime.mac.o" });
+        try buildRuntimeObject(init, .{
+            .root = root_abs,
+            .out_path = try std.fs.path.join(arena, &.{ root_abs, "stdlib", "runtime.mac.o" }),
+            .zig_bin = zig_bin,
+            .driver = zig_cc_driver,
+            .target = macos_target,
+            .opt = "-O2",
+            .san = false,
+            .debug_info = false,
+            .use_marker_cflags = false,
+            .extra_cflags = &.{},
+        });
     }
 }
 
