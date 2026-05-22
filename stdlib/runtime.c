@@ -1813,64 +1813,10 @@ long long nurl_proc_run(const char *cmd, const char *argv_buf,
 #endif
 
 #else
-/* ── WASI / unsupported targets — stub ──────────────────────── */
-
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
-long long nurl_proc_run(const char *cmd, const char *argv_buf,
-                        long long argc, const char *stdin_blob) {
-    (void)cmd; (void)argv_buf; (void)argc; (void)stdin_blob;
-    NurlProcResult *r = (NurlProcResult*)calloc(1, sizeof(NurlProcResult));
-    if (!r) return 0;
-    r->err_kind   = NURL_PROC_ERR_OTHER;
-    r->stdout_buf = strdup("");
-    r->stderr_buf = strdup("");
-    return (long long)(uintptr_t)r;
-}
-#endif
-
+/* WASI proc_run fallback now lives in stdlib/runtime_process.zig. */
 #endif  /* §16 backend selection */
 
-/* Accessors and the freer are platform-agnostic. */
-
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
-long long nurl_proc_exit_code(long long h) {
-    NurlProcResult *r = (NurlProcResult*)(uintptr_t)h;
-    return r ? r->exit_code : -1;
-}
-
-long long nurl_proc_err_kind(long long h) {
-    NurlProcResult *r = (NurlProcResult*)(uintptr_t)h;
-    return r ? r->err_kind : NURL_PROC_ERR_OTHER;
-}
-
-const char* nurl_proc_stdout(long long h) {
-    NurlProcResult *r = (NurlProcResult*)(uintptr_t)h;
-    return (r && r->stdout_buf) ? r->stdout_buf : "";
-}
-
-const char* nurl_proc_stderr(long long h) {
-    NurlProcResult *r = (NurlProcResult*)(uintptr_t)h;
-    return (r && r->stderr_buf) ? r->stderr_buf : "";
-}
-
-long long nurl_proc_stdout_len(long long h) {
-    NurlProcResult *r = (NurlProcResult*)(uintptr_t)h;
-    return r ? r->stdout_len : 0;
-}
-
-long long nurl_proc_stderr_len(long long h) {
-    NurlProcResult *r = (NurlProcResult*)(uintptr_t)h;
-    return r ? r->stderr_len : 0;
-}
-
-void nurl_proc_free(long long h) {
-    NurlProcResult *r = (NurlProcResult*)(uintptr_t)h;
-    if (!r) return;
-    free(r->stdout_buf);
-    free(r->stderr_buf);
-    free(r);
-}
-#endif
+/* proc_run accessors/free now live in stdlib/runtime_process.zig. */
 
 /* ── §16b  Process spawn (duplex stdio, line-buffered) ───────── */
 /*
@@ -1921,7 +1867,7 @@ void nurl_proc_free(long long h) {
  * Tag values match `ProcessErr` (NURL_PROC_ERR_* constants above).
  */
 
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV)
 typedef struct NurlProcChild {
     long long  err_kind;       /* 0 / NURL_PROC_ERR_* set at spawn */
     long long  last_io_err;    /* errno snapshot from last failure */
@@ -2224,107 +2170,10 @@ long long nurl_proc_spawn_kill(long long h, long long sig) {
     return 0;
 }
 
-#elif defined(_WIN32) && !defined(__wasi__)
-/* ── Win32 stub: spawn returns ProcessOther for now ──────────── */
-
-long long nurl_proc_spawn(const char *cmd, const char *argv_buf, long long argc) {
-    (void)cmd; (void)argv_buf; (void)argc;
-    NurlProcChild *c = (NurlProcChild*)calloc(1, sizeof(NurlProcChild));
-    if (!c) return 0;
-    c->err_kind = NURL_PROC_ERR_OTHER;
-    c->exit_code = -1;
-    return (long long)(uintptr_t)c;
-}
-long long nurl_proc_spawn_write(long long h, const char *buf, long long n) {
-    (void)h; (void)buf; (void)n; return -1;
-}
-void nurl_proc_spawn_close_stdin(long long h) { (void)h; }
-const char* nurl_proc_spawn_read_line(long long h, long long t) { (void)h; (void)t; return ""; }
-long long nurl_proc_spawn_wait(long long h) { (void)h; return -1; }
-long long nurl_proc_spawn_kill(long long h, long long sig) { (void)h; (void)sig; return -1; }
-
-#else
-/* ── WASI stub ─────────────────────────────────────────────────── */
-
-long long nurl_proc_spawn(const char *cmd, const char *argv_buf, long long argc) {
-    (void)cmd; (void)argv_buf; (void)argc;
-    NurlProcChild *c = (NurlProcChild*)calloc(1, sizeof(NurlProcChild));
-    if (!c) return 0;
-    c->err_kind = NURL_PROC_ERR_OTHER;
-    c->exit_code = -1;
-    return (long long)(uintptr_t)c;
-}
-long long nurl_proc_spawn_write(long long h, const char *buf, long long n) {
-    (void)h; (void)buf; (void)n; return -1;
-}
-void nurl_proc_spawn_close_stdin(long long h) { (void)h; }
-const char* nurl_proc_spawn_read_line(long long h, long long t) { (void)h; (void)t; return ""; }
-long long nurl_proc_spawn_wait(long long h) { (void)h; return -1; }
-long long nurl_proc_spawn_kill(long long h, long long sig) { (void)h; (void)sig; return -1; }
-
 #endif  /* §16b backend selection */
+#endif  /* !NURL_RUNTIME_ZIG_FS_ENV */
 
-/* Platform-agnostic accessors. */
-
-long long nurl_proc_spawn_err_kind(long long h) {
-    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
-    return c ? c->err_kind : NURL_PROC_ERR_OTHER;
-}
-
-long long nurl_proc_spawn_pid(long long h) {
-    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
-    return c ? c->pid_or_0 : 0;
-}
-
-long long nurl_proc_spawn_read_line_len(long long h) {
-    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
-    return c ? (long long)c->line_len : 0;
-}
-
-long long nurl_proc_spawn_eof(long long h) {
-    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
-    return c ? (long long)c->eof : 1;
-}
-
-long long nurl_proc_spawn_last_io_err(long long h) {
-    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
-    return c ? c->last_io_err : 0;
-}
-
-void nurl_proc_spawn_free(long long h) {
-    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
-    if (!c) return;
-#if !defined(_WIN32) && !defined(__wasi__)
-    if (c->fd_in  >= 0) close(c->fd_in);
-    if (c->fd_out >= 0) close(c->fd_out);
-    if (c->pid > 0 && !c->waited) {
-        /* Best-effort reap so we don't accumulate zombies. SIGTERM
-         * first then a non-blocking waitpid; if still alive, SIGKILL
-         * and a blocking wait. */
-        kill(c->pid, SIGTERM);
-        int status = 0;
-        for (int i = 0; i < 50; i++) {
-            pid_t w = waitpid(c->pid, &status, WNOHANG);
-            if (w == c->pid) { c->waited = 1; break; }
-            if (w < 0) break;
-            struct timespec ts = {0, 10 * 1000 * 1000}; /* 10ms */
-            nanosleep(&ts, NULL);
-        }
-        if (!c->waited) {
-            kill(c->pid, SIGKILL);
-            waitpid(c->pid, &status, 0);
-        }
-    }
-#elif defined(_WIN32) && !defined(__wasi__)
-    if (c->h_in)   CloseHandle(c->h_in);
-    if (c->h_out)  CloseHandle(c->h_out);
-    if (c->h_proc) CloseHandle(c->h_proc);
-#endif
-    free(c->scratch);
-    free(c->line_buf);
-    free(c);
-}
-#endif
+/* proc_spawn stubs/accessors/free now live in stdlib/runtime_process.zig. */
 
 /* ── §17  Crypto (SHA-256, HMAC-SHA-256, secure random) ───────── */
 /*

@@ -25,22 +25,55 @@ const NurlProcBuf = struct {
     cap: usize = 0,
 };
 
-const NurlProcChild = extern struct {
-    err_kind: c_longlong,
-    last_io_err: c_longlong,
-    exit_code: c_longlong,
-    eof: c_int,
-    waited: c_int,
-    pid_or_0: c_longlong,
-    pid: c.pid_t,
-    fd_in: c.fd_t,
-    fd_out: c.fd_t,
-    scratch: ?[*]u8,
-    scratch_len: usize,
-    scratch_cap: usize,
-    line_buf: ?[*]u8,
-    line_len: usize,
-    line_cap: usize,
+const NurlProcChild = switch (builtin.os.tag) {
+    .windows => extern struct {
+        err_kind: c_longlong,
+        last_io_err: c_longlong,
+        exit_code: c_longlong,
+        eof: c_int,
+        waited: c_int,
+        pid_or_0: c_longlong,
+        h_proc: ?*anyopaque,
+        h_in: ?*anyopaque,
+        h_out: ?*anyopaque,
+        scratch: ?[*]u8,
+        scratch_len: usize,
+        scratch_cap: usize,
+        line_buf: ?[*]u8,
+        line_len: usize,
+        line_cap: usize,
+    },
+    .wasi => extern struct {
+        err_kind: c_longlong,
+        last_io_err: c_longlong,
+        exit_code: c_longlong,
+        eof: c_int,
+        waited: c_int,
+        pid_or_0: c_longlong,
+        scratch: ?[*]u8,
+        scratch_len: usize,
+        scratch_cap: usize,
+        line_buf: ?[*]u8,
+        line_len: usize,
+        line_cap: usize,
+    },
+    else => extern struct {
+        err_kind: c_longlong,
+        last_io_err: c_longlong,
+        exit_code: c_longlong,
+        eof: c_int,
+        waited: c_int,
+        pid_or_0: c_longlong,
+        pid: c.pid_t,
+        fd_in: c.fd_t,
+        fd_out: c.fd_t,
+        scratch: ?[*]u8,
+        scratch_len: usize,
+        scratch_cap: usize,
+        line_buf: ?[*]u8,
+        line_len: usize,
+        line_cap: usize,
+    },
 };
 
 const nurl_proc_err_ok: c_longlong = 0;
@@ -130,25 +163,33 @@ fn allocProcChild() ?*NurlProcChild {
     return @ptrCast(@alignCast(raw));
 }
 
+fn initProcChild(child: *NurlProcChild, err_kind: c_longlong) void {
+    child.err_kind = err_kind;
+    child.last_io_err = 0;
+    child.exit_code = -1;
+    child.eof = 0;
+    child.waited = 0;
+    child.pid_or_0 = 0;
+    if (comptime builtin.os.tag == .windows) {
+        child.h_proc = null;
+        child.h_in = null;
+        child.h_out = null;
+    } else if (comptime builtin.os.tag != .wasi) {
+        child.pid = 0;
+        child.fd_in = -1;
+        child.fd_out = -1;
+    }
+    child.scratch = null;
+    child.scratch_len = 0;
+    child.scratch_cap = 0;
+    child.line_buf = null;
+    child.line_len = 0;
+    child.line_cap = 0;
+}
+
 fn procChildEmpty(err_kind: c_longlong) c_longlong {
     const child = allocProcChild() orelse return 0;
-    child.* = .{
-        .err_kind = err_kind,
-        .last_io_err = 0,
-        .exit_code = -1,
-        .eof = 0,
-        .waited = 0,
-        .pid_or_0 = 0,
-        .pid = 0,
-        .fd_in = -1,
-        .fd_out = -1,
-        .scratch = null,
-        .scratch_len = 0,
-        .scratch_cap = 0,
-        .line_buf = null,
-        .line_len = 0,
-        .line_cap = 0,
-    };
+    initProcChild(child, err_kind);
     return @intCast(@intFromPtr(child));
 }
 
@@ -512,23 +553,7 @@ fn nurl_proc_spawn_impl(
     }
 
     const child = allocProcChild() orelse return 0;
-    child.* = .{
-        .err_kind = nurl_proc_err_ok,
-        .last_io_err = 0,
-        .exit_code = -1,
-        .eof = 0,
-        .waited = 0,
-        .pid_or_0 = 0,
-        .pid = 0,
-        .fd_in = -1,
-        .fd_out = -1,
-        .scratch = null,
-        .scratch_len = 0,
-        .scratch_cap = 0,
-        .line_buf = null,
-        .line_len = 0,
-        .line_cap = 0,
-    };
+    initProcChild(child, nurl_proc_err_ok);
 
     const cmd_ptr = cmd orelse {
         child.err_kind = nurl_proc_err_notfound;
@@ -841,28 +866,82 @@ fn nurl_proc_spawn_last_io_err_impl(handle: c_longlong) callconv(.c) c_longlong 
     return if (child) |value| value.last_io_err else 0;
 }
 
+fn nurl_proc_run_stub_impl(
+    cmd: ?[*:0]const u8,
+    argv_buf: ?[*:0]const u8,
+    argc: c_longlong,
+    stdin_blob: ?[*:0]const u8,
+) callconv(.c) c_longlong {
+    _ = cmd;
+    _ = argv_buf;
+    _ = argc;
+    _ = stdin_blob;
+    return procEmptyResult(nurl_proc_err_other);
+}
+
+fn nurl_proc_spawn_stub_impl(
+    cmd: ?[*:0]const u8,
+    argv_buf: ?[*:0]const u8,
+    argc: c_longlong,
+) callconv(.c) c_longlong {
+    _ = cmd;
+    _ = argv_buf;
+    _ = argc;
+    return procChildEmpty(nurl_proc_err_other);
+}
+
+fn nurl_proc_spawn_write_stub_impl(handle: c_longlong, buf: ?[*:0]const u8, n: c_longlong) callconv(.c) c_longlong {
+    _ = handle;
+    _ = buf;
+    _ = n;
+    return -1;
+}
+
+fn nurl_proc_spawn_close_stdin_stub_impl(handle: c_longlong) callconv(.c) void {
+    _ = handle;
+}
+
+fn nurl_proc_spawn_read_line_stub_impl(handle: c_longlong, timeout_ms: c_longlong) callconv(.c) ?[*:0]const u8 {
+    _ = handle;
+    _ = timeout_ms;
+    return "";
+}
+
+fn nurl_proc_spawn_wait_stub_impl(handle: c_longlong) callconv(.c) c_longlong {
+    _ = handle;
+    return -1;
+}
+
+fn nurl_proc_spawn_kill_stub_impl(handle: c_longlong, sig: c_longlong) callconv(.c) c_longlong {
+    _ = handle;
+    _ = sig;
+    return -1;
+}
+
 fn nurl_proc_spawn_free_impl(handle: c_longlong) callconv(.c) void {
     const child = procChildHandle(handle) orelse return;
-    if (child.fd_in >= 0) _ = posix.close(child.fd_in);
-    if (child.fd_out >= 0) _ = posix.close(child.fd_out);
+    if (comptime builtin.os.tag != .windows and builtin.os.tag != .wasi) {
+        if (child.fd_in >= 0) _ = posix.close(child.fd_in);
+        if (child.fd_out >= 0) _ = posix.close(child.fd_out);
 
-    if (child.pid_or_0 > 0 and child.waited == 0) {
-        _ = c.kill(child.pid, c.SIG.TERM);
-        var status: c_int = 0;
-        var i: usize = 0;
-        while (i < 50) : (i += 1) {
-            const waited_pid = c.waitpid(child.pid, &status, c.W.NOHANG);
-            if (waited_pid == child.pid) {
-                child.waited = 1;
-                break;
+        if (child.pid_or_0 > 0 and child.waited == 0) {
+            _ = c.kill(child.pid, c.SIG.TERM);
+            var status: c_int = 0;
+            var i: usize = 0;
+            while (i < 50) : (i += 1) {
+                const waited_pid = c.waitpid(child.pid, &status, c.W.NOHANG);
+                if (waited_pid == child.pid) {
+                    child.waited = 1;
+                    break;
+                }
+                if (waited_pid < 0) break;
+                var ts = c.timespec{ .sec = 0, .nsec = 10 * 1000 * 1000 };
+                while (c.nanosleep(&ts, &ts) != 0 and c._errno().* == @intFromEnum(c.E.INTR)) {}
             }
-            if (waited_pid < 0) break;
-            var ts = c.timespec{ .sec = 0, .nsec = 10 * 1000 * 1000 };
-            while (c.nanosleep(&ts, &ts) != 0 and c._errno().* == @intFromEnum(c.E.INTR)) {}
-        }
-        if (child.waited == 0) {
-            _ = c.kill(child.pid, c.SIG.KILL);
-            _ = c.waitpid(child.pid, &status, 0);
+            if (child.waited == 0) {
+                _ = c.kill(child.pid, c.SIG.KILL);
+                _ = c.waitpid(child.pid, &status, 0);
+            }
         }
     }
 
@@ -872,27 +951,42 @@ fn nurl_proc_spawn_free_impl(handle: c_longlong) callconv(.c) void {
 }
 
 comptime {
-    if (builtin.os.tag != .windows and builtin.os.tag != .wasi) {
-        @export(&nurl_proc_run_impl, .{ .name = "nurl_proc_run" });
-        @export(&nurl_proc_exit_code_impl, .{ .name = "nurl_proc_exit_code" });
-        @export(&nurl_proc_err_kind_impl, .{ .name = "nurl_proc_err_kind" });
-        @export(&nurl_proc_stdout_impl, .{ .name = "nurl_proc_stdout" });
-        @export(&nurl_proc_stderr_impl, .{ .name = "nurl_proc_stderr" });
-        @export(&nurl_proc_stdout_len_impl, .{ .name = "nurl_proc_stdout_len" });
-        @export(&nurl_proc_stderr_len_impl, .{ .name = "nurl_proc_stderr_len" });
-        @export(&nurl_proc_free_impl, .{ .name = "nurl_proc_free" });
+    @export(&nurl_proc_exit_code_impl, .{ .name = "nurl_proc_exit_code" });
+    @export(&nurl_proc_err_kind_impl, .{ .name = "nurl_proc_err_kind" });
+    @export(&nurl_proc_stdout_impl, .{ .name = "nurl_proc_stdout" });
+    @export(&nurl_proc_stderr_impl, .{ .name = "nurl_proc_stderr" });
+    @export(&nurl_proc_stdout_len_impl, .{ .name = "nurl_proc_stdout_len" });
+    @export(&nurl_proc_stderr_len_impl, .{ .name = "nurl_proc_stderr_len" });
+    @export(&nurl_proc_free_impl, .{ .name = "nurl_proc_free" });
+    @export(&nurl_proc_spawn_err_kind_impl, .{ .name = "nurl_proc_spawn_err_kind" });
+    @export(&nurl_proc_spawn_pid_impl, .{ .name = "nurl_proc_spawn_pid" });
+    @export(&nurl_proc_spawn_read_line_len_impl, .{ .name = "nurl_proc_spawn_read_line_len" });
+    @export(&nurl_proc_spawn_eof_impl, .{ .name = "nurl_proc_spawn_eof" });
+    @export(&nurl_proc_spawn_last_io_err_impl, .{ .name = "nurl_proc_spawn_last_io_err" });
+    @export(&nurl_proc_spawn_free_impl, .{ .name = "nurl_proc_spawn_free" });
 
+    if (builtin.os.tag == .windows) {
+        @export(&nurl_proc_spawn_stub_impl, .{ .name = "nurl_proc_spawn" });
+        @export(&nurl_proc_spawn_write_stub_impl, .{ .name = "nurl_proc_spawn_write" });
+        @export(&nurl_proc_spawn_close_stdin_stub_impl, .{ .name = "nurl_proc_spawn_close_stdin" });
+        @export(&nurl_proc_spawn_read_line_stub_impl, .{ .name = "nurl_proc_spawn_read_line" });
+        @export(&nurl_proc_spawn_wait_stub_impl, .{ .name = "nurl_proc_spawn_wait" });
+        @export(&nurl_proc_spawn_kill_stub_impl, .{ .name = "nurl_proc_spawn_kill" });
+    } else if (builtin.os.tag == .wasi) {
+        @export(&nurl_proc_run_stub_impl, .{ .name = "nurl_proc_run" });
+        @export(&nurl_proc_spawn_stub_impl, .{ .name = "nurl_proc_spawn" });
+        @export(&nurl_proc_spawn_write_stub_impl, .{ .name = "nurl_proc_spawn_write" });
+        @export(&nurl_proc_spawn_close_stdin_stub_impl, .{ .name = "nurl_proc_spawn_close_stdin" });
+        @export(&nurl_proc_spawn_read_line_stub_impl, .{ .name = "nurl_proc_spawn_read_line" });
+        @export(&nurl_proc_spawn_wait_stub_impl, .{ .name = "nurl_proc_spawn_wait" });
+        @export(&nurl_proc_spawn_kill_stub_impl, .{ .name = "nurl_proc_spawn_kill" });
+    } else {
+        @export(&nurl_proc_run_impl, .{ .name = "nurl_proc_run" });
         @export(&nurl_proc_spawn_impl, .{ .name = "nurl_proc_spawn" });
         @export(&nurl_proc_spawn_write_impl, .{ .name = "nurl_proc_spawn_write" });
         @export(&nurl_proc_spawn_close_stdin_impl, .{ .name = "nurl_proc_spawn_close_stdin" });
         @export(&nurl_proc_spawn_read_line_impl, .{ .name = "nurl_proc_spawn_read_line" });
         @export(&nurl_proc_spawn_wait_impl, .{ .name = "nurl_proc_spawn_wait" });
         @export(&nurl_proc_spawn_kill_impl, .{ .name = "nurl_proc_spawn_kill" });
-        @export(&nurl_proc_spawn_err_kind_impl, .{ .name = "nurl_proc_spawn_err_kind" });
-        @export(&nurl_proc_spawn_pid_impl, .{ .name = "nurl_proc_spawn_pid" });
-        @export(&nurl_proc_spawn_read_line_len_impl, .{ .name = "nurl_proc_spawn_read_line_len" });
-        @export(&nurl_proc_spawn_eof_impl, .{ .name = "nurl_proc_spawn_eof" });
-        @export(&nurl_proc_spawn_last_io_err_impl, .{ .name = "nurl_proc_spawn_last_io_err" });
-        @export(&nurl_proc_spawn_free_impl, .{ .name = "nurl_proc_spawn_free" });
     }
 }
