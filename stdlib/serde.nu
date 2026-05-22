@@ -19,12 +19,18 @@
 //    impl would collide on `Json`. The helper-function convention
 //    sidesteps that.
 //
-//  * Only the JSON side ships today. TOML / MsgPack hooks land
-//    alongside their respective decoder rewrites (`stdlib/ext/toml.nu`
-//    already has a parser; `stdlib/ext/msgpack.nu` is not in tree).
-//    When they land, mirror this file's shape: `% TomlSerialize [T]
-//    { @ to_toml T x → TomlValue }`, `from_toml_<T> TomlValue v
-//    → !T TomlErr`, and so on.
+//  * JSON and TOML sides ship. `% JsonSerialize` / `to_json` /
+//    `from_json_<T>` cover JSON; `% TomlSerialize` / `to_toml` /
+//    `from_toml_<T>` cover TOML, pairing with `stdlib/ext/toml.nu`'s
+//    parser (`toml_parse`) and serializer (`toml_stringify`). The
+//    `from_<fmt>_<T>` helpers all return `!T ParseErr` — one error
+//    type across formats, `BadFormat` for a variant mismatch. A
+//    MsgPack codec exists (`stdlib/ext/msgpack.nu`); its serde hook
+//    (`% MsgpackSerialize`) is the remaining piece.
+//
+//    TomlValue has no float variant (toml.nu's parser excludes
+//    floats), so TomlSerialize covers `i` / `b` / `s` / `String` —
+//    there is no `to_toml f` or `from_toml_f`.
 //
 //  Usage shape:
 //
@@ -49,6 +55,7 @@
 //      // `s` now holds the canonical JSON encoding of `p`.
 
 $ `stdlib/ext/json.nu`
+$ `stdlib/ext/toml.nu`
 
 // ── Serialize trait — convert T → Json ─────────────────────────────
 //
@@ -135,5 +142,62 @@ $ `stdlib/ext/json.nu`
     ^ ?? j {
         JStr s → @ !s ParseErr { T ( string_data s ) }
         _ → @ !s ParseErr { F @ ParseErr { BadFormat } }
+    }
+}
+
+// ── Serialize trait — convert T → TomlValue ────────────────────────
+//
+// Mirrors JsonSerialize. A user type ships `% TomlSerialize Foo {
+// @ to_toml Foo x → TomlValue { ... } }`, building a TTable with
+// `@ TomlEntry { key value }` rows. Pair `to_toml` with
+// `toml_stringify` to reach TOML text. There is no `f` impl —
+// TomlValue (toml.nu's parser AST) has no float variant.
+
+% TomlSerialize [T] {
+    @ to_toml T x → TomlValue
+}
+
+% TomlSerialize i {
+    @ to_toml i n → TomlValue { ^ @ TomlValue { TInt n } }
+}
+
+% TomlSerialize b {
+    @ to_toml b v → TomlValue { ^ @ TomlValue { TBool v } }
+}
+
+% TomlSerialize s {
+    @ to_toml s p → TomlValue { ^ @ TomlValue { TStr ( string_from p ) } }
+}
+
+% TomlSerialize String {
+    @ to_toml String s → TomlValue { ^ @ TomlValue { TStr ( string_from ( string_data s ) ) } }
+}
+
+// ── Deserialize helpers — per-type `from_toml_<T>` ─────────────────
+//
+// Each returns `!T ParseErr`, `BadFormat` when the TomlValue variant
+// is not the expected one — same shape and error type as the JSON
+// helpers above.
+
+@ from_toml_i TomlValue v → !i ParseErr {
+    ^ ?? v {
+        TInt n → @ !i ParseErr { T n }
+        _ → @ !i ParseErr { F @ ParseErr { BadFormat } }
+    }
+}
+
+@ from_toml_b TomlValue v → !b ParseErr {
+    ^ ?? v {
+        TBool x → @ !b ParseErr { T x }
+        _ → @ !b ParseErr { F @ ParseErr { BadFormat } }
+    }
+}
+
+// Returns a fresh owned `String` copied from the TStr payload; the
+// source TomlValue is left intact. Caller frees the result.
+@ from_toml_string TomlValue v → !String ParseErr {
+    ^ ?? v {
+        TStr s → @ !String ParseErr { T ( string_from ( string_data s ) ) }
+        _ → @ !String ParseErr { F @ ParseErr { BadFormat } }
     }
 }

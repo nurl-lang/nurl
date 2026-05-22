@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **TOML serde.** `stdlib/serde.nu` gained its TOML side: a
+  `% TomlSerialize [T] { @ to_toml T x → TomlValue }` trait with impls
+  for `i` / `b` / `s` / `String`, and `from_toml_i` / `from_toml_b` /
+  `from_toml_string` decoders returning `!T ParseErr` — the same shape
+  and error type as the JSON helpers. There is no `f` impl: the
+  `TomlValue` AST has no float variant. `stdlib/ext/toml.nu` gained
+  `toml_stringify`, the inverse of `toml_parse`: a `TomlValue` is
+  rendered as TOML text — top-level `key = value` lines, nested tables
+  and arrays inline, strings escaped with the `\\ \" \n \r \t` set the
+  parser accepts, so `toml_parse ∘ toml_stringify` round-trips.
+  Regression `compiler/tests/toml_serde.nu`; verified leak-free under
+  ASan/UBSan/LSan.
+
 * **MessagePack codec.** `stdlib/ext/msgpack.nu` is a faithful binary
   codec between the `Json` value and the MessagePack wire format:
   `msgpack_encode Json → ! ( Vec u ) MsgpackErr` and `msgpack_decode

@@ -739,3 +739,119 @@ $ `stdlib/core/option.nu`
     }
     ^ @ ? b { F F }
 }
+
+// ── Serialization (TomlValue → TOML text) ────────────────────────
+//
+// The inverse of toml_parse. A top-level TTable is emitted as bare
+// `key = value` lines; every nested table is an inline table `{ … }`
+// and every array an inline array `[ … ]`, so the output is valid
+// TOML at any nesting depth without `[section]`-header bookkeeping.
+// String values and non-bare keys are quoted basic strings with the
+// same `\\ \" \n \r \t` escapes toml_parse accepts — so
+// toml_parse ∘ toml_stringify round-trips. Returns an owned String.
+
+@ toml_stringify TomlValue v → String {
+    : String out ( string_new )
+    ?? v {
+        TTable entries → {
+            : i n ( vec_len [TomlEntry] entries )
+            : ~ i k 0
+            ~ < k n {
+                ?? ( vec_get [TomlEntry] entries k ) {
+                    T e → {
+                        ( __toml_emit_key out ( string_data . e key ) )
+                        ( string_push_str out ` = ` )
+                        ( __toml_emit_value out . e value )
+                        ( string_push_char out 10 )
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+        }
+        _ → ( __toml_emit_value out v )
+    }
+    ^ out
+}
+
+// Emit one value in its inline form.
+@ __toml_emit_value String out TomlValue v → v {
+    ?? v {
+        TStr s → ( __toml_emit_str out ( string_data s ) )
+        TInt n → ( string_push_int out n )
+        TBool x → {
+            ? x { ( string_push_str out `true` ) } { ( string_push_str out `false` ) }
+        }
+        TArr arr → {
+            ( string_push_char out 91 )
+            : i n ( vec_len [TomlValue] arr )
+            : ~ i k 0
+            ~ < k n {
+                ? > k 0 { ( string_push_str out `, ` ) } {}
+                ?? ( vec_get [TomlValue] arr k ) {
+                    T ev → ( __toml_emit_value out ev )
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( string_push_char out 93 )
+        }
+        TTable entries → {
+            ( string_push_str out `{ ` )
+            : i n ( vec_len [TomlEntry] entries )
+            : ~ i k 0
+            ~ < k n {
+                ? > k 0 { ( string_push_str out `, ` ) } {}
+                ?? ( vec_get [TomlEntry] entries k ) {
+                    T e → {
+                        ( __toml_emit_key out ( string_data . e key ) )
+                        ( string_push_str out ` = ` )
+                        ( __toml_emit_value out . e value )
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( string_push_str out ` }` )
+        }
+    }
+}
+
+// Emit a quoted TOML basic string. Bytes are pushed directly to avoid
+// any ambiguity over escape handling in NURL string literals.
+@ __toml_emit_str String out s text → v {
+    ( string_push_char out 34 )
+    : i n ( nurl_str_len text )
+    : *u p # *u text
+    : ~ i k 0
+    ~ < k n {
+        : i c & 255 # i . p k
+        ? == c 34 { ( string_push_char out 92 ) ( string_push_char out 34 ) } {
+            ? == c 92 { ( string_push_char out 92 ) ( string_push_char out 92 ) } {
+                ? == c 10 { ( string_push_char out 92 ) ( string_push_char out 110 ) } {
+                    ? == c 13 { ( string_push_char out 92 ) ( string_push_char out 114 ) } {
+                        ? == c 9 { ( string_push_char out 92 ) ( string_push_char out 116 ) } {
+                            ( string_push_char out c )
+                        }
+                    }
+                }
+            }
+        }
+        = k + k 1
+    }
+    ( string_push_char out 34 )
+}
+
+// A non-empty key of only bare-key characters is emitted as-is; any
+// other key (empty, spaces, dots) becomes a quoted key.
+@ __toml_emit_key String out s key → v {
+    : i n ( nurl_str_len key )
+    : ~ b bare ? > n 0 { T } { F }
+    : *u p # *u key
+    : ~ i k 0
+    ~ & < k n bare {
+        ? ( __t_is_bare & 255 # i . p k ) {} { = bare F }
+        = k + k 1
+    }
+    ? bare { ( string_push_str out key ) } { ( __toml_emit_str out key ) }
+}
