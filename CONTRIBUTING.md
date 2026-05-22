@@ -103,15 +103,13 @@ The full bootstrap chain:
 git clone https://github.com/nurl-lang/nurl
 cd nurl
 
-# One-time: build the C runtime
-clang -c stdlib/runtime.c -o stdlib/runtime.o
-
-# Bootstrap the self-hosted compiler (Python → NURL → NURL fixed point)
-./build.sh
+# Bootstrap the self-hosted compiler (Python -> NURL -> NURL fixed point)
+zig build bootstrap
 ```
 
-Requirements: Python 3.8+, clang/LLVM 14+. Windows users have
-`build.bat`; macOS works with Homebrew LLVM (`brew install llvm`).
+Requirements: Python 3.8+, clang/LLVM 14+, Zig 0.16. The runtime is now
+built through `nurl-build runtime-obj`, which combines `stdlib/runtime.c`
+with the Zig runtime slices under `stdlib/`.
 
 Compile and run a single program:
 
