@@ -7143,6 +7143,7 @@ int nurl_gzip_decompress(unsigned char *dst, long long *dst_len,
  * the global cap still applies.
  */
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 typedef struct NurlDosIpEntry {
     char     *ip;        /* owned strdup */
     long long count;
@@ -7315,3 +7316,4 @@ long long nurl_dos_state_active(long long state) {
     nurl__dos_unlock(s);
     return c;
 }
+#endif

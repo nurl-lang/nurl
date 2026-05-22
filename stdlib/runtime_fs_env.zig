@@ -389,6 +389,21 @@ const NurlCond = struct {
     cond: std.Io.Condition = .init,
 };
 
+const NurlDosIpEntry = struct {
+    ip: [*:0]u8,
+    count: c_longlong,
+};
+
+const NurlDosState = struct {
+    max_concurrent: c_longlong,
+    max_per_ip: c_longlong,
+    active_count: c_longlong,
+    ip_entries: ?[*]NurlDosIpEntry,
+    ip_count: usize,
+    ip_cap: usize,
+    mutex: std.Io.Mutex = .init,
+};
+
 const max_cgs = 8;
 
 const NurlCG = struct {
@@ -784,8 +799,32 @@ fn handleToCond(handle: c_longlong) ?*NurlCond {
     return @ptrFromInt(@as(usize, @intCast(handle)));
 }
 
+fn handleToDosState(handle: c_longlong) ?*NurlDosState {
+    if (handle == 0) return null;
+    return @ptrFromInt(@as(usize, @intCast(handle)));
+}
+
 fn nurlThreadTrampoline(thread: *NurlThread) void {
     thread.fn_ptr(thread.env);
+}
+
+fn dosLock(state: *NurlDosState) void {
+    if (builtin.os.tag == .wasi) return;
+    state.mutex.lockUncancelable(nurlIo());
+}
+
+fn dosUnlock(state: *NurlDosState) void {
+    if (builtin.os.tag == .wasi) return;
+    state.mutex.unlock(nurlIo());
+}
+
+fn dosFindIp(state: *NurlDosState, ip: []const u8) ?usize {
+    const entries = state.ip_entries orelse return null;
+    var i: usize = 0;
+    while (i < state.ip_count) : (i += 1) {
+        if (std.mem.eql(u8, std.mem.span(entries[i].ip), ip)) return i;
+    }
+    return null;
 }
 
 fn csvCellPtr(content: [*]const u8, escape_buf: ?[*]const u8, off: c_longlong) ?[*]const u8 {
@@ -2977,4 +3016,100 @@ pub export fn nurl_cond_free(handle: c_longlong) void {
     if (builtin.os.tag == .wasi) return;
     const cond = handleToCond(handle) orelse return;
     c.free(cond);
+}
+
+pub export fn nurl_dos_state_new(max_concurrent: c_longlong, max_per_ip: c_longlong) c_longlong {
+    const raw = c.calloc(1, @sizeOf(NurlDosState)) orelse return 0;
+    const state: *NurlDosState = @ptrCast(@alignCast(raw));
+    state.* = .{
+        .max_concurrent = max_concurrent,
+        .max_per_ip = max_per_ip,
+        .active_count = 0,
+        .ip_entries = null,
+        .ip_count = 0,
+        .ip_cap = 0,
+        .mutex = .init,
+    };
+    return @intCast(@intFromPtr(state));
+}
+
+pub export fn nurl_dos_state_try_acquire(handle: c_longlong, ip_ptr: ?[*:0]const u8) c_longlong {
+    const state = handleToDosState(handle) orelse return 1;
+    dosLock(state);
+    defer dosUnlock(state);
+
+    if (state.max_concurrent > 0 and state.active_count >= state.max_concurrent) return 0;
+
+    const ip = std.mem.span(ip_ptr orelse "");
+    if (state.max_per_ip > 0 and ip.len > 0) {
+        if (dosFindIp(state, ip)) |idx| {
+            const entries = state.ip_entries.?;
+            if (entries[idx].count >= state.max_per_ip) return 0;
+            entries[idx].count += 1;
+        } else if (state.ip_count < 256) {
+            if (state.ip_count == state.ip_cap) {
+                var new_cap = if (state.ip_cap == 0) @as(usize, 16) else state.ip_cap * 2;
+                if (new_cap > 256) new_cap = 256;
+                if (new_cap > state.ip_cap) {
+                    const grown = c.realloc(state.ip_entries, new_cap * @sizeOf(NurlDosIpEntry));
+                    if (grown != null) {
+                        state.ip_entries = @ptrCast(@alignCast(grown));
+                        state.ip_cap = new_cap;
+                    }
+                }
+            }
+            if (state.ip_count < state.ip_cap) {
+                const copy = dupSliceZ(ip) orelse {
+                    state.active_count += 1;
+                    return 1;
+                };
+                const entries = state.ip_entries.?;
+                entries[state.ip_count] = .{
+                    .ip = copy,
+                    .count = 1,
+                };
+                state.ip_count += 1;
+            }
+        }
+    }
+
+    state.active_count += 1;
+    return 1;
+}
+
+pub export fn nurl_dos_state_release(handle: c_longlong, ip_ptr: ?[*:0]const u8) void {
+    const state = handleToDosState(handle) orelse return;
+    dosLock(state);
+    defer dosUnlock(state);
+
+    if (state.active_count > 0) state.active_count -= 1;
+
+    const ip = std.mem.span(ip_ptr orelse "");
+    if (ip.len == 0) return;
+    const idx = dosFindIp(state, ip) orelse return;
+    const entries = state.ip_entries.?;
+    if (entries[idx].count > 0) entries[idx].count -= 1;
+    if (entries[idx].count != 0) return;
+
+    c.free(entries[idx].ip);
+    const last = state.ip_count - 1;
+    if (idx != last) entries[idx] = entries[last];
+    state.ip_count -= 1;
+}
+
+pub export fn nurl_dos_state_free(handle: c_longlong) void {
+    const state = handleToDosState(handle) orelse return;
+    if (state.ip_entries) |entries| {
+        var i: usize = 0;
+        while (i < state.ip_count) : (i += 1) c.free(entries[i].ip);
+        c.free(entries);
+    }
+    c.free(state);
+}
+
+pub export fn nurl_dos_state_active(handle: c_longlong) c_longlong {
+    const state = handleToDosState(handle) orelse return 0;
+    dosLock(state);
+    defer dosUnlock(state);
+    return state.active_count;
 }
