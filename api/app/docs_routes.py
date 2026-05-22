@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -31,6 +32,34 @@ NURL_NOTICE_PATH = os.environ.get("NURL_NOTICE_PATH", "/opt/nurl/NOTICE")
 NURL_PUBLIC_URL = os.environ.get("NURL_PUBLIC_URL", "").rstrip("/")
 
 
+@dataclass(frozen=True)
+class MarkdownDocSpec:
+    page_path: str
+    raw_path: str
+    title: str
+    source_path: str
+    label: str
+    page_summary: str
+    raw_summary: str
+    extensions: list[str]
+    extension_configs: dict | None = None
+
+
+@dataclass(frozen=True)
+class InlineMarkdownDocSpec:
+    page_path: str
+    raw_path: str
+    title: str
+    source_path: str
+    label: str
+    page_summary: str
+    raw_summary: str
+    heading_md: str
+    code_lang: str = ""
+    extensions: list[str] | None = None
+    extension_configs: dict | None = None
+
+
 class McpInfoResponse(BaseModel):
     url_path: str = Field(..., examples=["/mcp"])
     transport: str = Field(..., examples=["streamable-http"])
@@ -43,6 +72,144 @@ class McpInfoResponse(BaseModel):
             "Drop-in snippet for mcp.json (Claude Desktop, Cursor, Windsurf, Zed). "
             "Replace the host/port to match your deployment."
         ),
+    )
+
+
+_MARKDOWN_DOC_SPECS: tuple[MarkdownDocSpec, ...] = (
+    MarkdownDocSpec(
+        page_path="/readme",
+        raw_path="/readme.md",
+        title="README",
+        source_path=NURL_README_PATH,
+        label="README.md",
+        page_summary="Render README.md as HTML",
+        raw_summary="Raw README.md source",
+        extensions=["fenced_code", "tables", "codehilite", "toc", "sane_lists"],
+        extension_configs={"codehilite": {"guess_lang": False, "css_class": "codehilite"}},
+    ),
+    MarkdownDocSpec(
+        page_path="/roadmap",
+        raw_path="/roadmap.md",
+        title="Roadmap",
+        source_path=NURL_ROADMAP_PATH,
+        label="ROADMAP.md",
+        page_summary="Render ROADMAP.md as HTML",
+        raw_summary="Raw ROADMAP.md source",
+        extensions=["fenced_code", "tables", "codehilite", "toc", "sane_lists"],
+        extension_configs={"codehilite": {"guess_lang": False, "css_class": "codehilite"}},
+    ),
+    MarkdownDocSpec(
+        page_path="/gotchas",
+        raw_path="/gotchas.md",
+        title="Gotchas",
+        source_path=NURL_GOTCHAS_PATH,
+        label="GOTCHAS.md",
+        page_summary="Render docs/GOTCHAS.md as HTML",
+        raw_summary="Raw docs/GOTCHAS.md source",
+        extensions=["fenced_code", "codehilite"],
+        extension_configs={"codehilite": {"guess_lang": False, "css_class": "codehilite"}},
+    ),
+)
+
+_INLINE_MARKDOWN_DOC_SPECS: tuple[InlineMarkdownDocSpec, ...] = (
+    InlineMarkdownDocSpec(
+        page_path="/license/mit",
+        raw_path="/LICENSE-MIT",
+        title="MIT License",
+        source_path=NURL_LICENSE_MIT_PATH,
+        label="LICENSE-MIT",
+        page_summary="Render LICENSE-MIT",
+        raw_summary="Raw LICENSE-MIT text",
+        heading_md="# MIT License",
+        extensions=["fenced_code"],
+    ),
+    InlineMarkdownDocSpec(
+        page_path="/license/apache",
+        raw_path="/LICENSE-APACHE",
+        title="Apache License 2.0",
+        source_path=NURL_LICENSE_APACHE_PATH,
+        label="LICENSE-APACHE",
+        page_summary="Render LICENSE-APACHE (Apache 2.0)",
+        raw_summary="Raw LICENSE-APACHE text",
+        heading_md="# Apache License, Version 2.0",
+        extensions=["fenced_code"],
+    ),
+    InlineMarkdownDocSpec(
+        page_path="/grammar",
+        raw_path="/grammar.ebnf",
+        title="Grammar",
+        source_path=NURL_GRAMMAR_PATH,
+        label="grammar.ebnf",
+        page_summary="Render the current NURL grammar (spec/grammar.ebnf)",
+        raw_summary="Raw grammar.ebnf source",
+        heading_md="# Grammar (`spec/grammar.ebnf`)",
+        code_lang="ebnf",
+        extensions=["fenced_code", "codehilite"],
+        extension_configs={"codehilite": {"guess_lang": False, "css_class": "codehilite"}},
+    ),
+)
+
+
+def _register_markdown_doc(spec: MarkdownDocSpec) -> None:
+    def page_endpoint(spec: MarkdownDocSpec = spec) -> HTMLResponse:
+        return render_markdown_file(
+            title=spec.title,
+            path_str=spec.source_path,
+            label=spec.label,
+            raw_path=spec.raw_path,
+            extensions=spec.extensions,
+            extension_configs=spec.extension_configs,
+        )
+
+    def raw_endpoint(spec: MarkdownDocSpec = spec) -> PlainTextResponse:
+        return raw_text_response(spec.source_path, spec.label)
+
+    router.add_api_route(
+        spec.page_path,
+        page_endpoint,
+        response_class=HTMLResponse,
+        tags=["docs"],
+        summary=spec.page_summary,
+    )
+    router.add_api_route(
+        spec.raw_path,
+        raw_endpoint,
+        response_class=PlainTextResponse,
+        tags=["docs"],
+        summary=spec.raw_summary,
+    )
+
+
+def _register_inline_markdown_doc(spec: InlineMarkdownDocSpec) -> None:
+    def page_endpoint(spec: InlineMarkdownDocSpec = spec) -> HTMLResponse:
+        source = read_text_file(spec.source_path, spec.label).rstrip()
+        md_text = (
+            f"{spec.heading_md}\n\n```{spec.code_lang}\n{source}\n```\n"
+        )
+        return render_markdown_page(
+            title=spec.title,
+            text=md_text,
+            raw_path=spec.raw_path,
+            extensions=spec.extensions or ["fenced_code"],
+            extension_configs=spec.extension_configs,
+        )
+
+    def raw_endpoint(spec: InlineMarkdownDocSpec = spec) -> PlainTextResponse:
+        return raw_text_response(spec.source_path, spec.label)
+
+    router.add_api_route(
+        spec.page_path,
+        page_endpoint,
+        response_class=HTMLResponse,
+        tags=["docs"],
+        summary=spec.page_summary,
+    )
+    router.add_api_route(
+        spec.raw_path,
+        raw_endpoint,
+        response_class=PlainTextResponse,
+        tags=["docs"],
+        summary=spec.raw_summary,
     )
 
 def _render_license_index(notice_text: str) -> HTMLResponse:
@@ -76,126 +243,15 @@ def _render_license_index(notice_text: str) -> HTMLResponse:
 )
 def license_index() -> HTMLResponse:
     try:
-        notice_text = _read_text_file(NURL_NOTICE_PATH, "NOTICE")
+        notice_text = read_text_file(NURL_NOTICE_PATH, "NOTICE")
     except HTTPException:
         notice_text = "NURL — Neural Unified Representation Language\nDual-licensed under MIT OR Apache-2.0.\n"
     return _render_license_index(notice_text)
 
 
-@router.get("/license/mit", response_class=HTMLResponse, tags=["docs"], summary="Render LICENSE-MIT")
-def license_mit_html() -> HTMLResponse:
-    text = read_text_file(NURL_LICENSE_MIT_PATH, "LICENSE-MIT")
-    return render_markdown_page(
-        title="MIT License",
-        text="# MIT License\n\n```\n" + text.rstrip() + "\n```\n",
-        raw_path="/LICENSE-MIT",
-        extensions=["fenced_code"],
-    )
-
-
-@router.get(
-    "/license/apache",
-    response_class=HTMLResponse,
-    tags=["docs"],
-    summary="Render LICENSE-APACHE (Apache 2.0)",
-)
-def license_apache_html() -> HTMLResponse:
-    text = read_text_file(NURL_LICENSE_APACHE_PATH, "LICENSE-APACHE")
-    return render_markdown_page(
-        title="Apache License 2.0",
-        text="# Apache License, Version 2.0\n\n```\n" + text.rstrip() + "\n```\n",
-        raw_path="/LICENSE-APACHE",
-        extensions=["fenced_code"],
-    )
-
-
-@router.get("/LICENSE-MIT", response_class=PlainTextResponse, tags=["docs"], summary="Raw LICENSE-MIT text")
-def license_mit_raw() -> PlainTextResponse:
-    return raw_text_response(NURL_LICENSE_MIT_PATH, "LICENSE-MIT")
-
-
-@router.get("/LICENSE-APACHE", response_class=PlainTextResponse, tags=["docs"], summary="Raw LICENSE-APACHE text")
-def license_apache_raw() -> PlainTextResponse:
-    return raw_text_response(NURL_LICENSE_APACHE_PATH, "LICENSE-APACHE")
-
-
 @router.get("/NOTICE", response_class=PlainTextResponse, tags=["docs"], summary="Raw NOTICE text")
 def notice_raw() -> PlainTextResponse:
     return raw_text_response(NURL_NOTICE_PATH, "NOTICE")
-
-
-@router.get("/readme", response_class=HTMLResponse, tags=["docs"], summary="Render README.md as HTML")
-def readme_html() -> HTMLResponse:
-    return render_markdown_file(
-        title="README",
-        path_str=NURL_README_PATH,
-        label="README.md",
-        raw_path="/readme.md",
-        extensions=["fenced_code", "tables", "codehilite", "toc", "sane_lists"],
-        extension_configs={"codehilite": {"guess_lang": False, "css_class": "codehilite"}},
-    )
-
-
-@router.get("/readme.md", response_class=PlainTextResponse, tags=["docs"], summary="Raw README.md source")
-def readme_raw() -> PlainTextResponse:
-    return raw_text_response(NURL_README_PATH, "README.md")
-
-
-@router.get("/roadmap", response_class=HTMLResponse, tags=["docs"], summary="Render ROADMAP.md as HTML")
-def roadmap_html() -> HTMLResponse:
-    return render_markdown_file(
-        title="Roadmap",
-        path_str=NURL_ROADMAP_PATH,
-        label="ROADMAP.md",
-        raw_path="/roadmap.md",
-        extensions=["fenced_code", "tables", "codehilite", "toc", "sane_lists"],
-        extension_configs={"codehilite": {"guess_lang": False, "css_class": "codehilite"}},
-    )
-
-
-@router.get("/roadmap.md", response_class=PlainTextResponse, tags=["docs"], summary="Raw ROADMAP.md source")
-def roadmap_raw() -> PlainTextResponse:
-    return raw_text_response(NURL_ROADMAP_PATH, "ROADMAP.md")
-
-
-@router.get("/gotchas", response_class=HTMLResponse, tags=["docs"], summary="Render docs/GOTCHAS.md as HTML")
-def gotchas_html() -> HTMLResponse:
-    return render_markdown_file(
-        title="Gotchas",
-        path_str=NURL_GOTCHAS_PATH,
-        label="GOTCHAS.md",
-        raw_path="/gotchas.md",
-        extensions=["fenced_code", "codehilite"],
-        extension_configs={"codehilite": {"guess_lang": False, "css_class": "codehilite"}},
-    )
-
-
-@router.get("/gotchas.md", response_class=PlainTextResponse, tags=["docs"], summary="Raw docs/GOTCHAS.md source")
-def gotchas_raw() -> PlainTextResponse:
-    return raw_text_response(NURL_GOTCHAS_PATH, "GOTCHAS.md")
-
-
-@router.get(
-    "/grammar",
-    response_class=HTMLResponse,
-    tags=["docs"],
-    summary="Render the current NURL grammar (spec/grammar.ebnf)",
-)
-def grammar_html() -> HTMLResponse:
-    text = read_text_file(NURL_GRAMMAR_PATH, "grammar.ebnf")
-    md_text = f"# Grammar (`spec/grammar.ebnf`)\n\n```ebnf\n{text}\n```\n"
-    return render_markdown_page(
-        title="Grammar",
-        text=md_text,
-        raw_path="/grammar.ebnf",
-        extensions=["fenced_code", "codehilite"],
-        extension_configs={"codehilite": {"guess_lang": False, "css_class": "codehilite"}},
-    )
-
-
-@router.get("/grammar.ebnf", response_class=PlainTextResponse, tags=["docs"], summary="Raw grammar.ebnf source")
-def grammar_raw() -> PlainTextResponse:
-    return raw_text_response(NURL_GRAMMAR_PATH, "grammar.ebnf")
 
 
 @router.get(
@@ -227,3 +283,10 @@ def mcp_info(request: Request) -> McpInfoResponse:
             }
         },
     )
+
+
+for _spec in _MARKDOWN_DOC_SPECS:
+    _register_markdown_doc(_spec)
+
+for _spec in _INLINE_MARKDOWN_DOC_SPECS:
+    _register_inline_markdown_doc(_spec)

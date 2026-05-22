@@ -24,8 +24,8 @@ directly from disk.
 
 from pathlib import Path
 
-import httpx
 from mcp.server.fastmcp import FastMCP
+from app.internal_http_client import get_app_client
 from app.mcp_catalog import (
     MCP_INSTRUCTIONS,
     NURL_EXAMPLES_DIR,
@@ -52,35 +52,13 @@ mcp = FastMCP(
     instructions=MCP_INSTRUCTIONS,
 )
 
-
-# ── Internal HTTP client (in-process ASGI, no real socket) ─────────
-#
-# The app is imported lazily inside get_client() to avoid a circular
-# import at module load time: app.main imports this module to mount
-# the MCP sub-app.
-
-_client = None  # type: httpx.AsyncClient | None
-
-
-async def _get_client():
-    global _client
-    if _client is None:
-        from app.main import app as fastapi_app  # local import, breaks cycle
-        _client = httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=fastapi_app),
-            base_url="http://nurl.local",
-            timeout=60.0,
-        )
-    return _client
-
-
 # ── Tools ──────────────────────────────────────────────────────────
 
 @mcp.tool(
     description=TOOL_SPECS["nurl_build_native"].description,
 )
 async def nurl_build_native(source: str, filename: str = "main.nu") -> dict:
-    client = await _get_client()
+    client = await get_app_client()
     r = await client.post("/build", json={"source": source, "filename": filename})
     r.raise_for_status()
     return r.json()
@@ -90,7 +68,7 @@ async def nurl_build_native(source: str, filename: str = "main.nu") -> dict:
     description=TOOL_SPECS["nurl_build_windows"].description,
 )
 async def nurl_build_windows(source: str, filename: str = "main.nu") -> dict:
-    client = await _get_client()
+    client = await get_app_client()
     r = await client.post("/build_windows", json={"source": source, "filename": filename})
     r.raise_for_status()
     return r.json()
@@ -100,7 +78,7 @@ async def nurl_build_windows(source: str, filename: str = "main.nu") -> dict:
     description=TOOL_SPECS["nurl_build_macos"].description,
 )
 async def nurl_build_macos(source: str, filename: str = "main.nu") -> dict:
-    client = await _get_client()
+    client = await get_app_client()
     r = await client.post("/build_macos", json={"source": source, "filename": filename})
     r.raise_for_status()
     return r.json()
@@ -114,7 +92,7 @@ async def nurl_build_wasm(
     filename: str = "main.nu",
     emit_ll: bool = False,
 ) -> dict:
-    client = await _get_client()
+    client = await get_app_client()
     r = await client.post(
         "/build_wasm",
         json={
@@ -132,7 +110,7 @@ async def nurl_build_wasm(
     description=TOOL_SPECS["nurl_list_examples"].description,
 )
 async def nurl_list_examples() -> list:
-    client = await _get_client()
+    client = await get_app_client()
     r = await client.get("/examples")
     r.raise_for_status()
     return r.json()
@@ -142,7 +120,7 @@ async def nurl_list_examples() -> list:
     description=TOOL_SPECS["nurl_read_example"].description,
 )
 async def nurl_read_example(name: str) -> str:
-    client = await _get_client()
+    client = await get_app_client()
     r = await client.get(f"/examples/{name}")
     r.raise_for_status()
     return r.json()["source"]

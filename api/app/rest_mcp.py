@@ -31,9 +31,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-import httpx
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
+from app.internal_http_client import get_app_client
 from app.mcp_catalog import (
     NURL_EXAMPLES_DIR,
     NURL_GOTCHAS_PATH,
@@ -55,27 +55,6 @@ from app.mcp_catalog import (
 
 
 router = APIRouter(prefix="/rmcp", tags=["rest-mcp"])
-
-
-# ── In-process ASGI client (lazy) ──────────────────────────────────
-#
-# Lets tools call into the rest of the FastAPI app without a TCP round
-# trip. Imported lazily to avoid an import cycle: ``app.main`` includes
-# this router, so this module must not import from ``app.main`` at top level.
-
-_client: httpx.AsyncClient | None = None
-
-
-async def _get_client() -> httpx.AsyncClient:
-    global _client
-    if _client is None:
-        from app.main import app as fastapi_app  # local import breaks cycle
-        _client = httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=fastapi_app),
-            base_url="http://nurl.local",
-            timeout=60.0,
-        )
-    return _client
 
 
 # ── Catalog: tools / resources / prompts ──────────────────────────
@@ -110,7 +89,7 @@ def _safe_under(base_dir: str, name: str, *, label: str) -> Path:
 # ── Tool handlers ─────────────────────────────────────────────────
 
 async def _tool_build_native(args: dict[str, Any]) -> dict[str, Any]:
-    client = await _get_client()
+    client = await get_app_client()
     r = await client.post("/build", json={
         "source":   args["source"],
         "filename": args.get("filename", "main.nu"),
@@ -120,7 +99,7 @@ async def _tool_build_native(args: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _tool_build_windows(args: dict[str, Any]) -> dict[str, Any]:
-    client = await _get_client()
+    client = await get_app_client()
     r = await client.post("/build_windows", json={
         "source":   args["source"],
         "filename": args.get("filename", "main.nu"),
@@ -130,7 +109,7 @@ async def _tool_build_windows(args: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _tool_build_macos(args: dict[str, Any]) -> dict[str, Any]:
-    client = await _get_client()
+    client = await get_app_client()
     r = await client.post("/build_macos", json={
         "source":   args["source"],
         "filename": args.get("filename", "main.nu"),
@@ -140,7 +119,7 @@ async def _tool_build_macos(args: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _tool_build_wasm(args: dict[str, Any]) -> dict[str, Any]:
-    client = await _get_client()
+    client = await get_app_client()
     r = await client.post("/build_wasm", json={
         "source":        args["source"],
         "filename":      args.get("filename", "main.nu"),
@@ -152,7 +131,7 @@ async def _tool_build_wasm(args: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _tool_list_examples(_args: dict[str, Any]) -> list[dict[str, Any]]:
-    client = await _get_client()
+    client = await get_app_client()
     r = await client.get("/examples")
     r.raise_for_status()
     return r.json()
