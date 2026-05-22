@@ -285,7 +285,7 @@ $ `stdlib/core/errors.nu`
 //
 // For SSE / chunked responses where the body arrives over time and the
 // caller wants to react to each chunk before the request completes.
-// Backed by libcurl's multi handle in `runtime.c §14b`; WinHTTP and
+// Backed by libcurl's multi handle in `stdlib/runtime_http.zig`; WinHTTP and
 // WASI builds return `HttpOther` on open.
 //
 //   ( http_stream_open_to s method s url s body s headers_blob

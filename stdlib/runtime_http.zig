@@ -3,9 +3,15 @@ const builtin = @import("builtin");
 const runtime_features = @import("runtime_features_generated.zig");
 
 const c = std.c;
+const have_windows_http = builtin.os.tag == .windows;
 const have_libcurl_runtime = runtime_features.have_libcurl and builtin.os.tag != .windows and builtin.os.tag != .wasi;
 const curl = if (have_libcurl_runtime) @cImport({
     @cInclude("curl/curl.h");
+}) else struct {};
+const winhttp = if (have_windows_http) @cImport({
+    @cDefine("WIN32_LEAN_AND_MEAN", "1");
+    @cInclude("windows.h");
+    @cInclude("winhttp.h");
 }) else struct {};
 
 const NurlHttpHeader = extern struct {
@@ -65,23 +71,47 @@ fn dupSliceZ(src: []const u8) ?[*:0]u8 {
     return @ptrCast(buf);
 }
 
+fn httpBufReserve(buf: *NurlHttpBuf, need: usize) bool {
+    if (need <= buf.cap) return true;
+    var new_cap: usize = if (buf.cap != 0) buf.cap else 256;
+    while (new_cap < need) new_cap *= 2;
+    const resized = if (buf.data) |existing|
+        c.realloc(existing, new_cap)
+    else
+        c.malloc(new_cap);
+    if (resized == null) return false;
+    buf.data = @ptrCast(@alignCast(resized));
+    buf.cap = new_cap;
+    return true;
+}
+
 fn httpBufAppend(buf: *NurlHttpBuf, src: [*]const u8, n: usize) bool {
-    if (buf.len + n + 1 > buf.cap) {
-        var new_cap: usize = if (buf.cap != 0) buf.cap else 256;
-        while (new_cap < buf.len + n + 1) new_cap *= 2;
-        const resized = if (buf.data) |existing|
-            c.realloc(existing, new_cap)
-        else
-            c.malloc(new_cap);
-        if (resized == null) return false;
-        buf.data = @ptrCast(@alignCast(resized));
-        buf.cap = new_cap;
-    }
+    if (!httpBufReserve(buf, buf.len + n + 1)) return false;
     const data = buf.data.?;
     @memcpy(data[buf.len .. buf.len + n], src[0..n]);
     buf.len += n;
     data[buf.len] = 0;
     return true;
+}
+
+fn httpAllocResponse() ?*NurlHttpResponse {
+    const raw = c.calloc(1, @sizeOf(NurlHttpResponse)) orelse return null;
+    const resp: *NurlHttpResponse = @ptrCast(@alignCast(raw));
+    resp.* = .{
+        .status = 0,
+        .err_kind = nurl_http_err_ok,
+        .header_count = 0,
+        .headers = null,
+        .body = dupSliceZ(""),
+        .body_len = 0,
+    };
+    return resp;
+}
+
+fn httpStubResponse(err_kind: c_longlong) c_longlong {
+    const resp = httpAllocResponse() orelse return 0;
+    resp.err_kind = err_kind;
+    return @intCast(@intFromPtr(resp));
 }
 
 fn httpMapErr(rc: curl.CURLcode) c_longlong {
@@ -136,6 +166,307 @@ fn httpHeaderBufClear(hdrs: *NurlHttpHeaderBuf) void {
     }
     hdrs.len = 0;
 }
+
+const windows_http = if (have_windows_http) struct {
+    const auto_length = std.math.maxInt(winhttp.DWORD);
+
+    fn utf8ToWide(src: ?[*:0]const u8) ?[*:0]u16 {
+        const text = src orelse return null;
+        const needed = winhttp.MultiByteToWideChar(winhttp.CP_UTF8, 0, text, -1, null, 0);
+        if (needed <= 0) return null;
+        const raw = c.malloc(@as(usize, @intCast(needed)) * @sizeOf(u16)) orelse return null;
+        const wide: [*]u16 = @ptrCast(@alignCast(raw));
+        if (winhttp.MultiByteToWideChar(winhttp.CP_UTF8, 0, text, -1, @ptrCast(wide), needed) <= 0) {
+            c.free(raw);
+            return null;
+        }
+        return @ptrCast(wide);
+    }
+
+    fn wideToUtf8N(src: [*]const u16, len: usize) ?[*:0]u8 {
+        if (len == 0) return dupSliceZ("");
+        const needed = winhttp.WideCharToMultiByte(winhttp.CP_UTF8, 0, @ptrCast(src), @intCast(len), null, 0, null, null);
+        if (needed <= 0) return dupSliceZ("");
+        const raw = c.malloc(@as(usize, @intCast(needed)) + 1) orelse return dupSliceZ("");
+        const bytes: [*]u8 = @ptrCast(raw);
+        _ = winhttp.WideCharToMultiByte(winhttp.CP_UTF8, 0, @ptrCast(src), @intCast(len), @ptrCast(bytes), needed, null, null);
+        bytes[@intCast(needed)] = 0;
+        return @ptrCast(bytes);
+    }
+
+    fn mapErr(err_no: winhttp.DWORD) c_longlong {
+        return switch (err_no) {
+            winhttp.ERROR_WINHTTP_NAME_NOT_RESOLVED => nurl_http_err_dns,
+            winhttp.ERROR_WINHTTP_CANNOT_CONNECT => nurl_http_err_connect,
+            winhttp.ERROR_WINHTTP_TIMEOUT => nurl_http_err_timeout,
+            winhttp.ERROR_WINHTTP_SECURE_FAILURE => nurl_http_err_tls,
+            winhttp.ERROR_WINHTTP_INVALID_URL,
+            winhttp.ERROR_WINHTTP_UNRECOGNIZED_SCHEME,
+            => nurl_http_err_invalid,
+            else => nurl_http_err_other,
+        };
+    }
+
+    fn appendHeader(hdrs: *NurlHttpHeaderBuf, line: [*]const u16, len_in: usize) void {
+        var n = len_in;
+        while (n > 0 and (line[n - 1] == '\n' or line[n - 1] == '\r')) n -= 1;
+        if (n == 0) return;
+
+        var colon_idx: ?usize = null;
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            if (line[i] == ':') {
+                colon_idx = i;
+                break;
+            }
+        }
+        const name_len = colon_idx orelse return;
+        var val_off = name_len + 1;
+        while (val_off < n and (line[val_off] == ' ' or line[val_off] == '\t')) val_off += 1;
+        const val_len = n - val_off;
+
+        const name = wideToUtf8N(line, name_len) orelse return;
+        const value = wideToUtf8N(line + val_off, val_len) orelse {
+            c.free(name);
+            return;
+        };
+        if (!httpHeaderPush(hdrs, name, value)) {
+            c.free(name);
+            c.free(value);
+        }
+    }
+
+    fn perform(
+        url: ?[*:0]const u8,
+        method: ?[*:0]const u8,
+        body: ?[*:0]const u8,
+        headers_blob: ?[*:0]const u8,
+        timeout_ms: c_longlong,
+        connect_timeout_ms: c_longlong,
+    ) c_longlong {
+        const resp = httpAllocResponse() orelse return 0;
+        if (url == null or url.?[0] == 0) {
+            resp.err_kind = nurl_http_err_invalid;
+            return @intCast(@intFromPtr(resp));
+        }
+
+        const total_timeout: c_int = @intCast(if (timeout_ms > 0) timeout_ms else 30000);
+        const connect_timeout: c_int = @intCast(if (connect_timeout_ms > 0) connect_timeout_ms else 10000);
+
+        const wurl = utf8ToWide(url) orelse {
+            resp.err_kind = nurl_http_err_invalid;
+            return @intCast(@intFromPtr(resp));
+        };
+        defer c.free(wurl);
+
+        var uc: winhttp.URL_COMPONENTSW = std.mem.zeroes(winhttp.URL_COMPONENTSW);
+        uc.dwStructSize = @sizeOf(winhttp.URL_COMPONENTSW);
+        uc.dwSchemeLength = auto_length;
+        uc.dwHostNameLength = auto_length;
+        uc.dwUrlPathLength = auto_length;
+        uc.dwExtraInfoLength = auto_length;
+        if (winhttp.WinHttpCrackUrl(@ptrCast(wurl), 0, 0, &uc) == 0 or uc.dwHostNameLength == 0) {
+            resp.err_kind = nurl_http_err_invalid;
+            return @intCast(@intFromPtr(resp));
+        }
+
+        const host_len: usize = @intCast(uc.dwHostNameLength);
+        const host_raw = c.malloc((host_len + 1) * @sizeOf(u16)) orelse {
+            resp.err_kind = nurl_http_err_other;
+            return @intCast(@intFromPtr(resp));
+        };
+        defer c.free(host_raw);
+        const host: [*]u16 = @ptrCast(@alignCast(host_raw));
+        const host_src: [*]const u16 = @ptrCast(uc.lpszHostName);
+        @memcpy(host[0..host_len], host_src[0..host_len]);
+        host[host_len] = 0;
+
+        const url_path_len: usize = @intCast(uc.dwUrlPathLength);
+        const extra_len: usize = @intCast(uc.dwExtraInfoLength);
+        const path_len = url_path_len + extra_len;
+        const path_raw = c.malloc((path_len + 2) * @sizeOf(u16)) orelse {
+            resp.err_kind = nurl_http_err_other;
+            return @intCast(@intFromPtr(resp));
+        };
+        defer c.free(path_raw);
+        const path: [*]u16 = @ptrCast(@alignCast(path_raw));
+        if (path_len == 0) {
+            path[0] = '/';
+            path[1] = 0;
+        } else {
+            const path_src: [*]const u16 = @ptrCast(uc.lpszUrlPath);
+            @memcpy(path[0..url_path_len], path_src[0..url_path_len]);
+            if (extra_len > 0) {
+                const extra_src: [*]const u16 = @ptrCast(uc.lpszExtraInfo);
+                @memcpy(path[url_path_len..path_len], extra_src[0..extra_len]);
+            }
+            path[path_len] = 0;
+        }
+        const is_https = uc.nScheme == winhttp.INTERNET_SCHEME_HTTPS;
+
+        const user_agent = utf8ToWide("nurl-http/0.1") orelse {
+            resp.err_kind = nurl_http_err_other;
+            return @intCast(@intFromPtr(resp));
+        };
+        defer c.free(user_agent);
+
+        const h_session = winhttp.WinHttpOpen(
+            @ptrCast(user_agent),
+            winhttp.WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+            null,
+            null,
+            0,
+        ) orelse {
+            resp.err_kind = mapErr(winhttp.GetLastError());
+            return @intCast(@intFromPtr(resp));
+        };
+        defer _ = winhttp.WinHttpCloseHandle(h_session);
+        _ = winhttp.WinHttpSetTimeouts(h_session, connect_timeout, connect_timeout, total_timeout, total_timeout);
+
+        const h_conn = winhttp.WinHttpConnect(h_session, @ptrCast(host), uc.nPort, 0) orelse {
+            resp.err_kind = mapErr(winhttp.GetLastError());
+            return @intCast(@intFromPtr(resp));
+        };
+        defer _ = winhttp.WinHttpCloseHandle(h_conn);
+
+        const wmethod = utf8ToWide(method orelse "GET") orelse {
+            resp.err_kind = nurl_http_err_other;
+            return @intCast(@intFromPtr(resp));
+        };
+        defer c.free(wmethod);
+
+        const req_flags: winhttp.DWORD = if (is_https) winhttp.WINHTTP_FLAG_SECURE else 0;
+        const h_req = winhttp.WinHttpOpenRequest(
+            h_conn,
+            @ptrCast(wmethod),
+            @ptrCast(path),
+            null,
+            null,
+            null,
+            req_flags,
+        ) orelse {
+            resp.err_kind = mapErr(winhttp.GetLastError());
+            return @intCast(@intFromPtr(resp));
+        };
+        defer _ = winhttp.WinHttpCloseHandle(h_req);
+
+        var redirect_policy: winhttp.DWORD = winhttp.WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
+        _ = winhttp.WinHttpSetOption(h_req, winhttp.WINHTTP_OPTION_REDIRECT_POLICY, &redirect_policy, @sizeOf(winhttp.DWORD));
+
+        if (headers_blob != null and headers_blob.?[0] != 0) {
+            if (utf8ToWide(headers_blob)) |wide_headers| {
+                defer c.free(wide_headers);
+                _ = winhttp.WinHttpAddRequestHeaders(
+                    h_req,
+                    @ptrCast(wide_headers),
+                    std.math.maxInt(winhttp.DWORD),
+                    @as(winhttp.DWORD, @intCast(winhttp.WINHTTP_ADDREQ_FLAG_ADD)) |
+                        @as(winhttp.DWORD, @bitCast(winhttp.WINHTTP_ADDREQ_FLAG_REPLACE)),
+                );
+            }
+        }
+
+        const method_text = std.mem.span(method orelse "GET");
+        const body_allowed =
+            std.mem.eql(u8, method_text, "POST") or
+            std.mem.eql(u8, method_text, "PUT") or
+            std.mem.eql(u8, method_text, "DELETE") or
+            std.mem.eql(u8, method_text, "PATCH");
+        const body_len: winhttp.DWORD = if (body_allowed and body != null) @intCast(std.mem.len(body.?)) else 0;
+        const body_ptr = if (body_len != 0 and body != null)
+            @as(?*anyopaque, @ptrCast(@constCast(body.?)))
+        else
+            winhttp.WINHTTP_NO_REQUEST_DATA;
+
+        var ok = winhttp.WinHttpSendRequest(
+            h_req,
+            null,
+            0,
+            body_ptr,
+            body_len,
+            body_len,
+            0,
+        );
+        if (ok != 0) ok = winhttp.WinHttpReceiveResponse(h_req, null);
+        if (ok == 0) {
+            resp.err_kind = mapErr(winhttp.GetLastError());
+            return @intCast(@intFromPtr(resp));
+        }
+
+        var status_code: winhttp.DWORD = 0;
+        var status_size: winhttp.DWORD = @sizeOf(winhttp.DWORD);
+        _ = winhttp.WinHttpQueryHeaders(
+            h_req,
+            winhttp.WINHTTP_QUERY_STATUS_CODE | winhttp.WINHTTP_QUERY_FLAG_NUMBER,
+            null,
+            &status_code,
+            &status_size,
+            null,
+        );
+        resp.status = @intCast(status_code);
+
+        var hdr_buf = NurlHttpHeaderBuf{ .items = null, .len = 0, .cap = 0 };
+        var hdr_bytes: winhttp.DWORD = 0;
+        _ = winhttp.WinHttpQueryHeaders(
+            h_req,
+            winhttp.WINHTTP_QUERY_RAW_HEADERS_CRLF,
+            null,
+            null,
+            &hdr_bytes,
+            null,
+        );
+        if (winhttp.GetLastError() == winhttp.ERROR_INSUFFICIENT_BUFFER and hdr_bytes > 0) {
+            const hdr_raw = c.malloc(hdr_bytes);
+            if (hdr_raw != null) {
+                defer c.free(hdr_raw);
+                if (winhttp.WinHttpQueryHeaders(
+                    h_req,
+                    winhttp.WINHTTP_QUERY_RAW_HEADERS_CRLF,
+                    null,
+                    hdr_raw,
+                    &hdr_bytes,
+                    null,
+                ) != 0) {
+                    const hdrs: [*]const u16 = @ptrCast(@alignCast(hdr_raw));
+                    var wn: usize = @intCast(hdr_bytes / @sizeOf(u16));
+                    if (wn > 0 and hdrs[wn - 1] == 0) wn -= 1;
+                    var i: usize = 0;
+                    while (i < wn) {
+                        var j = i;
+                        while (j < wn and hdrs[j] != '\n') : (j += 1) {}
+                        var end = j;
+                        if (end > i and hdrs[end - 1] == '\r') end -= 1;
+                        appendHeader(&hdr_buf, hdrs + i, end - i);
+                        i = j + 1;
+                    }
+                }
+            }
+        }
+
+        var body_buf = NurlHttpBuf{ .data = null, .len = 0, .cap = 0 };
+        while (true) {
+            var avail: winhttp.DWORD = 0;
+            if (winhttp.WinHttpQueryDataAvailable(h_req, &avail) == 0 or avail == 0) break;
+            if (!httpBufReserve(&body_buf, body_buf.len + @as(usize, @intCast(avail)) + 1)) break;
+            var got: winhttp.DWORD = 0;
+            if (winhttp.WinHttpReadData(h_req, body_buf.data.? + body_buf.len, avail, &got) == 0 or got == 0) break;
+            body_buf.len += @intCast(got);
+            body_buf.data.?[body_buf.len] = 0;
+        }
+
+        if (resp.body) |body_text| c.free(body_text);
+        if (body_buf.data) |buf| {
+            resp.body = buf;
+            resp.body_len = @intCast(body_buf.len);
+        } else {
+            resp.body = dupSliceZ("");
+            resp.body_len = 0;
+        }
+        resp.headers = hdr_buf.items;
+        resp.header_count = @intCast(hdr_buf.len);
+        return @intCast(@intFromPtr(resp));
+    }
+} else struct {};
 
 fn httpBuildSlist(blob: ?[*:0]const u8) ?*curl.struct_curl_slist {
     if (!runtime_features.have_libcurl or builtin.os.tag == .windows or builtin.os.tag == .wasi) return null;
@@ -318,22 +649,15 @@ pub export fn nurl_http_perform_full_to(
     timeout_ms: c_longlong,
     connect_timeout_ms: c_longlong,
 ) c_longlong {
-    if (!have_libcurl_runtime) return 0;
+    if (have_windows_http) {
+        return windows_http.perform(url, method, body, headers_blob, timeout_ms, connect_timeout_ms);
+    }
+    if (!have_libcurl_runtime) return httpStubResponse(nurl_http_err_other);
 
-    const raw = c.calloc(1, @sizeOf(NurlHttpResponse)) orelse return 0;
-    const resp: *NurlHttpResponse = @ptrCast(@alignCast(raw));
-    resp.* = .{
-        .status = 0,
-        .err_kind = nurl_http_err_ok,
-        .header_count = 0,
-        .headers = null,
-        .body = null,
-        .body_len = 0,
-    };
+    const resp = httpAllocResponse() orelse return 0;
 
     if (url == null or url.?[0] == 0) {
         resp.err_kind = nurl_http_err_invalid;
-        resp.body = dupSliceZ("");
         return @intCast(@intFromPtr(resp));
     }
 
@@ -342,7 +666,6 @@ pub export fn nurl_http_perform_full_to(
 
     const easy = curl.curl_easy_init() orelse {
         resp.err_kind = nurl_http_err_other;
-        resp.body = dupSliceZ("");
         return @intCast(@intFromPtr(resp));
     };
     defer curl.curl_easy_cleanup(easy);
@@ -396,10 +719,10 @@ pub export fn nurl_http_perform_full_to(
     }
 
     if (body_buf.data) |buf| {
+        if (resp.body) |body_text| c.free(body_text);
         resp.body = buf;
         resp.body_len = @intCast(body_buf.len);
     } else {
-        resp.body = dupSliceZ("");
         resp.body_len = 0;
     }
     resp.headers = hdr_buf.items;
