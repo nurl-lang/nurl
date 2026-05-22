@@ -2077,6 +2077,8 @@ long long nurl_proc_spawn_kill(long long h, long long sig) {
  *   - TLS: handled by Phase 9 — left to nginx/caddy in front for v1.
  */
 
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV)
+
 #define NURL_NET_ERR_OK             0
 #define NURL_NET_ERR_BIND           1
 #define NURL_NET_ERR_ADDRINUSE      2
@@ -3249,6 +3251,8 @@ void nurl_signal_trigger_shutdown(void) {
 #endif
 
 #endif
+
+#endif  /* !NURL_RUNTIME_ZIG_FS_ENV for §18 TCP/TLS + §20 shutdown */
 
 
 /* ── §20  Panic / recover (Phase 8 handler-panic recovery) ──────── */
