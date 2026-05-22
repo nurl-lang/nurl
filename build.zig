@@ -289,6 +289,14 @@ pub fn build(b: *std.Build) !void {
     const buildwasm_step = b.step("buildwasm", "Build compiler/nurlc.nu to nurlc.wasm via the local NURL API");
     buildwasm_step.dependOn(&buildwasm_cmd.step);
 
+    const api_runtime_objs_cmd = addHelperStep(b, nurl_build_exe, &.{"api-runtime-objs"}, true);
+    api_runtime_objs_cmd.setEnvironmentVariable("NURL_ZIG", b.graph.zig_exe);
+    if (b.args) |args| {
+        api_runtime_objs_cmd.addArgs(args);
+    }
+    const api_runtime_objs_step = b.step("api-runtime-objs", "Build wasm/windows/macos runtime objects for API containers");
+    api_runtime_objs_step.dependOn(&api_runtime_objs_cmd.step);
+
     const clean_tree_cmd = addHelperStep(b, nurl_build_exe, &.{"clean"}, true);
     const clean_tree_step = b.step("clean-tree", "Remove build artifacts, legacy IRs, and Python caches");
     clean_tree_step.dependOn(&clean_tree_cmd.step);

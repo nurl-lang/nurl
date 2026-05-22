@@ -23,22 +23,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libzstd-dev \
         pkg-config \
         binaryen \
-        gcc-mingw-w64-x86-64 \
         binutils-mingw-w64-x86-64 \
-        mingw-w64-tools \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/clang-16 /usr/local/bin/clang
 
 RUN ln -sf /usr/bin/python3 /usr/local/bin/python
-
-# --- WASI SDK (clang + libc for wasm32-wasi) -------------------
-ARG WASI_SDK_VERSION=24
-ARG WASI_SDK_FULL=24.0
-RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/wasi-sdk.tar.gz \
-        "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_FULL}-x86_64-linux.tar.gz" \
-    && mkdir -p /opt/wasi-sdk \
-    && tar -xzf /tmp/wasi-sdk.tar.gz -C /opt/wasi-sdk --strip-components=1 \
-    && rm /tmp/wasi-sdk.tar.gz
 
 # --- Static libcurl for mingw-w64 -------------------
 ARG CURL_VERSION=8.10.1
@@ -84,30 +73,10 @@ RUN find . -type f \( -name '*.sh' -o -name '*.nu' \) -exec sed -i 's/\r$//' {} 
 # Bootstrap nurlc (image build skips tests; they run in CI elsewhere)
 RUN /opt/zig/zig build bootstrap
 
-# Compile runtime objects
-# 1. Native Linux
-# zig build bootstrap already produced stdlib/runtime.native.o (a plain
-# ELF object — runtime.o itself is LLVM bitcode under -flto and won't
-# link with a stock clang/ld). The whole stdlib/ dir is copied below.
-
-# 2. wasm32-wasi
-RUN /opt/wasi-sdk/bin/clang --target=wasm32-wasi -O2 \
-        -c stdlib/runtime.c -o stdlib/runtime.wasm.o \
-    && /opt/wasi-sdk/bin/clang --target=wasm32-wasi -O2 \
-        -c stdlib/canvas_wasm.c -o stdlib/canvas.wasm.o \
-    && /opt/wasi-sdk/bin/clang --target=wasm32-wasi -O2 \
-        -c stdlib/audio_wasm.c -o stdlib/audio.wasm.o
-
-# 3. Windows (x86_64-w64-mingw32)
-RUN x86_64-w64-mingw32-gcc -O2 \
-        -DNURL_HAVE_LIBCURL -DCURL_STATICLIB \
-        -I/opt/curl-mingw/include \
-        -c stdlib/runtime.c -o stdlib/runtime.win.o \
-    && echo 1 > stdlib/runtime.win.curl
-
-# 4. macOS x86_64
-RUN /opt/zig/zig cc -target x86_64-macos-none -O2 \
-        -c stdlib/runtime.c -o stdlib/runtime.mac.o
+# Compile the API/runtime cross-target objects through the shared Zig helper.
+RUN NURL_ZIG=/opt/zig/zig \
+    NURL_MINGW_CURL_PREFIX=/opt/curl-mingw \
+    /opt/zig/zig build api-runtime-objs
 
 # Compile the NURL API binary itself
 RUN /opt/zig/zig build nurl -- nurlapi/main.nu nurlapi/nurlapi
@@ -130,16 +99,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libzstd-dev \
         ca-certificates \
         binaryen \
-        gcc-mingw-w64-x86-64 \
-        binutils-mingw-w64-x86-64 \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/clang-16 /usr/bin/clang
 
 ENV NURLC_PATH=/opt/nurl/build/nurlc \
+    NURL_LINK_HELPER=/opt/nurl/build/nurl-build \
+    NURL_NATIVE_CLANG=/usr/bin/clang-16 \
     NURL_STDLIB_DIR=/opt/nurl/stdlib \
     NURL_WORK_ROOT=/opt/nurl \
     NURL_STATIC_DIR=/app/static \
-    WASI_CLANG=/opt/wasi-sdk/bin/clang \
     NURL_RUNTIME_WASM_O=/opt/nurl/stdlib/runtime.wasm.o \
     NURL_CANVAS_WASM_O=/opt/nurl/stdlib/canvas.wasm.o \
     NURL_AUDIO_WASM_O=/opt/nurl/stdlib/audio.wasm.o \
@@ -159,8 +127,8 @@ COPY --from=builder /src/nurlapi/static /app/static
 # Bring in all cross-compilation artifacts
 RUN mkdir -p /opt/nurl/build /opt/nurl/stdlib /app/output /opt/nurl/examples
 COPY --from=builder /src/build/nurlc             /opt/nurl/build/nurlc
+COPY --from=builder /src/build/nurl-build        /opt/nurl/build/nurl-build
 COPY --from=builder /src/stdlib                  /opt/nurl/stdlib
-COPY --from=builder /opt/wasi-sdk                /opt/wasi-sdk
 COPY --from=builder /opt/curl-mingw              /opt/curl-mingw
 COPY --from=builder /opt/zig                     /opt/zig
 COPY --from=builder /src/examples                /opt/nurl/examples

@@ -6,7 +6,6 @@ $ `stdlib/std/path.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/encode.nu`
 $ `stdlib/std/int.nu`
-$ `stdlib/ext/regex.nu`
 
 // ── Globals ──────────────────────────────────────────────────────────
 
@@ -14,15 +13,40 @@ $ `stdlib/ext/regex.nu`
 @ get_stdlib_dir → String { ^ ( env_var_or `NURL_STDLIB_DIR` `/opt/nurl/stdlib` ) }
 @ get_output_dir → String { ^ ( env_var_or `NURL_OUTPUT_DIR` `/app/output` ) }
 @ get_examples_dir → String { ^ ( env_var_or `NURL_EXAMPLES_DIR` `/opt/nurl/examples` ) }
-@ get_wasi_clang → String { ^ ( env_var_or `WASI_CLANG` `/opt/wasi-sdk/bin/clang` ) }
+@ get_link_helper → String { ^ ( env_var_or `NURL_LINK_HELPER` `/opt/nurl/build/nurl-build` ) }
+@ get_native_clang → String { ^ ( env_var_or `NURL_NATIVE_CLANG` `clang` ) }
 @ get_runtime_wasm_o → String { ^ ( env_var_or `NURL_RUNTIME_WASM_O` `/opt/nurl/stdlib/runtime.wasm.o` ) }
 @ get_canvas_wasm_o → String { ^ ( env_var_or `NURL_CANVAS_WASM_O` `/opt/nurl/stdlib/canvas.wasm.o` ) }
 @ get_audio_wasm_o → String { ^ ( env_var_or `NURL_AUDIO_WASM_O` `/opt/nurl/stdlib/audio_wasm.o` ) }
 @ get_runtime_win_o → String { ^ ( env_var_or `NURL_RUNTIME_WIN_O` `/opt/nurl/stdlib/runtime.win.o` ) }
 @ get_runtime_mac_o → String { ^ ( env_var_or `NURL_RUNTIME_MAC_O` `/opt/nurl/stdlib/runtime.mac.o` ) }
+@ get_windows_target → String { ^ ( env_var_or `NURL_WINDOWS_TARGET` `x86_64-windows-gnu` ) }
+@ get_macos_target → String { ^ ( env_var_or `NURL_MACOS_TARGET` `x86_64-macos-none` ) }
 @ get_zig → String { ^ ( env_var_or `NURL_ZIG` `/opt/zig/zig` ) }
+@ get_wasm_opt → String { ^ ( env_var_or `WASM_OPT` `wasm-opt` ) }
 @ get_work_root → String { ^ ( env_var_or `NURL_WORK_ROOT` `/opt/nurl` ) }
 @ get_static_dir → String { ^ ( env_var_or `NURL_STATIC_DIR` `/app/static` ) }
+
+@ get_runtime_native_o → String {
+  : String stdlib_dir ( get_stdlib_dir )
+  : String path ( path_join ( string_data stdlib_dir ) `runtime.native.o` )
+  ( string_free stdlib_dir )
+  ^ path
+}
+
+@ get_canvas_o → String {
+  : String stdlib_dir ( get_stdlib_dir )
+  : String path ( path_join ( string_data stdlib_dir ) `canvas.o` )
+  ( string_free stdlib_dir )
+  ^ path
+}
+
+@ get_canvas_sdl2_marker → String {
+  : String stdlib_dir ( get_stdlib_dir )
+  : String path ( path_join ( string_data stdlib_dir ) `canvas.sdl2` )
+  ( string_free stdlib_dir )
+  ^ path
+}
 
 @ create_build_id → String {
   : i now ( now_ms )
@@ -73,171 +97,6 @@ $ `stdlib/ext/regex.nu`
   ^ arr
 }
 
-// ── IR Shimming for WASM ─────────────────────────────────────────────
-
-@ prepare_ir_for_wasi String ir → String {
-  : String res ( string_from ( string_data ir ) )
-
-  // 1. Rename main definition robustly.
-  : String r1 ( string_replace res ` @main(` ` @__main_argc_argv(` )
-  ( string_free res ) = res r1
-
-  // 2. Prepend WASM triple and datalayout.
-  : String head ( string_from `target datalayout = "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-n32:64-S128-ni:1:10:20"\ntarget triple = "wasm32-unknown-wasi"\n` )
-  : String r3 ( string_concat head res )
-  ( string_free res ) ( string_free head ) = res r3
-
-  : String shims ( string_from `\n; ── wasm32 libc ABI shims ──\n` )
-  : ( Vec String ) shimmed ( vec_new [String] )
-  
-  : s list `malloc:p:s,calloc:p:ss,realloc:p:ps,puts:i:p,putchar:i:i,getchar:i:,strlen:s:p,strcmp:i:pp,strncmp:i:pps,strcpy:p:pp,strncpy:p:pps,strcat:p:pp,strdup:p:p,memcpy:p:pps,memmove:p:pps,memset:p:pis,memcmp:i:pps,atoi:i:p,abs:i:i,exit:v:i,rand:i:,srand:v:s,system:i:p,write:i:ips,read:i:ips,open:i:pii,close:i:i`
-  : String slist ( string_from list )
-  : ( Vec String ) entries ( string_split slist `,` )
-  
-  : ~ i idx 0
-  ~ < idx ( vec_len [String] entries ) {
-    : ? String entry_opt ( vec_get [String] entries idx )
-    ?? entry_opt { T entry → {
-        : ( Vec String ) parts ( string_split entry `:` )
-        ? == ( vec_len [String] parts ) 3 {
-          : String name ( string_new ) : String ret ( string_new ) : String pms ( string_new )
-          : ? String n_o ( vec_get [String] parts 0 ) ?? n_o { T s → { ( string_free name ) = name ( string_from ( string_data s ) ) } F → {} }
-          : ? String r_o ( vec_get [String] parts 1 ) ?? r_o { T s → { ( string_free ret ) = ret ( string_from ( string_data s ) ) } F → {} }
-          : ? String p_o ( vec_get [String] parts 2 ) ?? p_o { T s → { = pms ( string_from ( string_data s ) ) } F → {} }
-          
-          : String pat ( string_from `@` ) ( string_push_str pat ( string_data name ) ) ( string_push_char pat 40 )
-          
-          ? ( string_contains res ( string_data pat ) ) {
-             : String sname ( string_from `@__nurl_` ) ( string_push_str sname ( string_data name ) ) ( string_push_str sname `_shim(` )
-             
-             : b already_shimmed F
-             : ~ i si 0 ~ < si ( vec_len [String] shimmed ) {
-               : ? String s_o ( vec_get [String] shimmed si ) ?? s_o { T s → { ? ( string_eq s name ) { = already_shimmed T } {} } F → {} }
-               = si + si 1
-             }
-
-             ? == already_shimmed F {
-               // 1. Rename ALL occurrences (including the original
-               // `declare X @<libc>(...)` line emitted by nurlc).
-               : String tmp ( string_replace res ( string_data pat ) ( string_data sname ) )
-               ( string_free res ) = res tmp
-               ( vec_push [String] shimmed ( string_from ( string_data name ) ) )
-
-               // 2. Strip the renamed declaration line. After step 1, the IR
-               // contains lines like `declare i8*  @__nurl_malloc_shim(i64)\n`
-               // (1- or 2-space variants depending on nurlc's column-aligned
-               // emit). clang rejects ANY `declare` + `define` of the same
-               // function name as a redefinition, so we must remove the
-               // declare line before step 3 emits the define. The previous
-               // regex approach used a `^`-anchor that only matches start-of-
-               // string in NURL's regex; this string_replace fallback covers
-               // both 1-space and 2-space variants for the 4 LLVM types that
-               // nurlc emits as the libc-style return.
-               : ( Vec s ) types ( vec_new [s] )
-               ( vec_push [s] types `i8*` ) ( vec_push [s] types `i64` ) ( vec_push [s] types `void` ) ( vec_push [s] types `i32` )
-               : ~ i ti 0 ~ < ti ( vec_len [s] types ) {
-                  : ? s t_o ( vec_get [s] types ti )
-                  ?? t_o { T t → {
-                     // Build: "declare " + t + "  @__nurl_<name>_shim(" — 2 space variant
-                     : String two_decl ( string_from `declare ` )
-                     ( string_push_str two_decl t ) ( string_push_str two_decl `  @__nurl_` )
-                     ( string_push_str two_decl ( string_data name ) ) ( string_push_str two_decl `_shim(` )
-
-                     // 1-space variant
-                     : String one_decl ( string_from `declare ` )
-                     ( string_push_str one_decl t ) ( string_push_str one_decl ` @__nurl_` )
-                     ( string_push_str one_decl ( string_data name ) ) ( string_push_str one_decl `_shim(` )
-
-                     // Find each declare line by its prefix, then locate the
-                     // line's trailing `\n` and replace the whole line range
-                     // with "". Since string_replace works on exact substrings
-                     // we must find the line length first.
-                     : ? i tp ( string_index_of res ( string_data two_decl ) )
-                     ?? tp { T pos → {
-                        // Find `\n` after pos
-                        : i rn ( string_len res )
-                        : ~ i le pos
-                        ~ & < le rn != ( string_get res le ) 10 { = le + le 1 }
-                        ? < le rn { = le + le 1 } {}
-                        : String full_line ( string_substr res pos - le pos )
-                        : String tmp2 ( string_replace res ( string_data full_line ) `` )
-                        ( string_free res ) = res tmp2 ( string_free full_line )
-                     } F _ → {
-                        : ? i op ( string_index_of res ( string_data one_decl ) )
-                        ?? op { T pos2 → {
-                           : i rn2 ( string_len res )
-                           : ~ i le2 pos2
-                           ~ & < le2 rn2 != ( string_get res le2 ) 10 { = le2 + le2 1 }
-                           ? < le2 rn2 { = le2 + le2 1 } {}
-                           : String full_line2 ( string_substr res pos2 - le2 pos2 )
-                           : String tmp3 ( string_replace res ( string_data full_line2 ) `` )
-                           ( string_free res ) = res tmp3 ( string_free full_line2 )
-                        } F _ → {} }
-                     } }
-                     ( string_free two_decl ) ( string_free one_decl )
-                  } F → {} }
-                  = ti + ti 1
-               }
-               ( vec_free [s] types )
-
-               // 3. Build shim definition. We've already gated emission on
-               // `already_shimmed=F` above, so always emit here — the prior
-               // `needed` check was buggy: it inspected `res` for the renamed
-               // CALL sites left behind by step 1, mistaking those for an
-               // existing DEFINITION and silently dropping the shim body.
-               // Without the body, wasm-ld fails with `undefined symbol:
-               // __nurl_<fn>_shim`. Tracked separately by `shimmed` Vec.
-               : String sname_def ( string_from `@__nurl_` ) ( string_push_str sname_def ( string_data name ) ) ( string_push_str sname_def `_shim(` )
-               ? T {
-                 ( string_push_str shims `\ndeclare ` )
-                 : i r_char ? > ( string_len ret ) 0 ( string_get ret 0 ) 0
-                 ( string_push_str shims ? == r_char 112 `i8*` ? == r_char 118 `void` `i32` )
-                 ( string_push_str shims ` @` ) ( string_push_str shims ( string_data name ) ) ( string_push_char shims 40 )
-                 : ~ i k 0 ~ < k ( string_len pms ) { ? > k 0 { ( string_push_str shims `, ` ) } {} : i p ( string_get pms k ) ( string_push_str shims ? == p 112 `i8*` `i32` ) = k + k 1 }
-                 // External linkage (no `internal`) so the shim define
-                 // satisfies any pre-existing `declare @__nurl_<name>_shim(...)`
-                 // lines that step 1 might have produced by renaming the
-                 // original `declare @<libc>(...)`. Step 2's regex-based
-                 // declaration-restore uses a `^`-anchored pattern which
-                 // only matches start-of-string in NURL regex, so the old
-                 // renamed `declare` survives and would conflict with an
-                 // `internal`-linkage define.
-                 ( string_push_str shims `)\ndefine ` )
-                 ( string_push_str shims ? == r_char 112 `i8*` ? == r_char 118 `void` `i64` )
-                 ( string_push_str shims ` @__nurl_` ) ( string_push_str shims ( string_data name ) ) ( string_push_str shims `_shim(` )
-                 : ~ i k2 0 ~ < k2 ( string_len pms ) { ? > k2 0 { ( string_push_str shims `, ` ) } {} : i p ( string_get pms k2 ) ( string_push_str shims ? == p 112 `i8* %a` `i64 %a` ) ( string_push_int shims k2 ) = k2 + k2 1 }
-                 ( string_push_str shims `) {\n` )
-                 : ~ i k3 0 ~ < k3 ( string_len pms ) { : i p ( string_get pms k3 ) ? != p 112 { ( string_push_str shims `  %t` ) ( string_push_int shims k3 ) ( string_push_str shims ` = trunc i64 %a` ) ( string_push_int shims k3 ) ( string_push_str shims ` to i32\n` ) } {} = k3 + k3 1 }
-                 ( string_push_str shims `  %r = tail call ` )
-                 ( string_push_str shims ? == r_char 112 `i8*` ? == r_char 118 `void` `i32` )
-                 ( string_push_str shims ` @` ) ( string_push_str shims ( string_data name ) ) ( string_push_char shims 40 )
-                 : ~ i k4 0 ~ < k4 ( string_len pms ) {
-                   ? > k4 0 { ( string_push_str shims `, ` ) } {}
-                   : i p ( string_get pms k4 ) ? == p 112 { ( string_push_str shims `i8* %a` ) ( string_push_int shims k4 ) } { ( string_push_str shims `i32 %t` ) ( string_push_int shims k4 ) }
-                   = k4 + k4 1
-                 }
-                 ( string_push_str shims `)\n` )
-                 ? == r_char 118 { ( string_push_str shims `  ret void\n` ) } { ? == r_char 112 { ( string_push_str shims `  ret i8* %r\n` ) } { : s op ? == r_char 115 `zext` `sext` ( string_push_str shims `  %rw = ` ) ( string_push_str shims op ) ( string_push_str shims ` i32 %r to i64\n  ret i64 %rw\n` ) } }
-                 ( string_push_str shims `}\n` )
-               } {}
-               ( string_free sname_def )
-             } {}
-             ( string_free sname )
-          } {}
-          ( string_free pat ) ( string_free name ) ( string_free ret ) ( string_free pms )
-        } {}
-        ( vec_free_with [String] parts \ String s → v { ( string_free s ) } )
-    } F → {} }
-    = idx + idx 1
-  }
-  ( vec_free_with [String] entries \ String s → v { ( string_free s ) } )
-  ( string_free slist ) ( vec_free_with [String] shimmed \ String s → v { ( string_free s ) } )
-
-  : String final ( string_concat res shims )
-  ( string_free res ) ( string_free shims )
-  ^ final
-}
-
 // ── Shared logic ─────────────────────────────────────────────────────
 
 @ get_common_json Json root s key s default → s {
@@ -248,6 +107,17 @@ $ `stdlib/ext/regex.nu`
 @ get_common_bool Json root s key b default → b {
   : ? Json opt ( json_obj_get root key )
   ?? opt { T j → { ^ ( json_bool_val j ) } F _ → { ^ default } }
+}
+
+@ get_common_int Json root s key i default → i {
+  : ? Json opt ( json_obj_get root key )
+  ?? opt {
+    T j → {
+      : ?i no ( json_num_as_i j )
+      ?? no { T n → { ^ n } F → { ^ default } }
+    }
+    F _ → { ^ default }
+  }
 }
 
 @ json_str_or_null s str → Json {
@@ -261,16 +131,83 @@ $ `stdlib/ext/regex.nu`
   ^ body_str
 }
 
+@ json_response_owned i status Json j → HttpResponse {
+  : String body ( json_stringify j )
+  : HttpResponse hr ( response_text status ( string_data body ) )
+  ( response_set_header hr `Content-Type` `application/json` )
+  ( json_free j )
+  ( string_free body )
+  ^ hr
+}
+
+@ build_download_url String build_id s name → String {
+  : String url ( string_with_cap 96 )
+  ( string_push_str url `/download/` )
+  ( string_push_str url ( string_data build_id ) )
+  ( string_push_str url `/` )
+  ( string_push_str url name )
+  ^ url
+}
+
+@ build_artifact_json String build_id s path_raw → Json {
+  : String name ( path_basename path_raw )
+  : ! i IoErr szr ( file_size path_raw )
+  : Json obj ( json_obj_new )
+  ( json_obj_set obj `name` ( json_str_lit ( string_data name ) ) )
+  ( json_obj_set obj `bytes` ( json_int ?? szr { T s → s F _ → 0 } ) )
+  : String url ( build_download_url build_id ( string_data name ) )
+  ( json_obj_set obj `download_url` ( json_str_lit ( string_data url ) ) )
+  ( string_free name )
+  ( string_free url )
+  ^ obj
+}
+
+@ payload_set_artifact Json payload String build_id s path_key s out_key → v {
+  : s path_raw ( get_common_json payload path_key `` )
+  ? > ( nurl_str_len path_raw ) 0 {
+    : Json art ( build_artifact_json build_id path_raw )
+    ( json_obj_set payload out_key art )
+  } {}
+}
+
+@ helper_detail Json payload → String {
+  : String out ( string_from ( get_common_json payload `fatal_detail` `` ) )
+  ? == ( string_len out ) 0 {
+    ( string_free out )
+    = out ( string_from ( get_common_json payload `error_message` `` ) )
+  } {}
+  ? == ( string_len out ) 0 {
+    ( string_free out )
+    = out ( string_from ( get_common_json payload `stderr` `` ) )
+  } {}
+  ? == ( string_len out ) 0 {
+    ( string_free out )
+    = out ( string_from ( get_common_json payload `message` `` ) )
+  } {}
+  ^ out
+}
+
 // ── Build handler (Native Linux) ─────────────────────────────────────
 
-@ h_build HttpRequest req Params params → HttpResponse {
-  ( nurl_print `[srv] POST /build\n` )
+@ free_build_target_cfg String driver String runtime String target String canvas_obj String canvas_marker → v {
+  ( string_free driver )
+  ( string_free runtime )
+  ( string_free target )
+  ( string_free canvas_obj )
+  ( string_free canvas_marker )
+}
+
+@ h_build_target HttpRequest req s kind String driver String runtime String target String canvas_obj String canvas_marker → HttpResponse {
   : String body_str ( get_body_str req )
   : ! Json ParseErr root_res ( json_parse ( string_data body_str ) )
   ?? root_res {
     T root → {
       : s source ( get_common_json root `source` `` )
-      ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
+      ? == ( nurl_str_len source ) 0 {
+        ( free_build_target_cfg driver runtime target canvas_obj canvas_marker )
+        ( json_free root ) ( string_free body_str )
+        ^ ( response_text 400 `{"error":"source is required"}\n` )
+      } {}
       : s filename ( get_common_json root `filename` `main.nu` )
       : s opt ( get_common_json root `opt` `-O2` )
 
@@ -282,97 +219,120 @@ $ `stdlib/ext/regex.nu`
         T _ → {
           : String nu_path ( path_join ( string_data build_dir ) filename )
           ( write_file ( string_data nu_path ) source )
-          : String bin_name ( string_from filename )
-          ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
-          : String ll_name ( string_from ( string_data bin_name ) ) ( string_push_str ll_name `.ll` )
-          : String ll_path ( path_join ( string_data build_dir ) ( string_data ll_name ) )
-          : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
+          : String helper_path ( get_link_helper )
+          : String work_root ( get_work_root )
+          : ( Vec s ) helper_args ( vec_new [s] )
+          ( vec_push [s] helper_args `api-build` )
+          ( vec_push [s] helper_args `--kind` ) ( vec_push [s] helper_args kind )
+          ( vec_push [s] helper_args `--root` ) ( vec_push [s] helper_args ( string_data work_root ) )
+          ( vec_push [s] helper_args `--src` ) ( vec_push [s] helper_args ( string_data nu_path ) )
+          ( vec_push [s] helper_args `--build-dir` ) ( vec_push [s] helper_args ( string_data build_dir ) )
+          ( vec_push [s] helper_args `--driver` ) ( vec_push [s] helper_args ( string_data driver ) )
+          ( vec_push [s] helper_args `--runtime` ) ( vec_push [s] helper_args ( string_data runtime ) )
+          ( vec_push [s] helper_args `--opt` ) ( vec_push [s] helper_args opt )
+          ( vec_push [s] helper_args `--filename` ) ( vec_push [s] helper_args filename )
+          ? > ( string_len target ) 0 {
+            ( vec_push [s] helper_args `--target` ) ( vec_push [s] helper_args ( string_data target ) )
+          } {}
+          ? > ( string_len canvas_obj ) 0 {
+            ( vec_push [s] helper_args `--canvas-obj` ) ( vec_push [s] helper_args ( string_data canvas_obj ) )
+          } {}
+          ? > ( string_len canvas_marker ) 0 {
+            ( vec_push [s] helper_args `--canvas-sdl2-marker` ) ( vec_push [s] helper_args ( string_data canvas_marker ) )
+          } {}
 
-          : b uses_canvas >= ( nurl_str_find source `stdlib/ext/canvas.nu` ) 0
-          : b uses_audio >= ( nurl_str_find source `stdlib/ext/audio.nu` ) 0
+          : ! Output ProcessErr helper_res ( process_run ( string_data helper_path ) helper_args `` )
+          ( vec_free [s] helper_args )
+          ?? helper_res {
+            T h_out → {
+              : i helper_rc ( output_exit_code h_out )
+              ? != helper_rc 0 {
+                : String detail ( string_from ( output_stderr h_out ) )
+                ? == ( string_len detail ) 0 { ( string_free detail ) = detail ( string_from ( output_stdout h_out ) ) } {}
+                : HttpResponse hr ( response_text 500 ( string_data detail ) )
+                ( string_free detail )
+                ( output_free h_out )
+                ( string_free helper_path ) ( string_free work_root )
+                ( string_free nu_path ) ( string_free build_id ) ( string_free build_dir )
+                ( json_free root ) ( string_free body_str )
+                ( free_build_target_cfg driver runtime target canvas_obj canvas_marker )
+                ^ hr
+              } {}
 
-          : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
-          : ! Output ProcessErr nurlc_res ( process_run ( string_data ( get_nurlc_path ) ) nurlc_args `` ) ( vec_free [s] nurlc_args )
-
-          ?? nurlc_res {
-            T n_out → {
-              : i n_rc ( output_exit_code n_out )
-              ? ( output_success n_out ) {
-                ( write_file ( string_data ll_path ) ( output_stdout n_out ) )
-                : ( Vec s ) clang_args ( vec_new [s] )
-                ( vec_push [s] clang_args opt ) ( vec_push [s] clang_args `-Wno-override-module` ) ( vec_push [s] clang_args ( string_data ll_path ) )
-                : String runtime_o ( path_join ( string_data ( get_stdlib_dir ) ) `runtime.native.o` )
-                ( vec_push [s] clang_args ( string_data runtime_o ) ) ( vec_push [s] clang_args `-o` ) ( vec_push [s] clang_args ( string_data bin_path ) )
-                ( vec_push [s] clang_args `-lm` ) ( vec_push [s] clang_args `-lpthread` ) ( vec_push [s] clang_args `-lcurl` )
-
-                : ! Output ProcessErr clang_res ( process_run `clang` clang_args `` ) ( vec_free [s] clang_args )
-
-                ?? clang_res {
-                  T c_out → {
-                    : i c_rc ( output_exit_code c_out )
-                    : Json res ( json_obj_new )
-                    ( json_obj_set res `status` ( json_str_lit ? == c_rc 0 `ok` `error` ) )
-                    ( json_obj_set res `message` ( json_str_lit `compiled nurl → native binary` ) )
-                    ( json_obj_set res `filename` ( json_str_lit filename ) )
-                    ( json_obj_set res `nurlc_returncode` ( json_int n_rc ) )
-                    ( json_obj_set res `clang_returncode` ( json_int c_rc ) )
-                    ( json_obj_set res `nurlc_stdout` ( json_str_lit `[nurlc] build successful` ) )
-                    ( json_obj_set res `nurlc_stderr` ( json_str_lit ( output_stderr n_out ) ) )
-                    ( json_obj_set res `clang_stdout` ( json_str_lit ( output_stdout c_out ) ) )
-                    ( json_obj_set res `clang_stderr` ( json_str_lit ( output_stderr c_out ) ) )
-                    ( json_obj_set res `uses_canvas` ( json_bool uses_canvas ) )
-                    ( json_obj_set res `uses_audio` ( json_bool uses_audio ) )
-                    
-                    : String ll_url ( string_new ) : String bin_url ( string_new )
-                    ? == c_rc 0 {
-                      : ! i IoErr ll_size_res ( file_size ( string_data ll_path ) )
-                      : ! i IoErr bin_size_res ( file_size ( string_data bin_path ) )
-                      : Json ll_art ( json_obj_new )
-                      ( json_obj_set ll_art `name` ( json_str_lit ( string_data ll_name ) ) )
-                      ( json_obj_set ll_art `bytes` ( json_int ?? ll_size_res { T s → s F _ → 0 } ) )
-                      = ll_url ( string_with_cap 64 )
-                      ( string_push_str ll_url `/download/` ) ( string_push_str ll_url ( string_data build_id ) ) ( string_push_str ll_url `/` ) ( string_push_str ll_url ( string_data ll_name ) )
-                      ( json_obj_set ll_art `download_url` ( json_str_lit ( string_data ll_url ) ) )
-                      ( json_obj_set res `ll_artifact` ll_art )
-
-                      : Json bin_art ( json_obj_new )
-                      ( json_obj_set bin_art `name` ( json_str_lit ( string_data bin_name ) ) )
-                      ( json_obj_set bin_art `bytes` ( json_int ?? bin_size_res { T s → s F _ → 0 } ) )
-                      = bin_url ( string_with_cap 64 )
-                      ( string_push_str bin_url `/download/` ) ( string_push_str bin_url ( string_data build_id ) ) ( string_push_str bin_url `/` ) ( string_push_str bin_url ( string_data bin_name ) )
-                      ( json_obj_set bin_art `download_url` ( json_str_lit ( string_data bin_url ) ) )
-                      ( json_obj_set res `binary_artifact` bin_art )
-                    } {}
-
-                    : String body ( json_stringify res )
-                    : HttpResponse hr ( response_text 200 ( string_data body ) )
-                    ( response_set_header hr `Content-Type` `application/json` )
-                    
-                    ( string_free ll_url ) ( string_free bin_url ) ( json_free res ) ( string_free runtime_o )
-                    ( output_free n_out ) ( output_free c_out ) ( json_free root )
-                    ( string_free nu_path ) ( string_free ll_name ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path )
-                    ( string_free build_id ) ( string_free build_dir ) ( string_free body_str ) ( string_free body ) 
-                    ^ hr
-                  }
-                  F ce → { ^ ( response_text 500 `{"error":"clang process failed"}\n` ) }
+              : ! Json ParseErr payload_res ( json_parse ( output_stdout h_out ) )
+              ?? payload_res {
+                T payload → {
+                  : i http_status ( get_common_int payload `http_status` 200 )
+                  ( payload_set_artifact payload build_id `ll_path` `ll_artifact` )
+                  ( payload_set_artifact payload build_id `binary_path` `binary_artifact` )
+                  ? == http_status 200 {
+                    ( json_obj_set payload `nurlc_stdout` ( json_str_lit `[nurlc] build successful` ) )
+                  } {}
+                  : HttpResponse hr ( json_response_owned http_status payload )
+                  ( output_free h_out )
+                  ( string_free helper_path ) ( string_free work_root )
+                  ( string_free nu_path ) ( string_free build_id ) ( string_free build_dir )
+                  ( json_free root ) ( string_free body_str )
+                  ( free_build_target_cfg driver runtime target canvas_obj canvas_marker )
+                  ^ hr
                 }
-              } {
-                : HttpResponse hr422 ( response_text 422 ( output_stderr n_out ) )
-                ( output_free n_out ) ( json_free root ) ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path ) ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
-                ^ hr422
+                F _ → {
+                  : HttpResponse hr ( response_text 500 `{"error":"helper returned invalid json"}\n` )
+                  ( output_free h_out )
+                  ( string_free helper_path ) ( string_free work_root )
+                  ( string_free nu_path ) ( string_free build_id ) ( string_free build_dir )
+                  ( json_free root ) ( string_free body_str )
+                  ( free_build_target_cfg driver runtime target canvas_obj canvas_marker )
+                  ^ hr
+                }
               }
             }
-            F _ → { ^ ( response_text 500 `{"error":"nurlc failed"}\n` ) }
+            F _ → {
+              : HttpResponse hr ( response_text 500 `{"error":"build helper process failed"}\n` )
+              ( string_free helper_path ) ( string_free work_root )
+              ( string_free nu_path ) ( string_free build_id ) ( string_free build_dir )
+              ( json_free root ) ( string_free body_str )
+              ( free_build_target_cfg driver runtime target canvas_obj canvas_marker )
+              ^ hr
+            }
           }
         }
-        F _ → { ^ ( response_text 500 `{"error":"could not create build dir"}\n` ) }
+        F _ → {
+          ( free_build_target_cfg driver runtime target canvas_obj canvas_marker )
+          ( json_free root ) ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
+          ^ ( response_text 500 `{"error":"could not create build dir"}\n` )
+        }
       }
     }
-    F err → { ^ ( response_text 400 `{"error":"invalid json"}\n` ) }
+    F err → {
+      ( free_build_target_cfg driver runtime target canvas_obj canvas_marker )
+      ( string_free body_str )
+      ^ ( response_text 400 `{"error":"invalid json"}\n` )
+    }
   }
 }
 
+@ h_build HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] POST /build\n` )
+  : String driver ( get_native_clang )
+  : String runtime ( get_runtime_native_o )
+  : String target ( string_new )
+  : String canvas_obj ( get_canvas_o )
+  : String canvas_marker ( get_canvas_sdl2_marker )
+  ^ ( h_build_target req `native` driver runtime target canvas_obj canvas_marker )
+}
+
 // ── Build handler (WASM) ─────────────────────────────────────────────
+
+@ free_build_wasm_cfg String helper_path String work_root String runtime_wasm String canvas_wasm String audio_wasm String zig_driver String wasm_opt → v {
+  ( string_free helper_path )
+  ( string_free work_root )
+  ( string_free runtime_wasm )
+  ( string_free canvas_wasm )
+  ( string_free audio_wasm )
+  ( string_free zig_driver )
+  ( string_free wasm_opt )
+}
 
 @ h_build_wasm HttpRequest req Params params → HttpResponse {
   ( nurl_print `[srv] POST /build_wasm\n` )
@@ -393,96 +353,107 @@ $ `stdlib/ext/regex.nu`
         T _ → {
           : String nu_path ( path_join ( string_data build_dir ) filename )
           ( write_file ( string_data nu_path ) source )
-          : String bin_name ( string_from filename )
-          ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
-          : String ll_name ( string_from ( string_data bin_name ) ) ( string_push_str ll_name `.ll` )
-          : String wasm_name ( string_from ( string_data bin_name ) ) ( string_push_str wasm_name `.wasm` )
+          : String helper_path ( get_link_helper )
+          : String work_root ( get_work_root )
+          : String runtime_wasm ( get_runtime_wasm_o )
+          : String canvas_wasm ( get_canvas_wasm_o )
+          : String audio_wasm ( get_audio_wasm_o )
+          : String zig ( get_zig )
+          : String zig_driver ( string_from ( string_data zig ) )
+          ( string_push_str zig_driver ` cc` )
+          ( string_free zig )
+          : String wasm_opt ( get_wasm_opt )
 
-          : String ll_path ( path_join ( string_data build_dir ) ( string_data ll_name ) )
-          : String wasm_path ( path_join ( string_data build_dir ) ( string_data wasm_name ) )
+          : ( Vec s ) helper_args ( vec_new [s] )
+          ( vec_push [s] helper_args `api-build-wasm` )
+          ( vec_push [s] helper_args `--root` ) ( vec_push [s] helper_args ( string_data work_root ) )
+          ( vec_push [s] helper_args `--src` ) ( vec_push [s] helper_args ( string_data nu_path ) )
+          ( vec_push [s] helper_args `--build-dir` ) ( vec_push [s] helper_args ( string_data build_dir ) )
+          ( vec_push [s] helper_args `--target` ) ( vec_push [s] helper_args `wasm32-wasi` )
+          ( vec_push [s] helper_args `--runtime` ) ( vec_push [s] helper_args ( string_data runtime_wasm ) )
+          ( vec_push [s] helper_args `--canvas-obj` ) ( vec_push [s] helper_args ( string_data canvas_wasm ) )
+          ( vec_push [s] helper_args `--audio-obj` ) ( vec_push [s] helper_args ( string_data audio_wasm ) )
+          ( vec_push [s] helper_args `--zig-driver` ) ( vec_push [s] helper_args ( string_data zig_driver ) )
+          ( vec_push [s] helper_args `--wasm-opt` ) ( vec_push [s] helper_args ( string_data wasm_opt ) )
+          ( vec_push [s] helper_args `--filename` ) ( vec_push [s] helper_args filename )
 
-          : b uses_canvas >= ( nurl_str_find source `stdlib/ext/canvas.nu` ) 0
-          : b uses_audio >= ( nurl_str_find source `stdlib/ext/audio.nu` ) 0
+          : ! Output ProcessErr helper_res ( process_run ( string_data helper_path ) helper_args `` )
+          ( vec_free [s] helper_args )
+          ?? helper_res {
+            T h_out → {
+              : i helper_rc ( output_exit_code h_out )
+              ? != helper_rc 0 {
+                : String detail ( string_from ( output_stderr h_out ) )
+                ? == ( string_len detail ) 0 { ( string_free detail ) = detail ( string_from ( output_stdout h_out ) ) } {}
+                : HttpResponse hr ( response_text 500 ( string_data detail ) )
+                ( string_free detail )
+                ( output_free h_out )
+                ( free_build_wasm_cfg helper_path work_root runtime_wasm canvas_wasm audio_wasm zig_driver wasm_opt )
+                ( string_free nu_path ) ( string_free build_id ) ( string_free build_dir )
+                ( json_free root ) ( string_free body_str )
+                ^ hr
+              } {}
 
-          : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
-          : ! Output ProcessErr nurlc_res ( process_run ( string_data ( get_nurlc_path ) ) nurlc_args `` ) ( vec_free [s] nurlc_args )
-
-          ?? nurlc_res {
-            T n_out → {
-              : i n_rc ( output_exit_code n_out )
-              ? ( output_success n_out ) {
-                : String ir ( string_from ( output_stdout n_out ) )
-                : String ir_fixed ( prepare_ir_for_wasi ir )
-                ( write_file ( string_data ll_path ) ( string_data ir_fixed ) )
-                ( string_free ir )
-
-                : b uses_canvas F
-                : ! Regex ParseErr re_canv ( regex_compile `@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mouse_btn)\b` )
-                ?? re_canv { T rc → { = uses_canvas ( regex_test rc ( string_data ir_fixed ) ) ( regex_free rc ) } F _ → {} }
-                
-                : b uses_audio F
-                : ! Regex ParseErr re_aud ( regex_compile `@audio_(level|bin|bin_count|peak_bin|centroid|freq_of|sample_rate|is_silent|ready)\b` )
-                ?? re_aud { T ra → { = uses_audio ( regex_test ra ( string_data ir_fixed ) ) ( regex_free ra ) } F _ → {} }
-
-                : ( Vec s ) clang_args ( vec_new [s] )
-                ( vec_push [s] clang_args `--target=wasm32-wasi` ) ( vec_push [s] clang_args `-O2` ) ( vec_push [s] clang_args `-Wno-override-module` ) ( vec_push [s] clang_args ( string_data ll_path ) )
-                ( vec_push [s] clang_args ( string_data ( get_runtime_wasm_o ) ) )
-                ? uses_canvas { ( vec_push [s] clang_args ( string_data ( get_canvas_wasm_o ) ) ) } {}
-                ? uses_audio { ( vec_push [s] clang_args ( string_data ( get_audio_wasm_o ) ) ) } {}
-                ? | uses_canvas uses_audio { ( vec_push [s] clang_args `-Wl,--allow-undefined` ) } {}
-                ( vec_push [s] clang_args `-o` ) ( vec_push [s] clang_args ( string_data wasm_path ) ) ( vec_push [s] clang_args `-lm` )
-
-                : ! Output ProcessErr clang_res ( process_run ( string_data ( get_wasi_clang ) ) clang_args `` ) ( vec_free [s] clang_args )
-
-                ?? clang_res {
-                  T c_out → {
-                    : i c_rc ( output_exit_code c_out )
-                    : Json res ( json_obj_new )
-                    ( json_obj_set res `status` ( json_str_lit ? == c_rc 0 `ok` `error` ) )
-                    ( json_obj_set res `message` ( json_str_lit `compiled nurl → wasm32-wasi` ) )
-                    ( json_obj_set res `filename` ( json_str_lit filename ) )
-                    ( json_obj_set res `wasm_base64` ( json_null ) )
-                    ( json_obj_set res `wasm_bytes` ( json_int 0 ) )
-                    ( json_obj_set res `nurlc_stderr` ( json_str_or_null ( output_stderr n_out ) ) )
-                    ( json_obj_set res `nurlc_errors` ( json_arr_new ) )
-                    ( json_obj_set res `clang_stderr` ( json_str_or_null ( output_stderr c_out ) ) )
-                    ( json_obj_set res `llvm_ir` ? | emit_ll != c_rc 0 { ( json_str_lit ( string_data ir_fixed ) ) } { ( json_null ) } )
-                    ( json_obj_set res `uses_canvas` ( json_bool uses_canvas ) )
-                    ( json_obj_set res `uses_audio` ( json_bool uses_audio ) )
-                    
-                    : String b64 ( string_new ) : String wasm_url ( string_new )
-                    ? == c_rc 0 {
-                      : ! i IoErr wasm_size_res ( file_size ( string_data wasm_path ) )
+              : ! Json ParseErr payload_res ( json_parse ( output_stdout h_out ) )
+              ?? payload_res {
+                T payload → {
+                  : i http_status ( get_common_int payload `http_status` 200 )
+                  ? == http_status 200 {
+                    : s wasm_path_raw ( get_common_json payload `wasm_path` `` )
+                    ? > ( nurl_str_len wasm_path_raw ) 0 {
+                      : ! i IoErr wasm_size_res ( file_size wasm_path_raw )
                       : i w_bytes ?? wasm_size_res { T s → s F _ → 0 }
-                      ( json_obj_set res `wasm_bytes` ( json_int w_bytes ) )
-                      : ! ( Vec u ) IoErr wasm_data_res ( read_file_bytes ( string_data wasm_path ) )
-                      ?? wasm_data_res { T w_data → { 
-                          : String b ( b64_encode_vec w_data ) ( json_obj_set res `wasm_base64` ( json_str_lit ( string_data b ) ) )
-                          ( string_free b64 ) = b64 b ( vec_free [u] w_data ) } F _ → {} }
-                      = wasm_url ( string_with_cap 64 )
-                      ( string_push_str wasm_url `/download/` ) ( string_push_str wasm_url ( string_data build_id ) ) ( string_push_str wasm_url `/` ) ( string_push_str wasm_url ( string_data wasm_name ) )
-                      ( json_obj_set res `download_url` ( json_str_lit ( string_data wasm_url ) ) )
+                      ( json_obj_set payload `wasm_bytes` ( json_int w_bytes ) )
+                      : ! ( Vec u ) IoErr wasm_data_res ( read_file_bytes wasm_path_raw )
+                      ?? wasm_data_res {
+                        T w_data → {
+                          : String b64 ( b64_encode_vec w_data )
+                          ( json_obj_set payload `wasm_base64` ( json_str_lit ( string_data b64 ) ) )
+                          ( vec_free [u] w_data ) ( string_free b64 )
+                        }
+                        F _ → { ( json_obj_set payload `wasm_base64` ( json_null ) ) }
+                      }
+                      : String wasm_name ( path_basename wasm_path_raw )
+                      : String wasm_url ( build_download_url build_id ( string_data wasm_name ) )
+                      ( json_obj_set payload `download_url` ( json_str_lit ( string_data wasm_url ) ) )
+                      ( string_free wasm_name ) ( string_free wasm_url )
                     } {}
-
-                    : String body ( json_stringify res )
-                    : HttpResponse hr ( response_text 200 ( string_data body ) )
-                    ( response_set_header hr `Content-Type` `application/json` )
-                    
-                    ( string_free b64 ) ( string_free wasm_url ) ( json_free res ) ( string_free ir_fixed )
-                    ( output_free n_out ) ( output_free c_out ) ( json_free root )
-                    ( string_free nu_path ) ( string_free ll_name ) ( string_free ll_path ) ( string_free wasm_name ) ( string_free wasm_path )
-                    ( string_free build_id ) ( string_free build_dir ) ( string_free body_str ) ( string_free body )
-                    ^ hr
-                  }
-                  F ce → { ( string_free ir_fixed ) ^ ( response_text 500 `{"error":"wasi-clang failed"}\n` ) }
+                    ? emit_ll {
+                      : s ll_path_raw ( get_common_json payload `prepared_ll_path` `` )
+                      ? > ( nurl_str_len ll_path_raw ) 0 {
+                        : ! String IoErr ll_res ( read_file ll_path_raw )
+                        ?? ll_res { T ll_text → {
+                            ( json_obj_set payload `llvm_ir` ( json_str_lit ( string_data ll_text ) ) )
+                            ( string_free ll_text )
+                        } F _ → { ( json_obj_set payload `llvm_ir` ( json_null ) ) } }
+                      } { ( json_obj_set payload `llvm_ir` ( json_null ) ) } 
+                    } { ( json_obj_set payload `llvm_ir` ( json_null ) ) } 
+                    ( json_obj_set payload `nurlc_errors` ( json_arr_new ) )
+                  } {}
+                  : HttpResponse hr ( json_response_owned http_status payload )
+                  ( output_free h_out )
+                  ( free_build_wasm_cfg helper_path work_root runtime_wasm canvas_wasm audio_wasm zig_driver wasm_opt )
+                  ( string_free nu_path ) ( string_free build_id ) ( string_free build_dir )
+                  ( json_free root ) ( string_free body_str )
+                  ^ hr
                 }
-              } {
-                : HttpResponse hr422 ( response_text 422 ( output_stderr n_out ) )
-                ( output_free n_out ) ( json_free root ) ( string_free nu_path ) ( string_free ll_path ) ( string_free wasm_path ) ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
-                ^ hr422
+                F _ → {
+                  : HttpResponse hr ( response_text 500 `{"error":"helper returned invalid json"}\n` )
+                  ( output_free h_out )
+                  ( free_build_wasm_cfg helper_path work_root runtime_wasm canvas_wasm audio_wasm zig_driver wasm_opt )
+                  ( string_free nu_path ) ( string_free build_id ) ( string_free build_dir )
+                  ( json_free root ) ( string_free body_str )
+                  ^ hr
+                }
               }
             }
-            F _ → { ^ ( response_text 500 `{"error":"nurlc failed"}\n` ) }
+            F _ → {
+              : HttpResponse hr ( response_text 500 `{"error":"build helper process failed"}\n` )
+              ( free_build_wasm_cfg helper_path work_root runtime_wasm canvas_wasm audio_wasm zig_driver wasm_opt )
+              ( string_free nu_path ) ( string_free build_id ) ( string_free build_dir )
+              ( json_free root ) ( string_free body_str )
+              ^ hr
+            }
           }
         }
         F _ → { ^ ( response_text 500 `{"error":"could not create build dir"}\n` ) }
@@ -496,118 +467,30 @@ $ `stdlib/ext/regex.nu`
 
 @ h_build_windows HttpRequest req Params params → HttpResponse {
   ( nurl_print `[srv] POST /build_windows\n` )
-  : String body_str ( get_body_str req )
-  : ! Json ParseErr root_res ( json_parse ( string_data body_str ) )
-  ?? root_res {
-    T root → {
-      : s source ( get_common_json root `source` `` )
-      ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
-      : s filename ( get_common_json root `filename` `main.nu` )
-      : s opt ( get_common_json root `opt` `-O2` )
-      : String build_id ( create_build_id )
-      : String build_dir ( path_join ( string_data ( get_output_dir ) ) ( string_data build_id ) )
-      : ! v IoErr dr ( dir_create ( string_data build_dir ) )
-      ?? dr {
-        T _ → {
-          : String nu_path ( path_join ( string_data build_dir ) filename )
-          ( write_file ( string_data nu_path ) source )
-          : String ll_path ( path_join ( string_data build_dir ) `main.ll` )
-          : String bin_name ( string_from filename )
-          ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
-          ( string_push_str bin_name `.exe` )
-          : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
-          : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
-          : ! Output ProcessErr nurlc_res ( process_run ( string_data ( get_nurlc_path ) ) nurlc_args `` ) ( vec_free [s] nurlc_args )
-          ?? nurlc_res {
-            T n_out → {
-              : i n_rc ( output_exit_code n_out )
-              ? ( output_success n_out ) {
-                ( write_file ( string_data ll_path ) ( output_stdout n_out ) )
-                : ( Vec s ) clang_args ( vec_new [s] )
-                ( vec_push [s] clang_args `--target=x86_64-w64-mingw32` ) ( vec_push [s] clang_args opt ) ( vec_push [s] clang_args `-Wno-override-module` ) ( vec_push [s] clang_args ( string_data ll_path ) )
-                ( vec_push [s] clang_args ( string_data ( get_runtime_win_o ) ) ) ( vec_push [s] clang_args `-o` ) ( vec_push [s] clang_args ( string_data bin_path ) )
-                ( vec_push [s] clang_args `-L/opt/curl-mingw/lib` ) ( vec_push [s] clang_args `-lcurl` ) ( vec_push [s] clang_args `-lws2_32` ) ( vec_push [s] clang_args `-lcrypt32` ) ( vec_push [s] clang_args `-lbcrypt` ) ( vec_push [s] clang_args `-lncrypt` ) ( vec_push [s] clang_args `-lsecur32` ) ( vec_push [s] clang_args `-ladvapi32` )
-                : ! Output ProcessErr clang_res ( process_run `clang` clang_args `` ) ( vec_free [s] clang_args )
-                ?? clang_res {
-                  T c_out → {
-                    : i c_rc ( output_exit_code c_out )
-                    : Json res ( json_obj_new )
-                    ( json_obj_set res `status` ( json_str_lit ? == c_rc 0 `ok` `error` ) ) ( json_obj_set res `message` ( json_str_lit `compiled nurl → windows .exe` ) ) ( json_obj_set res `filename` ( json_str_lit filename ) ) ( json_obj_set res `nurlc_returncode` ( json_int n_rc ) ) ( json_obj_set res `clang_returncode` ( json_int c_rc ) )
-                    ( json_obj_set res `nurlc_stdout` ( json_str_lit `[nurlc] build successful` ) ) ( json_obj_set res `nurlc_stderr` ( json_str_lit ( output_stderr n_out ) ) ) ( json_obj_set res `clang_stdout` ( json_str_lit ( output_stdout c_out ) ) ) ( json_obj_set res `clang_stderr` ( json_str_lit ( output_stderr c_out ) ) )
-                    : String bin_url ( string_new )
-                    ? == c_rc 0 { : ! i IoErr bin_size_res ( file_size ( string_data bin_path ) ) : Json bin_art ( json_obj_new ) ( json_obj_set bin_art `name` ( json_str_lit ( string_data bin_name ) ) ) ( json_obj_set bin_art `bytes` ( json_int ?? bin_size_res { T s → s F _ → 0 } ) )
-                      = bin_url ( string_with_cap 64 ) ( string_push_str bin_url `/download/` ) ( string_push_str bin_url ( string_data build_id ) ) ( string_push_str bin_url `/` ) ( string_push_str bin_url ( string_data bin_name ) )
-                      ( json_obj_set bin_art `download_url` ( json_str_lit ( string_data bin_url ) ) ) ( json_obj_set res `binary_artifact` bin_art ) } {}
-                    : String body ( json_stringify res )
-                    : HttpResponse hr ( response_text 200 ( string_data body ) ) ( response_set_header hr `Content-Type` `application/json` )
-                    ( string_free bin_url ) ( json_free res ) ( output_free n_out ) ( output_free c_out ) ( json_free root )
-                    ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path )
-                    ( string_free build_id ) ( string_free build_dir ) ( string_free body_str ) ( string_free body ) ^ hr
-                  } F ce → { ^ ( response_text 500 `{"error":"clang process failed"}\n` ) } }
-              } {
-                : HttpResponse hr422 ( response_text 422 ( output_stderr n_out ) )
-                ( output_free n_out ) ( json_free root ) ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path ) ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
-                ^ hr422
-              } } F _ → { ^ ( response_text 500 `{"error":"nurlc failed"}\n` ) } }
-        } F _ → { ^ ( response_text 500 `{"error":"could not create build dir"}\n` ) } } } F _ → { ^ ( response_text 400 `{"error":"invalid json"}\n` ) } }
+  : String zig ( get_zig )
+  : String driver ( string_from ( string_data zig ) )
+  ( string_push_str driver ` cc` )
+  ( string_free zig )
+  : String runtime ( get_runtime_win_o )
+  : String target ( get_windows_target )
+  : String canvas_obj ( string_new )
+  : String canvas_marker ( string_new )
+  ^ ( h_build_target req `windows` driver runtime target canvas_obj canvas_marker )
 }
 
 // ── Build handler (macOS) ────────────────────────────────────────────
 
 @ h_build_macos HttpRequest req Params params → HttpResponse {
   ( nurl_print `[srv] POST /build_macos\n` )
-  : String body_str ( get_body_str req )
-  : ! Json ParseErr root_res ( json_parse ( string_data body_str ) )
-  ?? root_res {
-    T root → {
-      : s source ( get_common_json root `source` `` )
-      ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
-      : s filename ( get_common_json root `filename` `main.nu` )
-      : s opt ( get_common_json root `opt` `-O2` )
-      : String build_id ( create_build_id )
-      : String build_dir ( path_join ( string_data ( get_output_dir ) ) ( string_data build_id ) )
-      : ! v IoErr dr ( dir_create ( string_data build_dir ) )
-      ?? dr {
-        T _ → {
-          : String nu_path ( path_join ( string_data build_dir ) filename )
-          ( write_file ( string_data nu_path ) source )
-          : String ll_path ( path_join ( string_data build_dir ) `main.ll` )
-          : String bin_name ( string_from filename )
-          ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
-          : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
-          : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
-          : ! Output ProcessErr nurlc_res ( process_run ( string_data ( get_nurlc_path ) ) nurlc_args `` ) ( vec_free [s] nurlc_args )
-          ?? nurlc_res {
-            T n_out → {
-              : i n_rc ( output_exit_code n_out )
-              ? ( output_success n_out ) {
-                ( write_file ( string_data ll_path ) ( output_stdout n_out ) )
-                : ( Vec s ) zig_args ( vec_new [s] )
-                ( vec_push [s] zig_args `cc` ) ( vec_push [s] zig_args `-target` ) ( vec_push [s] zig_args `x86_64-macos-none` ) ( vec_push [s] zig_args opt )
-                ( vec_push [s] zig_args `-Wno-override-module` ) ( vec_push [s] zig_args ( string_data ll_path ) ) ( vec_push [s] zig_args ( string_data ( get_runtime_mac_o ) ) ) ( vec_push [s] zig_args `-o` ) ( vec_push [s] zig_args ( string_data bin_path ) )
-                : ! Output ProcessErr zig_res ( process_run ( string_data ( get_zig ) ) zig_args `` ) ( vec_free [s] zig_args )
-                ?? zig_res {
-                  T z_out → {
-                    : i z_rc ( output_exit_code z_out )
-                    : Json res ( json_obj_new )
-                    ( json_obj_set res `status` ( json_str_lit ? == z_rc 0 `ok` `error` ) ) ( json_obj_set res `message` ( json_str_lit `compiled nurl → macOS Mach-O` ) ) ( json_obj_set res `filename` ( json_str_lit filename ) ) ( json_obj_set res `nurlc_returncode` ( json_int n_rc ) ) ( json_obj_set res `clang_returncode` ( json_int z_rc ) )
-                    ( json_obj_set res `nurlc_stdout` ( json_str_lit `[nurlc] build successful` ) ) ( json_obj_set res `nurlc_stderr` ( json_str_lit ( output_stderr n_out ) ) ) ( json_obj_set res `clang_stdout` ( json_str_lit ( output_stdout z_out ) ) ) ( json_obj_set res `clang_stderr` ( json_str_lit ( output_stderr z_out ) ) )
-                    : String bin_url ( string_new )
-                    ? == z_rc 0 { : ! i IoErr bin_size_res ( file_size ( string_data bin_path ) ) : Json bin_art ( json_obj_new ) ( json_obj_set bin_art `name` ( json_str_lit ( string_data bin_name ) ) ) ( json_obj_set bin_art `bytes` ( json_int ?? bin_size_res { T s → s F _ → 0 } ) )
-                      = bin_url ( string_with_cap 64 ) ( string_push_str bin_url `/download/` ) ( string_push_str bin_url ( string_data build_id ) ) ( string_push_str bin_url `/` ) ( string_push_str bin_url ( string_data bin_name ) )
-                      ( json_obj_set bin_art `download_url` ( json_str_lit ( string_data bin_url ) ) ) ( json_obj_set res `binary_artifact` bin_art ) } {}
-                    : String body ( json_stringify res )
-                    : HttpResponse hr ( response_text 200 ( string_data body ) ) ( response_set_header hr `Content-Type` `application/json` )
-                    ( string_free bin_url ) ( json_free res ) ( output_free n_out ) ( output_free z_out ) ( json_free root )
-                    ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path )
-                    ( string_free build_id ) ( string_free build_dir ) ( string_free body_str ) ( string_free body ) ^ hr
-                  } F ce → { ^ ( response_text 500 `{"error":"zig process failed"}\n` ) } }
-              } {
-                : HttpResponse hr422 ( response_text 422 ( output_stderr n_out ) )
-                ( output_free n_out ) ( json_free root ) ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path ) ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
-                ^ hr422
-              } } F _ → { ^ ( response_text 500 `{"error":"nurlc failed"}\n` ) } }
-        } F _ → { ^ ( response_text 500 `{"error":"could not create build dir"}\n` ) } } } F _ → { ^ ( response_text 400 `{"error":"invalid json"}\n` ) } }
+  : String zig ( get_zig )
+  : String driver ( string_from ( string_data zig ) )
+  ( string_push_str driver ` cc` )
+  ( string_free zig )
+  : String runtime ( get_runtime_mac_o )
+  : String target ( get_macos_target )
+  : String canvas_obj ( string_new )
+  : String canvas_marker ( string_new )
+  ^ ( h_build_target req `macos` driver runtime target canvas_obj canvas_marker )
 }
 
 // ── Examples handler ────────────────────────────────────────────────
@@ -658,19 +541,25 @@ $ `stdlib/ext/regex.nu`
 
 @ h_health HttpRequest req Params params → HttpResponse {
   ( nurl_print `[srv] GET /health\n` )
-  : String nurlc_path ( get_nurlc_path ) : String stdlib_dir ( get_stdlib_dir ) : String wasi_clang ( get_wasi_clang ) : String runtime_wasm ( get_runtime_wasm_o )
+  : String nurlc_path ( get_nurlc_path )
+  : String stdlib_dir ( get_stdlib_dir )
+  : String link_helper ( get_link_helper )
+  : String runtime_wasm ( get_runtime_wasm_o )
+  : String zig ( get_zig )
   : Json j ( json_obj_new )
   ( json_obj_set j `status` ( json_str_lit `ok` ) )
   ( json_obj_set j `nurlc_available` ( json_bool ( file_exists ( string_data nurlc_path ) ) ) )
   ( json_obj_set j `nurlc_path` ( json_str_lit ( string_data nurlc_path ) ) )
-  ( json_obj_set j `wasi_toolchain_available` ( json_bool | ( file_exists ( string_data wasi_clang ) ) ( file_exists ( string_data runtime_wasm ) ) ) )
+  ( json_obj_set j `link_helper_available` ( json_bool ( file_exists ( string_data link_helper ) ) ) )
+  ( json_obj_set j `link_helper_path` ( json_str_lit ( string_data link_helper ) ) )
+  ( json_obj_set j `wasi_toolchain_available` ( json_bool & ( file_exists ( string_data link_helper ) ) | ( file_exists ( string_data runtime_wasm ) ) ( file_exists ( string_data zig ) ) ) )
   ( json_obj_set j `stdlib_available` ( json_bool ( file_exists ( string_data stdlib_dir ) ) ) )
   ( json_obj_set j `stdlib_dir` ( json_str_lit ( string_data stdlib_dir ) ) )
   ( json_obj_set j `stdlib_modules` ( list_stdlib_modules ) )
   
   : String body ( json_stringify j )
   : HttpResponse r ( response_text 200 ( string_data body ) ) ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
-  ( json_free j ) ( string_free nurlc_path ) ( string_free stdlib_dir ) ( string_free wasi_clang ) ( string_free runtime_wasm ) ( string_free body )
+  ( json_free j ) ( string_free nurlc_path ) ( string_free stdlib_dir ) ( string_free link_helper ) ( string_free runtime_wasm ) ( string_free zig ) ( string_free body )
   ^ r
 }
 

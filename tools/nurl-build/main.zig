@@ -18,6 +18,9 @@ const library_specs = [_]LibrarySpec{
 
 const Command = enum {
     link,
+    api_build,
+    api_build_wasm,
+    api_runtime_objs,
     nurl,
     wasmnurl,
     fmt,
@@ -64,6 +67,9 @@ fn run(init: std.process.Init) !void {
     if (parseCommand(args[1])) |cmd| {
         return switch (cmd) {
             .link => runLink(init, args[2..]),
+            .api_build => runApiBuild(init, args[2..]),
+            .api_build_wasm => runApiBuildWasm(init, args[2..]),
+            .api_runtime_objs => runApiRuntimeObjs(init, args[2..]),
             .nurl => runNurl(init, args[2..]),
             .wasmnurl => runWasmNurl(init, args[2..]),
             .fmt => runFmt(init, args[2..]),
@@ -92,6 +98,9 @@ fn run(init: std.process.Init) !void {
 }
 
 fn parseCommand(name: []const u8) ?Command {
+    if (std.mem.eql(u8, name, "api-build")) return .api_build;
+    if (std.mem.eql(u8, name, "api-build-wasm")) return .api_build_wasm;
+    if (std.mem.eql(u8, name, "api-runtime-objs")) return .api_runtime_objs;
     if (std.mem.eql(u8, name, "fmt-idempotent")) return .fmt_idempotent;
     if (std.mem.eql(u8, name, "test-42")) return .test_42;
     if (std.mem.eql(u8, name, "san-test")) return .san_test;
@@ -106,6 +115,117 @@ fn parseCommand(name: []const u8) ?Command {
 const CompileFlavor = enum {
     native,
     wasm,
+};
+
+const ApiBuildKind = enum {
+    native,
+    windows,
+    macos,
+};
+
+const ApiBuildWasmConfig = struct {
+    root: []const u8,
+    src_path: []const u8,
+    build_dir: []const u8,
+    filename: ?[]const u8,
+    target: []const u8,
+    runtime: []const u8,
+    canvas_obj: []const u8,
+    audio_obj: []const u8,
+    zig_driver: []const u8,
+    wasm_opt: []const u8,
+};
+
+const ApiBuildConfig = struct {
+    kind: ApiBuildKind,
+    root: []const u8,
+    src_path: []const u8,
+    build_dir: []const u8,
+    filename: ?[]const u8,
+    opt: []const u8,
+    driver: []const u8,
+    target: ?[]const u8,
+    runtime: []const u8,
+    canvas_obj: ?[]const u8,
+    canvas_sdl2_marker: ?[]const u8,
+};
+
+const ApiBuildPayload = struct {
+    http_status: u16 = 200,
+    fatal_detail: ?[]const u8 = null,
+    status: []const u8,
+    message: []const u8,
+    filename: ?[]const u8,
+    uses_canvas: bool,
+    uses_audio: bool,
+    nurlc_returncode: i32,
+    nurlc_stdout_bytes: usize,
+    nurlc_stderr: []const u8,
+    clang_returncode: ?i32,
+    clang_stdout: ?[]const u8,
+    clang_stderr: ?[]const u8,
+    stdout: []const u8,
+    stderr: []const u8,
+    ll_path: ?[]const u8,
+    binary_path: ?[]const u8,
+};
+
+const ApiBuildWasmPayload = struct {
+    http_status: u16 = 200,
+    error_message: ?[]const u8 = null,
+    error_stage: ?[]const u8 = null,
+    error_returncode: ?i32 = null,
+    error_stderr: ?[]const u8 = null,
+    error_nurlc_stderr: ?[]const u8 = null,
+    status: []const u8,
+    message: []const u8,
+    filename: ?[]const u8,
+    uses_canvas: bool,
+    uses_audio: bool,
+    nurlc_stderr: ?[]const u8,
+    clang_stderr: ?[]const u8,
+    raw_ll_path: ?[]const u8,
+    prepared_ll_path: ?[]const u8,
+    wasm_path: ?[]const u8,
+};
+
+const WasmAbiEntry = struct {
+    name: []const u8,
+    ret: u8,
+    params: []const u8,
+};
+
+const wasm_target_triple = "target triple = \"wasm32-unknown-wasi\"\n";
+
+const wasm_abi_entries = [_]WasmAbiEntry{
+    .{ .name = "malloc", .ret = 'p', .params = "s" },
+    .{ .name = "calloc", .ret = 'p', .params = "ss" },
+    .{ .name = "realloc", .ret = 'p', .params = "ps" },
+    .{ .name = "free", .ret = 'v', .params = "p" },
+    .{ .name = "puts", .ret = 'i', .params = "p" },
+    .{ .name = "putchar", .ret = 'i', .params = "i" },
+    .{ .name = "getchar", .ret = 'i', .params = "" },
+    .{ .name = "strlen", .ret = 's', .params = "p" },
+    .{ .name = "strcmp", .ret = 'i', .params = "pp" },
+    .{ .name = "strncmp", .ret = 'i', .params = "pps" },
+    .{ .name = "strcpy", .ret = 'p', .params = "pp" },
+    .{ .name = "strncpy", .ret = 'p', .params = "pps" },
+    .{ .name = "strcat", .ret = 'p', .params = "pp" },
+    .{ .name = "strdup", .ret = 'p', .params = "p" },
+    .{ .name = "memcpy", .ret = 'p', .params = "pps" },
+    .{ .name = "memmove", .ret = 'p', .params = "pps" },
+    .{ .name = "memset", .ret = 'p', .params = "pis" },
+    .{ .name = "memcmp", .ret = 'i', .params = "pps" },
+    .{ .name = "atoi", .ret = 'i', .params = "p" },
+    .{ .name = "abs", .ret = 'i', .params = "i" },
+    .{ .name = "exit", .ret = 'v', .params = "i" },
+    .{ .name = "rand", .ret = 'i', .params = "" },
+    .{ .name = "srand", .ret = 'v', .params = "s" },
+    .{ .name = "system", .ret = 'i', .params = "p" },
+    .{ .name = "write", .ret = 'i', .params = "ips" },
+    .{ .name = "read", .ret = 'i', .params = "ips" },
+    .{ .name = "open", .ret = 'i', .params = "pii" },
+    .{ .name = "close", .ret = 'i', .params = "i" },
 };
 
 const UserCompileConfig = struct {
@@ -3186,6 +3306,1200 @@ fn runBuildWasm(init: std.process.Init, args: []const []const u8) !void {
 
     std.debug.print("\nDone: {s}  ({d} bytes)\n", .{ final_out_path, response_bytes.len });
     std.debug.print("\nTry:\n  zig build wasmnurl -- examples/showcase.nu\n", .{});
+}
+
+fn runApiBuild(init: std.process.Init, args: []const []const u8) !void {
+    const payload = try executeApiBuild(init, args);
+
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buffer);
+    const stdout = &stdout_writer.interface;
+    defer stdout_writer.flush() catch {};
+
+    try std.json.Stringify.value(payload, .{}, stdout);
+    try stdout.writeByte('\n');
+}
+
+fn runApiBuildWasm(init: std.process.Init, args: []const []const u8) !void {
+    const payload = try executeApiBuildWasm(init, args);
+
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buffer);
+    const stdout = &stdout_writer.interface;
+    defer stdout_writer.flush() catch {};
+
+    try std.json.Stringify.value(payload, .{}, stdout);
+    try stdout.writeByte('\n');
+}
+
+fn runApiRuntimeObjs(init: std.process.Init, args: []const []const u8) !void {
+    const arena = init.arena.allocator();
+    const io = init.io;
+
+    var root: []const u8 = ".";
+    var zig_bin: []const u8 = init.environ_map.get("NURL_ZIG") orelse "zig";
+    var curl_prefix: []const u8 = init.environ_map.get("NURL_MINGW_CURL_PREFIX") orelse "/opt/curl-mingw";
+    var wasm_target: []const u8 = init.environ_map.get("NURL_WASM_TARGET") orelse "wasm32-wasi";
+    var windows_target: []const u8 = init.environ_map.get("NURL_WINDOWS_TARGET") orelse "x86_64-windows-gnu";
+    var macos_target: []const u8 = init.environ_map.get("NURL_MACOS_TARGET") orelse "x86_64-macos-none";
+    var skip_wasm = false;
+    var skip_windows = false;
+    var skip_macos = false;
+
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--root")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            root = args[i];
+        } else if (std.mem.eql(u8, arg, "--zig")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            zig_bin = args[i];
+        } else if (std.mem.eql(u8, arg, "--curl-prefix")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            curl_prefix = args[i];
+        } else if (std.mem.eql(u8, arg, "--wasm-target")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            wasm_target = args[i];
+        } else if (std.mem.eql(u8, arg, "--windows-target")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            windows_target = args[i];
+        } else if (std.mem.eql(u8, arg, "--macos-target")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            macos_target = args[i];
+        } else if (std.mem.eql(u8, arg, "--skip-wasm")) {
+            skip_wasm = true;
+        } else if (std.mem.eql(u8, arg, "--skip-windows")) {
+            skip_windows = true;
+        } else if (std.mem.eql(u8, arg, "--skip-macos")) {
+            skip_macos = true;
+        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            std.debug.print(
+                "usage: nurl-build api-runtime-objs [--root <path>] [--zig <path>] [--curl-prefix <path>] [--wasm-target <triple>] [--windows-target <triple>] [--macos-target <triple>] [--skip-wasm] [--skip-windows] [--skip-macos]\n",
+                .{},
+            );
+            std.process.exit(0);
+        } else {
+            std.debug.print("nurl-build: unknown api-runtime-objs arg: {s}\n", .{arg});
+            return error.InvalidArgs;
+        }
+    }
+
+    if (i != args.len) return error.InvalidArgs;
+
+    const root_abs = try absolutePath(arena, root);
+    try ensureExists(io, root_abs, "repo root");
+
+    const runtime_c = try std.fs.path.join(arena, &.{ root_abs, "stdlib", "runtime.c" });
+    try ensureExists(io, runtime_c, "stdlib/runtime.c");
+
+    if (!skip_wasm) {
+        std.debug.print("[wasm] compiling runtime.wasm.o, canvas.wasm.o, audio.wasm.o\n", .{});
+        try runInheritedInCwd(init, root_abs, &.{ zig_bin, "cc", "-target", wasm_target, "-O2", "-c", "stdlib/runtime.c", "-o", "stdlib/runtime.wasm.o" });
+        try runInheritedInCwd(init, root_abs, &.{ zig_bin, "cc", "-target", wasm_target, "-O2", "-c", "stdlib/canvas_wasm.c", "-o", "stdlib/canvas.wasm.o" });
+        try runInheritedInCwd(init, root_abs, &.{ zig_bin, "cc", "-target", wasm_target, "-O2", "-c", "stdlib/audio_wasm.c", "-o", "stdlib/audio.wasm.o" });
+    }
+
+    if (!skip_windows) {
+        const curl_include = try std.fmt.allocPrint(arena, "-I{s}/include", .{curl_prefix});
+        std.debug.print("[windows] compiling runtime.win.o\n", .{});
+        try runInheritedInCwd(init, root_abs, &.{
+            zig_bin,
+            "cc",
+            "-target",
+            windows_target,
+            "-O2",
+            "-DNURL_HAVE_LIBCURL",
+            "-DCURL_STATICLIB",
+            curl_include,
+            "-c",
+            "stdlib/runtime.c",
+            "-o",
+            "stdlib/runtime.win.o",
+        });
+        try std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = try std.fs.path.join(arena, &.{ root_abs, "stdlib", "runtime.win.curl" }),
+            .data = "1\n",
+        });
+    }
+
+    if (!skip_macos) {
+        std.debug.print("[macos] compiling runtime.mac.o\n", .{});
+        try runInheritedInCwd(init, root_abs, &.{ zig_bin, "cc", "-target", macos_target, "-O2", "-c", "stdlib/runtime.c", "-o", "stdlib/runtime.mac.o" });
+    }
+}
+
+fn executeApiBuildWasm(init: std.process.Init, args: []const []const u8) !ApiBuildWasmPayload {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+    const io = init.io;
+
+    const cfg = try parseApiBuildWasmArgs(arena, args);
+    try ensureExists(io, cfg.src_path, "source file");
+    try ensureExists(io, cfg.runtime, "runtime object");
+    try ensureDirPath(io, cfg.build_dir);
+
+    const basename = try sanitizeBasename(gpa, cfg.filename orelse cfg.src_path);
+    const raw_ll_name = try std.fmt.allocPrint(gpa, "{s}.raw.ll", .{basename});
+    const ll_name = try std.fmt.allocPrint(gpa, "{s}.ll", .{basename});
+    const wasm_name = try std.fmt.allocPrint(gpa, "{s}.wasm", .{basename});
+    const async_name = try std.fmt.allocPrint(gpa, "{s}.async.wasm", .{basename});
+    const raw_ll_path = try std.fs.path.join(gpa, &.{ cfg.build_dir, raw_ll_name });
+    const ll_path = try std.fs.path.join(gpa, &.{ cfg.build_dir, ll_name });
+    const wasm_path = try std.fs.path.join(gpa, &.{ cfg.build_dir, wasm_name });
+    const async_wasm_path = try std.fs.path.join(gpa, &.{ cfg.build_dir, async_name });
+
+    const nurlc_path = try resolveNurlc(init, cfg.root);
+    try ensureExists(io, nurlc_path, "nurlc");
+
+    const nurlc_result = try std.process.run(gpa, io, .{
+        .argv = &.{ nurlc_path, cfg.src_path },
+        .cwd = .{ .path = cfg.root },
+    });
+    const nurlc_stderr = std.mem.trimEnd(u8, nurlc_result.stderr, "\r\n");
+    const nurlc_rc = runResultExitCode(nurlc_result.term);
+    if (nurlc_rc != 0 or nurlc_result.stdout.len == 0) {
+        return .{
+            .http_status = 422,
+            .error_stage = "nurlc",
+            .error_returncode = nurlc_rc,
+            .error_stderr = nurlc_stderr,
+            .error_nurlc_stderr = nurlc_stderr,
+            .status = "error",
+            .message = "nurlc failed",
+            .filename = cfg.filename,
+            .uses_canvas = false,
+            .uses_audio = false,
+            .nurlc_stderr = nurlc_stderr,
+            .clang_stderr = null,
+            .raw_ll_path = null,
+            .prepared_ll_path = null,
+            .wasm_path = null,
+        };
+    }
+
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = raw_ll_path,
+        .data = nurlc_result.stdout,
+    });
+
+    const prepared_ir = prepareIrForWasi(gpa, nurlc_result.stdout) catch {
+        return .{
+            .http_status = 422,
+            .error_message = "failed to rewrite LLVM IR for wasm32-wasi",
+            .status = "error",
+            .message = "ir rewrite failed",
+            .filename = cfg.filename,
+            .uses_canvas = false,
+            .uses_audio = false,
+            .nurlc_stderr = nurlc_stderr,
+            .clang_stderr = null,
+            .raw_ll_path = raw_ll_path,
+            .prepared_ll_path = null,
+            .wasm_path = null,
+        };
+    };
+
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = ll_path,
+        .data = prepared_ir,
+    });
+
+    const uses_canvas = containsAny(prepared_ir, &.{
+        "@canvas_open",
+        "@canvas_present",
+        "@canvas_sleep",
+        "@canvas_should_close",
+        "@canvas_close",
+        "@canvas_mouse_x",
+        "@canvas_mouse_y",
+        "@canvas_mouse_btn",
+    });
+    const uses_audio = containsAny(prepared_ir, &.{
+        "@audio_level",
+        "@audio_bin",
+        "@audio_bin_count",
+        "@audio_peak_bin",
+        "@audio_centroid",
+        "@audio_freq_of",
+        "@audio_sample_rate",
+        "@audio_is_silent",
+        "@audio_ready",
+    });
+
+    if (uses_canvas and !pathExists(io, cfg.canvas_obj)) {
+        return .{
+            .http_status = 500,
+            .error_message = try std.fmt.allocPrint(gpa, "canvas FFI used but {s} not present. Rebuild the container with canvas_wasm.c compiled.", .{cfg.canvas_obj}),
+            .status = "fatal",
+            .message = "canvas runtime unavailable",
+            .filename = cfg.filename,
+            .uses_canvas = true,
+            .uses_audio = uses_audio,
+            .nurlc_stderr = nurlc_stderr,
+            .clang_stderr = null,
+            .raw_ll_path = raw_ll_path,
+            .prepared_ll_path = ll_path,
+            .wasm_path = null,
+        };
+    }
+    if (uses_audio and !pathExists(io, cfg.audio_obj)) {
+        return .{
+            .http_status = 500,
+            .error_message = try std.fmt.allocPrint(gpa, "audio FFI used but {s} not present. Rebuild the container with audio_wasm.c compiled.", .{cfg.audio_obj}),
+            .status = "fatal",
+            .message = "audio runtime unavailable",
+            .filename = cfg.filename,
+            .uses_canvas = uses_canvas,
+            .uses_audio = true,
+            .nurlc_stderr = nurlc_stderr,
+            .clang_stderr = null,
+            .raw_ll_path = raw_ll_path,
+            .prepared_ll_path = ll_path,
+            .wasm_path = null,
+        };
+    }
+
+    var link_args: std.ArrayList([]const u8) = .empty;
+    defer link_args.deinit(gpa);
+    try link_args.appendSlice(gpa, &.{
+        "--driver",
+        cfg.zig_driver,
+        "--target",
+        cfg.target,
+        "--opt",
+        "-O2",
+        "--runtime",
+        cfg.runtime,
+        "--no-lto",
+        "--no-marker-libs",
+        "--flag",
+        "-Wno-override-module",
+    });
+    if (uses_canvas) try link_args.appendSlice(gpa, &.{ "--extra-obj", cfg.canvas_obj });
+    if (uses_audio) try link_args.appendSlice(gpa, &.{ "--extra-obj", cfg.audio_obj });
+    if (uses_canvas or uses_audio) {
+        try link_args.appendSlice(gpa, &.{ "--flag", "-Wl,--allow-undefined" });
+    }
+    try link_args.appendSlice(gpa, &.{ "--extra-lib", "-lm", cfg.root, ll_path, wasm_path });
+
+    const link_result = try runLinkCapture(init, link_args.items);
+    const link_stderr = std.mem.trimEnd(u8, link_result.stderr, "\r\n");
+    const link_rc = runResultExitCode(link_result.term);
+    if (link_rc != 0 or !pathExists(io, wasm_path)) {
+        return .{
+            .http_status = 422,
+            .error_stage = "nurl-build-wasm",
+            .error_returncode = link_rc,
+            .error_stderr = link_stderr,
+            .error_nurlc_stderr = nurlc_stderr,
+            .status = "error",
+            .message = "wasm link failed",
+            .filename = cfg.filename,
+            .uses_canvas = uses_canvas,
+            .uses_audio = uses_audio,
+            .nurlc_stderr = nurlc_stderr,
+            .clang_stderr = link_stderr,
+            .raw_ll_path = raw_ll_path,
+            .prepared_ll_path = ll_path,
+            .wasm_path = null,
+        };
+    }
+
+    var final_wasm_path = wasm_path;
+    var final_clang_stderr = link_stderr;
+
+    if (uses_canvas) {
+        const opt_result = std.process.run(gpa, io, .{
+            .argv = &.{
+                cfg.wasm_opt,
+                "--asyncify",
+                "--pass-arg=asyncify-imports@canvas.sleep",
+                "-O2",
+                wasm_path,
+                "-o",
+                async_wasm_path,
+            },
+        }) catch |err| switch (err) {
+            error.FileNotFound => {
+                return .{
+                    .http_status = 500,
+                    .error_message = try std.fmt.allocPrint(gpa, "wasm-opt not found at '{s}'. Canvas programs require binaryen.", .{cfg.wasm_opt}),
+                    .status = "fatal",
+                    .message = "wasm-opt unavailable",
+                    .filename = cfg.filename,
+                    .uses_canvas = true,
+                    .uses_audio = uses_audio,
+                    .nurlc_stderr = nurlc_stderr,
+                    .clang_stderr = link_stderr,
+                    .raw_ll_path = raw_ll_path,
+                    .prepared_ll_path = ll_path,
+                    .wasm_path = wasm_path,
+                };
+            },
+            else => |e| return e,
+        };
+        const opt_stderr = std.mem.trimEnd(u8, opt_result.stderr, "\r\n");
+        const opt_rc = runResultExitCode(opt_result.term);
+        if (opt_rc != 0 or !pathExists(io, async_wasm_path)) {
+            return .{
+                .http_status = 422,
+                .error_stage = "wasm-opt asyncify",
+                .error_returncode = opt_rc,
+                .error_stderr = opt_stderr,
+                .status = "error",
+                .message = "wasm asyncify failed",
+                .filename = cfg.filename,
+                .uses_canvas = true,
+                .uses_audio = uses_audio,
+                .nurlc_stderr = nurlc_stderr,
+                .clang_stderr = joinNonEmpty(gpa, &.{ link_stderr, opt_stderr }) catch link_stderr,
+                .raw_ll_path = raw_ll_path,
+                .prepared_ll_path = ll_path,
+                .wasm_path = wasm_path,
+            };
+        }
+        final_wasm_path = async_wasm_path;
+        final_clang_stderr = joinNonEmpty(gpa, &.{ link_stderr, opt_stderr }) catch link_stderr;
+    }
+
+    return .{
+        .status = "ok",
+        .message = try std.fmt.allocPrint(
+            gpa,
+            "compiled nurl → wasm32-wasi{s}{s}",
+            .{
+                if (uses_canvas) " (asyncified for canvas)" else "",
+                if (uses_audio) " [+audio]" else "",
+            },
+        ),
+        .filename = cfg.filename,
+        .uses_canvas = uses_canvas,
+        .uses_audio = uses_audio,
+        .nurlc_stderr = if (nurlc_stderr.len == 0) null else nurlc_stderr,
+        .clang_stderr = if (final_clang_stderr.len == 0) null else final_clang_stderr,
+        .raw_ll_path = raw_ll_path,
+        .prepared_ll_path = ll_path,
+        .wasm_path = final_wasm_path,
+    };
+}
+
+fn parseApiBuildWasmArgs(arena: std.mem.Allocator, args: []const []const u8) !ApiBuildWasmConfig {
+    var root: ?[]const u8 = null;
+    var src_path: ?[]const u8 = null;
+    var build_dir: ?[]const u8 = null;
+    var filename: ?[]const u8 = null;
+    var target: ?[]const u8 = null;
+    var runtime: ?[]const u8 = null;
+    var canvas_obj: ?[]const u8 = null;
+    var audio_obj: ?[]const u8 = null;
+    var zig_driver: ?[]const u8 = null;
+    var wasm_opt: ?[]const u8 = null;
+
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--root")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            root = args[i];
+        } else if (std.mem.eql(u8, arg, "--src")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            src_path = args[i];
+        } else if (std.mem.eql(u8, arg, "--build-dir")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            build_dir = args[i];
+        } else if (std.mem.eql(u8, arg, "--filename")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            filename = args[i];
+        } else if (std.mem.eql(u8, arg, "--target")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            target = args[i];
+        } else if (std.mem.eql(u8, arg, "--runtime")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            runtime = args[i];
+        } else if (std.mem.eql(u8, arg, "--canvas-obj")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            canvas_obj = args[i];
+        } else if (std.mem.eql(u8, arg, "--audio-obj")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            audio_obj = args[i];
+        } else if (std.mem.eql(u8, arg, "--zig-driver")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            zig_driver = args[i];
+        } else if (std.mem.eql(u8, arg, "--wasm-opt")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            wasm_opt = args[i];
+        } else {
+            std.debug.print("nurl-build: unknown api-build-wasm arg: {s}\n", .{arg});
+            return error.InvalidArgs;
+        }
+    }
+
+    if (root == null or src_path == null or build_dir == null or target == null or runtime == null or canvas_obj == null or audio_obj == null or zig_driver == null or wasm_opt == null) {
+        std.debug.print(
+            "usage: nurl-build api-build-wasm --root <path> --src <path> --build-dir <path> --target <triple> --runtime <path> --canvas-obj <path> --audio-obj <path> --zig-driver <cmd> --wasm-opt <path> [--filename <name>]\n",
+            .{},
+        );
+        return error.InvalidArgs;
+    }
+
+    return .{
+        .root = try absolutePath(arena, root.?),
+        .src_path = try absolutePath(arena, src_path.?),
+        .build_dir = try absolutePath(arena, build_dir.?),
+        .filename = filename,
+        .target = target.?,
+        .runtime = try absolutePath(arena, runtime.?),
+        .canvas_obj = try absolutePath(arena, canvas_obj.?),
+        .audio_obj = try absolutePath(arena, audio_obj.?),
+        .zig_driver = zig_driver.?,
+        .wasm_opt = wasm_opt.?,
+    };
+}
+
+fn executeApiBuild(init: std.process.Init, args: []const []const u8) !ApiBuildPayload {
+    const arena = init.arena.allocator();
+    const gpa = init.gpa;
+    const io = init.io;
+
+    const cfg = try parseApiBuildArgs(arena, args);
+    try ensureExists(io, cfg.src_path, "source file");
+    try ensureExists(io, cfg.runtime, "runtime object");
+    try ensureDirPath(io, cfg.build_dir);
+
+    const basename = try sanitizeBasename(gpa, cfg.filename orelse cfg.src_path);
+    const ll_name = try std.fmt.allocPrint(gpa, "{s}.ll", .{basename});
+    const bin_name = switch (cfg.kind) {
+        .native, .macos => basename,
+        .windows => try std.fmt.allocPrint(gpa, "{s}.exe", .{basename}),
+    };
+    const ll_path = try std.fs.path.join(gpa, &.{ cfg.build_dir, ll_name });
+    const bin_path = try std.fs.path.join(gpa, &.{ cfg.build_dir, bin_name });
+
+    const nurlc_path = try resolveNurlc(init, cfg.root);
+    try ensureExists(io, nurlc_path, "nurlc");
+
+    const nurlc_cwd = if (pathExists(io, cfg.root))
+        cfg.root
+    else
+        std.fs.path.dirname(cfg.src_path) orelse ".";
+
+    const nurlc_result = try std.process.run(gpa, io, .{
+        .argv = &.{ nurlc_path, cfg.src_path },
+        .cwd = .{ .path = nurlc_cwd },
+    });
+
+    const nurlc_stderr = std.mem.trimEnd(u8, nurlc_result.stderr, "\r\n");
+    const nurlc_stdout_bytes = nurlc_result.stdout.len;
+    const nurlc_rc = runResultExitCode(nurlc_result.term);
+
+    var stdout_log: std.Io.Writer.Allocating = .init(gpa);
+    var stderr_log: std.Io.Writer.Allocating = .init(gpa);
+    try appendPrefixedLog(&stderr_log, "nurlc", nurlc_stderr);
+
+    if (nurlc_rc != 0 or nurlc_result.stdout.len == 0) {
+        return .{
+            .status = "error",
+            .message = "nurlc failed",
+            .filename = cfg.filename,
+            .uses_canvas = false,
+            .uses_audio = false,
+            .nurlc_returncode = nurlc_rc,
+            .nurlc_stdout_bytes = nurlc_stdout_bytes,
+            .nurlc_stderr = nurlc_stderr,
+            .clang_returncode = null,
+            .clang_stdout = null,
+            .clang_stderr = null,
+            .stdout = "",
+            .stderr = stderr_log.written(),
+            .ll_path = null,
+            .binary_path = null,
+        };
+    }
+
+    if (!containsMainDefinition(nurlc_result.stdout)) {
+        try appendPrefixedLog(
+            &stderr_log,
+            "nurl",
+            switch (cfg.kind) {
+                .native => "nurlc produced IR without an `@main` definition. NURL's entry point is `@ main → i { ... }` — not `fn main() -> i { ... }`. See /examples for working sources.",
+                .windows, .macos => "nurlc produced IR without an `@main` definition. NURL's entry point is `@ main → i { ... }`.",
+            },
+        );
+        return .{
+            .status = "error",
+            .message = "no @main in generated IR",
+            .filename = cfg.filename,
+            .uses_canvas = false,
+            .uses_audio = false,
+            .nurlc_returncode = nurlc_rc,
+            .nurlc_stdout_bytes = nurlc_stdout_bytes,
+            .nurlc_stderr = nurlc_stderr,
+            .clang_returncode = null,
+            .clang_stdout = null,
+            .clang_stderr = null,
+            .stdout = "",
+            .stderr = stderr_log.written(),
+            .ll_path = null,
+            .binary_path = null,
+        };
+    }
+
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = ll_path,
+        .data = nurlc_result.stdout,
+    });
+
+    const uses_canvas = containsAny(nurlc_result.stdout, &.{
+        "@canvas_open",
+        "@canvas_present",
+        "@canvas_sleep",
+        "@canvas_should_close",
+        "@canvas_close",
+        "@canvas_mouse_x",
+        "@canvas_mouse_y",
+        "@canvas_mouse_btn",
+    });
+    const uses_audio = containsAny(nurlc_result.stdout, &.{
+        "@audio_level",
+        "@audio_bin",
+        "@audio_bin_count",
+        "@audio_peak_bin",
+        "@audio_centroid",
+        "@audio_freq_of",
+        "@audio_sample_rate",
+        "@audio_is_silent",
+        "@audio_ready",
+    });
+
+    switch (cfg.kind) {
+        .native => {
+            if (uses_canvas) {
+                const canvas_obj = cfg.canvas_obj orelse {
+                    return .{
+                        .http_status = 500,
+                        .fatal_detail = "canvas FFI used but no canvas object was configured for api-build",
+                        .status = "fatal",
+                        .message = "canvas runtime unavailable",
+                        .filename = cfg.filename,
+                        .uses_canvas = true,
+                        .uses_audio = uses_audio,
+                        .nurlc_returncode = nurlc_rc,
+                        .nurlc_stdout_bytes = nurlc_stdout_bytes,
+                        .nurlc_stderr = nurlc_stderr,
+                        .clang_returncode = null,
+                        .clang_stdout = null,
+                        .clang_stderr = null,
+                        .stdout = stdout_log.written(),
+                        .stderr = stderr_log.written(),
+                        .ll_path = null,
+                        .binary_path = null,
+                    };
+                };
+                if (!pathExists(io, canvas_obj)) {
+                    return .{
+                        .http_status = 500,
+                        .fatal_detail = try std.fmt.allocPrint(gpa, "canvas FFI used but {s} not present. Rebuild the container with canvas.c compiled.", .{canvas_obj}),
+                        .status = "fatal",
+                        .message = "canvas runtime unavailable",
+                        .filename = cfg.filename,
+                        .uses_canvas = true,
+                        .uses_audio = uses_audio,
+                        .nurlc_returncode = nurlc_rc,
+                        .nurlc_stdout_bytes = nurlc_stdout_bytes,
+                        .nurlc_stderr = nurlc_stderr,
+                        .clang_returncode = null,
+                        .clang_stdout = null,
+                        .clang_stderr = null,
+                        .stdout = stdout_log.written(),
+                        .stderr = stderr_log.written(),
+                        .ll_path = null,
+                        .binary_path = null,
+                    };
+                }
+            }
+        },
+        .windows, .macos => {
+            if (uses_canvas or uses_audio) {
+                const target_name = switch (cfg.kind) {
+                    .windows => "Windows",
+                    .macos => "macOS",
+                    .native => unreachable,
+                };
+                var unsupported: std.Io.Writer.Allocating = .init(gpa);
+                defer unsupported.deinit();
+                if (uses_canvas) try unsupported.writer.writeAll("canvas");
+                if (uses_audio) {
+                    if (uses_canvas) try unsupported.writer.writeAll(", ");
+                    try unsupported.writer.writeAll("audio");
+                }
+                return .{
+                    .http_status = 400,
+                    .fatal_detail = try std.fmt.allocPrint(gpa, "{s} build does not support FFI: {s}. Use Build WASM for canvas/audio programs.", .{ target_name, unsupported.written() }),
+                    .status = "fatal",
+                    .message = "unsupported ffi",
+                    .filename = cfg.filename,
+                    .uses_canvas = false,
+                    .uses_audio = uses_audio,
+                    .nurlc_returncode = nurlc_rc,
+                    .nurlc_stdout_bytes = nurlc_stdout_bytes,
+                    .nurlc_stderr = nurlc_stderr,
+                    .clang_returncode = null,
+                    .clang_stdout = null,
+                    .clang_stderr = null,
+                    .stdout = stdout_log.written(),
+                    .stderr = stderr_log.written(),
+                    .ll_path = null,
+                    .binary_path = null,
+                };
+            }
+        },
+    }
+
+    var link_args: std.ArrayList([]const u8) = .empty;
+    defer link_args.deinit(gpa);
+    try link_args.appendSlice(gpa, &.{
+        "--opt",
+        cfg.opt,
+        "--runtime",
+        cfg.runtime,
+        "--no-lto",
+        "--flag",
+        "-Wno-override-module",
+        "--driver",
+        cfg.driver,
+    });
+    if (cfg.target) |target| {
+        try link_args.appendSlice(gpa, &.{ "--target", target });
+    }
+    if (cfg.kind == .native and uses_canvas) {
+        try link_args.appendSlice(gpa, &.{ "--extra-obj", cfg.canvas_obj.? });
+        if (cfg.canvas_sdl2_marker) |marker| {
+            if (pathExists(io, marker)) {
+                try link_args.appendSlice(gpa, &.{ "--extra-lib", "-lSDL2" });
+            }
+        }
+    }
+    if (cfg.kind == .windows) {
+        const runtime_dir = std.fs.path.dirname(cfg.runtime) orelse ".";
+        const win_curl_marker = try std.fs.path.join(gpa, &.{ runtime_dir, "runtime.win.curl" });
+        if (pathExists(io, win_curl_marker)) {
+            const mingw_prefix = init.environ_map.get("NURL_MINGW_CURL_PREFIX") orelse "/opt/curl-mingw";
+            try link_args.appendSlice(gpa, &.{
+                "--extra-lib", try std.fmt.allocPrint(gpa, "-L{s}/lib", .{mingw_prefix}),
+                "--extra-lib", "-lcurl",
+                "--extra-lib", "-lws2_32",
+                "--extra-lib", "-lcrypt32",
+                "--extra-lib", "-lbcrypt",
+                "--extra-lib", "-lncrypt",
+                "--extra-lib", "-lsecur32",
+                "--extra-lib", "-ladvapi32",
+            });
+        }
+    }
+    try link_args.appendSlice(gpa, &.{ cfg.root, ll_path, bin_path });
+
+    const link_result = try runLinkCapture(init, link_args.items);
+
+    const clang_stdout = std.mem.trimEnd(u8, link_result.stdout, "\r\n");
+    const clang_stderr = std.mem.trimEnd(u8, link_result.stderr, "\r\n");
+    const link_label = switch (cfg.kind) {
+        .native => "link",
+        .windows, .macos => "zig cc",
+    };
+    try appendPrefixedLog(&stdout_log, link_label, clang_stdout);
+    try appendPrefixedLog(&stderr_log, link_label, clang_stderr);
+
+    const clang_rc = runResultExitCode(link_result.term);
+    const binary_exists = pathExists(io, bin_path);
+    const ok = clang_rc == 0 and binary_exists;
+
+    return .{
+        .status = if (ok) "ok" else "error",
+        .message = switch (cfg.kind) {
+            .native => if (ok) "compiled nurl → native binary" else "build failed (see stderr)",
+            .windows => if (ok) "compiled nurl → Windows .exe (zig cc)" else "windows build failed (see stderr)",
+            .macos => if (ok) try std.fmt.allocPrint(gpa, "compiled nurl → macOS Mach-O ({s})", .{cfg.target orelse "unknown-target"}) else "macos build failed (see stderr)",
+        },
+        .filename = cfg.filename,
+        .uses_canvas = uses_canvas and cfg.kind == .native,
+        .uses_audio = uses_audio,
+        .nurlc_returncode = nurlc_rc,
+        .nurlc_stdout_bytes = nurlc_stdout_bytes,
+        .nurlc_stderr = nurlc_stderr,
+        .clang_returncode = clang_rc,
+        .clang_stdout = if (clang_stdout.len == 0) null else clang_stdout,
+        .clang_stderr = if (clang_stderr.len == 0) null else clang_stderr,
+        .stdout = stdout_log.written(),
+        .stderr = stderr_log.written(),
+        .ll_path = ll_path,
+        .binary_path = if (binary_exists) bin_path else null,
+    };
+}
+
+fn parseApiBuildArgs(arena: std.mem.Allocator, args: []const []const u8) !ApiBuildConfig {
+    var kind: ?ApiBuildKind = null;
+    var root: ?[]const u8 = null;
+    var src_path: ?[]const u8 = null;
+    var build_dir: ?[]const u8 = null;
+    var filename: ?[]const u8 = null;
+    var opt: []const u8 = "-O2";
+    var driver: ?[]const u8 = null;
+    var target: ?[]const u8 = null;
+    var runtime: ?[]const u8 = null;
+    var canvas_obj: ?[]const u8 = null;
+    var canvas_sdl2_marker: ?[]const u8 = null;
+
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--kind")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            kind = std.meta.stringToEnum(ApiBuildKind, args[i]) orelse return error.InvalidArgs;
+        } else if (std.mem.eql(u8, arg, "--root")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            root = args[i];
+        } else if (std.mem.eql(u8, arg, "--src")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            src_path = args[i];
+        } else if (std.mem.eql(u8, arg, "--build-dir")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            build_dir = args[i];
+        } else if (std.mem.eql(u8, arg, "--filename")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            filename = args[i];
+        } else if (std.mem.eql(u8, arg, "--opt")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            opt = args[i];
+        } else if (std.mem.eql(u8, arg, "--driver")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            driver = args[i];
+        } else if (std.mem.eql(u8, arg, "--target")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            target = args[i];
+        } else if (std.mem.eql(u8, arg, "--runtime")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            runtime = args[i];
+        } else if (std.mem.eql(u8, arg, "--canvas-obj")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            canvas_obj = args[i];
+        } else if (std.mem.eql(u8, arg, "--canvas-sdl2-marker")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            canvas_sdl2_marker = args[i];
+        } else {
+            std.debug.print("nurl-build: unknown api-build arg: {s}\n", .{arg});
+            return error.InvalidArgs;
+        }
+    }
+
+    if (kind == null or root == null or src_path == null or build_dir == null or driver == null or runtime == null) {
+        std.debug.print(
+            "usage: nurl-build api-build --kind <native|windows|macos> --root <path> --src <path> --build-dir <path> --driver <cmd> --runtime <path> [--filename <name>] [--opt <-O2>] [--target <triple>] [--canvas-obj <path>] [--canvas-sdl2-marker <path>]\n",
+            .{},
+        );
+        return error.InvalidArgs;
+    }
+
+    return .{
+        .kind = kind.?,
+        .root = try absolutePath(arena, root.?),
+        .src_path = try absolutePath(arena, src_path.?),
+        .build_dir = try absolutePath(arena, build_dir.?),
+        .filename = filename,
+        .opt = opt,
+        .driver = driver.?,
+        .target = target,
+        .runtime = try absolutePath(arena, runtime.?),
+        .canvas_obj = if (canvas_obj) |path| try absolutePath(arena, path) else null,
+        .canvas_sdl2_marker = if (canvas_sdl2_marker) |path| try absolutePath(arena, path) else null,
+    };
+}
+
+fn sanitizeBasename(gpa: std.mem.Allocator, raw: []const u8) ![]const u8 {
+    const base = std.fs.path.basename(raw);
+    const ext = std.fs.path.extension(base);
+    const stem = if (ext.len != 0) base[0 .. base.len - ext.len] else base;
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    for (stem) |c| {
+        if (std.ascii.isAlphanumeric(c) or c == '.' or c == '_' or c == '-') {
+            try out.append(gpa, c);
+        }
+    }
+    if (out.items.len == 0) {
+        return try gpa.dupe(u8, "main");
+    }
+    return try gpa.dupe(u8, out.items);
+}
+
+fn appendPrefixedLog(block: *std.Io.Writer.Allocating, prefix: []const u8, content: []const u8) !void {
+    if (content.len == 0) return;
+    if (block.written().len != 0) try block.writer.writeByte('\n');
+    try block.writer.print("[{s}] {s}", .{ prefix, content });
+}
+
+fn containsMainDefinition(ir: []const u8) bool {
+    return std.mem.indexOf(u8, ir, "define i32 @main(") != null or
+        std.mem.indexOf(u8, ir, "define  i32 @main(") != null or
+        std.mem.indexOf(u8, ir, "\ndefine i32 @main(") != null or
+        std.mem.indexOf(u8, ir, "\ndefine  i32 @main(") != null;
+}
+
+fn runResultExitCode(term: std.process.Child.Term) i32 {
+    return switch (term) {
+        .exited => |code| @intCast(code),
+        .signal => |sig| 128 + @as(i32, @intCast(@intFromEnum(sig))),
+        .stopped => |sig| 128 + @as(i32, @intCast(@intFromEnum(sig))),
+        .unknown => |status| @intCast(status),
+    };
+}
+
+fn joinNonEmpty(gpa: std.mem.Allocator, parts: []const []const u8) ![]const u8 {
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    for (parts) |part| {
+        if (part.len == 0) continue;
+        if (out.written().len != 0) try out.writer.writeByte('\n');
+        try out.writer.writeAll(part);
+    }
+    return out.written();
+}
+
+fn prepareIrForWasi(gpa: std.mem.Allocator, ir_bytes: []const u8) ![]u8 {
+    var text = try gpa.dupe(u8, ir_bytes);
+    text = try renameMainForWasi(gpa, text);
+
+    var masked = try maskLlvmCStrings(gpa, text);
+    defer masked.saved.deinit(gpa);
+
+    var shims: std.ArrayList([]const u8) = .empty;
+    defer shims.deinit(gpa);
+
+    var rewritten = masked.text;
+    for (wasm_abi_entries) |entry| {
+        if (std.mem.indexOf(u8, rewritten, try std.fmt.allocPrint(gpa, "@{s}", .{entry.name})) == null) {
+            continue;
+        }
+        if (!wasmNeedsShim(entry)) continue;
+
+        rewritten = try stripDeclareLine(gpa, rewritten, entry.name);
+        rewritten = try rewriteCallLikeUses(gpa, rewritten, entry.name);
+        try shims.append(gpa, try emitWasmShim(gpa, entry));
+    }
+
+    var unmasked = try unmaskLlvmCStrings(gpa, rewritten, masked.saved.items);
+    if (shims.items.len != 0) {
+        var extra: std.Io.Writer.Allocating = .init(gpa);
+        try extra.writer.writeAll(unmasked);
+        try extra.writer.writeAll("\n; -- wasm32 libc ABI shims --\n");
+        for (shims.items) |shim| try extra.writer.writeAll(shim);
+        unmasked = extra.written();
+    }
+
+    return try insertWasmTargetTriple(gpa, unmasked);
+}
+
+const MaskedCStrings = struct {
+    text: []u8,
+    saved: std.ArrayList([]const u8),
+};
+
+fn maskLlvmCStrings(gpa: std.mem.Allocator, text: []const u8) !MaskedCStrings {
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    var saved: std.ArrayList([]const u8) = .empty;
+
+    var i: usize = 0;
+    while (i < text.len) {
+        if (text[i] == 'c' and i + 1 < text.len and text[i + 1] == '"') {
+            var j = i + 2;
+            while (j < text.len) {
+                if (text[j] == '\\' and j + 1 < text.len) {
+                    j += 2;
+                    continue;
+                }
+                if (text[j] == '"') {
+                    j += 1;
+                    break;
+                }
+                j += 1;
+            }
+            const literal = try gpa.dupe(u8, text[i..@min(j, text.len)]);
+            try saved.append(gpa, literal);
+            try out.writer.print("\x00CSTR{d}\x00", .{saved.items.len - 1});
+            i = @min(j, text.len);
+            continue;
+        }
+        try out.writer.writeByte(text[i]);
+        i += 1;
+    }
+
+    return .{
+        .text = out.written(),
+        .saved = saved,
+    };
+}
+
+fn unmaskLlvmCStrings(gpa: std.mem.Allocator, text: []const u8, saved: []const []const u8) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    var i: usize = 0;
+    while (i < text.len) {
+        if (text[i] == 0 and std.mem.startsWith(u8, text[i..], "\x00CSTR")) {
+            var j = i + 5;
+            var idx: usize = 0;
+            while (j < text.len and text[j] >= '0' and text[j] <= '9') : (j += 1) {
+                idx = idx * 10 + (text[j] - '0');
+            }
+            if (j < text.len and text[j] == 0 and idx < saved.len) {
+                try out.writer.writeAll(saved[idx]);
+                i = j + 1;
+                continue;
+            }
+        }
+        try out.writer.writeByte(text[i]);
+        i += 1;
+    }
+    return out.written();
+}
+
+fn renameMainForWasi(gpa: std.mem.Allocator, text: []const u8) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    var replaced = false;
+
+    var line_start: usize = 0;
+    while (line_start < text.len) {
+        const maybe_nl = std.mem.indexOfScalarPos(u8, text, line_start, '\n');
+        const line_end = maybe_nl orelse text.len;
+        const line = text[line_start..line_end];
+
+        if (!replaced and isMainDefLine(line)) {
+            const main_idx = std.mem.indexOf(u8, line, "@main") orelse unreachable;
+            try out.writer.writeAll(line[0..main_idx]);
+            try out.writer.writeAll("@__main_argc_argv");
+            try out.writer.writeAll(line[main_idx + "@main".len ..]);
+            replaced = true;
+        } else {
+            try out.writer.writeAll(line);
+        }
+
+        if (maybe_nl != null) try out.writer.writeByte('\n');
+        line_start = if (maybe_nl) |idx| idx + 1 else text.len;
+    }
+
+    return out.written();
+}
+
+fn isMainDefLine(line: []const u8) bool {
+    var i: usize = 0;
+    while (i < line.len and isSpaceByte(line[i])) : (i += 1) {}
+    if (!std.mem.startsWith(u8, line[i..], "define")) return false;
+    const main_idx = std.mem.indexOf(u8, line, "@main") orelse return false;
+    var j = main_idx + "@main".len;
+    while (j < line.len and isSpaceByte(line[j])) : (j += 1) {}
+    return j < line.len and line[j] == '(';
+}
+
+fn stripDeclareLine(gpa: std.mem.Allocator, text: []const u8, name: []const u8) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    var removed = false;
+    const needle = try std.fmt.allocPrint(gpa, "@{s}", .{name});
+
+    var line_start: usize = 0;
+    while (line_start < text.len) {
+        const maybe_nl = std.mem.indexOfScalarPos(u8, text, line_start, '\n');
+        const line_end = maybe_nl orelse text.len;
+        const line = text[line_start..line_end];
+
+        var skip = false;
+        if (!removed) {
+            var i: usize = 0;
+            while (i < line.len and isSpaceByte(line[i])) : (i += 1) {}
+            if (std.mem.startsWith(u8, line[i..], "declare") and std.mem.indexOf(u8, line, needle) != null) {
+                const idx = std.mem.indexOf(u8, line, needle).?;
+                var j = idx + needle.len;
+                while (j < line.len and isSpaceByte(line[j])) : (j += 1) {}
+                if (j < line.len and line[j] == '(') {
+                    skip = true;
+                    removed = true;
+                }
+            }
+        }
+
+        if (!skip) {
+            try out.writer.writeAll(line);
+            if (maybe_nl != null) try out.writer.writeByte('\n');
+        }
+
+        line_start = if (maybe_nl) |idx| idx + 1 else text.len;
+    }
+    return out.written();
+}
+
+fn rewriteCallLikeUses(gpa: std.mem.Allocator, text: []const u8, name: []const u8) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    const needle = try std.fmt.allocPrint(gpa, "@{s}", .{name});
+    const replacement = try std.fmt.allocPrint(gpa, "@__nurl_{s}_shim", .{name});
+
+    var i: usize = 0;
+    while (i < text.len) {
+        if (i + needle.len <= text.len and std.mem.eql(u8, text[i .. i + needle.len], needle)) {
+            var j = i + needle.len;
+            while (j < text.len and isSpaceByte(text[j])) : (j += 1) {}
+            if (j < text.len and text[j] == '(') {
+                try out.writer.writeAll(replacement);
+                i += needle.len;
+                continue;
+            }
+        }
+        try out.writer.writeByte(text[i]);
+        i += 1;
+    }
+    return out.written();
+}
+
+fn emitWasmShim(gpa: std.mem.Allocator, entry: WasmAbiEntry) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(gpa);
+
+    try out.writer.print("declare {s} @{s}(", .{ realTy(entry.ret), entry.name });
+    for (entry.params, 0..) |param, idx| {
+        if (idx != 0) try out.writer.writeAll(", ");
+        try out.writer.writeAll(realTy(param));
+    }
+    try out.writer.writeAll(")\n\n");
+
+    try out.writer.print("define internal {s} @__nurl_{s}_shim(", .{ nurlTy(entry.ret), entry.name });
+    for (entry.params, 0..) |param, idx| {
+        if (idx != 0) try out.writer.writeAll(", ");
+        try out.writer.print("{s} %a{d}", .{ nurlTy(param), idx });
+    }
+    try out.writer.writeAll(") {\n");
+
+    var first_call_arg = true;
+    for (entry.params, 0..) |param, idx| {
+        const nt = nurlTy(param);
+        const rt = realTy(param);
+        if (!std.mem.eql(u8, nt, rt)) {
+            try out.writer.print("  %t{d} = trunc {s} %a{d} to {s}\n", .{ idx, nt, idx, rt });
+        }
+        if (first_call_arg) {
+            first_call_arg = false;
+        }
+    }
+
+    if (entry.ret == 'v') {
+        try out.writer.print("  tail call {s} @{s}(", .{ realTy(entry.ret), entry.name });
+    } else {
+        try out.writer.print("  %r = tail call {s} @{s}(", .{ realTy(entry.ret), entry.name });
+    }
+    for (entry.params, 0..) |param, idx| {
+        if (idx != 0) try out.writer.writeAll(", ");
+        const nt = nurlTy(param);
+        const rt = realTy(param);
+        if (std.mem.eql(u8, nt, rt)) {
+            try out.writer.print("{s} %a{d}", .{ rt, idx });
+        } else {
+            try out.writer.print("{s} %t{d}", .{ rt, idx });
+        }
+    }
+    try out.writer.writeAll(")\n");
+
+    if (entry.ret == 'v') {
+        try out.writer.writeAll("  ret void\n");
+    } else if (std.mem.eql(u8, realTy(entry.ret), nurlTy(entry.ret))) {
+        try out.writer.print("  ret {s} %r\n", .{nurlTy(entry.ret)});
+    } else {
+        const widen_op = if (entry.ret == 's') "zext" else "sext";
+        try out.writer.print("  %rw = {s} {s} %r to {s}\n", .{ widen_op, realTy(entry.ret), nurlTy(entry.ret) });
+        try out.writer.print("  ret {s} %rw\n", .{nurlTy(entry.ret)});
+    }
+
+    try out.writer.writeAll("}\n\n");
+    return out.written();
+}
+
+fn insertWasmTargetTriple(gpa: std.mem.Allocator, text: []const u8) ![]u8 {
+    if (std.mem.indexOf(u8, text, "target triple") != null) {
+        return try gpa.dupe(u8, text);
+    }
+
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    var inserted = false;
+    var line_start: usize = 0;
+    while (line_start < text.len) {
+        const maybe_nl = std.mem.indexOfScalarPos(u8, text, line_start, '\n');
+        const line_end = maybe_nl orelse text.len;
+        const line = text[line_start..line_end];
+        if (!inserted) {
+            const trimmed = std.mem.trim(u8, line, " \t\r");
+            if (!(trimmed.len == 0 or std.mem.startsWith(u8, trimmed, ";"))) {
+                try out.writer.writeAll(wasm_target_triple);
+                inserted = true;
+            }
+        }
+        try out.writer.writeAll(line);
+        if (maybe_nl != null) try out.writer.writeByte('\n');
+        line_start = if (maybe_nl) |idx| idx + 1 else text.len;
+    }
+    if (!inserted) {
+        try out.writer.writeAll(wasm_target_triple);
+    }
+    return out.written();
+}
+
+fn wasmNeedsShim(entry: WasmAbiEntry) bool {
+    if (!std.mem.eql(u8, realTy(entry.ret), nurlTy(entry.ret))) return true;
+    for (entry.params) |param| {
+        if (!std.mem.eql(u8, realTy(param), nurlTy(param))) return true;
+    }
+    return false;
+}
+
+fn realTy(code: u8) []const u8 {
+    return switch (code) {
+        'i', 's' => "i32",
+        'p' => "i8*",
+        'v' => "void",
+        else => unreachable,
+    };
+}
+
+fn nurlTy(code: u8) []const u8 {
+    return switch (code) {
+        'i', 's' => "i64",
+        'p' => "i8*",
+        'v' => "void",
+        else => unreachable,
+    };
+}
+
+fn isSpaceByte(b: u8) bool {
+    return b == ' ' or b == '\t' or b == '\r';
 }
 
 fn runClean(init: std.process.Init, args: []const []const u8) !void {

@@ -142,48 +142,12 @@ RUN find . -type f \( -name '*.sh' -o -name '*.nu' \) -exec sed -i 's/\r$//' {} 
 # slow down image construction significantly.
 RUN /opt/zig/zig build bootstrap
 
-# Compile the NURL runtime for wasm32-wasi so linking later is a single
-# `zig cc` invocation inside the API container. `zig cc -target wasm32-wasi`
-# bundles wasi-libc, so no WASI SDK is needed. The canvas/audio objects are
-# compiled in further steps — they forward to host imports under the
-# "canvas"/"audio" wasm modules (wired up in the browser playground).
-RUN /opt/zig/zig cc -target wasm32-wasi -O2 \
-        -c stdlib/runtime.c -o stdlib/runtime.wasm.o \
-    && /opt/zig/zig cc -target wasm32-wasi -O2 \
-        -c stdlib/canvas_wasm.c -o stdlib/canvas.wasm.o \
-    && /opt/zig/zig cc -target wasm32-wasi -O2 \
-        -c stdlib/audio_wasm.c -o stdlib/audio.wasm.o
-
-# Cross-compile the NURL runtime for Windows (x86_64-windows-gnu) so
-# /build_windows can link user IR against a Windows-native runtime.o without
-# rebuilding the runtime per request. `zig cc -target x86_64-windows-gnu`
-# bundles the mingw-w64 headers (`<direct.h>`, `<sys/stat.h>`, …) and the CRT
-# + libgcc equivalents, so no external mingw-w64 toolchain is involved — this
-# matches the driver /build_windows uses at request time.
-#
-# HTTP: built with -DNURL_HAVE_LIBCURL against the static libcurl cross-build
-# above. CURL_STATICLIB suppresses libcurl's default __declspec(dllimport)
-# attributes so the runtime references plain symbols satisfied by libcurl.a.
-# A `stdlib/runtime.win.curl` marker tells /build_windows to append the
-# required Windows system libs (ws2_32, crypt32, bcrypt, ncrypt, secur32,
-# advapi32) at link time.
-RUN /opt/zig/zig cc -target x86_64-windows-gnu -O2 \
-        -DNURL_HAVE_LIBCURL -DCURL_STATICLIB \
-        -I/opt/curl-mingw/include \
-        -c stdlib/runtime.c -o stdlib/runtime.win.o \
-    && echo 1 > stdlib/runtime.win.curl
-
-# Cross-compile the NURL runtime for macOS x86_64 (Mach-O). Zig's clang
-# targets `x86_64-macos-none` with its bundled libSystem stubs; the
-# resulting runtime.mac.o will be linked at request time against user
-# IR to produce a standalone Mach-O executable.
-#
-# HTTP: built WITHOUT -DNURL_HAVE_LIBCURL. runtime.c's #else path
-# provides no-op stubs that make the symbols link and report
-# HttpErr::Other at runtime — same "no oheistiedostoja" rule the
-# playground advertises for macOS.
-RUN /opt/zig/zig cc -target x86_64-macos-none -O2 \
-        -c stdlib/runtime.c -o stdlib/runtime.mac.o
+# Build the API's prelinked cross-target runtime objects through the shared
+# Zig helper so wasm/windows/macos all follow the same policy the live API
+# uses at request time.
+RUN NURL_ZIG=/opt/zig/zig \
+    NURL_MINGW_CURL_PREFIX=/opt/curl-mingw \
+    /opt/zig/zig build api-runtime-objs
 
 # ---------------------------------------------------------------
 # Stage 2: slim runtime image with Python + FastAPI + the

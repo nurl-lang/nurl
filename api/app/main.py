@@ -16,6 +16,7 @@ and the OpenAPI schema at /openapi.json.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 import secrets
@@ -291,220 +292,6 @@ def _wasi_toolchain_available() -> bool:
     )
 
 
-# ── IR rewriting for wasm32-wasi ABI ────────────────────────────
-#
-# NURL emits LLVM IR with an i64-centric ABI (integers, sizes, and
-# ssize-style returns are all i64; pointers are i8*). wasm32-wasi uses
-# the standard wasm32 C ABI: `int`, `size_t`, `ssize_t` are all i32
-# (32-bit address space, 32-bit C int). That creates a signature
-# mismatch at every libc FFI boundary — wasm-ld either inserts a
-# `.L<fn>_bitcast_invalid` trap stub, or emits a warning and produces
-# a module that traps on the first libc call.
-#
-# Fix: for each known libc symbol that actually appears in the IR and
-# whose NURL-native signature differs from the wasm32 one, the rewriter
-#   (a) strips NURL's `declare` line,
-#   (b) emits the real libc declare with wasm32 types,
-#   (c) emits an internal shim `@__nurl_<name>_shim` whose signature
-#       matches NURL's callsites (i64 / i8*), truncs args to the real
-#       widths, forwards to the real libc, and sext/zext the return
-#       back to NURL's i64,
-#   (d) rewrites every `@<name>(` callsite to `@__nurl_<name>_shim(`.
-#
-# Entry-point rename: wasi-libc's crt1 calls `__main_argc_argv(argc,
-# argv)`, not `main`. clang's C frontend renames `int main(int,char**)`
-# automatically but that never happens for pre-generated LLVM IR, so
-# we do it here.
-#
-# NB: this targets the FFI boundary only. NURL's internal arithmetic
-# stays i64 — wasm has native i64 opcodes, we just need to agree with
-# libc's i32 signatures at the seam.
-
-_NURL_MAIN_DEF_RE = re.compile(
-    r"(^\s*define\s+[^\n]*@)main(\s*\()", re.MULTILINE
-)
-_WASM_TARGET_TRIPLE = 'target triple = "wasm32-unknown-wasi"\n'
-
-# ABI descriptors for libc symbols that differ between NURL (i64/i8*)
-# and wasm32 libc (i32/i8*).
-#
-#   'i' — signed 32-bit C int  / ssize_t  (ret widens via sext,  arg truncs)
-#   's' — unsigned 32-bit size_t          (ret widens via zext, arg truncs)
-#   'p' — pointer (i8*, passes through)
-#   'v' — void
-#
-# Entry: name → (ret_code, [param_codes]).
-LIBC_WASM32_ABI: dict[str, tuple[str, list[str]]] = {
-    # mem
-    "malloc":  ("p", ["s"]),
-    "calloc":  ("p", ["s", "s"]),
-    "realloc": ("p", ["p", "s"]),
-    "free":    ("v", ["p"]),  # matches already — no shim emitted
-    # stdio
-    "puts":    ("i", ["p"]),
-    "putchar": ("i", ["i"]),
-    "getchar": ("i", []),
-    # string
-    "strlen":  ("s", ["p"]),
-    "strcmp":  ("i", ["p", "p"]),
-    "strncmp": ("i", ["p", "p", "s"]),
-    "strcpy":  ("p", ["p", "p"]),
-    "strncpy": ("p", ["p", "p", "s"]),
-    "strcat":  ("p", ["p", "p"]),
-    "strdup":  ("p", ["p"]),
-    # mem block
-    "memcpy":  ("p", ["p", "p", "s"]),
-    "memmove": ("p", ["p", "p", "s"]),
-    "memset":  ("p", ["p", "i", "s"]),
-    "memcmp":  ("i", ["p", "p", "s"]),
-    # ctype-ish / stdlib
-    "atoi":    ("i", ["p"]),
-    "abs":     ("i", ["i"]),
-    "exit":    ("v", ["i"]),
-    "rand":    ("i", []),
-    "srand":   ("v", ["s"]),
-    "system":  ("i", ["p"]),
-    # posix I/O (ssize_t → i for sext widening)
-    "write":   ("i", ["i", "p", "s"]),
-    "read":    ("i", ["i", "p", "s"]),
-    "open":    ("i", ["p", "i", "i"]),
-    "close":   ("i", ["i"]),
-}
-
-_REAL_TY = {"i": "i32", "s": "i32", "p": "i8*", "v": "void"}
-_NURL_TY = {"i": "i64", "s": "i64", "p": "i8*", "v": "void"}
-
-
-def _wasm_needs_shim(ret: str, params: list[str]) -> bool:
-    return any(_REAL_TY[c] != _NURL_TY[c] for c in [ret, *params])
-
-
-def _emit_wasm_shim(name: str, ret: str, params: list[str]) -> str:
-    """Emit (real libc declare + NURL-typed internal shim) as IR text."""
-    real_ret = _REAL_TY[ret]
-    real_params = [_REAL_TY[c] for c in params]
-    nurl_ret = _NURL_TY[ret]
-    nurl_params = [_NURL_TY[c] for c in params]
-
-    lines: list[str] = []
-    lines.append(f"declare {real_ret} @{name}({', '.join(real_params)})")
-    lines.append("")
-    shim_args_decl = ", ".join(
-        f"{nt} %a{i}" for i, nt in enumerate(nurl_params)
-    )
-    lines.append(
-        f"define internal {nurl_ret} @__nurl_{name}_shim({shim_args_decl}) {{"
-    )
-
-    # Argument conversions: i64 → i32 trunc where widths differ.
-    call_args: list[str] = []
-    for i, (nt, rt) in enumerate(zip(nurl_params, real_params)):
-        if nt == rt:
-            call_args.append(f"{rt} %a{i}")
-        else:
-            lines.append(f"  %t{i} = trunc {nt} %a{i} to {rt}")
-            call_args.append(f"{rt} %t{i}")
-
-    call_expr = f"tail call {real_ret} @{name}({', '.join(call_args)})"
-    if real_ret == "void":
-        lines.append(f"  {call_expr}")
-        lines.append("  ret void")
-    elif real_ret == nurl_ret:
-        lines.append(f"  %r = {call_expr}")
-        lines.append(f"  ret {nurl_ret} %r")
-    else:
-        # Return-widening: size_t (unsigned) → zext; int/ssize_t → sext.
-        op = "zext" if ret == "s" else "sext"
-        lines.append(f"  %r = {call_expr}")
-        lines.append(f"  %rw = {op} {real_ret} %r to {nurl_ret}")
-        lines.append(f"  ret {nurl_ret} %rw")
-    lines.append("}")
-    lines.append("")
-    return "\n".join(lines)
-
-
-def _strip_declare(text: str, name: str) -> str:
-    """Remove any `declare ... @<name>(...)` line from the IR (1 occurrence)."""
-    pat = re.compile(
-        rf"^declare\b[^\n]*@{re.escape(name)}\s*\([^\n]*\)[^\n]*\n?",
-        re.MULTILINE,
-    )
-    return pat.sub("", text, count=1)
-
-
-# Matches an LLVM IR `c"..."` byte-string literal (with `\xx` / `\\` escapes).
-# Used to mask string-constant payloads while we rewrite call-sites — NURL
-# compilers like `nurlc.nu` embed LLVM IR snippets as data, and we mustn't
-# touch those bytes (their `[N x i8]` type prefix would go out of sync).
-_LLVM_CSTR_RE = re.compile(r'c"(?:[^"\\]|\\.)*"')
-
-
-def _mask_cstrings(text: str) -> tuple[str, list[str]]:
-    saved: list[str] = []
-
-    def _sub(m: re.Match[str]) -> str:
-        saved.append(m.group(0))
-        return f"\x00CSTR{len(saved) - 1}\x00"
-
-    return _LLVM_CSTR_RE.sub(_sub, text), saved
-
-
-def _unmask_cstrings(text: str, saved: list[str]) -> str:
-    def _sub(m: re.Match[str]) -> str:
-        return saved[int(m.group(1))]
-
-    return re.sub(r"\x00CSTR(\d+)\x00", _sub, text)
-
-
-def _prepare_ir_for_wasi(ir_bytes: bytes) -> bytes:
-    try:
-        text = ir_bytes.decode("utf-8")
-    except UnicodeDecodeError:
-        return ir_bytes
-
-    # 1) Rename user-defined `main` to wasi-libc's expected entry symbol.
-    text = _NURL_MAIN_DEF_RE.sub(r"\1__main_argc_argv\2", text, count=1)
-
-    # 2) For every libc symbol we know about, if it appears in the IR
-    #    and NURL's signature conflicts with wasm32's, swap in a shim.
-    #    Mask `c"..."` byte-string constants first so substitutions
-    #    don't corrupt embedded IR text emitted by NURL programs that
-    #    are themselves compilers (e.g. nurlc.nu) — rewriting bytes
-    #    inside a constant would desync its `[N x i8]` type prefix.
-    text, saved_cstrs = _mask_cstrings(text)
-    shims: list[str] = []
-    for name, (ret, params) in LIBC_WASM32_ABI.items():
-        # Cheap substring gate — skip entries not referenced at all.
-        if f"@{name}" not in text:
-            continue
-        if not _wasm_needs_shim(ret, params):
-            continue  # signatures already match (e.g. `free(i8*)`)
-        text = _strip_declare(text, name)
-        # Only rewrite call-like uses (`@name(` or `@name  (`). Leave
-        # function-pointer references like `@name` in bitcasts alone.
-        text = re.sub(
-            rf"@{re.escape(name)}(?=\s*\()",
-            f"@__nurl_{name}_shim",
-            text,
-        )
-        shims.append(_emit_wasm_shim(name, ret, params))
-    text = _unmask_cstrings(text, saved_cstrs)
-
-    if shims:
-        text += "\n; ── wasm32 libc ABI shims ──\n" + "\n".join(shims)
-
-    # 3) Prepend a target triple if the IR doesn't already declare one.
-    if "target triple" not in text:
-        lines = text.splitlines(keepends=True)
-        i = 0
-        while i < len(lines) and (lines[i].startswith(";") or lines[i].strip() == ""):
-            i += 1
-        lines.insert(i, _WASM_TARGET_TRIPLE)
-        text = "".join(lines)
-
-    return text.encode("utf-8")
-
-
 def _list_stdlib_modules(limit: int = 200) -> list[str]:
     root = Path(NURL_STDLIB_DIR)
     if not root.is_dir():
@@ -665,190 +452,7 @@ def build_wasm(req: BuildWasmRequest):
             detail=f"link helper not found at '{NURL_LINK_HELPER}'",
         )
 
-    basename = "main"
-    if req.filename:
-        stem = Path(req.filename).stem
-        if stem:
-            basename = "".join(c for c in stem if c.isalnum() or c in "._-") or "main"
-
-    with tempfile.TemporaryDirectory(prefix="nurl-build-") as tmp:
-        tmpdir = Path(tmp)
-        nu_path = tmpdir / f"{basename}.nu"
-        ll_path = tmpdir / f"{basename}.ll"
-        wasm_path = tmpdir / f"{basename}.wasm"
-        nu_path.write_bytes(src_bytes)
-
-        # 1) NURL → LLVM IR (nurlc writes IR to stdout).
-        # nurlc resolves `$ "stdlib/..."` imports relative to its CWD via
-        # nurl_read_file, so we run it from NURL_WORK_ROOT (which contains
-        # the bundled stdlib/) and pass an absolute path to the source.
-        nurlc_cwd = NURL_WORK_ROOT if Path(NURL_WORK_ROOT).is_dir() else str(tmpdir)
-        nurlc_proc = _run([NURLC_PATH, str(nu_path)], cwd=nurlc_cwd)
-        if nurlc_proc.returncode != 0 or not nurlc_proc.stdout:
-            nurlc_stderr_txt = nurlc_proc.stderr.decode("utf-8", "replace")
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={
-                    "stage": "nurlc",
-                    "returncode": nurlc_proc.returncode,
-                    "stderr": nurlc_stderr_txt,
-                    # Parsed file:line:col: msg entries so MCP / editor
-                    # clients don't have to scrape stderr themselves.
-                    "errors": [d.model_dump() for d in parse_nurlc_diagnostics(nurlc_stderr_txt)],
-                },
-            )
-        # Rename `@main` → `@__main_argc_argv` (wasi-libc's expected entry)
-        # and add a wasm32-wasi target triple to silence the override warning.
-        prepared_ir = _prepare_ir_for_wasi(nurlc_proc.stdout)
-        ll_path.write_bytes(prepared_ir)
-
-        # Detect whether the program calls into the canvas FFI; if so
-        # we link canvas.wasm.o and later Asyncify-wrap the module.
-        uses_canvas = bool(
-            re.search(
-                rb"@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mouse_btn)\b",
-                prepared_ir,
-            )
-        )
-        # Detect audio-FFI use. Audio imports are all synchronous polls
-        # of a host-side AnalyserNode, so no Asyncify pass is required
-        # for audio alone — only canvas triggers that.
-        uses_audio = bool(
-            re.search(
-                rb"@audio_(level|bin|bin_count|peak_bin|centroid|freq_of|sample_rate|is_silent|ready)\b",
-                prepared_ir,
-            )
-        )
-
-        # 2) LLVM IR + runtime.wasm.o (+ canvas.wasm.o / audio.wasm.o) → .wasm
-        #    via the shared Zig helper. Python keeps the wasm-specific IR prep
-        #    and Asyncify pass; the helper owns driver/target invocation.
-        link_cmd = [
-            NURL_LINK_HELPER,
-            "--driver", f"{NURL_ZIG} cc",
-            "--target", WASM_TARGET,
-            "--opt", "-O2",
-            "--runtime", RUNTIME_WASM_O,
-            "--no-lto",
-            "--no-marker-libs",
-            "--flag", "-Wno-override-module",
-            NURL_WORK_ROOT,
-            str(ll_path),
-            str(wasm_path),
-        ]
-        if uses_canvas:
-            if not Path(CANVAS_WASM_O).is_file():
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=(
-                        f"canvas FFI used but {CANVAS_WASM_O} not present. "
-                        "Rebuild the container with canvas_wasm.c compiled."
-                    ),
-                )
-            link_cmd += ["--extra-obj", CANVAS_WASM_O]
-        if uses_audio:
-            if not Path(AUDIO_WASM_O).is_file():
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=(
-                        f"audio FFI used but {AUDIO_WASM_O} not present. "
-                        "Rebuild the container with audio_wasm.c compiled."
-                    ),
-                )
-            link_cmd += ["--extra-obj", AUDIO_WASM_O]
-        if uses_canvas or uses_audio:
-            # Allow undefined `canvas.*` / `audio.*` imports — they're
-            # supplied by the browser host, not present in wasi-libc.
-            link_cmd += ["--flag", "-Wl,--allow-undefined"]
-        # runtime.wasm.o pulls in libm symbols (sqrt/sin/cos/...).
-        # wasi-libc 24.0 ships libm.a in the sysroot.
-        link_cmd += ["--extra-lib", "-lm"]
-
-        clang_proc = _run(link_cmd, cwd=str(tmpdir))
-        if clang_proc.returncode != 0 or not wasm_path.exists():
-            nurlc_stderr_txt = nurlc_proc.stderr.decode("utf-8", "replace")
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={
-                    "stage": "nurl-build-wasm",
-                    "returncode": clang_proc.returncode,
-                    "stderr": clang_proc.stderr.decode("utf-8", "replace"),
-                    "nurlc_stderr": nurlc_stderr_txt,
-                    "errors": [d.model_dump() for d in parse_nurlc_diagnostics(nurlc_stderr_txt)],
-                },
-            )
-
-        # 3) Asyncify-wrap when the program uses canvas — lets
-        #    canvas_sleep actually suspend the wasm module and yield
-        #    back to the browser event loop. We restrict the set of
-        #    "async" imports to those that really need to yield, so
-        #    the instrumentation overhead is minimal.
-        wasm_opt_stderr = ""
-        if uses_canvas:
-            if shutil.which(WASM_OPT) is None:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=(
-                        f"wasm-opt not found at '{WASM_OPT}'. Canvas programs "
-                        "require binaryen (Debian: `apt install binaryen`)."
-                    ),
-                )
-            asyncified = tmpdir / f"{basename}.async.wasm"
-            opt_cmd = [
-                WASM_OPT,
-                "--asyncify",
-                "--pass-arg=asyncify-imports@canvas.sleep",
-                "-O2",
-                str(wasm_path),
-                "-o",
-                str(asyncified),
-            ]
-            opt_proc = _run(opt_cmd, cwd=str(tmpdir))
-            wasm_opt_stderr = opt_proc.stderr.decode("utf-8", "replace")
-            if opt_proc.returncode != 0 or not asyncified.exists():
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail={
-                        "stage": "wasm-opt asyncify",
-                        "returncode": opt_proc.returncode,
-                        "stderr": wasm_opt_stderr,
-                    },
-                )
-            wasm_path = asyncified
-
-        wasm_bytes = wasm_path.read_bytes()
-
-    if req.return_format == "binary":
-        return Response(
-            content=wasm_bytes,
-            media_type="application/wasm",
-            headers={
-                "Content-Disposition": f'attachment; filename="{basename}.wasm"',
-                "X-Nurl-Uses-Canvas": "1" if uses_canvas else "0",
-                "X-Nurl-Uses-Audio":  "1" if uses_audio  else "0",
-            },
-        )
-
-    clang_stderr = clang_proc.stderr.decode("utf-8", "replace")
-    if wasm_opt_stderr:
-        clang_stderr = (clang_stderr + "\n" + wasm_opt_stderr).strip()
-
-    nurlc_stderr_txt = nurlc_proc.stderr.decode("utf-8", "replace")
-    return BuildWasmResponse(
-        status="ok",
-        message="compiled nurl → wasm32-wasi"
-                + (" (asyncified for canvas)" if uses_canvas else "")
-                + (" [+audio]" if uses_audio else ""),
-        filename=req.filename,
-        wasm_base64=base64.b64encode(wasm_bytes).decode("ascii"),
-        wasm_bytes=len(wasm_bytes),
-        nurlc_stderr=nurlc_stderr_txt or None,
-        nurlc_errors=parse_nurlc_diagnostics(nurlc_stderr_txt),
-        clang_stderr=clang_stderr or None,
-        llvm_ir=nurlc_proc.stdout.decode("utf-8", "replace") if req.emit_ll else None,
-        uses_canvas=uses_canvas,
-        uses_audio=uses_audio,
-    )
+    return _run_api_build_wasm_helper(req)
 
 
 # ── Native build + download registry ─────────────────────────────
@@ -983,6 +587,242 @@ def _sanitize_basename(raw: str | None) -> str:
     return cleaned or "main"
 
 
+def _register_build_artifact(
+    path: Path,
+    media_type: str,
+    request: Request,
+    *,
+    executable: bool = False,
+) -> BuildArtifact | None:
+    if not path.is_file():
+        return None
+    if executable:
+        try:
+            path.chmod(0o755)
+        except OSError:
+            pass
+    token = _register_download(path, media_type)
+    return BuildArtifact(
+        name=path.name,
+        bytes=path.stat().st_size,
+        download_url=_download_url(request, token),
+        token=token,
+    )
+
+
+def _run_api_build_helper(
+    req: BuildRequest,
+    request: Request,
+    *,
+    kind: Literal["native", "windows", "macos"],
+    driver: str,
+    runtime: str,
+    target: str | None,
+    binary_media_type: str,
+    executable_artifact: bool,
+    canvas_obj: str | None = None,
+    canvas_sdl2_marker: str | None = None,
+) -> BuildResponse:
+    _gc_downloads()
+
+    opt_flag = req.opt if req.opt and req.opt.startswith("-O") else "-O2"
+    output_root = Path(OUTPUT_DIR)
+    output_root.mkdir(parents=True, exist_ok=True)
+    build_prefix = {
+        "native": "build",
+        "windows": "buildwin",
+        "macos": "buildmac",
+    }[kind]
+    build_dir = output_root / f"{build_prefix}-{uuid.uuid4().hex[:12]}"
+    build_dir.mkdir(parents=True, exist_ok=False)
+
+    with tempfile.TemporaryDirectory(prefix=f"nurl-build-{kind}-") as tmp:
+        tmpdir = Path(tmp)
+        nu_path = tmpdir / f"{_sanitize_basename(req.filename)}.nu"
+        nu_path.write_bytes(req.source.encode("utf-8"))
+
+        helper_cmd = [
+            NURL_LINK_HELPER,
+            "api-build",
+            "--kind", kind,
+            "--root", NURL_WORK_ROOT,
+            "--src", str(nu_path),
+            "--build-dir", str(build_dir),
+            "--driver", driver,
+            "--runtime", runtime,
+            "--opt", opt_flag,
+        ]
+        if req.filename:
+            helper_cmd += ["--filename", req.filename]
+        if target:
+            helper_cmd += ["--target", target]
+        if canvas_obj:
+            helper_cmd += ["--canvas-obj", canvas_obj]
+        if canvas_sdl2_marker:
+            helper_cmd += ["--canvas-sdl2-marker", canvas_sdl2_marker]
+
+        helper_proc = _run(helper_cmd, cwd=str(tmpdir))
+
+    helper_stdout = helper_proc.stdout.decode("utf-8", "replace")
+    helper_stderr = helper_proc.stderr.decode("utf-8", "replace").strip()
+    if helper_proc.returncode != 0:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=helper_stderr or helper_stdout or f"{kind} api-build helper failed",
+        )
+
+    try:
+        payload = json.loads(helper_stdout or "{}")
+    except json.JSONDecodeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"{kind} api-build helper returned invalid JSON",
+        ) from e
+
+    http_status = int(payload.get("http_status", 200))
+    if http_status != 200:
+        raise HTTPException(
+            status_code=http_status,
+            detail=payload.get("fatal_detail")
+            or payload.get("stderr")
+            or payload.get("message")
+            or f"{kind} build failed",
+        )
+
+    ll_artifact = None
+    if payload.get("ll_path"):
+        ll_artifact = _register_build_artifact(
+            Path(payload["ll_path"]),
+            "text/plain",
+            request,
+        )
+
+    binary_artifact = None
+    if payload.get("binary_path"):
+        binary_artifact = _register_build_artifact(
+            Path(payload["binary_path"]),
+            binary_media_type,
+            request,
+            executable=executable_artifact,
+        )
+
+    nurlc_stderr = str(payload.get("nurlc_stderr") or "")
+    return BuildResponse(
+        status=str(payload.get("status") or "error"),
+        message=str(payload.get("message") or f"{kind} build failed"),
+        filename=req.filename,
+        uses_canvas=bool(payload.get("uses_canvas")),
+        nurlc_returncode=int(payload.get("nurlc_returncode", 0)),
+        nurlc_stdout_bytes=int(payload.get("nurlc_stdout_bytes", 0)),
+        nurlc_stderr=nurlc_stderr,
+        clang_returncode=payload.get("clang_returncode"),
+        clang_stdout=payload.get("clang_stdout") or None,
+        clang_stderr=payload.get("clang_stderr") or None,
+        stdout=str(payload.get("stdout") or ""),
+        stderr=str(payload.get("stderr") or ""),
+        nurlc_errors=parse_nurlc_diagnostics(nurlc_stderr),
+        ll_artifact=ll_artifact,
+        binary_artifact=binary_artifact,
+    )
+
+
+def _run_api_build_wasm_helper(req: BuildWasmRequest):
+    basename = _sanitize_basename(req.filename)
+
+    with tempfile.TemporaryDirectory(prefix="nurl-build-wasm-") as tmp:
+        tmpdir = Path(tmp)
+        nu_path = tmpdir / f"{basename}.nu"
+        nu_path.write_bytes(req.source.encode("utf-8"))
+
+        helper_cmd = [
+            NURL_LINK_HELPER,
+            "api-build-wasm",
+            "--root", NURL_WORK_ROOT,
+            "--src", str(nu_path),
+            "--build-dir", str(tmpdir),
+            "--target", WASM_TARGET,
+            "--runtime", RUNTIME_WASM_O,
+            "--canvas-obj", CANVAS_WASM_O,
+            "--audio-obj", AUDIO_WASM_O,
+            "--zig-driver", f"{NURL_ZIG} cc",
+            "--wasm-opt", WASM_OPT,
+        ]
+        if req.filename:
+            helper_cmd += ["--filename", req.filename]
+
+        helper_proc = _run(helper_cmd, cwd=str(tmpdir))
+        helper_stdout = helper_proc.stdout.decode("utf-8", "replace")
+        helper_stderr = helper_proc.stderr.decode("utf-8", "replace").strip()
+        if helper_proc.returncode != 0:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=helper_stderr or helper_stdout or "wasm api-build helper failed",
+            )
+
+        try:
+            payload = json.loads(helper_stdout or "{}")
+        except json.JSONDecodeError as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="wasm api-build helper returned invalid JSON",
+            ) from e
+
+        http_status = int(payload.get("http_status", 200))
+        if http_status != 200:
+            if payload.get("error_stage"):
+                nurlc_stderr = str(payload.get("error_nurlc_stderr") or "")
+                detail = {
+                    "stage": payload.get("error_stage"),
+                    "returncode": payload.get("error_returncode"),
+                    "stderr": payload.get("error_stderr") or "",
+                }
+                if nurlc_stderr:
+                    detail["nurlc_stderr"] = nurlc_stderr
+                    detail["errors"] = [d.model_dump() for d in parse_nurlc_diagnostics(nurlc_stderr)]
+                raise HTTPException(status_code=http_status, detail=detail)
+            raise HTTPException(
+                status_code=http_status,
+                detail=payload.get("error_message")
+                or payload.get("message")
+                or "wasm build failed",
+            )
+
+        wasm_path = Path(payload["wasm_path"])
+        wasm_bytes = wasm_path.read_bytes()
+        uses_canvas = bool(payload.get("uses_canvas"))
+        uses_audio = bool(payload.get("uses_audio"))
+
+        if req.return_format == "binary":
+            return Response(
+                content=wasm_bytes,
+                media_type="application/wasm",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{basename}.wasm"',
+                    "X-Nurl-Uses-Canvas": "1" if uses_canvas else "0",
+                    "X-Nurl-Uses-Audio": "1" if uses_audio else "0",
+                },
+            )
+
+        llvm_ir = None
+        if req.emit_ll and payload.get("raw_ll_path"):
+            llvm_ir = Path(payload["raw_ll_path"]).read_text("utf-8", "replace")
+
+        nurlc_stderr = str(payload.get("nurlc_stderr") or "")
+        return BuildWasmResponse(
+            status=str(payload.get("status") or "error"),
+            message=str(payload.get("message") or "wasm build failed"),
+            filename=req.filename,
+            wasm_base64=base64.b64encode(wasm_bytes).decode("ascii"),
+            wasm_bytes=len(wasm_bytes),
+            nurlc_stderr=nurlc_stderr or None,
+            nurlc_errors=parse_nurlc_diagnostics(nurlc_stderr),
+            clang_stderr=(payload.get("clang_stderr") or None),
+            llvm_ir=llvm_ir,
+            uses_canvas=uses_canvas,
+            uses_audio=uses_audio,
+        )
+
+
 @app.post(
     "/build",
     response_model=BuildResponse,
@@ -1052,180 +892,17 @@ def build_native(req: BuildRequest, request: Request) -> BuildResponse:
             ),
         )
 
-    _gc_downloads()
-
-    basename = _sanitize_basename(req.filename)
-    opt_flag = req.opt if req.opt and req.opt.startswith("-O") else "-O2"
-
-    # Per-build subdir so concurrent requests don't stomp on each other
-    # and GC can drop everything in one go.
-    output_root = Path(OUTPUT_DIR)
-    output_root.mkdir(parents=True, exist_ok=True)
-    build_dir = output_root / f"build-{uuid.uuid4().hex[:12]}"
-    build_dir.mkdir(parents=True, exist_ok=False)
-
-    ll_path = build_dir / f"{basename}.ll"
-    bin_path = build_dir / basename
-
-    stdout_log: list[str] = []
-    stderr_log: list[str] = []
-
-    with tempfile.TemporaryDirectory(prefix="nurl-build-native-") as tmp:
-        tmpdir = Path(tmp)
-        nu_path = tmpdir / f"{basename}.nu"
-        nu_path.write_bytes(src_bytes)
-
-        # 1) nurlc → LLVM IR (stdout).
-        nurlc_cwd = NURL_WORK_ROOT if Path(NURL_WORK_ROOT).is_dir() else str(tmpdir)
-        nurlc_proc = _run([NURLC_PATH, str(nu_path)], cwd=nurlc_cwd)
-        nurlc_stderr = nurlc_proc.stderr.decode("utf-8", "replace")
-        stderr_log.append(f"[nurlc] {nurlc_stderr}" if nurlc_stderr else "")
-
-        if nurlc_proc.returncode != 0 or not nurlc_proc.stdout:
-            # Surface as a structured response (status=error) rather than
-            # 422 — the caller asked for stdout/stderr and we have it.
-            return BuildResponse(
-                status="error",
-                message="nurlc failed",
-                filename=req.filename,
-                uses_canvas=False,
-                nurlc_returncode=nurlc_proc.returncode,
-                nurlc_stdout_bytes=len(nurlc_proc.stdout or b""),
-                nurlc_stderr=nurlc_stderr,
-                stdout="",
-                stderr="\n".join(s for s in stderr_log if s).strip(),
-                nurlc_errors=parse_nurlc_diagnostics(nurlc_stderr),
-                ll_artifact=None,
-                binary_artifact=None,
-            )
-
-        ll_path.write_bytes(nurlc_proc.stdout)
-
-        # nurlc emits headers + declares even for unparseable sources and still
-        # exits 0, so an IR with no `define ... @main` is the most common way
-        # /build fails with a cryptic `undefined reference to main` from ld.
-        # Surface that up-front with a friendlier diagnostic.
-        if not re.search(rb"^\s*define\s+i32\s+@main\s*\(", nurlc_proc.stdout, re.MULTILINE):
-            hint = (
-                "nurlc produced IR without an `@main` definition. "
-                "NURL's entry point is `@ main → i { ... }` — not "
-                "`fn main() -> i { ... }`. See /examples for working sources."
-            )
-            return BuildResponse(
-                status="error",
-                message="no @main in generated IR",
-                filename=req.filename,
-                uses_canvas=False,
-                nurlc_returncode=nurlc_proc.returncode,
-                nurlc_stdout_bytes=len(nurlc_proc.stdout),
-                nurlc_stderr=nurlc_stderr,
-                clang_returncode=None,
-                clang_stdout=None,
-                clang_stderr=None,
-                stdout="",
-                stderr=("\n".join(s for s in stderr_log if s) + "\n[nurl] " + hint).strip(),
-                nurlc_errors=parse_nurlc_diagnostics(nurlc_stderr),
-                ll_artifact=None,
-                binary_artifact=None,
-            )
-
-        uses_canvas = bool(
-            re.search(
-                rb"@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mouse_btn)\b",
-                nurlc_proc.stdout,
-            )
-        )
-
-        # 2) native link through the shared repo helper. The API still owns
-        # request/response shaping and artifact management; the helper owns
-        # runtime marker → library policy, canvas extras, and driver flags.
-        link_cmd: list[str] = [
-            NURL_LINK_HELPER,
-            "--driver", NATIVE_CLANG,
-            "--opt", opt_flag,
-            "--runtime", RUNTIME_O,
-            "--no-lto",
-            "--flag", "-Wno-override-module",
-            NURL_WORK_ROOT,
-            str(ll_path),
-            str(bin_path),
-        ]
-        if uses_canvas:
-            if not Path(CANVAS_O).is_file():
-                # Clean up the .ll we wrote so we don't leak a dangling artifact.
-                try:
-                    ll_path.unlink()
-                    build_dir.rmdir()
-                except OSError:
-                    pass
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=(
-                        f"canvas FFI used but {CANVAS_O} not present. "
-                        "Rebuild the container with canvas.c compiled."
-                    ),
-                )
-            link_cmd += ["--extra-obj", CANVAS_O]
-            if Path(CANVAS_SDL2_MARKER).is_file():
-                link_cmd += ["--extra-lib", "-lSDL2"]
-
-        clang_proc = _run(
-            link_cmd,
-            cwd=str(tmpdir),
-        )
-        clang_stdout = clang_proc.stdout.decode("utf-8", "replace")
-        clang_stderr = clang_proc.stderr.decode("utf-8", "replace")
-        if clang_stdout:
-            stdout_log.append(f"[link] {clang_stdout}")
-        if clang_stderr:
-            stderr_log.append(f"[link] {clang_stderr}")
-
-    # Register whatever artifacts actually landed on disk.
-    ll_artifact: BuildArtifact | None = None
-    if ll_path.is_file():
-        token = _register_download(ll_path, "text/plain")
-        ll_artifact = BuildArtifact(
-            name=ll_path.name,
-            bytes=ll_path.stat().st_size,
-            download_url=_download_url(request, token),
-            token=token,
-        )
-
-    binary_artifact: BuildArtifact | None = None
-    if bin_path.is_file():
-        try:
-            bin_path.chmod(0o755)
-        except OSError:
-            pass
-        token = _register_download(bin_path, "application/octet-stream")
-        binary_artifact = BuildArtifact(
-            name=bin_path.name,
-            bytes=bin_path.stat().st_size,
-            download_url=_download_url(request, token),
-            token=token,
-        )
-
-    ok = clang_proc.returncode == 0 and binary_artifact is not None
-    return BuildResponse(
-        status="ok" if ok else "error",
-        message=(
-            "compiled nurl → native binary"
-            if ok
-            else "build failed (see stderr)"
-        ),
-        filename=req.filename,
-        uses_canvas=uses_canvas,
-        nurlc_returncode=nurlc_proc.returncode,
-        nurlc_stdout_bytes=len(nurlc_proc.stdout),
-        nurlc_stderr=nurlc_stderr,
-        clang_returncode=clang_proc.returncode,
-        clang_stdout=clang_stdout or None,
-        clang_stderr=clang_stderr or None,
-        stdout="\n".join(s for s in stdout_log if s).strip(),
-        stderr="\n".join(s for s in stderr_log if s).strip(),
-        nurlc_errors=parse_nurlc_diagnostics(nurlc_stderr),
-        ll_artifact=ll_artifact,
-        binary_artifact=binary_artifact,
+    return _run_api_build_helper(
+        req,
+        request,
+        kind="native",
+        driver=NATIVE_CLANG,
+        runtime=RUNTIME_O,
+        target=None,
+        binary_media_type="application/octet-stream",
+        executable_artifact=True,
+        canvas_obj=CANVAS_O,
+        canvas_sdl2_marker=CANVAS_SDL2_MARKER,
     )
 
 
@@ -1306,182 +983,15 @@ def build_windows(req: BuildRequest, request: Request) -> BuildResponse:
             detail=f"link helper not found at '{NURL_LINK_HELPER}'",
         )
 
-    _gc_downloads()
-
-    basename = _sanitize_basename(req.filename)
-    opt_flag = req.opt if req.opt and req.opt.startswith("-O") else "-O2"
-
-    output_root = Path(OUTPUT_DIR)
-    output_root.mkdir(parents=True, exist_ok=True)
-    build_dir = output_root / f"buildwin-{uuid.uuid4().hex[:12]}"
-    build_dir.mkdir(parents=True, exist_ok=False)
-
-    ll_path = build_dir / f"{basename}.ll"
-    exe_path = build_dir / f"{basename}.exe"
-
-    stdout_log: list[str] = []
-    stderr_log: list[str] = []
-
-    with tempfile.TemporaryDirectory(prefix="nurl-build-windows-") as tmp:
-        tmpdir = Path(tmp)
-        nu_path = tmpdir / f"{basename}.nu"
-        nu_path.write_bytes(src_bytes)
-
-        nurlc_cwd = NURL_WORK_ROOT if Path(NURL_WORK_ROOT).is_dir() else str(tmpdir)
-        nurlc_proc = _run([NURLC_PATH, str(nu_path)], cwd=nurlc_cwd)
-        nurlc_stderr = nurlc_proc.stderr.decode("utf-8", "replace")
-        stderr_log.append(f"[nurlc] {nurlc_stderr}" if nurlc_stderr else "")
-
-        if nurlc_proc.returncode != 0 or not nurlc_proc.stdout:
-            return BuildResponse(
-                status="error",
-                message="nurlc failed",
-                filename=req.filename,
-                uses_canvas=False,
-                nurlc_returncode=nurlc_proc.returncode,
-                nurlc_stdout_bytes=len(nurlc_proc.stdout or b""),
-                nurlc_stderr=nurlc_stderr,
-                stdout="",
-                stderr="\n".join(s for s in stderr_log if s).strip(),
-                nurlc_errors=parse_nurlc_diagnostics(nurlc_stderr),
-                ll_artifact=None,
-                binary_artifact=None,
-            )
-
-        ll_path.write_bytes(nurlc_proc.stdout)
-
-        if not re.search(rb"^\s*define\s+i32\s+@main\s*\(", nurlc_proc.stdout, re.MULTILINE):
-            hint = (
-                "nurlc produced IR without an `@main` definition. "
-                "NURL's entry point is `@ main → i { ... }`."
-            )
-            return BuildResponse(
-                status="error",
-                message="no @main in generated IR",
-                filename=req.filename,
-                uses_canvas=False,
-                nurlc_returncode=nurlc_proc.returncode,
-                nurlc_stdout_bytes=len(nurlc_proc.stdout),
-                nurlc_stderr=nurlc_stderr,
-                clang_returncode=None,
-                clang_stdout=None,
-                clang_stderr=None,
-                stdout="",
-                stderr=("\n".join(s for s in stderr_log if s) + "\n[nurl] " + hint).strip(),
-                nurlc_errors=parse_nurlc_diagnostics(nurlc_stderr),
-                ll_artifact=None,
-                binary_artifact=None,
-            )
-
-        uses_canvas = bool(
-            re.search(
-                rb"@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mouse_btn)\b",
-                nurlc_proc.stdout,
-            )
-        )
-        uses_audio = bool(re.search(rb"@audio_[a-z_]+\b", nurlc_proc.stdout))
-
-        # Reject FFIs that have no Windows back-end in this container.
-        if uses_canvas or uses_audio:
-            try:
-                ll_path.unlink()
-                build_dir.rmdir()
-            except OSError:
-                pass
-            unsupported = []
-            if uses_canvas: unsupported.append("canvas")
-            if uses_audio:  unsupported.append("audio")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"Windows build does not support FFI: {', '.join(unsupported)}. "
-                    "Use Build WASM for canvas/audio programs."
-                ),
-            )
-
-        # Route the Windows cross-link through the shared Zig helper so the
-        # target/driver orchestration lives next to the rest of the build
-        # policy instead of inside this endpoint.
-        zig_cmd: list[str] = [
-            NURL_LINK_HELPER,
-            "--driver", f"{NURL_ZIG} cc",
-            "--target", WINDOWS_TARGET,
-            "--opt", opt_flag,
-            "--runtime", RUNTIME_WIN_O,
-            "--no-lto",
-            "--no-marker-libs",
-            "--flag", "-Wno-override-module",
-            NURL_WORK_ROOT,
-            str(ll_path),
-            str(exe_path),
-        ]
-        # When the Windows runtime was built with -DNURL_HAVE_LIBCURL
-        # (Dockerfile drops a stdlib/runtime.win.curl marker), link the
-        # static libcurl bundle plus the Windows system libs schannel /
-        # winsock require. Static + schannel keeps the .exe self-contained.
-        if Path(os.path.join(os.path.dirname(RUNTIME_WIN_O), "runtime.win.curl")).is_file():
-            zig_cmd.extend([
-                "--extra-lib", f"-L{MINGW_CURL_PREFIX}/lib",
-                "--extra-lib", "-lcurl",
-                "--extra-lib", "-lws2_32",
-                "--extra-lib", "-lcrypt32",
-                "--extra-lib", "-lbcrypt",
-                "--extra-lib", "-lncrypt",
-                "--extra-lib", "-lsecur32",
-                "--extra-lib", "-ladvapi32",
-            ])
-        clang_proc = _run(zig_cmd, cwd=str(tmpdir))
-        clang_stdout = clang_proc.stdout.decode("utf-8", "replace")
-        clang_stderr = clang_proc.stderr.decode("utf-8", "replace")
-        if clang_stdout:
-            stdout_log.append(f"[zig cc] {clang_stdout}")
-        if clang_stderr:
-            stderr_log.append(f"[zig cc] {clang_stderr}")
-
-    ll_artifact: BuildArtifact | None = None
-    if ll_path.is_file():
-        token = _register_download(ll_path, "text/plain")
-        ll_artifact = BuildArtifact(
-            name=ll_path.name,
-            bytes=ll_path.stat().st_size,
-            download_url=_download_url(request, token),
-            token=token,
-        )
-
-    exe_artifact: BuildArtifact | None = None
-    if exe_path.is_file():
-        token = _register_download(exe_path, "application/vnd.microsoft.portable-executable")
-        exe_artifact = BuildArtifact(
-            name=exe_path.name,
-            bytes=exe_path.stat().st_size,
-            download_url=_download_url(request, token),
-            token=token,
-        )
-
-    # Single zig cc invocation compiles + links, so its exit code is the
-    # whole story (no separate link stage to reconcile).
-    ok = clang_proc.returncode == 0 and exe_artifact is not None
-    reported_rc = clang_proc.returncode
-    return BuildResponse(
-        status="ok" if ok else "error",
-        message=(
-            "compiled nurl → Windows .exe (zig cc)"
-            if ok
-            else "windows build failed (see stderr)"
-        ),
-        filename=req.filename,
-        uses_canvas=False,
-        nurlc_returncode=nurlc_proc.returncode,
-        nurlc_stdout_bytes=len(nurlc_proc.stdout),
-        nurlc_stderr=nurlc_stderr,
-        clang_returncode=reported_rc,
-        clang_stdout=clang_stdout or None,
-        clang_stderr=clang_stderr or None,
-        stdout="\n".join(s for s in stdout_log if s).strip(),
-        stderr="\n".join(s for s in stderr_log if s).strip(),
-        nurlc_errors=parse_nurlc_diagnostics(nurlc_stderr),
-        ll_artifact=ll_artifact,
-        binary_artifact=exe_artifact,
+    return _run_api_build_helper(
+        req,
+        request,
+        kind="windows",
+        driver=f"{NURL_ZIG} cc",
+        runtime=RUNTIME_WIN_O,
+        target=WINDOWS_TARGET,
+        binary_media_type="application/vnd.microsoft.portable-executable",
+        executable_artifact=False,
     )
 
 
@@ -1562,169 +1072,15 @@ def build_macos(req: BuildRequest, request: Request) -> BuildResponse:
             detail=f"link helper not found at '{NURL_LINK_HELPER}'",
         )
 
-    _gc_downloads()
-
-    basename = _sanitize_basename(req.filename)
-    opt_flag = req.opt if req.opt and req.opt.startswith("-O") else "-O2"
-
-    output_root = Path(OUTPUT_DIR)
-    output_root.mkdir(parents=True, exist_ok=True)
-    build_dir = output_root / f"buildmac-{uuid.uuid4().hex[:12]}"
-    build_dir.mkdir(parents=True, exist_ok=False)
-
-    ll_path = build_dir / f"{basename}.ll"
-    bin_path = build_dir / basename
-
-    stdout_log: list[str] = []
-    stderr_log: list[str] = []
-
-    with tempfile.TemporaryDirectory(prefix="nurl-build-macos-") as tmp:
-        tmpdir = Path(tmp)
-        nu_path = tmpdir / f"{basename}.nu"
-        nu_path.write_bytes(src_bytes)
-
-        nurlc_cwd = NURL_WORK_ROOT if Path(NURL_WORK_ROOT).is_dir() else str(tmpdir)
-        nurlc_proc = _run([NURLC_PATH, str(nu_path)], cwd=nurlc_cwd)
-        nurlc_stderr = nurlc_proc.stderr.decode("utf-8", "replace")
-        stderr_log.append(f"[nurlc] {nurlc_stderr}" if nurlc_stderr else "")
-
-        if nurlc_proc.returncode != 0 or not nurlc_proc.stdout:
-            return BuildResponse(
-                status="error",
-                message="nurlc failed",
-                filename=req.filename,
-                uses_canvas=False,
-                nurlc_returncode=nurlc_proc.returncode,
-                nurlc_stdout_bytes=len(nurlc_proc.stdout or b""),
-                nurlc_stderr=nurlc_stderr,
-                stdout="",
-                stderr="\n".join(s for s in stderr_log if s).strip(),
-                nurlc_errors=parse_nurlc_diagnostics(nurlc_stderr),
-                ll_artifact=None,
-                binary_artifact=None,
-            )
-
-        ll_path.write_bytes(nurlc_proc.stdout)
-
-        if not re.search(rb"^\s*define\s+i32\s+@main\s*\(", nurlc_proc.stdout, re.MULTILINE):
-            hint = (
-                "nurlc produced IR without an `@main` definition. "
-                "NURL's entry point is `@ main → i { ... }`."
-            )
-            return BuildResponse(
-                status="error",
-                message="no @main in generated IR",
-                filename=req.filename,
-                uses_canvas=False,
-                nurlc_returncode=nurlc_proc.returncode,
-                nurlc_stdout_bytes=len(nurlc_proc.stdout),
-                nurlc_stderr=nurlc_stderr,
-                clang_returncode=None,
-                clang_stdout=None,
-                clang_stderr=None,
-                stdout="",
-                stderr=("\n".join(s for s in stderr_log if s) + "\n[nurl] " + hint).strip(),
-                nurlc_errors=parse_nurlc_diagnostics(nurlc_stderr),
-                ll_artifact=None,
-                binary_artifact=None,
-            )
-
-        uses_canvas = bool(
-            re.search(
-                rb"@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mouse_btn)\b",
-                nurlc_proc.stdout,
-            )
-        )
-        uses_audio = bool(re.search(rb"@audio_[a-z_]+\b", nurlc_proc.stdout))
-
-        # Reject FFIs that have no macOS back-end in this container.
-        if uses_canvas or uses_audio:
-            try:
-                ll_path.unlink()
-                build_dir.rmdir()
-            except OSError:
-                pass
-            unsupported = []
-            if uses_canvas: unsupported.append("canvas")
-            if uses_audio:  unsupported.append("audio")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"macOS build does not support FFI: {', '.join(unsupported)}. "
-                    "Use Build WASM for canvas/audio programs."
-                ),
-            )
-
-        # Route the macOS cross-link through the shared Zig helper so target
-        # selection and driver invocation stay centralized.
-        zig_cmd: list[str] = [
-            NURL_LINK_HELPER,
-            "--driver", f"{NURL_ZIG} cc",
-            "--target", MACOS_TARGET,
-            "--opt", opt_flag,
-            "--runtime", RUNTIME_MAC_O,
-            "--no-lto",
-            "--no-marker-libs",
-            "--flag", "-Wno-override-module",
-            NURL_WORK_ROOT,
-            str(ll_path),
-            str(bin_path),
-        ]
-        # runtime.c links libm calls on POSIX; on macOS those live in
-        # libSystem (which zig links implicitly), so no -lm needed.
-        clang_proc = _run(zig_cmd, cwd=str(tmpdir))
-        clang_stdout = clang_proc.stdout.decode("utf-8", "replace")
-        clang_stderr = clang_proc.stderr.decode("utf-8", "replace")
-        if clang_stdout:
-            stdout_log.append(f"[zig cc] {clang_stdout}")
-        if clang_stderr:
-            stderr_log.append(f"[zig cc] {clang_stderr}")
-
-    ll_artifact: BuildArtifact | None = None
-    if ll_path.is_file():
-        token = _register_download(ll_path, "text/plain")
-        ll_artifact = BuildArtifact(
-            name=ll_path.name,
-            bytes=ll_path.stat().st_size,
-            download_url=_download_url(request, token),
-            token=token,
-        )
-
-    bin_artifact: BuildArtifact | None = None
-    if bin_path.is_file():
-        try:
-            bin_path.chmod(0o755)
-        except OSError:
-            pass
-        token = _register_download(bin_path, "application/x-mach-binary")
-        bin_artifact = BuildArtifact(
-            name=bin_path.name,
-            bytes=bin_path.stat().st_size,
-            download_url=_download_url(request, token),
-            token=token,
-        )
-
-    ok = clang_proc.returncode == 0 and bin_artifact is not None
-    return BuildResponse(
-        status="ok" if ok else "error",
-        message=(
-            f"compiled nurl → macOS Mach-O ({MACOS_TARGET})"
-            if ok
-            else "macos build failed (see stderr)"
-        ),
-        filename=req.filename,
-        uses_canvas=False,
-        nurlc_returncode=nurlc_proc.returncode,
-        nurlc_stdout_bytes=len(nurlc_proc.stdout),
-        nurlc_stderr=nurlc_stderr,
-        clang_returncode=clang_proc.returncode,
-        clang_stdout=clang_stdout or None,
-        clang_stderr=clang_stderr or None,
-        stdout="\n".join(s for s in stdout_log if s).strip(),
-        stderr="\n".join(s for s in stderr_log if s).strip(),
-        nurlc_errors=parse_nurlc_diagnostics(nurlc_stderr),
-        ll_artifact=ll_artifact,
-        binary_artifact=bin_artifact,
+    return _run_api_build_helper(
+        req,
+        request,
+        kind="macos",
+        driver=f"{NURL_ZIG} cc",
+        runtime=RUNTIME_MAC_O,
+        target=MACOS_TARGET,
+        binary_media_type="application/x-mach-binary",
+        executable_artifact=True,
     )
 
 
