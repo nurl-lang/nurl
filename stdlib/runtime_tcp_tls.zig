@@ -807,6 +807,76 @@ fn nurl_signal_trigger_shutdown_impl() callconv(.c) void {
     }
 }
 
+fn nurl_tcp_listen_stub_impl(host: ?[*:0]const u8, port: c_longlong, backlog: c_longlong) callconv(.c) c_longlong {
+    _ = host;
+    _ = port;
+    _ = backlog;
+    return 0;
+}
+
+fn nurl_tcp_listen_tls_stub_impl(
+    host: ?[*:0]const u8,
+    port: c_longlong,
+    backlog: c_longlong,
+    cert_path: ?[*:0]const u8,
+    key_path: ?[*:0]const u8,
+) callconv(.c) c_longlong {
+    _ = host;
+    _ = port;
+    _ = backlog;
+    _ = cert_path;
+    _ = key_path;
+    return 0;
+}
+
+fn nurl_tcp_accept_stub_impl(listener_handle: c_longlong) callconv(.c) c_longlong {
+    _ = listener_handle;
+    return 0;
+}
+
+fn nurl_tcp_read_stub_impl(handle: c_longlong, buf: ?[*:0]const u8, n: c_longlong) callconv(.c) c_longlong {
+    _ = handle;
+    _ = buf;
+    _ = n;
+    return -1;
+}
+
+fn nurl_tcp_write_stub_impl(handle: c_longlong, buf: ?[*:0]const u8, n: c_longlong) callconv(.c) c_longlong {
+    _ = handle;
+    _ = buf;
+    _ = n;
+    return -1;
+}
+
+fn nurl_tcp_close_stub_impl(handle: c_longlong) callconv(.c) void {
+    _ = handle;
+}
+
+fn nurl_tcp_shutdown_stub_impl(handle: c_longlong) callconv(.c) void {
+    _ = handle;
+}
+
+fn nurl_tcp_err_kind_stub_impl(handle: c_longlong) callconv(.c) c_longlong {
+    _ = handle;
+    return nurl_net_err_other;
+}
+
+fn nurl_tcp_peer_addr_stub_impl(handle: c_longlong) callconv(.c) ?[*:0]const u8 {
+    _ = handle;
+    return "";
+}
+
+fn nurl_tcp_set_timeout_stub_impl(handle: c_longlong, ms: c_longlong) callconv(.c) void {
+    _ = handle;
+    _ = ms;
+}
+
+fn nurl_signal_install_shutdown_stub_impl(listener_handle: c_longlong) callconv(.c) void {
+    _ = listener_handle;
+}
+
+fn nurl_signal_trigger_shutdown_stub_impl() callconv(.c) void {}
+
 comptime {
     if (have_posix_tcp) {
         @export(&nurl_tcp_listen_impl, .{ .name = "nurl_tcp_listen" });
@@ -827,5 +897,18 @@ comptime {
         @export(&nurl_tcp_set_timeout_impl, .{ .name = "nurl_tcp_set_timeout" });
         @export(&nurl_signal_install_shutdown_impl, .{ .name = "nurl_signal_install_shutdown" });
         @export(&nurl_signal_trigger_shutdown_impl, .{ .name = "nurl_signal_trigger_shutdown" });
+    } else if (builtin.os.tag == .wasi) {
+        @export(&nurl_tcp_listen_stub_impl, .{ .name = "nurl_tcp_listen" });
+        @export(&nurl_tcp_listen_tls_stub_impl, .{ .name = "nurl_tcp_listen_tls" });
+        @export(&nurl_tcp_accept_stub_impl, .{ .name = "nurl_tcp_accept" });
+        @export(&nurl_tcp_read_stub_impl, .{ .name = "nurl_tcp_read" });
+        @export(&nurl_tcp_write_stub_impl, .{ .name = "nurl_tcp_write" });
+        @export(&nurl_tcp_close_stub_impl, .{ .name = "nurl_tcp_close" });
+        @export(&nurl_tcp_shutdown_stub_impl, .{ .name = "nurl_tcp_shutdown" });
+        @export(&nurl_tcp_err_kind_stub_impl, .{ .name = "nurl_tcp_err_kind" });
+        @export(&nurl_tcp_peer_addr_stub_impl, .{ .name = "nurl_tcp_peer_addr" });
+        @export(&nurl_tcp_set_timeout_stub_impl, .{ .name = "nurl_tcp_set_timeout" });
+        @export(&nurl_signal_install_shutdown_stub_impl, .{ .name = "nurl_signal_install_shutdown" });
+        @export(&nurl_signal_trigger_shutdown_stub_impl, .{ .name = "nurl_signal_trigger_shutdown" });
     }
 }

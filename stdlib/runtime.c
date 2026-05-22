@@ -2516,7 +2516,7 @@ static NurlTcp *nurl__tcp_new_handle(int kind) {
     return h;
 }
 
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
 long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
 #ifdef _WIN32
     if (!nurl__net_wsa_init()) {
@@ -2595,7 +2595,7 @@ long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
 }
 #endif
 
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
 long long nurl_tcp_accept(long long listener) {
     NurlTcp *l = (NurlTcp*)(uintptr_t)listener;
     NurlTcp *c = nurl__tcp_new_handle(NURL_TCP_KIND_CONN);
@@ -3089,7 +3089,7 @@ const char *nurl_tcp_alpn_selected(long long handle) {
 }
 #endif
 
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
 long long nurl_tcp_read(long long handle, const char *buf, long long n) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return -1;
@@ -3210,7 +3210,7 @@ long long nurl_tcp_write(long long handle, const char *buf, long long n) {
 }
 #endif
 
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
 void nurl_tcp_close(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return;
@@ -3269,7 +3269,7 @@ void nurl_tcp_close(long long handle) {
  * empirically as ~40% intermittent SIGSEGV at process exit on
  * Windows). Caller invokes nurl_tcp_close after all workers have
  * joined to actually free the struct. */
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
 void nurl_tcp_shutdown(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return;
@@ -3315,30 +3315,8 @@ void nurl_tcp_set_timeout(long long handle, long long ms) {
 }
 #endif
 
-#else  /* __wasi__: no socket support — every call returns NetOther. */
-
-long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
-    (void)host; (void)port; (void)backlog;
-    return 0;
-}
-long long nurl_tcp_listen_tls(const char *host, long long port, long long backlog,
-                              const char *cert, const char *key) {
-    (void)host; (void)port; (void)backlog; (void)cert; (void)key;
-    return 0;
-}
-long long nurl_tcp_accept(long long listener) { (void)listener; return 0; }
-long long nurl_tcp_read(long long h, const char *buf, long long n) {
-    (void)h; (void)buf; (void)n; return -1;
-}
-long long nurl_tcp_write(long long h, const char *buf, long long n) {
-    (void)h; (void)buf; (void)n; return -1;
-}
-void nurl_tcp_close(long long h) { (void)h; }
-void nurl_tcp_shutdown(long long h) { (void)h; }
-long long nurl_tcp_err_kind(long long h) { (void)h; return NURL_NET_ERR_OTHER; }
-const char *nurl_tcp_peer_addr(long long h) { (void)h; return ""; }
-void nurl_tcp_set_timeout(long long h, long long ms) { (void)h; (void)ms; }
-
+#else  /* __wasi__ */
+/* WASI TCP stubs now live in stdlib/runtime_tcp_tls.zig. */
 #endif /* __wasi__ guard for §18 */
 
 
@@ -3392,7 +3370,7 @@ void nurl_tcp_set_timeout(long long h, long long ms) { (void)h; (void)ms; }
  * tiny.
  * ============================================================ */
 
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
 
 #if !defined(__wasi__)
 
@@ -3464,10 +3442,6 @@ void nurl_signal_trigger_shutdown(void) {
     if (h && h->fd != NURL_INVALID_SOCK) shutdown(h->fd, SHUT_RDWR);
 #  endif
 }
-
-#else  /* __wasi__ — no signals; no-ops. */
-void nurl_signal_install_shutdown(long long listener) { (void)listener; }
-void nurl_signal_trigger_shutdown(void)               {}
 #endif
 
 #endif
