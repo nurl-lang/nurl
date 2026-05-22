@@ -457,6 +457,13 @@ const NurlProcChild = extern struct {
     line_cap: usize,
 };
 
+const NurlTcpPrefix = extern struct {
+    fd: c.fd_t,
+    err_kind: c_longlong,
+    kind: c_int,
+    peer: ?[*:0]u8,
+};
+
 const max_cgs = 8;
 
 const NurlCG = struct {
@@ -469,6 +476,8 @@ const nurl_proc_err_notfound: c_longlong = 1;
 const nurl_proc_err_exec_failed: c_longlong = 2;
 const nurl_proc_err_io: c_longlong = 3;
 const nurl_proc_err_other: c_longlong = 4;
+const nurl_net_err_other: c_longlong = 8;
+const nurl_invalid_sock: c.fd_t = -1;
 
 fn readFileAlloc(path: [*:0]const u8, nul_terminate: bool, empty_alloc_one: bool) ?[*]u8 {
     const file = c.fopen(path, "rb") orelse return null;
@@ -1063,6 +1072,11 @@ fn procChildHandle(handle: c_longlong) ?*NurlProcChild {
     return @ptrFromInt(@as(usize, @intCast(handle)));
 }
 
+fn tcpPrefixHandle(handle: c_longlong) ?*NurlTcpPrefix {
+    if (handle == 0) return null;
+    return @ptrFromInt(@as(usize, @intCast(handle)));
+}
+
 var g_cgs: [max_cgs]?*NurlCG = .{null} ** max_cgs;
 var g_cg_count: c_int = 0;
 var g_lexers: [max_lex]?*NurlLex = .{null} ** max_lex;
@@ -1081,6 +1095,7 @@ var g_log_level: c_longlong = 1;
 var g_stdin_eof_flag = false;
 var g_outbuf: ?[*]u8 = null;
 var g_outbuf_len: usize = 0;
+var g_signal_listener: ?*volatile NurlTcpPrefix = null;
 var g_outbuf_mode = false;
 
 const outbuf_size = 8 * 1024 * 1024;
@@ -3043,6 +3058,75 @@ comptime {
         @export(&nurl_proc_spawn_eof_impl, .{ .name = "nurl_proc_spawn_eof" });
         @export(&nurl_proc_spawn_last_io_err_impl, .{ .name = "nurl_proc_spawn_last_io_err" });
         @export(&nurl_proc_spawn_free_impl, .{ .name = "nurl_proc_spawn_free" });
+    }
+}
+
+fn nurlSignalPosixHandler(sig: c.SIG) callconv(.c) void {
+    _ = sig;
+    const listener = g_signal_listener orelse return;
+    if (listener.fd != nurl_invalid_sock) {
+        _ = c.close(listener.fd);
+        listener.fd = nurl_invalid_sock;
+    }
+}
+
+fn nurl_tcp_shutdown_impl(handle: c_longlong) callconv(.c) void {
+    const tcp = tcpPrefixHandle(handle) orelse return;
+    if (tcp.fd != nurl_invalid_sock) {
+        _ = c.shutdown(tcp.fd, c.SHUT.RDWR);
+        _ = posix.close(tcp.fd);
+        tcp.fd = nurl_invalid_sock;
+    }
+}
+
+fn nurl_tcp_err_kind_impl(handle: c_longlong) callconv(.c) c_longlong {
+    const tcp = tcpPrefixHandle(handle);
+    return if (tcp) |value| value.err_kind else nurl_net_err_other;
+}
+
+fn nurl_tcp_peer_addr_impl(handle: c_longlong) callconv(.c) ?[*:0]const u8 {
+    const tcp = tcpPrefixHandle(handle) orelse return "";
+    return tcp.peer orelse "";
+}
+
+fn nurl_tcp_set_timeout_impl(handle: c_longlong, ms: c_longlong) callconv(.c) void {
+    const tcp = tcpPrefixHandle(handle) orelse return;
+    if (tcp.fd == nurl_invalid_sock) return;
+
+    var tv = c.timeval{
+        .sec = if (ms > 0) @intCast(@divTrunc(ms, 1000)) else 0,
+        .usec = if (ms > 0) @intCast(@mod(ms, 1000) * 1000) else 0,
+    };
+    _ = c.setsockopt(tcp.fd, c.SOL.SOCKET, c.SO.RCVTIMEO, @ptrCast(&tv), @sizeOf(c.timeval));
+    _ = c.setsockopt(tcp.fd, c.SOL.SOCKET, c.SO.SNDTIMEO, @ptrCast(&tv), @sizeOf(c.timeval));
+}
+
+fn nurl_signal_install_shutdown_impl(listener_handle: c_longlong) callconv(.c) void {
+    g_signal_listener = if (listener_handle == 0) null else @ptrFromInt(@as(usize, @intCast(listener_handle)));
+    var sa = std.mem.zeroes(c.Sigaction);
+    sa.handler.handler = nurlSignalPosixHandler;
+    _ = c.sigemptyset(&sa.mask);
+    sa.flags = 0;
+    _ = c.sigaction(c.SIG.INT, &sa, null);
+    _ = c.sigaction(c.SIG.TERM, &sa, null);
+}
+
+fn nurl_signal_trigger_shutdown_impl() callconv(.c) void {
+    const listener = g_signal_listener orelse return;
+    if (listener.fd != nurl_invalid_sock) {
+        _ = c.close(listener.fd);
+        listener.fd = nurl_invalid_sock;
+    }
+}
+
+comptime {
+    if (builtin.os.tag != .windows and builtin.os.tag != .wasi) {
+        @export(&nurl_tcp_shutdown_impl, .{ .name = "nurl_tcp_shutdown" });
+        @export(&nurl_tcp_err_kind_impl, .{ .name = "nurl_tcp_err_kind" });
+        @export(&nurl_tcp_peer_addr_impl, .{ .name = "nurl_tcp_peer_addr" });
+        @export(&nurl_tcp_set_timeout_impl, .{ .name = "nurl_tcp_set_timeout" });
+        @export(&nurl_signal_install_shutdown_impl, .{ .name = "nurl_signal_install_shutdown" });
+        @export(&nurl_signal_trigger_shutdown_impl, .{ .name = "nurl_signal_trigger_shutdown" });
     }
 }
 

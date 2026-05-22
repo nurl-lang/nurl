@@ -39,7 +39,9 @@ $ `stdlib/core/io.nu`
 
 @ run_live_shutdown → v {
     ( nurl_print `── live shutdown ──\n` )
-    : !TcpListener NetErr lr ( tcp_listen_with_backlog `127.0.0.1` 0 16 )
+    // Port 0 is rejected by the runtime's TCP listen path, so use a
+    // fixed loopback-only port for the live shutdown smoke.
+    : !TcpListener NetErr lr ( tcp_listen_with_backlog `127.0.0.1` 18767 16 )
     ?? lr {
         T listener → {
             ( signal_install_shutdown listener )

@@ -6155,6 +6155,7 @@ void nurl_tcp_close(long long handle) {
  * empirically as ~40% intermittent SIGSEGV at process exit on
  * Windows). Caller invokes nurl_tcp_close after all workers have
  * joined to actually free the struct. */
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 void nurl_tcp_shutdown(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return;
@@ -6198,6 +6199,7 @@ void nurl_tcp_set_timeout(long long handle, long long ms) {
     setsockopt(h->fd, SOL_SOCKET, SO_SNDTIMEO, &tv, (socklen_t)sizeof(tv));
 #endif
 }
+#endif
 
 #else  /* __wasi__: no socket support — every call returns NetOther. */
 
@@ -6497,6 +6499,8 @@ void      nurl_cond_free(long long h)              { (void)h; }
  * tiny.
  * ============================================================ */
 
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
+
 #if !defined(__wasi__)
 
 static volatile NurlTcp *g_signal_listener = NULL;
@@ -6571,6 +6575,8 @@ void nurl_signal_trigger_shutdown(void) {
 #else  /* __wasi__ — no signals; no-ops. */
 void nurl_signal_install_shutdown(long long listener) { (void)listener; }
 void nurl_signal_trigger_shutdown(void)               {}
+#endif
+
 #endif
 
 
