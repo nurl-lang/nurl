@@ -2320,7 +2320,7 @@ static NurlTcp *nurl__tcp_new_handle(int kind) {
     return h;
 }
 
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV)
 long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
 #ifdef _WIN32
     if (!nurl__net_wsa_init()) {
@@ -2399,7 +2399,7 @@ long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
 }
 #endif
 
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV)
 long long nurl_tcp_accept(long long listener) {
     NurlTcp *l = (NurlTcp*)(uintptr_t)listener;
     NurlTcp *c = nurl__tcp_new_handle(NURL_TCP_KIND_CONN);
@@ -2539,7 +2539,7 @@ static int nurl__alpn_select_cb(SSL *ssl, const unsigned char **out,
 long long nurl_tcp_listen(const char *host, long long port, long long backlog);
 #endif
 
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV)
 long long nurl_tcp_listen_tls(const char *host, long long port,
                               long long backlog,
                               const char *cert_path, const char *key_path) {
@@ -2599,7 +2599,7 @@ long long nurl_tcp_listen_tls(const char *host, long long port,
  * + ALPN callback; clients that don't offer any of the listed
  * protocols still complete the handshake (SSL_TLSEXT_ERR_NOACK) —
  * server should treat them as the default (HTTP/1.1). */
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV)
 long long nurl_tcp_listen_tls_alpn(const char *host, long long port,
                                    long long backlog,
                                    const char *cert_path, const char *key_path,
@@ -2672,7 +2672,7 @@ static SSL_CTX *nurl__tls_build_ctx(NurlTcp *h, const char *cert_path,
  * Returns 0 on success; non-zero NurlNetErr otherwise (cert/key
  * load failure most commonly). May be called repeatedly to grow
  * the registry; existing in-flight conns are unaffected. */
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV)
 long long nurl_tcp_tls_add_sni(long long handle, const char *hostname,
                                const char *cert_path, const char *key_path) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
@@ -2742,7 +2742,7 @@ long long nurl_tcp_tls_add_sni(long long handle, const char *hostname,
  * until they close. New accepts immediately use the new ctx.
  *
  * Returns 0 on success, NetErr code on failure. */
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV)
 long long nurl_tcp_tls_reload(long long handle, const char *hostname,
                               const char *cert_path, const char *key_path) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
@@ -2805,7 +2805,7 @@ long long nurl_tcp_tls_reload(long long handle, const char *hostname,
  * via `nurl_tcp_peer_cert_subject`.
  *
  * Returns 0 on success, NetErr code on failure. */
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV)
 long long nurl_tcp_tls_require_client_cert(long long handle,
                                             const char *ca_bundle_path,
                                             long long strict) {
@@ -2842,7 +2842,7 @@ long long nurl_tcp_tls_require_client_cert(long long handle,
  * off a completed TLS conn. Returns a heap-owned NUL-terminated
  * string. Empty when no peer cert was presented or the conn is
  * non-TLS. Caller frees via nurl_free. */
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV)
 const char *nurl_tcp_peer_cert_subject(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return strdup("");
@@ -2872,7 +2872,7 @@ const char *nurl_tcp_peer_cert_subject(long long handle) {
  * heap-owned NUL-terminated string ("h2" / "http/1.1" / ...); empty
  * when ALPN was not negotiated or the handle is non-TLS. Caller frees
  * via nurl_free. */
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV)
 const char *nurl_tcp_alpn_selected(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return strdup("");
@@ -2893,7 +2893,7 @@ const char *nurl_tcp_alpn_selected(long long handle) {
 }
 #endif
 
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV)
 long long nurl_tcp_read(long long handle, const char *buf, long long n) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return -1;
@@ -3014,7 +3014,7 @@ long long nurl_tcp_write(long long handle, const char *buf, long long n) {
 }
 #endif
 
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV)
 void nurl_tcp_close(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return;

@@ -7,7 +7,8 @@ const windows = std.os.windows;
 
 const have_posix_tcp = builtin.os.tag != .windows and builtin.os.tag != .wasi;
 const have_windows_tcp = builtin.os.tag == .windows;
-const have_posix_openssl = runtime_features.have_openssl and have_posix_tcp;
+const have_tls_runtime = runtime_features.have_openssl and builtin.os.tag != .wasi;
+const have_posix_openssl = have_tls_runtime and have_posix_tcp;
 const winsock = if (have_windows_tcp) @cImport({
     @cInclude("winsock2.h");
     @cInclude("ws2tcpip.h");
@@ -17,7 +18,7 @@ const net = if (have_posix_tcp) @cImport({
     @cInclude("netinet/in.h");
     @cInclude("arpa/inet.h");
 }) else struct {};
-const openssl = if (have_posix_openssl) @cImport({
+const openssl = if (have_tls_runtime) @cImport({
     @cInclude("openssl/ssl.h");
     @cInclude("openssl/err.h");
 }) else struct {};
@@ -30,6 +31,9 @@ const posix = if (builtin.os.tag == .windows) struct {} else struct {
 };
 
 const TcpFd = if (have_windows_tcp) winsock.SOCKET else c.fd_t;
+const TcpSockAddrIn = if (have_windows_tcp) winsock.sockaddr_in else net.sockaddr_in;
+const TcpSockAddr = if (have_windows_tcp) winsock.sockaddr else net.sockaddr;
+const TcpSockLen = if (have_windows_tcp) c_int else net.socklen_t;
 const win_ctrl_c_event: windows.DWORD = 0;
 const win_ctrl_break_event: windows.DWORD = 1;
 const win_ctrl_close_event: windows.DWORD = 2;
@@ -43,12 +47,12 @@ const NurlTcpPrefix = extern struct {
     peer: ?[*:0]u8,
 };
 
-const NurlSniEntry = if (have_posix_openssl) extern struct {
+const NurlSniEntry = if (have_tls_runtime) extern struct {
     hostname: ?[*:0]u8,
     ctx: ?*openssl.SSL_CTX,
 } else struct {};
 
-const NurlTcp = if (have_posix_openssl) extern struct {
+const NurlTcp = if (have_tls_runtime) extern struct {
     fd: TcpFd,
     err_kind: c_longlong,
     kind: c_int,
@@ -60,7 +64,7 @@ const NurlTcp = if (have_posix_openssl) extern struct {
     sni_entries: ?[*]NurlSniEntry,
     sni_count: usize,
     sni_cap: usize,
-    tls_lock: pthread.pthread_mutex_t,
+    tls_lock: if (have_windows_tcp) windows.CRITICAL_SECTION else pthread.pthread_mutex_t,
     tls_lock_init: c_int,
 } else extern struct {
     fd: TcpFd,
@@ -85,11 +89,24 @@ const nurl_net_err_tls_handshake: c_longlong = 12;
 const nurl_invalid_sock: TcpFd = if (have_windows_tcp) winsock.INVALID_SOCKET else -1;
 
 var g_signal_listener: ?*volatile NurlTcpPrefix = null;
+var g_wsa_started: bool = false;
 
 extern "kernel32" fn SetConsoleCtrlHandler(
     handler: ?*const fn (ctrl_type: windows.DWORD) callconv(.winapi) windows.BOOL,
     add: windows.BOOL,
 ) callconv(.winapi) windows.BOOL;
+extern "kernel32" fn InitializeCriticalSection(
+    critical_section: *windows.CRITICAL_SECTION,
+) callconv(.winapi) void;
+extern "kernel32" fn EnterCriticalSection(
+    critical_section: *windows.CRITICAL_SECTION,
+) callconv(.winapi) void;
+extern "kernel32" fn LeaveCriticalSection(
+    critical_section: *windows.CRITICAL_SECTION,
+) callconv(.winapi) void;
+extern "kernel32" fn DeleteCriticalSection(
+    critical_section: *windows.CRITICAL_SECTION,
+) callconv(.winapi) void;
 
 fn dupZ(src: [*:0]const u8) ?[*:0]u8 {
     const len = std.mem.len(src);
@@ -128,6 +145,15 @@ fn tcpAllocHandle(kind: c_int) ?*NurlTcp {
     return tcp;
 }
 
+fn initTcpRuntime() bool {
+    if (!have_windows_tcp) return true;
+    if (g_wsa_started) return true;
+    var wsa: winsock.WSADATA = std.mem.zeroes(winsock.WSADATA);
+    if (winsock.WSAStartup(0x0202, &wsa) != 0) return false;
+    g_wsa_started = true;
+    return true;
+}
+
 fn netMapErrno(err_no: c_int, default_kind: c_longlong) c_longlong {
     if (err_no == @intFromEnum(c.E.AGAIN)) return nurl_net_err_timeout;
     if (@hasField(c.E, "WOULDBLOCK")) {
@@ -145,12 +171,43 @@ fn netMapErrno(err_no: c_int, default_kind: c_longlong) c_longlong {
     return default_kind;
 }
 
-fn netFormatPeer(sa: *const net.sockaddr_in) ?[*:0]u8 {
+fn netMapSockErr(default_kind: c_longlong) c_longlong {
+    if (have_windows_tcp) return netMapWsa(winsock.WSAGetLastError(), default_kind);
+    return netMapErrno(c._errno().*, default_kind);
+}
+
+fn netMapWsa(err_no: c_int, default_kind: c_longlong) c_longlong {
+    if (!have_windows_tcp) return default_kind;
+    return switch (err_no) {
+        winsock.WSAETIMEDOUT => nurl_net_err_timeout,
+        winsock.WSAEADDRINUSE => nurl_net_err_addrinuse,
+        winsock.WSAECONNRESET,
+        winsock.WSAECONNABORTED,
+        winsock.WSAESHUTDOWN,
+        => nurl_net_err_closed,
+        else => default_kind,
+    };
+}
+
+fn closeSock(fd: TcpFd) void {
+    if (have_windows_tcp) {
+        _ = winsock.closesocket(fd);
+    } else {
+        _ = posix.close(fd);
+    }
+}
+
+fn netFormatPeer(sa: *const TcpSockAddrIn) ?[*:0]u8 {
     var ip_buf: [64]u8 = undefined;
-    const ip_ptr = net.inet_ntop(c.AF.INET, @constCast(&sa.sin_addr), &ip_buf, ip_buf.len) orelse return dupSliceZ("");
+    const ip_ptr = if (have_windows_tcp)
+        winsock.InetNtopA(winsock.AF_INET, @constCast(&sa.sin_addr), &ip_buf, ip_buf.len)
+    else
+        net.inet_ntop(c.AF.INET, @constCast(&sa.sin_addr), &ip_buf, ip_buf.len);
+    if (ip_ptr == null) return dupSliceZ("");
     const ip = std.mem.span(ip_ptr);
+    const port = if (have_windows_tcp) winsock.ntohs(sa.sin_port) else net.ntohs(sa.sin_port);
     var peer_buf: [32]u8 = undefined;
-    const peer = std.fmt.bufPrint(&peer_buf, "{s}:{d}", .{ ip, net.ntohs(sa.sin_port) }) catch return dupSliceZ("");
+    const peer = std.fmt.bufPrint(&peer_buf, "{s}:{d}", .{ ip, port }) catch return dupSliceZ("");
     return dupSliceZ(peer);
 }
 
@@ -190,7 +247,7 @@ fn alpnPack(spec: ?[*:0]const u8, out_len: *usize) ?[*]u8 {
 }
 
 fn tlsBuildCtx(tcp: ?*NurlTcp, cert_path: ?[*:0]const u8, key_path: ?[*:0]const u8) ?*openssl.SSL_CTX {
-    if (!have_posix_openssl) return null;
+    if (!have_tls_runtime) return null;
     const cert = cert_path orelse {
         if (tcp) |value| value.err_kind = nurl_net_err_tls_cert_load;
         return null;
@@ -224,22 +281,34 @@ fn tlsBuildCtx(tcp: ?*NurlTcp, cert_path: ?[*:0]const u8, key_path: ?[*:0]const 
 }
 
 fn tlsLockEnsure(tcp: *NurlTcp) void {
-    if (!have_posix_openssl) return;
+    if (!have_tls_runtime) return;
     if (tcp.tls_lock_init != 0) return;
-    _ = pthread.pthread_mutex_init(&tcp.tls_lock, null);
+    if (have_windows_tcp) {
+        InitializeCriticalSection(&tcp.tls_lock);
+    } else {
+        _ = pthread.pthread_mutex_init(&tcp.tls_lock, null);
+    }
     tcp.tls_lock_init = 1;
 }
 
 fn tlsLock(tcp: *NurlTcp) void {
-    if (!have_posix_openssl) return;
+    if (!have_tls_runtime) return;
     if (tcp.tls_lock_init == 0) return;
-    _ = pthread.pthread_mutex_lock(&tcp.tls_lock);
+    if (have_windows_tcp) {
+        EnterCriticalSection(&tcp.tls_lock);
+    } else {
+        _ = pthread.pthread_mutex_lock(&tcp.tls_lock);
+    }
 }
 
 fn tlsUnlock(tcp: *NurlTcp) void {
-    if (!have_posix_openssl) return;
+    if (!have_tls_runtime) return;
     if (tcp.tls_lock_init == 0) return;
-    _ = pthread.pthread_mutex_unlock(&tcp.tls_lock);
+    if (have_windows_tcp) {
+        LeaveCriticalSection(&tcp.tls_lock);
+    } else {
+        _ = pthread.pthread_mutex_unlock(&tcp.tls_lock);
+    }
 }
 
 fn hostnameIeq(a: ?[*:0]const u8, b: ?[*:0]const u8) bool {
@@ -260,7 +329,7 @@ fn hostnameIeq(a: ?[*:0]const u8, b: ?[*:0]const u8) bool {
 }
 
 fn tlsInstallSniCallback(ctx: ?*openssl.SSL_CTX, tcp: *NurlTcp) void {
-    if (!have_posix_openssl) return;
+    if (!have_tls_runtime) return;
     if (ctx == null) return;
     _ = openssl.SSL_CTX_callback_ctrl(
         ctx,
@@ -297,7 +366,7 @@ fn nurlTcpAlpnSelectCb(
 
 fn nurlTcpSniSelectCb(ssl: ?*openssl.SSL, al: [*c]c_int, arg: ?*anyopaque) callconv(.c) c_int {
     _ = al;
-    if (!have_posix_openssl) return openssl.SSL_TLSEXT_ERR_OK;
+    if (!have_tls_runtime) return openssl.SSL_TLSEXT_ERR_OK;
     const tcp: *NurlTcp = @ptrCast(@alignCast(arg orelse return openssl.SSL_TLSEXT_ERR_OK));
     const server_name = openssl.SSL_get_servername(ssl, openssl.TLSEXT_NAMETYPE_host_name);
     if (server_name == null) return openssl.SSL_TLSEXT_ERR_OK;
@@ -345,6 +414,11 @@ fn nurlSignalWindowsHandler(ctrl_type: windows.DWORD) callconv(.winapi) windows.
 }
 
 fn nurl_tcp_listen_impl(host: ?[*:0]const u8, port: c_longlong, backlog: c_longlong) callconv(.c) c_longlong {
+    if (!initTcpRuntime()) {
+        const tcp = tcpAllocHandle(0) orelse return 0;
+        tcp.err_kind = nurl_net_err_other;
+        return @intCast(@intFromPtr(tcp));
+    }
     const tcp = tcpAllocHandle(0) orelse return 0;
     if (port <= 0 or port > 65535) {
         tcp.err_kind = nurl_net_err_bind;
@@ -352,35 +426,61 @@ fn nurl_tcp_listen_impl(host: ?[*:0]const u8, port: c_longlong, backlog: c_longl
     }
 
     const effective_backlog: c_uint = @intCast(if (backlog <= 0) @as(c_longlong, 16) else backlog);
-    const fd = c.socket(c.AF.INET, c.SOCK.STREAM, 0);
+    const fd = if (have_windows_tcp)
+        winsock.socket(winsock.AF_INET, winsock.SOCK_STREAM, 0)
+    else
+        c.socket(c.AF.INET, c.SOCK.STREAM, 0);
     if (fd == nurl_invalid_sock) {
         tcp.err_kind = nurl_net_err_bind;
         return @intCast(@intFromPtr(tcp));
     }
 
     var on: c_int = 1;
-    _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.REUSEADDR, @ptrCast(&on), @sizeOf(c_int));
+    if (have_windows_tcp) {
+        _ = winsock.setsockopt(fd, winsock.SOL_SOCKET, winsock.SO_REUSEADDR, @ptrCast(&on), @sizeOf(c_int));
+    } else {
+        _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.REUSEADDR, @ptrCast(&on), @sizeOf(c_int));
+    }
 
-    var sa = std.mem.zeroes(net.sockaddr_in);
-    if (@hasField(net.sockaddr_in, "sin_len")) sa.sin_len = @sizeOf(net.sockaddr_in);
-    sa.sin_family = c.AF.INET;
-    sa.sin_port = net.htons(@as(c_ushort, @intCast(port)));
+    var sa = std.mem.zeroes(TcpSockAddrIn);
+    if (!have_windows_tcp and @hasField(TcpSockAddrIn, "sin_len")) sa.sin_len = @sizeOf(TcpSockAddrIn);
+    sa.sin_family = if (have_windows_tcp) winsock.AF_INET else c.AF.INET;
+    sa.sin_port = if (have_windows_tcp)
+        winsock.htons(@as(winsock.u_short, @intCast(port)))
+    else
+        net.htons(@as(c_ushort, @intCast(port)));
     if (host == null or host.?[0] == 0) {
-        sa.sin_addr = .{ .s_addr = net.htonl(net.INADDR_ANY) };
-    } else if (net.inet_pton(c.AF.INET, host.?, &sa.sin_addr) != 1) {
-        _ = posix.close(fd);
+        if (have_windows_tcp) {
+            sa.sin_addr.S_un.S_addr = winsock.htonl(winsock.INADDR_ANY);
+        } else {
+            sa.sin_addr = .{ .s_addr = net.htonl(net.INADDR_ANY) };
+        }
+    } else if ((if (have_windows_tcp)
+        winsock.InetPtonA(winsock.AF_INET, host.?, &sa.sin_addr)
+    else
+        net.inet_pton(c.AF.INET, host.?, &sa.sin_addr)) != 1)
+    {
+        closeSock(fd);
         tcp.err_kind = nurl_net_err_bind;
         return @intCast(@intFromPtr(tcp));
     }
 
-    if (c.bind(fd, @ptrCast(&sa), @intCast(@sizeOf(net.sockaddr_in))) != 0) {
-        tcp.err_kind = netMapErrno(c._errno().*, nurl_net_err_bind);
-        _ = posix.close(fd);
+    if ((if (have_windows_tcp)
+        winsock.bind(fd, @ptrCast(&sa), @intCast(@sizeOf(TcpSockAddrIn)))
+    else
+        c.bind(fd, @ptrCast(&sa), @intCast(@sizeOf(TcpSockAddrIn)))) != 0)
+    {
+        tcp.err_kind = netMapSockErr(nurl_net_err_bind);
+        closeSock(fd);
         return @intCast(@intFromPtr(tcp));
     }
-    if (c.listen(fd, effective_backlog) != 0) {
-        tcp.err_kind = netMapErrno(c._errno().*, nurl_net_err_bind);
-        _ = posix.close(fd);
+    if ((if (have_windows_tcp)
+        winsock.listen(fd, @intCast(effective_backlog))
+    else
+        c.listen(fd, effective_backlog)) != 0)
+    {
+        tcp.err_kind = netMapSockErr(nurl_net_err_bind);
+        closeSock(fd);
         return @intCast(@intFromPtr(tcp));
     }
 
@@ -396,7 +496,7 @@ fn nurl_tcp_listen_tls_impl(
     cert_path: ?[*:0]const u8,
     key_path: ?[*:0]const u8,
 ) callconv(.c) c_longlong {
-    if (!have_posix_openssl) {
+    if (!have_tls_runtime) {
         const tcp = tcpAllocHandle(0) orelse return 0;
         tcp.err_kind = nurl_net_err_tls_ctx_init;
         return @intCast(@intFromPtr(tcp));
@@ -407,7 +507,7 @@ fn nurl_tcp_listen_tls_impl(
     if (tcp.err_kind != nurl_net_err_ok) return handle;
 
     const ctx = tlsBuildCtx(tcp, cert_path, key_path) orelse {
-        _ = posix.close(tcp.fd);
+        closeSock(tcp.fd);
         tcp.fd = nurl_invalid_sock;
         return handle;
     };
@@ -424,7 +524,7 @@ fn nurl_tcp_listen_tls_alpn_impl(
     alpn_protocols: ?[*:0]const u8,
 ) callconv(.c) c_longlong {
     const handle = nurl_tcp_listen_tls_impl(host, port, backlog, cert_path, key_path);
-    if (!have_posix_openssl) return handle;
+    if (!have_tls_runtime) return handle;
 
     const tcp = tcpHandle(handle) orelse return handle;
     if (tcp.err_kind != nurl_net_err_ok or tcp.ssl_ctx == null) return handle;
@@ -449,7 +549,7 @@ fn nurl_tcp_tls_add_sni_impl(
     key_path: ?[*:0]const u8,
 ) callconv(.c) c_longlong {
     const tcp = tcpHandle(handle) orelse return nurl_net_err_other;
-    if (!have_posix_openssl) {
+    if (!have_tls_runtime) {
         tcp.err_kind = nurl_net_err_tls_ctx_init;
         return nurl_net_err_tls_ctx_init;
     }
@@ -511,7 +611,7 @@ fn nurl_tcp_tls_reload_impl(
     key_path: ?[*:0]const u8,
 ) callconv(.c) c_longlong {
     const tcp = tcpHandle(handle) orelse return nurl_net_err_other;
-    if (!have_posix_openssl) {
+    if (!have_tls_runtime) {
         tcp.err_kind = nurl_net_err_tls_ctx_init;
         return nurl_net_err_tls_ctx_init;
     }
@@ -560,7 +660,7 @@ fn nurl_tcp_tls_require_client_cert_impl(
     strict: c_longlong,
 ) callconv(.c) c_longlong {
     const tcp = tcpHandle(handle) orelse return nurl_net_err_other;
-    if (!have_posix_openssl) {
+    if (!have_tls_runtime) {
         tcp.err_kind = nurl_net_err_tls_ctx_init;
         return nurl_net_err_tls_ctx_init;
     }
@@ -593,11 +693,14 @@ fn nurl_tcp_accept_impl(listener_handle: c_longlong) callconv(.c) c_longlong {
         return @intCast(@intFromPtr(conn));
     }
 
-    var peer = std.mem.zeroes(net.sockaddr_in);
-    var peer_len: net.socklen_t = @intCast(@sizeOf(net.sockaddr_in));
-    const fd = c.accept(listener.?.fd, @ptrCast(&peer), &peer_len);
+    var peer = std.mem.zeroes(TcpSockAddrIn);
+    var peer_len: TcpSockLen = @intCast(@sizeOf(TcpSockAddrIn));
+    const fd = if (have_windows_tcp)
+        winsock.accept(listener.?.fd, @ptrCast(&peer), &peer_len)
+    else
+        c.accept(listener.?.fd, @ptrCast(&peer), &peer_len);
     if (fd == nurl_invalid_sock) {
-        conn.err_kind = netMapErrno(c._errno().*, nurl_net_err_accept);
+        conn.err_kind = netMapSockErr(nurl_net_err_accept);
         return @intCast(@intFromPtr(conn));
     }
 
@@ -605,25 +708,25 @@ fn nurl_tcp_accept_impl(listener_handle: c_longlong) callconv(.c) c_longlong {
     conn.err_kind = nurl_net_err_ok;
     conn.peer = netFormatPeer(&peer);
 
-    if (comptime have_posix_openssl) {
+    if (comptime have_tls_runtime) {
         if (listener.?.ssl_ctx) |ssl_ctx| {
             const ssl = openssl.SSL_new(ssl_ctx);
             if (ssl == null) {
-                _ = posix.close(conn.fd);
+                closeSock(conn.fd);
                 conn.fd = nurl_invalid_sock;
                 conn.err_kind = nurl_net_err_tls_handshake;
                 return @intCast(@intFromPtr(conn));
             }
             if (openssl.SSL_set_fd(ssl, @intCast(conn.fd)) != 1) {
                 openssl.SSL_free(ssl);
-                _ = posix.close(conn.fd);
+                closeSock(conn.fd);
                 conn.fd = nurl_invalid_sock;
                 conn.err_kind = nurl_net_err_tls_handshake;
                 return @intCast(@intFromPtr(conn));
             }
             if (openssl.SSL_accept(ssl) != 1) {
                 openssl.SSL_free(ssl);
-                _ = posix.close(conn.fd);
+                closeSock(conn.fd);
                 conn.fd = nurl_invalid_sock;
                 conn.err_kind = nurl_net_err_tls_handshake;
                 return @intCast(@intFromPtr(conn));
@@ -637,7 +740,7 @@ fn nurl_tcp_accept_impl(listener_handle: c_longlong) callconv(.c) c_longlong {
 
 fn nurl_tcp_peer_cert_subject_impl(handle: c_longlong) callconv(.c) ?[*:0]const u8 {
     const tcp = tcpHandle(handle) orelse return dupSliceZ("") orelse "";
-    if (!have_posix_openssl) return dupSliceZ("") orelse "";
+    if (!have_tls_runtime) return dupSliceZ("") orelse "";
     const ssl = tcp.ssl orelse return dupSliceZ("") orelse "";
     const cert = openssl.SSL_get_peer_certificate(ssl) orelse return dupSliceZ("") orelse "";
     defer openssl.X509_free(cert);
@@ -651,7 +754,7 @@ fn nurl_tcp_peer_cert_subject_impl(handle: c_longlong) callconv(.c) ?[*:0]const 
 
 fn nurl_tcp_alpn_selected_impl(handle: c_longlong) callconv(.c) ?[*:0]const u8 {
     const tcp = tcpHandle(handle) orelse return dupSliceZ("") orelse "";
-    if (!have_posix_openssl) return dupSliceZ("") orelse "";
+    if (!have_tls_runtime) return dupSliceZ("") orelse "";
     const ssl = tcp.ssl orelse return dupSliceZ("") orelse "";
 
     var data: [*c]const u8 = null;
@@ -673,7 +776,7 @@ fn nurl_tcp_read_impl(handle: c_longlong, buf: ?[*:0]const u8, n: c_longlong) ca
         return -1;
     }
 
-    if (comptime have_posix_openssl) {
+    if (comptime have_tls_runtime) {
         if (tcp.ssl) |ssl| {
             const max_chunk: c_int = @intCast(@min(n, @as(c_longlong, 0x40000000)));
             const rd = openssl.SSL_read(ssl, @ptrCast(@constCast(buf.?)), max_chunk);
@@ -692,6 +795,16 @@ fn nurl_tcp_read_impl(handle: c_longlong, buf: ?[*:0]const u8, n: c_longlong) ca
         }
     }
 
+    if (have_windows_tcp) {
+        const rd = winsock.recv(tcp.fd, @ptrCast(@constCast(buf.?)), @intCast(@min(n, @as(c_longlong, 0x40000000))), 0);
+        if (rd > 0) {
+            tcp.err_kind = nurl_net_err_ok;
+            return rd;
+        }
+        if (rd == 0) return 0;
+        tcp.err_kind = netMapSockErr(nurl_net_err_read);
+        return -1;
+    }
     var rd: isize = 0;
     while (true) {
         rd = c.recv(tcp.fd, @ptrCast(@constCast(buf.?)), @intCast(n), 0);
@@ -719,7 +832,7 @@ fn nurl_tcp_write_impl(handle: c_longlong, buf: ?[*:0]const u8, n: c_longlong) c
         return -1;
     }
 
-    if (comptime have_posix_openssl) {
+    if (comptime have_tls_runtime) {
         if (tcp.ssl) |ssl| {
             var total: c_longlong = 0;
             while (total < n) {
@@ -737,9 +850,20 @@ fn nurl_tcp_write_impl(handle: c_longlong, buf: ?[*:0]const u8, n: c_longlong) c
         }
     }
 
-    const send_flags: c_int = if (@hasDecl(c.MSG, "NOSIGNAL")) c.MSG.NOSIGNAL else 0;
     var total: c_longlong = 0;
     while (total < n) {
+        if (have_windows_tcp) {
+            const want = n - total;
+            const chunk: c_int = @intCast(@min(want, @as(c_longlong, 0x40000000)));
+            const wn = winsock.send(tcp.fd, @ptrCast(buf.? + @as(usize, @intCast(total))), chunk, 0);
+            if (wn <= 0) {
+                tcp.err_kind = netMapSockErr(nurl_net_err_write);
+                return -1;
+            }
+            total += wn;
+            continue;
+        }
+        const send_flags: c_int = if (@hasDecl(c.MSG, "NOSIGNAL")) c.MSG.NOSIGNAL else 0;
         var wn: isize = 0;
         while (true) {
             wn = c.send(tcp.fd, buf.? + @as(usize, @intCast(total)), @intCast(n - total), send_flags);
@@ -757,7 +881,7 @@ fn nurl_tcp_write_impl(handle: c_longlong, buf: ?[*:0]const u8, n: c_longlong) c
 
 fn nurl_tcp_close_impl(handle: c_longlong) callconv(.c) void {
     const tcp = tcpHandle(handle) orelse return;
-    if (comptime have_posix_openssl) {
+    if (comptime have_tls_runtime) {
         if (tcp.ssl) |ssl| {
             _ = openssl.SSL_shutdown(ssl);
             openssl.SSL_free(ssl);
@@ -784,12 +908,16 @@ fn nurl_tcp_close_impl(handle: c_longlong) callconv(.c) void {
             tcp.sni_cap = 0;
         }
         if (tcp.tls_lock_init != 0) {
-            _ = pthread.pthread_mutex_destroy(&tcp.tls_lock);
+            if (have_windows_tcp) {
+                DeleteCriticalSection(&tcp.tls_lock);
+            } else {
+                _ = pthread.pthread_mutex_destroy(&tcp.tls_lock);
+            }
             tcp.tls_lock_init = 0;
         }
     }
     if (tcp.fd != nurl_invalid_sock) {
-        _ = posix.close(tcp.fd);
+        closeSock(tcp.fd);
         tcp.fd = nurl_invalid_sock;
     }
     if (tcp.peer) |peer| c.free(peer);
@@ -968,6 +1096,18 @@ comptime {
         @export(&nurl_signal_install_shutdown_impl, .{ .name = "nurl_signal_install_shutdown" });
         @export(&nurl_signal_trigger_shutdown_impl, .{ .name = "nurl_signal_trigger_shutdown" });
     } else if (have_windows_tcp) {
+        @export(&nurl_tcp_listen_impl, .{ .name = "nurl_tcp_listen" });
+        @export(&nurl_tcp_listen_tls_impl, .{ .name = "nurl_tcp_listen_tls" });
+        @export(&nurl_tcp_listen_tls_alpn_impl, .{ .name = "nurl_tcp_listen_tls_alpn" });
+        @export(&nurl_tcp_tls_add_sni_impl, .{ .name = "nurl_tcp_tls_add_sni" });
+        @export(&nurl_tcp_tls_reload_impl, .{ .name = "nurl_tcp_tls_reload" });
+        @export(&nurl_tcp_tls_require_client_cert_impl, .{ .name = "nurl_tcp_tls_require_client_cert" });
+        @export(&nurl_tcp_accept_impl, .{ .name = "nurl_tcp_accept" });
+        @export(&nurl_tcp_peer_cert_subject_impl, .{ .name = "nurl_tcp_peer_cert_subject" });
+        @export(&nurl_tcp_alpn_selected_impl, .{ .name = "nurl_tcp_alpn_selected" });
+        @export(&nurl_tcp_read_impl, .{ .name = "nurl_tcp_read" });
+        @export(&nurl_tcp_write_impl, .{ .name = "nurl_tcp_write" });
+        @export(&nurl_tcp_close_impl, .{ .name = "nurl_tcp_close" });
         @export(&nurl_tcp_shutdown_impl, .{ .name = "nurl_tcp_shutdown" });
         @export(&nurl_tcp_err_kind_impl, .{ .name = "nurl_tcp_err_kind" });
         @export(&nurl_tcp_peer_addr_impl, .{ .name = "nurl_tcp_peer_addr" });
