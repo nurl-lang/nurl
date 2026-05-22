@@ -1354,6 +1354,66 @@ long long nurl_dir_remove(const char *path) {
     return 0;
 }
 
+/* Classify the entry at `path` WITHOUT following a final symbolic link
+ * (lstat semantics): 0 = missing or stat error, 1 = regular file,
+ * 2 = directory, 3 = symbolic link, 4 = other (fifo, socket, device).
+ * lstat — not stat — is deliberate: stdlib/std/fs.nu's recursive
+ * dir_remove_all classifies every entry through this, and a symlink
+ * must report as a link (3) so the walk unlinks it rather than
+ * descending through it and deleting whatever it points at. Windows
+ * has no lstat; there stat is used and symlinks are not distinguished.
+ * MSVC's <sys/stat.h> defines S_IFMT/S_IFDIR/S_IFREG but not the
+ * S_ISDIR/S_ISREG macros, so define them when absent. */
+#ifndef S_ISDIR
+#  define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+#endif
+#ifndef S_ISREG
+#  define S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
+#endif
+
+long long nurl_path_type(const char *path) {
+    if (!path) return 0;
+    struct stat st;
+#ifdef _WIN32
+    if (stat(path, &st) != 0) return 0;
+#else
+    if (lstat(path, &st) != 0) return 0;
+    if (S_ISLNK(st.st_mode)) return 3;
+#endif
+    if (S_ISDIR(st.st_mode)) return 2;
+    if (S_ISREG(st.st_mode)) return 1;
+    return 4;
+}
+
+/* Read up to `n` bytes from an open file handle `h` (a FILE* from
+ * nurl_file_open) into a fresh malloc'd buffer. The number of bytes
+ * actually read is exposed through nurl_last_bytes_len() — 0 means the
+ * stream is at end of file. Returns the buffer (non-NULL even for a
+ * 0-byte read, so EOF is unambiguous from the NULL error signal), or
+ * NULL with errno set on a hard read error. The buffer is NOT
+ * NUL-terminated — callers must honour the length. */
+const char* nurl_file_read_chunk(void *h, long long n) {
+    g_last_bytes_len = 0;
+    if (!h || n <= 0) { errno = EINVAL; return NULL; }
+    char *buf = (char*)malloc((size_t)n);
+    if (!buf) { errno = ENOMEM; return NULL; }
+    size_t got = fread(buf, 1, (size_t)n, (FILE*)h);
+    if (got == 0 && ferror((FILE*)h)) {
+        free(buf);
+        errno = errno ? errno : EIO;
+        return NULL;
+    }
+    g_last_bytes_len = (long long)got;
+    return buf;
+}
+
+/* 1 once the handle's end-of-file indicator is set (the previous read
+ * reached EOF), 0 otherwise. A NULL handle reports EOF. */
+long long nurl_file_eof(void *h) {
+    if (!h) return 1;
+    return feof((FILE*)h) ? 1 : 0;
+}
+
 
 /* ── §5  HashMap (string → i64) ────────────────────────────────── */
 

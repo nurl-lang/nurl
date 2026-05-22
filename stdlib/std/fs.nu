@@ -20,6 +20,16 @@
 //                                                    the entry was actually unlinked,
 //                                                    so we surface ENOENT as NotFound)
 //   ( dir_create path )          → ! v IoErr        mkdir 0755; AlreadyExists if exists
+//   ( dir_create_all path )      → ! v IoErr        mkdir -p: every missing parent;
+//                                                    an existing directory is not an error
+//   ( dir_remove_all path )      → ! v IoErr        recursive rm -rf of a directory tree
+//                                                    (also unlinks a plain file / symlink)
+//
+// Streaming reads — for inputs too large to slurp with read_file:
+//   ( file_open path )           → ! File IoErr     open a file for binary reading
+//   ( file_read_chunk f n )      → ! ( Vec u ) IoErr  up to n bytes; empty Vec at EOF
+//   ( file_eof f )               → b                T once the stream is drained
+//   ( file_close f )             → v                close the handle
 //
 // Examples:
 //   : ! String IoErr r ( read_file `data.txt` )
@@ -37,6 +47,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/errors.nu`
+$ `stdlib/std/path.nu`
 
 // errno-kind → IoErr enum value. Order matches `nurl_errno_kind` in
 // runtime.c (NotFound=0, PermissionDenied=1, AlreadyExists=2,
@@ -248,4 +259,174 @@ $ `stdlib/core/errors.nu`
     } {}
     : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
     ^ @ !v IoErr { F e }
+}
+
+// ── Recursive directory operations ──────────────────────────────────
+//
+// dir_create_all is mkdir -p; dir_remove_all is rm -rf. Both compose the
+// single-level primitives above. dir_remove_all classifies every entry
+// with `nurl_path_type`, which uses lstat — a symbolic link is unlinked,
+// never followed, so the walk can never escape the tree it was handed.
+
+// libc unlink(2): removes a file or symlink entry; 0 on success, -1 with
+// errno set. Used for non-directory entries during recursive removal —
+// nurl_file_del discards its return code, and file_delete's stat-based
+// existence probe would mis-report a dangling symlink as NotFound.
+& `c` @ unlink s path → i32
+
+// Runtime filesystem helpers (resolved from runtime.o; libc is always
+// linked). nurl_path_type: 0 missing, 1 file, 2 dir, 3 symlink, 4 other.
+& `c` @ nurl_path_type       s path        → i
+& `c` @ nurl_file_read_chunk *v h i n      → s
+& `c` @ nurl_file_eof        *v h          → i
+
+// mkdir one path component, treating an already-existing directory as
+// success — the whole point of mkdir -p. errno-kind 2 is AlreadyExists.
+@ __dir_create_step s p → !v IoErr {
+    : i rc ( nurl_dir_create p )
+    ? == rc 0 { ^ @ !v IoErr { T 0 } } {}
+    : i k ( nurl_errno_kind )
+    ? == k 2 { ^ @ !v IoErr { T 0 } } {}
+    ^ @ !v IoErr { F ( __io_err_of_kind k ) }
+}
+
+// Create `path` and every missing parent directory. An existing leaf or
+// parent is not an error. The first component that genuinely fails
+// (permission denied, a file in the way) aborts and surfaces that error.
+@ dir_create_all s path → !v IoErr {
+    : i n ( nurl_str_len path )
+    ? == n 0 { ^ @ !v IoErr { F @ IoErr { NotFound } } } {}
+    : *u pb # *u path
+    : String prefix ( string_new )
+    : ~ i idx 0
+    ~ < idx n {
+        : i c & # i . pb idx 255
+        ? | == c 47 == c 92 {
+            // A separator: create everything accumulated so far. Skip a
+            // leading or doubled separator (empty prefix → nothing yet).
+            ? > ( string_len prefix ) 0 {
+                ?? ( __dir_create_step ( string_data prefix ) ) {
+                    T → {}
+                    F e → {
+                        ( string_free prefix )
+                        ^ @ !v IoErr { F e }
+                    }
+                }
+            } {}
+        } {}
+        ( string_push_char prefix c )
+        = idx + idx 1
+    }
+    // Final component (the path itself, with no trailing separator).
+    : !v IoErr last ( __dir_create_step ( string_data prefix ) )
+    ( string_free prefix )
+    ^ last
+}
+
+// unlink a non-directory entry, mapping errno to IoErr.
+@ __unlink_entry s p → !v IoErr {
+    : i32 rc ( unlink p )
+    ? == rc 0 { ^ @ !v IoErr { T 0 } } {}
+    ^ @ !v IoErr { F ( __io_err_of_kind ( nurl_errno_kind ) ) }
+}
+
+// Free a Vec[String] and every String it owns.
+@ __free_str_vec ( Vec String ) v → v {
+    : ( @ v String ) drop_str \ String e → v { ( string_free e ) }
+    ( vec_free_with [String] v drop_str )
+}
+
+// Recursively remove a directory and everything beneath it. Handed a
+// plain file or a symlink, it unlinks that entry directly (rm -rf
+// parity). Returns NotFound when `path` does not exist. On the first
+// failure the walk stops and surfaces that error — entries already
+// removed stay removed (best-effort, like rm -rf).
+@ dir_remove_all s path → !v IoErr {
+    : i t ( nurl_path_type path )
+    ? == t 0 { ^ @ !v IoErr { F @ IoErr { NotFound } } } {}
+    ? != t 2 { ^ ( __unlink_entry path ) } {}
+    : !( Vec String ) IoErr lst ( dir_list path )
+    ?? lst {
+        F e → { ^ @ !v IoErr { F e } }
+        T entries → {
+            : i cnt ( vec_len [String] entries )
+            : ~ i idx 0
+            ~ < idx cnt {
+                ?? ( vec_get [String] entries idx ) {
+                    T name → {
+                        : String full ( path_join path ( string_data name ) )
+                        : s fp ( string_data full )
+                        : !v IoErr r ? == 2 ( nurl_path_type fp ) { ( dir_remove_all fp ) } { ( __unlink_entry fp ) }
+                        ( string_free full )
+                        ?? r {
+                            T → {}
+                            F e → {
+                                ( __free_str_vec entries )
+                                ^ @ !v IoErr { F e }
+                            }
+                        }
+                    }
+                    F → {}
+                }
+                = idx + idx 1
+            }
+            ( __free_str_vec entries )
+        }
+    }
+    // The directory is empty now — remove the directory itself.
+    ^ ( dir_remove path )
+}
+
+// ── Handle-based streaming reads ────────────────────────────────────
+//
+// file_open + file_read_chunk read a file in fixed-size pieces, so an
+// input far larger than RAM is processed without ever being fully
+// resident. For line-oriented streaming use stdlib/std/bufio.nu, which
+// adds a refill buffer and a memchr line scanner on top of the same
+// FILE* handle; this layer is the raw binary primitive.
+//
+// File wraps a libc FILE* (an opaque `s`). file_open opens "rb"; the
+// handle is closed by file_close.
+
+: File { s raw }
+
+@ file_open s path → !File IoErr {
+    : *v h ( nurl_file_open path `rb` )
+    ? == 0 # i h {
+        ^ @ !File IoErr { F ( __io_err_of_kind ( nurl_errno_kind ) ) }
+    } {}
+    : s rawp # s h
+    ^ @ !File IoErr { T @ File { rawp } }
+}
+
+// Read up to `n` bytes from the handle into an owned Vec[u]. A returned
+// Vec shorter than `n` (down to empty) signals end of file — pair with
+// file_eof for an explicit check. The caller owns the Vec (vec_free [u]).
+@ file_read_chunk File f i n → !( Vec u ) IoErr {
+    ? <= n 0 { ^ @ !( Vec u ) IoErr { T ( vec_new [u] ) } } {}
+    : s hp . f raw
+    : s raw ( nurl_file_read_chunk # *v hp n )
+    ? == 0 # i raw {
+        ^ @ !( Vec u ) IoErr { F ( __io_err_of_kind ( nurl_errno_kind ) ) }
+    } {}
+    : i got ( nurl_last_bytes_len )
+    : ( Vec u ) out ( vec_with_cap [u] got )
+    : *u src # *u raw
+    : ~ i k 0
+    ~ < k got {
+        ( vec_push [u] out . src k )
+        = k + k 1
+    }
+    ( nurl_free raw )
+    ^ @ !( Vec u ) IoErr { T out }
+}
+
+@ file_eof File f → b {
+    : s hp . f raw
+    ^ != 0 ( nurl_file_eof # *v hp )
+}
+
+@ file_close File f → v {
+    : s hp . f raw
+    ? != 0 # i hp { ( nurl_file_close # *v hp ) } {}
 }

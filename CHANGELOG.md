@@ -10,6 +10,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Advanced filesystem operations.** `stdlib/std/fs.nu` gained
+  recursive directory operations and a streaming file reader:
+  `dir_create_all` is mkdir -p — it creates every missing parent
+  directory and treats an already-existing directory as success;
+  `dir_remove_all` is recursive rm -rf — it walks the tree removing
+  every entry before removing the directory itself, and unlinks a
+  symlink rather than descending through it. `file_open` /
+  `file_read_chunk` / `file_eof` / `file_close` read a file in
+  fixed-size byte chunks over a new `File` handle, so a binary input
+  far larger than RAM can be processed without ever being fully
+  resident (line-oriented streaming stays with `stdlib/std/bufio.nu`).
+  Three new `runtime.c` filesystem helpers back this — `nurl_path_type`
+  (an lstat-based entry classifier), `nurl_file_read_chunk` and
+  `nurl_file_eof` — all reached through the pure-NURL `& \`c\`` FFI
+  model, so the compiler is unchanged and the bootstrap fixed point is
+  byte-identical. Regression `compiler/tests/fs_advanced.nu`; the new
+  paths are verified leak-free under ASan/UBSan/LSan.
+* **Runtime filesystem helpers** — `nurl_path_type`,
+  `nurl_file_read_chunk`, `nurl_file_eof` in `stdlib/runtime.c`.
 * **Call-arity diagnostics.** `gen_call` now checks every call against
   the callee's declared parameter count and rejects a mismatch with a
   precise `error:` at the call site — e.g. `call to 'add' has the
