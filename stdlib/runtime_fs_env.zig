@@ -1,5 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const cjmp = @cImport({
+    @cInclude("setjmp.h");
+});
 
 const c = std.c;
 const windows = std.os.windows;
@@ -422,6 +425,12 @@ const NurlDosState = struct {
     ip_count: usize,
     ip_cap: usize,
     mutex: std.Io.Mutex = .init,
+};
+
+const NurlPanicFrame = struct {
+    jb: cjmp.jmp_buf,
+    msg: ?[*:0]u8,
+    prev: ?*NurlPanicFrame,
 };
 
 const NurlProcResult = extern struct {
@@ -1097,6 +1106,8 @@ var g_outbuf: ?[*]u8 = null;
 var g_outbuf_len: usize = 0;
 var g_signal_listener: ?*volatile NurlTcpPrefix = null;
 var g_outbuf_mode = false;
+threadlocal var g_panic_top: ?*NurlPanicFrame = null;
+threadlocal var g_panic_last_msg: ?[*:0]u8 = null;
 
 const outbuf_size = 8 * 1024 * 1024;
 const c_eof: c_int = -1;
@@ -3128,6 +3139,52 @@ comptime {
         @export(&nurl_signal_install_shutdown_impl, .{ .name = "nurl_signal_install_shutdown" });
         @export(&nurl_signal_trigger_shutdown_impl, .{ .name = "nurl_signal_trigger_shutdown" });
     }
+}
+
+pub export fn nurl_recover(fn_ptr: ?*anyopaque, env_ptr: ?*anyopaque) c_longlong {
+    if (fn_ptr == null) return 0;
+    if (builtin.os.tag == .wasi) {
+        const closure: NurlThreadFn = @ptrFromInt(@intFromPtr(fn_ptr.?));
+        closure(env_ptr);
+        return 0;
+    }
+
+    var frame = NurlPanicFrame{
+        .jb = undefined,
+        .msg = null,
+        .prev = g_panic_top,
+    };
+    g_panic_top = &frame;
+
+    if (cjmp.setjmp(&frame.jb) == 0) {
+        const closure: NurlThreadFn = @ptrFromInt(@intFromPtr(fn_ptr.?));
+        closure(env_ptr);
+        g_panic_top = frame.prev;
+        return 0;
+    }
+
+    g_panic_top = frame.prev;
+    if (g_panic_last_msg) |prev| c.free(prev);
+    g_panic_last_msg = frame.msg orelse dupSliceZ("(no panic message)");
+    return 1;
+}
+
+pub export fn nurl_panic_last_msg() ?[*:0]const u8 {
+    return g_panic_last_msg orelse "";
+}
+
+pub export fn nurl_panic(msg: ?[*:0]const u8) void {
+    const text = msg orelse "(no message)";
+    if (builtin.os.tag == .wasi or g_panic_top == null) {
+        _ = fputs("nurl panic: ", stderrFile());
+        _ = fputs(text, stderrFile());
+        _ = fputc('\n', stderrFile());
+        _ = fflush(stderrFile());
+        c.abort();
+    }
+
+    g_panic_top.?.msg = dupZ(text);
+    cjmp.longjmp(&g_panic_top.?.jb, 1);
 }
 
 pub export fn nurl_str_len(input: ?[*:0]const u8) c_longlong {

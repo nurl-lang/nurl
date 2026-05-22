@@ -6617,6 +6617,8 @@ void nurl_signal_trigger_shutdown(void)               {}
  * same behavioural class as an unhandled fault.
  */
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
+
 #ifndef __wasi__
 
 typedef struct NurlPanicFrame {
@@ -6723,6 +6725,8 @@ void nurl_panic(const char *msg) {
 }
 
 #endif  /* __wasi__ panic stubs */
+
+#endif  /* !NURL_RUNTIME_ZIG_FS_ENV */
 
 
 /* ── §21  SQLite FFI bridge ─────────────────────────────────────── */
