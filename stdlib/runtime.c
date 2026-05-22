@@ -5999,6 +5999,7 @@ const char *nurl_tcp_alpn_selected(long long handle) {
 #endif
 }
 
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 long long nurl_tcp_read(long long handle, const char *buf, long long n) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return -1;
@@ -6117,6 +6118,7 @@ long long nurl_tcp_write(long long handle, const char *buf, long long n) {
     h->err_kind = NURL_NET_ERR_OK;
     return total;
 }
+#endif
 
 #if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 void nurl_tcp_close(long long handle) {

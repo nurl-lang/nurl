@@ -595,6 +595,8 @@ const nurl_net_err_ok: c_longlong = 0;
 const nurl_net_err_bind: c_longlong = 1;
 const nurl_net_err_addrinuse: c_longlong = 2;
 const nurl_net_err_accept: c_longlong = 3;
+const nurl_net_err_read: c_longlong = 4;
+const nurl_net_err_write: c_longlong = 5;
 const nurl_net_err_closed: c_longlong = 6;
 const nurl_net_err_timeout: c_longlong = 7;
 const nurl_net_err_other: c_longlong = 8;
@@ -3501,6 +3503,100 @@ fn nurl_tcp_accept_impl(listener_handle: c_longlong) callconv(.c) c_longlong {
     return @intCast(@intFromPtr(conn));
 }
 
+fn nurl_tcp_read_impl(handle: c_longlong, buf: ?[*:0]const u8, n: c_longlong) callconv(.c) c_longlong {
+    const tcp = tcpHandle(handle) orelse return -1;
+    if (tcp.fd == nurl_invalid_sock) {
+        tcp.err_kind = nurl_net_err_closed;
+        return -1;
+    }
+    if (n <= 0) return 0;
+    if (buf == null) {
+        tcp.err_kind = nurl_net_err_read;
+        return -1;
+    }
+
+    if (comptime have_posix_openssl) {
+        if (tcp.ssl) |ssl| {
+            const max_chunk: c_int = @intCast(@min(n, @as(c_longlong, 0x40000000)));
+            const rd = openssl.SSL_read(ssl, @ptrCast(@constCast(buf.?)), max_chunk);
+            if (rd > 0) {
+                tcp.err_kind = nurl_net_err_ok;
+                return rd;
+            }
+            const ssl_err = openssl.SSL_get_error(ssl, rd);
+            if (ssl_err == openssl.SSL_ERROR_ZERO_RETURN) return 0;
+            if (ssl_err == openssl.SSL_ERROR_WANT_READ or ssl_err == openssl.SSL_ERROR_WANT_WRITE) {
+                tcp.err_kind = nurl_net_err_timeout;
+                return -1;
+            }
+            tcp.err_kind = nurl_net_err_read;
+            return -1;
+        }
+    }
+
+    var rd: isize = 0;
+    while (true) {
+        rd = c.recv(tcp.fd, @ptrCast(@constCast(buf.?)), @intCast(n), 0);
+        if (rd >= 0 or c._errno().* != @intFromEnum(c.E.INTR)) break;
+    }
+    if (rd > 0) {
+        tcp.err_kind = nurl_net_err_ok;
+        return @intCast(rd);
+    }
+    if (rd == 0) return 0;
+
+    tcp.err_kind = netMapErrno(c._errno().*, nurl_net_err_read);
+    return -1;
+}
+
+fn nurl_tcp_write_impl(handle: c_longlong, buf: ?[*:0]const u8, n: c_longlong) callconv(.c) c_longlong {
+    const tcp = tcpHandle(handle) orelse return -1;
+    if (tcp.fd == nurl_invalid_sock) {
+        tcp.err_kind = nurl_net_err_closed;
+        return -1;
+    }
+    if (n <= 0) return 0;
+    if (buf == null) {
+        tcp.err_kind = nurl_net_err_write;
+        return -1;
+    }
+
+    if (comptime have_posix_openssl) {
+        if (tcp.ssl) |ssl| {
+            var total: c_longlong = 0;
+            while (total < n) {
+                const want = n - total;
+                const chunk: c_int = @intCast(@min(want, @as(c_longlong, 0x40000000)));
+                const wn = openssl.SSL_write(ssl, buf.? + @as(usize, @intCast(total)), chunk);
+                if (wn <= 0) {
+                    tcp.err_kind = nurl_net_err_write;
+                    return -1;
+                }
+                total += wn;
+            }
+            tcp.err_kind = nurl_net_err_ok;
+            return total;
+        }
+    }
+
+    const send_flags: c_int = if (@hasDecl(c.MSG, "NOSIGNAL")) c.MSG.NOSIGNAL else 0;
+    var total: c_longlong = 0;
+    while (total < n) {
+        var wn: isize = 0;
+        while (true) {
+            wn = c.send(tcp.fd, buf.? + @as(usize, @intCast(total)), @intCast(n - total), send_flags);
+            if (wn >= 0 or c._errno().* != @intFromEnum(c.E.INTR)) break;
+        }
+        if (wn <= 0) {
+            tcp.err_kind = netMapErrno(c._errno().*, nurl_net_err_write);
+            return -1;
+        }
+        total += @intCast(wn);
+    }
+    tcp.err_kind = nurl_net_err_ok;
+    return total;
+}
+
 fn nurl_tcp_close_impl(handle: c_longlong) callconv(.c) void {
     const tcp = tcpHandle(handle) orelse return;
     if (comptime have_posix_openssl) {
@@ -3595,6 +3691,8 @@ comptime {
     if (builtin.os.tag != .windows and builtin.os.tag != .wasi) {
         @export(&nurl_tcp_listen_impl, .{ .name = "nurl_tcp_listen" });
         @export(&nurl_tcp_accept_impl, .{ .name = "nurl_tcp_accept" });
+        @export(&nurl_tcp_read_impl, .{ .name = "nurl_tcp_read" });
+        @export(&nurl_tcp_write_impl, .{ .name = "nurl_tcp_write" });
         @export(&nurl_tcp_close_impl, .{ .name = "nurl_tcp_close" });
         @export(&nurl_tcp_shutdown_impl, .{ .name = "nurl_tcp_shutdown" });
         @export(&nurl_tcp_err_kind_impl, .{ .name = "nurl_tcp_err_kind" });
