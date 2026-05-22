@@ -44,6 +44,7 @@
 //   ( mqtt_listener_stop MqttListener lst )                    → v
 //   ( mqtt_message_prop MqttMessage m s key )                  → s   borrowed
 //   ( mqtt_message_free MqttMessage m )                        → v
+//   ( mqtt_topic_matches s filter s topic )                    → b
 //   ( mqtt_err_name     MqttErr e )                            → s
 //   ( mqtt_disconnect   MqttClient )                           → v
 //
@@ -56,7 +57,9 @@
 // connection. `mqtt_listen` spawns a background reader thread that owns
 // the connection and feeds inbound messages through a channel — the
 // application does other work and just `mqtt_listener_recv`s. Plain TCP
-// (`tcp_connect`) is also exported.
+// (`tcp_connect`) is also exported. `mqtt_topic_matches` runs the MQTT
+// §4.7 `+` / `#` wildcard rules for client-side dispatch when one
+// connection carries several subscriptions.
 //
 // Not yet implemented: pipelined (multiple-in-flight) publishing — the
 // calls are synchronous, one packet in flight. See MQTT_PLAN.md.
@@ -1035,6 +1038,131 @@ $ `stdlib/core/pair.nu`
         = k + k 1
     }
     ^ ``
+}
+
+// ── topic-filter matching (MQTT 5.0 §4.7) ────────────────────────────
+
+// Index just past the topic level beginning at `start`: the position
+// of the next `/` (byte 47), or `len` when this is the last level.
+@ __mqtt_level_end ( Vec u ) v i start i len → i {
+    : ~ i k start
+    : ~ i e len
+    : ~ b done F
+    ~ ! done {
+        ? >= k len {
+            = done T
+        } {
+            ? == ( __mqtt_byte v k ) 47 {
+                = e k
+                = done T
+            } {
+                = k + k 1
+            }
+        }
+    }
+    ^ e
+}
+
+// True when the byte ranges va[a0,a1) and vb[b0,b1) are byte-for-byte
+// equal — the literal topic-level comparison.
+@ __mqtt_seg_eq ( Vec u ) va i a0 i a1 ( Vec u ) vb i b0 i b1 → b {
+    ? != - a1 a0 - b1 b0 { ^ F } {}
+    : ~ i ai a0
+    : ~ i bi b0
+    : ~ b ok T
+    ~ & ok < ai a1 {
+        ? != ( __mqtt_byte va ai ) ( __mqtt_byte vb bi ) { = ok F } {}
+        = ai + ai 1
+        = bi + bi 1
+    }
+    ^ ok
+}
+
+// Topic-filter match over byte buffers — the engine behind
+// `mqtt_topic_matches`. `f` is the subscription filter, `t` the topic
+// name. Walks both one `/`-separated level at a time; `#` short-circuits
+// to a match (it covers every remaining level, zero included).
+@ __mqtt_topic_match_bytes ( Vec u ) f ( Vec u ) t → b {
+    : i flen ( vec_len [u] f )
+    : i tlen ( vec_len [u] t )
+    : i f0 ( __mqtt_byte f 0 )
+    // §4.7.2 — a filter whose first level is `+` or `#` never matches a
+    // topic whose first level begins with `$` (so `#` skips `$SYS/...`).
+    ? & | == f0 43 == f0 35 == ( __mqtt_byte t 0 ) 36 { ^ F } {}
+
+    : ~ i fs 0
+    : ~ i ts 0
+    : ~ b f_done F
+    : ~ b t_done F
+    : ~ i verdict -1
+    ~ == verdict -1 {
+        : i fe ( __mqtt_level_end f fs flen )
+        : i fseg - fe fs
+        : i fb ( __mqtt_byte f fs )
+        ? & == fseg 1 == fb 35 {
+            = verdict 1
+        } {
+            ? t_done {
+                // filter still carries a non-`#` level, topic ran out
+                = verdict 0
+            } {
+                : i te ( __mqtt_level_end t ts tlen )
+                : ~ b lvl_ok F
+                ? & == fseg 1 == fb 43 {
+                    = lvl_ok T
+                } {
+                    = lvl_ok ( __mqtt_seg_eq f fs fe t ts te )
+                }
+                ? lvl_ok {
+                    ? >= fe flen { = f_done T } { = fs + fe 1 }
+                    ? >= te tlen { = t_done T } { = ts + te 1 }
+                    ? & f_done t_done {
+                        = verdict 1
+                    } {
+                        ? f_done {
+                            = verdict 0
+                        } {
+                            ? t_done {
+                                // topic consumed, filter has levels
+                                // left: matches only if the remainder
+                                // is exactly a trailing `#`.
+                                : i ne ( __mqtt_level_end f fs flen )
+                                ? & & == - ne fs 1 == ( __mqtt_byte f fs ) 35 >= ne flen {
+                                    = verdict 1
+                                } {
+                                    = verdict 0
+                                }
+                            } {}
+                        }
+                    }
+                } {
+                    = verdict 0
+                }
+            }
+        }
+    }
+    ^ == verdict 1
+}
+
+// Does topic name `name` match subscription filter `filter`?
+//
+// Implements the MQTT 5.0 §4.7 topic-filter wildcards: `/` separates
+// topic levels, `+` matches exactly one level, and `#` matches the
+// rest of the topic — zero or more levels — so `sport/#` matches both
+// `sport/tennis/p1` and the parent topic `sport`. Per §4.7.2 a filter
+// whose first level is a wildcard never matches a topic whose first
+// level begins with `$`, so a `#` subscription does not pick up
+// `$SYS/...`. `filter` is assumed well-formed (a `#`, if present, is
+// the last level). The intended use is client-side dispatch: when one
+// connection holds several subscriptions, route an inbound PUBLISH to
+// the handler whose filter its topic matches.
+@ mqtt_topic_matches s filter s name → b {
+    : ( Vec u ) f ( bytes_from_str filter )
+    : ( Vec u ) t ( bytes_from_str name )
+    : b r ( __mqtt_topic_match_bytes f t )
+    ( vec_free [u] f )
+    ( vec_free [u] t )
+    ^ r
 }
 
 // ── background listener ──────────────────────────────────────────────

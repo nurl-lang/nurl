@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* **MQTT client — topic-filter wildcard matching.** `mqtt_topic_matches`
+  in `stdlib/ext/mqtt.nu` implements the MQTT 5.0 §4.7 `+` / `#`
+  wildcard rules — `+` matches one topic level, `#` matches the
+  remainder (zero levels included, so `sport/#` also matches the parent
+  `sport`) — including the §4.7.2 guard that a filter beginning with a
+  wildcard never matches a `$SYS/...` topic. The intended use is
+  client-side dispatch when one connection carries several
+  subscriptions.
+* **MQTT offline codec regression** — `compiler/tests/mqtt_codec.nu`
+  exercises the Variable Byte Integer round-trip, the unsigned byte
+  reader, MQTT UTF-8 string framing, the CONNECT byte layout, CONNACK
+  reason extraction, MQTT 5 user-property parsing, the typed `MqttErr`
+  names, and topic matching — no network, CI-safe (closes the bulk of
+  MQTT_PLAN.md Phase 5).
+
 ## [0.8.1] — 2026-05-21
 
 ### Added

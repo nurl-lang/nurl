@@ -87,14 +87,28 @@ Verified end to end against a live broker — `example/mqtt_pubsub.nu`.
       race. `example/mqtt_listener.nu` verifies it live (publisher +
       background subscriber, two connections).
 
-## Phase 5 — Quality — TODO
+## Phase 5 — Quality — PARTIAL
 
-- [ ] Offline codec tests in `compiler/tests/` (CONNECT byte layout,
-      varint encode/decode round-trip, CONNACK/PUBLISH parse) — no
-      network, CI-safe.
-- [ ] Gated live integration test (`NURL_NET_TESTS=1`).
-- [ ] Topic-filter wildcard matching (`+`, `#`) for client-side dispatch
-      across multiple subscriptions.
+- [x] **Offline codec tests** — `compiler/tests/mqtt_codec.nu`. Covers
+      the Variable Byte Integer encode/decode round-trip (1–4-byte
+      values, incl. the 0x0FFFFFFF maximum), the unsigned byte reader
+      (`__mqtt_byte`'s `& 255` mask on 0x80+ bytes), MQTT UTF-8 string
+      framing, the CONNECT packet byte layout, CONNACK reason
+      extraction, MQTT 5 user-property parsing, the typed `MqttErr`
+      names, and topic-filter matching. No network — runs
+      unconditionally in `run_tests.sh`, CI-safe.
+- [ ] Gated live integration test (`NURL_NET_TESTS=1`). The
+      `example/mqtt_*.nu` programs already verify the client end to end
+      against a live broker; a CI-gated test still needs a broker
+      fixture (a loopback mock or a spawned `mosquitto`).
+- [x] **Topic-filter wildcard matching** — `mqtt_topic_matches s filter
+      s topic → b` implements the MQTT 5.0 §4.7 rules: `+` matches one
+      level, `#` matches the remainder (zero or more levels, so
+      `sport/#` matches the parent `sport`). Includes the §4.7.2 guard
+      — a filter whose first level is a wildcard never matches a topic
+      whose first level begins with `$` (a `#` subscription does not
+      pick up `$SYS/...`). For client-side dispatch when one connection
+      carries several subscriptions.
 
 ---
 
