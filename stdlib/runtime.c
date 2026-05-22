@@ -201,6 +201,7 @@ void nurl_eprintln(const char *s) { fputs(s, stderr); fputc('\n', stderr); fflus
 
 /* ── §2  String operations ─────────────────────────────────────── */
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 long long nurl_str_len(const char *s) {
     return (long long)strlen(s);
 }
@@ -274,11 +275,13 @@ long long nurl_str_to_int(const char *s) {
 double nurl_str_to_float(const char *s) {
     return atof(s);
 }
+#endif
 
 /* Parse i64 from a byte range (no NUL required). Stops on first non-digit
  * after the optional leading sign. Returns 0 on empty/all-non-digit input
  * — caller distinguishes "real zero" from "parse failure" only if needed
  * (CSV indexed-sort treats both as 0, matching v1). */
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 long long nurl_parse_int_range(const char *p, long long len) {
     if (!p || len <= 0) return 0;
     long long i = 0;
@@ -294,11 +297,13 @@ long long nurl_parse_int_range(const char *p, long long len) {
     }
     return acc * sign;
 }
+#endif
 
 /* Parse f64 from a byte range. Copies into a small NUL-terminated buffer
  * and calls strtod. Returns 0.0 on empty/parse failure. Allocates only
  * when len exceeds the stack buffer; the common CSV cell case never
  * touches malloc. */
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 double nurl_parse_float_range(const char *p, long long len) {
     if (!p || len <= 0) return 0.0;
     char stack[64];
@@ -317,6 +322,7 @@ double nurl_parse_float_range(const char *p, long long len) {
     if (heap) free(buf);
     return v;
 }
+#endif
 
 /* CSV scanner: walk forward from `p` for at most `len` bytes, returning
  * the offset of the first occurrence of `delim`, '\n', or '\r' — or
@@ -361,6 +367,7 @@ long long nurl_memmem_range(const char *hay, long long hlen,
  *
  * Use over `nurl_parse_float_range` when the input is known to
  * be plain decimal (no NaN/Inf, no locale comma). */
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 double nurl_csv_fast_float_range(const char *p, long long len) {
     if (!p || len <= 0) return 0.0;
     long long i = 0;
@@ -410,6 +417,7 @@ double nurl_csv_fast_float_range(const char *p, long long len) {
     }
     return neg ? -r : r;
 }
+#endif
 
 static double __csv_fast_atof(const char *p, long long len) {
     if (len <= 0) return 0.0;
@@ -650,16 +658,19 @@ long long nurl_csv_filter_str_contains(
  * Used by csv.nu's loader to gate the unquoted-CSV fast path: one
  * 100 MB scan ~= 5 ms, vs the parser cost it routes away from
  * (~250 ms on the same file). */
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 long long nurl_has_byte(const char *p, long long len, long long target) {
     if (!p || len <= 0) return 0;
     return memchr(p, (int)(unsigned char)target, (size_t)len) ? 1 : 0;
 }
+#endif
 
 /* Count occurrences of `target` in p[0..len). Uses libc memchr in a
  * loop; on glibc this dispatches to SSE2/AVX2 vector scans. Used by
  * csv.nu's loader to pre-count newlines and pick exact buffer sizes
  * for the whole-file fast path — pre-counting avoids the page-fault
  * cost of over-allocating flat_cells. ~5 ms for 100 MB. */
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 long long nurl_count_byte(const char *p, long long len, long long target) {
     if (!p || len <= 0) return 0;
     unsigned char t = (unsigned char)target;
@@ -673,7 +684,9 @@ long long nurl_count_byte(const char *p, long long len, long long target) {
     }
     return n;
 }
+#endif
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 long long nurl_csv_scan_cell(const char *p, long long len, long long delim) {
     if (!p || len <= 0) return 0;
     unsigned char d = (unsigned char)delim;
@@ -702,6 +715,7 @@ long long nurl_csv_scan_cell(const char *p, long long len, long long delim) {
     }
     return len;
 }
+#endif
 
 /* Bulk CSV parser: walks the entire input in one C pass, populating
  * caller-supplied buffers. Used by csv.nu's arena loader to skip the
@@ -873,6 +887,7 @@ long long nurl_csv_parse_arena(
  * Returns:
  *   0  : success
  *   -1 : row had more than out_pair_cap cells (caller can fall back). */
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 static long long g_csv_row_n_cells  = 0;
 static long long g_csv_row_next_pos = 0;
 long long nurl_csv_row_n_cells_out(void)  { return g_csv_row_n_cells;  }
@@ -943,11 +958,13 @@ long long nurl_csv_scan_row_pairs(
     g_csv_row_next_pos = p;
     return 0;
 }
+#endif
 
 /* Substring search inside a byte range (no NUL required on haystack).
  * Returns the byte offset of the first occurrence of `needle` in
  * `hay[0..hlen)`, or -1 if not found. Empty needle returns 0.
  * Uses libc memmem on glibc; falls back to a tight loop elsewhere. */
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 long long nurl_memmem_range(const char *hay, long long hlen,
                             const char *needle, long long nlen) {
     if (!hay || hlen < 0 || !needle || nlen < 0) return -1;
@@ -967,10 +984,12 @@ long long nurl_memmem_range(const char *hay, long long hlen,
     return -1;
 #endif
 }
+#endif
 
 /* Lexicographic memcmp with length tiebreak (shorter < longer when prefix
  * matches). Returns sign of difference (-1/0/+1), suitable as a 3-way
  * comparator. */
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 long long nurl_memcmp_lex(const char *a, long long la,
                           const char *b, long long lb) {
     long long n = la < lb ? la : lb;
@@ -982,9 +1001,11 @@ long long nurl_memcmp_lex(const char *a, long long la,
     if (la > lb) return 1;
     return 0;
 }
+#endif
 
 /* Return bytes [start, start+len); result is malloc'd.
  * Clamps to actual string length. */
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 const char* nurl_str_slice(const char *s, long long start, long long len) {
     long long slen = (long long)strlen(s);
     if (start < 0) start = 0;
@@ -1016,10 +1037,12 @@ long long nurl_str_ends(const char *s, const char *suffix) {
     if (plen > slen) return 0;
     return memcmp(s + slen - plen, suffix, plen) == 0 ? 1 : 0;
 }
+#endif
 
 
 /* ── §3  Char classification ───────────────────────────────────── */
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 long long nurl_is_alpha(long long c)  { return isalpha((int)c) ? 1 : 0; }
 long long nurl_is_digit(long long c)  { return isdigit((int)c) ? 1 : 0; }
 long long nurl_is_space(long long c)  { return isspace((int)c) ? 1 : 0; }
@@ -1027,6 +1050,7 @@ long long nurl_is_space(long long c)  { return isspace((int)c) ? 1 : 0; }
 long long nurl_is_alnum_(long long c) {
     return (isalnum((int)c) || c == '_') ? 1 : 0;
 }
+#endif
 
 
 /* ── §4  File & process ────────────────────────────────────────── */
@@ -2252,6 +2276,7 @@ void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
 
 /* ── §11  Math (libm bridge) ────────────────────────────────────── */
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 double nurl_sqrt (double x)            { return sqrt (x); }
 double nurl_fabs (double x)            { return fabs (x); }
 double nurl_floor(double x)            { return floor(x); }
@@ -2289,11 +2314,13 @@ long long nurl_ipow(long long x, long long y) {
     }
     return r;
 }
+#endif
 
 /* Strict double parser. Returns 1 on success, 0 on failure.
  * On success the parsed value is stored in a sideband retrievable via
  * nurl_str_float_value(). Rejects empty strings, trailing garbage
  * (after optional whitespace), no-digit strings, and out-of-range. */
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 static double g_last_parsed_float = 0.0;
 
 long long nurl_str_to_float_safe(const char *s) {
@@ -2313,6 +2340,7 @@ long long nurl_str_to_float_safe(const char *s) {
 }
 
 double nurl_str_float_value(void) { return g_last_parsed_float; }
+#endif
 
 /* ── §12  Time ─────────────────────────────────────────────────── */
 /* MSVC's UCRT lacks POSIX `clock_gettime` and `nanosleep`, so the
@@ -2321,6 +2349,7 @@ double nurl_str_float_value(void) { return g_last_parsed_float; }
  * through Win32 APIs unconditionally on _WIN32 keeps both toolchains on
  * the same code path. */
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 long long nurl_now_ms(void) {
 #ifdef _WIN32
     /* FILETIME ticks are 100ns since 1601-01-01; offset to Unix epoch =
@@ -2380,6 +2409,7 @@ void nurl_sleep_ms(long long ms) {
     while (nanosleep(&req, &req) == -1 && errno == EINTR) { /* retry */ }
 #endif
 }
+#endif
 
 /* ── §13  CLI tooling: env, cwd, stdin slurp, directory listing ── */
 /* All const char* returns are heap-owned (Phase 2B) — strdup on success,
