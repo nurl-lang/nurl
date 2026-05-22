@@ -2879,6 +2879,51 @@ fn appendRuntimeCompileFlags(
     }
 }
 
+fn appendRuntimeZigIncludeFlags(
+    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    io: std.Io,
+    argv: *std.ArrayList([]const u8),
+    root: []const u8,
+) !void {
+    const compile_specs = [_]struct {
+        marker: []const u8,
+        pkg: []const u8,
+    }{
+        .{ .marker = "runtime.curl", .pkg = "libcurl" },
+        .{ .marker = "runtime.openssl", .pkg = "openssl" },
+        .{ .marker = "runtime.sqlite3", .pkg = "sqlite3" },
+        .{ .marker = "runtime.z", .pkg = "zlib" },
+    };
+
+    const pkg_config = "pkg-config";
+    for (compile_specs) |spec| {
+        const marker_path = try std.fs.path.join(arena, &.{ root, "stdlib", spec.marker });
+        if (!pathExists(io, marker_path)) continue;
+
+        const result = std.process.run(gpa, io, .{
+            .argv = &.{ pkg_config, "--cflags", spec.pkg },
+        }) catch |err| {
+            if (err == error.FileNotFound) continue;
+            return err;
+        };
+        defer gpa.free(result.stdout);
+        defer gpa.free(result.stderr);
+        switch (result.term) {
+            .exited => |code| {
+                if (code != 0) continue;
+                var it = std.mem.tokenizeAny(u8, result.stdout, " \t\r\n");
+                while (it.next()) |token| {
+                    if (std.mem.startsWith(u8, token, "-I") or std.mem.startsWith(u8, token, "-isystem")) {
+                        try argv.append(gpa, try arena.dupe(u8, token));
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+}
+
 fn writeRuntimeFeaturesZig(
     arena: std.mem.Allocator,
     io: std.Io,
@@ -3061,6 +3106,7 @@ fn buildRuntimeObject(init: std.process.Init, cfg: RuntimeObjConfig) !void {
     var zig_argv: std.ArrayList([]const u8) = .empty;
     defer zig_argv.deinit(gpa);
     try zig_argv.appendSlice(gpa, &.{ cfg.zig_bin, "build-obj", runtime_zig, "-lc" });
+    try appendRuntimeZigIncludeFlags(gpa, arena, io, &zig_argv, cfg.root);
     if (cfg.target) |target| {
         try zig_argv.appendSlice(gpa, &.{ "-target", target });
     }

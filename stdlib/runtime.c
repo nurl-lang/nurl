@@ -5440,6 +5440,7 @@ static NurlTcp *nurl__tcp_new_handle(int kind) {
     return h;
 }
 
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
 #ifdef _WIN32
     if (!nurl__net_wsa_init()) {
@@ -5516,7 +5517,9 @@ long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
     h->err_kind = NURL_NET_ERR_OK;
     return (long long)(uintptr_t)h;
 }
+#endif
 
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 long long nurl_tcp_accept(long long listener) {
     NurlTcp *l = (NurlTcp*)(uintptr_t)listener;
     NurlTcp *c = nurl__tcp_new_handle(NURL_TCP_KIND_CONN);
@@ -5579,6 +5582,7 @@ long long nurl_tcp_accept(long long listener) {
 #endif
     return (long long)(uintptr_t)c;
 }
+#endif
 
 /* TLS listener — POSIX/Win32 path. Composes the existing socket
  * listen() with an SSL_CTX configured against the given cert + key
@@ -5649,6 +5653,10 @@ static int nurl__alpn_select_cb(SSL *ssl, const unsigned char **out,
     return SSL_TLSEXT_ERR_NOACK;
 }
 
+#endif
+
+#if defined(NURL_RUNTIME_ZIG_FS_ENV) && !defined(_WIN32) && !defined(__wasi__)
+long long nurl_tcp_listen(const char *host, long long port, long long backlog);
 #endif
 
 long long nurl_tcp_listen_tls(const char *host, long long port,
@@ -6110,6 +6118,7 @@ long long nurl_tcp_write(long long handle, const char *buf, long long n) {
     return total;
 }
 
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 void nurl_tcp_close(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return;
@@ -6158,6 +6167,7 @@ void nurl_tcp_close(long long handle) {
     free(h->peer);
     free(h);
 }
+#endif
 
 /* Soft-shutdown: close the underlying socket but KEEP the NurlTcp
  * struct alive. Used by server_run_pool's shutdown thread — workers

@@ -4,6 +4,8 @@ const cjmp = @cImport({
     @cInclude("setjmp.h");
 });
 const runtime_features = @import("runtime_features_generated.zig");
+const have_posix_tcp = builtin.os.tag != .windows and builtin.os.tag != .wasi;
+const have_posix_openssl = runtime_features.have_openssl and have_posix_tcp;
 const zlib = if (runtime_features.have_zlib) @cImport({
     @cInclude("zlib.h");
 }) else struct {};
@@ -12,6 +14,18 @@ const sqlite = if (runtime_features.have_sqlite3) @cImport({
 }) else struct {};
 const curl = if (runtime_features.have_libcurl and builtin.os.tag != .windows and builtin.os.tag != .wasi) @cImport({
     @cInclude("curl/curl.h");
+}) else struct {};
+const net = if (have_posix_tcp) @cImport({
+    @cInclude("sys/socket.h");
+    @cInclude("netinet/in.h");
+    @cInclude("arpa/inet.h");
+}) else struct {};
+const openssl = if (have_posix_openssl) @cImport({
+    @cInclude("openssl/ssl.h");
+    @cInclude("openssl/err.h");
+}) else struct {};
+const pthread = if (have_posix_openssl) @cImport({
+    @cInclude("pthread.h");
 }) else struct {};
 
 const c = std.c;
@@ -539,6 +553,32 @@ const NurlTcpPrefix = extern struct {
     peer: ?[*:0]u8,
 };
 
+const NurlSniEntry = if (have_posix_openssl) extern struct {
+    hostname: ?[*:0]u8,
+    ctx: ?*openssl.SSL_CTX,
+} else struct {};
+
+const NurlTcp = if (have_posix_openssl) extern struct {
+    fd: c.fd_t,
+    err_kind: c_longlong,
+    kind: c_int,
+    peer: ?[*:0]u8,
+    ssl_ctx: ?*openssl.SSL_CTX,
+    ssl: ?*openssl.SSL,
+    alpn_wire: ?[*]u8,
+    alpn_wire_len: usize,
+    sni_entries: ?[*]NurlSniEntry,
+    sni_count: usize,
+    sni_cap: usize,
+    tls_lock: pthread.pthread_mutex_t,
+    tls_lock_init: c_int,
+} else extern struct {
+    fd: c.fd_t,
+    err_kind: c_longlong,
+    kind: c_int,
+    peer: ?[*:0]u8,
+};
+
 const max_cgs = 8;
 
 const NurlCG = struct {
@@ -551,7 +591,14 @@ const nurl_proc_err_notfound: c_longlong = 1;
 const nurl_proc_err_exec_failed: c_longlong = 2;
 const nurl_proc_err_io: c_longlong = 3;
 const nurl_proc_err_other: c_longlong = 4;
+const nurl_net_err_ok: c_longlong = 0;
+const nurl_net_err_bind: c_longlong = 1;
+const nurl_net_err_addrinuse: c_longlong = 2;
+const nurl_net_err_accept: c_longlong = 3;
+const nurl_net_err_closed: c_longlong = 6;
+const nurl_net_err_timeout: c_longlong = 7;
 const nurl_net_err_other: c_longlong = 8;
+const nurl_net_err_tls_handshake: c_longlong = 12;
 const nurl_invalid_sock: c.fd_t = -1;
 const nurl_gzip_err_unsupported: c_int = -98;
 const nurl_sqlite_err_ok: c_longlong = 0;
@@ -1162,6 +1209,47 @@ fn procChildHandle(handle: c_longlong) ?*NurlProcChild {
 fn tcpPrefixHandle(handle: c_longlong) ?*NurlTcpPrefix {
     if (handle == 0) return null;
     return @ptrFromInt(@as(usize, @intCast(handle)));
+}
+
+fn tcpHandle(handle: c_longlong) ?*NurlTcp {
+    if (handle == 0) return null;
+    return @ptrFromInt(@as(usize, @intCast(handle)));
+}
+
+fn tcpAllocHandle(kind: c_int) ?*NurlTcp {
+    const raw = c.calloc(1, @sizeOf(NurlTcp)) orelse return null;
+    const tcp: *NurlTcp = @ptrCast(@alignCast(raw));
+    tcp.fd = nurl_invalid_sock;
+    tcp.err_kind = nurl_net_err_other;
+    tcp.kind = kind;
+    tcp.peer = null;
+    return tcp;
+}
+
+fn netMapErrno(err_no: c_int, default_kind: c_longlong) c_longlong {
+    if (err_no == @intFromEnum(c.E.AGAIN)) return nurl_net_err_timeout;
+    if (@hasField(c.E, "WOULDBLOCK")) {
+        const would_block = @intFromEnum(@field(c.E, "WOULDBLOCK"));
+        if (would_block != @intFromEnum(c.E.AGAIN) and err_no == would_block) return nurl_net_err_timeout;
+    }
+    if (err_no == @intFromEnum(c.E.TIMEDOUT)) return nurl_net_err_timeout;
+    if (err_no == @intFromEnum(c.E.ADDRINUSE)) return nurl_net_err_addrinuse;
+    if (err_no == @intFromEnum(c.E.PIPE) or
+        err_no == @intFromEnum(c.E.CONNRESET) or
+        err_no == @intFromEnum(c.E.NOTCONN))
+    {
+        return nurl_net_err_closed;
+    }
+    return default_kind;
+}
+
+fn netFormatPeer(sa: *const net.sockaddr_in) ?[*:0]u8 {
+    var ip_buf: [64]u8 = undefined;
+    const ip_ptr = net.inet_ntop(c.AF.INET, @constCast(&sa.sin_addr), &ip_buf, ip_buf.len) orelse return dupSliceZ("");
+    const ip = std.mem.span(ip_ptr);
+    var peer_buf: [32]u8 = undefined;
+    const peer = std.fmt.bufPrint(&peer_buf, "{s}:{d}", .{ ip, net.ntohs(sa.sin_port) }) catch return dupSliceZ("");
+    return dupSliceZ(peer);
 }
 
 fn sqliteDbHandle(handle: c_longlong) ?*NurlSqliteDb {
@@ -3315,6 +3403,145 @@ fn nurlSignalPosixHandler(sig: c.SIG) callconv(.c) void {
     }
 }
 
+fn nurl_tcp_listen_impl(host: ?[*:0]const u8, port: c_longlong, backlog: c_longlong) callconv(.c) c_longlong {
+    const tcp = tcpAllocHandle(0) orelse return 0;
+    if (port <= 0 or port > 65535) {
+        tcp.err_kind = nurl_net_err_bind;
+        return @intCast(@intFromPtr(tcp));
+    }
+
+    const effective_backlog: c_uint = @intCast(if (backlog <= 0) @as(c_longlong, 16) else backlog);
+    const fd = c.socket(c.AF.INET, c.SOCK.STREAM, 0);
+    if (fd == nurl_invalid_sock) {
+        tcp.err_kind = nurl_net_err_bind;
+        return @intCast(@intFromPtr(tcp));
+    }
+
+    var on: c_int = 1;
+    _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.REUSEADDR, @ptrCast(&on), @sizeOf(c_int));
+
+    var sa = std.mem.zeroes(net.sockaddr_in);
+    if (@hasField(net.sockaddr_in, "sin_len")) {
+        sa.sin_len = @sizeOf(net.sockaddr_in);
+    }
+    sa.sin_family = c.AF.INET;
+    sa.sin_port = net.htons(@as(c_ushort, @intCast(port)));
+    if (host == null or host.?[0] == 0) {
+        sa.sin_addr = .{ .s_addr = net.htonl(net.INADDR_ANY) };
+    } else if (net.inet_pton(c.AF.INET, host.?, &sa.sin_addr) != 1) {
+        _ = posix.close(fd);
+        tcp.err_kind = nurl_net_err_bind;
+        return @intCast(@intFromPtr(tcp));
+    }
+
+    if (c.bind(fd, @ptrCast(&sa), @intCast(@sizeOf(net.sockaddr_in))) != 0) {
+        tcp.err_kind = netMapErrno(c._errno().*, nurl_net_err_bind);
+        _ = posix.close(fd);
+        return @intCast(@intFromPtr(tcp));
+    }
+
+    if (c.listen(fd, effective_backlog) != 0) {
+        tcp.err_kind = netMapErrno(c._errno().*, nurl_net_err_bind);
+        _ = posix.close(fd);
+        return @intCast(@intFromPtr(tcp));
+    }
+
+    tcp.fd = fd;
+    tcp.err_kind = nurl_net_err_ok;
+    return @intCast(@intFromPtr(tcp));
+}
+
+fn nurl_tcp_accept_impl(listener_handle: c_longlong) callconv(.c) c_longlong {
+    const listener = tcpHandle(listener_handle);
+    const conn = tcpAllocHandle(1) orelse return 0;
+    if (listener == null or listener.?.fd == nurl_invalid_sock or listener.?.kind != 0) {
+        conn.err_kind = nurl_net_err_accept;
+        return @intCast(@intFromPtr(conn));
+    }
+
+    var peer = std.mem.zeroes(net.sockaddr_in);
+    var peer_len: net.socklen_t = @intCast(@sizeOf(net.sockaddr_in));
+    const fd = c.accept(listener.?.fd, @ptrCast(&peer), &peer_len);
+    if (fd == nurl_invalid_sock) {
+        conn.err_kind = netMapErrno(c._errno().*, nurl_net_err_accept);
+        return @intCast(@intFromPtr(conn));
+    }
+
+    conn.fd = fd;
+    conn.err_kind = nurl_net_err_ok;
+    conn.peer = netFormatPeer(&peer);
+
+    if (comptime have_posix_openssl) {
+        if (listener.?.ssl_ctx) |ssl_ctx| {
+            const ssl = openssl.SSL_new(ssl_ctx);
+            if (ssl == null) {
+                _ = posix.close(conn.fd);
+                conn.fd = nurl_invalid_sock;
+                conn.err_kind = nurl_net_err_tls_handshake;
+                return @intCast(@intFromPtr(conn));
+            }
+            if (openssl.SSL_set_fd(ssl, @intCast(conn.fd)) != 1) {
+                openssl.SSL_free(ssl);
+                _ = posix.close(conn.fd);
+                conn.fd = nurl_invalid_sock;
+                conn.err_kind = nurl_net_err_tls_handshake;
+                return @intCast(@intFromPtr(conn));
+            }
+            if (openssl.SSL_accept(ssl) != 1) {
+                openssl.SSL_free(ssl);
+                _ = posix.close(conn.fd);
+                conn.fd = nurl_invalid_sock;
+                conn.err_kind = nurl_net_err_tls_handshake;
+                return @intCast(@intFromPtr(conn));
+            }
+            conn.ssl = ssl;
+        }
+    }
+
+    return @intCast(@intFromPtr(conn));
+}
+
+fn nurl_tcp_close_impl(handle: c_longlong) callconv(.c) void {
+    const tcp = tcpHandle(handle) orelse return;
+    if (comptime have_posix_openssl) {
+        if (tcp.ssl) |ssl| {
+            _ = openssl.SSL_shutdown(ssl);
+            openssl.SSL_free(ssl);
+            tcp.ssl = null;
+        }
+        if (tcp.ssl_ctx) |ssl_ctx| {
+            openssl.SSL_CTX_free(ssl_ctx);
+            tcp.ssl_ctx = null;
+        }
+        if (tcp.alpn_wire) |wire| {
+            c.free(wire);
+            tcp.alpn_wire = null;
+            tcp.alpn_wire_len = 0;
+        }
+        if (tcp.sni_entries) |entries_ptr| {
+            const entries = entries_ptr[0..tcp.sni_count];
+            for (entries) |entry| {
+                if (entry.hostname) |hostname| c.free(hostname);
+                if (entry.ctx) |ssl_ctx| openssl.SSL_CTX_free(ssl_ctx);
+            }
+            c.free(entries_ptr);
+            tcp.sni_entries = null;
+            tcp.sni_count = 0;
+            tcp.sni_cap = 0;
+        }
+        if (tcp.tls_lock_init != 0) {
+            _ = pthread.pthread_mutex_destroy(&tcp.tls_lock);
+            tcp.tls_lock_init = 0;
+        }
+    }
+    if (tcp.fd != nurl_invalid_sock) {
+        _ = posix.close(tcp.fd);
+        tcp.fd = nurl_invalid_sock;
+    }
+    if (tcp.peer) |peer| c.free(peer);
+    c.free(tcp);
+}
+
 fn nurl_tcp_shutdown_impl(handle: c_longlong) callconv(.c) void {
     const tcp = tcpPrefixHandle(handle) orelse return;
     if (tcp.fd != nurl_invalid_sock) {
@@ -3366,6 +3593,9 @@ fn nurl_signal_trigger_shutdown_impl() callconv(.c) void {
 
 comptime {
     if (builtin.os.tag != .windows and builtin.os.tag != .wasi) {
+        @export(&nurl_tcp_listen_impl, .{ .name = "nurl_tcp_listen" });
+        @export(&nurl_tcp_accept_impl, .{ .name = "nurl_tcp_accept" });
+        @export(&nurl_tcp_close_impl, .{ .name = "nurl_tcp_close" });
         @export(&nurl_tcp_shutdown_impl, .{ .name = "nurl_tcp_shutdown" });
         @export(&nurl_tcp_err_kind_impl, .{ .name = "nurl_tcp_err_kind" });
         @export(&nurl_tcp_peer_addr_impl, .{ .name = "nurl_tcp_peer_addr" });
