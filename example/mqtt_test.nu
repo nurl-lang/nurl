@@ -15,7 +15,7 @@ $ `stdlib/ext/mqtt.nu`
 @ main → i {
     ( nurl_print `MQTT v5 → emqx.homecloud.fi:8883 (TLS), clientId=qwerty\n` )
 
-    : !MqttClient NetErr r ( mqtt_connect
+    : !MqttClient MqttErr r ( mqtt_connect
         `emqx.homecloud.fi` 8883
         `qwerty` `qwerty` `qwerty` )
 
@@ -27,7 +27,7 @@ $ `stdlib/ext/mqtt.nu`
         }
         F e → {
             ( nurl_eprint `connect failed: ` )
-            ( nurl_eprint ( net_err_name e ) )
+            ( nurl_eprint ( mqtt_err_name e ) )
             ( nurl_eprint `\n` )
             ^ 1
         }

@@ -33,7 +33,7 @@ pure NURL on `( Vec u )`.
 
 Verified end to end against a live broker — `example/mqtt_pubsub.nu`.
 
-## Phase 3 — Production hardening — PARTLY SHIPPED
+## Phase 3 — Production hardening — SHIPPED
 
 - [x] **Configurable connect** — `MqttConfig` struct + `mqtt_connect_cfg`
       (clean-start, keep-alive, will, session expiry). `mqtt_connect`
@@ -50,10 +50,15 @@ Verified end to end against a live broker — `example/mqtt_pubsub.nu`.
       `mqtt_receive` parses inbound property blocks (a full property-id
       length table skips non-user-property entries) into
       `MqttMessage.props`. `mqtt_message_prop` looks one up.
-- [ ] **Reason codes** — surface MQTT 5 reason codes (a typed `MqttErr`)
-      instead of collapsing failures to `NetOther`. The last Phase 3 item.
-- [ ] Typed accessors for content-type / response-topic / correlation
-      data (parsed-and-skipped today; expose if a use case needs them).
+- [x] **Typed reason codes** — every MQTT call returns `! T MqttErr`.
+      Transport faults (`MqttTransport` / `MqttTimeout` / `MqttClosed`),
+      protocol faults (`MqttProtocol`), and broker rejections
+      (`MqttRefused` / `MqttBadAuth` / `MqttNotAuthorized` from CONNACK,
+      `MqttSubFailed` from SUBACK) are distinct — a caller tells "wrong
+      password" from "network down". `mqtt_err_name` renders one.
+- [ ] *(optional, later)* typed accessors for content-type /
+      response-topic / correlation-data properties (parsed-and-skipped
+      today; expose if a use case needs them).
 
 ## Phase 4 — Long-lived connections — PARTLY SHIPPED
 

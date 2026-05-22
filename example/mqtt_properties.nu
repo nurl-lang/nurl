@@ -18,18 +18,18 @@ $ `stdlib/ext/mqtt.nu`
 
     ( nurl_print `MQTT v5 user properties → emqx.homecloud.fi:8883 (TLS)\n` )
 
-    : !MqttClient NetErr o ( mqtt_connect
+    : !MqttClient MqttErr o ( mqtt_connect
         `emqx.homecloud.fi` 8883 `qwerty` `qwerty` `qwerty` )
     ?? o {
         T cl → {
             ( nurl_print `connected.\n` )
 
-            : !v NetErr sr ( mqtt_subscribe cl topic )
+            : !v MqttErr sr ( mqtt_subscribe cl topic )
             ?? sr {
                 T → { ( nurl_print `subscribed to ` ) ( nurl_print topic ) ( nurl_print `\n` ) }
                 F se → {
                     ( nurl_eprint `subscribe failed: ` )
-                    ( nurl_eprint ( net_err_name se ) ) ( nurl_eprint `\n` )
+                    ( nurl_eprint ( mqtt_err_name se ) ) ( nurl_eprint `\n` )
                     ( mqtt_disconnect cl ) ^ 1
                 }
             }
@@ -41,18 +41,18 @@ $ `stdlib/ext/mqtt.nu`
             ( vec_push [( Pair String String )] props
               @ ( Pair String String ) { ( string_from `sender` ) ( string_from `nurl-mqtt` ) } )
 
-            : !v NetErr pr ( mqtt_publish_props cl topic `payload with props` 0 props )
+            : !v MqttErr pr ( mqtt_publish_props cl topic `payload with props` 0 props )
             ( mqtt_props_free props )
             ?? pr {
                 T → { ( nurl_print `published with 2 user properties.\n` ) }
                 F pe → {
                     ( nurl_eprint `publish failed: ` )
-                    ( nurl_eprint ( net_err_name pe ) ) ( nurl_eprint `\n` )
+                    ( nurl_eprint ( mqtt_err_name pe ) ) ( nurl_eprint `\n` )
                     ( mqtt_disconnect cl ) ^ 1
                 }
             }
 
-            : !MqttMessage NetErr rr ( mqtt_receive cl )
+            : !MqttMessage MqttErr rr ( mqtt_receive cl )
             ?? rr {
                 T m → {
                     : i np ( vec_len [( Pair String String )] . m props )
@@ -77,14 +77,14 @@ $ `stdlib/ext/mqtt.nu`
                 }
                 F re → {
                     ( nurl_eprint `receive failed: ` )
-                    ( nurl_eprint ( net_err_name re ) ) ( nurl_eprint `\n` )
+                    ( nurl_eprint ( mqtt_err_name re ) ) ( nurl_eprint `\n` )
                     ( mqtt_disconnect cl ) ^ 1
                 }
             }
         }
         F e → {
             ( nurl_eprint `connect failed: ` )
-            ( nurl_eprint ( net_err_name e ) ) ( nurl_eprint `\n` )
+            ( nurl_eprint ( mqtt_err_name e ) ) ( nurl_eprint `\n` )
             ^ 1
         }
     }

@@ -22,38 +22,38 @@ $ `stdlib/ext/mqtt.nu`
 
     ( nurl_print `MQTT v5 resilience → emqx.homecloud.fi:8883 (TLS)\n` )
 
-    : !MqttClient NetErr o ( mqtt_connect_cfg `emqx.homecloud.fi` 8883 cfg )
+    : !MqttClient MqttErr o ( mqtt_connect_cfg `emqx.homecloud.fi` 8883 cfg )
     ?? o {
         T cl → {
             ( nurl_print `connected (keep-alive 2 s).\n` )
 
-            : !v NetErr p1 ( mqtt_publish1 cl topic `before reconnect` )
+            : !v MqttErr p1 ( mqtt_publish1 cl topic `before reconnect` )
             ?? p1 {
                 T → { ( nurl_print `published before reconnect.\n` ) }
                 F e → {
                     ( nurl_eprint `publish failed: ` )
-                    ( nurl_eprint ( net_err_name e ) ) ( nurl_eprint `\n` )
+                    ( nurl_eprint ( mqtt_err_name e ) ) ( nurl_eprint `\n` )
                     ( mqtt_disconnect cl ) ^ 1
                 }
             }
 
             // tear the connection down and bring it back up
-            : !v NetErr rc ( mqtt_reconnect cl `emqx.homecloud.fi` 8883 cfg )
+            : !v MqttErr rc ( mqtt_reconnect cl `emqx.homecloud.fi` 8883 cfg )
             ?? rc {
                 T → { ( nurl_print `reconnected — fresh TLS + CONNECT.\n` ) }
                 F e → {
                     ( nurl_eprint `reconnect failed: ` )
-                    ( nurl_eprint ( net_err_name e ) ) ( nurl_eprint `\n` )
+                    ( nurl_eprint ( mqtt_err_name e ) ) ( nurl_eprint `\n` )
                     ^ 1
                 }
             }
 
-            : !v NetErr p2 ( mqtt_publish1 cl topic `after reconnect` )
+            : !v MqttErr p2 ( mqtt_publish1 cl topic `after reconnect` )
             ?? p2 {
                 T → { ( nurl_print `published after reconnect — client still live.\n` ) }
                 F e → {
                     ( nurl_eprint `post-reconnect publish failed: ` )
-                    ( nurl_eprint ( net_err_name e ) ) ( nurl_eprint `\n` )
+                    ( nurl_eprint ( mqtt_err_name e ) ) ( nurl_eprint `\n` )
                     ( mqtt_disconnect cl ) ^ 1
                 }
             }
@@ -64,7 +64,7 @@ $ `stdlib/ext/mqtt.nu`
             : ~ b kfail F
             ~ < k 3 {
                 ( sleep_ms 2200 )
-                : !v NetErr kt ( mqtt_keepalive_tick cl )
+                : !v MqttErr kt ( mqtt_keepalive_tick cl )
                 ?? kt {
                     T → {
                         ( nurl_print `keep-alive tick ` )
@@ -86,7 +86,7 @@ $ `stdlib/ext/mqtt.nu`
         }
         F e → {
             ( nurl_eprint `connect failed: ` )
-            ( nurl_eprint ( net_err_name e ) ) ( nurl_eprint `\n` )
+            ( nurl_eprint ( mqtt_err_name e ) ) ( nurl_eprint `\n` )
             ^ 1
         }
     }

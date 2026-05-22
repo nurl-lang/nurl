@@ -23,13 +23,13 @@ $ `stdlib/ext/mqtt.nu`
         `qwerty` `qwerty` `qwerty` 60 T
         `nurl/status/qwerty` `client gone` 1 300 }
 
-    : !MqttClient NetErr o ( mqtt_connect_cfg `emqx.homecloud.fi` 8883 cfg )
+    : !MqttClient MqttErr o ( mqtt_connect_cfg `emqx.homecloud.fi` 8883 cfg )
     ?? o {
         T cl → {
             ( nurl_print `connected — will + session-expiry accepted.\n` )
 
             // publish a RETAINED message
-            : !v NetErr pr ( mqtt_publish_retain cl rtopic `retained value` 0 )
+            : !v MqttErr pr ( mqtt_publish_retain cl rtopic `retained value` 0 )
             ?? pr {
                 T → {
                     ( nurl_print `published retained → ` )
@@ -37,14 +37,14 @@ $ `stdlib/ext/mqtt.nu`
                 }
                 F pe → {
                     ( nurl_eprint `retain publish failed: ` )
-                    ( nurl_eprint ( net_err_name pe ) ) ( nurl_eprint `\n` )
+                    ( nurl_eprint ( mqtt_err_name pe ) ) ( nurl_eprint `\n` )
                     ( mqtt_disconnect cl ) ^ 1
                 }
             }
 
             // subscribe at QoS 1 — the broker delivers the retained
             // message immediately after the SUBACK.
-            : !v NetErr sr ( mqtt_subscribe_qos cl rtopic 1 )
+            : !v MqttErr sr ( mqtt_subscribe_qos cl rtopic 1 )
             ?? sr {
                 T → {
                     ( nurl_print `subscribed (max QoS 1) to ` )
@@ -52,12 +52,12 @@ $ `stdlib/ext/mqtt.nu`
                 }
                 F se → {
                     ( nurl_eprint `subscribe failed: ` )
-                    ( nurl_eprint ( net_err_name se ) ) ( nurl_eprint `\n` )
+                    ( nurl_eprint ( mqtt_err_name se ) ) ( nurl_eprint `\n` )
                     ( mqtt_disconnect cl ) ^ 1
                 }
             }
 
-            : !MqttMessage NetErr rr ( mqtt_receive cl )
+            : !MqttMessage MqttErr rr ( mqtt_receive cl )
             ?? rr {
                 T m → {
                     ( nurl_print `retained message received: ` )
@@ -73,14 +73,14 @@ $ `stdlib/ext/mqtt.nu`
                 }
                 F re → {
                     ( nurl_eprint `receive failed: ` )
-                    ( nurl_eprint ( net_err_name re ) ) ( nurl_eprint `\n` )
+                    ( nurl_eprint ( mqtt_err_name re ) ) ( nurl_eprint `\n` )
                     ( mqtt_disconnect cl ) ^ 1
                 }
             }
 
             // an empty retained payload deletes the retained message —
             // leave the broker clean.
-            : !v NetErr clr ( mqtt_publish_retain cl rtopic `` 0 )
+            : !v MqttErr clr ( mqtt_publish_retain cl rtopic `` 0 )
             ?? clr {
                 T → { ( nurl_print `retained message cleared.\n` ) }
                 F _ → {}
@@ -92,7 +92,7 @@ $ `stdlib/ext/mqtt.nu`
         }
         F e → {
             ( nurl_eprint `connect failed: ` )
-            ( nurl_eprint ( net_err_name e ) ) ( nurl_eprint `\n` )
+            ( nurl_eprint ( mqtt_err_name e ) ) ( nurl_eprint `\n` )
             ^ 1
         }
     }
