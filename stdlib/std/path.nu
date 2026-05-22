@@ -15,6 +15,42 @@
 //   ( path_extension p )    → String  text after the last '.' in the basename, "" if none
 //   ( path_is_absolute p )  → b       starts with '/' / '\\' or matches X: drive prefix
 //   ( path_normalize p )    → String  collapses '.', '..', and duplicate separators
+//
+// ── Typed Path ──────────────────────────────────────────────────────
+//
+// `Path { String inner }` is a typed, owning wrapper over a path string
+// — it makes "this value is a path" explicit in a signature and carries
+// ownership clearly. The typed layer uses concise Rust-PathBuf-style
+// verbs; the `s`-based functions above stay the raw layer underneath.
+//
+//   ( path_new s )              → Path     wrap a copy of a path string
+//   ( path_str p )              → s        borrow the inner buffer (fs interop)
+//   ( path_len p )              → i
+//   ( path_is_empty p )         → b
+//   ( path_clone p )            → Path     deep copy
+//   ( path_free p )             → v        free the inner String
+//   ( path_eq a b )             → b
+//   ( path_push base child )    → Path     base joined with one component
+//   ( path_parent p )           → Path     directory containing `p`
+//   ( path_name p )             → Path     final component of `p`
+//   ( path_is_abs p )           → b
+//   ( path_canonical p )        → ? Path   realpath: absolute, symlinks
+//                                          resolved; None if `p` is missing
+//   ( path_relative_to base p ) → ? Path   lexical relative path from
+//                                          `base` to `p`; None if the two
+//                                          are not comparable (one
+//                                          absolute, one relative, or
+//                                          different Windows drives)
+//
+// path_canonical is the one function here that touches the filesystem
+// (it resolves symlinks and requires the path to exist); everything
+// else is pure string computation. Both ? -returning functions yield
+// None rather than an error code — for a missing path, probe first with
+// fs.nu's file_exists when the distinction matters.
+//
+// A Path owns its String: free it with path_free or let auto-drop run
+// at scope exit. The typed functions never consume their arguments —
+// each returns a fresh Path — so the caller frees every Path it holds.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -347,4 +383,155 @@ $ `stdlib/core/vec.nu`
     }
     ( vec_free_with [String] stk drop_str )
     ^ out
+}
+
+// ── Typed Path ──────────────────────────────────────────────────────
+//
+// Path wraps an owned String. The typed functions below never mutate or
+// consume their Path arguments — each produces a fresh Path — so a
+// caller frees every Path it holds (path_free, or auto-drop at scope
+// exit). path_str hands back a borrow of the inner buffer for interop
+// with the `s`-based layer and with fs.nu.
+
+: Path { String inner }
+
+@ path_new s p → Path {
+    : String s ( string_from p )
+    ^ @ Path { s }
+}
+
+@ path_str Path p → s {
+    ^ ( string_data . p inner )
+}
+
+@ path_len Path p → i {
+    ^ ( string_len . p inner )
+}
+
+@ path_is_empty Path p → b {
+    ^ == 0 ( string_len . p inner )
+}
+
+@ path_clone Path p → Path {
+    : String c ( string_clone . p inner )
+    ^ @ Path { c }
+}
+
+@ path_free Path p → v {
+    ( string_free . p inner )
+}
+
+@ path_eq Path a Path b → b {
+    ^ ( string_eq . a inner . b inner )
+}
+
+// base joined with one more component (path_join semantics: a trailing
+// separator on the base and a leading one on the child are coalesced).
+@ path_push Path base s child → Path {
+    : String j ( path_join ( path_str base ) child )
+    ^ @ Path { j }
+}
+
+@ path_parent Path p → Path {
+    : String d ( path_dirname ( path_str p ) )
+    ^ @ Path { d }
+}
+
+@ path_name Path p → Path {
+    : String b ( path_basename ( path_str p ) )
+    ^ @ Path { b }
+}
+
+@ path_is_abs Path p → b {
+    ^ ( path_is_absolute ( path_str p ) )
+}
+
+// realpath(3): canonical, absolute, all symlinks resolved. The one
+// filesystem-touching function here — None when the path does not
+// exist or is not accessible.
+& `c` @ nurl_realpath s path → s
+
+@ path_canonical Path p → ? Path {
+    : s raw ( nurl_realpath ( path_str p ) )
+    ? == 0 # i raw { ^ @ ? Path { F # Path 0 } } {}
+    : String s ( string_from raw )
+    ( nurl_free raw )
+    : Path rp @ Path { s }
+    ^ @ ? Path { T rp }
+}
+
+// Lexical relative path from `base` to `target`: the result, appended
+// to `base` and normalized, names the same location as `target`. Both
+// paths are normalized first, then split into segments; the answer is
+// one ".." per base segment past the common prefix, followed by the
+// target's remaining segments. Purely lexical — no filesystem access,
+// no symlink awareness. None when the two are not comparable: one
+// absolute and one relative, or rooted on different Windows drives.
+@ path_relative_to Path base Path target → ? Path {
+    : ( @ v String ) drop_str \ String s → v { ( string_free s ) }
+    : s bs ( path_str base )
+    : s ts ( path_str target )
+    ? != ( path_is_absolute bs ) ( path_is_absolute ts ) {
+        ^ @ ? Path { F # Path 0 }
+    } {}
+    ? != ( __has_drive bs ) ( __has_drive ts ) {
+        ^ @ ? Path { F # Path 0 }
+    } {}
+    ? ( __has_drive bs ) {
+        ? != ( nurl_str_get bs 0 ) ( nurl_str_get ts 0 ) {
+            ^ @ ? Path { F # Path 0 }
+        } {}
+    } {}
+    : String bn ( path_normalize bs )
+    : String tn ( path_normalize ts )
+    : ( Vec String ) bsegs ( __collect_segments ( string_data bn ) 0 )
+    : ( Vec String ) tsegs ( __collect_segments ( string_data tn ) 0 )
+    ( string_free bn )
+    ( string_free tn )
+    : i bc ( vec_len [String] bsegs )
+    : i tc ( vec_len [String] tsegs )
+    // Length of the common leading run of equal segments.
+    : ~ i common 0
+    : ~ b matching T
+    ~ & < common bc & < common tc matching {
+        : ~ b same F
+        ?? ( vec_get [String] bsegs common ) {
+            T bseg → {
+                ?? ( vec_get [String] tsegs common ) {
+                    T tseg → { ? ( string_eq bseg tseg ) { = same T } {} }
+                    F → {}
+                }
+            }
+            F → {}
+        }
+        ? same { = common + common 1 } { = matching F }
+    }
+    : String out ( string_new )
+    // base → common ancestor: one ".." per base segment past the prefix.
+    : i ups - bc common
+    : ~ i u 0
+    ~ < u ups {
+        ? > ( string_len out ) 0 { ( string_push_char out 47 ) } {}
+        ( string_push_char out 46 )
+        ( string_push_char out 46 )
+        = u + u 1
+    }
+    // common ancestor → target: the target's remaining segments.
+    : ~ i d common
+    ~ < d tc {
+        ?? ( vec_get [String] tsegs d ) {
+            T seg → {
+                ? > ( string_len out ) 0 { ( string_push_char out 47 ) } {}
+                ( string_push_str out ( string_data seg ) )
+            }
+            F → {}
+        }
+        = d + d 1
+    }
+    // Same location → empty result → ".".
+    ? == 0 ( string_len out ) { ( string_push_char out 46 ) } {}
+    ( vec_free_with [String] bsegs drop_str )
+    ( vec_free_with [String] tsegs drop_str )
+    : Path rp @ Path { out }
+    ^ @ ? Path { T rp }
 }

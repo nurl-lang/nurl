@@ -1414,6 +1414,23 @@ long long nurl_file_eof(void *h) {
     return feof((FILE*)h) ? 1 : 0;
 }
 
+/* Resolve `path` to a canonical absolute path: on POSIX via realpath(3),
+ * which makes it absolute, collapses `.` / `..` and expands every
+ * symbolic link; on Windows via _fullpath, which absolutises and
+ * collapses but does not expand symbolic links (NTFS reparse points are
+ * uncommon). Both require the path to exist. Returns a freshly malloc'd
+ * string the caller frees, or NULL with errno set when the path does
+ * not exist or is not accessible. Backs stdlib/std/path.nu's
+ * path_canonical. */
+const char* nurl_realpath(const char *path) {
+    if (!path) { errno = EINVAL; return NULL; }
+#ifdef _WIN32
+    return _fullpath(NULL, path, 0);
+#else
+    return realpath(path, NULL);
+#endif
+}
+
 
 /* ── §5  HashMap (string → i64) ────────────────────────────────── */
 

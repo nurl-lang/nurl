@@ -10,6 +10,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Typed Path.** `stdlib/std/path.nu` gained a `Path { String inner }`
+  typed, owning wrapper over a path string, with a concise
+  Rust-PathBuf-style verb API — `path_new`, `path_str` (borrow the
+  inner buffer), `path_len`, `path_is_empty`, `path_clone`,
+  `path_free`, `path_eq`, `path_push` (join one component),
+  `path_parent`, `path_name`, `path_is_abs` — and the two operations
+  the existing string-level layer lacked: `path_canonical` (realpath:
+  absolute, symbolic links resolved) and `path_relative_to` (a purely
+  lexical relative path between two paths). Both return `? Path` —
+  None for a missing / inaccessible path or a not-comparable pair. The
+  string-`s`-based `path_*` functions stay the raw layer underneath;
+  the typed functions never consume their arguments. One runtime
+  helper, `nurl_realpath`, is reached through the pure-NURL `& \`c\``
+  FFI model, so the compiler is unchanged and the bootstrap fixed
+  point is byte-identical. Regression `compiler/tests/path_typed.nu`;
+  verified leak-free under ASan/UBSan/LSan.
+* **Runtime helper** — `nurl_realpath` (realpath on POSIX, `_fullpath`
+  on Windows) in `stdlib/runtime.c`.
 * **Extended hash family — SHA-512, MD5, HMAC-SHA-512.**
   `stdlib/std/hash.nu` gained `sha512_bytes` / `sha512_hex` (FIPS 180-4
   SHA-512, 64-byte digest), `md5_bytes` / `md5_hex` (RFC 1321 MD5,
