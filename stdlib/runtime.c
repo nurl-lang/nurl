@@ -7079,6 +7079,8 @@ long long nurl_sqlite_reset(long long handle) {
 #include <zlib.h>
 #endif
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
+
 int nurl_gzip_compress(unsigned char *dst, long long *dst_len,
                        unsigned char *src, long long src_len, int level) {
 #ifdef NURL_HAVE_ZLIB
@@ -7136,6 +7138,8 @@ int nurl_gzip_decompress(unsigned char *dst, long long *dst_len,
     return NURL_GZIP_ERR_UNSUPPORTED;
 #endif
 }
+
+#endif
 
 
 /* ── §23  DoS protection — concurrent + per-IP connection caps ──────

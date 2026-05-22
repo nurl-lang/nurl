@@ -3,6 +3,10 @@ const builtin = @import("builtin");
 const cjmp = @cImport({
     @cInclude("setjmp.h");
 });
+const runtime_features = @import("runtime_features_generated.zig");
+const zlib = if (runtime_features.have_zlib) @cImport({
+    @cInclude("zlib.h");
+}) else struct {};
 
 const c = std.c;
 const windows = std.os.windows;
@@ -487,6 +491,7 @@ const nurl_proc_err_io: c_longlong = 3;
 const nurl_proc_err_other: c_longlong = 4;
 const nurl_net_err_other: c_longlong = 8;
 const nurl_invalid_sock: c.fd_t = -1;
+const nurl_gzip_err_unsupported: c_int = -98;
 
 fn readFileAlloc(path: [*:0]const u8, nul_terminate: bool, empty_alloc_one: bool) ?[*]u8 {
     const file = c.fopen(path, "rb") orelse return null;
@@ -3185,6 +3190,81 @@ pub export fn nurl_panic(msg: ?[*:0]const u8) void {
 
     g_panic_top.?.msg = dupZ(text);
     cjmp.longjmp(&g_panic_top.?.jb, 1);
+}
+
+pub export fn nurl_gzip_compress(
+    dst_ptr: ?[*]u8,
+    dst_len_ptr: ?*c_longlong,
+    src_ptr: ?[*]u8,
+    src_len: c_longlong,
+    level: c_int,
+) c_int {
+    if (!runtime_features.have_zlib) return nurl_gzip_err_unsupported;
+    const dst = dst_ptr orelse return zlib.Z_BUF_ERROR;
+    const dst_len = dst_len_ptr orelse return zlib.Z_BUF_ERROR;
+    const src = src_ptr orelse return zlib.Z_BUF_ERROR;
+
+    var stream = std.mem.zeroes(zlib.z_stream);
+    stream.next_in = @ptrCast(src);
+    stream.avail_in = @intCast(src_len);
+    stream.next_out = @ptrCast(dst);
+    stream.avail_out = @intCast(dst_len.*);
+
+    var rc = zlib.deflateInit2_(
+        &stream,
+        level,
+        zlib.Z_DEFLATED,
+        15 + 16,
+        8,
+        zlib.Z_DEFAULT_STRATEGY,
+        zlib.ZLIB_VERSION,
+        @sizeOf(zlib.z_stream),
+    );
+    if (rc != zlib.Z_OK) return rc;
+
+    rc = zlib.deflate(&stream, zlib.Z_FINISH);
+    if (rc != zlib.Z_STREAM_END) {
+        _ = zlib.deflateEnd(&stream);
+        return if (rc == zlib.Z_OK) zlib.Z_BUF_ERROR else rc;
+    }
+
+    dst_len.* = @intCast(stream.total_out);
+    return zlib.deflateEnd(&stream);
+}
+
+pub export fn nurl_gzip_decompress(
+    dst_ptr: ?[*]u8,
+    dst_len_ptr: ?*c_longlong,
+    src_ptr: ?[*]u8,
+    src_len: c_longlong,
+) c_int {
+    if (!runtime_features.have_zlib) return nurl_gzip_err_unsupported;
+    const dst = dst_ptr orelse return zlib.Z_BUF_ERROR;
+    const dst_len = dst_len_ptr orelse return zlib.Z_BUF_ERROR;
+    const src = src_ptr orelse return zlib.Z_BUF_ERROR;
+
+    var stream = std.mem.zeroes(zlib.z_stream);
+    stream.next_in = @ptrCast(src);
+    stream.avail_in = @intCast(src_len);
+    stream.next_out = @ptrCast(dst);
+    stream.avail_out = @intCast(dst_len.*);
+
+    var rc = zlib.inflateInit2_(
+        &stream,
+        15 + 32,
+        zlib.ZLIB_VERSION,
+        @sizeOf(zlib.z_stream),
+    );
+    if (rc != zlib.Z_OK) return rc;
+
+    rc = zlib.inflate(&stream, zlib.Z_FINISH);
+    if (rc != zlib.Z_STREAM_END) {
+        _ = zlib.inflateEnd(&stream);
+        return if (rc == zlib.Z_OK) zlib.Z_BUF_ERROR else rc;
+    }
+
+    dst_len.* = @intCast(stream.total_out);
+    return zlib.inflateEnd(&stream);
 }
 
 pub export fn nurl_str_len(input: ?[*:0]const u8) c_longlong {

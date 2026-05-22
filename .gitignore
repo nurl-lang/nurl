@@ -82,6 +82,7 @@ CLAUDE.local.md
 /apireply.txt
 /buildreply.json
 result-diff.txt
+stdlib/runtime_features_generated.zig
 
 # Benchmark data outputs (data files in compare/ are large + regenerable)
 compare/*.csv

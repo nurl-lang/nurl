@@ -2879,6 +2879,31 @@ fn appendRuntimeCompileFlags(
     }
 }
 
+fn writeRuntimeFeaturesZig(
+    arena: std.mem.Allocator,
+    io: std.Io,
+    root: []const u8,
+) !void {
+    const feature_path = try std.fs.path.join(arena, &.{ root, "stdlib", "runtime_features_generated.zig" });
+    const have_libcurl = pathExists(io, try std.fs.path.join(arena, &.{ root, "stdlib", "runtime.curl" }));
+    const have_openssl = pathExists(io, try std.fs.path.join(arena, &.{ root, "stdlib", "runtime.openssl" }));
+    const have_sqlite3 = pathExists(io, try std.fs.path.join(arena, &.{ root, "stdlib", "runtime.sqlite3" }));
+    const have_zlib = pathExists(io, try std.fs.path.join(arena, &.{ root, "stdlib", "runtime.z" }));
+
+    const contents = try std.fmt.allocPrint(arena,
+        \\pub const have_libcurl = {};
+        \\pub const have_openssl = {};
+        \\pub const have_sqlite3 = {};
+        \\pub const have_zlib = {};
+        \\
+    , .{ have_libcurl, have_openssl, have_sqlite3, have_zlib });
+
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = feature_path,
+        .data = contents,
+    });
+}
+
 fn runRuntimeObj(init: std.process.Init, args: []const []const u8) !void {
     const cfg = try parseRuntimeObjArgs(init, args);
     try buildRuntimeObject(init, cfg);
@@ -2984,6 +3009,7 @@ fn buildRuntimeObject(init: std.process.Init, cfg: RuntimeObjConfig) !void {
     try ensureExists(io, runtime_c, "stdlib/runtime.c");
     try ensureExists(io, runtime_zig, "stdlib/runtime_fs_env.zig");
     try ensureParentDir(io, cfg.out_path);
+    try writeRuntimeFeaturesZig(arena, io, cfg.root);
 
     var cleanup = false;
     defer {
