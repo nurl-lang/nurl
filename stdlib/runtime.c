@@ -1346,7 +1346,7 @@ void nurl_http_response_free(long long resp) {
 #define NURL_PROC_ERR_IO            3
 #define NURL_PROC_ERR_OTHER         4
 
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV)
 typedef struct NurlProcResult {
     long long  exit_code;
     long long  err_kind;
@@ -1389,7 +1389,7 @@ static void nurl__proc_close_pair(int p[2]) {
     p[0] = p[1] = -1;
 }
 
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV)
 long long nurl_proc_run(const char *cmd, const char *argv_buf,
                         long long argc, const char *stdin_blob) {
     NurlProcResult *r = (NurlProcResult*)calloc(1, sizeof(NurlProcResult));
@@ -1614,204 +1614,8 @@ long long nurl_proc_run(const char *cmd, const char *argv_buf,
     return (long long)(uintptr_t)r;
 }
 #endif
-
 #elif defined(_WIN32) && !defined(__wasi__)
-/* ── Win32 backend (CreateProcess + reader threads) ─────────── */
-
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
-#include <process.h>
-
-typedef struct NurlProcReadCtx {
-    HANDLE       h;
-    NurlProcBuf  buf;
-    int          io_err;
-} NurlProcReadCtx;
-
-static unsigned __stdcall nurl__proc_reader_thread(void *p) {
-    NurlProcReadCtx *ctx = (NurlProcReadCtx*)p;
-    char tmp[4096];
-    DWORD rd = 0;
-    for (;;) {
-        BOOL ok = ReadFile(ctx->h, tmp, sizeof(tmp), &rd, NULL);
-        if (!ok) {
-            DWORD le = GetLastError();
-            if (le == ERROR_BROKEN_PIPE || le == ERROR_HANDLE_EOF) break;
-            ctx->io_err = 1;
-            break;
-        }
-        if (rd == 0) break;
-        if (!nurl__proc_buf_append(&ctx->buf, tmp, (size_t)rd)) {
-            ctx->io_err = 1;
-            break;
-        }
-    }
-    return 0;
-}
-
-/* Quote a single argv entry per the CommandLineToArgvW rules. Source:
- * "Everyone quotes command line arguments the wrong way" / Daniel
- * Colascione (MSDN, 2011). */
-static int nurl__proc_quote_arg(const char *arg, NurlProcBuf *out) {
-    if (!arg) arg = "";
-    int needs_quote = (*arg == 0);
-    for (const char *p = arg; *p && !needs_quote; p++) {
-        if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\v' || *p == '"') {
-            needs_quote = 1;
-        }
-    }
-    if (!needs_quote) {
-        return nurl__proc_buf_append(out, arg, strlen(arg));
-    }
-    if (!nurl__proc_buf_append(out, "\"", 1)) return 0;
-    const char *p = arg;
-    while (*p) {
-        size_t bs = 0;
-        while (*p == '\\') { bs++; p++; }
-        if (*p == 0) {
-            for (size_t i = 0; i < 2 * bs; i++)
-                if (!nurl__proc_buf_append(out, "\\", 1)) return 0;
-            break;
-        } else if (*p == '"') {
-            for (size_t i = 0; i < 2 * bs + 1; i++)
-                if (!nurl__proc_buf_append(out, "\\", 1)) return 0;
-            if (!nurl__proc_buf_append(out, "\"", 1)) return 0;
-            p++;
-        } else {
-            for (size_t i = 0; i < bs; i++)
-                if (!nurl__proc_buf_append(out, "\\", 1)) return 0;
-            if (!nurl__proc_buf_append(out, p, 1)) return 0;
-            p++;
-        }
-    }
-    return nurl__proc_buf_append(out, "\"", 1);
-}
-
-long long nurl_proc_run(const char *cmd, const char *argv_buf,
-                        long long argc, const char *stdin_blob) {
-    NurlProcResult *r = (NurlProcResult*)calloc(1, sizeof(NurlProcResult));
-    if (!r) return 0;
-    if (!cmd || !*cmd) {
-        r->err_kind   = NURL_PROC_ERR_NOTFOUND;
-        r->stdout_buf = strdup("");
-        r->stderr_buf = strdup("");
-        return (long long)(uintptr_t)r;
-    }
-    if (argc < 0) argc = 0;
-    const char *const *argv_user = (const char *const *)argv_buf;
-
-    NurlProcBuf cmdline = {0};
-    int build_ok = nurl__proc_quote_arg(cmd, &cmdline);
-    for (long long i = 0; i < argc && build_ok; i++) {
-        if (!nurl__proc_buf_append(&cmdline, " ", 1)) { build_ok = 0; break; }
-        const char *a = argv_user ? argv_user[i] : "";
-        if (!nurl__proc_quote_arg(a, &cmdline)) { build_ok = 0; break; }
-    }
-    if (!build_ok || !cmdline.data) {
-        free(cmdline.data);
-        r->err_kind   = NURL_PROC_ERR_OTHER;
-        r->stdout_buf = strdup("");
-        r->stderr_buf = strdup("");
-        return (long long)(uintptr_t)r;
-    }
-
-    SECURITY_ATTRIBUTES sa = {0};
-    sa.nLength              = sizeof(sa);
-    sa.bInheritHandle       = TRUE;
-    sa.lpSecurityDescriptor = NULL;
-
-    HANDLE in_r = NULL, in_w = NULL;
-    HANDLE out_r = NULL, out_w = NULL;
-    HANDLE err_r = NULL, err_w = NULL;
-    if (!CreatePipe(&in_r, &in_w, &sa, 0) ||
-        !CreatePipe(&out_r, &out_w, &sa, 0) ||
-        !CreatePipe(&err_r, &err_w, &sa, 0)) {
-        if (in_r)  CloseHandle(in_r);
-        if (in_w)  CloseHandle(in_w);
-        if (out_r) CloseHandle(out_r);
-        if (out_w) CloseHandle(out_w);
-        if (err_r) CloseHandle(err_r);
-        if (err_w) CloseHandle(err_w);
-        free(cmdline.data);
-        r->err_kind   = NURL_PROC_ERR_IO;
-        r->stdout_buf = strdup("");
-        r->stderr_buf = strdup("");
-        return (long long)(uintptr_t)r;
-    }
-    /* Parent ends must NOT be inherited. */
-    SetHandleInformation(in_w,  HANDLE_FLAG_INHERIT, 0);
-    SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0);
-    SetHandleInformation(err_r, HANDLE_FLAG_INHERIT, 0);
-
-    STARTUPINFOA si = {0};
-    si.cb         = sizeof(si);
-    si.dwFlags    = STARTF_USESTDHANDLES;
-    si.hStdInput  = in_r;
-    si.hStdOutput = out_w;
-    si.hStdError  = err_w;
-    PROCESS_INFORMATION pi = {0};
-    BOOL ok = CreateProcessA(NULL, cmdline.data,
-                             NULL, NULL, TRUE, 0,
-                             NULL, NULL, &si, &pi);
-    free(cmdline.data);
-    /* Close the inherited ends on the parent side once the child owns them. */
-    CloseHandle(in_r);
-    CloseHandle(out_w);
-    CloseHandle(err_w);
-
-    if (!ok) {
-        DWORD le = GetLastError();
-        CloseHandle(in_w);
-        CloseHandle(out_r);
-        CloseHandle(err_r);
-        if (le == ERROR_FILE_NOT_FOUND || le == ERROR_PATH_NOT_FOUND)
-            r->err_kind = NURL_PROC_ERR_NOTFOUND;
-        else
-            r->err_kind = NURL_PROC_ERR_EXEC_FAILED;
-        r->stdout_buf = strdup("");
-        r->stderr_buf = strdup("");
-        return (long long)(uintptr_t)r;
-    }
-
-    NurlProcReadCtx out_ctx = {0}, err_ctx = {0};
-    out_ctx.h = out_r;
-    err_ctx.h = err_r;
-    HANDLE out_th = (HANDLE)_beginthreadex(NULL, 0, nurl__proc_reader_thread, &out_ctx, 0, NULL);
-    HANDLE err_th = (HANDLE)_beginthreadex(NULL, 0, nurl__proc_reader_thread, &err_ctx, 0, NULL);
-
-    if (stdin_blob && *stdin_blob) {
-        size_t total = strlen(stdin_blob);
-        size_t off = 0;
-        while (off < total) {
-            DWORD written = 0;
-            BOOL wok = WriteFile(in_w, stdin_blob + off, (DWORD)(total - off), &written, NULL);
-            if (!wok || written == 0) break;
-            off += written;
-        }
-    }
-    CloseHandle(in_w);
-
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    DWORD exit_code = 0;
-    GetExitCodeProcess(pi.hProcess, &exit_code);
-
-    if (out_th) { WaitForSingleObject(out_th, INFINITE); CloseHandle(out_th); }
-    if (err_th) { WaitForSingleObject(err_th, INFINITE); CloseHandle(err_th); }
-    CloseHandle(out_r);
-    CloseHandle(err_r);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-
-    int io_err = out_ctx.io_err || err_ctx.io_err;
-    r->exit_code  = io_err ? -1 : (long long)exit_code;
-    r->err_kind   = io_err ? NURL_PROC_ERR_IO : NURL_PROC_ERR_OK;
-    r->stdout_buf = out_ctx.buf.data ? out_ctx.buf.data : strdup("");
-    r->stdout_len = (long long)out_ctx.buf.len;
-    r->stderr_buf = err_ctx.buf.data ? err_ctx.buf.data : strdup("");
-    r->stderr_len = (long long)err_ctx.buf.len;
-    return (long long)(uintptr_t)r;
-}
-#endif
-
+/* Win32 proc_run backend now lives in stdlib/runtime_process.zig. */
 #else
 /* WASI proc_run fallback now lives in stdlib/runtime_process.zig. */
 #endif  /* §16 backend selection */

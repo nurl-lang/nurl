@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const c = std.c;
+const windows = std.os.windows;
 
 extern "c" fn execvp(file: [*:0]const u8, argv: [*c]?[*:0]const u8) c_int;
 extern "c" fn signal(sig: c_int, handler: usize) usize;
@@ -82,6 +83,61 @@ const nurl_proc_err_exec_failed: c_longlong = 2;
 const nurl_proc_err_io: c_longlong = 3;
 const nurl_proc_err_other: c_longlong = 4;
 
+const win_handle_flag_inherit: windows.DWORD = 0x00000001;
+const win_infinite: windows.DWORD = std.math.maxInt(windows.DWORD);
+const win_wait_failed: windows.DWORD = std.math.maxInt(windows.DWORD);
+
+extern "kernel32" fn CreatePipe(
+    h_read_pipe: *?windows.HANDLE,
+    h_write_pipe: *?windows.HANDLE,
+    pipe_attributes: ?*windows.SECURITY_ATTRIBUTES,
+    size: windows.DWORD,
+) callconv(.winapi) windows.BOOL;
+
+extern "kernel32" fn SetHandleInformation(
+    h_object: windows.HANDLE,
+    mask: windows.DWORD,
+    flags: windows.DWORD,
+) callconv(.winapi) windows.BOOL;
+
+extern "kernel32" fn ReadFile(
+    h_file: windows.HANDLE,
+    buffer: windows.LPVOID,
+    bytes_to_read: windows.DWORD,
+    bytes_read: ?*windows.DWORD,
+    overlapped: ?*anyopaque,
+) callconv(.winapi) windows.BOOL;
+
+extern "kernel32" fn WriteFile(
+    h_file: windows.HANDLE,
+    buffer: windows.LPCVOID,
+    bytes_to_write: windows.DWORD,
+    bytes_written: ?*windows.DWORD,
+    overlapped: ?*anyopaque,
+) callconv(.winapi) windows.BOOL;
+
+extern "kernel32" fn WaitForSingleObject(
+    handle: windows.HANDLE,
+    milliseconds: windows.DWORD,
+) callconv(.winapi) windows.DWORD;
+
+extern "kernel32" fn GetExitCodeProcess(
+    h_process: windows.HANDLE,
+    exit_code: *windows.DWORD,
+) callconv(.winapi) windows.BOOL;
+
+extern "kernel32" fn TerminateProcess(
+    h_process: windows.HANDLE,
+    exit_code: windows.UINT,
+) callconv(.winapi) windows.BOOL;
+
+const WinProcReadCtx = struct {
+    handle: windows.HANDLE,
+    buf: NurlProcBuf = .{},
+    io_err: bool = false,
+    last_error: c_longlong = 0,
+};
+
 fn setErrno(err: c.E) void {
     c._errno().* = @intFromEnum(err);
 }
@@ -132,6 +188,278 @@ fn procBufAppend(buf: *NurlProcBuf, src: []const u8) bool {
 
 fn procBufOwnedOrEmpty(buf: *NurlProcBuf) ?[*:0]u8 {
     return if (buf.data) |data| @ptrCast(data) else dupSliceZ("");
+}
+
+fn procCloseBuf(buf: *NurlProcBuf) void {
+    if (buf.data) |data| c.free(data);
+    buf.* = .{};
+}
+
+fn winCloseHandleOpt(handle: *?windows.HANDLE) void {
+    if (handle.*) |value| windows.CloseHandle(value);
+    handle.* = null;
+}
+
+fn winReaderThread(ctx: *WinProcReadCtx) void {
+    var tmp: [4096]u8 = undefined;
+    while (true) {
+        var rd: windows.DWORD = 0;
+        const ok = ReadFile(
+            ctx.handle,
+            @ptrCast(tmp[0..].ptr),
+            @intCast(tmp.len),
+            &rd,
+            null,
+        );
+        if (ok == .FALSE) {
+            const last = windows.GetLastError();
+            if (last == .BROKEN_PIPE or last == .HANDLE_EOF) break;
+            ctx.io_err = true;
+            ctx.last_error = @intCast(@intFromEnum(last));
+            break;
+        }
+        if (rd == 0) break;
+        if (!procBufAppend(&ctx.buf, tmp[0..rd])) {
+            ctx.io_err = true;
+            break;
+        }
+    }
+}
+
+fn procQuoteArg(arg: ?[*:0]const u8, out: *NurlProcBuf) bool {
+    const slice = std.mem.span(arg orelse "");
+    var needs_quote = slice.len == 0;
+    if (!needs_quote) {
+        for (slice) |byte| {
+            if (byte == ' ' or byte == '\t' or byte == '\n' or byte == '\x0b' or byte == '"') {
+                needs_quote = true;
+                break;
+            }
+        }
+    }
+    if (!needs_quote) return procBufAppend(out, slice);
+    if (!procBufAppend(out, "\"")) return false;
+
+    var index: usize = 0;
+    while (index < slice.len) {
+        const backslash_start = index;
+        while (index < slice.len and slice[index] == '\\') index += 1;
+        const backslash_count = index - backslash_start;
+        if (index == slice.len) {
+            var i: usize = 0;
+            while (i < backslash_count * 2) : (i += 1) {
+                if (!procBufAppend(out, "\\")) return false;
+            }
+            break;
+        }
+        if (slice[index] == '"') {
+            var i: usize = 0;
+            while (i < backslash_count * 2 + 1) : (i += 1) {
+                if (!procBufAppend(out, "\\")) return false;
+            }
+            if (!procBufAppend(out, "\"")) return false;
+            index += 1;
+            continue;
+        }
+        var i: usize = 0;
+        while (i < backslash_count) : (i += 1) {
+            if (!procBufAppend(out, "\\")) return false;
+        }
+        if (!procBufAppend(out, slice[index .. index + 1])) return false;
+        index += 1;
+    }
+    return procBufAppend(out, "\"");
+}
+
+fn nurlProcRunWindows(
+    cmd: ?[*:0]const u8,
+    argv_buf: ?[*:0]const u8,
+    argc: c_longlong,
+    stdin_blob: ?[*:0]const u8,
+) c_longlong {
+    const result = allocProcResult() orelse return 0;
+    result.* = .{
+        .exit_code = 0,
+        .err_kind = nurl_proc_err_ok,
+        .stdout_buf = dupSliceZ(""),
+        .stdout_len = 0,
+        .stderr_buf = dupSliceZ(""),
+        .stderr_len = 0,
+    };
+
+    const cmd_ptr = cmd orelse {
+        result.err_kind = nurl_proc_err_notfound;
+        return @intCast(@intFromPtr(result));
+    };
+    if (cmd_ptr[0] == 0) {
+        result.err_kind = nurl_proc_err_notfound;
+        return @intCast(@intFromPtr(result));
+    }
+
+    const arg_count: usize = if (argc < 0) 0 else @intCast(argc);
+    const argv_user: ?[*]const ?[*:0]const u8 = if (arg_count == 0 or argv_buf == null)
+        null
+    else
+        @ptrCast(@alignCast(argv_buf.?));
+
+    var cmdline = NurlProcBuf{};
+    defer procCloseBuf(&cmdline);
+    var build_ok = procQuoteArg(cmd_ptr, &cmdline);
+    var arg_index: usize = 0;
+    while (arg_index < arg_count and build_ok) : (arg_index += 1) {
+        build_ok = procBufAppend(&cmdline, " ");
+        if (!build_ok) break;
+        const arg_ptr = if (argv_user) |user| user[arg_index] else null;
+        build_ok = procQuoteArg(arg_ptr, &cmdline);
+    }
+    if (!build_ok or cmdline.data == null) {
+        result.err_kind = nurl_proc_err_other;
+        return @intCast(@intFromPtr(result));
+    }
+
+    const cmdline_bytes = (cmdline.data orelse unreachable)[0..cmdline.len :0];
+    const cmdline_utf16 = std.unicode.wtf8ToWtf16LeAllocZ(std.heap.c_allocator, cmdline_bytes) catch {
+        result.err_kind = nurl_proc_err_other;
+        return @intCast(@intFromPtr(result));
+    };
+    defer std.heap.c_allocator.free(cmdline_utf16);
+
+    var sa: windows.SECURITY_ATTRIBUTES = .{
+        .nLength = @sizeOf(windows.SECURITY_ATTRIBUTES),
+        .lpSecurityDescriptor = null,
+        .bInheritHandle = windows.BOOL.fromBool(true),
+    };
+
+    var in_r: ?windows.HANDLE = null;
+    var in_w: ?windows.HANDLE = null;
+    var out_r: ?windows.HANDLE = null;
+    var out_w: ?windows.HANDLE = null;
+    var err_r: ?windows.HANDLE = null;
+    var err_w: ?windows.HANDLE = null;
+    errdefer winCloseHandleOpt(&in_r);
+    errdefer winCloseHandleOpt(&in_w);
+    errdefer winCloseHandleOpt(&out_r);
+    errdefer winCloseHandleOpt(&out_w);
+    errdefer winCloseHandleOpt(&err_r);
+    errdefer winCloseHandleOpt(&err_w);
+
+    if (CreatePipe(&in_r, &in_w, &sa, 0) == .FALSE or
+        CreatePipe(&out_r, &out_w, &sa, 0) == .FALSE or
+        CreatePipe(&err_r, &err_w, &sa, 0) == .FALSE)
+    {
+        result.err_kind = nurl_proc_err_io;
+        return @intCast(@intFromPtr(result));
+    }
+
+    if (SetHandleInformation(in_w.?, win_handle_flag_inherit, 0) == .FALSE or
+        SetHandleInformation(out_r.?, win_handle_flag_inherit, 0) == .FALSE or
+        SetHandleInformation(err_r.?, win_handle_flag_inherit, 0) == .FALSE)
+    {
+        result.err_kind = nurl_proc_err_io;
+        return @intCast(@intFromPtr(result));
+    }
+
+    var si: windows.STARTUPINFOW = std.mem.zeroes(windows.STARTUPINFOW);
+    si.cb = @sizeOf(windows.STARTUPINFOW);
+    si.dwFlags = windows.STARTF_USESTDHANDLES;
+    si.hStdInput = in_r;
+    si.hStdOutput = out_w;
+    si.hStdError = err_w;
+
+    var pi: windows.PROCESS.INFORMATION = std.mem.zeroes(windows.PROCESS.INFORMATION);
+    const created = windows.kernel32.CreateProcessW(
+        null,
+        cmdline_utf16.ptr,
+        null,
+        null,
+        windows.BOOL.fromBool(true),
+        .{},
+        null,
+        null,
+        &si,
+        &pi,
+    );
+    winCloseHandleOpt(&in_r);
+    winCloseHandleOpt(&out_w);
+    winCloseHandleOpt(&err_w);
+
+    if (created == .FALSE) {
+        const last = windows.GetLastError();
+        result.err_kind = switch (last) {
+            .FILE_NOT_FOUND, .PATH_NOT_FOUND => nurl_proc_err_notfound,
+            else => nurl_proc_err_exec_failed,
+        };
+        return @intCast(@intFromPtr(result));
+    }
+    errdefer {
+        winCloseHandleOpt(&in_w);
+        winCloseHandleOpt(&out_r);
+        winCloseHandleOpt(&err_r);
+        windows.CloseHandle(pi.hThread);
+        windows.CloseHandle(pi.hProcess);
+    }
+
+    var out_ctx = WinProcReadCtx{ .handle = out_r.? };
+    var err_ctx = WinProcReadCtx{ .handle = err_r.? };
+    var out_thread = std.Thread.spawn(.{}, winReaderThread, .{&out_ctx}) catch {
+        _ = TerminateProcess(pi.hProcess, 1);
+        result.err_kind = nurl_proc_err_other;
+        return @intCast(@intFromPtr(result));
+    };
+    var err_thread = std.Thread.spawn(.{}, winReaderThread, .{&err_ctx}) catch {
+        _ = TerminateProcess(pi.hProcess, 1);
+        out_thread.join();
+        procCloseBuf(&out_ctx.buf);
+        result.err_kind = nurl_proc_err_other;
+        return @intCast(@intFromPtr(result));
+    };
+
+    const stdin_slice = std.mem.span(stdin_blob orelse "");
+    if (stdin_slice.len != 0) {
+        var off: usize = 0;
+        while (off < stdin_slice.len) {
+            var written: windows.DWORD = 0;
+            const want: usize = @min(stdin_slice.len - off, std.math.maxInt(windows.DWORD));
+            const ok = WriteFile(
+                in_w.?,
+                @ptrCast(stdin_slice.ptr + off),
+                @intCast(want),
+                &written,
+                null,
+            );
+            if (ok == .FALSE or written == 0) break;
+            off += written;
+        }
+    }
+    winCloseHandleOpt(&in_w);
+
+    var io_err = false;
+    if (WaitForSingleObject(pi.hProcess, win_infinite) == win_wait_failed) {
+        io_err = true;
+    }
+    var exit_code: windows.DWORD = 0;
+    if (GetExitCodeProcess(pi.hProcess, &exit_code) == .FALSE) {
+        io_err = true;
+    }
+
+    out_thread.join();
+    err_thread.join();
+    winCloseHandleOpt(&out_r);
+    winCloseHandleOpt(&err_r);
+    windows.CloseHandle(pi.hProcess);
+    windows.CloseHandle(pi.hThread);
+
+    io_err = io_err or out_ctx.io_err or err_ctx.io_err;
+    result.exit_code = if (io_err) -1 else @intCast(exit_code);
+    result.err_kind = if (io_err) nurl_proc_err_io else nurl_proc_err_ok;
+
+    c.free(result.stdout_buf);
+    c.free(result.stderr_buf);
+    result.stdout_buf = procBufOwnedOrEmpty(&out_ctx.buf);
+    result.stdout_len = @intCast(out_ctx.buf.len);
+    result.stderr_buf = procBufOwnedOrEmpty(&err_ctx.buf);
+    result.stderr_len = @intCast(err_ctx.buf.len);
+    return @intCast(@intFromPtr(result));
 }
 
 fn procClosePair(pair: *[2]c.fd_t) void {
@@ -247,8 +575,11 @@ fn nurl_proc_run_impl(
     argc: c_longlong,
     stdin_blob: ?[*:0]const u8,
 ) callconv(.c) c_longlong {
-    if (builtin.os.tag == .windows or builtin.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi) {
         return procEmptyResult(nurl_proc_err_other);
+    }
+    if (builtin.os.tag == .windows) {
+        return nurlProcRunWindows(cmd, argv_buf, argc, stdin_blob);
     }
 
     const result = allocProcResult() orelse return 0;
@@ -966,6 +1297,7 @@ comptime {
     @export(&nurl_proc_spawn_free_impl, .{ .name = "nurl_proc_spawn_free" });
 
     if (builtin.os.tag == .windows) {
+        @export(&nurl_proc_run_impl, .{ .name = "nurl_proc_run" });
         @export(&nurl_proc_spawn_stub_impl, .{ .name = "nurl_proc_spawn" });
         @export(&nurl_proc_spawn_write_stub_impl, .{ .name = "nurl_proc_spawn_write" });
         @export(&nurl_proc_spawn_close_stdin_stub_impl, .{ .name = "nurl_proc_spawn_close_stdin" });
