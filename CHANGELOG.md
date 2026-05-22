@@ -52,6 +52,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   i64 tag to a narrower destination. Regression test
   `compiler/tests/enum_to_int_cast.nu`.
 
+### Removed
+
+* **Legacy `nurlapi` service tree retired.** The repository now keeps
+  a single supported HTTP service implementation under `api/`: the
+  FastAPI app, its Docker image, playground, and MCP surface. The old
+  `nurlapi/main.nu` + `nurlapi/Dockerfile` duplicate service path has
+  been removed now that both sides were already sharing the same Zig
+  build worker and runtime-object pipeline.
+
 ## [0.8.0] — 2026-05-20
 
 ### Added

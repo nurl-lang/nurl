@@ -22,21 +22,24 @@ directly from disk.
 # stringify the annotations and crash with
 # `TypeError: issubclass() arg 1 must be a class`.
 
-import os
 from pathlib import Path
 
 import httpx
 from mcp.server.fastmcp import FastMCP
-
-# Paths mirror those in app.main so that both the HTTP API and the MCP
-# server surface identical content.
-NURL_STDLIB_DIR   = os.environ.get("NURL_STDLIB_DIR",   "/opt/nurl/stdlib")
-NURL_EXAMPLES_DIR = os.environ.get("NURL_EXAMPLES_DIR", "/opt/nurl/examples")
-NURL_TESTS_DIR    = os.environ.get("NURL_TESTS_DIR",    "/opt/nurl/compiler/tests")
-NURL_GRAMMAR_PATH = os.environ.get("NURL_GRAMMAR_PATH", "/opt/nurl/spec/grammar.ebnf")
-NURL_README_PATH  = os.environ.get("NURL_README_PATH",  "/opt/nurl/README.md")
-NURL_ROADMAP_PATH = os.environ.get("NURL_ROADMAP_PATH", "/opt/nurl/ROADMAP.md")
-NURL_GOTCHAS_PATH = os.environ.get("NURL_GOTCHAS_PATH", "/opt/nurl/docs/GOTCHAS.md")
+from app.mcp_catalog import (
+    MCP_INSTRUCTIONS,
+    NURL_EXAMPLES_DIR,
+    NURL_GOTCHAS_PATH,
+    NURL_GRAMMAR_PATH,
+    NURL_README_PATH,
+    NURL_ROADMAP_PATH,
+    NURL_STDLIB_DIR,
+    NURL_TESTS_DIR,
+    PROMPT_SPECS,
+    RESOURCE_SPECS,
+    TOOL_SPECS,
+    render_nurl_coding_assistant_prompt,
+)
 
 
 mcp = FastMCP(
@@ -46,17 +49,7 @@ mcp = FastMCP(
     # `Mount("/mcp", …)` behaviour of redirecting `/mcp` → `/mcp/` with
     # HTTP 307, which loses the POST body and breaks MCP clients.
     streamable_http_path="/mcp",
-    instructions=(
-        "NURL language toolchain. Use `nurl_build_native` (Linux ELF), "
-        "`nurl_build_windows` (Windows .exe via zig cc), "
-        "`nurl_build_macos` (macOS Mach-O via zig cc), or "
-        "`nurl_build_wasm` (wasm32-wasi via zig cc) to compile source. The language uses a "
-        "terse prefix notation: functions are declared with "
-        "`@ name → ret_ty { body }`, return via `^ expr`, and call "
-        "functions with parenthesised prefix form like `( puts `hello` )`. "
-        "Read `nurl://grammar` and `nurl://readme` for the full spec; "
-        "fetch working examples via `nurl_read_example`."
-    ),
+    instructions=MCP_INSTRUCTIONS,
 )
 
 
@@ -84,12 +77,7 @@ async def _get_client():
 # ── Tools ──────────────────────────────────────────────────────────
 
 @mcp.tool(
-    description=(
-        "Compile NURL source to a native x86_64 Linux ELF binary. "
-        "Returns build status, nurlc+clang return codes and stderr, "
-        "plus download URLs for the generated `.ll` (LLVM IR) and "
-        "the binary. Equivalent to `POST /build`."
-    ),
+    description=TOOL_SPECS["nurl_build_native"].description,
 )
 async def nurl_build_native(source: str, filename: str = "main.nu") -> dict:
     client = await _get_client()
@@ -99,13 +87,7 @@ async def nurl_build_native(source: str, filename: str = "main.nu") -> dict:
 
 
 @mcp.tool(
-    description=(
-        "Cross-compile NURL source to a Windows x86_64 .exe via zig cc "
-        "(x86_64-windows-gnu). Returns build status, nurlc + zig cc return "
-        "codes and stderr, plus download URLs for the generated `.ll` (LLVM "
-        "IR) and the `.exe`. canvas/audio FFI is not supported on this "
-        "target. Equivalent to `POST /build_windows`."
-    ),
+    description=TOOL_SPECS["nurl_build_windows"].description,
 )
 async def nurl_build_windows(source: str, filename: str = "main.nu") -> dict:
     client = await _get_client()
@@ -115,15 +97,7 @@ async def nurl_build_windows(source: str, filename: str = "main.nu") -> dict:
 
 
 @mcp.tool(
-    description=(
-        "Cross-compile NURL source to a macOS x86_64 Mach-O binary via zig cc. "
-        "Returns build status, nurlc+zig return codes and stderr, plus download "
-        "URLs for the generated `.ll` (LLVM IR) and the binary. The result "
-        "links only libSystem — canvas/audio FFI and libcurl-backed HTTP are "
-        "not supported on this target. The binary is unsigned; users must "
-        "clear the Gatekeeper quarantine attribute before running it. "
-        "Equivalent to `POST /build_macos`."
-    ),
+    description=TOOL_SPECS["nurl_build_macos"].description,
 )
 async def nurl_build_macos(source: str, filename: str = "main.nu") -> dict:
     client = await _get_client()
@@ -133,12 +107,7 @@ async def nurl_build_macos(source: str, filename: str = "main.nu") -> dict:
 
 
 @mcp.tool(
-    description=(
-        "Compile NURL source to a wasm32-wasi WebAssembly module. "
-        "Returns the wasm bytes (base64) plus compile logs. Suitable "
-        "for running in-browser via a WASI shim or with wasmtime. "
-        "Equivalent to `POST /build_wasm`."
-    ),
+    description=TOOL_SPECS["nurl_build_wasm"].description,
 )
 async def nurl_build_wasm(
     source: str,
@@ -160,11 +129,7 @@ async def nurl_build_wasm(
 
 
 @mcp.tool(
-    description=(
-        "List bundled NURL example programs. Each entry has `name`, "
-        "`path` and `bytes`. Use `nurl_read_example` to fetch the "
-        "source of a specific one."
-    ),
+    description=TOOL_SPECS["nurl_list_examples"].description,
 )
 async def nurl_list_examples() -> list:
     client = await _get_client()
@@ -174,11 +139,7 @@ async def nurl_list_examples() -> list:
 
 
 @mcp.tool(
-    description=(
-        "Read the source of a bundled NURL example by name "
-        "(e.g. 'enigma.nu' or 'calculator.nu'). Returns the full "
-        "source as a string."
-    ),
+    description=TOOL_SPECS["nurl_read_example"].description,
 )
 async def nurl_read_example(name: str) -> str:
     client = await _get_client()
@@ -188,11 +149,7 @@ async def nurl_read_example(name: str) -> str:
 
 
 @mcp.tool(
-    description=(
-        "List NURL stdlib modules (.nu files under the stdlib "
-        "directory). Return relative paths; read any one via the "
-        "`nurl://stdlib/{path}` resource."
-    ),
+    description=TOOL_SPECS["nurl_list_stdlib"].description,
 )
 async def nurl_list_stdlib() -> list:
     base = Path(NURL_STDLIB_DIR)
@@ -204,11 +161,7 @@ async def nurl_list_stdlib() -> list:
 
 
 @mcp.tool(
-    description=(
-        "Read the source of a NURL stdlib module by relative path "
-        "(e.g. 'core/option.nu' or 'std/string.nu'). Returns the full "
-        "source as a string."
-    ),
+    description=TOOL_SPECS["nurl_read_stdlib"].description,
 )
 async def nurl_read_stdlib(name: str) -> str:
     base = Path(NURL_STDLIB_DIR).resolve()
@@ -221,11 +174,7 @@ async def nurl_read_stdlib(name: str) -> str:
 
 
 @mcp.tool(
-    description=(
-        "List bundled NURL compiler test programs (.nu files under "
-        "compiler/tests). Compiler has passed all of them. Each entry has `name`, `path` and `bytes`. "
-        "Use `nurl_read_test` to fetch the source of a specific one."
-    ),
+    description=TOOL_SPECS["nurl_list_tests"].description,
 )
 async def nurl_list_tests() -> list:
     base = Path(NURL_TESTS_DIR)
@@ -245,11 +194,7 @@ async def nurl_list_tests() -> list:
 
 
 @mcp.tool(
-    description=(
-        "Read the source of a bundled NURL compiler test by name "
-        "(e.g. 'generic_struct.nu' or 'string_mvp3.nu'). Returns the "
-        "full source as a string."
-    ),
+    description=TOOL_SPECS["nurl_read_test"].description,
 )
 async def nurl_read_test(name: str) -> str:
     base = Path(NURL_TESTS_DIR).resolve()
@@ -262,11 +207,7 @@ async def nurl_read_test(name: str) -> str:
 
 
 @mcp.tool(
-    description=(
-        "Read the authoritative NURL grammar (EBNF) from "
-        "`spec/grammar.ebnf`. Equivalent to the `nurl://grammar` resource, "
-        "exposed as a tool for clients that don't fetch resources."
-    ),
+    description=TOOL_SPECS["nurl_read_grammar"].description,
 )
 async def nurl_read_grammar() -> str:
     p = Path(NURL_GRAMMAR_PATH)
@@ -276,10 +217,7 @@ async def nurl_read_grammar() -> str:
 
 
 @mcp.tool(
-    description=(
-        "Read the project README (`README.md`) covering NURL design, "
-        "usage and toolchain. Equivalent to the `nurl://readme` resource."
-    ),
+    description=TOOL_SPECS["nurl_read_readme"].description,
 )
 async def nurl_read_readme() -> str:
     p = Path(NURL_README_PATH)
@@ -289,10 +227,7 @@ async def nurl_read_readme() -> str:
 
 
 @mcp.tool(
-    description=(
-        "Read the project ROADMAP (`ROADMAP.md`) covering planned features "
-        "and direction. Equivalent to the `nurl://roadmap` resource."
-    ),
+    description=TOOL_SPECS["nurl_read_roadmap"].description,
 )
 async def nurl_read_roadmap() -> str:
     p = Path(NURL_ROADMAP_PATH)
@@ -302,11 +237,7 @@ async def nurl_read_roadmap() -> str:
 
 
 @mcp.tool(
-    description=(
-        "Read the NURL gotchas / pitfalls guide (`docs/GOTCHAS.md`) "
-        "documenting common mistakes and surprising behaviour. "
-        "Equivalent to the `nurl://gotchas` resource."
-    ),
+    description=TOOL_SPECS["nurl_read_gotchas"].description,
 )
 async def nurl_read_gotchas() -> str:
     p = Path(NURL_GOTCHAS_PATH)
@@ -319,9 +250,9 @@ async def nurl_read_gotchas() -> str:
 
 @mcp.resource(
     "nurl://grammar",
-    name="NURL grammar (EBNF)",
-    description="The authoritative EBNF grammar for the current NURL version.",
-    mime_type="text/plain",
+    name=RESOURCE_SPECS["nurl://grammar"].name,
+    description=RESOURCE_SPECS["nurl://grammar"].description,
+    mime_type=RESOURCE_SPECS["nurl://grammar"].mime_type,
 )
 def resource_grammar() -> str:
     p = Path(NURL_GRAMMAR_PATH)
@@ -330,9 +261,9 @@ def resource_grammar() -> str:
 
 @mcp.resource(
     "nurl://readme",
-    name="NURL README",
-    description="Project README covering design, usage and toolchain. Use this to get general information about NURL. This is BIG. Use only when needed.",
-    mime_type="text/markdown",
+    name=RESOURCE_SPECS["nurl://readme"].name,
+    description=RESOURCE_SPECS["nurl://readme"].description,
+    mime_type=RESOURCE_SPECS["nurl://readme"].mime_type,
 )
 def resource_readme() -> str:
     p = Path(NURL_README_PATH)
@@ -341,9 +272,9 @@ def resource_readme() -> str:
 
 @mcp.resource(
     "nurl://roadmap",
-    name="NURL ROADMAP",
-    description="Project ROADMAP covering planned features and direction.",
-    mime_type="text/markdown",
+    name=RESOURCE_SPECS["nurl://roadmap"].name,
+    description=RESOURCE_SPECS["nurl://roadmap"].description,
+    mime_type=RESOURCE_SPECS["nurl://roadmap"].mime_type,
 )
 def resource_roadmap() -> str:
     p = Path(NURL_ROADMAP_PATH)
@@ -352,9 +283,9 @@ def resource_roadmap() -> str:
 
 @mcp.resource(
     "nurl://gotchas",
-    name="NURL gotchas",
-    description="Common pitfalls and surprising behaviour when writing NURL. Read this before debugging tricky compile or runtime errors.",
-    mime_type="text/markdown",
+    name=RESOURCE_SPECS["nurl://gotchas"].name,
+    description=RESOURCE_SPECS["nurl://gotchas"].description,
+    mime_type=RESOURCE_SPECS["nurl://gotchas"].mime_type,
 )
 def resource_gotchas() -> str:
     p = Path(NURL_GOTCHAS_PATH)
@@ -363,9 +294,9 @@ def resource_gotchas() -> str:
 
 @mcp.resource(
     "nurl://stdlib/{path}",
-    name="NURL stdlib module",
-    description="Source of a stdlib .nu module, e.g. 'core/option.nu'.",
-    mime_type="text/plain",
+    name=RESOURCE_SPECS["nurl://stdlib/{path}"].name,
+    description=RESOURCE_SPECS["nurl://stdlib/{path}"].description,
+    mime_type=RESOURCE_SPECS["nurl://stdlib/{path}"].mime_type,
 )
 def resource_stdlib(path: str) -> str:
     base = Path(NURL_STDLIB_DIR).resolve()
@@ -380,9 +311,9 @@ def resource_stdlib(path: str) -> str:
 
 @mcp.resource(
     "nurl://example/{name}",
-    name="NURL example program",
-    description="Source of a bundled example, e.g. 'calculator.nu'.",
-    mime_type="text/plain",
+    name=RESOURCE_SPECS["nurl://example/{name}"].name,
+    description=RESOURCE_SPECS["nurl://example/{name}"].description,
+    mime_type=RESOURCE_SPECS["nurl://example/{name}"].mime_type,
 )
 def resource_example(name: str) -> str:
     base = Path(NURL_EXAMPLES_DIR).resolve()
@@ -396,9 +327,9 @@ def resource_example(name: str) -> str:
 
 @mcp.resource(
     "nurl://test/{name}",
-    name="NURL compiler test",
-    description="Source of a bundled compiler test, e.g. 'generic_struct.nu'.",
-    mime_type="text/plain",
+    name=RESOURCE_SPECS["nurl://test/{name}"].name,
+    description=RESOURCE_SPECS["nurl://test/{name}"].description,
+    mime_type=RESOURCE_SPECS["nurl://test/{name}"].mime_type,
 )
 def resource_test(name: str) -> str:
     base = Path(NURL_TESTS_DIR).resolve()
@@ -414,33 +345,7 @@ def resource_test(name: str) -> str:
 
 @mcp.prompt(
     name="nurl_coding_assistant",
-    description=(
-        "Prime the assistant with NURL's syntax and conventions before "
-        "asking it to write or review NURL code."
-    ),
+    description=PROMPT_SPECS["nurl_coding_assistant"].description,
 )
 def prompt_coding_assistant() -> str:
-    # Kept compact on purpose: full grammar + one canonical example is
-    # enough to ground most small-to-medium LLMs.
-    example = ""
-    p = Path(NURL_EXAMPLES_DIR) / "calculator.nu"
-    if p.is_file():
-        example = p.read_text("utf-8")
-    return (
-        "You are helping a developer write NURL code.\n\n"
-        "Key syntax reminders:\n"
-        "  - Function: `@ name → ret_ty { body }` (not `fn name() -> ret_ty`)\n"
-        "  - Return:   `^ expr`\n"
-        "  - Call:     `( fname arg1 arg2 )` (parenthesised prefix)\n"
-        "  - String:   backticks: `` `hello` ``\n"
-        "  - Types:    `i` (i64), `u` (u64), `f` (f64), `b` (bool), "
-        "`s` (string), `v` (void), `* T` (pointer to T)\n"
-        "  - Imports:  ``$ `stdlib/core/option.nu` ``\n"
-        "  - FFI:      ``& `libc` @ puts * i8 → i``\n\n"
-        "Before writing, you MAY call the `nurl_read_example` tool or "
-        "read the `nurl://grammar` resource to double-check syntax. "
-        "Always validate generated code by calling `nurl_build_native` "
-        "and inspecting stderr; fix errors and retry.\n\n"
-        "Reference example (calculator.nu):\n"
-        "```\n" + example + "\n```"
-    )
+    return render_nurl_coding_assistant_prompt()

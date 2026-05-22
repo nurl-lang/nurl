@@ -28,22 +28,30 @@ language model can self-orient with one round-trip.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
-
-# Paths mirror those in app.main / app.mcp_server.
-NURL_STDLIB_DIR   = os.environ.get("NURL_STDLIB_DIR",   "/opt/nurl/stdlib")
-NURL_EXAMPLES_DIR = os.environ.get("NURL_EXAMPLES_DIR", "/opt/nurl/examples")
-NURL_TESTS_DIR    = os.environ.get("NURL_TESTS_DIR",    "/opt/nurl/compiler/tests")
-NURL_GRAMMAR_PATH = os.environ.get("NURL_GRAMMAR_PATH", "/opt/nurl/spec/grammar.ebnf")
-NURL_README_PATH  = os.environ.get("NURL_README_PATH",  "/opt/nurl/README.md")
-NURL_ROADMAP_PATH = os.environ.get("NURL_ROADMAP_PATH", "/opt/nurl/ROADMAP.md")
-NURL_GOTCHAS_PATH = os.environ.get("NURL_GOTCHAS_PATH", "/opt/nurl/docs/GOTCHAS.md")
+from app.mcp_catalog import (
+    NURL_EXAMPLES_DIR,
+    NURL_GOTCHAS_PATH,
+    NURL_GRAMMAR_PATH,
+    NURL_README_PATH,
+    NURL_ROADMAP_PATH,
+    NURL_STDLIB_DIR,
+    NURL_TESTS_DIR,
+    PROMPTS,
+    PROMPT_SPECS,
+    RESOURCES,
+    REST_INSTRUCTIONS,
+    TOOLS,
+    PromptSpec,
+    ResourceSpec,
+    ToolSpec,
+    render_nurl_coding_assistant_prompt,
+)
 
 
 router = APIRouter(prefix="/rmcp", tags=["rest-mcp"])
@@ -72,221 +80,7 @@ async def _get_client() -> httpx.AsyncClient:
 
 # ── Catalog: tools / resources / prompts ──────────────────────────
 
-INSTRUCTIONS = (
-    "NURL language toolchain over plain REST (companion to /mcp). "
-    "Build with `nurl_build_native` (Linux ELF), `nurl_build_windows` "
-    "(.exe via mingw-w64), `nurl_build_macos` (Mach-O via zig cc), "
-    "or `nurl_build_wasm`. NURL syntax is terse "
-    "prefix: declare with `@ name → ret_ty { body }`, return via "
-    "`^ expr`, call with `( fname args… )`, strings in backticks. "
-    "Read `nurl://grammar` and `nurl://readme` for the full spec; "
-    "fetch working examples via `nurl_read_example`. Validate generated "
-    "code by running a build tool and checking `nurlc_errors`."
-)
-
-
-class ToolSpec(BaseModel):
-    name: str
-    description: str
-    input_schema: dict[str, Any] = Field(
-        ...,
-        description="JSON Schema for the POST body of /rmcp/tools/{name}.",
-    )
-
-
-class ResourceSpec(BaseModel):
-    uri: str
-    name: str
-    description: str
-    mime_type: str = "text/plain"
-
-
-class PromptSpec(BaseModel):
-    name: str
-    description: str
-    arguments: list[dict[str, Any]] = Field(default_factory=list)
-
-
-# Inline JSON schemas — kept here so GET /rmcp/tools is fully self-describing
-# without runtime introspection.
-_BUILD_REQ_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "source":   {"type": "string", "description": "NURL source code."},
-        "filename": {"type": "string", "description": "Logical name (default main.nu)."},
-    },
-    "required": ["source"],
-    "additionalProperties": False,
-}
-
-_BUILD_WASM_REQ_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "source":   {"type": "string"},
-        "filename": {"type": "string"},
-        "emit_ll":  {"type": "boolean", "description": "Include LLVM IR in response."},
-    },
-    "required": ["source"],
-    "additionalProperties": False,
-}
-
-_NAME_ARG_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {"name": {"type": "string"}},
-    "required": ["name"],
-    "additionalProperties": False,
-}
-
-_NO_ARGS_SCHEMA: dict[str, Any] = {
-    "type": "object", "properties": {}, "additionalProperties": False,
-}
-
-
-TOOLS: list[ToolSpec] = [
-    ToolSpec(
-        name="nurl_build_native",
-        description=(
-            "Compile NURL source to a native x86_64 Linux ELF binary. "
-            "Returns build status, return codes, stderr, structured "
-            "`nurlc_errors`, and download URLs for the .ll and the binary."
-        ),
-        input_schema=_BUILD_REQ_SCHEMA,
-    ),
-    ToolSpec(
-        name="nurl_build_windows",
-        description=(
-            "Cross-compile NURL source to a Windows x86_64 .exe via mingw-w64. "
-            "canvas/audio FFI is not supported on this target."
-        ),
-        input_schema=_BUILD_REQ_SCHEMA,
-    ),
-    ToolSpec(
-        name="nurl_build_macos",
-        description=(
-            "Cross-compile NURL source to a macOS x86_64 Mach-O binary via zig cc. "
-            "Links only libSystem; canvas/audio FFI and libcurl-backed HTTP are "
-            "not supported. The binary is unsigned — users must clear the Gatekeeper "
-            "quarantine attribute (`xattr -d com.apple.quarantine <bin>`) to run it."
-        ),
-        input_schema=_BUILD_REQ_SCHEMA,
-    ),
-    ToolSpec(
-        name="nurl_build_wasm",
-        description=(
-            "Compile NURL source to a wasm32-wasi WebAssembly module. "
-            "Returns the bytes base64-encoded plus compile logs. Set "
-            "`emit_ll: true` to include the intermediate LLVM IR."
-        ),
-        input_schema=_BUILD_WASM_REQ_SCHEMA,
-    ),
-    ToolSpec(
-        name="nurl_list_examples",
-        description="List bundled NURL example programs (name, path, bytes).",
-        input_schema=_NO_ARGS_SCHEMA,
-    ),
-    ToolSpec(
-        name="nurl_read_example",
-        description="Read a bundled example by name (e.g. 'calculator.nu').",
-        input_schema=_NAME_ARG_SCHEMA,
-    ),
-    ToolSpec(
-        name="nurl_list_stdlib",
-        description="List NURL stdlib modules (.nu files under stdlib/).",
-        input_schema=_NO_ARGS_SCHEMA,
-    ),
-    ToolSpec(
-        name="nurl_read_stdlib",
-        description="Read a stdlib module by relative path (e.g. 'core/option.nu').",
-        input_schema=_NAME_ARG_SCHEMA,
-    ),
-    ToolSpec(
-        name="nurl_list_tests",
-        description=(
-            "List bundled compiler test programs the compiler currently "
-            "passes. Each entry has name/path/bytes."
-        ),
-        input_schema=_NO_ARGS_SCHEMA,
-    ),
-    ToolSpec(
-        name="nurl_read_test",
-        description="Read a bundled compiler test by name (e.g. 'generic_struct.nu').",
-        input_schema=_NAME_ARG_SCHEMA,
-    ),
-    ToolSpec(
-        name="nurl_read_grammar",
-        description="Read the authoritative EBNF grammar (spec/grammar.ebnf).",
-        input_schema=_NO_ARGS_SCHEMA,
-    ),
-    ToolSpec(
-        name="nurl_read_readme",
-        description="Read the project README.md. Large; fetch only when needed.",
-        input_schema=_NO_ARGS_SCHEMA,
-    ),
-    ToolSpec(
-        name="nurl_read_roadmap",
-        description="Read the project ROADMAP.md (planned features and direction).",
-        input_schema=_NO_ARGS_SCHEMA,
-    ),
-    ToolSpec(
-        name="nurl_read_gotchas",
-        description="Read the NURL gotchas / pitfalls guide (docs/GOTCHAS.md).",
-        input_schema=_NO_ARGS_SCHEMA,
-    ),
-]
-
-
-RESOURCES: list[ResourceSpec] = [
-    ResourceSpec(
-        uri="nurl://grammar",
-        name="NURL grammar (EBNF)",
-        description="Authoritative EBNF grammar for the current NURL version.",
-    ),
-    ResourceSpec(
-        uri="nurl://readme",
-        name="NURL README",
-        description="Project README. Large — fetch only when needed.",
-        mime_type="text/markdown",
-    ),
-    ResourceSpec(
-        uri="nurl://roadmap",
-        name="NURL ROADMAP",
-        description="Project ROADMAP covering planned features and direction.",
-        mime_type="text/markdown",
-    ),
-    ResourceSpec(
-        uri="nurl://gotchas",
-        name="NURL gotchas",
-        description="Common pitfalls and surprising behaviour when writing NURL.",
-        mime_type="text/markdown",
-    ),
-    ResourceSpec(
-        uri="nurl://stdlib/{path}",
-        name="NURL stdlib module",
-        description="Source of a stdlib .nu module, e.g. 'core/option.nu'.",
-    ),
-    ResourceSpec(
-        uri="nurl://example/{name}",
-        name="NURL example program",
-        description="Source of a bundled example, e.g. 'calculator.nu'.",
-    ),
-    ResourceSpec(
-        uri="nurl://test/{name}",
-        name="NURL compiler test",
-        description="Source of a bundled compiler test, e.g. 'generic_struct.nu'.",
-    ),
-]
-
-
-PROMPTS: list[PromptSpec] = [
-    PromptSpec(
-        name="nurl_coding_assistant",
-        description=(
-            "Prime the assistant with NURL's syntax and conventions before "
-            "writing or reviewing NURL code."
-        ),
-        arguments=[],
-    ),
-]
+INSTRUCTIONS = REST_INSTRUCTIONS
 
 
 # ── Path-safety helper ────────────────────────────────────────────
@@ -506,28 +300,7 @@ def _read_resource(uri: str) -> tuple[str, str]:
 # ── Prompt renderers ──────────────────────────────────────────────
 
 def _prompt_coding_assistant() -> str:
-    example = ""
-    p = Path(NURL_EXAMPLES_DIR) / "calculator.nu"
-    if p.is_file():
-        example = p.read_text("utf-8", errors="replace")
-    return (
-        "You are helping a developer write NURL code.\n\n"
-        "Key syntax reminders:\n"
-        "  - Function: `@ name → ret_ty { body }` (not `fn name() -> ret_ty`)\n"
-        "  - Return:   `^ expr`\n"
-        "  - Call:     `( fname arg1 arg2 )` (parenthesised prefix)\n"
-        "  - String:   backticks: `` `hello` ``\n"
-        "  - Types:    `i` (i64), `u` (u64), `f` (f64), `b` (bool), "
-        "`s` (string), `v` (void), `* T` (pointer to T)\n"
-        "  - Imports:  ``$ `stdlib/core/option.nu` ``\n"
-        "  - FFI:      ``& `libc` @ puts * i8 → i``\n\n"
-        "Before writing, fetch the `nurl://grammar` resource (or call the "
-        "`nurl_read_grammar` tool) to confirm syntax. Always validate "
-        "generated code by calling `nurl_build_native` and inspecting "
-        "`nurlc_errors`; fix and retry.\n\n"
-        "Reference example (calculator.nu):\n"
-        "```\n" + example + "\n```"
-    )
+    return render_nurl_coding_assistant_prompt()
 
 
 _PROMPT_RENDERERS = {
@@ -689,7 +462,7 @@ class PromptGetResponse(BaseModel):
 )
 def get_prompt(name: str) -> PromptGetResponse:
     renderer = _PROMPT_RENDERERS.get(name)
-    spec = next((p for p in PROMPTS if p.name == name), None)
+    spec = PROMPT_SPECS.get(name)
     if renderer is None or spec is None:
         raise HTTPException(status_code=404, detail=f"unknown prompt: {name}")
     return PromptGetResponse(
