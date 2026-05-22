@@ -534,6 +534,67 @@ exercised by the build scripts today.
 
 ---
 
+## Networking
+
+NURL reaches the network through a pure-POSIX socket layer in the C
+runtime (`nurl_tcp_*`) — no libcurl, no framework. Both directions are
+covered:
+
+- **Server** — `tcp_listen` / `tcp_listen_tls` + `tcp_accept`, with a
+  full HTTP/1.1 server stack on top (`stdlib/ext/http_*` — routing,
+  static files, middleware, multipart, TLS; see `HTTP_SERVER_PLAN.md`).
+- **Client** — `tcp_connect` / `tcp_connect_tls` (runtime §18b/§18c:
+  DNS via `getaddrinfo`, a TLS client handshake with SNI). The
+  primitive any outbound client needs.
+
+### MQTT 5.0 client
+
+`stdlib/ext/mqtt.nu` is a production-grade MQTT 5.0 client built on that
+socket layer. The whole packet codec is pure NURL over `( Vec u )` — no
+extra dependencies beyond the runtime's libssl.
+
+```
+$ `stdlib/ext/mqtt.nu`
+
+@ main → i {
+    : !MqttClient MqttErr r ( mqtt_connect
+        `broker.example.com` 8883 `client-id` `user` `pass` )
+    ?? r {
+        T cl → {
+            : !v MqttErr s ( mqtt_subscribe cl `sensors/#` )
+            ?? s { T → {} F e → {} }
+            : !v MqttErr p ( mqtt_publish1 cl `sensors/temp` `21.4` )
+            ?? p { T → {} F e → {} }
+            ( mqtt_disconnect cl )
+            ^ 0
+        }
+        F e → { ( nurl_eprint ( mqtt_err_name e ) ) ^ 1 }
+    }
+}
+```
+
+What it covers:
+
+- TLS (port 8883) or plain TCP (1883); MQTT 5.0 CONNECT via a
+  configurable `MqttConfig` — Last Will, session expiry, clean-start.
+- PUBLISH at **QoS 0 / 1 / 2** (the full PUBREC/PUBREL/PUBCOMP
+  exchange), the `retain` flag, and MQTT 5 user properties.
+- SUBSCRIBE / UNSUBSCRIBE at a chosen max QoS; `mqtt_receive` returns
+  inbound messages and auto-acknowledges QoS 1/2.
+- A **framed packet reader** — a packet split across TCP segments, or
+  several packets in one segment, is reassembled correctly.
+- Keep-alive (`mqtt_ping` / deadline-aware `mqtt_keepalive_tick`), a
+  rotating packet-id allocator, `mqtt_reconnect`, and `mqtt_listen` —
+  a background reader thread that feeds inbound messages through a
+  channel while the application does other work.
+- Typed errors (`MqttErr`): transport faults are distinct from broker
+  rejections (`MqttBadAuth`, `MqttNotAuthorized`, …).
+
+`MQTT_PLAN.md` tracks the design; `example/mqtt_*.nu` are runnable
+demos verified against a live broker.
+
+---
+
 ## Project structure
 
 ```
@@ -850,6 +911,7 @@ see [`docs/GOTCHAS.md`](docs/GOTCHAS.md).
 | Capability | Notes |
 |---|---|
 | **TLS server-side shipped 2026-05-15** via `tcp_listen_tls host port cert_path key_path → !TcpListener NetErr` | Build-time dependency: `libssl` (pkg-config). HttpServer integrates without code changes — just swap `tcp_listen` for `tcp_listen_tls`. |
+| **TLS client-side shipped 2026-05-22** via `tcp_connect_tls host port verify` (runtime §18c) | DNS resolution + `connect` + a TLS client handshake with SNI. The primitive behind the MQTT client and any outbound TLS. Peer-certificate verification is an opt-in flag. |
 | TLS 1.2 minimum | TLS 1.0 / 1.1 / SSL 3.0 disabled in the SSL_CTX |
 | No SNI in v1 (single cert per listener) | Follow-up item |
 | No ALPN in v1 (no HTTP/2 to negotiate yet anyway) | Follow-up item |
