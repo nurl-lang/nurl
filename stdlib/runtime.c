@@ -85,6 +85,7 @@
 
 /* ── §1  Basic I/O ─────────────────────────────────────────────── */
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 void nurl_print_int(long long n)  { printf("%lld\n", n); }
 void nurl_print_str(const char *s){ puts(s); }
 void nurl_print_bool(int b)       { puts(b ? "true" : "false"); }
@@ -197,6 +198,7 @@ void nurl_print(const char *s) {
 void nurl_eprint(const char *s) { fputs(s, stderr); fflush(stderr); }
 
 void nurl_eprintln(const char *s) { fputs(s, stderr); fputc('\n', stderr); fflush(stderr); }
+#endif
 
 
 /* ── §2  String operations ─────────────────────────────────────── */
@@ -476,6 +478,7 @@ static double __csv_fast_atof(const char *p, long long len) {
  * sequentially (the float-failing rows — ~85 % of input on the
  * canonical test — never pay the cell-offset reload + substring
  * scan that the chained version would). */
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 long long nurl_csv_filter_float_gt_and_str_contains(
     const char *content,
     const unsigned char *escape_buf,
@@ -530,6 +533,7 @@ long long nurl_csv_filter_float_gt_and_str_contains(
     }
     return w;
 }
+#endif
 
 /* P3b: filter using pre-parsed typed_floats cache. typed_floats[r]
  * holds the parsed double for body row r; the filter narrows the
@@ -543,6 +547,7 @@ long long nurl_csv_filter_float_gt_and_str_contains(
  * that narrowed row_starts break the alignment. csv.nu's
  * `csv_table_filter_typed_float_gt` enforces this with a length
  * check + cache invalidation. */
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 long long nurl_csv_filter_typed_float_gt(
     const double *typed_floats,
     long long *row_starts,
@@ -561,7 +566,9 @@ long long nurl_csv_filter_typed_float_gt(
     }
     return w;
 }
+#endif
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 long long nurl_csv_filter_float_gt(
     const char *content,
     const unsigned char *escape_buf,
@@ -599,7 +606,9 @@ long long nurl_csv_filter_float_gt(
     }
     return w;
 }
+#endif
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 long long nurl_csv_filter_str_contains(
     const char *content,
     const unsigned char *escape_buf,
@@ -652,6 +661,7 @@ long long nurl_csv_filter_str_contains(
     }
     return w;
 }
+#endif
 
 /* True iff `target` appears anywhere in `p[0..len)`. Uses libc memchr,
  * which on glibc dispatches to SSE2/AVX2 scanners — ~16 bytes/cycle.
@@ -749,6 +759,7 @@ long long nurl_csv_scan_cell(const char *p, long long len, long long delim) {
  *   0  = success
  *   -1 = a buffer would overflow (output globals undefined)
  */
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 static long long g_csv_n_rows    = 0;
 static long long g_csv_n_header  = 0;
 static long long g_csv_n_cells   = 0;
@@ -864,6 +875,7 @@ long long nurl_csv_parse_arena(
     g_csv_n_cells  = n_cells / 2;
     return 0;
 }
+#endif
 
 /* Scan one CSV row into a small caller-supplied (off, len) buffer.
  * The scan stops at the row terminator (LF/CRLF/EOF). Cells are
@@ -2099,6 +2111,7 @@ typedef struct {
 } NurlSymTab;
 
 #define MAX_SYMTABS 16
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 static NurlSymTab *g_symtabs[MAX_SYMTABS];
 static int         g_symtab_count = 0;
 
@@ -2151,6 +2164,7 @@ void nurl_sym_pop(long long h) {
     }
     if (t->depth > 0) t->depth--;
 }
+#endif
 
 
 /* ── §7  Codegen helpers ───────────────────────────────────────── */

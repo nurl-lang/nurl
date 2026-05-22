@@ -10,6 +10,10 @@ extern "c" fn fseek(stream: *c.FILE, offset: c_long, whence: c_int) c_int;
 extern "c" fn ftell(stream: *c.FILE) c_long;
 extern "c" fn fputs(s: [*:0]const u8, stream: *c.FILE) c_int;
 extern "c" fn fputc(ch: c_int, stream: *c.FILE) c_int;
+extern "c" fn fflush(stream: *c.FILE) c_int;
+extern "c" fn scanf(format: [*:0]const u8, ...) c_int;
+extern "c" fn fgetc(stream: *c.FILE) c_int;
+extern "c" fn feof(stream: *c.FILE) c_int;
 extern "c" fn atoll(nptr: [*:0]const u8) c_longlong;
 extern "c" fn strtod(nptr: [*:0]const u8, endptr: *?[*:0]u8) f64;
 extern "c" fn sqrt(x: f64) f64;
@@ -35,7 +39,22 @@ const darwin = if (builtin.os.tag == .driverkit or
     builtin.os.tag == .watchos) struct {
     extern "c" fn @"stat$INODE64"(path: [*:0]const u8, buf: *c.Stat) c_int;
     extern "c" fn @"fstat$INODE64"(fd: c.fd_t, buf: *c.Stat) c_int;
+    extern "c" var __stdinp: *c.FILE;
+    extern "c" var __stdoutp: *c.FILE;
+    extern "c" var __stderrp: *c.FILE;
 } else struct {};
+
+const generic_stdio = if (builtin.os.tag == .driverkit or
+    builtin.os.tag == .ios or
+    builtin.os.tag == .maccatalyst or
+    builtin.os.tag == .macos or
+    builtin.os.tag == .tvos or
+    builtin.os.tag == .visionos or
+    builtin.os.tag == .watchos) struct {} else struct {
+    extern "c" var stdin: *c.FILE;
+    extern "c" var stdout: *c.FILE;
+    extern "c" var stderr: *c.FILE;
+};
 
 const posix = if (builtin.os.tag == .windows) struct {} else struct {
     extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
@@ -219,6 +238,27 @@ fn handleToFile(handle: ?*anyopaque) ?*c.FILE {
     return @ptrCast(@alignCast(ptr));
 }
 
+fn stdinFile() *c.FILE {
+    return switch (builtin.os.tag) {
+        .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => darwin.__stdinp,
+        else => generic_stdio.stdin,
+    };
+}
+
+fn stdoutFile() *c.FILE {
+    return switch (builtin.os.tag) {
+        .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => darwin.__stdoutp,
+        else => generic_stdio.stdout,
+    };
+}
+
+fn stderrFile() *c.FILE {
+    return switch (builtin.os.tag) {
+        .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => darwin.__stderrp,
+        else => generic_stdio.stderr,
+    };
+}
+
 const NurlDirIter = if (builtin.os.tag == .windows) struct {
     h: windows.HANDLE,
     fd: win.WIN32_FIND_DATAA,
@@ -240,6 +280,22 @@ const NurlMapEntry = struct {
 const NurlMap = struct {
     buckets: [nurl_map_buckets]?*NurlMapEntry,
     size: c_longlong,
+};
+
+const max_syms = 1_000_000;
+const max_symtabs = 16;
+
+const NurlSymEntry = struct {
+    depth: c_int,
+    name: [*:0]u8,
+    ty: [*:0]u8,
+};
+
+const NurlSymTab = struct {
+    entries: ?[*]NurlSymEntry,
+    count: usize,
+    cap: usize,
+    depth: c_int,
 };
 
 const max_cgs = 8;
@@ -285,14 +341,65 @@ fn handleToMap(handle: c_longlong) ?*NurlMap {
     return @ptrFromInt(@as(usize, @intCast(handle)));
 }
 
+fn fatalRuntime(msg: [*:0]const u8) noreturn {
+    _ = fputs(msg, stderrFile());
+    std.process.exit(1);
+}
+
+fn getSymTab(handle: c_longlong) *NurlSymTab {
+    const idx: c_int = @intCast(handle - 1);
+    if (idx < 0 or idx >= g_symtab_count or g_symtabs[@intCast(idx)] == null) {
+        fatalRuntime("nurlc: invalid symtab handle\n");
+    }
+    return g_symtabs[@intCast(idx)].?;
+}
+
+fn ensureSymCap(tab: *NurlSymTab, need: usize) void {
+    if (need <= tab.cap) return;
+    var new_cap = if (tab.cap == 0) @as(usize, 16) else tab.cap;
+    while (new_cap < need) : (new_cap *= 2) {}
+    if (new_cap > max_syms) new_cap = max_syms;
+    if (new_cap < need) fatalRuntime("nurlc: symbol table full\n");
+
+    const new_bytes = new_cap * @sizeOf(NurlSymEntry);
+    const raw = c.realloc(tab.entries, new_bytes) orelse fatalRuntime("nurlc: symbol table full\n");
+    tab.entries = @ptrCast(@alignCast(raw));
+    tab.cap = new_cap;
+}
+
+fn csvCellPtr(content: [*]const u8, escape_buf: ?[*]const u8, off: c_longlong) ?[*]const u8 {
+    if (off >= 0) return content + @as(usize, @intCast(off));
+    const escaped = escape_buf orelse return null;
+    return escaped + @as(usize, @intCast(-(off + 1)));
+}
+
+fn csvCellContains(hay_ptr: [*]const u8, hay_len: c_longlong, needle: []const u8) bool {
+    if (needle.len == 0) return true;
+    if (hay_len < 0) return false;
+    const hay = hay_ptr[0..@intCast(hay_len)];
+    return std.mem.indexOf(u8, hay, needle) != null;
+}
+
 var g_cgs: [max_cgs]?*NurlCG = .{null} ** max_cgs;
 var g_cg_count: c_int = 0;
+var g_symtabs: [max_symtabs]?*NurlSymTab = .{null} ** max_symtabs;
+var g_symtab_count: c_int = 0;
 var g_last_type: [*:0]const u8 = "i64";
 var g_last_type_owned = false;
 var g_last_parsed_float: f64 = 0.0;
 var g_csv_row_n_cells: c_longlong = 0;
 var g_csv_row_next_pos: c_longlong = 0;
+var g_csv_n_rows: c_longlong = 0;
+var g_csv_n_header: c_longlong = 0;
+var g_csv_n_cells: c_longlong = 0;
 var g_log_level: c_longlong = 1;
+var g_stdin_eof_flag = false;
+var g_outbuf: ?[*]u8 = null;
+var g_outbuf_len: usize = 0;
+var g_outbuf_mode = false;
+
+const outbuf_size = 8 * 1024 * 1024;
+const c_eof: c_int = -1;
 
 fn getCg(handle: c_longlong) *NurlCG {
     const idx: c_int = @intCast(handle - 1);
@@ -301,6 +408,14 @@ fn getCg(handle: c_longlong) *NurlCG {
         std.process.exit(1);
     }
     return g_cgs[@intCast(idx)].?;
+}
+
+fn outbufInit() void {
+    if (g_outbuf != null) return;
+    const raw = c.malloc(outbuf_size) orelse return;
+    const buf: [*]u8 = @ptrCast(raw);
+    buf[0] = 0;
+    g_outbuf = buf;
 }
 
 fn mapDirOpenError(err: anyerror) void {
@@ -390,6 +505,137 @@ pub export fn nurl_argv_get(i: c_longlong) ?[*:0]u8 {
 
 pub export fn nurl_exit(code: c_longlong) noreturn {
     std.process.exit(@intCast(code));
+}
+
+pub export fn nurl_print_int(value: c_longlong) void {
+    var buf: [32]u8 = undefined;
+    const out = std.fmt.bufPrint(&buf, "{d}", .{value}) catch return;
+    const file = stdoutFile();
+    _ = c.fwrite(out.ptr, 1, out.len, file);
+    _ = fputc('\n', file);
+}
+
+pub export fn nurl_print_str(text: ?[*:0]const u8) void {
+    const file = stdoutFile();
+    _ = fputs(text orelse "", file);
+    _ = fputc('\n', file);
+}
+
+pub export fn nurl_print_bool(value: c_int) void {
+    const file = stdoutFile();
+    _ = fputs(if (value != 0) "true" else "false", file);
+    _ = fputc('\n', file);
+}
+
+pub export fn nurl_read_int() c_longlong {
+    var value: c_longlong = 0;
+    if (scanf("%lld", &value) != 1) return 0;
+    return value;
+}
+
+pub export fn nurl_read_line() ?[*:0]u8 {
+    var cap: usize = 128;
+    var raw = c.malloc(cap) orelse return dupSliceZ("");
+    var buf: [*]u8 = @ptrCast(raw);
+    var len: usize = 0;
+    var got_any = false;
+    const file = stdinFile();
+    while (true) {
+        const ch = fgetc(file);
+        if (ch == c_eof) break;
+        got_any = true;
+        if (ch == '\n') break;
+        if (len + 2 > cap) {
+            cap *= 2;
+            raw = c.realloc(raw, cap) orelse {
+                c.free(buf);
+                return dupSliceZ("");
+            };
+            buf = @ptrCast(raw);
+        }
+        buf[len] = @intCast(ch);
+        len += 1;
+    }
+    if (!got_any and feof(file) != 0) {
+        g_stdin_eof_flag = true;
+        c.free(buf);
+        return dupSliceZ("");
+    }
+    buf[len] = 0;
+    return @ptrCast(buf);
+}
+
+pub export fn nurl_stdin_eof() c_longlong {
+    return if (g_stdin_eof_flag) 1 else 0;
+}
+
+pub export fn nurl_flush_stdout() void {
+    _ = fflush(stdoutFile());
+}
+
+pub export fn nurl_flush_stderr() void {
+    _ = fflush(stderrFile());
+}
+
+pub export fn nurl_read_n_bytes(n: c_longlong) ?[*:0]u8 {
+    g_last_bytes_len = 0;
+    if (n <= 0) return dupSliceZ("");
+    const size: usize = @intCast(n);
+    const raw = c.malloc(size + 1) orelse return dupSliceZ("");
+    const buf: [*]u8 = @ptrCast(raw);
+    const file = stdinFile();
+    const got = c.fread(buf, 1, size, file);
+    if (got == 0 and feof(file) != 0) g_stdin_eof_flag = true;
+    buf[got] = 0;
+    g_last_bytes_len = @intCast(got);
+    return @ptrCast(buf);
+}
+
+pub export fn nurl_print_buf_start() void {
+    outbufInit();
+    g_outbuf_mode = true;
+}
+
+pub export fn nurl_print_buf_stop() ?[*:0]u8 {
+    g_outbuf_mode = false;
+    return dupSliceZ(if (g_outbuf) |buf| std.mem.span(@as([*:0]u8, @ptrCast(buf))) else "");
+}
+
+pub export fn nurl_print_buf_reset() void {
+    outbufInit();
+    g_outbuf_len = 0;
+    if (g_outbuf) |buf| buf[0] = 0;
+}
+
+pub export fn nurl_print(text: ?[*:0]const u8) void {
+    const slice = std.mem.span(text orelse "");
+    if (g_outbuf_mode) {
+        outbufInit();
+        if (g_outbuf) |buf| {
+            if (g_outbuf_len + slice.len + 1 < outbuf_size) {
+                @memcpy(buf[g_outbuf_len .. g_outbuf_len + slice.len], slice);
+                g_outbuf_len += slice.len;
+                buf[g_outbuf_len] = 0;
+            }
+        }
+        return;
+    }
+    const file = stdoutFile();
+    _ = fputs(text orelse "", file);
+    _ = fflush(file);
+}
+
+pub export fn nurl_eprint(text: ?[*:0]const u8) void {
+    const file = stderrFile();
+    _ = fputs(text orelse "", file);
+    _ = fflush(file);
+}
+
+pub export fn nurl_eprintln(text: ?[*:0]const u8) void {
+    const file = stderrFile();
+    _ = fputs(text orelse "", file);
+    _ = fputc('\n', file);
+    _ = fflush(file);
 }
 
 pub export fn nurl_env_get(name: ?[*:0]const u8) ?[*:0]u8 {
@@ -986,6 +1232,75 @@ pub export fn nurl_map_free(handle: c_longlong) void {
     c.free(map);
 }
 
+pub export fn nurl_sym_new() c_longlong {
+    if (g_symtab_count >= max_symtabs) {
+        fatalRuntime("nurlc: too many symtabs\n");
+    }
+    const raw = c.calloc(1, @sizeOf(NurlSymTab)) orelse fatalRuntime("nurlc: too many symtabs\n");
+    const tab: *NurlSymTab = @ptrCast(@alignCast(raw));
+    tab.* = .{
+        .entries = null,
+        .count = 0,
+        .cap = 0,
+        .depth = 0,
+    };
+    const idx: c_int = g_symtab_count;
+    g_symtabs[@intCast(idx)] = tab;
+    g_symtab_count += 1;
+    return idx + 1;
+}
+
+pub export fn nurl_sym_def(handle: c_longlong, name: ?[*:0]const u8, ty: ?[*:0]const u8) void {
+    const tab = getSymTab(handle);
+    const sym_name = name orelse "";
+    const sym_ty = ty orelse "";
+    if (tab.count >= max_syms) {
+        fatalRuntime("nurlc: symbol table full\n");
+    }
+    ensureSymCap(tab, tab.count + 1);
+    const name_copy = dupZ(sym_name) orelse fatalRuntime("nurlc: symbol table full\n");
+    const ty_copy = dupZ(sym_ty) orelse {
+        c.free(name_copy);
+        fatalRuntime("nurlc: symbol table full\n");
+    };
+    tab.entries.?[tab.count] = .{
+        .depth = tab.depth,
+        .name = name_copy,
+        .ty = ty_copy,
+    };
+    tab.count += 1;
+}
+
+pub export fn nurl_sym_get(handle: c_longlong, name: ?[*:0]const u8) ?[*:0]u8 {
+    const tab = getSymTab(handle);
+    const query = std.mem.span(name orelse "");
+    var idx = tab.count;
+    while (idx > 0) {
+        idx -= 1;
+        const entry = tab.entries.?[idx];
+        if (std.mem.eql(u8, std.mem.span(entry.name), query)) {
+            return dupZ(entry.ty);
+        }
+    }
+    return dupSliceZ("");
+}
+
+pub export fn nurl_sym_push(handle: c_longlong) void {
+    getSymTab(handle).depth += 1;
+}
+
+pub export fn nurl_sym_pop(handle: c_longlong) void {
+    const tab = getSymTab(handle);
+    while (tab.count > 0) {
+        const entry = tab.entries.?[tab.count - 1];
+        if (entry.depth != tab.depth) break;
+        c.free(entry.name);
+        c.free(entry.ty);
+        tab.count -= 1;
+    }
+    if (tab.depth > 0) tab.depth -= 1;
+}
+
 pub export fn nurl_cg_new() c_longlong {
     if (g_cg_count >= max_cgs) {
         std.debug.print("nurlc: too many codegen handles\n", .{});
@@ -1223,6 +1538,154 @@ pub export fn nurl_csv_fast_float_range(ptr: ?[*]const u8, len: c_longlong) f64 
     return parseFloatRangeFast(raw[0..@intCast(len)]);
 }
 
+pub export fn nurl_csv_filter_float_gt_and_str_contains(
+    content: ?[*]const u8,
+    escape_buf: ?[*]const u8,
+    flat_cells: ?[*]const c_longlong,
+    row_starts: ?[*]c_longlong,
+    row_lens: ?[*]c_longlong,
+    n_rows: c_longlong,
+    col_f: c_longlong,
+    threshold: f64,
+    col_s: c_longlong,
+    needle: ?[*:0]const u8,
+    nlen: c_longlong,
+) c_longlong {
+    if (col_f < 0 or col_s < 0 or n_rows <= 0) return 0;
+    const raw = content orelse return 0;
+    const cells = flat_cells orelse return 0;
+    const starts = row_starts orelse return 0;
+    const lens = row_lens orelse return 0;
+    const needle_ptr = needle orelse return 0;
+    if (nlen <= 0) return 0;
+    const needle_slice = needle_ptr[0..@intCast(nlen)];
+
+    var w: c_longlong = 0;
+    var r: c_longlong = 0;
+    while (r < n_rows) : (r += 1) {
+        const row_first = starts[@intCast(r)];
+        const row_count = lens[@intCast(r)];
+        if (col_f >= row_count or col_s >= row_count) continue;
+
+        const float_idx = row_first + col_f;
+        const float_off = cells[@intCast(float_idx * 2)];
+        const float_len = cells[@intCast(float_idx * 2 + 1)];
+        if (float_len <= 0) continue;
+        const float_ptr = csvCellPtr(raw, escape_buf, float_off) orelse continue;
+        if (!(parseFloatRangeFast(float_ptr[0..@intCast(float_len)]) > threshold)) continue;
+
+        const str_idx = row_first + col_s;
+        const str_off = cells[@intCast(str_idx * 2)];
+        const str_len = cells[@intCast(str_idx * 2 + 1)];
+        if (str_len < nlen) continue;
+        const str_ptr = csvCellPtr(raw, escape_buf, str_off) orelse continue;
+        if (!csvCellContains(str_ptr, str_len, needle_slice)) continue;
+
+        starts[@intCast(w)] = row_first;
+        lens[@intCast(w)] = row_count;
+        w += 1;
+    }
+    return w;
+}
+
+pub export fn nurl_csv_filter_typed_float_gt(
+    typed_floats: ?[*]const f64,
+    row_starts: ?[*]c_longlong,
+    row_lens: ?[*]c_longlong,
+    n_rows: c_longlong,
+    threshold: f64,
+) c_longlong {
+    if (n_rows <= 0) return 0;
+    const typed = typed_floats orelse return 0;
+    const starts = row_starts orelse return 0;
+    const lens = row_lens orelse return 0;
+
+    var w: c_longlong = 0;
+    var r: c_longlong = 0;
+    while (r < n_rows) : (r += 1) {
+        if (typed[@intCast(r)] > threshold) {
+            starts[@intCast(w)] = starts[@intCast(r)];
+            lens[@intCast(w)] = lens[@intCast(r)];
+            w += 1;
+        }
+    }
+    return w;
+}
+
+pub export fn nurl_csv_filter_float_gt(
+    content: ?[*]const u8,
+    escape_buf: ?[*]const u8,
+    flat_cells: ?[*]const c_longlong,
+    row_starts: ?[*]c_longlong,
+    row_lens: ?[*]c_longlong,
+    n_rows: c_longlong,
+    col: c_longlong,
+    threshold: f64,
+) c_longlong {
+    if (col < 0 or n_rows <= 0) return 0;
+    const raw = content orelse return 0;
+    const cells = flat_cells orelse return 0;
+    const starts = row_starts orelse return 0;
+    const lens = row_lens orelse return 0;
+
+    var w: c_longlong = 0;
+    var r: c_longlong = 0;
+    while (r < n_rows) : (r += 1) {
+        const row_first = starts[@intCast(r)];
+        const row_count = lens[@intCast(r)];
+        if (col >= row_count) continue;
+        const cell_idx = row_first + col;
+        const off = cells[@intCast(cell_idx * 2)];
+        const len = cells[@intCast(cell_idx * 2 + 1)];
+        if (len <= 0) continue;
+        const src = csvCellPtr(raw, escape_buf, off) orelse continue;
+        if (!(parseFloatRangeFast(src[0..@intCast(len)]) > threshold)) continue;
+        starts[@intCast(w)] = row_first;
+        lens[@intCast(w)] = row_count;
+        w += 1;
+    }
+    return w;
+}
+
+pub export fn nurl_csv_filter_str_contains(
+    content: ?[*]const u8,
+    escape_buf: ?[*]const u8,
+    flat_cells: ?[*]const c_longlong,
+    row_starts: ?[*]c_longlong,
+    row_lens: ?[*]c_longlong,
+    n_rows: c_longlong,
+    col: c_longlong,
+    needle: ?[*:0]const u8,
+    nlen: c_longlong,
+) c_longlong {
+    if (col < 0 or n_rows <= 0) return 0;
+    const raw = content orelse return 0;
+    const cells = flat_cells orelse return 0;
+    const starts = row_starts orelse return 0;
+    const lens = row_lens orelse return 0;
+    const needle_ptr = needle orelse return n_rows;
+    if (nlen <= 0) return n_rows;
+    const needle_slice = needle_ptr[0..@intCast(nlen)];
+
+    var w: c_longlong = 0;
+    var r: c_longlong = 0;
+    while (r < n_rows) : (r += 1) {
+        const row_first = starts[@intCast(r)];
+        const row_count = lens[@intCast(r)];
+        if (col >= row_count) continue;
+        const cell_idx = row_first + col;
+        const off = cells[@intCast(cell_idx * 2)];
+        const len = cells[@intCast(cell_idx * 2 + 1)];
+        if (len < nlen) continue;
+        const src = csvCellPtr(raw, escape_buf, off) orelse continue;
+        if (!csvCellContains(src, len, needle_slice)) continue;
+        starts[@intCast(w)] = row_first;
+        lens[@intCast(w)] = row_count;
+        w += 1;
+    }
+    return w;
+}
+
 pub export fn nurl_has_byte(ptr: ?[*]const u8, len: c_longlong, target: c_longlong) c_longlong {
     const raw = ptr orelse return 0;
     if (len <= 0) return 0;
@@ -1254,6 +1717,121 @@ pub export fn nurl_csv_scan_cell(ptr: ?[*]const u8, len: c_longlong, delim: c_lo
         if (ch == d or ch == '\n' or ch == '\r') return @intCast(idx);
     }
     return len;
+}
+
+pub export fn nurl_csv_n_rows_out() c_longlong {
+    return g_csv_n_rows;
+}
+
+pub export fn nurl_csv_n_header_out() c_longlong {
+    return g_csv_n_header;
+}
+
+pub export fn nurl_csv_n_cells_out() c_longlong {
+    return g_csv_n_cells;
+}
+
+pub export fn nurl_csv_parse_arena(
+    content: ?[*]const u8,
+    clen: c_longlong,
+    delim: c_longlong,
+    flat_cells: ?[*]c_longlong,
+    flat_cap: c_longlong,
+    row_starts: ?[*]c_longlong,
+    row_lens: ?[*]c_longlong,
+    row_cap: c_longlong,
+    header_cells: ?[*]c_longlong,
+    header_cap: c_longlong,
+) c_longlong {
+    g_csv_n_rows = 0;
+    g_csv_n_header = 0;
+    g_csv_n_cells = 0;
+
+    const raw = content orelse return 0;
+    if (clen <= 0) return 0;
+    if (flat_cap < 0 or row_cap < 0 or header_cap < 0) return -1;
+
+    const body_pairs = flat_cells orelse return -1;
+    const body_rows = row_starts orelse return -1;
+    const body_lens = row_lens orelse return -1;
+    const headers = header_cells orelse return -1;
+
+    const d = asciiByte(delim) orelse return -1;
+    const slice = raw[0..@intCast(clen)];
+
+    var pos: usize = 0;
+    var first_row = true;
+    var n_cells: c_longlong = 0;
+    var n_rows: c_longlong = 0;
+    var n_hdr: c_longlong = 0;
+
+    while (pos < slice.len) {
+        const row_first_cell: c_longlong = @divTrunc(n_cells, 2);
+        var row_n_cells: c_longlong = 0;
+        var row_done = false;
+
+        while (!row_done) {
+            const field_start = pos;
+            while (pos < slice.len) : (pos += 1) {
+                const ch = slice[pos];
+                if (ch == d or ch == '\n' or ch == '\r') break;
+            }
+
+            const cell_len: c_longlong = @intCast(pos - field_start);
+            if (first_row) {
+                if (n_hdr + 2 > header_cap) return -1;
+                headers[@intCast(n_hdr)] = @intCast(field_start);
+                headers[@intCast(n_hdr + 1)] = cell_len;
+                n_hdr += 2;
+            } else {
+                if (n_cells + 2 > flat_cap) return -1;
+                body_pairs[@intCast(n_cells)] = @intCast(field_start);
+                body_pairs[@intCast(n_cells + 1)] = cell_len;
+                n_cells += 2;
+            }
+            row_n_cells += 1;
+
+            if (pos >= slice.len) {
+                row_done = true;
+                break;
+            }
+
+            const ch = slice[pos];
+            if (ch == d) {
+                pos += 1;
+                continue;
+            }
+
+            pos += 1;
+            if (ch == '\r' and pos < slice.len and slice[pos] == '\n') pos += 1;
+            row_done = true;
+        }
+
+        const last_len = if (first_row)
+            headers[@intCast(n_hdr - 1)]
+        else
+            body_pairs[@intCast(n_cells - 1)];
+        const phantom = row_n_cells == 1 and last_len == 0 and pos >= slice.len;
+        if (phantom) {
+            if (first_row) n_hdr -= 2 else n_cells -= 2;
+            continue;
+        }
+
+        if (first_row) {
+            first_row = false;
+            continue;
+        }
+
+        if (n_rows >= row_cap) return -1;
+        body_rows[@intCast(n_rows)] = row_first_cell;
+        body_lens[@intCast(n_rows)] = row_n_cells;
+        n_rows += 1;
+    }
+
+    g_csv_n_rows = n_rows;
+    g_csv_n_header = @divTrunc(n_hdr, 2);
+    g_csv_n_cells = @divTrunc(n_cells, 2);
+    return 0;
 }
 
 pub export fn nurl_csv_row_n_cells_out() c_longlong {
