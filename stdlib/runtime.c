@@ -5659,6 +5659,7 @@ static int nurl__alpn_select_cb(SSL *ssl, const unsigned char **out,
 long long nurl_tcp_listen(const char *host, long long port, long long backlog);
 #endif
 
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 long long nurl_tcp_listen_tls(const char *host, long long port,
                               long long backlog,
                               const char *cert_path, const char *key_path) {
@@ -5709,6 +5710,7 @@ long long nurl_tcp_listen_tls(const char *host, long long port,
     return lh;
 #endif
 }
+#endif
 
 /* TLS listener WITH ALPN protocol negotiation. Functionally identical
  * to nurl_tcp_listen_tls except for the trailing `alpn_protocols`
@@ -5717,6 +5719,7 @@ long long nurl_tcp_listen_tls(const char *host, long long port,
  * + ALPN callback; clients that don't offer any of the listed
  * protocols still complete the handshake (SSL_TLSEXT_ERR_NOACK) —
  * server should treat them as the default (HTTP/1.1). */
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 long long nurl_tcp_listen_tls_alpn(const char *host, long long port,
                                    long long backlog,
                                    const char *cert_path, const char *key_path,
@@ -5746,6 +5749,7 @@ long long nurl_tcp_listen_tls_alpn(const char *host, long long port,
     return lh;
 #endif
 }
+#endif
 
 /* Build a fresh SSL_CTX configured with the given cert + private key.
  * Caller owns the returned ctx (SSL_CTX_free). Returns NULL + sets
@@ -5952,6 +5956,7 @@ long long nurl_tcp_tls_require_client_cert(long long handle,
  * off a completed TLS conn. Returns a heap-owned NUL-terminated
  * string. Empty when no peer cert was presented or the conn is
  * non-TLS. Caller frees via nurl_free. */
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 const char *nurl_tcp_peer_cert_subject(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return strdup("");
@@ -5975,11 +5980,13 @@ const char *nurl_tcp_peer_cert_subject(long long handle) {
     return strdup("");
 #endif
 }
+#endif
 
 /* Read the negotiated ALPN protocol from a TLS conn handle. Returns a
  * heap-owned NUL-terminated string ("h2" / "http/1.1" / ...); empty
  * when ALPN was not negotiated or the handle is non-TLS. Caller frees
  * via nurl_free. */
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 const char *nurl_tcp_alpn_selected(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return strdup("");
@@ -5998,6 +6005,7 @@ const char *nurl_tcp_alpn_selected(long long handle) {
     return strdup("");
 #endif
 }
+#endif
 
 #if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 long long nurl_tcp_read(long long handle, const char *buf, long long n) {

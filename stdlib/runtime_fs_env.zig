@@ -600,6 +600,9 @@ const nurl_net_err_write: c_longlong = 5;
 const nurl_net_err_closed: c_longlong = 6;
 const nurl_net_err_timeout: c_longlong = 7;
 const nurl_net_err_other: c_longlong = 8;
+const nurl_net_err_tls_ctx_init: c_longlong = 9;
+const nurl_net_err_tls_cert_load: c_longlong = 10;
+const nurl_net_err_tls_key_load: c_longlong = 11;
 const nurl_net_err_tls_handshake: c_longlong = 12;
 const nurl_invalid_sock: c.fd_t = -1;
 const nurl_gzip_err_unsupported: c_int = -98;
@@ -1252,6 +1255,100 @@ fn netFormatPeer(sa: *const net.sockaddr_in) ?[*:0]u8 {
     var peer_buf: [32]u8 = undefined;
     const peer = std.fmt.bufPrint(&peer_buf, "{s}:{d}", .{ ip, net.ntohs(sa.sin_port) }) catch return dupSliceZ("");
     return dupSliceZ(peer);
+}
+
+fn alpnPack(spec: ?[*:0]const u8, out_len: *usize) ?[*]u8 {
+    out_len.* = 0;
+    const raw = spec orelse return null;
+    const text = std.mem.span(raw);
+    if (text.len == 0) return null;
+
+    const alloc = c.malloc(text.len + 1) orelse return null;
+    const buf: [*]u8 = @ptrCast(alloc);
+    var written: usize = 0;
+
+    var i: usize = 0;
+    while (i < text.len) {
+        while (i < text.len and text[i] == ' ') : (i += 1) {}
+        if (i >= text.len) break;
+        const start = i;
+        while (i < text.len and text[i] != ' ') : (i += 1) {}
+        const tok = text[start..i];
+        if (tok.len == 0 or tok.len > 255) {
+            c.free(alloc);
+            return null;
+        }
+        buf[written] = @intCast(tok.len);
+        written += 1;
+        @memcpy(buf[written .. written + tok.len], tok);
+        written += tok.len;
+    }
+
+    if (written == 0) {
+        c.free(alloc);
+        return null;
+    }
+    out_len.* = written;
+    return buf;
+}
+
+fn tlsBuildCtx(tcp: ?*NurlTcp, cert_path: ?[*:0]const u8, key_path: ?[*:0]const u8) ?*openssl.SSL_CTX {
+    if (!comptime have_posix_openssl) return null;
+    const cert = cert_path orelse {
+        if (tcp) |value| value.err_kind = nurl_net_err_tls_cert_load;
+        return null;
+    };
+    const key = key_path orelse {
+        if (tcp) |value| value.err_kind = nurl_net_err_tls_key_load;
+        return null;
+    };
+
+    const ctx = openssl.SSL_CTX_new(openssl.TLS_server_method()) orelse {
+        if (tcp) |value| value.err_kind = nurl_net_err_tls_ctx_init;
+        return null;
+    };
+    _ = openssl.SSL_CTX_set_min_proto_version(ctx, openssl.TLS1_2_VERSION);
+    if (openssl.SSL_CTX_use_certificate_chain_file(ctx, cert) != 1) {
+        openssl.SSL_CTX_free(ctx);
+        if (tcp) |value| value.err_kind = nurl_net_err_tls_cert_load;
+        return null;
+    }
+    if (openssl.SSL_CTX_use_PrivateKey_file(ctx, key, openssl.SSL_FILETYPE_PEM) != 1) {
+        openssl.SSL_CTX_free(ctx);
+        if (tcp) |value| value.err_kind = nurl_net_err_tls_key_load;
+        return null;
+    }
+    if (openssl.SSL_CTX_check_private_key(ctx) != 1) {
+        openssl.SSL_CTX_free(ctx);
+        if (tcp) |value| value.err_kind = nurl_net_err_tls_key_load;
+        return null;
+    }
+    return ctx;
+}
+
+fn nurlTcpAlpnSelectCb(
+    ssl: ?*openssl.SSL,
+    out: [*c]?*const u8,
+    outlen: [*c]u8,
+    in: [*c]const u8,
+    inlen: c_uint,
+    arg: ?*anyopaque,
+) callconv(.c) c_int {
+    _ = ssl;
+    const tcp: *NurlTcp = @ptrCast(@alignCast(arg orelse return openssl.SSL_TLSEXT_ERR_NOACK));
+    const wire = tcp.alpn_wire orelse return openssl.SSL_TLSEXT_ERR_NOACK;
+    if (tcp.alpn_wire_len == 0) return openssl.SSL_TLSEXT_ERR_NOACK;
+
+    const rv = openssl.SSL_select_next_proto(
+        @ptrCast(out),
+        @ptrCast(outlen),
+        wire,
+        @intCast(tcp.alpn_wire_len),
+        in,
+        inlen,
+    );
+    if (rv == openssl.OPENSSL_NPN_NEGOTIATED) return openssl.SSL_TLSEXT_ERR_OK;
+    return openssl.SSL_TLSEXT_ERR_NOACK;
 }
 
 fn sqliteDbHandle(handle: c_longlong) ?*NurlSqliteDb {
@@ -3453,6 +3550,59 @@ fn nurl_tcp_listen_impl(host: ?[*:0]const u8, port: c_longlong, backlog: c_longl
     return @intCast(@intFromPtr(tcp));
 }
 
+fn nurl_tcp_listen_tls_impl(
+    host: ?[*:0]const u8,
+    port: c_longlong,
+    backlog: c_longlong,
+    cert_path: ?[*:0]const u8,
+    key_path: ?[*:0]const u8,
+) callconv(.c) c_longlong {
+    if (!have_posix_openssl) {
+        const tcp = tcpAllocHandle(0) orelse return 0;
+        tcp.err_kind = nurl_net_err_tls_ctx_init;
+        return @intCast(@intFromPtr(tcp));
+    }
+
+    const handle = nurl_tcp_listen_impl(host, port, backlog);
+    const tcp = tcpHandle(handle) orelse return handle;
+    if (tcp.err_kind != nurl_net_err_ok) return handle;
+
+    const ctx = tlsBuildCtx(tcp, cert_path, key_path) orelse {
+        _ = posix.close(tcp.fd);
+        tcp.fd = nurl_invalid_sock;
+        return handle;
+    };
+    tcp.ssl_ctx = ctx;
+    return handle;
+}
+
+fn nurl_tcp_listen_tls_alpn_impl(
+    host: ?[*:0]const u8,
+    port: c_longlong,
+    backlog: c_longlong,
+    cert_path: ?[*:0]const u8,
+    key_path: ?[*:0]const u8,
+    alpn_protocols: ?[*:0]const u8,
+) callconv(.c) c_longlong {
+    const handle = nurl_tcp_listen_tls_impl(host, port, backlog, cert_path, key_path);
+    if (!have_posix_openssl) return handle;
+
+    const tcp = tcpHandle(handle) orelse return handle;
+    if (tcp.err_kind != nurl_net_err_ok or tcp.ssl_ctx == null) return handle;
+
+    var wire_len: usize = 0;
+    const wire = alpnPack(alpn_protocols, &wire_len) orelse return handle;
+    if (wire_len == 0) {
+        c.free(wire);
+        return handle;
+    }
+
+    tcp.alpn_wire = wire;
+    tcp.alpn_wire_len = wire_len;
+    openssl.SSL_CTX_set_alpn_select_cb(tcp.ssl_ctx.?, nurlTcpAlpnSelectCb, tcp);
+    return handle;
+}
+
 fn nurl_tcp_accept_impl(listener_handle: c_longlong) callconv(.c) c_longlong {
     const listener = tcpHandle(listener_handle);
     const conn = tcpAllocHandle(1) orelse return 0;
@@ -3501,6 +3651,32 @@ fn nurl_tcp_accept_impl(listener_handle: c_longlong) callconv(.c) c_longlong {
     }
 
     return @intCast(@intFromPtr(conn));
+}
+
+fn nurl_tcp_peer_cert_subject_impl(handle: c_longlong) callconv(.c) ?[*:0]const u8 {
+    const tcp = tcpHandle(handle) orelse return dupSliceZ("") orelse "";
+    if (!have_posix_openssl) return dupSliceZ("") orelse "";
+    const ssl = tcp.ssl orelse return dupSliceZ("") orelse "";
+    const cert = openssl.SSL_get_peer_certificate(ssl) orelse return dupSliceZ("") orelse "";
+    defer openssl.X509_free(cert);
+
+    const subject = openssl.X509_get_subject_name(cert) orelse return dupSliceZ("") orelse "";
+    const line = openssl.X509_NAME_oneline(subject, null, 0);
+    if (line == null) return dupSliceZ("") orelse "";
+    defer openssl.CRYPTO_free(line, "runtime_fs_env.zig", 0);
+    return dupZ(line) orelse dupSliceZ("") orelse "";
+}
+
+fn nurl_tcp_alpn_selected_impl(handle: c_longlong) callconv(.c) ?[*:0]const u8 {
+    const tcp = tcpHandle(handle) orelse return dupSliceZ("") orelse "";
+    if (!have_posix_openssl) return dupSliceZ("") orelse "";
+    const ssl = tcp.ssl orelse return dupSliceZ("") orelse "";
+
+    var data: [*c]const u8 = null;
+    var len: c_uint = 0;
+    openssl.SSL_get0_alpn_selected(ssl, @ptrCast(&data), &len);
+    if (data == null or len == 0) return dupSliceZ("") orelse "";
+    return dupSliceZ(data[0..len]) orelse dupSliceZ("") orelse "";
 }
 
 fn nurl_tcp_read_impl(handle: c_longlong, buf: ?[*:0]const u8, n: c_longlong) callconv(.c) c_longlong {
@@ -3690,7 +3866,11 @@ fn nurl_signal_trigger_shutdown_impl() callconv(.c) void {
 comptime {
     if (builtin.os.tag != .windows and builtin.os.tag != .wasi) {
         @export(&nurl_tcp_listen_impl, .{ .name = "nurl_tcp_listen" });
+        @export(&nurl_tcp_listen_tls_impl, .{ .name = "nurl_tcp_listen_tls" });
+        @export(&nurl_tcp_listen_tls_alpn_impl, .{ .name = "nurl_tcp_listen_tls_alpn" });
         @export(&nurl_tcp_accept_impl, .{ .name = "nurl_tcp_accept" });
+        @export(&nurl_tcp_peer_cert_subject_impl, .{ .name = "nurl_tcp_peer_cert_subject" });
+        @export(&nurl_tcp_alpn_selected_impl, .{ .name = "nurl_tcp_alpn_selected" });
         @export(&nurl_tcp_read_impl, .{ .name = "nurl_tcp_read" });
         @export(&nurl_tcp_write_impl, .{ .name = "nurl_tcp_write" });
         @export(&nurl_tcp_close_impl, .{ .name = "nurl_tcp_close" });
