@@ -4345,6 +4345,7 @@ void nurl_proc_free(long long h) {
  * Tag values match `ProcessErr` (NURL_PROC_ERR_* constants above).
  */
 
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 typedef struct NurlProcChild {
     long long  err_kind;       /* 0 / NURL_PROC_ERR_* set at spawn */
     long long  last_io_err;    /* errno snapshot from last failure */
@@ -4747,6 +4748,7 @@ void nurl_proc_spawn_free(long long h) {
     free(c->line_buf);
     free(c);
 }
+#endif
 
 /* ── §17  Crypto (SHA-256, HMAC-SHA-256, secure random) ───────── */
 /*
