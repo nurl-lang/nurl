@@ -71,9 +71,12 @@ Verified end to end against a live broker — `example/mqtt_pubsub.nu`.
 - [ ] **Reconnect polish** — automatic drop detection + backoff, and
       remembering subscriptions to re-issue them (today the caller
       re-subscribes).
-- [ ] **Packet-id allocator** — rotating 1..65535 ids so multiple QoS
-      1/2 messages can be in flight (today: fixed id 1, correct only for
-      strictly synchronous use).
+- [x] **Packet-id allocator** — `MqttClient.next_pid` rotates 1..65535;
+      `__mqtt_next_pid` hands a fresh id to every QoS 1/2 PUBLISH,
+      SUBSCRIBE and UNSUBSCRIBE. The await paths verify the ack carries
+      the matching id (PUBACK / PUBREC / PUBCOMP / SUBACK / UNSUBACK).
+      Publishing is still synchronous — one in flight — so this is
+      currently hygiene + the groundwork for pipelined publishing.
 - [ ] **Background receive** — a reader thread (`std/thread.nu`) so
       inbound PUBLISH is handled — and keep-alive pings emitted —
       while the app does other work.

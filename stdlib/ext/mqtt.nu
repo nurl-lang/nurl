@@ -52,8 +52,9 @@
 // deadline has passed; `mqtt_reconnect` re-establishes a dropped
 // connection. Plain TCP (`tcp_connect`) is also exported.
 //
-// Not yet implemented: multi-message packet-id allocation and a
-// background receive thread — see MQTT_PLAN.md.
+// Not yet implemented: a background receive thread. (The packet-id
+// allocator rotates 1..65535, but publishing is still synchronous —
+// one packet in flight.) See MQTT_PLAN.md.
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/bytes.nu`
@@ -164,12 +165,14 @@ $ `stdlib/core/pair.nu`
 // consumed — leftover past a packet boundary; the framed reader drains
 // from its front. `ping_deadline` is the now_ms timestamp by which the
 // next PINGREQ must go out to satisfy the broker's keep-alive;
-// `keepalive_ms` 0 disables keep-alive.
+// `keepalive_ms` 0 disables keep-alive. `next_pid` is the rotating
+// 1..65535 packet-identifier allocator (0 is reserved by the spec).
 : MqttClient {
     TcpConn   conn
     ( Vec u ) rxbuf
     i         ping_deadline
     i         keepalive_ms
+    i         next_pid
 }
 
 // An inbound application message. `props` holds the MQTT 5 user
@@ -201,6 +204,18 @@ $ `stdlib/core/pair.nu`
 // literally and call mqtt_connect_cfg.
 @ mqtt_config s client_id s username s password → MqttConfig {
     ^ @ MqttConfig { client_id username password 60 T `` `` 0 0 }
+}
+
+// Allocate the next packet identifier — returns the current value and
+// advances the rotating 1..65535 counter (0 is reserved). One in flight
+// at a time today (the calls are synchronous), but the wire carries a
+// fresh id per QoS 1/2 publish, SUBSCRIBE and UNSUBSCRIBE.
+@ __mqtt_next_pid MqttClient cl → i {
+    : i pid . cl next_pid
+    : ~ i nxt + pid 1
+    ? > nxt 65535 { = nxt 1 } {}
+    = . cl next_pid nxt
+    ^ pid
 }
 
 // ── low-level codec ──────────────────────────────────────────────────
@@ -445,7 +460,7 @@ $ `stdlib/core/pair.nu`
         T conn → {
             ( tcp_set_timeout conn 15000 )
             : i kams * . cfg keepalive 1000
-            : MqttClient cl @ MqttClient { conn ( vec_new [u] ) + ( now_ms ) kams kams }
+            : MqttClient cl @ MqttClient { conn ( vec_new [u] ) + ( now_ms ) kams kams 1 }
 
             : ( Vec u ) pkt ( vec_with_cap [u] 96 )
             ( __mqtt_encode_connect pkt cfg )
@@ -495,8 +510,9 @@ $ `stdlib/core/pair.nu`
 
 // ── publish ──────────────────────────────────────────────────────────
 
-// Block until the broker's PUBACK (QoS 1). Non-PUBACK packets skipped.
-@ __mqtt_await_puback MqttClient cl → !v MqttErr {
+// Block until the broker's PUBACK for packet id `pid` (QoS 1). Packets
+// of another type — or a PUBACK for a different id — are skipped.
+@ __mqtt_await_puback MqttClient cl i pid → !v MqttErr {
     : ~ i guard 0
     ~ < guard 50 {
         = guard + guard 1
@@ -504,8 +520,9 @@ $ `stdlib/core/pair.nu`
         ?? rp {
             T ack → {
                 : i pt & >> ( __mqtt_byte ack 0 ) 4 15
+                : i apid + * ( __mqtt_byte ack 2 ) 256 ( __mqtt_byte ack 3 )
                 ( vec_free [u] ack )
-                ? == pt 4 { ^ @ !v MqttErr { T 0 } } {}
+                ? & == pt 4 == apid pid { ^ @ !v MqttErr { T 0 } } {}
             }
             F e → { ^ @ !v MqttErr { F e } }
         }
@@ -513,8 +530,9 @@ $ `stdlib/core/pair.nu`
     ^ @ !v MqttErr { F # MqttErr MqttProtocol }
 }
 
-// Finish a QoS 2 publish: await PUBREC, send PUBREL, await PUBCOMP.
-@ __mqtt_await_qos2 MqttClient cl → !v MqttErr {
+// Finish a QoS 2 publish for packet id `pid`: await PUBREC, send
+// PUBREL (carrying the same id), await PUBCOMP.
+@ __mqtt_await_qos2 MqttClient cl i pid → !v MqttErr {
     : ~ i g1 0
     : ~ b got_rec F
     ~ & ! got_rec < g1 50 {
@@ -523,15 +541,16 @@ $ `stdlib/core/pair.nu`
         ?? rp {
             T p → {
                 : i pt & >> ( __mqtt_byte p 0 ) 4 15
+                : i rpid + * ( __mqtt_byte p 2 ) 256 ( __mqtt_byte p 3 )
                 ( vec_free [u] p )
-                ? == pt 5 { = got_rec T } {}
+                ? & == pt 5 == rpid pid { = got_rec T } {}
             }
             F e → { ^ @ !v MqttErr { F e } }
         }
     }
     ? ! got_rec { ^ @ !v MqttErr { F # MqttErr MqttProtocol } } {}
 
-    ( __mqtt_send_ack2 cl 98 1 )
+    ( __mqtt_send_ack2 cl 98 pid )
     : ~ i g2 0
     ~ < g2 50 {
         = g2 + g2 1
@@ -539,8 +558,9 @@ $ `stdlib/core/pair.nu`
         ?? rp {
             T p → {
                 : i pt & >> ( __mqtt_byte p 0 ) 4 15
+                : i cpid + * ( __mqtt_byte p 2 ) 256 ( __mqtt_byte p 3 )
                 ( vec_free [u] p )
-                ? == pt 7 { ^ @ !v MqttErr { T 0 } } {}
+                ? & == pt 7 == cpid pid { ^ @ !v MqttErr { T 0 } } {}
             }
             F e → { ^ @ !v MqttErr { F e } }
         }
@@ -556,10 +576,12 @@ $ `stdlib/core/pair.nu`
     ? == qos 1 { = b0 | b0 2 } {}
     ? == qos 2 { = b0 | b0 4 } {}
     ? retain   { = b0 | b0 1 } {}
+    : ~ i pid 0
+    ? > qos 0 { = pid ( __mqtt_next_pid cl ) } {}
 
     : ( Vec u ) vh ( vec_with_cap [u] 40 )
     ( __mqtt_put_str vh topic )
-    ? > qos 0 { ( bytes_push_u16_be vh 1 ) } {}
+    ? > qos 0 { ( bytes_push_u16_be vh pid ) } {}
     // PUBLISH property block — one User Property (0x26) per uprops entry
     : ( Vec u ) props ( vec_new [u] )
     : i np ( vec_len [( Pair String String )] uprops )
@@ -588,8 +610,8 @@ $ `stdlib/core/pair.nu`
     ( vec_free [u] pkt )
     ?? w { T → {} F we → { ^ @ !v MqttErr { F ( __mqtt_of_net we ) } } }
 
-    ? == qos 1 { ^ ( __mqtt_await_puback cl ) } {}
-    ? == qos 2 { ^ ( __mqtt_await_qos2 cl ) } {}
+    ? == qos 1 { ^ ( __mqtt_await_puback cl pid ) } {}
+    ? == qos 2 { ^ ( __mqtt_await_qos2 cl pid ) } {}
     ^ @ !v MqttErr { T 0 }
 }
 
@@ -626,8 +648,9 @@ $ `stdlib/core/pair.nu`
 // check the SUBACK. The subscription-options byte's low 2 bits are the
 // maximum QoS the broker may deliver on this filter.
 @ mqtt_subscribe_qos MqttClient cl s topic i qos → !v MqttErr {
+    : i pid ( __mqtt_next_pid cl )
     : ( Vec u ) vh ( vec_with_cap [u] 8 )
-    ( bytes_push_u16_be vh 1 )
+    ( bytes_push_u16_be vh pid )
     ( vec_push [u] vh # u 0 )
 
     : ( Vec u ) pl ( vec_with_cap [u] 32 )
@@ -652,11 +675,12 @@ $ `stdlib/core/pair.nu`
         T resp → {
             : i b0 ( __mqtt_byte resp 0 )
             : i n ( vec_len [u] resp )
+            : i spid + * ( __mqtt_byte resp 2 ) 256 ( __mqtt_byte resp 3 )
             : ~ i rc 255
             ? > n 0 { = rc ( __mqtt_byte resp - n 1 ) } {}
             ( vec_free [u] resp )
-            // SUBACK type is 9 (0x90); trailing reason code < 0x80 = granted.
-            ? & == & b0 240 144 < rc 128 {
+            // SUBACK type 9 (0x90), matching packet id, reason < 0x80 = granted.
+            ? & & == & b0 240 144 == spid pid < rc 128 {
                 ^ @ !v MqttErr { T 0 }
             } {
                 ^ @ !v MqttErr { F # MqttErr MqttSubFailed }
@@ -673,8 +697,9 @@ $ `stdlib/core/pair.nu`
 
 // UNSUBSCRIBE from one topic filter, then read + check the UNSUBACK.
 @ mqtt_unsubscribe MqttClient cl s topic → !v MqttErr {
+    : i pid ( __mqtt_next_pid cl )
     : ( Vec u ) vh ( vec_with_cap [u] 8 )
-    ( bytes_push_u16_be vh 1 )
+    ( bytes_push_u16_be vh pid )
     ( vec_push [u] vh # u 0 )
 
     : ( Vec u ) pl ( vec_with_cap [u] 32 )
@@ -697,9 +722,10 @@ $ `stdlib/core/pair.nu`
     ?? rd {
         T resp → {
             : i b0 ( __mqtt_byte resp 0 )
+            : i upid + * ( __mqtt_byte resp 2 ) 256 ( __mqtt_byte resp 3 )
             ( vec_free [u] resp )
-            // UNSUBACK type is 11 (0xB0).
-            ? == & b0 240 176 {
+            // UNSUBACK type is 11 (0xB0), matching packet id.
+            ? & == & b0 240 176 == upid pid {
                 ^ @ !v MqttErr { T 0 }
             } {
                 ^ @ !v MqttErr { F # MqttErr MqttSubFailed }
