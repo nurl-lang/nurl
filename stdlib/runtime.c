@@ -24,6 +24,6 @@
  *   - stdlib/runtime_sqlite_compress.zig
  *       sqlite bridge and gzip helpers
  *
- * This file remains as the canonical runtime section map and as the
- * C-side anchor object combined with the Zig slices into `runtime.o`.
+ * This file remains as the canonical runtime section map; `runtime.o`
+ * is now emitted directly from the Zig runtime slices.
  */

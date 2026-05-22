@@ -108,8 +108,8 @@ zig build bootstrap
 ```
 
 Requirements: Python 3.8+, clang/LLVM 14+, Zig 0.16. The runtime is now
-built through `nurl-build runtime-obj`, which combines `stdlib/runtime.c`
-with the Zig runtime slices under `stdlib/`.
+built through `nurl-build runtime-obj`, which emits `runtime.o` directly
+from the Zig runtime slices under `stdlib/`.
 
 Compile and run a single program:
 
