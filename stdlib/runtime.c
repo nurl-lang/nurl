@@ -1519,6 +1519,7 @@ void nurl_map_free(long long handle) {
  *  36  SIZEOF  37  SEMICOL 38  BACKSLASH
  */
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
 #define LTT_EOF      0
 #define LTT_IDENT    1
 #define LTT_INT      2
@@ -2091,6 +2092,7 @@ long long nurl_lex_peek4_type(long long h) {
     if (!lx->peek4_valid) { lx->peek4 = lex_next_tok(lx); lx->peek4.start_pos = g_last_tok_start; lx->peek4_valid = 1; }
     return (long long)lx->peek4.type;
 }
+#endif
 
 
 /* ── §6  Symbol table ──────────────────────────────────────────── */
