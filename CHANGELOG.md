@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **MsgPack serde.** `stdlib/serde.nu` gained `from_msgpack_i` /
+  `from_msgpack_f` / `from_msgpack_b` / `from_msgpack_string` —
+  decoding MessagePack bytes straight to a built-in value. There is no
+  `% MsgpackSerialize` trait: MessagePack and JSON share a data model,
+  so a value is encoded by composing the existing `to_json` with
+  `msgpack_encode`. The decoders return `!T MsgpackErr` (not
+  `ParseErr` — `MsgpackErr` is the richer error type and represents
+  every failure losslessly); `MsgpackErr` gained a
+  `MsgpackTypeMismatch` variant for a value that decoded cleanly but
+  is the wrong shape. Demo `examples/msgpack_demo.nu`; regression
+  `compiler/tests/msgpack_serde.nu`. With this the serde story covers
+  JSON, TOML and MessagePack — all reusing one `JsonSerialize` impl
+  per type.
+
 * **TOML serde.** `stdlib/serde.nu` gained its TOML side: a
   `% TomlSerialize [T] { @ to_toml T x → TomlValue }` trait with impls
   for `i` / `b` / `s` / `String`, and `from_toml_i` / `from_toml_b` /

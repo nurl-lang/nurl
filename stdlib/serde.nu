@@ -23,10 +23,16 @@
 //    `from_json_<T>` cover JSON; `% TomlSerialize` / `to_toml` /
 //    `from_toml_<T>` cover TOML, pairing with `stdlib/ext/toml.nu`'s
 //    parser (`toml_parse`) and serializer (`toml_stringify`). The
-//    `from_<fmt>_<T>` helpers all return `!T ParseErr` — one error
-//    type across formats, `BadFormat` for a variant mismatch. A
-//    MsgPack codec exists (`stdlib/ext/msgpack.nu`); its serde hook
-//    (`% MsgpackSerialize`) is the remaining piece.
+//    `from_json_<T>` / `from_toml_<T>` helpers return `!T ParseErr`.
+//
+//  * MsgPack needs no serialize trait of its own: MessagePack and JSON
+//    share a data model, so a value is encoded by composing the
+//    existing `to_json` with `msgpack_encode` (codec in
+//    `stdlib/ext/msgpack.nu`). Decoding gets the `from_msgpack_<T>`
+//    helpers below — they return `!T MsgpackErr` (not `ParseErr`):
+//    `MsgpackErr` is the richer of the two error types and can carry
+//    every msgpack-decode failure plus a `MsgpackTypeMismatch` for a
+//    decoded value of the wrong shape, all without loss.
 //
 //    TomlValue has no float variant (toml.nu's parser excludes
 //    floats), so TomlSerialize covers `i` / `b` / `s` / `String` —
@@ -56,6 +62,7 @@
 
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/toml.nu`
+$ `stdlib/ext/msgpack.nu`
 
 // ── Serialize trait — convert T → Json ─────────────────────────────
 //
@@ -199,5 +206,76 @@ $ `stdlib/ext/toml.nu`
     ^ ?? v {
         TStr s → @ !String ParseErr { T ( string_from ( string_data s ) ) }
         _ → @ !String ParseErr { F @ ParseErr { BadFormat } }
+    }
+}
+
+// ── MsgPack decode helpers — `from_msgpack_<T>` ────────────────────
+//
+// Decode MessagePack bytes straight to a built-in value. Each runs
+// `msgpack_decode` then extracts from the resulting `Json` directly —
+// they deliberately do NOT call the `from_json_<T>` helpers above,
+// because those return `ParseErr` and that would drag a second error
+// type into the result. The value is pulled out via `json_num_as_i` /
+// `json_num_as_f` (which return an Option, not a Result) or a direct
+// `JBool` / `JStr` match, so `MsgpackErr` stays the only error type.
+// `MsgpackTypeMismatch` means the bytes decoded fine but the value is
+// not the requested type. The decoded Json is freed before return.
+//
+// Encoding has no helper: compose `to_json` with `msgpack_encode`.
+
+@ from_msgpack_i ( Vec u ) bytes → !i MsgpackErr {
+    ?? ( msgpack_decode bytes ) {
+        T j → {
+            : ?i o ( json_num_as_i j )
+            ( json_free j )
+            ^ ?? o {
+                T n → @ !i MsgpackErr { T n }
+                F → @ !i MsgpackErr { F @ MsgpackErr { MsgpackTypeMismatch } }
+            }
+        }
+        F e → { ^ @ !i MsgpackErr { F e } }
+    }
+}
+
+@ from_msgpack_f ( Vec u ) bytes → !f MsgpackErr {
+    ?? ( msgpack_decode bytes ) {
+        T j → {
+            : ?f o ( json_num_as_f j )
+            ( json_free j )
+            ^ ?? o {
+                T x → @ !f MsgpackErr { T x }
+                F → @ !f MsgpackErr { F @ MsgpackErr { MsgpackTypeMismatch } }
+            }
+        }
+        F e → { ^ @ !f MsgpackErr { F e } }
+    }
+}
+
+@ from_msgpack_b ( Vec u ) bytes → !b MsgpackErr {
+    ?? ( msgpack_decode bytes ) {
+        T j → {
+            : b isb ( json_is_bool j )
+            : b val ( json_bool_val j )
+            ( json_free j )
+            ? isb { ^ @ !b MsgpackErr { T val } } {}
+            ^ @ !b MsgpackErr { F @ MsgpackErr { MsgpackTypeMismatch } }
+        }
+        F e → { ^ @ !b MsgpackErr { F e } }
+    }
+}
+
+// Returns a fresh owned `String` copied out of the decoded JStr.
+@ from_msgpack_string ( Vec u ) bytes → !String MsgpackErr {
+    ?? ( msgpack_decode bytes ) {
+        T j → {
+            ? ( json_is_str j ) {
+                : String s ( string_from ( json_str_data j ) )
+                ( json_free j )
+                ^ @ !String MsgpackErr { T s }
+            } {}
+            ( json_free j )
+            ^ @ !String MsgpackErr { F @ MsgpackErr { MsgpackTypeMismatch } }
+        }
+        F e → { ^ @ !String MsgpackErr { F e } }
     }
 }

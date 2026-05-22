@@ -53,6 +53,7 @@ $ `stdlib/std/bytes.nu`
     MsgpackBadType
     MsgpackUnsupported
     MsgpackDepth
+    MsgpackTypeMismatch
     MsgpackOther
 }
 
@@ -62,6 +63,7 @@ $ `stdlib/std/bytes.nu`
         MsgpackBadType → `invalid type byte`
         MsgpackUnsupported → `unsupported type (bin / ext / non-string map key)`
         MsgpackDepth → `nesting too deep`
+        MsgpackTypeMismatch → `decoded value is not the expected type`
         MsgpackOther → `malformed msgpack`
     }
 }
