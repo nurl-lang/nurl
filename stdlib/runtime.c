@@ -6755,6 +6755,8 @@ void nurl_panic(const char *msg) {
  * link time.
  */
 
+#ifndef NURL_RUNTIME_ZIG_FS_ENV
+
 #define NURL_SQLITE_ERR_OK            0
 #define NURL_SQLITE_ERR_ROW           100  /* sqlite_step: got a row */
 #define NURL_SQLITE_ERR_DONE          101  /* sqlite_step: no more rows */
@@ -7058,6 +7060,8 @@ long long nurl_sqlite_reset(long long handle) {
     return s->err_kind;
 #endif
 }
+
+#endif
 
 /* ── §22  Gzip wire format (libz stream API) ───────────────────────
  *
