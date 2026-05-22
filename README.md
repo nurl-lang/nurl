@@ -558,12 +558,13 @@ nurl/
 │       └── *.nu               — positive and negative tests
 ├── stdlib/
 │   ├── runtime.c              ✓ remaining C runtime core / platform fallbacks
-│   ├── runtime_fs_env.zig     ✓ Zig runtime slice (fs/env/string/csv/core runtime)
+│   ├── runtime_fs_env.zig     ✓ Zig runtime slice (fs/env/io/core runtime)
 │   ├── runtime_compiler_support.zig ✓ Zig runtime slice (symtab/lexer/codegen)
 │   ├── runtime_crypto_threads.zig ✓ Zig runtime slice (crypto/thread/DoS)
 │   ├── runtime_http.zig       ✓ Zig runtime slice (http client/streaming)
 │   ├── runtime_process.zig    ✓ Zig runtime slice (process run/spawn)
 │   ├── runtime_sqlite_compress.zig ✓ Zig runtime slice (sqlite/gzip)
+│   ├── runtime_string_csv.zig ✓ Zig runtime slice (strings/csv/math helpers)
 │   ├── runtime_tcp_tls.zig    ✓ Zig runtime slice (tcp/tls/signal)
 │   ├── runtime.o              — native host build (C core + Zig slices)
 │   └── runtime.wasm.o         — wasm32-wasi build (produced inside the API image)
