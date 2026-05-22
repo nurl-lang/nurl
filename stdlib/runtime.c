@@ -2741,6 +2741,8 @@ typedef struct NurlHttpResponse {
 #define NURL_HTTP_ERR_INVALID    5
 #define NURL_HTTP_ERR_OTHER      6
 
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV)
+
 #if defined(NURL_HAVE_LIBCURL) && !defined(__wasi__)
 #include <curl/curl.h>
 
@@ -3663,6 +3665,8 @@ const char* nurl_http_stream_header_value(long long h, long long i) { (void)h; (
 void      nurl_http_stream_close(long long h)     { (void)h; }
 
 #endif  /* streaming backend selection */
+
+#endif  /* !NURL_RUNTIME_ZIG_FS_ENV */
 
 /* Accessors and the freer are libcurl-agnostic — they only inspect the
  * NurlHttpResponse struct, so the same code serves both the real and

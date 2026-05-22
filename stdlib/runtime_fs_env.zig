@@ -484,6 +484,21 @@ const NurlHttpHeaderBuf = struct {
     cap: usize,
 };
 
+const NurlHttpStream = if (runtime_features.have_libcurl and builtin.os.tag != .windows and builtin.os.tag != .wasi) struct {
+    multi: ?*curl.CURLM,
+    easy: ?*curl.CURL,
+    req_headers: ?*curl.struct_curl_slist,
+    body_buf: NurlHttpBuf,
+    hdr_buf: NurlHttpHeaderBuf,
+    headers_done: c_int,
+    still_running: c_int,
+    finished: c_int,
+    status: c_longlong,
+    err_kind: c_longlong,
+} else struct {
+    _dummy: u8 = 0,
+};
+
 const NurlProcResult = extern struct {
     exit_code: c_longlong,
     err_kind: c_longlong,
@@ -1255,6 +1270,17 @@ fn httpHeaderBufFree(hdrs: *NurlHttpHeaderBuf) void {
         c.free(@ptrCast(items));
     }
     hdrs.* = .{ .items = null, .len = 0, .cap = 0 };
+}
+
+fn httpHeaderBufClear(hdrs: *NurlHttpHeaderBuf) void {
+    if (hdrs.items) |items| {
+        var i: usize = 0;
+        while (i < hdrs.len) : (i += 1) {
+            if (items[i].name) |name| c.free(name);
+            if (items[i].value) |value| c.free(value);
+        }
+    }
+    hdrs.len = 0;
 }
 
 fn httpBuildSlist(blob: ?[*:0]const u8) ?*curl.struct_curl_slist {
@@ -3727,6 +3753,89 @@ fn nurlHttpWriteHeader(ptr: [*c]u8, size: usize, nmemb: usize, user: ?*anyopaque
     return total;
 }
 
+fn nurlHttpStreamWriteBody(ptr: [*c]u8, size: usize, nmemb: usize, user: ?*anyopaque) callconv(.c) usize {
+    const total = size * nmemb;
+    const stream: *NurlHttpStream = @ptrCast(@alignCast(user orelse return 0));
+    if (stream.status == 0 and stream.easy != null) {
+        var http_code: c_long = 0;
+        _ = curl.curl_easy_getinfo(stream.easy, curl.CURLINFO_RESPONSE_CODE, &http_code);
+        stream.status = http_code;
+    }
+    stream.headers_done = 1;
+    const src: [*]const u8 = @ptrCast(ptr);
+    if (!httpBufAppend(&stream.body_buf, src, total)) return 0;
+    return total;
+}
+
+fn nurlHttpStreamWriteHeader(ptr: [*c]u8, size: usize, nmemb: usize, user: ?*anyopaque) callconv(.c) usize {
+    const total = size * nmemb;
+    const stream: *NurlHttpStream = @ptrCast(@alignCast(user orelse return 0));
+    const line: [*]u8 = @ptrCast(ptr);
+    var n = total;
+    while (n > 0 and (line[n - 1] == '\n' or line[n - 1] == '\r')) n -= 1;
+    if (n == 0) {
+        var http_code: c_long = 0;
+        if (stream.easy != null) _ = curl.curl_easy_getinfo(stream.easy, curl.CURLINFO_RESPONSE_CODE, &http_code);
+        if (http_code >= 100 and http_code < 200) {
+            httpHeaderBufClear(&stream.hdr_buf);
+        } else {
+            stream.headers_done = 1;
+            stream.status = http_code;
+        }
+        return total;
+    }
+
+    var colon_idx: ?usize = null;
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        if (line[i] == ':') {
+            colon_idx = i;
+            break;
+        }
+    }
+    const name_len = colon_idx orelse return total;
+    var val_off = name_len + 1;
+    while (val_off < n and (line[val_off] == ' ' or line[val_off] == '\t')) val_off += 1;
+    const val_len = n - val_off;
+
+    const name = c.malloc(name_len + 1) orelse return 0;
+    const value = c.malloc(val_len + 1) orelse {
+        c.free(name);
+        return 0;
+    };
+    const name_bytes: [*]u8 = @ptrCast(name);
+    const value_bytes: [*]u8 = @ptrCast(value);
+    @memcpy(name_bytes[0..name_len], line[0..name_len]);
+    @memcpy(value_bytes[0..val_len], line[val_off .. val_off + val_len]);
+    name_bytes[name_len] = 0;
+    value_bytes[val_len] = 0;
+    if (!httpHeaderPush(&stream.hdr_buf, @ptrCast(name_bytes), @ptrCast(value_bytes))) {
+        c.free(name);
+        c.free(value);
+        return 0;
+    }
+    return total;
+}
+
+fn httpStreamHandle(handle: c_longlong) ?*NurlHttpStream {
+    if (handle == 0 or !runtime_features.have_libcurl or builtin.os.tag == .windows or builtin.os.tag == .wasi) return null;
+    return @ptrFromInt(@as(usize, @intCast(handle)));
+}
+
+fn httpStreamCaptureDone(stream: *NurlHttpStream) void {
+    if (stream.multi == null or stream.easy == null) return;
+    var msgs_left: c_int = 0;
+    while (true) {
+        const msg = curl.curl_multi_info_read(stream.multi, &msgs_left) orelse break;
+        if (msg[0].msg == curl.CURLMSG_DONE) {
+            var http_code: c_long = 0;
+            _ = curl.curl_easy_getinfo(stream.easy, curl.CURLINFO_RESPONSE_CODE, &http_code);
+            stream.status = http_code;
+            stream.err_kind = httpMapErr(msg[0].data.result);
+        }
+    }
+}
+
 pub export fn nurl_http_perform_full_to(
     url: ?[*:0]const u8,
     method: ?[*:0]const u8,
@@ -3831,6 +3940,169 @@ pub export fn nurl_http_perform_full(
     headers_blob: ?[*:0]const u8,
 ) c_longlong {
     return nurl_http_perform_full_to(url, method, body, headers_blob, 30000, 10000);
+}
+
+pub export fn nurl_http_stream_open_to(
+    method: ?[*:0]const u8,
+    url: ?[*:0]const u8,
+    body: ?[*:0]const u8,
+    headers_blob: ?[*:0]const u8,
+    timeout_ms: c_longlong,
+    connect_timeout_ms: c_longlong,
+) c_longlong {
+    if (!runtime_features.have_libcurl or builtin.os.tag == .windows or builtin.os.tag == .wasi) return 0;
+
+    const raw = c.calloc(1, @sizeOf(NurlHttpStream)) orelse return 0;
+    const stream: *NurlHttpStream = @ptrCast(@alignCast(raw));
+    stream.* = .{
+        .multi = curl.curl_multi_init(),
+        .easy = curl.curl_easy_init(),
+        .req_headers = null,
+        .body_buf = .{ .data = null, .len = 0, .cap = 0 },
+        .hdr_buf = .{ .items = null, .len = 0, .cap = 0 },
+        .headers_done = 0,
+        .still_running = 0,
+        .finished = 0,
+        .status = 0,
+        .err_kind = nurl_http_err_ok,
+    };
+
+    if (stream.multi == null or stream.easy == null) {
+        stream.err_kind = nurl_http_err_other;
+        stream.finished = 1;
+        return @intCast(@intFromPtr(stream));
+    }
+
+    const total_timeout: c_long = @intCast(if (timeout_ms > 0) timeout_ms else 30000);
+    const connect_timeout: c_long = @intCast(if (connect_timeout_ms > 0) connect_timeout_ms else 10000);
+
+    _ = curl.curl_easy_setopt(stream.easy, curl.CURLOPT_URL, url orelse "");
+    _ = curl.curl_easy_setopt(stream.easy, curl.CURLOPT_FOLLOWLOCATION, @as(c_long, 1));
+    _ = curl.curl_easy_setopt(stream.easy, curl.CURLOPT_NOSIGNAL, @as(c_long, 1));
+    _ = curl.curl_easy_setopt(stream.easy, curl.CURLOPT_TIMEOUT_MS, total_timeout);
+    _ = curl.curl_easy_setopt(stream.easy, curl.CURLOPT_CONNECTTIMEOUT_MS, connect_timeout);
+    _ = curl.curl_easy_setopt(stream.easy, curl.CURLOPT_WRITEFUNCTION, &nurlHttpStreamWriteBody);
+    _ = curl.curl_easy_setopt(stream.easy, curl.CURLOPT_WRITEDATA, stream);
+    _ = curl.curl_easy_setopt(stream.easy, curl.CURLOPT_HEADERFUNCTION, &nurlHttpStreamWriteHeader);
+    _ = curl.curl_easy_setopt(stream.easy, curl.CURLOPT_HEADERDATA, stream);
+    _ = curl.curl_easy_setopt(stream.easy, curl.CURLOPT_USERAGENT, "nurl-http/0.1");
+    _ = curl.curl_easy_setopt(stream.easy, curl.CURLOPT_ACCEPT_ENCODING, "");
+
+    stream.req_headers = httpBuildSlist(headers_blob);
+    if (stream.req_headers != null) {
+        _ = curl.curl_easy_setopt(stream.easy, curl.CURLOPT_HTTPHEADER, stream.req_headers);
+    }
+
+    const m = method orelse "GET";
+    if (std.mem.eql(u8, std.mem.span(m), "POST")) {
+        _ = curl.curl_easy_setopt(stream.easy, curl.CURLOPT_POST, @as(c_long, 1));
+        _ = curl.curl_easy_setopt(stream.easy, curl.CURLOPT_POSTFIELDS, body orelse "");
+        _ = curl.curl_easy_setopt(stream.easy, curl.CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(std.mem.len(body orelse ""))));
+    } else if (!std.mem.eql(u8, std.mem.span(m), "GET")) {
+        _ = curl.curl_easy_setopt(stream.easy, curl.CURLOPT_CUSTOMREQUEST, m);
+        if (body != null and body.?[0] != 0) {
+            _ = curl.curl_easy_setopt(stream.easy, curl.CURLOPT_POSTFIELDS, body.?);
+            _ = curl.curl_easy_setopt(stream.easy, curl.CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(std.mem.len(body.?))));
+        }
+    }
+
+    const mrc = curl.curl_multi_add_handle(stream.multi, stream.easy);
+    if (mrc != curl.CURLM_OK) {
+        stream.err_kind = nurl_http_err_other;
+        stream.finished = 1;
+        return @intCast(@intFromPtr(stream));
+    }
+    stream.still_running = 1;
+    return @intCast(@intFromPtr(stream));
+}
+
+pub export fn nurl_http_stream_next(handle: c_longlong) ?[*:0]u8 {
+    const stream = httpStreamHandle(handle) orelse return null;
+    while (stream.body_buf.len == 0 and stream.finished == 0) {
+        var still: c_int = 0;
+        const mrc = curl.curl_multi_perform(stream.multi, &still);
+        if (mrc != curl.CURLM_OK) {
+            stream.err_kind = nurl_http_err_other;
+            stream.finished = 1;
+            break;
+        }
+        stream.still_running = still;
+        if (still == 0) {
+            httpStreamCaptureDone(stream);
+            stream.finished = 1;
+            break;
+        }
+        var numfds: c_int = 0;
+        _ = curl.curl_multi_wait(stream.multi, null, 0, 100, &numfds);
+    }
+    if (stream.body_buf.len == 0) return null;
+    const out = stream.body_buf.data;
+    stream.body_buf.data = null;
+    stream.body_buf.len = 0;
+    stream.body_buf.cap = 0;
+    return out;
+}
+
+pub export fn nurl_http_stream_status(handle: c_longlong) c_longlong {
+    const stream = httpStreamHandle(handle) orelse return 0;
+    return stream.status;
+}
+
+pub export fn nurl_http_stream_err_kind(handle: c_longlong) c_longlong {
+    const stream = httpStreamHandle(handle) orelse return nurl_http_err_other;
+    return stream.err_kind;
+}
+
+pub export fn nurl_http_stream_pump_headers(handle: c_longlong) c_longlong {
+    const stream = httpStreamHandle(handle) orelse return 0;
+    while (stream.headers_done == 0 and stream.finished == 0) {
+        var still: c_int = 0;
+        const mrc = curl.curl_multi_perform(stream.multi, &still);
+        if (mrc != curl.CURLM_OK) {
+            stream.err_kind = nurl_http_err_other;
+            stream.finished = 1;
+            break;
+        }
+        stream.still_running = still;
+        if (still == 0) {
+            httpStreamCaptureDone(stream);
+            stream.finished = 1;
+            break;
+        }
+        var numfds: c_int = 0;
+        _ = curl.curl_multi_wait(stream.multi, null, 0, 100, &numfds);
+    }
+    return stream.status;
+}
+
+pub export fn nurl_http_stream_header_count(handle: c_longlong) c_longlong {
+    const stream = httpStreamHandle(handle) orelse return 0;
+    return @intCast(stream.hdr_buf.len);
+}
+
+pub export fn nurl_http_stream_header_name(handle: c_longlong, idx: c_longlong) ?[*:0]const u8 {
+    const stream = httpStreamHandle(handle) orelse return "";
+    if (idx < 0 or @as(usize, @intCast(idx)) >= stream.hdr_buf.len) return "";
+    return stream.hdr_buf.items.?[@intCast(idx)].name orelse "";
+}
+
+pub export fn nurl_http_stream_header_value(handle: c_longlong, idx: c_longlong) ?[*:0]const u8 {
+    const stream = httpStreamHandle(handle) orelse return "";
+    if (idx < 0 or @as(usize, @intCast(idx)) >= stream.hdr_buf.len) return "";
+    return stream.hdr_buf.items.?[@intCast(idx)].value orelse "";
+}
+
+pub export fn nurl_http_stream_close(handle: c_longlong) void {
+    const stream = httpStreamHandle(handle) orelse return;
+    if (stream.multi != null and stream.easy != null) {
+        _ = curl.curl_multi_remove_handle(stream.multi, stream.easy);
+    }
+    if (stream.easy != null) curl.curl_easy_cleanup(stream.easy);
+    if (stream.multi != null) _ = curl.curl_multi_cleanup(stream.multi);
+    if (stream.req_headers != null) curl.curl_slist_free_all(stream.req_headers);
+    httpHeaderBufFree(&stream.hdr_buf);
+    if (stream.body_buf.data) |buf| c.free(buf);
+    c.free(stream);
 }
 
 pub export fn nurl_str_len(input: ?[*:0]const u8) c_longlong {
