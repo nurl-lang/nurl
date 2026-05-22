@@ -1346,7 +1346,7 @@ void nurl_http_response_free(long long resp) {
 #define NURL_PROC_ERR_IO            3
 #define NURL_PROC_ERR_OTHER         4
 
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
 typedef struct NurlProcResult {
     long long  exit_code;
     long long  err_kind;
@@ -1389,7 +1389,7 @@ static void nurl__proc_close_pair(int p[2]) {
     p[0] = p[1] = -1;
 }
 
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
 long long nurl_proc_run(const char *cmd, const char *argv_buf,
                         long long argc, const char *stdin_blob) {
     NurlProcResult *r = (NurlProcResult*)calloc(1, sizeof(NurlProcResult));
@@ -1618,7 +1618,7 @@ long long nurl_proc_run(const char *cmd, const char *argv_buf,
 #elif defined(_WIN32) && !defined(__wasi__)
 /* ── Win32 backend (CreateProcess + reader threads) ─────────── */
 
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
 #include <process.h>
 
 typedef struct NurlProcReadCtx {
@@ -2735,7 +2735,7 @@ static int nurl__alpn_select_cb(SSL *ssl, const unsigned char **out,
 long long nurl_tcp_listen(const char *host, long long port, long long backlog);
 #endif
 
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
 long long nurl_tcp_listen_tls(const char *host, long long port,
                               long long backlog,
                               const char *cert_path, const char *key_path) {
@@ -2795,7 +2795,7 @@ long long nurl_tcp_listen_tls(const char *host, long long port,
  * + ALPN callback; clients that don't offer any of the listed
  * protocols still complete the handshake (SSL_TLSEXT_ERR_NOACK) —
  * server should treat them as the default (HTTP/1.1). */
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
 long long nurl_tcp_listen_tls_alpn(const char *host, long long port,
                                    long long backlog,
                                    const char *cert_path, const char *key_path,
@@ -2868,7 +2868,7 @@ static SSL_CTX *nurl__tls_build_ctx(NurlTcp *h, const char *cert_path,
  * Returns 0 on success; non-zero NurlNetErr otherwise (cert/key
  * load failure most commonly). May be called repeatedly to grow
  * the registry; existing in-flight conns are unaffected. */
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
 long long nurl_tcp_tls_add_sni(long long handle, const char *hostname,
                                const char *cert_path, const char *key_path) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
@@ -2938,7 +2938,7 @@ long long nurl_tcp_tls_add_sni(long long handle, const char *hostname,
  * until they close. New accepts immediately use the new ctx.
  *
  * Returns 0 on success, NetErr code on failure. */
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
 long long nurl_tcp_tls_reload(long long handle, const char *hostname,
                               const char *cert_path, const char *key_path) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
@@ -3001,7 +3001,7 @@ long long nurl_tcp_tls_reload(long long handle, const char *hostname,
  * via `nurl_tcp_peer_cert_subject`.
  *
  * Returns 0 on success, NetErr code on failure. */
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
 long long nurl_tcp_tls_require_client_cert(long long handle,
                                             const char *ca_bundle_path,
                                             long long strict) {
@@ -3038,7 +3038,7 @@ long long nurl_tcp_tls_require_client_cert(long long handle,
  * off a completed TLS conn. Returns a heap-owned NUL-terminated
  * string. Empty when no peer cert was presented or the conn is
  * non-TLS. Caller frees via nurl_free. */
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
 const char *nurl_tcp_peer_cert_subject(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return strdup("");
@@ -3068,7 +3068,7 @@ const char *nurl_tcp_peer_cert_subject(long long handle) {
  * heap-owned NUL-terminated string ("h2" / "http/1.1" / ...); empty
  * when ALPN was not negotiated or the handle is non-TLS. Caller frees
  * via nurl_free. */
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
 const char *nurl_tcp_alpn_selected(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return strdup("");
