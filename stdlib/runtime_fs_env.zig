@@ -114,6 +114,8 @@ const win = if (builtin.os.tag == .windows) struct {
     extern "kernel32" fn FindFirstFileA(lpFileName: [*:0]const u8, lpFindFileData: *WIN32_FIND_DATAA) callconv(.winapi) windows.HANDLE;
     extern "kernel32" fn FindNextFileA(hFindFile: windows.HANDLE, lpFindFileData: *WIN32_FIND_DATAA) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn FindClose(hFindFile: windows.HANDLE) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn CreateSymbolicLinkA(lpSymlinkFileName: [*:0]const u8, lpTargetFileName: [*:0]const u8, dwFlags: windows.DWORD) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn GetFileAttributesA(lpFileName: [*:0]const u8) callconv(.winapi) windows.DWORD;
 
     extern "c" fn _putenv_s(name: [*:0]const u8, value: [*:0]const u8) c_int;
     extern "c" fn _getcwd(buf: ?[*]u8, size: c_int) ?[*:0]u8;
@@ -1107,6 +1109,45 @@ pub export fn nurl_dir_remove(path: ?[*:0]const u8) c_longlong {
         return if (win._rmdir(dir_path) == 0) 0 else -1;
     }
     return if (c.rmdir(dir_path) == 0) 0 else -1;
+}
+
+fn windowsSymlinkImpl(target: ?[*:0]const u8, linkpath: ?[*:0]const u8) callconv(.c) c_int {
+    const target_path = target orelse {
+        setErrno(.INVAL);
+        return -1;
+    };
+    const link_path = linkpath orelse {
+        setErrno(.INVAL);
+        return -1;
+    };
+
+    const symbolic_link_flag_directory: windows.DWORD = 0x1;
+    const symbolic_link_flag_allow_unprivileged_create: windows.DWORD = 0x2;
+    const invalid_file_attributes: windows.DWORD = 0xffff_ffff;
+    const file_attribute_directory: windows.DWORD = 0x10;
+
+    var flags: windows.DWORD = symbolic_link_flag_allow_unprivileged_create;
+    const attrs = win.GetFileAttributesA(target_path);
+    if (attrs != invalid_file_attributes and (attrs & file_attribute_directory) != 0) {
+        flags |= symbolic_link_flag_directory;
+    }
+
+    if (win.CreateSymbolicLinkA(link_path, target_path, flags) != .FALSE) return 0;
+
+    const last = windows.GetLastError();
+    switch (last) {
+        .ALREADY_EXISTS => setErrno(.EXIST),
+        .ACCESS_DENIED, .PRIVILEGE_NOT_HELD => setErrno(.ACCES),
+        .PATH_NOT_FOUND, .FILE_NOT_FOUND => setErrno(.NOENT),
+        else => setErrno(.IO),
+    }
+    return -1;
+}
+
+comptime {
+    if (builtin.os.tag == .windows) {
+        @export(&windowsSymlinkImpl, .{ .name = "symlink" });
+    }
 }
 
 pub export fn nurl_map_new() c_longlong {

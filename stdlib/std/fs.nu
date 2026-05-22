@@ -140,9 +140,10 @@ $ `stdlib/core/errors.nu`
 // POSIX symlink(2) — `target` is what the link points TO (stored
 // verbatim in the symlink), `linkpath` is the new symlink entry to
 // create. Returns 0 on success, -1 on failure with errno set.
-// Windows is NOT supported here; CreateSymbolicLinkW needs a privilege
-// (`SeCreateSymbolicLinkPrivilege`) most accounts lack — Win32 users
-// of nurlpkg should fall back to copying.
+// On Windows the runtime provides a CreateSymbolicLinkA-backed shim
+// that preserves the same 0 / -1 + errno contract. This still depends
+// on either SeCreateSymbolicLinkPrivilege or Developer Mode being
+// enabled; the failure path maps back onto errno for IoErr handling.
 & `c` @ symlink s target s linkpath → i32
 
 // Create a symbolic link at `linkpath` pointing to `target`. Returns
