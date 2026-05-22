@@ -10,6 +10,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Call-arity diagnostics.** `gen_call` now checks every call against
+  the callee's declared parameter count and rejects a mismatch with a
+  precise `error:` at the call site — e.g. `call to 'add' has the
+  wrong number of arguments: expected 2, got 1`. Previously a
+  wrong-arity call to a known function either miscompiled silently
+  (too few arguments) or emitted a malformed `call` the LLVM verifier
+  complained about far from the source (too many). `scan_fn_sigs`
+  records each non-generic `@`-function's parameter count through a
+  new pure-lexical type skipper (`scan_skip_type` — no `parse_type`
+  call, which would desync the scan); a name carrying two definitions
+  of differing arity is marked ambiguous and skipped rather than
+  mis-blamed. Generic and variadic-FFI callees are out of scope for
+  v1.
+* **Prefix arity-cascade diagnostic.** When a prefix operator runs out
+  of operands and over-reads into the following statement — the
+  classic NURL cascade, since operators have fixed arity and no
+  closing bracket — the resulting "unexpected token" error now names
+  the offending token and points back at the line where the
+  short-an-argument statement began, instead of blaming the innocent
+  next line.
+* **Compiler regressions** — `compiler/tests/{call_arity_ok,`
+  `should_fail_call_arity_few,should_fail_call_arity_many,`
+  `should_fail_prefix_cascade}.nu`.
 * **MQTT client — topic-filter wildcard matching.** `mqtt_topic_matches`
   in `stdlib/ext/mqtt.nu` implements the MQTT 5.0 §4.7 `+` / `#`
   wildcard rules — `+` matches one topic level, `#` matches the

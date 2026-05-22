@@ -1193,6 +1193,29 @@
     | | == tt TT_SHL == tt TT_SHR == tt TT_CARETCARET
 }
 
+// g_stmt_line — source line of the statement gen_stmt is currently
+// parsing. Read by gen_ident's "unexpected token" diagnostic: when an
+// operand parse over-reads past its statement (a prefix operator short
+// an argument — the classic NURL arity cascade), the offending token
+// lands on a LATER line than this, which lets the error point back at
+// the real culprit instead of blaming the innocent next statement.
+: i g_stmt_line 0
+
+// __tok_label — a human-readable name for a token that turned up where
+// a value expression was required. Used only on the diagnostic path.
+@ __tok_label i tt s val → s {
+    ? == tt TT_COLON   { ^ `':' (a ':' binding starts here)` } {}
+    ? == tt TT_EQ      { ^ `'=' (an assignment starts here)` } {}
+    ? == tt TT_SEMICOL { ^ `';' (a ';' defer starts here)` } {}
+    ? == tt TT_RBRACE  { ^ `'}' (the enclosing block ends here)` } {}
+    ? == tt TT_RPAREN  { ^ `')'` } {}
+    ? == tt TT_RBRACK  { ^ `']'` } {}
+    ? == tt TT_EOF     { ^ `end of input` } {}
+    ? == tt TT_ARROW   { ^ `'->'` } {}
+    ? != 0 ( nurl_str_len val ) { ^ ( nurl_str_cat3 `'` val `'` ) } {}
+    `this token`
+}
+
 @ gen_expr i lex i syms i cg → s {
     : i tt ( nurl_lex_type lex )
     ? == tt TT_INT ( gen_int_lit lex )
@@ -1290,7 +1313,26 @@
         ( load_var cg lt ( nurl_str_cat `@` name ) )
         ( nurl_str_cat `%` name )
     }
-    { ( die lex `unexpected token in expression` ) }
+    { : i ut ( nurl_lex_type lex )
+        : i uln ( nurl_lex_line lex )
+        : s un ( __tok_label ut ( nurl_lex_val lex ) )
+        // A closer / statement-starter cannot begin a value expression.
+        // Reaching one here means a prefix operator on a preceding line
+        // ran out of operands and over-read into the next statement —
+        // the classic NURL arity cascade. Name the token and, when it
+        // sits past the current statement's start line, point back at
+        // the real culprit instead of blaming this innocent line.
+        : b blocks_value | | | | == ut TT_COLON == ut TT_EQ == ut TT_SEMICOL
+            == ut TT_RBRACE | == ut TT_EOF | == ut TT_RPAREN == ut TT_RBRACK
+        ? blocks_value
+        { : s where ? > uln g_stmt_line
+            ( nurl_str_cat3 ` the statement starting at line ` ( nurl_str_int g_stmt_line ) ` is still being parsed, so` )
+            ``
+          ( die lex ( nurl_str_cat3
+            ( nurl_str_cat3 `unexpected ` un ` where a value expression is required —` )
+            where
+            ` a prefix operator is short an argument: every NURL operator has fixed arity and no closing bracket, so a missing operand silently consumes whatever follows. See README -> Known Limitations -> Grammar.` ) ) }
+        { ( die lex ( nurl_str_cat3 `unexpected ` un ` in expression` ) ) } }
 }
 
 // ── Binary op OP lhs rhs ─────────────────────────────────────────
@@ -2029,6 +2071,31 @@
         { = argstr ( nurl_str_cat argstr ( nurl_str_cat4 `, ` at ` ` av ) ) }
         = arg_idx + arg_idx 1
     }
+    // Call-arity check. scan_fn_sigs records every non-generic
+    // @-function's declared parameter count as `<fname>__arity`. A call
+    // with the wrong argument count otherwise emits a malformed `call`
+    // the LLVM verifier rejects far from the source — or, with too few
+    // arguments, silently miscompiles. The check runs while the lexer
+    // still sits on the closing `)`, so the diagnostic points at the
+    // call itself. Skipped for generic calls (call_name != fname), for
+    // variadic FFI, and for a callee shadowed by a local binding
+    // (closure / fn-pointer — `<fname>__ptr` is set); none of those
+    // carry an `__arity` entry anyway, the `__ptr` guard just makes the
+    // skip explicit against a same-named local.
+    // `ar_s` is `?` when scan_fn_sigs saw conflicting definitions of
+    // the name (different parameter counts) — skip the check then.
+    : s ar_s ( nurl_sym_get syms ( nurl_str_cat fname `__arity` ) )
+    ? & & & & ( seq call_name fname ) ! is_variadic
+          != 0 ( nurl_str_len ar_s ) ! ( seq ar_s `?` )
+          == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__ptr` ) ) )
+    { : i ar_want ( nurl_str_to_int ar_s )
+        ? != ar_want arg_idx
+        { ( die lex ( nurl_str_cat3
+            ( nurl_str_cat3 `call to '` fname `' has the wrong number of arguments: expected ` )
+            ( nurl_str_cat3 ( nurl_str_int ar_want ) `, got ` ( nurl_str_int arg_idx ) )
+            ` — every NURL operator has fixed arity, so a missing or extra argument shifts every token after it; check this call.` ) ) }
+        {} }
+    {}
     ( expect lex TT_RPAREN )
     // Escape analysis: a call's RESULT is never a stack reference —
     // returning a borrow into a parameter is interprocedural (BORROW.md
@@ -4440,6 +4507,9 @@
     {}
     : i tt ( nurl_lex_type lex )
     : i bck_line ( nurl_lex_line lex )
+    // Record this statement's start line for gen_ident's cascade-aware
+    // "unexpected token" diagnostic (see g_stmt_line).
+    = g_stmt_line bck_line
     : s gs_rv ? == tt TT_COLON ( gen_let_or_struct lex syms cg )
     ? == tt TT_EQ ( gen_assign lex syms cg )
     ? == tt TT_TILDE ( gen_loop lex syms cg )
@@ -9731,6 +9801,51 @@
     }
 }
 
+// __is_param_marker_word — true for the contextual parameter-convention
+// keywords (`in` / `inout` / `sink`) that may lead a parameter. Mirrors
+// parse_param_marker so the lexical param count below matches the real
+// parser's view of where a parameter's type begins.
+@ __is_param_marker_word s v → b {
+    | | ( seq v `in` ) ( seq v `inout` ) ( seq v `sink` )
+}
+
+// scan_skip_paren — lexically advance past one balanced `( ... )` group.
+// Returns 1 on a matched group, 0 if it ran into EOF first.
+@ scan_skip_paren i lex → i {
+    ? != ( nurl_lex_type lex ) TT_LPAREN { ^ 0 } {}
+    ( nurl_lex_advance lex )
+    : i depth 1
+    ~ & != depth 0 != ( nurl_lex_type lex ) TT_EOF {
+        : i t2 ( nurl_lex_type lex )
+        ? == t2 TT_LPAREN { = depth + depth 1 } {}
+        ? == t2 TT_RPAREN { = depth - depth 1 } {}
+        ( nurl_lex_advance lex )
+    }
+    ? == depth 0 1 0
+}
+
+// scan_skip_type — lexically advance past ONE type expression in a
+// function-signature parameter region. Mirrors parse_type's grammar
+// shape but emits no IR and calls no parse_* helper: a parse_type call
+// inside scan_fn_sigs desyncs the scan (BORROW.md Phase 4). Returns 1
+// on success, 0 on a shape it cannot classify (an anonymous enum type,
+// say); the caller then abandons the arity count for that function —
+// a missed check, never a wrong one.
+@ scan_skip_type i lex → i {
+    : i tt ( nurl_lex_type lex )
+    ? == tt TT_STAR   { ( nurl_lex_advance lex ) ^ ( scan_skip_type lex ) } {}
+    ? == tt TT_QUEST  { ( nurl_lex_advance lex ) ^ ( scan_skip_type lex ) } {}
+    ? == tt TT_LBRACK { ( nurl_lex_advance lex ) ^ ( scan_skip_type lex ) } {}
+    ? == tt TT_BANG
+    { ( nurl_lex_advance lex )
+        ? == 0 ( scan_skip_type lex ) { ^ 0 } {}
+        ^ ( scan_skip_type lex ) }
+    {}
+    ? == tt TT_LPAREN { ^ ( scan_skip_paren lex ) } {}
+    ? ( is_ident_tok tt ) { ( nurl_lex_advance lex ) ^ 1 } {}
+    0
+}
+
 // scan_fn_sigs: register return types of all @ and & declarations.
 @ scan_fn_sigs i lex i syms → v {
     ~ != ( nurl_lex_type lex ) TT_EOF {
@@ -9795,23 +9910,56 @@
                     {}
                     ( skip_balanced lex )
                 }
-                { // BORROW.md Phase 4: blind-advance the parameter
-                  // region (robust against any header shape) but note
-                  // whether the marker token `inout` appears. `inout`
-                  // is banned as a parameter NAME (see gen_fn_param),
-                  // so its presence here is exact: `<fname>__has_inout`
-                  // lets a forward call site reject calling an
-                  // `inout` function before its definition is compiled
-                  // (g_fn_inout would otherwise be empty and the
-                  // argument silently passed by value).
+                { // BORROW.md Phase 4 + arity: walk the parameter
+                  // region counting parameters — one `[marker] TYPE
+                  // NAME` triple each, the TYPE skipped purely
+                  // lexically via scan_skip_type — and note whether the
+                  // `inout` marker appears. `inout` is banned as a
+                  // parameter NAME (see gen_fn_param) so a bare `inout`
+                  // here is exact: `<fname>__has_inout` lets a forward
+                  // call site reject calling an `inout` function before
+                  // its definition is compiled. If the walk meets a
+                  // shape scan_skip_type can't classify it abandons the
+                  // count (pc_ok → F) and blind-advances the rest, so
+                  // `<fname>__arity` is simply not recorded — a missed
+                  // arity check, never a wrong one.
                     : ~ b saw_inout F
-                    ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF
+                    : ~ i pcount 0
+                    : ~ b pc_ok T
+                    ~ & & pc_ok != ( nurl_lex_type lex ) TT_ARROW
+                          != ( nurl_lex_type lex ) TT_EOF
                     { ? & ( is_ident_tok ( nurl_lex_type lex ) )
-                          ( seq ( nurl_lex_val lex ) `inout` )
-                        { = saw_inout T } {}
-                        ( nurl_lex_advance lex ) }
+                          ( __is_param_marker_word ( nurl_lex_val lex ) )
+                        { ? ( seq ( nurl_lex_val lex ) `inout` )
+                            { = saw_inout T } {}
+                            ( nurl_lex_advance lex ) }
+                        {}
+                        ? == 0 ( scan_skip_type lex )
+                        { = pc_ok F }
+                        { ? ( is_ident_tok ( nurl_lex_type lex ) )
+                            { ( nurl_lex_advance lex ) = pcount + pcount 1 }
+                            { = pc_ok F } } }
+                    // If the count was abandoned mid-region, advance the
+                    // rest blind so the `->` / ret-type handling still
+                    // runs (the arity entry is just not written).
+                    ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF
+                    { ( nurl_lex_advance lex ) }
                     ? saw_inout
                     { ( nurl_sym_def syms ( nurl_str_cat fname `__has_inout` ) `1` ) }
+                    {}
+                    ? pc_ok
+                    { : s ar_key ( nurl_str_cat fname `__arity` )
+                        : s ar_prev ( nurl_sym_get syms ar_key )
+                        : s ar_new ( nurl_str_int pcount )
+                        // Two definitions of the same name with
+                        // different parameter counts (a latent stdlib
+                        // collision) — neither arity can be trusted at
+                        // a call site, so mark it ambiguous (`?`) and
+                        // let gen_call skip the check rather than
+                        // blame an innocent call.
+                        ? & != 0 ( nurl_str_len ar_prev ) ! ( seq ar_prev ar_new )
+                        { ( nurl_sym_def syms ar_key `?` ) }
+                        { ( nurl_sym_def syms ar_key ar_new ) } }
                     {}
                     ? == ( nurl_lex_type lex ) TT_ARROW
                     { ( nurl_lex_advance lex )

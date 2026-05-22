@@ -22,6 +22,8 @@
 > | `?` with bare then/else followed by `{ ... }` block        | `warning:` (the n-ary `&`/`|` trap) |
 > | `:`-binding shadowing a parameter                          | `warning:` |
 > | closure capturing `: ~`-multi-field struct, escaping       | `warning:` (borrow-checker region escape analysis, on by default; `--no-borrowck` disables) on `^`-return / `vec_push`/`vec_insert`/`vec_set`/`thread_spawn` / assignment into a longer-lived binding |
+> | `( f a )` for an `@`-fn `f` declared with a different arity | `error:` + `call to 'f' has the wrong number of arguments: expected N, got M` |
+> | a prefix operator short an operand, over-reading the next line | `error:` + names the token and points back at the line whose statement is short an argument |
 >
 > If you are an LLM and hit a NURL compile error not listed above,
 > the diagnostic itself is the source of truth — quote it verbatim

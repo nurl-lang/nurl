@@ -1193,6 +1193,29 @@
     | | == tt TT_SHL == tt TT_SHR == tt TT_CARETCARET
 }
 
+// g_stmt_line — source line of the statement gen_stmt is currently
+// parsing. Read by gen_ident's "unexpected token" diagnostic: when an
+// operand parse over-reads past its statement (a prefix operator short
+// an argument — the classic NURL arity cascade), the offending token
+// lands on a LATER line than this, which lets the error point back at
+// the real culprit instead of blaming the innocent next statement.
+: i g_stmt_line 0
+
+// __tok_label — a human-readable name for a token that turned up where
+// a value expression was required. Used only on the diagnostic path.
+@ __tok_label i tt s val → s {
+    ? == tt TT_COLON   { ^ `':' (a ':' binding starts here)` } {}
+    ? == tt TT_EQ      { ^ `'=' (an assignment starts here)` } {}
+    ? == tt TT_SEMICOL { ^ `';' (a ';' defer starts here)` } {}
+    ? == tt TT_RBRACE  { ^ `'}' (the enclosing block ends here)` } {}
+    ? == tt TT_RPAREN  { ^ `')'` } {}
+    ? == tt TT_RBRACK  { ^ `']'` } {}
+    ? == tt TT_EOF     { ^ `end of input` } {}
+    ? == tt TT_ARROW   { ^ `'->'` } {}
+    ? != 0 ( nurl_str_len val ) { ^ ( nurl_str_cat3 `'` val `'` ) } {}
+    `this token`
+}
+
 @ gen_expr i lex i syms i cg → s {
     : i tt ( nurl_lex_type lex )
     ? == tt TT_INT ( gen_int_lit lex )
@@ -1290,7 +1313,26 @@
         ( load_var cg lt ( nurl_str_cat `@` name ) )
         ( nurl_str_cat `%` name )
     }
-    { ( die lex `unexpected token in expression` ) }
+    { : i ut ( nurl_lex_type lex )
+        : i uln ( nurl_lex_line lex )
+        : s un ( __tok_label ut ( nurl_lex_val lex ) )
+        // A closer / statement-starter cannot begin a value expression.
+        // Reaching one here means a prefix operator on a preceding line
+        // ran out of operands and over-read into the next statement —
+        // the classic NURL arity cascade. Name the token and, when it
+        // sits past the current statement's start line, point back at
+        // the real culprit instead of blaming this innocent line.
+        : b blocks_value | | | | == ut TT_COLON == ut TT_EQ == ut TT_SEMICOL
+            == ut TT_RBRACE | == ut TT_EOF | == ut TT_RPAREN == ut TT_RBRACK
+        ? blocks_value
+        { : s where ? > uln g_stmt_line
+            ( nurl_str_cat3 ` the statement starting at line ` ( nurl_str_int g_stmt_line ) ` is still being parsed, so` )
+            ``
+          ( die lex ( nurl_str_cat3
+            ( nurl_str_cat3 `unexpected ` un ` where a value expression is required —` )
+            where
+            ` a prefix operator is short an argument: every NURL operator has fixed arity and no closing bracket, so a missing operand silently consumes whatever follows. See README -> Known Limitations -> Grammar.` ) ) }
+        { ( die lex ( nurl_str_cat3 `unexpected ` un ` in expression` ) ) } }
 }
 
 // ── Binary op OP lhs rhs ─────────────────────────────────────────
@@ -1642,6 +1684,68 @@
     }
 }
 
+// gen_inout_field_addr: lex is positioned at the TT_DOT of an
+// `inout . obj field` call argument. Emits a `getelementptr` to the
+// named field of the struct binding `obj` and returns that
+// field-pointer register, with the last-type side-channel set to
+// `<fieldtype>*` so gen_call passes it as the `inout` pointer.
+//
+// `obj` must be a bare mutable (`: ~`) struct binding — or an `inout`
+// struct parameter, which carries the same `__ptr` / `__mutable`
+// shape. Single-level access only (`. obj field`); `.` is dyadic so
+// the argument is exactly three tokens and the next token always
+// begins the following argument. The field-name → index / type
+// lookup uses the `<sname>__<field>__idx` / `__type` entries
+// gen_struct_decl (and the generic-instantiation emitter) register
+// for every struct, so this works for plain and generic structs.
+@ gen_inout_field_addr i lex i syms i cg s fname → s {
+    ( nurl_lex_advance lex )  // consume '.'
+    ? ! ( is_ident_tok ( nurl_lex_type lex ) )
+    { ( die lex ( nurl_str_cat3
+        `inout field argument to '` fname
+        `' must be '. <binding> <field>' naming a plain struct binding` ) ) }
+    {}
+    : s obj ( nurl_lex_val lex )
+    ( nurl_lex_advance lex )
+    : s objptr ( nurl_sym_get syms ( nurl_str_cat obj `__ptr` ) )
+    : s objty ( nurl_sym_get syms obj )
+    ? == 0 ( nurl_str_len objptr )
+    { ( die lex ( nurl_str_cat3
+        `inout field argument: '` obj `' is not a struct binding in scope` ) ) }
+    {}
+    ? == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat obj `__mutable` ) ) )
+    { ( die lex ( nurl_str_cat3
+        `inout field argument: binding '` obj
+        `' must be mutable ': ~' - the callee mutates its field in place` ) ) }
+    {}
+    ? | == 0 ( nurl_str_len objty ) ! == 37 ( nurl_str_get objty 0 )
+    { ( die lex ( nurl_str_cat3
+        `inout field argument: '` obj `' is not a named-struct binding` ) ) }
+    {}
+    ? ! ( is_ident_tok ( nurl_lex_type lex ) )
+    { ( die lex ( nurl_str_cat3
+        `inout field argument: expected a field name after '. ` obj `'` ) ) }
+    {}
+    : s fld ( nurl_lex_val lex )
+    ( nurl_lex_advance lex )
+    : s sname ( nurl_str_slice objty 1 - ( nurl_str_len objty ) 1 )
+    : s idx_s ( nurl_sym_get syms
+        ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fld `__idx` ) ) ) )
+    : s fty ( nurl_sym_get syms
+        ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fld `__type` ) ) ) )
+    ? == 0 ( nurl_str_len idx_s )
+    { ( die lex ( nurl_str_cat4
+        `inout field argument: struct '` sname `' has no field '` fld ) ) }
+    {}
+    : s gep ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print gep )
+    ( nurl_print ` = getelementptr ` ) ( nurl_print objty )
+    ( nurl_print `, ` ) ( nurl_print objty ) ( nurl_print `* ` ) ( nurl_print objptr )
+    ( nurl_print `, i32 0, i32 ` ) ( nurl_print idx_s ) ( nurl_print `\n` )
+    ( nurl_set_last_type ( nurl_str_cat fty `*` ) )
+    ^ gep
+}
+
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
@@ -1758,19 +1862,34 @@
     // gen_fn_decl_concrete as the callee is compiled). An argument at
     // one of these positions is passed by address — see the
     // per-argument handling below. Empty for an ordinary function.
-    : s callee_inout ( nurl_sym_get g_fn_inout call_name )
+    : ~ s callee_inout ( nurl_sym_get g_fn_inout call_name )
     // BORROW.md Phase 4: indices of the callee's `sink` parameters —
     // an argument there is consumed (move-checked at the call site).
-    : s callee_sink ( nurl_sym_get g_fn_sink call_name )
+    : ~ s callee_sink ( nurl_sym_get g_fn_sink call_name )
+    // Generic call: g_fn_inout / g_fn_sink for a generic function are
+    // keyed by the GENERIC name (the index sets are type-independent,
+    // computed once by compute_generic_inout_sink). The mangled
+    // call_name gets its own entry only once the deferred
+    // instantiation is compiled — too late for this call site. When
+    // call_name is a mangled generic name (call_name != fname) with no
+    // direct entry, fall back to the generic-name lookup.
+    ? & == 0 ( nurl_str_len callee_inout ) ! ( seq call_name fname )
+    { = callee_inout ( nurl_sym_get g_fn_inout fname ) }
+    {}
+    ? & == 0 ( nurl_str_len callee_sink ) ! ( seq call_name fname )
+    { = callee_sink ( nurl_sym_get g_fn_sink fname ) }
+    {}
     // If the callee is known (scan_fn_sigs) to have `inout` parameters
-    // but g_fn_inout has no entry, it is being called BEFORE its
+    // but g_fn_inout still has no entry, it is being called BEFORE its
     // definition was compiled — passing the argument by value would
-    // mismatch the `<T>*` parameter and miscompile silently. Reject it.
+    // mismatch the `<T>*` parameter and miscompile silently. Holds for
+    // both ordinary and generic functions: scan_fn_sigs records
+    // `<fname>__has_inout` for either. Reject it.
     ? & == 0 ( nurl_str_len callee_inout )
           ( seq ( nurl_sym_get syms ( nurl_str_cat fname `__has_inout` ) ) `1` )
     { ( die lex ( nurl_str_cat3
         `function '` fname
-        `' has 'inout' parameters and must be defined before it is called - move its definition above this call site (inout on generic functions is not yet supported)` ) ) }
+        `' has 'inout' parameters and must be defined before it is called - move its definition above this call site` ) ) }
     {}
     // Phase 2B parameter-ownership: collect register values for arg expressions
     // whose result is a fresh owned-string allocation (e.g. `nurl_str_cat`),
@@ -1848,20 +1967,28 @@
         : ~ s av ``
         : ~ s at ``
         ? is_inout_arg
-        { ? ! ( is_ident_tok bck_arg_tt )
-            { ( die lex ( nurl_str_cat3 `inout argument to '` fname `' must be a mutable ': ~' binding, not an expression` ) ) }
-            {}
-            : s iptr ( nurl_sym_get syms ( nurl_str_cat bck_arg_val `__ptr` ) )
-            : s ity ( nurl_sym_get syms bck_arg_val )
-            ? == 0 ( nurl_str_len iptr )
-            { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' is not a binding in scope` ) ) }
-            {}
-            ? == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat bck_arg_val `__mutable` ) ) )
-            { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' must be a mutable ': ~' binding - the callee mutates it in place` ) ) }
-            {}
-            ( nurl_lex_advance lex )
-            = av iptr
-            = at ( nurl_str_cat ity `*` )
+        { ? == bck_arg_tt TT_DOT
+            { // BORROW.md Phase 4: `inout` field target — `. obj field`.
+              // Pass the field's address so the callee mutates exactly
+              // that field of the caller's struct in place.
+                = av ( gen_inout_field_addr lex syms cg fname )
+                = at ( nurl_get_last_type )
+            }
+            { ? ! ( is_ident_tok bck_arg_tt )
+                { ( die lex ( nurl_str_cat3 `inout argument to '` fname `' must be a mutable ': ~' binding or a '. binding field' field target, not an expression` ) ) }
+                {}
+                : s iptr ( nurl_sym_get syms ( nurl_str_cat bck_arg_val `__ptr` ) )
+                : s ity ( nurl_sym_get syms bck_arg_val )
+                ? == 0 ( nurl_str_len iptr )
+                { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' is not a binding in scope` ) ) }
+                {}
+                ? == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat bck_arg_val `__mutable` ) ) )
+                { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' must be a mutable ': ~' binding - the callee mutates it in place` ) ) }
+                {}
+                ( nurl_lex_advance lex )
+                = av iptr
+                = at ( nurl_str_cat ity `*` )
+            }
         }
         { = av ( gen_expr lex syms cg )
             = at ( nurl_get_last_type )
@@ -1944,6 +2071,31 @@
         { = argstr ( nurl_str_cat argstr ( nurl_str_cat4 `, ` at ` ` av ) ) }
         = arg_idx + arg_idx 1
     }
+    // Call-arity check. scan_fn_sigs records every non-generic
+    // @-function's declared parameter count as `<fname>__arity`. A call
+    // with the wrong argument count otherwise emits a malformed `call`
+    // the LLVM verifier rejects far from the source — or, with too few
+    // arguments, silently miscompiles. The check runs while the lexer
+    // still sits on the closing `)`, so the diagnostic points at the
+    // call itself. Skipped for generic calls (call_name != fname), for
+    // variadic FFI, and for a callee shadowed by a local binding
+    // (closure / fn-pointer — `<fname>__ptr` is set); none of those
+    // carry an `__arity` entry anyway, the `__ptr` guard just makes the
+    // skip explicit against a same-named local.
+    // `ar_s` is `?` when scan_fn_sigs saw conflicting definitions of
+    // the name (different parameter counts) — skip the check then.
+    : s ar_s ( nurl_sym_get syms ( nurl_str_cat fname `__arity` ) )
+    ? & & & & ( seq call_name fname ) ! is_variadic
+          != 0 ( nurl_str_len ar_s ) ! ( seq ar_s `?` )
+          == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__ptr` ) ) )
+    { : i ar_want ( nurl_str_to_int ar_s )
+        ? != ar_want arg_idx
+        { ( die lex ( nurl_str_cat3
+            ( nurl_str_cat3 `call to '` fname `' has the wrong number of arguments: expected ` )
+            ( nurl_str_cat3 ( nurl_str_int ar_want ) `, got ` ( nurl_str_int arg_idx ) )
+            ` — every NURL operator has fixed arity, so a missing or extra argument shifts every token after it; check this call.` ) ) }
+        {} }
+    {}
     ( expect lex TT_RPAREN )
     // Escape analysis: a call's RESULT is never a stack reference —
     // returning a borrow into a parameter is interprocedural (BORROW.md
@@ -2279,11 +2431,37 @@
     // Peek the variable name (if any) BEFORE gen_expr consumes it, so we
     // can later look up `<name>__res_nurl_T` (set by gen_let_or_struct)
     // to know the source-level NURL T of an `! T E` value being matched.
-    : s match_var_name ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_lex_val lex ) ``
+    : ~ s match_var_name ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_lex_val lex ) ``
 
-    // Generate the value to match against
+    // Generate the value to match against. Clear __last_nurl_call__
+    // first: for a non-binding scrutinee, a non-empty value afterwards
+    // means the scrutinee's outermost operation was a call, and the
+    // value is that callee's NURL return type (`! T E`).
+    ( nurl_sym_def syms `__last_nurl_call__` `` )
     : s match_val ( gen_expr lex syms cg )
     : s match_type ( nurl_get_last_type )
+
+    // A `?? ( f … )` whose scrutinee is a direct call has no binding
+    // name, so the wide-payload reconstruction below (keyed on
+    // `<name>__res_nurl_T` / `__res_t_llvm`) would be skipped — and a
+    // wide `! T E` payload (a multi-field value struct) would be read
+    // as its raw heap-box pointer (silent garbage). Synthesise a
+    // binding name and populate those keys from the call's NURL return
+    // type so the direct-call form reconstructs identically to `?? r`.
+    ? & == 0 ( nurl_str_len match_var_name )
+          != 0 ( nurl_str_len ( nurl_sym_get syms `__last_nurl_call__` ) )
+    { : s mcall_nurl ( nurl_sym_get syms `__last_nurl_call__` )
+        : s msynth ( nurl_str_cat `__matchtmp` ( nurl_cg_lbl cg `mt` ) )
+        : s minner_t ( str_first_word ( str_skip_word mcall_nurl ) )
+        : s minner_e ( str_first_word ( str_skip_word ( str_skip_word mcall_nurl ) ) )
+        ( nurl_sym_def syms ( nurl_str_cat msynth `__res_nurl_T` ) minner_t )
+        ( nurl_sym_def syms ( nurl_str_cat msynth `__res_nurl_E` ) minner_e )
+        : s minner_llvm ( nurl_sym_get syms minner_t )
+        ? != 0 ( nurl_str_len minner_llvm )
+        { ( nurl_sym_def syms ( nurl_str_cat msynth `__res_t_llvm` ) minner_llvm ) }
+        {}
+        = match_var_name msynth }
+    {}
 
     ( expect lex TT_LBRACE )  // expect '{'
 
@@ -2990,35 +3168,35 @@
 // ── Loop ~ cond { body } ──────────────────────────────────────────
 
 @ gen_loop i lex i syms i cg → s {
-    : i start_pos ( nurl_lex_cur_start lex )
     ( nurl_lex_advance lex )
     // For-each: ~ IDENT(var) IDENT(slice) { body }
     ? & == ( nurl_lex_type lex ) TT_IDENT == ( nurl_lex_peek_type lex ) TT_IDENT
     { ^ ( gen_foreach lex syms cg ) }
     {}
 
-    // While loop: ~ cond { body }
-    // We need to see if a block follows. If not, this was a complement expression.
+    // While loop `~ cond { body }`, or a complement expression used as
+    // a statement (grammar alternative 3 — `~ expr`). Emit the
+    // condition straight into `lc`, a re-enterable block, then look for
+    // the `{`. The condition is therefore parsed exactly once and
+    // evaluated once per iteration — there is no speculative parse
+    // whose IR would have to be discarded, so a side-effecting
+    // condition runs exactly (bodies + 1) times. If no `{` follows it
+    // was a complement expression: `lc` stays as a harmless
+    // single-predecessor block, the value is complemented, returned.
     : s lc ( nurl_cg_lbl cg `loop_check` )
     : s lb ( nurl_cg_lbl cg `loop_body` )
     : s le ( nurl_cg_lbl cg `loop_exit` )
 
-    // Speculatively parse condition
+    ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
+    ( emit ( nurl_str_cat lc `:` ) )
+    ( nurl_sym_def syms `__cur_lbl__` lc )
     : s cv ( gen_expr lex syms cg )
+    : s cvt ( nurl_get_last_type )
     ? == ( nurl_lex_type lex ) TT_LBRACE
     {
-        // It's a loop! Emit the control flow.
-        // We already emitted some expression IR into the current block, but we need it in lc.
-        // Easiest is to re-parse it in the right place.
-        ( nurl_lex_set_pos lex start_pos )
-        ( nurl_lex_advance lex )
-
-        ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
-        ( emit ( nurl_str_cat lc `:` ) )
-        ( nurl_sym_def syms `__cur_lbl__` lc )
-        = cv ( gen_expr lex syms cg )
+        // It's a loop.
         // Narrow non-i1 integer loop conditions (see gen_cond).
-        = cv ( coerce_to_i1 cv ( nurl_get_last_type ) cg )
+        = cv ( coerce_to_i1 cv cvt cg )
         ( nurl_print `  br i1 ` ) ( nurl_print cv )
         ( nurl_print `, label %` ) ( nurl_print lb )
         ( nurl_print `, label %` ) ( nurl_print le ) ( emit_dbg_eol )
@@ -3051,10 +3229,19 @@
         ^ `undef`
     }
     {
-        // No block follows, must be a complement expression.
-        // Backtrack and let gen_expr handle it.
-        ( nurl_lex_set_pos lex start_pos )
-        ^ ( gen_expr lex syms cg )
+        // No block — a complement expression `~ cond` used as a
+        // statement (grammar alternative 3). `cv` already holds the
+        // operand value (emitted into `lc`); apply the complement and
+        // return it. `lc` stays as a harmless single-predecessor block.
+        : s res_c ( nurl_cg_reg cg )
+        ? ( seq cvt `double` )
+        { ( nurl_print `  ` ) ( nurl_print res_c )
+            ( nurl_print ` = fneg double ` ) ( nurl_print cv ) ( nurl_print `\n` ) }
+        { ( nurl_print `  ` ) ( nurl_print res_c )
+            ( nurl_print ` = xor ` ) ( nurl_print cvt )
+            ( nurl_print ` ` ) ( nurl_print cv ) ( nurl_print `, -1\n` ) }
+        ( nurl_set_last_type cvt )
+        ^ res_c
     }
 }
 
@@ -4320,6 +4507,9 @@
     {}
     : i tt ( nurl_lex_type lex )
     : i bck_line ( nurl_lex_line lex )
+    // Record this statement's start line for gen_ident's cascade-aware
+    // "unexpected token" diagnostic (see g_stmt_line).
+    = g_stmt_line bck_line
     : s gs_rv ? == tt TT_COLON ( gen_let_or_struct lex syms cg )
     ? == tt TT_EQ ( gen_assign lex syms cg )
     ? == tt TT_TILDE ( gen_loop lex syms cg )
@@ -7201,6 +7391,68 @@
     result
 }
 
+// compute_generic_inout_sink: derive a generic function's `inout` and
+// `sink` parameter index sets from its stored template and publish
+// them under the GENERIC name in g_fn_inout / g_fn_sink.
+//
+// A parameter convention is a property of parameter POSITION, not of
+// the type arguments, so one computation serves every instantiation.
+// A call site looks the sets up by the generic name (see gen_call):
+// the mangled-name entry only appears once the deferred instantiation
+// is itself compiled, which is too late for the call site that
+// triggered it.
+//
+// parse_type and its helpers emit no IR and trigger no struct
+// instantiation — the scan_generic_structs pre-pass owns that — so
+// walking the raw template here, tparam tokens (`A` / `T` …) and all,
+// is side-effect-free.
+@ compute_generic_inout_sink s fname → v {
+    : s gsrc ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__gsrc` ) )
+    ? != 0 ( nurl_str_len gsrc )
+    { // Substitute every type parameter with a concrete primitive (`i`)
+      // before parsing. A bare tparam letter such as `T` or `F` lexes
+      // as TT_BOOL, which parse_type rejects with `expected type`; the
+      // real instantiation path dodges this because emit_one_instantiation
+      // substitutes the tparams away first. The substitution is
+      // type-irrelevant here — only parameter POSITIONS are read.
+        : ~ s probe gsrc
+        : ~ s tpr ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__tparams` ) )
+        ~ != 0 ( nurl_str_len tpr )
+        { : s tp ( str_first_word tpr )
+            = tpr ( str_skip_word tpr )
+            = probe ( subst_source probe tp `i` )
+        }
+        : i lexp ( nurl_lex_new probe `<gsig>` )
+        : ~ s ia ``
+        : ~ s sa ``
+        : ~ i pc 0
+        // Walk the parameter region only — stop at `→` (or, defensively,
+        // at the body `{` if a malformed template lacks the arrow).
+        ~ & & != ( nurl_lex_type lexp ) TT_ARROW != ( nurl_lex_type lexp ) TT_EOF
+                != ( nurl_lex_type lexp ) TT_LBRACE
+        { : i mk ( parse_param_marker lexp )
+            ? == mk 1
+            { = ia ? == 0 ( nurl_str_len ia )
+                ( nurl_str_int pc )
+                ( nurl_str_cat3 ia ` ` ( nurl_str_int pc ) ) }
+            {}
+            ? == mk 2
+            { = sa ? == 0 ( nurl_str_len sa )
+                ( nurl_str_int pc )
+                ( nurl_str_cat3 sa ` ` ( nurl_str_int pc ) ) }
+            {}
+            ( parse_type lexp )
+            ? ( is_ident_tok ( nurl_lex_type lexp ) )
+            { ( nurl_lex_advance lexp ) }
+            {}
+            = pc + pc 1
+        }
+        ( nurl_sym_def g_fn_inout fname ia )
+        ( nurl_sym_def g_fn_sink fname sa )
+    }
+    {}
+}
+
 // gen_generic_fn_store: record a generic function declaration.
 // Called when '[' is seen after the function name in gen_fn_decl.
 // Stores source template in g_generic_syms; emits no IR.
@@ -7233,6 +7485,11 @@
     ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__tparams` ) tparams )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__gsrc` ) src )
     ( nurl_sym_def syms ( nurl_str_cat fname `__generic` ) `1` )
+    // BORROW.md Phase 4: record this generic function's `inout` / `sink`
+    // parameter index sets (keyed by the generic name) so a call site
+    // can pass `inout` arguments by address and move-mark `sink` ones
+    // without waiting for the deferred instantiation to be compiled.
+    ( compute_generic_inout_sink fname )
 }
 
 // compute_generic_ret_ty: determine return type of a generic instantiation
@@ -9544,6 +9801,51 @@
     }
 }
 
+// __is_param_marker_word — true for the contextual parameter-convention
+// keywords (`in` / `inout` / `sink`) that may lead a parameter. Mirrors
+// parse_param_marker so the lexical param count below matches the real
+// parser's view of where a parameter's type begins.
+@ __is_param_marker_word s v → b {
+    | | ( seq v `in` ) ( seq v `inout` ) ( seq v `sink` )
+}
+
+// scan_skip_paren — lexically advance past one balanced `( ... )` group.
+// Returns 1 on a matched group, 0 if it ran into EOF first.
+@ scan_skip_paren i lex → i {
+    ? != ( nurl_lex_type lex ) TT_LPAREN { ^ 0 } {}
+    ( nurl_lex_advance lex )
+    : i depth 1
+    ~ & != depth 0 != ( nurl_lex_type lex ) TT_EOF {
+        : i t2 ( nurl_lex_type lex )
+        ? == t2 TT_LPAREN { = depth + depth 1 } {}
+        ? == t2 TT_RPAREN { = depth - depth 1 } {}
+        ( nurl_lex_advance lex )
+    }
+    ? == depth 0 1 0
+}
+
+// scan_skip_type — lexically advance past ONE type expression in a
+// function-signature parameter region. Mirrors parse_type's grammar
+// shape but emits no IR and calls no parse_* helper: a parse_type call
+// inside scan_fn_sigs desyncs the scan (BORROW.md Phase 4). Returns 1
+// on success, 0 on a shape it cannot classify (an anonymous enum type,
+// say); the caller then abandons the arity count for that function —
+// a missed check, never a wrong one.
+@ scan_skip_type i lex → i {
+    : i tt ( nurl_lex_type lex )
+    ? == tt TT_STAR   { ( nurl_lex_advance lex ) ^ ( scan_skip_type lex ) } {}
+    ? == tt TT_QUEST  { ( nurl_lex_advance lex ) ^ ( scan_skip_type lex ) } {}
+    ? == tt TT_LBRACK { ( nurl_lex_advance lex ) ^ ( scan_skip_type lex ) } {}
+    ? == tt TT_BANG
+    { ( nurl_lex_advance lex )
+        ? == 0 ( scan_skip_type lex ) { ^ 0 } {}
+        ^ ( scan_skip_type lex ) }
+    {}
+    ? == tt TT_LPAREN { ^ ( scan_skip_paren lex ) } {}
+    ? ( is_ident_tok tt ) { ( nurl_lex_advance lex ) ^ 1 } {}
+    0
+}
+
 // scan_fn_sigs: register return types of all @ and & declarations.
 @ scan_fn_sigs i lex i syms → v {
     ~ != ( nurl_lex_type lex ) TT_EOF {
@@ -9588,25 +9890,76 @@
                 { ~ != ( nurl_lex_type lex ) TT_RBRACK { ( nurl_lex_advance lex ) }
                     ( nurl_lex_advance lex )  // consume ']'
                     ( nurl_sym_def syms ( nurl_str_cat fname `__generic` ) `1` )
-                    ( skip_balanced lex )
-                }
-                { // BORROW.md Phase 4: blind-advance the parameter
-                  // region (robust against any header shape) but note
-                  // whether the marker token `inout` appears. `inout`
-                  // is banned as a parameter NAME (see gen_fn_param),
-                  // so its presence here is exact: `<fname>__has_inout`
-                  // lets a forward call site reject calling an
-                  // `inout` function before its definition is compiled
-                  // (g_fn_inout would otherwise be empty and the
-                  // argument silently passed by value).
-                    : ~ b saw_inout F
-                    ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF
+                    // BORROW.md Phase 4: scan the parameter region (from
+                    // here to the body `{`) for the `inout` marker, just
+                    // as the non-generic branch below does. `inout` is
+                    // banned as a parameter NAME so a bare `inout` token
+                    // here is exact. This lets a forward call to a
+                    // generic `inout` function be rejected cleanly — the
+                    // index set itself is computed by
+                    // compute_generic_inout_sink at gen_generic_fn_store.
+                    : ~ b g_saw_inout F
+                    ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF
                     { ? & ( is_ident_tok ( nurl_lex_type lex ) )
                           ( seq ( nurl_lex_val lex ) `inout` )
-                        { = saw_inout T } {}
+                        { = g_saw_inout T }
+                        {}
                         ( nurl_lex_advance lex ) }
+                    ? g_saw_inout
+                    { ( nurl_sym_def syms ( nurl_str_cat fname `__has_inout` ) `1` ) }
+                    {}
+                    ( skip_balanced lex )
+                }
+                { // BORROW.md Phase 4 + arity: walk the parameter
+                  // region counting parameters — one `[marker] TYPE
+                  // NAME` triple each, the TYPE skipped purely
+                  // lexically via scan_skip_type — and note whether the
+                  // `inout` marker appears. `inout` is banned as a
+                  // parameter NAME (see gen_fn_param) so a bare `inout`
+                  // here is exact: `<fname>__has_inout` lets a forward
+                  // call site reject calling an `inout` function before
+                  // its definition is compiled. If the walk meets a
+                  // shape scan_skip_type can't classify it abandons the
+                  // count (pc_ok → F) and blind-advances the rest, so
+                  // `<fname>__arity` is simply not recorded — a missed
+                  // arity check, never a wrong one.
+                    : ~ b saw_inout F
+                    : ~ i pcount 0
+                    : ~ b pc_ok T
+                    ~ & & pc_ok != ( nurl_lex_type lex ) TT_ARROW
+                          != ( nurl_lex_type lex ) TT_EOF
+                    { ? & ( is_ident_tok ( nurl_lex_type lex ) )
+                          ( __is_param_marker_word ( nurl_lex_val lex ) )
+                        { ? ( seq ( nurl_lex_val lex ) `inout` )
+                            { = saw_inout T } {}
+                            ( nurl_lex_advance lex ) }
+                        {}
+                        ? == 0 ( scan_skip_type lex )
+                        { = pc_ok F }
+                        { ? ( is_ident_tok ( nurl_lex_type lex ) )
+                            { ( nurl_lex_advance lex ) = pcount + pcount 1 }
+                            { = pc_ok F } } }
+                    // If the count was abandoned mid-region, advance the
+                    // rest blind so the `->` / ret-type handling still
+                    // runs (the arity entry is just not written).
+                    ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF
+                    { ( nurl_lex_advance lex ) }
                     ? saw_inout
                     { ( nurl_sym_def syms ( nurl_str_cat fname `__has_inout` ) `1` ) }
+                    {}
+                    ? pc_ok
+                    { : s ar_key ( nurl_str_cat fname `__arity` )
+                        : s ar_prev ( nurl_sym_get syms ar_key )
+                        : s ar_new ( nurl_str_int pcount )
+                        // Two definitions of the same name with
+                        // different parameter counts (a latent stdlib
+                        // collision) — neither arity can be trusted at
+                        // a call site, so mark it ambiguous (`?`) and
+                        // let gen_call skip the check rather than
+                        // blame an innocent call.
+                        ? & != 0 ( nurl_str_len ar_prev ) ! ( seq ar_prev ar_new )
+                        { ( nurl_sym_def syms ar_key `?` ) }
+                        { ( nurl_sym_def syms ar_key ar_new ) } }
                     {}
                     ? == ( nurl_lex_type lex ) TT_ARROW
                     { ( nurl_lex_advance lex )
