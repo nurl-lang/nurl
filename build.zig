@@ -88,16 +88,14 @@ pub fn build(b: *std.Build) !void {
     lastgood_runtime_cmd.step.dependOn(&sync_runtime_zstd.step);
     if (cfg.san) lastgood_runtime_cmd.addArg("--san");
 
-    const canvas_cmd = addCcCommand(b, cfg.cc_tokens);
+    const canvas_source = if (cfg.sdl2_include != null) "stdlib/canvas_sdl.zig" else "stdlib/canvas_stub.zig";
+    const canvas_cmd = b.addSystemCommand(&.{ b.graph.zig_exe, "build-obj", canvas_source, "-lc", "-O", "ReleaseFast", "-femit-bin=stdlib/canvas.o" });
     canvas_cmd.setCwd(b.path("."));
     canvas_cmd.has_side_effects = true;
     canvas_cmd.step.dependOn(&sync_canvas_sdl2.step);
-    canvas_cmd.addArgs(&.{ "-c", "stdlib/canvas.c" });
     if (cfg.sdl2_include) |include_dir| {
-        canvas_cmd.addArg("-DNURL_HAVE_SDL2");
         canvas_cmd.addArg(b.fmt("-I{s}", .{include_dir}));
     }
-    canvas_cmd.addArgs(&.{ "-o", "stdlib/canvas.o" });
 
     const stage0_ir = b.addSystemCommand(&.{ cfg.python, "compiler/nurlc.py", "--llvm", "compiler/nurlc.nu" });
     stage0_ir.setCwd(b.path("."));

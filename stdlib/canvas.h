@@ -4,7 +4,7 @@
  * via the `& \`canvas\` @ …` FFI syntax. Two back-ends implement
  * this contract:
  *
- *   - stdlib/canvas.c         uses SDL2 (native Linux/macOS/Windows)
+ *   - stdlib/canvas_sdl.zig   uses SDL2 (native Linux/macOS/Windows)
  *   - stdlib/canvas_wasm.zig  forwards to JS imports (browser playground)
  *
  * Pixel format: each pixel is stored as one int64_t whose low 32 bits

@@ -2796,10 +2796,23 @@ fn collectCanvasLinkExtras(
     const canvas_marker = try std.fs.path.join(std.heap.page_allocator, &.{ root, "stdlib", "canvas.sdl2" });
     defer std.heap.page_allocator.free(canvas_marker);
     if (pathExists(io, canvas_marker)) {
-        try extra_libs.append(gpa, "-lSDL2");
+        try appendCanvasLibTokens(gpa, gpa, io, extra_libs);
     } else {
         std.debug.print("[info] canvas.o is a stub build (no SDL2 at build time).\n", .{});
     }
+}
+
+fn appendCanvasLibTokens(
+    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    io: std.Io,
+    argv: *std.ArrayList([]const u8),
+) !void {
+    try appendPkgConfigOrFallback(gpa, arena, io, argv, "pkg-config", .{
+        .marker = "canvas.sdl2",
+        .pkg_config = "sdl2",
+        .fallback = &.{"-lSDL2"},
+    });
 }
 
 fn ensureDebugRuntime(init: std.process.Init, root: []const u8, driver_override: []const u8) ![]const u8 {
@@ -4262,7 +4275,7 @@ fn executeApiBuild(init: std.process.Init, args: []const []const u8) !ApiBuildPa
                 if (!pathExists(io, canvas_obj)) {
                     return .{
                         .http_status = 500,
-                        .fatal_detail = try std.fmt.allocPrint(gpa, "canvas FFI used but {s} not present. Rebuild the container with canvas.c compiled.", .{canvas_obj}),
+                        .fatal_detail = try std.fmt.allocPrint(gpa, "canvas FFI used but {s} not present. Rebuild the container with the Zig canvas backend compiled.", .{canvas_obj}),
                         .status = "fatal",
                         .message = "canvas runtime unavailable",
                         .filename = cfg.filename,
@@ -4339,7 +4352,12 @@ fn executeApiBuild(init: std.process.Init, args: []const []const u8) !ApiBuildPa
         try link_args.appendSlice(gpa, &.{ "--extra-obj", cfg.canvas_obj.? });
         if (cfg.canvas_sdl2_marker) |marker| {
             if (pathExists(io, marker)) {
-                try link_args.appendSlice(gpa, &.{ "--extra-lib", "-lSDL2" });
+                var canvas_libs: std.ArrayList([]const u8) = .empty;
+                defer canvas_libs.deinit(gpa);
+                try appendCanvasLibTokens(gpa, gpa, io, &canvas_libs);
+                for (canvas_libs.items) |arg| {
+                    try link_args.appendSlice(gpa, &.{ "--extra-lib", arg });
+                }
             }
         }
     }
