@@ -20,15 +20,10 @@
 //   ( query_pairs_free ( Vec QueryPair ) v ) → v
 //
 // Note on shape: query parameters use a dedicated `QueryPair { String
-// key, String value }` struct rather than the generic `Pair[String,
-// String]`. This is because the NURL compiler currently doesn't accept
-// compound type-args in the `( Vec ( Pair K V ) )` form (return /
-// declaration positions invoke `parse_type_paren`, which reads
-// type-args one token at a time and never recurses into a nested
-// paren). The slice form `[( Pair K V )]` works because
-// `parse_type_slice` recurses through `parse_type`. See
-// HTTP_SERVER_PLAN.md "Cross-cutting prerequisites" for the
-// language-side follow-up.
+// key, String value }` struct. `( Vec ( Pair String String ) )` is
+// fully supported by the compiler (compound type-args shipped
+// 2026-05-04) — the named struct is kept purely because `key` / `value`
+// read better at call sites than a generic Pair's `first` / `second`.
 //
 //   ( header_get ( Vec Header ) hs s name ) → ? String     case-insens
 //                                                          owned copy
@@ -134,11 +129,9 @@ $ `stdlib/ext/http.nu`
 }
 
 // Result of `parse_url`: a path/query split. Both fields are owned
-// Strings. Use the dedicated struct (rather than `Pair[String,String]`)
-// because struct-field types of the form `( Pair String String )` work
-// fine but `( Vec ( Pair String String ) )` doesn't parse (see
-// HTTP_SERVER_PLAN.md). Keeping a dedicated struct keeps the surface
-// uniform with `QueryPair` below.
+// Strings. A dedicated struct (rather than `Pair[String,String]`) for
+// the readable `path` / `query` field names — `( Vec ( Pair String
+// String ) )` itself compiles fine; see the QueryPair note above.
 : UrlSplit {
     String path
     String query

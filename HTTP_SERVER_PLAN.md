@@ -131,11 +131,10 @@ Pure NURL. No socket dependency for the parser proper — accepts a
 - [x] `parse_query s query → ( Vec QueryPair )` — `&`-separated, percent-decode
 - [x] `percent_decode s in → String` — `%20` → ` ` etc., honours `+` → space
 - [x] `percent_encode s in → String` — RFC 3986 unreserved set, uppercase hex
-  - **Note:** `UrlSplit` and `QueryPair` are dedicated structs rather
-    than `Pair[String,String]` because the compiler currently doesn't
-    accept compound type-args in the `( Vec ( Pair K V ) )` form (return
-    / declaration positions). The slice form `[( Pair K V )]` works.
-    See "Cross-cutting prerequisites" entry below.
+  - **Note:** `UrlSplit` and `QueryPair` are dedicated structs for
+    readable field names. The compound-type-arg limitation that once
+    motivated this is fixed — `( Vec ( Pair K V ) )` shipped 2026-05-04
+    (see the cross-cutting entry below).
 
 ### 2.3 Body reading — SHIPPED 2026-05-02
 - [x] Content-Length path: read N bytes from socket, append to body Vec[u]
@@ -894,18 +893,22 @@ body readers off a TcpConn with configurable size cap. Acceptance:
 well-formed/multi-header/folding/percent-encoded/unsupported-version/
 incomplete/malformed/oversized. Bootstrap fixed-point holds.
 
-Three NURL language gaps surfaced and recorded as cross-cutting
-follow-ups (none blocking — Phase 2 worked around each cleanly):
+Three NURL language gaps surfaced during Phase 2. Two have since been
+fixed in the compiler; the third remains:
 
-  1. `parse_type_paren` doesn't recurse for compound type-args
-     (`( Vec ( Pair K V ) )`); workaround is named structs
-     (`UrlSplit`, `QueryPair`, `ParsedHeaders`).
-  2. `! T E` Ok arms can only carry i64-fitting values; multi-field
-     structs miscompile. Workaround is the tagged-struct pattern used
-     by `ParsedHead { head, consumed, ok, err }`.
+  1. `parse_type_paren` didn't recurse for compound type-args
+     (`( Vec ( Pair K V ) )`). **FIXED 2026-05-04** — see the
+     cross-cutting entry above. `UrlSplit` / `QueryPair` are now a
+     readability choice, not a workaround.
+  2. `! T E` Ok arms miscompiled multi-field-struct payloads.
+     **FIXED 2026-05-21** — `! T E` now carries arbitrary structs (the
+     MQTT client returns `! MqttClient NetErr`, `! MqttMessage NetErr`
+     and similar). The `ParsedHead` tagged-struct pattern still works
+     but is no longer required.
   3. `# StructName 0` default-construction is wrong for multi-field
-     structs, breaking `vec_get [MultiFieldStruct]`. Workaround is
-     direct `*Header`/`*QueryPair`-pointer iteration via `vec_data`.
+     structs, breaking `vec_get [MultiFieldStruct]`. **Still open** —
+     workaround is direct `*Header`/`*QueryPair`-pointer iteration via
+     `vec_data`.
 
 Next up: Phase 3 — HTTP/1.1 response writer in
 `stdlib/ext/http_response.nu`.*
