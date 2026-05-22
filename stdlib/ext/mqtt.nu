@@ -39,6 +39,9 @@
 //   ( mqtt_keepalive_tick MqttClient )                         → ! v MqttErr
 //   ( mqtt_reconnect    MqttClient s host i port MqttConfig cfg ) → ! v MqttErr
 //   ( mqtt_receive      MqttClient )                           → ! MqttMessage MqttErr
+//   ( mqtt_listen       MqttClient )                           → ! MqttListener MqttErr
+//   ( mqtt_listener_recv MqttListener lst )                    → ? MqttMessage
+//   ( mqtt_listener_stop MqttListener lst )                    → v
 //   ( mqtt_message_prop MqttMessage m s key )                  → s   borrowed
 //   ( mqtt_message_free MqttMessage m )                        → v
 //   ( mqtt_err_name     MqttErr e )                            → s
@@ -50,15 +53,19 @@
 // properties (`mqtt_message_prop` looks one up; `mqtt_message_free`
 // releases it). `mqtt_keepalive_tick` pings only when the keep-alive
 // deadline has passed; `mqtt_reconnect` re-establishes a dropped
-// connection. Plain TCP (`tcp_connect`) is also exported.
+// connection. `mqtt_listen` spawns a background reader thread that owns
+// the connection and feeds inbound messages through a channel — the
+// application does other work and just `mqtt_listener_recv`s. Plain TCP
+// (`tcp_connect`) is also exported.
 //
-// Not yet implemented: a background receive thread. (The packet-id
-// allocator rotates 1..65535, but publishing is still synchronous —
-// one packet in flight.) See MQTT_PLAN.md.
+// Not yet implemented: pipelined (multiple-in-flight) publishing — the
+// calls are synchronous, one packet in flight. See MQTT_PLAN.md.
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/time.nu`
+$ `stdlib/std/thread.nu`
+$ `stdlib/std/channel.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/pair.nu`
@@ -766,6 +773,19 @@ $ `stdlib/core/pair.nu`
     ^ @ !v MqttErr { F # MqttErr MqttProtocol }
 }
 
+// Send a bare PINGREQ (no wait for PINGRESP) and push the keep-alive
+// deadline out. Used by the listener thread, which consumes the
+// PINGRESP transparently in its own read loop.
+@ __mqtt_send_pingreq MqttClient cl → v {
+    : ( Vec u ) pkt ( vec_with_cap [u] 2 )
+    ( vec_push [u] pkt # u 192 )
+    ( vec_push [u] pkt # u 0 )
+    : !v NetErr w ( tcp_write_all . cl conn pkt )
+    ?? w { T → {} F _ → {} }
+    ( vec_free [u] pkt )
+    = . cl ping_deadline + ( now_ms ) . cl keepalive_ms
+}
+
 // Send PINGREQ only if the keep-alive deadline has passed. Call this
 // from an idle loop — the library decides when a ping is actually due.
 // A no-op (Ok) when keep-alive is disabled or the deadline is not yet
@@ -918,10 +938,43 @@ $ `stdlib/core/pair.nu`
     }
 }
 
+// Parse a PUBLISH packet into an MqttMessage — topic, payload, and the
+// user properties — and free `pkt`. An inbound QoS 1 PUBLISH is PUBACK'd
+// and a QoS 2 PUBLISH gets the PUBREC/PUBCOMP exchange before returning.
+@ __mqtt_parse_publish MqttClient cl ( Vec u ) pkt → MqttMessage {
+    : i b0 ( __mqtt_byte pkt 0 )
+    : i qos & >> b0 1 3
+    : MqttVarint rl ( __mqtt_decode_varint pkt 1 )
+    : i hdr + 1 . rl nbytes
+    : i end + hdr . rl value
+    : i th ( __mqtt_byte pkt hdr )
+    : i tl ( __mqtt_byte pkt + hdr 1 )
+    : i tlen + * th 256 tl
+    : i tstart + hdr 2
+    : ~ i p + tstart tlen
+    : i pidhi ( __mqtt_byte pkt p )
+    : i pidlo ( __mqtt_byte pkt + p 1 )
+    ? > qos 0 { = p + p 2 } {}
+    : MqttVarint pr ( __mqtt_decode_varint pkt p )
+    : i propstart + p . pr nbytes
+    : i propend + propstart . pr value
+
+    : String topic ( __mqtt_extract_str pkt tstart tlen )
+    : String payload ( __mqtt_extract_str pkt propend - end propend )
+    : ( Vec ( Pair String String ) ) props ( vec_new [( Pair String String )] )
+    ( __mqtt_parse_props pkt propstart propend props )
+    ( vec_free [u] pkt )
+    : i inpid + * pidhi 256 pidlo
+    ? == qos 1 { ( __mqtt_send_ack2 cl 64 inpid ) } {}
+    ? == qos 2 { ( __mqtt_qos2_inbound cl inpid ) } {}
+    ^ @ MqttMessage { topic payload props }
+}
+
 // Read the next inbound application message. PINGRESP and other control
-// packets are consumed transparently; an inbound QoS 1 PUBLISH is
-// PUBACK'd automatically. A broker-initiated DISCONNECT surfaces as
-// Err(MqttClosed).
+// packets are consumed transparently; an inbound QoS 1/2 PUBLISH is
+// acknowledged automatically. A broker-initiated DISCONNECT surfaces as
+// Err(MqttClosed). Blocking — for non-blocking inbound handling while
+// the app does other work, use mqtt_listen.
 @ mqtt_receive MqttClient cl → !MqttMessage MqttErr {
     : ~ i guard 0
     ~ < guard 200 {
@@ -929,34 +982,9 @@ $ `stdlib/core/pair.nu`
         : !( Vec u ) MqttErr rp ( __mqtt_read_packet cl )
         ?? rp {
             T pkt → {
-                : i b0 ( __mqtt_byte pkt 0 )
-                : i ptype & >> b0 4 15
+                : i ptype & >> ( __mqtt_byte pkt 0 ) 4 15
                 ? == ptype 3 {
-                    : i qos & >> b0 1 3
-                    : MqttVarint rl ( __mqtt_decode_varint pkt 1 )
-                    : i hdr + 1 . rl nbytes
-                    : i end + hdr . rl value
-                    : i th ( __mqtt_byte pkt hdr )
-                    : i tl ( __mqtt_byte pkt + hdr 1 )
-                    : i tlen + * th 256 tl
-                    : i tstart + hdr 2
-                    : ~ i p + tstart tlen
-                    : i pidhi ( __mqtt_byte pkt p )
-                    : i pidlo ( __mqtt_byte pkt + p 1 )
-                    ? > qos 0 { = p + p 2 } {}
-                    : MqttVarint pr ( __mqtt_decode_varint pkt p )
-                    : i propstart + p . pr nbytes
-                    : i propend + propstart . pr value
-
-                    : String topic ( __mqtt_extract_str pkt tstart tlen )
-                    : String payload ( __mqtt_extract_str pkt propend - end propend )
-                    : ( Vec ( Pair String String ) ) props ( vec_new [( Pair String String )] )
-                    ( __mqtt_parse_props pkt propstart propend props )
-                    ( vec_free [u] pkt )
-                    : i inpid + * pidhi 256 pidlo
-                    ? == qos 1 { ( __mqtt_send_ack2 cl 64 inpid ) } {}
-                    ? == qos 2 { ( __mqtt_qos2_inbound cl inpid ) } {}
-                    ^ @ !MqttMessage MqttErr { T @ MqttMessage { topic payload props } }
+                    ^ @ !MqttMessage MqttErr { T ( __mqtt_parse_publish cl pkt ) }
                 } {
                     ( vec_free [u] pkt )
                     ? == ptype 14 {
@@ -1007,6 +1035,105 @@ $ `stdlib/core/pair.nu`
         = k + k 1
     }
     ^ ``
+}
+
+// ── background listener ──────────────────────────────────────────────
+
+// A running background reader. `inbox` carries inbound messages from
+// the reader thread to the application; `thread` is the reader itself.
+: MqttListener {
+    ( Channel MqttMessage ) inbox
+    Thread thread
+}
+
+// Spawn a background reader thread that owns the connection: it frames
+// inbound packets, pushes every PUBLISH onto an inbox channel, consumes
+// PINGRESP transparently, and emits its own keep-alive PINGREQs — so
+// the application can do other work and just pull messages with
+// `mqtt_listener_recv`. The thread is the sole user of `cl` from here
+// on; do not call other mqtt_* functions on `cl` while it runs.
+//
+// Intended for a subscriber: SUBSCRIBE before mqtt_listen, then consume.
+@ mqtt_listen MqttClient cl → !MqttListener MqttErr {
+    : ( Channel MqttMessage ) inbox ( chan_new [MqttMessage] )
+
+    // Wake often enough to ping within the keep-alive window and to
+    // notice a stop (the inbox channel being closed).
+    : ~ i rto 5000
+    ? > . cl keepalive_ms 0 {
+        ? < . cl keepalive_ms 6000 { = rto / . cl keepalive_ms 2 } {}
+    } {}
+    ( tcp_set_timeout . cl conn rto )
+
+    : ( @ v ) reader \ → v {
+        : ~ b running T
+        ~ running {
+            : !( Vec u ) MqttErr rp ( __mqtt_read_packet cl )
+            ?? rp {
+                T pkt → {
+                    : i ptype & >> ( __mqtt_byte pkt 0 ) 4 15
+                    ? == ptype 3 {
+                        : MqttMessage m ( __mqtt_parse_publish cl pkt )
+                        : b ok ( chan_send [MqttMessage] inbox m )
+                        ? ok {} { = running F }
+                    } {
+                        ( vec_free [u] pkt )
+                        ? == ptype 14 { = running F } {}
+                    }
+                }
+                F e → {
+                    ?? e {
+                        MqttTimeout → {
+                            ? ( chan_is_closed [MqttMessage] inbox ) {
+                                = running F
+                            } {
+                                ? > . cl keepalive_ms 0 {
+                                    ? >= ( now_ms ) . cl ping_deadline {
+                                        ( __mqtt_send_pingreq cl )
+                                    } {}
+                                } {}
+                            }
+                        }
+                        MqttClosed → { = running F }
+                        MqttTransport → { = running F }
+                        MqttProtocol → { = running F }
+                        MqttRefused → { = running F }
+                        MqttBadAuth → { = running F }
+                        MqttNotAuthorized → { = running F }
+                        MqttSubFailed → { = running F }
+                    }
+                }
+            }
+        }
+        ( chan_close [MqttMessage] inbox )
+        ( vec_free [u] . cl rxbuf )
+        ( tcp_close_conn . cl conn )
+    }
+
+    : !Thread ThreadErr tr ( thread_spawn reader )
+    ?? tr {
+        T t → { ^ @ !MqttListener MqttErr { T @ MqttListener { inbox t } } }
+        F _ → {
+            ( chan_free [MqttMessage] inbox )
+            ^ @ !MqttListener MqttErr { F # MqttErr MqttTransport }
+        }
+    }
+}
+
+// Block for the next inbound message. None once the listener has
+// stopped (connection closed, broker DISCONNECT, or mqtt_listener_stop).
+// Free each message with `mqtt_message_free`.
+@ mqtt_listener_recv MqttListener lst → ?MqttMessage {
+    ^ ( chan_recv [MqttMessage] . lst inbox )
+}
+
+// Stop the listener: signal the reader (close the inbox), wait for it
+// to exit — it closes the connection on its way out — and release the
+// channel.
+@ mqtt_listener_stop MqttListener lst → v {
+    ( chan_close [MqttMessage] . lst inbox )
+    ( thread_join . lst thread )
+    ( chan_free [MqttMessage] . lst inbox )
 }
 
 // ── disconnect ───────────────────────────────────────────────────────

@@ -60,7 +60,7 @@ Verified end to end against a live broker — `example/mqtt_pubsub.nu`.
       response-topic / correlation-data properties (parsed-and-skipped
       today; expose if a use case needs them).
 
-## Phase 4 — Long-lived connections — PARTLY SHIPPED
+## Phase 4 — Long-lived connections — SHIPPED
 
 - [x] **Keep-alive timer** — `MqttClient` tracks a `now_ms` ping
       deadline; `mqtt_keepalive_tick` emits a PINGREQ only when the
@@ -68,18 +68,24 @@ Verified end to end against a live broker — `example/mqtt_pubsub.nu`.
       idle loop. Fully-background pinging waits on the receive thread.
 - [x] **Reconnection** — `mqtt_reconnect` closes a dropped connection
       and re-runs TLS + CONNECT, leaving the `MqttClient` reusable.
-- [ ] **Reconnect polish** — automatic drop detection + backoff, and
-      remembering subscriptions to re-issue them (today the caller
-      re-subscribes).
+- [ ] *(optional, later)* **Reconnect polish** — automatic drop
+      detection + backoff, and remembering subscriptions to re-issue
+      them (today the caller re-subscribes).
 - [x] **Packet-id allocator** — `MqttClient.next_pid` rotates 1..65535;
       `__mqtt_next_pid` hands a fresh id to every QoS 1/2 PUBLISH,
       SUBSCRIBE and UNSUBSCRIBE. The await paths verify the ack carries
       the matching id (PUBACK / PUBREC / PUBCOMP / SUBACK / UNSUBACK).
       Publishing is still synchronous — one in flight — so this is
       currently hygiene + the groundwork for pipelined publishing.
-- [ ] **Background receive** — a reader thread (`std/thread.nu`) so
-      inbound PUBLISH is handled — and keep-alive pings emitted —
-      while the app does other work.
+- [x] **Background receive** — `mqtt_listen` spawns a reader thread
+      (`std/thread.nu`) that owns the socket: it frames inbound packets,
+      pushes every PUBLISH onto a `Channel MqttMessage`, consumes
+      PINGRESP, and emits its own keep-alive PINGREQ. The app pulls
+      messages with `mqtt_listener_recv` while doing other work;
+      `mqtt_listener_stop` closes the channel, joins the thread, and the
+      thread closes the connection on its way out — no socket-shutdown
+      race. `example/mqtt_listener.nu` verifies it live (publisher +
+      background subscriber, two connections).
 
 ## Phase 5 — Quality — TODO
 
