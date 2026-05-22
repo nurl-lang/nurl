@@ -2853,6 +2853,8 @@ fn appendRuntimeCompileFlags(
     io: std.Io,
     argv: *std.ArrayList([]const u8),
     root: []const u8,
+    pkg_config_exe: []const u8,
+    windows_cross_target: bool,
 ) !void {
     const compile_specs = [_]struct {
         marker: []const u8,
@@ -2865,30 +2867,11 @@ fn appendRuntimeCompileFlags(
         .{ .marker = "runtime.z", .define_flag = "-DNURL_HAVE_ZLIB", .pkg = "zlib" },
     };
 
-    const pkg_config = "pkg-config";
     for (compile_specs) |spec| {
         const marker_path = try std.fs.path.join(arena, &.{ root, "stdlib", spec.marker });
         if (!pathExists(io, marker_path)) continue;
         try argv.append(gpa, spec.define_flag);
-
-        const result = std.process.run(gpa, io, .{
-            .argv = &.{ pkg_config, "--cflags", spec.pkg },
-        }) catch |err| {
-            if (err == error.FileNotFound) continue;
-            return err;
-        };
-        defer gpa.free(result.stdout);
-        defer gpa.free(result.stderr);
-        switch (result.term) {
-            .exited => |code| {
-                if (code != 0) continue;
-                var it = std.mem.tokenizeAny(u8, result.stdout, " \t\r\n");
-                while (it.next()) |token| {
-                    try argv.append(gpa, try arena.dupe(u8, token));
-                }
-            },
-            else => {},
-        }
+        try appendPkgConfigCompileFlags(gpa, arena, io, argv, pkg_config_exe, spec.pkg, false, windows_cross_target);
     }
 }
 
@@ -2898,6 +2881,8 @@ fn appendRuntimeZigIncludeFlags(
     io: std.Io,
     argv: *std.ArrayList([]const u8),
     root: []const u8,
+    pkg_config_exe: []const u8,
+    windows_cross_target: bool,
 ) !void {
     const compile_specs = [_]struct {
         marker: []const u8,
@@ -2909,32 +2894,169 @@ fn appendRuntimeZigIncludeFlags(
         .{ .marker = "runtime.z", .pkg = "zlib" },
     };
 
-    const pkg_config = "pkg-config";
     for (compile_specs) |spec| {
         const marker_path = try std.fs.path.join(arena, &.{ root, "stdlib", spec.marker });
         if (!pathExists(io, marker_path)) continue;
+        try appendPkgConfigCompileFlags(gpa, arena, io, argv, pkg_config_exe, spec.pkg, true, windows_cross_target);
+    }
+}
 
-        const result = std.process.run(gpa, io, .{
-            .argv = &.{ pkg_config, "--cflags", spec.pkg },
-        }) catch |err| {
-            if (err == error.FileNotFound) continue;
-            return err;
-        };
-        defer gpa.free(result.stdout);
-        defer gpa.free(result.stderr);
-        switch (result.term) {
-            .exited => |code| {
-                if (code != 0) continue;
+fn appendPkgConfigCompileFlags(
+    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    io: std.Io,
+    argv: *std.ArrayList([]const u8),
+    pkg_config_exe: []const u8,
+    pkg: []const u8,
+    include_only: bool,
+    windows_cross_target: bool,
+) !void {
+    const result = std.process.run(gpa, io, .{
+        .argv = &.{ pkg_config_exe, "--cflags", pkg },
+    }) catch |err| {
+        if (err == error.FileNotFound) return;
+        return err;
+    };
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    var appended_include = false;
+    switch (result.term) {
+        .exited => |code| {
+            if (code == 0) {
                 var it = std.mem.tokenizeAny(u8, result.stdout, " \t\r\n");
                 while (it.next()) |token| {
-                    if (std.mem.startsWith(u8, token, "-I") or std.mem.startsWith(u8, token, "-isystem")) {
+                    if (std.mem.eql(u8, token, "-isystem")) {
+                        const next = it.next() orelse break;
+                        appended_include = true;
                         try argv.append(gpa, try arena.dupe(u8, token));
+                        try argv.append(gpa, try arena.dupe(u8, next));
+                        continue;
                     }
+
+                    const is_include =
+                        std.mem.startsWith(u8, token, "-I") or
+                        std.mem.startsWith(u8, token, "-isystem");
+                    if (include_only and !is_include) continue;
+                    if (is_include) appended_include = true;
+                    try argv.append(gpa, try arena.dupe(u8, token));
                 }
-            },
-            else => {},
-        }
+            }
+        },
+        else => {},
     }
+
+    if (appended_include) return;
+
+    if (try tryKnownPackageIncludeFallback(gpa, arena, io, argv, pkg)) return;
+
+    const include_dir = pkgConfigVariable(gpa, io, pkg_config_exe, pkg, "includedir") catch |err| {
+        if (err == error.FileNotFound) return;
+        return err;
+    } orelse return;
+    defer gpa.free(include_dir);
+    if (include_dir.len == 0) return;
+
+    try appendIncludeDirArg(gpa, arena, argv, include_dir, windows_cross_target and isSystemSdkIncludeDir(include_dir));
+}
+
+fn pkgConfigVariable(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    pkg_config_exe: []const u8,
+    pkg: []const u8,
+    variable: []const u8,
+) !?[]u8 {
+    const flag = try std.fmt.allocPrint(gpa, "--variable={s}", .{variable});
+    defer gpa.free(flag);
+
+    const result = std.process.run(gpa, io, .{
+        .argv = &.{ pkg_config_exe, flag, pkg },
+    }) catch |err| {
+        if (err == error.FileNotFound) return null;
+        return err;
+    };
+    defer gpa.free(result.stderr);
+
+    switch (result.term) {
+        .exited => |code| {
+            if (code != 0) {
+                gpa.free(result.stdout);
+                return null;
+            }
+        },
+        else => {
+            gpa.free(result.stdout);
+            return null;
+        },
+    }
+
+    const trimmed = std.mem.trim(u8, result.stdout, " \t\r\n");
+    if (trimmed.len == 0) {
+        gpa.free(result.stdout);
+        return null;
+    }
+
+    const out = try gpa.dupe(u8, trimmed);
+    gpa.free(result.stdout);
+    return out;
+}
+
+fn tryKnownPackageIncludeFallback(
+    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    io: std.Io,
+    argv: *std.ArrayList([]const u8),
+    pkg: []const u8,
+) !bool {
+    const candidates = switch (std.meta.stringToEnum(enum { zlib, sqlite3, openssl, libcurl }, pkg) orelse return false) {
+        .zlib => &[_][]const u8{
+            "/opt/homebrew/opt/zlib/include",
+            "/usr/local/opt/zlib/include",
+        },
+        .sqlite3 => &[_][]const u8{
+            "/opt/homebrew/opt/sqlite/include",
+            "/usr/local/opt/sqlite/include",
+        },
+        .openssl => &[_][]const u8{
+            "/opt/homebrew/opt/openssl@3/include",
+            "/opt/homebrew/opt/openssl/include",
+            "/usr/local/opt/openssl@3/include",
+            "/usr/local/opt/openssl/include",
+        },
+        .libcurl => &[_][]const u8{
+            "/opt/homebrew/opt/curl/include",
+            "/usr/local/opt/curl/include",
+        },
+    };
+
+    for (candidates) |candidate| {
+        if (!pathExists(io, candidate)) continue;
+        try appendIncludeDirArg(gpa, arena, argv, candidate, false);
+        return true;
+    }
+    return false;
+}
+
+fn appendIncludeDirArg(
+    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    argv: *std.ArrayList([]const u8),
+    include_dir: []const u8,
+    use_dir_after: bool,
+) !void {
+    if (use_dir_after) {
+        try argv.append(gpa, "-idirafter");
+        try argv.append(gpa, try arena.dupe(u8, include_dir));
+    } else {
+        const include_flag = try std.fmt.allocPrint(arena, "-I{s}", .{include_dir});
+        try argv.append(gpa, include_flag);
+    }
+}
+
+fn isSystemSdkIncludeDir(include_dir: []const u8) bool {
+    return std.mem.indexOf(u8, include_dir, "/SDKs/MacOSX") != null and
+        std.mem.endsWith(u8, include_dir, "/usr/include");
 }
 
 fn writeRuntimeFeaturesZig(
@@ -3063,6 +3185,7 @@ fn buildRuntimeObject(init: std.process.Init, cfg: RuntimeObjConfig) !void {
     const zig_obj = try std.fmt.allocPrint(arena, "{s}.zig.{d}.o", .{ cfg.out_path, pid });
     const zig_emit = try std.fmt.allocPrint(arena, "-femit-bin={s}", .{zig_obj});
     const is_windows_target = inferSystemLibMode(cfg.target) == .windows;
+    const pkg_config_exe = init.environ_map.get("PKG_CONFIG") orelse "pkg-config";
 
     try ensureExists(io, runtime_c, "stdlib/runtime.c");
     try ensureExists(io, runtime_zig, "stdlib/runtime_fs_env.zig");
@@ -3097,7 +3220,7 @@ fn buildRuntimeObject(init: std.process.Init, cfg: RuntimeObjConfig) !void {
         });
     }
     if (cfg.use_marker_cflags) {
-        try appendRuntimeCompileFlags(gpa, arena, io, &c_argv, cfg.root);
+        try appendRuntimeCompileFlags(gpa, arena, io, &c_argv, cfg.root, pkg_config_exe, is_windows_target);
     }
     try c_argv.appendSlice(gpa, cfg.extra_cflags);
     try c_argv.appendSlice(gpa, &.{
@@ -3119,7 +3242,7 @@ fn buildRuntimeObject(init: std.process.Init, cfg: RuntimeObjConfig) !void {
     var zig_argv: std.ArrayList([]const u8) = .empty;
     defer zig_argv.deinit(gpa);
     try zig_argv.appendSlice(gpa, &.{ cfg.zig_bin, "build-obj", runtime_zig, "-lc" });
-    try appendRuntimeZigIncludeFlags(gpa, arena, io, &zig_argv, cfg.root);
+    try appendRuntimeZigIncludeFlags(gpa, arena, io, &zig_argv, cfg.root, pkg_config_exe, is_windows_target);
     if (cfg.target) |target| {
         try zig_argv.appendSlice(gpa, &.{ "-target", target });
     }
