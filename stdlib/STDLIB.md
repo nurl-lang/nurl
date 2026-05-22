@@ -22,26 +22,24 @@
 
 ---
 
-## Nykytila — mitä `runtime.c`:ssä on jo
+## Nykytila — runtime backend
 
-`runtime.c` (~980 riviä) sisältää kaksi toisistaan erillistä puoliskoa:
+Varsinainen runtime-backend ei enää asu `runtime.c`:ssä. Se on siirretty
+Zig-sliceihin `stdlib/`-hakemistossa, ja `nurl-build runtime-obj` emittoi
+`runtime.o`:n suoraan niistä. `runtime.c` on enää lyhyt section map / shell,
+jotta vanhat viittaukset `runtime.c §...` pysyvät navigoitavina siirtymäkauden
+ajan.
 
-**A. Bootstrap-kompilaattorin tuki** (poistetaan kun kääntäjä itsehostuu puhtaasti):
-`nurl_lex_*`, `nurl_sym_*`, `nurl_cg_*`, `nurl_get_last_type`/`nurl_set_last_type`,
-`nurl_print_buf_start/stop/reset`. **Ei kuulu stdlibiin.**
+Nykyiset domainit:
 
-**B. Stdlib-FFI** (tästä stdlib rakennetaan):
-- I/O: `nurl_print`, `nurl_print_int`, `nurl_print_str`, `nurl_print_bool`, `nurl_eprint`, `nurl_eprintln`, `nurl_read_int`
-- Raaka-str: `nurl_str_len/get/eq/cat/cat3/cat4/int/float/to_int/slice/starts/find`
-- Charit: `nurl_is_alpha/digit/space/alnum_`
-- Tiedostot: `nurl_read_file`, `nurl_file_open/read/write/close/exists/size/del`
-- Prosessi: `nurl_argc`, `nurl_argv`, `nurl_argv_count`, `nurl_argv_get`, `nurl_exit`
-- Muisti: `nurl_alloc`, `nurl_zalloc`, `nurl_realloc`, `nurl_free`, `nurl_memcpy`, `nurl_peek`, `nurl_poke`
-- HashMap (string→i64): `nurl_map_new/put/get/has/del/size/free`
-- ~~StringBuilder: `nurl_sb_new/add/add_int/add_float/str/len/clear/free`~~ **POISTETTU 2026-05-01** — String elää nyt Vec[u]:n päällä `stdlib/core/string.nu`:ssa.
-
-Huom: `nurl_memset`, `nurl_arena_*`, `read_line`, `flush_stdout`, `dir_*`, aika, env, math,
-random, net, process_run eivät ole vielä runtimessa.
+- `runtime_fs_env.zig` — fs/env/io/core runtime, panic/recover, time, Windows symlink shim
+- `runtime_compiler_support.zig` — lexer/symtab/codegen/last-type
+- `runtime_string_csv.zig` — string/csv/math/strict-float helpers
+- `runtime_crypto_threads.zig` — crypto/thread/DoS state
+- `runtime_process.zig` — `proc_run` / `proc_spawn` + cross-target stubit
+- `runtime_tcp_tls.zig` — tcp/tls/accessors/graceful shutdown signal hooks
+- `runtime_http.zig` — sync HTTP, streaming HTTP, WinHTTP fallback
+- `runtime_sqlite_compress.zig` — sqlite + gzip
 
 ---
 
@@ -769,7 +767,15 @@ Ei ennakoivaa toteutusta — ne valmistuvat sitä mukaa kun joku oikeasti tarvit
 
 ```
 stdlib/
-├── runtime.c              — C-runtime (FFI-pohja, libm/libcurl/libsodium-sillat)
+├── runtime.c              — runtime section map shell
+├── runtime_fs_env.zig
+├── runtime_compiler_support.zig
+├── runtime_crypto_threads.zig
+├── runtime_http.zig
+├── runtime_process.zig
+├── runtime_sqlite_compress.zig
+├── runtime_string_csv.zig
+├── runtime_tcp_tls.zig
 ├── runtime.o
 ├── core/                  — Tier 0, automaattisesti tuotu prelude
 │   ├── mem.nu

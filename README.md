@@ -557,7 +557,7 @@ nurl/
 │       ├── correct.txt        — golden baseline (status + output per test)
 │       └── *.nu               — positive and negative tests
 ├── stdlib/
-│   ├── runtime.c              ✓ remaining C runtime core / platform fallbacks
+│   ├── runtime.c              ✓ runtime section map shell (implementation moved to Zig)
 │   ├── runtime_fs_env.zig     ✓ Zig runtime slice (fs/env/io/core runtime)
 │   ├── runtime_compiler_support.zig ✓ Zig runtime slice (symtab/lexer/codegen)
 │   ├── runtime_crypto_threads.zig ✓ Zig runtime slice (crypto/thread/DoS)
@@ -566,8 +566,8 @@ nurl/
 │   ├── runtime_sqlite_compress.zig ✓ Zig runtime slice (sqlite/gzip)
 │   ├── runtime_string_csv.zig ✓ Zig runtime slice (strings/csv/math helpers)
 │   ├── runtime_tcp_tls.zig    ✓ Zig runtime slice (tcp/tls/signal)
-│   ├── runtime.o              — native host build (C core + Zig slices)
-│   └── runtime.wasm.o         — wasm32-wasi build (produced inside the API image)
+│   ├── runtime.o              — native host build (emitted directly from Zig runtime slices)
+│   └── runtime.wasm.o         — wasm32-wasi build (emitted directly from Zig runtime slices)
 ├── examples/                  — curated `.nu` programs surfaced by the playground
 │   ├── showcase.nu  calculator.nu  fizzbuzz.nu  collatz.nu  wordcount.nu
 │   └── enigma.nu  slice_test.nu  test_05_closures_and_capture.nu …
