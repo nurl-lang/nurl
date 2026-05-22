@@ -4,8 +4,24 @@ const builtin = @import("builtin");
 const c = std.c;
 const windows = std.os.windows;
 
+const RuntimeStat = if (builtin.os.tag == .windows) extern struct {
+    dev: c_uint,
+    ino: c_ushort,
+    mode: c_ushort,
+    nlink: c_short,
+    uid: c_short,
+    gid: c_short,
+    rdev: c_uint,
+    atime: c_longlong,
+    mtime: c_longlong,
+    ctime: c_longlong,
+    size: c_longlong,
+} else c.Stat;
+
 extern "c" fn remove(path: [*:0]const u8) c_int;
-extern "c" fn stat(path: [*:0]const u8, buf: *c.Stat) c_int;
+extern "c" fn stat(path: [*:0]const u8, buf: *RuntimeStat) c_int;
+extern "c" fn execvp(file: [*:0]const u8, argv: [*c]?[*:0]const u8) c_int;
+extern "c" fn signal(sig: c_int, handler: usize) usize;
 extern "c" fn fseek(stream: *c.FILE, offset: c_long, whence: c_int) c_int;
 extern "c" fn ftell(stream: *c.FILE) c_long;
 extern "c" fn fputs(s: [*:0]const u8, stream: *c.FILE) c_int;
@@ -37,8 +53,8 @@ const darwin = if (builtin.os.tag == .driverkit or
     builtin.os.tag == .tvos or
     builtin.os.tag == .visionos or
     builtin.os.tag == .watchos) struct {
-    extern "c" fn @"stat$INODE64"(path: [*:0]const u8, buf: *c.Stat) c_int;
-    extern "c" fn @"fstat$INODE64"(fd: c.fd_t, buf: *c.Stat) c_int;
+    extern "c" fn @"stat$INODE64"(path: [*:0]const u8, buf: *RuntimeStat) c_int;
+    extern "c" fn @"fstat$INODE64"(fd: c.fd_t, buf: *RuntimeStat) c_int;
     extern "c" var __stdinp: *c.FILE;
     extern "c" var __stdoutp: *c.FILE;
     extern "c" var __stderrp: *c.FILE;
@@ -60,7 +76,7 @@ const posix = if (builtin.os.tag == .windows) struct {} else struct {
     extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
     extern "c" fn unsetenv(name: [*:0]const u8) c_int;
     extern "c" fn close(fd: c.fd_t) c_int;
-    extern "c" fn fstat(fd: c.fd_t, buf: *c.Stat) c_int;
+    extern "c" fn fstat(fd: c.fd_t, buf: *RuntimeStat) c_int;
 };
 
 const win = if (builtin.os.tag == .windows) struct {
@@ -97,7 +113,7 @@ fn ensureErrnoOr(err: c.E) void {
     if (c._errno().* == 0) setErrno(err);
 }
 
-fn statCall(path: [*:0]const u8, buf: *c.Stat) c_int {
+fn statCall(path: [*:0]const u8, buf: *RuntimeStat) c_int {
     return switch (builtin.os.tag) {
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => switch (builtin.cpu.arch) {
             .x86_64 => darwin.@"stat$INODE64"(path, buf),
@@ -107,7 +123,7 @@ fn statCall(path: [*:0]const u8, buf: *c.Stat) c_int {
     };
 }
 
-fn fstatCall(fd: c.fd_t, buf: *c.Stat) c_int {
+fn fstatCall(fd: c.fd_t, buf: *RuntimeStat) c_int {
     return switch (builtin.os.tag) {
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => switch (builtin.cpu.arch) {
             .x86_64 => darwin.@"fstat$INODE64"(fd, buf),
@@ -127,6 +143,10 @@ fn dupZ(src: [*:0]const u8) ?[*:0]u8 {
     @memcpy(buf[0..len], src[0..len]);
     buf[len] = 0;
     return @ptrCast(buf);
+}
+
+fn statSize(st: *const RuntimeStat) c_longlong {
+    return @intCast(st.size);
 }
 
 fn dupSliceZ(src: []const u8) ?[*:0]u8 {
@@ -404,12 +424,33 @@ const NurlDosState = struct {
     mutex: std.Io.Mutex = .init,
 };
 
+const NurlProcResult = extern struct {
+    exit_code: c_longlong,
+    err_kind: c_longlong,
+    stdout_buf: ?[*:0]u8,
+    stdout_len: c_longlong,
+    stderr_buf: ?[*:0]u8,
+    stderr_len: c_longlong,
+};
+
+const NurlProcBuf = struct {
+    data: ?[*]u8 = null,
+    len: usize = 0,
+    cap: usize = 0,
+};
+
 const max_cgs = 8;
 
 const NurlCG = struct {
     reg: c_int,
     lbl: c_int,
 };
+
+const nurl_proc_err_ok: c_longlong = 0;
+const nurl_proc_err_notfound: c_longlong = 1;
+const nurl_proc_err_exec_failed: c_longlong = 2;
+const nurl_proc_err_io: c_longlong = 3;
+const nurl_proc_err_other: c_longlong = 4;
 
 fn readFileAlloc(path: [*:0]const u8, nul_terminate: bool, empty_alloc_one: bool) ?[*]u8 {
     const file = c.fopen(path, "rb") orelse return null;
@@ -868,6 +909,67 @@ fn fillRandomBytes(buf: []u8) bool {
     return true;
 }
 
+fn allocProcResult() ?*NurlProcResult {
+    const raw = c.calloc(1, @sizeOf(NurlProcResult)) orelse return null;
+    return @ptrCast(@alignCast(raw));
+}
+
+fn procEmptyResult(err_kind: c_longlong) c_longlong {
+    const result = allocProcResult() orelse return 0;
+    result.* = .{
+        .exit_code = 0,
+        .err_kind = err_kind,
+        .stdout_buf = dupSliceZ(""),
+        .stdout_len = 0,
+        .stderr_buf = dupSliceZ(""),
+        .stderr_len = 0,
+    };
+    return @intCast(@intFromPtr(result));
+}
+
+fn procBufAppend(buf: *NurlProcBuf, src: []const u8) bool {
+    if (buf.len + src.len + 1 > buf.cap) {
+        var new_cap = if (buf.cap == 0) @as(usize, 256) else buf.cap;
+        while (new_cap < buf.len + src.len + 1) new_cap *= 2;
+        const raw = c.realloc(buf.data, new_cap) orelse return false;
+        buf.data = @ptrCast(raw);
+        buf.cap = new_cap;
+    }
+    const data = buf.data orelse return false;
+    @memcpy(data[buf.len .. buf.len + src.len], src);
+    buf.len += src.len;
+    data[buf.len] = 0;
+    return true;
+}
+
+fn procBufOwnedOrEmpty(buf: *NurlProcBuf) ?[*:0]u8 {
+    return if (buf.data) |data| @ptrCast(data) else dupSliceZ("");
+}
+
+fn procClosePair(pair: *[2]c.fd_t) void {
+    if (pair[0] >= 0) _ = posix.close(pair[0]);
+    if (pair[1] >= 0) _ = posix.close(pair[1]);
+    pair[0] = -1;
+    pair[1] = -1;
+}
+
+fn waitStatusExited(status: c_int) bool {
+    return (status & 0x7f) == 0;
+}
+
+fn waitStatusExitCode(status: c_int) c_longlong {
+    return @intCast((status >> 8) & 0xff);
+}
+
+fn waitStatusSignaled(status: c_int) bool {
+    const term_sig = status & 0x7f;
+    return term_sig != 0 and term_sig != 0x7f;
+}
+
+fn waitStatusTermSig(status: c_int) c_longlong {
+    return @intCast(status & 0x7f);
+}
+
 var g_cgs: [max_cgs]?*NurlCG = .{null} ** max_cgs;
 var g_cg_count: c_int = 0;
 var g_lexers: [max_lex]?*NurlLex = .{null} ** max_lex;
@@ -1181,7 +1283,7 @@ pub export fn nurl_chdir(path: ?[*:0]const u8) c_longlong {
 
 pub export fn nurl_file_exists(path: ?[*:0]const u8) c_longlong {
     const file_path = path orelse return 0;
-    var st: c.Stat = undefined;
+    var st: RuntimeStat = undefined;
     return if (statCall(file_path, &st) == 0) 1 else 0;
 }
 
@@ -1255,8 +1357,8 @@ pub export fn nurl_file_size(path: ?[*:0]const u8) c_longlong {
         setErrno(.INVAL);
         return -1;
     };
-    var st: c.Stat = undefined;
-    if (statCall(file_path, &st) == 0) return @intCast(st.size);
+    var st: RuntimeStat = undefined;
+    if (statCall(file_path, &st) == 0) return statSize(&st);
     return -1;
 }
 
@@ -1383,11 +1485,11 @@ pub export fn nurl_read_file_mmap_zero(path: ?[*:0]const u8) ?[*]const u8 {
     if (fd < 0) return null;
     defer _ = posix.close(fd);
 
-    var st: c.Stat = undefined;
+    var st: RuntimeStat = undefined;
     if (fstatCall(fd, &st) != 0) return null;
-    if (st.size <= 0) return null;
+    if (statSize(&st) <= 0) return null;
 
-    const size: usize = @intCast(st.size);
+    const size: usize = @intCast(statSize(&st));
     const view = std.posix.mmap(null, size, .{ .READ = true }, std.posix.MAP{ .TYPE = .PRIVATE }, fd, 0) catch |err| {
         mapMmapError(err);
         return null;
@@ -1419,15 +1521,15 @@ pub export fn nurl_read_file_mmap(path: ?[*:0]const u8) ?[*:0]u8 {
     if (fd < 0) return null;
     defer _ = posix.close(fd);
 
-    var st: c.Stat = undefined;
+    var st: RuntimeStat = undefined;
     if (fstatCall(fd, &st) != 0) return null;
-    if (st.size <= 0) {
+    if (statSize(&st) <= 0) {
         const buf = allocBytes(1) orelse return null;
         buf[0] = 0;
         return @ptrCast(buf);
     }
 
-    const size: usize = @intCast(st.size);
+    const size: usize = @intCast(statSize(&st));
     const view = std.posix.mmap(null, size, .{ .READ = true }, std.posix.MAP{ .TYPE = .PRIVATE }, fd, 0) catch |err| {
         mapMmapError(err);
         return null;
@@ -2148,6 +2250,321 @@ pub export fn nurl_log_level_get() c_longlong {
 
 pub export fn nurl_log_level_set(level: c_longlong) void {
     g_log_level = level;
+}
+
+fn nurl_proc_run_impl(
+    cmd: ?[*:0]const u8,
+    argv_buf: ?[*:0]const u8,
+    argc: c_longlong,
+    stdin_blob: ?[*:0]const u8,
+) callconv(.c) c_longlong {
+    if (builtin.os.tag == .windows or builtin.os.tag == .wasi) {
+        return procEmptyResult(nurl_proc_err_other);
+    }
+
+    const result = allocProcResult() orelse return 0;
+    result.* = .{
+        .exit_code = 0,
+        .err_kind = nurl_proc_err_ok,
+        .stdout_buf = dupSliceZ(""),
+        .stdout_len = 0,
+        .stderr_buf = dupSliceZ(""),
+        .stderr_len = 0,
+    };
+
+    const cmd_ptr = cmd orelse {
+        result.err_kind = nurl_proc_err_notfound;
+        return @intCast(@intFromPtr(result));
+    };
+    if (cmd_ptr[0] == 0) {
+        result.err_kind = nurl_proc_err_notfound;
+        return @intCast(@intFromPtr(result));
+    }
+
+    const arg_count: usize = if (argc < 0) 0 else @intCast(argc);
+    const argv_user: ?[*]const ?[*:0]const u8 = if (arg_count == 0 or argv_buf == null)
+        null
+    else
+        @ptrCast(@alignCast(argv_buf.?));
+    const full_raw = c.malloc((arg_count + 2) * @sizeOf(?[*:0]const u8)) orelse {
+        result.err_kind = nurl_proc_err_other;
+        return @intCast(@intFromPtr(result));
+    };
+    defer c.free(full_raw);
+    const full: [*]?[*:0]const u8 = @ptrCast(@alignCast(full_raw));
+    full[0] = cmd_ptr;
+    var arg_index: usize = 0;
+    while (arg_index < arg_count) : (arg_index += 1) {
+        full[arg_index + 1] = if (argv_user) |user| user[arg_index] orelse "" else "";
+    }
+    full[arg_count + 1] = null;
+
+    var sin_p: [2]c.fd_t = .{ -1, -1 };
+    var sout_p: [2]c.fd_t = .{ -1, -1 };
+    var serr_p: [2]c.fd_t = .{ -1, -1 };
+    var err_p: [2]c.fd_t = .{ -1, -1 };
+
+    if (c.pipe(&sin_p) != 0 or c.pipe(&sout_p) != 0 or c.pipe(&serr_p) != 0 or c.pipe(&err_p) != 0) {
+        procClosePair(&sin_p);
+        procClosePair(&sout_p);
+        procClosePair(&serr_p);
+        procClosePair(&err_p);
+        result.err_kind = nurl_proc_err_io;
+        return @intCast(@intFromPtr(result));
+    }
+
+    const fd_flags = c.fcntl(err_p[1], c.F.GETFD, @as(usize, 0));
+    if (fd_flags != -1) _ = c.fcntl(err_p[1], c.F.SETFD, @as(c_uint, @intCast(fd_flags | c.FD_CLOEXEC)));
+
+    const pid_raw = c.fork();
+    if (pid_raw < 0) {
+        procClosePair(&sin_p);
+        procClosePair(&sout_p);
+        procClosePair(&serr_p);
+        procClosePair(&err_p);
+        result.err_kind = nurl_proc_err_io;
+        return @intCast(@intFromPtr(result));
+    }
+
+    if (pid_raw == 0) {
+        if (sin_p[0] != 0) _ = c.dup2(sin_p[0], 0);
+        if (sout_p[1] != 1) _ = c.dup2(sout_p[1], 1);
+        if (serr_p[1] != 2) _ = c.dup2(serr_p[1], 2);
+        _ = posix.close(sin_p[0]);
+        _ = posix.close(sin_p[1]);
+        _ = posix.close(sout_p[0]);
+        _ = posix.close(sout_p[1]);
+        _ = posix.close(serr_p[0]);
+        _ = posix.close(serr_p[1]);
+        _ = posix.close(err_p[0]);
+        _ = execvp(cmd_ptr, @ptrCast(full));
+        var child_errno: c_int = c._errno().*;
+        _ = c.write(err_p[1], @ptrCast(&child_errno), @sizeOf(c_int));
+        c._exit(127);
+    }
+
+    _ = posix.close(sin_p[0]);
+    sin_p[0] = -1;
+    _ = posix.close(sout_p[1]);
+    sout_p[1] = -1;
+    _ = posix.close(serr_p[1]);
+    serr_p[1] = -1;
+    _ = posix.close(err_p[1]);
+    err_p[1] = -1;
+
+    const nonblock_flag: c_uint = @bitCast(c.O{ .NONBLOCK = true });
+    var fl = c.fcntl(sout_p[0], c.F.GETFL, @as(usize, 0));
+    if (fl != -1) _ = c.fcntl(sout_p[0], c.F.SETFL, @as(c_uint, @intCast(fl)) | nonblock_flag);
+    fl = c.fcntl(serr_p[0], c.F.GETFL, @as(usize, 0));
+    if (fl != -1) _ = c.fcntl(serr_p[0], c.F.SETFL, @as(c_uint, @intCast(fl)) | nonblock_flag);
+
+    const old_pipe = signal(@intFromEnum(c.SIG.PIPE), 1);
+    const stdin_slice = std.mem.span(stdin_blob orelse "");
+    if (stdin_slice.len != 0) {
+        var off: usize = 0;
+        while (off < stdin_slice.len) {
+            const wrote = c.write(sin_p[1], stdin_slice.ptr + off, stdin_slice.len - off);
+            if (wrote < 0) {
+                if (c.errno(-1) == .INTR) continue;
+                break;
+            }
+            off += @intCast(wrote);
+        }
+    }
+    _ = posix.close(sin_p[1]);
+    sin_p[1] = -1;
+    _ = signal(@intFromEnum(c.SIG.PIPE), old_pipe);
+
+    var out_buf = NurlProcBuf{};
+    var err_buf = NurlProcBuf{};
+    var tmp: [4096]u8 = undefined;
+    var sout_open = true;
+    var serr_open = true;
+    var io_err = false;
+
+    while (sout_open or serr_open) {
+        var pfds: [2]c.pollfd = undefined;
+        var n_fds: usize = 0;
+        if (sout_open) {
+            pfds[n_fds] = .{
+                .fd = sout_p[0],
+                .events = c.POLL.IN,
+                .revents = 0,
+            };
+            n_fds += 1;
+        }
+        if (serr_open) {
+            pfds[n_fds] = .{
+                .fd = serr_p[0],
+                .events = c.POLL.IN,
+                .revents = 0,
+            };
+            n_fds += 1;
+        }
+
+        var pr: c_int = undefined;
+        while (true) {
+            pr = c.poll(pfds[0..].ptr, @intCast(n_fds), -1);
+            if (pr >= 0 or c.errno(-1) != .INTR) break;
+        }
+        if (pr < 0) {
+            io_err = true;
+            break;
+        }
+
+        var fd_index: usize = 0;
+        while (fd_index < n_fds) : (fd_index += 1) {
+            const fd = pfds[fd_index].fd;
+            const target = if (fd == sout_p[0]) &out_buf else &err_buf;
+            const open_flag = if (fd == sout_p[0]) &sout_open else &serr_open;
+            if (pfds[fd_index].revents == 0) continue;
+
+            var got_eof = false;
+            while (true) {
+                const rd = c.read(fd, &tmp, tmp.len);
+                if (rd > 0) {
+                    if (!procBufAppend(target, tmp[0..@intCast(rd)])) {
+                        io_err = true;
+                        got_eof = true;
+                        break;
+                    }
+                } else if (rd == 0) {
+                    got_eof = true;
+                    break;
+                } else {
+                    const err = c.errno(-1);
+                    if (err == .INTR) continue;
+                    if (err == .AGAIN) break;
+                    io_err = true;
+                    got_eof = true;
+                    break;
+                }
+            }
+
+            if (got_eof or (pfds[fd_index].revents & (c.POLL.HUP | c.POLL.ERR)) != 0) {
+                while (true) {
+                    const rd = c.read(fd, &tmp, tmp.len);
+                    if (rd > 0) {
+                        if (!procBufAppend(target, tmp[0..@intCast(rd)])) {
+                            io_err = true;
+                            break;
+                        }
+                    } else break;
+                }
+                open_flag.* = false;
+            }
+        }
+    }
+
+    _ = posix.close(sout_p[0]);
+    sout_p[0] = -1;
+    _ = posix.close(serr_p[0]);
+    serr_p[0] = -1;
+
+    var child_errno: c_int = 0;
+    var got_errno_bytes: usize = 0;
+    while (true) {
+        const rd = c.read(err_p[0], @as([*]u8, @ptrCast(&child_errno)) + got_errno_bytes, @sizeOf(c_int) - got_errno_bytes);
+        if (rd > 0) {
+            got_errno_bytes += @intCast(rd);
+            if (got_errno_bytes >= @sizeOf(c_int)) break;
+        } else if (rd == 0) {
+            break;
+        } else {
+            if (c.errno(-1) == .INTR) continue;
+            break;
+        }
+    }
+    _ = posix.close(err_p[0]);
+    err_p[0] = -1;
+
+    var status: c_int = 0;
+    var waited_pid: c.pid_t = undefined;
+    while (true) {
+        waited_pid = c.waitpid(@intCast(pid_raw), &status, 0);
+        if (waited_pid >= 0 or c.errno(-1) != .INTR) break;
+    }
+    if (waited_pid < 0) io_err = true;
+
+    if (child_errno != 0) {
+        result.exit_code = -1;
+        result.err_kind = if (child_errno == @intFromEnum(c.E.NOENT))
+            nurl_proc_err_notfound
+        else
+            nurl_proc_err_exec_failed;
+    } else if (io_err) {
+        result.exit_code = -1;
+        result.err_kind = nurl_proc_err_io;
+    } else if (waitStatusExited(status)) {
+        result.exit_code = waitStatusExitCode(status);
+        result.err_kind = nurl_proc_err_ok;
+    } else if (waitStatusSignaled(status)) {
+        result.exit_code = 128 + waitStatusTermSig(status);
+        result.err_kind = nurl_proc_err_ok;
+    } else {
+        result.exit_code = -1;
+        result.err_kind = nurl_proc_err_other;
+    }
+
+    c.free(result.stdout_buf);
+    c.free(result.stderr_buf);
+    result.stdout_buf = procBufOwnedOrEmpty(&out_buf);
+    result.stdout_len = @intCast(out_buf.len);
+    result.stderr_buf = procBufOwnedOrEmpty(&err_buf);
+    result.stderr_len = @intCast(err_buf.len);
+    return @intCast(@intFromPtr(result));
+}
+
+fn nurl_proc_exit_code_impl(handle: c_longlong) callconv(.c) c_longlong {
+    const result: ?*NurlProcResult = if (handle == 0) null else @ptrFromInt(@as(usize, @intCast(handle)));
+    return if (result) |value| value.exit_code else -1;
+}
+
+fn nurl_proc_err_kind_impl(handle: c_longlong) callconv(.c) c_longlong {
+    const result: ?*NurlProcResult = if (handle == 0) null else @ptrFromInt(@as(usize, @intCast(handle)));
+    return if (result) |value| value.err_kind else nurl_proc_err_other;
+}
+
+fn nurl_proc_stdout_impl(handle: c_longlong) callconv(.c) ?[*:0]const u8 {
+    const result: ?*NurlProcResult = if (handle == 0) null else @ptrFromInt(@as(usize, @intCast(handle)));
+    return if (result) |value| value.stdout_buf orelse "" else "";
+}
+
+fn nurl_proc_stderr_impl(handle: c_longlong) callconv(.c) ?[*:0]const u8 {
+    const result: ?*NurlProcResult = if (handle == 0) null else @ptrFromInt(@as(usize, @intCast(handle)));
+    return if (result) |value| value.stderr_buf orelse "" else "";
+}
+
+fn nurl_proc_stdout_len_impl(handle: c_longlong) callconv(.c) c_longlong {
+    const result: ?*NurlProcResult = if (handle == 0) null else @ptrFromInt(@as(usize, @intCast(handle)));
+    return if (result) |value| value.stdout_len else 0;
+}
+
+fn nurl_proc_stderr_len_impl(handle: c_longlong) callconv(.c) c_longlong {
+    const result: ?*NurlProcResult = if (handle == 0) null else @ptrFromInt(@as(usize, @intCast(handle)));
+    return if (result) |value| value.stderr_len else 0;
+}
+
+fn nurl_proc_free_impl(handle: c_longlong) callconv(.c) void {
+    const result: ?*NurlProcResult = if (handle == 0) null else @ptrFromInt(@as(usize, @intCast(handle)));
+    if (result) |value| {
+        if (value.stdout_buf) |buf| c.free(buf);
+        if (value.stderr_buf) |buf| c.free(buf);
+        c.free(value);
+    }
+}
+
+comptime {
+    if (builtin.os.tag != .windows and builtin.os.tag != .wasi) {
+        @export(&nurl_proc_run_impl, .{ .name = "nurl_proc_run" });
+        @export(&nurl_proc_exit_code_impl, .{ .name = "nurl_proc_exit_code" });
+        @export(&nurl_proc_err_kind_impl, .{ .name = "nurl_proc_err_kind" });
+        @export(&nurl_proc_stdout_impl, .{ .name = "nurl_proc_stdout" });
+        @export(&nurl_proc_stderr_impl, .{ .name = "nurl_proc_stderr" });
+        @export(&nurl_proc_stdout_len_impl, .{ .name = "nurl_proc_stdout_len" });
+        @export(&nurl_proc_stderr_len_impl, .{ .name = "nurl_proc_stderr_len" });
+        @export(&nurl_proc_free_impl, .{ .name = "nurl_proc_free" });
+    }
 }
 
 pub export fn nurl_str_len(input: ?[*:0]const u8) c_longlong {

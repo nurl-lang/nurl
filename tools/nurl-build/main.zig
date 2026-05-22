@@ -2979,6 +2979,7 @@ fn buildRuntimeObject(init: std.process.Init, cfg: RuntimeObjConfig) !void {
     const core_obj = try std.fmt.allocPrint(arena, "{s}.core.{d}.o", .{ cfg.out_path, pid });
     const zig_obj = try std.fmt.allocPrint(arena, "{s}.zig.{d}.o", .{ cfg.out_path, pid });
     const zig_emit = try std.fmt.allocPrint(arena, "-femit-bin={s}", .{zig_obj});
+    const is_windows_target = inferSystemLibMode(cfg.target) == .windows;
 
     try ensureExists(io, runtime_c, "stdlib/runtime.c");
     try ensureExists(io, runtime_zig, "stdlib/runtime_fs_env.zig");
@@ -3047,23 +3048,41 @@ fn buildRuntimeObject(init: std.process.Init, cfg: RuntimeObjConfig) !void {
     defer gpa.free(zig_result.stderr);
     try ensureSuccessWithStderr(zig_result, "runtime fs/env zig compile failed");
 
-    var relink_argv: std.ArrayList([]const u8) = .empty;
-    defer relink_argv.deinit(gpa);
-    try relink_argv.appendSlice(gpa, driver_parts.items);
-    if (cfg.target) |target| {
-        try relink_argv.appendSlice(gpa, &.{ "-target", target });
-    }
-    try relink_argv.appendSlice(gpa, &.{ "-r", core_obj, zig_obj, "-o", cfg.out_path });
+    if (is_windows_target) {
+        const zig_sidecar = try runtimeZigSidecarPath(arena, cfg.out_path);
+        try std.Io.Dir.copyFileAbsolute(core_obj, cfg.out_path, io, .{
+            .permissions = .default_file,
+            .make_path = true,
+            .replace = true,
+        });
+        try std.Io.Dir.copyFileAbsolute(zig_obj, zig_sidecar, io, .{
+            .permissions = .default_file,
+            .make_path = true,
+            .replace = true,
+        });
+    } else {
+        var relink_argv: std.ArrayList([]const u8) = .empty;
+        defer relink_argv.deinit(gpa);
+        try relink_argv.appendSlice(gpa, driver_parts.items);
+        if (cfg.target) |target| {
+            try relink_argv.appendSlice(gpa, &.{ "-target", target });
+        }
+        try relink_argv.appendSlice(gpa, &.{ "-r", core_obj, zig_obj, "-o", cfg.out_path });
 
-    const relink_result = try std.process.run(gpa, io, .{
-        .argv = relink_argv.items,
-        .cwd = .{ .path = cfg.root },
-    });
-    defer gpa.free(relink_result.stdout);
-    defer gpa.free(relink_result.stderr);
-    try ensureSuccessWithStderr(relink_result, "runtime object relink failed");
+        const relink_result = try std.process.run(gpa, io, .{
+            .argv = relink_argv.items,
+            .cwd = .{ .path = cfg.root },
+        });
+        defer gpa.free(relink_result.stdout);
+        defer gpa.free(relink_result.stderr);
+        try ensureSuccessWithStderr(relink_result, "runtime object relink failed");
+    }
 
     cleanup = true;
+}
+
+fn runtimeZigSidecarPath(arena: std.mem.Allocator, runtime_path: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}.zig.o", .{runtime_path});
 }
 
 fn zigOptimizeForRuntime(opt: []const u8, debug_info: bool) []const u8 {
@@ -3251,6 +3270,12 @@ fn buildLinkArgv(init: std.process.Init, args: []const []const u8) !std.ArrayLis
     try child_argv.appendSlice(gpa, extra_flags.items);
     try child_argv.append(gpa, ll_path);
     try child_argv.append(gpa, runtime_path);
+    if (inferSystemLibMode(target_override) == .windows) {
+        const runtime_sidecar = try runtimeZigSidecarPath(arena, runtime_path);
+        if (pathExists(io, runtime_sidecar)) {
+            try child_argv.append(gpa, runtime_sidecar);
+        }
+    }
     for (extra_objs.items) |extra_obj| {
         try ensureExists(io, extra_obj, "extra object");
         try child_argv.append(gpa, extra_obj);

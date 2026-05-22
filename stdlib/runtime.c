@@ -3770,6 +3770,7 @@ void nurl_log_level_set(long long lvl) { g_log_level = lvl; }
 #define NURL_PROC_ERR_IO            3
 #define NURL_PROC_ERR_OTHER         4
 
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 typedef struct NurlProcResult {
     long long  exit_code;
     long long  err_kind;
@@ -3794,6 +3795,7 @@ static int nurl__proc_buf_append(NurlProcBuf *b, const char *src, size_t n) {
     b->data[b->len] = 0;
     return 1;
 }
+#endif
 
 #if !defined(_WIN32) && !defined(__wasi__)
 /* ── POSIX backend (Linux + macOS) ───────────────────────────── */
@@ -3811,6 +3813,7 @@ static void nurl__proc_close_pair(int p[2]) {
     p[0] = p[1] = -1;
 }
 
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 long long nurl_proc_run(const char *cmd, const char *argv_buf,
                         long long argc, const char *stdin_blob) {
     NurlProcResult *r = (NurlProcResult*)calloc(1, sizeof(NurlProcResult));
@@ -4034,10 +4037,12 @@ long long nurl_proc_run(const char *cmd, const char *argv_buf,
     r->stderr_len = (long long)err_buf.len;
     return (long long)(uintptr_t)r;
 }
+#endif
 
 #elif defined(_WIN32) && !defined(__wasi__)
 /* ── Win32 backend (CreateProcess + reader threads) ─────────── */
 
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 #include <process.h>
 
 typedef struct NurlProcReadCtx {
@@ -4229,10 +4234,12 @@ long long nurl_proc_run(const char *cmd, const char *argv_buf,
     r->stderr_len = (long long)err_ctx.buf.len;
     return (long long)(uintptr_t)r;
 }
+#endif
 
 #else
 /* ── WASI / unsupported targets — stub ──────────────────────── */
 
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 long long nurl_proc_run(const char *cmd, const char *argv_buf,
                         long long argc, const char *stdin_blob) {
     (void)cmd; (void)argv_buf; (void)argc; (void)stdin_blob;
@@ -4243,11 +4250,13 @@ long long nurl_proc_run(const char *cmd, const char *argv_buf,
     r->stderr_buf = strdup("");
     return (long long)(uintptr_t)r;
 }
+#endif
 
 #endif  /* §16 backend selection */
 
 /* Accessors and the freer are platform-agnostic. */
 
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32) || defined(__wasi__)
 long long nurl_proc_exit_code(long long h) {
     NurlProcResult *r = (NurlProcResult*)(uintptr_t)h;
     return r ? r->exit_code : -1;
@@ -4285,6 +4294,7 @@ void nurl_proc_free(long long h) {
     free(r->stderr_buf);
     free(r);
 }
+#endif
 
 /* ── §16b  Process spawn (duplex stdio, line-buffered) ───────── */
 /*
