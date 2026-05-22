@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Parenthesised-operator diagnostic.** A `(` begins a function call,
+  so the token after it must be a function name. An operator token
+  there — `( . obj field )`, `( | a b )`, `( + x y )` — meant an
+  operator expression was wrongly wrapped in parentheses. nurlc used
+  to take the operator's lexeme as the callee, emit a call to a
+  function literally named `.` / `|` / `+`, and let the build fail far
+  from the source at link time with `use of undefined value`.
+  `gen_call` now rejects a binary operator, member access `.`, the
+  cast `#` or the caret `^` immediately after `(` with a precise
+  `error:` at the call site — `operator '.' cannot be a call target:
+  '(' begins a function call, but operator expressions are written
+  without parentheses` — and a caret on the operator. Regression
+  `compiler/tests/should_fail_paren_operator.nu`.
+
 * **Typed Path.** `stdlib/std/path.nu` gained a `Path { String inner }`
   typed, owning wrapper over a path string, with a concise
   Rust-PathBuf-style verb API — `path_new`, `path_str` (borrow the
