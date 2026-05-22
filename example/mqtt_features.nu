@@ -63,8 +63,7 @@ $ `stdlib/ext/mqtt.nu`
                     ( nurl_print `retained message received: ` )
                     ( nurl_print ( string_data . m payload ) ) ( nurl_print `\n` )
                     : i ok ( nurl_str_eq ( string_data . m payload ) `retained value` )
-                    ( string_free . m topic )
-                    ( string_free . m payload )
+                    ( mqtt_message_free m )
                     ? != 0 ok {
                         ( nurl_print `retain delivery OK.\n` )
                     } {

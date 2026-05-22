@@ -23,6 +23,8 @@
 //   ( mqtt_publish1     MqttClient s topic s payload )         → ! v NetErr   (QoS 1 + PUBACK)
 //   ( mqtt_publish2     MqttClient s topic s payload )         → ! v NetErr   (QoS 2, 4-way)
 //   ( mqtt_publish_retain MqttClient s topic s payload i qos ) → ! v NetErr
+//   ( mqtt_publish_props MqttClient s topic s payload i qos
+//                        ( Vec ( Pair String String ) ) props ) → ! v NetErr
 //   ( mqtt_subscribe    MqttClient s topic )                   → ! v NetErr
 //   ( mqtt_subscribe_qos MqttClient s topic i qos )            → ! v NetErr
 //   ( mqtt_unsubscribe  MqttClient s topic )                   → ! v NetErr
@@ -30,24 +32,27 @@
 //   ( mqtt_keepalive_tick MqttClient )                         → ! v NetErr
 //   ( mqtt_reconnect    MqttClient s host i port MqttConfig cfg ) → ! v NetErr
 //   ( mqtt_receive      MqttClient )                           → ! MqttMessage NetErr
+//   ( mqtt_message_prop MqttMessage m s key )                  → s   borrowed
+//   ( mqtt_message_free MqttMessage m )                        → v
 //   ( mqtt_disconnect   MqttClient )                           → v
 //
 // `mqtt_connect_cfg` takes a MqttConfig — will message, session expiry,
 // clean-start, keep-alive. `mqtt_receive` returns the next inbound
-// PUBLISH (transparently consuming PINGRESP and acking inbound QoS 1/2).
-// `mqtt_keepalive_tick` pings only when the keep-alive deadline has
-// passed; `mqtt_reconnect` re-establishes a dropped connection. Plain
-// TCP (`tcp_connect`) and the CONNACK-reason helper are also exported.
+// PUBLISH as an `MqttMessage` — topic, payload, and the MQTT 5 user
+// properties (`mqtt_message_prop` looks one up; `mqtt_message_free`
+// releases it). `mqtt_keepalive_tick` pings only when the keep-alive
+// deadline has passed; `mqtt_reconnect` re-establishes a dropped
+// connection. Plain TCP (`tcp_connect`) is also exported.
 //
-// Not yet implemented: MQTT 5 user properties on pub/receive, typed
-// reason codes, multi-message packet-id allocation, and a background
-// receive thread — see MQTT_PLAN.md.
+// Not yet implemented: typed reason codes, multi-message packet-id
+// allocation, and a background receive thread — see MQTT_PLAN.md.
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/pair.nu`
 
 // ── client-side connect (runtime.c §18b/§18c) ────────────────────────
 //
@@ -104,8 +109,15 @@ $ `stdlib/core/vec.nu`
     i         keepalive_ms
 }
 
-// An inbound application message.
-: MqttMessage { String topic  String payload }
+// An inbound application message. `props` holds the MQTT 5 user
+// properties (key/value string pairs) carried on the PUBLISH; empty
+// when the publisher attached none. Free the whole thing with
+// `mqtt_message_free`.
+: MqttMessage {
+    String topic
+    String payload
+    ( Vec ( Pair String String ) ) props
+}
 
 // CONNECT configuration. An empty `will_topic` means no will message;
 // a `session_expiry` of 0 with `clean_start` T is a clean session.
@@ -472,7 +484,7 @@ $ `stdlib/core/vec.nu`
 // Core PUBLISH — any QoS (0/1/2) and the retain flag. A synchronous
 // client keeps one packet in flight, so a fixed id (1) is safe. QoS 1
 // blocks for PUBACK, QoS 2 for the full PUBREC/PUBREL/PUBCOMP exchange.
-@ __mqtt_do_publish MqttClient cl s topic s payload i qos b retain → !v NetErr {
+@ __mqtt_do_publish MqttClient cl s topic s payload i qos b retain ( Vec ( Pair String String ) ) uprops → !v NetErr {
     : ~ i b0 48
     ? == qos 1 { = b0 | b0 2 } {}
     ? == qos 2 { = b0 | b0 4 } {}
@@ -481,7 +493,20 @@ $ `stdlib/core/vec.nu`
     : ( Vec u ) vh ( vec_with_cap [u] 40 )
     ( __mqtt_put_str vh topic )
     ? > qos 0 { ( bytes_push_u16_be vh 1 ) } {}
-    ( vec_push [u] vh # u 0 )
+    // PUBLISH property block — one User Property (0x26) per uprops entry
+    : ( Vec u ) props ( vec_new [u] )
+    : i np ( vec_len [( Pair String String )] uprops )
+    : *( Pair String String ) pd ( vec_data [( Pair String String )] uprops )
+    : ~ i pi 0
+    ~ < pi np {
+        : ( Pair String String ) pr . pd pi
+        ( vec_push [u] props # u 38 )
+        ( __mqtt_put_str props ( string_data . pr first ) )
+        ( __mqtt_put_str props ( string_data . pr second ) )
+        = pi + pi 1
+    }
+    ( __mqtt_emit_props vh props )
+    ( vec_free [u] props )
     : i plen ( nurl_str_len payload )
 
     : ( Vec u ) pkt ( vec_with_cap [u] 72 )
@@ -501,15 +526,31 @@ $ `stdlib/core/vec.nu`
     ^ @ !v NetErr { T 0 }
 }
 
+// Run `__mqtt_do_publish` with no user properties — owns and frees the
+// empty property list so the QoS wrappers stay one-liners.
+@ __mqtt_publish_plain MqttClient cl s topic s payload i qos b retain → !v NetErr {
+    : ( Vec ( Pair String String ) ) e ( vec_new [( Pair String String )] )
+    : !v NetErr r ( __mqtt_do_publish cl topic payload qos retain e )
+    ( vec_free [( Pair String String )] e )
+    ^ r
+}
+
 // PUBLISH at QoS 0 / 1 / 2 — fire-and-forget, at-least-once, exactly-once.
-@ mqtt_publish  MqttClient cl s topic s payload → !v NetErr { ^ ( __mqtt_do_publish cl topic payload 0 F ) }
-@ mqtt_publish1 MqttClient cl s topic s payload → !v NetErr { ^ ( __mqtt_do_publish cl topic payload 1 F ) }
-@ mqtt_publish2 MqttClient cl s topic s payload → !v NetErr { ^ ( __mqtt_do_publish cl topic payload 2 F ) }
+@ mqtt_publish  MqttClient cl s topic s payload → !v NetErr { ^ ( __mqtt_publish_plain cl topic payload 0 F ) }
+@ mqtt_publish1 MqttClient cl s topic s payload → !v NetErr { ^ ( __mqtt_publish_plain cl topic payload 1 F ) }
+@ mqtt_publish2 MqttClient cl s topic s payload → !v NetErr { ^ ( __mqtt_publish_plain cl topic payload 2 F ) }
 
 // PUBLISH with the retain flag — the broker stores the message and
 // hands it to every future subscriber of `topic`.
 @ mqtt_publish_retain MqttClient cl s topic s payload i qos → !v NetErr {
-    ^ ( __mqtt_do_publish cl topic payload qos T )
+    ^ ( __mqtt_publish_plain cl topic payload qos T )
+}
+
+// PUBLISH carrying MQTT 5 user properties — `props` is a list of
+// (key, value) string pairs placed in the PUBLISH property block. The
+// caller owns `props`.
+@ mqtt_publish_props MqttClient cl s topic s payload i qos ( Vec ( Pair String String ) ) props → !v NetErr {
+    ^ ( __mqtt_do_publish cl topic payload qos F props )
 }
 
 // ── subscribe / unsubscribe ──────────────────────────────────────────
@@ -722,6 +763,70 @@ $ `stdlib/core/vec.nu`
     ( __mqtt_send_ack2 cl 112 pid )
 }
 
+// Build an owned String from `len` bytes of `pkt` starting at `start`.
+@ __mqtt_extract_str ( Vec u ) pkt i start i len → String {
+    : String out ( string_with_cap 16 )
+    : i stop + start len
+    : ~ i k start
+    ~ < k stop {
+        : i b ( __mqtt_byte pkt k )
+        ? >= b 0 { ( string_push_char out b ) } {}
+        = k + k 1
+    }
+    ^ out
+}
+
+// Advance past one MQTT 5 property's value — `p` points just after the
+// property id byte. Covers every property's wire type so an unknown
+// property never derails the walk.
+@ __mqtt_skip_prop_value ( Vec u ) pkt i p i id → i {
+    // one-byte value
+    ? | | | == id 1 == id 23 == id 25 == id 36 { ^ + p 1 } {}
+    ? | | == id 37 == id 40 == id 41 { ^ + p 1 } {}
+    ? == id 42 { ^ + p 1 } {}
+    // two-byte value
+    ? | | | == id 19 == id 33 == id 34 == id 35 { ^ + p 2 } {}
+    // four-byte value
+    ? | | == id 2 == id 17 == id 24 { ^ + p 4 } {}
+    // variable byte integer (subscription identifier)
+    ? == id 11 {
+        : MqttVarint mv ( __mqtt_decode_varint pkt p )
+        ^ + p . mv nbytes
+    } {}
+    // default — UTF-8 string or binary data: 2-byte length + bytes
+    : i th ( __mqtt_byte pkt p )
+    : i tl ( __mqtt_byte pkt + p 1 )
+    ^ + + p 2 + * th 256 tl
+}
+
+// Walk the property block `pkt[start, end)` and append every User
+// Property (id 0x26 — a UTF-8 string pair) to `out`. Any other
+// property is skipped by its wire length.
+@ __mqtt_parse_props ( Vec u ) pkt i start i end ( Vec ( Pair String String ) ) out → v {
+    : ~ i p start
+    ~ < p end {
+        : i id ( __mqtt_byte pkt p )
+        ? < id 0 { = p end } {
+            = p + p 1
+            ? == id 38 {
+                : i kh ( __mqtt_byte pkt p )
+                : i kl ( __mqtt_byte pkt + p 1 )
+                : i klen + * kh 256 kl
+                : String key ( __mqtt_extract_str pkt + p 2 klen )
+                = p + + p 2 klen
+                : i vh ( __mqtt_byte pkt p )
+                : i vl ( __mqtt_byte pkt + p 1 )
+                : i vlen + * vh 256 vl
+                : String val ( __mqtt_extract_str pkt + p 2 vlen )
+                = p + + p 2 vlen
+                ( vec_push [( Pair String String )] out @ ( Pair String String ) { key val } )
+            } {
+                = p ( __mqtt_skip_prop_value pkt p id )
+            }
+        }
+    }
+}
+
 // Read the next inbound application message. PINGRESP and other control
 // packets are consumed transparently; an inbound QoS 1 PUBLISH is
 // PUBACK'd automatically. A broker-initiated DISCONNECT surfaces as
@@ -749,27 +854,18 @@ $ `stdlib/core/vec.nu`
                     : i pidlo ( __mqtt_byte pkt + p 1 )
                     ? > qos 0 { = p + p 2 } {}
                     : MqttVarint pr ( __mqtt_decode_varint pkt p )
-                    = p + p + . pr nbytes . pr value
+                    : i propstart + p . pr nbytes
+                    : i propend + propstart . pr value
 
-                    : String topic ( string_with_cap 16 )
-                    : ~ i ti tstart
-                    ~ < ti + tstart tlen {
-                        : i tb ( __mqtt_byte pkt ti )
-                        ? >= tb 0 { ( string_push_char topic tb ) } {}
-                        = ti + ti 1
-                    }
-                    : String payload ( string_with_cap 32 )
-                    : ~ i k p
-                    ~ < k end {
-                        : i pb ( __mqtt_byte pkt k )
-                        ? >= pb 0 { ( string_push_char payload pb ) } {}
-                        = k + k 1
-                    }
+                    : String topic ( __mqtt_extract_str pkt tstart tlen )
+                    : String payload ( __mqtt_extract_str pkt propend - end propend )
+                    : ( Vec ( Pair String String ) ) props ( vec_new [( Pair String String )] )
+                    ( __mqtt_parse_props pkt propstart propend props )
                     ( vec_free [u] pkt )
                     : i inpid + * pidhi 256 pidlo
                     ? == qos 1 { ( __mqtt_send_ack2 cl 64 inpid ) } {}
                     ? == qos 2 { ( __mqtt_qos2_inbound cl inpid ) } {}
-                    ^ @ !MqttMessage NetErr { T @ MqttMessage { topic payload } }
+                    ^ @ !MqttMessage NetErr { T @ MqttMessage { topic payload props } }
                 } {
                     ( vec_free [u] pkt )
                     ? == ptype 14 {
@@ -781,6 +877,45 @@ $ `stdlib/core/vec.nu`
         }
     }
     ^ @ !MqttMessage NetErr { F # NetErr NetOther }
+}
+
+// Free a user-property list and every String inside it. (A manual loop
+// rather than vec_free_with — a `\`-closure parameter cannot carry the
+// compound type `( Pair String String )`.)
+@ mqtt_props_free ( Vec ( Pair String String ) ) props → v {
+    : i n ( vec_len [( Pair String String )] props )
+    : *( Pair String String ) d ( vec_data [( Pair String String )] props )
+    : ~ i k 0
+    ~ < k n {
+        : ( Pair String String ) p . d k
+        ( string_free . p first )
+        ( string_free . p second )
+        = k + k 1
+    }
+    ( vec_free [( Pair String String )] props )
+}
+
+// Free an MqttMessage — topic, payload, and every user-property pair.
+@ mqtt_message_free MqttMessage m → v {
+    ( string_free . m topic )
+    ( string_free . m payload )
+    ( mqtt_props_free . m props )
+}
+
+// Look up a user-property value by key; "" when absent. The result is
+// borrowed from the message — valid until mqtt_message_free.
+@ mqtt_message_prop MqttMessage m s key → s {
+    : i n ( vec_len [( Pair String String )] . m props )
+    : *( Pair String String ) d ( vec_data [( Pair String String )] . m props )
+    : ~ i k 0
+    ~ < k n {
+        : ( Pair String String ) p . d k
+        ? != 0 ( nurl_str_eq ( string_data . p first ) key ) {
+            ^ ( string_data . p second )
+        } {}
+        = k + k 1
+    }
+    ^ ``
 }
 
 // ── disconnect ───────────────────────────────────────────────────────

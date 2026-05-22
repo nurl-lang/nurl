@@ -54,8 +54,7 @@ $ `stdlib/ext/mqtt.nu`
                     ( nurl_print ( string_data . m payload ) )
                     ( nurl_print `\n` )
                     : i same ( nurl_str_eq ( string_data . m payload ) msg )
-                    ( string_free . m topic )
-                    ( string_free . m payload )
+                    ( mqtt_message_free m )
                     ? != 0 same {
                         ( nurl_print `QoS 0 round-trip OK.\n` )
                     } {

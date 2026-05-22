@@ -45,11 +45,15 @@ Verified end to end against a live broker — `example/mqtt_pubsub.nu`.
       QoS bits). no-local / retain-handling bits still default 0.
 - [x] **Retain flag** — `mqtt_publish_retain`; unified `__mqtt_do_publish`
       drives every QoS + retain.
-- [ ] **MQTT 5 properties on pub / receive** — user properties,
-      content-type, response-topic; parse inbound property blocks into
-      `MqttMessage` (the reader already skips them, just doesn't expose).
+- [x] **MQTT 5 user properties** — `mqtt_publish_props` attaches a
+      `( Vec ( Pair String String ) )` to the PUBLISH property block;
+      `mqtt_receive` parses inbound property blocks (a full property-id
+      length table skips non-user-property entries) into
+      `MqttMessage.props`. `mqtt_message_prop` looks one up.
 - [ ] **Reason codes** — surface MQTT 5 reason codes (a typed `MqttErr`)
-      instead of collapsing failures to `NetOther`.
+      instead of collapsing failures to `NetOther`. The last Phase 3 item.
+- [ ] Typed accessors for content-type / response-topic / correlation
+      data (parsed-and-skipped today; expose if a use case needs them).
 
 ## Phase 4 — Long-lived connections — PARTLY SHIPPED
 
