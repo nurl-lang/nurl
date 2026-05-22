@@ -10,6 +10,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **MessagePack codec.** `stdlib/ext/msgpack.nu` is a faithful binary
+  codec between the `Json` value and the MessagePack wire format:
+  `msgpack_encode Json → ! ( Vec u ) MsgpackErr` and `msgpack_decode
+  ( Vec u ) → ! Json MsgpackErr`. The encoder emits the smallest
+  signed integer format, float64 for reals, and length-appropriate
+  str / array / map headers; the decoder accepts every integer and
+  float format plus all str / array / map sizes. `bin` / `ext` and
+  non-string map keys are reported as `MsgpackUnsupported`; truncation
+  and malformed input have their own `MsgpackErr` variants; a
+  recursion cap guards both directions. Three runtime helpers —
+  `nurl_f64_bits`, `nurl_f64_from_bits`, `nurl_f32_from_bits` — provide
+  the IEEE-754 bit access needed for the float wire format. Regression
+  `compiler/tests/msgpack_basic.nu` (37 assertions: round-trips,
+  msgpack.org encode vectors, non-canonical-format decoding, malformed
+  inputs); verified leak-free under ASan/UBSan/LSan. First of the
+  three Serde-completion ships (codec, then TOML serde, then MsgPack
+  serde).
+* **Runtime float-bits helpers** — `nurl_f64_bits`,
+  `nurl_f64_from_bits`, `nurl_f32_from_bits` in `stdlib/runtime.c`.
 * **Parenthesised-operator diagnostic.** A `(` begins a function call,
   so the token after it must be a function name. An operator token
   there — `( . obj field )`, `( | a b )`, `( + x y )` — meant an

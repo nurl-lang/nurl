@@ -2328,6 +2328,33 @@ double nurl_cos  (double x)            { return cos  (x); }
 double nurl_tan  (double x)            { return tan  (x); }
 double nurl_atan2(double y, double x)  { return atan2(y, x); }
 
+/* IEEE-754 bit access for the MessagePack codec (stdlib/ext/msgpack.nu),
+ * which reads and writes float32 / float64 in their exact wire bit
+ * patterns. A NURL `#` cast is a numeric value conversion (fptosi /
+ * sitofp); these reinterpret the bits instead, via memcpy — the only
+ * strict-aliasing-safe spelling. nurl_f64_bits yields the 64-bit
+ * pattern of a double; nurl_f64_from_bits / nurl_f32_from_bits rebuild
+ * a double from a 64- / 32-bit pattern (a decoded float32 widens to a
+ * double, NURL's only float type). */
+long long nurl_f64_bits(double x) {
+    long long bits;
+    memcpy(&bits, &x, 8);
+    return bits;
+}
+
+double nurl_f64_from_bits(long long bits) {
+    double x;
+    memcpy(&x, &bits, 8);
+    return x;
+}
+
+double nurl_f32_from_bits(long long bits) {
+    unsigned int u = (unsigned int)bits;
+    float f;
+    memcpy(&f, &u, 4);
+    return (double)f;
+}
+
 /* NaN / Inf classifiers — NURL's `!=` lowers to `fcmp one` which is
  * ordered, so the usual `x != x` trick reports false for NaN. */
 long long nurl_is_nan(double x) { return isnan(x) ? 1 : 0; }
