@@ -3,9 +3,15 @@ const builtin = @import("builtin");
 const runtime_features = @import("runtime_features_generated.zig");
 
 const c = std.c;
+const windows = std.os.windows;
 
 const have_posix_tcp = builtin.os.tag != .windows and builtin.os.tag != .wasi;
+const have_windows_tcp = builtin.os.tag == .windows;
 const have_posix_openssl = runtime_features.have_openssl and have_posix_tcp;
+const winsock = if (have_windows_tcp) @cImport({
+    @cInclude("winsock2.h");
+    @cInclude("ws2tcpip.h");
+}) else struct {};
 const net = if (have_posix_tcp) @cImport({
     @cInclude("sys/socket.h");
     @cInclude("netinet/in.h");
@@ -23,8 +29,15 @@ const posix = if (builtin.os.tag == .windows) struct {} else struct {
     extern "c" fn close(fd: c.fd_t) c_int;
 };
 
+const TcpFd = if (have_windows_tcp) winsock.SOCKET else c.fd_t;
+const win_ctrl_c_event: windows.DWORD = 0;
+const win_ctrl_break_event: windows.DWORD = 1;
+const win_ctrl_close_event: windows.DWORD = 2;
+const win_ctrl_logoff_event: windows.DWORD = 5;
+const win_ctrl_shutdown_event: windows.DWORD = 6;
+
 const NurlTcpPrefix = extern struct {
-    fd: c.fd_t,
+    fd: TcpFd,
     err_kind: c_longlong,
     kind: c_int,
     peer: ?[*:0]u8,
@@ -36,7 +49,7 @@ const NurlSniEntry = if (have_posix_openssl) extern struct {
 } else struct {};
 
 const NurlTcp = if (have_posix_openssl) extern struct {
-    fd: c.fd_t,
+    fd: TcpFd,
     err_kind: c_longlong,
     kind: c_int,
     peer: ?[*:0]u8,
@@ -50,7 +63,7 @@ const NurlTcp = if (have_posix_openssl) extern struct {
     tls_lock: pthread.pthread_mutex_t,
     tls_lock_init: c_int,
 } else extern struct {
-    fd: c.fd_t,
+    fd: TcpFd,
     err_kind: c_longlong,
     kind: c_int,
     peer: ?[*:0]u8,
@@ -69,9 +82,14 @@ const nurl_net_err_tls_ctx_init: c_longlong = 9;
 const nurl_net_err_tls_cert_load: c_longlong = 10;
 const nurl_net_err_tls_key_load: c_longlong = 11;
 const nurl_net_err_tls_handshake: c_longlong = 12;
-const nurl_invalid_sock: c.fd_t = -1;
+const nurl_invalid_sock: TcpFd = if (have_windows_tcp) winsock.INVALID_SOCKET else -1;
 
 var g_signal_listener: ?*volatile NurlTcpPrefix = null;
+
+extern "kernel32" fn SetConsoleCtrlHandler(
+    handler: ?*const fn (ctrl_type: windows.DWORD) callconv(.winapi) windows.BOOL,
+    add: windows.BOOL,
+) callconv(.winapi) windows.BOOL;
 
 fn dupZ(src: [*:0]const u8) ?[*:0]u8 {
     const len = std.mem.len(src);
@@ -303,6 +321,26 @@ fn nurlSignalPosixHandler(sig: c.SIG) callconv(.c) void {
     if (listener.fd != nurl_invalid_sock) {
         _ = c.close(listener.fd);
         listener.fd = nurl_invalid_sock;
+    }
+}
+
+fn nurlSignalWindowsHandler(ctrl_type: windows.DWORD) callconv(.winapi) windows.BOOL {
+    const listener = g_signal_listener orelse return windows.BOOL.fromBool(false);
+    switch (ctrl_type) {
+        win_ctrl_c_event,
+        win_ctrl_break_event,
+        win_ctrl_close_event,
+        win_ctrl_logoff_event,
+        win_ctrl_shutdown_event,
+        => {
+            if (listener.fd != nurl_invalid_sock) {
+                _ = winsock.shutdown(listener.fd, winsock.SD_BOTH);
+                _ = winsock.closesocket(listener.fd);
+                listener.fd = nurl_invalid_sock;
+            }
+            return windows.BOOL.fromBool(true);
+        },
+        else => return windows.BOOL.fromBool(false),
     }
 }
 
@@ -761,8 +799,13 @@ fn nurl_tcp_close_impl(handle: c_longlong) callconv(.c) void {
 fn nurl_tcp_shutdown_impl(handle: c_longlong) callconv(.c) void {
     const tcp = tcpPrefixHandle(handle) orelse return;
     if (tcp.fd != nurl_invalid_sock) {
-        _ = c.shutdown(tcp.fd, c.SHUT.RDWR);
-        _ = posix.close(tcp.fd);
+        if (have_windows_tcp) {
+            _ = winsock.shutdown(tcp.fd, winsock.SD_BOTH);
+            _ = winsock.closesocket(tcp.fd);
+        } else {
+            _ = c.shutdown(tcp.fd, c.SHUT.RDWR);
+            _ = posix.close(tcp.fd);
+        }
         tcp.fd = nurl_invalid_sock;
     }
 }
@@ -781,28 +824,55 @@ fn nurl_tcp_set_timeout_impl(handle: c_longlong, ms: c_longlong) callconv(.c) vo
     const tcp = tcpPrefixHandle(handle) orelse return;
     if (tcp.fd == nurl_invalid_sock) return;
 
-    var tv = c.timeval{
-        .sec = if (ms > 0) @intCast(@divTrunc(ms, 1000)) else 0,
-        .usec = if (ms > 0) @intCast(@mod(ms, 1000) * 1000) else 0,
-    };
-    _ = c.setsockopt(tcp.fd, c.SOL.SOCKET, c.SO.RCVTIMEO, @ptrCast(&tv), @sizeOf(c.timeval));
-    _ = c.setsockopt(tcp.fd, c.SOL.SOCKET, c.SO.SNDTIMEO, @ptrCast(&tv), @sizeOf(c.timeval));
+    if (have_windows_tcp) {
+        const tv: winsock.DWORD = if (ms > 0) @intCast(ms) else 0;
+        _ = winsock.setsockopt(
+            tcp.fd,
+            winsock.SOL_SOCKET,
+            winsock.SO_RCVTIMEO,
+            @ptrCast(&tv),
+            @sizeOf(winsock.DWORD),
+        );
+        _ = winsock.setsockopt(
+            tcp.fd,
+            winsock.SOL_SOCKET,
+            winsock.SO_SNDTIMEO,
+            @ptrCast(&tv),
+            @sizeOf(winsock.DWORD),
+        );
+    } else {
+        var tv = c.timeval{
+            .sec = if (ms > 0) @intCast(@divTrunc(ms, 1000)) else 0,
+            .usec = if (ms > 0) @intCast(@mod(ms, 1000) * 1000) else 0,
+        };
+        _ = c.setsockopt(tcp.fd, c.SOL.SOCKET, c.SO.RCVTIMEO, @ptrCast(&tv), @sizeOf(c.timeval));
+        _ = c.setsockopt(tcp.fd, c.SOL.SOCKET, c.SO.SNDTIMEO, @ptrCast(&tv), @sizeOf(c.timeval));
+    }
 }
 
 fn nurl_signal_install_shutdown_impl(listener_handle: c_longlong) callconv(.c) void {
     g_signal_listener = if (listener_handle == 0) null else @ptrFromInt(@as(usize, @intCast(listener_handle)));
-    var sa = std.mem.zeroes(c.Sigaction);
-    sa.handler.handler = nurlSignalPosixHandler;
-    _ = c.sigemptyset(&sa.mask);
-    sa.flags = 0;
-    _ = c.sigaction(c.SIG.INT, &sa, null);
-    _ = c.sigaction(c.SIG.TERM, &sa, null);
+    if (have_windows_tcp) {
+        _ = SetConsoleCtrlHandler(nurlSignalWindowsHandler, windows.BOOL.fromBool(true));
+    } else {
+        var sa = std.mem.zeroes(c.Sigaction);
+        sa.handler.handler = nurlSignalPosixHandler;
+        _ = c.sigemptyset(&sa.mask);
+        sa.flags = 0;
+        _ = c.sigaction(c.SIG.INT, &sa, null);
+        _ = c.sigaction(c.SIG.TERM, &sa, null);
+    }
 }
 
 fn nurl_signal_trigger_shutdown_impl() callconv(.c) void {
     const listener = g_signal_listener orelse return;
     if (listener.fd != nurl_invalid_sock) {
-        _ = c.close(listener.fd);
+        if (have_windows_tcp) {
+            _ = winsock.shutdown(listener.fd, winsock.SD_BOTH);
+            _ = winsock.closesocket(listener.fd);
+        } else {
+            _ = c.close(listener.fd);
+        }
         listener.fd = nurl_invalid_sock;
     }
 }
@@ -891,6 +961,13 @@ comptime {
         @export(&nurl_tcp_read_impl, .{ .name = "nurl_tcp_read" });
         @export(&nurl_tcp_write_impl, .{ .name = "nurl_tcp_write" });
         @export(&nurl_tcp_close_impl, .{ .name = "nurl_tcp_close" });
+        @export(&nurl_tcp_shutdown_impl, .{ .name = "nurl_tcp_shutdown" });
+        @export(&nurl_tcp_err_kind_impl, .{ .name = "nurl_tcp_err_kind" });
+        @export(&nurl_tcp_peer_addr_impl, .{ .name = "nurl_tcp_peer_addr" });
+        @export(&nurl_tcp_set_timeout_impl, .{ .name = "nurl_tcp_set_timeout" });
+        @export(&nurl_signal_install_shutdown_impl, .{ .name = "nurl_signal_install_shutdown" });
+        @export(&nurl_signal_trigger_shutdown_impl, .{ .name = "nurl_signal_trigger_shutdown" });
+    } else if (have_windows_tcp) {
         @export(&nurl_tcp_shutdown_impl, .{ .name = "nurl_tcp_shutdown" });
         @export(&nurl_tcp_err_kind_impl, .{ .name = "nurl_tcp_err_kind" });
         @export(&nurl_tcp_peer_addr_impl, .{ .name = "nurl_tcp_peer_addr" });

@@ -3073,7 +3073,7 @@ void nurl_tcp_close(long long handle) {
  * empirically as ~40% intermittent SIGSEGV at process exit on
  * Windows). Caller invokes nurl_tcp_close after all workers have
  * joined to actually free the struct. */
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV)
 void nurl_tcp_shutdown(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return;
@@ -3174,7 +3174,7 @@ void nurl_tcp_set_timeout(long long handle, long long ms) {
  * tiny.
  * ============================================================ */
 
-#if !defined(NURL_RUNTIME_ZIG_FS_ENV) || defined(_WIN32)
+#if !defined(NURL_RUNTIME_ZIG_FS_ENV)
 
 #if !defined(__wasi__)
 
