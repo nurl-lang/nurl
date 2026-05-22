@@ -5,7 +5,7 @@
  * this contract:
  *
  *   - stdlib/canvas.c         uses SDL2 (native Linux/macOS/Windows)
- *   - stdlib/canvas_wasm.c    forwards to JS imports (browser playground)
+ *   - stdlib/canvas_wasm.zig  forwards to JS imports (browser playground)
  *
  * Pixel format: each pixel is stored as one int64_t whose low 32 bits
  * are an ARGB8888 value (0xAARRGGBB). The high 32 bits are ignored.

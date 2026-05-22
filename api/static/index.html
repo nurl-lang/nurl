@@ -647,7 +647,7 @@ class AsyncifyRuntime {
   }
   ensureStack() {
     if (this.stackPtr) return;
-    // canvas_wasm.c exports a statically-allocated 4 KiB scratch buffer
+    // canvas_wasm.zig exports a statically-allocated 4 KiB scratch buffer
     // under the name __nurl_asyncify_stack_ptr — use it as the asyncify
     // stack so we don't need a malloc export from the wasm module.
     const getPtr  = this.exports.__nurl_asyncify_stack_ptr;
@@ -655,7 +655,7 @@ class AsyncifyRuntime {
     if (!getPtr || !getSize) {
       throw new Error(
         "asyncify: module is missing __nurl_asyncify_stack_* exports. " +
-        "Rebuild canvas_wasm.o from the current stdlib/canvas_wasm.c."
+        "Rebuild canvas_wasm.o from the current stdlib/canvas_wasm.zig."
       );
     }
     const base = getPtr() | 0;

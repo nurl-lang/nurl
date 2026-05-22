@@ -1,10 +1,14 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const runtime_features = @import("runtime_features_generated.zig");
 
-const zlib = if (runtime_features.have_zlib) @cImport({
+const have_zlib_runtime = runtime_features.have_zlib and builtin.os.tag != .wasi;
+const have_sqlite_runtime = runtime_features.have_sqlite3 and builtin.os.tag != .wasi;
+
+const zlib = if (have_zlib_runtime) @cImport({
     @cInclude("zlib.h");
 }) else struct {};
-const sqlite = if (runtime_features.have_sqlite3) @cImport({
+const sqlite = if (have_sqlite_runtime) @cImport({
     @cInclude("sqlite3.h");
 }) else struct {};
 
@@ -16,14 +20,17 @@ const nurl_sqlite_err_row: c_longlong = 100;
 const nurl_sqlite_err_done: c_longlong = 101;
 const nurl_sqlite_err_unsupported: c_longlong = 99;
 
+const SqliteDbRaw = if (have_sqlite_runtime) sqlite.sqlite3 else opaque {};
+const SqliteStmtRaw = if (have_sqlite_runtime) sqlite.sqlite3_stmt else opaque {};
+
 const NurlSqliteDb = struct {
-    db: ?*sqlite.sqlite3,
+    db: ?*SqliteDbRaw,
     err_kind: c_longlong,
     errmsg: ?[*:0]u8,
 };
 
 const NurlSqliteStmt = struct {
-    stmt: ?*sqlite.sqlite3_stmt,
+    stmt: ?*SqliteStmtRaw,
     err_kind: c_longlong,
     text_buf: ?[*:0]u8,
     bound_texts: ?[*]?[*:0]u8,
@@ -51,7 +58,7 @@ fn sqliteStmtHandle(handle: c_longlong) ?*NurlSqliteStmt {
 }
 
 fn sqliteSetErrmsg(db: *NurlSqliteDb) void {
-    if (!runtime_features.have_sqlite3) return;
+    if (!have_sqlite_runtime) return;
     if (db.errmsg) |prev| c.free(prev);
     const msg = if (db.db) |raw| sqlite.sqlite3_errmsg(raw) else null;
     db.errmsg = if (msg) |text| dupZ(text) else null;
@@ -94,7 +101,7 @@ pub export fn nurl_gzip_compress(
     src_len: c_longlong,
     level: c_int,
 ) c_int {
-    if (!runtime_features.have_zlib) return nurl_gzip_err_unsupported;
+    if (!have_zlib_runtime) return nurl_gzip_err_unsupported;
     const dst = dst_ptr orelse return zlib.Z_BUF_ERROR;
     const dst_len = dst_len_ptr orelse return zlib.Z_BUF_ERROR;
     const src = src_ptr orelse return zlib.Z_BUF_ERROR;
@@ -133,7 +140,7 @@ pub export fn nurl_gzip_decompress(
     src_ptr: ?[*]u8,
     src_len: c_longlong,
 ) c_int {
-    if (!runtime_features.have_zlib) return nurl_gzip_err_unsupported;
+    if (!have_zlib_runtime) return nurl_gzip_err_unsupported;
     const dst = dst_ptr orelse return zlib.Z_BUF_ERROR;
     const dst_len = dst_len_ptr orelse return zlib.Z_BUF_ERROR;
     const src = src_ptr orelse return zlib.Z_BUF_ERROR;
@@ -171,12 +178,12 @@ pub export fn nurl_sqlite_open(path: ?[*:0]const u8) c_longlong {
         .errmsg = null,
     };
 
-    if (!runtime_features.have_sqlite3) {
+    if (!have_sqlite_runtime) {
         db.err_kind = nurl_sqlite_err_unsupported;
         return @intCast(@intFromPtr(db));
     }
 
-    var sqlite_db: ?*sqlite.sqlite3 = null;
+    var sqlite_db: ?*SqliteDbRaw = null;
     const rc = sqlite.sqlite3_open(path orelse ":memory:", &sqlite_db);
     db.db = sqlite_db;
     if (rc != sqlite.SQLITE_OK) {
@@ -188,7 +195,7 @@ pub export fn nurl_sqlite_open(path: ?[*:0]const u8) c_longlong {
 
 pub export fn nurl_sqlite_close(handle: c_longlong) void {
     const db = sqliteDbHandle(handle) orelse return;
-    if (runtime_features.have_sqlite3) {
+    if (have_sqlite_runtime) {
         if (db.db) |raw| _ = sqlite.sqlite3_close(raw);
     }
     if (db.errmsg) |msg| c.free(msg);
@@ -207,7 +214,7 @@ pub export fn nurl_sqlite_errmsg(handle: c_longlong) ?[*:0]const u8 {
 
 pub export fn nurl_sqlite_exec(handle: c_longlong, sql: ?[*:0]const u8) c_longlong {
     const db = sqliteDbHandle(handle) orelse return -1;
-    if (!runtime_features.have_sqlite3 or db.db == null) {
+    if (!have_sqlite_runtime or db.db == null) {
         db.err_kind = nurl_sqlite_err_unsupported;
         return -1;
     }
@@ -239,7 +246,7 @@ pub export fn nurl_sqlite_prepare(handle: c_longlong, sql: ?[*:0]const u8) c_lon
         .bound_text_cap = 0,
     };
 
-    if (!runtime_features.have_sqlite3 or db.db == null) {
+    if (!have_sqlite_runtime or db.db == null) {
         stmt.err_kind = nurl_sqlite_err_unsupported;
         return @intCast(@intFromPtr(stmt));
     }
@@ -260,7 +267,7 @@ pub export fn nurl_sqlite_stmt_err_kind(handle: c_longlong) c_longlong {
 
 pub export fn nurl_sqlite_bind_int(handle: c_longlong, idx: c_longlong, val: c_longlong) c_longlong {
     const stmt = sqliteStmtHandle(handle) orelse return nurl_sqlite_err_unsupported;
-    if (!runtime_features.have_sqlite3 or stmt.stmt == null) {
+    if (!have_sqlite_runtime or stmt.stmt == null) {
         stmt.err_kind = nurl_sqlite_err_unsupported;
         return stmt.err_kind;
     }
@@ -271,7 +278,7 @@ pub export fn nurl_sqlite_bind_int(handle: c_longlong, idx: c_longlong, val: c_l
 
 pub export fn nurl_sqlite_bind_text(handle: c_longlong, idx: c_longlong, val: ?[*:0]const u8) c_longlong {
     const stmt = sqliteStmtHandle(handle) orelse return nurl_sqlite_err_unsupported;
-    if (!runtime_features.have_sqlite3 or stmt.stmt == null) {
+    if (!have_sqlite_runtime or stmt.stmt == null) {
         stmt.err_kind = nurl_sqlite_err_unsupported;
         return stmt.err_kind;
     }
@@ -291,7 +298,7 @@ pub export fn nurl_sqlite_bind_text(handle: c_longlong, idx: c_longlong, val: ?[
 
 pub export fn nurl_sqlite_bind_null(handle: c_longlong, idx: c_longlong) c_longlong {
     const stmt = sqliteStmtHandle(handle) orelse return nurl_sqlite_err_unsupported;
-    if (!runtime_features.have_sqlite3 or stmt.stmt == null) {
+    if (!have_sqlite_runtime or stmt.stmt == null) {
         stmt.err_kind = nurl_sqlite_err_unsupported;
         return stmt.err_kind;
     }
@@ -302,7 +309,7 @@ pub export fn nurl_sqlite_bind_null(handle: c_longlong, idx: c_longlong) c_longl
 
 pub export fn nurl_sqlite_step(handle: c_longlong) c_longlong {
     const stmt = sqliteStmtHandle(handle) orelse return nurl_sqlite_err_unsupported;
-    if (!runtime_features.have_sqlite3 or stmt.stmt == null) {
+    if (!have_sqlite_runtime or stmt.stmt == null) {
         stmt.err_kind = nurl_sqlite_err_unsupported;
         return stmt.err_kind;
     }
@@ -321,25 +328,25 @@ pub export fn nurl_sqlite_step(handle: c_longlong) c_longlong {
 
 pub export fn nurl_sqlite_column_count(handle: c_longlong) c_longlong {
     const stmt = sqliteStmtHandle(handle) orelse return 0;
-    if (!runtime_features.have_sqlite3 or stmt.stmt == null) return 0;
+    if (!have_sqlite_runtime or stmt.stmt == null) return 0;
     return sqlite.sqlite3_column_count(stmt.stmt);
 }
 
 pub export fn nurl_sqlite_column_type(handle: c_longlong, idx: c_longlong) c_longlong {
     const stmt = sqliteStmtHandle(handle) orelse return 5;
-    if (!runtime_features.have_sqlite3 or stmt.stmt == null) return 5;
+    if (!have_sqlite_runtime or stmt.stmt == null) return 5;
     return sqlite.sqlite3_column_type(stmt.stmt, @intCast(idx));
 }
 
 pub export fn nurl_sqlite_column_int(handle: c_longlong, idx: c_longlong) c_longlong {
     const stmt = sqliteStmtHandle(handle) orelse return 0;
-    if (!runtime_features.have_sqlite3 or stmt.stmt == null) return 0;
+    if (!have_sqlite_runtime or stmt.stmt == null) return 0;
     return @intCast(sqlite.sqlite3_column_int64(stmt.stmt, @intCast(idx)));
 }
 
 pub export fn nurl_sqlite_column_text(handle: c_longlong, idx: c_longlong) ?[*:0]const u8 {
     const stmt = sqliteStmtHandle(handle) orelse return "";
-    if (!runtime_features.have_sqlite3 or stmt.stmt == null) return "";
+    if (!have_sqlite_runtime or stmt.stmt == null) return "";
     const raw = sqlite.sqlite3_column_text(stmt.stmt, @intCast(idx));
     if (stmt.text_buf) |prev| c.free(prev);
     stmt.text_buf = if (raw) |text| dupZ(@ptrCast(text)) else dupZ("");
@@ -348,7 +355,7 @@ pub export fn nurl_sqlite_column_text(handle: c_longlong, idx: c_longlong) ?[*:0
 
 pub export fn nurl_sqlite_finalize(handle: c_longlong) void {
     const stmt = sqliteStmtHandle(handle) orelse return;
-    if (runtime_features.have_sqlite3) {
+    if (have_sqlite_runtime) {
         if (stmt.stmt) |raw| _ = sqlite.sqlite3_finalize(raw);
     }
     if (stmt.text_buf) |buf| c.free(buf);
@@ -358,7 +365,7 @@ pub export fn nurl_sqlite_finalize(handle: c_longlong) void {
 
 pub export fn nurl_sqlite_reset(handle: c_longlong) c_longlong {
     const stmt = sqliteStmtHandle(handle) orelse return nurl_sqlite_err_unsupported;
-    if (!runtime_features.have_sqlite3 or stmt.stmt == null) {
+    if (!have_sqlite_runtime or stmt.stmt == null) {
         stmt.err_kind = nurl_sqlite_err_unsupported;
         return stmt.err_kind;
     }

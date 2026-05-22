@@ -3,7 +3,8 @@ const builtin = @import("builtin");
 const runtime_features = @import("runtime_features_generated.zig");
 
 const c = std.c;
-const curl = if (runtime_features.have_libcurl and builtin.os.tag != .windows and builtin.os.tag != .wasi) @cImport({
+const have_libcurl_runtime = runtime_features.have_libcurl and builtin.os.tag != .windows and builtin.os.tag != .wasi;
+const curl = if (have_libcurl_runtime) @cImport({
     @cInclude("curl/curl.h");
 }) else struct {};
 
@@ -33,7 +34,7 @@ const NurlHttpHeaderBuf = struct {
     cap: usize,
 };
 
-const NurlHttpStream = if (runtime_features.have_libcurl and builtin.os.tag != .windows and builtin.os.tag != .wasi) struct {
+const NurlHttpStream = if (have_libcurl_runtime) struct {
     multi: ?*curl.CURLM,
     easy: ?*curl.CURL,
     req_headers: ?*curl.struct_curl_slist,
@@ -84,7 +85,7 @@ fn httpBufAppend(buf: *NurlHttpBuf, src: [*]const u8, n: usize) bool {
 }
 
 fn httpMapErr(rc: curl.CURLcode) c_longlong {
-    if (!runtime_features.have_libcurl or builtin.os.tag == .windows or builtin.os.tag == .wasi) return nurl_http_err_other;
+    if (!have_libcurl_runtime) return nurl_http_err_other;
     return switch (rc) {
         curl.CURLE_OK => nurl_http_err_ok,
         curl.CURLE_COULDNT_RESOLVE_HOST => nurl_http_err_dns,
@@ -317,7 +318,7 @@ pub export fn nurl_http_perform_full_to(
     timeout_ms: c_longlong,
     connect_timeout_ms: c_longlong,
 ) c_longlong {
-    if (!runtime_features.have_libcurl or builtin.os.tag == .windows or builtin.os.tag == .wasi) return 0;
+    if (!have_libcurl_runtime) return 0;
 
     const raw = c.calloc(1, @sizeOf(NurlHttpResponse)) orelse return 0;
     const resp: *NurlHttpResponse = @ptrCast(@alignCast(raw));
@@ -423,7 +424,7 @@ pub export fn nurl_http_stream_open_to(
     timeout_ms: c_longlong,
     connect_timeout_ms: c_longlong,
 ) c_longlong {
-    if (!runtime_features.have_libcurl or builtin.os.tag == .windows or builtin.os.tag == .wasi) return 0;
+    if (!have_libcurl_runtime) return 0;
 
     const raw = c.calloc(1, @sizeOf(NurlHttpStream)) orelse return 0;
     const stream: *NurlHttpStream = @ptrCast(@alignCast(raw));
@@ -490,6 +491,7 @@ pub export fn nurl_http_stream_open_to(
 }
 
 pub export fn nurl_http_stream_next(handle: c_longlong) ?[*:0]u8 {
+    if (!have_libcurl_runtime) return null;
     const stream = httpStreamHandle(handle) orelse return null;
     while (stream.body_buf.len == 0 and stream.finished == 0) {
         var still: c_int = 0;
@@ -517,16 +519,19 @@ pub export fn nurl_http_stream_next(handle: c_longlong) ?[*:0]u8 {
 }
 
 pub export fn nurl_http_stream_status(handle: c_longlong) c_longlong {
+    if (!have_libcurl_runtime) return 0;
     const stream = httpStreamHandle(handle) orelse return 0;
     return stream.status;
 }
 
 pub export fn nurl_http_stream_err_kind(handle: c_longlong) c_longlong {
+    if (!have_libcurl_runtime) return nurl_http_err_other;
     const stream = httpStreamHandle(handle) orelse return nurl_http_err_other;
     return stream.err_kind;
 }
 
 pub export fn nurl_http_stream_pump_headers(handle: c_longlong) c_longlong {
+    if (!have_libcurl_runtime) return 0;
     const stream = httpStreamHandle(handle) orelse return 0;
     while (stream.headers_done == 0 and stream.finished == 0) {
         var still: c_int = 0;
@@ -549,23 +554,27 @@ pub export fn nurl_http_stream_pump_headers(handle: c_longlong) c_longlong {
 }
 
 pub export fn nurl_http_stream_header_count(handle: c_longlong) c_longlong {
+    if (!have_libcurl_runtime) return 0;
     const stream = httpStreamHandle(handle) orelse return 0;
     return @intCast(stream.hdr_buf.len);
 }
 
 pub export fn nurl_http_stream_header_name(handle: c_longlong, idx: c_longlong) ?[*:0]const u8 {
+    if (!have_libcurl_runtime) return "";
     const stream = httpStreamHandle(handle) orelse return "";
     if (idx < 0 or @as(usize, @intCast(idx)) >= stream.hdr_buf.len) return "";
     return stream.hdr_buf.items.?[@intCast(idx)].name orelse "";
 }
 
 pub export fn nurl_http_stream_header_value(handle: c_longlong, idx: c_longlong) ?[*:0]const u8 {
+    if (!have_libcurl_runtime) return "";
     const stream = httpStreamHandle(handle) orelse return "";
     if (idx < 0 or @as(usize, @intCast(idx)) >= stream.hdr_buf.len) return "";
     return stream.hdr_buf.items.?[@intCast(idx)].value orelse "";
 }
 
 pub export fn nurl_http_stream_close(handle: c_longlong) void {
+    if (!have_libcurl_runtime) return;
     const stream = httpStreamHandle(handle) orelse return;
     if (stream.multi != null and stream.easy != null) {
         _ = curl.curl_multi_remove_handle(stream.multi, stream.easy);

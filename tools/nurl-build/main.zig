@@ -3721,8 +3721,27 @@ fn runApiRuntimeObjs(init: std.process.Init, args: []const []const u8) !void {
             .use_marker_cflags = false,
             .extra_cflags = &.{},
         });
-        try runInheritedInCwd(init, root_abs, &.{ zig_bin, "cc", "-target", wasm_target, "-O2", "-c", "stdlib/canvas_wasm.c", "-o", "stdlib/canvas.wasm.o" });
-        try runInheritedInCwd(init, root_abs, &.{ zig_bin, "cc", "-target", wasm_target, "-O2", "-c", "stdlib/audio_wasm.c", "-o", "stdlib/audio.wasm.o" });
+        try runInheritedInCwd(init, root_abs, &.{
+            zig_bin,
+            "build-obj",
+            "stdlib/canvas_wasm.zig",
+            "-lc",
+            "-target",
+            wasm_target,
+            "-O",
+            "ReleaseFast",
+            "-femit-bin=stdlib/canvas.wasm.o",
+        });
+        try runInheritedInCwd(init, root_abs, &.{
+            zig_bin,
+            "build-obj",
+            "stdlib/audio_wasm.zig",
+            "-target",
+            wasm_target,
+            "-O",
+            "ReleaseFast",
+            "-femit-bin=stdlib/audio.wasm.o",
+        });
     }
 
     if (!skip_windows) {
@@ -3864,7 +3883,7 @@ fn executeApiBuildWasm(init: std.process.Init, args: []const []const u8) !ApiBui
     if (uses_canvas and !pathExists(io, cfg.canvas_obj)) {
         return .{
             .http_status = 500,
-            .error_message = try std.fmt.allocPrint(gpa, "canvas FFI used but {s} not present. Rebuild the container with canvas_wasm.c compiled.", .{cfg.canvas_obj}),
+            .error_message = try std.fmt.allocPrint(gpa, "canvas FFI used but {s} not present. Rebuild the container with canvas_wasm.zig compiled.", .{cfg.canvas_obj}),
             .status = "fatal",
             .message = "canvas runtime unavailable",
             .filename = cfg.filename,
@@ -3880,7 +3899,7 @@ fn executeApiBuildWasm(init: std.process.Init, args: []const []const u8) !ApiBui
     if (uses_audio and !pathExists(io, cfg.audio_obj)) {
         return .{
             .http_status = 500,
-            .error_message = try std.fmt.allocPrint(gpa, "audio FFI used but {s} not present. Rebuild the container with audio_wasm.c compiled.", .{cfg.audio_obj}),
+            .error_message = try std.fmt.allocPrint(gpa, "audio FFI used but {s} not present. Rebuild the container with audio_wasm.zig compiled.", .{cfg.audio_obj}),
             .status = "fatal",
             .message = "audio runtime unavailable",
             .filename = cfg.filename,
