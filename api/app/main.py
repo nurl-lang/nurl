@@ -30,7 +30,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.artifacts import ArtifactStore, BuildArtifact, sanitize_basename
@@ -147,21 +146,6 @@ app = FastAPI(
 )
 
 
-class HealthResponse(BaseModel):
-    status: str = Field(..., examples=["ok"])
-    nurlc_available: bool = Field(
-        ..., description="Whether the bundled nurlc binary is present and executable."
-    )
-    nurlc_path: str
-    wasi_toolchain_available: bool
-    stdlib_available: bool
-    stdlib_dir: str
-    stdlib_modules: list[str] = Field(
-        default_factory=list,
-        description="Relative paths of .nu files discovered under the stdlib dir.",
-    )
-
-
 class BuildWasmRequest(BaseModel):
     source: str = Field(
         ...,
@@ -264,9 +248,18 @@ class BuildWasmResponse(BaseModel):
     )
 
 
+from app.system_routes import create_system_router, mount_static_playground  # noqa: E402
+app.include_router(create_system_router(
+    nurlc_path=NURLC_PATH,
+    nurl_zig=NURL_ZIG,
+    runtime_wasm_o=RUNTIME_WASM_O,
+    stdlib_dir=NURL_STDLIB_DIR,
+))
+
+
 def _is_executable(path: str) -> bool:
-    p = Path(path)
-    return p.is_file() and os.access(p, os.X_OK)
+    target = Path(path)
+    return target.is_file() and os.access(target, os.X_OK)
 
 
 def _link_helper_available() -> bool:
@@ -275,35 +268,6 @@ def _link_helper_available() -> bool:
 
 def _nurlc_available() -> bool:
     return _is_executable(NURLC_PATH) or shutil.which("nurlc") is not None
-
-
-def _wasi_toolchain_available() -> bool:
-    return (
-        (shutil.which(NURL_ZIG) is not None or _is_executable(NURL_ZIG))
-        and Path(RUNTIME_WASM_O).is_file()
-    )
-
-
-def _list_stdlib_modules(limit: int = 200) -> list[str]:
-    root = Path(NURL_STDLIB_DIR)
-    if not root.is_dir():
-        return []
-    mods = sorted(str(p.relative_to(root)) for p in root.rglob("*.nu"))
-    return mods[:limit]
-
-
-@app.get("/health", response_model=HealthResponse, tags=["system"])
-def health() -> HealthResponse:
-    """Liveness / readiness probe."""
-    return HealthResponse(
-        status="ok",
-        nurlc_available=_nurlc_available(),
-        nurlc_path=NURLC_PATH,
-        wasi_toolchain_available=_wasi_toolchain_available(),
-        stdlib_available=Path(NURL_STDLIB_DIR).is_dir(),
-        stdlib_dir=NURL_STDLIB_DIR,
-        stdlib_modules=_list_stdlib_modules(),
-    )
 
 
 def _run(
@@ -378,7 +342,8 @@ def build_wasm(req: BuildWasmRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"nurlc not found at {NURLC_PATH}",
         )
-    if not _wasi_toolchain_available():
+    if not ((shutil.which(NURL_ZIG) is not None or Path(NURL_ZIG).is_file() and os.access(NURL_ZIG, os.X_OK))
+            and Path(RUNTIME_WASM_O).is_file()):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=(
@@ -386,7 +351,7 @@ def build_wasm(req: BuildWasmRequest):
                 f"(zig={NURL_ZIG}, runtime={RUNTIME_WASM_O})"
             ),
         )
-    if not _link_helper_available():
+    if not (Path(NURL_LINK_HELPER).is_file() and os.access(NURL_LINK_HELPER, os.X_OK)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"link helper not found at '{NURL_LINK_HELPER}'",
@@ -949,22 +914,7 @@ async def _http_exc_handler(_request, exc: HTTPException):  # noqa: D401
     )
 
 
-# ── Static playground ────────────────────────────────────────────
-# Served at "/" (index.html) with supporting assets under "/static/*".
-if Path(STATIC_DIR).is_dir():
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-    @app.get("/", include_in_schema=False)
-    def _root() -> FileResponse:
-        return FileResponse(str(Path(STATIC_DIR) / "index.html"))
-
-    @app.get("/favicon.ico", include_in_schema=False)
-    @app.get("/favicon.svg", include_in_schema=False)
-    def _favicon() -> FileResponse:
-        fav = Path(STATIC_DIR) / "favicon.svg"
-        if not fav.is_file():
-            raise HTTPException(status_code=404, detail="favicon not found")
-        return FileResponse(str(fav), media_type="image/svg+xml")
+mount_static_playground(app, STATIC_DIR)
 
 
 # ── REST-MCP (plain HTTP companion) ──────────────────────────────
