@@ -5,14 +5,19 @@ REM     1. compile with nurlc (to LLVM IR)
 REM     2. if compile OK, link with clang + runtime.o
 REM     3. if link OK, run the binary with a timeout and capture
 REM        stdout+stderr + exit code
-REM  A single snapshot file testresults.txt records the full
-REM  outcome for each test (status, exit code, captured output).
 REM
-REM  Compared to correct.txt as baseline:
-REM   - missing baseline -> testresults.txt is copied over as the
-REM     initial baseline
-REM   - identical         -> print "TESTS PASSED"
-REM   - different         -> print diff and exit 1
+REM  Output (since PURIFY.md Phase 5, 2026-05-23):
+REM   - success.txt   only the tests whose outcome matched the
+REM                   expectation. Compared to correct.txt as the
+REM                   snapshot baseline.
+REM   - failures.txt  only the tests whose outcome did not match,
+REM                   with the exact compile / link command and
+REM                   full captured stderr. Empty when everything
+REM                   went well.
+REM
+REM  Exit code:
+REM   - 0 when success.txt == correct.txt AND failures.txt is empty
+REM   - 1 on baseline diff OR any unexpected failure
 REM
 REM  Windows counterpart of run_tests.sh - same logic, same
 REM  output file format.
@@ -50,7 +55,8 @@ if errorlevel 1 (
     )
 )
 
-set "RESULTS=%SCRIPT_DIR%\testresults.txt"
+set "SUCCESS=%SCRIPT_DIR%\success.txt"
+set "FAILURES=%SCRIPT_DIR%\failures.txt"
 set "BASELINE=%SCRIPT_DIR%\correct.txt"
 set "WORKDIR=%ROOT_DIR%\build\tests"
 
@@ -62,7 +68,10 @@ REM HTTP tests reach the public internet, so they're opt-in via NURL_HTTP_TESTS=
 REM (mirrors run_tests.sh). Default skips http_*.nu to keep the baseline stable.
 if not defined NURL_HTTP_TESTS set "NURL_HTTP_TESTS=0"
 
-type nul > "%RESULTS%"
+set "LINK_FLAGS=-O2 -lwinhttp"
+
+type nul > "%SUCCESS%"
+type nul > "%FAILURES%"
 if not exist "%WORKDIR%" mkdir "%WORKDIR%"
 
 REM Gather *.nu files and sort them (LC_ALL=C equivalent via default ASCII sort).
@@ -81,21 +90,21 @@ for /f "usebackq delims=" %%F in ("%FILELIST%") do (
     set "ll=%WORKDIR%\!name!.ll"
     set "bin=%WORKDIR%\!name!.exe"
     set "out=%WORKDIR%\!name!.out"
+    set "err=%WORKDIR%\!name!.err"
     if exist "!ll!"  del "!ll!"  >nul 2>&1
     if exist "!bin!" del "!bin!" >nul 2>&1
     if exist "!out!" del "!out!" >nul 2>&1
+    if exist "!err!" del "!err!" >nul 2>&1
 
-    REM Skip network-dependent HTTP tests unless explicitly enabled. Setting
-    REM SKIP=1 short-circuits every block below so the test produces no entry
-    REM in testresults.txt at all, matching run_tests.sh's behaviour.
+    REM Skip helper modules (no main).
     set "SKIP=0"
+    echo !name! | findstr /e /c:"_mod" >nul && set "SKIP=1"
+    echo !name! | findstr /e /c:"_helper" >nul && set "SKIP=1"
+    echo !name! | findstr /e /c:"_lib" >nul && set "SKIP=1"
+
+    REM Skip network-dependent HTTP tests unless explicitly enabled.
     echo !name! | findstr /b /c:"http_" >nul
     if !errorlevel! equ 0 if not "%NURL_HTTP_TESTS%"=="1" set "SKIP=1"
-    REM http_request_parser + http_response_builder + http_router are pure
-    REM parser/builder/router (no socket), exempt from gate. mcp_http is
-    REM also pure (offline handler exercise); not http_-prefixed but the
-    REM SKIP gate above already let it through — no extra carve-out
-    REM needed.
     if "!name!"=="http_request_parser" set "SKIP=0"
     if "!name!"=="http_response_builder" set "SKIP=0"
     if "!name!"=="http_router" set "SKIP=0"
@@ -106,75 +115,110 @@ for /f "usebackq delims=" %%F in ("%FILELIST%") do (
     if "!name!"=="http_proxy" set "SKIP=0"
 
     if "!SKIP!"=="0" (
-        >>"%RESULTS%" echo === !name! ===
+        REM should_fail_* expects COMPILE FAIL.
+        set "EXPECT_FAIL=0"
+        echo !name! | findstr /b /c:"should_fail_" >nul && set "EXPECT_FAIL=1"
 
-        "%NURLC%" "!src!" > "!ll!" 2>nul
-        if errorlevel 1 (
-            >>"%RESULTS%" echo COMPILE FAIL
-            >>"%RESULTS%" echo.
-        ) else (
-            >>"%RESULTS%" echo COMPILE OK
-            "%CLANG%" -O2 "!ll!" "%RUNTIME%" -lwinhttp -o "!bin!" 2>nul
-            if errorlevel 1 (
-                >>"%RESULTS%" echo LINK FAIL
-                >>"%RESULTS%" echo.
+        "%NURLC%" "!src!" > "!ll!" 2>"!err!"
+        set "CC_EC=!errorlevel!"
+
+        if "!EXPECT_FAIL!"=="1" (
+            if !CC_EC! neq 0 (
+                >>"%SUCCESS%" echo === !name! ===
+                >>"%SUCCESS%" echo COMPILE FAIL
+                >>"%SUCCESS%" echo.
             ) else (
-                >>"%RESULTS%" echo LINK OK
-                REM Run with cwd = WORKDIR and argv[0] = ".\name.exe" so argv-sensitive
-                REM tests produce the same output regardless of the absolute path
-                REM where the repo lives. Use PowerShell to enforce a hard timeout,
-                REM merging stdout + stderr into !out!.
-                pushd "%WORKDIR%" >nul
-                powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; $p = Start-Process -FilePath ('.\\' + '!name!' + '.exe') -RedirectStandardOutput '!out!.o' -RedirectStandardError '!out!.e' -PassThru -NoNewWindow -WorkingDirectory (Get-Location); if (-not $p.WaitForExit(%TIMEOUT% * 1000)) { try { $p.Kill() } catch {}; exit 124 } else { exit $p.ExitCode }"
-                set "EC=!errorlevel!"
-                if exist "!out!.o" (
-                    if exist "!out!.e" (
-                        copy /B "!out!.o"+"!out!.e" "!out!" >nul 2>&1
-                    ) else (
-                        copy /B "!out!.o" "!out!" >nul 2>&1
-                    )
+                >>"%FAILURES%" echo === !name! ===
+                >>"%FAILURES%" echo [1/2] compiler/tests/!name!.nu -^> build/tests/!name!.ll
+                >>"%FAILURES%" echo ^(expected COMPILE FAIL but compiler accepted the program^)
+                if exist "!err!" type "!err!" >> "%FAILURES%"
+                >>"%FAILURES%" echo.
+            )
+        ) else (
+            if !CC_EC! neq 0 (
+                >>"%FAILURES%" echo === !name! ===
+                >>"%FAILURES%" echo [1/2] compiler/tests/!name!.nu -^> build/tests/!name!.ll
+                if exist "!err!" type "!err!" >> "%FAILURES%"
+                >>"%FAILURES%" echo.
+            ) else (
+                "%CLANG%" -O2 "!ll!" "%RUNTIME%" -lwinhttp -o "!bin!" 2>"!err!"
+                set "LK_EC=!errorlevel!"
+                if !LK_EC! neq 0 (
+                    >>"%FAILURES%" echo === !name! ===
+                    >>"%FAILURES%" echo [1/2] compiler/tests/!name!.nu -^> build/tests/!name!.ll
+                    >>"%FAILURES%" echo [2/2] build/tests/!name!.ll -^> build/tests/!name!.exe  ^(!LINK_FLAGS!^)
+                    if exist "!err!" type "!err!" >> "%FAILURES%"
+                    >>"%FAILURES%" echo.
                 ) else (
-                    if exist "!out!.e" ( copy /B "!out!.e" "!out!" >nul 2>&1 ) else ( type nul > "!out!" )
+                    REM Run with cwd = WORKDIR and argv[0] = ".\name.exe" so argv-sensitive
+                    REM tests produce the same output regardless of the absolute path
+                    REM where the repo lives.
+                    pushd "%WORKDIR%" >nul
+                    powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; $p = Start-Process -FilePath ('.\\' + '!name!' + '.exe') -RedirectStandardOutput '!out!.o' -RedirectStandardError '!out!.e' -PassThru -NoNewWindow -WorkingDirectory (Get-Location); if (-not $p.WaitForExit(%TIMEOUT% * 1000)) { try { $p.Kill() } catch {}; exit 124 } else { exit $p.ExitCode }"
+                    set "EC=!errorlevel!"
+                    if exist "!out!.o" (
+                        if exist "!out!.e" (
+                            copy /B "!out!.o"+"!out!.e" "!out!" >nul 2>&1
+                        ) else (
+                            copy /B "!out!.o" "!out!" >nul 2>&1
+                        )
+                    ) else (
+                        if exist "!out!.e" ( copy /B "!out!.e" "!out!" >nul 2>&1 ) else ( type nul > "!out!" )
+                    )
+                    del "!out!.o" "!out!.e" >nul 2>&1
+                    popd >nul
+                    >>"%SUCCESS%" echo === !name! ===
+                    >>"%SUCCESS%" echo COMPILE OK
+                    >>"%SUCCESS%" echo LINK OK
+                    >>"%SUCCESS%" echo EXIT !EC!
+                    >>"%SUCCESS%" echo OUTPUT
+                    call :append_output_capped "!out!"
+                    >>"%SUCCESS%" echo.
                 )
-                del "!out!.o" "!out!.e" >nul 2>&1
-                popd >nul
-                >>"%RESULTS%" echo EXIT !EC!
-                >>"%RESULTS%" echo OUTPUT
-                call :append_output_capped "!out!"
-                >>"%RESULTS%" echo.
             )
         )
     )
 )
 del "%FILELIST%" 2>nul
 
+set "EXIT_STATUS=0"
+
 if not exist "%BASELINE%" (
-    copy /Y "%RESULTS%" "%BASELINE%" >nul
-    echo No baseline found - created correct.txt from current results.
+    copy /Y "%SUCCESS%" "%BASELINE%" >nul
+    echo No baseline found - created correct.txt from current success.txt.
     echo Review it and commit if it reflects the expected state.
-    exit /b 0
+) else (
+    fc /B "%SUCCESS%" "%BASELINE%" >nul 2>&1
+    if errorlevel 1 (
+        echo TESTS FAILED - success.txt differs from correct.txt:
+        echo.
+        fc "%BASELINE%" "%SUCCESS%"
+        echo.
+        set "EXIT_STATUS=1"
+    )
 )
 
-fc /B "%RESULTS%" "%BASELINE%" >nul 2>&1
-if not errorlevel 1 (
-    echo TESTS PASSED
-    exit /b 0
+REM Report failures.txt if non-empty.
+for %%F in ("%FAILURES%") do set "FAIL_SIZE=%%~zF"
+if defined FAIL_SIZE if !FAIL_SIZE! gtr 0 (
+    echo.
+    echo === failures recorded in compiler\tests\failures.txt ===
+    type "%FAILURES%"
+    set "EXIT_STATUS=1"
 )
 
-echo TESTS FAILED - testresults.txt differs from correct.txt:
-echo.
-fc "%BASELINE%" "%RESULTS%"
-exit /b 1
+if "!EXIT_STATUS!"=="0" echo TESTS PASSED
+exit /b !EXIT_STATUS!
 
 :append_output_capped
 set "OF=%~1"
-if not exist "%OF%" ( >>"%RESULTS%" echo. & exit /b 0 )
+if not exist "%OF%" ( >>"%SUCCESS%" echo. & exit /b 0 )
 for /f %%A in ('type "%OF%" ^| find /c /v ""') do set "LINES=%%A"
 if !LINES! leq %MAX_OUT_LINES% (
-    type "%OF%" >> "%RESULTS%"
+    type "%OF%" >> "%SUCCESS%"
 ) else (
-    powershell -NoProfile -Command "Get-Content -LiteralPath '%OF%' -TotalCount %MAX_OUT_LINES%" >> "%RESULTS%"
+    powershell -NoProfile -Command "Get-Content -LiteralPath '%OF%' -TotalCount %MAX_OUT_LINES%" >> "%SUCCESS%"
     set /a "REST=!LINES! - %MAX_OUT_LINES%"
-    >>"%RESULTS%" echo [... !REST! more lines truncated ...]
+    >>"%SUCCESS%" echo [... !REST! more lines truncated ...]
 )
 exit /b 0
