@@ -220,36 +220,54 @@ digests, WebSocket handshake, MQTT auth) since per-op data is
 small. A future Phase-5 follow-on could SIMD-vectorise the
 transform in C if hot-path crypto bites.
 
-### Phase 5 — String operations (`§2`, ~700 LOC reduction) — DEFERRED 2026-05-23
+### Phase 5 — String operations (`§2`, ~700 LOC reduction) — DONE 2026-05-23
 
-Attempted; rolled back. Root blocker: every `nurl_str_*` is hot
-in `compiler/nurlc.nu`, and the bootstrap stage-0 Python compiler
-(`compiler/nurlc.py`) doesn't yet understand the NURL features
-that a clean pure-NURL replacement would lean on. Concretely the
-Python parser/typechecker stops on:
+Initial attempt rolled back because the stage-0 Python compiler
+(`compiler/nurlc.py`) couldn't compile a pure-NURL replacement
+that used `&`-FFI, `i32`, `& 255` on `i`, or `. p i` pointer
+indexing. The unblock was the second option below: **retire
+Python from the bootstrap** (commit `879dc14`) — `nurlc.py` is
+gone and stage 0 is now `clang compiler/nurlc_lastgood.ll`. With
+the Python ceiling removed, every NURL feature `nurlc_lastgood`
+supports is on the table, and the migration landed in three
+batches:
 
-  - `&`-FFI declarations (`& \`c\` @ memcmp …` — no rule for `&`
-    as a top-level decl-starter)
-  - `i32` type (Python has only `i` / `u` / `f` / `b` / `s` / `v`
-    base types — no sized-integer variants)
-  - `& 255` bitwise on `i` operands (Python requires `b` operands
-    for `&`)
-  - `. p i` pointer-index syntax with a variable index (Python's
-    `.` expects a struct field name identifier, not an expression)
+  - **Batch A** (`0536e99`) — libc scaffolding: `strlen`/`strcmp`/
+    `strncmp`/`memcmp`/`strstr`/`memmem`/`atoll`/`atof`/`memcpy`/
+    `strdup` declared globally in nurlc's preamble + `sym_def`'d
+    so any module can call them without per-file `&`-FFI noise.
+    `nurl_memcmp_lex` moved first as the canary.
+  - **Batch B** (`16b980c`) — 9 thin libc wrappers: `nurl_str_len`,
+    `_eq`, `_cmp`, `_to_int`, `_to_float`, `_starts`, `_find`,
+    `_ends`, `_memmem_range`.
+  - **Batch C** (`d547651`) — 6 allocation/algorithm ops:
+    `nurl_str_get`, `_cat`, `_cat3`, `_cat4`, `_slice`,
+    `_parse_int_range`. `_cat4` lost the historic 2-intermediate
+    leak from nested `cat` calls; now allocates exactly once.
 
-Each of these is a non-trivial extension to a 2k-LOC Python
-compiler that exists to bootstrap the self-host. The right unblock
-is one of:
+Each batch held the fixed-point gate (`./build.sh` = stage1 IR ≡
+stage2 IR byte-identical, full corpus passing).
 
-  - **Upgrade `nurlc.py`** to a broader subset (probably 200-300
-    LOC of Python: add `&`-FFI, sized ints, byte-loop primitives).
-  - **Retire `nurlc.py`** in favour of a `nurlc_lastgood`-only
-    bootstrap. Removes the Python dependency entirely; pure-NURL
-    rewrites of compiler-side helpers become unblocked because
-    every NURL feature `nurlc_lastgood` supports is available.
+The migration teaches `compiler/nurlc.nu` itself: it can't
+`$`-import its own stdlib, so it carries a local copy of each
+moved @-fn — a 100-line duplication but a small price for the
+~600 lines of C deleted. `nurl_sym_def` registrations stay
+intact so cross-module callers that don't `$`-import
+`stdlib/core/string.nu` still get correct LLVM call types (the
+verifier rejects the i64-instead-of-ptr mismatch otherwise).
 
-Both are out of Phase 5 scope. Moving on; revisit when the bootstrap
-chain is reconsidered.
+**Residual C** (`stdlib/runtime.c §2`): `nurl_str_int`,
+`nurl_str_float`, `nurl_parse_float_range` — all `snprintf`/
+`strtod`-shaped. Deferred to a future Batch D' (either bind
+`snprintf` variadic via FFI or hand-code decimal / float
+formatting in NURL; the latter is a known LLONG_MIN /
+Grisu-style minefield, hence the deferral).
+
+`runtime.c`: 8 879 → 8 197 LOC (−682). `nurlc.nu`'s preamble
+shed 10 `declare` lines and several `nurl_sym_def` entries;
+six test files that called `nurl_str_*` without importing
+`stdlib/core/string.nu` got the explicit import — the symbol
+no longer floats in as a runtime extern.
 
 ### Phase 6 — Threads / mutex / cond (`§19`, ~290 LOC reduction)
 
