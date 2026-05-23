@@ -64,6 +64,37 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ^ @ IoErr { Other }
 }
 
+// Win32 / WASI fallback for `read_file` — same fopen + fseek(SEEK_END)
+// + ftell + fread + fclose pattern the old `nurl_read_file_safe`
+// followed. Allocates exactly `len + 1` bytes (matches what
+// `string_from_take`'s cap expects) and writes a trailing NUL.
+@ __read_file_fread_pure s path → s {
+    ? == # i path 0 { ^ # s 0 } {}
+    : s fp ( fopen path `rb` )
+    ? == # i fp 0 { ^ # s 0 } {}
+    : i32 sr ( fseek fp 0 # i32 2 )
+    ? != sr # i32 0 {
+        : i32 _u ( fclose fp )
+        ^ # s 0
+    } {}
+    : i sz ( ftell fp )
+    ? < sz 0 {
+        : i32 _u ( fclose fp )
+        ^ # s 0
+    } {}
+    : i32 _r ( fseek fp 0 # i32 0 )
+    : s buf ( nurl_alloc + sz 1 )
+    ? == # i buf 0 {
+        : i32 _u ( fclose fp )
+        ^ # s 0
+    } {}
+    : i got ? > sz 0 ( fread buf 1 sz fp ) 0
+    : i32 _u ( fclose fp )
+    : *u bp # *u buf
+    = . bp got # u 0
+    ^ buf
+}
+
 // Pure-NURL mmap-backed file read (PURIFY §4 batch 5). On POSIX the
 // kernel page-cache is mapped read-only into the process, sequential
 // access is hinted via `madvise(MADV_SEQUENTIAL)`, and the bytes are
@@ -118,14 +149,14 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 // `raw` is either the malloc'd file contents (owned) or NULL on failure.
 // Cast to i64 to detect NULL — calling nurl_str_len on NULL would crash.
 @ read_file s path → !String IoErr {
-    // POSIX path: pure-NURL mmap → memcpy. Win32 / WASI route through
-    // the runtime helper (which uses the fopen/fread fallback) since
+    // POSIX path: pure-NURL mmap → memcpy. Win32 / WASI use a
+    // fopen+fseek+fread fallback (also pure NURL) since
     // `MAP_PRIVATE` is unavailable in `nurl_native_constant` there.
     : ~ s raw # s 0
     ? != ( posix_const `MAP_PRIVATE` ) -1 {
         = raw # s ( __read_file_mmap_pure path )
     } {
-        = raw ( nurl_read_file_mmap path )
+        = raw ( __read_file_fread_pure path )
     }
     : i p # i raw
     ? == p 0 {

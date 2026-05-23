@@ -1055,36 +1055,13 @@ const char* nurl_read_file(const char *path) {
  * code. (`stdlib/std/fs.nu`'s `__read_file_mmap_pure` copies once into
  * a malloc'd buffer — the zero-copy variant is the future enhancement.) */
 
-/* Forward declaration — used by the WASI/MSVC fallback below before
- * the full definition appears further down in the file. */
-const char* nurl_read_file_safe(const char *path);
-
-/* WASI / MSVC fallback only — PURIFY §4 batch 5 (2026-05-24) moved
- * the POSIX mmap path to pure NURL (`__read_file_mmap_pure` in
- * `stdlib/std/fs.nu`). `read_file` gates on
- * `posix_const "MAP_PRIVATE" != -1` and routes here only on
- * platforms where mmap is unavailable or unreliable. */
-const char* nurl_read_file_mmap(const char *path) {
-    return nurl_read_file_safe(path);
-}
-
-/* Non-fatal variant: returns NULL on error instead of exiting.
- * Used by stdlib/std/fs.nu to surface failures as `! String IoErr`.
- * The errno classification is left to the caller (see nurl_errno_kind). */
-const char* nurl_read_file_safe(const char *path) {
-    FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    if (sz < 0) { fclose(f); return NULL; }
-    fseek(f, 0, SEEK_SET);
-    char *buf = (char*)malloc((size_t)sz + 1);
-    if (!buf) { fclose(f); return NULL; }
-    size_t got = fread(buf, 1, (size_t)sz, f);
-    buf[got] = '\0';
-    fclose(f);
-    return buf;
-}
+/* nurl_read_file_mmap / nurl_read_file_safe — REMOVED 2026-05-24
+ * (§4 batch 6). The POSIX mmap path moved to pure NURL
+ * (`__read_file_mmap_pure`) in batch 5; this batch retired the
+ * Win32/WASI fopen+fread fallback by adding `__read_file_fread_pure`
+ * to `stdlib/std/fs.nu`. `read_file` now gates on
+ * `posix_const "MAP_PRIVATE" != -1` and routes to one of two
+ * pure-NURL implementations — no runtime entry remains. */
 
 /* Map errno to the IoErr enum tag in stdlib/core/errors.nu.
  *   0 = NotFound          (ENOENT)

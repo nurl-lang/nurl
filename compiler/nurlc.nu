@@ -9224,9 +9224,7 @@
     // PURIFY.md Phase 7 (2026-05-23): nurl_file_exists / _del /
     // _dir_create / _dir_remove are pure-NURL @-fns in
     // stdlib/std/fs.nu, calling libc access / remove / mkdir / rmdir /
-    // fopen / fseek / ftell (the last three drive `file_size` directly).
-    ( emit `declare i8*  @nurl_read_file_safe(i8*)` )
-    ( emit `declare i8*  @nurl_read_file_mmap(i8*)` )
+    // fopen / fseek / ftell / fread / open / mmap / munmap directly.
     ( emit `declare i64  @nurl_errno_kind()` )
     // libm wrappers (nurl_sqrt / _fabs / _floor / _ceil / _round /
     // _pow / _log / _exp / _sin / _cos / _tan / _atan2) and
@@ -9437,8 +9435,6 @@
     // non-fatal fs API used by stdlib/std/fs.nu — raw is an i8* the caller
     // must `nurl_free` after copying (see read_file). Intentionally NOT
     // marked __ret_owned to avoid double-free against the manual free.
-    ( nurl_sym_def syms `nurl_read_file_safe` `i8*` )
-    ( nurl_sym_def syms `nurl_read_file_mmap` `i8*` )
     ( nurl_sym_def syms `nurl_errno_kind` `i64` )
     // double-returning runtime functions
     ( nurl_sym_def syms `nurl_lex_fnum` `double` )
