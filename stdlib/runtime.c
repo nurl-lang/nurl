@@ -302,13 +302,20 @@ void nurl_eprintln(const char *s) { fputs(s, stderr); fputc('\n', stderr); fflus
  * malloc + memcpy directly live in `stdlib/core/string.nu` and
  * `compiler/nurlc.nu`'s local copy. */
 
-/* Decimal representation of n; result is malloc'd. */
+/* Decimal representation of n; result is malloc'd.
+ * Stays in C — 72 corpus tests do `( nurl_print ( nurl_str_int n ) )`
+ * without an explicit `stdlib/core/string.nu` import. Moving str_int
+ * to NURL would force the import on every one. Justified exception
+ * until a prelude / auto-import mechanism lands. */
 const char* nurl_str_int(long long n) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%lld", n);
     return strdup(buf);
 }
 
+/* nurl_str_float STAYS — printf-family float formatting (%g / %e)
+ * needs either a Grisu/Ryu implementation or variadic FFI for
+ * snprintf; neither is in place yet. ~4 LOC justified exception. */
 const char* nurl_str_float(double d) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%g", d);
@@ -322,28 +329,13 @@ const char* nurl_str_float(double d) {
  * Batch C). Pure-NURL @-fn in `stdlib/core/string.nu` (and
  * `nurlc.nu`'s local copy). */
 
-/* Parse f64 from a byte range. Copies into a small NUL-terminated buffer
- * and calls strtod. Returns 0.0 on empty/parse failure. Allocates only
- * when len exceeds the stack buffer; the common CSV cell case never
- * touches malloc. */
-double nurl_parse_float_range(const char *p, long long len) {
-    if (!p || len <= 0) return 0.0;
-    char stack[64];
-    char *buf = stack;
-    int heap = 0;
-    if ((size_t)len + 1 > sizeof(stack)) {
-        buf = (char*)malloc((size_t)len + 1);
-        if (!buf) return 0.0;
-        heap = 1;
-    }
-    memcpy(buf, p, (size_t)len);
-    buf[len] = '\0';
-    char *end = NULL;
-    double v = strtod(buf, &end);
-    if (end == buf) v = 0.0;
-    if (heap) free(buf);
-    return v;
-}
+/* nurl_parse_float_range — REMOVED 2026-05-23 (PURIFY.md Phase 5
+ * Batch D'). Pure-NURL @-fn calling libc `strtod` through the
+ * preamble FFI lives in stdlib/core/string.nu (and nurlc.nu's
+ * local copy). The stack-buffer optimisation is gone (every call
+ * does one malloc); the CSV bulk parsers in §2 don't go through
+ * this entry point, so the perf cost is bounded to user-facing
+ * one-off float parses. */
 
 /* CSV scanner: walk forward from `p` for at most `len` bytes, returning
  * the offset of the first occurrence of `delim`, '\n', or '\r' — or

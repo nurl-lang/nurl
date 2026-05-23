@@ -233,6 +233,30 @@ $ `stdlib/core/char.nu`
     ^ * acc sign
 }
 
+// ── PURIFY.md Phase 5 Batch D' (2026-05-23) ──
+// strtod via FFI for byte-range float parsing. nurl_str_int and
+// nurl_str_float keep their C bodies — str_int because moving it
+// would force `$ stdlib/core/string.nu` into 72 corpus tests that
+// use it transitively; str_float because printf-family %g/%e needs
+// Grisu/Ryu or variadic FFI.
+
+// Parse f64 from byte range [p, p+len) via libc `strtod`. Copies
+// into a NUL-terminated scratch buffer, passes NULL as endptr.
+// Returns 0.0 on empty / null input.
+@ nurl_parse_float_range s p i len → f {
+    ? == # i p 0 { ^ 0.0 } {}
+    ? <= len 0 { ^ 0.0 } {}
+    : s buf # s ( malloc + len 1 )
+    ( memcpy buf p len )
+    : *u bp # *u buf
+    : u zero # u 0
+    = . bp len zero
+    : **u endptr # **u 0
+    : f v ( strtod buf endptr )
+    ( free buf )
+    ^ v
+}
+
 : String {
     s ctl
 }

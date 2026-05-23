@@ -1929,6 +1929,29 @@
     ^ * acc sign
 }
 
+// ── Batch D' (2026-05-23): strtod via FFI for byte-range float parse.
+// nurl_str_int / _str_float keep their C bodies (see runtime.c for
+// the rationale).
+
+// Parse f64 from byte range [p, p+len). Copies into a NUL-terminated
+// scratch buffer and hands it to libc `strtod` (NULL endptr — we
+// don't surface the parse position). Returns 0.0 on empty / null
+// input; mirrors strtod's "0.0 on parse failure" behaviour for any
+// input strtod itself rejects.
+@ nurl_parse_float_range s p i len → f {
+    ? == # i p 0 { ^ 0.0 } {}
+    ? <= len 0 { ^ 0.0 } {}
+    : s buf # s ( malloc + len 1 )
+    ( memcpy buf p len )
+    : *u bp # *u buf
+    : u zero # u 0
+    = . bp len zero
+    : **u endptr # **u 0
+    : f v ( strtod buf endptr )
+    ( free buf )
+    ^ v
+}
+
 @ __is_operator_callee i tt → b {
     ? == tt TT_DOT { ^ T } {}
     ? == tt TT_HASH { ^ T } {}
@@ -9031,6 +9054,7 @@
     ( emit `declare i8*  @memmem(i8*, i64, i8*, i64)` )
     ( emit `declare i64  @atoll(i8*)` )
     ( emit `declare double @atof(i8*)` )
+    ( emit `declare double @strtod(i8*, i8**)` )
     ( emit `declare i8*  @memcpy(i8*, i8*, i64)` )
     ( emit `declare i8*  @strdup(i8*)` )
     ( emit `declare void @nurl_init(i32, i8**)` )
@@ -9050,10 +9074,13 @@
     // _cat3 / _cat4 / _slice / _parse_int_range are pure-NURL @-fns
     // now — declares dropped to avoid clashing with their `define`s
     // in user code (and the local copies inside nurlc.nu itself).
-    // nurl_str_int / _str_float / _parse_float_range stay (Batch D).
+    // Batch D' (2026-05-23): _parse_float_range joined them via
+    // strtod. _str_int stays in C — 72 corpus tests use it without
+    // importing stdlib/core/string.nu, and the cost-vs-savings
+    // doesn't justify churning them until a prelude lands. Only
+    // _str_float (printf-family %g, Grisu/Ryu TODO) stays beside it.
     ( emit `declare i8*  @nurl_str_int(i64)` )
     ( emit `declare i8*  @nurl_str_float(double)` )
-    ( emit `declare double @nurl_parse_float_range(i8*, i64)` )
     // PURIFY.md Phase 5 (2026-05-23): nurl_str_len / _eq / _cmp /
     // _to_int / _to_float / _starts / _find / _ends / _memmem_range /
     // _memcmp_lex are pure-NURL @-fns now (libc-thin wrappers
@@ -9326,12 +9353,13 @@
     ( nurl_sym_def syms `nurl_read_file` `i8*` )
     ( nurl_sym_def syms `nurl_read_line` `i8*` )
     ( nurl_sym_def syms `nurl_read_n_bytes` `i8*` )
-    // PURIFY.md Phase 5 Batch C: nurl_str_cat / _cat3 / _cat4 / _slice
-    // are pure-NURL @-fns now (defined in stdlib/core/string.nu and
-    // mirrored locally above). The sym_def keeps cross-module callers
-    // typed correctly even when they don't `$`-import string.nu —
-    // omitting it makes nurlc emit `call i64 @nurl_str_cat(...)` and
-    // the LLVM verifier rejects the type mismatch.
+    // PURIFY.md Phase 5 Batches C+D' (2026-05-23): nurl_str_cat /
+    // _cat3 / _cat4 / _slice / _str_int are pure-NURL @-fns now.
+    // The sym_def keeps cross-module callers typed correctly even
+    // when they don't `$`-import string.nu — omitting it makes
+    // nurlc emit `call i64 @nurl_str_cat(...)` and the LLVM verifier
+    // rejects the type mismatch. nurl_str_float (Batch D) still has
+    // a C body.
     ( nurl_sym_def syms `nurl_str_cat` `i8*` )
     ( nurl_sym_def syms `nurl_str_cat3` `i8*` )
     ( nurl_sym_def syms `nurl_str_cat4` `i8*` )
@@ -9368,6 +9396,7 @@
     ( nurl_sym_def syms `memmem` `i8*` )
     ( nurl_sym_def syms `atoll` `i64` )
     ( nurl_sym_def syms `atof` `double` )
+    ( nurl_sym_def syms `strtod` `double` )
     ( nurl_sym_def syms `memcpy` `i8*` )
     ( nurl_sym_def syms `strdup` `i8*` )
     // file I/O
