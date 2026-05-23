@@ -2574,31 +2574,12 @@ double nurl_str_float_value(void) { return g_last_parsed_float; }
 #  include <dirent.h>      /* opendir, readdir, closedir */
 #endif
 
-/* Slurp stdin to EOF. Always returns a heap-owned C string (possibly empty).
- * On allocation failure returns NULL. */
-const char* nurl_read_all_stdin(void) {
-    size_t cap = 4096, len = 0;
-    char *buf = (char*)malloc(cap);
-    if (!buf) return NULL;
-    for (;;) {
-        size_t want = cap - len - 1;            /* leave space for NUL */
-        if (want == 0) {
-            size_t ncap = cap * 2;
-            char *nb = (char*)realloc(buf, ncap);
-            if (!nb) { free(buf); return NULL; }
-            buf = nb; cap = ncap;
-            want = cap - len - 1;
-        }
-        size_t got = fread(buf + len, 1, want, stdin);
-        len += got;
-        if (got < want) {                       /* EOF or error */
-            if (ferror(stdin)) { free(buf); return NULL; }
-            break;
-        }
-    }
-    buf[len] = '\0';
-    return buf;
-}
+/* nurl_read_all_stdin — REMOVED 2026-05-24 (PURIFY.md §13 batch 2).
+ * Pure-NURL `__read_all_stdin_pure` in `stdlib/core/io.nu` calls
+ * `read(2)` (POSIX FFI from `stdlib/core/posix.nu`) on fd 0 in a
+ * 4 KB-stepped grow-and-retry loop. mingw-w64 libmingwex exposes
+ * `read` (= `_read`) so the same code path works on Win32 without
+ * gating; wasi-libc routes through its POSIX shim. */
 
 /* Directory listing — opaque handle (i64) + skip-dots iteration.
  * The "." and ".." entries are filtered so callers don't have to. */
