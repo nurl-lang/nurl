@@ -158,27 +158,117 @@ const char *nurl_read_n_bytes(long long n) {
     return buf;
 }
 
-/* ── Output buffer for deferred emission (closure bodies etc.) ── */
-#define OUTBUF_SIZE (8*1024*1024)  /* 8 MB deferred output buffer */
+/* ── Output buffer for deferred emission (closure bodies etc.) ──
+ *
+ * Stack-based: every `start` pushes a fresh empty frame and switches
+ * to buffering; every `stop` snapshots the current frame's contents
+ * to a strdup'd return value and pops back to whatever was there
+ * before (which may itself be a buffering frame).
+ *
+ * Why stack instead of single-slot: `gen_closure_expr` in
+ * `compiler/nurlc.nu` brackets each closure body with start/stop. A
+ * closure body that itself defines another closure (nested
+ * `:`-binding of a `\ → R { ... }`) re-enters `gen_closure_expr`
+ * recursively. Under the old single-slot model the inner call's
+ * `reset` cleared the bytes the outer body had emitted so far, and
+ * the inner's `stop` switched back to stdout — so the outer's
+ * remaining body bytes leaked out at module scope. The deferred
+ * function for the outer closure ended up being only the inner
+ * closure's body, while the outer's tail spilled into global IR.
+ * Symptom: `error: expected 'type' after name` on what is plainly
+ * function-body IR sitting outside any `define`. Stack semantics
+ * makes nested `start`/`stop` pairs do the obvious thing without a
+ * single line of compiler-side change. (Fix landed 2026-05-23 in
+ * the async-runtime cleanup; see docs/GOTCHAS.md §12.)
+ */
+#define OUTBUF_SIZE       (8*1024*1024)  /* 8 MB per-frame buffer */
+#define OUTBUF_STACK_MAX  32
+
+struct OutbufFrame {
+    char  *bytes;    /* saved snapshot; NULL when frame was empty */
+    size_t len;
+    int    mode;
+};
+
 static char  *g_outbuf      = NULL;
 static size_t g_outbuf_len  = 0;
 static int    g_outbuf_mode = 0;   /* 0 = stdout, 1 = buffer */
+static struct OutbufFrame g_outbuf_stack[OUTBUF_STACK_MAX];
+static int    g_outbuf_sp   = 0;   /* 0 = stack empty */
 
 static void outbuf_init(void) {
     if (!g_outbuf) { g_outbuf = (char*)malloc(OUTBUF_SIZE); g_outbuf[0] = '\0'; }
 }
 
-/* Redirect nurl_print to the internal buffer. */
-void nurl_print_buf_start(void) { outbuf_init(); g_outbuf_mode = 1; }
-/* Return to stdout mode and return accumulated buffer as a heap-owned copy
-   so Phase 2B auto-drop is safe; internal g_outbuf keeps growing until
-   nurl_print_buf_reset().                                                   */
-const char* nurl_print_buf_stop(void) {
-    g_outbuf_mode = 0;
-    return strdup(g_outbuf ? g_outbuf : "");
+/* Push a fresh empty buffering frame. The previous frame's bytes +
+ * mode are saved on the stack for `stop` to restore. */
+void nurl_print_buf_start(void) {
+    outbuf_init();
+    if (g_outbuf_sp >= OUTBUF_STACK_MAX) {
+        fputs("nurl_print_buf_start: stack overflow\n", stderr);
+        return;
+    }
+    struct OutbufFrame *f = &g_outbuf_stack[g_outbuf_sp++];
+    f->mode = g_outbuf_mode;
+    f->len  = g_outbuf_len;
+    if (g_outbuf_len > 0) {
+        f->bytes = (char*)malloc(g_outbuf_len + 1);
+        if (f->bytes) memcpy(f->bytes, g_outbuf, g_outbuf_len + 1);
+    } else {
+        f->bytes = NULL;
+    }
+    g_outbuf_len = 0;
+    g_outbuf[0] = '\0';
+    g_outbuf_mode = 1;
 }
-/* Reset the buffer (call before starting a new capture). */
-void nurl_print_buf_reset(void) { outbuf_init(); g_outbuf_len = 0; g_outbuf[0] = '\0'; }
+
+/* Snapshot the current frame as the return value, then pop the
+ * saved frame back into place. The caller owns the returned pointer
+ * (auto-drop / explicit free). */
+const char* nurl_print_buf_stop(void) {
+    outbuf_init();
+    char *ret = strdup(g_outbuf ? g_outbuf : "");
+    if (g_outbuf_sp > 0) {
+        struct OutbufFrame *f = &g_outbuf_stack[--g_outbuf_sp];
+        g_outbuf_len = f->len;
+        if (f->bytes) {
+            memcpy(g_outbuf, f->bytes, f->len + 1);
+            free(f->bytes);
+            f->bytes = NULL;
+        } else {
+            g_outbuf[0] = '\0';
+        }
+        g_outbuf_mode = f->mode;
+    } else {
+        /* Bottom of the stack — fall back to stdout mode. */
+        g_outbuf_len = 0;
+        g_outbuf[0] = '\0';
+        g_outbuf_mode = 0;
+    }
+    return ret;
+}
+
+/* Legacy: `gen_closure_expr` historically called `reset+start` to
+ * guarantee a clean buffer before capturing a closure body. Under
+ * the new stack semantics, `start` already pushes a fresh empty
+ * frame — but the bug class we're closing is exactly the case where
+ * a nested `gen_closure_expr` call invokes this reset, which under
+ * the obvious "clear current bytes" semantics would wipe the parent
+ * frame's accumulated bytes (the parent IS the current top of stack
+ * until the nested `start` fires).
+ *
+ * Resolution: clear ONLY when the stack is empty. With outstanding
+ * frames the parent buffer is preserved, and the nested `start`
+ * pushes a new fresh frame on top regardless. The end-to-end
+ * semantic of `reset+start` is unchanged at single-level call sites
+ * (where stack is empty) and now correct at nested call sites. */
+void nurl_print_buf_reset(void) {
+    outbuf_init();
+    if (g_outbuf_sp == 0) {
+        g_outbuf_len = 0;
+        g_outbuf[0] = '\0';
+    }
+}
 
 /* print without newline */
 void nurl_print(const char *s) {
