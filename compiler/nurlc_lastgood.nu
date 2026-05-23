@@ -9030,9 +9030,10 @@
     ( emit `declare i64  @nurl_proc_spawn_wait(i64)` )
     ( emit `declare i64  @nurl_proc_spawn_kill(i64, i64)` )
     ( emit `declare void @nurl_proc_spawn_free(i64)` )
-    ( emit `declare i8*  @nurl_sha256_hex(i8*)` )
-    ( emit `declare i8*  @nurl_hmac_sha256_hex(i8*, i8*)` )
-    ( emit `declare void @nurl_sha1_bytes(i8*, i64, i8*)` )
+    // Crypto hash transforms (SHA-1/256/512, MD5, HMAC-SHA-256/512)
+    // moved to pure NURL — `stdlib/std/hash_*.nu` — as PURIFY.md
+    // Phase 4 (2026-05-23). Only `nurl_rand_*` stays C-side
+    // (irreducible getrandom/RtlGenRandom syscall bridge).
     ( emit `declare i64  @nurl_rand_u64()` )
     ( emit `declare i8*  @nurl_rand_bytes_hex(i64)` )
     ( emit `declare i8*  @nurl_read_file_bytes(i8*)` )
@@ -9296,9 +9297,7 @@
     // (caller frees via nurl_free); not auto-marked __ret_owned because
     // the wrappers in stdlib/std/hash.nu and stdlib/std/random.nu do
     // their own copy + free.
-    ( nurl_sym_def syms `nurl_sha256_hex` `i8*` )
-    ( nurl_sym_def syms `nurl_hmac_sha256_hex` `i8*` )
-    ( nurl_sym_def syms `nurl_sha1_bytes` `void` )
+    // Crypto hash sym_defs — see PURIFY.md Phase 4 comment above.
     ( nurl_sym_def syms `nurl_rand_u64` `i64` )
     ( nurl_sym_def syms `nurl_rand_bytes_hex` `i8*` )
     // Binary file I/O (runtime §4 extension). Read returns a heap buffer +

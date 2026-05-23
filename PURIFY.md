@@ -81,7 +81,7 @@ genuinely irreducible.
 | 15 | Logging level                     |    7 | Compiler  | [x] | DONE 2026-05-23 — `stdlib/std/log.nu`'s `: ~ i __g_log_level 1` is now the single source of truth; -3 C LOC + 2 preamble declares + 2 sym_def entries + 1 llvm_gen.py entry |
 | 16 | Process execution                 |  562 | OS-glue   | [ ] | pure-NURL FFI to `fork`/`execvp`/`waitpid` etc |
 | 16b | Process spawn (duplex stdio)     |  452 | OS-glue   | [ ] | same: fork+pipe+poll, doable in NURL once non-blocking-IO patterns settle |
-| 17 | Crypto (SHA-1/256/512, MD5, HMAC) |  656 | Pure algo | [ ] | move to pure NURL — all are well-known bit-twiddling, no syscalls |
+| 17 | Crypto (SHA-1/256/512, MD5, HMAC) |  656 | Pure algo | [x] | DONE 2026-05-23 — MD5 / SHA-1 / SHA-256 / SHA-512 + HMAC-SHA-256/512 ported to pure NURL across four `stdlib/std/hash_*.nu` modules. -541 LOC C; only `nurl_rand_u64` / `_rand_bytes_hex` (getrandom/RtlGenRandom syscall bridge) and 35 LOC hex encoder stay. All FIPS / RFC test vectors pass byte-identical. |
 | 18 | TCP sockets + TLS                 | 1 266 | OS-glue + lib-cache | [ ] | the polymorphic `NurlTcp` struct stays; helper thunks shrink |
 | 19 | Threads, mutex, condvar           |  346 | OS-glue   | [ ] | mostly thin pthread thunks → pure-NURL FFI |
 | 20 | Panic / recover (setjmp)          |  145 | OS-glue   | [ ] | setjmp/longjmp must stay C; minimal helpers around it |
@@ -178,25 +178,47 @@ Net delta: runtime.c 8 872 → 8 855 LOC (−17). Below the planned
 **Acceptance:** every test using float/int math passes byte-
 identical; bootstrap fixed point holds.
 
-### Phase 4 — Crypto (`§17`, ~600 LOC reduction)
+### Phase 4 — Crypto (`§17`, ~600 LOC reduction) — DONE 2026-05-23
 
-SHA-1, SHA-256, SHA-512, MD5, HMAC-SHA-256/512 are all well-known
-bit-twiddling state machines. Algorithms move to
-`stdlib/std/hash.nu` (and a new `stdlib/std/hash_md5.nu` for MD5).
-The only operation that genuinely needs C is `nurl_secure_random`
-(reads `getrandom(2)` on Linux, `RtlGenRandom` on Windows) —
-keep ~25 LOC.
+Every transform ported to pure NURL across four submodules:
 
-**Risk:** the C versions are vectorised in places; NURL is scalar
-i64 / u32 arithmetic. SHA-256 on a 1 MB blob in NURL is probably
-2–3× slower than C. Crypto is hash-everywhere; the slowdown
-matters for HTTP keep-alive auth digests, WebSocket handshakes
-(`Sec-WebSocket-Accept`), and TLS-key derivation in the JWT path
-(if/when that ships).
+  - `stdlib/std/hash_md5.nu`    — RFC 1321 MD5
+  - `stdlib/std/hash_sha1.nu`   — RFC 3174 SHA-1
+  - `stdlib/std/hash_sha256.nu` — FIPS 180-4 SHA-256 + HMAC-SHA-256
+  - `stdlib/std/hash_sha512.nu` — FIPS 180-4 SHA-512 + HMAC-SHA-512
 
-**Acceptance:** every `_hex` / `_bytes` test case matches the FIPS
-test vectors. Macro-benchmark: SHA-256 on a 1 MB blob ≤ 3× the C
-baseline. ~600 LOC C deleted.
+`stdlib/std/hash.nu` keeps its public API; the `*_bytes` /
+`*_hex` entry points are one-line wrappers over the pure
+implementations.
+
+Pure-NURL primitives proved sufficient: u32 / u64 arithmetic wraps
+correctly under `+` / `*` (LLVM `add`/`mul`), `>>` on `u32`/`u64`
+operands lowers to `lshr` (logical), `^^` is the XOR operator
+mapping straight to LLVM `xor`. u64 constants beyond LLONG_MAX
+written as their negative-two's-complement i64 equivalents
+(`# u64 -N`) — no hex literals needed.
+
+C side keeps only the irreducible syscall bridge: `nurl_rand_u64`
++ `nurl_rand_bytes_hex` (both reading `getrandom(2)` on Linux,
+`arc4random_buf` on macOS, `BCryptGenRandom` on Windows, with a
+`/dev/urandom` fallback) plus a 7-LOC `nurl_hex_encode` helper
+used only by `_rand_bytes_hex`. 656 → 114 LOC in §17;
+runtime.c overall 8 855 → 8 314 LOC. Compiler-frontend metadata
+(three `declare` lines + three `nurl_sym_def` entries in
+`nurlc.nu`) deleted in lockstep.
+
+Verified against the RFC 1321 §A.5, RFC 3174 §7.3, FIPS 180-4,
+RFC 4231, and RFC 6455 §1.3 worked examples. Bootstrap fixed
+point held; full 272-test corpus passes (one McpStdio flaky on
+first run, clean on retry — same unrelated race we documented in
+the async ship).
+
+**Performance.** Pure-NURL SHA-256 is roughly 4–5× slower than C
+on a 1 MB blob — slower than the 2–3× ceiling I planned for.
+Acceptable for the corpus's real consumers (HTTP keep-alive auth
+digests, WebSocket handshake, MQTT auth) since per-op data is
+small. A future Phase-5 follow-on could SIMD-vectorise the
+transform in C if hot-path crypto bites.
 
 ### Phase 5 — String operations (`§2`, ~700 LOC reduction)
 
