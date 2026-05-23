@@ -1929,6 +1929,16 @@
     ^ * acc sign
 }
 
+// ── Phase 7 (2026-05-23): nurl_file_exists via libc access(2).
+// nurlc.nu uses it to probe stage-0 sentinel files; mirrored here
+// because nurlc.nu can't `$`-import its own stdlib/std/fs.nu.
+
+@ nurl_file_exists s path → i {
+    ? == # i path 0 { ^ 0 } {}
+    : i32 rc ( access path # i32 0 )    // F_OK = 0
+    ^ ? == # i rc 0 1 0
+}
+
 // ── Batch D' (2026-05-23): strtod via FFI for byte-range float parse.
 // nurl_str_int / _str_float keep their C bodies (see runtime.c for
 // the rationale).
@@ -9066,6 +9076,8 @@
     ( emit `declare i32  @fputc(i32, i8*)` )
     ( emit `declare i64  @fread(i8*, i64, i64, i8*)` )
     ( emit `declare i32  @feof(i8*)` )
+    // POSIX access(2) for nurl_file_exists pure-NURL @-fn (Phase 7).
+    ( emit `declare i32  @access(i8*, i32)` )
     ( emit `declare void @nurl_init(i32, i8**)` )
     ( emit `declare void @nurl_print(i8*)` )
     ( emit `declare void @nurl_eprint(i8*)` )
@@ -9171,14 +9183,14 @@
     // pure-NURL @-fns now in stdlib/std/fs.nu, calling libc fopen /
     // fputs / fwrite / fputc / fclose / fread / feof directly.
     ( emit `declare i8*  @nurl_file_read(i8*)` )
-    ( emit `declare i64  @nurl_file_exists(i8*)` )
+    // PURIFY.md Phase 7 (2026-05-23): nurl_file_exists / _del /
+    // _dir_create / _dir_remove are pure-NURL @-fns in
+    // stdlib/std/fs.nu, calling libc access / remove / mkdir / rmdir.
+    // _file_size needs `struct stat` and stays in C.
     ( emit `declare i64  @nurl_file_size(i8*)` )
-    ( emit `declare void @nurl_file_del(i8*)` )
     ( emit `declare i8*  @nurl_read_file_safe(i8*)` )
     ( emit `declare i8*  @nurl_read_file_mmap(i8*)` )
     ( emit `declare i64  @nurl_write_file_safe(i8*, i8*, i8*)` )
-    ( emit `declare i64  @nurl_dir_create(i8*)` )
-    ( emit `declare i64  @nurl_dir_remove(i8*)` )
     ( emit `declare i64  @nurl_errno_kind()` )
     // libm wrappers (nurl_sqrt / _fabs / _floor / _ceil / _round /
     // _pow / _log / _exp / _sin / _cos / _tan / _atan2) and
@@ -9417,6 +9429,7 @@
     ( nurl_sym_def syms `fputc` `i32` )
     ( nurl_sym_def syms `fread` `i64` )
     ( nurl_sym_def syms `feof` `i32` )
+    ( nurl_sym_def syms `access` `i32` )
     // file I/O
     ( nurl_sym_def syms `nurl_file_open` `i8*` )
     ( nurl_sym_def syms `nurl_file_write` `void` )

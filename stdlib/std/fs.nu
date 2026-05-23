@@ -326,6 +326,37 @@ $ `stdlib/std/path.nu`
 // dual-return shape (ptr + len) the runtime doesn't expose yet.
 & `c` @ nurl_file_read_chunk *v h i n      → s
 
+// ── PURIFY.md Phase 7 batch 2 (2026-05-23): probe + mutation ──
+// access(2) / remove(3) / mkdir(2) / rmdir(2) wrappers. `access`
+// uses F_OK (0) for "does this path exist at all". `mkdir` mode
+// is 0755 (decimal 493) to match the historic C wrapper.
+
+& `c` @ remove s path                      → i32
+& `c` @ mkdir  s path i32 mode             → i32
+& `c` @ rmdir  s path                      → i32
+
+@ nurl_file_exists s path → i {
+    ? == # i path 0 { ^ 0 } {}
+    : i32 rc ( access path # i32 0 )
+    ^ ? == # i rc 0 1 0
+}
+
+@ nurl_file_del s path → v {
+    ? != 0 # i path { : i32 _ ( remove path ) } {}
+}
+
+@ nurl_dir_create s path → i {
+    ? == # i path 0 { ^ -1 } {}
+    : i32 rc ( mkdir path # i32 493 )
+    ^ ? == # i rc 0 0 -1
+}
+
+@ nurl_dir_remove s path → i {
+    ? == # i path 0 { ^ -1 } {}
+    : i32 rc ( rmdir path )
+    ^ ? == # i rc 0 0 -1
+}
+
 // mkdir one path component, treating an already-existing directory as
 // success — the whole point of mkdir -p. errno-kind 2 is AlreadyExists.
 @ __dir_create_step s p → !v IoErr {

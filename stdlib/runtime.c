@@ -1176,19 +1176,14 @@ const char* nurl_file_read(const char *path) {
     return nurl_read_file(path);
 }
 
-long long nurl_file_exists(const char *path) {
-    struct stat st;
-    return (stat(path, &st) == 0) ? 1 : 0;
-}
+/* nurl_file_exists / _del — REMOVED 2026-05-23 (PURIFY.md Phase 7
+ * batch 2). Pure-NURL @-fns calling libc access(2) / remove(3) in
+ * stdlib/std/fs.nu (and nurlc.nu's local copy of file_exists). */
 
 long long nurl_file_size(const char *path) {
     struct stat st;
     if (stat(path, &st) == 0) return (long long)st.st_size;
     return -1;
-}
-
-void nurl_file_del(const char *path) {
-    remove(path);
 }
 
 /* Non-fatal write helper for stdlib/std/fs.nu.
@@ -1267,38 +1262,11 @@ long long nurl_write_file_bytes(const char *path, const char *data, long long le
     return 0;
 }
 
-/* Create a directory with mode 0755. Non-fatal — returns 0 on success,
- * -1 with errno set on failure. errno = EEXIST if the directory (or any
- * file at `path`) already exists; the caller maps to AlreadyExists. */
-#ifdef _WIN32
-#  include <direct.h>
-#  define MKDIR_2(p, m) _mkdir(p)
-#else
-#  include <sys/types.h>
-#  include <unistd.h>
-#  define MKDIR_2(p, m) mkdir((p), (m))
-#endif
-
-long long nurl_dir_create(const char *path) {
-    if (!path) { errno = EINVAL; return -1; }
-    if (MKDIR_2(path, 0755) != 0) return -1;
-    return 0;
-}
-
-/* Remove an empty directory. Non-fatal — returns 0 on success, -1 with
- * errno set on failure (typically ENOENT or ENOTEMPTY). The caller maps
- * via nurl_errno_kind. */
-#ifdef _WIN32
-#  define RMDIR_1(p) _rmdir(p)
-#else
-#  define RMDIR_1(p) rmdir(p)
-#endif
-
-long long nurl_dir_remove(const char *path) {
-    if (!path) { errno = EINVAL; return -1; }
-    if (RMDIR_1(path) != 0) return -1;
-    return 0;
-}
+/* nurl_dir_create / _dir_remove — REMOVED 2026-05-23 (PURIFY.md
+ * Phase 7 batch 2). Pure-NURL @-fns calling libc mkdir / rmdir in
+ * stdlib/std/fs.nu. POSIX-only — the historic MKDIR_2 / RMDIR_1
+ * macros papered over _mkdir / _rmdir on Windows; Win32 callers
+ * lose this until the prelude grows OS dispatch. */
 
 /* Classify the entry at `path` WITHOUT following a final symbolic link
  * (lstat semantics): 0 = missing or stat error, 1 = regular file,
