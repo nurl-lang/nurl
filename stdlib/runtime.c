@@ -1180,11 +1180,8 @@ const char* nurl_file_read(const char *path) {
  * batch 2). Pure-NURL @-fns calling libc access(2) / remove(3) in
  * stdlib/std/fs.nu (and nurlc.nu's local copy of file_exists). */
 
-long long nurl_file_size(const char *path) {
-    struct stat st;
-    if (stat(path, &st) == 0) return (long long)st.st_size;
-    return -1;
-}
+/* nurl_file_size — REMOVED 2026-05-24 (§4 batch 4). Pure-NURL
+ * `__file_size_pure` (fs.nu) uses fopen+fseek+ftell+fclose. */
 
 /* nurl_write_file_safe — REMOVED 2026-05-24 (PURIFY.md §4 batch 3).
  * Pure-NURL `__write_file_pure` in `stdlib/std/fs.nu` calls libc

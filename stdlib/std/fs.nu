@@ -142,8 +142,33 @@ $ `stdlib/std/path.nu`
     ^ != 0 ( nurl_file_exists path )
 }
 
+// Byte length of a regular file. Implementation: open in binary mode,
+// seek to end, query position, close. Avoids the `stat(2)` path
+// entirely because `struct stat`'s `st_size` field offset varies by
+// platform (Linux x86_64 = 48, macOS = 96, mingw layout different
+// again) and porting that offset table buys nothing — SEEK_END is a
+// universal POSIX value (2) honoured by every libc stdio we target.
+// Directories and other non-regular files yield the same "fopen
+// succeeded" outcome as on POSIX (ftell on a directory is
+// implementation-defined; the previous stat-based path returned the
+// directory's allocation size 4096 — a behavioural difference NURL
+// callers should not be relying on).
+@ __file_size_pure s path → i {
+    ? == # i path 0 { ^ -1 } {}
+    : s fp ( fopen path `rb` )
+    ? == # i fp 0 { ^ -1 } {}
+    : i32 sr ( fseek fp 0 # i32 2 )
+    ? != sr # i32 0 {
+        : i32 _u ( fclose fp )
+        ^ -1
+    } {}
+    : i sz ( ftell fp )
+    : i32 _cr ( fclose fp )
+    ^ sz
+}
+
 @ file_size s path → !i IoErr {
-    : i n ( nurl_file_size path )
+    : i n ( __file_size_pure path )
     ? < n 0 {
         : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
         ^ @ !i IoErr { F e }

@@ -9109,6 +9109,12 @@
     ( emit `declare i32  @fputc(i32, i8*)` )
     ( emit `declare i64  @fread(i8*, i64, i64, i8*)` )
     ( emit `declare i32  @feof(i8*)` )
+    // fseek/ftell — POSIX stdio file-position primitives. Pure-NURL
+    // file_size + future random-access I/O use these to learn the
+    // file's length without going through `stat(2)` (whose `struct
+    // stat` layout varies per platform). SEEK_END = 2 universally.
+    ( emit `declare i32  @fseek(i8*, i64, i32)` )
+    ( emit `declare i64  @ftell(i8*)` )
     // POSIX access(2) for nurl_file_exists pure-NURL @-fn (Phase 7).
     ( emit `declare i32  @access(i8*, i32)` )
     ( emit `declare void @nurl_init(i32, i8**)` )
@@ -9218,9 +9224,8 @@
     ( emit `declare i8*  @nurl_file_read(i8*)` )
     // PURIFY.md Phase 7 (2026-05-23): nurl_file_exists / _del /
     // _dir_create / _dir_remove are pure-NURL @-fns in
-    // stdlib/std/fs.nu, calling libc access / remove / mkdir / rmdir.
-    // _file_size needs `struct stat` and stays in C.
-    ( emit `declare i64  @nurl_file_size(i8*)` )
+    // stdlib/std/fs.nu, calling libc access / remove / mkdir / rmdir /
+    // fopen / fseek / ftell (the last three drive `file_size` directly).
     ( emit `declare i8*  @nurl_read_file_safe(i8*)` )
     ( emit `declare i8*  @nurl_read_file_mmap(i8*)` )
     ( emit `declare i64  @nurl_errno_kind()` )
@@ -9421,6 +9426,8 @@
     ( nurl_sym_def syms `fputc` `i32` )
     ( nurl_sym_def syms `fread` `i64` )
     ( nurl_sym_def syms `feof` `i32` )
+    ( nurl_sym_def syms `fseek` `i32` )
+    ( nurl_sym_def syms `ftell` `i64` )
     ( nurl_sym_def syms `access` `i32` )
     // file I/O
     ( nurl_sym_def syms `nurl_file_open` `i8*` )
@@ -9430,7 +9437,6 @@
     ( nurl_sym_def syms `nurl_file_close` `void` )
     ( nurl_sym_def syms `nurl_file_read` `i8*` )
     ( nurl_sym_def syms `nurl_file_exists` `i64` )
-    ( nurl_sym_def syms `nurl_file_size` `i64` )
     ( nurl_sym_def syms `nurl_file_del` `void` )
     // non-fatal fs API used by stdlib/std/fs.nu — raw is an i8* the caller
     // must `nurl_free` after copying (see read_file). Intentionally NOT

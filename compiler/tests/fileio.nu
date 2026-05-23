@@ -40,7 +40,11 @@ $ `stdlib/std/fs.nu`
 
     // File size
     ( nurl_print `size: ` )
-    ( nurl_print ( nurl_str_int ( nurl_file_size `test_output.txt` ) ) )
+    : !i IoErr fsr ( file_size `test_output.txt` )
+    ?? fsr {
+        T n → ( nurl_print ( nurl_str_int n ) )
+        F e → ( nurl_print `?` )
+    }
     ( nurl_print ` bytes\n` )
 
     // Delete
