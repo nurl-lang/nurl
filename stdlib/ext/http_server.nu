@@ -812,3 +812,76 @@ $ `stdlib/ext/http_response.nu`
     ( nurl_free thandles )
     ^ @ !v NetErr { T 0 }
 }
+
+// ── server_run_async — fiber-driven (Phase 7) ─────────────────────────
+//
+// Per-conn fiber instead of per-conn thread. One accept fiber loops on
+// the listener; each successful accept spawns a *handler fiber* that
+// runs the existing `__serve_keepalive_loop` — which transparently
+// goes through `tcp_read_chunk` / `tcp_write_all`, both of which are
+// now context-aware (fiber → park on the reactor; thread → block).
+// So no duplication of the keep-alive loop: same code path, different
+// concurrency primitive.
+//
+// Caller is responsible for the runtime lifecycle. Typical shape:
+//
+//   ( runtime_init 0 )                 // 0 = default worker count
+//   : !v NetErr r ( server_run_async server )
+//   ( runtime_shutdown )
+//
+// `server_run_async` returns when the accept loop exits (listener
+// closed via `server_stop` from a signal handler, or accept failed
+// fatally). The conn fibers that were in flight at that point keep
+// running on the workers; `runtime_shutdown` then joins them.
+//
+// Memory model: same as server_run_pool. Each conn fiber captures the
+// HttpServer handle by value (it's an opaque pointer-handle); concurrent
+// handler invocations must guard their own shared state.
+//
+// v1 scope (matching docs/ASYNC.md Phase 7):
+//   * No per-request total timeout enforcement beyond what the
+//     existing keep-alive loop already does (it's the same loop).
+//   * No paired idle-timer fiber yet — slowloris defence relies on
+//     `tcp_set_timeout`'s per-recv deadline, which under async mode
+//     surfaces as NetTimeout on read and ends the conn fiber.
+//   * No graceful drain on shutdown — workers exit their loops as
+//     soon as their currently-running fiber yields/completes.
+
+$ `stdlib/std/async.nu`
+
+// Per-conn fiber body — runs the existing keep-alive loop (which
+// uses the now-context-aware tcp_read_chunk / tcp_write_all) then
+// closes. Lifted to top-level so the surrounding accept-loop closure
+// stays simple — nested ":"-binding of a closure inside another
+// closure's body provoked an IR-codegen bug in earlier sweeps.
+@ __async_serve_conn HttpServer s TcpConn c → v {
+    ( __serve_keepalive_loop s c )
+    ( tcp_close_conn c )
+}
+
+// Top-level accept loop. Spawned as a fiber by `server_run_async`;
+// per accepted conn it spawns one more fiber that runs the
+// per-conn keep-alive loop. Result (NetClosed / NetAccept clean
+// shutdown vs. fatal NetErr) flows back through the mutable
+// captures of the spawning frame.
+@ __async_accept_loop HttpServer s → v {
+    : TcpListener listener . s listener
+    : ~ b done F
+    ~ ! done {
+        : !TcpConn NetErr cr ( tcp_accept listener )
+        ?? cr {
+            T c → {
+                ( spawn \ → v { ( __async_serve_conn s c ) } )
+            }
+            F e → { = done T }
+        }
+    }
+}
+
+@ server_run_async HttpServer s → !v NetErr {
+    // Spawn one accept fiber; runtime_run blocks until the accept
+    // fiber exits AND every in-flight conn fiber drains (pending=0).
+    ( spawn \ → v { ( __async_accept_loop s ) } )
+    ( runtime_run )
+    ^ @ !v NetErr { T 0 }
+}

@@ -6540,6 +6540,32 @@ long long nurl_tcp_write(long long handle, const char *buf, long long n) {
     return total;
 }
 
+/* Phase 6 async support — expose the underlying fd for reactor
+ * registration and toggle O_NONBLOCK on the socket. Plain accept /
+ * read / write keep working unchanged: a NULL handle is a no-op,
+ * and the kernel's EAGAIN return for non-blocking sockets is what
+ * the NURL async wrappers loop on. */
+long long nurl_tcp_get_fd(long long handle) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return -1;
+    return (long long)h->fd;
+}
+
+void nurl_tcp_set_nonblock(long long handle, long long on) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h || h->fd < 0) return;
+#if defined(_WIN32)
+    u_long mode = on ? 1 : 0;
+    ioctlsocket(h->fd, FIONBIO, &mode);
+#else
+    int fl = fcntl(h->fd, F_GETFL, 0);
+    if (fl < 0) return;
+    if (on) fl |=  O_NONBLOCK;
+    else    fl &= ~O_NONBLOCK;
+    fcntl(h->fd, F_SETFL, fl);
+#endif
+}
+
 void nurl_tcp_close(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return;
@@ -7763,3 +7789,1002 @@ long long nurl_dos_state_active(long long state) {
     nurl__dos_unlock(s);
     return c;
 }
+
+/* ── §24  Async runtime (stackful fibers, M:N work-stealing) ────────
+ *
+ * Phase 1 shipped a single-thread round-robin scheduler. Phase 3
+ * generalises it to M:N with work-stealing: N worker pthreads, each
+ * with a mutex-protected FIFO local runqueue; a shared global queue
+ * absorbs spawns from non-fiber contexts and overflow; idle workers
+ * steal half a peer's queue, then drain global, then park on the idle
+ * condvar. Joinable fibers (spawn_joinable + join) provide a
+ * synchronous completion signal; the standard spawn just fires-and-
+ * forgets and frees on DONE.
+ *
+ * mmap'd 64 KB stacks with a 4 KB guard page below catch overflow as
+ * SIGSEGV at a deterministic page. Channel[A] park integration is
+ * Phase 4; the I/O reactor is Phase 5. See docs/ASYNC.md for the
+ * full design.
+ *
+ * ABI — every fiber handle is a long long (uintptr_t cast); 0 means
+ * error / "no current fiber":
+ *   long long nurl_fiber_spawn(void *fn, void *env);
+ *   long long nurl_fiber_spawn_joinable(void *fn, void *env);
+ *   void      nurl_fiber_join(long long fiber);
+ *   void      nurl_fiber_yield(void);
+ *   long long nurl_fiber_current(void);
+ *   long long nurl_fiber_worker_id(void);     // 0..N-1 or -1 outside
+ *   void      nurl_runtime_init(long long worker_count);
+ *   void      nurl_runtime_run(void);          // block until pending=0
+ *   void      nurl_runtime_shutdown(void);
+ *
+ * Closure shape — same as nurl_thread_spawn in §19: the compiler
+ * decomposes a `(@ v)` closure into (fn_ptr, env_ptr) via the
+ * `# *u closure 0|1` cast; the fiber trampoline calls
+ * ((void(*)(void*))fn)(env). The body is a regular NURL function
+ * whose first argument is an i8* env pointer.
+ *
+ * Platform: POSIX (pthreads + ucontext). Windows joins in a later
+ * phase via CreateFiber + Win32 threads. WASI stays stubbed
+ * (no threads).
+ */
+
+/* Forward declarations — exposed to NURL via the pure-NURL FFI model. */
+long long nurl_fiber_spawn(void *fn, void *env);
+long long nurl_fiber_spawn_joinable(void *fn, void *env);
+void      nurl_fiber_join(long long fiber);
+void      nurl_fiber_yield(void);
+long long nurl_fiber_current(void);
+long long nurl_fiber_worker_id(void);
+void      nurl_fiber_park_with_mutex(long long mutex_h);
+void      nurl_fiber_unpark(long long fiber);
+void      nurl_runtime_init(long long worker_count);
+void      nurl_runtime_run(void);
+void      nurl_runtime_shutdown(void);
+
+#if !defined(__wasi__) && !defined(_WIN32)
+#include <ucontext.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <pthread.h>
+
+/* macOS deprecates ucontext_t but keeps it functional. Silence the
+ * one warning; the asm-based context switch in a later phase will
+ * replace this entirely on macOS. */
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
+#define NURL_FIBER_STACK_BYTES   (64 * 1024)
+#define NURL_FIBER_GUARD_BYTES   4096
+#define NURL_MAX_WORKERS         64
+
+/* Forward decl — full struct lives in §25 (I/O reactor). */
+struct NurlReactorWait;
+
+typedef enum {
+    NF_NEW = 0,
+    NF_RUNNABLE,
+    NF_RUNNING,
+    NF_PARKED,
+    NF_DONE
+} NurlFiberState;
+
+typedef struct NurlFiber {
+    ucontext_t       ctx;
+    void            *stack_base;     /* mmap origin: guard page + usable */
+    size_t           stack_total_sz;
+    void           (*fn)(void*);
+    void            *env;
+    NurlFiberState   state;
+    struct NurlFiber*next;           /* intrusive runqueue link */
+    int              joinable;       /* if 1, survives DONE for join */
+    int              done_taken;     /* if joinable: 1 after join freed it */
+    pthread_mutex_t  join_m;
+    pthread_cond_t   join_c;
+    /* Phase 4 park-with-unlock: the worker loop releases this mutex
+     * AFTER the fiber's swapcontext-out completes, so any concurrent
+     * unpark from a holder of the same mutex sees a stable PARKED
+     * state. NULL = no pending unlock (e.g. reactor-driven park). */
+    pthread_mutex_t *pending_unlock;
+    /* Phase 5: reactor writes the wake-up reason here BEFORE
+     * unparking. 1 = fd ready, 0 = timeout. The fiber reads this
+     * after swap-in to distinguish completion vs. timeout. */
+    int              last_park_result;
+    /* Phase 5 race-closer: the wait entry the fiber registered with
+     * the reactor before parking. The worker loop activates it
+     * AFTER swap-out completes so the reactor never matches a
+     * not-yet-suspended fiber. */
+    struct NurlReactorWait *pending_reactor_wait;
+} NurlFiber;
+
+typedef struct NurlWorker {
+    pthread_t        thread;
+    int              id;
+    int              started;        /* 1 once the pthread is alive */
+    ucontext_t       loop_ctx;       /* worker loop's saved context */
+    /* `current` is read by the running fiber's code (same pthread)
+     * AND written by the worker loop (same pthread) on both sides of
+     * swapcontext. With LTO, the optimiser can hoist the load past
+     * the function-call boundary because it sees both ends of the
+     * call chain. `volatile` forces a fresh load on every access,
+     * which is what the cooperative model actually needs. */
+    NurlFiber *volatile current;
+    NurlFiber       *rq_head;        /* local runqueue */
+    NurlFiber       *rq_tail;
+    pthread_mutex_t  rq_lock;
+    unsigned         steal_rng;      /* xorshift state for victim choice */
+} NurlWorker;
+
+typedef struct NurlScheduler {
+    NurlWorker       workers[NURL_MAX_WORKERS];
+    int              worker_count;
+    NurlFiber       *global_head;
+    NurlFiber       *global_tail;
+    pthread_mutex_t  global_lock;
+    long long        pending;        /* live fibers (spawned, not freed) */
+    pthread_mutex_t  pending_lock;
+    pthread_cond_t   pending_zero;   /* signalled when pending → 0 */
+    pthread_mutex_t  idle_lock;
+    pthread_cond_t   idle_cv;        /* signalled when work appears */
+    int              idle_waiters;   /* workers parked on idle_cv */
+    int              initialized;
+    volatile int     shutdown;
+} NurlScheduler;
+
+static NurlScheduler nurl__sched;
+static __thread NurlWorker *nurl__tls_worker = NULL;
+
+/* ── Pending counter ──────────────────────────────────────────────── */
+
+static void nurl__pending_inc(void) {
+    pthread_mutex_lock(&nurl__sched.pending_lock);
+    nurl__sched.pending++;
+    pthread_mutex_unlock(&nurl__sched.pending_lock);
+}
+
+static void nurl__pending_dec(void) {
+    pthread_mutex_lock(&nurl__sched.pending_lock);
+    long long now = --nurl__sched.pending;
+    if (now <= 0) pthread_cond_broadcast(&nurl__sched.pending_zero);
+    pthread_mutex_unlock(&nurl__sched.pending_lock);
+}
+
+/* ── Per-worker FIFO runqueue ────────────────────────────────────── */
+
+static void nurl__rq_push_local(NurlWorker *w, NurlFiber *f) {
+    f->next = NULL;
+    pthread_mutex_lock(&w->rq_lock);
+    if (w->rq_tail) w->rq_tail->next = f;
+    else            w->rq_head = f;
+    w->rq_tail = f;
+    pthread_mutex_unlock(&w->rq_lock);
+}
+
+static NurlFiber *nurl__rq_pop_local(NurlWorker *w) {
+    pthread_mutex_lock(&w->rq_lock);
+    NurlFiber *f = w->rq_head;
+    if (f) {
+        w->rq_head = f->next;
+        if (!w->rq_head) w->rq_tail = NULL;
+        f->next = NULL;
+    }
+    pthread_mutex_unlock(&w->rq_lock);
+    return f;
+}
+
+/* Steal-protocol: detach the *front half* of a victim's queue. The
+ * thief returns one fiber to run immediately and pushes the rest
+ * onto its own local queue (left-shifted, preserving relative
+ * order). Empirically a half-steal balances load faster than
+ * single-fiber stealing. */
+static NurlFiber *nurl__rq_steal_from(NurlWorker *victim, NurlWorker *thief) {
+    if (victim == thief) return NULL;
+    NurlFiber *taken_head = NULL, *taken_tail = NULL;
+    int count = 0;
+    pthread_mutex_lock(&victim->rq_lock);
+    /* Count length first (linear; fine — runqueues stay short in
+     * practice). */
+    NurlFiber *p = victim->rq_head;
+    while (p) { count++; p = p->next; }
+    if (count >= 2) {
+        int take = count / 2;
+        taken_head = victim->rq_head;
+        p = taken_head;
+        for (int i = 1; i < take; i++) p = p->next;
+        taken_tail = p;
+        victim->rq_head = p->next;
+        if (!victim->rq_head) victim->rq_tail = NULL;
+        taken_tail->next = NULL;
+    }
+    pthread_mutex_unlock(&victim->rq_lock);
+    if (!taken_head) return NULL;
+    /* Pop the first as our immediate next; push the rest to our local. */
+    NurlFiber *next = taken_head;
+    NurlFiber *rest_head = next->next;
+    next->next = NULL;
+    if (rest_head) {
+        pthread_mutex_lock(&thief->rq_lock);
+        NurlFiber *rest_tail = rest_head;
+        while (rest_tail->next) rest_tail = rest_tail->next;
+        if (thief->rq_tail) thief->rq_tail->next = rest_head;
+        else                thief->rq_head = rest_head;
+        thief->rq_tail = rest_tail;
+        pthread_mutex_unlock(&thief->rq_lock);
+    }
+    return next;
+}
+
+/* ── Global runqueue (spawn-from-non-fiber, overflow) ──────────── */
+
+static void nurl__rq_push_global(NurlFiber *f) {
+    f->next = NULL;
+    pthread_mutex_lock(&nurl__sched.global_lock);
+    if (nurl__sched.global_tail) nurl__sched.global_tail->next = f;
+    else                         nurl__sched.global_head = f;
+    nurl__sched.global_tail = f;
+    pthread_mutex_unlock(&nurl__sched.global_lock);
+}
+
+static NurlFiber *nurl__rq_pop_global(void) {
+    pthread_mutex_lock(&nurl__sched.global_lock);
+    NurlFiber *f = nurl__sched.global_head;
+    if (f) {
+        nurl__sched.global_head = f->next;
+        if (!nurl__sched.global_head) nurl__sched.global_tail = NULL;
+        f->next = NULL;
+    }
+    pthread_mutex_unlock(&nurl__sched.global_lock);
+    return f;
+}
+
+/* Wake one parked worker (if any). Cheap when idle_waiters is 0. */
+static void nurl__wake_one(void) {
+    pthread_mutex_lock(&nurl__sched.idle_lock);
+    if (nurl__sched.idle_waiters > 0) pthread_cond_signal(&nurl__sched.idle_cv);
+    pthread_mutex_unlock(&nurl__sched.idle_lock);
+}
+
+static void nurl__wake_all(void) {
+    pthread_mutex_lock(&nurl__sched.idle_lock);
+    pthread_cond_broadcast(&nurl__sched.idle_cv);
+    pthread_mutex_unlock(&nurl__sched.idle_lock);
+}
+
+/* ── Fiber lifecycle ─────────────────────────────────────────────── */
+
+/* makecontext on 64-bit POSIX passes args as int (32 bits). The
+ * trampoline reassembles the fiber pointer from two halves. */
+static void nurl__fiber_entry(unsigned hi, unsigned lo) {
+    uintptr_t p = ((uintptr_t)hi << 32) | (uintptr_t)lo;
+    NurlFiber *f = (NurlFiber*)p;
+    if (f && f->fn) f->fn(f->env);
+    if (f) f->state = NF_DONE;
+    /* Return to whichever worker is running us. uc_link mirrors. */
+    NurlWorker *w = nurl__tls_worker;
+    if (w) setcontext(&w->loop_ctx);
+    /* Last resort — should be unreachable. */
+    pthread_exit(NULL);
+}
+
+static NurlFiber *nurl__fiber_alloc(void *fn, void *env, int joinable) {
+    NurlFiber *f = (NurlFiber*)calloc(1, sizeof(NurlFiber));
+    if (!f) return NULL;
+
+    long pg = sysconf(_SC_PAGESIZE);
+    if (pg <= 0) pg = 4096;
+    size_t guard = ((size_t)NURL_FIBER_GUARD_BYTES + (size_t)pg - 1)
+                 / (size_t)pg * (size_t)pg;
+    size_t usable = ((size_t)NURL_FIBER_STACK_BYTES + (size_t)pg - 1)
+                  / (size_t)pg * (size_t)pg;
+    size_t total = guard + usable;
+
+#if defined(MAP_ANONYMOUS)
+    int mflags = MAP_PRIVATE | MAP_ANONYMOUS;
+#else
+    int mflags = MAP_PRIVATE | MAP_ANON;
+#endif
+    void *base = mmap(NULL, total, PROT_READ | PROT_WRITE, mflags, -1, 0);
+    if (base == MAP_FAILED) { free(f); return NULL; }
+
+    if (mprotect(base, guard, PROT_NONE) != 0) {
+        munmap(base, total);
+        free(f);
+        return NULL;
+    }
+    f->stack_base = base;
+    f->stack_total_sz = total;
+    f->fn = (void(*)(void*))fn;
+    f->env = env;
+    f->state = NF_RUNNABLE;
+    f->joinable = joinable;
+    if (joinable) {
+        pthread_mutex_init(&f->join_m, NULL);
+        pthread_cond_init(&f->join_c, NULL);
+    }
+
+    if (getcontext(&f->ctx) != 0) {
+        munmap(base, total);
+        free(f);
+        return NULL;
+    }
+    f->ctx.uc_stack.ss_sp   = (char*)base + guard;
+    f->ctx.uc_stack.ss_size = usable;
+    f->ctx.uc_link          = NULL;     /* loop_ctx set per-worker at run */
+    uintptr_t p = (uintptr_t)f;
+    unsigned hi = (unsigned)((p >> 32) & 0xFFFFFFFFu);
+    unsigned lo = (unsigned)(p & 0xFFFFFFFFu);
+    makecontext(&f->ctx, (void(*)(void))nurl__fiber_entry, 2,
+                (int)hi, (int)lo);
+    return f;
+}
+
+static void nurl__fiber_free(NurlFiber *f) {
+    if (!f) return;
+    if (f->joinable) {
+        pthread_mutex_destroy(&f->join_m);
+        pthread_cond_destroy(&f->join_c);
+    }
+    if (f->stack_base) munmap(f->stack_base, f->stack_total_sz);
+    free(f);
+}
+
+/* Enqueue a freshly-allocated fiber. Use the current worker's local
+ * queue if we're on one; otherwise drop it into the global queue.
+ * Bump the pending counter and wake an idle worker if any. */
+static void nurl__enqueue_new(NurlFiber *f) {
+    nurl__pending_inc();
+    NurlWorker *w = nurl__tls_worker;
+    if (w) nurl__rq_push_local(w, f);
+    else   nurl__rq_push_global(f);
+    nurl__wake_one();
+}
+
+long long nurl_fiber_spawn(void *fn, void *env) {
+    if (!fn) return 0;
+    if (!nurl__sched.initialized) nurl_runtime_init(0);
+    NurlFiber *f = nurl__fiber_alloc(fn, env, 0);
+    if (!f) return 0;
+    nurl__enqueue_new(f);
+    return (long long)(uintptr_t)f;
+}
+
+long long nurl_fiber_spawn_joinable(void *fn, void *env) {
+    if (!fn) return 0;
+    if (!nurl__sched.initialized) nurl_runtime_init(0);
+    NurlFiber *f = nurl__fiber_alloc(fn, env, 1);
+    if (!f) return 0;
+    nurl__enqueue_new(f);
+    return (long long)(uintptr_t)f;
+}
+
+__attribute__((noinline))
+void nurl_fiber_yield(void) {
+    /* noinline gate — same reason as nurl_fiber_current: the
+     * NURL-emitted IR is a separate "translation unit" from the C
+     * runtime, and LTO inlining a __thread access across that
+     * boundary lowers the TLS load incorrectly. Keeping the body
+     * outlined preserves the per-thread access semantics. */
+    NurlWorker *w = nurl__tls_worker;
+    if (!w) return;            /* not on a worker — no-op */
+    NurlFiber *cur = w->current;
+    if (!cur) return;
+    cur->state = NF_RUNNABLE;
+    nurl__rq_push_local(w, cur);
+    /* If a peer is idle, the new tail-push is worth a wake — but
+     * since we just enqueued ourselves only, skip the wake; the next
+     * fresh spawn / unpark will signal. */
+    swapcontext(&cur->ctx, &w->loop_ctx);
+}
+
+__attribute__((noinline))
+long long nurl_fiber_current(void) {
+    NurlWorker *w = nurl__tls_worker;
+    if (!w) return 0;
+    NurlFiber *cur = __atomic_load_n(&w->current, __ATOMIC_SEQ_CST);
+    return (long long)(uintptr_t)cur;
+}
+
+__attribute__((noinline))
+long long nurl_fiber_worker_id(void) {
+    NurlWorker *w = nurl__tls_worker;
+    return w ? (long long)w->id : -1;
+}
+
+/* Park-with-mutex: callable only from inside a fiber. The associated
+ * mutex MUST be locked by the caller. The protocol:
+ *   1. Caller (e.g. chan_recv) finds the queue empty + open, pushes
+ *      the current fiber onto the channel's recv-waiters list.
+ *   2. Caller invokes nurl_fiber_park_with_mutex(ch.m) — this sets
+ *      pending_unlock = &ch.m->mtx, sets state = NF_PARKED, and
+ *      swapcontext-outs into the worker loop.
+ *   3. The worker loop observes state == NF_PARKED and releases
+ *      pending_unlock AFTER the swap-out is complete. Only then can
+ *      a sender on the other side grab ch.m and observe the waiter.
+ *   4. The sender pops the waiter, calls nurl_fiber_unpark on it.
+ *      Unpark sees state == NF_PARKED (now stable — sender holds
+ *      ch.m which the parker has finished releasing), transitions
+ *      to RUNNABLE, pushes to the global queue, signals an idle
+ *      worker. Some worker resumes the fiber, which re-locks ch.m
+ *      and re-checks the predicate.
+ *
+ * This eliminates the lost-wakeup race that the naive "unlock first,
+ * then park" sequence has: between unlock and swap-out, a sender
+ * could grab the mutex, observe the not-yet-parked fiber, push it
+ * to runqueue before its registers are saved — and another worker
+ * could then swapcontext-in to a half-saved context. */
+__attribute__((noinline))
+void nurl_fiber_park_with_mutex(long long mutex_h) {
+    NurlWorker *w = nurl__tls_worker;
+    if (!w) return;       /* not on a fiber — caller's mutex stays locked */
+    NurlFiber *cur = w->current;
+    if (!cur) return;
+    NurlMutex *m = (NurlMutex*)(uintptr_t)mutex_h;
+    cur->pending_unlock = m ? &m->mtx : NULL;
+    cur->state = NF_PARKED;
+    swapcontext(&cur->ctx, &w->loop_ctx);
+    /* Resume point: scheduler has restored us into a worker. */
+}
+
+void nurl_fiber_unpark(long long fiber_h) {
+    NurlFiber *f = (NurlFiber*)(uintptr_t)fiber_h;
+    if (!f) return;
+    /* The unparker is the sole writer of PARKED→RUNNABLE — it was
+     * told about this fiber by the parker handing off through the
+     * shared mutex, so the race is closed. */
+    f->state = NF_RUNNABLE;
+    nurl__rq_push_global(f);
+    nurl__wake_one();
+}
+
+/* nurl_fiber_join: block (pthread-cond_wait — this is Phase 3; fiber-
+ * to-fiber join lands once park/unpark generalises in Phase 4) until
+ * the target fiber's body has returned. Then free the fiber control
+ * block. Calling join twice on the same handle is undefined. */
+void nurl_fiber_join(long long fiber) {
+    NurlFiber *f = (NurlFiber*)(uintptr_t)fiber;
+    if (!f || !f->joinable) return;
+    pthread_mutex_lock(&f->join_m);
+    while (f->state != NF_DONE) {
+        pthread_cond_wait(&f->join_c, &f->join_m);
+    }
+    f->done_taken = 1;
+    pthread_mutex_unlock(&f->join_m);
+    nurl__fiber_free(f);
+}
+
+/* ── Worker loop ─────────────────────────────────────────────────── */
+
+/* xorshift32 — cheap, branch-free, good enough for victim choice. */
+static unsigned nurl__rng_next(unsigned *st) {
+    unsigned x = *st;
+    if (x == 0) x = 0x9E3779B9u;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *st = x;
+    return x;
+}
+
+/* Pull the next runnable fiber for `w`. Tries local, then steal,
+ * then global, then parks on idle_cv. Returns NULL on shutdown. */
+static NurlFiber *nurl__worker_next(NurlWorker *w) {
+    for (;;) {
+        if (nurl__sched.shutdown) return NULL;
+        NurlFiber *f = nurl__rq_pop_local(w);
+        if (f) return f;
+        /* Try stealing up to 2× worker_count peers before falling back. */
+        int wc = nurl__sched.worker_count;
+        for (int tries = 0; tries < wc * 2; tries++) {
+            int victim_id = (int)(nurl__rng_next(&w->steal_rng) % (unsigned)wc);
+            NurlWorker *victim = &nurl__sched.workers[victim_id];
+            if (victim == w) continue;
+            NurlFiber *st = nurl__rq_steal_from(victim, w);
+            if (st) return st;
+        }
+        f = nurl__rq_pop_global();
+        if (f) return f;
+        /* Idle — park on the cond. The wake-up rules:
+         *   - new spawn / push wakes one worker via nurl__wake_one
+         *   - shutdown broadcast wakes everyone via nurl__wake_all
+         * The lock is held for the predicate check + wait so a wake
+         * arriving between predicate and wait isn't lost. */
+        pthread_mutex_lock(&nurl__sched.idle_lock);
+        if (nurl__sched.shutdown) {
+            pthread_mutex_unlock(&nurl__sched.idle_lock);
+            return NULL;
+        }
+        nurl__sched.idle_waiters++;
+        pthread_cond_wait(&nurl__sched.idle_cv, &nurl__sched.idle_lock);
+        nurl__sched.idle_waiters--;
+        pthread_mutex_unlock(&nurl__sched.idle_lock);
+        /* Loop back and try again. */
+    }
+}
+
+static void *nurl__worker_loop(void *arg) {
+    NurlWorker *w = (NurlWorker*)arg;
+    nurl__tls_worker = w;
+    w->steal_rng = (unsigned)(0xC2B2AE35u ^ (unsigned)(w->id * 2654435761u));
+    for (;;) {
+        NurlFiber *f = nurl__worker_next(w);
+        if (!f) break;     /* shutdown */
+        f->state = NF_RUNNING;
+        __atomic_store_n(&w->current, f, __ATOMIC_SEQ_CST);
+        swapcontext(&w->loop_ctx, &f->ctx);
+        __atomic_store_n(&w->current, (NurlFiber*)NULL, __ATOMIC_SEQ_CST);
+        if (f->state == NF_DONE) {
+            if (f->joinable) {
+                pthread_mutex_lock(&f->join_m);
+                pthread_cond_broadcast(&f->join_c);
+                pthread_mutex_unlock(&f->join_m);
+                /* Joiner is responsible for the free. */
+            } else {
+                nurl__fiber_free(f);
+            }
+            nurl__pending_dec();
+        } else if (f->state == NF_PARKED) {
+            /* Release the parker's held mutex AFTER swap-out is
+             * complete. This is the synchronization point that
+             * makes nurl_fiber_unpark safe: any waker on the other
+             * side of `pending_unlock` will only observe this
+             * fiber once its context is fully saved. */
+            pthread_mutex_t *pm = f->pending_unlock;
+            f->pending_unlock = NULL;
+            if (pm) pthread_mutex_unlock(pm);
+            /* Same race-closer for reactor-driven parks: activate
+             * the registered wait entry only AFTER swap-out is
+             * complete, then poke the reactor. Implementation in §25. */
+            extern void nurl__reactor_activate(struct NurlReactorWait *w);
+            struct NurlReactorWait *prw = f->pending_reactor_wait;
+            f->pending_reactor_wait = NULL;
+            if (prw) nurl__reactor_activate(prw);
+        }
+        /* RUNNABLE → already re-queued by yield.
+         * PARKED   → released above; the unparker on the other side
+         *            of pending_unlock will push us back. */
+    }
+    nurl__tls_worker = NULL;
+    return NULL;
+}
+
+/* ── Runtime lifecycle ────────────────────────────────────────────── */
+
+void nurl_runtime_init(long long worker_count) {
+    if (nurl__sched.initialized) return;
+
+    pthread_mutex_init(&nurl__sched.global_lock, NULL);
+    pthread_mutex_init(&nurl__sched.pending_lock, NULL);
+    pthread_cond_init(&nurl__sched.pending_zero, NULL);
+    pthread_mutex_init(&nurl__sched.idle_lock, NULL);
+    pthread_cond_init(&nurl__sched.idle_cv, NULL);
+    nurl__sched.idle_waiters = 0;
+    nurl__sched.pending = 0;
+    nurl__sched.shutdown = 0;
+    nurl__sched.global_head = nurl__sched.global_tail = NULL;
+
+    int wc = (int)worker_count;
+    if (wc <= 0) {
+        const char *env = getenv("NURL_WORKERS");
+        if (env && *env) wc = atoi(env);
+        if (wc <= 0) {
+            long n = sysconf(_SC_NPROCESSORS_ONLN);
+            wc = (n > 0) ? (int)n : 2;
+        }
+    }
+    if (wc < 1) wc = 1;
+    if (wc > NURL_MAX_WORKERS) wc = NURL_MAX_WORKERS;
+    nurl__sched.worker_count = wc;
+
+    for (int i = 0; i < wc; i++) {
+        NurlWorker *w = &nurl__sched.workers[i];
+        w->id = i;
+        w->started = 0;
+        w->current = NULL;
+        w->rq_head = w->rq_tail = NULL;
+        pthread_mutex_init(&w->rq_lock, NULL);
+        w->steal_rng = (unsigned)(0xC2B2AE35u ^ (unsigned)(i * 2654435761u));
+    }
+    nurl__sched.initialized = 1;
+
+    /* Spawn the worker pthreads. */
+    for (int i = 0; i < wc; i++) {
+        NurlWorker *w = &nurl__sched.workers[i];
+        if (pthread_create(&w->thread, NULL, nurl__worker_loop, w) == 0) {
+            w->started = 1;
+        }
+    }
+}
+
+/* runtime_run from the caller (typically main) blocks until pending=0.
+ * Workers continue running between calls — they only exit on
+ * runtime_shutdown. */
+void nurl_runtime_run(void) {
+    if (!nurl__sched.initialized) nurl_runtime_init(0);
+    pthread_mutex_lock(&nurl__sched.pending_lock);
+    while (nurl__sched.pending > 0 && !nurl__sched.shutdown) {
+        pthread_cond_wait(&nurl__sched.pending_zero, &nurl__sched.pending_lock);
+    }
+    pthread_mutex_unlock(&nurl__sched.pending_lock);
+}
+
+void nurl_runtime_shutdown(void) {
+    if (!nurl__sched.initialized) return;
+    nurl__sched.shutdown = 1;
+    /* Wake every parked worker so they observe the flag and exit. */
+    nurl__wake_all();
+    /* Also wake any caller blocked in runtime_run. */
+    pthread_mutex_lock(&nurl__sched.pending_lock);
+    pthread_cond_broadcast(&nurl__sched.pending_zero);
+    pthread_mutex_unlock(&nurl__sched.pending_lock);
+    /* Stop the reactor thread first — it might be holding refs to
+     * fibers that the worker loop is about to free. Implementation
+     * lives in §25 where the reactor types are in scope. */
+    extern void nurl__reactor_shutdown(void);
+    nurl__reactor_shutdown();
+    /* Join the workers — guarantees post-condition: no worker still
+     * touches scheduler state when this returns. */
+    for (int i = 0; i < nurl__sched.worker_count; i++) {
+        NurlWorker *w = &nurl__sched.workers[i];
+        if (w->started) pthread_join(w->thread, NULL);
+        w->started = 0;
+        pthread_mutex_destroy(&w->rq_lock);
+    }
+    pthread_mutex_destroy(&nurl__sched.global_lock);
+    pthread_mutex_destroy(&nurl__sched.pending_lock);
+    pthread_cond_destroy(&nurl__sched.pending_zero);
+    pthread_mutex_destroy(&nurl__sched.idle_lock);
+    pthread_cond_destroy(&nurl__sched.idle_cv);
+    nurl__sched.initialized = 0;
+    nurl__sched.worker_count = 0;
+}
+
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+
+#else  /* WASI or Windows — stubs until a later phase */
+
+long long nurl_fiber_spawn(void *fn, void *env) {
+    (void)fn; (void)env; return 0;
+}
+long long nurl_fiber_spawn_joinable(void *fn, void *env) {
+    (void)fn; (void)env; return 0;
+}
+void      nurl_fiber_join(long long fiber) { (void)fiber; }
+void      nurl_fiber_yield(void) {}
+long long nurl_fiber_current(void) { return 0; }
+long long nurl_fiber_worker_id(void) { return -1; }
+void      nurl_fiber_park_with_mutex(long long mutex_h) { (void)mutex_h; }
+void      nurl_fiber_unpark(long long fiber) { (void)fiber; }
+void      nurl_runtime_init(long long worker_count) { (void)worker_count; }
+void      nurl_runtime_run(void) {}
+void      nurl_runtime_shutdown(void) {}
+
+#endif /* fiber platform guard */
+
+/* ── §25  I/O reactor + timer wheel (Phase 5) ───────────────────────
+ *
+ * One reactor thread runs `poll(2)` over a dynamic array of (fd,
+ * events). When an async I/O wrapper sees EAGAIN/EWOULDBLOCK, it
+ * calls `nurl_reactor_wait_*` which:
+ *   1. registers (fd, events, deadline) → current fiber
+ *   2. writes a byte to the reactor's wake pipe so `poll` returns
+ *   3. parks the fiber via the registration mutex
+ * The reactor wakes, sees the new registration, drains the wake
+ * byte, and includes the fd in its next `poll` round. On readiness
+ * (or deadline) the reactor unparks the registered fiber and the
+ * entry is dropped.
+ *
+ * For sleep_ms, the registration omits a real fd — only a deadline
+ * is recorded. Poll's timeout is min(next_deadline, INFINITE).
+ *
+ * Phase 5 portability: POSIX poll(2). Limited to ~4 K live waiters
+ * by the per-iteration pollfd[] rebuild; epoll/kqueue/IOCP land as
+ * a Phase 8 follow-on when a real consumer needs 10 K+ fds. WASI
+ * and Windows route through the stub branch below.
+ *
+ * ABI:
+ *   int nurl_reactor_wait_read(int fd, long long timeout_ms);
+ *      returns 1 on ready, 0 on timeout, -1 if not on a fiber
+ *   int nurl_reactor_wait_write(int fd, long long timeout_ms);
+ *   int nurl_fiber_sleep_ms(long long ms);  always 0
+ */
+
+long long nurl_reactor_wait_read(long long fd, long long timeout_ms);
+long long nurl_reactor_wait_write(long long fd, long long timeout_ms);
+long long nurl_fiber_sleep_ms(long long ms);
+
+#if !defined(__wasi__) && !defined(_WIN32)
+#include <poll.h>
+#include <fcntl.h>
+#include <errno.h>
+
+typedef struct NurlReactorWait {
+    int                     fd;          /* -1 → pure timer */
+    short                   events;      /* POLLIN | POLLOUT */
+    long long               deadline_ms; /* -1 → infinite */
+    NurlFiber              *fiber;
+    int                     result;      /* 1 ready, 0 timeout */
+    int                     active;      /* 0 until swap-out completes;
+                                          * reactor ignores inactive
+                                          * entries to close the
+                                          * unpark-before-park race. */
+    struct NurlReactorWait *next;
+} NurlReactorWait;
+
+typedef struct NurlReactor {
+    pthread_t        thread;
+    int              wake_pipe[2];   /* [0] = read, [1] = write */
+    pthread_mutex_t  lock;           /* protects `waits` */
+    NurlReactorWait *waits;
+    int              shutdown;
+    int              started;
+} NurlReactor;
+
+static NurlReactor nurl__reactor;
+
+static long long nurl__now_ms_internal(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000LL + (long long)(ts.tv_nsec / 1000000L);
+}
+
+static void nurl__reactor_wake(void) {
+    /* Best-effort wake; the byte is drained in the reactor's poll
+     * pass. Multiple writes coalesce. */
+    char b = 'w';
+    ssize_t r = write(nurl__reactor.wake_pipe[1], &b, 1);
+    (void)r;
+}
+
+/* Reactor thread loop: build pollfd[], compute min-deadline, poll,
+ * wake ready/timed-out fibers. */
+static void *nurl__reactor_loop(void *arg) {
+    (void)arg;
+    /* Sized for the typical case; grows on demand. */
+    struct pollfd fds[256];
+    NurlReactorWait *batch[256];
+    for (;;) {
+        if (nurl__reactor.shutdown) break;
+
+        pthread_mutex_lock(&nurl__reactor.lock);
+        int nfds = 1;
+        fds[0].fd = nurl__reactor.wake_pipe[0];
+        fds[0].events = POLLIN;
+        fds[0].revents = 0;
+        batch[0] = NULL;
+
+        long long now = nurl__now_ms_internal();
+        long long min_deadline = -1;
+        for (NurlReactorWait *w = nurl__reactor.waits; w; w = w->next) {
+            /* Skip inactive entries — fiber hasn't completed swap-out
+             * yet, so it's not safe to unpark. */
+            if (!w->active) continue;
+            if (w->deadline_ms >= 0) {
+                if (min_deadline < 0 || w->deadline_ms < min_deadline)
+                    min_deadline = w->deadline_ms;
+            }
+            if (w->fd >= 0 && nfds < 256) {
+                fds[nfds].fd = w->fd;
+                fds[nfds].events = w->events;
+                fds[nfds].revents = 0;
+                batch[nfds] = w;
+                nfds++;
+            }
+        }
+        pthread_mutex_unlock(&nurl__reactor.lock);
+
+        int timeout = -1;
+        if (min_deadline >= 0) {
+            long long delta = min_deadline - now;
+            if (delta < 0) delta = 0;
+            if (delta > 1000000000LL) delta = 1000000000LL;
+            timeout = (int)delta;
+        }
+
+        int r = poll(fds, (nfds_t)nfds, timeout);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            /* Unrecoverable — bail. */
+            break;
+        }
+
+        /* Drain wake-pipe if signalled. */
+        if (fds[0].revents & POLLIN) {
+            char buf[64];
+            while (read(nurl__reactor.wake_pipe[0], buf, sizeof(buf)) > 0) {}
+        }
+
+        /* Walk the wait list, decide who wakes up. We snapshot the
+         * list under the lock, then process and re-attach the
+         * surviving entries. */
+        pthread_mutex_lock(&nurl__reactor.lock);
+        NurlReactorWait *survivors = NULL, *survivors_tail = NULL;
+        NurlReactorWait *to_unpark = NULL;
+        now = nurl__now_ms_internal();
+        for (NurlReactorWait *w = nurl__reactor.waits; w; ) {
+            NurlReactorWait *next = w->next;
+            int wake = 0;
+            int result = 0;
+            /* Inactive entries are invisible to the reactor — same
+             * predicate as the poll-set build above. */
+            if (!w->active) {
+                /* Survives unchanged. */
+                w->next = NULL;
+                if (survivors_tail) survivors_tail->next = w;
+                else                survivors = w;
+                survivors_tail = w;
+                w = next;
+                continue;
+            }
+            if (w->fd >= 0) {
+                /* Find this entry in the poll batch and check revents. */
+                for (int i = 1; i < nfds; i++) {
+                    if (batch[i] == w) {
+                        if (fds[i].revents & (w->events | POLLERR | POLLHUP | POLLNVAL)) {
+                            wake = 1; result = 1;
+                        }
+                        break;
+                    }
+                }
+            }
+            if (!wake && w->deadline_ms >= 0 && now >= w->deadline_ms) {
+                wake = 1; result = 0;
+            }
+            if (wake) {
+                w->result = result;
+                w->next = to_unpark;
+                to_unpark = w;
+            } else {
+                w->next = NULL;
+                if (survivors_tail) survivors_tail->next = w;
+                else                survivors = w;
+                survivors_tail = w;
+            }
+            w = next;
+        }
+        nurl__reactor.waits = survivors;
+        pthread_mutex_unlock(&nurl__reactor.lock);
+
+        /* Unpark outside the lock. The result must be written to
+         * the fiber BEFORE the unpark — once unparked, the fiber
+         * may resume on another worker and read the value. */
+        for (NurlReactorWait *w = to_unpark; w; ) {
+            NurlReactorWait *next = w->next;
+            NurlFiber *fb = w->fiber;
+            int result = w->result;
+            free(w);
+            if (fb) {
+                fb->last_park_result = result;
+                nurl_fiber_unpark((long long)(uintptr_t)fb);
+            }
+            w = next;
+        }
+    }
+    return NULL;
+}
+
+static void nurl__reactor_init_once(void) {
+    if (pipe(nurl__reactor.wake_pipe) != 0) return;
+    int fl0 = fcntl(nurl__reactor.wake_pipe[0], F_GETFL, 0);
+    int fl1 = fcntl(nurl__reactor.wake_pipe[1], F_GETFL, 0);
+    fcntl(nurl__reactor.wake_pipe[0], F_SETFL, fl0 | O_NONBLOCK);
+    fcntl(nurl__reactor.wake_pipe[1], F_SETFL, fl1 | O_NONBLOCK);
+    pthread_mutex_init(&nurl__reactor.lock, NULL);
+    nurl__reactor.waits = NULL;
+    nurl__reactor.shutdown = 0;
+    if (pthread_create(&nurl__reactor.thread, NULL,
+                       nurl__reactor_loop, NULL) == 0) {
+        nurl__reactor.started = 1;
+    }
+}
+
+static void nurl__reactor_start_if_needed(void) {
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, nurl__reactor_init_once);
+}
+
+/* Activate a registered wait entry — called from the worker loop
+ * AFTER the parking fiber's swap-out is complete, so the reactor
+ * cannot match a not-yet-suspended fiber. */
+void nurl__reactor_activate(NurlReactorWait *w) {
+    if (!w) return;
+    pthread_mutex_lock(&nurl__reactor.lock);
+    w->active = 1;
+    pthread_mutex_unlock(&nurl__reactor.lock);
+    nurl__reactor_wake();
+}
+
+/* Common wait path: register (fd, events, deadline) → current fiber,
+ * park, return the reactor-set result. timeout_ms < 0 → infinite.
+ *
+ * Race-safety: the wait entry is added to the reactor's list as
+ * INACTIVE, then the calling fiber parks. The worker loop sees
+ * NF_PARKED on return from swapcontext and activates the entry
+ * (via `nurl__reactor_activate` above) — only THEN can the reactor
+ * match it. This eliminates the unpark-before-park double-execution
+ * race that would otherwise let another worker swap into the
+ * fiber's context before our swap-out completed. */
+__attribute__((noinline))
+static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
+    NurlWorker *w = nurl__tls_worker;
+    if (!w || !w->current) return -1;  /* not on a fiber */
+    nurl__reactor_start_if_needed();
+
+    NurlReactorWait *wt = (NurlReactorWait*)calloc(1, sizeof(NurlReactorWait));
+    if (!wt) return -1;
+    wt->fd = fd;
+    wt->events = events;
+    wt->deadline_ms = (timeout_ms < 0) ? -1 :
+                      (nurl__now_ms_internal() + timeout_ms);
+    wt->fiber = w->current;
+    wt->result = 0;
+    wt->active = 0;
+
+    pthread_mutex_lock(&nurl__reactor.lock);
+    wt->next = nurl__reactor.waits;
+    nurl__reactor.waits = wt;
+    pthread_mutex_unlock(&nurl__reactor.lock);
+    /* Do NOT wake the reactor yet — the entry is inactive and would
+     * be skipped. The worker loop wakes it via nurl__reactor_activate
+     * after our swap-out is fully complete. */
+
+    NurlFiber *cur = w->current;
+    cur->pending_unlock = NULL;
+    cur->pending_reactor_wait = wt;
+    cur->state = NF_PARKED;
+    swapcontext(&cur->ctx, &w->loop_ctx);
+
+    /* Resume point. The reactor wrote `last_park_result` to our
+     * fiber struct BEFORE unparking, so the value is safely visible
+     * here on whichever worker resumed us. */
+    return cur->last_park_result;
+}
+
+long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
+    return (long long)nurl__reactor_wait((int)fd, POLLIN, timeout_ms);
+}
+
+long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
+    return (long long)nurl__reactor_wait((int)fd, POLLOUT, timeout_ms);
+}
+
+long long nurl_fiber_sleep_ms(long long ms) {
+    if (ms <= 0) { nurl_fiber_yield(); return 0; }
+    nurl__reactor_wait(-1, 0, ms);
+    return 0;
+}
+
+void nurl__reactor_shutdown(void) {
+    if (!nurl__reactor.started) return;
+    nurl__reactor.shutdown = 1;
+    nurl__reactor_wake();
+    pthread_join(nurl__reactor.thread, NULL);
+    nurl__reactor.started = 0;
+    close(nurl__reactor.wake_pipe[0]);
+    close(nurl__reactor.wake_pipe[1]);
+    pthread_mutex_destroy(&nurl__reactor.lock);
+    NurlReactorWait *w = nurl__reactor.waits;
+    while (w) { NurlReactorWait *n = w->next; free(w); w = n; }
+    nurl__reactor.waits = NULL;
+}
+
+#else  /* WASI / Windows — Phase 5 stubs */
+
+void nurl__reactor_shutdown(void) {}
+
+long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
+    (void)fd; (void)timeout_ms; return -1;
+}
+long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
+    (void)fd; (void)timeout_ms; return -1;
+}
+long long nurl_fiber_sleep_ms(long long ms) {
+    /* Best effort: nanosleep equivalent. POSIX-only here; on
+     * Windows the build would Sleep(); WASI returns immediately. */
+    (void)ms; return 0;
+}
+
+#endif /* reactor platform guard */

@@ -46,6 +46,10 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/errors.nu`
+// sleep_ms is fiber-aware via the runtime — parks on the reactor's
+// timer wheel when invoked from a fiber, blocks via nanosleep when
+// invoked from a plain OS thread.
+$ `stdlib/std/async_ffi.nu`
 
 @ now_ms → i {
     ^ ( nurl_now_ms )
@@ -59,8 +63,19 @@ $ `stdlib/core/errors.nu`
     ^ ( nurl_monotonic_ns )
 }
 
+// Context-aware sleep: when called from inside a fiber, parks on
+// the async runtime's timer wheel so the worker pthread keeps
+// running other fibers. When called from a plain OS thread (or on
+// WASI / Windows where the fiber runtime is stubbed), falls back to
+// `nanosleep`-style blocking. The dispatch is invisible to the
+// caller — same name, same signature, same observable wait time.
 @ sleep_ms i ms → v {
-    ( nurl_sleep_ms ms )
+    : i fcur ( nurl_fiber_current )
+    ? != fcur 0 {
+        : i unused ( nurl_fiber_sleep_ms ms )
+    } {
+        ( nurl_sleep_ms ms )
+    }
 }
 
 @ elapsed_ms_since i t0 → i {

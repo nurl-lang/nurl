@@ -299,6 +299,12 @@ $ `stdlib/core/errors.nu`
 // ── Connection acceptance ──────────────────────────────────────────
 
 @ tcp_accept TcpListener l → !TcpConn NetErr {
+    // Context-aware: on a fiber, dispatch to the async path so the
+    // worker pthread stays free while we wait for an incoming
+    // connection. From outside any fiber, fall through to the
+    // blocking POSIX accept.
+    : i fcur ( nurl_fiber_current )
+    ? != fcur 0 { ^ ( tcp_accept_async l ) } {}
     : s lrp . l raw
     : i lraw # i lrp
     : i craw ( nurl_tcp_accept lraw )
@@ -337,6 +343,9 @@ $ `stdlib/core/errors.nu`
 // surfaced as `Err(NetClosed)` so empty Ok-vectors are never confused
 // with a clean peer shutdown. Caller frees the Vec on the Ok path.
 @ tcp_read_chunk TcpConn c i max → !( Vec u ) NetErr {
+    // Context-aware dispatch — see tcp_accept's note.
+    : i fcur ( nurl_fiber_current )
+    ? != fcur 0 { ^ ( tcp_read_chunk_async c max ) } {}
     : s rp . c raw
     : i raw # i rp
     ? <= max 0 {
@@ -363,6 +372,9 @@ $ `stdlib/core/errors.nu`
 // ── Writing ────────────────────────────────────────────────────────
 
 @ tcp_write_all TcpConn c ( Vec u ) bytes → !v NetErr {
+    // Context-aware dispatch — see tcp_accept's note.
+    : i fcur ( nurl_fiber_current )
+    ? != fcur 0 { ^ ( tcp_write_all_async c bytes ) } {}
     : s rp . c raw
     : i raw # i rp
     : i n ( vec_len [u] bytes )
@@ -390,5 +402,153 @@ $ `stdlib/core/errors.nu`
         : i ek ( nurl_tcp_err_kind raw )
         ^ @ !v NetErr { F ( __net_err_of ek ) }
     } {}
+    ^ @ !v NetErr { T 0 }
+}
+
+// ── Phase 6 — fiber-aware async TCP wrappers ───────────────────────
+//
+// These mirror the sync API one-to-one. Inside a fiber, an EAGAIN /
+// EWOULDBLOCK from the underlying socket is converted into a park on
+// the reactor; the worker pthread is NOT blocked. From outside a
+// fiber (e.g. main thread with no scheduler attached), the reactor
+// returns -1 immediately and the async wrapper falls back to the
+// blocking variant transparently.
+//
+// First call on a (listener / conn) handle flips its fd to
+// O_NONBLOCK via `nurl_tcp_set_nonblock` — subsequent sync calls on
+// the SAME handle will start surfacing NetTimeout on no-data; mixing
+// sync + async on one handle is not supported.
+
+$ `stdlib/std/async_ffi.nu`
+
+& `c` @ nurl_tcp_get_fd i handle → i
+& `c` @ nurl_tcp_set_nonblock i handle i on → v
+
+// Set non-blocking mode (idempotent). Used internally by the async
+// wrappers on first call. Exposed in case callers want to manage the
+// mode explicitly (e.g. a custom proactor loop).
+@ tcp_set_nonblock_listener TcpListener l i on → v {
+    : s rp . l raw
+    : i raw # i rp
+    ( nurl_tcp_set_nonblock raw on )
+}
+
+@ tcp_set_nonblock_conn TcpConn c i on → v {
+    : s rp . c raw
+    : i raw # i rp
+    ( nurl_tcp_set_nonblock raw on )
+}
+
+// Non-blocking accept. Loops: try accept; if NetTimeout (EAGAIN),
+// wait_readable on listener fd, retry. On non-fiber callers,
+// wait_readable returns -1 immediately and we fall back to the
+// existing sync `tcp_accept` (which blocks on the kernel).
+@ tcp_accept_async TcpListener l → !TcpConn NetErr {
+    : s lrp . l raw
+    : i lraw # i lrp
+    ( nurl_tcp_set_nonblock lraw 1 )
+    : i fd ( nurl_tcp_get_fd lraw )
+    ~ T {
+        : i craw ( nurl_tcp_accept lraw )
+        ? == craw 0 { ^ @ !TcpConn NetErr { F # NetErr NetOther } } {}
+        : i ek ( nurl_tcp_err_kind craw )
+        ? == ek 0 {
+            : s crp # s craw
+            : TcpConn c @ TcpConn { crp }
+            ^ @ !TcpConn NetErr { T c }
+        } {
+            ( nurl_tcp_close craw )
+            ? == ek 7 {     // NetTimeout / EAGAIN
+                : i rc ( nurl_reactor_wait_read fd - 0 1 )
+                // wait_readable returns -1 outside a fiber; in that
+                // case the sync accept already blocked, so EAGAIN
+                // shouldn't recur — bail to NetAccept.
+                ? < rc 0 { ^ @ !TcpConn NetErr { F # NetErr NetAccept } } {}
+            } {
+                ^ @ !TcpConn NetErr { F ( __net_err_of ek ) }
+            }
+        }
+    }
+    ^ @ !TcpConn NetErr { F # NetErr NetOther }
+}
+
+// Non-blocking single recv. Same shape as tcp_read_chunk; loops on
+// EAGAIN via the reactor.
+@ tcp_read_chunk_async TcpConn c i max → !( Vec u ) NetErr {
+    : s rp . c raw
+    : i raw # i rp
+    ( nurl_tcp_set_nonblock raw 1 )
+    : i fd ( nurl_tcp_get_fd raw )
+    ? <= max 0 {
+        : ( Vec u ) v0 ( vec_new [u] )
+        ^ @ !( Vec u ) NetErr { T v0 }
+    } {}
+    : ( Vec u ) v ( vec_with_cap [u] max )
+    : *u p ( vec_data [u] v )
+    : s pbuf # s p
+    ~ T {
+        : i n ( nurl_tcp_read raw pbuf max )
+        ? > n 0 {
+            ( vec_set_len [u] v n )
+            ^ @ !( Vec u ) NetErr { T v }
+        } {}
+        ? == n 0 {
+            ( vec_free [u] v )
+            ^ @ !( Vec u ) NetErr { F # NetErr NetClosed }
+        } {}
+        : i ek ( nurl_tcp_err_kind raw )
+        ? == ek 7 {
+            : i rc ( nurl_reactor_wait_read fd - 0 1 )
+            ? < rc 0 {
+                ( vec_free [u] v )
+                ^ @ !( Vec u ) NetErr { F # NetErr NetTimeout }
+            } {}
+        } {
+            ( vec_free [u] v )
+            ^ @ !( Vec u ) NetErr { F ( __net_err_of ek ) }
+        }
+    }
+    ( vec_free [u] v )
+    ^ @ !( Vec u ) NetErr { F # NetErr NetOther }
+}
+
+// Non-blocking write-all. Loops issuing send(2) until the full Vec
+// is delivered, parking on wait_writable when the kernel returns
+// EAGAIN.
+@ tcp_write_all_async TcpConn c ( Vec u ) bytes → !v NetErr {
+    : s rp . c raw
+    : i raw # i rp
+    ( nurl_tcp_set_nonblock raw 1 )
+    : i fd ( nurl_tcp_get_fd raw )
+    : i total ( vec_len [u] bytes )
+    ? <= total 0 { ^ @ !v NetErr { T 0 } } {}
+    : *u p ( vec_data [u] bytes )
+    : s pbuf # s p
+    : ~ i sent 0
+    ~ < sent total {
+        : i remaining - total sent
+        : s slice # s + # i pbuf sent
+        : i n ( nurl_tcp_write raw slice remaining )
+        ? > n 0 {
+            = sent + sent n
+        } {
+            ? < n 0 {
+                : i ek ( nurl_tcp_err_kind raw )
+                ? == ek 7 {
+                    : i rc ( nurl_reactor_wait_write fd - 0 1 )
+                    ? < rc 0 {
+                        ^ @ !v NetErr { F # NetErr NetTimeout }
+                    } {}
+                } {
+                    ^ @ !v NetErr { F ( __net_err_of ek ) }
+                }
+            } {
+                // n == 0 — kernel says "wrote nothing" without error.
+                // Treat as EAGAIN to avoid spinning.
+                : i rc ( nurl_reactor_wait_write fd - 0 1 )
+                ? < rc 0 { ^ @ !v NetErr { F # NetErr NetTimeout } } {}
+            }
+        }
+    }
     ^ @ !v NetErr { T 0 }
 }
