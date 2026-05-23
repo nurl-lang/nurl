@@ -704,7 +704,481 @@ $ `stdlib/core/posix.nu`
     ^ @ !ProcChild ProcessErr { T p }
 }
 
+// ── PURIFY Phase 8 batch 3 — pure-NURL POSIX spawn backend ─────────
+//
+// NurlProcChild heap struct layout (16 slots × 8 bytes = 128 bytes,
+// nurl_zalloc'd; same struct C-side accessors below project into):
+//
+//   0  err_kind         (0 / NURL_PROC_ERR_*)
+//   1  last_io_err      (errno snapshot)
+//   2  exit_code        (-1 until wait succeeds)
+//   3  eof              (0 / 1)
+//   4  waited           (0 / 1)
+//   5  pid_or_0         (logical pid; same as pid on POSIX)
+//   6  pid              (POSIX pid_t widened to i64)
+//   7  fd_in            (-1 once closed)
+//   8  fd_out           (-1 once closed)
+//   9  scratch          (heap byte buffer, NULL until first read)
+//   10 scratch_len      (bytes currently held)
+//   11 scratch_cap      (allocation size)
+//   12 line_buf         (heap byte buffer for the most-recent line)
+//   13 line_len         (length, no trailing NUL)
+//   14 line_cap         (allocation size incl. terminator)
+//   15 reserved
+
+@ __pc_alloc → s {
+    : s c ( nurl_zalloc 128 )
+    ( nurl_poke c 2 -1 )                                // exit_code = -1
+    ( nurl_poke c 7 -1 )                                // fd_in = -1
+    ( nurl_poke c 8 -1 )                                // fd_out = -1
+    ^ c
+}
+
+// scratch_reserve / line_reserve / drain_line — translated from C
+// §16b's static helpers verbatim.
+
+@ __pc_scratch_reserve s c i want → v {
+    : i cap ( nurl_peek c 11 )
+    ? >= cap want {} {
+        : ~ i newcap ? > cap 0 cap 1024
+        ~ < newcap want { = newcap * newcap 2 }
+        : s old # s ( nurl_peek c 9 )
+        : s p ( nurl_realloc old newcap )
+        ( nurl_poke c 9 # i p )
+        ( nurl_poke c 11 newcap )
+    }
+}
+
+@ __pc_line_reserve s c i want → v {
+    : i cap ( nurl_peek c 14 )
+    ? >= cap + want 1 {} {
+        : ~ i newcap ? > cap 0 cap 256
+        ~ < newcap + want 1 { = newcap * newcap 2 }
+        : s old # s ( nurl_peek c 12 )
+        : s p ( nurl_realloc old newcap )
+        ( nurl_poke c 12 # i p )
+        ( nurl_poke c 14 newcap )
+    }
+}
+
+// Try to extract the first '\n'-terminated line from scratch into
+// line_buf. Returns 1 on success. The trailing '\n' is consumed but
+// not copied; an optional '\r' before it is also stripped.
+@ __pc_drain_line s c → i {
+    : s scratch # s ( nurl_peek c 9 )
+    : i scratch_len ( nurl_peek c 10 )
+    ? == # i scratch 0 { ^ 0 } {}
+    : *u sp # *u scratch
+    : ~ i i 0
+    ~ < i scratch_len {
+        : i b & 255 # i . sp i
+        ? == b 10 {                                     // '\n'
+            : ~ i take i
+            ? > take 0 {
+                : i prev & 255 # i . sp - take 1
+                ? == prev 13 { = take - take 1 } {}     // '\r'
+            } {}
+            ( __pc_line_reserve c take )
+            : s line # s ( nurl_peek c 12 )
+            ? > take 0 {
+                : *u dst # *u line
+                ( nurl_memcpy dst sp take )
+            } {}
+            : *u lp # *u line
+            = . lp take # u 0
+            ( nurl_poke c 13 take )
+            : i consume + i 1
+            : i rem - scratch_len consume
+            ? > rem 0 {
+                : *u dst2 # *u scratch
+                : *u src2 # *u + # i sp consume
+                ( nurl_memcpy dst2 src2 rem )
+            } {}
+            ( nurl_poke c 10 rem )
+            ^ 1
+        } {}
+        = i + i 1
+    }
+    ^ 0
+}
+
+@ __process_spawn_posix s cmd ( Vec s ) args → !ProcChild ProcessErr {
+    : s c ( __pc_alloc )
+
+    : i cmd_len ( nurl_str_len cmd )
+    ? <= cmd_len 0 {
+        ( nurl_poke c 0 1 )                             // NotFound
+        ^ ( __proc_spawn_dispatch # i c )
+    } {}
+
+    : s sin_p ( nurl_alloc 8 )
+    : s sout_p ( nurl_alloc 8 )
+    : s err_p ( nurl_alloc 8 )
+
+    : i p1 ( pipe # *u sin_p )
+    : i p2 ( pipe # *u sout_p )
+    : i p3 ( pipe # *u err_p )
+    ? || || < p1 0 < p2 0 < p3 0 {
+        ? >= p1 0 {
+            ( close ( __pipe_fd sin_p 0 ) ) ( close ( __pipe_fd sin_p 1 ) )
+        } {}
+        ? >= p2 0 {
+            ( close ( __pipe_fd sout_p 0 ) ) ( close ( __pipe_fd sout_p 1 ) )
+        } {}
+        ? >= p3 0 {
+            ( close ( __pipe_fd err_p 0 ) ) ( close ( __pipe_fd err_p 1 ) )
+        } {}
+        ( nurl_free sin_p ) ( nurl_free sout_p ) ( nurl_free err_p )
+        ( nurl_poke c 0 3 )                             // Io
+        ( nurl_poke c 1 ( nurl_errno_get ) )
+        ^ ( __proc_spawn_dispatch # i c )
+    } {}
+
+    ( __set_cloexec ( __pipe_fd err_p 1 ) )
+
+    : s full ( __build_argv cmd args )
+
+    : i pid ( fork )
+    ? < pid 0 {
+        ( nurl_free full )
+        ( close ( __pipe_fd sin_p 0 ) ) ( close ( __pipe_fd sin_p 1 ) )
+        ( close ( __pipe_fd sout_p 0 ) ) ( close ( __pipe_fd sout_p 1 ) )
+        ( close ( __pipe_fd err_p 0 ) ) ( close ( __pipe_fd err_p 1 ) )
+        ( nurl_free sin_p ) ( nurl_free sout_p ) ( nurl_free err_p )
+        ( nurl_poke c 0 3 )                             // Io
+        ( nurl_poke c 1 ( nurl_errno_get ) )
+        ^ ( __proc_spawn_dispatch # i c )
+    } {}
+
+    ? == pid 0 {
+        ( dup2 ( __pipe_fd sin_p 0 ) 0 )
+        ( dup2 ( __pipe_fd sout_p 1 ) 1 )
+        // stderr inherits — no dup
+        ( close ( __pipe_fd sin_p 0 ) ) ( close ( __pipe_fd sin_p 1 ) )
+        ( close ( __pipe_fd sout_p 0 ) ) ( close ( __pipe_fd sout_p 1 ) )
+        ( close ( __pipe_fd err_p 0 ) )
+        ( execvp cmd # *u full )
+        : i e ( nurl_errno_get )
+        ( __write_exec_errno ( __pipe_fd err_p 1 ) e )
+        ( _exit 127 )
+    } {}
+
+    ( nurl_free full )
+    ( close ( __pipe_fd sin_p 0 ) )
+    ( close ( __pipe_fd sout_p 1 ) )
+    ( close ( __pipe_fd err_p 1 ) )
+
+    : i sin_wfd ( __pipe_fd sin_p 1 )
+    : i sout_rfd ( __pipe_fd sout_p 0 )
+    : i err_rfd ( __pipe_fd err_p 0 )
+    ( nurl_free sin_p ) ( nurl_free sout_p ) ( nurl_free err_p )
+
+    : i child_errno ( __read_exec_errno err_rfd )
+    ( close err_rfd )
+    ? != child_errno 0 {
+        ( close sin_wfd ) ( close sout_rfd )
+        : s status_buf ( nurl_zalloc 4 )
+        : *u status_p # *u status_buf
+        ( waitpid pid status_p 0 )
+        ( nurl_free status_buf )
+        ( nurl_poke c 0 ( __map_exec_errno child_errno ) )
+        ( nurl_poke c 1 child_errno )
+        ^ ( __proc_spawn_dispatch # i c )
+    } {}
+
+    // Non-blocking on stdout so timeout-driven read_line doesn't wedge.
+    ( __set_nonblock sout_rfd )
+
+    ( nurl_poke c 5 pid )                                // pid_or_0
+    ( nurl_poke c 6 pid )                                // pid
+    ( nurl_poke c 7 sin_wfd )                            // fd_in
+    ( nurl_poke c 8 sout_rfd )                           // fd_out
+    ^ ( __proc_spawn_dispatch # i c )
+}
+
+@ __proc_write_posix i raw s buf i n → i {
+    : s c # s raw
+    : i fd_in ( nurl_peek c 7 )
+    ? < fd_in 0 { ^ 0 } {}
+    ? <= n 0 { ^ 0 } {}
+    : *u old_pipe ( signal ( posix_const `SIGPIPE` ) # *u ( posix_const `SIG_IGN` ) )
+    : ~ i total 0
+    ~ < total n {
+        : s slice # s + # i # *u buf total
+        : i w ( write fd_in # *u slice - n total )
+        ? > w 0 { = total + total w } {
+            ? < w 0 {
+                : i e ( nurl_errno_get )
+                ? == e ( posix_const `EINTR` ) {} {
+                    ( nurl_poke c 1 e )
+                    ( signal ( posix_const `SIGPIPE` ) old_pipe )
+                    ^ -1
+                }
+            } { = total n }                              // w == 0: break
+        }
+    }
+    ( signal ( posix_const `SIGPIPE` ) old_pipe )
+    ^ total
+}
+
+@ __proc_close_stdin_posix i raw → v {
+    : s c # s raw
+    : i fd_in ( nurl_peek c 7 )
+    ? >= fd_in 0 {
+        ( close fd_in )
+        ( nurl_poke c 7 -1 )
+    } {}
+}
+
+// One pollfd entry's worth of bytes for read_line's poll(2) call.
+@ __proc_read_line_posix i raw i timeout_ms → s {
+    : s c # s raw
+    // Reset previous line.
+    ( nurl_poke c 13 0 )
+    : s prev_line # s ( nurl_peek c 12 )
+    ? != # i prev_line 0 {
+        : *u lp # *u prev_line
+        = . lp 0 # u 0
+    } {}
+
+    ? == 1 ( __pc_drain_line c ) {
+        : s line # s ( nurl_peek c 12 )
+        ^ ? != # i line 0 line ``
+    } {}
+
+    : i fd_out ( nurl_peek c 8 )
+    ? < fd_out 0 {
+        ( nurl_poke c 3 1 )                             // eof
+        ^ ``
+    } {}
+
+    : s pollfds ( nurl_alloc 8 )
+    : s chunk ( nurl_alloc 4096 )
+    : i pollin ( posix_const `POLLIN` )
+    : i pollhup ( posix_const `POLLHUP` )
+    : i pollerr ( posix_const `POLLERR` )
+
+    ~ T {
+        ( posix_pollfd_set # *u pollfds 0 fd_out pollin )
+        : i wait_for ? > timeout_ms 0 timeout_ms -1
+        : ~ i pr 0
+        : ~ i poll_done 0
+        ~ == poll_done 0 {
+            = pr ( poll # *u pollfds 1 wait_for )
+            ? >= pr 0 { = poll_done 1 } {
+                : i pe ( nurl_errno_get )
+                ? != pe ( posix_const `EINTR` ) { = poll_done 1 } {}
+            }
+        }
+        ? == pr 0 {
+            ( nurl_free pollfds ) ( nurl_free chunk )
+            ^ ``                                        // timeout
+        } {}
+        ? < pr 0 {
+            ( nurl_poke c 0 3 )                         // Io
+            ( nurl_poke c 1 ( nurl_errno_get ) )
+            ( nurl_free pollfds ) ( nurl_free chunk )
+            ^ ``
+        } {}
+        : i rev ( posix_pollfd_revents # *u pollfds 0 )
+        : i has_in & rev pollin
+        ? != has_in 0 {
+            // Drain everything currently buffered.
+            : ~ i drain_done 0
+            ~ == drain_done 0 {
+                : i rd ( read fd_out # *u chunk 4096 )
+                ? > rd 0 {
+                    : i scratch_len ( nurl_peek c 10 )
+                    ( __pc_scratch_reserve c + scratch_len rd )
+                    : s scratch_new # s ( nurl_peek c 9 )
+                    : *u dst # *u + # i # *u scratch_new scratch_len
+                    : *u src # *u chunk
+                    ( nurl_memcpy dst src rd )
+                    ( nurl_poke c 10 + scratch_len rd )
+                } {
+                    ? == rd 0 {
+                        ( close fd_out )
+                        ( nurl_poke c 8 -1 )
+                        ( nurl_poke c 3 1 )             // eof
+                        = drain_done 1
+                    } {
+                        : i re ( nurl_errno_get )
+                        ? == re ( posix_const `EINTR` ) {} {
+                            ? == re ( posix_const `EAGAIN` ) { = drain_done 1 } {
+                                ? == re ( posix_const `EWOULDBLOCK` ) { = drain_done 1 } {
+                                    ( nurl_poke c 0 3 )
+                                    ( nurl_poke c 1 re )
+                                    ( nurl_free pollfds ) ( nurl_free chunk )
+                                    ^ ``
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            : i hit_eof ( nurl_peek c 3 )
+            ? == 1 ( __pc_drain_line c ) {
+                ( nurl_free pollfds ) ( nurl_free chunk )
+                : s line # s ( nurl_peek c 12 )
+                ^ ? != # i line 0 line ``
+            } {}
+            // EOF without trailing '\n': flush tail.
+            ? != hit_eof 0 {
+                : i sc_len ( nurl_peek c 10 )
+                ? > sc_len 0 {
+                    ( __pc_line_reserve c sc_len )
+                    : s line # s ( nurl_peek c 12 )
+                    : s scratch # s ( nurl_peek c 9 )
+                    : *u dst # *u line
+                    : *u src # *u scratch
+                    ( nurl_memcpy dst src sc_len )
+                    : *u lp # *u line
+                    = . lp sc_len # u 0
+                    ( nurl_poke c 13 sc_len )
+                    ( nurl_poke c 10 0 )
+                    ( nurl_free pollfds ) ( nurl_free chunk )
+                    ^ line
+                } {}
+                ( nurl_free pollfds ) ( nurl_free chunk )
+                ^ ``
+            } {}
+        } {}
+        : i hup_or_err & rev | pollhup pollerr
+        ? != hup_or_err 0 {
+            ( close fd_out )
+            ( nurl_poke c 8 -1 )
+            ( nurl_poke c 3 1 )                         // eof
+            ? == 1 ( __pc_drain_line c ) {
+                ( nurl_free pollfds ) ( nurl_free chunk )
+                : s line # s ( nurl_peek c 12 )
+                ^ ? != # i line 0 line ``
+            } {}
+            : i sc_len ( nurl_peek c 10 )
+            ? > sc_len 0 {
+                ( __pc_line_reserve c sc_len )
+                : s line # s ( nurl_peek c 12 )
+                : s scratch # s ( nurl_peek c 9 )
+                : *u dst # *u line
+                : *u src # *u scratch
+                ( nurl_memcpy dst src sc_len )
+                : *u lp # *u line
+                = . lp sc_len # u 0
+                ( nurl_poke c 13 sc_len )
+                ( nurl_poke c 10 0 )
+                ( nurl_free pollfds ) ( nurl_free chunk )
+                ^ line
+            } {}
+            ( nurl_free pollfds ) ( nurl_free chunk )
+            ^ ``
+        } {}
+        // Loop — still no '\n' yet.
+    }
+    ( nurl_free pollfds ) ( nurl_free chunk )
+    ^ ``
+}
+
+@ __proc_wait_posix i raw → i {
+    : s c # s raw
+    : i waited ( nurl_peek c 4 )
+    ? != waited 0 { ^ ( nurl_peek c 2 ) } {}
+    : i pid ( nurl_peek c 6 )
+    ? <= pid 0 { ^ -1 } {}
+    : s status_buf ( nurl_zalloc 4 )
+    : *u status_p # *u status_buf
+    : ~ i w 0
+    : ~ i wait_done 0
+    ~ == wait_done 0 {
+        = w ( waitpid pid status_p 0 )
+        ? >= w 0 { = wait_done 1 } {
+            : i e ( nurl_errno_get )
+            ? != e ( posix_const `EINTR` ) {
+                = wait_done 1
+                ( nurl_poke c 1 e )
+                ( nurl_free status_buf )
+                ^ -1
+            } {}
+        }
+    }
+    : i raw_status ( __le32_read status_p 0 )
+    ( nurl_free status_buf )
+    : ~ i ec -1
+    ? == 1 ( nurl_wait_is_exited raw_status ) {
+        = ec ( nurl_wait_exit_status raw_status )
+    } {
+        ? == 1 ( nurl_wait_is_signaled raw_status ) {
+            = ec + 128 ( nurl_wait_term_sig raw_status )
+        } {}
+    }
+    ( nurl_poke c 2 ec )
+    ( nurl_poke c 4 1 )                                 // waited
+    ^ ec
+}
+
+@ __proc_kill_posix i raw i sig → i {
+    : s c # s raw
+    : i pid ( nurl_peek c 6 )
+    ? <= pid 0 { ^ -1 } {}
+    : i s ? > sig 0 sig ( posix_const `SIGTERM` )
+    : i rc ( kill pid s )
+    ? < rc 0 {
+        ( nurl_poke c 1 ( nurl_errno_get ) )
+        ^ -1
+    } {}
+    ^ 0
+}
+
+// best-effort reap helper — SIGTERM, poll waitpid(WNOHANG) for up to
+// 500ms, then SIGKILL + blocking wait if still alive.
+@ __proc_reap_posix i raw → v {
+    : s c # s raw
+    : i pid ( nurl_peek c 6 )
+    : i waited ( nurl_peek c 4 )
+    ? || <= pid 0 != waited 0 {} {
+        ( kill pid ( posix_const `SIGTERM` ) )
+        : s status_buf ( nurl_zalloc 4 )
+        : *u status_p # *u status_buf
+        : ~ i tries 0
+        : ~ i reaped 0
+        ~ < tries 50 {
+            : i w ( waitpid pid status_p ( posix_const `WNOHANG` ) )
+            ? == w pid { = reaped 1 = tries 50 } {
+                ? < w 0 { = tries 50 } {}
+            }
+            ? == reaped 0 {
+                // 10ms sleep — simple busy-wait via repeated waitpid is
+                // acceptable for the rare ungraceful-shutdown path.
+                = tries + tries 1
+            } {}
+        }
+        ? == reaped 0 {
+            ( kill pid ( posix_const `SIGKILL` ) )
+            ( waitpid pid status_p 0 )
+        } {}
+        ( nurl_free status_buf )
+        ( nurl_poke c 4 1 )                             // waited
+    }
+}
+
+@ __proc_free_posix i raw → v {
+    : s c # s raw
+    ? == raw 0 {} {
+        : i fd_in ( nurl_peek c 7 )
+        ? >= fd_in 0 { ( close fd_in ) } {}
+        : i fd_out ( nurl_peek c 8 )
+        ? >= fd_out 0 { ( close fd_out ) } {}
+        ( __proc_reap_posix raw )
+        : s scratch # s ( nurl_peek c 9 )
+        ? != # i scratch 0 { ( nurl_free scratch ) } {}
+        : s line # s ( nurl_peek c 12 )
+        ? != # i line 0 { ( nurl_free line ) } {}
+        ( nurl_free c )
+    }
+}
+
 @ process_spawn s cmd ( Vec s ) args → !ProcChild ProcessErr {
+    ? != ( posix_const `O_NONBLOCK` ) -1 {
+        ^ ( __process_spawn_posix cmd args )
+    } {}
     : *s argv ( vec_data [s] args )
     : i argc ( vec_len [s] args )
     : s argv_buf # s argv
@@ -745,6 +1219,9 @@ $ `stdlib/core/posix.nu`
 @ proc_write ProcChild p s buf i n → i {
     : s rp . p raw
     : i raw # i rp
+    ? != ( posix_const `O_NONBLOCK` ) -1 {
+        ^ ( __proc_write_posix raw buf n )
+    } {}
     ^ ( nurl_proc_spawn_write raw buf n )
 }
 
@@ -764,7 +1241,11 @@ $ `stdlib/core/posix.nu`
 @ proc_close_stdin ProcChild p → v {
     : s rp . p raw
     : i raw # i rp
-    ( nurl_proc_spawn_close_stdin raw )
+    ? != ( posix_const `O_NONBLOCK` ) -1 {
+        ( __proc_close_stdin_posix raw )
+    } {
+        ( nurl_proc_spawn_close_stdin raw )
+    }
 }
 
 @ proc_eof ProcChild p → b {
@@ -786,7 +1267,9 @@ $ `stdlib/core/posix.nu`
 @ proc_read_line ProcChild p i timeout_ms → ?String {
     : s rp . p raw
     : i raw # i rp
-    : s view ( nurl_proc_spawn_read_line raw timeout_ms )
+    : s view ? != ( posix_const `O_NONBLOCK` ) -1
+        ( __proc_read_line_posix raw timeout_ms )
+        ( nurl_proc_spawn_read_line raw timeout_ms )
     : i n ( nurl_proc_spawn_read_line_len raw )
     ? == n 0 { ^ @ ?String { F # String 0 } } {}
     ^ @ ?String { T ( string_from view ) }
@@ -795,17 +1278,27 @@ $ `stdlib/core/posix.nu`
 @ proc_wait ProcChild p → i {
     : s rp . p raw
     : i raw # i rp
+    ? != ( posix_const `O_NONBLOCK` ) -1 {
+        ^ ( __proc_wait_posix raw )
+    } {}
     ^ ( nurl_proc_spawn_wait raw )
 }
 
 @ proc_kill ProcChild p i sig → i {
     : s rp . p raw
     : i raw # i rp
+    ? != ( posix_const `O_NONBLOCK` ) -1 {
+        ^ ( __proc_kill_posix raw sig )
+    } {}
     ^ ( nurl_proc_spawn_kill raw sig )
 }
 
 @ proc_free ProcChild p → v {
     : s rp . p raw
     : i raw # i rp
-    ( nurl_proc_spawn_free raw )
+    ? != ( posix_const `O_NONBLOCK` ) -1 {
+        ( __proc_free_posix raw )
+    } {
+        ( nurl_proc_spawn_free raw )
+    }
 }

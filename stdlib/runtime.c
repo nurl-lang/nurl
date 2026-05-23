@@ -4286,20 +4286,33 @@ void nurl_proc_free(long long h) {
  * Tag values match `ProcessErr` (NURL_PROC_ERR_* constants above).
  */
 
+/* All-long-long layout — every field is one 8-byte slot — so the
+ * pure-NURL POSIX backend in stdlib/std/process.nu can index fields
+ * by `nurl_poke` / `nurl_peek` slot number (0..15). C-side accessors
+ * read the same fields via the typedef. PURIFY Phase 8 batch 3
+ * (2026-05-23) — the int / pid_t / size_t mix that lived here before
+ * is gone; sizeof(NurlProcChild) is now 128 bytes on every supported
+ * POSIX target.
+ *
+ * Win32 keeps its own layout (different field set: HANDLEs not fds)
+ * since pure-NURL FFI doesn't reach CreateProcess yet. Slots 0..5
+ * are shared, slot 14 is `h_proc / fd_in / pid` interleaved by
+ * platform — Win32 is allowed to be a bit different here because
+ * NURL never reads its slots directly. */
 typedef struct NurlProcChild {
-    long long  err_kind;       /* 0 / NURL_PROC_ERR_* set at spawn */
-    long long  last_io_err;    /* errno snapshot from last failure */
-    long long  exit_code;      /* -1 until wait() succeeds */
-    int        eof;            /* stdout drained: 0/1 */
-    int        waited;         /* exit_code is valid */
-    long long  pid_or_0;       /* logical pid; 0 on platforms w/o pid */
+    long long  err_kind;       /* slot 0 — 0 / NURL_PROC_ERR_* set at spawn */
+    long long  last_io_err;    /* slot 1 — errno snapshot from last failure */
+    long long  exit_code;      /* slot 2 — -1 until wait() succeeds */
+    long long  eof;            /* slot 3 — stdout drained: 0/1 */
+    long long  waited;         /* slot 4 — exit_code is valid */
+    long long  pid_or_0;       /* slot 5 — logical pid; 0 on platforms w/o pid */
 
 #if !defined(_WIN32) && !defined(__wasi__)
-    pid_t      pid;
-    int        fd_in;          /* parent → child stdin write */
-    int        fd_out;         /* child stdout → parent read */
+    long long  pid;            /* slot 6 — pid_t, widened */
+    long long  fd_in;          /* slot 7 — parent → child stdin write */
+    long long  fd_out;         /* slot 8 — child stdout → parent read */
 #elif defined(_WIN32) && !defined(__wasi__)
-    HANDLE     h_proc;
+    HANDLE     h_proc;         /* slot 6 (Win32-only layout) */
     HANDLE     h_in;
     HANDLE     h_out;
 #endif
@@ -4307,286 +4320,41 @@ typedef struct NurlProcChild {
     /* Pending bytes read from the child but not yet returned: any
      * scratch read past the first '\n' of a request becomes the head
      * of the next read_line. */
-    char  *scratch;
-    size_t scratch_len;
-    size_t scratch_cap;
+    long long  scratch;        /* slot 9 — char* widened to i64 */
+    long long  scratch_len;    /* slot 10 */
+    long long  scratch_cap;    /* slot 11 */
 
     /* Resolved line returned by `nurl_proc_spawn_read_line`. Reused
      * across calls to keep allocations stable. */
-    char  *line_buf;
-    size_t line_len;
-    size_t line_cap;
+    long long  line_buf;       /* slot 12 — char* widened to i64 */
+    long long  line_len;       /* slot 13 */
+    long long  line_cap;       /* slot 14 */
+    long long  _reserved;      /* slot 15 — round to 128 bytes */
 } NurlProcChild;
 
-static int nurl__pc_scratch_reserve(NurlProcChild *c, size_t want) {
-    if (c->scratch_cap >= want) return 1;
-    size_t newcap = c->scratch_cap ? c->scratch_cap : 1024;
-    while (newcap < want) newcap *= 2;
-    char *p = (char*)realloc(c->scratch, newcap);
-    if (!p) return 0;
-    c->scratch = p; c->scratch_cap = newcap;
-    return 1;
-}
-
-static int nurl__pc_line_reserve(NurlProcChild *c, size_t want) {
-    if (c->line_cap >= want + 1) return 1;
-    size_t newcap = c->line_cap ? c->line_cap : 256;
-    while (newcap < want + 1) newcap *= 2;
-    char *p = (char*)realloc(c->line_buf, newcap);
-    if (!p) return 0;
-    c->line_buf = p; c->line_cap = newcap;
-    return 1;
-}
-
-/* Try to extract the first '\n'-terminated line from scratch into
- * line_buf. Returns 1 on success. The trailing '\n' is consumed but
- * not copied; an optional '\r' before it is also stripped. */
-static int nurl__pc_drain_line(NurlProcChild *c) {
-    for (size_t i = 0; i < c->scratch_len; i++) {
-        if (c->scratch[i] == '\n') {
-            size_t take = i;
-            if (take > 0 && c->scratch[take - 1] == '\r') take--;
-            if (!nurl__pc_line_reserve(c, take)) return 0;
-            memcpy(c->line_buf, c->scratch, take);
-            c->line_buf[take] = 0;
-            c->line_len = take;
-            size_t consume = i + 1;
-            size_t rem = c->scratch_len - consume;
-            if (rem) memmove(c->scratch, c->scratch + consume, rem);
-            c->scratch_len = rem;
-            return 1;
-        }
-    }
-    return 0;
-}
-
 #if !defined(_WIN32) && !defined(__wasi__)
-/* ── POSIX backend ────────────────────────────────────────────── */
+/* ── POSIX backend: superseded by pure-NURL stdlib/std/process.nu ──
+ *
+ * PURIFY Phase 8 batch 3 (2026-05-23) moved the whole fork+pipes+
+ * exec+poll-drain+waitpid POSIX body — plus the scratch_reserve /
+ * line_reserve / drain_line helpers — into NURL via the FFI surface
+ * in stdlib/core/posix.nu. process_spawn / proc_write /
+ * proc_close_stdin / proc_read_line / proc_wait / proc_kill /
+ * proc_free gate on `posix_const "O_NONBLOCK" != -1` and dispatch
+ * to the NURL implementation on every POSIX target; these stubs
+ * remain only for link-time symbol resolution. */
 
 long long nurl_proc_spawn(const char *cmd, const char *argv_buf, long long argc) {
-    NurlProcChild *c = (NurlProcChild*)calloc(1, sizeof(NurlProcChild));
-    if (!c) return 0;
-    c->fd_in   = -1;
-    c->fd_out  = -1;
-    c->exit_code = -1;
-    if (!cmd || !*cmd) { c->err_kind = NURL_PROC_ERR_NOTFOUND; return (long long)(uintptr_t)c; }
-    if (argc < 0) argc = 0;
-    const char *const *argv_user = (const char *const *)argv_buf;
-
-    int sin_p[2]  = {-1,-1};
-    int sout_p[2] = {-1,-1};
-    int err_p[2]  = {-1,-1};
-    if (pipe(sin_p) < 0 || pipe(sout_p) < 0 || pipe(err_p) < 0) {
-        nurl__proc_close_pair(sin_p);
-        nurl__proc_close_pair(sout_p);
-        nurl__proc_close_pair(err_p);
-        c->err_kind = NURL_PROC_ERR_IO;
-        c->last_io_err = errno;
-        return (long long)(uintptr_t)c;
-    }
-    int efl = fcntl(err_p[1], F_GETFD);
-    if (efl != -1) fcntl(err_p[1], F_SETFD, efl | FD_CLOEXEC);
-
-    char **full = (char**)malloc(sizeof(char*) * (size_t)(argc + 2));
-    if (!full) {
-        nurl__proc_close_pair(sin_p);
-        nurl__proc_close_pair(sout_p);
-        nurl__proc_close_pair(err_p);
-        c->err_kind = NURL_PROC_ERR_OTHER;
-        return (long long)(uintptr_t)c;
-    }
-    full[0] = (char*)cmd;
-    for (long long i = 0; i < argc; i++)
-        full[i + 1] = argv_user && argv_user[i] ? (char*)argv_user[i] : (char*)"";
-    full[argc + 1] = NULL;
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        free(full);
-        nurl__proc_close_pair(sin_p);
-        nurl__proc_close_pair(sout_p);
-        nurl__proc_close_pair(err_p);
-        c->err_kind = NURL_PROC_ERR_IO;
-        c->last_io_err = errno;
-        return (long long)(uintptr_t)c;
-    }
-    if (pid == 0) {
-        if (sin_p[0]  != 0) dup2(sin_p[0],  0);
-        if (sout_p[1] != 1) dup2(sout_p[1], 1);
-        /* stderr inherits from parent — no dup. */
-        close(sin_p[0]);  close(sin_p[1]);
-        close(sout_p[0]); close(sout_p[1]);
-        close(err_p[0]);
-        execvp(cmd, full);
-        int e = errno;
-        ssize_t wn = write(err_p[1], &e, sizeof(e));
-        (void)wn;
-        _exit(127);
-    }
-    free(full);
-    close(sin_p[0]);   sin_p[0]  = -1;
-    close(sout_p[1]);  sout_p[1] = -1;
-    close(err_p[1]);   err_p[1]  = -1;
-
-    /* Drain exec-error sideband; EOF without bytes ⇒ exec succeeded. */
-    int child_errno = 0;
-    {
-        size_t got = 0;
-        for (;;) {
-            ssize_t rd = read(err_p[0], (char*)&child_errno + got, sizeof(child_errno) - got);
-            if (rd > 0) { got += (size_t)rd; if (got >= sizeof(child_errno)) break; }
-            else if (rd == 0) break;
-            else if (errno == EINTR) continue;
-            else break;
-        }
-        close(err_p[0]); err_p[0] = -1;
-    }
-    if (child_errno != 0) {
-        close(sin_p[1]); close(sout_p[0]);
-        int st = 0; waitpid(pid, &st, 0);
-        c->err_kind = (child_errno == ENOENT) ? NURL_PROC_ERR_NOTFOUND : NURL_PROC_ERR_EXEC_FAILED;
-        c->last_io_err = child_errno;
-        return (long long)(uintptr_t)c;
-    }
-
-    /* Non-blocking on stdout so timeout-driven read_line doesn't wedge. */
-    int fl = fcntl(sout_p[0], F_GETFL);
-    if (fl != -1) fcntl(sout_p[0], F_SETFL, fl | O_NONBLOCK);
-
-    c->pid       = pid;
-    c->pid_or_0  = (long long)pid;
-    c->fd_in     = sin_p[1];
-    c->fd_out    = sout_p[0];
-    c->err_kind  = NURL_PROC_ERR_OK;
-    return (long long)(uintptr_t)c;
-}
-
-long long nurl_proc_spawn_write(long long h, const char *buf, long long n) {
-    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
-    if (!c || c->fd_in < 0 || !buf || n <= 0) return 0;
-    void (*old_pipe)(int) = signal(SIGPIPE, SIG_IGN);
-    long long total = 0;
-    while (total < n) {
-        ssize_t w = write(c->fd_in, buf + total, (size_t)(n - total));
-        if (w < 0) {
-            if (errno == EINTR) continue;
-            c->last_io_err = errno;
-            signal(SIGPIPE, old_pipe);
-            return -1;
-        }
-        if (w == 0) break;
-        total += w;
-    }
-    signal(SIGPIPE, old_pipe);
-    return total;
-}
-
-void nurl_proc_spawn_close_stdin(long long h) {
-    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
-    if (!c) return;
-    if (c->fd_in >= 0) { close(c->fd_in); c->fd_in = -1; }
-}
-
-const char* nurl_proc_spawn_read_line(long long h, long long timeout_ms) {
-    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
-    if (!c) return "";
-    c->line_len = 0;
-    if (c->line_buf) c->line_buf[0] = 0;
-
-    /* If a previous read already pulled in the next line, return it. */
-    if (nurl__pc_drain_line(c)) return c->line_buf ? c->line_buf : "";
-
-    if (c->fd_out < 0) { c->eof = 1; return ""; }
-
-    long long remaining = timeout_ms;
-    char chunk[4096];
-    for (;;) {
-        struct pollfd pf;
-        pf.fd = c->fd_out;
-        pf.events = POLLIN;
-        int wait_for = (timeout_ms > 0) ? (int)remaining : -1;
-        int pr;
-        do { pr = poll(&pf, 1, wait_for); } while (pr < 0 && errno == EINTR);
-        if (pr == 0) { /* timeout */ return ""; }
-        if (pr < 0)  { c->err_kind = NURL_PROC_ERR_IO; c->last_io_err = errno; return ""; }
-
-        if (pf.revents & POLLIN) {
-            for (;;) {
-                ssize_t rd = read(c->fd_out, chunk, sizeof(chunk));
-                if (rd > 0) {
-                    if (!nurl__pc_scratch_reserve(c, c->scratch_len + (size_t)rd)) {
-                        c->err_kind = NURL_PROC_ERR_OTHER;
-                        return "";
-                    }
-                    memcpy(c->scratch + c->scratch_len, chunk, (size_t)rd);
-                    c->scratch_len += (size_t)rd;
-                } else if (rd == 0) {
-                    /* peer closed — flush any tail without trailing '\n'. */
-                    close(c->fd_out); c->fd_out = -1;
-                    c->eof = 1;
-                    if (nurl__pc_drain_line(c)) return c->line_buf ? c->line_buf : "";
-                    if (c->scratch_len > 0) {
-                        if (!nurl__pc_line_reserve(c, c->scratch_len)) return "";
-                        memcpy(c->line_buf, c->scratch, c->scratch_len);
-                        c->line_buf[c->scratch_len] = 0;
-                        c->line_len = c->scratch_len;
-                        c->scratch_len = 0;
-                        return c->line_buf;
-                    }
-                    return "";
-                } else {
-                    if (errno == EINTR) continue;
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-                    c->err_kind = NURL_PROC_ERR_IO;
-                    c->last_io_err = errno;
-                    return "";
-                }
-            }
-            if (nurl__pc_drain_line(c)) return c->line_buf ? c->line_buf : "";
-        }
-        if (pf.revents & (POLLHUP | POLLERR)) {
-            close(c->fd_out); c->fd_out = -1;
-            c->eof = 1;
-            if (nurl__pc_drain_line(c)) return c->line_buf ? c->line_buf : "";
-            if (c->scratch_len > 0) {
-                if (!nurl__pc_line_reserve(c, c->scratch_len)) return "";
-                memcpy(c->line_buf, c->scratch, c->scratch_len);
-                c->line_buf[c->scratch_len] = 0;
-                c->line_len = c->scratch_len;
-                c->scratch_len = 0;
-                return c->line_buf;
-            }
-            return "";
-        }
-        /* Loop — still no '\n' yet. (For finite timeouts we naively
-         * wait the full quantum each iteration; mainline MCP responses
-         * arrive within a single poll wakeup so the slack is invisible.) */
-    }
-}
-
-long long nurl_proc_spawn_wait(long long h) {
-    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
-    if (!c) return -1;
-    if (c->waited) return c->exit_code;
-    if (c->pid <= 0) return -1;
-    int status = 0;
-    pid_t w;
-    do { w = waitpid(c->pid, &status, 0); } while (w < 0 && errno == EINTR);
-    if (w < 0) { c->last_io_err = errno; return -1; }
-    if (WIFEXITED(status))         c->exit_code = (long long)WEXITSTATUS(status);
-    else if (WIFSIGNALED(status))  c->exit_code = (long long)(128 + WTERMSIG(status));
-    else                           c->exit_code = -1;
-    c->waited = 1;
-    return c->exit_code;
-}
-
-long long nurl_proc_spawn_kill(long long h, long long sig) {
-    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
-    if (!c || c->pid <= 0) return -1;
-    int s = (sig > 0) ? (int)sig : SIGTERM;
-    if (kill(c->pid, s) < 0) { c->last_io_err = errno; return -1; }
+    (void)cmd; (void)argv_buf; (void)argc;
     return 0;
 }
+long long nurl_proc_spawn_write(long long h, const char *buf, long long n) {
+    (void)h; (void)buf; (void)n; return -1;
+}
+void nurl_proc_spawn_close_stdin(long long h) { (void)h; }
+const char* nurl_proc_spawn_read_line(long long h, long long t) { (void)h; (void)t; return ""; }
+long long nurl_proc_spawn_wait(long long h) { (void)h; return -1; }
+long long nurl_proc_spawn_kill(long long h, long long sig) { (void)h; (void)sig; return -1; }
 
 #elif defined(_WIN32) && !defined(__wasi__)
 /* ── Win32 stub: spawn returns ProcessOther for now ──────────── */
@@ -4659,34 +4427,21 @@ void nurl_proc_spawn_free(long long h) {
     NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
     if (!c) return;
 #if !defined(_WIN32) && !defined(__wasi__)
-    if (c->fd_in  >= 0) close(c->fd_in);
-    if (c->fd_out >= 0) close(c->fd_out);
-    if (c->pid > 0 && !c->waited) {
-        /* Best-effort reap so we don't accumulate zombies. SIGTERM
-         * first then a non-blocking waitpid; if still alive, SIGKILL
-         * and a blocking wait. */
-        kill(c->pid, SIGTERM);
-        int status = 0;
-        for (int i = 0; i < 50; i++) {
-            pid_t w = waitpid(c->pid, &status, WNOHANG);
-            if (w == c->pid) { c->waited = 1; break; }
-            if (w < 0) break;
-            struct timespec ts = {0, 10 * 1000 * 1000}; /* 10ms */
-            nanosleep(&ts, NULL);
-        }
-        if (!c->waited) {
-            kill(c->pid, SIGKILL);
-            waitpid(c->pid, &status, 0);
-        }
-    }
+    /* PURIFY Phase 8 batch 3: NURL `proc_free` calls `__proc_free_posix`
+     * which does the close/reap/buffer-free on POSIX; this stub remains
+     * for link-time symbol resolution and the (rare) Win32/WASI dispatch
+     * path where C-side accessors still own the struct. */
+    free(c);
 #elif defined(_WIN32) && !defined(__wasi__)
     if (c->h_in)   CloseHandle(c->h_in);
     if (c->h_out)  CloseHandle(c->h_out);
     if (c->h_proc) CloseHandle(c->h_proc);
-#endif
-    free(c->scratch);
-    free(c->line_buf);
+    free((void*)(uintptr_t)c->scratch);
+    free((void*)(uintptr_t)c->line_buf);
     free(c);
+#else
+    free(c);
+#endif
 }
 
 /* ── §17  Crypto (secure random only) ────────────────────────────

@@ -366,7 +366,7 @@ full-Phase-7 target: ~150-200 LOC, far below the 500 the original
 plan assumed (the plan double-counted §13's getenv/getcwd and
 overestimated how much of §4's mmap/stat paths can leave C).
 
-### Phase 8 — Process spawn (`§16 + §16b`, ~700 LOC reduction) — BATCH 2 LANDED 2026-05-23
+### Phase 8 — Process spawn (`§16 + §16b`, ~700 LOC reduction) — DONE 2026-05-23
 
 `fork`/`execvp`/`pipe`/`poll`/`dup2`/`close`/`waitpid` are all libc
 syscalls; pure-NURL FFI can call each one directly. The duplex-
@@ -435,11 +435,38 @@ Bootstrap held first try; full corpus passes including
 `process_basic`, `process_spawn_basic`, every `http_server_*`,
 `mcp_stdio_basic`, `postgres_basic`.
 
-**Batch 3 — port `nurl_proc_spawn` POSIX backend (~227 LOC)**:
-same fork-spawn shape but keeps the child's stdin/stdout/stderr
-open for incremental writes / line-buffered reads. The
-`nurl__pc_drain_line` accumulator becomes a NURL Vec[u]
-manipulator over the FFI read.
+**Batch 3 landed** — `nurl_proc_spawn` POSIX backend + the
+scratch / line buffer accumulators + write / close_stdin /
+read_line / wait / kill / free ported to pure NURL.
+
+`stdlib/std/process.nu` gained `__process_spawn_posix`,
+`__proc_write_posix`, `__proc_close_stdin_posix`,
+`__proc_read_line_posix` (with the full poll-driven drain +
+'\n'-trailer accumulator), `__proc_wait_posix`,
+`__proc_kill_posix`, `__proc_reap_posix`, `__proc_free_posix`
+plus three pure-NURL buffer helpers (`__pc_scratch_reserve` /
+`__pc_line_reserve` / `__pc_drain_line`).
+
+The `NurlProcChild` struct was refactored to use 16 × i64 slots
+(128 bytes total) so the NURL side can address every field
+through `nurl_poke` / `nurl_peek` by slot number — the previous
+`int eof` / `int waited` / `pid_t pid` / `int fd_in` / `int
+fd_out` / `size_t scratch_len` mix is gone. C-side accessors
+(`err_kind` / `pid` / `read_line_len` / `eof` / `last_io_err`)
+unchanged.
+
+`process_spawn` and every `proc_*` wrapper gate on
+`posix_const "O_NONBLOCK" != -1` and dispatch to the NURL path
+on POSIX; Win32 / WASI fall through to the existing C stubs.
+The POSIX-side `nurl_proc_spawn_*` symbols collapse to 5-LOC
+link-time placeholders; `nurl_proc_spawn_free` keeps a trivial
+POSIX path (`free(c)`) since the real cleanup runs in
+`__proc_free_posix`.
+
+`runtime.c`: 7 804 → 7 559 LOC (−245). Bootstrap fixed point
+held on the lastgood-refresh round-trip; full corpus passes
+including `process_spawn_basic`, `mcp_stdio_basic`, every
+`http_server_*` test.
 
 **Residual C:** Win32 backend (~215 LOC, CreateProcess + reader
 threads) stays — the API surface is genuinely incompatible with
