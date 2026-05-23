@@ -63,7 +63,7 @@ genuinely irreducible.
 | § | Name                              | LOC | Category | Status | Disposition |
 |---|-----------------------------------|----:|----------|:------:|-------------|
 | 1  | Basic I/O                         |  206 | OS-glue   | [ ] | shrink — thin libc thunks |
-| 2  | String operations                 |  819 | Pure algo | [ ] | move to NURL (`stdlib/core/string.nu`) — keep SIMD CSV scanner only |
+| 2  | String operations                 |  819 | Pure algo | [-] | DEFERRED 2026-05-23 — every `nurl_str_*` is hot in `nurlc.nu`, and the bootstrap stage-0 Python compiler (`compiler/nurlc.py`) doesn't yet support the NURL features a clean replacement needs (`&`-FFI declarations, `i32` type, `& 255` bitwise on `i`, `. p i` pointer-index). Unblocks only after a Python-compiler upgrade (PURIFY.md §1A future item) or after deciding to retire `nurlc.py` in favour of a `nurlc_lastgood`-only bootstrap. |
 | 3  | Char classification               |   11 | Pure algo | [x] | DONE 2026-05-23 — `stdlib/core/char.nu` (35 NURL LOC); -10 C LOC; compiler preamble shrunk by 4 declare lines; both `nurlc.py` (typechecker.py + llvm_gen.py) and `nurlc.nu` no longer carry the FFI surface for it |
 | 4  | File & process                    |  403 | OS-glue   | [ ] | shrink — most logic is path massaging, do in NURL |
 | 5  | HashMap (string → i64)            |  101 | Compiler  | [ ] | replace with `stdlib/core/hashmap.nu` (already exists) |
@@ -220,25 +220,36 @@ digests, WebSocket handshake, MQTT auth) since per-op data is
 small. A future Phase-5 follow-on could SIMD-vectorise the
 transform in C if hot-path crypto bites.
 
-### Phase 5 — String operations (`§2`, ~700 LOC reduction)
+### Phase 5 — String operations (`§2`, ~700 LOC reduction) — DEFERRED 2026-05-23
 
-Move `nurl_str_eq`, `nurl_str_cat*`, `nurl_str_int`, `nurl_parse_*`,
-`nurl_strstr`, `nurl_memmem_range`, `nurl_str_ends_with`,
-`nurl_str_starts_with`, `nurl_str_sub` etc. into
-`stdlib/core/string.nu`. The pure-NURL versions are slower
-(no SSE2/PCMPEQ); preserve the SIMD CSV scanner (`nurl_csv_scan*`
-and the float-parse helper in §2 + §4) as the one performance-
-critical exception.
+Attempted; rolled back. Root blocker: every `nurl_str_*` is hot
+in `compiler/nurlc.nu`, and the bootstrap stage-0 Python compiler
+(`compiler/nurlc.py`) doesn't yet understand the NURL features
+that a clean pure-NURL replacement would lean on. Concretely the
+Python parser/typechecker stops on:
 
-**Risk:** the compiler itself is the heaviest `nurl_str_cat*`
-consumer. Self-host runtime might grow noticeably. Mitigation: a
-later phase can add a NURL-side `StringBuilder` to reduce
-allocations.
+  - `&`-FFI declarations (`& \`c\` @ memcmp …` — no rule for `&`
+    as a top-level decl-starter)
+  - `i32` type (Python has only `i` / `u` / `f` / `b` / `s` / `v`
+    base types — no sized-integer variants)
+  - `& 255` bitwise on `i` operands (Python requires `b` operands
+    for `&`)
+  - `. p i` pointer-index syntax with a variable index (Python's
+    `.` expects a struct field name identifier, not an expression)
 
-**Acceptance:** the 271-test corpus passes byte-identical; bootstrap
-fixed point holds. ~700 LOC C deleted (SIMD CSV stays). Self-host
-wall-time regression ≤ 1.5× the pre-phase baseline; if larger,
-defer or roll back.
+Each of these is a non-trivial extension to a 2k-LOC Python
+compiler that exists to bootstrap the self-host. The right unblock
+is one of:
+
+  - **Upgrade `nurlc.py`** to a broader subset (probably 200-300
+    LOC of Python: add `&`-FFI, sized ints, byte-loop primitives).
+  - **Retire `nurlc.py`** in favour of a `nurlc_lastgood`-only
+    bootstrap. Removes the Python dependency entirely; pure-NURL
+    rewrites of compiler-side helpers become unblocked because
+    every NURL feature `nurlc_lastgood` supports is available.
+
+Both are out of Phase 5 scope. Moving on; revisit when the bootstrap
+chain is reconsidered.
 
 ### Phase 6 — Threads / mutex / cond (`§19`, ~290 LOC reduction)
 
