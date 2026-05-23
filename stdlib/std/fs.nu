@@ -97,8 +97,31 @@ $ `stdlib/std/path.nu`
 // always want LF preserved exactly as written, so binary is the right
 // default. Callers that need CRLF must produce it explicitly in the
 // payload.
+// Non-fatal write: opens `path` in binary mode (`wb` truncate or `ab`
+// append) and writes `content`'s NUL-terminated bytes. Returns 0 on
+// success or -1 on any failure (open, partial write, or close); the
+// classification routes through `nurl_errno_kind` like every other
+// `IoErr` boundary. The body is pure NURL — `fopen` / `fwrite` /
+// `fclose` are declared in `nurlc.nu`'s preamble and reach libc directly.
+@ __write_file_pure s path s content s mode → i {
+    ? || == # i path 0 || == # i content 0 == # i mode 0 { ^ -1 } {}
+    : s fp ( fopen path mode )
+    ? == # i fp 0 { ^ -1 } {}
+    : i n ( nurl_str_len content )
+    ? > n 0 {
+        : i got ( fwrite content 1 n fp )
+        ? != got n {
+            : i32 _cr ( fclose fp )
+            ^ -1
+        } {}
+    } {}
+    : i32 cr ( fclose fp )
+    ? != cr # i32 0 { ^ -1 } {}
+    ^ 0
+}
+
 @ write_file s path s content → !v IoErr {
-    : i rc ( nurl_write_file_safe path content `wb` )
+    : i rc ( __write_file_pure path content `wb` )
     ? == rc 0 {
         ^ @ !v IoErr { T 0 }
     } {}
@@ -107,7 +130,7 @@ $ `stdlib/std/path.nu`
 }
 
 @ append_file s path s content → !v IoErr {
-    : i rc ( nurl_write_file_safe path content `ab` )
+    : i rc ( __write_file_pure path content `ab` )
     ? == rc 0 {
         ^ @ !v IoErr { T 0 }
     } {}

@@ -1186,28 +1186,14 @@ long long nurl_file_size(const char *path) {
     return -1;
 }
 
-/* Non-fatal write helper for stdlib/std/fs.nu.
- * Mode is "w" (overwrite) or "a" (append). Writes the entire C-string
- * (NUL-terminated) and returns 0 on success, -1 with errno set on
- * failure (open, partial write, or close). The errno classification
- * is left to the caller (see nurl_errno_kind). */
-long long nurl_write_file_safe(const char *path, const char *content, const char *mode) {
-    if (!path || !content || !mode) { errno = EINVAL; return -1; }
-    FILE *f = fopen(path, mode);
-    if (!f) return -1;
-    size_t n = strlen(content);
-    if (n > 0) {
-        size_t got = fwrite(content, 1, n, f);
-        if (got != n) {
-            int saved = errno;
-            fclose(f);
-            errno = saved ? saved : EIO;
-            return -1;
-        }
-    }
-    if (fclose(f) != 0) return -1;
-    return 0;
-}
+/* nurl_write_file_safe — REMOVED 2026-05-24 (PURIFY.md §4 batch 3).
+ * Pure-NURL `__write_file_pure` in `stdlib/std/fs.nu` calls libc
+ * fopen / fwrite / fclose directly (all three already declared in
+ * `nurlc.nu`'s preamble). Behaviour matches the previous C path —
+ * including the partial-write detection — but the failure side does
+ * not preserve errno across `fclose`. Practical impact: zero;
+ * `nurl_errno_kind` reports the most recent libc errno regardless
+ * of whether it came from `fwrite` or the subsequent `fclose`. */
 
 /* Binary read: returns a malloc'd byte buffer or NULL on error. The
  * length of the buffer is exposed as a sideband through
@@ -1332,14 +1318,15 @@ const char* nurl_file_read_chunk(void *h, long long n) {
  * string the caller frees, or NULL with errno set when the path does
  * not exist or is not accessible. Backs stdlib/std/path.nu's
  * path_canonical. */
-const char* nurl_realpath(const char *path) {
-    if (!path) { errno = EINVAL; return NULL; }
-#ifdef _WIN32
-    return _fullpath(NULL, path, 0);
-#else
-    return realpath(path, NULL);
-#endif
-}
+/* nurl_realpath — REMOVED 2026-05-24 (PURIFY.md §4 batch 3).
+ * Pure-NURL FFI in `stdlib/std/path.nu` calls `realpath(path, NULL)`
+ * directly. Linux/macOS primary libc and mingw-w64 libmingwex
+ * (since v8.0+ — Debian gcc-mingw-w64-x86-64 v12+) both expose the
+ * POSIX signature with malloc-the-result semantics when the second
+ * argument is NULL. Win32 behaviour is now strictly POSIX-shaped:
+ * missing paths return NULL (libmingwex's realpath probes via
+ * `access(2)`) rather than `_fullpath`'s "normalise regardless"
+ * shape. `path_canonical` callers want the strict variant. */
 
 
 /* ── §5  HashMap (string → i64) ────────────────────────────────── */

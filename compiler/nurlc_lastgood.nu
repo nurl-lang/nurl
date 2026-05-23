@@ -9223,7 +9223,6 @@
     ( emit `declare i64  @nurl_file_size(i8*)` )
     ( emit `declare i8*  @nurl_read_file_safe(i8*)` )
     ( emit `declare i8*  @nurl_read_file_mmap(i8*)` )
-    ( emit `declare i64  @nurl_write_file_safe(i8*, i8*, i8*)` )
     ( emit `declare i64  @nurl_errno_kind()` )
     // libm wrappers (nurl_sqrt / _fabs / _floor / _ceil / _round /
     // _pow / _log / _exp / _sin / _cos / _tan / _atan2) and
@@ -9439,9 +9438,6 @@
     // marked __ret_owned to avoid double-free against the manual free.
     ( nurl_sym_def syms `nurl_read_file_safe` `i8*` )
     ( nurl_sym_def syms `nurl_read_file_mmap` `i8*` )
-    ( nurl_sym_def syms `nurl_write_file_safe` `i64` )
-    ( nurl_sym_def syms `nurl_dir_create` `i64` )
-    ( nurl_sym_def syms `nurl_dir_remove` `i64` )
     ( nurl_sym_def syms `nurl_errno_kind` `i64` )
     // double-returning runtime functions
     ( nurl_sym_def syms `nurl_lex_fnum` `double` )
