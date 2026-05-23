@@ -73,7 +73,7 @@ genuinely irreducible.
 | 8  | "Last type" sideband              |   24 | Compiler  | [ ] | NURL globals |
 | 9  | Memory allocation                 |   39 | OS-glue   | [ ] | keep as 3-fn `malloc`/`free`/`realloc` thunk |
 | 10 | (REMOVED 2026-05-01)              |    9 |    —      | [x] | already gone |
-| 11 | Math (libm bridge)                |   91 | FFI       | [ ] | convert to pure-NURL `& \`m\`` FFI |
+| 11 | Math (libm bridge)                |   91 | FFI       | [~] | PARTIAL 2026-05-23 — 12 libm wrappers + iabs/ipow removed (pure-NURL FFI to libm in `stdlib/std/float.nu`; pure NURL algorithms for `int_abs`/`int_pow` in `stdlib/std/int.nu`); -17 C LOC + 14 preamble declares + 14 sym_def entries. Bit access, isnan/isinf, strtod parser retained (type-punning + static state). |
 | 12 | Time                              |   67 | OS-glue   | [ ] | pure-NURL FFI to `clock_gettime` + `nanosleep` |
 | 13 | CLI tooling                       |  219 | OS-glue   | [ ] | shrink — env/cwd/dir-list are simple wrappers |
 | 14 | HTTP client (libcurl)             |  665 | Lib-cache | [ ] | shrink to libcurl-easy bridge only; high-level moves to NURL |
@@ -144,26 +144,39 @@ visibility is at the next syscall (`nurl_eprint` in every
 `log_*` call performs an implicit fence via `write(2)`). Same
 guarantee the C version offered — no regression.
 
-### Phase 3 — Pure-NURL FFI for math + time + gzip (`§11+§12+§22`, ~237 LOC reduction)
+### Phase 3 — Pure-NURL FFI for math + time + gzip (`§11+§12+§22`, ~237 LOC reduction) — PARTIAL 2026-05-23
 
-Three sections that are already thin libc/libm/libz wrappers.
-Re-declare each symbol directly via the `& \`m\`` / `& \`c\`` /
-`& \`z\`` pattern (template: `stdlib/ext/postgres.nu`). The
-resulting NURL module is ~30 LOC each; the C bridge disappears.
+**§11 (libm bridge) — done.** All twelve trivial libm pass-
+throughs (`nurl_sqrt` / `_fabs` / `_floor` / `_ceil` / `_round` /
+`_pow` / `_log` / `_exp` / `_sin` / `_cos` / `_tan` / `_atan2`)
+deleted; `stdlib/std/float.nu` now `& `m` @ sqrt f x → f` etc.
+directly, with the `float_*` wrappers calling them in one hop.
+Likewise the two integer helpers — `nurl_iabs` / `nurl_ipow` —
+moved to pure NURL in `stdlib/std/int.nu` (saturating-LLONG_MIN
+abs + exponentiation-by-squaring). Compiler preamble shrunk by
+14 declare lines + 14 sym_def entries.
 
-For `§22` (gzip), the existing `z_stream` opaque-pointer bridge
-(`nurl_gzip_compress` / `_decompress`) stays — `z_stream`'s
-`sizeof` is platform-specific and only worth the C bridge for the
-two streaming helpers. The rest of §22 (level constants, error
-mapping) moves to NURL.
+**§11 retained for cause.** `nurl_f64_bits` / `_from_bits` /
+`nurl_f32_from_bits` need memcpy-based type punning (NURL has no
+bit-pun primitive). `nurl_is_nan` / `_is_inf` wrap libm macros,
+not real symbols, so a portable C wrapper is the safe bridge.
+`nurl_str_to_float_safe` / `nurl_str_float_value` rely on a
+static sideband for the parsed value — refactoring later.
 
-For `§12` (time), `clock_gettime` + `nanosleep` are the only real
-syscalls; everything else (calendar arithmetic) is already pure
-NURL in `stdlib/std/time.nu`.
+**§12 + §22 — deferred.** Re-reading both confirmed they are
+already minimal. §12's cross-platform branching (`clock_gettime`
++ `nanosleep` on POSIX vs `GetSystemTimeAsFileTime` +
+`QueryPerformanceCounter` + `Sleep` on Win32) would force a
+`#ifdef`-laden NURL module that doesn't read better than the C.
+§22's `z_stream` opaque-pointer bridge was already documented as
+the irreducible core; there's no level-table or error-mapping in
+C-side to move (those are NURL-side). Both stay as-is.
 
-**Acceptance:** every test using `now_ms` / `monotonic_ns` /
-`sleep_ms` / math intrinsics / gzip round-trip stays green;
-runtime.c drops ~237 LOC.
+Net delta: runtime.c 8 872 → 8 855 LOC (−17). Below the planned
+~237 because §12 / §22 stayed; ship the wins, defer the rest.
+
+**Acceptance:** every test using float/int math passes byte-
+identical; bootstrap fixed point holds.
 
 ### Phase 4 — Crypto (`§17`, ~600 LOC reduction)
 

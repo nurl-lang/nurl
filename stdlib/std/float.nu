@@ -1,8 +1,11 @@
 // stdlib/std/float.nu — IEEE-754 double helpers (libm bridge)
 //
-// Thin wrappers over the runtime libm bindings (`nurl_sqrt`, `nurl_sin`, …).
-// All trigonometric functions take/return radians; `atan2 y x` returns the
-// principal angle of the point (x, y).
+// Pure-NURL FFI to libm — `sqrt` / `fabs` / `sin` / `cos` / … are
+// declared directly via `& `m` @ … → …` below, no `runtime.c`
+// pass-through. (Old C bridge in §11 deleted 2026-05-23 as
+// PURIFY.md Phase 3.) All trigonometric functions take/return
+// radians; `atan2 y x` returns the principal angle of the point
+// (x, y).
 //
 //   ( float_abs   x )       → f
 //   ( float_sqrt  x )       → f
@@ -47,31 +50,52 @@ $ `stdlib/core/errors.nu`
 : f LN_2 0.6931471805599453
 : f LN_10 2.302585092994046
 
-// ── libm wrappers ──────────────────────────────────────────────────
+// ── libm FFI (pure NURL — direct linker calls to libm) ────────────
+//
+// On glibc/musl/macOS-libsystem these are plain `double f(double)`
+// exports from libm.so / libSystem; on Windows MSVCRT/UCRT they're
+// part of the C runtime and resolve under the same name. `m` is
+// in `__ffi_lib_check`'s whitelist so no `stdlib/runtime.m`
+// sentinel is needed.
 
-@ float_abs f x → f { ^ ( nurl_fabs x ) }
+& `m` @ sqrt   f x → f
+& `m` @ fabs   f x → f
+& `m` @ floor  f x → f
+& `m` @ ceil   f x → f
+& `m` @ round  f x → f
+& `m` @ log    f x → f
+& `m` @ exp    f x → f
+& `m` @ sin    f x → f
+& `m` @ cos    f x → f
+& `m` @ tan    f x → f
+& `m` @ pow    f x f y → f
+& `m` @ atan2  f y f x → f
 
-@ float_sqrt f x → f { ^ ( nurl_sqrt x ) }
+// ── float_* wrappers ──────────────────────────────────────────────
 
-@ float_floor f x → f { ^ ( nurl_floor x ) }
+@ float_abs f x → f { ^ ( fabs x ) }
 
-@ float_ceil f x → f { ^ ( nurl_ceil x ) }
+@ float_sqrt f x → f { ^ ( sqrt x ) }
 
-@ float_round f x → f { ^ ( nurl_round x ) }
+@ float_floor f x → f { ^ ( floor x ) }
 
-@ float_log f x → f { ^ ( nurl_log x ) }
+@ float_ceil f x → f { ^ ( ceil x ) }
 
-@ float_exp f x → f { ^ ( nurl_exp x ) }
+@ float_round f x → f { ^ ( round x ) }
 
-@ float_sin f x → f { ^ ( nurl_sin x ) }
+@ float_log f x → f { ^ ( log x ) }
 
-@ float_cos f x → f { ^ ( nurl_cos x ) }
+@ float_exp f x → f { ^ ( exp x ) }
 
-@ float_tan f x → f { ^ ( nurl_tan x ) }
+@ float_sin f x → f { ^ ( sin x ) }
 
-@ float_pow f x f y → f { ^ ( nurl_pow x y ) }
+@ float_cos f x → f { ^ ( cos x ) }
 
-@ float_atan2 f y f x → f { ^ ( nurl_atan2 y x ) }
+@ float_tan f x → f { ^ ( tan x ) }
+
+@ float_pow f x f y → f { ^ ( pow x y ) }
+
+@ float_atan2 f y f x → f { ^ ( atan2 y x ) }
 
 // ── Predicates ─────────────────────────────────────────────────────
 

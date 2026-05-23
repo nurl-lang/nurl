@@ -2400,19 +2400,22 @@ void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
  * ─────────────────────────────────────────────────────────────────*/
 
 /* ── §11  Math (libm bridge) ────────────────────────────────────── */
-
-double nurl_sqrt (double x)            { return sqrt (x); }
-double nurl_fabs (double x)            { return fabs (x); }
-double nurl_floor(double x)            { return floor(x); }
-double nurl_ceil (double x)            { return ceil (x); }
-double nurl_round(double x)            { return round(x); }
-double nurl_pow  (double x, double y)  { return pow  (x, y); }
-double nurl_log  (double x)            { return log  (x); }
-double nurl_exp  (double x)            { return exp  (x); }
-double nurl_sin  (double x)            { return sin  (x); }
-double nurl_cos  (double x)            { return cos  (x); }
-double nurl_tan  (double x)            { return tan  (x); }
-double nurl_atan2(double y, double x)  { return atan2(y, x); }
+/*
+ * libm pass-throughs (sqrt / fabs / floor / ceil / round / pow / log /
+ * exp / sin / cos / tan / atan2) — REMOVED 2026-05-23 (PURIFY.md
+ * Phase 3). NURL now calls libm directly via `& `m` @ … → …` in
+ * `stdlib/std/float.nu`; the C wrappers were a redundant indirection.
+ * Same removal for `nurl_iabs` / `nurl_ipow` (moved to pure-NURL
+ * algorithms in `stdlib/std/int.nu`).
+ *
+ * Retained here because they can't be a pure-FFI bridge:
+ *   - `nurl_f64_bits` / `_from_bits` / `nurl_f32_from_bits` — memcpy
+ *     type punning (NURL has no bit-pun primitive)
+ *   - `nurl_is_nan` / `_is_inf` — isnan/isinf are libm macros, not
+ *     stable C symbols; keep the C wrapper for portability
+ *   - `nurl_str_to_float_safe` / `nurl_str_float_value` — strtod
+ *     plus a static side-channel
+ */
 
 /* IEEE-754 bit access for the MessagePack codec (stdlib/ext/msgpack.nu),
  * which reads and writes float32 / float64 in their exact wire bit
@@ -2445,26 +2448,6 @@ double nurl_f32_from_bits(long long bits) {
  * ordered, so the usual `x != x` trick reports false for NaN. */
 long long nurl_is_nan(double x) { return isnan(x) ? 1 : 0; }
 long long nurl_is_inf(double x) { return isinf(x) ? 1 : 0; }
-
-/* Integer absolute value with overflow protection for LLONG_MIN. */
-long long nurl_iabs(long long n) {
-    if (n == (long long)(1ULL << 63)) return (long long)(1ULL << 63); /* saturate */
-    return n < 0 ? -n : n;
-}
-
-/* Integer power with non-negative exponent. Returns 0 when y < 0
- * (caller can use float_pow for that case). */
-long long nurl_ipow(long long x, long long y) {
-    if (y < 0) return 0;
-    long long r = 1;
-    long long b = x;
-    while (y > 0) {
-        if (y & 1) r *= b;
-        y >>= 1;
-        if (y) b *= b;
-    }
-    return r;
-}
 
 /* Strict double parser. Returns 1 on success, 0 on failure.
  * On success the parsed value is stored in a sideband retrievable via

@@ -8969,22 +8969,13 @@
     ( emit `declare i64  @nurl_dir_remove(i8*)` )
     ( emit `declare i64  @nurl_errno_kind()` )
     ( emit `declare i64  @nurl_str_ends(i8*, i8*)` )
-    ( emit `declare double @nurl_sqrt(double)` )
-    ( emit `declare double @nurl_fabs(double)` )
-    ( emit `declare double @nurl_floor(double)` )
-    ( emit `declare double @nurl_ceil(double)` )
-    ( emit `declare double @nurl_round(double)` )
-    ( emit `declare double @nurl_pow(double, double)` )
-    ( emit `declare double @nurl_log(double)` )
-    ( emit `declare double @nurl_exp(double)` )
-    ( emit `declare double @nurl_sin(double)` )
-    ( emit `declare double @nurl_cos(double)` )
-    ( emit `declare double @nurl_tan(double)` )
-    ( emit `declare double @nurl_atan2(double, double)` )
+    // libm wrappers (nurl_sqrt / _fabs / _floor / _ceil / _round /
+    // _pow / _log / _exp / _sin / _cos / _tan / _atan2) and
+    // nurl_iabs / _ipow — moved to pure-NURL (libm direct FFI in
+    // stdlib/std/float.nu; iabs/ipow as plain @-fns in
+    // stdlib/std/int.nu) as PURIFY.md Phase 3 (2026-05-23).
     ( emit `declare i64    @nurl_is_nan(double)` )
     ( emit `declare i64    @nurl_is_inf(double)` )
-    ( emit `declare i64  @nurl_iabs(i64)` )
-    ( emit `declare i64  @nurl_ipow(i64, i64)` )
     ( emit `declare i64    @nurl_str_to_float_safe(i8*)` )
     ( emit `declare double @nurl_str_float_value()` )
     ( emit `declare i64  @nurl_now_ms()` )
@@ -9209,23 +9200,12 @@
     ( nurl_sym_def syms `nurl_str_to_float` `double` )
     ( nurl_sym_def syms `nurl_str_float_value` `double` )
     ( nurl_sym_def syms `nurl_parse_float_range` `double` )
-    ( nurl_sym_def syms `nurl_sqrt` `double` )
-    ( nurl_sym_def syms `nurl_fabs` `double` )
-    ( nurl_sym_def syms `nurl_floor` `double` )
-    ( nurl_sym_def syms `nurl_ceil` `double` )
-    ( nurl_sym_def syms `nurl_round` `double` )
-    ( nurl_sym_def syms `nurl_pow` `double` )
-    ( nurl_sym_def syms `nurl_log` `double` )
-    ( nurl_sym_def syms `nurl_exp` `double` )
-    ( nurl_sym_def syms `nurl_sin` `double` )
-    ( nurl_sym_def syms `nurl_cos` `double` )
-    ( nurl_sym_def syms `nurl_tan` `double` )
-    ( nurl_sym_def syms `nurl_atan2` `double` )
-    // i64-returning math/time/parse helpers
+    // libm wrappers + iabs/ipow removed in PURIFY.md Phase 3 — see
+    // `stdlib/std/float.nu` (libm FFI) and `stdlib/std/int.nu`
+    // (pure-NURL int_abs / int_pow).
+    // i64-returning math/parse helpers (still C-side)
     ( nurl_sym_def syms `nurl_is_nan` `i64` )
     ( nurl_sym_def syms `nurl_is_inf` `i64` )
-    ( nurl_sym_def syms `nurl_iabs` `i64` )
-    ( nurl_sym_def syms `nurl_ipow` `i64` )
     ( nurl_sym_def syms `nurl_str_to_float_safe` `i64` )
     ( nurl_sym_def syms `nurl_parse_int_range` `i64` )
     ( nurl_sym_def syms `nurl_memcmp_lex` `i64` )
