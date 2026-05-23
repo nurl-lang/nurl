@@ -366,7 +366,7 @@ full-Phase-7 target: ~150-200 LOC, far below the 500 the original
 plan assumed (the plan double-counted §13's getenv/getcwd and
 overestimated how much of §4's mmap/stat paths can leave C).
 
-### Phase 8 — Process spawn (`§16 + §16b`, ~700 LOC reduction) — BATCH 1 LANDED 2026-05-23
+### Phase 8 — Process spawn (`§16 + §16b`, ~700 LOC reduction) — BATCH 2 LANDED 2026-05-23
 
 `fork`/`execvp`/`pipe`/`poll`/`dup2`/`close`/`waitpid` are all libc
 syscalls; pure-NURL FFI can call each one directly. The duplex-
@@ -402,14 +402,38 @@ this batch; this is the foundation for batches 2 + 3.
     exit status via the new helpers. End-to-end proof that the
     NURL→pthread_create→execvp→waitpid path works under bootstrap.
 
-**Batch 2 — port `nurl_proc_run` POSIX backend (~240 LOC C → NURL)**:
-fork + 4 × pipe + CLOEXEC sideband + dup2 setup + execvp + poll
-drain loop + waitpid + errno-mapped err_kind. The CLOEXEC sideband
-(parent reads `int errno` from exec-error pipe; EOF without bytes
-= exec succeeded) is the tricky part — needs `cell_for_native "int"`
-storage plus pipe-with-FD_CLOEXEC. NurlProcResult struct may stay
-C-side as an opaque allocation, populated through small per-field
-setters; or move to NURL Output struct with named fields.
+**Batch 2 landed** — `nurl_proc_run` POSIX backend ported to pure NURL.
+
+`stdlib/std/process.nu` gained `__process_run_posix` (~280 LOC) that
+executes the full fork + 4 × pipe + CLOEXEC sideband + dup2 setup +
+execvp + poll drain loop + waitpid + errno-mapped err_kind sequence
+through the FFI surface in `stdlib/core/posix.nu`. The
+`NurlProcResult` heap struct stays C-side as an opaque 48-byte
+allocation (slot 0 = exit_code, 1 = err_kind, 2 = stdout_buf,
+3 = stdout_len, 4 = stderr_buf, 5 = stderr_len); NURL populates it
+via `nurl_poke` and the existing `nurl_proc_*` accessors project
+into it unchanged.
+
+`process_run` gates on `posix_const "O_NONBLOCK" != -1` and dispatches
+to the NURL path on POSIX; Win32 / WASI fall through to the runtime
+`nurl_proc_run` (whose POSIX body is now a 5-LOC link-time placeholder).
+
+A language-level prerequisite shipped alongside: `||` and `&&` are
+now own lexer tokens with strict binary arity (bool-only,
+short-circuit). The legacy `|` / `&` chain semantics — N tokens take
+N+1 operands and dispatch bitwise vs. logical by operand type —
+stays intact for everything that uses it; the new tokens unblock
+chains like `( a || b || c )` whose `| | | a b c` equivalent is
+less readable. Three changes total: lexer (`stdlib/runtime.c` two
+`make_tok` cases), parser (`compiler/nurlc.nu` two `gen_*`-arms),
+bootstrap snapshot refreshed in the same commit.
+
+`runtime.c`: 8 197 → 7 984 LOC (−213 from §16's POSIX path; the
+~10-LOC helper `nurl__proc_close_pair` + a re-included POSIX header
+block stays until §16b's `nurl_proc_spawn` migrates in batch 3).
+Bootstrap held first try; full corpus passes including
+`process_basic`, `process_spawn_basic`, every `http_server_*`,
+`mcp_stdio_basic`, `postgres_basic`.
 
 **Batch 3 — port `nurl_proc_spawn` POSIX backend (~227 LOC)**:
 same fork-spawn shape but keeps the child's stdin/stdout/stderr

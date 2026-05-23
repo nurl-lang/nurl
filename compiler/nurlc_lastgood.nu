@@ -74,6 +74,8 @@
 : i TT_ELLIPSIS 43
 : i TT_PUB 44
 : i TT_CARETCARET 45  // `^^` — bitwise / logical XOR (lexer pairs `^^`)
+: i TT_OROR       46  // `||` — short-circuit logical OR  (binary, bool only)
+: i TT_ANDAND     47  // `&&` — short-circuit logical AND (binary, bool only)
 
 // ── Abort helpers ─────────────────────────────────────────────────
 
@@ -1234,9 +1236,40 @@
     ? == tt TT_AT ( gen_agg_lit lex syms cg )
     ? == tt TT_BACKSLASH ( gen_backslash_expr lex syms cg )
     ? == tt TT_LBRACK ( gen_slice_literal lex syms cg )
+    ? == tt TT_OROR ( gen_oror lex syms cg )
+    ? == tt TT_ANDAND ( gen_andand lex syms cg )
     ? ( is_binop_tt tt ) ( gen_binary lex syms cg )
     ? == tt TT_TILDE ( gen_complement lex syms cg )
     ( gen_ident lex syms cg )
+}
+
+// ── `||` / `&&` — strict binary short-circuit (bool only) ─────────────
+// Unlike `|` / `&` (which dispatch to bitwise vs short-circuit based on
+// operand type and chain N+1 operands per N tokens), the two-char
+// variants are fixed arity 2 and require both operands to be bool.
+// Useful when a chain like `( cond1 || cond2 || cond3 )` would be more
+// readable than the canonical `| | cond1 cond2 cond3`. The compiled
+// IR is identical to gen_logical_or / gen_logical_and's i1 path.
+@ gen_oror i lex i syms i cg → s {
+    ( nurl_lex_advance lex )
+    : s lv ( gen_expr lex syms cg )
+    : s lt ( nurl_get_last_type )
+    ? ! ( seq lt `i1` )
+    { ( die lex `operator || requires bool operands — left operand has non-bool type` ) }
+    {}
+    : s left_lbl ( nurl_sym_get syms `__cur_lbl__` )
+    ^ ( gen_logical_or lv left_lbl lex syms cg )
+}
+
+@ gen_andand i lex i syms i cg → s {
+    ( nurl_lex_advance lex )
+    : s lv ( gen_expr lex syms cg )
+    : s lt ( nurl_get_last_type )
+    ? ! ( seq lt `i1` )
+    { ( die lex `operator && requires bool operands — left operand has non-bool type` ) }
+    {}
+    : s left_lbl ( nurl_sym_get syms `__cur_lbl__` )
+    ^ ( gen_logical_and lv left_lbl lex syms cg )
 }
 
 @ gen_complement i lex i syms i cg → s {

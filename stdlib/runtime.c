@@ -1504,6 +1504,8 @@ void nurl_map_free(long long handle) {
 #define LTT_ELLIPSIS   43
 #define LTT_PUB        44
 #define LTT_CARETCARET 45   /* `^^` — bitwise / logical XOR operator */
+#define LTT_OROR       46   /* `||` — short-circuit logical OR (binary, bool only) */
+#define LTT_ANDAND     47   /* `&&` — short-circuit logical AND (binary, bool only) */
 
 typedef struct {
     int         type;
@@ -1783,6 +1785,8 @@ static NurlToken lex_next_tok(NurlLex *lx) {
         if (c == '>' && c2 == '>') { lx->pos += 2; return make_tok(LTT_SHR,       ">>", 0, line); }
         if (c == '?' && c2 == '?') { lx->pos += 2; return make_tok(LTT_QUESTQUEST, "??", 0, line); }
         if (c == '^' && c2 == '^') { lx->pos += 2; return make_tok(LTT_CARETCARET, "^^", 0, line); }
+        if (c == '|' && c2 == '|') { lx->pos += 2; return make_tok(LTT_OROR,       "||", 0, line); }
+        if (c == '&' && c2 == '&') { lx->pos += 2; return make_tok(LTT_ANDAND,     "&&", 0, line); }
     }
 
     /* single-char operators */
@@ -3951,8 +3955,24 @@ static int nurl__proc_buf_append(NurlProcBuf *b, const char *src, size_t n) {
 }
 
 #if !defined(_WIN32) && !defined(__wasi__)
-/* ── POSIX backend (Linux + macOS) ───────────────────────────── */
+/* ── POSIX backend: superseded by pure-NURL stdlib/std/process.nu ──
+ *
+ * PURIFY Phase 8 batch 2 (2026-05-23) moved the entire ~225 LOC
+ * fork+pipe+poll+waitpid+execvp body into NURL via the FFI surface
+ * in stdlib/core/posix.nu. process_run gates on
+ * `posix_const "O_NONBLOCK" != -1` and dispatches to the NURL
+ * implementation on every POSIX target; this stub remains only for
+ * link-time symbol resolution. */
 
+long long nurl_proc_run(const char *cmd, const char *argv_buf,
+                        long long argc, const char *stdin_blob) {
+    (void)cmd; (void)argv_buf; (void)argc; (void)stdin_blob;
+    return 0;
+}
+
+/* Helper retained for the §16b spawn path (still C-side until Phase 8
+ * batch 3 lands). Same POSIX include block the deleted §16 backend
+ * used; safe to share. */
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -3964,230 +3984,6 @@ static void nurl__proc_close_pair(int p[2]) {
     if (p[0] >= 0) close(p[0]);
     if (p[1] >= 0) close(p[1]);
     p[0] = p[1] = -1;
-}
-
-long long nurl_proc_run(const char *cmd, const char *argv_buf,
-                        long long argc, const char *stdin_blob) {
-    NurlProcResult *r = (NurlProcResult*)calloc(1, sizeof(NurlProcResult));
-    if (!r) return 0;
-    if (!cmd || !*cmd) {
-        r->err_kind   = NURL_PROC_ERR_NOTFOUND;
-        r->stdout_buf = strdup("");
-        r->stderr_buf = strdup("");
-        return (long long)(uintptr_t)r;
-    }
-    if (argc < 0) argc = 0;
-    const char *const *argv_user = (const char *const *)argv_buf;
-
-    int sin_p[2]  = {-1,-1};
-    int sout_p[2] = {-1,-1};
-    int serr_p[2] = {-1,-1};
-    int err_p[2]  = {-1,-1};
-
-    if (pipe(sin_p)  < 0 ||
-        pipe(sout_p) < 0 ||
-        pipe(serr_p) < 0 ||
-        pipe(err_p)  < 0) {
-        nurl__proc_close_pair(sin_p);
-        nurl__proc_close_pair(sout_p);
-        nurl__proc_close_pair(serr_p);
-        nurl__proc_close_pair(err_p);
-        r->err_kind   = NURL_PROC_ERR_IO;
-        r->stdout_buf = strdup("");
-        r->stderr_buf = strdup("");
-        return (long long)(uintptr_t)r;
-    }
-
-    /* CLOEXEC on the exec-error sideband write end so it auto-closes
-     * on a successful exec — that EOF is how the parent learns exec
-     * worked. */
-    int efl = fcntl(err_p[1], F_GETFD);
-    if (efl != -1) fcntl(err_p[1], F_SETFD, efl | FD_CLOEXEC);
-
-    /* argv layout: [cmd, user[0], ..., user[argc-1], NULL] */
-    char **full = (char**)malloc(sizeof(char*) * (size_t)(argc + 2));
-    if (!full) {
-        nurl__proc_close_pair(sin_p);
-        nurl__proc_close_pair(sout_p);
-        nurl__proc_close_pair(serr_p);
-        nurl__proc_close_pair(err_p);
-        r->err_kind   = NURL_PROC_ERR_OTHER;
-        r->stdout_buf = strdup("");
-        r->stderr_buf = strdup("");
-        return (long long)(uintptr_t)r;
-    }
-    full[0] = (char*)cmd;
-    for (long long i = 0; i < argc; i++) {
-        full[i + 1] = argv_user && argv_user[i] ? (char*)argv_user[i] : (char*)"";
-    }
-    full[argc + 1] = NULL;
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        free(full);
-        nurl__proc_close_pair(sin_p);
-        nurl__proc_close_pair(sout_p);
-        nurl__proc_close_pair(serr_p);
-        nurl__proc_close_pair(err_p);
-        r->err_kind   = NURL_PROC_ERR_IO;
-        r->stdout_buf = strdup("");
-        r->stderr_buf = strdup("");
-        return (long long)(uintptr_t)r;
-    }
-    if (pid == 0) {
-        /* child */
-        if (sin_p[0]  != 0) dup2(sin_p[0],  0);
-        if (sout_p[1] != 1) dup2(sout_p[1], 1);
-        if (serr_p[1] != 2) dup2(serr_p[1], 2);
-        close(sin_p[0]);  close(sin_p[1]);
-        close(sout_p[0]); close(sout_p[1]);
-        close(serr_p[0]); close(serr_p[1]);
-        close(err_p[0]);
-        execvp(cmd, full);
-        /* exec failed — report errno over the sideband and bail. */
-        int e = errno;
-        ssize_t wn = write(err_p[1], &e, sizeof(e));
-        (void)wn;
-        _exit(127);
-    }
-    /* parent */
-    free(full);
-    close(sin_p[0]);   sin_p[0]  = -1;
-    close(sout_p[1]);  sout_p[1] = -1;
-    close(serr_p[1]);  serr_p[1] = -1;
-    close(err_p[1]);   err_p[1]  = -1;
-
-    /* Non-blocking stdout/stderr so poll-driven drain can't deadlock. */
-    int fl;
-    fl = fcntl(sout_p[0], F_GETFL); if (fl != -1) fcntl(sout_p[0], F_SETFL, fl | O_NONBLOCK);
-    fl = fcntl(serr_p[0], F_GETFL); if (fl != -1) fcntl(serr_p[0], F_SETFL, fl | O_NONBLOCK);
-
-    /* Write stdin (blocking). Ignore SIGPIPE locally so an early
-     * child exit doesn't take the parent down. */
-    void (*old_pipe)(int) = signal(SIGPIPE, SIG_IGN);
-    if (stdin_blob && *stdin_blob) {
-        size_t total = strlen(stdin_blob);
-        size_t off = 0;
-        while (off < total) {
-            ssize_t n = write(sin_p[1], stdin_blob + off, total - off);
-            if (n < 0) {
-                if (errno == EINTR) continue;
-                break;
-            }
-            off += (size_t)n;
-        }
-    }
-    close(sin_p[1]); sin_p[1] = -1;
-    signal(SIGPIPE, old_pipe);
-
-    NurlProcBuf out_buf = {0}, err_buf = {0};
-    char tmp[4096];
-    int sout_open = 1, serr_open = 1;
-    int io_err = 0;
-    while (sout_open || serr_open) {
-        struct pollfd pfds[2];
-        int n = 0;
-        if (sout_open) { pfds[n].fd = sout_p[0]; pfds[n].events = POLLIN; n++; }
-        if (serr_open) { pfds[n].fd = serr_p[0]; pfds[n].events = POLLIN; n++; }
-        int pr = poll(pfds, n, -1);
-        if (pr < 0) {
-            if (errno == EINTR) continue;
-            io_err = 1;
-            break;
-        }
-        for (int i = 0; i < n; i++) {
-            short rev = pfds[i].revents;
-            if (!rev) continue;
-            int fd = pfds[i].fd;
-            NurlProcBuf *target = (fd == sout_p[0]) ? &out_buf : &err_buf;
-            int *open_flag      = (fd == sout_p[0]) ? &sout_open : &serr_open;
-            int got_eof = 0;
-            for (;;) {
-                ssize_t rd = read(fd, tmp, sizeof(tmp));
-                if (rd > 0) {
-                    if (!nurl__proc_buf_append(target, tmp, (size_t)rd)) {
-                        io_err = 1;
-                        got_eof = 1;
-                        break;
-                    }
-                } else if (rd == 0) {
-                    got_eof = 1;
-                    break;
-                } else {
-                    if (errno == EINTR) continue;
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-                    io_err = 1;
-                    got_eof = 1;
-                    break;
-                }
-            }
-            if (got_eof || (rev & (POLLHUP | POLLERR))) {
-                /* drain any remaining bytes once more before closing */
-                for (;;) {
-                    ssize_t rd = read(fd, tmp, sizeof(tmp));
-                    if (rd > 0) {
-                        if (!nurl__proc_buf_append(target, tmp, (size_t)rd)) {
-                            io_err = 1;
-                            break;
-                        }
-                    } else break;
-                }
-                *open_flag = 0;
-            }
-        }
-    }
-    close(sout_p[0]); sout_p[0] = -1;
-    close(serr_p[0]); serr_p[0] = -1;
-
-    /* Drain exec-error sideband. EOF without bytes ⇒ exec succeeded. */
-    int child_errno = 0;
-    {
-        size_t got = 0;
-        for (;;) {
-            ssize_t rd = read(err_p[0], (char*)&child_errno + got, sizeof(child_errno) - got);
-            if (rd > 0) {
-                got += (size_t)rd;
-                if (got >= sizeof(child_errno)) break;
-            } else if (rd == 0) {
-                break;
-            } else if (errno == EINTR) {
-                continue;
-            } else {
-                break;
-            }
-        }
-        close(err_p[0]); err_p[0] = -1;
-    }
-
-    int status = 0;
-    pid_t w;
-    do { w = waitpid(pid, &status, 0); } while (w < 0 && errno == EINTR);
-    if (w < 0) io_err = 1;
-
-    if (child_errno != 0) {
-        r->exit_code = -1;
-        r->err_kind  = (child_errno == ENOENT)
-                          ? NURL_PROC_ERR_NOTFOUND
-                          : NURL_PROC_ERR_EXEC_FAILED;
-    } else if (io_err) {
-        r->exit_code = -1;
-        r->err_kind  = NURL_PROC_ERR_IO;
-    } else if (WIFEXITED(status)) {
-        r->exit_code = (long long)WEXITSTATUS(status);
-        r->err_kind  = NURL_PROC_ERR_OK;
-    } else if (WIFSIGNALED(status)) {
-        r->exit_code = (long long)(128 + WTERMSIG(status));
-        r->err_kind  = NURL_PROC_ERR_OK;
-    } else {
-        r->exit_code = -1;
-        r->err_kind  = NURL_PROC_ERR_OTHER;
-    }
-
-    r->stdout_buf = out_buf.data ? out_buf.data : strdup("");
-    r->stdout_len = (long long)out_buf.len;
-    r->stderr_buf = err_buf.data ? err_buf.data : strdup("");
-    r->stderr_len = (long long)err_buf.len;
-    return (long long)(uintptr_t)r;
 }
 
 #elif defined(_WIN32) && !defined(__wasi__)
