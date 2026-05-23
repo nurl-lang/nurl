@@ -2355,6 +2355,10 @@ long long nurl_native_constant(const char *name) {
     if (strcmp(name, "EINTR")       == 0) return EINTR;
     if (strcmp(name, "EPIPE")       == 0) return EPIPE;
 #endif
+    /* ERANGE — surfaced cross-platform (defined in `<errno.h>` everywhere)
+     * so `stdlib/ext/env.nu`'s pure-NURL `getcwd` retry loop can branch on
+     * "buffer too small" without baking a platform-specific integer. */
+    if (strcmp(name, "ERANGE")      == 0) return ERANGE;
     /* POSIX `<time.h>` clock identifiers — exposed unconditionally
      * because `<time.h>` is included at file scope above, and every
      * supported target's `clock_gettime` (Linux/macOS libc, MinGW
@@ -2561,9 +2565,19 @@ double nurl_str_float_value(void) { return g_last_parsed_float; }
  * 4 `nurl_sym_def` entries. The bootstrap fixed point held on the
  * lastgood-refresh round-trip. */
 
-/* ── §13  CLI tooling: env, cwd, stdin slurp, directory listing ── */
-/* All const char* returns are heap-owned (Phase 2B) — strdup on success,
- * NULL on failure (so callers can map to ?T or fall back). */
+/* ── §13  CLI tooling: stdin slurp, directory listing ──────────────── */
+/* PURIFY §13 batch 1 (2026-05-24): `nurl_env_get` / `_env_set` /
+ * `_env_unset` / `_cwd` / `_chdir` moved to pure-NURL FFI in
+ * `stdlib/ext/env.nu`. Both libc flavours we target (Linux/macOS
+ * primary libc, mingw-w64 libmingwex) expose the POSIX names
+ * `getenv` / `setenv` / `unsetenv` / `getcwd` / `chdir` with the
+ * same ABI, so no `#ifdef` gate stays in NURL. `ERANGE` added to
+ * `nurl_native_constant` for the getcwd retry loop.
+ *
+ * Remaining C: `nurl_read_all_stdin` (stdio fread loop) and the
+ * `nurl_dir_list_*` opaque DIR* / FindFirstFile iterator state cache.
+ * All `const char*` returns are heap-owned — strdup on success, NULL
+ * on failure (so callers can map to ?T or fall back). */
 
 #ifdef _WIN32
 #  include <io.h>          /* _getcwd */
@@ -2572,66 +2586,6 @@ double nurl_str_float_value(void) { return g_last_parsed_float; }
 #  include <unistd.h>      /* getcwd, chdir, setenv, unsetenv */
 #  include <dirent.h>      /* opendir, readdir, closedir */
 #endif
-
-const char* nurl_env_get(const char *name) {
-    if (!name) return NULL;
-    const char *v = getenv(name);
-    if (!v) return NULL;
-    return strdup(v);
-}
-
-long long nurl_env_set(const char *name, const char *value) {
-    if (!name || !value) { errno = EINVAL; return -1; }
-#ifdef _WIN32
-    /* _putenv_s returns 0 on success. */
-    return _putenv_s(name, value) == 0 ? 0 : -1;
-#else
-    /* setenv overwrite=1 → match Rust's std::env::set_var. */
-    return setenv(name, value, 1) == 0 ? 0 : -1;
-#endif
-}
-
-long long nurl_env_unset(const char *name) {
-    if (!name) { errno = EINVAL; return -1; }
-#ifdef _WIN32
-    /* "VAR=" with empty value removes the variable on Windows. */
-    return _putenv_s(name, "") == 0 ? 0 : -1;
-#else
-    return unsetenv(name) == 0 ? 0 : -1;
-#endif
-}
-
-const char* nurl_cwd(void) {
-#ifdef _WIN32
-    char *buf = _getcwd(NULL, 0);   /* _getcwd(NULL, 0) malloc's */
-    if (!buf) return NULL;
-    /* Hand back via strdup so the NURL caller can free it through nurl_free. */
-    char *out = strdup(buf);
-    free(buf);
-    return out;
-#else
-    /* getcwd(NULL, 0) is a glibc extension; do the portable two-step. */
-    size_t cap = 256;
-    for (;;) {
-        char *buf = (char*)malloc(cap);
-        if (!buf) return NULL;
-        if (getcwd(buf, cap) != NULL) return buf;
-        free(buf);
-        if (errno != ERANGE) return NULL;
-        if (cap >= (1u << 20)) return NULL;     /* sanity ceiling */
-        cap *= 2;
-    }
-#endif
-}
-
-long long nurl_chdir(const char *path) {
-    if (!path) { errno = EINVAL; return -1; }
-#ifdef _WIN32
-    return _chdir(path) == 0 ? 0 : -1;
-#else
-    return chdir(path) == 0 ? 0 : -1;
-#endif
-}
 
 /* Slurp stdin to EOF. Always returns a heap-owned C string (possibly empty).
  * On allocation failure returns NULL. */

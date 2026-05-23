@@ -75,7 +75,7 @@ genuinely irreducible.
 | 10 | (REMOVED 2026-05-01)              |    9 |    —      | [x] | already gone |
 | 11 | Math (libm bridge)                |   91 | FFI       | [~] | PARTIAL 2026-05-23 — 12 libm wrappers + iabs/ipow removed (pure-NURL FFI to libm in `stdlib/std/float.nu`; pure NURL algorithms for `int_abs`/`int_pow` in `stdlib/std/int.nu`); -17 C LOC + 14 preamble declares + 14 sym_def entries. Bit access, isnan/isinf, strtod parser retained (type-punning + static state). |
 | 12 | Time                              |   67 | OS-glue   | [x] | DONE 2026-05-24 — `nurl_now_ms` / `_now_seconds` / `_monotonic_ns` / `_sleep_ms` replaced by pure-NURL `& \`c\`` FFI to `clock_gettime` + `nanosleep` in `stdlib/std/time.nu`. `CLOCK_REALTIME` / `CLOCK_MONOTONIC` added to `nurl_native_constant` (macOS uses 6 for `CLOCK_MONOTONIC` vs 1 elsewhere). −38 C LOC; 4 preamble declares + 4 `sym_def` entries gone. Single code path across Linux / macOS / MinGW (winpthreads) / wasi-libc; no platform `#ifdef` gating in NURL. |
-| 13 | CLI tooling                       |  219 | OS-glue   | [ ] | shrink — env/cwd/dir-list are simple wrappers |
+| 13 | CLI tooling                       |  219 | OS-glue   | [~] | PARTIAL 2026-05-24 — batch 1 done: `nurl_env_get` / `_env_set` / `_env_unset` / `_cwd` / `_chdir` replaced by pure-NURL `& \`c\`` FFI to `getenv` / `setenv` / `unsetenv` / `getcwd` / `chdir` in `stdlib/ext/env.nu`. `ERANGE` added to `nurl_native_constant` for the cwd retry loop. −46 C LOC; 5 preamble declares + 5 `sym_def` entries gone. Remaining: `nurl_read_all_stdin` (fread loop) + `nurl_dir_list_*` (DIR* / FindFirstFile opaque iterator). |
 | 14 | HTTP client (libcurl)             |  665 | Lib-cache | [ ] | shrink to libcurl-easy bridge only; high-level moves to NURL |
 | 14b | HTTP streaming (libcurl multi)   |  396 | Lib-cache | [ ] | reduce; multi-handle state-cache stays C |
 | 15 | Logging level                     |    7 | Compiler  | [x] | DONE 2026-05-23 — `stdlib/std/log.nu`'s `: ~ i __g_log_level 1` is now the single source of truth; -3 C LOC + 2 preamble declares + 2 sym_def entries + 1 llvm_gen.py entry |
@@ -607,6 +607,47 @@ delta: 7 229 → 7 191 LOC (−38, after the +10 LOC for the two new
 Bootstrap fixed point held after a lastgood-refresh round-trip; the
 full 272-test corpus passes including `async_*`, `process_basic`,
 `http_server_*`, `mqtt_basic`.
+
+### Phase §13 — CLI tooling batch 1 (env + cwd, ~46 LOC) — DONE 2026-05-24
+
+Shipped: `stdlib/ext/env.nu` now declares the five POSIX names
+directly via `& \`c\`` — `getenv`, `setenv`, `unsetenv`, `getcwd`,
+`chdir` — and the `env_get` / `env_set` / `env_unset` / `env_cwd` /
+`env_chdir` public wrappers call them in one hop.
+
+  * **Single ABI across libc flavours.** Linux/macOS primary libc and
+    mingw-w64's libmingwex (auto-linked on Win32) both expose the
+    POSIX names with the same signature. The `_putenv_s` / `_getcwd`
+    / `_chdir` `_`-prefixed MSVCRT variants the previous C bridge
+    used are no longer reachable from NURL — the linker now resolves
+    the POSIX names directly.
+  * **`getenv` borrowed-pointer discipline.** `getenv` returns a
+    libc-owned pointer into the environment block; `string_from`
+    copies the bytes into an owned String so the result outlives any
+    subsequent `setenv` that might invalidate the borrow. The
+    previous C `nurl_env_get` strdup'd internally and the NURL caller
+    then copied again — one extra allocation per lookup gone.
+  * **Owned-cwd retry loop.** `getcwd(buf, cap)` returns NULL with
+    errno=ERANGE when the buffer is too small; the NURL implementation
+    doubles and retries up to a 1 MB ceiling (well past any real
+    PATH_MAX). `ERANGE` added to `nurl_native_constant` outside the
+    POSIX-only guard — `<errno.h>` is included at file scope and the
+    value is identical on every platform we target.
+
+`runtime.c §13` shed the five thunks (POSIX + Win32 branches);
+`compiler/nurlc.nu` shed 5 `declare` lines + 5 `nurl_sym_def`
+entries. Net runtime.c delta: 7 191 → 7 145 LOC (−46). One test
+file (`net_loopback.nu`) switched from `nurl_env_set` to `env_set`
+with a `$`-import of `stdlib/ext/env.nu`.
+
+Bootstrap fixed point held after a lastgood-refresh round-trip; full
+272-test corpus passes including `process_basic`, `http_server_*`,
+`net_loopback`.
+
+**Remaining §13:** `nurl_read_all_stdin` (fread accumulator) and
+`nurl_dir_list_open` / `_next` / `_close` (opaque DIR* on POSIX,
+WIN32_FIND_DATAA iterator on Win32). Batch 2 candidates once the
+fread / readdir FFI shape settles.
 
 ### Phase 13 — Basic I/O thinning (`§1`, ~150 LOC) — DEFERRED 2026-05-23
 
