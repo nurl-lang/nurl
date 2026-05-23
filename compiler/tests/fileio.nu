@@ -1,5 +1,7 @@
 // File I/O — read, write, append
 
+$ `stdlib/std/fs.nu`
+
 @ main → i {
     ( nurl_print `File I/O test...\n` )
 

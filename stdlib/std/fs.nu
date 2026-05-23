@@ -277,8 +277,54 @@ $ `stdlib/std/path.nu`
 // Runtime filesystem helpers (resolved from runtime.o; libc is always
 // linked). nurl_path_type: 0 missing, 1 file, 2 dir, 3 symlink, 4 other.
 & `c` @ nurl_path_type       s path        → i
+
+// ── PURIFY.md Phase 7 (2026-05-23): nurl_file_* C→NURL via libc stdio ──
+// fopen / fclose / fputs / fwrite / fputc / fread / feof come from
+// the nurlc preamble (globally declared); each @-fn below mirrors
+// the historic C wrapper bit-for-bit minus the (void*) casts that
+// the C version threaded through. Handles are *v throughout.
+
+// fopen wrapper. Returns NULL handle on failure (NURL callers check
+// via `# i h == 0`).
+@ nurl_file_open s path s mode → *v {
+    : s h # s ( fopen path mode )
+    ^ # *v h
+}
+
+@ nurl_file_close *v h → v {
+    ? != 0 # i h { : i32 _ ( fclose # s h ) } {}
+}
+
+// fputs the NUL-terminated `str` to `h`. NULL-safe on both args.
+@ nurl_file_write *v h s str → v {
+    ? & != 0 # i h != 0 # i str {
+        : i32 _ ( fputs str # s h )
+    } {}
+}
+
+// fwrite `len` bytes from `p` to `h`. NULL-safe; len<=0 is a no-op.
+@ nurl_file_write_range *v h s p i len → v {
+    ? & & != 0 # i h != 0 # i p > len 0 {
+        : i _ ( fwrite p 1 len # s h )
+    } {}
+}
+
+// fputc one byte. NULL-safe.
+@ nurl_file_write_byte *v h i c → v {
+    ? != 0 # i h { : i32 _ ( fputc # i32 c # s h ) } {}
+}
+
+@ nurl_file_eof *v h → i {
+    ? == # i h 0 { ^ 1 } {}
+    ^ ? != 0 # i ( feof # s h ) 1 0
+}
+
+// nurl_file_read_chunk stays in C — its contract writes to the
+// g_last_bytes_len side-channel that the file_read_chunk wrapper
+// consumes for the actual byte count, and the NULL-vs-empty error
+// distinction needs errno discipline. Migrating it cleanly needs a
+// dual-return shape (ptr + len) the runtime doesn't expose yet.
 & `c` @ nurl_file_read_chunk *v h i n      → s
-& `c` @ nurl_file_eof        *v h          → i
 
 // mkdir one path component, treating an already-existing directory as
 // success — the whole point of mkdir -p. errno-kind 2 is AlreadyExists.

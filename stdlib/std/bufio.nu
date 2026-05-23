@@ -56,7 +56,12 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/errors.nu`
 
 // ── libc bridges (pure-NURL FFI) ────────────────────────────────────
-& `c` @ fread   *u ptr i size i nmemb *v stream → i
+// fread is declared globally in nurlc's preamble (Phase 7, 2026-05-23);
+// the local declaration has different pointer types so we keep this
+// one for the *u pointer shape — actually wait, nope, fread is
+// globally declared as (i8*, i64, i64, i8*) → i64; the per-file
+// declaration with *u clashes with that. Drop the local one and
+// adjust the call site to use the global shape.
 & `c` @ memchr  *u hay i needle i n             → s
 & `c` @ memmove *u dst *u src i n               → *u
 & `c` @ fdopen  i fd s mode                     → *v
@@ -134,7 +139,7 @@ $ `stdlib/core/errors.nu`
             ( nurl_poke ctl 2 cap )
         } {}
         : i want - cap end
-        : i got ( fread # *u + bufa end 1 want # *v handle )
+        : i got ( fread # s + bufa end 1 want # s handle )
         ? > got 0 { ( nurl_poke ctl 4 + end got ) } { ( nurl_poke ctl 5 1 ) }
     }
 }

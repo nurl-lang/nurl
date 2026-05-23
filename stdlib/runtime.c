@@ -1166,25 +1166,10 @@ long long nurl_errno_kind(void) {
 
 /* ── File I/O (buffered via FILE*) ───────────────────────────── */
 
-void* nurl_file_open(const char *path, const char *mode) {
-    return (void*)fopen(path, mode);
-}
-
-void nurl_file_write(void *h, const char *s) {
-    if (h && s) fputs(s, (FILE*)h);
-}
-
-void nurl_file_write_range(void *h, const char *p, long long len) {
-    if (h && p && len > 0) fwrite(p, 1, (size_t)len, (FILE*)h);
-}
-
-void nurl_file_write_byte(void *h, long long c) {
-    if (h) fputc((int)(c & 0xff), (FILE*)h);
-}
-
-void nurl_file_close(void *h) {
-    if (h) fclose((FILE*)h);
-}
+/* nurl_file_open / _write / _write_range / _write_byte / _close —
+ * REMOVED 2026-05-23 (PURIFY.md Phase 7). Pure-NURL @-fns calling
+ * libc fopen / fputs / fwrite / fputc / fclose directly live in
+ * stdlib/std/fs.nu. */
 
 /* Alias for nurl_read_file used in fileio.nu */
 const char* nurl_file_read(const char *path) {
@@ -1368,12 +1353,8 @@ const char* nurl_file_read_chunk(void *h, long long n) {
     return buf;
 }
 
-/* 1 once the handle's end-of-file indicator is set (the previous read
- * reached EOF), 0 otherwise. A NULL handle reports EOF. */
-long long nurl_file_eof(void *h) {
-    if (!h) return 1;
-    return feof((FILE*)h) ? 1 : 0;
-}
+/* nurl_file_eof — REMOVED 2026-05-23 (PURIFY.md Phase 7). Pure-NURL
+ * @-fn calling libc `feof` directly in stdlib/std/fs.nu. */
 
 /* Resolve `path` to a canonical absolute path: on POSIX via realpath(3),
  * which makes it absolute, collapses `.` / `..` and expands every

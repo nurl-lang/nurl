@@ -9057,6 +9057,15 @@
     ( emit `declare double @strtod(i8*, i8**)` )
     ( emit `declare i8*  @memcpy(i8*, i8*, i64)` )
     ( emit `declare i8*  @strdup(i8*)` )
+    // libc stdio primitives — used by pure-NURL replacements for the
+    // historic `nurl_file_*` C wrappers (PURIFY.md Phase 7, 2026-05-23).
+    ( emit `declare i8*  @fopen(i8*, i8*)` )
+    ( emit `declare i32  @fclose(i8*)` )
+    ( emit `declare i32  @fputs(i8*, i8*)` )
+    ( emit `declare i64  @fwrite(i8*, i64, i64, i8*)` )
+    ( emit `declare i32  @fputc(i32, i8*)` )
+    ( emit `declare i64  @fread(i8*, i64, i64, i8*)` )
+    ( emit `declare i32  @feof(i8*)` )
     ( emit `declare void @nurl_init(i32, i8**)` )
     ( emit `declare void @nurl_print(i8*)` )
     ( emit `declare void @nurl_eprint(i8*)` )
@@ -9157,11 +9166,10 @@
     ( emit `declare void @nurl_memset(i8*, i64, i64)` )
     ( emit `declare i64  @nurl_peek(i8*, i64)` )
     ( emit `declare void @nurl_poke(i8*, i64, i64)` )
-    ( emit `declare i8*  @nurl_file_open(i8*, i8*)` )
-    ( emit `declare void @nurl_file_write(i8*, i8*)` )
-    ( emit `declare void @nurl_file_write_range(i8*, i8*, i64)` )
-    ( emit `declare void @nurl_file_write_byte(i8*, i64)` )
-    ( emit `declare void @nurl_file_close(i8*)` )
+    // PURIFY.md Phase 7 (2026-05-23): nurl_file_open / _write /
+    // _write_range / _write_byte / _close / _read_chunk / _eof are
+    // pure-NURL @-fns now in stdlib/std/fs.nu, calling libc fopen /
+    // fputs / fwrite / fputc / fclose / fread / feof directly.
     ( emit `declare i8*  @nurl_file_read(i8*)` )
     ( emit `declare i64  @nurl_file_exists(i8*)` )
     ( emit `declare i64  @nurl_file_size(i8*)` )
@@ -9399,6 +9407,16 @@
     ( nurl_sym_def syms `strtod` `double` )
     ( nurl_sym_def syms `memcpy` `i8*` )
     ( nurl_sym_def syms `strdup` `i8*` )
+    // libc stdio (PURIFY.md Phase 7, 2026-05-23) — i64-typed returns
+    // align with how the @-fns capture them. fopen returns FILE*
+    // (i8*); fread/fwrite return size_t which we treat as i64.
+    ( nurl_sym_def syms `fopen` `i8*` )
+    ( nurl_sym_def syms `fclose` `i32` )
+    ( nurl_sym_def syms `fputs` `i32` )
+    ( nurl_sym_def syms `fwrite` `i64` )
+    ( nurl_sym_def syms `fputc` `i32` )
+    ( nurl_sym_def syms `fread` `i64` )
+    ( nurl_sym_def syms `feof` `i32` )
     // file I/O
     ( nurl_sym_def syms `nurl_file_open` `i8*` )
     ( nurl_sym_def syms `nurl_file_write` `void` )
