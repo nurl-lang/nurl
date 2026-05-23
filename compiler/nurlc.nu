@@ -9221,7 +9221,6 @@
     // _write_range / _write_byte / _close / _read_chunk / _eof are
     // pure-NURL @-fns now in stdlib/std/fs.nu, calling libc fopen /
     // fputs / fwrite / fputc / fclose / fread / feof directly.
-    ( emit `declare i8*  @nurl_file_read(i8*)` )
     // PURIFY.md Phase 7 (2026-05-23): nurl_file_exists / _del /
     // _dir_create / _dir_remove are pure-NURL @-fns in
     // stdlib/std/fs.nu, calling libc access / remove / mkdir / rmdir /
@@ -9435,7 +9434,6 @@
     ( nurl_sym_def syms `nurl_file_write_range` `void` )
     ( nurl_sym_def syms `nurl_file_write_byte` `void` )
     ( nurl_sym_def syms `nurl_file_close` `void` )
-    ( nurl_sym_def syms `nurl_file_read` `i8*` )
     ( nurl_sym_def syms `nurl_file_exists` `i64` )
     ( nurl_sym_def syms `nurl_file_del` `void` )
     // non-fatal fs API used by stdlib/std/fs.nu — raw is an i8* the caller

@@ -1049,44 +1049,11 @@ const char* nurl_read_file(const char *path) {
 #  include <fcntl.h>
 #  include <unistd.h>
 #endif
-/* True zero-copy mmap: returns the file's content as an mmap'd
- * read-only pointer (NUL-terminated NOT guaranteed — caller relies
- * on the size returned via nurl_read_file_mmap_size_out). The
- * mapping must be released via `nurl_munmap_file(ptr, size)`. Use
- * for very large reads where the memcpy in `nurl_read_file_mmap`
- * is itself a bottleneck. CSV loader gates this on a separate
- * cleanup field on CSVTable since the deallocator differs from
- * malloc/free. */
-static long long g_nurl_mmap_size = 0;
-long long nurl_read_file_mmap_size_out(void) { return g_nurl_mmap_size; }
-
-const char* nurl_read_file_mmap_zero(const char *path) {
-    g_nurl_mmap_size = 0;
-#if defined(__unix__) || defined(__APPLE__)
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return NULL;
-    struct stat st;
-    if (fstat(fd, &st) < 0) { close(fd); return NULL; }
-    if (st.st_size <= 0) { close(fd); return NULL; }
-    size_t sz = (size_t)st.st_size;
-    void *m = mmap(NULL, sz, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
-    if (m == MAP_FAILED) return NULL;
-    (void)madvise(m, sz, MADV_SEQUENTIAL);
-    g_nurl_mmap_size = (long long)sz;
-    return (const char *)m;
-#else
-    return NULL;
-#endif
-}
-
-void nurl_munmap_file(const char *ptr, long long sz) {
-#if defined(__unix__) || defined(__APPLE__)
-    if (ptr && sz > 0) munmap((void *)ptr, (size_t)sz);
-#else
-    (void)ptr; (void)sz;
-#endif
-}
+/* nurl_read_file_mmap_zero / _munmap_file / _read_file_mmap_size_out —
+ * REMOVED 2026-05-24. Intended for a CSV-loader zero-copy fast path
+ * that never wired up; no NURL caller ever referenced them. Pure dead
+ * code. (`stdlib/std/fs.nu`'s `__read_file_mmap_pure` copies once into
+ * a malloc'd buffer — the zero-copy variant is the future enhancement.) */
 
 /* Forward declaration — used by the WASI/MSVC fallback below before
  * the full definition appears further down in the file. */
@@ -1146,10 +1113,9 @@ long long nurl_errno_kind(void) {
  * libc fopen / fputs / fwrite / fputc / fclose directly live in
  * stdlib/std/fs.nu. */
 
-/* Alias for nurl_read_file used in fileio.nu */
-const char* nurl_file_read(const char *path) {
-    return nurl_read_file(path);
-}
+/* nurl_file_read — REMOVED 2026-05-24. Was a one-line alias for
+ * `nurl_read_file`. The only callers were `compiler/tests/fileio.nu`,
+ * updated to call `nurl_read_file` directly. */
 
 /* nurl_file_exists / _del — REMOVED 2026-05-23 (PURIFY.md Phase 7
  * batch 2). Pure-NURL @-fns calling libc access(2) / remove(3) in

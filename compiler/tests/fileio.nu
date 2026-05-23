@@ -15,7 +15,7 @@ $ `stdlib/std/fs.nu`
     ( nurl_print `wrote 3 lines\n` )
 
     // Read entire file
-    : s content ( nurl_file_read `test_output.txt` )
+    : s content ( nurl_read_file `test_output.txt` )
     ( nurl_print `read back:\n` )
     ( nurl_print content )
 
@@ -25,7 +25,7 @@ $ `stdlib/std/fs.nu`
     ( nurl_file_close f2 )
 
     // Read again to verify append
-    : s content2 ( nurl_file_read `test_output.txt` )
+    : s content2 ( nurl_read_file `test_output.txt` )
     ( nurl_print `after append:\n` )
     ( nurl_print content2 )
 
