@@ -82,27 +82,25 @@ REM ── clean ─────────────────────
 set "LABEL=clean"
 >>"%LOG%" echo.
 >>"%LOG%" echo [%LABEL%]
-del /q build\nurlc_py.ll build\nurlc_py.exe build\nurlc_self.ll build\nurlc_self.exe build\nurlc_self2.ll build\nurlc_self2.exe build\nurlc.exe >>"%LOG%" 2>&1
-
-REM ── stage0 ir ────────────────────────────────────────────────
-set "LABEL=stage0 ir"
->>"%LOG%" echo.
->>"%LOG%" echo [%LABEL%] python compiler\nurlc.py --llvm compiler\nurlc.nu ^> build\nurlc_py.ll
-python compiler\nurlc.py --llvm compiler\nurlc.nu > build\nurlc_py.ll 2>>"%LOG%"
-if errorlevel 1 goto :failed
+del /q build\nurlc_lastgood.bin.exe build\nurlc_self.ll build\nurlc_self.exe build\nurlc_self2.ll build\nurlc_self2.exe build\nurlc.exe >>"%LOG%" 2>&1
 
 REM ── stage0 link ──────────────────────────────────────────────
+REM Python-free bootstrap: link the committed `nurlc_lastgood.ll`
+REM snapshot (regenerate via Linux/macOS `./build.sh --refresh-bootstrap`
+REM when a grammar / runtime-ABI change leaves it unable to compile
+REM current nurlc.nu). The .ll carries no `target triple` directive
+REM so clang on Windows picks the host triple automatically.
 set "LABEL=stage0 link"
 >>"%LOG%" echo.
->>"%LOG%" echo [%LABEL%] "%CLANG%" -O2 build/nurlc_py.ll stdlib/runtime.o -lwinhttp -o build/nurlc_py.exe
-"%CLANG%" -O2 build/nurlc_py.ll stdlib/runtime.o -lwinhttp -o build/nurlc_py.exe >>"%LOG%" 2>&1
+>>"%LOG%" echo [%LABEL%] "%CLANG%" -O2 compiler/nurlc_lastgood.ll stdlib/runtime.o -lwinhttp -o build/nurlc_lastgood.bin.exe
+"%CLANG%" -O2 compiler/nurlc_lastgood.ll stdlib/runtime.o -lwinhttp -o build/nurlc_lastgood.bin.exe >>"%LOG%" 2>&1
 if errorlevel 1 goto :failed
 
 REM ── stage1 ir ────────────────────────────────────────────────
 set "LABEL=stage1 ir"
 >>"%LOG%" echo.
->>"%LOG%" echo [%LABEL%] build\nurlc_py.exe compiler\nurlc.nu ^> build\nurlc_self.ll
-build\nurlc_py.exe compiler\nurlc.nu > build\nurlc_self.ll 2>>"%LOG%"
+>>"%LOG%" echo [%LABEL%] build\nurlc_lastgood.bin.exe compiler\nurlc.nu ^> build\nurlc_self.ll
+build\nurlc_lastgood.bin.exe compiler\nurlc.nu > build\nurlc_self.ll 2>>"%LOG%"
 if errorlevel 1 goto :failed
 
 REM ── stage1 link ──────────────────────────────────────────────
@@ -111,14 +109,6 @@ set "LABEL=stage1 link"
 >>"%LOG%" echo [%LABEL%] "%CLANG%" -O2 build/nurlc_self.ll stdlib/runtime.o -lwinhttp -o build/nurlc_self.exe
 "%CLANG%" -O2 build/nurlc_self.ll stdlib/runtime.o -lwinhttp -o build/nurlc_self.exe >>"%LOG%" 2>&1
 if errorlevel 1 goto :failed
-
-REM Informational: python vs nurlc_py IR (not fatal).
-fc /B build\nurlc_py.ll build\nurlc_self.ll >nul 2>&1
-if errorlevel 1 (
-    >>"%LOG%" echo [info] python and nurlc_py produce different IR ^(not fatal^)
-) else (
-    >>"%LOG%" echo [info] python and nurlc_py produce identical IR
-)
 
 REM ── stage2 ir ────────────────────────────────────────────────
 set "LABEL=stage2 ir"
@@ -152,7 +142,8 @@ call "%SCRIPT_DIR%\compiler\tests\run_tests.bat" > "%TESTOUT%" 2>&1
 if errorlevel 1 goto :tests_failed
 
 echo BUILD SUCCESS ^& TESTS PASSED
-copy /Y compiler\nurlc.nu compiler\nurlc_lastgood.nu >nul
+REM nurlc_lastgood.{nu,ll} are NOT auto-updated; refresh via
+REM `./build.sh --refresh-bootstrap` (Linux/macOS) and commit both.
 del "%TESTOUT%" 2>nul
 call :cleanup
 popd >nul

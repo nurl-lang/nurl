@@ -607,14 +607,9 @@ nurl/
 │   └── bootstrapping.md
 ├── compiler/
 │   ├── nurlc.nu               ✓ self-hosting compiler, written in NURL
-│   ├── nurlc.py               — Python bootstrap compiler
-│   ├── src/                   — Python compiler internals
-│   │   ├── lexer.py
-│   │   ├── parser.py
-│   │   ├── typechecker.py
-│   │   ├── ir_gen.py
-│   │   └── llvm_gen.py
-│   └── tests/                 — 80+ `.nu` test programs + snapshot runner
+│   ├── nurlc_lastgood.nu      — committed bootstrap snapshot (NURL source)
+│   ├── nurlc_lastgood.ll      — committed bootstrap snapshot (LLVM IR; clang links to a boot binary)
+│   └── tests/                 — `.nu` test programs + snapshot runner
 │       ├── run_tests.sh       — Linux/macOS test runner
 │       ├── run_tests.bat      — Windows test runner
 │       ├── correct.txt        — golden baseline (status + output per test)
@@ -634,7 +629,7 @@ nurl/
 ├── tooling/
 │   └── vscode-nurl/           — VS Code / Windsurf syntax-highlighting extension
 ├── build/                     — all bootstrap artefacts land here
-│   ├── nurlc_py(.ll)          — stage 0: Python-compiled `nurlc.nu`
+│   ├── nurlc_lastgood.bin     — stage 0: clang-linked from `compiler/nurlc_lastgood.ll`
 │   ├── nurlc_self(.ll)        — stage 1: self-compiled
 │   ├── nurlc_self2(.ll)       — stage 2: fixed-point check
 │   └── nurlc                  — final self-hosting binary
@@ -660,8 +655,12 @@ The detailed development plan and status are maintained in [ROADMAP.md](ROADMAP.
 
 | Tool | Purpose |
 |---|---|
-| Python 3.8+ | Python reference compiler (`compiler/nurlc.py`) |
-| clang / LLVM 14+ | Compile LLVM IR (`.ll`) to native binary |
+| clang / LLVM 14+ | Compile LLVM IR (`.ll`) to native binary; only build-time dependency |
+
+No Python, no make, no language-specific package manager. Clone the
+repo and run `./build.sh` (or `build.bat` on Windows). The
+committed `compiler/nurlc_lastgood.ll` snapshot is the only thing
+that boots the self-hosted chain.
 
 #### Windows
 
@@ -673,13 +672,13 @@ You can use Command Prompt, PowerShell, or Git Bash for the commands below.
 #### Linux (Debian / Ubuntu)
 
 ```sh
-sudo apt install python3 clang
+sudo apt install clang
 ```
 
 #### Linux (Fedora / RHEL)
 
 ```sh
-sudo dnf install python3 clang
+sudo dnf install clang
 ```
 
 #### macOS
@@ -719,12 +718,20 @@ build.bat
 ```
 
 The build script performs a complete bootstrap process:
-1. Compiles `nurlc.nu` with the Python reference compiler → `build/nurlc_py`
-2. Compiles `nurlc.nu` with the stage-0 binary → `build/nurlc_self` (stage 1)
-3. Compiles `nurlc.nu` with stage 1 → `build/nurlc_self2` (stage 2)
+1. Links the committed `compiler/nurlc_lastgood.ll` snapshot →
+   `build/nurlc_lastgood.bin` (stage 0; the only step that doesn't
+   already need a working `nurlc`)
+2. `nurlc_lastgood.bin` compiles `compiler/nurlc.nu` → `build/nurlc_self` (stage 1)
+3. `nurlc_self` compiles `compiler/nurlc.nu` again → `build/nurlc_self2` (stage 2)
 4. Verifies stages 1 and 2 produce byte-identical LLVM IR (bootstrap fixed point)
 5. Copies stage 2 to `build/nurlc` and symlinks it at the repo root
 6. Runs the snapshot test suite (`compiler/tests/run_tests.sh` on Linux/macOS, `compiler/tests/run_tests.bat` on Windows) and diffs against `correct.txt`
+
+When a grammar / runtime-ABI change leaves the committed snapshot
+unable to compile current `nurlc.nu`, refresh it with
+`./build.sh --refresh-bootstrap` (uses the EXISTING `build/nurlc` to
+regenerate both `compiler/nurlc_lastgood.nu` and `.ll`; commit both
+files together).
 
 All build artefacts are stored under `build/`. The run prints
 `BUILD SUCCESS & TESTS PASSED` on success, or the full log / diff on failure.
@@ -744,12 +751,13 @@ clean.bat
 mkdir -p build  # Linux/macOS
 mkdir build     # Windows
 
-# Generate LLVM IR using Python compiler  
-python compiler/nurlc.py --llvm compiler/nurlc.nu > build/nurlc.ll
+# Stage 0: link the committed snapshot IR → a working boot compiler.
+clang compiler/nurlc_lastgood.ll stdlib/runtime.o -lm -lpthread -o build/nurlc_lastgood.bin
 
-# Link into native binary
-clang build/nurlc.ll stdlib/runtime.o -o build/nurlc      # Linux/macOS
-clang build\nurlc.ll stdlib\runtime.o -o build\nurlc.exe  # Windows
+# Stage 1: boot compiler self-compiles → fresh self-hosted nurlc.
+build/nurlc_lastgood.bin compiler/nurlc.nu > build/nurlc.ll
+clang build/nurlc.ll stdlib/runtime.o -lm -lpthread -o build/nurlc      # Linux/macOS
+clang build\nurlc.ll stdlib\runtime.o -lm -lpthread -o build\nurlc.exe  # Windows
 ```
 
 ---
@@ -813,18 +821,28 @@ End-to-end regression test: `./tools/dwarf_test.sh` (no-op when
 
 ---
 
-### Python reference compiler vs self-hosting compiler
+### Bootstrap chain
 
-The Python reference compiler (`compiler/nurlc.py`) exists solely to bootstrap the
-self-hosting compiler. It implements the subset of grammar v1.1 that `nurlc.nu` itself
-uses — structs, functions, the `:`/`=`/`@`/`^`/`?`/`~`/`(`/`.`/`#` core, basic traits
-and impls — and omits most of the features added in Groups D–F:
+The build is Python-free as of 2026-05-23. Stage 0 links the
+committed `compiler/nurlc_lastgood.ll` snapshot — pre-compiled IR
+of `compiler/nurlc_lastgood.nu` (a checked-in mirror of the last
+self-host-stable `nurlc.nu`). Anyone with `clang` can clone and
+build; no other-language toolchain is required.
 
-- not implemented: `ffi_decl`, `enum_decl`, `defer_stmt`, `try_expr` (`\`), `sizeof_expr` (`Z`), `agg_expr`, `res_type` (`! T E`), closures, slice literals, for-each, generic instantiation, integer-indexed `member_expr`.
-- one intentional syntax deviation: the Python compiler parses `fn_type` as `@ R P*` in type position, while the grammar spec and `nurlc.nu` both use `(@ R P*)`.
+  - `compiler/nurlc_lastgood.nu` — NURL source of the snapshot
+    (human-readable; identical to `nurlc.nu` at the point it was
+    captured).
+  - `compiler/nurlc_lastgood.ll` — LLVM IR text (~1.5 MB),
+    diffable in git, target-triple-agnostic so the same blob
+    bootstraps Linux / macOS / Windows.
 
-Anything beyond the bootstrap subset must be compiled with the self-hosted
-`build/nurlc` binary. The Python compiler is not a user-facing tool.
+Snapshot refresh: `./build.sh --refresh-bootstrap` (re-runs the
+EXISTING `build/nurlc` on the current `nurlc.nu` and overwrites
+both `.nu` and `.ll`; commit them together).
+
+The historic Python reference compiler (`compiler/nurlc.py` plus
+`compiler/src/*.py`) has been removed. See `git log` for the
+final Python-era commits if you need to study them.
 
 ---
 

@@ -9,6 +9,9 @@ nurlc.wasm
 *.ll
 *.wasm
 
+# Compiler output (keep the last good version)
+!compiler/nurlc_lastgood.ll
+
 # Stdlib runtime objects (rebuilt per platform)
 stdlib/runtime.o
 stdlib/runtime.native.o
