@@ -315,12 +315,58 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ^ @ !v IoErr { F e }
 }
 
+// POSIX dir-list helpers — pure-NURL drivers over opendir/readdir/closedir.
+// PURIFY §13 batch 3 (2026-05-24): replaced the C-side iterator with a
+// loop in NURL that filters "." / ".." and copies each name into an
+// owned String. The `d_name` field offset within `struct dirent` varies
+// by platform (Linux glibc = 19, macOS = 21), so a 1-line C accessor
+// (`nurl_dirent_name` in runtime.c) bridges it without porting the
+// offset table into NURL.
+@ __dir_list_pure_posix s path → !( Vec String ) IoErr {
+    : s d ( opendir path )
+    ? == # i d 0 {
+        : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+        ^ @ !( Vec String ) IoErr { F e }
+    } {}
+    : ( Vec String ) out ( vec_new [String] )
+    : ~ b going T
+    ~ going {
+        : s de ( readdir d )
+        ? == # i de 0 {
+            = going F
+        } {
+            : s name ( nurl_dirent_name de )
+            ? != # i name 0 {
+                : i c0 ( nurl_str_get name 0 )
+                : i n ( nurl_str_len name )
+                : ~ b skip F
+                ? == c0 46 {
+                    ? == n 1 { = skip T } {
+                        ? & == n 2 == ( nurl_str_get name 1 ) 46 { = skip T } {}
+                    }
+                } {}
+                ? ! skip {
+                    ( vec_push [String] out ( string_from name ) )
+                } {}
+            } {}
+        }
+    }
+    : i32 _c ( closedir d )
+    ^ @ !( Vec String ) IoErr { T out }
+}
+
 // List directory entries (excluding "." and "..") as owned Strings.
 // The returned Vec is owned: free the elements first via vec_free_with
 // + string_free, then drop the Vec itself. Order is platform-defined
 // (POSIX returns the on-disk order; Windows returns FindFirstFile order).
 // Callers that want a stable order should sort_by cmp_string afterwards.
 @ dir_list s path → !( Vec String ) IoErr {
+    // POSIX: drive opendir/readdir/closedir in pure NURL via
+    // `__dir_list_pure_posix`. Win32 / WASI route through the runtime's
+    // `nurl_dir_list_*` opaque-handle trio (FindFirstFile state cache).
+    ? != ( posix_const `O_RDONLY` ) -1 {
+        ^ ( __dir_list_pure_posix path )
+    } {}
     : i h ( nurl_dir_list_open path )
     ? == h 0 {
         : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )

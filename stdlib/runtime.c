@@ -2586,29 +2586,14 @@ int symlink(const char *target, const char *linkpath) {
 
 #else  /* POSIX */
 
-long long nurl_dir_list_open(const char *path) {
-    if (!path) { errno = EINVAL; return 0; }
-    DIR *d = opendir(path);
-    if (!d) return 0;
-    return (long long)(uintptr_t)d;
-}
-
-const char* nurl_dir_list_next(long long handle) {
-    DIR *d = (DIR*)(uintptr_t)handle;
-    if (!d) return NULL;
-    for (;;) {
-        struct dirent *de = readdir(d);
-        if (!de) return NULL;
-        const char *name = de->d_name;
-        if (name[0] == '.' && (name[1] == '\0' ||
-            (name[1] == '.' && name[2] == '\0'))) continue;
-        return strdup(name);
-    }
-}
-
-void nurl_dir_list_close(long long handle) {
-    DIR *d = (DIR*)(uintptr_t)handle;
-    if (d) closedir(d);
+/* POSIX `nurl_dir_list_*` REMOVED 2026-05-24 (PURIFY §13 batch 3).
+ * Pure-NURL `__dir_list_*_pure` in `stdlib/std/fs.nu` drives the
+ * opendir / readdir / closedir loop through `stdlib/core/posix.nu`'s
+ * `& \`c\`` FFI declarations. The platform-specific `d_name` field
+ * offset is bridged by the tiny accessor below — one expression
+ * each platform but with stable NURL-facing ABI. */
+const char* nurl_dirent_name(const void *de) {
+    return de ? ((const struct dirent *)de)->d_name : NULL;
 }
 
 #endif

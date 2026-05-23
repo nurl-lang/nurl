@@ -136,6 +136,21 @@ $ `stdlib/core/cell.nu`
 // observable side effect on the data itself; ignore the return.
 & `c` @ madvise *u addr i length i32 advice → i32
 
+// ── Directory iteration ───────────────────────────────────────────
+//
+// opendir/readdir/closedir over libc's `DIR*` opaque handle. `readdir`
+// returns a borrowed `struct dirent *` (libc-owned, invalidated by
+// the next readdir on the same handle) — caller must copy the name
+// before the next call. NURL accesses the `d_name` field through the
+// `nurl_dirent_name` thunk in `runtime.c` because the offset varies
+// per platform (Linux glibc = 19, macOS = 21) and porting that
+// offset table into NURL buys nothing.
+
+& `c` @ opendir   s path → s
+& `c` @ readdir   s dirp → s
+& `c` @ closedir  s dirp → i32
+& `c` @ nurl_dirent_name s de → s   // borrowed `de->d_name`
+
 // ── Signal handling ───────────────────────────────────────────────
 
 // signal(2) — returns the OLD handler (as opaque *u). Pass SIG_IGN /
