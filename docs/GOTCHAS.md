@@ -31,3 +31,53 @@
 > prefix notation, prefix-cascade debugging) consult
 > [`../spec/grammar.ebnf`](../spec/grammar.ebnf) — it carries the
 > definitive grammar including the binary-operator comment.
+
+---
+
+## 12. Async runtime — fiber traps (Phase 1–8, 2026-05-23)
+
+The stackful M:N fiber runtime in `stdlib/std/async.nu` is designed
+to look and feel like ordinary code (no `async`/`await` colouring),
+but a handful of platform realities still leak through:
+
+- **TLS through LTO** — any runtime function in `stdlib/runtime.c §24`
+  that reads `nurl__tls_worker` carries
+  `__attribute__((noinline))`. Cross-translation-unit inlining of
+  `__thread` accesses (the NURL-emitted IR is a separate TU) lowers
+  the segment-register-relative load incorrectly under
+  `clang -O2 -flto`, returning a stale or NULL value for what
+  should be a valid worker pointer. Symptom: `nurl_fiber_current`
+  silently returns 0 inside a freshly-resumed fiber, the fiber-aware
+  `tcp_accept` dispatch then falls through to the blocking path on
+  a non-blocking listener, and accept immediately surfaces
+  `NetTimeout`. Symptom-debugged via raw writes; eliminated by
+  `noinline` on every TLS-reading entry point (`nurl_fiber_current`
+  / `_yield` / `_worker_id` / `_park_with_mutex` / `_reactor_wait`).
+  Adding a new TLS-reading runtime function? Annotate it the same way.
+- **Reactor park-vs-unpark race** — `nurl__reactor_wait` registers
+  the wait entry with `active = 0`; the worker loop, after the
+  parking fiber's `swapcontext` completes, calls
+  `nurl__reactor_activate` to flip the flag. The reactor only
+  considers active entries, so an unpark cannot fire before the
+  fiber's context is fully saved. Channel-coordinated parks
+  (`Channel[A]`) use the symmetric `pending_unlock` deferral.
+- **Same-handle async + sync mixing** — once any of
+  `tcp_accept_async` / `tcp_read_chunk_async` / `tcp_write_all_async`
+  runs on a `TcpListener` / `TcpConn`, the underlying socket has
+  `O_NONBLOCK` set. A subsequent SYNC call on the same handle from
+  a non-fiber context will then surface EAGAIN as `NetTimeout`.
+  Either stay in async mode for that handle or call
+  `tcp_set_nonblock_*` to flip it back.
+- **Capturing a stack-borrowed pointer in a spawned closure** is
+  the same hazard as `thread_spawn` — borrow-checker phase 3 catches
+  the documented shapes (`vec_push`/`vec_insert`/`vec_set`/`spawn`/
+  `thread_spawn` of an escaping mutable-struct capture), but a
+  closure that captures a `: ~ T x` then survives `x`'s scope is on
+  you. Use a heap-backed handle (`Mutex` + `Vec[i]` etc.) for shared
+  mutable state across fibers.
+- **`runtime_run` blocks until `pending = 0`** — every `spawn` that
+  isn't reaped (the fire-and-forget shape) bumps the pending count;
+  every fiber that runs to completion decrements it. A long-running
+  accept fiber that never returns keeps `runtime_run` blocked
+  forever, which is exactly what HTTP servers want. Call
+  `server_stop` / `runtime_shutdown` to drain on demand.

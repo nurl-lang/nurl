@@ -1746,9 +1746,47 @@
     ^ gep
 }
 
+// A '(' begins a function call, so the token right after it must be a
+// function name. An operator token there (`.` `|` `&` `+` `==` …) means
+// an operator expression was wrongly wrapped in parentheses — the
+// classic NURL trap `( . obj field )` written for `. obj field`. Left
+// alone, gen_call takes the operator's lexeme as the callee name and
+// emits a call to a function literally named `.`, which links nowhere:
+// the failure surfaces far from the source as `use of undefined value`.
+// gen_call catches it at the call site instead. The set is the binary
+// operators plus member access `.`, the cast `#` and the caret `^` —
+// every token here is unambiguously an operator, never a function name.
+@ __is_operator_callee i tt → b {
+    ? == tt TT_DOT { ^ T } {}
+    ? == tt TT_HASH { ^ T } {}
+    ? == tt TT_CARET { ^ T } {}
+    ? == tt TT_CARETCARET { ^ T } {}
+    ? == tt TT_PLUS { ^ T } {}
+    ? == tt TT_MINUS { ^ T } {}
+    ? == tt TT_STAR { ^ T } {}
+    ? == tt TT_SLASH { ^ T } {}
+    ? == tt TT_PERCENT { ^ T } {}
+    ? == tt TT_AMP { ^ T } {}
+    ? == tt TT_PIPE { ^ T } {}
+    ? == tt TT_LT { ^ T } {}
+    ? == tt TT_GT { ^ T } {}
+    ? == tt TT_EQEQ { ^ T } {}
+    ? == tt TT_NE { ^ T } {}
+    ? == tt TT_LE { ^ T } {}
+    ? == tt TT_GE { ^ T } {}
+    ? == tt TT_SHL { ^ T } {}
+    ? == tt TT_SHR { ^ T } {}
+    ^ F
+}
+
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
+    ? ( __is_operator_callee ( nurl_lex_type lex ) )
+    { ( die lex ( nurl_str_cat3
+        `operator '` fname
+        `' cannot be a call target: '(' begins a function call, but operator expressions are written without parentheses (e.g. '. obj field', not '( . obj field )')` ) ) }
+    {}
     ( nurl_lex_advance lex )
     // Tail-call optimisation: snapshot + consume the tail-position
     // flag at function entry. Argument evaluation below recurses
