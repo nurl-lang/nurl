@@ -2240,6 +2240,13 @@ void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
 #  include <windows.h>
+/* mingw-w64's posix thread model (Debian's gcc-mingw-w64-x86-64 default)
+ * ships <pthread.h> from libwinpthread. NURL's pure-NURL FFI for
+ * mutex+cond (stdlib/std/thread.nu, PURIFY Phase 6 batch 1) calls
+ * pthread_mutex_init / pthread_cond_init etc. directly, and Cell-sizes
+ * its storage from sizeof(pthread_mutex_t) — so the Win32 runtime
+ * needs the same header that POSIX does. */
+#  include <pthread.h>
 #else
 #  include <pthread.h>
 #  include <sys/socket.h>
@@ -2248,16 +2255,9 @@ void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
 
 long long nurl_native_sizeof(const char *name) {
     if (!name) return -1;
-#ifdef _WIN32
-    if (strcmp(name, "pthread_mutex_t")     == 0) return (long long)sizeof(CRITICAL_SECTION);
-    if (strcmp(name, "pthread_cond_t")      == 0) return (long long)sizeof(CONDITION_VARIABLE);
-    if (strcmp(name, "pthread_t")           == 0) return (long long)sizeof(HANDLE);
-    if (strcmp(name, "pthread_attr_t")      == 0) return 8;  /* unused on Win32 — placeholder */
-    if (strcmp(name, "pthread_mutexattr_t") == 0) return 8;
-    if (strcmp(name, "pthread_condattr_t")  == 0) return 8;
-    if (strcmp(name, "pthread_rwlock_t")    == 0) return (long long)sizeof(SRWLOCK);
-    if (strcmp(name, "sigset_t")            == 0) return 8;  /* not first-class on Win32 */
-#else
+    /* pthread family — same names on every platform now that Win32 uses
+     * winpthreads (Phase 6 batch 1). Returns sizeof of the platform's
+     * actual pthread_*_t struct so a Cell can hold it. */
     if (strcmp(name, "pthread_mutex_t")     == 0) return (long long)sizeof(pthread_mutex_t);
     if (strcmp(name, "pthread_cond_t")      == 0) return (long long)sizeof(pthread_cond_t);
     if (strcmp(name, "pthread_t")           == 0) return (long long)sizeof(pthread_t);
@@ -2265,6 +2265,9 @@ long long nurl_native_sizeof(const char *name) {
     if (strcmp(name, "pthread_mutexattr_t") == 0) return (long long)sizeof(pthread_mutexattr_t);
     if (strcmp(name, "pthread_condattr_t")  == 0) return (long long)sizeof(pthread_condattr_t);
     if (strcmp(name, "pthread_rwlock_t")    == 0) return (long long)sizeof(pthread_rwlock_t);
+#ifdef _WIN32
+    if (strcmp(name, "sigset_t")            == 0) return 8;  /* not first-class on Win32 */
+#else
     if (strcmp(name, "sigset_t")            == 0) return (long long)sizeof(sigset_t);
 #endif
     if (strcmp(name, "struct stat")         == 0) return (long long)sizeof(struct stat);
@@ -6159,21 +6162,28 @@ void nurl_tcp_set_timeout(long long h, long long ms) { (void)h; (void)ms; }
 #endif /* __wasi__ guard for §18 */
 
 
-/* ── §19  Threads, mutex, condvar ──────────────────────────────── */
+/* ── §19  Threads ───────────────────────────────────────────────── */
 /*
- * Thread/mutex/cond primitives used by stdlib/std/thread.nu. Foundation
- * for the thread-per-connection HTTP server (HTTP_SERVER_PLAN.md §5)
- * and any producer/consumer NURL code that needs message passing.
+ * Thread spawn/join/detach primitives used by stdlib/std/thread.nu.
+ * Mutex + cond moved to pure-NURL FFI in stdlib/std/thread.nu
+ * (PURIFY.md Phase 6 batch 1, 2026-05-23) — they go straight to
+ * libpthread (libwinpthread on mingw-w64) via the `&`-FFI shape.
  *
- * ABI — every handle is a long long (uintptr_t cast); 0 means error.
+ * Thread spawn/join/detach still go through this thunk because
+ * pthread_t is passed BY VALUE to pthread_join and is a 16-byte
+ * struct on winpthreads — NURL's FFI has no by-value-struct shape.
+ * PURIFY Phase 6 batch 2 will replace these with pointer-taking
+ * pthread_join_ptr / detach_ptr trampolines.
+ *
+ * ABI — handle is a long long (uintptr_t cast); 0 means error.
  *   long long nurl_thread_spawn(void* fn, void* env);
  *   long long nurl_thread_join(long long h);
  *   void      nurl_thread_detach(long long h);
- *   long long nurl_mutex_new(void);
- *   void      nurl_mutex_lock/_unlock/_free(long long h);
- *   long long nurl_cond_new(void);
- *   void      nurl_cond_wait(long long cond, long long mutex);
- *   void      nurl_cond_signal/_broadcast/_free(long long h);
+ *
+ * WASI shims for the pthread_mutex_* / pthread_cond_* symbols live
+ * at the bottom — WASI's libc has no pthread, so every primitive
+ * degrades to a no-op stub. Matches the pre-PURIFY semantics: any
+ * program using mutex/cond on WASI gets a single-threaded execution.
  *
  * NURL closure → thread shape: the compiler decomposes a `(@ v)` closure
  * into (fn_ptr, env_ptr) via the `# *u closure 0|1` cast. The thread
@@ -6190,14 +6200,6 @@ typedef struct NurlThread {
     void   (*fn)(void*);
     void    *env;
 } NurlThread;
-
-typedef struct NurlMutex {
-    CRITICAL_SECTION cs;
-} NurlMutex;
-
-typedef struct NurlCond {
-    CONDITION_VARIABLE cv;
-} NurlCond;
 
 static unsigned __stdcall nurl__thread_trampoline(void *p) {
     NurlThread *t = (NurlThread*)p;
@@ -6235,54 +6237,6 @@ void nurl_thread_detach(long long handle) {
     free(t);
 }
 
-long long nurl_mutex_new(void) {
-    NurlMutex *m = (NurlMutex*)calloc(1, sizeof(NurlMutex));
-    if (!m) return 0;
-    InitializeCriticalSection(&m->cs);
-    return (long long)(uintptr_t)m;
-}
-void nurl_mutex_lock(long long h) {
-    NurlMutex *m = (NurlMutex*)(uintptr_t)h;
-    if (m) EnterCriticalSection(&m->cs);
-}
-void nurl_mutex_unlock(long long h) {
-    NurlMutex *m = (NurlMutex*)(uintptr_t)h;
-    if (m) LeaveCriticalSection(&m->cs);
-}
-void nurl_mutex_free(long long h) {
-    NurlMutex *m = (NurlMutex*)(uintptr_t)h;
-    if (!m) return;
-    DeleteCriticalSection(&m->cs);
-    free(m);
-}
-
-long long nurl_cond_new(void) {
-    NurlCond *c = (NurlCond*)calloc(1, sizeof(NurlCond));
-    if (!c) return 0;
-    InitializeConditionVariable(&c->cv);
-    return (long long)(uintptr_t)c;
-}
-void nurl_cond_wait(long long ch, long long mh) {
-    NurlCond  *c = (NurlCond*)(uintptr_t)ch;
-    NurlMutex *m = (NurlMutex*)(uintptr_t)mh;
-    if (!c || !m) return;
-    SleepConditionVariableCS(&c->cv, &m->cs, INFINITE);
-}
-void nurl_cond_signal(long long h) {
-    NurlCond *c = (NurlCond*)(uintptr_t)h;
-    if (c) WakeConditionVariable(&c->cv);
-}
-void nurl_cond_broadcast(long long h) {
-    NurlCond *c = (NurlCond*)(uintptr_t)h;
-    if (c) WakeAllConditionVariable(&c->cv);
-}
-void nurl_cond_free(long long h) {
-    NurlCond *c = (NurlCond*)(uintptr_t)h;
-    if (!c) return;
-    /* CONDITION_VARIABLE has no destroy primitive on Win32. */
-    free(c);
-}
-
 #  else /* POSIX */
 
 #    include <pthread.h>
@@ -6292,14 +6246,6 @@ typedef struct NurlThread {
     void   (*fn)(void*);
     void    *env;
 } NurlThread;
-
-typedef struct NurlMutex {
-    pthread_mutex_t mtx;
-} NurlMutex;
-
-typedef struct NurlCond {
-    pthread_cond_t cv;
-} NurlCond;
 
 static void *nurl__thread_trampoline(void *p) {
     NurlThread *t = (NurlThread*)p;
@@ -6336,70 +6282,29 @@ void nurl_thread_detach(long long handle) {
     free(t);
 }
 
-long long nurl_mutex_new(void) {
-    NurlMutex *m = (NurlMutex*)calloc(1, sizeof(NurlMutex));
-    if (!m) return 0;
-    if (pthread_mutex_init(&m->mtx, NULL) != 0) { free(m); return 0; }
-    return (long long)(uintptr_t)m;
-}
-void nurl_mutex_lock(long long h) {
-    NurlMutex *m = (NurlMutex*)(uintptr_t)h;
-    if (m) pthread_mutex_lock(&m->mtx);
-}
-void nurl_mutex_unlock(long long h) {
-    NurlMutex *m = (NurlMutex*)(uintptr_t)h;
-    if (m) pthread_mutex_unlock(&m->mtx);
-}
-void nurl_mutex_free(long long h) {
-    NurlMutex *m = (NurlMutex*)(uintptr_t)h;
-    if (!m) return;
-    pthread_mutex_destroy(&m->mtx);
-    free(m);
-}
-
-long long nurl_cond_new(void) {
-    NurlCond *c = (NurlCond*)calloc(1, sizeof(NurlCond));
-    if (!c) return 0;
-    if (pthread_cond_init(&c->cv, NULL) != 0) { free(c); return 0; }
-    return (long long)(uintptr_t)c;
-}
-void nurl_cond_wait(long long ch, long long mh) {
-    NurlCond  *c = (NurlCond*)(uintptr_t)ch;
-    NurlMutex *m = (NurlMutex*)(uintptr_t)mh;
-    if (!c || !m) return;
-    pthread_cond_wait(&c->cv, &m->mtx);
-}
-void nurl_cond_signal(long long h) {
-    NurlCond *c = (NurlCond*)(uintptr_t)h;
-    if (c) pthread_cond_signal(&c->cv);
-}
-void nurl_cond_broadcast(long long h) {
-    NurlCond *c = (NurlCond*)(uintptr_t)h;
-    if (c) pthread_cond_broadcast(&c->cv);
-}
-void nurl_cond_free(long long h) {
-    NurlCond *c = (NurlCond*)(uintptr_t)h;
-    if (!c) return;
-    pthread_cond_destroy(&c->cv);
-    free(c);
-}
-
 #  endif /* _WIN32 vs POSIX */
 
 #else  /* __wasi__ — no threading; every entry returns a 0/-1 stub. */
 
+/* Thread spawn/join/detach degrade to "spawn fails, join errors". */
 long long nurl_thread_spawn(void *fn, void *env) { (void)fn; (void)env; return 0; }
 long long nurl_thread_join(long long h)            { (void)h; return -1; }
 void      nurl_thread_detach(long long h)          { (void)h; }
-long long nurl_mutex_new(void)                     { return 0; }
-void      nurl_mutex_lock(long long h)             { (void)h; }
-void      nurl_mutex_unlock(long long h)           { (void)h; }
-void      nurl_mutex_free(long long h)             { (void)h; }
-long long nurl_cond_new(void)                      { return 0; }
-void      nurl_cond_wait(long long c, long long m) { (void)c; (void)m; }
-void      nurl_cond_signal(long long h)            { (void)h; }
-void      nurl_cond_broadcast(long long h)         { (void)h; }
-void      nurl_cond_free(long long h)              { (void)h; }
+
+/* pthread mutex/cond shims for WASI. The NURL-side surface in
+ * stdlib/std/thread.nu calls these directly via `&`-FFI; on WASI the
+ * libpthread symbols are absent, so the runtime provides degenerate
+ * versions that pretend success. Single-threaded WASI execution sees
+ * no contention — same behavior the pre-PURIFY stubs offered. */
+int pthread_mutex_init(void *m, void *a)  { (void)m; (void)a; return 0; }
+int pthread_mutex_lock(void *m)            { (void)m; return 0; }
+int pthread_mutex_unlock(void *m)          { (void)m; return 0; }
+int pthread_mutex_destroy(void *m)         { (void)m; return 0; }
+int pthread_cond_init(void *c, void *a)    { (void)c; (void)a; return 0; }
+int pthread_cond_wait(void *c, void *m)    { (void)c; (void)m; return 0; }
+int pthread_cond_signal(void *c)           { (void)c; return 0; }
+int pthread_cond_broadcast(void *c)        { (void)c; return 0; }
+int pthread_cond_destroy(void *c)          { (void)c; return 0; }
 
 #endif /* __wasi__ guard for §19 */
 
@@ -7685,8 +7590,11 @@ void nurl_fiber_park_with_mutex(long long mutex_h) {
     if (!w) return;       /* not on a fiber — caller's mutex stays locked */
     NurlFiber *cur = w->current;
     if (!cur) return;
-    NurlMutex *m = (NurlMutex*)(uintptr_t)mutex_h;
-    cur->pending_unlock = m ? &m->mtx : NULL;
+    /* mutex_h is the raw pthread_mutex_t* from NURL (Phase 6 batch 1:
+     * Mutex.c is a Cell holding the mutex bytes, cell_ptr is exactly
+     * &pthread_mutex_t). No NurlMutex wrapper anymore. */
+    pthread_mutex_t *m = (pthread_mutex_t *)(uintptr_t)mutex_h;
+    cur->pending_unlock = m;
     cur->state = NF_PARKED;
     swapcontext(&cur->ctx, &w->loop_ctx);
     /* Resume point: scheduler has restored us into a worker. */

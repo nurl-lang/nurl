@@ -1,8 +1,21 @@
 // stdlib/std/thread.nu — Threads, mutexes, condition variables
 //
-// Wraps the runtime bridge in stdlib/runtime.c (§19). Foundation for
-// thread-per-connection HTTP serving (HTTP_SERVER_PLAN.md Phase 5) and
-// any producer/consumer NURL code that needs message passing.
+// Foundation for thread-per-connection HTTP serving (HTTP_SERVER_PLAN.md
+// Phase 5) and any producer/consumer NURL code that needs message
+// passing.
+//
+// Mutex + Cond are pure-NURL FFI over libpthread (PURIFY.md Phase 6
+// batch 1, 2026-05-23). On POSIX platforms `pthread_mutex_*` and
+// `pthread_cond_*` are libc symbols; on Windows the mingw-w64 toolchain
+// supplies them via libwinpthread (link with -lpthread). NURL-side
+// storage is a `Cell` sized from `nurl_native_sizeof("pthread_mutex_t")`
+// / `..._cond_t"`, which translates to the right shape per platform.
+//
+// Thread spawn/join/detach still go through the runtime trampoline in
+// stdlib/runtime.c §19 — pthread_t is passed by value to pthread_join
+// (and is a 16-byte struct on winpthreads) which NURL's FFI can't
+// express. PURIFY Phase 6 batch 2 will replace those with a small
+// pointer-taking trampoline.
 //
 // API:
 //
@@ -37,6 +50,24 @@
 //     surfaces `ThreadCreate` so callers can fall back to a serial path.
 
 $ `stdlib/core/string.nu`
+$ `stdlib/core/cell.nu`
+
+// FFI: direct libpthread for mutex + cond. On Linux/macOS these are
+// libc; on mingw-w64 Windows they come from libwinpthread (link with
+// -lpthread). Return value is the POSIX errno-style int — 0 on
+// success, non-zero on failure. We ignore it: every documented failure
+// (EAGAIN/EINVAL/ENOMEM/EBUSY/EDEADLK/EPERM) for these primitives is
+// either a programmer error (unbalanced lock, destroying a held
+// mutex) or an OOM that the caller can't sensibly recover from.
+& `c` @ pthread_mutex_init     *u m *u attr → i
+& `c` @ pthread_mutex_lock     *u m → i
+& `c` @ pthread_mutex_unlock   *u m → i
+& `c` @ pthread_mutex_destroy  *u m → i
+& `c` @ pthread_cond_init      *u cv *u attr → i
+& `c` @ pthread_cond_wait      *u cv *u m → i
+& `c` @ pthread_cond_signal    *u cv → i
+& `c` @ pthread_cond_broadcast *u cv → i
+& `c` @ pthread_cond_destroy   *u cv → i
 
 // ── ThreadErr ─────────────────────────────────────────────────────
 
@@ -55,8 +86,8 @@ $ `stdlib/core/string.nu`
 // ── Opaque handles ────────────────────────────────────────────────
 
 : Thread { s raw }
-: Mutex { s raw }
-: Cond { s raw }
+: Mutex { Cell c }
+: Cond  { Cell c }
 
 // ── Thread lifecycle ──────────────────────────────────────────────
 
@@ -88,27 +119,27 @@ $ `stdlib/core/string.nu`
 // ── Mutex ─────────────────────────────────────────────────────────
 
 @ mutex_new → Mutex {
-    : i raw ( nurl_mutex_new )
-    : s rp # s raw
-    ^ @ Mutex { rp }
+    : Cell c ( cell_for_native `pthread_mutex_t` )
+    ? ( cell_is_null c ) {} {
+        ( pthread_mutex_init ( cell_ptr c ) # *u 0 )
+    }
+    ^ @ Mutex { c }
 }
 
 @ mutex_lock Mutex m → v {
-    : s rp . m raw
-    : i raw # i rp
-    ( nurl_mutex_lock raw )
+    ( pthread_mutex_lock ( cell_ptr . m c ) )
 }
 
 @ mutex_unlock Mutex m → v {
-    : s rp . m raw
-    : i raw # i rp
-    ( nurl_mutex_unlock raw )
+    ( pthread_mutex_unlock ( cell_ptr . m c ) )
 }
 
 @ mutex_free Mutex m → v {
-    : s rp . m raw
-    : i raw # i rp
-    ( nurl_mutex_free raw )
+    : Cell c . m c
+    ? ( cell_is_null c ) {} {
+        ( pthread_mutex_destroy ( cell_ptr c ) )
+    }
+    ( cell_free c )
 }
 
 // Run `body` while holding `m`. Releases the lock even when body returns
@@ -124,33 +155,29 @@ $ `stdlib/core/string.nu`
 // ── Condition variable ────────────────────────────────────────────
 
 @ cond_new → Cond {
-    : i raw ( nurl_cond_new )
-    : s rp # s raw
-    ^ @ Cond { rp }
+    : Cell cell ( cell_for_native `pthread_cond_t` )
+    ? ( cell_is_null cell ) {} {
+        ( pthread_cond_init ( cell_ptr cell ) # *u 0 )
+    }
+    ^ @ Cond { cell }
 }
 
 @ cond_wait Cond c Mutex m → v {
-    : s crp . c raw
-    : i craw # i crp
-    : s mrp . m raw
-    : i mraw # i mrp
-    ( nurl_cond_wait craw mraw )
+    ( pthread_cond_wait ( cell_ptr . c c ) ( cell_ptr . m c ) )
 }
 
 @ cond_signal Cond c → v {
-    : s rp . c raw
-    : i raw # i rp
-    ( nurl_cond_signal raw )
+    ( pthread_cond_signal ( cell_ptr . c c ) )
 }
 
 @ cond_broadcast Cond c → v {
-    : s rp . c raw
-    : i raw # i rp
-    ( nurl_cond_broadcast raw )
+    ( pthread_cond_broadcast ( cell_ptr . c c ) )
 }
 
 @ cond_free Cond c → v {
-    : s rp . c raw
-    : i raw # i rp
-    ( nurl_cond_free raw )
+    : Cell cell . c c
+    ? ( cell_is_null cell ) {} {
+        ( pthread_cond_destroy ( cell_ptr cell ) )
+    }
+    ( cell_free cell )
 }

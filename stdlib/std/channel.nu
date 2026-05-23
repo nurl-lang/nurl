@@ -150,8 +150,11 @@ $ `stdlib/std/async_ffi.nu`
             // swap-out completes, so a concurrent sender sees the
             // queued waiter on a stable PARKED state.
             ( vec_push [i] . impl recv_fibers fcur )
-            : s mrp . . impl m raw
-            : i mraw # i mrp
+            // Mutex.c is a Cell over pthread_mutex_t (PURIFY Phase 6
+            // batch 1). cell_ptr returns *u directly into the mutex
+            // bytes — the C side casts back to pthread_mutex_t*.
+            : *u mptr ( cell_ptr . . impl m c )
+            : i mraw # i mptr
             ( nurl_fiber_park_with_mutex mraw )
             // Re-acquire the mutex on resume and loop the predicate.
             ( mutex_lock . impl m )

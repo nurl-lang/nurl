@@ -1498,9 +1498,18 @@ def build_windows(req: BuildRequest, request: Request) -> BuildResponse:
 
         link_proc = None
         if clang_proc.returncode == 0 and obj_path.is_file():
+            # `-lpthread` pulls in libwinpthread (Debian's
+            # gcc-mingw-w64-x86-64 ships the `posix` thread model by
+            # default, which makes pthread_* symbols resolvable). The
+            # NURL stdlib/std/thread.nu uses pthread_mutex_* /
+            # pthread_cond_* via pure-NURL FFI on every target — that
+            # demand only surfaces here for Windows (Linux + macOS
+            # native builds already link `-lpthread` via build.sh /
+            # nurl.sh). PURIFY.md Phase 6 batch 1, 2026-05-23.
             link_cmd: list[str] = [
                 MINGW_GCC, opt_flag,
                 str(obj_path), RUNTIME_WIN_O,
+                "-lpthread",
                 "-o", str(exe_path),
             ]
             # When the Windows runtime was built with -DNURL_HAVE_LIBCURL

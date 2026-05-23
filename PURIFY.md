@@ -269,28 +269,48 @@ six test files that called `nurl_str_*` without importing
 `stdlib/core/string.nu` got the explicit import — the symbol
 no longer floats in as a runtime extern.
 
-### Phase 6 — Threads / mutex / cond (`§19`, ~290 LOC) — DEFERRED 2026-05-23
+### Phase 6 — Threads / mutex / cond (`§19`, ~290 LOC) — BATCH 1 LANDED 2026-05-23
 
-Original plan called for `& \`pthread\` @ pthread_mutex_init …`
-direct FFI plus a small `pthread_create` trampoline. Blocked on
-two infrastructure gaps the plan didn't anticipate:
+Both infrastructure gaps closed by commit 41b96d4
+([[project-box-allocators]]): `nurl_native_sizeof` returns the
+platform's actual `pthread_mutex_t` / `pthread_cond_t` size, and
+`Cell` gives heap-stable opaque storage. The Win32 question
+resolved at the link layer: mingw-w64's posix thread model
+(Debian's `gcc-mingw-w64-x86-64` default) ships winpthreads, so
+`pthread_*` symbols resolve uniformly when the linker gets
+`-lpthread` (added to `api/app/main.py:1502` mingw link line).
+The Win32 build now also pulls `<pthread.h>`.
 
-  1. **`pthread_mutex_t` / `pthread_cond_t` struct sizes vary by
-     platform** — 40 B on glibc x86_64, 64 B on macOS,
-     `CRITICAL_SECTION` is a different shape entirely on Windows.
-     NURL has no `sizeof` primitive. Either a C-side helper
-     exposing the constant (≈5 LOC, defeats the purpose) or a
-     dedicated `box[T]` infrastructure with platform-specific
-     instantiations is required first.
-  2. **The Win32 branch is genuinely different.** `_beginthreadex`
-     + `CRITICAL_SECTION` + `CONDITION_VARIABLE` don't share the
-     pthread ABI. A pure-NURL replacement either drops Win32 (the
-     async runtime depends on it) or adds an OS-dispatch layer
-     NURL also lacks today.
+**Batch 1 landed** — mutex + cond moved to pure-NURL FFI:
+  * `stdlib/std/thread.nu` declares `pthread_mutex_init/lock/unlock/destroy`
+    + `pthread_cond_init/wait/signal/broadcast/destroy` via `& \`c\``.
+  * `Mutex { Cell c }` + `Cond { Cell c }` — storage is a Cell
+    sized via `cell_for_native "pthread_mutex_t"`.
+  * `stdlib/runtime.c §19` shed all 12 `nurl_mutex_*` / `nurl_cond_*`
+    functions (both POSIX and Win32 branches) plus the `NurlMutex` /
+    `NurlCond` typedefs. WASI keeps tiny pthread-shaped no-op shims
+    (9 stub fns, ~9 LOC) since wasi-libc has no pthread.
+  * `compiler/nurlc.nu` preamble shed 9 `declare` lines + 9 `nurl_sym_def`
+    entries.
+  * `stdlib/std/channel.nu` updated to pass `cell_ptr` of the mutex
+    Cell directly to `nurl_fiber_park_with_mutex` — the C side now
+    casts to `pthread_mutex_t *` instead of `NurlMutex *`.
 
-Net realistic shrink for §19 without that infra: maybe 80 LOC
-(the per-platform wrappers compress, the cross-platform abstraction
-stays). Punt until at least one of the two gaps closes.
+`runtime.c`: 8 254 → 8 162 LOC (−92). §19 alone: 346 → ~150 LOC
+(comment block grew; actual code shed ~210 LOC). Bootstrap held
+on the lastgood-refresh round-trip; full 272-test corpus passes
+including `cell_pthread`, `arc_threads`, `async_basic`,
+`async_chan`, `channel_basic`, `signal_basic`,
+`http_server_tls_extras`.
+
+**Batch 2 — thread spawn/join/detach** is the remaining ~150 LOC.
+Blocker: `pthread_t` is passed BY VALUE to `pthread_join` and is a
+16-byte struct on winpthreads — NURL has no by-value-struct FFI
+shape. Workable path: tiny C trampoline `nurl_pthread_join_ptr(pthread_t *)`
+that dereferences and calls, plus `nurl_pthread_create_closure`
+that takes the NURL closure (fn, env) pair and wires the
+`void *(*)(void*)` adapter. Net residual: ~30 LOC C trampolines +
+all NURL-side bookkeeping.
 
 ### Phase 7 — File & process syscalls (`§4 + §13`, ~500 LOC) — PARTIAL 2026-05-23
 

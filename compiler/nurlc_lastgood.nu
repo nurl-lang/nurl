@@ -9286,15 +9286,9 @@
     ( emit `declare i64  @nurl_thread_spawn(i8*, i8*)` )
     ( emit `declare i64  @nurl_thread_join(i64)` )
     ( emit `declare void @nurl_thread_detach(i64)` )
-    ( emit `declare i64  @nurl_mutex_new()` )
-    ( emit `declare void @nurl_mutex_lock(i64)` )
-    ( emit `declare void @nurl_mutex_unlock(i64)` )
-    ( emit `declare void @nurl_mutex_free(i64)` )
-    ( emit `declare i64  @nurl_cond_new()` )
-    ( emit `declare void @nurl_cond_wait(i64, i64)` )
-    ( emit `declare void @nurl_cond_signal(i64)` )
-    ( emit `declare void @nurl_cond_broadcast(i64)` )
-    ( emit `declare void @nurl_cond_free(i64)` )
+    // Mutex + cond moved to pure-NURL FFI in stdlib/std/thread.nu
+    // (PURIFY.md Phase 6 batch 1) — the libpthread symbols are
+    // declared on-demand in that module via `& `c` @ pthread_*`.
     ( emit `declare void @nurl_signal_install_shutdown(i64)` )
     ( emit `declare void @nurl_signal_trigger_shutdown()` )
     ( emit `declare void @nurl_panic(i8*)` )
@@ -9586,21 +9580,15 @@
     ( nurl_sym_def syms `nurl_tcp_err_kind` `i64` )
     ( nurl_sym_def syms `nurl_tcp_peer_addr` `i8*` )
     ( nurl_sym_def syms `nurl_tcp_set_timeout` `void` )
-    // Thread / mutex / condvar (runtime §19). Handles are i64-cast heap
-    // pointers — same convention as TCP. spawn takes raw fn/env i8*
-    // pointers extracted from a NURL closure via `# *u f 0|1`.
+    // Thread spawn / join / detach (runtime §19). Handles are i64-cast
+    // heap pointers. spawn takes raw fn/env i8* pointers extracted from
+    // a NURL closure via `# *u f 0|1`. Mutex + cond are NOT here —
+    // PURIFY Phase 6 batch 1 moved them to pure-NURL FFI in
+    // stdlib/std/thread.nu (`pthread_mutex_*` / `pthread_cond_*`
+    // declared via `& `c` @ ...`).
     ( nurl_sym_def syms `nurl_thread_spawn` `i64` )
     ( nurl_sym_def syms `nurl_thread_join` `i64` )
     ( nurl_sym_def syms `nurl_thread_detach` `void` )
-    ( nurl_sym_def syms `nurl_mutex_new` `i64` )
-    ( nurl_sym_def syms `nurl_mutex_lock` `void` )
-    ( nurl_sym_def syms `nurl_mutex_unlock` `void` )
-    ( nurl_sym_def syms `nurl_mutex_free` `void` )
-    ( nurl_sym_def syms `nurl_cond_new` `i64` )
-    ( nurl_sym_def syms `nurl_cond_wait` `void` )
-    ( nurl_sym_def syms `nurl_cond_signal` `void` )
-    ( nurl_sym_def syms `nurl_cond_broadcast` `void` )
-    ( nurl_sym_def syms `nurl_cond_free` `void` )
     ( nurl_sym_def syms `nurl_signal_install_shutdown` `void` )
     ( nurl_sym_def syms `nurl_signal_trigger_shutdown` `void` )
     ( nurl_sym_def syms `nurl_panic` `void` )
