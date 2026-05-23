@@ -9,7 +9,7 @@
 //   * mcp_err_name covers all variants.
 //   * mcp_response_is_error / _error_code / _error_message on a
 //     synthetic JSON-RPC error envelope.
-//   * mcp_response_result extracts the `result` object on success.
+//   * mcp_response_get_result extracts the `result` object on success.
 //   * `__extract_array_field` accessible via tool/prompt/resource list
 //     extraction is exercised by feeding a synthetic response.
 
@@ -66,7 +66,7 @@ $ `stdlib/core/string.nu`
 //
 // Build a minimal JSON-RPC error envelope by hand and feed it into
 // mcp_response_is_error / _error_code / _error_message. Then a
-// success envelope and verify mcp_response_result extracts the inner
+// success envelope and verify mcp_response_get_result extracts the inner
 // object. Validates the JSON path-walk without network.
 
 @ run_response_inspect → v {
@@ -96,7 +96,7 @@ $ `stdlib/core/string.nu`
     ( json_obj_set resp2 `result` result )
 
     ( println_bool `  is_error    = ` ( mcp_response_is_error resp2 ) )
-    : ?Json got ( mcp_response_result resp2 )
+    : ?Json got ( mcp_response_get_result resp2 )
     ?? got {
         T res → {
             // We don't free `res` — borrowed view into resp2.

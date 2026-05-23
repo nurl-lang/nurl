@@ -9,7 +9,7 @@
 //
 //   http.nu      → http_request_to (timeouts)
 //   json.nu      → json_stringify, json_parse, json_obj_get/set
-//   mcp.nu       → mcp_response_result / mcp_notification (envelope shapes)
+//   mcp.nu       → mcp_response_result (envelope builder) / mcp_notification
 //
 // No runtime/compiler changes. No state — every helper is a single
 // HTTP round-trip. Sessions can layer on top via the `Mcp-Session-Id`
@@ -204,7 +204,12 @@ $ `stdlib/core/vec.nu`
     ^ ``
 }
 
-@ mcp_response_result Json r → ?Json {
+// Extract the `result` member of a JSON-RPC response envelope.
+// Renamed from `mcp_response_result` 2026-05-23 to break the latent
+// link-time collision with `mcp.nu`'s 2-arg envelope BUILDER of the
+// same name (both ended up in the same IR when a program imported
+// `mcp_client.nu`, since the client transitively pulls in `mcp.nu`).
+@ mcp_response_get_result Json r → ?Json {
     ^ ( json_obj_get r `result` )
 }
 
