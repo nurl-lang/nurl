@@ -1765,12 +1765,13 @@
     ^ | | | & >= ch 65 <= ch 90 & >= ch 97 <= ch 122 & >= ch 48 <= ch 57 == ch 95
 }
 
-// Pure-NURL `nurl_memcmp_lex` — replaces the C wrapper in
-// `stdlib/runtime.c §2` (PURIFY.md Phase 5, 2026-05-23). Calls
-// libc `memcmp` directly via the global preamble declaration.
-// Duplicates the `stdlib/core/string.nu` definition because
-// nurlc.nu can't `$`-import; the linker sees only this copy in
-// the nurlc binary, and only the stdlib copy in user binaries.
+// Pure-NURL replacements for the historic `nurl_str_*` C wrappers
+// in `stdlib/runtime.c §2` (PURIFY.md Phase 5, 2026-05-23). Each
+// is mirrored in `stdlib/core/string.nu` for user code; the
+// duplication is because `nurlc.nu` has no `$`-imports — the
+// linker sees only this local copy in the nurlc binary, only the
+// stdlib copy in user binaries.
+
 @ nurl_memcmp_lex s a i la s b i lb → i {
     : i n ? < la lb la lb
     ? > n 0 {
@@ -1780,6 +1781,62 @@
     ? < la lb { ^ -1 } {}
     ? > la lb { ^ 1 } {}
     ^ 0
+}
+
+@ nurl_str_len s str → i {
+    ^ ( strlen str )
+}
+
+@ nurl_str_eq s a s b → i {
+    : i c # i ( strcmp a b )
+    ^ ? == c 0 1 0
+}
+
+@ nurl_str_cmp s a s b → i {
+    : i c # i ( strcmp a b )
+    ? < c 0 { ^ -1 } {}
+    ? > c 0 { ^ 1 } {}
+    ^ 0
+}
+
+@ nurl_str_to_int s str → i {
+    ^ ( atoll str )
+}
+
+@ nurl_str_to_float s str → f {
+    ^ ( atof str )
+}
+
+@ nurl_str_starts s str s prefix → i {
+    : i n ( strlen prefix )
+    : i c # i ( strncmp str prefix n )
+    ^ ? == c 0 1 0
+}
+
+@ nurl_str_find s haystack s needle → i {
+    : s p # s ( strstr haystack needle )
+    ? == # i p 0 { ^ -1 } {}
+    ^ - # i p # i haystack
+}
+
+@ nurl_str_ends s str s suffix → i {
+    : i slen ( strlen str )
+    : i plen ( strlen suffix )
+    ? > plen slen { ^ 0 } {}
+    : i off - slen plen
+    : *u sp # *u str
+    : s base # s + # i sp off
+    : i c # i ( memcmp base suffix plen )
+    ^ ? == c 0 1 0
+}
+
+@ nurl_memmem_range s hay i hlen s needle i nlen → i {
+    ? | < hlen 0 < nlen 0 { ^ -1 } {}
+    ? == nlen 0 { ^ 0 } {}
+    ? > nlen hlen { ^ -1 } {}
+    : s p # s ( memmem hay hlen needle nlen )
+    ? == # i p 0 { ^ -1 } {}
+    ^ - # i p # i hay
 }
 
 @ __is_operator_callee i tt → b {
@@ -8899,21 +8956,20 @@
     ( emit `declare i64  @nurl_stdin_eof()` )
     ( emit `declare void @nurl_flush_stdout()` )
     ( emit `declare void @nurl_flush_stderr()` )
-    ( emit `declare i64  @nurl_str_len(i8*)` )
     ( emit `declare i64  @nurl_str_get(i8*, i64)` )
-    ( emit `declare i64  @nurl_str_eq(i8*, i8*)` )
-    ( emit `declare i64  @nurl_str_cmp(i8*, i8*)` )
     ( emit `declare i8*  @nurl_str_cat(i8*, i8*)` )
     ( emit `declare i8*  @nurl_str_cat3(i8*, i8*, i8*)` )
     ( emit `declare i8*  @nurl_str_cat4(i8*, i8*, i8*, i8*)` )
     ( emit `declare i8*  @nurl_str_int(i64)` )
     ( emit `declare i8*  @nurl_str_float(double)` )
-    ( emit `declare i64  @nurl_str_to_int(i8*)` )
-    ( emit `declare double @nurl_str_to_float(i8*)` )
     ( emit `declare i64    @nurl_parse_int_range(i8*, i64)` )
     ( emit `declare double @nurl_parse_float_range(i8*, i64)` )
-    // nurl_memcmp_lex — pure NURL @-fn now (PURIFY.md Phase 5).
-    ( emit `declare i64    @nurl_memmem_range(i8*, i64, i8*, i64)` )
+    // PURIFY.md Phase 5 (2026-05-23): nurl_str_len / _eq / _cmp /
+    // _to_int / _to_float / _starts / _find / _ends / _memmem_range /
+    // _memcmp_lex are pure-NURL @-fns now (libc-thin wrappers
+    // calling strlen / strcmp / strncmp / strstr / memcmp / memmem /
+    // atoll / atof directly via the global preamble declarations
+    // emitted above).
     ( emit `declare i64    @nurl_csv_scan_cell(i8*, i64, i64)` )
     ( emit `declare i64    @nurl_csv_filter_float_gt(i8*, i8*, i64*, i64*, i64*, i64, i64, double)` )
     ( emit `declare i64    @nurl_csv_filter_str_contains(i8*, i8*, i64*, i64*, i64*, i64, i64, i8*, i64)` )
@@ -8930,8 +8986,6 @@
     ( emit `declare i64    @nurl_csv_row_n_cells_out()` )
     ( emit `declare i64    @nurl_csv_row_next_pos_out()` )
     ( emit `declare i8*  @nurl_str_slice(i8*, i64, i64)` )
-    ( emit `declare i64  @nurl_str_starts(i8*, i8*)` )
-    ( emit `declare i64  @nurl_str_find(i8*, i8*)` )
     ( emit `declare i64  @nurl_map_new()` )
     ( emit `declare void @nurl_map_put(i64, i8*, i64)` )
     ( emit `declare i64  @nurl_map_get(i64, i8*)` )
@@ -9001,7 +9055,6 @@
     ( emit `declare i64  @nurl_dir_create(i8*)` )
     ( emit `declare i64  @nurl_dir_remove(i8*)` )
     ( emit `declare i64  @nurl_errno_kind()` )
-    ( emit `declare i64  @nurl_str_ends(i8*, i8*)` )
     // libm wrappers (nurl_sqrt / _fabs / _floor / _ceil / _round /
     // _pow / _log / _exp / _sin / _cos / _tan / _atan2) and
     // nurl_iabs / _ipow — moved to pure-NURL (libm direct FFI in
@@ -9242,7 +9295,6 @@
     ( nurl_sym_def syms `nurl_errno_kind` `i64` )
     // double-returning runtime functions
     ( nurl_sym_def syms `nurl_lex_fnum` `double` )
-    ( nurl_sym_def syms `nurl_str_to_float` `double` )
     ( nurl_sym_def syms `nurl_str_float_value` `double` )
     ( nurl_sym_def syms `nurl_parse_float_range` `double` )
     // libm wrappers + iabs/ipow removed in PURIFY.md Phase 3 — see
@@ -9253,8 +9305,10 @@
     ( nurl_sym_def syms `nurl_is_inf` `i64` )
     ( nurl_sym_def syms `nurl_str_to_float_safe` `i64` )
     ( nurl_sym_def syms `nurl_parse_int_range` `i64` )
-    // nurl_memcmp_lex sym_def — pure NURL @-fn now (PURIFY.md Phase 5).
-    ( nurl_sym_def syms `nurl_memmem_range` `i64` )
+    // nurl_str_len / _eq / _cmp / _to_int / _to_float / _starts /
+    // _find / _ends / _memmem_range / _memcmp_lex — pure-NURL
+    // @-fns now (PURIFY.md Phase 5, 2026-05-23). Their return
+    // types are discovered from the @-fn declaration itself.
     ( nurl_sym_def syms `nurl_csv_scan_cell` `i64` )
     ( nurl_sym_def syms `nurl_csv_filter_float_gt` `i64` )
     ( nurl_sym_def syms `nurl_csv_filter_str_contains` `i64` )

@@ -72,6 +72,62 @@ $ `stdlib/core/char.nu`
     ^ 0
 }
 
+@ nurl_str_len s str → i {
+    ^ ( strlen str )
+}
+
+@ nurl_str_eq s a s b → i {
+    : i c # i ( strcmp a b )
+    ^ ? == c 0 1 0
+}
+
+@ nurl_str_cmp s a s b → i {
+    : i c # i ( strcmp a b )
+    ? < c 0 { ^ -1 } {}
+    ? > c 0 { ^ 1 } {}
+    ^ 0
+}
+
+@ nurl_str_to_int s str → i {
+    ^ ( atoll str )
+}
+
+@ nurl_str_to_float s str → f {
+    ^ ( atof str )
+}
+
+@ nurl_str_starts s str s prefix → i {
+    : i n ( strlen prefix )
+    : i c # i ( strncmp str prefix n )
+    ^ ? == c 0 1 0
+}
+
+@ nurl_str_find s haystack s needle → i {
+    : s p # s ( strstr haystack needle )
+    ? == # i p 0 { ^ -1 } {}
+    ^ - # i p # i haystack
+}
+
+@ nurl_str_ends s str s suffix → i {
+    : i slen ( strlen str )
+    : i plen ( strlen suffix )
+    ? > plen slen { ^ 0 } {}
+    : i off - slen plen
+    : *u sp # *u str
+    : s base # s + # i sp off
+    : i c # i ( memcmp base suffix plen )
+    ^ ? == c 0 1 0
+}
+
+@ nurl_memmem_range s hay i hlen s needle i nlen → i {
+    ? | < hlen 0 < nlen 0 { ^ -1 } {}
+    ? == nlen 0 { ^ 0 } {}
+    ? > nlen hlen { ^ -1 } {}
+    : s p # s ( memmem hay hlen needle nlen )
+    ? == # i p 0 { ^ -1 } {}
+    ^ - # i p # i hay
+}
+
 : String {
     s ctl
 }

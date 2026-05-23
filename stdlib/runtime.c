@@ -291,30 +291,17 @@ void nurl_eprintln(const char *s) { fputs(s, stderr); fputc('\n', stderr); fflus
 
 /* ── §2  String operations ─────────────────────────────────────── */
 
-long long nurl_str_len(const char *s) {
-    return (long long)strlen(s);
-}
+/* nurl_str_len / _eq / _cmp — REMOVED 2026-05-23 (PURIFY.md
+ * Phase 5). Pure NURL @-fns calling libc strlen / strcmp directly
+ * live in `stdlib/core/string.nu` and `compiler/nurlc.nu`'s local
+ * copy. nurl_str_get stays — its bounds-check + sentinel-zero on
+ * OOB is a NURL idiom, not a libc primitive. */
 
 /* Return byte at index i (0 if out of range). */
 long long nurl_str_get(const char *s, long long i) {
     long long n = (long long)strlen(s);
     if (i < 0 || i >= n) return 0;
     return (unsigned char)s[i];
-}
-
-/* 1 if a == b (content equality), 0 otherwise. */
-long long nurl_str_eq(const char *a, const char *b) {
-    return strcmp(a, b) == 0 ? 1 : 0;
-}
-
-/* Lexicographic byte compare: -1 if a < b, 0 if equal, +1 if a > b.
-   Normalised so callers can use `( cmp x y )` as the canonical
-   3-way compare (sort, binary_search, etc). */
-long long nurl_str_cmp(const char *a, const char *b) {
-    int r = strcmp(a, b);
-    if (r < 0) return -1;
-    if (r > 0) return 1;
-    return 0;
 }
 
 /* Concatenate two strings; result is malloc'd. */
@@ -355,15 +342,8 @@ const char* nurl_str_float(double d) {
     return strdup(buf);
 }
 
-/* Parse decimal integer from string. */
-long long nurl_str_to_int(const char *s) {
-    return (long long)atoll(s);
-}
-
-/* Parse IEEE-754 double from string. */
-double nurl_str_to_float(const char *s) {
-    return atof(s);
-}
+/* nurl_str_to_int / _to_float — REMOVED 2026-05-23 (PURIFY.md
+ * Phase 5). Pure NURL @-fns calling libc atoll / atof directly. */
 
 /* Parse i64 from a byte range (no NUL required). Stops on first non-digit
  * after the optional leading sign. Returns 0 on empty/all-non-digit input
@@ -414,10 +394,10 @@ double nurl_parse_float_range(const char *p, long long len) {
  * arena loader to advance one cell-at-a-time instead of one byte at a
  * time; the C inner loop is ~5× faster than NURL bytecode for the same
  * task. */
-/* Forward decl: nurl_memmem_range is defined further down in §3
- * String operations; we reference it from §4 csv filters below. */
-long long nurl_memmem_range(const char *hay, long long hlen,
-                            const char *needle, long long nlen);
+/* nurl_memmem_range forward decl — REMOVED 2026-05-23 (no C caller;
+ * the historic CSV-filter comment referenced a hook that never
+ * materialised). The real function is now a pure-NURL @-fn
+ * (PURIFY.md Phase 5) wrapping libc `memmem` via the preamble. */
 
 /* Predicate filter helpers — narrow a CSVTable's row index in place.
  *
@@ -1034,29 +1014,12 @@ long long nurl_csv_scan_row_pairs(
     return 0;
 }
 
-/* Substring search inside a byte range (no NUL required on haystack).
- * Returns the byte offset of the first occurrence of `needle` in
- * `hay[0..hlen)`, or -1 if not found. Empty needle returns 0.
- * Uses libc memmem on glibc; falls back to a tight loop elsewhere. */
-long long nurl_memmem_range(const char *hay, long long hlen,
-                            const char *needle, long long nlen) {
-    if (!hay || hlen < 0 || !needle || nlen < 0) return -1;
-    if (nlen == 0) return 0;
-    if (nlen > hlen) return -1;
-#if defined(__GLIBC__) || (defined(__linux__) && !defined(__BIONIC__))
-    void *p = memmem(hay, (size_t)hlen, needle, (size_t)nlen);
-    if (!p) return -1;
-    return (long long)((const char*)p - hay);
-#else
-    long long last = hlen - nlen;
-    char first = needle[0];
-    for (long long i = 0; i <= last; i++) {
-        if (hay[i] != first) continue;
-        if (memcmp(hay + i, needle, (size_t)nlen) == 0) return i;
-    }
-    return -1;
-#endif
-}
+/* nurl_memmem_range — REMOVED 2026-05-23 (PURIFY.md Phase 5).
+ * Pure NURL @-fn calls libc `memmem` directly; the non-glibc
+ * fallback the C version carried is gone — modern macOS/musl
+ * provide memmem natively, the rare host that doesn't will
+ * surface as an undefined-symbol link error and can be fixed
+ * with a per-platform shim if it ever bites. */
 
 /* nurl_memcmp_lex — REMOVED 2026-05-23 (PURIFY.md Phase 5).
  * Pure NURL via libc `memcmp`; lives in `stdlib/core/string.nu`
@@ -1076,25 +1039,9 @@ const char* nurl_str_slice(const char *s, long long start, long long len) {
     return r;
 }
 
-/* 1 if strings share a prefix of length n. */
-long long nurl_str_starts(const char *s, const char *prefix) {
-    return strncmp(s, prefix, strlen(prefix)) == 0 ? 1 : 0;
-}
-
-/* Index of first occurrence of needle in haystack, or -1 if not found. */
-long long nurl_str_find(const char *haystack, const char *needle) {
-    const char *p = strstr(haystack, needle);
-    if (!p) return -1;
-    return (long long)(p - haystack);
-}
-
-/* 1 if s ends with suffix. */
-long long nurl_str_ends(const char *s, const char *suffix) {
-    size_t slen = strlen(s);
-    size_t plen = strlen(suffix);
-    if (plen > slen) return 0;
-    return memcmp(s + slen - plen, suffix, plen) == 0 ? 1 : 0;
-}
+/* nurl_str_starts / _find / _ends — REMOVED 2026-05-23 (PURIFY.md
+ * Phase 5). Pure NURL @-fns calling libc strncmp / strstr / memcmp
+ * directly. */
 
 
 /* §3  Char classification — REMOVED 2026-05-23 (PURIFY.md Phase 1).

@@ -65,6 +65,7 @@
 $ `stdlib/core/mem.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/pair.nu`
+$ `stdlib/core/string.nu`
 
 : HashMap [K V] { s ctl }
 

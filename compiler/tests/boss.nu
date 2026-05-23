@@ -1,3 +1,5 @@
+$ `stdlib/core/string.nu`
+
 : | Json {
     JNull
     JBool b

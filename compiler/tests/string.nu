@@ -1,5 +1,7 @@
 // Built-in string operations test
 
+$ `stdlib/core/string.nu`
+
 @ main → i {
     ( nurl_print `String operations test...\n` )
 

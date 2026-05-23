@@ -4,6 +4,8 @@
 //   42
 //   123
 
+$ `stdlib/core/string.nu`
+
 % Stringify {
     @ stringify i n → s
 }

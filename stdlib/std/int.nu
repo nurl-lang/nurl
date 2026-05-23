@@ -19,6 +19,7 @@
 
 $ `stdlib/core/errors.nu`
 $ `stdlib/core/char.nu`
+$ `stdlib/core/string.nu`
 
 // ── Constants ──────────────────────────────────────────────────────
 
