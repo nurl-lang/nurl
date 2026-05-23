@@ -2213,6 +2213,122 @@ void nurl_poke(void *base, long long idx, long long val) {
 /* nurl_malloc kept as alias for backward compatibility */
 void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
 
+/* ── Platform-opaque sizeof bridge ──────────────────────────────────
+ *
+ * Many POSIX/Win32 types are deliberately opaque to programs — the
+ * caller is expected to allocate `sizeof(<type>)` bytes via the C
+ * compiler. NURL has no idea what `sizeof(pthread_mutex_t)` is, and
+ * the answer varies per platform (40 on glibc x86_64, 48 on glibc
+ * aarch64, 64 on macOS, a different `CRITICAL_SECTION` shape on
+ * Win32). `nurl_native_sizeof(name)` exposes the C-compiler-known
+ * size to NURL by string lookup. Returns -1 for an unknown name —
+ * callers (`cell_for_native` in stdlib/core/cell.nu) treat this as a
+ * platform-portability bug, not a runtime-recoverable error.
+ *
+ * Names are kept ASCII-stable and case-sensitive; add new entries
+ * here as PURIFY Phase 6/8/11 land their respective FFI moves. The
+ * list intentionally stays small — every entry is a struct we cannot
+ * port to NURL because its layout is platform-defined. Adding scalar
+ * type sizes (`int`, `long`, `size_t`) covers cases where a C API
+ * takes a length-prefixed buffer and NURL needs to size the prefix. */
+
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <time.h>
+#ifdef _WIN32
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#  include <windows.h>
+#else
+#  include <pthread.h>
+#  include <sys/socket.h>
+#  include <netinet/in.h>
+#endif
+
+long long nurl_native_sizeof(const char *name) {
+    if (!name) return -1;
+#ifdef _WIN32
+    if (strcmp(name, "pthread_mutex_t")     == 0) return (long long)sizeof(CRITICAL_SECTION);
+    if (strcmp(name, "pthread_cond_t")      == 0) return (long long)sizeof(CONDITION_VARIABLE);
+    if (strcmp(name, "pthread_t")           == 0) return (long long)sizeof(HANDLE);
+    if (strcmp(name, "pthread_attr_t")      == 0) return 8;  /* unused on Win32 — placeholder */
+    if (strcmp(name, "pthread_mutexattr_t") == 0) return 8;
+    if (strcmp(name, "pthread_condattr_t")  == 0) return 8;
+    if (strcmp(name, "pthread_rwlock_t")    == 0) return (long long)sizeof(SRWLOCK);
+    if (strcmp(name, "sigset_t")            == 0) return 8;  /* not first-class on Win32 */
+#else
+    if (strcmp(name, "pthread_mutex_t")     == 0) return (long long)sizeof(pthread_mutex_t);
+    if (strcmp(name, "pthread_cond_t")      == 0) return (long long)sizeof(pthread_cond_t);
+    if (strcmp(name, "pthread_t")           == 0) return (long long)sizeof(pthread_t);
+    if (strcmp(name, "pthread_attr_t")      == 0) return (long long)sizeof(pthread_attr_t);
+    if (strcmp(name, "pthread_mutexattr_t") == 0) return (long long)sizeof(pthread_mutexattr_t);
+    if (strcmp(name, "pthread_condattr_t")  == 0) return (long long)sizeof(pthread_condattr_t);
+    if (strcmp(name, "pthread_rwlock_t")    == 0) return (long long)sizeof(pthread_rwlock_t);
+    if (strcmp(name, "sigset_t")            == 0) return (long long)sizeof(sigset_t);
+#endif
+    if (strcmp(name, "struct stat")         == 0) return (long long)sizeof(struct stat);
+    if (strcmp(name, "struct timespec")     == 0) return (long long)sizeof(struct timespec);
+    if (strcmp(name, "struct sockaddr_in")  == 0) return (long long)sizeof(struct sockaddr_in);
+    if (strcmp(name, "struct sockaddr_in6") == 0) return (long long)sizeof(struct sockaddr_in6);
+    if (strcmp(name, "struct sockaddr_storage") == 0) return (long long)sizeof(struct sockaddr_storage);
+    if (strcmp(name, "int")                 == 0) return (long long)sizeof(int);
+    if (strcmp(name, "long")                == 0) return (long long)sizeof(long);
+    if (strcmp(name, "size_t")              == 0) return (long long)sizeof(size_t);
+    if (strcmp(name, "off_t")               == 0) return (long long)sizeof(off_t);
+    if (strcmp(name, "time_t")              == 0) return (long long)sizeof(time_t);
+    return -1;
+}
+
+/* ── Atomic refcount primitives ─────────────────────────────────────
+ *
+ * `Arc[T]` (stdlib/std/arc.nu) needs a thread-safe ref-count
+ * increment / decrement-and-test on a heap-resident `i64`. NURL has
+ * no atomic primitive in the language; expose the two operations as
+ * C-side thunks over GCC/Clang's __atomic builtins (or MSVC's
+ * `_Interlocked*`).
+ *
+ * `nurl_atomic_i64_inc(p)` adds 1 atomically, returns the OLD value.
+ * `nurl_atomic_i64_dec_fetch(p)` subtracts 1 atomically, returns the
+ *   NEW value — Arc's free path needs the post-decrement count to
+ *   decide whether to actually deallocate (count became 0).
+ * `nurl_atomic_i64_load(p)` plain acquire-load (debug / introspection).
+ *
+ * Memory ordering: SEQ_CST on every op. Refcount churn is not the
+ * hot path; the safety of sequential consistency outweighs the
+ * acquire/release dance, and matches what `std::shared_ptr` /
+ * `Arc<T>` typically use on the FREE path. */
+long long nurl_atomic_i64_inc(void *p) {
+    if (!p) return 0;
+#ifdef _WIN32
+    return (long long)InterlockedExchangeAdd64((volatile LONG64*)p, 1);
+#else
+    return __atomic_fetch_add((long long*)p, 1, __ATOMIC_SEQ_CST);
+#endif
+}
+
+long long nurl_atomic_i64_dec_fetch(void *p) {
+    if (!p) return 0;
+#ifdef _WIN32
+    /* InterlockedExchangeAdd64 returns the OLD value. To get the new
+     * value (old - 1), subtract one. */
+    return (long long)InterlockedExchangeAdd64((volatile LONG64*)p, -1) - 1;
+#else
+    return __atomic_sub_fetch((long long*)p, 1, __ATOMIC_SEQ_CST);
+#endif
+}
+
+long long nurl_atomic_i64_load(void *p) {
+    if (!p) return 0;
+#ifdef _WIN32
+    return (long long)InterlockedCompareExchange64((volatile LONG64*)p, 0, 0);
+#else
+    long long v;
+    __atomic_load((long long*)p, &v, __ATOMIC_SEQ_CST);
+    return v;
+#endif
+}
+
 
 /* ── §10 String Builder — REMOVED 2026-05-01 ────────────────────────
  *
