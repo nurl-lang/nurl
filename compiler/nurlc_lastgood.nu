@@ -9283,12 +9283,10 @@
     ( emit `declare i64  @nurl_tcp_err_kind(i64)` )
     ( emit `declare i8*  @nurl_tcp_peer_addr(i64)` )
     ( emit `declare void @nurl_tcp_set_timeout(i64, i64)` )
-    ( emit `declare i64  @nurl_thread_spawn(i8*, i8*)` )
-    ( emit `declare i64  @nurl_thread_join(i64)` )
-    ( emit `declare void @nurl_thread_detach(i64)` )
-    // Mutex + cond moved to pure-NURL FFI in stdlib/std/thread.nu
-    // (PURIFY.md Phase 6 batch 1) — the libpthread symbols are
-    // declared on-demand in that module via `& `c` @ pthread_*`.
+    // Thread / mutex / cond moved to pure-NURL FFI in stdlib/std/thread.nu
+    // (PURIFY.md Phase 6) — libpthread symbols (pthread_create / mutex_*
+    // / cond_*) plus the tiny nurl_pthread_join_ptr / _detach_ptr
+    // trampolines are declared on-demand in that module via `& `c` @ ...`.
     ( emit `declare void @nurl_signal_install_shutdown(i64)` )
     ( emit `declare void @nurl_signal_trigger_shutdown()` )
     ( emit `declare void @nurl_panic(i8*)` )
@@ -9580,15 +9578,11 @@
     ( nurl_sym_def syms `nurl_tcp_err_kind` `i64` )
     ( nurl_sym_def syms `nurl_tcp_peer_addr` `i8*` )
     ( nurl_sym_def syms `nurl_tcp_set_timeout` `void` )
-    // Thread spawn / join / detach (runtime §19). Handles are i64-cast
-    // heap pointers. spawn takes raw fn/env i8* pointers extracted from
-    // a NURL closure via `# *u f 0|1`. Mutex + cond are NOT here —
-    // PURIFY Phase 6 batch 1 moved them to pure-NURL FFI in
-    // stdlib/std/thread.nu (`pthread_mutex_*` / `pthread_cond_*`
-    // declared via `& `c` @ ...`).
-    ( nurl_sym_def syms `nurl_thread_spawn` `i64` )
-    ( nurl_sym_def syms `nurl_thread_join` `i64` )
-    ( nurl_sym_def syms `nurl_thread_detach` `void` )
+    // Thread / mutex / cond entirely on the pure-NURL FFI side now
+    // (PURIFY Phase 6): pthread_create / pthread_mutex_* /
+    // pthread_cond_* plus the nurl_pthread_join_ptr / _detach_ptr
+    // trampolines are declared in stdlib/std/thread.nu via `& `c` @ ...`,
+    // so no sym_def registrations are needed here.
     ( nurl_sym_def syms `nurl_signal_install_shutdown` `void` )
     ( nurl_sym_def syms `nurl_signal_trigger_shutdown` `void` )
     ( nurl_sym_def syms `nurl_panic` `void` )

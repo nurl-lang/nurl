@@ -4,18 +4,25 @@
 // Phase 5) and any producer/consumer NURL code that needs message
 // passing.
 //
-// Mutex + Cond are pure-NURL FFI over libpthread (PURIFY.md Phase 6
-// batch 1, 2026-05-23). On POSIX platforms `pthread_mutex_*` and
-// `pthread_cond_*` are libc symbols; on Windows the mingw-w64 toolchain
-// supplies them via libwinpthread (link with -lpthread). NURL-side
-// storage is a `Cell` sized from `nurl_native_sizeof("pthread_mutex_t")`
-// / `..._cond_t"`, which translates to the right shape per platform.
+// PURIFY.md Phase 6 (2026-05-23): the whole surface is now pure-NURL
+// FFI over libpthread. On POSIX `pthread_mutex_*` / `pthread_cond_*` /
+// `pthread_create` are libc symbols; on Windows mingw-w64 supplies
+// them via libwinpthread (link with -lpthread).
 //
-// Thread spawn/join/detach still go through the runtime trampoline in
-// stdlib/runtime.c §19 — pthread_t is passed by value to pthread_join
-// (and is a 16-byte struct on winpthreads) which NURL's FFI can't
-// express. PURIFY Phase 6 batch 2 will replace those with a small
-// pointer-taking trampoline.
+// What's left on the C side (runtime.c §19):
+//
+//   * `nurl_pthread_join_ptr` / `nurl_pthread_detach_ptr` — pthread_t
+//     is passed BY VALUE to pthread_join / pthread_detach, and on
+//     winpthreads it's a 16-byte struct. NURL's `&`-FFI cannot express
+//     by-value-struct args, so these two pointer-taking trampolines
+//     bridge the gap (deref, call, return).
+//   * WASI stubs — wasi-libc has no pthread; all entries degrade.
+//
+// NURL-side storage:
+//
+//   * `Mutex { Cell c }` — Cell sized via `nurl_native_sizeof("pthread_mutex_t")`.
+//   * `Cond  { Cell c }` — same pattern, "pthread_cond_t".
+//   * `Thread { Cell t }` — same pattern, "pthread_t".
 //
 // API:
 //
@@ -52,13 +59,15 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/cell.nu`
 
-// FFI: direct libpthread for mutex + cond. On Linux/macOS these are
-// libc; on mingw-w64 Windows they come from libwinpthread (link with
-// -lpthread). Return value is the POSIX errno-style int — 0 on
-// success, non-zero on failure. We ignore it: every documented failure
-// (EAGAIN/EINVAL/ENOMEM/EBUSY/EDEADLK/EPERM) for these primitives is
-// either a programmer error (unbalanced lock, destroying a held
-// mutex) or an OOM that the caller can't sensibly recover from.
+// FFI: direct libpthread surface. On Linux/macOS these are libc; on
+// mingw-w64 Windows they come from libwinpthread (link with -lpthread).
+// Return value is the POSIX errno-style int — 0 on success, non-zero
+// on failure. We ignore most of them: every documented failure
+// (EAGAIN/EINVAL/ENOMEM/EBUSY/EDEADLK/EPERM) for the mutex/cond
+// primitives is either a programmer error (unbalanced lock, destroying
+// a held mutex) or an OOM the caller can't recover from. thread_spawn
+// IS error-checking because pthread_create's EAGAIN ("would exceed
+// thread cap") is a real recoverable condition.
 & `c` @ pthread_mutex_init     *u m *u attr → i
 & `c` @ pthread_mutex_lock     *u m → i
 & `c` @ pthread_mutex_unlock   *u m → i
@@ -68,6 +77,19 @@ $ `stdlib/core/cell.nu`
 & `c` @ pthread_cond_signal    *u cv → i
 & `c` @ pthread_cond_broadcast *u cv → i
 & `c` @ pthread_cond_destroy   *u cv → i
+
+// pthread_create's start_routine signature is `void *(*)(void *)`.
+// NURL closures compile to `void(*)(void *env)` — same arg shape; the
+// return is discarded at the OS layer because the runtime trampolines
+// below always pass NULL for the join's value pointer. ABI-compatible
+// on every System V target (x86_64 / aarch64 / riscv64).
+& `c` @ pthread_create *u t *u attr *u start *u arg → i
+
+// pthread_t is by-value and 16-byte struct on winpthreads — NURL has
+// no struct-by-value FFI. These two trampolines (runtime.c §19) take
+// pthread_t* and dereference inside C.
+& `c` @ nurl_pthread_join_ptr   *u t → i
+& `c` @ nurl_pthread_detach_ptr *u t → v
 
 // ── ThreadErr ─────────────────────────────────────────────────────
 
@@ -85,35 +107,54 @@ $ `stdlib/core/cell.nu`
 
 // ── Opaque handles ────────────────────────────────────────────────
 
+// Thread keeps the 8-byte `{ s raw }` shape it had pre-Phase 6 — `raw`
+// is a heap pointer to a pthread_t-sized buffer (via nurl_alloc), and
+// the public-facing handle stays cast-to-i64 round-trippable. This
+// matters because compiler/tests/{thread_basic,arc_threads}.nu and
+// stdlib/ext/http_server.nu's worker-pool path stash handles in a
+// malloc'd i64 array via nurl_poke / nurl_peek for batch-join later
+// — a 16-byte Cell wouldn't fit those slots.
+// Mutex / Cond don't have that constraint, so they store a full Cell.
 : Thread { s raw }
-: Mutex { Cell c }
-: Cond  { Cell c }
+: Mutex  { Cell c }
+: Cond   { Cell c }
 
 // ── Thread lifecycle ──────────────────────────────────────────────
 
 @ thread_spawn ( @ v ) f → !Thread ThreadErr {
-    // Decompose the closure into (fn_ptr, env_ptr) — the C trampoline
-    // calls fn_ptr(env_ptr). Closure-field-extract `#`-cast lands here:
-    // bare-form, no outer parens — `( # ... )` would be parsed as a call
-    // with `#` as the function name.
+    // Decompose the closure into (fn_ptr, env_ptr) — pthread_create
+    // calls fn_ptr(env_ptr) on the worker thread. Closure-field-extract
+    // `#`-cast lands here in bare-form, no outer parens — `( # ... )`
+    // would be parsed as a call with `#` as the function name.
     : *u fnp # *u f 0
     : *u env # *u f 1
-    : i raw ( nurl_thread_spawn fnp env )
-    ? == raw 0 { ^ @ !Thread ThreadErr { F # ThreadErr ThreadCreate } } {}
-    : s rp # s raw
-    ^ @ !Thread ThreadErr { T @ Thread { rp } }
+    : i sz ( nurl_native_sizeof `pthread_t` )
+    : s ptr ( nurl_alloc sz )
+    ? == 0 # i ptr {
+        ^ @ !Thread ThreadErr { F # ThreadErr ThreadCreate }
+    } {}
+    : *u tp # *u ptr
+    : i rc ( pthread_create tp # *u 0 fnp env )
+    ? != rc 0 {
+        ( nurl_free ptr )
+        ^ @ !Thread ThreadErr { F # ThreadErr ThreadCreate }
+    } {}
+    ^ @ !Thread ThreadErr { T @ Thread { ptr } }
 }
 
 @ thread_join Thread t → i {
-    : s rp . t raw
-    : i raw # i rp
-    ^ ( nurl_thread_join raw )
+    : s ptr . t raw
+    : *u tp # *u ptr
+    : i rc ( nurl_pthread_join_ptr tp )
+    ( nurl_free ptr )
+    ^ ? == rc 0 0 -1
 }
 
 @ thread_detach Thread t → v {
-    : s rp . t raw
-    : i raw # i rp
-    ( nurl_thread_detach raw )
+    : s ptr . t raw
+    : *u tp # *u ptr
+    ( nurl_pthread_detach_ptr tp )
+    ( nurl_free ptr )
 }
 
 // ── Mutex ─────────────────────────────────────────────────────────

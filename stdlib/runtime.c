@@ -6164,132 +6164,62 @@ void nurl_tcp_set_timeout(long long h, long long ms) { (void)h; (void)ms; }
 
 /* ── §19  Threads ───────────────────────────────────────────────── */
 /*
- * Thread spawn/join/detach primitives used by stdlib/std/thread.nu.
- * Mutex + cond moved to pure-NURL FFI in stdlib/std/thread.nu
- * (PURIFY.md Phase 6 batch 1, 2026-05-23) — they go straight to
- * libpthread (libwinpthread on mingw-w64) via the `&`-FFI shape.
+ * After PURIFY Phase 6 (2026-05-23), nearly the entire threading
+ * surface for stdlib/std/thread.nu lives in NURL. Mutex + cond went
+ * pure-NURL FFI in batch 1; thread spawn/join/detach went pure-NURL
+ * FFI in batch 2.
  *
- * Thread spawn/join/detach still go through this thunk because
- * pthread_t is passed BY VALUE to pthread_join and is a 16-byte
- * struct on winpthreads — NURL's FFI has no by-value-struct shape.
- * PURIFY Phase 6 batch 2 will replace these with pointer-taking
- * pthread_join_ptr / detach_ptr trampolines.
+ * What's left on the C side here:
  *
- * ABI — handle is a long long (uintptr_t cast); 0 means error.
- *   long long nurl_thread_spawn(void* fn, void* env);
- *   long long nurl_thread_join(long long h);
- *   void      nurl_thread_detach(long long h);
+ *  - `nurl_pthread_join_ptr` / `nurl_pthread_detach_ptr` — POSIX
+ *    pthread_join and pthread_detach take their pthread_t argument
+ *    BY VALUE, and pthread_t is a 16-byte struct on winpthreads
+ *    (mingw-w64 posix model). NURL's `&`-FFI cannot express a
+ *    by-value-struct argument, so these tiny pointer-taking
+ *    trampolines bridge it.
  *
- * WASI shims for the pthread_mutex_* / pthread_cond_* symbols live
- * at the bottom — WASI's libc has no pthread, so every primitive
- * degrades to a no-op stub. Matches the pre-PURIFY semantics: any
- * program using mutex/cond on WASI gets a single-threaded execution.
+ *  - WASI shims for the pthread surface — wasi-libc has no pthread,
+ *    so we provide degenerate no-op stubs for pthread_create /
+ *    pthread_mutex_* / pthread_cond_* / the join+detach trampolines
+ *    above. Programs that try to thread on WASI see thread_spawn
+ *    return `ThreadCreate` and mutex/cond ops succeed silently —
+ *    single-threaded execution, same observable shape as before.
  *
- * NURL closure → thread shape: the compiler decomposes a `(@ v)` closure
- * into (fn_ptr, env_ptr) via the `# *u closure 0|1` cast. The thread
- * trampoline below calls `((void(*)(void*))fn)(env)`. The closure body
- * is a regular NURL function whose first argument is an i8* env pointer.
+ * NURL closure → pthread_create shape: the compiler decomposes a
+ * `( @ v )` closure into (fn_ptr, env_ptr) via the `# *u closure 0|1`
+ * cast. stdlib/std/thread.nu passes those two pointers straight to
+ * pthread_create as start_routine / arg. NURL closure body has
+ * signature `void(*)(void *)`, pthread expects `void *(*)(void *)`
+ * — System V x86_64 ABI compatibility lets the slight return-type
+ * mismatch through (the return value is discarded since join always
+ * passes `&rv` and we throw `rv` away). Same on aarch64 / riscv64
+ * (return register holds garbage for void-returning fns).
  */
 
 #if !defined(__wasi__)
 
-#  if defined(_WIN32)
+/* <pthread.h> already pulled in at the top of the file (§2 sizeof
+ * table needs the type sizes on both POSIX and Win32-winpthreads). */
 
-typedef struct NurlThread {
-    HANDLE   handle;
-    void   (*fn)(void*);
-    void    *env;
-} NurlThread;
-
-static unsigned __stdcall nurl__thread_trampoline(void *p) {
-    NurlThread *t = (NurlThread*)p;
-    if (t && t->fn) t->fn(t->env);
-    return 0;
-}
-
-long long nurl_thread_spawn(void *fn, void *env) {
-    if (!fn) return 0;
-    NurlThread *t = (NurlThread*)calloc(1, sizeof(NurlThread));
-    if (!t) return 0;
-    t->fn  = (void(*)(void*))fn;
-    t->env = env;
-    HANDLE h = (HANDLE)_beginthreadex(NULL, 0, nurl__thread_trampoline, t, 0, NULL);
-    if (!h) { free(t); return 0; }
-    t->handle = h;
-    return (long long)(uintptr_t)t;
-}
-
-long long nurl_thread_join(long long handle) {
-    NurlThread *t = (NurlThread*)(uintptr_t)handle;
-    if (!t) return -1;
-    WaitForSingleObject(t->handle, INFINITE);
-    DWORD rc = 0;
-    GetExitCodeThread(t->handle, &rc);
-    CloseHandle(t->handle);
-    free(t);
-    return (long long)rc;
-}
-
-void nurl_thread_detach(long long handle) {
-    NurlThread *t = (NurlThread*)(uintptr_t)handle;
-    if (!t) return;
-    CloseHandle(t->handle);
-    free(t);
-}
-
-#  else /* POSIX */
-
-#    include <pthread.h>
-
-typedef struct NurlThread {
-    pthread_t handle;
-    void   (*fn)(void*);
-    void    *env;
-} NurlThread;
-
-static void *nurl__thread_trampoline(void *p) {
-    NurlThread *t = (NurlThread*)p;
-    if (t && t->fn) t->fn(t->env);
-    return NULL;
-}
-
-long long nurl_thread_spawn(void *fn, void *env) {
-    if (!fn) return 0;
-    NurlThread *t = (NurlThread*)calloc(1, sizeof(NurlThread));
-    if (!t) return 0;
-    t->fn  = (void(*)(void*))fn;
-    t->env = env;
-    if (pthread_create(&t->handle, NULL, nurl__thread_trampoline, t) != 0) {
-        free(t);
-        return 0;
-    }
-    return (long long)(uintptr_t)t;
-}
-
-long long nurl_thread_join(long long handle) {
-    NurlThread *t = (NurlThread*)(uintptr_t)handle;
+int nurl_pthread_join_ptr(pthread_t *t) {
     if (!t) return -1;
     void *rv = NULL;
-    int rc = pthread_join(t->handle, &rv);
-    free(t);
-    return rc == 0 ? 0 : -1;
+    return pthread_join(*t, &rv);
 }
 
-void nurl_thread_detach(long long handle) {
-    NurlThread *t = (NurlThread*)(uintptr_t)handle;
-    if (!t) return;
-    pthread_detach(t->handle);
-    free(t);
+void nurl_pthread_detach_ptr(pthread_t *t) {
+    if (t) pthread_detach(*t);
 }
 
-#  endif /* _WIN32 vs POSIX */
+#else  /* __wasi__ — no threading; every entry degrades. */
 
-#else  /* __wasi__ — no threading; every entry returns a 0/-1 stub. */
-
-/* Thread spawn/join/detach degrade to "spawn fails, join errors". */
-long long nurl_thread_spawn(void *fn, void *env) { (void)fn; (void)env; return 0; }
-long long nurl_thread_join(long long h)            { (void)h; return -1; }
-void      nurl_thread_detach(long long h)          { (void)h; }
+/* pthread_create + the trampolines pretend failure on WASI; any
+ * NURL caller sees thread_spawn return ThreadCreate. */
+int  pthread_create(void *t, void *a, void *s, void *arg) {
+    (void)t; (void)a; (void)s; (void)arg; return -1;
+}
+int  nurl_pthread_join_ptr  (void *t) { (void)t; return -1; }
+void nurl_pthread_detach_ptr(void *t) { (void)t; }
 
 /* pthread mutex/cond shims for WASI. The NURL-side surface in
  * stdlib/std/thread.nu calls these directly via `&`-FFI; on WASI the

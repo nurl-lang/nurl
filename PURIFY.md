@@ -303,14 +303,32 @@ including `cell_pthread`, `arc_threads`, `async_basic`,
 `async_chan`, `channel_basic`, `signal_basic`,
 `http_server_tls_extras`.
 
-**Batch 2 — thread spawn/join/detach** is the remaining ~150 LOC.
-Blocker: `pthread_t` is passed BY VALUE to `pthread_join` and is a
-16-byte struct on winpthreads — NURL has no by-value-struct FFI
-shape. Workable path: tiny C trampoline `nurl_pthread_join_ptr(pthread_t *)`
-that dereferences and calls, plus `nurl_pthread_create_closure`
-that takes the NURL closure (fn, env) pair and wires the
-`void *(*)(void*)` adapter. Net residual: ~30 LOC C trampolines +
-all NURL-side bookkeeping.
+**Batch 2 landed** — thread spawn/join/detach are pure-NURL FFI:
+  * `stdlib/std/thread.nu` declares `pthread_create` via `& \`c\``
+    and passes the NURL closure's (fn, env) pair as start_routine /
+    arg. The closure's `void(*)(void *)` signature is ABI-compatible
+    with pthread's `void *(*)(void *)` on every System V target
+    — the discarded return value falls out of x86_64/aarch64/riscv64
+    calling conventions naturally (pthread_join always passes a
+    value-ptr we throw away).
+  * Two tiny C trampolines remain — `nurl_pthread_join_ptr` and
+    `nurl_pthread_detach_ptr` — because pthread_t is passed BY VALUE
+    to pthread_join / pthread_detach and is a 16-byte struct on
+    winpthreads (NURL's `&`-FFI has no by-value-struct shape).
+    Each is 1-3 LOC.
+  * `Thread { s raw }` kept its 8-byte shape (raw is a `nurl_alloc`'d
+    pthread_t-sized buffer, NOT a Cell) because three call sites
+    (`compiler/tests/{thread_basic,arc_threads}.nu` and the
+    `stdlib/ext/http_server.nu` worker-pool path) stash handles in a
+    malloc'd i64 array via `nurl_poke` / `nurl_peek` for batch-join
+    — a 16-byte Cell wouldn't fit.
+  * `compiler/nurlc.nu` preamble shed the 3 `nurl_thread_*` declares
+    + 3 `nurl_sym_def` entries. Combined Phase 6: 12 declares +
+    12 sym_defs gone.
+
+`runtime.c`: 8 162 → 8 092 LOC (−70 for batch 2 alone; combined
+Phase 6 net −162 from 8 254). §19 now ~80 LOC (2 trampolines +
+9 WASI stubs + comments). Bootstrap held; full corpus passes.
 
 ### Phase 7 — File & process syscalls (`§4 + §13`, ~500 LOC) — PARTIAL 2026-05-23
 
