@@ -128,6 +128,111 @@ $ `stdlib/core/char.nu`
     ^ - # i p # i hay
 }
 
+// ── PURIFY.md Phase 5 Batch C (2026-05-23): allocation-style ops ──
+// Direct malloc + memcpy through the preamble libc declarations.
+// `malloc` / `memcpy` already declared globally; no `&`-FFI needed.
+
+// Return byte at index `idx` (0 if out of range). `& 255` masks the
+// sign-extension that `# i u` introduces — caller gets 0..255.
+@ nurl_str_get s str i idx → i {
+    : i n ( strlen str )
+    ? | < idx 0 >= idx n { ^ 0 } {}
+    : *u p # *u str
+    : u b . p idx
+    ^ & # i b 255
+}
+
+// Concatenate two strings; result is malloc'd, NUL-terminated.
+@ nurl_str_cat s a s b → s {
+    : i la ( strlen a )
+    : i lb ( strlen b )
+    : s r # s ( malloc + + la lb 1 )
+    ( memcpy r a la )
+    : *u rp # *u r
+    : *u dst # *u + # i rp la
+    ( memcpy # s dst b + lb 1 )
+    ^ r
+}
+
+// Concatenate three; result is malloc'd, NUL-terminated.
+@ nurl_str_cat3 s a s b s c → s {
+    : i la ( strlen a )
+    : i lb ( strlen b )
+    : i lc ( strlen c )
+    : s r # s ( malloc + + + la lb lc 1 )
+    ( memcpy r a la )
+    : *u rp # *u r
+    : *u d2 # *u + # i rp la
+    ( memcpy # s d2 b lb )
+    : *u d3 # *u + # i rp + la lb
+    ( memcpy # s d3 c + lc 1 )
+    ^ r
+}
+
+// Concatenate four; result is malloc'd, NUL-terminated. Allocates
+// exactly once (the historic C version nested two `cat` calls and
+// leaked the intermediates).
+@ nurl_str_cat4 s a s b s c s d → s {
+    : i la ( strlen a )
+    : i lb ( strlen b )
+    : i lc ( strlen c )
+    : i ld ( strlen d )
+    : s r # s ( malloc + + + + la lb lc ld 1 )
+    ( memcpy r a la )
+    : *u rp # *u r
+    : *u d2 # *u + # i rp la
+    ( memcpy # s d2 b lb )
+    : *u d3 # *u + # i rp + la lb
+    ( memcpy # s d3 c lc )
+    : *u d4 # *u + # i rp + + la lb lc
+    ( memcpy # s d4 d + ld 1 )
+    ^ r
+}
+
+// Return bytes [start, start+len); result is malloc'd, NUL-terminated.
+// Clamps `start` and `len` into the actual string length.
+@ nurl_str_slice s str i start i n → s {
+    : i slen ( strlen str )
+    : ~ i st start
+    : ~ i k n
+    ? < st 0 { = st 0 } {}
+    ? > st slen { = st slen } {}
+    ? < k 0 { = k 0 } {}
+    ? > + st k slen { = k - slen st } {}
+    : s r # s ( malloc + k 1 )
+    : *u sp # *u str
+    : *u sat # *u + # i sp st
+    ( memcpy r # s sat k )
+    : *u rp # *u r
+    : u zero # u 0
+    = . rp k zero
+    ^ r
+}
+
+// Parse i64 from byte range [p, p+len). Optional leading '-' / '+',
+// then decimal digits; stops on first non-digit. Returns 0 on empty
+// or all-non-digit input (callers that need to distinguish "parse
+// failure" from "real zero" use int_parse on a NUL-terminated input).
+@ nurl_parse_int_range s p i len → i {
+    ? == # i p 0 { ^ 0 } {}
+    ? <= len 0 { ^ 0 } {}
+    : *u q # *u p
+    : ~ i i 0
+    : ~ i sign 1
+    : u first . q 0
+    ? == & # i first 255 45 { = sign -1  = i 1 } {}
+    ? == & # i first 255 43 { = i 1 } {}
+    : ~ i acc 0
+    ~ < i len {
+        : u c . q i
+        : i ci & # i c 255
+        ? | < ci 48 > ci 57 { ^ * acc sign } {}
+        = acc + * acc 10 - ci 48
+        = i + i 1
+    }
+    ^ * acc sign
+}
+
 : String {
     s ctl
 }

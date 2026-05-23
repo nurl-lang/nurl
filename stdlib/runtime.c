@@ -297,37 +297,10 @@ void nurl_eprintln(const char *s) { fputs(s, stderr); fputc('\n', stderr); fflus
  * copy. nurl_str_get stays — its bounds-check + sentinel-zero on
  * OOB is a NURL idiom, not a libc primitive. */
 
-/* Return byte at index i (0 if out of range). */
-long long nurl_str_get(const char *s, long long i) {
-    long long n = (long long)strlen(s);
-    if (i < 0 || i >= n) return 0;
-    return (unsigned char)s[i];
-}
-
-/* Concatenate two strings; result is malloc'd. */
-const char* nurl_str_cat(const char *a, const char *b) {
-    size_t la = strlen(a), lb = strlen(b);
-    char *r = (char*)malloc(la + lb + 1);
-    memcpy(r, a, la);
-    memcpy(r + la, b, lb + 1);
-    return r;
-}
-
-/* Concatenate three strings; result is malloc'd. */
-const char* nurl_str_cat3(const char *a, const char *b, const char *c) {
-    size_t la = strlen(a), lb = strlen(b), lc = strlen(c);
-    char *r = (char*)malloc(la + lb + lc + 1);
-    memcpy(r, a, la);
-    memcpy(r + la, b, lb);
-    memcpy(r + la + lb, c, lc + 1);
-    return r;
-}
-
-/* Concatenate four strings; result is malloc'd. */
-const char* nurl_str_cat4(const char *a, const char *b,
-                          const char *c, const char *d) {
-    return nurl_str_cat(nurl_str_cat(a, b), nurl_str_cat(c, d));
-}
+/* nurl_str_get / _cat / _cat3 / _cat4 — REMOVED 2026-05-23
+ * (PURIFY.md Phase 5 Batch C). Pure-NURL @-fns calling libc
+ * malloc + memcpy directly live in `stdlib/core/string.nu` and
+ * `compiler/nurlc.nu`'s local copy. */
 
 /* Decimal representation of n; result is malloc'd. */
 const char* nurl_str_int(long long n) {
@@ -345,25 +318,9 @@ const char* nurl_str_float(double d) {
 /* nurl_str_to_int / _to_float — REMOVED 2026-05-23 (PURIFY.md
  * Phase 5). Pure NURL @-fns calling libc atoll / atof directly. */
 
-/* Parse i64 from a byte range (no NUL required). Stops on first non-digit
- * after the optional leading sign. Returns 0 on empty/all-non-digit input
- * — caller distinguishes "real zero" from "parse failure" only if needed
- * (CSV indexed-sort treats both as 0, matching v1). */
-long long nurl_parse_int_range(const char *p, long long len) {
-    if (!p || len <= 0) return 0;
-    long long i = 0;
-    int sign = 1;
-    if (p[0] == '-') { sign = -1; i = 1; }
-    else if (p[0] == '+') { i = 1; }
-    long long acc = 0;
-    while (i < len) {
-        unsigned char c = (unsigned char)p[i];
-        if (c < '0' || c > '9') break;
-        acc = acc * 10 + (c - '0');
-        i++;
-    }
-    return acc * sign;
-}
+/* nurl_parse_int_range — REMOVED 2026-05-23 (PURIFY.md Phase 5
+ * Batch C). Pure-NURL @-fn in `stdlib/core/string.nu` (and
+ * `nurlc.nu`'s local copy). */
 
 /* Parse f64 from a byte range. Copies into a small NUL-terminated buffer
  * and calls strtod. Returns 0.0 on empty/parse failure. Allocates only
@@ -1025,19 +982,9 @@ long long nurl_csv_scan_row_pairs(
  * Pure NURL via libc `memcmp`; lives in `stdlib/core/string.nu`
  * (and `compiler/nurlc.nu`'s local copy). */
 
-/* Return bytes [start, start+len); result is malloc'd.
- * Clamps to actual string length. */
-const char* nurl_str_slice(const char *s, long long start, long long len) {
-    long long slen = (long long)strlen(s);
-    if (start < 0) start = 0;
-    if (start > slen) start = slen;
-    if (len < 0) len = 0;
-    if (start + len > slen) len = slen - start;
-    char *r = (char*)malloc((size_t)len + 1);
-    memcpy(r, s + start, (size_t)len);
-    r[len] = '\0';
-    return r;
-}
+/* nurl_str_slice — REMOVED 2026-05-23 (PURIFY.md Phase 5 Batch C).
+ * Pure-NURL @-fn in `stdlib/core/string.nu` (and `nurlc.nu`'s
+ * local copy). */
 
 /* nurl_str_starts / _find / _ends — REMOVED 2026-05-23 (PURIFY.md
  * Phase 5). Pure NURL @-fns calling libc strncmp / strstr / memcmp

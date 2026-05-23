@@ -1839,6 +1839,96 @@
     ^ - # i p # i hay
 }
 
+// ── Batch C (2026-05-23): allocation-style ops via libc malloc + memcpy ──
+
+@ nurl_str_get s str i idx → i {
+    : i n ( strlen str )
+    ? | < idx 0 >= idx n { ^ 0 } {}
+    : *u p # *u str
+    : u b . p idx
+    ^ & # i b 255
+}
+
+@ nurl_str_cat s a s b → s {
+    : i la ( strlen a )
+    : i lb ( strlen b )
+    : s r # s ( malloc + + la lb 1 )
+    ( memcpy r a la )
+    : *u rp # *u r
+    : *u dst # *u + # i rp la
+    ( memcpy # s dst b + lb 1 )
+    ^ r
+}
+
+@ nurl_str_cat3 s a s b s c → s {
+    : i la ( strlen a )
+    : i lb ( strlen b )
+    : i lc ( strlen c )
+    : s r # s ( malloc + + + la lb lc 1 )
+    ( memcpy r a la )
+    : *u rp # *u r
+    : *u d2 # *u + # i rp la
+    ( memcpy # s d2 b lb )
+    : *u d3 # *u + # i rp + la lb
+    ( memcpy # s d3 c + lc 1 )
+    ^ r
+}
+
+@ nurl_str_cat4 s a s b s c s d → s {
+    : i la ( strlen a )
+    : i lb ( strlen b )
+    : i lc ( strlen c )
+    : i ld ( strlen d )
+    : s r # s ( malloc + + + + la lb lc ld 1 )
+    ( memcpy r a la )
+    : *u rp # *u r
+    : *u d2 # *u + # i rp la
+    ( memcpy # s d2 b lb )
+    : *u d3 # *u + # i rp + la lb
+    ( memcpy # s d3 c lc )
+    : *u d4 # *u + # i rp + + la lb lc
+    ( memcpy # s d4 d + ld 1 )
+    ^ r
+}
+
+@ nurl_str_slice s str i start i n → s {
+    : i slen ( strlen str )
+    : ~ i st start
+    : ~ i k n
+    ? < st 0 { = st 0 } {}
+    ? > st slen { = st slen } {}
+    ? < k 0 { = k 0 } {}
+    ? > + st k slen { = k - slen st } {}
+    : s r # s ( malloc + k 1 )
+    : *u sp # *u str
+    : *u sat # *u + # i sp st
+    ( memcpy r # s sat k )
+    : *u rp # *u r
+    : u zero # u 0
+    = . rp k zero
+    ^ r
+}
+
+@ nurl_parse_int_range s p i len → i {
+    ? == # i p 0 { ^ 0 } {}
+    ? <= len 0 { ^ 0 } {}
+    : *u q # *u p
+    : ~ i i 0
+    : ~ i sign 1
+    : u first . q 0
+    ? == & # i first 255 45 { = sign -1  = i 1 } {}
+    ? == & # i first 255 43 { = i 1 } {}
+    : ~ i acc 0
+    ~ < i len {
+        : u c . q i
+        : i ci & # i c 255
+        ? | < ci 48 > ci 57 { ^ * acc sign } {}
+        = acc + * acc 10 - ci 48
+        = i + i 1
+    }
+    ^ * acc sign
+}
+
 @ __is_operator_callee i tt → b {
     ? == tt TT_DOT { ^ T } {}
     ? == tt TT_HASH { ^ T } {}
@@ -8956,13 +9046,13 @@
     ( emit `declare i64  @nurl_stdin_eof()` )
     ( emit `declare void @nurl_flush_stdout()` )
     ( emit `declare void @nurl_flush_stderr()` )
-    ( emit `declare i64  @nurl_str_get(i8*, i64)` )
-    ( emit `declare i8*  @nurl_str_cat(i8*, i8*)` )
-    ( emit `declare i8*  @nurl_str_cat3(i8*, i8*, i8*)` )
-    ( emit `declare i8*  @nurl_str_cat4(i8*, i8*, i8*, i8*)` )
+    // PURIFY.md Phase 5 Batch C (2026-05-23): nurl_str_get / _cat /
+    // _cat3 / _cat4 / _slice / _parse_int_range are pure-NURL @-fns
+    // now — declares dropped to avoid clashing with their `define`s
+    // in user code (and the local copies inside nurlc.nu itself).
+    // nurl_str_int / _str_float / _parse_float_range stay (Batch D).
     ( emit `declare i8*  @nurl_str_int(i64)` )
     ( emit `declare i8*  @nurl_str_float(double)` )
-    ( emit `declare i64    @nurl_parse_int_range(i8*, i64)` )
     ( emit `declare double @nurl_parse_float_range(i8*, i64)` )
     // PURIFY.md Phase 5 (2026-05-23): nurl_str_len / _eq / _cmp /
     // _to_int / _to_float / _starts / _find / _ends / _memmem_range /
@@ -8985,7 +9075,7 @@
     ( emit `declare i64    @nurl_csv_scan_row_pairs(i8*, i64, i64, i64, i64*, i64)` )
     ( emit `declare i64    @nurl_csv_row_n_cells_out()` )
     ( emit `declare i64    @nurl_csv_row_next_pos_out()` )
-    ( emit `declare i8*  @nurl_str_slice(i8*, i64, i64)` )
+    // nurl_str_slice — pure-NURL @-fn (PURIFY.md Phase 5 Batch C).
     ( emit `declare i64  @nurl_map_new()` )
     ( emit `declare void @nurl_map_put(i64, i8*, i64)` )
     ( emit `declare i64  @nurl_map_get(i64, i8*)` )
@@ -9236,6 +9326,12 @@
     ( nurl_sym_def syms `nurl_read_file` `i8*` )
     ( nurl_sym_def syms `nurl_read_line` `i8*` )
     ( nurl_sym_def syms `nurl_read_n_bytes` `i8*` )
+    // PURIFY.md Phase 5 Batch C: nurl_str_cat / _cat3 / _cat4 / _slice
+    // are pure-NURL @-fns now (defined in stdlib/core/string.nu and
+    // mirrored locally above). The sym_def keeps cross-module callers
+    // typed correctly even when they don't `$`-import string.nu —
+    // omitting it makes nurlc emit `call i64 @nurl_str_cat(...)` and
+    // the LLVM verifier rejects the type mismatch.
     ( nurl_sym_def syms `nurl_str_cat` `i8*` )
     ( nurl_sym_def syms `nurl_str_cat3` `i8*` )
     ( nurl_sym_def syms `nurl_str_cat4` `i8*` )
