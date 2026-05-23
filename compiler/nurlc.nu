@@ -1765,6 +1765,23 @@
     ^ | | | & >= ch 65 <= ch 90 & >= ch 97 <= ch 122 & >= ch 48 <= ch 57 == ch 95
 }
 
+// Pure-NURL `nurl_memcmp_lex` — replaces the C wrapper in
+// `stdlib/runtime.c §2` (PURIFY.md Phase 5, 2026-05-23). Calls
+// libc `memcmp` directly via the global preamble declaration.
+// Duplicates the `stdlib/core/string.nu` definition because
+// nurlc.nu can't `$`-import; the linker sees only this copy in
+// the nurlc binary, and only the stdlib copy in user binaries.
+@ nurl_memcmp_lex s a i la s b i lb → i {
+    : i n ? < la lb la lb
+    ? > n 0 {
+        : i c # i ( memcmp a b n )
+        ? != c 0 { ^ ? < c 0 -1 1 } {}
+    } {}
+    ? < la lb { ^ -1 } {}
+    ? > la lb { ^ 1 } {}
+    ^ 0
+}
+
 @ __is_operator_callee i tt → b {
     ? == tt TT_DOT { ^ T } {}
     ? == tt TT_HASH { ^ T } {}
@@ -8853,6 +8870,22 @@
     ( emit `declare i32  @printf(i8*, ...)` )
     ( emit `declare i8*  @malloc(i64)` )
     ( emit `declare void @free(i8*)` )
+    // libc string / parse primitives — used by pure-NURL replacements
+    // for the historic `nurl_str_*` C wrappers (PURIFY.md Phase 5,
+    // 2026-05-23). These are globally-callable from NURL programs
+    // and from `nurlc.nu` itself. Returns mapped at their native C
+    // widths (i32 for int-returners, i8* for ptr-returners); NURL
+    // callers do their own widening via `# i` if they need i64.
+    ( emit `declare i64  @strlen(i8*)` )
+    ( emit `declare i32  @strcmp(i8*, i8*)` )
+    ( emit `declare i32  @strncmp(i8*, i8*, i64)` )
+    ( emit `declare i32  @memcmp(i8*, i8*, i64)` )
+    ( emit `declare i8*  @strstr(i8*, i8*)` )
+    ( emit `declare i8*  @memmem(i8*, i64, i8*, i64)` )
+    ( emit `declare i64  @atoll(i8*)` )
+    ( emit `declare double @atof(i8*)` )
+    ( emit `declare i8*  @memcpy(i8*, i8*, i64)` )
+    ( emit `declare i8*  @strdup(i8*)` )
     ( emit `declare void @nurl_init(i32, i8**)` )
     ( emit `declare void @nurl_print(i8*)` )
     ( emit `declare void @nurl_eprint(i8*)` )
@@ -8879,7 +8912,7 @@
     ( emit `declare double @nurl_str_to_float(i8*)` )
     ( emit `declare i64    @nurl_parse_int_range(i8*, i64)` )
     ( emit `declare double @nurl_parse_float_range(i8*, i64)` )
-    ( emit `declare i64    @nurl_memcmp_lex(i8*, i64, i8*, i64)` )
+    // nurl_memcmp_lex — pure NURL @-fn now (PURIFY.md Phase 5).
     ( emit `declare i64    @nurl_memmem_range(i8*, i64, i8*, i64)` )
     ( emit `declare i64    @nurl_csv_scan_cell(i8*, i64, i64)` )
     ( emit `declare i64    @nurl_csv_filter_float_gt(i8*, i8*, i64*, i64*, i64*, i64, i64, double)` )
@@ -9177,6 +9210,17 @@
     ( nurl_sym_def syms `nurl_alloc` `i8*` )
     ( nurl_sym_def syms `nurl_zalloc` `i8*` )
     ( nurl_sym_def syms `nurl_realloc` `i8*` )
+    // libc string / parse primitives (PURIFY.md Phase 5, 2026-05-23)
+    ( nurl_sym_def syms `strlen` `i64` )
+    ( nurl_sym_def syms `strcmp` `i32` )
+    ( nurl_sym_def syms `strncmp` `i32` )
+    ( nurl_sym_def syms `memcmp` `i32` )
+    ( nurl_sym_def syms `strstr` `i8*` )
+    ( nurl_sym_def syms `memmem` `i8*` )
+    ( nurl_sym_def syms `atoll` `i64` )
+    ( nurl_sym_def syms `atof` `double` )
+    ( nurl_sym_def syms `memcpy` `i8*` )
+    ( nurl_sym_def syms `strdup` `i8*` )
     // file I/O
     ( nurl_sym_def syms `nurl_file_open` `i8*` )
     ( nurl_sym_def syms `nurl_file_write` `void` )
@@ -9209,7 +9253,7 @@
     ( nurl_sym_def syms `nurl_is_inf` `i64` )
     ( nurl_sym_def syms `nurl_str_to_float_safe` `i64` )
     ( nurl_sym_def syms `nurl_parse_int_range` `i64` )
-    ( nurl_sym_def syms `nurl_memcmp_lex` `i64` )
+    // nurl_memcmp_lex sym_def — pure NURL @-fn now (PURIFY.md Phase 5).
     ( nurl_sym_def syms `nurl_memmem_range` `i64` )
     ( nurl_sym_def syms `nurl_csv_scan_cell` `i64` )
     ( nurl_sym_def syms `nurl_csv_filter_float_gt` `i64` )

@@ -53,6 +53,25 @@ $ `stdlib/core/char.nu`
 // the compiler to reference %String before its body is emitted. We keep
 // this module self-contained on Vec[u] primitives only.
 
+// ── PURIFY.md Phase 5 (2026-05-23): pure-NURL replacements for
+//    the historic `nurl_str_*` / `nurl_memcmp_lex` / `nurl_memmem_range`
+//    / `nurl_parse_int_range` C wrappers in `stdlib/runtime.c §2`.
+//    Direct libc FFI — `strlen` / `strcmp` / `strncmp` / `strstr` /
+//    `memcmp` / `memmem` / `atoll` / `atof` / `memcpy` / `strdup`
+//    are declared globally by the nurlc preamble, so call sites
+//    don't need a per-file `&`-FFI declaration.
+
+@ nurl_memcmp_lex s a i la s b i lb → i {
+    : i n ? < la lb la lb
+    ? > n 0 {
+        : i c # i ( memcmp a b n )
+        ? != c 0 { ^ ? < c 0 -1 1 } {}
+    } {}
+    ? < la lb { ^ -1 } {}
+    ? > la lb { ^ 1 } {}
+    ^ 0
+}
+
 : String {
     s ctl
 }

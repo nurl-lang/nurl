@@ -1058,20 +1058,9 @@ long long nurl_memmem_range(const char *hay, long long hlen,
 #endif
 }
 
-/* Lexicographic memcmp with length tiebreak (shorter < longer when prefix
- * matches). Returns sign of difference (-1/0/+1), suitable as a 3-way
- * comparator. */
-long long nurl_memcmp_lex(const char *a, long long la,
-                          const char *b, long long lb) {
-    long long n = la < lb ? la : lb;
-    if (n > 0) {
-        int c = memcmp(a, b, (size_t)n);
-        if (c != 0) return c < 0 ? -1 : 1;
-    }
-    if (la < lb) return -1;
-    if (la > lb) return 1;
-    return 0;
-}
+/* nurl_memcmp_lex — REMOVED 2026-05-23 (PURIFY.md Phase 5).
+ * Pure NURL via libc `memcmp`; lives in `stdlib/core/string.nu`
+ * (and `compiler/nurlc.nu`'s local copy). */
 
 /* Return bytes [start, start+len); result is malloc'd.
  * Clamps to actual string length. */

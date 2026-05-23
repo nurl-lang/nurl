@@ -5,11 +5,9 @@
 // raw-pointer indeksointia ja FFI-liitäntää.
 // ============================================================
 
-// FFI-liitännät libc:hen
-& `libc`
-
-@ strlen s str → i
-
+// FFI-liitännät libc:hen — `strlen` tulee nykyisin kääntäjän
+// preamblesta globaalisti (PURIFY.md Phase 5 scaffolding,
+// 2026-05-23), joten per-tiedosto-redeklaraatio jäi pois.
 & `libc`
 
 @ write i fd s buf i count → i
