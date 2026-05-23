@@ -46,21 +46,90 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/errors.nu`
+$ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get + nurl_native_sizeof
 // sleep_ms is fiber-aware via the runtime — parks on the reactor's
 // timer wheel when invoked from a fiber, blocks via nanosleep when
 // invoked from a plain OS thread.
 $ `stdlib/std/async_ffi.nu`
 
+// ── §12 Time — pure-NURL libc FFI ────────────────────────────────────
+//
+// PURIFY (2026-05-24): the four runtime helpers (`nurl_now_ms` /
+// `_now_seconds` / `_monotonic_ns` / `_sleep_ms`) are gone — every
+// supported target reaches `clock_gettime(2)` / `nanosleep(2)` through
+// libc directly. Linux + macOS expose them in their primary libc;
+// MinGW-w64 routes through winpthreads (we already link `-lpthread` on
+// Win32 from Phase 6); wasi-libc wraps the WASI snapshot-1 syscalls.
+//
+// Buffer layout: `struct timespec` is `{ time_t tv_sec; long tv_nsec; }`.
+// On every supported 64-bit POSIX target it is 16 bytes (8 + 8); on
+// MinGW Win32 it is 12 bytes packed (`long` is 32 bits on LLP64) but
+// the struct's natural alignment is 8, so its sizeof rounds to 16.
+// Allocating 16 bytes via `nurl_zalloc` covers every layout: the
+// trailing pad on Win32/WASI stays zeroed so `nurl_peek` of slot 1
+// returns the 32-bit `tv_nsec` extended with zeros — the correct value.
+
+& `c` @ clock_gettime i32 clock_id *u tp → i32
+& `c` @ nanosleep     *u req         *u rem → i32
+
 @ now_ms → i {
-    ^ ( nurl_now_ms )
+    : s ts ( nurl_zalloc 16 )
+    : i32 rc ( clock_gettime # i32 ( posix_const `CLOCK_REALTIME` ) # *u ts )
+    ? != rc 0 { ( nurl_free ts ) ^ 0 } {}
+    : i secs ( nurl_peek ts 0 )
+    : i nsec ( nurl_peek ts 1 )
+    ( nurl_free ts )
+    ^ + * secs 1000 / nsec 1000000
 }
 
 @ now_seconds → i {
-    ^ ( nurl_now_seconds )
+    : s ts ( nurl_zalloc 16 )
+    : i32 rc ( clock_gettime # i32 ( posix_const `CLOCK_REALTIME` ) # *u ts )
+    ? != rc 0 { ( nurl_free ts ) ^ 0 } {}
+    : i secs ( nurl_peek ts 0 )
+    ( nurl_free ts )
+    ^ secs
 }
 
 @ monotonic_ns → i {
-    ^ ( nurl_monotonic_ns )
+    : s ts ( nurl_zalloc 16 )
+    : i32 rc ( clock_gettime # i32 ( posix_const `CLOCK_MONOTONIC` ) # *u ts )
+    ? != rc 0 { ( nurl_free ts ) ^ 0 } {}
+    : i secs ( nurl_peek ts 0 )
+    : i nsec ( nurl_peek ts 1 )
+    ( nurl_free ts )
+    ^ + * secs 1000000000 nsec
+}
+
+// Blocking `nanosleep` loop — retries on EINTR with the remaining
+// time the kernel wrote into the second timespec. Negative / zero ms
+// is a no-op. Allocates two 16-byte timespec buffers (req + rem) so
+// EINTR retries preserve the unslept remainder.
+@ __sleep_ms_blocking i ms → v {
+    ? > ms 0 {
+        : s req ( nurl_zalloc 16 )
+        : i secs / ms 1000
+        : i ms_rem - ms * secs 1000
+        ( nurl_poke req 0 secs )
+        ( nurl_poke req 1 * ms_rem 1000000 )
+        : ~ b done F
+        ~ ! done {
+            : i32 rc ( nanosleep # *u req # *u req )
+            ? == rc 0 {
+                = done T
+            } {
+                : i e ( nurl_errno_get )
+                ? != e ( posix_const `EINTR` ) {
+                    // Any non-EINTR failure (EINVAL, EFAULT) is a programmer
+                    // bug, not a transient — stop retrying rather than
+                    // spin-loop. The remaining sleep is lost; callers that
+                    // care should not feed in bogus durations.
+                    = done T
+                } {}
+            }
+        }
+        ( nurl_free req )
+    } {}
 }
 
 // Context-aware sleep: when called from inside a fiber, parks on
@@ -74,12 +143,12 @@ $ `stdlib/std/async_ffi.nu`
     ? != fcur 0 {
         : i unused ( nurl_fiber_sleep_ms ms )
     } {
-        ( nurl_sleep_ms ms )
+        ( __sleep_ms_blocking ms )
     }
 }
 
 @ elapsed_ms_since i t0 → i {
-    : i now ( nurl_monotonic_ns )
+    : i now ( monotonic_ns )
     ^ / - now t0 1000000
 }
 

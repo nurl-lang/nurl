@@ -2355,6 +2355,19 @@ long long nurl_native_constant(const char *name) {
     if (strcmp(name, "EINTR")       == 0) return EINTR;
     if (strcmp(name, "EPIPE")       == 0) return EPIPE;
 #endif
+    /* POSIX `<time.h>` clock identifiers — exposed unconditionally
+     * because `<time.h>` is included at file scope above, and every
+     * supported target's `clock_gettime` (Linux/macOS libc, MinGW
+     * winpthreads, wasi-libc) recognises these IDs. The values differ
+     * across platforms (CLOCK_MONOTONIC is 1 on Linux/WASI/MinGW but 6
+     * on macOS) so NURL callers must read them at runtime rather than
+     * hard-code. Used by `stdlib/std/time.nu` (PURIFY §12). */
+#ifdef CLOCK_REALTIME
+    if (strcmp(name, "CLOCK_REALTIME")  == 0) return CLOCK_REALTIME;
+#endif
+#ifdef CLOCK_MONOTONIC
+    if (strcmp(name, "CLOCK_MONOTONIC") == 0) return CLOCK_MONOTONIC;
+#endif
     (void)name;
     return -1;
 }
@@ -2532,72 +2545,21 @@ long long nurl_str_to_float_safe(const char *s) {
 
 double nurl_str_float_value(void) { return g_last_parsed_float; }
 
-/* ── §12  Time ─────────────────────────────────────────────────── */
-/* MSVC's UCRT lacks POSIX `clock_gettime` and `nanosleep`, so the
- * Windows path uses `GetSystemTimeAsFileTime` + `QueryPerformanceCounter`
- * + `Sleep`. MinGW-w64 actually does provide clock_gettime, but going
- * through Win32 APIs unconditionally on _WIN32 keeps both toolchains on
- * the same code path. */
-
-long long nurl_now_ms(void) {
-#ifdef _WIN32
-    /* FILETIME ticks are 100ns since 1601-01-01; offset to Unix epoch =
-     * 11644473600 seconds = 116444736000000000 in 100ns units. */
-    FILETIME ft;
-    GetSystemTimeAsFileTime(&ft);
-    unsigned long long t = ((unsigned long long)ft.dwHighDateTime << 32)
-                         |  (unsigned long long)ft.dwLowDateTime;
-    t -= 116444736000000000ULL;          /* → 100ns since Unix epoch */
-    return (long long)(t / 10000ULL);    /* → ms */
-#else
-    struct timespec ts;
-    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) return 0;
-    return (long long)ts.tv_sec * 1000LL + (long long)(ts.tv_nsec / 1000000LL);
-#endif
-}
-
-long long nurl_now_seconds(void) {
-#ifdef _WIN32
-    return nurl_now_ms() / 1000LL;
-#else
-    struct timespec ts;
-    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) return 0;
-    return (long long)ts.tv_sec;
-#endif
-}
-
-long long nurl_monotonic_ns(void) {
-#ifdef _WIN32
-    LARGE_INTEGER freq, ctr;
-    if (!QueryPerformanceFrequency(&freq) || !QueryPerformanceCounter(&ctr))
-        return 0;
-    /* Convert ticks → ns without losing precision: split the multiply. */
-    long long sec     = ctr.QuadPart / freq.QuadPart;
-    long long rem     = ctr.QuadPart % freq.QuadPart;
-    long long ns_part = (rem * 1000000000LL) / freq.QuadPart;
-    return sec * 1000000000LL + ns_part;
-#elif defined(CLOCK_MONOTONIC)
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
-    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
-#else
-    struct timespec ts;
-    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) return 0;
-    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
-#endif
-}
-
-void nurl_sleep_ms(long long ms) {
-    if (ms <= 0) return;
-#ifdef _WIN32
-    Sleep((DWORD)ms);
-#else
-    struct timespec req;
-    req.tv_sec  = (time_t)(ms / 1000);
-    req.tv_nsec = (long)((ms % 1000) * 1000000L);
-    while (nanosleep(&req, &req) == -1 && errno == EINTR) { /* retry */ }
-#endif
-}
+/* §12 Time — REMOVED 2026-05-24 (PURIFY.md Phase §12).
+ *
+ * `nurl_now_ms` / `_now_seconds` / `_monotonic_ns` / `_sleep_ms` are
+ * now pure-NURL `& \`c\``-FFI calls into libc's `clock_gettime(2)` and
+ * `nanosleep(2)` from `stdlib/std/time.nu`. Every supported target
+ * resolves the two symbols cleanly: Linux/macOS via primary libc,
+ * MinGW Win32 via the already-linked winpthreads (`-lpthread`),
+ * wasi-libc via its POSIX shim over `clock_time_get` / `poll_oneoff`.
+ * Constants `CLOCK_REALTIME` and `CLOCK_MONOTONIC` come from the new
+ * `nurl_native_constant` table entries above (their values differ
+ * across platforms — macOS uses 6 for `CLOCK_MONOTONIC` vs 1 elsewhere).
+ *
+ * runtime.c shed ~66 LOC; compiler/nurlc.nu shed 4 `declare` lines and
+ * 4 `nurl_sym_def` entries. The bootstrap fixed point held on the
+ * lastgood-refresh round-trip. */
 
 /* ── §13  CLI tooling: env, cwd, stdin slurp, directory listing ── */
 /* All const char* returns are heap-owned (Phase 2B) — strdup on success,

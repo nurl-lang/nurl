@@ -74,7 +74,7 @@ genuinely irreducible.
 | 9  | Memory allocation                 |   39 | OS-glue   | [ ] | keep as 3-fn `malloc`/`free`/`realloc` thunk |
 | 10 | (REMOVED 2026-05-01)              |    9 |    —      | [x] | already gone |
 | 11 | Math (libm bridge)                |   91 | FFI       | [~] | PARTIAL 2026-05-23 — 12 libm wrappers + iabs/ipow removed (pure-NURL FFI to libm in `stdlib/std/float.nu`; pure NURL algorithms for `int_abs`/`int_pow` in `stdlib/std/int.nu`); -17 C LOC + 14 preamble declares + 14 sym_def entries. Bit access, isnan/isinf, strtod parser retained (type-punning + static state). |
-| 12 | Time                              |   67 | OS-glue   | [ ] | pure-NURL FFI to `clock_gettime` + `nanosleep` |
+| 12 | Time                              |   67 | OS-glue   | [x] | DONE 2026-05-24 — `nurl_now_ms` / `_now_seconds` / `_monotonic_ns` / `_sleep_ms` replaced by pure-NURL `& \`c\`` FFI to `clock_gettime` + `nanosleep` in `stdlib/std/time.nu`. `CLOCK_REALTIME` / `CLOCK_MONOTONIC` added to `nurl_native_constant` (macOS uses 6 for `CLOCK_MONOTONIC` vs 1 elsewhere). −38 C LOC; 4 preamble declares + 4 `sym_def` entries gone. Single code path across Linux / macOS / MinGW (winpthreads) / wasi-libc; no platform `#ifdef` gating in NURL. |
 | 13 | CLI tooling                       |  219 | OS-glue   | [ ] | shrink — env/cwd/dir-list are simple wrappers |
 | 14 | HTTP client (libcurl)             |  665 | Lib-cache | [ ] | shrink to libcurl-easy bridge only; high-level moves to NURL |
 | 14b | HTTP streaming (libcurl multi)   |  396 | Lib-cache | [ ] | reduce; multi-handle state-cache stays C |
@@ -567,6 +567,46 @@ LOC (−330). Bootstrap held; sqlite_basic + every consumer passes.
 
 **Acceptance:** every HTTP / SQLite test passes. Per-request
 overhead within 10 % of pre-phase baseline.
+
+### Phase §12 — Time (clock_gettime + nanosleep, ~38 LOC) — DONE 2026-05-24
+
+Shipped: `stdlib/std/time.nu` now declares `clock_gettime` and
+`nanosleep` directly via `& \`c\`` and replaces every runtime helper
+(`nurl_now_ms` / `_now_seconds` / `_monotonic_ns` / `_sleep_ms`) with
+pure-NURL implementations over a 16-byte `struct timespec` buffer.
+
+  * **Cross-platform without `#ifdef`.** Linux + macOS expose
+    `clock_gettime` and `nanosleep` in primary libc; MinGW-w64 routes
+    through winpthreads (already linked via `-lpthread` from Phase 6
+    batch 1); wasi-libc wraps the WASI snapshot-1 syscalls. NURL ships
+    one code path — no platform gating.
+  * **Constants via `nurl_native_constant`.** `CLOCK_REALTIME` and
+    `CLOCK_MONOTONIC` added to the table (outside the existing
+    `!_WIN32 && !__wasi__` guard since `<time.h>` is included at file
+    scope). macOS values differ — `CLOCK_MONOTONIC = 6` there vs `1`
+    elsewhere — so NURL reads at runtime rather than hard-coding.
+  * **16-byte allocation.** `struct timespec` is `{ time_t tv_sec;
+    long tv_nsec; }`: 16 B on every 64-bit POSIX target, 12 B packed
+    on MinGW LLP64 (rounded to 16 with 8-byte alignment). Allocating
+    16 via `nurl_zalloc` covers every layout — the trailing pad on
+    Win32/WASI stays zeroed so `nurl_peek` of slot 1 returns the
+    32-bit `tv_nsec` extended with zeros, the correct value.
+  * **`nanosleep` EINTR retry** uses `nanosleep(req, req)` — same
+    pointer for both args, so the kernel updates the remaining time
+    in place and the retry sees the correct duration. Non-EINTR
+    failures (EINVAL / EFAULT) drop the residual sleep rather than
+    spin-loop.
+
+`runtime.c §12` deleted (66 → 14 LOC comment stub); `compiler/nurlc.nu`
+shed 4 `declare` lines + 4 `nurl_sym_def` entries. Net `runtime.c`
+delta: 7 229 → 7 191 LOC (−38, after the +10 LOC for the two new
+`nurl_native_constant` entries). Two test files (`async_http_server.nu`,
+`async_tcp.nu`) updated to `$`-import `stdlib/std/time.nu` and call
+`sleep_ms` instead of the removed runtime symbol.
+
+Bootstrap fixed point held after a lastgood-refresh round-trip; the
+full 272-test corpus passes including `async_*`, `process_basic`,
+`http_server_*`, `mqtt_basic`.
 
 ### Phase 13 — Basic I/O thinning (`§1`, ~150 LOC) — DEFERRED 2026-05-23
 
