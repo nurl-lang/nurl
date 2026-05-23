@@ -366,15 +366,60 @@ full-Phase-7 target: ~150-200 LOC, far below the 500 the original
 plan assumed (the plan double-counted §13's getenv/getcwd and
 overestimated how much of §4's mmap/stat paths can leave C).
 
-### Phase 8 — Process spawn (`§16 + §16b`, ~700 LOC reduction)
+### Phase 8 — Process spawn (`§16 + §16b`, ~700 LOC reduction) — BATCH 1 LANDED 2026-05-23
 
 `fork`/`execvp`/`pipe`/`poll`/`dup2`/`close`/`waitpid` are all libc
-syscalls. Pure-NURL FFI replaces every direct call. The duplex-
+syscalls; pure-NURL FFI can call each one directly. The duplex-
 stdio loop (`nurl_proc_read_line` line-buffer accumulator) becomes
 NURL code over the FFI primitives.
 
-**Residual C:** the CLOEXEC sideband for exec-error reporting needs
-~25 LOC of pipe + dup2 sequencing.
+**Batch 1 — POSIX FFI scaffolding** landed. No C-LOC reduction
+this batch; this is the foundation for batches 2 + 3.
+
+  * `stdlib/runtime.c §2` gains:
+    - `nurl_native_constant(name)` — runtime lookup for platform-
+      varying ints (`O_NONBLOCK`, `F_GETFL`, `POLLIN`, `SIGTERM`,
+      `WNOHANG`, common errnos). Returns -1 on Win32/WASI for the
+      POSIX-only names — caller gates the whole code path on target.
+    - `nurl_errno_get` / `nurl_errno_set` — thread-local errno
+      accessor (libc's `__errno_location` differs by platform).
+    - `nurl_wait_is_exited` / `_exit_status` / `_is_signaled` /
+      `_term_sig` — function-wrapped versions of the WIFEXITED /
+      WEXITSTATUS / WIFSIGNALED / WTERMSIG macros (NURL has no
+      preprocessor).
+    - `struct pollfd` + `pid_t` added to `nurl_native_sizeof` table.
+    - POSIX headers (`<fcntl.h>` / `<poll.h>` / `<sys/wait.h>` /
+      `<unistd.h>`) promoted to the top-of-file POSIX include block
+      so §2's new helpers can see the constants/macros.
+
+  * `stdlib/core/posix.nu` (new, 168 LOC) — pure-NURL FFI surface
+    for fork / execvp / `_exit` / waitpid / kill / getpid / pipe /
+    dup2 / close / fcntl / read / write / signal / poll. Plus
+    `posix_pollfd_set` / `_revents` helpers for the 8-byte struct.
+
+  * `compiler/tests/posix_fork_exec.nu` (new) — smoke test that
+    forks, execs `/bin/true`, waitpids the child, and decodes the
+    exit status via the new helpers. End-to-end proof that the
+    NURL→pthread_create→execvp→waitpid path works under bootstrap.
+
+**Batch 2 — port `nurl_proc_run` POSIX backend (~240 LOC C → NURL)**:
+fork + 4 × pipe + CLOEXEC sideband + dup2 setup + execvp + poll
+drain loop + waitpid + errno-mapped err_kind. The CLOEXEC sideband
+(parent reads `int errno` from exec-error pipe; EOF without bytes
+= exec succeeded) is the tricky part — needs `cell_for_native "int"`
+storage plus pipe-with-FD_CLOEXEC. NurlProcResult struct may stay
+C-side as an opaque allocation, populated through small per-field
+setters; or move to NURL Output struct with named fields.
+
+**Batch 3 — port `nurl_proc_spawn` POSIX backend (~227 LOC)**:
+same fork-spawn shape but keeps the child's stdin/stdout/stderr
+open for incremental writes / line-buffered reads. The
+`nurl__pc_drain_line` accumulator becomes a NURL Vec[u]
+manipulator over the FFI read.
+
+**Residual C:** Win32 backend (~215 LOC, CreateProcess + reader
+threads) stays — the API surface is genuinely incompatible with
+fork/exec. CLOEXEC sideband C-side or NURL-side is roughly a wash.
 
 ### Phase 9 — Compiler-internal helpers (`§5 + §6sym + §7 + §8`, ~244 LOC reduction)
 

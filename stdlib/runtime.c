@@ -2247,10 +2247,18 @@ void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
  * its storage from sizeof(pthread_mutex_t) — so the Win32 runtime
  * needs the same header that POSIX does. */
 #  include <pthread.h>
-#else
+#elif !defined(__wasi__)
 #  include <pthread.h>
 #  include <sys/socket.h>
 #  include <netinet/in.h>
+/* POSIX syscall headers — needed at the top because PURIFY Phase 8
+ * scaffolding (`nurl_native_constant`, `nurl_wait_is_exited`, …) sits
+ * up here in §2 and needs the constants / macros from fcntl / poll /
+ * sys/wait. Previously §16 included them inside its POSIX backend. */
+#  include <fcntl.h>
+#  include <poll.h>
+#  include <sys/wait.h>
+#  include <unistd.h>
 #endif
 
 long long nurl_native_sizeof(const char *name) {
@@ -2275,12 +2283,116 @@ long long nurl_native_sizeof(const char *name) {
     if (strcmp(name, "struct sockaddr_in")  == 0) return (long long)sizeof(struct sockaddr_in);
     if (strcmp(name, "struct sockaddr_in6") == 0) return (long long)sizeof(struct sockaddr_in6);
     if (strcmp(name, "struct sockaddr_storage") == 0) return (long long)sizeof(struct sockaddr_storage);
+#if !defined(_WIN32) && !defined(__wasi__)
+    /* POSIX poll(2) — only relevant on Linux/macOS; Win32 has its own
+     * WSAPoll layout. Phase 8 NURL FFI uses this for proc-spawn polling. */
+    if (strcmp(name, "struct pollfd")       == 0) return (long long)sizeof(struct pollfd);
+    if (strcmp(name, "pid_t")               == 0) return (long long)sizeof(pid_t);
+#endif
     if (strcmp(name, "int")                 == 0) return (long long)sizeof(int);
     if (strcmp(name, "long")                == 0) return (long long)sizeof(long);
     if (strcmp(name, "size_t")              == 0) return (long long)sizeof(size_t);
     if (strcmp(name, "off_t")               == 0) return (long long)sizeof(off_t);
     if (strcmp(name, "time_t")              == 0) return (long long)sizeof(time_t);
     return -1;
+}
+
+/* ── Native constant lookup ────────────────────────────────────────
+ *
+ * Same shape as `nurl_native_sizeof` but for integer constants whose
+ * values vary by platform — POSIX `O_NONBLOCK` is 2048 on glibc and
+ * 4 on macOS; `POLLIN` is 1 universally but `POLLHUP` differs; signal
+ * numbers shift between Linux and macOS. NURL has no `#ifdef`, so
+ * platform-conditional constants need a runtime accessor.
+ *
+ * Used by `stdlib/core/posix.nu` (PURIFY Phase 8 scaffolding) so the
+ * pure-NURL fork/exec/poll/waitpid path can call `fcntl(fd, F_SETFL,
+ * O_NONBLOCK)` etc. without baking integer values into NURL code.
+ *
+ * Returns -1 for unknown names — caller treats that as a hard
+ * portability bug, not a recoverable error. Win32 / WASI return -1
+ * for every POSIX-only name (the NURL caller is expected to gate the
+ * whole POSIX code path on a target check). */
+long long nurl_native_constant(const char *name) {
+    if (!name) return -1;
+#if !defined(_WIN32) && !defined(__wasi__)
+    /* fcntl(2) command words */
+    if (strcmp(name, "F_GETFL")     == 0) return F_GETFL;
+    if (strcmp(name, "F_SETFL")     == 0) return F_SETFL;
+    if (strcmp(name, "F_GETFD")     == 0) return F_GETFD;
+    if (strcmp(name, "F_SETFD")     == 0) return F_SETFD;
+    if (strcmp(name, "FD_CLOEXEC")  == 0) return FD_CLOEXEC;
+    if (strcmp(name, "O_NONBLOCK")  == 0) return O_NONBLOCK;
+    /* poll(2) events */
+    if (strcmp(name, "POLLIN")      == 0) return POLLIN;
+    if (strcmp(name, "POLLOUT")     == 0) return POLLOUT;
+    if (strcmp(name, "POLLHUP")     == 0) return POLLHUP;
+    if (strcmp(name, "POLLERR")     == 0) return POLLERR;
+    if (strcmp(name, "POLLNVAL")    == 0) return POLLNVAL;
+    /* signals — Phase 8 only needs the small set the proc-spawn path
+     * uses, but list common ones so user code can spawn signal handlers. */
+    if (strcmp(name, "SIGPIPE")     == 0) return SIGPIPE;
+    if (strcmp(name, "SIGTERM")     == 0) return SIGTERM;
+    if (strcmp(name, "SIGKILL")     == 0) return SIGKILL;
+    if (strcmp(name, "SIGINT")      == 0) return SIGINT;
+    if (strcmp(name, "SIGHUP")      == 0) return SIGHUP;
+    if (strcmp(name, "SIGCHLD")     == 0) return SIGCHLD;
+    /* signal(2) sentinel: SIG_IGN is a function pointer-cast macro.
+     * Cast to long long via uintptr_t — the only legal value the
+     * receiver passes back to signal(2) is what we returned here. */
+    if (strcmp(name, "SIG_IGN")     == 0) return (long long)(uintptr_t)SIG_IGN;
+    if (strcmp(name, "SIG_DFL")     == 0) return (long long)(uintptr_t)SIG_DFL;
+    /* waitpid(2) options */
+    if (strcmp(name, "WNOHANG")     == 0) return WNOHANG;
+    /* errno values surfaced for diagnostic / branching in NURL */
+    if (strcmp(name, "ENOENT")      == 0) return ENOENT;
+    if (strcmp(name, "EAGAIN")      == 0) return EAGAIN;
+    if (strcmp(name, "EWOULDBLOCK") == 0) return EWOULDBLOCK;
+    if (strcmp(name, "EINTR")       == 0) return EINTR;
+    if (strcmp(name, "EPIPE")       == 0) return EPIPE;
+#endif
+    (void)name;
+    return -1;
+}
+
+/* errno is a thread-local on every platform; libc exposes it via
+ * `__errno_location()` (glibc), `__error()` (BSD/macOS), `_errno()`
+ * (mingw). NURL FFI can't follow that platform-specific accessor
+ * cleanly, so the runtime hands back the current value. */
+int nurl_errno_get(void) { return errno; }
+void nurl_errno_set(int e) { errno = e; }
+
+/* Macro decoders for waitpid status. WIFEXITED / WEXITSTATUS are
+ * preprocessor bit-twiddles; NURL has no preprocessor, so the
+ * runtime exposes them as trivial functions. Same pattern as
+ * nurl_native_sizeof — opaque platform shape behind a stable API. */
+int nurl_wait_is_exited (int status) {
+#if defined(_WIN32) || defined(__wasi__)
+    (void)status; return 0;
+#else
+    return WIFEXITED(status) ? 1 : 0;
+#endif
+}
+int nurl_wait_exit_status(int status) {
+#if defined(_WIN32) || defined(__wasi__)
+    (void)status; return -1;
+#else
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
+}
+int nurl_wait_is_signaled(int status) {
+#if defined(_WIN32) || defined(__wasi__)
+    (void)status; return 0;
+#else
+    return WIFSIGNALED(status) ? 1 : 0;
+#endif
+}
+int nurl_wait_term_sig(int status) {
+#if defined(_WIN32) || defined(__wasi__)
+    (void)status; return 0;
+#else
+    return WIFSIGNALED(status) ? WTERMSIG(status) : 0;
+#endif
 }
 
 /* ── Atomic refcount primitives ─────────────────────────────────────
