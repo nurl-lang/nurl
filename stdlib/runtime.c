@@ -2463,29 +2463,12 @@ double nurl_f32_from_bits(long long bits) {
 long long nurl_is_nan(double x) { return isnan(x) ? 1 : 0; }
 long long nurl_is_inf(double x) { return isinf(x) ? 1 : 0; }
 
-/* Strict double parser. Returns 1 on success, 0 on failure.
- * On success the parsed value is stored in a sideband retrievable via
- * nurl_str_float_value(). Rejects empty strings, trailing garbage
- * (after optional whitespace), no-digit strings, and out-of-range. */
-static double g_last_parsed_float = 0.0;
-
-long long nurl_str_to_float_safe(const char *s) {
-    g_last_parsed_float = 0.0;
-    if (!s) return 0;
-    while (*s == ' ' || *s == '\t') s++;
-    if (*s == '\0') return 0;
-    char *end = NULL;
-    errno = 0;
-    double v = strtod(s, &end);
-    if (end == s) return 0;                         /* no digits */
-    if (errno == ERANGE) return 0;                  /* overflow / underflow */
-    while (*end == ' ' || *end == '\t') end++;
-    if (*end != '\0') return 0;                     /* trailing garbage */
-    g_last_parsed_float = v;
-    return 1;
-}
-
-double nurl_str_float_value(void) { return g_last_parsed_float; }
+/* nurl_str_to_float_safe / _str_float_value / g_last_parsed_float —
+ * REMOVED 2026-05-24 (§11 strtod sideband). `stdlib/std/float.nu`'s
+ * `float_parse` now calls `strtod` directly through `& \`c\`` FFI,
+ * collects the parsed double as the return value, and walks the
+ * `endptr` slot in NURL to enforce strict trailing-garbage rejection.
+ * `ERANGE` detection routes through `nurl_errno_get` + `nurl_native_constant`. */
 
 /* §12 Time — REMOVED 2026-05-24 (PURIFY.md Phase §12).
  *

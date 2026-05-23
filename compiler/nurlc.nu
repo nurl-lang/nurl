@@ -9235,8 +9235,6 @@
     // stdlib/std/int.nu) as PURIFY.md Phase 3 (2026-05-23).
     ( emit `declare i64    @nurl_is_nan(double)` )
     ( emit `declare i64    @nurl_is_inf(double)` )
-    ( emit `declare i64    @nurl_str_to_float_safe(i8*)` )
-    ( emit `declare double @nurl_str_float_value()` )
     ( emit `declare i64  @nurl_dir_list_open(i8*)` )
     ( emit `declare i8*  @nurl_dir_list_next(i64)` )
     ( emit `declare void @nurl_dir_list_close(i64)` )
@@ -9444,7 +9442,6 @@
     ( nurl_sym_def syms `nurl_errno_kind` `i64` )
     // double-returning runtime functions
     ( nurl_sym_def syms `nurl_lex_fnum` `double` )
-    ( nurl_sym_def syms `nurl_str_float_value` `double` )
     ( nurl_sym_def syms `nurl_parse_float_range` `double` )
     // libm wrappers + iabs/ipow removed in PURIFY.md Phase 3 — see
     // `stdlib/std/float.nu` (libm FFI) and `stdlib/std/int.nu`
@@ -9452,7 +9449,6 @@
     // i64-returning math/parse helpers (still C-side)
     ( nurl_sym_def syms `nurl_is_nan` `i64` )
     ( nurl_sym_def syms `nurl_is_inf` `i64` )
-    ( nurl_sym_def syms `nurl_str_to_float_safe` `i64` )
     ( nurl_sym_def syms `nurl_parse_int_range` `i64` )
     // nurl_str_len / _eq / _cmp / _to_int / _to_float / _starts /
     // _find / _ends / _memmem_range / _memcmp_lex — pure-NURL

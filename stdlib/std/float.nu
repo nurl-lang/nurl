@@ -39,6 +39,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/errors.nu`
+$ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get for strtod ERANGE detection
 
 // ── Constants ──────────────────────────────────────────────────────
 
@@ -111,20 +112,62 @@ $ `stdlib/core/errors.nu`
 
 // ── Strict parser ──────────────────────────────────────────────────
 //
-// Uses the runtime sideband: nurl_str_to_float_safe returns 1/0 ok-flag
-// and stashes the parsed value in a static slot retrievable via
-// nurl_str_float_value. Single-threaded only, but consistent with the
-// rest of NURL's runtime conventions (see `nurl_get_last_type`).
+// Direct FFI to libc `strtod` — PURIFY §11 batch (2026-05-24) eliminated
+// the runtime sideband (`nurl_str_to_float_safe` + `nurl_str_float_value`
+// + static `g_last_parsed_float`). Strictness is enforced here:
+//
+//   - empty input                                → Empty
+//   - leading whitespace ok, but at least one non-WS must follow → BadFormat
+//   - no digits consumed (`endptr == str_after_ws`)              → BadFormat
+//   - errno = ERANGE on overflow / underflow                     → BadFormat
+//   - non-whitespace trailing garbage                            → BadFormat
 
 @ float_parse s str → !f ParseErr {
-    ? == 0 ( nurl_str_len str ) {
-        ^ @ !f ParseErr { F @ ParseErr { Empty } }
-    } {}
-    : i ok ( nurl_str_to_float_safe str )
-    ? == ok 0 {
+    : i n ( nurl_str_len str )
+    ? == n 0 { ^ @ !f ParseErr { F @ ParseErr { Empty } } } {}
+    // strtod skips leading whitespace itself, but we still need to
+    // detect "all whitespace" inputs so the caller can distinguish
+    // Empty from BadFormat. Walk past spaces / tabs explicitly.
+    : ~ i pre 0
+    : ~ b stopped F
+    ~ & < pre n ! stopped {
+        : i c ( nurl_str_get str pre )
+        ? || == c 32 == c 9 { = pre + pre 1 } { = stopped T }
+    }
+    ? >= pre n { ^ @ !f ParseErr { F @ ParseErr { Empty } } } {}
+
+    : s ep_buf ( nurl_alloc 8 )
+    ? == # i ep_buf 0 { ^ @ !f ParseErr { F @ ParseErr { BadFormat } } } {}
+    ( nurl_poke ep_buf 0 0 )
+    ( nurl_errno_set 0 )
+    : f v ( strtod str # *u ep_buf )
+    : i end ( nurl_peek ep_buf 0 )
+    ( nurl_free ep_buf )
+
+    // No digits consumed: endptr stayed at the first non-whitespace
+    // byte (which strtod's internal whitespace skip reached).
+    : i sptr + # i str pre
+    ? == end sptr { ^ @ !f ParseErr { F @ ParseErr { BadFormat } } } {}
+
+    // Out-of-range overflow / underflow.
+    : i e ( nurl_errno_get )
+    ? == e ( posix_const `ERANGE` ) {
         ^ @ !f ParseErr { F @ ParseErr { BadFormat } }
     } {}
-    ^ @ !f ParseErr { T ( nurl_str_float_value ) }
+
+    // Trailing garbage check: skip whitespace at endptr, then require
+    // NUL terminator. NURL has no direct *u read-byte primitive in
+    // this context — convert end back to an offset and re-read via
+    // `nurl_str_get` which is bounds-aware.
+    : i tail_off - end # i str
+    : ~ i tk tail_off
+    ~ < tk n {
+        : i tc ( nurl_str_get str tk )
+        ? || == tc 32 == tc 9 { = tk + tk 1 } {
+            ^ @ !f ParseErr { F @ ParseErr { BadFormat } }
+        }
+    }
+    ^ @ !f ParseErr { T v }
 }
 
 // String → float without error info (legacy convenience).
