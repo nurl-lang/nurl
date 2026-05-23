@@ -542,7 +542,7 @@ C-side IP-table policy verbatim (linear search, 256-entry cap,
 last-element-swap-then-pop eviction on refcount=0, no LRU
 churn beyond that).
 
-### Phase 12 — Lib-cache thinning (`§14 + §14b + §21`, ~700 LOC reduction)
+### Phase 12 — Lib-cache thinning (`§14 + §14b + §21`, ~700 LOC reduction) — §21 SQLite DONE 2026-05-23
 
 `§14` HTTP client: keep the libcurl-easy handle bridge (~150 LOC)
 for the request/response state cache; move the request-building +
@@ -552,9 +552,18 @@ URL-encoding helpers move to a NURL module.
 `§14b` HTTP streaming: shrink `NurlHttpStream` to the multi-handle
 + pump-callback state (~80 LOC) and move framing into NURL.
 
-`§21` SQLite: the `sqlite3_column_text` borrowed-pointer view is
-the one real cache (~50 LOC). The rest is pure-NURL FFI over
-`sqlite3_*` symbols.
+`§21` SQLite — **DONE 2026-05-23**. Shipped pure-NURL FFI over 18
+libsqlite3 symbols (`sqlite3_open` / `_close` / `_exec` /
+`_prepare_v2` / `_step` / `_finalize` / `_reset` / `_clear_bindings`
+/ `_bind_int64` / `_bind_text` / `_bind_null` / `_column_int64` /
+`_column_text` / `_column_count` / `_column_type` / `_changes` /
+`_errmsg` / `_free`) in `stdlib/ext/sqlite.nu`. Database +
+Statement handles are 32-byte opaque NURL-allocated heap blocks
+(slot 0 = pointer, 1 = err_kind, 2 = strdup'd diagnostic /
+borrowed-view snapshot). `SQLITE_TRANSIENT` materialised as
+`# *u -1`. `runtime.c §21` deleted in full; 17 declare lines +
+17 sym_def entries gone from `nurlc.nu`. runtime.c 7 559 → 7 229
+LOC (−330). Bootstrap held; sqlite_basic + every consumer passes.
 
 **Acceptance:** every HTTP / SQLite test passes. Per-request
 overhead within 10 % of pre-phase baseline.
