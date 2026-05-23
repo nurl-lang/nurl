@@ -18,6 +18,7 @@
 //                                       `- 0 N` and N must fit in i64)
 
 $ `stdlib/core/errors.nu`
+$ `stdlib/core/char.nu`
 
 // ── Constants ──────────────────────────────────────────────────────
 
@@ -65,7 +66,7 @@ $ `stdlib/core/errors.nu`
 
     ~ < idx len {
         : i c ( nurl_str_get str idx )
-        ? == ( nurl_is_digit c ) 0 {
+        ? == ( is_digit c ) 0 {
             ^ @ !i ParseErr { F @ ParseErr { BadFormat } }
         } {}
         = idx + idx 1

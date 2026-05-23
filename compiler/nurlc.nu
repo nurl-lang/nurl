@@ -1756,6 +1756,15 @@
 // gen_call catches it at the call site instead. The set is the binary
 // operators plus member access `.`, the cast `#` and the caret `^` —
 // every token here is unambiguously an operator, never a function name.
+// Identifier-continuation predicate — used by scan helpers below.
+// Inlines the ASCII alpha/digit/underscore check; the historic
+// `nurl_is_alpha` / `_is_digit` C helpers were dropped in
+// PURIFY.md Phase 1 (2026-05-23) and the nurlc compiler is
+// self-contained (no `$`-imports) so the check lives here verbatim.
+@ __is_ident_char i ch → b {
+    ^ | | | & >= ch 65 <= ch 90 & >= ch 97 <= ch 122 & >= ch 48 <= ch 57 == ch 95
+}
+
 @ __is_operator_callee i tt → b {
     ? == tt TT_DOT { ^ T } {}
     ? == tt TT_HASH { ^ T } {}
@@ -7391,7 +7400,7 @@
     : i word_start 0
     ~ < pos slen {
         : i ch ( nurl_str_get src pos )
-        : b is_ident | | != ( nurl_is_alpha ch ) 0 != ( nurl_is_digit ch ) 0 == ch 95
+        : b is_ident ( __is_ident_char ch )
         ? is_ident
         { = pos + pos 1 }
         { ? > pos word_start
@@ -8697,7 +8706,7 @@
                 = pos + pos 1
                 = word_start pos
             }
-            { : b is_id | | != ( nurl_is_alpha ch ) 0 != ( nurl_is_digit ch ) 0 == ch 95
+            { : b is_id ( __is_ident_char ch )
                 ? is_id
                 { = pos + pos 1 }
                 { ? > pos word_start
@@ -8897,10 +8906,6 @@
     ( emit `declare void @nurl_map_del(i64, i8*)` )
     ( emit `declare i64  @nurl_map_size(i64)` )
     ( emit `declare void @nurl_map_free(i64)` )
-    ( emit `declare i64  @nurl_is_alpha(i64)` )
-    ( emit `declare i64  @nurl_is_digit(i64)` )
-    ( emit `declare i64  @nurl_is_space(i64)` )
-    ( emit `declare i64  @nurl_is_alnum_(i64)` )
     ( emit `declare i8*  @nurl_read_file(i8*)` )
     ( emit `declare void @nurl_exit(i64)` )
     ( emit `declare i64  @nurl_argc()` )

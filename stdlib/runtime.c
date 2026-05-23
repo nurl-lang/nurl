@@ -1108,16 +1108,12 @@ long long nurl_str_ends(const char *s, const char *suffix) {
 }
 
 
-/* ── §3  Char classification ───────────────────────────────────── */
-
-long long nurl_is_alpha(long long c)  { return isalpha((int)c) ? 1 : 0; }
-long long nurl_is_digit(long long c)  { return isdigit((int)c) ? 1 : 0; }
-long long nurl_is_space(long long c)  { return isspace((int)c) ? 1 : 0; }
-/* alnum or underscore */
-long long nurl_is_alnum_(long long c) {
-    return (isalnum((int)c) || c == '_') ? 1 : 0;
-}
-
+/* §3  Char classification — REMOVED 2026-05-23 (PURIFY.md Phase 1).
+ * `nurl_is_alpha` / `_is_digit` / `_is_space` / `_is_alnum_` moved to
+ * pure NURL `stdlib/core/char.nu` as `is_alpha` / `is_digit` /
+ * `is_space` / `is_alnum_us`. The C definitions and their preamble
+ * `declare` lines (both nurlc.nu and nurlc.py) are gone too.
+ */
 
 /* ── §4  File & process ────────────────────────────────────────── */
 

@@ -47,6 +47,7 @@
 
 $ `stdlib/core/errors.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/char.nu`
 // Note: do NOT include stdlib/std/bytes.nu here. bytes.nu depends on
 // String (e.g. `bytes_to_str → String`); a circular include would force
 // the compiler to reference %String before its body is emitted. We keep
@@ -306,7 +307,7 @@ $ `stdlib/core/vec.nu`
 
     ~ < idx len {
         : i c ( string_get str idx )
-        ? == ( nurl_is_digit c ) 0 {
+        ? == ( is_digit c ) 0 {
             ^ @ !i ParseErr { F @ ParseErr { BadFormat } }
         } {}
         = idx + idx 1
@@ -342,7 +343,7 @@ $ `stdlib/core/vec.nu`
     ~ going {
         ? == idx len { = going F } {
             : i c ( string_get str idx )
-            ? == ( nurl_is_digit c ) 0 { = going F } {
+            ? == ( is_digit c ) 0 { = going F } {
                 = idx + idx 1
                 = int_digits + int_digits 1
             }
@@ -356,7 +357,7 @@ $ `stdlib/core/vec.nu`
         ~ going {
             ? == idx len { = going F } {
                 : i c ( string_get str idx )
-                ? == ( nurl_is_digit c ) 0 { = going F } {
+                ? == ( is_digit c ) 0 { = going F } {
                     = idx + idx 1
                     = frac_digits + frac_digits 1
                 }
@@ -381,7 +382,7 @@ $ `stdlib/core/vec.nu`
             ~ going {
                 ? == idx len { = going F } {
                     : i ec ( string_get str idx )
-                    ? == ( nurl_is_digit ec ) 0 { = going F } {
+                    ? == ( is_digit ec ) 0 { = going F } {
                         = idx + idx 1
                         = exp_digits + exp_digits 1
                     }
@@ -476,14 +477,14 @@ $ `stdlib/core/vec.nu`
     ^ out
 }
 
-// Strip leading whitespace bytes (nurl_is_space).
+// Strip leading whitespace bytes (is_space).
 @ string_trim_start String str → String {
     : i n ( string_len str )
     : ~ i start 0
     : ~ b more T
     ~ more {
         ? >= start n { = more F } {
-            ? == ( nurl_is_space ( string_get str start ) ) 0 { = more F } {
+            ? == ( is_space ( string_get str start ) ) 0 { = more F } {
                 = start + start 1
             }
         }
@@ -498,7 +499,7 @@ $ `stdlib/core/vec.nu`
     : ~ b more T
     ~ more {
         ? <= end 0 { = more F } {
-            ? == ( nurl_is_space ( string_get str - end 1 ) ) 0 { = more F } {
+            ? == ( is_space ( string_get str - end 1 ) ) 0 { = more F } {
                 = end - end 1
             }
         }
@@ -513,7 +514,7 @@ $ `stdlib/core/vec.nu`
     : ~ b more T
     ~ more {
         ? >= start n { = more F } {
-            ? == ( nurl_is_space ( string_get str start ) ) 0 { = more F } {
+            ? == ( is_space ( string_get str start ) ) 0 { = more F } {
                 = start + start 1
             }
         }
@@ -522,7 +523,7 @@ $ `stdlib/core/vec.nu`
     = more T
     ~ more {
         ? <= end start { = more F } {
-            ? == ( nurl_is_space ( string_get str - end 1 ) ) 0 { = more F } {
+            ? == ( is_space ( string_get str - end 1 ) ) 0 { = more F } {
                 = end - end 1
             }
         }

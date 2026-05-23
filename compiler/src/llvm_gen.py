@@ -222,11 +222,9 @@ _BUILTIN_DECLS: Dict[str, Tuple[str, str]] = {
     'nurl_map_size': ('nurl_map_size', 'declare i64  @nurl_map_size(i64)'),
     'nurl_map_free': ('nurl_map_free', 'declare void @nurl_map_free(i64)'),
 
-    # char classification
-    'nurl_is_alpha':  ('nurl_is_alpha',  'declare i64  @nurl_is_alpha(i64)'),
-    'nurl_is_digit':  ('nurl_is_digit',  'declare i64  @nurl_is_digit(i64)'),
-    'nurl_is_space':  ('nurl_is_space',  'declare i64  @nurl_is_space(i64)'),
-    'nurl_is_alnum_': ('nurl_is_alnum_', 'declare i64  @nurl_is_alnum_(i64)'),
+    # Char classification (formerly nurl_is_alpha / _digit / _space /
+    # _alnum_) moved to pure-NURL `stdlib/core/char.nu` as PURIFY.md
+    # Phase 1 (2026-05-23); no FFI declarations here anymore.
 
     # file & process
     'nurl_read_file':   ('nurl_read_file',   'declare i8*  @nurl_read_file(i8*)'),

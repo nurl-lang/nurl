@@ -33,7 +33,7 @@
 **B. Stdlib-FFI** (tästä stdlib rakennetaan):
 - I/O: `nurl_print`, `nurl_print_int`, `nurl_print_str`, `nurl_print_bool`, `nurl_eprint`, `nurl_eprintln`, `nurl_read_int`
 - Raaka-str: `nurl_str_len/get/eq/cat/cat3/cat4/int/float/to_int/slice/starts/find`
-- Charit: `nurl_is_alpha/digit/space/alnum_`
+- Charit (pure NURL, `stdlib/core/char.nu`): `is_alpha`, `is_digit`, `is_space`, `is_alnum_us` (siirretty C:stä 2026-05-23, PURIFY.md Phase 1)
 - Tiedostot: `nurl_read_file`, `nurl_file_open/read/write/close/exists/size/del`
 - Prosessi: `nurl_argc`, `nurl_argv`, `nurl_argv_count`, `nurl_argv_get`, `nurl_exit`
 - Muisti: `nurl_alloc`, `nurl_zalloc`, `nurl_realloc`, `nurl_free`, `nurl_memcpy`, `nurl_peek`, `nurl_poke`

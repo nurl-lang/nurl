@@ -78,11 +78,9 @@ _BUILTINS: Dict[str, FnType] = {
     'nurl_str_find':   FnType(ret=TI, params=[TS, TS]),
     'nurl_str_float':  FnType(ret=TS, params=[TF]),
 
-    # ── Char classification ──
-    'nurl_is_alpha':   FnType(ret=TI, params=[TI]),
-    'nurl_is_digit':   FnType(ret=TI, params=[TI]),
-    'nurl_is_space':   FnType(ret=TI, params=[TI]),
-    'nurl_is_alnum_':  FnType(ret=TI, params=[TI]),
+    # Char classification (formerly nurl_is_alpha / _digit / _space /
+    # _alnum_) moved to pure-NURL `stdlib/core/char.nu` as PURIFY.md
+    # Phase 1 (2026-05-23); no FFI symbols here anymore.
 
     # ── File & process ──
     'nurl_read_file':  FnType(ret=TS, params=[TS]),
