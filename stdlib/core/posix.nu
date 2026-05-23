@@ -110,6 +110,32 @@ $ `stdlib/core/cell.nu`
 & `c` @ read  i fd *u buf i n → i
 & `c` @ write i fd *u buf i n → i
 
+// ── File descriptor / mmap primitives ─────────────────────────────
+//
+// open(2): low-level fd-based file open. `flags` is `O_RDONLY` / etc.
+// from `posix_const`; `mode` matters only when O_CREAT is set
+// (typical caller passes 0). Returns the new fd or -1 with errno.
+& `c` @ open  s path i32 flags i32 mode → i32
+
+// lseek(2): reposition the read/write head. `whence` is 0 (SET) /
+// 1 (CUR) / 2 (END) — universal POSIX values. Returns the new
+// offset on success (and so doubles as a "give me file size" tool
+// when whence == SEEK_END), -1 on failure.
+& `c` @ lseek i32 fd i offset i32 whence → i
+
+// mmap(2): map `length` bytes of `fd` starting at `offset` into the
+// caller's address space. `prot` is `PROT_READ` / etc.; `flags` is
+// `MAP_PRIVATE` for a copy-on-write file mapping. Returns the
+// mapping pointer or `MAP_FAILED` ((void*)-1) on failure.
+& `c` @ mmap   *u addr i length i32 prot i32 flags i32 fd i offset → *u
+
+// munmap(2): release a previous mmap.
+& `c` @ munmap *u addr i length → i32
+
+// madvise(2): kernel hint for read-ahead pattern. Best-effort, no
+// observable side effect on the data itself; ignore the return.
+& `c` @ madvise *u addr i length i32 advice → i32
+
 // ── Signal handling ───────────────────────────────────────────────
 
 // signal(2) — returns the OLD handler (as opaque *u). Pass SIG_IGN /

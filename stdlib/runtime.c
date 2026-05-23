@@ -1092,38 +1092,13 @@ void nurl_munmap_file(const char *ptr, long long sz) {
  * the full definition appears further down in the file. */
 const char* nurl_read_file_safe(const char *path);
 
+/* WASI / MSVC fallback only — PURIFY §4 batch 5 (2026-05-24) moved
+ * the POSIX mmap path to pure NURL (`__read_file_mmap_pure` in
+ * `stdlib/std/fs.nu`). `read_file` gates on
+ * `posix_const "MAP_PRIVATE" != -1` and routes here only on
+ * platforms where mmap is unavailable or unreliable. */
 const char* nurl_read_file_mmap(const char *path) {
-#if defined(__unix__) || defined(__APPLE__)
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return NULL;
-    struct stat st;
-    if (fstat(fd, &st) < 0) { close(fd); return NULL; }
-    if (st.st_size <= 0) {
-        close(fd);
-        char *buf = (char*)malloc(1);
-        if (!buf) return NULL;
-        buf[0] = '\0';
-        return buf;
-    }
-    size_t sz = (size_t)st.st_size;
-    void *m = mmap(NULL, sz, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
-    if (m == MAP_FAILED) return NULL;
-    /* Hint the kernel that we'll read this sequentially — helps it
-     * pre-fetch pages ahead of the consumer. Best-effort; no error
-     * path. */
-    (void)madvise(m, sz, MADV_SEQUENTIAL);
-    char *buf = (char*)malloc(sz + 1);
-    if (!buf) { munmap(m, sz); return NULL; }
-    memcpy(buf, m, sz);
-    buf[sz] = '\0';
-    munmap(m, sz);
-    return buf;
-#else
-    /* WASI / MSVC fallback: same fopen+fread+strdup path as
-     * nurl_read_file_safe. */
     return nurl_read_file_safe(path);
-#endif
 }
 
 /* Non-fatal variant: returns NULL on error instead of exiting.
@@ -2247,6 +2222,7 @@ void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
 #  include <poll.h>
 #  include <sys/wait.h>
 #  include <unistd.h>
+#  include <sys/mman.h>     /* PROT_READ / MAP_PRIVATE / MADV_SEQUENTIAL */
 #endif
 
 long long nurl_native_sizeof(const char *name) {
@@ -2355,6 +2331,18 @@ long long nurl_native_constant(const char *name) {
 #endif
 #ifdef CLOCK_MONOTONIC
     if (strcmp(name, "CLOCK_MONOTONIC") == 0) return CLOCK_MONOTONIC;
+#endif
+    /* File-mode + mmap constants for `stdlib/std/fs.nu`'s pure-NURL
+     * `__read_file_mmap_pure` (PURIFY §4 batch 5). POSIX-only — Win32
+     * NURL callers gate on `posix_const "MAP_PRIVATE" != -1` and fall
+     * through to the C runtime's WASI/MSVC path. */
+#if !defined(_WIN32) && !defined(__wasi__)
+    if (strcmp(name, "O_RDONLY")        == 0) return O_RDONLY;
+    if (strcmp(name, "PROT_READ")       == 0) return PROT_READ;
+    if (strcmp(name, "MAP_PRIVATE")     == 0) return MAP_PRIVATE;
+#  ifdef MADV_SEQUENTIAL
+    if (strcmp(name, "MADV_SEQUENTIAL") == 0) return MADV_SEQUENTIAL;
+#  endif
 #endif
     (void)name;
     return -1;

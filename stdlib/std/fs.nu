@@ -48,6 +48,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/errors.nu`
 $ `stdlib/std/path.nu`
+$ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 
 // errno-kind → IoErr enum value. Order matches `nurl_errno_kind` in
 // runtime.c (NotFound=0, PermissionDenied=1, AlreadyExists=2,
@@ -63,14 +64,69 @@ $ `stdlib/std/path.nu`
     ^ @ IoErr { Other }
 }
 
+// Pure-NURL mmap-backed file read (PURIFY §4 batch 5). On POSIX the
+// kernel page-cache is mapped read-only into the process, sequential
+// access is hinted via `madvise(MADV_SEQUENTIAL)`, and the bytes are
+// copied into a malloc'd `nurl_alloc` buffer that the caller wraps
+// via `string_from_take` (no second copy). Returns 0 on any failure
+// — the gate `read_file` below classifies it via `nurl_errno_kind`.
+//
+// The size is learned via `lseek(fd, 0, SEEK_END)` rather than
+// `fstat(fd)` so the implementation doesn't need to know the
+// platform-specific `struct stat::st_size` offset. SEEK_END = 2 is
+// universal POSIX.
+@ __read_file_mmap_pure s path → s {
+    ? == # i path 0 { ^ # s 0 } {}
+    : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
+    ? < fd # i32 0 { ^ # s 0 } {}
+    : i sz ( lseek fd 0 # i32 2 )
+    ? < sz 0 {
+        : i _c ( close # i fd )
+        ^ # s 0
+    } {}
+    ? == sz 0 {
+        // Empty file: return a freshly-allocated 1-byte NUL buffer.
+        : i _c ( close # i fd )
+        : s buf ( nurl_alloc 1 )
+        ? != # i buf 0 {
+            : *u bp # *u buf
+            = . bp 0 # u 0
+        } {}
+        ^ buf
+    } {}
+    : *u m ( mmap # *u 0 sz
+              # i32 ( posix_const `PROT_READ` )
+              # i32 ( posix_const `MAP_PRIVATE` )
+              fd 0 )
+    : i _c ( close # i fd )
+    // MAP_FAILED = (void*)-1 on every supported target; check via ptrtoint.
+    ? == # i m -1 { ^ # s 0 } {}
+    // Best-effort read-ahead hint; ignore the return.
+    : i32 _mr ( madvise m sz # i32 ( posix_const `MADV_SEQUENTIAL` ) )
+    : s buf ( nurl_alloc + sz 1 )
+    ? == # i buf 0 {
+        : i32 _u ( munmap m sz )
+        ^ # s 0
+    } {}
+    ( memcpy # *u buf m sz )
+    : *u bp # *u buf
+    = . bp sz # u 0
+    : i32 _u ( munmap m sz )
+    ^ buf
+}
+
 // `raw` is either the malloc'd file contents (owned) or NULL on failure.
 // Cast to i64 to detect NULL — calling nurl_str_len on NULL would crash.
 @ read_file s path → !String IoErr {
-    // mmap-backed read (fast path on POSIX) — kernel page-cache to
-    // process address space without going through libc stdio's
-    // buffered-i/o layer. ~20-40 ms faster than fread on warm-cache
-    // 100 MB reads. Falls back to fread on WASI/MSVC.
-    : s raw ( nurl_read_file_mmap path )
+    // POSIX path: pure-NURL mmap → memcpy. Win32 / WASI route through
+    // the runtime helper (which uses the fopen/fread fallback) since
+    // `MAP_PRIVATE` is unavailable in `nurl_native_constant` there.
+    : ~ s raw # s 0
+    ? != ( posix_const `MAP_PRIVATE` ) -1 {
+        = raw # s ( __read_file_mmap_pure path )
+    } {
+        = raw ( nurl_read_file_mmap path )
+    }
     : i p # i raw
     ? == p 0 {
         : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
