@@ -269,31 +269,64 @@ six test files that called `nurl_str_*` without importing
 `stdlib/core/string.nu` got the explicit import — the symbol
 no longer floats in as a runtime extern.
 
-### Phase 6 — Threads / mutex / cond (`§19`, ~290 LOC reduction)
+### Phase 6 — Threads / mutex / cond (`§19`, ~290 LOC) — DEFERRED 2026-05-23
 
-The wrappers are thin pthread thunks. Re-declare directly via
-`& \`pthread\` @ pthread_mutex_init …` etc. NURL's existing
-`Mutex`/`Cond`/`Thread` opaque handles wrap a pointer; the
-allocation + init pattern stays in NURL.
+Original plan called for `& \`pthread\` @ pthread_mutex_init …`
+direct FFI plus a small `pthread_create` trampoline. Blocked on
+two infrastructure gaps the plan didn't anticipate:
 
-`pthread_create` needs a small C trampoline (1 fn ~10 LOC) because
-NURL's closure ABI is `(fn_ptr, env_ptr)` while pthread expects
-`void *(*)(void *)` — the trampoline calls the closure shape
-correctly. The trampoline is the only residual C from §19.
+  1. **`pthread_mutex_t` / `pthread_cond_t` struct sizes vary by
+     platform** — 40 B on glibc x86_64, 64 B on macOS,
+     `CRITICAL_SECTION` is a different shape entirely on Windows.
+     NURL has no `sizeof` primitive. Either a C-side helper
+     exposing the constant (≈5 LOC, defeats the purpose) or a
+     dedicated `box[T]` infrastructure with platform-specific
+     instantiations is required first.
+  2. **The Win32 branch is genuinely different.** `_beginthreadex`
+     + `CRITICAL_SECTION` + `CONDITION_VARIABLE` don't share the
+     pthread ABI. A pure-NURL replacement either drops Win32 (the
+     async runtime depends on it) or adds an OS-dispatch layer
+     NURL also lacks today.
 
-**Acceptance:** every channel/thread test passes; async-runtime
-spawn-via-pthread still works.
+Net realistic shrink for §19 without that infra: maybe 80 LOC
+(the per-platform wrappers compress, the cross-platform abstraction
+stays). Punt until at least one of the two gaps closes.
 
-### Phase 7 — File & process syscalls (`§4 + §13`, ~500 LOC reduction)
+### Phase 7 — File & process syscalls (`§4 + §13`, ~500 LOC) — PARTIAL 2026-05-23
 
-`open`/`read`/`write`/`close`/`mmap`/`stat`/`lstat`/`unlink`/
-`mkdir`/`getcwd`/`getenv`/`opendir`/`readdir` — all pure libc
-syscalls. Re-declare via pure-NURL FFI in `stdlib/std/fs.nu` (which
-already imports several). Path-string massaging logic (relative-
-path resolution, `..`-rejection, etc.) moves into NURL.
+**Landed batch 1** (`2e6b717`) — 6 fopen-family wrappers via libc
+stdio in the nurlc preamble:
 
-**Residual C:** only the per-file-error-kind mapping table
-(~30 LOC).
+  nurl_file_open / _close / _write / _write_range / _write_byte / _eof
+  → fopen / fclose / fputs / fwrite / fputc / feof
+
+**Landed batch 2** (`166287b`) — 4 probe / mutation wrappers:
+
+  nurl_file_exists / _del / _dir_create / _dir_remove
+  → access / remove / mkdir / rmdir (POSIX; Win32 lost the
+    _mkdir / _rmdir paper-over)
+
+**Held back:**
+
+  - `nurl_file_read_chunk` writes the `g_last_bytes_len` side-
+    channel that the `file_read_chunk` wrapper consumes for the
+    actual byte count. Clean migration needs a dual-return shape
+    (ptr + len) or a thread-local — neither in the runtime yet.
+  - `nurl_file_size` reads `struct stat::st_size`; struct layout
+    knowledge is the same `sizeof` gap as Phase 6.
+  - `nurl_realpath` / `nurl_read_file_safe` / `nurl_read_file_mmap` /
+    `nurl_write_file_safe` — allocation-heavy, several still doable
+    once Phase 7 reaches them; mmap one is platform-specific.
+  - `nurl_init` / `nurl_argc` / `nurl_argv` / `nurl_exit` — these
+    are the bootstrap-entry contract with the generated `_nurl_main`,
+    irreducible.
+  - `§13` (env/cwd/stdin slurp/dir-listing) — clean libc, future
+    batch.
+
+runtime.c shrink so far: 8 189 → 8 138 LOC (−51). Realistic
+full-Phase-7 target: ~150-200 LOC, far below the 500 the original
+plan assumed (the plan double-counted §13's getenv/getcwd and
+overestimated how much of §4's mmap/stat paths can leave C).
 
 ### Phase 8 — Process spawn (`§16 + §16b`, ~700 LOC reduction)
 
@@ -344,12 +377,19 @@ runs (5 LOC C).
 **Acceptance:** every test compiles to byte-identical IR. Self-host
 wall time ≤ 6× pre-Phase-9 baseline.
 
-### Phase 11 — DoS protection (`§23`, ~180 LOC reduction)
+### Phase 11 — DoS protection (`§23`, ~180 LOC) — DEFERRED 2026-05-23
 
-Mutex + counter table + per-IP entry growth. The mutex + counter
-become NURL HashMap. The mutex is pthread (already FFI'd from
-Phase 6). Resulting code is ~80 LOC NURL in
-`stdlib/ext/http_dos.nu`.
+The plan assumed Phase 6's pure-NURL mutex; with Phase 6 deferred,
+the lock part still works via the existing `nurl_mutex_*` (which
+sit on top of C-side pthread). The genuine blocker is `DosState`
+itself: a heap-stable struct with 5 fields including a HashMap
+and a Mutex handle. NURL has no `Box[T]` / heap-allocation primitive
+for struct values — every `@ Foo { … }` is by-value.
+
+A workable path needs either (a) Phase 6's struct-size infra, or
+(b) the same `box[T]` primitive Phase 6 wants. Both are bigger
+than this phase's payoff, so park §23 with a clear note in the
+runtime.
 
 ### Phase 12 — Lib-cache thinning (`§14 + §14b + §21`, ~700 LOC reduction)
 
@@ -368,16 +408,23 @@ the one real cache (~50 LOC). The rest is pure-NURL FFI over
 **Acceptance:** every HTTP / SQLite test passes. Per-request
 overhead within 10 % of pre-phase baseline.
 
-### Phase 13 — Basic I/O thinning (`§1`, ~150 LOC reduction)
+### Phase 13 — Basic I/O thinning (`§1`, ~150 LOC) — DEFERRED 2026-05-23
 
-`fputs`/`fflush`/`fgets`/`fread`/`fwrite` are pure libc. Wrap
-directly via NURL FFI. The deferred-emission output buffer (used
-by `gen_closure_expr` in `nurlc.nu`) is the one piece that stays
-in C — it's the platform-specific malloc + state machine we
-already keep simple.
+The outbuf stack machinery (`nurl_print_buf_start` / `_stop` /
+`_reset` + the 32-deep frame stack feeding `gen_closure_expr`) is
+the irreducible core the plan already called out — that stays.
+The migration candidates are the *user-visible* I/O:
+`nurl_print` / `_print_int` / `_print_str` / `_print_bool` /
+`_eprint` / `_eprintln`.
 
-**Acceptance:** all I/O tests pass; output buffer (the post-
-commit 7cf5d5d stack model) is the only retained `§1` code.
+Genuine blocker: **the test corpus calls these directly without
+any import.** A quick grep counts ~250 test files invoking
+`nurl_print` and ~70 invoking `nurl_print_int`. Moving the
+definitions to a NURL module (e.g. `stdlib/core/io.nu`) would
+force `$`-imports on each — the same friction that drove Batch
+D' to keep `nurl_str_int` in C. Add an **auto-prelude** mechanism
+first (compiler emits a sentinel `$`-import for every program), or
+accept this section as runtime-pinned.
 
 ### Phase 14 — Final accounting
 
