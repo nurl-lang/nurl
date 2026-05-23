@@ -484,19 +484,36 @@ runs (5 LOC C).
 **Acceptance:** every test compiles to byte-identical IR. Self-host
 wall time ≤ 6× pre-Phase-9 baseline.
 
-### Phase 11 — DoS protection (`§23`, ~180 LOC) — DEFERRED 2026-05-23
+### Phase 11 — DoS protection (`§23`, ~180 LOC) — DONE 2026-05-23
 
-The plan assumed Phase 6's pure-NURL mutex; with Phase 6 deferred,
-the lock part still works via the existing `nurl_mutex_*` (which
-sit on top of C-side pthread). The genuine blocker is `DosState`
-itself: a heap-stable struct with 5 fields including a HashMap
-and a Mutex handle. NURL has no `Box[T]` / heap-allocation primitive
-for struct values — every `@ Foo { … }` is by-value.
+Shipped: `stdlib/std/dos.nu` (254 LOC) replaces the entire 196-LOC
+§23 body. The migration leans on three prior phases:
 
-A workable path needs either (a) Phase 6's struct-size infra, or
-(b) the same `box[T]` primitive Phase 6 wants. Both are bigger
-than this phase's payoff, so park §23 with a clear note in the
-runtime.
+  * Phase 6 batch 1 mutex/cond FFI — `pthread_mutex_init/lock/unlock/
+    destroy` come directly from `stdlib/std/thread.nu`. The mutex
+    buffer lives in slot 7 of the state struct (sized via
+    `nurl_native_sizeof "pthread_mutex_t"`).
+  * Box / Cell / heap allocators ([[box-allocators]]) — the
+    `DosState` heap struct is a `nurl_zalloc 80`-allocated 10-slot
+    opaque block with field access via `nurl_poke` / `nurl_peek`.
+    The two parallel IP-table arrays (string keys + i64 counts)
+    grow via `nurl_realloc`.
+  * `strdup` (already in nurlc's preamble) — used to take ownership
+    of the per-IP key string; the old C `free()` path is now
+    `nurl_free` on each slot at `dos_state_free` time.
+
+`http_server.nu` switches from `nurl_dos_state_*` to the new
+`dos_state_*` API (five call sites updated). `runtime.c` §23
+deleted in full; the five `declare` lines + five `nurl_sym_def`
+entries gone from `compiler/nurlc.nu` and the lastgood snapshot.
+
+`runtime.c`: 7 984 → 7 804 LOC (−180). Bootstrap fixed point
+held on the lastgood-refresh round-trip; full corpus passes
+including `http_server_dos`, `http_server_limits`, every other
+`http_server_*` test. The pure-NURL implementation preserves the
+C-side IP-table policy verbatim (linear search, 256-entry cap,
+last-element-swap-then-pop eviction on refcount=0, no LRU
+churn beyond that).
 
 ### Phase 12 — Lib-cache thinning (`§14 + §14b + §21`, ~700 LOC reduction)
 

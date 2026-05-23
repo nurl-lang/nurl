@@ -96,6 +96,7 @@
 $ `stdlib/std/net.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/thread.nu`
+$ `stdlib/std/dos.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/panic.nu`
 $ `stdlib/core/string.nu`
@@ -213,8 +214,8 @@ $ `stdlib/ext/http_response.nu`
 // after construction by directly mutating the returned struct, or
 // extend this helper if a uniform full-knob variant is needed later.
 @ server_new_with_dos TcpListener listener ( @ HttpResponse HttpRequest ) handler DosLimits dos_limits → HttpServer {
-    : i st ( nurl_dos_state_new . dos_limits max_concurrent_conns
-                                   . dos_limits max_conns_per_ip )
+    : i st ( dos_state_new . dos_limits max_concurrent_conns
+                              . dos_limits max_conns_per_ip )
     ^ @ HttpServer { listener handler
         ( server_default_idle_timeout_ms )
         ( server_default_max_keepalive_requests )
@@ -229,13 +230,13 @@ $ `stdlib/ext/http_response.nu`
     : s rp . s dos_state
     : i raw # i rp
     ? == raw 0 { ^ 0 } {}
-    ^ ( nurl_dos_state_active raw )
+    ^ ( dos_state_active raw )
 }
 
 @ server_stop HttpServer s → v {
     : s rp . s dos_state
     : i raw # i rp
-    ? != raw 0 { ( nurl_dos_state_free raw ) } {}
+    ? != raw 0 { ( dos_state_free raw ) } {}
     ( tcp_close_listener . s listener )
 }
 
@@ -542,7 +543,7 @@ $ `stdlib/ext/http_response.nu`
                     // a connection makes this acceptable; freed by the
                     // process when the conn closes via tcp_close_conn.
                 } { = peer_ip addr }
-                : i ok ( nurl_dos_state_try_acquire ds_raw peer_ip )
+                : i ok ( dos_state_try_acquire ds_raw peer_ip )
                 ? == ok 0 {
                     ( tcp_close_conn conn )
                     ^ @ !v NetErr { T 0 }
@@ -551,7 +552,7 @@ $ `stdlib/ext/http_response.nu`
             : i ito . s idle_timeout_ms
             ? > ito 0 { ( tcp_set_timeout conn ito ) } {}
             ( __serve_keepalive_loop s conn )
-            ? != ds_raw 0 { ( nurl_dos_state_release ds_raw peer_ip ) } {}
+            ? != ds_raw 0 { ( dos_state_release ds_raw peer_ip ) } {}
             ( tcp_close_conn conn )
             ^ @ !v NetErr { T 0 }
         }
