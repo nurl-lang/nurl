@@ -9019,8 +9019,6 @@
     ( emit `declare i64  @nurl_http_stream_header_count(i64)` )
     ( emit `declare i8*  @nurl_http_stream_header_name(i64, i64)` )
     ( emit `declare i8*  @nurl_http_stream_header_value(i64, i64)` )
-    ( emit `declare i64  @nurl_log_level_get()` )
-    ( emit `declare void @nurl_log_level_set(i64)` )
     ( emit `declare i64  @nurl_proc_run(i8*, i8*, i64, i8*)` )
     ( emit `declare i64  @nurl_proc_exit_code(i64)` )
     ( emit `declare i64  @nurl_proc_err_kind(i64)` )
@@ -9288,9 +9286,6 @@
     ( nurl_sym_def syms `nurl_http_stream_header_count` `i64` )
     ( nurl_sym_def syms `nurl_http_stream_header_name` `i8*` )
     ( nurl_sym_def syms `nurl_http_stream_header_value` `i8*` )
-    // log level (process-wide)
-    ( nurl_sym_def syms `nurl_log_level_get` `i64` )
-    ( nurl_sym_def syms `nurl_log_level_set` `void` )
     // process execution (runtime §16). Output buffers are BORROWED views
     // into the runtime-owned NurlProcResult — do NOT mark __ret_owned.
     ( nurl_sym_def syms `nurl_proc_run` `i64` )

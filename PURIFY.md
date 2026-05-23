@@ -78,7 +78,7 @@ genuinely irreducible.
 | 13 | CLI tooling                       |  219 | OS-glue   | [ ] | shrink — env/cwd/dir-list are simple wrappers |
 | 14 | HTTP client (libcurl)             |  665 | Lib-cache | [ ] | shrink to libcurl-easy bridge only; high-level moves to NURL |
 | 14b | HTTP streaming (libcurl multi)   |  396 | Lib-cache | [ ] | reduce; multi-handle state-cache stays C |
-| 15 | Logging level                     |    7 | Compiler  | [ ] | replace with `: ~ i g_log_level` in NURL |
+| 15 | Logging level                     |    7 | Compiler  | [x] | DONE 2026-05-23 — `stdlib/std/log.nu`'s `: ~ i __g_log_level 1` is now the single source of truth; -3 C LOC + 2 preamble declares + 2 sym_def entries + 1 llvm_gen.py entry |
 | 16 | Process execution                 |  562 | OS-glue   | [ ] | pure-NURL FFI to `fork`/`execvp`/`waitpid` etc |
 | 16b | Process spawn (duplex stdio)     |  452 | OS-glue   | [ ] | same: fork+pipe+poll, doable in NURL once non-blocking-IO patterns settle |
 | 17 | Crypto (SHA-1/256/512, MD5, HMAC) |  656 | Pure algo | [ ] | move to pure NURL — all are well-known bit-twiddling, no syscalls |
@@ -128,13 +128,21 @@ under a clean NURL name (no `nurl_` prefix), import where used,
 strip the FFI surface from every compiler frontend that knew about
 the C function.
 
-### Phase 2 — Logging level (`§15`, ~7 LOC reduction)
+### Phase 2 — Logging level (`§15`, ~7 LOC reduction) — DONE 2026-05-23
 
-A single mutable `g_log_level` and accessors. Replace with a NURL
-`: ~ i g_log_level 0` global. Delete §15.
+Shipped: `stdlib/std/log.nu` gained a module-level
+`: ~ i __g_log_level 1` (default Info). `log_set_level` /
+`log_get_level` write/read the global directly; the two `__log_emit*`
+helpers read it too. `§15` and the matching compiler-frontend
+metadata (preamble declares in `nurlc.nu`, the two `nurl_sym_def`
+entries, the llvm_gen.py declarations) deleted in lockstep.
+Bootstrap held first try; corpus green.
 
-**Acceptance:** `log_set_level` / `log_get_level` callers compile
-and run unchanged.
+**Note on concurrency:** single `i64` write is naturally atomic on
+every supported target (x86_64/aarch64/riscv64). Cross-thread
+visibility is at the next syscall (`nurl_eprint` in every
+`log_*` call performs an implicit fence via `write(2)`). Same
+guarantee the C version offered — no regression.
 
 ### Phase 3 — Pure-NURL FFI for math + time + gzip (`§11+§12+§22`, ~237 LOC reduction)
 

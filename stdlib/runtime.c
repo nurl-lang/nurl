@@ -3837,12 +3837,9 @@ void nurl_http_response_free(long long resp) {
     free(r);
 }
 
-/* ── §15  Logging level (mutable global) ───────────────────────── */
-/* Single process-wide level used by stdlib/std/log.nu.            */
-/* Encoding: 0=Debug 1=Info 2=Warn 3=Error 4=Off. Default Info(1). */
-static long long g_log_level = 1;
-long long nurl_log_level_get(void) { return g_log_level; }
-void nurl_log_level_set(long long lvl) { g_log_level = lvl; }
+/* §15 Logging level — REMOVED 2026-05-23 (PURIFY.md Phase 2).
+ * `g_log_level` + `nurl_log_level_get/_set` moved to
+ * `stdlib/std/log.nu` as a pure-NURL mutable global. */
 
 /* ── §16  Process execution ───────────────────────────────────── */
 /*

@@ -296,9 +296,9 @@ _BUILTIN_DECLS: Dict[str, Tuple[str, str]] = {
     'nurl_dir_list_next':  ('nurl_dir_list_next',  'declare i8*  @nurl_dir_list_next(i64)'),
     'nurl_dir_list_close': ('nurl_dir_list_close', 'declare void @nurl_dir_list_close(i64)'),
 
-    # logging level (process-wide; backs stdlib/std/log.nu)
-    'nurl_log_level_get': ('nurl_log_level_get', 'declare i64  @nurl_log_level_get()'),
-    'nurl_log_level_set': ('nurl_log_level_set', 'declare void @nurl_log_level_set(i64)'),
+    # Logging level (formerly nurl_log_level_get/_set) moved to
+    # pure-NURL `stdlib/std/log.nu` (module-level `: ~ i __g_log_level`)
+    # as PURIFY.md Phase 2 (2026-05-23); no FFI symbols here anymore.
 }
 
 

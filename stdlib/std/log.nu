@@ -1,9 +1,11 @@
 // stdlib/std/log.nu — leveled structured logging on top of fmt
 //
 // All output goes to stderr (matches eprintln) so logs don't interleave
-// with stdout. The current threshold is held in a process-wide global
-// (`nurl_log_level_get/set` in runtime §15); messages whose level is
-// below the threshold are silently dropped.
+// with stdout. The current threshold lives in this module's mutable
+// `__g_log_level` global (pure NURL since PURIFY.md Phase 2,
+// 2026-05-23 — the historic `nurl_log_level_get/set` C accessors in
+// runtime §15 are gone). Messages whose level is below the threshold
+// are silently dropped.
 //
 // Levels (low → high):
 //   0  Debug   — verbose tracing, typically off in production
@@ -71,14 +73,22 @@ $ `stdlib/std/fmt.nu`
 
 @ log_level_off → i { ^ 4 }
 
-// ── Threshold accessors ─────────────────────────────────────────────
+// ── Threshold state + accessors ─────────────────────────────────────
+//
+// Pure-NURL mutable global; default Info (1). Single-process, so no
+// pthread synchronisation — the value is a single i64, atomic on
+// every supported target. `set` from one thread is observable to
+// `get` on another with the next memory-fenced syscall (which every
+// `log_*` call performs via `nurl_eprint`).
+
+: ~ i __g_log_level 1
 
 @ log_set_level i lvl → v {
-    ( nurl_log_level_set lvl )
+    = __g_log_level lvl
 }
 
 @ log_get_level → i {
-    ^ ( nurl_log_level_get )
+    ^ __g_log_level
 }
 
 // ── Internal emit ───────────────────────────────────────────────────
@@ -92,7 +102,7 @@ $ `stdlib/std/fmt.nu`
 }
 
 @ __log_emit i level s msg → v {
-    : i thr ( nurl_log_level_get )
+    : i thr __g_log_level
     ? >= level thr {
         ( nurl_eprint ( __log_tag level ) )
         ( nurl_eprint msg )
@@ -101,7 +111,7 @@ $ `stdlib/std/fmt.nu`
 }
 
 @ __log_emitf i level s tmpl ( Vec s ) args → v {
-    : i thr ( nurl_log_level_get )
+    : i thr __g_log_level
     ? >= level thr {
         : String r ( fmt tmpl args )
         ( nurl_eprint ( __log_tag level ) )
