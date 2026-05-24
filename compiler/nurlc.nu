@@ -411,6 +411,14 @@
                   //  capture hooks no-op so closure statements do not
                   //  inline into the enclosing function's list
                   //  (BORROW.md Phase 1: segregate closure scopes)
+: ~ i g_bck_errors 0 // count of borrow errors emitted so far. BORROW.md
+                  //  Phase 8 final: errors no longer abort on the spot
+                  //  (we want to surface every violation in one run,
+                  //  same as a C compiler) — the diagnostic helpers
+                  //  bump this counter and main() exits non-zero if it
+                  //  is > 0 once parsing finishes. --no-borrowck and
+                  //  borrow-clean programs both leave this at 0 so
+                  //  the bootstrap fixed point is unaffected.
 
 // BORROW.md Phase 4 (Option B): per-function inout-parameter map.
 // `g_fn_inout[fname]` is the space-separated list of 0-based indices
@@ -5390,10 +5398,11 @@
         : s ml ( nurl_sym_get g_bck ( nurl_str_cat `ml_` name ) )
         : s loc ( nurl_str_cat3 ( nurl_sym_get g_bck `file` ) `:`
             ( nurl_str_int useline ) )
-        : s msg ( nurl_str_cat4 `: warning: use of moved value '` name
+        : s msg ( nurl_str_cat4 `: error: use of moved value '` name
             `' - it was consumed at line ` ( nurl_str_cat3 ml
             ` (pass a fresh value or rebind it before reuse)` `` ) )
         ( nurl_eprintln ( nurl_str_cat loc msg ) )
+        = g_bck_errors + g_bck_errors 1
     }
 }
 
@@ -5643,15 +5652,21 @@
     0
 }
 
-// Emit one escape `warning:` as `file:line: warning: <msg>`. The
+// Emit one borrow-checker `error:` as `file:line: error: <msg>`. The
 // check fires parse-time but away from the offending token (after
 // `gen_expr` has consumed the whole sub-expression), so — like the
 // Phase 1/2 `bck_diag` — it carries the source line explicitly and
-// omits the caret rather than pointing at the wrong token.
+// omits the caret rather than pointing at the wrong token. Increments
+// `g_bck_errors`; main() exits non-zero at end of compile if any were
+// recorded (BORROW.md Phase 8 final, 2026-05-25). Helper kept under
+// its historical `bck_esc_warn` name to limit the diff — the body is
+// shared by Phase 3 escape + Phase 5 aliased-mut + Phase 6 iterator-
+// invalidation diagnostics.
 @ bck_esc_warn i lex i line s msg → v {
     : s loc ( nurl_str_cat3 ( nurl_lex_filename lex ) `:`
         ( nurl_str_int line ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` msg ) )
+    = g_bck_errors + g_bck_errors 1
 }
 
 // Record a freshly-declared binding's region (its block depth) and,
@@ -11305,4 +11320,15 @@
     // Emit all deferred generic instantiations collected during compilation.
     ( flush_deferred_instantiations syms cg )
     ( dbg_flush )
+    // BORROW.md Phase 8 final (2026-05-25): borrow-checker diagnostics
+    // are errors, not warnings. We let parse_program walk every
+    // function so every violation surfaces in one run, then exit
+    // non-zero here if any were recorded. A borrow-clean program
+    // leaves g_bck_errors at 0 and this is a no-op.
+    ? > g_bck_errors 0
+    { ( nurl_eprintln ( nurl_str_cat3 `error: compilation aborted - `
+        ( nurl_str_int g_bck_errors )
+        ` borrow-checker violations (re-run with --no-borrowck to bypass)` ) )
+      ( nurl_exit 1 ) }
+    {}
 }

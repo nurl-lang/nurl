@@ -1,29 +1,29 @@
 # Borrow Checking — Preliminary Investigation & Phased Implementation Plan
 
-> **Status (2026-05-20): Phases 0–3 + 8-partial + 4-partial (`inout`)
-> + 5-partial + 6 landed; the borrow checker is ON by default.
-> Part III decided: Option B (mutable value semantics).**
+> **Status (2026-05-25): Phases 0–3 + 4-partial (`inout`) + 5-partial
+> + 6 + 8-full landed; the borrow checker is ON by default and its
+> diagnostics are HARD ERRORS. Part III decided: Option B (mutable
+> value semantics).**
 > This document is the feasibility study + work-list for adding static
 > aliasing / borrow analysis to NURL. Phase 0 (the analysis substrate),
 > Phase 1 (move checking / use-after-move), Phase 2 (alias /
 > double-free) and Phase 3 (escape analysis) are implemented — see the
-> per-phase sections below for what each landed. Phase 8-partial
-> flipped the analysis ON by default (`--no-borrowck` disables it) and
-> shipped the user-facing rules doc [`docs/MEMORY.md`](docs/MEMORY.md).
-> Phase 4-partial added the `inout` and `sink` parameter conventions
-> (Option B); Phase 5-partial enforces exclusive access for `inout`
-> arguments at a call site; Phase 6 closes iterator invalidation. Bug
-> classes 1/2/3/5 are closed; bug class 6 (aliased mutation) is closed
-> for the call-site case.
+> per-phase sections below for what each landed. Phase 4-partial added
+> the `inout` and `sink` parameter conventions (Option B); Phase 5-partial
+> enforces exclusive access for `inout` arguments at a call site;
+> Phase 6 closes iterator invalidation. Phase 8-full (2026-05-25)
+> promoted the diagnostics from `warning:` to `error:` after a 5-day
+> false-positive-clean soak on-by-default and updated the test harness
+> to baseline the error text. Bug classes 1/2/3/5/6 are now COMPILE
+> ERRORS; `--no-borrowck` remains the escape hatch.
 >
-> Phases 1, 2 and 3 emit `warning:` (not `error:`) for now — BORROW.md
-> watch #3: a new rule ships as a warning and is promoted to an error
-> only once proven false-positive-free. All three are clean:
-> the analysis over the whole compiler + stdlib + test + example
-> corpus (253 files) emits zero warnings outside the deliberate
+> Phases 1, 2, 3, 5, 6 emit `error:` as of 2026-05-25. The 2026-05-20
+> warning-then-soak cycle ran clean over the whole compiler + stdlib
+> + test + example corpus (253+ files) outside the deliberate
 > `borrow_*` regression tests — the codebase is move-clean,
-> alias-clean and escape-clean. Promotion to `error:` is deferred to
-> full Phase 8, after the warnings have soaked on-by-default.
+> alias-clean, escape-clean and iter-invalidation-clean. Bootstrap
+> fixed point holds at 1 602 394 B; the test corpus passes with the
+> updated baseline.
 >
 > The whole feature is designed as a **diagnostic-only analysis pass**:
 > it emits `error:` / `warning:` and never changes emitted IR. A
@@ -706,32 +706,49 @@ DWARF Phase 7.
 
 ## Phase 8 — Diagnostics polish, docs, flip the default
 
-> **PARTIAL LANDED 2026-05-20.** The subset of Phase 8 that the
-> Phases 0–3 milestone can ship without the Phase 4–6 work:
-> - `g_borrowck` now defaults to **1** (on); `--no-borrowck` disables
+> **LANDED 2026-05-25 (full).** The 5-day on-by-default soak across
+> the whole compiler + stdlib + 250+-file test/example corpus emitted
+> ZERO warnings outside the deliberate `borrow_*` regression cases.
+> Promotion to error landed today:
+> - `bck_diag` (Phase 1 use-after-move) and `bck_esc_warn` (Phase
+>   3 escape + Phase 5 aliased-mut + Phase 6 iterator-invalidation)
+>   now emit `: error: ` instead of `: warning: ` and bump a new
+>   `g_bck_errors` counter.
+> - `main()` exits non-zero after `parse_program` if any borrow
+>   error was recorded — the counter lets us surface every
+>   violation in one run (same shape as a C compiler) instead of
+>   aborting on the first one.
+> - The test harness now treats `borrow_*` tests as **expected
+>   compile failures with an `ERRORS` baseline blob** rather than
+>   "compile OK + WARNINGS". The exact error text is still
+>   regression-protected per BORROW.md watch #2.
+> - `--no-borrowck` remains the escape hatch for users who hit a
+>   false positive after the promotion — the error message points
+>   at it so the user is never wedged.
+>
+> **PARTIAL LANDED 2026-05-20 (still true).**
+> - `g_borrowck` defaults to **1** (on); `--no-borrowck` disables
 >   it; `--borrowck` is kept as an accepted no-op for compatibility.
->   The usage string and CLI comments are updated.
 > - `docs/MEMORY.md` written — the single user-facing reference for
 >   the ownership model, the three borrow rules, and an explicit
->   *not-yet-checked* list (aliased mutation, iterator invalidation,
->   `*T`, interprocedural escape).
+>   *not-yet-checked* list (`*T`, interprocedural escape).
 > - `README` "no borrow checker" line removed; a "Static borrow
 >   checker, on by default" bullet added pointing at `docs/MEMORY.md`.
 > - `critic.md` §4's central complaint (no use-after-free / double-
 >   free / escape detection — a "vibes-based memory model") is now
->   answered for bug classes 1/2/3; `critic.md` itself is left as the
->   external critique it is.
+>   answered for bug classes 1/2/3/5/6: the checker is on by default
+>   AND those violations now refuse to compile.
 >
 > Bootstrap fixed point holds (the checker is diagnostic-only — IR is
-> byte-identical with `--no-borrowck`, verified); `build.sh` +
-> `run_tests.sh` green with the checker on by default. `run_san_tests.sh`
-> is unaffected by construction: borrowck emits no IR, so a sanitized
-> run is identical to the pre-flip one.
+> byte-identical with `--no-borrowck`, verified at 1 602 394 B);
+> `build.sh` + `run_tests.sh` green with the checker on by default.
+> `run_san_tests.sh` is unaffected by construction: borrowck emits no
+> IR, so a sanitized run is identical to the pre-flip one.
 >
-> **Still pending for full Phase 8** (needs Phases 4–6 first): promote
-> the `warning:`s to `error:` once soaked false-positive-free; pointing
-> carets on the post-parse diagnostics; the `should_fail_borrow_*`
-> baseline category for the hard errors.
+> **Still deferred** (out of v1 scope): pointing carets on the
+> post-parse diagnostics (the lexer position has moved on by the time
+> the analysis pass runs); Phase 5 full coverage of aliased mutation
+> through non-bare-identifier arguments (field access, nested calls).
 
 **Goal:** make `--borrowck` the default; production-quality messages;
 documentation.

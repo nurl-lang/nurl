@@ -17,9 +17,13 @@ statically. It covers the model as actually implemented in `nurlc.nu`
   (BORROW.md Phases 1-3) catches use-after-move, alias double-free,
   and closures that escape the stack frame they point into. It is on
   unless you pass `--no-borrowck`.
-- **It is a diagnostic pass.** The borrow checker emits `warning:`
-  lines and *never* changes generated code. A borrow-clean program
-  compiles to byte-identical IR with or without the checker.
+- **It is a diagnostic pass and its diagnostics are hard errors.**
+  Since 2026-05-25 the borrow checker emits `error:` lines and the
+  compiler exits non-zero with a count of violations after walking
+  the whole program (so every error surfaces in one run). It *never*
+  changes generated code — a borrow-clean program compiles to
+  byte-identical IR with or without the checker. `--no-borrowck`
+  remains the escape hatch for a false positive.
 
 ## 1. Ownership and auto-drop
 
@@ -113,15 +117,16 @@ parameters (`@ consume [A] sink ( Box A ) b → v`).
 
 The borrow checker is a **diagnostic-only** static analysis. It is
 **on by default**; `--no-borrowck` disables it. Because it only emits
-diagnostics and never lowers anything, a program with no borrow
-warnings produces the exact same IR either way — the bootstrap fixed
-point is unaffected.
+diagnostics and never lowers anything, a borrow-clean program produces
+the exact same IR either way — the bootstrap fixed point is
+unaffected.
 
-All three rules currently emit `warning:`, not `error:`. This is
-deliberate (BORROW.md watch #3): a new rule ships as a warning and is
-promoted to a hard error only once it has been proven
-false-positive-free across the whole compiler + stdlib + test +
-example corpus. All three are clean today.
+All five rules emit `error:` as of 2026-05-25. They were introduced as
+`warning:` (BORROW.md watch #3 — a new rule ships as a warning and is
+promoted to a hard error only once proven false-positive-free across
+the whole compiler + stdlib + test + example corpus) and promoted
+after a clean 5-day soak. Use `--no-borrowck` for the escape hatch if
+a corner case slips through.
 
 ### 2.1 Move checking — use-after-move
 
@@ -136,7 +141,7 @@ After a move the binding holds freed-or-about-to-be-freed memory.
 Reading it again is reported:
 
 ```
-warning: use of moved value 'v' - it was consumed at line N
+error: use of moved value 'v' - it was consumed at line N
          (pass a fresh value or rebind it before reuse)
 ```
 
@@ -176,7 +181,7 @@ propagates through closure and aggregate literals, `let` copies, and
 - an `=` into a binding declared in a longer-lived (shallower) region.
 
 ```
-warning: returning a value that references a stack binding by pointer
+error: returning a value that references a stack binding by pointer
          - it dangles after this function returns
          (move the captured data to a heap-backed handle)
 ```
@@ -194,7 +199,7 @@ same binding again — as a second `inout`, or as a plain by-value
 argument — is reported.
 
 ```
-( swap_counters c c )    // warning: 'c' is both mutably borrowed
+( swap_counters c c )    // error: 'c' is both mutably borrowed
                          //          and aliased by another argument
 ```
 
@@ -214,7 +219,7 @@ reallocate; `vec_free` releases the buffer outright), so it is
 reported:
 
 ```
-~ x xs { ( vec_push xs x ) }   // warning: cannot mutate 'xs'
+~ x xs { ( vec_push xs x ) }   // error: cannot mutate 'xs'
                                //          while iterating over it
 ```
 
@@ -268,11 +273,11 @@ hits in practice. It deliberately does **not** yet cover:
 
 | Bug class | Checked? | BORROW.md phase |
 |---|---|---|
-| Use-after-move | yes (`warning:`) | Phase 1 |
-| Alias double-free | yes (`warning:`) | Phase 2 |
-| Closure / stack-reference escape | yes (`warning:`) | Phase 3 |
-| `inout` exclusive access (call-site aliasing) | yes (`warning:`) | Phases 4-5 |
-| Iterator invalidation (mutate container in `~`-foreach) | yes (`warning:`) | Phase 6 |
+| Use-after-move | yes (`error:`) | Phase 1 |
+| Alias double-free | yes (`error:`) | Phase 2 |
+| Closure / stack-reference escape | yes (`error:`) | Phase 3 |
+| `inout` exclusive access (call-site aliasing) | yes (`error:`) | Phases 4-5 |
+| Iterator invalidation (mutate container in `~`-foreach) | yes (`error:`) | Phase 6 |
 | Aliased mutation via nested-argument reads | no | Phase 5 (remainder) |
 | Returned borrows / lifetime inference | no | Phase 7 |
 | `*T` raw pointers | no (by design) | n/a |

@@ -6,6 +6,43 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed — borrow-checker diagnostics are now hard errors
+
+`BORROW.md` Phase 8 final landed on 2026-05-25. The borrow checker has
+been on by default since 2026-05-20 and ran clean across the whole
+compiler + stdlib + 250+-file test/example corpus over the 5-day soak.
+Promotion to error is now live:
+
+* `bck_diag` (Phase 1 use-after-move) and `bck_esc_warn` (Phase 3
+  escape analysis + Phase 5 aliased-mut + Phase 6 iterator
+  invalidation) emit `: error: ` instead of `: warning: ` and bump a
+  new `g_bck_errors` counter. `main()` exits non-zero after
+  `parse_program` if any violation was recorded — every error
+  surfaces in one run (same shape as a C compiler), not one at a
+  time.
+* The test harness now treats `borrow_*` tests as **expected compile
+  failures with an `ERRORS` baseline blob** rather than "compile OK +
+  WARNINGS". The exact error text remains regression-protected
+  (BORROW.md watch #2).
+* `--no-borrowck` remains the escape hatch; the abort message points
+  at it so a user hitting a false positive is never wedged.
+* Bootstrap fixed point holds (the checker is diagnostic-only — IR is
+  byte-identical with or without `--no-borrowck`): stage1 ≡ stage2 at
+  **1 602 394 B**.
+
+This closes `critic.md` §4's central complaint — the "vibes-based
+memory model" framing no longer applies. Bug classes 1 (use-after-
+move), 2 (alias double-free), 3 (closure escape), 5 (call-site
+aliased mutation) and 6 (iterator invalidation) are now COMPILE
+ERRORS by default. Bug class 4 (`*T` raw pointers) and the
+remainder of Phase 5 (aliased mutation through nested-argument
+reads) are documented as `--no-borrowck`-style escape hatches in
+[`docs/MEMORY.md`](docs/MEMORY.md).
+
+`README.md`, `docs/MEMORY.md` and `BORROW.md` updated to match.
+
 ## [0.9.0] — 2026-05-24
 
 ### Changed — `refactor/nurlify` branch
