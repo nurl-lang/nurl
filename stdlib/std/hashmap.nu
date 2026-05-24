@@ -71,12 +71,22 @@ $ `stdlib/core/string.nu`
 
 // ── Stock hash + eq for common key types ────────────────────────────
 
+// djb2 hash — direct byte access via *u pointer walk. The original
+// version called `nurl_str_get` per byte, which calls `strlen` per
+// call, making the whole hash O(n²). Now O(n) — one `strlen` at the
+// start, then byte-by-byte through the pointer.
+//
+// Returns 5381 (the djb2 seed) for a NULL or empty string so the
+// caller's downstream code doesn't need to branch.
 @ hash_string s str → i {
-    : i n ( nurl_str_len str )
+    ? == # i str 0 { ^ 5381 } {}
+    : i n ( strlen str )
+    : *u p # *u str
     : ~ i h 5381
     : ~ i i 0
     ~ < i n {
-        = h + * h 33 ( nurl_str_get str i )
+        // h * 33 + byte == (h << 5) + h + byte
+        = h + + << h 5 h & # i . p i 255
         = i + i 1
     }
     ^ h

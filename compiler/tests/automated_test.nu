@@ -10,6 +10,8 @@
 //
 
 $ `stdlib/core/string.nu`
+$ `stdlib/std/hashmap.nu`
+$ `stdlib/core/option.nu`
 
 // ══════════════════════════════════════════════════════════════════════
 // Työkalut testaamiseen
@@ -294,16 +296,21 @@ $ `stdlib/core/string.nu`
 @ test_hashmap → b {
     ( test_header `HashMap` )
 
+    // Phase 9c (2026-05-24): käytä geneeristä stdlib HashMap[s i] —
+    // vanha runtime.c §5 `nurl_map_*` poistui samassa muutoksessa.
+    : ( @ i s ) hs \ s str → i { ^ ( hash_string str ) }
+    : ( @ b s s ) es \ s a s b → b { ^ ( eq_string a b ) }
+
     // Luo HashMap
-    : i m ( nurl_map_new )
+    : ( HashMap s i ) m ( map_new [s i] )
 
     // Lisää avain-arvo -pareja
-    ( nurl_map_put m `alice` 42 )
-    ( nurl_map_put m `bob` 17 )
+    ( map_set [s i] m `alice` 42 hs es )
+    ( map_set [s i] m `bob` 17 hs es )
 
-    // Hae arvoja
-    : i alice_age ( nurl_map_get m `alice` )
-    : i bob_age ( nurl_map_get m `bob` )
+    // Hae arvoja — opt_unwrap_or oletusarvo 0 jos avain puuttuu.
+    : i alice_age ( opt_unwrap_or [i] ( map_get [s i] m `alice` hs es ) 0 )
+    : i bob_age   ( opt_unwrap_or [i] ( map_get [s i] m `bob`   hs es ) 0 )
 
     : b test1_ok == alice_age 42
     : b test2_ok == bob_age 17
@@ -311,20 +318,20 @@ $ `stdlib/core/string.nu`
     ( test_result test2_ok `HashMap: bob = 17` )
 
     // Tarkista koko
-    : i size ( nurl_map_size m )
+    : i size ( map_len [s i] m )
     : b test3_ok == size 2
     ( test_result test3_ok `HashMap: size = 2` )
 
-    // Tarkista has
-    : i has_alice ( nurl_map_has m `alice` )
-    : i has_charlie ( nurl_map_has m `charlie` )
-    : b test4_ok != has_alice 0
-    : b test5_ok == has_charlie 0
+    // Tarkista contains
+    : b has_alice   ( map_contains [s i] m `alice`   hs es )
+    : b has_charlie ( map_contains [s i] m `charlie` hs es )
+    : b test4_ok    has_alice
+    : b test5_ok  ! has_charlie
     ( test_result test4_ok `HashMap: has alice = true` )
     ( test_result test5_ok `HashMap: has charlie = false` )
 
     // Siivoa
-    ( nurl_map_free m )
+    ( map_free [s i] m )
 
     ^ & & & & test1_ok test2_ok test3_ok test4_ok test5_ok
 }

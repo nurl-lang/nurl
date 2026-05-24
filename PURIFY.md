@@ -66,7 +66,7 @@ genuinely irreducible.
 | 2  | String operations                 |  819 | Pure algo | [-] | DEFERRED 2026-05-23 — every `nurl_str_*` is hot in `nurlc.nu`, and the bootstrap stage-0 Python compiler (`compiler/nurlc.py`) doesn't yet support the NURL features a clean replacement needs (`&`-FFI declarations, `i32` type, `& 255` bitwise on `i`, `. p i` pointer-index). Unblocks only after a Python-compiler upgrade (PURIFY.md §1A future item) or after deciding to retire `nurlc.py` in favour of a `nurlc_lastgood`-only bootstrap. |
 | 3  | Char classification               |   11 | Pure algo | [x] | DONE 2026-05-23 — `stdlib/core/char.nu` (35 NURL LOC); -10 C LOC; compiler preamble shrunk by 4 declare lines; both `nurlc.py` (typechecker.py + llvm_gen.py) and `nurlc.nu` no longer carry the FFI surface for it |
 | 4  | File & process                    |  403 | OS-glue   | [~] | PARTIAL — Phase 7 batches 1+2 + §4 batches 3-5 (2026-05-23/24). Replaced `nurl_realpath` / `nurl_write_file_safe` / `nurl_file_size` / POSIX path of `nurl_read_file_mmap` with pure-NURL `& \`c\`` FFI (`realpath` / `fopen` / `fwrite` / `fclose` / `fseek` / `ftell` / `open` / `lseek` / `mmap` / `munmap` / `madvise`); −28 LOC C, fseek/ftell added to preamble. `O_RDONLY` / `PROT_READ` / `MAP_PRIVATE` / `MADV_SEQUENTIAL` added to `nurl_native_constant`. `read_file` gates on `posix_const "MAP_PRIVATE" != -1` — pure-NURL mmap+memcpy on POSIX, runtime fopen+fread fallback on Win32/WASI. |
-| 5  | HashMap (string → i64)            |  101 | Compiler  | [ ] | replace with `stdlib/core/hashmap.nu` (already exists) |
+| 5  | HashMap (string → i64)            |  101 | Compiler  | [x] | DONE 2026-05-24 (Phase 9c) — the historic djb2-chained 64-bucket map's only NURL caller was `compiler/tests/hashmap.nu` (+ a wider HashMap section of `automated_test.nu`); both now use the generic `stdlib/std/hashmap.nu` HashMap[s i] instantiation. While the only caller was a test, `stdlib/std/hashmap.nu`'s `hash_string` was secretly O(n²) (it called `nurl_str_get` per byte, which calls `strlen` per call); fixed to O(n) direct `*u` byte walk during this migration. −101 LOC C; 7 preamble declares + 3 sym_def entries gone. The runtime is now hashmap-free; one canonical implementation (the generic stdlib) for every consumer. |
 | 6a | Lexer                             |  589 | Compiler  | [ ] | rewrite in NURL — biggest single move |
 | 6b | Symbol table                      |   72 | Compiler  | [x] | DONE 2026-05-24 (Phase 9b) — `nurl_sym_new` / `_def` / `_get` / `_push` / `_pop` are pure-NURL @-fns in `compiler/nurlc.nu` over a `nurl_zalloc`'d 48-byte handle and three parallel grow-by-2× arrays (names / types / depths), each starting at cap=64. Cache-friendlier than the C struct-of-arrays layout for the hot linear scan in `nurl_sym_get` (only fetches name pointers per iteration; touches types only on a match). Pays only for what each table uses vs. the C version's 24 MB-per-table preallocation from `MAX_SYMS=1 000 000`. `nurl_sym_get` body returns `^ # s ( strdup … )` directly to suppress Phase 2B's owned-string auto-tag (callers leak the strdup'd copy by design, same as the C version). −72 LOC C; 5 preamble declares + 4 sym_def entries gone. Self-host wall time ~4.3 s — within the ≤ 5× budget. |
 | 7  | Codegen helpers                   |   47 | Compiler  | [x] | DONE 2026-05-24 (Phase 9a) — `nurl_cg_new` / `_reg` / `_lbl` / `_reset` are pure-NURL @-fns in `compiler/nurlc.nu` over a 16-byte `nurl_zalloc`'d 2-i64-slot handle. The @-fns deliberately return `nurl_str_cat` results without an intervening `: s` binding so Phase 2B's auto-detector keeps `__last_ident_name__` on an i64 ident (`n`) at fn exit — that suppresses the `nurl_cg_reg__ret_owned = "str"` tag the auto-detector would otherwise emit, matching the C version's same-program-lifetime leak that `gen_agg_lit`'s insertvalue chain depends on. −47 LOC C; 4 preamble declares + 3 sym_def entries gone. |
@@ -483,6 +483,15 @@ closer to "truly self-hosted" — at a runtime cost.
 sideband are pure-NURL @-fns in `compiler/nurlc.nu`. See the §7
 and §8 rows above for the per-section detail.
 
+**Phase 9b landed** — `§6b` symbol table is a pure-NURL @-fn
+family over a 6-i64-slot heap handle (count / depth / cap +
+three parallel grow-by-2× arrays). See the §6b row.
+
+**Phase 9c landed** — `§5` HashMap deleted entirely. The only
+NURL caller was `compiler/tests/hashmap.nu` (a test); migrated to
+the generic `stdlib/std/hashmap.nu` HashMap[s i]. Same migration
+caught the O(n²) `hash_string` and fixed it. See the §5 row.
+
 Key learning from Phase 9a: Phase 2B's owned-string auto-detector
 at `gen_fn_decl`'s epilogue auto-tags any @-fn whose final
 expression is bound through an `__owned_strings__`-tracked `: s`
@@ -496,7 +505,8 @@ ident at fn exit is the i64 binding `n` instead of an owned-string
 binding. This propagates the C version's "leak for program
 lifetime" contract through cleanly.
 
-**Remaining (Phase 9b/9c):** §5 hashmap + §6b symbol table.
+**Phase 9 complete** — §5 + §6b + §7 + §8 all moved out of
+runtime.c.
 
 **Bootstrap:** every Phase 9 batch must compile from
 `nurlc_lastgood`. After Phase 9a, that snapshot was regenerated

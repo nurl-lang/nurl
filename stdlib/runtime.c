@@ -1244,105 +1244,18 @@ const char* nurl_file_read_chunk(void *h, long long n) {
  * shape. `path_canonical` callers want the strict variant. */
 
 
-/* ── §5  HashMap (string → i64) ────────────────────────────────── */
-
-#define NURL_MAP_BUCKETS 64
-
-typedef struct NurlMapEntry {
-    char                *key;
-    long long            val;
-    struct NurlMapEntry *next;
-} NurlMapEntry;
-
-typedef struct {
-    NurlMapEntry *buckets[NURL_MAP_BUCKETS];
-    long long     size;
-} NurlMap;
-
-static unsigned nurl_map_hash(const char *s) {
-    unsigned h = 5381;
-    while (*s) h = ((h << 5) + h) ^ (unsigned char)*s++;
-    return h % NURL_MAP_BUCKETS;
-}
-
-long long nurl_map_new(void) {
-    NurlMap *m = (NurlMap*)calloc(1, sizeof(NurlMap));
-    return (long long)(uintptr_t)m;
-}
-
-void nurl_map_put(long long handle, const char *key, long long val) {
-    NurlMap *m = (NurlMap*)(uintptr_t)handle;
-    unsigned h = nurl_map_hash(key);
-    NurlMapEntry *e = m->buckets[h];
-    while (e) {
-        if (strcmp(e->key, key) == 0) { e->val = val; return; }
-        e = e->next;
-    }
-    NurlMapEntry *ne = (NurlMapEntry*)malloc(sizeof(NurlMapEntry));
-    ne->key  = strdup(key);
-    ne->val  = val;
-    ne->next = m->buckets[h];
-    m->buckets[h] = ne;
-    m->size++;
-}
-
-long long nurl_map_get(long long handle, const char *key) {
-    NurlMap *m = (NurlMap*)(uintptr_t)handle;
-    unsigned h = nurl_map_hash(key);
-    NurlMapEntry *e = m->buckets[h];
-    while (e) {
-        if (strcmp(e->key, key) == 0) return e->val;
-        e = e->next;
-    }
-    return 0;
-}
-
-long long nurl_map_has(long long handle, const char *key) {
-    NurlMap *m = (NurlMap*)(uintptr_t)handle;
-    unsigned h = nurl_map_hash(key);
-    NurlMapEntry *e = m->buckets[h];
-    while (e) {
-        if (strcmp(e->key, key) == 0) return 1;
-        e = e->next;
-    }
-    return 0;
-}
-
-void nurl_map_del(long long handle, const char *key) {
-    NurlMap *m = (NurlMap*)(uintptr_t)handle;
-    unsigned h = nurl_map_hash(key);
-    NurlMapEntry **pp = &m->buckets[h];
-    while (*pp) {
-        NurlMapEntry *e = *pp;
-        if (strcmp(e->key, key) == 0) {
-            *pp = e->next;
-            free(e->key);
-            free(e);
-            m->size--;
-            return;
-        }
-        pp = &e->next;
-    }
-}
-
-long long nurl_map_size(long long handle) {
-    NurlMap *m = (NurlMap*)(uintptr_t)handle;
-    return m->size;
-}
-
-void nurl_map_free(long long handle) {
-    NurlMap *m = (NurlMap*)(uintptr_t)handle;
-    for (int i = 0; i < NURL_MAP_BUCKETS; i++) {
-        NurlMapEntry *e = m->buckets[i];
-        while (e) {
-            NurlMapEntry *next = e->next;
-            free(e->key);
-            free(e);
-            e = next;
-        }
-    }
-    free(m);
-}
+/* §5 HashMap (string → i64) — REMOVED 2026-05-24 (PURIFY.md
+ * Phase 9c). The historic djb2-chained 64-bucket map's only caller
+ * was `compiler/tests/hashmap.nu`; that test now exercises the
+ * generic `stdlib/std/hashmap.nu` HashMap[s i] instantiation (open
+ * addressing + linear probing + 75 %-load grow), which is faster,
+ * more cache-friendly, and shared with every other consumer.
+ *
+ * Also: stdlib `hash_string` was O(n²) because it called
+ * `nurl_str_get` per byte (each call does its own `strlen`). The
+ * Phase 9c migration drops it to O(n) via direct `*u` byte access.
+ *
+ * −101 LOC C; 7 preamble declares + 3 sym_def entries gone. */
 
 
 /* ── §6  Lexer ─────────────────────────────────────────────────── */

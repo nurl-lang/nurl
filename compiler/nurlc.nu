@@ -9344,13 +9344,11 @@
     ( emit `declare i64    @nurl_csv_row_n_cells_out()` )
     ( emit `declare i64    @nurl_csv_row_next_pos_out()` )
     // nurl_str_slice — pure-NURL @-fn (PURIFY.md Phase 5 Batch C).
-    ( emit `declare i64  @nurl_map_new()` )
-    ( emit `declare void @nurl_map_put(i64, i8*, i64)` )
-    ( emit `declare i64  @nurl_map_get(i64, i8*)` )
-    ( emit `declare i64  @nurl_map_has(i64, i8*)` )
-    ( emit `declare void @nurl_map_del(i64, i8*)` )
-    ( emit `declare i64  @nurl_map_size(i64)` )
-    ( emit `declare void @nurl_map_free(i64)` )
+    // PURIFY.md Phase 9c (2026-05-24): nurl_map_* (string→i64
+    // djb2-chained map) was removed from runtime.c §5; user code
+    // should use the generic `stdlib/std/hashmap.nu` HashMap[K V]
+    // at [s i] instead. See `compiler/tests/hashmap.nu` for the
+    // ported example.
     ( emit `declare i8*  @nurl_read_file(i8*)` )
     ( emit `declare void @nurl_exit(i64)` )
     ( emit `declare i64  @nurl_argc()` )
@@ -9762,9 +9760,7 @@
     ( nurl_sym_def syms `nurl_stdin_eof` `i64` )
     ( nurl_sym_def syms `free` `void` )
     ( nurl_sym_def syms `nurl_free` `void` )
-    ( nurl_sym_def syms `nurl_map_put` `void` )
-    ( nurl_sym_def syms `nurl_map_del` `void` )
-    ( nurl_sym_def syms `nurl_map_free` `void` )
+    // PURIFY.md Phase 9c (2026-05-24): nurl_map_* gone (see emit_preamble).
     ( nurl_sym_def syms `nurl_memcpy` `void` )
     ( nurl_sym_def syms `nurl_poke` `void` )
     // output buffering
