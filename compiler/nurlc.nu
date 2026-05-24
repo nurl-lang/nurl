@@ -4230,19 +4230,67 @@
     : s fe_cont ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_lex_val lex ) ``
     : s slice_val ( gen_expr lex syms cg )
     : s slice_ty ( nurl_get_last_type )
-    // slice_ty = "{ T*, i64 }" — extract ptr_ty (T*) then elem_ty (T)
-    : i slen ( nurl_str_len slice_ty )
-    : s ptr_ty ( nurl_str_slice slice_ty 2 - - slen 7 2 )
-    : s elem_ty ( nurl_str_slice ptr_ty 0 - ( nurl_str_len ptr_ty ) 1 )
-    // Extract ptr and length from the slice struct
-    : s ptr_val ( nurl_cg_reg cg )
-    ( nurl_print `  ` ) ( nurl_print ptr_val )
-    ( nurl_print ` = extractvalue ` ) ( nurl_print slice_ty )
-    ( nurl_print ` ` ) ( nurl_print slice_val ) ( nurl_print `, 0\n` )
-    : s len_val ( nurl_cg_reg cg )
-    ( nurl_print `  ` ) ( nurl_print len_val )
-    ( nurl_print ` = extractvalue ` ) ( nurl_print slice_ty )
-    ( nurl_print ` ` ) ( nurl_print slice_val ) ( nurl_print `, 1\n` )
+    // Two carrier shapes feed `~ x xs { ... }`:
+    //
+    //   Slice  `[T`        →  slice_ty = "{ T*, i64 }"
+    //                          ptr at field 0, len at field 1.
+    //
+    //   Vec    `( Vec T )` →  slice_ty = "%Vec__T" (= type { i8* })
+    //                          field 0 is the ctl pointer; the actual
+    //                          data ptr / len live in the 24-byte
+    //                          control block at words 0 and 1, reached
+    //                          via nurl_peek. The phantom element type
+    //                          T is recovered by demangling the suffix
+    //                          after `%Vec__` — round-trips through
+    //                          mangle_type/demangle_type. The carrier
+    //                          struct itself has no len field, so the
+    //                          old "extractvalue %Vec__T %v, 1" path
+    //                          produced out-of-bounds IR (clang error
+    //                          "invalid indices for extractvalue"); the
+    //                          Vec branch below replaces that with the
+    //                          control-block accessor pair.
+    : b is_vec != 0 ( nurl_str_starts slice_ty `%Vec__` )
+    : ~ s ptr_ty ``
+    : ~ s elem_ty ``
+    : ~ s ptr_val ``
+    : ~ s len_val ``
+    ? is_vec {
+        : i sty_len ( nurl_str_len slice_ty )
+        : s suffix ( nurl_str_slice slice_ty 6 - sty_len 6 )
+        = elem_ty ( demangle_type suffix )
+        = ptr_ty ( nurl_str_cat elem_ty `*` )
+        // ctl = extractvalue %Vec__T %v, 0
+        : s ctl ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print ctl )
+        ( nurl_print ` = extractvalue ` ) ( nurl_print slice_ty )
+        ( nurl_print ` ` ) ( nurl_print slice_val ) ( nurl_print `, 0\n` )
+        // data_i64 = nurl_peek(ctl, 0); ptr = inttoptr data_i64 to T*
+        : s data_int ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print data_int )
+        ( nurl_print ` = call i64 @nurl_peek(i8* ` ) ( nurl_print ctl )
+        ( nurl_print `, i64 0)\n` )
+        = ptr_val ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print ptr_val )
+        ( nurl_print ` = inttoptr i64 ` ) ( nurl_print data_int )
+        ( nurl_print ` to ` ) ( nurl_print ptr_ty ) ( nurl_print `\n` )
+        // len = nurl_peek(ctl, 1)
+        = len_val ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print len_val )
+        ( nurl_print ` = call i64 @nurl_peek(i8* ` ) ( nurl_print ctl )
+        ( nurl_print `, i64 1)\n` )
+    } {
+        : i slen ( nurl_str_len slice_ty )
+        = ptr_ty ( nurl_str_slice slice_ty 2 - - slen 7 2 )
+        = elem_ty ( nurl_str_slice ptr_ty 0 - ( nurl_str_len ptr_ty ) 1 )
+        = ptr_val ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print ptr_val )
+        ( nurl_print ` = extractvalue ` ) ( nurl_print slice_ty )
+        ( nurl_print ` ` ) ( nurl_print slice_val ) ( nurl_print `, 0\n` )
+        = len_val ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print len_val )
+        ( nurl_print ` = extractvalue ` ) ( nurl_print slice_ty )
+        ( nurl_print ` ` ) ( nurl_print slice_val ) ( nurl_print `, 1\n` )
+    }
     // Alloca for index counter
     : s idx_ptr ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print idx_ptr )
@@ -8490,6 +8538,25 @@
     ^ ( nurl_str_slice lty 1 - ( nurl_str_len lty ) 1 )
     {}
     lty
+}
+
+// demangle_type: inverse of mangle_type. Maps a monomorphisation
+// suffix (the slug after `__` in `vec_push__i64`, `vec_get__str`,
+// `vec_new__Point`, etc.) back to a valid LLVM type string. Used by
+// gen_foreach to recover the element type from a `%Vec__T` carrier
+// type without re-parsing the original NURL generic. The two
+// functions must round-trip: `demangle_type ( mangle_type t ) == t`
+// for every t the front-end can produce.
+@ demangle_type s mty → s {
+    ? ( seq mty `i64` ) ^ `i64`
+    ? ( seq mty `f64` ) ^ `double`
+    ? ( seq mty `i1` ) ^ `i1`
+    ? ( seq mty `str` ) ^ `i8*`
+    ? ( seq mty `void` ) ^ `void`
+    ? != 0 ( nurl_str_starts mty `ptr_` )
+    ^ ( nurl_str_cat ( demangle_type ( nurl_str_slice mty 4 - ( nurl_str_len mty ) 4 ) ) `*` )
+    {}
+    ( nurl_str_cat `%` mty )
 }
 
 // subst_source: replace whole-word occurrences of 'from' with 'to' in src.
