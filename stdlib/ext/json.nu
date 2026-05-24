@@ -25,52 +25,91 @@
 // JObj is a Vec of alternating key-value entries. Keys are JStr (always),
 // values can be any Json. Lookup is O(n) — fine for LLM-typical payloads
 // (tens of fields). If you need O(1) probe, copy into a HashMap[s i] or
-// similar — left to the caller.
+// similar — left to the caller. Duplicate keys are preserved as-is by
+// the parser (the JSON spec allows but does not mandate handling); the
+// accessor `json_obj_get` returns the first match in source order, and
+// `json_obj_set` replaces the first match in source order.
 //
 // ── API ─────────────────────────────────────────────────────────────
 //
-// Constructors / predicates:
+// Constructors:
 //   ( json_null )                     → Json
-//   ( json_bool b )                   → Json
-//   ( json_num_lit raw )              → Json   raw as i8* (gets copied)
-//   ( json_str_lit raw )              → Json   raw as i8* (gets copied)
-//   ( json_arr v )                    → Json   takes ownership of v
-//   ( json_obj v )                    → Json   takes ownership of v
+//   ( json_bool   v )                 → Json
+//   ( json_num_lit raw )              → Json    raw as i8* (gets copied)
+//   ( json_str_lit raw )              → Json    raw as i8* (gets copied)
+//   ( json_int  n )                   → Json    JNum from primitive int
+//   ( json_float x )                  → Json    JNum from primitive float
+//   ( json_arr_new )                  → Json    empty []
+//   ( json_obj_new )                  → Json    empty {}
+//   ( json_arr v )                    → Json    takes ownership of Vec
+//   ( json_obj v )                    → Json    takes ownership of Vec
 //
-//   ( json_is_null j )                → b
-//   ( json_is_bool j )                → b
-//   ( json_is_num  j )                → b
-//   ( json_is_str  j )                → b
-//   ( json_is_arr  j )                → b
-//   ( json_is_obj  j )                → b
-//   ( json_type_name j )              → s   one of "null"/"bool"/...
+// Predicates / typing:
+//   ( json_is_null j ) / _bool / _num / _str / _arr / _obj  → b
+//   ( json_type_name j )              → s    "null"/"bool"/"num"/"str"/"arr"/"obj"
 //
 // Parser / serializer:
 //   ( json_parse raw )                → ! Json ParseErr
-//   ( json_stringify j )              → String       compact
-//   ( json_pretty    j )              → String       2-space indented
+//   ( json_stringify j )              → String  compact (always valid JSON)
+//   ( json_pretty    j )              → String  2-space indented
+//
+// Parser diagnostics (valid after a F-tagged json_parse return; reset on
+// every json_parse call):
+//   ( json_last_error_pos )           → i    byte offset (0-based, -1 = none)
+//   ( json_last_error_line )          → i    1-based line number (0 = none)
+//   ( json_last_error_col )           → i    1-based column (0 = none)
+//   ( json_format_error e )           → String   "<kind> at line L col C" (caller owns)
 //
 // Iteration:
-//   ( json_arr_each  j f )            → v   f : (@ v Json)         arrays
-//   ( json_obj_each  j f )            → v   f : (@ v s Json)       (raw key, value)
-//
-// Accessors (return None / 0 / "" on type mismatch):
-//   ( json_arr_len   j )              → i      0 if not array
-//   ( json_arr_get   j idx )          → ? Json
-//   ( json_obj_get   j key_raw )      → ? Json
-//   ( json_obj_has   j key_raw )      → b
+//   ( json_arr_each  j f )            → v    f : (@ v Json)
+//   ( json_obj_each  j f )            → v    f : (@ v s Json) (raw key, value)
 //   ( json_obj_keys  j )              → ( Vec String )  fresh owned copies
-//   ( json_num_as_i  j )              → ? i
-//   ( json_num_as_f  j )              → ? f
-//   ( json_str_data  j )              → s      borrowed; "" on mismatch
-//   ( json_bool_val  j )              → b      F on mismatch
 //
-// Free:
-//   ( json_free      j )              → v   recursive
+// Containers — random access (return None / 0 on miss or wrong variant):
+//   ( json_arr_len   j )              → i
+//   ( json_arr_get   j idx )          → ? Json   borrowed
+//   ( json_obj_get   j key_raw )      → ? Json   borrowed; first match in order
+//   ( json_obj_has   j key_raw )      → b
+//   ( json_get       j dotted_path )  → ? Json   borrowed; see "Path access"
 //
-// Errors: `ParseErr` from stdlib/core/errors.nu. The parser uses Empty
-// (no value found), BadFormat (anything malformed), TrailingGarbage
-// (well-formed value followed by non-whitespace junk).
+// Leaf accessors:
+//   ( json_num_as_i  j )              → ? i    parses JNum; None on overflow/non-int
+//   ( json_num_as_f  j )              → ? f    parses JNum; None on parse fail
+//   ( json_str_data  j )              → s      borrowed; "" on wrong variant
+//   ( json_bool_val  j )              → b      F on wrong variant
+//   ( json_as_str    j )              → s      alias of json_str_data
+//   ( json_as_int    j )              → i      lenient: JNum→int, JBool→1/0, else 0
+//   ( json_as_bool   j )              → b      strict JBool unwrap (F on miss)
+//
+// Mutation (build-style — consume the supplied element/value on success):
+//   ( json_arr_push  j elem )         → b      F if j is not an array
+//   ( json_obj_set   j key_raw val )  → b      F if j is not an object;
+//                                              replaces first match in order
+//
+// Copy / compare / free:
+//   ( json_clone j )                  → Json   deep copy, caller owns
+//   ( json_eq    a b )                → b      byte-exact JNum, order-sensitive JObj
+//   ( json_free  j )                  → v      recursive
+//
+// Errors: `ParseErr` from stdlib/core/errors.nu. The parser uses
+//   Empty           — no value found (whitespace / EOF before any value)
+//   BadFormat       — anything malformed at the byte level
+//   TrailingGarbage — well-formed value followed by non-whitespace junk
+//   Overflow        — nesting depth exceeded `JSON_MAX_DEPTH`
+// After a failure, `json_last_error_line` / `_col` / `_pos` point at the
+// byte that confused the parser (best-effort, may be one past the end).
+//
+// Notes / limits:
+//   - Max nesting depth is `JSON_MAX_DEPTH` (1024) — guards against
+//     stack-blowing payloads like `[[[[[[…]]]]]]`.
+//   - `json_get` paths split on `.`. A purely-numeric segment ALWAYS
+//     means array index — there is no escape syntax to reach a numeric
+//     key in an object via path; use `json_obj_get` directly for those.
+//   - Duplicate object keys are preserved; first-match wins for lookup.
+//     If you need set semantics, project into a HashMap.
+//   - Diagnostics globals are single-threaded — call sites that parse
+//     from multiple OS threads must serialize, or read the location
+//     fields immediately after the failing `json_parse` call.
 
 $ `stdlib/core/errors.nu`
 $ `stdlib/core/string.nu`
@@ -204,11 +243,18 @@ $ `stdlib/core/result.nu`
 // Heap-allocated so that recursive descent calls can mutate `pos`
 // without threading state through return tuples. Owned by json_parse;
 // freed before returning.
+//
+// `depth` is bumped/decremented around array/object recursion to enforce
+// a hard cap (`JSON_MAX_DEPTH`) and prevent stack overflow from hostile
+// payloads like `[[[[[[...]]]]]]`.
+
+: i JSON_MAX_DEPTH 1024
 
 : JsonParser {
     s src
     i len
     i pos
+    i depth
 }
 
 @ __jp_new s txt → *JsonParser {
@@ -216,7 +262,72 @@ $ `stdlib/core/result.nu`
     = . p src txt
     = . p len ( nurl_str_len txt )
     = . p pos 0
+    = . p depth 0
     ^ p
+}
+
+// ── Diagnostics globals (single-threaded) ───────────────────────────
+//
+// `json_parse` resets these on entry and updates them just before any
+// F-return so that callers can fetch the failure location via
+// `json_last_error_line` / `_col` / `_pos`. Concurrent parses on
+// different OS threads must serialize — typical NURL parsing is
+// single-threaded so this is intentional.
+
+: ~ i __g_json_err_pos -1
+: ~ i __g_json_err_line 0
+: ~ i __g_json_err_col 0
+
+@ __jp_reset_err → v {
+    = __g_json_err_pos -1
+    = __g_json_err_line 0
+    = __g_json_err_col 0
+}
+
+// Compute (line, col) for the parser's current `pos` and stash them in
+// the diagnostics globals. Lines are counted by walking `src` from byte
+// 0; columns reset after every '\n'. Cost is O(pos) — acceptable since
+// this only runs once per failure. Position clamps to [0, len].
+@ __jp_record_err * JsonParser p → v {
+    : i n . p len
+    : i target . p pos
+    ? > target n { = target n } {}
+    ? < target 0 { = target 0 } {}
+    : s src . p src
+    : ~ i line 1
+    : ~ i col 1
+    : ~ i k 0
+    ~ < k target {
+        : i c ( nurl_str_get src k )
+        ? == c 10 {
+            = line + line 1
+            = col 1
+        } {
+            = col + col 1
+        }
+        = k + k 1
+    }
+    = __g_json_err_pos target
+    = __g_json_err_line line
+    = __g_json_err_col col
+}
+
+@ json_last_error_pos → i { ^ __g_json_err_pos }
+@ json_last_error_line → i { ^ __g_json_err_line }
+@ json_last_error_col → i { ^ __g_json_err_col }
+
+// Format a parse failure as "<kind> at line L col C". Caller owns the
+// returned String; pass the same `e` they received from `json_parse`.
+@ json_format_error ParseErr e → String {
+    : String out ( string_with_cap 48 )
+    ( string_push_str out ( parse_err_msg # ParseErr e ) )
+    ? > __g_json_err_line 0 {
+        ( string_push_str out ` at line ` )
+        ( string_push_int out __g_json_err_line )
+        ( string_push_str out ` col ` )
+        ( string_push_int out __g_json_err_col )
+    } {}
+    ^ out
 }
 
 @ __jp_eof * JsonParser p → b {
@@ -522,6 +633,10 @@ $ `stdlib/core/result.nu`
 }
 
 @ __jp_parse_array * JsonParser p → !Json ParseErr {
+    ? >= . p depth JSON_MAX_DEPTH {
+        ^ @ !Json ParseErr { F @ ParseErr { Overflow } }
+    } {}
+    = . p depth + . p depth 1
     = . p pos + . p pos 1  // consume '['
     : ( Vec Json ) elems ( vec_new [Json] )
     ( __jp_skip_ws p )
@@ -532,6 +647,7 @@ $ `stdlib/core/result.nu`
     } {}
     ? == ( __jp_peek p ) 93 {  // empty array
         = . p pos + . p pos 1
+        = . p depth - . p depth 1
         ^ @ !Json ParseErr { T @ Json { JArr elems } }
     } {}
 
@@ -567,10 +683,15 @@ $ `stdlib/core/result.nu`
             }
         }
     }
+    = . p depth - . p depth 1
     ^ @ !Json ParseErr { T @ Json { JArr elems } }
 }
 
 @ __jp_parse_object * JsonParser p → !Json ParseErr {
+    ? >= . p depth JSON_MAX_DEPTH {
+        ^ @ !Json ParseErr { F @ ParseErr { Overflow } }
+    } {}
+    = . p depth + . p depth 1
     = . p pos + . p pos 1  // consume '{'
     : ( Vec Json ) kvs ( vec_new [Json] )
     ( __jp_skip_ws p )
@@ -581,6 +702,7 @@ $ `stdlib/core/result.nu`
     } {}
     ? == ( __jp_peek p ) 125 {  // empty object
         = . p pos + . p pos 1
+        = . p depth - . p depth 1
         ^ @ !Json ParseErr { T @ Json { JObj kvs } }
     } {}
 
@@ -637,11 +759,16 @@ $ `stdlib/core/result.nu`
             }
         }
     }
+    = . p depth - . p depth 1
     ^ @ !Json ParseErr { T @ Json { JObj kvs } }
 }
 
 @ json_parse s src → !Json ParseErr {
+    ( __jp_reset_err )
     ? == ( nurl_str_len src ) 0 {
+        = __g_json_err_pos 0
+        = __g_json_err_line 1
+        = __g_json_err_col 1
         ^ @ !Json ParseErr { F @ ParseErr { Empty } }
     } {}
     : *JsonParser p ( __jp_new src )
@@ -650,6 +777,7 @@ $ `stdlib/core/result.nu`
         T j → {
             ( __jp_skip_ws p )
             ? ! ( __jp_eof p ) {
+                ( __jp_record_err p )
                 ( json_free j )
                 ( nurl_free # s p )
                 ^ @ !Json ParseErr { F @ ParseErr { TrailingGarbage } }
@@ -658,6 +786,7 @@ $ `stdlib/core/result.nu`
             ^ @ !Json ParseErr { T j }
         }
         F e → {
+            ( __jp_record_err p )
             ( nurl_free # s p )
             ^ @ !Json ParseErr { F # ParseErr e }
         }
@@ -667,7 +796,20 @@ $ `stdlib/core/result.nu`
 // ── Stringify ────────────────────────────────────────────────────────
 //
 // Compact serialization with the inverse of __jp_parse_string's escape
-// table. Returns a fresh String the caller owns.
+// table. Returns a fresh String the caller owns. Output is always valid
+// JSON: any byte below 0x20 that does not have a named escape (\b \t \n
+// \f \r) is encoded as `\u00XX`, so the result round-trips through any
+// strict JSON parser (including jq, Python, JavaScript).
+
+// Append a single ASCII hex digit (0..15) to `out`. Used by the
+// `\u00XX` control-char escape path.
+@ __js_hex_nibble String out i v → v {
+    ? < v 10 {
+        ( string_push_char out + 48 v )  // '0'..'9'
+    } {
+        ( string_push_char out + 87 v )  // 'a'..'f' (87 = 'a' - 10)
+    }
+}
 
 @ __js_emit_str String out String s → v {
     ( string_push_char out 34 )
@@ -682,11 +824,18 @@ $ `stdlib/core/result.nu`
                         ? == c 13 { ( string_push_char out 92 ) ( string_push_char out 114 ) } {
                             ? == c 8 { ( string_push_char out 92 ) ( string_push_char out 98 ) } {
                                 ? == c 12 { ( string_push_char out 92 ) ( string_push_char out 102 ) } {
-                                    // Other control characters (0x00–0x1F) get pushed through as
-                                    // their raw byte. JSON spec wants \u00XX but for an MVP this is
-                                    // acceptable and matches what most tools do for already-escaped
-                                    // payloads.
-                                    ( string_push_char out c )
+                                    ? & >= c 0 < c 32 {
+                                        // Remaining control bytes (0x00..0x1F without a named
+                                        // escape) → `\u00XX`. Required for strict-parser safety.
+                                        ( string_push_char out 92 )    // '\\'
+                                        ( string_push_char out 117 )   // 'u'
+                                        ( string_push_char out 48 )    // '0'
+                                        ( string_push_char out 48 )    // '0'
+                                        ( __js_hex_nibble out & >> c 4 15 )
+                                        ( __js_hex_nibble out & c 15 )
+                                    } {
+                                        ( string_push_char out c )
+                                    }
                                 } } } } } } }
         = k + k 1
     }
@@ -1105,15 +1254,27 @@ $ `stdlib/core/result.nu`
     ^ ( string_from ( string_data src ) )
 }
 
-// ── Accessors ────────────────────────────────────────────────────────
+// ── Lenient leaf unwrappers ─────────────────────────────────────────
 //
-// Return the unwrapped value of the leaf-typed variants. Empty/default
-// for the wrong variant — these are convenience extractors, not
-// type-checked unwrappers. Use `json_is_*` first if strictness matters.
+// `json_as_*` are convenience extractors that fall back to a default
+// (empty / 0 / F) for the wrong variant. Use `json_is_*` first if
+// strictness matters.
 //
-// json_as_str returns a BORROWED view into the underlying JStr's
+// `json_as_str` returns a BORROWED view into the underlying JStr's
 // String backing buffer — valid only while the source Json lives.
 // Copy via `string_from` if you need a longer-lived String.
+//
+// `json_as_int` vs `json_num_as_i`: both project a Json to an integer,
+// but with different strictness:
+//   - `json_num_as_i` returns `? i` and only succeeds on JNum whose
+//     textual value parses as a valid integer (no fraction, no overflow).
+//     Use it when caller cares about parse failure.
+//   - `json_as_int`   returns plain `i`, never fails. It accepts JBool
+//     (T→1, F→0) and falls back to 0 for everything else. JNum is
+//     parsed via lenient `nurl_str_to_int` (returns 0 on failure).
+//     Use it in hot paths where 0 is a reasonable default.
+// Pick `json_num_as_i` when validating untrusted input; pick
+// `json_as_int` when the field has already been schema-checked.
 
 @ json_as_str Json j → s {
     ^ ?? j {

@@ -13,6 +13,11 @@
 //   err empty: empty input
 //   err bad: bad format
 //   err trailing: trailing garbage
+//   diag bad@line=2 col=3
+//   diag trailing@line=1 col=4
+//   depth overflow detected
+//   ctrl escape ok: "o\u0001k"
+//   formatted=bad format at line 2 col 3
 
 $ `stdlib/ext/json.nu`
 
@@ -382,6 +387,79 @@ $ `stdlib/ext/json.nu`
     ( json_free dup )
     ( string_free built_s )
     ( json_free built )
+
+    // 18. Error diagnostics — parser must report 1-based line/col at the
+    //     byte that confused it. Input is a 2-line snippet with junk
+    //     starting at column 3 of line 2.
+    : !Json ParseErr rd1 ( json_parse `\n  xy` )
+    ?? rd1 {
+        T j → { ( nurl_print `diag unexpected ok\n` ) ( json_free j ) }
+        F _ → {
+            ( nurl_print `diag bad@line=` )
+            ( nurl_print ( nurl_str_int ( json_last_error_line ) ) )
+            ( nurl_print ` col=` )
+            ( nurl_print ( nurl_str_int ( json_last_error_col ) ) )
+            ( nurl_print `\n` )
+        }
+    }
+
+    : !Json ParseErr rd2 ( json_parse `42 trail` )
+    ?? rd2 {
+        T j → { ( nurl_print `diag trailing unexpected ok\n` ) ( json_free j ) }
+        F _ → {
+            ( nurl_print `diag trailing@line=` )
+            ( nurl_print ( nurl_str_int ( json_last_error_line ) ) )
+            ( nurl_print ` col=` )
+            ( nurl_print ( nurl_str_int ( json_last_error_col ) ) )
+            ( nurl_print `\n` )
+        }
+    }
+
+    // 19. Depth overflow — 1100 `[` exceeds the 1024 cap and must
+    //     return ParseErr.Overflow before exhausting the C stack.
+    : String deep ( string_with_cap 1100 )
+    : ~ i di 0
+    ~ < di 1100 {
+        ( string_push_char deep 91 )
+        = di + di 1
+    }
+    : !Json ParseErr rdeep ( json_parse ( string_data deep ) )
+    ?? rdeep {
+        T j → { ( nurl_print `depth unexpected ok\n` ) ( json_free j ) }
+        F e → ?? e {
+            Overflow → ( nurl_print `depth overflow detected\n` )
+            _ → ( nurl_print `depth wrong err variant\n` )
+        }
+    }
+    ( string_free deep )
+
+    // 20. Control-byte escape — JStr containing raw 0x01 must serialize
+    //     to the JSON-spec \uNNNN form, not a raw byte.
+    : String raw_ctrl ( string_with_cap 4 )
+    ( string_push_char raw_ctrl 111 )  // 'o'
+    ( string_push_char raw_ctrl 1 )    // 0x01
+    ( string_push_char raw_ctrl 107 )  // 'k'
+    : Json jctrl @ Json { JStr raw_ctrl }
+    : String serialized ( json_stringify jctrl )
+    ( nurl_print `ctrl escape ok: ` )
+    ( nurl_print ( string_data serialized ) )
+    ( nurl_print `\n` )
+    ( string_free serialized )
+    ( json_free jctrl )
+
+    // 21. json_format_error wraps the ParseErr + location into a
+    //     single human-readable string the caller owns.
+    : !Json ParseErr rfmt ( json_parse `\n  xy` )
+    ?? rfmt {
+        T j → { ( nurl_print `fmt unexpected ok\n` ) ( json_free j ) }
+        F e → {
+            : String msg ( json_format_error # ParseErr e )
+            ( nurl_print `formatted=` )
+            ( nurl_print ( string_data msg ) )
+            ( nurl_print `\n` )
+            ( string_free msg )
+        }
+    }
 
     ^ 0
 }
