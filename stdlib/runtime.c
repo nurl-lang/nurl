@@ -881,14 +881,38 @@ _Static_assert(sizeof(NurlHttpHeader)   == 16, "NurlHttpHeader layout");
 #define NURL_HTTP_ERR_INVALID    5
 #define NURL_HTTP_ERR_OTHER      6
 
+/* The libcurl orchestrator (URL setup, options, perform, response
+ * struct fill) is pure NURL now — see __libcurl_perform_full_to in
+ * stdlib/ext/http.nu. What stays C-side: the two libcurl callbacks
+ * (libcurl invokes them through C function pointers, so they have to
+ * live here) and a handful of monomorphic wrappers around the
+ * variadic curl_easy_{setopt,getinfo} (NURL can't call C varargs).
+ * nurl_curl_available() is the gate NURL probes to decide whether
+ * to use the libcurl path or fall through to the WinHTTP/stub
+ * nurl_http_perform_full_to below. */
+
 #if defined(NURL_HAVE_LIBCURL) && !defined(__wasi__)
 #include <curl/curl.h>
 
+/* Growable byte buffer used by the libcurl write callback. NURL
+ * allocates instances via `nurl_zalloc 24` and reads back data/len
+ * slots after curl_easy_perform; the static_assert pins the 24-byte
+ * / 3-slot layout so a future field reorder breaks the build instead
+ * of silently miscompiling NURL reads. */
 typedef struct NurlHttpBuf {
     char  *data;
     size_t len;
     size_t cap;
 } NurlHttpBuf;
+
+typedef struct NurlHttpHeaderBuf {
+    NurlHttpHeader *items;
+    size_t          len;
+    size_t          cap;
+} NurlHttpHeaderBuf;
+
+_Static_assert(sizeof(NurlHttpBuf)       == 24, "NurlHttpBuf layout");
+_Static_assert(sizeof(NurlHttpHeaderBuf) == 24, "NurlHttpHeaderBuf layout");
 
 static int nurl__http_buf_append(NurlHttpBuf *b, const char *src, size_t n) {
     if (b->len + n + 1 > b->cap) {
@@ -907,20 +931,13 @@ static int nurl__http_buf_append(NurlHttpBuf *b, const char *src, size_t n) {
 
 static size_t nurl__http_write_body(char *ptr, size_t size, size_t nmemb, void *user) {
     size_t total = size * nmemb;
-    NurlHttpBuf *b = (NurlHttpBuf*)user;
-    if (!nurl__http_buf_append(b, ptr, total)) return 0;
+    if (!nurl__http_buf_append((NurlHttpBuf*)user, ptr, total)) return 0;
     return total;
 }
 
-/* libcurl header callback — receives one line at a time including CRLF.
+/* libcurl header callback — one line at a time including CRLF.
  * Splits on the first ':' into a {name, value} record; status lines
  * (no ':') and blank separators are skipped. */
-typedef struct NurlHttpHeaderBuf {
-    NurlHttpHeader *items;
-    size_t          len;
-    size_t          cap;
-} NurlHttpHeaderBuf;
-
 static size_t nurl__http_write_header(char *ptr, size_t size, size_t nmemb, void *user) {
     size_t total = size * nmemb;
     NurlHttpHeaderBuf *hb = (NurlHttpHeaderBuf*)user;
@@ -954,6 +971,9 @@ static size_t nurl__http_write_header(char *ptr, size_t size, size_t nmemb, void
     return total;
 }
 
+/* CURLcode → NURL_HTTP_ERR_* tag. Used by the libcurl streaming
+ * backend (§14b); the synchronous path is pure NURL and does the
+ * mapping itself in stdlib/ext/http.nu. */
 static long long nurl__http_map_err(CURLcode rc) {
     switch (rc) {
     case CURLE_OK:                       return NURL_HTTP_ERR_OK;
@@ -968,8 +988,10 @@ static long long nurl__http_map_err(CURLcode rc) {
     }
 }
 
-/* Parse a CRLF-delimited "Name: Value" blob into a curl_slist (caller
- * frees with curl_slist_free_all). Lines without ':' are dropped. */
+/* CRLF-delimited "Name: Value" blob → curl_slist (caller frees with
+ * curl_slist_free_all). Lines without ':' are dropped. Used by the
+ * streaming backend (§14b); the synchronous path rebuilds the slist
+ * in pure NURL via __curl_build_slist in stdlib/ext/http.nu. */
 static struct curl_slist *nurl__http_build_slist(const char *blob) {
     struct curl_slist *list = NULL;
     if (!blob || !*blob) return NULL;
@@ -1001,85 +1023,95 @@ static struct curl_slist *nurl__http_build_slist(const char *blob) {
     return list;
 }
 
+/* Monomorphic wrappers around the variadic curl_easy_{setopt,getinfo}.
+ * NURL FFI can't call C varargs safely — one shape per arg type used
+ * by the orchestrator. The opt / info codes are ABI-stable libcurl
+ * constants; NURL hard-codes them. */
+void *nurl_curl_easy_init(void)            { return (void*)curl_easy_init(); }
+void  nurl_curl_easy_cleanup(void *eh)     { if (eh) curl_easy_cleanup((CURL*)eh); }
+long long nurl_curl_easy_perform(void *eh) { return (long long)curl_easy_perform((CURL*)eh); }
+
+long long nurl_curl_setopt_l(void *eh, long long opt, long long val) {
+    return (long long)curl_easy_setopt((CURL*)eh, (CURLoption)opt, (long)val);
+}
+long long nurl_curl_setopt_s(void *eh, long long opt, const char *s) {
+    return (long long)curl_easy_setopt((CURL*)eh, (CURLoption)opt, s);
+}
+long long nurl_curl_setopt_p(void *eh, long long opt, void *p) {
+    return (long long)curl_easy_setopt((CURL*)eh, (CURLoption)opt, p);
+}
+long long nurl_curl_getinfo_l(void *eh, long long info, long *out) {
+    return (long long)curl_easy_getinfo((CURL*)eh, (CURLINFO)info, out);
+}
+
+void *nurl_curl_slist_append(void *list, const char *s) {
+    return (void*)curl_slist_append((struct curl_slist*)list, s);
+}
+void nurl_curl_slist_free_all(void *list) {
+    curl_slist_free_all((struct curl_slist*)list);
+}
+
+/* Wire both write callbacks plus their userdata slots in one call —
+ * keeps the C function pointers fully encapsulated. Returns 0 on
+ * success; first non-zero CURLcode otherwise. */
+long long nurl_curl_attach_callbacks(void *eh, void *body_buf, void *hdr_buf) {
+    CURL *h = (CURL*)eh;
+    CURLcode rc;
+    rc = curl_easy_setopt(h, CURLOPT_WRITEFUNCTION,  nurl__http_write_body);
+    if (rc != CURLE_OK) return (long long)rc;
+    rc = curl_easy_setopt(h, CURLOPT_WRITEDATA,      body_buf);
+    if (rc != CURLE_OK) return (long long)rc;
+    rc = curl_easy_setopt(h, CURLOPT_HEADERFUNCTION, nurl__http_write_header);
+    if (rc != CURLE_OK) return (long long)rc;
+    return (long long)curl_easy_setopt(h, CURLOPT_HEADERDATA, hdr_buf);
+}
+
+long long nurl_curl_available(void) { return 1; }
+
+#else  /* No libcurl — every helper is a stub. NURL gates on
+        * nurl_curl_available() == 0 and routes around them. */
+
+void *nurl_curl_easy_init(void)            { return NULL; }
+void  nurl_curl_easy_cleanup(void *eh)     { (void)eh; }
+long long nurl_curl_easy_perform(void *eh) { (void)eh; return -1; }
+
+long long nurl_curl_setopt_l(void *eh, long long opt, long long val) {
+    (void)eh; (void)opt; (void)val; return -1;
+}
+long long nurl_curl_setopt_s(void *eh, long long opt, const char *s) {
+    (void)eh; (void)opt; (void)s; return -1;
+}
+long long nurl_curl_setopt_p(void *eh, long long opt, void *p) {
+    (void)eh; (void)opt; (void)p; return -1;
+}
+long long nurl_curl_getinfo_l(void *eh, long long info, long *out) {
+    (void)eh; (void)info; if (out) *out = 0; return -1;
+}
+void *nurl_curl_slist_append(void *list, const char *s) {
+    (void)list; (void)s; return NULL;
+}
+void nurl_curl_slist_free_all(void *list) { (void)list; }
+long long nurl_curl_attach_callbacks(void *eh, void *body_buf, void *hdr_buf) {
+    (void)eh; (void)body_buf; (void)hdr_buf; return -1;
+}
+long long nurl_curl_available(void) { return 0; }
+
+#endif
+
+#if defined(NURL_HAVE_LIBCURL) && !defined(__wasi__)
+/* libcurl present → NURL drives via the trampolines above; this
+ * symbol stays as a stub so downstream tools that link against the
+ * runtime expecting nurl_http_perform_full_to keep resolving. */
 long long nurl_http_perform_full_to(const char *url, const char *method,
                                     const char *body, const char *headers_blob,
                                     long long timeout_ms,
                                     long long connect_timeout_ms) {
+    (void)url; (void)method; (void)body; (void)headers_blob;
+    (void)timeout_ms; (void)connect_timeout_ms;
     NurlHttpResponse *r = (NurlHttpResponse*)calloc(1, sizeof(NurlHttpResponse));
     if (!r) return 0;
-    if (!url || !*url) {
-        r->err_kind = NURL_HTTP_ERR_INVALID;
-        r->body     = strdup("");
-        return (long long)(uintptr_t)r;
-    }
-
-    /* 0 / negative => runtime defaults (30 s total / 10 s connect). */
-    if (timeout_ms         <= 0) timeout_ms         = 30000;
-    if (connect_timeout_ms <= 0) connect_timeout_ms = 10000;
-
-    CURL *eh = curl_easy_init();
-    if (!eh) {
-        r->err_kind = NURL_HTTP_ERR_OTHER;
-        r->body     = strdup("");
-        return (long long)(uintptr_t)r;
-    }
-
-    NurlHttpBuf       body_buf = {0};
-    NurlHttpHeaderBuf hdr_buf  = {0};
-
-    curl_easy_setopt(eh, CURLOPT_URL,                url);
-    curl_easy_setopt(eh, CURLOPT_FOLLOWLOCATION,     1L);
-    curl_easy_setopt(eh, CURLOPT_NOSIGNAL,           1L);   /* multi-thread safe */
-    curl_easy_setopt(eh, CURLOPT_TIMEOUT_MS,         (long)timeout_ms);
-    curl_easy_setopt(eh, CURLOPT_CONNECTTIMEOUT_MS,  (long)connect_timeout_ms);
-    curl_easy_setopt(eh, CURLOPT_WRITEFUNCTION,  nurl__http_write_body);
-    curl_easy_setopt(eh, CURLOPT_WRITEDATA,      &body_buf);
-    curl_easy_setopt(eh, CURLOPT_HEADERFUNCTION, nurl__http_write_header);
-    curl_easy_setopt(eh, CURLOPT_HEADERDATA,     &hdr_buf);
-    curl_easy_setopt(eh, CURLOPT_USERAGENT,      "nurl-http/0.1");
-    curl_easy_setopt(eh, CURLOPT_ACCEPT_ENCODING, "");   /* libcurl decompresses */
-
-    struct curl_slist *req_headers = nurl__http_build_slist(headers_blob);
-    if (req_headers) {
-        curl_easy_setopt(eh, CURLOPT_HTTPHEADER, req_headers);
-    }
-
-    const char *m = method ? method : "GET";
-    if (strcmp(m, "POST") == 0) {
-        curl_easy_setopt(eh, CURLOPT_POST,           1L);
-        curl_easy_setopt(eh, CURLOPT_POSTFIELDS,     body ? body : "");
-        curl_easy_setopt(eh, CURLOPT_POSTFIELDSIZE,  (long)(body ? strlen(body) : 0));
-    } else if (strcmp(m, "PUT")    == 0 ||
-               strcmp(m, "DELETE") == 0 ||
-               strcmp(m, "PATCH")  == 0) {
-        curl_easy_setopt(eh, CURLOPT_CUSTOMREQUEST, m);
-        if (body && *body) {
-            curl_easy_setopt(eh, CURLOPT_POSTFIELDS,    body);
-            curl_easy_setopt(eh, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
-        }
-    }  /* GET: no body setup */
-
-    CURLcode rc = curl_easy_perform(eh);
-    if (rc != CURLE_OK) {
-        r->err_kind = nurl__http_map_err(rc);
-    } else {
-        long http_code = 0;
-        curl_easy_getinfo(eh, CURLINFO_RESPONSE_CODE, &http_code);
-        r->status = (long long)http_code;
-    }
-
-    if (req_headers) curl_slist_free_all(req_headers);
-    curl_easy_cleanup(eh);
-
-    if (body_buf.data) {
-        r->body     = body_buf.data;
-        r->body_len = (long long)body_buf.len;
-    } else {
-        r->body     = strdup("");
-        r->body_len = 0;
-    }
-    r->headers      = hdr_buf.items;
-    r->header_count = (long long)hdr_buf.len;
+    r->err_kind = NURL_HTTP_ERR_OTHER;
+    r->body     = strdup("");
     return (long long)(uintptr_t)r;
 }
 
@@ -1447,17 +1479,39 @@ long long nurl_http_perform_full(const char *url, const char *method,
 #if defined(NURL_HAVE_LIBCURL) && !defined(__wasi__)
 
 typedef struct NurlHttpStream {
+    /* All fields 8-byte / i64 so the layout reads cleanly through
+     * `nurl_peek(state, slot)` on the NURL side. 14 slots / 112 B.
+     *
+     *   slot 0  multi          CURLM*
+     *   slot 1  easy           CURL*
+     *   slot 2  req_headers    struct curl_slist*
+     *   slot 3  body_buf.data  char*
+     *   slot 4  body_buf.len   size_t
+     *   slot 5  body_buf.cap   size_t
+     *   slot 6  hdr_buf.items  NurlHttpHeader*
+     *   slot 7  hdr_buf.len    size_t
+     *   slot 8  hdr_buf.cap    size_t
+     *   slot 9  headers_done   bool (i64)
+     *   slot 10 still_running  i64
+     *   slot 11 finished       bool (i64)
+     *   slot 12 status         i64
+     *   slot 13 err_kind       i64
+     *
+     * The three flags were `int` historically; widened so the slot
+     * pattern stays clean and the accessors can be pure-NURL @-fns
+     * over `nurl_peek` (PURIFY §14b). */
     CURLM             *multi;
     CURL              *easy;
     struct curl_slist *req_headers;
     NurlHttpBuf        body_buf;
     NurlHttpHeaderBuf  hdr_buf;
-    int                headers_done;
-    int                still_running;
-    int                finished;
+    long long          headers_done;
+    long long          still_running;
+    long long          finished;
     long long          status;
     long long          err_kind;
 } NurlHttpStream;
+_Static_assert(sizeof(NurlHttpStream) == 112, "NurlHttpStream layout");
 
 static size_t nurl__http_stream_write_body(char *ptr, size_t size, size_t nmemb,
                                            void *user) {
@@ -1527,168 +1581,108 @@ static size_t nurl__http_stream_write_header(char *ptr, size_t size, size_t nmem
     return total;
 }
 
-long long nurl_http_stream_open_to(const char *method, const char *url,
-                                   const char *body, const char *headers_blob,
-                                   long long timeout_ms,
-                                   long long connect_timeout_ms) {
-    NurlHttpStream *s = (NurlHttpStream*)calloc(1, sizeof(*s));
-    if (!s) return 0;
-
-    s->multi = curl_multi_init();
-    s->easy  = curl_easy_init();
-    if (!s->multi || !s->easy) {
-        s->err_kind = NURL_HTTP_ERR_OTHER;
-        s->finished = 1;
-        return (long long)(uintptr_t)s;
-    }
-
-    if (timeout_ms <= 0)         timeout_ms         = 30000;
-    if (connect_timeout_ms <= 0) connect_timeout_ms = 10000;
-
-    curl_easy_setopt(s->easy, CURLOPT_URL,                url ? url : "");
-    curl_easy_setopt(s->easy, CURLOPT_FOLLOWLOCATION,     1L);
-    curl_easy_setopt(s->easy, CURLOPT_NOSIGNAL,           1L);
-    curl_easy_setopt(s->easy, CURLOPT_TIMEOUT_MS,         (long)timeout_ms);
-    curl_easy_setopt(s->easy, CURLOPT_CONNECTTIMEOUT_MS,  (long)connect_timeout_ms);
-    curl_easy_setopt(s->easy, CURLOPT_WRITEFUNCTION,      nurl__http_stream_write_body);
-    curl_easy_setopt(s->easy, CURLOPT_WRITEDATA,          s);
-    curl_easy_setopt(s->easy, CURLOPT_HEADERFUNCTION,     nurl__http_stream_write_header);
-    curl_easy_setopt(s->easy, CURLOPT_HEADERDATA,         s);
-    curl_easy_setopt(s->easy, CURLOPT_USERAGENT,          "nurl-http/0.1");
-    curl_easy_setopt(s->easy, CURLOPT_ACCEPT_ENCODING,    "");
-
-    s->req_headers = nurl__http_build_slist(headers_blob);
-    if (s->req_headers) {
-        curl_easy_setopt(s->easy, CURLOPT_HTTPHEADER, s->req_headers);
-    }
-
-    const char *m = method ? method : "GET";
-    if (strcmp(m, "POST") == 0) {
-        curl_easy_setopt(s->easy, CURLOPT_POST,          1L);
-        curl_easy_setopt(s->easy, CURLOPT_POSTFIELDS,    body ? body : "");
-        curl_easy_setopt(s->easy, CURLOPT_POSTFIELDSIZE, (long)(body ? strlen(body) : 0));
-    } else if (strcmp(m, "GET") != 0) {
-        curl_easy_setopt(s->easy, CURLOPT_CUSTOMREQUEST, m);
-        if (body && *body) {
-            curl_easy_setopt(s->easy, CURLOPT_POSTFIELDS,    body);
-            curl_easy_setopt(s->easy, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
+/* Monomorphic wrappers around curl_multi_*. NURL drives the pump
+ * loop through these (PURIFY §14b 2026-05-24). Returns -1 on a
+ * CURLM error so the NURL side can treat any negative as failure. */
+void *nurl_curl_multi_init(void)                  { return (void*)curl_multi_init(); }
+long long nurl_curl_multi_cleanup(void *m) {
+    return (long long)curl_multi_cleanup((CURLM*)m);
+}
+long long nurl_curl_multi_add_handle(void *m, void *e) {
+    return (long long)curl_multi_add_handle((CURLM*)m, (CURL*)e);
+}
+long long nurl_curl_multi_remove_handle(void *m, void *e) {
+    return (long long)curl_multi_remove_handle((CURLM*)m, (CURL*)e);
+}
+/* Drives a single multi_perform pump. Returns still_running count
+ * on success, -1 on CURLM error. */
+long long nurl_curl_multi_perform(void *m) {
+    int still = 0;
+    CURLMcode rc = curl_multi_perform((CURLM*)m, &still);
+    if (rc != CURLM_OK) return -1;
+    return (long long)still;
+}
+/* Blocks up to timeout_ms for activity; ignores numfds (caller
+ * cares only about wake-up timing). Returns -1 on CURLM error. */
+long long nurl_curl_multi_wait(void *m, long long timeout_ms) {
+    int numfds = 0;
+    CURLMcode rc = curl_multi_wait((CURLM*)m, NULL, 0, (int)timeout_ms, &numfds);
+    if (rc != CURLM_OK) return -1;
+    return 0;
+}
+/* Drain done messages once; return the CURLcode result of the
+ * latest CURLMSG_DONE seen, or -1 if no DONE message was queued. */
+long long nurl_curl_multi_drain_done(void *m) {
+    long long out = -1;
+    CURLMsg *msg;
+    int msgs_left = 0;
+    while ((msg = curl_multi_info_read((CURLM*)m, &msgs_left)) != NULL) {
+        if (msg->msg == CURLMSG_DONE) {
+            out = (long long)msg->data.result;
         }
     }
-
-    CURLMcode mrc = curl_multi_add_handle(s->multi, s->easy);
-    if (mrc != CURLM_OK) {
-        s->err_kind = NURL_HTTP_ERR_OTHER;
-        s->finished = 1;
-        return (long long)(uintptr_t)s;
-    }
-    s->still_running = 1;
-    return (long long)(uintptr_t)s;
+    return out;
 }
 
-char *nurl_http_stream_next(long long handle) {
-    NurlHttpStream *s = (NurlHttpStream*)(uintptr_t)handle;
-    if (!s) return NULL;
-
-    while (s->body_buf.len == 0 && !s->finished) {
-        int still = 0;
-        CURLMcode mrc = curl_multi_perform(s->multi, &still);
-        if (mrc != CURLM_OK) {
-            s->err_kind = NURL_HTTP_ERR_OTHER;
-            s->finished = 1;
-            break;
-        }
-        s->still_running = still;
-        if (!still) {
-            CURLMsg *msg;
-            int msgs_left = 0;
-            while ((msg = curl_multi_info_read(s->multi, &msgs_left)) != NULL) {
-                if (msg->msg == CURLMSG_DONE) {
-                    long http_code = 0;
-                    curl_easy_getinfo(s->easy, CURLINFO_RESPONSE_CODE, &http_code);
-                    s->status   = (long long)http_code;
-                    s->err_kind = nurl__http_map_err(msg->data.result);
-                }
-            }
-            s->finished = 1;
-            break;
-        }
-        int numfds = 0;
-        curl_multi_wait(s->multi, NULL, 0, 100, &numfds);
-    }
-
-    if (s->body_buf.len == 0) return NULL;
-
-    /* Hand over the buffer; reset the accumulator for the next pull. */
+/* NurlHttpStream-shaped allocation + callback wiring. NURL drives the
+ * setopts itself for everything else; these two encapsulate the parts
+ * that touch internal symbols. */
+void *nurl_curl_stream_alloc(void) {
+    return (void*)calloc(1, sizeof(NurlHttpStream));
+}
+long long nurl_curl_stream_attach_callbacks(void *handle, void *easy) {
+    if (!handle || !easy) return -1;
+    CURL *e = (CURL*)easy;
+    CURLcode rc;
+    rc = curl_easy_setopt(e, CURLOPT_WRITEFUNCTION,  nurl__http_stream_write_body);
+    if (rc != CURLE_OK) return (long long)rc;
+    rc = curl_easy_setopt(e, CURLOPT_WRITEDATA,      handle);
+    if (rc != CURLE_OK) return (long long)rc;
+    rc = curl_easy_setopt(e, CURLOPT_HEADERFUNCTION, nurl__http_stream_write_header);
+    if (rc != CURLE_OK) return (long long)rc;
+    return (long long)curl_easy_setopt(e, CURLOPT_HEADERDATA, handle);
+}
+/* Swap out the body accumulator and return the previous data pointer
+ * (owned by caller; NULL if empty). Resets len/cap so the next pump
+ * starts a fresh buffer. */
+char *nurl_curl_stream_take_body(void *handle) {
+    NurlHttpStream *s = (NurlHttpStream*)handle;
+    if (!s || s->body_buf.len == 0) return NULL;
     char *out = s->body_buf.data;
     s->body_buf.data = NULL;
     s->body_buf.len  = 0;
     s->body_buf.cap  = 0;
     return out;
 }
-
-long long nurl_http_stream_status(long long handle) {
-    NurlHttpStream *s = (NurlHttpStream*)(uintptr_t)handle;
-    return s ? s->status : 0;
+/* Set s->status from the easy handle's response code and map the
+ * CURLcode to the matching HttpErr tag. Called when a DONE message
+ * arrives on the multi handle. */
+void nurl_curl_stream_finalize(void *handle, long long curle_result) {
+    NurlHttpStream *s = (NurlHttpStream*)handle;
+    if (!s) return;
+    long http_code = 0;
+    curl_easy_getinfo(s->easy, CURLINFO_RESPONSE_CODE, &http_code);
+    s->status   = (long long)http_code;
+    s->err_kind = nurl__http_map_err((CURLcode)curle_result);
+    s->finished = 1;
 }
 
-long long nurl_http_stream_err_kind(long long handle) {
-    NurlHttpStream *s = (NurlHttpStream*)(uintptr_t)handle;
-    return s ? s->err_kind : NURL_HTTP_ERR_OTHER;
+/* nurl_http_stream_open_to / _next / _pump_headers became pure-NURL
+ * @-fns in stdlib/ext/http.nu (PURIFY §14b 2026-05-24) — driving the
+ * multi-handle pump from NURL over the trampolines above. NURL gates
+ * on `nurl_curl_available() != 0` and reaches these stubs only on
+ * builds without libcurl, where they all map to HttpOther via the
+ * 0 / NULL signals the dispatch in stdlib/ext/http.nu interprets. */
+long long nurl_http_stream_open_to(const char *method, const char *url,
+                                   const char *body, const char *headers_blob,
+                                   long long timeout_ms,
+                                   long long connect_timeout_ms) {
+    (void)method; (void)url; (void)body; (void)headers_blob;
+    (void)timeout_ms; (void)connect_timeout_ms;
+    return 0;
 }
-
-/* Pump until response headers are fully received OR transfer terminates.
- * After return, status/header_count/header_name/header_value are valid
- * and body chunks may be pulled via nurl_http_stream_next. Returns the
- * status code, or 0 if the transfer aborted before a status line — then
- * probe nurl_http_stream_err_kind for the reason. */
-long long nurl_http_stream_pump_headers(long long handle) {
-    NurlHttpStream *s = (NurlHttpStream*)(uintptr_t)handle;
-    if (!s) return 0;
-    while (!s->headers_done && !s->finished) {
-        int still = 0;
-        CURLMcode mrc = curl_multi_perform(s->multi, &still);
-        if (mrc != CURLM_OK) {
-            s->err_kind = NURL_HTTP_ERR_OTHER;
-            s->finished = 1;
-            break;
-        }
-        s->still_running = still;
-        if (!still) {
-            CURLMsg *msg;
-            int msgs_left = 0;
-            while ((msg = curl_multi_info_read(s->multi, &msgs_left)) != NULL) {
-                if (msg->msg == CURLMSG_DONE) {
-                    long http_code = 0;
-                    curl_easy_getinfo(s->easy, CURLINFO_RESPONSE_CODE, &http_code);
-                    s->status   = (long long)http_code;
-                    s->err_kind = nurl__http_map_err(msg->data.result);
-                }
-            }
-            s->finished = 1;
-            break;
-        }
-        int numfds = 0;
-        curl_multi_wait(s->multi, NULL, 0, 100, &numfds);
-    }
-    return s->status;
-}
-
-long long nurl_http_stream_header_count(long long handle) {
-    NurlHttpStream *s = (NurlHttpStream*)(uintptr_t)handle;
-    return s ? (long long)s->hdr_buf.len : 0;
-}
-
-const char* nurl_http_stream_header_name(long long handle, long long i) {
-    NurlHttpStream *s = (NurlHttpStream*)(uintptr_t)handle;
-    if (!s || i < 0 || (size_t)i >= s->hdr_buf.len) return "";
-    return s->hdr_buf.items[i].name ? s->hdr_buf.items[i].name : "";
-}
-
-const char* nurl_http_stream_header_value(long long handle, long long i) {
-    NurlHttpStream *s = (NurlHttpStream*)(uintptr_t)handle;
-    if (!s || i < 0 || (size_t)i >= s->hdr_buf.len) return "";
-    return s->hdr_buf.items[i].value ? s->hdr_buf.items[i].value : "";
-}
+char *nurl_http_stream_next(long long handle)      { (void)handle; return NULL; }
+long long nurl_http_stream_pump_headers(long long handle) { (void)handle; return 0; }
 
 void nurl_http_stream_close(long long handle) {
     NurlHttpStream *s = (NurlHttpStream*)(uintptr_t)handle;
@@ -1722,13 +1716,23 @@ long long nurl_http_stream_open_to(const char *method, const char *url,
 }
 
 char *nurl_http_stream_next(long long handle)     { (void)handle; return NULL; }
-long long nurl_http_stream_status(long long h)    { (void)h; return 0; }
-long long nurl_http_stream_err_kind(long long h)  { (void)h; return NURL_HTTP_ERR_OTHER; }
 long long nurl_http_stream_pump_headers(long long h)  { (void)h; return 0; }
-long long nurl_http_stream_header_count(long long h)  { (void)h; return 0; }
-const char* nurl_http_stream_header_name(long long h, long long i)  { (void)h; (void)i; return ""; }
-const char* nurl_http_stream_header_value(long long h, long long i) { (void)h; (void)i; return ""; }
 void      nurl_http_stream_close(long long h)     { (void)h; }
+
+/* Multi + stream-state stubs for the no-libcurl link path. NURL gates
+ * on nurl_curl_available() == 0 and won't reach them at runtime; they
+ * exist purely so the symbol set resolves. */
+void *nurl_curl_multi_init(void)                                 { return NULL; }
+long long nurl_curl_multi_cleanup(void *m)                       { (void)m; return -1; }
+long long nurl_curl_multi_add_handle(void *m, void *e)           { (void)m; (void)e; return -1; }
+long long nurl_curl_multi_remove_handle(void *m, void *e)        { (void)m; (void)e; return -1; }
+long long nurl_curl_multi_perform(void *m)                       { (void)m; return -1; }
+long long nurl_curl_multi_wait(void *m, long long timeout_ms)    { (void)m; (void)timeout_ms; return -1; }
+long long nurl_curl_multi_drain_done(void *m)                    { (void)m; return -1; }
+void *nurl_curl_stream_alloc(void)                               { return NULL; }
+long long nurl_curl_stream_attach_callbacks(void *h, void *e)    { (void)h; (void)e; return -1; }
+char *nurl_curl_stream_take_body(void *h)                        { (void)h; return NULL; }
+void nurl_curl_stream_finalize(void *h, long long r)             { (void)h; (void)r; }
 
 #endif  /* streaming backend selection */
 

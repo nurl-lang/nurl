@@ -842,9 +842,9 @@ outside this document's scope.
 
 **Starting point (2026-05-23):** `stdlib/runtime.c` 8 879 LOC across 28 sections.
 
-**Current (2026-05-24):** `stdlib/runtime.c` **5 453 LOC** — a
-**−3 426 LOC** reduction (−38.6 %) across the branch's 43+ commits.
-Two thirds of the way to the 3 000-LOC target with every shipped
+**Current (2026-05-24):** `stdlib/runtime.c` **4 544 LOC** — a
+**−4 335 LOC** reduction (−48.8 %) across the branch's 45+ commits.
+Within striking distance of the 3 000-LOC target with every shipped
 phase keeping the bootstrap fixed point and the full test corpus
 green.
 
@@ -874,6 +874,8 @@ green.
 | §22 | gzip (`nurl_gzip_compress` / `nurl_gzip_decompress`) |  −15 | pure NURL (`stdlib/ext/compress.nu`) over `& \`z\`` FFI to deflateInit2_/deflate/deflateEnd + tiny C struct accessors (`nurl_z_setup` / `nurl_z_total_out`) that bridge LP64/LLP64 uLong-width variance |
 | §2 SIMD CSV | typed CSV scanner |  ~−508 | pure NURL (`stdlib/ext/csv.nu`) — 153 LOC ported over libc primitives; the SIMD intrinsics that earlier justified C-side residency turned out unnecessary post-LTO |
 | §14 | response accessors (`nurl_http_response_status` / `_err_kind` / `_body` / `_body_len` / `_header_count` / `_header_name` / `_header_value`) |  −12 | pure NURL (`stdlib/ext/http.nu`) over `nurl_peek(p, slot)` walking the NurlHttpResponse i64-slot layout; static asserts in runtime.c pin the layout at compile time. Only `_free` stays C (walks the headers[] array deallocating each name/value pair plus the body) |
+| §14 | libcurl synchronous backend (`nurl_http_perform_full_to` orchestrator + `nurl__http_map_err` + `nurl__http_build_slist`) | ~−100 net | pure NURL `__libcurl_perform_full_to` in `stdlib/ext/http.nu` over 11 trampolines (`nurl_curl_easy_*` / `_setopt_l|s|p` / `_getinfo_l` / `_slist_*` / `_attach_callbacks` / `_available`). Variadic `curl_easy_setopt` / `_getinfo` hidden behind monomorphic wrappers. The two write callbacks (libcurl invokes through raw C fn-pointers) stay C-side; `nurl_curl_attach_callbacks` wires them up so the NURL side never references them by symbol. WinHTTP and no-backend paths unchanged. Live verification: GET / POST / PUT / PATCH / DELETE / POST+headers / POST+JSON all return 200 from httpbin.org via the pure-NURL path |
+| §14b | libcurl multi streaming backend + accessors (`nurl_http_stream_open_to` orchestrator + `_next` + `_pump_headers` + `_status` + `_err_kind` + `_header_count` + `_header_name` + `_header_value`) | ~−150 net | pure NURL `__http_stream_open_to_libcurl` + `__http_stream_next_libcurl` + `__http_stream_pump_headers_libcurl` + `__http_stream_pump_once` in `stdlib/ext/http.nu` over 11 multi/state trampolines (`nurl_curl_multi_*` / `nurl_curl_stream_alloc` / `_attach_callbacks` / `_take_body` / `_finalize`). NurlHttpStream's three historical `int` fields widened to `long long` for clean i64-slot layout; static_assert(112-byte struct) pins it. The five accessors are pure-NURL `nurl_peek`s. The two callbacks + `nurl_http_stream_close` stay C-side. The "deferred — int fields break slot pattern" caveat in the previous PURIFY snapshot is now fully resolved |
 
 **Other branch deliverables (not LOC moves):**
 
@@ -904,31 +906,25 @@ green.
     `api/app/main.py` wasm shim list. The uuidgen wasm build now
     links without `signature mismatch` warnings.
 
-**Residual runtime.c (~5 453 LOC):** still above the projected
-end-state (~2 000 LOC) — Phase 12 lib-cache (libcurl easy +
-multi backends), Phase 13 basic I/O, Phase 14 final accounting
-still open. The path from here is the same FFI pattern, applied
-to fewer-but-larger remaining sections.
+**Residual runtime.c (~4 544 LOC):** approaching the projected
+end-state (~2 000 LOC) — the libcurl backends (§14 + §14b) have
+shipped, leaving Phase 13 basic I/O and the larger irreducibles
+(§18 TCP/TLS, §24 async, §25 reactor, §16 Win32 process exec)
+as the dominant remaining mass. The libcurl WinHTTP fallback
+(~320 LOC) is the next-biggest single movable chunk — same FFI
+shape applied to `winhttp.dll`, doable but Win32-API-heavy.
 
 **Known follow-on candidates** (with risk/reward sketch):
 
-  * **§14 libcurl backend** (~210 LOC of `nurl_http_perform_full_to` +
-    write/header callbacks + slist builder) — biggest movable chunk
-    by far. Doable via `& \`curl\`` FFI; the callbacks become @-fns
-    (libcurl puts userdata last, matching @-fn signatures with no
-    closure ABI mismatch). Likely needs 2-3 small monomorphic C
-    trampolines around `curl_easy_setopt` since it's variadic. WinHTTP
-    fallback stays C-side (~250 LOC of Win32-specific API surface).
-  * **§14b libcurl multi backend** (~390 LOC) — same shape, more
-    state. Both backends share `NurlHttpHeaderBuf` / `NurlHttpBuf` so
-    a partial migration that leaves the response struct C-side is the
-    safe sequencing.
-  * **§14b stream accessors** (~25 LOC) — deferred. `NurlHttpStream`
-    has three `int`s in the middle (`headers_done` / `still_running`
-    / `finished`) that break the clean i64-slot pattern that worked
-    for `NurlHttpResponse`. Would need either a struct reorder or
-    byte-offset addressing (which `nurl_peek` doesn't support); cost
-    > benefit at current LOC ratio.
+  * **§14 WinHTTP backend** (~320 LOC of `nurl_http_perform_full_to`
+    Win32-only branch) — same trampoline pattern over winhttp.dll
+    (`WinHttpOpen` / `Connect` / `OpenRequest` / `SetTimeouts` /
+    `SetOption` / `AddRequestHeaders` / `SendRequest` /
+    `ReceiveResponse` / `QueryHeaders` / `QueryDataAvailable` /
+    `ReadData` / `CloseHandle`) plus a small WCHAR ↔ UTF-8 helper.
+    Lower-priority than the libcurl backends because most NURL
+    builds target Linux + libcurl; Windows users typically get a
+    libcurl-bundled binary anyway.
   * **§4 `nurl_read_file`** (~16 LOC) — fopen/fseek/ftell/fread chain.
     Moving requires a local copy in `nurlc.nu` (bootstrap can't
     `$`-import) plus a new shared @-fn in `stdlib/core/io.nu` for
