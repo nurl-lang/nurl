@@ -49,11 +49,11 @@ A reproducible micro-benchmark suite lives in [`bench/`](bench/) — one source 
 
 | Benchmark         | NURL  | Python  | Rust  | Node    |
 |-------------------|------:|--------:|------:|--------:|
-| `lcg` (100M LCG iters)         |  11   | 28 244  |  18   |  9 731  |
-| `sieve` (π(10M))               |  63   |  5 792  |  63   |    144  |
-| `json_parse` (5× 64 KB)        | 479   |     41  |   9   |     48  |
+| `lcg` (100M LCG iters)         |  10   | 27 459  |  16   |  9 680  |
+| `sieve` (π(10M))               |  69   |  5 898  |  62   |    142  |
+| `json_parse` (5× 64 KB)        |  14   |     34  |   5   |     47  |
 
-(Lower = better, median wall-clock ms across 5 runs.) On compute-bound work NURL lands within measurement noise of Rust — same LLVM `-O2 -flto` codegen. On `json_parse` NURL's pure-NURL parser is ~12× behind Python's C `json` — honest call-out of where the stdlib-pure-NURL choice currently costs throughput.
+(Lower = better, median wall-clock ms across 5 runs.) On compute-bound work NURL lands within measurement noise of Rust — same LLVM `-O2 -flto` codegen. On `json_parse` NURL's pure-NURL parser beats Python's C-extension `json` ~2.4× and trails a hand-written zero-copy Rust parser by ~3×.
 
 ---
 

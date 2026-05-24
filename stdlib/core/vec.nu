@@ -125,9 +125,26 @@ $ `stdlib/core/mem.nu`
         : ~ i new_cap ? == cap 0 4 cap
         ~ < new_cap need { = new_cap * new_cap 2 }
         : s cur ( __vec_data_raw ctl )
-        : s fresh ( nurl_realloc cur * Z A new_cap )
-        ( nurl_poke ctl 0 # i fresh )
-        ( nurl_poke ctl 2 new_cap )
+        : i bytes * Z A new_cap
+        // If `cur` lives in the same alloc as ctl (the packed-string
+        // layout from string_from_bytes_packed — data sits at ctl+24),
+        // realloc() would walk into the middle of another malloc block
+        // and crash. Detect that, malloc-copy-out into a fresh buffer
+        // instead; the next free of this Vec then frees both blocks
+        // (the packed-aware vec_free below skips the in-ctl buffer).
+        : i ctl_end + # i ctl 24
+        ? & != 0 # i cur == # i cur ctl_end {
+            : s fresh ( nurl_alloc bytes )
+            : i len ( __vec_len_raw ctl )
+            : i copy_bytes * Z A len
+            ? > copy_bytes 0 { ( nurl_memcpy fresh cur copy_bytes ) } {}
+            ( nurl_poke ctl 0 # i fresh )
+            ( nurl_poke ctl 2 new_cap )
+        } {
+            : s fresh ( nurl_realloc cur bytes )
+            ( nurl_poke ctl 0 # i fresh )
+            ( nurl_poke ctl 2 new_cap )
+        }
     } {}
 }
 
@@ -379,7 +396,12 @@ $ `stdlib/core/mem.nu`
 @ vec_free [A] ( Vec A ) v → v {
     : s ctl . v ctl
     : s data ( __vec_data_raw ctl )
-    ? != 0 # i data { ( nurl_free data ) } {}
+    // `string_from_bytes_packed` (core/string.nu) lays the data
+    // buffer immediately after the 24-byte ctl in a single alloc.
+    // Detect that case (data == ctl + 24) and skip the separate
+    // buffer-free — both regions live in the one block freed below.
+    : i ctl_end + # i ctl 24
+    ? & != 0 # i data != # i data ctl_end { ( nurl_free data ) } {}
     ( nurl_free ctl )
 }
 
@@ -400,7 +422,10 @@ $ `stdlib/core/mem.nu`
             ( drop . buf i )
             = i + i 1
         }
-        ( nurl_free data )
+        // Skip the buffer free when it lives in the same alloc as the
+        // ctl (see vec_free above for the packed-string layout).
+        : i ctl_end + # i ctl 24
+        ? != # i data ctl_end { ( nurl_free data ) } {}
     } {}
     ( nurl_free ctl )
 }

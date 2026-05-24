@@ -51,15 +51,27 @@ ZSTD_LIBS=""; [[ -f "$ROOT/stdlib/runtime.zstd"    ]] && ZSTD_LIBS="$(pkg-config
 # Print one wall-clock ms reading on stdout. On non-zero exit prints
 # FAIL; on `timeout` SIGTERM (exit 124) prints "TIMEOUT" so the median
 # helper can render it as a distinct cell.
+#
+# Uses bash 5's `$EPOCHREALTIME` to avoid forking `date` twice per
+# measurement — each `date +%s%N` adds ~1.5ms in fork+exec overhead,
+# which is large vs. a 10-20 ms bench cell. The `timeout` wrapper is
+# kept (it's the only way to bound a runaway child); when the child
+# is well-behaved this loop costs ~50 microseconds per call.
 time_ms() {
     local label="$1"; shift
     local t0 t1 ec
-    t0=$(date +%s%N)
+    t0=$EPOCHREALTIME
     timeout --foreground "${PER_RUN_TIMEOUT}s" "$@" > /dev/null 2>&1
     ec=$?
-    t1=$(date +%s%N)
+    t1=$EPOCHREALTIME
     if [[ $ec -eq 0 ]]; then
-        echo $(( (t1 - t0) / 1000000 ))
+        # $EPOCHREALTIME is "<seconds>.<microseconds>"; convert both
+        # sides to total microseconds via pure bash arithmetic (no
+        # `awk` / `bc` fork), then divide. `10#` forces base-10
+        # interpretation of the fractional part (a leading 0 in
+        # `.092397` would otherwise look octal).
+        local sa=${t0%.*} ua=${t0#*.} sb=${t1%.*} ub=${t1#*.}
+        echo $(( ( ( ${sb} * 1000000 + 10#${ub} ) - ( ${sa} * 1000000 + 10#${ua} ) ) / 1000 ))
     elif [[ $ec -eq 124 ]]; then
         echo TIMEOUT
     else

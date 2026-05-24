@@ -8,6 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — `stdlib/ext/json.nu` parser ~34× faster (2026-05-25)
+
+`json_parse` of the `bench/json_parse` payload (5 × 64 KB) dropped
+from **479 ms** to **14 ms** — now faster than Python's C-extension
+`json` (~34 ms) and within ~3× of a hand-written zero-copy Rust
+parser (~5 ms). Two landed changes:
+
+1. **Direct `*u` pointer reads instead of `nurl_str_get`.** Every
+   `__jp_peek` was paying a full `strlen` of the whole input (the
+   `core/string.nu` helper does an `strlen` for the bounds check) —
+   a 64 KB parse spent gigabytes of memory bandwidth in `strlen`
+   alone, classic O(n²). Replaced with a cached `*u`-based byte read
+   against `. p src`, plus a `memchr`-driven fast path in
+   `__jp_parse_string` that slices the literal byte range when the
+   string contains no `\` escape (the common case).
+
+2. **Packed-layout `String` constructor.** New
+   `core/string.nu::string_from_bytes_packed` allocates the 24-byte
+   `Vec` control block and the data buffer in a single
+   `nurl_alloc(24 + n + 1)`. `vec_free` / `vec_free_with` /
+   `__vec_grow` in `core/vec.nu` detect the layout by `data ==
+   ctl + 24`; the lifecycle is byte-identical to a normal String
+   (it can still grow — the first growth pays for an unpacking copy
+   out into a separate buffer). For JSON parsing every `JNum` /
+   `JStr` is read-only after construction, so this exact case halves
+   the per-string allocation count.
+
+Bench runner (`bench/run.sh`) also stopped forking `date` twice per
+measurement by switching to `$EPOCHREALTIME` arithmetic (bash 5+),
+shaving ~3 ms of measurement overhead per cell.
+
+`bench/RESULTS.md` and `README.md` updated with the new headline
+numbers. Bootstrap fixed point holds; full test corpus green;
+no API or grammar changes.
+
 ### Added — `bench/` peer-comparison benchmark suite (2026-05-25)
 
 Three reproducible micro-benchmarks with one source file per language
