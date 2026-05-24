@@ -1201,6 +1201,26 @@ typedef struct NurlHttpResponse {
     long long          body_len;
 } NurlHttpResponse;
 
+/* Pure-NURL accessors in `stdlib/ext/http.nu` read this struct via
+ * `nurl_peek(p, slot)` with slot indices 0..5 and assume each field is
+ * one i64 slot. On every 64-bit native target sizeof(pointer) == 8 so
+ * the layout is 6 × 8 = 48 bytes with field offsets 0/8/16/24/32/40.
+ * Each NurlHttpHeader is 16 bytes (2 × pointer = 2 × 8), so the headers
+ * array stride is 2 slots per entry. Compile-time enforce so a future
+ * field reorder breaks the build instead of silently miscompiling NURL
+ * reads. wasm32 is exempt: pointers are 4 bytes there so the struct
+ * compacts, but the wasm HTTP backend always returns err_kind=HttpOther
+ * and NURL's dispatch short-circuits before any pointer-bearing slot is
+ * read. */
+#if !defined(__wasi__)
+_Static_assert(sizeof(NurlHttpResponse) == 48,
+               "NurlHttpResponse must be 6 i64 slots — pure-NURL accessors "
+               "in stdlib/ext/http.nu depend on this layout");
+_Static_assert(sizeof(NurlHttpHeader) == 16,
+               "NurlHttpHeader must be 2 i64 slots — pure-NURL accessors "
+               "stride by 2 per header entry");
+#endif
+
 /* Tags must match `HttpErr` in stdlib/ext/http.nu. */
 #define NURL_HTTP_ERR_OK         0
 #define NURL_HTTP_ERR_CONNECT    1
@@ -2129,47 +2149,15 @@ void      nurl_http_stream_close(long long h)     { (void)h; }
 
 #endif  /* streaming backend selection */
 
-/* Accessors and the freer are libcurl-agnostic — they only inspect the
- * NurlHttpResponse struct, so the same code serves both the real and
- * stub builds. */
-
-long long nurl_http_response_status(long long resp) {
-    NurlHttpResponse *r = (NurlHttpResponse*)(uintptr_t)resp;
-    return r ? r->status : 0;
-}
-
-long long nurl_http_response_err_kind(long long resp) {
-    NurlHttpResponse *r = (NurlHttpResponse*)(uintptr_t)resp;
-    return r ? r->err_kind : NURL_HTTP_ERR_OTHER;
-}
-
-const char* nurl_http_response_body(long long resp) {
-    NurlHttpResponse *r = (NurlHttpResponse*)(uintptr_t)resp;
-    return (r && r->body) ? r->body : "";
-}
-
-long long nurl_http_response_body_len(long long resp) {
-    NurlHttpResponse *r = (NurlHttpResponse*)(uintptr_t)resp;
-    return r ? r->body_len : 0;
-}
-
-long long nurl_http_response_header_count(long long resp) {
-    NurlHttpResponse *r = (NurlHttpResponse*)(uintptr_t)resp;
-    return r ? r->header_count : 0;
-}
-
-const char* nurl_http_response_header_name(long long resp, long long i) {
-    NurlHttpResponse *r = (NurlHttpResponse*)(uintptr_t)resp;
-    if (!r || i < 0 || i >= r->header_count) return "";
-    return r->headers[i].name ? r->headers[i].name : "";
-}
-
-const char* nurl_http_response_header_value(long long resp, long long i) {
-    NurlHttpResponse *r = (NurlHttpResponse*)(uintptr_t)resp;
-    if (!r || i < 0 || i >= r->header_count) return "";
-    return r->headers[i].value ? r->headers[i].value : "";
-}
-
+/* The accessors used to live here — status / err_kind / body / body_len
+ * / header_count / header_name / header_value. They were trivial field
+ * reads off NurlHttpResponse; PURIFY 2026-05-24 moved them to pure-NURL
+ * @-fns in `stdlib/ext/http.nu` that read the same struct via
+ * `nurl_peek(p, slot)` over the i64-slot layout. The `_free` below
+ * stays C because it walks the headers[] array freeing every
+ * name/value pair plus the body — that ownership/dealloc dance is
+ * easier to keep alongside the allocation sites in the libcurl /
+ * WinHTTP backends than to split. */
 void nurl_http_response_free(long long resp) {
     NurlHttpResponse *r = (NurlHttpResponse*)(uintptr_t)resp;
     if (!r) return;

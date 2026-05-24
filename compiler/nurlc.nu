@@ -10166,13 +10166,11 @@
     ( emit `declare void @nurl_dir_list_close(i64)` )
     ( emit `declare i64  @nurl_http_perform_full(i8*, i8*, i8*, i8*)` )
     ( emit `declare i64  @nurl_http_perform_full_to(i8*, i8*, i8*, i8*, i64, i64)` )
-    ( emit `declare i64  @nurl_http_response_status(i64)` )
-    ( emit `declare i64  @nurl_http_response_err_kind(i64)` )
-    ( emit `declare i8*  @nurl_http_response_body(i64)` )
-    ( emit `declare i64  @nurl_http_response_body_len(i64)` )
-    ( emit `declare i64  @nurl_http_response_header_count(i64)` )
-    ( emit `declare i8*  @nurl_http_response_header_name(i64, i64)` )
-    ( emit `declare i8*  @nurl_http_response_header_value(i64, i64)` )
+    // The 7 accessors (status / err_kind / body / body_len / header_count
+    // / header_name / header_value) moved to pure-NURL @-fns in
+    // stdlib/ext/http.nu that read the NurlHttpResponse struct via
+    // nurl_peek (PURIFY §14 2026-05-24). Only the C-side freer stays —
+    // it walks the headers array deallocating every name/value pair.
     ( emit `declare void @nurl_http_response_free(i64)` )
     ( emit `declare i64  @nurl_http_stream_open_to(i8*, i8*, i8*, i8*, i64, i64)` )
     ( emit `declare i8*  @nurl_http_stream_next(i64)` )
@@ -10387,13 +10385,9 @@
     // __ret_owned=str marker — the caller MUST NOT auto-free them.
     ( nurl_sym_def syms `nurl_http_perform_full` `i64` )
     ( nurl_sym_def syms `nurl_http_perform_full_to` `i64` )
-    ( nurl_sym_def syms `nurl_http_response_status` `i64` )
-    ( nurl_sym_def syms `nurl_http_response_err_kind` `i64` )
-    ( nurl_sym_def syms `nurl_http_response_body` `i8*` )
-    ( nurl_sym_def syms `nurl_http_response_body_len` `i64` )
-    ( nurl_sym_def syms `nurl_http_response_header_count` `i64` )
-    ( nurl_sym_def syms `nurl_http_response_header_name` `i8*` )
-    ( nurl_sym_def syms `nurl_http_response_header_value` `i8*` )
+    // accessors (status/err_kind/body/body_len/header_count/_name/_value)
+    // now pure NURL in stdlib/ext/http.nu — see runtime.c §14 + nurlc
+    // preamble note above (PURIFY §14 2026-05-24).
     ( nurl_sym_def syms `nurl_http_response_free` `void` )
     // HTTP streaming (runtime.c §14b). Pull-based — NURL drives one
     // chunk at a time. `nurl_http_stream_next` returns a heap-owned

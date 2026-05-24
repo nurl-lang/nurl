@@ -132,10 +132,24 @@ $ `stdlib/core/errors.nu`
 // Internal: dispatch the runtime call result onto a NURL ! Response HttpErr.
 // `raw` is the i64 returned by `nurl_http_perform_full` — 0 means the
 // runtime couldn't even allocate; non-zero is a heap pointer whose
-// `err_kind` field tells us whether the transport succeeded.
+// `err_kind` slot (slot 1) tells us whether the transport succeeded.
+//
+// Slot layout of the C NurlHttpResponse heap struct (PURIFY §14, native
+// 64-bit; wasm32 layout differs but the wasm HTTP backend always returns
+// err_kind = HttpOther so the err-kind probe at slot 1 still works and
+// every other slot stays unreachable):
+//
+//   slot 0  status         i64
+//   slot 1  err_kind       i64
+//   slot 2  header_count   i64
+//   slot 3  headers        *u — NurlHttpHeader[]; each entry is two i64
+//                              slots (name, value), 16 bytes on native
+//   slot 4  body           *u — owned NUL-terminated body bytes
+//   slot 5  body_len       i64
 @ __http_dispatch i raw → !Response HttpErr {
     ? == raw 0 { ^ @ !Response HttpErr { F # HttpErr HttpOther } } {}
-    : i ek ( nurl_http_response_err_kind raw )
+    : *u rawp # *u raw
+    : i ek ( nurl_peek rawp 1 )
     ? != ek 0 {
         ( nurl_http_response_free raw )
         ? == ek 1 { ^ @ !Response HttpErr { F # HttpErr HttpConnect } } {}
@@ -230,36 +244,60 @@ $ `stdlib/core/errors.nu`
     ^ ( http_request `DELETE` url `` `` )
 }
 
-// ── Accessors (borrowed views) ─────────────────────────────────────
+// ── Accessors (borrowed views) — pure NURL over the NurlHttpResponse
+//                                 heap struct's i64-slot layout (see
+//                                 __http_dispatch above for the map).
+//
+// Strings returned here point into the response struct's owned storage
+// and are valid until `response_free`. The cast pattern is
+// `^ # s ( nurl_peek ... )` so the auto-detector sees an i64 binding at
+// fn exit and does NOT tag the @-fn's return as owned (avoiding a
+// spurious auto-drop of borrowed bytes).
 
 @ http_status Response r → i {
     : s rp . r raw
-    : i raw # i rp
-    ^ ( nurl_http_response_status raw )
+    : *u rawp # *u rp
+    ^ ( nurl_peek rawp 0 )
 }
 
 @ http_body_str Response r → s {
     : s rp . r raw
-    : i raw # i rp
-    ^ ( nurl_http_response_body raw )
+    : *u rawp # *u rp
+    : i bp ( nurl_peek rawp 4 )
+    ^ ? == bp 0 `` # s bp
 }
 
 @ http_header_count Response r → i {
     : s rp . r raw
-    : i raw # i rp
-    ^ ( nurl_http_response_header_count raw )
+    : *u rawp # *u rp
+    ^ ( nurl_peek rawp 2 )
 }
 
 @ http_header_name Response r i idx → s {
     : s rp . r raw
-    : i raw # i rp
-    ^ ( nurl_http_response_header_name raw idx )
+    : *u rawp # *u rp
+    : i hc ( nurl_peek rawp 2 )
+    ? || < idx 0 >= idx hc { ^ `` } {}
+    : i ap ( nurl_peek rawp 3 )
+    ? == ap 0 { ^ `` } {}
+    : *u arr # *u ap
+    : i name_slot * idx 2
+    : i np ( nurl_peek arr name_slot )
+    ^ ? == np 0 `` # s np
 }
 
 @ http_header_value Response r i idx → s {
     : s rp . r raw
-    : i raw # i rp
-    ^ ( nurl_http_response_header_value raw idx )
+    : *u rawp # *u rp
+    : i hc ( nurl_peek rawp 2 )
+    ? || < idx 0 >= idx hc { ^ `` } {}
+    : i ap ( nurl_peek rawp 3 )
+    ? == ap 0 { ^ `` } {}
+    : *u arr # *u ap
+    : i name_slot * idx 2
+    : i value_slot + name_slot 1
+    : i vp ( nurl_peek arr value_slot )
+    ^ ? == vp 0 `` # s vp
 }
 
 @ response_free Response r → v {
