@@ -1134,6 +1134,14 @@ void  nurl_free(void *ptr)                     { free(ptr); }
 void  nurl_memcpy(void *dst, const void *src, long long bytes) {
     memcpy(dst, src, (size_t)bytes);
 }
+/* Overlap-safe sibling of nurl_memcpy. Use whenever `dst` and `src`
+ * can alias — e.g. shifting the tail of a buffer back over its head
+ * after consuming a prefix. nurl_memcpy is left strict (libc memcpy
+ * semantics) so ASan keeps flagging unintentional overlaps in code
+ * that doesn't reach for the explicit move variant. */
+void  nurl_memmove(void *dst, const void *src, long long bytes) {
+    memmove(dst, src, (size_t)bytes);
+}
 void  nurl_memset(void *dst, long long byte, long long bytes) {
     memset(dst, (int)byte, (size_t)bytes);
 }
@@ -1607,10 +1615,53 @@ int symlink(const char *target, const char *linkpath) {
 
 #else  /* POSIX */
 
-/* POSIX dir-listing is pure NURL (`stdlib/std/fs.nu` drives
- * opendir / readdir / closedir via FFI). What stays is the
- * one-line accessor below — `struct dirent`'s `d_name` field
- * offset varies across platforms, but the accessor is stable. */
+/* POSIX dir-listing is pure NURL on the hot path (`stdlib/std/fs.nu`
+ * drives opendir / readdir / closedir via FFI). The `dirent` name
+ * accessor below bridges the platform-varying `d_name` field offset.
+ *
+ * The opaque-handle trio (`nurl_dir_list_open/next/close`) is the
+ * Win32 surface; on POSIX it is normally unreachable because
+ * `dir_list` short-circuits to `__dir_list_pure_posix`. Under `-flto`
+ * the dead branch is fully eliminated. Sanitizer builds disable LTO,
+ * so the symbols still have to *link* — and that's why we provide a
+ * working POSIX implementation here rather than abort-stubs. The two
+ * code paths stay observationally equivalent (same skip-dots filter,
+ * same strdup'd ownership transfer) so the fallback is correct, not
+ * just linkable. */
+typedef struct {
+    DIR *d;
+} NurlDirIterPosix;
+
+long long nurl_dir_list_open(const char *path) {
+    if (!path) { errno = EINVAL; return 0; }
+    DIR *d = opendir(path);
+    if (!d) return 0;                              /* errno set by opendir */
+    NurlDirIterPosix *it = (NurlDirIterPosix*)calloc(1, sizeof(*it));
+    if (!it) { closedir(d); errno = ENOMEM; return 0; }
+    it->d = d;
+    return (long long)(uintptr_t)it;
+}
+
+const char* nurl_dir_list_next(long long handle) {
+    NurlDirIterPosix *it = (NurlDirIterPosix*)(uintptr_t)handle;
+    if (!it || !it->d) return NULL;
+    for (;;) {
+        struct dirent *de = readdir(it->d);
+        if (!de) return NULL;
+        const char *name = de->d_name;
+        if (name[0] == '.' && (name[1] == '\0' ||
+            (name[1] == '.' && name[2] == '\0'))) continue;
+        return strdup(name);
+    }
+}
+
+void nurl_dir_list_close(long long handle) {
+    NurlDirIterPosix *it = (NurlDirIterPosix*)(uintptr_t)handle;
+    if (!it) return;
+    if (it->d) closedir(it->d);
+    free(it);
+}
+
 const char* nurl_dirent_name(const void *de) {
     return de ? ((const struct dirent *)de)->d_name : NULL;
 }

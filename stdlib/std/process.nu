@@ -790,9 +790,13 @@ $ `stdlib/core/posix.nu`
             : i consume + i 1
             : i rem - scratch_len consume
             ? > rem 0 {
+                // dst (scratch base) and src (scratch + consume) alias
+                // — shift the tail back over the consumed prefix with
+                // memmove, not memcpy. memcpy is UB on overlap and
+                // ASan flags it correctly under -fsanitize=address.
                 : *u dst2 # *u scratch
                 : *u src2 # *u + # i sp consume
-                ( nurl_memcpy dst2 src2 rem )
+                ( nurl_memmove dst2 src2 rem )
             } {}
             ( nurl_poke c 10 rem )
             ^ 1

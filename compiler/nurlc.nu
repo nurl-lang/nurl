@@ -10083,6 +10083,7 @@
     ( emit `declare i8*  @nurl_realloc(i8*, i64)` )
     ( emit `declare void @nurl_free(i8*)` )
     ( emit `declare void @nurl_memcpy(i8*, i8*, i64)` )
+    ( emit `declare void @nurl_memmove(i8*, i8*, i64)` )
     ( emit `declare void @nurl_memset(i8*, i64, i64)` )
     ( emit `declare i64  @nurl_peek(i8*, i64)` )
     ( emit `declare void @nurl_poke(i8*, i64, i64)` )
@@ -10451,6 +10452,7 @@
     ( nurl_sym_def syms `nurl_free` `void` )
     // PURIFY.md Phase 9c (2026-05-24): nurl_map_* gone (see emit_preamble).
     ( nurl_sym_def syms `nurl_memcpy` `void` )
+    ( nurl_sym_def syms `nurl_memmove` `void` )
     ( nurl_sym_def syms `nurl_poke` `void` )
     // output buffering
     ( nurl_sym_def syms `nurl_print_buf_start` `void` )
