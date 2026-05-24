@@ -1,4 +1,4 @@
-// serde_basic.nu — regression target for stdlib/serde.nu's
+// serde_basic.nu — regression target for stdlib/ext/serde.nu's
 // JsonSerialize trait + the from_json_<T> decoder helpers.
 //
 // Asserts the shipped primitive shapes round-trip cleanly:
@@ -9,7 +9,7 @@
 //   from_json_i / _b / _f / _string / _str_borrow on the matching
 //   JSON values return the expected Ok payload.
 
-$ `stdlib/serde.nu`
+$ `stdlib/ext/serde.nu`
 
 @ main → v {
     : Json ji ( to_json 42 )

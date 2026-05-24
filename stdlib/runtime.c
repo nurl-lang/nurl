@@ -291,51 +291,23 @@ void nurl_eprintln(const char *s) { fputs(s, stderr); fputc('\n', stderr); fflus
 
 /* ── §2  String operations ─────────────────────────────────────── */
 
-/* nurl_str_len / _eq / _cmp — REMOVED 2026-05-23 (PURIFY.md
- * Phase 5). Pure NURL @-fns calling libc strlen / strcmp directly
- * live in `stdlib/core/string.nu` and `compiler/nurlc.nu`'s local
- * copy. nurl_str_get stays — its bounds-check + sentinel-zero on
- * OOB is a NURL idiom, not a libc primitive. */
-
-/* nurl_str_get / _cat / _cat3 / _cat4 — REMOVED 2026-05-23
- * (PURIFY.md Phase 5 Batch C). Pure-NURL @-fns calling libc
- * malloc + memcpy directly live in `stdlib/core/string.nu` and
- * `compiler/nurlc.nu`'s local copy. */
-
-/* Decimal representation of n; result is malloc'd.
- * Stays in C — 72 corpus tests do `( nurl_print ( nurl_str_int n ) )`
- * without an explicit `stdlib/core/string.nu` import. Moving str_int
- * to NURL would force the import on every one. Justified exception
- * until a prelude / auto-import mechanism lands. */
+/* Decimal representation of n; result is malloc'd. Kept in C
+ * because 72 corpus tests call `nurl_str_int` without importing
+ * `stdlib/core/string.nu`; moving it to NURL would force the
+ * import on every test. Drop once a prelude / auto-import lands. */
 const char* nurl_str_int(long long n) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%lld", n);
     return strdup(buf);
 }
 
-/* nurl_str_float STAYS — printf-family float formatting (%g / %e)
- * needs either a Grisu/Ryu implementation or variadic FFI for
- * snprintf; neither is in place yet. ~4 LOC justified exception. */
+/* Float formatting via printf %g — kept in C until either a
+ * Grisu/Ryu implementation or variadic FFI for snprintf lands. */
 const char* nurl_str_float(double d) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%g", d);
     return strdup(buf);
 }
-
-/* nurl_str_to_int / _to_float — REMOVED 2026-05-23 (PURIFY.md
- * Phase 5). Pure NURL @-fns calling libc atoll / atof directly. */
-
-/* nurl_parse_int_range — REMOVED 2026-05-23 (PURIFY.md Phase 5
- * Batch C). Pure-NURL @-fn in `stdlib/core/string.nu` (and
- * `nurlc.nu`'s local copy). */
-
-/* nurl_parse_float_range — REMOVED 2026-05-23 (PURIFY.md Phase 5
- * Batch D'). Pure-NURL @-fn calling libc `strtod` through the
- * preamble FFI lives in stdlib/core/string.nu (and nurlc.nu's
- * local copy). The stack-buffer optimisation is gone (every call
- * does one malloc); the CSV bulk parsers in §2 don't go through
- * this entry point, so the perf cost is bounded to user-facing
- * one-off float parses. */
 
 /* CSV scanner: walk forward from `p` for at most `len` bytes, returning
  * the offset of the first occurrence of `delim`, '\n', or '\r' — or
@@ -343,10 +315,6 @@ const char* nurl_str_float(double d) {
  * arena loader to advance one cell-at-a-time instead of one byte at a
  * time; the C inner loop is ~5× faster than NURL bytecode for the same
  * task. */
-/* nurl_memmem_range forward decl — REMOVED 2026-05-23 (no C caller;
- * the historic CSV-filter comment referenced a hook that never
- * materialised). The real function is now a pure-NURL @-fn
- * (PURIFY.md Phase 5) wrapping libc `memmem` via the preamble. */
 
 /* Predicate filter helpers — narrow a CSVTable's row index in place.
  *
@@ -963,33 +931,6 @@ long long nurl_csv_scan_row_pairs(
     return 0;
 }
 
-/* nurl_memmem_range — REMOVED 2026-05-23 (PURIFY.md Phase 5).
- * Pure NURL @-fn calls libc `memmem` directly; the non-glibc
- * fallback the C version carried is gone — modern macOS/musl
- * provide memmem natively, the rare host that doesn't will
- * surface as an undefined-symbol link error and can be fixed
- * with a per-platform shim if it ever bites. */
-
-/* nurl_memcmp_lex — REMOVED 2026-05-23 (PURIFY.md Phase 5).
- * Pure NURL via libc `memcmp`; lives in `stdlib/core/string.nu`
- * (and `compiler/nurlc.nu`'s local copy). */
-
-/* nurl_str_slice — REMOVED 2026-05-23 (PURIFY.md Phase 5 Batch C).
- * Pure-NURL @-fn in `stdlib/core/string.nu` (and `nurlc.nu`'s
- * local copy). */
-
-/* nurl_str_starts / _find / _ends — REMOVED 2026-05-23 (PURIFY.md
- * Phase 5). Pure NURL @-fns calling libc strncmp / strstr / memcmp
- * directly. */
-
-
-/* §3  Char classification — REMOVED 2026-05-23 (PURIFY.md Phase 1).
- * `nurl_is_alpha` / `_is_digit` / `_is_space` / `_is_alnum_` moved to
- * pure NURL `stdlib/core/char.nu` as `is_alpha` / `is_digit` /
- * `is_space` / `is_alnum_us`. The C definitions and their preamble
- * `declare` lines (both nurlc.nu and nurlc.py) are gone too.
- */
-
 /* ── §4  File & process ────────────────────────────────────────── */
 
 static int   g_argc = 0;
@@ -1049,20 +990,6 @@ const char* nurl_read_file(const char *path) {
 #  include <fcntl.h>
 #  include <unistd.h>
 #endif
-/* nurl_read_file_mmap_zero / _munmap_file / _read_file_mmap_size_out —
- * REMOVED 2026-05-24. Intended for a CSV-loader zero-copy fast path
- * that never wired up; no NURL caller ever referenced them. Pure dead
- * code. (`stdlib/std/fs.nu`'s `__read_file_mmap_pure` copies once into
- * a malloc'd buffer — the zero-copy variant is the future enhancement.) */
-
-/* nurl_read_file_mmap / nurl_read_file_safe — REMOVED 2026-05-24
- * (§4 batch 6). The POSIX mmap path moved to pure NURL
- * (`__read_file_mmap_pure`) in batch 5; this batch retired the
- * Win32/WASI fopen+fread fallback by adding `__read_file_fread_pure`
- * to `stdlib/std/fs.nu`. `read_file` now gates on
- * `posix_const "MAP_PRIVATE" != -1` and routes to one of two
- * pure-NURL implementations — no runtime entry remains. */
-
 /* Map errno to the IoErr enum tag in stdlib/core/errors.nu.
  *   0 = NotFound          (ENOENT)
  *   1 = PermissionDenied  (EACCES, EPERM)
@@ -1084,31 +1011,6 @@ long long nurl_errno_kind(void) {
 }
 
 /* ── File I/O (buffered via FILE*) ───────────────────────────── */
-
-/* nurl_file_open / _write / _write_range / _write_byte / _close —
- * REMOVED 2026-05-23 (PURIFY.md Phase 7). Pure-NURL @-fns calling
- * libc fopen / fputs / fwrite / fputc / fclose directly live in
- * stdlib/std/fs.nu. */
-
-/* nurl_file_read — REMOVED 2026-05-24. Was a one-line alias for
- * `nurl_read_file`. The only callers were `compiler/tests/fileio.nu`,
- * updated to call `nurl_read_file` directly. */
-
-/* nurl_file_exists / _del — REMOVED 2026-05-23 (PURIFY.md Phase 7
- * batch 2). Pure-NURL @-fns calling libc access(2) / remove(3) in
- * stdlib/std/fs.nu (and nurlc.nu's local copy of file_exists). */
-
-/* nurl_file_size — REMOVED 2026-05-24 (§4 batch 4). Pure-NURL
- * `__file_size_pure` (fs.nu) uses fopen+fseek+ftell+fclose. */
-
-/* nurl_write_file_safe — REMOVED 2026-05-24 (PURIFY.md §4 batch 3).
- * Pure-NURL `__write_file_pure` in `stdlib/std/fs.nu` calls libc
- * fopen / fwrite / fclose directly (all three already declared in
- * `nurlc.nu`'s preamble). Behaviour matches the previous C path —
- * including the partial-write detection — but the failure side does
- * not preserve errno across `fclose`. Practical impact: zero;
- * `nurl_errno_kind` reports the most recent libc errno regardless
- * of whether it came from `fwrite` or the subsequent `fclose`. */
 
 /* Binary read: returns a malloc'd byte buffer or NULL on error. The
  * length of the buffer is exposed as a sideband through
@@ -1163,12 +1065,6 @@ long long nurl_write_file_bytes(const char *path, const char *data, long long le
     return 0;
 }
 
-/* nurl_dir_create / _dir_remove — REMOVED 2026-05-23 (PURIFY.md
- * Phase 7 batch 2). Pure-NURL @-fns calling libc mkdir / rmdir in
- * stdlib/std/fs.nu. POSIX-only — the historic MKDIR_2 / RMDIR_1
- * macros papered over _mkdir / _rmdir on Windows; Win32 callers
- * lose this until the prelude grows OS dispatch. */
-
 /* Classify the entry at `path` WITHOUT following a final symbolic link
  * (lstat semantics): 0 = missing or stat error, 1 = regular file,
  * 2 = directory, 3 = symbolic link, 4 = other (fifo, socket, device).
@@ -1222,75 +1118,12 @@ const char* nurl_file_read_chunk(void *h, long long n) {
     return buf;
 }
 
-/* nurl_file_eof — REMOVED 2026-05-23 (PURIFY.md Phase 7). Pure-NURL
- * @-fn calling libc `feof` directly in stdlib/std/fs.nu. */
-
-/* Resolve `path` to a canonical absolute path: on POSIX via realpath(3),
- * which makes it absolute, collapses `.` / `..` and expands every
- * symbolic link; on Windows via _fullpath, which absolutises and
- * collapses but does not expand symbolic links (NTFS reparse points are
- * uncommon). Both require the path to exist. Returns a freshly malloc'd
- * string the caller frees, or NULL with errno set when the path does
- * not exist or is not accessible. Backs stdlib/std/path.nu's
- * path_canonical. */
-/* nurl_realpath — REMOVED 2026-05-24 (PURIFY.md §4 batch 3).
- * Pure-NURL FFI in `stdlib/std/path.nu` calls `realpath(path, NULL)`
- * directly. Linux/macOS primary libc and mingw-w64 libmingwex
- * (since v8.0+ — Debian gcc-mingw-w64-x86-64 v12+) both expose the
- * POSIX signature with malloc-the-result semantics when the second
- * argument is NULL. Win32 behaviour is now strictly POSIX-shaped:
- * missing paths return NULL (libmingwex's realpath probes via
- * `access(2)`) rather than `_fullpath`'s "normalise regardless"
- * shape. `path_canonical` callers want the strict variant. */
-
-
-/* §5 HashMap (string → i64) — REMOVED 2026-05-24 (PURIFY.md
- * Phase 9c). The historic djb2-chained 64-bucket map's only caller
- * was `compiler/tests/hashmap.nu`; that test now exercises the
- * generic `stdlib/std/hashmap.nu` HashMap[s i] instantiation (open
- * addressing + linear probing + 75 %-load grow), which is faster,
- * more cache-friendly, and shared with every other consumer.
- *
- * Also: stdlib `hash_string` was O(n²) because it called
- * `nurl_str_get` per byte (each call does its own `strlen`). The
- * Phase 9c migration drops it to O(n) via direct `*u` byte access.
- *
- * −101 LOC C; 7 preamble declares + 3 sym_def entries gone. */
-
-/* §6a Lexer — REMOVED 2026-05-24 (PURIFY.md Phase 10). The full
- * lexer state machine (skip_ws_comments + lex_next_tok + the 4-deep
- * lookahead buffer + every `nurl_lex_*` entry point) is now in
- * `compiler/nurlc.nu` as pure-NURL @-fns over a `nurl_zalloc`'d
- * 280-byte heap handle (35 i64 slots: 5 lexer-state slots + 5 ×
- * 6-slot token records). Same lookahead depth and same backtick-
- * string escape rules as the C version. fnum is no longer stored —
- * the parser-side `gen_float_lit` already emits the val string into
- * the IR directly, so `nurl_lex_fnum` (re-)parses on demand. −592
- * LOC C; 17 preamble declares + 8 sym_def entries gone. */
-
-/* §6 Symbol table — REMOVED 2026-05-24 (PURIFY.md Phase 9b).
- * nurl_sym_new / _def / _get / _push / _pop are pure-NURL @-fns in
- * compiler/nurlc.nu now over a `nurl_zalloc`'d 48-byte handle and
- * three parallel grow-by-2× arrays (names / types / depths), each
- * starting at cap=64. Cache-friendlier than the C version's
- * struct-of-arrays for the hot linear scan, and pays only for what
- * each table actually uses (vs. the C version's 24 MB preallocation
- * per table from MAX_SYMS=1 000 000). −72 LOC C; 5 preamble
- * declares + 4 sym_def entries gone. */
-
-
-/* §7 Codegen helpers — REMOVED 2026-05-24 (PURIFY.md Phase 9a).
- * nurl_cg_new / _reg / _lbl / _reset are pure-NURL @-fns in
- * compiler/nurlc.nu now. Handle is a `nurl_zalloc`'d 16-byte block
- * (slot 0 = next register number, slot 1 = next label number).
- * −47 LOC C; 4 preamble declares + 3 `nurl_sym_def` entries gone. */
-
-/* §8 "Last type" sideband — REMOVED 2026-05-24 (PURIFY.md Phase 9a).
- * nurl_get_last_type / _set_last_type are pure-NURL @-fns in
- * compiler/nurlc.nu now over a module-level `g_last_type_ptr` i8*
- * (stored as i64). strdup-on-set / free-old / strdup-on-get
- * semantics preserved byte-for-byte. −24 LOC C; 2 preamble declares
- * + 2 `nurl_sym_def` entries gone. */
+/* §5 HashMap, §6a Lexer, §6 Symbol table, §7 Codegen helpers,
+ * §8 "Last type" sideband and §4 file/dir/realpath thunks — all
+ * moved to pure NURL across PURIFY phases 5 / 7 / 9 / 10. The
+ * compiler-internal ones now live in `compiler/nurlc.nu`; the
+ * file/dir/path ones in `stdlib/std/fs.nu` and `stdlib/std/path.nu`
+ * over direct libc FFI. See PURIFY.md Part VII for the LOC table. */
 
 /* ── §9  Memory allocation ─────────────────────────────────────── */
 
@@ -1342,17 +1175,16 @@ void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
  * callers (`cell_for_native` in stdlib/core/cell.nu) treat this as a
  * platform-portability bug, not a runtime-recoverable error.
  *
- * Names are kept ASCII-stable and case-sensitive; add new entries
- * here as PURIFY Phase 6/8/11 land their respective FFI moves. The
- * list intentionally stays small — every entry is a struct we cannot
- * port to NURL because its layout is platform-defined. Adding scalar
- * type sizes (`int`, `long`, `size_t`) covers cases where a C API
- * takes a length-prefixed buffer and NURL needs to size the prefix. */
+ * Names are kept ASCII-stable and case-sensitive. The list stays
+ * small — every entry is a struct we cannot port to NURL because
+ * its layout is platform-defined. Scalar type sizes (`int`,
+ * `long`, `size_t`) cover the cases where a C API takes a
+ * length-prefixed buffer and NURL needs to size the prefix. */
 
 /* <signal.h> on wasi-libc errors out (`wasm lacks signal support`) and
  * <sys/socket.h> isn't shipped at all, so the WASI build skips both —
- * the Phase 8 / Phase-11 FFI surfaces these expose aren't reachable
- * from a wasm playground binary anyway. */
+ * the FFI surfaces these expose aren't reachable from a wasm playground
+ * binary anyway. */
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -1365,19 +1197,18 @@ void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
 #  include <windows.h>
 /* mingw-w64's posix thread model (Debian's gcc-mingw-w64-x86-64 default)
  * ships <pthread.h> from libwinpthread. NURL's pure-NURL FFI for
- * mutex+cond (stdlib/std/thread.nu, PURIFY Phase 6 batch 1) calls
- * pthread_mutex_init / pthread_cond_init etc. directly, and Cell-sizes
- * its storage from sizeof(pthread_mutex_t) — so the Win32 runtime
- * needs the same header that POSIX does. */
+ * mutex+cond (`stdlib/std/thread.nu`) calls pthread_mutex_init /
+ * pthread_cond_init etc. directly, and Cell-sizes its storage from
+ * sizeof(pthread_mutex_t) — so the Win32 runtime needs the same
+ * header that POSIX does. */
 #  include <pthread.h>
 #elif !defined(__wasi__)
 #  include <pthread.h>
 #  include <sys/socket.h>
 #  include <netinet/in.h>
-/* POSIX syscall headers — needed at the top because PURIFY Phase 8
- * scaffolding (`nurl_native_constant`, `nurl_wait_is_exited`, …) sits
- * up here in §2 and needs the constants / macros from fcntl / poll /
- * sys/wait. Previously §16 included them inside its POSIX backend. */
+/* POSIX syscall headers — needed at the top because the
+ * `nurl_native_constant` table and `nurl_wait_*` helpers in §2 below
+ * read constants / macros from fcntl / poll / sys/wait. */
 #  include <fcntl.h>
 #  include <poll.h>
 #  include <sys/wait.h>
@@ -1387,9 +1218,9 @@ void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
 
 long long nurl_native_sizeof(const char *name) {
     if (!name) return -1;
-    /* pthread family — same names on every platform now that Win32 uses
-     * winpthreads (Phase 6 batch 1). Returns sizeof of the platform's
-     * actual pthread_*_t struct so a Cell can hold it. */
+    /* pthread family — same names on every platform now that Win32
+     * uses winpthreads. Returns sizeof of the platform's actual
+     * pthread_*_t struct so a Cell can hold it. */
     if (strcmp(name, "pthread_mutex_t")     == 0) return (long long)sizeof(pthread_mutex_t);
     if (strcmp(name, "pthread_cond_t")      == 0) return (long long)sizeof(pthread_cond_t);
     if (strcmp(name, "pthread_t")           == 0) return (long long)sizeof(pthread_t);
@@ -1414,7 +1245,7 @@ long long nurl_native_sizeof(const char *name) {
 #endif
 #if !defined(_WIN32) && !defined(__wasi__)
     /* POSIX poll(2) — only relevant on Linux/macOS; Win32 has its own
-     * WSAPoll layout. Phase 8 NURL FFI uses this for proc-spawn polling. */
+     * WSAPoll layout. NURL FFI uses this for proc-spawn polling. */
     if (strcmp(name, "struct pollfd")       == 0) return (long long)sizeof(struct pollfd);
     if (strcmp(name, "pid_t")               == 0) return (long long)sizeof(pid_t);
 #endif
@@ -1434,9 +1265,9 @@ long long nurl_native_sizeof(const char *name) {
  * numbers shift between Linux and macOS. NURL has no `#ifdef`, so
  * platform-conditional constants need a runtime accessor.
  *
- * Used by `stdlib/core/posix.nu` (PURIFY Phase 8 scaffolding) so the
- * pure-NURL fork/exec/poll/waitpid path can call `fcntl(fd, F_SETFL,
- * O_NONBLOCK)` etc. without baking integer values into NURL code.
+ * Used by `stdlib/core/posix.nu` so the pure-NURL fork/exec/poll/
+ * waitpid path can call `fcntl(fd, F_SETFL, O_NONBLOCK)` etc.
+ * without baking integer values into NURL code.
  *
  * Returns -1 for unknown names — caller treats that as a hard
  * portability bug, not a recoverable error. Win32 / WASI return -1
@@ -1458,8 +1289,8 @@ long long nurl_native_constant(const char *name) {
     if (strcmp(name, "POLLHUP")     == 0) return POLLHUP;
     if (strcmp(name, "POLLERR")     == 0) return POLLERR;
     if (strcmp(name, "POLLNVAL")    == 0) return POLLNVAL;
-    /* signals — Phase 8 only needs the small set the proc-spawn path
-     * uses, but list common ones so user code can spawn signal handlers. */
+    /* signals — the proc-spawn path needs only a small set, but we
+     * list common ones so user code can install signal handlers. */
     if (strcmp(name, "SIGPIPE")     == 0) return SIGPIPE;
     if (strcmp(name, "SIGTERM")     == 0) return SIGTERM;
     if (strcmp(name, "SIGKILL")     == 0) return SIGKILL;
@@ -1490,7 +1321,7 @@ long long nurl_native_constant(const char *name) {
      * winpthreads, wasi-libc) recognises these IDs. The values differ
      * across platforms (CLOCK_MONOTONIC is 1 on Linux/WASI/MinGW but 6
      * on macOS) so NURL callers must read them at runtime rather than
-     * hard-code. Used by `stdlib/std/time.nu` (PURIFY §12). */
+     * hard-code. Used by `stdlib/std/time.nu`. */
     /* wasi-libc defines these as pointer-typed macros (`(&_CLOCK_REALTIME)`),
      * not integers — cast through uintptr_t so the lookup returns a stable
      * long long regardless of platform; callers don't decode the value,
@@ -1503,9 +1334,9 @@ long long nurl_native_constant(const char *name) {
     if (strcmp(name, "CLOCK_MONOTONIC") == 0) return (long long)(uintptr_t)CLOCK_MONOTONIC;
 #endif
     /* File-mode + mmap constants for `stdlib/std/fs.nu`'s pure-NURL
-     * `__read_file_mmap_pure` (PURIFY §4 batch 5). POSIX-only — Win32
-     * NURL callers gate on `posix_const "MAP_PRIVATE" != -1` and fall
-     * through to the C runtime's WASI/MSVC path. */
+     * `__read_file_mmap_pure`. POSIX-only — Win32 NURL callers gate
+     * on `posix_const "MAP_PRIVATE" != -1` and fall through to the
+     * fopen+fread fallback in `__read_file_fread_pure`. */
 #if !defined(_WIN32) && !defined(__wasi__)
     if (strcmp(name, "O_RDONLY")        == 0) return O_RDONLY;
     if (strcmp(name, "PROT_READ")       == 0) return PROT_READ;
@@ -1620,31 +1451,16 @@ long long nurl_atomic_i64_load(void *p) {
 }
 
 
-/* ── §10 String Builder — REMOVED 2026-05-01 ────────────────────────
- *
- * The C-runtime `NurlStringBuilder` type and `nurl_sb_*` API have been
- * retired. Owned strings now live in `stdlib/core/string.nu` on top of
- * `Vec[u]` (see `String { s ctl }`). For growable byte/string buffers
- * use `( string_with_cap n )` + `string_push_char/str/int/float`, or
- * `( vec_with_cap [u] n )` + `vec_push [u]` directly.
- * ─────────────────────────────────────────────────────────────────*/
-
 /* ── §11  Math (libm bridge) ────────────────────────────────────── */
 /*
- * libm pass-throughs (sqrt / fabs / floor / ceil / round / pow / log /
- * exp / sin / cos / tan / atan2) — REMOVED 2026-05-23 (PURIFY.md
- * Phase 3). NURL now calls libm directly via `& `m` @ … → …` in
- * `stdlib/std/float.nu`; the C wrappers were a redundant indirection.
- * Same removal for `nurl_iabs` / `nurl_ipow` (moved to pure-NURL
- * algorithms in `stdlib/std/int.nu`).
- *
- * Retained here because they can't be a pure-FFI bridge:
- *   - `nurl_f64_bits` / `_from_bits` / `nurl_f32_from_bits` — memcpy
- *     type punning (NURL has no bit-pun primitive)
- *   - `nurl_is_nan` / `_is_inf` — isnan/isinf are libm macros, not
- *     stable C symbols; keep the C wrapper for portability
- *   - `nurl_str_to_float_safe` / `nurl_str_float_value` — strtod
- *     plus a static side-channel
+ * libm pass-throughs (sqrt / fabs / floor / etc.) and the integer
+ * helpers (`nurl_iabs` / `_ipow`) are pure-NURL FFI now —
+ * `stdlib/std/float.nu` and `stdlib/std/int.nu`. What stays here
+ * are the ones that can't be a thin FFI bridge:
+ *   - `nurl_f64_bits` / `_from_bits` / `nurl_f32_from_bits` —
+ *     memcpy type-punning (NURL has no bit-reinterpret primitive)
+ *   - `nurl_is_nan` / `_is_inf` — isnan/isinf are libm macros,
+ *     not stable C symbols; keep the wrapper for portability
  */
 
 /* IEEE-754 bit access for the MessagePack codec (stdlib/ext/msgpack.nu),
@@ -1679,42 +1495,15 @@ double nurl_f32_from_bits(long long bits) {
 long long nurl_is_nan(double x) { return isnan(x) ? 1 : 0; }
 long long nurl_is_inf(double x) { return isinf(x) ? 1 : 0; }
 
-/* nurl_str_to_float_safe / _str_float_value / g_last_parsed_float —
- * REMOVED 2026-05-24 (§11 strtod sideband). `stdlib/std/float.nu`'s
- * `float_parse` now calls `strtod` directly through `& \`c\`` FFI,
- * collects the parsed double as the return value, and walks the
- * `endptr` slot in NURL to enforce strict trailing-garbage rejection.
- * `ERANGE` detection routes through `nurl_errno_get` + `nurl_native_constant`. */
-
-/* §12 Time — REMOVED 2026-05-24 (PURIFY.md Phase §12).
+/* ── §13  CLI tooling: directory listing ────────────────────────────
  *
- * `nurl_now_ms` / `_now_seconds` / `_monotonic_ns` / `_sleep_ms` are
- * now pure-NURL `& \`c\``-FFI calls into libc's `clock_gettime(2)` and
- * `nanosleep(2)` from `stdlib/std/time.nu`. Every supported target
- * resolves the two symbols cleanly: Linux/macOS via primary libc,
- * MinGW Win32 via the already-linked winpthreads (`-lpthread`),
- * wasi-libc via its POSIX shim over `clock_time_get` / `poll_oneoff`.
- * Constants `CLOCK_REALTIME` and `CLOCK_MONOTONIC` come from the new
- * `nurl_native_constant` table entries above (their values differ
- * across platforms — macOS uses 6 for `CLOCK_MONOTONIC` vs 1 elsewhere).
- *
- * runtime.c shed ~66 LOC; compiler/nurlc.nu shed 4 `declare` lines and
- * 4 `nurl_sym_def` entries. The bootstrap fixed point held on the
- * lastgood-refresh round-trip. */
-
-/* ── §13  CLI tooling: stdin slurp, directory listing ──────────────── */
-/* PURIFY §13 batch 1 (2026-05-24): `nurl_env_get` / `_env_set` /
- * `_env_unset` / `_cwd` / `_chdir` moved to pure-NURL FFI in
- * `stdlib/ext/env.nu`. Both libc flavours we target (Linux/macOS
- * primary libc, mingw-w64 libmingwex) expose the POSIX names
- * `getenv` / `setenv` / `unsetenv` / `getcwd` / `chdir` with the
- * same ABI, so no `#ifdef` gate stays in NURL. `ERANGE` added to
- * `nurl_native_constant` for the getcwd retry loop.
- *
- * Remaining C: `nurl_read_all_stdin` (stdio fread loop) and the
- * `nurl_dir_list_*` opaque DIR* / FindFirstFile iterator state cache.
- * All `const char*` returns are heap-owned — strdup on success, NULL
- * on failure (so callers can map to ?T or fall back). */
+ * `nurl_env_*`, `_cwd`, `_chdir`, `_read_all_stdin` and Time §12
+ * (`clock_gettime` + `nanosleep`) are pure-NURL FFI in
+ * `stdlib/ext/env.nu`, `stdlib/core/io.nu` and `stdlib/std/time.nu`.
+ * What stays in C is the directory iterator state cache below —
+ * opaque DIR* on POSIX, WIN32_FIND_DATAA on Win32 — and a 1-LOC
+ * dirent-name accessor (bridges the platform-varying `d_name`
+ * field offset). */
 
 #ifdef _WIN32
 #  include <io.h>          /* _getcwd */
@@ -1723,13 +1512,6 @@ long long nurl_is_inf(double x) { return isinf(x) ? 1 : 0; }
 #  include <unistd.h>      /* getcwd, chdir, setenv, unsetenv */
 #  include <dirent.h>      /* opendir, readdir, closedir */
 #endif
-
-/* nurl_read_all_stdin — REMOVED 2026-05-24 (PURIFY.md §13 batch 2).
- * Pure-NURL `__read_all_stdin_pure` in `stdlib/core/io.nu` calls
- * `read(2)` (POSIX FFI from `stdlib/core/posix.nu`) on fd 0 in a
- * 4 KB-stepped grow-and-retry loop. mingw-w64 libmingwex exposes
- * `read` (= `_read`) so the same code path works on Win32 without
- * gating; wasi-libc routes through its POSIX shim. */
 
 /* Directory listing — opaque handle (i64) + skip-dots iteration.
  * The "." and ".." entries are filtered so callers don't have to. */
@@ -1825,12 +1607,10 @@ int symlink(const char *target, const char *linkpath) {
 
 #else  /* POSIX */
 
-/* POSIX `nurl_dir_list_*` REMOVED 2026-05-24 (PURIFY §13 batch 3).
- * Pure-NURL `__dir_list_*_pure` in `stdlib/std/fs.nu` drives the
- * opendir / readdir / closedir loop through `stdlib/core/posix.nu`'s
- * `& \`c\`` FFI declarations. The platform-specific `d_name` field
- * offset is bridged by the tiny accessor below — one expression
- * each platform but with stable NURL-facing ABI. */
+/* POSIX dir-listing is pure NURL (`stdlib/std/fs.nu` drives
+ * opendir / readdir / closedir via FFI). What stays is the
+ * one-line accessor below — `struct dirent`'s `d_name` field
+ * offset varies across platforms, but the accessor is stable. */
 const char* nurl_dirent_name(const void *de) {
     return de ? ((const struct dirent *)de)->d_name : NULL;
 }
@@ -2898,10 +2678,6 @@ void nurl_http_response_free(long long resp) {
     free(r);
 }
 
-/* §15 Logging level — REMOVED 2026-05-23 (PURIFY.md Phase 2).
- * `g_log_level` + `nurl_log_level_get/_set` moved to
- * `stdlib/std/log.nu` as a pure-NURL mutable global. */
-
 /* ── §16  Process execution ───────────────────────────────────── */
 /*
  * Synchronous subprocess runner used by stdlib/std/process.nu.
@@ -2974,24 +2750,18 @@ static int nurl__proc_buf_append(NurlProcBuf *b, const char *src, size_t n) {
 }
 
 #if !defined(_WIN32) && !defined(__wasi__)
-/* ── POSIX backend: superseded by pure-NURL stdlib/std/process.nu ──
- *
- * PURIFY Phase 8 batch 2 (2026-05-23) moved the entire ~225 LOC
- * fork+pipe+poll+waitpid+execvp body into NURL via the FFI surface
- * in stdlib/core/posix.nu. process_run gates on
- * `posix_const "O_NONBLOCK" != -1` and dispatches to the NURL
- * implementation on every POSIX target; this stub remains only for
- * link-time symbol resolution. */
-
+/* POSIX backend: the real fork+pipe+poll+waitpid path lives in
+ * pure NURL (`stdlib/std/process.nu` via `stdlib/core/posix.nu`'s
+ * FFI surface). `process_run` dispatches there on every POSIX
+ * target; this no-op stub remains only for link-time symbol
+ * resolution of `nurl_proc_run`. */
 long long nurl_proc_run(const char *cmd, const char *argv_buf,
                         long long argc, const char *stdin_blob) {
     (void)cmd; (void)argv_buf; (void)argc; (void)stdin_blob;
     return 0;
 }
 
-/* Helper retained for the §16b spawn path (still C-side until Phase 8
- * batch 3 lands). Same POSIX include block the deleted §16 backend
- * used; safe to share. */
+/* Shared POSIX include block — used by the §16b accessors below. */
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -3306,18 +3076,16 @@ void nurl_proc_free(long long h) {
  */
 
 /* All-long-long layout — every field is one 8-byte slot — so the
- * pure-NURL POSIX backend in stdlib/std/process.nu can index fields
- * by `nurl_poke` / `nurl_peek` slot number (0..15). C-side accessors
- * read the same fields via the typedef. PURIFY Phase 8 batch 3
- * (2026-05-23) — the int / pid_t / size_t mix that lived here before
- * is gone; sizeof(NurlProcChild) is now 128 bytes on every supported
- * POSIX target.
+ * pure-NURL POSIX backend in `stdlib/std/process.nu` can index
+ * fields by `nurl_poke` / `nurl_peek` slot number (0..15). C-side
+ * accessors read the same fields via the typedef. sizeof is 128
+ * bytes on every supported POSIX target.
  *
- * Win32 keeps its own layout (different field set: HANDLEs not fds)
- * since pure-NURL FFI doesn't reach CreateProcess yet. Slots 0..5
- * are shared, slot 14 is `h_proc / fd_in / pid` interleaved by
- * platform — Win32 is allowed to be a bit different here because
- * NURL never reads its slots directly. */
+ * Win32 keeps its own layout (HANDLEs instead of fds) since
+ * pure-NURL FFI doesn't reach CreateProcess yet. Slots 0..5 are
+ * shared, slot 6+ is `h_proc / fd_in / pid` interleaved by
+ * platform — Win32 is allowed to differ because NURL never reads
+ * its slots directly. */
 typedef struct NurlProcChild {
     long long  err_kind;       /* slot 0 — 0 / NURL_PROC_ERR_* set at spawn */
     long long  last_io_err;    /* slot 1 — errno snapshot from last failure */
@@ -3352,15 +3120,10 @@ typedef struct NurlProcChild {
 } NurlProcChild;
 
 #if !defined(_WIN32) && !defined(__wasi__)
-/* ── POSIX backend: superseded by pure-NURL stdlib/std/process.nu ──
- *
- * PURIFY Phase 8 batch 3 (2026-05-23) moved the whole fork+pipes+
- * exec+poll-drain+waitpid POSIX body — plus the scratch_reserve /
- * line_reserve / drain_line helpers — into NURL via the FFI surface
- * in stdlib/core/posix.nu. process_spawn / proc_write /
- * proc_close_stdin / proc_read_line / proc_wait / proc_kill /
- * proc_free gate on `posix_const "O_NONBLOCK" != -1` and dispatch
- * to the NURL implementation on every POSIX target; these stubs
+/* POSIX backend: the real fork+pipes+exec+poll-drain+waitpid path
+ * lives in pure NURL (`stdlib/std/process.nu` via
+ * `stdlib/core/posix.nu`'s FFI surface). The spawn surface
+ * dispatches there on every POSIX target; these no-op stubs
  * remain only for link-time symbol resolution. */
 
 long long nurl_proc_spawn(const char *cmd, const char *argv_buf, long long argc) {
@@ -3446,10 +3209,10 @@ void nurl_proc_spawn_free(long long h) {
     NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
     if (!c) return;
 #if !defined(_WIN32) && !defined(__wasi__)
-    /* PURIFY Phase 8 batch 3: NURL `proc_free` calls `__proc_free_posix`
-     * which does the close/reap/buffer-free on POSIX; this stub remains
-     * for link-time symbol resolution and the (rare) Win32/WASI dispatch
-     * path where C-side accessors still own the struct. */
+    /* NURL `proc_free` does the close/reap/buffer-free on POSIX; this
+     * stub remains for link-time symbol resolution and the (rare)
+     * Win32/WASI dispatch path where C-side accessors still own the
+     * struct. */
     free(c);
 #elif defined(_WIN32) && !defined(__wasi__)
     if (c->h_in)   CloseHandle(c->h_in);
@@ -3465,10 +3228,8 @@ void nurl_proc_spawn_free(long long h) {
 
 /* ── §17  Crypto (secure random only) ────────────────────────────
  *
- * Pre-PURIFY: 656 LOC self-contained SHA-1/256/512, MD5, HMAC-*.
- * 2026-05-23 Phase 4: every transform moved to pure NURL
- * (`stdlib/std/hash_md5.nu` / `hash_sha1.nu` / `hash_sha256.nu` /
- * `hash_sha512.nu`). What stays here is the irreducible OS-entropy
+ * MD5 / SHA-1 / SHA-256 / SHA-512 / HMAC transforms are pure NURL
+ * (`stdlib/std/hash_*.nu`). What stays here is the OS-entropy
  * bridge — `getrandom(2)` on Linux, `arc4random_buf` on macOS/BSD,
  * `BCryptGenRandom` on Windows, plus a `/dev/urandom` fallback —
  * and a small hex encoder used only by `nurl_rand_bytes_hex`.
@@ -4846,11 +4607,8 @@ void nurl_tcp_set_timeout(long long h, long long ms) { (void)h; (void)ms; }
 
 /* ── §19  Threads ───────────────────────────────────────────────── */
 /*
- * After PURIFY Phase 6 (2026-05-23), nearly the entire threading
- * surface for stdlib/std/thread.nu lives in NURL. Mutex + cond went
- * pure-NURL FFI in batch 1; thread spawn/join/detach went pure-NURL
- * FFI in batch 2.
- *
+ * Nearly the entire threading surface for `stdlib/std/thread.nu`
+ * lives in NURL via pure-NURL FFI (mutex/cond + spawn/join/detach).
  * What's left on the C side here:
  *
  *  - `nurl_pthread_join_ptr` / `nurl_pthread_detach_ptr` — POSIX
@@ -4907,7 +4665,7 @@ void nurl_pthread_detach_ptr(void *t) { (void)t; }
  * stdlib/std/thread.nu calls these directly via `&`-FFI; on WASI the
  * libpthread symbols are absent, so the runtime provides degenerate
  * versions that pretend success. Single-threaded WASI execution sees
- * no contention — same behavior the pre-PURIFY stubs offered. */
+ * no contention — same behavior as before. */
 int pthread_mutex_init(void *m, void *a)  { (void)m; (void)a; return 0; }
 int pthread_mutex_lock(void *m)            { (void)m; return 0; }
 int pthread_mutex_unlock(void *m)          { (void)m; return 0; }

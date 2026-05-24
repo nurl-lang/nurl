@@ -1,5 +1,5 @@
 // examples/serde_demo.nu — round-trip a user struct through JSON via
-// the stdlib/serde.nu Serialize trait + a hand-written from_json
+// the stdlib/ext/serde.nu Serialize trait + a hand-written from_json
 // helper. Demonstrates the recommended shape; mirror it for your
 // own types.
 //
@@ -7,7 +7,7 @@
 //   ./nurl.sh examples/serde_demo.nu /tmp/serde_demo
 //   /tmp/serde_demo
 
-$ `stdlib/serde.nu`
+$ `stdlib/ext/serde.nu`
 
 // ── A typical leaf struct ──────────────────────────────────────────
 
