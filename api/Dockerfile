@@ -9,9 +9,16 @@
 FROM debian:bookworm-slim AS nurl-build
 
 ENV DEBIAN_FRONTEND=noninteractive
+# clang-16 (not the default `clang` = clang-14) is required: nurlc now emits
+# IR that mixes loosely-typed libc calls (`call i64 @puts(i8* %r)`) with the
+# i64/i8* alternations the runtime ABI uses for token payloads. clang-14
+# still enforces typed pointers and rejects that IR; clang-16 defaults to
+# opaque pointers and accepts it — the same reasoning the runtime stage
+# below already documents and applies. Symlink it as `clang` so build.sh's
+# PATH lookup picks it up.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        clang \
-        llvm \
+        clang-16 \
+        llvm-16 \
         python3 \
         python3-pip \
         ca-certificates \
@@ -35,7 +42,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         mingw-w64-tools \
     && rm -rf /var/lib/apt/lists/*
 
-RUN ln -sf /usr/bin/python3 /usr/local/bin/python
+RUN ln -sf /usr/bin/python3 /usr/local/bin/python \
+    && ln -sf /usr/bin/clang-16 /usr/local/bin/clang
 
 # --- WASI SDK (clang + libc for wasm32-wasi) -------------------
 ARG WASI_SDK_VERSION=24

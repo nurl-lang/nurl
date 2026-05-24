@@ -1349,10 +1349,16 @@ void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
  * type sizes (`int`, `long`, `size_t`) covers cases where a C API
  * takes a length-prefixed buffer and NURL needs to size the prefix. */
 
-#include <signal.h>
+/* <signal.h> on wasi-libc errors out (`wasm lacks signal support`) and
+ * <sys/socket.h> isn't shipped at all, so the WASI build skips both —
+ * the Phase 8 / Phase-11 FFI surfaces these expose aren't reachable
+ * from a wasm playground binary anyway. */
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <time.h>
+#ifndef __wasi__
+#  include <signal.h>
+#endif
 #ifdef _WIN32
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
@@ -1391,16 +1397,21 @@ long long nurl_native_sizeof(const char *name) {
     if (strcmp(name, "pthread_mutexattr_t") == 0) return (long long)sizeof(pthread_mutexattr_t);
     if (strcmp(name, "pthread_condattr_t")  == 0) return (long long)sizeof(pthread_condattr_t);
     if (strcmp(name, "pthread_rwlock_t")    == 0) return (long long)sizeof(pthread_rwlock_t);
-#ifdef _WIN32
-    if (strcmp(name, "sigset_t")            == 0) return 8;  /* not first-class on Win32 */
+#if defined(_WIN32) || defined(__wasi__)
+    if (strcmp(name, "sigset_t")            == 0) return 8;  /* not first-class on Win32 / WASI */
 #else
     if (strcmp(name, "sigset_t")            == 0) return (long long)sizeof(sigset_t);
 #endif
     if (strcmp(name, "struct stat")         == 0) return (long long)sizeof(struct stat);
     if (strcmp(name, "struct timespec")     == 0) return (long long)sizeof(struct timespec);
+#ifndef __wasi__
+    /* sockaddr_* live in <netinet/in.h> which wasi-libc doesn't ship.
+     * The wasm playground build doesn't need them — the only socket FFI
+     * is the native client connect, gated NURL-side on platform == native. */
     if (strcmp(name, "struct sockaddr_in")  == 0) return (long long)sizeof(struct sockaddr_in);
     if (strcmp(name, "struct sockaddr_in6") == 0) return (long long)sizeof(struct sockaddr_in6);
     if (strcmp(name, "struct sockaddr_storage") == 0) return (long long)sizeof(struct sockaddr_storage);
+#endif
 #if !defined(_WIN32) && !defined(__wasi__)
     /* POSIX poll(2) — only relevant on Linux/macOS; Win32 has its own
      * WSAPoll layout. Phase 8 NURL FFI uses this for proc-spawn polling. */
@@ -1480,11 +1491,16 @@ long long nurl_native_constant(const char *name) {
      * across platforms (CLOCK_MONOTONIC is 1 on Linux/WASI/MinGW but 6
      * on macOS) so NURL callers must read them at runtime rather than
      * hard-code. Used by `stdlib/std/time.nu` (PURIFY §12). */
+    /* wasi-libc defines these as pointer-typed macros (`(&_CLOCK_REALTIME)`),
+     * not integers — cast through uintptr_t so the lookup returns a stable
+     * long long regardless of platform; callers don't decode the value,
+     * they just hand it back to `clock_gettime` which on wasi reinterprets
+     * it as its native `clockid_t`. */
 #ifdef CLOCK_REALTIME
-    if (strcmp(name, "CLOCK_REALTIME")  == 0) return CLOCK_REALTIME;
+    if (strcmp(name, "CLOCK_REALTIME")  == 0) return (long long)(uintptr_t)CLOCK_REALTIME;
 #endif
 #ifdef CLOCK_MONOTONIC
-    if (strcmp(name, "CLOCK_MONOTONIC") == 0) return CLOCK_MONOTONIC;
+    if (strcmp(name, "CLOCK_MONOTONIC") == 0) return (long long)(uintptr_t)CLOCK_MONOTONIC;
 #endif
     /* File-mode + mmap constants for `stdlib/std/fs.nu`'s pure-NURL
      * `__read_file_mmap_pure` (PURIFY §4 batch 5). POSIX-only — Win32
@@ -5270,7 +5286,21 @@ void      nurl_runtime_init(long long worker_count);
 void      nurl_runtime_run(void);
 void      nurl_runtime_shutdown(void);
 
-#if !defined(__wasi__) && !defined(_WIN32)
+/* musl deliberately omits the ucontext family (`getcontext`/`setcontext`/
+ * `makecontext`/`swapcontext`) — including the headers links to "undefined
+ * symbol" errors. Gate the stackful fiber implementation on glibc-Linux or
+ * macOS; every other POSIX-ish target (musl Linux, WASI, …) falls through
+ * to the stub block below. Phase-5 will replace this with an asm-based
+ * context switch portable across libc choices. */
+#if !defined(__wasi__) && !defined(_WIN32) && (defined(__GLIBC__) || defined(__APPLE__))
+/* On macOS the ucontext routines are gated behind `_XOPEN_SOURCE` —
+ * zig's libSystem headers (and Apple's own SDK) `#error` out otherwise.
+ * Define it BEFORE including ucontext.h so getcontext / setcontext /
+ * makecontext / swapcontext are visible. The same define is harmless on
+ * Linux glibc + musl, where the routines are exposed unconditionally. */
+#if defined(__APPLE__) && !defined(_XOPEN_SOURCE)
+#  define _XOPEN_SOURCE 600
+#endif
 #include <ucontext.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -5927,7 +5957,10 @@ long long nurl_reactor_wait_read(long long fd, long long timeout_ms);
 long long nurl_reactor_wait_write(long long fd, long long timeout_ms);
 long long nurl_fiber_sleep_ms(long long ms);
 
-#if !defined(__wasi__) && !defined(_WIN32)
+/* Reactor uses the fiber primitives (NurlFiber, nurl__sched) defined in
+ * §24 above, so its platform guard must match — musl lacks the ucontext
+ * routines those rely on. */
+#if !defined(__wasi__) && !defined(_WIN32) && (defined(__GLIBC__) || defined(__APPLE__))
 #include <poll.h>
 #include <fcntl.h>
 #include <errno.h>
