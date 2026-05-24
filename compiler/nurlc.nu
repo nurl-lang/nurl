@@ -2089,6 +2089,15 @@
 // `: s tmp` binding holding an owned-string call result), preserving
 // the same caller contract.
 
+// IMPLEMENTATION NOTE — `*s` and `*i` pointer arithmetic (`. p k`
+// and `= . p k v`) lowers to a single LLVM load/store, no function
+// call. Every iteration of `nurl_sym_get` is a `strcmp` + a load +
+// a compare + a branch — the same shape as the C version's
+// `if (strcmp(entries[i].name, name) == 0)` loop. The earlier
+// `nurl_peek`/`nurl_poke` pattern made the loop call a runtime
+// function per slot, which LTO didn't fully inline; the wall-clock
+// hit was ~1 s per stage2 compile of nurlc.nu itself.
+
 @ __sym_grow i h → v {
     : s t # s h
     : i cap ( nurl_peek t 2 )
@@ -2127,27 +2136,30 @@
     : i count ( nurl_peek t 0 )
     : i cap ( nurl_peek t 2 )
     ? >= count cap { ( __sym_grow h ) } {}
-    // Re-read array bases AFTER possible grow (the realloc may have
-    // moved them). cap/count read above stay valid since count
-    // doesn't change on grow.
-    : s names_buf # s ( nurl_peek t 3 )
-    : s types_buf # s ( nurl_peek t 4 )
-    : s depths_buf # s ( nurl_peek t 5 )
-    ( nurl_poke names_buf count # i ( strdup name ) )
-    ( nurl_poke types_buf count # i ( strdup type ) )
-    ( nurl_poke depths_buf count ( nurl_peek t 1 ) )
+    // Direct `*s` / `*i` array writes — one LLVM `store` each, no
+    // runtime call. Read after the grow check so a realloc'd base
+    // is picked up.
+    : *s names # *s # s ( nurl_peek t 3 )
+    : *s types # *s # s ( nurl_peek t 4 )
+    : *i depths # *i # s ( nurl_peek t 5 )
+    = . names count # s ( strdup name )
+    = . types count # s ( strdup type )
+    = . depths count ( nurl_peek t 1 )
     ( nurl_poke t 0 + count 1 )
 }
 
 @ nurl_sym_get i h s name → s {
     : s t # s h
     : i count ( nurl_peek t 0 )
-    : s names_buf # s ( nurl_peek t 3 )
-    : s types_buf # s ( nurl_peek t 4 )
+    // Inner loop body is now `strcmp` + load + branch — one C-call,
+    // no `nurl_peek` indirection. Matches the original C version's
+    // `entries[i].name` shape byte-for-byte.
+    : *s names # *s # s ( nurl_peek t 3 )
+    : *s types # *s # s ( nurl_peek t 4 )
     : ~ i k - count 1
     ~ >= k 0 {
-        ? == 0 # i ( strcmp name # s ( nurl_peek names_buf k ) )
-        { ^ # s ( strdup # s ( nurl_peek types_buf k ) ) }
+        ? == 0 # i ( strcmp name . names k )
+        { ^ # s ( strdup . types k ) }
         {}
         = k - k 1
     }
@@ -2163,13 +2175,13 @@
     : s t # s h
     : ~ i count ( nurl_peek t 0 )
     : i depth ( nurl_peek t 1 )
-    : s names_buf # s ( nurl_peek t 3 )
-    : s types_buf # s ( nurl_peek t 4 )
-    : s depths_buf # s ( nurl_peek t 5 )
-    ~ & > count 0 == ( nurl_peek depths_buf - count 1 ) depth {
+    : *s names # *s # s ( nurl_peek t 3 )
+    : *s types # *s # s ( nurl_peek t 4 )
+    : *i depths # *i # s ( nurl_peek t 5 )
+    ~ & > count 0 == . depths - count 1 depth {
         : i idx - count 1
-        ( free # s ( nurl_peek names_buf idx ) )
-        ( free # s ( nurl_peek types_buf idx ) )
+        ( free . names idx )
+        ( free . types idx )
         = count - count 1
     }
     ( nurl_poke t 0 count )

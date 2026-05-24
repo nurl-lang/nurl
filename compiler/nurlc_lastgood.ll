@@ -7756,43 +7756,49 @@ end_3:
   %r11 = load i8*, i8** %r1
   %r12 = call i64 @nurl_peek(i8* %r11, i64 3)
   %r13 = inttoptr i64 %r12 to i8*
-  ; DEBUG: val=%r13 vt=i8* ptype=i8*
+  %r14 = bitcast i8* %r13 to i8**
+  ; DEBUG: val=%r14 vt=i8** ptype=i8**
   ; DEBUG: convert_closure_arg is_closure=0 expects_fn=0
-  %r14 = alloca i8*
-  store i8* %r13, i8** %r14
-  %r15 = load i8*, i8** %r1
-  %r16 = call i64 @nurl_peek(i8* %r15, i64 4)
-  %r17 = inttoptr i64 %r16 to i8*
-  ; DEBUG: val=%r17 vt=i8* ptype=i8*
+  %r15 = alloca i8**
+  store i8** %r14, i8*** %r15
+  %r16 = load i8*, i8** %r1
+  %r17 = call i64 @nurl_peek(i8* %r16, i64 4)
+  %r18 = inttoptr i64 %r17 to i8*
+  %r19 = bitcast i8* %r18 to i8**
+  ; DEBUG: val=%r19 vt=i8** ptype=i8**
   ; DEBUG: convert_closure_arg is_closure=0 expects_fn=0
-  %r18 = alloca i8*
-  store i8* %r17, i8** %r18
-  %r19 = load i8*, i8** %r1
-  %r20 = call i64 @nurl_peek(i8* %r19, i64 5)
-  %r21 = inttoptr i64 %r20 to i8*
-  ; DEBUG: val=%r21 vt=i8* ptype=i8*
+  %r20 = alloca i8**
+  store i8** %r19, i8*** %r20
+  %r21 = load i8*, i8** %r1
+  %r22 = call i64 @nurl_peek(i8* %r21, i64 5)
+  %r23 = inttoptr i64 %r22 to i8*
+  %r24 = bitcast i8* %r23 to i64*
+  ; DEBUG: val=%r24 vt=i64* ptype=i64*
   ; DEBUG: convert_closure_arg is_closure=0 expects_fn=0
-  %r22 = alloca i8*
-  store i8* %r21, i8** %r22
-  %r23 = load i8*, i8** %r14
-  %r24 = load i64, i64* %r4
-  %r25 = call i8* @strdup(i8* %name)
-  %r26 = ptrtoint i8* %r25 to i64
-  call void @nurl_poke(i8* %r23, i64 %r24, i64 %r26)
-  %r27 = load i8*, i8** %r18
-  %r28 = load i64, i64* %r4
-  %r29 = call i8* @strdup(i8* %type)
-  %r30 = ptrtoint i8* %r29 to i64
-  call void @nurl_poke(i8* %r27, i64 %r28, i64 %r30)
-  %r31 = load i8*, i8** %r22
+  %r25 = alloca i64*
+  store i64* %r24, i64** %r25
+  %r26 = load i8**, i8*** %r15
+  %r27 = load i64, i64* %r4
+  %r28 = call i8* @strdup(i8* %name)
+  %r29 = bitcast i8* %r28 to i8*
+  %r30 = getelementptr i8*, i8** %r26, i64 %r27
+  store i8* %r29, i8** %r30
+  %r31 = load i8**, i8*** %r20
   %r32 = load i64, i64* %r4
-  %r33 = load i8*, i8** %r1
-  %r34 = call i64 @nurl_peek(i8* %r33, i64 1)
-  call void @nurl_poke(i8* %r31, i64 %r32, i64 %r34)
-  %r35 = load i8*, i8** %r1
-  %r36 = load i64, i64* %r4
-  %r37 = add i64 %r36, 1
-  call void @nurl_poke(i8* %r35, i64 0, i64 %r37)
+  %r33 = call i8* @strdup(i8* %type)
+  %r34 = bitcast i8* %r33 to i8*
+  %r35 = getelementptr i8*, i8** %r31, i64 %r32
+  store i8* %r34, i8** %r35
+  %r36 = load i64*, i64** %r25
+  %r37 = load i64, i64* %r4
+  %r38 = load i8*, i8** %r1
+  %r39 = call i64 @nurl_peek(i8* %r38, i64 1)
+  %r40 = getelementptr i64, i64* %r36, i64 %r37
+  store i64 %r39, i64* %r40
+  %r41 = load i8*, i8** %r1
+  %r42 = load i64, i64* %r4
+  %r43 = add i64 %r42, 1
+  call void @nurl_poke(i8* %r41, i64 0, i64 %r43)
   ret void
 }
 
@@ -7813,57 +7819,59 @@ entry:
   %r6 = load i8*, i8** %r2
   %r7 = call i64 @nurl_peek(i8* %r6, i64 3)
   %r8 = inttoptr i64 %r7 to i8*
-  ; DEBUG: val=%r8 vt=i8* ptype=i8*
+  %r9 = bitcast i8* %r8 to i8**
+  ; DEBUG: val=%r9 vt=i8** ptype=i8**
   ; DEBUG: convert_closure_arg is_closure=0 expects_fn=0
-  %r9 = alloca i8*
-  store i8* %r8, i8** %r9
-  %r10 = load i8*, i8** %r2
-  %r11 = call i64 @nurl_peek(i8* %r10, i64 4)
-  %r12 = inttoptr i64 %r11 to i8*
-  ; DEBUG: val=%r12 vt=i8* ptype=i8*
+  %r10 = alloca i8**
+  store i8** %r9, i8*** %r10
+  %r11 = load i8*, i8** %r2
+  %r12 = call i64 @nurl_peek(i8* %r11, i64 4)
+  %r13 = inttoptr i64 %r12 to i8*
+  %r14 = bitcast i8* %r13 to i8**
+  ; DEBUG: val=%r14 vt=i8** ptype=i8**
   ; DEBUG: convert_closure_arg is_closure=0 expects_fn=0
-  %r13 = alloca i8*
-  store i8* %r12, i8** %r13
-  %r14 = load i64, i64* %r5
-  %r15 = sub i64 %r14, 1
-  ; DEBUG: val=%r15 vt=i64 ptype=i64
+  %r15 = alloca i8**
+  store i8** %r14, i8*** %r15
+  %r16 = load i64, i64* %r5
+  %r17 = sub i64 %r16, 1
+  ; DEBUG: val=%r17 vt=i64 ptype=i64
   ; DEBUG: convert_closure_arg is_closure=0 expects_fn=0
-  %r16 = alloca i64
-  store i64 %r15, i64* %r16
+  %r18 = alloca i64
+  store i64 %r17, i64* %r18
   br label %loop_check_1
 loop_check_1:
-  %r17 = load i64, i64* %r16
-  %r18 = icmp sge i64 %r17, 0
-  br i1 %r18, label %loop_body_2, label %loop_exit_3
+  %r19 = load i64, i64* %r18
+  %r20 = icmp sge i64 %r19, 0
+  br i1 %r20, label %loop_body_2, label %loop_exit_3
 loop_body_2:
-  %r19 = load i8*, i8** %r9
-  %r20 = load i64, i64* %r16
-  %r21 = call i64 @nurl_peek(i8* %r19, i64 %r20)
-  %r22 = inttoptr i64 %r21 to i8*
-  %r23 = call i32 @strcmp(i8* %name, i8* %r22)
-  %r24 = sext i32 %r23 to i64
-  %r25 = icmp eq i64 0, %r24
-  br i1 %r25, label %then_4, label %else_5
+  %r21 = load i8**, i8*** %r10
+  %r22 = load i64, i64* %r18
+  %r23 = getelementptr i8*, i8** %r21, i64 %r22
+  %r24 = load i8*, i8** %r23
+  %r25 = call i32 @strcmp(i8* %name, i8* %r24)
+  %r26 = sext i32 %r25 to i64
+  %r27 = icmp eq i64 0, %r26
+  br i1 %r27, label %then_4, label %else_5
 then_4:
-  %r26 = load i8*, i8** %r13
-  %r27 = load i64, i64* %r16
-  %r28 = call i64 @nurl_peek(i8* %r26, i64 %r27)
-  %r29 = inttoptr i64 %r28 to i8*
-  %r30 = tail call i8* @strdup(i8* %r29)
-  %r31 = bitcast i8* %r30 to i8*
-  ret i8* %r31
+  %r28 = load i8**, i8*** %r15
+  %r29 = load i64, i64* %r18
+  %r30 = getelementptr i8*, i8** %r28, i64 %r29
+  %r31 = load i8*, i8** %r30
+  %r32 = tail call i8* @strdup(i8* %r31)
+  %r33 = bitcast i8* %r32 to i8*
+  ret i8* %r33
 else_5:
   br label %end_6
 end_6:
-  %r32 = load i64, i64* %r16
-  %r33 = sub i64 %r32, 1
-  store i64 %r33, i64* %r16
+  %r34 = load i64, i64* %r18
+  %r35 = sub i64 %r34, 1
+  store i64 %r35, i64* %r18
   br label %loop_check_1
 loop_exit_3:
-  %r34 = getelementptr [1 x i8], [1 x i8]* @.str.569, i64 0, i64 0
-  %r35 = tail call i8* @strdup(i8* %r34)
-  %r36 = bitcast i8* %r35 to i8*
-  ret i8* %r36
+  %r36 = getelementptr [1 x i8], [1 x i8]* @.str.569, i64 0, i64 0
+  %r37 = tail call i8* @strdup(i8* %r36)
+  %r38 = bitcast i8* %r37 to i8*
+  ret i8* %r38
 }
 
 @.str.569 = private unnamed_addr constant [1 x i8] c"\00"
@@ -7904,73 +7912,77 @@ entry:
   %r8 = load i8*, i8** %r1
   %r9 = call i64 @nurl_peek(i8* %r8, i64 3)
   %r10 = inttoptr i64 %r9 to i8*
-  ; DEBUG: val=%r10 vt=i8* ptype=i8*
+  %r11 = bitcast i8* %r10 to i8**
+  ; DEBUG: val=%r11 vt=i8** ptype=i8**
   ; DEBUG: convert_closure_arg is_closure=0 expects_fn=0
-  %r11 = alloca i8*
-  store i8* %r10, i8** %r11
-  %r12 = load i8*, i8** %r1
-  %r13 = call i64 @nurl_peek(i8* %r12, i64 4)
-  %r14 = inttoptr i64 %r13 to i8*
-  ; DEBUG: val=%r14 vt=i8* ptype=i8*
+  %r12 = alloca i8**
+  store i8** %r11, i8*** %r12
+  %r13 = load i8*, i8** %r1
+  %r14 = call i64 @nurl_peek(i8* %r13, i64 4)
+  %r15 = inttoptr i64 %r14 to i8*
+  %r16 = bitcast i8* %r15 to i8**
+  ; DEBUG: val=%r16 vt=i8** ptype=i8**
   ; DEBUG: convert_closure_arg is_closure=0 expects_fn=0
-  %r15 = alloca i8*
-  store i8* %r14, i8** %r15
-  %r16 = load i8*, i8** %r1
-  %r17 = call i64 @nurl_peek(i8* %r16, i64 5)
-  %r18 = inttoptr i64 %r17 to i8*
-  ; DEBUG: val=%r18 vt=i8* ptype=i8*
+  %r17 = alloca i8**
+  store i8** %r16, i8*** %r17
+  %r18 = load i8*, i8** %r1
+  %r19 = call i64 @nurl_peek(i8* %r18, i64 5)
+  %r20 = inttoptr i64 %r19 to i8*
+  %r21 = bitcast i8* %r20 to i64*
+  ; DEBUG: val=%r21 vt=i64* ptype=i64*
   ; DEBUG: convert_closure_arg is_closure=0 expects_fn=0
-  %r19 = alloca i8*
-  store i8* %r18, i8** %r19
+  %r22 = alloca i64*
+  store i64* %r21, i64** %r22
   br label %loop_check_1
 loop_check_1:
-  %r20 = load i64, i64* %r4
-  %r21 = icmp sgt i64 %r20, 0
-  br i1 %r21, label %and_right_4, label %and_end_5
-and_right_4:
-  %r22 = load i8*, i8** %r19
   %r23 = load i64, i64* %r4
-  %r24 = sub i64 %r23, 1
-  %r25 = call i64 @nurl_peek(i8* %r22, i64 %r24)
-  %r26 = load i64, i64* %r7
-  %r27 = icmp eq i64 %r25, %r26
+  %r24 = icmp sgt i64 %r23, 0
+  br i1 %r24, label %and_right_4, label %and_end_5
+and_right_4:
+  %r25 = load i64*, i64** %r22
+  %r26 = load i64, i64* %r4
+  %r27 = sub i64 %r26, 1
+  %r28 = getelementptr i64, i64* %r25, i64 %r27
+  %r29 = load i64, i64* %r28
+  %r30 = load i64, i64* %r7
+  %r31 = icmp eq i64 %r29, %r30
   br label %and_end_5
 and_end_5:
-  %r28 = phi i1 [ 0, %loop_check_1 ], [ %r27, %and_right_4 ]
-  br i1 %r28, label %loop_body_2, label %loop_exit_3
+  %r32 = phi i1 [ 0, %loop_check_1 ], [ %r31, %and_right_4 ]
+  br i1 %r32, label %loop_body_2, label %loop_exit_3
 loop_body_2:
-  %r29 = load i64, i64* %r4
-  %r30 = sub i64 %r29, 1
-  ; DEBUG: val=%r30 vt=i64 ptype=i64
+  %r33 = load i64, i64* %r4
+  %r34 = sub i64 %r33, 1
+  ; DEBUG: val=%r34 vt=i64 ptype=i64
   ; DEBUG: convert_closure_arg is_closure=0 expects_fn=0
-  %r31 = alloca i64
-  store i64 %r30, i64* %r31
-  %r32 = load i8*, i8** %r11
-  %r33 = load i64, i64* %r31
-  %r34 = call i64 @nurl_peek(i8* %r32, i64 %r33)
-  %r35 = inttoptr i64 %r34 to i8*
-  call void @free(i8* %r35)
-  %r36 = load i8*, i8** %r15
-  %r37 = load i64, i64* %r31
-  %r38 = call i64 @nurl_peek(i8* %r36, i64 %r37)
-  %r39 = inttoptr i64 %r38 to i8*
+  %r35 = alloca i64
+  store i64 %r34, i64* %r35
+  %r36 = load i8**, i8*** %r12
+  %r37 = load i64, i64* %r35
+  %r38 = getelementptr i8*, i8** %r36, i64 %r37
+  %r39 = load i8*, i8** %r38
   call void @free(i8* %r39)
-  %r40 = load i64, i64* %r4
-  %r41 = sub i64 %r40, 1
-  store i64 %r41, i64* %r4
+  %r40 = load i8**, i8*** %r17
+  %r41 = load i64, i64* %r35
+  %r42 = getelementptr i8*, i8** %r40, i64 %r41
+  %r43 = load i8*, i8** %r42
+  call void @free(i8* %r43)
+  %r44 = load i64, i64* %r4
+  %r45 = sub i64 %r44, 1
+  store i64 %r45, i64* %r4
   br label %loop_check_1
 loop_exit_3:
-  %r42 = load i8*, i8** %r1
-  %r43 = load i64, i64* %r4
-  call void @nurl_poke(i8* %r42, i64 0, i64 %r43)
-  %r44 = load i64, i64* %r7
-  %r45 = icmp sgt i64 %r44, 0
-  br i1 %r45, label %then_6, label %else_7
-then_6:
   %r46 = load i8*, i8** %r1
-  %r47 = load i64, i64* %r7
-  %r48 = sub i64 %r47, 1
-  call void @nurl_poke(i8* %r46, i64 1, i64 %r48)
+  %r47 = load i64, i64* %r4
+  call void @nurl_poke(i8* %r46, i64 0, i64 %r47)
+  %r48 = load i64, i64* %r7
+  %r49 = icmp sgt i64 %r48, 0
+  br i1 %r49, label %then_6, label %else_7
+then_6:
+  %r50 = load i8*, i8** %r1
+  %r51 = load i64, i64* %r7
+  %r52 = sub i64 %r51, 1
+  call void @nurl_poke(i8* %r50, i64 1, i64 %r52)
   br label %end_8
 else_7:
   br label %end_8
