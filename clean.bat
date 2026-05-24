@@ -16,13 +16,9 @@ REM Clean legacy artifacts from root directory
 echo   Cleaning legacy artifacts from root directory...
 del /Q *.ll 2>nul
 del /Q nurlc.exe 2>nul
+del /Q nurlc_lastgood.bin* 2>nul
 del /Q nurlc_py* 2>nul
 del /Q nurlc_self* 2>nul
 del /Q *.tmp 2>nul
-
-REM Clean Python cache
-echo   Cleaning Python cache...
-for /d /r . %%d in (__pycache__) do @if exist "%%d" rd /s /q "%%d" 2>nul
-del /s /q *.pyc 2>nul
 
 echo Clean complete!

@@ -8,9 +8,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — `refactor/pure-nurl` branch
+
+The `refactor/pure-nurl` branch (42 commits, 2026-05-23 → 2026-05-24)
+took the bulk of `stdlib/runtime.c` out of C and into pure NURL —
+either as pure-NURL @-fns or as direct `& \`c\`` / `& \`pthread\`` /
+`& \`sqlite3\`` FFI declarations. Per the PURIFY.md tracker:
+
+* **`stdlib/runtime.c`: 8 879 → 6 265 LOC (−2 614, −29.4 %).** The
+  bootstrap fixed point held on every shipped phase and the full
+  test corpus stayed green.
+* **Python removed from the bootstrap.** `compiler/nurlc.py` and
+  `compiler/src/*.py` are gone. Stage 0 now links the committed
+  `compiler/nurlc_lastgood.ll` snapshot directly via clang. The
+  only build-time dependency is clang/LLVM 14+. Refresh the
+  snapshot with `./build.sh --refresh-bootstrap` when a
+  grammar/runtime-ABI change leaves the current snapshot unable
+  to compile current `nurlc.nu`.
+* **`Box[T]` / `Cell[T]` / `Rc[T]` / `Arc[T]`** heap-stable
+  allocator surface — `stdlib/core/box.nu`, `stdlib/core/cell.nu`,
+  `stdlib/std/rc.nu`, `stdlib/std/arc.nu`. `% Drop` auto-fires;
+  `nurl_native_sizeof` + `nurl_atomic_i64_*` runtime primitives
+  added. This unblocked Phases 6 / 8 / 11 / 12 of the purification.
+* **PURIFY phases shipped** (per-phase detail in PURIFY.md Part VII):
+  - Phase 1 §3 char classification (`stdlib/core/char.nu`, −11 C)
+  - Phase 2 §15 logging level (`stdlib/std/log.nu`, −7 C)
+  - Phase 3 §11 libm + integer helpers (`& \`m\`` / `& \`c\`` FFI, −17 C)
+  - Phase 4 §17 crypto MD5/SHA-1/256/512 + HMAC
+    (`stdlib/std/hash_*.nu`, **−541 C**)
+  - Phase 5 §2 string ops over libc (strlen/strcmp/strncmp/strstr/
+    memcmp/memmem/atoll/atof/memcpy/strdup via preamble, **−682 C**)
+  - Phase 6 §19 threads / mutex / cond (pthread `& \`pthread\``
+    FFI in `stdlib/std/thread.nu`, −162 C; mingw-w64 winpthreads
+    linked via `-lpthread`)
+  - Phase 7 §4 + §13 file & dir syscalls — incremental over many
+    batches (realpath / write_file_safe / file_size / mmap / fread
+    fallback / dir_list POSIX, −158 C combined)
+  - Phase 8 §16 + §16b process spawn (fork/exec/poll, `||` and
+    `&&` added as language tokens for the spawn-error sideband,
+    **−245 C**)
+  - Phase 9a §7 + §8 codegen counters + last-type sideband
+    (pure-NURL @-fns in `nurlc.nu`, −71 C)
+  - Phase 9b §6b symbol table (3 parallel grow-by-2× arrays,
+    inner loops via direct `*s` / `*i` pointer arithmetic, −72 C;
+    ~0.95× of C runtime — LTO inlines everything and the parallel
+    layout is cache-friendlier than the C interleaved struct)
+  - Phase 9c §5 HashMap deleted entirely (the canonical
+    `stdlib/std/hashmap.nu` HashMap[s i] is the one-true map for
+    every consumer; the migration also fixed `hash_string` from
+    O(n²) → O(n) by switching from per-byte `nurl_str_get` to a
+    direct `*u` byte walk, −101 C)
+  - **Phase 10 §6a Lexer (the big one, −592 C).** Full state
+    machine + 4-deep lookahead ported to pure-NURL @-fns over a
+    280-byte heap handle. Uncovered + fixed a subtle escape-handling
+    bug: only `\n \t \r \\` are real escapes; any other `\X`
+    (including `` \` ``) writes the lone `\` and advances one byte.
+  - Phase 11 §23 DoS protection (`stdlib/std/dos.nu`, −180 C)
+  - Phase 12 §21 SQLite bridge — pure-NURL FFI over 18 libsqlite3
+    symbols (`stdlib/ext/sqlite.nu`, **−330 C**)
+  - §12 Time — `clock_gettime` + `nanosleep` FFI (`stdlib/std/time.nu`,
+    −38 C; macOS uses `CLOCK_MONOTONIC = 6` vs `1` elsewhere, read
+    at runtime via `nurl_native_constant`)
+  - §13 batch 2/3 — stdin + dir_list POSIX FFI (−80 C)
+  - §11 strtod sideband eliminated with an endptr buffer (−20 C)
+* **`||` and `&&` operators** added as language tokens — strict
+  binary, bool-only short-circuit. Alternative to the chainable
+  `|` / `&` for cases that are more readable as a `||` / `&&`
+  chain. Grammar v2.0 documents them. Same LLVM IR as `|` / `&`
+  on i1 left operands.
+* **`./check.sh <file.nu>`** — per-file syntax/type check tool;
+  runs `nurlc` against a single source file in ~0.2 s vs build.sh
+  ~60 s. Use in iterate-fix loops before kicking the full build.
+* **Test runner output split** into `success.txt` + `failures.txt`
+  so a failed test is greppable without scrolling through the
+  green output.
+* **Parenthesised-operator diagnostic.** A `(` begins a call, so
+  `( . obj field )` / `( | a b )` / `( + x y )` etc. now produce
+  a precise call-site `error:` instead of a far-away LLVM-verifier
+  complaint. (Listed earlier in this section under the original
+  feature work; reiterated here as it landed in this branch.)
+* **Call-arity diagnostics.** Every call's argument count is
+  checked against the callee's declared parameter count; a
+  mismatch points at the call site (same listing remark).
+* **Prefix arity-cascade diagnostic.** Short-an-argument prefix
+  operator over-reads now name the offending token and point back
+  at the line where the cascade started.
+* **`mcp_response_get_result`** — `mcp_client`'s 1-arg result
+  extractor renamed for consistency with the rest of the surface.
+
+### Fixed — `refactor/pure-nurl` branch
+
+* **WASM FFI width mismatches** uncovered by uuidgen wasm build
+  (2026-05-24). `nurl_errno_get` / `nurl_errno_set` /
+  `nurl_wait_is_exited` / `_exit_status` / `_is_signaled` /
+  `_term_sig` paluut + parametrit widened `int` → `long long`
+  in `stdlib/runtime.c`. On x86_64 SysV the `int` return's upper
+  32 bits were undefined and accidentally zero; wasm-ld validates
+  signatures strictly and refused to link until the C side
+  agreed with the NURL FFI's `→ i` (i64) declaration. `memmem`
+  added to `api/app/main.py:LIBC_WASM32_ABI` (the playground's
+  wasm-build IR rewriter), since wasm32 `size_t` is i32 but
+  `nurlc.nu`'s preamble emits `memmem(i8*, i64, i8*, i64)`.
+* **macOS `WIFEXITED` lvalue requirement.** The widened
+  `nurl_wait_*` functions originally passed `(int)status` as an
+  rvalue to the W*-macros; macOS's `<sys/wait.h>` expands them
+  to `*(int*)&(x)` which needs an lvalue. Fixed by binding
+  `int s = (int)status;` first inside each wrapper. Restores the
+  zig macOS-arm64 / macOS-x64 cross-build.
+
 ### Added
 
-* **MsgPack serde.** `stdlib/serde.nu` gained `from_msgpack_i` /
+* **MsgPack serde.** `stdlib/ext/serde.nu` gained `from_msgpack_i` /
   `from_msgpack_f` / `from_msgpack_b` / `from_msgpack_string` —
   decoding MessagePack bytes straight to a built-in value. There is no
   `% MsgpackSerialize` trait: MessagePack and JSON share a data model,
@@ -24,7 +132,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JSON, TOML and MessagePack — all reusing one `JsonSerialize` impl
   per type.
 
-* **TOML serde.** `stdlib/serde.nu` gained its TOML side: a
+* **TOML serde.** `stdlib/ext/serde.nu` gained its TOML side: a
   `% TomlSerialize [T] { @ to_toml T x → TomlValue }` trait with impls
   for `i` / `b` / `s` / `String`, and `from_toml_i` / `from_toml_b` /
   `from_toml_string` decoders returning `!T ParseErr` — the same shape
@@ -539,7 +647,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 * **Serde-style `JsonSerialize` trait + decoder helpers
-  (`stdlib/serde.nu`).** A NURL trait `JsonSerialize [T] { @ to_json
+  (`stdlib/ext/serde.nu`).** A NURL trait `JsonSerialize [T] { @ to_json
   T x → Json }` with first-arg dispatch and impls for `i` / `b` /
   `f` / `s` / `String`, paired with per-type `from_json_<T>` helpers
   (`from_json_i` / `_b` / `_f` / `_string` / `_str_borrow`) that

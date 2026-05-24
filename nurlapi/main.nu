@@ -90,7 +90,7 @@ $ `stdlib/ext/regex.nu`
   : String shims ( string_from `\n; ── wasm32 libc ABI shims ──\n` )
   : ( Vec String ) shimmed ( vec_new [String] )
   
-  : s list `malloc:p:s,calloc:p:ss,realloc:p:ps,puts:i:p,putchar:i:i,getchar:i:,strlen:s:p,strcmp:i:pp,strncmp:i:pps,strcpy:p:pp,strncpy:p:pps,strcat:p:pp,strdup:p:p,memcpy:p:pps,memmove:p:pps,memset:p:pis,memcmp:i:pps,atoi:i:p,abs:i:i,exit:v:i,rand:i:,srand:v:s,system:i:p,write:i:ips,read:i:ips,open:i:pii,close:i:i`
+  : s list `malloc:p:s,calloc:p:ss,realloc:p:ps,puts:i:p,putchar:i:i,getchar:i:,strlen:s:p,strcmp:i:pp,strncmp:i:pps,strcpy:p:pp,strncpy:p:pps,strcat:p:pp,strdup:p:p,memcpy:p:pps,memmove:p:pps,memset:p:pis,memcmp:i:pps,memmem:p:psps,atoi:i:p,abs:i:i,exit:v:i,rand:i:,srand:v:s,system:i:p,write:i:ips,read:i:ips,open:i:pii,close:i:i`
   : String slist ( string_from list )
   : ( Vec String ) entries ( string_split slist `,` )
   

@@ -153,6 +153,25 @@ for src in "${tests[@]}"; do
     stdout_log="$LOGDIR/$name.stdout"
     stderr_log="$LOGDIR/$name.stderr"
 
+    # borrow_* — BORROW.md baseline tests. They contain *deliberate*
+    # use-after-free / double-free / use-after-move patterns whose
+    # purpose is to exercise the borrow checker's warning path. The
+    # normal run_tests.sh compiles them with `--borrowck` and never
+    # links or runs them; we mirror that here so ASan isn't asked to
+    # adjudicate code that's documented to be unsafe. A compile that
+    # produces no diagnostic *at all* is the real regression.
+    if [[ "$name" == borrow_* ]]; then
+        if ! "$NURLC" --borrowck "$src" > "$ll" 2>"$stderr_log"; then
+            printf '%-44s %s\n' "$name" "COMPILE_FAIL"
+            echo "COMPILE_FAIL $name" >> "$SUMMARY"
+            n_compile_fail=$((n_compile_fail + 1))
+            continue
+        fi
+        printf '%-44s %s\n' "$name" "PASS"
+        n_pass=$((n_pass + 1))
+        continue
+    fi
+
     # Compile (uses the just-built nurlc — should always succeed if the
     # normal run_tests.sh would compile it). We don't capture warnings
     # here because the focus is runtime-not-compile.

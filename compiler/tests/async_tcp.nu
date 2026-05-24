@@ -18,6 +18,7 @@ $ `stdlib/std/async.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/channel.nu`
+$ `stdlib/std/time.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/core/string.nu`
 
@@ -60,7 +61,7 @@ $ `stdlib/core/string.nu`
             }
 
             : ( @ v ) client \ → v {
-                ( nurl_sleep_ms 50 )
+                ( sleep_ms 50 )
                 : i craw ( nurl_tcp_connect `127.0.0.1` 18910 )
                 ? == craw 0 {
                     ( chan_send [i] done 0 )

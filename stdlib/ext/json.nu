@@ -274,7 +274,7 @@ $ `stdlib/core/result.nu`
     ? == ( __jp_peek p ) 45 { = . p pos + . p pos 1 } {}
 
     : ~ i digit_count 0
-    ~ & ! ( __jp_eof p ) != 0 ( nurl_is_digit ( __jp_peek p ) ) {
+    ~ & ! ( __jp_eof p ) != 0 ( is_digit ( __jp_peek p ) ) {
         = . p pos + . p pos 1
         = digit_count + digit_count 1
     }
@@ -287,7 +287,7 @@ $ `stdlib/core/result.nu`
     ? & ! ( __jp_eof p ) == ( __jp_peek p ) 46 {
         = . p pos + . p pos 1
         : ~ i frac_count 0
-        ~ & ! ( __jp_eof p ) != 0 ( nurl_is_digit ( __jp_peek p ) ) {
+        ~ & ! ( __jp_eof p ) != 0 ( is_digit ( __jp_peek p ) ) {
             = . p pos + . p pos 1
             = frac_count + frac_count 1
         }
@@ -306,7 +306,7 @@ $ `stdlib/core/result.nu`
                 ? | == sgn 43 == sgn 45 { = . p pos + . p pos 1 } {}
             } {}
             : ~ i exp_count 0
-            ~ & ! ( __jp_eof p ) != 0 ( nurl_is_digit ( __jp_peek p ) ) {
+            ~ & ! ( __jp_eof p ) != 0 ( is_digit ( __jp_peek p ) ) {
                 = . p pos + . p pos 1
                 = exp_count + exp_count 1
             }
@@ -514,7 +514,7 @@ $ `stdlib/core/result.nu`
     ? == c 91 { ^ ( __jp_parse_array p ) } {}
     ? == c 123 { ^ ( __jp_parse_object p ) } {}
 
-    ? | == c 45 != 0 ( nurl_is_digit c ) {
+    ? | == c 45 != 0 ( is_digit c ) {
         ^ ( __jp_parse_number p )
     } {}
 
@@ -1269,7 +1269,7 @@ $ `stdlib/core/result.nu`
     : ~ b ok T
     ~ & ok < k n {
         : i c ( nurl_str_get seg k )
-        ? == 0 ( nurl_is_digit c ) { = ok F } {}
+        ? == 0 ( is_digit c ) { = ok F } {}
         = k + k 1
     }
     ^ ok

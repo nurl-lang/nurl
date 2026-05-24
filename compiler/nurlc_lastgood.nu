@@ -74,6 +74,8 @@
 : i TT_ELLIPSIS 43
 : i TT_PUB 44
 : i TT_CARETCARET 45  // `^^` — bitwise / logical XOR (lexer pairs `^^`)
+: i TT_OROR       46  // `||` — short-circuit logical OR  (binary, bool only)
+: i TT_ANDAND     47  // `&&` — short-circuit logical AND (binary, bool only)
 
 // ── Abort helpers ─────────────────────────────────────────────────
 
@@ -1234,9 +1236,40 @@
     ? == tt TT_AT ( gen_agg_lit lex syms cg )
     ? == tt TT_BACKSLASH ( gen_backslash_expr lex syms cg )
     ? == tt TT_LBRACK ( gen_slice_literal lex syms cg )
+    ? == tt TT_OROR ( gen_oror lex syms cg )
+    ? == tt TT_ANDAND ( gen_andand lex syms cg )
     ? ( is_binop_tt tt ) ( gen_binary lex syms cg )
     ? == tt TT_TILDE ( gen_complement lex syms cg )
     ( gen_ident lex syms cg )
+}
+
+// ── `||` / `&&` — strict binary short-circuit (bool only) ─────────────
+// Unlike `|` / `&` (which dispatch to bitwise vs short-circuit based on
+// operand type and chain N+1 operands per N tokens), the two-char
+// variants are fixed arity 2 and require both operands to be bool.
+// Useful when a chain like `( cond1 || cond2 || cond3 )` would be more
+// readable than the canonical `| | cond1 cond2 cond3`. The compiled
+// IR is identical to gen_logical_or / gen_logical_and's i1 path.
+@ gen_oror i lex i syms i cg → s {
+    ( nurl_lex_advance lex )
+    : s lv ( gen_expr lex syms cg )
+    : s lt ( nurl_get_last_type )
+    ? ! ( seq lt `i1` )
+    { ( die lex `operator || requires bool operands — left operand has non-bool type` ) }
+    {}
+    : s left_lbl ( nurl_sym_get syms `__cur_lbl__` )
+    ^ ( gen_logical_or lv left_lbl lex syms cg )
+}
+
+@ gen_andand i lex i syms i cg → s {
+    ( nurl_lex_advance lex )
+    : s lv ( gen_expr lex syms cg )
+    : s lt ( nurl_get_last_type )
+    ? ! ( seq lt `i1` )
+    { ( die lex `operator && requires bool operands — left operand has non-bool type` ) }
+    {}
+    : s left_lbl ( nurl_sym_get syms `__cur_lbl__` )
+    ^ ( gen_logical_and lv left_lbl lex syms cg )
 }
 
 @ gen_complement i lex i syms i cg → s {
@@ -1756,6 +1789,1098 @@
 // gen_call catches it at the call site instead. The set is the binary
 // operators plus member access `.`, the cast `#` and the caret `^` —
 // every token here is unambiguously an operator, never a function name.
+// Identifier-continuation predicate — used by scan helpers below.
+// Inlines the ASCII alpha/digit/underscore check; the historic
+// `nurl_is_alpha` / `_is_digit` C helpers were dropped in
+// PURIFY.md Phase 1 (2026-05-23) and the nurlc compiler is
+// self-contained (no `$`-imports) so the check lives here verbatim.
+@ __is_ident_char i ch → b {
+    ^ | | | & >= ch 65 <= ch 90 & >= ch 97 <= ch 122 & >= ch 48 <= ch 57 == ch 95
+}
+
+// Pure-NURL replacements for the historic `nurl_str_*` C wrappers
+// in `stdlib/runtime.c §2` (PURIFY.md Phase 5, 2026-05-23). Each
+// is mirrored in `stdlib/core/string.nu` for user code; the
+// duplication is because `nurlc.nu` has no `$`-imports — the
+// linker sees only this local copy in the nurlc binary, only the
+// stdlib copy in user binaries.
+
+@ nurl_memcmp_lex s a i la s b i lb → i {
+    : i n ? < la lb la lb
+    ? > n 0 {
+        : i c # i ( memcmp a b n )
+        ? != c 0 { ^ ? < c 0 -1 1 } {}
+    } {}
+    ? < la lb { ^ -1 } {}
+    ? > la lb { ^ 1 } {}
+    ^ 0
+}
+
+@ nurl_str_len s str → i {
+    ^ ( strlen str )
+}
+
+@ nurl_str_eq s a s b → i {
+    : i c # i ( strcmp a b )
+    ^ ? == c 0 1 0
+}
+
+@ nurl_str_cmp s a s b → i {
+    : i c # i ( strcmp a b )
+    ? < c 0 { ^ -1 } {}
+    ? > c 0 { ^ 1 } {}
+    ^ 0
+}
+
+@ nurl_str_to_int s str → i {
+    ^ ( atoll str )
+}
+
+@ nurl_str_to_float s str → f {
+    ^ ( atof str )
+}
+
+@ nurl_str_starts s str s prefix → i {
+    : i n ( strlen prefix )
+    : i c # i ( strncmp str prefix n )
+    ^ ? == c 0 1 0
+}
+
+@ nurl_str_find s haystack s needle → i {
+    : s p # s ( strstr haystack needle )
+    ? == # i p 0 { ^ -1 } {}
+    ^ - # i p # i haystack
+}
+
+@ nurl_str_ends s str s suffix → i {
+    : i slen ( strlen str )
+    : i plen ( strlen suffix )
+    ? > plen slen { ^ 0 } {}
+    : i off - slen plen
+    : *u sp # *u str
+    : s base # s + # i sp off
+    : i c # i ( memcmp base suffix plen )
+    ^ ? == c 0 1 0
+}
+
+@ nurl_memmem_range s hay i hlen s needle i nlen → i {
+    ? | < hlen 0 < nlen 0 { ^ -1 } {}
+    ? == nlen 0 { ^ 0 } {}
+    ? > nlen hlen { ^ -1 } {}
+    : s p # s ( memmem hay hlen needle nlen )
+    ? == # i p 0 { ^ -1 } {}
+    ^ - # i p # i hay
+}
+
+// ── Batch C (2026-05-23): allocation-style ops via libc malloc + memcpy ──
+
+@ nurl_str_get s str i idx → i {
+    : i n ( strlen str )
+    ? | < idx 0 >= idx n { ^ 0 } {}
+    : *u p # *u str
+    : u b . p idx
+    ^ & # i b 255
+}
+
+@ nurl_str_cat s a s b → s {
+    : i la ( strlen a )
+    : i lb ( strlen b )
+    : s r # s ( malloc + + la lb 1 )
+    ( memcpy r a la )
+    : *u rp # *u r
+    : *u dst # *u + # i rp la
+    ( memcpy # s dst b + lb 1 )
+    ^ r
+}
+
+@ nurl_str_cat3 s a s b s c → s {
+    : i la ( strlen a )
+    : i lb ( strlen b )
+    : i lc ( strlen c )
+    : s r # s ( malloc + + + la lb lc 1 )
+    ( memcpy r a la )
+    : *u rp # *u r
+    : *u d2 # *u + # i rp la
+    ( memcpy # s d2 b lb )
+    : *u d3 # *u + # i rp + la lb
+    ( memcpy # s d3 c + lc 1 )
+    ^ r
+}
+
+@ nurl_str_cat4 s a s b s c s d → s {
+    : i la ( strlen a )
+    : i lb ( strlen b )
+    : i lc ( strlen c )
+    : i ld ( strlen d )
+    : s r # s ( malloc + + + + la lb lc ld 1 )
+    ( memcpy r a la )
+    : *u rp # *u r
+    : *u d2 # *u + # i rp la
+    ( memcpy # s d2 b lb )
+    : *u d3 # *u + # i rp + la lb
+    ( memcpy # s d3 c lc )
+    : *u d4 # *u + # i rp + + la lb lc
+    ( memcpy # s d4 d + ld 1 )
+    ^ r
+}
+
+@ nurl_str_slice s str i start i n → s {
+    : i slen ( strlen str )
+    : ~ i st start
+    : ~ i k n
+    ? < st 0 { = st 0 } {}
+    ? > st slen { = st slen } {}
+    ? < k 0 { = k 0 } {}
+    ? > + st k slen { = k - slen st } {}
+    : s r # s ( malloc + k 1 )
+    : *u sp # *u str
+    : *u sat # *u + # i sp st
+    ( memcpy r # s sat k )
+    : *u rp # *u r
+    : u zero # u 0
+    = . rp k zero
+    ^ r
+}
+
+@ nurl_parse_int_range s p i len → i {
+    ? == # i p 0 { ^ 0 } {}
+    ? <= len 0 { ^ 0 } {}
+    : *u q # *u p
+    : ~ i i 0
+    : ~ i sign 1
+    : u first . q 0
+    ? == & # i first 255 45 { = sign -1  = i 1 } {}
+    ? == & # i first 255 43 { = i 1 } {}
+    : ~ i acc 0
+    ~ < i len {
+        : u c . q i
+        : i ci & # i c 255
+        ? | < ci 48 > ci 57 { ^ * acc sign } {}
+        = acc + * acc 10 - ci 48
+        = i + i 1
+    }
+    ^ * acc sign
+}
+
+// ── Phase 7 (2026-05-23): nurl_file_exists via libc access(2).
+// nurlc.nu uses it to probe stage-0 sentinel files; mirrored here
+// because nurlc.nu can't `$`-import its own stdlib/std/fs.nu.
+
+@ nurl_file_exists s path → i {
+    ? == # i path 0 { ^ 0 } {}
+    : i32 rc ( access path # i32 0 )    // F_OK = 0
+    ^ ? == # i rc 0 1 0
+}
+
+// ── Batch D' (2026-05-23): strtod via FFI for byte-range float parse.
+// nurl_str_int / _str_float keep their C bodies (see runtime.c for
+// the rationale).
+
+// Parse f64 from byte range [p, p+len). Copies into a NUL-terminated
+// scratch buffer and hands it to libc `strtod` (NULL endptr — we
+// don't surface the parse position). Returns 0.0 on empty / null
+// input; mirrors strtod's "0.0 on parse failure" behaviour for any
+// input strtod itself rejects.
+@ nurl_parse_float_range s p i len → f {
+    ? == # i p 0 { ^ 0.0 } {}
+    ? <= len 0 { ^ 0.0 } {}
+    : s buf # s ( malloc + len 1 )
+    ( memcpy buf p len )
+    : *u bp # *u buf
+    : u zero # u 0
+    = . bp len zero
+    : **u endptr # **u 0
+    : f v ( strtod buf endptr )
+    ( free buf )
+    ^ v
+}
+
+// ── PURIFY.md Phase 9a (2026-05-24): §7 codegen counters ──────────
+// Handle is a `nurl_zalloc`'d 16-byte block: slot 0 = next register
+// number, slot 1 = next label number. The handle is opaque to all
+// callers (passed back into _reg / _lbl / _reset / never deref'd
+// directly); returned as `i` to preserve the original `: i cg ( … )`
+// caller binding shape. Cast to `s` (== i8*) inside this file for
+// `nurl_peek` / `nurl_poke` access.
+//
+// IMPORTANT — Phase 2B owned-string auto-detection: the @-fn bodies
+// below deliberately return the `nurl_str_cat` result without an
+// intervening `: s` binding. That keeps `__last_ident_name__` on an
+// i64 binding (`n`) at fn exit, so the auto-detector at gen_fn_decl
+// epilogue doesn't tag `nurl_cg_reg__ret_owned = "str"`. The C
+// runtime version of these helpers was NOT marked owned either, so
+// every caller in `gen_*` (e.g. `gen_agg_lit`'s `= result r` chain)
+// reads the malloc'd register-name string as a borrow that lives
+// for the rest of compilation. Same intentional leak as the C
+// version. Adding `: s tmp` here would flip the auto-tag and break
+// gen_agg_lit's insertvalue chain (the binding would auto-drop
+// before its register name is read in the next iteration).
+
+@ nurl_cg_new → i {
+    ^ # i ( nurl_zalloc 16 )
+}
+
+@ nurl_cg_reg i h → s {
+    : s p # s h
+    : i n ( nurl_peek p 0 )
+    ( nurl_poke p 0 + n 1 )
+    ^ ( nurl_str_cat `%r` ( nurl_str_int n ) )
+}
+
+@ nurl_cg_lbl i h s hint → s {
+    : s p # s h
+    : i n ( nurl_peek p 1 )
+    ( nurl_poke p 1 + n 1 )
+    ^ ( nurl_str_cat3 hint `_` ( nurl_str_int n ) )
+}
+
+@ nurl_cg_reset i h → v {
+    : s p # s h
+    ( nurl_poke p 0 0 )
+    ( nurl_poke p 1 0 )
+}
+
+// ── PURIFY.md Phase 9a (2026-05-24): §8 "last type" sideband ──────
+// Module-level i8* held in `g_last_type_ptr` (stored as i64 — the
+// `: i` slot can carry any pointer value). Initial 0 means "use the
+// default `i64`". `nurl_set_last_type` strdup's the input and frees
+// the previous value; `nurl_get_last_type` strdup's the current
+// value so callers always receive an owned heap copy they can drop
+// freely. Matches the runtime.c §8 contract byte-for-byte.
+
+: i g_last_type_ptr 0
+
+@ nurl_get_last_type → s {
+    ? == g_last_type_ptr 0 { ^ # s ( strdup `i64` ) } {}
+    ^ # s ( strdup # s g_last_type_ptr )
+}
+
+@ nurl_set_last_type s t → v {
+    : i old g_last_type_ptr
+    = g_last_type_ptr # i ( strdup t )
+    ? != old 0 { ( free # s old ) } {}
+}
+
+// ── PURIFY.md Phase 9b (2026-05-24): §6b symbol table ─────────────
+// Scoped flat-array map of (depth, name, type) entries. Handle is
+// a `nurl_zalloc`'d 48-byte block, 6 i64 slots:
+//   0: count          (number of valid entries)
+//   1: depth          (current scope depth — incremented by _push)
+//   2: cap            (current allocated capacity of each array)
+//   3: names_buf  i8* (i8** array, length = cap; strdup'd names)
+//   4: types_buf  i8* (i8** array, length = cap; strdup'd types)
+//   5: depths_buf i8* (i64*  array, length = cap)
+//
+// Three parallel arrays (vs. one array-of-struct in the C version)
+// give nurl_sym_get's hot linear scan better cache locality — the
+// scan only fetches name pointers (8 B per entry, 8 entries per 64 B
+// cache line), and only touches the types array on a match.
+//
+// Grow-by-2× starting at cap=64. The C version preallocated 1M
+// entries (24 MB) per table; this pays only for what each table
+// actually uses. nurl_sym_pop frees every (name, type) strdup at
+// the current depth, matching the C version's pop semantics.
+//
+// nurl_sym_get returns a strdup'd copy of the matched type, or a
+// strdup'd `""` on miss — same contract as the runtime.c §6 body.
+// The C version was sym_def'd as `i8*` (no `__ret_owned`) so callers
+// leak the result; the @-fn below is shaped to avoid Phase 2B's
+// auto-owned tag (returns `^ # s (strdup ...)` with no intervening
+// `: s tmp` binding holding an owned-string call result), preserving
+// the same caller contract.
+
+// IMPLEMENTATION NOTE — `*s` and `*i` pointer arithmetic (`. p k`
+// and `= . p k v`) lowers to a single LLVM load/store, no function
+// call. Every iteration of `nurl_sym_get` is a `strcmp` + a load +
+// a compare + a branch — the same shape as the C version's
+// `if (strcmp(entries[i].name, name) == 0)` loop. The earlier
+// `nurl_peek`/`nurl_poke` pattern made the loop call a runtime
+// function per slot, which LTO didn't fully inline; the wall-clock
+// hit was ~1 s per stage2 compile of nurlc.nu itself.
+
+@ __sym_grow i h → v {
+    : s t # s h
+    : i cap ( nurl_peek t 2 )
+    : i newcap * cap 2
+    : i count ( nurl_peek t 0 )
+    : s names_old # s ( nurl_peek t 3 )
+    : s types_old # s ( nurl_peek t 4 )
+    : s depths_old # s ( nurl_peek t 5 )
+    : s names_new # s ( malloc * newcap 8 )
+    : s types_new # s ( malloc * newcap 8 )
+    : s depths_new # s ( malloc * newcap 8 )
+    : i nbytes * count 8
+    ( memcpy names_new names_old nbytes )
+    ( memcpy types_new types_old nbytes )
+    ( memcpy depths_new depths_old nbytes )
+    ( free names_old )
+    ( free types_old )
+    ( free depths_old )
+    ( nurl_poke t 2 newcap )
+    ( nurl_poke t 3 # i names_new )
+    ( nurl_poke t 4 # i types_new )
+    ( nurl_poke t 5 # i depths_new )
+}
+
+@ nurl_sym_new → i {
+    : s t # s ( nurl_zalloc 48 )
+    ( nurl_poke t 2 64 )
+    ( nurl_poke t 3 # i # s ( malloc * 64 8 ) )
+    ( nurl_poke t 4 # i # s ( malloc * 64 8 ) )
+    ( nurl_poke t 5 # i # s ( malloc * 64 8 ) )
+    ^ # i t
+}
+
+@ nurl_sym_def i h s name s type → v {
+    : s t # s h
+    : i count ( nurl_peek t 0 )
+    : i cap ( nurl_peek t 2 )
+    ? >= count cap { ( __sym_grow h ) } {}
+    // Direct `*s` / `*i` array writes — one LLVM `store` each, no
+    // runtime call. Read after the grow check so a realloc'd base
+    // is picked up.
+    : *s names # *s # s ( nurl_peek t 3 )
+    : *s types # *s # s ( nurl_peek t 4 )
+    : *i depths # *i # s ( nurl_peek t 5 )
+    = . names count # s ( strdup name )
+    = . types count # s ( strdup type )
+    = . depths count ( nurl_peek t 1 )
+    ( nurl_poke t 0 + count 1 )
+}
+
+@ nurl_sym_get i h s name → s {
+    : s t # s h
+    : i count ( nurl_peek t 0 )
+    // Inner loop body is now `strcmp` + load + branch — one C-call,
+    // no `nurl_peek` indirection. Matches the original C version's
+    // `entries[i].name` shape byte-for-byte.
+    : *s names # *s # s ( nurl_peek t 3 )
+    : *s types # *s # s ( nurl_peek t 4 )
+    : ~ i k - count 1
+    ~ >= k 0 {
+        ? == 0 # i ( strcmp name . names k )
+        { ^ # s ( strdup . types k ) }
+        {}
+        = k - k 1
+    }
+    ^ # s ( strdup `` )
+}
+
+@ nurl_sym_push i h → v {
+    : s t # s h
+    ( nurl_poke t 1 + ( nurl_peek t 1 ) 1 )
+}
+
+@ nurl_sym_pop i h → v {
+    : s t # s h
+    : ~ i count ( nurl_peek t 0 )
+    : i depth ( nurl_peek t 1 )
+    : *s names # *s # s ( nurl_peek t 3 )
+    : *s types # *s # s ( nurl_peek t 4 )
+    : *i depths # *i # s ( nurl_peek t 5 )
+    ~ & > count 0 == . depths - count 1 depth {
+        : i idx - count 1
+        ( free . names idx )
+        ( free . types idx )
+        = count - count 1
+    }
+    ( nurl_poke t 0 count )
+    ? > depth 0 { ( nurl_poke t 1 - depth 1 ) } {}
+}
+
+// ══════════════════════════════════════════════════════════════════
+// ── PURIFY.md Phase 10 (2026-05-24): §6a Lexer ───────────────────
+// ══════════════════════════════════════════════════════════════════
+//
+// Pure-NURL replacement for runtime.c §6a. Handle is a `nurl_zalloc`'d
+// 280-byte heap block, 35 i64 slots. Layout (slot offsets):
+//
+//   0:  src       (i8*)         — strdup'd source bytes
+//   1:  filename  (i8*)         — strdup'd filename
+//   2:  pos       (i64)         — current byte position
+//   3:  len       (i64)         — strlen(src) cached at _new
+//   4:  line      (i64)         — current 1-based line number
+//   5-10:  cur token            — always valid after _new primes it
+//   11-16: peek token  + valid  — lookahead 1
+//   17-22: peek2 token + valid  — lookahead 2
+//   23-28: peek3 token + valid  — lookahead 3
+//   29-34: peek4 token + valid  — lookahead 4
+//
+// Token field offsets (relative to token base):
+//   0: type  1: val (i8*)  2: inum  3: line  4: start  5: valid
+//
+// `fnum` is NOT stored (the C version's field was dead — every parser
+// callsite reads `nurl_lex_val` and emits the string form into the
+// LLVM IR directly, never going through `nurl_lex_fnum`). Saves a slot
+// per token + removes the float-bitcast bridge.
+//
+// The token `val` field is a `strdup`'d copy owned by the lexer; the
+// lexer overwrites/leaks it on advance — same lifetime contract as
+// the C version, which never freed token vals either.
+//
+// `nurl_lex_val` returns a fresh `strdup` of the current token's val
+// so callers can stash a stable copy across `nurl_lex_advance` calls.
+// Same contract as runtime.c.
+
+: i LX_SRC      0
+: i LX_FILENAME 1
+: i LX_POS      2
+: i LX_LEN      3
+: i LX_LINE     4
+: i LX_CUR      5
+: i LX_PEEK    11
+: i LX_PEEK2   17
+: i LX_PEEK3   23
+: i LX_PEEK4   29
+
+: i TF_TYPE  0
+: i TF_VAL   1
+: i TF_INUM  2
+: i TF_LINE  3
+: i TF_START 4
+: i TF_VALID 5
+
+: i LX_SIZE 280   // 35 slots × 8 bytes
+
+// ── ASCII byte-class predicates ──────────────────────────────────
+
+@ __lx_is_digit i c → b {
+    ^ & >= c 48 <= c 57
+}
+
+@ __lx_is_alpha i c → b {
+    ^ | & >= c 65 <= c 90 & >= c 97 <= c 122
+}
+
+@ __lx_is_alpha_us i c → b {
+    ^ | ( __lx_is_alpha c ) == c 95
+}
+
+@ __lx_is_ident_cont i c → b {
+    ^ | ( __lx_is_alpha_us c ) ( __lx_is_digit c )
+}
+
+@ __lx_is_space i c → b {
+    ^ | | | == c 32 == c 9 == c 10 == c 13
+}
+
+// ── Token-slot helpers ───────────────────────────────────────────
+
+// Write a complete token into slot at `base`. `val` is taken
+// ownership of (caller must pass an i8* the lexer can hold; usually
+// from strdup or an inline malloc). Marks the slot valid.
+@ __tok_write i lex i base i type s val i inum i line i start → v {
+    : s p # s lex
+    ( nurl_poke p + base TF_TYPE  type )
+    ( nurl_poke p + base TF_VAL   # i val )
+    ( nurl_poke p + base TF_INUM  inum )
+    ( nurl_poke p + base TF_LINE  line )
+    ( nurl_poke p + base TF_START start )
+    ( nurl_poke p + base TF_VALID 1 )
+}
+
+// Copy a token from src_base into dst_base within the same lexer.
+// Both must be valid token-slot bases.
+@ __tok_shift i lex i src_base i dst_base → v {
+    : s p # s lex
+    ( nurl_poke p + dst_base TF_TYPE  ( nurl_peek p + src_base TF_TYPE  ) )
+    ( nurl_poke p + dst_base TF_VAL   ( nurl_peek p + src_base TF_VAL   ) )
+    ( nurl_poke p + dst_base TF_INUM  ( nurl_peek p + src_base TF_INUM  ) )
+    ( nurl_poke p + dst_base TF_LINE  ( nurl_peek p + src_base TF_LINE  ) )
+    ( nurl_poke p + dst_base TF_START ( nurl_peek p + src_base TF_START ) )
+    ( nurl_poke p + dst_base TF_VALID 1 )
+}
+
+// ── Whitespace + comment skip ────────────────────────────────────
+
+@ __lx_skip_ws i lex → v {
+    : s p # s lex
+    : *u src # *u # s ( nurl_peek p LX_SRC )
+    : i len ( nurl_peek p LX_LEN )
+    : ~ i pos ( nurl_peek p LX_POS )
+    : ~ i line ( nurl_peek p LX_LINE )
+    : ~ b done F
+    ~ ! done {
+        : ~ b ws_done F
+        ~ ! ws_done {
+            ? >= pos len { = ws_done T } {
+                : i c & # i . src pos 255
+                ? ( __lx_is_space c ) {
+                    ? == c 10 { = line + line 1 } {}
+                    = pos + pos 1
+                } { = ws_done T }
+            }
+        }
+        ? & & < + pos 1 len
+            == & # i . src pos 255 47
+            == & # i . src + pos 1 255 47 {
+            // line comment — skip to end of line (exclusive of '\n').
+            ~ & < pos len != & # i . src pos 255 10 { = pos + pos 1 }
+        } { = done T }
+    }
+    ( nurl_poke p LX_POS pos )
+    ( nurl_poke p LX_LINE line )
+}
+
+// ── Lex one token, write into slot at `base`.
+// Reads from current lexer pos; advances pos to point past the token.
+// Updates line if the token consumed a newline (only backtick strings
+// can do that). Always produces a token (TT_EOF at end of input).
+
+@ __lex_one i lex i base → v {
+    ( __lx_skip_ws lex )
+    : s p # s lex
+    : *u src # *u # s ( nurl_peek p LX_SRC )
+    : i len ( nurl_peek p LX_LEN )
+    : ~ i pos ( nurl_peek p LX_POS )
+    : ~ i line ( nurl_peek p LX_LINE )
+    : i start pos
+    : ~ b done F
+
+    // ── EOF ──
+    ? >= pos len {
+        ( __tok_write lex base TT_EOF # i ( strdup `` ) 0 line start )
+        = done T
+    } {}
+
+    // ── UTF-8 arrow → (E2 86 92) ──
+    ? ! done {
+        ? & & & < + pos 2 len
+            == & # i . src pos 255 226
+            == & # i . src + pos 1 255 134
+            == & # i . src + pos 2 255 146 {
+            = pos + pos 3
+            ( __tok_write lex base TT_ARROW # i ( strdup `→` ) 0 line start )
+            = done T
+        } {}
+    } {}
+
+    // ── Backtick string with \n \t \r \\ escape handling ──
+    //
+    // IMPORTANT: only the four sequences `\n` `\t` `\r` `\\` are
+    // recognised as escapes. Any other `\X` (including `\``) writes
+    // the lone `\` to the output and ADVANCES BY ONE byte — so a
+    // backtick following a backslash terminates the string in the
+    // normal way. This matches the historic C lexer's behaviour
+    // verbatim; treating `\\`` as an escape (the obvious-looking
+    // bug) breaks comment skipping for any line with backticked
+    // content because the string then consumes the rest of the
+    // file. The two loops below (scan-for-end + fill) must both use
+    // the same is-real-escape predicate.
+    //
+    // Escapes only shrink output, so the byte span between the
+    // backticks (+1 for NUL) is always a sufficient allocation.
+    ? ! done {
+        ? == & # i . src pos 255 96 {
+            : i str_open + pos 1
+            : ~ i scan str_open
+            : ~ i scan_line line
+            ~ & < scan len != & # i . src scan 255 96 {
+                ? == & # i . src scan 255 10 { = scan_line + scan_line 1 } {}
+                ? & == & # i . src scan 255 92 < + scan 1 len {
+                    : i nx & # i . src + scan 1 255
+                    ? | | | == nx 110 == nx 116 == nx 114 == nx 92 {
+                        = scan + scan 2
+                    } {
+                        = scan + scan 1
+                    }
+                } {
+                    = scan + scan 1
+                }
+            }
+            : i raw_len - scan str_open
+            : s buf # s ( malloc + raw_len 1 )
+            : *u bp # *u buf
+            : ~ i blen 0
+            : ~ i rp str_open
+            ~ < rp scan {
+                : i ch & # i . src rp 255
+                ? & == ch 92 < + rp 1 scan {
+                    : i nx & # i . src + rp 1 255
+                    ? == nx 110 {
+                        = . bp blen # u 10  = blen + blen 1  = rp + rp 2
+                    } {
+                        ? == nx 116 {
+                            = . bp blen # u 9   = blen + blen 1  = rp + rp 2
+                        } {
+                            ? == nx 114 {
+                                = . bp blen # u 13  = blen + blen 1  = rp + rp 2
+                            } {
+                                ? == nx 92 {
+                                    = . bp blen # u 92  = blen + blen 1  = rp + rp 2
+                                } {
+                                    // unknown \X — write the lone `\`
+                                    // and advance 1 byte; the next
+                                    // iteration handles X normally.
+                                    = . bp blen # u ch
+                                    = blen + blen 1
+                                    = rp + rp 1
+                                }
+                            }
+                        }
+                    }
+                } {
+                    = . bp blen # u ch    = blen + blen 1    = rp + rp 1
+                }
+            }
+            = . bp blen # u 0
+            = line scan_line
+            = pos ? < scan len + scan 1 scan  // skip closing ` if present
+            ( __tok_write lex base TT_STR buf 0 line start )
+            = done T
+        } {}
+    } {}
+
+    // ── Negative integer / float literal: '-' immediately followed
+    //    by a digit. The unary-minus binary operator is written with
+    //    whitespace (`- a b`); a tight `-5` is a single token.
+    ? ! done {
+        ? & == & # i . src pos 255 45
+            & < + pos 1 len
+            ( __lx_is_digit & # i . src + pos 1 255 ) {
+            : i lit_start pos
+            = pos + pos 1   // consume '-'
+            ~ & < pos len ( __lx_is_digit & # i . src pos 255 ) { = pos + pos 1 }
+            : ~ b is_float F
+            ? & & < + pos 1 len
+                == & # i . src pos 255 46
+                ( __lx_is_digit & # i . src + pos 1 255 ) {
+                = is_float T
+                = pos + pos 1
+                ~ & < pos len ( __lx_is_digit & # i . src pos 255 ) { = pos + pos 1 }
+                ? & < pos len
+                    | == & # i . src pos 255 101
+                      == & # i . src pos 255 69 {
+                    = pos + pos 1
+                    ? & < pos len
+                        | == & # i . src pos 255 43
+                          == & # i . src pos 255 45 {
+                        = pos + pos 1
+                    } {}
+                    ~ & < pos len ( __lx_is_digit & # i . src pos 255 ) { = pos + pos 1 }
+                } {}
+            } {}
+            // Materialise the literal text as an owned string.
+            : i n - pos lit_start
+            : s sv # s ( malloc + n 1 )
+            ( memcpy sv # s + # i # *u # s ( nurl_peek p LX_SRC ) lit_start n )
+            : *u svp # *u sv
+            = . svp n # u 0
+            ? is_float {
+                ( __tok_write lex base TT_FLOAT sv 0 line start )
+            } {
+                ( __tok_write lex base TT_INT sv ( atoll sv ) line start )
+            }
+            = done T
+        } {}
+    } {}
+
+    // ── Plain integer or float literal ──
+    ? ! done {
+        ? ( __lx_is_digit & # i . src pos 255 ) {
+            : i lit_start pos
+            ~ & < pos len ( __lx_is_digit & # i . src pos 255 ) { = pos + pos 1 }
+            : ~ b is_float F
+            ? & & < + pos 1 len
+                == & # i . src pos 255 46
+                ( __lx_is_digit & # i . src + pos 1 255 ) {
+                = is_float T
+                = pos + pos 1
+                ~ & < pos len ( __lx_is_digit & # i . src pos 255 ) { = pos + pos 1 }
+                ? & < pos len
+                    | == & # i . src pos 255 101
+                      == & # i . src pos 255 69 {
+                    = pos + pos 1
+                    ? & < pos len
+                        | == & # i . src pos 255 43
+                          == & # i . src pos 255 45 {
+                        = pos + pos 1
+                    } {}
+                    ~ & < pos len ( __lx_is_digit & # i . src pos 255 ) { = pos + pos 1 }
+                } {}
+            } {}
+            : i n - pos lit_start
+            : s sv # s ( malloc + n 1 )
+            ( memcpy sv # s + # i # *u # s ( nurl_peek p LX_SRC ) lit_start n )
+            : *u svp # *u sv
+            = . svp n # u 0
+            ? is_float {
+                ( __tok_write lex base TT_FLOAT sv 0 line start )
+            } {
+                ( __tok_write lex base TT_INT sv ( atoll sv ) line start )
+            }
+            = done T
+        } {}
+    } {}
+
+    // ── Identifier / keyword ──
+    ? ! done {
+        ? ( __lx_is_alpha_us & # i . src pos 255 ) {
+            : i id_start pos
+            ~ & < pos len ( __lx_is_ident_cont & # i . src pos 255 ) { = pos + pos 1 }
+            // Namespace `::` merge — a::b[::c...] becomes a__b[__c...].
+            // Each `::` is exactly two ASCII bytes followed by an
+            // ident-start char (alpha or _).
+            ~ & & < + pos 2 len
+                & == & # i . src pos 255 58
+                  == & # i . src + pos 1 255 58
+                ( __lx_is_alpha_us & # i . src + pos 2 255 ) {
+                = pos + pos 2
+                ~ & < pos len ( __lx_is_ident_cont & # i . src pos 255 ) { = pos + pos 1 }
+            }
+            // Materialise the identifier text.
+            : i n - pos id_start
+            : s id # s ( malloc + n 1 )
+            ( memcpy id # s + # i # *u # s ( nurl_peek p LX_SRC ) id_start n )
+            : *u idp # *u id
+            // Rewrite any `::` (two colons) found in `id` to `__`.
+            : ~ i k 0
+            ~ < k n {
+                ? & == & # i . idp k 255 58
+                    & < + k 1 n
+                    == & # i . idp + k 1 255 58 {
+                    = . idp k # u 95
+                    = . idp + k 1 # u 95
+                    = k + k 2
+                } {
+                    = k + k 1
+                }
+            }
+            = . idp n # u 0
+            : i ttype TT_IDENT
+            : i inum 0
+            // Bool literals, sizeof, pub, base type kws (`i u f b s v`),
+            // and fixed-width int/float kws (i8/i16/i32/i64/u16/u32/u64/f32).
+            ? == n 1 {
+                : i c0 & # i . idp 0 255
+                ? == c0 84 { = ttype TT_BOOL = inum 1 } {}    // 'T'
+                ? == c0 70 { = ttype TT_BOOL = inum 0 } {}    // 'F'
+                ? == c0 90 { = ttype TT_SIZEOF } {}            // 'Z'
+                ? | | | | | == c0 105 == c0 117 == c0 102 == c0 98 == c0 115 == c0 118 {
+                    = ttype TT_TYPE_KW
+                } {}
+            } {}
+            ? & == ttype TT_IDENT == n 3 {
+                ? & == & # i . idp 0 255 112
+                    & == & # i . idp 1 255 117
+                      == & # i . idp 2 255 98 {
+                    = ttype TT_PUB
+                } {}
+            } {}
+            ? & == ttype TT_IDENT | | == n 2 == n 3 == n 4 {
+                // i8 i16 i32 i64 u16 u32 u64 f32
+                : i c0 & # i . idp 0 255
+                ? | | == c0 105 == c0 117 == c0 102 {
+                    ? == n 2 {
+                        : i c1 & # i . idp 1 255
+                        ? == c1 56 { = ttype TT_TYPE_KW } {}   // 'i8'
+                    } {}
+                    ? == n 3 {
+                        : i c1 & # i . idp 1 255
+                        : i c2 & # i . idp 2 255
+                        ? & == c1 49 == c2 54 { = ttype TT_TYPE_KW } {}   // ?16
+                        ? & == c1 51 == c2 50 { = ttype TT_TYPE_KW } {}   // ?32
+                        ? & == c1 54 == c2 52 { = ttype TT_TYPE_KW } {}   // ?64
+                    } {}
+                } {}
+            } {}
+            ( __tok_write lex base ttype id inum line start )
+            = done T
+        } {}
+    } {}
+
+    // ── Three-char `...` ellipsis ──
+    ? ! done {
+        ? & & < + pos 2 len
+            == & # i . src pos 255 46
+            & == & # i . src + pos 1 255 46
+              == & # i . src + pos 2 255 46 {
+            = pos + pos 3
+            ( __tok_write lex base TT_ELLIPSIS # i ( strdup `...` ) 0 line start )
+            = done T
+        } {}
+    } {}
+
+    // ── Two-char operators ──
+    ? ! done {
+        ? < + pos 1 len {
+            : i c1 & # i . src pos 255
+            : i c2 & # i . src + pos 1 255
+            ? & == c1 61 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_EQEQ       # i ( strdup `==` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 33 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_NE         # i ( strdup `!=` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 60 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_LE         # i ( strdup `<=` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 62 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_GE         # i ( strdup `>=` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 60 == c2 60 { = pos + pos 2 ( __tok_write lex base TT_SHL        # i ( strdup `<<` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 62 == c2 62 { = pos + pos 2 ( __tok_write lex base TT_SHR        # i ( strdup `>>` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 63 == c2 63 { = pos + pos 2 ( __tok_write lex base TT_QUESTQUEST # i ( strdup `??` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 94 == c2 94 { = pos + pos 2 ( __tok_write lex base TT_CARETCARET # i ( strdup `^^` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 124 == c2 124 { = pos + pos 2 ( __tok_write lex base TT_OROR     # i ( strdup `||` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 38 == c2 38 { = pos + pos 2 ( __tok_write lex base TT_ANDAND     # i ( strdup `&&` ) 0 line start ) = done T } {}
+        } {}
+    } {}
+
+    // ── Single-char operators (fallback) ──
+    ? ! done {
+        : i c & # i . src pos 255
+        = pos + pos 1
+        ? == c 64  { ( __tok_write lex base TT_AT        # i ( strdup `@`  ) 0 line start ) = done T } {}
+        ? & ! done == c 58 { ( __tok_write lex base TT_COLON     # i ( strdup `:`  ) 0 line start ) = done T } {}
+        ? & ! done == c 61 { ( __tok_write lex base TT_EQ        # i ( strdup `=`  ) 0 line start ) = done T } {}
+        ? & ! done == c 94 { ( __tok_write lex base TT_CARET     # i ( strdup `^`  ) 0 line start ) = done T } {}
+        ? & ! done == c 63 { ( __tok_write lex base TT_QUEST     # i ( strdup `?`  ) 0 line start ) = done T } {}
+        ? & ! done == c 126 { ( __tok_write lex base TT_TILDE    # i ( strdup `~`  ) 0 line start ) = done T } {}
+        ? & ! done == c 40 { ( __tok_write lex base TT_LPAREN    # i ( strdup `(`  ) 0 line start ) = done T } {}
+        ? & ! done == c 41 { ( __tok_write lex base TT_RPAREN    # i ( strdup `)`  ) 0 line start ) = done T } {}
+        ? & ! done == c 123 { ( __tok_write lex base TT_LBRACE   # i ( strdup `{`  ) 0 line start ) = done T } {}
+        ? & ! done == c 125 { ( __tok_write lex base TT_RBRACE   # i ( strdup `}`  ) 0 line start ) = done T } {}
+        ? & ! done == c 46 { ( __tok_write lex base TT_DOT       # i ( strdup `.`  ) 0 line start ) = done T } {}
+        ? & ! done == c 35 { ( __tok_write lex base TT_HASH      # i ( strdup `#`  ) 0 line start ) = done T } {}
+        ? & ! done == c 33 { ( __tok_write lex base TT_BANG      # i ( strdup `!`  ) 0 line start ) = done T } {}
+        ? & ! done == c 43 { ( __tok_write lex base TT_PLUS      # i ( strdup `+`  ) 0 line start ) = done T } {}
+        ? & ! done == c 45 { ( __tok_write lex base TT_MINUS     # i ( strdup `-`  ) 0 line start ) = done T } {}
+        ? & ! done == c 42 { ( __tok_write lex base TT_STAR      # i ( strdup `*`  ) 0 line start ) = done T } {}
+        ? & ! done == c 47 { ( __tok_write lex base TT_SLASH     # i ( strdup `/`  ) 0 line start ) = done T } {}
+        ? & ! done == c 37 { ( __tok_write lex base TT_PERCENT   # i ( strdup `%`  ) 0 line start ) = done T } {}
+        ? & ! done == c 38 { ( __tok_write lex base TT_AMP       # i ( strdup `&`  ) 0 line start ) = done T } {}
+        ? & ! done == c 124 { ( __tok_write lex base TT_PIPE     # i ( strdup `|`  ) 0 line start ) = done T } {}
+        ? & ! done == c 60 { ( __tok_write lex base TT_LT        # i ( strdup `<`  ) 0 line start ) = done T } {}
+        ? & ! done == c 62 { ( __tok_write lex base TT_GT        # i ( strdup `>`  ) 0 line start ) = done T } {}
+        ? & ! done == c 91 { ( __tok_write lex base TT_LBRACK    # i ( strdup `[`  ) 0 line start ) = done T } {}
+        ? & ! done == c 93 { ( __tok_write lex base TT_RBRACK    # i ( strdup `]`  ) 0 line start ) = done T } {}
+        ? & ! done == c 59 { ( __tok_write lex base TT_SEMICOL   # i ( strdup `;`  ) 0 line start ) = done T } {}
+        ? & ! done == c 92 { ( __tok_write lex base TT_BACKSLASH # i ( strdup `\\` ) 0 line start ) = done T } {}
+        ? & ! done == c 36 { ( __tok_write lex base TT_DOLLAR    # i ( strdup `$`  ) 0 line start ) = done T } {}
+        // Unknown byte — emit IDENT "?XX" so caller can diagnose.
+        ? ! done {
+            : s buf # s ( malloc 4 )
+            : *u bp # *u buf
+            = . bp 0 # u 63   // '?'
+            : i hi / c 16
+            : i lo & c 15
+            = . bp 1 # u + ? < hi 10 + 48 hi + 55 hi 0
+            = . bp 2 # u + ? < lo 10 + 48 lo + 55 lo 0
+            = . bp 3 # u 0
+            ( __tok_write lex base TT_IDENT buf 0 line start )
+            = done T
+        } {}
+    } {}
+
+    ( nurl_poke p LX_POS pos )
+    ( nurl_poke p LX_LINE line )
+}
+
+// ── Public API ───────────────────────────────────────────────────
+
+@ nurl_lex_new s src s filename → i {
+    : s lx # s ( nurl_zalloc LX_SIZE )
+    ( nurl_poke lx LX_SRC      # i ( strdup src ) )
+    ( nurl_poke lx LX_FILENAME # i ( strdup filename ) )
+    ( nurl_poke lx LX_POS      0 )
+    ( nurl_poke lx LX_LEN      ( strlen src ) )
+    ( nurl_poke lx LX_LINE     1 )
+    // Prime cur token.
+    ( __lex_one # i lx LX_CUR )
+    ^ # i lx
+}
+
+@ nurl_lex_type i h → i {
+    : s p # s h
+    ^ ( nurl_peek p + LX_CUR TF_TYPE )
+}
+
+@ nurl_lex_val i h → s {
+    : s p # s h
+    ^ # s ( strdup # s ( nurl_peek p + LX_CUR TF_VAL ) )
+}
+
+@ nurl_lex_inum i h → i {
+    : s p # s h
+    ^ ( nurl_peek p + LX_CUR TF_INUM )
+}
+
+// fnum: re-parse the val on demand. nurl_lex_fnum has no caller in
+// the compiler or stdlib today (the float-literal codepath emits the
+// val string directly into the LLVM IR), but the symbol stays for
+// backward-compat with any external code that may declare it.
+@ nurl_lex_fnum i h → f {
+    : s p # s h
+    : s v # s ( nurl_peek p + LX_CUR TF_VAL )
+    ^ ( atof v )
+}
+
+@ nurl_lex_line i h → i {
+    : s p # s h
+    ^ ( nurl_peek p + LX_CUR TF_LINE )
+}
+
+@ nurl_lex_filename i h → s {
+    : s p # s h
+    ^ # s ( strdup # s ( nurl_peek p LX_FILENAME ) )
+}
+
+@ nurl_lex_cur_start i h → i {
+    : s p # s h
+    ^ ( nurl_peek p + LX_CUR TF_START )
+}
+
+// Walk back from cur.start_pos to the previous '\n' (or BOF) counting
+// bytes. UTF-8 multibyte chars bump the column by their byte count;
+// editors that measure post-newline bytes still land on the right
+// line:col since both they and the lexer count bytes.
+@ nurl_lex_col i h → i {
+    : s p # s h
+    : *u src # *u # s ( nurl_peek p LX_SRC )
+    : i len ( nurl_peek p LX_LEN )
+    : ~ i pos ( nurl_peek p + LX_CUR TF_START )
+    ? < pos 0 { = pos 0 } {}
+    ? > pos len { = pos len } {}
+    : ~ i col 1
+    ~ & > pos 0 != & # i . src - pos 1 255 10 { = pos - pos 1   = col + col 1 }
+    ^ col
+}
+
+// Return the source text of the line containing the current token,
+// with tabs expanded to single spaces so caller-rendered caret
+// pointers line up. Heap-allocated; caller does not free (process
+// is about to exit).
+@ nurl_lex_line_text i h → s {
+    : s p # s h
+    : *u src # *u # s ( nurl_peek p LX_SRC )
+    : i len ( nurl_peek p LX_LEN )
+    : ~ i base ( nurl_peek p + LX_CUR TF_START )
+    ? < base 0 { = base 0 } {}
+    ? > base len { = base len } {}
+    : ~ i line_start base
+    ~ & > line_start 0 != & # i . src - line_start 1 255 10 { = line_start - line_start 1 }
+    : ~ i line_end base
+    ~ & < line_end len != & # i . src line_end 255 10 { = line_end + line_end 1 }
+    ? & > line_end line_start == & # i . src - line_end 1 255 13 { = line_end - line_end 1 } {}
+    : i n - line_end line_start
+    : s out # s ( malloc + n 1 )
+    : *u op # *u out
+    : ~ i i 0
+    ~ < i n {
+        : i c & # i . src + line_start i 255
+        = . op i # u ? == c 9 32 c
+        = i + i 1
+    }
+    = . op n # u 0
+    ^ out
+}
+
+// Build a `pad` space + '^' caret pointer for diagnostics.
+@ nurl_diag_caret i col → s {
+    : ~ i pad ? > col 0 - col 1 0
+    ? > pad 4096 { = pad 4096 } {}
+    : s out # s ( malloc + pad 2 )
+    : *u op # *u out
+    : ~ i i 0
+    ~ < i pad { = . op i # u 32   = i + i 1 }
+    = . op pad # u 94
+    = . op + pad 1 # u 0
+    ^ out
+}
+
+@ nurl_lex_src_slice i h i start i n → s {
+    : s p # s h
+    : i len ( nurl_peek p LX_LEN )
+    : ~ i st start
+    : ~ i k n
+    ? < st 0 { = st 0 } {}
+    ? > st len { = st len } {}
+    : i avail - len st
+    ? < k 0 { = k 0 } {}
+    ? > k avail { = k avail } {}
+    : s out # s ( malloc + k 1 )
+    ( memcpy out # s + # i # *u # s ( nurl_peek p LX_SRC ) st k )
+    : *u op # *u out
+    = . op k # u 0
+    ^ out
+}
+
+@ nurl_lex_set_pos i h i new_pos → v {
+    : s p # s h
+    : *u src # *u # s ( nurl_peek p LX_SRC )
+    : i len ( nurl_peek p LX_LEN )
+    : ~ i np new_pos
+    ? < np 0 { = np 0 } {}
+    ? > np len { = np len } {}
+    // Invalidate lookahead.
+    ( nurl_poke p + LX_PEEK  TF_VALID 0 )
+    ( nurl_poke p + LX_PEEK2 TF_VALID 0 )
+    ( nurl_poke p + LX_PEEK3 TF_VALID 0 )
+    ( nurl_poke p + LX_PEEK4 TF_VALID 0 )
+    // Recompute line by scanning from start of src.
+    : ~ i line 1
+    : ~ i i 0
+    ~ & < i np < i len {
+        ? == & # i . src i 255 10 { = line + line 1 } {}
+        = i + i 1
+    }
+    ( nurl_poke p LX_POS np )
+    ( nurl_poke p LX_LINE line )
+    ( __lex_one # i p LX_CUR )
+}
+
+// Shift cur ← peek ← peek2 ← peek3 ← peek4; reload tail. Drops the
+// old cur (leaks its val string — same as the C version).
+@ nurl_lex_advance i h → v {
+    : s p # s h
+    ? != 0 ( nurl_peek p + LX_PEEK TF_VALID ) {
+        ( __tok_shift # i p LX_PEEK LX_CUR )
+        ? != 0 ( nurl_peek p + LX_PEEK2 TF_VALID ) {
+            ( __tok_shift # i p LX_PEEK2 LX_PEEK )
+            ? != 0 ( nurl_peek p + LX_PEEK3 TF_VALID ) {
+                ( __tok_shift # i p LX_PEEK3 LX_PEEK2 )
+                ? != 0 ( nurl_peek p + LX_PEEK4 TF_VALID ) {
+                    ( __tok_shift # i p LX_PEEK4 LX_PEEK3 )
+                    ( nurl_poke p + LX_PEEK4 TF_VALID 0 )
+                } {
+                    ( nurl_poke p + LX_PEEK3 TF_VALID 0 )
+                }
+            } {
+                ( nurl_poke p + LX_PEEK2 TF_VALID 0 )
+            }
+        } {
+            ( nurl_poke p + LX_PEEK TF_VALID 0 )
+        }
+    } {
+        ( __lex_one # i p LX_CUR )
+    }
+}
+
+@ nurl_lex_peek_type i h → i {
+    : s p # s h
+    ? == 0 ( nurl_peek p + LX_PEEK TF_VALID ) {
+        ( __lex_one # i p LX_PEEK )
+    } {}
+    ^ ( nurl_peek p + LX_PEEK TF_TYPE )
+}
+
+@ nurl_lex_peek2_type i h → i {
+    : s p # s h
+    ? == 0 ( nurl_peek p + LX_PEEK TF_VALID ) { ( __lex_one # i p LX_PEEK ) } {}
+    ? == 0 ( nurl_peek p + LX_PEEK2 TF_VALID ) { ( __lex_one # i p LX_PEEK2 ) } {}
+    ^ ( nurl_peek p + LX_PEEK2 TF_TYPE )
+}
+
+@ nurl_lex_peek3_type i h → i {
+    : s p # s h
+    ? == 0 ( nurl_peek p + LX_PEEK TF_VALID ) { ( __lex_one # i p LX_PEEK ) } {}
+    ? == 0 ( nurl_peek p + LX_PEEK2 TF_VALID ) { ( __lex_one # i p LX_PEEK2 ) } {}
+    ? == 0 ( nurl_peek p + LX_PEEK3 TF_VALID ) { ( __lex_one # i p LX_PEEK3 ) } {}
+    ^ ( nurl_peek p + LX_PEEK3 TF_TYPE )
+}
+
+@ nurl_lex_peek4_type i h → i {
+    : s p # s h
+    ? == 0 ( nurl_peek p + LX_PEEK TF_VALID ) { ( __lex_one # i p LX_PEEK ) } {}
+    ? == 0 ( nurl_peek p + LX_PEEK2 TF_VALID ) { ( __lex_one # i p LX_PEEK2 ) } {}
+    ? == 0 ( nurl_peek p + LX_PEEK3 TF_VALID ) { ( __lex_one # i p LX_PEEK3 ) } {}
+    ? == 0 ( nurl_peek p + LX_PEEK4 TF_VALID ) { ( __lex_one # i p LX_PEEK4 ) } {}
+    ^ ( nurl_peek p + LX_PEEK4 TF_TYPE )
+}
+
 @ __is_operator_callee i tt → b {
     ? == tt TT_DOT { ^ T } {}
     ? == tt TT_HASH { ^ T } {}
@@ -7391,7 +8516,7 @@
     : i word_start 0
     ~ < pos slen {
         : i ch ( nurl_str_get src pos )
-        : b is_ident | | != ( nurl_is_alpha ch ) 0 != ( nurl_is_digit ch ) 0 == ch 95
+        : b is_ident ( __is_ident_char ch )
         ? is_ident
         { = pos + pos 1 }
         { ? > pos word_start
@@ -8697,7 +9822,7 @@
                 = pos + pos 1
                 = word_start pos
             }
-            { : b is_id | | != ( nurl_is_alpha ch ) 0 != ( nurl_is_digit ch ) 0 == ch 95
+            { : b is_id ( __is_ident_char ch )
                 ? is_id
                 { = pos + pos 1 }
                 { ? > pos word_start
@@ -8844,6 +9969,40 @@
     ( emit `declare i32  @printf(i8*, ...)` )
     ( emit `declare i8*  @malloc(i64)` )
     ( emit `declare void @free(i8*)` )
+    // libc string / parse primitives — used by pure-NURL replacements
+    // for the historic `nurl_str_*` C wrappers (PURIFY.md Phase 5,
+    // 2026-05-23). These are globally-callable from NURL programs
+    // and from `nurlc.nu` itself. Returns mapped at their native C
+    // widths (i32 for int-returners, i8* for ptr-returners); NURL
+    // callers do their own widening via `# i` if they need i64.
+    ( emit `declare i64  @strlen(i8*)` )
+    ( emit `declare i32  @strcmp(i8*, i8*)` )
+    ( emit `declare i32  @strncmp(i8*, i8*, i64)` )
+    ( emit `declare i32  @memcmp(i8*, i8*, i64)` )
+    ( emit `declare i8*  @strstr(i8*, i8*)` )
+    ( emit `declare i8*  @memmem(i8*, i64, i8*, i64)` )
+    ( emit `declare i64  @atoll(i8*)` )
+    ( emit `declare double @atof(i8*)` )
+    ( emit `declare double @strtod(i8*, i8**)` )
+    ( emit `declare i8*  @memcpy(i8*, i8*, i64)` )
+    ( emit `declare i8*  @strdup(i8*)` )
+    // libc stdio primitives — used by pure-NURL replacements for the
+    // historic `nurl_file_*` C wrappers (PURIFY.md Phase 7, 2026-05-23).
+    ( emit `declare i8*  @fopen(i8*, i8*)` )
+    ( emit `declare i32  @fclose(i8*)` )
+    ( emit `declare i32  @fputs(i8*, i8*)` )
+    ( emit `declare i64  @fwrite(i8*, i64, i64, i8*)` )
+    ( emit `declare i32  @fputc(i32, i8*)` )
+    ( emit `declare i64  @fread(i8*, i64, i64, i8*)` )
+    ( emit `declare i32  @feof(i8*)` )
+    // fseek/ftell — POSIX stdio file-position primitives. Pure-NURL
+    // file_size + future random-access I/O use these to learn the
+    // file's length without going through `stat(2)` (whose `struct
+    // stat` layout varies per platform). SEEK_END = 2 universally.
+    ( emit `declare i32  @fseek(i8*, i64, i32)` )
+    ( emit `declare i64  @ftell(i8*)` )
+    // POSIX access(2) for nurl_file_exists pure-NURL @-fn (Phase 7).
+    ( emit `declare i32  @access(i8*, i32)` )
     ( emit `declare void @nurl_init(i32, i8**)` )
     ( emit `declare void @nurl_print(i8*)` )
     ( emit `declare void @nurl_eprint(i8*)` )
@@ -8857,21 +10016,23 @@
     ( emit `declare i64  @nurl_stdin_eof()` )
     ( emit `declare void @nurl_flush_stdout()` )
     ( emit `declare void @nurl_flush_stderr()` )
-    ( emit `declare i64  @nurl_str_len(i8*)` )
-    ( emit `declare i64  @nurl_str_get(i8*, i64)` )
-    ( emit `declare i64  @nurl_str_eq(i8*, i8*)` )
-    ( emit `declare i64  @nurl_str_cmp(i8*, i8*)` )
-    ( emit `declare i8*  @nurl_str_cat(i8*, i8*)` )
-    ( emit `declare i8*  @nurl_str_cat3(i8*, i8*, i8*)` )
-    ( emit `declare i8*  @nurl_str_cat4(i8*, i8*, i8*, i8*)` )
+    // PURIFY.md Phase 5 Batch C (2026-05-23): nurl_str_get / _cat /
+    // _cat3 / _cat4 / _slice / _parse_int_range are pure-NURL @-fns
+    // now — declares dropped to avoid clashing with their `define`s
+    // in user code (and the local copies inside nurlc.nu itself).
+    // Batch D' (2026-05-23): _parse_float_range joined them via
+    // strtod. _str_int stays in C — 72 corpus tests use it without
+    // importing stdlib/core/string.nu, and the cost-vs-savings
+    // doesn't justify churning them until a prelude lands. Only
+    // _str_float (printf-family %g, Grisu/Ryu TODO) stays beside it.
     ( emit `declare i8*  @nurl_str_int(i64)` )
     ( emit `declare i8*  @nurl_str_float(double)` )
-    ( emit `declare i64  @nurl_str_to_int(i8*)` )
-    ( emit `declare double @nurl_str_to_float(i8*)` )
-    ( emit `declare i64    @nurl_parse_int_range(i8*, i64)` )
-    ( emit `declare double @nurl_parse_float_range(i8*, i64)` )
-    ( emit `declare i64    @nurl_memcmp_lex(i8*, i64, i8*, i64)` )
-    ( emit `declare i64    @nurl_memmem_range(i8*, i64, i8*, i64)` )
+    // PURIFY.md Phase 5 (2026-05-23): nurl_str_len / _eq / _cmp /
+    // _to_int / _to_float / _starts / _find / _ends / _memmem_range /
+    // _memcmp_lex are pure-NURL @-fns now (libc-thin wrappers
+    // calling strlen / strcmp / strncmp / strstr / memcmp / memmem /
+    // atoll / atof directly via the global preamble declarations
+    // emitted above).
     ( emit `declare i64    @nurl_csv_scan_cell(i8*, i64, i64)` )
     ( emit `declare i64    @nurl_csv_filter_float_gt(i8*, i8*, i64*, i64*, i64*, i64, i64, double)` )
     ( emit `declare i64    @nurl_csv_filter_str_contains(i8*, i8*, i64*, i64*, i64*, i64, i64, i8*, i64)` )
@@ -8887,111 +10048,61 @@
     ( emit `declare i64    @nurl_csv_scan_row_pairs(i8*, i64, i64, i64, i64*, i64)` )
     ( emit `declare i64    @nurl_csv_row_n_cells_out()` )
     ( emit `declare i64    @nurl_csv_row_next_pos_out()` )
-    ( emit `declare i8*  @nurl_str_slice(i8*, i64, i64)` )
-    ( emit `declare i64  @nurl_str_starts(i8*, i8*)` )
-    ( emit `declare i64  @nurl_str_find(i8*, i8*)` )
-    ( emit `declare i64  @nurl_map_new()` )
-    ( emit `declare void @nurl_map_put(i64, i8*, i64)` )
-    ( emit `declare i64  @nurl_map_get(i64, i8*)` )
-    ( emit `declare i64  @nurl_map_has(i64, i8*)` )
-    ( emit `declare void @nurl_map_del(i64, i8*)` )
-    ( emit `declare i64  @nurl_map_size(i64)` )
-    ( emit `declare void @nurl_map_free(i64)` )
-    ( emit `declare i64  @nurl_is_alpha(i64)` )
-    ( emit `declare i64  @nurl_is_digit(i64)` )
-    ( emit `declare i64  @nurl_is_space(i64)` )
-    ( emit `declare i64  @nurl_is_alnum_(i64)` )
+    // nurl_str_slice — pure-NURL @-fn (PURIFY.md Phase 5 Batch C).
+    // PURIFY.md Phase 9c (2026-05-24): nurl_map_* (string→i64
+    // djb2-chained map) was removed from runtime.c §5; user code
+    // should use the generic `stdlib/std/hashmap.nu` HashMap[K V]
+    // at [s i] instead. See `compiler/tests/hashmap.nu` for the
+    // ported example.
     ( emit `declare i8*  @nurl_read_file(i8*)` )
     ( emit `declare void @nurl_exit(i64)` )
     ( emit `declare i64  @nurl_argc()` )
     ( emit `declare i8*  @nurl_argv(i64)` )
     ( emit `declare i64  @nurl_argv_count()` )
     ( emit `declare i8*  @nurl_argv_get(i64)` )
-    ( emit `declare i64  @nurl_lex_new(i8*, i8*)` )
-    ( emit `declare i64  @nurl_lex_type(i64)` )
-    ( emit `declare i8*  @nurl_lex_val(i64)` )
-    ( emit `declare i64    @nurl_lex_inum(i64)` )
-    ( emit `declare double @nurl_lex_fnum(i64)` )
-    ( emit `declare void   @nurl_lex_advance(i64)` )
-    ( emit `declare i64  @nurl_lex_peek_type(i64)` )
-    ( emit `declare i64  @nurl_lex_peek2_type(i64)` )
-    ( emit `declare i64  @nurl_lex_peek3_type(i64)` )
-    ( emit `declare i64  @nurl_lex_peek4_type(i64)` )
-    ( emit `declare i64  @nurl_lex_line(i64)` )
-    ( emit `declare i64  @nurl_lex_col(i64)` )
-    ( emit `declare i8*  @nurl_lex_line_text(i64)` )
-    ( emit `declare i8*  @nurl_diag_caret(i64)` )
-    ( emit `declare i64  @nurl_lex_cur_start(i64)` )
-    ( emit `declare i8*  @nurl_lex_src_slice(i64, i64, i64)` )
-    ( emit `declare void @nurl_lex_set_pos(i64, i64)` )
+    // PURIFY.md Phase 10 (2026-05-24): nurl_lex_* are pure-NURL
+    // @-fns in compiler/nurlc.nu now (see the §6a Lexer block).
+    // declares + sym_defs deleted in lockstep with the runtime.c §6a
+    // removal.
     ( emit `declare void @nurl_print_buf_start()` )
     ( emit `declare i8*  @nurl_print_buf_stop()` )
     ( emit `declare void @nurl_print_buf_reset()` )
-    ( emit `declare i8*  @nurl_lex_filename(i64)` )
-    ( emit `declare i64  @nurl_sym_new()` )
-    ( emit `declare void @nurl_sym_def(i64, i8*, i8*)` )
-    ( emit `declare i8*  @nurl_sym_get(i64, i8*)` )
-    ( emit `declare void @nurl_sym_push(i64)` )
-    ( emit `declare void @nurl_sym_pop(i64)` )
-    ( emit `declare i64  @nurl_cg_new()` )
-    ( emit `declare i8*  @nurl_cg_reg(i64)` )
-    ( emit `declare i8*  @nurl_cg_lbl(i64, i8*)` )
-    ( emit `declare void @nurl_cg_reset(i64)` )
-    ( emit `declare i8*  @nurl_get_last_type()` )
-    ( emit `declare void @nurl_set_last_type(i8*)` )
+    // nurl_lex_filename — pure-NURL @-fn (PURIFY Phase 10).
+    // PURIFY.md Phase 9b (2026-05-24): nurl_sym_new / _def / _get /
+    // _push / _pop are pure-NURL @-fns now (see top of this file).
+    // declares + sym_defs deleted in lockstep with the runtime.c §6
+    // removal.
+    // PURIFY.md Phase 9a (2026-05-24): nurl_cg_new / _reg / _lbl /
+    // _reset and nurl_get_last_type / _set_last_type are pure-NURL
+    // @-fns now (see top of this file). Their `declare` lines + the
+    // matching `nurl_sym_def` entries in `init_syms` were deleted in
+    // lockstep with the runtime.c §7+§8 removal.
     ( emit `declare i8*  @nurl_malloc(i64)` )
     ( emit `declare i8*  @nurl_alloc(i64)` )
     ( emit `declare i8*  @nurl_zalloc(i64)` )
     ( emit `declare i8*  @nurl_realloc(i8*, i64)` )
     ( emit `declare void @nurl_free(i8*)` )
     ( emit `declare void @nurl_memcpy(i8*, i8*, i64)` )
+    ( emit `declare void @nurl_memmove(i8*, i8*, i64)` )
     ( emit `declare void @nurl_memset(i8*, i64, i64)` )
     ( emit `declare i64  @nurl_peek(i8*, i64)` )
     ( emit `declare void @nurl_poke(i8*, i64, i64)` )
-    ( emit `declare i8*  @nurl_file_open(i8*, i8*)` )
-    ( emit `declare void @nurl_file_write(i8*, i8*)` )
-    ( emit `declare void @nurl_file_write_range(i8*, i8*, i64)` )
-    ( emit `declare void @nurl_file_write_byte(i8*, i64)` )
-    ( emit `declare void @nurl_file_close(i8*)` )
-    ( emit `declare i8*  @nurl_file_read(i8*)` )
-    ( emit `declare i64  @nurl_file_exists(i8*)` )
-    ( emit `declare i64  @nurl_file_size(i8*)` )
-    ( emit `declare void @nurl_file_del(i8*)` )
-    ( emit `declare i8*  @nurl_read_file_safe(i8*)` )
-    ( emit `declare i8*  @nurl_read_file_mmap(i8*)` )
-    ( emit `declare i64  @nurl_write_file_safe(i8*, i8*, i8*)` )
-    ( emit `declare i64  @nurl_dir_create(i8*)` )
-    ( emit `declare i64  @nurl_dir_remove(i8*)` )
+    // PURIFY.md Phase 7 (2026-05-23): nurl_file_open / _write /
+    // _write_range / _write_byte / _close / _read_chunk / _eof are
+    // pure-NURL @-fns now in stdlib/std/fs.nu, calling libc fopen /
+    // fputs / fwrite / fputc / fclose / fread / feof directly.
+    // PURIFY.md Phase 7 (2026-05-23): nurl_file_exists / _del /
+    // _dir_create / _dir_remove are pure-NURL @-fns in
+    // stdlib/std/fs.nu, calling libc access / remove / mkdir / rmdir /
+    // fopen / fseek / ftell / fread / open / mmap / munmap directly.
     ( emit `declare i64  @nurl_errno_kind()` )
-    ( emit `declare i64  @nurl_str_ends(i8*, i8*)` )
-    ( emit `declare double @nurl_sqrt(double)` )
-    ( emit `declare double @nurl_fabs(double)` )
-    ( emit `declare double @nurl_floor(double)` )
-    ( emit `declare double @nurl_ceil(double)` )
-    ( emit `declare double @nurl_round(double)` )
-    ( emit `declare double @nurl_pow(double, double)` )
-    ( emit `declare double @nurl_log(double)` )
-    ( emit `declare double @nurl_exp(double)` )
-    ( emit `declare double @nurl_sin(double)` )
-    ( emit `declare double @nurl_cos(double)` )
-    ( emit `declare double @nurl_tan(double)` )
-    ( emit `declare double @nurl_atan2(double, double)` )
+    // libm wrappers (nurl_sqrt / _fabs / _floor / _ceil / _round /
+    // _pow / _log / _exp / _sin / _cos / _tan / _atan2) and
+    // nurl_iabs / _ipow — moved to pure-NURL (libm direct FFI in
+    // stdlib/std/float.nu; iabs/ipow as plain @-fns in
+    // stdlib/std/int.nu) as PURIFY.md Phase 3 (2026-05-23).
     ( emit `declare i64    @nurl_is_nan(double)` )
     ( emit `declare i64    @nurl_is_inf(double)` )
-    ( emit `declare i64  @nurl_iabs(i64)` )
-    ( emit `declare i64  @nurl_ipow(i64, i64)` )
-    ( emit `declare i64    @nurl_str_to_float_safe(i8*)` )
-    ( emit `declare double @nurl_str_float_value()` )
-    ( emit `declare i64  @nurl_now_ms()` )
-    ( emit `declare i64  @nurl_now_seconds()` )
-    ( emit `declare i64  @nurl_monotonic_ns()` )
-    ( emit `declare void @nurl_sleep_ms(i64)` )
-    ( emit `declare i8*  @nurl_env_get(i8*)` )
-    ( emit `declare i64  @nurl_env_set(i8*, i8*)` )
-    ( emit `declare i64  @nurl_env_unset(i8*)` )
-    ( emit `declare i8*  @nurl_cwd()` )
-    ( emit `declare i64  @nurl_chdir(i8*)` )
-    ( emit `declare i8*  @nurl_read_all_stdin()` )
     ( emit `declare i64  @nurl_dir_list_open(i8*)` )
     ( emit `declare i8*  @nurl_dir_list_next(i64)` )
     ( emit `declare void @nurl_dir_list_close(i64)` )
@@ -9014,8 +10125,6 @@
     ( emit `declare i64  @nurl_http_stream_header_count(i64)` )
     ( emit `declare i8*  @nurl_http_stream_header_name(i64, i64)` )
     ( emit `declare i8*  @nurl_http_stream_header_value(i64, i64)` )
-    ( emit `declare i64  @nurl_log_level_get()` )
-    ( emit `declare void @nurl_log_level_set(i64)` )
     ( emit `declare i64  @nurl_proc_run(i8*, i8*, i64, i8*)` )
     ( emit `declare i64  @nurl_proc_exit_code(i64)` )
     ( emit `declare i64  @nurl_proc_err_kind(i64)` )
@@ -9036,9 +10145,10 @@
     ( emit `declare i64  @nurl_proc_spawn_wait(i64)` )
     ( emit `declare i64  @nurl_proc_spawn_kill(i64, i64)` )
     ( emit `declare void @nurl_proc_spawn_free(i64)` )
-    ( emit `declare i8*  @nurl_sha256_hex(i8*)` )
-    ( emit `declare i8*  @nurl_hmac_sha256_hex(i8*, i8*)` )
-    ( emit `declare void @nurl_sha1_bytes(i8*, i64, i8*)` )
+    // Crypto hash transforms (SHA-1/256/512, MD5, HMAC-SHA-256/512)
+    // moved to pure NURL — `stdlib/std/hash_*.nu` — as PURIFY.md
+    // Phase 4 (2026-05-23). Only `nurl_rand_*` stays C-side
+    // (irreducible getrandom/RtlGenRandom syscall bridge).
     ( emit `declare i64  @nurl_rand_u64()` )
     ( emit `declare i8*  @nurl_rand_bytes_hex(i64)` )
     ( emit `declare i8*  @nurl_read_file_bytes(i8*)` )
@@ -9052,11 +10162,6 @@
     ( emit `declare i64  @nurl_tcp_tls_reload(i64, i8*, i8*, i8*)` )
     ( emit `declare i64  @nurl_tcp_tls_require_client_cert(i64, i8*, i64)` )
     ( emit `declare i8*  @nurl_tcp_peer_cert_subject(i64)` )
-    ( emit `declare i64  @nurl_dos_state_new(i64, i64)` )
-    ( emit `declare i64  @nurl_dos_state_try_acquire(i64, i8*)` )
-    ( emit `declare void @nurl_dos_state_release(i64, i8*)` )
-    ( emit `declare void @nurl_dos_state_free(i64)` )
-    ( emit `declare i64  @nurl_dos_state_active(i64)` )
     ( emit `declare i64  @nurl_tcp_accept(i64)` )
     ( emit `declare i64  @nurl_tcp_read(i64, i8*, i64)` )
     ( emit `declare i64  @nurl_tcp_write(i64, i8*, i64)` )
@@ -9065,40 +10170,15 @@
     ( emit `declare i64  @nurl_tcp_err_kind(i64)` )
     ( emit `declare i8*  @nurl_tcp_peer_addr(i64)` )
     ( emit `declare void @nurl_tcp_set_timeout(i64, i64)` )
-    ( emit `declare i64  @nurl_thread_spawn(i8*, i8*)` )
-    ( emit `declare i64  @nurl_thread_join(i64)` )
-    ( emit `declare void @nurl_thread_detach(i64)` )
-    ( emit `declare i64  @nurl_mutex_new()` )
-    ( emit `declare void @nurl_mutex_lock(i64)` )
-    ( emit `declare void @nurl_mutex_unlock(i64)` )
-    ( emit `declare void @nurl_mutex_free(i64)` )
-    ( emit `declare i64  @nurl_cond_new()` )
-    ( emit `declare void @nurl_cond_wait(i64, i64)` )
-    ( emit `declare void @nurl_cond_signal(i64)` )
-    ( emit `declare void @nurl_cond_broadcast(i64)` )
-    ( emit `declare void @nurl_cond_free(i64)` )
+    // Thread / mutex / cond moved to pure-NURL FFI in stdlib/std/thread.nu
+    // (PURIFY.md Phase 6) — libpthread symbols (pthread_create / mutex_*
+    // / cond_*) plus the tiny nurl_pthread_join_ptr / _detach_ptr
+    // trampolines are declared on-demand in that module via `& `c` @ ...`.
     ( emit `declare void @nurl_signal_install_shutdown(i64)` )
     ( emit `declare void @nurl_signal_trigger_shutdown()` )
     ( emit `declare void @nurl_panic(i8*)` )
     ( emit `declare i64  @nurl_recover(i8*, i8*)` )
     ( emit `declare i8*  @nurl_panic_last_msg()` )
-    ( emit `declare i64  @nurl_sqlite_open(i8*)` )
-    ( emit `declare void @nurl_sqlite_close(i64)` )
-    ( emit `declare i64  @nurl_sqlite_err_kind(i64)` )
-    ( emit `declare i8*  @nurl_sqlite_errmsg(i64)` )
-    ( emit `declare i64  @nurl_sqlite_exec(i64, i8*)` )
-    ( emit `declare i64  @nurl_sqlite_prepare(i64, i8*)` )
-    ( emit `declare i64  @nurl_sqlite_stmt_err_kind(i64)` )
-    ( emit `declare i64  @nurl_sqlite_bind_int(i64, i64, i64)` )
-    ( emit `declare i64  @nurl_sqlite_bind_text(i64, i64, i8*)` )
-    ( emit `declare i64  @nurl_sqlite_bind_null(i64, i64)` )
-    ( emit `declare i64  @nurl_sqlite_step(i64)` )
-    ( emit `declare i64  @nurl_sqlite_column_count(i64)` )
-    ( emit `declare i64  @nurl_sqlite_column_type(i64, i64)` )
-    ( emit `declare i64  @nurl_sqlite_column_int(i64, i64)` )
-    ( emit `declare i8*  @nurl_sqlite_column_text(i64, i64)` )
-    ( emit `declare void @nurl_sqlite_finalize(i64)` )
-    ( emit `declare i64  @nurl_sqlite_reset(i64)` )
     ( emit `` )
 }
 
@@ -9142,19 +10222,23 @@
     ( nurl_sym_def syms `__imported_files__` `` )
     ( nurl_sym_def syms `__scanned_files__` `` )
     // i8*-returning runtime functions
-    ( nurl_sym_def syms `nurl_lex_val` `i8*` )
-    ( nurl_sym_def syms `nurl_lex_filename` `i8*` )
-    ( nurl_sym_def syms `nurl_lex_line_text` `i8*` )
-    ( nurl_sym_def syms `nurl_diag_caret` `i8*` )
-    ( nurl_sym_def syms `nurl_cg_reg` `i8*` )
-    ( nurl_sym_def syms `nurl_cg_lbl` `i8*` )
-    ( nurl_sym_def syms `nurl_get_last_type` `i8*` )
-    ( nurl_sym_def syms `nurl_sym_get` `i8*` )
+    // nurl_lex_val / _filename / _line_text / nurl_diag_caret — pure-NURL @-fns (Phase 10).
+    // PURIFY.md Phase 9a (2026-05-24): nurl_cg_reg / _lbl /
+    // _get_last_type — pure-NURL @-fns now; types come from the
+    // @-fn declaration itself.
+    // nurl_sym_get type comes from @-fn declaration (Phase 9b).
     ( nurl_sym_def syms `nurl_argv` `i8*` )
     ( nurl_sym_def syms `nurl_argv_get` `i8*` )
     ( nurl_sym_def syms `nurl_read_file` `i8*` )
     ( nurl_sym_def syms `nurl_read_line` `i8*` )
     ( nurl_sym_def syms `nurl_read_n_bytes` `i8*` )
+    // PURIFY.md Phase 5 Batches C+D' (2026-05-23): nurl_str_cat /
+    // _cat3 / _cat4 / _slice / _str_int are pure-NURL @-fns now.
+    // The sym_def keeps cross-module callers typed correctly even
+    // when they don't `$`-import string.nu — omitting it makes
+    // nurlc emit `call i64 @nurl_str_cat(...)` and the LLVM verifier
+    // rejects the type mismatch. nurl_str_float (Batch D) still has
+    // a C body.
     ( nurl_sym_def syms `nurl_str_cat` `i8*` )
     ( nurl_sym_def syms `nurl_str_cat3` `i8*` )
     ( nurl_sym_def syms `nurl_str_cat4` `i8*` )
@@ -9182,51 +10266,57 @@
     ( nurl_sym_def syms `nurl_alloc` `i8*` )
     ( nurl_sym_def syms `nurl_zalloc` `i8*` )
     ( nurl_sym_def syms `nurl_realloc` `i8*` )
+    // libc string / parse primitives (PURIFY.md Phase 5, 2026-05-23)
+    ( nurl_sym_def syms `strlen` `i64` )
+    ( nurl_sym_def syms `strcmp` `i32` )
+    ( nurl_sym_def syms `strncmp` `i32` )
+    ( nurl_sym_def syms `memcmp` `i32` )
+    ( nurl_sym_def syms `strstr` `i8*` )
+    ( nurl_sym_def syms `memmem` `i8*` )
+    ( nurl_sym_def syms `atoll` `i64` )
+    ( nurl_sym_def syms `atof` `double` )
+    ( nurl_sym_def syms `strtod` `double` )
+    ( nurl_sym_def syms `memcpy` `i8*` )
+    ( nurl_sym_def syms `strdup` `i8*` )
+    // libc stdio (PURIFY.md Phase 7, 2026-05-23) — i64-typed returns
+    // align with how the @-fns capture them. fopen returns FILE*
+    // (i8*); fread/fwrite return size_t which we treat as i64.
+    ( nurl_sym_def syms `fopen` `i8*` )
+    ( nurl_sym_def syms `fclose` `i32` )
+    ( nurl_sym_def syms `fputs` `i32` )
+    ( nurl_sym_def syms `fwrite` `i64` )
+    ( nurl_sym_def syms `fputc` `i32` )
+    ( nurl_sym_def syms `fread` `i64` )
+    ( nurl_sym_def syms `feof` `i32` )
+    ( nurl_sym_def syms `fseek` `i32` )
+    ( nurl_sym_def syms `ftell` `i64` )
+    ( nurl_sym_def syms `access` `i32` )
     // file I/O
     ( nurl_sym_def syms `nurl_file_open` `i8*` )
     ( nurl_sym_def syms `nurl_file_write` `void` )
     ( nurl_sym_def syms `nurl_file_write_range` `void` )
     ( nurl_sym_def syms `nurl_file_write_byte` `void` )
     ( nurl_sym_def syms `nurl_file_close` `void` )
-    ( nurl_sym_def syms `nurl_file_read` `i8*` )
     ( nurl_sym_def syms `nurl_file_exists` `i64` )
-    ( nurl_sym_def syms `nurl_file_size` `i64` )
     ( nurl_sym_def syms `nurl_file_del` `void` )
     // non-fatal fs API used by stdlib/std/fs.nu — raw is an i8* the caller
     // must `nurl_free` after copying (see read_file). Intentionally NOT
     // marked __ret_owned to avoid double-free against the manual free.
-    ( nurl_sym_def syms `nurl_read_file_safe` `i8*` )
-    ( nurl_sym_def syms `nurl_read_file_mmap` `i8*` )
-    ( nurl_sym_def syms `nurl_write_file_safe` `i64` )
-    ( nurl_sym_def syms `nurl_dir_create` `i64` )
-    ( nurl_sym_def syms `nurl_dir_remove` `i64` )
     ( nurl_sym_def syms `nurl_errno_kind` `i64` )
     // double-returning runtime functions
-    ( nurl_sym_def syms `nurl_lex_fnum` `double` )
-    ( nurl_sym_def syms `nurl_str_to_float` `double` )
-    ( nurl_sym_def syms `nurl_str_float_value` `double` )
+    // nurl_lex_fnum — pure-NURL @-fn (Phase 10).
     ( nurl_sym_def syms `nurl_parse_float_range` `double` )
-    ( nurl_sym_def syms `nurl_sqrt` `double` )
-    ( nurl_sym_def syms `nurl_fabs` `double` )
-    ( nurl_sym_def syms `nurl_floor` `double` )
-    ( nurl_sym_def syms `nurl_ceil` `double` )
-    ( nurl_sym_def syms `nurl_round` `double` )
-    ( nurl_sym_def syms `nurl_pow` `double` )
-    ( nurl_sym_def syms `nurl_log` `double` )
-    ( nurl_sym_def syms `nurl_exp` `double` )
-    ( nurl_sym_def syms `nurl_sin` `double` )
-    ( nurl_sym_def syms `nurl_cos` `double` )
-    ( nurl_sym_def syms `nurl_tan` `double` )
-    ( nurl_sym_def syms `nurl_atan2` `double` )
-    // i64-returning math/time/parse helpers
+    // libm wrappers + iabs/ipow removed in PURIFY.md Phase 3 — see
+    // `stdlib/std/float.nu` (libm FFI) and `stdlib/std/int.nu`
+    // (pure-NURL int_abs / int_pow).
+    // i64-returning math/parse helpers (still C-side)
     ( nurl_sym_def syms `nurl_is_nan` `i64` )
     ( nurl_sym_def syms `nurl_is_inf` `i64` )
-    ( nurl_sym_def syms `nurl_iabs` `i64` )
-    ( nurl_sym_def syms `nurl_ipow` `i64` )
-    ( nurl_sym_def syms `nurl_str_to_float_safe` `i64` )
     ( nurl_sym_def syms `nurl_parse_int_range` `i64` )
-    ( nurl_sym_def syms `nurl_memcmp_lex` `i64` )
-    ( nurl_sym_def syms `nurl_memmem_range` `i64` )
+    // nurl_str_len / _eq / _cmp / _to_int / _to_float / _starts /
+    // _find / _ends / _memmem_range / _memcmp_lex — pure-NURL
+    // @-fns now (PURIFY.md Phase 5, 2026-05-23). Their return
+    // types are discovered from the @-fn declaration itself.
     ( nurl_sym_def syms `nurl_csv_scan_cell` `i64` )
     ( nurl_sym_def syms `nurl_csv_filter_float_gt` `i64` )
     ( nurl_sym_def syms `nurl_csv_filter_str_contains` `i64` )
@@ -9242,18 +10332,8 @@
     ( nurl_sym_def syms `nurl_csv_scan_row_pairs` `i64` )
     ( nurl_sym_def syms `nurl_csv_row_n_cells_out` `i64` )
     ( nurl_sym_def syms `nurl_csv_row_next_pos_out` `i64` )
-    ( nurl_sym_def syms `nurl_now_ms` `i64` )
-    ( nurl_sym_def syms `nurl_now_seconds` `i64` )
-    ( nurl_sym_def syms `nurl_monotonic_ns` `i64` )
-    ( nurl_sym_def syms `nurl_sleep_ms` `void` )
     // CLI tooling — i8*-returning calls return heap-owned strings (caller frees)
-    ( nurl_sym_def syms `nurl_env_get` `i8*` )
-    ( nurl_sym_def syms `nurl_cwd` `i8*` )
-    ( nurl_sym_def syms `nurl_read_all_stdin` `i8*` )
     ( nurl_sym_def syms `nurl_dir_list_next` `i8*` )
-    ( nurl_sym_def syms `nurl_env_set` `i64` )
-    ( nurl_sym_def syms `nurl_env_unset` `i64` )
-    ( nurl_sym_def syms `nurl_chdir` `i64` )
     ( nurl_sym_def syms `nurl_dir_list_open` `i64` )
     ( nurl_sym_def syms `nurl_dir_list_close` `void` )
     // HTTP runtime helpers (libcurl bridge — see runtime.c §14).
@@ -9283,9 +10363,6 @@
     ( nurl_sym_def syms `nurl_http_stream_header_count` `i64` )
     ( nurl_sym_def syms `nurl_http_stream_header_name` `i8*` )
     ( nurl_sym_def syms `nurl_http_stream_header_value` `i8*` )
-    // log level (process-wide)
-    ( nurl_sym_def syms `nurl_log_level_get` `i64` )
-    ( nurl_sym_def syms `nurl_log_level_set` `void` )
     // process execution (runtime §16). Output buffers are BORROWED views
     // into the runtime-owned NurlProcResult — do NOT mark __ret_owned.
     ( nurl_sym_def syms `nurl_proc_run` `i64` )
@@ -9316,9 +10393,7 @@
     // (caller frees via nurl_free); not auto-marked __ret_owned because
     // the wrappers in stdlib/std/hash.nu and stdlib/std/random.nu do
     // their own copy + free.
-    ( nurl_sym_def syms `nurl_sha256_hex` `i8*` )
-    ( nurl_sym_def syms `nurl_hmac_sha256_hex` `i8*` )
-    ( nurl_sym_def syms `nurl_sha1_bytes` `void` )
+    // Crypto hash sym_defs — see PURIFY.md Phase 4 comment above.
     ( nurl_sym_def syms `nurl_rand_u64` `i64` )
     ( nurl_sym_def syms `nurl_rand_bytes_hex` `i8*` )
     // Binary file I/O (runtime §4 extension). Read returns a heap buffer +
@@ -9340,11 +10415,6 @@
     ( nurl_sym_def syms `nurl_tcp_tls_reload` `i64` )
     ( nurl_sym_def syms `nurl_tcp_tls_require_client_cert` `i64` )
     ( nurl_sym_def syms `nurl_tcp_peer_cert_subject` `i8*` )
-    ( nurl_sym_def syms `nurl_dos_state_new` `i64` )
-    ( nurl_sym_def syms `nurl_dos_state_try_acquire` `i64` )
-    ( nurl_sym_def syms `nurl_dos_state_release` `void` )
-    ( nurl_sym_def syms `nurl_dos_state_free` `void` )
-    ( nurl_sym_def syms `nurl_dos_state_active` `i64` )
     ( nurl_sym_def syms `nurl_tcp_accept` `i64` )
     ( nurl_sym_def syms `nurl_tcp_read` `i64` )
     ( nurl_sym_def syms `nurl_tcp_write` `i64` )
@@ -9353,43 +10423,16 @@
     ( nurl_sym_def syms `nurl_tcp_err_kind` `i64` )
     ( nurl_sym_def syms `nurl_tcp_peer_addr` `i8*` )
     ( nurl_sym_def syms `nurl_tcp_set_timeout` `void` )
-    // Thread / mutex / condvar (runtime §19). Handles are i64-cast heap
-    // pointers — same convention as TCP. spawn takes raw fn/env i8*
-    // pointers extracted from a NURL closure via `# *u f 0|1`.
-    ( nurl_sym_def syms `nurl_thread_spawn` `i64` )
-    ( nurl_sym_def syms `nurl_thread_join` `i64` )
-    ( nurl_sym_def syms `nurl_thread_detach` `void` )
-    ( nurl_sym_def syms `nurl_mutex_new` `i64` )
-    ( nurl_sym_def syms `nurl_mutex_lock` `void` )
-    ( nurl_sym_def syms `nurl_mutex_unlock` `void` )
-    ( nurl_sym_def syms `nurl_mutex_free` `void` )
-    ( nurl_sym_def syms `nurl_cond_new` `i64` )
-    ( nurl_sym_def syms `nurl_cond_wait` `void` )
-    ( nurl_sym_def syms `nurl_cond_signal` `void` )
-    ( nurl_sym_def syms `nurl_cond_broadcast` `void` )
-    ( nurl_sym_def syms `nurl_cond_free` `void` )
+    // Thread / mutex / cond entirely on the pure-NURL FFI side now
+    // (PURIFY Phase 6): pthread_create / pthread_mutex_* /
+    // pthread_cond_* plus the nurl_pthread_join_ptr / _detach_ptr
+    // trampolines are declared in stdlib/std/thread.nu via `& `c` @ ...`,
+    // so no sym_def registrations are needed here.
     ( nurl_sym_def syms `nurl_signal_install_shutdown` `void` )
     ( nurl_sym_def syms `nurl_signal_trigger_shutdown` `void` )
     ( nurl_sym_def syms `nurl_panic` `void` )
     ( nurl_sym_def syms `nurl_recover` `i64` )
     ( nurl_sym_def syms `nurl_panic_last_msg` `i8*` )
-    ( nurl_sym_def syms `nurl_sqlite_open` `i64` )
-    ( nurl_sym_def syms `nurl_sqlite_close` `void` )
-    ( nurl_sym_def syms `nurl_sqlite_err_kind` `i64` )
-    ( nurl_sym_def syms `nurl_sqlite_errmsg` `i8*` )
-    ( nurl_sym_def syms `nurl_sqlite_exec` `i64` )
-    ( nurl_sym_def syms `nurl_sqlite_prepare` `i64` )
-    ( nurl_sym_def syms `nurl_sqlite_stmt_err_kind` `i64` )
-    ( nurl_sym_def syms `nurl_sqlite_bind_int` `i64` )
-    ( nurl_sym_def syms `nurl_sqlite_bind_text` `i64` )
-    ( nurl_sym_def syms `nurl_sqlite_bind_null` `i64` )
-    ( nurl_sym_def syms `nurl_sqlite_step` `i64` )
-    ( nurl_sym_def syms `nurl_sqlite_column_count` `i64` )
-    ( nurl_sym_def syms `nurl_sqlite_column_type` `i64` )
-    ( nurl_sym_def syms `nurl_sqlite_column_int` `i64` )
-    ( nurl_sym_def syms `nurl_sqlite_column_text` `i8*` )
-    ( nurl_sym_def syms `nurl_sqlite_finalize` `void` )
-    ( nurl_sym_def syms `nurl_sqlite_reset` `i64` )
     // void runtime functions
     ( nurl_sym_def syms `nurl_print` `void` )
     ( nurl_sym_def syms `nurl_eprint` `void` )
@@ -9397,31 +10440,26 @@
     ( nurl_sym_def syms `nurl_print_int` `void` )
     ( nurl_sym_def syms `nurl_print_str` `void` )
     ( nurl_sym_def syms `nurl_print_bool` `void` )
-    ( nurl_sym_def syms `nurl_lex_advance` `void` )
-    ( nurl_sym_def syms `nurl_sym_def` `void` )
-    ( nurl_sym_def syms `nurl_sym_push` `void` )
-    ( nurl_sym_def syms `nurl_sym_pop` `void` )
-    ( nurl_sym_def syms `nurl_cg_reset` `void` )
-    ( nurl_sym_def syms `nurl_set_last_type` `void` )
+    // nurl_lex_advance — pure-NURL @-fn (Phase 10).
+    // nurl_sym_def / _push / _pop types come from @-fn declarations (Phase 9b).
+    // PURIFY.md Phase 9a (2026-05-24): nurl_cg_reset / _set_last_type
+    // are pure-NURL @-fns now.
     ( nurl_sym_def syms `nurl_exit` `void` )
     ( nurl_sym_def syms `nurl_flush_stdout` `void` )
     ( nurl_sym_def syms `nurl_flush_stderr` `void` )
     ( nurl_sym_def syms `nurl_stdin_eof` `i64` )
     ( nurl_sym_def syms `free` `void` )
     ( nurl_sym_def syms `nurl_free` `void` )
-    ( nurl_sym_def syms `nurl_map_put` `void` )
-    ( nurl_sym_def syms `nurl_map_del` `void` )
-    ( nurl_sym_def syms `nurl_map_free` `void` )
+    // PURIFY.md Phase 9c (2026-05-24): nurl_map_* gone (see emit_preamble).
     ( nurl_sym_def syms `nurl_memcpy` `void` )
+    ( nurl_sym_def syms `nurl_memmove` `void` )
     ( nurl_sym_def syms `nurl_poke` `void` )
     // output buffering
     ( nurl_sym_def syms `nurl_print_buf_start` `void` )
     ( nurl_sym_def syms `nurl_print_buf_stop` `i8*` )
     ( nurl_sym_def syms `nurl_print_buf_reset` `void` )
     // lexer position save/restore
-    ( nurl_sym_def syms `nurl_lex_cur_start` `i64` )
-    ( nurl_sym_def syms `nurl_lex_src_slice` `i8*` )
-    ( nurl_sym_def syms `nurl_lex_set_pos` `void` )
+    // nurl_lex_cur_start / _src_slice / _set_pos — pure-NURL @-fns (Phase 10).
 }
 
 // ── Signature pre-scan (first pass) ──────────────────────────────

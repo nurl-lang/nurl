@@ -5,6 +5,8 @@
 // path under valgrind / AddressSanitizer-style runs and verifies the
 // user-visible behaviour (field reads still return the right bytes).
 
+$ `stdlib/core/string.nu`
+
 : Greeting {
     s msg
     i n

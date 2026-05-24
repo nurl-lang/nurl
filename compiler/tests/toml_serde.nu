@@ -1,4 +1,4 @@
-// toml_serde.nu — exercises the TOML side of stdlib/serde.nu and the
+// toml_serde.nu — exercises the TOML side of stdlib/ext/serde.nu and the
 // toml_stringify serializer added to stdlib/ext/toml.nu.
 //
 //   * to_toml builtin impls (i / b / s) — checked by stringifying.
@@ -23,7 +23,7 @@
 //   struct port: ok
 //   struct tls: ok
 
-$ `stdlib/serde.nu`
+$ `stdlib/ext/serde.nu`
 $ `stdlib/ext/toml.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

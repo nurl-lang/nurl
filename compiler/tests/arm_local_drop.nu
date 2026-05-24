@@ -4,6 +4,8 @@
 // caller's owned list (which would produce invalid IR) and not left
 // allocated (which ASan would flag as a leak).
 
+$ `stdlib/core/string.nu`
+
 : Boxed {
     s msg
     i n

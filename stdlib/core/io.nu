@@ -17,6 +17,71 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/posix.nu`  // read(2) for the pure-NURL stdin slurp
+
+// ── Pure-NURL stdin slurp ───────────────────────────────────────────
+//
+// PURIFY §13 batch 2 (2026-05-24): `nurl_read_all_stdin` is now a NURL
+// @-function reading fd 0 via `read(2)` (declared in `stdlib/core/posix.nu`)
+// in a 4 KB-stepped grow-and-retry loop. Both libc flavours we target
+// (Linux/macOS, mingw-w64 libmingwex `read = _read`) accept fd 0 with
+// blocking semantics for the controlling terminal / piped stdin. WASI
+// routes the read through wasi-libc's POSIX shim.
+//
+// Returns a malloc'd NUL-terminated buffer (caller frees) or `0` on
+// failure. The trailing NUL is written at `len`; the malloc'd region
+// is sized `cap` (>= len + 1). The wrapper `read_all_stdin` below
+// translates to an owned String for normal callers.
+@ __read_all_stdin_pure → s {
+    : ~ i cap 4096
+    : ~ i len 0
+    : ~ s buf ( nurl_alloc cap )
+    ? == # i buf 0 { ^ # s 0 } {}
+    : ~ b done F
+    : ~ b ok F
+    ~ ! done {
+        // Ensure room for at least 1 byte read + NUL.
+        ? <= - cap len 1 {
+            : i ncap * cap 2
+            : s nb ( nurl_realloc buf ncap )
+            ? == # i nb 0 {
+                // realloc failed; the original buf is still valid —
+                // free it explicitly so the failure path doesn't leak.
+                ( nurl_free buf )
+                = buf # s 0
+                = done T
+            } {
+                = buf nb
+                = cap ncap
+            }
+        } {}
+        ? ! done {
+            : i room - cap - len 1
+            : *u dst # *u + # i buf len
+            : i got ( read # i32 0 dst room )
+            ? > got 0 {
+                = len + len got
+            } {
+                ? == got 0 {
+                    // EOF — clean completion
+                    = ok T
+                    = done T
+                } {
+                    // -1 read error
+                    = done T
+                }
+            }
+        } {}
+    }
+    ? ok {
+        : *u p # *u + # i buf len
+        = . p 0 # u 0
+        ^ buf
+    } {
+        ? != # i buf 0 { ( nurl_free buf ) } {}
+        ^ # s 0
+    }
+}
 
 @ read_line → String {
     : s raw ( nurl_read_line )
@@ -30,7 +95,7 @@ $ `stdlib/core/vec.nu`
 // String on allocation failure too — the runtime falls back to NULL which
 // `string_from` turns into "" rather than crashing.
 @ read_all_stdin → String {
-    : s raw ( nurl_read_all_stdin )
+    : s raw ( __read_all_stdin_pure )
     : i p # i raw
     ? == p 0 {
         ^ ( string_new )

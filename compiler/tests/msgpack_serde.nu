@@ -1,5 +1,5 @@
 // msgpack_serde.nu — exercises the from_msgpack_<T> decode helpers
-// added to stdlib/serde.nu.
+// added to stdlib/ext/serde.nu.
 //
 // Each helper runs msgpack_decode then extracts the value straight
 // from the Json, returning !T MsgpackErr — MsgpackTypeMismatch when
@@ -15,7 +15,7 @@
 //   dec mismatch: ok
 //   dec error: ok
 
-$ `stdlib/serde.nu`
+$ `stdlib/ext/serde.nu`
 $ `stdlib/ext/msgpack.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/core/vec.nu`

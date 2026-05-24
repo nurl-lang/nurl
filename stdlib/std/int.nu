@@ -18,6 +18,8 @@
 //                                       `- 0 N` and N must fit in i64)
 
 $ `stdlib/core/errors.nu`
+$ `stdlib/core/char.nu`
+$ `stdlib/core/string.nu`
 
 // ── Constants ──────────────────────────────────────────────────────
 
@@ -32,12 +34,31 @@ $ `stdlib/core/errors.nu`
 
 // ── Operations ─────────────────────────────────────────────────────
 
+// Pure-NURL replacements for the historic `nurl_iabs` / `nurl_ipow` C
+// helpers — runtime §11 dropped 2026-05-23 as PURIFY.md Phase 3.
+
+// LLONG_MIN (`- -9223372036854775807 1`) is its own negation in
+// two's-complement; the saturate-to-LLONG_MIN match preserves the
+// historic behaviour rather than wrapping to +0.
 @ int_abs i n → i {
-    ^ ( nurl_iabs n )
+    ? == n - -9223372036854775807 1 { ^ n } {}
+    ? < n 0 { ^ - 0 n } {}
+    ^ n
 }
 
+// Exponentiation-by-squaring; non-negative `y` only. Negative `y`
+// returns 0 (use `float_pow` for fractional / negative exponents).
 @ int_pow i x i y → i {
-    ^ ( nurl_ipow x y )
+    ? < y 0 { ^ 0 } {}
+    : ~ i r 1
+    : ~ i b x
+    : ~ i e y
+    ~ > e 0 {
+        ? != 0 & e 1 { = r * r b } {}
+        = e >> e 1
+        ? > e 0 { = b * b b } {}
+    }
+    ^ r
 }
 
 @ int_sign i n → i {
@@ -65,7 +86,7 @@ $ `stdlib/core/errors.nu`
 
     ~ < idx len {
         : i c ( nurl_str_get str idx )
-        ? == ( nurl_is_digit c ) 0 {
+        ? == ( is_digit c ) 0 {
             ^ @ !i ParseErr { F @ ParseErr { BadFormat } }
         } {}
         = idx + idx 1

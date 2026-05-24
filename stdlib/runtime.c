@@ -291,121 +291,22 @@ void nurl_eprintln(const char *s) { fputs(s, stderr); fputc('\n', stderr); fflus
 
 /* ── §2  String operations ─────────────────────────────────────── */
 
-long long nurl_str_len(const char *s) {
-    return (long long)strlen(s);
-}
-
-/* Return byte at index i (0 if out of range). */
-long long nurl_str_get(const char *s, long long i) {
-    long long n = (long long)strlen(s);
-    if (i < 0 || i >= n) return 0;
-    return (unsigned char)s[i];
-}
-
-/* 1 if a == b (content equality), 0 otherwise. */
-long long nurl_str_eq(const char *a, const char *b) {
-    return strcmp(a, b) == 0 ? 1 : 0;
-}
-
-/* Lexicographic byte compare: -1 if a < b, 0 if equal, +1 if a > b.
-   Normalised so callers can use `( cmp x y )` as the canonical
-   3-way compare (sort, binary_search, etc). */
-long long nurl_str_cmp(const char *a, const char *b) {
-    int r = strcmp(a, b);
-    if (r < 0) return -1;
-    if (r > 0) return 1;
-    return 0;
-}
-
-/* Concatenate two strings; result is malloc'd. */
-const char* nurl_str_cat(const char *a, const char *b) {
-    size_t la = strlen(a), lb = strlen(b);
-    char *r = (char*)malloc(la + lb + 1);
-    memcpy(r, a, la);
-    memcpy(r + la, b, lb + 1);
-    return r;
-}
-
-/* Concatenate three strings; result is malloc'd. */
-const char* nurl_str_cat3(const char *a, const char *b, const char *c) {
-    size_t la = strlen(a), lb = strlen(b), lc = strlen(c);
-    char *r = (char*)malloc(la + lb + lc + 1);
-    memcpy(r, a, la);
-    memcpy(r + la, b, lb);
-    memcpy(r + la + lb, c, lc + 1);
-    return r;
-}
-
-/* Concatenate four strings; result is malloc'd. */
-const char* nurl_str_cat4(const char *a, const char *b,
-                          const char *c, const char *d) {
-    return nurl_str_cat(nurl_str_cat(a, b), nurl_str_cat(c, d));
-}
-
-/* Decimal representation of n; result is malloc'd. */
+/* Decimal representation of n; result is malloc'd. Kept in C
+ * because 72 corpus tests call `nurl_str_int` without importing
+ * `stdlib/core/string.nu`; moving it to NURL would force the
+ * import on every test. Drop once a prelude / auto-import lands. */
 const char* nurl_str_int(long long n) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%lld", n);
     return strdup(buf);
 }
 
+/* Float formatting via printf %g — kept in C until either a
+ * Grisu/Ryu implementation or variadic FFI for snprintf lands. */
 const char* nurl_str_float(double d) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%g", d);
     return strdup(buf);
-}
-
-/* Parse decimal integer from string. */
-long long nurl_str_to_int(const char *s) {
-    return (long long)atoll(s);
-}
-
-/* Parse IEEE-754 double from string. */
-double nurl_str_to_float(const char *s) {
-    return atof(s);
-}
-
-/* Parse i64 from a byte range (no NUL required). Stops on first non-digit
- * after the optional leading sign. Returns 0 on empty/all-non-digit input
- * — caller distinguishes "real zero" from "parse failure" only if needed
- * (CSV indexed-sort treats both as 0, matching v1). */
-long long nurl_parse_int_range(const char *p, long long len) {
-    if (!p || len <= 0) return 0;
-    long long i = 0;
-    int sign = 1;
-    if (p[0] == '-') { sign = -1; i = 1; }
-    else if (p[0] == '+') { i = 1; }
-    long long acc = 0;
-    while (i < len) {
-        unsigned char c = (unsigned char)p[i];
-        if (c < '0' || c > '9') break;
-        acc = acc * 10 + (c - '0');
-        i++;
-    }
-    return acc * sign;
-}
-
-/* Parse f64 from a byte range. Copies into a small NUL-terminated buffer
- * and calls strtod. Returns 0.0 on empty/parse failure. Allocates only
- * when len exceeds the stack buffer; the common CSV cell case never
- * touches malloc. */
-double nurl_parse_float_range(const char *p, long long len) {
-    if (!p || len <= 0) return 0.0;
-    char stack[64];
-    char *buf = stack;
-    int heap = 0;
-    if ((size_t)len + 1 > sizeof(stack)) {
-        buf = (char*)malloc((size_t)len + 1);
-        if (!buf) return 0.0;
-        heap = 1;
-    }
-    memcpy(buf, p, (size_t)len);
-    buf[len] = '\0';
-    char *end = NULL;
-    double v = strtod(buf, &end);
-    if (end == buf) v = 0.0;
-    if (heap) free(buf);
-    return v;
 }
 
 /* CSV scanner: walk forward from `p` for at most `len` bytes, returning
@@ -414,10 +315,6 @@ double nurl_parse_float_range(const char *p, long long len) {
  * arena loader to advance one cell-at-a-time instead of one byte at a
  * time; the C inner loop is ~5× faster than NURL bytecode for the same
  * task. */
-/* Forward decl: nurl_memmem_range is defined further down in §3
- * String operations; we reference it from §4 csv filters below. */
-long long nurl_memmem_range(const char *hay, long long hlen,
-                            const char *needle, long long nlen);
 
 /* Predicate filter helpers — narrow a CSVTable's row index in place.
  *
@@ -1034,91 +931,6 @@ long long nurl_csv_scan_row_pairs(
     return 0;
 }
 
-/* Substring search inside a byte range (no NUL required on haystack).
- * Returns the byte offset of the first occurrence of `needle` in
- * `hay[0..hlen)`, or -1 if not found. Empty needle returns 0.
- * Uses libc memmem on glibc; falls back to a tight loop elsewhere. */
-long long nurl_memmem_range(const char *hay, long long hlen,
-                            const char *needle, long long nlen) {
-    if (!hay || hlen < 0 || !needle || nlen < 0) return -1;
-    if (nlen == 0) return 0;
-    if (nlen > hlen) return -1;
-#if defined(__GLIBC__) || (defined(__linux__) && !defined(__BIONIC__))
-    void *p = memmem(hay, (size_t)hlen, needle, (size_t)nlen);
-    if (!p) return -1;
-    return (long long)((const char*)p - hay);
-#else
-    long long last = hlen - nlen;
-    char first = needle[0];
-    for (long long i = 0; i <= last; i++) {
-        if (hay[i] != first) continue;
-        if (memcmp(hay + i, needle, (size_t)nlen) == 0) return i;
-    }
-    return -1;
-#endif
-}
-
-/* Lexicographic memcmp with length tiebreak (shorter < longer when prefix
- * matches). Returns sign of difference (-1/0/+1), suitable as a 3-way
- * comparator. */
-long long nurl_memcmp_lex(const char *a, long long la,
-                          const char *b, long long lb) {
-    long long n = la < lb ? la : lb;
-    if (n > 0) {
-        int c = memcmp(a, b, (size_t)n);
-        if (c != 0) return c < 0 ? -1 : 1;
-    }
-    if (la < lb) return -1;
-    if (la > lb) return 1;
-    return 0;
-}
-
-/* Return bytes [start, start+len); result is malloc'd.
- * Clamps to actual string length. */
-const char* nurl_str_slice(const char *s, long long start, long long len) {
-    long long slen = (long long)strlen(s);
-    if (start < 0) start = 0;
-    if (start > slen) start = slen;
-    if (len < 0) len = 0;
-    if (start + len > slen) len = slen - start;
-    char *r = (char*)malloc((size_t)len + 1);
-    memcpy(r, s + start, (size_t)len);
-    r[len] = '\0';
-    return r;
-}
-
-/* 1 if strings share a prefix of length n. */
-long long nurl_str_starts(const char *s, const char *prefix) {
-    return strncmp(s, prefix, strlen(prefix)) == 0 ? 1 : 0;
-}
-
-/* Index of first occurrence of needle in haystack, or -1 if not found. */
-long long nurl_str_find(const char *haystack, const char *needle) {
-    const char *p = strstr(haystack, needle);
-    if (!p) return -1;
-    return (long long)(p - haystack);
-}
-
-/* 1 if s ends with suffix. */
-long long nurl_str_ends(const char *s, const char *suffix) {
-    size_t slen = strlen(s);
-    size_t plen = strlen(suffix);
-    if (plen > slen) return 0;
-    return memcmp(s + slen - plen, suffix, plen) == 0 ? 1 : 0;
-}
-
-
-/* ── §3  Char classification ───────────────────────────────────── */
-
-long long nurl_is_alpha(long long c)  { return isalpha((int)c) ? 1 : 0; }
-long long nurl_is_digit(long long c)  { return isdigit((int)c) ? 1 : 0; }
-long long nurl_is_space(long long c)  { return isspace((int)c) ? 1 : 0; }
-/* alnum or underscore */
-long long nurl_is_alnum_(long long c) {
-    return (isalnum((int)c) || c == '_') ? 1 : 0;
-}
-
-
 /* ── §4  File & process ────────────────────────────────────────── */
 
 static int   g_argc = 0;
@@ -1178,101 +990,6 @@ const char* nurl_read_file(const char *path) {
 #  include <fcntl.h>
 #  include <unistd.h>
 #endif
-/* True zero-copy mmap: returns the file's content as an mmap'd
- * read-only pointer (NUL-terminated NOT guaranteed — caller relies
- * on the size returned via nurl_read_file_mmap_size_out). The
- * mapping must be released via `nurl_munmap_file(ptr, size)`. Use
- * for very large reads where the memcpy in `nurl_read_file_mmap`
- * is itself a bottleneck. CSV loader gates this on a separate
- * cleanup field on CSVTable since the deallocator differs from
- * malloc/free. */
-static long long g_nurl_mmap_size = 0;
-long long nurl_read_file_mmap_size_out(void) { return g_nurl_mmap_size; }
-
-const char* nurl_read_file_mmap_zero(const char *path) {
-    g_nurl_mmap_size = 0;
-#if defined(__unix__) || defined(__APPLE__)
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return NULL;
-    struct stat st;
-    if (fstat(fd, &st) < 0) { close(fd); return NULL; }
-    if (st.st_size <= 0) { close(fd); return NULL; }
-    size_t sz = (size_t)st.st_size;
-    void *m = mmap(NULL, sz, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
-    if (m == MAP_FAILED) return NULL;
-    (void)madvise(m, sz, MADV_SEQUENTIAL);
-    g_nurl_mmap_size = (long long)sz;
-    return (const char *)m;
-#else
-    return NULL;
-#endif
-}
-
-void nurl_munmap_file(const char *ptr, long long sz) {
-#if defined(__unix__) || defined(__APPLE__)
-    if (ptr && sz > 0) munmap((void *)ptr, (size_t)sz);
-#else
-    (void)ptr; (void)sz;
-#endif
-}
-
-/* Forward declaration — used by the WASI/MSVC fallback below before
- * the full definition appears further down in the file. */
-const char* nurl_read_file_safe(const char *path);
-
-const char* nurl_read_file_mmap(const char *path) {
-#if defined(__unix__) || defined(__APPLE__)
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return NULL;
-    struct stat st;
-    if (fstat(fd, &st) < 0) { close(fd); return NULL; }
-    if (st.st_size <= 0) {
-        close(fd);
-        char *buf = (char*)malloc(1);
-        if (!buf) return NULL;
-        buf[0] = '\0';
-        return buf;
-    }
-    size_t sz = (size_t)st.st_size;
-    void *m = mmap(NULL, sz, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
-    if (m == MAP_FAILED) return NULL;
-    /* Hint the kernel that we'll read this sequentially — helps it
-     * pre-fetch pages ahead of the consumer. Best-effort; no error
-     * path. */
-    (void)madvise(m, sz, MADV_SEQUENTIAL);
-    char *buf = (char*)malloc(sz + 1);
-    if (!buf) { munmap(m, sz); return NULL; }
-    memcpy(buf, m, sz);
-    buf[sz] = '\0';
-    munmap(m, sz);
-    return buf;
-#else
-    /* WASI / MSVC fallback: same fopen+fread+strdup path as
-     * nurl_read_file_safe. */
-    return nurl_read_file_safe(path);
-#endif
-}
-
-/* Non-fatal variant: returns NULL on error instead of exiting.
- * Used by stdlib/std/fs.nu to surface failures as `! String IoErr`.
- * The errno classification is left to the caller (see nurl_errno_kind). */
-const char* nurl_read_file_safe(const char *path) {
-    FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    if (sz < 0) { fclose(f); return NULL; }
-    fseek(f, 0, SEEK_SET);
-    char *buf = (char*)malloc((size_t)sz + 1);
-    if (!buf) { fclose(f); return NULL; }
-    size_t got = fread(buf, 1, (size_t)sz, f);
-    buf[got] = '\0';
-    fclose(f);
-    return buf;
-}
-
 /* Map errno to the IoErr enum tag in stdlib/core/errors.nu.
  *   0 = NotFound          (ENOENT)
  *   1 = PermissionDenied  (EACCES, EPERM)
@@ -1294,69 +1011,6 @@ long long nurl_errno_kind(void) {
 }
 
 /* ── File I/O (buffered via FILE*) ───────────────────────────── */
-
-void* nurl_file_open(const char *path, const char *mode) {
-    return (void*)fopen(path, mode);
-}
-
-void nurl_file_write(void *h, const char *s) {
-    if (h && s) fputs(s, (FILE*)h);
-}
-
-void nurl_file_write_range(void *h, const char *p, long long len) {
-    if (h && p && len > 0) fwrite(p, 1, (size_t)len, (FILE*)h);
-}
-
-void nurl_file_write_byte(void *h, long long c) {
-    if (h) fputc((int)(c & 0xff), (FILE*)h);
-}
-
-void nurl_file_close(void *h) {
-    if (h) fclose((FILE*)h);
-}
-
-/* Alias for nurl_read_file used in fileio.nu */
-const char* nurl_file_read(const char *path) {
-    return nurl_read_file(path);
-}
-
-long long nurl_file_exists(const char *path) {
-    struct stat st;
-    return (stat(path, &st) == 0) ? 1 : 0;
-}
-
-long long nurl_file_size(const char *path) {
-    struct stat st;
-    if (stat(path, &st) == 0) return (long long)st.st_size;
-    return -1;
-}
-
-void nurl_file_del(const char *path) {
-    remove(path);
-}
-
-/* Non-fatal write helper for stdlib/std/fs.nu.
- * Mode is "w" (overwrite) or "a" (append). Writes the entire C-string
- * (NUL-terminated) and returns 0 on success, -1 with errno set on
- * failure (open, partial write, or close). The errno classification
- * is left to the caller (see nurl_errno_kind). */
-long long nurl_write_file_safe(const char *path, const char *content, const char *mode) {
-    if (!path || !content || !mode) { errno = EINVAL; return -1; }
-    FILE *f = fopen(path, mode);
-    if (!f) return -1;
-    size_t n = strlen(content);
-    if (n > 0) {
-        size_t got = fwrite(content, 1, n, f);
-        if (got != n) {
-            int saved = errno;
-            fclose(f);
-            errno = saved ? saved : EIO;
-            return -1;
-        }
-    }
-    if (fclose(f) != 0) return -1;
-    return 0;
-}
 
 /* Binary read: returns a malloc'd byte buffer or NULL on error. The
  * length of the buffer is exposed as a sideband through
@@ -1408,39 +1062,6 @@ long long nurl_write_file_bytes(const char *path, const char *data, long long le
         }
     }
     if (fclose(f) != 0) return -1;
-    return 0;
-}
-
-/* Create a directory with mode 0755. Non-fatal — returns 0 on success,
- * -1 with errno set on failure. errno = EEXIST if the directory (or any
- * file at `path`) already exists; the caller maps to AlreadyExists. */
-#ifdef _WIN32
-#  include <direct.h>
-#  define MKDIR_2(p, m) _mkdir(p)
-#else
-#  include <sys/types.h>
-#  include <unistd.h>
-#  define MKDIR_2(p, m) mkdir((p), (m))
-#endif
-
-long long nurl_dir_create(const char *path) {
-    if (!path) { errno = EINVAL; return -1; }
-    if (MKDIR_2(path, 0755) != 0) return -1;
-    return 0;
-}
-
-/* Remove an empty directory. Non-fatal — returns 0 on success, -1 with
- * errno set on failure (typically ENOENT or ENOTEMPTY). The caller maps
- * via nurl_errno_kind. */
-#ifdef _WIN32
-#  define RMDIR_1(p) _rmdir(p)
-#else
-#  define RMDIR_1(p) rmdir(p)
-#endif
-
-long long nurl_dir_remove(const char *path) {
-    if (!path) { errno = EINVAL; return -1; }
-    if (RMDIR_1(path) != 0) return -1;
     return 0;
 }
 
@@ -1497,863 +1118,12 @@ const char* nurl_file_read_chunk(void *h, long long n) {
     return buf;
 }
 
-/* 1 once the handle's end-of-file indicator is set (the previous read
- * reached EOF), 0 otherwise. A NULL handle reports EOF. */
-long long nurl_file_eof(void *h) {
-    if (!h) return 1;
-    return feof((FILE*)h) ? 1 : 0;
-}
-
-/* Resolve `path` to a canonical absolute path: on POSIX via realpath(3),
- * which makes it absolute, collapses `.` / `..` and expands every
- * symbolic link; on Windows via _fullpath, which absolutises and
- * collapses but does not expand symbolic links (NTFS reparse points are
- * uncommon). Both require the path to exist. Returns a freshly malloc'd
- * string the caller frees, or NULL with errno set when the path does
- * not exist or is not accessible. Backs stdlib/std/path.nu's
- * path_canonical. */
-const char* nurl_realpath(const char *path) {
-    if (!path) { errno = EINVAL; return NULL; }
-#ifdef _WIN32
-    return _fullpath(NULL, path, 0);
-#else
-    return realpath(path, NULL);
-#endif
-}
-
-
-/* ── §5  HashMap (string → i64) ────────────────────────────────── */
-
-#define NURL_MAP_BUCKETS 64
-
-typedef struct NurlMapEntry {
-    char                *key;
-    long long            val;
-    struct NurlMapEntry *next;
-} NurlMapEntry;
-
-typedef struct {
-    NurlMapEntry *buckets[NURL_MAP_BUCKETS];
-    long long     size;
-} NurlMap;
-
-static unsigned nurl_map_hash(const char *s) {
-    unsigned h = 5381;
-    while (*s) h = ((h << 5) + h) ^ (unsigned char)*s++;
-    return h % NURL_MAP_BUCKETS;
-}
-
-long long nurl_map_new(void) {
-    NurlMap *m = (NurlMap*)calloc(1, sizeof(NurlMap));
-    return (long long)(uintptr_t)m;
-}
-
-void nurl_map_put(long long handle, const char *key, long long val) {
-    NurlMap *m = (NurlMap*)(uintptr_t)handle;
-    unsigned h = nurl_map_hash(key);
-    NurlMapEntry *e = m->buckets[h];
-    while (e) {
-        if (strcmp(e->key, key) == 0) { e->val = val; return; }
-        e = e->next;
-    }
-    NurlMapEntry *ne = (NurlMapEntry*)malloc(sizeof(NurlMapEntry));
-    ne->key  = strdup(key);
-    ne->val  = val;
-    ne->next = m->buckets[h];
-    m->buckets[h] = ne;
-    m->size++;
-}
-
-long long nurl_map_get(long long handle, const char *key) {
-    NurlMap *m = (NurlMap*)(uintptr_t)handle;
-    unsigned h = nurl_map_hash(key);
-    NurlMapEntry *e = m->buckets[h];
-    while (e) {
-        if (strcmp(e->key, key) == 0) return e->val;
-        e = e->next;
-    }
-    return 0;
-}
-
-long long nurl_map_has(long long handle, const char *key) {
-    NurlMap *m = (NurlMap*)(uintptr_t)handle;
-    unsigned h = nurl_map_hash(key);
-    NurlMapEntry *e = m->buckets[h];
-    while (e) {
-        if (strcmp(e->key, key) == 0) return 1;
-        e = e->next;
-    }
-    return 0;
-}
-
-void nurl_map_del(long long handle, const char *key) {
-    NurlMap *m = (NurlMap*)(uintptr_t)handle;
-    unsigned h = nurl_map_hash(key);
-    NurlMapEntry **pp = &m->buckets[h];
-    while (*pp) {
-        NurlMapEntry *e = *pp;
-        if (strcmp(e->key, key) == 0) {
-            *pp = e->next;
-            free(e->key);
-            free(e);
-            m->size--;
-            return;
-        }
-        pp = &e->next;
-    }
-}
-
-long long nurl_map_size(long long handle) {
-    NurlMap *m = (NurlMap*)(uintptr_t)handle;
-    return m->size;
-}
-
-void nurl_map_free(long long handle) {
-    NurlMap *m = (NurlMap*)(uintptr_t)handle;
-    for (int i = 0; i < NURL_MAP_BUCKETS; i++) {
-        NurlMapEntry *e = m->buckets[i];
-        while (e) {
-            NurlMapEntry *next = e->next;
-            free(e->key);
-            free(e);
-            e = next;
-        }
-    }
-    free(m);
-}
-
-
-/* ── §6  Lexer ─────────────────────────────────────────────────── */
-/*
- * Token types (must match constants in nurlc.nu):
- *   0  EOF      1  IDENT    2  INT      3  STR
- *   4  BOOL     5  TYPE_KW  6  AT       7  COLON
- *   8  EQ       9  ARROW   10  CARET   11  QUEST
- *  12  TILDE   13  LPAREN  14  RPAREN  15  LBRACE
- *  16  RBRACE  17  DOT     18  HASH    19  BANG
- *  20  PLUS    21  MINUS   22  STAR    23  SLASH
- *  24  PERCENT 25  AMP     26  PIPE    27  LT
- *  28  GT      29  EQEQ    30  NE      31  LE
- *  32  GE      33  LBRACK  34  RBRACK  35  FLOAT
- *  36  SIZEOF  37  SEMICOL 38  BACKSLASH
- */
-
-#define LTT_EOF      0
-#define LTT_IDENT    1
-#define LTT_INT      2
-#define LTT_STR      3
-#define LTT_BOOL     4
-#define LTT_TYPE_KW  5
-#define LTT_AT       6
-#define LTT_COLON    7
-#define LTT_EQ       8
-#define LTT_ARROW    9
-#define LTT_CARET   10
-#define LTT_QUEST   11
-#define LTT_TILDE   12
-#define LTT_LPAREN  13
-#define LTT_RPAREN  14
-#define LTT_LBRACE  15
-#define LTT_RBRACE  16
-#define LTT_DOT     17
-#define LTT_HASH    18
-#define LTT_BANG    19
-#define LTT_PLUS    20
-#define LTT_MINUS   21
-#define LTT_STAR    22
-#define LTT_SLASH   23
-#define LTT_PERCENT 24
-#define LTT_AMP     25
-#define LTT_PIPE    26
-#define LTT_LT      27
-#define LTT_GT      28
-#define LTT_EQEQ    29
-#define LTT_NE      30
-#define LTT_LE      31
-#define LTT_GE      32
-#define LTT_LBRACK    33
-#define LTT_RBRACK    34
-#define LTT_FLOAT     35
-#define LTT_SIZEOF    36
-#define LTT_SEMICOL   37
-#define LTT_BACKSLASH 38
-#define LTT_DOLLAR    39
-#define LTT_QUESTQUEST 40
-#define LTT_SHL        41
-#define LTT_SHR        42
-#define LTT_ELLIPSIS   43
-#define LTT_PUB        44
-#define LTT_CARETCARET 45   /* `^^` — bitwise / logical XOR operator */
-
-typedef struct {
-    int         type;
-    char       *val;       /* malloc'd string value */
-    long long   inum;      /* integer value for INT tokens */
-    double      fnum;      /* float value for FLOAT tokens */
-    long long   line;
-    int         start_pos; /* byte offset in src where this token starts */
-} NurlToken;
-
-typedef struct {
-    const char *src;
-    const char *filename;
-    int         pos;       /* byte position in src */
-    int         len;
-    long long   line;
-    NurlToken   cur;       /* current (already lexed) token */
-    NurlToken   peek;      /* one token of lookahead */
-    int         peek_valid;
-    NurlToken   peek2;     /* two tokens of lookahead */
-    int         peek2_valid;
-    NurlToken   peek3;     /* three tokens of lookahead */
-    int         peek3_valid;
-    NurlToken   peek4;     /* four tokens of lookahead */
-    int         peek4_valid;
-} NurlLex;
-
-/* Forward declarations */
-static NurlToken lex_next_tok(NurlLex *lx);
-
-static void skip_ws_comments(NurlLex *lx) {
-    for (;;) {
-        /* skip whitespace */
-        while (lx->pos < lx->len && isspace((unsigned char)lx->src[lx->pos])) {
-            if (lx->src[lx->pos] == '\n') lx->line++;
-            lx->pos++;
-        }
-        /* skip // comments */
-        if (lx->pos + 1 < lx->len &&
-            lx->src[lx->pos] == '/' && lx->src[lx->pos+1] == '/') {
-            while (lx->pos < lx->len && lx->src[lx->pos] != '\n')
-                lx->pos++;
-            continue;
-        }
-        break;
-    }
-}
-
-static char* read_ident(NurlLex *lx) {
-    int start = lx->pos;
-    /* first char: alpha or _ */
-    while (lx->pos < lx->len &&
-           (isalnum((unsigned char)lx->src[lx->pos]) ||
-            lx->src[lx->pos] == '_'))
-        lx->pos++;
-    int n = lx->pos - start;
-    char *s = (char*)malloc(n + 1);
-    memcpy(s, lx->src + start, n);
-    s[n] = '\0';
-    return s;
-}
-
-static NurlToken make_tok(int type, const char *val, long long inum, long long line) {
-    NurlToken t;
-    t.type = type; t.val = strdup(val ? val : "");
-    t.inum = inum; t.fnum = 0.0; t.line = line; t.start_pos = 0;
-    return t;
-}
-
-static NurlToken make_ftok(const char *val, double fnum, long long line) {
-    NurlToken t;
-    t.type = LTT_FLOAT; t.val = strdup(val ? val : "");
-    t.inum = (long long)fnum; t.fnum = fnum; t.line = line; t.start_pos = 0;
-    return t;
-}
-
-static int g_last_tok_start = 0;  /* set by lex_next_tok before lexing each token */
-
-static NurlToken lex_next_tok(NurlLex *lx) {
-    skip_ws_comments(lx);
-    long long line = lx->line;
-    g_last_tok_start = lx->pos;  /* record start position for this token */
-
-    if (lx->pos >= lx->len)
-        return make_tok(LTT_EOF, "", 0, line);
-
-    unsigned char c = (unsigned char)lx->src[lx->pos];
-
-    /* UTF-8 arrow → (E2 86 92) */
-    if (c == 0xE2 && lx->pos + 2 < lx->len &&
-        (unsigned char)lx->src[lx->pos+1] == 0x86 &&
-        (unsigned char)lx->src[lx->pos+2] == 0x92) {
-        lx->pos += 3;
-        return make_tok(LTT_ARROW, "→", 0, line);
-    }
-
-    /* backtick string — process \n \t \r \\ escape sequences */
-    if (c == '`') {
-        lx->pos++;
-        char *buf = (char*)malloc(lx->len + 1);
-        int blen = 0;
-        while (lx->pos < lx->len && lx->src[lx->pos] != '`') {
-            char ch = lx->src[lx->pos];
-            if (ch == '\n') lx->line++;
-            if (ch == '\\' && lx->pos + 1 < lx->len) {
-                char nx = lx->src[lx->pos + 1];
-                if (nx == 'n')  { buf[blen++] = '\n'; lx->pos += 2; continue; }
-                if (nx == 't')  { buf[blen++] = '\t'; lx->pos += 2; continue; }
-                if (nx == 'r')  { buf[blen++] = '\r'; lx->pos += 2; continue; }
-                if (nx == '\\') { buf[blen++] = '\\'; lx->pos += 2; continue; }
-                /* other \X: pass both chars through unchanged */
-            }
-            buf[blen++] = ch;
-            lx->pos++;
-        }
-        buf[blen] = '\0';
-        if (lx->pos < lx->len) lx->pos++; /* skip closing ` */
-        NurlToken t = make_tok(LTT_STR, buf, 0, line);
-        free(buf);
-        return t;
-    }
-
-    /* negative integer or float literal: '-' immediately followed by digit,
-       no intervening whitespace. Disambiguation from binary MINUS: the
-       binary operator is written with a space before the operand
-       ( '- a b' or '( - 5 3 )' ), so '-5' / '-3.14' can be a single token. */
-    if (c == '-' && lx->pos + 1 < lx->len &&
-        isdigit((unsigned char)lx->src[lx->pos + 1])) {
-        int start = lx->pos;
-        lx->pos++; /* consume '-' */
-        while (lx->pos < lx->len && isdigit((unsigned char)lx->src[lx->pos]))
-            lx->pos++;
-        if (lx->pos < lx->len && lx->src[lx->pos] == '.' &&
-            lx->pos + 1 < lx->len && isdigit((unsigned char)lx->src[lx->pos + 1])) {
-            lx->pos++; /* consume '.' */
-            while (lx->pos < lx->len && isdigit((unsigned char)lx->src[lx->pos]))
-                lx->pos++;
-            if (lx->pos < lx->len &&
-                (lx->src[lx->pos] == 'e' || lx->src[lx->pos] == 'E')) {
-                lx->pos++;
-                if (lx->pos < lx->len &&
-                    (lx->src[lx->pos] == '+' || lx->src[lx->pos] == '-'))
-                    lx->pos++;
-                while (lx->pos < lx->len && isdigit((unsigned char)lx->src[lx->pos]))
-                    lx->pos++;
-            }
-            int n = lx->pos - start;
-            char *s = (char*)malloc(n + 1);
-            memcpy(s, lx->src + start, n);
-            s[n] = '\0';
-            double fv = atof(s);
-            NurlToken t = make_ftok(s, fv, line);
-            free(s);
-            return t;
-        }
-        int n = lx->pos - start;
-        char *s = (char*)malloc(n + 1);
-        memcpy(s, lx->src + start, n);
-        s[n] = '\0';
-        long long v = atoll(s);
-        NurlToken t = make_tok(LTT_INT, s, v, line);
-        free(s);
-        return t;
-    }
-
-    /* integer or float literal */
-    if (isdigit(c)) {
-        int start = lx->pos;
-        while (lx->pos < lx->len && isdigit((unsigned char)lx->src[lx->pos]))
-            lx->pos++;
-        /* float: digits '.' digit  (dot followed by another digit = float, not member) */
-        if (lx->pos < lx->len && lx->src[lx->pos] == '.' &&
-            lx->pos + 1 < lx->len && isdigit((unsigned char)lx->src[lx->pos + 1])) {
-            lx->pos++; /* consume '.' */
-            while (lx->pos < lx->len && isdigit((unsigned char)lx->src[lx->pos]))
-                lx->pos++;
-            /* optional exponent: e/E with optional sign */
-            if (lx->pos < lx->len &&
-                (lx->src[lx->pos] == 'e' || lx->src[lx->pos] == 'E')) {
-                lx->pos++;
-                if (lx->pos < lx->len &&
-                    (lx->src[lx->pos] == '+' || lx->src[lx->pos] == '-'))
-                    lx->pos++;
-                while (lx->pos < lx->len && isdigit((unsigned char)lx->src[lx->pos]))
-                    lx->pos++;
-            }
-            int n = lx->pos - start;
-            char *s = (char*)malloc(n + 1);
-            memcpy(s, lx->src + start, n);
-            s[n] = '\0';
-            double fv = atof(s);
-            NurlToken t = make_ftok(s, fv, line);
-            free(s);
-            return t;
-        }
-        /* plain integer */
-        int n = lx->pos - start;
-        char *s = (char*)malloc(n + 1);
-        memcpy(s, lx->src + start, n);
-        s[n] = '\0';
-        long long v = atoll(s);
-        NurlToken t = make_tok(LTT_INT, s, v, line);
-        free(s);
-        return t;
-    }
-
-    /* identifier / keyword */
-    if (isalpha(c) || c == '_') {
-        char *id = read_ident(lx);
-        /* bool literals */
-        if (strcmp(id, "T") == 0) { NurlToken t = make_tok(LTT_BOOL,   "T", 1, line); free(id); return t; }
-        if (strcmp(id, "F") == 0) { NurlToken t = make_tok(LTT_BOOL,   "F", 0, line); free(id); return t; }
-        /* sizeof keyword */
-        if (strcmp(id, "Z") == 0) { NurlToken t = make_tok(LTT_SIZEOF, "Z", 0, line); free(id); return t; }
-        /* visibility keyword `pub` (grammar v2.0). Reserved — when the
-           parser is at top-level decl position, a `pub` prefix marks the
-           following @, :, &, or % decl as public. In legacy files (no
-           `pub` anywhere) every top-level symbol stays public; the
-           moment any decl is marked `pub` the file enters strict-vis
-           mode and unmarked @-functions become private to that file. */
-        if (strcmp(id, "pub") == 0) { NurlToken t = make_tok(LTT_PUB, "pub", 0, line); free(id); return t; }
-        /* type keywords — single-char (i u f b s v) plus fixed-width
-           variants i8 i16 i32 u16 u32 u64 f32 added in grammar v1.8.
-           No u8 alias: legacy `u` IS the unsigned-8-bit byte type. */
-        if (strlen(id) == 1 && strchr("iufbsv", id[0])) {
-            NurlToken t = make_tok(LTT_TYPE_KW, id, 0, line); free(id); return t;
-        }
-        if (strcmp(id, "i8")  == 0 || strcmp(id, "i16") == 0 ||
-            strcmp(id, "i32") == 0 || strcmp(id, "i64") == 0 ||
-            strcmp(id, "u16") == 0 || strcmp(id, "u32") == 0 ||
-            strcmp(id, "u64") == 0 || strcmp(id, "f32") == 0) {
-            NurlToken t = make_tok(LTT_TYPE_KW, id, 0, line); free(id); return t;
-        }
-        /* namespace syntax: a::b[::c...] is merged into a single IDENT
-           with '__' as separator (name-mangling). */
-        while (lx->pos + 2 < lx->len &&
-               lx->src[lx->pos] == ':' && lx->src[lx->pos + 1] == ':' &&
-               (isalpha((unsigned char)lx->src[lx->pos + 2]) ||
-                lx->src[lx->pos + 2] == '_')) {
-            lx->pos += 2; /* consume '::' */
-            char *id2 = read_ident(lx);
-            size_t n1 = strlen(id);
-            size_t n2 = strlen(id2);
-            char *joined = (char*)malloc(n1 + 2 + n2 + 1);
-            memcpy(joined, id, n1);
-            joined[n1]     = '_';
-            joined[n1 + 1] = '_';
-            memcpy(joined + n1 + 2, id2, n2);
-            joined[n1 + 2 + n2] = '\0';
-            free(id);
-            free(id2);
-            id = joined;
-        }
-        NurlToken t = make_tok(LTT_IDENT, id, 0, line); free(id); return t;
-    }
-
-    /* three-char operator: `...` ellipsis (grammar v1.9 variadic-FFI
-       marker). Must precede the single-char `.` branch below so that the
-       three dots merge into one ELLIPSIS token rather than three DOTs.
-       At this point the digit-led float lexer above has already consumed
-       any `digit . digit` sequence, so a `.` here is never the start of
-       a numeric literal. */
-    if (c == '.' && lx->pos + 2 < lx->len &&
-        lx->src[lx->pos + 1] == '.' && lx->src[lx->pos + 2] == '.') {
-        lx->pos += 3;
-        return make_tok(LTT_ELLIPSIS, "...", 0, line);
-    }
-
-    /* two-char operators */
-    if (lx->pos + 1 < lx->len) {
-        char c2 = lx->src[lx->pos+1];
-        if (c == '=' && c2 == '=') { lx->pos += 2; return make_tok(LTT_EQEQ,      "==", 0, line); }
-        if (c == '!' && c2 == '=') { lx->pos += 2; return make_tok(LTT_NE,        "!=", 0, line); }
-        if (c == '<' && c2 == '=') { lx->pos += 2; return make_tok(LTT_LE,        "<=", 0, line); }
-        if (c == '>' && c2 == '=') { lx->pos += 2; return make_tok(LTT_GE,        ">=", 0, line); }
-        if (c == '<' && c2 == '<') { lx->pos += 2; return make_tok(LTT_SHL,       "<<", 0, line); }
-        if (c == '>' && c2 == '>') { lx->pos += 2; return make_tok(LTT_SHR,       ">>", 0, line); }
-        if (c == '?' && c2 == '?') { lx->pos += 2; return make_tok(LTT_QUESTQUEST, "??", 0, line); }
-        if (c == '^' && c2 == '^') { lx->pos += 2; return make_tok(LTT_CARETCARET, "^^", 0, line); }
-    }
-
-    /* single-char operators */
-    lx->pos++;
-    switch (c) {
-        case '@': return make_tok(LTT_AT,      "@",  0, line);
-        case ':': return make_tok(LTT_COLON,   ":",  0, line);
-        case '=': return make_tok(LTT_EQ,      "=",  0, line);
-        case '^': return make_tok(LTT_CARET,   "^",  0, line);
-        case '?': return make_tok(LTT_QUEST,   "?",  0, line);
-        case '~': return make_tok(LTT_TILDE,   "~",  0, line);
-        case '(': return make_tok(LTT_LPAREN,  "(",  0, line);
-        case ')': return make_tok(LTT_RPAREN,  ")",  0, line);
-        case '{': return make_tok(LTT_LBRACE,  "{",  0, line);
-        case '}': return make_tok(LTT_RBRACE,  "}",  0, line);
-        case '.': return make_tok(LTT_DOT,     ".",  0, line);
-        case '#': return make_tok(LTT_HASH,    "#",  0, line);
-        case '!': return make_tok(LTT_BANG,    "!",  0, line);
-        case '+': return make_tok(LTT_PLUS,    "+",  0, line);
-        case '-': return make_tok(LTT_MINUS,   "-",  0, line);
-        case '*': return make_tok(LTT_STAR,    "*",  0, line);
-        case '/': return make_tok(LTT_SLASH,   "/",  0, line);
-        case '%': return make_tok(LTT_PERCENT, "%",  0, line);
-        case '&': return make_tok(LTT_AMP,     "&",  0, line);
-        case '|': return make_tok(LTT_PIPE,    "|",  0, line);
-        case '<': return make_tok(LTT_LT,      "<",  0, line);
-        case '>': return make_tok(LTT_GT,      ">",  0, line);
-        case '[':  return make_tok(LTT_LBRACK,    "[",  0, line);
-        case ']':  return make_tok(LTT_RBRACK,    "]",  0, line);
-        case ';':  return make_tok(LTT_SEMICOL,   ";",  0, line);
-        case '\\': return make_tok(LTT_BACKSLASH, "\\", 0, line);
-        case '$':  return make_tok(LTT_DOLLAR,    "$",  0, line);
-        default: {
-            char buf[32];
-            snprintf(buf, sizeof(buf), "?%02X", c);
-            return make_tok(LTT_IDENT, buf, 0, line);
-        }
-    }
-}
-
-/* Opaque handles: lexers are stored in a fixed-size table. The cap was
- * bumped from 256 → 1024 when http_server.nu landed: it transitively
- * pulls in net + bytes + string + vec + http + http_request +
- * http_response, each of which the compiler instantiates a lexer for
- * across multiple bootstrap stages. */
-#define MAX_LEX 1024
-static NurlLex *g_lexers[MAX_LEX];
-static int       g_lex_count = 0;
-
-/* Create a new lexer over src; return opaque handle (1-based). */
-long long nurl_lex_new(const char *src, const char *filename) {
-    if (g_lex_count >= MAX_LEX) { fputs("nurlc: too many lexers\n", stderr); exit(1); }
-    NurlLex *lx = (NurlLex*)calloc(1, sizeof(NurlLex));
-    /* Lexers live for the whole process (no free function exists), so
-       strdup lets the NURL caller drop its source buffer immediately without
-       dangling lx->src. The pool is bounded by MAX_LEX. */
-    lx->src      = strdup(src);
-    lx->filename = strdup(filename);
-    lx->len      = (int)strlen(src);
-    lx->line     = 1;
-    lx->cur      = lex_next_tok(lx);   /* prime: read first token */
-    lx->cur.start_pos = g_last_tok_start;
-    lx->peek_valid  = 0;
-    lx->peek2_valid = 0;
-    lx->peek3_valid = 0;
-    lx->peek4_valid = 0;
-    int idx = g_lex_count++;
-    g_lexers[idx] = lx;
-    return (long long)(idx + 1);       /* 1-based */
-}
-
-static NurlLex* get_lex(long long h) {
-    int idx = (int)h - 1;
-    if (idx < 0 || idx >= g_lex_count || !g_lexers[idx]) {
-        fputs("nurlc: invalid lexer handle\n", stderr); exit(1);
-    }
-    return g_lexers[idx];
-}
-
-long long   nurl_lex_type(long long h)     { return (long long)get_lex(h)->cur.type; }
-/* Return a strdup'd copy so the caller's pointer stays valid after advance(). */
-const char* nurl_lex_val(long long h)      { return strdup(get_lex(h)->cur.val); }
-long long   nurl_lex_inum(long long h)     { return get_lex(h)->cur.inum; }
-double      nurl_lex_fnum(long long h)     { return get_lex(h)->cur.fnum; }
-long long   nurl_lex_line(long long h)     { return get_lex(h)->cur.line; }
-const char* nurl_lex_filename(long long h) { return strdup(get_lex(h)->filename); }
-
-/* Advance: discard current token, load next. Shifts peek/peek2/peek3/peek4 down. */
-void nurl_lex_advance(long long h) {
-    NurlLex *lx = get_lex(h);
-    free(lx->cur.val);
-    if (lx->peek_valid) {
-        lx->cur = lx->peek;
-        if (lx->peek2_valid) {
-            lx->peek = lx->peek2;
-            if (lx->peek3_valid) {
-                lx->peek2 = lx->peek3;
-                if (lx->peek4_valid) {
-                    lx->peek3 = lx->peek4;
-                    lx->peek4_valid = 0;
-                } else {
-                    lx->peek3_valid = 0;
-                }
-            } else {
-                lx->peek2_valid = 0;
-            }
-        } else {
-            lx->peek_valid = 0;
-        }
-    } else {
-        lx->cur = lex_next_tok(lx);
-        lx->cur.start_pos = g_last_tok_start;
-    }
-}
-
-/* Return the byte position in source where the current token starts. */
-long long nurl_lex_cur_start(long long h) {
-    return (long long)get_lex(h)->cur.start_pos;
-}
-
-/* Return the 1-based column of the current token's start byte. Walks
-   back from cur.start_pos to the previous '\n' (or BOF) and counts
-   bytes. O(column); only called from error paths, so fine. Note this
-   counts UTF-8 bytes, not code points — a multibyte char in the line
-   bumps the column by its byte count, but editors and humans still
-   land on the right line:col since both they and the lexer measure
-   bytes after the last newline. */
-long long nurl_lex_col(long long h) {
-    NurlLex *lx = get_lex(h);
-    int p = lx->cur.start_pos;
-    if (p < 0) p = 0;
-    if (p > lx->len) p = lx->len;
-    int col = 1;
-    while (p > 0 && lx->src[p - 1] != '\n') { p--; col++; }
-    return (long long)col;
-}
-
-/* Return the source text of the line containing the current token,
-   with tabs expanded to single spaces so column offsets in caller-
-   rendered caret diagnostics line up. Result is heap-allocated; the
-   caller (NURL `die`) doesn't free — the process is about to exit. */
-const char* nurl_lex_line_text(long long h) {
-    NurlLex *lx = get_lex(h);
-    int p = lx->cur.start_pos;
-    if (p < 0) p = 0;
-    if (p > lx->len) p = lx->len;
-    /* Walk back to line start. */
-    int line_start = p;
-    while (line_start > 0 && lx->src[line_start - 1] != '\n') line_start--;
-    /* Walk forward to line end (exclusive of '\n'). Handle trailing \r too. */
-    int line_end = p;
-    while (line_end < lx->len && lx->src[line_end] != '\n') line_end++;
-    if (line_end > line_start && lx->src[line_end - 1] == '\r') line_end--;
-    int n = line_end - line_start;
-    char *out = (char*)malloc(n + 1);
-    for (int i = 0; i < n; i++) {
-        char c = lx->src[line_start + i];
-        out[i] = (c == '\t') ? ' ' : c;
-    }
-    out[n] = '\0';
-    return out;
-}
-
-/* Build a caret-pointer string: (col-1) spaces followed by a single
-   `^`. Kept in the runtime so NURL's `die` helper stays one line
-   longer rather than pulling in a string-repeat primitive. */
-const char* nurl_diag_caret(long long col) {
-    long long pad = col > 0 ? col - 1 : 0;
-    if (pad > 4096) pad = 4096;  /* safety clamp */
-    char *out = (char*)malloc(pad + 2);
-    for (long long i = 0; i < pad; i++) out[i] = ' ';
-    out[pad]     = '^';
-    out[pad + 1] = '\0';
-    return out;
-}
-
-/* Return a copy of source[start..start+len] for the given lexer.
-   Used by the compiler to capture raw source text (including backticks
-   and escape sequences) for template storage. */
-const char* nurl_lex_src_slice(long long h, long long start, long long len) {
-    NurlLex *lx = get_lex(h);
-    if (start < 0) start = 0;
-    if (start > lx->len) start = lx->len;
-    long long avail = lx->len - start;
-    if (len < 0) len = 0;
-    if (len > avail) len = avail;
-    char *out = (char*)malloc((size_t)len + 1);
-    memcpy(out, lx->src + start, (size_t)len);
-    out[len] = '\0';
-    return out;
-}
-
-/* Reset lexer to a given byte position and re-lex the current token.
-   Invalidates all lookahead buffers. */
-void nurl_lex_set_pos(long long h, long long pos) {
-    NurlLex *lx = get_lex(h);
-    free(lx->cur.val); lx->cur.val = NULL;
-    if (lx->peek_valid)  { free(lx->peek.val);  lx->peek_valid  = 0; }
-    if (lx->peek2_valid) { free(lx->peek2.val); lx->peek2_valid = 0; }
-    if (lx->peek3_valid) { free(lx->peek3.val); lx->peek3_valid = 0; }
-    if (lx->peek4_valid) { free(lx->peek4.val); lx->peek4_valid = 0; }
-    lx->pos = (int)pos;
-    /* Recompute line number up to pos (scan from start) */
-    lx->line = 1;
-    for (int i = 0; i < lx->pos && i < lx->len; i++)
-        if (lx->src[i] == '\n') lx->line++;
-    lx->cur = lex_next_tok(lx);
-    lx->cur.start_pos = g_last_tok_start;
-}
-
-/* Peek at the token AFTER the current one (one token look-ahead). */
-long long nurl_lex_peek_type(long long h) {
-    NurlLex *lx = get_lex(h);
-    if (!lx->peek_valid) {
-        lx->peek           = lex_next_tok(lx);
-        lx->peek.start_pos = g_last_tok_start;
-        lx->peek_valid     = 1;
-    }
-    return (long long)lx->peek.type;
-}
-
-/* Peek 2 tokens after the current one (two token look-ahead). */
-long long nurl_lex_peek2_type(long long h) {
-    NurlLex *lx = get_lex(h);
-    if (!lx->peek_valid)  { lx->peek  = lex_next_tok(lx); lx->peek.start_pos  = g_last_tok_start; lx->peek_valid  = 1; }
-    if (!lx->peek2_valid) { lx->peek2 = lex_next_tok(lx); lx->peek2.start_pos = g_last_tok_start; lx->peek2_valid = 1; }
-    return (long long)lx->peek2.type;
-}
-
-/* Peek 3 tokens after the current one (three token look-ahead). */
-long long nurl_lex_peek3_type(long long h) {
-    NurlLex *lx = get_lex(h);
-    if (!lx->peek_valid)  { lx->peek  = lex_next_tok(lx); lx->peek.start_pos  = g_last_tok_start; lx->peek_valid  = 1; }
-    if (!lx->peek2_valid) { lx->peek2 = lex_next_tok(lx); lx->peek2.start_pos = g_last_tok_start; lx->peek2_valid = 1; }
-    if (!lx->peek3_valid) { lx->peek3 = lex_next_tok(lx); lx->peek3.start_pos = g_last_tok_start; lx->peek3_valid = 1; }
-    return (long long)lx->peek3.type;
-}
-
-/* Peek 4 tokens after the current one (four token look-ahead). */
-long long nurl_lex_peek4_type(long long h) {
-    NurlLex *lx = get_lex(h);
-    if (!lx->peek_valid)  { lx->peek  = lex_next_tok(lx); lx->peek.start_pos  = g_last_tok_start; lx->peek_valid  = 1; }
-    if (!lx->peek2_valid) { lx->peek2 = lex_next_tok(lx); lx->peek2.start_pos = g_last_tok_start; lx->peek2_valid = 1; }
-    if (!lx->peek3_valid) { lx->peek3 = lex_next_tok(lx); lx->peek3.start_pos = g_last_tok_start; lx->peek3_valid = 1; }
-    if (!lx->peek4_valid) { lx->peek4 = lex_next_tok(lx); lx->peek4.start_pos = g_last_tok_start; lx->peek4_valid = 1; }
-    return (long long)lx->peek4.type;
-}
-
-
-/* ── §6  Symbol table ──────────────────────────────────────────── */
-/*
- * Scoped map: name → llvm_type_string.
- * Implemented as a flat array of (scope_depth, name, type) entries.
- * Supports push/pop for function-local scopes.
- */
-
-#define MAX_SYMS 1000000
-
-typedef struct { int depth; char *name; char *type; } NurlSym;
-
-typedef struct {
-    NurlSym entries[MAX_SYMS];
-    int     count;
-    int     depth;
-} NurlSymTab;
-
-#define MAX_SYMTABS 16
-static NurlSymTab *g_symtabs[MAX_SYMTABS];
-static int         g_symtab_count = 0;
-
-long long nurl_sym_new(void) {
-    if (g_symtab_count >= MAX_SYMTABS) { fputs("nurlc: too many symtabs\n", stderr); exit(1); }
-    NurlSymTab *t = (NurlSymTab*)calloc(1, sizeof(NurlSymTab));
-    t->depth = 0; t->count = 0;
-    int idx = g_symtab_count++;
-    g_symtabs[idx] = t;
-    return (long long)(idx + 1);
-}
-
-static NurlSymTab* get_sym(long long h) {
-    int idx = (int)h - 1;
-    if (idx < 0 || idx >= g_symtab_count || !g_symtabs[idx]) {
-        fputs("nurlc: invalid symtab handle\n", stderr); exit(1);
-    }
-    return g_symtabs[idx];
-}
-
-void nurl_sym_def(long long h, const char *name, const char *type) {
-    NurlSymTab *t = get_sym(h);
-    if (t->count >= MAX_SYMS) { fputs("nurlc: symbol table full\n", stderr); exit(1); }
-    t->entries[t->count].depth = t->depth;
-    t->entries[t->count].name  = strdup(name);
-    t->entries[t->count].type  = strdup(type);
-    t->count++;
-}
-
-/* Return a strdup'd copy of the most-recently-defined type for name, or
-   strdup("") if not found.  Heap-owning the return keeps Phase 2B auto-drop
-   safe — the symbol table retains its own copy via sym_define().            */
-const char* nurl_sym_get(long long h, const char *name) {
-    NurlSymTab *t = get_sym(h);
-    for (int i = t->count - 1; i >= 0; i--)
-        if (strcmp(t->entries[i].name, name) == 0)
-            return strdup(t->entries[i].type);
-    return strdup("");
-}
-
-void nurl_sym_push(long long h) { get_sym(h)->depth++; }
-
-void nurl_sym_pop(long long h) {
-    NurlSymTab *t = get_sym(h);
-    /* remove all entries at current depth */
-    while (t->count > 0 && t->entries[t->count-1].depth == t->depth) {
-        free(t->entries[t->count-1].name);
-        free(t->entries[t->count-1].type);
-        t->count--;
-    }
-    if (t->depth > 0) t->depth--;
-}
-
-
-/* ── §7  Codegen helpers ───────────────────────────────────────── */
-
-typedef struct { int reg; int lbl; } NurlCG;
-
-#define MAX_CGS 8
-static NurlCG *g_cgs[MAX_CGS];
-static int      g_cg_count = 0;
-
-long long nurl_cg_new(void) {
-    if (g_cg_count >= MAX_CGS) { fputs("nurlc: too many codegen handles\n", stderr); exit(1); }
-    NurlCG *cg = (NurlCG*)calloc(1, sizeof(NurlCG));
-    int idx = g_cg_count++;
-    g_cgs[idx] = cg;
-    return (long long)(idx + 1);
-}
-
-static NurlCG* get_cg(long long h) {
-    int idx = (int)h - 1;
-    if (idx < 0 || idx >= g_cg_count || !g_cgs[idx]) {
-        fputs("nurlc: invalid cg handle\n", stderr); exit(1);
-    }
-    return g_cgs[idx];
-}
-
-/* Return next %rN register name (malloc'd). */
-const char* nurl_cg_reg(long long h) {
-    NurlCG *cg = get_cg(h);
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%%r%d", cg->reg++);
-    return strdup(buf);
-}
-
-/* Return next hint_N label name (malloc'd). */
-const char* nurl_cg_lbl(long long h, const char *hint) {
-    NurlCG *cg = get_cg(h);
-    char buf[64];
-    snprintf(buf, sizeof(buf), "%s_%d", hint, cg->lbl++);
-    return strdup(buf);
-}
-
-/* Reset register and label counters (call at start of each function). */
-void nurl_cg_reset(long long h) {
-    NurlCG *cg = get_cg(h);
-    cg->reg = 0;
-    cg->lbl = 0;
-}
-
-/* ── §8  "Last type" sideband ──────────────────────────────────── */
-/*
- * parse_expr returns the LLVM register name (s).
- * The LLVM type of that register is returned via this sideband.
- *
- * Ownership: set() strdups the caller's buffer and frees the previous one.
- * This lets the NURL caller auto-drop its own string right after the call
- * without the sideband dangling. get() returns the stable heap copy; the
- * caller must not free it. The initial value is a literal, so the first
- * set() must skip the free (tracked by g_last_type_owned).
- */
-static const char *g_last_type = "i64";
-static int         g_last_type_owned = 0;
-
-/* get(): returns an owned copy — caller must free. Matches the convention
-   used by nurl_lex_val/nurl_lex_filename so Phase 2B auto-drop is safe.   */
-const char* nurl_get_last_type(void) { return strdup(g_last_type); }
-void        nurl_set_last_type(const char *t) {
-    char *dup = strdup(t ? t : "");
-    if (g_last_type_owned) free((void*)g_last_type);
-    g_last_type = dup;
-    g_last_type_owned = 1;
-}
+/* §5 HashMap, §6a Lexer, §6 Symbol table, §7 Codegen helpers,
+ * §8 "Last type" sideband and §4 file/dir/realpath thunks — all
+ * moved to pure NURL across PURIFY phases 5 / 7 / 9 / 10. The
+ * compiler-internal ones now live in `compiler/nurlc.nu`; the
+ * file/dir/path ones in `stdlib/std/fs.nu` and `stdlib/std/path.nu`
+ * over direct libc FFI. See PURIFY.md Part VII for the LOC table. */
 
 /* ── §9  Memory allocation ─────────────────────────────────────── */
 
@@ -2363,6 +1133,14 @@ void* nurl_realloc(void *ptr, long long bytes) { return realloc(ptr, (size_t)byt
 void  nurl_free(void *ptr)                     { free(ptr); }
 void  nurl_memcpy(void *dst, const void *src, long long bytes) {
     memcpy(dst, src, (size_t)bytes);
+}
+/* Overlap-safe sibling of nurl_memcpy. Use whenever `dst` and `src`
+ * can alias — e.g. shifting the tail of a buffer back over its head
+ * after consuming a prefix. nurl_memcpy is left strict (libc memcpy
+ * semantics) so ASan keeps flagging unintentional overlaps in code
+ * that doesn't reach for the explicit move variant. */
+void  nurl_memmove(void *dst, const void *src, long long bytes) {
+    memmove(dst, src, (size_t)bytes);
 }
 void  nurl_memset(void *dst, long long byte, long long bytes) {
     memset(dst, (int)byte, (size_t)bytes);
@@ -2393,30 +1171,305 @@ void nurl_poke(void *base, long long idx, long long val) {
 /* nurl_malloc kept as alias for backward compatibility */
 void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
 
-
-/* ── §10 String Builder — REMOVED 2026-05-01 ────────────────────────
+/* ── Platform-opaque sizeof bridge ──────────────────────────────────
  *
- * The C-runtime `NurlStringBuilder` type and `nurl_sb_*` API have been
- * retired. Owned strings now live in `stdlib/core/string.nu` on top of
- * `Vec[u]` (see `String { s ctl }`). For growable byte/string buffers
- * use `( string_with_cap n )` + `string_push_char/str/int/float`, or
- * `( vec_with_cap [u] n )` + `vec_push [u]` directly.
- * ─────────────────────────────────────────────────────────────────*/
+ * Many POSIX/Win32 types are deliberately opaque to programs — the
+ * caller is expected to allocate `sizeof(<type>)` bytes via the C
+ * compiler. NURL has no idea what `sizeof(pthread_mutex_t)` is, and
+ * the answer varies per platform (40 on glibc x86_64, 48 on glibc
+ * aarch64, 64 on macOS, a different `CRITICAL_SECTION` shape on
+ * Win32). `nurl_native_sizeof(name)` exposes the C-compiler-known
+ * size to NURL by string lookup. Returns -1 for an unknown name —
+ * callers (`cell_for_native` in stdlib/core/cell.nu) treat this as a
+ * platform-portability bug, not a runtime-recoverable error.
+ *
+ * Names are kept ASCII-stable and case-sensitive. The list stays
+ * small — every entry is a struct we cannot port to NURL because
+ * its layout is platform-defined. Scalar type sizes (`int`,
+ * `long`, `size_t`) cover the cases where a C API takes a
+ * length-prefixed buffer and NURL needs to size the prefix. */
+
+/* <signal.h> on wasi-libc errors out (`wasm lacks signal support`) and
+ * <sys/socket.h> isn't shipped at all, so the WASI build skips both —
+ * the FFI surfaces these expose aren't reachable from a wasm playground
+ * binary anyway. */
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <time.h>
+#ifndef __wasi__
+#  include <signal.h>
+#endif
+#ifdef _WIN32
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#  include <windows.h>
+/* mingw-w64's posix thread model (Debian's gcc-mingw-w64-x86-64 default)
+ * ships <pthread.h> from libwinpthread. NURL's pure-NURL FFI for
+ * mutex+cond (`stdlib/std/thread.nu`) calls pthread_mutex_init /
+ * pthread_cond_init etc. directly, and Cell-sizes its storage from
+ * sizeof(pthread_mutex_t) — so the Win32 runtime needs the same
+ * header that POSIX does. */
+#  include <pthread.h>
+#elif !defined(__wasi__)
+#  include <pthread.h>
+#  include <sys/socket.h>
+#  include <netinet/in.h>
+/* POSIX syscall headers — needed at the top because the
+ * `nurl_native_constant` table and `nurl_wait_*` helpers in §2 below
+ * read constants / macros from fcntl / poll / sys/wait. */
+#  include <fcntl.h>
+#  include <poll.h>
+#  include <sys/wait.h>
+#  include <unistd.h>
+#  include <sys/mman.h>     /* PROT_READ / MAP_PRIVATE / MADV_SEQUENTIAL */
+#endif
+
+long long nurl_native_sizeof(const char *name) {
+    if (!name) return -1;
+    /* pthread family — same names on every platform now that Win32
+     * uses winpthreads. Returns sizeof of the platform's actual
+     * pthread_*_t struct so a Cell can hold it. */
+    if (strcmp(name, "pthread_mutex_t")     == 0) return (long long)sizeof(pthread_mutex_t);
+    if (strcmp(name, "pthread_cond_t")      == 0) return (long long)sizeof(pthread_cond_t);
+    if (strcmp(name, "pthread_t")           == 0) return (long long)sizeof(pthread_t);
+    if (strcmp(name, "pthread_attr_t")      == 0) return (long long)sizeof(pthread_attr_t);
+    if (strcmp(name, "pthread_mutexattr_t") == 0) return (long long)sizeof(pthread_mutexattr_t);
+    if (strcmp(name, "pthread_condattr_t")  == 0) return (long long)sizeof(pthread_condattr_t);
+    if (strcmp(name, "pthread_rwlock_t")    == 0) return (long long)sizeof(pthread_rwlock_t);
+#if defined(_WIN32) || defined(__wasi__)
+    if (strcmp(name, "sigset_t")            == 0) return 8;  /* not first-class on Win32 / WASI */
+#else
+    if (strcmp(name, "sigset_t")            == 0) return (long long)sizeof(sigset_t);
+#endif
+    if (strcmp(name, "struct stat")         == 0) return (long long)sizeof(struct stat);
+    if (strcmp(name, "struct timespec")     == 0) return (long long)sizeof(struct timespec);
+#ifndef __wasi__
+    /* sockaddr_* live in <netinet/in.h> which wasi-libc doesn't ship.
+     * The wasm playground build doesn't need them — the only socket FFI
+     * is the native client connect, gated NURL-side on platform == native. */
+    if (strcmp(name, "struct sockaddr_in")  == 0) return (long long)sizeof(struct sockaddr_in);
+    if (strcmp(name, "struct sockaddr_in6") == 0) return (long long)sizeof(struct sockaddr_in6);
+    if (strcmp(name, "struct sockaddr_storage") == 0) return (long long)sizeof(struct sockaddr_storage);
+#endif
+#if !defined(_WIN32) && !defined(__wasi__)
+    /* POSIX poll(2) — only relevant on Linux/macOS; Win32 has its own
+     * WSAPoll layout. NURL FFI uses this for proc-spawn polling. */
+    if (strcmp(name, "struct pollfd")       == 0) return (long long)sizeof(struct pollfd);
+    if (strcmp(name, "pid_t")               == 0) return (long long)sizeof(pid_t);
+#endif
+    if (strcmp(name, "int")                 == 0) return (long long)sizeof(int);
+    if (strcmp(name, "long")                == 0) return (long long)sizeof(long);
+    if (strcmp(name, "size_t")              == 0) return (long long)sizeof(size_t);
+    if (strcmp(name, "off_t")               == 0) return (long long)sizeof(off_t);
+    if (strcmp(name, "time_t")              == 0) return (long long)sizeof(time_t);
+    return -1;
+}
+
+/* ── Native constant lookup ────────────────────────────────────────
+ *
+ * Same shape as `nurl_native_sizeof` but for integer constants whose
+ * values vary by platform — POSIX `O_NONBLOCK` is 2048 on glibc and
+ * 4 on macOS; `POLLIN` is 1 universally but `POLLHUP` differs; signal
+ * numbers shift between Linux and macOS. NURL has no `#ifdef`, so
+ * platform-conditional constants need a runtime accessor.
+ *
+ * Used by `stdlib/core/posix.nu` so the pure-NURL fork/exec/poll/
+ * waitpid path can call `fcntl(fd, F_SETFL, O_NONBLOCK)` etc.
+ * without baking integer values into NURL code.
+ *
+ * Returns -1 for unknown names — caller treats that as a hard
+ * portability bug, not a recoverable error. Win32 / WASI return -1
+ * for every POSIX-only name (the NURL caller is expected to gate the
+ * whole POSIX code path on a target check). */
+long long nurl_native_constant(const char *name) {
+    if (!name) return -1;
+#if !defined(_WIN32) && !defined(__wasi__)
+    /* fcntl(2) command words */
+    if (strcmp(name, "F_GETFL")     == 0) return F_GETFL;
+    if (strcmp(name, "F_SETFL")     == 0) return F_SETFL;
+    if (strcmp(name, "F_GETFD")     == 0) return F_GETFD;
+    if (strcmp(name, "F_SETFD")     == 0) return F_SETFD;
+    if (strcmp(name, "FD_CLOEXEC")  == 0) return FD_CLOEXEC;
+    if (strcmp(name, "O_NONBLOCK")  == 0) return O_NONBLOCK;
+    /* poll(2) events */
+    if (strcmp(name, "POLLIN")      == 0) return POLLIN;
+    if (strcmp(name, "POLLOUT")     == 0) return POLLOUT;
+    if (strcmp(name, "POLLHUP")     == 0) return POLLHUP;
+    if (strcmp(name, "POLLERR")     == 0) return POLLERR;
+    if (strcmp(name, "POLLNVAL")    == 0) return POLLNVAL;
+    /* signals — the proc-spawn path needs only a small set, but we
+     * list common ones so user code can install signal handlers. */
+    if (strcmp(name, "SIGPIPE")     == 0) return SIGPIPE;
+    if (strcmp(name, "SIGTERM")     == 0) return SIGTERM;
+    if (strcmp(name, "SIGKILL")     == 0) return SIGKILL;
+    if (strcmp(name, "SIGINT")      == 0) return SIGINT;
+    if (strcmp(name, "SIGHUP")      == 0) return SIGHUP;
+    if (strcmp(name, "SIGCHLD")     == 0) return SIGCHLD;
+    /* signal(2) sentinel: SIG_IGN is a function pointer-cast macro.
+     * Cast to long long via uintptr_t — the only legal value the
+     * receiver passes back to signal(2) is what we returned here. */
+    if (strcmp(name, "SIG_IGN")     == 0) return (long long)(uintptr_t)SIG_IGN;
+    if (strcmp(name, "SIG_DFL")     == 0) return (long long)(uintptr_t)SIG_DFL;
+    /* waitpid(2) options */
+    if (strcmp(name, "WNOHANG")     == 0) return WNOHANG;
+    /* errno values surfaced for diagnostic / branching in NURL */
+    if (strcmp(name, "ENOENT")      == 0) return ENOENT;
+    if (strcmp(name, "EAGAIN")      == 0) return EAGAIN;
+    if (strcmp(name, "EWOULDBLOCK") == 0) return EWOULDBLOCK;
+    if (strcmp(name, "EINTR")       == 0) return EINTR;
+    if (strcmp(name, "EPIPE")       == 0) return EPIPE;
+#endif
+    /* ERANGE — surfaced cross-platform (defined in `<errno.h>` everywhere)
+     * so `stdlib/ext/env.nu`'s pure-NURL `getcwd` retry loop can branch on
+     * "buffer too small" without baking a platform-specific integer. */
+    if (strcmp(name, "ERANGE")      == 0) return ERANGE;
+    /* POSIX `<time.h>` clock identifiers — exposed unconditionally
+     * because `<time.h>` is included at file scope above, and every
+     * supported target's `clock_gettime` (Linux/macOS libc, MinGW
+     * winpthreads, wasi-libc) recognises these IDs. The values differ
+     * across platforms (CLOCK_MONOTONIC is 1 on Linux/WASI/MinGW but 6
+     * on macOS) so NURL callers must read them at runtime rather than
+     * hard-code. Used by `stdlib/std/time.nu`. */
+    /* wasi-libc defines these as pointer-typed macros (`(&_CLOCK_REALTIME)`),
+     * not integers — cast through uintptr_t so the lookup returns a stable
+     * long long regardless of platform; callers don't decode the value,
+     * they just hand it back to `clock_gettime` which on wasi reinterprets
+     * it as its native `clockid_t`. */
+#ifdef CLOCK_REALTIME
+    if (strcmp(name, "CLOCK_REALTIME")  == 0) return (long long)(uintptr_t)CLOCK_REALTIME;
+#endif
+#ifdef CLOCK_MONOTONIC
+    if (strcmp(name, "CLOCK_MONOTONIC") == 0) return (long long)(uintptr_t)CLOCK_MONOTONIC;
+#endif
+    /* File-mode + mmap constants for `stdlib/std/fs.nu`'s pure-NURL
+     * `__read_file_mmap_pure`. POSIX-only — Win32 NURL callers gate
+     * on `posix_const "MAP_PRIVATE" != -1` and fall through to the
+     * fopen+fread fallback in `__read_file_fread_pure`. */
+#if !defined(_WIN32) && !defined(__wasi__)
+    if (strcmp(name, "O_RDONLY")        == 0) return O_RDONLY;
+    if (strcmp(name, "PROT_READ")       == 0) return PROT_READ;
+    if (strcmp(name, "MAP_PRIVATE")     == 0) return MAP_PRIVATE;
+#  ifdef MADV_SEQUENTIAL
+    if (strcmp(name, "MADV_SEQUENTIAL") == 0) return MADV_SEQUENTIAL;
+#  endif
+#endif
+    (void)name;
+    return -1;
+}
+
+/* errno is a thread-local on every platform; libc exposes it via
+ * `__errno_location()` (glibc), `__error()` (BSD/macOS), `_errno()`
+ * (mingw). NURL FFI can't follow that platform-specific accessor
+ * cleanly, so the runtime hands back the current value. */
+/* Return type widened to `long long` (i64) on 2026-05-24 to match
+ * the NURL FFI declaration in `stdlib/core/posix.nu` (`→ i`). On
+ * x86_64 SysV the upper 32 bits of an `int` return were undefined
+ * and happened to be zero in practice; on wasm32 wasm-ld validates
+ * the signature strictly and refused to link until the C side
+ * widened. Same for `nurl_wait_*` and `nurl_errno_set`. */
+long long nurl_errno_get(void) { return errno; }
+void nurl_errno_set(long long e) { errno = (int)e; }
+
+/* Macro decoders for waitpid status. WIFEXITED / WEXITSTATUS are
+ * preprocessor bit-twiddles; NURL has no preprocessor, so the
+ * runtime exposes them as trivial functions. Same pattern as
+ * nurl_native_sizeof — opaque platform shape behind a stable API. */
+/* The W*-macros on macOS expand to `*(int*)&(x)` so they need an
+ * *lvalue* of type int, not an rvalue cast. Bind a local first. */
+long long nurl_wait_is_exited (long long status) {
+#if defined(_WIN32) || defined(__wasi__)
+    (void)status; return 0;
+#else
+    int s = (int)status;
+    return WIFEXITED(s) ? 1 : 0;
+#endif
+}
+long long nurl_wait_exit_status(long long status) {
+#if defined(_WIN32) || defined(__wasi__)
+    (void)status; return -1;
+#else
+    int s = (int)status;
+    return WIFEXITED(s) ? WEXITSTATUS(s) : -1;
+#endif
+}
+long long nurl_wait_is_signaled(long long status) {
+#if defined(_WIN32) || defined(__wasi__)
+    (void)status; return 0;
+#else
+    int s = (int)status;
+    return WIFSIGNALED(s) ? 1 : 0;
+#endif
+}
+long long nurl_wait_term_sig(long long status) {
+#if defined(_WIN32) || defined(__wasi__)
+    (void)status; return 0;
+#else
+    int s = (int)status;
+    return WIFSIGNALED(s) ? WTERMSIG(s) : 0;
+#endif
+}
+
+/* ── Atomic refcount primitives ─────────────────────────────────────
+ *
+ * `Arc[T]` (stdlib/std/arc.nu) needs a thread-safe ref-count
+ * increment / decrement-and-test on a heap-resident `i64`. NURL has
+ * no atomic primitive in the language; expose the two operations as
+ * C-side thunks over GCC/Clang's __atomic builtins (or MSVC's
+ * `_Interlocked*`).
+ *
+ * `nurl_atomic_i64_inc(p)` adds 1 atomically, returns the OLD value.
+ * `nurl_atomic_i64_dec_fetch(p)` subtracts 1 atomically, returns the
+ *   NEW value — Arc's free path needs the post-decrement count to
+ *   decide whether to actually deallocate (count became 0).
+ * `nurl_atomic_i64_load(p)` plain acquire-load (debug / introspection).
+ *
+ * Memory ordering: SEQ_CST on every op. Refcount churn is not the
+ * hot path; the safety of sequential consistency outweighs the
+ * acquire/release dance, and matches what `std::shared_ptr` /
+ * `Arc<T>` typically use on the FREE path. */
+long long nurl_atomic_i64_inc(void *p) {
+    if (!p) return 0;
+#ifdef _WIN32
+    return (long long)InterlockedExchangeAdd64((volatile LONG64*)p, 1);
+#else
+    return __atomic_fetch_add((long long*)p, 1, __ATOMIC_SEQ_CST);
+#endif
+}
+
+long long nurl_atomic_i64_dec_fetch(void *p) {
+    if (!p) return 0;
+#ifdef _WIN32
+    /* InterlockedExchangeAdd64 returns the OLD value. To get the new
+     * value (old - 1), subtract one. */
+    return (long long)InterlockedExchangeAdd64((volatile LONG64*)p, -1) - 1;
+#else
+    return __atomic_sub_fetch((long long*)p, 1, __ATOMIC_SEQ_CST);
+#endif
+}
+
+long long nurl_atomic_i64_load(void *p) {
+    if (!p) return 0;
+#ifdef _WIN32
+    return (long long)InterlockedCompareExchange64((volatile LONG64*)p, 0, 0);
+#else
+    long long v;
+    __atomic_load((long long*)p, &v, __ATOMIC_SEQ_CST);
+    return v;
+#endif
+}
+
 
 /* ── §11  Math (libm bridge) ────────────────────────────────────── */
-
-double nurl_sqrt (double x)            { return sqrt (x); }
-double nurl_fabs (double x)            { return fabs (x); }
-double nurl_floor(double x)            { return floor(x); }
-double nurl_ceil (double x)            { return ceil (x); }
-double nurl_round(double x)            { return round(x); }
-double nurl_pow  (double x, double y)  { return pow  (x, y); }
-double nurl_log  (double x)            { return log  (x); }
-double nurl_exp  (double x)            { return exp  (x); }
-double nurl_sin  (double x)            { return sin  (x); }
-double nurl_cos  (double x)            { return cos  (x); }
-double nurl_tan  (double x)            { return tan  (x); }
-double nurl_atan2(double y, double x)  { return atan2(y, x); }
+/*
+ * libm pass-throughs (sqrt / fabs / floor / etc.) and the integer
+ * helpers (`nurl_iabs` / `_ipow`) are pure-NURL FFI now —
+ * `stdlib/std/float.nu` and `stdlib/std/int.nu`. What stays here
+ * are the ones that can't be a thin FFI bridge:
+ *   - `nurl_f64_bits` / `_from_bits` / `nurl_f32_from_bits` —
+ *     memcpy type-punning (NURL has no bit-reinterpret primitive)
+ *   - `nurl_is_nan` / `_is_inf` — isnan/isinf are libm macros,
+ *     not stable C symbols; keep the wrapper for portability
+ */
 
 /* IEEE-754 bit access for the MessagePack codec (stdlib/ext/msgpack.nu),
  * which reads and writes float32 / float64 in their exact wire bit
@@ -2450,120 +1503,15 @@ double nurl_f32_from_bits(long long bits) {
 long long nurl_is_nan(double x) { return isnan(x) ? 1 : 0; }
 long long nurl_is_inf(double x) { return isinf(x) ? 1 : 0; }
 
-/* Integer absolute value with overflow protection for LLONG_MIN. */
-long long nurl_iabs(long long n) {
-    if (n == (long long)(1ULL << 63)) return (long long)(1ULL << 63); /* saturate */
-    return n < 0 ? -n : n;
-}
-
-/* Integer power with non-negative exponent. Returns 0 when y < 0
- * (caller can use float_pow for that case). */
-long long nurl_ipow(long long x, long long y) {
-    if (y < 0) return 0;
-    long long r = 1;
-    long long b = x;
-    while (y > 0) {
-        if (y & 1) r *= b;
-        y >>= 1;
-        if (y) b *= b;
-    }
-    return r;
-}
-
-/* Strict double parser. Returns 1 on success, 0 on failure.
- * On success the parsed value is stored in a sideband retrievable via
- * nurl_str_float_value(). Rejects empty strings, trailing garbage
- * (after optional whitespace), no-digit strings, and out-of-range. */
-static double g_last_parsed_float = 0.0;
-
-long long nurl_str_to_float_safe(const char *s) {
-    g_last_parsed_float = 0.0;
-    if (!s) return 0;
-    while (*s == ' ' || *s == '\t') s++;
-    if (*s == '\0') return 0;
-    char *end = NULL;
-    errno = 0;
-    double v = strtod(s, &end);
-    if (end == s) return 0;                         /* no digits */
-    if (errno == ERANGE) return 0;                  /* overflow / underflow */
-    while (*end == ' ' || *end == '\t') end++;
-    if (*end != '\0') return 0;                     /* trailing garbage */
-    g_last_parsed_float = v;
-    return 1;
-}
-
-double nurl_str_float_value(void) { return g_last_parsed_float; }
-
-/* ── §12  Time ─────────────────────────────────────────────────── */
-/* MSVC's UCRT lacks POSIX `clock_gettime` and `nanosleep`, so the
- * Windows path uses `GetSystemTimeAsFileTime` + `QueryPerformanceCounter`
- * + `Sleep`. MinGW-w64 actually does provide clock_gettime, but going
- * through Win32 APIs unconditionally on _WIN32 keeps both toolchains on
- * the same code path. */
-
-long long nurl_now_ms(void) {
-#ifdef _WIN32
-    /* FILETIME ticks are 100ns since 1601-01-01; offset to Unix epoch =
-     * 11644473600 seconds = 116444736000000000 in 100ns units. */
-    FILETIME ft;
-    GetSystemTimeAsFileTime(&ft);
-    unsigned long long t = ((unsigned long long)ft.dwHighDateTime << 32)
-                         |  (unsigned long long)ft.dwLowDateTime;
-    t -= 116444736000000000ULL;          /* → 100ns since Unix epoch */
-    return (long long)(t / 10000ULL);    /* → ms */
-#else
-    struct timespec ts;
-    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) return 0;
-    return (long long)ts.tv_sec * 1000LL + (long long)(ts.tv_nsec / 1000000LL);
-#endif
-}
-
-long long nurl_now_seconds(void) {
-#ifdef _WIN32
-    return nurl_now_ms() / 1000LL;
-#else
-    struct timespec ts;
-    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) return 0;
-    return (long long)ts.tv_sec;
-#endif
-}
-
-long long nurl_monotonic_ns(void) {
-#ifdef _WIN32
-    LARGE_INTEGER freq, ctr;
-    if (!QueryPerformanceFrequency(&freq) || !QueryPerformanceCounter(&ctr))
-        return 0;
-    /* Convert ticks → ns without losing precision: split the multiply. */
-    long long sec     = ctr.QuadPart / freq.QuadPart;
-    long long rem     = ctr.QuadPart % freq.QuadPart;
-    long long ns_part = (rem * 1000000000LL) / freq.QuadPart;
-    return sec * 1000000000LL + ns_part;
-#elif defined(CLOCK_MONOTONIC)
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
-    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
-#else
-    struct timespec ts;
-    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) return 0;
-    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
-#endif
-}
-
-void nurl_sleep_ms(long long ms) {
-    if (ms <= 0) return;
-#ifdef _WIN32
-    Sleep((DWORD)ms);
-#else
-    struct timespec req;
-    req.tv_sec  = (time_t)(ms / 1000);
-    req.tv_nsec = (long)((ms % 1000) * 1000000L);
-    while (nanosleep(&req, &req) == -1 && errno == EINTR) { /* retry */ }
-#endif
-}
-
-/* ── §13  CLI tooling: env, cwd, stdin slurp, directory listing ── */
-/* All const char* returns are heap-owned (Phase 2B) — strdup on success,
- * NULL on failure (so callers can map to ?T or fall back). */
+/* ── §13  CLI tooling: directory listing ────────────────────────────
+ *
+ * `nurl_env_*`, `_cwd`, `_chdir`, `_read_all_stdin` and Time §12
+ * (`clock_gettime` + `nanosleep`) are pure-NURL FFI in
+ * `stdlib/ext/env.nu`, `stdlib/core/io.nu` and `stdlib/std/time.nu`.
+ * What stays in C is the directory iterator state cache below —
+ * opaque DIR* on POSIX, WIN32_FIND_DATAA on Win32 — and a 1-LOC
+ * dirent-name accessor (bridges the platform-varying `d_name`
+ * field offset). */
 
 #ifdef _WIN32
 #  include <io.h>          /* _getcwd */
@@ -2572,92 +1520,6 @@ void nurl_sleep_ms(long long ms) {
 #  include <unistd.h>      /* getcwd, chdir, setenv, unsetenv */
 #  include <dirent.h>      /* opendir, readdir, closedir */
 #endif
-
-const char* nurl_env_get(const char *name) {
-    if (!name) return NULL;
-    const char *v = getenv(name);
-    if (!v) return NULL;
-    return strdup(v);
-}
-
-long long nurl_env_set(const char *name, const char *value) {
-    if (!name || !value) { errno = EINVAL; return -1; }
-#ifdef _WIN32
-    /* _putenv_s returns 0 on success. */
-    return _putenv_s(name, value) == 0 ? 0 : -1;
-#else
-    /* setenv overwrite=1 → match Rust's std::env::set_var. */
-    return setenv(name, value, 1) == 0 ? 0 : -1;
-#endif
-}
-
-long long nurl_env_unset(const char *name) {
-    if (!name) { errno = EINVAL; return -1; }
-#ifdef _WIN32
-    /* "VAR=" with empty value removes the variable on Windows. */
-    return _putenv_s(name, "") == 0 ? 0 : -1;
-#else
-    return unsetenv(name) == 0 ? 0 : -1;
-#endif
-}
-
-const char* nurl_cwd(void) {
-#ifdef _WIN32
-    char *buf = _getcwd(NULL, 0);   /* _getcwd(NULL, 0) malloc's */
-    if (!buf) return NULL;
-    /* Hand back via strdup so the NURL caller can free it through nurl_free. */
-    char *out = strdup(buf);
-    free(buf);
-    return out;
-#else
-    /* getcwd(NULL, 0) is a glibc extension; do the portable two-step. */
-    size_t cap = 256;
-    for (;;) {
-        char *buf = (char*)malloc(cap);
-        if (!buf) return NULL;
-        if (getcwd(buf, cap) != NULL) return buf;
-        free(buf);
-        if (errno != ERANGE) return NULL;
-        if (cap >= (1u << 20)) return NULL;     /* sanity ceiling */
-        cap *= 2;
-    }
-#endif
-}
-
-long long nurl_chdir(const char *path) {
-    if (!path) { errno = EINVAL; return -1; }
-#ifdef _WIN32
-    return _chdir(path) == 0 ? 0 : -1;
-#else
-    return chdir(path) == 0 ? 0 : -1;
-#endif
-}
-
-/* Slurp stdin to EOF. Always returns a heap-owned C string (possibly empty).
- * On allocation failure returns NULL. */
-const char* nurl_read_all_stdin(void) {
-    size_t cap = 4096, len = 0;
-    char *buf = (char*)malloc(cap);
-    if (!buf) return NULL;
-    for (;;) {
-        size_t want = cap - len - 1;            /* leave space for NUL */
-        if (want == 0) {
-            size_t ncap = cap * 2;
-            char *nb = (char*)realloc(buf, ncap);
-            if (!nb) { free(buf); return NULL; }
-            buf = nb; cap = ncap;
-            want = cap - len - 1;
-        }
-        size_t got = fread(buf + len, 1, want, stdin);
-        len += got;
-        if (got < want) {                       /* EOF or error */
-            if (ferror(stdin)) { free(buf); return NULL; }
-            break;
-        }
-    }
-    buf[len] = '\0';
-    return buf;
-}
 
 /* Directory listing — opaque handle (i64) + skip-dots iteration.
  * The "." and ".." entries are filtered so callers don't have to. */
@@ -2753,18 +1615,38 @@ int symlink(const char *target, const char *linkpath) {
 
 #else  /* POSIX */
 
+/* POSIX dir-listing is pure NURL on the hot path (`stdlib/std/fs.nu`
+ * drives opendir / readdir / closedir via FFI). The `dirent` name
+ * accessor below bridges the platform-varying `d_name` field offset.
+ *
+ * The opaque-handle trio (`nurl_dir_list_open/next/close`) is the
+ * Win32 surface; on POSIX it is normally unreachable because
+ * `dir_list` short-circuits to `__dir_list_pure_posix`. Under `-flto`
+ * the dead branch is fully eliminated. Sanitizer builds disable LTO,
+ * so the symbols still have to *link* — and that's why we provide a
+ * working POSIX implementation here rather than abort-stubs. The two
+ * code paths stay observationally equivalent (same skip-dots filter,
+ * same strdup'd ownership transfer) so the fallback is correct, not
+ * just linkable. */
+typedef struct {
+    DIR *d;
+} NurlDirIterPosix;
+
 long long nurl_dir_list_open(const char *path) {
     if (!path) { errno = EINVAL; return 0; }
     DIR *d = opendir(path);
-    if (!d) return 0;
-    return (long long)(uintptr_t)d;
+    if (!d) return 0;                              /* errno set by opendir */
+    NurlDirIterPosix *it = (NurlDirIterPosix*)calloc(1, sizeof(*it));
+    if (!it) { closedir(d); errno = ENOMEM; return 0; }
+    it->d = d;
+    return (long long)(uintptr_t)it;
 }
 
 const char* nurl_dir_list_next(long long handle) {
-    DIR *d = (DIR*)(uintptr_t)handle;
-    if (!d) return NULL;
+    NurlDirIterPosix *it = (NurlDirIterPosix*)(uintptr_t)handle;
+    if (!it || !it->d) return NULL;
     for (;;) {
-        struct dirent *de = readdir(d);
+        struct dirent *de = readdir(it->d);
         if (!de) return NULL;
         const char *name = de->d_name;
         if (name[0] == '.' && (name[1] == '\0' ||
@@ -2774,8 +1656,14 @@ const char* nurl_dir_list_next(long long handle) {
 }
 
 void nurl_dir_list_close(long long handle) {
-    DIR *d = (DIR*)(uintptr_t)handle;
-    if (d) closedir(d);
+    NurlDirIterPosix *it = (NurlDirIterPosix*)(uintptr_t)handle;
+    if (!it) return;
+    if (it->d) closedir(it->d);
+    free(it);
+}
+
+const char* nurl_dirent_name(const void *de) {
+    return de ? ((const struct dirent *)de)->d_name : NULL;
 }
 
 #endif
@@ -3841,13 +2729,6 @@ void nurl_http_response_free(long long resp) {
     free(r);
 }
 
-/* ── §15  Logging level (mutable global) ───────────────────────── */
-/* Single process-wide level used by stdlib/std/log.nu.            */
-/* Encoding: 0=Debug 1=Info 2=Warn 3=Error 4=Off. Default Info(1). */
-static long long g_log_level = 1;
-long long nurl_log_level_get(void) { return g_log_level; }
-void nurl_log_level_set(long long lvl) { g_log_level = lvl; }
-
 /* ── §16  Process execution ───────────────────────────────────── */
 /*
  * Synchronous subprocess runner used by stdlib/std/process.nu.
@@ -3920,8 +2801,18 @@ static int nurl__proc_buf_append(NurlProcBuf *b, const char *src, size_t n) {
 }
 
 #if !defined(_WIN32) && !defined(__wasi__)
-/* ── POSIX backend (Linux + macOS) ───────────────────────────── */
+/* POSIX backend: the real fork+pipe+poll+waitpid path lives in
+ * pure NURL (`stdlib/std/process.nu` via `stdlib/core/posix.nu`'s
+ * FFI surface). `process_run` dispatches there on every POSIX
+ * target; this no-op stub remains only for link-time symbol
+ * resolution of `nurl_proc_run`. */
+long long nurl_proc_run(const char *cmd, const char *argv_buf,
+                        long long argc, const char *stdin_blob) {
+    (void)cmd; (void)argv_buf; (void)argc; (void)stdin_blob;
+    return 0;
+}
 
+/* Shared POSIX include block — used by the §16b accessors below. */
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -3933,230 +2824,6 @@ static void nurl__proc_close_pair(int p[2]) {
     if (p[0] >= 0) close(p[0]);
     if (p[1] >= 0) close(p[1]);
     p[0] = p[1] = -1;
-}
-
-long long nurl_proc_run(const char *cmd, const char *argv_buf,
-                        long long argc, const char *stdin_blob) {
-    NurlProcResult *r = (NurlProcResult*)calloc(1, sizeof(NurlProcResult));
-    if (!r) return 0;
-    if (!cmd || !*cmd) {
-        r->err_kind   = NURL_PROC_ERR_NOTFOUND;
-        r->stdout_buf = strdup("");
-        r->stderr_buf = strdup("");
-        return (long long)(uintptr_t)r;
-    }
-    if (argc < 0) argc = 0;
-    const char *const *argv_user = (const char *const *)argv_buf;
-
-    int sin_p[2]  = {-1,-1};
-    int sout_p[2] = {-1,-1};
-    int serr_p[2] = {-1,-1};
-    int err_p[2]  = {-1,-1};
-
-    if (pipe(sin_p)  < 0 ||
-        pipe(sout_p) < 0 ||
-        pipe(serr_p) < 0 ||
-        pipe(err_p)  < 0) {
-        nurl__proc_close_pair(sin_p);
-        nurl__proc_close_pair(sout_p);
-        nurl__proc_close_pair(serr_p);
-        nurl__proc_close_pair(err_p);
-        r->err_kind   = NURL_PROC_ERR_IO;
-        r->stdout_buf = strdup("");
-        r->stderr_buf = strdup("");
-        return (long long)(uintptr_t)r;
-    }
-
-    /* CLOEXEC on the exec-error sideband write end so it auto-closes
-     * on a successful exec — that EOF is how the parent learns exec
-     * worked. */
-    int efl = fcntl(err_p[1], F_GETFD);
-    if (efl != -1) fcntl(err_p[1], F_SETFD, efl | FD_CLOEXEC);
-
-    /* argv layout: [cmd, user[0], ..., user[argc-1], NULL] */
-    char **full = (char**)malloc(sizeof(char*) * (size_t)(argc + 2));
-    if (!full) {
-        nurl__proc_close_pair(sin_p);
-        nurl__proc_close_pair(sout_p);
-        nurl__proc_close_pair(serr_p);
-        nurl__proc_close_pair(err_p);
-        r->err_kind   = NURL_PROC_ERR_OTHER;
-        r->stdout_buf = strdup("");
-        r->stderr_buf = strdup("");
-        return (long long)(uintptr_t)r;
-    }
-    full[0] = (char*)cmd;
-    for (long long i = 0; i < argc; i++) {
-        full[i + 1] = argv_user && argv_user[i] ? (char*)argv_user[i] : (char*)"";
-    }
-    full[argc + 1] = NULL;
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        free(full);
-        nurl__proc_close_pair(sin_p);
-        nurl__proc_close_pair(sout_p);
-        nurl__proc_close_pair(serr_p);
-        nurl__proc_close_pair(err_p);
-        r->err_kind   = NURL_PROC_ERR_IO;
-        r->stdout_buf = strdup("");
-        r->stderr_buf = strdup("");
-        return (long long)(uintptr_t)r;
-    }
-    if (pid == 0) {
-        /* child */
-        if (sin_p[0]  != 0) dup2(sin_p[0],  0);
-        if (sout_p[1] != 1) dup2(sout_p[1], 1);
-        if (serr_p[1] != 2) dup2(serr_p[1], 2);
-        close(sin_p[0]);  close(sin_p[1]);
-        close(sout_p[0]); close(sout_p[1]);
-        close(serr_p[0]); close(serr_p[1]);
-        close(err_p[0]);
-        execvp(cmd, full);
-        /* exec failed — report errno over the sideband and bail. */
-        int e = errno;
-        ssize_t wn = write(err_p[1], &e, sizeof(e));
-        (void)wn;
-        _exit(127);
-    }
-    /* parent */
-    free(full);
-    close(sin_p[0]);   sin_p[0]  = -1;
-    close(sout_p[1]);  sout_p[1] = -1;
-    close(serr_p[1]);  serr_p[1] = -1;
-    close(err_p[1]);   err_p[1]  = -1;
-
-    /* Non-blocking stdout/stderr so poll-driven drain can't deadlock. */
-    int fl;
-    fl = fcntl(sout_p[0], F_GETFL); if (fl != -1) fcntl(sout_p[0], F_SETFL, fl | O_NONBLOCK);
-    fl = fcntl(serr_p[0], F_GETFL); if (fl != -1) fcntl(serr_p[0], F_SETFL, fl | O_NONBLOCK);
-
-    /* Write stdin (blocking). Ignore SIGPIPE locally so an early
-     * child exit doesn't take the parent down. */
-    void (*old_pipe)(int) = signal(SIGPIPE, SIG_IGN);
-    if (stdin_blob && *stdin_blob) {
-        size_t total = strlen(stdin_blob);
-        size_t off = 0;
-        while (off < total) {
-            ssize_t n = write(sin_p[1], stdin_blob + off, total - off);
-            if (n < 0) {
-                if (errno == EINTR) continue;
-                break;
-            }
-            off += (size_t)n;
-        }
-    }
-    close(sin_p[1]); sin_p[1] = -1;
-    signal(SIGPIPE, old_pipe);
-
-    NurlProcBuf out_buf = {0}, err_buf = {0};
-    char tmp[4096];
-    int sout_open = 1, serr_open = 1;
-    int io_err = 0;
-    while (sout_open || serr_open) {
-        struct pollfd pfds[2];
-        int n = 0;
-        if (sout_open) { pfds[n].fd = sout_p[0]; pfds[n].events = POLLIN; n++; }
-        if (serr_open) { pfds[n].fd = serr_p[0]; pfds[n].events = POLLIN; n++; }
-        int pr = poll(pfds, n, -1);
-        if (pr < 0) {
-            if (errno == EINTR) continue;
-            io_err = 1;
-            break;
-        }
-        for (int i = 0; i < n; i++) {
-            short rev = pfds[i].revents;
-            if (!rev) continue;
-            int fd = pfds[i].fd;
-            NurlProcBuf *target = (fd == sout_p[0]) ? &out_buf : &err_buf;
-            int *open_flag      = (fd == sout_p[0]) ? &sout_open : &serr_open;
-            int got_eof = 0;
-            for (;;) {
-                ssize_t rd = read(fd, tmp, sizeof(tmp));
-                if (rd > 0) {
-                    if (!nurl__proc_buf_append(target, tmp, (size_t)rd)) {
-                        io_err = 1;
-                        got_eof = 1;
-                        break;
-                    }
-                } else if (rd == 0) {
-                    got_eof = 1;
-                    break;
-                } else {
-                    if (errno == EINTR) continue;
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-                    io_err = 1;
-                    got_eof = 1;
-                    break;
-                }
-            }
-            if (got_eof || (rev & (POLLHUP | POLLERR))) {
-                /* drain any remaining bytes once more before closing */
-                for (;;) {
-                    ssize_t rd = read(fd, tmp, sizeof(tmp));
-                    if (rd > 0) {
-                        if (!nurl__proc_buf_append(target, tmp, (size_t)rd)) {
-                            io_err = 1;
-                            break;
-                        }
-                    } else break;
-                }
-                *open_flag = 0;
-            }
-        }
-    }
-    close(sout_p[0]); sout_p[0] = -1;
-    close(serr_p[0]); serr_p[0] = -1;
-
-    /* Drain exec-error sideband. EOF without bytes ⇒ exec succeeded. */
-    int child_errno = 0;
-    {
-        size_t got = 0;
-        for (;;) {
-            ssize_t rd = read(err_p[0], (char*)&child_errno + got, sizeof(child_errno) - got);
-            if (rd > 0) {
-                got += (size_t)rd;
-                if (got >= sizeof(child_errno)) break;
-            } else if (rd == 0) {
-                break;
-            } else if (errno == EINTR) {
-                continue;
-            } else {
-                break;
-            }
-        }
-        close(err_p[0]); err_p[0] = -1;
-    }
-
-    int status = 0;
-    pid_t w;
-    do { w = waitpid(pid, &status, 0); } while (w < 0 && errno == EINTR);
-    if (w < 0) io_err = 1;
-
-    if (child_errno != 0) {
-        r->exit_code = -1;
-        r->err_kind  = (child_errno == ENOENT)
-                          ? NURL_PROC_ERR_NOTFOUND
-                          : NURL_PROC_ERR_EXEC_FAILED;
-    } else if (io_err) {
-        r->exit_code = -1;
-        r->err_kind  = NURL_PROC_ERR_IO;
-    } else if (WIFEXITED(status)) {
-        r->exit_code = (long long)WEXITSTATUS(status);
-        r->err_kind  = NURL_PROC_ERR_OK;
-    } else if (WIFSIGNALED(status)) {
-        r->exit_code = (long long)(128 + WTERMSIG(status));
-        r->err_kind  = NURL_PROC_ERR_OK;
-    } else {
-        r->exit_code = -1;
-        r->err_kind  = NURL_PROC_ERR_OTHER;
-    }
-
-    r->stdout_buf = out_buf.data ? out_buf.data : strdup("");
-    r->stdout_len = (long long)out_buf.len;
-    r->stderr_buf = err_buf.data ? err_buf.data : strdup("");
-    r->stderr_len = (long long)err_buf.len;
-    return (long long)(uintptr_t)r;
 }
 
 #elif defined(_WIN32) && !defined(__wasi__)
@@ -4459,20 +3126,31 @@ void nurl_proc_free(long long h) {
  * Tag values match `ProcessErr` (NURL_PROC_ERR_* constants above).
  */
 
+/* All-long-long layout — every field is one 8-byte slot — so the
+ * pure-NURL POSIX backend in `stdlib/std/process.nu` can index
+ * fields by `nurl_poke` / `nurl_peek` slot number (0..15). C-side
+ * accessors read the same fields via the typedef. sizeof is 128
+ * bytes on every supported POSIX target.
+ *
+ * Win32 keeps its own layout (HANDLEs instead of fds) since
+ * pure-NURL FFI doesn't reach CreateProcess yet. Slots 0..5 are
+ * shared, slot 6+ is `h_proc / fd_in / pid` interleaved by
+ * platform — Win32 is allowed to differ because NURL never reads
+ * its slots directly. */
 typedef struct NurlProcChild {
-    long long  err_kind;       /* 0 / NURL_PROC_ERR_* set at spawn */
-    long long  last_io_err;    /* errno snapshot from last failure */
-    long long  exit_code;      /* -1 until wait() succeeds */
-    int        eof;            /* stdout drained: 0/1 */
-    int        waited;         /* exit_code is valid */
-    long long  pid_or_0;       /* logical pid; 0 on platforms w/o pid */
+    long long  err_kind;       /* slot 0 — 0 / NURL_PROC_ERR_* set at spawn */
+    long long  last_io_err;    /* slot 1 — errno snapshot from last failure */
+    long long  exit_code;      /* slot 2 — -1 until wait() succeeds */
+    long long  eof;            /* slot 3 — stdout drained: 0/1 */
+    long long  waited;         /* slot 4 — exit_code is valid */
+    long long  pid_or_0;       /* slot 5 — logical pid; 0 on platforms w/o pid */
 
 #if !defined(_WIN32) && !defined(__wasi__)
-    pid_t      pid;
-    int        fd_in;          /* parent → child stdin write */
-    int        fd_out;         /* child stdout → parent read */
+    long long  pid;            /* slot 6 — pid_t, widened */
+    long long  fd_in;          /* slot 7 — parent → child stdin write */
+    long long  fd_out;         /* slot 8 — child stdout → parent read */
 #elif defined(_WIN32) && !defined(__wasi__)
-    HANDLE     h_proc;
+    HANDLE     h_proc;         /* slot 6 (Win32-only layout) */
     HANDLE     h_in;
     HANDLE     h_out;
 #endif
@@ -4480,286 +3158,36 @@ typedef struct NurlProcChild {
     /* Pending bytes read from the child but not yet returned: any
      * scratch read past the first '\n' of a request becomes the head
      * of the next read_line. */
-    char  *scratch;
-    size_t scratch_len;
-    size_t scratch_cap;
+    long long  scratch;        /* slot 9 — char* widened to i64 */
+    long long  scratch_len;    /* slot 10 */
+    long long  scratch_cap;    /* slot 11 */
 
     /* Resolved line returned by `nurl_proc_spawn_read_line`. Reused
      * across calls to keep allocations stable. */
-    char  *line_buf;
-    size_t line_len;
-    size_t line_cap;
+    long long  line_buf;       /* slot 12 — char* widened to i64 */
+    long long  line_len;       /* slot 13 */
+    long long  line_cap;       /* slot 14 */
+    long long  _reserved;      /* slot 15 — round to 128 bytes */
 } NurlProcChild;
 
-static int nurl__pc_scratch_reserve(NurlProcChild *c, size_t want) {
-    if (c->scratch_cap >= want) return 1;
-    size_t newcap = c->scratch_cap ? c->scratch_cap : 1024;
-    while (newcap < want) newcap *= 2;
-    char *p = (char*)realloc(c->scratch, newcap);
-    if (!p) return 0;
-    c->scratch = p; c->scratch_cap = newcap;
-    return 1;
-}
-
-static int nurl__pc_line_reserve(NurlProcChild *c, size_t want) {
-    if (c->line_cap >= want + 1) return 1;
-    size_t newcap = c->line_cap ? c->line_cap : 256;
-    while (newcap < want + 1) newcap *= 2;
-    char *p = (char*)realloc(c->line_buf, newcap);
-    if (!p) return 0;
-    c->line_buf = p; c->line_cap = newcap;
-    return 1;
-}
-
-/* Try to extract the first '\n'-terminated line from scratch into
- * line_buf. Returns 1 on success. The trailing '\n' is consumed but
- * not copied; an optional '\r' before it is also stripped. */
-static int nurl__pc_drain_line(NurlProcChild *c) {
-    for (size_t i = 0; i < c->scratch_len; i++) {
-        if (c->scratch[i] == '\n') {
-            size_t take = i;
-            if (take > 0 && c->scratch[take - 1] == '\r') take--;
-            if (!nurl__pc_line_reserve(c, take)) return 0;
-            memcpy(c->line_buf, c->scratch, take);
-            c->line_buf[take] = 0;
-            c->line_len = take;
-            size_t consume = i + 1;
-            size_t rem = c->scratch_len - consume;
-            if (rem) memmove(c->scratch, c->scratch + consume, rem);
-            c->scratch_len = rem;
-            return 1;
-        }
-    }
-    return 0;
-}
-
 #if !defined(_WIN32) && !defined(__wasi__)
-/* ── POSIX backend ────────────────────────────────────────────── */
+/* POSIX backend: the real fork+pipes+exec+poll-drain+waitpid path
+ * lives in pure NURL (`stdlib/std/process.nu` via
+ * `stdlib/core/posix.nu`'s FFI surface). The spawn surface
+ * dispatches there on every POSIX target; these no-op stubs
+ * remain only for link-time symbol resolution. */
 
 long long nurl_proc_spawn(const char *cmd, const char *argv_buf, long long argc) {
-    NurlProcChild *c = (NurlProcChild*)calloc(1, sizeof(NurlProcChild));
-    if (!c) return 0;
-    c->fd_in   = -1;
-    c->fd_out  = -1;
-    c->exit_code = -1;
-    if (!cmd || !*cmd) { c->err_kind = NURL_PROC_ERR_NOTFOUND; return (long long)(uintptr_t)c; }
-    if (argc < 0) argc = 0;
-    const char *const *argv_user = (const char *const *)argv_buf;
-
-    int sin_p[2]  = {-1,-1};
-    int sout_p[2] = {-1,-1};
-    int err_p[2]  = {-1,-1};
-    if (pipe(sin_p) < 0 || pipe(sout_p) < 0 || pipe(err_p) < 0) {
-        nurl__proc_close_pair(sin_p);
-        nurl__proc_close_pair(sout_p);
-        nurl__proc_close_pair(err_p);
-        c->err_kind = NURL_PROC_ERR_IO;
-        c->last_io_err = errno;
-        return (long long)(uintptr_t)c;
-    }
-    int efl = fcntl(err_p[1], F_GETFD);
-    if (efl != -1) fcntl(err_p[1], F_SETFD, efl | FD_CLOEXEC);
-
-    char **full = (char**)malloc(sizeof(char*) * (size_t)(argc + 2));
-    if (!full) {
-        nurl__proc_close_pair(sin_p);
-        nurl__proc_close_pair(sout_p);
-        nurl__proc_close_pair(err_p);
-        c->err_kind = NURL_PROC_ERR_OTHER;
-        return (long long)(uintptr_t)c;
-    }
-    full[0] = (char*)cmd;
-    for (long long i = 0; i < argc; i++)
-        full[i + 1] = argv_user && argv_user[i] ? (char*)argv_user[i] : (char*)"";
-    full[argc + 1] = NULL;
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        free(full);
-        nurl__proc_close_pair(sin_p);
-        nurl__proc_close_pair(sout_p);
-        nurl__proc_close_pair(err_p);
-        c->err_kind = NURL_PROC_ERR_IO;
-        c->last_io_err = errno;
-        return (long long)(uintptr_t)c;
-    }
-    if (pid == 0) {
-        if (sin_p[0]  != 0) dup2(sin_p[0],  0);
-        if (sout_p[1] != 1) dup2(sout_p[1], 1);
-        /* stderr inherits from parent — no dup. */
-        close(sin_p[0]);  close(sin_p[1]);
-        close(sout_p[0]); close(sout_p[1]);
-        close(err_p[0]);
-        execvp(cmd, full);
-        int e = errno;
-        ssize_t wn = write(err_p[1], &e, sizeof(e));
-        (void)wn;
-        _exit(127);
-    }
-    free(full);
-    close(sin_p[0]);   sin_p[0]  = -1;
-    close(sout_p[1]);  sout_p[1] = -1;
-    close(err_p[1]);   err_p[1]  = -1;
-
-    /* Drain exec-error sideband; EOF without bytes ⇒ exec succeeded. */
-    int child_errno = 0;
-    {
-        size_t got = 0;
-        for (;;) {
-            ssize_t rd = read(err_p[0], (char*)&child_errno + got, sizeof(child_errno) - got);
-            if (rd > 0) { got += (size_t)rd; if (got >= sizeof(child_errno)) break; }
-            else if (rd == 0) break;
-            else if (errno == EINTR) continue;
-            else break;
-        }
-        close(err_p[0]); err_p[0] = -1;
-    }
-    if (child_errno != 0) {
-        close(sin_p[1]); close(sout_p[0]);
-        int st = 0; waitpid(pid, &st, 0);
-        c->err_kind = (child_errno == ENOENT) ? NURL_PROC_ERR_NOTFOUND : NURL_PROC_ERR_EXEC_FAILED;
-        c->last_io_err = child_errno;
-        return (long long)(uintptr_t)c;
-    }
-
-    /* Non-blocking on stdout so timeout-driven read_line doesn't wedge. */
-    int fl = fcntl(sout_p[0], F_GETFL);
-    if (fl != -1) fcntl(sout_p[0], F_SETFL, fl | O_NONBLOCK);
-
-    c->pid       = pid;
-    c->pid_or_0  = (long long)pid;
-    c->fd_in     = sin_p[1];
-    c->fd_out    = sout_p[0];
-    c->err_kind  = NURL_PROC_ERR_OK;
-    return (long long)(uintptr_t)c;
-}
-
-long long nurl_proc_spawn_write(long long h, const char *buf, long long n) {
-    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
-    if (!c || c->fd_in < 0 || !buf || n <= 0) return 0;
-    void (*old_pipe)(int) = signal(SIGPIPE, SIG_IGN);
-    long long total = 0;
-    while (total < n) {
-        ssize_t w = write(c->fd_in, buf + total, (size_t)(n - total));
-        if (w < 0) {
-            if (errno == EINTR) continue;
-            c->last_io_err = errno;
-            signal(SIGPIPE, old_pipe);
-            return -1;
-        }
-        if (w == 0) break;
-        total += w;
-    }
-    signal(SIGPIPE, old_pipe);
-    return total;
-}
-
-void nurl_proc_spawn_close_stdin(long long h) {
-    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
-    if (!c) return;
-    if (c->fd_in >= 0) { close(c->fd_in); c->fd_in = -1; }
-}
-
-const char* nurl_proc_spawn_read_line(long long h, long long timeout_ms) {
-    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
-    if (!c) return "";
-    c->line_len = 0;
-    if (c->line_buf) c->line_buf[0] = 0;
-
-    /* If a previous read already pulled in the next line, return it. */
-    if (nurl__pc_drain_line(c)) return c->line_buf ? c->line_buf : "";
-
-    if (c->fd_out < 0) { c->eof = 1; return ""; }
-
-    long long remaining = timeout_ms;
-    char chunk[4096];
-    for (;;) {
-        struct pollfd pf;
-        pf.fd = c->fd_out;
-        pf.events = POLLIN;
-        int wait_for = (timeout_ms > 0) ? (int)remaining : -1;
-        int pr;
-        do { pr = poll(&pf, 1, wait_for); } while (pr < 0 && errno == EINTR);
-        if (pr == 0) { /* timeout */ return ""; }
-        if (pr < 0)  { c->err_kind = NURL_PROC_ERR_IO; c->last_io_err = errno; return ""; }
-
-        if (pf.revents & POLLIN) {
-            for (;;) {
-                ssize_t rd = read(c->fd_out, chunk, sizeof(chunk));
-                if (rd > 0) {
-                    if (!nurl__pc_scratch_reserve(c, c->scratch_len + (size_t)rd)) {
-                        c->err_kind = NURL_PROC_ERR_OTHER;
-                        return "";
-                    }
-                    memcpy(c->scratch + c->scratch_len, chunk, (size_t)rd);
-                    c->scratch_len += (size_t)rd;
-                } else if (rd == 0) {
-                    /* peer closed — flush any tail without trailing '\n'. */
-                    close(c->fd_out); c->fd_out = -1;
-                    c->eof = 1;
-                    if (nurl__pc_drain_line(c)) return c->line_buf ? c->line_buf : "";
-                    if (c->scratch_len > 0) {
-                        if (!nurl__pc_line_reserve(c, c->scratch_len)) return "";
-                        memcpy(c->line_buf, c->scratch, c->scratch_len);
-                        c->line_buf[c->scratch_len] = 0;
-                        c->line_len = c->scratch_len;
-                        c->scratch_len = 0;
-                        return c->line_buf;
-                    }
-                    return "";
-                } else {
-                    if (errno == EINTR) continue;
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-                    c->err_kind = NURL_PROC_ERR_IO;
-                    c->last_io_err = errno;
-                    return "";
-                }
-            }
-            if (nurl__pc_drain_line(c)) return c->line_buf ? c->line_buf : "";
-        }
-        if (pf.revents & (POLLHUP | POLLERR)) {
-            close(c->fd_out); c->fd_out = -1;
-            c->eof = 1;
-            if (nurl__pc_drain_line(c)) return c->line_buf ? c->line_buf : "";
-            if (c->scratch_len > 0) {
-                if (!nurl__pc_line_reserve(c, c->scratch_len)) return "";
-                memcpy(c->line_buf, c->scratch, c->scratch_len);
-                c->line_buf[c->scratch_len] = 0;
-                c->line_len = c->scratch_len;
-                c->scratch_len = 0;
-                return c->line_buf;
-            }
-            return "";
-        }
-        /* Loop — still no '\n' yet. (For finite timeouts we naively
-         * wait the full quantum each iteration; mainline MCP responses
-         * arrive within a single poll wakeup so the slack is invisible.) */
-    }
-}
-
-long long nurl_proc_spawn_wait(long long h) {
-    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
-    if (!c) return -1;
-    if (c->waited) return c->exit_code;
-    if (c->pid <= 0) return -1;
-    int status = 0;
-    pid_t w;
-    do { w = waitpid(c->pid, &status, 0); } while (w < 0 && errno == EINTR);
-    if (w < 0) { c->last_io_err = errno; return -1; }
-    if (WIFEXITED(status))         c->exit_code = (long long)WEXITSTATUS(status);
-    else if (WIFSIGNALED(status))  c->exit_code = (long long)(128 + WTERMSIG(status));
-    else                           c->exit_code = -1;
-    c->waited = 1;
-    return c->exit_code;
-}
-
-long long nurl_proc_spawn_kill(long long h, long long sig) {
-    NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
-    if (!c || c->pid <= 0) return -1;
-    int s = (sig > 0) ? (int)sig : SIGTERM;
-    if (kill(c->pid, s) < 0) { c->last_io_err = errno; return -1; }
+    (void)cmd; (void)argv_buf; (void)argc;
     return 0;
 }
+long long nurl_proc_spawn_write(long long h, const char *buf, long long n) {
+    (void)h; (void)buf; (void)n; return -1;
+}
+void nurl_proc_spawn_close_stdin(long long h) { (void)h; }
+const char* nurl_proc_spawn_read_line(long long h, long long t) { (void)h; (void)t; return ""; }
+long long nurl_proc_spawn_wait(long long h) { (void)h; return -1; }
+long long nurl_proc_spawn_kill(long long h, long long sig) { (void)h; (void)sig; return -1; }
 
 #elif defined(_WIN32) && !defined(__wasi__)
 /* ── Win32 stub: spawn returns ProcessOther for now ──────────── */
@@ -4832,53 +3260,36 @@ void nurl_proc_spawn_free(long long h) {
     NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
     if (!c) return;
 #if !defined(_WIN32) && !defined(__wasi__)
-    if (c->fd_in  >= 0) close(c->fd_in);
-    if (c->fd_out >= 0) close(c->fd_out);
-    if (c->pid > 0 && !c->waited) {
-        /* Best-effort reap so we don't accumulate zombies. SIGTERM
-         * first then a non-blocking waitpid; if still alive, SIGKILL
-         * and a blocking wait. */
-        kill(c->pid, SIGTERM);
-        int status = 0;
-        for (int i = 0; i < 50; i++) {
-            pid_t w = waitpid(c->pid, &status, WNOHANG);
-            if (w == c->pid) { c->waited = 1; break; }
-            if (w < 0) break;
-            struct timespec ts = {0, 10 * 1000 * 1000}; /* 10ms */
-            nanosleep(&ts, NULL);
-        }
-        if (!c->waited) {
-            kill(c->pid, SIGKILL);
-            waitpid(c->pid, &status, 0);
-        }
-    }
+    /* NURL `proc_free` does the close/reap/buffer-free on POSIX; this
+     * stub remains for link-time symbol resolution and the (rare)
+     * Win32/WASI dispatch path where C-side accessors still own the
+     * struct. */
+    free(c);
 #elif defined(_WIN32) && !defined(__wasi__)
     if (c->h_in)   CloseHandle(c->h_in);
     if (c->h_out)  CloseHandle(c->h_out);
     if (c->h_proc) CloseHandle(c->h_proc);
-#endif
-    free(c->scratch);
-    free(c->line_buf);
+    free((void*)(uintptr_t)c->scratch);
+    free((void*)(uintptr_t)c->line_buf);
     free(c);
+#else
+    free(c);
+#endif
 }
 
-/* ── §17  Crypto (SHA-256, HMAC-SHA-256, secure random) ───────── */
-/*
- * Minimum viable crypto layer used by stdlib/std/hash.nu and
- * stdlib/std/random.nu. Self-contained — no libsodium / OpenSSL link
- * dependency. SHA-256 is the public-domain Brad Conte / RFC 6234 style
- * implementation, kept short and readable.
+/* ── §17  Crypto (secure random only) ────────────────────────────
+ *
+ * MD5 / SHA-1 / SHA-256 / SHA-512 / HMAC transforms are pure NURL
+ * (`stdlib/std/hash_*.nu`). What stays here is the OS-entropy
+ * bridge — `getrandom(2)` on Linux, `arc4random_buf` on macOS/BSD,
+ * `BCryptGenRandom` on Windows, plus a `/dev/urandom` fallback —
+ * and a small hex encoder used only by `nurl_rand_bytes_hex`.
  *
  * Public ABI:
- *   const char* nurl_sha256_hex      (const char *s);
- *   const char* nurl_hmac_sha256_hex (const char *key, const char *msg);
  *   long long   nurl_rand_u64        (void);
  *   const char* nurl_rand_bytes_hex  (long long n);   // n > 0; ≤ 4096
  *
- * All const char* returns are heap-owned (NURL caller frees via nurl_free).
- * Inputs are NUL-terminated (strlen-based) — appropriate for HTTP tokens,
- * webhook payloads and similar text. For binary buffers add length-aware
- * variants when bytes/Vec[u8] is wired up.
+ * `const char*` returns are heap-owned (NURL caller frees via nurl_free).
  */
 
 #ifdef _WIN32
@@ -4890,95 +3301,6 @@ void nurl_proc_spawn_free(long long h) {
 #  include <sys/random.h>
 #endif
 
-typedef struct {
-    uint32_t state[8];
-    uint64_t bitlen;
-    uint8_t  data[64];
-    size_t   datalen;
-} NurlSha256Ctx;
-
-static const uint32_t NURL_SHA256_K[64] = {
-    0x428a2f98u,0x71374491u,0xb5c0fbcfu,0xe9b5dba5u,0x3956c25bu,0x59f111f1u,0x923f82a4u,0xab1c5ed5u,
-    0xd807aa98u,0x12835b01u,0x243185beu,0x550c7dc3u,0x72be5d74u,0x80deb1feu,0x9bdc06a7u,0xc19bf174u,
-    0xe49b69c1u,0xefbe4786u,0x0fc19dc6u,0x240ca1ccu,0x2de92c6fu,0x4a7484aau,0x5cb0a9dcu,0x76f988dau,
-    0x983e5152u,0xa831c66du,0xb00327c8u,0xbf597fc7u,0xc6e00bf3u,0xd5a79147u,0x06ca6351u,0x14292967u,
-    0x27b70a85u,0x2e1b2138u,0x4d2c6dfcu,0x53380d13u,0x650a7354u,0x766a0abbu,0x81c2c92eu,0x92722c85u,
-    0xa2bfe8a1u,0xa81a664bu,0xc24b8b70u,0xc76c51a3u,0xd192e819u,0xd6990624u,0xf40e3585u,0x106aa070u,
-    0x19a4c116u,0x1e376c08u,0x2748774cu,0x34b0bcb5u,0x391c0cb3u,0x4ed8aa4au,0x5b9cca4fu,0x682e6ff3u,
-    0x748f82eeu,0x78a5636fu,0x84c87814u,0x8cc70208u,0x90befffau,0xa4506cebu,0xbef9a3f7u,0xc67178f2u
-};
-
-#define NURL_ROTR(x,n) (((x) >> (n)) | ((x) << (32 - (n))))
-
-static void nurl_sha256_transform(NurlSha256Ctx *ctx, const uint8_t *data) {
-    uint32_t m[64];
-    for (int i = 0, j = 0; i < 16; i++, j += 4) {
-        m[i] = ((uint32_t)data[j] << 24) | ((uint32_t)data[j+1] << 16)
-             | ((uint32_t)data[j+2] << 8) | ((uint32_t)data[j+3]);
-    }
-    for (int i = 16; i < 64; i++) {
-        uint32_t s0 = NURL_ROTR(m[i-15], 7) ^ NURL_ROTR(m[i-15], 18) ^ (m[i-15] >> 3);
-        uint32_t s1 = NURL_ROTR(m[i-2], 17) ^ NURL_ROTR(m[i-2], 19) ^ (m[i-2] >> 10);
-        m[i] = m[i-16] + s0 + m[i-7] + s1;
-    }
-    uint32_t a = ctx->state[0], b = ctx->state[1], c = ctx->state[2], d = ctx->state[3];
-    uint32_t e = ctx->state[4], f = ctx->state[5], g = ctx->state[6], h = ctx->state[7];
-    for (int i = 0; i < 64; i++) {
-        uint32_t S1 = NURL_ROTR(e, 6) ^ NURL_ROTR(e, 11) ^ NURL_ROTR(e, 25);
-        uint32_t ch = (e & f) ^ (~e & g);
-        uint32_t t1 = h + S1 + ch + NURL_SHA256_K[i] + m[i];
-        uint32_t S0 = NURL_ROTR(a, 2) ^ NURL_ROTR(a, 13) ^ NURL_ROTR(a, 22);
-        uint32_t mj = (a & b) ^ (a & c) ^ (b & c);
-        uint32_t t2 = S0 + mj;
-        h = g; g = f; f = e; e = d + t1;
-        d = c; c = b; b = a; a = t1 + t2;
-    }
-    ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c; ctx->state[3] += d;
-    ctx->state[4] += e; ctx->state[5] += f; ctx->state[6] += g; ctx->state[7] += h;
-}
-
-static void nurl_sha256_init(NurlSha256Ctx *ctx) {
-    ctx->datalen = 0;
-    ctx->bitlen = 0;
-    ctx->state[0] = 0x6a09e667u; ctx->state[1] = 0xbb67ae85u;
-    ctx->state[2] = 0x3c6ef372u; ctx->state[3] = 0xa54ff53au;
-    ctx->state[4] = 0x510e527fu; ctx->state[5] = 0x9b05688cu;
-    ctx->state[6] = 0x1f83d9abu; ctx->state[7] = 0x5be0cd19u;
-}
-
-static void nurl_sha256_update(NurlSha256Ctx *ctx, const uint8_t *data, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        ctx->data[ctx->datalen++] = data[i];
-        if (ctx->datalen == 64) {
-            nurl_sha256_transform(ctx, ctx->data);
-            ctx->bitlen += 512;
-            ctx->datalen = 0;
-        }
-    }
-}
-
-static void nurl_sha256_final(NurlSha256Ctx *ctx, uint8_t out[32]) {
-    size_t i = ctx->datalen;
-    if (ctx->datalen < 56) {
-        ctx->data[i++] = 0x80;
-        while (i < 56) ctx->data[i++] = 0;
-    } else {
-        ctx->data[i++] = 0x80;
-        while (i < 64) ctx->data[i++] = 0;
-        nurl_sha256_transform(ctx, ctx->data);
-        memset(ctx->data, 0, 56);
-    }
-    ctx->bitlen += (uint64_t)ctx->datalen * 8;
-    for (int k = 0; k < 8; k++)
-        ctx->data[63 - k] = (uint8_t)(ctx->bitlen >> (8 * k));
-    nurl_sha256_transform(ctx, ctx->data);
-    for (int k = 0; k < 4; k++) {
-        for (int j = 0; j < 8; j++) {
-            out[k + j*4] = (uint8_t)(ctx->state[j] >> (24 - k*8));
-        }
-    }
-}
-
 static void nurl_hex_encode(const uint8_t *bytes, size_t n, char *out) {
     static const char H[] = "0123456789abcdef";
     for (size_t i = 0; i < n; i++) {
@@ -4986,59 +3308,6 @@ static void nurl_hex_encode(const uint8_t *bytes, size_t n, char *out) {
         out[i*2+1] = H[bytes[i] & 0x0F];
     }
     out[n*2] = '\0';
-}
-
-const char* nurl_sha256_hex(const char *s) {
-    if (!s) s = "";
-    NurlSha256Ctx ctx;
-    nurl_sha256_init(&ctx);
-    nurl_sha256_update(&ctx, (const uint8_t*)s, strlen(s));
-    uint8_t digest[32];
-    nurl_sha256_final(&ctx, digest);
-    char *out = (char*)malloc(65);
-    if (!out) return strdup("");
-    nurl_hex_encode(digest, 32, out);
-    return out;
-}
-
-const char* nurl_hmac_sha256_hex(const char *key, const char *msg) {
-    if (!key) key = "";
-    if (!msg) msg = "";
-    size_t klen = strlen(key);
-    uint8_t kbuf[64];
-    if (klen > 64) {
-        NurlSha256Ctx kctx;
-        nurl_sha256_init(&kctx);
-        nurl_sha256_update(&kctx, (const uint8_t*)key, klen);
-        uint8_t kdigest[32];
-        nurl_sha256_final(&kctx, kdigest);
-        memcpy(kbuf, kdigest, 32);
-        memset(kbuf + 32, 0, 32);
-    } else {
-        memcpy(kbuf, key, klen);
-        memset(kbuf + klen, 0, 64 - klen);
-    }
-    uint8_t ipad[64], opad[64];
-    for (int i = 0; i < 64; i++) {
-        ipad[i] = kbuf[i] ^ 0x36;
-        opad[i] = kbuf[i] ^ 0x5c;
-    }
-    NurlSha256Ctx ictx;
-    nurl_sha256_init(&ictx);
-    nurl_sha256_update(&ictx, ipad, 64);
-    nurl_sha256_update(&ictx, (const uint8_t*)msg, strlen(msg));
-    uint8_t inner[32];
-    nurl_sha256_final(&ictx, inner);
-    NurlSha256Ctx octx;
-    nurl_sha256_init(&octx);
-    nurl_sha256_update(&octx, opad, 64);
-    nurl_sha256_update(&octx, inner, 32);
-    uint8_t mac[32];
-    nurl_sha256_final(&octx, mac);
-    char *out = (char*)malloc(65);
-    if (!out) return strdup("");
-    nurl_hex_encode(mac, 32, out);
-    return out;
 }
 
 /* Fill `buf` with `n` cryptographically-strong random bytes. Returns 1 on
@@ -5120,403 +3389,6 @@ const char* nurl_rand_bytes_hex(long long n) {
     return out;
 }
 
-/* ── SHA-1 (RFC 3174) — self-contained for WebSocket handshake ─────
- *
- * RFC 6455 §4.2.2 mandates SHA-1 in the Sec-WebSocket-Accept derivation;
- * no security guarantee is implied by the algorithm choice — it is a
- * fixed handshake hashing step. Implementation style mirrors the SHA-256
- * block above (public-domain transform + init/update/final + a length-
- * aware public entry). 80 rounds, 4 round functions, 4 K-constants per
- * RFC 3174 §6.1.
- *
- * Public ABI:
- *   void nurl_sha1_bytes(const unsigned char *data, long long len,
- *                        unsigned char out[20]);
- */
-
-typedef struct {
-    uint32_t state[5];
-    uint64_t bitlen;
-    uint8_t  data[64];
-    size_t   datalen;
-} NurlSha1Ctx;
-
-static void nurl_sha1_transform(NurlSha1Ctx *ctx, const uint8_t *data) {
-    uint32_t w[80];
-    for (int i = 0, j = 0; i < 16; i++, j += 4) {
-        w[i] = ((uint32_t)data[j] << 24) | ((uint32_t)data[j+1] << 16)
-             | ((uint32_t)data[j+2] << 8) | ((uint32_t)data[j+3]);
-    }
-    for (int i = 16; i < 80; i++) {
-        uint32_t x = w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16];
-        w[i] = (x << 1) | (x >> 31);
-    }
-    uint32_t a = ctx->state[0], b = ctx->state[1], c = ctx->state[2];
-    uint32_t d = ctx->state[3], e = ctx->state[4];
-    for (int i = 0; i < 80; i++) {
-        uint32_t f, k;
-        if (i < 20)       { f = (b & c) | ((~b) & d);            k = 0x5A827999u; }
-        else if (i < 40)  { f = b ^ c ^ d;                       k = 0x6ED9EBA1u; }
-        else if (i < 60)  { f = (b & c) | (b & d) | (c & d);     k = 0x8F1BBCDCu; }
-        else              { f = b ^ c ^ d;                       k = 0xCA62C1D6u; }
-        uint32_t t = ((a << 5) | (a >> 27)) + f + e + k + w[i];
-        e = d; d = c; c = (b << 30) | (b >> 2); b = a; a = t;
-    }
-    ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c;
-    ctx->state[3] += d; ctx->state[4] += e;
-}
-
-static void nurl_sha1_init(NurlSha1Ctx *ctx) {
-    ctx->datalen = 0;
-    ctx->bitlen = 0;
-    ctx->state[0] = 0x67452301u;
-    ctx->state[1] = 0xEFCDAB89u;
-    ctx->state[2] = 0x98BADCFEu;
-    ctx->state[3] = 0x10325476u;
-    ctx->state[4] = 0xC3D2E1F0u;
-}
-
-static void nurl_sha1_update(NurlSha1Ctx *ctx, const uint8_t *data, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        ctx->data[ctx->datalen++] = data[i];
-        if (ctx->datalen == 64) {
-            nurl_sha1_transform(ctx, ctx->data);
-            ctx->bitlen += 512;
-            ctx->datalen = 0;
-        }
-    }
-}
-
-static void nurl_sha1_final(NurlSha1Ctx *ctx, uint8_t out[20]) {
-    size_t i = ctx->datalen;
-    if (ctx->datalen < 56) {
-        ctx->data[i++] = 0x80;
-        while (i < 56) ctx->data[i++] = 0;
-    } else {
-        ctx->data[i++] = 0x80;
-        while (i < 64) ctx->data[i++] = 0;
-        nurl_sha1_transform(ctx, ctx->data);
-        memset(ctx->data, 0, 56);
-    }
-    ctx->bitlen += (uint64_t)ctx->datalen * 8;
-    for (int k = 0; k < 8; k++)
-        ctx->data[63 - k] = (uint8_t)(ctx->bitlen >> (8 * k));
-    nurl_sha1_transform(ctx, ctx->data);
-    for (int k = 0; k < 4; k++) {
-        for (int j = 0; j < 5; j++) {
-            out[k + j*4] = (uint8_t)(ctx->state[j] >> (24 - k*8));
-        }
-    }
-}
-
-void nurl_sha1_bytes(const unsigned char *data, long long len,
-                     unsigned char out[20]) {
-    NurlSha1Ctx ctx;
-    nurl_sha1_init(&ctx);
-    if (data && len > 0) {
-        nurl_sha1_update(&ctx, data, (size_t)len);
-    }
-    nurl_sha1_final(&ctx, out);
-}
-
-/* ── MD5 (RFC 1321) — self-contained ───────────────────────────────
- *
- * MD5 is broken for collision resistance and MUST NOT be used to
- * authenticate data or hash secrets — it is provided only for
- * compatibility with legacy formats and protocols that mandate it
- * (file checksums, S3 ETags, old APIs). Same implementation style as
- * the SHA blocks above: public-domain transform + init/update/final +
- * a length-aware binary-clean public entry. 64 rounds; the message
- * length is appended little-endian and the digest words are emitted
- * little-endian (MD5's byte order, opposite to the SHA family).
- *
- * Public ABI:
- *   void nurl_md5_bytes(const unsigned char *data, long long len,
- *                       unsigned char out[16]);
- */
-
-typedef struct {
-    uint32_t state[4];
-    uint64_t bitlen;
-    uint8_t  data[64];
-    size_t   datalen;
-} NurlMd5Ctx;
-
-static const uint32_t NURL_MD5_K[64] = {
-    0xd76aa478u,0xe8c7b756u,0x242070dbu,0xc1bdceeeu,0xf57c0fafu,0x4787c62au,0xa8304613u,0xfd469501u,
-    0x698098d8u,0x8b44f7afu,0xffff5bb1u,0x895cd7beu,0x6b901122u,0xfd987193u,0xa679438eu,0x49b40821u,
-    0xf61e2562u,0xc040b340u,0x265e5a51u,0xe9b6c7aau,0xd62f105du,0x02441453u,0xd8a1e681u,0xe7d3fbc8u,
-    0x21e1cde6u,0xc33707d6u,0xf4d50d87u,0x455a14edu,0xa9e3e905u,0xfcefa3f8u,0x676f02d9u,0x8d2a4c8au,
-    0xfffa3942u,0x8771f681u,0x6d9d6122u,0xfde5380cu,0xa4beea44u,0x4bdecfa9u,0xf6bb4b60u,0xbebfbc70u,
-    0x289b7ec6u,0xeaa127fau,0xd4ef3085u,0x04881d05u,0xd9d4d039u,0xe6db99e5u,0x1fa27cf8u,0xc4ac5665u,
-    0xf4292244u,0x432aff97u,0xab9423a7u,0xfc93a039u,0x655b59c3u,0x8f0ccc92u,0xffeff47du,0x85845dd1u,
-    0x6fa87e4fu,0xfe2ce6e0u,0xa3014314u,0x4e0811a1u,0xf7537e82u,0xbd3af235u,0x2ad7d2bbu,0xeb86d391u
-};
-
-static const uint8_t NURL_MD5_S[64] = {
-    7,12,17,22, 7,12,17,22, 7,12,17,22, 7,12,17,22,
-    5, 9,14,20, 5, 9,14,20, 5, 9,14,20, 5, 9,14,20,
-    4,11,16,23, 4,11,16,23, 4,11,16,23, 4,11,16,23,
-    6,10,15,21, 6,10,15,21, 6,10,15,21, 6,10,15,21
-};
-
-#define NURL_MD5_ROTL(x,c) (((x) << (c)) | ((x) >> (32 - (c))))
-
-static void nurl_md5_transform(NurlMd5Ctx *ctx, const uint8_t *data) {
-    uint32_t m[16];
-    for (int i = 0, j = 0; i < 16; i++, j += 4) {
-        m[i] = ((uint32_t)data[j]) | ((uint32_t)data[j+1] << 8)
-             | ((uint32_t)data[j+2] << 16) | ((uint32_t)data[j+3] << 24);
-    }
-    uint32_t a = ctx->state[0], b = ctx->state[1];
-    uint32_t c = ctx->state[2], d = ctx->state[3];
-    for (int i = 0; i < 64; i++) {
-        uint32_t f; int g;
-        if (i < 16)      { f = (b & c) | ((~b) & d);  g = i; }
-        else if (i < 32) { f = (d & b) | ((~d) & c);  g = (5*i + 1) & 15; }
-        else if (i < 48) { f = b ^ c ^ d;             g = (3*i + 5) & 15; }
-        else             { f = c ^ (b | (~d));        g = (7*i) & 15; }
-        uint32_t tmp = d;
-        d = c;
-        c = b;
-        uint32_t x = a + f + NURL_MD5_K[i] + m[g];
-        b = b + NURL_MD5_ROTL(x, NURL_MD5_S[i]);
-        a = tmp;
-    }
-    ctx->state[0] += a; ctx->state[1] += b;
-    ctx->state[2] += c; ctx->state[3] += d;
-}
-
-static void nurl_md5_init(NurlMd5Ctx *ctx) {
-    ctx->datalen = 0;
-    ctx->bitlen = 0;
-    ctx->state[0] = 0x67452301u;
-    ctx->state[1] = 0xefcdab89u;
-    ctx->state[2] = 0x98badcfeu;
-    ctx->state[3] = 0x10325476u;
-}
-
-static void nurl_md5_update(NurlMd5Ctx *ctx, const uint8_t *data, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        ctx->data[ctx->datalen++] = data[i];
-        if (ctx->datalen == 64) {
-            nurl_md5_transform(ctx, ctx->data);
-            ctx->bitlen += 512;
-            ctx->datalen = 0;
-        }
-    }
-}
-
-static void nurl_md5_final(NurlMd5Ctx *ctx, uint8_t out[16]) {
-    size_t i = ctx->datalen;
-    if (ctx->datalen < 56) {
-        ctx->data[i++] = 0x80;
-        while (i < 56) ctx->data[i++] = 0;
-    } else {
-        ctx->data[i++] = 0x80;
-        while (i < 64) ctx->data[i++] = 0;
-        nurl_md5_transform(ctx, ctx->data);
-        memset(ctx->data, 0, 56);
-    }
-    ctx->bitlen += (uint64_t)ctx->datalen * 8;
-    /* MD5 appends the bit length little-endian. */
-    for (int k = 0; k < 8; k++)
-        ctx->data[56 + k] = (uint8_t)(ctx->bitlen >> (8 * k));
-    nurl_md5_transform(ctx, ctx->data);
-    for (int k = 0; k < 4; k++) {
-        out[k*4]   = (uint8_t)(ctx->state[k]);
-        out[k*4+1] = (uint8_t)(ctx->state[k] >> 8);
-        out[k*4+2] = (uint8_t)(ctx->state[k] >> 16);
-        out[k*4+3] = (uint8_t)(ctx->state[k] >> 24);
-    }
-}
-
-void nurl_md5_bytes(const unsigned char *data, long long len,
-                    unsigned char out[16]) {
-    NurlMd5Ctx ctx;
-    nurl_md5_init(&ctx);
-    if (data && len > 0) {
-        nurl_md5_update(&ctx, data, (size_t)len);
-    }
-    nurl_md5_final(&ctx, out);
-}
-
-/* ── SHA-512 (FIPS 180-4) — self-contained ─────────────────────────
- *
- * 64-bit-word SHA-2: 128-byte blocks, 80 rounds, a 128-bit length
- * field. The single uint64_t bit counter holds inputs up to 2^61
- * bytes — the high 64 bits of the length field are always written
- * zero, the same practical bound the SHA-1/SHA-256 blocks above
- * accept. Suitable for new security-sensitive use.
- *
- * Public ABI:
- *   void nurl_sha512_bytes(const unsigned char *data, long long len,
- *                          unsigned char out[64]);
- *   void nurl_hmac_sha512_bytes(const unsigned char *key, long long klen,
- *                               const unsigned char *msg, long long mlen,
- *                               unsigned char out[64]);
- */
-
-typedef struct {
-    uint64_t state[8];
-    uint64_t bitlen;
-    uint8_t  data[128];
-    size_t   datalen;
-} NurlSha512Ctx;
-
-static const uint64_t NURL_SHA512_K[80] = {
-    0x428a2f98d728ae22ULL,0x7137449123ef65cdULL,0xb5c0fbcfec4d3b2fULL,0xe9b5dba58189dbbcULL,
-    0x3956c25bf348b538ULL,0x59f111f1b605d019ULL,0x923f82a4af194f9bULL,0xab1c5ed5da6d8118ULL,
-    0xd807aa98a3030242ULL,0x12835b0145706fbeULL,0x243185be4ee4b28cULL,0x550c7dc3d5ffb4e2ULL,
-    0x72be5d74f27b896fULL,0x80deb1fe3b1696b1ULL,0x9bdc06a725c71235ULL,0xc19bf174cf692694ULL,
-    0xe49b69c19ef14ad2ULL,0xefbe4786384f25e3ULL,0x0fc19dc68b8cd5b5ULL,0x240ca1cc77ac9c65ULL,
-    0x2de92c6f592b0275ULL,0x4a7484aa6ea6e483ULL,0x5cb0a9dcbd41fbd4ULL,0x76f988da831153b5ULL,
-    0x983e5152ee66dfabULL,0xa831c66d2db43210ULL,0xb00327c898fb213fULL,0xbf597fc7beef0ee4ULL,
-    0xc6e00bf33da88fc2ULL,0xd5a79147930aa725ULL,0x06ca6351e003826fULL,0x142929670a0e6e70ULL,
-    0x27b70a8546d22ffcULL,0x2e1b21385c26c926ULL,0x4d2c6dfc5ac42aedULL,0x53380d139d95b3dfULL,
-    0x650a73548baf63deULL,0x766a0abb3c77b2a8ULL,0x81c2c92e47edaee6ULL,0x92722c851482353bULL,
-    0xa2bfe8a14cf10364ULL,0xa81a664bbc423001ULL,0xc24b8b70d0f89791ULL,0xc76c51a30654be30ULL,
-    0xd192e819d6ef5218ULL,0xd69906245565a910ULL,0xf40e35855771202aULL,0x106aa07032bbd1b8ULL,
-    0x19a4c116b8d2d0c8ULL,0x1e376c085141ab53ULL,0x2748774cdf8eeb99ULL,0x34b0bcb5e19b48a8ULL,
-    0x391c0cb3c5c95a63ULL,0x4ed8aa4ae3418acbULL,0x5b9cca4f7763e373ULL,0x682e6ff3d6b2b8a3ULL,
-    0x748f82ee5defb2fcULL,0x78a5636f43172f60ULL,0x84c87814a1f0ab72ULL,0x8cc702081a6439ecULL,
-    0x90befffa23631e28ULL,0xa4506cebde82bde9ULL,0xbef9a3f7b2c67915ULL,0xc67178f2e372532bULL,
-    0xca273eceea26619cULL,0xd186b8c721c0c207ULL,0xeada7dd6cde0eb1eULL,0xf57d4f7fee6ed178ULL,
-    0x06f067aa72176fbaULL,0x0a637dc5a2c898a6ULL,0x113f9804bef90daeULL,0x1b710b35131c471bULL,
-    0x28db77f523047d84ULL,0x32caab7b40c72493ULL,0x3c9ebe0a15c9bebcULL,0x431d67c49c100d4cULL,
-    0x4cc5d4becb3e42b6ULL,0x597f299cfc657e2aULL,0x5fcb6fab3ad6faecULL,0x6c44198c4a475817ULL
-};
-
-#define NURL_SHA512_ROTR(x,n) (((x) >> (n)) | ((x) << (64 - (n))))
-
-static void nurl_sha512_transform(NurlSha512Ctx *ctx, const uint8_t *data) {
-    uint64_t w[80];
-    for (int i = 0, j = 0; i < 16; i++, j += 8) {
-        w[i] = ((uint64_t)data[j]   << 56) | ((uint64_t)data[j+1] << 48)
-             | ((uint64_t)data[j+2] << 40) | ((uint64_t)data[j+3] << 32)
-             | ((uint64_t)data[j+4] << 24) | ((uint64_t)data[j+5] << 16)
-             | ((uint64_t)data[j+6] << 8)  | ((uint64_t)data[j+7]);
-    }
-    for (int i = 16; i < 80; i++) {
-        uint64_t s0 = NURL_SHA512_ROTR(w[i-15],1) ^ NURL_SHA512_ROTR(w[i-15],8)
-                    ^ (w[i-15] >> 7);
-        uint64_t s1 = NURL_SHA512_ROTR(w[i-2],19) ^ NURL_SHA512_ROTR(w[i-2],61)
-                    ^ (w[i-2] >> 6);
-        w[i] = w[i-16] + s0 + w[i-7] + s1;
-    }
-    uint64_t a=ctx->state[0],b=ctx->state[1],c=ctx->state[2],d=ctx->state[3];
-    uint64_t e=ctx->state[4],f=ctx->state[5],g=ctx->state[6],h=ctx->state[7];
-    for (int i = 0; i < 80; i++) {
-        uint64_t S1 = NURL_SHA512_ROTR(e,14) ^ NURL_SHA512_ROTR(e,18)
-                    ^ NURL_SHA512_ROTR(e,41);
-        uint64_t ch = (e & f) ^ ((~e) & g);
-        uint64_t t1 = h + S1 + ch + NURL_SHA512_K[i] + w[i];
-        uint64_t S0 = NURL_SHA512_ROTR(a,28) ^ NURL_SHA512_ROTR(a,34)
-                    ^ NURL_SHA512_ROTR(a,39);
-        uint64_t maj = (a & b) ^ (a & c) ^ (b & c);
-        uint64_t t2 = S0 + maj;
-        h=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;
-    }
-    ctx->state[0]+=a; ctx->state[1]+=b; ctx->state[2]+=c; ctx->state[3]+=d;
-    ctx->state[4]+=e; ctx->state[5]+=f; ctx->state[6]+=g; ctx->state[7]+=h;
-}
-
-static void nurl_sha512_init(NurlSha512Ctx *ctx) {
-    ctx->datalen = 0;
-    ctx->bitlen = 0;
-    ctx->state[0] = 0x6a09e667f3bcc908ULL;
-    ctx->state[1] = 0xbb67ae8584caa73bULL;
-    ctx->state[2] = 0x3c6ef372fe94f82bULL;
-    ctx->state[3] = 0xa54ff53a5f1d36f1ULL;
-    ctx->state[4] = 0x510e527fade682d1ULL;
-    ctx->state[5] = 0x9b05688c2b3e6c1fULL;
-    ctx->state[6] = 0x1f83d9abfb41bd6bULL;
-    ctx->state[7] = 0x5be0cd19137e2179ULL;
-}
-
-static void nurl_sha512_update(NurlSha512Ctx *ctx, const uint8_t *data, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        ctx->data[ctx->datalen++] = data[i];
-        if (ctx->datalen == 128) {
-            nurl_sha512_transform(ctx, ctx->data);
-            ctx->bitlen += 1024;
-            ctx->datalen = 0;
-        }
-    }
-}
-
-static void nurl_sha512_final(NurlSha512Ctx *ctx, uint8_t out[64]) {
-    size_t i = ctx->datalen;
-    if (ctx->datalen < 112) {
-        ctx->data[i++] = 0x80;
-        while (i < 112) ctx->data[i++] = 0;
-    } else {
-        ctx->data[i++] = 0x80;
-        while (i < 128) ctx->data[i++] = 0;
-        nurl_sha512_transform(ctx, ctx->data);
-        memset(ctx->data, 0, 112);
-    }
-    ctx->bitlen += (uint64_t)ctx->datalen * 8;
-    /* 128-bit big-endian length: high 64 bits are always zero. */
-    for (int k = 0; k < 8; k++) ctx->data[112 + k] = 0;
-    for (int k = 0; k < 8; k++)
-        ctx->data[127 - k] = (uint8_t)(ctx->bitlen >> (8 * k));
-    nurl_sha512_transform(ctx, ctx->data);
-    for (int k = 0; k < 8; k++) {
-        for (int j = 0; j < 8; j++) {
-            out[k*8 + j] = (uint8_t)(ctx->state[k] >> (56 - j*8));
-        }
-    }
-}
-
-void nurl_sha512_bytes(const unsigned char *data, long long len,
-                       unsigned char out[64]) {
-    NurlSha512Ctx ctx;
-    nurl_sha512_init(&ctx);
-    if (data && len > 0) {
-        nurl_sha512_update(&ctx, data, (size_t)len);
-    }
-    nurl_sha512_final(&ctx, out);
-}
-
-/* HMAC-SHA-512 (RFC 2104) — block size B = 128 bytes for SHA-512.
- * A key longer than B is replaced by its own SHA-512 digest; any key
- * is then zero-padded to B before the ipad/opad XOR. */
-void nurl_hmac_sha512_bytes(const unsigned char *key, long long klen,
-                            const unsigned char *msg, long long mlen,
-                            unsigned char out[64]) {
-    size_t kl = (klen > 0) ? (size_t)klen : 0;
-    size_t ml = (mlen > 0) ? (size_t)mlen : 0;
-    uint8_t kbuf[128];
-    if (kl > 128) {
-        NurlSha512Ctx kctx;
-        nurl_sha512_init(&kctx);
-        nurl_sha512_update(&kctx, key, kl);
-        uint8_t kd[64];
-        nurl_sha512_final(&kctx, kd);
-        memcpy(kbuf, kd, 64);
-        memset(kbuf + 64, 0, 64);
-    } else {
-        if (key && kl) memcpy(kbuf, key, kl);
-        memset(kbuf + kl, 0, 128 - kl);
-    }
-    uint8_t ipad[128], opad[128];
-    for (int i = 0; i < 128; i++) {
-        ipad[i] = (uint8_t)(kbuf[i] ^ 0x36);
-        opad[i] = (uint8_t)(kbuf[i] ^ 0x5c);
-    }
-    NurlSha512Ctx ictx;
-    nurl_sha512_init(&ictx);
-    nurl_sha512_update(&ictx, ipad, 128);
-    if (msg && ml) nurl_sha512_update(&ictx, msg, ml);
-    uint8_t inner[64];
-    nurl_sha512_final(&ictx, inner);
-    NurlSha512Ctx octx;
-    nurl_sha512_init(&octx);
-    nurl_sha512_update(&octx, opad, 128);
-    nurl_sha512_update(&octx, inner, 64);
-    nurl_sha512_final(&octx, out);
-}
 
 /* ── §18  TCP sockets (HTTP server foundation) ──────────────────── */
 /*
@@ -6784,247 +4656,76 @@ void nurl_tcp_set_timeout(long long h, long long ms) { (void)h; (void)ms; }
 #endif /* __wasi__ guard for §18 */
 
 
-/* ── §19  Threads, mutex, condvar ──────────────────────────────── */
+/* ── §19  Threads ───────────────────────────────────────────────── */
 /*
- * Thread/mutex/cond primitives used by stdlib/std/thread.nu. Foundation
- * for the thread-per-connection HTTP server (HTTP_SERVER_PLAN.md §5)
- * and any producer/consumer NURL code that needs message passing.
+ * Nearly the entire threading surface for `stdlib/std/thread.nu`
+ * lives in NURL via pure-NURL FFI (mutex/cond + spawn/join/detach).
+ * What's left on the C side here:
  *
- * ABI — every handle is a long long (uintptr_t cast); 0 means error.
- *   long long nurl_thread_spawn(void* fn, void* env);
- *   long long nurl_thread_join(long long h);
- *   void      nurl_thread_detach(long long h);
- *   long long nurl_mutex_new(void);
- *   void      nurl_mutex_lock/_unlock/_free(long long h);
- *   long long nurl_cond_new(void);
- *   void      nurl_cond_wait(long long cond, long long mutex);
- *   void      nurl_cond_signal/_broadcast/_free(long long h);
+ *  - `nurl_pthread_join_ptr` / `nurl_pthread_detach_ptr` — POSIX
+ *    pthread_join and pthread_detach take their pthread_t argument
+ *    BY VALUE, and pthread_t is a 16-byte struct on winpthreads
+ *    (mingw-w64 posix model). NURL's `&`-FFI cannot express a
+ *    by-value-struct argument, so these tiny pointer-taking
+ *    trampolines bridge it.
  *
- * NURL closure → thread shape: the compiler decomposes a `(@ v)` closure
- * into (fn_ptr, env_ptr) via the `# *u closure 0|1` cast. The thread
- * trampoline below calls `((void(*)(void*))fn)(env)`. The closure body
- * is a regular NURL function whose first argument is an i8* env pointer.
+ *  - WASI shims for the pthread surface — wasi-libc has no pthread,
+ *    so we provide degenerate no-op stubs for pthread_create /
+ *    pthread_mutex_* / pthread_cond_* / the join+detach trampolines
+ *    above. Programs that try to thread on WASI see thread_spawn
+ *    return `ThreadCreate` and mutex/cond ops succeed silently —
+ *    single-threaded execution, same observable shape as before.
+ *
+ * NURL closure → pthread_create shape: the compiler decomposes a
+ * `( @ v )` closure into (fn_ptr, env_ptr) via the `# *u closure 0|1`
+ * cast. stdlib/std/thread.nu passes those two pointers straight to
+ * pthread_create as start_routine / arg. NURL closure body has
+ * signature `void(*)(void *)`, pthread expects `void *(*)(void *)`
+ * — System V x86_64 ABI compatibility lets the slight return-type
+ * mismatch through (the return value is discarded since join always
+ * passes `&rv` and we throw `rv` away). Same on aarch64 / riscv64
+ * (return register holds garbage for void-returning fns).
  */
 
 #if !defined(__wasi__)
 
-#  if defined(_WIN32)
+/* <pthread.h> already pulled in at the top of the file (§2 sizeof
+ * table needs the type sizes on both POSIX and Win32-winpthreads). */
 
-typedef struct NurlThread {
-    HANDLE   handle;
-    void   (*fn)(void*);
-    void    *env;
-} NurlThread;
-
-typedef struct NurlMutex {
-    CRITICAL_SECTION cs;
-} NurlMutex;
-
-typedef struct NurlCond {
-    CONDITION_VARIABLE cv;
-} NurlCond;
-
-static unsigned __stdcall nurl__thread_trampoline(void *p) {
-    NurlThread *t = (NurlThread*)p;
-    if (t && t->fn) t->fn(t->env);
-    return 0;
-}
-
-long long nurl_thread_spawn(void *fn, void *env) {
-    if (!fn) return 0;
-    NurlThread *t = (NurlThread*)calloc(1, sizeof(NurlThread));
-    if (!t) return 0;
-    t->fn  = (void(*)(void*))fn;
-    t->env = env;
-    HANDLE h = (HANDLE)_beginthreadex(NULL, 0, nurl__thread_trampoline, t, 0, NULL);
-    if (!h) { free(t); return 0; }
-    t->handle = h;
-    return (long long)(uintptr_t)t;
-}
-
-long long nurl_thread_join(long long handle) {
-    NurlThread *t = (NurlThread*)(uintptr_t)handle;
-    if (!t) return -1;
-    WaitForSingleObject(t->handle, INFINITE);
-    DWORD rc = 0;
-    GetExitCodeThread(t->handle, &rc);
-    CloseHandle(t->handle);
-    free(t);
-    return (long long)rc;
-}
-
-void nurl_thread_detach(long long handle) {
-    NurlThread *t = (NurlThread*)(uintptr_t)handle;
-    if (!t) return;
-    CloseHandle(t->handle);
-    free(t);
-}
-
-long long nurl_mutex_new(void) {
-    NurlMutex *m = (NurlMutex*)calloc(1, sizeof(NurlMutex));
-    if (!m) return 0;
-    InitializeCriticalSection(&m->cs);
-    return (long long)(uintptr_t)m;
-}
-void nurl_mutex_lock(long long h) {
-    NurlMutex *m = (NurlMutex*)(uintptr_t)h;
-    if (m) EnterCriticalSection(&m->cs);
-}
-void nurl_mutex_unlock(long long h) {
-    NurlMutex *m = (NurlMutex*)(uintptr_t)h;
-    if (m) LeaveCriticalSection(&m->cs);
-}
-void nurl_mutex_free(long long h) {
-    NurlMutex *m = (NurlMutex*)(uintptr_t)h;
-    if (!m) return;
-    DeleteCriticalSection(&m->cs);
-    free(m);
-}
-
-long long nurl_cond_new(void) {
-    NurlCond *c = (NurlCond*)calloc(1, sizeof(NurlCond));
-    if (!c) return 0;
-    InitializeConditionVariable(&c->cv);
-    return (long long)(uintptr_t)c;
-}
-void nurl_cond_wait(long long ch, long long mh) {
-    NurlCond  *c = (NurlCond*)(uintptr_t)ch;
-    NurlMutex *m = (NurlMutex*)(uintptr_t)mh;
-    if (!c || !m) return;
-    SleepConditionVariableCS(&c->cv, &m->cs, INFINITE);
-}
-void nurl_cond_signal(long long h) {
-    NurlCond *c = (NurlCond*)(uintptr_t)h;
-    if (c) WakeConditionVariable(&c->cv);
-}
-void nurl_cond_broadcast(long long h) {
-    NurlCond *c = (NurlCond*)(uintptr_t)h;
-    if (c) WakeAllConditionVariable(&c->cv);
-}
-void nurl_cond_free(long long h) {
-    NurlCond *c = (NurlCond*)(uintptr_t)h;
-    if (!c) return;
-    /* CONDITION_VARIABLE has no destroy primitive on Win32. */
-    free(c);
-}
-
-#  else /* POSIX */
-
-#    include <pthread.h>
-
-typedef struct NurlThread {
-    pthread_t handle;
-    void   (*fn)(void*);
-    void    *env;
-} NurlThread;
-
-typedef struct NurlMutex {
-    pthread_mutex_t mtx;
-} NurlMutex;
-
-typedef struct NurlCond {
-    pthread_cond_t cv;
-} NurlCond;
-
-static void *nurl__thread_trampoline(void *p) {
-    NurlThread *t = (NurlThread*)p;
-    if (t && t->fn) t->fn(t->env);
-    return NULL;
-}
-
-long long nurl_thread_spawn(void *fn, void *env) {
-    if (!fn) return 0;
-    NurlThread *t = (NurlThread*)calloc(1, sizeof(NurlThread));
-    if (!t) return 0;
-    t->fn  = (void(*)(void*))fn;
-    t->env = env;
-    if (pthread_create(&t->handle, NULL, nurl__thread_trampoline, t) != 0) {
-        free(t);
-        return 0;
-    }
-    return (long long)(uintptr_t)t;
-}
-
-long long nurl_thread_join(long long handle) {
-    NurlThread *t = (NurlThread*)(uintptr_t)handle;
+int nurl_pthread_join_ptr(pthread_t *t) {
     if (!t) return -1;
     void *rv = NULL;
-    int rc = pthread_join(t->handle, &rv);
-    free(t);
-    return rc == 0 ? 0 : -1;
+    return pthread_join(*t, &rv);
 }
 
-void nurl_thread_detach(long long handle) {
-    NurlThread *t = (NurlThread*)(uintptr_t)handle;
-    if (!t) return;
-    pthread_detach(t->handle);
-    free(t);
+void nurl_pthread_detach_ptr(pthread_t *t) {
+    if (t) pthread_detach(*t);
 }
 
-long long nurl_mutex_new(void) {
-    NurlMutex *m = (NurlMutex*)calloc(1, sizeof(NurlMutex));
-    if (!m) return 0;
-    if (pthread_mutex_init(&m->mtx, NULL) != 0) { free(m); return 0; }
-    return (long long)(uintptr_t)m;
-}
-void nurl_mutex_lock(long long h) {
-    NurlMutex *m = (NurlMutex*)(uintptr_t)h;
-    if (m) pthread_mutex_lock(&m->mtx);
-}
-void nurl_mutex_unlock(long long h) {
-    NurlMutex *m = (NurlMutex*)(uintptr_t)h;
-    if (m) pthread_mutex_unlock(&m->mtx);
-}
-void nurl_mutex_free(long long h) {
-    NurlMutex *m = (NurlMutex*)(uintptr_t)h;
-    if (!m) return;
-    pthread_mutex_destroy(&m->mtx);
-    free(m);
-}
+#else  /* __wasi__ — no threading; every entry degrades. */
 
-long long nurl_cond_new(void) {
-    NurlCond *c = (NurlCond*)calloc(1, sizeof(NurlCond));
-    if (!c) return 0;
-    if (pthread_cond_init(&c->cv, NULL) != 0) { free(c); return 0; }
-    return (long long)(uintptr_t)c;
+/* pthread_create + the trampolines pretend failure on WASI; any
+ * NURL caller sees thread_spawn return ThreadCreate. */
+int  pthread_create(void *t, void *a, void *s, void *arg) {
+    (void)t; (void)a; (void)s; (void)arg; return -1;
 }
-void nurl_cond_wait(long long ch, long long mh) {
-    NurlCond  *c = (NurlCond*)(uintptr_t)ch;
-    NurlMutex *m = (NurlMutex*)(uintptr_t)mh;
-    if (!c || !m) return;
-    pthread_cond_wait(&c->cv, &m->mtx);
-}
-void nurl_cond_signal(long long h) {
-    NurlCond *c = (NurlCond*)(uintptr_t)h;
-    if (c) pthread_cond_signal(&c->cv);
-}
-void nurl_cond_broadcast(long long h) {
-    NurlCond *c = (NurlCond*)(uintptr_t)h;
-    if (c) pthread_cond_broadcast(&c->cv);
-}
-void nurl_cond_free(long long h) {
-    NurlCond *c = (NurlCond*)(uintptr_t)h;
-    if (!c) return;
-    pthread_cond_destroy(&c->cv);
-    free(c);
-}
+int  nurl_pthread_join_ptr  (void *t) { (void)t; return -1; }
+void nurl_pthread_detach_ptr(void *t) { (void)t; }
 
-#  endif /* _WIN32 vs POSIX */
-
-#else  /* __wasi__ — no threading; every entry returns a 0/-1 stub. */
-
-long long nurl_thread_spawn(void *fn, void *env) { (void)fn; (void)env; return 0; }
-long long nurl_thread_join(long long h)            { (void)h; return -1; }
-void      nurl_thread_detach(long long h)          { (void)h; }
-long long nurl_mutex_new(void)                     { return 0; }
-void      nurl_mutex_lock(long long h)             { (void)h; }
-void      nurl_mutex_unlock(long long h)           { (void)h; }
-void      nurl_mutex_free(long long h)             { (void)h; }
-long long nurl_cond_new(void)                      { return 0; }
-void      nurl_cond_wait(long long c, long long m) { (void)c; (void)m; }
-void      nurl_cond_signal(long long h)            { (void)h; }
-void      nurl_cond_broadcast(long long h)         { (void)h; }
-void      nurl_cond_free(long long h)              { (void)h; }
+/* pthread mutex/cond shims for WASI. The NURL-side surface in
+ * stdlib/std/thread.nu calls these directly via `&`-FFI; on WASI the
+ * libpthread symbols are absent, so the runtime provides degenerate
+ * versions that pretend success. Single-threaded WASI execution sees
+ * no contention — same behavior as before. */
+int pthread_mutex_init(void *m, void *a)  { (void)m; (void)a; return 0; }
+int pthread_mutex_lock(void *m)            { (void)m; return 0; }
+int pthread_mutex_unlock(void *m)          { (void)m; return 0; }
+int pthread_mutex_destroy(void *m)         { (void)m; return 0; }
+int pthread_cond_init(void *c, void *a)    { (void)c; (void)a; return 0; }
+int pthread_cond_wait(void *c, void *m)    { (void)c; (void)m; return 0; }
+int pthread_cond_signal(void *c)           { (void)c; return 0; }
+int pthread_cond_broadcast(void *c)        { (void)c; return 0; }
+int pthread_cond_destroy(void *c)          { (void)c; return 0; }
 
 #endif /* __wasi__ guard for §19 */
 
@@ -7275,336 +4976,6 @@ void nurl_panic(const char *msg) {
 #endif  /* __wasi__ panic stubs */
 
 
-/* ── §21  SQLite FFI bridge ─────────────────────────────────────── */
-/*
- * Thin wrapper over libsqlite3 (TIER 3 stdlib). The NURL surface
- * (`stdlib/ext/sqlite.nu`) builds typed Result-returning APIs on top
- * of these entry points. Two handle kinds:
- *
- *   NurlSqliteDb   — wraps `sqlite3 *`        (one per connection)
- *   NurlSqliteStmt — wraps `sqlite3_stmt *`   (one per prepared SQL)
- *
- * Both are heap-allocated and addressed as `long long` from NURL,
- * mirroring NurlTcp / NurlThread / etc. `err_kind = 0` means OK; any
- * other value is the most recent SQLite error code (`SQLITE_*`).
- *
- * MVP scope kept narrow on purpose:
- *   * Bind: int64, text, NULL. No blob, no double (callers stringify).
- *   * Column: int64, text, type-tag, count. No blob, no double.
- *   * No transaction helpers — caller issues `BEGIN`/`COMMIT` via exec.
- *   * No statement cache, no ATTACH, no WAL/PRAGMA wrappers — those
- *     are pure-SQL recipes the caller assembles.
- *
- * When NURL_HAVE_SQLITE3 is unset (build host lacks libsqlite3-dev),
- * every entry returns a sentinel (NULL handle / err_kind=99
- * = SqliteUnsupported) so callers fail gracefully rather than at
- * link time.
- */
-
-#define NURL_SQLITE_ERR_OK            0
-#define NURL_SQLITE_ERR_ROW           100  /* sqlite_step: got a row */
-#define NURL_SQLITE_ERR_DONE          101  /* sqlite_step: no more rows */
-#define NURL_SQLITE_ERR_UNSUPPORTED   99   /* build had no libsqlite3 */
-/* For every other code the runtime forwards the raw SQLite errcode
- * (1..28, see sqlite3.h SQLITE_ERROR / _BUSY / _LOCKED / _MISUSE etc).
- * NURL surface re-classifies into a small `SqliteErr` enum. */
-
-#ifdef NURL_HAVE_SQLITE3
-#include <sqlite3.h>
-#endif
-
-typedef struct NurlSqliteDb {
-#ifdef NURL_HAVE_SQLITE3
-    sqlite3 *db;
-#else
-    void *db_unused;
-#endif
-    long long err_kind;
-    /* errmsg slot — strdup'd on each error so the borrowed view
-     * surfaced via nurl_sqlite_errmsg lives at least until the next
-     * operation on this handle. Freed at handle close. */
-    char *errmsg;
-} NurlSqliteDb;
-
-typedef struct NurlSqliteStmt {
-#ifdef NURL_HAVE_SQLITE3
-    sqlite3_stmt *stmt;
-#else
-    void *stmt_unused;
-#endif
-    long long err_kind;
-    /* Backing strdup'd buffer for the most-recent column_text read.
-     * SQLite's `sqlite3_column_text` returns a borrowed pointer whose
-     * lifetime ends at the next step/finalize, which is a hostile API
-     * for a single-owner caller. We snapshot into our own slot so the
-     * NURL surface can consistently `string_from` it. Freed at
-     * finalize. */
-    char *text_buf;
-} NurlSqliteStmt;
-
-#ifdef NURL_HAVE_SQLITE3
-static void nurl__sqlite_set_errmsg(NurlSqliteDb *h) {
-    free(h->errmsg);
-    const char *m = sqlite3_errmsg(h->db);
-    h->errmsg = m ? strdup(m) : NULL;
-}
-#endif
-
-long long nurl_sqlite_open(const char *path) {
-    NurlSqliteDb *h = (NurlSqliteDb*)calloc(1, sizeof(NurlSqliteDb));
-    if (!h) return 0;
-#ifdef NURL_HAVE_SQLITE3
-    int rc = sqlite3_open(path ? path : ":memory:", &h->db);
-    if (rc != SQLITE_OK) {
-        h->err_kind = rc ? rc : 1;
-        nurl__sqlite_set_errmsg(h);
-        /* keep the handle so the caller can inspect err_kind / errmsg */
-    } else {
-        h->err_kind = NURL_SQLITE_ERR_OK;
-    }
-#else
-    (void)path;
-    h->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
-#endif
-    return (long long)(uintptr_t)h;
-}
-
-void nurl_sqlite_close(long long handle) {
-    NurlSqliteDb *h = (NurlSqliteDb*)(uintptr_t)handle;
-    if (!h) return;
-#ifdef NURL_HAVE_SQLITE3
-    if (h->db) sqlite3_close(h->db);
-#endif
-    free(h->errmsg);
-    free(h);
-}
-
-long long nurl_sqlite_err_kind(long long handle) {
-    NurlSqliteDb *h = (NurlSqliteDb*)(uintptr_t)handle;
-    return h ? h->err_kind : NURL_SQLITE_ERR_UNSUPPORTED;
-}
-
-const char *nurl_sqlite_errmsg(long long handle) {
-    NurlSqliteDb *h = (NurlSqliteDb*)(uintptr_t)handle;
-    if (!h || !h->errmsg) return "";
-    return h->errmsg;
-}
-
-/* sqlite3_exec convenience — accepts a script of one or more
- * semicolon-separated statements. No result-set extraction; returns
- * the row-count (`sqlite3_changes`) on OK, -1 on error (err_kind +
- * errmsg populated). DDL and INSERT/UPDATE/DELETE land here; for
- * SELECT use prepare + step. */
-long long nurl_sqlite_exec(long long handle, const char *sql) {
-    NurlSqliteDb *h = (NurlSqliteDb*)(uintptr_t)handle;
-    if (!h) return -1;
-#ifdef NURL_HAVE_SQLITE3
-    if (!h->db) { h->err_kind = NURL_SQLITE_ERR_UNSUPPORTED; return -1; }
-    char *err = NULL;
-    int rc = sqlite3_exec(h->db, sql ? sql : "", NULL, NULL, &err);
-    if (rc != SQLITE_OK) {
-        h->err_kind = rc;
-        free(h->errmsg);
-        h->errmsg = err ? strdup(err) : strdup("sqlite_exec failed");
-        sqlite3_free(err);
-        return -1;
-    }
-    h->err_kind = NURL_SQLITE_ERR_OK;
-    return (long long)sqlite3_changes(h->db);
-#else
-    (void)sql;
-    h->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
-    return -1;
-#endif
-}
-
-long long nurl_sqlite_prepare(long long handle, const char *sql) {
-    NurlSqliteDb *h = (NurlSqliteDb*)(uintptr_t)handle;
-    if (!h) return 0;
-    NurlSqliteStmt *s = (NurlSqliteStmt*)calloc(1, sizeof(NurlSqliteStmt));
-    if (!s) return 0;
-#ifdef NURL_HAVE_SQLITE3
-    if (!h->db) {
-        s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
-        return (long long)(uintptr_t)s;
-    }
-    int rc = sqlite3_prepare_v2(h->db, sql ? sql : "", -1, &s->stmt, NULL);
-    if (rc != SQLITE_OK) {
-        s->err_kind = rc;
-        h->err_kind = rc;
-        nurl__sqlite_set_errmsg(h);
-    } else {
-        s->err_kind = NURL_SQLITE_ERR_OK;
-    }
-#else
-    (void)sql;
-    s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
-#endif
-    return (long long)(uintptr_t)s;
-}
-
-long long nurl_sqlite_stmt_err_kind(long long handle) {
-    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
-    return s ? s->err_kind : NURL_SQLITE_ERR_UNSUPPORTED;
-}
-
-long long nurl_sqlite_bind_int(long long handle, long long idx, long long val) {
-    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
-    if (!s) return NURL_SQLITE_ERR_UNSUPPORTED;
-#ifdef NURL_HAVE_SQLITE3
-    if (!s->stmt) { s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED; return s->err_kind; }
-    int rc = sqlite3_bind_int64(s->stmt, (int)idx, (sqlite3_int64)val);
-    s->err_kind = (rc == SQLITE_OK) ? NURL_SQLITE_ERR_OK : rc;
-    return s->err_kind;
-#else
-    (void)idx; (void)val;
-    s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
-    return s->err_kind;
-#endif
-}
-
-long long nurl_sqlite_bind_text(long long handle, long long idx, const char *val) {
-    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
-    if (!s) return NURL_SQLITE_ERR_UNSUPPORTED;
-#ifdef NURL_HAVE_SQLITE3
-    if (!s->stmt) { s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED; return s->err_kind; }
-    /* SQLITE_TRANSIENT → SQLite copies, so the caller's `s` may be
-     * freed immediately after this call. SQLITE_STATIC would be
-     * faster but contradicts NURL's single-owner contract. */
-    int rc = sqlite3_bind_text(s->stmt, (int)idx, val ? val : "", -1,
-                               SQLITE_TRANSIENT);
-    s->err_kind = (rc == SQLITE_OK) ? NURL_SQLITE_ERR_OK : rc;
-    return s->err_kind;
-#else
-    (void)idx; (void)val;
-    s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
-    return s->err_kind;
-#endif
-}
-
-long long nurl_sqlite_bind_null(long long handle, long long idx) {
-    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
-    if (!s) return NURL_SQLITE_ERR_UNSUPPORTED;
-#ifdef NURL_HAVE_SQLITE3
-    if (!s->stmt) { s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED; return s->err_kind; }
-    int rc = sqlite3_bind_null(s->stmt, (int)idx);
-    s->err_kind = (rc == SQLITE_OK) ? NURL_SQLITE_ERR_OK : rc;
-    return s->err_kind;
-#else
-    (void)idx;
-    s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
-    return s->err_kind;
-#endif
-}
-
-/* Drives one cursor advance. Returns ROW (100) when a row is
- * available, DONE (101) on end-of-result. Any other return is an
- * error code passed through; the surface enum maps the common
- * SQLITE_BUSY / _LOCKED / _MISUSE to its variants. */
-long long nurl_sqlite_step(long long handle) {
-    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
-    if (!s) return NURL_SQLITE_ERR_UNSUPPORTED;
-#ifdef NURL_HAVE_SQLITE3
-    if (!s->stmt) { s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED; return s->err_kind; }
-    int rc = sqlite3_step(s->stmt);
-    if (rc == SQLITE_ROW) {
-        s->err_kind = NURL_SQLITE_ERR_OK;
-        return NURL_SQLITE_ERR_ROW;
-    }
-    if (rc == SQLITE_DONE) {
-        s->err_kind = NURL_SQLITE_ERR_OK;
-        return NURL_SQLITE_ERR_DONE;
-    }
-    s->err_kind = rc;
-    return rc;
-#else
-    s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
-    return s->err_kind;
-#endif
-}
-
-long long nurl_sqlite_column_count(long long handle) {
-    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
-    if (!s) return 0;
-#ifdef NURL_HAVE_SQLITE3
-    if (!s->stmt) return 0;
-    return (long long)sqlite3_column_count(s->stmt);
-#else
-    return 0;
-#endif
-}
-
-/* SQLite column-type ids: 1=INTEGER, 2=FLOAT, 3=TEXT, 4=BLOB, 5=NULL.
- * Forwarded verbatim so the NURL surface can decide. */
-long long nurl_sqlite_column_type(long long handle, long long idx) {
-    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
-    if (!s) return 5;
-#ifdef NURL_HAVE_SQLITE3
-    if (!s->stmt) return 5;
-    return (long long)sqlite3_column_type(s->stmt, (int)idx);
-#else
-    (void)idx;
-    return 5;
-#endif
-}
-
-long long nurl_sqlite_column_int(long long handle, long long idx) {
-    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
-    if (!s) return 0;
-#ifdef NURL_HAVE_SQLITE3
-    if (!s->stmt) return 0;
-    return (long long)sqlite3_column_int64(s->stmt, (int)idx);
-#else
-    (void)idx;
-    return 0;
-#endif
-}
-
-/* Returns a borrowed view that's stable until the next call into
- * this statement (step / finalize / column_text on another index).
- * NURL callers `string_from` it on the spot. */
-const char *nurl_sqlite_column_text(long long handle, long long idx) {
-    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
-    if (!s) return "";
-#ifdef NURL_HAVE_SQLITE3
-    if (!s->stmt) return "";
-    const unsigned char *raw = sqlite3_column_text(s->stmt, (int)idx);
-    free(s->text_buf);
-    s->text_buf = raw ? strdup((const char*)raw) : strdup("");
-    return s->text_buf ? s->text_buf : "";
-#else
-    (void)idx;
-    return "";
-#endif
-}
-
-void nurl_sqlite_finalize(long long handle) {
-    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
-    if (!s) return;
-#ifdef NURL_HAVE_SQLITE3
-    if (s->stmt) sqlite3_finalize(s->stmt);
-#endif
-    free(s->text_buf);
-    free(s);
-}
-
-/* Helper for callers that want to reuse a prepared statement across
- * multiple binding sets. Resets the cursor + clears bindings. */
-long long nurl_sqlite_reset(long long handle) {
-    NurlSqliteStmt *s = (NurlSqliteStmt*)(uintptr_t)handle;
-    if (!s) return NURL_SQLITE_ERR_UNSUPPORTED;
-#ifdef NURL_HAVE_SQLITE3
-    if (!s->stmt) { s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED; return s->err_kind; }
-    int rc = sqlite3_reset(s->stmt);
-    if (rc == SQLITE_OK) sqlite3_clear_bindings(s->stmt);
-    s->err_kind = (rc == SQLITE_OK) ? NURL_SQLITE_ERR_OK : rc;
-    return s->err_kind;
-#else
-    s->err_kind = NURL_SQLITE_ERR_UNSUPPORTED;
-    return s->err_kind;
-#endif
-}
-
 /* ── §22  Gzip wire format (libz stream API) ───────────────────────
  *
  * NURL surface (`stdlib/ext/compress.nu`) ships zlib-stream helpers as
@@ -7684,202 +5055,6 @@ int nurl_gzip_decompress(unsigned char *dst, long long *dst_len,
 }
 
 
-/* ── §23  DoS protection — concurrent + per-IP connection caps ──────
- *
- * Thread-safe state shared across server workers. Created once per
- * HttpServer instance; consulted in the accept hot path. The IP table
- * is a linear array (cap defaults to 256 distinct active IPs); lookup
- * is O(N) but N stays small for realistic workloads and the cost is
- * dwarfed by the accept(2) system call.
- *
- * Eviction policy: none — the table grows up to ip_cap, after which
- * unknown IPs fall through to a "best-effort" path that still enforces
- * the global cap but not per-IP. The intent is DoS mitigation, not
- * cryptographic fairness; a real attack hits the global cap long
- * before flooding the IP table.
- *
- * Public ABI:
- *   long long nurl_dos_state_new(long long max_concurrent, long long max_per_ip);
- *   long long nurl_dos_state_try_acquire(long long state, const char *ip);
- *   void      nurl_dos_state_release(long long state, const char *ip);
- *   void      nurl_dos_state_free(long long state);
- *
- * try_acquire returns 1 on success (caller proceeds), 0 on cap-rejection
- * (caller MUST close the conn without serving). Pair every try_acquire=1
- * with exactly one release on the same IP, regardless of how the conn
- * terminated. Empty ip ("") disables per-IP tracking for that call —
- * the global cap still applies.
- */
-
-typedef struct NurlDosIpEntry {
-    char     *ip;        /* owned strdup */
-    long long count;
-} NurlDosIpEntry;
-
-typedef struct NurlDosState {
-    long long max_concurrent;    /* 0 = unlimited */
-    long long max_per_ip;        /* 0 = unlimited */
-    long long active_count;
-    NurlDosIpEntry *ip_entries;
-    size_t    ip_count;
-    size_t    ip_cap;
-#ifdef _WIN32
-    CRITICAL_SECTION lock;
-#elif !defined(__wasi__)
-    pthread_mutex_t  lock;
-#endif
-    int       lock_init;
-} NurlDosState;
-
-static void nurl__dos_lock(NurlDosState *s) {
-    if (!s || !s->lock_init) return;
-#ifdef _WIN32
-    EnterCriticalSection(&s->lock);
-#elif !defined(__wasi__)
-    pthread_mutex_lock(&s->lock);
-#else
-    (void)s;  /* wasi: single-threaded, no lock */
-#endif
-}
-static void nurl__dos_unlock(NurlDosState *s) {
-    if (!s || !s->lock_init) return;
-#ifdef _WIN32
-    LeaveCriticalSection(&s->lock);
-#elif !defined(__wasi__)
-    pthread_mutex_unlock(&s->lock);
-#else
-    (void)s;
-#endif
-}
-
-long long nurl_dos_state_new(long long max_concurrent, long long max_per_ip) {
-    NurlDosState *s = (NurlDosState*)calloc(1, sizeof(NurlDosState));
-    if (!s) return 0;
-    s->max_concurrent = max_concurrent;
-    s->max_per_ip = max_per_ip;
-    s->ip_cap = 0;
-    s->ip_count = 0;
-    s->ip_entries = NULL;
-#ifdef _WIN32
-    InitializeCriticalSection(&s->lock);
-#elif !defined(__wasi__)
-    pthread_mutex_init(&s->lock, NULL);
-#endif
-    s->lock_init = 1;
-    return (long long)(uintptr_t)s;
-}
-
-/* Find the IP entry index, or -1 if absent. Caller MUST hold the lock. */
-static long nurl__dos_find_ip(NurlDosState *s, const char *ip) {
-    if (!s || !s->ip_entries || !ip) return -1;
-    for (size_t i = 0; i < s->ip_count; i++) {
-        if (s->ip_entries[i].ip && strcmp(s->ip_entries[i].ip, ip) == 0) {
-            return (long)i;
-        }
-    }
-    return -1;
-}
-
-long long nurl_dos_state_try_acquire(long long state, const char *ip) {
-    NurlDosState *s = (NurlDosState*)(uintptr_t)state;
-    if (!s) return 1;  /* no state → permit (DoS-disabled mode) */
-    nurl__dos_lock(s);
-    /* Global cap check */
-    if (s->max_concurrent > 0 && s->active_count >= s->max_concurrent) {
-        nurl__dos_unlock(s);
-        return 0;
-    }
-    /* Per-IP cap check — only if IP supplied AND a limit configured */
-    if (s->max_per_ip > 0 && ip && *ip) {
-        long idx = nurl__dos_find_ip(s, ip);
-        if (idx >= 0) {
-            if (s->ip_entries[idx].count >= s->max_per_ip) {
-                nurl__dos_unlock(s);
-                return 0;
-            }
-            s->ip_entries[idx].count++;
-        } else {
-            /* New IP — try to add. Cap the table at 256 entries; over
-             * that fall back to "global cap only" for unknown IPs. */
-            if (s->ip_count < 256) {
-                if (s->ip_count == s->ip_cap) {
-                    size_t newcap = s->ip_cap ? s->ip_cap * 2 : 16;
-                    if (newcap > 256) newcap = 256;
-                    NurlDosIpEntry *grown = (NurlDosIpEntry*)realloc(
-                        s->ip_entries, newcap * sizeof(NurlDosIpEntry));
-                    if (grown) {
-                        s->ip_entries = grown;
-                        s->ip_cap = newcap;
-                    }
-                }
-                if (s->ip_count < s->ip_cap) {
-                    s->ip_entries[s->ip_count].ip = strdup(ip);
-                    s->ip_entries[s->ip_count].count = 1;
-                    s->ip_count++;
-                }
-            }
-        }
-    }
-    s->active_count++;
-    nurl__dos_unlock(s);
-    return 1;
-}
-
-void nurl_dos_state_release(long long state, const char *ip) {
-    NurlDosState *s = (NurlDosState*)(uintptr_t)state;
-    if (!s) return;
-    nurl__dos_lock(s);
-    if (s->active_count > 0) s->active_count--;
-    if (ip && *ip) {
-        long idx = nurl__dos_find_ip(s, ip);
-        if (idx >= 0) {
-            if (s->ip_entries[idx].count > 0) s->ip_entries[idx].count--;
-            /* When count drops to 0, evict the entry — keeps the table
-             * compact under steady churn. Last-element-swap-then-drop
-             * is O(1). */
-            if (s->ip_entries[idx].count == 0) {
-                free(s->ip_entries[idx].ip);
-                size_t last = s->ip_count - 1;
-                if ((size_t)idx != last) {
-                    s->ip_entries[idx] = s->ip_entries[last];
-                }
-                s->ip_count--;
-            }
-        }
-    }
-    nurl__dos_unlock(s);
-}
-
-void nurl_dos_state_free(long long state) {
-    NurlDosState *s = (NurlDosState*)(uintptr_t)state;
-    if (!s) return;
-    if (s->ip_entries) {
-        for (size_t i = 0; i < s->ip_count; i++) {
-            free(s->ip_entries[i].ip);
-        }
-        free(s->ip_entries);
-    }
-    if (s->lock_init) {
-#ifdef _WIN32
-        DeleteCriticalSection(&s->lock);
-#elif !defined(__wasi__)
-        pthread_mutex_destroy(&s->lock);
-#endif
-    }
-    free(s);
-}
-
-/* Read the current active connection count — useful for /metrics
- * style observability endpoints. */
-long long nurl_dos_state_active(long long state) {
-    NurlDosState *s = (NurlDosState*)(uintptr_t)state;
-    if (!s) return 0;
-    nurl__dos_lock(s);
-    long long c = s->active_count;
-    nurl__dos_unlock(s);
-    return c;
-}
-
 /* ── §24  Async runtime (stackful fibers, M:N work-stealing) ────────
  *
  * Phase 1 shipped a single-thread round-robin scheduler. Phase 3
@@ -7932,7 +5107,21 @@ void      nurl_runtime_init(long long worker_count);
 void      nurl_runtime_run(void);
 void      nurl_runtime_shutdown(void);
 
-#if !defined(__wasi__) && !defined(_WIN32)
+/* musl deliberately omits the ucontext family (`getcontext`/`setcontext`/
+ * `makecontext`/`swapcontext`) — including the headers links to "undefined
+ * symbol" errors. Gate the stackful fiber implementation on glibc-Linux or
+ * macOS; every other POSIX-ish target (musl Linux, WASI, …) falls through
+ * to the stub block below. Phase-5 will replace this with an asm-based
+ * context switch portable across libc choices. */
+#if !defined(__wasi__) && !defined(_WIN32) && (defined(__GLIBC__) || defined(__APPLE__))
+/* On macOS the ucontext routines are gated behind `_XOPEN_SOURCE` —
+ * zig's libSystem headers (and Apple's own SDK) `#error` out otherwise.
+ * Define it BEFORE including ucontext.h so getcontext / setcontext /
+ * makecontext / swapcontext are visible. The same define is harmless on
+ * Linux glibc + musl, where the routines are exposed unconditionally. */
+#if defined(__APPLE__) && !defined(_XOPEN_SOURCE)
+#  define _XOPEN_SOURCE 600
+#endif
 #include <ucontext.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -8310,8 +5499,11 @@ void nurl_fiber_park_with_mutex(long long mutex_h) {
     if (!w) return;       /* not on a fiber — caller's mutex stays locked */
     NurlFiber *cur = w->current;
     if (!cur) return;
-    NurlMutex *m = (NurlMutex*)(uintptr_t)mutex_h;
-    cur->pending_unlock = m ? &m->mtx : NULL;
+    /* mutex_h is the raw pthread_mutex_t* from NURL (Phase 6 batch 1:
+     * Mutex.c is a Cell holding the mutex bytes, cell_ptr is exactly
+     * &pthread_mutex_t). No NurlMutex wrapper anymore. */
+    pthread_mutex_t *m = (pthread_mutex_t *)(uintptr_t)mutex_h;
+    cur->pending_unlock = m;
     cur->state = NF_PARKED;
     swapcontext(&cur->ctx, &w->loop_ctx);
     /* Resume point: scheduler has restored us into a worker. */
@@ -8586,7 +5778,10 @@ long long nurl_reactor_wait_read(long long fd, long long timeout_ms);
 long long nurl_reactor_wait_write(long long fd, long long timeout_ms);
 long long nurl_fiber_sleep_ms(long long ms);
 
-#if !defined(__wasi__) && !defined(_WIN32)
+/* Reactor uses the fiber primitives (NurlFiber, nurl__sched) defined in
+ * §24 above, so its platform guard must match — musl lacks the ucontext
+ * routines those rely on. */
+#if !defined(__wasi__) && !defined(_WIN32) && (defined(__GLIBC__) || defined(__APPLE__))
 #include <poll.h>
 #include <fcntl.h>
 #include <errno.h>

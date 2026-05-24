@@ -1,5 +1,7 @@
 // Argv — command line arguments
 
+$ `stdlib/core/string.nu`
+
 @ main → i {
     : i argc ( nurl_argv_count )
     : s prog ( nurl_argv_get 0 )

@@ -4,6 +4,8 @@
 // the path under valgrind/AddressSanitizer-style runs and verifies that
 // reassignment still produces correct values for the user.
 
+$ `stdlib/core/string.nu`
+
 @ main → i {
     : ~ s greeting ( nurl_str_cat `hello ` `world` )
     ( nurl_print greeting ) ( nurl_print `\n` )

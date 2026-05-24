@@ -2,6 +2,8 @@
 // a function argument must be freed after the call returns; nested arg
 // allocations follow the same rule via each gen_call's own temp list.
 
+$ `stdlib/core/string.nu`
+
 @ greet s name → v {
     ( nurl_print `Hello, ` ) ( nurl_print name ) ( nurl_print `!\n` )
 }

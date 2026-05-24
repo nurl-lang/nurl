@@ -1,7 +1,7 @@
 // Copyright (c) 2026 The NURL Project Developers
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // ============================================================
-//  stdlib/serde.nu — Serde-style Serialize trait + JSON
+//  stdlib/ext/serde.nu — Serde-style Serialize trait + JSON
 //                    en/decoder helpers for built-in types.
 //
 //  Design choices:
@@ -40,7 +40,7 @@
 //
 //  Usage shape:
 //
-//      $ `stdlib/serde.nu`
+//      $ `stdlib/ext/serde.nu`
 //
 //      : Point { i x  i y }
 //      % JsonSerialize Point {

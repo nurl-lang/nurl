@@ -5,19 +5,26 @@
 #     2. if compile OK, link with clang + runtime.o
 #     3. if link OK, run the binary with a timeout and capture
 #        stdout+stderr + exit code
-#  A single snapshot file testresults.txt records the full
-#  outcome for each test (status, exit code, captured output).
 #
-#  Compared to correct.txt as baseline:
-#   - missing baseline → testresults.txt is copied over as the
-#     initial baseline
-#   - identical         → print "TESTS PASSED"
-#   - different         → print unified diff and exit 1
+#  Output (since PURIFY.md Phase 5, 2026-05-23):
+#   - success.txt — only the tests whose outcome matched the
+#                   expectation (normal tests: COMPILE+LINK+RUN
+#                   success; should_fail_*: COMPILE FAIL;
+#                   should_warn_* / borrow_*: COMPILE OK with the
+#                   captured WARNINGS block).
+#   - failures.txt — only the tests whose outcome DIDN'T match,
+#                    with the exact compile / link command and
+#                    full captured stderr so the cause is visible
+#                    at a glance. Empty when everything went well.
+#   - correct.txt — snapshot baseline; compared against success.txt
+#                   only. Failures don't pollute the baseline diff.
 #
-#  Add or remove tests simply by adding/removing .nu files.
-#  When the baseline legitimately needs updating: delete
-#  correct.txt (or overwrite it with testresults.txt) and
-#  commit the new version.
+#  Exit code:
+#   - 0 when success.txt == correct.txt AND failures.txt is empty
+#   - 1 on baseline diff OR any unexpected failure
+#
+#  When the baseline legitimately needs updating: overwrite
+#  correct.txt with success.txt and commit the new version.
 # ============================================================
 set -u
 
@@ -48,9 +55,10 @@ if ! command -v "$CLANG" &>/dev/null; then
     exit 2
 fi
 
-# Link -lcurl when build.sh detected libcurl. Programs that don't import
-# stdlib/ext/http.nu link cleanly either way; this just keeps http_basic.nu
-# resolvable when NURL_HTTP_TESTS=1 enables it.
+# Per-feature link flags — see header in build.sh for the gating
+# sentinels. Programs that don't import the corresponding stdlib
+# module link cleanly either way; these just resolve the symbols
+# when something does pull them in.
 CURL_LIBS=""
 if [[ -f "$ROOT_DIR/stdlib/runtime.curl" ]]; then
     if command -v pkg-config &>/dev/null && pkg-config --exists libcurl 2>/dev/null; then
@@ -59,10 +67,6 @@ if [[ -f "$ROOT_DIR/stdlib/runtime.curl" ]]; then
         CURL_LIBS="-lcurl"
     fi
 fi
-
-# Link -lssl -lcrypto when build.sh detected openssl. Same model — the
-# TLS symbols compile in unconditionally; without the link flags the
-# runtime would fail at link time the first time anything calls them.
 OPENSSL_LIBS=""
 if [[ -f "$ROOT_DIR/stdlib/runtime.openssl" ]]; then
     if command -v pkg-config &>/dev/null && pkg-config --exists openssl 2>/dev/null; then
@@ -71,8 +75,6 @@ if [[ -f "$ROOT_DIR/stdlib/runtime.openssl" ]]; then
         OPENSSL_LIBS="-lssl -lcrypto"
     fi
 fi
-
-# Link -lsqlite3 when build.sh detected libsqlite3. Same model.
 SQLITE3_LIBS=""
 if [[ -f "$ROOT_DIR/stdlib/runtime.sqlite3" ]]; then
     if command -v pkg-config &>/dev/null && pkg-config --exists sqlite3 2>/dev/null; then
@@ -81,8 +83,6 @@ if [[ -f "$ROOT_DIR/stdlib/runtime.sqlite3" ]]; then
         SQLITE3_LIBS="-lsqlite3"
     fi
 fi
-
-# Link -lpq when build.sh detected libpq. Same model.
 PQ_LIBS=""
 if [[ -f "$ROOT_DIR/stdlib/runtime.pq" ]]; then
     if command -v pkg-config &>/dev/null && pkg-config --exists libpq 2>/dev/null; then
@@ -91,8 +91,6 @@ if [[ -f "$ROOT_DIR/stdlib/runtime.pq" ]]; then
         PQ_LIBS="-lpq"
     fi
 fi
-
-# Link -lz / -lzstd when build.sh detected compression libs.
 ZLIB_LIBS=""
 if [[ -f "$ROOT_DIR/stdlib/runtime.z" ]]; then
     if command -v pkg-config &>/dev/null && pkg-config --exists zlib 2>/dev/null; then
@@ -110,31 +108,24 @@ if [[ -f "$ROOT_DIR/stdlib/runtime.zstd" ]]; then
     fi
 fi
 
-# HTTP tests require network egress, so they're opt-in. Default skips.
 ENABLE_HTTP_TESTS="${NURL_HTTP_TESTS:-0}"
-
-# Live-socket net tests (server listen + loopback round-trip) are opt-in
-# via NURL_NET_TESTS=1. The error-path-only `net_basic.nu` runs
-# unconditionally; loopback / live tests need the gate.
 ENABLE_NET_TESTS="${NURL_NET_TESTS:-0}"
 
-# Sanitizer mode: separate runner (run_san_tests.sh) handles ASan/UBSan
-# instrumented runs because the output shape and pass/fail semantics
-# differ from the baseline-diff model below.
 if [[ "${NURL_SAN:-0}" == "1" ]]; then
     echo "NURL_SAN=1 set — use ./compiler/tests/run_san_tests.sh for sanitized runs." >&2
     exit 2
 fi
 
-RESULTS="$SCRIPT_DIR/testresults.txt"
+SUCCESS="$SCRIPT_DIR/success.txt"
+FAILURES="$SCRIPT_DIR/failures.txt"
 BASELINE="$SCRIPT_DIR/correct.txt"
 WORKDIR="$ROOT_DIR/build/tests"
 
-# Cap captured output per-test so a runaway test can't balloon the baseline.
 MAX_OUT_LINES="${MAX_OUT_LINES:-200}"
 TIMEOUT="${TIMEOUT:-10}"
 
-: > "$RESULTS"
+: > "$SUCCESS"
+: > "$FAILURES"
 mkdir -p "$WORKDIR"
 
 shopt -s nullglob
@@ -149,17 +140,80 @@ fi
 IFS=$'\n' tests=($(printf '%s\n' "${tests[@]}" | LC_ALL=C sort))
 unset IFS
 
-append_output_capped() {
-    local out_file="$1"
+# Append `out_file` to `dst` with a hard cap on lines (avoid baseline
+# explosions on runaway test output).
+append_capped() {
+    local dst="$1"; local out_file="$2"
     local lines
     lines=$(wc -l < "$out_file")
     if [[ $lines -le $MAX_OUT_LINES ]]; then
-        cat "$out_file" >> "$RESULTS"
+        cat "$out_file" >> "$dst"
     else
-        head -n "$MAX_OUT_LINES" "$out_file" >> "$RESULTS"
+        head -n "$MAX_OUT_LINES" "$out_file" >> "$dst"
         printf '[... %d more lines truncated ...]\n' \
-            "$((lines - MAX_OUT_LINES))" >> "$RESULTS"
+            "$((lines - MAX_OUT_LINES))" >> "$dst"
     fi
+}
+
+# Strip the absolute repo root prefix from paths in `file` in place,
+# so output is portable across checkout locations.
+strip_root() {
+    sed -i "s|$ROOT_DIR/||g" "$1"
+}
+
+# Build the link command shared by every test — keep it as a single
+# string so the failure record can reproduce it verbatim. The flag
+# list mirrors build.sh's per-stage link line. Squash runs of spaces
+# (some feature vars expand to empty when the optional lib is absent).
+LINK_FLAGS="$(printf '%s' "-O2 -flto -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS" | tr -s ' ' | sed 's/ *$//')"
+
+# Record a successful test (passes the expected outcome) into success.txt.
+# Fields written: header + status lines, mirroring the historic
+# `testresults.txt` format so correct.txt baselines stay readable.
+record_success() {
+    local name="$1"
+    printf '=== %s ===\n' "$name" >> "$SUCCESS"
+    shift
+    while [[ $# -gt 0 ]]; do
+        echo "$1" >> "$SUCCESS"
+        shift
+    done
+    echo >> "$SUCCESS"
+}
+
+# Record a failure into failures.txt — the user-visible format the
+# user requested: `[1/2]` and `[2/2]` step lines + the verbatim
+# command + the captured stderr. Paths get the repo-root prefix
+# stripped so the record is portable / pasteable.
+record_failure() {
+    local name="$1"; local stage="$2"; local src="$3"
+    local ll="$4"; local bin="$5"; local err_file="$6"
+    local src_rel="${src#$ROOT_DIR/}"
+    local ll_rel="${ll#$ROOT_DIR/}"
+    local bin_rel="${bin#$ROOT_DIR/}"
+    printf '=== %s ===\n' "$name" >> "$FAILURES"
+    case "$stage" in
+        compile)
+            echo "[1/2] $src_rel → $ll_rel" >> "$FAILURES"
+            ;;
+        link)
+            echo "[1/2] $src_rel → $ll_rel" >> "$FAILURES"
+            echo "[2/2] $ll_rel → $bin_rel  ($LINK_FLAGS)" >> "$FAILURES"
+            ;;
+        run)
+            echo "[1/2] $src_rel → $ll_rel" >> "$FAILURES"
+            echo "[2/2] $ll_rel → $bin_rel" >> "$FAILURES"
+            echo "[run] $bin_rel (exit not as expected)" >> "$FAILURES"
+            ;;
+        unexpected_compile_ok)
+            echo "[1/2] $src_rel → $ll_rel" >> "$FAILURES"
+            echo "(expected COMPILE FAIL but compiler accepted the program)" >> "$FAILURES"
+            ;;
+    esac
+    if [[ -s "$err_file" ]]; then
+        cat "$err_file" >> "$FAILURES"
+    fi
+    echo >> "$FAILURES"
 }
 
 for src in "${tests[@]}"; do
@@ -167,25 +221,17 @@ for src in "${tests[@]}"; do
     ll="$WORKDIR/$name.ll"
     bin="$WORKDIR/$name"
     out="$WORKDIR/$name.out"
-    rm -f "$ll" "$bin" "$out"
+    err="$WORKDIR/$name.err"
+    rm -f "$ll" "$bin" "$out" "$err"
 
     # Skip helper modules: files imported by other tests via `$`-import
-    # have no `main` function, so the test framework would record them
-    # as `COMPILE OK / LINK FAIL` (no `main` symbol). They are not real
-    # test cases — only here to satisfy import paths. Convention:
-    # `*_mod.nu`, `*_helper.nu`, `*_lib.nu`.
+    # have no `main` function. Convention: `*_mod.nu`, `*_helper.nu`,
+    # `*_lib.nu`.
     case "$name" in
         *_mod|*_helper|*_lib) continue ;;
     esac
 
     # Network-dependent HTTP tests are opt-in via NURL_HTTP_TESTS=1.
-    # Exemptions:
-    #   * `http_request_parser` / `http_response_builder` /
-    #     `http_router` — pure parser/builder/router, no socket;
-    #     run unconditionally.
-    #   * `http_server_seq` — opens a loopback listener (no remote
-    #     net), so gated by NURL_NET_TESTS=1 alongside the live TCP
-    #     tests rather than by NURL_HTTP_TESTS.
     if [[ "$name" == http_* \
           && "$name" != "http_request_parser" \
           && "$name" != "http_response_builder" \
@@ -203,9 +249,6 @@ for src in "${tests[@]}"; do
           && "$ENABLE_HTTP_TESTS" != "1" ]]; then
         continue
     fi
-
-    # Live-socket http_server tests gated by NURL_NET_TESTS=1 — same
-    # treatment as net_loopback. Skip when the gate is off.
     if [[ ( "$name" == "http_server_seq" \
             || "$name" == "http_server_pipelined" \
             || "$name" == "http_server_limits" \
@@ -214,105 +257,112 @@ for src in "${tests[@]}"; do
           && "$ENABLE_NET_TESTS" != "1" ]]; then
         continue
     fi
-
-    # Live TCP loopback test (net_loopback.nu) is opt-in via
-    # NURL_NET_TESTS=1. The error-path `net_basic.nu` is exempt — it
-    # never opens a real socket.
     if [[ "$name" == net_* && "$name" != "net_basic" \
           && "$ENABLE_NET_TESTS" != "1" ]]; then
         continue
     fi
 
-    printf '=== %s ===\n' "$name" >> "$RESULTS"
-
-    # `should_warn_*` tests intentionally trip a compiler diagnostic
-    # that is non-fatal (warning, not error). For those, capture the
-    # compile stderr into a WARNINGS block so the baseline records the
-    # exact diagnostic text; for everything else, compile stderr is
-    # dropped to keep results deterministic across machines whose tool
-    # versions vary.
-    werr=""
-    # `borrow_*` tests exercise the --borrowck analysis pass (BORROW.md).
-    # They are compiled WITH --borrowck, their diagnostic is captured
-    # into the baseline, and they are compile-only — a use-after-move
-    # demo must not actually run (the run would be a real fault).
+    # ── borrow_* — --borrowck compile-only, captures WARNINGS block ──
     if [[ "$name" == borrow_* ]]; then
-        werr="$WORKDIR/$name.werr"
-        if ! "$NURLC" --borrowck "$src" > "$ll" 2>"$werr"; then
-            echo "COMPILE FAIL" >> "$RESULTS"
-            echo >> "$RESULTS"
+        if ! "$NURLC" --borrowck "$src" > "$ll" 2>"$err"; then
+            record_failure "$name" compile "$src" "$ll" "$bin" "$err"
             continue
         fi
-        echo "COMPILE OK" >> "$RESULTS"
-        if [[ -s "$werr" ]]; then
-            echo "WARNINGS" >> "$RESULTS"
-            sed -i "s|$ROOT_DIR/||g" "$werr"
-            append_output_capped "$werr"
+        printf '=== %s ===\n' "$name" >> "$SUCCESS"
+        echo "COMPILE OK" >> "$SUCCESS"
+        if [[ -s "$err" ]]; then
+            strip_root "$err"
+            echo "WARNINGS" >> "$SUCCESS"
+            append_capped "$SUCCESS" "$err"
         fi
-        echo >> "$RESULTS"
+        echo >> "$SUCCESS"
         continue
     fi
+
+    # ── should_fail_* — COMPILE FAIL is the expected outcome ──
+    if [[ "$name" == should_fail_* ]]; then
+        if "$NURLC" "$src" > "$ll" 2>"$err"; then
+            # Expected failure but compiled successfully → unexpected
+            record_failure "$name" unexpected_compile_ok "$src" "$ll" "$bin" "$err"
+        else
+            record_success "$name" "COMPILE FAIL"
+        fi
+        continue
+    fi
+
+    # ── compile ──
+    # For should_warn_* the compile stderr is the diagnostic that
+    # gets baselined; keep it in $werr so the link step (which reuses
+    # $err) can't clobber it.
+    werr=""
     if [[ "$name" == should_warn_* ]]; then
         werr="$WORKDIR/$name.werr"
+        rm -f "$werr"
         if ! "$NURLC" "$src" > "$ll" 2>"$werr"; then
-            echo "COMPILE FAIL" >> "$RESULTS"
-            echo >> "$RESULTS"
+            record_failure "$name" compile "$src" "$ll" "$bin" "$werr"
             continue
         fi
     else
-        if ! "$NURLC" "$src" > "$ll" 2>/dev/null; then
-            echo "COMPILE FAIL" >> "$RESULTS"
-            echo >> "$RESULTS"
+        if ! "$NURLC" "$src" > "$ll" 2>"$err"; then
+            record_failure "$name" compile "$src" "$ll" "$bin" "$err"
             continue
         fi
     fi
-    echo "COMPILE OK" >> "$RESULTS"
-    if [[ -n "$werr" && -s "$werr" ]]; then
-        echo "WARNINGS" >> "$RESULTS"
-        # Strip the absolute repo prefix from warning paths so the
-        # baseline is machine-portable. Anything before
-        # `compiler/tests/…` becomes a relative path.
-        sed -i "s|$ROOT_DIR/||g" "$werr"
-        append_output_capped "$werr"
-    fi
 
+    # ── link ──
     # shellcheck disable=SC2086
-    # `-flto` matches build.sh: runtime.o ships as LLVM bitcode and the
-    # link-time LTO pipeline inlines runtime symbols into the test binary.
-    if ! "$CLANG" -O2 -flto "$ll" "$RUNTIME" -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o "$bin" 2>/dev/null; then
-        echo "LINK FAIL" >> "$RESULTS"
-        echo >> "$RESULTS"
+    if ! "$CLANG" -O2 -flto "$ll" "$RUNTIME" -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o "$bin" 2>"$err"; then
+        strip_root "$err"
+        record_failure "$name" link "$src" "$ll" "$bin" "$err"
         continue
     fi
-    echo "LINK OK" >> "$RESULTS"
 
-    # Run with cwd = WORKDIR and argv[0] = "./name" so argv-sensitive
-    # tests produce the same output regardless of the absolute path
-    # where the repo lives.  Braces + 2>/dev/null silence bash's own
-    # "Aborted" / "Segmentation fault" job-status message when the
-    # binary dies by signal; the binary's stderr is already merged
-    # into $out via 2>&1.
+    # ── run ──
     { ( cd "$WORKDIR" && timeout "${TIMEOUT}s" "./$name" > "$out" 2>&1 ); } 2>/dev/null
     exit_code=$?
-    printf 'EXIT %d\n' "$exit_code" >> "$RESULTS"
-    echo "OUTPUT" >> "$RESULTS"
-    append_output_capped "$out"
-    echo >> "$RESULTS"
+
+    # Write the success record. Inline (rather than via a helper)
+    # because the optional WARNINGS body is a multi-line file blob.
+    printf '=== %s ===\n' "$name" >> "$SUCCESS"
+    echo "COMPILE OK" >> "$SUCCESS"
+    if [[ -n "$werr" && -s "$werr" ]]; then
+        strip_root "$werr"
+        echo "WARNINGS" >> "$SUCCESS"
+        append_capped "$SUCCESS" "$werr"
+    fi
+    echo "LINK OK" >> "$SUCCESS"
+    printf 'EXIT %d\n' "$exit_code" >> "$SUCCESS"
+    echo "OUTPUT" >> "$SUCCESS"
+    append_capped "$SUCCESS" "$out"
+    echo >> "$SUCCESS"
 done
 
+# ── Report ─────────────────────────────────────────────────────
+exit_status=0
+
 if [[ ! -f "$BASELINE" ]]; then
-    cp "$RESULTS" "$BASELINE"
-    echo "No baseline found — created correct.txt from current results."
+    cp "$SUCCESS" "$BASELINE"
+    echo "No baseline found — created correct.txt from current success.txt."
     echo "Review it and commit if it reflects the expected state."
-    exit 0
+else
+    if ! cmp -s "$SUCCESS" "$BASELINE"; then
+        echo "TESTS FAILED — success.txt differs from correct.txt:"
+        echo
+        diff -u "$BASELINE" "$SUCCESS" || true
+        echo
+        exit_status=1
+    fi
 fi
 
-if cmp -s "$RESULTS" "$BASELINE"; then
+if [[ -s "$FAILURES" ]]; then
+    n=$(grep -c "^=== " "$FAILURES")
+    echo
+    echo "=== $n failure(s) recorded in compiler/tests/failures.txt ==="
+    cat "$FAILURES"
+    exit_status=1
+fi
+
+if [[ $exit_status -eq 0 ]]; then
     echo "TESTS PASSED"
-    exit 0
 fi
-
-echo "TESTS FAILED — testresults.txt differs from correct.txt:"
-echo
-diff -u "$BASELINE" "$RESULTS" || true
-exit 1
+exit "$exit_status"

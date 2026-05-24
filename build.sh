@@ -15,6 +15,14 @@
 #    --no-tests  Skip the test suite at the end (Docker images, CI
 #                stages that test elsewhere). Bootstrap fixed point
 #                still has to hold or the build fails.
+#    --refresh-bootstrap
+#                Copy `compiler/nurlc.nu` → `compiler/nurlc_lastgood.nu`
+#                and regenerate `compiler/nurlc_lastgood.ll` from it
+#                using the EXISTING `build/nurlc`. Required when a
+#                grammar / runtime-ABI change leaves the committed
+#                bootstrap snapshot unable to compile current nurlc.nu.
+#                The build then proceeds normally with the new
+#                snapshot. Commit both `.nu` and `.ll` files together.
 #    --san       Build runtime.o + every stage binary with
 #                AddressSanitizer + UndefinedBehaviorSanitizer. Catches
 #                use-after-free, double-free, OOB reads/writes, integer
@@ -34,10 +42,12 @@ cd "$SCRIPT_DIR"
 
 RUN_TESTS=1
 SAN=0
+REFRESH_BOOTSTRAP=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --no-tests) RUN_TESTS=0; shift ;;
-        --san)      SAN=1; shift ;;
+        --no-tests)          RUN_TESTS=0; shift ;;
+        --san)               SAN=1; shift ;;
+        --refresh-bootstrap) REFRESH_BOOTSTRAP=1; shift ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
     esac
 done
@@ -68,7 +78,7 @@ if (( SAN == 1 )); then
     # the point of a san run anyway (we're after correctness, not perf).
     NO_LTO_IN_SAN=1
     export NURL_SAN=1
-    # Disable LSan during the BUILD itself: nurlc_py / nurlc_self run
+    # Disable LSan during the BUILD itself: nurlc_lastgood.bin / nurlc_self run
     # to completion and exit without freeing their str-pool / sym-arena
     # globals (an intentional process-lifetime allocation strategy).
     # LSan would flag every one as a leak and tank the build with
@@ -270,23 +280,40 @@ else
     rm -f stdlib/canvas.sdl2
     log "[info] libsdl2-dev not found — built canvas.o as a stub (canvas demos will link but abort at runtime)"
 fi
-step "clean"         rm -f build/nurlc_py.ll build/nurlc_py \
+# ── --refresh-bootstrap (optional, pre-clean) ────────────────────────
+# When a grammar or runtime-ABI change leaves the committed
+# `compiler/nurlc_lastgood.ll` unable to compile current nurlc.nu,
+# the developer flips the snapshot forward by hand. Requires the
+# CURRENT `build/nurlc` to exist (i.e. you've already built once
+# before with the previous snapshot still functional).
+if (( REFRESH_BOOTSTRAP == 1 )); then
+    if [ ! -x build/nurlc ]; then
+        echo "ERROR: --refresh-bootstrap requires an existing build/nurlc" >&2
+        echo "       (run ./build.sh first to produce one)" >&2
+        exit 1
+    fi
+    log "[refresh] cp compiler/nurlc.nu → compiler/nurlc_lastgood.nu"
+    cp compiler/nurlc.nu compiler/nurlc_lastgood.nu
+    step "refresh lastgood ir" \
+        bash -c "./build/nurlc compiler/nurlc_lastgood.nu > compiler/nurlc_lastgood.ll"
+    log "[refresh] $(wc -l < compiler/nurlc_lastgood.ll) lines, $(wc -c < compiler/nurlc_lastgood.ll) bytes"
+    log "[refresh] commit BOTH compiler/nurlc_lastgood.nu + .ll together"
+fi
+
+step "clean"         rm -f build/nurlc_lastgood.bin \
                           build/nurlc_self.ll build/nurlc_self \
                           build/nurlc_self2.ll build/nurlc_self2 \
                           build/nurlc
 
-step "stage0 ir"     bash -c 'python compiler/nurlc.py --llvm compiler/nurlc.nu > build/nurlc_py.ll'
-step "stage0 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS build/nurlc_py.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_py
+# Stage 0: link the committed snapshot IR. No Python anywhere —
+# the .ll was produced by a previous nurlc run and lives in the
+# repo. clang picks the host triple automatically; the IR carries
+# no `target triple` directive so the same .ll boots on
+# Linux / macOS / Windows.
+step "stage0 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS compiler/nurlc_lastgood.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_lastgood.bin
 
-step "stage1 ir"     bash -c './build/nurlc_py compiler/nurlc.nu > build/nurlc_self.ll'
+step "stage1 ir"     bash -c './build/nurlc_lastgood.bin compiler/nurlc.nu > build/nurlc_self.ll'
 step "stage1 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS build/nurlc_self.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_self
-
-# Informational: python vs nurlc_py IR (not fatal).
-if cmp -s build/nurlc_py.ll build/nurlc_self.ll; then
-    log "[info] python and nurlc_py produce identical IR"
-else
-    log "[info] python and nurlc_py produce different IR (not fatal)"
-fi
 
 step "stage2 ir"     bash -c './build/nurlc_self compiler/nurlc.nu > build/nurlc_self2.ll'
 step "stage2 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS build/nurlc_self2.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_self2
@@ -337,7 +364,11 @@ fi
 
 if TEST_OUT="$(compiler/tests/run_tests.sh 2>&1)"; then
     echo "BUILD SUCCESS & TESTS PASSED"
-    cp compiler/nurlc.nu compiler/nurlc_lastgood.nu
+    # NOTE: nurlc_lastgood.{nu,ll} are NOT auto-updated on a
+    # successful build. They are the committed bootstrap snapshot
+    # and only the explicit `./build.sh --refresh-bootstrap` flag
+    # moves them forward (and then BOTH files must be committed
+    # together — the .ll is what stage 0 actually consumes).
     exit 0
 fi
 

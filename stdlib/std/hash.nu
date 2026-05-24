@@ -40,30 +40,45 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/mem.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/std/hash_md5.nu`
+$ `stdlib/std/hash_sha1.nu`
+$ `stdlib/std/hash_sha256.nu`
+$ `stdlib/std/hash_sha512.nu`
+
+// Helper: copy a NUL-terminated raw `s` into an owned Vec[u].
+@ __hash_str_to_bytes s str → ( Vec u ) {
+    : ( Vec u ) v ( vec_new [u] )
+    : i n ( nurl_str_len str )
+    : ~ i i 0
+    ~ < i n {
+        ( vec_push [u] v # u & ( nurl_str_get str i ) 255 )
+        = i + i 1
+    }
+    ^ v
+}
 
 @ sha256_hex s str → String {
-    : s digest ( nurl_sha256_hex str )
-    : String out ( string_from digest )
-    ( nurl_free digest )
+    : ( Vec u ) data ( __hash_str_to_bytes str )
+    : ( Vec u ) digest ( sha256_pure data )
+    : String out ( bytes_to_hex digest )
+    ( vec_free [u] digest )
+    ( vec_free [u] data )
     ^ out
 }
 
 @ hmac_sha256_hex s key s msg → String {
-    : s digest ( nurl_hmac_sha256_hex key msg )
-    : String out ( string_from digest )
-    ( nurl_free digest )
+    : ( Vec u ) k ( __hash_str_to_bytes key )
+    : ( Vec u ) m ( __hash_str_to_bytes msg )
+    : ( Vec u ) digest ( hmac_sha256_pure k m )
+    : String out ( bytes_to_hex digest )
+    ( vec_free [u] digest )
+    ( vec_free [u] m )
+    ( vec_free [u] k )
     ^ out
 }
 
 @ sha1_bytes ( Vec u ) data → ( Vec u ) {
-    : i n ( vec_len [u] data )
-    : *u srcp ( vec_data [u] data )
-    : ( Vec u ) out ( vec_with_cap [u] 20 )
-    ( vec_reserve [u] out 20 )
-    : *u dst ( vec_data [u] out )
-    ( nurl_sha1_bytes srcp n dst )
-    : b _ ( vec_set_len [u] out 20 )
-    ^ out
+    ^ ( sha1_pure data )
 }
 
 @ sha1_hex ( Vec u ) data → String {
@@ -78,19 +93,12 @@ $ `stdlib/std/bytes.nu`
 // Runtime entries — binary-clean, write the digest into a caller buffer
 // (resolved from runtime.o; libc is always linked).
 
-& `c` @ nurl_md5_bytes         *u data i len *u out          → v
-& `c` @ nurl_sha512_bytes      *u data i len *u out          → v
-& `c` @ nurl_hmac_sha512_bytes *u key i klen *u msg i mlen *u out → v
+// Crypto algorithms all moved to pure NURL submodules above
+// (PURIFY.md Phase 4, 2026-05-23). The runtime no longer ships any
+// hash transform — `secure_random` is the only crypto FFI left.
 
 @ sha512_bytes ( Vec u ) data → ( Vec u ) {
-    : i n ( vec_len [u] data )
-    : *u srcp ( vec_data [u] data )
-    : ( Vec u ) out ( vec_with_cap [u] 64 )
-    ( vec_reserve [u] out 64 )
-    : *u dst ( vec_data [u] out )
-    ( nurl_sha512_bytes srcp n dst )
-    : b _ ( vec_set_len [u] out 64 )
-    ^ out
+    ^ ( sha512_pure data )
 }
 
 @ sha512_hex ( Vec u ) data → String {
@@ -101,14 +109,7 @@ $ `stdlib/std/bytes.nu`
 }
 
 @ md5_bytes ( Vec u ) data → ( Vec u ) {
-    : i n ( vec_len [u] data )
-    : *u srcp ( vec_data [u] data )
-    : ( Vec u ) out ( vec_with_cap [u] 16 )
-    ( vec_reserve [u] out 16 )
-    : *u dst ( vec_data [u] out )
-    ( nurl_md5_bytes srcp n dst )
-    : b _ ( vec_set_len [u] out 16 )
-    ^ out
+    ^ ( md5_pure data )
 }
 
 @ md5_hex ( Vec u ) data → String {
@@ -119,16 +120,7 @@ $ `stdlib/std/bytes.nu`
 }
 
 @ hmac_sha512_bytes ( Vec u ) key ( Vec u ) msg → ( Vec u ) {
-    : i kn ( vec_len [u] key )
-    : *u kp ( vec_data [u] key )
-    : i mn ( vec_len [u] msg )
-    : *u mp ( vec_data [u] msg )
-    : ( Vec u ) out ( vec_with_cap [u] 64 )
-    ( vec_reserve [u] out 64 )
-    : *u dst ( vec_data [u] out )
-    ( nurl_hmac_sha512_bytes kp kn mp mn dst )
-    : b _ ( vec_set_len [u] out 64 )
-    ^ out
+    ^ ( hmac_sha512_pure key msg )
 }
 
 @ hmac_sha512_hex ( Vec u ) key ( Vec u ) msg → String {

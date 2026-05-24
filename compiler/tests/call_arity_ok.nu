@@ -3,6 +3,8 @@
 // (zero-param, base types, a named-struct parameter). Guards the
 // call-arity check against false positives. Expect 51.
 
+$ `stdlib/core/string.nu`
+
 : Point { i x  i y }
 
 @ zero → i { ^ 7 }

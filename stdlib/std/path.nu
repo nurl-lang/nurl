@@ -449,10 +449,19 @@ $ `stdlib/core/vec.nu`
 // realpath(3): canonical, absolute, all symlinks resolved. The one
 // filesystem-touching function here — None when the path does not
 // exist or is not accessible.
-& `c` @ nurl_realpath s path → s
+//
+// Pure libc FFI: passing NULL as the second argument tells `realpath`
+// to malloc the result buffer itself (POSIX.1-2008 behaviour, also
+// honoured by mingw-w64's `realpath` since v8.0). Win32 callers route
+// through libmingwex's `realpath` wrapper, which delegates to
+// `_fullpath` plus an `access(2)` existence probe — slightly stricter
+// than the previous bare `_fullpath` path (returns NULL for missing
+// paths, matching POSIX), which matches what `path_canonical` callers
+// want.
+& `c` @ realpath s path s resolved → s
 
 @ path_canonical Path p → ? Path {
-    : s raw ( nurl_realpath ( path_str p ) )
+    : s raw ( realpath ( path_str p ) # s 0 )
     ? == 0 # i raw { ^ @ ? Path { F # Path 0 } } {}
     : String s ( string_from raw )
     ( nurl_free raw )

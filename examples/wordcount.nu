@@ -3,7 +3,7 @@
 // Demonstrates:
 //   - File I/O (nurl_read_file)
 //   - String iteration with while loop
-//   - Character classification (nurl_is_space)
+//   - Character classification (is_space, from stdlib/core/char.nu)
 //   - Structs and field access
 //
 // Build & run:

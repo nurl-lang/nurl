@@ -48,6 +48,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/errors.nu`
 $ `stdlib/std/path.nu`
+$ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 
 // errno-kind → IoErr enum value. Order matches `nurl_errno_kind` in
 // runtime.c (NotFound=0, PermissionDenied=1, AlreadyExists=2,
@@ -63,14 +64,100 @@ $ `stdlib/std/path.nu`
     ^ @ IoErr { Other }
 }
 
+// Win32 / WASI fallback for `read_file` — same fopen + fseek(SEEK_END)
+// + ftell + fread + fclose pattern the old `nurl_read_file_safe`
+// followed. Allocates exactly `len + 1` bytes (matches what
+// `string_from_take`'s cap expects) and writes a trailing NUL.
+@ __read_file_fread_pure s path → s {
+    ? == # i path 0 { ^ # s 0 } {}
+    : s fp ( fopen path `rb` )
+    ? == # i fp 0 { ^ # s 0 } {}
+    : i32 sr ( fseek fp 0 # i32 2 )
+    ? != sr # i32 0 {
+        : i32 _u ( fclose fp )
+        ^ # s 0
+    } {}
+    : i sz ( ftell fp )
+    ? < sz 0 {
+        : i32 _u ( fclose fp )
+        ^ # s 0
+    } {}
+    : i32 _r ( fseek fp 0 # i32 0 )
+    : s buf ( nurl_alloc + sz 1 )
+    ? == # i buf 0 {
+        : i32 _u ( fclose fp )
+        ^ # s 0
+    } {}
+    : i got ? > sz 0 ( fread buf 1 sz fp ) 0
+    : i32 _u ( fclose fp )
+    : *u bp # *u buf
+    = . bp got # u 0
+    ^ buf
+}
+
+// Pure-NURL mmap-backed file read (PURIFY §4 batch 5). On POSIX the
+// kernel page-cache is mapped read-only into the process, sequential
+// access is hinted via `madvise(MADV_SEQUENTIAL)`, and the bytes are
+// copied into a malloc'd `nurl_alloc` buffer that the caller wraps
+// via `string_from_take` (no second copy). Returns 0 on any failure
+// — the gate `read_file` below classifies it via `nurl_errno_kind`.
+//
+// The size is learned via `lseek(fd, 0, SEEK_END)` rather than
+// `fstat(fd)` so the implementation doesn't need to know the
+// platform-specific `struct stat::st_size` offset. SEEK_END = 2 is
+// universal POSIX.
+@ __read_file_mmap_pure s path → s {
+    ? == # i path 0 { ^ # s 0 } {}
+    : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
+    ? < fd # i32 0 { ^ # s 0 } {}
+    : i sz ( lseek fd 0 # i32 2 )
+    ? < sz 0 {
+        : i _c ( close # i fd )
+        ^ # s 0
+    } {}
+    ? == sz 0 {
+        // Empty file: return a freshly-allocated 1-byte NUL buffer.
+        : i _c ( close # i fd )
+        : s buf ( nurl_alloc 1 )
+        ? != # i buf 0 {
+            : *u bp # *u buf
+            = . bp 0 # u 0
+        } {}
+        ^ buf
+    } {}
+    : *u m ( mmap # *u 0 sz
+              # i32 ( posix_const `PROT_READ` )
+              # i32 ( posix_const `MAP_PRIVATE` )
+              fd 0 )
+    : i _c ( close # i fd )
+    // MAP_FAILED = (void*)-1 on every supported target; check via ptrtoint.
+    ? == # i m -1 { ^ # s 0 } {}
+    // Best-effort read-ahead hint; ignore the return.
+    : i32 _mr ( madvise m sz # i32 ( posix_const `MADV_SEQUENTIAL` ) )
+    : s buf ( nurl_alloc + sz 1 )
+    ? == # i buf 0 {
+        : i32 _u ( munmap m sz )
+        ^ # s 0
+    } {}
+    ( memcpy # *u buf m sz )
+    : *u bp # *u buf
+    = . bp sz # u 0
+    : i32 _u ( munmap m sz )
+    ^ buf
+}
+
 // `raw` is either the malloc'd file contents (owned) or NULL on failure.
 // Cast to i64 to detect NULL — calling nurl_str_len on NULL would crash.
 @ read_file s path → !String IoErr {
-    // mmap-backed read (fast path on POSIX) — kernel page-cache to
-    // process address space without going through libc stdio's
-    // buffered-i/o layer. ~20-40 ms faster than fread on warm-cache
-    // 100 MB reads. Falls back to fread on WASI/MSVC.
-    : s raw ( nurl_read_file_mmap path )
+    // POSIX path: pure-NURL mmap → memcpy. Win32 / WASI use a
+    // fopen+fseek+fread fallback (also pure NURL) since
+    // `MAP_PRIVATE` is unavailable in `nurl_native_constant` there.
+    : ~ s raw # s 0
+    ? != ( posix_const `MAP_PRIVATE` ) -1 {
+        = raw # s ( __read_file_mmap_pure path )
+    } {
+        = raw ( __read_file_fread_pure path )
+    }
     : i p # i raw
     ? == p 0 {
         : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
@@ -97,8 +184,31 @@ $ `stdlib/std/path.nu`
 // always want LF preserved exactly as written, so binary is the right
 // default. Callers that need CRLF must produce it explicitly in the
 // payload.
+// Non-fatal write: opens `path` in binary mode (`wb` truncate or `ab`
+// append) and writes `content`'s NUL-terminated bytes. Returns 0 on
+// success or -1 on any failure (open, partial write, or close); the
+// classification routes through `nurl_errno_kind` like every other
+// `IoErr` boundary. The body is pure NURL — `fopen` / `fwrite` /
+// `fclose` are declared in `nurlc.nu`'s preamble and reach libc directly.
+@ __write_file_pure s path s content s mode → i {
+    ? || == # i path 0 || == # i content 0 == # i mode 0 { ^ -1 } {}
+    : s fp ( fopen path mode )
+    ? == # i fp 0 { ^ -1 } {}
+    : i n ( nurl_str_len content )
+    ? > n 0 {
+        : i got ( fwrite content 1 n fp )
+        ? != got n {
+            : i32 _cr ( fclose fp )
+            ^ -1
+        } {}
+    } {}
+    : i32 cr ( fclose fp )
+    ? != cr # i32 0 { ^ -1 } {}
+    ^ 0
+}
+
 @ write_file s path s content → !v IoErr {
-    : i rc ( nurl_write_file_safe path content `wb` )
+    : i rc ( __write_file_pure path content `wb` )
     ? == rc 0 {
         ^ @ !v IoErr { T 0 }
     } {}
@@ -107,7 +217,7 @@ $ `stdlib/std/path.nu`
 }
 
 @ append_file s path s content → !v IoErr {
-    : i rc ( nurl_write_file_safe path content `ab` )
+    : i rc ( __write_file_pure path content `ab` )
     ? == rc 0 {
         ^ @ !v IoErr { T 0 }
     } {}
@@ -119,8 +229,33 @@ $ `stdlib/std/path.nu`
     ^ != 0 ( nurl_file_exists path )
 }
 
+// Byte length of a regular file. Implementation: open in binary mode,
+// seek to end, query position, close. Avoids the `stat(2)` path
+// entirely because `struct stat`'s `st_size` field offset varies by
+// platform (Linux x86_64 = 48, macOS = 96, mingw layout different
+// again) and porting that offset table buys nothing — SEEK_END is a
+// universal POSIX value (2) honoured by every libc stdio we target.
+// Directories and other non-regular files yield the same "fopen
+// succeeded" outcome as on POSIX (ftell on a directory is
+// implementation-defined; the previous stat-based path returned the
+// directory's allocation size 4096 — a behavioural difference NURL
+// callers should not be relying on).
+@ __file_size_pure s path → i {
+    ? == # i path 0 { ^ -1 } {}
+    : s fp ( fopen path `rb` )
+    ? == # i fp 0 { ^ -1 } {}
+    : i32 sr ( fseek fp 0 # i32 2 )
+    ? != sr # i32 0 {
+        : i32 _u ( fclose fp )
+        ^ -1
+    } {}
+    : i sz ( ftell fp )
+    : i32 _cr ( fclose fp )
+    ^ sz
+}
+
 @ file_size s path → !i IoErr {
-    : i n ( nurl_file_size path )
+    : i n ( __file_size_pure path )
     ? < n 0 {
         : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
         ^ @ !i IoErr { F e }
@@ -180,12 +315,58 @@ $ `stdlib/std/path.nu`
     ^ @ !v IoErr { F e }
 }
 
+// POSIX dir-list helpers — pure-NURL drivers over opendir/readdir/closedir.
+// PURIFY §13 batch 3 (2026-05-24): replaced the C-side iterator with a
+// loop in NURL that filters "." / ".." and copies each name into an
+// owned String. The `d_name` field offset within `struct dirent` varies
+// by platform (Linux glibc = 19, macOS = 21), so a 1-line C accessor
+// (`nurl_dirent_name` in runtime.c) bridges it without porting the
+// offset table into NURL.
+@ __dir_list_pure_posix s path → !( Vec String ) IoErr {
+    : s d ( opendir path )
+    ? == # i d 0 {
+        : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+        ^ @ !( Vec String ) IoErr { F e }
+    } {}
+    : ( Vec String ) out ( vec_new [String] )
+    : ~ b going T
+    ~ going {
+        : s de ( readdir d )
+        ? == # i de 0 {
+            = going F
+        } {
+            : s name ( nurl_dirent_name de )
+            ? != # i name 0 {
+                : i c0 ( nurl_str_get name 0 )
+                : i n ( nurl_str_len name )
+                : ~ b skip F
+                ? == c0 46 {
+                    ? == n 1 { = skip T } {
+                        ? & == n 2 == ( nurl_str_get name 1 ) 46 { = skip T } {}
+                    }
+                } {}
+                ? ! skip {
+                    ( vec_push [String] out ( string_from name ) )
+                } {}
+            } {}
+        }
+    }
+    : i32 _c ( closedir d )
+    ^ @ !( Vec String ) IoErr { T out }
+}
+
 // List directory entries (excluding "." and "..") as owned Strings.
 // The returned Vec is owned: free the elements first via vec_free_with
 // + string_free, then drop the Vec itself. Order is platform-defined
 // (POSIX returns the on-disk order; Windows returns FindFirstFile order).
 // Callers that want a stable order should sort_by cmp_string afterwards.
 @ dir_list s path → !( Vec String ) IoErr {
+    // POSIX: drive opendir/readdir/closedir in pure NURL via
+    // `__dir_list_pure_posix`. Win32 / WASI route through the runtime's
+    // `nurl_dir_list_*` opaque-handle trio (FindFirstFile state cache).
+    ? != ( posix_const `O_RDONLY` ) -1 {
+        ^ ( __dir_list_pure_posix path )
+    } {}
     : i h ( nurl_dir_list_open path )
     ? == h 0 {
         : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
@@ -277,8 +458,85 @@ $ `stdlib/std/path.nu`
 // Runtime filesystem helpers (resolved from runtime.o; libc is always
 // linked). nurl_path_type: 0 missing, 1 file, 2 dir, 3 symlink, 4 other.
 & `c` @ nurl_path_type       s path        → i
+
+// ── PURIFY.md Phase 7 (2026-05-23): nurl_file_* C→NURL via libc stdio ──
+// fopen / fclose / fputs / fwrite / fputc / fread / feof come from
+// the nurlc preamble (globally declared); each @-fn below mirrors
+// the historic C wrapper bit-for-bit minus the (void*) casts that
+// the C version threaded through. Handles are *v throughout.
+
+// fopen wrapper. Returns NULL handle on failure (NURL callers check
+// via `# i h == 0`).
+@ nurl_file_open s path s mode → *v {
+    : s h # s ( fopen path mode )
+    ^ # *v h
+}
+
+@ nurl_file_close *v h → v {
+    ? != 0 # i h { : i32 _ ( fclose # s h ) } {}
+}
+
+// fputs the NUL-terminated `str` to `h`. NULL-safe on both args.
+@ nurl_file_write *v h s str → v {
+    ? & != 0 # i h != 0 # i str {
+        : i32 _ ( fputs str # s h )
+    } {}
+}
+
+// fwrite `len` bytes from `p` to `h`. NULL-safe; len<=0 is a no-op.
+@ nurl_file_write_range *v h s p i len → v {
+    ? & & != 0 # i h != 0 # i p > len 0 {
+        : i _ ( fwrite p 1 len # s h )
+    } {}
+}
+
+// fputc one byte. NULL-safe.
+@ nurl_file_write_byte *v h i c → v {
+    ? != 0 # i h { : i32 _ ( fputc # i32 c # s h ) } {}
+}
+
+@ nurl_file_eof *v h → i {
+    ? == # i h 0 { ^ 1 } {}
+    ^ ? != 0 # i ( feof # s h ) 1 0
+}
+
+// nurl_file_read_chunk stays in C — its contract writes to the
+// g_last_bytes_len side-channel that the file_read_chunk wrapper
+// consumes for the actual byte count, and the NULL-vs-empty error
+// distinction needs errno discipline. Migrating it cleanly needs a
+// dual-return shape (ptr + len) the runtime doesn't expose yet.
 & `c` @ nurl_file_read_chunk *v h i n      → s
-& `c` @ nurl_file_eof        *v h          → i
+
+// ── PURIFY.md Phase 7 batch 2 (2026-05-23): probe + mutation ──
+// access(2) / remove(3) / mkdir(2) / rmdir(2) wrappers. `access`
+// uses F_OK (0) for "does this path exist at all". `mkdir` mode
+// is 0755 (decimal 493) to match the historic C wrapper.
+
+& `c` @ remove s path                      → i32
+& `c` @ mkdir  s path i32 mode             → i32
+& `c` @ rmdir  s path                      → i32
+
+@ nurl_file_exists s path → i {
+    ? == # i path 0 { ^ 0 } {}
+    : i32 rc ( access path # i32 0 )
+    ^ ? == # i rc 0 1 0
+}
+
+@ nurl_file_del s path → v {
+    ? != 0 # i path { : i32 _ ( remove path ) } {}
+}
+
+@ nurl_dir_create s path → i {
+    ? == # i path 0 { ^ -1 } {}
+    : i32 rc ( mkdir path # i32 493 )
+    ^ ? == # i rc 0 0 -1
+}
+
+@ nurl_dir_remove s path → i {
+    ? == # i path 0 { ^ -1 } {}
+    : i32 rc ( rmdir path )
+    ^ ? == # i rc 0 0 -1
+}
 
 // mkdir one path component, treating an already-existing directory as
 // success — the whole point of mkdir -p. errno-kind 2 is AlreadyExists.

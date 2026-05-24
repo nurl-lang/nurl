@@ -20,6 +20,7 @@ $ `stdlib/std/async.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/channel.nu`
+$ `stdlib/std/time.nu`
 $ `stdlib/ext/http_server.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/core/string.nu`
@@ -44,7 +45,7 @@ $ `stdlib/ext/env.nu`
             : ( Channel i ) done ( chan_new [i] )
 
             : ( @ v ) client \ → v {
-                ( nurl_sleep_ms 200 )
+                ( sleep_ms 200 )
                 : i craw ( nurl_tcp_connect `127.0.0.1` 18920 )
                 ? != craw 0 {
                     : i ek ( nurl_tcp_err_kind craw )

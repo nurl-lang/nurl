@@ -106,11 +106,14 @@ cd nurl
 # One-time: build the C runtime
 clang -c stdlib/runtime.c -o stdlib/runtime.o
 
-# Bootstrap the self-hosted compiler (Python → NURL → NURL fixed point)
+# Bootstrap the self-hosted compiler (committed snapshot IR → NURL → NURL fixed point)
 ./build.sh
 ```
 
-Requirements: Python 3.8+, clang/LLVM 14+. Windows users have
+Requirements: clang/LLVM 14+. Nothing else — Python was removed
+from the build path 2026-05-23; the bootstrap snapshot now lives
+as committed LLVM IR (`compiler/nurlc_lastgood.ll`) that clang
+links directly into a working boot compiler. Windows users have
 `build.bat`; macOS works with Homebrew LLVM (`brew install llvm`).
 
 Compile and run a single program:
@@ -127,8 +130,8 @@ the container/dev setup.
 NURL doesn't ship an autoformatter yet, so style is "match the
 surrounding code". Some loose conventions:
 
-- **Indentation**: 4 spaces in `.nu` files, 4 spaces in Python,
-  2 spaces in TypeScript/JSON.
+- **Indentation**: 4 spaces in `.nu` files, 2 spaces in
+  TypeScript/JSON.
 - **Naming**: `snake_case` for functions and bindings, `PascalCase`
   for types, `SCREAMING_CASE` for top-level constants.
 - **Comments**: `//` for single-line. Avoid restating what the code

@@ -47,10 +47,215 @@
 
 $ `stdlib/core/errors.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/char.nu`
 // Note: do NOT include stdlib/std/bytes.nu here. bytes.nu depends on
 // String (e.g. `bytes_to_str → String`); a circular include would force
 // the compiler to reference %String before its body is emitted. We keep
 // this module self-contained on Vec[u] primitives only.
+
+// ── PURIFY.md Phase 5 (2026-05-23): pure-NURL replacements for
+//    the historic `nurl_str_*` / `nurl_memcmp_lex` / `nurl_memmem_range`
+//    / `nurl_parse_int_range` C wrappers in `stdlib/runtime.c §2`.
+//    Direct libc FFI — `strlen` / `strcmp` / `strncmp` / `strstr` /
+//    `memcmp` / `memmem` / `atoll` / `atof` / `memcpy` / `strdup`
+//    are declared globally by the nurlc preamble, so call sites
+//    don't need a per-file `&`-FFI declaration.
+
+@ nurl_memcmp_lex s a i la s b i lb → i {
+    : i n ? < la lb la lb
+    ? > n 0 {
+        : i c # i ( memcmp a b n )
+        ? != c 0 { ^ ? < c 0 -1 1 } {}
+    } {}
+    ? < la lb { ^ -1 } {}
+    ? > la lb { ^ 1 } {}
+    ^ 0
+}
+
+@ nurl_str_len s str → i {
+    ^ ( strlen str )
+}
+
+@ nurl_str_eq s a s b → i {
+    : i c # i ( strcmp a b )
+    ^ ? == c 0 1 0
+}
+
+@ nurl_str_cmp s a s b → i {
+    : i c # i ( strcmp a b )
+    ? < c 0 { ^ -1 } {}
+    ? > c 0 { ^ 1 } {}
+    ^ 0
+}
+
+@ nurl_str_to_int s str → i {
+    ^ ( atoll str )
+}
+
+@ nurl_str_to_float s str → f {
+    ^ ( atof str )
+}
+
+@ nurl_str_starts s str s prefix → i {
+    : i n ( strlen prefix )
+    : i c # i ( strncmp str prefix n )
+    ^ ? == c 0 1 0
+}
+
+@ nurl_str_find s haystack s needle → i {
+    : s p # s ( strstr haystack needle )
+    ? == # i p 0 { ^ -1 } {}
+    ^ - # i p # i haystack
+}
+
+@ nurl_str_ends s str s suffix → i {
+    : i slen ( strlen str )
+    : i plen ( strlen suffix )
+    ? > plen slen { ^ 0 } {}
+    : i off - slen plen
+    : *u sp # *u str
+    : s base # s + # i sp off
+    : i c # i ( memcmp base suffix plen )
+    ^ ? == c 0 1 0
+}
+
+@ nurl_memmem_range s hay i hlen s needle i nlen → i {
+    ? | < hlen 0 < nlen 0 { ^ -1 } {}
+    ? == nlen 0 { ^ 0 } {}
+    ? > nlen hlen { ^ -1 } {}
+    : s p # s ( memmem hay hlen needle nlen )
+    ? == # i p 0 { ^ -1 } {}
+    ^ - # i p # i hay
+}
+
+// ── PURIFY.md Phase 5 Batch C (2026-05-23): allocation-style ops ──
+// Direct malloc + memcpy through the preamble libc declarations.
+// `malloc` / `memcpy` already declared globally; no `&`-FFI needed.
+
+// Return byte at index `idx` (0 if out of range). `& 255` masks the
+// sign-extension that `# i u` introduces — caller gets 0..255.
+@ nurl_str_get s str i idx → i {
+    : i n ( strlen str )
+    ? | < idx 0 >= idx n { ^ 0 } {}
+    : *u p # *u str
+    : u b . p idx
+    ^ & # i b 255
+}
+
+// Concatenate two strings; result is malloc'd, NUL-terminated.
+@ nurl_str_cat s a s b → s {
+    : i la ( strlen a )
+    : i lb ( strlen b )
+    : s r # s ( malloc + + la lb 1 )
+    ( memcpy r a la )
+    : *u rp # *u r
+    : *u dst # *u + # i rp la
+    ( memcpy # s dst b + lb 1 )
+    ^ r
+}
+
+// Concatenate three; result is malloc'd, NUL-terminated.
+@ nurl_str_cat3 s a s b s c → s {
+    : i la ( strlen a )
+    : i lb ( strlen b )
+    : i lc ( strlen c )
+    : s r # s ( malloc + + + la lb lc 1 )
+    ( memcpy r a la )
+    : *u rp # *u r
+    : *u d2 # *u + # i rp la
+    ( memcpy # s d2 b lb )
+    : *u d3 # *u + # i rp + la lb
+    ( memcpy # s d3 c + lc 1 )
+    ^ r
+}
+
+// Concatenate four; result is malloc'd, NUL-terminated. Allocates
+// exactly once (the historic C version nested two `cat` calls and
+// leaked the intermediates).
+@ nurl_str_cat4 s a s b s c s d → s {
+    : i la ( strlen a )
+    : i lb ( strlen b )
+    : i lc ( strlen c )
+    : i ld ( strlen d )
+    : s r # s ( malloc + + + + la lb lc ld 1 )
+    ( memcpy r a la )
+    : *u rp # *u r
+    : *u d2 # *u + # i rp la
+    ( memcpy # s d2 b lb )
+    : *u d3 # *u + # i rp + la lb
+    ( memcpy # s d3 c lc )
+    : *u d4 # *u + # i rp + + la lb lc
+    ( memcpy # s d4 d + ld 1 )
+    ^ r
+}
+
+// Return bytes [start, start+len); result is malloc'd, NUL-terminated.
+// Clamps `start` and `len` into the actual string length.
+@ nurl_str_slice s str i start i n → s {
+    : i slen ( strlen str )
+    : ~ i st start
+    : ~ i k n
+    ? < st 0 { = st 0 } {}
+    ? > st slen { = st slen } {}
+    ? < k 0 { = k 0 } {}
+    ? > + st k slen { = k - slen st } {}
+    : s r # s ( malloc + k 1 )
+    : *u sp # *u str
+    : *u sat # *u + # i sp st
+    ( memcpy r # s sat k )
+    : *u rp # *u r
+    : u zero # u 0
+    = . rp k zero
+    ^ r
+}
+
+// Parse i64 from byte range [p, p+len). Optional leading '-' / '+',
+// then decimal digits; stops on first non-digit. Returns 0 on empty
+// or all-non-digit input (callers that need to distinguish "parse
+// failure" from "real zero" use int_parse on a NUL-terminated input).
+@ nurl_parse_int_range s p i len → i {
+    ? == # i p 0 { ^ 0 } {}
+    ? <= len 0 { ^ 0 } {}
+    : *u q # *u p
+    : ~ i i 0
+    : ~ i sign 1
+    : u first . q 0
+    ? == & # i first 255 45 { = sign -1  = i 1 } {}
+    ? == & # i first 255 43 { = i 1 } {}
+    : ~ i acc 0
+    ~ < i len {
+        : u c . q i
+        : i ci & # i c 255
+        ? | < ci 48 > ci 57 { ^ * acc sign } {}
+        = acc + * acc 10 - ci 48
+        = i + i 1
+    }
+    ^ * acc sign
+}
+
+// ── PURIFY.md Phase 5 Batch D' (2026-05-23) ──
+// strtod via FFI for byte-range float parsing. nurl_str_int and
+// nurl_str_float keep their C bodies — str_int because moving it
+// would force `$ stdlib/core/string.nu` into 72 corpus tests that
+// use it transitively; str_float because printf-family %g/%e needs
+// Grisu/Ryu or variadic FFI.
+
+// Parse f64 from byte range [p, p+len) via libc `strtod`. Copies
+// into a NUL-terminated scratch buffer, passes NULL as endptr.
+// Returns 0.0 on empty / null input.
+@ nurl_parse_float_range s p i len → f {
+    ? == # i p 0 { ^ 0.0 } {}
+    ? <= len 0 { ^ 0.0 } {}
+    : s buf # s ( malloc + len 1 )
+    ( memcpy buf p len )
+    : *u bp # *u buf
+    : u zero # u 0
+    = . bp len zero
+    : **u endptr # **u 0
+    : f v ( strtod buf endptr )
+    ( free buf )
+    ^ v
+}
 
 : String {
     s ctl
@@ -306,7 +511,7 @@ $ `stdlib/core/vec.nu`
 
     ~ < idx len {
         : i c ( string_get str idx )
-        ? == ( nurl_is_digit c ) 0 {
+        ? == ( is_digit c ) 0 {
             ^ @ !i ParseErr { F @ ParseErr { BadFormat } }
         } {}
         = idx + idx 1
@@ -342,7 +547,7 @@ $ `stdlib/core/vec.nu`
     ~ going {
         ? == idx len { = going F } {
             : i c ( string_get str idx )
-            ? == ( nurl_is_digit c ) 0 { = going F } {
+            ? == ( is_digit c ) 0 { = going F } {
                 = idx + idx 1
                 = int_digits + int_digits 1
             }
@@ -356,7 +561,7 @@ $ `stdlib/core/vec.nu`
         ~ going {
             ? == idx len { = going F } {
                 : i c ( string_get str idx )
-                ? == ( nurl_is_digit c ) 0 { = going F } {
+                ? == ( is_digit c ) 0 { = going F } {
                     = idx + idx 1
                     = frac_digits + frac_digits 1
                 }
@@ -381,7 +586,7 @@ $ `stdlib/core/vec.nu`
             ~ going {
                 ? == idx len { = going F } {
                     : i ec ( string_get str idx )
-                    ? == ( nurl_is_digit ec ) 0 { = going F } {
+                    ? == ( is_digit ec ) 0 { = going F } {
                         = idx + idx 1
                         = exp_digits + exp_digits 1
                     }
@@ -476,14 +681,14 @@ $ `stdlib/core/vec.nu`
     ^ out
 }
 
-// Strip leading whitespace bytes (nurl_is_space).
+// Strip leading whitespace bytes (is_space).
 @ string_trim_start String str → String {
     : i n ( string_len str )
     : ~ i start 0
     : ~ b more T
     ~ more {
         ? >= start n { = more F } {
-            ? == ( nurl_is_space ( string_get str start ) ) 0 { = more F } {
+            ? == ( is_space ( string_get str start ) ) 0 { = more F } {
                 = start + start 1
             }
         }
@@ -498,7 +703,7 @@ $ `stdlib/core/vec.nu`
     : ~ b more T
     ~ more {
         ? <= end 0 { = more F } {
-            ? == ( nurl_is_space ( string_get str - end 1 ) ) 0 { = more F } {
+            ? == ( is_space ( string_get str - end 1 ) ) 0 { = more F } {
                 = end - end 1
             }
         }
@@ -513,7 +718,7 @@ $ `stdlib/core/vec.nu`
     : ~ b more T
     ~ more {
         ? >= start n { = more F } {
-            ? == ( nurl_is_space ( string_get str start ) ) 0 { = more F } {
+            ? == ( is_space ( string_get str start ) ) 0 { = more F } {
                 = start + start 1
             }
         }
@@ -522,7 +727,7 @@ $ `stdlib/core/vec.nu`
     = more T
     ~ more {
         ? <= end start { = more F } {
-            ? == ( nurl_is_space ( string_get str - end 1 ) ) 0 { = more F } {
+            ? == ( is_space ( string_get str - end 1 ) ) 0 { = more F } {
                 = end - end 1
             }
         }

@@ -11,7 +11,7 @@
 //   ./nurl.sh examples/msgpack_demo.nu /tmp/msgpack_demo
 //   /tmp/msgpack_demo
 
-$ `stdlib/serde.nu`
+$ `stdlib/ext/serde.nu`
 
 : Point { i x  i y }
 

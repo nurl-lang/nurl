@@ -45,24 +45,21 @@ fi
 mkdir -p build
 
 # ── Build stages ─────────────────────────────────────────────
+# Python-free rescue build: start from the committed
+# `compiler/nurlc_lastgood.ll` snapshot (boot binary), then run the
+# self-host chain against `nurlc_lastgood.nu` (not `nurlc.nu`).
+# Useful when current nurlc.nu is in a broken state and you want a
+# known-good compiler to fall back on.
 step "runtime"       "$CLANG" -c stdlib/runtime.c -o stdlib/runtime.o
-step "clean"         rm -f build/nurlc_py.ll build/nurlc_py \
+step "clean"         rm -f build/nurlc_lastgood.bin \
                           build/nurlc_self.ll build/nurlc_self \
                           build/nurlc_self2.ll build/nurlc_self2 \
                           build/nurlc
 
-step "stage0 ir"     bash -c 'python compiler/nurlc.py --llvm compiler/nurlc_lastgood.nu > build/nurlc_py.ll'
-step "stage0 link"   "$CLANG" -O2 build/nurlc_py.ll stdlib/runtime.o -lm -o build/nurlc_py
+step "stage0 link"   "$CLANG" -O2 compiler/nurlc_lastgood.ll stdlib/runtime.o -lm -o build/nurlc_lastgood.bin
 
-step "stage1 ir"     bash -c './build/nurlc_py compiler/nurlc_lastgood.nu > build/nurlc_self.ll'
+step "stage1 ir"     bash -c './build/nurlc_lastgood.bin compiler/nurlc_lastgood.nu > build/nurlc_self.ll'
 step "stage1 link"   "$CLANG" -O2 build/nurlc_self.ll stdlib/runtime.o -lm -o build/nurlc_self
-
-# Informational: python vs nurlc_py IR (not fatal).
-if cmp -s build/nurlc_py.ll build/nurlc_self.ll; then
-    log "[info] python and nurlc_py produce identical IR"
-else
-    log "[info] python and nurlc_py produce different IR (not fatal)"
-fi
 
 step "stage2 ir"     bash -c './build/nurlc_self compiler/nurlc_lastgood.nu > build/nurlc_self2.ll'
 step "stage2 link"   "$CLANG" -O2 build/nurlc_self2.ll stdlib/runtime.o -lm -o build/nurlc_self2

@@ -9,6 +9,9 @@ nurlc.wasm
 *.ll
 *.wasm
 
+# Compiler output (keep the last good version)
+!compiler/nurlc_lastgood.ll
+
 # Stdlib runtime objects (rebuilt per platform)
 stdlib/runtime.o
 stdlib/runtime.native.o
@@ -20,6 +23,8 @@ stdlib/canvas.sdl2
 # Test runner output
 compiler/tests/tmp/
 compiler/tests/testresults.txt
+compiler/tests/success.txt
+compiler/tests/failures.txt
 compiler/tests/correct.txt
 *.test
 test_output/
@@ -88,5 +93,6 @@ compare/*.parquet
 compare/nurl_top10*.csv
 nurl_top10_arena.csv
 
-# Critic notes
+# Development notes & helpers
 critic.md
+output.txt

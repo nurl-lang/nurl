@@ -31,7 +31,7 @@ $ `stdlib/ext/http_server.nu`
 }
 
 @ run_live_dos_test → v {
-    : !TcpListener NetErr lr ( tcp_listen `127.0.0.1` 18793 16 )
+    : !TcpListener NetErr lr ( tcp_listen_with_backlog `127.0.0.1` 18793 16 )
     ?? lr {
         T listener → {
             : ( @ HttpResponse HttpRequest ) h \ HttpRequest req → HttpResponse { ^ ( dos_handler req ) }

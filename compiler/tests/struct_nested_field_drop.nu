@@ -7,6 +7,8 @@
 // free path under ASan-style runs and verifies the user-visible
 // round-trip reads the right bytes.
 
+$ `stdlib/core/string.nu`
+
 : Inner {
     s msg
     i n

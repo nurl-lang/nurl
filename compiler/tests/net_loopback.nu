@@ -16,6 +16,7 @@ $ `stdlib/std/process.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/ext/env.nu`
 
 // Python one-liner that connects to the server, writes "ping",
 // reads back exactly 4 bytes, prints them. Kept inline so the test
@@ -102,7 +103,7 @@ sys.stdout.write(buf.decode())
             ``
             `` )
             // Stash python source in env so quoting stays simple.
-            ( nurl_env_set `NURL_PYCLIENT` pyclient )
+            : !v IoErr _es ( env_set `NURL_PYCLIENT` pyclient )
             : !Output ProcessErr bg ( process_run_shell shell_cmd )
             ?? bg {
                 T bgo → ( output_free bgo )

@@ -1,5 +1,7 @@
 // File I/O — read, write, append
 
+$ `stdlib/std/fs.nu`
+
 @ main → i {
     ( nurl_print `File I/O test...\n` )
 
@@ -13,7 +15,7 @@
     ( nurl_print `wrote 3 lines\n` )
 
     // Read entire file
-    : s content ( nurl_file_read `test_output.txt` )
+    : s content ( nurl_read_file `test_output.txt` )
     ( nurl_print `read back:\n` )
     ( nurl_print content )
 
@@ -23,7 +25,7 @@
     ( nurl_file_close f2 )
 
     // Read again to verify append
-    : s content2 ( nurl_file_read `test_output.txt` )
+    : s content2 ( nurl_read_file `test_output.txt` )
     ( nurl_print `after append:\n` )
     ( nurl_print content2 )
 
@@ -38,7 +40,11 @@
 
     // File size
     ( nurl_print `size: ` )
-    ( nurl_print ( nurl_str_int ( nurl_file_size `test_output.txt` ) ) )
+    : !i IoErr fsr ( file_size `test_output.txt` )
+    ?? fsr {
+        T n → ( nurl_print ( nurl_str_int n ) )
+        F e → ( nurl_print `?` )
+    }
     ( nurl_print ` bytes\n` )
 
     // Delete
