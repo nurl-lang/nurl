@@ -266,7 +266,7 @@ $ `stdlib/ext/regex.nu`
 @ h_build HttpRequest req Params params → HttpResponse {
   ( nurl_print `[srv] POST /build\n` )
   : String body_str ( get_body_str req )
-  : ! Json ParseErr root_res ( json_parse ( string_data body_str ) )
+  : ! Json JsonError root_res ( json_parse ( string_data body_str ) )
   ?? root_res {
     T root → {
       : s source ( get_common_json root `source` `` )
@@ -377,7 +377,7 @@ $ `stdlib/ext/regex.nu`
 @ h_build_wasm HttpRequest req Params params → HttpResponse {
   ( nurl_print `[srv] POST /build_wasm\n` )
   : String body_str ( get_body_str req )
-  : ! Json ParseErr root_res ( json_parse ( string_data body_str ) )
+  : ! Json JsonError root_res ( json_parse ( string_data body_str ) )
   ?? root_res {
     T root → {
       : s source ( get_common_json root `source` `` )
@@ -497,7 +497,7 @@ $ `stdlib/ext/regex.nu`
 @ h_build_windows HttpRequest req Params params → HttpResponse {
   ( nurl_print `[srv] POST /build_windows\n` )
   : String body_str ( get_body_str req )
-  : ! Json ParseErr root_res ( json_parse ( string_data body_str ) )
+  : ! Json JsonError root_res ( json_parse ( string_data body_str ) )
   ?? root_res {
     T root → {
       : s source ( get_common_json root `source` `` )
@@ -557,7 +557,7 @@ $ `stdlib/ext/regex.nu`
 @ h_build_macos HttpRequest req Params params → HttpResponse {
   ( nurl_print `[srv] POST /build_macos\n` )
   : String body_str ( get_body_str req )
-  : ! Json ParseErr root_res ( json_parse ( string_data body_str ) )
+  : ! Json JsonError root_res ( json_parse ( string_data body_str ) )
   ?? root_res {
     T root → {
       : s source ( get_common_json root `source` `` )

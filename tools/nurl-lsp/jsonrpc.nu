@@ -133,7 +133,7 @@ $ `stdlib/ext/json.nu`
         = k + k 1
     }
     ( vec_free [u] body )
-    : !Json ParseErr pr ( json_parse ( string_data src ) )
+    : !Json JsonError pr ( json_parse ( string_data src ) )
     ( string_free src )
     ?? pr {
         T j → ^ @ ?Json { T j }

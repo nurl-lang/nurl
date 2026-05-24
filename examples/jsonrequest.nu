@@ -2,9 +2,9 @@ $ `stdlib/ext/http.nu`
 $ `stdlib/ext/json.nu`
 
 // Helper to print a JSON‑parsing error
-@ show_parse_err s label ParseErr e → v {
+@ show_parse_err s label JsonError e → v {
     ( nurl_print label )
-    ( nurl_print ( parse_err_msg # ParseErr e ) )
+    ( nurl_print ( parse_err_msg # ParseErr . e kind ) )
     ( nurl_print `\n` )
 }
 
@@ -35,7 +35,7 @@ $ `stdlib/ext/json.nu`
             : s body ( http_body_str resp )
 
             // Parse the body as JSON (Result<Json, ParseErr>)
-            : !Json ParseErr j ( json_parse body )
+            : !Json JsonError j ( json_parse body )
             ?? j {
                 T obj → {
                     // Pretty‑print the JSON object
@@ -45,7 +45,7 @@ $ `stdlib/ext/json.nu`
                     ( string_free pretty )
                     ( json_free obj )
                 }
-                F e → ( show_parse_err `JSON parse error: ` # ParseErr e )
+                F e → ( show_parse_err `JSON parse error: ` # JsonError e )
             }
 
             ( response_free resp )

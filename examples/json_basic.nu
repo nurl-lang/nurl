@@ -16,15 +16,15 @@
 
 $ `stdlib/ext/json.nu`
 
-@ show_err s label ParseErr e → v {
+@ show_err s label JsonError e → v {
     ( nurl_print label )
-    ( nurl_print ( parse_err_msg # ParseErr e ) )
+    ( nurl_print ( parse_err_msg # ParseErr . e kind ) )
     ( nurl_print `\n` )
 }
 
 @ main → i {
     // 1. null
-    : !Json ParseErr r1 ( json_parse `null` )
+    : !Json JsonError r1 ( json_parse `null` )
     ?? r1 {
         T j → {
             ( nurl_print `parse null ok type=` )
@@ -32,11 +32,11 @@ $ `stdlib/ext/json.nu`
             ( nurl_print `\n` )
             ( json_free j )
         }
-        F e → ( show_err `parse null err: ` # ParseErr e )
+        F e → ( show_err `parse null err: ` # JsonError e )
     }
 
     // 2. true
-    : !Json ParseErr r2 ( json_parse `true` )
+    : !Json JsonError r2 ( json_parse `true` )
     ?? r2 {
         T j → {
             ( nurl_print `parse true ok type=` )
@@ -46,11 +46,11 @@ $ `stdlib/ext/json.nu`
             ( nurl_print `\n` )
             ( json_free j )
         }
-        F e → ( show_err `parse true err: ` # ParseErr e )
+        F e → ( show_err `parse true err: ` # JsonError e )
     }
 
     // 3. false
-    : !Json ParseErr r3 ( json_parse `false` )
+    : !Json JsonError r3 ( json_parse `false` )
     ?? r3 {
         T j → {
             ( nurl_print `parse false ok type=` )
@@ -60,11 +60,11 @@ $ `stdlib/ext/json.nu`
             ( nurl_print `\n` )
             ( json_free j )
         }
-        F e → ( show_err `parse false err: ` # ParseErr e )
+        F e → ( show_err `parse false err: ` # JsonError e )
     }
 
     // 4. integer
-    : !Json ParseErr r4 ( json_parse `42` )
+    : !Json JsonError r4 ( json_parse `42` )
     ?? r4 {
         T j → {
             ( nurl_print `parse 42 ok type=` )
@@ -78,11 +78,11 @@ $ `stdlib/ext/json.nu`
             ( nurl_print `\n` )
             ( json_free j )
         }
-        F e → ( show_err `parse 42 err: ` # ParseErr e )
+        F e → ( show_err `parse 42 err: ` # JsonError e )
     }
 
     // 5. negative float
-    : !Json ParseErr r5 ( json_parse `-3.5` )
+    : !Json JsonError r5 ( json_parse `-3.5` )
     ?? r5 {
         T j → {
             ( nurl_print `parse -3.5 ok type=` )
@@ -96,11 +96,11 @@ $ `stdlib/ext/json.nu`
             ( nurl_print `\n` )
             ( json_free j )
         }
-        F e → ( show_err `parse -3.5 err: ` # ParseErr e )
+        F e → ( show_err `parse -3.5 err: ` # JsonError e )
     }
 
     // 6. string with escape
-    : !Json ParseErr r6 ( json_parse `"hi\n"` )
+    : !Json JsonError r6 ( json_parse `"hi\n"` )
     ?? r6 {
         T j → {
             ( nurl_print `parse "hi\\n" ok type=` )
@@ -109,11 +109,11 @@ $ `stdlib/ext/json.nu`
             ( nurl_print ( json_str_data j ) )
             ( json_free j )
         }
-        F e → ( show_err `parse string err: ` # ParseErr e )
+        F e → ( show_err `parse string err: ` # JsonError e )
     }
 
     // 7. array of integers
-    : !Json ParseErr r7 ( json_parse `[1, 2, 3]` )
+    : !Json JsonError r7 ( json_parse `[1, 2, 3]` )
     ?? r7 {
         T j → {
             ( nurl_print `parse [1,2,3] ok type=` )
@@ -135,11 +135,11 @@ $ `stdlib/ext/json.nu`
             ( nurl_print `\n` )
             ( json_free j )
         }
-        F e → ( show_err `parse arr err: ` # ParseErr e )
+        F e → ( show_err `parse arr err: ` # JsonError e )
     }
 
     // 8. object with mixed values
-    : !Json ParseErr r8 ( json_parse `{"a": 1, "b": [true, null]}` )
+    : !Json JsonError r8 ( json_parse `{"a": 1, "b": [true, null]}` )
     ?? r8 {
         T j → {
             ( nurl_print `parse obj ok type=` )
@@ -167,7 +167,7 @@ $ `stdlib/ext/json.nu`
             // 9. roundtrip
             : String out ( json_stringify j )
             // Re-parse the serialized form and compare top-level keys.
-            : !Json ParseErr r9 ( json_parse ( string_data out ) )
+            : !Json JsonError r9 ( json_parse ( string_data out ) )
             ?? r9 {
                 T j2 → {
                     ? & ( json_is_obj j2 ) ( json_obj_has j2 `b` ) {
@@ -177,35 +177,35 @@ $ `stdlib/ext/json.nu`
                     }
                     ( json_free j2 )
                 }
-                F e → ( show_err `roundtrip parse err: ` # ParseErr e )
+                F e → ( show_err `roundtrip parse err: ` # JsonError e )
             }
             ( string_free out )
             ( json_free j )
         }
-        F e → ( show_err `parse obj err: ` # ParseErr e )
+        F e → ( show_err `parse obj err: ` # JsonError e )
     }
 
     // 10. error paths
-    : !Json ParseErr re1 ( json_parse `` )
+    : !Json JsonError re1 ( json_parse `` )
     ?? re1 {
         T j → { ( nurl_print `unexpected ok\n` ) ( json_free j ) }
-        F e → ( show_err `err empty: ` # ParseErr e )
+        F e → ( show_err `err empty: ` # JsonError e )
     }
 
-    : !Json ParseErr re2 ( json_parse `xyz` )
+    : !Json JsonError re2 ( json_parse `xyz` )
     ?? re2 {
         T j → { ( nurl_print `unexpected ok\n` ) ( json_free j ) }
-        F e → ( show_err `err bad: ` # ParseErr e )
+        F e → ( show_err `err bad: ` # JsonError e )
     }
 
-    : !Json ParseErr re3 ( json_parse `42 trailing` )
+    : !Json JsonError re3 ( json_parse `42 trailing` )
     ?? re3 {
         T j → { ( nurl_print `unexpected ok\n` ) ( json_free j ) }
-        F e → ( show_err `err trailing: ` # ParseErr e )
+        F e → ( show_err `err trailing: ` # JsonError e )
     }
 
     // 11. json_pretty + json_obj_keys + json_arr_each + json_obj_each
-    : !Json ParseErr rp ( json_parse `{"x":1,"y":[true,null],"z":"q"}` )
+    : !Json JsonError rp ( json_parse `{"x":1,"y":[true,null],"z":"q"}` )
     ?? rp {
         T j → {
             // pretty roundtrips through compact parser back into the same value
@@ -263,11 +263,11 @@ $ `stdlib/ext/json.nu`
             ( string_free pp )
             ( json_free j )
         }
-        F e → ( show_err `pretty parse err: ` # ParseErr e )
+        F e → ( show_err `pretty parse err: ` # JsonError e )
     }
 
     // 12. pretty edge: empty array + empty object collapse
-    : !Json ParseErr rp2 ( json_parse `{"a":[],"b":{}}` )
+    : !Json JsonError rp2 ( json_parse `{"a":[],"b":{}}` )
     ?? rp2 {
         T j → {
             : String p ( json_pretty j )
@@ -277,7 +277,7 @@ $ `stdlib/ext/json.nu`
             ( string_free p )
             ( json_free j )
         }
-        F e → ( show_err `empty pretty err: ` # ParseErr e )
+        F e → ( show_err `empty pretty err: ` # JsonError e )
     }
 
     // 13. Programmatic build via constructors + mutators
@@ -361,9 +361,9 @@ $ `stdlib/ext/json.nu`
     }
 
     // 17. json_eq round-trip on a parsed object
-    : !Json ParseErr e1 ( json_parse `{"x":1,"y":2}` )
-    : !Json ParseErr e2 ( json_parse `{"x":1,"y":2}` )
-    : !Json ParseErr e3 ( json_parse `{"x":1,"y":3}` )
+    : !Json JsonError e1 ( json_parse `{"x":1,"y":2}` )
+    : !Json JsonError e2 ( json_parse `{"x":1,"y":2}` )
+    : !Json JsonError e3 ( json_parse `{"x":1,"y":3}` )
     ?? e1 { T j1 → {
             ?? e2 { T j2 → {
                     ?? e3 { T j3 → {

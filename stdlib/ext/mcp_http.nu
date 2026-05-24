@@ -230,7 +230,7 @@ $ `stdlib/core/vec.nu`
         // Decode body as UTF-8 String. bytes_to_str adds a NUL terminator
         // so json_parse (which reads via raw `s`) sees a clean string.
         : String body_str ( bytes_to_str . req body )
-        : !Json ParseErr pj ( json_parse ( string_data body_str ) )
+        : !Json JsonError pj ( json_parse ( string_data body_str ) )
         ( string_free body_str )
 
         ?? pj {

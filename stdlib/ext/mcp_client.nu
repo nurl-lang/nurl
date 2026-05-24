@@ -140,7 +140,7 @@ $ `stdlib/core/vec.nu`
             : i status ( http_status resp )
             ? & >= status 200 < status 300 {
                 : s body_view ( http_body_str resp )
-                : !Json ParseErr pr ( json_parse body_view )
+                : !Json JsonError pr ( json_parse body_view )
                 ( response_free resp )
                 ?? pr {
                     T j → {

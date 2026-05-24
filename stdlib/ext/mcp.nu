@@ -178,7 +178,7 @@ $ `stdlib/ext/json.nu`
         ? == ll 0 {
             ( string_free line )
         } {
-            : !Json ParseErr pj ( json_parse ( string_data line ) )
+            : !Json JsonError pj ( json_parse ( string_data line ) )
             ?? pj {
                 T j → {
                     ( string_free line )
