@@ -2010,76 +2010,18 @@ void nurl_sym_pop(long long h) {
 }
 
 
-/* ── §7  Codegen helpers ───────────────────────────────────────── */
+/* §7 Codegen helpers — REMOVED 2026-05-24 (PURIFY.md Phase 9a).
+ * nurl_cg_new / _reg / _lbl / _reset are pure-NURL @-fns in
+ * compiler/nurlc.nu now. Handle is a `nurl_zalloc`'d 16-byte block
+ * (slot 0 = next register number, slot 1 = next label number).
+ * −47 LOC C; 4 preamble declares + 3 `nurl_sym_def` entries gone. */
 
-typedef struct { int reg; int lbl; } NurlCG;
-
-#define MAX_CGS 8
-static NurlCG *g_cgs[MAX_CGS];
-static int      g_cg_count = 0;
-
-long long nurl_cg_new(void) {
-    if (g_cg_count >= MAX_CGS) { fputs("nurlc: too many codegen handles\n", stderr); exit(1); }
-    NurlCG *cg = (NurlCG*)calloc(1, sizeof(NurlCG));
-    int idx = g_cg_count++;
-    g_cgs[idx] = cg;
-    return (long long)(idx + 1);
-}
-
-static NurlCG* get_cg(long long h) {
-    int idx = (int)h - 1;
-    if (idx < 0 || idx >= g_cg_count || !g_cgs[idx]) {
-        fputs("nurlc: invalid cg handle\n", stderr); exit(1);
-    }
-    return g_cgs[idx];
-}
-
-/* Return next %rN register name (malloc'd). */
-const char* nurl_cg_reg(long long h) {
-    NurlCG *cg = get_cg(h);
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%%r%d", cg->reg++);
-    return strdup(buf);
-}
-
-/* Return next hint_N label name (malloc'd). */
-const char* nurl_cg_lbl(long long h, const char *hint) {
-    NurlCG *cg = get_cg(h);
-    char buf[64];
-    snprintf(buf, sizeof(buf), "%s_%d", hint, cg->lbl++);
-    return strdup(buf);
-}
-
-/* Reset register and label counters (call at start of each function). */
-void nurl_cg_reset(long long h) {
-    NurlCG *cg = get_cg(h);
-    cg->reg = 0;
-    cg->lbl = 0;
-}
-
-/* ── §8  "Last type" sideband ──────────────────────────────────── */
-/*
- * parse_expr returns the LLVM register name (s).
- * The LLVM type of that register is returned via this sideband.
- *
- * Ownership: set() strdups the caller's buffer and frees the previous one.
- * This lets the NURL caller auto-drop its own string right after the call
- * without the sideband dangling. get() returns the stable heap copy; the
- * caller must not free it. The initial value is a literal, so the first
- * set() must skip the free (tracked by g_last_type_owned).
- */
-static const char *g_last_type = "i64";
-static int         g_last_type_owned = 0;
-
-/* get(): returns an owned copy — caller must free. Matches the convention
-   used by nurl_lex_val/nurl_lex_filename so Phase 2B auto-drop is safe.   */
-const char* nurl_get_last_type(void) { return strdup(g_last_type); }
-void        nurl_set_last_type(const char *t) {
-    char *dup = strdup(t ? t : "");
-    if (g_last_type_owned) free((void*)g_last_type);
-    g_last_type = dup;
-    g_last_type_owned = 1;
-}
+/* §8 "Last type" sideband — REMOVED 2026-05-24 (PURIFY.md Phase 9a).
+ * nurl_get_last_type / _set_last_type are pure-NURL @-fns in
+ * compiler/nurlc.nu now over a module-level `g_last_type_ptr` i8*
+ * (stored as i64). strdup-on-set / free-old / strdup-on-get
+ * semantics preserved byte-for-byte. −24 LOC C; 2 preamble declares
+ * + 2 `nurl_sym_def` entries gone. */
 
 /* ── §9  Memory allocation ─────────────────────────────────────── */
 

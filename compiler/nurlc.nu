@@ -1995,6 +1995,72 @@
     ^ v
 }
 
+// ── PURIFY.md Phase 9a (2026-05-24): §7 codegen counters ──────────
+// Handle is a `nurl_zalloc`'d 16-byte block: slot 0 = next register
+// number, slot 1 = next label number. The handle is opaque to all
+// callers (passed back into _reg / _lbl / _reset / never deref'd
+// directly); returned as `i` to preserve the original `: i cg ( … )`
+// caller binding shape. Cast to `s` (== i8*) inside this file for
+// `nurl_peek` / `nurl_poke` access.
+//
+// IMPORTANT — Phase 2B owned-string auto-detection: the @-fn bodies
+// below deliberately return the `nurl_str_cat` result without an
+// intervening `: s` binding. That keeps `__last_ident_name__` on an
+// i64 binding (`n`) at fn exit, so the auto-detector at gen_fn_decl
+// epilogue doesn't tag `nurl_cg_reg__ret_owned = "str"`. The C
+// runtime version of these helpers was NOT marked owned either, so
+// every caller in `gen_*` (e.g. `gen_agg_lit`'s `= result r` chain)
+// reads the malloc'd register-name string as a borrow that lives
+// for the rest of compilation. Same intentional leak as the C
+// version. Adding `: s tmp` here would flip the auto-tag and break
+// gen_agg_lit's insertvalue chain (the binding would auto-drop
+// before its register name is read in the next iteration).
+
+@ nurl_cg_new → i {
+    ^ # i ( nurl_zalloc 16 )
+}
+
+@ nurl_cg_reg i h → s {
+    : s p # s h
+    : i n ( nurl_peek p 0 )
+    ( nurl_poke p 0 + n 1 )
+    ^ ( nurl_str_cat `%r` ( nurl_str_int n ) )
+}
+
+@ nurl_cg_lbl i h s hint → s {
+    : s p # s h
+    : i n ( nurl_peek p 1 )
+    ( nurl_poke p 1 + n 1 )
+    ^ ( nurl_str_cat3 hint `_` ( nurl_str_int n ) )
+}
+
+@ nurl_cg_reset i h → v {
+    : s p # s h
+    ( nurl_poke p 0 0 )
+    ( nurl_poke p 1 0 )
+}
+
+// ── PURIFY.md Phase 9a (2026-05-24): §8 "last type" sideband ──────
+// Module-level i8* held in `g_last_type_ptr` (stored as i64 — the
+// `: i` slot can carry any pointer value). Initial 0 means "use the
+// default `i64`". `nurl_set_last_type` strdup's the input and frees
+// the previous value; `nurl_get_last_type` strdup's the current
+// value so callers always receive an owned heap copy they can drop
+// freely. Matches the runtime.c §8 contract byte-for-byte.
+
+: i g_last_type_ptr 0
+
+@ nurl_get_last_type → s {
+    ? == g_last_type_ptr 0 { ^ # s ( strdup `i64` ) } {}
+    ^ # s ( strdup # s g_last_type_ptr )
+}
+
+@ nurl_set_last_type s t → v {
+    : i old g_last_type_ptr
+    = g_last_type_ptr # i ( strdup t )
+    ? != old 0 { ( free # s old ) } {}
+}
+
 @ __is_operator_callee i tt → b {
     ? == tt TT_DOT { ^ T } {}
     ? == tt TT_HASH { ^ T } {}
@@ -9202,12 +9268,11 @@
     ( emit `declare i8*  @nurl_sym_get(i64, i8*)` )
     ( emit `declare void @nurl_sym_push(i64)` )
     ( emit `declare void @nurl_sym_pop(i64)` )
-    ( emit `declare i64  @nurl_cg_new()` )
-    ( emit `declare i8*  @nurl_cg_reg(i64)` )
-    ( emit `declare i8*  @nurl_cg_lbl(i64, i8*)` )
-    ( emit `declare void @nurl_cg_reset(i64)` )
-    ( emit `declare i8*  @nurl_get_last_type()` )
-    ( emit `declare void @nurl_set_last_type(i8*)` )
+    // PURIFY.md Phase 9a (2026-05-24): nurl_cg_new / _reg / _lbl /
+    // _reset and nurl_get_last_type / _set_last_type are pure-NURL
+    // @-fns now (see top of this file). Their `declare` lines + the
+    // matching `nurl_sym_def` entries in `init_syms` were deleted in
+    // lockstep with the runtime.c §7+§8 removal.
     ( emit `declare i8*  @nurl_malloc(i64)` )
     ( emit `declare i8*  @nurl_alloc(i64)` )
     ( emit `declare i8*  @nurl_zalloc(i64)` )
@@ -9356,9 +9421,9 @@
     ( nurl_sym_def syms `nurl_lex_filename` `i8*` )
     ( nurl_sym_def syms `nurl_lex_line_text` `i8*` )
     ( nurl_sym_def syms `nurl_diag_caret` `i8*` )
-    ( nurl_sym_def syms `nurl_cg_reg` `i8*` )
-    ( nurl_sym_def syms `nurl_cg_lbl` `i8*` )
-    ( nurl_sym_def syms `nurl_get_last_type` `i8*` )
+    // PURIFY.md Phase 9a (2026-05-24): nurl_cg_reg / _lbl /
+    // _get_last_type — pure-NURL @-fns now; types come from the
+    // @-fn declaration itself.
     ( nurl_sym_def syms `nurl_sym_get` `i8*` )
     ( nurl_sym_def syms `nurl_argv` `i8*` )
     ( nurl_sym_def syms `nurl_argv_get` `i8*` )
@@ -9577,8 +9642,8 @@
     ( nurl_sym_def syms `nurl_sym_def` `void` )
     ( nurl_sym_def syms `nurl_sym_push` `void` )
     ( nurl_sym_def syms `nurl_sym_pop` `void` )
-    ( nurl_sym_def syms `nurl_cg_reset` `void` )
-    ( nurl_sym_def syms `nurl_set_last_type` `void` )
+    // PURIFY.md Phase 9a (2026-05-24): nurl_cg_reset / _set_last_type
+    // are pure-NURL @-fns now.
     ( nurl_sym_def syms `nurl_exit` `void` )
     ( nurl_sym_def syms `nurl_flush_stdout` `void` )
     ( nurl_sym_def syms `nurl_flush_stderr` `void` )

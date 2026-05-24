@@ -69,8 +69,8 @@ genuinely irreducible.
 | 5  | HashMap (string → i64)            |  101 | Compiler  | [ ] | replace with `stdlib/core/hashmap.nu` (already exists) |
 | 6a | Lexer                             |  589 | Compiler  | [ ] | rewrite in NURL — biggest single move |
 | 6b | Symbol table                      |   72 | Compiler  | [ ] | thin wrapper over §5; goes away with §5 |
-| 7  | Codegen helpers                   |   47 | Compiler  | [ ] | counters + label stack → NURL globals |
-| 8  | "Last type" sideband              |   24 | Compiler  | [ ] | NURL globals |
+| 7  | Codegen helpers                   |   47 | Compiler  | [x] | DONE 2026-05-24 (Phase 9a) — `nurl_cg_new` / `_reg` / `_lbl` / `_reset` are pure-NURL @-fns in `compiler/nurlc.nu` over a 16-byte `nurl_zalloc`'d 2-i64-slot handle. The @-fns deliberately return `nurl_str_cat` results without an intervening `: s` binding so Phase 2B's auto-detector keeps `__last_ident_name__` on an i64 ident (`n`) at fn exit — that suppresses the `nurl_cg_reg__ret_owned = "str"` tag the auto-detector would otherwise emit, matching the C version's same-program-lifetime leak that `gen_agg_lit`'s insertvalue chain depends on. −47 LOC C; 4 preamble declares + 3 sym_def entries gone. |
+| 8  | "Last type" sideband              |   24 | Compiler  | [x] | DONE 2026-05-24 (Phase 9a) — `nurl_get_last_type` / `_set_last_type` are pure-NURL @-fns in `compiler/nurlc.nu` over a module-level `: i g_last_type_ptr 0` (an i8* held as i64). `strdup`-on-set / `free`-old / `strdup`-on-get semantics preserved byte-for-byte vs. runtime.c §8. −24 LOC C; 2 preamble declares + 2 sym_def entries gone. |
 | 9  | Memory allocation                 |   39 | OS-glue   | [ ] | keep as 3-fn `malloc`/`free`/`realloc` thunk |
 | 10 | (REMOVED 2026-05-01)              |    9 |    —      | [x] | already gone |
 | 11 | Math (libm bridge)                |   91 | FFI       | [~] | PARTIAL 2026-05-23/24 — 12 libm wrappers + iabs/ipow removed (2026-05-23: pure-NURL FFI to libm in `stdlib/std/float.nu`; pure NURL algorithms for `int_abs`/`int_pow` in `stdlib/std/int.nu`). 2026-05-24: `nurl_str_to_float_safe` + `_str_float_value` + `g_last_parsed_float` static deleted — `float_parse` now calls `strtod` directly via `& \`c\`` FFI with an `endptr` buffer + `nurl_errno_get` ERANGE detection. −17 LOC C + 2 preamble declares + 2 `sym_def` entries. Bit access (`nurl_f64_bits` / `_from_bits` / `_f32_from_bits`) and isnan/isinf macro wrappers retained (type-punning + macro-not-symbol). |
@@ -472,19 +472,42 @@ including `process_spawn_basic`, `mcp_stdio_basic`, every
 threads) stays — the API surface is genuinely incompatible with
 fork/exec. CLOEXEC sideband C-side or NURL-side is roughly a wash.
 
-### Phase 9 — Compiler-internal helpers (`§5 + §6sym + §7 + §8`, ~244 LOC reduction)
+### Phase 9 — Compiler-internal helpers (`§5 + §6sym + §7 + §8`, ~244 LOC reduction) — PHASE 9a LANDED 2026-05-24
 
 **The performance-sensitive cut.** Replace the C hashmap +
 symbol-table wrapper + codegen counter + sideband with NURL
-implementations using `stdlib/core/hashmap.nu` (pure NURL, already
-exists). The compiler becomes more self-contained — closer to
-"truly self-hosted" — at a runtime cost.
+implementations. The compiler becomes more self-contained —
+closer to "truly self-hosted" — at a runtime cost.
 
-Bootstrap: `nurlc.py` must compile the new `nurlc.nu` correctly.
-`hashmap.nu` is pure NURL and uses features `nurlc.py` already
-supports (it's part of stdlib).
+**Phase 9a landed** — `§7` codegen counters + `§8` last-type
+sideband are pure-NURL @-fns in `compiler/nurlc.nu`. See the §7
+and §8 rows above for the per-section detail.
 
-**Risk:** compiler self-host slows ~2–4× on hashmap-heavy paths
+Key learning from Phase 9a: Phase 2B's owned-string auto-detector
+at `gen_fn_decl`'s epilogue auto-tags any @-fn whose final
+expression is bound through an `__owned_strings__`-tracked `: s`
+identifier. For the §7 helpers, that auto-tag would break
+`gen_agg_lit`'s insertvalue accumulator chain (the caller's `= result r`
+reassignment was written against the C version's non-owned
+contract, so an auto-tagged owned return would auto-drop `r` and
+leave `result` dangling). Fix: inline the int formatting into a
+single `nurl_str_cat` call without `: s tmp` binding, so the last
+ident at fn exit is the i64 binding `n` instead of an owned-string
+binding. This propagates the C version's "leak for program
+lifetime" contract through cleanly.
+
+**Remaining (Phase 9b/9c):** §5 hashmap + §6b symbol table.
+
+**Bootstrap:** every Phase 9 batch must compile from
+`nurlc_lastgood`. After Phase 9a, that snapshot was regenerated
+via `--refresh-bootstrap` plus a one-shot sed to strip six
+stale `declare` lines the OLD build/nurlc still emits in its
+preamble (this is the standard pattern when removing preamble
+declares — until a new build/nurlc with the cleaned preamble
+exists, the lastgood it generates carries stale declares that
+collide with the new pure-NURL @-fn defines).
+
+**Risk:** compiler self-host may slow on hashmap-heavy paths
 (symbol lookup). Mitigation: profile post-phase; if symbol lookup
 dominates, add a small open-addressing fast-path keyed on the
 common short identifiers.
