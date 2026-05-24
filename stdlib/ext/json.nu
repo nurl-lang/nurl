@@ -2,7 +2,7 @@
 //
 // JSON is the lingua franca of LLM tool-use payloads. This module provides
 // a single canonical Json value type, a strict parser that rejects malformed
-// input via `! Json ParseErr`, a compact serializer that round-trips, and
+// input via `! Json JsonError`, a compact serializer that round-trips, and
 // a small set of accessors so call sites don't have to ?? match for every
 // field probe.
 //
@@ -20,7 +20,9 @@
 // JNum stores the original textual form (`-3.14`, `42`, `1e10`, …). Use
 // `json_num_as_i` / `json_num_as_f` to project to numeric types when
 // needed; this avoids forcing every JSON int to lose information through
-// double rounding and keeps the serializer trivial.
+// double rounding and keeps the serializer trivial. The parser rejects
+// non-conforming numbers (RFC 8259: leading zeros like `01` → BadFormat),
+// so the serializer's output is guaranteed valid JSON.
 //
 // JObj is a Vec of alternating key-value entries. Keys are JStr (always),
 // values can be any Json. Lookup is O(n) — fine for LLM-typical payloads
@@ -29,6 +31,20 @@
 // the parser (the JSON spec allows but does not mandate handling); the
 // accessor `json_obj_get` returns the first match in source order, and
 // `json_obj_set` replaces the first match in source order.
+//
+// ── Errors ──────────────────────────────────────────────────────────
+//
+//   : JsonError {
+//     ParseErr kind   // BadFormat / Empty / TrailingGarbage / Overflow
+//     i pos           // 0-based byte offset of the failure (or token start)
+//     i line          // 1-based line number
+//     i col           // 1-based column
+//   }
+//
+// Location is computed once per failure and travels with the error value
+// — there is no global state, so nested `json_parse` calls (e.g. an error
+// handler that parses a fallback config) and multi-threaded use are both
+// safe. Render with `json_format_error` or build your own message.
 //
 // ── API ─────────────────────────────────────────────────────────────
 //
@@ -49,16 +65,10 @@
 //   ( json_type_name j )              → s    "null"/"bool"/"num"/"str"/"arr"/"obj"
 //
 // Parser / serializer:
-//   ( json_parse raw )                → ! Json ParseErr
+//   ( json_parse raw )                → ! Json JsonError
 //   ( json_stringify j )              → String  compact (always valid JSON)
 //   ( json_pretty    j )              → String  2-space indented
-//
-// Parser diagnostics (valid after a F-tagged json_parse return; reset on
-// every json_parse call):
-//   ( json_last_error_pos )           → i    byte offset (0-based, -1 = none)
-//   ( json_last_error_line )          → i    1-based line number (0 = none)
-//   ( json_last_error_col )           → i    1-based column (0 = none)
-//   ( json_format_error e )           → String   "<kind> at line L col C" (caller owns)
+//   ( json_format_error e )           → String  "<kind> at line L col C" (caller owns)
 //
 // Iteration:
 //   ( json_arr_each  j f )            → v    f : (@ v Json)
@@ -91,13 +101,12 @@
 //   ( json_eq    a b )                → b      byte-exact JNum, order-sensitive JObj
 //   ( json_free  j )                  → v      recursive
 //
-// Errors: `ParseErr` from stdlib/core/errors.nu. The parser uses
+// Errors: `ParseErr` from stdlib/core/errors.nu, wrapped in `JsonError`:
 //   Empty           — no value found (whitespace / EOF before any value)
-//   BadFormat       — anything malformed at the byte level
+//   BadFormat       — anything malformed at the byte level (incl. leading
+//                     zeros like `01`, which RFC 8259 forbids)
 //   TrailingGarbage — well-formed value followed by non-whitespace junk
 //   Overflow        — nesting depth exceeded `JSON_MAX_DEPTH`
-// After a failure, `json_last_error_line` / `_col` / `_pos` point at the
-// byte that confused the parser (best-effort, may be one past the end).
 //
 // Notes / limits:
 //   - Max nesting depth is `JSON_MAX_DEPTH` (1024) — guards against
@@ -107,9 +116,6 @@
 //     key in an object via path; use `json_obj_get` directly for those.
 //   - Duplicate object keys are preserved; first-match wins for lookup.
 //     If you need set semantics, project into a HashMap.
-//   - Diagnostics globals are single-threaded — call sites that parse
-//     from multiple OS threads must serialize, or read the location
-//     fields immediately after the failing `json_parse` call.
 
 $ `stdlib/core/errors.nu`
 $ `stdlib/core/string.nu`
@@ -124,6 +130,13 @@ $ `stdlib/core/result.nu`
     JStr String
     JArr ( Vec Json )
     JObj ( Vec Json )
+}
+
+: JsonError {
+    ParseErr kind
+    i pos
+    i line
+    i col
 }
 
 // ── Constructors ─────────────────────────────────────────────────────
@@ -266,70 +279,6 @@ $ `stdlib/core/result.nu`
     ^ p
 }
 
-// ── Diagnostics globals (single-threaded) ───────────────────────────
-//
-// `json_parse` resets these on entry and updates them just before any
-// F-return so that callers can fetch the failure location via
-// `json_last_error_line` / `_col` / `_pos`. Concurrent parses on
-// different OS threads must serialize — typical NURL parsing is
-// single-threaded so this is intentional.
-
-: ~ i __g_json_err_pos -1
-: ~ i __g_json_err_line 0
-: ~ i __g_json_err_col 0
-
-@ __jp_reset_err → v {
-    = __g_json_err_pos -1
-    = __g_json_err_line 0
-    = __g_json_err_col 0
-}
-
-// Compute (line, col) for the parser's current `pos` and stash them in
-// the diagnostics globals. Lines are counted by walking `src` from byte
-// 0; columns reset after every '\n'. Cost is O(pos) — acceptable since
-// this only runs once per failure. Position clamps to [0, len].
-@ __jp_record_err * JsonParser p → v {
-    : i n . p len
-    : i target . p pos
-    ? > target n { = target n } {}
-    ? < target 0 { = target 0 } {}
-    : s src . p src
-    : ~ i line 1
-    : ~ i col 1
-    : ~ i k 0
-    ~ < k target {
-        : i c ( nurl_str_get src k )
-        ? == c 10 {
-            = line + line 1
-            = col 1
-        } {
-            = col + col 1
-        }
-        = k + k 1
-    }
-    = __g_json_err_pos target
-    = __g_json_err_line line
-    = __g_json_err_col col
-}
-
-@ json_last_error_pos → i { ^ __g_json_err_pos }
-@ json_last_error_line → i { ^ __g_json_err_line }
-@ json_last_error_col → i { ^ __g_json_err_col }
-
-// Format a parse failure as "<kind> at line L col C". Caller owns the
-// returned String; pass the same `e` they received from `json_parse`.
-@ json_format_error ParseErr e → String {
-    : String out ( string_with_cap 48 )
-    ( string_push_str out ( parse_err_msg # ParseErr e ) )
-    ? > __g_json_err_line 0 {
-        ( string_push_str out ` at line ` )
-        ( string_push_int out __g_json_err_line )
-        ( string_push_str out ` col ` )
-        ( string_push_int out __g_json_err_col )
-    } {}
-    ^ out
-}
-
 @ __jp_eof * JsonParser p → b {
     ^ >= . p pos . p len
 }
@@ -371,19 +320,58 @@ $ `stdlib/core/result.nu`
     ^ ok
 }
 
+// ── Error construction ──────────────────────────────────────────────
+//
+// All parser failures route through `__jp_err`, which captures the
+// current `pos` and walks `src` from byte 0 to compute (line, col). The
+// returned `JsonError` carries all the diagnostic state — there are no
+// globals, so nested or threaded parses don't clobber each other.
+//
+// Use `__jp_err_at` when the failure should point at a specific byte
+// (e.g. the opening `"` of an unterminated string, not the EOF byte
+// where the parser actually stopped).
+
+@ __jp_err_at * JsonParser p i pos_override ParseErr kind → JsonError {
+    : i n . p len
+    : i target pos_override
+    ? > target n { = target n } {}
+    ? < target 0 { = target 0 } {}
+    : s src . p src
+    : ~ i line 1
+    : ~ i col 1
+    : ~ i k 0
+    ~ < k target {
+        : i c ( nurl_str_get src k )
+        ? == c 10 {
+            = line + line 1
+            = col 1
+        } {
+            = col + col 1
+        }
+        = k + k 1
+    }
+    ^ @ JsonError { kind target line col }
+}
+
+@ __jp_err * JsonParser p ParseErr kind → JsonError {
+    ^ ( __jp_err_at p . p pos kind )
+}
+
 // ── Number ───────────────────────────────────────────────────────────
 //
-// Strict-ish JSON number grammar:
+// Strict JSON number grammar (RFC 8259):
 //   '-'? ( '0' | [1-9][0-9]* ) ( '.' [0-9]+ )? ( [eE][+-]?[0-9]+ )?
 //
-// We accept the leading-zero-with-digits case too (lenient) — the JSON
-// spec forbids `01`, but rejecting it isn't worth the complexity for
-// LLM-generated payloads, which sometimes include leading zeros.
+// Leading zeros are rejected (`01` → BadFormat) so that the serializer
+// can round-trip any parsed value as valid JSON without numeric
+// reformatting. The error position points at the first digit so that
+// the diagnostic highlights the offending token, not a trailing byte.
 
-@ __jp_parse_number * JsonParser p → !Json ParseErr {
-    : i start . p pos
+@ __jp_parse_number * JsonParser p → !Json JsonError {
+    : i token_start . p pos
     ? == ( __jp_peek p ) 45 { = . p pos + . p pos 1 } {}
 
+    : i first_digit_pos . p pos
     : ~ i digit_count 0
     ~ & ! ( __jp_eof p ) != 0 ( is_digit ( __jp_peek p ) ) {
         = . p pos + . p pos 1
@@ -391,7 +379,13 @@ $ `stdlib/core/result.nu`
     }
 
     ? == digit_count 0 {
-        ^ @ !Json ParseErr { F @ ParseErr { BadFormat } }
+        ^ @ !Json JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
+    } {}
+
+    // RFC 8259: leading zero is only allowed when the integer part is
+    // exactly `0` (so `0.5`, `0e2`, `0` ok; `01`, `007` rejected).
+    ? & >= digit_count 2 == ( nurl_str_get . p src first_digit_pos ) 48 {
+        ^ @ !Json JsonError { F ( __jp_err_at p first_digit_pos @ ParseErr { BadFormat } ) }
     } {}
 
     // Optional fractional part.
@@ -403,7 +397,7 @@ $ `stdlib/core/result.nu`
             = frac_count + frac_count 1
         }
         ? == frac_count 0 {
-            ^ @ !Json ParseErr { F @ ParseErr { BadFormat } }
+            ^ @ !Json JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
         } {}
     } {}
 
@@ -422,19 +416,19 @@ $ `stdlib/core/result.nu`
                 = exp_count + exp_count 1
             }
             ? == exp_count 0 {
-                ^ @ !Json ParseErr { F @ ParseErr { BadFormat } }
+                ^ @ !Json JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
             } {}
         } {}
     } {}
 
-    : i n_bytes - . p pos start
+    : i n_bytes - . p pos token_start
     : String raw ( string_with_cap n_bytes )
-    : ~ i k start
+    : ~ i k token_start
     ~ < k . p pos {
         ( string_push_char raw ( nurl_str_get . p src k ) )
         = k + k 1
     }
-    ^ @ !Json ParseErr { T @ Json { JNum raw } }
+    ^ @ !Json JsonError { T @ Json { JNum raw } }
 }
 
 // ── String ───────────────────────────────────────────────────────────
@@ -443,6 +437,10 @@ $ `stdlib/core/result.nu`
 // (including surrogate pairs, encoded to UTF-8 bytes). A literal byte
 // stream of multi-byte UTF-8 is also accepted directly inside the
 // quotes — we don't validate it, just shovel bytes through.
+//
+// All failure paths report the position of the opening `"` so that
+// "unterminated string" points at the byte where the string starts,
+// not at EOF on the other end of the file.
 
 // Convert a single ASCII hex digit to its 0..15 value, or -1 on a
 // non-hex byte.
@@ -501,9 +499,10 @@ $ `stdlib/core/result.nu`
     ^ acc
 }
 
-@ __jp_parse_string * JsonParser p → !String ParseErr {
+@ __jp_parse_string * JsonParser p → !String JsonError {
+    : i token_start . p pos
     ? != ( __jp_peek p ) 34 {
-        ^ @ !String ParseErr { F @ ParseErr { BadFormat } }
+        ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
     } {}
     = . p pos + . p pos 1
 
@@ -512,7 +511,7 @@ $ `stdlib/core/result.nu`
     ~ ! done {
         ? ( __jp_eof p ) {
             ( string_free out )
-            ^ @ !String ParseErr { F @ ParseErr { BadFormat } }
+            ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
         } {}
         : i c ( __jp_peek p )
         ? == c 34 {
@@ -523,7 +522,7 @@ $ `stdlib/core/result.nu`
                 = . p pos + . p pos 1
                 ? ( __jp_eof p ) {
                     ( string_free out )
-                    ^ @ !String ParseErr { F @ ParseErr { BadFormat } }
+                    ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
                 } {}
                 : i esc ( __jp_peek p )
                 = . p pos + . p pos 1
@@ -545,7 +544,7 @@ $ `stdlib/core/result.nu`
                                                     : i h ( __jp_read_hex4 p )
                                                     ? < h 0 {
                                                         ( string_free out )
-                                                        ^ @ !String ParseErr { F @ ParseErr { BadFormat } }
+                                                        ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
                                                     } {}
                                                     ? & >= h 55296 <= h 56319 {
                                                         // Possible high surrogate — try to consume `\uYYYY`.
@@ -576,7 +575,7 @@ $ `stdlib/core/result.nu`
                                                     }
                                                 } {
                                                     ( string_free out )
-                                                    ^ @ !String ParseErr { F @ ParseErr { BadFormat } }
+                                                    ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
                                                 } } } } } } } } }
             } {
                 ( string_push_char out c )
@@ -584,42 +583,45 @@ $ `stdlib/core/result.nu`
             }
         }
     }
-    ^ @ !String ParseErr { T out }
+    ^ @ !String JsonError { T out }
 }
 
 // ── Top-level dispatch (forward declaration via mutual recursion) ────
 
-@ __jp_parse_value * JsonParser p → !Json ParseErr {
+@ __jp_parse_value * JsonParser p → !Json JsonError {
     ( __jp_skip_ws p )
     ? ( __jp_eof p ) {
-        ^ @ !Json ParseErr { F @ ParseErr { Empty } }
+        ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { Empty } ) }
     } {}
     : i c ( __jp_peek p )
 
     ? == c 110 {
         ? ( __jp_match_kw p `null` ) {
-            ^ @ !Json ParseErr { T @ Json { JNull } }
+            ^ @ !Json JsonError { T @ Json { JNull } }
         } {}
-        ^ @ !Json ParseErr { F @ ParseErr { BadFormat } }
+        ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
     } {}
 
     ? == c 116 {
         ? ( __jp_match_kw p `true` ) {
-            ^ @ !Json ParseErr { T @ Json { JBool T } }
+            ^ @ !Json JsonError { T @ Json { JBool T } }
         } {}
-        ^ @ !Json ParseErr { F @ ParseErr { BadFormat } }
+        ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
     } {}
 
     ? == c 102 {
         ? ( __jp_match_kw p `false` ) {
-            ^ @ !Json ParseErr { T @ Json { JBool F } }
+            ^ @ !Json JsonError { T @ Json { JBool F } }
         } {}
-        ^ @ !Json ParseErr { F @ ParseErr { BadFormat } }
+        ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
     } {}
 
     ? == c 34 {
-        : String s \ ( __jp_parse_string p )
-        ^ @ !Json ParseErr { T @ Json { JStr s } }
+        : !String JsonError sr ( __jp_parse_string p )
+        ^ ?? sr {
+            T s → @ !Json JsonError { T @ Json { JStr s } }
+            F e → @ !Json JsonError { F # JsonError e }
+        }
     } {}
 
     ? == c 91 { ^ ( __jp_parse_array p ) } {}
@@ -629,44 +631,54 @@ $ `stdlib/core/result.nu`
         ^ ( __jp_parse_number p )
     } {}
 
-    ^ @ !Json ParseErr { F @ ParseErr { BadFormat } }
+    ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
 }
 
-@ __jp_parse_array * JsonParser p → !Json ParseErr {
+// Array / object are split into an outer wrapper (depth bump + decrement,
+// guaranteed paired across all success AND failure paths) and an inner
+// body. This keeps the depth counter accurate even if a future refactor
+// reuses a single JsonParser across multiple parses.
+
+@ __jp_parse_array * JsonParser p → !Json JsonError {
     ? >= . p depth JSON_MAX_DEPTH {
-        ^ @ !Json ParseErr { F @ ParseErr { Overflow } }
+        ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { Overflow } ) }
     } {}
     = . p depth + . p depth 1
+    : !Json JsonError r ( __jp_parse_array_body p )
+    = . p depth - . p depth 1
+    ^ r
+}
+
+@ __jp_parse_array_body * JsonParser p → !Json JsonError {
     = . p pos + . p pos 1  // consume '['
     : ( Vec Json ) elems ( vec_new [Json] )
     ( __jp_skip_ws p )
     ? ( __jp_eof p ) {
         : ( @ v Json ) drop1 \ Json e → v { ( json_free e ) }
         ( vec_free_with [Json] elems drop1 )
-        ^ @ !Json ParseErr { F @ ParseErr { BadFormat } }
+        ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
     } {}
     ? == ( __jp_peek p ) 93 {  // empty array
         = . p pos + . p pos 1
-        = . p depth - . p depth 1
-        ^ @ !Json ParseErr { T @ Json { JArr elems } }
+        ^ @ !Json JsonError { T @ Json { JArr elems } }
     } {}
 
     : ~ b more T
     ~ more {
-        : !Json ParseErr child ( __jp_parse_value p )
+        : !Json JsonError child ( __jp_parse_value p )
         ?? child {
             T jv → ( vec_push [Json] elems jv )
             F e → {
                 : ( @ v Json ) drop2 \ Json e2 → v { ( json_free e2 ) }
                 ( vec_free_with [Json] elems drop2 )
-                ^ @ !Json ParseErr { F # ParseErr e }
+                ^ @ !Json JsonError { F # JsonError e }
             }
         }
         ( __jp_skip_ws p )
         ? ( __jp_eof p ) {
             : ( @ v Json ) drop3 \ Json e → v { ( json_free e ) }
             ( vec_free_with [Json] elems drop3 )
-            ^ @ !Json ParseErr { F @ ParseErr { BadFormat } }
+            ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
         } {}
         : i nc ( __jp_peek p )
         ? == nc 44 {  // ','
@@ -679,31 +691,35 @@ $ `stdlib/core/result.nu`
             } {
                 : ( @ v Json ) drop4 \ Json e → v { ( json_free e ) }
                 ( vec_free_with [Json] elems drop4 )
-                ^ @ !Json ParseErr { F @ ParseErr { BadFormat } }
+                ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
             }
         }
     }
-    = . p depth - . p depth 1
-    ^ @ !Json ParseErr { T @ Json { JArr elems } }
+    ^ @ !Json JsonError { T @ Json { JArr elems } }
 }
 
-@ __jp_parse_object * JsonParser p → !Json ParseErr {
+@ __jp_parse_object * JsonParser p → !Json JsonError {
     ? >= . p depth JSON_MAX_DEPTH {
-        ^ @ !Json ParseErr { F @ ParseErr { Overflow } }
+        ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { Overflow } ) }
     } {}
     = . p depth + . p depth 1
+    : !Json JsonError r ( __jp_parse_object_body p )
+    = . p depth - . p depth 1
+    ^ r
+}
+
+@ __jp_parse_object_body * JsonParser p → !Json JsonError {
     = . p pos + . p pos 1  // consume '{'
     : ( Vec Json ) kvs ( vec_new [Json] )
     ( __jp_skip_ws p )
     ? ( __jp_eof p ) {
         : ( @ v Json ) drop1 \ Json e → v { ( json_free e ) }
         ( vec_free_with [Json] kvs drop1 )
-        ^ @ !Json ParseErr { F @ ParseErr { BadFormat } }
+        ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
     } {}
     ? == ( __jp_peek p ) 125 {  // empty object
         = . p pos + . p pos 1
-        = . p depth - . p depth 1
-        ^ @ !Json ParseErr { T @ Json { JObj kvs } }
+        ^ @ !Json JsonError { T @ Json { JObj kvs } }
     } {}
 
     : ~ b more T
@@ -712,38 +728,38 @@ $ `stdlib/core/result.nu`
         ? != ( __jp_peek p ) 34 {
             : ( @ v Json ) drop2 \ Json e → v { ( json_free e ) }
             ( vec_free_with [Json] kvs drop2 )
-            ^ @ !Json ParseErr { F @ ParseErr { BadFormat } }
+            ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
         } {}
-        : !String ParseErr ks ( __jp_parse_string p )
+        : !String JsonError ks ( __jp_parse_string p )
         ?? ks {
             T s → ( vec_push [Json] kvs @ Json { JStr s } )
             F e → {
                 : ( @ v Json ) drop3 \ Json e2 → v { ( json_free e2 ) }
                 ( vec_free_with [Json] kvs drop3 )
-                ^ @ !Json ParseErr { F # ParseErr e }
+                ^ @ !Json JsonError { F # JsonError e }
             }
         }
         ( __jp_skip_ws p )
         ? != ( __jp_peek p ) 58 {  // ':'
             : ( @ v Json ) drop4 \ Json e → v { ( json_free e ) }
             ( vec_free_with [Json] kvs drop4 )
-            ^ @ !Json ParseErr { F @ ParseErr { BadFormat } }
+            ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
         } {}
         = . p pos + . p pos 1
-        : !Json ParseErr vv ( __jp_parse_value p )
+        : !Json JsonError vv ( __jp_parse_value p )
         ?? vv {
             T jv → ( vec_push [Json] kvs jv )
             F e → {
                 : ( @ v Json ) drop5 \ Json e2 → v { ( json_free e2 ) }
                 ( vec_free_with [Json] kvs drop5 )
-                ^ @ !Json ParseErr { F # ParseErr e }
+                ^ @ !Json JsonError { F # JsonError e }
             }
         }
         ( __jp_skip_ws p )
         ? ( __jp_eof p ) {
             : ( @ v Json ) drop6 \ Json e → v { ( json_free e ) }
             ( vec_free_with [Json] kvs drop6 )
-            ^ @ !Json ParseErr { F @ ParseErr { BadFormat } }
+            ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
         } {}
         : i nc ( __jp_peek p )
         ? == nc 44 {
@@ -755,50 +771,63 @@ $ `stdlib/core/result.nu`
             } {
                 : ( @ v Json ) drop7 \ Json e → v { ( json_free e ) }
                 ( vec_free_with [Json] kvs drop7 )
-                ^ @ !Json ParseErr { F @ ParseErr { BadFormat } }
+                ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
             }
         }
     }
-    = . p depth - . p depth 1
-    ^ @ !Json ParseErr { T @ Json { JObj kvs } }
+    ^ @ !Json JsonError { T @ Json { JObj kvs } }
 }
 
-@ json_parse s src → !Json ParseErr {
-    ( __jp_reset_err )
+@ json_parse s src → !Json JsonError {
     ? == ( nurl_str_len src ) 0 {
-        = __g_json_err_pos 0
-        = __g_json_err_line 1
-        = __g_json_err_col 1
-        ^ @ !Json ParseErr { F @ ParseErr { Empty } }
+        : JsonError e @ JsonError {
+            @ ParseErr { Empty }
+            0
+            1
+            1
+        }
+        ^ @ !Json JsonError { F e }
     } {}
     : *JsonParser p ( __jp_new src )
-    : !Json ParseErr r ( __jp_parse_value p )
+    : !Json JsonError r ( __jp_parse_value p )
     ?? r {
         T j → {
             ( __jp_skip_ws p )
             ? ! ( __jp_eof p ) {
-                ( __jp_record_err p )
+                : JsonError e ( __jp_err p @ ParseErr { TrailingGarbage } )
                 ( json_free j )
                 ( nurl_free # s p )
-                ^ @ !Json ParseErr { F @ ParseErr { TrailingGarbage } }
+                ^ @ !Json JsonError { F e }
             } {}
             ( nurl_free # s p )
-            ^ @ !Json ParseErr { T j }
+            ^ @ !Json JsonError { T j }
         }
         F e → {
-            ( __jp_record_err p )
             ( nurl_free # s p )
-            ^ @ !Json ParseErr { F # ParseErr e }
+            ^ @ !Json JsonError { F # JsonError e }
         }
     }
+}
+
+// Format a parse failure as "<kind> at line L col C". Caller owns the
+// returned String.
+@ json_format_error JsonError e → String {
+    : String out ( string_with_cap 48 )
+    ( string_push_str out ( parse_err_msg # ParseErr . e kind ) )
+    ( string_push_str out ` at line ` )
+    ( string_push_int out . e line )
+    ( string_push_str out ` col ` )
+    ( string_push_int out . e col )
+    ^ out
 }
 
 // ── Stringify ────────────────────────────────────────────────────────
 //
 // Compact serialization with the inverse of __jp_parse_string's escape
 // table. Returns a fresh String the caller owns. Output is always valid
-// JSON: any byte below 0x20 that does not have a named escape (\b \t \n
-// \f \r) is encoded as `\u00XX`, so the result round-trips through any
+// JSON: the parser only accepts spec-conformant numbers (no leading
+// zeros), and any byte below 0x20 without a named escape (\b \t \n \f
+// \r) is encoded as `\u00XX`. The result round-trips through any
 // strict JSON parser (including jq, Python, JavaScript).
 
 // Append a single ASCII hex digit (0..15) to `out`. Used by the

@@ -60,7 +60,7 @@ $ `stdlib/ext/serde.nu`
     ( nurl_print `encoded:  ` ) ( nurl_print ( string_data s ) ) ( nurl_print `\n` )
 
     // Round-trip: parse the JSON text back, decode into a Point, compare.
-    : !Json ParseErr pr ( json_parse ( string_data s ) )
+    : !Json JsonError pr ( json_parse ( string_data s ) )
     ?? pr {
         T j2 → {
             : !Point ParseErr p2r ( point_from_json j2 )

@@ -203,7 +203,7 @@ $ `stdlib/core/vec.nu`
         : ?String line_o ( proc_read_line . c child to )
         ?? line_o {
             T line → {
-                : !Json ParseErr pj ( json_parse ( string_data line ) )
+                : !Json JsonError pj ( json_parse ( string_data line ) )
                 ( string_free line )
                 ?? pj {
                     T j → {

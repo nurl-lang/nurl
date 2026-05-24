@@ -724,7 +724,7 @@ i thinking_budget
             : String body_owned ( string_from ( http_body_str r ) )
             ( response_free r )
 
-            : !Json ParseErr pj ( json_parse ( string_data body_owned ) )
+            : !Json JsonError pj ( json_parse ( string_data body_owned ) )
             ( string_free body_owned )
 
             ?? pj {
@@ -928,7 +928,7 @@ i thinking_budget
     ? == ( nurl_str_eq en `content_block_delta` ) 0 {
         ^ @ ?String { F # String 0 }
     } {}
-    : !Json ParseErr pj ( json_parse ( string_data . ev data ) )
+    : !Json JsonError pj ( json_parse ( string_data . ev data ) )
     ?? pj {
         T j → {
             : ?Json delta ( json_obj_get j `delta` )
@@ -976,7 +976,7 @@ i thinking_budget
     ? == ( nurl_str_eq en `content_block_delta` ) 0 {
         ^ @ ?String { F # String 0 }
     } {}
-    : !Json ParseErr pj ( json_parse ( string_data . ev data ) )
+    : !Json JsonError pj ( json_parse ( string_data . ev data ) )
     ?? pj {
         T j → {
             : ?Json delta ( json_obj_get j `delta` )
@@ -1022,7 +1022,7 @@ i thinking_budget
     ? & == ea 0 & == eb 0 == ec 0 {
         ^ @ ?i { F 0 }
     } {}
-    : !Json ParseErr pj ( json_parse ( string_data . ev data ) )
+    : !Json JsonError pj ( json_parse ( string_data . ev data ) )
     ?? pj {
         T j → {
             : ?Json idx ( json_obj_get j `index` )
@@ -1054,7 +1054,7 @@ i thinking_budget
     ? == ( nurl_str_eq en `content_block_start` ) 0 {
         ^ @ ?String { F # String 0 }
     } {}
-    : !Json ParseErr pj ( json_parse ( string_data . ev data ) )
+    : !Json JsonError pj ( json_parse ( string_data . ev data ) )
     ?? pj {
         T j → {
             : ?Json cb ( json_obj_get j `content_block` )
@@ -1088,7 +1088,7 @@ i thinking_budget
     ? == ( nurl_str_eq en `content_block_start` ) 0 {
         ^ @ ?String { F # String 0 }
     } {}
-    : !Json ParseErr pj ( json_parse ( string_data . ev data ) )
+    : !Json JsonError pj ( json_parse ( string_data . ev data ) )
     ?? pj {
         T j → {
             : ?Json cb ( json_obj_get j `content_block` )
@@ -1145,7 +1145,7 @@ i thinking_budget
     ? == ( nurl_str_eq en `message_delta` ) 0 {
         ^ @ ?String { F # String 0 }
     } {}
-    : !Json ParseErr pj ( json_parse ( string_data . ev data ) )
+    : !Json JsonError pj ( json_parse ( string_data . ev data ) )
     ?? pj {
         T j → {
             : ?Json delta ( json_obj_get j `delta` )
@@ -1176,7 +1176,7 @@ i thinking_budget
     ? == ( nurl_str_eq en `error` ) 0 {
         ^ @ ?String { F # String 0 }
     } {}
-    : !Json ParseErr pj ( json_parse ( string_data . ev data ) )
+    : !Json JsonError pj ( json_parse ( string_data . ev data ) )
     ?? pj {
         T j → {
             : ?Json err ( json_obj_get j `error` )
