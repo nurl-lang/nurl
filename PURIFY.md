@@ -8,10 +8,11 @@
 > **Starting point (2026-05-23):** `stdlib/runtime.c` is 8 879 LOC
 > across 28 sections. Pure-NURL stdlib is 28 809 LOC.
 >
-> **Current (2026-05-24):** `stdlib/runtime.c` is **5 929 LOC** —
-> **−2 950 LOC** moved out, the bulk into pure-NURL FFI declarations
-> over libc/libpthread/libsqlite3/libz. See Part VII for the per-phase
-> breakdown.
+> **Current (2026-05-24):** `stdlib/runtime.c` is **5 453 LOC** —
+> **−3 426 LOC** moved out, the bulk into pure-NURL FFI declarations
+> over libc/libpthread/libsqlite3/libz, plus the SIMD CSV scanner
+> ported to pure NURL (`stdlib/ext/csv.nu`). See Part VII for the
+> per-phase breakdown.
 >
 > **Target:** runtime.c around **3 000 LOC**, comprising only:
 >   - the libc/syscall thunks (file, socket, pthread, mmap),
@@ -841,8 +842,8 @@ outside this document's scope.
 
 **Starting point (2026-05-23):** `stdlib/runtime.c` 8 879 LOC across 28 sections.
 
-**Current (2026-05-24):** `stdlib/runtime.c` **5 929 LOC** — a
-**−2 950 LOC** reduction (−33.2 %) across the branch's 42+ commits.
+**Current (2026-05-24):** `stdlib/runtime.c` **5 453 LOC** — a
+**−3 426 LOC** reduction (−38.6 %) across the branch's 43+ commits.
 Two thirds of the way to the 3 000-LOC target with every shipped
 phase keeping the bootstrap fixed point and the full test corpus
 green.
@@ -871,6 +872,8 @@ green.
 | §17 | random surface (`rand_u64` / `rand_hex_str`) |  −34 | pure NURL (`stdlib/std/random.nu`) over `& \`c\`` FFI to a single `nurl_rand_fill` syscall bridge — getrandom/arc4random_buf/BCryptGenRandom branching stays C |
 | §4 | file ops batch (`nurl_read_file_bytes` / `_write_file_bytes` / `nurl_file_read_chunk` / `nurl_read_n_bytes` / `nurl_errno_kind` + `g_last_bytes_len` sideband) | −91 | pure NURL (`stdlib/std/fs.nu` / `stdlib/core/io.nu` / `stdlib/core/posix.nu`) — fopen/fseek/ftell/fread/fwrite/fclose/ferror via `& \`c\`` FFI, write into Vec[u]'s data buffer, no sideband |
 | §22 | gzip (`nurl_gzip_compress` / `nurl_gzip_decompress`) |  −15 | pure NURL (`stdlib/ext/compress.nu`) over `& \`z\`` FFI to deflateInit2_/deflate/deflateEnd + tiny C struct accessors (`nurl_z_setup` / `nurl_z_total_out`) that bridge LP64/LLP64 uLong-width variance |
+| §2 SIMD CSV | typed CSV scanner |  ~−508 | pure NURL (`stdlib/ext/csv.nu`) — 153 LOC ported over libc primitives; the SIMD intrinsics that earlier justified C-side residency turned out unnecessary post-LTO |
+| §14 | response accessors (`nurl_http_response_status` / `_err_kind` / `_body` / `_body_len` / `_header_count` / `_header_name` / `_header_value`) |  −12 | pure NURL (`stdlib/ext/http.nu`) over `nurl_peek(p, slot)` walking the NurlHttpResponse i64-slot layout; static asserts in runtime.c pin the layout at compile time. Only `_free` stays C (walks the headers[] array deallocating each name/value pair plus the body) |
 
 **Other branch deliverables (not LOC moves):**
 
@@ -901,11 +904,43 @@ green.
     `api/app/main.py` wasm shim list. The uuidgen wasm build now
     links without `signature mismatch` warnings.
 
-**Residual runtime.c (~5 929 LOC):** still above the projected
+**Residual runtime.c (~5 453 LOC):** still above the projected
 end-state (~2 000 LOC) — Phase 12 lib-cache (libcurl easy +
-multi), Phase 13 basic I/O, Phase 14 final accounting still open.
-The path from here is the same FFI pattern, applied to
-fewer-but-larger remaining sections.
+multi backends), Phase 13 basic I/O, Phase 14 final accounting
+still open. The path from here is the same FFI pattern, applied
+to fewer-but-larger remaining sections.
+
+**Known follow-on candidates** (with risk/reward sketch):
+
+  * **§14 libcurl backend** (~210 LOC of `nurl_http_perform_full_to` +
+    write/header callbacks + slist builder) — biggest movable chunk
+    by far. Doable via `& \`curl\`` FFI; the callbacks become @-fns
+    (libcurl puts userdata last, matching @-fn signatures with no
+    closure ABI mismatch). Likely needs 2-3 small monomorphic C
+    trampolines around `curl_easy_setopt` since it's variadic. WinHTTP
+    fallback stays C-side (~250 LOC of Win32-specific API surface).
+  * **§14b libcurl multi backend** (~390 LOC) — same shape, more
+    state. Both backends share `NurlHttpHeaderBuf` / `NurlHttpBuf` so
+    a partial migration that leaves the response struct C-side is the
+    safe sequencing.
+  * **§14b stream accessors** (~25 LOC) — deferred. `NurlHttpStream`
+    has three `int`s in the middle (`headers_done` / `still_running`
+    / `finished`) that break the clean i64-slot pattern that worked
+    for `NurlHttpResponse`. Would need either a struct reorder or
+    byte-offset addressing (which `nurl_peek` doesn't support); cost
+    > benefit at current LOC ratio.
+  * **§4 `nurl_read_file`** (~16 LOC) — fopen/fseek/ftell/fread chain.
+    Moving requires a local copy in `nurlc.nu` (bootstrap can't
+    `$`-import) plus a new shared @-fn in `stdlib/core/io.nu` for
+    `manifest.nu`. Modest reduction; queue behind §14 libcurl.
+  * **§13 `nurl_dir_list_*` POSIX trio** (~50 LOC) — deliberately
+    kept as a sanitizer-build fallback (LTO eliminates them in normal
+    builds). Removing requires accepting that `-fsanitize` runs would
+    break on `dir_list` calls; not a clean win.
+  * **§1 user-visible print** (~100 LOC) — `nurl_print` / `_print_int`
+    / `_eprint` etc. Blocked on an auto-prelude mechanism (test corpus
+    calls these names without imports). Documented as the §1
+    DEFERRED row above.
 
 ---
 
