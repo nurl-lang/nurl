@@ -10079,7 +10079,8 @@
     ( emit `declare void @nurl_print_bool(i1)` )
     ( emit `declare i64  @nurl_read_int()` )
     ( emit `declare i8*  @nurl_read_line()` )
-    ( emit `declare i8*  @nurl_read_n_bytes(i64)` )
+    // nurl_read_n_bytes → pure NURL `read_n_bytes` in `stdlib/core/io.nu`
+    // (PURIFY 2026-05-24); reads fd 0 via `read(2)` directly.
     ( emit `declare i64  @nurl_stdin_eof()` )
     ( emit `declare void @nurl_flush_stdout()` )
     ( emit `declare void @nurl_flush_stderr()` )
@@ -10100,21 +10101,10 @@
     // calling strlen / strcmp / strncmp / strstr / memcmp / memmem /
     // atoll / atof directly via the global preamble declarations
     // emitted above).
-    ( emit `declare i64    @nurl_csv_scan_cell(i8*, i64, i64)` )
-    ( emit `declare i64    @nurl_csv_filter_float_gt(i8*, i8*, i64*, i64*, i64*, i64, i64, double)` )
-    ( emit `declare i64    @nurl_csv_filter_str_contains(i8*, i8*, i64*, i64*, i64*, i64, i64, i8*, i64)` )
-    ( emit `declare i64    @nurl_csv_filter_float_gt_and_str_contains(i8*, i8*, i64*, i64*, i64*, i64, i64, double, i64, i8*, i64)` )
-    ( emit `declare i64    @nurl_csv_filter_typed_float_gt(double*, i64*, i64*, i64, double)` )
-    ( emit `declare i64    @nurl_has_byte(i8*, i64, i64)` )
+    ( emit `declare i64    @nurl_scan_byte3(i8*, i64, i64, i64, i64)` )
+    ( emit `declare i64    @nurl_byte_substr(i8*, i64, i8*, i64)` )
     ( emit `declare i64    @nurl_count_byte(i8*, i64, i64)` )
-    ( emit `declare double @nurl_csv_fast_float_range(i8*, i64)` )
-    ( emit `declare i64    @nurl_csv_parse_arena(i8*, i64, i64, i64*, i64, i64*, i64*, i64, i64*, i64)` )
-    ( emit `declare i64    @nurl_csv_n_rows_out()` )
-    ( emit `declare i64    @nurl_csv_n_header_out()` )
-    ( emit `declare i64    @nurl_csv_n_cells_out()` )
-    ( emit `declare i64    @nurl_csv_scan_row_pairs(i8*, i64, i64, i64, i64*, i64)` )
-    ( emit `declare i64    @nurl_csv_row_n_cells_out()` )
-    ( emit `declare i64    @nurl_csv_row_next_pos_out()` )
+    ( emit `declare double @nurl_fast_atof(i8*, i64)` )
     // nurl_str_slice — pure-NURL @-fn (PURIFY.md Phase 5 Batch C).
     // PURIFY.md Phase 9c (2026-05-24): nurl_map_* (string→i64
     // djb2-chained map) was removed from runtime.c §5; user code
@@ -10162,7 +10152,8 @@
     // _dir_create / _dir_remove are pure-NURL @-fns in
     // stdlib/std/fs.nu, calling libc access / remove / mkdir / rmdir /
     // fopen / fseek / ftell / fread / open / mmap / munmap directly.
-    ( emit `declare i64  @nurl_errno_kind()` )
+    // nurl_errno_kind → pure NURL `errno_kind` in `stdlib/core/posix.nu`
+    // (PURIFY 2026-05-24). Callers $-import posix.nu.
     // libm wrappers (nurl_sqrt / _fabs / _floor / _ceil / _round /
     // _pow / _log / _exp / _sin / _cos / _tan / _atan2) and
     // nurl_iabs / _ipow — moved to pure-NURL (libm direct FFI in
@@ -10175,23 +10166,16 @@
     ( emit `declare void @nurl_dir_list_close(i64)` )
     ( emit `declare i64  @nurl_http_perform_full(i8*, i8*, i8*, i8*)` )
     ( emit `declare i64  @nurl_http_perform_full_to(i8*, i8*, i8*, i8*, i64, i64)` )
-    ( emit `declare i64  @nurl_http_response_status(i64)` )
-    ( emit `declare i64  @nurl_http_response_err_kind(i64)` )
-    ( emit `declare i8*  @nurl_http_response_body(i64)` )
-    ( emit `declare i64  @nurl_http_response_body_len(i64)` )
-    ( emit `declare i64  @nurl_http_response_header_count(i64)` )
-    ( emit `declare i8*  @nurl_http_response_header_name(i64, i64)` )
-    ( emit `declare i8*  @nurl_http_response_header_value(i64, i64)` )
+    // The 7 accessors (status / err_kind / body / body_len / header_count
+    // / header_name / header_value) moved to pure-NURL @-fns in
+    // stdlib/ext/http.nu that read the NurlHttpResponse struct via
+    // nurl_peek (PURIFY §14 2026-05-24). Only the C-side freer stays —
+    // it walks the headers array deallocating every name/value pair.
     ( emit `declare void @nurl_http_response_free(i64)` )
     ( emit `declare i64  @nurl_http_stream_open_to(i8*, i8*, i8*, i8*, i64, i64)` )
     ( emit `declare i8*  @nurl_http_stream_next(i64)` )
-    ( emit `declare i64  @nurl_http_stream_status(i64)` )
-    ( emit `declare i64  @nurl_http_stream_err_kind(i64)` )
     ( emit `declare void @nurl_http_stream_close(i64)` )
     ( emit `declare i64  @nurl_http_stream_pump_headers(i64)` )
-    ( emit `declare i64  @nurl_http_stream_header_count(i64)` )
-    ( emit `declare i8*  @nurl_http_stream_header_name(i64, i64)` )
-    ( emit `declare i8*  @nurl_http_stream_header_value(i64, i64)` )
     ( emit `declare i64  @nurl_proc_run(i8*, i8*, i64, i8*)` )
     ( emit `declare i64  @nurl_proc_exit_code(i64)` )
     ( emit `declare i64  @nurl_proc_err_kind(i64)` )
@@ -10214,13 +10198,14 @@
     ( emit `declare void @nurl_proc_spawn_free(i64)` )
     // Crypto hash transforms (SHA-1/256/512, MD5, HMAC-SHA-256/512)
     // moved to pure NURL — `stdlib/std/hash_*.nu` — as PURIFY.md
-    // Phase 4 (2026-05-23). Only `nurl_rand_*` stays C-side
-    // (irreducible getrandom/RtlGenRandom syscall bridge).
-    ( emit `declare i64  @nurl_rand_u64()` )
-    ( emit `declare i8*  @nurl_rand_bytes_hex(i64)` )
-    ( emit `declare i8*  @nurl_read_file_bytes(i8*)` )
-    ( emit `declare i64  @nurl_write_file_bytes(i8*, i8*, i64, i8*)` )
-    ( emit `declare i64  @nurl_last_bytes_len()` )
+    // Phase 4 (2026-05-23). Random surface (`rand_u64` / `rand_hex_str`)
+    // moved to `stdlib/std/random.nu` (2026-05-24); the OS-entropy
+    // bridge `nurl_rand_fill` is declared via `& \`c\`` FFI directly
+    // in `random.nu` — no preamble declare here.
+    // nurl_read_file_bytes / nurl_write_file_bytes / nurl_last_bytes_len
+    // sideband → pure NURL in `stdlib/std/fs.nu` (PURIFY 2026-05-24);
+    // fread / fwrite write into Vec[u]'s data buffer, vec_set_len records
+    // the count. No more sideband symbol.
     ( emit `declare i64  @nurl_tcp_listen(i8*, i64, i64)` )
     ( emit `declare i64  @nurl_tcp_listen_tls(i8*, i64, i64, i8*, i8*)` )
     ( emit `declare i64  @nurl_tcp_listen_tls_alpn(i8*, i64, i64, i8*, i8*, i8*)` )
@@ -10298,7 +10283,6 @@
     ( nurl_sym_def syms `nurl_argv_get` `i8*` )
     ( nurl_sym_def syms `nurl_read_file` `i8*` )
     ( nurl_sym_def syms `nurl_read_line` `i8*` )
-    ( nurl_sym_def syms `nurl_read_n_bytes` `i8*` )
     // PURIFY.md Phase 5 Batches C+D' (2026-05-23): nurl_str_cat /
     // _cat3 / _cat4 / _slice / _str_int are pure-NURL @-fns now.
     // The sym_def keeps cross-module callers typed correctly even
@@ -10325,7 +10309,6 @@
         ( nurl_sym_def syms `nurl_str_slice__ret_owned` `str` )
         ( nurl_sym_def syms `nurl_read_file__ret_owned` `str` )
         ( nurl_sym_def syms `nurl_read_line__ret_owned` `str` )
-        ( nurl_sym_def syms `nurl_read_n_bytes__ret_owned` `str` )
     }
     {}
     ( nurl_sym_def syms `malloc` `i8*` )
@@ -10369,7 +10352,6 @@
     // non-fatal fs API used by stdlib/std/fs.nu — raw is an i8* the caller
     // must `nurl_free` after copying (see read_file). Intentionally NOT
     // marked __ret_owned to avoid double-free against the manual free.
-    ( nurl_sym_def syms `nurl_errno_kind` `i64` )
     // double-returning runtime functions
     // nurl_lex_fnum — pure-NURL @-fn (Phase 10).
     ( nurl_sym_def syms `nurl_parse_float_range` `double` )
@@ -10384,21 +10366,10 @@
     // _find / _ends / _memmem_range / _memcmp_lex — pure-NURL
     // @-fns now (PURIFY.md Phase 5, 2026-05-23). Their return
     // types are discovered from the @-fn declaration itself.
-    ( nurl_sym_def syms `nurl_csv_scan_cell` `i64` )
-    ( nurl_sym_def syms `nurl_csv_filter_float_gt` `i64` )
-    ( nurl_sym_def syms `nurl_csv_filter_str_contains` `i64` )
-    ( nurl_sym_def syms `nurl_csv_filter_float_gt_and_str_contains` `i64` )
-    ( nurl_sym_def syms `nurl_csv_filter_typed_float_gt` `i64` )
-    ( nurl_sym_def syms `nurl_has_byte` `i64` )
+    ( nurl_sym_def syms `nurl_scan_byte3` `i64` )
+    ( nurl_sym_def syms `nurl_byte_substr` `i64` )
     ( nurl_sym_def syms `nurl_count_byte` `i64` )
-    ( nurl_sym_def syms `nurl_csv_fast_float_range` `double` )
-    ( nurl_sym_def syms `nurl_csv_parse_arena` `i64` )
-    ( nurl_sym_def syms `nurl_csv_n_rows_out` `i64` )
-    ( nurl_sym_def syms `nurl_csv_n_header_out` `i64` )
-    ( nurl_sym_def syms `nurl_csv_n_cells_out` `i64` )
-    ( nurl_sym_def syms `nurl_csv_scan_row_pairs` `i64` )
-    ( nurl_sym_def syms `nurl_csv_row_n_cells_out` `i64` )
-    ( nurl_sym_def syms `nurl_csv_row_next_pos_out` `i64` )
+    ( nurl_sym_def syms `nurl_fast_atof` `double` )
     // CLI tooling — i8*-returning calls return heap-owned strings (caller frees)
     ( nurl_sym_def syms `nurl_dir_list_next` `i8*` )
     ( nurl_sym_def syms `nurl_dir_list_open` `i64` )
@@ -10409,13 +10380,9 @@
     // __ret_owned=str marker — the caller MUST NOT auto-free them.
     ( nurl_sym_def syms `nurl_http_perform_full` `i64` )
     ( nurl_sym_def syms `nurl_http_perform_full_to` `i64` )
-    ( nurl_sym_def syms `nurl_http_response_status` `i64` )
-    ( nurl_sym_def syms `nurl_http_response_err_kind` `i64` )
-    ( nurl_sym_def syms `nurl_http_response_body` `i8*` )
-    ( nurl_sym_def syms `nurl_http_response_body_len` `i64` )
-    ( nurl_sym_def syms `nurl_http_response_header_count` `i64` )
-    ( nurl_sym_def syms `nurl_http_response_header_name` `i8*` )
-    ( nurl_sym_def syms `nurl_http_response_header_value` `i8*` )
+    // accessors (status/err_kind/body/body_len/header_count/_name/_value)
+    // now pure NURL in stdlib/ext/http.nu — see runtime.c §14 + nurlc
+    // preamble note above (PURIFY §14 2026-05-24).
     ( nurl_sym_def syms `nurl_http_response_free` `void` )
     // HTTP streaming (runtime.c §14b). Pull-based — NURL drives one
     // chunk at a time. `nurl_http_stream_next` returns a heap-owned
@@ -10423,13 +10390,8 @@
     ( nurl_sym_def syms `nurl_http_stream_open_to` `i64` )
     ( nurl_sym_def syms `nurl_http_stream_next` `i8*` )
     ( nurl_sym_def syms `nurl_http_stream_next__ret_owned` `str` )
-    ( nurl_sym_def syms `nurl_http_stream_status` `i64` )
-    ( nurl_sym_def syms `nurl_http_stream_err_kind` `i64` )
     ( nurl_sym_def syms `nurl_http_stream_close` `void` )
     ( nurl_sym_def syms `nurl_http_stream_pump_headers` `i64` )
-    ( nurl_sym_def syms `nurl_http_stream_header_count` `i64` )
-    ( nurl_sym_def syms `nurl_http_stream_header_name` `i8*` )
-    ( nurl_sym_def syms `nurl_http_stream_header_value` `i8*` )
     // process execution (runtime §16). Output buffers are BORROWED views
     // into the runtime-owned NurlProcResult — do NOT mark __ret_owned.
     ( nurl_sym_def syms `nurl_proc_run` `i64` )
@@ -10461,15 +10423,8 @@
     // the wrappers in stdlib/std/hash.nu and stdlib/std/random.nu do
     // their own copy + free.
     // Crypto hash sym_defs — see PURIFY.md Phase 4 comment above.
-    ( nurl_sym_def syms `nurl_rand_u64` `i64` )
-    ( nurl_sym_def syms `nurl_rand_bytes_hex` `i8*` )
-    // Binary file I/O (runtime §4 extension). Read returns a heap buffer +
-    // sideband length via nurl_last_bytes_len; not __ret_owned-marked
-    // because stdlib/std/fs.nu reads the bytes into a Vec[u] and frees
-    // the buffer manually.
-    ( nurl_sym_def syms `nurl_read_file_bytes` `i8*` )
-    ( nurl_sym_def syms `nurl_write_file_bytes` `i64` )
-    ( nurl_sym_def syms `nurl_last_bytes_len` `i64` )
+    // Binary file I/O (runtime §4 extension) — moved to pure NURL in
+    // `stdlib/std/fs.nu` (PURIFY 2026-05-24). No more sideband symbol.
     // TCP sockets (runtime §18). Handles are i64-cast heap pointers; the
     // peer-addr accessor returns a BORROWED view into the handle struct,
     // so it is intentionally NOT __ret_owned-marked (caller copies via

@@ -3,42 +3,27 @@
  *
  * Copyright (c) 2026 The NURL Project Developers
  * SPDX-License-Identifier: MIT OR Apache-2.0
- * Dual-licensed under MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE) at your option.
- * See README.md for details.
  *
- * Compile:
- *   clang -c stdlib/runtime.c -o stdlib/runtime.o
- * Link:
- *   clang program.ll stdlib/runtime.o -o program
+ * Compile:  clang -c stdlib/runtime.c -o stdlib/runtime.o
+ * Link:     clang program.ll stdlib/runtime.o -o program
  *
- * All functions use the "nurl_" prefix to avoid collisions with libc.
+ * Most language primitives (string/file/process/threads/crypto/etc.)
+ * have moved to pure-NURL FFI in `stdlib/` modules over libc / libpthread
+ * / libcurl / libsqlite3 / libz; what remains here is irreducible
+ * syscall-shaped glue and state-cached external-library bridges.
+ * See PURIFY.md for the per-section inventory.
  *
- * Sections:
- *   1. I/O (print_int, print_str, print_bool, read_int)
- *   2. String operations
- *   3. Char classification
- *   4. File & process
- *   5. Lexer (opaque handle — used by nurlc.nu)
- *   6. Symbol table (opaque handle — used by nurlc.nu)
- *   7. Codegen helpers (register/label counters — used by nurlc.nu)
- *  11. Math (libm bridge)
- *  12. Time
- *  13. CLI tooling (env, cwd, stdin slurp, dir listing)
- *  14. HTTP client (libcurl + WinHTTP)
- *  15. Logging level
- *  16. Process execution (subprocess runner)
- *  17. Crypto (SHA-256, HMAC-SHA-256, secure random)
- *  18. TCP sockets (HTTP server foundation)
+ * All functions use the "nurl_" prefix to avoid colliding with libc.
  */
 
 #ifndef _CRT_SECURE_NO_WARNINGS
 #  define _CRT_SECURE_NO_WARNINGS
 #endif
 #ifdef _MSC_VER
-#  define strdup _strdup   /* POSIX strdup is _strdup on MSVC */
+#  define strdup _strdup
 #endif
 #ifndef _GNU_SOURCE
-#  define _GNU_SOURCE  /* for memmem() */
+#  define _GNU_SOURCE   /* memmem() */
 #endif
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,13 +35,8 @@
 #include <math.h>
 #include <time.h>
 #ifndef __wasi__
-/* WASI's libc currently rejects <setjmp.h> unless the program was
- * compiled with the Wasm Exception Handling proposal enabled
- * (`-mllvm -wasm-enable-sjlj`). NURL's panic model degrades on WASI
- * to "every panic aborts the program" — single-threaded, no recovery —
- * which is in line with the other WASI fallbacks (signals,
- * processes, threads). The §20 implementation is wrapped in the same
- * guard. */
+/* WASI's libc rejects <setjmp.h> unless built with Wasm EH; the panic
+ * model degrades to abort-on-panic there (same as signals/threads). */
 #include <setjmp.h>
 #endif
 #ifdef _WIN32
@@ -65,19 +45,11 @@
 #  include <ws2tcpip.h>
 #  include <windows.h>
 #endif
-/* SSE2 intrinsics for the CSV row scanner. Available on every x86_64
- * target (SSE2 is part of the baseline ABI). Wrapped in __SSE2__ so
- * non-x86 builds (WASM, aarch64) fall back to the scalar path. */
 #if defined(__SSE2__)
 #  include <emmintrin.h>
 #endif
-/* DWARF/glibc backtrace — used by nurl_panic to print a stack of
- * pointers when a panic propagates past the outermost recover.
- * Symbol resolution (function names) comes from backtrace_symbols_fd
- * when the binary still carries its symbol table; source-line
- * resolution requires `addr2line -e <binary> <addr>` and the binary
- * to have been built with --debug (DWARF .debug_info). On WASI and
- * MSVC the API is absent; we silently degrade to "no backtrace". */
+/* glibc backtrace — feeds nurl_panic when recover propagates to the top.
+ * Source lines need `addr2line` against a --debug binary. */
 #if defined(__GLIBC__) && !defined(__wasi__) && !defined(_MSC_VER)
 #  include <execinfo.h>
 #  define NURL_HAVE_EXECINFO 1
@@ -95,9 +67,8 @@ long long nurl_read_int(void) {
     return n;
 }
 
-/* Read a line from stdin. Strips the trailing '\n'. Always returns a
-   heap-owned string (callers treat the return as owned per Phase 2B).
-   On EOF with no bytes read, returns strdup("") and raises the EOF flag. */
+/* Read a line from stdin, strip trailing '\n'. Always returns a heap-owned
+ * string. On EOF with no bytes read, returns "" and raises the EOF flag. */
 static int g_stdin_eof_flag = 0;
 const char* nurl_read_line(void) {
     size_t cap = 128, len = 0;
@@ -130,58 +101,15 @@ long long nurl_stdin_eof(void) { return g_stdin_eof_flag ? 1 : 0; }
 void nurl_flush_stdout(void) { fflush(stdout); }
 void nurl_flush_stderr(void) { fflush(stderr); }
 
-/* Forward declaration: defined in §4 alongside nurl_read_file_bytes.
- * `nurl_read_n_bytes` uses the same side-channel to expose the actual
- * count read on a short EOF. */
-static long long g_last_bytes_len;
-
-/* Read EXACTLY `n` bytes from stdin (or fewer on EOF). Used by framed
- * protocols (LSP `Content-Length: N\r\n\r\n<body>`, DAP, raw JSON-RPC
- * over stdio) where the body is binary and may contain '\n' or NUL
- * bytes so `read_line` is wrong. Returns a heap-owned buffer with one
- * extra trailing NUL byte; the actual count read lives in the
- * `g_last_bytes_len` side-channel that `nurl_last_bytes_len()` exposes.
- * On EOF before any byte: returns a 1-byte NUL buffer with length 0;
- * the EOF flag is also raised so callers can distinguish "short read"
- * from "clean close". */
-const char *nurl_read_n_bytes(long long n) {
-    g_last_bytes_len = 0;
-    if (n <= 0) { return strdup(""); }
-    char *buf = (char*)malloc((size_t)n + 1);
-    if (!buf) return strdup("");
-    size_t got = fread(buf, 1, (size_t)n, stdin);
-    if (got == 0 && feof(stdin)) {
-        g_stdin_eof_flag = 1;
-    }
-    buf[got] = '\0';
-    g_last_bytes_len = (long long)got;
-    return buf;
-}
-
-/* ── Output buffer for deferred emission (closure bodies etc.) ──
+/* Output-buffer stack for deferred emission of closure bodies.
  *
- * Stack-based: every `start` pushes a fresh empty frame and switches
- * to buffering; every `stop` snapshots the current frame's contents
- * to a strdup'd return value and pops back to whatever was there
- * before (which may itself be a buffering frame).
- *
- * Why stack instead of single-slot: `gen_closure_expr` in
- * `compiler/nurlc.nu` brackets each closure body with start/stop. A
- * closure body that itself defines another closure (nested
- * `:`-binding of a `\ → R { ... }`) re-enters `gen_closure_expr`
- * recursively. Under the old single-slot model the inner call's
- * `reset` cleared the bytes the outer body had emitted so far, and
- * the inner's `stop` switched back to stdout — so the outer's
- * remaining body bytes leaked out at module scope. The deferred
- * function for the outer closure ended up being only the inner
- * closure's body, while the outer's tail spilled into global IR.
- * Symptom: `error: expected 'type' after name` on what is plainly
- * function-body IR sitting outside any `define`. Stack semantics
- * makes nested `start`/`stop` pairs do the obvious thing without a
- * single line of compiler-side change. (Fix landed 2026-05-23 in
- * the async-runtime cleanup; see docs/GOTCHAS.md §12.)
- */
-#define OUTBUF_SIZE       (8*1024*1024)  /* 8 MB per-frame buffer */
+ * `start` pushes a fresh buffering frame; `stop` snapshots it to a
+ * strdup'd return and pops back to whatever was active before. The
+ * stack (not a single slot) is required because gen_closure_expr in
+ * nurlc.nu recurses for nested closures — a single slot would let the
+ * inner stop switch back to stdout while the outer body was still mid-
+ * buffer, spilling IR at module scope. */
+#define OUTBUF_SIZE       (8*1024*1024)
 #define OUTBUF_STACK_MAX  32
 
 struct OutbufFrame {
@@ -200,8 +128,7 @@ static void outbuf_init(void) {
     if (!g_outbuf) { g_outbuf = (char*)malloc(OUTBUF_SIZE); g_outbuf[0] = '\0'; }
 }
 
-/* Push a fresh empty buffering frame. The previous frame's bytes +
- * mode are saved on the stack for `stop` to restore. */
+/* Push a fresh buffering frame; previous frame is saved for `stop`. */
 void nurl_print_buf_start(void) {
     outbuf_init();
     if (g_outbuf_sp >= OUTBUF_STACK_MAX) {
@@ -222,9 +149,7 @@ void nurl_print_buf_start(void) {
     g_outbuf_mode = 1;
 }
 
-/* Snapshot the current frame as the return value, then pop the
- * saved frame back into place. The caller owns the returned pointer
- * (auto-drop / explicit free). */
+/* Snapshot current frame as owned return; pop saved frame back. */
 const char* nurl_print_buf_stop(void) {
     outbuf_init();
     char *ret = strdup(g_outbuf ? g_outbuf : "");
@@ -248,20 +173,8 @@ const char* nurl_print_buf_stop(void) {
     return ret;
 }
 
-/* Legacy: `gen_closure_expr` historically called `reset+start` to
- * guarantee a clean buffer before capturing a closure body. Under
- * the new stack semantics, `start` already pushes a fresh empty
- * frame — but the bug class we're closing is exactly the case where
- * a nested `gen_closure_expr` call invokes this reset, which under
- * the obvious "clear current bytes" semantics would wipe the parent
- * frame's accumulated bytes (the parent IS the current top of stack
- * until the nested `start` fires).
- *
- * Resolution: clear ONLY when the stack is empty. With outstanding
- * frames the parent buffer is preserved, and the nested `start`
- * pushes a new fresh frame on top regardless. The end-to-end
- * semantic of `reset+start` is unchanged at single-level call sites
- * (where stack is empty) and now correct at nested call sites. */
+/* Clear ONLY when no buffering frame is active — preserves the parent
+ * frame's bytes when called from inside a nested gen_closure_expr. */
 void nurl_print_buf_reset(void) {
     outbuf_init();
     if (g_outbuf_sp == 0) {
@@ -270,7 +183,7 @@ void nurl_print_buf_reset(void) {
     }
 }
 
-/* print without newline */
+/* Print without a trailing newline. */
 void nurl_print(const char *s) {
     if (g_outbuf_mode) {
         size_t n = strlen(s);
@@ -283,9 +196,7 @@ void nurl_print(const char *s) {
         fflush(stdout);
     }
 }
-/* stderr helpers */
-void nurl_eprint(const char *s) { fputs(s, stderr); fflush(stderr); }
-
+void nurl_eprint(const char *s)   { fputs(s, stderr); fflush(stderr); }
 void nurl_eprintln(const char *s) { fputs(s, stderr); fputc('\n', stderr); fflush(stderr); }
 
 
@@ -301,54 +212,18 @@ const char* nurl_str_int(long long n) {
     return strdup(buf);
 }
 
-/* Float formatting via printf %g — kept in C until either a
- * Grisu/Ryu implementation or variadic FFI for snprintf lands. */
+/* Float formatting via printf %g. Kept in C until variadic FFI lands. */
 const char* nurl_str_float(double d) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%g", d);
     return strdup(buf);
 }
 
-/* CSV scanner: walk forward from `p` for at most `len` bytes, returning
- * the offset of the first occurrence of `delim`, '\n', or '\r' — or
- * `len` if none of those bytes appear in the range. Used by csv.nu's
- * arena loader to advance one cell-at-a-time instead of one byte at a
- * time; the C inner loop is ~5× faster than NURL bytecode for the same
- * task. */
-
-/* Predicate filter helpers — narrow a CSVTable's row index in place.
- *
- * Both helpers walk every committed row in `row_starts` / `row_lens`,
- * apply a per-row predicate against ONE column's cell bytes, and
- * compact the surviving rows back into the same arrays. They mutate
- * row_starts/row_lens but never touch flat_cells, content, or
- * escape_buf — the underlying arena stays intact, so successive
- * filter calls can chain (each operates on the prior survivor set).
- *
- * Each is ~10-20 ns per row in a tight scalar loop with the FFI
- * absorbed into one call: 1 M rows finishes in ~10-30 ms vs the
- * current closure-based filter's ~150 ms (per-row closure dispatch
- * + per-row nurl_parse_float_range + per-row cell-offset re-read).
- *
- * Negative cell offsets (off < 0) address `escape_buf`; both helpers
- * resolve them when `escape_buf` is supplied. csv.nu callers that
- * never quoted data can pass NULL for escape_buf.
- *
- * Return value: new committed row count (= n_rows survivors). */
-/* Fast CSV-numeric float parser. Exposed via FFI as
- * `nurl_csv_fast_float_range` for callers that want strtod's
- * semantics for CSV numeric cells without the per-call cost
- * (glibc strtod ~150 ns/call mostly spent on locale + NaN/Inf
- * special cases we don't need). Recognises the regular numeric
- * grammar `-?digits(.digits)?(eE[+-]?digits)?` — which covers
- * every cell produced by csv.nu writers, pandas, and Polars —
- * at ~40-60 ns/call on typical 5-10 char cells. Rejects on
- * empty / non-numeric (returns 0.0). Does NOT honour locale-
- * specific decimal separators; CSV cells are by spec C-locale.
- *
- * Use over `nurl_parse_float_range` when the input is known to
- * be plain decimal (no NaN/Inf, no locale comma). */
-double nurl_csv_fast_float_range(const char *p, long long len) {
+/* Fast decimal-float parser over a byte range (no NUL needed).
+ * Recognises `-?digits(.digits)?(eE[+-]?digits)?`. Returns 0.0 for
+ * empty/non-numeric. No locale, no NaN/Inf — use strtod when those
+ * matter. ~40-60 ns vs ~hundreds for libc on short inputs. */
+double nurl_fast_atof(const char *p, long long len) {
     if (!p || len <= 0) return 0.0;
     long long i = 0;
     int neg = 0;
@@ -398,255 +273,26 @@ double nurl_csv_fast_float_range(const char *p, long long len) {
     return neg ? -r : r;
 }
 
-static double __csv_fast_atof(const char *p, long long len) {
-    if (len <= 0) return 0.0;
-    long long i = 0;
-    int neg = 0;
-    if (p[0] == '-')      { neg = 1; i = 1; }
-    else if (p[0] == '+') {           i = 1; }
-    double r = 0.0;
-    while (i < len) {
-        unsigned char c = (unsigned char)p[i];
-        if (c < '0' || c > '9') break;
-        r = r * 10.0 + (c - '0');
-        i++;
-    }
-    if (i < len && p[i] == '.') {
-        i++;
-        double scale = 0.1;
-        while (i < len) {
-            unsigned char c = (unsigned char)p[i];
-            if (c < '0' || c > '9') break;
-            r += (c - '0') * scale;
-            scale *= 0.1;
-            i++;
-        }
-    }
-    if (i < len && (p[i] == 'e' || p[i] == 'E')) {
-        i++;
-        int eneg = 0;
-        if (i < len) {
-            if (p[i] == '-')      { eneg = 1; i++; }
-            else if (p[i] == '+') {            i++; }
-        }
-        int ev = 0;
-        while (i < len) {
-            unsigned char c = (unsigned char)p[i];
-            if (c < '0' || c > '9') break;
-            ev = ev * 10 + (c - '0');
-            i++;
-        }
-        double base = 10.0;
-        double mult = 1.0;
-        while (ev > 0) {
-            if (ev & 1) mult *= base;
-            base *= base;
-            ev >>= 1;
-        }
-        if (eneg) r /= mult; else r *= mult;
-    }
-    return neg ? -r : r;
-}
-
-/* Combined-predicate filter: `col_f > threshold` AND
- * `col_s contains needle`. Walks every row once, short-circuiting
- * the str scan when the float check fails. Saves ~30-40 ms on the
- * 1 M-row test_data.csv bench vs running the two filters
- * sequentially (the float-failing rows — ~85 % of input on the
- * canonical test — never pay the cell-offset reload + substring
- * scan that the chained version would). */
-long long nurl_csv_filter_float_gt_and_str_contains(
-    const char *content,
-    const unsigned char *escape_buf,
-    const long long *flat_cells,
-    long long *row_starts,
-    long long *row_lens,
-    long long n_rows,
-    long long col_f, double threshold,
-    long long col_s, const char *needle, long long nlen)
-{
-    if (col_f < 0 || col_s < 0 || !content || !flat_cells || !row_starts || !row_lens) return 0;
-    if (!needle || nlen <= 0) return 0;
+/* First-occurrence offset of needle in hay[0..hlen), or -1 if absent.
+ * Empty needle returns 0. Beats glibc memmem on short inputs by
+ * skipping its Two-Way preprocessing. */
+long long nurl_byte_substr(const char *hay, long long hlen,
+                           const char *needle, long long nlen) {
+    if (nlen <= 0) return 0;
+    if (!hay || hlen < nlen || !needle) return -1;
     unsigned char n0 = (unsigned char)needle[0];
-    long long w = 0;
-    for (long long r = 0; r < n_rows; r++) {
-        long long row_first = row_starts[r];
-        long long row_count = row_lens[r];
-        if (col_f >= row_count || col_s >= row_count) continue;
-        /* Float check first — drops 85 % of rows on the canonical
-         * bench, skipping the costlier substring scan. */
-        long long cf_idx = row_first + col_f;
-        long long fo = flat_cells[cf_idx * 2];
-        long long fl = flat_cells[cf_idx * 2 + 1];
-        if (fl <= 0) continue;
-        const char *fsrc;
-        if (fo >= 0) fsrc = content + fo;
-        else if (escape_buf) fsrc = (const char *)(escape_buf + (-(fo + 1)));
-        else continue;
-        if (!(__csv_fast_atof(fsrc, fl) > threshold)) continue;
-        /* Substring scan on the str column. */
-        long long cs_idx = row_first + col_s;
-        long long so = flat_cells[cs_idx * 2];
-        long long sl = flat_cells[cs_idx * 2 + 1];
-        if (sl < nlen) continue;
-        const char *ssrc;
-        if (so >= 0) ssrc = content + so;
-        else if (escape_buf) ssrc = (const char *)(escape_buf + (-(so + 1)));
-        else continue;
-        long long last = sl - nlen;
-        int hit = 0;
-        for (long long i = 0; i <= last; i++) {
-            if ((unsigned char)ssrc[i] != n0) continue;
-            if (nlen == 1 || memcmp(ssrc + i, needle, (size_t)nlen) == 0) {
-                hit = 1; break;
-            }
-        }
-        if (hit) {
-            row_starts[w] = row_first;
-            row_lens[w]   = row_count;
-            w++;
+    long long last = hlen - nlen;
+    for (long long i = 0; i <= last; i++) {
+        if ((unsigned char)hay[i] != n0) continue;
+        if (nlen == 1 || memcmp(hay + i, needle, (size_t)nlen) == 0) {
+            return i;
         }
     }
-    return w;
+    return -1;
 }
 
-/* P3b: filter using pre-parsed typed_floats cache. typed_floats[r]
- * holds the parsed double for body row r; the filter narrows the
- * parallel row_starts/row_lens in place by reading typed_floats[r]
- * instead of re-parsing the cell text via fast_atof. ~2-5 ns/row,
- * an order of magnitude faster than `nurl_csv_filter_float_gt` on
- * the same data. Returns the surviving row count.
- *
- * Caller MUST ensure typed_floats has exactly n_rows entries — the
- * cache is indexed by ORIGINAL body-row order, so prior filters
- * that narrowed row_starts break the alignment. csv.nu's
- * `csv_table_filter_typed_float_gt` enforces this with a length
- * check + cache invalidation. */
-long long nurl_csv_filter_typed_float_gt(
-    const double *typed_floats,
-    long long *row_starts,
-    long long *row_lens,
-    long long n_rows,
-    double threshold)
-{
-    if (!typed_floats || !row_starts || !row_lens) return 0;
-    long long w = 0;
-    for (long long r = 0; r < n_rows; r++) {
-        if (typed_floats[r] > threshold) {
-            row_starts[w] = row_starts[r];
-            row_lens[w]   = row_lens[r];
-            w++;
-        }
-    }
-    return w;
-}
-
-long long nurl_csv_filter_float_gt(
-    const char *content,
-    const unsigned char *escape_buf,
-    const long long *flat_cells,
-    long long *row_starts,
-    long long *row_lens,
-    long long n_rows,
-    long long col,
-    double threshold)
-{
-    if (col < 0 || !content || !flat_cells || !row_starts || !row_lens) return 0;
-    long long w = 0;
-    for (long long r = 0; r < n_rows; r++) {
-        long long row_first = row_starts[r];
-        long long row_count = row_lens[r];
-        if (col >= row_count) continue;
-        long long cell_idx = row_first + col;
-        long long off = flat_cells[cell_idx * 2];
-        long long len = flat_cells[cell_idx * 2 + 1];
-        if (len <= 0) continue;
-        const char *src;
-        if (off >= 0) {
-            src = content + off;
-        } else if (escape_buf) {
-            src = (const char *)(escape_buf + (-(off + 1)));
-        } else {
-            continue;
-        }
-        double v = __csv_fast_atof(src, len);
-        if (v > threshold) {
-            row_starts[w] = row_first;
-            row_lens[w]   = row_count;
-            w++;
-        }
-    }
-    return w;
-}
-
-long long nurl_csv_filter_str_contains(
-    const char *content,
-    const unsigned char *escape_buf,
-    const long long *flat_cells,
-    long long *row_starts,
-    long long *row_lens,
-    long long n_rows,
-    long long col,
-    const char *needle, long long nlen)
-{
-    if (col < 0 || !content || !flat_cells || !row_starts || !row_lens) return 0;
-    if (!needle || nlen <= 0) return n_rows;  /* empty needle matches all */
-    /* Inline substring scan instead of glibc memmem: for the typical
-     * CSV cell-search case (haystack 10-50 B, needle 3-12 B) memmem's
-     * per-call Two-Way preprocessing dominates (~300-400 ns/call).
-     * A first-byte filter + memcmp tail collapses that to ~20-50 ns
-     * — translating to 50-80 ms saved on a 1 M-row filter chain. */
-    unsigned char n0 = (unsigned char)needle[0];
-    long long w = 0;
-    for (long long r = 0; r < n_rows; r++) {
-        long long row_first = row_starts[r];
-        long long row_count = row_lens[r];
-        if (col >= row_count) continue;
-        long long cell_idx = row_first + col;
-        long long off = flat_cells[cell_idx * 2];
-        long long len = flat_cells[cell_idx * 2 + 1];
-        if (len < nlen) continue;
-        const char *src;
-        if (off >= 0) {
-            src = content + off;
-        } else if (escape_buf) {
-            src = (const char *)(escape_buf + (-(off + 1)));
-        } else {
-            continue;
-        }
-        long long last = len - nlen;
-        int hit = 0;
-        for (long long i = 0; i <= last; i++) {
-            if ((unsigned char)src[i] != n0) continue;
-            if (nlen == 1 || memcmp(src + i, needle, (size_t)nlen) == 0) {
-                hit = 1;
-                break;
-            }
-        }
-        if (hit) {
-            row_starts[w] = row_first;
-            row_lens[w]   = row_count;
-            w++;
-        }
-    }
-    return w;
-}
-
-/* True iff `target` appears anywhere in `p[0..len)`. Uses libc memchr,
- * which on glibc dispatches to SSE2/AVX2 scanners — ~16 bytes/cycle.
- * Used by csv.nu's loader to gate the unquoted-CSV fast path: one
- * 100 MB scan ~= 5 ms, vs the parser cost it routes away from
- * (~250 ms on the same file). */
-long long nurl_has_byte(const char *p, long long len, long long target) {
-    if (!p || len <= 0) return 0;
-    return memchr(p, (int)(unsigned char)target, (size_t)len) ? 1 : 0;
-}
-
-/* Count occurrences of `target` in p[0..len). Uses libc memchr in a
- * loop; on glibc this dispatches to SSE2/AVX2 vector scans. Used by
- * csv.nu's loader to pre-count newlines and pick exact buffer sizes
- * for the whole-file fast path — pre-counting avoids the page-fault
- * cost of over-allocating flat_cells. ~5 ms for 100 MB. */
+/* Count occurrences of `target` in p[0..len). memchr loop — glibc
+ * dispatches to SSE2/AVX2 internally. */
 long long nurl_count_byte(const char *p, long long len, long long target) {
     if (!p || len <= 0) return 0;
     unsigned char t = (unsigned char)target;
@@ -661,22 +307,26 @@ long long nurl_count_byte(const char *p, long long len, long long target) {
     return n;
 }
 
-long long nurl_csv_scan_cell(const char *p, long long len, long long delim) {
+/* Offset of first byte in p[0..len) matching any of b0/b1/b2, else `len`.
+ * SSE2-vectorised (16 bytes/iter). Used by CSV cell scanners
+ * (delim/'\n'/'\r'); duplicate a byte to scan for fewer targets. */
+long long nurl_scan_byte3(const char *p, long long len,
+                          long long b0, long long b1, long long b2) {
     if (!p || len <= 0) return 0;
-    unsigned char d = (unsigned char)delim;
+    unsigned char d0 = (unsigned char)b0;
+    unsigned char d1 = (unsigned char)b1;
+    unsigned char d2 = (unsigned char)b2;
     long long i = 0;
 #if defined(__SSE2__)
-    /* 16-byte SSE2 byte search for delim / '\n' / '\r' in parallel.
-     * Hot path for CSV cells > ~10 chars; tail loop covers the rest. */
-    __m128i v_d  = _mm_set1_epi8((char)d);
-    __m128i v_lf = _mm_set1_epi8('\n');
-    __m128i v_cr = _mm_set1_epi8('\r');
+    __m128i v_0 = _mm_set1_epi8((char)d0);
+    __m128i v_1 = _mm_set1_epi8((char)d1);
+    __m128i v_2 = _mm_set1_epi8((char)d2);
     while (i + 16 <= len) {
         __m128i chunk = _mm_loadu_si128((const __m128i*)(p + i));
         __m128i m = _mm_or_si128(
-            _mm_cmpeq_epi8(chunk, v_d),
-            _mm_or_si128(_mm_cmpeq_epi8(chunk, v_lf),
-                         _mm_cmpeq_epi8(chunk, v_cr)));
+            _mm_cmpeq_epi8(chunk, v_0),
+            _mm_or_si128(_mm_cmpeq_epi8(chunk, v_1),
+                         _mm_cmpeq_epi8(chunk, v_2)));
         int mask = _mm_movemask_epi8(m);
         if (mask) return i + __builtin_ctz(mask);
         i += 16;
@@ -684,251 +334,10 @@ long long nurl_csv_scan_cell(const char *p, long long len, long long delim) {
 #endif
     while (i < len) {
         unsigned char c = (unsigned char)p[i];
-        if (c == d || c == '\n' || c == '\r') return i;
+        if (c == d0 || c == d1 || c == d2) return i;
         i++;
     }
     return len;
-}
-
-/* Bulk CSV parser: walks the entire input in one C pass, populating
- * caller-supplied buffers. Used by csv.nu's arena loader to skip the
- * NURL bytecode parsing loop entirely — about 4× faster than the
- * byte-by-byte NURL implementation.
- *
- * Inputs:
- *   content, clen     : raw bytes (NUL-tolerant)
- *   delim             : field separator (e.g. ',' = 44)
- *
- * Outputs (caller-allocated; sized via clen/100 + 16 row heuristic):
- *   flat_cells        : interleaved (off, len) pairs for body cells
- *                       (header cells overwritten back to position 0
- *                       after parsing — caller reads header_cells
- *                       separately before any body cells are pushed).
- *   row_starts        : cell-index of each body row's first cell
- *   row_lens          : cell count per body row
- *   header_cells      : interleaved (off, len) pairs for the header row
- *
- * Capacity inputs (caller-promised maximum element count):
- *   flat_cap          : flat_cells slots (must be ≥ 2 * total body cells)
- *   row_cap           : row_starts/row_lens slots (must be ≥ n_rows)
- *   header_cap        : header_cells slots (must be ≥ 2 * n_columns)
- *
- * Sideband out-globals (read after the call):
- *   g_csv_n_rows      : number of body rows parsed
- *   g_csv_n_header    : number of header cells parsed
- *   g_csv_n_cells     : total body cells = sum(row_lens)
- *
- * Return value:
- *   0  = success
- *   -1 = a buffer would overflow (output globals undefined)
- */
-static long long g_csv_n_rows    = 0;
-static long long g_csv_n_header  = 0;
-static long long g_csv_n_cells   = 0;
-
-long long nurl_csv_n_rows_out(void)   { return g_csv_n_rows; }
-long long nurl_csv_n_header_out(void) { return g_csv_n_header; }
-long long nurl_csv_n_cells_out(void)  { return g_csv_n_cells; }
-
-long long nurl_csv_parse_arena(
-    const char *content, long long clen, long long delim,
-    long long *flat_cells, long long flat_cap,
-    long long *row_starts, long long *row_lens, long long row_cap,
-    long long *header_cells, long long header_cap)
-{
-    g_csv_n_rows = 0;
-    g_csv_n_header = 0;
-    g_csv_n_cells = 0;
-    if (!content || clen <= 0) return 0;
-
-    unsigned char d = (unsigned char)delim;
-    long long pos = 0;
-    int first_row = 1;
-    long long n_cells = 0;     /* slot count (off+len) in flat_cells */
-    long long n_rows  = 0;     /* body rows committed */
-    long long n_hdr   = 0;     /* slot count in header_cells */
-
-    while (pos < clen) {
-        long long row_first_cell = n_cells / 2;
-        long long row_n_cells = 0;
-        int row_done = 0;
-
-        while (!row_done) {
-            long long field_start = pos;
-#if defined(__SSE2__)
-            {
-                __m128i v_d  = _mm_set1_epi8((char)d);
-                __m128i v_lf = _mm_set1_epi8('\n');
-                __m128i v_cr = _mm_set1_epi8('\r');
-                while (pos + 16 <= clen) {
-                    __m128i chunk = _mm_loadu_si128((const __m128i*)(content + pos));
-                    __m128i m = _mm_or_si128(
-                        _mm_cmpeq_epi8(chunk, v_d),
-                        _mm_or_si128(_mm_cmpeq_epi8(chunk, v_lf),
-                                     _mm_cmpeq_epi8(chunk, v_cr)));
-                    int mask = _mm_movemask_epi8(m);
-                    if (mask) { pos += __builtin_ctz(mask); goto _arena_found; }
-                    pos += 16;
-                }
-            }
-#endif
-            /* scalar tail / fallback: scan to delim/LF/CR/EOF */
-            while (pos < clen) {
-                unsigned char c = (unsigned char)content[pos];
-                if (c == d || c == '\n' || c == '\r') break;
-                pos++;
-            }
-#if defined(__SSE2__)
-        _arena_found:;
-#endif
-            long long cell_len = pos - field_start;
-
-            if (first_row) {
-                if (n_hdr + 2 > header_cap) return -1;
-                header_cells[n_hdr++] = field_start;
-                header_cells[n_hdr++] = cell_len;
-            } else {
-                if (n_cells + 2 > flat_cap) return -1;
-                flat_cells[n_cells++] = field_start;
-                flat_cells[n_cells++] = cell_len;
-            }
-            row_n_cells++;
-
-            if (pos >= clen) {
-                row_done = 1;
-                break;
-            }
-            unsigned char c = (unsigned char)content[pos];
-            if (c == d) {
-                pos++;
-                continue;
-            }
-            /* row terminator */
-            pos++;
-            if (c == '\r' && pos < clen && content[pos] == '\n') pos++;
-            row_done = 1;
-        }
-
-        /* Phantom-row guard: a trailing '\n' after the last row produces
-         * a single empty cell. Drop it. */
-        int phantom = (row_n_cells == 1) &&
-                      (first_row ? (header_cells[n_hdr - 1] == 0)
-                                 : (flat_cells[n_cells - 1] == 0)) &&
-                      pos >= clen;
-        if (phantom) {
-            if (first_row) n_hdr -= 2;
-            else           n_cells -= 2;
-            continue;
-        }
-
-        if (first_row) {
-            first_row = 0;
-            continue;
-        }
-
-        if (n_rows >= row_cap) return -1;
-        row_starts[n_rows] = row_first_cell;
-        row_lens[n_rows]   = row_n_cells;
-        n_rows++;
-    }
-
-    g_csv_n_rows   = n_rows;
-    g_csv_n_header = n_hdr / 2;
-    g_csv_n_cells  = n_cells / 2;
-    return 0;
-}
-
-/* Scan one CSV row into a small caller-supplied (off, len) buffer.
- * The scan stops at the row terminator (LF/CRLF/EOF). Cells are
- * recorded as i64 pairs in `out_pairs[0..2*out_pair_cap)`.
- *
- * Why: the bulk parser's full pre-reservation pays a page-fault per
- * fresh OS page, dominating the savings from removing NURL bytecode.
- * Per-row scanning calls C once per row (cheap FFI), keeps the byte
- * loop in compiled C (fast), and lets NURL push results onto its
- * geometric-growth Vec[i] buffers (warm-page reuse). One row's
- * worth of cells fits in a stack buffer, so no allocation churn.
- *
- * Inputs:
- *   content, clen, pos, delim — same semantics as the bulk parser.
- *   out_pairs : caller buffer with `out_pair_cap` slots (stack OK).
- *
- * Output globals (read after the call):
- *   g_csv_row_n_cells  : number of cells in the row scanned (≥ 1)
- *   g_csv_row_next_pos : `pos` after consuming the terminator
- *
- * Returns:
- *   0  : success
- *   -1 : row had more than out_pair_cap cells (caller can fall back). */
-static long long g_csv_row_n_cells  = 0;
-static long long g_csv_row_next_pos = 0;
-long long nurl_csv_row_n_cells_out(void)  { return g_csv_row_n_cells;  }
-long long nurl_csv_row_next_pos_out(void) { return g_csv_row_next_pos; }
-
-long long nurl_csv_scan_row_pairs(
-    const char *content, long long clen, long long pos, long long delim,
-    long long *out_pairs, long long out_pair_cap)
-{
-    g_csv_row_n_cells  = 0;
-    g_csv_row_next_pos = pos;
-    if (!content || pos >= clen) return 0;
-
-    unsigned char d = (unsigned char)delim;
-    long long n = 0;        /* cell count */
-    long long p = pos;
-    long long field_start = p;
-    int row_done = 0;
-
-    while (!row_done) {
-#if defined(__SSE2__)
-        /* SSE2 byte-search: process 16 bytes/iter looking for any of
-         * delim / '\n' / '\r' simultaneously. ~5-10× faster than the
-         * scalar loop on cells longer than the SSE register width.
-         * For short cells (≤16 B) the tail loop dominates anyway, so
-         * net cost is the same or better. */
-        __m128i v_d  = _mm_set1_epi8((char)d);
-        __m128i v_lf = _mm_set1_epi8('\n');
-        __m128i v_cr = _mm_set1_epi8('\r');
-        while (p + 16 <= clen) {
-            __m128i chunk = _mm_loadu_si128((const __m128i*)(content + p));
-            __m128i m = _mm_or_si128(
-                _mm_cmpeq_epi8(chunk, v_d),
-                _mm_or_si128(_mm_cmpeq_epi8(chunk, v_lf),
-                             _mm_cmpeq_epi8(chunk, v_cr)));
-            int mask = _mm_movemask_epi8(m);
-            if (mask) { p += __builtin_ctz(mask); goto found; }
-            p += 16;
-        }
-#endif
-        while (p < clen) {
-            unsigned char c = (unsigned char)content[p];
-            if (c == d || c == '\n' || c == '\r') break;
-            p++;
-        }
-#if defined(__SSE2__)
-    found:;
-#endif
-        if (n >= out_pair_cap) return -1;
-        out_pairs[n * 2 + 0] = field_start;
-        out_pairs[n * 2 + 1] = p - field_start;
-        n++;
-
-        if (p >= clen) { row_done = 1; break; }
-        unsigned char c = (unsigned char)content[p];
-        if (c == d) {
-            p++;
-            field_start = p;
-            continue;
-        }
-        /* row terminator */
-        p++;
-        if (c == '\r' && p < clen && content[p] == '\n') p++;
-        row_done = 1;
-    }
-
-    g_csv_row_n_cells  = n;
-    g_csv_row_next_pos = p;
-    return 0;
 }
 
 /* ── §4  File & process ────────────────────────────────────────── */
@@ -939,24 +348,23 @@ static char **g_argv = NULL;
 /* Called from the generated C main() to stash argv. */
 void nurl_init(int argc, char **argv) { g_argc = argc; g_argv = argv; }
 
+/* argv accessors return heap copies — the process-owned argv pointers
+ * must never be freed by NURL code's auto-drop. */
 long long   nurl_argc(void)           { return (long long)g_argc; }
-/* argv accessors return heap copies so Phase 2B auto-drop is safe; the
-   process-owned argv pointers must never be freed by NURL code.          */
 const char* nurl_argv(long long i)    {
     if (i < 0 || i >= g_argc) return strdup("");
     return strdup(g_argv[(int)i]);
 }
-
-/* argv_count / argv_get — clean public names for NURL code */
-long long   nurl_argv_count(void)         { return (long long)g_argc; }
-const char* nurl_argv_get(long long i)    {
+long long   nurl_argv_count(void)     { return (long long)g_argc; }
+const char* nurl_argv_get(long long i){
     if (i < 0 || i >= g_argc) return strdup("");
     return strdup(g_argv[(int)i]);
 }
 
 void nurl_exit(long long code) { exit((int)code); }
 
-/* Read entire file into a malloc'd string; exit on error. */
+/* Read entire file into a malloc'd, NUL-terminated string; exit on error.
+ * The compiler's source-file load path goes through here. */
 const char* nurl_read_file(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) {
@@ -973,108 +381,17 @@ const char* nurl_read_file(const char *path) {
     return buf;
 }
 
-/* mmap-based file read. Returns a freshly malloc'd, NUL-terminated
- * buffer with the file contents. Compared to nurl_read_file_safe's
- * fread path:
- *   - fread copies kernel page-cache → libc stdio buffer → user heap
- *     (with potential small-chunk loops inside libc's buffered io)
- *   - mmap maps the file's page-cache pages directly into the
- *     process; the subsequent memcpy goes page-cache → user heap
- *     in a single tight loop without stdio's bookkeeping
- *
- * On warm-cache 100 MB reads on Linux this measurably wins ~20-40 ms
- * (depending on disk vs page cache state). Falls back to fread when
- * mmap isn't available (WASI / MSVC). */
 #if defined(__unix__) || defined(__APPLE__)
 #  include <sys/mman.h>
 #  include <fcntl.h>
 #  include <unistd.h>
 #endif
-/* Map errno to the IoErr enum tag in stdlib/core/errors.nu.
- *   0 = NotFound          (ENOENT)
- *   1 = PermissionDenied  (EACCES, EPERM)
- *   2 = AlreadyExists     (EEXIST)
- *   3 = Interrupted       (EINTR)
- *   4 = UnexpectedEof     (no errno mapping; reserved)
- *   5 = WriteFailed
- *   6 = ReadFailed
- *   7 = Other
- * Call after a libc operation has set errno. */
-long long nurl_errno_kind(void) {
-    switch (errno) {
-        case ENOENT: return 0;
-        case EACCES: case EPERM: return 1;
-        case EEXIST: return 2;
-        case EINTR: return 3;
-        default: return 7;
-    }
-}
 
-/* ── File I/O (buffered via FILE*) ───────────────────────────── */
-
-/* Binary read: returns a malloc'd byte buffer or NULL on error. The
- * length of the buffer is exposed as a sideband through
- * `nurl_last_bytes_len()` because NURL FFI returns a single value.
- * The buffer is NOT NUL-terminated — callers MUST honour the length.
- * On NULL return, `nurl_errno_kind()` classifies the failure. */
-static long long g_last_bytes_len = 0;
-long long nurl_last_bytes_len(void) { return g_last_bytes_len; }
-
-const char* nurl_read_file_bytes(const char *path) {
-    g_last_bytes_len = 0;
-    if (!path) { errno = EINVAL; return NULL; }
-    FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
-    if (fseek(f, 0, SEEK_END) != 0) { int e = errno; fclose(f); errno = e; return NULL; }
-    long sz = ftell(f);
-    if (sz < 0) { int e = errno; fclose(f); errno = e; return NULL; }
-    if (fseek(f, 0, SEEK_SET) != 0) { int e = errno; fclose(f); errno = e; return NULL; }
-    /* Allocate at least 1 byte so the returned pointer is never NULL for
-     * empty files (ambiguous with the failure signal). */
-    char *buf = (char*)malloc((size_t)(sz > 0 ? sz : 1));
-    if (!buf) { fclose(f); errno = ENOMEM; return NULL; }
-    size_t got = sz > 0 ? fread(buf, 1, (size_t)sz, f) : 0;
-    fclose(f);
-    if (sz > 0 && got != (size_t)sz) {
-        free(buf);
-        errno = errno ? errno : EIO;
-        return NULL;
-    }
-    g_last_bytes_len = (long long)got;
-    return buf;
-}
-
-/* Binary write: writes `len` bytes from `data` to `path`. Mode is "w"
- * (overwrite) or "a" (append). Returns 0 on success, -1 with errno set
- * on failure. */
-long long nurl_write_file_bytes(const char *path, const char *data, long long len, const char *mode) {
-    if (!path || !mode || (len > 0 && !data)) { errno = EINVAL; return -1; }
-    if (len < 0) { errno = EINVAL; return -1; }
-    FILE *f = fopen(path, mode);
-    if (!f) return -1;
-    if (len > 0) {
-        size_t got = fwrite(data, 1, (size_t)len, f);
-        if (got != (size_t)len) {
-            int saved = errno;
-            fclose(f);
-            errno = saved ? saved : EIO;
-            return -1;
-        }
-    }
-    if (fclose(f) != 0) return -1;
-    return 0;
-}
-
-/* Classify the entry at `path` WITHOUT following a final symbolic link
- * (lstat semantics): 0 = missing or stat error, 1 = regular file,
- * 2 = directory, 3 = symbolic link, 4 = other (fifo, socket, device).
- * lstat — not stat — is deliberate: stdlib/std/fs.nu's recursive
- * dir_remove_all classifies every entry through this, and a symlink
- * must report as a link (3) so the walk unlinks it rather than
- * descending through it and deleting whatever it points at. Windows
- * has no lstat; there stat is used and symlinks are not distinguished.
- * MSVC's <sys/stat.h> defines S_IFMT/S_IFDIR/S_IFREG but not the
- * S_ISDIR/S_ISREG macros, so define them when absent. */
+/* Classify entry at `path` WITHOUT following a final symlink (lstat).
+ * Return: 0 missing / 1 file / 2 dir / 3 symlink / 4 other. lstat (not
+ * stat) is required so dir_remove_all unlinks links instead of
+ * recursing through them. Windows has no lstat → falls through to stat
+ * and never reports 3. */
 #ifndef S_ISDIR
 #  define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
 #endif
@@ -1096,35 +413,6 @@ long long nurl_path_type(const char *path) {
     return 4;
 }
 
-/* Read up to `n` bytes from an open file handle `h` (a FILE* from
- * nurl_file_open) into a fresh malloc'd buffer. The number of bytes
- * actually read is exposed through nurl_last_bytes_len() — 0 means the
- * stream is at end of file. Returns the buffer (non-NULL even for a
- * 0-byte read, so EOF is unambiguous from the NULL error signal), or
- * NULL with errno set on a hard read error. The buffer is NOT
- * NUL-terminated — callers must honour the length. */
-const char* nurl_file_read_chunk(void *h, long long n) {
-    g_last_bytes_len = 0;
-    if (!h || n <= 0) { errno = EINVAL; return NULL; }
-    char *buf = (char*)malloc((size_t)n);
-    if (!buf) { errno = ENOMEM; return NULL; }
-    size_t got = fread(buf, 1, (size_t)n, (FILE*)h);
-    if (got == 0 && ferror((FILE*)h)) {
-        free(buf);
-        errno = errno ? errno : EIO;
-        return NULL;
-    }
-    g_last_bytes_len = (long long)got;
-    return buf;
-}
-
-/* §5 HashMap, §6a Lexer, §6 Symbol table, §7 Codegen helpers,
- * §8 "Last type" sideband and §4 file/dir/realpath thunks — all
- * moved to pure NURL across PURIFY phases 5 / 7 / 9 / 10. The
- * compiler-internal ones now live in `compiler/nurlc.nu`; the
- * file/dir/path ones in `stdlib/std/fs.nu` and `stdlib/std/path.nu`
- * over direct libc FFI. See PURIFY.md Part VII for the LOC table. */
-
 /* ── §9  Memory allocation ─────────────────────────────────────── */
 
 void* nurl_alloc(long long bytes)              { return malloc((size_t)bytes); }
@@ -1134,11 +422,9 @@ void  nurl_free(void *ptr)                     { free(ptr); }
 void  nurl_memcpy(void *dst, const void *src, long long bytes) {
     memcpy(dst, src, (size_t)bytes);
 }
-/* Overlap-safe sibling of nurl_memcpy. Use whenever `dst` and `src`
- * can alias — e.g. shifting the tail of a buffer back over its head
- * after consuming a prefix. nurl_memcpy is left strict (libc memcpy
- * semantics) so ASan keeps flagging unintentional overlaps in code
- * that doesn't reach for the explicit move variant. */
+/* Overlap-safe sibling of nurl_memcpy — use when dst/src can alias
+ * (e.g. shifting the tail of a buffer over its head after consuming a
+ * prefix). nurl_memcpy stays strict so ASan keeps flagging accidents. */
 void  nurl_memmove(void *dst, const void *src, long long bytes) {
     memmove(dst, src, (size_t)bytes);
 }
@@ -1146,53 +432,30 @@ void  nurl_memset(void *dst, long long byte, long long bytes) {
     memset(dst, (int)byte, (size_t)bytes);
 }
 
-/* Read i64 at index idx in a raw byte buffer.
- * Defensive NULL check: returns 0 when base is NULL instead of
- * dereferencing. This matters for Option/Result-shaped data where a
- * F-arm pattern binding (`F e → ...` over a `?T`) extracts the
- * payload slot, which is undef/zero on the F path; callers that pass
- * the resulting handle to a `vec_free` / `string_free` would
- * otherwise hit `nurl_peek(NULL, 0)` and trip UBSan
- * "applying zero offset to null pointer". This is technically a
- * caller bug (the F-arm of `?T` carries no data), but a hardened
- * runtime should not crash the program because of it. */
+/* Read/write i64 at slot idx in a raw byte buffer (8-byte stride).
+ * NULL base returns 0 / no-ops — F-arm payload-undef from `?T` patterns
+ * can hand callers a NULL that would otherwise UBSan-trip on
+ * "zero offset to null pointer". */
 long long nurl_peek(const void *base, long long idx) {
     if (!base) return 0;
     return ((const long long*)base)[(size_t)idx];
 }
-/* Write i64 val at index idx in a raw byte buffer.
- * Defensive NULL check: silently no-op when base is NULL. Same
- * rationale as nurl_peek above — F-arm payload-undef from `?T`. */
 void nurl_poke(void *base, long long idx, long long val) {
     if (!base) return;
     ((long long*)base)[(size_t)idx] = val;
 }
 
-/* nurl_malloc kept as alias for backward compatibility */
+/* Back-compat alias. */
 void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
 
-/* ── Platform-opaque sizeof bridge ──────────────────────────────────
+/* Platform-opaque sizeof bridge.
  *
- * Many POSIX/Win32 types are deliberately opaque to programs — the
- * caller is expected to allocate `sizeof(<type>)` bytes via the C
- * compiler. NURL has no idea what `sizeof(pthread_mutex_t)` is, and
- * the answer varies per platform (40 on glibc x86_64, 48 on glibc
- * aarch64, 64 on macOS, a different `CRITICAL_SECTION` shape on
- * Win32). `nurl_native_sizeof(name)` exposes the C-compiler-known
- * size to NURL by string lookup. Returns -1 for an unknown name —
- * callers (`cell_for_native` in stdlib/core/cell.nu) treat this as a
- * platform-portability bug, not a runtime-recoverable error.
- *
- * Names are kept ASCII-stable and case-sensitive. The list stays
- * small — every entry is a struct we cannot port to NURL because
- * its layout is platform-defined. Scalar type sizes (`int`,
- * `long`, `size_t`) cover the cases where a C API takes a
- * length-prefixed buffer and NURL needs to size the prefix. */
+ * POSIX/Win32 expose many types whose layout varies per platform
+ * (pthread_mutex_t is 40 / 48 / 64 bytes on glibc-x86_64 / glibc-aarch64
+ * / macOS, plus a different shape via winpthreads on Win32). NURL's
+ * cell_for_native allocates `nurl_native_sizeof(name)` bytes via this
+ * table. Returns -1 for unknown names — treated as a portability bug. */
 
-/* <signal.h> on wasi-libc errors out (`wasm lacks signal support`) and
- * <sys/socket.h> isn't shipped at all, so the WASI build skips both —
- * the FFI surfaces these expose aren't reachable from a wasm playground
- * binary anyway. */
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -1203,25 +466,19 @@ void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
 #  include <windows.h>
-/* mingw-w64's posix thread model (Debian's gcc-mingw-w64-x86-64 default)
- * ships <pthread.h> from libwinpthread. NURL's pure-NURL FFI for
- * mutex+cond (`stdlib/std/thread.nu`) calls pthread_mutex_init /
- * pthread_cond_init etc. directly, and Cell-sizes its storage from
- * sizeof(pthread_mutex_t) — so the Win32 runtime needs the same
- * header that POSIX does. */
-#  include <pthread.h>
+#  include <pthread.h>  /* winpthreads — same names as POSIX */
 #elif !defined(__wasi__)
 #  include <pthread.h>
 #  include <sys/socket.h>
 #  include <netinet/in.h>
-/* POSIX syscall headers — needed at the top because the
- * `nurl_native_constant` table and `nurl_wait_*` helpers in §2 below
- * read constants / macros from fcntl / poll / sys/wait. */
 #  include <fcntl.h>
 #  include <poll.h>
 #  include <sys/wait.h>
 #  include <unistd.h>
-#  include <sys/mman.h>     /* PROT_READ / MAP_PRIVATE / MADV_SEQUENTIAL */
+#  include <sys/mman.h>
+#endif
+#ifdef NURL_HAVE_ZLIB
+#  include <zlib.h>
 #endif
 
 long long nurl_native_sizeof(const char *name) {
@@ -1237,23 +494,18 @@ long long nurl_native_sizeof(const char *name) {
     if (strcmp(name, "pthread_condattr_t")  == 0) return (long long)sizeof(pthread_condattr_t);
     if (strcmp(name, "pthread_rwlock_t")    == 0) return (long long)sizeof(pthread_rwlock_t);
 #if defined(_WIN32) || defined(__wasi__)
-    if (strcmp(name, "sigset_t")            == 0) return 8;  /* not first-class on Win32 / WASI */
+    if (strcmp(name, "sigset_t")            == 0) return 8;
 #else
     if (strcmp(name, "sigset_t")            == 0) return (long long)sizeof(sigset_t);
 #endif
     if (strcmp(name, "struct stat")         == 0) return (long long)sizeof(struct stat);
     if (strcmp(name, "struct timespec")     == 0) return (long long)sizeof(struct timespec);
 #ifndef __wasi__
-    /* sockaddr_* live in <netinet/in.h> which wasi-libc doesn't ship.
-     * The wasm playground build doesn't need them — the only socket FFI
-     * is the native client connect, gated NURL-side on platform == native. */
     if (strcmp(name, "struct sockaddr_in")  == 0) return (long long)sizeof(struct sockaddr_in);
     if (strcmp(name, "struct sockaddr_in6") == 0) return (long long)sizeof(struct sockaddr_in6);
     if (strcmp(name, "struct sockaddr_storage") == 0) return (long long)sizeof(struct sockaddr_storage);
 #endif
 #if !defined(_WIN32) && !defined(__wasi__)
-    /* POSIX poll(2) — only relevant on Linux/macOS; Win32 has its own
-     * WSAPoll layout. NURL FFI uses this for proc-spawn polling. */
     if (strcmp(name, "struct pollfd")       == 0) return (long long)sizeof(struct pollfd);
     if (strcmp(name, "pid_t")               == 0) return (long long)sizeof(pid_t);
 #endif
@@ -1262,89 +514,61 @@ long long nurl_native_sizeof(const char *name) {
     if (strcmp(name, "size_t")              == 0) return (long long)sizeof(size_t);
     if (strcmp(name, "off_t")               == 0) return (long long)sizeof(off_t);
     if (strcmp(name, "time_t")              == 0) return (long long)sizeof(time_t);
+#ifdef NURL_HAVE_ZLIB
+    /* z_stream's uLong is 4 bytes on Win32 LLP64 vs 8 on POSIX LP64. */
+    if (strcmp(name, "z_stream")            == 0) return (long long)sizeof(z_stream);
+#endif
     return -1;
 }
 
-/* ── Native constant lookup ────────────────────────────────────────
- *
- * Same shape as `nurl_native_sizeof` but for integer constants whose
- * values vary by platform — POSIX `O_NONBLOCK` is 2048 on glibc and
- * 4 on macOS; `POLLIN` is 1 universally but `POLLHUP` differs; signal
- * numbers shift between Linux and macOS. NURL has no `#ifdef`, so
- * platform-conditional constants need a runtime accessor.
- *
- * Used by `stdlib/core/posix.nu` so the pure-NURL fork/exec/poll/
- * waitpid path can call `fcntl(fd, F_SETFL, O_NONBLOCK)` etc.
- * without baking integer values into NURL code.
- *
- * Returns -1 for unknown names — caller treats that as a hard
- * portability bug, not a recoverable error. Win32 / WASI return -1
- * for every POSIX-only name (the NURL caller is expected to gate the
- * whole POSIX code path on a target check). */
+/* Integer-constant counterpart to nurl_native_sizeof — used by
+ * stdlib/core/posix.nu when a constant's value varies per platform
+ * (O_NONBLOCK is 2048 on glibc, 4 on macOS; signal numbers differ
+ * between Linux and macOS; etc.). Win32/WASI return -1 for POSIX-only
+ * names — NURL callers gate the whole code path on a target check. */
 long long nurl_native_constant(const char *name) {
     if (!name) return -1;
 #if !defined(_WIN32) && !defined(__wasi__)
-    /* fcntl(2) command words */
     if (strcmp(name, "F_GETFL")     == 0) return F_GETFL;
     if (strcmp(name, "F_SETFL")     == 0) return F_SETFL;
     if (strcmp(name, "F_GETFD")     == 0) return F_GETFD;
     if (strcmp(name, "F_SETFD")     == 0) return F_SETFD;
     if (strcmp(name, "FD_CLOEXEC")  == 0) return FD_CLOEXEC;
     if (strcmp(name, "O_NONBLOCK")  == 0) return O_NONBLOCK;
-    /* poll(2) events */
     if (strcmp(name, "POLLIN")      == 0) return POLLIN;
     if (strcmp(name, "POLLOUT")     == 0) return POLLOUT;
     if (strcmp(name, "POLLHUP")     == 0) return POLLHUP;
     if (strcmp(name, "POLLERR")     == 0) return POLLERR;
     if (strcmp(name, "POLLNVAL")    == 0) return POLLNVAL;
-    /* signals — the proc-spawn path needs only a small set, but we
-     * list common ones so user code can install signal handlers. */
     if (strcmp(name, "SIGPIPE")     == 0) return SIGPIPE;
     if (strcmp(name, "SIGTERM")     == 0) return SIGTERM;
     if (strcmp(name, "SIGKILL")     == 0) return SIGKILL;
     if (strcmp(name, "SIGINT")      == 0) return SIGINT;
     if (strcmp(name, "SIGHUP")      == 0) return SIGHUP;
     if (strcmp(name, "SIGCHLD")     == 0) return SIGCHLD;
-    /* signal(2) sentinel: SIG_IGN is a function pointer-cast macro.
-     * Cast to long long via uintptr_t — the only legal value the
-     * receiver passes back to signal(2) is what we returned here. */
+    /* SIG_IGN / SIG_DFL are pointer-cast macros; cast through uintptr_t
+     * so the lookup returns a stable i64 the caller hands back unchanged. */
     if (strcmp(name, "SIG_IGN")     == 0) return (long long)(uintptr_t)SIG_IGN;
     if (strcmp(name, "SIG_DFL")     == 0) return (long long)(uintptr_t)SIG_DFL;
-    /* waitpid(2) options */
     if (strcmp(name, "WNOHANG")     == 0) return WNOHANG;
-    /* errno values surfaced for diagnostic / branching in NURL */
+#endif
     if (strcmp(name, "ENOENT")      == 0) return ENOENT;
+    if (strcmp(name, "EACCES")      == 0) return EACCES;
+    if (strcmp(name, "EPERM")       == 0) return EPERM;
+    if (strcmp(name, "EEXIST")      == 0) return EEXIST;
+    if (strcmp(name, "EINTR")       == 0) return EINTR;
     if (strcmp(name, "EAGAIN")      == 0) return EAGAIN;
     if (strcmp(name, "EWOULDBLOCK") == 0) return EWOULDBLOCK;
-    if (strcmp(name, "EINTR")       == 0) return EINTR;
     if (strcmp(name, "EPIPE")       == 0) return EPIPE;
-#endif
-    /* ERANGE — surfaced cross-platform (defined in `<errno.h>` everywhere)
-     * so `stdlib/ext/env.nu`'s pure-NURL `getcwd` retry loop can branch on
-     * "buffer too small" without baking a platform-specific integer. */
     if (strcmp(name, "ERANGE")      == 0) return ERANGE;
-    /* POSIX `<time.h>` clock identifiers — exposed unconditionally
-     * because `<time.h>` is included at file scope above, and every
-     * supported target's `clock_gettime` (Linux/macOS libc, MinGW
-     * winpthreads, wasi-libc) recognises these IDs. The values differ
-     * across platforms (CLOCK_MONOTONIC is 1 on Linux/WASI/MinGW but 6
-     * on macOS) so NURL callers must read them at runtime rather than
-     * hard-code. Used by `stdlib/std/time.nu`. */
-    /* wasi-libc defines these as pointer-typed macros (`(&_CLOCK_REALTIME)`),
-     * not integers — cast through uintptr_t so the lookup returns a stable
-     * long long regardless of platform; callers don't decode the value,
-     * they just hand it back to `clock_gettime` which on wasi reinterprets
-     * it as its native `clockid_t`. */
+    /* CLOCK_* values differ per platform (CLOCK_MONOTONIC is 6 on
+     * macOS, 1 elsewhere); wasi-libc spells them as pointer macros. */
 #ifdef CLOCK_REALTIME
     if (strcmp(name, "CLOCK_REALTIME")  == 0) return (long long)(uintptr_t)CLOCK_REALTIME;
 #endif
 #ifdef CLOCK_MONOTONIC
     if (strcmp(name, "CLOCK_MONOTONIC") == 0) return (long long)(uintptr_t)CLOCK_MONOTONIC;
 #endif
-    /* File-mode + mmap constants for `stdlib/std/fs.nu`'s pure-NURL
-     * `__read_file_mmap_pure`. POSIX-only — Win32 NURL callers gate
-     * on `posix_const "MAP_PRIVATE" != -1` and fall through to the
-     * fopen+fread fallback in `__read_file_fread_pure`. */
 #if !defined(_WIN32) && !defined(__wasi__)
     if (strcmp(name, "O_RDONLY")        == 0) return O_RDONLY;
     if (strcmp(name, "PROT_READ")       == 0) return PROT_READ;
@@ -1357,25 +581,15 @@ long long nurl_native_constant(const char *name) {
     return -1;
 }
 
-/* errno is a thread-local on every platform; libc exposes it via
- * `__errno_location()` (glibc), `__error()` (BSD/macOS), `_errno()`
- * (mingw). NURL FFI can't follow that platform-specific accessor
- * cleanly, so the runtime hands back the current value. */
-/* Return type widened to `long long` (i64) on 2026-05-24 to match
- * the NURL FFI declaration in `stdlib/core/posix.nu` (`→ i`). On
- * x86_64 SysV the upper 32 bits of an `int` return were undefined
- * and happened to be zero in practice; on wasm32 wasm-ld validates
- * the signature strictly and refused to link until the C side
- * widened. Same for `nurl_wait_*` and `nurl_errno_set`. */
+/* errno bridge — the per-platform __errno_location / __error / _errno
+ * accessor isn't NURL-FFI-friendly, so hand the current value back as
+ * i64. Return type widened from int because wasm-ld's strict signature
+ * check rejected the narrow shape. */
 long long nurl_errno_get(void) { return errno; }
 void nurl_errno_set(long long e) { errno = (int)e; }
 
-/* Macro decoders for waitpid status. WIFEXITED / WEXITSTATUS are
- * preprocessor bit-twiddles; NURL has no preprocessor, so the
- * runtime exposes them as trivial functions. Same pattern as
- * nurl_native_sizeof — opaque platform shape behind a stable API. */
-/* The W*-macros on macOS expand to `*(int*)&(x)` so they need an
- * *lvalue* of type int, not an rvalue cast. Bind a local first. */
+/* waitpid status decoders — the W* macros are preprocessor bit-twiddles
+ * and macOS expands them against an int lvalue, so bind locally first. */
 long long nurl_wait_is_exited (long long status) {
 #if defined(_WIN32) || defined(__wasi__)
     (void)status; return 0;
@@ -1409,24 +623,9 @@ long long nurl_wait_term_sig(long long status) {
 #endif
 }
 
-/* ── Atomic refcount primitives ─────────────────────────────────────
- *
- * `Arc[T]` (stdlib/std/arc.nu) needs a thread-safe ref-count
- * increment / decrement-and-test on a heap-resident `i64`. NURL has
- * no atomic primitive in the language; expose the two operations as
- * C-side thunks over GCC/Clang's __atomic builtins (or MSVC's
- * `_Interlocked*`).
- *
- * `nurl_atomic_i64_inc(p)` adds 1 atomically, returns the OLD value.
- * `nurl_atomic_i64_dec_fetch(p)` subtracts 1 atomically, returns the
- *   NEW value — Arc's free path needs the post-decrement count to
- *   decide whether to actually deallocate (count became 0).
- * `nurl_atomic_i64_load(p)` plain acquire-load (debug / introspection).
- *
- * Memory ordering: SEQ_CST on every op. Refcount churn is not the
- * hot path; the safety of sequential consistency outweighs the
- * acquire/release dance, and matches what `std::shared_ptr` /
- * `Arc<T>` typically use on the FREE path. */
+/* Atomic refcount primitives over a heap-resident i64 for Arc[T].
+ *   _inc returns the OLD value; _dec_fetch returns the NEW value
+ *   (Arc's free path needs post-decrement == 0). All SEQ_CST. */
 long long nurl_atomic_i64_inc(void *p) {
     if (!p) return 0;
 #ifdef _WIN32
@@ -1439,8 +638,6 @@ long long nurl_atomic_i64_inc(void *p) {
 long long nurl_atomic_i64_dec_fetch(void *p) {
     if (!p) return 0;
 #ifdef _WIN32
-    /* InterlockedExchangeAdd64 returns the OLD value. To get the new
-     * value (old - 1), subtract one. */
     return (long long)InterlockedExchangeAdd64((volatile LONG64*)p, -1) - 1;
 #else
     return __atomic_sub_fetch((long long*)p, 1, __ATOMIC_SEQ_CST);
@@ -1459,26 +656,11 @@ long long nurl_atomic_i64_load(void *p) {
 }
 
 
-/* ── §11  Math (libm bridge) ────────────────────────────────────── */
-/*
- * libm pass-throughs (sqrt / fabs / floor / etc.) and the integer
- * helpers (`nurl_iabs` / `_ipow`) are pure-NURL FFI now —
- * `stdlib/std/float.nu` and `stdlib/std/int.nu`. What stays here
- * are the ones that can't be a thin FFI bridge:
- *   - `nurl_f64_bits` / `_from_bits` / `nurl_f32_from_bits` —
- *     memcpy type-punning (NURL has no bit-reinterpret primitive)
- *   - `nurl_is_nan` / `_is_inf` — isnan/isinf are libm macros,
- *     not stable C symbols; keep the wrapper for portability
- */
+/* ── §11  Math — IEEE-754 bit access + macro wrappers ──────────── */
 
-/* IEEE-754 bit access for the MessagePack codec (stdlib/ext/msgpack.nu),
- * which reads and writes float32 / float64 in their exact wire bit
- * patterns. A NURL `#` cast is a numeric value conversion (fptosi /
- * sitofp); these reinterpret the bits instead, via memcpy — the only
- * strict-aliasing-safe spelling. nurl_f64_bits yields the 64-bit
- * pattern of a double; nurl_f64_from_bits / nurl_f32_from_bits rebuild
- * a double from a 64- / 32-bit pattern (a decoded float32 widens to a
- * double, NURL's only float type). */
+/* IEEE-754 bit-pun helpers for stdlib/ext/msgpack.nu's float wire codec.
+ * NURL's `#` cast does numeric conversion (fptosi/sitofp); these
+ * reinterpret bits via memcpy — strict-aliasing-safe. */
 long long nurl_f64_bits(double x) {
     long long bits;
     memcpy(&bits, &x, 8);
@@ -1498,20 +680,12 @@ double nurl_f32_from_bits(long long bits) {
     return (double)f;
 }
 
-/* NaN / Inf classifiers — NURL's `!=` lowers to `fcmp one` which is
- * ordered, so the usual `x != x` trick reports false for NaN. */
+/* isnan/isinf are libm macros, not symbols — wrap for FFI. NURL's
+ * `!=` lowers to `fcmp one` (ordered) so `x != x` is false for NaN. */
 long long nurl_is_nan(double x) { return isnan(x) ? 1 : 0; }
 long long nurl_is_inf(double x) { return isinf(x) ? 1 : 0; }
 
-/* ── §13  CLI tooling: directory listing ────────────────────────────
- *
- * `nurl_env_*`, `_cwd`, `_chdir`, `_read_all_stdin` and Time §12
- * (`clock_gettime` + `nanosleep`) are pure-NURL FFI in
- * `stdlib/ext/env.nu`, `stdlib/core/io.nu` and `stdlib/std/time.nu`.
- * What stays in C is the directory iterator state cache below —
- * opaque DIR* on POSIX, WIN32_FIND_DATAA on Win32 — and a 1-LOC
- * dirent-name accessor (bridges the platform-varying `d_name`
- * field offset). */
+/* ── §13  Directory iterator (opaque DIR* / WIN32_FIND_DATAA) ──── */
 
 #ifdef _WIN32
 #  include <io.h>          /* _getcwd */
@@ -1585,20 +759,14 @@ void nurl_dir_list_close(long long handle) {
     free(it);
 }
 
-/* POSIX `symlink(target, linkpath)` shim. stdlib/std/fs.nu declares
- * `symlink` as an `& \`c\` @ symlink ...` FFI import from libc; MSVCRT
- * has no such symbol, so without this stub every program that imports
- * std/fs.nu (nurlfmt, nurlpkg, nurl-lsp, …) fails to link on Windows.
- *
- * We try CreateSymbolicLinkA first — it works when the account holds
- * SeCreateSymbolicLinkPrivilege or Developer Mode is on, mapping the
- * unprivileged failure path back onto the POSIX-style -1/errno return
- * that fs_symlink expects. The SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
- * bit (0x2) makes it work in Developer Mode without elevation. */
+/* POSIX symlink() shim — MSVCRT has no such symbol, so every program
+ * importing stdlib/std/fs.nu would fail to link on Windows without
+ * this. CreateSymbolicLinkA needs Developer Mode (the 0x2 flag) or
+ * SeCreateSymbolicLinkPrivilege; unprivileged failure maps back to a
+ * POSIX-shaped -1/errno return. */
 int symlink(const char *target, const char *linkpath) {
     if (!target || !linkpath) { errno = EINVAL; return -1; }
-    DWORD flags = 0x2 /* allow unprivileged create (Developer Mode) */;
-    /* Mark directory symlinks correctly when the target exists and is a dir. */
+    DWORD flags = 0x2;  /* SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE */
     DWORD attrs = GetFileAttributesA(target);
     if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
         flags |= 0x1;
@@ -1615,19 +783,10 @@ int symlink(const char *target, const char *linkpath) {
 
 #else  /* POSIX */
 
-/* POSIX dir-listing is pure NURL on the hot path (`stdlib/std/fs.nu`
- * drives opendir / readdir / closedir via FFI). The `dirent` name
- * accessor below bridges the platform-varying `d_name` field offset.
- *
- * The opaque-handle trio (`nurl_dir_list_open/next/close`) is the
- * Win32 surface; on POSIX it is normally unreachable because
- * `dir_list` short-circuits to `__dir_list_pure_posix`. Under `-flto`
- * the dead branch is fully eliminated. Sanitizer builds disable LTO,
- * so the symbols still have to *link* — and that's why we provide a
- * working POSIX implementation here rather than abort-stubs. The two
- * code paths stay observationally equivalent (same skip-dots filter,
- * same strdup'd ownership transfer) so the fallback is correct, not
- * just linkable. */
+/* POSIX dir-list trio: unreachable on the hot path (stdlib/std/fs.nu
+ * drives opendir/readdir/closedir via FFI) but kept observationally
+ * equivalent because sanitizer builds disable LTO and still link
+ * against these symbols. */
 typedef struct {
     DIR *d;
 } NurlDirIterPosix;
@@ -1668,68 +827,24 @@ const char* nurl_dirent_name(const void *de) {
 
 #endif
 
-/* ── §14  HTTP client (MVP — GET + POST) ──────────────────────── */
+/* ── §14  HTTP client (libcurl / WinHTTP / no-op stub) ────────── */
 /*
- * Backend selection (checked top-down):
- *   1. NURL_HAVE_LIBCURL — libcurl bridge. Linux native + Docker
- *      mingw cross-build. Runtime must link with -lcurl (plus the
- *      Windows system libs schannel pulls in on the cross-build).
- *   2. _WIN32 without libcurl — WinHTTP bridge. Covers native Windows
- *      builds via clang/MSVC where no libcurl is installed.  The
- *      runtime must be linked with `-lwinhttp` (or `winhttp.lib`) so
- *      every program produced by nurl.bat picks up the Windows HTTP
- *      stack for free — no external dependency required.
- *   3. Anything else (wasm32-wasi, exotic targets) — stubs that make
- *      stdlib/ext/http.nu compile + link cleanly while every call
- *      reports HttpErr::Other.
+ * Backend selection (top-down): NURL_HAVE_LIBCURL → libcurl bridge
+ * (Linux + Docker mingw cross-build, links -lcurl); else _WIN32 →
+ * WinHTTP bridge (links -lwinhttp); else stub that reports
+ * HttpErr::Other on every call.
  *
- * Public ABI exported to NURL (i.e. callable from compiled .nu code):
+ * Public ABI: nurl_http_perform_full_to(url, method, body, headers_blob,
+ * timeout_ms, connect_timeout_ms) → heap NurlHttpResponse* cast to i64
+ * (0 on alloc fail). 4-arg nurl_http_perform_full is an alias using the
+ * 30 s / 10 s default budget. nurl_http_response_free MUST be called
+ * exactly once per result; the borrowed body/header views inside live
+ * until then. Accessors (status / body / headers / err_kind) are pure
+ * NURL in stdlib/ext/http.nu over the i64-slot layout below.
  *
- *   long long  nurl_http_perform_full_to(const char *url,
- *                                        const char *method,
- *                                        const char *body,
- *                                        const char *headers_blob,
- *                                        long long timeout_ms,
- *                                        long long connect_timeout_ms);
- *   long long  nurl_http_perform_full   (const char *url,
- *                                        const char *method,
- *                                        const char *body,
- *                                        const char *headers_blob);
- *       Run one HTTP request.  The `_to` form takes per-call
- *       timeout overrides in milliseconds — pass 0 (or any value
- *       <= 0) to fall back to the runtime defaults of 30 s total
- *       budget / 10 s connect budget.  The 4-arg `nurl_http_perform_full`
- *       wrapper is a thin alias that always uses the defaults; it
- *       stays exported so older NURL programs and any external
- *       callers keep working unchanged.  Returns a heap pointer
- *       cast to i64 (0 on transport error).  Method is "GET",
- *       "POST", "PUT", "DELETE", "PATCH" — anything else falls back
- *       to GET.  body may be NULL / "" when no payload is needed
- *       (GET, body-less DELETE, …).  `headers_blob` carries optional
- *       outbound request headers as a UTF-8 buffer of CRLF-delimited
- *       lines:
- *
- *         "Authorization: Bearer xyz\r\nX-Trace-Id: abc\r\n"
- *
- *       Pass NULL or "" to send no extra headers.  Lines without
- *       a ':' are silently dropped.  The libcurl backend feeds
- *       each line into curl_slist_append; the WinHTTP backend
- *       converts the buffer to UTF-16 and hands it to
- *       WinHttpAddRequestHeaders.
- *
- *   long long  nurl_http_response_status(long long resp);
- *   const char* nurl_http_response_body  (long long resp);
- *   long long  nurl_http_response_header_count(long long resp);
- *   const char* nurl_http_response_header_name (long long resp, long long i);
- *   const char* nurl_http_response_header_value(long long resp, long long i);
- *   long long  nurl_http_response_err_kind(long long resp);
- *       0 = ok, otherwise one of the HttpErr-tag values from
- *       stdlib/ext/http.nu (Connect|Timeout|Tls|Dns|InvalidUrl|Other).
- *   void       nurl_http_response_free(long long resp);
- *
- * Returned strings are owned by the response struct and freed by
- * nurl_http_response_free; do NOT free them individually.  The caller
- * is responsible for calling nurl_http_response_free exactly once.
+ * Methods: GET / POST / PUT / DELETE / PATCH (other → GET). body may be
+ * NULL/"" for body-less methods. headers_blob is a UTF-8 buffer of
+ * CRLF-delimited "Name: Value" lines; lines without ':' are dropped.
  */
 
 typedef struct NurlHttpHeader {
@@ -1738,13 +853,24 @@ typedef struct NurlHttpHeader {
 } NurlHttpHeader;
 
 typedef struct NurlHttpResponse {
-    long long          status;        /* HTTP status code; 0 on transport err */
-    long long          err_kind;      /* HttpErr tag — see http.nu */
+    long long          status;
+    long long          err_kind;
     long long          header_count;
     NurlHttpHeader    *headers;
-    char              *body;          /* NUL-terminated; "" when empty/missing */
+    char              *body;          /* NUL-terminated; "" when empty */
     long long          body_len;
 } NurlHttpResponse;
+
+/* Pure-NURL accessors in stdlib/ext/http.nu nurl_peek this struct as
+ * 6 i64 slots; NurlHttpHeader as 2 i64 slots (16-byte stride). Static-
+ * assert so a future field reorder breaks the build instead of silently
+ * miscompiling NURL reads. wasm32 is exempt — its stub backend always
+ * returns HttpOther and NURL dispatch short-circuits before any
+ * pointer-bearing slot is read. */
+#if !defined(__wasi__)
+_Static_assert(sizeof(NurlHttpResponse) == 48, "NurlHttpResponse layout");
+_Static_assert(sizeof(NurlHttpHeader)   == 16, "NurlHttpHeader layout");
+#endif
 
 /* Tags must match `HttpErr` in stdlib/ext/http.nu. */
 #define NURL_HTTP_ERR_OK         0
@@ -1755,15 +881,38 @@ typedef struct NurlHttpResponse {
 #define NURL_HTTP_ERR_INVALID    5
 #define NURL_HTTP_ERR_OTHER      6
 
+/* The libcurl orchestrator (URL setup, options, perform, response
+ * struct fill) is pure NURL now — see __libcurl_perform_full_to in
+ * stdlib/ext/http.nu. What stays C-side: the two libcurl callbacks
+ * (libcurl invokes them through C function pointers, so they have to
+ * live here) and a handful of monomorphic wrappers around the
+ * variadic curl_easy_{setopt,getinfo} (NURL can't call C varargs).
+ * nurl_curl_available() is the gate NURL probes to decide whether
+ * to use the libcurl path or fall through to the WinHTTP/stub
+ * nurl_http_perform_full_to below. */
+
 #if defined(NURL_HAVE_LIBCURL) && !defined(__wasi__)
 #include <curl/curl.h>
 
-/* Growable buffer used by the libcurl write callback. */
+/* Growable byte buffer used by the libcurl write callback. NURL
+ * allocates instances via `nurl_zalloc 24` and reads back data/len
+ * slots after curl_easy_perform; the static_assert pins the 24-byte
+ * / 3-slot layout so a future field reorder breaks the build instead
+ * of silently miscompiling NURL reads. */
 typedef struct NurlHttpBuf {
     char  *data;
     size_t len;
     size_t cap;
 } NurlHttpBuf;
+
+typedef struct NurlHttpHeaderBuf {
+    NurlHttpHeader *items;
+    size_t          len;
+    size_t          cap;
+} NurlHttpHeaderBuf;
+
+_Static_assert(sizeof(NurlHttpBuf)       == 24, "NurlHttpBuf layout");
+_Static_assert(sizeof(NurlHttpHeaderBuf) == 24, "NurlHttpHeaderBuf layout");
 
 static int nurl__http_buf_append(NurlHttpBuf *b, const char *src, size_t n) {
     if (b->len + n + 1 > b->cap) {
@@ -1782,29 +931,19 @@ static int nurl__http_buf_append(NurlHttpBuf *b, const char *src, size_t n) {
 
 static size_t nurl__http_write_body(char *ptr, size_t size, size_t nmemb, void *user) {
     size_t total = size * nmemb;
-    NurlHttpBuf *b = (NurlHttpBuf*)user;
-    if (!nurl__http_buf_append(b, ptr, total)) return 0;
+    if (!nurl__http_buf_append((NurlHttpBuf*)user, ptr, total)) return 0;
     return total;
 }
 
-/* libcurl's header callback receives one header line at a time, including
- * trailing \r\n.  We split on the first ':' and append a {name, value}
- * record to the headers vector.  Status lines (HTTP/1.1 200 OK) and
- * empty separator lines are skipped. */
-typedef struct NurlHttpHeaderBuf {
-    NurlHttpHeader *items;
-    size_t          len;
-    size_t          cap;
-} NurlHttpHeaderBuf;
-
+/* libcurl header callback — one line at a time including CRLF.
+ * Splits on the first ':' into a {name, value} record; status lines
+ * (no ':') and blank separators are skipped. */
 static size_t nurl__http_write_header(char *ptr, size_t size, size_t nmemb, void *user) {
     size_t total = size * nmemb;
     NurlHttpHeaderBuf *hb = (NurlHttpHeaderBuf*)user;
-    /* Trim trailing CRLF. */
     size_t n = total;
     while (n > 0 && (ptr[n-1] == '\n' || ptr[n-1] == '\r')) n--;
-    if (n == 0) return total;                                 /* blank separator */
-    /* Skip status lines: "HTTP/..." has no ':' in the prefix. */
+    if (n == 0) return total;
     char *colon = NULL;
     for (size_t i = 0; i < n; i++) {
         if (ptr[i] == ':') { colon = ptr + i; break; }
@@ -1814,7 +953,6 @@ static size_t nurl__http_write_header(char *ptr, size_t size, size_t nmemb, void
     size_t val_off  = name_len + 1;
     while (val_off < n && (ptr[val_off] == ' ' || ptr[val_off] == '\t')) val_off++;
     size_t val_len = n - val_off;
-    /* Grow the headers vector by one. */
     if (hb->len + 1 > hb->cap) {
         size_t newcap = hb->cap ? hb->cap * 2 : 8;
         NurlHttpHeader *p = (NurlHttpHeader*)realloc(hb->items, newcap * sizeof(NurlHttpHeader));
@@ -1833,7 +971,9 @@ static size_t nurl__http_write_header(char *ptr, size_t size, size_t nmemb, void
     return total;
 }
 
-/* Map a CURLcode to the NURL HttpErr tag. */
+/* CURLcode → NURL_HTTP_ERR_* tag. Used by the libcurl streaming
+ * backend (§14b); the synchronous path is pure NURL and does the
+ * mapping itself in stdlib/ext/http.nu. */
 static long long nurl__http_map_err(CURLcode rc) {
     switch (rc) {
     case CURLE_OK:                       return NURL_HTTP_ERR_OK;
@@ -1848,10 +988,10 @@ static long long nurl__http_map_err(CURLcode rc) {
     }
 }
 
-/* Parse a CRLF-delimited "Name: Value" blob and append each non-empty
- * line to a freshly built curl_slist. Caller frees the returned list
- * with curl_slist_free_all. Lines with no ':' are silently dropped to
- * mirror what the response-side header parser does. */
+/* CRLF-delimited "Name: Value" blob → curl_slist (caller frees with
+ * curl_slist_free_all). Lines without ':' are dropped. Used by the
+ * streaming backend (§14b); the synchronous path rebuilds the slist
+ * in pure NURL via __curl_build_slist in stdlib/ext/http.nu. */
 static struct curl_slist *nurl__http_build_slist(const char *blob) {
     struct curl_slist *list = NULL;
     if (!blob || !*blob) return NULL;
@@ -1883,88 +1023,95 @@ static struct curl_slist *nurl__http_build_slist(const char *blob) {
     return list;
 }
 
+/* Monomorphic wrappers around the variadic curl_easy_{setopt,getinfo}.
+ * NURL FFI can't call C varargs safely — one shape per arg type used
+ * by the orchestrator. The opt / info codes are ABI-stable libcurl
+ * constants; NURL hard-codes them. */
+void *nurl_curl_easy_init(void)            { return (void*)curl_easy_init(); }
+void  nurl_curl_easy_cleanup(void *eh)     { if (eh) curl_easy_cleanup((CURL*)eh); }
+long long nurl_curl_easy_perform(void *eh) { return (long long)curl_easy_perform((CURL*)eh); }
+
+long long nurl_curl_setopt_l(void *eh, long long opt, long long val) {
+    return (long long)curl_easy_setopt((CURL*)eh, (CURLoption)opt, (long)val);
+}
+long long nurl_curl_setopt_s(void *eh, long long opt, const char *s) {
+    return (long long)curl_easy_setopt((CURL*)eh, (CURLoption)opt, s);
+}
+long long nurl_curl_setopt_p(void *eh, long long opt, void *p) {
+    return (long long)curl_easy_setopt((CURL*)eh, (CURLoption)opt, p);
+}
+long long nurl_curl_getinfo_l(void *eh, long long info, long *out) {
+    return (long long)curl_easy_getinfo((CURL*)eh, (CURLINFO)info, out);
+}
+
+void *nurl_curl_slist_append(void *list, const char *s) {
+    return (void*)curl_slist_append((struct curl_slist*)list, s);
+}
+void nurl_curl_slist_free_all(void *list) {
+    curl_slist_free_all((struct curl_slist*)list);
+}
+
+/* Wire both write callbacks plus their userdata slots in one call —
+ * keeps the C function pointers fully encapsulated. Returns 0 on
+ * success; first non-zero CURLcode otherwise. */
+long long nurl_curl_attach_callbacks(void *eh, void *body_buf, void *hdr_buf) {
+    CURL *h = (CURL*)eh;
+    CURLcode rc;
+    rc = curl_easy_setopt(h, CURLOPT_WRITEFUNCTION,  nurl__http_write_body);
+    if (rc != CURLE_OK) return (long long)rc;
+    rc = curl_easy_setopt(h, CURLOPT_WRITEDATA,      body_buf);
+    if (rc != CURLE_OK) return (long long)rc;
+    rc = curl_easy_setopt(h, CURLOPT_HEADERFUNCTION, nurl__http_write_header);
+    if (rc != CURLE_OK) return (long long)rc;
+    return (long long)curl_easy_setopt(h, CURLOPT_HEADERDATA, hdr_buf);
+}
+
+long long nurl_curl_available(void) { return 1; }
+
+#else  /* No libcurl — every helper is a stub. NURL gates on
+        * nurl_curl_available() == 0 and routes around them. */
+
+void *nurl_curl_easy_init(void)            { return NULL; }
+void  nurl_curl_easy_cleanup(void *eh)     { (void)eh; }
+long long nurl_curl_easy_perform(void *eh) { (void)eh; return -1; }
+
+long long nurl_curl_setopt_l(void *eh, long long opt, long long val) {
+    (void)eh; (void)opt; (void)val; return -1;
+}
+long long nurl_curl_setopt_s(void *eh, long long opt, const char *s) {
+    (void)eh; (void)opt; (void)s; return -1;
+}
+long long nurl_curl_setopt_p(void *eh, long long opt, void *p) {
+    (void)eh; (void)opt; (void)p; return -1;
+}
+long long nurl_curl_getinfo_l(void *eh, long long info, long *out) {
+    (void)eh; (void)info; if (out) *out = 0; return -1;
+}
+void *nurl_curl_slist_append(void *list, const char *s) {
+    (void)list; (void)s; return NULL;
+}
+void nurl_curl_slist_free_all(void *list) { (void)list; }
+long long nurl_curl_attach_callbacks(void *eh, void *body_buf, void *hdr_buf) {
+    (void)eh; (void)body_buf; (void)hdr_buf; return -1;
+}
+long long nurl_curl_available(void) { return 0; }
+
+#endif
+
+#if defined(NURL_HAVE_LIBCURL) && !defined(__wasi__)
+/* libcurl present → NURL drives via the trampolines above; this
+ * symbol stays as a stub so downstream tools that link against the
+ * runtime expecting nurl_http_perform_full_to keep resolving. */
 long long nurl_http_perform_full_to(const char *url, const char *method,
                                     const char *body, const char *headers_blob,
                                     long long timeout_ms,
                                     long long connect_timeout_ms) {
+    (void)url; (void)method; (void)body; (void)headers_blob;
+    (void)timeout_ms; (void)connect_timeout_ms;
     NurlHttpResponse *r = (NurlHttpResponse*)calloc(1, sizeof(NurlHttpResponse));
     if (!r) return 0;
-    if (!url || !*url) {
-        r->err_kind = NURL_HTTP_ERR_INVALID;
-        r->body     = strdup("");
-        return (long long)(uintptr_t)r;
-    }
-
-    /* Caller-supplied 0 / negative => use runtime defaults (30 s / 10 s).
-     * This keeps the legacy 4-arg perform_full wrapper meaningful and lets
-     * NURL code opt out of an override by passing 0. */
-    if (timeout_ms         <= 0) timeout_ms         = 30000;
-    if (connect_timeout_ms <= 0) connect_timeout_ms = 10000;
-
-    CURL *eh = curl_easy_init();
-    if (!eh) {
-        r->err_kind = NURL_HTTP_ERR_OTHER;
-        r->body     = strdup("");
-        return (long long)(uintptr_t)r;
-    }
-
-    NurlHttpBuf       body_buf = {0};
-    NurlHttpHeaderBuf hdr_buf  = {0};
-
-    curl_easy_setopt(eh, CURLOPT_URL,                url);
-    curl_easy_setopt(eh, CURLOPT_FOLLOWLOCATION,     1L);
-    curl_easy_setopt(eh, CURLOPT_NOSIGNAL,           1L);   /* multi-thread safe */
-    curl_easy_setopt(eh, CURLOPT_TIMEOUT_MS,         (long)timeout_ms);
-    curl_easy_setopt(eh, CURLOPT_CONNECTTIMEOUT_MS,  (long)connect_timeout_ms);
-    curl_easy_setopt(eh, CURLOPT_WRITEFUNCTION,  nurl__http_write_body);
-    curl_easy_setopt(eh, CURLOPT_WRITEDATA,      &body_buf);
-    curl_easy_setopt(eh, CURLOPT_HEADERFUNCTION, nurl__http_write_header);
-    curl_easy_setopt(eh, CURLOPT_HEADERDATA,     &hdr_buf);
-    curl_easy_setopt(eh, CURLOPT_USERAGENT,      "nurl-http/0.1");
-    curl_easy_setopt(eh, CURLOPT_ACCEPT_ENCODING, "");  /* let curl decompress */
-
-    struct curl_slist *req_headers = nurl__http_build_slist(headers_blob);
-    if (req_headers) {
-        curl_easy_setopt(eh, CURLOPT_HTTPHEADER, req_headers);
-    }
-
-    const char *m = method ? method : "GET";
-    if (strcmp(m, "POST") == 0) {
-        curl_easy_setopt(eh, CURLOPT_POST,           1L);
-        curl_easy_setopt(eh, CURLOPT_POSTFIELDS,     body ? body : "");
-        curl_easy_setopt(eh, CURLOPT_POSTFIELDSIZE,  (long)(body ? strlen(body) : 0));
-    } else if (strcmp(m, "PUT")    == 0 ||
-               strcmp(m, "DELETE") == 0 ||
-               strcmp(m, "PATCH")  == 0) {
-        curl_easy_setopt(eh, CURLOPT_CUSTOMREQUEST, m);
-        if (body && *body) {
-            curl_easy_setopt(eh, CURLOPT_POSTFIELDS,    body);
-            curl_easy_setopt(eh, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
-        }
-    } /* GET: no extra setup */
-
-    CURLcode rc = curl_easy_perform(eh);
-    if (rc != CURLE_OK) {
-        r->err_kind = nurl__http_map_err(rc);
-    } else {
-        long http_code = 0;
-        curl_easy_getinfo(eh, CURLINFO_RESPONSE_CODE, &http_code);
-        r->status = (long long)http_code;
-    }
-
-    if (req_headers) curl_slist_free_all(req_headers);
-    curl_easy_cleanup(eh);
-
-    /* Hand body+headers to the response struct (transferring ownership). */
-    if (body_buf.data) {
-        r->body     = body_buf.data;
-        r->body_len = (long long)body_buf.len;
-    } else {
-        r->body     = strdup("");
-        r->body_len = 0;
-    }
-    r->headers      = hdr_buf.items;
-    r->header_count = (long long)hdr_buf.len;
+    r->err_kind = NURL_HTTP_ERR_OTHER;
+    r->body     = strdup("");
     return (long long)(uintptr_t)r;
 }
 
@@ -1985,8 +1132,7 @@ long long nurl_http_perform_full_to(const char *url, const char *method,
 
 #include <winhttp.h>
 
-/* UTF-8 → heap-allocated UTF-16 (caller frees). Returns NULL on failure
- * or on empty input. The extra +1 leaves room for a trailing L'\0'. */
+/* UTF-8 → heap-allocated UTF-16 (caller frees). NULL on failure/empty. */
 static wchar_t *nurl__utf8_to_wide(const char *s) {
     if (!s) return NULL;
     int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
@@ -2000,8 +1146,7 @@ static wchar_t *nurl__utf8_to_wide(const char *s) {
     return w;
 }
 
-/* UTF-16 (length-prefixed, no NUL required) → heap-allocated UTF-8
- * (caller frees). Returns a fresh "" on empty input / failure. */
+/* UTF-16 (length-prefixed) → heap-allocated UTF-8. Returns "" on fail. */
 static char *nurl__wide_to_utf8_n(const wchar_t *w, size_t wlen) {
     if (!w || wlen == 0) return strdup("");
     int n = WideCharToMultiByte(CP_UTF8, 0, w, (int)wlen, NULL, 0, NULL, NULL);
@@ -2013,8 +1158,7 @@ static char *nurl__wide_to_utf8_n(const wchar_t *w, size_t wlen) {
     return s;
 }
 
-/* Map a Windows last-error value from the WinHTTP call chain to a
- * NURL HttpErr tag. The ERROR_WINHTTP_* constants are stable. */
+/* GetLastError() → NURL HttpErr tag. */
 static long long nurl__http_map_win_err(DWORD e) {
     switch (e) {
     case ERROR_WINHTTP_NAME_NOT_RESOLVED:   return NURL_HTTP_ERR_DNS;
@@ -2027,19 +1171,18 @@ static long long nurl__http_map_win_err(DWORD e) {
     }
 }
 
-/* Append a parsed {name,value} header into the response vector. Skips
- * status lines (no ':') and blank separators. All inputs are UTF-16. */
+/* Append a parsed {name,value} header from a UTF-16 line. Skips status
+ * lines (no ':') and blank separators. */
 static void nurl__http_append_header(NurlHttpHeader **items,
                                      size_t *len, size_t *cap,
                                      const wchar_t *line, size_t n) {
-    /* Trim trailing CR/LF. */
     while (n > 0 && (line[n-1] == L'\n' || line[n-1] == L'\r')) n--;
     if (n == 0) return;
     const wchar_t *colon = NULL;
     for (size_t i = 0; i < n; i++) {
         if (line[i] == L':') { colon = line + i; break; }
     }
-    if (!colon) return;                    /* status line — skip */
+    if (!colon) return;
     size_t name_len = (size_t)(colon - line);
     size_t val_off  = name_len + 1;
     while (val_off < n && (line[val_off] == L' ' || line[val_off] == L'\t')) {
@@ -2081,11 +1224,8 @@ long long nurl_http_perform_full_to(const char *url, const char *method,
         return (long long)(uintptr_t)r;
     }
 
-    /* WinHttpCrackUrl with zero-initialised lpszHostName / lpszUrlPath
-     * (and lpszExtraInfo=NULL + dwExtraInfoLength=0) returns pointers
-     * into `wurl`; we read their lengths from the URL_COMPONENTS struct.
-     * This matches the MSDN "length-only" calling convention where the
-     * caller doesn't supply output buffers. */
+    /* "Length-only" WinHttpCrackUrl: returns pointers into `wurl`,
+     * lengths read from the URL_COMPONENTS struct. */
     URL_COMPONENTSW uc;
     memset(&uc, 0, sizeof(uc));
     uc.dwStructSize      = sizeof(uc);
@@ -2100,9 +1240,7 @@ long long nurl_http_perform_full_to(const char *url, const char *method,
         return (long long)(uintptr_t)r;
     }
 
-    /* Copy host into a freshly NUL-terminated buffer (WinHttpConnect
-     * requires a zero-terminated pointer, but the cracked view above is
-     * not). Path + extra are passed inline via a concatenated buffer. */
+    /* WinHttpConnect needs NUL-terminated host; the cracked view isn't. */
     wchar_t *host = (wchar_t*)malloc(((size_t)uc.dwHostNameLength + 1) * sizeof(wchar_t));
     if (!host) {
         free(wurl);
@@ -2130,7 +1268,6 @@ long long nurl_http_perform_full_to(const char *url, const char *method,
     }
     BOOL is_https = (uc.nScheme == INTERNET_SCHEME_HTTPS);
 
-    /* Session/connection/request — fail fast if any handle open fails. */
     HINTERNET hSession = WinHttpOpen(L"nurl-http/0.1",
                                      WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                      WINHTTP_NO_PROXY_NAME,
@@ -2142,8 +1279,7 @@ long long nurl_http_perform_full_to(const char *url, const char *method,
         r->err_kind = nurl__http_map_win_err(e);
         return (long long)(uintptr_t)r;
     }
-    /* Connect/send/recv timeouts mirror libcurl's connect/total budget.
-     * WinHttpSetTimeouts takes (resolve, connect, send, receive) all ms. */
+    /* WinHttpSetTimeouts(resolve, connect, send, receive) — all ms. */
     WinHttpSetTimeouts(hSession,
                        (int)connect_timeout_ms,
                        (int)connect_timeout_ms,
@@ -2182,14 +1318,11 @@ long long nurl_http_perform_full_to(const char *url, const char *method,
         return (long long)(uintptr_t)r;
     }
 
-    /* Follow redirects like libcurl's CURLOPT_FOLLOWLOCATION=1. */
+    /* Match libcurl's CURLOPT_FOLLOWLOCATION=1. */
     DWORD redirect_policy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
     WinHttpSetOption(hReq, WINHTTP_OPTION_REDIRECT_POLICY,
                      &redirect_policy, sizeof(redirect_policy));
 
-    /* Caller-supplied request headers. The blob arrives as UTF-8 with
-     * "Name: Value\r\n" lines; WinHttpAddRequestHeaders accepts the same
-     * grammar but in UTF-16. Empty / NULL blob → skip. */
     if (headers_blob && *headers_blob) {
         wchar_t *whdrs = nurl__utf8_to_wide(headers_blob);
         if (whdrs) {
@@ -2221,7 +1354,6 @@ long long nurl_http_perform_full_to(const char *url, const char *method,
         return (long long)(uintptr_t)r;
     }
 
-    /* Status code. */
     {
         DWORD status_code = 0;
         DWORD size = sizeof(status_code);
@@ -2232,8 +1364,7 @@ long long nurl_http_perform_full_to(const char *url, const char *method,
         r->status = (long long)status_code;
     }
 
-    /* Raw headers as a single CRLF-delimited wide string. Two-call
-     * idiom: first query the size, then allocate + re-query. */
+    /* Raw headers as one CRLF-delimited wide string (size-then-fetch idiom). */
     {
         DWORD hdr_bytes = 0;
         WinHttpQueryHeaders(hReq, WINHTTP_QUERY_RAW_HEADERS_CRLF,
@@ -2245,16 +1376,14 @@ long long nurl_http_perform_full_to(const char *url, const char *method,
                                             WINHTTP_HEADER_NAME_BY_INDEX, hdrs,
                                             &hdr_bytes, WINHTTP_NO_HEADER_INDEX)) {
                 size_t wn = hdr_bytes / sizeof(wchar_t);
-                if (wn > 0 && hdrs[wn-1] == 0) wn--;    /* drop terminator */
+                if (wn > 0 && hdrs[wn-1] == 0) wn--;
                 NurlHttpHeader *items = NULL;
                 size_t hlen = 0, hcap = 0;
-                /* Walk CRLF-separated lines. */
                 size_t i = 0;
                 while (i < wn) {
                     size_t j = i;
                     while (j < wn && hdrs[j] != L'\n') j++;
                     size_t end = j;
-                    /* Drop a preceding CR if present. */
                     if (end > i && hdrs[end-1] == L'\r') end--;
                     nurl__http_append_header(&items, &hlen, &hcap,
                                              hdrs + i, end - i);
@@ -2267,7 +1396,7 @@ long long nurl_http_perform_full_to(const char *url, const char *method,
         }
     }
 
-    /* Body: drain WinHttpQueryDataAvailable / WinHttpReadData loop. */
+    /* Body — drain WinHttpQueryDataAvailable / WinHttpReadData. */
     {
         char  *buf = NULL;
         size_t len = 0, cap = 0;
@@ -2308,7 +1437,7 @@ long long nurl_http_perform_full_to(const char *url, const char *method,
     return (long long)(uintptr_t)r;
 }
 
-#else  /* No HTTP backend — emit no-op stubs so the symbol set stays stable. */
+#else  /* No HTTP backend — stub keeps the symbol set stable. */
 
 long long nurl_http_perform_full_to(const char *url, const char *method,
                                     const char *body, const char *headers_blob,
@@ -2323,68 +1452,73 @@ long long nurl_http_perform_full_to(const char *url, const char *method,
     return (long long)(uintptr_t)r;
 }
 
-#endif  /* backend selection */
+#endif
 
-/* Backwards-compatible 4-arg wrapper. Keeps existing call sites and the
- * older NURL surface working with the historical 30 s / 10 s budget. */
+/* 4-arg alias using the historical 30 s / 10 s budget. */
 long long nurl_http_perform_full(const char *url, const char *method,
                                  const char *body, const char *headers_blob) {
     return nurl_http_perform_full_to(url, method, body, headers_blob,
                                      30000, 10000);
 }
 
-/* ── §14b: HTTP streaming (pull-based, libcurl multi) ─────────────────
+/* ── §14b  HTTP streaming (pull-based, libcurl multi) ─────────── */
+/*
+ * Streaming variant for SSE / chunked bodies. nurl_http_stream_next
+ * blocks until libcurl has buffered some bytes (returns owned NUL-
+ * terminated copy) or the transfer terminates (returns NULL — then
+ * status/err_kind carry the final outcome). Backed by libcurl's multi
+ * handle so we never sit inside a synchronous easy_perform.
  *
- * Streaming variant for SSE / chunked response bodies. NURL drives the
- * transfer one chunk at a time via repeated calls to
- * `nurl_http_stream_next` — each call blocks until either:
- *   1. libcurl has buffered some bytes from the server, in which case
- *      a freshly malloc'd, NUL-terminated copy is returned (caller
- *      frees), or
- *   2. the transfer finishes (success or failure), in which case NULL
- *      is returned. After NULL, `nurl_http_stream_status` /
- *      `nurl_http_stream_err_kind` carry the final outcome.
+ * The chunk is the accumulator since the last call, not necessarily one
+ * frame — SSE event boundaries (\n\n) are the caller's job. NUL inside
+ * the body would terminate the C string early; fine for UTF-8 SSE text.
  *
- * Implementation note: backed by libcurl's multi handle so we never
- * block inside a synchronous `curl_easy_perform` — the multi's
- * non-blocking pump lets us yield bytes to NURL incrementally.
- *
- * The chunk delivered to NURL is the accumulator since the last call,
- * not necessarily one HTTP frame: SSE event boundaries (\n\n) are the
- * caller's job (see `stdlib/ext/http.nu#http_stream_next` + the SSE
- * decoder). NUL bytes inside the body would terminate the C string
- * early — fine for SSE (UTF-8 text), document the limitation for any
- * binary streamer that comes later.
- *
- * WinHTTP and no-backend builds emit stubs that signal failure on
- * open and return NULL on every read (HttpOther on err_kind probe).
+ * WinHTTP and no-backend builds stub to "open fails → HttpOther".
  */
 
 #if defined(NURL_HAVE_LIBCURL) && !defined(__wasi__)
 
 typedef struct NurlHttpStream {
+    /* All fields 8-byte / i64 so the layout reads cleanly through
+     * `nurl_peek(state, slot)` on the NURL side. 14 slots / 112 B.
+     *
+     *   slot 0  multi          CURLM*
+     *   slot 1  easy           CURL*
+     *   slot 2  req_headers    struct curl_slist*
+     *   slot 3  body_buf.data  char*
+     *   slot 4  body_buf.len   size_t
+     *   slot 5  body_buf.cap   size_t
+     *   slot 6  hdr_buf.items  NurlHttpHeader*
+     *   slot 7  hdr_buf.len    size_t
+     *   slot 8  hdr_buf.cap    size_t
+     *   slot 9  headers_done   bool (i64)
+     *   slot 10 still_running  i64
+     *   slot 11 finished       bool (i64)
+     *   slot 12 status         i64
+     *   slot 13 err_kind       i64
+     *
+     * The three flags were `int` historically; widened so the slot
+     * pattern stays clean and the accessors can be pure-NURL @-fns
+     * over `nurl_peek` (PURIFY §14b). */
     CURLM             *multi;
     CURL              *easy;
     struct curl_slist *req_headers;
-    NurlHttpBuf        body_buf;     /* accumulator since last yield */
-    NurlHttpHeaderBuf  hdr_buf;      /* response headers (one entry per line) */
-    int                headers_done; /* set once we see the blank-separator line */
-    int                still_running;
-    int                finished;     /* libcurl reported transfer done */
-    long long          status;       /* HTTP status — captured at first body
-                                        callback (and re-stamped at finish). */
-    long long          err_kind;     /* final HttpErr (set on finish) */
+    NurlHttpBuf        body_buf;
+    NurlHttpHeaderBuf  hdr_buf;
+    long long          headers_done;
+    long long          still_running;
+    long long          finished;
+    long long          status;
+    long long          err_kind;
 } NurlHttpStream;
+_Static_assert(sizeof(NurlHttpStream) == 112, "NurlHttpStream layout");
 
 static size_t nurl__http_stream_write_body(char *ptr, size_t size, size_t nmemb,
                                            void *user) {
     NurlHttpStream *s = (NurlHttpStream*)user;
     size_t total = size * nmemb;
-    /* The header callback fires for every header line including the blank
-     * separator that terminates the header block. The body callback then
-     * fires for body bytes. By the time we land here all headers are in,
-     * and CURLINFO_RESPONSE_CODE is final — capture it once so callers can
-     * read .status without waiting for the transfer to finish. */
+    /* Headers are fully in by the time we get body bytes — capture
+     * status once so callers can read it without waiting for finish. */
     if (s->status == 0) {
         long http_code = 0;
         curl_easy_getinfo(s->easy, CURLINFO_RESPONSE_CODE, &http_code);
@@ -2395,13 +1529,9 @@ static size_t nurl__http_stream_write_body(char *ptr, size_t size, size_t nmemb,
     return total;
 }
 
-/* Streaming-mode header callback. Reuses the libcurl-agnostic
- * NurlHttpHeader{Buf} layout so the same `nurl_http_response_*` accessor
- * shape can be exposed via the streaming-side wrappers below. The blank
- * separator line marks the boundary between status-100 continuations
- * (followed by another header block) and the real response headers; we
- * reset the buffer on each new block so the final accumulated set is the
- * RESPONSE headers only, not informational+response merged together. */
+/* Streaming header callback. On a blank-separator line we either reset
+ * (1xx continuation — another header block follows) or mark headers
+ * done; otherwise parse "Name: Value" and append. */
 static size_t nurl__http_stream_write_header(char *ptr, size_t size, size_t nmemb,
                                              void *user) {
     NurlHttpStream *s = (NurlHttpStream*)user;
@@ -2409,13 +1539,6 @@ static size_t nurl__http_stream_write_header(char *ptr, size_t size, size_t nmem
     size_t n = total;
     while (n > 0 && (ptr[n-1] == '\n' || ptr[n-1] == '\r')) n--;
     if (n == 0) {
-        /* Blank-separator line. If a 1xx informational block just ended,
-         * libcurl will deliver another set of headers next; toss what we
-         * have and start fresh so the final result reflects the real
-         * 2xx/3xx/4xx/5xx response. We detect "informational" by peeking
-         * at CURLINFO_RESPONSE_CODE — libcurl updates it after each
-         * status line, so a value <200 means the next block is the real
-         * one. */
         long http_code = 0;
         curl_easy_getinfo(s->easy, CURLINFO_RESPONSE_CODE, &http_code);
         if (http_code >= 100 && http_code < 200) {
@@ -2430,7 +1553,6 @@ static size_t nurl__http_stream_write_header(char *ptr, size_t size, size_t nmem
         }
         return total;
     }
-    /* Status lines have no ':' before the first space — skip them. */
     char *colon = NULL;
     for (size_t i = 0; i < n; i++) {
         if (ptr[i] == ':') { colon = ptr + i; break; }
@@ -2459,178 +1581,108 @@ static size_t nurl__http_stream_write_header(char *ptr, size_t size, size_t nmem
     return total;
 }
 
-long long nurl_http_stream_open_to(const char *method, const char *url,
-                                   const char *body, const char *headers_blob,
-                                   long long timeout_ms,
-                                   long long connect_timeout_ms) {
-    NurlHttpStream *s = (NurlHttpStream*)calloc(1, sizeof(*s));
-    if (!s) return 0;
-
-    s->multi = curl_multi_init();
-    s->easy  = curl_easy_init();
-    if (!s->multi || !s->easy) {
-        s->err_kind = NURL_HTTP_ERR_OTHER;
-        s->finished = 1;
-        return (long long)(uintptr_t)s;
-    }
-
-    if (timeout_ms <= 0)         timeout_ms         = 30000;
-    if (connect_timeout_ms <= 0) connect_timeout_ms = 10000;
-
-    curl_easy_setopt(s->easy, CURLOPT_URL,                url ? url : "");
-    curl_easy_setopt(s->easy, CURLOPT_FOLLOWLOCATION,     1L);
-    curl_easy_setopt(s->easy, CURLOPT_NOSIGNAL,           1L);
-    curl_easy_setopt(s->easy, CURLOPT_TIMEOUT_MS,         (long)timeout_ms);
-    curl_easy_setopt(s->easy, CURLOPT_CONNECTTIMEOUT_MS,  (long)connect_timeout_ms);
-    curl_easy_setopt(s->easy, CURLOPT_WRITEFUNCTION,      nurl__http_stream_write_body);
-    curl_easy_setopt(s->easy, CURLOPT_WRITEDATA,          s);
-    curl_easy_setopt(s->easy, CURLOPT_HEADERFUNCTION,     nurl__http_stream_write_header);
-    curl_easy_setopt(s->easy, CURLOPT_HEADERDATA,         s);
-    curl_easy_setopt(s->easy, CURLOPT_USERAGENT,          "nurl-http/0.1");
-    curl_easy_setopt(s->easy, CURLOPT_ACCEPT_ENCODING,    "");
-
-    s->req_headers = nurl__http_build_slist(headers_blob);
-    if (s->req_headers) {
-        curl_easy_setopt(s->easy, CURLOPT_HTTPHEADER, s->req_headers);
-    }
-
-    const char *m = method ? method : "GET";
-    if (strcmp(m, "POST") == 0) {
-        curl_easy_setopt(s->easy, CURLOPT_POST,          1L);
-        curl_easy_setopt(s->easy, CURLOPT_POSTFIELDS,    body ? body : "");
-        curl_easy_setopt(s->easy, CURLOPT_POSTFIELDSIZE, (long)(body ? strlen(body) : 0));
-    } else if (strcmp(m, "GET") != 0) {
-        curl_easy_setopt(s->easy, CURLOPT_CUSTOMREQUEST, m);
-        if (body && *body) {
-            curl_easy_setopt(s->easy, CURLOPT_POSTFIELDS,    body);
-            curl_easy_setopt(s->easy, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
+/* Monomorphic wrappers around curl_multi_*. NURL drives the pump
+ * loop through these (PURIFY §14b 2026-05-24). Returns -1 on a
+ * CURLM error so the NURL side can treat any negative as failure. */
+void *nurl_curl_multi_init(void)                  { return (void*)curl_multi_init(); }
+long long nurl_curl_multi_cleanup(void *m) {
+    return (long long)curl_multi_cleanup((CURLM*)m);
+}
+long long nurl_curl_multi_add_handle(void *m, void *e) {
+    return (long long)curl_multi_add_handle((CURLM*)m, (CURL*)e);
+}
+long long nurl_curl_multi_remove_handle(void *m, void *e) {
+    return (long long)curl_multi_remove_handle((CURLM*)m, (CURL*)e);
+}
+/* Drives a single multi_perform pump. Returns still_running count
+ * on success, -1 on CURLM error. */
+long long nurl_curl_multi_perform(void *m) {
+    int still = 0;
+    CURLMcode rc = curl_multi_perform((CURLM*)m, &still);
+    if (rc != CURLM_OK) return -1;
+    return (long long)still;
+}
+/* Blocks up to timeout_ms for activity; ignores numfds (caller
+ * cares only about wake-up timing). Returns -1 on CURLM error. */
+long long nurl_curl_multi_wait(void *m, long long timeout_ms) {
+    int numfds = 0;
+    CURLMcode rc = curl_multi_wait((CURLM*)m, NULL, 0, (int)timeout_ms, &numfds);
+    if (rc != CURLM_OK) return -1;
+    return 0;
+}
+/* Drain done messages once; return the CURLcode result of the
+ * latest CURLMSG_DONE seen, or -1 if no DONE message was queued. */
+long long nurl_curl_multi_drain_done(void *m) {
+    long long out = -1;
+    CURLMsg *msg;
+    int msgs_left = 0;
+    while ((msg = curl_multi_info_read((CURLM*)m, &msgs_left)) != NULL) {
+        if (msg->msg == CURLMSG_DONE) {
+            out = (long long)msg->data.result;
         }
     }
-
-    CURLMcode mrc = curl_multi_add_handle(s->multi, s->easy);
-    if (mrc != CURLM_OK) {
-        s->err_kind = NURL_HTTP_ERR_OTHER;
-        s->finished = 1;
-        return (long long)(uintptr_t)s;
-    }
-    s->still_running = 1;
-    return (long long)(uintptr_t)s;
+    return out;
 }
 
-char *nurl_http_stream_next(long long handle) {
-    NurlHttpStream *s = (NurlHttpStream*)(uintptr_t)handle;
-    if (!s) return NULL;
-
-    /* Pump until we either have buffered bytes or libcurl says done. */
-    while (s->body_buf.len == 0 && !s->finished) {
-        int still = 0;
-        CURLMcode mrc = curl_multi_perform(s->multi, &still);
-        if (mrc != CURLM_OK) {
-            s->err_kind = NURL_HTTP_ERR_OTHER;
-            s->finished = 1;
-            break;
-        }
-        s->still_running = still;
-        if (!still) {
-            CURLMsg *msg;
-            int msgs_left = 0;
-            while ((msg = curl_multi_info_read(s->multi, &msgs_left)) != NULL) {
-                if (msg->msg == CURLMSG_DONE) {
-                    long http_code = 0;
-                    curl_easy_getinfo(s->easy, CURLINFO_RESPONSE_CODE, &http_code);
-                    s->status   = (long long)http_code;
-                    s->err_kind = nurl__http_map_err(msg->data.result);
-                }
-            }
-            s->finished = 1;
-            break;
-        }
-        int numfds = 0;
-        curl_multi_wait(s->multi, NULL, 0, 100, &numfds);
-    }
-
-    if (s->body_buf.len == 0) return NULL;
-
-    /* Hand over the buffer; reset accumulator for the next pull. */
+/* NurlHttpStream-shaped allocation + callback wiring. NURL drives the
+ * setopts itself for everything else; these two encapsulate the parts
+ * that touch internal symbols. */
+void *nurl_curl_stream_alloc(void) {
+    return (void*)calloc(1, sizeof(NurlHttpStream));
+}
+long long nurl_curl_stream_attach_callbacks(void *handle, void *easy) {
+    if (!handle || !easy) return -1;
+    CURL *e = (CURL*)easy;
+    CURLcode rc;
+    rc = curl_easy_setopt(e, CURLOPT_WRITEFUNCTION,  nurl__http_stream_write_body);
+    if (rc != CURLE_OK) return (long long)rc;
+    rc = curl_easy_setopt(e, CURLOPT_WRITEDATA,      handle);
+    if (rc != CURLE_OK) return (long long)rc;
+    rc = curl_easy_setopt(e, CURLOPT_HEADERFUNCTION, nurl__http_stream_write_header);
+    if (rc != CURLE_OK) return (long long)rc;
+    return (long long)curl_easy_setopt(e, CURLOPT_HEADERDATA, handle);
+}
+/* Swap out the body accumulator and return the previous data pointer
+ * (owned by caller; NULL if empty). Resets len/cap so the next pump
+ * starts a fresh buffer. */
+char *nurl_curl_stream_take_body(void *handle) {
+    NurlHttpStream *s = (NurlHttpStream*)handle;
+    if (!s || s->body_buf.len == 0) return NULL;
     char *out = s->body_buf.data;
     s->body_buf.data = NULL;
     s->body_buf.len  = 0;
     s->body_buf.cap  = 0;
     return out;
 }
-
-long long nurl_http_stream_status(long long handle) {
-    NurlHttpStream *s = (NurlHttpStream*)(uintptr_t)handle;
-    return s ? s->status : 0;
+/* Set s->status from the easy handle's response code and map the
+ * CURLcode to the matching HttpErr tag. Called when a DONE message
+ * arrives on the multi handle. */
+void nurl_curl_stream_finalize(void *handle, long long curle_result) {
+    NurlHttpStream *s = (NurlHttpStream*)handle;
+    if (!s) return;
+    long http_code = 0;
+    curl_easy_getinfo(s->easy, CURLINFO_RESPONSE_CODE, &http_code);
+    s->status   = (long long)http_code;
+    s->err_kind = nurl__http_map_err((CURLcode)curle_result);
+    s->finished = 1;
 }
 
-long long nurl_http_stream_err_kind(long long handle) {
-    NurlHttpStream *s = (NurlHttpStream*)(uintptr_t)handle;
-    return s ? s->err_kind : NURL_HTTP_ERR_OTHER;
+/* nurl_http_stream_open_to / _next / _pump_headers became pure-NURL
+ * @-fns in stdlib/ext/http.nu (PURIFY §14b 2026-05-24) — driving the
+ * multi-handle pump from NURL over the trampolines above. NURL gates
+ * on `nurl_curl_available() != 0` and reaches these stubs only on
+ * builds without libcurl, where they all map to HttpOther via the
+ * 0 / NULL signals the dispatch in stdlib/ext/http.nu interprets. */
+long long nurl_http_stream_open_to(const char *method, const char *url,
+                                   const char *body, const char *headers_blob,
+                                   long long timeout_ms,
+                                   long long connect_timeout_ms) {
+    (void)method; (void)url; (void)body; (void)headers_blob;
+    (void)timeout_ms; (void)connect_timeout_ms;
+    return 0;
 }
-
-/* Pump the multi handle until either the response headers are fully
- * received OR the transfer terminates. After this returns, the caller
- * can safely read .status / header_count / header_name / header_value
- * AND start pulling body chunks via nurl_http_stream_next.
- *
- * Return value:
- *   >0  HTTP status code (headers in)
- *    0  transfer ended without a usable status (DNS/connect/TLS/etc —
- *       caller should probe nurl_http_stream_err_kind to learn why).
- *
- * The body callback also stamps .status on the first byte (in case a
- * server flushes the body before the header callback returns from the
- * blank-separator line — rare but allowed by libcurl's internal
- * sequencing). Either path leaves the stream ready for body pulls. */
-long long nurl_http_stream_pump_headers(long long handle) {
-    NurlHttpStream *s = (NurlHttpStream*)(uintptr_t)handle;
-    if (!s) return 0;
-    while (!s->headers_done && !s->finished) {
-        int still = 0;
-        CURLMcode mrc = curl_multi_perform(s->multi, &still);
-        if (mrc != CURLM_OK) {
-            s->err_kind = NURL_HTTP_ERR_OTHER;
-            s->finished = 1;
-            break;
-        }
-        s->still_running = still;
-        if (!still) {
-            CURLMsg *msg;
-            int msgs_left = 0;
-            while ((msg = curl_multi_info_read(s->multi, &msgs_left)) != NULL) {
-                if (msg->msg == CURLMSG_DONE) {
-                    long http_code = 0;
-                    curl_easy_getinfo(s->easy, CURLINFO_RESPONSE_CODE, &http_code);
-                    s->status   = (long long)http_code;
-                    s->err_kind = nurl__http_map_err(msg->data.result);
-                }
-            }
-            s->finished = 1;
-            break;
-        }
-        int numfds = 0;
-        curl_multi_wait(s->multi, NULL, 0, 100, &numfds);
-    }
-    return s->status;
-}
-
-long long nurl_http_stream_header_count(long long handle) {
-    NurlHttpStream *s = (NurlHttpStream*)(uintptr_t)handle;
-    return s ? (long long)s->hdr_buf.len : 0;
-}
-
-const char* nurl_http_stream_header_name(long long handle, long long i) {
-    NurlHttpStream *s = (NurlHttpStream*)(uintptr_t)handle;
-    if (!s || i < 0 || (size_t)i >= s->hdr_buf.len) return "";
-    return s->hdr_buf.items[i].name ? s->hdr_buf.items[i].name : "";
-}
-
-const char* nurl_http_stream_header_value(long long handle, long long i) {
-    NurlHttpStream *s = (NurlHttpStream*)(uintptr_t)handle;
-    if (!s || i < 0 || (size_t)i >= s->hdr_buf.len) return "";
-    return s->hdr_buf.items[i].value ? s->hdr_buf.items[i].value : "";
-}
+char *nurl_http_stream_next(long long handle)      { (void)handle; return NULL; }
+long long nurl_http_stream_pump_headers(long long handle) { (void)handle; return 0; }
 
 void nurl_http_stream_close(long long handle) {
     NurlHttpStream *s = (NurlHttpStream*)(uintptr_t)handle;
@@ -2664,57 +1716,35 @@ long long nurl_http_stream_open_to(const char *method, const char *url,
 }
 
 char *nurl_http_stream_next(long long handle)     { (void)handle; return NULL; }
-long long nurl_http_stream_status(long long h)    { (void)h; return 0; }
-long long nurl_http_stream_err_kind(long long h)  { (void)h; return NURL_HTTP_ERR_OTHER; }
 long long nurl_http_stream_pump_headers(long long h)  { (void)h; return 0; }
-long long nurl_http_stream_header_count(long long h)  { (void)h; return 0; }
-const char* nurl_http_stream_header_name(long long h, long long i)  { (void)h; (void)i; return ""; }
-const char* nurl_http_stream_header_value(long long h, long long i) { (void)h; (void)i; return ""; }
 void      nurl_http_stream_close(long long h)     { (void)h; }
+
+/* Multi + stream-state stubs for the no-libcurl link path. NURL gates
+ * on nurl_curl_available() == 0 and won't reach them at runtime; they
+ * exist purely so the symbol set resolves. */
+void *nurl_curl_multi_init(void)                                 { return NULL; }
+long long nurl_curl_multi_cleanup(void *m)                       { (void)m; return -1; }
+long long nurl_curl_multi_add_handle(void *m, void *e)           { (void)m; (void)e; return -1; }
+long long nurl_curl_multi_remove_handle(void *m, void *e)        { (void)m; (void)e; return -1; }
+long long nurl_curl_multi_perform(void *m)                       { (void)m; return -1; }
+long long nurl_curl_multi_wait(void *m, long long timeout_ms)    { (void)m; (void)timeout_ms; return -1; }
+long long nurl_curl_multi_drain_done(void *m)                    { (void)m; return -1; }
+void *nurl_curl_stream_alloc(void)                               { return NULL; }
+long long nurl_curl_stream_attach_callbacks(void *h, void *e)    { (void)h; (void)e; return -1; }
+char *nurl_curl_stream_take_body(void *h)                        { (void)h; return NULL; }
+void nurl_curl_stream_finalize(void *h, long long r)             { (void)h; (void)r; }
 
 #endif  /* streaming backend selection */
 
-/* Accessors and the freer are libcurl-agnostic — they only inspect the
- * NurlHttpResponse struct, so the same code serves both the real and
- * stub builds. */
-
-long long nurl_http_response_status(long long resp) {
-    NurlHttpResponse *r = (NurlHttpResponse*)(uintptr_t)resp;
-    return r ? r->status : 0;
-}
-
-long long nurl_http_response_err_kind(long long resp) {
-    NurlHttpResponse *r = (NurlHttpResponse*)(uintptr_t)resp;
-    return r ? r->err_kind : NURL_HTTP_ERR_OTHER;
-}
-
-const char* nurl_http_response_body(long long resp) {
-    NurlHttpResponse *r = (NurlHttpResponse*)(uintptr_t)resp;
-    return (r && r->body) ? r->body : "";
-}
-
-long long nurl_http_response_body_len(long long resp) {
-    NurlHttpResponse *r = (NurlHttpResponse*)(uintptr_t)resp;
-    return r ? r->body_len : 0;
-}
-
-long long nurl_http_response_header_count(long long resp) {
-    NurlHttpResponse *r = (NurlHttpResponse*)(uintptr_t)resp;
-    return r ? r->header_count : 0;
-}
-
-const char* nurl_http_response_header_name(long long resp, long long i) {
-    NurlHttpResponse *r = (NurlHttpResponse*)(uintptr_t)resp;
-    if (!r || i < 0 || i >= r->header_count) return "";
-    return r->headers[i].name ? r->headers[i].name : "";
-}
-
-const char* nurl_http_response_header_value(long long resp, long long i) {
-    NurlHttpResponse *r = (NurlHttpResponse*)(uintptr_t)resp;
-    if (!r || i < 0 || i >= r->header_count) return "";
-    return r->headers[i].value ? r->headers[i].value : "";
-}
-
+/* The accessors used to live here — status / err_kind / body / body_len
+ * / header_count / header_name / header_value. They were trivial field
+ * reads off NurlHttpResponse; PURIFY 2026-05-24 moved them to pure-NURL
+ * @-fns in `stdlib/ext/http.nu` that read the same struct via
+ * `nurl_peek(p, slot)` over the i64-slot layout. The `_free` below
+ * stays C because it walks the headers[] array freeing every
+ * name/value pair plus the body — that ownership/dealloc dance is
+ * easier to keep alongside the allocation sites in the libcurl /
+ * WinHTTP backends than to split. */
 void nurl_http_response_free(long long resp) {
     NurlHttpResponse *r = (NurlHttpResponse*)(uintptr_t)resp;
     if (!r) return;
@@ -2729,44 +1759,19 @@ void nurl_http_response_free(long long resp) {
     free(r);
 }
 
-/* ── §16  Process execution ───────────────────────────────────── */
+/* ── §16  Process execution (synchronous, Win32 only) ─────────── */
 /*
- * Synchronous subprocess runner used by stdlib/std/process.nu.
+ * Win32-only synchronous subprocess runner. POSIX runs through pure
+ * NURL (stdlib/std/process.nu over stdlib/core/posix.nu); the C symbol
+ * here is a link-time stub on those targets. ABI:
+ *   nurl_proc_run(cmd, argv_buf, argc, stdin_blob) → heap NurlProcResult*
+ * argv_buf is a char *const argv[argc] view of NUL-terminated entries;
+ * stdin_blob is fed verbatim to the child's stdin (NULL/"" → empty).
+ * Blocks until child exits and stdout+stderr have drained. Accessors
+ * (exit_code / err_kind / stdout / stderr / *_len) live below.
  *
- * Public ABI (callable from compiled .nu code):
- *
- *   long long  nurl_proc_run(const char *cmd,
- *                            const char *argv_buf,
- *                            long long argc,
- *                            const char *stdin_blob);
- *       Spawn `cmd` with the argument array stored at `argv_buf`
- *       (interpreted as `char *const argv[argc]`, i.e. an array of
- *       NUL-terminated C-string pointers). `argv_buf` may be NULL
- *       when `argc == 0`. `stdin_blob` is fed verbatim to the child's
- *       stdin (NULL or "" means empty stdin). The call blocks until
- *       the child exits and stdout/stderr have been drained. Returns
- *       a heap pointer (cast to i64) the accessors below project; 0
- *       only on calloc failure.
- *
- *   long long  nurl_proc_exit_code  (long long h);
- *   const char* nurl_proc_stdout    (long long h);   // borrowed
- *   const char* nurl_proc_stderr    (long long h);   // borrowed
- *   long long  nurl_proc_stdout_len (long long h);
- *   long long  nurl_proc_stderr_len (long long h);
- *   long long  nurl_proc_err_kind   (long long h);   // 0 = ok
- *   void       nurl_proc_free       (long long h);
- *
- * Tags must match `ProcessErr` in stdlib/std/process.nu:
- *   0  ok
- *   1  ProcessNotFound      cmd missing on PATH / file not found
- *   2  ProcessExecFailed    fork/exec/CreateProcess failed otherwise
- *   3  ProcessIo            pipe/wait/read failure mid-flight
- *   4  ProcessOther         anything else / unsupported target (WASI)
- *
- * MVP scope:
- *   * Blocking single-shot run. No streaming, no timeout.
- *   * Stdout + stderr are captured into heap buffers in full.
- *   * Child inherits the parent process environment as-is.
+ * ProcessErr tags (must match stdlib/std/process.nu):
+ *   0 ok  1 NotFound  2 ExecFailed  3 Io  4 Other
  */
 
 #define NURL_PROC_ERR_OK            0
@@ -2784,7 +1789,6 @@ typedef struct NurlProcResult {
     long long  stderr_len;
 } NurlProcResult;
 
-/* Growable byte buffer specialised for child-output capture. */
 typedef struct NurlProcBuf { char *data; size_t len; size_t cap; } NurlProcBuf;
 static int nurl__proc_buf_append(NurlProcBuf *b, const char *src, size_t n) {
     if (b->len + n + 1 > b->cap) {
@@ -2801,18 +1805,14 @@ static int nurl__proc_buf_append(NurlProcBuf *b, const char *src, size_t n) {
 }
 
 #if !defined(_WIN32) && !defined(__wasi__)
-/* POSIX backend: the real fork+pipe+poll+waitpid path lives in
- * pure NURL (`stdlib/std/process.nu` via `stdlib/core/posix.nu`'s
- * FFI surface). `process_run` dispatches there on every POSIX
- * target; this no-op stub remains only for link-time symbol
- * resolution of `nurl_proc_run`. */
+/* POSIX path is in pure NURL; this stub is link-time only. */
 long long nurl_proc_run(const char *cmd, const char *argv_buf,
                         long long argc, const char *stdin_blob) {
     (void)cmd; (void)argv_buf; (void)argc; (void)stdin_blob;
     return 0;
 }
 
-/* Shared POSIX include block — used by the §16b accessors below. */
+/* POSIX headers shared with the §16b accessors below. */
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -2858,9 +1858,7 @@ static unsigned __stdcall nurl__proc_reader_thread(void *p) {
     return 0;
 }
 
-/* Quote a single argv entry per the CommandLineToArgvW rules. Source:
- * "Everyone quotes command line arguments the wrong way" / Daniel
- * Colascione (MSDN, 2011). */
+/* Quote one argv entry per CommandLineToArgvW rules (Colascione 2011). */
 static int nurl__proc_quote_arg(const char *arg, NurlProcBuf *out) {
     if (!arg) arg = "";
     int needs_quote = (*arg == 0);
@@ -2947,7 +1945,7 @@ long long nurl_proc_run(const char *cmd, const char *argv_buf,
         r->stderr_buf = strdup("");
         return (long long)(uintptr_t)r;
     }
-    /* Parent ends must NOT be inherited. */
+    /* Parent-side ends must not be inherited. */
     SetHandleInformation(in_w,  HANDLE_FLAG_INHERIT, 0);
     SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0);
     SetHandleInformation(err_r, HANDLE_FLAG_INHERIT, 0);
@@ -2963,7 +1961,7 @@ long long nurl_proc_run(const char *cmd, const char *argv_buf,
                              NULL, NULL, TRUE, 0,
                              NULL, NULL, &si, &pi);
     free(cmdline.data);
-    /* Close the inherited ends on the parent side once the child owns them. */
+    /* Close inherited ends on the parent side once the child owns them. */
     CloseHandle(in_r);
     CloseHandle(out_w);
     CloseHandle(err_w);
@@ -3021,8 +2019,7 @@ long long nurl_proc_run(const char *cmd, const char *argv_buf,
     return (long long)(uintptr_t)r;
 }
 
-#else
-/* ── WASI / unsupported targets — stub ──────────────────────── */
+#else  /* WASI — stub */
 
 long long nurl_proc_run(const char *cmd, const char *argv_buf,
                         long long argc, const char *stdin_blob) {
@@ -3035,9 +2032,7 @@ long long nurl_proc_run(const char *cmd, const char *argv_buf,
     return (long long)(uintptr_t)r;
 }
 
-#endif  /* §16 backend selection */
-
-/* Accessors and the freer are platform-agnostic. */
+#endif
 
 long long nurl_proc_exit_code(long long h) {
     NurlProcResult *r = (NurlProcResult*)(uintptr_t)h;
@@ -3079,104 +2074,52 @@ void nurl_proc_free(long long h) {
 
 /* ── §16b  Process spawn (duplex stdio, line-buffered) ───────── */
 /*
- * Persistent child process with live stdin/stdout pipes. Backs the MCP
- * stdio client (`stdlib/ext/mcp_stdio.nu`) where every JSON-RPC request
- * writes one line and every response reads one line back, across many
- * round-trips on a single child.
+ * Persistent child with live stdin/stdout pipes — backs the MCP stdio
+ * client (one write-line, one read-line per JSON-RPC round-trip, many
+ * round-trips per child). Stderr is INHERITED so the parent sees diags.
  *
- * Public ABI:
+ * Read-line returns a BORROWED pointer into the handle's reused
+ * line_buf (NUL-terminated, no trailing '\n'); copy via string_from
+ * before the next read. timeout_ms<=0 blocks; on timeout returns ""
+ * with err_kind unchanged (caller probes _eof to distinguish from EOF);
+ * on error returns "", err_kind=Io, last_io_err=errno.
  *
- *   long long  nurl_proc_spawn(const char *cmd,
- *                              const char *argv_buf,
- *                              long long argc);
- *       Fork+execvp (POSIX) or CreateProcess (Win32) with stdin and
- *       stdout piped to the parent. Stderr is INHERITED — MCP servers
- *       conventionally log diagnostics there and the parent forwards
- *       them to its own terminal. Returns a heap pointer (cast to i64);
- *       0 only on calloc failure.
+ * Write blocks until n bytes flushed; returns bytes written or -1.
+ * SIGPIPE is locally ignored so a dead child doesn't kill the parent.
  *
- *   long long  nurl_proc_spawn_err_kind     (long long h);  // 0 = ok
- *   long long  nurl_proc_spawn_pid          (long long h);
- *   long long  nurl_proc_spawn_write        (long long h, const char *buf, long long n);
- *   void       nurl_proc_spawn_close_stdin  (long long h);
- *   const char* nurl_proc_spawn_read_line   (long long h, long long timeout_ms);
- *   long long  nurl_proc_spawn_read_line_len(long long h);
- *   long long  nurl_proc_spawn_eof          (long long h);
- *   long long  nurl_proc_spawn_last_io_err  (long long h);
- *   long long  nurl_proc_spawn_wait         (long long h);  // blocks
- *   long long  nurl_proc_spawn_kill         (long long h, long long sig);
- *   void       nurl_proc_spawn_free         (long long h);
- *
- * Read-line semantics:
- *   * Returns a BORROWED pointer into the handle's internal line_buf
- *     (NUL-terminated, no trailing '\n'). The same buffer is reused on
- *     the next read_line call — caller must copy via `string_from`
- *     before triggering another read.
- *   * On timeout: returns "" with err_kind unchanged; caller distinguishes
- *     timeout from EOF via `_eof` (0 means timeout, 1 means peer closed).
- *   * On read error: returns "", sets err_kind = NURL_PROC_ERR_IO,
- *     sets last_io_err = errno.
- *   * timeout_ms <= 0 ⇒ block until a full line arrives or EOF/error.
- *
- * Write semantics:
- *   * Blocking write of `n` bytes. Returns bytes written (>= 0) or -1
- *     on error; SIGPIPE is locally ignored so a dead child doesn't
- *     kill the parent.
- *
- * Tag values match `ProcessErr` (NURL_PROC_ERR_* constants above).
- */
-
-/* All-long-long layout — every field is one 8-byte slot — so the
- * pure-NURL POSIX backend in `stdlib/std/process.nu` can index
- * fields by `nurl_poke` / `nurl_peek` slot number (0..15). C-side
- * accessors read the same fields via the typedef. sizeof is 128
- * bytes on every supported POSIX target.
- *
- * Win32 keeps its own layout (HANDLEs instead of fds) since
- * pure-NURL FFI doesn't reach CreateProcess yet. Slots 0..5 are
- * shared, slot 6+ is `h_proc / fd_in / pid` interleaved by
- * platform — Win32 is allowed to differ because NURL never reads
- * its slots directly. */
+ * NurlProcChild is laid out as 16 × i64 slots so the pure-NURL POSIX
+ * backend (stdlib/std/process.nu) can index fields via nurl_peek/poke.
+ * Win32 keeps HANDLE-typed fields at slot 6+ because NURL never reads
+ * those slots directly (Win32 spawn isn't ported yet). */
 typedef struct NurlProcChild {
-    long long  err_kind;       /* slot 0 — 0 / NURL_PROC_ERR_* set at spawn */
-    long long  last_io_err;    /* slot 1 — errno snapshot from last failure */
-    long long  exit_code;      /* slot 2 — -1 until wait() succeeds */
-    long long  eof;            /* slot 3 — stdout drained: 0/1 */
-    long long  waited;         /* slot 4 — exit_code is valid */
-    long long  pid_or_0;       /* slot 5 — logical pid; 0 on platforms w/o pid */
-
+    long long  err_kind;       /* slot 0  */
+    long long  last_io_err;    /* slot 1  — errno snapshot */
+    long long  exit_code;      /* slot 2  — -1 until wait() */
+    long long  eof;            /* slot 3  — stdout drained 0/1 */
+    long long  waited;         /* slot 4  — exit_code valid */
+    long long  pid_or_0;       /* slot 5  */
 #if !defined(_WIN32) && !defined(__wasi__)
-    long long  pid;            /* slot 6 — pid_t, widened */
-    long long  fd_in;          /* slot 7 — parent → child stdin write */
-    long long  fd_out;         /* slot 8 — child stdout → parent read */
+    long long  pid;            /* slot 6  — pid_t widened */
+    long long  fd_in;          /* slot 7  — parent→child stdin */
+    long long  fd_out;         /* slot 8  — child→parent stdout */
 #elif defined(_WIN32) && !defined(__wasi__)
-    HANDLE     h_proc;         /* slot 6 (Win32-only layout) */
+    HANDLE     h_proc;         /* slot 6+ (Win32 layout — NURL never reads) */
     HANDLE     h_in;
     HANDLE     h_out;
 #endif
-
-    /* Pending bytes read from the child but not yet returned: any
-     * scratch read past the first '\n' of a request becomes the head
-     * of the next read_line. */
-    long long  scratch;        /* slot 9 — char* widened to i64 */
+    /* Read-overflow: bytes past the first '\n' become the next line's head. */
+    long long  scratch;        /* slot 9  — char* widened */
     long long  scratch_len;    /* slot 10 */
     long long  scratch_cap;    /* slot 11 */
-
-    /* Resolved line returned by `nurl_proc_spawn_read_line`. Reused
-     * across calls to keep allocations stable. */
-    long long  line_buf;       /* slot 12 — char* widened to i64 */
+    /* Resolved line — reused across calls. */
+    long long  line_buf;       /* slot 12 — char* widened */
     long long  line_len;       /* slot 13 */
     long long  line_cap;       /* slot 14 */
     long long  _reserved;      /* slot 15 — round to 128 bytes */
 } NurlProcChild;
 
 #if !defined(_WIN32) && !defined(__wasi__)
-/* POSIX backend: the real fork+pipes+exec+poll-drain+waitpid path
- * lives in pure NURL (`stdlib/std/process.nu` via
- * `stdlib/core/posix.nu`'s FFI surface). The spawn surface
- * dispatches there on every POSIX target; these no-op stubs
- * remain only for link-time symbol resolution. */
-
+/* POSIX spawn surface lives in pure NURL; these stubs satisfy the linker. */
 long long nurl_proc_spawn(const char *cmd, const char *argv_buf, long long argc) {
     (void)cmd; (void)argv_buf; (void)argc;
     return 0;
@@ -3190,8 +2133,7 @@ long long nurl_proc_spawn_wait(long long h) { (void)h; return -1; }
 long long nurl_proc_spawn_kill(long long h, long long sig) { (void)h; (void)sig; return -1; }
 
 #elif defined(_WIN32) && !defined(__wasi__)
-/* ── Win32 stub: spawn returns ProcessOther for now ──────────── */
-
+/* Win32 spawn stubs — returns ProcessOther until ported. */
 long long nurl_proc_spawn(const char *cmd, const char *argv_buf, long long argc) {
     (void)cmd; (void)argv_buf; (void)argc;
     NurlProcChild *c = (NurlProcChild*)calloc(1, sizeof(NurlProcChild));
@@ -3208,9 +2150,7 @@ const char* nurl_proc_spawn_read_line(long long h, long long t) { (void)h; (void
 long long nurl_proc_spawn_wait(long long h) { (void)h; return -1; }
 long long nurl_proc_spawn_kill(long long h, long long sig) { (void)h; (void)sig; return -1; }
 
-#else
-/* ── WASI stub ─────────────────────────────────────────────────── */
-
+#else  /* WASI */
 long long nurl_proc_spawn(const char *cmd, const char *argv_buf, long long argc) {
     (void)cmd; (void)argv_buf; (void)argc;
     NurlProcChild *c = (NurlProcChild*)calloc(1, sizeof(NurlProcChild));
@@ -3226,10 +2166,7 @@ void nurl_proc_spawn_close_stdin(long long h) { (void)h; }
 const char* nurl_proc_spawn_read_line(long long h, long long t) { (void)h; (void)t; return ""; }
 long long nurl_proc_spawn_wait(long long h) { (void)h; return -1; }
 long long nurl_proc_spawn_kill(long long h, long long sig) { (void)h; (void)sig; return -1; }
-
-#endif  /* §16b backend selection */
-
-/* Platform-agnostic accessors. */
+#endif
 
 long long nurl_proc_spawn_err_kind(long long h) {
     NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
@@ -3259,38 +2196,23 @@ long long nurl_proc_spawn_last_io_err(long long h) {
 void nurl_proc_spawn_free(long long h) {
     NurlProcChild *c = (NurlProcChild*)(uintptr_t)h;
     if (!c) return;
-#if !defined(_WIN32) && !defined(__wasi__)
-    /* NURL `proc_free` does the close/reap/buffer-free on POSIX; this
-     * stub remains for link-time symbol resolution and the (rare)
-     * Win32/WASI dispatch path where C-side accessors still own the
-     * struct. */
-    free(c);
-#elif defined(_WIN32) && !defined(__wasi__)
+#if defined(_WIN32) && !defined(__wasi__)
     if (c->h_in)   CloseHandle(c->h_in);
     if (c->h_out)  CloseHandle(c->h_out);
     if (c->h_proc) CloseHandle(c->h_proc);
     free((void*)(uintptr_t)c->scratch);
     free((void*)(uintptr_t)c->line_buf);
-    free(c);
-#else
-    free(c);
 #endif
+    /* POSIX `proc_free` does the close/reap/buffer-free in NURL. */
+    free(c);
 }
 
-/* ── §17  Crypto (secure random only) ────────────────────────────
- *
- * MD5 / SHA-1 / SHA-256 / SHA-512 / HMAC transforms are pure NURL
- * (`stdlib/std/hash_*.nu`). What stays here is the OS-entropy
- * bridge — `getrandom(2)` on Linux, `arc4random_buf` on macOS/BSD,
- * `BCryptGenRandom` on Windows, plus a `/dev/urandom` fallback —
- * and a small hex encoder used only by `nurl_rand_bytes_hex`.
- *
- * Public ABI:
- *   long long   nurl_rand_u64        (void);
- *   const char* nurl_rand_bytes_hex  (long long n);   // n > 0; ≤ 4096
- *
- * `const char*` returns are heap-owned (NURL caller frees via nurl_free).
- */
+/* ── §17  Crypto entropy bridge ─────────────────────────────── */
+/* Hash transforms (MD5/SHA-1/SHA-256/SHA-512/HMAC) live in pure NURL
+ * (stdlib/std/hash_*.nu); rand_u64 / rand_hex_str in stdlib/std/random.nu.
+ * What stays here is the OS-entropy bridge — three different syscall
+ * APIs (getrandom / arc4random_buf / BCryptGenRandom) in three different
+ * link-time libraries, with a /dev/urandom fallback. */
 
 #ifdef _WIN32
 #  include <bcrypt.h>
@@ -3301,169 +2223,82 @@ void nurl_proc_spawn_free(long long h) {
 #  include <sys/random.h>
 #endif
 
-static void nurl_hex_encode(const uint8_t *bytes, size_t n, char *out) {
-    static const char H[] = "0123456789abcdef";
-    for (size_t i = 0; i < n; i++) {
-        out[i*2]   = H[bytes[i] >> 4];
-        out[i*2+1] = H[bytes[i] & 0x0F];
-    }
-    out[n*2] = '\0';
-}
-
-/* Fill `buf` with `n` cryptographically-strong random bytes. Returns 1 on
- * success, 0 on failure. Falls back to a non-cryptographic time/clock
- * mix only if every OS source fails (extreme degradation; should never
- * happen on a modern host). */
-static int nurl_rand_fill(uint8_t *buf, size_t n) {
+/* Fill buf with n cryptographically-strong bytes; return 1 on success.
+ * 0 only on degraded fallback (LCG over time+clock) — shouldn't happen
+ * on a modern host. */
+long long nurl_rand_fill(unsigned char *buf, long long n) {
+    if (!buf || n <= 0) return 0;
+    size_t want = (size_t)n;
 #if defined(_WIN32)
-    if (BCryptGenRandom(NULL, buf, (ULONG)n, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0)
+    if (BCryptGenRandom(NULL, buf, (ULONG)want, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0)
         return 1;
 #elif defined(__APPLE__)
-    /* arc4random_buf is documented as never failing. */
-    arc4random_buf(buf, n);
+    arc4random_buf(buf, want);
     return 1;
 #elif defined(__linux__)
     size_t got = 0;
-    while (got < n) {
-        ssize_t r = getrandom(buf + got, n - got, 0);
+    while (got < want) {
+        ssize_t r = getrandom(buf + got, want - got, 0);
         if (r < 0) {
             if (errno == EINTR) continue;
             break;
         }
         got += (size_t)r;
     }
-    if (got == n) return 1;
-    /* Fallback: /dev/urandom (older kernels without getrandom). */
+    if (got == want) return 1;
+    /* /dev/urandom for older kernels without getrandom. */
     FILE *f = fopen("/dev/urandom", "rb");
     if (f) {
-        size_t r2 = fread(buf, 1, n, f);
+        size_t r2 = fread(buf, 1, want, f);
         fclose(f);
-        if (r2 == n) return 1;
+        if (r2 == want) return 1;
     }
 #else
     FILE *f = fopen("/dev/urandom", "rb");
     if (f) {
-        size_t r = fread(buf, 1, n, f);
+        size_t r = fread(buf, 1, want, f);
         fclose(f);
-        if (r == n) return 1;
+        if (r == want) return 1;
     }
 #endif
-    /* Last-resort degraded fallback. NOT cryptographically strong. */
+    /* Degraded LCG fallback — NOT cryptographically strong. wasi-sdk
+     * deprecates clock() so drop it from the mix there. */
 #ifdef __wasi__
-    /* `clock()` is deprecated on wasi-sdk (would need
-     * `_WASI_EMULATED_PROCESS_CLOCKS`); drop it from the entropy mix —
-     * the buf-address XOR is enough variance for a degraded path. */
     uint64_t t = (uint64_t)time(NULL) ^ (uint64_t)(uintptr_t)buf;
 #else
     uint64_t t = (uint64_t)time(NULL) ^ (uint64_t)(uintptr_t)buf ^ (uint64_t)clock();
 #endif
-    for (size_t i = 0; i < n; i++) {
+    for (size_t i = 0; i < want; i++) {
         t = t * 6364136223846793005ULL + 1442695040888963407ULL;
         buf[i] = (uint8_t)(t >> 33);
     }
     return 0;
 }
 
-long long nurl_rand_u64(void) {
-    uint8_t b[8];
-    nurl_rand_fill(b, 8);
-    uint64_t v = 0;
-    for (int i = 0; i < 8; i++) v = (v << 8) | b[i];
-    return (long long)v;
-}
 
-const char* nurl_rand_bytes_hex(long long n) {
-    if (n <= 0) {
-        char *empty = (char*)malloc(1);
-        if (empty) empty[0] = '\0';
-        return empty;
-    }
-    if (n > 4096) n = 4096;  /* cap to keep the hex output bounded */
-    uint8_t *buf = (uint8_t*)malloc((size_t)n);
-    if (!buf) return strdup("");
-    nurl_rand_fill(buf, (size_t)n);
-    char *out = (char*)malloc((size_t)(n * 2 + 1));
-    if (!out) { free(buf); return strdup(""); }
-    nurl_hex_encode(buf, (size_t)n, out);
-    free(buf);
-    return out;
-}
-
-
-/* ── §18  TCP sockets (HTTP server foundation) ──────────────────── */
+/* ── §18  TCP sockets + TLS (HTTP server foundation) ─────────── */
 /*
- * Minimum viable TCP layer used by stdlib/std/net.nu and the upcoming
- * pure-NURL HTTP server (HTTP_SERVER_PLAN.md). Self-contained — no
- * libuv / openssl dependency, only the host's libc / Winsock stack.
+ * Blocking IPv4 TCP layer over libc / Winsock, optionally with OpenSSL
+ * TLS (SNI + ALPN + mTLS). Handles are heap NurlTcp* cast to i64; the
+ * handle is always non-zero so the caller probes nurl_tcp_err_kind.
  *
- * Public ABI exported to NURL (callable from compiled .nu code):
+ * ABI:
+ *   tcp_listen(host, port, backlog)         → LISTEN handle. host=""/NULL
+ *                                              → INADDR_ANY. backlog<=0
+ *                                              → 16.
+ *   tcp_connect(host, port)                 → CONN handle (IPv4 or IPv6
+ *                                              via getaddrinfo).
+ *   tcp_accept(listener)                    → fresh CONN; eager peer cap.
+ *   tcp_read (h, buf, n) → >0 bytes / 0 EOF / <0 err  (sets h->err_kind)
+ *   tcp_write(h, buf, n) → total bytes or -1
+ *   tcp_close(h)                            — call once, never twice.
+ *   tcp_set_timeout(h, ms)                  — SO_RCVTIMEO + SO_SNDTIMEO.
+ *   tcp_peer_addr(h)                        — borrowed "ip:port".
  *
- *   long long  nurl_tcp_listen     (const char *host,
- *                                   long long port,
- *                                   long long backlog);
- *       Allocate a heap NurlTcp handle, open a fresh socket, bind it
- *       to host:port (host == NULL or "" → INADDR_ANY) and set it to
- *       LISTEN with the requested backlog (clamped to >= 1). Returns
- *       a handle (long long heap pointer cast); the handle is always
- *       non-zero so callers can read err_kind via nurl_tcp_err_kind to
- *       discover whether the listener is live. Ports outside [1,65535]
- *       fail with NetBind. Backlog <= 0 is treated as 16.
- *
- *   long long  nurl_tcp_accept     (long long listener);
- *       Block on accept(2). Returns a fresh NurlTcp handle of kind
- *       CONN. On failure the returned handle has err_kind != 0 and
- *       fd == NURL_INVALID_SOCK; the listener handle's err_kind is
- *       NOT touched (each handle owns its own sideband). The peer
- *       address is captured eagerly here so peer_addr is a cheap
- *       lookup later.
- *
- *   long long  nurl_tcp_read       (long long h, const char *buf,
- *                                   long long n);
- *       Issue a single recv(2). Returns:
- *         > 0 — bytes written into buf
- *         = 0 — peer closed cleanly (EOF)
- *         < 0 — error; sets h->err_kind to NetTimeout / NetClosed /
- *               NetRead as appropriate.
- *       The buffer is BORROWED (typically a Vec[u]'s data pointer).
- *
- *   long long  nurl_tcp_write      (long long h, const char *buf,
- *                                   long long n);
- *       Loops over send(2) until the full payload is written or an
- *       error occurs. Returns total bytes written on success, or -1
- *       on error (sets h->err_kind to NetTimeout / NetClosed / NetWrite).
- *
- *   void       nurl_tcp_close      (long long h);
- *       Closes the underlying socket (if any) and frees the handle.
- *       Safe to call on a 0/null handle. Calling it twice on the same
- *       handle is a use-after-free — don't.
- *
- *   long long  nurl_tcp_err_kind   (long long h);
- *       Returns h->err_kind (0 on a healthy handle).
- *
- *   const char *nurl_tcp_peer_addr (long long h);
- *       Returns a borrowed view of the cached "ip:port" peer address,
- *       lifetime tied to the handle. Returns "" for a listener handle
- *       or a never-accepted conn.
- *
- *   void       nurl_tcp_set_timeout(long long h, long long ms);
- *       Sets SO_RCVTIMEO and SO_SNDTIMEO. ms <= 0 disables the timeout.
- *
- * NetErr tags must match `NetErr` in stdlib/std/net.nu:
- *   0  ok
- *   1  NetBind         bind/listen failed (bad host, perm denied, …)
- *   2  NetAddrInUse    EADDRINUSE on bind
- *   3  NetAccept       accept(2) failed
- *   4  NetRead         recv(2) failed (non-timeout)
- *   5  NetWrite        send(2) failed (non-timeout, non-closed)
- *   6  NetClosed       peer reset / EPIPE
- *   7  NetTimeout      EAGAIN/EWOULDBLOCK after SO_*TIMEO
- *   8  NetOther        anything else / unsupported target (WASI)
- *
- * MVP scope (deliberate exclusions):
- *   - IPv6: only AF_INET is wired in for v1 (HTTP_SERVER_PLAN Phase 1).
- *   - Async / non-blocking: every operation is blocking. The server's
- *     concurrency story (Phase 5) layers thread-per-connection on top.
- *   - TLS: handled by Phase 9 — left to nginx/caddy in front for v1.
+ * NetErr tags (match stdlib/std/net.nu):
+ *   0 ok 1 Bind 2 AddrInUse 3 Accept 4 Read 5 Write 6 Closed
+ *   7 Timeout 8 Other
+ *   9..12  TLS_CTX_INIT / TLS_CERT_LOAD / TLS_KEY_LOAD / TLS_HANDSHAKE
  */
 
 #define NURL_NET_ERR_OK             0
@@ -3475,9 +2310,8 @@ const char* nurl_rand_bytes_hex(long long n) {
 #define NURL_NET_ERR_CLOSED         6
 #define NURL_NET_ERR_TIMEOUT        7
 #define NURL_NET_ERR_OTHER          8
-/* TLS-specific errors (Phase 9). Only meaningful when NURL_HAVE_OPENSSL
- * was defined at compile time — otherwise tcp_listen_tls returns
- * TLS_CTX_INIT unconditionally. */
+/* TLS errors — meaningful only with NURL_HAVE_OPENSSL; otherwise
+ * tcp_listen_tls returns TLS_CTX_INIT unconditionally. */
 #define NURL_NET_ERR_TLS_CTX_INIT   9
 #define NURL_NET_ERR_TLS_CERT_LOAD  10
 #define NURL_NET_ERR_TLS_KEY_LOAD   11
@@ -3512,10 +2346,9 @@ typedef int nurl_sockfd_t;
 #  endif
 
 #ifdef NURL_HAVE_OPENSSL
-/* SNI registry entry — pairs a lowercase hostname with the SSL_CTX
- * that holds its cert + private key. The SSL_CTX is owned (caller
- * adds via nurl_tcp_tls_add_sni); freed via SSL_CTX_free which is
- * refcounted in OpenSSL so in-flight conns survive a reload. */
+/* One SNI registry entry: owned hostname + owned SSL_CTX (added via
+ * nurl_tcp_tls_add_sni, freed via SSL_CTX_free which is refcounted so
+ * in-flight conns survive a reload). */
 typedef struct NurlSniEntry {
     char    *hostname;
     SSL_CTX *ctx;
@@ -3525,36 +2358,26 @@ typedef struct NurlSniEntry {
 typedef struct NurlTcp {
     nurl_sockfd_t fd;
     long long     err_kind;
-    int           kind;     /* NURL_TCP_KIND_* */
-    char         *peer;     /* "ip:port" or "" — owned heap copy */
+    int           kind;
+    char         *peer;     /* owned "ip:port" or "" */
 #ifdef NURL_HAVE_OPENSSL
-    /* TLS state. Non-NULL fields turn this handle into a TLS-aware
-     * variant — read/write/close dispatch via libssl in that case.
-     *  * ssl_ctx is set on a LISTENER created via nurl_tcp_listen_tls;
-     *    on accept(), a per-conn SSL is spun up from this context and
-     *    stored in the new conn handle's `ssl` field.
-     *  * ssl is set on a CONN whose handshake completed; nurl_tcp_read
-     *    / nurl_tcp_write then call SSL_read / SSL_write instead of
-     *    recv / send. SSL_shutdown + SSL_free fire on close. */
+    /* TLS state — non-NULL fields turn the handle into a TLS variant.
+     *   ssl_ctx is on a LISTENER from nurl_tcp_listen_tls; accept()
+     *     spins up a per-conn SSL stored in the new conn handle.
+     *   ssl is on a CONN whose handshake completed; read/write then
+     *     dispatch via SSL_read/SSL_write. */
     SSL_CTX      *ssl_ctx;
     SSL          *ssl;
-    /* ALPN protocol list, wire-format (per RFC 7301): a sequence of
-     * length-prefixed entries, e.g. "\x02h2\x08http/1.1". Owned. NULL
-     * means ALPN was not configured on this listener — the selected
-     * protocol per-conn is left blank and the server defaults to
-     * HTTP/1.1 handling. Freed at handle close. */
+    /* ALPN wire-format list (RFC 7301): length-prefixed entries like
+     * "\x02h2\x08http/1.1". NULL ⇒ no ALPN configured. */
     unsigned char *alpn_wire;
     size_t         alpn_wire_len;
-    /* SNI registry — per-hostname cert/key. Empty (NULL) on listeners
-     * that only serve the default ssl_ctx. The SNI callback picks an
-     * entry based on the client's TLS extension; falls through to
-     * ssl_ctx when no entry matches. */
+    /* SNI registry — empty on listeners serving only the default ctx. */
     NurlSniEntry  *sni_entries;
     size_t         sni_count;
     size_t         sni_cap;
-    /* Mutex protects ssl_ctx swap + sni_entries growth during live
-     * cert reload. Init-on-first-TLS-use; lazily because plain TCP
-     * listeners don't need it. */
+    /* Protects ssl_ctx swap + sni_entries growth during live cert
+     * reload. Lazy-init — plain TCP listeners never pay the cost. */
   #ifdef _WIN32
     CRITICAL_SECTION tls_lock;
   #else
@@ -3600,8 +2423,7 @@ static void nurl__tls_lock_destroy(NurlTcp *h) {
     h->tls_lock_init = 0;
 }
 
-/* Case-insensitive ASCII strcmp. Inlined here to keep the SNI lookup
- * self-contained — runtime.c has a couple of similar one-offs. */
+/* Case-insensitive ASCII strcmp for SNI hostname lookup. */
 static int nurl__hostname_ieq(const char *a, const char *b) {
     if (!a || !b) return 0;
     while (*a && *b) {
@@ -3614,11 +2436,8 @@ static int nurl__hostname_ieq(const char *a, const char *b) {
     return *a == 0 && *b == 0;
 }
 
-/* SNI callback (RFC 6066 §3). Invoked by OpenSSL during the client
- * hello; we look the client-sent servername up in the listener's
- * sni_entries and call SSL_set_SSL_CTX if it matches. Returns OK
- * either way — a no-match leaves the conn on the listener's default
- * ssl_ctx, which is the spec-compliant fallback. */
+/* SNI callback (RFC 6066 §3) — match client-sent servername against
+ * listener's sni_entries; no-match falls through to the default ctx. */
 static int nurl__sni_select_cb(SSL *ssl, int *al, void *arg) {
     (void)al;
     NurlTcp *listener = (NurlTcp*)arg;
@@ -3637,8 +2456,7 @@ static int nurl__sni_select_cb(SSL *ssl, int *al, void *arg) {
 }
 #endif
 
-/* Map host errno → NetErr tag for a generic operation. Specific
- * call-sites override (e.g. read distinguishes EOF/timeout). */
+/* errno/WSAGetLastError → NetErr; call sites override when needed. */
 #ifdef _WIN32
 static long long nurl__net_map_wsa(int we, long long deflt) {
     switch (we) {
@@ -3668,8 +2486,7 @@ static long long nurl__net_map_errno(int e, long long deflt) {
 #endif
 
 #ifdef _WIN32
-/* One-time WSAStartup. Idempotent — safe to call from every entry
- * point. Returns 1 on success, 0 on failure. */
+/* One-time WSAStartup; idempotent across calls. */
 static int nurl__net_wsa_init(void) {
     static int initialised = 0;
     if (initialised) return 1;
@@ -3680,27 +2497,23 @@ static int nurl__net_wsa_init(void) {
 }
 #endif
 
-/* Format an AF_INET sockaddr into a freshly-allocated "ip:port" string. */
+/* AF_INET sockaddr → owned "ip:port" string. */
 static char *nurl__net_format_peer(const struct sockaddr_in *sa) {
     char ip[INET_ADDRSTRLEN] = {0};
 #ifdef _WIN32
-    /* inet_ntop is available on Vista+; ws2tcpip.h provides it. */
     InetNtopA(AF_INET, (PVOID)&sa->sin_addr, ip, sizeof(ip));
 #else
     inet_ntop(AF_INET, &sa->sin_addr, ip, sizeof(ip));
 #endif
     unsigned port = (unsigned)ntohs(sa->sin_port);
-    /* INET_ADDRSTRLEN is 16; "+:65535\0" needs at most 23 bytes. */
-    char *out = (char*)malloc(32);
+    char *out = (char*)malloc(32);  /* INET_ADDRSTRLEN(16) + ":65535\0" fits */
     if (!out) return strdup("");
     snprintf(out, 32, "%s:%u", ip, port);
     return out;
 }
 
-/* Allocate a fresh NurlTcp handle. Always returns non-NULL on a healthy
- * host — only an OOM degrades to NULL, which the caller surfaces as
- * NetOther. The handle starts in the "failed" state (err_kind = OTHER,
- * fd = invalid); call sites overwrite both on success. */
+/* Fresh handle in the "failed" state (err_kind=OTHER, fd=invalid);
+ * call sites overwrite on success. NULL only on OOM. */
 static NurlTcp *nurl__tcp_new_handle(int kind) {
     NurlTcp *h = (NurlTcp*)calloc(1, sizeof(NurlTcp));
     if (!h) return NULL;
@@ -3734,7 +2547,7 @@ long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
         return (long long)(uintptr_t)h;
     }
 
-    /* SO_REUSEADDR so quick restarts don't TIME_WAIT for a minute. */
+    /* SO_REUSEADDR so quick restarts skip TIME_WAIT. */
     int on = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
                (const char*)&on, (int)sizeof(on));
@@ -3788,13 +2601,9 @@ long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
     return (long long)(uintptr_t)h;
 }
 
-/* §18b — client-side TCP connect. Resolves `host` (DNS name or IP
- * literal, v4 or v6) via getaddrinfo, opens a socket, and connect()s
- * to `port`. Returns a CONN-kind NurlTcp handle — read/write/close/
- * set_timeout consume it exactly like an accept()ed connection. The
- * handle is always non-zero; callers probe nurl_tcp_err_kind. The
- * server half of the runtime is listen/accept only; this is what an
- * MQTT / outbound client needs. */
+/* Client-side connect — getaddrinfo for host (DNS or IPv4/IPv6 literal)
+ * + socket + connect. Returned CONN handle consumes read/write/close
+ * identically to an accept()ed conn. */
 long long nurl_tcp_connect(const char *host, long long port) {
 #ifdef _WIN32
     if (!nurl__net_wsa_init()) {
@@ -3816,7 +2625,7 @@ long long nurl_tcp_connect(const char *host, long long port) {
 
     struct addrinfo hints, *res = NULL, *ai;
     memset(&hints, 0, sizeof(hints));
-    hints.ai_family   = AF_UNSPEC;        /* accept IPv4 or IPv6 */
+    hints.ai_family   = AF_UNSPEC;   /* IPv4 or IPv6 */
     hints.ai_socktype = SOCK_STREAM;
     if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) {
         h->err_kind = NURL_NET_ERR_OTHER;
@@ -3876,11 +2685,8 @@ long long nurl_tcp_accept(long long listener) {
     c->err_kind = NURL_NET_ERR_OK;
     c->peer     = nurl__net_format_peer(&peer);
 #ifdef NURL_HAVE_OPENSSL
-    /* If the listener carries an SSL_CTX (i.e. came from
-     * nurl_tcp_listen_tls), spin up a per-conn SSL and run the server-
-     * side handshake before handing the conn back. A handshake failure
-     * is reported as TLS_HANDSHAKE; the TCP fd is closed so we don't
-     * leak a half-open peer. */
+    /* TLS listener — spin up per-conn SSL and run the handshake here.
+     * Handshake failure → TLS_HANDSHAKE + close fd (no half-open leak). */
     if (l->ssl_ctx) {
         SSL *s = SSL_new(l->ssl_ctx);
         if (!s) {
@@ -3910,32 +2716,15 @@ long long nurl_tcp_accept(long long listener) {
     return (long long)(uintptr_t)c;
 }
 
-/* TLS listener — POSIX/Win32 path. Composes the existing socket
- * listen() with an SSL_CTX configured against the given cert + key
- * files. On any failure (ctx create, cert load, key load, listen), we
- * still return a valid handle so the caller can inspect err_kind.
- * The underlying socket fd is closed if the TLS phase fails after
- * listen() succeeded, so no FD leak. */
-/* ── ALPN (RFC 7301) — server-side protocol selection ─────────────
- *
- * Server-side ALPN allows the client + server to negotiate which
- * application-layer protocol (h2, http/1.1, ...) runs over the TLS
- * connection. Required by RFC 9113 §3.3 for HTTP/2 over TLS.
- *
- * NURL's API uses a space-separated protocol list in server-preference
- * order, e.g. "h2 http/1.1". We convert it to ALPN wire format
- * (length-prefixed entries) once at listener-create time, stash the
- * blob on the NurlTcp handle, and the callback below picks the first
- * server-preferred match.
- *
- * Build-time gated on NURL_HAVE_OPENSSL (matches the rest of the TLS
- * surface). */
+/* Server-side ALPN (RFC 7301) — required by HTTP/2-over-TLS. The NURL
+ * API takes a server-preference list like "h2 http/1.1"; we convert
+ * once at listen time to the wire-format "\x02h2\x08http/1.1" and the
+ * callback below picks the first server-preferred match. Gated on
+ * NURL_HAVE_OPENSSL. */
 #ifdef NURL_HAVE_OPENSSL
 
-/* Convert "h2 http/1.1" → "\x02h2\x08http/1.1" (heap-owned, caller
- * frees). Returns NULL on allocation failure or malformed input
- * (single token longer than 255 bytes — ALPN length prefix is u8).
- * `out_len` is set to the wire-format byte count. */
+/* "h2 http/1.1" → "\x02h2\x08http/1.1" (heap-owned). NULL on OOM or a
+ * token longer than 255 bytes (ALPN length prefix is u8). */
 static unsigned char *nurl__alpn_pack(const char *spec, size_t *out_len) {
     if (!spec) { *out_len = 0; return NULL; }
     size_t cap = strlen(spec) + 1;
@@ -3967,10 +2756,8 @@ static int nurl__alpn_select_cb(SSL *ssl, const unsigned char **out,
     if (!listener || !listener->alpn_wire || listener->alpn_wire_len == 0) {
         return SSL_TLSEXT_ERR_NOACK;
     }
-    /* SSL_select_next_proto returns OPENSSL_NPN_NEGOTIATED (1) on a
-     * server-preferred match, OPENSSL_NPN_NO_OVERLAP (0) otherwise.
-     * The (unsigned char **) cast strips the const because the
-     * OpenSSL prototype is mutable; the data isn't actually written. */
+    /* Cast strips const because OpenSSL's prototype is mutable; the
+     * data isn't actually written. */
     int rv = SSL_select_next_proto((unsigned char **)out, outlen,
                                    listener->alpn_wire,
                                    (unsigned int)listener->alpn_wire_len,
@@ -3995,9 +2782,6 @@ long long nurl_tcp_listen_tls(const char *host, long long port,
     long long lh = nurl_tcp_listen(host, port, backlog);
     NurlTcp *h = (NurlTcp*)(uintptr_t)lh;
     if (!h || h->err_kind != NURL_NET_ERR_OK) return lh;
-    /* TLS 1.2+ server context. SSL_CTX_set_min_proto_version is the
-     * canonical knob since OpenSSL 1.1.0; we ignore its return for
-     * brevity (only fails on truly broken OpenSSL builds). */
     SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
     if (!ctx) {
         nurl_close_sock(h->fd);
@@ -4032,14 +2816,11 @@ long long nurl_tcp_listen_tls(const char *host, long long port,
 #endif
 }
 
-/* §18c — client-side TLS connect. Plain connect() to host:port, then a
- * TLS client handshake over it. The resulting CONN handle carries
- * `ssl`/`ssl_ctx`, so nurl_tcp_read / _write / _close already dispatch
- * through libssl — no other code path changes. `verify` != 0 turns on
- * peer-certificate + hostname verification against the system trust
- * store; 0 completes the handshake regardless of the chain (still
- * encrypted — the choice an MQTT client's `--insecure` makes). SNI is
- * always sent so brokers behind a shared IP route correctly. */
+/* Client-side TLS connect — plain connect + client handshake. Resulting
+ * CONN handle carries ssl/ssl_ctx so read/write/close dispatch via
+ * libssl. verify != 0 → peer-cert + hostname verification against the
+ * system trust store; verify == 0 still encrypts but skips verification
+ * (the MQTT `--insecure` choice). SNI is always sent. */
 long long nurl_tcp_connect_tls(const char *host, long long port,
                                long long verify) {
 #ifndef NURL_HAVE_OPENSSL
@@ -4074,9 +2855,9 @@ long long nurl_tcp_connect_tls(const char *host, long long port,
         h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
         return ch;
     }
-    /* SNI — required by most multi-tenant brokers. */
+    /* SNI — most multi-tenant brokers require it. */
     SSL_set_tlsext_host_name(ssl, host);
-    if (verify) SSL_set1_host(ssl, host);   /* cert must match hostname */
+    if (verify) SSL_set1_host(ssl, host);
     SSL_set_fd(ssl, (int)h->fd);
 
     if (SSL_connect(ssl) != 1) {
@@ -4094,13 +2875,10 @@ long long nurl_tcp_connect_tls(const char *host, long long port,
 #endif
 }
 
-/* TLS listener WITH ALPN protocol negotiation. Functionally identical
- * to nurl_tcp_listen_tls except for the trailing `alpn_protocols`
- * arg, a space-separated server-preference list ("h2 http/1.1"). On
- * accept(), the per-conn SSL handle inherits the listener's SSL_CTX
- * + ALPN callback; clients that don't offer any of the listed
- * protocols still complete the handshake (SSL_TLSEXT_ERR_NOACK) —
- * server should treat them as the default (HTTP/1.1). */
+/* TLS listener + ALPN. alpn_protocols is a space-separated server-
+ * preference list ("h2 http/1.1"). Clients that offer no listed
+ * protocol still handshake (SSL_TLSEXT_ERR_NOACK) — server treats them
+ * as the default (HTTP/1.1). */
 long long nurl_tcp_listen_tls_alpn(const char *host, long long port,
                                    long long backlog,
                                    const char *cert_path, const char *key_path,
@@ -4119,8 +2897,7 @@ long long nurl_tcp_listen_tls_alpn(const char *host, long long port,
     size_t wlen = 0;
     unsigned char *wire = nurl__alpn_pack(alpn_protocols, &wlen);
     if (!wire || wlen == 0) {
-        /* Empty or malformed list — silently skip ALPN setup; the
-         * connection still works as a non-ALPN TLS listener. */
+        /* Empty/malformed list — skip ALPN, listener still works. */
         free(wire);
         return lh;
     }
@@ -4131,9 +2908,7 @@ long long nurl_tcp_listen_tls_alpn(const char *host, long long port,
 #endif
 }
 
-/* Build a fresh SSL_CTX configured with the given cert + private key.
- * Caller owns the returned ctx (SSL_CTX_free). Returns NULL + sets
- * h->err_kind on failure. Used by nurl_tcp_tls_add_sni + reload. */
+/* Build SSL_CTX with cert+key. NULL + sets h->err_kind on failure. */
 #ifdef NURL_HAVE_OPENSSL
 static SSL_CTX *nurl__tls_build_ctx(NurlTcp *h, const char *cert_path,
                                     const char *key_path) {
@@ -4162,16 +2937,10 @@ static SSL_CTX *nurl__tls_build_ctx(NurlTcp *h, const char *cert_path,
 }
 #endif
 
-/* Register an additional SNI hostname → cert/key pair on a TLS
- * listener. The default ssl_ctx (set at listen time) is used when
- * the client offers no SNI extension OR offers one that doesn't
- * match any registered hostname — that matches the RFC 6066 §3
- * "this server does not have an SNI configured for the requested
- * hostname" fallback.
- *
- * Returns 0 on success; non-zero NurlNetErr otherwise (cert/key
- * load failure most commonly). May be called repeatedly to grow
- * the registry; existing in-flight conns are unaffected. */
+/* Register an SNI hostname → cert/key on a TLS listener. The default
+ * ctx is used on no-SNI or no-match (RFC 6066 §3 fallback). Idempotent
+ * re-adds replace the matching entry; existing conns stay valid because
+ * SSL_CTX is refcounted. Returns 0 / NurlNetErr. */
 long long nurl_tcp_tls_add_sni(long long handle, const char *hostname,
                                const char *cert_path, const char *key_path) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
@@ -4189,7 +2958,6 @@ long long nurl_tcp_tls_add_sni(long long handle, const char *hostname,
     if (!ctx) return h->err_kind;
     nurl__tls_lock_ensure(h);
     nurl__tls_lock(h);
-    /* Replace if hostname is already registered (idempotent re-add). */
     int replaced = 0;
     for (size_t i = 0; i < h->sni_count; i++) {
         if (nurl__hostname_ieq(h->sni_entries[i].hostname, hostname)) {
@@ -4201,7 +2969,6 @@ long long nurl_tcp_tls_add_sni(long long handle, const char *hostname,
         }
     }
     if (!replaced) {
-        /* Grow */
         if (h->sni_count == h->sni_cap) {
             size_t newcap = h->sni_cap ? h->sni_cap * 2 : 4;
             NurlSniEntry *grown = (NurlSniEntry*)realloc(h->sni_entries,
@@ -4219,7 +2986,7 @@ long long nurl_tcp_tls_add_sni(long long handle, const char *hostname,
         h->sni_entries[h->sni_count].ctx = ctx;
         h->sni_count++;
     }
-    /* Install the SNI callback on the default ctx (idempotent). */
+    /* SNI callback install is idempotent. */
     SSL_CTX_set_tlsext_servername_callback(h->ssl_ctx, nurl__sni_select_cb);
     SSL_CTX_set_tlsext_servername_arg(h->ssl_ctx, h);
     nurl__tls_unlock(h);
@@ -4232,14 +2999,9 @@ long long nurl_tcp_tls_add_sni(long long handle, const char *hostname,
 #endif
 }
 
-/* Live cert reload. `hostname` selects which entry to reload:
- *   * NULL or empty → swap the listener's DEFAULT ssl_ctx
- *   * any other value → swap the matching SNI entry; FAIL if no match
- * The old SSL_CTX is SSL_CTX_free()'d — OpenSSL refcounts internally,
- * so in-flight conns that already wrapped an SSL from it stay valid
- * until they close. New accepts immediately use the new ctx.
- *
- * Returns 0 on success, NetErr code on failure. */
+/* Live cert reload. hostname NULL/"" → swap the default ctx; otherwise
+ * swap the matching SNI entry (fail if no match). Old SSL_CTX is freed
+ * via SSL_CTX_free; refcounting keeps in-flight conns valid. */
 long long nurl_tcp_tls_reload(long long handle, const char *hostname,
                               const char *cert_path, const char *key_path) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
@@ -4256,8 +3018,7 @@ long long nurl_tcp_tls_reload(long long handle, const char *hostname,
     if (!hostname || !*hostname) {
         SSL_CTX *old = h->ssl_ctx;
         h->ssl_ctx = new_ctx;
-        /* Re-install ALPN + SNI hooks on the new ctx — these were set
-         * on the old ctx and don't carry through. */
+        /* Re-install ALPN + SNI hooks — they're per-ctx. */
         if (h->alpn_wire && h->alpn_wire_len > 0) {
             SSL_CTX_set_alpn_select_cb(new_ctx, nurl__alpn_select_cb, h);
         }
@@ -4270,7 +3031,6 @@ long long nurl_tcp_tls_reload(long long handle, const char *hostname,
         h->err_kind = NURL_NET_ERR_OK;
         return NURL_NET_ERR_OK;
     }
-    /* Per-SNI-entry reload */
     for (size_t i = 0; i < h->sni_count; i++) {
         if (nurl__hostname_ieq(h->sni_entries[i].hostname, hostname)) {
             SSL_CTX *old = h->sni_entries[i].ctx;
@@ -4281,7 +3041,6 @@ long long nurl_tcp_tls_reload(long long handle, const char *hostname,
             return NURL_NET_ERR_OK;
         }
     }
-    /* No matching SNI entry */
     SSL_CTX_free(new_ctx);
     nurl__tls_unlock(h);
     h->err_kind = NURL_NET_ERR_OTHER;
@@ -4293,14 +3052,10 @@ long long nurl_tcp_tls_reload(long long handle, const char *hostname,
 #endif
 }
 
-/* Require client-cert authentication (mTLS). `ca_bundle_path` points
- * to a PEM file with the trust roots used to verify peer certs.
- * `strict` (non-zero) means SSL_VERIFY_FAIL_IF_NO_PEER_CERT is set,
- * making mTLS mandatory; otherwise the handshake completes with an
- * unauthenticated peer and the application can decide what to do
- * via `nurl_tcp_peer_cert_subject`.
- *
- * Returns 0 on success, NetErr code on failure. */
+/* Require client-cert auth (mTLS). ca_bundle_path is a PEM file with
+ * the trust roots. strict != 0 → mandatory (SSL_VERIFY_FAIL_IF_NO_PEER_CERT);
+ * otherwise handshake completes unauth and the app decides via
+ * nurl_tcp_peer_cert_subject. */
 long long nurl_tcp_tls_require_client_cert(long long handle,
                                             const char *ca_bundle_path,
                                             long long strict) {
@@ -4318,9 +3073,7 @@ long long nurl_tcp_tls_require_client_cert(long long handle,
     int mode = SSL_VERIFY_PEER;
     if (strict) mode |= SSL_VERIFY_FAIL_IF_NO_PEER_CERT;
     SSL_CTX_set_verify(h->ssl_ctx, mode, NULL);
-    /* Also configure the client-CA list sent in the CertificateRequest
-     * so well-behaved clients pick the right cert when they hold
-     * multiple. SSL_load_client_CA_file reads the same PEM bundle. */
+    /* Client-CA list in CertificateRequest helps multi-cert clients pick. */
     STACK_OF(X509_NAME) *list = SSL_load_client_CA_file(ca_bundle_path);
     if (list) SSL_CTX_set_client_CA_list(h->ssl_ctx, list);
     h->err_kind = NURL_NET_ERR_OK;
@@ -4332,10 +3085,8 @@ long long nurl_tcp_tls_require_client_cert(long long handle,
 #endif
 }
 
-/* Read the peer's certificate subject (DN in OpenSSL one-line format)
- * off a completed TLS conn. Returns a heap-owned NUL-terminated
- * string. Empty when no peer cert was presented or the conn is
- * non-TLS. Caller frees via nurl_free. */
+/* Peer-cert subject DN (OpenSSL one-line). Owned NUL-terminated string;
+ * "" when no peer cert or non-TLS. Caller frees via nurl_free. */
 const char *nurl_tcp_peer_cert_subject(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return strdup("");
@@ -4360,10 +3111,8 @@ const char *nurl_tcp_peer_cert_subject(long long handle) {
 #endif
 }
 
-/* Read the negotiated ALPN protocol from a TLS conn handle. Returns a
- * heap-owned NUL-terminated string ("h2" / "http/1.1" / ...); empty
- * when ALPN was not negotiated or the handle is non-TLS. Caller frees
- * via nurl_free. */
+/* Negotiated ALPN protocol ("h2" / "http/1.1" / ...). Owned string,
+ * "" when ALPN wasn't negotiated. Caller frees via nurl_free. */
 const char *nurl_tcp_alpn_selected(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return strdup("");
@@ -4428,10 +3177,7 @@ long long nurl_tcp_read(long long handle, const char *buf, long long n) {
         h->err_kind = NURL_NET_ERR_OK;
         return (long long)rd;
     }
-    if (rd == 0) {
-        /* peer closed cleanly — EOF is not an error, leave err_kind alone */
-        return 0;
-    }
+    if (rd == 0) return 0;   /* clean EOF — not an error */
 #ifdef _WIN32
     int we = WSAGetLastError();
     h->err_kind = nurl__net_map_wsa(we, NURL_NET_ERR_READ);
@@ -4502,11 +3248,9 @@ long long nurl_tcp_write(long long handle, const char *buf, long long n) {
     return total;
 }
 
-/* Phase 6 async support — expose the underlying fd for reactor
- * registration and toggle O_NONBLOCK on the socket. Plain accept /
- * read / write keep working unchanged: a NULL handle is a no-op,
- * and the kernel's EAGAIN return for non-blocking sockets is what
- * the NURL async wrappers loop on. */
+/* Async-runtime hooks — expose fd for reactor registration; toggle
+ * O_NONBLOCK. Blocking accept/read/write keep working (NURL async
+ * wrappers loop on the kernel's EAGAIN). */
 long long nurl_tcp_get_fd(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return -1;
@@ -4532,30 +3276,20 @@ void nurl_tcp_close(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return;
 #ifdef NURL_HAVE_OPENSSL
-    /* Per-conn TLS session: best-effort SSL_shutdown (single one-way
-     * close_notify; we deliberately skip the bidirectional close to
-     * keep the worker fast). SSL_free does not close the underlying
-     * fd — we still nurl_close_sock below. */
+    /* Best-effort one-way SSL_shutdown (skip bidirectional close — keeps
+     * workers fast). SSL_free does not close the underlying fd. */
     if (h->ssl) {
         SSL_shutdown(h->ssl);
         SSL_free(h->ssl);
         h->ssl = NULL;
     }
-    /* Per-listener TLS context: drop the SSL_CTX. New conns can no
-     * longer be wrapped from this listener. */
     if (h->ssl_ctx) {
         SSL_CTX_free(h->ssl_ctx);
         h->ssl_ctx = NULL;
     }
-    /* ALPN wire blob shipped with the listener — free regardless of
-     * which side (listener vs conn) owns this handle; conn handles
-     * never set alpn_wire, so it's a no-op on those. */
     free(h->alpn_wire);
     h->alpn_wire = NULL;
     h->alpn_wire_len = 0;
-    /* SNI registry — only listeners populate this. Each entry owns
-     * its hostname (strdup'd) and SSL_CTX (refcounted; free here
-     * decrements). */
     if (h->sni_entries) {
         for (size_t i = 0; i < h->sni_count; i++) {
             free(h->sni_entries[i].hostname);
@@ -4566,7 +3300,6 @@ void nurl_tcp_close(long long handle) {
         h->sni_count = 0;
         h->sni_cap = 0;
     }
-    /* TLS lock — only initialised if SNI / reload was ever called. */
     nurl__tls_lock_destroy(h);
 #endif
     if (h->fd != NURL_INVALID_SOCK) {
@@ -4577,14 +3310,11 @@ void nurl_tcp_close(long long handle) {
     free(h);
 }
 
-/* Soft-shutdown: close the underlying socket but KEEP the NurlTcp
- * struct alive. Used by server_run_pool's shutdown thread — workers
- * blocked in accept(2) wake up with an error and then dereference
- * h->err_kind / h->fd as part of their normal exit path. Freeing the
- * struct here would race with those reads (use-after-free observed
- * empirically as ~40% intermittent SIGSEGV at process exit on
- * Windows). Caller invokes nurl_tcp_close after all workers have
- * joined to actually free the struct. */
+/* Soft-shutdown — close the socket but KEEP the struct. server_run_pool's
+ * shutdown thread relies on this: workers blocked in accept(2) wake with
+ * an error and then read h->err_kind / h->fd on exit; freeing here would
+ * race them (saw ~40% intermittent SIGSEGV on Windows). Caller invokes
+ * nurl_tcp_close after workers have joined. */
 void nurl_tcp_shutdown(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return;
@@ -4609,7 +3339,7 @@ void nurl_tcp_set_timeout(long long handle, long long ms) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h || h->fd == NURL_INVALID_SOCK) return;
 #ifdef _WIN32
-    /* Win32: SO_RCVTIMEO is a DWORD of milliseconds. */
+    /* Win32 SO_RCVTIMEO is a DWORD of ms (not a timeval). */
     DWORD tv = (ms > 0) ? (DWORD)ms : 0;
     setsockopt(h->fd, SOL_SOCKET, SO_RCVTIMEO,
                (const char*)&tv, (int)sizeof(tv));
@@ -4656,41 +3386,24 @@ void nurl_tcp_set_timeout(long long h, long long ms) { (void)h; (void)ms; }
 #endif /* __wasi__ guard for §18 */
 
 
-/* ── §19  Threads ───────────────────────────────────────────────── */
+/* ── §19  Thread by-value trampolines + WASI pthread stubs ────── */
 /*
- * Nearly the entire threading surface for `stdlib/std/thread.nu`
- * lives in NURL via pure-NURL FFI (mutex/cond + spawn/join/detach).
- * What's left on the C side here:
+ * Thread/mutex/cond surface is pure NURL (stdlib/std/thread.nu) over
+ * libpthread (winpthreads on mingw). What remains here:
  *
- *  - `nurl_pthread_join_ptr` / `nurl_pthread_detach_ptr` — POSIX
- *    pthread_join and pthread_detach take their pthread_t argument
- *    BY VALUE, and pthread_t is a 16-byte struct on winpthreads
- *    (mingw-w64 posix model). NURL's `&`-FFI cannot express a
- *    by-value-struct argument, so these tiny pointer-taking
- *    trampolines bridge it.
+ *   • nurl_pthread_join_ptr / _detach_ptr — pthread_t passes by value;
+ *     on winpthreads it's a 16-byte struct that NURL's &-FFI can't
+ *     express, so these tiny trampolines deref a pointer instead.
+ *   • WASI pthread shims — wasi-libc has no threads; spawn fails
+ *     (NURL surfaces ThreadCreate), mutex/cond ops succeed silently.
  *
- *  - WASI shims for the pthread surface — wasi-libc has no pthread,
- *    so we provide degenerate no-op stubs for pthread_create /
- *    pthread_mutex_* / pthread_cond_* / the join+detach trampolines
- *    above. Programs that try to thread on WASI see thread_spawn
- *    return `ThreadCreate` and mutex/cond ops succeed silently —
- *    single-threaded execution, same observable shape as before.
- *
- * NURL closure → pthread_create shape: the compiler decomposes a
- * `( @ v )` closure into (fn_ptr, env_ptr) via the `# *u closure 0|1`
- * cast. stdlib/std/thread.nu passes those two pointers straight to
- * pthread_create as start_routine / arg. NURL closure body has
- * signature `void(*)(void *)`, pthread expects `void *(*)(void *)`
- * — System V x86_64 ABI compatibility lets the slight return-type
- * mismatch through (the return value is discarded since join always
- * passes `&rv` and we throw `rv` away). Same on aarch64 / riscv64
- * (return register holds garbage for void-returning fns).
+ * NURL closure → pthread_create: the closure compiles to
+ * `void(*)(void *env)`; pthread expects `void *(*)(void *)`. The
+ * return-value mismatch is harmless under SysV / aarch64 / riscv64
+ * because join() always discards the return through a throwaway slot.
  */
 
 #if !defined(__wasi__)
-
-/* <pthread.h> already pulled in at the top of the file (§2 sizeof
- * table needs the type sizes on both POSIX and Win32-winpthreads). */
 
 int nurl_pthread_join_ptr(pthread_t *t) {
     if (!t) return -1;
@@ -4702,21 +3415,13 @@ void nurl_pthread_detach_ptr(pthread_t *t) {
     if (t) pthread_detach(*t);
 }
 
-#else  /* __wasi__ — no threading; every entry degrades. */
+#else  /* WASI — no threading. */
 
-/* pthread_create + the trampolines pretend failure on WASI; any
- * NURL caller sees thread_spawn return ThreadCreate. */
 int  pthread_create(void *t, void *a, void *s, void *arg) {
     (void)t; (void)a; (void)s; (void)arg; return -1;
 }
 int  nurl_pthread_join_ptr  (void *t) { (void)t; return -1; }
 void nurl_pthread_detach_ptr(void *t) { (void)t; }
-
-/* pthread mutex/cond shims for WASI. The NURL-side surface in
- * stdlib/std/thread.nu calls these directly via `&`-FFI; on WASI the
- * libpthread symbols are absent, so the runtime provides degenerate
- * versions that pretend success. Single-threaded WASI execution sees
- * no contention — same behavior as before. */
 int pthread_mutex_init(void *m, void *a)  { (void)m; (void)a; return 0; }
 int pthread_mutex_lock(void *m)            { (void)m; return 0; }
 int pthread_mutex_unlock(void *m)          { (void)m; return 0; }
@@ -4727,32 +3432,16 @@ int pthread_cond_signal(void *c)           { (void)c; return 0; }
 int pthread_cond_broadcast(void *c)        { (void)c; return 0; }
 int pthread_cond_destroy(void *c)          { (void)c; return 0; }
 
-#endif /* __wasi__ guard for §19 */
+#endif
 
-/* ============================================================
- * §20 — Signal-driven graceful shutdown
- *
- * One global slot for the listener fd to soft-close on
- * SIGINT/SIGTERM (POSIX) or CTRL_C/CTRL_BREAK/CTRL_CLOSE (Win32).
- * Caller registers a NurlTcp listener handle; the OS-level signal
- * handler dereferences h->fd and calls shutdown(fd, RDWR), which
- * makes any blocked accept(2) / accept() return with an error so
- * server_run / server_run_pool can exit their loops cleanly.
- *
- * Async-signal-safety: shutdown(2) is on the POSIX async-signal-
- * safe list (SUSv4 §2.4.3). We DO NOT free the NurlTcp struct in
- * the handler — caller invokes server_stop after the loop joins
- * (same protocol as server_run_pool's tcp_shutdown_listener).
- *
- * Idempotent — repeat calls overwrite the stored handle. Only one
- * listener can be registered at a time; that's enough for the MVP
- * single-server case (multi-server graceful shutdown can compose
- * via a central control channel).
- *
- * Win32 SetConsoleCtrlHandler runs the handler on a fresh thread,
- * so there's no AS-safety constraint there. We still keep the body
- * tiny.
- * ============================================================ */
+/* ── Signal-driven graceful listener shutdown ─────────────────── */
+/*
+ * One global slot for the listener fd. SIGINT/SIGTERM (POSIX) or
+ * CTRL_C/CTRL_BREAK/CTRL_CLOSE (Win32) calls shutdown(fd, RDWR), which
+ * wakes any blocked accept() with an error so server_run loops exit
+ * cleanly. shutdown(2) is async-signal-safe (SUSv4 §2.4.3); the struct
+ * itself isn't touched here — caller frees after the loop joins. Only
+ * one listener registered at a time. */
 
 #if !defined(__wasi__)
 
@@ -4768,13 +3457,8 @@ static BOOL WINAPI nurl__signal_console_handler(DWORD ctrl_type) {
         ctrl_type == CTRL_CLOSE_EVENT ||
         ctrl_type == CTRL_LOGOFF_EVENT||
         ctrl_type == CTRL_SHUTDOWN_EVENT) {
-        if (h->fd != NURL_INVALID_SOCK) {
-            shutdown(h->fd, SD_BOTH);
-        }
-        /* Returning TRUE marks the event as handled, suppressing
-         * the default termination so server_run_pool can exit
-         * cleanly. */
-        return TRUE;
+        if (h->fd != NURL_INVALID_SOCK) shutdown(h->fd, SD_BOTH);
+        return TRUE;  /* mark handled — suppresses default termination */
     }
     return FALSE;
 }
@@ -4784,37 +3468,28 @@ static void nurl__signal_posix_handler(int sig) {
     (void)sig;
     NurlTcp *h = (NurlTcp*)g_signal_listener;
     if (!h) return;
-    if (h->fd != NURL_INVALID_SOCK) {
-        shutdown(h->fd, SHUT_RDWR);
-    }
+    if (h->fd != NURL_INVALID_SOCK) shutdown(h->fd, SHUT_RDWR);
 }
 #  endif
 
-/* Register `listener` (raw NurlTcp pointer cast through long long
- * by the caller) for soft shutdown on SIGINT/SIGTERM (POSIX) or
- * Ctrl+C/Break/Close (Win32). Pass 0 to clear the registration. */
+/* Register a listener for soft shutdown on SIGINT/SIGTERM (POSIX) or
+ * Ctrl+C/Break/Close (Win32). Pass 0 to clear. */
 void nurl_signal_install_shutdown(long long listener) {
     g_signal_listener = (NurlTcp*)(uintptr_t)listener;
 #  ifdef _WIN32
-    /* The console-handler list is process-global; SetConsoleCtrlHandler
-     * with the same fn pointer is idempotent (Win32 silently dedupes). */
     SetConsoleCtrlHandler(nurl__signal_console_handler, TRUE);
 #  else
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = nurl__signal_posix_handler;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;  /* No SA_RESTART — we WANT accept() to fail. */
+    sa.sa_flags = 0;  /* no SA_RESTART — accept() must fail */
     sigaction(SIGINT,  &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 #  endif
 }
 
-/* Convenience for tests: synthesise the same shutdown the signal
- * handler would do, without actually raising the signal (which on
- * Windows can't be delivered programmatically to the current
- * console process, and on POSIX would risk killing the test
- * runner if no handler is installed yet). */
+/* Test helper — synthesise the shutdown without raising the signal. */
 void nurl_signal_trigger_shutdown(void) {
 #  ifdef _WIN32
     NurlTcp *h = (NurlTcp*)g_signal_listener;
@@ -4825,70 +3500,41 @@ void nurl_signal_trigger_shutdown(void) {
 #  endif
 }
 
-#else  /* __wasi__ — no signals; no-ops. */
+#else  /* WASI — no signals. */
 void nurl_signal_install_shutdown(long long listener) { (void)listener; }
 void nurl_signal_trigger_shutdown(void)               {}
 #endif
 
 
-/* ── §20  Panic / recover (Phase 8 handler-panic recovery) ──────── */
+/* ── §20  Panic / recover (setjmp/longjmp) ────────────────────── */
 /*
- * NURL's panic model is intentionally narrow: an explicit `panic` form
- * is an unwind to the nearest `recover` frame (setjmp/longjmp-based),
- * NOT an attempt at exception-style stack unwinding. The auto-drop
- * machinery does NOT participate — owned heap allocations made inside
- * a recover scope that don't run their destructors LEAK. This is the
- * fundamental trade-off setjmp/longjmp imposes; we accept it because:
+ * NURL's panic is a narrow setjmp/longjmp unwind to the nearest recover
+ * frame — NOT exception-style with destructor calls. Owned heap allocs
+ * made inside the recover scope LEAK; this is the price of skipping EH
+ * tables, and acceptable because recover is for crash-mitigation
+ * (handler bug, LLM-scaffold misfire), not routine errors (`! T E`
+ * stays canonical). Signal faults (SIGSEGV etc.) are NOT bridged in —
+ * async-signal-safety would force the whole runtime into an unsafe
+ * "may run during panic" contract.
  *
- *   (a) recover is intended for crash-mitigation (HTTP handler bug,
- *       LLM-generated test scaffold that hit an unexpected branch),
- *       NOT routine error handling — `! T E` + `\` remains the
- *       canonical path for expected errors;
- *   (b) the alternative (Rust-style unwind with destructor calls)
- *       requires Itanium EH tables + an aliasing model strong enough
- *       to know when destructors are safe to run during unwind —
- *       essentially as much engineering as a borrow checker;
- *   (c) the leak is bounded per panic (whatever the closure scope had
- *       allocated), and for a worker-thread design the OS reclaims
- *       the entire thread stack on thread exit anyway.
- *
- * Hard rule: `panic` ONLY responds to an explicit `nurl_panic` call.
- * SIGSEGV / SIGFPE / SIGBUS / SIGABRT are NOT bridged into the panic
- * model — async-signal-safety on POSIX would force every async-signal-
- * unsafe operation in the runtime (malloc, fprintf, …) into a "may run
- * during panic" contract that's both onerous and easy to break. Signal
- * faults remain process-aborts.
- *
- * Thread-local stack of frames: a fresh recover frame is pushed at
- * `nurl_recover` entry, popped on either exit path (closure-returned
- * normally OR closure-panicked). Frames live on the C stack of the
- * `nurl_recover` invocation, so jmp_buf addresses stay valid for the
- * lifetime of that call. A panic with no frame above it aborts the
- * process via the existing `fprintf(stderr, ...); abort()` path —
- * same behavioural class as an unhandled fault.
- */
+ * Frames live on the recover() caller's C stack so jmp_buf stays valid.
+ * A panic with no frame on top falls through to fprintf+abort. */
 
 #ifndef __wasi__
 
 typedef struct NurlPanicFrame {
     jmp_buf                  jb;
-    char                    *msg;   /* heap-owned panic message or NULL */
+    char                    *msg;   /* owned panic message or NULL */
     struct NurlPanicFrame   *prev;
 } NurlPanicFrame;
 
-/* GCC/Clang __thread is supported on Linux, macOS, mingw-w64. */
 static __thread NurlPanicFrame *nurl__panic_top = NULL;
-/* Captured message from the most-recent panic, ownership transferred
- * to nurl_panic_last_msg's caller via strdup-and-take. The slot itself
- * is freed by the next recover-exit-with-panic. */
+/* Captured message from the most-recent panic; ownership transferred
+ * out on nurl_panic_last_msg read, freed by the next recover. */
 static __thread char *nurl__panic_last_msg = NULL;
 
-/* Entry point for `recover closure` in NURL. `fn_ptr` is a closure
- * function pointer with signature `void(void *env)`; `env_ptr` is the
- * closure's environment block. Returns 0 if the closure ran to
- * completion, 1 if it called nurl_panic (and was therefore longjmped
- * back here). The captured message — if any — lands in
- * nurl__panic_last_msg, retrievable via nurl_panic_last_msg(). */
+/* `recover closure` entry. fn_ptr is `void(*)(void *env)`; returns 0 if
+ * the closure completed, 1 if it panicked (message via _last_msg). */
 long long nurl_recover(void *fn_ptr, void *env_ptr) {
     if (!fn_ptr) return 0;
     NurlPanicFrame frame;
@@ -4900,20 +3546,14 @@ long long nurl_recover(void *fn_ptr, void *env_ptr) {
         nurl__panic_top = frame.prev;
         return 0;
     }
-    /* Panicked. Stash the captured message in the thread-local slot,
-     * freeing any prior unread one so concurrent panics from sibling
-     * threads don't trample each other's storage. */
     nurl__panic_top = frame.prev;
     free(nurl__panic_last_msg);
     nurl__panic_last_msg = frame.msg ? frame.msg : strdup("(no panic message)");
     return 1;
 }
 
-/* Read out the captured panic message from the most-recent recover-
- * with-panic exit on this thread. Returns "" if no panic is currently
- * captured. Ownership: BORROWED — the storage is owned by the runtime
- * and overwritten by the next panic. NURL callers typically copy via
- * `string_from` to capture the value past the lifetime of the slot. */
+/* Captured panic message from the most recent recover-with-panic on
+ * this thread. BORROWED — overwritten by the next panic. */
 const char *nurl_panic_last_msg(void) {
     return nurl__panic_last_msg ? nurl__panic_last_msg : "";
 }
@@ -4981,120 +3621,53 @@ void nurl_panic(const char *msg) {
  * NURL surface (`stdlib/ext/compress.nu`) ships zlib-stream helpers as
  * pure-NURL `& \`z\` @ compress2 / uncompress` calls — those work fine
  * because libz's `compress2` is a self-contained one-shot ABI. The
- * gzip file format (RFC 1952, `1f 8b` magic + CRC-32 + ISIZE trailer)
- * requires the streaming API (`deflateInit2_` / `deflate` / `deflateEnd`)
- * whose `z_stream` struct has a platform-specific size — 88 bytes on
- * 64-bit Windows (LLP64, `uLong` is 4) vs 112 on Linux/macOS 64-bit
- * (LP64, `uLong` is 8). Mirroring that layout from NURL would be
- * brittle, so this thin ABI bridge keeps z_stream entirely C-side.
- * Behaviour mirrors libz's `compress2` / `uncompress`: `dst_len` is
- * in/out, return 0 on success / negative on failure. */
-
-#define NURL_GZIP_ERR_UNSUPPORTED -98
+ * gzip file format (RFC 1952) needs the streaming deflateInit2_ /
+ * deflate / deflateEnd API. z_stream's size and field offsets vary
+ * (uLong is 4 bytes on Win32 LLP64, 8 on POSIX LP64), so the inflate/
+ * deflate loop lives NURL-side over the FFI surface but the two
+ * field accessors stay C to absorb the layout difference. */
 
 #ifdef NURL_HAVE_ZLIB
-#include <zlib.h>
-#endif
-
-int nurl_gzip_compress(unsigned char *dst, long long *dst_len,
-                       unsigned char *src, long long src_len, int level) {
-#ifdef NURL_HAVE_ZLIB
-    z_stream s;
-    s.zalloc = Z_NULL;
-    s.zfree  = Z_NULL;
-    s.opaque = Z_NULL;
-    s.next_in   = src;
-    s.avail_in  = (uInt)src_len;
-    s.next_out  = dst;
-    s.avail_out = (uInt)*dst_len;
-    /* windowBits 15 + 16 → wrap raw deflate in the gzip file format. */
-    int rc = deflateInit2(&s, level, Z_DEFLATED, 15 + 16, 8,
-                          Z_DEFAULT_STRATEGY);
-    if (rc != Z_OK) return rc;
-    rc = deflate(&s, Z_FINISH);
-    if (rc != Z_STREAM_END) {
-        deflateEnd(&s);
-        return (rc == Z_OK) ? Z_BUF_ERROR : rc;
-    }
-    *dst_len = (long long)s.total_out;
-    return deflateEnd(&s);
-#else
-    (void)dst; (void)dst_len; (void)src; (void)src_len; (void)level;
-    return NURL_GZIP_ERR_UNSUPPORTED;
-#endif
+/* Initialise the four mutable z_stream slots before deflate/inflate.
+ * zalloc/zfree/opaque must already be NULL (nurl_zalloc gives that). */
+void nurl_z_setup(void *zs, void *in, long long avail_in,
+                  void *out, long long avail_out) {
+    z_stream *s = (z_stream*)zs;
+    s->next_in   = (Bytef*)in;
+    s->avail_in  = (uInt)avail_in;
+    s->next_out  = (Bytef*)out;
+    s->avail_out = (uInt)avail_out;
 }
 
-int nurl_gzip_decompress(unsigned char *dst, long long *dst_len,
-                         unsigned char *src, long long src_len) {
-#ifdef NURL_HAVE_ZLIB
-    z_stream s;
-    s.zalloc = Z_NULL;
-    s.zfree  = Z_NULL;
-    s.opaque = Z_NULL;
-    s.next_in   = src;
-    s.avail_in  = (uInt)src_len;
-    s.next_out  = dst;
-    s.avail_out = (uInt)*dst_len;
-    /* windowBits 15 + 32 → auto-detect gzip OR zlib. Accepting both
-     * shapes here is harmless and matches what every real-world gzip
-     * decoder does (HTTP `Content-Encoding: gzip` peers occasionally
-     * ship raw deflate; auto-detect smooths over that). */
-    int rc = inflateInit2(&s, 15 + 32);
-    if (rc != Z_OK) return rc;
-    rc = inflate(&s, Z_FINISH);
-    if (rc != Z_STREAM_END) {
-        inflateEnd(&s);
-        return (rc == Z_OK) ? Z_BUF_ERROR : rc;
-    }
-    *dst_len = (long long)s.total_out;
-    return inflateEnd(&s);
-#else
-    (void)dst; (void)dst_len; (void)src; (void)src_len;
-    return NURL_GZIP_ERR_UNSUPPORTED;
-#endif
+/* z_stream::total_out — uLong width varies per platform so the offset
+ * isn't NURL-portable. */
+long long nurl_z_total_out(const void *zs) {
+    return (long long)((const z_stream*)zs)->total_out;
 }
+#else
+void nurl_z_setup(void *zs, void *in, long long avail_in,
+                  void *out, long long avail_out) {
+    (void)zs; (void)in; (void)avail_in; (void)out; (void)avail_out;
+}
+long long nurl_z_total_out(const void *zs) { (void)zs; return 0; }
+#endif
 
 
-/* ── §24  Async runtime (stackful fibers, M:N work-stealing) ────────
+/* ── §24  Async runtime — stackful fibers, M:N work-stealing ──── */
+/*
+ * N worker pthreads, each with a mutex-protected FIFO local runqueue.
+ * A shared global queue absorbs spawns from non-fiber contexts and
+ * overflow; idle workers steal half a peer's queue, then drain global,
+ * then park on idle_cv. spawn_joinable + join give a synchronous
+ * completion signal; plain spawn fires-and-forgets and frees on DONE.
  *
- * Phase 1 shipped a single-thread round-robin scheduler. Phase 3
- * generalises it to M:N with work-stealing: N worker pthreads, each
- * with a mutex-protected FIFO local runqueue; a shared global queue
- * absorbs spawns from non-fiber contexts and overflow; idle workers
- * steal half a peer's queue, then drain global, then park on the idle
- * condvar. Joinable fibers (spawn_joinable + join) provide a
- * synchronous completion signal; the standard spawn just fires-and-
- * forgets and frees on DONE.
+ * mmap'd 64 KB stacks with a 4 KB guard page → SIGSEGV at a
+ * deterministic page on overflow. Channel park integration in Phase 4,
+ * I/O reactor in Phase 5 (see §25). Full design in docs/ASYNC.md.
  *
- * mmap'd 64 KB stacks with a 4 KB guard page below catch overflow as
- * SIGSEGV at a deterministic page. Channel[A] park integration is
- * Phase 4; the I/O reactor is Phase 5. See docs/ASYNC.md for the
- * full design.
- *
- * ABI — every fiber handle is a long long (uintptr_t cast); 0 means
- * error / "no current fiber":
- *   long long nurl_fiber_spawn(void *fn, void *env);
- *   long long nurl_fiber_spawn_joinable(void *fn, void *env);
- *   void      nurl_fiber_join(long long fiber);
- *   void      nurl_fiber_yield(void);
- *   long long nurl_fiber_current(void);
- *   long long nurl_fiber_worker_id(void);     // 0..N-1 or -1 outside
- *   void      nurl_runtime_init(long long worker_count);
- *   void      nurl_runtime_run(void);          // block until pending=0
- *   void      nurl_runtime_shutdown(void);
- *
- * Closure shape — same as nurl_thread_spawn in §19: the compiler
- * decomposes a `(@ v)` closure into (fn_ptr, env_ptr) via the
- * `# *u closure 0|1` cast; the fiber trampoline calls
- * ((void(*)(void*))fn)(env). The body is a regular NURL function
- * whose first argument is an i8* env pointer.
- *
- * Platform: POSIX (pthreads + ucontext). Windows joins in a later
- * phase via CreateFiber + Win32 threads. WASI stays stubbed
- * (no threads).
- */
-
-/* Forward declarations — exposed to NURL via the pure-NURL FFI model. */
+ * Fiber handles are long long (uintptr_t cast); 0 = error/no fiber.
+ * POSIX-only (pthreads + ucontext); Win32 + WASI are stubbed below.
+ * Closure shape matches nurl_thread_spawn in §19. */
 long long nurl_fiber_spawn(void *fn, void *env);
 long long nurl_fiber_spawn_joinable(void *fn, void *env);
 void      nurl_fiber_join(long long fiber);
@@ -5107,18 +3680,10 @@ void      nurl_runtime_init(long long worker_count);
 void      nurl_runtime_run(void);
 void      nurl_runtime_shutdown(void);
 
-/* musl deliberately omits the ucontext family (`getcontext`/`setcontext`/
- * `makecontext`/`swapcontext`) — including the headers links to "undefined
- * symbol" errors. Gate the stackful fiber implementation on glibc-Linux or
- * macOS; every other POSIX-ish target (musl Linux, WASI, …) falls through
- * to the stub block below. Phase-5 will replace this with an asm-based
- * context switch portable across libc choices. */
+/* musl omits ucontext (linker errors on include), so gate the stackful
+ * implementation on glibc/macOS. Other POSIX-ish targets fall through
+ * to the stub block. macOS gates ucontext behind _XOPEN_SOURCE. */
 #if !defined(__wasi__) && !defined(_WIN32) && (defined(__GLIBC__) || defined(__APPLE__))
-/* On macOS the ucontext routines are gated behind `_XOPEN_SOURCE` —
- * zig's libSystem headers (and Apple's own SDK) `#error` out otherwise.
- * Define it BEFORE including ucontext.h so getcontext / setcontext /
- * makecontext / swapcontext are visible. The same define is harmless on
- * Linux glibc + musl, where the routines are exposed unconditionally. */
 #if defined(__APPLE__) && !defined(_XOPEN_SOURCE)
 #  define _XOPEN_SOURCE 600
 #endif
@@ -5127,9 +3692,7 @@ void      nurl_runtime_shutdown(void);
 #include <unistd.h>
 #include <pthread.h>
 
-/* macOS deprecates ucontext_t but keeps it functional. Silence the
- * one warning; the asm-based context switch in a later phase will
- * replace this entirely on macOS. */
+/* macOS deprecates ucontext_t but keeps it working — silence one warn. */
 #if defined(__APPLE__)
 #  pragma clang diagnostic push
 #  pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -5152,48 +3715,40 @@ typedef enum {
 
 typedef struct NurlFiber {
     ucontext_t       ctx;
-    void            *stack_base;     /* mmap origin: guard page + usable */
+    void            *stack_base;     /* mmap origin (guard page + usable) */
     size_t           stack_total_sz;
     void           (*fn)(void*);
     void            *env;
     NurlFiberState   state;
     struct NurlFiber*next;           /* intrusive runqueue link */
-    int              joinable;       /* if 1, survives DONE for join */
-    int              done_taken;     /* if joinable: 1 after join freed it */
+    int              joinable;       /* survives DONE for join() */
+    int              done_taken;     /* set after join freed it */
     pthread_mutex_t  join_m;
     pthread_cond_t   join_c;
-    /* Phase 4 park-with-unlock: the worker loop releases this mutex
-     * AFTER the fiber's swapcontext-out completes, so any concurrent
-     * unpark from a holder of the same mutex sees a stable PARKED
-     * state. NULL = no pending unlock (e.g. reactor-driven park). */
+    /* Park-with-unlock: worker releases this mutex AFTER swap-out so
+     * concurrent unparkers see a stable PARKED state. NULL = no unlock
+     * (reactor-driven park). */
     pthread_mutex_t *pending_unlock;
-    /* Phase 5: reactor writes the wake-up reason here BEFORE
-     * unparking. 1 = fd ready, 0 = timeout. The fiber reads this
-     * after swap-in to distinguish completion vs. timeout. */
+    /* Reactor wake-up reason: 1 fd-ready, 0 timeout. */
     int              last_park_result;
-    /* Phase 5 race-closer: the wait entry the fiber registered with
-     * the reactor before parking. The worker loop activates it
-     * AFTER swap-out completes so the reactor never matches a
-     * not-yet-suspended fiber. */
+    /* Pending reactor wait — activated by worker after swap-out so the
+     * reactor never matches a not-yet-suspended fiber. */
     struct NurlReactorWait *pending_reactor_wait;
 } NurlFiber;
 
 typedef struct NurlWorker {
     pthread_t        thread;
     int              id;
-    int              started;        /* 1 once the pthread is alive */
-    ucontext_t       loop_ctx;       /* worker loop's saved context */
-    /* `current` is read by the running fiber's code (same pthread)
-     * AND written by the worker loop (same pthread) on both sides of
-     * swapcontext. With LTO, the optimiser can hoist the load past
-     * the function-call boundary because it sees both ends of the
-     * call chain. `volatile` forces a fresh load on every access,
-     * which is what the cooperative model actually needs. */
+    int              started;
+    ucontext_t       loop_ctx;
+    /* `current` is read by the running fiber and written by the worker
+     * loop on either side of swapcontext. `volatile` defeats the LTO
+     * hoist that would otherwise reuse a stale load across the swap. */
     NurlFiber *volatile current;
-    NurlFiber       *rq_head;        /* local runqueue */
+    NurlFiber       *rq_head;
     NurlFiber       *rq_tail;
     pthread_mutex_t  rq_lock;
-    unsigned         steal_rng;      /* xorshift state for victim choice */
+    unsigned         steal_rng;      /* xorshift victim picker */
 } NurlWorker;
 
 typedef struct NurlScheduler {
@@ -5253,19 +3808,15 @@ static NurlFiber *nurl__rq_pop_local(NurlWorker *w) {
     return f;
 }
 
-/* Steal-protocol: detach the *front half* of a victim's queue. The
- * thief returns one fiber to run immediately and pushes the rest
- * onto its own local queue (left-shifted, preserving relative
- * order). Empirically a half-steal balances load faster than
- * single-fiber stealing. */
+/* Half-steal — take the front half of a victim's queue: one fiber to
+ * run now, rest pushed onto our own local queue (relative order kept).
+ * Empirically balances load faster than single-fiber stealing. */
 static NurlFiber *nurl__rq_steal_from(NurlWorker *victim, NurlWorker *thief) {
     if (victim == thief) return NULL;
     NurlFiber *taken_head = NULL, *taken_tail = NULL;
     int count = 0;
     pthread_mutex_lock(&victim->rq_lock);
-    /* Count length first (linear; fine — runqueues stay short in
-     * practice). */
-    NurlFiber *p = victim->rq_head;
+    NurlFiber *p = victim->rq_head;  /* runqueues are short — linear count is fine */
     while (p) { count++; p = p->next; }
     if (count >= 2) {
         int take = count / 2;
@@ -5279,7 +3830,6 @@ static NurlFiber *nurl__rq_steal_from(NurlWorker *victim, NurlWorker *thief) {
     }
     pthread_mutex_unlock(&victim->rq_lock);
     if (!taken_head) return NULL;
-    /* Pop the first as our immediate next; push the rest to our local. */
     NurlFiber *next = taken_head;
     NurlFiber *rest_head = next->next;
     next->next = NULL;
@@ -5333,18 +3883,16 @@ static void nurl__wake_all(void) {
 
 /* ── Fiber lifecycle ─────────────────────────────────────────────── */
 
-/* makecontext on 64-bit POSIX passes args as int (32 bits). The
- * trampoline reassembles the fiber pointer from two halves. */
+/* makecontext on 64-bit POSIX passes args as int (32 bits) — reassemble
+ * the fiber pointer from two halves on entry. */
 static void nurl__fiber_entry(unsigned hi, unsigned lo) {
     uintptr_t p = ((uintptr_t)hi << 32) | (uintptr_t)lo;
     NurlFiber *f = (NurlFiber*)p;
     if (f && f->fn) f->fn(f->env);
     if (f) f->state = NF_DONE;
-    /* Return to whichever worker is running us. uc_link mirrors. */
     NurlWorker *w = nurl__tls_worker;
     if (w) setcontext(&w->loop_ctx);
-    /* Last resort — should be unreachable. */
-    pthread_exit(NULL);
+    pthread_exit(NULL);  /* unreachable */
 }
 
 static NurlFiber *nurl__fiber_alloc(void *fn, void *env, int joinable) {
@@ -5390,7 +3938,7 @@ static NurlFiber *nurl__fiber_alloc(void *fn, void *env, int joinable) {
     }
     f->ctx.uc_stack.ss_sp   = (char*)base + guard;
     f->ctx.uc_stack.ss_size = usable;
-    f->ctx.uc_link          = NULL;     /* loop_ctx set per-worker at run */
+    f->ctx.uc_link          = NULL;     /* worker sets loop_ctx at run-time */
     uintptr_t p = (uintptr_t)f;
     unsigned hi = (unsigned)((p >> 32) & 0xFFFFFFFFu);
     unsigned lo = (unsigned)(p & 0xFFFFFFFFu);
@@ -5409,9 +3957,8 @@ static void nurl__fiber_free(NurlFiber *f) {
     free(f);
 }
 
-/* Enqueue a freshly-allocated fiber. Use the current worker's local
- * queue if we're on one; otherwise drop it into the global queue.
- * Bump the pending counter and wake an idle worker if any. */
+/* Enqueue a fresh fiber — local queue if on a worker, else global.
+ * Bumps pending and wakes one idle worker. */
 static void nurl__enqueue_new(NurlFiber *f) {
     nurl__pending_inc();
     NurlWorker *w = nurl__tls_worker;
@@ -5438,22 +3985,16 @@ long long nurl_fiber_spawn_joinable(void *fn, void *env) {
     return (long long)(uintptr_t)f;
 }
 
+/* noinline keeps the __thread TLS load on this side of the LTO
+ * boundary — LTO across the NURL/C edge mislowered the TLS access. */
 __attribute__((noinline))
 void nurl_fiber_yield(void) {
-    /* noinline gate — same reason as nurl_fiber_current: the
-     * NURL-emitted IR is a separate "translation unit" from the C
-     * runtime, and LTO inlining a __thread access across that
-     * boundary lowers the TLS load incorrectly. Keeping the body
-     * outlined preserves the per-thread access semantics. */
     NurlWorker *w = nurl__tls_worker;
-    if (!w) return;            /* not on a worker — no-op */
+    if (!w) return;
     NurlFiber *cur = w->current;
     if (!cur) return;
     cur->state = NF_RUNNABLE;
     nurl__rq_push_local(w, cur);
-    /* If a peer is idle, the new tail-push is worth a wake — but
-     * since we just enqueued ourselves only, skip the wake; the next
-     * fresh spawn / unpark will signal. */
     swapcontext(&cur->ctx, &w->loop_ctx);
 }
 
@@ -5471,59 +4012,40 @@ long long nurl_fiber_worker_id(void) {
     return w ? (long long)w->id : -1;
 }
 
-/* Park-with-mutex: callable only from inside a fiber. The associated
- * mutex MUST be locked by the caller. The protocol:
- *   1. Caller (e.g. chan_recv) finds the queue empty + open, pushes
- *      the current fiber onto the channel's recv-waiters list.
- *   2. Caller invokes nurl_fiber_park_with_mutex(ch.m) — this sets
- *      pending_unlock = &ch.m->mtx, sets state = NF_PARKED, and
- *      swapcontext-outs into the worker loop.
- *   3. The worker loop observes state == NF_PARKED and releases
- *      pending_unlock AFTER the swap-out is complete. Only then can
- *      a sender on the other side grab ch.m and observe the waiter.
- *   4. The sender pops the waiter, calls nurl_fiber_unpark on it.
- *      Unpark sees state == NF_PARKED (now stable — sender holds
- *      ch.m which the parker has finished releasing), transitions
- *      to RUNNABLE, pushes to the global queue, signals an idle
- *      worker. Some worker resumes the fiber, which re-locks ch.m
- *      and re-checks the predicate.
+/* Park-with-mutex from inside a fiber; caller holds `mutex_h`.
  *
- * This eliminates the lost-wakeup race that the naive "unlock first,
- * then park" sequence has: between unlock and swap-out, a sender
- * could grab the mutex, observe the not-yet-parked fiber, push it
- * to runqueue before its registers are saved — and another worker
- * could then swapcontext-in to a half-saved context. */
+ * Lost-wakeup-free handoff:
+ *   1. Caller registers the fiber on the waiter list under the mutex,
+ *      then calls this — pending_unlock = mutex_h, state = PARKED,
+ *      swap-out into the worker loop.
+ *   2. Worker observes PARKED and releases pending_unlock AFTER swap-
+ *      out completes. Only now can a sender grab the mutex and see the
+ *      stable PARKED state.
+ *   3. Sender pops the waiter and nurl_fiber_unparks it; state goes to
+ *      RUNNABLE, global queue, wake-one. Resumed fiber re-locks the
+ *      mutex and re-checks its predicate. */
 __attribute__((noinline))
 void nurl_fiber_park_with_mutex(long long mutex_h) {
     NurlWorker *w = nurl__tls_worker;
-    if (!w) return;       /* not on a fiber — caller's mutex stays locked */
+    if (!w) return;
     NurlFiber *cur = w->current;
     if (!cur) return;
-    /* mutex_h is the raw pthread_mutex_t* from NURL (Phase 6 batch 1:
-     * Mutex.c is a Cell holding the mutex bytes, cell_ptr is exactly
-     * &pthread_mutex_t). No NurlMutex wrapper anymore. */
     pthread_mutex_t *m = (pthread_mutex_t *)(uintptr_t)mutex_h;
     cur->pending_unlock = m;
     cur->state = NF_PARKED;
     swapcontext(&cur->ctx, &w->loop_ctx);
-    /* Resume point: scheduler has restored us into a worker. */
 }
 
 void nurl_fiber_unpark(long long fiber_h) {
     NurlFiber *f = (NurlFiber*)(uintptr_t)fiber_h;
     if (!f) return;
-    /* The unparker is the sole writer of PARKED→RUNNABLE — it was
-     * told about this fiber by the parker handing off through the
-     * shared mutex, so the race is closed. */
     f->state = NF_RUNNABLE;
     nurl__rq_push_global(f);
     nurl__wake_one();
 }
 
-/* nurl_fiber_join: block (pthread-cond_wait — this is Phase 3; fiber-
- * to-fiber join lands once park/unpark generalises in Phase 4) until
- * the target fiber's body has returned. Then free the fiber control
- * block. Calling join twice on the same handle is undefined. */
+/* Block until the target fiber's body returns, then free it. Calling
+ * join twice on the same handle is undefined. */
 void nurl_fiber_join(long long fiber) {
     NurlFiber *f = (NurlFiber*)(uintptr_t)fiber;
     if (!f || !f->joinable) return;
@@ -5538,7 +4060,7 @@ void nurl_fiber_join(long long fiber) {
 
 /* ── Worker loop ─────────────────────────────────────────────────── */
 
-/* xorshift32 — cheap, branch-free, good enough for victim choice. */
+/* xorshift32 — branch-free victim picker. */
 static unsigned nurl__rng_next(unsigned *st) {
     unsigned x = *st;
     if (x == 0) x = 0x9E3779B9u;
@@ -5549,14 +4071,13 @@ static unsigned nurl__rng_next(unsigned *st) {
     return x;
 }
 
-/* Pull the next runnable fiber for `w`. Tries local, then steal,
- * then global, then parks on idle_cv. Returns NULL on shutdown. */
+/* Next runnable for `w`: local → steal up to 2×worker_count peers →
+ * global → park on idle_cv. NULL on shutdown. */
 static NurlFiber *nurl__worker_next(NurlWorker *w) {
     for (;;) {
         if (nurl__sched.shutdown) return NULL;
         NurlFiber *f = nurl__rq_pop_local(w);
         if (f) return f;
-        /* Try stealing up to 2× worker_count peers before falling back. */
         int wc = nurl__sched.worker_count;
         for (int tries = 0; tries < wc * 2; tries++) {
             int victim_id = (int)(nurl__rng_next(&w->steal_rng) % (unsigned)wc);
@@ -5567,11 +4088,6 @@ static NurlFiber *nurl__worker_next(NurlWorker *w) {
         }
         f = nurl__rq_pop_global();
         if (f) return f;
-        /* Idle — park on the cond. The wake-up rules:
-         *   - new spawn / push wakes one worker via nurl__wake_one
-         *   - shutdown broadcast wakes everyone via nurl__wake_all
-         * The lock is held for the predicate check + wait so a wake
-         * arriving between predicate and wait isn't lost. */
         pthread_mutex_lock(&nurl__sched.idle_lock);
         if (nurl__sched.shutdown) {
             pthread_mutex_unlock(&nurl__sched.idle_lock);
@@ -5581,7 +4097,6 @@ static NurlFiber *nurl__worker_next(NurlWorker *w) {
         pthread_cond_wait(&nurl__sched.idle_cv, &nurl__sched.idle_lock);
         nurl__sched.idle_waiters--;
         pthread_mutex_unlock(&nurl__sched.idle_lock);
-        /* Loop back and try again. */
     }
 }
 
@@ -5601,31 +4116,24 @@ static void *nurl__worker_loop(void *arg) {
                 pthread_mutex_lock(&f->join_m);
                 pthread_cond_broadcast(&f->join_c);
                 pthread_mutex_unlock(&f->join_m);
-                /* Joiner is responsible for the free. */
+                /* Joiner does the free. */
             } else {
                 nurl__fiber_free(f);
             }
             nurl__pending_dec();
         } else if (f->state == NF_PARKED) {
-            /* Release the parker's held mutex AFTER swap-out is
-             * complete. This is the synchronization point that
-             * makes nurl_fiber_unpark safe: any waker on the other
-             * side of `pending_unlock` will only observe this
-             * fiber once its context is fully saved. */
+            /* Release pending_unlock AFTER swap-out so the waker only
+             * observes the fiber once its context is fully saved. Same
+             * race-closer for reactor parks (activate then poke). */
             pthread_mutex_t *pm = f->pending_unlock;
             f->pending_unlock = NULL;
             if (pm) pthread_mutex_unlock(pm);
-            /* Same race-closer for reactor-driven parks: activate
-             * the registered wait entry only AFTER swap-out is
-             * complete, then poke the reactor. Implementation in §25. */
             extern void nurl__reactor_activate(struct NurlReactorWait *w);
             struct NurlReactorWait *prw = f->pending_reactor_wait;
             f->pending_reactor_wait = NULL;
             if (prw) nurl__reactor_activate(prw);
         }
-        /* RUNNABLE → already re-queued by yield.
-         * PARKED   → released above; the unparker on the other side
-         *            of pending_unlock will push us back. */
+        /* RUNNABLE was already re-queued by yield. */
     }
     nurl__tls_worker = NULL;
     return NULL;
@@ -5670,7 +4178,6 @@ void nurl_runtime_init(long long worker_count) {
     }
     nurl__sched.initialized = 1;
 
-    /* Spawn the worker pthreads. */
     for (int i = 0; i < wc; i++) {
         NurlWorker *w = &nurl__sched.workers[i];
         if (pthread_create(&w->thread, NULL, nurl__worker_loop, w) == 0) {
@@ -5679,9 +4186,8 @@ void nurl_runtime_init(long long worker_count) {
     }
 }
 
-/* runtime_run from the caller (typically main) blocks until pending=0.
- * Workers continue running between calls — they only exit on
- * runtime_shutdown. */
+/* Block until pending fibers reach zero. Workers stay alive between
+ * calls; only runtime_shutdown exits them. */
 void nurl_runtime_run(void) {
     if (!nurl__sched.initialized) nurl_runtime_init(0);
     pthread_mutex_lock(&nurl__sched.pending_lock);
@@ -5694,19 +4200,15 @@ void nurl_runtime_run(void) {
 void nurl_runtime_shutdown(void) {
     if (!nurl__sched.initialized) return;
     nurl__sched.shutdown = 1;
-    /* Wake every parked worker so they observe the flag and exit. */
     nurl__wake_all();
-    /* Also wake any caller blocked in runtime_run. */
     pthread_mutex_lock(&nurl__sched.pending_lock);
     pthread_cond_broadcast(&nurl__sched.pending_zero);
     pthread_mutex_unlock(&nurl__sched.pending_lock);
-    /* Stop the reactor thread first — it might be holding refs to
-     * fibers that the worker loop is about to free. Implementation
-     * lives in §25 where the reactor types are in scope. */
+    /* Stop the reactor first — it may hold refs to fibers the workers
+     * are about to free. */
     extern void nurl__reactor_shutdown(void);
     nurl__reactor_shutdown();
-    /* Join the workers — guarantees post-condition: no worker still
-     * touches scheduler state when this returns. */
+    /* Workers must be joined before scheduler state is torn down. */
     for (int i = 0; i < nurl__sched.worker_count; i++) {
         NurlWorker *w = &nurl__sched.workers[i];
         if (w->started) pthread_join(w->thread, NULL);
@@ -5746,56 +4248,41 @@ void      nurl_runtime_shutdown(void) {}
 
 #endif /* fiber platform guard */
 
-/* ── §25  I/O reactor + timer wheel (Phase 5) ───────────────────────
+/* ── §25  I/O reactor + timer wheel ─────────────────────────────── */
+/*
+ * One reactor thread runs poll(2) over a dynamic (fd, events) list.
+ * Async wrappers on EAGAIN/EWOULDBLOCK call nurl_reactor_wait_*, which
+ * registers (fd, events, deadline) → current fiber, pokes the wake
+ * pipe, and parks. On readiness (or deadline) the reactor unparks the
+ * fiber and drops the entry. sleep_ms registers without an fd — just a
+ * deadline; poll's timeout is min(next_deadline, INFINITE).
  *
- * One reactor thread runs `poll(2)` over a dynamic array of (fd,
- * events). When an async I/O wrapper sees EAGAIN/EWOULDBLOCK, it
- * calls `nurl_reactor_wait_*` which:
- *   1. registers (fd, events, deadline) → current fiber
- *   2. writes a byte to the reactor's wake pipe so `poll` returns
- *   3. parks the fiber via the registration mutex
- * The reactor wakes, sees the new registration, drains the wake
- * byte, and includes the fd in its next `poll` round. On readiness
- * (or deadline) the reactor unparks the registered fiber and the
- * entry is dropped.
+ * POSIX-only (poll). epoll/kqueue/IOCP wait for a real 10 K+ consumer.
+ * WASI/Windows fall through to the stub block.
  *
- * For sleep_ms, the registration omits a real fd — only a deadline
- * is recorded. Poll's timeout is min(next_deadline, INFINITE).
- *
- * Phase 5 portability: POSIX poll(2). Limited to ~4 K live waiters
- * by the per-iteration pollfd[] rebuild; epoll/kqueue/IOCP land as
- * a Phase 8 follow-on when a real consumer needs 10 K+ fds. WASI
- * and Windows route through the stub branch below.
- *
- * ABI:
- *   int nurl_reactor_wait_read(int fd, long long timeout_ms);
- *      returns 1 on ready, 0 on timeout, -1 if not on a fiber
- *   int nurl_reactor_wait_write(int fd, long long timeout_ms);
- *   int nurl_fiber_sleep_ms(long long ms);  always 0
- */
+ * ABI: nurl_reactor_wait_read(fd, timeout_ms) → 1 ready / 0 timeout /
+ * -1 not on a fiber. Same shape for _write. nurl_fiber_sleep_ms always
+ * returns 0. */
 
 long long nurl_reactor_wait_read(long long fd, long long timeout_ms);
 long long nurl_reactor_wait_write(long long fd, long long timeout_ms);
 long long nurl_fiber_sleep_ms(long long ms);
 
-/* Reactor uses the fiber primitives (NurlFiber, nurl__sched) defined in
- * §24 above, so its platform guard must match — musl lacks the ucontext
- * routines those rely on. */
+/* Same platform guard as §24 — needs the fiber primitives. */
 #if !defined(__wasi__) && !defined(_WIN32) && (defined(__GLIBC__) || defined(__APPLE__))
 #include <poll.h>
 #include <fcntl.h>
 #include <errno.h>
 
 typedef struct NurlReactorWait {
-    int                     fd;          /* -1 → pure timer */
+    int                     fd;          /* -1 = pure timer */
     short                   events;      /* POLLIN | POLLOUT */
-    long long               deadline_ms; /* -1 → infinite */
+    long long               deadline_ms; /* -1 = infinite */
     NurlFiber              *fiber;
     int                     result;      /* 1 ready, 0 timeout */
-    int                     active;      /* 0 until swap-out completes;
-                                          * reactor ignores inactive
-                                          * entries to close the
-                                          * unpark-before-park race. */
+    int                     active;      /* set after fiber swap-out completes;
+                                          * inactive entries are skipped to
+                                          * close the park/unpark race. */
     struct NurlReactorWait *next;
 } NurlReactorWait;
 
@@ -5817,18 +4304,16 @@ static long long nurl__now_ms_internal(void) {
 }
 
 static void nurl__reactor_wake(void) {
-    /* Best-effort wake; the byte is drained in the reactor's poll
-     * pass. Multiple writes coalesce. */
+    /* Best-effort poke; multiple writes coalesce — reactor drains on poll. */
     char b = 'w';
     ssize_t r = write(nurl__reactor.wake_pipe[1], &b, 1);
     (void)r;
 }
 
-/* Reactor thread loop: build pollfd[], compute min-deadline, poll,
- * wake ready/timed-out fibers. */
+/* Reactor loop: build pollfd[], compute min-deadline, poll, wake
+ * ready / timed-out fibers. */
 static void *nurl__reactor_loop(void *arg) {
     (void)arg;
-    /* Sized for the typical case; grows on demand. */
     struct pollfd fds[256];
     NurlReactorWait *batch[256];
     for (;;) {
@@ -5844,9 +4329,7 @@ static void *nurl__reactor_loop(void *arg) {
         long long now = nurl__now_ms_internal();
         long long min_deadline = -1;
         for (NurlReactorWait *w = nurl__reactor.waits; w; w = w->next) {
-            /* Skip inactive entries — fiber hasn't completed swap-out
-             * yet, so it's not safe to unpark. */
-            if (!w->active) continue;
+            if (!w->active) continue;   /* fiber hasn't swap-completed */
             if (w->deadline_ms >= 0) {
                 if (min_deadline < 0 || w->deadline_ms < min_deadline)
                     min_deadline = w->deadline_ms;
@@ -5933,9 +4416,9 @@ static void *nurl__reactor_loop(void *arg) {
         nurl__reactor.waits = survivors;
         pthread_mutex_unlock(&nurl__reactor.lock);
 
-        /* Unpark outside the lock. The result must be written to
-         * the fiber BEFORE the unpark — once unparked, the fiber
-         * may resume on another worker and read the value. */
+        /* Unpark outside the lock. Write the result onto the fiber
+         * BEFORE unparking — once unparked it may resume on another
+         * worker and read the value. */
         for (NurlReactorWait *w = to_unpark; w; ) {
             NurlReactorWait *next = w->next;
             NurlFiber *fb = w->fiber;
@@ -5971,9 +4454,8 @@ static void nurl__reactor_start_if_needed(void) {
     pthread_once(&once, nurl__reactor_init_once);
 }
 
-/* Activate a registered wait entry — called from the worker loop
- * AFTER the parking fiber's swap-out is complete, so the reactor
- * cannot match a not-yet-suspended fiber. */
+/* Called by the worker loop AFTER the parking fiber's swap-out
+ * completes; only then is it safe for the reactor to match. */
 void nurl__reactor_activate(NurlReactorWait *w) {
     if (!w) return;
     pthread_mutex_lock(&nurl__reactor.lock);
@@ -5982,16 +4464,10 @@ void nurl__reactor_activate(NurlReactorWait *w) {
     nurl__reactor_wake();
 }
 
-/* Common wait path: register (fd, events, deadline) → current fiber,
- * park, return the reactor-set result. timeout_ms < 0 → infinite.
- *
- * Race-safety: the wait entry is added to the reactor's list as
- * INACTIVE, then the calling fiber parks. The worker loop sees
- * NF_PARKED on return from swapcontext and activates the entry
- * (via `nurl__reactor_activate` above) — only THEN can the reactor
- * match it. This eliminates the unpark-before-park double-execution
- * race that would otherwise let another worker swap into the
- * fiber's context before our swap-out completed. */
+/* Register (fd, events, deadline) → current fiber, park, return the
+ * reactor-set result. timeout_ms < 0 = infinite. The entry is INACTIVE
+ * until the worker loop activates it via nurl__reactor_activate after
+ * swap-out, which closes the unpark-before-park double-execution race. */
 __attribute__((noinline))
 static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     NurlWorker *w = nurl__tls_worker;
@@ -6012,19 +4488,14 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     wt->next = nurl__reactor.waits;
     nurl__reactor.waits = wt;
     pthread_mutex_unlock(&nurl__reactor.lock);
-    /* Do NOT wake the reactor yet — the entry is inactive and would
-     * be skipped. The worker loop wakes it via nurl__reactor_activate
-     * after our swap-out is fully complete. */
+    /* Don't wake the reactor — entry is inactive; worker loop activates
+     * after swap-out completes. */
 
     NurlFiber *cur = w->current;
     cur->pending_unlock = NULL;
     cur->pending_reactor_wait = wt;
     cur->state = NF_PARKED;
     swapcontext(&cur->ctx, &w->loop_ctx);
-
-    /* Resume point. The reactor wrote `last_park_result` to our
-     * fiber struct BEFORE unparking, so the value is safely visible
-     * here on whichever worker resumed us. */
     return cur->last_park_result;
 }
 
@@ -6067,9 +4538,8 @@ long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
     (void)fd; (void)timeout_ms; return -1;
 }
 long long nurl_fiber_sleep_ms(long long ms) {
-    /* Best effort: nanosleep equivalent. POSIX-only here; on
-     * Windows the build would Sleep(); WASI returns immediately. */
+    /* WASI/Windows fall-through; real sleep awaits port. */
     (void)ms; return 0;
 }
 
-#endif /* reactor platform guard */
+#endif
