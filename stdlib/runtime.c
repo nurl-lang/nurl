@@ -1522,39 +1522,51 @@ long long nurl_native_constant(const char *name) {
  * `__errno_location()` (glibc), `__error()` (BSD/macOS), `_errno()`
  * (mingw). NURL FFI can't follow that platform-specific accessor
  * cleanly, so the runtime hands back the current value. */
-int nurl_errno_get(void) { return errno; }
-void nurl_errno_set(int e) { errno = e; }
+/* Return type widened to `long long` (i64) on 2026-05-24 to match
+ * the NURL FFI declaration in `stdlib/core/posix.nu` (`→ i`). On
+ * x86_64 SysV the upper 32 bits of an `int` return were undefined
+ * and happened to be zero in practice; on wasm32 wasm-ld validates
+ * the signature strictly and refused to link until the C side
+ * widened. Same for `nurl_wait_*` and `nurl_errno_set`. */
+long long nurl_errno_get(void) { return errno; }
+void nurl_errno_set(long long e) { errno = (int)e; }
 
 /* Macro decoders for waitpid status. WIFEXITED / WEXITSTATUS are
  * preprocessor bit-twiddles; NURL has no preprocessor, so the
  * runtime exposes them as trivial functions. Same pattern as
  * nurl_native_sizeof — opaque platform shape behind a stable API. */
-int nurl_wait_is_exited (int status) {
+/* The W*-macros on macOS expand to `*(int*)&(x)` so they need an
+ * *lvalue* of type int, not an rvalue cast. Bind a local first. */
+long long nurl_wait_is_exited (long long status) {
 #if defined(_WIN32) || defined(__wasi__)
     (void)status; return 0;
 #else
-    return WIFEXITED(status) ? 1 : 0;
+    int s = (int)status;
+    return WIFEXITED(s) ? 1 : 0;
 #endif
 }
-int nurl_wait_exit_status(int status) {
+long long nurl_wait_exit_status(long long status) {
 #if defined(_WIN32) || defined(__wasi__)
     (void)status; return -1;
 #else
-    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    int s = (int)status;
+    return WIFEXITED(s) ? WEXITSTATUS(s) : -1;
 #endif
 }
-int nurl_wait_is_signaled(int status) {
+long long nurl_wait_is_signaled(long long status) {
 #if defined(_WIN32) || defined(__wasi__)
     (void)status; return 0;
 #else
-    return WIFSIGNALED(status) ? 1 : 0;
+    int s = (int)status;
+    return WIFSIGNALED(s) ? 1 : 0;
 #endif
 }
-int nurl_wait_term_sig(int status) {
+long long nurl_wait_term_sig(long long status) {
 #if defined(_WIN32) || defined(__wasi__)
     (void)status; return 0;
 #else
-    return WIFSIGNALED(status) ? WTERMSIG(status) : 0;
+    int s = (int)status;
+    return WIFSIGNALED(s) ? WTERMSIG(s) : 0;
 #endif
 }
 

@@ -407,6 +407,7 @@ LIBC_WASM32_ABI: dict[str, tuple[str, list[str]]] = {
     "memmove": ("p", ["p", "p", "s"]),
     "memset":  ("p", ["p", "i", "s"]),
     "memcmp":  ("i", ["p", "p", "s"]),
+    "memmem":  ("p", ["p", "s", "p", "s"]),  # GNU extension, in wasi-libc
     # ctype-ish / stdlib
     "atoi":    ("i", ["p"]),
     "abs":     ("i", ["i"]),
