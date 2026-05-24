@@ -1938,76 +1938,15 @@ long long nurl_lex_peek4_type(long long h) {
 }
 
 
-/* ── §6  Symbol table ──────────────────────────────────────────── */
-/*
- * Scoped map: name → llvm_type_string.
- * Implemented as a flat array of (scope_depth, name, type) entries.
- * Supports push/pop for function-local scopes.
- */
-
-#define MAX_SYMS 1000000
-
-typedef struct { int depth; char *name; char *type; } NurlSym;
-
-typedef struct {
-    NurlSym entries[MAX_SYMS];
-    int     count;
-    int     depth;
-} NurlSymTab;
-
-#define MAX_SYMTABS 16
-static NurlSymTab *g_symtabs[MAX_SYMTABS];
-static int         g_symtab_count = 0;
-
-long long nurl_sym_new(void) {
-    if (g_symtab_count >= MAX_SYMTABS) { fputs("nurlc: too many symtabs\n", stderr); exit(1); }
-    NurlSymTab *t = (NurlSymTab*)calloc(1, sizeof(NurlSymTab));
-    t->depth = 0; t->count = 0;
-    int idx = g_symtab_count++;
-    g_symtabs[idx] = t;
-    return (long long)(idx + 1);
-}
-
-static NurlSymTab* get_sym(long long h) {
-    int idx = (int)h - 1;
-    if (idx < 0 || idx >= g_symtab_count || !g_symtabs[idx]) {
-        fputs("nurlc: invalid symtab handle\n", stderr); exit(1);
-    }
-    return g_symtabs[idx];
-}
-
-void nurl_sym_def(long long h, const char *name, const char *type) {
-    NurlSymTab *t = get_sym(h);
-    if (t->count >= MAX_SYMS) { fputs("nurlc: symbol table full\n", stderr); exit(1); }
-    t->entries[t->count].depth = t->depth;
-    t->entries[t->count].name  = strdup(name);
-    t->entries[t->count].type  = strdup(type);
-    t->count++;
-}
-
-/* Return a strdup'd copy of the most-recently-defined type for name, or
-   strdup("") if not found.  Heap-owning the return keeps Phase 2B auto-drop
-   safe — the symbol table retains its own copy via sym_define().            */
-const char* nurl_sym_get(long long h, const char *name) {
-    NurlSymTab *t = get_sym(h);
-    for (int i = t->count - 1; i >= 0; i--)
-        if (strcmp(t->entries[i].name, name) == 0)
-            return strdup(t->entries[i].type);
-    return strdup("");
-}
-
-void nurl_sym_push(long long h) { get_sym(h)->depth++; }
-
-void nurl_sym_pop(long long h) {
-    NurlSymTab *t = get_sym(h);
-    /* remove all entries at current depth */
-    while (t->count > 0 && t->entries[t->count-1].depth == t->depth) {
-        free(t->entries[t->count-1].name);
-        free(t->entries[t->count-1].type);
-        t->count--;
-    }
-    if (t->depth > 0) t->depth--;
-}
+/* §6 Symbol table — REMOVED 2026-05-24 (PURIFY.md Phase 9b).
+ * nurl_sym_new / _def / _get / _push / _pop are pure-NURL @-fns in
+ * compiler/nurlc.nu now over a `nurl_zalloc`'d 48-byte handle and
+ * three parallel grow-by-2× arrays (names / types / depths), each
+ * starting at cap=64. Cache-friendlier than the C version's
+ * struct-of-arrays for the hot linear scan, and pays only for what
+ * each table actually uses (vs. the C version's 24 MB preallocation
+ * per table from MAX_SYMS=1 000 000). −72 LOC C; 5 preamble
+ * declares + 4 sym_def entries gone. */
 
 
 /* §7 Codegen helpers — REMOVED 2026-05-24 (PURIFY.md Phase 9a).

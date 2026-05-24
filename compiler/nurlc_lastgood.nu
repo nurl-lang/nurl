@@ -2061,6 +2061,121 @@
     ? != old 0 { ( free # s old ) } {}
 }
 
+// ── PURIFY.md Phase 9b (2026-05-24): §6b symbol table ─────────────
+// Scoped flat-array map of (depth, name, type) entries. Handle is
+// a `nurl_zalloc`'d 48-byte block, 6 i64 slots:
+//   0: count          (number of valid entries)
+//   1: depth          (current scope depth — incremented by _push)
+//   2: cap            (current allocated capacity of each array)
+//   3: names_buf  i8* (i8** array, length = cap; strdup'd names)
+//   4: types_buf  i8* (i8** array, length = cap; strdup'd types)
+//   5: depths_buf i8* (i64*  array, length = cap)
+//
+// Three parallel arrays (vs. one array-of-struct in the C version)
+// give nurl_sym_get's hot linear scan better cache locality — the
+// scan only fetches name pointers (8 B per entry, 8 entries per 64 B
+// cache line), and only touches the types array on a match.
+//
+// Grow-by-2× starting at cap=64. The C version preallocated 1M
+// entries (24 MB) per table; this pays only for what each table
+// actually uses. nurl_sym_pop frees every (name, type) strdup at
+// the current depth, matching the C version's pop semantics.
+//
+// nurl_sym_get returns a strdup'd copy of the matched type, or a
+// strdup'd `""` on miss — same contract as the runtime.c §6 body.
+// The C version was sym_def'd as `i8*` (no `__ret_owned`) so callers
+// leak the result; the @-fn below is shaped to avoid Phase 2B's
+// auto-owned tag (returns `^ # s (strdup ...)` with no intervening
+// `: s tmp` binding holding an owned-string call result), preserving
+// the same caller contract.
+
+@ __sym_grow i h → v {
+    : s t # s h
+    : i cap ( nurl_peek t 2 )
+    : i newcap * cap 2
+    : i count ( nurl_peek t 0 )
+    : s names_old # s ( nurl_peek t 3 )
+    : s types_old # s ( nurl_peek t 4 )
+    : s depths_old # s ( nurl_peek t 5 )
+    : s names_new # s ( malloc * newcap 8 )
+    : s types_new # s ( malloc * newcap 8 )
+    : s depths_new # s ( malloc * newcap 8 )
+    : i nbytes * count 8
+    ( memcpy names_new names_old nbytes )
+    ( memcpy types_new types_old nbytes )
+    ( memcpy depths_new depths_old nbytes )
+    ( free names_old )
+    ( free types_old )
+    ( free depths_old )
+    ( nurl_poke t 2 newcap )
+    ( nurl_poke t 3 # i names_new )
+    ( nurl_poke t 4 # i types_new )
+    ( nurl_poke t 5 # i depths_new )
+}
+
+@ nurl_sym_new → i {
+    : s t # s ( nurl_zalloc 48 )
+    ( nurl_poke t 2 64 )
+    ( nurl_poke t 3 # i # s ( malloc * 64 8 ) )
+    ( nurl_poke t 4 # i # s ( malloc * 64 8 ) )
+    ( nurl_poke t 5 # i # s ( malloc * 64 8 ) )
+    ^ # i t
+}
+
+@ nurl_sym_def i h s name s type → v {
+    : s t # s h
+    : i count ( nurl_peek t 0 )
+    : i cap ( nurl_peek t 2 )
+    ? >= count cap { ( __sym_grow h ) } {}
+    // Re-read array bases AFTER possible grow (the realloc may have
+    // moved them). cap/count read above stay valid since count
+    // doesn't change on grow.
+    : s names_buf # s ( nurl_peek t 3 )
+    : s types_buf # s ( nurl_peek t 4 )
+    : s depths_buf # s ( nurl_peek t 5 )
+    ( nurl_poke names_buf count # i ( strdup name ) )
+    ( nurl_poke types_buf count # i ( strdup type ) )
+    ( nurl_poke depths_buf count ( nurl_peek t 1 ) )
+    ( nurl_poke t 0 + count 1 )
+}
+
+@ nurl_sym_get i h s name → s {
+    : s t # s h
+    : i count ( nurl_peek t 0 )
+    : s names_buf # s ( nurl_peek t 3 )
+    : s types_buf # s ( nurl_peek t 4 )
+    : ~ i k - count 1
+    ~ >= k 0 {
+        ? == 0 # i ( strcmp name # s ( nurl_peek names_buf k ) )
+        { ^ # s ( strdup # s ( nurl_peek types_buf k ) ) }
+        {}
+        = k - k 1
+    }
+    ^ # s ( strdup `` )
+}
+
+@ nurl_sym_push i h → v {
+    : s t # s h
+    ( nurl_poke t 1 + ( nurl_peek t 1 ) 1 )
+}
+
+@ nurl_sym_pop i h → v {
+    : s t # s h
+    : ~ i count ( nurl_peek t 0 )
+    : i depth ( nurl_peek t 1 )
+    : s names_buf # s ( nurl_peek t 3 )
+    : s types_buf # s ( nurl_peek t 4 )
+    : s depths_buf # s ( nurl_peek t 5 )
+    ~ & > count 0 == ( nurl_peek depths_buf - count 1 ) depth {
+        : i idx - count 1
+        ( free # s ( nurl_peek names_buf idx ) )
+        ( free # s ( nurl_peek types_buf idx ) )
+        = count - count 1
+    }
+    ( nurl_poke t 0 count )
+    ? > depth 0 { ( nurl_poke t 1 - depth 1 ) } {}
+}
+
 @ __is_operator_callee i tt → b {
     ? == tt TT_DOT { ^ T } {}
     ? == tt TT_HASH { ^ T } {}
@@ -9263,11 +9378,10 @@
     ( emit `declare i8*  @nurl_print_buf_stop()` )
     ( emit `declare void @nurl_print_buf_reset()` )
     ( emit `declare i8*  @nurl_lex_filename(i64)` )
-    ( emit `declare i64  @nurl_sym_new()` )
-    ( emit `declare void @nurl_sym_def(i64, i8*, i8*)` )
-    ( emit `declare i8*  @nurl_sym_get(i64, i8*)` )
-    ( emit `declare void @nurl_sym_push(i64)` )
-    ( emit `declare void @nurl_sym_pop(i64)` )
+    // PURIFY.md Phase 9b (2026-05-24): nurl_sym_new / _def / _get /
+    // _push / _pop are pure-NURL @-fns now (see top of this file).
+    // declares + sym_defs deleted in lockstep with the runtime.c §6
+    // removal.
     // PURIFY.md Phase 9a (2026-05-24): nurl_cg_new / _reg / _lbl /
     // _reset and nurl_get_last_type / _set_last_type are pure-NURL
     // @-fns now (see top of this file). Their `declare` lines + the
@@ -9424,7 +9538,7 @@
     // PURIFY.md Phase 9a (2026-05-24): nurl_cg_reg / _lbl /
     // _get_last_type — pure-NURL @-fns now; types come from the
     // @-fn declaration itself.
-    ( nurl_sym_def syms `nurl_sym_get` `i8*` )
+    // nurl_sym_get type comes from @-fn declaration (Phase 9b).
     ( nurl_sym_def syms `nurl_argv` `i8*` )
     ( nurl_sym_def syms `nurl_argv_get` `i8*` )
     ( nurl_sym_def syms `nurl_read_file` `i8*` )
@@ -9639,9 +9753,7 @@
     ( nurl_sym_def syms `nurl_print_str` `void` )
     ( nurl_sym_def syms `nurl_print_bool` `void` )
     ( nurl_sym_def syms `nurl_lex_advance` `void` )
-    ( nurl_sym_def syms `nurl_sym_def` `void` )
-    ( nurl_sym_def syms `nurl_sym_push` `void` )
-    ( nurl_sym_def syms `nurl_sym_pop` `void` )
+    // nurl_sym_def / _push / _pop types come from @-fn declarations (Phase 9b).
     // PURIFY.md Phase 9a (2026-05-24): nurl_cg_reset / _set_last_type
     // are pure-NURL @-fns now.
     ( nurl_sym_def syms `nurl_exit` `void` )
