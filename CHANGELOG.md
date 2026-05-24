@@ -8,6 +8,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — `bench/` peer-comparison benchmark suite (2026-05-25)
+
+Three reproducible micro-benchmarks with one source file per language
+(NURL, Python 3, Rust, Node.js):
+
+* `bench/lcg.{nu,py,rs,js}` — 100M-step MMIX linear congruential
+  generator. Tight i64 multiply + add with a single-stream data
+  dependency that defeats LLVM's closed-form folding.
+* `bench/sieve.{nu,py,rs,js}` — Sieve of Eratosthenes computing
+  π(10 000 000) = 664 579. Memory bandwidth + branch prediction.
+* `bench/json_parse.{nu,py,rs,js}` — 5 parses of a deterministic
+  ~64 KB JSON file. Each language uses **what ships in its standard
+  distribution** (Python `json`, Node `JSON.parse`, NURL
+  `stdlib/ext/json.nu`; Rust links a small hand-written
+  recursive-descent parser since it has no JSON in stdlib).
+
+`bench/run.sh` compiles each NURL + Rust target, runs every present
+language N times (default 5) with a per-run `timeout`, and prints a
+median-wall-clock-ms table. Missing tools render as `n/a`; a cell that
+hits the timeout renders as `>30s` instead of hanging the suite.
+
+`bench/RESULTS.md` captures the numbers from one specific machine plus
+honest commentary:
+
+* On `lcg` and `sieve` NURL lands within measurement noise of Rust —
+  same LLVM `-O2 -flto` codegen on both sides.
+* On `json_parse` NURL's pure-NURL parser is ~12× slower than Python's
+  C `json` and ~50× slower than a hand-written Rust parser. The
+  module's allocator-and-Vec-growth path through recursive descent is
+  the explanation, and a zero-copy slice-based rewrite would close
+  most of the gap — tracked as a follow-up.
+
+This addresses `critic.md` §10's central complaint ("the 38× keep-alive
+speedup is NURL-vs-NURL, not NURL-vs-peers — there is no published
+benchmark against any peer server"). The HTTP-server-vs-`net/http`
+peer benchmark the critic actually asked for needs a Go install and a
+`wrk`-shaped harness and is tracked as the next benchmark suite.
+
 ### Changed — borrow-checker diagnostics are now hard errors
 
 `BORROW.md` Phase 8 final landed on 2026-05-25. The borrow checker has

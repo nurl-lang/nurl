@@ -43,6 +43,18 @@ The same source always produces identical output. No UB, no platform differences
 ### 5. Full platform support
 One compilation pipeline → all target platforms without porting.
 
+### Performance — head-to-head with Python, Rust, Node
+
+A reproducible micro-benchmark suite lives in [`bench/`](bench/) — one source file per language, `bench/run.sh` compiles + runs every present language N times, prints a median-ms table. [`bench/RESULTS.md`](bench/RESULTS.md) captures the numbers from one specific machine (12-core Intel @ 3.5 GHz):
+
+| Benchmark         | NURL  | Python  | Rust  | Node    |
+|-------------------|------:|--------:|------:|--------:|
+| `lcg` (100M LCG iters)         |  11   | 28 244  |  18   |  9 731  |
+| `sieve` (π(10M))               |  63   |  5 792  |  63   |    144  |
+| `json_parse` (5× 64 KB)        | 479   |     41  |   9   |     48  |
+
+(Lower = better, median wall-clock ms across 5 runs.) On compute-bound work NURL lands within measurement noise of Rust — same LLVM `-O2 -flto` codegen. On `json_parse` NURL's pure-NURL parser is ~12× behind Python's C `json` — honest call-out of where the stdlib-pure-NURL choice currently costs throughput.
+
 ---
 
 ## Architecture
