@@ -8,7 +8,7 @@
 
   ## What's inside
 
-  - **`nurlc`** — the self-hosted NURL compiler (bootstrapped `python → nurlc_py → nurlc_self → nurlc_self2`).
+  - **`nurlc`** — the self-hosted NURL compiler (bootstrapped `nurlc_lastgood.ll → nurlc_lastgood.bin → nurlc_self → nurlc_self2`; clang-only, no Python).
   - **Cross-compilation toolchains**, all preinstalled:
     - **Linux** x86_64 ELF — `clang-16` + glibc, full FFI (HTTP / sqlite / canvas)
     - **Linux** cross — `zig cc`: `x86_64` / `aarch64` / `riscv64` musl (static),

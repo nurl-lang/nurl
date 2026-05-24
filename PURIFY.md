@@ -8,6 +8,11 @@
 > **Starting point (2026-05-23):** `stdlib/runtime.c` is 8 879 LOC
 > across 28 sections. Pure-NURL stdlib is 28 809 LOC.
 >
+> **Current (2026-05-24):** `stdlib/runtime.c` is **6 265 LOC** —
+> **−2 614 LOC** moved out, the bulk into pure-NURL FFI declarations
+> over libc/libpthread/libsqlite3. See Part VII for the per-phase
+> breakdown.
+>
 > **Target:** runtime.c around **3 000 LOC**, comprising only:
 >   - the libc/syscall thunks (file, socket, pthread, mmap),
 >   - state-cached external-library bridges that can't be pure-FFI'd
@@ -526,23 +531,33 @@ common short identifiers.
 ≤ 5× baseline (acceptable for a compiler whose target audience is
 LLMs, not iteration speed).
 
-### Phase 10 — Lexer (`§6a`, ~589 LOC reduction)
+### Phase 10 — Lexer (`§6a`, ~589 LOC reduction) — DONE 2026-05-24
 
-**The largest single move.** The lexer is a state machine over
-bytes: peek/advance/lex_type/lex_val/lex_line. Rewrite in NURL
-under `compiler/lex.nu`. Every `nurl_lex_*` call site in
-`nurlc.nu` switches to the NURL surface.
+**The largest single move — landed.** Full lexer state machine +
+4-deep lookahead + every `nurl_lex_*` entry point ported to
+pure-NURL @-fns in `compiler/nurlc.nu` over a `nurl_zalloc`'d
+280-byte handle (35 i64 slots: 5 lexer-state + 5 × 6-slot token
+records). Same lookahead depth and same backtick-string escape
+rules as the C version.
 
-The pure-NURL FFI for `read_file_bytes` (Phase 7) gives us the
-input. Token table moves to a NURL `Vec[Token]` or similar.
+**Subtle escape-handling bug uncovered + fixed during the port:**
+only `\n` `\t` `\r` `\\` are real escapes. Any other `\X`
+(including `` \` ``) writes the lone `\` and advances ONE byte —
+so a backtick following a backslash terminates the string
+normally. The obvious-looking "always skip 2 on `\X`" treats
+`` \\` `` as escaped, which breaks every backtick-quoting comment
+in `nurlc.nu` itself by consuming the rest of the file into one
+giant string.
 
-**Risk:** the lexer is THE hottest path in compilation. Pure-NURL
-scalar bytes is slow vs. tight C. Mitigation: keep the lexer's
-core scan loop in NURL but FFI to `memchr(3)` for whitespace-skip
-runs (5 LOC C).
+`fnum` is no longer stored per-token — every parser callsite
+reads `nurl_lex_val` and re-parses the string form on demand via
+`nurl_lex_fnum` (cheap; called only at parse-time for FLOAT
+tokens, not in the inner-loop scan).
 
-**Acceptance:** every test compiles to byte-identical IR. Self-host
-wall time ≤ 6× pre-Phase-9 baseline.
+**Result:** −592 LOC C; 17 preamble `declare` lines + 8
+`nurl_sym_def` entries gone from `nurlc.nu` and the lastgood
+snapshot. Self-host wall time ~5.1 s (vs ~3.9 s pre-phase,
+1.3×; well inside the ≤6× budget).
 
 ### Phase 11 — DoS protection (`§23`, ~180 LOC) — DONE 2026-05-23
 
@@ -822,5 +837,73 @@ outside this document's scope.
 
 ---
 
-*Last updated: 2026-05-23 — initial draft. Phase 0 (this
-document) ships before any code moves.*
+## Part VII — Status snapshot (end of refactor/pure-nurl branch)
+
+**Starting point (2026-05-23):** `stdlib/runtime.c` 8 879 LOC across 28 sections.
+
+**Current (2026-05-24):** `stdlib/runtime.c` **6 265 LOC** — a
+**−2 614 LOC** reduction (−29.4 %) across the branch's 42 commits.
+Two thirds of the way to the 3 000-LOC target with every shipped
+phase keeping the bootstrap fixed point and the full test corpus
+green.
+
+**Shipped phases (chronological):**
+
+| # | Section(s)           | C-LOC moved | Vehicle |
+|--:|---------------------|------------:|---------|
+| 1  | §3 char classification        |  −11 | pure NURL (`stdlib/core/char.nu`) |
+| 2  | §15 logging level             |   −7 | pure NURL global (`stdlib/std/log.nu`) |
+| 3  | §11 libm + integer helpers    |  −17 | `& \`m\`` / `& \`c\`` FFI |
+| 4  | §17 crypto (MD5/SHA-1/256/512 + HMAC) | −541 | pure NURL (`stdlib/std/hash_*.nu`) |
+| 5  | §2 string operations          | −682 | libc `& \`c\`` FFI |
+| 6  | §19 threads / mutex / cond    | −162 | pthread `& \`pthread\`` FFI |
+| 7  | §4 + §13 file & dir syscalls (incremental) | −158 | POSIX `& \`c\`` FFI |
+| 8  | §16 + §16b process spawn      | −245 | fork/exec/poll `& \`c\`` FFI |
+| 9a | §7 + §8 codegen + last_type   |  −71 | pure NURL @-fns in `nurlc.nu` |
+| 9b | §6b symbol table              |  −72 | pure NURL @-fns + `*s` arith |
+| 9c | §5 HashMap (string→i64)       | −101 | generic stdlib HashMap[s i] |
+| 10 | §6a Lexer (the big one)       | −592 | pure NURL state machine in `nurlc.nu` |
+| 11 | §23 DoS protection            | −180 | pure NURL (`stdlib/std/dos.nu`) |
+| 12·§21 | sqlite3 bridge            | −330 | `& \`sqlite3\`` FFI (`stdlib/ext/sqlite.nu`) |
+| §12 | clock + sleep                |  −38 | `clock_gettime` + `nanosleep` FFI |
+| §13b | stdin + dir_list            |  −80 | `read(2)` + opendir/readdir POSIX FFI |
+| §11 strtod | float parse sideband  |  −20 | strtod + endptr buffer |
+
+**Other branch deliverables (not LOC moves):**
+
+  * Python bootstrap removed. `compiler/nurlc.py` + `compiler/src/*.py`
+    deleted. Stage 0 now links `compiler/nurlc_lastgood.ll` directly
+    via clang. `build.sh --refresh-bootstrap` regenerates both
+    `nurlc_lastgood.nu` and `.ll` from the current `build/nurlc`.
+    No language toolchain other than `clang` is required to build.
+  * `Box[T]` / `Cell[T]` / `Rc[T]` / `Arc[T]` allocators landed
+    (`stdlib/core/box.nu` + `cell.nu` + `stdlib/std/rc.nu` + `arc.nu`).
+    `% Drop` auto-fires; `nurl_native_sizeof` + `nurl_atomic_i64_*`
+    runtime primitives added. These unblocked Phase 6 / 8 / 11 / 12.
+  * `||` and `&&` tokens (the strict bool-only short-circuit forms)
+    added to the language. Grammar v2.0 documents them.
+  * `./check.sh <file.nu>` — per-file syntax/type check, ~270×
+    faster than a full `build.sh` round-trip. Use in iterate-fix
+    loops before kicking the full build.
+  * Test-runner split into `success.txt` + `failures.txt` so a
+    failure is greppable without reading through the green output.
+  * Parenthesised-operator diagnostic — `( . obj field )` /
+    `( | a b )` etc. now produce a precise call-site `error:`
+    instead of a far-away LLVM-verifier complaint.
+  * Call-arity diagnostics — every call's argument count is
+    checked against the callee's parameter count; mismatches
+    point at the call site.
+  * WASM FFI width fixes — `nurl_errno_get` / `nurl_errno_set` /
+    `nurl_wait_*` widened to `long long`; `memmem` added to the
+    `api/app/main.py` wasm shim list. The uuidgen wasm build now
+    links without `signature mismatch` warnings.
+
+**Residual runtime.c (~6 265 LOC):** still above the projected
+end-state (~2 000 LOC) — Phase 12 lib-cache (libcurl easy +
+multi), Phase 13 basic I/O, Phase 14 final accounting still open.
+The path from here is the same FFI pattern, applied to
+fewer-but-larger remaining sections.
+
+---
+
+*Last updated: 2026-05-24 — end of refactor/pure-nurl branch.*

@@ -520,12 +520,21 @@ expr = literal
    { ... } { ... }` — where the bare `c`/`d` were consumed as the
    ternary's then/else and the `{ ... }` blocks became side-effect
    statements. Other contexts (function args, while conditions) still
-   need user awareness — count operands left-to-right. *)
+   need user awareness — count operands left-to-right.
+
+   '||' and '&&' (the two-char forms) are an alternative spelling for
+   the bool-only short-circuit cases of '|' / '&'. They are strict
+   binary (no N-ary chaining at the parse level — write `( a || b )`
+   not `|| a || b c`), require both operands to be `b` (i1), and emit
+   the same IR as the single-char operators on an i1 left operand.
+   The two-char form was added 2026-05-23 to let code that is more
+   readable as a `||`/`&&` chain stay that way. *)
 bin_expr = BIN_OP expr expr ;
 BIN_OP   = '+' | '-' | '*' | '/' | '%'
          | '<' | '>' | '==' | '!=' | '<=' | '>='
          | '<<' | '>>'
          | '&' | '|' | '^^'
+         | '&&' | '||'
          ;
 
 (* ! expr  — logical NOT, yields b *)
