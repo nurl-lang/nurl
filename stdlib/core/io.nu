@@ -105,29 +105,35 @@ $ `stdlib/core/posix.nu`  // read(2) for the pure-NURL stdin slurp
     ^ out
 }
 
-// Binary stdin reader: returns exactly `n` bytes as an OWNED Vec[u].
-// On short reads (EOF mid-stream) the result is shorter than `n` and
-// ( stdin_eof ) turns T. Used by framed protocols (LSP / DAP /
-// raw JSON-RPC over stdio) where the body length is announced by a
-// `Content-Length: N` header and the body is opaque bytes — possibly
-// containing newlines or even NULs — so `read_line` would corrupt it.
+// Binary stdin reader: returns up to `n` bytes as an OWNED Vec[u].
+// On short reads (EOF mid-stream) the result is shorter than `n`;
+// callers detect EOF by comparing `vec_len out` against `n`. Used by
+// framed protocols (LSP / DAP / raw JSON-RPC over stdio) where the
+// body length is announced by a `Content-Length: N` header and the
+// body is opaque bytes — possibly containing newlines or even NULs —
+// so `read_line` would corrupt it.
 //
-// Memory: the runtime allocates an `n+1`-byte buffer (trailing NUL),
-// the actual byte count rides the `nurl_last_bytes_len` side-channel.
-// This function copies into an OWNED Vec[u] and frees the runtime
-// buffer; caller must `( vec_free [u] v )` when done.
+// PURIFY (2026-05-24): reads fd 0 via `read(2)` in a retry loop until
+// `n` bytes are accumulated or read returns 0 (EOF) / -1 (error). No
+// more runtime-side sideband — the byte count is the returned Vec's
+// length. Caller frees via `vec_free [u]` or auto-drop.
 @ read_n_bytes i n → ( Vec u ) {
     ? <= n 0 { ^ ( vec_new [u] ) } {}
-    // `raw` is auto-dropped at scope exit because nurl_read_n_bytes
-    // is registered as `__ret_owned=str`; no manual nurl_free needed.
-    : s raw ( nurl_read_n_bytes n )
-    : i got ( nurl_last_bytes_len )
-    : ( Vec u ) out ( vec_with_cap [u] got )
-    : ~ i k 0
-    ~ < k got {
-        ( vec_push [u] out # u ( nurl_str_get raw k ) )
-        = k + k 1
+    : ( Vec u ) out ( vec_with_cap [u] n )
+    : *u dst ( vec_data [u] out )
+    : ~ i got 0
+    : ~ b done F
+    ~ ! done {
+        : i room - n got
+        ? <= room 0 { = done T } {
+            : *u at # *u + # i dst got
+            : i r ( read # i32 0 at room )
+            ? <= r 0 { = done T } {
+                = got + got r
+            }
+        }
     }
+    : b _ok ( vec_set_len [u] out got )
     ^ out
 }
 

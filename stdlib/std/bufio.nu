@@ -54,6 +54,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/errors.nu`
+$ `stdlib/core/posix.nu`  // errno_kind
 
 // ── libc bridges (pure-NURL FFI) ────────────────────────────────────
 // fread is declared globally in nurlc's preamble (Phase 7, 2026-05-23);
@@ -199,7 +200,7 @@ $ `stdlib/core/errors.nu`
 @ bufreader_open s path → !BufReader IoErr {
     : *v h ( nurl_file_open path `rb` )
     ? == 0 # i h {
-        ^ @ !BufReader IoErr { F ( __bufio_err_of_kind ( nurl_errno_kind ) ) }
+        ^ @ !BufReader IoErr { F ( __bufio_err_of_kind ( errno_kind ) ) }
     } {}
     ^ @ !BufReader IoErr { T ( __bufreader_make h 1 ) }
 }

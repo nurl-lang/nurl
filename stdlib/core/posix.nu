@@ -53,6 +53,29 @@ $ `stdlib/core/cell.nu`
 & `c` @ nurl_errno_get → i
 & `c` @ nurl_errno_set i e → v
 
+// Classify the current errno as one of the IoErr enum tags from
+// `stdlib/core/errors.nu`. Replaces runtime.c's `nurl_errno_kind`
+// (PURIFY 2026-05-24). Caller must read errno immediately after the
+// failing syscall — any intervening libc call may clobber it.
+//
+//   0 = NotFound          (ENOENT)
+//   1 = PermissionDenied  (EACCES, EPERM)
+//   2 = AlreadyExists     (EEXIST)
+//   3 = Interrupted       (EINTR)
+//   4 = UnexpectedEof     (no errno mapping; reserved)
+//   5 = WriteFailed       (no errno mapping; reserved)
+//   6 = ReadFailed        (no errno mapping; reserved)
+//   7 = Other
+@ errno_kind → i {
+    : i e ( nurl_errno_get )
+    ? == e ( posix_const `ENOENT` ) { ^ 0 } {}
+    ? == e ( posix_const `EACCES` ) { ^ 1 } {}
+    ? == e ( posix_const `EPERM` )  { ^ 1 } {}
+    ? == e ( posix_const `EEXIST` ) { ^ 2 } {}
+    ? == e ( posix_const `EINTR` )  { ^ 3 } {}
+    ^ 7
+}
+
 // ── waitpid status decoders ───────────────────────────────────────
 
 // WIFEXITED / WEXITSTATUS / WIFSIGNALED / WTERMSIG are preprocessor

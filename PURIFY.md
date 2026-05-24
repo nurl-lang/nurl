@@ -8,9 +8,9 @@
 > **Starting point (2026-05-23):** `stdlib/runtime.c` is 8 879 LOC
 > across 28 sections. Pure-NURL stdlib is 28 809 LOC.
 >
-> **Current (2026-05-24):** `stdlib/runtime.c` is **6 265 LOC** —
-> **−2 614 LOC** moved out, the bulk into pure-NURL FFI declarations
-> over libc/libpthread/libsqlite3. See Part VII for the per-phase
+> **Current (2026-05-24):** `stdlib/runtime.c` is **5 929 LOC** —
+> **−2 950 LOC** moved out, the bulk into pure-NURL FFI declarations
+> over libc/libpthread/libsqlite3/libz. See Part VII for the per-phase
 > breakdown.
 >
 > **Target:** runtime.c around **3 000 LOC**, comprising only:
@@ -841,8 +841,8 @@ outside this document's scope.
 
 **Starting point (2026-05-23):** `stdlib/runtime.c` 8 879 LOC across 28 sections.
 
-**Current (2026-05-24):** `stdlib/runtime.c` **6 265 LOC** — a
-**−2 614 LOC** reduction (−29.4 %) across the branch's 42 commits.
+**Current (2026-05-24):** `stdlib/runtime.c` **5 929 LOC** — a
+**−2 950 LOC** reduction (−33.2 %) across the branch's 42+ commits.
 Two thirds of the way to the 3 000-LOC target with every shipped
 phase keeping the bootstrap fixed point and the full test corpus
 green.
@@ -868,6 +868,9 @@ green.
 | §12 | clock + sleep                |  −38 | `clock_gettime` + `nanosleep` FFI |
 | §13b | stdin + dir_list            |  −80 | `read(2)` + opendir/readdir POSIX FFI |
 | §11 strtod | float parse sideband  |  −20 | strtod + endptr buffer |
+| §17 | random surface (`rand_u64` / `rand_hex_str`) |  −34 | pure NURL (`stdlib/std/random.nu`) over `& \`c\`` FFI to a single `nurl_rand_fill` syscall bridge — getrandom/arc4random_buf/BCryptGenRandom branching stays C |
+| §4 | file ops batch (`nurl_read_file_bytes` / `_write_file_bytes` / `nurl_file_read_chunk` / `nurl_read_n_bytes` / `nurl_errno_kind` + `g_last_bytes_len` sideband) | −91 | pure NURL (`stdlib/std/fs.nu` / `stdlib/core/io.nu` / `stdlib/core/posix.nu`) — fopen/fseek/ftell/fread/fwrite/fclose/ferror via `& \`c\`` FFI, write into Vec[u]'s data buffer, no sideband |
+| §22 | gzip (`nurl_gzip_compress` / `nurl_gzip_decompress`) |  −15 | pure NURL (`stdlib/ext/compress.nu`) over `& \`z\`` FFI to deflateInit2_/deflate/deflateEnd + tiny C struct accessors (`nurl_z_setup` / `nurl_z_total_out`) that bridge LP64/LLP64 uLong-width variance |
 
 **Other branch deliverables (not LOC moves):**
 
@@ -898,7 +901,7 @@ green.
     `api/app/main.py` wasm shim list. The uuidgen wasm build now
     links without `signature mismatch` warnings.
 
-**Residual runtime.c (~6 265 LOC):** still above the projected
+**Residual runtime.c (~5 929 LOC):** still above the projected
 end-state (~2 000 LOC) — Phase 12 lib-cache (libcurl easy +
 multi), Phase 13 basic I/O, Phase 14 final accounting still open.
 The path from here is the same FFI pattern, applied to

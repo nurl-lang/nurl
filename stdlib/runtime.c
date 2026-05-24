@@ -130,33 +130,11 @@ long long nurl_stdin_eof(void) { return g_stdin_eof_flag ? 1 : 0; }
 void nurl_flush_stdout(void) { fflush(stdout); }
 void nurl_flush_stderr(void) { fflush(stderr); }
 
-/* Forward declaration: defined in §4 alongside nurl_read_file_bytes.
- * `nurl_read_n_bytes` uses the same side-channel to expose the actual
- * count read on a short EOF. */
-static long long g_last_bytes_len;
-
-/* Read EXACTLY `n` bytes from stdin (or fewer on EOF). Used by framed
- * protocols (LSP `Content-Length: N\r\n\r\n<body>`, DAP, raw JSON-RPC
- * over stdio) where the body is binary and may contain '\n' or NUL
- * bytes so `read_line` is wrong. Returns a heap-owned buffer with one
- * extra trailing NUL byte; the actual count read lives in the
- * `g_last_bytes_len` side-channel that `nurl_last_bytes_len()` exposes.
- * On EOF before any byte: returns a 1-byte NUL buffer with length 0;
- * the EOF flag is also raised so callers can distinguish "short read"
- * from "clean close". */
-const char *nurl_read_n_bytes(long long n) {
-    g_last_bytes_len = 0;
-    if (n <= 0) { return strdup(""); }
-    char *buf = (char*)malloc((size_t)n + 1);
-    if (!buf) return strdup("");
-    size_t got = fread(buf, 1, (size_t)n, stdin);
-    if (got == 0 && feof(stdin)) {
-        g_stdin_eof_flag = 1;
-    }
-    buf[got] = '\0';
-    g_last_bytes_len = (long long)got;
-    return buf;
-}
+/* `nurl_read_n_bytes` + the `g_last_bytes_len` / `nurl_last_bytes_len`
+ * sideband moved to pure NURL (PURIFY 2026-05-24): `stdlib/core/io.nu`'s
+ * `read_n_bytes` now calls `read(2)` on fd 0 in a retry loop and writes
+ * into the returned Vec[u]'s data buffer; vec_set_len records the count.
+ * EOF detection: callers compare `vec_len out` against the requested `n`. */
 
 /* ── Output buffer for deferred emission (closure bodies etc.) ──
  *
@@ -990,80 +968,19 @@ const char* nurl_read_file(const char *path) {
 #  include <fcntl.h>
 #  include <unistd.h>
 #endif
-/* Map errno to the IoErr enum tag in stdlib/core/errors.nu.
- *   0 = NotFound          (ENOENT)
- *   1 = PermissionDenied  (EACCES, EPERM)
- *   2 = AlreadyExists     (EEXIST)
- *   3 = Interrupted       (EINTR)
- *   4 = UnexpectedEof     (no errno mapping; reserved)
- *   5 = WriteFailed
- *   6 = ReadFailed
- *   7 = Other
- * Call after a libc operation has set errno. */
-long long nurl_errno_kind(void) {
-    switch (errno) {
-        case ENOENT: return 0;
-        case EACCES: case EPERM: return 1;
-        case EEXIST: return 2;
-        case EINTR: return 3;
-        default: return 7;
-    }
-}
+/* `nurl_errno_kind` (errno → IoErr tag classifier) moved to pure NURL
+ * in `stdlib/core/posix.nu` as `errno_kind` (PURIFY 2026-05-24). Reads
+ * the same per-thread errno via `nurl_errno_get` and compares against
+ * the cross-platform `posix_const` table entries (ENOENT / EACCES /
+ * EPERM / EEXIST / EINTR). */
 
-/* ── File I/O (buffered via FILE*) ───────────────────────────── */
-
-/* Binary read: returns a malloc'd byte buffer or NULL on error. The
- * length of the buffer is exposed as a sideband through
- * `nurl_last_bytes_len()` because NURL FFI returns a single value.
- * The buffer is NOT NUL-terminated — callers MUST honour the length.
- * On NULL return, `nurl_errno_kind()` classifies the failure. */
-static long long g_last_bytes_len = 0;
-long long nurl_last_bytes_len(void) { return g_last_bytes_len; }
-
-const char* nurl_read_file_bytes(const char *path) {
-    g_last_bytes_len = 0;
-    if (!path) { errno = EINVAL; return NULL; }
-    FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
-    if (fseek(f, 0, SEEK_END) != 0) { int e = errno; fclose(f); errno = e; return NULL; }
-    long sz = ftell(f);
-    if (sz < 0) { int e = errno; fclose(f); errno = e; return NULL; }
-    if (fseek(f, 0, SEEK_SET) != 0) { int e = errno; fclose(f); errno = e; return NULL; }
-    /* Allocate at least 1 byte so the returned pointer is never NULL for
-     * empty files (ambiguous with the failure signal). */
-    char *buf = (char*)malloc((size_t)(sz > 0 ? sz : 1));
-    if (!buf) { fclose(f); errno = ENOMEM; return NULL; }
-    size_t got = sz > 0 ? fread(buf, 1, (size_t)sz, f) : 0;
-    fclose(f);
-    if (sz > 0 && got != (size_t)sz) {
-        free(buf);
-        errno = errno ? errno : EIO;
-        return NULL;
-    }
-    g_last_bytes_len = (long long)got;
-    return buf;
-}
-
-/* Binary write: writes `len` bytes from `data` to `path`. Mode is "w"
- * (overwrite) or "a" (append). Returns 0 on success, -1 with errno set
- * on failure. */
-long long nurl_write_file_bytes(const char *path, const char *data, long long len, const char *mode) {
-    if (!path || !mode || (len > 0 && !data)) { errno = EINVAL; return -1; }
-    if (len < 0) { errno = EINVAL; return -1; }
-    FILE *f = fopen(path, mode);
-    if (!f) return -1;
-    if (len > 0) {
-        size_t got = fwrite(data, 1, (size_t)len, f);
-        if (got != (size_t)len) {
-            int saved = errno;
-            fclose(f);
-            errno = saved ? saved : EIO;
-            return -1;
-        }
-    }
-    if (fclose(f) != 0) return -1;
-    return 0;
-}
+/* `nurl_read_file_bytes` / `nurl_write_file_bytes` / `nurl_file_read_chunk`
+ * + the `g_last_bytes_len` sideband moved to pure NURL (PURIFY 2026-05-24):
+ * `stdlib/std/fs.nu`'s `read_file_bytes` / `write_file_bytes` /
+ * `file_read_chunk` now call fopen / fseek / ftell / fread / fwrite /
+ * fclose / ferror directly via libc FFI and write into the Vec[u]'s
+ * data buffer; vec_set_len records the actual byte count. No more
+ * sideband. */
 
 /* Classify the entry at `path` WITHOUT following a final symbolic link
  * (lstat semantics): 0 = missing or stat error, 1 = regular file,
@@ -1094,28 +1011,6 @@ long long nurl_path_type(const char *path) {
     if (S_ISDIR(st.st_mode)) return 2;
     if (S_ISREG(st.st_mode)) return 1;
     return 4;
-}
-
-/* Read up to `n` bytes from an open file handle `h` (a FILE* from
- * nurl_file_open) into a fresh malloc'd buffer. The number of bytes
- * actually read is exposed through nurl_last_bytes_len() — 0 means the
- * stream is at end of file. Returns the buffer (non-NULL even for a
- * 0-byte read, so EOF is unambiguous from the NULL error signal), or
- * NULL with errno set on a hard read error. The buffer is NOT
- * NUL-terminated — callers must honour the length. */
-const char* nurl_file_read_chunk(void *h, long long n) {
-    g_last_bytes_len = 0;
-    if (!h || n <= 0) { errno = EINVAL; return NULL; }
-    char *buf = (char*)malloc((size_t)n);
-    if (!buf) { errno = ENOMEM; return NULL; }
-    size_t got = fread(buf, 1, (size_t)n, (FILE*)h);
-    if (got == 0 && ferror((FILE*)h)) {
-        free(buf);
-        errno = errno ? errno : EIO;
-        return NULL;
-    }
-    g_last_bytes_len = (long long)got;
-    return buf;
 }
 
 /* §5 HashMap, §6a Lexer, §6 Symbol table, §7 Codegen helpers,
@@ -1224,6 +1119,14 @@ void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
 #  include <sys/mman.h>     /* PROT_READ / MAP_PRIVATE / MADV_SEQUENTIAL */
 #endif
 
+/* zlib.h promoted to top-level so `nurl_native_sizeof "z_stream"` and
+ * the §22 setup/total_out accessors can both see the struct layout.
+ * The actual deflate/inflate calls live in `stdlib/ext/compress.nu`
+ * via pure-NURL FFI (PURIFY 2026-05-24). */
+#ifdef NURL_HAVE_ZLIB
+#  include <zlib.h>
+#endif
+
 long long nurl_native_sizeof(const char *name) {
     if (!name) return -1;
     /* pthread family — same names on every platform now that Win32
@@ -1262,6 +1165,13 @@ long long nurl_native_sizeof(const char *name) {
     if (strcmp(name, "size_t")              == 0) return (long long)sizeof(size_t);
     if (strcmp(name, "off_t")               == 0) return (long long)sizeof(off_t);
     if (strcmp(name, "time_t")              == 0) return (long long)sizeof(time_t);
+#ifdef NURL_HAVE_ZLIB
+    /* z_stream layout is platform-specific (uLong is 4 bytes on Win32
+     * LLP64 vs 8 bytes on POSIX LP64); the sizeof bridges that gap so
+     * NURL can allocate the stream opaquely for libz's deflate /
+     * inflate. Used by `stdlib/ext/compress.nu`'s pure-NURL gzip path. */
+    if (strcmp(name, "z_stream")            == 0) return (long long)sizeof(z_stream);
+#endif
     return -1;
 }
 
@@ -1312,16 +1222,25 @@ long long nurl_native_constant(const char *name) {
     if (strcmp(name, "SIG_DFL")     == 0) return (long long)(uintptr_t)SIG_DFL;
     /* waitpid(2) options */
     if (strcmp(name, "WNOHANG")     == 0) return WNOHANG;
-    /* errno values surfaced for diagnostic / branching in NURL */
+#endif
+    /* errno values — all from standard `<errno.h>` (included at file scope
+     * unconditionally), so cross-platform. On Win32 the numeric values
+     * differ from POSIX but `nurl_errno_get` returns the platform-native
+     * code and we compare against the same platform's constant — the pair
+     * stays internally consistent. `stdlib/core/posix.nu`'s pure-NURL
+     * `errno_kind` classifier (the replacement for runtime.c's
+     * `nurl_errno_kind`) reads these. */
     if (strcmp(name, "ENOENT")      == 0) return ENOENT;
+    if (strcmp(name, "EACCES")      == 0) return EACCES;
+    if (strcmp(name, "EPERM")       == 0) return EPERM;
+    if (strcmp(name, "EEXIST")      == 0) return EEXIST;
+    if (strcmp(name, "EINTR")       == 0) return EINTR;
     if (strcmp(name, "EAGAIN")      == 0) return EAGAIN;
     if (strcmp(name, "EWOULDBLOCK") == 0) return EWOULDBLOCK;
-    if (strcmp(name, "EINTR")       == 0) return EINTR;
     if (strcmp(name, "EPIPE")       == 0) return EPIPE;
-#endif
-    /* ERANGE — surfaced cross-platform (defined in `<errno.h>` everywhere)
-     * so `stdlib/ext/env.nu`'s pure-NURL `getcwd` retry loop can branch on
-     * "buffer too small" without baking a platform-specific integer. */
+    /* ERANGE — used by `stdlib/ext/env.nu`'s pure-NURL `getcwd` retry
+     * loop to branch on "buffer too small" without baking a
+     * platform-specific integer. */
     if (strcmp(name, "ERANGE")      == 0) return ERANGE;
     /* POSIX `<time.h>` clock identifiers — exposed unconditionally
      * because `<time.h>` is included at file scope above, and every
@@ -3277,19 +3196,17 @@ void nurl_proc_spawn_free(long long h) {
 #endif
 }
 
-/* ── §17  Crypto (secure random only) ────────────────────────────
+/* ── §17  Crypto (OS entropy bridge only) ────────────────────────
  *
  * MD5 / SHA-1 / SHA-256 / SHA-512 / HMAC transforms are pure NURL
- * (`stdlib/std/hash_*.nu`). What stays here is the OS-entropy
- * bridge — `getrandom(2)` on Linux, `arc4random_buf` on macOS/BSD,
- * `BCryptGenRandom` on Windows, plus a `/dev/urandom` fallback —
- * and a small hex encoder used only by `nurl_rand_bytes_hex`.
- *
- * Public ABI:
- *   long long   nurl_rand_u64        (void);
- *   const char* nurl_rand_bytes_hex  (long long n);   // n > 0; ≤ 4096
- *
- * `const char*` returns are heap-owned (NURL caller frees via nurl_free).
+ * (`stdlib/std/hash_*.nu`). The `rand_u64` / `rand_hex_str` public API
+ * moved to `stdlib/std/random.nu` (PURIFY 2026-05-24). What stays here
+ * is the irreducible OS-entropy bridge: `getrandom(2)` on Linux,
+ * `arc4random_buf` on macOS/BSD, `BCryptGenRandom` on Windows, plus a
+ * `/dev/urandom` fallback. Platform-branching is genuinely C-only —
+ * the three OS APIs live in three different link-time libraries that
+ * NURL's `& \`...\`` FFI cannot pick between per host. NURL calls
+ * `nurl_rand_fill(buf, n)` once and does the rest.
  */
 
 #ifdef _WIN32
@@ -3301,51 +3218,44 @@ void nurl_proc_spawn_free(long long h) {
 #  include <sys/random.h>
 #endif
 
-static void nurl_hex_encode(const uint8_t *bytes, size_t n, char *out) {
-    static const char H[] = "0123456789abcdef";
-    for (size_t i = 0; i < n; i++) {
-        out[i*2]   = H[bytes[i] >> 4];
-        out[i*2+1] = H[bytes[i] & 0x0F];
-    }
-    out[n*2] = '\0';
-}
-
 /* Fill `buf` with `n` cryptographically-strong random bytes. Returns 1 on
  * success, 0 on failure. Falls back to a non-cryptographic time/clock
  * mix only if every OS source fails (extreme degradation; should never
  * happen on a modern host). */
-static int nurl_rand_fill(uint8_t *buf, size_t n) {
+long long nurl_rand_fill(unsigned char *buf, long long n) {
+    if (!buf || n <= 0) return 0;
+    size_t want = (size_t)n;
 #if defined(_WIN32)
-    if (BCryptGenRandom(NULL, buf, (ULONG)n, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0)
+    if (BCryptGenRandom(NULL, buf, (ULONG)want, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0)
         return 1;
 #elif defined(__APPLE__)
     /* arc4random_buf is documented as never failing. */
-    arc4random_buf(buf, n);
+    arc4random_buf(buf, want);
     return 1;
 #elif defined(__linux__)
     size_t got = 0;
-    while (got < n) {
-        ssize_t r = getrandom(buf + got, n - got, 0);
+    while (got < want) {
+        ssize_t r = getrandom(buf + got, want - got, 0);
         if (r < 0) {
             if (errno == EINTR) continue;
             break;
         }
         got += (size_t)r;
     }
-    if (got == n) return 1;
+    if (got == want) return 1;
     /* Fallback: /dev/urandom (older kernels without getrandom). */
     FILE *f = fopen("/dev/urandom", "rb");
     if (f) {
-        size_t r2 = fread(buf, 1, n, f);
+        size_t r2 = fread(buf, 1, want, f);
         fclose(f);
-        if (r2 == n) return 1;
+        if (r2 == want) return 1;
     }
 #else
     FILE *f = fopen("/dev/urandom", "rb");
     if (f) {
-        size_t r = fread(buf, 1, n, f);
+        size_t r = fread(buf, 1, want, f);
         fclose(f);
-        if (r == n) return 1;
+        if (r == want) return 1;
     }
 #endif
     /* Last-resort degraded fallback. NOT cryptographically strong. */
@@ -3357,36 +3267,11 @@ static int nurl_rand_fill(uint8_t *buf, size_t n) {
 #else
     uint64_t t = (uint64_t)time(NULL) ^ (uint64_t)(uintptr_t)buf ^ (uint64_t)clock();
 #endif
-    for (size_t i = 0; i < n; i++) {
+    for (size_t i = 0; i < want; i++) {
         t = t * 6364136223846793005ULL + 1442695040888963407ULL;
         buf[i] = (uint8_t)(t >> 33);
     }
     return 0;
-}
-
-long long nurl_rand_u64(void) {
-    uint8_t b[8];
-    nurl_rand_fill(b, 8);
-    uint64_t v = 0;
-    for (int i = 0; i < 8; i++) v = (v << 8) | b[i];
-    return (long long)v;
-}
-
-const char* nurl_rand_bytes_hex(long long n) {
-    if (n <= 0) {
-        char *empty = (char*)malloc(1);
-        if (empty) empty[0] = '\0';
-        return empty;
-    }
-    if (n > 4096) n = 4096;  /* cap to keep the hex output bounded */
-    uint8_t *buf = (uint8_t*)malloc((size_t)n);
-    if (!buf) return strdup("");
-    nurl_rand_fill(buf, (size_t)n);
-    char *out = (char*)malloc((size_t)(n * 2 + 1));
-    if (!out) { free(buf); return strdup(""); }
-    nurl_hex_encode(buf, (size_t)n, out);
-    free(buf);
-    return out;
 }
 
 
@@ -4990,69 +4875,39 @@ void nurl_panic(const char *msg) {
  * Behaviour mirrors libz's `compress2` / `uncompress`: `dst_len` is
  * in/out, return 0 on success / negative on failure. */
 
-#define NURL_GZIP_ERR_UNSUPPORTED -98
+/* `nurl_gzip_compress` / `nurl_gzip_decompress` moved to pure-NURL FFI
+ * in `stdlib/ext/compress.nu` (PURIFY 2026-05-24). The deflate /
+ * inflate dance now happens NURL-side, with `nurl_zalloc` sizing the
+ * stream via `nurl_native_sizeof "z_stream"` and the two tiny
+ * accessors below bridging the platform-varying field layout (LP64 vs
+ * LLP64 uLong sizes shift next_out and total_out offsets). */
 
 #ifdef NURL_HAVE_ZLIB
-#include <zlib.h>
-#endif
-
-int nurl_gzip_compress(unsigned char *dst, long long *dst_len,
-                       unsigned char *src, long long src_len, int level) {
-#ifdef NURL_HAVE_ZLIB
-    z_stream s;
-    s.zalloc = Z_NULL;
-    s.zfree  = Z_NULL;
-    s.opaque = Z_NULL;
-    s.next_in   = src;
-    s.avail_in  = (uInt)src_len;
-    s.next_out  = dst;
-    s.avail_out = (uInt)*dst_len;
-    /* windowBits 15 + 16 → wrap raw deflate in the gzip file format. */
-    int rc = deflateInit2(&s, level, Z_DEFLATED, 15 + 16, 8,
-                          Z_DEFAULT_STRATEGY);
-    if (rc != Z_OK) return rc;
-    rc = deflate(&s, Z_FINISH);
-    if (rc != Z_STREAM_END) {
-        deflateEnd(&s);
-        return (rc == Z_OK) ? Z_BUF_ERROR : rc;
-    }
-    *dst_len = (long long)s.total_out;
-    return deflateEnd(&s);
-#else
-    (void)dst; (void)dst_len; (void)src; (void)src_len; (void)level;
-    return NURL_GZIP_ERR_UNSUPPORTED;
-#endif
+/* Set the four mutable z_stream pointer/length fields before a call to
+ * `deflate` / `inflate`. zalloc / zfree / opaque must already be NULL
+ * (nurl_zalloc on the stream buffer gives that for free). */
+void nurl_z_setup(void *zs, void *in, long long avail_in,
+                  void *out, long long avail_out) {
+    z_stream *s = (z_stream*)zs;
+    s->next_in   = (Bytef*)in;
+    s->avail_in  = (uInt)avail_in;
+    s->next_out  = (Bytef*)out;
+    s->avail_out = (uInt)avail_out;
 }
 
-int nurl_gzip_decompress(unsigned char *dst, long long *dst_len,
-                         unsigned char *src, long long src_len) {
-#ifdef NURL_HAVE_ZLIB
-    z_stream s;
-    s.zalloc = Z_NULL;
-    s.zfree  = Z_NULL;
-    s.opaque = Z_NULL;
-    s.next_in   = src;
-    s.avail_in  = (uInt)src_len;
-    s.next_out  = dst;
-    s.avail_out = (uInt)*dst_len;
-    /* windowBits 15 + 32 → auto-detect gzip OR zlib. Accepting both
-     * shapes here is harmless and matches what every real-world gzip
-     * decoder does (HTTP `Content-Encoding: gzip` peers occasionally
-     * ship raw deflate; auto-detect smooths over that). */
-    int rc = inflateInit2(&s, 15 + 32);
-    if (rc != Z_OK) return rc;
-    rc = inflate(&s, Z_FINISH);
-    if (rc != Z_STREAM_END) {
-        inflateEnd(&s);
-        return (rc == Z_OK) ? Z_BUF_ERROR : rc;
-    }
-    *dst_len = (long long)s.total_out;
-    return inflateEnd(&s);
-#else
-    (void)dst; (void)dst_len; (void)src; (void)src_len;
-    return NURL_GZIP_ERR_UNSUPPORTED;
-#endif
+/* Read z_stream::total_out after a finished deflate / inflate. uLong
+ * width varies (4 on Win32 LLP64, 8 on POSIX LP64), so the offset
+ * isn't NURL-portable — read it through C. */
+long long nurl_z_total_out(const void *zs) {
+    return (long long)((const z_stream*)zs)->total_out;
 }
+#else
+void nurl_z_setup(void *zs, void *in, long long avail_in,
+                  void *out, long long avail_out) {
+    (void)zs; (void)in; (void)avail_in; (void)out; (void)avail_out;
+}
+long long nurl_z_total_out(const void *zs) { (void)zs; return 0; }
+#endif
 
 
 /* ── §24  Async runtime (stackful fibers, M:N work-stealing) ────────

@@ -160,7 +160,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     }
     : i p # i raw
     ? == p 0 {
-        : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+        : IoErr e ( __io_err_of_kind ( errno_kind ) )
         ^ @ !String IoErr { F e }
     } {}
     // Wrap the malloc'd buffer in a String WITHOUT copying. The
@@ -212,7 +212,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ? == rc 0 {
         ^ @ !v IoErr { T 0 }
     } {}
-    : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+    : IoErr e ( __io_err_of_kind ( errno_kind ) )
     ^ @ !v IoErr { F e }
 }
 
@@ -221,7 +221,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ? == rc 0 {
         ^ @ !v IoErr { T 0 }
     } {}
-    : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+    : IoErr e ( __io_err_of_kind ( errno_kind ) )
     ^ @ !v IoErr { F e }
 }
 
@@ -257,7 +257,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 @ file_size s path → !i IoErr {
     : i n ( __file_size_pure path )
     ? < n 0 {
-        : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+        : IoErr e ( __io_err_of_kind ( errno_kind ) )
         ^ @ !i IoErr { F e }
     } {}
     ^ @ !i IoErr { T n }
@@ -279,7 +279,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ? == rc 0 {
         ^ @ !v IoErr { T 0 }
     } {}
-    : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+    : IoErr e ( __io_err_of_kind ( errno_kind ) )
     ^ @ !v IoErr { F e }
 }
 
@@ -299,7 +299,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ? == rc 0 {
         ^ @ !v IoErr { T 0 }
     } {}
-    : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+    : IoErr e ( __io_err_of_kind ( errno_kind ) )
     ^ @ !v IoErr { F e }
 }
 
@@ -311,7 +311,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ? == rc 0 {
         ^ @ !v IoErr { T 0 }
     } {}
-    : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+    : IoErr e ( __io_err_of_kind ( errno_kind ) )
     ^ @ !v IoErr { F e }
 }
 
@@ -325,7 +325,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 @ __dir_list_pure_posix s path → !( Vec String ) IoErr {
     : s d ( opendir path )
     ? == # i d 0 {
-        : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+        : IoErr e ( __io_err_of_kind ( errno_kind ) )
         ^ @ !( Vec String ) IoErr { F e }
     } {}
     : ( Vec String ) out ( vec_new [String] )
@@ -369,7 +369,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     } {}
     : i h ( nurl_dir_list_open path )
     ? == h 0 {
-        : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+        : IoErr e ( __io_err_of_kind ( errno_kind ) )
         ^ @ !( Vec String ) IoErr { F e }
     } {}
     : ( Vec String ) out ( vec_new [String] )
@@ -399,47 +399,65 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 // runtime buffer is freed inside read_file_bytes — callers never see it.
 // write_file_bytes BORROWS its byte buffer.
 
+// PURIFY (2026-05-24): read_file_bytes / write_file_bytes /
+// append_file_bytes now call fopen / fseek / ftell / fread / fwrite /
+// fclose directly via libc FFI — no more `nurl_read_file_bytes` /
+// `nurl_write_file_bytes` / `nurl_last_bytes_len` sideband in C.
+// fread writes into the Vec[u]'s data buffer directly; vec_set_len
+// records the actual byte count.
 @ read_file_bytes s path → !( Vec u ) IoErr {
-    : s raw ( nurl_read_file_bytes path )
-    : i p # i raw
-    ? == p 0 {
-        : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
+    : s f # s ( fopen path `rb` )
+    ? == # i f 0 {
+        : IoErr e ( __io_err_of_kind ( errno_kind ) )
         ^ @ !( Vec u ) IoErr { F e }
     } {}
-    : i n ( nurl_last_bytes_len )
-    : ( Vec u ) v ( vec_with_cap [u] n )
-    : *u src # *u raw
-    : ~ i k 0
-    ~ < k n {
-        ( vec_push [u] v . src k )
-        = k + k 1
-    }
-    ( nurl_free raw )
+    : i32 _e1 ( fseek f 0 # i32 2 )  // SEEK_END
+    : i sz ( ftell f )
+    : i32 _e2 ( fseek f 0 # i32 0 )  // SEEK_SET
+    ? < sz 0 {
+        : i32 _ ( fclose f )
+        : IoErr e ( __io_err_of_kind ( errno_kind ) )
+        ^ @ !( Vec u ) IoErr { F e }
+    } {}
+    : i cap_n ? > sz 0 sz 1
+    : ( Vec u ) v ( vec_with_cap [u] cap_n )
+    : *u dst ( vec_data [u] v )
+    : i got ? > sz 0 ( fread # s dst 1 sz f ) 0
+    : i32 _r ( fclose f )
+    : b _ok ( vec_set_len [u] v got )
     ^ @ !( Vec u ) IoErr { T v }
 }
 
 @ write_file_bytes s path ( Vec u ) v → !v IoErr {
-    : i n ( vec_len [u] v )
-    : *u data ( vec_data [u] v )
-    : s raw # s data
-    : i rc ( nurl_write_file_bytes path raw n `wb` )
-    ? == rc 0 {
-        ^ @ !v IoErr { T 0 }
-    } {}
-    : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
-    ^ @ !v IoErr { F e }
+    ^ ( __write_bytes path v `wb` )
 }
 
 @ append_file_bytes s path ( Vec u ) v → !v IoErr {
-    : i n ( vec_len [u] v )
-    : *u data ( vec_data [u] v )
-    : s raw # s data
-    : i rc ( nurl_write_file_bytes path raw n `ab` )
-    ? == rc 0 {
-        ^ @ !v IoErr { T 0 }
+    ^ ( __write_bytes path v `ab` )
+}
+
+@ __write_bytes s path ( Vec u ) v s mode → !v IoErr {
+    : s f # s ( fopen path mode )
+    ? == # i f 0 {
+        : IoErr e ( __io_err_of_kind ( errno_kind ) )
+        ^ @ !v IoErr { F e }
     } {}
-    : IoErr e ( __io_err_of_kind ( nurl_errno_kind ) )
-    ^ @ !v IoErr { F e }
+    : i n ( vec_len [u] v )
+    ? > n 0 {
+        : *u data ( vec_data [u] v )
+        : i got ( fwrite # s data 1 n f )
+        ? != got n {
+            : i32 _ ( fclose f )
+            : IoErr e ( __io_err_of_kind ( errno_kind ) )
+            ^ @ !v IoErr { F e }
+        } {}
+    } {}
+    : i32 rc ( fclose f )
+    ? != rc # i32 0 {
+        : IoErr e ( __io_err_of_kind ( errno_kind ) )
+        ^ @ !v IoErr { F e }
+    } {}
+    ^ @ !v IoErr { T 0 }
 }
 
 // ── Recursive directory operations ──────────────────────────────────
@@ -500,12 +518,10 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ^ ? != 0 # i ( feof # s h ) 1 0
 }
 
-// nurl_file_read_chunk stays in C — its contract writes to the
-// g_last_bytes_len side-channel that the file_read_chunk wrapper
-// consumes for the actual byte count, and the NULL-vs-empty error
-// distinction needs errno discipline. Migrating it cleanly needs a
-// dual-return shape (ptr + len) the runtime doesn't expose yet.
-& `c` @ nurl_file_read_chunk *v h i n      → s
+// PURIFY (2026-05-24): nurl_file_read_chunk moved to pure NURL —
+// `file_read_chunk` below calls fread(buf, 1, n, h) directly into a
+// Vec[u]'s data buffer; ferror gates the read-error path.
+& `c` @ ferror s h → i32
 
 // ── PURIFY.md Phase 7 batch 2 (2026-05-23): probe + mutation ──
 // access(2) / remove(3) / mkdir(2) / rmdir(2) wrappers. `access`
@@ -543,7 +559,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 @ __dir_create_step s p → !v IoErr {
     : i rc ( nurl_dir_create p )
     ? == rc 0 { ^ @ !v IoErr { T 0 } } {}
-    : i k ( nurl_errno_kind )
+    : i k ( errno_kind )
     ? == k 2 { ^ @ !v IoErr { T 0 } } {}
     ^ @ !v IoErr { F ( __io_err_of_kind k ) }
 }
@@ -585,7 +601,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 @ __unlink_entry s p → !v IoErr {
     : i32 rc ( unlink p )
     ? == rc 0 { ^ @ !v IoErr { T 0 } } {}
-    ^ @ !v IoErr { F ( __io_err_of_kind ( nurl_errno_kind ) ) }
+    ^ @ !v IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
 }
 
 // Free a Vec[String] and every String it owns.
@@ -651,7 +667,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 @ file_open s path → !File IoErr {
     : *v h ( nurl_file_open path `rb` )
     ? == 0 # i h {
-        ^ @ !File IoErr { F ( __io_err_of_kind ( nurl_errno_kind ) ) }
+        ^ @ !File IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
     } {}
     : s rawp # s h
     ^ @ !File IoErr { T @ File { rawp } }
@@ -663,19 +679,16 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 @ file_read_chunk File f i n → !( Vec u ) IoErr {
     ? <= n 0 { ^ @ !( Vec u ) IoErr { T ( vec_new [u] ) } } {}
     : s hp . f raw
-    : s raw ( nurl_file_read_chunk # *v hp n )
-    ? == 0 # i raw {
-        ^ @ !( Vec u ) IoErr { F ( __io_err_of_kind ( nurl_errno_kind ) ) }
+    ? == 0 # i hp {
+        ^ @ !( Vec u ) IoErr { F @ IoErr { Other } }
     } {}
-    : i got ( nurl_last_bytes_len )
-    : ( Vec u ) out ( vec_with_cap [u] got )
-    : *u src # *u raw
-    : ~ i k 0
-    ~ < k got {
-        ( vec_push [u] out . src k )
-        = k + k 1
-    }
-    ( nurl_free raw )
+    : ( Vec u ) out ( vec_with_cap [u] n )
+    : *u dst ( vec_data [u] out )
+    : i got ( fread # s dst 1 n hp )
+    ? & == got 0 != 0 # i ( ferror hp ) {
+        ^ @ !( Vec u ) IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+    } {}
+    : b _ok ( vec_set_len [u] out got )
     ^ @ !( Vec u ) IoErr { T out }
 }
 

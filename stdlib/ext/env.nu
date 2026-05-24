@@ -133,7 +133,7 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get
     ? == # i path 0 { ^ @ !v IoErr { F @ IoErr { Other } } } {}
     : i32 rc ( chdir path )
     ? == rc # i32 0 { ^ @ !v IoErr { T 0 } } {}
-    : i k ( nurl_errno_kind )
+    : i k ( errno_kind )
     ? == k 0 { ^ @ !v IoErr { F @ IoErr { NotFound } } } {}
     ? == k 1 { ^ @ !v IoErr { F @ IoErr { PermissionDenied } } } {}
     ^ @ !v IoErr { F @ IoErr { Other } }
