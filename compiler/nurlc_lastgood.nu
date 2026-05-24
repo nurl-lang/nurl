@@ -10101,21 +10101,10 @@
     // calling strlen / strcmp / strncmp / strstr / memcmp / memmem /
     // atoll / atof directly via the global preamble declarations
     // emitted above).
-    ( emit `declare i64    @nurl_csv_scan_cell(i8*, i64, i64)` )
-    ( emit `declare i64    @nurl_csv_filter_float_gt(i8*, i8*, i64*, i64*, i64*, i64, i64, double)` )
-    ( emit `declare i64    @nurl_csv_filter_str_contains(i8*, i8*, i64*, i64*, i64*, i64, i64, i8*, i64)` )
-    ( emit `declare i64    @nurl_csv_filter_float_gt_and_str_contains(i8*, i8*, i64*, i64*, i64*, i64, i64, double, i64, i8*, i64)` )
-    ( emit `declare i64    @nurl_csv_filter_typed_float_gt(double*, i64*, i64*, i64, double)` )
-    ( emit `declare i64    @nurl_has_byte(i8*, i64, i64)` )
+    ( emit `declare i64    @nurl_scan_byte3(i8*, i64, i64, i64, i64)` )
+    ( emit `declare i64    @nurl_byte_substr(i8*, i64, i8*, i64)` )
     ( emit `declare i64    @nurl_count_byte(i8*, i64, i64)` )
-    ( emit `declare double @nurl_csv_fast_float_range(i8*, i64)` )
-    ( emit `declare i64    @nurl_csv_parse_arena(i8*, i64, i64, i64*, i64, i64*, i64*, i64, i64*, i64)` )
-    ( emit `declare i64    @nurl_csv_n_rows_out()` )
-    ( emit `declare i64    @nurl_csv_n_header_out()` )
-    ( emit `declare i64    @nurl_csv_n_cells_out()` )
-    ( emit `declare i64    @nurl_csv_scan_row_pairs(i8*, i64, i64, i64, i64*, i64)` )
-    ( emit `declare i64    @nurl_csv_row_n_cells_out()` )
-    ( emit `declare i64    @nurl_csv_row_next_pos_out()` )
+    ( emit `declare double @nurl_fast_atof(i8*, i64)` )
     // nurl_str_slice — pure-NURL @-fn (PURIFY.md Phase 5 Batch C).
     // PURIFY.md Phase 9c (2026-05-24): nurl_map_* (string→i64
     // djb2-chained map) was removed from runtime.c §5; user code
@@ -10384,21 +10373,10 @@
     // _find / _ends / _memmem_range / _memcmp_lex — pure-NURL
     // @-fns now (PURIFY.md Phase 5, 2026-05-23). Their return
     // types are discovered from the @-fn declaration itself.
-    ( nurl_sym_def syms `nurl_csv_scan_cell` `i64` )
-    ( nurl_sym_def syms `nurl_csv_filter_float_gt` `i64` )
-    ( nurl_sym_def syms `nurl_csv_filter_str_contains` `i64` )
-    ( nurl_sym_def syms `nurl_csv_filter_float_gt_and_str_contains` `i64` )
-    ( nurl_sym_def syms `nurl_csv_filter_typed_float_gt` `i64` )
-    ( nurl_sym_def syms `nurl_has_byte` `i64` )
+    ( nurl_sym_def syms `nurl_scan_byte3` `i64` )
+    ( nurl_sym_def syms `nurl_byte_substr` `i64` )
     ( nurl_sym_def syms `nurl_count_byte` `i64` )
-    ( nurl_sym_def syms `nurl_csv_fast_float_range` `double` )
-    ( nurl_sym_def syms `nurl_csv_parse_arena` `i64` )
-    ( nurl_sym_def syms `nurl_csv_n_rows_out` `i64` )
-    ( nurl_sym_def syms `nurl_csv_n_header_out` `i64` )
-    ( nurl_sym_def syms `nurl_csv_n_cells_out` `i64` )
-    ( nurl_sym_def syms `nurl_csv_scan_row_pairs` `i64` )
-    ( nurl_sym_def syms `nurl_csv_row_n_cells_out` `i64` )
-    ( nurl_sym_def syms `nurl_csv_row_next_pos_out` `i64` )
+    ( nurl_sym_def syms `nurl_fast_atof` `double` )
     // CLI tooling — i8*-returning calls return heap-owned strings (caller frees)
     ( nurl_sym_def syms `nurl_dir_list_next` `i8*` )
     ( nurl_sym_def syms `nurl_dir_list_open` `i64` )

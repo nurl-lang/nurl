@@ -313,20 +313,12 @@ const char* nurl_str_float(double d) {
  * never quoted data can pass NULL for escape_buf.
  *
  * Return value: new committed row count (= n_rows survivors). */
-/* Fast CSV-numeric float parser. Exposed via FFI as
- * `nurl_csv_fast_float_range` for callers that want strtod's
- * semantics for CSV numeric cells without the per-call cost
- * (glibc strtod ~150 ns/call mostly spent on locale + NaN/Inf
- * special cases we don't need). Recognises the regular numeric
- * grammar `-?digits(.digits)?(eE[+-]?digits)?` — which covers
- * every cell produced by csv.nu writers, pandas, and Polars —
- * at ~40-60 ns/call on typical 5-10 char cells. Rejects on
- * empty / non-numeric (returns 0.0). Does NOT honour locale-
- * specific decimal separators; CSV cells are by spec C-locale.
- *
- * Use over `nurl_parse_float_range` when the input is known to
- * be plain decimal (no NaN/Inf, no locale comma). */
-double nurl_csv_fast_float_range(const char *p, long long len) {
+/* Fast decimal-float parser over a byte range (no NUL needed).
+ * Recognises `-?digits(.digits)?(eE[+-]?digits)?` at ~40-60 ns
+ * per typical 5-10 char input. Returns 0.0 for empty / non-
+ * numeric. Does NOT honour locale-specific decimal separators
+ * or recognise NaN/Inf — use libc strtod when those matter. */
+double nurl_fast_atof(const char *p, long long len) {
     if (!p || len <= 0) return 0.0;
     long long i = 0;
     int neg = 0;
@@ -376,255 +368,33 @@ double nurl_csv_fast_float_range(const char *p, long long len) {
     return neg ? -r : r;
 }
 
-static double __csv_fast_atof(const char *p, long long len) {
-    if (len <= 0) return 0.0;
-    long long i = 0;
-    int neg = 0;
-    if (p[0] == '-')      { neg = 1; i = 1; }
-    else if (p[0] == '+') {           i = 1; }
-    double r = 0.0;
-    while (i < len) {
-        unsigned char c = (unsigned char)p[i];
-        if (c < '0' || c > '9') break;
-        r = r * 10.0 + (c - '0');
-        i++;
-    }
-    if (i < len && p[i] == '.') {
-        i++;
-        double scale = 0.1;
-        while (i < len) {
-            unsigned char c = (unsigned char)p[i];
-            if (c < '0' || c > '9') break;
-            r += (c - '0') * scale;
-            scale *= 0.1;
-            i++;
-        }
-    }
-    if (i < len && (p[i] == 'e' || p[i] == 'E')) {
-        i++;
-        int eneg = 0;
-        if (i < len) {
-            if (p[i] == '-')      { eneg = 1; i++; }
-            else if (p[i] == '+') {            i++; }
-        }
-        int ev = 0;
-        while (i < len) {
-            unsigned char c = (unsigned char)p[i];
-            if (c < '0' || c > '9') break;
-            ev = ev * 10 + (c - '0');
-            i++;
-        }
-        double base = 10.0;
-        double mult = 1.0;
-        while (ev > 0) {
-            if (ev & 1) mult *= base;
-            base *= base;
-            ev >>= 1;
-        }
-        if (eneg) r /= mult; else r *= mult;
-    }
-    return neg ? -r : r;
-}
-
-/* Combined-predicate filter: `col_f > threshold` AND
- * `col_s contains needle`. Walks every row once, short-circuiting
- * the str scan when the float check fails. Saves ~30-40 ms on the
- * 1 M-row test_data.csv bench vs running the two filters
- * sequentially (the float-failing rows — ~85 % of input on the
- * canonical test — never pay the cell-offset reload + substring
- * scan that the chained version would). */
-long long nurl_csv_filter_float_gt_and_str_contains(
-    const char *content,
-    const unsigned char *escape_buf,
-    const long long *flat_cells,
-    long long *row_starts,
-    long long *row_lens,
-    long long n_rows,
-    long long col_f, double threshold,
-    long long col_s, const char *needle, long long nlen)
-{
-    if (col_f < 0 || col_s < 0 || !content || !flat_cells || !row_starts || !row_lens) return 0;
-    if (!needle || nlen <= 0) return 0;
-    unsigned char n0 = (unsigned char)needle[0];
-    long long w = 0;
-    for (long long r = 0; r < n_rows; r++) {
-        long long row_first = row_starts[r];
-        long long row_count = row_lens[r];
-        if (col_f >= row_count || col_s >= row_count) continue;
-        /* Float check first — drops 85 % of rows on the canonical
-         * bench, skipping the costlier substring scan. */
-        long long cf_idx = row_first + col_f;
-        long long fo = flat_cells[cf_idx * 2];
-        long long fl = flat_cells[cf_idx * 2 + 1];
-        if (fl <= 0) continue;
-        const char *fsrc;
-        if (fo >= 0) fsrc = content + fo;
-        else if (escape_buf) fsrc = (const char *)(escape_buf + (-(fo + 1)));
-        else continue;
-        if (!(__csv_fast_atof(fsrc, fl) > threshold)) continue;
-        /* Substring scan on the str column. */
-        long long cs_idx = row_first + col_s;
-        long long so = flat_cells[cs_idx * 2];
-        long long sl = flat_cells[cs_idx * 2 + 1];
-        if (sl < nlen) continue;
-        const char *ssrc;
-        if (so >= 0) ssrc = content + so;
-        else if (escape_buf) ssrc = (const char *)(escape_buf + (-(so + 1)));
-        else continue;
-        long long last = sl - nlen;
-        int hit = 0;
-        for (long long i = 0; i <= last; i++) {
-            if ((unsigned char)ssrc[i] != n0) continue;
-            if (nlen == 1 || memcmp(ssrc + i, needle, (size_t)nlen) == 0) {
-                hit = 1; break;
-            }
-        }
-        if (hit) {
-            row_starts[w] = row_first;
-            row_lens[w]   = row_count;
-            w++;
-        }
-    }
-    return w;
-}
-
-/* P3b: filter using pre-parsed typed_floats cache. typed_floats[r]
- * holds the parsed double for body row r; the filter narrows the
- * parallel row_starts/row_lens in place by reading typed_floats[r]
- * instead of re-parsing the cell text via fast_atof. ~2-5 ns/row,
- * an order of magnitude faster than `nurl_csv_filter_float_gt` on
- * the same data. Returns the surviving row count.
+/* Substring search over a byte range. Returns the offset of the
+ * first occurrence of `needle[0..nlen)` in `hay[0..hlen)`, or -1
+ * if not found. Empty needle returns 0.
  *
- * Caller MUST ensure typed_floats has exactly n_rows entries — the
- * cache is indexed by ORIGINAL body-row order, so prior filters
- * that narrowed row_starts break the alignment. csv.nu's
- * `csv_table_filter_typed_float_gt` enforces this with a length
- * check + cache invalidation. */
-long long nurl_csv_filter_typed_float_gt(
-    const double *typed_floats,
-    long long *row_starts,
-    long long *row_lens,
-    long long n_rows,
-    double threshold)
-{
-    if (!typed_floats || !row_starts || !row_lens) return 0;
-    long long w = 0;
-    for (long long r = 0; r < n_rows; r++) {
-        if (typed_floats[r] > threshold) {
-            row_starts[w] = row_starts[r];
-            row_lens[w]   = row_lens[r];
-            w++;
-        }
-    }
-    return w;
-}
-
-long long nurl_csv_filter_float_gt(
-    const char *content,
-    const unsigned char *escape_buf,
-    const long long *flat_cells,
-    long long *row_starts,
-    long long *row_lens,
-    long long n_rows,
-    long long col,
-    double threshold)
-{
-    if (col < 0 || !content || !flat_cells || !row_starts || !row_lens) return 0;
-    long long w = 0;
-    for (long long r = 0; r < n_rows; r++) {
-        long long row_first = row_starts[r];
-        long long row_count = row_lens[r];
-        if (col >= row_count) continue;
-        long long cell_idx = row_first + col;
-        long long off = flat_cells[cell_idx * 2];
-        long long len = flat_cells[cell_idx * 2 + 1];
-        if (len <= 0) continue;
-        const char *src;
-        if (off >= 0) {
-            src = content + off;
-        } else if (escape_buf) {
-            src = (const char *)(escape_buf + (-(off + 1)));
-        } else {
-            continue;
-        }
-        double v = __csv_fast_atof(src, len);
-        if (v > threshold) {
-            row_starts[w] = row_first;
-            row_lens[w]   = row_count;
-            w++;
-        }
-    }
-    return w;
-}
-
-long long nurl_csv_filter_str_contains(
-    const char *content,
-    const unsigned char *escape_buf,
-    const long long *flat_cells,
-    long long *row_starts,
-    long long *row_lens,
-    long long n_rows,
-    long long col,
-    const char *needle, long long nlen)
-{
-    if (col < 0 || !content || !flat_cells || !row_starts || !row_lens) return 0;
-    if (!needle || nlen <= 0) return n_rows;  /* empty needle matches all */
-    /* Inline substring scan instead of glibc memmem: for the typical
-     * CSV cell-search case (haystack 10-50 B, needle 3-12 B) memmem's
-     * per-call Two-Way preprocessing dominates (~300-400 ns/call).
-     * A first-byte filter + memcmp tail collapses that to ~20-50 ns
-     * — translating to 50-80 ms saved on a 1 M-row filter chain. */
+ * Hand-rolled first-byte filter + memcmp tail. For the typical
+ * short-haystack / short-needle case (haystack 10-50 B, needle
+ * 3-12 B) glibc memmem's per-call Two-Way preprocessing dominates
+ * (~300-400 ns/call). This loop is ~20-50 ns and inlines through
+ * LTO when the call site is hot. */
+long long nurl_byte_substr(const char *hay, long long hlen,
+                           const char *needle, long long nlen) {
+    if (nlen <= 0) return 0;
+    if (!hay || hlen < nlen || !needle) return -1;
     unsigned char n0 = (unsigned char)needle[0];
-    long long w = 0;
-    for (long long r = 0; r < n_rows; r++) {
-        long long row_first = row_starts[r];
-        long long row_count = row_lens[r];
-        if (col >= row_count) continue;
-        long long cell_idx = row_first + col;
-        long long off = flat_cells[cell_idx * 2];
-        long long len = flat_cells[cell_idx * 2 + 1];
-        if (len < nlen) continue;
-        const char *src;
-        if (off >= 0) {
-            src = content + off;
-        } else if (escape_buf) {
-            src = (const char *)(escape_buf + (-(off + 1)));
-        } else {
-            continue;
-        }
-        long long last = len - nlen;
-        int hit = 0;
-        for (long long i = 0; i <= last; i++) {
-            if ((unsigned char)src[i] != n0) continue;
-            if (nlen == 1 || memcmp(src + i, needle, (size_t)nlen) == 0) {
-                hit = 1;
-                break;
-            }
-        }
-        if (hit) {
-            row_starts[w] = row_first;
-            row_lens[w]   = row_count;
-            w++;
+    long long last = hlen - nlen;
+    for (long long i = 0; i <= last; i++) {
+        if ((unsigned char)hay[i] != n0) continue;
+        if (nlen == 1 || memcmp(hay + i, needle, (size_t)nlen) == 0) {
+            return i;
         }
     }
-    return w;
-}
-
-/* True iff `target` appears anywhere in `p[0..len)`. Uses libc memchr,
- * which on glibc dispatches to SSE2/AVX2 scanners — ~16 bytes/cycle.
- * Used by csv.nu's loader to gate the unquoted-CSV fast path: one
- * 100 MB scan ~= 5 ms, vs the parser cost it routes away from
- * (~250 ms on the same file). */
-long long nurl_has_byte(const char *p, long long len, long long target) {
-    if (!p || len <= 0) return 0;
-    return memchr(p, (int)(unsigned char)target, (size_t)len) ? 1 : 0;
+    return -1;
 }
 
 /* Count occurrences of `target` in p[0..len). Uses libc memchr in a
- * loop; on glibc this dispatches to SSE2/AVX2 vector scans. Used by
- * csv.nu's loader to pre-count newlines and pick exact buffer sizes
- * for the whole-file fast path — pre-counting avoids the page-fault
- * cost of over-allocating flat_cells. ~5 ms for 100 MB. */
+ * loop; on glibc this dispatches to SSE2/AVX2 vector scans. ~5 ms
+ * for 100 MB. */
 long long nurl_count_byte(const char *p, long long len, long long target) {
     if (!p || len <= 0) return 0;
     unsigned char t = (unsigned char)target;
@@ -639,22 +409,29 @@ long long nurl_count_byte(const char *p, long long len, long long target) {
     return n;
 }
 
-long long nurl_csv_scan_cell(const char *p, long long len, long long delim) {
+/* Byte-set scanner: return offset of the first byte in `p[0..len)`
+ * that equals any of `b0`, `b1`, `b2`, or `len` if none match.
+ * SSE2-vectorised: 16 bytes/iter, three parallel `cmpeq`/`or`.
+ * General 3-byte search used e.g. by CSV cell scanners
+ * (delim/'\n'/'\r'). Pass the same byte multiple times to scan
+ * for fewer distinct targets. */
+long long nurl_scan_byte3(const char *p, long long len,
+                          long long b0, long long b1, long long b2) {
     if (!p || len <= 0) return 0;
-    unsigned char d = (unsigned char)delim;
+    unsigned char d0 = (unsigned char)b0;
+    unsigned char d1 = (unsigned char)b1;
+    unsigned char d2 = (unsigned char)b2;
     long long i = 0;
 #if defined(__SSE2__)
-    /* 16-byte SSE2 byte search for delim / '\n' / '\r' in parallel.
-     * Hot path for CSV cells > ~10 chars; tail loop covers the rest. */
-    __m128i v_d  = _mm_set1_epi8((char)d);
-    __m128i v_lf = _mm_set1_epi8('\n');
-    __m128i v_cr = _mm_set1_epi8('\r');
+    __m128i v_0 = _mm_set1_epi8((char)d0);
+    __m128i v_1 = _mm_set1_epi8((char)d1);
+    __m128i v_2 = _mm_set1_epi8((char)d2);
     while (i + 16 <= len) {
         __m128i chunk = _mm_loadu_si128((const __m128i*)(p + i));
         __m128i m = _mm_or_si128(
-            _mm_cmpeq_epi8(chunk, v_d),
-            _mm_or_si128(_mm_cmpeq_epi8(chunk, v_lf),
-                         _mm_cmpeq_epi8(chunk, v_cr)));
+            _mm_cmpeq_epi8(chunk, v_0),
+            _mm_or_si128(_mm_cmpeq_epi8(chunk, v_1),
+                         _mm_cmpeq_epi8(chunk, v_2)));
         int mask = _mm_movemask_epi8(m);
         if (mask) return i + __builtin_ctz(mask);
         i += 16;
@@ -662,251 +439,10 @@ long long nurl_csv_scan_cell(const char *p, long long len, long long delim) {
 #endif
     while (i < len) {
         unsigned char c = (unsigned char)p[i];
-        if (c == d || c == '\n' || c == '\r') return i;
+        if (c == d0 || c == d1 || c == d2) return i;
         i++;
     }
     return len;
-}
-
-/* Bulk CSV parser: walks the entire input in one C pass, populating
- * caller-supplied buffers. Used by csv.nu's arena loader to skip the
- * NURL bytecode parsing loop entirely — about 4× faster than the
- * byte-by-byte NURL implementation.
- *
- * Inputs:
- *   content, clen     : raw bytes (NUL-tolerant)
- *   delim             : field separator (e.g. ',' = 44)
- *
- * Outputs (caller-allocated; sized via clen/100 + 16 row heuristic):
- *   flat_cells        : interleaved (off, len) pairs for body cells
- *                       (header cells overwritten back to position 0
- *                       after parsing — caller reads header_cells
- *                       separately before any body cells are pushed).
- *   row_starts        : cell-index of each body row's first cell
- *   row_lens          : cell count per body row
- *   header_cells      : interleaved (off, len) pairs for the header row
- *
- * Capacity inputs (caller-promised maximum element count):
- *   flat_cap          : flat_cells slots (must be ≥ 2 * total body cells)
- *   row_cap           : row_starts/row_lens slots (must be ≥ n_rows)
- *   header_cap        : header_cells slots (must be ≥ 2 * n_columns)
- *
- * Sideband out-globals (read after the call):
- *   g_csv_n_rows      : number of body rows parsed
- *   g_csv_n_header    : number of header cells parsed
- *   g_csv_n_cells     : total body cells = sum(row_lens)
- *
- * Return value:
- *   0  = success
- *   -1 = a buffer would overflow (output globals undefined)
- */
-static long long g_csv_n_rows    = 0;
-static long long g_csv_n_header  = 0;
-static long long g_csv_n_cells   = 0;
-
-long long nurl_csv_n_rows_out(void)   { return g_csv_n_rows; }
-long long nurl_csv_n_header_out(void) { return g_csv_n_header; }
-long long nurl_csv_n_cells_out(void)  { return g_csv_n_cells; }
-
-long long nurl_csv_parse_arena(
-    const char *content, long long clen, long long delim,
-    long long *flat_cells, long long flat_cap,
-    long long *row_starts, long long *row_lens, long long row_cap,
-    long long *header_cells, long long header_cap)
-{
-    g_csv_n_rows = 0;
-    g_csv_n_header = 0;
-    g_csv_n_cells = 0;
-    if (!content || clen <= 0) return 0;
-
-    unsigned char d = (unsigned char)delim;
-    long long pos = 0;
-    int first_row = 1;
-    long long n_cells = 0;     /* slot count (off+len) in flat_cells */
-    long long n_rows  = 0;     /* body rows committed */
-    long long n_hdr   = 0;     /* slot count in header_cells */
-
-    while (pos < clen) {
-        long long row_first_cell = n_cells / 2;
-        long long row_n_cells = 0;
-        int row_done = 0;
-
-        while (!row_done) {
-            long long field_start = pos;
-#if defined(__SSE2__)
-            {
-                __m128i v_d  = _mm_set1_epi8((char)d);
-                __m128i v_lf = _mm_set1_epi8('\n');
-                __m128i v_cr = _mm_set1_epi8('\r');
-                while (pos + 16 <= clen) {
-                    __m128i chunk = _mm_loadu_si128((const __m128i*)(content + pos));
-                    __m128i m = _mm_or_si128(
-                        _mm_cmpeq_epi8(chunk, v_d),
-                        _mm_or_si128(_mm_cmpeq_epi8(chunk, v_lf),
-                                     _mm_cmpeq_epi8(chunk, v_cr)));
-                    int mask = _mm_movemask_epi8(m);
-                    if (mask) { pos += __builtin_ctz(mask); goto _arena_found; }
-                    pos += 16;
-                }
-            }
-#endif
-            /* scalar tail / fallback: scan to delim/LF/CR/EOF */
-            while (pos < clen) {
-                unsigned char c = (unsigned char)content[pos];
-                if (c == d || c == '\n' || c == '\r') break;
-                pos++;
-            }
-#if defined(__SSE2__)
-        _arena_found:;
-#endif
-            long long cell_len = pos - field_start;
-
-            if (first_row) {
-                if (n_hdr + 2 > header_cap) return -1;
-                header_cells[n_hdr++] = field_start;
-                header_cells[n_hdr++] = cell_len;
-            } else {
-                if (n_cells + 2 > flat_cap) return -1;
-                flat_cells[n_cells++] = field_start;
-                flat_cells[n_cells++] = cell_len;
-            }
-            row_n_cells++;
-
-            if (pos >= clen) {
-                row_done = 1;
-                break;
-            }
-            unsigned char c = (unsigned char)content[pos];
-            if (c == d) {
-                pos++;
-                continue;
-            }
-            /* row terminator */
-            pos++;
-            if (c == '\r' && pos < clen && content[pos] == '\n') pos++;
-            row_done = 1;
-        }
-
-        /* Phantom-row guard: a trailing '\n' after the last row produces
-         * a single empty cell. Drop it. */
-        int phantom = (row_n_cells == 1) &&
-                      (first_row ? (header_cells[n_hdr - 1] == 0)
-                                 : (flat_cells[n_cells - 1] == 0)) &&
-                      pos >= clen;
-        if (phantom) {
-            if (first_row) n_hdr -= 2;
-            else           n_cells -= 2;
-            continue;
-        }
-
-        if (first_row) {
-            first_row = 0;
-            continue;
-        }
-
-        if (n_rows >= row_cap) return -1;
-        row_starts[n_rows] = row_first_cell;
-        row_lens[n_rows]   = row_n_cells;
-        n_rows++;
-    }
-
-    g_csv_n_rows   = n_rows;
-    g_csv_n_header = n_hdr / 2;
-    g_csv_n_cells  = n_cells / 2;
-    return 0;
-}
-
-/* Scan one CSV row into a small caller-supplied (off, len) buffer.
- * The scan stops at the row terminator (LF/CRLF/EOF). Cells are
- * recorded as i64 pairs in `out_pairs[0..2*out_pair_cap)`.
- *
- * Why: the bulk parser's full pre-reservation pays a page-fault per
- * fresh OS page, dominating the savings from removing NURL bytecode.
- * Per-row scanning calls C once per row (cheap FFI), keeps the byte
- * loop in compiled C (fast), and lets NURL push results onto its
- * geometric-growth Vec[i] buffers (warm-page reuse). One row's
- * worth of cells fits in a stack buffer, so no allocation churn.
- *
- * Inputs:
- *   content, clen, pos, delim — same semantics as the bulk parser.
- *   out_pairs : caller buffer with `out_pair_cap` slots (stack OK).
- *
- * Output globals (read after the call):
- *   g_csv_row_n_cells  : number of cells in the row scanned (≥ 1)
- *   g_csv_row_next_pos : `pos` after consuming the terminator
- *
- * Returns:
- *   0  : success
- *   -1 : row had more than out_pair_cap cells (caller can fall back). */
-static long long g_csv_row_n_cells  = 0;
-static long long g_csv_row_next_pos = 0;
-long long nurl_csv_row_n_cells_out(void)  { return g_csv_row_n_cells;  }
-long long nurl_csv_row_next_pos_out(void) { return g_csv_row_next_pos; }
-
-long long nurl_csv_scan_row_pairs(
-    const char *content, long long clen, long long pos, long long delim,
-    long long *out_pairs, long long out_pair_cap)
-{
-    g_csv_row_n_cells  = 0;
-    g_csv_row_next_pos = pos;
-    if (!content || pos >= clen) return 0;
-
-    unsigned char d = (unsigned char)delim;
-    long long n = 0;        /* cell count */
-    long long p = pos;
-    long long field_start = p;
-    int row_done = 0;
-
-    while (!row_done) {
-#if defined(__SSE2__)
-        /* SSE2 byte-search: process 16 bytes/iter looking for any of
-         * delim / '\n' / '\r' simultaneously. ~5-10× faster than the
-         * scalar loop on cells longer than the SSE register width.
-         * For short cells (≤16 B) the tail loop dominates anyway, so
-         * net cost is the same or better. */
-        __m128i v_d  = _mm_set1_epi8((char)d);
-        __m128i v_lf = _mm_set1_epi8('\n');
-        __m128i v_cr = _mm_set1_epi8('\r');
-        while (p + 16 <= clen) {
-            __m128i chunk = _mm_loadu_si128((const __m128i*)(content + p));
-            __m128i m = _mm_or_si128(
-                _mm_cmpeq_epi8(chunk, v_d),
-                _mm_or_si128(_mm_cmpeq_epi8(chunk, v_lf),
-                             _mm_cmpeq_epi8(chunk, v_cr)));
-            int mask = _mm_movemask_epi8(m);
-            if (mask) { p += __builtin_ctz(mask); goto found; }
-            p += 16;
-        }
-#endif
-        while (p < clen) {
-            unsigned char c = (unsigned char)content[p];
-            if (c == d || c == '\n' || c == '\r') break;
-            p++;
-        }
-#if defined(__SSE2__)
-    found:;
-#endif
-        if (n >= out_pair_cap) return -1;
-        out_pairs[n * 2 + 0] = field_start;
-        out_pairs[n * 2 + 1] = p - field_start;
-        n++;
-
-        if (p >= clen) { row_done = 1; break; }
-        unsigned char c = (unsigned char)content[p];
-        if (c == d) {
-            p++;
-            field_start = p;
-            continue;
-        }
-        /* row terminator */
-        p++;
-        if (c == '\r' && p < clen && content[p] == '\n') p++;
-        row_done = 1;
-    }
-
-    g_csv_row_n_cells  = n;
-    g_csv_row_next_pos = p;
-    return 0;
 }
 
 /* ── §4  File & process ────────────────────────────────────────── */

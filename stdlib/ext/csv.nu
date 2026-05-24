@@ -618,7 +618,7 @@ $ `stdlib/std/hashmap.nu`
                     : ~ s src # s 0
                     ? >= off 0 { = src # s + # i cd off }
                     { = src # s + # i eb - 0 + off 1 }
-                    = v ( nurl_csv_fast_float_range src len )
+                    = v ( nurl_fast_atof src len )
                 } {}
             } {}
         }
@@ -639,8 +639,7 @@ $ `stdlib/std/hashmap.nu`
 // once per ROW (~2 FFI × n_rows) and doing cell stores as raw memory
 // writes, we trade ~32 M FFI calls per million rows for ~5 M.
 //
-// Earlier failed approaches kept as cautionary notes (helpers live in
-// `stdlib/runtime.c` for the future typed-schema reader):
+// Earlier failed approaches (removed 2026-05-24):
 //   • bulk C parser `nurl_csv_parse_arena`: large up-front contiguous
 //     reservation page-faulted across the buffer.
 //   • per-row C scanner `nurl_csv_scan_row_pairs`: 1 M FFI calls +
@@ -668,13 +667,10 @@ $ `stdlib/std/hashmap.nu`
     : ~ i pos 0
     : ~ b first_row T
 
-    // Fast path: when the dialect has quoting disabled OR the entire
-    // content has no quote byte, each row goes through the SSE2-
-    // vectorised `nurl_csv_scan_row_pairs` (16 bytes/iter looking for
-    // delim/CR/LF simultaneously) instead of the per-byte NURL loop
-    // below. The C scanner writes (off, len) pairs DIRECTLY into the
-    // flat_cells buffer via the pre-fetched fcp_w pointer — no copy.
-    // One quote-detection memchr (~5 ms for 100 MB) gates the path.
+    // Unquoted-cell path uses the SSE2-vectorised `nurl_scan_byte3`
+    // helper (16 bytes/iter looking for delim/CR/LF simultaneously)
+    // for the per-cell scan; quoted cells fall back to the per-byte
+    // NURL loop.
 
     ~ < pos clen {
         : i row_first_i64 ( vec_len [i] . t flat_cells )
@@ -772,7 +768,7 @@ $ `stdlib/std/hashmap.nu`
                 // typical 10-byte cells, ~50 ns saved on wide cells.
                 // Drops load by ~30 ms on 1 M-row × 8-col CSV.
                 : i field_start p
-                : i scan_off ( nurl_csv_scan_cell # s + # i cd p - clen p delim )
+                : i scan_off ( nurl_scan_byte3 # s + # i cd p - clen p delim 10 13 )
                 = p + p scan_off
                 = cell_off field_start
                 = cell_len - p field_start
@@ -862,7 +858,7 @@ $ `stdlib/std/hashmap.nu`
                             ? >= tf_off 0
                             { = tf_src # s + # i cd tf_off }
                             { = tf_src # s + # i ( vec_data [u] . t escape_buf ) - 0 + tf_off 1 }
-                            = tf_v ( nurl_csv_fast_float_range tf_src tf_len )
+                            = tf_v ( nurl_fast_atof tf_src tf_len )
                         } {}
                     } {}
                     ( vec_push [f] . t typed_floats tf_v )
@@ -1146,7 +1142,7 @@ $ `stdlib/std/hashmap.nu`
                     : ~ s src # s 0
                     ? >= off 0 { = src # s + # i cd off }
                     { = src # s + # i eb - 0 + off 1 }
-                    = v ( nurl_csv_fast_float_range src len )
+                    = v ( nurl_fast_atof src len )
                 } {}
             } {}
             ( vec_push [f] keys v )
@@ -1283,10 +1279,10 @@ $ `stdlib/std/hashmap.nu`
 // 1 M-row table that's ~150 ms even with all the hot data cached.
 //
 // `csv_table_filter_float_gt` / `csv_table_filter_str_contains`
-// route the entire filter through a tight C inner loop
-// (`nurl_csv_filter_*` in runtime.c) — one FFI call total, scalar
-// loop running at native speed, no closure dispatch, no per-row
-// arena pointer reload. ~10-30 ms for 1 M rows on the same hardware.
+// inline the narrowing inner loop in NURL. With runtime LTO the
+// per-cell FFI calls (`nurl_fast_atof`, `nurl_byte_substr`) inline
+// into LLVM IR — the inner loop is competitive with hand-written C
+// once LLVM-O2 hoists the cached pointers.
 //
 // Each operates on ONE column. Chain them: the second call sees
 // only the survivors of the first (row_starts/row_lens are narrowed
@@ -1303,16 +1299,40 @@ $ `stdlib/std/hashmap.nu`
         : *i fcp ( vec_data [i] . t flat_cells )
         : *i rsp ( vec_data [i] . t row_starts )
         : *i rlp ( vec_data [i] . t row_lens )
-        : i kept ( nurl_csv_filter_float_gt # s cd # s eb fcp rsp rlp n col threshold )
-        : b _a ( vec_set_len [i] . t row_starts kept )
-        : b _b ( vec_set_len [i] . t row_lens kept )
+        : ~ i w 0
+        : ~ i r 0
+        ~ < r n {
+            : i row_first . rsp r
+            : i row_count . rlp r
+            : ~ b keep F
+            ? & >= col 0 < col row_count {
+                : i cell_idx + row_first col
+                : i off . fcp * cell_idx 2
+                : i len . fcp + * cell_idx 2 1
+                ? > len 0 {
+                    : ~ s src # s 0
+                    ? >= off 0 { = src # s + # i cd off }
+                    { = src # s + # i eb - 0 + off 1 }
+                    : f v ( nurl_fast_atof src len )
+                    ? > v threshold { = keep T } {}
+                } {}
+            } {}
+            ? keep {
+                = . rsp w row_first
+                = . rlp w row_count
+                = w + w 1
+            } {}
+            = r + r 1
+        }
+        : b _a ( vec_set_len [i] . t row_starts w )
+        : b _b ( vec_set_len [i] . t row_lens w )
     } {}
 }
 
 // Combined predicate: `col_f > threshold` AND `col_s contains needle`.
-// Single FFI call with row-level short-circuit: rows that fail the
-// float check skip the substring scan entirely. Saves ~30-40 ms on
-// the 1 M-row × 8-col compare/test_data.csv bench (where 85 % of
+// Single in-place pass with row-level short-circuit — rows that fail
+// the float check skip the substring scan entirely. Saves ~30-40 ms
+// on the 1 M-row × 8-col compare/test_data.csv bench (where 85 % of
 // rows fail the float check) vs chaining two separate filter helpers.
 @ csv_table_filter_float_gt_and_str_contains * CSVTable t i col_f f threshold i col_s s needle → v {
     : i n ( csv_table_n_rows t )
@@ -1323,9 +1343,44 @@ $ `stdlib/std/hashmap.nu`
         : *i fcp ( vec_data [i] . t flat_cells )
         : *i rsp ( vec_data [i] . t row_starts )
         : *i rlp ( vec_data [i] . t row_lens )
-        : i kept ( nurl_csv_filter_float_gt_and_str_contains # s cd # s eb fcp rsp rlp n col_f threshold col_s needle nlen )
-        : b _a ( vec_set_len [i] . t row_starts kept )
-        : b _b ( vec_set_len [i] . t row_lens kept )
+        : ~ i w 0
+        : ~ i r 0
+        ~ < r n {
+            : i row_first . rsp r
+            : i row_count . rlp r
+            : ~ b keep F
+            ? & & >= col_f 0 < col_f row_count & >= col_s 0 < col_s row_count {
+                : i cf_idx + row_first col_f
+                : i fo . fcp * cf_idx 2
+                : i fl . fcp + * cf_idx 2 1
+                ? > fl 0 {
+                    : ~ s fsrc # s 0
+                    ? >= fo 0 { = fsrc # s + # i cd fo }
+                    { = fsrc # s + # i eb - 0 + fo 1 }
+                    : f fv ( nurl_fast_atof fsrc fl )
+                    ? > fv threshold {
+                        : i cs_idx + row_first col_s
+                        : i so . fcp * cs_idx 2
+                        : i sl . fcp + * cs_idx 2 1
+                        ? >= sl nlen {
+                            : ~ s ssrc # s 0
+                            ? >= so 0 { = ssrc # s + # i cd so }
+                            { = ssrc # s + # i eb - 0 + so 1 }
+                            : i hit ( nurl_byte_substr ssrc sl needle nlen )
+                            ? >= hit 0 { = keep T } {}
+                        } {}
+                    } {}
+                } {}
+            } {}
+            ? keep {
+                = . rsp w row_first
+                = . rlp w row_count
+                = w + w 1
+            } {}
+            = r + r 1
+        }
+        : b _a ( vec_set_len [i] . t row_starts w )
+        : b _b ( vec_set_len [i] . t row_lens w )
     } {}
 }
 
@@ -1344,9 +1399,19 @@ $ `stdlib/std/hashmap.nu`
             : *f tfp ( vec_data [f] . t typed_floats )
             : *i rsp ( vec_data [i] . t row_starts )
             : *i rlp ( vec_data [i] . t row_lens )
-            : i kept ( nurl_csv_filter_typed_float_gt tfp rsp rlp n threshold )
-            : b _a ( vec_set_len [i] . t row_starts kept )
-            : b _b ( vec_set_len [i] . t row_lens kept )
+            : ~ i w 0
+            : ~ i r 0
+            ~ < r n {
+                : f v . tfp r
+                ? > v threshold {
+                    = . rsp w . rsp r
+                    = . rlp w . rlp r
+                    = w + w 1
+                } {}
+                = r + r 1
+            }
+            : b _a ( vec_set_len [i] . t row_starts w )
+            : b _b ( vec_set_len [i] . t row_lens w )
         } {}
         // Clear the cache — row_starts no longer aligns with
         // typed_floats whether or not we ran the narrow path
@@ -1367,9 +1432,33 @@ $ `stdlib/std/hashmap.nu`
         : *i fcp ( vec_data [i] . t flat_cells )
         : *i rsp ( vec_data [i] . t row_starts )
         : *i rlp ( vec_data [i] . t row_lens )
-        : i kept ( nurl_csv_filter_str_contains # s cd # s eb fcp rsp rlp n col needle nlen )
-        : b _a ( vec_set_len [i] . t row_starts kept )
-        : b _b ( vec_set_len [i] . t row_lens kept )
+        : ~ i w 0
+        : ~ i r 0
+        ~ < r n {
+            : i row_first . rsp r
+            : i row_count . rlp r
+            : ~ b keep F
+            ? & >= col 0 < col row_count {
+                : i cell_idx + row_first col
+                : i off . fcp * cell_idx 2
+                : i len . fcp + * cell_idx 2 1
+                ? >= len nlen {
+                    : ~ s src # s 0
+                    ? >= off 0 { = src # s + # i cd off }
+                    { = src # s + # i eb - 0 + off 1 }
+                    : i hit ( nurl_byte_substr src len needle nlen )
+                    ? >= hit 0 { = keep T } {}
+                } {}
+            } {}
+            ? keep {
+                = . rsp w row_first
+                = . rlp w row_count
+                = w + w 1
+            } {}
+            = r + r 1
+        }
+        : b _a ( vec_set_len [i] . t row_starts w )
+        : b _b ( vec_set_len [i] . t row_lens w )
     } {}
 }
 
