@@ -6,7 +6,93 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.0] — 2026-05-24
+
+### Changed — `refactor/nurlify` branch
+
+Picks up where `refactor/pure-nurl` left off and drives `stdlib/runtime.c`
+the rest of the way down. Per the PURIFY.md tracker:
+
+* **`stdlib/runtime.c`: 6 265 → 4 540 LOC (−1 725, −27.5 %).** Combined
+  with the prior branch the total reduction since v0.8.0 is **8 879 →
+  4 540 LOC (−4 339, −48.9 %)** — over half of the C runtime is gone.
+  Bootstrap fixed point held on every shipped phase; full test corpus
+  green.
+* **PURIFY §17 random.** `rand_u64` / `rand_hex_str` ported to pure
+  NURL in `stdlib/std/random.nu`. Only `nurl_rand_fill` stays C —
+  the `getrandom` / `arc4random_buf` / `BCryptGenRandom` platform
+  branching is genuinely syscall-shaped FFI.
+* **PURIFY §4 file ops batch.** `nurl_read_file_bytes` /
+  `_write_file_bytes` / `_file_read_chunk` / `_read_n_bytes` /
+  `_errno_kind` moved to pure NURL. The `g_last_bytes_len` sideband is
+  gone — `fread` / `fwrite` write directly into the `Vec[u]` data
+  buffer and `vec_set_len` records the count. `EACCES` / `EPERM` /
+  `EEXIST` added to `nurl_native_constant`; `errno_kind` now lives in
+  `stdlib/core/posix.nu`.
+* **PURIFY §22 gzip.** `nurl_gzip_compress` / `_decompress` moved to
+  pure-NURL FFI in `stdlib/ext/compress.nu` over `deflateInit2_` /
+  `deflate` / `deflateEnd` + `inflateInit2_` / `inflate` /
+  `inflateEnd`. Two tiny C accessors (`nurl_z_setup` /
+  `nurl_z_total_out`) bridge the platform-varying `z_stream` field
+  layout (LP64 vs LLP64 `uLong` width).
+* **PURIFY §14 HTTP response accessors.** The 7 accessor C functions
+  (`status` / `err_kind` / `body` / `body_len` / `header_count` /
+  `header_name` / `header_value`) deleted from `runtime.c`. Pure-NURL
+  equivalents in `stdlib/ext/http.nu` read the `NurlHttpResponse`
+  heap struct via `nurl_peek(p, slot)` over its 6-i64 slot layout.
+  Static asserts in `runtime.c` pin the layout at compile time so a
+  future field reorder breaks the native build instead of silently
+  miscompiling NURL reads. `nurl_http_response_free` stays C because
+  it walks `headers[]` deallocating each name / value pair plus the
+  body.
+* **PURIFY §14b HTTP libcurl backend** + multi-stream orchestration
+  driven from pure NURL. Sync `nurl_http_perform_full_to` and
+  multi-stream `_open_to` / `_next` / `_pump_headers` plus the 5
+  stream accessors live in `stdlib/ext/http.nu`; 22 monomorphic
+  trampolines stay C (`nurl_curl_*` `setopt` / `multi` /
+  stream-state) because libcurl's variadic `curl_easy_setopt` and the
+  raw-fn-pointer callbacks (`nurl__http_write_body` /
+  `_write_header`) can't cross the FFI directly. `NurlHttpStream`'s
+  three historical `int` fields widened to `long long` for a clean
+  14×i64 slot layout; `static_assert` pins it. Live verified
+  against httpbin.
+* **PURIFY §2 SIMD CSV scanner** ported to pure NURL
+  (`stdlib/ext/csv.nu`, −508 C). The vectorised newline / delimiter
+  scanner is now NURL @-fns over `nurl_peek` of a heap-side byte
+  window.
+* **`runtime.c` prose cleanup** (commits `d558844`, `f88d7bb`):
+  trimmed verbose multi-paragraph explanations, phase-by-phase
+  migration history and prose that just restated what the code does
+  — kept one-line function-purpose intros and the non-obvious "why"
+  notes (TLS / SNI race discipline, fiber park-unlock ordering,
+  wasm32 layout caveats, libz LP64 / LLP64 differences). Net −913
+  comment-only LOC.
+
+### Changed — `JSON-to-production` branch
+
+* **`json` ext goes production-ready.** `stdlib/ext/json.nu`:
+  - **Typed `JsonError`** replaces the bare `ParseErr` — carries
+    `kind` (`BadFormat` / `Empty` / `TrailingGarbage` / `Overflow`),
+    `pos` (0-based byte offset), `line` (1-based) and `col`
+    (1-based). Location is computed once per failure and travels
+    with the error value — no global state, so nested
+    `json_parse` calls and multi-threaded use are both safe.
+    `json_format_error` renders the standard message; build your
+    own from the fields if you need a custom shape.
+  - **RFC 8259 strict mode.** Non-conforming numbers (leading zeros
+    like `01`, `+5`, lone `.5`, `1.`) are now `BadFormat` instead of
+    parsing to the prefix — `json_stringify ∘ json_parse` is
+    guaranteed-valid JSON.
+  - **New constructors** — `json_int n` / `json_float x` from
+    primitives (no `i8*` roundtrip), `json_arr_new` / `json_obj_new`
+    for empty containers.
+  - **Duplicate-key behavior documented.** Parser preserves
+    duplicate keys as-is; `json_obj_get` returns the first match in
+    source order; `json_obj_set` replaces the first match in source
+    order.
+  - Call sites updated across `stdlib/ext/anthropic.nu`,
+    `stdlib/ext/mcp{,_client,_http,_stdio}.nu`, `nurlapi/main.nu`,
+    `examples/serde_demo.nu`, `tools/nurl-lsp/jsonrpc.nu`.
 
 ### Changed — `refactor/pure-nurl` branch
 
