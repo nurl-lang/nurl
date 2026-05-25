@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Structured logging (critic v0.9.0 Tier D #1, 2026-05-25)
+
+`stdlib/std/log.nu` gains two structured-logging features that the
+critic flagged as missing-for-v1.0 (ROADMAP §2):
+
+1. **Key/value variants** — `log_debug_kv1` / `_kv2` / `_kv3`,
+   `log_info_kv1..3`, `log_warn_kv1..3`, `log_error_kv1..3`. Twelve
+   fixed-arity helpers that accept 1..3 `s` key / `s` value pairs
+   alongside a message. Same below-threshold suppression as the raw
+   and `fN` variants.
+
+2. **JSON output mode** — `log_set_json T` / `log_set_json F`,
+   `log_get_json`. When JSON is on, every `log_*` call emits a single
+   `{"level":"info","msg":"…","key":"value",…}` line instead of the
+   `[INFO]  msg key=value` text form. Compatible with `jq`, Logstash,
+   Loki, CloudWatch, etc. — values are RFC 8259-compliant (named
+   escapes for `"` `\` `\n` `\r` `\t`; remaining control bytes
+   0x00..0x1F emit `\u00XX`).
+
+The existing raw `log_<level>` and `log_<level>fN` calls route
+through the new shared `__log_dispatch` so JSON mode applies
+uniformly to every call site. The per-byte JSON-escape walker uses
+a `*u` pointer instead of `nurl_str_get` to avoid the O(strlen)
+per-character cost. Compiler / bootstrap untouched; regression
+`compiler/tests/log_structured.nu` exercises text mode, JSON mode,
+escape coverage and below-threshold suppression. `jq -c .`
+round-trips every JSON line emitted by the test.
+
 ### Added — Tier A diagnostics for the v0.9.0 critic (2026-05-25)
 
 Closes the four "grammar-legal but semantically dead" cases the

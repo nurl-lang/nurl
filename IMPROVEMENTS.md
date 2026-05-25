@@ -154,8 +154,11 @@ critic-driven backlog is in one place; the canonical home is ROADMAP.md.
 - [ ] **Generic signal handling.** Beyond `nurl_signal_install_shutdown` —
       arbitrary signal numbers, NURL closure handlers, async-signal-safety
       caveats documented. ROADMAP §3.
-- [ ] **Structured logging.** `log_info_kv` for key-value pairs, JSON output
-      mode for log lines. ROADMAP §2.
+- [x] **Structured logging — shipped 2026-05-25.** `stdlib/std/log.nu` now
+      has `log_<level>_kv1` / `_kv2` / `_kv3` (12 fixed-arity kv helpers)
+      and a `log_set_json` / `log_get_json` toggle. JSON output is RFC 8259
+      compliant and applies uniformly to every `log_*` call. Test:
+      `log_structured.nu` (jq round-trips every JSON line). ROADMAP §2.
 - [ ] **Mobile / embedded targets.** Android, iOS, `no_std` embedded
       profiles. ROADMAP §6. (Milk-V Duo already validated as a NURL target
       via cross-compile; that's the prior-art shape.)
