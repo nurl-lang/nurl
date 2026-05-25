@@ -1098,6 +1098,22 @@
     { ( nurl_sym_def syms `__tail_call_pending__` `1` ) }
     {}
     : s val ( gen_expr lex syms cg )
+    // XOR confusion (critic v0.9.0 §1): `^ X Y` on the same line is
+    // almost always the user thinking `^` is XOR. `^^` (two adjacent
+    // carets, no space) IS XOR; `^ X` returns X and any tail tokens
+    // are dead code. Heuristic: post-expression next-token on the
+    // same line as `^` AND not a statement/expression terminator.
+    : i __xor_nt ( nurl_lex_type lex )
+    : i __xor_nl ( nurl_lex_line lex )
+    // TT_LBRACE is excluded because `^ X { ... }` is the canonical
+    // shape for the then-arm of a `?` ternary whose else-arm follows
+    // on the same line: `? cond ^ then_val { else_block }`.
+    : b __xor_blocks | | | | | | | == __xor_nt TT_COLON == __xor_nt TT_EQ
+        == __xor_nt TT_SEMICOL == __xor_nt TT_RBRACE == __xor_nt TT_RPAREN
+        == __xor_nt TT_RBRACK == __xor_nt TT_LBRACE == __xor_nt TT_EOF
+    ? & == __xor_nl bck_line ! __xor_blocks
+    { ( warn lex `'^' is the return operator; did you mean '^^' for XOR? (Two adjacent carets, no space between them)` ) }
+    {}
     // Borrow checker: record this return statement.
     ( bck_record `ret` `` bck_line )
     // Defensive: clear any residual pending flag (gen_expr may have
@@ -2984,7 +3000,7 @@
         : s gkey ( nurl_str_cat `__inst_` mangled )
         : s g_already ( nurl_sym_get g_generic_syms gkey )
         ? == 0 ( nurl_str_len g_already )
-        { ( defer_instantiation fname mangled type_args syms )
+        { ( defer_instantiation lex fname mangled type_args syms )
             ( nurl_sym_def g_generic_syms gkey `1` ) }
         { : s already ( nurl_sym_get syms mangled )
             ? == 0 ( nurl_str_len already )
@@ -3197,7 +3213,14 @@
         // it is a bare identifier, names a binding being consumed —
         // stash it as a move (flushed after the enclosing statement).
         ? & & is_consume_call == arg_idx 0 ( is_ident_tok bck_arg_tt )
-        { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) ) }
+        { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) )
+            // Auto-sink inference (critic v0.9.0 §2): if the consumed
+            // bare-ident is the enclosing fn's parameter, record its
+            // index so gen_fn_decl_concrete can append it to
+            // g_fn_sink[fname]. Closes the indirect use-after-free
+            // case where `( wrapper x )` frees `x` inside `wrapper`'s
+            // body and the caller then reads `x`.
+            ( bck_record_inferred_sink syms bck_arg_val ) }
         {}
         // BORROW.md Phase 4: a `sink` parameter consumes its argument.
         // When the argument is a bare-identifier binding, record it as
@@ -3216,7 +3239,12 @@
             { ( die lex ( nurl_str_cat3
                 `'` bck_arg_val
                 `' is a compiler-auto-dropped value; passing it to a 'sink' parameter is not yet supported (BORROW.md Phase 4) - pass a Vec or other manually-managed handle, or pass it as an ordinary parameter` ) ) }
-            { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) ) } }
+            { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) )
+                // Auto-sink cascade (critic v0.9.0 §2): if THIS fn
+                // passes its own parameter as a sink arg to another fn,
+                // mark this parameter as auto-sink too — caller-of-this-
+                // fn likewise loses access to that arg afterwards.
+                ( bck_record_inferred_sink syms bck_arg_val ) } }
         {}
         // Variadic position: promote BEFORE owned-temp tracking + argstr
         // append, since promotion replaces (at, av) with the widened pair.
@@ -5744,6 +5772,31 @@
        // statement only for a parenthesised call `( fn ... )`; `?` / `??`
        // control flow is captured by the gen_block_ret depth markers
        // instead, so it is not double-recorded here.
+        // Bare-identifier-as-statement (critic v0.9.0 §1): if the leading
+        // token is a name registered in syms with NO `__ptr` (i.e. not a
+        // local/parameter) and NO `__global` (i.e. not a const / enum
+        // variant), it is some kind of callable — @-fn, generic @-fn,
+        // FFI fn, or runtime builtin. The user almost certainly forgot
+        // the parens: calls in NURL are '( fn args )', not 'fn args'. A
+        // bare callable name as a statement compiles to a dead name
+        // lookup whose value is discarded — grammar-legal, semantically
+        // useless. Die rather than warn: there is no legitimate program
+        // shape this matches.
+        ? == tt TT_IDENT
+        { : s __bc_nm ( nurl_lex_val lex )
+            : s __bc_ty  ( nurl_sym_get syms __bc_nm )
+            : s __bc_ptr ( nurl_sym_get syms ( nurl_str_cat __bc_nm `__ptr` ) )
+            : s __bc_glb ( nurl_sym_get syms ( nurl_str_cat __bc_nm `__global` ) )
+            : s __bc_par ( nurl_sym_get syms ( nurl_str_cat __bc_nm `__param` ) )
+            ? & & & != 0 ( nurl_str_len __bc_ty )
+                    == 0 ( nurl_str_len __bc_ptr )
+                    == 0 ( nurl_str_len __bc_glb )
+                    == 0 ( nurl_str_len __bc_par )
+            { ( die lex ( nurl_str_cat3
+                `bare identifier '` __bc_nm
+                `' as a statement has no effect — calls in NURL are written '( name args )', not 'name args'. Did you forget the parens?` ) ) }
+            {} }
+        {}
         : s bck_ev ( gen_expr lex syms cg )
         ? == tt TT_LPAREN { ( bck_record `expr` `` bck_line ) } {}
         bck_ev
@@ -8520,6 +8573,47 @@
     F
 }
 
+// Return the 0-based index of `word` in space-separated `list`,
+// or -1 if `word` is not in `list`. Companion to str_contains_word.
+@ str_word_index s list s word → i {
+    : ~ s rest list
+    : ~ i idx 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ( seq w word ) { ^ idx } {}
+        = idx + idx 1
+    }
+    -1
+}
+
+// Auto-sink inference (critic v0.9.0 §2): when a body call moves /
+// consumes an argument that is a bare parameter of the enclosing
+// function, record that parameter's 0-based index for later merge
+// into g_fn_sink[fname]. The merge happens in gen_fn_decl_concrete
+// after the body finishes parsing. Call sites of the enclosing fn
+// then see the auto-sink and reject any use-after-call of that
+// argument — the indirect form of use-after-free
+// (` ( wrapper x ) ( read x ) ` where wrapper frees `x` inside its
+// body) becomes a borrow-checker error like the direct form already
+// is. Duplicates are skipped so an explicit `sink` declaration on
+// the same param is not double-listed.
+@ bck_record_inferred_sink i syms s arg_name → v {
+    ? == g_borrowck 0 {} {
+        : s pn ( nurl_sym_get syms `__fn_param_names__` )
+        : i idx ( str_word_index pn arg_name )
+        ? >= idx 0
+        { : s cur ( nurl_sym_get syms `__fn_inferred_sink__` )
+            : s new ( nurl_str_int idx )
+            ? ! ( str_contains_word cur new )
+            { ( nurl_sym_def syms `__fn_inferred_sink__`
+                ? == 0 ( nurl_str_len cur ) new
+                ( nurl_str_cat3 cur ` ` new ) ) }
+            {} }
+        {}
+    }
+}
+
 // check_exhaustive: compile error if match arms don't cover all enum variants.
 // ename: enum name (e.g. "Color")  seen: space-separated matched variant names
 // has_wildcard: 1 if a '_' arm was present
@@ -8893,7 +8987,13 @@
 
 // defer_instantiation: queue a generic instantiation for emission after
 // the calling function's closing '}'. Returns the mangled name.
-@ defer_instantiation s fname s mangled s type_args i syms → v {
+@ defer_instantiation i lex s fname s mangled s type_args i syms → v {
+    // Critic v0.9.0 §2: capture the call site so emit_one_instantiation
+    // can render `<generic vec_as_slice__i64 from user.nu:42>:1:21:` in
+    // any diagnostic emitted while re-parsing the substituted body,
+    // instead of the opaque `<generic>:1:21:`.
+    : s caller_file ( nurl_lex_filename lex )
+    : i caller_line ( nurl_lex_line lex )
     : s ret_ty ( compute_generic_ret_ty fname type_args )
     ( nurl_sym_def syms mangled ret_ty )
     : s cnt_s ( nurl_sym_get g_generic_syms `__deferred_count__` )
@@ -8903,6 +9003,8 @@
     ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_fn` ) fname )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_mn` ) mangled )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_ta` ) type_args )
+    ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_cf` ) caller_file )
+    ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_cl` ) ( nurl_str_int caller_line ) )
 }
 
 // emit_str_globals: emit global constants for string literals [base..top).
@@ -9097,7 +9199,30 @@
     }
     {}
     : i base_str g_str_idx
+    // Auto-sink inference (critic v0.9.0 §2): reset the side-channel
+    // accumulator before the body parses. gen_call's destructor- and
+    // sink-arg paths append param indices via bck_record_inferred_sink
+    // when the consumed arg is a bare parameter of THIS function. The
+    // merge into g_fn_sink[fname] happens after the body finishes.
+    ( nurl_sym_def syms `__fn_inferred_sink__` `` )
     : s last ( gen_block_ret lex syms cg )
+    // Auto-sink inference (critic v0.9.0 §2): merge any inferred sinks
+    // into g_fn_sink[fname], deduping against the explicit `sink`
+    // marker set already published above.
+    : s __as_inferred ( nurl_sym_get syms `__fn_inferred_sink__` )
+    ? != 0 ( nurl_str_len __as_inferred )
+    { : ~ s __as_merged ( nurl_sym_get g_fn_sink fname )
+        : ~ s __as_rest __as_inferred
+        ~ != 0 ( nurl_str_len __as_rest ) {
+            : s __as_w ( str_first_word __as_rest )
+            = __as_rest ( str_skip_word __as_rest )
+            ? ! ( str_contains_word __as_merged __as_w )
+            { = __as_merged ? == 0 ( nurl_str_len __as_merged )
+                __as_w
+                ( nurl_str_cat3 __as_merged ` ` __as_w ) }
+            {} }
+        ( nurl_sym_def g_fn_sink fname __as_merged ) }
+    {}
     // Implicit return — route through defer chain if defers are active
     : s dtop ( nurl_sym_get syms `__defer_top__` )
     // Ownership transfer: if ret type is a slice AND the last expression
@@ -9644,6 +9769,13 @@
     ( expect lex TT_ARROW )
     : s ret_ty ( parse_type lex )
     ( nurl_sym_def syms fname ret_ty )
+    // Mark this name as a callable FFI symbol. gen_stmt's bare-ident-
+    // as-statement check (critic v0.9.0 §1) uses this to die on
+    // `name args` when the user meant `( name args )` — the @-fn
+    // counterpart is detected via the `__src_file` entry written
+    // by vis_record_fn, which FFI decls deliberately do not get
+    // (FFI symbols are linker-level ABI globals, not NURL sources).
+    ( nurl_sym_def syms ( nurl_str_cat fname `__ffi` ) `1` )
     // emit_header already emits `declare` lines for a small set of libc
     // symbols (malloc, free, puts, printf). If the user FFI-declares any of
     // those, re-emitting the same `declare` would trigger LLVM's "invalid
@@ -9992,7 +10124,7 @@
 // fields), then again to actually emit the function. The two passes
 // share `syms` so the rescan's emitted instantiations are visible to
 // the body-parsing pass.
-@ emit_one_instantiation s fname s mangled s type_args i syms i cg → v {
+@ emit_one_instantiation s fname s mangled s type_args s caller_file s caller_line i syms i cg → v {
     : s tparams ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__tparams` ) )
     : s gsrc ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__gsrc` ) )
     : s subst_src gsrc
@@ -10008,7 +10140,14 @@
     : s full_src ( nurl_str_cat `@ ` ( nurl_str_cat mangled ( nurl_str_cat ` ` subst_src ) ) )
     : i lex_scan ( nurl_lex_new full_src `<generic-scan>` )
     ( scan_generic_structs lex_scan syms )
-    : i lex2 ( nurl_lex_new full_src `<generic>` )
+    // Critic v0.9.0 §2: synthesise a filename that includes the call
+    // site so any diagnostic emitted while re-parsing the substituted
+    // body points the user at THEIR code, not the opaque `<generic>`.
+    : s synth_name ? & != 0 ( nurl_str_len caller_file ) != 0 ( nurl_str_len caller_line )
+        ( nurl_str_cat3 `<generic ` mangled
+            ( nurl_str_cat4 ` from ` caller_file `:` ( nurl_str_cat caller_line `>` ) ) )
+        ( nurl_str_cat3 `<generic ` mangled `>` )
+    : i lex2 ( nurl_lex_new full_src synth_name )
     // DWARF Phase 7: stash the original generic-decl line so
     // gen_fn_decl_concrete points this mono's !DISubprogram at the
     // real source, not the synthetic `<generic>:1`. Cleared in a
@@ -10031,7 +10170,9 @@
         : s fname ( nurl_sym_get g_generic_syms ( nurl_str_cat base `_fn` ) )
         : s mangled ( nurl_sym_get g_generic_syms ( nurl_str_cat base `_mn` ) )
         : s type_args ( nurl_sym_get g_generic_syms ( nurl_str_cat base `_ta` ) )
-        ( emit_one_instantiation fname mangled type_args syms cg )
+        : s caller_file ( nurl_sym_get g_generic_syms ( nurl_str_cat base `_cf` ) )
+        : s caller_line ( nurl_sym_get g_generic_syms ( nurl_str_cat base `_cl` ) )
+        ( emit_one_instantiation fname mangled type_args caller_file caller_line syms cg )
         = k + k 1
     }
 }

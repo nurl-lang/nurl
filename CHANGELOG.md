@@ -8,6 +8,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Tier A diagnostics for the v0.9.0 critic (2026-05-25)
+
+Closes the four "grammar-legal but semantically dead" cases the
+external review flagged as silent compiles. Each is a small, local
+compiler change; bootstrap fixed point holds; full test corpus
+green. See `IMPROVEMENTS.md` for the original backlog.
+
+1. **`^` vs `^^` XOR confusion `warning:`** — `gen_ret` peeks the
+   token after the returned expression. If it is on the same source
+   line as the `^` AND is value-producing (not `:` / `=` / `;` / `}`
+   / `)` / `]` / `{` / EOF), the user almost certainly wrote `^ X Y`
+   intending XOR. Emits a soft `warning:` naming `^^` (two adjacent
+   carets, no space) as the cure. Test: `should_warn_caret_xor.nu`.
+2. **Bare-callable-as-statement `error:`** — `gen_stmt` checks for
+   `name args` (no parens) at statement position. If `name` is a
+   known callable (registered in syms with no `__ptr` / `__global`
+   / `__param`), dies with `( name args )`-cure pointer. The
+   companion `gen_ffi_decl` now stamps `<name>__ffi = 1` so FFI
+   builtins like `nurl_print` are detected alongside @-fns. Test:
+   `should_fail_bare_ident_stmt.nu` (PoC: `nurl_print \`oops\``).
+3. **Use-after-`_free` via wrapper `error:`** — auto-infer `sink`
+   convention on parameters that a function passes to a destructor
+   (`*_free`) or to another fn's existing `sink` slot. New helper
+   `bck_record_inferred_sink` accumulates into
+   `__fn_inferred_sink__` per fn body; `gen_fn_decl_concrete`
+   merges into `g_fn_sink[fname]` after body parses, deduping
+   against the explicit `sink` marker. Closes the indirect
+   `( take s ) ( read s )` use-after-free the critic exhibited.
+   Test: `should_fail_uaf_indirect.nu`. Also added
+   `str_word_index` helper next to `str_contains_word`.
+4. **Per-instantiation source line for generics** — replaces the
+   opaque `<generic>:1:21:` synthetic filename with
+   `<generic vec_as_slice__i64 from user.nu:42>:1:21:` so a parse
+   error during the substituted-body re-parse names the call site
+   in the user's own code. `defer_instantiation` now captures the
+   call-site file + line; `flush_deferred_instantiations` passes
+   them to `emit_one_instantiation`, which builds the synthetic
+   filename. (Diagnostic-only — IR unchanged.)
+
 ### Changed — `stdlib/ext/json.nu` parser ~34× faster (2026-05-25)
 
 `json_parse` of the `bench/json_parse` payload (5 × 64 KB) dropped
