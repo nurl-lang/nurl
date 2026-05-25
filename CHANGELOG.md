@@ -8,6 +8,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — More examples + refreshed catalogue (Tier D #4, 2026-05-25)
+
+Two-part deliverable closing ROADMAP §6 "More Examples":
+
+1. **`examples/find_clone.nu`** — grep-style recursive search over
+   files / directories with three modes:
+
+   ```
+   find_clone PATTERN [PATH ...]                  # literal substring
+   find_clone --list PAT[,PAT...] [PATH ...]      # comma-separated alternatives
+   find_clone --regex PAT [PATH ...]              # POSIX-extended regex
+   ```
+
+   PATH is one or more files or directories — directories recurse,
+   dotfiles are skipped, and with no PATH the tool reads stdin. Output
+   is `path:line:contents` per match; exit 0 on any match, 1 on no
+   match, 2 on usage / I/O error. Closure-shaped matchers
+   (`make_literal_test`, `make_list_test`, `make_regex_test`) so
+   `scan_lines` is mode-agnostic; `walk_dir` returns -1 on
+   not-a-directory so the dispatcher falls back to the file scanner
+   cleanly. Built on top of `stdlib/std/fs.nu` (`read_file`,
+   `dir_list`), `stdlib/ext/regex.nu` (`regex_compile` / `_test`), and
+   the existing `nurl_str_*` helpers. Pure CLI I/O — runs on the
+   public playground.
+
+2. **`examples/README.md` refresh** — from a 3-of-36 catalogue to all
+   36 rows, organised by category (CLI tools / Algorithms / Data
+   formats / Language showcase / HTTP & RPC / LLM API / SDL canvas).
+   Each row carries a one-line description plus a **playground** or
+   **local** tag describing where it can run. *playground* = pure
+   compute + stdin / argv / file I/O (runs on `play.nurl-lang.org`
+   as-is); *local* = needs network, a server listening port, an
+   `ANTHROPIC_API_KEY`, SDL2, or microphone access.
+
+The critic-suggested agent-loop variants and MCP-client demo were
+deliberately omitted: `examples/claude_agent.nu` already covers the
+agent shape, and an MCP-client-from-the-public-playground would need
+either secret injection (API keys) or WASM outbound sockets,
+neither of which the playground exposes today.
+
 ### Added — GitHub Actions CI (critic v0.9.0 Tier D #2, 2026-05-25)
 
 `.github/workflows/ci.yml` lifts the previously-local build + test +

@@ -172,8 +172,18 @@ critic-driven backlog is in one place; the canonical home is ROADMAP.md.
       sentinel checks light up. `nurlfmt --check` deferred — corpus
       has ~100 non-canonical files (incl. `compiler/nurlc.nu`); wire
       it after a separate repo-wide `nurlfmt --write` pass. ROADMAP §6.
-- [ ] **More `examples/`.** Small JSON pretty-printer, `wc` / `grep` / `cat`
-      clones, MCP client demo, agent loop variants. ROADMAP §6.
+- [x] **More `examples/` — shipped 2026-05-25.** Two-part:
+      (1) `examples/find_clone.nu` — grep-style recursive search with
+      literal / `--list` / `--regex` modes + stdin + dotfile skip;
+      covers the `wc`+`grep`+`cat` clones the critic listed alongside
+      the pre-existing `wordcount.nu`. (2) `examples/README.md`
+      refreshed from a 3-of-36 catalogue to all 36 rows tagged
+      **playground** (runs on play.nurl-lang.org) vs **local**
+      (network / SDL / API key required). Agent-loop variants and
+      MCP-client demo deliberately not added — `claude_agent.nu`
+      already covers the agent shape; an MCP-client-from-the-public-
+      playground would need either secret injection or WASM outbound
+      sockets, neither of which the playground exposes. ROADMAP §6.
 - [ ] **HTTP-server peer benchmark vs Go `net/http` / Rust `hyper`.**
       `bench/RESULTS.md` covers compute + JSON parse against Python / Rust /
       Node, but the critic §10 specifically asked for the HTTP-server

@@ -1,6 +1,7 @@
 # NURL Examples
 
-Practical examples demonstrating NURL language features.
+Practical NURL programs demonstrating the language and stdlib. Use
+them as both reference and starting points.
 
 ## Building Examples
 
@@ -8,39 +9,139 @@ Practical examples demonstrating NURL language features.
 # Build the compiler first (if not already built)
 ./build.sh
 
-# Compile and run an example
+# Compile and run an example via the launcher
 ./nurl.sh examples/fizzbuzz.nu
 
 # Or compile manually
 ./build/nurlc examples/fizzbuzz.nu > /tmp/fizzbuzz.ll
-clang /tmp/fizzbuzz.ll stdlib/runtime.o -o /tmp/fizzbuzz
+clang -O2 -flto /tmp/fizzbuzz.ll stdlib/runtime.o -lm -lpthread -o /tmp/fizzbuzz
 /tmp/fizzbuzz
 ```
 
-## Examples
+## Catalogue (36 examples)
 
-### `fizzbuzz.nu`
-Classic FizzBuzz — demonstrates loops, conditionals, and mutable variables.
+Each example is tagged for where it can run:
 
-### `wordcount.nu`
-Count lines, words, and characters in a file — demonstrates file I/O, structs, and command-line arguments.
+- **playground** — also runs on the public WASM playground at
+  [play.nurl-lang.org](https://play.nurl-lang.org). Pure compute,
+  stdin / argv / file I/O only, no network / no graphics / no
+  secrets.
+- **local** — runs only on a local build. Reasons listed in the row:
+  network calls (LLM APIs, HTTP requests), server listeners, SDL2
+  canvas, microphone, or API keys.
 
-### `calculator.nu`
-Expression evaluator with AST — demonstrates enums, pattern matching, Option types, recursion, and heap allocation.
+### CLI tools — file I/O, argv, no network
 
-## Language Features Demonstrated
+| File | What it does | Tag |
+|---|---|---|
+| [`find_clone.nu`](find_clone.nu) | grep-style search across files / directories with literal, list-of-alternatives (`--list a,b,c`), or regex (`--regex PAT`) modes. Recurses into directories, skips dotfiles, reads stdin when no PATH is given. Exit 0 on any match, 1 on no match. | playground |
+| [`wordcount.nu`](wordcount.nu) | `wc`-style line / word / char counter. Demonstrates file I/O, struct, and `nurl_argv_*`. | playground |
+| [`csv_demo.nu`](csv_demo.nu) | Round-trips a CSV file through `stdlib/ext/csv.nu` (RFC 4180-conformant quoting via the v2 arena writer). | playground |
+| [`uuidgen.nu`](uuidgen.nu) | Emits a UUID v4 string via `stdlib/ext/uuid.nu` — quick sanity check on `nurl_rand_fill` + the hex formatter. | playground |
+| [`time_basic.nu`](time_basic.nu) | Smokes the `stdlib/std/time.nu` surface: `now_ms`, `sleep_ms`, monotonic vs wall clocks. Output is intrinsically non-deterministic, so only relative orderings are asserted. | playground |
 
-| Feature | fizzbuzz | wordcount | calculator |
-|---------|----------|-----------|------------|
-| Functions (`@`) | ✓ | ✓ | ✓ |
-| Conditionals (`?`) | ✓ | ✓ | ✓ |
-| While loops (`~`) | ✓ | ✓ | |
-| Mutable vars (`~ type`) | ✓ | ✓ | |
-| Structs (`: Name {}`) | | ✓ | |
-| Enums (`: \| Name {}`) | | | ✓ |
-| Pattern match (`??`) | | | ✓ |
-| Option type (`?T`) | | | ✓ |
-| Try operator (`\`) | | | ✓ |
-| Pointers (`*T`) | | | ✓ |
-| File I/O | | ✓ | |
-| CLI args | | ✓ | |
+### Algorithms & control flow
+
+| File | What it does | Tag |
+|---|---|---|
+| [`fizzbuzz.nu`](fizzbuzz.nu) | Classic FizzBuzz. Loops, conditionals, mutable vars. | playground |
+| [`collatz.nu`](collatz.nu) | Collatz (3n+1) sequence length for a given start. | playground |
+| [`calculator.nu`](calculator.nu) | Recursive-descent expression evaluator with an AST. Demonstrates enums, pattern match, Option, `\` try-propagate, heap allocation. | playground |
+| [`dict_coder.nu`](dict_coder.nu) | Tiny dictionary-based text compressor + decompressor. Demonstrates `Vec[String]`, byte-level I/O. | playground |
+| [`enigma.nu`](enigma.nu) | NURL stress-test: a minimal Enigma-machine evaluator. Tagged "Human readability score: 0" — exercises pattern matching, multiple `Vec`s, bit-twiddling. | playground |
+| [`rule30.nu`](rule30.nu) | Wolfram's Rule 30 elementary CA — single seed → aperiodic pattern. | playground |
+| [`math_basic.nu`](math_basic.nu) | `stdlib/std/float.nu` + `stdlib/std/int.nu` smoke test (libm wrappers: sqrt / sin / cos / log / exp / pow / floor / ceil / round). | playground |
+| [`primordial.nu`](primordial.nu) | Primordial-soup particle chemistry — five elementary particle types, bitmask compounds, conserved momentum. Pure-text output (the canvas version below is `primordial_canvas.nu`). | playground |
+
+### Data formats
+
+| File | What it does | Tag |
+|---|---|---|
+| [`json_basic.nu`](json_basic.nu) | Full feature tour of `stdlib/ext/json.nu` — parse + stringify + accessors + Jq-style traversal. Pinned baseline output. | playground |
+| [`msgpack_demo.nu`](msgpack_demo.nu) | Round-trips a user struct through MessagePack via `stdlib/ext/msgpack.nu`. | playground |
+| [`serde_demo.nu`](serde_demo.nu) | Round-trips a user struct through JSON via the `stdlib/ext/serde.nu` `Serialize` trait + a hand-written `from_json` helper. The recommended shape for "make my struct serialisable". | playground |
+
+### Language showcase
+
+| File | What it does | Tag |
+|---|---|---|
+| [`showcase.nu`](showcase.nu) | Compact tour: arithmetic, control flow, structs, enums, closures, slices. Useful as a "does my fresh build work" smoke test. | playground |
+| [`slice_test.nu`](slice_test.nu) | Slice literals + foreach borrow semantics + struct field access. | playground |
+| [`test_05_closures_and_capture.nu`](test_05_closures_and_capture.nu) | Closure capture semantics (snapshot vs by-pointer) and the closure-as-value calling convention. | playground |
+| [`test_06_torture_chamber.nu`](test_06_torture_chamber.nu) | AST construction, type inference, and memory-layout torture test. | playground |
+
+### HTTP & RPC
+
+| File | What it does | Tag |
+|---|---|---|
+| [`http_basic.nu`](http_basic.nu) | `stdlib/ext/http.nu` GET + POST against httpbin.org. Gated on `NURL_HTTP_TESTS=1`. | local (network) |
+| [`jsonrequest.nu`](jsonrequest.nu) | HTTP GET → parse JSON response → print fields. | local (network) |
+| [`static_server.nu`](static_server.nu) | Production-shape static-file server: HTTP/1.1 keep-alive, router (`/`, `/*path`, `/api/health`, `/metrics`), Prometheus metrics, access log, `..`-rejection, graceful shutdown on Ctrl+C / SIGTERM. The canonical "did the HTTP stack work?" demo. | local (server listener) |
+| [`async_http_server.nu`](async_http_server.nu) | Same handler contract as `static_server.nu` but runs the request handlers on the M:N fiber runtime. | local (server listener) |
+| [`mcp_echo_server.nu`](mcp_echo_server.nu) | Minimal MCP server over stdio — one `echo` tool. Wire it into an MCP-aware client (Claude Desktop, Claude Code, etc.) and the tool is callable. | local (stdio + MCP client) |
+| [`mcp_echo_server_http.nu`](mcp_echo_server_http.nu) | Same business logic as `mcp_echo_server.nu`, but exposed over HTTP transport. | local (server listener) |
+
+### LLM / Anthropic API
+
+| File | What it does | Tag |
+|---|---|---|
+| [`claude_chat.nu`](claude_chat.nu) | Minimal Anthropic Messages-API CLI: reads `ANTHROPIC_API_KEY`, sends prompt from argv or stdin, streams the response. | local (API key + network) |
+| [`claude_agent.nu`](claude_agent.nu) | Tool-using Claude agent loop with two registered tools. Demonstrates the full tool-use cycle: model emits `tool_use` → executor runs tool → result fed back → model continues. | local (API key + network) |
+
+### Canvas / graphics (SDL2)
+
+These open a window via the SDL2 canvas FFI in `stdlib/canvas.c`. The
+playground has no display surface; build locally with SDL2 dev libs
+installed. All eight cap out at 60 fps and exit on window close.
+
+| File | What it does | Tag |
+|---|---|---|
+| [`pixels_demo.nu`](pixels_demo.nu) | Minimal canvas animation: a plasma-like sinusoidal colour field, sweeping across a WxH pixel window. The "did SDL link" smoke test. | local (SDL canvas) |
+| [`starfield.nu`](starfield.nu) | 3D warp-speed starfield with motion blur. | local (SDL canvas) |
+| [`doomfire.nu`](doomfire.nu) | Classic Doom fire effect. | local (SDL canvas) |
+| [`gameoflife.nu`](gameoflife.nu) | Conway's Life — classic two-colour, big and clear. | local (SDL canvas) |
+| [`sand.nu`](sand.nu) | Interactive falling-sand simulation. Click-and-drag to drop sand. | local (SDL canvas) |
+| [`primordial_canvas.nu`](primordial_canvas.nu) | Same rules as `primordial.nu` (above, in *Algorithms*) but rendered live on the pixel canvas. | local (SDL canvas) |
+| [`audio_sparkles.nu`](audio_sparkles.nu) | Microphone-driven pixel fireworks — peak detection on input audio triggers visual sparkles. | local (SDL + microphone) |
+| [`audio_sparcles2.nu`](audio_sparcles2.nu) | Variant of `audio_sparkles.nu` with tuned colour ramp + persistence. | local (SDL + microphone) |
+
+## Language features at a glance
+
+| Feature | First appearance |
+|---------|-----|
+| Functions (`@`) | `fizzbuzz.nu` |
+| Conditionals (`?`) | `fizzbuzz.nu` |
+| While loops (`~`) | `fizzbuzz.nu` |
+| Mutable bindings (`: ~ T`) | `fizzbuzz.nu` |
+| Structs (`: Name {}`) | `wordcount.nu` |
+| Enums (`: \| Name {}`) | `calculator.nu` |
+| Pattern match (`??`) | `calculator.nu` |
+| Option type (`?T`) | `calculator.nu` |
+| Result + try-propagate (`!T E` + `\`) | `calculator.nu` |
+| Pointers (`*T`) | `calculator.nu` |
+| File I/O | `wordcount.nu` |
+| CLI args | `wordcount.nu` |
+| Slice literal + foreach borrow | `slice_test.nu` |
+| Closures + capture | `test_05_closures_and_capture.nu` |
+| Generics | `find_clone.nu` (Vec[String] / regex) |
+| HTTP client | `jsonrequest.nu` |
+| HTTP server | `static_server.nu` |
+| MCP server | `mcp_echo_server.nu` |
+| Async / fibers | `async_http_server.nu` |
+| Anthropic SDK | `claude_chat.nu` |
+| Regex | `find_clone.nu` |
+| SDL2 canvas | `pixels_demo.nu` |
+
+## Running examples on the playground
+
+The "playground" tag in the catalogue above marks examples that the
+public WASM playground can run as-is — they read at most stdin and
+argv, write to stdout / stderr, and use no network / no SDL / no
+secrets. Paste the source into the editor at
+[play.nurl-lang.org](https://play.nurl-lang.org), click *Run*, and the
+container compiles + runs your code under wasmtime.
+
+"local" examples need a feature the WASM sandbox does not (yet)
+expose: outbound network, a listening socket, an `ANTHROPIC_API_KEY`,
+a display surface for SDL, or microphone input. Build them on a host
+where those are available.
