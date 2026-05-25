@@ -241,7 +241,9 @@ Docker.
 ### Compiler-in-wasm (offline / embeddable)
 
 The same `POST /build_wasm` pipeline can be pointed at `compiler/nurlc.nu`
-itself, producing a ~390 KB `nurlc.wasm` that **is** the NURL compiler:
+itself, producing a ~316 KB `nurlc.wasm` (verified 2026-05-25 at
+**315 708 bytes**; ROADMAP "Last updated" pins the exact figure per ship)
+that **is** the NURL compiler:
 
 ```bash
 ./startdev.sh        # one terminal: bring up the API container

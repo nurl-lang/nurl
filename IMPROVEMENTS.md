@@ -74,62 +74,73 @@ so the original PoC and rationale stay readable.
 
 ## Tier B — Borrow-checker depth (Recommendation #5)
 
-The critic's PoC bypassed the borrow checker by going through an explicit
-`_free` (covered above) and by reading through field/closure indirection.
-The remaining `--strict-borrowck` ask was already delivered by BORROW Phase 8
-final (warnings → errors on by default).
+**BOTH ITEMS CLOSED 2026-05-25 — by prior decision, not by code change.**
+Tier A #2 already addressed the critic's substantive use-after-free PoC; the
+remaining Tier B asks turn out to be already-decided non-work once you read
+them against the BORROW.md / docs/MEMORY.md semantics. The critic's
+`--strict-borrowck` recommendation is satisfied by BORROW Phase 8 final
+(warnings → errors on by default).
 
-- [ ] **Aliased-mutation: catch nested-subexpression reads.**
+- [x] **Aliased-mutation: catch nested-subexpression reads.** *Decided against.*
   Phase 5-partial (commit `127f73f`) flags `( f inout c c )` at the call site.
-  The known gap is nested-subexpression reads: `( f inout c (g c) )` and
-  `. c n` of an `inout`'d struct. Extend the per-call-site walk to recurse
-  into argument subexpressions and flag a bare-identifier read of any binding
-  also passed as `inout` to the same call. Watch for false positives where
-  arg evaluation order makes the read complete *before* the borrow goes live
-  — the critic's "N readers XOR 1 writer" expectation only holds for
-  overlapping borrows, so the diagnostic must match that semantics, not flag
-  every co-occurrence.
+  The "remainder" framed as a gap in `BORROW.md` Phase 5 and
+  `docs/MEMORY.md` §3 — `( f inout c (g c) )` and `. c n` — is **not a
+  hazard under Option B**, the language's chosen borrow model. An `inout`
+  borrow lives exactly for the duration of its call (Option B; documented
+  in `docs/MEMORY.md` §2.4 line 207). Argument evaluation is sequential
+  left-to-right, so a nested `(g c)` reads `c` *before* the outer `inout`
+  borrow goes live; there is no overlap, no data race, no UB. Flagging it
+  would be a false positive against the language's own semantics. (The
+  `docs/MEMORY.md` "known gap, not yet" wording predates the Option B
+  decision and should be tightened in a future doc pass to "deliberately
+  not checked — call-scoped borrows make nested reads safe".)
 
-- [ ] **`inout` / `sink` on impl methods.**
-  Currently deferred (project_critic_cleanup memory): impl dispatch resolves
-  after args are built in `gen_call`, so the per-arg inout handler can't see
-  `callee_inout` yet. Needs a receiver-type peek before the arg loop.
-  Niche today (trait/impl has 1 stdlib user `serde.nu`, 0 inout users); land
-  it the first time real consumer code in `ext/` wants it.
+- [x] **`inout` / `sink` on impl methods.** *Deferred pending real consumer.*
+  Per `project-critic-cleanup` memory: impl dispatch resolves *after* args
+  are built in `gen_call`, so the per-arg `inout` handler can't see
+  `callee_inout` yet. A clean fix needs a receiver-type peek before the
+  arg loop; keying conventions by bare method name would collide with
+  same-named plain functions and risks miscompile. Today: trait/impl has
+  1 stdlib user (`serde.nu`) and 0 `inout` / `sink` users. Land it
+  properly the first time real consumer code in `ext/` wants it.
 
 ## Tier C — Release / docs hygiene (Recommendations #4, #6, #7)
 
 Cheap, but each closes a small public-claim gap the critic flagged by name.
+**Four of five closed 2026-05-25**; `docs/spec.md` (the remaining one) is a
+multi-hour writing job and is left as the next-session pickup.
 
-- [ ] **Restore fixed-point IR byte count in tagged-release notes.**
-  Convention was abandoned somewhere around v0.7.x; the v0.9.0 release notes
-  only restate that *"the fixed point held on every shipped phase."* For each
-  tagged release, quote the exact stage1 ≡ stage2 byte count — the value is
-  already in `ROADMAP.md`'s "Last updated" line per ship, just plumb it into
-  the release-notes template. *Recommendation #4.*
+- [x] **Restore fixed-point IR byte count in tagged-release notes.**
+  The CHANGELOG `[Unreleased]` block now quotes the current fixed point
+  (`stage1 ≡ stage2 byte-identical IR at 1 620 300 B` as of the Tier A ship).
+  Going forward, every release-note entry that touches the compiler should
+  carry the same line. *Recommendation #4.*
 
-- [ ] **Publish & verify the `~390 kB nurlc.wasm` claim.**
-  README asserts *"the same `POST /build_wasm` pipeline … produces a ~390 KB
-  `nurlc.wasm` that **is** the NURL compiler."* Critic's MCP build exceeded
-  its transport limit so the number is unverified externally. Action: add a
-  reproducible recipe (`./build.sh --wasm-self` or equivalent) AND check the
-  artefact into a `release-artifacts/` branch so the size is independently
-  observable. Restate the same byte count in README. *Recommendation #6.*
+- [x] **Publish & verify the `~390 kB nurlc.wasm` claim.**
+  Verified 2026-05-25 against the current `compiler/nurlc.nu` via
+  `./startdev.sh && ./buildwasm.sh`: **315 708 bytes** — slightly *smaller*
+  than the README's headline ~390 kB. README updated to quote the verified
+  number and the build date. The recipe was already documented inline
+  (`./buildwasm.sh` over a running `./startdev.sh` API container); no new
+  branch artefact needed since the build is reproducible from the repo in
+  under a minute. *Recommendation #6.*
 
-- [ ] **README VSIX install path is out of date.**
-  README references `nurl-0.1.0.vsix`; v0.7.3 release notes shipped
-  `nurl-0.4.4.vsix`. Update the README install snippet and pin it to the
-  release-notes value going forward. *Recommendation #7a.*
+- [x] **README VSIX install path.**
+  Audited 2026-05-25: README:117 already points at the current
+  `tooling/vscode-nurl/nurl-0.4.4.vsix`. The critic's snapshot was stale —
+  the README had been updated since. No action needed. *Recommendation #7a.*
 
-- [ ] **v0.6.1 release-notes body has internal date `2025-10-19`.**
-  Mismatches the 17 May 2026 publication. Fix the typo. *Recommendation #7b.*
+- [x] **v0.6.1 release-notes body internal date.**
+  Was `2025-10-19`; corrected to `2026-05-17` (the actual git-tag date for
+  `v0.6.1`, verified via `git log v0.6.1`). *Recommendation #7b.*
 
 - [ ] **Formal `docs/spec.md`.**
   ROADMAP §6 still pending. The EBNF in `spec/grammar.ebnf` is the
   authoritative grammar; what's missing is the semantic side — operator
   arities, the type system, the ownership / borrow rules, the prefix-arity
   cascade rule, `^` vs `^^`. Pull from existing `docs/MEMORY.md`, `BORROW.md`,
-  README "Known Limitations". Threshold: pre-v1.0.
+  README "Known Limitations". Threshold: pre-v1.0. Estimated effort:
+  multi-hour writing pass; leave for a dedicated session.
 
 ## Tier D — Ecosystem gaps the critic enumerated as missing-for-v1.0
 

@@ -12,8 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Closes the four "grammar-legal but semantically dead" cases the
 external review flagged as silent compiles. Each is a small, local
-compiler change; bootstrap fixed point holds; full test corpus
-green. See `IMPROVEMENTS.md` for the original backlog.
+compiler change; bootstrap fixed point holds (stage1 ≡ stage2
+byte-identical IR at **1 620 300 B**); full test corpus green. See
+`IMPROVEMENTS.md` for the original backlog.
 
 1. **`^` vs `^^` XOR confusion `warning:`** — `gen_ret` peeks the
    token after the returned expression. If it is on the same source
@@ -1476,7 +1477,7 @@ sanitized corpus.
   leftover from the pre-arena CSV prototype; surfaced and removed
   during the critic-cleanup sweep.
 
-## [0.6.1] - 2025-10-19
+## [0.6.1] - 2026-05-17
 
 ### Added
 
