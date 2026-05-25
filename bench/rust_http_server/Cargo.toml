@@ -1,0 +1,26 @@
+# bench/rust_http_server/Cargo.toml — minimal Cargo manifest for the
+# hyper-based hello-world server. Kept in its own subdir so the bench
+# Rust dep tree stays out of the main build path.
+#
+# Build:
+#     cargo build --release --manifest-path bench/rust_http_server/Cargo.toml
+#
+# The runner script bench/run_http.sh does this automatically.
+
+[package]
+name = "http_server"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+hyper = { version = "1.5", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "io-util"] }
+bytes = "1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

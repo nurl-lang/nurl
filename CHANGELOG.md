@@ -8,6 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — HTTP peer-bench (Tier D #3, 2026-05-25)
+
+`bench/run_http.sh` + `bench/http_server.{nu,js}` +
+`bench/rust_http_server/` (Cargo + hyper 1.9 + tokio multi-thread)
+close the long-standing "no Rust hyper / Node http peer comparison"
+gap that critic v0.9.0 §10 flagged. Drives `oha` 1.8.0 against three
+hello-world servers at four concurrency levels (1, 10, 50, 200),
+median of 3 × 10 s per cell. Captured numbers + commentary in
+`bench/HTTP_RESULTS.md`:
+
+| Server  | C = 1    | C = 10   | C = 50   | C = 200  |
+|---------|---------:|---------:|---------:|---------:|
+| NURL    | 14 451   | **68 960** |  60 897  |  59 044  |
+| Rust    | 14 507   |  47 703  | **86 699** | **114 694** |
+| Node    |  8 708   |  16 726  |  17 108  |  15 555  |
+
+(req/s, higher is better, best in bold per column.)
+
+Highlights:
+
+- NURL is parity with Rust hyper at C=1 (within < 1 %), and is **1.45× ahead**
+  of hyper at C=10 — NURL's 8-worker pool fits the workload while tokio's
+  12-worker default is over-provisioned at that concurrency.
+- Rust hyper pulls ahead at C ≥ 50, peaking at 115 k/s vs NURL's 59 k/s
+  (1.94×) at C=200.
+- NURL has **the lowest tail latency across the whole sweep**: p99 0.62 ms
+  at C=200 vs Rust's 6.19 ms and Node's 20.95 ms.
+- Node http plateaus at ~16 k/s — textbook single-event-loop signature.
+
+The Go `net/http` half of the originally-asked-for comparison is
+deferred: Go was not installed on the bench host at capture time.
+`bench/run_http.sh` has the lane reserved and `bench/README.md`
+documents the gap — a PR adding `bench/http_server.go` would re-publish
+a four-column table.
+
 ### Added — More examples + refreshed catalogue (Tier D #4, 2026-05-25)
 
 Two-part deliverable closing ROADMAP §6 "More Examples":

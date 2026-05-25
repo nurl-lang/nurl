@@ -184,11 +184,18 @@ critic-driven backlog is in one place; the canonical home is ROADMAP.md.
       already covers the agent shape; an MCP-client-from-the-public-
       playground would need either secret injection or WASM outbound
       sockets, neither of which the playground exposes. ROADMAP §6.
-- [ ] **HTTP-server peer benchmark vs Go `net/http` / Rust `hyper`.**
-      `bench/RESULTS.md` covers compute + JSON parse against Python / Rust /
-      Node, but the critic §10 specifically asked for the HTTP-server
-      comparison the README's *"~38× keep-alive"* claim is currently
-      NURL-vs-NURL only.
+- [x] **HTTP-server peer benchmark — shipped 2026-05-25** (Rust hyper +
+      Node http halves). `bench/http_server.{nu,js}` +
+      `bench/rust_http_server/` hello-world peers; `bench/run_http.sh`
+      drives them via `oha`. Median-of-3 × 10 s per cell at C=1, 10,
+      50, 200. Headline: NURL parity with Rust hyper at low concurrency
+      (14.5 k/s at C=1); NURL **ahead** of Rust at C=10 (69k vs 48k,
+      1.45× — NURL's 8-worker pool happens to fit the workload); Rust
+      pulls ahead at higher C (87k at C=50, 115k at C=200, ~1.9×).
+      NURL holds the **lowest p99 latency across the whole sweep**
+      (0.62 ms at C=200 vs Rust's 6.19 ms). Go peer deferred — not
+      installed on the bench host; runner has the lane, README
+      documents the gap. See `bench/HTTP_RESULTS.md`.
 
 ## Tier E — Already addressed; verify external framing matches
 
