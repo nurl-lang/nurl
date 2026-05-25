@@ -107,8 +107,7 @@ them against the BORROW.md / docs/MEMORY.md semantics. The critic's
 ## Tier C — Release / docs hygiene (Recommendations #4, #6, #7)
 
 Cheap, but each closes a small public-claim gap the critic flagged by name.
-**Four of five closed 2026-05-25**; `docs/spec.md` (the remaining one) is a
-multi-hour writing job and is left as the next-session pickup.
+**All five closed 2026-05-25.**
 
 - [x] **Restore fixed-point IR byte count in tagged-release notes.**
   The CHANGELOG `[Unreleased]` block now quotes the current fixed point
@@ -134,13 +133,16 @@ multi-hour writing job and is left as the next-session pickup.
   Was `2025-10-19`; corrected to `2026-05-17` (the actual git-tag date for
   `v0.6.1`, verified via `git log v0.6.1`). *Recommendation #7b.*
 
-- [ ] **Formal `docs/spec.md`.**
-  ROADMAP §6 still pending. The EBNF in `spec/grammar.ebnf` is the
-  authoritative grammar; what's missing is the semantic side — operator
-  arities, the type system, the ownership / borrow rules, the prefix-arity
-  cascade rule, `^` vs `^^`. Pull from existing `docs/MEMORY.md`, `BORROW.md`,
-  README "Known Limitations". Threshold: pre-v1.0. Estimated effort:
-  multi-hour writing pass; leave for a dedicated session.
+- [x] **Formal `docs/spec.md` shipped 2026-05-25.** ~1000-line normative
+  reference covering the semantic side the grammar EBNF doesn't: lexical
+  structure, modules / visibility, types (base + composite + generics),
+  statements, expressions (prefix arities, evaluation order, `^` vs `^^`),
+  functions (parameter conventions, return ownership, tail calls, generics),
+  memory model, borrow-checker rules, diagnostics philosophy, conformance.
+  Pulls together rules from `spec/grammar.ebnf` (referenced, not duplicated),
+  `docs/MEMORY.md`, `BORROW.md`, and README "Known Limitations" into a single
+  document a programmer can read end-to-end. ROADMAP §6 entry promoted from
+  partial to done.
 
 ## Tier D — Ecosystem gaps the critic enumerated as missing-for-v1.0
 
