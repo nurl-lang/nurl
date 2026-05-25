@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — GitHub Actions CI (critic v0.9.0 Tier D #2, 2026-05-25)
+
+`.github/workflows/ci.yml` lifts the previously-local build + test +
+sanitiser gate to PR-level. Two parallel jobs on `ubuntu-latest`:
+
+- **`build-test`** — installs clang + optional FFI dev libs
+  (`libcurl4-openssl-dev`, `libssl-dev`, `libsqlite3-dev`,
+  `libpq-dev`, `zlib1g-dev`, `libzstd-dev`) so every
+  `stdlib/runtime.<lib>` sentinel lights up, then runs `./build.sh`
+  (bootstrap stage1 ≡ stage2 fixed point + the full `run_tests.sh`
+  corpus). 15-min timeout.
+- **`sanitizers`** — same setup, runs `./build.sh --san --no-tests`
+  to build an ASan + UBSan-instrumented stack, then
+  `compiler/tests/run_san_tests.sh` over the corpus. 25-min timeout.
+
+Triggers on push to `main` / `Improvements`, PR-to-`main`, and
+`workflow_dispatch` (manual rerun). `concurrency.cancel-in-progress`
+cancels older runs when a new commit lands on the same ref so the
+queue can't fill up on a fast-typing day.
+
+`nurlfmt --check` is deliberately NOT yet wired up — ~100 .nu files
+in the current stdlib / tests / examples corpus (and
+`compiler/nurlc.nu` itself) are not in canonical form, so adding the
+check today would fail every PR with an unrelated 100-line diff.
+The follow-up path is documented inline in the workflow comments:
+either a single repo-wide `nurlfmt --write` pass first, or grow the
+check scope file-by-file as canonicalisation lands.
+
 ### Added — Structured logging (critic v0.9.0 Tier D #1, 2026-05-25)
 
 `stdlib/std/log.nu` gains two structured-logging features that the

@@ -162,8 +162,16 @@ critic-driven backlog is in one place; the canonical home is ROADMAP.md.
 - [ ] **Mobile / embedded targets.** Android, iOS, `no_std` embedded
       profiles. ROADMAP §6. (Milk-V Duo already validated as a NURL target
       via cross-compile; that's the prior-art shape.)
-- [ ] **GitHub Actions CI.** Sanitiser gate runs locally; wire to GHA so PRs
-      are gated automatically. ROADMAP §6.
+- [x] **GitHub Actions CI — shipped 2026-05-25.**
+      `.github/workflows/ci.yml` with two parallel jobs on
+      `ubuntu-latest`: `build-test` (`./build.sh`) + `sanitizers`
+      (`./build.sh --san --no-tests` then `run_san_tests.sh`). Triggers
+      on push to `main` / `Improvements` + PR-to-`main` +
+      `workflow_dispatch`. Optional FFI dev libs (libcurl / libssl /
+      libsqlite3 / libpq / zlib / libzstd) installed in each job so
+      sentinel checks light up. `nurlfmt --check` deferred — corpus
+      has ~100 non-canonical files (incl. `compiler/nurlc.nu`); wire
+      it after a separate repo-wide `nurlfmt --write` pass. ROADMAP §6.
 - [ ] **More `examples/`.** Small JSON pretty-printer, `wc` / `grep` / `cat`
       clones, MCP client demo, agent loop variants. ROADMAP §6.
 - [ ] **HTTP-server peer benchmark vs Go `net/http` / Rust `hyper`.**
