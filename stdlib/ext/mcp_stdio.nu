@@ -183,9 +183,30 @@ $ `stdlib/core/vec.nu`
         // closed its stdin read-end (EPIPE). Disambiguate: if its
         // stdout is also at EOF the server is simply gone (McpStdioEof,
         // same as a write that lands then reads EOF); otherwise it is a
-        // genuine transient pipe fault (McpStdioIo). Without this the
-        // dead-server outcome races between the two depending on
-        // whether the write or the child exit wins.
+        // genuine transient pipe fault (McpStdioIo).
+        //
+        // proc_eof's flag is set lazily — it goes true only once a
+        // `read(2)` has observed zero bytes. At write-fail time we have
+        // not read from the child's stdout yet, so the flag is still
+        // false even when the child has actually died. Force an EOF
+        // observation here by attempting a short read probe: if the
+        // child is gone the kernel returns 0 immediately (POLLHUP +
+        // read → 0), the eof flag flips to true, and we land on
+        // McpStdioEof. A genuinely-alive-but-broken-stdin pipe (the
+        // McpStdioIo case proper) returns EAGAIN inside the timeout
+        // window and the flag stays false.
+        //
+        // Why this used to flake: `false` exits before our write
+        // arrives at the kernel ~50% of runs. The write-succeeded
+        // path always read EOF and reported McpStdioEof; the write-
+        // failed path skipped the EOF probe and reported McpStdioIo.
+        // Probing here collapses both into McpStdioEof for dead
+        // servers, which is what callers actually want.
+        : ?String drop ( proc_read_line . c child 50 )
+        ?? drop {
+            T s → ( string_free s )
+            F _ → {}
+        }
         ? ( proc_eof . c child ) {
             ^ @ !Json McpStdioErr { F @ McpStdioErr { McpStdioEof } }
         } {
