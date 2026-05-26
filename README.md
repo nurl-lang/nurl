@@ -43,6 +43,18 @@ The same source always produces identical output. No UB, no platform differences
 ### 5. Full platform support
 One compilation pipeline → all target platforms without porting.
 
+### Performance — head-to-head with Python, Rust, Node
+
+A reproducible micro-benchmark suite lives in [`bench/`](bench/) — one source file per language, `bench/run.sh` compiles + runs every present language N times, prints a median-ms table. [`bench/RESULTS.md`](bench/RESULTS.md) captures the numbers from one specific machine (12-core Intel @ 3.5 GHz):
+
+| Benchmark         | NURL  | Python  | Rust  | Node    |
+|-------------------|------:|--------:|------:|--------:|
+| `lcg` (100M LCG iters)         |  10   | 27 459  |  16   |  9 680  |
+| `sieve` (π(10M))               |  69   |  5 898  |  62   |    142  |
+| `json_parse` (5× 64 KB)        |  14   |     34  |   5   |     47  |
+
+(Lower = better, median wall-clock ms across 5 runs.) On compute-bound work NURL lands within measurement noise of Rust — same LLVM `-O2 -flto` codegen. On `json_parse` NURL's pure-NURL parser beats Python's C-extension `json` ~2.4× and trails a hand-written zero-copy Rust parser by ~3×.
+
 ---
 
 ## Architecture
@@ -229,7 +241,9 @@ Docker.
 ### Compiler-in-wasm (offline / embeddable)
 
 The same `POST /build_wasm` pipeline can be pointed at `compiler/nurlc.nu`
-itself, producing a ~390 KB `nurlc.wasm` that **is** the NURL compiler:
+itself, producing a ~316 KB `nurlc.wasm` (verified 2026-05-25 at
+**315 708 bytes**; ROADMAP "Last updated" pins the exact figure per ship)
+that **is** the NURL compiler:
 
 ```bash
 ./startdev.sh        # one terminal: bring up the API container
@@ -501,7 +515,7 @@ The current compiler is deliberately minimal:
   - Phase 2A — slice-returning function calls transfer ownership to the caller's binding.
   - Phase 2B — string auto-drop for allocating runtime calls (`nurl_str_cat`, `_cat3/4`, `_int`, `_float`, `_slice`, `nurl_read_file`). Default ON, including for the compiler itself: retaining C runtime helpers (`nurl_lex_new`, `nurl_set_last_type`, `nurl_get_last_type`, `nurl_argv`, `nurl_sym_get`, `nurl_lex_filename`, `nurl_print_buf_stop`) `strdup` their inputs/outputs so callers can auto-drop safely. `?`, `~`, and `??` arms scope their `:` bindings in a new symtab frame so owned-string entries don't leak into sibling branches. Reassigning an owned `i8*` to a fresh allocating call frees the previous value first; allocating-call results passed inline as call arguments are released right after the callee returns (callee-borrows convention — retaining helpers must `strdup`).
   - Phase 2C — struct-field auto-drop: when a named-struct literal `@ T { ... }` populates a field directly from a fresh owned allocation, the compiler records a per-field drop against the binding's alloca and emits a load + `extractvalue` + `nurl_free` at scope exit. Covers two kinds: (a) `i8*` fields populated from allocating string calls (`nurl_str_cat`, `_cat3/4`, `_int`, `_float`, `_slice`, `nurl_read_file`); (b) slice `[T` fields populated from a slice literal `[ T | ... ]` or a slice-returning call. Conservative by design — only fields populated from a fresh allocation on the spot get a drop, so copying an already-owned binding into a struct does not cause a double-free. Nested owned-struct fields and arm-local struct bindings that fall through (no `^`) still leak, same as the existing arm-scoped string behaviour.
-- **Static borrow checker, on by default** — a diagnostic analysis pass (disable with `--no-borrowck`) catches the mistakes the conservative auto-drop layer cannot detect: reading a binding after its ownership has moved (use-after-move), aliasing an owned heap value so the buffer would be freed twice, and closures that capture a `: ~`-mutable struct by pointer and then escape the stack frame they point into (returned, pushed into a container, spawned onto a thread, or assigned into a longer-lived binding). It emits `warning:` and never changes generated code — a borrow-clean program compiles to byte-identical IR with or without it. Aliased-mutation (exclusive-access "N readers XOR 1 writer") checking is not yet implemented. Full rules and the not-yet-checked list: [`docs/MEMORY.md`](docs/MEMORY.md); design and roadmap: [`BORROW.md`](BORROW.md).
+- **Static borrow checker, on by default — diagnostics are HARD ERRORS** — a diagnostic analysis pass (disable with `--no-borrowck`) catches the mistakes the conservative auto-drop layer cannot detect: reading a binding after its ownership has moved (use-after-move), aliasing an owned heap value so the buffer would be freed twice, closures that capture a `: ~`-mutable struct by pointer and then escape the stack frame they point into (returned, pushed into a container, spawned onto a thread, or assigned into a longer-lived binding), aliased exclusive-access ("N readers XOR 1 writer") at a call site, and mutating a container while a `~`-foreach borrows its elements. Since 2026-05-25 these are **compile errors** — `error: use of moved value …` / `error: cannot mutate 'xs' while iterating over it` — and the compiler exits non-zero with the count of violations. The checker never changes generated code, so a borrow-clean program produces byte-identical IR with or without `--no-borrowck`. Full rules and the not-yet-checked list (`*T`, interprocedural escape): [`docs/MEMORY.md`](docs/MEMORY.md); design and phase log: [`BORROW.md`](BORROW.md).
 
 ---
 

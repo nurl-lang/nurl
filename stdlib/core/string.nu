@@ -369,6 +369,36 @@ $ `stdlib/core/char.nu`
     ^ @ String { . tmp ctl }
 }
 
+// Packed-layout fast constructor: one malloc for `ctl + buf` together
+// instead of the two `string_from_bytes` makes. For read-only Strings
+// (parsed JSON values, immutable lookup keys, …) this halves the
+// per-string alloc count. `vec_free` / `vec_free_with` / `__vec_grow`
+// in `core/vec.nu` detect the packed layout by `data == ctl + 24` so
+// the lifecycle is byte-identical to a normal String: it can still be
+// mutated and grown (growth allocates out into a separate buffer the
+// first time), and freed with the standard `string_free`.
+//
+// Use for known-immutable strings only — the first push or extend
+// pays for an unpacking copy. Mutate-heavy paths should keep using
+// `string_from_bytes`.
+@ string_from_bytes_packed * u src i n → String {
+    : i len ? > n 0 n 0
+    : i cap + len 1
+    : i total + 24 cap
+    : s pack ( nurl_alloc total )
+    : i data_off + # i pack 24
+    : s data # s data_off
+    // ctl slot 0 = data ptr, slot 1 = len, slot 2 = cap
+    ( nurl_poke pack 0 data_off )
+    ( nurl_poke pack 1 len )
+    ( nurl_poke pack 2 cap )
+    ? > len 0 { ( nurl_memcpy data # s src len ) } {}
+    : *u bp # *u data
+    : u zero # u 0
+    = . bp len zero
+    ^ @ String { pack }
+}
+
 // Deep copy of `str` into a fresh owned String. The two Strings share
 // no storage — mutating or freeing one never affects the other. Embedded
 // NUL bytes in [0, len) are preserved verbatim.

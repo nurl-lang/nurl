@@ -6,6 +6,356 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added — UDP datagram sockets + full DNS resolver (Tier D #6, 2026-05-26)
+
+Closes the last `IMPROVEMENTS.md` Tier D Roadmap §3 item the v0.9.0
+critic flagged as missing for v1.0. Three new public surfaces:
+
+1. **`stdlib/std/udp.nu`** — pure-NURL wrapper over runtime §18b. Dual-
+   stack IPv4/IPv6 by default (wildcard `udp_bind("", 0)` creates an
+   `AF_INET6` socket with `IPV6_V6ONLY=0` so a single fd serves both
+   v4 and v6 peers; literal `udp_bind("127.0.0.1", 0)` stays IPv4-only
+   on purpose). Sync + fiber-aware async on every send/recv: inside a
+   fiber, `udp_recv_from` / `udp_send_to` park on the reactor on
+   EAGAIN; outside any fiber, they fall back to blocking I/O
+   transparently. Exposed surface:
+   - lifecycle: `udp_bind`, `udp_bind_any`, `udp_connect`, `udp_close`
+   - send/recv: `udp_send_to`, `udp_send_str_to`, `udp_recv_from`,
+     `udp_send`, `udp_recv` (last two for connected-mode UDP)
+   - address: `udp_peer_addr` (borrowed), `udp_local_addr` (owned
+     String — how the caller discovers the kernel-assigned ephemeral
+     port after `udp_bind("", 0)`)
+   - options: `udp_set_timeout`, `udp_set_nonblock`, `udp_set_broadcast`
+   - multicast: `udp_join_group`, `udp_leave_group`,
+     `udp_set_multicast_ttl`, `udp_set_multicast_loop`. `iface` arg is
+     intentionally minimal (IPv4 IP literal or numeric ifindex; no
+     `if_nametoindex` so Win32 doesn't need `-liphlpapi`).
+
+2. **`stdlib/std/dns.nu`** — pure-NURL wrapper over runtime §18c.
+   System-resolver-based (`getaddrinfo` / `getnameinfo`), no c-ares
+   dep. Three entry points:
+   - `dns_resolve host` → `! ( Vec String ) NetErr` of A/AAAA literals
+     in the kernel's preferred order, dedup'd.
+   - `dns_resolve_port host port` → same, but each entry is formatted
+     as `"ip:port"` (IPv4) or `"[ip]:port"` (IPv6, RFC 3986 §3.2.2)
+     ready for direct `tcp_connect` / `udp_connect`.
+   - `dns_reverse ip` → `? String` (Some only when there's a real PTR
+     record — `NI_NAMEREQD`).
+
+3. **Runtime §18b / §18c (`stdlib/runtime.c`)** — implementation:
+   - `NurlUdp { fd, err_kind, family, peer }` opaque handle (~16 % the
+     size of `NurlTcp` — UDP has no TLS state to track).
+   - 22 new `nurl_udp_*` and 3 new `nurl_dns_*` exports; WASI stub
+     row at the bottom degrades every call to `NetOther` /
+     `strdup("")` so `wasm32-wasi` builds still link.
+   - Reuses §18's `NURL_NET_ERR_*` error space + `nurl__net_map_errno
+     / _wsa` mapping helpers; multicast group-family branching uses a
+     new `nurl__parse_numeric_addr` (`AI_NUMERICHOST`) so callers
+     don't have to thread family flags through the NURL API.
+   - DNS results come back as newline-separated heap strings; NURL
+     splits and dedupes are deferred to the wrapper (`__dns_split_lines`).
+
+Acceptance:
+
+- `compiler/tests/udp_basic.nu` — always-on (loopback only, no live
+  network). Covers send_to/recv_from roundtrip, peer-addr capture,
+  connected-mode send/recv on a separate pair, zero-length datagram,
+  wildcard dual-stack bind, broadcast + multicast TTL / loop
+  setsockopt smoke. Exit 0, output matches `correct.txt` baseline.
+- `compiler/tests/dns_basic.nu` — always-on (uses literals + the
+  `/etc/hosts` `localhost` mapping that every Linux/macOS/Win box
+  has, no external DNS). Covers resolve + resolve_port for both IPv4
+  and IPv6, IPv6 bracketed-port formatting, reverse lookup, empty-
+  input → `Err NetOther`.
+
+Runtime LOC delta: `stdlib/runtime.c` 4 790 → 5 606 (+816, +17 %)
+including the WASI stub row. Bootstrap fixed point unchanged at
+**1 620 300 B** (stage1 ≡ stage2 byte-identical IR) — the runtime
+extension is pure stdlib, no compiler IR perturbation.
+
+### Added — HTTP peer-bench (Tier D #3, 2026-05-25)
+
+`bench/run_http.sh` + `bench/http_server.{nu,js}` +
+`bench/rust_http_server/` (Cargo + hyper 1.9 + tokio multi-thread)
+close the long-standing "no Rust hyper / Node http peer comparison"
+gap that critic v0.9.0 §10 flagged. Drives `oha` 1.8.0 against three
+hello-world servers at four concurrency levels (1, 10, 50, 200),
+median of 3 × 10 s per cell. Captured numbers + commentary in
+`bench/HTTP_RESULTS.md`:
+
+| Server  | C = 1    | C = 10   | C = 50   | C = 200  |
+|---------|---------:|---------:|---------:|---------:|
+| NURL    | 14 451   | **68 960** |  60 897  |  59 044  |
+| Rust    | 14 507   |  47 703  | **86 699** | **114 694** |
+| Node    |  8 708   |  16 726  |  17 108  |  15 555  |
+
+(req/s, higher is better, best in bold per column.)
+
+Highlights:
+
+- NURL is parity with Rust hyper at C=1 (within < 1 %), and is **1.45× ahead**
+  of hyper at C=10 — NURL's 8-worker pool fits the workload while tokio's
+  12-worker default is over-provisioned at that concurrency.
+- Rust hyper pulls ahead at C ≥ 50, peaking at 115 k/s vs NURL's 59 k/s
+  (1.94×) at C=200.
+- NURL has **the lowest tail latency across the whole sweep**: p99 0.62 ms
+  at C=200 vs Rust's 6.19 ms and Node's 20.95 ms.
+- Node http plateaus at ~16 k/s — textbook single-event-loop signature.
+
+The Go `net/http` half of the originally-asked-for comparison is
+deferred: Go was not installed on the bench host at capture time.
+`bench/run_http.sh` has the lane reserved and `bench/README.md`
+documents the gap — a PR adding `bench/http_server.go` would re-publish
+a four-column table.
+
+### Added — More examples + refreshed catalogue (Tier D #4, 2026-05-25)
+
+Two-part deliverable closing ROADMAP §6 "More Examples":
+
+1. **`examples/find_clone.nu`** — grep-style recursive search over
+   files / directories with three modes:
+
+   ```
+   find_clone PATTERN [PATH ...]                  # literal substring
+   find_clone --list PAT[,PAT...] [PATH ...]      # comma-separated alternatives
+   find_clone --regex PAT [PATH ...]              # POSIX-extended regex
+   ```
+
+   PATH is one or more files or directories — directories recurse,
+   dotfiles are skipped, and with no PATH the tool reads stdin. Output
+   is `path:line:contents` per match; exit 0 on any match, 1 on no
+   match, 2 on usage / I/O error. Closure-shaped matchers
+   (`make_literal_test`, `make_list_test`, `make_regex_test`) so
+   `scan_lines` is mode-agnostic; `walk_dir` returns -1 on
+   not-a-directory so the dispatcher falls back to the file scanner
+   cleanly. Built on top of `stdlib/std/fs.nu` (`read_file`,
+   `dir_list`), `stdlib/ext/regex.nu` (`regex_compile` / `_test`), and
+   the existing `nurl_str_*` helpers. Pure CLI I/O — runs on the
+   public playground.
+
+2. **`examples/README.md` refresh** — from a 3-of-36 catalogue to all
+   36 rows, organised by category (CLI tools / Algorithms / Data
+   formats / Language showcase / HTTP & RPC / LLM API / SDL canvas).
+   Each row carries a one-line description plus a **playground** or
+   **local** tag describing where it can run. *playground* = pure
+   compute + stdin / argv / file I/O (runs on `play.nurl-lang.org`
+   as-is); *local* = needs network, a server listening port, an
+   `ANTHROPIC_API_KEY`, SDL2, or microphone access.
+
+The critic-suggested agent-loop variants and MCP-client demo were
+deliberately omitted: `examples/claude_agent.nu` already covers the
+agent shape, and an MCP-client-from-the-public-playground would need
+either secret injection (API keys) or WASM outbound sockets,
+neither of which the playground exposes today.
+
+### Added — GitHub Actions CI (critic v0.9.0 Tier D #2, 2026-05-25)
+
+`.github/workflows/ci.yml` lifts the previously-local build + test +
+sanitiser gate to PR-level. Two parallel jobs on `ubuntu-latest`:
+
+- **`build-test`** — installs clang + optional FFI dev libs
+  (`libcurl4-openssl-dev`, `libssl-dev`, `libsqlite3-dev`,
+  `libpq-dev`, `zlib1g-dev`, `libzstd-dev`) so every
+  `stdlib/runtime.<lib>` sentinel lights up, then runs `./build.sh`
+  (bootstrap stage1 ≡ stage2 fixed point + the full `run_tests.sh`
+  corpus). 15-min timeout.
+- **`sanitizers`** — same setup, runs `./build.sh --san --no-tests`
+  to build an ASan + UBSan-instrumented stack, then
+  `compiler/tests/run_san_tests.sh` over the corpus. 25-min timeout.
+
+Triggers on push to `main` / `Improvements`, PR-to-`main`, and
+`workflow_dispatch` (manual rerun). `concurrency.cancel-in-progress`
+cancels older runs when a new commit lands on the same ref so the
+queue can't fill up on a fast-typing day.
+
+`nurlfmt --check` is deliberately NOT yet wired up — ~100 .nu files
+in the current stdlib / tests / examples corpus (and
+`compiler/nurlc.nu` itself) are not in canonical form, so adding the
+check today would fail every PR with an unrelated 100-line diff.
+The follow-up path is documented inline in the workflow comments:
+either a single repo-wide `nurlfmt --write` pass first, or grow the
+check scope file-by-file as canonicalisation lands.
+
+### Added — Structured logging (critic v0.9.0 Tier D #1, 2026-05-25)
+
+`stdlib/std/log.nu` gains two structured-logging features that the
+critic flagged as missing-for-v1.0 (ROADMAP §2):
+
+1. **Key/value variants** — `log_debug_kv1` / `_kv2` / `_kv3`,
+   `log_info_kv1..3`, `log_warn_kv1..3`, `log_error_kv1..3`. Twelve
+   fixed-arity helpers that accept 1..3 `s` key / `s` value pairs
+   alongside a message. Same below-threshold suppression as the raw
+   and `fN` variants.
+
+2. **JSON output mode** — `log_set_json T` / `log_set_json F`,
+   `log_get_json`. When JSON is on, every `log_*` call emits a single
+   `{"level":"info","msg":"…","key":"value",…}` line instead of the
+   `[INFO]  msg key=value` text form. Compatible with `jq`, Logstash,
+   Loki, CloudWatch, etc. — values are RFC 8259-compliant (named
+   escapes for `"` `\` `\n` `\r` `\t`; remaining control bytes
+   0x00..0x1F emit `\u00XX`).
+
+The existing raw `log_<level>` and `log_<level>fN` calls route
+through the new shared `__log_dispatch` so JSON mode applies
+uniformly to every call site. The per-byte JSON-escape walker uses
+a `*u` pointer instead of `nurl_str_get` to avoid the O(strlen)
+per-character cost. Compiler / bootstrap untouched; regression
+`compiler/tests/log_structured.nu` exercises text mode, JSON mode,
+escape coverage and below-threshold suppression. `jq -c .`
+round-trips every JSON line emitted by the test.
+
+### Added — Tier A diagnostics for the v0.9.0 critic (2026-05-25)
+
+Closes the four "grammar-legal but semantically dead" cases the
+external review flagged as silent compiles. Each is a small, local
+compiler change; bootstrap fixed point holds (stage1 ≡ stage2
+byte-identical IR at **1 620 300 B**); full test corpus green. The
+original critic-driven backlog (`IMPROVEMENTS.md`) was retired
+2026-05-26 after all 20/21 items shipped and the final Mobile/Embedded
+row graduated to ROADMAP §4 as a long-running roadmap item.
+
+1. **`^` vs `^^` XOR confusion `warning:`** — `gen_ret` peeks the
+   token after the returned expression. If it is on the same source
+   line as the `^` AND is value-producing (not `:` / `=` / `;` / `}`
+   / `)` / `]` / `{` / EOF), the user almost certainly wrote `^ X Y`
+   intending XOR. Emits a soft `warning:` naming `^^` (two adjacent
+   carets, no space) as the cure. Test: `should_warn_caret_xor.nu`.
+2. **Bare-callable-as-statement `error:`** — `gen_stmt` checks for
+   `name args` (no parens) at statement position. If `name` is a
+   known callable (registered in syms with no `__ptr` / `__global`
+   / `__param`), dies with `( name args )`-cure pointer. The
+   companion `gen_ffi_decl` now stamps `<name>__ffi = 1` so FFI
+   builtins like `nurl_print` are detected alongside @-fns. Test:
+   `should_fail_bare_ident_stmt.nu` (PoC: `nurl_print \`oops\``).
+3. **Use-after-`_free` via wrapper `error:`** — auto-infer `sink`
+   convention on parameters that a function passes to a destructor
+   (`*_free`) or to another fn's existing `sink` slot. New helper
+   `bck_record_inferred_sink` accumulates into
+   `__fn_inferred_sink__` per fn body; `gen_fn_decl_concrete`
+   merges into `g_fn_sink[fname]` after body parses, deduping
+   against the explicit `sink` marker. Closes the indirect
+   `( take s ) ( read s )` use-after-free the critic exhibited.
+   Test: `should_fail_uaf_indirect.nu`. Also added
+   `str_word_index` helper next to `str_contains_word`.
+4. **Per-instantiation source line for generics** — replaces the
+   opaque `<generic>:1:21:` synthetic filename with
+   `<generic vec_as_slice__i64 from user.nu:42>:1:21:` so a parse
+   error during the substituted-body re-parse names the call site
+   in the user's own code. `defer_instantiation` now captures the
+   call-site file + line; `flush_deferred_instantiations` passes
+   them to `emit_one_instantiation`, which builds the synthetic
+   filename. (Diagnostic-only — IR unchanged.)
+
+### Changed — `stdlib/ext/json.nu` parser ~34× faster (2026-05-25)
+
+`json_parse` of the `bench/json_parse` payload (5 × 64 KB) dropped
+from **479 ms** to **14 ms** — now faster than Python's C-extension
+`json` (~34 ms) and within ~3× of a hand-written zero-copy Rust
+parser (~5 ms). Two landed changes:
+
+1. **Direct `*u` pointer reads instead of `nurl_str_get`.** Every
+   `__jp_peek` was paying a full `strlen` of the whole input (the
+   `core/string.nu` helper does an `strlen` for the bounds check) —
+   a 64 KB parse spent gigabytes of memory bandwidth in `strlen`
+   alone, classic O(n²). Replaced with a cached `*u`-based byte read
+   against `. p src`, plus a `memchr`-driven fast path in
+   `__jp_parse_string` that slices the literal byte range when the
+   string contains no `\` escape (the common case).
+
+2. **Packed-layout `String` constructor.** New
+   `core/string.nu::string_from_bytes_packed` allocates the 24-byte
+   `Vec` control block and the data buffer in a single
+   `nurl_alloc(24 + n + 1)`. `vec_free` / `vec_free_with` /
+   `__vec_grow` in `core/vec.nu` detect the layout by `data ==
+   ctl + 24`; the lifecycle is byte-identical to a normal String
+   (it can still grow — the first growth pays for an unpacking copy
+   out into a separate buffer). For JSON parsing every `JNum` /
+   `JStr` is read-only after construction, so this exact case halves
+   the per-string allocation count.
+
+Bench runner (`bench/run.sh`) also stopped forking `date` twice per
+measurement by switching to `$EPOCHREALTIME` arithmetic (bash 5+),
+shaving ~3 ms of measurement overhead per cell.
+
+`bench/RESULTS.md` and `README.md` updated with the new headline
+numbers. Bootstrap fixed point holds; full test corpus green;
+no API or grammar changes.
+
+### Added — `bench/` peer-comparison benchmark suite (2026-05-25)
+
+Three reproducible micro-benchmarks with one source file per language
+(NURL, Python 3, Rust, Node.js):
+
+* `bench/lcg.{nu,py,rs,js}` — 100M-step MMIX linear congruential
+  generator. Tight i64 multiply + add with a single-stream data
+  dependency that defeats LLVM's closed-form folding.
+* `bench/sieve.{nu,py,rs,js}` — Sieve of Eratosthenes computing
+  π(10 000 000) = 664 579. Memory bandwidth + branch prediction.
+* `bench/json_parse.{nu,py,rs,js}` — 5 parses of a deterministic
+  ~64 KB JSON file. Each language uses **what ships in its standard
+  distribution** (Python `json`, Node `JSON.parse`, NURL
+  `stdlib/ext/json.nu`; Rust links a small hand-written
+  recursive-descent parser since it has no JSON in stdlib).
+
+`bench/run.sh` compiles each NURL + Rust target, runs every present
+language N times (default 5) with a per-run `timeout`, and prints a
+median-wall-clock-ms table. Missing tools render as `n/a`; a cell that
+hits the timeout renders as `>30s` instead of hanging the suite.
+
+`bench/RESULTS.md` captures the numbers from one specific machine plus
+honest commentary:
+
+* On `lcg` and `sieve` NURL lands within measurement noise of Rust —
+  same LLVM `-O2 -flto` codegen on both sides.
+* On `json_parse` NURL's pure-NURL parser is ~12× slower than Python's
+  C `json` and ~50× slower than a hand-written Rust parser. The
+  module's allocator-and-Vec-growth path through recursive descent is
+  the explanation, and a zero-copy slice-based rewrite would close
+  most of the gap — tracked as a follow-up.
+
+This addresses `critic.md` §10's central complaint ("the 38× keep-alive
+speedup is NURL-vs-NURL, not NURL-vs-peers — there is no published
+benchmark against any peer server"). The HTTP-server-vs-`net/http`
+peer benchmark the critic actually asked for needs a Go install and a
+`wrk`-shaped harness and is tracked as the next benchmark suite.
+
+### Changed — borrow-checker diagnostics are now hard errors
+
+`BORROW.md` Phase 8 final landed on 2026-05-25. The borrow checker has
+been on by default since 2026-05-20 and ran clean across the whole
+compiler + stdlib + 250+-file test/example corpus over the 5-day soak.
+Promotion to error is now live:
+
+* `bck_diag` (Phase 1 use-after-move) and `bck_esc_warn` (Phase 3
+  escape analysis + Phase 5 aliased-mut + Phase 6 iterator
+  invalidation) emit `: error: ` instead of `: warning: ` and bump a
+  new `g_bck_errors` counter. `main()` exits non-zero after
+  `parse_program` if any violation was recorded — every error
+  surfaces in one run (same shape as a C compiler), not one at a
+  time.
+* The test harness now treats `borrow_*` tests as **expected compile
+  failures with an `ERRORS` baseline blob** rather than "compile OK +
+  WARNINGS". The exact error text remains regression-protected
+  (BORROW.md watch #2).
+* `--no-borrowck` remains the escape hatch; the abort message points
+  at it so a user hitting a false positive is never wedged.
+* Bootstrap fixed point holds (the checker is diagnostic-only — IR is
+  byte-identical with or without `--no-borrowck`): stage1 ≡ stage2 at
+  **1 602 394 B**.
+
+This closes `critic.md` §4's central complaint — the "vibes-based
+memory model" framing no longer applies. Bug classes 1 (use-after-
+move), 2 (alias double-free), 3 (closure escape), 5 (call-site
+aliased mutation) and 6 (iterator invalidation) are now COMPILE
+ERRORS by default. Bug class 4 (`*T` raw pointers) and the
+remainder of Phase 5 (aliased mutation through nested-argument
+reads) are documented as `--no-borrowck`-style escape hatches in
+[`docs/MEMORY.md`](docs/MEMORY.md).
+
+`README.md`, `docs/MEMORY.md` and `BORROW.md` updated to match.
+
 ## [0.9.0] — 2026-05-24
 
 ### Changed — `refactor/nurlify` branch
@@ -1327,7 +1677,7 @@ sanitized corpus.
   leftover from the pre-arena CSV prototype; surfaced and removed
   during the critic-cleanup sweep.
 
-## [0.6.1] - 2025-10-19
+## [0.6.1] - 2026-05-17
 
 ### Added
 

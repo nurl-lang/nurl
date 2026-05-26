@@ -1,0 +1,102 @@
+name: ci
+
+# Closes ROADMAP §6 / IMPROVEMENTS.md Tier D #2 (critic v0.9.0).
+# The local gate (./build.sh + run_san_tests.sh) has been the pre-1.0
+# review tool; this workflow lifts it to PR-level so every branch tip
+# is exercised on Ubuntu out of the box.
+
+on:
+  push:
+    branches: [main, Improvements]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel an older in-flight run when a new commit lands on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build + bootstrap fixed point + test corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build deps (clang + optional FFI libs)
+        # The optional dev packages let the FFI sentinel checks
+        # (stdlib/runtime.<lib>) light up so the corresponding ext/
+        # modules build. With any of these missing, the affected
+        # FFI calls return their *_Other / *_Unsupported variant
+        # instead of breaking the build.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            pkg-config \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            libsqlite3-dev \
+            libpq-dev \
+            zlib1g-dev \
+            libzstd-dev
+          clang --version
+
+      - name: ./build.sh (stage1 ≡ stage2 fixed point + run_tests.sh)
+        # build.sh itself prints the final line "BUILD SUCCESS &
+        # TESTS PASSED" only when the bootstrap fixed point holds
+        # AND the test corpus baseline matches. Any failure surfaces
+        # the relevant diff so we don't need extra grep here.
+        run: ./build.sh
+
+  sanitizers:
+    name: AddressSanitizer + UndefinedBehaviorSanitizer
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build deps (clang + optional FFI libs)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            pkg-config \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            libsqlite3-dev \
+            libpq-dev \
+            zlib1g-dev \
+            libzstd-dev
+          clang --version
+
+      - name: ./build.sh --san (instrumented bootstrap)
+        # --no-tests so the standard runner does not run with the
+        # sanitised runtime; run_san_tests.sh below is the
+        # sanitiser-aware corpus driver.
+        run: ./build.sh --san --no-tests
+
+      - name: ASan + UBSan corpus
+        # Leak detection is opt-in via LSAN_DETECT_LEAKS=1; NURL has
+        # several process-lifetime globals (g_str_pool, g_sym_arena)
+        # that are intentionally never freed. The non-leak ASan +
+        # UBSan signal is what catches actual codegen bugs.
+        run: ./compiler/tests/run_san_tests.sh
+
+# nurlfmt --check is deliberately NOT in this workflow yet. The
+# README pins it as "the CI gate", but ~100 .nu files in the current
+# stdlib / tests / examples corpus (and compiler/nurlc.nu itself) are
+# not in canonical form. Wiring nurlfmt --check today would fail
+# every PR with a 100-line diff that has nothing to do with the
+# change. The path forward is one of:
+#   1. land a single repo-wide `nurlfmt --write` pass as its own
+#      formatting commit, then add the job here;
+#   2. or restrict the check to compiler/nurlc.nu first and grow the
+#      scope as files are canonicalised.
+# Tracked as a follow-up to critic v0.9.0 Tier D #2.

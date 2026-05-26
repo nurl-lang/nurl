@@ -262,17 +262,21 @@ for src in "${tests[@]}"; do
         continue
     fi
 
-    # ── borrow_* — --borrowck compile-only, captures WARNINGS block ──
+    # ── borrow_* — borrow violations are now compile errors (BORROW.md
+    #               Phase 8 final, 2026-05-25). Each test file contains
+    #               one or more positive cases that MUST trip the
+    #               checker; the run is expected to fail and the error
+    #               text is baselined for regression protection.
     if [[ "$name" == borrow_* ]]; then
-        if ! "$NURLC" --borrowck "$src" > "$ll" 2>"$err"; then
-            record_failure "$name" compile "$src" "$ll" "$bin" "$err"
+        if "$NURLC" "$src" > "$ll" 2>"$err"; then
+            record_failure "$name" unexpected_compile_ok "$src" "$ll" "$bin" "$err"
             continue
         fi
         printf '=== %s ===\n' "$name" >> "$SUCCESS"
-        echo "COMPILE OK" >> "$SUCCESS"
+        echo "COMPILE FAIL" >> "$SUCCESS"
         if [[ -s "$err" ]]; then
             strip_root "$err"
-            echo "WARNINGS" >> "$SUCCESS"
+            echo "ERRORS" >> "$SUCCESS"
             append_capped "$SUCCESS" "$err"
         fi
         echo >> "$SUCCESS"

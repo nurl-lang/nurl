@@ -123,6 +123,12 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/option.nu`
 $ `stdlib/core/result.nu`
 
+// memchr — glibc's SIMD-vectorised byte search. Used in
+// `__jp_parse_string`'s fast path to find the closing quote and (in
+// the same direction) the first backslash, replacing a byte-by-byte
+// NURL loop. Returns NULL when the byte is not present in [buf, buf+n).
+& `c` @ memchr s buf i c i n → s
+
 : | Json {
     JNull
     JBool b
@@ -283,9 +289,27 @@ $ `stdlib/core/result.nu`
     ^ >= . p pos . p len
 }
 
+// Read byte at absolute offset `k`. Returns -1 when out of range so
+// the parser's main loop can distinguish "EOF" from "literal NUL byte"
+// (the latter would be a parse error anyway, but callers test against
+// -1, not 0). Uses a direct `*u` pointer read against the cached
+// `. p src`; the historical `nurl_str_get` route incurred a fresh
+// `strlen` of the whole input on every single byte (O(n²) parse over
+// a 64 KB JSON spent gigabytes of bandwidth in `strlen` alone — fixed
+// 2026-05-25, dropped end-to-end json_parse time ~30× on the
+// `bench/json_parse` payload).
+@ __jp_byte_at * JsonParser p i k → i {
+    ? | < k 0 >= k . p len { ^ -1 } {}
+    : s raw . p src
+    : *u bp # *u raw
+    ^ & 255 # i . bp k
+}
+
 @ __jp_peek * JsonParser p → i {
-    ? ( __jp_eof p ) { ^ -1 } {}
-    ^ ( nurl_str_get . p src . p pos )
+    ? >= . p pos . p len { ^ -1 } {}
+    : s raw . p src
+    : *u bp # *u raw
+    ^ & 255 # i . bp . p pos
 }
 
 @ __jp_bump * JsonParser p → i {
@@ -295,13 +319,18 @@ $ `stdlib/core/result.nu`
 }
 
 @ __jp_skip_ws * JsonParser p → v {
+    : s raw . p src
+    : *u bp # *u raw
+    : i n . p len
+    : ~ i k . p pos
     : ~ b more T
-    ~ & more ! ( __jp_eof p ) {
-        : i c ( nurl_str_get . p src . p pos )
+    ~ & more < k n {
+        : i c & 255 # i . bp k
         ? | | | == c 32 == c 9 == c 10 == c 13
-        { = . p pos + . p pos 1 }
+        { = k + k 1 }
         { = more F }
     }
+    = . p pos k
 }
 
 // Match a literal keyword (e.g. `null`, `true`, `false`). Advances pos
@@ -309,10 +338,14 @@ $ `stdlib/core/result.nu`
 @ __jp_match_kw * JsonParser p s kw → b {
     : i n ( nurl_str_len kw )
     ? > + . p pos n . p len { ^ F } {}
+    : s raw . p src
+    : *u bp # *u raw
+    : *u bk # *u kw
+    : i base . p pos
     : ~ i k 0
     : ~ b ok T
     ~ & ok < k n {
-        ? != ( nurl_str_get . p src + . p pos k ) ( nurl_str_get kw k )
+        ? != & 255 # i . bp + base k & 255 # i . bk k
         { = ok F } {}
         = k + k 1
     }
@@ -336,12 +369,13 @@ $ `stdlib/core/result.nu`
     : i target pos_override
     ? > target n { = target n } {}
     ? < target 0 { = target 0 } {}
-    : s src . p src
+    : s raw . p src
+    : *u bp # *u raw
     : ~ i line 1
     : ~ i col 1
     : ~ i k 0
     ~ < k target {
-        : i c ( nurl_str_get src k )
+        : i c & 255 # i . bp k
         ? == c 10 {
             = line + line 1
             = col 1
@@ -384,7 +418,7 @@ $ `stdlib/core/result.nu`
 
     // RFC 8259: leading zero is only allowed when the integer part is
     // exactly `0` (so `0.5`, `0e2`, `0` ok; `01`, `007` rejected).
-    ? & >= digit_count 2 == ( nurl_str_get . p src first_digit_pos ) 48 {
+    ? & >= digit_count 2 == ( __jp_byte_at p first_digit_pos ) 48 {
         ^ @ !Json JsonError { F ( __jp_err_at p first_digit_pos @ ParseErr { BadFormat } ) }
     } {}
 
@@ -422,12 +456,10 @@ $ `stdlib/core/result.nu`
     } {}
 
     : i n_bytes - . p pos token_start
-    : String raw ( string_with_cap n_bytes )
-    : ~ i k token_start
-    ~ < k . p pos {
-        ( string_push_char raw ( nurl_str_get . p src k ) )
-        = k + k 1
-    }
+    : s src_raw . p src
+    : *u src_bp # *u src_raw
+    : *u start_ptr # *u + # i src_bp token_start
+    : String raw ( string_from_bytes_packed start_ptr n_bytes )
     ^ @ !Json JsonError { T @ Json { JNum raw } }
 }
 
@@ -505,6 +537,42 @@ $ `stdlib/core/result.nu`
         ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
     } {}
     = . p pos + . p pos 1
+
+    // Fast path: scan forward for the closing quote OR an escape. If we
+    // hit the close before any backslash, the string is byte-identical
+    // with its source bytes — copy the whole run with one memcpy via
+    // `string_from_bytes` and skip the per-char push loop entirely. In
+    // the bench/json_parse payload (RFC 8259 numbers + record-name
+    // strings of the `record-00000123` shape) this fires on 100 % of
+    // strings and is the difference between "slower than Python" and
+    // "competitive with hand-written Rust".
+    : s raw . p src
+    : *u bp # *u raw
+    : i len . p len
+    : i body_start . p pos
+    : i remaining - len body_start
+    : s body_start_ptr # s + # i bp body_start
+    // First locate the closing quote (the common case — every record-
+    // shape string in well-formed JSON has one). memchr is SIMD-fast.
+    : s close_p ( memchr body_start_ptr 34 remaining )
+    ? != # i close_p 0 {
+        : i close_off - # i close_p # i bp
+        : i hit_len - close_off body_start
+        // Then check whether the spanned range contains a backslash —
+        // if not, the bytes are literal and we can memcpy-slice them
+        // directly without walking the escape decoder.
+        : s esc_p ( memchr body_start_ptr 92 hit_len )
+        ? == # i esc_p 0 {
+            : *u from # *u body_start_ptr
+            : String fs ( string_from_bytes_packed from hit_len )
+            = . p pos + close_off 1
+            ^ @ !String JsonError { T fs }
+        } {}
+    } {}
+    // Else: contains an escape, or no close before EOF. Fall through to
+    // the canonical char-by-char loop, which handles both.
+    // Else: contains an escape, or hit EOF before a close. Fall through
+    // to the canonical char-by-char loop, which handles both.
 
     : String out ( string_with_cap 16 )
     : ~ b done F
