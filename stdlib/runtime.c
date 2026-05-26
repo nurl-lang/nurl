@@ -3384,6 +3384,785 @@ void nurl_tcp_set_timeout(long long handle, long long ms) {
 #endif
 }
 
+/* ── §18b  UDP sockets (dual-stack IPv4/IPv6 + multicast) ──────── */
+/*
+ * Datagram counterpart to §18. Each NurlUdp owns one socket plus a heap
+ * "ip:port" peer-address string that gets refreshed on the most recent
+ * recv_from / connect. NURL_NET_ERR_* codes are shared with §18 so the
+ * NURL `NetErr` enum classifies UDP failures the same way.
+ *
+ * Dual-stack: udp_bind("", port) creates an AF_INET6 socket with
+ * IPV6_V6ONLY=0 so a single fd serves IPv4 + IPv6 traffic. Literal
+ * binds honour the literal's family (so udp_bind("127.0.0.1", port)
+ * is IPv4-only on purpose).
+ *
+ * Multicast: udp_join_group / _leave_group dispatch on the group's
+ * address family. The `iface` argument is an IPv4 literal of the
+ * desired interface IP (v4 path) or a numeric ifindex string (v6
+ * path); empty string ⇒ the default interface (INADDR_ANY / 0). We
+ * deliberately do NOT call if_nametoindex to keep Win32 builds free
+ * of the -liphlpapi link dep.
+ */
+
+typedef struct NurlUdp {
+    nurl_sockfd_t fd;
+    long long     err_kind;
+    int           family;     /* AF_INET / AF_INET6 / AF_UNSPEC */
+    char         *peer;       /* owned "ip:port" of last peer; NULL if none */
+} NurlUdp;
+
+static NurlUdp *nurl__udp_new_handle(void) {
+    NurlUdp *h = (NurlUdp*)calloc(1, sizeof(NurlUdp));
+    if (!h) return NULL;
+    h->fd       = NURL_INVALID_SOCK;
+    h->err_kind = NURL_NET_ERR_OTHER;
+    h->family   = AF_UNSPEC;
+    h->peer     = NULL;
+    return h;
+}
+
+/* sockaddr → owned "ip:port" (IPv4) or "[ip]:port" (IPv6). NULL on OOM.
+ * Uses getnameinfo with NI_NUMERICHOST so no DNS lookup happens. */
+static char *nurl__net_format_sockaddr(const struct sockaddr *sa,
+                                       socklen_t salen) {
+    char host[INET6_ADDRSTRLEN + 4] = {0};
+    char port[16] = {0};
+    if (!sa || salen == 0) return strdup("");
+    if (getnameinfo(sa, salen, host, sizeof(host), port, sizeof(port),
+                    NI_NUMERICHOST | NI_NUMERICSERV) != 0) {
+        return strdup("");
+    }
+    size_t need = strlen(host) + strlen(port) + 8;
+    char *out = (char*)malloc(need);
+    if (!out) return NULL;
+    if (sa->sa_family == AF_INET6) {
+        snprintf(out, need, "[%s]:%s", host, port);
+    } else {
+        snprintf(out, need, "%s:%s", host, port);
+    }
+    return out;
+}
+
+long long nurl_udp_bind(const char *host, long long port) {
+#ifdef _WIN32
+    if (!nurl__net_wsa_init()) {
+        NurlUdp *h = nurl__udp_new_handle();
+        if (!h) return 0;
+        h->err_kind = NURL_NET_ERR_OTHER;
+        return (long long)(uintptr_t)h;
+    }
+#endif
+    NurlUdp *h = nurl__udp_new_handle();
+    if (!h) return 0;
+    if (port < 0 || port > 65535) {
+        h->err_kind = NURL_NET_ERR_BIND;
+        return (long long)(uintptr_t)h;
+    }
+    char portstr[16];
+    snprintf(portstr, sizeof(portstr), "%ld", (long)port);
+
+    struct addrinfo hints, *res = NULL, *ai;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_protocol = IPPROTO_UDP;
+    const char *node;
+    if (host && *host) {
+        node = host;
+        /* Numeric literal? Avoid a DNS round-trip for the common case. */
+        hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV;
+        if (getaddrinfo(node, portstr, &hints, &res) != 0 || !res) {
+            /* Not numeric — retry as a hostname (e.g. "localhost"). */
+            res = NULL;
+            hints.ai_flags = 0;
+            if (getaddrinfo(node, portstr, &hints, &res) != 0 || !res) {
+                h->err_kind = NURL_NET_ERR_BIND;
+                return (long long)(uintptr_t)h;
+            }
+        }
+    } else {
+        node = NULL;
+        /* Prefer IPv6 dual-stack for the wildcard bind. */
+        hints.ai_family = AF_INET6;
+        hints.ai_flags  = AI_PASSIVE | AI_NUMERICSERV;
+        if (getaddrinfo(node, portstr, &hints, &res) != 0 || !res) {
+            /* Stack lacks IPv6 → fall back to IPv4 wildcard. */
+            res = NULL;
+            hints.ai_family = AF_INET;
+            if (getaddrinfo(node, portstr, &hints, &res) != 0 || !res) {
+                h->err_kind = NURL_NET_ERR_BIND;
+                return (long long)(uintptr_t)h;
+            }
+        }
+    }
+
+    nurl_sockfd_t fd = NURL_INVALID_SOCK;
+    int chosen_family = AF_UNSPEC;
+    long long last_err = NURL_NET_ERR_BIND;
+    for (ai = res; ai; ai = ai->ai_next) {
+        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd == NURL_INVALID_SOCK) continue;
+        int on = 1;
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
+                   (const char*)&on, (int)sizeof(on));
+        /* Dual-stack wildcard: ask the kernel to also serve IPv4. */
+        if (ai->ai_family == AF_INET6 && (!host || !*host)) {
+            int off = 0;
+            setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY,
+                       (const char*)&off, (int)sizeof(off));
+        }
+        if (bind(fd, ai->ai_addr, (int)ai->ai_addrlen) == 0) {
+            chosen_family = ai->ai_family;
+            break;
+        }
+#ifdef _WIN32
+        last_err = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_BIND);
+#else
+        last_err = nurl__net_map_errno(errno, NURL_NET_ERR_BIND);
+#endif
+        nurl_close_sock(fd);
+        fd = NURL_INVALID_SOCK;
+    }
+    freeaddrinfo(res);
+
+    if (fd == NURL_INVALID_SOCK) {
+        h->err_kind = last_err;
+        return (long long)(uintptr_t)h;
+    }
+    h->fd       = fd;
+    h->family   = chosen_family;
+    h->err_kind = NURL_NET_ERR_OK;
+    return (long long)(uintptr_t)h;
+}
+
+long long nurl_udp_connect(long long handle,
+                           const char *host, long long port) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h) return -1;
+    if (h->fd == NURL_INVALID_SOCK) {
+        h->err_kind = NURL_NET_ERR_CLOSED;
+        return -1;
+    }
+    if (!host || !*host || port < 0 || port > 65535) {
+        h->err_kind = NURL_NET_ERR_OTHER;
+        return -1;
+    }
+    char portstr[16];
+    snprintf(portstr, sizeof(portstr), "%ld", (long)port);
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_DGRAM;
+    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) {
+        h->err_kind = NURL_NET_ERR_OTHER;
+        return -1;
+    }
+    int rc = connect(h->fd, res->ai_addr, (int)res->ai_addrlen);
+    if (rc == 0) {
+        free(h->peer);
+        h->peer = nurl__net_format_sockaddr(res->ai_addr,
+                                            (socklen_t)res->ai_addrlen);
+    }
+    freeaddrinfo(res);
+    if (rc != 0) {
+#ifdef _WIN32
+        h->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_OTHER);
+#else
+        h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_OTHER);
+#endif
+        return -1;
+    }
+    h->err_kind = NURL_NET_ERR_OK;
+    return 0;
+}
+
+long long nurl_udp_send_to(long long handle, const char *buf, long long n,
+                           const char *host, long long port) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h) return -1;
+    if (h->fd == NURL_INVALID_SOCK) {
+        h->err_kind = NURL_NET_ERR_CLOSED;
+        return -1;
+    }
+    if (n < 0 || (n > 0 && !buf) || !host || !*host ||
+        port < 0 || port > 65535) {
+        h->err_kind = NURL_NET_ERR_WRITE;
+        return -1;
+    }
+    char portstr[16];
+    snprintf(portstr, sizeof(portstr), "%ld", (long)port);
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_DGRAM;
+    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) {
+        h->err_kind = NURL_NET_ERR_WRITE;
+        return -1;
+    }
+#ifdef _WIN32
+    int sent = sendto(h->fd, buf, (int)n, 0,
+                      res->ai_addr, (int)res->ai_addrlen);
+#else
+    ssize_t sent;
+    do {
+        sent = sendto(h->fd, buf, (size_t)n,
+#  ifdef MSG_NOSIGNAL
+                      MSG_NOSIGNAL,
+#  else
+                      0,
+#  endif
+                      res->ai_addr, (socklen_t)res->ai_addrlen);
+    } while (sent < 0 && errno == EINTR);
+#endif
+    freeaddrinfo(res);
+    if (sent < 0) {
+#ifdef _WIN32
+        h->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_WRITE);
+#else
+        h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_WRITE);
+#endif
+        return -1;
+    }
+    h->err_kind = NURL_NET_ERR_OK;
+    return (long long)sent;
+}
+
+long long nurl_udp_recv_from(long long handle, char *buf, long long n) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h) return -1;
+    if (h->fd == NURL_INVALID_SOCK) {
+        h->err_kind = NURL_NET_ERR_CLOSED;
+        return -1;
+    }
+    if (n <= 0 || !buf) {
+        h->err_kind = NURL_NET_ERR_READ;
+        return -1;
+    }
+    struct sockaddr_storage src;
+    memset(&src, 0, sizeof(src));
+#ifdef _WIN32
+    int srclen = (int)sizeof(src);
+    int rd = recvfrom(h->fd, buf, (int)n, 0,
+                      (struct sockaddr*)&src, &srclen);
+#else
+    socklen_t srclen = (socklen_t)sizeof(src);
+    ssize_t rd;
+    do {
+        rd = recvfrom(h->fd, buf, (size_t)n, 0,
+                      (struct sockaddr*)&src, &srclen);
+    } while (rd < 0 && errno == EINTR);
+#endif
+    if (rd < 0) {
+#ifdef _WIN32
+        h->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_READ);
+#else
+        h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_READ);
+#endif
+        return -1;
+    }
+    free(h->peer);
+    h->peer = nurl__net_format_sockaddr((struct sockaddr*)&src,
+                                        (socklen_t)srclen);
+    h->err_kind = NURL_NET_ERR_OK;
+    return (long long)rd;
+}
+
+long long nurl_udp_send(long long handle, const char *buf, long long n) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h) return -1;
+    if (h->fd == NURL_INVALID_SOCK) {
+        h->err_kind = NURL_NET_ERR_CLOSED;
+        return -1;
+    }
+    if (n < 0 || (n > 0 && !buf)) {
+        h->err_kind = NURL_NET_ERR_WRITE;
+        return -1;
+    }
+#ifdef _WIN32
+    int sent = send(h->fd, buf, (int)n, 0);
+#else
+    ssize_t sent;
+    do {
+        sent = send(h->fd, buf, (size_t)n,
+#  ifdef MSG_NOSIGNAL
+                    MSG_NOSIGNAL
+#  else
+                    0
+#  endif
+                    );
+    } while (sent < 0 && errno == EINTR);
+#endif
+    if (sent < 0) {
+#ifdef _WIN32
+        h->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_WRITE);
+#else
+        h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_WRITE);
+#endif
+        return -1;
+    }
+    h->err_kind = NURL_NET_ERR_OK;
+    return (long long)sent;
+}
+
+long long nurl_udp_recv(long long handle, char *buf, long long n) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h) return -1;
+    if (h->fd == NURL_INVALID_SOCK) {
+        h->err_kind = NURL_NET_ERR_CLOSED;
+        return -1;
+    }
+    if (n <= 0 || !buf) {
+        h->err_kind = NURL_NET_ERR_READ;
+        return -1;
+    }
+#ifdef _WIN32
+    int rd = recv(h->fd, buf, (int)n, 0);
+#else
+    ssize_t rd;
+    do { rd = recv(h->fd, buf, (size_t)n, 0); }
+    while (rd < 0 && errno == EINTR);
+#endif
+    if (rd < 0) {
+#ifdef _WIN32
+        h->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_READ);
+#else
+        h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_READ);
+#endif
+        return -1;
+    }
+    h->err_kind = NURL_NET_ERR_OK;
+    return (long long)rd;
+}
+
+const char *nurl_udp_peer_addr(long long handle) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h || !h->peer) return "";
+    return h->peer;
+}
+
+/* Heap "ip:port" of the locally-bound endpoint. Caller frees via
+ * nurl_free. Empty string on error. */
+char *nurl_udp_local_addr(long long handle) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h || h->fd == NURL_INVALID_SOCK) return strdup("");
+    struct sockaddr_storage sa;
+    memset(&sa, 0, sizeof(sa));
+#ifdef _WIN32
+    int salen = (int)sizeof(sa);
+#else
+    socklen_t salen = (socklen_t)sizeof(sa);
+#endif
+    if (getsockname(h->fd, (struct sockaddr*)&sa, &salen) != 0) {
+        return strdup("");
+    }
+    char *out = nurl__net_format_sockaddr((struct sockaddr*)&sa,
+                                          (socklen_t)salen);
+    return out ? out : strdup("");
+}
+
+long long nurl_udp_err_kind(long long handle) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    return h ? h->err_kind : NURL_NET_ERR_OTHER;
+}
+
+long long nurl_udp_get_fd(long long handle) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h) return -1;
+    return (long long)h->fd;
+}
+
+long long nurl_udp_family(long long handle) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h) return -1;
+    return (long long)h->family;
+}
+
+void nurl_udp_set_nonblock(long long handle, long long on) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h || h->fd == NURL_INVALID_SOCK) return;
+#ifdef _WIN32
+    u_long mode = on ? 1 : 0;
+    ioctlsocket(h->fd, FIONBIO, &mode);
+#else
+    int fl = fcntl(h->fd, F_GETFL, 0);
+    if (fl < 0) return;
+    if (on) fl |=  O_NONBLOCK;
+    else    fl &= ~O_NONBLOCK;
+    fcntl(h->fd, F_SETFL, fl);
+#endif
+}
+
+void nurl_udp_set_timeout(long long handle, long long ms) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h || h->fd == NURL_INVALID_SOCK) return;
+#ifdef _WIN32
+    DWORD tv = (ms > 0) ? (DWORD)ms : 0;
+    setsockopt(h->fd, SOL_SOCKET, SO_RCVTIMEO,
+               (const char*)&tv, (int)sizeof(tv));
+    setsockopt(h->fd, SOL_SOCKET, SO_SNDTIMEO,
+               (const char*)&tv, (int)sizeof(tv));
+#else
+    struct timeval tv;
+    if (ms > 0) {
+        tv.tv_sec  = (time_t)(ms / 1000);
+        tv.tv_usec = (suseconds_t)((ms % 1000) * 1000);
+    } else {
+        tv.tv_sec  = 0;
+        tv.tv_usec = 0;
+    }
+    setsockopt(h->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, (socklen_t)sizeof(tv));
+    setsockopt(h->fd, SOL_SOCKET, SO_SNDTIMEO, &tv, (socklen_t)sizeof(tv));
+#endif
+}
+
+void nurl_udp_close(long long handle) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h) return;
+    if (h->fd != NURL_INVALID_SOCK) {
+        nurl_close_sock(h->fd);
+        h->fd = NURL_INVALID_SOCK;
+    }
+    free(h->peer);
+    h->peer = NULL;
+    free(h);
+}
+
+long long nurl_udp_set_broadcast(long long handle, long long on) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h || h->fd == NURL_INVALID_SOCK) {
+        if (h) h->err_kind = NURL_NET_ERR_CLOSED;
+        return -1;
+    }
+    int v = on ? 1 : 0;
+    if (setsockopt(h->fd, SOL_SOCKET, SO_BROADCAST,
+                   (const char*)&v, (int)sizeof(v)) != 0) {
+#ifdef _WIN32
+        h->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_OTHER);
+#else
+        h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_OTHER);
+#endif
+        return -1;
+    }
+    h->err_kind = NURL_NET_ERR_OK;
+    return 0;
+}
+
+/* Resolve a numeric IP literal into its sockaddr_storage form. Used by
+ * the multicast helpers so they can branch on family without forcing
+ * the caller to pass it separately. Returns 0 on success and writes
+ * *out_family + *out_sa + *out_salen; -1 on error. */
+static int nurl__parse_numeric_addr(const char *s, int *out_family,
+                                    struct sockaddr_storage *out_sa,
+                                    socklen_t *out_salen) {
+    if (!s || !*s) return -1;
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_flags  = AI_NUMERICHOST;
+    if (getaddrinfo(s, NULL, &hints, &res) != 0 || !res) return -1;
+    if (res->ai_addrlen > sizeof(*out_sa)) {
+        freeaddrinfo(res);
+        return -1;
+    }
+    memcpy(out_sa, res->ai_addr, res->ai_addrlen);
+    *out_salen  = (socklen_t)res->ai_addrlen;
+    *out_family = res->ai_family;
+    freeaddrinfo(res);
+    return 0;
+}
+
+/* iface argument convention (intentionally minimal — no if_nametoindex
+ * to keep Win32 builds free of -liphlpapi):
+ *   ""                           default interface (INADDR_ANY / 0)
+ *   IPv4 literal "192.168.1.5"   that interface's IP (v4 group only)
+ *   integer string "3"           interface index (v6 group only) */
+static long long nurl__udp_mcast_op(long long handle, const char *group,
+                                    const char *iface, int op_v4, int op_v6) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h || h->fd == NURL_INVALID_SOCK || !group || !*group) {
+        if (h) h->err_kind = h ? NURL_NET_ERR_OTHER : 0;
+        return -1;
+    }
+    int gfam = AF_UNSPEC;
+    struct sockaddr_storage gsa;
+    socklen_t gsalen = 0;
+    if (nurl__parse_numeric_addr(group, &gfam, &gsa, &gsalen) != 0) {
+        h->err_kind = NURL_NET_ERR_OTHER;
+        return -1;
+    }
+    int rc;
+    if (gfam == AF_INET) {
+        struct ip_mreq mr;
+        memset(&mr, 0, sizeof(mr));
+        mr.imr_multiaddr = ((struct sockaddr_in*)&gsa)->sin_addr;
+        if (iface && *iface) {
+            int ifam = AF_UNSPEC;
+            struct sockaddr_storage isa;
+            socklen_t isalen = 0;
+            if (nurl__parse_numeric_addr(iface, &ifam, &isa, &isalen) != 0
+                || ifam != AF_INET) {
+                h->err_kind = NURL_NET_ERR_OTHER;
+                return -1;
+            }
+            mr.imr_interface = ((struct sockaddr_in*)&isa)->sin_addr;
+        } else {
+            mr.imr_interface.s_addr = htonl(INADDR_ANY);
+        }
+        rc = setsockopt(h->fd, IPPROTO_IP, op_v4,
+                        (const char*)&mr, (int)sizeof(mr));
+    } else if (gfam == AF_INET6) {
+        struct ipv6_mreq mr;
+        memset(&mr, 0, sizeof(mr));
+        mr.ipv6mr_multiaddr = ((struct sockaddr_in6*)&gsa)->sin6_addr;
+        unsigned ifidx = 0;
+        if (iface && *iface) {
+            char *end = NULL;
+            unsigned long v = strtoul(iface, &end, 10);
+            if (!end || *end != 0) {
+                h->err_kind = NURL_NET_ERR_OTHER;
+                return -1;
+            }
+            ifidx = (unsigned)v;
+        }
+        mr.ipv6mr_interface = ifidx;
+        rc = setsockopt(h->fd, IPPROTO_IPV6, op_v6,
+                        (const char*)&mr, (int)sizeof(mr));
+    } else {
+        h->err_kind = NURL_NET_ERR_OTHER;
+        return -1;
+    }
+    if (rc != 0) {
+#ifdef _WIN32
+        h->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_OTHER);
+#else
+        h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_OTHER);
+#endif
+        return -1;
+    }
+    h->err_kind = NURL_NET_ERR_OK;
+    return 0;
+}
+
+long long nurl_udp_join_group(long long handle, const char *group,
+                              const char *iface) {
+    return nurl__udp_mcast_op(handle, group, iface,
+                              IP_ADD_MEMBERSHIP, IPV6_JOIN_GROUP);
+}
+
+long long nurl_udp_leave_group(long long handle, const char *group,
+                               const char *iface) {
+    return nurl__udp_mcast_op(handle, group, iface,
+                              IP_DROP_MEMBERSHIP, IPV6_LEAVE_GROUP);
+}
+
+long long nurl_udp_set_multicast_ttl(long long handle, long long ttl) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h || h->fd == NURL_INVALID_SOCK) {
+        if (h) h->err_kind = NURL_NET_ERR_CLOSED;
+        return -1;
+    }
+    if (ttl < 0 || ttl > 255) {
+        h->err_kind = NURL_NET_ERR_OTHER;
+        return -1;
+    }
+    int rc;
+    if (h->family == AF_INET6) {
+        int v = (int)ttl;
+        rc = setsockopt(h->fd, IPPROTO_IPV6, IPV6_MULTICAST_HOPS,
+                        (const char*)&v, (int)sizeof(v));
+    } else {
+        /* IPv4 TTL setsockopt takes an unsigned char on POSIX, int on Win32. */
+#ifdef _WIN32
+        DWORD v = (DWORD)ttl;
+        rc = setsockopt(h->fd, IPPROTO_IP, IP_MULTICAST_TTL,
+                        (const char*)&v, (int)sizeof(v));
+#else
+        unsigned char v = (unsigned char)ttl;
+        rc = setsockopt(h->fd, IPPROTO_IP, IP_MULTICAST_TTL,
+                        (const char*)&v, (int)sizeof(v));
+#endif
+    }
+    if (rc != 0) {
+#ifdef _WIN32
+        h->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_OTHER);
+#else
+        h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_OTHER);
+#endif
+        return -1;
+    }
+    h->err_kind = NURL_NET_ERR_OK;
+    return 0;
+}
+
+long long nurl_udp_set_multicast_loop(long long handle, long long on) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h || h->fd == NURL_INVALID_SOCK) {
+        if (h) h->err_kind = NURL_NET_ERR_CLOSED;
+        return -1;
+    }
+    int rc;
+    if (h->family == AF_INET6) {
+        int v = on ? 1 : 0;
+        rc = setsockopt(h->fd, IPPROTO_IPV6, IPV6_MULTICAST_LOOP,
+                        (const char*)&v, (int)sizeof(v));
+    } else {
+#ifdef _WIN32
+        DWORD v = on ? 1 : 0;
+        rc = setsockopt(h->fd, IPPROTO_IP, IP_MULTICAST_LOOP,
+                        (const char*)&v, (int)sizeof(v));
+#else
+        unsigned char v = on ? 1 : 0;
+        rc = setsockopt(h->fd, IPPROTO_IP, IP_MULTICAST_LOOP,
+                        (const char*)&v, (int)sizeof(v));
+#endif
+    }
+    if (rc != 0) {
+#ifdef _WIN32
+        h->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_OTHER);
+#else
+        h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_OTHER);
+#endif
+        return -1;
+    }
+    h->err_kind = NURL_NET_ERR_OK;
+    return 0;
+}
+
+/* ── §18c  DNS resolution (getaddrinfo + getnameinfo) ──────────── */
+/*
+ * Two-shot resolvers handing back newline-separated heap strings the
+ * NURL caller splits with `string_split s "\n"`. Empty return means
+ * "no addresses" (host doesn't resolve, NXDOMAIN, …); the result is
+ * always a heap-owned String, never NULL — NURL frees via nurl_free.
+ *
+ *   nurl_dns_resolve(host)         → "1.2.3.4\n2001:db8::1\n…" (no port)
+ *   nurl_dns_resolve_port(h, port) → "1.2.3.4:80\n[2001:db8::1]:80\n…"
+ *   nurl_dns_reverse(ip)           → "host.example.com" or ""
+ *
+ * Deduplicated and order-preserving: getaddrinfo's "what the kernel
+ * picks first" order survives, but duplicate strings are skipped so a
+ * dual-stack host doesn't list 127.0.0.1 four times.
+ */
+
+/* Append `line` + '\n' to *buf (heap, may grow). Returns 0 on success. */
+static int nurl__dns_append(char **buf, size_t *len, size_t *cap,
+                            const char *line) {
+    size_t add = strlen(line) + 1;
+    if (*len + add + 1 > *cap) {
+        size_t ncap = (*cap == 0) ? 256 : (*cap * 2);
+        while (ncap < *len + add + 1) ncap *= 2;
+        char *nb = (char*)realloc(*buf, ncap);
+        if (!nb) return -1;
+        *buf = nb;
+        *cap = ncap;
+    }
+    memcpy(*buf + *len, line, add - 1);
+    (*buf)[*len + add - 1] = '\n';
+    *len += add;
+    (*buf)[*len] = '\0';
+    return 0;
+}
+
+/* Linear "have we already emitted this exact line?" — fine for the
+ * handful of A+AAAA records a host typically resolves to. */
+static int nurl__dns_seen(const char *buf, size_t len, const char *line) {
+    if (!buf || len == 0) return 0;
+    size_t llen = strlen(line);
+    if (llen == 0) return 0;
+    const char *p = buf;
+    const char *end = buf + len;
+    while (p < end) {
+        const char *nl = (const char*)memchr(p, '\n', (size_t)(end - p));
+        size_t row = nl ? (size_t)(nl - p) : (size_t)(end - p);
+        if (row == llen && memcmp(p, line, llen) == 0) return 1;
+        if (!nl) break;
+        p = nl + 1;
+    }
+    return 0;
+}
+
+char *nurl_dns_resolve(const char *host) {
+#ifdef _WIN32
+    if (!nurl__net_wsa_init()) return strdup("");
+#endif
+    if (!host || !*host) return strdup("");
+    struct addrinfo hints, *res = NULL, *ai;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;   /* dedupe across DGRAM+STREAM duplicates */
+    if (getaddrinfo(host, NULL, &hints, &res) != 0 || !res) return strdup("");
+
+    char  *buf = NULL;
+    size_t len = 0, cap = 0;
+    char ipstr[INET6_ADDRSTRLEN + 4];
+    for (ai = res; ai; ai = ai->ai_next) {
+        ipstr[0] = '\0';
+        if (getnameinfo(ai->ai_addr, (socklen_t)ai->ai_addrlen,
+                        ipstr, sizeof(ipstr), NULL, 0,
+                        NI_NUMERICHOST) != 0) continue;
+        if (!ipstr[0]) continue;
+        if (nurl__dns_seen(buf, len, ipstr)) continue;
+        if (nurl__dns_append(&buf, &len, &cap, ipstr) != 0) {
+            free(buf);
+            freeaddrinfo(res);
+            return strdup("");
+        }
+    }
+    freeaddrinfo(res);
+    return buf ? buf : strdup("");
+}
+
+char *nurl_dns_resolve_port(const char *host, long long port) {
+#ifdef _WIN32
+    if (!nurl__net_wsa_init()) return strdup("");
+#endif
+    if (!host || !*host || port < 0 || port > 65535) return strdup("");
+    char portstr[16];
+    snprintf(portstr, sizeof(portstr), "%ld", (long)port);
+    struct addrinfo hints, *res = NULL, *ai;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) return strdup("");
+
+    char *buf = NULL;
+    size_t len = 0, cap = 0;
+    for (ai = res; ai; ai = ai->ai_next) {
+        char *one = nurl__net_format_sockaddr(ai->ai_addr,
+                                              (socklen_t)ai->ai_addrlen);
+        if (!one || !*one) { free(one); continue; }
+        if (!nurl__dns_seen(buf, len, one)) {
+            if (nurl__dns_append(&buf, &len, &cap, one) != 0) {
+                free(one);
+                free(buf);
+                freeaddrinfo(res);
+                return strdup("");
+            }
+        }
+        free(one);
+    }
+    freeaddrinfo(res);
+    return buf ? buf : strdup("");
+}
+
+char *nurl_dns_reverse(const char *ip) {
+#ifdef _WIN32
+    if (!nurl__net_wsa_init()) return strdup("");
+#endif
+    if (!ip || !*ip) return strdup("");
+    int fam = AF_UNSPEC;
+    struct sockaddr_storage sa;
+    socklen_t salen = 0;
+    if (nurl__parse_numeric_addr(ip, &fam, &sa, &salen) != 0) return strdup("");
+    /* Port doesn't matter for PTR — getnameinfo wants a non-zero sockaddr
+     * to know the family + bytes. */
+    char host[NI_MAXHOST] = {0};
+    if (getnameinfo((struct sockaddr*)&sa, salen,
+                    host, sizeof(host), NULL, 0,
+                    NI_NAMEREQD) != 0) return strdup("");
+    return strdup(host);
+}
+
 #else  /* __wasi__: no socket support — every call returns NetOther. */
 
 long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
@@ -3407,6 +4186,43 @@ void nurl_tcp_shutdown(long long h) { (void)h; }
 long long nurl_tcp_err_kind(long long h) { (void)h; return NURL_NET_ERR_OTHER; }
 const char *nurl_tcp_peer_addr(long long h) { (void)h; return ""; }
 void nurl_tcp_set_timeout(long long h, long long ms) { (void)h; (void)ms; }
+
+/* §18b / §18c WASI stubs — wasi-libc has no socket layer. */
+long long nurl_udp_bind(const char *h, long long p) {
+    (void)h; (void)p; return 0;
+}
+long long nurl_udp_connect(long long h, const char *host, long long p) {
+    (void)h; (void)host; (void)p; return -1;
+}
+long long nurl_udp_send_to(long long h, const char *b, long long n,
+                           const char *host, long long p) {
+    (void)h; (void)b; (void)n; (void)host; (void)p; return -1;
+}
+long long nurl_udp_recv_from(long long h, char *b, long long n) {
+    (void)h; (void)b; (void)n; return -1;
+}
+long long nurl_udp_send(long long h, const char *b, long long n) {
+    (void)h; (void)b; (void)n; return -1;
+}
+long long nurl_udp_recv(long long h, char *b, long long n) {
+    (void)h; (void)b; (void)n; return -1;
+}
+const char *nurl_udp_peer_addr(long long h)            { (void)h; return ""; }
+char       *nurl_udp_local_addr(long long h)           { (void)h; return strdup(""); }
+long long nurl_udp_err_kind(long long h)               { (void)h; return NURL_NET_ERR_OTHER; }
+long long nurl_udp_get_fd(long long h)                 { (void)h; return -1; }
+long long nurl_udp_family(long long h)                 { (void)h; return -1; }
+void nurl_udp_set_nonblock(long long h, long long on)  { (void)h; (void)on; }
+void nurl_udp_set_timeout(long long h, long long ms)   { (void)h; (void)ms; }
+void nurl_udp_close(long long h)                       { (void)h; }
+long long nurl_udp_set_broadcast(long long h, long long on)            { (void)h; (void)on; return -1; }
+long long nurl_udp_join_group(long long h, const char *g, const char *i){ (void)h; (void)g; (void)i; return -1; }
+long long nurl_udp_leave_group(long long h, const char *g, const char *i){ (void)h; (void)g; (void)i; return -1; }
+long long nurl_udp_set_multicast_ttl(long long h, long long t)         { (void)h; (void)t; return -1; }
+long long nurl_udp_set_multicast_loop(long long h, long long on)       { (void)h; (void)on; return -1; }
+char *nurl_dns_resolve(const char *h)                  { (void)h; return strdup(""); }
+char *nurl_dns_resolve_port(const char *h, long long p){ (void)h; (void)p; return strdup(""); }
+char *nurl_dns_reverse(const char *ip)                 { (void)ip; return strdup(""); }
 
 #endif /* __wasi__ guard for §18 */
 

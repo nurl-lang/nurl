@@ -8,6 +8,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — UDP datagram sockets + full DNS resolver (Tier D #6, 2026-05-26)
+
+Closes the last `IMPROVEMENTS.md` Tier D Roadmap §3 item the v0.9.0
+critic flagged as missing for v1.0. Three new public surfaces:
+
+1. **`stdlib/std/udp.nu`** — pure-NURL wrapper over runtime §18b. Dual-
+   stack IPv4/IPv6 by default (wildcard `udp_bind("", 0)` creates an
+   `AF_INET6` socket with `IPV6_V6ONLY=0` so a single fd serves both
+   v4 and v6 peers; literal `udp_bind("127.0.0.1", 0)` stays IPv4-only
+   on purpose). Sync + fiber-aware async on every send/recv: inside a
+   fiber, `udp_recv_from` / `udp_send_to` park on the reactor on
+   EAGAIN; outside any fiber, they fall back to blocking I/O
+   transparently. Exposed surface:
+   - lifecycle: `udp_bind`, `udp_bind_any`, `udp_connect`, `udp_close`
+   - send/recv: `udp_send_to`, `udp_send_str_to`, `udp_recv_from`,
+     `udp_send`, `udp_recv` (last two for connected-mode UDP)
+   - address: `udp_peer_addr` (borrowed), `udp_local_addr` (owned
+     String — how the caller discovers the kernel-assigned ephemeral
+     port after `udp_bind("", 0)`)
+   - options: `udp_set_timeout`, `udp_set_nonblock`, `udp_set_broadcast`
+   - multicast: `udp_join_group`, `udp_leave_group`,
+     `udp_set_multicast_ttl`, `udp_set_multicast_loop`. `iface` arg is
+     intentionally minimal (IPv4 IP literal or numeric ifindex; no
+     `if_nametoindex` so Win32 doesn't need `-liphlpapi`).
+
+2. **`stdlib/std/dns.nu`** — pure-NURL wrapper over runtime §18c.
+   System-resolver-based (`getaddrinfo` / `getnameinfo`), no c-ares
+   dep. Three entry points:
+   - `dns_resolve host` → `! ( Vec String ) NetErr` of A/AAAA literals
+     in the kernel's preferred order, dedup'd.
+   - `dns_resolve_port host port` → same, but each entry is formatted
+     as `"ip:port"` (IPv4) or `"[ip]:port"` (IPv6, RFC 3986 §3.2.2)
+     ready for direct `tcp_connect` / `udp_connect`.
+   - `dns_reverse ip` → `? String` (Some only when there's a real PTR
+     record — `NI_NAMEREQD`).
+
+3. **Runtime §18b / §18c (`stdlib/runtime.c`)** — implementation:
+   - `NurlUdp { fd, err_kind, family, peer }` opaque handle (~16 % the
+     size of `NurlTcp` — UDP has no TLS state to track).
+   - 22 new `nurl_udp_*` and 3 new `nurl_dns_*` exports; WASI stub
+     row at the bottom degrades every call to `NetOther` /
+     `strdup("")` so `wasm32-wasi` builds still link.
+   - Reuses §18's `NURL_NET_ERR_*` error space + `nurl__net_map_errno
+     / _wsa` mapping helpers; multicast group-family branching uses a
+     new `nurl__parse_numeric_addr` (`AI_NUMERICHOST`) so callers
+     don't have to thread family flags through the NURL API.
+   - DNS results come back as newline-separated heap strings; NURL
+     splits and dedupes are deferred to the wrapper (`__dns_split_lines`).
+
+Acceptance:
+
+- `compiler/tests/udp_basic.nu` — always-on (loopback only, no live
+  network). Covers send_to/recv_from roundtrip, peer-addr capture,
+  connected-mode send/recv on a separate pair, zero-length datagram,
+  wildcard dual-stack bind, broadcast + multicast TTL / loop
+  setsockopt smoke. Exit 0, output matches `correct.txt` baseline.
+- `compiler/tests/dns_basic.nu` — always-on (uses literals + the
+  `/etc/hosts` `localhost` mapping that every Linux/macOS/Win box
+  has, no external DNS). Covers resolve + resolve_port for both IPv4
+  and IPv6, IPv6 bracketed-port formatting, reverse lookup, empty-
+  input → `Err NetOther`.
+
+Runtime LOC delta: `stdlib/runtime.c` 4 790 → 5 606 (+816, +17 %)
+including the WASI stub row. Bootstrap fixed point unchanged at
+**1 620 300 B** (stage1 ≡ stage2 byte-identical IR) — the runtime
+extension is pure stdlib, no compiler IR perturbation.
+
 ### Added — HTTP peer-bench (Tier D #3, 2026-05-25)
 
 `bench/run_http.sh` + `bench/http_server.{nu,js}` +

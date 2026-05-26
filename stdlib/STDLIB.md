@@ -476,12 +476,12 @@ Nämä ovat tärkeitä mutta eivät kaikille käyttäjille. Voidaan toteuttaa ri
 - [ ] Shell-wrapper Windows-puolelle (`cmd /c` POSIX-`/bin/sh`:n rinnalle)
 - **LLM-agenttihostingin keystone.** Yhdessä `http`/`fs`/`env`/`json`/`fmt`/`log`-kirjastojen kanssa NURL voi nyt ajaa oikeita agenttipipelinejä — `git`, `npm`, `pytest`, `cargo`, `rg` jne. Synkroninen MVP riittää 95% LLM-tool-call-käytöstä.
 
-### 17. `net` — TCP/UDP-socketit
-- [ ] `tcp_connect host port` → `! Conn IoErr` (RT — socket/connect)
-- [ ] `tcp_listen port` → `! Listener IoErr` (RT — bind/listen/accept)
-- [ ] `udp_socket port` → `! Socket IoErr` (RT)
-- [ ] Buffered IO: `BufReader`, `BufWriter` (NURL, runtime-fd:n päälle)
-- [ ] `dns_resolve hostname` (RT — `getaddrinfo`)
+### 17. `net` — TCP/UDP-socketit + DNS
+- [x] `tcp_connect host port` → `! TcpConn NetErr` (`stdlib/std/net.nu`, runtime §18; +TLS variantti `tcp_connect_tls`)
+- [x] `tcp_listen host port` → `! TcpListener NetErr` (`stdlib/std/net.nu`, runtime §18; +TLS + ALPN + SNI + mTLS variantit)
+- [x] **UDP — shipped 2026-05-26 (Tier D #6 sulkeutuu).** `stdlib/std/udp.nu` (runtime §18b). Dual-stack `udp_bind`/`udp_bind_any`, `udp_connect`, `udp_send_to`/`udp_send_str_to`, `udp_recv_from` → `UdpPacket{data peer}`, connected-mode `udp_send`/`udp_recv`, `udp_local_addr` (owned, ephemeral-port-discovery), `udp_peer_addr` (borrowed), `udp_set_broadcast`, multicast `udp_join_group`/`_leave_group`/`_set_multicast_ttl`/`_set_multicast_loop`. Sync + fiber-aware async molemmissa send- ja recv-pinnoissa.
+- [x] Buffered IO: `BufReader`/`BufWriter` (`stdlib/std/bufio.nu`, runtime-fd:n päälle)
+- [x] **DNS — shipped 2026-05-26.** `stdlib/std/dns.nu` (runtime §18c). `dns_resolve host` → `! ( Vec String ) NetErr` (A/AAAA), `dns_resolve_port host port` → `"ip:port"`/`"[ip]:port"`-format suoraan `tcp_connect`/`udp_connect`-syötteeksi, `dns_reverse ip` → `? String` (`NI_NAMEREQD`). Käyttää järjestelmän resolveria (`getaddrinfo`/`getnameinfo`) — ei c-ares-bundlea.
 
 ### 18. `crypto` — kryptografia (`stdlib/std/hash.nu` + `stdlib/std/encode.nu` + `stdlib/std/random.nu`, MVP 2026-04-30)
 - [x] **`sha256_hex s` → `String`** (`stdlib/std/hash.nu`, runtime §17). Self-contained FIPS 180-4 toteutus runtime.c:ssä — ei libsodium/openssl-linkkausdiriippuvuutta. Heap-owned 64-merkkinen lowercase hex digest. Validoidaan `compiler/tests/crypto_basic.nu`-vektoreilla (`""`, `"abc"`, 56-byte block-edge case).

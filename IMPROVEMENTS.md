@@ -150,7 +150,20 @@ These are roadmap items the critic listed in §8 *"What is missing for v1.0,
 by the roadmap's own admission."* Reproduced here for visibility so the
 critic-driven backlog is in one place; the canonical home is ROADMAP.md.
 
-- [ ] **UDP + full DNS resolution (`getaddrinfo`).** ROADMAP §3.
+- [x] **UDP + full DNS resolution — shipped 2026-05-26.** Dual-stack
+      `stdlib/std/udp.nu` (sync + fiber-aware async on every send/recv,
+      `udp_bind`/`_connect`/`_send_to`/`_recv_from`/`_send`/`_recv` +
+      connected-mode, multicast `_join_group`/`_leave_group`/`_set_ttl`
+      /`_set_loop`, `_set_broadcast`, `udp_local_addr` for kernel-
+      assigned ephemeral-port discovery) over runtime §18b. Pure-NURL
+      `stdlib/std/dns.nu` (`dns_resolve` → A/AAAA, `dns_resolve_port`
+      → ready-for-`tcp_connect` `"ip:port"` / `"[ip]:port"`,
+      `dns_reverse` → `NI_NAMEREQD`) over runtime §18c, system-resolver
+      based (`getaddrinfo`/`getnameinfo`, no c-ares dep). Reuses
+      §18's `NetErr` enum + errno mapping. Tests `udp_basic.nu` +
+      `dns_basic.nu` always-on (loopback + `/etc/hosts` `localhost`,
+      no live network). Runtime LOC +816. Bootstrap fixed point holds
+      at 1 620 300 B (compiler IR unperturbed). ROADMAP §3.
 - [x] **Generic signal handling — shipped 2026-05-25.** `stdlib/std/signal.nu`
       now offers `signal_install` / `_clear` / `_pending` / `_poll` /
       `_dispatch` / `_raise` / `_pipe_fd` / `_constant` / `_name`
