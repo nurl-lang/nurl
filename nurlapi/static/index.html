@@ -158,10 +158,9 @@
     <label for="examples">Example:</label>
     <select id="examples"><option value="">— choose —</option></select>
     <input id="filename" type="text" value="main.nu" size="12" title="Filename used for diagnostics" />
-    <button id="build" class="primary" type="button">Build WASM ⌘B</button>
-    <button id="buildNative" type="button" title="Compile to a native Linux ELF via POST /build">Build native ⌘⇧B</button>
-    <button id="buildWindows" type="button" title="Cross-compile to a Windows .exe (mingw-w64) via POST /build_windows">Build Windows ⌘⌥B</button>
-    <button id="buildMacos" type="button" title="Cross-compile to a macOS Mach-O binary (zig cc) via POST /build_macos">Build macOS ⌘⌥⇧B</button>
+    <label for="target">Target:</label>
+    <select id="target" title="Compile target — see the hint to the right"></select>
+    <button id="build" class="primary" type="button">Build ⌘B</button>
     <button id="run" class="run" type="button" disabled>Run ⌘R</button>
     <button id="stop" class="stop" type="button" disabled>Stop</button>
     <button id="download" type="button" disabled>Download .wasm</button>
@@ -187,8 +186,9 @@
       <canvas id="nurlCanvas" width="160" height="90"></canvas>
       <div class="hint">canvas · press Stop to halt</div>
     </div>
-    <div id="output"><span class="dim">Press <strong>Build WASM</strong> to compile.
-Press <strong>Run</strong> to execute the compiled module in-browser via a WASI shim.
+    <div id="output"><span class="dim">Pick a <strong>Target</strong> and press <strong>Build</strong> to compile.
+With the WebAssembly target, press <strong>Run</strong> to execute the module in-browser via a WASI shim.
+Other targets (Linux / macOS / Windows, incl. RISC-V &amp; ARM64) cross-compile server-side and give a download link.
 Programs using the canvas FFI animate in a live pixel surface above.</span></div>
   </section>
 </main>
@@ -212,9 +212,7 @@ const fallbackTA = $("#editor-fallback");
 const examples  = $("#examples");
 const filename  = $("#filename");
 const buildBtn  = $("#build");
-const buildNativeBtn = $("#buildNative");
-const buildWindowsBtn = $("#buildWindows");
-const buildMacosBtn = $("#buildMacos");
+const targetSel = $("#target");
 const runBtn    = $("#run");
 const dlBtn     = $("#download");
 const output    = $("#output");
@@ -859,62 +857,118 @@ stopBtn.addEventListener("click", () => {
   if (currentRun) currentRun.stop();
 });
 
-// ── Build native (POST /build) ────────────────────────────────
+// ── Compile targets ───────────────────────────────────────────
 //
-// Compiles to an x86_64 ELF inside the container (mirrors nurl.sh) and
-// surfaces download links for the .ll and the binary. No in-browser run
-// path — this is for pulling artifacts off the server.
-async function buildNative() {
+// The target dropdown is populated from GET /targets — one source of
+// truth shared with the API. The `wasm` target builds + runs in the
+// browser; every other target compiles server-side and surfaces
+// download links (.ll + the binary). Native Linux and wasm get full
+// FFI; the zig cross targets reject canvas/audio server-side.
+const targetMeta = new Map();   // id → { id, label, group, endpoint, runnable, notes }
+
+async function loadTargets() {
+  let list;
+  try {
+    const resp = await fetch("/targets");
+    list = await resp.json();
+  } catch (e) {
+    // Fall back to a wasm-only dropdown so the playground still works.
+    list = [{ id: "wasm", label: "WebAssembly · wasm32-wasi", group: "WebAssembly",
+              endpoint: "/build_wasm", runnable: true, notes: "" }];
+  }
+  targetSel.innerHTML = "";
+  targetMeta.clear();
+  const groups = new Map();   // group name → <optgroup>
+  for (const t of list) {
+    targetMeta.set(t.id, t);
+    let og = groups.get(t.group);
+    if (!og) {
+      og = document.createElement("optgroup");
+      og.label = t.group;
+      groups.set(t.group, og);
+      targetSel.appendChild(og);
+    }
+    const opt = document.createElement("option");
+    opt.value = t.id;
+    opt.textContent = t.label;
+    opt.title = t.notes || "";
+    og.appendChild(opt);
+  }
+  targetSel.value = targetMeta.has("wasm") ? "wasm" : (list[0] && list[0].id) || "";
+  onTargetChange();
+}
+
+// Surface the selected target's constraints in the build-info slot so
+// "no HTTP/canvas" is visible without hovering the dropdown.
+function onTargetChange() {
+  const meta = targetMeta.get(targetSel.value);
+  buildInfo.textContent = (meta && meta.notes) || "";
+  targetSel.title = (meta && meta.notes) || "Compile target";
+}
+targetSel.addEventListener("change", onTargetChange);
+
+// ── Server-side binary build (native / windows / zig cross) ────
+//
+// One renderer for /build, /build_windows and /build_target. The
+// cross targets reject canvas/audio with a 400 — those have no
+// back-end outside wasm and native Linux.
+async function buildBinary(meta) {
   clearOutput();
-  buildNativeBtn.disabled = true;
   buildBtn.disabled = true;
-  buildInfo.textContent = "compiling native…";
+  targetSel.disabled = true;
+  runBtn.disabled = true;
+  dlBtn.disabled = true;
+  currentWasm = null;
+  buildInfo.textContent = `compiling ${meta.label}…`;
+
+  const payload = {
+    source: editorAPI.getValue(),
+    filename: filename.value || "main.nu",
+  };
+  if (meta.endpoint === "/build_target") payload.target = meta.id;
 
   const t0 = performance.now();
   let resp, body;
   try {
-    resp = await fetch("/build", {
+    resp = await fetch(meta.endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        source: editorAPI.getValue(),
-        filename: filename.value || "main.nu",
-      }),
+      body: JSON.stringify(payload),
     });
     body = await resp.json();
   } catch (e) {
     logLine("network error: " + e.message, "stderr");
-    buildNativeBtn.disabled = false;
     buildBtn.disabled = false;
+    targetSel.disabled = false;
     buildInfo.textContent = "";
     return;
   }
   const ms = Math.round(performance.now() - t0);
 
-  // /build always returns 200 with status=ok|error (except 4xx/5xx for
-  // toolchain-level failures — those still come through `detail`).
+  // 4xx/5xx — toolchain-level failure surfaced via `detail`.
   if (!resp.ok) {
-    section("BUILD FAILED");
-    logLine(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? body, null, 2), "stderr");
+    section(`BUILD FAILED (${meta.id})`);
+    logLine(typeof body.detail === "string"
+              ? body.detail
+              : JSON.stringify(body.detail ?? body, null, 2), "stderr");
     buildInfo.textContent = `failed in ${ms} ms`;
-    buildNativeBtn.disabled = false;
     buildBtn.disabled = false;
+    targetSel.disabled = false;
     return;
   }
 
   const ok = body.status === "ok";
-  section(ok ? "BUILD OK (native)" : "BUILD FAILED (native)");
+  section(ok ? `BUILD OK (${meta.id})` : `BUILD FAILED (${meta.id})`);
   if (body.message) logLine(body.message, ok ? "ok" : "stderr");
   if (typeof body.clang_returncode === "number") {
-    logLine(`nurlc exit ${body.nurlc_returncode} · clang exit ${body.clang_returncode} · ${ms} ms`,
-            "dim");
+    logLine(`nurlc exit ${body.nurlc_returncode} · ` +
+            `link exit ${body.clang_returncode} · ${ms} ms`, "dim");
   } else {
     logLine(`nurlc exit ${body.nurlc_returncode} · ${ms} ms`, "dim");
   }
   if (body.uses_canvas) logLine("program uses canvas FFI", "warn");
   if (body.uses_audio)  logLine("program uses audio FFI (microphone)", "warn");
 
-  // Download links first — they're the whole point of this button.
   if (body.ll_artifact || body.binary_artifact) {
     section("DOWNLOADS");
     const addLink = (art, label) => {
@@ -929,7 +983,7 @@ async function buildNative() {
       output.appendChild(a);
     };
     addLink(body.ll_artifact,     "LLVM IR (.ll)");
-    addLink(body.binary_artifact, "native binary");
+    addLink(body.binary_artifact, `${meta.label} binary`);
     log("\n");
   }
 
@@ -939,183 +993,8 @@ async function buildNative() {
     section("nurlc stderr"); log(body.nurlc_stderr, "warn");
   }
 
-  buildInfo.textContent = ok
-    ? `native ${body.binary_artifact?.bytes ?? 0} B · ${ms} ms`
-    : `failed in ${ms} ms`;
-  buildNativeBtn.disabled = false;
-  buildBtn.disabled = false;
-}
-buildNativeBtn.addEventListener("click", buildNative);
-
-// ── Build Windows .exe (POST /build_windows) ──────────────────
-//
-// Cross-compiles to a Windows x86_64 .exe via mingw-w64 inside the
-// container. Surface .ll + .exe download links. Canvas/audio FFI is
-// rejected server-side with a 400 — those have no Windows back-end.
-async function buildWindows() {
-  clearOutput();
-  buildWindowsBtn.disabled = true;
-  buildNativeBtn.disabled = true;
-  buildBtn.disabled = true;
-  buildInfo.textContent = "compiling windows…";
-
-  const t0 = performance.now();
-  let resp, body;
-  try {
-    resp = await fetch("/build_windows", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        source: editorAPI.getValue(),
-        filename: filename.value || "main.nu",
-      }),
-    });
-    body = await resp.json();
-  } catch (e) {
-    logLine("network error: " + e.message, "stderr");
-    buildWindowsBtn.disabled = false;
-    buildNativeBtn.disabled = false;
-    buildBtn.disabled = false;
-    buildInfo.textContent = "";
-    return;
-  }
-  const ms = Math.round(performance.now() - t0);
-
-  if (!resp.ok) {
-    section("BUILD FAILED (windows)");
-    logLine(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? body, null, 2), "stderr");
-    buildInfo.textContent = `failed in ${ms} ms`;
-    buildWindowsBtn.disabled = false;
-    buildNativeBtn.disabled = false;
-    buildBtn.disabled = false;
-    return;
-  }
-
-  const ok = body.status === "ok";
-  section(ok ? "BUILD OK (windows)" : "BUILD FAILED (windows)");
-  if (body.message) logLine(body.message, ok ? "ok" : "stderr");
-  if (typeof body.clang_returncode === "number") {
-    logLine(`nurlc exit ${body.nurlc_returncode} · clang exit ${body.clang_returncode} · ${ms} ms`,
-            "dim");
-  } else {
-    logLine(`nurlc exit ${body.nurlc_returncode} · ${ms} ms`, "dim");
-  }
-
-  if (body.ll_artifact || body.binary_artifact) {
-    section("DOWNLOADS");
-    const addLink = (art, label) => {
-      if (!art) return;
-      const a = document.createElement("a");
-      a.href = art.download_url;
-      a.download = art.name;
-      a.textContent = `↓ ${label}  (${art.name}, ${art.bytes.toLocaleString()} B)`;
-      a.style.color = "var(--accent)";
-      a.style.display = "block";
-      a.style.margin = ".15rem 0";
-      output.appendChild(a);
-    };
-    addLink(body.ll_artifact,     "LLVM IR (.ll)");
-    addLink(body.binary_artifact, "Windows .exe");
-    log("\n");
-  }
-
-  if (body.stdout) { section("stdout"); log(body.stdout); log("\n"); }
-  if (body.stderr) { section("stderr"); log(body.stderr, ok ? "warn" : "stderr"); log("\n"); }
-  if (!body.stdout && !body.stderr && body.nurlc_stderr) {
-    section("nurlc stderr"); log(body.nurlc_stderr, "warn");
-  }
-
-  buildInfo.textContent = ok
-    ? `windows ${body.binary_artifact?.bytes ?? 0} B · ${ms} ms`
-    : `failed in ${ms} ms`;
-  buildWindowsBtn.disabled = false;
-  buildNativeBtn.disabled = false;
-  buildBtn.disabled = false;
-}
-buildWindowsBtn.addEventListener("click", buildWindows);
-
-// ── Build macOS Mach-O (POST /build_macos) ────────────────────
-//
-// Cross-compiles to a macOS x86_64 Mach-O via zig cc inside the
-// container. Surface .ll + binary download links. canvas/audio FFI
-// is rejected server-side — same contract as the Windows path.
-// HTTP still links (via runtime stubs) but returns HttpErr::Other;
-// there's no libcurl on this target.
-async function buildMacos() {
-  clearOutput();
-  buildMacosBtn.disabled = true;
-  buildWindowsBtn.disabled = true;
-  buildNativeBtn.disabled = true;
-  buildBtn.disabled = true;
-  buildInfo.textContent = "compiling macos…";
-
-  const t0 = performance.now();
-  let resp, body;
-  try {
-    resp = await fetch("/build_macos", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        source: editorAPI.getValue(),
-        filename: filename.value || "main.nu",
-      }),
-    });
-    body = await resp.json();
-  } catch (e) {
-    logLine("network error: " + e.message, "stderr");
-    buildMacosBtn.disabled = false;
-    buildWindowsBtn.disabled = false;
-    buildNativeBtn.disabled = false;
-    buildBtn.disabled = false;
-    buildInfo.textContent = "";
-    return;
-  }
-  const ms = Math.round(performance.now() - t0);
-
-  if (!resp.ok) {
-    section("BUILD FAILED (macos)");
-    logLine(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? body, null, 2), "stderr");
-    buildInfo.textContent = `failed in ${ms} ms`;
-    buildMacosBtn.disabled = false;
-    buildWindowsBtn.disabled = false;
-    buildNativeBtn.disabled = false;
-    buildBtn.disabled = false;
-    return;
-  }
-
-  const ok = body.status === "ok";
-  section(ok ? "BUILD OK (macos)" : "BUILD FAILED (macos)");
-  if (body.message) logLine(body.message, ok ? "ok" : "stderr");
-  if (typeof body.clang_returncode === "number") {
-    logLine(`nurlc exit ${body.nurlc_returncode} · zig cc exit ${body.clang_returncode} · ${ms} ms`,
-            ok ? "info" : "stderr");
-  }
-  if (body.nurlc_stderr) logLine(body.nurlc_stderr.trim(), "stderr");
-  if (body.clang_stderr) logLine(body.clang_stderr.trim(), "stderr");
-  if (body.stderr && body.stderr !== body.nurlc_stderr && body.stderr !== body.clang_stderr) {
-    logLine(body.stderr.trim(), "stderr");
-  }
-
-  if (body.ll_artifact || body.binary_artifact) {
-    log("\n");
-    const addLink = (a, label) => {
-      if (!a) return;
-      const row = document.createElement("div");
-      row.className = "line info";
-      row.textContent = `${label}: `;
-      const link = document.createElement("a");
-      link.href = a.download_url;
-      link.textContent = `${a.name} (${a.bytes} B)`;
-      link.download = a.name;
-      row.appendChild(link);
-      output.appendChild(row);
-    };
-    addLink(body.ll_artifact,     "LLVM IR (.ll)");
-    addLink(body.binary_artifact, "macOS binary");
-    log("\n");
-  }
-
-  if (ok && body.binary_artifact) {
+  // macOS binaries from zig cc are unsigned — Gatekeeper will quarantine.
+  if (ok && body.binary_artifact && meta.group === "macOS") {
     logLine(
       "note: macOS binary is unsigned. Before running, clear the Gatekeeper " +
       "quarantine attribute:\n  xattr -d com.apple.quarantine " + body.binary_artifact.name +
@@ -1125,14 +1004,19 @@ async function buildMacos() {
   }
 
   buildInfo.textContent = ok
-    ? `macos ${body.binary_artifact?.bytes ?? 0} B · ${ms} ms`
+    ? `${meta.id} · ${(body.binary_artifact?.bytes ?? 0).toLocaleString()} B · ${ms} ms`
     : `failed in ${ms} ms`;
-  buildMacosBtn.disabled = false;
-  buildWindowsBtn.disabled = false;
-  buildNativeBtn.disabled = false;
   buildBtn.disabled = false;
+  targetSel.disabled = false;
 }
-buildMacosBtn.addEventListener("click", buildMacos);
+
+// ── Dispatch: build the currently selected target ─────────────
+function doBuild() {
+  const meta = targetMeta.get(targetSel.value);
+  if (!meta) { build(); return; }            // pre-/targets fallback
+  if (meta.endpoint === "/build_wasm") build();
+  else buildBinary(meta);
+}
 
 // ── Download ───────────────────────────────────────────────────
 dlBtn.addEventListener("click", () => {
@@ -1148,21 +1032,19 @@ dlBtn.addEventListener("click", () => {
 // ── Keybindings ────────────────────────────────────────────────
 document.addEventListener("keydown", (e) => {
   const meta = e.metaKey || e.ctrlKey;
-  if (meta && e.key.toLowerCase() === "b") {
-    e.preventDefault();
-    if (e.altKey && e.shiftKey) buildMacos();
-    else if (e.altKey) buildWindows();
-    else if (e.shiftKey) buildNative();
-    else build();
-  }
+  if (meta && e.key.toLowerCase() === "b") { e.preventDefault(); doBuild(); }
   if (meta && e.key.toLowerCase() === "r") { e.preventDefault(); if (!runBtn.disabled) run(); }
 });
-buildBtn.addEventListener("click", build);
+buildBtn.addEventListener("click", doBuild);
 runBtn.addEventListener("click", run);
 
 // ── Monaco setup ───────────────────────────────────────────────
-// Monarch tokenizer for NURL (translated from tooling/vscode-nurl's
-// tmLanguage.json). Token names are picked to line up with the
+// Monarch tokenizer for NURL — kept in lock-step with
+// tooling/vscode-nurl/syntaxes/nurl.tmLanguage.json. Any new
+// grammar token (sized type, shift op, escape sequence, …) needs to
+// be added BOTH HERE AND in the VS Code grammar; the
+// tooling/vscode-nurl/CHANGELOG.md and this comment block exist so
+// neither side drifts. Token names are picked to line up with the
 // vs-dark-plus theme so the result looks close to VS Code.
 const NURL_MONARCH = {
   defaultToken: "",
@@ -1193,12 +1075,18 @@ const NURL_MONARCH = {
       [/(:)(\s+)([A-Z][\w]*)(\s*)(\{)/,
         ["keyword", "white", "type.identifier", "white", "@brackets"]],
 
-      // numbers
-      [/\d+\.\d+([eE][+\-]?\d+)?/, "number.float"],
-      [/\d+/,                       "number"],
+      // numbers — leading `-` is part of the literal only when not
+      // preceded by an ident-char (grammar v1.1 negative-literal rule)
+      [/(?<![A-Za-z0-9_])-?\d+\.\d+([eE][+\-]?\d+)?/, "number.float"],
+      [/(?<![A-Za-z0-9_])-?\d+/,                     "number"],
 
       // boolean constants
       [/\b(T|F)\b/, "constant.language.boolean"],
+
+      // fixed-size primitive types (grammar v1.8). MUST precede the
+      // single-letter rule below so `i8` is not partially captured as
+      // the bare `i`.
+      [/\b(i8|i16|i32|u16|u32|u64|f32)\b/, "type"],
 
       // primitive types
       [/\b(i|u|f|b|s|v)\b/, "type"],
@@ -1215,6 +1103,8 @@ const NURL_MONARCH = {
       [/;/,              "keyword"],
       [/\\/,             "keyword"],
       [/\bZ\b/,          "keyword"],
+      // shift ops (v1.4) — must precede the single-char `<`/`>` rule.
+      [/(<<|>>)/,        "keyword.operator"],
       [/(==|!=|<=|>=)/,  "keyword.operator"],
       [/[<>]/,           "keyword.operator"],
       [/[+\-*/%]/,       "keyword.operator.arithmetic"],
@@ -1325,10 +1215,7 @@ async function initEditor() {
 
     // Monaco swallows keydowns; wire ⌘/Ctrl+B and ⌘/Ctrl+R inside editor too.
     const M = monaco.KeyMod, K = monaco.KeyCode;
-    inst.addCommand(M.CtrlCmd | K.KeyB, () => build());
-    inst.addCommand(M.CtrlCmd | M.Shift | K.KeyB, () => buildNative());
-    inst.addCommand(M.CtrlCmd | M.Alt | K.KeyB, () => buildWindows());
-    inst.addCommand(M.CtrlCmd | M.Alt | M.Shift | K.KeyB, () => buildMacos());
+    inst.addCommand(M.CtrlCmd | K.KeyB, () => doBuild());
     inst.addCommand(M.CtrlCmd | K.KeyR, () => { if (!runBtn.disabled) run(); });
     updateSrcInfo();
   } catch (e) {
@@ -1345,6 +1232,7 @@ async function initEditor() {
 initEditor();
 refreshHealth();
 loadExamples();
+loadTargets();
 </script>
 </body>
 </html>
