@@ -6,6 +6,7 @@ $ `stdlib/std/path.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/encode.nu`
 $ `stdlib/std/int.nu`
+$ `stdlib/std/sort.nu`
 $ `stdlib/ext/regex.nu`
 
 // ── Globals ──────────────────────────────────────────────────────────
@@ -28,6 +29,11 @@ $ `stdlib/ext/regex.nu`
 @ get_tests_dir → String { ^ ( env_var_or `NURL_TESTS_DIR` `/opt/nurl/compiler/tests` ) }
 @ get_mingw_gcc → String { ^ ( env_var_or `NURL_MINGW_GCC` `/usr/bin/x86_64-w64-mingw32-gcc` ) }
 @ get_mingw_curl_prefix → String { ^ ( env_var_or `NURL_MINGW_CURL_PREFIX` `/opt/curl-mingw` ) }
+@ get_roadmap_path → String { ^ ( env_var_or `NURL_ROADMAP_PATH` `/opt/nurl/ROADMAP.md` ) }
+@ get_gotchas_path → String { ^ ( env_var_or `NURL_GOTCHAS_PATH` `/opt/nurl/docs/GOTCHAS.md` ) }
+@ get_license_mit_path → String { ^ ( env_var_or `NURL_LICENSE_MIT_PATH` `/opt/nurl/LICENSE-MIT` ) }
+@ get_license_apache_path → String { ^ ( env_var_or `NURL_LICENSE_APACHE_PATH` `/opt/nurl/LICENSE-APACHE` ) }
+@ get_notice_path → String { ^ ( env_var_or `NURL_NOTICE_PATH` `/opt/nurl/NOTICE` ) }
 
 // Per-zig-target runtime object path. Used by /build_target so we don't
 // have to keep a switch in NURL code — the Dockerfile builds one
@@ -1300,6 +1306,267 @@ $ `stdlib/ext/regex.nu`
   }
 }
 
+// ── Raw doc passthroughs — text/markdown / text/plain ─────────────
+
+// Internal: read a file and return it with the chosen Content-Type.
+// 404 if the file isn't present, identical to api/'s HTTPException 404.
+@ __serve_file_text s fpath s mime s not_found_msg → HttpResponse {
+  : ! ( Vec u ) IoErr rd ( read_file_bytes fpath )
+  ?? rd {
+    T body → {
+      : HttpResponse r ( response_new 200 )
+      ( response_set_header r `Content-Type` mime )
+      ( response_set_body_bytes r body )
+      ( vec_free [u] body )
+      ^ r
+    }
+    F _ → { ^ ( response_text 404 not_found_msg ) }
+  }
+}
+
+@ h_readme_md HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /readme.md\n` )
+  : String fp ( get_readme_path )
+  : HttpResponse r ( __serve_file_text ( string_data fp ) `text/markdown; charset=utf-8` `README.md not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_roadmap HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /roadmap\n` )
+  : String fp ( get_roadmap_path )
+  : HttpResponse r ( __serve_file_text ( string_data fp ) `text/markdown; charset=utf-8` `ROADMAP.md not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_roadmap_md HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /roadmap.md\n` )
+  : String fp ( get_roadmap_path )
+  : HttpResponse r ( __serve_file_text ( string_data fp ) `text/markdown; charset=utf-8` `ROADMAP.md not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_gotchas HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /gotchas\n` )
+  : String fp ( get_gotchas_path )
+  : HttpResponse r ( __serve_file_text ( string_data fp ) `text/markdown; charset=utf-8` `GOTCHAS.md not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_gotchas_md HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /gotchas.md\n` )
+  : String fp ( get_gotchas_path )
+  : HttpResponse r ( __serve_file_text ( string_data fp ) `text/markdown; charset=utf-8` `GOTCHAS.md not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_grammar_ebnf HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /grammar.ebnf\n` )
+  : String fp ( get_grammar_path )
+  : HttpResponse r ( __serve_file_text ( string_data fp ) `text/plain; charset=utf-8` `grammar.ebnf not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_license_mit_raw HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /LICENSE-MIT\n` )
+  : String fp ( get_license_mit_path )
+  : HttpResponse r ( __serve_file_text ( string_data fp ) `text/plain; charset=utf-8` `LICENSE-MIT not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_license_apache_raw HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /LICENSE-APACHE\n` )
+  : String fp ( get_license_apache_path )
+  : HttpResponse r ( __serve_file_text ( string_data fp ) `text/plain; charset=utf-8` `LICENSE-APACHE not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_notice_raw HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /NOTICE\n` )
+  : String fp ( get_notice_path )
+  : HttpResponse r ( __serve_file_text ( string_data fp ) `text/plain; charset=utf-8` `NOTICE not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+// /license — minimal HTML index that links to the two raw text files.
+@ h_license HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /license\n` )
+  : String html ( string_with_cap 1024 )
+  ( string_push_str html `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>License · NURL</title>` )
+  ( string_push_str html `<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0f1115;color:#e6e8ee;max-width:780px;margin:2rem auto;padding:0 1.25rem;line-height:1.6}a{color:#7cc4ff}h1{border-bottom:1px solid #262c38;padding-bottom:.35em}</style>` )
+  ( string_push_str html `</head><body><h1>NURL — License</h1>` )
+  ( string_push_str html `<p>NURL is dual-licensed under either of:</p><ul>` )
+  ( string_push_str html `<li><a href="/license/mit">MIT License</a> (<a href="/LICENSE-MIT">raw</a>)</li>` )
+  ( string_push_str html `<li><a href="/license/apache">Apache License 2.0</a> (<a href="/LICENSE-APACHE">raw</a>)</li>` )
+  ( string_push_str html `</ul><p>at your option. SPDX: <code>MIT OR Apache-2.0</code></p>` )
+  ( string_push_str html `<p>See also <a href="/NOTICE">NOTICE</a>.</p></body></html>` )
+  : HttpResponse r ( response_text 200 ( string_data html ) )
+  ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+  ^ r
+}
+
+// /license/mit, /license/apache — the rendered-page variants. Python
+// renders markdown→HTML; until the NURL markdown parser lands these
+// serve the raw text wrapped in a dark <pre> so the page looks like
+// the rest of the playground rather than a stark white default.
+@ __serve_doc_pre s title s fpath s raw_path s not_found_msg → HttpResponse {
+  : ! ( Vec u ) IoErr rd ( read_file_bytes fpath )
+  ?? rd {
+    T body → {
+      : String html ( string_with_cap + ( vec_len [u] body ) 2048 )
+      ( string_push_str html `<!doctype html><html lang="en"><head><meta charset="utf-8">` )
+      ( string_push_str html `<title>` ) ( string_push_str html title ) ( string_push_str html ` · NURL</title>` )
+      ( string_push_str html `<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0f1115;color:#e6e8ee;margin:0}header{display:flex;align-items:center;gap:.75rem;padding:.75rem 1rem;border-bottom:1px solid #262c38;background:#161a21;position:sticky;top:0}header a{color:#7cc4ff;text-decoration:none;font-size:.9rem}header .title{font-weight:600}header .spacer{flex:1}.wrap{max-width:860px;margin:0 auto;padding:1.5rem 1.25rem 4rem}pre{font-family:ui-monospace,Menlo,Consolas,monospace;background:#161a21;border:1px solid #262c38;padding:1rem;border-radius:8px;white-space:pre-wrap;word-wrap:break-word;font-size:.85rem;line-height:1.5}</style>` )
+      ( string_push_str html `</head><body><header><a href="/">← Playground</a><span class="title">` )
+      ( string_push_str html title )
+      ( string_push_str html `</span><div class="spacer"></div><a href="` )
+      ( string_push_str html raw_path )
+      ( string_push_str html `" target="_blank" rel="noopener">raw</a></header><div class="wrap"><pre>` )
+      // Append body as escaped HTML. Minimal escape: &, <, >. For licenses + .md
+      // these characters are rare; we walk the byte buffer once.
+      : i blen ( vec_len [u] body )
+      : ~ i k 0
+      ~ < k blen {
+        : ? u co ( vec_get [u] body k )
+        ?? co {
+          T c → {
+            ? == c 38 { ( string_push_str html `&amp;` ) } {
+              ? == c 60 { ( string_push_str html `&lt;` ) } {
+                ? == c 62 { ( string_push_str html `&gt;` ) } {
+                  ( string_push_char html c )
+                }
+              }
+            }
+          }
+          F → {}
+        }
+        = k + k 1
+      }
+      ( vec_free [u] body )
+      ( string_push_str html `</pre></div></body></html>` )
+      : HttpResponse r ( response_text 200 ( string_data html ) )
+      ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+      ^ r
+    }
+    F _ → { ^ ( response_text 404 not_found_msg ) }
+  }
+}
+
+@ h_license_mit HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /license/mit\n` )
+  : String fp ( get_license_mit_path )
+  : HttpResponse r ( __serve_doc_pre `MIT License` ( string_data fp ) `/LICENSE-MIT` `LICENSE-MIT not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_license_apache HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /license/apache\n` )
+  : String fp ( get_license_apache_path )
+  : HttpResponse r ( __serve_doc_pre `Apache License 2.0` ( string_data fp ) `/LICENSE-APACHE` `LICENSE-APACHE not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+// ── Recursive .nu file listings — /stdlib + /tests JSON ──────────
+
+// Join `root` with `prefix`; when `prefix` is empty, returns a fresh
+// copy of `root`. Factored out because inline ternary on a String
+// return trips a codegen bug ("call @?" with String args).
+@ __join_or_root s root s prefix → String {
+  ? > ( nurl_str_len prefix ) 0 { ^ ( path_join root prefix ) } {}
+  ^ ( string_from root )
+}
+
+// Walk `root_dir` recursively. For every regular .nu file found,
+// append { name: <rel>, path: <rel>, bytes: N } to `arr`. `rel` is
+// the path relative to root_dir (POSIX-style, "/" separator).
+// Subdirectories are entered if dir_list succeeds on them. Entries
+// at each level are sorted alphabetically before walking, which gives
+// a globally sorted output (top-level "foo.nu" comes before subdir
+// "g/bar.nu" iff "foo.nu" < "g" lexicographically).
+@ __walk_nu_files Json arr s root_dir s rel_prefix → v {
+  : String full ( __join_or_root root_dir rel_prefix )
+  : ! ( Vec String ) IoErr dr ( dir_list ( string_data full ) )
+  ?? dr {
+    T entries → {
+      ( sort_by [String] entries \ String a String b → i {
+        ^ ( nurl_str_cmp ( string_data a ) ( string_data b ) )
+      } )
+      : i n ( vec_len [String] entries )
+      : ~ i i 0
+      ~ < i n {
+        ?? ( vec_get [String] entries i ) {
+          T name → {
+            : String child_rel ( __join_or_root rel_prefix ( string_data name ) )
+            : String child_full ( path_join ( string_data full ) ( string_data name ) )
+            ? ( string_ends_with name `.nu` ) {
+              : ! i IoErr sz ( file_size ( string_data child_full ) )
+              ?? sz {
+                T bytes → {
+                  : Json o ( json_obj_new )
+                  ( json_obj_set o `name`  ( json_str_lit ( string_data child_rel ) ) )
+                  ( json_obj_set o `path`  ( json_str_lit ( string_data child_rel ) ) )
+                  ( json_obj_set o `bytes` ( json_int bytes ) )
+                  ( json_arr_push arr o )
+                }
+                F _ → {}
+              }
+            } {
+              // Try to recurse — if it's a directory, dir_list succeeds.
+              ( __walk_nu_files arr root_dir ( string_data child_rel ) )
+            }
+            ( string_free child_full )
+            ( string_free child_rel )
+          }
+          F _ → {}
+        }
+        = i + i 1
+      }
+      : ~ i k 0
+      ~ < k n {
+        ?? ( vec_get [String] entries k ) { T fs → ( string_free fs ) F _ → {} }
+        = k + k 1
+      }
+      ( vec_free [String] entries )
+    }
+    F _ → {}
+  }
+  ( string_free full )
+}
+
+@ h_stdlib_list HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /stdlib\n` )
+  : String dir ( get_stdlib_dir )
+  : Json arr ( json_arr_new )
+  ( __walk_nu_files arr ( string_data dir ) `` )
+  : String body ( json_stringify arr )
+  : HttpResponse r ( response_text 200 ( string_data body ) )
+  ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
+  ( json_free arr ) ( string_free dir ) ( string_free body )
+  ^ r
+}
+
+@ h_tests_list HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /tests\n` )
+  : String dir ( get_tests_dir )
+  : Json arr ( json_arr_new )
+  ( __walk_nu_files arr ( string_data dir ) `` )
+  : String body ( json_stringify arr )
+  : HttpResponse r ( response_text 200 ( string_data body ) )
+  ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
+  ( json_free arr ) ( string_free dir ) ( string_free body )
+  ^ r
+}
+
 // ── Directory listing viewers — /stdlib-viewer + /tests-viewer ──
 
 // Internal: build a minimal browse-only HTML page listing every file
@@ -1640,9 +1907,23 @@ $ `stdlib/ext/regex.nu`
       ( router_get  r `/health`          \ HttpRequest req Params params → HttpResponse { ^ ( h_health      req params ) } )
       ( router_get  r `/targets`         \ HttpRequest req Params params → HttpResponse { ^ ( h_targets     req params ) } )
       ( router_get  r `/readme`          \ HttpRequest req Params params → HttpResponse { ^ ( h_readme      req params ) } )
+      ( router_get  r `/readme.md`       \ HttpRequest req Params params → HttpResponse { ^ ( h_readme_md   req params ) } )
+      ( router_get  r `/roadmap`         \ HttpRequest req Params params → HttpResponse { ^ ( h_roadmap     req params ) } )
+      ( router_get  r `/roadmap.md`      \ HttpRequest req Params params → HttpResponse { ^ ( h_roadmap_md  req params ) } )
+      ( router_get  r `/gotchas`         \ HttpRequest req Params params → HttpResponse { ^ ( h_gotchas     req params ) } )
+      ( router_get  r `/gotchas.md`      \ HttpRequest req Params params → HttpResponse { ^ ( h_gotchas_md  req params ) } )
       ( router_get  r `/grammar`         \ HttpRequest req Params params → HttpResponse { ^ ( h_grammar     req params ) } )
+      ( router_get  r `/grammar.ebnf`    \ HttpRequest req Params params → HttpResponse { ^ ( h_grammar_ebnf req params ) } )
+      ( router_get  r `/license`         \ HttpRequest req Params params → HttpResponse { ^ ( h_license       req params ) } )
+      ( router_get  r `/license/mit`     \ HttpRequest req Params params → HttpResponse { ^ ( h_license_mit   req params ) } )
+      ( router_get  r `/license/apache`  \ HttpRequest req Params params → HttpResponse { ^ ( h_license_apache req params ) } )
+      ( router_get  r `/LICENSE-MIT`     \ HttpRequest req Params params → HttpResponse { ^ ( h_license_mit_raw    req params ) } )
+      ( router_get  r `/LICENSE-APACHE`  \ HttpRequest req Params params → HttpResponse { ^ ( h_license_apache_raw req params ) } )
+      ( router_get  r `/NOTICE`          \ HttpRequest req Params params → HttpResponse { ^ ( h_notice_raw   req params ) } )
       ( router_get  r `/stdlib-viewer`   \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_viewer req params ) } )
       ( router_get  r `/tests-viewer`    \ HttpRequest req Params params → HttpResponse { ^ ( h_tests_viewer  req params ) } )
+      ( router_get  r `/stdlib`          \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_list  req params ) } )
+      ( router_get  r `/tests`           \ HttpRequest req Params params → HttpResponse { ^ ( h_tests_list   req params ) } )
       ( router_get  r `/stdlib/*path`    \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_file req params ) } )
       ( router_get  r `/tests/*path`     \ HttpRequest req Params params → HttpResponse { ^ ( h_tests_file  req params ) } )
       ( router_get  r `/mcp-info`        \ HttpRequest req Params params → HttpResponse { ^ ( h_mcp_info    req params ) } )

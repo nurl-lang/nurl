@@ -188,7 +188,7 @@ COPY --from=builder /src/nurlapi/nurlapi /app/nurlapi
 COPY --from=builder /src/nurlapi/static /app/static
 
 # Bring in all cross-compilation artifacts
-RUN mkdir -p /opt/nurl/build /opt/nurl/stdlib /app/output /opt/nurl/examples /opt/nurl/compiler /opt/nurl/spec
+RUN mkdir -p /opt/nurl/build /opt/nurl/stdlib /app/output /opt/nurl/examples /opt/nurl/compiler /opt/nurl/spec /opt/nurl/docs
 COPY --from=builder /src/build/nurlc             /opt/nurl/build/nurlc
 COPY --from=builder /src/stdlib                  /opt/nurl/stdlib
 COPY --from=builder /opt/wasi-sdk                /opt/wasi-sdk
@@ -201,6 +201,11 @@ COPY --from=builder /opt/zig-cache               /opt/zig-cache
 COPY --from=builder /src/examples                /opt/nurl/examples
 COPY --from=builder /src/compiler/tests          /opt/nurl/compiler/tests
 COPY --from=builder /src/README.md               /opt/nurl/README.md
+COPY --from=builder /src/ROADMAP.md              /opt/nurl/ROADMAP.md
+COPY --from=builder /src/docs/GOTCHAS.md         /opt/nurl/docs/GOTCHAS.md
+COPY --from=builder /src/LICENSE-MIT             /opt/nurl/LICENSE-MIT
+COPY --from=builder /src/LICENSE-APACHE          /opt/nurl/LICENSE-APACHE
+COPY --from=builder /src/NOTICE                  /opt/nurl/NOTICE
 COPY --from=builder /src/spec                    /opt/nurl/spec
 
 EXPOSE 8000
