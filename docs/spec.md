@@ -1031,7 +1031,6 @@ IR blob + deterministic compiler + fixed-point check) mirrors Zig.
 - [`docs/FORMAT.md`](FORMAT.md) — `nurlfmt` rules.
 - [`docs/ASYNC.md`](ASYNC.md) — async runtime design.
 - [`README.md`](../README.md) — project overview and tutorials.
-- [`IMPROVEMENTS.md`](../IMPROVEMENTS.md) — current critic-driven
-  backlog.
+- [`ROADMAP.md`](../ROADMAP.md) — forward plan and per-section status.
 - [`CHANGELOG.md`](../CHANGELOG.md) — release history and per-ship
   notes.

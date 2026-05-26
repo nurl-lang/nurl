@@ -211,8 +211,10 @@ round-trips every JSON line emitted by the test.
 Closes the four "grammar-legal but semantically dead" cases the
 external review flagged as silent compiles. Each is a small, local
 compiler change; bootstrap fixed point holds (stage1 ≡ stage2
-byte-identical IR at **1 620 300 B**); full test corpus green. See
-`IMPROVEMENTS.md` for the original backlog.
+byte-identical IR at **1 620 300 B**); full test corpus green. The
+original critic-driven backlog (`IMPROVEMENTS.md`) was retired
+2026-05-26 after all 20/21 items shipped and the final Mobile/Embedded
+row graduated to ROADMAP §4 as a long-running roadmap item.
 
 1. **`^` vs `^^` XOR confusion `warning:`** — `gen_ret` peeks the
    token after the returned expression. If it is on the same source
