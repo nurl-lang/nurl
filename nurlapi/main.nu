@@ -23,6 +23,24 @@ $ `stdlib/ext/regex.nu`
 @ get_zig → String { ^ ( env_var_or `NURL_ZIG` `/opt/zig/zig` ) }
 @ get_work_root → String { ^ ( env_var_or `NURL_WORK_ROOT` `/opt/nurl` ) }
 @ get_static_dir → String { ^ ( env_var_or `NURL_STATIC_DIR` `/app/static` ) }
+@ get_readme_path → String { ^ ( env_var_or `NURL_README_PATH` `/opt/nurl/README.md` ) }
+@ get_grammar_path → String { ^ ( env_var_or `NURL_GRAMMAR_PATH` `/opt/nurl/spec/grammar.ebnf` ) }
+@ get_tests_dir → String { ^ ( env_var_or `NURL_TESTS_DIR` `/opt/nurl/compiler/tests` ) }
+
+// Per-zig-target runtime object path. Used by /build_target so we don't
+// have to keep a switch in NURL code — the Dockerfile builds one
+// runtime.<id>.o per registered target and the path lookup follows
+// suit: `runtime.<target_id>.o` under NURL_STDLIB_DIR.
+@ get_runtime_target_o s target_id → String {
+  : String sdir ( get_stdlib_dir )
+  : String fname ( string_with_cap 32 )
+  ( string_push_str fname `runtime.` )
+  ( string_push_str fname target_id )
+  ( string_push_str fname `.o` )
+  : String full ( path_join ( string_data sdir ) ( string_data fname ) )
+  ( string_free sdir ) ( string_free fname )
+  ^ full
+}
 
 @ create_build_id → String {
   : i now ( now_ms )
@@ -682,9 +700,44 @@ $ `stdlib/ext/regex.nu`
   ^ r
 }
 
+// Reads <output_dir>/<build_id>/<filename> directly and returns it
+// with the right Content-Type. Replaces an earlier serve_static call
+// whose request-path-based resolution double-prefixed the build dir
+// ("/download/<id>/<file>" → "<build_dir>/download/<id>/<file>" → 404).
 @ h_download HttpRequest req Params params → HttpResponse {
-  : ? String bid_opt ( params_get params `build_id` ) : ? String fname_opt ( params_get params `filename` )
-  ?? bid_opt { T bid → { ?? fname_opt { T fname → { : String out_dir_base ( get_output_dir ) : String build_dir ( path_join ( string_data out_dir_base ) ( string_data bid ) ) : HttpResponse res ( serve_static ( string_data build_dir ) req ) ( string_free bid ) ( string_free fname ) ( string_free out_dir_base ) ( string_free build_dir ) ^ res } F _ → { ( string_free bid ) ^ ( response_text 400 `{"error":"filename missing"}\n` ) } } } F _ → { ^ ( response_text 400 `{"error":"build_id missing"}\n` ) } }
+  : ? String bid_opt ( params_get params `build_id` )
+  : ? String fname_opt ( params_get params `filename` )
+  ?? bid_opt { T bid → {
+    ?? fname_opt { T fname → {
+      // Path-traversal defence — refuse `..` in either segment.
+      ? | ( __has_dotdot_segment ( string_data bid ) ) ( __has_dotdot_segment ( string_data fname ) ) {
+        ( string_free bid ) ( string_free fname )
+        ^ ( response_text 403 `forbidden\n` )
+      } {}
+      : String out_dir_base ( get_output_dir )
+      : String build_dir ( path_join ( string_data out_dir_base ) ( string_data bid ) )
+      : String fpath ( path_join ( string_data build_dir ) ( string_data fname ) )
+      : ! ( Vec u ) IoErr rd ( read_file_bytes ( string_data fpath ) )
+      ?? rd {
+        T body → {
+          : String ext ( path_extension ( string_data fpath ) )
+          : s mime ( mime_for_ext ( string_data ext ) )
+          : HttpResponse r ( response_new 200 )
+          ( response_set_header r `Content-Type` mime )
+          ( response_set_body_bytes r body )
+          ( vec_free [u] body )
+          ( string_free ext ) ( string_free fpath ) ( string_free build_dir )
+          ( string_free out_dir_base ) ( string_free bid ) ( string_free fname )
+          ^ r
+        }
+        F _ → {
+          ( string_free fpath ) ( string_free build_dir )
+          ( string_free out_dir_base ) ( string_free bid ) ( string_free fname )
+          ^ ( response_text 404 `not found\n` )
+        }
+      }
+    } F _ → { ( string_free bid ) ^ ( response_text 400 `{"error":"filename missing"}\n` ) } }
+  } F _ → { ^ ( response_text 400 `{"error":"build_id missing"}\n` ) } }
 }
 
 @ h_static HttpRequest req Params params → HttpResponse {
@@ -732,11 +785,29 @@ $ `stdlib/ext/regex.nu`
   ( nurl_print `/` )
   ( nurl_print ( string_data filename ) )
   ( nurl_print `\n` )
+  ? | ( __has_dotdot_segment ( string_data build_id ) ) ( __has_dotdot_segment ( string_data filename ) ) {
+    ^ ( response_text 403 `forbidden\n` )
+  } {}
   : String out_dir_base ( get_output_dir )
   : String build_dir ( path_join ( string_data out_dir_base ) ( string_data build_id ) )
-  : HttpResponse res ( serve_static ( string_data build_dir ) req )
-  ( string_free out_dir_base ) ( string_free build_dir )
-  ^ res
+  : String fpath ( path_join ( string_data build_dir ) ( string_data filename ) )
+  : ! ( Vec u ) IoErr rd ( read_file_bytes ( string_data fpath ) )
+  ?? rd {
+    T body → {
+      : String ext ( path_extension ( string_data fpath ) )
+      : s mime ( mime_for_ext ( string_data ext ) )
+      : HttpResponse r ( response_new 200 )
+      ( response_set_header r `Content-Type` mime )
+      ( response_set_body_bytes r body )
+      ( vec_free [u] body )
+      ( string_free ext ) ( string_free fpath ) ( string_free build_dir ) ( string_free out_dir_base )
+      ^ r
+    }
+    F _ → {
+      ( string_free fpath ) ( string_free build_dir ) ( string_free out_dir_base )
+      ^ ( response_text 404 `not found\n` )
+    }
+  }
 }
 
 @ h_static_for HttpRequest req String tail → HttpResponse {
@@ -919,6 +990,346 @@ $ `stdlib/ext/regex.nu`
   }
 }
 
+// ── Doc passthrough — README.md / grammar.ebnf ────────────────────
+
+@ h_readme HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /readme\n` )
+  : String fp ( get_readme_path )
+  : ! ( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+  ?? rd {
+    T body → {
+      : HttpResponse r ( response_new 200 )
+      ( response_set_header r `Content-Type` `text/markdown; charset=utf-8` )
+      ( response_set_body_bytes r body )
+      ( vec_free [u] body )
+      ( string_free fp )
+      ^ r
+    }
+    F _ → {
+      ( string_free fp )
+      ^ ( response_text 404 `README.md not found\n` )
+    }
+  }
+}
+
+@ h_grammar HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /grammar\n` )
+  : String fp ( get_grammar_path )
+  : ! ( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+  ?? rd {
+    T body → {
+      : HttpResponse r ( response_new 200 )
+      ( response_set_header r `Content-Type` `text/plain; charset=utf-8` )
+      ( response_set_body_bytes r body )
+      ( vec_free [u] body )
+      ( string_free fp )
+      ^ r
+    }
+    F _ → {
+      ( string_free fp )
+      ^ ( response_text 404 `grammar.ebnf not found\n` )
+    }
+  }
+}
+
+// ── Directory listing viewers — /stdlib-viewer + /tests-viewer ──
+
+// Internal: build a minimal browse-only HTML page listing every file
+// directly under `dir` (one level deep — no recursion into
+// subdirectories for stdlib's core/ ext/ std/ split; the listing
+// shows each entry name verbatim). Returned HTML wraps the list in a
+// `<pre>`-styled block so the page is readable without external CSS.
+@ __viewer_html_for s title s dir s base_url → String {
+  : String html ( string_with_cap 4096 )
+  ( string_push_str html `<!doctype html><html lang="en"><head><meta charset="utf-8">` )
+  ( string_push_str html `<title>` ) ( string_push_str html title ) ( string_push_str html `</title>` )
+  ( string_push_str html `<style>body{font-family:ui-monospace,Menlo,Consolas,monospace;background:#0d1117;color:#c9d1d9;padding:24px;max-width:980px;margin:0 auto}a{color:#79c0ff;text-decoration:none}a:hover{text-decoration:underline}h1{color:#f0f6fc;border-bottom:1px solid #30363d;padding-bottom:8px}ul{list-style:none;padding-left:0}li{padding:2px 0}.dir{color:#7ee787}</style>` )
+  ( string_push_str html `</head><body><h1>` ) ( string_push_str html title ) ( string_push_str html `</h1><ul>` )
+  : ! ( Vec String ) IoErr dr ( dir_list dir )
+  ?? dr {
+    T entries → {
+      : ~ i i 0
+      ~ < i ( vec_len [String] entries ) {
+        ?? ( vec_get [String] entries i ) {
+          T name → {
+            : String full ( path_join dir ( string_data name ) )
+            : b is_nu ( string_ends_with name `.nu` )
+            ? | is_nu ( string_ends_with name `.sh` ) {
+              ( string_push_str html `<li><a href="` )
+              ( string_push_str html base_url )
+              ( string_push_char html 47 )
+              ( string_push_str html ( string_data name ) )
+              ( string_push_str html `">` )
+              ( string_push_str html ( string_data name ) )
+              ( string_push_str html `</a></li>` )
+            } { ? ( file_exists ( string_data full ) ) {} {
+                // Treat as subdirectory — show with dir tag, no link
+                ( string_push_str html `<li class="dir">` )
+                ( string_push_str html ( string_data name ) )
+                ( string_push_str html `/</li>` )
+              }
+            }
+            ( string_free full )
+          }
+          F _ → {}
+        }
+        = i + i 1
+      }
+      : ~ i k 0
+      ~ < k ( vec_len [String] entries ) {
+        ?? ( vec_get [String] entries k ) { T fs → ( string_free fs ) F _ → {} }
+        = k + k 1
+      }
+      ( vec_free [String] entries )
+    }
+    F _ → {
+      ( string_push_str html `<li><em>(could not list directory: ` )
+      ( string_push_str html dir )
+      ( string_push_str html `)</em></li>` )
+    }
+  }
+  ( string_push_str html `</ul></body></html>\n` )
+  ^ html
+}
+
+@ h_stdlib_viewer HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /stdlib-viewer\n` )
+  : String dir ( get_stdlib_dir )
+  : String html ( __viewer_html_for `NURL stdlib` ( string_data dir ) `/stdlib` )
+  : HttpResponse r ( response_text 200 ( string_data html ) )
+  ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+  ( string_free dir ) ( string_free html )
+  ^ r
+}
+
+@ h_tests_viewer HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /tests-viewer\n` )
+  : String dir ( get_tests_dir )
+  : String html ( __viewer_html_for `NURL compiler tests` ( string_data dir ) `/tests` )
+  : HttpResponse r ( response_text 200 ( string_data html ) )
+  ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+  ( string_free dir ) ( string_free html )
+  ^ r
+}
+
+// Single-file passthrough used by /stdlib/<path> and /tests/<path>
+// link targets in the viewer pages. Reads the file under `dir` +
+// `tail` and returns it as text/plain; refuses `..` segments.
+@ __serve_text_under HttpRequest req String dir String tail → HttpResponse {
+  ? ( __has_dotdot_segment ( string_data tail ) ) {
+    ^ ( response_text 403 `forbidden\n` )
+  } {}
+  : String fpath ( path_join ( string_data dir ) ( string_data tail ) )
+  : ! ( Vec u ) IoErr rd ( read_file_bytes ( string_data fpath ) )
+  ?? rd {
+    T body → {
+      : HttpResponse r ( response_new 200 )
+      ( response_set_header r `Content-Type` `text/plain; charset=utf-8` )
+      ( response_set_body_bytes r body )
+      ( vec_free [u] body )
+      ( string_free fpath )
+      ^ r
+    }
+    F _ → {
+      ( string_free fpath )
+      ^ ( response_text 404 `not found\n` )
+    }
+  }
+}
+
+@ h_stdlib_file HttpRequest req Params params → HttpResponse {
+  : ? String tail_opt ( params_get params `path` )
+  ?? tail_opt {
+    T tail → {
+      : String dir ( get_stdlib_dir )
+      : HttpResponse r ( __serve_text_under req dir tail )
+      ( string_free dir ) ( string_free tail )
+      ^ r
+    }
+    F _ → { ^ ( response_text 400 `{"error":"path missing"}\n` ) }
+  }
+}
+
+@ h_tests_file HttpRequest req Params params → HttpResponse {
+  : ? String tail_opt ( params_get params `path` )
+  ?? tail_opt {
+    T tail → {
+      : String dir ( get_tests_dir )
+      : HttpResponse r ( __serve_text_under req dir tail )
+      ( string_free dir ) ( string_free tail )
+      ^ r
+    }
+    F _ → { ^ ( response_text 400 `{"error":"path missing"}\n` ) }
+  }
+}
+
+// ── /targets — JSON list of compile targets (UI dropdown source) ──
+
+// Append one TargetInfo entry to `arr`. Shape mirrors api/'s
+// TargetInfo dataclass — id / label / group / endpoint / runnable /
+// notes — so the playground's existing dropdown JS works unchanged.
+@ __push_target Json arr s id s label s group s endpoint b runnable s notes → v {
+  : Json o ( json_obj_new )
+  ( json_obj_set o `id`       ( json_str_lit id ) )
+  ( json_obj_set o `label`    ( json_str_lit label ) )
+  ( json_obj_set o `group`    ( json_str_lit group ) )
+  ( json_obj_set o `endpoint` ( json_str_lit endpoint ) )
+  ( json_obj_set o `runnable` ( json_bool runnable ) )
+  ( json_obj_set o `notes`    ( json_str_lit notes ) )
+  ( json_arr_push arr o )
+}
+
+@ h_targets HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /targets\n` )
+  : Json arr ( json_arr_new )
+  ( __push_target arr `wasm`              `WebAssembly · wasm32-wasi`     `WebAssembly` `/build_wasm`    T `runs in-browser · full canvas/audio FFI` )
+  ( __push_target arr `linux-x64`         `Linux x86_64 · native (glibc)` `Linux`       `/build`         F `full FFI: HTTP / sqlite / canvas` )
+  ( __push_target arr `linux-x64-musl`    `Linux x86_64 · musl (static)`  `Linux`       `/build_target`  F `static ELF · no HTTP/canvas/audio` )
+  ( __push_target arr `linux-arm64-musl`  `Linux ARM64 · musl (static)`   `Linux`       `/build_target`  F `static ELF · no HTTP/canvas/audio` )
+  ( __push_target arr `linux-arm64-gnu`   `Linux ARM64 · glibc`           `Linux`       `/build_target`  F `dynamic ELF (glibc 2.31+) · no HTTP/canvas/audio` )
+  ( __push_target arr `linux-riscv64-musl` `Linux RISC-V 64 · musl (static)` `Linux`    `/build_target`  F `static ELF · no HTTP/canvas/audio` )
+  ( __push_target arr `macos-x64`         `macOS x86_64 · Intel`          `macOS`       `/build_target`  F `libSystem only · no HTTP/canvas/audio` )
+  ( __push_target arr `macos-arm64`       `macOS ARM64 · Apple Silicon`   `macOS`       `/build_target`  F `libSystem only · no HTTP/canvas/audio` )
+  ( __push_target arr `windows-x64`       `Windows x86_64 · .exe (mingw-w64)` `Windows` `/build_windows` F `static libcurl HTTP · no canvas/audio` )
+  : String body ( json_stringify arr )
+  : HttpResponse r ( response_text 200 ( string_data body ) )
+  ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
+  ( json_free arr ) ( string_free body )
+  ^ r
+}
+
+// ── /build_target — generic cross-compile via zig cc ───────────────
+
+// Resolve target_id → (zig triple, static-flag, libs string).
+// Returns empty triple when the id is unknown (caller emits 400).
+@ __zig_triple_for s id → s {
+  ? ( nurl_str_eq id `linux-x64-musl`     ) { ^ `x86_64-linux-musl` } {}
+  ? ( nurl_str_eq id `linux-arm64-musl`   ) { ^ `aarch64-linux-musl` } {}
+  ? ( nurl_str_eq id `linux-arm64-gnu`    ) { ^ `aarch64-linux-gnu.2.31` } {}
+  ? ( nurl_str_eq id `linux-riscv64-musl` ) { ^ `riscv64-linux-musl` } {}
+  ? ( nurl_str_eq id `macos-x64`          ) { ^ `x86_64-macos-none` } {}
+  ? ( nurl_str_eq id `macos-arm64`        ) { ^ `aarch64-macos-none` } {}
+  ^ ``
+}
+
+@ __zig_is_static s id → b {
+  ? ( nurl_str_eq id `linux-x64-musl`     ) { ^ T } {}
+  ? ( nurl_str_eq id `linux-arm64-musl`   ) { ^ T } {}
+  ? ( nurl_str_eq id `linux-riscv64-musl` ) { ^ T } {}
+  ^ F
+}
+
+@ __zig_is_linux s id → b {
+  ? ( nurl_str_eq id `linux-x64-musl`     ) { ^ T } {}
+  ? ( nurl_str_eq id `linux-arm64-musl`   ) { ^ T } {}
+  ? ( nurl_str_eq id `linux-arm64-gnu`    ) { ^ T } {}
+  ? ( nurl_str_eq id `linux-riscv64-musl` ) { ^ T } {}
+  ^ F
+}
+
+@ h_build_target HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] POST /build_target\n` )
+  : String body_str ( get_body_str req )
+  : ! Json JsonError root_res ( json_parse ( string_data body_str ) )
+  ?? root_res {
+    T root → {
+      : s source ( get_common_json root `source` `` )
+      : s target ( get_common_json root `target` `` )
+      : s filename ( get_common_json root `filename` `main.nu` )
+      : s opt ( get_common_json root `opt` `-O2` )
+      ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
+      : s triple ( __zig_triple_for target )
+      ? == ( nurl_str_len triple ) 0 {
+        ( json_free root ) ( string_free body_str )
+        ^ ( response_text 400 `{"error":"unknown target id (see GET /targets)"}\n` )
+      } {}
+      : b is_static ( __zig_is_static target )
+      : b is_linux ( __zig_is_linux target )
+
+      : String build_id ( create_build_id )
+      : String build_dir ( path_join ( string_data ( get_output_dir ) ) ( string_data build_id ) )
+      : ! v IoErr dr ( dir_create ( string_data build_dir ) )
+      ?? dr {
+        T _ → {
+          : String nu_path ( path_join ( string_data build_dir ) filename )
+          ( write_file ( string_data nu_path ) source )
+          : String ll_path ( path_join ( string_data build_dir ) `main.ll` )
+          : String bin_name ( string_from filename )
+          ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
+          : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
+          : String rt_o ( get_runtime_target_o target )
+
+          : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
+          : ! Output ProcessErr nurlc_res ( process_run ( string_data ( get_nurlc_path ) ) nurlc_args `` ) ( vec_free [s] nurlc_args )
+          ?? nurlc_res {
+            T n_out → {
+              : i n_rc ( output_exit_code n_out )
+              ? ( output_success n_out ) {
+                ( write_file ( string_data ll_path ) ( output_stdout n_out ) )
+                : ( Vec s ) zig_args ( vec_new [s] )
+                ( vec_push [s] zig_args `cc` )
+                ( vec_push [s] zig_args `-target` ) ( vec_push [s] zig_args triple )
+                ( vec_push [s] zig_args opt )
+                ( vec_push [s] zig_args `-Wno-override-module` )
+                ? is_static { ( vec_push [s] zig_args `-static` ) } {}
+                ( vec_push [s] zig_args ( string_data ll_path ) )
+                ( vec_push [s] zig_args ( string_data rt_o ) )
+                ? is_linux { ( vec_push [s] zig_args `-lm` ) ( vec_push [s] zig_args `-lpthread` ) } {}
+                ( vec_push [s] zig_args `-o` ) ( vec_push [s] zig_args ( string_data bin_path ) )
+                : ! Output ProcessErr zig_res ( process_run ( string_data ( get_zig ) ) zig_args `` ) ( vec_free [s] zig_args )
+                ?? zig_res {
+                  T z_out → {
+                    : i z_rc ( output_exit_code z_out )
+                    : Json res ( json_obj_new )
+                    ( json_obj_set res `status` ( json_str_lit ? == z_rc 0 `ok` `error` ) )
+                    ( json_obj_set res `message` ( json_str_lit `compiled nurl → zig target` ) )
+                    ( json_obj_set res `target` ( json_str_lit target ) )
+                    ( json_obj_set res `triple` ( json_str_lit triple ) )
+                    ( json_obj_set res `filename` ( json_str_lit filename ) )
+                    ( json_obj_set res `nurlc_returncode` ( json_int n_rc ) )
+                    ( json_obj_set res `clang_returncode` ( json_int z_rc ) )
+                    ( json_obj_set res `nurlc_stderr` ( json_str_or_null ( output_stderr n_out ) ) )
+                    ( json_obj_set res `clang_stderr` ( json_str_or_null ( output_stderr z_out ) ) )
+                    : String bin_url ( string_new )
+                    ? == z_rc 0 {
+                      : ! i IoErr bsz ( file_size ( string_data bin_path ) )
+                      ( json_obj_set res `binary_bytes` ( json_int ?? bsz { T s → s F _ → 0 } ) )
+                      = bin_url ( string_with_cap 64 )
+                      ( string_push_str bin_url `/download/` ) ( string_push_str bin_url ( string_data build_id ) )
+                      ( string_push_str bin_url `/` ) ( string_push_str bin_url ( string_data bin_name ) )
+                      ( json_obj_set res `download_url` ( json_str_lit ( string_data bin_url ) ) )
+                    } {}
+                    : String body ( json_stringify res )
+                    : HttpResponse hr ( response_text 200 ( string_data body ) )
+                    ( response_set_header hr `Content-Type` `application/json` )
+                    ( string_free bin_url ) ( json_free res )
+                    ( output_free n_out ) ( output_free z_out ) ( json_free root )
+                    ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name )
+                    ( string_free bin_path ) ( string_free rt_o ) ( string_free build_id )
+                    ( string_free build_dir ) ( string_free body_str ) ( string_free body )
+                    ^ hr
+                  }
+                  F _ → { ^ ( response_text 500 `{"error":"zig cc invocation failed"}\n` ) }
+                }
+              } {
+                : HttpResponse hr422 ( response_text 422 ( output_stderr n_out ) )
+                ( output_free n_out ) ( json_free root )
+                ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name )
+                ( string_free bin_path ) ( string_free rt_o ) ( string_free build_id )
+                ( string_free build_dir ) ( string_free body_str )
+                ^ hr422
+              }
+            }
+            F _ → { ^ ( response_text 500 `{"error":"nurlc failed"}\n` ) }
+          }
+        }
+        F _ → { ^ ( response_text 500 `{"error":"could not create build dir"}\n` ) }
+      }
+    }
+    F _ → { ^ ( response_text 400 `{"error":"invalid json"}\n` ) }
+  }
+}
+
 @ main → i {
   // Anchor the process at NURL_WORK_ROOT so that nurlc subprocesses inherit
   // a cwd from which `$ "stdlib/std/time.nu"`-style imports resolve. NURL's
@@ -946,10 +1357,18 @@ $ `stdlib/ext/regex.nu`
       ( router_post r `/build_wasm`    \ HttpRequest req Params params → HttpResponse { ^ ( h_build_wasm    req params ) } )
       ( router_post r `/build_windows` \ HttpRequest req Params params → HttpResponse { ^ ( h_build_windows req params ) } )
       ( router_post r `/build_macos`   \ HttpRequest req Params params → HttpResponse { ^ ( h_build_macos   req params ) } )
+      ( router_post r `/build_target`  \ HttpRequest req Params params → HttpResponse { ^ ( h_build_target  req params ) } )
       ( router_get  r `/download/:build_id/:filename` \ HttpRequest req Params params → HttpResponse { ^ ( h_download req params ) } )
       ( router_get  r `/examples`        \ HttpRequest req Params params → HttpResponse { ^ ( h_examples    req params ) } )
       ( router_get  r `/examples/*name`  \ HttpRequest req Params params → HttpResponse { ^ ( h_get_example req params ) } )
       ( router_get  r `/health`          \ HttpRequest req Params params → HttpResponse { ^ ( h_health      req params ) } )
+      ( router_get  r `/targets`         \ HttpRequest req Params params → HttpResponse { ^ ( h_targets     req params ) } )
+      ( router_get  r `/readme`          \ HttpRequest req Params params → HttpResponse { ^ ( h_readme      req params ) } )
+      ( router_get  r `/grammar`         \ HttpRequest req Params params → HttpResponse { ^ ( h_grammar     req params ) } )
+      ( router_get  r `/stdlib-viewer`   \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_viewer req params ) } )
+      ( router_get  r `/tests-viewer`    \ HttpRequest req Params params → HttpResponse { ^ ( h_tests_viewer  req params ) } )
+      ( router_get  r `/stdlib/*path`    \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_file req params ) } )
+      ( router_get  r `/tests/*path`     \ HttpRequest req Params params → HttpResponse { ^ ( h_tests_file  req params ) } )
       ( router_get  r `/mcp-info`        \ HttpRequest req Params params → HttpResponse { ^ ( h_mcp_info    req params ) } )
       ( router_get  r `/favicon.ico`     \ HttpRequest req Params params → HttpResponse { ^ ( h_favicon     req params ) } )
       ( router_get  r `/favicon.svg`     \ HttpRequest req Params params → HttpResponse { ^ ( h_favicon     req params ) } )

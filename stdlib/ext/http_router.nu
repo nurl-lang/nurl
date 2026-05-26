@@ -130,14 +130,17 @@ $ `stdlib/ext/http_response.nu`
 //
 // Storage strategy: routes are heap-allocated `RouteImpl` blocks wrapped
 // in single-pointer `Route { s ctl }` handles. The handle layout (one
-// `i8*` field, 8 bytes) means `Vec[Route]` is a vec of 8-byte slots —
-// no multi-field-struct stride hazard. We hit this when `Vec[Route]`
-// is read from pthread worker threads under clang -O2 on Linux: even-
-// indexed slots had their first multi-field-struct member overwritten
-// with what looked like thread-stack regions (8 MiB+page apart). The
-// boxed-handle pattern sidesteps the entire class of issues for
-// multi-field collection elements, matching how `Regex`, `Channel`,
-// and `McpClient` already work.
+// `i8*` field, 8 bytes) means `Vec[Route]` is a vec of 8-byte slots,
+// matching how `Regex`, `Channel`, and `McpClient` already work.
+//
+// Earlier revisions of this comment blamed an apparent "multi-field-Vec
+// stride" issue under pthread/-O2 for symptoms that turned out to be a
+// `server_run_pool` heap overrun (`nurl_poke` was called with a byte
+// offset instead of a slot index, scribbling past the worker-handles
+// buffer; routes happened to share an arena page and got corrupted).
+// Fixed 2026-05-26 — Vec[Route] itself was always sound, the
+// boxed-handle pattern just dodges a separate class of issues for
+// multi-field collection elements.
 
 : RouteImpl {
     String method
