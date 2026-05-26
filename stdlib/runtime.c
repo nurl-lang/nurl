@@ -546,11 +546,36 @@ long long nurl_native_constant(const char *name) {
     if (strcmp(name, "SIGINT")      == 0) return SIGINT;
     if (strcmp(name, "SIGHUP")      == 0) return SIGHUP;
     if (strcmp(name, "SIGCHLD")     == 0) return SIGCHLD;
+    if (strcmp(name, "SIGUSR1")     == 0) return SIGUSR1;
+    if (strcmp(name, "SIGUSR2")     == 0) return SIGUSR2;
+    if (strcmp(name, "SIGQUIT")     == 0) return SIGQUIT;
+    if (strcmp(name, "SIGALRM")     == 0) return SIGALRM;
+    if (strcmp(name, "SIGABRT")     == 0) return SIGABRT;
+    if (strcmp(name, "SIGFPE")      == 0) return SIGFPE;
+    if (strcmp(name, "SIGILL")      == 0) return SIGILL;
+    if (strcmp(name, "SIGSEGV")     == 0) return SIGSEGV;
+    if (strcmp(name, "SIGBUS")      == 0) return SIGBUS;
+    if (strcmp(name, "SIGCONT")     == 0) return SIGCONT;
+    if (strcmp(name, "SIGSTOP")     == 0) return SIGSTOP;
+    if (strcmp(name, "SIGTSTP")     == 0) return SIGTSTP;
+    if (strcmp(name, "SIGWINCH")    == 0) return SIGWINCH;
     /* SIG_IGN / SIG_DFL are pointer-cast macros; cast through uintptr_t
      * so the lookup returns a stable i64 the caller hands back unchanged. */
     if (strcmp(name, "SIG_IGN")     == 0) return (long long)(uintptr_t)SIG_IGN;
     if (strcmp(name, "SIG_DFL")     == 0) return (long long)(uintptr_t)SIG_DFL;
     if (strcmp(name, "WNOHANG")     == 0) return WNOHANG;
+#endif
+#ifdef _WIN32
+    /* Win32 CRT supports a small set of signal numbers via signal()/raise().
+     * Expose them so portable NURL code can still resolve SIGINT/SIGTERM
+     * etc. on Windows; POSIX-only signums (SIGUSR1/2, SIGHUP, …) keep
+     * returning -1 here and NURL callers branch on target. */
+    if (strcmp(name, "SIGINT")      == 0) return SIGINT;
+    if (strcmp(name, "SIGTERM")     == 0) return SIGTERM;
+    if (strcmp(name, "SIGABRT")     == 0) return SIGABRT;
+    if (strcmp(name, "SIGFPE")      == 0) return SIGFPE;
+    if (strcmp(name, "SIGILL")      == 0) return SIGILL;
+    if (strcmp(name, "SIGSEGV")     == 0) return SIGSEGV;
 #endif
     if (strcmp(name, "ENOENT")      == 0) return ENOENT;
     if (strcmp(name, "EACCES")      == 0) return EACCES;
@@ -3434,75 +3459,296 @@ int pthread_cond_destroy(void *c)          { (void)c; return 0; }
 
 #endif
 
-/* ── Signal-driven graceful listener shutdown ─────────────────── */
+/* ── §21  Signal handling — generic + legacy shutdown bridge ──── */
 /*
- * One global slot for the listener fd. SIGINT/SIGTERM (POSIX) or
- * CTRL_C/CTRL_BREAK/CTRL_CLOSE (Win32) calls shutdown(fd, RDWR), which
- * wakes any blocked accept() with an error so server_run loops exit
- * cleanly. shutdown(2) is async-signal-safe (SUSv4 §2.4.3); the struct
- * itself isn't touched here — caller frees after the loop joins. Only
- * one listener registered at a time. */
+ * Two layers in one place:
+ *
+ *   (a) Generic per-signal NURL handler registration. NURL closure
+ *       ({fn, env}) per signum; the OS handler is async-signal-safe
+ *       (just a `volatile sig_atomic_t` flag + a self-pipe wake byte),
+ *       and the closure runs synchronously on the main thread via
+ *       `nurl_signal_dispatch()`. Self-pipe FD is exposed so callers
+ *       can integrate signal wake-ups into their own select/poll
+ *       loops without polling a flag.
+ *
+ *   (b) Legacy listener-shutdown bridge — `nurl_signal_install_shutdown`
+ *       continues to register a single TCP listener whose fd gets
+ *       `shutdown(RDWR)` from the OS handler on SIGINT/SIGTERM
+ *       (POSIX) or CTRL_C/CTRL_BREAK/CTRL_CLOSE (Win32). The
+ *       shutdown happens in the async-signal-safe handler itself
+ *       because `shutdown(2)` is on SUSv4 §2.4.3's safe-functions
+ *       list — this is the one place a NURL program can act on a
+ *       signal without first calling dispatch().
+ *
+ * Async-signal-safety contract for caller-supplied NURL handlers:
+ * the handler runs on the main thread between dispatch ticks, so any
+ * NURL code is allowed (alloc, mutex, log, …). The handler is NOT
+ * invoked from the OS signal context.
+ */
 
 #if !defined(__wasi__)
 
-static volatile NurlTcp *g_signal_listener = NULL;
-
+#  include <signal.h>
 #  ifdef _WIN32
 #    include <windows.h>
-static BOOL WINAPI nurl__signal_console_handler(DWORD ctrl_type) {
-    NurlTcp *h = (NurlTcp*)g_signal_listener;
-    if (!h) return FALSE;
+#  endif
+
+/* Cap matches Linux's NSIG (real-time signals 32-64 included).
+ * macOS NSIG is 32; Win32 CRT defines ≤ 23. Pick the union so the
+ * same table fits all targets; out-of-range signums are bounce-
+ * checked on register. */
+#  define NURL_SIG_MAX 64
+
+typedef struct { void *fn; void *env; } NurlSignalSlot;
+static volatile NurlSignalSlot g_signal_slots[NURL_SIG_MAX];
+static volatile sig_atomic_t   g_signal_pending[NURL_SIG_MAX];
+
+/* Legacy listener slot — set by nurl_signal_install_shutdown, read by
+ * the OS handler in async-signal context. shutdown(2) on the fd is
+ * safe to call from a handler; the struct itself is not touched. */
+static volatile NurlTcp *g_signal_listener = NULL;
+
+/* Self-pipe: read end exposed to NURL via nurl_signal_pipe_fd so the
+ * caller can wake a select/poll loop from a signal. Lazy-init on
+ * first register; both ends are non-blocking + CLOEXEC. write(2)
+ * is async-signal-safe (SUSv4 §2.4.3). */
+#  ifndef _WIN32
+static int g_signal_pipe[2] = { -1, -1 };
+#  endif
+
+/* OS-level handler. Async-signal-safe: only sig_atomic_t writes,
+ * a non-blocking single-byte write(2), and shutdown(2) on the
+ * legacy listener slot if SIGINT/SIGTERM fired. */
+static void nurl__signal_os_handler(int sig) {
+    if (sig > 0 && sig < NURL_SIG_MAX) {
+        g_signal_pending[sig] = 1;
+    }
+#  ifndef _WIN32
+    if (g_signal_pipe[1] >= 0) {
+        unsigned char b = (unsigned char)(sig & 0xFF);
+        /* Pipe is non-blocking; EAGAIN means the reader hasn't
+         * drained yet but the pending flag still records the
+         * signal, so a missed pipe byte is harmless. */
+        ssize_t r = write(g_signal_pipe[1], &b, 1);
+        (void)r;
+    }
+#  endif
+    if (sig == SIGINT || sig == SIGTERM) {
+        NurlTcp *h = (NurlTcp *)g_signal_listener;
+        if (h && h->fd != NURL_INVALID_SOCK) {
+#  ifdef _WIN32
+            shutdown(h->fd, SD_BOTH);
+#  else
+            shutdown(h->fd, SHUT_RDWR);
+#  endif
+        }
+    }
+}
+
+#  ifdef _WIN32
+/* Win32 console-control bridge — translates ctrl-type into a SIGINT
+ * delivery so the same dispatch path covers Ctrl+C/Ctrl+Break/Close. */
+static BOOL WINAPI nurl__signal_console_bridge(DWORD ctrl_type) {
     if (ctrl_type == CTRL_C_EVENT     ||
         ctrl_type == CTRL_BREAK_EVENT ||
         ctrl_type == CTRL_CLOSE_EVENT ||
         ctrl_type == CTRL_LOGOFF_EVENT||
         ctrl_type == CTRL_SHUTDOWN_EVENT) {
-        if (h->fd != NURL_INVALID_SOCK) shutdown(h->fd, SD_BOTH);
-        return TRUE;  /* mark handled — suppresses default termination */
+        nurl__signal_os_handler(SIGINT);
+        return TRUE;
     }
     return FALSE;
 }
-#  else
-#    include <signal.h>
-static void nurl__signal_posix_handler(int sig) {
-    (void)sig;
-    NurlTcp *h = (NurlTcp*)g_signal_listener;
-    if (!h) return;
-    if (h->fd != NURL_INVALID_SOCK) shutdown(h->fd, SHUT_RDWR);
+static int g_signal_console_installed = 0;
+#  endif
+
+#  ifndef _WIN32
+/* Create the self-pipe once. Errors silently degrade — register
+ * still arms sigaction, only the pipe-fd integration is lost. */
+static void nurl__signal_pipe_lazy_init(void) {
+    if (g_signal_pipe[0] >= 0) return;
+    if (pipe(g_signal_pipe) != 0) {
+        g_signal_pipe[0] = g_signal_pipe[1] = -1;
+        return;
+    }
+    /* Non-blocking on both ends, CLOEXEC so child processes don't
+     * inherit a fd that's only meaningful to us. */
+    int fl;
+    fl = fcntl(g_signal_pipe[0], F_GETFL); if (fl >= 0) fcntl(g_signal_pipe[0], F_SETFL, fl | O_NONBLOCK);
+    fl = fcntl(g_signal_pipe[1], F_GETFL); if (fl >= 0) fcntl(g_signal_pipe[1], F_SETFL, fl | O_NONBLOCK);
+    fl = fcntl(g_signal_pipe[0], F_GETFD); if (fl >= 0) fcntl(g_signal_pipe[0], F_SETFD, fl | FD_CLOEXEC);
+    fl = fcntl(g_signal_pipe[1], F_GETFD); if (fl >= 0) fcntl(g_signal_pipe[1], F_SETFD, fl | FD_CLOEXEC);
 }
 #  endif
 
-/* Register a listener for soft shutdown on SIGINT/SIGTERM (POSIX) or
- * Ctrl+C/Break/Close (Win32). Pass 0 to clear. */
-void nurl_signal_install_shutdown(long long listener) {
-    g_signal_listener = (NurlTcp*)(uintptr_t)listener;
+/* Arm an OS-level handler for `signum`. Idempotent. */
+static int nurl__signal_arm(int signum) {
 #  ifdef _WIN32
-    SetConsoleCtrlHandler(nurl__signal_console_handler, TRUE);
+    /* Win32 CRT signal() handles SIGINT/SIGTERM/SIGABRT/SIGFPE/SIGILL/
+     * SIGSEGV; other numbers (e.g. SIGUSR1) just return SIG_ERR. The
+     * console-ctrl bridge below covers Ctrl+C/Break/Close → SIGINT. */
+    void (*prev)(int) = signal(signum, nurl__signal_os_handler);
+    if (prev == SIG_ERR) return -1;
+    if (signum == SIGINT && !g_signal_console_installed) {
+        SetConsoleCtrlHandler(nurl__signal_console_bridge, TRUE);
+        g_signal_console_installed = 1;
+    }
+    return 0;
 #  else
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = nurl__signal_posix_handler;
+    sa.sa_handler = nurl__signal_os_handler;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;  /* no SA_RESTART — accept() must fail */
-    sigaction(SIGINT,  &sa, NULL);
-    sigaction(SIGTERM, &sa, NULL);
+    /* No SA_RESTART: NURL programs that are blocked in accept(),
+     * read(), select(), etc. must observe EINTR so they can pick up
+     * the pending flag rather than transparently resuming. */
+    sa.sa_flags = 0;
+    return sigaction(signum, &sa, NULL);
 #  endif
 }
 
-/* Test helper — synthesise the shutdown without raising the signal. */
-void nurl_signal_trigger_shutdown(void) {
+/* Restore the default disposition for `signum`. */
+static void nurl__signal_disarm(int signum) {
 #  ifdef _WIN32
-    NurlTcp *h = (NurlTcp*)g_signal_listener;
-    if (h && h->fd != NURL_INVALID_SOCK) shutdown(h->fd, SD_BOTH);
+    signal(signum, SIG_DFL);
 #  else
-    NurlTcp *h = (NurlTcp*)g_signal_listener;
-    if (h && h->fd != NURL_INVALID_SOCK) shutdown(h->fd, SHUT_RDWR);
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = SIG_DFL;
+    sigemptyset(&sa.sa_mask);
+    sigaction(signum, &sa, NULL);
 #  endif
 }
 
-#else  /* WASI — no signals. */
-void nurl_signal_install_shutdown(long long listener) { (void)listener; }
-void nurl_signal_trigger_shutdown(void)               {}
+/* ── Public C API (called from NURL) ─────────────────────────── */
+
+/* Register a NURL closure to run on `signum`. fn is the closure's
+ * compiled body — `void (*)(void *env, long long sig)`; env is its
+ * captured-environment block. Pass fn=NULL to leave the OS handler
+ * armed but route through `_pending`/`_poll` only (used by the
+ * legacy shutdown registration, which doesn't need a NURL handler). */
+long long nurl_signal_register(long long signum, void *fn, void *env) {
+    if (signum <= 0 || signum >= NURL_SIG_MAX) return -1;
+#  ifndef _WIN32
+    nurl__signal_pipe_lazy_init();
+#  endif
+    g_signal_slots[signum].fn  = fn;
+    g_signal_slots[signum].env = env;
+    return (long long)nurl__signal_arm((int)signum);
+}
+
+/* Restore the default disposition and clear the NURL slot. */
+void nurl_signal_unregister(long long signum) {
+    if (signum <= 0 || signum >= NURL_SIG_MAX) return;
+    g_signal_slots[signum].fn  = NULL;
+    g_signal_slots[signum].env = NULL;
+    g_signal_pending[signum]   = 0;
+    nurl__signal_disarm((int)signum);
+}
+
+/* Non-destructive pending check. Returns 1 iff the signal fired
+ * since the last `dispatch` or matching `_poll`. */
+long long nurl_signal_pending(long long signum) {
+    if (signum <= 0 || signum >= NURL_SIG_MAX) return 0;
+    return g_signal_pending[signum] ? 1 : 0;
+}
+
+/* Destructive single-signum probe. Returns the lowest pending
+ * signum and clears its flag, or -1 if none are pending. */
+long long nurl_signal_poll(void) {
+    for (int s = 1; s < NURL_SIG_MAX; s++) {
+        if (g_signal_pending[s]) {
+            g_signal_pending[s] = 0;
+            return s;
+        }
+    }
+    return -1;
+}
+
+/* Run every pending NURL handler on the calling thread. Closure
+ * call shape: `void (*)(void *env, long long sig)`. Pending flags
+ * are cleared BEFORE the closure runs so a re-entrant raise of the
+ * same signal inside a handler is observed on the next dispatch. */
+void nurl_signal_dispatch(void) {
+    for (int s = 1; s < NURL_SIG_MAX; s++) {
+        if (!g_signal_pending[s]) continue;
+        g_signal_pending[s] = 0;
+        NurlSignalSlot slot = g_signal_slots[s];
+        if (slot.fn) {
+            ((void (*)(void *, long long))slot.fn)(slot.env, (long long)s);
+        }
+    }
+#  ifndef _WIN32
+    /* Drain any queued wake bytes — the flags have been observed. */
+    if (g_signal_pipe[0] >= 0) {
+        char buf[64];
+        while (read(g_signal_pipe[0], buf, sizeof buf) > 0) {}
+    }
+#  endif
+}
+
+/* Read end of the self-pipe; level-triggered, single-byte writes
+ * per signal delivery. Caller may add this fd to select/poll/epoll
+ * to wake the loop on signal. Returns -1 if unavailable
+ * (Win32, allocation failure, or no register call yet). */
+long long nurl_signal_pipe_fd(void) {
+#  ifdef _WIN32
+    return -1;
+#  else
+    return (long long)g_signal_pipe[0];
+#  endif
+}
+
+/* Synchronous self-signal — used by tests and by callers that want
+ * the same dispatch path the OS handler would trigger. raise(3) on
+ * Win32 is supported for SIGINT/SIGTERM/SIGABRT/SIGFPE/SIGILL/SIGSEGV. */
+long long nurl_signal_raise(long long signum) {
+    if (signum <= 0 || signum >= NURL_SIG_MAX) return -1;
+    return (long long)raise((int)signum);
+}
+
+/* ── Legacy shutdown bridge ─────────────────────────────────── */
+
+/* Register a listener for soft shutdown on SIGINT/SIGTERM (POSIX) or
+ * Ctrl+C/Break/Close (Win32). Pass 0 to clear. Internally arms the
+ * generic handler for SIGINT + SIGTERM if not already armed; the
+ * OS handler performs `shutdown(fd, RDWR)` directly so the accept()
+ * loop wakes without waiting for a dispatch tick. */
+void nurl_signal_install_shutdown(long long listener) {
+    g_signal_listener = (NurlTcp *)(uintptr_t)listener;
+    if (listener) {
+        nurl__signal_arm(SIGINT);
+        nurl__signal_arm(SIGTERM);
+    }
+}
+
+/* Test helper — synthesise the listener shutdown without raising
+ * the signal (Win32 can't deliver SIGINT programmatically; POSIX
+ * raise() is fine but the registration order in tests can be racy). */
+void nurl_signal_trigger_shutdown(void) {
+    NurlTcp *h = (NurlTcp *)g_signal_listener;
+    if (!h || h->fd == NURL_INVALID_SOCK) return;
+#  ifdef _WIN32
+    shutdown(h->fd, SD_BOTH);
+#  else
+    shutdown(h->fd, SHUT_RDWR);
+#  endif
+}
+
+#else  /* WASI — no signals at all. Every entry is a no-op stub. */
+
+long long nurl_signal_register(long long signum, void *fn, void *env) {
+    (void)signum; (void)fn; (void)env; return -1;
+}
+void      nurl_signal_unregister(long long signum)        { (void)signum; }
+long long nurl_signal_pending(long long signum)           { (void)signum; return 0; }
+long long nurl_signal_poll(void)                          { return -1; }
+void      nurl_signal_dispatch(void)                      {}
+long long nurl_signal_pipe_fd(void)                       { return -1; }
+long long nurl_signal_raise(long long signum)             { (void)signum; return -1; }
+void      nurl_signal_install_shutdown(long long listener){ (void)listener; }
+void      nurl_signal_trigger_shutdown(void)              {}
+
 #endif
 
 

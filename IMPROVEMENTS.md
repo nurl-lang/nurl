@@ -151,9 +151,26 @@ by the roadmap's own admission."* Reproduced here for visibility so the
 critic-driven backlog is in one place; the canonical home is ROADMAP.md.
 
 - [ ] **UDP + full DNS resolution (`getaddrinfo`).** ROADMAP §3.
-- [ ] **Generic signal handling.** Beyond `nurl_signal_install_shutdown` —
-      arbitrary signal numbers, NURL closure handlers, async-signal-safety
-      caveats documented. ROADMAP §3.
+- [x] **Generic signal handling — shipped 2026-05-25.** `stdlib/std/signal.nu`
+      now offers `signal_install` / `_clear` / `_pending` / `_poll` /
+      `_dispatch` / `_raise` / `_pipe_fd` / `_constant` / `_name`
+      alongside the legacy `_install_shutdown` bridge. Runtime side
+      (runtime.c §21): per-signum `{fn, env}` table, async-signal-safe
+      OS handler (only `volatile sig_atomic_t` writes + a non-blocking
+      self-pipe wake + the legacy `shutdown(fd)` on the listener slot),
+      NURL closures run synchronously on the main thread at
+      `signal_dispatch` time. Self-pipe FD exposed so select/poll loops
+      can wake on signal. `nurl_native_constant` extended with
+      SIGUSR1/2/QUIT/ALRM/ABRT/FPE/ILL/SEGV/BUS/CONT/STOP/TSTP/WINCH +
+      a Win32 block for the CRT-supported subset (SIGINT/TERM/ABRT/FPE/
+      ILL/SEGV). Async-signal-safety contract documented in
+      `stdlib/std/signal.nu`'s top-of-file (~70 LOC of caveats covering
+      handler-context rules, coalesced delivery, dispatch obligation,
+      synchronous-fault caveats, threading model, Win32/WASI degradation).
+      Test: `compiler/tests/signal_basic.nu` extended with constant
+      round-trip (SIGTERM cross-platform) + SIGUSR1 install/raise/
+      dispatch/clear coverage; both run unconditionally and degrade
+      gracefully on Win32. ROADMAP §3.
 - [x] **Structured logging — shipped 2026-05-25.** `stdlib/std/log.nu` now
       has `log_<level>_kv1` / `_kv2` / `_kv3` (12 fixed-arity kv helpers)
       and a `log_set_json` / `log_get_json` toggle. JSON output is RFC 8259
