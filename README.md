@@ -55,6 +55,17 @@ A reproducible micro-benchmark suite lives in [`bench/`](bench/) — one source 
 
 (Lower = better, median wall-clock ms across 5 runs.) On compute-bound work NURL lands within measurement noise of Rust — same LLVM `-O2 -flto` codegen. On `json_parse` NURL's pure-NURL parser beats Python's C-extension `json` ~2.4× and trails a hand-written zero-copy Rust parser by ~3×.
 
+**HTTP server peer bench** — [`bench/HTTP_RESULTS.md`](bench/HTTP_RESULTS.md), driven via [`oha`](https://github.com/hatoo/oha) (10 s × 3 runs, median):
+
+| Concurrency | NURL (req/s) | Rust hyper | Node http | NURL p99 (ms) | Rust p99 | Node p99 |
+|---:|---:|---:|---:|---:|---:|---:|
+|   1 |  14 451  |  14 507  |   8 708  | **0.14** | 0.11 |  0.51 |
+|  10 | **68 960** |  47 703  |  16 726  | **0.56** | 1.16 |  2.43 |
+|  50 |  60 897  | **86 699** |  17 108  | **0.67** | 2.82 | 12.30 |
+| 200 |  59 044  | **114 694** |  15 555  | **0.62** | 6.19 | 21.16 |
+
+Parity with Rust hyper at C=1; NURL **1.45× ahead** at C=10 (the 8-worker pool fits the workload); Rust pulls ahead at C ≥ 50 with deeper async machinery. **NURL holds the lowest tail latency across the whole sweep** — p99 0.62 ms at C=200 vs Rust 6.19 ms, Node 21 ms.
+
 ---
 
 ## Architecture
@@ -539,10 +550,11 @@ exercised by the build scripts today.
 | Linux x86_64      | LLVM         | primary dev target — `build.sh` + tests  |
 | Windows x86_64    | LLVM         | fully supported — `build.bat` runs the same bootstrap + snapshot test suite as `build.sh` |
 | macOS x86_64      | LLVM + zig cc | cross-compiled from the `api/` container via `POST /build_macos`; Mach-O binary links only libSystem (no Apple SDK needed). Runs on Apple Silicon via Rosetta 2. canvas/audio/libcurl-HTTP not supported on this target. |
-| macOS ARM64       | LLVM         | should work via clang; untested          |
+| macOS ARM64       | LLVM + zig cc | cross-compiled via `POST /build_target` (`target=macos-arm64`) — native Apple Silicon Mach-O, links only libSystem. Unsigned, so clear quarantine attribute before running. |
 | WebAssembly       | wasm32-wasi  | supported via the `api/` container (WASI SDK 24.0); browser execution via `browser_wasi_shim`. The self-hosting compiler itself also builds to wasm — see `buildwasm.sh` / `wasmnurl.sh` below |
-| Android / iOS     | LLVM cross   | planned                                  |
-| Embedded (no_std) | LLVM         | planned                                  |
+| Linux ARM64 / RISC-V64 | LLVM + zig cc | cross-compiled via `POST /build_target` — fully-static `musl` ELFs (`linux-arm64-musl`, `linux-riscv64-musl`) or dynamic glibc (`linux-arm64-gnu`). Milk-V Duo (RISC-V C906) validated on-device. |
+| Android / iOS     | LLVM cross   | planned (ROADMAP §4)                     |
+| Embedded (no_std) | LLVM         | planned (ROADMAP §4)                     |
 | JVM               | JVM bytecode | future                                   |
 | .NET CLR          | CIL          | future                                   |
 
@@ -551,15 +563,33 @@ exercised by the build scripts today.
 ## Networking
 
 NURL reaches the network through a pure-POSIX socket layer in the C
-runtime (`nurl_tcp_*`) — no libcurl, no framework. Both directions are
-covered:
+runtime (`nurl_tcp_*` / `nurl_udp_*` / `nurl_dns_*`) — no libcurl,
+no framework. Four primitives, every one of them dual-stack IPv4/IPv6
+and integrated with the fiber reactor for async I/O:
 
-- **Server** — `tcp_listen` / `tcp_listen_tls` + `tcp_accept`, with a
-  full HTTP/1.1 server stack on top (`stdlib/ext/http_*` — routing,
-  static files, middleware, multipart, TLS; see `HTTP_SERVER_PLAN.md`).
-- **Client** — `tcp_connect` / `tcp_connect_tls` (runtime §18b/§18c:
-  DNS via `getaddrinfo`, a TLS client handshake with SNI). The
-  primitive any outbound client needs.
+- **TCP server** — `tcp_listen` / `tcp_listen_tls` + `tcp_accept`,
+  with a full HTTP/1.1 server stack on top (`stdlib/ext/http_*` —
+  routing, static files, middleware, multipart, WebSockets, TLS
+  with SNI + ALPN + mTLS + live cert reload; see
+  `HTTP_SERVER_PLAN.md`).
+- **TCP client** — `tcp_connect` / `tcp_connect_tls` (runtime §18).
+  TLS client handshake with SNI; peer-certificate verification is
+  an opt-in flag. The primitive behind the MQTT 5.0 client and any
+  outbound TLS application.
+- **UDP** (`stdlib/std/udp.nu`, runtime §18b) — `udp_bind` (dual-
+  stack wildcard via `AF_INET6 + IPV6_V6ONLY=0`), `udp_connect`,
+  `udp_send_to` / `udp_recv_from`, connected-mode `udp_send` /
+  `udp_recv`, broadcast and multicast (`udp_join_group` /
+  `_leave_group` / `_set_multicast_ttl` / `_set_multicast_loop`).
+  Sync + fiber-aware async on every send/recv via the same context
+  dispatch as the TCP primitives.
+- **DNS** (`stdlib/std/dns.nu`, runtime §18c) — system-resolver
+  wrappers over `getaddrinfo` / `getnameinfo`, no c-ares dep.
+  `dns_resolve host → ! (Vec String) NetErr` lists the A/AAAA
+  literals in the kernel's preferred order; `dns_resolve_port host
+  port` formats each entry as `"ip:port"` (IPv4) or `"[ip]:port"`
+  (IPv6, RFC 3986 §3.2.2) ready for direct `tcp_connect` /
+  `udp_connect`; `dns_reverse ip → ? String` runs `NI_NAMEREQD`.
 
 ### MQTT 5.0 client
 
@@ -942,13 +972,13 @@ see [`docs/GOTCHAS.md`](docs/GOTCHAS.md).
 
 | Capability | Notes |
 |---|---|
-| **TLS server-side shipped 2026-05-15** via `tcp_listen_tls host port cert_path key_path → !TcpListener NetErr` | Build-time dependency: `libssl` (pkg-config). HttpServer integrates without code changes — just swap `tcp_listen` for `tcp_listen_tls`. |
-| **TLS client-side shipped 2026-05-22** via `tcp_connect_tls host port verify` (runtime §18c) | DNS resolution + `connect` + a TLS client handshake with SNI. The primitive behind the MQTT client and any outbound TLS. Peer-certificate verification is an opt-in flag. |
-| TLS 1.2 minimum | TLS 1.0 / 1.1 / SSL 3.0 disabled in the SSL_CTX |
-| No SNI in v1 (single cert per listener) | Follow-up item |
-| No ALPN in v1 (no HTTP/2 to negotiate yet anyway) | Follow-up item |
-| No client-cert auth | Follow-up item |
-| No live cert reload | Follow-up item — would need a `tcp_set_tls_cert` runtime fn |
+| **TLS server-side** via `tcp_listen_tls host port cert_path key_path → !TcpListener NetErr` | Build-time dependency: `libssl` (pkg-config). HttpServer integrates without code changes — just swap `tcp_listen` for `tcp_listen_tls`. |
+| **TLS client-side** via `tcp_connect_tls host port verify` (runtime §18) | TLS client handshake with SNI; peer-certificate verification is an opt-in flag. The primitive behind the MQTT client and any outbound TLS. |
+| TLS 1.2 minimum | TLS 1.0 / 1.1 / SSL 3.0 disabled in the SSL_CTX. |
+| **SNI** (RFC 6066 §3) — `tcp_tls_add_sni listener hostname cert key` | Multi-tenant HTTPS — register per-hostname cert/key pairs on one listener; handshake-time selection from client's SNI extension; no-match falls through to the default cert. Idempotent on re-add. |
+| **ALPN** (RFC 7301) — `tcp_listen_tls_with_alpn` (server-preference list `"h2 http/1.1"`); `tcp_alpn_protocol conn` reads the negotiated protocol post-accept | Required by HTTP/2-over-TLS (RFC 9113 §3.3). |
+| **Mutual TLS (mTLS)** — `tcp_tls_require_client_cert listener ca_bundle strict?`; `tcp_peer_cert_subject conn` reads the peer's DN | Both strict mode (handshake fails without a cert) and opportunistic mode (handshake completes; app decides via the subject string). |
+| **Live cert reload** — `tcp_tls_reload listener hostname cert key` | Hot-swaps the SSL_CTX under a per-listener mutex; in-flight `SSL_read` / `SSL_write` on the old ctx survive until close via OpenSSL's refcount. Standard use case: Let's Encrypt rotation triggered from a control endpoint or SIGHUP handler. |
 
 ---
 
