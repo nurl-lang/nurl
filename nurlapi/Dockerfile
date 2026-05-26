@@ -171,6 +171,7 @@ ENV NURLC_PATH=/opt/nurl/build/nurlc \
     NURL_AUDIO_WASM_O=/opt/nurl/stdlib/audio.wasm.o \
     NURL_RUNTIME_WIN_O=/opt/nurl/stdlib/runtime.win.o \
     NURL_MINGW_CURL_PREFIX=/opt/curl-mingw \
+    NURL_MINGW_GCC=/usr/bin/x86_64-w64-mingw32-gcc \
     NURL_ZIG=/opt/zig/zig \
     ZIG_GLOBAL_CACHE_DIR=/opt/zig-cache \
     NURL_MACOS_TARGET=x86_64-macos-none \

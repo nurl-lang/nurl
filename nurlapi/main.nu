@@ -26,6 +26,8 @@ $ `stdlib/ext/regex.nu`
 @ get_readme_path → String { ^ ( env_var_or `NURL_README_PATH` `/opt/nurl/README.md` ) }
 @ get_grammar_path → String { ^ ( env_var_or `NURL_GRAMMAR_PATH` `/opt/nurl/spec/grammar.ebnf` ) }
 @ get_tests_dir → String { ^ ( env_var_or `NURL_TESTS_DIR` `/opt/nurl/compiler/tests` ) }
+@ get_mingw_gcc → String { ^ ( env_var_or `NURL_MINGW_GCC` `/usr/bin/x86_64-w64-mingw32-gcc` ) }
+@ get_mingw_curl_prefix → String { ^ ( env_var_or `NURL_MINGW_CURL_PREFIX` `/opt/curl-mingw` ) }
 
 // Per-zig-target runtime object path. Used by /build_target so we don't
 // have to keep a switch in NURL code — the Dockerfile builds one
@@ -713,46 +715,100 @@ $ `stdlib/ext/regex.nu`
               : i n_rc ( output_exit_code n_out )
               ? ( output_success n_out ) {
                 ( write_file ( string_data ll_path ) ( output_stdout n_out ) )
+
+                // Two-step build: (1) clang --target=mingw -c → .o,
+                // (2) x86_64-w64-mingw32-gcc to link with libgcc /
+                // libwinpthread / static libcurl. Single-step clang link
+                // fails on -lgcc lookup since clang's mingw driver can't
+                // resolve mingw-w64's installed support libs by itself.
+                : String obj_path ( path_join ( string_data build_dir ) `main.o` )
+
                 : ( Vec s ) clang_args ( vec_new [s] )
-                ( vec_push [s] clang_args `--target=x86_64-w64-mingw32` ) ( vec_push [s] clang_args opt ) ( vec_push [s] clang_args `-Wno-override-module` ) ( vec_push [s] clang_args ( string_data ll_path ) )
-                ( vec_push [s] clang_args ( string_data ( get_runtime_win_o ) ) ) ( vec_push [s] clang_args `-o` ) ( vec_push [s] clang_args ( string_data bin_path ) )
-                ( vec_push [s] clang_args `-L/opt/curl-mingw/lib` ) ( vec_push [s] clang_args `-lcurl` ) ( vec_push [s] clang_args `-lws2_32` ) ( vec_push [s] clang_args `-lcrypt32` ) ( vec_push [s] clang_args `-lbcrypt` ) ( vec_push [s] clang_args `-lncrypt` ) ( vec_push [s] clang_args `-lsecur32` ) ( vec_push [s] clang_args `-ladvapi32` )
+                ( vec_push [s] clang_args opt )
+                ( vec_push [s] clang_args `-Wno-override-module` )
+                ( vec_push [s] clang_args `--target=x86_64-w64-mingw32` )
+                ( vec_push [s] clang_args `-c` )
+                ( vec_push [s] clang_args ( string_data ll_path ) )
+                ( vec_push [s] clang_args `-o` )
+                ( vec_push [s] clang_args ( string_data obj_path ) )
                 : ! Output ProcessErr clang_res ( process_run `clang` clang_args `` ) ( vec_free [s] clang_args )
+
                 ?? clang_res {
                   T c_out → {
                     : i c_rc ( output_exit_code c_out )
-                    : i n_so_bytes ( nurl_str_len ( output_stdout n_out ) )
-                    : s c_so ( output_stdout c_out )
-                    : s c_se ( output_stderr c_out )
-                    : s n_se ( output_stderr n_out )
-                    : String combined_stderr ( combine_stderr n_se c_se )
 
-                    : Json res ( json_obj_new )
-                    ( stamp_build_response res
-                        ? == c_rc 0 `ok` `error`
-                        ? == c_rc 0 `compiled nurl → windows .exe` `build failed (see stderr)`
-                        filename F F
-                        n_rc n_se n_so_bytes
-                        c_rc c_so c_se
-                        c_so ( string_data combined_stderr ) )
-
-                    ? == c_rc 0 {
-                      : ! i IoErr bn_sz ( file_size ( string_data bin_path ) )
-                      ( json_obj_set res `binary_artifact`
-                        ( make_artifact_json ( string_data bin_name )
-                            ?? bn_sz { T s → s F _ → 0 } ( string_data build_id ) ) )
+                    // Build the linker command once. We always run mingw-
+                    // gcc — if the compile failed it still gets called but
+                    // exits with its own (informative) error.
+                    : ( Vec s ) link_args ( vec_new [s] )
+                    ( vec_push [s] link_args opt )
+                    ( vec_push [s] link_args ( string_data obj_path ) )
+                    ( vec_push [s] link_args ( string_data ( get_runtime_win_o ) ) )
+                    ( vec_push [s] link_args `-lpthread` )
+                    : String curl_marker ( path_join ( string_data ( get_stdlib_dir ) ) `runtime.win.curl` )
+                    : String curl_L ( string_with_cap 64 )
+                    ? ( file_exists ( string_data curl_marker ) ) {
+                      ( string_push_str curl_L `-L` )
+                      ( string_push_str curl_L ( string_data ( get_mingw_curl_prefix ) ) )
+                      ( string_push_str curl_L `/lib` )
+                      ( vec_push [s] link_args ( string_data curl_L ) )
+                      ( vec_push [s] link_args `-lcurl` )
+                      ( vec_push [s] link_args `-lws2_32` )
+                      ( vec_push [s] link_args `-lcrypt32` )
+                      ( vec_push [s] link_args `-lbcrypt` )
+                      ( vec_push [s] link_args `-lncrypt` )
+                      ( vec_push [s] link_args `-lsecur32` )
+                      ( vec_push [s] link_args `-ladvapi32` )
                     } {}
+                    ( vec_push [s] link_args `-o` )
+                    ( vec_push [s] link_args ( string_data bin_path ) )
+                    : ! Output ProcessErr link_res ( process_run ( string_data ( get_mingw_gcc ) ) link_args `` )
+                    ( vec_free [s] link_args )
 
-                    : String body ( json_stringify res )
-                    : HttpResponse hr ( response_text 200 ( string_data body ) )
-                    ( response_set_header hr `Content-Type` `application/json` )
-                    ( string_free combined_stderr ) ( json_free res )
-                    ( output_free n_out ) ( output_free c_out ) ( json_free root )
-                    ( string_free nu_path ) ( string_free ll_path )
-                    ( string_free bin_name ) ( string_free bin_path )
-                    ( string_free build_id ) ( string_free build_dir )
-                    ( string_free body_str ) ( string_free body )
-                    ^ hr
+                    ?? link_res {
+                      T l_out → {
+                        : i lnk_rc ( output_exit_code l_out )
+                        : i n_so_bytes ( nurl_str_len ( output_stdout n_out ) )
+                        : s c_so ( output_stdout c_out )
+                        : s c_se ( output_stderr c_out )
+                        : s n_se ( output_stderr n_out )
+                        : s l_se ( output_stderr l_out )
+                        : String stage1 ( combine_stderr n_se c_se )
+                        : String combined_stderr ( combine_stderr ( string_data stage1 ) l_se )
+
+                        : i final_rc ? != c_rc 0 c_rc lnk_rc
+                        : b ok & == c_rc 0 == lnk_rc 0
+
+                        : Json res ( json_obj_new )
+                        ( stamp_build_response res
+                            ? ok `ok` `error`
+                            ? ok `compiled nurl → windows .exe` `build failed (see stderr)`
+                            filename F F
+                            n_rc n_se n_so_bytes
+                            final_rc c_so c_se
+                            c_so ( string_data combined_stderr ) )
+
+                        ? ok {
+                          : ! i IoErr bn_sz ( file_size ( string_data bin_path ) )
+                          ( json_obj_set res `binary_artifact`
+                            ( make_artifact_json ( string_data bin_name )
+                                ?? bn_sz { T s → s F _ → 0 } ( string_data build_id ) ) )
+                        } {}
+
+                        : String body ( json_stringify res )
+                        : HttpResponse hr ( response_text 200 ( string_data body ) )
+                        ( response_set_header hr `Content-Type` `application/json` )
+                        ( string_free stage1 ) ( string_free combined_stderr ) ( json_free res )
+                        ( output_free n_out ) ( output_free c_out ) ( output_free l_out ) ( json_free root )
+                        ( string_free curl_marker ) ( string_free curl_L )
+                        ( string_free nu_path ) ( string_free ll_path ) ( string_free obj_path )
+                        ( string_free bin_name ) ( string_free bin_path )
+                        ( string_free build_id ) ( string_free build_dir )
+                        ( string_free body_str ) ( string_free body )
+                        ^ hr
+                      }
+                      F _ → { ^ ( response_text 500 `{"error":"mingw-gcc invocation failed"}\n` ) }
+                    }
                   } F ce → { ^ ( response_text 500 `{"error":"clang process failed"}\n` ) } }
               } {
                 : HttpResponse hr_err ( nurlc_failure_response filename ( output_exit_code n_out ) ( output_stderr n_out ) ( nurl_str_len ( output_stdout n_out ) ) )
