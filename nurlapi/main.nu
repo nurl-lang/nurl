@@ -272,6 +272,180 @@ $ `stdlib/ext/regex.nu`
   ? == ( nurl_str_len str ) 0 { ^ ( json_null ) } { ^ ( json_str_lit str ) }
 }
 
+// ── Build-response helpers (shared by /build*, mirrors api/'s shape) ──
+
+// Build the standard { name, bytes, download_url } artifact object.
+@ make_artifact_json s name i bytes s build_id → Json {
+  : Json o ( json_obj_new )
+  ( json_obj_set o `name`  ( json_str_lit name ) )
+  ( json_obj_set o `bytes` ( json_int bytes ) )
+  : String url ( string_with_cap 64 )
+  ( string_push_str url `/download/` )
+  ( string_push_str url build_id )
+  ( string_push_str url `/` )
+  ( string_push_str url name )
+  ( json_obj_set o `download_url` ( json_str_lit ( string_data url ) ) )
+  ( string_free url )
+  ^ o
+}
+
+// Concatenate nurlc + clang stderr blobs into one combined log, mirror
+// of Python's `"\n".join(s for s in stderr_log if s).strip()`. Returns
+// an owned String — caller frees.
+@ combine_stderr s a s b → String {
+  : i la ( nurl_str_len a )
+  : i lb ( nurl_str_len b )
+  : String out ( string_with_cap + + la lb 2 )
+  ? > la 0 { ( string_push_str out a ) } {}
+  ? & > la 0 > lb 0 { ( string_push_char out 10 ) } {}
+  ? > lb 0 { ( string_push_str out b ) } {}
+  // No post-trim: nurlc/clang stderr blobs are already line-terminated
+  // and the playground's <pre> rendering tolerates the trailing newline.
+  // Trimming inline triggered a double-free against the explicit `out`
+  // free + compiler auto-drop on the trimmed-branch return path.
+  ^ out
+}
+
+// Parse nurlc stderr blob into a Json array of
+// `{ "file": str, "line": int, "col": int, "message": str }` entries.
+// Each line that matches `file:line:col: message` becomes one entry;
+// non-matching lines are ignored (so debug prints + warnings don't
+// pollute the structured diagnostics).
+@ parse_nurlc_diagnostics s blob → Json {
+  : Json arr ( json_arr_new )
+  : i n ( nurl_str_len blob )
+  ? <= n 0 { ^ arr } {}
+
+  : ~ i lo 0       // line start
+  : ~ i k 0        // cursor
+  ~ <= k n {
+    : b at_end | == k n == ( nurl_str_get blob k ) 10
+    ? at_end {
+      // Process [lo, k) as one line.
+      ? > k lo {
+        // Find first three ':' positions.
+        : ~ i c1 - 0 1
+        : ~ i c2 - 0 1
+        : ~ i c3 - 0 1
+        : ~ i j lo
+        ~ < j k {
+          ? == ( nurl_str_get blob j ) 58 {
+            ? < c1 0 { = c1 j } {
+              ? < c2 0 { = c2 j } {
+                ? < c3 0 { = c3 j } {}
+              }
+            }
+          } {}
+          = j + j 1
+        }
+        ? & & & >= c1 0 >= c2 0 >= c3 0 < c3 k {
+          // file = blob[lo..c1], line = parse(blob[c1+1..c2]),
+          // col = parse(blob[c2+1..c3]), msg = blob[c3+2..k] (skip ": ")
+          : s file_s ( nurl_str_slice blob lo - c1 lo )
+          : s line_s ( nurl_str_slice blob + c1 1 - c2 + c1 1 )
+          : s col_s  ( nurl_str_slice blob + c2 1 - c3 + c2 1 )
+          // Skip leading whitespace after the third colon.
+          : ~ i ms + c3 1
+          ~ & < ms k == ( nurl_str_get blob ms ) 32 { = ms + ms 1 }
+          : s msg_s ( nurl_str_slice blob ms - k ms )
+          // Validate line+col are digit-only.
+          : ~ b digits_only T
+          : ~ i lp 0
+          ~ < lp ( nurl_str_len line_s ) {
+            : i ch ( nurl_str_get line_s lp )
+            ? | < ch 48 > ch 57 { = digits_only F } {}
+            = lp + lp 1
+          }
+          : ~ i cp 0
+          ~ < cp ( nurl_str_len col_s ) {
+            : i ch ( nurl_str_get col_s cp )
+            ? | < ch 48 > ch 57 { = digits_only F } {}
+            = cp + cp 1
+          }
+          ? & digits_only > ( nurl_str_len file_s ) 0 {
+            : i line_n ( nurl_str_to_int line_s )
+            : i col_n  ( nurl_str_to_int col_s )
+            : Json o ( json_obj_new )
+            ( json_obj_set o `file`    ( json_str_lit file_s ) )
+            ( json_obj_set o `line`    ( json_int line_n ) )
+            ( json_obj_set o `col`     ( json_int col_n ) )
+            ( json_obj_set o `message` ( json_str_lit msg_s ) )
+            ( json_arr_push arr o )
+          } {}
+          // file_s/line_s/col_s/msg_s are nurl_str_slice results —
+          // already on the compiler's auto-drop list. Explicit
+          // nurl_free here would be a double-free.
+        } {}
+      } {}
+      = lo + k 1
+    } {}
+    = k + k 1
+  }
+  ^ arr
+}
+
+// Stamp the shared BuildResponse fields onto `res`. Mirrors api/'s
+// BuildResponse exactly so the playground's renderer works unchanged.
+// Caller owns `res` and `combined_*` (which are NOT freed here).
+@ stamp_build_response Json res s status s message s filename
+    b uses_canvas b uses_audio
+    i nurlc_rc s nurlc_stderr i nurlc_stdout_bytes
+    i clang_rc s clang_stdout s clang_stderr
+    s combined_stdout s combined_stderr → v {
+  ( json_obj_set res `status`              ( json_str_lit status ) )
+  ( json_obj_set res `message`             ( json_str_lit message ) )
+  ( json_obj_set res `filename`            ( json_str_lit filename ) )
+  ( json_obj_set res `uses_canvas`         ( json_bool uses_canvas ) )
+  ( json_obj_set res `uses_audio`          ( json_bool uses_audio ) )
+  ( json_obj_set res `nurlc_returncode`    ( json_int nurlc_rc ) )
+  ( json_obj_set res `nurlc_stdout_bytes`  ( json_int nurlc_stdout_bytes ) )
+  ( json_obj_set res `nurlc_stderr`        ( json_str_or_null nurlc_stderr ) )
+  ( json_obj_set res `clang_returncode`    ( json_int clang_rc ) )
+  ( json_obj_set res `clang_stdout`        ( json_str_or_null clang_stdout ) )
+  ( json_obj_set res `clang_stderr`        ( json_str_or_null clang_stderr ) )
+  ( json_obj_set res `stdout`              ( json_str_lit combined_stdout ) )
+  ( json_obj_set res `stderr`              ( json_str_lit combined_stderr ) )
+  ( json_obj_set res `nurlc_errors`        ( parse_nurlc_diagnostics nurlc_stderr ) )
+}
+
+// Append the native-build runtime libs to the clang command. Matches
+// what nurl.sh produces locally so a /build link succeeds against the
+// committed stdlib/runtime.native.o (FFI-rich: libcurl + openssl +
+// sqlite3 + libpq + zlib + zstd).
+@ push_native_runtime_libs ( Vec s ) args → v {
+  ( vec_push [s] args `-lm` )
+  ( vec_push [s] args `-lpthread` )
+  ( vec_push [s] args `-lcurl` )
+  ( vec_push [s] args `-lssl` )
+  ( vec_push [s] args `-lcrypto` )
+  ( vec_push [s] args `-lsqlite3` )
+  ( vec_push [s] args `-lpq` )
+  ( vec_push [s] args `-lz` )
+  ( vec_push [s] args `-lzstd` )
+}
+
+// Build a 200 OK JSON response for the nurlc-failed-before-link path.
+// Mirrors api/'s behaviour (status=error, returncode != 0, structured
+// nurlc_errors[]) so the playground's BUILD FAILED renderer works
+// uniformly across success + failure + partial-failure cases.
+//
+// String/Json bindings are auto-dropped at scope exit — do NOT add
+// explicit string_free / json_free for `combined`, `res`, `body`
+// here (the compiler emits both, double-freeing).
+@ nurlc_failure_response s filename i nurlc_rc s nurlc_stderr i nurlc_stdout_bytes → HttpResponse {
+  : String combined ( combine_stderr nurlc_stderr `` )
+  : Json res ( json_obj_new )
+  ( stamp_build_response res
+      `error` `nurlc failed` filename F F
+      nurlc_rc nurlc_stderr nurlc_stdout_bytes
+      - 0 1 `` ``
+      `` ( string_data combined ) )
+  : String body ( json_stringify res )
+  : HttpResponse hr ( response_text 200 ( string_data body ) )
+  ( response_set_header hr `Content-Type` `application/json` )
+  ^ hr
+}
+
 @ get_body_str HttpRequest req → String {
   : i blen ( vec_len [u] . req body )
   : String body_str ( string_with_cap + blen 1 )
@@ -318,66 +492,64 @@ $ `stdlib/ext/regex.nu`
               ? ( output_success n_out ) {
                 ( write_file ( string_data ll_path ) ( output_stdout n_out ) )
                 : ( Vec s ) clang_args ( vec_new [s] )
-                ( vec_push [s] clang_args opt ) ( vec_push [s] clang_args `-Wno-override-module` ) ( vec_push [s] clang_args ( string_data ll_path ) )
+                ( vec_push [s] clang_args opt )
+                ( vec_push [s] clang_args `-Wno-override-module` )
+                ( vec_push [s] clang_args ( string_data ll_path ) )
                 : String runtime_o ( path_join ( string_data ( get_stdlib_dir ) ) `runtime.native.o` )
-                ( vec_push [s] clang_args ( string_data runtime_o ) ) ( vec_push [s] clang_args `-o` ) ( vec_push [s] clang_args ( string_data bin_path ) )
-                ( vec_push [s] clang_args `-lm` ) ( vec_push [s] clang_args `-lpthread` ) ( vec_push [s] clang_args `-lcurl` )
+                ( vec_push [s] clang_args ( string_data runtime_o ) )
+                ( vec_push [s] clang_args `-o` )
+                ( vec_push [s] clang_args ( string_data bin_path ) )
+                ( push_native_runtime_libs clang_args )
 
                 : ! Output ProcessErr clang_res ( process_run `clang` clang_args `` ) ( vec_free [s] clang_args )
 
                 ?? clang_res {
                   T c_out → {
                     : i c_rc ( output_exit_code c_out )
-                    : Json res ( json_obj_new )
-                    ( json_obj_set res `status` ( json_str_lit ? == c_rc 0 `ok` `error` ) )
-                    ( json_obj_set res `message` ( json_str_lit `compiled nurl → native binary` ) )
-                    ( json_obj_set res `filename` ( json_str_lit filename ) )
-                    ( json_obj_set res `nurlc_returncode` ( json_int n_rc ) )
-                    ( json_obj_set res `clang_returncode` ( json_int c_rc ) )
-                    ( json_obj_set res `nurlc_stdout` ( json_str_lit `[nurlc] build successful` ) )
-                    ( json_obj_set res `nurlc_stderr` ( json_str_lit ( output_stderr n_out ) ) )
-                    ( json_obj_set res `clang_stdout` ( json_str_lit ( output_stdout c_out ) ) )
-                    ( json_obj_set res `clang_stderr` ( json_str_lit ( output_stderr c_out ) ) )
-                    ( json_obj_set res `uses_canvas` ( json_bool uses_canvas ) )
-                    ( json_obj_set res `uses_audio` ( json_bool uses_audio ) )
-                    
-                    : String ll_url ( string_new ) : String bin_url ( string_new )
-                    ? == c_rc 0 {
-                      : ! i IoErr ll_size_res ( file_size ( string_data ll_path ) )
-                      : ! i IoErr bin_size_res ( file_size ( string_data bin_path ) )
-                      : Json ll_art ( json_obj_new )
-                      ( json_obj_set ll_art `name` ( json_str_lit ( string_data ll_name ) ) )
-                      ( json_obj_set ll_art `bytes` ( json_int ?? ll_size_res { T s → s F _ → 0 } ) )
-                      = ll_url ( string_with_cap 64 )
-                      ( string_push_str ll_url `/download/` ) ( string_push_str ll_url ( string_data build_id ) ) ( string_push_str ll_url `/` ) ( string_push_str ll_url ( string_data ll_name ) )
-                      ( json_obj_set ll_art `download_url` ( json_str_lit ( string_data ll_url ) ) )
-                      ( json_obj_set res `ll_artifact` ll_art )
+                    : i n_so_bytes ( nurl_str_len ( output_stdout n_out ) )
+                    : s c_so ( output_stdout c_out )
+                    : s c_se ( output_stderr c_out )
+                    : s n_se ( output_stderr n_out )
+                    : String combined_stderr ( combine_stderr n_se c_se )
 
-                      : Json bin_art ( json_obj_new )
-                      ( json_obj_set bin_art `name` ( json_str_lit ( string_data bin_name ) ) )
-                      ( json_obj_set bin_art `bytes` ( json_int ?? bin_size_res { T s → s F _ → 0 } ) )
-                      = bin_url ( string_with_cap 64 )
-                      ( string_push_str bin_url `/download/` ) ( string_push_str bin_url ( string_data build_id ) ) ( string_push_str bin_url `/` ) ( string_push_str bin_url ( string_data bin_name ) )
-                      ( json_obj_set bin_art `download_url` ( json_str_lit ( string_data bin_url ) ) )
-                      ( json_obj_set res `binary_artifact` bin_art )
+                    : Json res ( json_obj_new )
+                    ( stamp_build_response res
+                        ? == c_rc 0 `ok` `error`
+                        ? == c_rc 0 `compiled nurl → native binary` `build failed (see stderr)`
+                        filename uses_canvas uses_audio
+                        n_rc n_se n_so_bytes
+                        c_rc c_so c_se
+                        c_so ( string_data combined_stderr ) )
+
+                    ? == c_rc 0 {
+                      : ! i IoErr ll_sz ( file_size ( string_data ll_path ) )
+                      : ! i IoErr bn_sz ( file_size ( string_data bin_path ) )
+                      ( json_obj_set res `ll_artifact`
+                        ( make_artifact_json ( string_data ll_name )
+                            ?? ll_sz { T s → s F _ → 0 } ( string_data build_id ) ) )
+                      ( json_obj_set res `binary_artifact`
+                        ( make_artifact_json ( string_data bin_name )
+                            ?? bn_sz { T s → s F _ → 0 } ( string_data build_id ) ) )
                     } {}
 
                     : String body ( json_stringify res )
                     : HttpResponse hr ( response_text 200 ( string_data body ) )
                     ( response_set_header hr `Content-Type` `application/json` )
-                    
-                    ( string_free ll_url ) ( string_free bin_url ) ( json_free res ) ( string_free runtime_o )
+
+                    ( string_free combined_stderr ) ( json_free res ) ( string_free runtime_o )
                     ( output_free n_out ) ( output_free c_out ) ( json_free root )
-                    ( string_free nu_path ) ( string_free ll_name ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path )
-                    ( string_free build_id ) ( string_free build_dir ) ( string_free body_str ) ( string_free body ) 
+                    ( string_free nu_path ) ( string_free ll_name ) ( string_free ll_path )
+                    ( string_free bin_name ) ( string_free bin_path )
+                    ( string_free build_id ) ( string_free build_dir )
+                    ( string_free body_str ) ( string_free body )
                     ^ hr
                   }
                   F ce → { ^ ( response_text 500 `{"error":"clang process failed"}\n` ) }
                 }
               } {
-                : HttpResponse hr422 ( response_text 422 ( output_stderr n_out ) )
+                : HttpResponse hr_err ( nurlc_failure_response filename ( output_exit_code n_out ) ( output_stderr n_out ) ( nurl_str_len ( output_stdout n_out ) ) )
                 ( output_free n_out ) ( json_free root ) ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path ) ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
-                ^ hr422
+                ^ hr_err
               }
             }
             F _ → { ^ ( response_text 500 `{"error":"nurlc failed"}\n` ) }
@@ -462,7 +634,7 @@ $ `stdlib/ext/regex.nu`
                     ( json_obj_set res `wasm_base64` ( json_null ) )
                     ( json_obj_set res `wasm_bytes` ( json_int 0 ) )
                     ( json_obj_set res `nurlc_stderr` ( json_str_or_null ( output_stderr n_out ) ) )
-                    ( json_obj_set res `nurlc_errors` ( json_arr_new ) )
+                    ( json_obj_set res `nurlc_errors` ( parse_nurlc_diagnostics ( output_stderr n_out ) ) )
                     ( json_obj_set res `clang_stderr` ( json_str_or_null ( output_stderr c_out ) ) )
                     ( json_obj_set res `llvm_ir` ? | emit_ll != c_rc 0 { ( json_str_lit ( string_data ir_fixed ) ) } { ( json_null ) } )
                     ( json_obj_set res `uses_canvas` ( json_bool uses_canvas ) )
@@ -495,9 +667,9 @@ $ `stdlib/ext/regex.nu`
                   F ce → { ( string_free ir_fixed ) ^ ( response_text 500 `{"error":"wasi-clang failed"}\n` ) }
                 }
               } {
-                : HttpResponse hr422 ( response_text 422 ( output_stderr n_out ) )
+                : HttpResponse hr_err ( nurlc_failure_response filename ( output_exit_code n_out ) ( output_stderr n_out ) ( nurl_str_len ( output_stdout n_out ) ) )
                 ( output_free n_out ) ( json_free root ) ( string_free nu_path ) ( string_free ll_path ) ( string_free wasm_path ) ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
-                ^ hr422
+                ^ hr_err
               }
             }
             F _ → { ^ ( response_text 500 `{"error":"nurlc failed"}\n` ) }
@@ -549,23 +721,43 @@ $ `stdlib/ext/regex.nu`
                 ?? clang_res {
                   T c_out → {
                     : i c_rc ( output_exit_code c_out )
+                    : i n_so_bytes ( nurl_str_len ( output_stdout n_out ) )
+                    : s c_so ( output_stdout c_out )
+                    : s c_se ( output_stderr c_out )
+                    : s n_se ( output_stderr n_out )
+                    : String combined_stderr ( combine_stderr n_se c_se )
+
                     : Json res ( json_obj_new )
-                    ( json_obj_set res `status` ( json_str_lit ? == c_rc 0 `ok` `error` ) ) ( json_obj_set res `message` ( json_str_lit `compiled nurl → windows .exe` ) ) ( json_obj_set res `filename` ( json_str_lit filename ) ) ( json_obj_set res `nurlc_returncode` ( json_int n_rc ) ) ( json_obj_set res `clang_returncode` ( json_int c_rc ) )
-                    ( json_obj_set res `nurlc_stdout` ( json_str_lit `[nurlc] build successful` ) ) ( json_obj_set res `nurlc_stderr` ( json_str_lit ( output_stderr n_out ) ) ) ( json_obj_set res `clang_stdout` ( json_str_lit ( output_stdout c_out ) ) ) ( json_obj_set res `clang_stderr` ( json_str_lit ( output_stderr c_out ) ) )
-                    : String bin_url ( string_new )
-                    ? == c_rc 0 { : ! i IoErr bin_size_res ( file_size ( string_data bin_path ) ) : Json bin_art ( json_obj_new ) ( json_obj_set bin_art `name` ( json_str_lit ( string_data bin_name ) ) ) ( json_obj_set bin_art `bytes` ( json_int ?? bin_size_res { T s → s F _ → 0 } ) )
-                      = bin_url ( string_with_cap 64 ) ( string_push_str bin_url `/download/` ) ( string_push_str bin_url ( string_data build_id ) ) ( string_push_str bin_url `/` ) ( string_push_str bin_url ( string_data bin_name ) )
-                      ( json_obj_set bin_art `download_url` ( json_str_lit ( string_data bin_url ) ) ) ( json_obj_set res `binary_artifact` bin_art ) } {}
+                    ( stamp_build_response res
+                        ? == c_rc 0 `ok` `error`
+                        ? == c_rc 0 `compiled nurl → windows .exe` `build failed (see stderr)`
+                        filename F F
+                        n_rc n_se n_so_bytes
+                        c_rc c_so c_se
+                        c_so ( string_data combined_stderr ) )
+
+                    ? == c_rc 0 {
+                      : ! i IoErr bn_sz ( file_size ( string_data bin_path ) )
+                      ( json_obj_set res `binary_artifact`
+                        ( make_artifact_json ( string_data bin_name )
+                            ?? bn_sz { T s → s F _ → 0 } ( string_data build_id ) ) )
+                    } {}
+
                     : String body ( json_stringify res )
-                    : HttpResponse hr ( response_text 200 ( string_data body ) ) ( response_set_header hr `Content-Type` `application/json` )
-                    ( string_free bin_url ) ( json_free res ) ( output_free n_out ) ( output_free c_out ) ( json_free root )
-                    ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path )
-                    ( string_free build_id ) ( string_free build_dir ) ( string_free body_str ) ( string_free body ) ^ hr
+                    : HttpResponse hr ( response_text 200 ( string_data body ) )
+                    ( response_set_header hr `Content-Type` `application/json` )
+                    ( string_free combined_stderr ) ( json_free res )
+                    ( output_free n_out ) ( output_free c_out ) ( json_free root )
+                    ( string_free nu_path ) ( string_free ll_path )
+                    ( string_free bin_name ) ( string_free bin_path )
+                    ( string_free build_id ) ( string_free build_dir )
+                    ( string_free body_str ) ( string_free body )
+                    ^ hr
                   } F ce → { ^ ( response_text 500 `{"error":"clang process failed"}\n` ) } }
               } {
-                : HttpResponse hr422 ( response_text 422 ( output_stderr n_out ) )
+                : HttpResponse hr_err ( nurlc_failure_response filename ( output_exit_code n_out ) ( output_stderr n_out ) ( nurl_str_len ( output_stdout n_out ) ) )
                 ( output_free n_out ) ( json_free root ) ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path ) ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
-                ^ hr422
+                ^ hr_err
               } } F _ → { ^ ( response_text 500 `{"error":"nurlc failed"}\n` ) } }
         } F _ → { ^ ( response_text 500 `{"error":"could not create build dir"}\n` ) } } } F _ → { ^ ( response_text 400 `{"error":"invalid json"}\n` ) } }
 }
@@ -607,23 +799,43 @@ $ `stdlib/ext/regex.nu`
                 ?? zig_res {
                   T z_out → {
                     : i z_rc ( output_exit_code z_out )
+                    : i n_so_bytes ( nurl_str_len ( output_stdout n_out ) )
+                    : s z_so ( output_stdout z_out )
+                    : s z_se ( output_stderr z_out )
+                    : s n_se ( output_stderr n_out )
+                    : String combined_stderr ( combine_stderr n_se z_se )
+
                     : Json res ( json_obj_new )
-                    ( json_obj_set res `status` ( json_str_lit ? == z_rc 0 `ok` `error` ) ) ( json_obj_set res `message` ( json_str_lit `compiled nurl → macOS Mach-O` ) ) ( json_obj_set res `filename` ( json_str_lit filename ) ) ( json_obj_set res `nurlc_returncode` ( json_int n_rc ) ) ( json_obj_set res `clang_returncode` ( json_int z_rc ) )
-                    ( json_obj_set res `nurlc_stdout` ( json_str_lit `[nurlc] build successful` ) ) ( json_obj_set res `nurlc_stderr` ( json_str_lit ( output_stderr n_out ) ) ) ( json_obj_set res `clang_stdout` ( json_str_lit ( output_stdout z_out ) ) ) ( json_obj_set res `clang_stderr` ( json_str_lit ( output_stderr z_out ) ) )
-                    : String bin_url ( string_new )
-                    ? == z_rc 0 { : ! i IoErr bin_size_res ( file_size ( string_data bin_path ) ) : Json bin_art ( json_obj_new ) ( json_obj_set bin_art `name` ( json_str_lit ( string_data bin_name ) ) ) ( json_obj_set bin_art `bytes` ( json_int ?? bin_size_res { T s → s F _ → 0 } ) )
-                      = bin_url ( string_with_cap 64 ) ( string_push_str bin_url `/download/` ) ( string_push_str bin_url ( string_data build_id ) ) ( string_push_str bin_url `/` ) ( string_push_str bin_url ( string_data bin_name ) )
-                      ( json_obj_set bin_art `download_url` ( json_str_lit ( string_data bin_url ) ) ) ( json_obj_set res `binary_artifact` bin_art ) } {}
+                    ( stamp_build_response res
+                        ? == z_rc 0 `ok` `error`
+                        ? == z_rc 0 `compiled nurl → macOS Mach-O` `build failed (see stderr)`
+                        filename F F
+                        n_rc n_se n_so_bytes
+                        z_rc z_so z_se
+                        z_so ( string_data combined_stderr ) )
+
+                    ? == z_rc 0 {
+                      : ! i IoErr bn_sz ( file_size ( string_data bin_path ) )
+                      ( json_obj_set res `binary_artifact`
+                        ( make_artifact_json ( string_data bin_name )
+                            ?? bn_sz { T s → s F _ → 0 } ( string_data build_id ) ) )
+                    } {}
+
                     : String body ( json_stringify res )
-                    : HttpResponse hr ( response_text 200 ( string_data body ) ) ( response_set_header hr `Content-Type` `application/json` )
-                    ( string_free bin_url ) ( json_free res ) ( output_free n_out ) ( output_free z_out ) ( json_free root )
-                    ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path )
-                    ( string_free build_id ) ( string_free build_dir ) ( string_free body_str ) ( string_free body ) ^ hr
+                    : HttpResponse hr ( response_text 200 ( string_data body ) )
+                    ( response_set_header hr `Content-Type` `application/json` )
+                    ( string_free combined_stderr ) ( json_free res )
+                    ( output_free n_out ) ( output_free z_out ) ( json_free root )
+                    ( string_free nu_path ) ( string_free ll_path )
+                    ( string_free bin_name ) ( string_free bin_path )
+                    ( string_free build_id ) ( string_free build_dir )
+                    ( string_free body_str ) ( string_free body )
+                    ^ hr
                   } F ce → { ^ ( response_text 500 `{"error":"zig process failed"}\n` ) } }
               } {
-                : HttpResponse hr422 ( response_text 422 ( output_stderr n_out ) )
+                : HttpResponse hr_err ( nurlc_failure_response filename ( output_exit_code n_out ) ( output_stderr n_out ) ( nurl_str_len ( output_stdout n_out ) ) )
                 ( output_free n_out ) ( json_free root ) ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path ) ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
-                ^ hr422
+                ^ hr_err
               } } F _ → { ^ ( response_text 500 `{"error":"nurlc failed"}\n` ) } }
         } F _ → { ^ ( response_text 500 `{"error":"could not create build dir"}\n` ) } } } F _ → { ^ ( response_text 400 `{"error":"invalid json"}\n` ) } }
 }
@@ -1280,29 +1492,37 @@ $ `stdlib/ext/regex.nu`
                 ?? zig_res {
                   T z_out → {
                     : i z_rc ( output_exit_code z_out )
+                    : i n_so_bytes ( nurl_str_len ( output_stdout n_out ) )
+                    : s z_so ( output_stdout z_out )
+                    : s z_se ( output_stderr z_out )
+                    : s n_se ( output_stderr n_out )
+                    : String combined_stderr ( combine_stderr n_se z_se )
+
                     : Json res ( json_obj_new )
-                    ( json_obj_set res `status` ( json_str_lit ? == z_rc 0 `ok` `error` ) )
-                    ( json_obj_set res `message` ( json_str_lit `compiled nurl → zig target` ) )
+                    ( stamp_build_response res
+                        ? == z_rc 0 `ok` `error`
+                        ? == z_rc 0 `compiled nurl → zig target` `build failed (see stderr)`
+                        filename F F
+                        n_rc n_se n_so_bytes
+                        z_rc z_so z_se
+                        z_so ( string_data combined_stderr ) )
+                    // Target-specific extras retained on top of the
+                    // shared shape (api/ uses BuildResponse without
+                    // them; harmless additions for inspection).
                     ( json_obj_set res `target` ( json_str_lit target ) )
                     ( json_obj_set res `triple` ( json_str_lit triple ) )
-                    ( json_obj_set res `filename` ( json_str_lit filename ) )
-                    ( json_obj_set res `nurlc_returncode` ( json_int n_rc ) )
-                    ( json_obj_set res `clang_returncode` ( json_int z_rc ) )
-                    ( json_obj_set res `nurlc_stderr` ( json_str_or_null ( output_stderr n_out ) ) )
-                    ( json_obj_set res `clang_stderr` ( json_str_or_null ( output_stderr z_out ) ) )
-                    : String bin_url ( string_new )
+
                     ? == z_rc 0 {
-                      : ! i IoErr bsz ( file_size ( string_data bin_path ) )
-                      ( json_obj_set res `binary_bytes` ( json_int ?? bsz { T s → s F _ → 0 } ) )
-                      = bin_url ( string_with_cap 64 )
-                      ( string_push_str bin_url `/download/` ) ( string_push_str bin_url ( string_data build_id ) )
-                      ( string_push_str bin_url `/` ) ( string_push_str bin_url ( string_data bin_name ) )
-                      ( json_obj_set res `download_url` ( json_str_lit ( string_data bin_url ) ) )
+                      : ! i IoErr bn_sz ( file_size ( string_data bin_path ) )
+                      ( json_obj_set res `binary_artifact`
+                        ( make_artifact_json ( string_data bin_name )
+                            ?? bn_sz { T s → s F _ → 0 } ( string_data build_id ) ) )
                     } {}
+
                     : String body ( json_stringify res )
                     : HttpResponse hr ( response_text 200 ( string_data body ) )
                     ( response_set_header hr `Content-Type` `application/json` )
-                    ( string_free bin_url ) ( json_free res )
+                    ( string_free combined_stderr ) ( json_free res )
                     ( output_free n_out ) ( output_free z_out ) ( json_free root )
                     ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name )
                     ( string_free bin_path ) ( string_free rt_o ) ( string_free build_id )
@@ -1312,12 +1532,12 @@ $ `stdlib/ext/regex.nu`
                   F _ → { ^ ( response_text 500 `{"error":"zig cc invocation failed"}\n` ) }
                 }
               } {
-                : HttpResponse hr422 ( response_text 422 ( output_stderr n_out ) )
+                : HttpResponse hr_err ( nurlc_failure_response filename ( output_exit_code n_out ) ( output_stderr n_out ) ( nurl_str_len ( output_stdout n_out ) ) )
                 ( output_free n_out ) ( json_free root )
                 ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name )
                 ( string_free bin_path ) ( string_free rt_o ) ( string_free build_id )
                 ( string_free build_dir ) ( string_free body_str )
-                ^ hr422
+                ^ hr_err
               }
             }
             F _ → { ^ ( response_text 500 `{"error":"nurlc failed"}\n` ) }
