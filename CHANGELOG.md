@@ -8,6 +8,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+(Empty — the next ship lands its `### Added` / `### Changed` / `### Fixed`
+notes here.)
+
+## [0.9.1] — 2026-05-26
+
+### Release summary
+
+The "critic v0.9.0 backlog closes" release. v0.9.0's external peer
+review (`critic.md`, 24 May 2026) distilled into `IMPROVEMENTS.md`
+across Tiers A–E; v0.9.1 ships the entire remaining set (20 of 20
+actionable items) and a handful of opportunistic perf + stdlib wins
+that landed in the same window. `IMPROVEMENTS.md` is retired this
+release — the surviving long-running item (Mobile / Embedded
+targets) graduated to ROADMAP §4.
+
+**Headline wins:**
+
+- **Borrow checker promoted to hard errors by default** (BORROW.md
+  Phase 8 final). Five bug classes are now compile errors: use-after-
+  move, alias double-free, closure escape, aliased mutable-borrow at
+  call sites, iterator invalidation. `--no-borrowck` is the escape
+  hatch.
+- **Networking complete:** UDP datagrams (dual-stack IPv4/IPv6 with
+  multicast) + standalone DNS resolver (`getaddrinfo` /
+  `getnameinfo`) land alongside the existing TCP / TLS / HTTP stack.
+- **JSON parser ~34× faster** — pure-NURL `stdlib/ext/json.nu`
+  rewritten around a single-pass scanner; 479 ms → 14 ms on the
+  `bench/json_parse` micro-benchmark.
+- **First peer benchmarks shipped** — `bench/` v1 compares NURL with
+  Python / Rust / Node on three reproducible micro-benches plus an
+  HTTP-server-vs-Rust-hyper / Node-http sweep. NURL parity with Rust
+  on compute-bound work; NURL holds the lowest tail latency across
+  the whole HTTP concurrency sweep (p99 0.62 ms at C=200 vs Rust's
+  6.19 ms).
+- **CI lit up** — GitHub Actions workflow with parallel build-test +
+  sanitizer (ASan + UBSan) jobs.
+- **Formal language spec** — `docs/spec.md` (~1 000 lines) covers the
+  semantic side the grammar EBNF doesn't.
+- **Generic signal handling** + **structured logging** + **silent-
+  miscompile diagnostics** round out the stdlib + compiler surface.
+
+Bootstrap fixed point at release time: stage1 ≡ stage2 byte-identical
+IR at **1 620 300 B**. Full test corpus + sanitizers green.
+
 ### Added — UDP datagram sockets + full DNS resolver (Tier D #6, 2026-05-26)
 
 Closes the last `IMPROVEMENTS.md` Tier D Roadmap §3 item the v0.9.0
