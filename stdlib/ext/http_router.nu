@@ -130,14 +130,17 @@ $ `stdlib/ext/http_response.nu`
 //
 // Storage strategy: routes are heap-allocated `RouteImpl` blocks wrapped
 // in single-pointer `Route { s ctl }` handles. The handle layout (one
-// `i8*` field, 8 bytes) means `Vec[Route]` is a vec of 8-byte slots —
-// no multi-field-struct stride hazard. We hit this when `Vec[Route]`
-// is read from pthread worker threads under clang -O2 on Linux: even-
-// indexed slots had their first multi-field-struct member overwritten
-// with what looked like thread-stack regions (8 MiB+page apart). The
-// boxed-handle pattern sidesteps the entire class of issues for
-// multi-field collection elements, matching how `Regex`, `Channel`,
-// and `McpClient` already work.
+// `i8*` field, 8 bytes) means `Vec[Route]` is a vec of 8-byte slots,
+// matching how `Regex`, `Channel`, and `McpClient` already work.
+//
+// Earlier revisions of this comment blamed an apparent "multi-field-Vec
+// stride" issue under pthread/-O2 for symptoms that turned out to be a
+// `server_run_pool` heap overrun (`nurl_poke` was called with a byte
+// offset instead of a slot index, scribbling past the worker-handles
+// buffer; routes happened to share an arena page and got corrupted).
+// Fixed 2026-05-26 — Vec[Route] itself was always sound, the
+// boxed-handle pattern just dodges a separate class of issues for
+// multi-field collection elements.
 
 : RouteImpl {
     String method
@@ -354,13 +357,32 @@ $ `stdlib/ext/http_response.nu`
     : *Route data ( vec_data [Route] . r routes )
     : s req_method ( string_data . req method )
     : s req_path ( string_data . req path )
-    : ~ i k 0
 
+    // OPTIONS — RFC 7231 §4.3.7. Don't dispatch to any handler; the
+    // router knows which methods exist for `req_path` and answers
+    // directly with a 204 + `Allow:` header. This matches what
+    // FastAPI / Express / most modern HTTP frameworks do out of the
+    // box for CORS preflight and probe traffic.
+    ? != 0 ( nurl_str_eq req_method `OPTIONS` ) {
+        ^ ( __router_options r req_path )
+    } {}
+
+    // HEAD — per RFC 7231 §4.3.2, "the server MUST NOT send a message
+    // body in the response" but otherwise treats it like GET. We let
+    // the handler registered for GET produce a full response, then
+    // pin the original Content-Length on the headers and clear the
+    // body Vec — wire serialisation emits headers without payload.
+    : b is_head != 0 ( nurl_str_eq req_method `HEAD` )
+
+    : ~ i k 0
     ~ < k n {
         : Route route . data k
         : *RouteImpl impl # *RouteImpl . route ctl
         : s rmethod ( string_data . impl method )
-        : b method_ok | != 0 ( nurl_str_eq rmethod `*` ) != 0 ( nurl_str_eq rmethod req_method )
+        : b method_ok
+            | | != 0 ( nurl_str_eq rmethod `*` )
+                != 0 ( nurl_str_eq rmethod req_method )
+                & is_head != 0 ( nurl_str_eq rmethod `GET` )
         ? method_ok {
             : Params params ( params_new )
             : s pattern ( string_data . impl pattern )
@@ -368,6 +390,7 @@ $ `stdlib/ext/http_response.nu`
                 : ( @ HttpResponse HttpRequest Params ) f . impl handler
                 : HttpResponse resp ( f req params )
                 ( params_free params )
+                ? is_head { ( __strip_body_for_head resp ) } {}
                 ^ resp
             } {
                 ( params_free params )
@@ -377,6 +400,97 @@ $ `stdlib/ext/http_response.nu`
     }
 
     ^ ( response_text 404 `not found\n` )
+}
+
+// HEAD post-processing: pin Content-Length to the would-have-been body
+// length, then empty the body Vec. Wire-level Content-Length stays
+// honest so probes can see resource size without a download.
+@ __strip_body_for_head HttpResponse resp → v {
+    : i body_len ( vec_len [u] . resp body )
+    : String cl ( string_new )
+    ( string_push_int cl body_len )
+    ( response_set_header resp `Content-Length` ( string_data cl ) )
+    ( string_free cl )
+    ( vec_clear [u] . resp body )
+}
+
+// OPTIONS — collect distinct methods registered against patterns
+// matching `path`, add HEAD if GET is among them, always include
+// OPTIONS itself; return 204 No Content with `Allow:` header.
+@ __router_options Router r s path → HttpResponse {
+    : i n ( vec_len [Route] . r routes )
+    : *Route data ( vec_data [Route] . r routes )
+    : ( Vec String ) methods ( vec_new [String] )
+    : ~ b have_get F
+    : ~ b matched F
+
+    : ~ i k 0
+    ~ < k n {
+        : Route route . data k
+        : *RouteImpl impl # *RouteImpl . route ctl
+        : s pattern ( string_data . impl pattern )
+        // Skip root-level catch-alls ("/*path", "/*anything") — they
+        // match every URL by design and would otherwise advertise GET
+        // for paths that have no real handler. They still serve as
+        // 404-fallbacks during regular GET dispatch above.
+        : i plen ( nurl_str_len pattern )
+        : ~ b is_root_catchall F
+        ? & >= plen 2 & == ( nurl_str_get pattern 0 ) 47 == ( nurl_str_get pattern 1 ) 42 {
+            = is_root_catchall T
+        } {}
+        : Params params ( params_new )
+        ? & ! is_root_catchall ( __match_pattern pattern path params ) {
+            = matched T
+            : s rmethod ( string_data . impl method )
+            // Dedup.
+            : ~ b seen F
+            : ~ i j 0
+            ~ < j ( vec_len [String] methods ) {
+                ?? ( vec_get [String] methods j ) {
+                    T m → { ? ( nurl_str_eq ( string_data m ) rmethod ) { = seen T } {} }
+                    F _ → {}
+                }
+                = j + j 1
+            }
+            ? ! seen {
+                ( vec_push [String] methods ( string_from rmethod ) )
+                ? ( nurl_str_eq rmethod `GET` ) { = have_get T } {}
+            } {}
+        } {}
+        ( params_free params )
+        = k + k 1
+    }
+
+    // No pattern matched → standard 404 (preserves the same response
+    // contract callers wrap around router_handle).
+    ? ! matched {
+        ( vec_free_with [String] methods \ String s → v { ( string_free s ) } )
+        ^ ( response_text 404 `not found\n` )
+    } {}
+
+    // Build Allow header from collected methods + HEAD (when GET
+    // exists) + OPTIONS (always).
+    : String allow ( string_new )
+    : i mn ( vec_len [String] methods )
+    : ~ i k2 0
+    ~ < k2 mn {
+        ?? ( vec_get [String] methods k2 ) {
+            T m → {
+                ? > k2 0 { ( string_push_str allow `, ` ) } {}
+                ( string_push_str allow ( string_data m ) )
+            }
+            F _ → {}
+        }
+        = k2 + k2 1
+    }
+    ? have_get { ( string_push_str allow `, HEAD` ) } {}
+    ? > mn 0 { ( string_push_str allow `, OPTIONS` ) } { ( string_push_str allow `OPTIONS` ) }
+
+    : HttpResponse rs ( response_status_only 204 )
+    ( response_set_header rs `Allow` ( string_data allow ) )
+    ( vec_free_with [String] methods \ String s → v { ( string_free s ) } )
+    ( string_free allow )
+    ^ rs
 }
 
 // ── Middleware combinators ────────────────────────────────────────────

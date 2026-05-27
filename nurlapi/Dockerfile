@@ -105,9 +105,35 @@ RUN x86_64-w64-mingw32-gcc -O2 \
         -c stdlib/runtime.c -o stdlib/runtime.win.o \
     && echo 1 > stdlib/runtime.win.curl
 
-# 4. macOS x86_64
+# 4. macOS x86_64 (kept as runtime.mac.o for /build_macos backwards
+#    compat; /build_target reads the same triple via runtime.macos-x64.o).
 RUN /opt/zig/zig cc -target x86_64-macos-none -O2 \
         -c stdlib/runtime.c -o stdlib/runtime.mac.o
+
+# 5. Every /build_target zig target gets a pre-built runtime.<id>.o.
+#    The same loop pre-warms zig's per-target libc + compiler-rt cache
+#    (a small `int main(){return 0;}` link) so the first cross-compile
+#    request lands as a cache hit, not a multi-second cold libc build.
+#    A failure in this loop turns into a `docker build` failure, which
+#    doubles as a smoke test that every advertised target actually
+#    links in this image.
+ENV ZIG_GLOBAL_CACHE_DIR=/opt/zig-cache
+RUN set -eux; \
+    mkdir -p /opt/zig-cache; \
+    printf 'int main(void){return 0;}\n' > /tmp/warm.c; \
+    build_zig_target() { \
+        /opt/zig/zig cc -target "$2" -O2 -c stdlib/runtime.c \
+            -o "stdlib/runtime.$1.o"; \
+        /opt/zig/zig cc -target "$2" -O2 $3 /tmp/warm.c \
+            "stdlib/runtime.$1.o" $4 -o "/tmp/warm-$1"; \
+    }; \
+    build_zig_target macos-x64          x86_64-macos-none        ""        ""; \
+    build_zig_target macos-arm64        aarch64-macos-none       ""        ""; \
+    build_zig_target linux-x64-musl     x86_64-linux-musl        "-static" "-lm -lpthread"; \
+    build_zig_target linux-arm64-musl   aarch64-linux-musl       "-static" "-lm -lpthread"; \
+    build_zig_target linux-arm64-gnu    aarch64-linux-gnu.2.31   ""        "-lm -lpthread"; \
+    build_zig_target linux-riscv64-musl riscv64-linux-musl       "-static" "-lm -lpthread"; \
+    rm -f /tmp/warm.c /tmp/warm-*
 
 # Compile the NURL API binary itself
 RUN ./nurl.sh nurlapi/main.nu nurlapi/nurlapi
@@ -145,10 +171,15 @@ ENV NURLC_PATH=/opt/nurl/build/nurlc \
     NURL_AUDIO_WASM_O=/opt/nurl/stdlib/audio.wasm.o \
     NURL_RUNTIME_WIN_O=/opt/nurl/stdlib/runtime.win.o \
     NURL_MINGW_CURL_PREFIX=/opt/curl-mingw \
+    NURL_MINGW_GCC=/usr/bin/x86_64-w64-mingw32-gcc \
     NURL_ZIG=/opt/zig/zig \
+    ZIG_GLOBAL_CACHE_DIR=/opt/zig-cache \
     NURL_MACOS_TARGET=x86_64-macos-none \
     NURL_RUNTIME_MAC_O=/opt/nurl/stdlib/runtime.mac.o \
     NURL_EXAMPLES_DIR=/opt/nurl/examples \
+    NURL_TESTS_DIR=/opt/nurl/compiler/tests \
+    NURL_README_PATH=/opt/nurl/README.md \
+    NURL_GRAMMAR_PATH=/opt/nurl/spec/grammar.ebnf \
     NURL_OUTPUT_DIR=/app/output \
     PATH=/opt/nurl/build:/usr/local/bin:/usr/bin:/bin:$PATH
 
@@ -157,13 +188,25 @@ COPY --from=builder /src/nurlapi/nurlapi /app/nurlapi
 COPY --from=builder /src/nurlapi/static /app/static
 
 # Bring in all cross-compilation artifacts
-RUN mkdir -p /opt/nurl/build /opt/nurl/stdlib /app/output /opt/nurl/examples
+RUN mkdir -p /opt/nurl/build /opt/nurl/stdlib /app/output /opt/nurl/examples /opt/nurl/compiler /opt/nurl/spec /opt/nurl/docs
 COPY --from=builder /src/build/nurlc             /opt/nurl/build/nurlc
 COPY --from=builder /src/stdlib                  /opt/nurl/stdlib
 COPY --from=builder /opt/wasi-sdk                /opt/wasi-sdk
 COPY --from=builder /opt/curl-mingw              /opt/curl-mingw
 COPY --from=builder /opt/zig                     /opt/zig
+# Per-target runtime objects are inside /src/stdlib (covered above) but
+# the pre-warmed cache rides separately so the first /build_target per
+# target is a fast cache hit instead of a multi-second cold libc build.
+COPY --from=builder /opt/zig-cache               /opt/zig-cache
 COPY --from=builder /src/examples                /opt/nurl/examples
+COPY --from=builder /src/compiler/tests          /opt/nurl/compiler/tests
+COPY --from=builder /src/README.md               /opt/nurl/README.md
+COPY --from=builder /src/ROADMAP.md              /opt/nurl/ROADMAP.md
+COPY --from=builder /src/docs/GOTCHAS.md         /opt/nurl/docs/GOTCHAS.md
+COPY --from=builder /src/LICENSE-MIT             /opt/nurl/LICENSE-MIT
+COPY --from=builder /src/LICENSE-APACHE          /opt/nurl/LICENSE-APACHE
+COPY --from=builder /src/NOTICE                  /opt/nurl/NOTICE
+COPY --from=builder /src/spec                    /opt/nurl/spec
 
 EXPOSE 8000
 CMD ["/app/nurlapi"]

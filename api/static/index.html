@@ -203,8 +203,18 @@ Programs using the canvas FFI animate in a live pixel surface above.</span></div
 </script>
 
 <script type="module">
-import { WASI, File, OpenFile, ConsoleStdout, PreopenDirectory }
-  from "https://esm.sh/@bjorn3/browser_wasi_shim@0.3.0";
+// WASI shim is loaded lazily (inside run()) so that a CDN stall on
+// esm.sh never blocks initial page paint. Without this the whole
+// `<script type="module">` body waits on the import to resolve before
+// running ANY of its statements — including refreshHealth() and
+// loadExamples(). A slow / blocked CDN therefore looked like
+// "/health doesn't respond" even though the server was fine.
+const WASI_SHIM_URL = "https://esm.sh/@bjorn3/browser_wasi_shim@0.3.0";
+let _wasiShimPromise = null;
+function loadWasiShim() {
+  if (!_wasiShimPromise) _wasiShimPromise = import(WASI_SHIM_URL);
+  return _wasiShimPromise;
+}
 
 const $ = (sel) => document.querySelector(sel);
 const editorHost = $("#editor");
@@ -736,6 +746,18 @@ async function run() {
     if (!ok) logLine("audio: running without microphone input", "warn");
   }
   const t0 = performance.now();
+
+  // Pull the WASI shim on demand. First Run-click pays the network
+  // cost; subsequent runs use the cached module. A CDN failure here
+  // is surfaced as a logLine error and aborts THIS run without
+  // touching the rest of the page.
+  let WASI, File, OpenFile, ConsoleStdout, PreopenDirectory;
+  try {
+    ({ WASI, File, OpenFile, ConsoleStdout, PreopenDirectory } = await loadWasiShim());
+  } catch (e) {
+    logLine("could not load WASI shim from " + WASI_SHIM_URL + ": " + e.message, "stderr");
+    return;
+  }
 
   const stdoutWriter = ConsoleStdout.lineBuffered((line) => logLine(line, "line-stdout"));
   const stderrWriter = ConsoleStdout.lineBuffered((line) => logLine(line, "stderr"));

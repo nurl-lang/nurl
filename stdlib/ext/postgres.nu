@@ -164,10 +164,12 @@ $ `stdlib/core/vec.nu`
         ?? pk {
             T sv → {
                 : s sdata ( string_data sv )
-                ( nurl_poke vals * k 8 # i sdata )
+                // nurl_poke uses SLOT indexing (×8 stride internally);
+                // pass `k`, NOT `k * 8`.
+                ( nurl_poke vals k # i sdata )
                 ( string_free sv )
             }
-            F _ → ( nurl_poke vals * k 8 0 )
+            F _ → ( nurl_poke vals k 0 )
         }
         = k + k 1
     }

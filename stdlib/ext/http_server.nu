@@ -788,11 +788,17 @@ $ `stdlib/ext/http_response.nu`
             T t → {
                 : s tp . t raw
                 : i traw # i tp
-                ( nurl_poke thandles * j 8 traw )
+                // nurl_poke uses SLOT indexing (×8 stride internally);
+                // pass `j`, NOT `j * 8`. Pre-fix this overran the
+                // 8×n_workers byte buffer by writing at byte offset
+                // j*64 — survived for small worker counts thanks to
+                // malloc-arena slack, crashed once the spillover hit
+                // anything load-bearing.
+                ( nurl_poke thandles j traw )
             }
             F _ → {
                 // Spawn failure → leave a NULL slot so the join phase skips it.
-                ( nurl_poke thandles * j 8 0 )
+                ( nurl_poke thandles j 0 )
             }
         }
         = j + j 1
@@ -802,7 +808,7 @@ $ `stdlib/ext/http_response.nu`
     // caller via server_stop, or every accept hit a fatal NetErr).
     = j 0
     ~ < j n_workers {
-        : i traw ( nurl_peek thandles * j 8 )
+        : i traw ( nurl_peek thandles j )
         ? != traw 0 {
             : s tp # s traw
             : Thread t @ Thread { tp }

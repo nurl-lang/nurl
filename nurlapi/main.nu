@@ -6,7 +6,11 @@ $ `stdlib/std/path.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/encode.nu`
 $ `stdlib/std/int.nu`
+$ `stdlib/std/sort.nu`
+$ `stdlib/std/random.nu`
 $ `stdlib/ext/regex.nu`
+$ `stdlib/ext/mcp.nu`
+$ `stdlib/ext/mcp_http.nu`
 
 // ── Globals ──────────────────────────────────────────────────────────
 
@@ -23,6 +27,34 @@ $ `stdlib/ext/regex.nu`
 @ get_zig → String { ^ ( env_var_or `NURL_ZIG` `/opt/zig/zig` ) }
 @ get_work_root → String { ^ ( env_var_or `NURL_WORK_ROOT` `/opt/nurl` ) }
 @ get_static_dir → String { ^ ( env_var_or `NURL_STATIC_DIR` `/app/static` ) }
+@ get_readme_path → String { ^ ( env_var_or `NURL_README_PATH` `/opt/nurl/README.md` ) }
+@ get_grammar_path → String { ^ ( env_var_or `NURL_GRAMMAR_PATH` `/opt/nurl/spec/grammar.ebnf` ) }
+@ get_tests_dir → String { ^ ( env_var_or `NURL_TESTS_DIR` `/opt/nurl/compiler/tests` ) }
+@ get_mingw_gcc → String { ^ ( env_var_or `NURL_MINGW_GCC` `/usr/bin/x86_64-w64-mingw32-gcc` ) }
+@ get_mingw_curl_prefix → String { ^ ( env_var_or `NURL_MINGW_CURL_PREFIX` `/opt/curl-mingw` ) }
+@ get_roadmap_path → String { ^ ( env_var_or `NURL_ROADMAP_PATH` `/opt/nurl/ROADMAP.md` ) }
+@ get_gotchas_path → String { ^ ( env_var_or `NURL_GOTCHAS_PATH` `/opt/nurl/docs/GOTCHAS.md` ) }
+@ get_license_mit_path → String { ^ ( env_var_or `NURL_LICENSE_MIT_PATH` `/opt/nurl/LICENSE-MIT` ) }
+@ get_license_apache_path → String { ^ ( env_var_or `NURL_LICENSE_APACHE_PATH` `/opt/nurl/LICENSE-APACHE` ) }
+@ get_notice_path → String { ^ ( env_var_or `NURL_NOTICE_PATH` `/opt/nurl/NOTICE` ) }
+@ get_mcp_loopback_url → String { ^ ( env_var_or `NURL_MCP_LOOPBACK_URL` `http://127.0.0.1:8000` ) }
+@ get_mcp_server_name → String { ^ ( env_var_or `NURL_MCP_SERVER_NAME` `nurl` ) }
+@ get_mcp_server_version → String { ^ ( env_var_or `NURL_MCP_SERVER_VERSION` `1.9.4` ) }
+
+// Per-zig-target runtime object path. Used by /build_target so we don't
+// have to keep a switch in NURL code — the Dockerfile builds one
+// runtime.<id>.o per registered target and the path lookup follows
+// suit: `runtime.<target_id>.o` under NURL_STDLIB_DIR.
+@ get_runtime_target_o s target_id → String {
+  : String sdir ( get_stdlib_dir )
+  : String fname ( string_with_cap 32 )
+  ( string_push_str fname `runtime.` )
+  ( string_push_str fname target_id )
+  ( string_push_str fname `.o` )
+  : String full ( path_join ( string_data sdir ) ( string_data fname ) )
+  ( string_free sdir ) ( string_free fname )
+  ^ full
+}
 
 @ create_build_id → String {
   : i now ( now_ms )
@@ -254,6 +286,196 @@ $ `stdlib/ext/regex.nu`
   ? == ( nurl_str_len str ) 0 { ^ ( json_null ) } { ^ ( json_str_lit str ) }
 }
 
+// ── Build-response helpers (shared by /build*, mirrors api/'s shape) ──
+
+// Build the standard { name, bytes, download_url, token } artifact object.
+// `token` is `<build_id>/<name>` — the same opaque identifier used by the
+// /download/<build_id>/<name> route, exposed separately so clients can
+// reconstruct the URL without re-parsing it (matches api/'s BuildArtifact).
+@ make_artifact_json s name i bytes s build_id → Json {
+  : Json o ( json_obj_new )
+  ( json_obj_set o `name`  ( json_str_lit name ) )
+  ( json_obj_set o `bytes` ( json_int bytes ) )
+  : String token ( string_with_cap 64 )
+  ( string_push_str token build_id )
+  ( string_push_str token `/` )
+  ( string_push_str token name )
+  : String url ( string_with_cap 64 )
+  ( string_push_str url `/download/` )
+  ( string_push_str url ( string_data token ) )
+  ( json_obj_set o `download_url` ( json_str_lit ( string_data url ) ) )
+  ( json_obj_set o `token`        ( json_str_lit ( string_data token ) ) )
+  ( string_free url )
+  ( string_free token )
+  ^ o
+}
+
+// Concatenate nurlc + clang stderr blobs into one combined log, mirror
+// of Python's `"\n".join(s for s in stderr_log if s).strip()`. Returns
+// an owned String — caller frees.
+@ combine_stderr s a s b → String {
+  : i la ( nurl_str_len a )
+  : i lb ( nurl_str_len b )
+  : String out ( string_with_cap + + la lb 2 )
+  ? > la 0 { ( string_push_str out a ) } {}
+  ? & > la 0 > lb 0 { ( string_push_char out 10 ) } {}
+  ? > lb 0 { ( string_push_str out b ) } {}
+  // No post-trim: nurlc/clang stderr blobs are already line-terminated
+  // and the playground's <pre> rendering tolerates the trailing newline.
+  // Trimming inline triggered a double-free against the explicit `out`
+  // free + compiler auto-drop on the trimmed-branch return path.
+  ^ out
+}
+
+// Parse nurlc stderr blob into a Json array of
+// `{ "file": str, "line": int, "col": int, "message": str }` entries.
+// Each line that matches `file:line:col: message` becomes one entry;
+// non-matching lines are ignored (so debug prints + warnings don't
+// pollute the structured diagnostics).
+@ parse_nurlc_diagnostics s blob → Json {
+  : Json arr ( json_arr_new )
+  : i n ( nurl_str_len blob )
+  ? <= n 0 { ^ arr } {}
+
+  : ~ i lo 0       // line start
+  : ~ i k 0        // cursor
+  ~ <= k n {
+    : b at_end | == k n == ( nurl_str_get blob k ) 10
+    ? at_end {
+      // Process [lo, k) as one line.
+      ? > k lo {
+        // Find first three ':' positions.
+        : ~ i c1 - 0 1
+        : ~ i c2 - 0 1
+        : ~ i c3 - 0 1
+        : ~ i j lo
+        ~ < j k {
+          ? == ( nurl_str_get blob j ) 58 {
+            ? < c1 0 { = c1 j } {
+              ? < c2 0 { = c2 j } {
+                ? < c3 0 { = c3 j } {}
+              }
+            }
+          } {}
+          = j + j 1
+        }
+        ? & & & >= c1 0 >= c2 0 >= c3 0 < c3 k {
+          // file = blob[lo..c1], line = parse(blob[c1+1..c2]),
+          // col = parse(blob[c2+1..c3]), msg = blob[c3+2..k] (skip ": ")
+          : s file_s ( nurl_str_slice blob lo - c1 lo )
+          : s line_s ( nurl_str_slice blob + c1 1 - c2 + c1 1 )
+          : s col_s  ( nurl_str_slice blob + c2 1 - c3 + c2 1 )
+          // Skip leading whitespace after the third colon.
+          : ~ i ms + c3 1
+          ~ & < ms k == ( nurl_str_get blob ms ) 32 { = ms + ms 1 }
+          : s msg_s ( nurl_str_slice blob ms - k ms )
+          // Validate line+col are digit-only.
+          : ~ b digits_only T
+          : ~ i lp 0
+          ~ < lp ( nurl_str_len line_s ) {
+            : i ch ( nurl_str_get line_s lp )
+            ? | < ch 48 > ch 57 { = digits_only F } {}
+            = lp + lp 1
+          }
+          : ~ i cp 0
+          ~ < cp ( nurl_str_len col_s ) {
+            : i ch ( nurl_str_get col_s cp )
+            ? | < ch 48 > ch 57 { = digits_only F } {}
+            = cp + cp 1
+          }
+          ? & digits_only > ( nurl_str_len file_s ) 0 {
+            : i line_n ( nurl_str_to_int line_s )
+            : i col_n  ( nurl_str_to_int col_s )
+            : Json o ( json_obj_new )
+            ( json_obj_set o `file`    ( json_str_lit file_s ) )
+            ( json_obj_set o `line`    ( json_int line_n ) )
+            ( json_obj_set o `col`     ( json_int col_n ) )
+            ( json_obj_set o `message` ( json_str_lit msg_s ) )
+            ( json_arr_push arr o )
+          } {}
+          // file_s/line_s/col_s/msg_s are nurl_str_slice results —
+          // already on the compiler's auto-drop list. Explicit
+          // nurl_free here would be a double-free.
+        } {}
+      } {}
+      = lo + k 1
+    } {}
+    = k + k 1
+  }
+  ^ arr
+}
+
+// Stamp the shared BuildResponse fields onto `res`. Mirrors api/'s
+// BuildResponse exactly so the playground's renderer works unchanged.
+// Caller owns `res` and `combined_*` (which are NOT freed here).
+//
+// `ll_artifact` / `binary_artifact` are emitted as `null` here so every
+// response has the same key set; success paths overwrite them via
+// `json_obj_set` (which replaces in-place) after this call returns.
+@ stamp_build_response Json res s status s message s filename
+    b uses_canvas
+    i nurlc_rc s nurlc_stderr i nurlc_stdout_bytes
+    i clang_rc s clang_stdout s clang_stderr
+    s combined_stdout s combined_stderr → v {
+  ( json_obj_set res `status`              ( json_str_lit status ) )
+  ( json_obj_set res `message`             ( json_str_lit message ) )
+  ( json_obj_set res `filename`            ( json_str_lit filename ) )
+  ( json_obj_set res `uses_canvas`         ( json_bool uses_canvas ) )
+  ( json_obj_set res `nurlc_returncode`    ( json_int nurlc_rc ) )
+  ( json_obj_set res `nurlc_stdout_bytes`  ( json_int nurlc_stdout_bytes ) )
+  ( json_obj_set res `nurlc_stderr`        ( json_str_or_null nurlc_stderr ) )
+  // clang_rc == -1 is the "clang never ran" sentinel — emit null to match
+  // api/'s `clang_returncode: int | None` shape.
+  ? == clang_rc - 0 1
+    { ( json_obj_set res `clang_returncode` ( json_null ) ) }
+    { ( json_obj_set res `clang_returncode` ( json_int clang_rc ) ) }
+  ( json_obj_set res `clang_stdout`        ( json_str_or_null clang_stdout ) )
+  ( json_obj_set res `clang_stderr`        ( json_str_or_null clang_stderr ) )
+  ( json_obj_set res `stdout`              ( json_str_lit combined_stdout ) )
+  ( json_obj_set res `stderr`              ( json_str_lit combined_stderr ) )
+  ( json_obj_set res `nurlc_errors`        ( parse_nurlc_diagnostics nurlc_stderr ) )
+  ( json_obj_set res `ll_artifact`         ( json_null ) )
+  ( json_obj_set res `binary_artifact`     ( json_null ) )
+}
+
+// Append the native-build runtime libs to the clang command. Matches
+// what nurl.sh produces locally so a /build link succeeds against the
+// committed stdlib/runtime.native.o (FFI-rich: libcurl + openssl +
+// sqlite3 + libpq + zlib + zstd).
+@ push_native_runtime_libs ( Vec s ) args → v {
+  ( vec_push [s] args `-lm` )
+  ( vec_push [s] args `-lpthread` )
+  ( vec_push [s] args `-lcurl` )
+  ( vec_push [s] args `-lssl` )
+  ( vec_push [s] args `-lcrypto` )
+  ( vec_push [s] args `-lsqlite3` )
+  ( vec_push [s] args `-lpq` )
+  ( vec_push [s] args `-lz` )
+  ( vec_push [s] args `-lzstd` )
+}
+
+// Build a 200 OK JSON response for the nurlc-failed-before-link path.
+// Mirrors api/'s behaviour (status=error, returncode != 0, structured
+// nurlc_errors[]) so the playground's BUILD FAILED renderer works
+// uniformly across success + failure + partial-failure cases.
+//
+// String/Json bindings are auto-dropped at scope exit — do NOT add
+// explicit string_free / json_free for `combined`, `res`, `body`
+// here (the compiler emits both, double-freeing).
+@ nurlc_failure_response s filename i nurlc_rc s nurlc_stderr i nurlc_stdout_bytes → HttpResponse {
+  : String combined ( combine_stderr nurlc_stderr `` )
+  : Json res ( json_obj_new )
+  ( stamp_build_response res
+      `error` `nurlc failed` filename F
+      nurlc_rc nurlc_stderr nurlc_stdout_bytes
+      - 0 1 `` ``
+      `` ( string_data combined ) )
+  : String body ( json_stringify res )
+  : HttpResponse hr ( response_text 200 ( string_data body ) )
+  ( response_set_header hr `Content-Type` `application/json` )
+  ^ hr
+}
+
 @ get_body_str HttpRequest req → String {
   : i blen ( vec_len [u] . req body )
   : String body_str ( string_with_cap + blen 1 )
@@ -300,66 +522,64 @@ $ `stdlib/ext/regex.nu`
               ? ( output_success n_out ) {
                 ( write_file ( string_data ll_path ) ( output_stdout n_out ) )
                 : ( Vec s ) clang_args ( vec_new [s] )
-                ( vec_push [s] clang_args opt ) ( vec_push [s] clang_args `-Wno-override-module` ) ( vec_push [s] clang_args ( string_data ll_path ) )
+                ( vec_push [s] clang_args opt )
+                ( vec_push [s] clang_args `-Wno-override-module` )
+                ( vec_push [s] clang_args ( string_data ll_path ) )
                 : String runtime_o ( path_join ( string_data ( get_stdlib_dir ) ) `runtime.native.o` )
-                ( vec_push [s] clang_args ( string_data runtime_o ) ) ( vec_push [s] clang_args `-o` ) ( vec_push [s] clang_args ( string_data bin_path ) )
-                ( vec_push [s] clang_args `-lm` ) ( vec_push [s] clang_args `-lpthread` ) ( vec_push [s] clang_args `-lcurl` )
+                ( vec_push [s] clang_args ( string_data runtime_o ) )
+                ( vec_push [s] clang_args `-o` )
+                ( vec_push [s] clang_args ( string_data bin_path ) )
+                ( push_native_runtime_libs clang_args )
 
                 : ! Output ProcessErr clang_res ( process_run `clang` clang_args `` ) ( vec_free [s] clang_args )
 
                 ?? clang_res {
                   T c_out → {
                     : i c_rc ( output_exit_code c_out )
-                    : Json res ( json_obj_new )
-                    ( json_obj_set res `status` ( json_str_lit ? == c_rc 0 `ok` `error` ) )
-                    ( json_obj_set res `message` ( json_str_lit `compiled nurl → native binary` ) )
-                    ( json_obj_set res `filename` ( json_str_lit filename ) )
-                    ( json_obj_set res `nurlc_returncode` ( json_int n_rc ) )
-                    ( json_obj_set res `clang_returncode` ( json_int c_rc ) )
-                    ( json_obj_set res `nurlc_stdout` ( json_str_lit `[nurlc] build successful` ) )
-                    ( json_obj_set res `nurlc_stderr` ( json_str_lit ( output_stderr n_out ) ) )
-                    ( json_obj_set res `clang_stdout` ( json_str_lit ( output_stdout c_out ) ) )
-                    ( json_obj_set res `clang_stderr` ( json_str_lit ( output_stderr c_out ) ) )
-                    ( json_obj_set res `uses_canvas` ( json_bool uses_canvas ) )
-                    ( json_obj_set res `uses_audio` ( json_bool uses_audio ) )
-                    
-                    : String ll_url ( string_new ) : String bin_url ( string_new )
-                    ? == c_rc 0 {
-                      : ! i IoErr ll_size_res ( file_size ( string_data ll_path ) )
-                      : ! i IoErr bin_size_res ( file_size ( string_data bin_path ) )
-                      : Json ll_art ( json_obj_new )
-                      ( json_obj_set ll_art `name` ( json_str_lit ( string_data ll_name ) ) )
-                      ( json_obj_set ll_art `bytes` ( json_int ?? ll_size_res { T s → s F _ → 0 } ) )
-                      = ll_url ( string_with_cap 64 )
-                      ( string_push_str ll_url `/download/` ) ( string_push_str ll_url ( string_data build_id ) ) ( string_push_str ll_url `/` ) ( string_push_str ll_url ( string_data ll_name ) )
-                      ( json_obj_set ll_art `download_url` ( json_str_lit ( string_data ll_url ) ) )
-                      ( json_obj_set res `ll_artifact` ll_art )
+                    : i n_so_bytes ( nurl_str_len ( output_stdout n_out ) )
+                    : s c_so ( output_stdout c_out )
+                    : s c_se ( output_stderr c_out )
+                    : s n_se ( output_stderr n_out )
+                    : String combined_stderr ( combine_stderr n_se c_se )
 
-                      : Json bin_art ( json_obj_new )
-                      ( json_obj_set bin_art `name` ( json_str_lit ( string_data bin_name ) ) )
-                      ( json_obj_set bin_art `bytes` ( json_int ?? bin_size_res { T s → s F _ → 0 } ) )
-                      = bin_url ( string_with_cap 64 )
-                      ( string_push_str bin_url `/download/` ) ( string_push_str bin_url ( string_data build_id ) ) ( string_push_str bin_url `/` ) ( string_push_str bin_url ( string_data bin_name ) )
-                      ( json_obj_set bin_art `download_url` ( json_str_lit ( string_data bin_url ) ) )
-                      ( json_obj_set res `binary_artifact` bin_art )
+                    : Json res ( json_obj_new )
+                    ( stamp_build_response res
+                        ? == c_rc 0 `ok` `error`
+                        ? == c_rc 0 `compiled nurl → native binary` `build failed (see stderr)`
+                        filename uses_canvas
+                        n_rc n_se n_so_bytes
+                        c_rc c_so c_se
+                        c_so ( string_data combined_stderr ) )
+
+                    ? == c_rc 0 {
+                      : ! i IoErr ll_sz ( file_size ( string_data ll_path ) )
+                      : ! i IoErr bn_sz ( file_size ( string_data bin_path ) )
+                      ( json_obj_set res `ll_artifact`
+                        ( make_artifact_json ( string_data ll_name )
+                            ?? ll_sz { T s → s F _ → 0 } ( string_data build_id ) ) )
+                      ( json_obj_set res `binary_artifact`
+                        ( make_artifact_json ( string_data bin_name )
+                            ?? bn_sz { T s → s F _ → 0 } ( string_data build_id ) ) )
                     } {}
 
                     : String body ( json_stringify res )
                     : HttpResponse hr ( response_text 200 ( string_data body ) )
                     ( response_set_header hr `Content-Type` `application/json` )
-                    
-                    ( string_free ll_url ) ( string_free bin_url ) ( json_free res ) ( string_free runtime_o )
+
+                    ( string_free combined_stderr ) ( json_free res ) ( string_free runtime_o )
                     ( output_free n_out ) ( output_free c_out ) ( json_free root )
-                    ( string_free nu_path ) ( string_free ll_name ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path )
-                    ( string_free build_id ) ( string_free build_dir ) ( string_free body_str ) ( string_free body ) 
+                    ( string_free nu_path ) ( string_free ll_name ) ( string_free ll_path )
+                    ( string_free bin_name ) ( string_free bin_path )
+                    ( string_free build_id ) ( string_free build_dir )
+                    ( string_free body_str ) ( string_free body )
                     ^ hr
                   }
                   F ce → { ^ ( response_text 500 `{"error":"clang process failed"}\n` ) }
                 }
               } {
-                : HttpResponse hr422 ( response_text 422 ( output_stderr n_out ) )
+                : HttpResponse hr_err ( nurlc_failure_response filename ( output_exit_code n_out ) ( output_stderr n_out ) ( nurl_str_len ( output_stdout n_out ) ) )
                 ( output_free n_out ) ( json_free root ) ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path ) ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
-                ^ hr422
+                ^ hr_err
               }
             }
             F _ → { ^ ( response_text 500 `{"error":"nurlc failed"}\n` ) }
@@ -444,7 +664,7 @@ $ `stdlib/ext/regex.nu`
                     ( json_obj_set res `wasm_base64` ( json_null ) )
                     ( json_obj_set res `wasm_bytes` ( json_int 0 ) )
                     ( json_obj_set res `nurlc_stderr` ( json_str_or_null ( output_stderr n_out ) ) )
-                    ( json_obj_set res `nurlc_errors` ( json_arr_new ) )
+                    ( json_obj_set res `nurlc_errors` ( parse_nurlc_diagnostics ( output_stderr n_out ) ) )
                     ( json_obj_set res `clang_stderr` ( json_str_or_null ( output_stderr c_out ) ) )
                     ( json_obj_set res `llvm_ir` ? | emit_ll != c_rc 0 { ( json_str_lit ( string_data ir_fixed ) ) } { ( json_null ) } )
                     ( json_obj_set res `uses_canvas` ( json_bool uses_canvas ) )
@@ -477,9 +697,9 @@ $ `stdlib/ext/regex.nu`
                   F ce → { ( string_free ir_fixed ) ^ ( response_text 500 `{"error":"wasi-clang failed"}\n` ) }
                 }
               } {
-                : HttpResponse hr422 ( response_text 422 ( output_stderr n_out ) )
+                : HttpResponse hr_err ( nurlc_failure_response filename ( output_exit_code n_out ) ( output_stderr n_out ) ( nurl_str_len ( output_stdout n_out ) ) )
                 ( output_free n_out ) ( json_free root ) ( string_free nu_path ) ( string_free ll_path ) ( string_free wasm_path ) ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
-                ^ hr422
+                ^ hr_err
               }
             }
             F _ → { ^ ( response_text 500 `{"error":"nurlc failed"}\n` ) }
@@ -523,31 +743,105 @@ $ `stdlib/ext/regex.nu`
               : i n_rc ( output_exit_code n_out )
               ? ( output_success n_out ) {
                 ( write_file ( string_data ll_path ) ( output_stdout n_out ) )
+
+                // Two-step build: (1) clang --target=mingw -c → .o,
+                // (2) x86_64-w64-mingw32-gcc to link with libgcc /
+                // libwinpthread / static libcurl. Single-step clang link
+                // fails on -lgcc lookup since clang's mingw driver can't
+                // resolve mingw-w64's installed support libs by itself.
+                : String obj_path ( path_join ( string_data build_dir ) `main.o` )
+
                 : ( Vec s ) clang_args ( vec_new [s] )
-                ( vec_push [s] clang_args `--target=x86_64-w64-mingw32` ) ( vec_push [s] clang_args opt ) ( vec_push [s] clang_args `-Wno-override-module` ) ( vec_push [s] clang_args ( string_data ll_path ) )
-                ( vec_push [s] clang_args ( string_data ( get_runtime_win_o ) ) ) ( vec_push [s] clang_args `-o` ) ( vec_push [s] clang_args ( string_data bin_path ) )
-                ( vec_push [s] clang_args `-L/opt/curl-mingw/lib` ) ( vec_push [s] clang_args `-lcurl` ) ( vec_push [s] clang_args `-lws2_32` ) ( vec_push [s] clang_args `-lcrypt32` ) ( vec_push [s] clang_args `-lbcrypt` ) ( vec_push [s] clang_args `-lncrypt` ) ( vec_push [s] clang_args `-lsecur32` ) ( vec_push [s] clang_args `-ladvapi32` )
+                ( vec_push [s] clang_args opt )
+                ( vec_push [s] clang_args `-Wno-override-module` )
+                ( vec_push [s] clang_args `--target=x86_64-w64-mingw32` )
+                ( vec_push [s] clang_args `-c` )
+                ( vec_push [s] clang_args ( string_data ll_path ) )
+                ( vec_push [s] clang_args `-o` )
+                ( vec_push [s] clang_args ( string_data obj_path ) )
                 : ! Output ProcessErr clang_res ( process_run `clang` clang_args `` ) ( vec_free [s] clang_args )
+
                 ?? clang_res {
                   T c_out → {
                     : i c_rc ( output_exit_code c_out )
-                    : Json res ( json_obj_new )
-                    ( json_obj_set res `status` ( json_str_lit ? == c_rc 0 `ok` `error` ) ) ( json_obj_set res `message` ( json_str_lit `compiled nurl → windows .exe` ) ) ( json_obj_set res `filename` ( json_str_lit filename ) ) ( json_obj_set res `nurlc_returncode` ( json_int n_rc ) ) ( json_obj_set res `clang_returncode` ( json_int c_rc ) )
-                    ( json_obj_set res `nurlc_stdout` ( json_str_lit `[nurlc] build successful` ) ) ( json_obj_set res `nurlc_stderr` ( json_str_lit ( output_stderr n_out ) ) ) ( json_obj_set res `clang_stdout` ( json_str_lit ( output_stdout c_out ) ) ) ( json_obj_set res `clang_stderr` ( json_str_lit ( output_stderr c_out ) ) )
-                    : String bin_url ( string_new )
-                    ? == c_rc 0 { : ! i IoErr bin_size_res ( file_size ( string_data bin_path ) ) : Json bin_art ( json_obj_new ) ( json_obj_set bin_art `name` ( json_str_lit ( string_data bin_name ) ) ) ( json_obj_set bin_art `bytes` ( json_int ?? bin_size_res { T s → s F _ → 0 } ) )
-                      = bin_url ( string_with_cap 64 ) ( string_push_str bin_url `/download/` ) ( string_push_str bin_url ( string_data build_id ) ) ( string_push_str bin_url `/` ) ( string_push_str bin_url ( string_data bin_name ) )
-                      ( json_obj_set bin_art `download_url` ( json_str_lit ( string_data bin_url ) ) ) ( json_obj_set res `binary_artifact` bin_art ) } {}
-                    : String body ( json_stringify res )
-                    : HttpResponse hr ( response_text 200 ( string_data body ) ) ( response_set_header hr `Content-Type` `application/json` )
-                    ( string_free bin_url ) ( json_free res ) ( output_free n_out ) ( output_free c_out ) ( json_free root )
-                    ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path )
-                    ( string_free build_id ) ( string_free build_dir ) ( string_free body_str ) ( string_free body ) ^ hr
+
+                    // Build the linker command once. We always run mingw-
+                    // gcc — if the compile failed it still gets called but
+                    // exits with its own (informative) error.
+                    : ( Vec s ) link_args ( vec_new [s] )
+                    ( vec_push [s] link_args opt )
+                    ( vec_push [s] link_args ( string_data obj_path ) )
+                    ( vec_push [s] link_args ( string_data ( get_runtime_win_o ) ) )
+                    ( vec_push [s] link_args `-lpthread` )
+                    : String curl_marker ( path_join ( string_data ( get_stdlib_dir ) ) `runtime.win.curl` )
+                    : String curl_L ( string_with_cap 64 )
+                    ? ( file_exists ( string_data curl_marker ) ) {
+                      ( string_push_str curl_L `-L` )
+                      ( string_push_str curl_L ( string_data ( get_mingw_curl_prefix ) ) )
+                      ( string_push_str curl_L `/lib` )
+                      ( vec_push [s] link_args ( string_data curl_L ) )
+                      ( vec_push [s] link_args `-lcurl` )
+                      ( vec_push [s] link_args `-lws2_32` )
+                      ( vec_push [s] link_args `-lcrypt32` )
+                      ( vec_push [s] link_args `-lbcrypt` )
+                      ( vec_push [s] link_args `-lncrypt` )
+                      ( vec_push [s] link_args `-lsecur32` )
+                      ( vec_push [s] link_args `-ladvapi32` )
+                    } {}
+                    ( vec_push [s] link_args `-o` )
+                    ( vec_push [s] link_args ( string_data bin_path ) )
+                    : ! Output ProcessErr link_res ( process_run ( string_data ( get_mingw_gcc ) ) link_args `` )
+                    ( vec_free [s] link_args )
+
+                    ?? link_res {
+                      T l_out → {
+                        : i lnk_rc ( output_exit_code l_out )
+                        : i n_so_bytes ( nurl_str_len ( output_stdout n_out ) )
+                        : s c_so ( output_stdout c_out )
+                        : s c_se ( output_stderr c_out )
+                        : s n_se ( output_stderr n_out )
+                        : s l_se ( output_stderr l_out )
+                        : String stage1 ( combine_stderr n_se c_se )
+                        : String combined_stderr ( combine_stderr ( string_data stage1 ) l_se )
+
+                        : i final_rc ? != c_rc 0 c_rc lnk_rc
+                        : b ok & == c_rc 0 == lnk_rc 0
+
+                        : Json res ( json_obj_new )
+                        ( stamp_build_response res
+                            ? ok `ok` `error`
+                            ? ok `compiled nurl → windows .exe` `build failed (see stderr)`
+                            filename F
+                            n_rc n_se n_so_bytes
+                            final_rc c_so c_se
+                            c_so ( string_data combined_stderr ) )
+
+                        ? ok {
+                          : ! i IoErr bn_sz ( file_size ( string_data bin_path ) )
+                          ( json_obj_set res `binary_artifact`
+                            ( make_artifact_json ( string_data bin_name )
+                                ?? bn_sz { T s → s F _ → 0 } ( string_data build_id ) ) )
+                        } {}
+
+                        : String body ( json_stringify res )
+                        : HttpResponse hr ( response_text 200 ( string_data body ) )
+                        ( response_set_header hr `Content-Type` `application/json` )
+                        ( string_free stage1 ) ( string_free combined_stderr ) ( json_free res )
+                        ( output_free n_out ) ( output_free c_out ) ( output_free l_out ) ( json_free root )
+                        ( string_free curl_marker ) ( string_free curl_L )
+                        ( string_free nu_path ) ( string_free ll_path ) ( string_free obj_path )
+                        ( string_free bin_name ) ( string_free bin_path )
+                        ( string_free build_id ) ( string_free build_dir )
+                        ( string_free body_str ) ( string_free body )
+                        ^ hr
+                      }
+                      F _ → { ^ ( response_text 500 `{"error":"mingw-gcc invocation failed"}\n` ) }
+                    }
                   } F ce → { ^ ( response_text 500 `{"error":"clang process failed"}\n` ) } }
               } {
-                : HttpResponse hr422 ( response_text 422 ( output_stderr n_out ) )
+                : HttpResponse hr_err ( nurlc_failure_response filename ( output_exit_code n_out ) ( output_stderr n_out ) ( nurl_str_len ( output_stdout n_out ) ) )
                 ( output_free n_out ) ( json_free root ) ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path ) ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
-                ^ hr422
+                ^ hr_err
               } } F _ → { ^ ( response_text 500 `{"error":"nurlc failed"}\n` ) } }
         } F _ → { ^ ( response_text 500 `{"error":"could not create build dir"}\n` ) } } } F _ → { ^ ( response_text 400 `{"error":"invalid json"}\n` ) } }
 }
@@ -589,23 +883,43 @@ $ `stdlib/ext/regex.nu`
                 ?? zig_res {
                   T z_out → {
                     : i z_rc ( output_exit_code z_out )
+                    : i n_so_bytes ( nurl_str_len ( output_stdout n_out ) )
+                    : s z_so ( output_stdout z_out )
+                    : s z_se ( output_stderr z_out )
+                    : s n_se ( output_stderr n_out )
+                    : String combined_stderr ( combine_stderr n_se z_se )
+
                     : Json res ( json_obj_new )
-                    ( json_obj_set res `status` ( json_str_lit ? == z_rc 0 `ok` `error` ) ) ( json_obj_set res `message` ( json_str_lit `compiled nurl → macOS Mach-O` ) ) ( json_obj_set res `filename` ( json_str_lit filename ) ) ( json_obj_set res `nurlc_returncode` ( json_int n_rc ) ) ( json_obj_set res `clang_returncode` ( json_int z_rc ) )
-                    ( json_obj_set res `nurlc_stdout` ( json_str_lit `[nurlc] build successful` ) ) ( json_obj_set res `nurlc_stderr` ( json_str_lit ( output_stderr n_out ) ) ) ( json_obj_set res `clang_stdout` ( json_str_lit ( output_stdout z_out ) ) ) ( json_obj_set res `clang_stderr` ( json_str_lit ( output_stderr z_out ) ) )
-                    : String bin_url ( string_new )
-                    ? == z_rc 0 { : ! i IoErr bin_size_res ( file_size ( string_data bin_path ) ) : Json bin_art ( json_obj_new ) ( json_obj_set bin_art `name` ( json_str_lit ( string_data bin_name ) ) ) ( json_obj_set bin_art `bytes` ( json_int ?? bin_size_res { T s → s F _ → 0 } ) )
-                      = bin_url ( string_with_cap 64 ) ( string_push_str bin_url `/download/` ) ( string_push_str bin_url ( string_data build_id ) ) ( string_push_str bin_url `/` ) ( string_push_str bin_url ( string_data bin_name ) )
-                      ( json_obj_set bin_art `download_url` ( json_str_lit ( string_data bin_url ) ) ) ( json_obj_set res `binary_artifact` bin_art ) } {}
+                    ( stamp_build_response res
+                        ? == z_rc 0 `ok` `error`
+                        ? == z_rc 0 `compiled nurl → macOS Mach-O` `build failed (see stderr)`
+                        filename F
+                        n_rc n_se n_so_bytes
+                        z_rc z_so z_se
+                        z_so ( string_data combined_stderr ) )
+
+                    ? == z_rc 0 {
+                      : ! i IoErr bn_sz ( file_size ( string_data bin_path ) )
+                      ( json_obj_set res `binary_artifact`
+                        ( make_artifact_json ( string_data bin_name )
+                            ?? bn_sz { T s → s F _ → 0 } ( string_data build_id ) ) )
+                    } {}
+
                     : String body ( json_stringify res )
-                    : HttpResponse hr ( response_text 200 ( string_data body ) ) ( response_set_header hr `Content-Type` `application/json` )
-                    ( string_free bin_url ) ( json_free res ) ( output_free n_out ) ( output_free z_out ) ( json_free root )
-                    ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path )
-                    ( string_free build_id ) ( string_free build_dir ) ( string_free body_str ) ( string_free body ) ^ hr
+                    : HttpResponse hr ( response_text 200 ( string_data body ) )
+                    ( response_set_header hr `Content-Type` `application/json` )
+                    ( string_free combined_stderr ) ( json_free res )
+                    ( output_free n_out ) ( output_free z_out ) ( json_free root )
+                    ( string_free nu_path ) ( string_free ll_path )
+                    ( string_free bin_name ) ( string_free bin_path )
+                    ( string_free build_id ) ( string_free build_dir )
+                    ( string_free body_str ) ( string_free body )
+                    ^ hr
                   } F ce → { ^ ( response_text 500 `{"error":"zig process failed"}\n` ) } }
               } {
-                : HttpResponse hr422 ( response_text 422 ( output_stderr n_out ) )
+                : HttpResponse hr_err ( nurlc_failure_response filename ( output_exit_code n_out ) ( output_stderr n_out ) ( nurl_str_len ( output_stdout n_out ) ) )
                 ( output_free n_out ) ( json_free root ) ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path ) ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
-                ^ hr422
+                ^ hr_err
               } } F _ → { ^ ( response_text 500 `{"error":"nurlc failed"}\n` ) } }
         } F _ → { ^ ( response_text 500 `{"error":"could not create build dir"}\n` ) } } } F _ → { ^ ( response_text 400 `{"error":"invalid json"}\n` ) } }
 }
@@ -674,17 +988,476 @@ $ `stdlib/ext/regex.nu`
   ^ r
 }
 
+// Push a single string entry into a JSON array.
+@ __mcp_info_push_str Json arr s v → v {
+  ( json_arr_push arr ( json_str_lit v ) )
+}
+
+// Resolve the public base URL for the example mcp.json snippet. Prefer
+// the NURL_PUBLIC_URL env var (production deployments behind a proxy
+// terminate TLS upstream and need an absolute URL); fall back to the
+// request's Host header with http://; degrade to http://localhost:8000
+// if even that is missing. Returns an owned String.
+@ __mcp_info_base_url HttpRequest req → String {
+  : String env ( env_var_or `NURL_PUBLIC_URL` `` )
+  : i envl ( string_len env )
+  ? != envl 0 {
+    ? ( string_ends_with env `/` ) {
+      : String trimmed ( string_substr env 0 - envl 1 )
+      ( string_free env )
+      ^ trimmed
+    } { ^ env }
+  } { ( string_free env ) }
+  : ?String host_opt ( header_get . req headers `Host` )
+  ?? host_opt {
+    T host → {
+      : String out ( string_with_cap 64 )
+      ( string_push_str out `http://` )
+      ( string_push_str out ( string_data host ) )
+      ( string_free host )
+      ^ out
+    }
+    F _ → { ^ ( string_from `http://localhost:8000` ) }
+  }
+}
+
 @ h_mcp_info HttpRequest req Params params → HttpResponse {
-  : Json j ( json_obj_new ) ( json_obj_set j `mcp_version` ( json_str_lit `1.0.0` ) ) ( json_obj_set j `server_name` ( json_str_lit `nurl-native-api` ) ) ( json_obj_set j `server_version` ( json_str_lit `0.1.0` ) )
+  : Json j ( json_obj_new )
+  ( json_obj_set j `url_path`  ( json_str_lit `/mcp` ) )
+  ( json_obj_set j `transport` ( json_str_lit `streamable-http` ) )
+
+  : Json tools ( json_arr_new )
+  ( __mcp_info_push_str tools `nurl_build_native` )
+  ( __mcp_info_push_str tools `nurl_build_windows` )
+  ( __mcp_info_push_str tools `nurl_build_macos` )
+  ( __mcp_info_push_str tools `nurl_build_wasm` )
+  ( __mcp_info_push_str tools `nurl_build_target` )
+  ( __mcp_info_push_str tools `nurl_list_examples` )
+  ( __mcp_info_push_str tools `nurl_read_example` )
+  ( __mcp_info_push_str tools `nurl_list_stdlib` )
+  ( __mcp_info_push_str tools `nurl_read_stdlib` )
+  ( __mcp_info_push_str tools `nurl_list_tests` )
+  ( __mcp_info_push_str tools `nurl_read_test` )
+  ( __mcp_info_push_str tools `nurl_read_grammar` )
+  ( __mcp_info_push_str tools `nurl_read_readme` )
+  ( __mcp_info_push_str tools `nurl_read_roadmap` )
+  ( __mcp_info_push_str tools `nurl_read_gotchas` )
+  ( json_obj_set j `tools` tools )
+
+  : Json resources ( json_arr_new )
+  ( __mcp_info_push_str resources `nurl://grammar` )
+  ( __mcp_info_push_str resources `nurl://readme` )
+  ( __mcp_info_push_str resources `nurl://roadmap` )
+  ( __mcp_info_push_str resources `nurl://gotchas` )
+  ( __mcp_info_push_str resources `nurl://stdlib/{path}` )
+  ( __mcp_info_push_str resources `nurl://example/{name}` )
+  ( __mcp_info_push_str resources `nurl://test/{name}` )
+  ( json_obj_set j `resources` resources )
+
+  : Json prompts ( json_arr_new )
+  ( __mcp_info_push_str prompts `nurl_coding_assistant` )
+  ( json_obj_set j `prompts` prompts )
+
+  // client_config_example: { mcpServers: { nurl: { url, transport } } }
+  : String base ( __mcp_info_base_url req )
+  : String mcp_url ( string_with_cap + ( string_len base ) 4 )
+  ( string_push_str mcp_url ( string_data base ) )
+  ( string_push_str mcp_url `/mcp` )
+  : Json nurl_entry ( json_obj_new )
+  ( json_obj_set nurl_entry `url`       ( json_str_lit ( string_data mcp_url ) ) )
+  ( json_obj_set nurl_entry `transport` ( json_str_lit `streamable-http` ) )
+  : Json servers ( json_obj_new )
+  ( json_obj_set servers `nurl` nurl_entry )
+  : Json client_cfg ( json_obj_new )
+  ( json_obj_set client_cfg `mcpServers` servers )
+  ( json_obj_set j `client_config_example` client_cfg )
+
   : String body ( json_stringify j )
-  : HttpResponse r ( response_text 200 ( string_data body ) ) ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
-  ( json_free j ) ( string_free body )
+  : HttpResponse r ( response_text 200 ( string_data body ) )
+  ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
+  ( json_free j ) ( string_free body ) ( string_free base ) ( string_free mcp_url )
   ^ r
 }
 
+// ── OpenAPI 3.1 schema served at /openapi.json ────────────────────
+//
+// Minimal but valid OpenAPI doc — enumerates every public route and
+// gives a one-line summary per endpoint. Schemas are kept loose (no
+// `$ref` chains) so the doc is self-contained and doesn't require us
+// to mirror api/'s 24-schema component map. Adequate for tooling
+// (Swagger UI, openapi-clients) that wants endpoint discovery.
+
+// Helper: append one `{method: { summary, responses: { "200": ... } }}`
+// entry under `path` in `paths`.
+@ __oa_path Json paths s path s method s summary s desc → v {
+  : Json op ( json_obj_new )
+  : Json tags ( json_arr_new ) ( json_arr_push tags ( json_str_lit `default` ) )
+  ( json_obj_set op `tags`        tags )
+  ( json_obj_set op `summary`     ( json_str_lit summary ) )
+  ( json_obj_set op `description` ( json_str_lit desc ) )
+
+  : Json ok ( json_obj_new )
+  ( json_obj_set ok `description` ( json_str_lit `Successful response.` ) )
+  : Json responses ( json_obj_new )
+  ( json_obj_set responses `200` ok )
+  ( json_obj_set op `responses` responses )
+
+  // Path entry — append onto existing entry if present, else new.
+  : ?Json existing ( json_obj_get paths path )
+  ?? existing {
+    T pj → { ( json_obj_set pj method op ) }
+    F _ → {
+      : Json pj ( json_obj_new )
+      ( json_obj_set pj method op )
+      ( json_obj_set paths path pj )
+    }
+  }
+}
+
+@ h_openapi_json HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /openapi.json\n` )
+  : Json doc ( json_obj_new )
+  ( json_obj_set doc `openapi` ( json_str_lit `3.1.0` ) )
+
+  : Json info ( json_obj_new )
+  ( json_obj_set info `title`   ( json_str_lit `NURL Compiler API (NURL-native)` ) )
+  ( json_obj_set info `version` ( json_str_lit `0.1.0` ) )
+  ( json_obj_set info `description` ( json_str_lit `HTTP interface to the NURL compiler — pure-NURL implementation. Compiles NURL source to native x86_64 binaries (POST /build) or wasm32-wasi WebAssembly (POST /build_wasm), serves the in-browser playground at /, and exposes the same surface as a Model Context Protocol server at POST /mcp (Streamable HTTP). See GET /mcp-info for MCP connection details.` ) )
+  ( json_obj_set doc `info` info )
+
+  : Json paths ( json_obj_new )
+
+  ( __oa_path paths `/health`               `get` `Liveness probe` `Returns 200 OK with a small JSON payload.` )
+  ( __oa_path paths `/build`                `post` `Compile NURL source to a native x86_64 Linux binary (mirrors nurl.sh)` `nurlc → LLVM IR → clang link → ELF. Returns BuildResponse with ll_artifact + binary_artifact download URLs on success.` )
+  ( __oa_path paths `/build_wasm`           `post` `Compile NURL source to a wasm32-wasi WebAssembly module` `nurlc → wasi-clang link → .wasm. Returns base64 wasm + canvas/audio FFI flags.` )
+  ( __oa_path paths `/build_windows`        `post` `Cross-compile to a Windows .exe via mingw-w64` `nurlc → clang+mingw link → PE/COFF. Static libcurl + Schannel TLS.` )
+  ( __oa_path paths `/build_macos`          `post` `Cross-compile to a macOS x86_64 Mach-O binary via zig cc` `Unsigned — clear quarantine attribute before running on macOS.` )
+  ( __oa_path paths `/build_target`         `post` `Cross-compile to a registered zig target (linux-arm64-musl, riscv64, …)` `See GET /targets for available target ids.` )
+  ( __oa_path paths `/targets`              `get`  `List available cross-compile targets` `Returns the TargetInfo[] used by the playground's dropdown.` )
+
+  ( __oa_path paths `/examples`             `get`  `List bundled example programs` `JSON array of {name, path, bytes}.` )
+  ( __oa_path paths `/examples/{name}`      `get`  `Return the source of a bundled example` `Path-encoded name as returned by /examples.` )
+
+  ( __oa_path paths `/stdlib`               `get`  `List bundled stdlib modules (recursive)` `JSON array of {name, path, bytes}, sorted.` )
+  ( __oa_path paths `/stdlib/{name}`        `get`  `Return the source of a stdlib module` `Returns {name, source, bytes}.` )
+
+  ( __oa_path paths `/tests`                `get`  `List bundled compiler tests (recursive)` `JSON array of {name, path, bytes}, sorted.` )
+  ( __oa_path paths `/tests/{name}`         `get`  `Return the source of a bundled test` `Returns {name, source, bytes}.` )
+
+  ( __oa_path paths `/readme`               `get`  `Render README.md as HTML` `Markdown rendered with same chrome as api/'s viewer.` )
+  ( __oa_path paths `/readme.md`            `get`  `Raw README.md source` `text/markdown response.` )
+  ( __oa_path paths `/roadmap`              `get`  `Render ROADMAP.md as HTML` `Markdown rendered with same chrome as api/'s viewer.` )
+  ( __oa_path paths `/roadmap.md`           `get`  `Raw ROADMAP.md source` `text/markdown response.` )
+  ( __oa_path paths `/gotchas`              `get`  `Render docs/GOTCHAS.md as HTML` `Markdown rendered with same chrome as api/'s viewer.` )
+  ( __oa_path paths `/gotchas.md`           `get`  `Raw docs/GOTCHAS.md source` `text/markdown response.` )
+  ( __oa_path paths `/grammar`              `get`  `Render the current NURL grammar (spec/grammar.ebnf)` `EBNF wrapped in a fenced code block.` )
+  ( __oa_path paths `/grammar.ebnf`         `get`  `Raw spec/grammar.ebnf` `text/plain response.` )
+
+  ( __oa_path paths `/license`              `get`  `Combined license overview (HTML)` `MIT + Apache-2.0 dual-license summary.` )
+  ( __oa_path paths `/license/mit`          `get`  `MIT license, HTML-rendered` `From LICENSE-MIT.` )
+  ( __oa_path paths `/license/apache`       `get`  `Apache-2.0 license, HTML-rendered` `From LICENSE-APACHE.` )
+  ( __oa_path paths `/LICENSE-MIT`          `get`  `Raw MIT license source` `text/plain.` )
+  ( __oa_path paths `/LICENSE-APACHE`       `get`  `Raw Apache-2.0 license source` `text/plain.` )
+  ( __oa_path paths `/NOTICE`               `get`  `Third-party attributions` `text/plain.` )
+
+  ( __oa_path paths `/stdlib-viewer`        `get`  `Browsable directory listing for stdlib/` `Lightweight HTML index linking to each .nu file.` )
+  ( __oa_path paths `/tests-viewer`         `get`  `Browsable directory listing for compiler/tests/` `Lightweight HTML index linking to each .nu file.` )
+
+  ( __oa_path paths `/mcp-info`             `get`  `MCP server connection info` `Tools, resources, prompts + drop-in mcp.json snippet.` )
+  ( __oa_path paths `/mcp`                  `post` `Model Context Protocol JSON-RPC endpoint (Streamable HTTP)` `Same surface as /build*, /examples, /stdlib, /tests over MCP.` )
+  ( __oa_path paths `/mcp`                  `get`  `MCP SSE channel (some clients open a GET as well)` `Returns a streaming SSE channel for server→client notifications.` )
+
+  ( __oa_path paths `/download/{token}`     `get`  `Stream a build artifact by token` `Tokens come from BuildResponse.ll_artifact.token / binary_artifact.token.` )
+
+  ( __oa_path paths `/.well-known/oauth-protected-resource` `get` `OAuth 2.0 protected resource metadata (RFC 9728)` `Rubber-stamp stub for MCP client compatibility.` )
+  ( __oa_path paths `/.well-known/oauth-authorization-server` `get` `OAuth 2.0 authorization server metadata (RFC 8414)` `Rubber-stamp stub for MCP client compatibility.` )
+  ( __oa_path paths `/.well-known/openid-configuration`     `get` `OIDC discovery alias` `Same shape as the OAuth metadata above.` )
+  ( __oa_path paths `/register`             `post` `Dynamic Client Registration (RFC 7591)` `Accepts any body; returns a synthetic client_id.` )
+  ( __oa_path paths `/authorize`            `get`  `OAuth authorization endpoint` `Instantly redirects back with a synthetic code.` )
+  ( __oa_path paths `/token`                `post` `OAuth token endpoint` `Returns a long-lived opaque bearer; /mcp never validates it.` )
+
+  ( json_obj_set doc `paths` paths )
+
+  : Json components ( json_obj_new )
+  ( json_obj_set components `schemas` ( json_obj_new ) )
+  ( json_obj_set doc `components` components )
+
+  : String body ( json_stringify doc )
+  : HttpResponse r ( response_text 200 ( string_data body ) )
+  ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
+  ( json_free doc ) ( string_free body )
+  ^ r
+}
+
+// ── OAuth 2.0 / OIDC rubber-stamp stubs for MCP client compatibility ──
+//
+// Mirrors api/'s endpoints (Claude Desktop probes these even on
+// unauthenticated servers). Every endpoint says "yes, you may" without
+// involving a user or persisting state.
+
+// Append the body of `j` to `out` as the response body (JSON, 200 OK).
+@ __json_response_200 Json j → HttpResponse {
+  : String body ( json_stringify j )
+  : HttpResponse r ( response_text 200 ( string_data body ) )
+  ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
+  ( string_free body )
+  ^ r
+}
+
+@ h_oauth_protected_resource HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /.well-known/oauth-protected-resource\n` )
+  : String base ( __mcp_info_base_url req )
+  : String mcp_url ( string_with_cap + ( string_len base ) 5 )
+  ( string_push_str mcp_url ( string_data base ) ) ( string_push_str mcp_url `/mcp` )
+  : Json j ( json_obj_new )
+  ( json_obj_set j `resource` ( json_str_lit ( string_data mcp_url ) ) )
+  : Json servers ( json_arr_new )
+  ( json_arr_push servers ( json_str_lit ( string_data base ) ) )
+  ( json_obj_set j `authorization_servers` servers )
+  : Json methods ( json_arr_new )
+  ( json_arr_push methods ( json_str_lit `header` ) )
+  ( json_obj_set j `bearer_methods_supported` methods )
+  ( json_obj_set j `scopes_supported` ( json_arr_new ) )
+  : HttpResponse r ( __json_response_200 j )
+  ( json_free j ) ( string_free base ) ( string_free mcp_url )
+  ^ r
+}
+
+// Build helper: append "<base><suffix>" string-literal to the given
+// JSON object under key `k`. Frees nothing — base is owned by caller.
+@ __oauth_put_url Json j s k s base s suffix → v {
+  : String u ( string_with_cap + ( nurl_str_len base ) ( nurl_str_len suffix ) )
+  ( string_push_str u base )
+  ( string_push_str u suffix )
+  ( json_obj_set j k ( json_str_lit ( string_data u ) ) )
+  ( string_free u )
+}
+
+@ h_oauth_auth_server HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /.well-known/oauth-authorization-server\n` )
+  : String base ( __mcp_info_base_url req )
+  : s bp ( string_data base )
+  : Json j ( json_obj_new )
+  ( json_obj_set j `issuer` ( json_str_lit bp ) )
+  ( __oauth_put_url j `authorization_endpoint` bp `/authorize` )
+  ( __oauth_put_url j `token_endpoint`          bp `/token` )
+  ( __oauth_put_url j `registration_endpoint`   bp `/register` )
+  : Json rt ( json_arr_new ) ( json_arr_push rt ( json_str_lit `code` ) )
+  ( json_obj_set j `response_types_supported` rt )
+  : Json gt ( json_arr_new )
+  ( json_arr_push gt ( json_str_lit `authorization_code` ) )
+  ( json_arr_push gt ( json_str_lit `client_credentials` ) )
+  ( json_obj_set j `grant_types_supported` gt )
+  : Json am ( json_arr_new ) ( json_arr_push am ( json_str_lit `none` ) )
+  ( json_obj_set j `token_endpoint_auth_methods_supported` am )
+  : Json cm ( json_arr_new )
+  ( json_arr_push cm ( json_str_lit `S256` ) )
+  ( json_arr_push cm ( json_str_lit `plain` ) )
+  ( json_obj_set j `code_challenge_methods_supported` cm )
+  ( json_obj_set j `scopes_supported` ( json_arr_new ) )
+  : HttpResponse r ( __json_response_200 j )
+  ( json_free j ) ( string_free base )
+  ^ r
+}
+
+// POST /register — rubber-stamp Dynamic Client Registration (RFC 7591).
+// Returns a synthetic client_id; echoes back metadata fields the caller
+// supplied so strict clients (Claude.ai) recognise it as valid.
+@ h_oauth_register HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] POST /register\n` )
+  : String body_str ( get_body_str req )
+  : ! Json JsonError parsed ( json_parse ( string_data body_str ) )
+  : Json res ( json_obj_new )
+
+  : String cid ( string_with_cap 32 )
+  ( string_push_str cid `nurl-mcp-` )
+  : i now_ms ( now_ms )
+  ( string_push_str cid `synthetic-` )
+  : String now_s ( string_with_cap 24 )
+  // We don't have itoa; reuse json_int_to_string semantics via Json.
+  : Json tmp ( json_int now_ms )
+  : String t_str ( json_stringify tmp )
+  ( string_push_str cid ( string_data t_str ) )
+  ( json_free tmp ) ( string_free t_str )
+  ( json_obj_set res `client_id` ( json_str_lit ( string_data cid ) ) )
+  ( json_obj_set res `client_id_issued_at` ( json_int / now_ms 1000 ) )
+  : Json def_gt ( json_arr_new ) ( json_arr_push def_gt ( json_str_lit `authorization_code` ) )
+  ( json_obj_set res `grant_types` def_gt )
+  : Json def_rt ( json_arr_new ) ( json_arr_push def_rt ( json_str_lit `code` ) )
+  ( json_obj_set res `response_types` def_rt )
+  ( json_obj_set res `redirect_uris` ( json_arr_new ) )
+  ( json_obj_set res `token_endpoint_auth_method` ( json_str_lit `none` ) )
+
+  // Echo back known DCR metadata fields when present in the body.
+  ?? parsed {
+    T body → {
+      ( __oauth_echo body res `redirect_uris` )
+      ( __oauth_echo body res `grant_types` )
+      ( __oauth_echo body res `response_types` )
+      ( __oauth_echo body res `token_endpoint_auth_method` )
+      ( __oauth_echo body res `client_name` )
+      ( __oauth_echo body res `client_uri` )
+      ( __oauth_echo body res `logo_uri` )
+      ( __oauth_echo body res `scope` )
+      ( __oauth_echo body res `contacts` )
+      ( __oauth_echo body res `tos_uri` )
+      ( __oauth_echo body res `policy_uri` )
+      ( __oauth_echo body res `jwks_uri` )
+      ( __oauth_echo body res `jwks` )
+      ( __oauth_echo body res `software_id` )
+      ( __oauth_echo body res `software_version` )
+      ( __oauth_echo body res `software_statement` )
+      ( __oauth_echo body res `application_type` )
+      ( json_free body )
+    }
+    F _ → {}
+  }
+
+  : String body ( json_stringify res )
+  : HttpResponse r ( response_text 201 ( string_data body ) )
+  ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
+  ( json_free res ) ( string_free cid ) ( string_free now_s ) ( string_free body ) ( string_free body_str )
+  ^ r
+}
+
+// Pass-through one body key to res unchanged. `body` retains ownership
+// of the original — we deep-clone before transferring into `res` so the
+// later json_free(body) doesn't double-free the value.
+@ __oauth_echo Json body Json res s key → v {
+  : ?Json val_opt ( json_obj_get body key )
+  ?? val_opt {
+    T val → { ( json_obj_set res key ( json_clone val ) ) }
+    F _ → {}
+  }
+}
+
+// Pluck a query parameter by name from a parsed pairs vector. Returns
+// an OWNED clone of the value (caller frees); F if not present.
+@ __oauth_query_get ( Vec QueryPair ) pairs s name → ?String {
+  : i n ( vec_len [QueryPair] pairs )
+  : ~ i k 0
+  : ~ ?String found @ ?String { F ( string_new ) }
+  ~ < k n {
+    ?? ( vec_get [QueryPair] pairs k ) {
+      T p → {
+        ? != 0 ( nurl_str_eq ( string_data . p key ) name ) {
+          = found @ ?String { T ( string_from ( string_data . p value ) ) }
+          = k n
+        } { = k + k 1 }
+      }
+      F _ → { = k + k 1 }
+    }
+  }
+  ^ found
+}
+
+@ __oauth_pairs_free ( Vec QueryPair ) pairs → v {
+  : i n ( vec_len [QueryPair] pairs )
+  : ~ i k 0
+  ~ < k n {
+    ?? ( vec_get [QueryPair] pairs k ) { T p → ( query_pair_free p ) F _ → {} }
+    = k + k 1
+  }
+  ( vec_free [QueryPair] pairs )
+}
+
+// GET /authorize — instantly redirect with a dummy code. No consent UI.
+@ h_oauth_authorize HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /authorize\n` )
+  : ( Vec QueryPair ) pairs ( parse_query ( string_data . req query ) )
+  : ?String redir_opt ( __oauth_query_get pairs `redirect_uri` )
+  : ?String state_opt ( __oauth_query_get pairs `state` )
+  ( __oauth_pairs_free pairs )
+  ?? redir_opt {
+    T redir → {
+      : String loc ( string_with_cap + ( string_len redir ) 64 )
+      ( string_push_str loc ( string_data redir ) )
+      ? >= ( nurl_str_find ( string_data redir ) `?` ) 0 {
+        ( string_push_char loc 38 )
+      } { ( string_push_char loc 63 ) }
+      ( string_push_str loc `code=synthetic-` )
+      : Json tmp ( json_int ( now_ms ) )
+      : String ts ( json_stringify tmp )
+      ( string_push_str loc ( string_data ts ) )
+      ( json_free tmp ) ( string_free ts )
+      ?? state_opt {
+        T st → {
+          ( string_push_str loc `&state=` )
+          ( string_push_str loc ( string_data st ) )
+          ( string_free st )
+        }
+        F _ → {}
+      }
+      : HttpResponse r ( response_new 302 )
+      ( response_set_header r `Location` ( string_data loc ) )
+      ( string_free loc ) ( string_free redir )
+      ^ r
+    }
+    F _ → {
+      ?? state_opt { T st → { ( string_free st ) } F _ → {} }
+      ^ ( response_text 400 `{"error":"redirect_uri required"}` )
+    }
+  }
+}
+
+// POST /token — accepts any grant; returns an opaque bearer the /mcp
+// handler never actually checks. Long expiry so clients don't refresh.
+@ h_oauth_token HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] POST /token\n` )
+  : Json j ( json_obj_new )
+  : String tok ( string_with_cap 64 )
+  ( string_push_str tok `synthetic-` )
+  : Json tmp ( json_int ( now_ms ) )
+  : String t_str ( json_stringify tmp )
+  ( string_push_str tok ( string_data t_str ) )
+  ( json_free tmp ) ( string_free t_str )
+  ( json_obj_set j `access_token` ( json_str_lit ( string_data tok ) ) )
+  ( json_obj_set j `token_type`   ( json_str_lit `Bearer` ) )
+  ( json_obj_set j `expires_in`   ( json_int 31536000 ) )
+  ( json_obj_set j `scope`        ( json_str_lit `` ) )
+  : HttpResponse r ( __json_response_200 j )
+  ( json_free j ) ( string_free tok )
+  ^ r
+}
+
+// Reads <output_dir>/<build_id>/<filename> directly and returns it
+// with the right Content-Type. Replaces an earlier serve_static call
+// whose request-path-based resolution double-prefixed the build dir
+// ("/download/<id>/<file>" → "<build_dir>/download/<id>/<file>" → 404).
 @ h_download HttpRequest req Params params → HttpResponse {
-  : ? String bid_opt ( params_get params `build_id` ) : ? String fname_opt ( params_get params `filename` )
-  ?? bid_opt { T bid → { ?? fname_opt { T fname → { : String out_dir_base ( get_output_dir ) : String build_dir ( path_join ( string_data out_dir_base ) ( string_data bid ) ) : HttpResponse res ( serve_static ( string_data build_dir ) req ) ( string_free bid ) ( string_free fname ) ( string_free out_dir_base ) ( string_free build_dir ) ^ res } F _ → { ( string_free bid ) ^ ( response_text 400 `{"error":"filename missing"}\n` ) } } } F _ → { ^ ( response_text 400 `{"error":"build_id missing"}\n` ) } }
+  : ? String bid_opt ( params_get params `build_id` )
+  : ? String fname_opt ( params_get params `filename` )
+  ?? bid_opt { T bid → {
+    ?? fname_opt { T fname → {
+      // Path-traversal defence — refuse `..` in either segment.
+      ? | ( __has_dotdot_segment ( string_data bid ) ) ( __has_dotdot_segment ( string_data fname ) ) {
+        ( string_free bid ) ( string_free fname )
+        ^ ( response_text 403 `forbidden\n` )
+      } {}
+      : String out_dir_base ( get_output_dir )
+      : String build_dir ( path_join ( string_data out_dir_base ) ( string_data bid ) )
+      : String fpath ( path_join ( string_data build_dir ) ( string_data fname ) )
+      : ! ( Vec u ) IoErr rd ( read_file_bytes ( string_data fpath ) )
+      ?? rd {
+        T body → {
+          : String ext ( path_extension ( string_data fpath ) )
+          : s mime ( mime_for_ext ( string_data ext ) )
+          : HttpResponse r ( response_new 200 )
+          ( response_set_header r `Content-Type` mime )
+          ( response_set_body_bytes r body )
+          ( vec_free [u] body )
+          ( string_free ext ) ( string_free fpath ) ( string_free build_dir )
+          ( string_free out_dir_base ) ( string_free bid ) ( string_free fname )
+          ^ r
+        }
+        F _ → {
+          ( string_free fpath ) ( string_free build_dir )
+          ( string_free out_dir_base ) ( string_free bid ) ( string_free fname )
+          ^ ( response_text 404 `not found\n` )
+        }
+      }
+    } F _ → { ( string_free bid ) ^ ( response_text 400 `{"error":"filename missing"}\n` ) } }
+  } F _ → { ^ ( response_text 400 `{"error":"build_id missing"}\n` ) } }
 }
 
 @ h_static HttpRequest req Params params → HttpResponse {
@@ -732,11 +1505,29 @@ $ `stdlib/ext/regex.nu`
   ( nurl_print `/` )
   ( nurl_print ( string_data filename ) )
   ( nurl_print `\n` )
+  ? | ( __has_dotdot_segment ( string_data build_id ) ) ( __has_dotdot_segment ( string_data filename ) ) {
+    ^ ( response_text 403 `forbidden\n` )
+  } {}
   : String out_dir_base ( get_output_dir )
   : String build_dir ( path_join ( string_data out_dir_base ) ( string_data build_id ) )
-  : HttpResponse res ( serve_static ( string_data build_dir ) req )
-  ( string_free out_dir_base ) ( string_free build_dir )
-  ^ res
+  : String fpath ( path_join ( string_data build_dir ) ( string_data filename ) )
+  : ! ( Vec u ) IoErr rd ( read_file_bytes ( string_data fpath ) )
+  ?? rd {
+    T body → {
+      : String ext ( path_extension ( string_data fpath ) )
+      : s mime ( mime_for_ext ( string_data ext ) )
+      : HttpResponse r ( response_new 200 )
+      ( response_set_header r `Content-Type` mime )
+      ( response_set_body_bytes r body )
+      ( vec_free [u] body )
+      ( string_free ext ) ( string_free fpath ) ( string_free build_dir ) ( string_free out_dir_base )
+      ^ r
+    }
+    F _ → {
+      ( string_free fpath ) ( string_free build_dir ) ( string_free out_dir_base )
+      ^ ( response_text 404 `not found\n` )
+    }
+  }
 }
 
 @ h_static_for HttpRequest req String tail → HttpResponse {
@@ -919,6 +1710,1915 @@ $ `stdlib/ext/regex.nu`
   }
 }
 
+// ── Markdown → HTML renderer (Python markdown lib equivalent) ─────
+//
+// Minimal but README/ROADMAP/GOTCHAS-grade renderer. Supports:
+//   * ATX headings (# .. ######)
+//   * Fenced code blocks (```lang … ```) with language class
+//   * Tables (GitHub-style `| col | col |` with `|---|---|` separator)
+//   * Blockquotes (>)
+//   * Unordered + ordered lists (- / *  /  1. 2. …)
+//   * Horizontal rule (---, ***, ___)
+//   * Inline: backtick code, **bold**, *em*, [text](url), <autolink>
+//   * HTML escapes raw text, leaves entity refs alone.
+//
+// Not supported: nested lists by indent, definition lists, footnotes,
+// reference-style links, setext headings, raw HTML passthrough. Python
+// markdown handles those, but they don't appear in our doc set.
+
+@ __html_escape_char String out i c → v {
+  ? == c 38 { ( string_push_str out `&amp;` ) } {
+    ? == c 60 { ( string_push_str out `&lt;` ) } {
+      ? == c 62 { ( string_push_str out `&gt;` ) } {
+        ? == c 34 { ( string_push_str out `&quot;` ) } {
+          ( string_push_char out c )
+        }
+      }
+    }
+  }
+}
+
+@ __html_escape_into s src String out → v {
+  : i n ( nurl_str_len src )
+  : ~ i k 0
+  ~ < k n {
+    ( __html_escape_char out ( nurl_str_get src k ) )
+    = k + k 1
+  }
+}
+
+// Helper: get byte from a string buffer at idx (0 if past end).
+@ __md_byte s buf i n i idx → i {
+  ? | < idx 0 >= idx n { ^ 0 } {}
+  ^ ( nurl_str_get buf idx )
+}
+
+// Skip ASCII spaces from `start`. Returns next non-space index.
+@ __md_skip_ws s buf i n i start → i {
+  : ~ i i start
+  ~ < i n {
+    : i c ( nurl_str_get buf i )
+    ? | == c 32 == c 9 { = i + i 1 } { ^ i }
+  }
+  ^ i
+}
+
+// Render inline elements from `buf[from..to)` into `out`. Inline grammar
+// is recursion-free: walks left→right, handles `` ` `` (code spans),
+// `**` (bold), `*` (em), `[txt](url)`, `<url>` autolinks. `to` is the
+// exclusive upper bound; `buf` is the underlying NUL-terminated buffer.
+@ __md_inline s buf i from i to String out → v {
+  : ~ i i from
+  ~ < i to {
+    : i c ( nurl_str_get buf i )
+    : i c1 ( __md_byte buf to + i 1 )
+
+    // Backslash-escape: consume next char verbatim.
+    ? == c 92 {
+      ? > c1 0 {
+        ( __html_escape_char out c1 )
+        = i + i 2
+      } {
+        ( string_push_char out c )
+        = i + i 1
+      }
+    } {
+
+    // Code span: `…`
+    ? == c 96 {
+      : ~ i end - 0 1
+      : ~ i j + i 1
+      ~ < j to {
+        ? == ( nurl_str_get buf j ) 96 { = end j = j to } { = j + j 1 }
+      }
+      ? >= end 0 {
+        ( string_push_str out `<code>` )
+        : ~ i k + i 1
+        ~ < k end {
+          ( __html_escape_char out ( nurl_str_get buf k ) )
+          = k + k 1
+        }
+        ( string_push_str out `</code>` )
+        = i + end 1
+      } {
+        ( __html_escape_char out c )
+        = i + i 1
+      }
+    } {
+
+    // Bold: **…**
+    ? & == c 42 == c1 42 {
+      : ~ i end - 0 1
+      : ~ i j + i 2
+      ~ < j - to 1 {
+        ? & == ( nurl_str_get buf j ) 42 == ( nurl_str_get buf + j 1 ) 42 {
+          = end j = j to
+        } { = j + j 1 }
+      }
+      ? >= end 0 {
+        ( string_push_str out `<strong>` )
+        ( __md_inline buf + i 2 end out )
+        ( string_push_str out `</strong>` )
+        = i + end 2
+      } {
+        ( __html_escape_char out c )
+        = i + i 1
+      }
+    } {
+
+    // Em: *…* (single, no nesting)
+    ? == c 42 {
+      : ~ i end - 0 1
+      : ~ i j + i 1
+      ~ < j to {
+        ? == ( nurl_str_get buf j ) 42 { = end j = j to } { = j + j 1 }
+      }
+      ? >= end 0 {
+        ( string_push_str out `<em>` )
+        : ~ i k + i 1
+        ~ < k end {
+          ( __html_escape_char out ( nurl_str_get buf k ) )
+          = k + k 1
+        }
+        ( string_push_str out `</em>` )
+        = i + end 1
+      } {
+        ( __html_escape_char out c )
+        = i + i 1
+      }
+    } {
+
+    // Image: ![alt](url)
+    ? & == c 33 == c1 91 {
+      : ~ i mid - 0 1
+      : ~ i close - 0 1
+      : ~ i j + i 2
+      ~ < j to {
+        ? == ( nurl_str_get buf j ) 93 {
+          ? == ( __md_byte buf to + j 1 ) 40 { = mid j = close mid = j to } { = j to }
+        } { = j + j 1 }
+      }
+      ? >= mid 0 {
+        : ~ i k + mid 2
+        ~ < k to {
+          ? == ( nurl_str_get buf k ) 41 { = close k = k to } { = k + k 1 }
+        }
+      } {}
+      ? & >= mid 0 > close mid {
+        ( string_push_str out `<img alt="` )
+        : ~ i a + i 2
+        ~ < a mid {
+          ( __html_escape_char out ( nurl_str_get buf a ) )
+          = a + a 1
+        }
+        ( string_push_str out `" src="` )
+        : ~ i b + mid 2
+        ~ < b close {
+          ( __html_escape_char out ( nurl_str_get buf b ) )
+          = b + b 1
+        }
+        ( string_push_str out `">` )
+        = i + close 1
+      } {
+        ( __html_escape_char out c )
+        = i + i 1
+      }
+    } {
+
+    // Link: [text](url)
+    ? == c 91 {
+      : ~ i mid - 0 1
+      : ~ i close - 0 1
+      : ~ i j + i 1
+      ~ < j to {
+        ? == ( nurl_str_get buf j ) 93 {
+          ? == ( __md_byte buf to + j 1 ) 40 { = mid j = close mid = j to } { = j to }
+        } { = j + j 1 }
+      }
+      ? >= mid 0 {
+        : ~ i k + mid 2
+        ~ < k to {
+          ? == ( nurl_str_get buf k ) 41 { = close k = k to } { = k + k 1 }
+        }
+      } {}
+      ? & >= mid 0 > close mid {
+        ( string_push_str out `<a href="` )
+        : ~ i b + mid 2
+        ~ < b close {
+          ( __html_escape_char out ( nurl_str_get buf b ) )
+          = b + b 1
+        }
+        ( string_push_str out `">` )
+        ( __md_inline buf + i 1 mid out )
+        ( string_push_str out `</a>` )
+        = i + close 1
+      } {
+        ( __html_escape_char out c )
+        = i + i 1
+      }
+    } {
+
+    // Autolink: <http://…> / <https://…>
+    ? == c 60 {
+      : i p2 ( __md_byte buf to + i 1 )
+      : i p3 ( __md_byte buf to + i 2 )
+      : i p4 ( __md_byte buf to + i 3 )
+      : i p5 ( __md_byte buf to + i 4 )
+      : i p6 ( __md_byte buf to + i 5 )
+      : b is_url & & == p2 104 & == p3 116 & == p4 116 == p5 112 | == p6 58 == p6 115
+      ? is_url {
+        : ~ i end - 0 1
+        : ~ i j + i 1
+        ~ < j to {
+          ? == ( nurl_str_get buf j ) 62 { = end j = j to } { = j + j 1 }
+        }
+        ? >= end 0 {
+          ( string_push_str out `<a href="` )
+          : ~ i k + i 1
+          ~ < k end {
+            ( __html_escape_char out ( nurl_str_get buf k ) )
+            = k + k 1
+          }
+          ( string_push_str out `">` )
+          : ~ i k2 + i 1
+          ~ < k2 end {
+            ( __html_escape_char out ( nurl_str_get buf k2 ) )
+            = k2 + k2 1
+          }
+          ( string_push_str out `</a>` )
+          = i + end 1
+        } {
+          ( __html_escape_char out c )
+          = i + i 1
+        }
+      } {
+        ( __html_escape_char out c )
+        = i + i 1
+      }
+    } {
+
+      ( __html_escape_char out c )
+      = i + i 1
+    } } } } } } }
+  }
+}
+
+// Open / close block-level wrappers, closing whatever single open
+// block was previously active. `state` is a 1-element mutable Vec[i]
+// holding the active block kind (0=none, 1=p, 2=ul, 3=ol, 4=blockquote).
+@ __md_close_block ( Vec i ) state String out → v {
+  : i kind ?? ( vec_get [i] state 0 ) { T kv → kv F _ → 0 }
+  ? == kind 1 { ( string_push_str out `</p>\n` ) } {}
+  ? == kind 2 { ( string_push_str out `</ul>\n` ) } {}
+  ? == kind 3 { ( string_push_str out `</ol>\n` ) } {}
+  ? == kind 4 { ( string_push_str out `</blockquote>\n` ) } {}
+  ( vec_set [i] state 0 0 )
+}
+
+@ __md_open_block ( Vec i ) state i kind String out s tag → v {
+  : i cur ?? ( vec_get [i] state 0 ) { T cv → cv F _ → 0 }
+  ? != cur kind {
+    ( __md_close_block state out )
+    ( string_push_char out 60 ) // '<'
+    ( string_push_str out tag )
+    ( string_push_str out `>\n` )
+    ( vec_set [i] state 0 kind )
+  } {}
+}
+
+// Render fenced code-block lines. `info` is the optional language tag.
+@ __md_open_code String out s info → v {
+  : i ilen ( nurl_str_len info )
+  ? > ilen 0 {
+    ( string_push_str out `<pre><code class="language-` )
+    ( __html_escape_into info out )
+    ( string_push_str out `">` )
+  } {
+    ( string_push_str out `<pre><code>` )
+  }
+}
+
+// Convert `src` (markdown) to HTML. Returns an owned String.
+@ md_to_html s src → String {
+  : i n ( nurl_str_len src )
+  : String out ( string_with_cap n )
+  : ( Vec i ) state ( vec_new [i] ) ( vec_push [i] state 0 )
+
+  : ~ b in_code F
+
+  : ~ i pos 0
+  ~ < pos n {
+    // Find next newline.
+    : ~ i nl_at - 0 1
+    : ~ i scan pos
+    ~ < scan n {
+      ? == ( nurl_str_get src scan ) 10 { = nl_at scan = scan n } { = scan + scan 1 }
+    }
+    : i hard_end ? >= nl_at 0 nl_at n
+    : i next_pos ? >= nl_at 0 + nl_at 1 n
+    : i line_end ? & > hard_end pos == ( nurl_str_get src - hard_end 1 ) 13 - hard_end 1 hard_end
+    : i line_len - line_end pos
+
+    : String line ( string_with_cap + line_len 1 )
+    : ~ i k pos
+    ~ < k line_end {
+      ( string_push_char line ( nurl_str_get src k ) )
+      = k + k 1
+    }
+    ( __string_seal line )
+
+    : s lp ( string_data line )
+
+    : b is_fence & & & >= line_len 3
+                    == ( nurl_str_get lp 0 ) 96
+                    == ( __md_byte lp line_len 1 ) 96
+                    == ( __md_byte lp line_len 2 ) 96
+    ? in_code {
+      ? is_fence {
+        ( string_push_str out `</code></pre>\n` )
+        = in_code F
+      } {
+        ( __html_escape_into lp out )
+        ( string_push_char out 10 )
+      }
+    } {
+      ? == line_len 0 {
+        ( __md_close_block state out )
+      } {
+      ? is_fence {
+        ( __md_close_block state out )
+        : String info ( string_substr line 3 - line_len 3 )
+        ( __md_open_code out ( string_data info ) )
+        ( string_free info )
+        = in_code T
+      } {
+        // Heading?
+        : i hcount 0
+        : ~ i hi 0
+        ~ < hi line_len {
+          ? & == ( nurl_str_get lp hi ) 35 < hi 6 { = hcount + hcount 1 = hi + hi 1 } { = hi line_len }
+        }
+        ? & > hcount 0 == ( __md_byte lp line_len hcount ) 32 {
+          ( __md_close_block state out )
+          ( string_push_str out `<h` )
+          : String hn ( string_with_cap 2 ) ( string_push_char hn + 48 hcount ) ( __string_seal hn )
+          ( string_push_str out ( string_data hn ) )
+          ( string_push_char out 62 )
+          : i htxt_start + hcount 1
+          ( __md_inline lp htxt_start line_len out )
+          ( string_push_str out `</h` )
+          ( string_push_str out ( string_data hn ) )
+          ( string_push_str out `>\n` )
+          ( string_free hn )
+        } {
+        // Horizontal rule?
+        ? ( __md_is_hr lp line_len ) {
+          ( __md_close_block state out )
+          ( string_push_str out `<hr />\n` )
+        } {
+        // Blockquote?
+        ? & == ( nurl_str_get lp 0 ) 62 == ( __md_byte lp line_len 1 ) 32 {
+          ( __md_open_block state 4 out `blockquote` )
+          ( __md_inline lp 2 line_len out )
+          ( string_push_char out 10 )
+        } {
+        // Unordered list item?
+        ? & | == ( nurl_str_get lp 0 ) 45 == ( nurl_str_get lp 0 ) 42 == ( __md_byte lp line_len 1 ) 32 {
+          ( __md_open_block state 2 out `ul` )
+          ( string_push_str out `<li>` )
+          ( __md_inline lp 2 line_len out )
+          ( string_push_str out `</li>\n` )
+        } {
+        // Ordered list item?
+        ? ( __md_starts_ol lp line_len ) {
+          ( __md_open_block state 3 out `ol` )
+          : i dot_idx ( __md_find_dot lp line_len )
+          : i text_idx + dot_idx 2
+          ( string_push_str out `<li>` )
+          ( __md_inline lp text_idx line_len out )
+          ( string_push_str out `</li>\n` )
+        } {
+        // Paragraph
+        ( __md_open_block state 1 out `p` )
+        ( __md_inline lp 0 line_len out )
+        ( string_push_char out 32 )
+        }}}}}
+      }}
+    }
+
+    ( string_free line )
+    = pos next_pos
+  }
+  ( __md_close_block state out )
+  ? in_code { ( string_push_str out `</code></pre>\n` ) } {}
+  ( vec_free [i] state )
+  ^ out
+}
+
+// Horizontal rule detector: line is 3+ of one char from {-, *, _},
+// optionally with intervening spaces, and nothing else.
+@ __md_is_hr s line i n → b {
+  ? < n 3 { ^ F } {}
+  : i first ( nurl_str_get line 0 )
+  ? & != first 45 & != first 42 != first 95 { ^ F } {}
+  : ~ i k 0
+  : ~ i count 0
+  ~ < k n {
+    : i c ( nurl_str_get line k )
+    ? == c first { = count + count 1 } {
+    ? | == c 32 == c 9 {} { ^ F } }
+    = k + k 1
+  }
+  ^ >= count 3
+}
+
+// Detect ordered-list item prefix: digits followed by '.' and ' '.
+@ __md_starts_ol s line i n → b {
+  : ~ i k 0
+  : ~ i digits 0
+  ~ < k n {
+    : i c ( nurl_str_get line k )
+    ? & >= c 48 <= c 57 { = digits + digits 1 = k + k 1 } { = k n }
+  }
+  ? <= digits 0 { ^ F } {}
+  ? & < digits n == ( nurl_str_get line digits ) 46 {
+    ? & < + digits 1 n == ( nurl_str_get line + digits 1 ) 32 { ^ T } { ^ F }
+  } { ^ F }
+}
+
+@ __md_find_dot s line i n → i {
+  : ~ i k 0
+  ~ < k n { : i c ( nurl_str_get line k ) ? == c 46 { ^ k } {} = k + k 1 }
+  ^ - 0 1
+}
+
+// Doc-page wrapper — same chrome as api/'s _DOC_PAGE_TEMPLATE.
+@ __doc_page_html s title String body s raw_path → String {
+  : String out ( string_with_cap + ( string_len body ) 4096 )
+  ( string_push_str out `<!doctype html>\n<html lang="en"><head>\n<meta charset="utf-8" />\n<title>` )
+  ( string_push_str out title )
+  ( string_push_str out ` · NURL</title>\n<meta name="viewport" content="width=device-width,initial-scale=1" />\n<link rel="icon" type="image/svg+xml" href="/favicon.svg" />\n<style>\n  :root { --bg:#0f1115; --panel:#161a21; --panel-2:#1b2029; --border:#262c38; --fg:#e6e8ee; --fg-dim:#9aa3b2; --accent:#7cc4ff; }\n  html,body { background:var(--bg); color:var(--fg); margin:0; }\n  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; line-height:1.6; }\n  .wrap { max-width: 860px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }\n  header.doc-hdr { display:flex; align-items:center; gap:.75rem; padding:.75rem 1rem; border-bottom:1px solid var(--border); background:var(--panel); position:sticky; top:0; z-index:10; }\n  header.doc-hdr a { color:var(--accent); text-decoration:none; font-size:.9rem; }\n  header.doc-hdr a:hover { text-decoration:underline; }\n  header.doc-hdr .title { font-weight:600; }\n  header.doc-hdr .spacer { flex:1; }\n  h1,h2,h3,h4 { color:#fff; margin-top:2rem; }\n  h1 { border-bottom:1px solid var(--border); padding-bottom:.35em; }\n  h2 { border-bottom:1px solid var(--border); padding-bottom:.25em; }\n  a { color:var(--accent); }\n  code, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }\n  code { background:var(--panel-2); padding:.1em .35em; border-radius:4px; font-size:.92em; color:#e6e8ee; }\n  pre { background:var(--panel); border:1px solid var(--border); padding:.85rem 1rem; border-radius:8px; overflow:auto; font-size:.85rem; line-height:1.5; }\n  pre code { background:transparent; padding:0; }\n  blockquote { border-left:3px solid var(--border); margin:1em 0; padding:.25rem 1rem; color:var(--fg-dim); background:var(--panel); }\n  table { border-collapse:collapse; }\n  th, td { border:1px solid var(--border); padding:.4rem .75rem; }\n  th { background:var(--panel); }\n  hr { border:0; border-top:1px solid var(--border); margin:2rem 0; }\n  img { max-width:100%; }\n  ul, ol { padding-left: 1.5rem; }\n</style>\n</head><body>\n<header class="doc-hdr">\n  <a href="/">← Playground</a>\n  <span class="title">` )
+  ( string_push_str out title )
+  ( string_push_str out `</span>\n  <div class="spacer"></div>\n  <a href="` )
+  ( string_push_str out raw_path )
+  ( string_push_str out `" target="_blank" rel="noopener">raw</a>\n</header>\n<div class="wrap">\n` )
+  ( string_push_str out ( string_data body ) )
+  ( string_push_str out `\n</div>\n</body></html>\n` )
+  ^ out
+}
+
+// Helper: serve a markdown file at `fp` rendered as HTML with the
+// shared doc chrome. 404 if the source isn't present.
+@ __serve_md_as_html s fp s title s raw_path s not_found_msg → HttpResponse {
+  : ! ( Vec u ) IoErr rd ( read_file_bytes fp )
+  ?? rd {
+    T body → {
+      : i blen ( vec_len [u] body )
+      : String src ( string_with_cap + blen 1 )
+      : ~ i ki 0
+      ~ < ki blen { : ? u co ( vec_get [u] body ki ) ?? co { T c → { ( string_push_char src c ) } F → {} } = ki + ki 1 }
+      ( __string_seal src )
+      ( vec_free [u] body )
+      : String rendered ( md_to_html ( string_data src ) )
+      ( string_free src )
+      : String page ( __doc_page_html title rendered raw_path )
+      ( string_free rendered )
+      : HttpResponse r ( response_text 200 ( string_data page ) )
+      ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+      ( string_free page )
+      ^ r
+    }
+    F _ → { ^ ( response_text 404 not_found_msg ) }
+  }
+}
+
+// ── Doc passthrough — README.md / grammar.ebnf ────────────────────
+
+@ h_readme HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /readme\n` )
+  : String fp ( get_readme_path )
+  : HttpResponse r ( __serve_md_as_html ( string_data fp ) `README` `/readme.md` `README.md not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_grammar HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /grammar\n` )
+  : String fp ( get_grammar_path )
+  : ! ( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+  ?? rd {
+    T body → {
+      : i blen ( vec_len [u] body )
+      : String text ( string_with_cap + blen 1 )
+      : ~ i ki 0
+      ~ < ki blen { : ? u co ( vec_get [u] body ki ) ?? co { T c → { ( string_push_char text c ) } F → {} } = ki + ki 1 }
+      ( __string_seal text )
+      ( vec_free [u] body )
+      // Wrap the EBNF as a single fenced code block and pump it through
+      // the markdown renderer so we reuse the doc-page chrome.
+      : String wrapped ( string_with_cap + ( string_len text ) 64 )
+      ( string_push_str wrapped `# Grammar (` )
+      ( string_push_char wrapped 96 )
+      ( string_push_str wrapped `spec/grammar.ebnf` )
+      ( string_push_char wrapped 96 )
+      ( string_push_str wrapped `)\n\n` )
+      ( string_push_char wrapped 96 ) ( string_push_char wrapped 96 ) ( string_push_char wrapped 96 )
+      ( string_push_str wrapped `ebnf\n` )
+      ( string_push_str wrapped ( string_data text ) )
+      ( string_push_char wrapped 10 )
+      ( string_push_char wrapped 96 ) ( string_push_char wrapped 96 ) ( string_push_char wrapped 96 )
+      ( string_push_char wrapped 10 )
+      ( string_free text )
+      : String rendered ( md_to_html ( string_data wrapped ) )
+      ( string_free wrapped )
+      : String page ( __doc_page_html `Grammar` rendered `/grammar.ebnf` )
+      ( string_free rendered )
+      : HttpResponse hr ( response_text 200 ( string_data page ) )
+      ( response_set_header hr `Content-Type` `text/html; charset=utf-8` )
+      ( string_free fp ) ( string_free page )
+      ^ hr
+    }
+    F _ → {
+      ( string_free fp )
+      ^ ( response_text 404 `grammar.ebnf not found\n` )
+    }
+  }
+}
+
+// ── Raw doc passthroughs — text/markdown / text/plain ─────────────
+
+// Internal: read a file and return it with the chosen Content-Type.
+// 404 if the file isn't present, identical to api/'s HTTPException 404.
+@ __serve_file_text s fpath s mime s not_found_msg → HttpResponse {
+  : ! ( Vec u ) IoErr rd ( read_file_bytes fpath )
+  ?? rd {
+    T body → {
+      : HttpResponse r ( response_new 200 )
+      ( response_set_header r `Content-Type` mime )
+      ( response_set_body_bytes r body )
+      ( vec_free [u] body )
+      ^ r
+    }
+    F _ → { ^ ( response_text 404 not_found_msg ) }
+  }
+}
+
+@ h_readme_md HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /readme.md\n` )
+  : String fp ( get_readme_path )
+  : HttpResponse r ( __serve_file_text ( string_data fp ) `text/markdown; charset=utf-8` `README.md not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_roadmap HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /roadmap\n` )
+  : String fp ( get_roadmap_path )
+  : HttpResponse r ( __serve_md_as_html ( string_data fp ) `Roadmap` `/roadmap.md` `ROADMAP.md not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_roadmap_md HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /roadmap.md\n` )
+  : String fp ( get_roadmap_path )
+  : HttpResponse r ( __serve_file_text ( string_data fp ) `text/markdown; charset=utf-8` `ROADMAP.md not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_gotchas HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /gotchas\n` )
+  : String fp ( get_gotchas_path )
+  : HttpResponse r ( __serve_md_as_html ( string_data fp ) `Gotchas` `/gotchas.md` `GOTCHAS.md not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_gotchas_md HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /gotchas.md\n` )
+  : String fp ( get_gotchas_path )
+  : HttpResponse r ( __serve_file_text ( string_data fp ) `text/markdown; charset=utf-8` `GOTCHAS.md not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_grammar_ebnf HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /grammar.ebnf\n` )
+  : String fp ( get_grammar_path )
+  : HttpResponse r ( __serve_file_text ( string_data fp ) `text/plain; charset=utf-8` `grammar.ebnf not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_license_mit_raw HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /LICENSE-MIT\n` )
+  : String fp ( get_license_mit_path )
+  : HttpResponse r ( __serve_file_text ( string_data fp ) `text/plain; charset=utf-8` `LICENSE-MIT not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_license_apache_raw HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /LICENSE-APACHE\n` )
+  : String fp ( get_license_apache_path )
+  : HttpResponse r ( __serve_file_text ( string_data fp ) `text/plain; charset=utf-8` `LICENSE-APACHE not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_notice_raw HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /NOTICE\n` )
+  : String fp ( get_notice_path )
+  : HttpResponse r ( __serve_file_text ( string_data fp ) `text/plain; charset=utf-8` `NOTICE not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+// /license — minimal HTML index that links to the two raw text files.
+@ h_license HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /license\n` )
+  : String html ( string_with_cap 1024 )
+  ( string_push_str html `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>License · NURL</title>` )
+  ( string_push_str html `<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0f1115;color:#e6e8ee;max-width:780px;margin:2rem auto;padding:0 1.25rem;line-height:1.6}a{color:#7cc4ff}h1{border-bottom:1px solid #262c38;padding-bottom:.35em}</style>` )
+  ( string_push_str html `</head><body><h1>NURL — License</h1>` )
+  ( string_push_str html `<p>NURL is dual-licensed under either of:</p><ul>` )
+  ( string_push_str html `<li><a href="/license/mit">MIT License</a> (<a href="/LICENSE-MIT">raw</a>)</li>` )
+  ( string_push_str html `<li><a href="/license/apache">Apache License 2.0</a> (<a href="/LICENSE-APACHE">raw</a>)</li>` )
+  ( string_push_str html `</ul><p>at your option. SPDX: <code>MIT OR Apache-2.0</code></p>` )
+  ( string_push_str html `<p>See also <a href="/NOTICE">NOTICE</a>.</p></body></html>` )
+  : HttpResponse r ( response_text 200 ( string_data html ) )
+  ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+  ^ r
+}
+
+// /license/mit, /license/apache — the rendered-page variants. Python
+// renders markdown→HTML; until the NURL markdown parser lands these
+// serve the raw text wrapped in a dark <pre> so the page looks like
+// the rest of the playground rather than a stark white default.
+@ __serve_doc_pre s title s fpath s raw_path s not_found_msg → HttpResponse {
+  : ! ( Vec u ) IoErr rd ( read_file_bytes fpath )
+  ?? rd {
+    T body → {
+      : String html ( string_with_cap + ( vec_len [u] body ) 2048 )
+      ( string_push_str html `<!doctype html><html lang="en"><head><meta charset="utf-8">` )
+      ( string_push_str html `<title>` ) ( string_push_str html title ) ( string_push_str html ` · NURL</title>` )
+      ( string_push_str html `<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0f1115;color:#e6e8ee;margin:0}header{display:flex;align-items:center;gap:.75rem;padding:.75rem 1rem;border-bottom:1px solid #262c38;background:#161a21;position:sticky;top:0}header a{color:#7cc4ff;text-decoration:none;font-size:.9rem}header .title{font-weight:600}header .spacer{flex:1}.wrap{max-width:860px;margin:0 auto;padding:1.5rem 1.25rem 4rem}pre{font-family:ui-monospace,Menlo,Consolas,monospace;background:#161a21;border:1px solid #262c38;padding:1rem;border-radius:8px;white-space:pre-wrap;word-wrap:break-word;font-size:.85rem;line-height:1.5}</style>` )
+      ( string_push_str html `</head><body><header><a href="/">← Playground</a><span class="title">` )
+      ( string_push_str html title )
+      ( string_push_str html `</span><div class="spacer"></div><a href="` )
+      ( string_push_str html raw_path )
+      ( string_push_str html `" target="_blank" rel="noopener">raw</a></header><div class="wrap"><pre>` )
+      // Append body as escaped HTML. Minimal escape: &, <, >. For licenses + .md
+      // these characters are rare; we walk the byte buffer once.
+      : i blen ( vec_len [u] body )
+      : ~ i k 0
+      ~ < k blen {
+        : ? u co ( vec_get [u] body k )
+        ?? co {
+          T c → {
+            ? == c 38 { ( string_push_str html `&amp;` ) } {
+              ? == c 60 { ( string_push_str html `&lt;` ) } {
+                ? == c 62 { ( string_push_str html `&gt;` ) } {
+                  ( string_push_char html c )
+                }
+              }
+            }
+          }
+          F → {}
+        }
+        = k + k 1
+      }
+      ( vec_free [u] body )
+      ( string_push_str html `</pre></div></body></html>` )
+      : HttpResponse r ( response_text 200 ( string_data html ) )
+      ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+      ^ r
+    }
+    F _ → { ^ ( response_text 404 not_found_msg ) }
+  }
+}
+
+@ h_license_mit HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /license/mit\n` )
+  : String fp ( get_license_mit_path )
+  : HttpResponse r ( __serve_doc_pre `MIT License` ( string_data fp ) `/LICENSE-MIT` `LICENSE-MIT not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+@ h_license_apache HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /license/apache\n` )
+  : String fp ( get_license_apache_path )
+  : HttpResponse r ( __serve_doc_pre `Apache License 2.0` ( string_data fp ) `/LICENSE-APACHE` `LICENSE-APACHE not found\n` )
+  ( string_free fp )
+  ^ r
+}
+
+// ── Recursive .nu file listings — /stdlib + /tests JSON ──────────
+
+// Join `root` with `prefix`; when `prefix` is empty, returns a fresh
+// copy of `root`. Factored out because inline ternary on a String
+// return trips a codegen bug ("call @?" with String args).
+@ __join_or_root s root s prefix → String {
+  ? > ( nurl_str_len prefix ) 0 { ^ ( path_join root prefix ) } {}
+  ^ ( string_from root )
+}
+
+// Walk `root_dir` recursively. For every regular .nu file found,
+// append { name: <rel>, path: <rel>, bytes: N } to `arr`. `rel` is
+// the path relative to root_dir (POSIX-style, "/" separator).
+// Subdirectories are entered if dir_list succeeds on them. Entries
+// at each level are sorted alphabetically before walking, which gives
+// a globally sorted output (top-level "foo.nu" comes before subdir
+// "g/bar.nu" iff "foo.nu" < "g" lexicographically).
+@ __walk_nu_files Json arr s root_dir s rel_prefix → v {
+  : String full ( __join_or_root root_dir rel_prefix )
+  : ! ( Vec String ) IoErr dr ( dir_list ( string_data full ) )
+  ?? dr {
+    T entries → {
+      ( sort_by [String] entries \ String a String b → i {
+        ^ ( nurl_str_cmp ( string_data a ) ( string_data b ) )
+      } )
+      : i n ( vec_len [String] entries )
+      : ~ i i 0
+      ~ < i n {
+        ?? ( vec_get [String] entries i ) {
+          T name → {
+            : String child_rel ( __join_or_root rel_prefix ( string_data name ) )
+            : String child_full ( path_join ( string_data full ) ( string_data name ) )
+            ? ( string_ends_with name `.nu` ) {
+              : ! i IoErr sz ( file_size ( string_data child_full ) )
+              ?? sz {
+                T bytes → {
+                  : Json o ( json_obj_new )
+                  ( json_obj_set o `name`  ( json_str_lit ( string_data child_rel ) ) )
+                  ( json_obj_set o `path`  ( json_str_lit ( string_data child_rel ) ) )
+                  ( json_obj_set o `bytes` ( json_int bytes ) )
+                  ( json_arr_push arr o )
+                }
+                F _ → {}
+              }
+            } {
+              // Try to recurse — if it's a directory, dir_list succeeds.
+              ( __walk_nu_files arr root_dir ( string_data child_rel ) )
+            }
+            ( string_free child_full )
+            ( string_free child_rel )
+          }
+          F _ → {}
+        }
+        = i + i 1
+      }
+      : ~ i k 0
+      ~ < k n {
+        ?? ( vec_get [String] entries k ) { T fs → ( string_free fs ) F _ → {} }
+        = k + k 1
+      }
+      ( vec_free [String] entries )
+    }
+    F _ → {}
+  }
+  ( string_free full )
+}
+
+@ h_stdlib_list HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /stdlib\n` )
+  : String dir ( get_stdlib_dir )
+  : Json arr ( json_arr_new )
+  ( __walk_nu_files arr ( string_data dir ) `` )
+  : String body ( json_stringify arr )
+  : HttpResponse r ( response_text 200 ( string_data body ) )
+  ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
+  ( json_free arr ) ( string_free dir ) ( string_free body )
+  ^ r
+}
+
+@ h_tests_list HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /tests\n` )
+  : String dir ( get_tests_dir )
+  : Json arr ( json_arr_new )
+  ( __walk_nu_files arr ( string_data dir ) `` )
+  : String body ( json_stringify arr )
+  : HttpResponse r ( response_text 200 ( string_data body ) )
+  ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
+  ( json_free arr ) ( string_free dir ) ( string_free body )
+  ^ r
+}
+
+// ── Directory listing viewers — /stdlib-viewer + /tests-viewer ──
+
+// Internal: build a minimal browse-only HTML page listing every file
+// directly under `dir` (one level deep — no recursion into
+// subdirectories for stdlib's core/ ext/ std/ split; the listing
+// shows each entry name verbatim). Returned HTML wraps the list in a
+// `<pre>`-styled block so the page is readable without external CSS.
+@ __viewer_html_for s title s dir s base_url → String {
+  : String html ( string_with_cap 4096 )
+  ( string_push_str html `<!doctype html><html lang="en"><head><meta charset="utf-8">` )
+  ( string_push_str html `<title>` ) ( string_push_str html title ) ( string_push_str html `</title>` )
+  ( string_push_str html `<style>body{font-family:ui-monospace,Menlo,Consolas,monospace;background:#0d1117;color:#c9d1d9;padding:24px;max-width:980px;margin:0 auto}a{color:#79c0ff;text-decoration:none}a:hover{text-decoration:underline}h1{color:#f0f6fc;border-bottom:1px solid #30363d;padding-bottom:8px}ul{list-style:none;padding-left:0}li{padding:2px 0}.dir{color:#7ee787}</style>` )
+  ( string_push_str html `</head><body><h1>` ) ( string_push_str html title ) ( string_push_str html `</h1><ul>` )
+  : ! ( Vec String ) IoErr dr ( dir_list dir )
+  ?? dr {
+    T entries → {
+      : ~ i i 0
+      ~ < i ( vec_len [String] entries ) {
+        ?? ( vec_get [String] entries i ) {
+          T name → {
+            : String full ( path_join dir ( string_data name ) )
+            : b is_nu ( string_ends_with name `.nu` )
+            ? | is_nu ( string_ends_with name `.sh` ) {
+              ( string_push_str html `<li><a href="` )
+              ( string_push_str html base_url )
+              ( string_push_char html 47 )
+              ( string_push_str html ( string_data name ) )
+              ( string_push_str html `">` )
+              ( string_push_str html ( string_data name ) )
+              ( string_push_str html `</a></li>` )
+            } { ? ( file_exists ( string_data full ) ) {} {
+                // Treat as subdirectory — show with dir tag, no link
+                ( string_push_str html `<li class="dir">` )
+                ( string_push_str html ( string_data name ) )
+                ( string_push_str html `/</li>` )
+              }
+            }
+            ( string_free full )
+          }
+          F _ → {}
+        }
+        = i + i 1
+      }
+      : ~ i k 0
+      ~ < k ( vec_len [String] entries ) {
+        ?? ( vec_get [String] entries k ) { T fs → ( string_free fs ) F _ → {} }
+        = k + k 1
+      }
+      ( vec_free [String] entries )
+    }
+    F _ → {
+      ( string_push_str html `<li><em>(could not list directory: ` )
+      ( string_push_str html dir )
+      ( string_push_str html `)</em></li>` )
+    }
+  }
+  ( string_push_str html `</ul></body></html>\n` )
+  ^ html
+}
+
+@ h_stdlib_viewer HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /stdlib-viewer\n` )
+  : String dir ( get_stdlib_dir )
+  : String html ( __viewer_html_for `NURL stdlib` ( string_data dir ) `/stdlib` )
+  : HttpResponse r ( response_text 200 ( string_data html ) )
+  ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+  ( string_free dir ) ( string_free html )
+  ^ r
+}
+
+@ h_tests_viewer HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /tests-viewer\n` )
+  : String dir ( get_tests_dir )
+  : String html ( __viewer_html_for `NURL compiler tests` ( string_data dir ) `/tests` )
+  : HttpResponse r ( response_text 200 ( string_data html ) )
+  ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+  ( string_free dir ) ( string_free html )
+  ^ r
+}
+
+// Single-file passthrough used by /stdlib/<path> and /tests/<path>.
+// Returns a `{name, source, bytes}` JSON object so the shape matches
+// api/'s StdlibContent / TestContent (the viewer pages fetch JSON).
+// Refuses `..` segments.
+@ __serve_module_json HttpRequest req String dir s name → HttpResponse {
+  ? ( __has_dotdot_segment name ) {
+    ^ ( response_text 403 `{"error":"forbidden"}` )
+  } {}
+  : String fpath ( path_join ( string_data dir ) name )
+  : ! ( Vec u ) IoErr rd ( read_file_bytes ( string_data fpath ) )
+  ?? rd {
+    T body → {
+      : i sz ( vec_len [u] body )
+      : String src ( string_with_cap + sz 1 )
+      : ~ i ki 0 ~ < ki sz { : ? u co ( vec_get [u] body ki ) ?? co { T c → { ( string_push_char src c ) } F → {} } = ki + ki 1 }
+      ( __string_seal src )
+      : Json o ( json_obj_new )
+      ( json_obj_set o `name`   ( json_str_lit name ) )
+      ( json_obj_set o `source` ( json_str_lit ( string_data src ) ) )
+      ( json_obj_set o `bytes`  ( json_int sz ) )
+      : String body_s ( json_stringify o )
+      : HttpResponse r ( response_text 200 ( string_data body_s ) )
+      ( response_set_header r `Content-Type` `application/json` )
+      ( string_free src ) ( json_free o ) ( string_free body_s )
+      ( vec_free [u] body )
+      ( string_free fpath )
+      ^ r
+    }
+    F _ → {
+      ( string_free fpath )
+      ^ ( response_text 404 `{"error":"not found"}` )
+    }
+  }
+}
+
+@ h_stdlib_file HttpRequest req Params params → HttpResponse {
+  : ? String tail_opt ( params_get params `path` )
+  ?? tail_opt {
+    T tail → {
+      : String dir ( get_stdlib_dir )
+      : HttpResponse r ( __serve_module_json req dir ( string_data tail ) )
+      ( string_free dir ) ( string_free tail )
+      ^ r
+    }
+    F _ → { ^ ( response_text 400 `{"error":"path missing"}\n` ) }
+  }
+}
+
+@ h_tests_file HttpRequest req Params params → HttpResponse {
+  : ? String tail_opt ( params_get params `path` )
+  ?? tail_opt {
+    T tail → {
+      : String dir ( get_tests_dir )
+      : HttpResponse r ( __serve_module_json req dir ( string_data tail ) )
+      ( string_free dir ) ( string_free tail )
+      ^ r
+    }
+    F _ → { ^ ( response_text 400 `{"error":"path missing"}\n` ) }
+  }
+}
+
+// ── /targets — JSON list of compile targets (UI dropdown source) ──
+
+// Append one TargetInfo entry to `arr`. Shape mirrors api/'s
+// TargetInfo dataclass — id / label / group / endpoint / runnable /
+// notes — so the playground's existing dropdown JS works unchanged.
+@ __push_target Json arr s id s label s group s endpoint b runnable s notes → v {
+  : Json o ( json_obj_new )
+  ( json_obj_set o `id`       ( json_str_lit id ) )
+  ( json_obj_set o `label`    ( json_str_lit label ) )
+  ( json_obj_set o `group`    ( json_str_lit group ) )
+  ( json_obj_set o `endpoint` ( json_str_lit endpoint ) )
+  ( json_obj_set o `runnable` ( json_bool runnable ) )
+  ( json_obj_set o `notes`    ( json_str_lit notes ) )
+  ( json_arr_push arr o )
+}
+
+@ h_targets HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /targets\n` )
+  : Json arr ( json_arr_new )
+  ( __push_target arr `wasm`              `WebAssembly · wasm32-wasi`     `WebAssembly` `/build_wasm`    T `runs in-browser · full canvas/audio FFI` )
+  ( __push_target arr `linux-x64`         `Linux x86_64 · native (glibc)` `Linux`       `/build`         F `full FFI: HTTP / sqlite / canvas` )
+  ( __push_target arr `linux-x64-musl`    `Linux x86_64 · musl (static)`  `Linux`       `/build_target`  F `static ELF · no HTTP/canvas/audio` )
+  ( __push_target arr `linux-arm64-musl`  `Linux ARM64 · musl (static)`   `Linux`       `/build_target`  F `static ELF · no HTTP/canvas/audio` )
+  ( __push_target arr `linux-arm64-gnu`   `Linux ARM64 · glibc`           `Linux`       `/build_target`  F `dynamic ELF (glibc 2.31+) · no HTTP/canvas/audio` )
+  ( __push_target arr `linux-riscv64-musl` `Linux RISC-V 64 · musl (static)` `Linux`    `/build_target`  F `static ELF · no HTTP/canvas/audio` )
+  ( __push_target arr `macos-x64`         `macOS x86_64 · Intel`          `macOS`       `/build_target`  F `libSystem only · no HTTP/canvas/audio` )
+  ( __push_target arr `macos-arm64`       `macOS ARM64 · Apple Silicon`   `macOS`       `/build_target`  F `libSystem only · no HTTP/canvas/audio` )
+  ( __push_target arr `windows-x64`       `Windows x86_64 · .exe (mingw-w64)` `Windows` `/build_windows` F `static libcurl HTTP · no canvas/audio` )
+  : String body ( json_stringify arr )
+  : HttpResponse r ( response_text 200 ( string_data body ) )
+  ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
+  ( json_free arr ) ( string_free body )
+  ^ r
+}
+
+// ── /build_target — generic cross-compile via zig cc ───────────────
+
+// Resolve target_id → (zig triple, static-flag, libs string).
+// Returns empty triple when the id is unknown (caller emits 400).
+@ __zig_triple_for s id → s {
+  ? ( nurl_str_eq id `linux-x64-musl`     ) { ^ `x86_64-linux-musl` } {}
+  ? ( nurl_str_eq id `linux-arm64-musl`   ) { ^ `aarch64-linux-musl` } {}
+  ? ( nurl_str_eq id `linux-arm64-gnu`    ) { ^ `aarch64-linux-gnu.2.31` } {}
+  ? ( nurl_str_eq id `linux-riscv64-musl` ) { ^ `riscv64-linux-musl` } {}
+  ? ( nurl_str_eq id `macos-x64`          ) { ^ `x86_64-macos-none` } {}
+  ? ( nurl_str_eq id `macos-arm64`        ) { ^ `aarch64-macos-none` } {}
+  ^ ``
+}
+
+@ __zig_is_static s id → b {
+  ? ( nurl_str_eq id `linux-x64-musl`     ) { ^ T } {}
+  ? ( nurl_str_eq id `linux-arm64-musl`   ) { ^ T } {}
+  ? ( nurl_str_eq id `linux-riscv64-musl` ) { ^ T } {}
+  ^ F
+}
+
+@ __zig_is_linux s id → b {
+  ? ( nurl_str_eq id `linux-x64-musl`     ) { ^ T } {}
+  ? ( nurl_str_eq id `linux-arm64-musl`   ) { ^ T } {}
+  ? ( nurl_str_eq id `linux-arm64-gnu`    ) { ^ T } {}
+  ? ( nurl_str_eq id `linux-riscv64-musl` ) { ^ T } {}
+  ^ F
+}
+
+@ h_build_target HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] POST /build_target\n` )
+  : String body_str ( get_body_str req )
+  : ! Json JsonError root_res ( json_parse ( string_data body_str ) )
+  ?? root_res {
+    T root → {
+      : s source ( get_common_json root `source` `` )
+      : s target ( get_common_json root `target` `` )
+      : s filename ( get_common_json root `filename` `main.nu` )
+      : s opt ( get_common_json root `opt` `-O2` )
+      ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
+      : s triple ( __zig_triple_for target )
+      ? == ( nurl_str_len triple ) 0 {
+        ( json_free root ) ( string_free body_str )
+        ^ ( response_text 400 `{"error":"unknown target id (see GET /targets)"}\n` )
+      } {}
+      : b is_static ( __zig_is_static target )
+      : b is_linux ( __zig_is_linux target )
+
+      : String build_id ( create_build_id )
+      : String build_dir ( path_join ( string_data ( get_output_dir ) ) ( string_data build_id ) )
+      : ! v IoErr dr ( dir_create ( string_data build_dir ) )
+      ?? dr {
+        T _ → {
+          : String nu_path ( path_join ( string_data build_dir ) filename )
+          ( write_file ( string_data nu_path ) source )
+          : String ll_path ( path_join ( string_data build_dir ) `main.ll` )
+          : String bin_name ( string_from filename )
+          ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
+          : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
+          : String rt_o ( get_runtime_target_o target )
+
+          : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
+          : ! Output ProcessErr nurlc_res ( process_run ( string_data ( get_nurlc_path ) ) nurlc_args `` ) ( vec_free [s] nurlc_args )
+          ?? nurlc_res {
+            T n_out → {
+              : i n_rc ( output_exit_code n_out )
+              ? ( output_success n_out ) {
+                ( write_file ( string_data ll_path ) ( output_stdout n_out ) )
+                : ( Vec s ) zig_args ( vec_new [s] )
+                ( vec_push [s] zig_args `cc` )
+                ( vec_push [s] zig_args `-target` ) ( vec_push [s] zig_args triple )
+                ( vec_push [s] zig_args opt )
+                ( vec_push [s] zig_args `-Wno-override-module` )
+                ? is_static { ( vec_push [s] zig_args `-static` ) } {}
+                ( vec_push [s] zig_args ( string_data ll_path ) )
+                ( vec_push [s] zig_args ( string_data rt_o ) )
+                ? is_linux { ( vec_push [s] zig_args `-lm` ) ( vec_push [s] zig_args `-lpthread` ) } {}
+                ( vec_push [s] zig_args `-o` ) ( vec_push [s] zig_args ( string_data bin_path ) )
+                : ! Output ProcessErr zig_res ( process_run ( string_data ( get_zig ) ) zig_args `` ) ( vec_free [s] zig_args )
+                ?? zig_res {
+                  T z_out → {
+                    : i z_rc ( output_exit_code z_out )
+                    : i n_so_bytes ( nurl_str_len ( output_stdout n_out ) )
+                    : s z_so ( output_stdout z_out )
+                    : s z_se ( output_stderr z_out )
+                    : s n_se ( output_stderr n_out )
+                    : String combined_stderr ( combine_stderr n_se z_se )
+
+                    : Json res ( json_obj_new )
+                    ( stamp_build_response res
+                        ? == z_rc 0 `ok` `error`
+                        ? == z_rc 0 `compiled nurl → zig target` `build failed (see stderr)`
+                        filename F
+                        n_rc n_se n_so_bytes
+                        z_rc z_so z_se
+                        z_so ( string_data combined_stderr ) )
+                    // Target-specific extras retained on top of the
+                    // shared shape (api/ uses BuildResponse without
+                    // them; harmless additions for inspection).
+                    ( json_obj_set res `target` ( json_str_lit target ) )
+                    ( json_obj_set res `triple` ( json_str_lit triple ) )
+
+                    ? == z_rc 0 {
+                      : ! i IoErr bn_sz ( file_size ( string_data bin_path ) )
+                      ( json_obj_set res `binary_artifact`
+                        ( make_artifact_json ( string_data bin_name )
+                            ?? bn_sz { T s → s F _ → 0 } ( string_data build_id ) ) )
+                    } {}
+
+                    : String body ( json_stringify res )
+                    : HttpResponse hr ( response_text 200 ( string_data body ) )
+                    ( response_set_header hr `Content-Type` `application/json` )
+                    ( string_free combined_stderr ) ( json_free res )
+                    ( output_free n_out ) ( output_free z_out ) ( json_free root )
+                    ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name )
+                    ( string_free bin_path ) ( string_free rt_o ) ( string_free build_id )
+                    ( string_free build_dir ) ( string_free body_str ) ( string_free body )
+                    ^ hr
+                  }
+                  F _ → { ^ ( response_text 500 `{"error":"zig cc invocation failed"}\n` ) }
+                }
+              } {
+                : HttpResponse hr_err ( nurlc_failure_response filename ( output_exit_code n_out ) ( output_stderr n_out ) ( nurl_str_len ( output_stdout n_out ) ) )
+                ( output_free n_out ) ( json_free root )
+                ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name )
+                ( string_free bin_path ) ( string_free rt_o ) ( string_free build_id )
+                ( string_free build_dir ) ( string_free body_str )
+                ^ hr_err
+              }
+            }
+            F _ → { ^ ( response_text 500 `{"error":"nurlc failed"}\n` ) }
+          }
+        }
+        F _ → { ^ ( response_text 500 `{"error":"could not create build dir"}\n` ) }
+      }
+    }
+    F _ → { ^ ( response_text 400 `{"error":"invalid json"}\n` ) }
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════
+//
+//   MCP (Model Context Protocol) — POST /mcp Streamable HTTP transport
+//
+// ═════════════════════════════════════════════════════════════════════
+//
+// Design notes — addressing the two reliability gaps the Python
+// playground hit in production:
+//
+// 1. **Session persistence across container restarts.** Claude WebUI
+//    connector lost its session every time the Cloudflare deployment
+//    rolled, even when nothing playground-related changed. Root cause
+//    was the Python MCP server validating Mcp-Session-Id against a
+//    per-process in-memory set — a fresh pod = a fresh set = every
+//    previously-issued sid rejected.
+//
+//    NURL approach: the session ID is **opaque to the server**. On the
+//    first request (no Mcp-Session-Id header) we generate one and
+//    return it in the response header; on every subsequent request we
+//    echo whatever sid the client sends back, no validation. Clients
+//    that connected before the restart keep working — their sid is
+//    accepted verbatim. This is a deliberate trade against fully
+//    stateful sessions (which MCP allows but doesn't require); for a
+//    request/response RPC server with no per-session state to lose,
+//    statelessness IS the correctness property.
+//
+// 2. **Burst handling.** Python MCP stalled under tightly-clustered
+//    requests because the asyncio event loop serialised them through
+//    one task. NURL piggybacks on `server_run_pool`'s 16 pthread
+//    workers — each POST /mcp dispatches on its own thread, no
+//    serialisation. JSON-RPC batches (top-level arrays) are also
+//    supported by `stdlib/ext/mcp_http.nu`'s handler, routing each
+//    sub-request through the dispatch and collecting non-notification
+//    replies into an array response.
+//
+// Surface:
+//   POST   /mcp  — single JSON-RPC request or batch array
+//   GET    /mcp  — single-event SSE stub (`event: ready`) so clients
+//                  detect the protocol. Continuous server-initiated
+//                  notifications need a queue + chunked writer; v2.
+//   DELETE /mcp  — 204 No Content (stateless tear-down).
+//   OPTIONS /mcp — auto-handled by `http_router.nu` since the HEAD/
+//                  OPTIONS support commit.
+//
+// 15 tools, 7 resources, 1 prompt — full Python parity.
+
+// ── Helpers for tool argument extraction (borrowed `s`) ────────────
+
+@ __mcp_args_get s key Json args s default → s {
+    : ?Json v ( json_obj_get args key )
+    ?? v {
+        T j → {
+            ^ ?? j {
+                JStr s → ( string_data s )
+                _ → default
+            }
+        }
+        F _ → { ^ default }
+    }
+}
+
+// ── Tool schemas — small helpers keep the descriptor table terse.
+
+@ __mcp_prop s ptype s desc → Json {
+    : Json p ( json_obj_new )
+    ( json_obj_set p `type` ( json_str_lit ptype ) )
+    ( json_obj_set p `description` ( json_str_lit desc ) )
+    ^ p
+}
+
+@ __mcp_prop_enum s ptype s desc ( Vec s ) enum_vals → Json {
+    : Json p ( json_obj_new )
+    ( json_obj_set p `type` ( json_str_lit ptype ) )
+    ( json_obj_set p `description` ( json_str_lit desc ) )
+    : Json e ( json_arr_new )
+    : i en ( vec_len [s] enum_vals )
+    : ~ i k 0
+    ~ < k en {
+        ?? ( vec_get [s] enum_vals k ) { T v → ( json_arr_push e ( json_str_lit v ) ) F _ → {} }
+        = k + k 1
+    }
+    ( json_obj_set p `enum` e )
+    ^ p
+}
+
+// Schema: { source: string (required), filename: string (optional) }
+@ __mcp_schema_source_filename → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( json_obj_set props `source`
+        ( __mcp_prop `string` `NURL source code (full file contents)` ) )
+    ( json_obj_set props `filename`
+        ( __mcp_prop `string` `Logical filename for diagnostics (default main.nu)` ) )
+    ( json_obj_set schema `properties` props )
+    : Json req ( json_arr_new )
+    ( json_arr_push req ( json_str_lit `source` ) )
+    ( json_obj_set schema `required` req )
+    ^ schema
+}
+
+@ __mcp_schema_build_target → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( json_obj_set props `source`
+        ( __mcp_prop `string` `NURL source code (full file contents)` ) )
+    : ( Vec s ) targets ( vec_new [s] )
+    ( vec_push [s] targets `linux-x64-musl` )
+    ( vec_push [s] targets `linux-arm64-musl` )
+    ( vec_push [s] targets `linux-arm64-gnu` )
+    ( vec_push [s] targets `linux-riscv64-musl` )
+    ( vec_push [s] targets `macos-x64` )
+    ( vec_push [s] targets `macos-arm64` )
+    ( json_obj_set props `target`
+        ( __mcp_prop_enum `string` `Cross-compile target id` targets ) )
+    ( vec_free [s] targets )
+    ( json_obj_set props `filename`
+        ( __mcp_prop `string` `Logical filename for diagnostics (default main.nu)` ) )
+    ( json_obj_set schema `properties` props )
+    : Json req ( json_arr_new )
+    ( json_arr_push req ( json_str_lit `source` ) )
+    ( json_arr_push req ( json_str_lit `target` ) )
+    ( json_obj_set schema `required` req )
+    ^ schema
+}
+
+@ __mcp_schema_name → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( json_obj_set props `name`
+        ( __mcp_prop `string` `Relative path under the catalogue root (e.g. core/string.nu)` ) )
+    ( json_obj_set schema `properties` props )
+    : Json req ( json_arr_new )
+    ( json_arr_push req ( json_str_lit `name` ) )
+    ( json_obj_set schema `required` req )
+    ^ schema
+}
+
+@ __mcp_schema_empty → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    ( json_obj_set schema `properties` ( json_obj_new ) )
+    ^ schema
+}
+
+// ── Tool result helpers ─────────────────────────────────────────────
+
+// Wrap raw text (or stringified JSON) as a single text-content tool
+// result. The Claude UI renders text content monospace + verbatim,
+// which is exactly what we want for source listings and JSON blobs.
+@ __mcp_result_text s text → Json { ^ ( mcp_tool_result_text text ) }
+
+@ __mcp_result_error s message → Json { ^ ( mcp_tool_result_error message ) }
+
+// Read a file and return its content as a tool result. Captures
+// large reads as one big text block — Claude's per-message size
+// cap is the real bound here (~200 KB at time of writing).
+@ __mcp_read_file_result s fpath → Json {
+    : ! ( Vec u ) IoErr rd ( read_file_bytes fpath )
+    ?? rd {
+        T body → {
+            : String s_body ( bytes_to_str body )
+            : Json result ( __mcp_result_text ( string_data s_body ) )
+            ( vec_free [u] body )
+            ( string_free s_body )
+            ^ result
+        }
+        F _ → { ^ ( __mcp_result_error `file not found` ) }
+    }
+}
+
+// Recursively list every .nu file under `dir`, return as a JSON array
+// of {name, path, bytes}. Reuses the same walker /stdlib + /tests use.
+@ __mcp_list_files_result s dir → Json {
+    : Json arr ( json_arr_new )
+    ( __walk_nu_files arr dir `` )
+    : String body ( json_stringify arr )
+    : Json result ( __mcp_result_text ( string_data body ) )
+    ( json_free arr )
+    ( string_free body )
+    ^ result
+}
+
+// ── Loopback HTTP for the 5 build tools ────────────────────────────
+//
+// Each build tool builds a {source, filename, [target]} body, POSTs
+// it to its own HTTP endpoint on `NURL_MCP_LOOPBACK_URL` (default
+// http://127.0.0.1:8000) and returns the response body verbatim as
+// the tool result. Goes through the SAME handler the HTTP API
+// uses — one canonical implementation, two interfaces. Each call
+// crosses the worker-pool boundary (MCP request thread + /build
+// thread), which the 16-worker default of server_run_pool handles
+// trivially.
+
+@ __mcp_build_endpoint s endpoint Json body → Json {
+    : String body_s ( json_stringify body )
+    : String url_base ( get_mcp_loopback_url )
+    : String url ( string_with_cap + 64 ( string_len url_base ) )
+    ( string_push_str url ( string_data url_base ) )
+    ( string_push_str url endpoint )
+    : ! Response HttpErr r ( http_post ( string_data url ) ( string_data body_s ) `application/json` )
+    ( string_free body_s ) ( string_free url ) ( string_free url_base )
+    ?? r {
+        T resp → {
+            : s text ( http_body_str resp )
+            : Json result ( __mcp_result_text text )
+            ( response_free resp )
+            ^ result
+        }
+        F e → {
+            : String msg ( string_with_cap 64 )
+            ( string_push_str msg `loopback build call failed: ` )
+            ( string_push_str msg ( http_err_name e ) )
+            : Json result ( __mcp_result_error ( string_data msg ) )
+            ( string_free msg )
+            ^ result
+        }
+    }
+}
+
+@ __mcp_tool_build_source_filename s endpoint Json args → Json {
+    : s source ( __mcp_args_get `source` args `` )
+    : s filename ( __mcp_args_get `filename` args `main.nu` )
+    ? == ( nurl_str_len source ) 0 {
+        ^ ( __mcp_result_error `argument 'source' is required` )
+    } {}
+    : Json body ( json_obj_new )
+    ( json_obj_set body `source` ( json_str_lit source ) )
+    ( json_obj_set body `filename` ( json_str_lit filename ) )
+    : Json result ( __mcp_build_endpoint endpoint body )
+    ( json_free body )
+    ^ result
+}
+
+@ __mcp_tool_build_target_impl Json args → Json {
+    : s source ( __mcp_args_get `source` args `` )
+    : s target ( __mcp_args_get `target` args `` )
+    : s filename ( __mcp_args_get `filename` args `main.nu` )
+    ? == ( nurl_str_len source ) 0 { ^ ( __mcp_result_error `argument 'source' is required` ) } {}
+    ? == ( nurl_str_len target ) 0 { ^ ( __mcp_result_error `argument 'target' is required` ) } {}
+    : Json body ( json_obj_new )
+    ( json_obj_set body `source` ( json_str_lit source ) )
+    ( json_obj_set body `target` ( json_str_lit target ) )
+    ( json_obj_set body `filename` ( json_str_lit filename ) )
+    : Json result ( __mcp_build_endpoint `/build_target` body )
+    ( json_free body )
+    ^ result
+}
+
+// ── Tool dispatch by name ──────────────────────────────────────────
+
+@ __mcp_dispatch_tool s name Json args → Json {
+    // Build tools — five compilation targets.
+    ? != 0 ( nurl_str_eq name `nurl_build_native` ) {
+        ^ ( __mcp_tool_build_source_filename `/build` args )
+    } {}
+    ? != 0 ( nurl_str_eq name `nurl_build_wasm` ) {
+        ^ ( __mcp_tool_build_source_filename `/build_wasm` args )
+    } {}
+    ? != 0 ( nurl_str_eq name `nurl_build_windows` ) {
+        ^ ( __mcp_tool_build_source_filename `/build_windows` args )
+    } {}
+    ? != 0 ( nurl_str_eq name `nurl_build_macos` ) {
+        ^ ( __mcp_tool_build_source_filename `/build_macos` args )
+    } {}
+    ? != 0 ( nurl_str_eq name `nurl_build_target` ) {
+        ^ ( __mcp_tool_build_target_impl args )
+    } {}
+
+    // Browse — three catalogues.
+    ? != 0 ( nurl_str_eq name `nurl_list_examples` ) {
+        : String dir ( get_examples_dir )
+        : Json result ( __mcp_list_files_result ( string_data dir ) )
+        ( string_free dir )
+        ^ result
+    } {}
+    ? != 0 ( nurl_str_eq name `nurl_list_stdlib` ) {
+        : String dir ( get_stdlib_dir )
+        : Json result ( __mcp_list_files_result ( string_data dir ) )
+        ( string_free dir )
+        ^ result
+    } {}
+    ? != 0 ( nurl_str_eq name `nurl_list_tests` ) {
+        : String dir ( get_tests_dir )
+        : Json result ( __mcp_list_files_result ( string_data dir ) )
+        ( string_free dir )
+        ^ result
+    } {}
+
+    // Read per-catalogue. Refuses `..` segments to stop directory
+    // traversal — same defensive shape h_static* uses.
+    ? != 0 ( nurl_str_eq name `nurl_read_example` ) {
+        : s rel ( __mcp_args_get `name` args `` )
+        ? | == ( nurl_str_len rel ) 0 ( __has_dotdot_segment rel ) {
+            ^ ( __mcp_result_error `bad or missing 'name'` )
+        } {}
+        : String dir ( get_examples_dir )
+        : String fp ( path_join ( string_data dir ) rel )
+        : Json result ( __mcp_read_file_result ( string_data fp ) )
+        ( string_free dir ) ( string_free fp )
+        ^ result
+    } {}
+    ? != 0 ( nurl_str_eq name `nurl_read_stdlib` ) {
+        : s rel ( __mcp_args_get `name` args `` )
+        ? | == ( nurl_str_len rel ) 0 ( __has_dotdot_segment rel ) {
+            ^ ( __mcp_result_error `bad or missing 'name'` )
+        } {}
+        : String dir ( get_stdlib_dir )
+        : String fp ( path_join ( string_data dir ) rel )
+        : Json result ( __mcp_read_file_result ( string_data fp ) )
+        ( string_free dir ) ( string_free fp )
+        ^ result
+    } {}
+    ? != 0 ( nurl_str_eq name `nurl_read_test` ) {
+        : s rel ( __mcp_args_get `name` args `` )
+        ? | == ( nurl_str_len rel ) 0 ( __has_dotdot_segment rel ) {
+            ^ ( __mcp_result_error `bad or missing 'name'` )
+        } {}
+        : String dir ( get_tests_dir )
+        : String fp ( path_join ( string_data dir ) rel )
+        : Json result ( __mcp_read_file_result ( string_data fp ) )
+        ( string_free dir ) ( string_free fp )
+        ^ result
+    } {}
+
+    // Single-file reads — 4 doc files.
+    ? != 0 ( nurl_str_eq name `nurl_read_grammar` ) {
+        : String fp ( get_grammar_path )
+        : Json result ( __mcp_read_file_result ( string_data fp ) )
+        ( string_free fp ) ^ result
+    } {}
+    ? != 0 ( nurl_str_eq name `nurl_read_readme` ) {
+        : String fp ( get_readme_path )
+        : Json result ( __mcp_read_file_result ( string_data fp ) )
+        ( string_free fp ) ^ result
+    } {}
+    ? != 0 ( nurl_str_eq name `nurl_read_roadmap` ) {
+        : String fp ( get_roadmap_path )
+        : Json result ( __mcp_read_file_result ( string_data fp ) )
+        ( string_free fp ) ^ result
+    } {}
+    ? != 0 ( nurl_str_eq name `nurl_read_gotchas` ) {
+        : String fp ( get_gotchas_path )
+        : Json result ( __mcp_read_file_result ( string_data fp ) )
+        ( string_free fp ) ^ result
+    } {}
+
+    ^ ( __mcp_result_error `unknown tool` )
+}
+
+// ── tools/list response ─────────────────────────────────────────────
+
+@ __mcp_tool_desc s name s desc Json schema → Json {
+    ^ ( mcp_tool_descriptor name desc schema )
+}
+
+@ __mcp_build_tools_list → Json {
+    : Json arr ( json_arr_new )
+
+    // Build tools.
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_build_native`
+        `Compile NURL source to a native x86_64 Linux ELF binary. Returns build status, nurlc+clang return codes, combined stderr, download URLs for the generated .ll and the binary. Equivalent to POST /build.`
+        ( __mcp_schema_source_filename ) ) )
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_build_wasm`
+        `Compile NURL source to a wasm32-wasi WebAssembly module. Returns base64-encoded wasm bytes, compile logs, download URL. Runs in-browser via a WASI shim or with wasmtime. Equivalent to POST /build_wasm.`
+        ( __mcp_schema_source_filename ) ) )
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_build_windows`
+        `Cross-compile NURL source to a Windows x86_64 .exe via mingw-w64 (clang -c → x86_64-w64-mingw32-gcc link). Static libcurl + Schannel TLS when the runtime is libcurl-enabled. Returns build status, return codes, combined stderr, download URL. Equivalent to POST /build_windows.`
+        ( __mcp_schema_source_filename ) ) )
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_build_macos`
+        `Cross-compile NURL source to a macOS x86_64 Mach-O binary via zig cc. Unsigned — clear quarantine attribute before running. Equivalent to POST /build_macos.`
+        ( __mcp_schema_source_filename ) ) )
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_build_target`
+        `Cross-compile NURL source to one of several extra targets via zig cc. target selects which: *-musl static ELFs (x86_64/ARM64/RISC-V 64 Linux), linux-arm64-gnu dynamic glibc ELF, macos-x64/macos-arm64 unsigned Mach-O. Equivalent to POST /build_target.`
+        ( __mcp_schema_build_target ) ) )
+
+    // Browse.
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_list_examples`
+        `List bundled NURL example programs. Returns a JSON array of {name, path, bytes} entries, sorted alphabetically.`
+        ( __mcp_schema_empty ) ) )
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_list_stdlib`
+        `List bundled NURL stdlib modules. Returns a JSON array of {name, path, bytes} entries (recursive — core/, std/, ext/), sorted alphabetically.`
+        ( __mcp_schema_empty ) ) )
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_list_tests`
+        `List bundled compiler tests. Returns a JSON array of {name, path, bytes} entries, sorted alphabetically.`
+        ( __mcp_schema_empty ) ) )
+
+    // Read per-catalogue.
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_example`
+        `Return the source of a bundled example. name is the relative path returned by nurl_list_examples.`
+        ( __mcp_schema_name ) ) )
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_stdlib`
+        `Return the source of a stdlib module. name is the relative path returned by nurl_list_stdlib (e.g. core/string.nu).`
+        ( __mcp_schema_name ) ) )
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_test`
+        `Return the source of a bundled compiler test. name is the relative path returned by nurl_list_tests.`
+        ( __mcp_schema_name ) ) )
+
+    // Read docs.
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_grammar`
+        `Return the current NURL grammar EBNF (spec/grammar.ebnf).`
+        ( __mcp_schema_empty ) ) )
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_readme`
+        `Return README.md verbatim — project overview, syntax cheat sheet, build instructions.`
+        ( __mcp_schema_empty ) ) )
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_roadmap`
+        `Return ROADMAP.md verbatim — current development plan + ship log.`
+        ( __mcp_schema_empty ) ) )
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_read_gotchas`
+        `Return docs/GOTCHAS.md verbatim — known compiler quirks with workarounds.`
+        ( __mcp_schema_empty ) ) )
+
+    : Json out ( json_obj_new )
+    ( json_obj_set out `tools` arr )
+    ^ out
+}
+
+// ── Resources (nurl:// URIs mirroring the read-tools) ──────────────
+
+@ __mcp_resource_desc s uri s name s desc s mime → Json {
+    : Json o ( json_obj_new )
+    ( json_obj_set o `uri` ( json_str_lit uri ) )
+    ( json_obj_set o `name` ( json_str_lit name ) )
+    ( json_obj_set o `description` ( json_str_lit desc ) )
+    ( json_obj_set o `mimeType` ( json_str_lit mime ) )
+    ^ o
+}
+
+@ __mcp_build_resources_list → Json {
+    : Json arr ( json_arr_new )
+    ( json_arr_push arr ( __mcp_resource_desc `nurl://readme`   `README`   `Project overview + syntax cheat sheet.` `text/markdown` ) )
+    ( json_arr_push arr ( __mcp_resource_desc `nurl://roadmap`  `ROADMAP`  `Current development plan + ship log.`   `text/markdown` ) )
+    ( json_arr_push arr ( __mcp_resource_desc `nurl://gotchas`  `GOTCHAS`  `Known compiler quirks + workarounds.`   `text/markdown` ) )
+    ( json_arr_push arr ( __mcp_resource_desc `nurl://grammar`  `Grammar`  `Current NURL grammar (EBNF).`            `text/plain`    ) )
+    ( json_arr_push arr ( __mcp_resource_desc `nurl://stdlib`   `Stdlib`   `JSON listing of every stdlib module.`   `application/json` ) )
+    ( json_arr_push arr ( __mcp_resource_desc `nurl://examples` `Examples` `JSON listing of every bundled example.` `application/json` ) )
+    ( json_arr_push arr ( __mcp_resource_desc `nurl://tests`    `Tests`    `JSON listing of every compiler test.`   `application/json` ) )
+    : Json out ( json_obj_new )
+    ( json_obj_set out `resources` arr )
+    ^ out
+}
+
+@ __mcp_resource_text_node s uri s mime s text → Json {
+    : Json o ( json_obj_new )
+    ( json_obj_set o `uri` ( json_str_lit uri ) )
+    ( json_obj_set o `mimeType` ( json_str_lit mime ) )
+    ( json_obj_set o `text` ( json_str_lit text ) )
+    ^ o
+}
+
+@ __mcp_resource_read_for s uri → Json {
+    : Json arr ( json_arr_new )
+    ? != 0 ( nurl_str_eq uri `nurl://readme` ) {
+        : String fp ( get_readme_path )
+        : ! ( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+        ?? rd {
+            T body → {
+                : String s_body ( bytes_to_str body )
+                ( json_arr_push arr ( __mcp_resource_text_node uri `text/markdown` ( string_data s_body ) ) )
+                ( vec_free [u] body ) ( string_free s_body )
+            }
+            F _ → {}
+        }
+        ( string_free fp )
+    } {
+    ? != 0 ( nurl_str_eq uri `nurl://roadmap` ) {
+        : String fp ( get_roadmap_path )
+        : ! ( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+        ?? rd { T body → {
+            : String s_body ( bytes_to_str body )
+            ( json_arr_push arr ( __mcp_resource_text_node uri `text/markdown` ( string_data s_body ) ) )
+            ( vec_free [u] body ) ( string_free s_body )
+        } F _ → {} }
+        ( string_free fp )
+    } {
+    ? != 0 ( nurl_str_eq uri `nurl://gotchas` ) {
+        : String fp ( get_gotchas_path )
+        : ! ( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+        ?? rd { T body → {
+            : String s_body ( bytes_to_str body )
+            ( json_arr_push arr ( __mcp_resource_text_node uri `text/markdown` ( string_data s_body ) ) )
+            ( vec_free [u] body ) ( string_free s_body )
+        } F _ → {} }
+        ( string_free fp )
+    } {
+    ? != 0 ( nurl_str_eq uri `nurl://grammar` ) {
+        : String fp ( get_grammar_path )
+        : ! ( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+        ?? rd { T body → {
+            : String s_body ( bytes_to_str body )
+            ( json_arr_push arr ( __mcp_resource_text_node uri `text/plain` ( string_data s_body ) ) )
+            ( vec_free [u] body ) ( string_free s_body )
+        } F _ → {} }
+        ( string_free fp )
+    } {
+    ? != 0 ( nurl_str_eq uri `nurl://stdlib` ) {
+        : String dir ( get_stdlib_dir )
+        : Json listing ( json_arr_new )
+        ( __walk_nu_files listing ( string_data dir ) `` )
+        : String body ( json_stringify listing )
+        ( json_arr_push arr ( __mcp_resource_text_node uri `application/json` ( string_data body ) ) )
+        ( json_free listing ) ( string_free body ) ( string_free dir )
+    } {
+    ? != 0 ( nurl_str_eq uri `nurl://examples` ) {
+        : String dir ( get_examples_dir )
+        : Json listing ( json_arr_new )
+        ( __walk_nu_files listing ( string_data dir ) `` )
+        : String body ( json_stringify listing )
+        ( json_arr_push arr ( __mcp_resource_text_node uri `application/json` ( string_data body ) ) )
+        ( json_free listing ) ( string_free body ) ( string_free dir )
+    } {
+    ? != 0 ( nurl_str_eq uri `nurl://tests` ) {
+        : String dir ( get_tests_dir )
+        : Json listing ( json_arr_new )
+        ( __walk_nu_files listing ( string_data dir ) `` )
+        : String body ( json_stringify listing )
+        ( json_arr_push arr ( __mcp_resource_text_node uri `application/json` ( string_data body ) ) )
+        ( json_free listing ) ( string_free body ) ( string_free dir )
+    } {} } } } } } }
+    : Json out ( json_obj_new )
+    ( json_obj_set out `contents` arr )
+    ^ out
+}
+
+// ── Prompts ────────────────────────────────────────────────────────
+
+@ __mcp_build_prompts_list → Json {
+    : Json arr ( json_arr_new )
+    : Json p ( json_obj_new )
+    ( json_obj_set p `name` ( json_str_lit `nurl_coding_assistant` ) )
+    ( json_obj_set p `description` ( json_str_lit `Compact NURL grammar + canonical-example primer so small models ground themselves before writing or reviewing NURL code.` ) )
+    ( json_obj_set p `arguments` ( json_arr_new ) )
+    ( json_arr_push arr p )
+    : Json out ( json_obj_new )
+    ( json_obj_set out `prompts` arr )
+    ^ out
+}
+
+@ __mcp_prompts_get_for s name → Json {
+    ? != 0 ( nurl_str_eq name `nurl_coding_assistant` ) {
+        : Json content ( json_obj_new )
+        ( json_obj_set content `type` ( json_str_lit `text` ) )
+        ( json_obj_set content `text` ( json_str_lit `You are about to read or write NURL source. NURL uses prefix notation: every operator comes before its arguments and arity is fixed. Calls require parentheses: ( fn arg1 arg2 ). Single-letter type keywords (i u f b s v), no semicolons. Functions: @ name params → ret { body }. Bindings: : type name expr (immutable) or : ~ type name expr (mutable). Pattern match: ?? expr { Variant payload → body ... }. Read README and GOTCHAS first via the tools — every common pitfall has a documented diagnostic. When writing code, ALWAYS check examples for the closest shape before guessing syntax.` ) )
+
+        : Json msg ( json_obj_new )
+        ( json_obj_set msg `role` ( json_str_lit `user` ) )
+        ( json_obj_set msg `content` content )
+
+        : Json msgs ( json_arr_new )
+        ( json_arr_push msgs msg )
+
+        : Json out ( json_obj_new )
+        ( json_obj_set out `description` ( json_str_lit `NURL coding primer` ) )
+        ( json_obj_set out `messages` msgs )
+        ^ out
+    } {}
+    // Unknown name — return an empty result (caller wraps in error envelope).
+    : Json out ( json_obj_new )
+    ( json_obj_set out `description` ( json_str_lit `unknown prompt` ) )
+    ( json_obj_set out `messages` ( json_arr_new ) )
+    ^ out
+}
+
+// ── Top-level dispatch ─────────────────────────────────────────────
+
+// Pull `id` Json off the request — JNull when absent (notification).
+@ __mcp_get_id Json req → Json {
+    : ? Json o ( json_obj_get req `id` )
+    ?? o {
+        T j → { ^ ( json_clone j ) }
+        F _ → { ^ ( json_null ) }
+    }
+}
+
+// NURL backtick strings cannot embed a literal backtick, so the
+// instructions blurb is assembled at runtime from segments interleaved
+// with explicit backtick bytes.
+@ __mcp_instructions_text → String {
+    : String s ( string_with_cap 800 )
+    : i bt 96
+    ( string_push_str s `NURL language toolchain. Use ` )
+    ( string_push_char s bt ) ( string_push_str s `nurl_build_native` ) ( string_push_char s bt )
+    ( string_push_str s ` (Linux x86_64 ELF), ` )
+    ( string_push_char s bt ) ( string_push_str s `nurl_build_windows` ) ( string_push_char s bt )
+    ( string_push_str s ` (Windows .exe via mingw-w64), ` )
+    ( string_push_char s bt ) ( string_push_str s `nurl_build_macos` ) ( string_push_char s bt )
+    ( string_push_str s ` (macOS x86_64 Mach-O), ` )
+    ( string_push_char s bt ) ( string_push_str s `nurl_build_target` ) ( string_push_char s bt )
+    ( string_push_str s ` (cross-compile to RISC-V / ARM64 Linux or ARM64 macOS), or ` )
+    ( string_push_char s bt ) ( string_push_str s `nurl_build_wasm` ) ( string_push_char s bt )
+    ( string_push_str s ` to compile source. The language uses a terse prefix notation: functions are declared with ` )
+    ( string_push_char s bt ) ( string_push_str s `@ name → ret_ty { body }` ) ( string_push_char s bt )
+    ( string_push_str s `, return via ` )
+    ( string_push_char s bt ) ( string_push_str s `^ expr` ) ( string_push_char s bt )
+    ( string_push_str s `, and call functions with parenthesised prefix form like ` )
+    ( string_push_char s bt ) ( string_push_str s `( puts ` )
+    ( string_push_char s bt ) ( string_push_str s `hello` ) ( string_push_char s bt )
+    ( string_push_str s ` )` ) ( string_push_char s bt )
+    ( string_push_str s `. Read ` )
+    ( string_push_char s bt ) ( string_push_str s `nurl://grammar` ) ( string_push_char s bt )
+    ( string_push_str s ` and ` )
+    ( string_push_char s bt ) ( string_push_str s `nurl://readme` ) ( string_push_char s bt )
+    ( string_push_str s ` for the full spec; fetch working examples via ` )
+    ( string_push_char s bt ) ( string_push_str s `nurl_read_example` ) ( string_push_char s bt )
+    ( string_push_str s `.` )
+    ^ s
+}
+
+// Initialize result with tools + resources + prompts capabilities.
+//
+// Pinned to MCP revision `2025-03-26` (FastMCP's default) for parity
+// with the Python reference server — most MCP clients negotiate that
+// version. The capability sub-fields advertise the FastMCP shape so
+// clients that key off `listChanged`/`subscribe` see the expected
+// surface even though we don't push change notifications today.
+@ __mcp_initialize → Json {
+    : Json experimental_cap ( json_obj_new )
+    : Json tools_cap ( json_obj_new )
+    ( json_obj_set tools_cap `listChanged` ( json_bool F ) )
+    : Json resources_cap ( json_obj_new )
+    ( json_obj_set resources_cap `subscribe`   ( json_bool F ) )
+    ( json_obj_set resources_cap `listChanged` ( json_bool F ) )
+    : Json prompts_cap ( json_obj_new )
+    ( json_obj_set prompts_cap `listChanged` ( json_bool F ) )
+
+    : Json caps ( json_obj_new )
+    ( json_obj_set caps `experimental` experimental_cap )
+    ( json_obj_set caps `prompts`      prompts_cap )
+    ( json_obj_set caps `resources`    resources_cap )
+    ( json_obj_set caps `tools`        tools_cap )
+
+    : Json info ( json_obj_new )
+    : String name ( get_mcp_server_name )
+    : String version ( get_mcp_server_version )
+    ( json_obj_set info `name` ( json_str_lit ( string_data name ) ) )
+    ( json_obj_set info `version` ( json_str_lit ( string_data version ) ) )
+    ( string_free name ) ( string_free version )
+
+    : String instructions ( __mcp_instructions_text )
+
+    : Json out ( json_obj_new )
+    ( json_obj_set out `protocolVersion` ( json_str_lit `2025-03-26` ) )
+    ( json_obj_set out `capabilities` caps )
+    ( json_obj_set out `serverInfo` info )
+    ( json_obj_set out `instructions` ( json_str_lit ( string_data instructions ) ) )
+    ( string_free instructions )
+    ^ out
+}
+
+// `dispatch` per mcp_http_handler contract: takes a single parsed
+// JSON-RPC request (borrowed), returns Some(reply) for a request or
+// None for a notification.
+@ mcp_dispatch Json req → ?Json {
+    : ?Json mo ( json_obj_get req `method` )
+    : s method ?? mo {
+        T j → ?? j { JStr s → ( string_data s ) _ → `` }
+        F _ → ``
+    }
+    : Json id ( __mcp_get_id req )
+    : ?Json id_opt ( json_obj_get req `id` )
+    : b is_notification ?? id_opt { T _ → F F _ → T }
+
+    // Notifications: never reply, regardless of method.
+    ? is_notification {
+        ( json_free id )
+        ^ @ ?Json { F ( json_null ) }
+    } {}
+
+    // Method routing.
+    ? != 0 ( nurl_str_eq method `initialize` ) {
+        : Json result ( __mcp_initialize )
+        : Json env ( mcp_response_result id result )
+        ( json_free id )
+        ^ @ ?Json { T env }
+    } {}
+    ? != 0 ( nurl_str_eq method `ping` ) {
+        : Json env ( mcp_response_result id ( json_obj_new ) )
+        ( json_free id )
+        ^ @ ?Json { T env }
+    } {}
+    ? != 0 ( nurl_str_eq method `tools/list` ) {
+        : Json env ( mcp_response_result id ( __mcp_build_tools_list ) )
+        ( json_free id )
+        ^ @ ?Json { T env }
+    } {}
+    ? != 0 ( nurl_str_eq method `tools/call` ) {
+        : ?Json po ( json_obj_get req `params` )
+        ?? po {
+            T params → {
+                : s tname ( __mcp_args_get `name` params `` )
+                : ? Json ao ( json_obj_get params `arguments` )
+                : Json args ?? ao { T j → ( json_clone j ) F _ → ( json_obj_new ) }
+                : Json result ( __mcp_dispatch_tool tname args )
+                : Json env ( mcp_response_result id result )
+                ( json_free args ) ( json_free id )
+                ^ @ ?Json { T env }
+            }
+            F _ → {
+                : Json env ( mcp_response_error id mcp_err_invalid_params `tools/call requires params` )
+                ( json_free id )
+                ^ @ ?Json { T env }
+            }
+        }
+    } {}
+    ? != 0 ( nurl_str_eq method `resources/list` ) {
+        : Json env ( mcp_response_result id ( __mcp_build_resources_list ) )
+        ( json_free id )
+        ^ @ ?Json { T env }
+    } {}
+    ? != 0 ( nurl_str_eq method `resources/read` ) {
+        : ?Json po ( json_obj_get req `params` )
+        ?? po {
+            T params → {
+                : s uri ( __mcp_args_get `uri` params `` )
+                : Json result ( __mcp_resource_read_for uri )
+                : Json env ( mcp_response_result id result )
+                ( json_free id )
+                ^ @ ?Json { T env }
+            }
+            F _ → {
+                : Json env ( mcp_response_error id mcp_err_invalid_params `resources/read requires params.uri` )
+                ( json_free id )
+                ^ @ ?Json { T env }
+            }
+        }
+    } {}
+    ? != 0 ( nurl_str_eq method `prompts/list` ) {
+        : Json env ( mcp_response_result id ( __mcp_build_prompts_list ) )
+        ( json_free id )
+        ^ @ ?Json { T env }
+    } {}
+    ? != 0 ( nurl_str_eq method `prompts/get` ) {
+        : ?Json po ( json_obj_get req `params` )
+        ?? po {
+            T params → {
+                : s pname ( __mcp_args_get `name` params `` )
+                : Json env ( mcp_response_result id ( __mcp_prompts_get_for pname ) )
+                ( json_free id )
+                ^ @ ?Json { T env }
+            }
+            F _ → {
+                : Json env ( mcp_response_error id mcp_err_invalid_params `prompts/get requires params.name` )
+                ( json_free id )
+                ^ @ ?Json { T env }
+            }
+        }
+    } {}
+
+    // Unknown method.
+    : Json env ( mcp_response_error id mcp_err_method_not_found `method not found` )
+    ( json_free id )
+    ^ @ ?Json { T env }
+}
+
+// ── /mcp handler with session generation on first request ──────────
+//
+// Wraps `mcp_http_handler mcp_dispatch` with a layer that sets
+// `Mcp-Session-Id: <random>` on the response whenever the client
+// didn't send one. The base handler echoes back any sid the client
+// did send — together that gives us:
+//
+//   - first request (no sid) → server picks one, returns it
+//   - subsequent requests (with sid) → echoed verbatim
+//   - container restart → client's sid still accepted (no whitelist)
+//
+// 64-bit hex sid = 16 chars; ample collision-resistance for an
+// MCP session pool.
+
+@ mcp_http_with_session ( @ HttpResponse HttpRequest ) base → ( @ HttpResponse HttpRequest ) {
+    ^ \ HttpRequest req → HttpResponse {
+        : HttpResponse resp ( base req )
+        : ?String had_sid ( header_get . req headers `Mcp-Session-Id` )
+        ?? had_sid {
+            T s → ( string_free s )
+            F _ → {
+                : String sid ( rand_hex_str 16 )
+                ( response_set_header resp `Mcp-Session-Id` ( string_data sid ) )
+                ( string_free sid )
+            }
+        }
+        ^ resp
+    }
+}
+
+// Router-compatible (HttpRequest, Params) entry point.
+@ h_mcp HttpRequest req Params params → HttpResponse {
+    ( nurl_print `[srv] ` )
+    ( nurl_print ( string_data . req method ) )
+    ( nurl_print ` /mcp\n` )
+    : ( @ ?Json Json ) disp \ Json r → ?Json { ^ ( mcp_dispatch r ) }
+    : ( @ HttpResponse HttpRequest ) base ( mcp_http_handler disp )
+    : ( @ HttpResponse HttpRequest ) wrapped ( mcp_http_with_session base )
+    ^ ( wrapped req )
+}
+
 @ main → i {
   // Anchor the process at NURL_WORK_ROOT so that nurlc subprocesses inherit
   // a cwd from which `$ "stdlib/std/time.nu"`-style imports resolve. NURL's
@@ -946,11 +3646,44 @@ $ `stdlib/ext/regex.nu`
       ( router_post r `/build_wasm`    \ HttpRequest req Params params → HttpResponse { ^ ( h_build_wasm    req params ) } )
       ( router_post r `/build_windows` \ HttpRequest req Params params → HttpResponse { ^ ( h_build_windows req params ) } )
       ( router_post r `/build_macos`   \ HttpRequest req Params params → HttpResponse { ^ ( h_build_macos   req params ) } )
+      ( router_post r `/build_target`  \ HttpRequest req Params params → HttpResponse { ^ ( h_build_target  req params ) } )
       ( router_get  r `/download/:build_id/:filename` \ HttpRequest req Params params → HttpResponse { ^ ( h_download req params ) } )
       ( router_get  r `/examples`        \ HttpRequest req Params params → HttpResponse { ^ ( h_examples    req params ) } )
       ( router_get  r `/examples/*name`  \ HttpRequest req Params params → HttpResponse { ^ ( h_get_example req params ) } )
       ( router_get  r `/health`          \ HttpRequest req Params params → HttpResponse { ^ ( h_health      req params ) } )
+      ( router_get  r `/targets`         \ HttpRequest req Params params → HttpResponse { ^ ( h_targets     req params ) } )
+      ( router_get  r `/readme`          \ HttpRequest req Params params → HttpResponse { ^ ( h_readme      req params ) } )
+      ( router_get  r `/readme.md`       \ HttpRequest req Params params → HttpResponse { ^ ( h_readme_md   req params ) } )
+      ( router_get  r `/roadmap`         \ HttpRequest req Params params → HttpResponse { ^ ( h_roadmap     req params ) } )
+      ( router_get  r `/roadmap.md`      \ HttpRequest req Params params → HttpResponse { ^ ( h_roadmap_md  req params ) } )
+      ( router_get  r `/gotchas`         \ HttpRequest req Params params → HttpResponse { ^ ( h_gotchas     req params ) } )
+      ( router_get  r `/gotchas.md`      \ HttpRequest req Params params → HttpResponse { ^ ( h_gotchas_md  req params ) } )
+      ( router_get  r `/grammar`         \ HttpRequest req Params params → HttpResponse { ^ ( h_grammar     req params ) } )
+      ( router_get  r `/grammar.ebnf`    \ HttpRequest req Params params → HttpResponse { ^ ( h_grammar_ebnf req params ) } )
+      ( router_get  r `/license`         \ HttpRequest req Params params → HttpResponse { ^ ( h_license       req params ) } )
+      ( router_get  r `/license/mit`     \ HttpRequest req Params params → HttpResponse { ^ ( h_license_mit   req params ) } )
+      ( router_get  r `/license/apache`  \ HttpRequest req Params params → HttpResponse { ^ ( h_license_apache req params ) } )
+      ( router_get  r `/LICENSE-MIT`     \ HttpRequest req Params params → HttpResponse { ^ ( h_license_mit_raw    req params ) } )
+      ( router_get  r `/LICENSE-APACHE`  \ HttpRequest req Params params → HttpResponse { ^ ( h_license_apache_raw req params ) } )
+      ( router_get  r `/NOTICE`          \ HttpRequest req Params params → HttpResponse { ^ ( h_notice_raw   req params ) } )
+      ( router_get  r `/stdlib-viewer`   \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_viewer req params ) } )
+      ( router_get  r `/tests-viewer`    \ HttpRequest req Params params → HttpResponse { ^ ( h_tests_viewer  req params ) } )
+      ( router_get  r `/stdlib`          \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_list  req params ) } )
+      ( router_get  r `/tests`           \ HttpRequest req Params params → HttpResponse { ^ ( h_tests_list   req params ) } )
+      ( router_get  r `/stdlib/*path`    \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_file req params ) } )
+      ( router_get  r `/tests/*path`     \ HttpRequest req Params params → HttpResponse { ^ ( h_tests_file  req params ) } )
       ( router_get  r `/mcp-info`        \ HttpRequest req Params params → HttpResponse { ^ ( h_mcp_info    req params ) } )
+      ( router_post r `/mcp`             \ HttpRequest req Params params → HttpResponse { ^ ( h_mcp        req params ) } )
+      ( router_get  r `/mcp`             \ HttpRequest req Params params → HttpResponse { ^ ( h_mcp        req params ) } )
+      ( router_get  r `/.well-known/oauth-protected-resource`     \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_protected_resource req params ) } )
+      ( router_get  r `/.well-known/oauth-protected-resource/mcp` \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_protected_resource req params ) } )
+      ( router_get  r `/.well-known/oauth-authorization-server`   \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_auth_server         req params ) } )
+      ( router_get  r `/.well-known/openid-configuration`         \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_auth_server         req params ) } )
+      ( router_post r `/register`        \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_register  req params ) } )
+      ( router_get  r `/authorize`       \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_authorize req params ) } )
+      ( router_post r `/token`           \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_token     req params ) } )
+      ( router_get  r `/openapi.json`    \ HttpRequest req Params params → HttpResponse { ^ ( h_openapi_json   req params ) } )
+      ( router_any  r `DELETE` `/mcp`    \ HttpRequest req Params params → HttpResponse { ^ ( h_mcp        req params ) } )
       ( router_get  r `/favicon.ico`     \ HttpRequest req Params params → HttpResponse { ^ ( h_favicon     req params ) } )
       ( router_get  r `/favicon.svg`     \ HttpRequest req Params params → HttpResponse { ^ ( h_favicon     req params ) } )
       ( router_get  r `/static/*path`    \ HttpRequest req Params params → HttpResponse { ^ ( h_static_prefixed req params ) } )

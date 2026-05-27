@@ -56,7 +56,9 @@ $ `stdlib/core/string.nu`
             T t → {
                 : s tp . t raw
                 : i traw # i tp
-                ( nurl_poke thandles * j 8 traw )
+                // nurl_poke uses SLOT indexing (×8 stride internally);
+                // pass `j`, not `j * 8`.
+                ( nurl_poke thandles j traw )
             }
             F e → { ( nurl_print `spawn fail\n` ) }
         }
@@ -64,7 +66,7 @@ $ `stdlib/core/string.nu`
     }
     = j 0
     ~ < j 8 {
-        : i traw ( nurl_peek thandles * j 8 )
+        : i traw ( nurl_peek thandles j )
         : s tp # s traw
         : Thread t @ Thread { tp }
         ( thread_join t )
