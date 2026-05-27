@@ -38,8 +38,8 @@ $ `stdlib/ext/mcp_http.nu`
 @ get_license_apache_path → String { ^ ( env_var_or `NURL_LICENSE_APACHE_PATH` `/opt/nurl/LICENSE-APACHE` ) }
 @ get_notice_path → String { ^ ( env_var_or `NURL_NOTICE_PATH` `/opt/nurl/NOTICE` ) }
 @ get_mcp_loopback_url → String { ^ ( env_var_or `NURL_MCP_LOOPBACK_URL` `http://127.0.0.1:8000` ) }
-@ get_mcp_server_name → String { ^ ( env_var_or `NURL_MCP_SERVER_NAME` `nurl-playground` ) }
-@ get_mcp_server_version → String { ^ ( env_var_or `NURL_MCP_SERVER_VERSION` `0.9.1` ) }
+@ get_mcp_server_name → String { ^ ( env_var_or `NURL_MCP_SERVER_NAME` `nurl` ) }
+@ get_mcp_server_version → String { ^ ( env_var_or `NURL_MCP_SERVER_VERSION` `1.9.4` ) }
 
 // Per-zig-target runtime object path. Used by /build_target so we don't
 // have to keep a switch in NURL code — the Dockerfile builds one
@@ -3398,12 +3398,62 @@ $ `stdlib/ext/mcp_http.nu`
     }
 }
 
+// NURL backtick strings cannot embed a literal backtick, so the
+// instructions blurb is assembled at runtime from segments interleaved
+// with explicit backtick bytes.
+@ __mcp_instructions_text → String {
+    : String s ( string_with_cap 800 )
+    : i bt 96
+    ( string_push_str s `NURL language toolchain. Use ` )
+    ( string_push_char s bt ) ( string_push_str s `nurl_build_native` ) ( string_push_char s bt )
+    ( string_push_str s ` (Linux x86_64 ELF), ` )
+    ( string_push_char s bt ) ( string_push_str s `nurl_build_windows` ) ( string_push_char s bt )
+    ( string_push_str s ` (Windows .exe via mingw-w64), ` )
+    ( string_push_char s bt ) ( string_push_str s `nurl_build_macos` ) ( string_push_char s bt )
+    ( string_push_str s ` (macOS x86_64 Mach-O), ` )
+    ( string_push_char s bt ) ( string_push_str s `nurl_build_target` ) ( string_push_char s bt )
+    ( string_push_str s ` (cross-compile to RISC-V / ARM64 Linux or ARM64 macOS), or ` )
+    ( string_push_char s bt ) ( string_push_str s `nurl_build_wasm` ) ( string_push_char s bt )
+    ( string_push_str s ` to compile source. The language uses a terse prefix notation: functions are declared with ` )
+    ( string_push_char s bt ) ( string_push_str s `@ name → ret_ty { body }` ) ( string_push_char s bt )
+    ( string_push_str s `, return via ` )
+    ( string_push_char s bt ) ( string_push_str s `^ expr` ) ( string_push_char s bt )
+    ( string_push_str s `, and call functions with parenthesised prefix form like ` )
+    ( string_push_char s bt ) ( string_push_str s `( puts ` )
+    ( string_push_char s bt ) ( string_push_str s `hello` ) ( string_push_char s bt )
+    ( string_push_str s ` )` ) ( string_push_char s bt )
+    ( string_push_str s `. Read ` )
+    ( string_push_char s bt ) ( string_push_str s `nurl://grammar` ) ( string_push_char s bt )
+    ( string_push_str s ` and ` )
+    ( string_push_char s bt ) ( string_push_str s `nurl://readme` ) ( string_push_char s bt )
+    ( string_push_str s ` for the full spec; fetch working examples via ` )
+    ( string_push_char s bt ) ( string_push_str s `nurl_read_example` ) ( string_push_char s bt )
+    ( string_push_str s `.` )
+    ^ s
+}
+
 // Initialize result with tools + resources + prompts capabilities.
+//
+// Pinned to MCP revision `2025-03-26` (FastMCP's default) for parity
+// with the Python reference server — most MCP clients negotiate that
+// version. The capability sub-fields advertise the FastMCP shape so
+// clients that key off `listChanged`/`subscribe` see the expected
+// surface even though we don't push change notifications today.
 @ __mcp_initialize → Json {
+    : Json experimental_cap ( json_obj_new )
+    : Json tools_cap ( json_obj_new )
+    ( json_obj_set tools_cap `listChanged` ( json_bool F ) )
+    : Json resources_cap ( json_obj_new )
+    ( json_obj_set resources_cap `subscribe`   ( json_bool F ) )
+    ( json_obj_set resources_cap `listChanged` ( json_bool F ) )
+    : Json prompts_cap ( json_obj_new )
+    ( json_obj_set prompts_cap `listChanged` ( json_bool F ) )
+
     : Json caps ( json_obj_new )
-    ( json_obj_set caps `tools`     ( json_obj_new ) )
-    ( json_obj_set caps `resources` ( json_obj_new ) )
-    ( json_obj_set caps `prompts`   ( json_obj_new ) )
+    ( json_obj_set caps `experimental` experimental_cap )
+    ( json_obj_set caps `prompts`      prompts_cap )
+    ( json_obj_set caps `resources`    resources_cap )
+    ( json_obj_set caps `tools`        tools_cap )
 
     : Json info ( json_obj_new )
     : String name ( get_mcp_server_name )
@@ -3412,10 +3462,14 @@ $ `stdlib/ext/mcp_http.nu`
     ( json_obj_set info `version` ( json_str_lit ( string_data version ) ) )
     ( string_free name ) ( string_free version )
 
+    : String instructions ( __mcp_instructions_text )
+
     : Json out ( json_obj_new )
-    ( json_obj_set out `protocolVersion` ( json_str_lit ( mcp_protocol_version ) ) )
+    ( json_obj_set out `protocolVersion` ( json_str_lit `2025-03-26` ) )
     ( json_obj_set out `capabilities` caps )
     ( json_obj_set out `serverInfo` info )
+    ( json_obj_set out `instructions` ( json_str_lit ( string_data instructions ) ) )
+    ( string_free instructions )
     ^ out
 }
 

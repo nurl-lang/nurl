@@ -134,6 +134,42 @@ $ `stdlib/core/vec.nu`
     ( response_set_header r `Access-Control-Expose-Headers` `Mcp-Session-Id` )
 }
 
+// MCP Streamable HTTP content-negotiation: if the client offers
+// `text/event-stream` in `Accept` (every official SDK does, since the
+// 2025-03-26 spec describes the POST→SSE upgrade as the normal path),
+// emit the JSON-RPC reply wrapped in a single SSE `message` event
+// rather than a bare `application/json` body. Otherwise fall back to
+// plain JSON for legacy clients. CONSUMES `resp_json`.
+@ __mcp_http_response_for_json HttpRequest req Json resp_json → HttpResponse {
+    : b want_sse F
+    : ?String accept ( header_get . req headers `Accept` )
+    ?? accept {
+        T s → {
+            ? ( string_contains s `text/event-stream` ) { = want_sse T } {}
+            ( string_free s )
+        }
+        F e → { ( string_free e ) }
+    }
+    ? want_sse {
+        : String payload ( json_stringify resp_json )
+        ( json_free resp_json )
+        : String body ( string_with_cap + ( string_len payload ) 28 )
+        ( string_push_str body `event: message\r\ndata: ` )
+        ( string_push_str body ( string_data payload ) )
+        ( string_push_str body `\r\n\r\n` )
+        ( string_free payload )
+        : HttpResponse r ( response_text 200 ( string_data body ) )
+        ( response_set_header r `Content-Type` `text/event-stream` )
+        ( response_set_header r `Cache-Control` `no-cache` )
+        ( string_free body )
+        ^ r
+    } {
+        : HttpResponse r ( response_json 200 resp_json )
+        ( json_free resp_json )
+        ^ r
+    }
+}
+
 // Echo the client-supplied Mcp-Session-Id back on the response. v1
 // forwards the header verbatim — there is no per-session state store
 // yet, so the field is forward-compat surface for clients that begin
@@ -272,8 +308,7 @@ $ `stdlib/core/vec.nu`
                     : i nr ( vec_len [Json] resps )
                     ? > nr 0 {
                         : Json resp_arr ( json_arr resps )
-                        : HttpResponse r ( response_json 200 resp_arr )
-                        ( json_free resp_arr )
+                        : HttpResponse r ( __mcp_http_response_for_json req resp_arr )
                         ( __mcp_http_apply_cors r )
                         ( __mcp_http_echo_session req r )
                         ^ r
@@ -292,8 +327,7 @@ $ `stdlib/core/vec.nu`
 
                 ?? reply {
                     T resp_json → {
-                        : HttpResponse r ( response_json 200 resp_json )
-                        ( json_free resp_json )
+                        : HttpResponse r ( __mcp_http_response_for_json req resp_json )
                         ( __mcp_http_apply_cors r )
                         ( __mcp_http_echo_session req r )
                         ^ r
