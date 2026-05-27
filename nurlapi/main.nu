@@ -288,18 +288,25 @@ $ `stdlib/ext/mcp_http.nu`
 
 // ── Build-response helpers (shared by /build*, mirrors api/'s shape) ──
 
-// Build the standard { name, bytes, download_url } artifact object.
+// Build the standard { name, bytes, download_url, token } artifact object.
+// `token` is `<build_id>/<name>` — the same opaque identifier used by the
+// /download/<build_id>/<name> route, exposed separately so clients can
+// reconstruct the URL without re-parsing it (matches api/'s BuildArtifact).
 @ make_artifact_json s name i bytes s build_id → Json {
   : Json o ( json_obj_new )
   ( json_obj_set o `name`  ( json_str_lit name ) )
   ( json_obj_set o `bytes` ( json_int bytes ) )
+  : String token ( string_with_cap 64 )
+  ( string_push_str token build_id )
+  ( string_push_str token `/` )
+  ( string_push_str token name )
   : String url ( string_with_cap 64 )
   ( string_push_str url `/download/` )
-  ( string_push_str url build_id )
-  ( string_push_str url `/` )
-  ( string_push_str url name )
+  ( string_push_str url ( string_data token ) )
   ( json_obj_set o `download_url` ( json_str_lit ( string_data url ) ) )
+  ( json_obj_set o `token`        ( json_str_lit ( string_data token ) ) )
   ( string_free url )
+  ( string_free token )
   ^ o
 }
 
@@ -401,8 +408,12 @@ $ `stdlib/ext/mcp_http.nu`
 // Stamp the shared BuildResponse fields onto `res`. Mirrors api/'s
 // BuildResponse exactly so the playground's renderer works unchanged.
 // Caller owns `res` and `combined_*` (which are NOT freed here).
+//
+// `ll_artifact` / `binary_artifact` are emitted as `null` here so every
+// response has the same key set; success paths overwrite them via
+// `json_obj_set` (which replaces in-place) after this call returns.
 @ stamp_build_response Json res s status s message s filename
-    b uses_canvas b uses_audio
+    b uses_canvas
     i nurlc_rc s nurlc_stderr i nurlc_stdout_bytes
     i clang_rc s clang_stdout s clang_stderr
     s combined_stdout s combined_stderr → v {
@@ -410,16 +421,21 @@ $ `stdlib/ext/mcp_http.nu`
   ( json_obj_set res `message`             ( json_str_lit message ) )
   ( json_obj_set res `filename`            ( json_str_lit filename ) )
   ( json_obj_set res `uses_canvas`         ( json_bool uses_canvas ) )
-  ( json_obj_set res `uses_audio`          ( json_bool uses_audio ) )
   ( json_obj_set res `nurlc_returncode`    ( json_int nurlc_rc ) )
   ( json_obj_set res `nurlc_stdout_bytes`  ( json_int nurlc_stdout_bytes ) )
   ( json_obj_set res `nurlc_stderr`        ( json_str_or_null nurlc_stderr ) )
-  ( json_obj_set res `clang_returncode`    ( json_int clang_rc ) )
+  // clang_rc == -1 is the "clang never ran" sentinel — emit null to match
+  // api/'s `clang_returncode: int | None` shape.
+  ? == clang_rc - 0 1
+    { ( json_obj_set res `clang_returncode` ( json_null ) ) }
+    { ( json_obj_set res `clang_returncode` ( json_int clang_rc ) ) }
   ( json_obj_set res `clang_stdout`        ( json_str_or_null clang_stdout ) )
   ( json_obj_set res `clang_stderr`        ( json_str_or_null clang_stderr ) )
   ( json_obj_set res `stdout`              ( json_str_lit combined_stdout ) )
   ( json_obj_set res `stderr`              ( json_str_lit combined_stderr ) )
   ( json_obj_set res `nurlc_errors`        ( parse_nurlc_diagnostics nurlc_stderr ) )
+  ( json_obj_set res `ll_artifact`         ( json_null ) )
+  ( json_obj_set res `binary_artifact`     ( json_null ) )
 }
 
 // Append the native-build runtime libs to the clang command. Matches
@@ -450,7 +466,7 @@ $ `stdlib/ext/mcp_http.nu`
   : String combined ( combine_stderr nurlc_stderr `` )
   : Json res ( json_obj_new )
   ( stamp_build_response res
-      `error` `nurlc failed` filename F F
+      `error` `nurlc failed` filename F
       nurlc_rc nurlc_stderr nurlc_stdout_bytes
       - 0 1 `` ``
       `` ( string_data combined ) )
@@ -530,7 +546,7 @@ $ `stdlib/ext/mcp_http.nu`
                     ( stamp_build_response res
                         ? == c_rc 0 `ok` `error`
                         ? == c_rc 0 `compiled nurl → native binary` `build failed (see stderr)`
-                        filename uses_canvas uses_audio
+                        filename uses_canvas
                         n_rc n_se n_so_bytes
                         c_rc c_so c_se
                         c_so ( string_data combined_stderr ) )
@@ -795,7 +811,7 @@ $ `stdlib/ext/mcp_http.nu`
                         ( stamp_build_response res
                             ? ok `ok` `error`
                             ? ok `compiled nurl → windows .exe` `build failed (see stderr)`
-                            filename F F
+                            filename F
                             n_rc n_se n_so_bytes
                             final_rc c_so c_se
                             c_so ( string_data combined_stderr ) )
@@ -877,7 +893,7 @@ $ `stdlib/ext/mcp_http.nu`
                     ( stamp_build_response res
                         ? == z_rc 0 `ok` `error`
                         ? == z_rc 0 `compiled nurl → macOS Mach-O` `build failed (see stderr)`
-                        filename F F
+                        filename F
                         n_rc n_se n_so_bytes
                         z_rc z_so z_se
                         z_so ( string_data combined_stderr ) )
@@ -972,11 +988,435 @@ $ `stdlib/ext/mcp_http.nu`
   ^ r
 }
 
+// Push a single string entry into a JSON array.
+@ __mcp_info_push_str Json arr s v → v {
+  ( json_arr_push arr ( json_str_lit v ) )
+}
+
+// Resolve the public base URL for the example mcp.json snippet. Prefer
+// the NURL_PUBLIC_URL env var (production deployments behind a proxy
+// terminate TLS upstream and need an absolute URL); fall back to the
+// request's Host header with http://; degrade to http://localhost:8000
+// if even that is missing. Returns an owned String.
+@ __mcp_info_base_url HttpRequest req → String {
+  : String env ( env_var_or `NURL_PUBLIC_URL` `` )
+  : i envl ( string_len env )
+  ? != envl 0 {
+    ? ( string_ends_with env `/` ) {
+      : String trimmed ( string_substr env 0 - envl 1 )
+      ( string_free env )
+      ^ trimmed
+    } { ^ env }
+  } { ( string_free env ) }
+  : ?String host_opt ( header_get . req headers `Host` )
+  ?? host_opt {
+    T host → {
+      : String out ( string_with_cap 64 )
+      ( string_push_str out `http://` )
+      ( string_push_str out ( string_data host ) )
+      ( string_free host )
+      ^ out
+    }
+    F _ → { ^ ( string_from `http://localhost:8000` ) }
+  }
+}
+
 @ h_mcp_info HttpRequest req Params params → HttpResponse {
-  : Json j ( json_obj_new ) ( json_obj_set j `mcp_version` ( json_str_lit `1.0.0` ) ) ( json_obj_set j `server_name` ( json_str_lit `nurl-native-api` ) ) ( json_obj_set j `server_version` ( json_str_lit `0.1.0` ) )
+  : Json j ( json_obj_new )
+  ( json_obj_set j `url_path`  ( json_str_lit `/mcp` ) )
+  ( json_obj_set j `transport` ( json_str_lit `streamable-http` ) )
+
+  : Json tools ( json_arr_new )
+  ( __mcp_info_push_str tools `nurl_build_native` )
+  ( __mcp_info_push_str tools `nurl_build_windows` )
+  ( __mcp_info_push_str tools `nurl_build_macos` )
+  ( __mcp_info_push_str tools `nurl_build_wasm` )
+  ( __mcp_info_push_str tools `nurl_build_target` )
+  ( __mcp_info_push_str tools `nurl_list_examples` )
+  ( __mcp_info_push_str tools `nurl_read_example` )
+  ( __mcp_info_push_str tools `nurl_list_stdlib` )
+  ( __mcp_info_push_str tools `nurl_read_stdlib` )
+  ( __mcp_info_push_str tools `nurl_list_tests` )
+  ( __mcp_info_push_str tools `nurl_read_test` )
+  ( __mcp_info_push_str tools `nurl_read_grammar` )
+  ( __mcp_info_push_str tools `nurl_read_readme` )
+  ( __mcp_info_push_str tools `nurl_read_roadmap` )
+  ( __mcp_info_push_str tools `nurl_read_gotchas` )
+  ( json_obj_set j `tools` tools )
+
+  : Json resources ( json_arr_new )
+  ( __mcp_info_push_str resources `nurl://grammar` )
+  ( __mcp_info_push_str resources `nurl://readme` )
+  ( __mcp_info_push_str resources `nurl://roadmap` )
+  ( __mcp_info_push_str resources `nurl://gotchas` )
+  ( __mcp_info_push_str resources `nurl://stdlib/{path}` )
+  ( __mcp_info_push_str resources `nurl://example/{name}` )
+  ( __mcp_info_push_str resources `nurl://test/{name}` )
+  ( json_obj_set j `resources` resources )
+
+  : Json prompts ( json_arr_new )
+  ( __mcp_info_push_str prompts `nurl_coding_assistant` )
+  ( json_obj_set j `prompts` prompts )
+
+  // client_config_example: { mcpServers: { nurl: { url, transport } } }
+  : String base ( __mcp_info_base_url req )
+  : String mcp_url ( string_with_cap + ( string_len base ) 4 )
+  ( string_push_str mcp_url ( string_data base ) )
+  ( string_push_str mcp_url `/mcp` )
+  : Json nurl_entry ( json_obj_new )
+  ( json_obj_set nurl_entry `url`       ( json_str_lit ( string_data mcp_url ) ) )
+  ( json_obj_set nurl_entry `transport` ( json_str_lit `streamable-http` ) )
+  : Json servers ( json_obj_new )
+  ( json_obj_set servers `nurl` nurl_entry )
+  : Json client_cfg ( json_obj_new )
+  ( json_obj_set client_cfg `mcpServers` servers )
+  ( json_obj_set j `client_config_example` client_cfg )
+
   : String body ( json_stringify j )
-  : HttpResponse r ( response_text 200 ( string_data body ) ) ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
-  ( json_free j ) ( string_free body )
+  : HttpResponse r ( response_text 200 ( string_data body ) )
+  ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
+  ( json_free j ) ( string_free body ) ( string_free base ) ( string_free mcp_url )
+  ^ r
+}
+
+// ── OpenAPI 3.1 schema served at /openapi.json ────────────────────
+//
+// Minimal but valid OpenAPI doc — enumerates every public route and
+// gives a one-line summary per endpoint. Schemas are kept loose (no
+// `$ref` chains) so the doc is self-contained and doesn't require us
+// to mirror api/'s 24-schema component map. Adequate for tooling
+// (Swagger UI, openapi-clients) that wants endpoint discovery.
+
+// Helper: append one `{method: { summary, responses: { "200": ... } }}`
+// entry under `path` in `paths`.
+@ __oa_path Json paths s path s method s summary s desc → v {
+  : Json op ( json_obj_new )
+  : Json tags ( json_arr_new ) ( json_arr_push tags ( json_str_lit `default` ) )
+  ( json_obj_set op `tags`        tags )
+  ( json_obj_set op `summary`     ( json_str_lit summary ) )
+  ( json_obj_set op `description` ( json_str_lit desc ) )
+
+  : Json ok ( json_obj_new )
+  ( json_obj_set ok `description` ( json_str_lit `Successful response.` ) )
+  : Json responses ( json_obj_new )
+  ( json_obj_set responses `200` ok )
+  ( json_obj_set op `responses` responses )
+
+  // Path entry — append onto existing entry if present, else new.
+  : ?Json existing ( json_obj_get paths path )
+  ?? existing {
+    T pj → { ( json_obj_set pj method op ) }
+    F _ → {
+      : Json pj ( json_obj_new )
+      ( json_obj_set pj method op )
+      ( json_obj_set paths path pj )
+    }
+  }
+}
+
+@ h_openapi_json HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /openapi.json\n` )
+  : Json doc ( json_obj_new )
+  ( json_obj_set doc `openapi` ( json_str_lit `3.1.0` ) )
+
+  : Json info ( json_obj_new )
+  ( json_obj_set info `title`   ( json_str_lit `NURL Compiler API (NURL-native)` ) )
+  ( json_obj_set info `version` ( json_str_lit `0.1.0` ) )
+  ( json_obj_set info `description` ( json_str_lit `HTTP interface to the NURL compiler — pure-NURL implementation. Compiles NURL source to native x86_64 binaries (POST /build) or wasm32-wasi WebAssembly (POST /build_wasm), serves the in-browser playground at /, and exposes the same surface as a Model Context Protocol server at POST /mcp (Streamable HTTP). See GET /mcp-info for MCP connection details.` ) )
+  ( json_obj_set doc `info` info )
+
+  : Json paths ( json_obj_new )
+
+  ( __oa_path paths `/health`               `get` `Liveness probe` `Returns 200 OK with a small JSON payload.` )
+  ( __oa_path paths `/build`                `post` `Compile NURL source to a native x86_64 Linux binary (mirrors nurl.sh)` `nurlc → LLVM IR → clang link → ELF. Returns BuildResponse with ll_artifact + binary_artifact download URLs on success.` )
+  ( __oa_path paths `/build_wasm`           `post` `Compile NURL source to a wasm32-wasi WebAssembly module` `nurlc → wasi-clang link → .wasm. Returns base64 wasm + canvas/audio FFI flags.` )
+  ( __oa_path paths `/build_windows`        `post` `Cross-compile to a Windows .exe via mingw-w64` `nurlc → clang+mingw link → PE/COFF. Static libcurl + Schannel TLS.` )
+  ( __oa_path paths `/build_macos`          `post` `Cross-compile to a macOS x86_64 Mach-O binary via zig cc` `Unsigned — clear quarantine attribute before running on macOS.` )
+  ( __oa_path paths `/build_target`         `post` `Cross-compile to a registered zig target (linux-arm64-musl, riscv64, …)` `See GET /targets for available target ids.` )
+  ( __oa_path paths `/targets`              `get`  `List available cross-compile targets` `Returns the TargetInfo[] used by the playground's dropdown.` )
+
+  ( __oa_path paths `/examples`             `get`  `List bundled example programs` `JSON array of {name, path, bytes}.` )
+  ( __oa_path paths `/examples/{name}`      `get`  `Return the source of a bundled example` `Path-encoded name as returned by /examples.` )
+
+  ( __oa_path paths `/stdlib`               `get`  `List bundled stdlib modules (recursive)` `JSON array of {name, path, bytes}, sorted.` )
+  ( __oa_path paths `/stdlib/{name}`        `get`  `Return the source of a stdlib module` `Returns {name, source, bytes}.` )
+
+  ( __oa_path paths `/tests`                `get`  `List bundled compiler tests (recursive)` `JSON array of {name, path, bytes}, sorted.` )
+  ( __oa_path paths `/tests/{name}`         `get`  `Return the source of a bundled test` `Returns {name, source, bytes}.` )
+
+  ( __oa_path paths `/readme`               `get`  `Render README.md as HTML` `Markdown rendered with same chrome as api/'s viewer.` )
+  ( __oa_path paths `/readme.md`            `get`  `Raw README.md source` `text/markdown response.` )
+  ( __oa_path paths `/roadmap`              `get`  `Render ROADMAP.md as HTML` `Markdown rendered with same chrome as api/'s viewer.` )
+  ( __oa_path paths `/roadmap.md`           `get`  `Raw ROADMAP.md source` `text/markdown response.` )
+  ( __oa_path paths `/gotchas`              `get`  `Render docs/GOTCHAS.md as HTML` `Markdown rendered with same chrome as api/'s viewer.` )
+  ( __oa_path paths `/gotchas.md`           `get`  `Raw docs/GOTCHAS.md source` `text/markdown response.` )
+  ( __oa_path paths `/grammar`              `get`  `Render the current NURL grammar (spec/grammar.ebnf)` `EBNF wrapped in a fenced code block.` )
+  ( __oa_path paths `/grammar.ebnf`         `get`  `Raw spec/grammar.ebnf` `text/plain response.` )
+
+  ( __oa_path paths `/license`              `get`  `Combined license overview (HTML)` `MIT + Apache-2.0 dual-license summary.` )
+  ( __oa_path paths `/license/mit`          `get`  `MIT license, HTML-rendered` `From LICENSE-MIT.` )
+  ( __oa_path paths `/license/apache`       `get`  `Apache-2.0 license, HTML-rendered` `From LICENSE-APACHE.` )
+  ( __oa_path paths `/LICENSE-MIT`          `get`  `Raw MIT license source` `text/plain.` )
+  ( __oa_path paths `/LICENSE-APACHE`       `get`  `Raw Apache-2.0 license source` `text/plain.` )
+  ( __oa_path paths `/NOTICE`               `get`  `Third-party attributions` `text/plain.` )
+
+  ( __oa_path paths `/stdlib-viewer`        `get`  `Browsable directory listing for stdlib/` `Lightweight HTML index linking to each .nu file.` )
+  ( __oa_path paths `/tests-viewer`         `get`  `Browsable directory listing for compiler/tests/` `Lightweight HTML index linking to each .nu file.` )
+
+  ( __oa_path paths `/mcp-info`             `get`  `MCP server connection info` `Tools, resources, prompts + drop-in mcp.json snippet.` )
+  ( __oa_path paths `/mcp`                  `post` `Model Context Protocol JSON-RPC endpoint (Streamable HTTP)` `Same surface as /build*, /examples, /stdlib, /tests over MCP.` )
+  ( __oa_path paths `/mcp`                  `get`  `MCP SSE channel (some clients open a GET as well)` `Returns a streaming SSE channel for server→client notifications.` )
+
+  ( __oa_path paths `/download/{token}`     `get`  `Stream a build artifact by token` `Tokens come from BuildResponse.ll_artifact.token / binary_artifact.token.` )
+
+  ( __oa_path paths `/.well-known/oauth-protected-resource` `get` `OAuth 2.0 protected resource metadata (RFC 9728)` `Rubber-stamp stub for MCP client compatibility.` )
+  ( __oa_path paths `/.well-known/oauth-authorization-server` `get` `OAuth 2.0 authorization server metadata (RFC 8414)` `Rubber-stamp stub for MCP client compatibility.` )
+  ( __oa_path paths `/.well-known/openid-configuration`     `get` `OIDC discovery alias` `Same shape as the OAuth metadata above.` )
+  ( __oa_path paths `/register`             `post` `Dynamic Client Registration (RFC 7591)` `Accepts any body; returns a synthetic client_id.` )
+  ( __oa_path paths `/authorize`            `get`  `OAuth authorization endpoint` `Instantly redirects back with a synthetic code.` )
+  ( __oa_path paths `/token`                `post` `OAuth token endpoint` `Returns a long-lived opaque bearer; /mcp never validates it.` )
+
+  ( json_obj_set doc `paths` paths )
+
+  : Json components ( json_obj_new )
+  ( json_obj_set components `schemas` ( json_obj_new ) )
+  ( json_obj_set doc `components` components )
+
+  : String body ( json_stringify doc )
+  : HttpResponse r ( response_text 200 ( string_data body ) )
+  ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
+  ( json_free doc ) ( string_free body )
+  ^ r
+}
+
+// ── OAuth 2.0 / OIDC rubber-stamp stubs for MCP client compatibility ──
+//
+// Mirrors api/'s endpoints (Claude Desktop probes these even on
+// unauthenticated servers). Every endpoint says "yes, you may" without
+// involving a user or persisting state.
+
+// Append the body of `j` to `out` as the response body (JSON, 200 OK).
+@ __json_response_200 Json j → HttpResponse {
+  : String body ( json_stringify j )
+  : HttpResponse r ( response_text 200 ( string_data body ) )
+  ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
+  ( string_free body )
+  ^ r
+}
+
+@ h_oauth_protected_resource HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /.well-known/oauth-protected-resource\n` )
+  : String base ( __mcp_info_base_url req )
+  : String mcp_url ( string_with_cap + ( string_len base ) 5 )
+  ( string_push_str mcp_url ( string_data base ) ) ( string_push_str mcp_url `/mcp` )
+  : Json j ( json_obj_new )
+  ( json_obj_set j `resource` ( json_str_lit ( string_data mcp_url ) ) )
+  : Json servers ( json_arr_new )
+  ( json_arr_push servers ( json_str_lit ( string_data base ) ) )
+  ( json_obj_set j `authorization_servers` servers )
+  : Json methods ( json_arr_new )
+  ( json_arr_push methods ( json_str_lit `header` ) )
+  ( json_obj_set j `bearer_methods_supported` methods )
+  ( json_obj_set j `scopes_supported` ( json_arr_new ) )
+  : HttpResponse r ( __json_response_200 j )
+  ( json_free j ) ( string_free base ) ( string_free mcp_url )
+  ^ r
+}
+
+// Build helper: append "<base><suffix>" string-literal to the given
+// JSON object under key `k`. Frees nothing — base is owned by caller.
+@ __oauth_put_url Json j s k s base s suffix → v {
+  : String u ( string_with_cap + ( nurl_str_len base ) ( nurl_str_len suffix ) )
+  ( string_push_str u base )
+  ( string_push_str u suffix )
+  ( json_obj_set j k ( json_str_lit ( string_data u ) ) )
+  ( string_free u )
+}
+
+@ h_oauth_auth_server HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /.well-known/oauth-authorization-server\n` )
+  : String base ( __mcp_info_base_url req )
+  : s bp ( string_data base )
+  : Json j ( json_obj_new )
+  ( json_obj_set j `issuer` ( json_str_lit bp ) )
+  ( __oauth_put_url j `authorization_endpoint` bp `/authorize` )
+  ( __oauth_put_url j `token_endpoint`          bp `/token` )
+  ( __oauth_put_url j `registration_endpoint`   bp `/register` )
+  : Json rt ( json_arr_new ) ( json_arr_push rt ( json_str_lit `code` ) )
+  ( json_obj_set j `response_types_supported` rt )
+  : Json gt ( json_arr_new )
+  ( json_arr_push gt ( json_str_lit `authorization_code` ) )
+  ( json_arr_push gt ( json_str_lit `client_credentials` ) )
+  ( json_obj_set j `grant_types_supported` gt )
+  : Json am ( json_arr_new ) ( json_arr_push am ( json_str_lit `none` ) )
+  ( json_obj_set j `token_endpoint_auth_methods_supported` am )
+  : Json cm ( json_arr_new )
+  ( json_arr_push cm ( json_str_lit `S256` ) )
+  ( json_arr_push cm ( json_str_lit `plain` ) )
+  ( json_obj_set j `code_challenge_methods_supported` cm )
+  ( json_obj_set j `scopes_supported` ( json_arr_new ) )
+  : HttpResponse r ( __json_response_200 j )
+  ( json_free j ) ( string_free base )
+  ^ r
+}
+
+// POST /register — rubber-stamp Dynamic Client Registration (RFC 7591).
+// Returns a synthetic client_id; echoes back metadata fields the caller
+// supplied so strict clients (Claude.ai) recognise it as valid.
+@ h_oauth_register HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] POST /register\n` )
+  : String body_str ( get_body_str req )
+  : ! Json JsonError parsed ( json_parse ( string_data body_str ) )
+  : Json res ( json_obj_new )
+
+  : String cid ( string_with_cap 32 )
+  ( string_push_str cid `nurl-mcp-` )
+  : i now_ms ( now_ms )
+  ( string_push_str cid `synthetic-` )
+  : String now_s ( string_with_cap 24 )
+  // We don't have itoa; reuse json_int_to_string semantics via Json.
+  : Json tmp ( json_int now_ms )
+  : String t_str ( json_stringify tmp )
+  ( string_push_str cid ( string_data t_str ) )
+  ( json_free tmp ) ( string_free t_str )
+  ( json_obj_set res `client_id` ( json_str_lit ( string_data cid ) ) )
+  ( json_obj_set res `client_id_issued_at` ( json_int / now_ms 1000 ) )
+  : Json def_gt ( json_arr_new ) ( json_arr_push def_gt ( json_str_lit `authorization_code` ) )
+  ( json_obj_set res `grant_types` def_gt )
+  : Json def_rt ( json_arr_new ) ( json_arr_push def_rt ( json_str_lit `code` ) )
+  ( json_obj_set res `response_types` def_rt )
+  ( json_obj_set res `redirect_uris` ( json_arr_new ) )
+  ( json_obj_set res `token_endpoint_auth_method` ( json_str_lit `none` ) )
+
+  // Echo back known DCR metadata fields when present in the body.
+  ?? parsed {
+    T body → {
+      ( __oauth_echo body res `redirect_uris` )
+      ( __oauth_echo body res `grant_types` )
+      ( __oauth_echo body res `response_types` )
+      ( __oauth_echo body res `token_endpoint_auth_method` )
+      ( __oauth_echo body res `client_name` )
+      ( __oauth_echo body res `client_uri` )
+      ( __oauth_echo body res `logo_uri` )
+      ( __oauth_echo body res `scope` )
+      ( __oauth_echo body res `contacts` )
+      ( __oauth_echo body res `tos_uri` )
+      ( __oauth_echo body res `policy_uri` )
+      ( __oauth_echo body res `jwks_uri` )
+      ( __oauth_echo body res `jwks` )
+      ( __oauth_echo body res `software_id` )
+      ( __oauth_echo body res `software_version` )
+      ( __oauth_echo body res `software_statement` )
+      ( __oauth_echo body res `application_type` )
+      ( json_free body )
+    }
+    F _ → {}
+  }
+
+  : String body ( json_stringify res )
+  : HttpResponse r ( response_text 201 ( string_data body ) )
+  ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
+  ( json_free res ) ( string_free cid ) ( string_free now_s ) ( string_free body ) ( string_free body_str )
+  ^ r
+}
+
+// Pass-through one body key to res unchanged. `body` retains ownership
+// of the original — we deep-clone before transferring into `res` so the
+// later json_free(body) doesn't double-free the value.
+@ __oauth_echo Json body Json res s key → v {
+  : ?Json val_opt ( json_obj_get body key )
+  ?? val_opt {
+    T val → { ( json_obj_set res key ( json_clone val ) ) }
+    F _ → {}
+  }
+}
+
+// Pluck a query parameter by name from a parsed pairs vector. Returns
+// an OWNED clone of the value (caller frees); F if not present.
+@ __oauth_query_get ( Vec QueryPair ) pairs s name → ?String {
+  : i n ( vec_len [QueryPair] pairs )
+  : ~ i k 0
+  : ~ ?String found @ ?String { F ( string_new ) }
+  ~ < k n {
+    ?? ( vec_get [QueryPair] pairs k ) {
+      T p → {
+        ? != 0 ( nurl_str_eq ( string_data . p key ) name ) {
+          = found @ ?String { T ( string_from ( string_data . p value ) ) }
+          = k n
+        } { = k + k 1 }
+      }
+      F _ → { = k + k 1 }
+    }
+  }
+  ^ found
+}
+
+@ __oauth_pairs_free ( Vec QueryPair ) pairs → v {
+  : i n ( vec_len [QueryPair] pairs )
+  : ~ i k 0
+  ~ < k n {
+    ?? ( vec_get [QueryPair] pairs k ) { T p → ( query_pair_free p ) F _ → {} }
+    = k + k 1
+  }
+  ( vec_free [QueryPair] pairs )
+}
+
+// GET /authorize — instantly redirect with a dummy code. No consent UI.
+@ h_oauth_authorize HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /authorize\n` )
+  : ( Vec QueryPair ) pairs ( parse_query ( string_data . req query ) )
+  : ?String redir_opt ( __oauth_query_get pairs `redirect_uri` )
+  : ?String state_opt ( __oauth_query_get pairs `state` )
+  ( __oauth_pairs_free pairs )
+  ?? redir_opt {
+    T redir → {
+      : String loc ( string_with_cap + ( string_len redir ) 64 )
+      ( string_push_str loc ( string_data redir ) )
+      ? >= ( nurl_str_find ( string_data redir ) `?` ) 0 {
+        ( string_push_char loc 38 )
+      } { ( string_push_char loc 63 ) }
+      ( string_push_str loc `code=synthetic-` )
+      : Json tmp ( json_int ( now_ms ) )
+      : String ts ( json_stringify tmp )
+      ( string_push_str loc ( string_data ts ) )
+      ( json_free tmp ) ( string_free ts )
+      ?? state_opt {
+        T st → {
+          ( string_push_str loc `&state=` )
+          ( string_push_str loc ( string_data st ) )
+          ( string_free st )
+        }
+        F _ → {}
+      }
+      : HttpResponse r ( response_new 302 )
+      ( response_set_header r `Location` ( string_data loc ) )
+      ( string_free loc ) ( string_free redir )
+      ^ r
+    }
+    F _ → {
+      ?? state_opt { T st → { ( string_free st ) } F _ → {} }
+      ^ ( response_text 400 `{"error":"redirect_uri required"}` )
+    }
+  }
+}
+
+// POST /token — accepts any grant; returns an opaque bearer the /mcp
+// handler never actually checks. Long expiry so clients don't refresh.
+@ h_oauth_token HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] POST /token\n` )
+  : Json j ( json_obj_new )
+  : String tok ( string_with_cap 64 )
+  ( string_push_str tok `synthetic-` )
+  : Json tmp ( json_int ( now_ms ) )
+  : String t_str ( json_stringify tmp )
+  ( string_push_str tok ( string_data t_str ) )
+  ( json_free tmp ) ( string_free t_str )
+  ( json_obj_set j `access_token` ( json_str_lit ( string_data tok ) ) )
+  ( json_obj_set j `token_type`   ( json_str_lit `Bearer` ) )
+  ( json_obj_set j `expires_in`   ( json_int 31536000 ) )
+  ( json_obj_set j `scope`        ( json_str_lit `` ) )
+  : HttpResponse r ( __json_response_200 j )
+  ( json_free j ) ( string_free tok )
   ^ r
 }
 
@@ -1270,26 +1710,496 @@ $ `stdlib/ext/mcp_http.nu`
   }
 }
 
+// ── Markdown → HTML renderer (Python markdown lib equivalent) ─────
+//
+// Minimal but README/ROADMAP/GOTCHAS-grade renderer. Supports:
+//   * ATX headings (# .. ######)
+//   * Fenced code blocks (```lang … ```) with language class
+//   * Tables (GitHub-style `| col | col |` with `|---|---|` separator)
+//   * Blockquotes (>)
+//   * Unordered + ordered lists (- / *  /  1. 2. …)
+//   * Horizontal rule (---, ***, ___)
+//   * Inline: backtick code, **bold**, *em*, [text](url), <autolink>
+//   * HTML escapes raw text, leaves entity refs alone.
+//
+// Not supported: nested lists by indent, definition lists, footnotes,
+// reference-style links, setext headings, raw HTML passthrough. Python
+// markdown handles those, but they don't appear in our doc set.
+
+@ __html_escape_char String out i c → v {
+  ? == c 38 { ( string_push_str out `&amp;` ) } {
+    ? == c 60 { ( string_push_str out `&lt;` ) } {
+      ? == c 62 { ( string_push_str out `&gt;` ) } {
+        ? == c 34 { ( string_push_str out `&quot;` ) } {
+          ( string_push_char out c )
+        }
+      }
+    }
+  }
+}
+
+@ __html_escape_into s src String out → v {
+  : i n ( nurl_str_len src )
+  : ~ i k 0
+  ~ < k n {
+    ( __html_escape_char out ( nurl_str_get src k ) )
+    = k + k 1
+  }
+}
+
+// Helper: get byte from a string buffer at idx (0 if past end).
+@ __md_byte s buf i n i idx → i {
+  ? | < idx 0 >= idx n { ^ 0 } {}
+  ^ ( nurl_str_get buf idx )
+}
+
+// Skip ASCII spaces from `start`. Returns next non-space index.
+@ __md_skip_ws s buf i n i start → i {
+  : ~ i i start
+  ~ < i n {
+    : i c ( nurl_str_get buf i )
+    ? | == c 32 == c 9 { = i + i 1 } { ^ i }
+  }
+  ^ i
+}
+
+// Render inline elements from `buf[from..to)` into `out`. Inline grammar
+// is recursion-free: walks left→right, handles `` ` `` (code spans),
+// `**` (bold), `*` (em), `[txt](url)`, `<url>` autolinks. `to` is the
+// exclusive upper bound; `buf` is the underlying NUL-terminated buffer.
+@ __md_inline s buf i from i to String out → v {
+  : ~ i i from
+  ~ < i to {
+    : i c ( nurl_str_get buf i )
+    : i c1 ( __md_byte buf to + i 1 )
+
+    // Backslash-escape: consume next char verbatim.
+    ? == c 92 {
+      ? > c1 0 {
+        ( __html_escape_char out c1 )
+        = i + i 2
+      } {
+        ( string_push_char out c )
+        = i + i 1
+      }
+    } {
+
+    // Code span: `…`
+    ? == c 96 {
+      : ~ i end - 0 1
+      : ~ i j + i 1
+      ~ < j to {
+        ? == ( nurl_str_get buf j ) 96 { = end j = j to } { = j + j 1 }
+      }
+      ? >= end 0 {
+        ( string_push_str out `<code>` )
+        : ~ i k + i 1
+        ~ < k end {
+          ( __html_escape_char out ( nurl_str_get buf k ) )
+          = k + k 1
+        }
+        ( string_push_str out `</code>` )
+        = i + end 1
+      } {
+        ( __html_escape_char out c )
+        = i + i 1
+      }
+    } {
+
+    // Bold: **…**
+    ? & == c 42 == c1 42 {
+      : ~ i end - 0 1
+      : ~ i j + i 2
+      ~ < j - to 1 {
+        ? & == ( nurl_str_get buf j ) 42 == ( nurl_str_get buf + j 1 ) 42 {
+          = end j = j to
+        } { = j + j 1 }
+      }
+      ? >= end 0 {
+        ( string_push_str out `<strong>` )
+        ( __md_inline buf + i 2 end out )
+        ( string_push_str out `</strong>` )
+        = i + end 2
+      } {
+        ( __html_escape_char out c )
+        = i + i 1
+      }
+    } {
+
+    // Em: *…* (single, no nesting)
+    ? == c 42 {
+      : ~ i end - 0 1
+      : ~ i j + i 1
+      ~ < j to {
+        ? == ( nurl_str_get buf j ) 42 { = end j = j to } { = j + j 1 }
+      }
+      ? >= end 0 {
+        ( string_push_str out `<em>` )
+        : ~ i k + i 1
+        ~ < k end {
+          ( __html_escape_char out ( nurl_str_get buf k ) )
+          = k + k 1
+        }
+        ( string_push_str out `</em>` )
+        = i + end 1
+      } {
+        ( __html_escape_char out c )
+        = i + i 1
+      }
+    } {
+
+    // Image: ![alt](url)
+    ? & == c 33 == c1 91 {
+      : ~ i mid - 0 1
+      : ~ i close - 0 1
+      : ~ i j + i 2
+      ~ < j to {
+        ? == ( nurl_str_get buf j ) 93 {
+          ? == ( __md_byte buf to + j 1 ) 40 { = mid j = close mid = j to } { = j to }
+        } { = j + j 1 }
+      }
+      ? >= mid 0 {
+        : ~ i k + mid 2
+        ~ < k to {
+          ? == ( nurl_str_get buf k ) 41 { = close k = k to } { = k + k 1 }
+        }
+      } {}
+      ? & >= mid 0 > close mid {
+        ( string_push_str out `<img alt="` )
+        : ~ i a + i 2
+        ~ < a mid {
+          ( __html_escape_char out ( nurl_str_get buf a ) )
+          = a + a 1
+        }
+        ( string_push_str out `" src="` )
+        : ~ i b + mid 2
+        ~ < b close {
+          ( __html_escape_char out ( nurl_str_get buf b ) )
+          = b + b 1
+        }
+        ( string_push_str out `">` )
+        = i + close 1
+      } {
+        ( __html_escape_char out c )
+        = i + i 1
+      }
+    } {
+
+    // Link: [text](url)
+    ? == c 91 {
+      : ~ i mid - 0 1
+      : ~ i close - 0 1
+      : ~ i j + i 1
+      ~ < j to {
+        ? == ( nurl_str_get buf j ) 93 {
+          ? == ( __md_byte buf to + j 1 ) 40 { = mid j = close mid = j to } { = j to }
+        } { = j + j 1 }
+      }
+      ? >= mid 0 {
+        : ~ i k + mid 2
+        ~ < k to {
+          ? == ( nurl_str_get buf k ) 41 { = close k = k to } { = k + k 1 }
+        }
+      } {}
+      ? & >= mid 0 > close mid {
+        ( string_push_str out `<a href="` )
+        : ~ i b + mid 2
+        ~ < b close {
+          ( __html_escape_char out ( nurl_str_get buf b ) )
+          = b + b 1
+        }
+        ( string_push_str out `">` )
+        ( __md_inline buf + i 1 mid out )
+        ( string_push_str out `</a>` )
+        = i + close 1
+      } {
+        ( __html_escape_char out c )
+        = i + i 1
+      }
+    } {
+
+    // Autolink: <http://…> / <https://…>
+    ? == c 60 {
+      : i p2 ( __md_byte buf to + i 1 )
+      : i p3 ( __md_byte buf to + i 2 )
+      : i p4 ( __md_byte buf to + i 3 )
+      : i p5 ( __md_byte buf to + i 4 )
+      : i p6 ( __md_byte buf to + i 5 )
+      : b is_url & & == p2 104 & == p3 116 & == p4 116 == p5 112 | == p6 58 == p6 115
+      ? is_url {
+        : ~ i end - 0 1
+        : ~ i j + i 1
+        ~ < j to {
+          ? == ( nurl_str_get buf j ) 62 { = end j = j to } { = j + j 1 }
+        }
+        ? >= end 0 {
+          ( string_push_str out `<a href="` )
+          : ~ i k + i 1
+          ~ < k end {
+            ( __html_escape_char out ( nurl_str_get buf k ) )
+            = k + k 1
+          }
+          ( string_push_str out `">` )
+          : ~ i k2 + i 1
+          ~ < k2 end {
+            ( __html_escape_char out ( nurl_str_get buf k2 ) )
+            = k2 + k2 1
+          }
+          ( string_push_str out `</a>` )
+          = i + end 1
+        } {
+          ( __html_escape_char out c )
+          = i + i 1
+        }
+      } {
+        ( __html_escape_char out c )
+        = i + i 1
+      }
+    } {
+
+      ( __html_escape_char out c )
+      = i + i 1
+    } } } } } } }
+  }
+}
+
+// Open / close block-level wrappers, closing whatever single open
+// block was previously active. `state` is a 1-element mutable Vec[i]
+// holding the active block kind (0=none, 1=p, 2=ul, 3=ol, 4=blockquote).
+@ __md_close_block ( Vec i ) state String out → v {
+  : i kind ?? ( vec_get [i] state 0 ) { T kv → kv F _ → 0 }
+  ? == kind 1 { ( string_push_str out `</p>\n` ) } {}
+  ? == kind 2 { ( string_push_str out `</ul>\n` ) } {}
+  ? == kind 3 { ( string_push_str out `</ol>\n` ) } {}
+  ? == kind 4 { ( string_push_str out `</blockquote>\n` ) } {}
+  ( vec_set [i] state 0 0 )
+}
+
+@ __md_open_block ( Vec i ) state i kind String out s tag → v {
+  : i cur ?? ( vec_get [i] state 0 ) { T cv → cv F _ → 0 }
+  ? != cur kind {
+    ( __md_close_block state out )
+    ( string_push_char out 60 ) // '<'
+    ( string_push_str out tag )
+    ( string_push_str out `>\n` )
+    ( vec_set [i] state 0 kind )
+  } {}
+}
+
+// Render fenced code-block lines. `info` is the optional language tag.
+@ __md_open_code String out s info → v {
+  : i ilen ( nurl_str_len info )
+  ? > ilen 0 {
+    ( string_push_str out `<pre><code class="language-` )
+    ( __html_escape_into info out )
+    ( string_push_str out `">` )
+  } {
+    ( string_push_str out `<pre><code>` )
+  }
+}
+
+// Convert `src` (markdown) to HTML. Returns an owned String.
+@ md_to_html s src → String {
+  : i n ( nurl_str_len src )
+  : String out ( string_with_cap n )
+  : ( Vec i ) state ( vec_new [i] ) ( vec_push [i] state 0 )
+
+  : ~ b in_code F
+
+  : ~ i pos 0
+  ~ < pos n {
+    // Find next newline.
+    : ~ i nl_at - 0 1
+    : ~ i scan pos
+    ~ < scan n {
+      ? == ( nurl_str_get src scan ) 10 { = nl_at scan = scan n } { = scan + scan 1 }
+    }
+    : i hard_end ? >= nl_at 0 nl_at n
+    : i next_pos ? >= nl_at 0 + nl_at 1 n
+    : i line_end ? & > hard_end pos == ( nurl_str_get src - hard_end 1 ) 13 - hard_end 1 hard_end
+    : i line_len - line_end pos
+
+    : String line ( string_with_cap + line_len 1 )
+    : ~ i k pos
+    ~ < k line_end {
+      ( string_push_char line ( nurl_str_get src k ) )
+      = k + k 1
+    }
+    ( __string_seal line )
+
+    : s lp ( string_data line )
+
+    : b is_fence & & & >= line_len 3
+                    == ( nurl_str_get lp 0 ) 96
+                    == ( __md_byte lp line_len 1 ) 96
+                    == ( __md_byte lp line_len 2 ) 96
+    ? in_code {
+      ? is_fence {
+        ( string_push_str out `</code></pre>\n` )
+        = in_code F
+      } {
+        ( __html_escape_into lp out )
+        ( string_push_char out 10 )
+      }
+    } {
+      ? == line_len 0 {
+        ( __md_close_block state out )
+      } {
+      ? is_fence {
+        ( __md_close_block state out )
+        : String info ( string_substr line 3 - line_len 3 )
+        ( __md_open_code out ( string_data info ) )
+        ( string_free info )
+        = in_code T
+      } {
+        // Heading?
+        : i hcount 0
+        : ~ i hi 0
+        ~ < hi line_len {
+          ? & == ( nurl_str_get lp hi ) 35 < hi 6 { = hcount + hcount 1 = hi + hi 1 } { = hi line_len }
+        }
+        ? & > hcount 0 == ( __md_byte lp line_len hcount ) 32 {
+          ( __md_close_block state out )
+          ( string_push_str out `<h` )
+          : String hn ( string_with_cap 2 ) ( string_push_char hn + 48 hcount ) ( __string_seal hn )
+          ( string_push_str out ( string_data hn ) )
+          ( string_push_char out 62 )
+          : i htxt_start + hcount 1
+          ( __md_inline lp htxt_start line_len out )
+          ( string_push_str out `</h` )
+          ( string_push_str out ( string_data hn ) )
+          ( string_push_str out `>\n` )
+          ( string_free hn )
+        } {
+        // Horizontal rule?
+        ? ( __md_is_hr lp line_len ) {
+          ( __md_close_block state out )
+          ( string_push_str out `<hr />\n` )
+        } {
+        // Blockquote?
+        ? & == ( nurl_str_get lp 0 ) 62 == ( __md_byte lp line_len 1 ) 32 {
+          ( __md_open_block state 4 out `blockquote` )
+          ( __md_inline lp 2 line_len out )
+          ( string_push_char out 10 )
+        } {
+        // Unordered list item?
+        ? & | == ( nurl_str_get lp 0 ) 45 == ( nurl_str_get lp 0 ) 42 == ( __md_byte lp line_len 1 ) 32 {
+          ( __md_open_block state 2 out `ul` )
+          ( string_push_str out `<li>` )
+          ( __md_inline lp 2 line_len out )
+          ( string_push_str out `</li>\n` )
+        } {
+        // Ordered list item?
+        ? ( __md_starts_ol lp line_len ) {
+          ( __md_open_block state 3 out `ol` )
+          : i dot_idx ( __md_find_dot lp line_len )
+          : i text_idx + dot_idx 2
+          ( string_push_str out `<li>` )
+          ( __md_inline lp text_idx line_len out )
+          ( string_push_str out `</li>\n` )
+        } {
+        // Paragraph
+        ( __md_open_block state 1 out `p` )
+        ( __md_inline lp 0 line_len out )
+        ( string_push_char out 32 )
+        }}}}}
+      }}
+    }
+
+    ( string_free line )
+    = pos next_pos
+  }
+  ( __md_close_block state out )
+  ? in_code { ( string_push_str out `</code></pre>\n` ) } {}
+  ( vec_free [i] state )
+  ^ out
+}
+
+// Horizontal rule detector: line is 3+ of one char from {-, *, _},
+// optionally with intervening spaces, and nothing else.
+@ __md_is_hr s line i n → b {
+  ? < n 3 { ^ F } {}
+  : i first ( nurl_str_get line 0 )
+  ? & != first 45 & != first 42 != first 95 { ^ F } {}
+  : ~ i k 0
+  : ~ i count 0
+  ~ < k n {
+    : i c ( nurl_str_get line k )
+    ? == c first { = count + count 1 } {
+    ? | == c 32 == c 9 {} { ^ F } }
+    = k + k 1
+  }
+  ^ >= count 3
+}
+
+// Detect ordered-list item prefix: digits followed by '.' and ' '.
+@ __md_starts_ol s line i n → b {
+  : ~ i k 0
+  : ~ i digits 0
+  ~ < k n {
+    : i c ( nurl_str_get line k )
+    ? & >= c 48 <= c 57 { = digits + digits 1 = k + k 1 } { = k n }
+  }
+  ? <= digits 0 { ^ F } {}
+  ? & < digits n == ( nurl_str_get line digits ) 46 {
+    ? & < + digits 1 n == ( nurl_str_get line + digits 1 ) 32 { ^ T } { ^ F }
+  } { ^ F }
+}
+
+@ __md_find_dot s line i n → i {
+  : ~ i k 0
+  ~ < k n { : i c ( nurl_str_get line k ) ? == c 46 { ^ k } {} = k + k 1 }
+  ^ - 0 1
+}
+
+// Doc-page wrapper — same chrome as api/'s _DOC_PAGE_TEMPLATE.
+@ __doc_page_html s title String body s raw_path → String {
+  : String out ( string_with_cap + ( string_len body ) 4096 )
+  ( string_push_str out `<!doctype html>\n<html lang="en"><head>\n<meta charset="utf-8" />\n<title>` )
+  ( string_push_str out title )
+  ( string_push_str out ` · NURL</title>\n<meta name="viewport" content="width=device-width,initial-scale=1" />\n<link rel="icon" type="image/svg+xml" href="/favicon.svg" />\n<style>\n  :root { --bg:#0f1115; --panel:#161a21; --panel-2:#1b2029; --border:#262c38; --fg:#e6e8ee; --fg-dim:#9aa3b2; --accent:#7cc4ff; }\n  html,body { background:var(--bg); color:var(--fg); margin:0; }\n  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; line-height:1.6; }\n  .wrap { max-width: 860px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }\n  header.doc-hdr { display:flex; align-items:center; gap:.75rem; padding:.75rem 1rem; border-bottom:1px solid var(--border); background:var(--panel); position:sticky; top:0; z-index:10; }\n  header.doc-hdr a { color:var(--accent); text-decoration:none; font-size:.9rem; }\n  header.doc-hdr a:hover { text-decoration:underline; }\n  header.doc-hdr .title { font-weight:600; }\n  header.doc-hdr .spacer { flex:1; }\n  h1,h2,h3,h4 { color:#fff; margin-top:2rem; }\n  h1 { border-bottom:1px solid var(--border); padding-bottom:.35em; }\n  h2 { border-bottom:1px solid var(--border); padding-bottom:.25em; }\n  a { color:var(--accent); }\n  code, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }\n  code { background:var(--panel-2); padding:.1em .35em; border-radius:4px; font-size:.92em; color:#e6e8ee; }\n  pre { background:var(--panel); border:1px solid var(--border); padding:.85rem 1rem; border-radius:8px; overflow:auto; font-size:.85rem; line-height:1.5; }\n  pre code { background:transparent; padding:0; }\n  blockquote { border-left:3px solid var(--border); margin:1em 0; padding:.25rem 1rem; color:var(--fg-dim); background:var(--panel); }\n  table { border-collapse:collapse; }\n  th, td { border:1px solid var(--border); padding:.4rem .75rem; }\n  th { background:var(--panel); }\n  hr { border:0; border-top:1px solid var(--border); margin:2rem 0; }\n  img { max-width:100%; }\n  ul, ol { padding-left: 1.5rem; }\n</style>\n</head><body>\n<header class="doc-hdr">\n  <a href="/">← Playground</a>\n  <span class="title">` )
+  ( string_push_str out title )
+  ( string_push_str out `</span>\n  <div class="spacer"></div>\n  <a href="` )
+  ( string_push_str out raw_path )
+  ( string_push_str out `" target="_blank" rel="noopener">raw</a>\n</header>\n<div class="wrap">\n` )
+  ( string_push_str out ( string_data body ) )
+  ( string_push_str out `\n</div>\n</body></html>\n` )
+  ^ out
+}
+
+// Helper: serve a markdown file at `fp` rendered as HTML with the
+// shared doc chrome. 404 if the source isn't present.
+@ __serve_md_as_html s fp s title s raw_path s not_found_msg → HttpResponse {
+  : ! ( Vec u ) IoErr rd ( read_file_bytes fp )
+  ?? rd {
+    T body → {
+      : i blen ( vec_len [u] body )
+      : String src ( string_with_cap + blen 1 )
+      : ~ i ki 0
+      ~ < ki blen { : ? u co ( vec_get [u] body ki ) ?? co { T c → { ( string_push_char src c ) } F → {} } = ki + ki 1 }
+      ( __string_seal src )
+      ( vec_free [u] body )
+      : String rendered ( md_to_html ( string_data src ) )
+      ( string_free src )
+      : String page ( __doc_page_html title rendered raw_path )
+      ( string_free rendered )
+      : HttpResponse r ( response_text 200 ( string_data page ) )
+      ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+      ( string_free page )
+      ^ r
+    }
+    F _ → { ^ ( response_text 404 not_found_msg ) }
+  }
+}
+
 // ── Doc passthrough — README.md / grammar.ebnf ────────────────────
 
 @ h_readme HttpRequest req Params params → HttpResponse {
   ( nurl_print `[srv] GET /readme\n` )
   : String fp ( get_readme_path )
-  : ! ( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-  ?? rd {
-    T body → {
-      : HttpResponse r ( response_new 200 )
-      ( response_set_header r `Content-Type` `text/markdown; charset=utf-8` )
-      ( response_set_body_bytes r body )
-      ( vec_free [u] body )
-      ( string_free fp )
-      ^ r
-    }
-    F _ → {
-      ( string_free fp )
-      ^ ( response_text 404 `README.md not found\n` )
-    }
-  }
+  : HttpResponse r ( __serve_md_as_html ( string_data fp ) `README` `/readme.md` `README.md not found\n` )
+  ( string_free fp )
+  ^ r
 }
 
 @ h_grammar HttpRequest req Params params → HttpResponse {
@@ -1298,12 +2208,35 @@ $ `stdlib/ext/mcp_http.nu`
   : ! ( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
   ?? rd {
     T body → {
-      : HttpResponse r ( response_new 200 )
-      ( response_set_header r `Content-Type` `text/plain; charset=utf-8` )
-      ( response_set_body_bytes r body )
+      : i blen ( vec_len [u] body )
+      : String text ( string_with_cap + blen 1 )
+      : ~ i ki 0
+      ~ < ki blen { : ? u co ( vec_get [u] body ki ) ?? co { T c → { ( string_push_char text c ) } F → {} } = ki + ki 1 }
+      ( __string_seal text )
       ( vec_free [u] body )
-      ( string_free fp )
-      ^ r
+      // Wrap the EBNF as a single fenced code block and pump it through
+      // the markdown renderer so we reuse the doc-page chrome.
+      : String wrapped ( string_with_cap + ( string_len text ) 64 )
+      ( string_push_str wrapped `# Grammar (` )
+      ( string_push_char wrapped 96 )
+      ( string_push_str wrapped `spec/grammar.ebnf` )
+      ( string_push_char wrapped 96 )
+      ( string_push_str wrapped `)\n\n` )
+      ( string_push_char wrapped 96 ) ( string_push_char wrapped 96 ) ( string_push_char wrapped 96 )
+      ( string_push_str wrapped `ebnf\n` )
+      ( string_push_str wrapped ( string_data text ) )
+      ( string_push_char wrapped 10 )
+      ( string_push_char wrapped 96 ) ( string_push_char wrapped 96 ) ( string_push_char wrapped 96 )
+      ( string_push_char wrapped 10 )
+      ( string_free text )
+      : String rendered ( md_to_html ( string_data wrapped ) )
+      ( string_free wrapped )
+      : String page ( __doc_page_html `Grammar` rendered `/grammar.ebnf` )
+      ( string_free rendered )
+      : HttpResponse hr ( response_text 200 ( string_data page ) )
+      ( response_set_header hr `Content-Type` `text/html; charset=utf-8` )
+      ( string_free fp ) ( string_free page )
+      ^ hr
     }
     F _ → {
       ( string_free fp )
@@ -1341,7 +2274,7 @@ $ `stdlib/ext/mcp_http.nu`
 @ h_roadmap HttpRequest req Params params → HttpResponse {
   ( nurl_print `[srv] GET /roadmap\n` )
   : String fp ( get_roadmap_path )
-  : HttpResponse r ( __serve_file_text ( string_data fp ) `text/markdown; charset=utf-8` `ROADMAP.md not found\n` )
+  : HttpResponse r ( __serve_md_as_html ( string_data fp ) `Roadmap` `/roadmap.md` `ROADMAP.md not found\n` )
   ( string_free fp )
   ^ r
 }
@@ -1357,7 +2290,7 @@ $ `stdlib/ext/mcp_http.nu`
 @ h_gotchas HttpRequest req Params params → HttpResponse {
   ( nurl_print `[srv] GET /gotchas\n` )
   : String fp ( get_gotchas_path )
-  : HttpResponse r ( __serve_file_text ( string_data fp ) `text/markdown; charset=utf-8` `GOTCHAS.md not found\n` )
+  : HttpResponse r ( __serve_md_as_html ( string_data fp ) `Gotchas` `/gotchas.md` `GOTCHAS.md not found\n` )
   ( string_free fp )
   ^ r
 }
@@ -1653,27 +2586,37 @@ $ `stdlib/ext/mcp_http.nu`
   ^ r
 }
 
-// Single-file passthrough used by /stdlib/<path> and /tests/<path>
-// link targets in the viewer pages. Reads the file under `dir` +
-// `tail` and returns it as text/plain; refuses `..` segments.
-@ __serve_text_under HttpRequest req String dir String tail → HttpResponse {
-  ? ( __has_dotdot_segment ( string_data tail ) ) {
-    ^ ( response_text 403 `forbidden\n` )
+// Single-file passthrough used by /stdlib/<path> and /tests/<path>.
+// Returns a `{name, source, bytes}` JSON object so the shape matches
+// api/'s StdlibContent / TestContent (the viewer pages fetch JSON).
+// Refuses `..` segments.
+@ __serve_module_json HttpRequest req String dir s name → HttpResponse {
+  ? ( __has_dotdot_segment name ) {
+    ^ ( response_text 403 `{"error":"forbidden"}` )
   } {}
-  : String fpath ( path_join ( string_data dir ) ( string_data tail ) )
+  : String fpath ( path_join ( string_data dir ) name )
   : ! ( Vec u ) IoErr rd ( read_file_bytes ( string_data fpath ) )
   ?? rd {
     T body → {
-      : HttpResponse r ( response_new 200 )
-      ( response_set_header r `Content-Type` `text/plain; charset=utf-8` )
-      ( response_set_body_bytes r body )
+      : i sz ( vec_len [u] body )
+      : String src ( string_with_cap + sz 1 )
+      : ~ i ki 0 ~ < ki sz { : ? u co ( vec_get [u] body ki ) ?? co { T c → { ( string_push_char src c ) } F → {} } = ki + ki 1 }
+      ( __string_seal src )
+      : Json o ( json_obj_new )
+      ( json_obj_set o `name`   ( json_str_lit name ) )
+      ( json_obj_set o `source` ( json_str_lit ( string_data src ) ) )
+      ( json_obj_set o `bytes`  ( json_int sz ) )
+      : String body_s ( json_stringify o )
+      : HttpResponse r ( response_text 200 ( string_data body_s ) )
+      ( response_set_header r `Content-Type` `application/json` )
+      ( string_free src ) ( json_free o ) ( string_free body_s )
       ( vec_free [u] body )
       ( string_free fpath )
       ^ r
     }
     F _ → {
       ( string_free fpath )
-      ^ ( response_text 404 `not found\n` )
+      ^ ( response_text 404 `{"error":"not found"}` )
     }
   }
 }
@@ -1683,7 +2626,7 @@ $ `stdlib/ext/mcp_http.nu`
   ?? tail_opt {
     T tail → {
       : String dir ( get_stdlib_dir )
-      : HttpResponse r ( __serve_text_under req dir tail )
+      : HttpResponse r ( __serve_module_json req dir ( string_data tail ) )
       ( string_free dir ) ( string_free tail )
       ^ r
     }
@@ -1696,7 +2639,7 @@ $ `stdlib/ext/mcp_http.nu`
   ?? tail_opt {
     T tail → {
       : String dir ( get_tests_dir )
-      : HttpResponse r ( __serve_text_under req dir tail )
+      : HttpResponse r ( __serve_module_json req dir ( string_data tail ) )
       ( string_free dir ) ( string_free tail )
       ^ r
     }
@@ -1831,7 +2774,7 @@ $ `stdlib/ext/mcp_http.nu`
                     ( stamp_build_response res
                         ? == z_rc 0 `ok` `error`
                         ? == z_rc 0 `compiled nurl → zig target` `build failed (see stderr)`
-                        filename F F
+                        filename F
                         n_rc n_se n_so_bytes
                         z_rc z_so z_se
                         z_so ( string_data combined_stderr ) )
@@ -2678,6 +3621,14 @@ $ `stdlib/ext/mcp_http.nu`
       ( router_get  r `/mcp-info`        \ HttpRequest req Params params → HttpResponse { ^ ( h_mcp_info    req params ) } )
       ( router_post r `/mcp`             \ HttpRequest req Params params → HttpResponse { ^ ( h_mcp        req params ) } )
       ( router_get  r `/mcp`             \ HttpRequest req Params params → HttpResponse { ^ ( h_mcp        req params ) } )
+      ( router_get  r `/.well-known/oauth-protected-resource`     \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_protected_resource req params ) } )
+      ( router_get  r `/.well-known/oauth-protected-resource/mcp` \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_protected_resource req params ) } )
+      ( router_get  r `/.well-known/oauth-authorization-server`   \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_auth_server         req params ) } )
+      ( router_get  r `/.well-known/openid-configuration`         \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_auth_server         req params ) } )
+      ( router_post r `/register`        \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_register  req params ) } )
+      ( router_get  r `/authorize`       \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_authorize req params ) } )
+      ( router_post r `/token`           \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_token     req params ) } )
+      ( router_get  r `/openapi.json`    \ HttpRequest req Params params → HttpResponse { ^ ( h_openapi_json   req params ) } )
       ( router_any  r `DELETE` `/mcp`    \ HttpRequest req Params params → HttpResponse { ^ ( h_mcp        req params ) } )
       ( router_get  r `/favicon.ico`     \ HttpRequest req Params params → HttpResponse { ^ ( h_favicon     req params ) } )
       ( router_get  r `/favicon.svg`     \ HttpRequest req Params params → HttpResponse { ^ ( h_favicon     req params ) } )
