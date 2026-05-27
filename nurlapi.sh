@@ -109,6 +109,25 @@ EOF
     echo "[nurlapi/bind] compiling nurlapi/main.nu → $LOCAL_BIN…"
     "$SCRIPT_DIR/nurl.sh" "$SCRIPT_DIR/nurlapi/main.nu" "$LOCAL_BIN"
 
+    # Rebuild stdlib/runtime.wasm.o from the host's stdlib/runtime.c when
+    # it's newer than the cached object. The Docker image bakes a
+    # runtime.wasm.o, but it freezes the runtime.c shipped at build time;
+    # local edits to stdlib/runtime.c (new C stubs, WASI fixes, etc) need
+    # to flow in to avoid `wasm-ld: undefined symbol: nurl_*` at link
+    # time. We compile inside a throwaway container that already has
+    # wasi-sdk so the host doesn't need its own toolchain.
+    RUNTIME_C="$SCRIPT_DIR/stdlib/runtime.c"
+    RUNTIME_WASM="$SCRIPT_DIR/stdlib/runtime.wasm.o.bind"
+    if [[ "$RUNTIME_C" -nt "$RUNTIME_WASM" ]]; then
+        echo "[nurlapi/bind] rebuilding stdlib/runtime.wasm.o (wasi target)…"
+        docker run --rm \
+            -v "$RUNTIME_C:/src/runtime.c:ro" \
+            -v "$SCRIPT_DIR/stdlib:/dst" \
+            --entrypoint /opt/wasi-sdk/bin/clang \
+            "$IMAGE" \
+            --target=wasm32-wasi -O2 -c /src/runtime.c -o /dst/runtime.wasm.o.bind
+    fi
+
     # Stop any previous bind-mode container with the same name.
     if docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
         echo "[nurlapi/bind] removing previous container '$CONTAINER_NAME'…"
@@ -128,7 +147,11 @@ EOF
         -v "$LOCAL_BIN:/app/nurlapi:ro" \
         -v "$SCRIPT_DIR/nurlapi/static:/app/static:ro" \
         -v "$SCRIPT_DIR/build/nurlc:/opt/nurl/build/nurlc:ro" \
-        -v "$SCRIPT_DIR/stdlib:/opt/nurl/stdlib:ro" \
+        -v "$SCRIPT_DIR/stdlib/core:/opt/nurl/stdlib/core:ro" \
+        -v "$SCRIPT_DIR/stdlib/std:/opt/nurl/stdlib/std:ro" \
+        -v "$SCRIPT_DIR/stdlib/ext:/opt/nurl/stdlib/ext:ro" \
+        -v "$SCRIPT_DIR/stdlib/STDLIB.md:/opt/nurl/stdlib/STDLIB.md:ro" \
+        -v "$RUNTIME_WASM:/opt/nurl/stdlib/runtime.wasm.o:ro" \
         -v "$SCRIPT_DIR/examples:/opt/nurl/examples:ro" \
         -v "$SCRIPT_DIR/compiler/tests:/opt/nurl/compiler/tests:ro" \
         -v "$SCRIPT_DIR/README.md:/opt/nurl/README.md:ro" \

@@ -11,6 +11,9 @@
 //   clang /tmp/wc.ll stdlib/runtime.o -o /tmp/wc
 //   /tmp/wc examples/wordcount.nu
 
+// nurl_str_get is a pure-NURL @-fn — needs the core/string include.
+$ `stdlib/core/string.nu`
+
 : Stats {
     i lines
     i words
@@ -57,10 +60,10 @@
 }
 
 @ print_stats Stats st s filename → v {
-    ( nurl_print ( nurl_str_cat `  ` ( nurl_str_int . st lines ) ) )
-    ( nurl_print ( nurl_str_cat `  ` ( nurl_str_int . st words ) ) )
-    ( nurl_print ( nurl_str_cat `  ` ( nurl_str_int . st chars ) ) )
-    ( nurl_print ( nurl_str_cat `  ` filename ) )
+    ( nurl_print `  ` ) ( nurl_print_int . st lines )
+    ( nurl_print `  ` ) ( nurl_print_int . st words )
+    ( nurl_print `  ` ) ( nurl_print_int . st chars )
+    ( nurl_print `  ` ) ( nurl_print filename )
     ( nurl_print `\n` )
 }
 

@@ -4186,6 +4186,13 @@ void nurl_tcp_shutdown(long long h) { (void)h; }
 long long nurl_tcp_err_kind(long long h) { (void)h; return NURL_NET_ERR_OTHER; }
 const char *nurl_tcp_peer_addr(long long h) { (void)h; return ""; }
 void nurl_tcp_set_timeout(long long h, long long ms) { (void)h; (void)ms; }
+/* Async-runtime hooks. The non-WASI variants live above the #else gate;
+ * mirror them as no-ops here so wasm-ld doesn't fail with undefined
+ * symbols for any example that imports the async/HTTP-server stack
+ * (which references these unconditionally — they just never fire under
+ * WASI because the underlying tcp_listen/_accept returned 0). */
+long long nurl_tcp_get_fd(long long h)                 { (void)h; return -1; }
+void nurl_tcp_set_nonblock(long long h, long long on)  { (void)h; (void)on; }
 
 /* §18b / §18c WASI stubs — wasi-libc has no socket layer. */
 long long nurl_udp_bind(const char *h, long long p) {

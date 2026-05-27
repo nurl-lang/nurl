@@ -73,7 +73,9 @@
     : P p @ P { @ O { 8 4 } s }
 
     // Exercise the X trait directly (v < O._ triggers the else-branch: slice length = 5)
-    : i tx ( x [P] p 3 )
+    // Explicit `[P]` instantiation triggers a known nurlc generic-mangle
+    // parse bug — implicit dispatch via the receiver's type works.
+    : i tx ( x p 3 )
 
     // Allocate recursive enum nodes on the heap
     : *N n1 ( sys::b @ N { A 7 3 } )

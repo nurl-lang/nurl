@@ -122,7 +122,23 @@ $ `stdlib/ext/mcp_http.nu`
   : String shims ( string_from `\n; ── wasm32 libc ABI shims ──\n` )
   : ( Vec String ) shimmed ( vec_new [String] )
   
-  : s list `malloc:p:s,calloc:p:ss,realloc:p:ps,puts:i:p,putchar:i:i,getchar:i:,strlen:s:p,strcmp:i:pp,strncmp:i:pps,strcpy:p:pp,strncpy:p:pps,strcat:p:pp,strdup:p:p,memcpy:p:pps,memmove:p:pps,memset:p:pis,memcmp:i:pps,memmem:p:psps,atoi:i:p,abs:i:i,exit:v:i,rand:i:,srand:v:s,system:i:p,write:i:ips,read:i:ips,open:i:pii,close:i:i`
+  // libc functions whose NURL FFI declares them with i64 args but wasm32
+  // libc expects i32. We rename @<name>(...) → @__nurl_<name>_shim(...)
+  // throughout the IR and emit a wrapper that trunc's i64→i32 (and
+  // sext/zext on the return). Without this, wasm-ld emits "function
+  // signature mismatch" warnings — and since the .wasm still loads with
+  // the wrong ABI, the program crashes at runtime ("runtime error:
+  // unreachable" or memory corruption). Add new libc functions here as
+  // examples surface them.
+  //
+  // memchr/getcwd/strchr/strrchr added 2026-05-27 — json_basic, mcp_*,
+  // serde_demo, claude_chat all hit the memchr mismatch; claude_chat
+  // also imports getcwd via std/process.nu.
+  //
+  // fread/fwrite/fseek/ftell/lseek added 2026-05-27 — find_clone /
+  // csv_demo / claude_agent stdio path. wasi-libc has all of these
+  // with i32-flavored size_t/long; NURL emits the i64 variants.
+  : s list `malloc:p:s,calloc:p:ss,realloc:p:ps,puts:i:p,putchar:i:i,getchar:i:,strlen:s:p,strcmp:i:pp,strncmp:i:pps,strcpy:p:pp,strncpy:p:pps,strcat:p:pp,strdup:p:p,memcpy:p:pps,memmove:p:pps,memset:p:pis,memcmp:i:pps,memchr:p:pis,memmem:p:psps,strchr:p:pi,strrchr:p:pi,atoi:i:p,abs:i:i,exit:v:i,rand:i:,srand:v:s,system:i:p,write:i:ips,read:i:ips,open:i:pii,close:i:i,getcwd:p:ps,fread:s:psps,fwrite:s:psps,fseek:i:pii,ftell:i:p,lseek:i:iii`
   : String slist ( string_from list )
   : ( Vec String ) entries ( string_split slist `,` )
   
@@ -264,6 +280,122 @@ $ `stdlib/ext/mcp_http.nu`
   }
   ( vec_free_with [String] entries \ String s → v { ( string_free s ) } )
   ( string_free slist ) ( vec_free_with [String] shimmed \ String s → v { ( string_free s ) } )
+
+  // POSIX-only fns that wasi-sysroot doesn't ship at all. The stdlib
+  // (std/fs.nu mmap path, std/process.nu fork+exec, std/signal.nu)
+  // unconditionally `declare`s and references them; on wasm we satisfy
+  // the linker by renaming the IR call sites to internal stub functions
+  // that return error sentinels (-1 / MAP_FAILED / NULL). The matching
+  // code paths are runtime-gated via `posix_const` (which already
+  // returns -1 on wasi), so these stubs never get called in
+  // well-formed programs. They unblock builds for csv_demo, find_clone,
+  // claude_agent, async_http_server etc.
+  //
+  // We rename `@<fn>(` → `@__nurl_<fn>_stub(` (and strip the original
+  // `declare` line) rather than defining `@<fn>` directly — wasi-sdk's
+  // clang refuses `define @mmap` / `@munmap` etc as "invalid
+  // redefinition" because libc builtins are recognised by name.
+  //
+  // Signatures must match the `declare`s nurlc emits exactly. Check
+  // with `grep '@<fn>(' < nurlc-output.ll` if a new one is added.
+  // POSIX-only fn → stub renaming. Strategy:
+  //   1. Replace ` @<name>(` with ` @__nurl_<name>_stub(` everywhere
+  //      in the IR. This rewrites both the declare line and every call
+  //      site in one pass.
+  //   2. Append a `define internal …` for `@__nurl_<name>_stub` that
+  //      returns the error sentinel. clang accepts declare+define for
+  //      the same renamed name — the rename is needed only because
+  //      clang/wasi-sdk treats libc builtin names (mmap/munmap/fork…)
+  //      as already-defined and rejects user `define @mmap`.
+  //
+  // Parallel arrays: posix_names[i] gets the matching stub body
+  // posix_bodies[i] when ` @<posix_names[i]>(` is found in the IR.
+  : ( Vec s ) posix_names ( vec_new [s] )
+  : ( Vec s ) posix_bodies ( vec_new [s] )
+  ( vec_push [s] posix_names `mmap` )    ( vec_push [s] posix_bodies `i8* @__nurl_mmap_stub(i8*, i64, i32, i32, i32, i64) {\n  %p = inttoptr i64 -1 to i8*\n  ret i8* %p\n}` )
+  ( vec_push [s] posix_names `munmap` )  ( vec_push [s] posix_bodies `i32 @__nurl_munmap_stub(i8*, i64) { ret i32 0 }` )
+  ( vec_push [s] posix_names `madvise` ) ( vec_push [s] posix_bodies `i32 @__nurl_madvise_stub(i8*, i64, i32) { ret i32 0 }` )
+  ( vec_push [s] posix_names `fork` )    ( vec_push [s] posix_bodies `i64 @__nurl_fork_stub() { ret i64 -1 }` )
+  ( vec_push [s] posix_names `execvp` )  ( vec_push [s] posix_bodies `i64 @__nurl_execvp_stub(i8*, i8*) { ret i64 -1 }` )
+  ( vec_push [s] posix_names `waitpid` ) ( vec_push [s] posix_bodies `i64 @__nurl_waitpid_stub(i64, i8*, i64) { ret i64 -1 }` )
+  ( vec_push [s] posix_names `pipe` )    ( vec_push [s] posix_bodies `i64 @__nurl_pipe_stub(i8*) { ret i64 -1 }` )
+  ( vec_push [s] posix_names `dup2` )    ( vec_push [s] posix_bodies `i64 @__nurl_dup2_stub(i64, i64) { ret i64 -1 }` )
+  ( vec_push [s] posix_names `signal` )  ( vec_push [s] posix_bodies `i8* @__nurl_signal_stub(i64, i8*) { ret i8* null }` )
+  // pthread family — wasi-libc doesn't ship pthread at all. std/thread.nu
+  // + std/arc.nu + the M:N async runtime declare these unconditionally.
+  // Single-threaded wasm stubs: lock/unlock/signal/broadcast/wait become
+  // no-ops returning 0 (success); create returns -1 so any code that
+  // actually tries to spawn fails gracefully.
+  ( vec_push [s] posix_names `pthread_mutex_init` )      ( vec_push [s] posix_bodies `i64 @__nurl_pthread_mutex_init_stub(i8*, i8*) { ret i64 0 }` )
+  ( vec_push [s] posix_names `pthread_mutex_lock` )      ( vec_push [s] posix_bodies `i64 @__nurl_pthread_mutex_lock_stub(i8*) { ret i64 0 }` )
+  ( vec_push [s] posix_names `pthread_mutex_unlock` )    ( vec_push [s] posix_bodies `i64 @__nurl_pthread_mutex_unlock_stub(i8*) { ret i64 0 }` )
+  ( vec_push [s] posix_names `pthread_mutex_destroy` )   ( vec_push [s] posix_bodies `i64 @__nurl_pthread_mutex_destroy_stub(i8*) { ret i64 0 }` )
+  ( vec_push [s] posix_names `pthread_cond_init` )       ( vec_push [s] posix_bodies `i64 @__nurl_pthread_cond_init_stub(i8*, i8*) { ret i64 0 }` )
+  ( vec_push [s] posix_names `pthread_cond_wait` )       ( vec_push [s] posix_bodies `i64 @__nurl_pthread_cond_wait_stub(i8*, i8*) { ret i64 0 }` )
+  ( vec_push [s] posix_names `pthread_cond_signal` )     ( vec_push [s] posix_bodies `i64 @__nurl_pthread_cond_signal_stub(i8*) { ret i64 0 }` )
+  ( vec_push [s] posix_names `pthread_cond_broadcast` )  ( vec_push [s] posix_bodies `i64 @__nurl_pthread_cond_broadcast_stub(i8*) { ret i64 0 }` )
+  ( vec_push [s] posix_names `pthread_cond_destroy` )    ( vec_push [s] posix_bodies `i64 @__nurl_pthread_cond_destroy_stub(i8*) { ret i64 0 }` )
+  ( vec_push [s] posix_names `pthread_create` )          ( vec_push [s] posix_bodies `i64 @__nurl_pthread_create_stub(i8*, i8*, i8*, i8*) { ret i64 -1 }` )
+  ( vec_push [s] posix_names `pthread_join` )            ( vec_push [s] posix_bodies `i64 @__nurl_pthread_join_stub(i8*, i8*) { ret i64 0 }` )
+  ( vec_push [s] posix_names `pthread_self` )            ( vec_push [s] posix_bodies `i8* @__nurl_pthread_self_stub() { ret i8* null }` )
+  ( vec_push [s] posix_names `pthread_detach` )          ( vec_push [s] posix_bodies `i64 @__nurl_pthread_detach_stub(i8*) { ret i64 0 }` )
+  // Misc POSIX a thread / IPC example may pull in. kill/getpid live in
+  // wasi-libc but only sometimes (depends on sysroot); stub them too so
+  // we get a consistent build regardless of which wasi-sdk version
+  // happens to be in the image.
+  ( vec_push [s] posix_names `kill` )    ( vec_push [s] posix_bodies `i64 @__nurl_kill_stub(i64, i64) { ret i64 -1 }` )
+  ( vec_push [s] posix_names `getpid` )  ( vec_push [s] posix_bodies `i64 @__nurl_getpid_stub() { ret i64 1 }` )
+
+  ( string_push_str shims `\n; ── wasi POSIX-only stubs ──\n` )
+  : ~ i pi 0
+  ~ < pi ( vec_len [s] posix_names ) {
+    : ? s name_o ( vec_get [s] posix_names pi )
+    : ? s body_o ( vec_get [s] posix_bodies pi )
+    ?? name_o { T name → {
+      : String needle ( string_from ` @` ) ( string_push_str needle name ) ( string_push_char needle 40 )
+      ? ( string_contains res ( string_data needle ) ) {
+        // 1. Rename ` @<name>(` → ` @__nurl_<name>_stub(` everywhere.
+        : String repl ( string_from ` @__nurl_` ) ( string_push_str repl name ) ( string_push_str repl `_stub(` )
+        : String tmp ( string_replace res ( string_data needle ) ( string_data repl ) )
+        ( string_free res ) = res tmp ( string_free repl )
+
+        // 2. Drop the renamed `declare <ret> @__nurl_<name>_stub(...)`
+        //    line. Without this, clang errors "invalid redefinition" —
+        //    a `declare` (external linkage) followed by `define
+        //    internal` for the same name is treated as a conflict
+        //    even though logically the define satisfies the declare.
+        //    The declare comes from nurlc emitting the FFI prototype;
+        //    we don't want it once we provide our own definition.
+        ?? body_o { T body → {
+          // body is `s` (string literal). Locate ` {` via nurl_str_find
+          // — string_index_of needs a String, not a raw `s`. The IR
+          // template strings we declared above always end in ` { … }`
+          // so the find returns ≥ 0.
+          : i sp_idx ( nurl_str_find body ` {` )
+          ? >= sp_idx 0 {
+            // Build `declare ` + body[0..sp_idx] + `\n` and delete it
+            // from `res`. The renamed declare lives there from step 1.
+            : String body_str ( string_from body )
+            : String prefix ( string_substr body_str 0 sp_idx )
+            : String declare_line ( string_from `declare ` )
+            ( string_push_str declare_line ( string_data prefix ) )
+            ( string_push_char declare_line 10 )
+            : String tmp2 ( string_replace res ( string_data declare_line ) `` )
+            ( string_free res ) = res tmp2
+            ( string_free declare_line ) ( string_free prefix ) ( string_free body_str )
+          } {}
+
+          // 3. Append the stub definition.
+          ( string_push_str shims `define internal ` )
+          ( string_push_str shims body )
+          ( string_push_str shims `\n` )
+        } F _ → {} }
+      } {}
+      ( string_free needle )
+    } F _ → {} }
+    = pi + pi 1
+  }
+  ( vec_free [s] posix_names ) ( vec_free [s] posix_bodies )
 
   : String final ( string_concat res shims )
   ( string_free res ) ( string_free shims )
@@ -604,6 +736,12 @@ $ `stdlib/ext/mcp_http.nu`
       ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
       : s filename ( get_common_json root `filename` `main.nu` )
       : b emit_ll ( get_common_bool root `emit_ll` F )
+      // /build_wasm opt level — defaults to -O1 (was -O2). On serde_demo /
+      // claude_chat / json_basic the -O2 link step accounted for 14-24 s of
+      // the perceived "playground feels slow"; -O1 produces ~5-15% larger
+      // .wasm but cuts compile time roughly in half. Caller can still
+      // explicitly request `-O2` or `-Oz` via the JSON `opt` field.
+      : s opt ( get_common_json root `opt` `-O1` )
 
       : String build_id ( create_build_id )
       : String build_dir ( path_join ( string_data ( get_output_dir ) ) ( string_data build_id ) )
@@ -636,16 +774,23 @@ $ `stdlib/ext/mcp_http.nu`
                 ( write_file ( string_data ll_path ) ( string_data ir_fixed ) )
                 ( string_free ir )
 
+                // NURL regex doesn't support \b (unknown-escape falls through
+                // to literal 'b'), so the trailing `(` of the IR call/decl
+                // serves as the word boundary instead. Examples that import
+                // canvas/audio via direct `& \`canvas\`` declarations (not
+                // via stdlib/ext/canvas.nu) only show up in the post-IR scan,
+                // so this matters — sand.nu and doomfire.nu silently failed
+                // to link canvas.wasm.o until this fix.
                 : b uses_canvas F
-                : ! Regex ParseErr re_canv ( regex_compile `@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mouse_btn)\b` )
+                : ! Regex ParseErr re_canv ( regex_compile `@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mouse_btn)\(` )
                 ?? re_canv { T rc → { = uses_canvas ( regex_test rc ( string_data ir_fixed ) ) ( regex_free rc ) } F _ → {} }
-                
+
                 : b uses_audio F
-                : ! Regex ParseErr re_aud ( regex_compile `@audio_(level|bin|bin_count|peak_bin|centroid|freq_of|sample_rate|is_silent|ready)\b` )
+                : ! Regex ParseErr re_aud ( regex_compile `@audio_(level|bin|bin_count|peak_bin|centroid|freq_of|sample_rate|is_silent|ready)\(` )
                 ?? re_aud { T ra → { = uses_audio ( regex_test ra ( string_data ir_fixed ) ) ( regex_free ra ) } F _ → {} }
 
                 : ( Vec s ) clang_args ( vec_new [s] )
-                ( vec_push [s] clang_args `--target=wasm32-wasi` ) ( vec_push [s] clang_args `-O2` ) ( vec_push [s] clang_args `-Wno-override-module` ) ( vec_push [s] clang_args ( string_data ll_path ) )
+                ( vec_push [s] clang_args `--target=wasm32-wasi` ) ( vec_push [s] clang_args opt ) ( vec_push [s] clang_args `-Wno-override-module` ) ( vec_push [s] clang_args ( string_data ll_path ) )
                 ( vec_push [s] clang_args ( string_data ( get_runtime_wasm_o ) ) )
                 ? uses_canvas { ( vec_push [s] clang_args ( string_data ( get_canvas_wasm_o ) ) ) } {}
                 ? uses_audio { ( vec_push [s] clang_args ( string_data ( get_audio_wasm_o ) ) ) } {}
@@ -657,15 +802,28 @@ $ `stdlib/ext/mcp_http.nu`
                 ?? clang_res {
                   T c_out → {
                     : i c_rc ( output_exit_code c_out )
+                    : s c_se ( output_stderr c_out )
+                    : s n_se ( output_stderr n_out )
+                    : String combined_stderr ( combine_stderr n_se c_se )
                     : Json res ( json_obj_new )
                     ( json_obj_set res `status` ( json_str_lit ? == c_rc 0 `ok` `error` ) )
-                    ( json_obj_set res `message` ( json_str_lit `compiled nurl → wasm32-wasi` ) )
+                    // Match native handler's message text so the playground's
+                    // build-info chip ("compiled" vs "build failed") agrees.
+                    ( json_obj_set res `message` ( json_str_lit ? == c_rc 0 `compiled nurl → wasm32-wasi` `build failed (see stderr)` ) )
                     ( json_obj_set res `filename` ( json_str_lit filename ) )
                     ( json_obj_set res `wasm_base64` ( json_null ) )
                     ( json_obj_set res `wasm_bytes` ( json_int 0 ) )
-                    ( json_obj_set res `nurlc_stderr` ( json_str_or_null ( output_stderr n_out ) ) )
-                    ( json_obj_set res `nurlc_errors` ( parse_nurlc_diagnostics ( output_stderr n_out ) ) )
-                    ( json_obj_set res `clang_stderr` ( json_str_or_null ( output_stderr c_out ) ) )
+                    ( json_obj_set res `nurlc_returncode` ( json_int n_rc ) )
+                    ( json_obj_set res `nurlc_stderr` ( json_str_or_null n_se ) )
+                    ( json_obj_set res `nurlc_errors` ( parse_nurlc_diagnostics n_se ) )
+                    ( json_obj_set res `clang_returncode` ( json_int c_rc ) )
+                    ( json_obj_set res `clang_stderr` ( json_str_or_null c_se ) )
+                    // Unified `stderr` mirrors stamp_build_response; the
+                    // playground's BUILD FAILED renderer only looks at this
+                    // field + nurlc_stderr, so omitting it (as the original
+                    // code did) silently swallowed wasi-clang errors like
+                    // "undefined symbol: canvas_open".
+                    ( json_obj_set res `stderr` ( json_str_lit ( string_data combined_stderr ) ) )
                     ( json_obj_set res `llvm_ir` ? | emit_ll != c_rc 0 { ( json_str_lit ( string_data ir_fixed ) ) } { ( json_null ) } )
                     ( json_obj_set res `uses_canvas` ( json_bool uses_canvas ) )
                     ( json_obj_set res `uses_audio` ( json_bool uses_audio ) )
@@ -688,7 +846,7 @@ $ `stdlib/ext/mcp_http.nu`
                     : HttpResponse hr ( response_text 200 ( string_data body ) )
                     ( response_set_header hr `Content-Type` `application/json` )
                     
-                    ( string_free b64 ) ( string_free wasm_url ) ( json_free res ) ( string_free ir_fixed )
+                    ( string_free b64 ) ( string_free wasm_url ) ( string_free combined_stderr ) ( json_free res ) ( string_free ir_fixed )
                     ( output_free n_out ) ( output_free c_out ) ( json_free root )
                     ( string_free nu_path ) ( string_free ll_name ) ( string_free ll_path ) ( string_free wasm_name ) ( string_free wasm_path )
                     ( string_free build_id ) ( string_free build_dir ) ( string_free body_str ) ( string_free body )
@@ -2508,82 +2666,39 @@ $ `stdlib/ext/mcp_http.nu`
 
 // ── Directory listing viewers — /stdlib-viewer + /tests-viewer ──
 
-// Internal: build a minimal browse-only HTML page listing every file
-// directly under `dir` (one level deep — no recursion into
-// subdirectories for stdlib's core/ ext/ std/ split; the listing
-// shows each entry name verbatim). Returned HTML wraps the list in a
-// `<pre>`-styled block so the page is readable without external CSS.
-@ __viewer_html_for s title s dir s base_url → String {
-  : String html ( string_with_cap 4096 )
-  ( string_push_str html `<!doctype html><html lang="en"><head><meta charset="utf-8">` )
-  ( string_push_str html `<title>` ) ( string_push_str html title ) ( string_push_str html `</title>` )
-  ( string_push_str html `<style>body{font-family:ui-monospace,Menlo,Consolas,monospace;background:#0d1117;color:#c9d1d9;padding:24px;max-width:980px;margin:0 auto}a{color:#79c0ff;text-decoration:none}a:hover{text-decoration:underline}h1{color:#f0f6fc;border-bottom:1px solid #30363d;padding-bottom:8px}ul{list-style:none;padding-left:0}li{padding:2px 0}.dir{color:#7ee787}</style>` )
-  ( string_push_str html `</head><body><h1>` ) ( string_push_str html title ) ( string_push_str html `</h1><ul>` )
-  : ! ( Vec String ) IoErr dr ( dir_list dir )
-  ?? dr {
-    T entries → {
-      : ~ i i 0
-      ~ < i ( vec_len [String] entries ) {
-        ?? ( vec_get [String] entries i ) {
-          T name → {
-            : String full ( path_join dir ( string_data name ) )
-            : b is_nu ( string_ends_with name `.nu` )
-            ? | is_nu ( string_ends_with name `.sh` ) {
-              ( string_push_str html `<li><a href="` )
-              ( string_push_str html base_url )
-              ( string_push_char html 47 )
-              ( string_push_str html ( string_data name ) )
-              ( string_push_str html `">` )
-              ( string_push_str html ( string_data name ) )
-              ( string_push_str html `</a></li>` )
-            } { ? ( file_exists ( string_data full ) ) {} {
-                // Treat as subdirectory — show with dir tag, no link
-                ( string_push_str html `<li class="dir">` )
-                ( string_push_str html ( string_data name ) )
-                ( string_push_str html `/</li>` )
-              }
-            }
-            ( string_free full )
-          }
-          F _ → {}
-        }
-        = i + i 1
-      }
-      : ~ i k 0
-      ~ < k ( vec_len [String] entries ) {
-        ?? ( vec_get [String] entries k ) { T fs → ( string_free fs ) F _ → {} }
-        = k + k 1
-      }
-      ( vec_free [String] entries )
+// Single Monaco-highlighted viewer page lives in
+// `static/viewer.html` and self-detects stdlib vs. tests via
+// `location.pathname`. Both /stdlib-viewer and /tests-viewer serve
+// the SAME file — only the URL the browser landed on differs, which
+// the page's JS uses to pick the back-end endpoint (`/stdlib` vs
+// `/tests`), the title, and the breadcrumb prefix. This keeps the
+// NURL handler a thin static-file passthrough; replacing the previous
+// inline-built minimal directory listing.
+@ __serve_viewer_html → HttpResponse {
+  : String sdir ( get_static_dir )
+  : String fp ( path_join ( string_data sdir ) `viewer.html` )
+  : ! ( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+  ( string_free sdir ) ( string_free fp )
+  ?? rd {
+    T body → {
+      : HttpResponse r ( response_new 200 )
+      ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+      ( response_set_body_bytes r body )
+      ( vec_free [u] body )
+      ^ r
     }
-    F _ → {
-      ( string_push_str html `<li><em>(could not list directory: ` )
-      ( string_push_str html dir )
-      ( string_push_str html `)</em></li>` )
-    }
+    F _ → { ^ ( response_text 500 `viewer.html not found in static dir\n` ) }
   }
-  ( string_push_str html `</ul></body></html>\n` )
-  ^ html
 }
 
 @ h_stdlib_viewer HttpRequest req Params params → HttpResponse {
   ( nurl_print `[srv] GET /stdlib-viewer\n` )
-  : String dir ( get_stdlib_dir )
-  : String html ( __viewer_html_for `NURL stdlib` ( string_data dir ) `/stdlib` )
-  : HttpResponse r ( response_text 200 ( string_data html ) )
-  ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
-  ( string_free dir ) ( string_free html )
-  ^ r
+  ^ ( __serve_viewer_html )
 }
 
 @ h_tests_viewer HttpRequest req Params params → HttpResponse {
   ( nurl_print `[srv] GET /tests-viewer\n` )
-  : String dir ( get_tests_dir )
-  : String html ( __viewer_html_for `NURL compiler tests` ( string_data dir ) `/tests` )
-  : HttpResponse r ( response_text 200 ( string_data html ) )
-  ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
-  ( string_free dir ) ( string_free html )
-  ^ r
+  ^ ( __serve_viewer_html )
 }
 
 // Single-file passthrough used by /stdlib/<path> and /tests/<path>.
