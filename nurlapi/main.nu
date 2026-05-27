@@ -834,7 +834,7 @@ $ `stdlib/ext/mcp_http.nu`
                       : i w_bytes ?? wasm_size_res { T s → s F _ → 0 }
                       ( json_obj_set res `wasm_bytes` ( json_int w_bytes ) )
                       : ! ( Vec u ) IoErr wasm_data_res ( read_file_bytes ( string_data wasm_path ) )
-                      ?? wasm_data_res { T w_data → { 
+                      ?? wasm_data_res { T w_data → {
                           : String b ( b64_encode_vec w_data ) ( json_obj_set res `wasm_base64` ( json_str_lit ( string_data b ) ) )
                           ( string_free b64 ) = b64 b ( vec_free [u] w_data ) } F _ → {} }
                       = wasm_url ( string_with_cap 64 )

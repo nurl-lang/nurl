@@ -34,7 +34,7 @@ $ `stdlib/ext/http_full.nu`
             // surface rather than a single accept loop. 8 workers is a
             // reasonable default for ~12-core hosts (tokio's default
             // multi-thread runtime in the Rust peer uses every core).
-            : !v NetErr rr ( server_run_pool srv 8 )
+            : !v NetErr rr ( server_run_pool srv 10 )
 
             ( signal_clear_shutdown )
             ( server_stop srv )

@@ -66,14 +66,22 @@ $ `stdlib/core/errors.nu`
 }
 
 // Append the bytes of `raw` (NUL-terminated, excluding NUL) onto `v`.
+// Bulk `nurl_memcpy` instead of byte-by-byte `vec_push`. A per-byte
+// push for the 330 KB JSON response body in nurlapi's /build_wasm was
+// costing ~2.5 s wall-time for a 250 ms compile job; the memcpy
+// variant drops that to single-digit ms. Mirrors the fast path
+// __string_append_raw already uses in stdlib/core/string.nu.
 @ bytes_extend_str ( Vec u ) v s raw → v {
     : i n ( nurl_str_len raw )
-    ( vec_reserve [u] v n )
-    : ~ i k 0
-    ~ < k n {
-        ( vec_push [u] v # u ( nurl_str_get raw k ) )
-        = k + k 1
-    }
+    ? > n 0 {
+        ( vec_reserve [u] v n )
+        : *u src # *u raw
+        : *u dst ( vec_data [u] v )
+        : i len ( vec_len [u] v )
+        : *u dst_at # *u + # i dst len
+        ( nurl_memcpy dst_at src n )
+        ( vec_set_len [u] v + len n )
+    } {}
 }
 
 // Append the decimal-text bytes of `n` onto `v` (no leading zeros, '-' for
@@ -81,6 +89,25 @@ $ `stdlib/core/errors.nu`
 // hides the malloc'd intermediate from caller-side accounting.
 @ bytes_push_int ( Vec u ) v i n → v {
     ( bytes_extend_str v ( nurl_str_int n ) )
+}
+
+// Bulk-append every byte of `src` to `v` via `nurl_memcpy`. Same shape
+// as `vec_extend [u]` but skips the per-element copy loop — for HTTP
+// response serialisation (a 330 KB body byte-vector being copied into
+// the wire buffer) the loop variant was the dominant cost in the
+// nurlapi playground; this drops it to a single memcpy. Source vector
+// is BORROWED.
+@ bytes_extend_bytes ( Vec u ) dst ( Vec u ) src → v {
+    : i n ( vec_len [u] src )
+    ? > n 0 {
+        ( vec_reserve [u] dst n )
+        : *u sp ( vec_data [u] src )
+        : *u dp ( vec_data [u] dst )
+        : i dlen ( vec_len [u] dst )
+        : *u dst_at # *u + # i dp dlen
+        ( nurl_memcpy dst_at sp n )
+        ( vec_set_len [u] dst + dlen n )
+    } {}
 }
 
 // Append the default float formatting (`%g`) of `x` onto `v`.

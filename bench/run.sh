@@ -95,12 +95,16 @@ median() {
 }
 
 # ── compile / prepare each benchmark ─────────────────────────────
+# nurlc resolves `$ "stdlib/..."` imports relative to its CWD — must
+# run from $ROOT so the stdlib tree is visible. Without this, every
+# bench fails at parse time with "cannot open 'stdlib/core/io.nu'"
+# and the table renders only FAIL cells.
 compile_nurl() {
     local name="$1"
     local src="$BENCH/$name.nu"
     local ll="$BUILD/$name.ll"
     local bin="$BUILD/${name}_nurl"
-    "$NURLC" "$src" > "$ll" 2>"$BUILD/$name.nurl.err" || return 1
+    ( cd "$ROOT" && "$NURLC" "$src" > "$ll" 2>"$BUILD/$name.nurl.err" ) || return 1
     clang -O2 -flto "$ll" "$RUNTIME" -lm -lpthread \
         $CURL_LIBS $SSL_LIBS $SQ_LIBS $PQ_LIBS $Z_LIBS $ZSTD_LIBS \
         -o "$bin" 2>"$BUILD/$name.link.err" || return 1
@@ -130,6 +134,12 @@ printf '\n%-14s | %10s | %10s | %10s | %10s\n' "bench" "NURL" "Python" "Rust" "N
 printf '%-14s-+-%10s-+-%10s-+-%10s-+-%10s\n' "--------------" "----------" "----------" "----------" "----------"
 
 for b in "${BENCHES[@]}"; do
+    # Per-bench progress to stderr so the user sees something is
+    # happening while slow languages (Python lcg ≈ 20 s × 5 runs)
+    # chew time. Without this the script appeared frozen for minutes
+    # before the first row printed.
+    printf '  …%s: compiling…\r' "$b" >&2
+
     # NURL
     nurl_bin=""
     if (( have_nurl )) && [[ -f "$BENCH/$b.nu" ]]; then
@@ -145,6 +155,7 @@ for b in "${BENCHES[@]}"; do
     declare -a nurl_runs py_runs rs_runs js_runs
     nurl_runs=(); py_runs=(); rs_runs=(); js_runs=()
     for ((r=0; r<ITERS; r++)); do
+        printf '  …%s: run %d/%d         \r' "$b" "$((r+1))" "$ITERS" >&2
         [[ -n "$nurl_bin" ]] && nurl_runs+=("$(time_ms nurl   "$nurl_bin")") || nurl_runs+=(FAIL)
         [[ -f "$BENCH/$b.py" && $have_py == 1 ]] && py_runs+=("$(cd "$ROOT" && time_ms py python3 "$BENCH/$b.py")") || py_runs+=(FAIL)
         [[ -n "$rs_bin" ]] && rs_runs+=("$(cd "$ROOT" && time_ms rs "$rs_bin")") || rs_runs+=(FAIL)
@@ -154,6 +165,7 @@ for b in "${BENCHES[@]}"; do
     py_med=$(median "${py_runs[@]}")
     rs_med=$(median "${rs_runs[@]}")
     js_med=$(median "${js_runs[@]}")
+    printf '                                          \r' >&2
     printf '%-14s | %10s | %10s | %10s | %10s\n' "$b" "$nurl_med" "$py_med" "$rs_med" "$js_med"
 done
 echo

@@ -139,7 +139,11 @@ prep_nurl() {
     local src="$BENCH/http_server.nu"
     local ll="$BENCH/_build/http_server_nurl.ll"
     mkdir -p "$BENCH/_build"
-    "$NURLC" "$src" > "$ll" || return 1
+    # nurlc resolves `$ "stdlib/..."` imports relative to its CWD —
+    # must run from $ROOT so the stdlib tree is visible. Without
+    # this, http_server.nu fails to parse with "cannot open
+    # 'stdlib/ext/http_full.nu'". Same fix as compile_nurl in run.sh.
+    ( cd "$ROOT" && "$NURLC" "$src" > "$ll" ) || return 1
 
     # Mirror compiler/tests/run_tests.sh's link line so optional FFI
     # libs (libcurl + libssl needed by http_full.nu) resolve cleanly.
