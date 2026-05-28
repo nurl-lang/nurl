@@ -840,7 +840,42 @@ $ `stdlib/ext/http2_hpack.nu`
                                     // PRIORITY — accepted on closed/half-
                                     // closed streams (§5.3), just discard.
                                 } {
-                                    = bail T
+                                    ? & == ft 4 == fsid 0 {
+                                        // SETTINGS — apply + ACK. Critical
+                                        // for tests that raise the window
+                                        // via a second SETTINGS frame
+                                        // after the stream is already
+                                        // pending a response.
+                                        ? != 0 & . frame flags ( h2_flag_ack ) {
+                                            // ACK — peer ACKing our SETTINGS.
+                                        } {
+                                            : ! H2Connection H2ConnErr ar
+                                                ( __h2_apply_settings cur frame )
+                                            ?? ar {
+                                                T newc → { = cur newc }
+                                                F _ → { = bail T }
+                                            }
+                                            ? ! bail {
+                                                : ! v H2FrameErr sack
+                                                    ( h2_send_settings_ack . cur tcp )
+                                                ?? sack { T _ → {} F _ → {} }
+                                            } {}
+                                        }
+                                    } {
+                                        ? & == ft 1 != fsid 0 {
+                                            // HEADERS for a NEW stream while
+                                            // we're still busy writing a
+                                            // previous response. We're not
+                                            // multi-streaming the writer, so
+                                            // refuse this stream — §5.1.2.
+                                            : ! v H2FrameErr rs
+                                                ( h2_send_rst_stream . cur tcp fsid
+                                                  ( h2_err_refused_stream ) )
+                                            ?? rs { T _ → {} F _ → {} }
+                                        } {
+                                            = bail T
+                                        }
+                                    }
                                 }
                             }
                             ( h2_frame_free frame )

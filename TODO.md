@@ -20,8 +20,8 @@ Lähde: ulkoinen tekninen review (47/100). Tärkein punainen lippu: **`play.nurl
 ## Tier 2 — kunnollisen kielen hygienia
 
 - [~] **Aja HTTP/2 + WebSocket interop-suite oikeita työkaluja vasten** ("offline RFC-vector verification" = unit test, ei interop):
-  - [~] `h2spec v2.6.0` (146 conformance casea RFC 7540 + RFC 7541 HPACK vasten)
-    - **Tila 2026-05-28: 142/146 läpäisee** (lähtö 0/146; ei UAF:ää, build vihreä)
+  - [x] `h2spec v2.6.0` (146 conformance casea RFC 7540 + RFC 7541 HPACK vasten)
+    - **Tila 2026-05-28: 146/146 läpäisee** (lähtö 0/146; 0 failures, 0 skipped; ei UAF:ää, build vihreä)
     - Korjatut juurisyyt (commitit `9f1f12b`, `52426e6`):
       - 4 parenthesoitua operaattori-ilmaisua (`( % n 6 )`, `( . rp from )`) — diagnoosi olemassa 2026-05-22 jälkeen, http2_conn.nu vain ei ollut build-pathilla
       - `nurl_str_slice_unsafe` löi load-byten pointer-aritmetiikan sijaan
@@ -45,12 +45,12 @@ Lähde: ulkoinen tekninen review (47/100). Tärkein punainen lippu: **`play.nurl
       - content-length §8.1.1 validointi (declared = vec_len(body))
       - HEADERS-on-open-stream = trailers §8.1
       - h2c-test-serverin per-connection timeout 1s (sekventiaalinen accept-silmukka ei jämähdä)
-    - **Jäljellä 4 failurea (kaikki saman juurisyyn alla):**
-      - "Sends SETTINGS frame to set the initial window size to 1 and sends HEADERS frame"
-      - "Sends multiple values of SETTINGS_INITIAL_WINDOW_SIZE"
-      - "Changes SETTINGS_INITIAL_WINDOW_SIZE after sending HEADERS frame"
-      - (1 skipped, prerequisite-dependent)
-      - **Juurisyy:** `__h2_send_response` kirjoittaa koko response-bodyn yhdellä DATA-framella välittämättä stream send_window:sta. Vaatii partial-state response writerin + resume-on-WINDOW_UPDATE-polun (ei-triviaali rakennemuutos).
+    - **Lopuksi shipattu (commit `27fb41b` + `<seuraava>`):**
+      - Flow-control-respecting response writer §5.2.1 §6.9.1 — chunk bound by `min(remaining, peer_max_frame_size, 16K, stream_window, conn_window)`
+      - Inline pump-on-window-exhaustion: handles WINDOW_UPDATE / SETTINGS / PRIORITY mid-write; sends RST_STREAM(REFUSED) for new HEADERS while a writer is busy (§5.1.2)
+      - Empty `DATA(END_STREAM)` fallback §6.9.1 — zero-length DATA + END_STREAM permitted regardless of window state
+      - TCP_NODELAY at accept — small framing-level ACKs don't get pinned by Nagle for 40 ms
+      - Async accept loop (`stdlib/std/async.nu` per-conn fiber) — h2spec's probe+test connection pattern requires concurrent serving
   - [~] `autobahn-testsuite` (WebSocket) — Docker image asennettu, `examples/ws_echo.nu` -echo-server skissattu.
     - **Avoin bugi:** `response_serialize` aiheuttaa UBSan misaligned ctl -loadin kun se kutsutaan kontekstissa jossa request on luotu `__read_request_head`-polulta (parsittu TCP-puskurista). Standalone-testi (`/tmp/test_ws_resp.nu`) jossa sama HttpResponse rakennetaan käsin shipped läpi puhtaasti. Ero on jossain request-parsinta-polun tilassa joka karahtaa response-serialisointiin. Vaatii nurlc-IR-tason debugin ennen kuin autobahn voidaan ajaa läpi.
     - **Reproduktio:** `NURL_SAN=1 ./nurl.sh examples/ws_echo.nu /tmp/ws_echo && /tmp/ws_echo` → handshake-tavut menevät peerille, sitten UBSan tappaa serverin response_serialize:n nurl_peek:in 8-misaligned osoitteeseen (~0x28d).
