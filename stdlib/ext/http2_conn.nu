@@ -586,6 +586,57 @@ $ `stdlib/ext/http2_hpack.nu`
     }
 }
 
+// Parse a `s` containing a decimal number; returns -1 on any
+// non-digit, leading sign, empty, or overflow. Used for the
+// content-length header in __h2_content_length_mismatch.
+@ __h2_parse_dec s text → i {
+    : i n ( nurl_str_len text )
+    ? == n 0 { ^ -1 } {}
+    : ~ i acc 0
+    : ~ i k 0
+    : ~ b bad F
+    ~ & ! bad < k n {
+        : i c & ( nurl_str_get text k ) 255
+        ? | < c 48 > c 57 { = bad T } {
+            = acc + * acc 10 - c 48
+        }
+        = k + k 1
+    }
+    ? bad { ^ -1 } {}
+    ^ acc
+}
+
+// RFC 9113 §8.1.1 — when `content-length` is present, the sum of the
+// DATA payloads on a stream MUST equal that value. Returns T on
+// mismatch (or invalid content-length representation) so the caller
+// can fail with PROTOCOL_ERROR before invoking the handler.
+@ __h2_content_length_mismatch H2Stream s → b {
+    : ( Vec Header ) hdrs . s decoded_headers
+    : i nh ( vec_len [Header] hdrs )
+    : *Header hp ( vec_data [Header] hdrs )
+    : ~ i declared -1
+    : ~ b bad F
+    : ~ i k 0
+    ~ & ! bad < k nh {
+        : Header h . hp k
+        : s nm ( string_data . h name )
+        ? != 0 ( __h2_eq_ci nm `content-length` ) {
+            : i v ( __h2_parse_dec ( string_data . h value ) )
+            ? < v 0 { = bad T } {
+                ? & >= declared 0 != declared v { = bad T } {}
+                = declared v
+            }
+        } {}
+        = k + k 1
+    }
+    ? bad { ^ T } {}
+    ? >= declared 0 {
+        : i actual ( vec_len [u] . s body )
+        ? != declared actual { ^ T } {}
+    } {}
+    ^ F
+}
+
 // ── HTTP request assembly ────────────────────────────────────────────
 //
 // Translate a stream's decoded pseudo + regular headers + body into the
@@ -1248,6 +1299,13 @@ $ `stdlib/ext/http2_hpack.nu`
         ^ @ ! H2Connection H2ConnErr { F H2ConnInternal }
     } {}
     : H2Stream s ( __h2_get_stream cur idx )
+    // RFC 9113 §8.1.1 — content-length must match the actual body size.
+    // Invoking the handler on a mismatched request would surface a
+    // semantic inconsistency that the spec mandates be caught at the
+    // protocol level.
+    ? ( __h2_content_length_mismatch s ) {
+        ^ @ ! H2Connection H2ConnErr { F H2ConnProtocol }
+    } {}
     : HttpRequest req ( __h2_stream_to_request s )
     : HttpResponse resp ( handler req )
     ( request_free req )

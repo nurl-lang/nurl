@@ -34,9 +34,12 @@ $ `stdlib/ext/http2_server.nu`
                         // many quick tests and the accept loop is
                         // sequential, so a peer that never sends a
                         // close after a partial flow would otherwise
-                        // wedge every subsequent test. 5 s is far
-                        // longer than any well-behaved h2 client needs.
-                        ( tcp_set_timeout conn 5000 )
+                        // wedge every subsequent test. 1 s is enough
+                        // for any well-behaved h2 client on loopback
+                        // and keeps the accept queue draining fast
+                        // when a test deliberately leaves a connection
+                        // half-open.
+                        ( tcp_set_timeout conn 1000 )
                         : ( @ HttpResponse HttpRequest ) h
                             \ HttpRequest req → HttpResponse { ^ ( h2c_handler req ) }
                         : ! v H2ConnErr sr ( http2_serve conn h )
