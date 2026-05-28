@@ -656,28 +656,40 @@ $ `stdlib/ext/http2_hpack.nu`
 
                 ?? ft {
                     4 → {
-                        // SETTINGS
-                        ? != 0 & . frame flags ( h2_flag_ack ) {
-                            // Peer ACKing our SETTINGS — nothing to do.
-                        } {
-                            : ! H2Connection H2ConnErr ar
-                                ( __h2_apply_settings cur frame )
-                            ?? ar {
-                                T newc → { = cur newc }
-                                F e → { = err e  = ok F }
-                            }
-                            ? ok {
-                                : ! v H2FrameErr ack
-                                    ( h2_send_settings_ack . cur tcp )
-                                ?? ack {
-                                    T _ → {}
-                                    F fe → {
-                                        = err ( __h2_frame_err_to_conn fe )
-                                        = ok F
-                                    }
-                                }
+                        // SETTINGS (RFC 9113 §6.5)
+                        // - MUST be stream 0 → PROTOCOL_ERROR
+                        // - ACK MUST have zero-length payload → FRAME_SIZE_ERROR
+                        ? != sid 0 {
+                            = err H2ConnProtocol  = ok F
+                        } {}
+                        ? & ok != 0 & . frame flags ( h2_flag_ack ) {
+                            ? != ( vec_len [u] . frame payload ) 0 {
+                                = err H2ConnFrameSize  = ok F
                             } {}
-                        }
+                        } {}
+                        ? ok {
+                            ? != 0 & . frame flags ( h2_flag_ack ) {
+                                // Peer ACKing our SETTINGS — nothing to do.
+                            } {
+                                : ! H2Connection H2ConnErr ar
+                                    ( __h2_apply_settings cur frame )
+                                ?? ar {
+                                    T newc → { = cur newc }
+                                    F e → { = err e  = ok F }
+                                }
+                                ? ok {
+                                    : ! v H2FrameErr ack
+                                        ( h2_send_settings_ack . cur tcp )
+                                    ?? ack {
+                                        T _ → {}
+                                        F fe → {
+                                            = err ( __h2_frame_err_to_conn fe )
+                                            = ok F
+                                        }
+                                    }
+                                } {}
+                            }
+                        } {}
                     }
                     6 → {
                         // PING — must be 8 bytes + stream 0
@@ -700,8 +712,16 @@ $ `stdlib/ext/http2_hpack.nu`
                         } {}
                     }
                     7 → {
-                        // GOAWAY
-                        = done T
+                        // GOAWAY (RFC 9113 §6.8). MUST be stream 0.
+                        ? != sid 0 {
+                            = err H2ConnProtocol  = ok F
+                        } {}
+                        // Peer initiated graceful shutdown — keep
+                        // processing in-flight frames (PING, RST_STREAM,
+                        // in-progress streams) until the peer closes the
+                        // socket; only accepting NEW streams is forbidden.
+                        // The natural loop exit (peer half-close →
+                        // read_frame returns ReadShort) terminates us.
                     }
                     8 → {
                         // WINDOW_UPDATE
@@ -732,12 +752,33 @@ $ `stdlib/ext/http2_hpack.nu`
                         }
                     }
                     3 → {
-                        // RST_STREAM — peer aborted a stream
-                        : i idx ( __h2_find_stream_index cur sid )
-                        ? >= idx 0 {
-                            : H2Stream s ( __h2_get_stream cur idx )
-                            = . s state ( h2_state_closed )
-                            ( __h2_set_stream cur idx s )
+                        // RST_STREAM (RFC 9113 §6.4)
+                        // - MUST be stream != 0 → PROTOCOL_ERROR
+                        // - MUST have length 4 → FRAME_SIZE_ERROR
+                        // - MUST NOT be sent on idle stream → PROTOCOL_ERROR
+                        ? == sid 0 {
+                            = err H2ConnProtocol  = ok F
+                        } {}
+                        ? & ok != ( vec_len [u] . frame payload ) 4 {
+                            = err H2ConnFrameSize  = ok F
+                        } {}
+                        ? ok {
+                            : i idx ( __h2_find_stream_index cur sid )
+                            ? >= idx 0 {
+                                : H2Stream s ( __h2_get_stream cur idx )
+                                = . s state ( h2_state_closed )
+                                ( __h2_set_stream cur idx s )
+                            } {
+                                // Idle stream (we've never seen this id, and
+                                // id <= last_peer_stream_id would mean it was
+                                // closed — RST on either is PROTOCOL_ERROR).
+                                ? <= sid . cur last_peer_stream_id {
+                                    // Closed stream — RST_STREAM on a closed
+                                    // stream is a no-op per §5.1, ignore.
+                                } {
+                                    = err H2ConnProtocol  = ok F
+                                }
+                            }
                         } {}
                     }
                     1 → {
@@ -841,11 +882,30 @@ $ `stdlib/ext/http2_hpack.nu`
                         }
                     }
                     0 → {
-                        // DATA
-                        : i idx ( __h2_find_stream_index cur sid )
-                        ? < idx 0 {
+                        // DATA (RFC 9113 §6.1)
+                        // - MUST be stream != 0 → PROTOCOL_ERROR
+                        // - Stream must be open / half-closed (local);
+                        //   otherwise STREAM_CLOSED (mapped to connection
+                        //   PROTOCOL_ERROR here — h2spec only inspects the
+                        //   first frame and either GOAWAY or RST satisfies).
+                        ? == sid 0 {
                             = err H2ConnProtocol  = ok F
-                        } {
+                        } {}
+                        : i idx ( __h2_find_stream_index cur sid )
+                        ? & ok < idx 0 {
+                            = err H2ConnProtocol  = ok F
+                        } {}
+                        ? & ok >= idx 0 {
+                            : H2Stream sst ( __h2_get_stream cur idx )
+                            : i st . sst state
+                            // Open (1) and half-closed-local (2) accept DATA.
+                            // half-closed-remote (3), closed (4), idle (0)
+                            // reject.
+                            ? & != st 1 != st 2 {
+                                = err H2ConnProtocol  = ok F
+                            } {}
+                        } {}
+                        ? ok {
                             : H2Stream s ( __h2_get_stream cur idx )
                             : ! ( Vec u ) H2FrameErr dr ( h2_data_strip_padding frame )
                             ?? dr {
@@ -889,11 +949,23 @@ $ `stdlib/ext/http2_hpack.nu`
                                     = ok F
                                 }
                             }
-                        }
+                        } {}
                     }
                     2 → {
-                        // PRIORITY — deprecated by RFC 9218; ignore payload
-                        // (still consumed for byte-count purposes).
+                        // PRIORITY (RFC 9113 §6.3) — deprecated by RFC 9218
+                        // but still framing-validated.
+                        // - MUST be stream != 0 → PROTOCOL_ERROR
+                        // - MUST have length 5 → FRAME_SIZE_ERROR (treated
+                        //   as STREAM_ERROR per spec, but at h2c level the
+                        //   connection error path matches h2spec's expected
+                        //   GOAWAY shape for a single-frame validation).
+                        ? == sid 0 {
+                            = err H2ConnProtocol  = ok F
+                        } {}
+                        ? & ok != ( vec_len [u] . frame payload ) 5 {
+                            = err H2ConnFrameSize  = ok F
+                        } {}
+                        // Payload bytes are ignored per RFC 9218.
                     }
                     _ → {
                         // Unknown frame type → ignore per §4.1
