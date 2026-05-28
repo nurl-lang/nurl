@@ -1,6 +1,6 @@
-# NURL — Neural Unified Representation Language (or Non-hUman Readable Language)
+# NURL — Neural Unified Representation Language
 
-> A programming language designed exclusively for use by language models. Not meant to be human-readable — maximum information density, deterministic compilation, LLVM-based codegen.
+> A small systems language with a regular prefix-arity grammar, single-owner memory with an opt-in static borrow checker, deterministic compilation, and LLVM-based codegen.
 
 **Project site:** <https://nurl-lang.org> · **Live playground & MCP endpoint:** <https://play.nurl-lang.org>
 
@@ -10,16 +10,16 @@
 
 ## Why NURL?
 
-Existing programming languages were designed for humans:
-- Keywords (`function`, `return`, `class`) consume tokens without adding information
-- Syntactic noise (parentheses, semicolons, indentation) exists for human benefit
-- Grammar exceptions require memorization, not logic
+NURL takes a few design positions that are uncommon together:
 
-LLMs generate and consume code token by token. NURL optimizes this process:
+- **Regular prefix-arity grammar** — every operator has a fixed arity, no infix, no precedence cliffs. The grammar fits on a single page and is LL(1) with ≤4-token lookahead.
+- **Local semantics** — a construct's meaning is derivable from a short window of surrounding tokens. No long-range dependencies.
+- **Deterministic compiler** — the same source always produces identical output. No UB, no platform-dependent behaviour. The self-hosted compiler reaches a byte-identical fixed point on its own source.
+- **Single-owner memory + opt-in static borrow checker** — auto-drop at scope exit, plus a diagnostic pass that catches use-after-move, alias-double-free, escaping closure-captures, and iterator invalidation as hard errors.
+- **LLVM-based codegen, broad platform reach** — one pipeline targets Linux, macOS, Windows, wasm32-wasi, RISC-V, and ARM64.
 
 | Metric | Python | C | NURL |
 |---|---|---|---|
-| Tokens for "add two ints" | ~15 | ~12 | ~4 |
 | Grammar productions | ~100 | ~200 | ~50 |
 | Runtime performance | slow | fast | fast (LLVM) |
 | Target platforms | one | many | any LLVM target |
@@ -28,19 +28,16 @@ LLMs generate and consume code token by token. NURL optimizes this process:
 
 ## Design Principles
 
-### 1. Token efficiency above all
-Every syntactic construct is designed to minimize token count without information loss. A single character can carry full semantic meaning.
+### 1. Regular grammar
+NURL's grammar has no exceptions — the same construct always works the same way. The grammar fits on a single page.
 
-### 2. Regular grammar
-LLMs predict the next token from context. NURL's grammar has no exceptions — the same construct always works the same way. The grammar fits on a single page.
+### 2. Local semantics
+A construct's meaning is derivable from a short window of surrounding tokens. No long-range dependencies.
 
-### 3. Local semantics
-A token's meaning is derivable from at most 8 tokens of context. No long-range dependencies that could break during generation.
+### 3. Deterministic compiler
+The same source always produces identical output. No UB, no platform differences, no behavioral variation. Code behaves as written.
 
-### 4. Deterministic compiler
-The same source always produces identical output. No UB, no platform differences, no behavioral variation. LLMs can trust code behaves as written.
-
-### 5. Full platform support
+### 4. Full platform support
 One compilation pipeline → all target platforms without porting.
 
 ### Performance — head-to-head with Python, Rust, Node
@@ -496,31 +493,6 @@ surfaces as an "unexpected token" several tokens later.
 }
 
 % Shape Rect { @ area Rect r → i { ^ * . r w . r h } }
-```
-
----
-
-## Token efficiency in practice
-
-Comparison: sum the numbers 1–100.
-
-**Python (~46 tokens):**
-```python
-def sum_to_hundred():
-    total = 0
-    for i in range(1, 101):
-        total += i
-    return total
-```
-
-**NURL (~13 tokens):**
-```
-@ sumto i n → i {
-  : i acc 0
-  : i k   1
-  ~ <= k n { = acc + acc k  = k + k 1 }
-  ^ acc
-}
 ```
 
 ---

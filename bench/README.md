@@ -6,9 +6,9 @@ baseline NURL is often compared to), **Rust** (the closest peer in the
 LLVM-backed-systems-language design space), and **Node.js** (V8 JIT,
 the JavaScript point of comparison).
 
-Goal: replace the README's "Python ~46 tokens, C ~30 tokens, NURL ~13
-tokens" framing with wall-clock numbers and honest commentary about
-where NURL wins, where it ties, and where it loses.
+Goal: provide wall-clock numbers and honest commentary about
+where NURL wins, where it ties, and where it loses against peer
+languages — runnable on any developer's machine.
 
 `critic.md` §10 specifically called out NURL's "38× keep-alive speedup"
 claim as a NURL-vs-NURL number, not a NURL-vs-peers number. This
@@ -85,9 +85,6 @@ x86_64 box.
   ([`HTTP_RESULTS.md`](HTTP_RESULTS.md)) compares NURL only against
   Rust hyper + Node `http`. PRs adding `bench/http_server.go` (with
   a Go sibling in `run_http.sh`) are welcome.
-- A measurement of LLM agent throughput / token efficiency. That's a
-  whole different methodology — see the "controlled study" point in
-  `critic.md` §20.
 
 See [`RESULTS.md`](RESULTS.md) for the compute-benches numbers and
 [`HTTP_RESULTS.md`](HTTP_RESULTS.md) for the HTTP-server peer table,
