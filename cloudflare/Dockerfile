@@ -4,4 +4,4 @@
 #
 # Hindurable/nurl kuuntelee porttia 8000, joka on määritelty
 # src/index.ts:n NurlContainer.defaultPort-kentässä.
-FROM --platform=linux/amd64 docker.io/hindurable/nurl:latest
+FROM docker.io/hindurable/nurl:latest

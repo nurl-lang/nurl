@@ -43,7 +43,7 @@
 #                  removed on exit (default: stays so logs survive)
 #    --detach, -d  run detached — print container id and exit
 #    --build-only  build the image, do not run the container
-#    --name=NAME   docker container name (default: nurlapi-running)
+#    --name=NAME   docker container name (default: nurlapi)
 #    --help, -h    show this message
 # ============================================================
 set -euo pipefail
@@ -51,14 +51,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-IMAGE="nurlapi"
+IMAGE="hindurable/nurl"
 HOST_PORT=8000
 NO_CACHE=""
 RM_FLAG=""
 DETACH_FLAG=""
 BUILD_ONLY=0
 MODE="prod"           # prod (full Docker build+run) | bind (local compile + bind-mount run)
-CONTAINER_NAME="nurlapi-running"
+CONTAINER_NAME="nurlapi"
 
 # Subcommand: `bind` must be the first positional arg if present.
 if [[ "${1-}" == "bind" ]]; then

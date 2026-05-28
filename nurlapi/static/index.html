@@ -271,14 +271,33 @@ const audioHost = {
 
   async init(fftSize = 2048) {
     if (this.analyser) return true;
+    // navigator.mediaDevices is only exposed in **secure contexts** —
+    // i.e. https://, http://localhost, or http://127.0.0.1. Hitting the
+    // playground over a LAN IP / non-localhost hostname leaves it
+    // undefined, and the original "this browser cannot access
+    // getUserMedia" message hid the real cause (it's the origin, not
+    // the browser).
+    if (!window.isSecureContext) {
+      logLine(
+        `audio: mic blocked — page origin (${location.origin}) is not a secure context. ` +
+        `Open the playground via https:// or http://localhost:8000 / http://127.0.0.1:8000.`,
+        "stderr"
+      );
+      return false;
+    }
     if (!navigator.mediaDevices?.getUserMedia) {
-      logLine("audio: this browser cannot access getUserMedia", "stderr");
+      logLine(
+        `audio: navigator.mediaDevices.getUserMedia unavailable on ${location.origin} ` +
+        `(secureContext=${window.isSecureContext}, ua=${navigator.userAgent.slice(0,60)}). ` +
+        `Try Chrome/Firefox/Safari on https:// or localhost.`,
+        "stderr"
+      );
       return false;
     }
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (e) {
-      logLine("audio: microphone permission denied (" + e.name + ")", "stderr");
+      logLine(`audio: microphone permission denied (${e.name}: ${e.message})`, "stderr");
       return false;
     }
     this.ctx = new (window.AudioContext || window.webkitAudioContext)();

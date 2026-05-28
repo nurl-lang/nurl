@@ -25,6 +25,7 @@ $ `stdlib/ext/mcp_http.nu`
 @ get_runtime_win_o → String { ^ ( env_var_or `NURL_RUNTIME_WIN_O` `/opt/nurl/stdlib/runtime.win.o` ) }
 @ get_runtime_mac_o → String { ^ ( env_var_or `NURL_RUNTIME_MAC_O` `/opt/nurl/stdlib/runtime.mac.o` ) }
 @ get_zig → String { ^ ( env_var_or `NURL_ZIG` `/opt/zig/zig` ) }
+@ get_wasm_opt → String { ^ ( env_var_or `NURL_WASM_OPT` `wasm-opt` ) }
 @ get_work_root → String { ^ ( env_var_or `NURL_WORK_ROOT` `/opt/nurl` ) }
 @ get_static_dir → String { ^ ( env_var_or `NURL_STATIC_DIR` `/app/static` ) }
 @ get_readme_path → String { ^ ( env_var_or `NURL_README_PATH` `/opt/nurl/README.md` ) }
@@ -801,10 +802,57 @@ $ `stdlib/ext/mcp_http.nu`
 
                 ?? clang_res {
                   T c_out → {
-                    : i c_rc ( output_exit_code c_out )
+                    : ~ i c_rc ( output_exit_code c_out )
                     : s c_se ( output_stderr c_out )
                     : s n_se ( output_stderr n_out )
                     : String combined_stderr ( combine_stderr n_se c_se )
+
+                    // ── Asyncify wrap for canvas programs ──────────────────
+                    // canvas.sleep yields back to the browser event loop;
+                    // browser_wasi_shim drives this via `asyncify_get_state`
+                    // / `asyncify_start_unwind`. Without this pass the first
+                    // frame renders but the second `canvas_sleep` call hits
+                    // "asyncify_get_state is not a function". We restrict the
+                    // pass to `canvas.sleep` so the instrumentation overhead
+                    // stays minimal.
+                    ? & == c_rc 0 uses_canvas {
+                      : String async_name ( string_from ( string_data bin_name ) ) ( string_push_str async_name `.async.wasm` )
+                      : String asyncified_path ( path_join ( string_data build_dir ) ( string_data async_name ) )
+                      ( string_free async_name )
+                      : ( Vec s ) opt_args ( vec_new [s] )
+                      ( vec_push [s] opt_args `--asyncify` )
+                      ( vec_push [s] opt_args `--pass-arg=asyncify-imports@canvas.sleep` )
+                      ( vec_push [s] opt_args `-O2` )
+                      ( vec_push [s] opt_args ( string_data wasm_path ) )
+                      ( vec_push [s] opt_args `-o` )
+                      ( vec_push [s] opt_args ( string_data asyncified_path ) )
+                      : ! Output ProcessErr opt_res ( process_run ( string_data ( get_wasm_opt ) ) opt_args `` )
+                      ( vec_free [s] opt_args )
+                      ?? opt_res {
+                        T o_out → {
+                          : i opt_rc ( output_exit_code o_out )
+                          ? == opt_rc 0 {
+                            ( string_free wasm_path ) = wasm_path asyncified_path
+                          } {
+                            = c_rc opt_rc
+                            ? > ( string_len combined_stderr ) 0 { ( string_push_char combined_stderr 10 ) } {}
+                            ( string_push_str combined_stderr `wasm-opt --asyncify failed:\n` )
+                            ( string_push_str combined_stderr ( output_stderr o_out ) )
+                            ( string_free asyncified_path )
+                          }
+                          ( output_free o_out )
+                        }
+                        F _ → {
+                          = c_rc 127
+                          ? > ( string_len combined_stderr ) 0 { ( string_push_char combined_stderr 10 ) } {}
+                          ( string_push_str combined_stderr `wasm-opt not found at ` )
+                          ( string_push_str combined_stderr ( string_data ( get_wasm_opt ) ) )
+                          ( string_push_str combined_stderr ` — canvas requires binaryen (apt install binaryen)` )
+                          ( string_free asyncified_path )
+                        }
+                      }
+                    } {}
+
                     : Json res ( json_obj_new )
                     ( json_obj_set res `status` ( json_str_lit ? == c_rc 0 `ok` `error` ) )
                     // Match native handler's message text so the playground's
@@ -1321,6 +1369,8 @@ $ `stdlib/ext/mcp_http.nu`
   ( __oa_path paths `/stdlib-viewer`        `get`  `Browsable directory listing for stdlib/` `Lightweight HTML index linking to each .nu file.` )
   ( __oa_path paths `/tests-viewer`         `get`  `Browsable directory listing for compiler/tests/` `Lightweight HTML index linking to each .nu file.` )
 
+  ( __oa_path paths `/docs`                 `get`  `Swagger UI for this OpenAPI 3.1 schema` `Loads /openapi.json into swagger-ui-dist served from unpkg CDN.` )
+
   ( __oa_path paths `/mcp-info`             `get`  `MCP server connection info` `Tools, resources, prompts + drop-in mcp.json snippet.` )
   ( __oa_path paths `/mcp`                  `post` `Model Context Protocol JSON-RPC endpoint (Streamable HTTP)` `Same surface as /build*, /examples, /stdlib, /tests over MCP.` )
   ( __oa_path paths `/mcp`                  `get`  `MCP SSE channel (some clients open a GET as well)` `Returns a streaming SSE channel for server→client notifications.` )
@@ -1344,6 +1394,21 @@ $ `stdlib/ext/mcp_http.nu`
   : HttpResponse r ( response_text 200 ( string_data body ) )
   ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
   ( json_free doc ) ( string_free body )
+  ^ r
+}
+
+// ── Swagger UI shell served at /docs ──────────────────────────────
+//
+// Renders the OpenAPI 3.1 schema from /openapi.json. The Swagger UI
+// assets are pulled from a CDN (unpkg) — no extra files are bundled
+// into the image. index.html links here from the "Swagger" chip.
+@ h_docs_html HttpRequest req Params params → HttpResponse {
+  ( nurl_print `[srv] GET /docs\n` )
+  : String html ( string_with_cap 1024 )
+  ( string_push_str html `<!doctype html>\n<html lang="en"><head>\n<meta charset="utf-8" />\n<title>NURL Compiler API · Swagger UI</title>\n<meta name="viewport" content="width=device-width,initial-scale=1" />\n<link rel="icon" type="image/svg+xml" href="/favicon.svg" />\n<link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />\n<style>body{margin:0;background:#0f1115}</style>\n</head><body>\n<div id="swagger-ui"></div>\n<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" crossorigin></script>\n<script>\nwindow.onload = () => {\n  window.ui = SwaggerUIBundle({\n    url: '/openapi.json',\n    dom_id: '#swagger-ui',\n    deepLinking: true,\n    presets: [SwaggerUIBundle.presets.apis],\n    layout: 'BaseLayout'\n  });\n};\n</script>\n</body></html>\n` )
+  : HttpResponse r ( response_text 200 ( string_data html ) )
+  ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+  ( string_free html )
   ^ r
 }
 
@@ -3798,6 +3863,7 @@ $ `stdlib/ext/mcp_http.nu`
       ( router_get  r `/authorize`       \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_authorize req params ) } )
       ( router_post r `/token`           \ HttpRequest req Params params → HttpResponse { ^ ( h_oauth_token     req params ) } )
       ( router_get  r `/openapi.json`    \ HttpRequest req Params params → HttpResponse { ^ ( h_openapi_json   req params ) } )
+      ( router_get  r `/docs`            \ HttpRequest req Params params → HttpResponse { ^ ( h_docs_html      req params ) } )
       ( router_any  r `DELETE` `/mcp`    \ HttpRequest req Params params → HttpResponse { ^ ( h_mcp        req params ) } )
       ( router_get  r `/favicon.ico`     \ HttpRequest req Params params → HttpResponse { ^ ( h_favicon     req params ) } )
       ( router_get  r `/favicon.svg`     \ HttpRequest req Params params → HttpResponse { ^ ( h_favicon     req params ) } )
