@@ -286,6 +286,28 @@ byte-identical IR). `./build.sh` corpus + sanitiser corpus green.
   the "best-known" hand-captured figures; `RESULTS_CI.md` is the
   reproducible falsifiable baseline anyone can compare against.
 
+### Tokeniser-aware token-efficiency baseline
+
+- **`bench/token_efficiency.py` + `bench/TOKEN_EFFICIENCY.md`** —
+  honest, BPE-aware counterpart to the older whitespace-atom claim
+  ('Python ~15 / C ~12 / NURL ~4 tokens for add two ints'). Counts
+  real BPE tokens using `tiktoken`'s `cl100k_base`
+  (GPT-3.5 / GPT-4 / Claude legacy), `o200k_base` (GPT-4o /
+  o-series), and `gpt2` (Llama-3 byte-pair proxy — Llama 3's own
+  tokeniser is HF-gated) against every cross-language benchmark in
+  `bench/`. The result is honest: NURL/Python BPE-aware token-count
+  ratios on these three benchmarks are **0.89–0.90× (LCG,
+  modern encoders) / 2.08–2.25× (sieve) / 1.70–1.88×
+  (json_parse)** — small win on the operator-heavy inner-loop case,
+  meaningful loss on the cases the BPE encoders were trained on
+  Python-heavy. The report's "How to read" section names the two
+  reasons (NURL not in any tokeniser's corpus; atom-count framing
+  inflated NURL's apparent efficiency) and the two caveats (small
+  benchmark set; Rust's Serde tokens dominate `json_parse`).
+- Closes TODO Tier 2.5. The original README claim was removed in
+  commit `1277711`; this lands the BPE-aware replacement as a
+  bench artifact rather than a marketing line.
+
 ### Borrow checker
 
 - **`--strict-borrowck` (off by default)** — opt-in mode that

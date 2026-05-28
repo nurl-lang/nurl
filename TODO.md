@@ -69,10 +69,10 @@ Lähde: ulkoinen tekninen review (47/100). Tärkein punainen lippu: **`play.nurl
     - Sanitizer-build-skripti `/tmp/build_san.sh` (ASan+UBSan, native runtime.o ilman LTO:ta) — käytä bug-debuggaukseen
     - Ajo: `/tmp/h2c_san > /tmp/svr.log 2>&1 &; h2spec -h 127.0.0.1 -p 8443 -o 3 > /tmp/h2spec.log 2>&1`
 
-- [ ] **Julkaise tokenizer-aware token-tehokkuusvertailu.**
-  - [ ] Aja Claude (cl100k variant), GPT-4o (o200k), Llama 3 BPE-tokenizerit ekvivalenttia NURL/Python/C/Rust-koodia vasten eri kokoluokissa
-  - [ ] Julkaise todelliset token-määrät — nykyinen "~15 vs ~4 tokens" laskee whitespace-eroteltuja atomeja, ei BPE-subwordeja
-  - [ ] Realistinen tarina luultavasti edelleen NURL-suuntainen, mutta vähemmän dramaattinen
+- [x] **Julkaise tokenizer-aware token-tehokkuusvertailu.** (Commit `<seuraava>`)
+  - [x] `bench/token_efficiency.py` + `bench/TOKEN_EFFICIENCY.md`: cl100k_base + o200k_base + gpt2 (Llama-3 proxy) tiktoken-encoderit, ekvivalentit NURL/Python/Rust/Node-lähteet `bench/`-kansiosta
+  - [x] Tulokset rehellisesti: NURL/Python BPE-token-suhde 0.89–0.90× (lcg), 2.08–2.25× (sieve), 1.70–1.88× (json_parse). Alkuperäinen "Python ~15 / NURL ~4 tokens" -framing oli optimisti — Pythonin BPE-merge-etu on iso eikä NURL voi voittaa sitä korpuksen ulkopuolella.
+  - [x] "How to read" -osio nimeää syyt (NURL ei ole minkään tokenizerin korpuksessa; atom-count-laskenta yliarvioi NURL:in tehokkuutta) ja kaveatit (pieni benchmark-otos; Rustin Serde dominoi json_parse:n token-määrän).
 
 - [x] **Syvennä borrow-checker (Miri-ekvivalentti memory check).** (Commit `<seuraava>`)
   - [x] `--strict-borrowck` -mode (off by default) joka aktivoi kaksi lisätarkistusta
