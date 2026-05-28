@@ -8,12 +8,12 @@ Lähde: ulkoinen tekninen review (47/100). Tärkein punainen lippu: **`play.nurl
 
 - [x] ~~**Pushaa loput repoa `main`iin.**~~ — Tarkistettu 2026-05-28: kaikki reviewerin "puuttuvaksi" väittämät artefaktit ovat jo `origin/main`issa (`bench/`, `tools/{nurlfmt,nurl-lsp,nurlpkg}`, `BORROW.md`, `docs/{MEMORY,spec}.md`, `.github/workflows/ci.yml`). Reviewer katsoi väärää lähdettä — tämä oli iso punainen lippu joka ei ollut todellinen.
 
-- [ ] **Julkaise reprodusoitavat benchmark-skriptit.**
-  - [ ] `bench/run.sh` (yhden komennon ajo)
-  - [ ] Lähdetiedostot per kieli (NURL/Python/Rust/Node, ja Go kun asennettu)
-  - [ ] CI-job kiinteällä speksillä (esim. GitHub Actions `ubuntu-latest` 2-vCPU) joka kirjoittaa taulukon versioituun tiedostoon
-  - [ ] Tavoite: kuka tahansa contributor saa `make bench`-ajolla 20 %:n tarkkuudella julkaistut luvut
-  - [ ] HTTP-bench `oha 1.8.0`: dokumentoi 8-worker poolin koko ja se että C=10 piikki johtuu pool-koosta, ei yleisestä paremmuudesta hyperiin nähden
+- [x] **Julkaise reprodusoitavat benchmark-skriptit.** (Commit `7f2d0da`)
+  - [x] `bench/run.sh` (yhden komennon ajo) — ollut olemassa, vahvistettu paikallisesti vihreäksi
+  - [x] Lähdetiedostot per kieli (NURL/Python/Rust/Node — Go vielä asentamatta runneriin)
+  - [x] CI-job kiinteällä speksillä — `.github/workflows/bench.yml` ajaa `bench/run.sh`:n `ubuntu-latest`:llä (2-vCPU / 7 GiB), uploadaa artifaktina + committaa `bench/RESULTS_CI.md`:n manualilla / viikoittain
+  - [x] Tavoite: kuka tahansa contributor saa CI-ajolla baseline-luvut joita vasten verrata; `RESULTS.md` säilyy "best-known" handcaptured-lukuna oikealla raudalla, `RESULTS_CI.md` reprodusoitavana baselinena
+  - [ ] HTTP-bench `oha 1.8.0` -dokumentointi: pool-koko (8) + se että C=10 piikki johtuu siitä eikä yleisestä paremmuudesta hyperiin nähden — ei vielä lisätty `HTTP_RESULTS.md`:hen
 
 - [ ] **Hanki yksi ulkoinen contributor jonka PR koskee kääntäjää.** Bus factor 1 on dominoiva riski; kunnes toinen ihminen on mergennyt ei-triviaalin compiler-muutoksen, kaikki muu insinöörityö riippuu yhdestä henkilöstä.
 
