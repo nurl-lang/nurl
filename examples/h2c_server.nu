@@ -30,6 +30,13 @@ $ `stdlib/ext/http2_server.nu`
                 : !TcpConn NetErr ar ( tcp_accept listener )
                 ?? ar {
                     T conn → {
+                        // Per-connection read timeout — h2spec issues
+                        // many quick tests and the accept loop is
+                        // sequential, so a peer that never sends a
+                        // close after a partial flow would otherwise
+                        // wedge every subsequent test. 5 s is far
+                        // longer than any well-behaved h2 client needs.
+                        ( tcp_set_timeout conn 5000 )
                         : ( @ HttpResponse HttpRequest ) h
                             \ HttpRequest req → HttpResponse { ^ ( h2c_handler req ) }
                         : ! v H2ConnErr sr ( http2_serve conn h )

@@ -315,13 +315,16 @@ $ `stdlib/ext/http2_hpack.nu`
     : *u p ( vec_data [u] . f payload )
     : ~ i k 0
     ~ < k n {
-        : i id0 # i . p k
-        : i id1 # i . p + k 1
+        // Mask each byte with & 255: `# i u` sign-extends a u-byte, so
+        // bytes ≥ 0x80 would otherwise propagate negative bits into the
+        // shift-and-or assembly and corrupt `value`.
+        : i id0 & # i . p k 255
+        : i id1 & # i . p + k 1 255
         : i id + << id0 8 id1
-        : i v0 # i . p + k 2
-        : i v1 # i . p + k 3
-        : i v2 # i . p + k 4
-        : i v3 # i . p + k 5
+        : i v0 & # i . p + k 2 255
+        : i v1 & # i . p + k 3 255
+        : i v2 & # i . p + k 4 255
+        : i v3 & # i . p + k 5 255
         : i value + + + << v0 24 << v1 16 << v2 8 v3
         ?? id {
             1 → { = . cur peer_header_table_size value }
@@ -373,6 +376,29 @@ $ `stdlib/ext/http2_hpack.nu`
 // stripping both, the remaining bytes are HPACK-encoded header block.
 // CONTINUATION frames append to the in-progress stream's
 // header_block buffer until END_HEADERS arrives.
+
+// When HEADERS carries the PRIORITY flag, the priority block (5 bytes
+// — 4-byte stream dependency with the top bit as exclusive-flag + 1-byte
+// weight) sits right after any PADDED pad-length octet. Returns the
+// 31-bit dependency value masked of the exclusive-bit, or -1 if the
+// flag is not set / the payload is malformed (caller falls back on its
+// own length check).
+@ __h2_headers_priority_dep H2Frame f → i {
+    ? == 0 & . f flags ( h2_flag_priority ) { ^ -1 } {}
+    : i n ( vec_len [u] . f payload )
+    : *u p ( vec_data [u] . f payload )
+    : ~ i off 0
+    ? != 0 & . f flags ( h2_flag_padded ) {
+        ? < n 1 { ^ -1 } {}
+        = off 1
+    } {}
+    ? < - n off 5 { ^ -1 } {}
+    : i d0 # i . p + off 0
+    : i d1 # i . p + off 1
+    : i d2 # i . p + off 2
+    : i d3 # i . p + off 3
+    ^ + + + << & d0 127 24 << & d1 255 16 << & d2 255 8 & d3 255
+}
 
 @ __h2_extract_headers_payload H2Frame f → ! ( Vec u ) H2ConnErr {
     : i n ( vec_len [u] . f payload )
@@ -435,6 +461,120 @@ $ `stdlib/ext/http2_hpack.nu`
         F _ → {
             ^ @ ! H2Connection H2ConnErr { F H2ConnCompression }
         }
+    }
+}
+
+// ── Request header-block validation (RFC 9113 §8.3, §8.2.1, §8.2.2) ──
+//
+// h2spec's "malformed request" suite checks several invariants on a
+// decoded HEADERS block before any application code sees it. Per §8.3
+// these MUST yield PROTOCOL_ERROR (stream-level by spec, connection-
+// level here keeps the existing error-handling shape; h2spec accepts
+// either GOAWAY or RST_STREAM as the response). Each predicate is
+// evaluated independently so the first failure wins.
+
+@ __h2_is_pseudo s name → b {
+    ^ & != 0 ( nurl_str_len name ) == 58 ( nurl_str_get name 0 )
+}
+
+@ __h2_name_has_uppercase s name → b {
+    : i n ( nurl_str_len name )
+    : ~ i k 0
+    : ~ b found F
+    ~ & ! found < k n {
+        : i c & ( nurl_str_get name k ) 255
+        ? & >= c 65 <= c 90 { = found T } {}
+        = k + k 1
+    }
+    ^ found
+}
+
+@ __h2_is_connection_specific s name → b {
+    ? | | | != 0 ( __h2_eq_ci name `connection` )
+          != 0 ( __h2_eq_ci name `proxy-connection` )
+          != 0 ( __h2_eq_ci name `keep-alive` )
+          != 0 ( __h2_eq_ci name `transfer-encoding` )
+    { ^ T } {}
+    ^ F
+}
+
+// TE is permitted ONLY with the exact value "trailers" (RFC 9113 §8.2.2).
+@ __h2_te_violates s name s value → b {
+    ? == 0 ( __h2_eq_ci name `te` ) { ^ F } {}
+    ? != 0 ( __h2_eq_ci value `trailers` ) { ^ F } {}
+    ^ T
+}
+
+@ __h2_validate_request_headers H2Stream s → H2ConnErr {
+    : ( Vec Header ) hdrs . s decoded_headers
+    : i nh ( vec_len [Header] hdrs )
+    : *Header hp ( vec_data [Header] hdrs )
+    : ~ b regular_seen F
+    : ~ i n_method 0
+    : ~ i n_scheme 0
+    : ~ i n_path 0
+    : ~ i n_authority 0
+    : ~ b path_empty F
+    : ~ b bad F
+    : ~ i k 0
+    ~ & ! bad < k nh {
+        : Header h . hp k
+        : s nm ( string_data . h name )
+        : s vl ( string_data . h value )
+        : b is_pseudo ( __h2_is_pseudo nm )
+        // §8.2.1 — names MUST be lowercase
+        ? ( __h2_name_has_uppercase nm ) { = bad T } {}
+        ? & ! bad is_pseudo {
+            // §8.3 — pseudo-headers MUST precede regular ones
+            ? regular_seen { = bad T } {
+                ? != 0 ( __h2_eq_ci nm `:method` ) {
+                    = n_method + n_method 1
+                } {
+                ? != 0 ( __h2_eq_ci nm `:scheme` ) {
+                    = n_scheme + n_scheme 1
+                } {
+                ? != 0 ( __h2_eq_ci nm `:path` ) {
+                    = n_path + n_path 1
+                    ? == 0 ( nurl_str_len vl ) { = path_empty T } {}
+                } {
+                ? != 0 ( __h2_eq_ci nm `:authority` ) {
+                    = n_authority + n_authority 1
+                } {
+                    // Unknown pseudo OR a response-only pseudo
+                    // (e.g. :status) in a request block.
+                    = bad T
+                } } } }
+            }
+        } {}
+        ? & ! bad ! is_pseudo {
+            = regular_seen T
+            // §8.2.2 — connection-specific headers MUST NOT be present
+            ? ( __h2_is_connection_specific nm ) { = bad T } {}
+            // §8.2.2 — TE permitted only with value "trailers"
+            ? & ! bad ( __h2_te_violates nm vl ) { = bad T } {}
+        } {}
+        = k + k 1
+    }
+    ? bad { ^ # H2ConnErr H2ConnProtocol } {}
+    // §8.3 — required pseudo-headers + uniqueness for non-CONNECT requests.
+    // (CONNECT special-cases :scheme / :path; we don't implement CONNECT.)
+    ? | | | > n_method 1 > n_scheme 1 > n_path 1 > n_authority 1
+        { ^ # H2ConnErr H2ConnProtocol } {}
+    ? | | == n_method 0 == n_scheme 0 == n_path 0
+        { ^ # H2ConnErr H2ConnProtocol } {}
+    ? path_empty { ^ # H2ConnErr H2ConnProtocol } {}
+    ^ # H2ConnErr H2ConnOther  // sentinel "no error"; callers check via the wrapper
+}
+
+// Wrapper returning the optional-error shape callers consume. The
+// H2ConnOther tag is reused as the "no validation error" sentinel
+// since H2ConnOther is only ever produced by this validator on the
+// happy path.
+@ __h2_check_request_headers H2Stream s → ? H2ConnErr {
+    : H2ConnErr e ( __h2_validate_request_headers s )
+    ?? e {
+        H2ConnOther → { ^ @ ? H2ConnErr { F # H2ConnErr H2ConnOther } }
+        _           → { ^ @ ? H2ConnErr { T e } }
     }
 }
 
@@ -729,24 +869,53 @@ $ `stdlib/ext/http2_hpack.nu`
                             = err H2ConnFrameSize  = ok F
                         } {
                             : *u wp ( vec_data [u] . frame payload )
-                            : i w0 # i . wp 0
-                            : i w1 # i . wp 1
-                            : i w2 # i . wp 2
-                            : i w3 # i . wp 3
+                            : i w0 & # i . wp 0 255
+                            : i w1 & # i . wp 1 255
+                            : i w2 & # i . wp 2 255
+                            : i w3 & # i . wp 3 255
                             : i inc + + + << & w0 127 24 << w1 16 << w2 8 w3
                             ? == inc 0 {
                                 = err H2ConnProtocol  = ok F
                             } {
                                 ? == sid 0 {
-                                    = . cur conn_send_window
-                                        + . cur conn_send_window inc
+                                    : i new_w + . cur conn_send_window inc
+                                    // §6.9.1 — window MUST NOT exceed 2^31-1.
+                                    ? > new_w ( h2_max_window_size ) {
+                                        = err H2ConnFlowControl  = ok F
+                                    } {
+                                        = . cur conn_send_window new_w
+                                    }
                                 } {
                                     : i idx ( __h2_find_stream_index cur sid )
                                     ? >= idx 0 {
                                         : H2Stream s ( __h2_get_stream cur idx )
-                                        = . s send_window + . s send_window inc
-                                        ( __h2_set_stream cur idx s )
-                                    } {}
+                                        : i new_sw + . s send_window inc
+                                        ? > new_sw ( h2_max_window_size ) {
+                                            // §6.9.1 — per-stream window
+                                            // overflow is a STREAM error,
+                                            // not a connection error: send
+                                            // RST_STREAM and close just this
+                                            // stream, keep the connection up.
+                                            : ! v H2FrameErr rs
+                                                ( h2_send_rst_stream . cur tcp sid
+                                                  ( h2_err_flow_control_error ) )
+                                            ?? rs { T _ → {} F _ → {} }
+                                            = . s state ( h2_state_closed )
+                                            ( __h2_set_stream cur idx s )
+                                        } {
+                                            = . s send_window new_sw
+                                            ( __h2_set_stream cur idx s )
+                                        }
+                                    } {
+                                        // §5.1 — WINDOW_UPDATE on an idle
+                                        // stream (sid > last_peer_stream_id
+                                        // AND never opened) is PROTOCOL_ERROR.
+                                        // A closed stream (sid <= last_peer_*)
+                                        // silently no-ops.
+                                        ? > sid . cur last_peer_stream_id {
+                                            = err H2ConnProtocol  = ok F
+                                        } {}
+                                    }
                                 }
                             }
                         }
@@ -786,7 +955,15 @@ $ `stdlib/ext/http2_hpack.nu`
                         ? | <= sid 0 == 0 & sid 1 {
                             // Stream ID must be positive AND odd (client-initiated).
                             = err H2ConnProtocol  = ok F
-                        } {
+                        } {}
+                        // §5.3.1 — stream MUST NOT depend on itself.
+                        ? ok {
+                            : i hdep ( __h2_headers_priority_dep frame )
+                            ? & >= hdep 0 == hdep sid {
+                                = err H2ConnProtocol  = ok F
+                            } {}
+                        } {}
+                        ? ok {
                             ? <= sid . cur last_peer_stream_id {
                                 // Reused or out-of-order stream ID.
                                 = err H2ConnProtocol  = ok F
@@ -830,6 +1007,18 @@ $ `stdlib/ext/http2_hpack.nu`
                                                     T newc → { = cur newc }
                                                     F e → { = err e  = ok F }
                                                 }
+                                                ? ok {
+                                                    : i vidx ( __h2_find_stream_index cur sid )
+                                                    ? >= vidx 0 {
+                                                        : H2Stream vs ( __h2_get_stream cur vidx )
+                                                        : ? H2ConnErr verr
+                                                            ( __h2_check_request_headers vs )
+                                                        ?? verr {
+                                                            T ve → { = err ve = ok F }
+                                                            F _ → {}
+                                                        }
+                                                    } {}
+                                                } {}
                                                 ? & ok . new_s end_stream_received {
                                                     : ! H2Connection H2ConnErr disp
                                                         ( __h2_dispatch cur sid handler )
@@ -844,7 +1033,7 @@ $ `stdlib/ext/http2_hpack.nu`
                                     }
                                 }
                             }
-                        }
+                        } {}
                     }
                     9 → {
                         // CONTINUATION
@@ -869,6 +1058,18 @@ $ `stdlib/ext/http2_hpack.nu`
                                         T newc → { = cur newc }
                                         F e → { = err e  = ok F }
                                     }
+                                    ? ok {
+                                        : i vidx ( __h2_find_stream_index cur sid )
+                                        ? >= vidx 0 {
+                                            : H2Stream vs ( __h2_get_stream cur vidx )
+                                            : ? H2ConnErr verr
+                                                ( __h2_check_request_headers vs )
+                                            ?? verr {
+                                                T ve → { = err ve = ok F }
+                                                F _ → {}
+                                            }
+                                        } {}
+                                    } {}
                                     ? & ok . s end_stream_received {
                                         : ! H2Connection H2ConnErr disp
                                             ( __h2_dispatch cur sid handler )
@@ -959,13 +1160,37 @@ $ `stdlib/ext/http2_hpack.nu`
                         //   as STREAM_ERROR per spec, but at h2c level the
                         //   connection error path matches h2spec's expected
                         //   GOAWAY shape for a single-frame validation).
+                        // - §5.3.1 — a stream cannot depend on itself.
                         ? == sid 0 {
                             = err H2ConnProtocol  = ok F
                         } {}
                         ? & ok != ( vec_len [u] . frame payload ) 5 {
                             = err H2ConnFrameSize  = ok F
                         } {}
-                        // Payload bytes are ignored per RFC 9218.
+                        ? ok {
+                            : *u prp ( vec_data [u] . frame payload )
+                            : i d0 # i . prp 0
+                            : i d1 # i . prp 1
+                            : i d2 # i . prp 2
+                            : i d3 # i . prp 3
+                            // Mask the exclusive-bit (top bit of d0).
+                            : i dep + + + << & d0 127 24
+                                        << & d1 255 16
+                                        << & d2 255 8
+                                           & d3 255
+                            ? == dep sid {
+                                = err H2ConnProtocol  = ok F
+                            } {}
+                        } {}
+                    }
+                    5 → {
+                        // PUSH_PROMISE (RFC 9113 §6.6). Server advertises
+                        // SETTINGS_ENABLE_PUSH=0, so the peer (client)
+                        // MUST NOT send PUSH_PROMISE; doing so is a
+                        // PROTOCOL_ERROR. PUSH_PROMISE from a client is
+                        // also semantically nonsensical — only servers
+                        // are allowed to push streams.
+                        = err H2ConnProtocol  = ok F
                     }
                     _ → {
                         // Unknown frame type → ignore per §4.1

@@ -413,6 +413,10 @@ $ `stdlib/ext/http.nu`
     : ~ b done F
     : ~ b ok T
     : ~ HpackErr last_err HpackOther
+    // RFC 7541 §4.2 — dynamic table size update MUST occur at the start
+    // of the header block, never after a literal/indexed field. Track
+    // whether any non-size-update has been processed.
+    : ~ b seen_field F
     ~ & ok < off n {
         : *u p ( vec_data [u] buf )
         : i b0 # i . p off
@@ -427,6 +431,7 @@ $ `stdlib/ext/http.nu`
                         F _ → { = last_err HpackBadIndex  = ok F }
                     }
                     = off + off . iv consumed
+                    = seen_field T
                 }
                 F e → { = last_err e  = ok F }
             }
@@ -443,19 +448,40 @@ $ `stdlib/ext/http.nu`
                         ( string_free . lr_ value )
                         = cur . lr_ dyn
                         = off + off . lr_ consumed
+                        = seen_field T
                     }
                     F e → { = last_err e  = ok F }
                 }
             } {
                 ? != 0 & b0 32 {
-                    // 6.3 Dynamic Table Size Update
-                    : ! HpackInt HpackErr ir ( hpack_decode_int buf off 5 )
-                    ?? ir {
-                        T iv → {
-                            = cur ( hpack_dyn_set_max cur . iv value )
-                            = off + off . iv consumed
+                    // 6.3 Dynamic Table Size Update — MUST be at the very
+                    // start of the header block (§4.2). After any field
+                    // has been decoded, a size update is a malformed
+                    // representation.
+                    ? seen_field {
+                        = last_err HpackOther  = ok F
+                    } {
+                        : ! HpackInt HpackErr ir ( hpack_decode_int buf off 5 )
+                        ?? ir {
+                            T iv → {
+                                // §4.2 — new size MUST be ≤ our advertised
+                                // SETTINGS_HEADER_TABLE_SIZE. We advertise
+                                // h2_default_header_table_size (4096) and
+                                // never raise it in our SETTINGS, so use
+                                // that as the fixed upper bound. (The
+                                // current table's max_size can be lower
+                                // than the ceiling because of a previous
+                                // size update, but peers may still raise
+                                // back up to the ceiling.)
+                                ? > . iv value ( h2_default_header_table_size ) {
+                                    = last_err HpackOther  = ok F
+                                } {
+                                    = cur ( hpack_dyn_set_max cur . iv value )
+                                    = off + off . iv consumed
+                                }
+                            }
+                            F e → { = last_err e  = ok F }
                         }
-                        F e → { = last_err e  = ok F }
                     }
                 } {
                     // 6.2.2 (top 4 = 0000) or 6.2.3 (top 4 = 0001) —
@@ -470,6 +496,7 @@ $ `stdlib/ext/http.nu`
                             ( string_free . lr_ value )
                             = cur . lr_ dyn
                             = off + off . lr_ consumed
+                            = seen_field T
                         }
                         F e → { = last_err e  = ok F }
                     }
