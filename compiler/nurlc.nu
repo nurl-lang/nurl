@@ -9599,7 +9599,6 @@
     }
     ( nurl_lex_advance lex )
     ( nurl_print ` }\n\n` )
-    // Register struct name so it is recognised as a named type in enum payloads etc.
     ( nurl_sym_def syms sname ( nurl_str_cat `%` sname ) )
     ( nurl_sym_def syms ( nurl_str_cat sname `__is_type` ) `1` )
     ( nurl_sym_def syms ( nurl_str_cat sname `__field_count` ) ( nurl_str_int fidx ) )
@@ -11102,7 +11101,26 @@
 
 // scan_fn_sigs: register return types of all @ and & declarations.
 @ scan_fn_sigs i lex i syms → v {
+    // Brace-depth tracker. A `:` struct decl body or any `@`-function body
+    // contains `{ ... }`; the `@` inside a closure-shaped struct field
+    // type (e.g. `( @ HttpResponse HttpRequest ) handler`) used to fire
+    // the function-decl branch below and desync the entire param walk,
+    // taking the next ident as a phantom `fname` and the next type as
+    // its return type — silently writing a wrong syms[<type>] mapping
+    // that later showed up at gen_match's payload reconstruction as a
+    // mis-typed `inttoptr i64 ... to %WrongStruct*` against any `! T E`
+    // result whose T-arm was the misregistered name. Only process
+    // declarations at depth 0; advance silently inside `{ ... }`.
+    : ~ i bdepth 0
     ~ != ( nurl_lex_type lex ) TT_EOF {
+        ? == ( nurl_lex_type lex ) TT_LBRACE
+        { = bdepth + bdepth 1 ( nurl_lex_advance lex ) }
+        { ? == ( nurl_lex_type lex ) TT_RBRACE
+            { = bdepth - bdepth 1 ( nurl_lex_advance lex ) }
+            {
+        ? != bdepth 0
+        { ( nurl_lex_advance lex ) }
+        {
         // Grammar v2.0: a top-level decl may be prefixed by `pub` to
         // mark it public. The flag is recorded in g_pending_pub and
         // consumed by vis_record_fn / vis_take_pending_pub at the
@@ -11284,6 +11302,7 @@
             { ( scan_impl_decl lex syms ) }
             { ( nurl_lex_advance lex ) }
         }
+        } } }
     }
 }
 
