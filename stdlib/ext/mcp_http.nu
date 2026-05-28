@@ -377,7 +377,12 @@ s host i port
     : !TcpListener NetErr lr ( tcp_listen host port )
     ?? lr {
         T listener → {
-            : ( @ HttpResponse HttpRequest ) handler ( mcp_http_handler dispatch )
+            // Wrap dispatch in an explicit closure rather than passing
+            // the parameter through directly. The bare @-fn ↔ closure
+            // coercion in argument position currently fails the
+            // type-checker (see GOTCHAS.md item 11) even when the
+            // source value is itself a closure-typed parameter.
+            : ( @ HttpResponse HttpRequest ) handler ( mcp_http_handler \ Json r → ?Json { ^ ( dispatch r ) } )
             : HttpServer srv ( server_new listener handler )
             : !v NetErr rr ( server_run srv )
             ( server_stop srv )

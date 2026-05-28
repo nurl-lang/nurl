@@ -7,5 +7,5 @@ IMAGE="hindurable/nurl:latest"
 
 cd "$(dirname "$0")"
 
-docker build -f api/Dockerfile -t "$IMAGE" .
+docker build -f nurlapi/Dockerfile -t "$IMAGE" .
 docker push "$IMAGE"

@@ -198,7 +198,6 @@ $ `stdlib/ext/json.nu`
 }
 
 // ── Serialisation ─────────────────────────────────────────────────────
-
 // Build the on-the-wire byte sequence for `r`. The output is fully
 // owned — caller frees with `( vec_free [u] out )`. Content-Length is
 // auto-prepended unless the response carries a Transfer-Encoding
@@ -237,7 +236,12 @@ $ `stdlib/ext/json.nu`
 
     // ── Blank line + body ──
     ( bytes_extend_str out `\r\n` )
-    ( vec_extend [u] out . r body )
+    // memcpy fast path — generic `vec_extend [u]` does a per-element
+    // copy that's the dominant cost for large response bodies
+    // (e.g. 330 KB base64 wasm payload). Replaced 2026-05-27 after
+    // profiling nurlapi /build_wasm showed ~2.5 s of the 3 s total
+    // wall-time was spent in this single byte-by-byte loop.
+    ( bytes_extend_bytes out . r body )
 
     ^ out
 }

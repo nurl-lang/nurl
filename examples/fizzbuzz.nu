@@ -24,7 +24,10 @@
         { ( nurl_print `Fizz\n` ) }
         ? div5
         { ( nurl_print `Buzz\n` ) }
-        { ( nurl_print ( nurl_str_cat ( nurl_str_int i ) `\n` ) ) }
+        // nurl_str_cat lives in stdlib/core/string.nu — call without
+        // importing it would emit `@nurl_str_cat` without a `declare`
+        // and fail at link. Use the runtime's nurl_print_int instead.
+        { ( nurl_print_int i ) ( nurl_print `\n` ) }
 
         = i + i 1
     }

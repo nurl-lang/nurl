@@ -271,14 +271,33 @@ const audioHost = {
 
   async init(fftSize = 2048) {
     if (this.analyser) return true;
+    // navigator.mediaDevices is only exposed in **secure contexts** —
+    // i.e. https://, http://localhost, or http://127.0.0.1. Hitting the
+    // playground over a LAN IP / non-localhost hostname leaves it
+    // undefined, and the original "this browser cannot access
+    // getUserMedia" message hid the real cause (it's the origin, not
+    // the browser).
+    if (!window.isSecureContext) {
+      logLine(
+        `audio: mic blocked — page origin (${location.origin}) is not a secure context. ` +
+        `Open the playground via https:// or http://localhost:8000 / http://127.0.0.1:8000.`,
+        "stderr"
+      );
+      return false;
+    }
     if (!navigator.mediaDevices?.getUserMedia) {
-      logLine("audio: this browser cannot access getUserMedia", "stderr");
+      logLine(
+        `audio: navigator.mediaDevices.getUserMedia unavailable on ${location.origin} ` +
+        `(secureContext=${window.isSecureContext}, ua=${navigator.userAgent.slice(0,60)}). ` +
+        `Try Chrome/Firefox/Safari on https:// or localhost.`,
+        "stderr"
+      );
       return false;
     }
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (e) {
-      logLine("audio: microphone permission denied (" + e.name + ")", "stderr");
+      logLine(`audio: microphone permission denied (${e.name}: ${e.message})`, "stderr");
       return false;
     }
     this.ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -483,8 +502,23 @@ async function build() {
     if (typeof d === "object" && d !== null) {
       if (d.stage) logLine(`stage: ${d.stage}`, "dim");
       if (typeof d.returncode === "number") logLine(`exit: ${d.returncode}`, "dim");
-      if (d.stderr)        { section("stderr"); log(d.stderr, "stderr"); }
-      if (d.nurlc_stderr)  { section("nurlc stderr"); log(d.nurlc_stderr, "stderr"); }
+      if (typeof d.nurlc_returncode === "number") logLine(`nurlc exit: ${d.nurlc_returncode}`, "dim");
+      if (typeof d.clang_returncode === "number") logLine(`clang exit: ${d.clang_returncode}`, "dim");
+      // Surface every stderr stream we got. Earlier versions only rendered
+      // d.stderr + d.nurlc_stderr, so any failure that lived purely in
+      // clang_stderr (e.g. wasm-ld missing canvas_open, undefined-value
+      // IR errors) produced an empty "BUILD FAILED" with no diagnostic.
+      if (d.stderr)        { section("stderr");        log(d.stderr,        "stderr"); }
+      else if (d.nurlc_stderr || d.clang_stderr) {
+        // Fall back to the per-stage streams when the server didn't ship
+        // the unified `stderr` field (older /build_wasm response shape).
+        if (d.nurlc_stderr) { section("nurlc stderr"); log(d.nurlc_stderr, "stderr"); }
+        if (d.clang_stderr) { section("clang stderr"); log(d.clang_stderr, "stderr"); }
+      } else if (d.error) {
+        logLine(String(d.error), "stderr");
+      } else {
+        logLine("(no diagnostic produced — check server logs)", "dim");
+      }
     } else {
       logLine(String(d), "stderr");
     }

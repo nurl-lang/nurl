@@ -57,7 +57,12 @@ $ `stdlib/ext/serde.nu`
     // Encode: trait dispatch routes ( to_json p ) to the Point impl;
     // msgpack_encode turns the Json into MessagePack bytes.
     : Json j ( to_json p )
-    ?? ( msgpack_encode j ) {
+    // Bind the option to a named variable first — passing a call result
+    // directly to `??` with a wide `Vec` payload tickles a known nurlc
+    // generic-monomorphize IR bug (see nurl_lang_gotchas memory). The
+    // scrutinee binding works around it.
+    : ! ( Vec u ) MsgpackErr _enc_res ( msgpack_encode j )
+    ?? _enc_res {
         T bytes → {
             ( nurl_print `encoded:  ` )
             ( nurl_print ( nurl_str_int ( vec_len [u] bytes ) ) )
@@ -89,9 +94,11 @@ $ `stdlib/ext/serde.nu`
     // A scalar needs no struct plumbing — from_msgpack_i decodes
     // straight to an i.
     : Json sj ( json_int 1729 )
-    ?? ( msgpack_encode sj ) {
+    : ! ( Vec u ) MsgpackErr _enc_sj ( msgpack_encode sj )
+    ?? _enc_sj {
         T sb → {
-            ?? ( from_msgpack_i sb ) {
+            : !i MsgpackErr _dec_sj ( from_msgpack_i sb )
+            ?? _dec_sj {
                 T n → {
                     ( nurl_print `scalar:   ` )
                     ( nurl_print ( nurl_str_int n ) )

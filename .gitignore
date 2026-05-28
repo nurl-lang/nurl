@@ -102,3 +102,4 @@ bench/rust_http_server/target/
 # Development notes & helpers
 critic.md
 output.txt
+stdlib/runtime.wasm.o.bind

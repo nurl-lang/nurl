@@ -178,9 +178,13 @@ folding ranges. Wired to VS Code / Windsurf via the
 
 ## HTTP API & browser playground
 
-A FastAPI container under `api/` exposes the compiler over HTTP and hosts a
-Monaco-based playground that builds and runs NURL programs as
-**WebAssembly (wasm32-wasi)** directly in the browser via
+A pure-NURL HTTP server under `nurlapi/` (the playground used to run on
+FastAPI; as of 2026-05-27 the API, router, MCP transport and OpenAPI
+emitter are all written in NURL — `nurlapi/main.nu` compiled to a native
+binary at image-build time, no Python in the runtime image) exposes the
+compiler over HTTP and hosts a Monaco-based playground that builds and
+runs NURL programs as **WebAssembly (wasm32-wasi)** directly in the
+browser via
 [`@bjorn3/browser_wasi_shim`](https://github.com/bjorn3/browser_wasi_shim).
 The same container also serves the public **MCP endpoint** at `/mcp` — see
 the [MCP section below](#mcp-server--let-an-llm-drive-the-toolchain).
@@ -221,7 +225,7 @@ the [MCP section below](#mcp-server--let-an-llm-drive-the-toolchain).
 - `GET /examples/{name}` — fetch a specific example's source.
 - `GET /grammar`     — current grammar rendered as HTML (from `spec/grammar.ebnf`).
 - `GET /readme`      — this README rendered as HTML.
-- `GET /docs`, `/redoc`, `/openapi.json` — OpenAPI explorers.
+- `GET /openapi.json` — OpenAPI 3.1 schema; `GET /docs` — Swagger UI (loads the schema from `/openapi.json`).
 
 ### Build & run the container
 
@@ -230,7 +234,7 @@ the Dockerfile can access `build.sh`, `compiler/`, `stdlib/`, `examples/`,
 `spec/`, `README.md`):
 
 ```bash
-docker build -f api/Dockerfile -t nurl-api:dev .
+docker build -f nurlapi/Dockerfile -t nurl-api:dev .
 docker run --rm -p 8000:8000 nurl-api:dev
 # → http://localhost:8000/         (playground)
 # → http://localhost:8000/docs     (Swagger UI)
@@ -246,8 +250,9 @@ docker run --rm -p 8000:8000 nurl-api:dev
    using the WASI SDK (24.0) bundled into the image.
 
 The wasm-compiled NURL runtime (`stdlib/runtime.wasm.o`) is baked into the
-image at build time. See `api/README.md` for local-dev instructions without
-Docker.
+image at build time. See `nurlapi/README.md` for image details and the
+local-dev path (`./nurl.sh nurlapi/main.nu nurlapi/nurlapi && ./nurlapi/nurlapi`
+runs the server outside Docker, using the host's `nurlc` and stdlib).
 
 ### Compiler-in-wasm (offline / embeddable)
 
@@ -282,9 +287,10 @@ MCP-aware client at it and the model can build, browse, and read NURL
 from inside its own loop — no local install required.
 
 **Public endpoint:** <https://play.nurl-lang.org/mcp>
-(implementation: [`api/app/mcp_server.py`](api/app/mcp_server.py); the
-playground is at <https://play.nurl-lang.org>, project home at
-<https://nurl-lang.org>.)
+(implementation: [`nurlapi/main.nu`](nurlapi/main.nu) — JSON-RPC handler,
+Streamable HTTP framing and the tool/resource catalog are all pure NURL,
+backed by `stdlib/ext/mcp.nu` + `stdlib/ext/mcp_http.nu`. The playground
+is at <https://play.nurl-lang.org>, project home at <https://nurl-lang.org>.)
 
 ### Add to Claude Code / Claude Desktop
 
@@ -322,13 +328,20 @@ write or review NURL code.
 The `/mcp` mount comes for free with the playground container:
 
 ```bash
-docker build -f api/Dockerfile -t nurl-api:dev .
+docker build -f nurlapi/Dockerfile -t nurl-api:dev .
 docker run --rm -p 8000:8000 nurl-api:dev
 # → http://localhost:8000/mcp     (your private MCP endpoint)
 ```
 
-Or run the FastAPI app directly with `uvicorn` from `api/` (see
-`api/README.md`) for non-Docker development.
+Or run the server binary directly without Docker:
+
+```bash
+./nurl.sh nurlapi/main.nu nurlapi/nurlapi
+./nurlapi/nurlapi   # listens on 0.0.0.0:8000
+```
+
+`nurlapi/main.nu` is a NURL program — no Python or Node runtime is
+involved. See `nurlapi/README.md` for environment variables.
 
 ### Caveats
 
@@ -549,9 +562,9 @@ exercised by the build scripts today.
 |---|---|---|
 | Linux x86_64      | LLVM         | primary dev target — `build.sh` + tests  |
 | Windows x86_64    | LLVM         | fully supported — `build.bat` runs the same bootstrap + snapshot test suite as `build.sh` |
-| macOS x86_64      | LLVM + zig cc | cross-compiled from the `api/` container via `POST /build_macos`; Mach-O binary links only libSystem (no Apple SDK needed). Runs on Apple Silicon via Rosetta 2. canvas/audio/libcurl-HTTP not supported on this target. |
+| macOS x86_64      | LLVM + zig cc | cross-compiled from the `nurlapi/` container via `POST /build_macos`; Mach-O binary links only libSystem (no Apple SDK needed). Runs on Apple Silicon via Rosetta 2. canvas/audio/libcurl-HTTP not supported on this target. |
 | macOS ARM64       | LLVM + zig cc | cross-compiled via `POST /build_target` (`target=macos-arm64`) — native Apple Silicon Mach-O, links only libSystem. Unsigned, so clear quarantine attribute before running. |
-| WebAssembly       | wasm32-wasi  | supported via the `api/` container (WASI SDK 24.0); browser execution via `browser_wasi_shim`. The self-hosting compiler itself also builds to wasm — see `buildwasm.sh` / `wasmnurl.sh` below |
+| WebAssembly       | wasm32-wasi  | supported via the `nurlapi/` container (WASI SDK 24.0); browser execution via `browser_wasi_shim`. The self-hosting compiler itself also builds to wasm — see `buildwasm.sh` / `wasmnurl.sh` below |
 | Linux ARM64 / RISC-V64 | LLVM + zig cc | cross-compiled via `POST /build_target` — fully-static `musl` ELFs (`linux-arm64-musl`, `linux-riscv64-musl`) or dynamic glibc (`linux-arm64-gnu`). Milk-V Duo (RISC-V C906) validated on-device. |
 | Android / iOS     | LLVM cross   | planned (ROADMAP §4)                     |
 | Embedded (no_std) | LLVM         | planned (ROADMAP §4)                     |
@@ -665,11 +678,11 @@ nurl/
 ├── examples/                  — curated `.nu` programs surfaced by the playground
 │   ├── showcase.nu  calculator.nu  fizzbuzz.nu  collatz.nu  wordcount.nu
 │   └── enigma.nu  slice_test.nu  test_05_closures_and_capture.nu …
-├── api/                       — FastAPI container (compiler-as-a-service + playground)
-│   ├── Dockerfile             — multi-stage build; installs WASI SDK; bootstraps nurlc
-│   ├── app/main.py            — endpoints, IR-rewrite shims, docs rendering
+├── nurlapi/                   — NURL-native container (compiler-as-a-service + playground + MCP)
+│   ├── Dockerfile             — multi-stage build; installs WASI SDK + zig + mingw; bootstraps nurlc; compiles `main.nu` to a native binary
+│   ├── main.nu                — endpoints, router, IR-rewrite shims, OpenAPI emitter, MCP handler — all NURL
 │   ├── static/index.html      — Monaco-based playground, runs wasm in-browser
-│   └── requirements.txt
+│   └── e2e_test.{py,sh}       — end-to-end suite hitting the running container
 ├── tooling/
 │   └── vscode-nurl/           — VS Code / Windsurf syntax-highlighting extension
 ├── build/                     — all bootstrap artefacts land here
