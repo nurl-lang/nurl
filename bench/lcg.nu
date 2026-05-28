@@ -1,7 +1,6 @@
 // lcg — 100 million iterations of a 64-bit linear congruential
 // generator (MMIX constants). Each step depends on the previous so
 // LLVM cannot fold it; output is the final state.
-$ `stdlib/core/io.nu`
 
 @ main → i {
     : ~ i x 1
@@ -10,6 +9,6 @@ $ `stdlib/core/io.nu`
         = x + * x 6364136223846793005 1442695040888963407
         = k + k 1
     }
-    ( puts ( nurl_str_int x ) )
+    ( nurl_print_int x )
     ^ 0
 }

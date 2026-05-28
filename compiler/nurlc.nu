@@ -394,25 +394,22 @@
 : i g_closure_emit_base 0  // Next func index to emit (watermark)
 : i g_type_emit_base 0  // Next type index to emit
 
-// ── Borrow-checker state (see BORROW.md) ─────────────────────────
-// g_borrowck is 1 (ON) by default — BORROW.md Phase 8 flipped the
-// default once Phases 1/2/3 were proven false-positive-free across
-// the whole corpus; `--no-borrowck` turns it back off. The borrow
-// checker is a diagnostic-only analysis pass: it never emits IR, so
-// a borrow-clean program produces byte-identical IR whether the flag
-// is on or off (the bootstrap fixed point is unaffected). All
-// borrowck_* state below is untouched when the flag is 0.
+// ── Borrow-checker state ─────────────────────────────────────────
+// g_borrowck is 1 (ON) by default; `--no-borrowck` turns it back off.
+// The borrow checker is a diagnostic-only analysis pass: it never
+// emits IR, so a borrow-clean program produces byte-identical IR
+// whether the flag is on or off (the bootstrap fixed point is
+// unaffected). All borrowck_* state below is untouched when the flag
+// is 0.
 : i g_borrowck 1  // 0 when --no-borrowck passed on the CLI
-// Phase 5+ / `--strict-borrowck` (off by default). Enables the
-// additional checks documented in BORROW.md "Phase 5+ / Strict
-// Mode": (1) aliased mutation through `. obj field` arguments at
-// the same call site — a generalisation of the existing
-// bare-identifier-only Phase 5 check, and (2) `# *T` raw-pointer
-// escape from owned bindings whose pointer may outlive the
-// binding's drop. Both are diagnostic-only and emit `error:` like
-// the rest of the borrowck. Disabled by default because the
-// extension has a meaningful false-positive rate against existing
-// stdlib code (cf. BORROW.md "Still deferred").
+// `--strict-borrowck` (off by default) enables two additional checks:
+// (1) aliased mutation through `. obj field` arguments at the same
+// call site — a generalisation of the bare-identifier-only check, and
+// (2) `# *T` raw-pointer escape from owned bindings whose pointer may
+// outlive the binding's drop. Both are diagnostic-only and emit
+// `error:` like the rest of the borrowck. Disabled by default because
+// the extension has a meaningful false-positive rate against existing
+// stdlib code.
 : i g_strict_borrowck 0  // 1 when --strict-borrowck passed on the CLI
 : i g_bck 0       // sym handle for the borrow checker's per-function
                   //  data (statement list etc.); allocated in main()
@@ -420,18 +417,18 @@
 : i g_bck_depth 0 // block-nesting depth during the statement walk
 : i g_bck_closure_depth 0 // >0 while parsing a closure body — the bck
                   //  capture hooks no-op so closure statements do not
-                  //  inline into the enclosing function's list
-                  //  (BORROW.md Phase 1: segregate closure scopes)
-: ~ i g_bck_errors 0 // count of borrow errors emitted so far. BORROW.md
-                  //  Phase 8 final: errors no longer abort on the spot
-                  //  (we want to surface every violation in one run,
-                  //  same as a C compiler) — the diagnostic helpers
-                  //  bump this counter and main() exits non-zero if it
+                  //  inline into the enclosing function's list (so
+                  //  closure scopes stay segregated)
+: ~ i g_bck_errors 0 // count of borrow errors emitted so far. Errors
+                  //  do not abort on the spot — every violation is
+                  //  surfaced in one run, the same as a C compiler;
+                  //  the diagnostic helpers bump this counter and
+                  //  main() exits non-zero if it
                   //  is > 0 once parsing finishes. --no-borrowck and
                   //  borrow-clean programs both leave this at 0 so
                   //  the bootstrap fixed point is unaffected.
 
-// BORROW.md Phase 4 (Option B): per-function inout-parameter map.
+// Per-function inout-parameter map.
 // `g_fn_inout[fname]` is the space-separated list of 0-based indices
 // of `inout` parameters, recorded by gen_fn_decl_concrete as each
 // function is compiled. gen_call consults it to pass those arguments
@@ -441,7 +438,7 @@
 // type mismatch — loud, never silent).
 : i g_fn_inout 0
 
-// BORROW.md Phase 4 (Option B): per-function sink-parameter map.
+// Per-function sink-parameter map.
 // `g_fn_sink[fname]` is the space-separated list of 0-based indices
 // of `sink` parameters. A `sink` parameter consumes (moves) its
 // argument: codegen is an ordinary by-value pass (no IR change), and
@@ -451,7 +448,7 @@
 // never miscompiled. Allocated in main().
 : i g_fn_sink 0
 
-// ── DWARF debug-info state (see DWARF.md) ────────────────────────
+// ── DWARF debug-info state ───────────────────────────────────────
 // All zero/empty when --g is OFF; emit helpers then produce IR that
 // is byte-identical to a pre-DWARF build. Toggled in main().
 : i g_dbg_enabled 0  // 1 when --g passed on the CLI
@@ -518,7 +515,7 @@
 // point this helper is the single integration point.
 @ emit_inst s body → v { ( emiti body ) }
 
-// ── DWARF helpers (see DWARF.md) ─────────────────────────────────
+// ── DWARF helpers ────────────────────────────────────────────────
 // Allocate the next metadata id; ids start at 100 (see g_dbg_next_id)
 // and increment monotonically. Returned ids are emitted at end-of-
 // module by dbg_flush in numeric order.
@@ -1132,7 +1129,7 @@
     // never reached gen_call to consume it).
     ( nurl_sym_def syms `__tail_call_pending__` `` )
     : s lt ( nurl_get_last_type )
-    // Escape analysis (BORROW.md Phase 3): warn if the returned value
+    // Escape analysis: warn if the returned value
     // is a stack reference — a closure capturing a binding by pointer,
     // an aggregate holding one, or a binding holding either. The
     // referent is a local / parameter of THIS function, so returning
@@ -1825,20 +1822,16 @@
 // operators plus member access `.`, the cast `#` and the caret `^` —
 // every token here is unambiguously an operator, never a function name.
 // Identifier-continuation predicate — used by scan helpers below.
-// Inlines the ASCII alpha/digit/underscore check; the historic
-// `nurl_is_alpha` / `_is_digit` C helpers were dropped in
-// PURIFY.md Phase 1 (2026-05-23) and the nurlc compiler is
-// self-contained (no `$`-imports) so the check lives here verbatim.
+// Inlines the ASCII alpha/digit/underscore check. The nurlc compiler
+// is self-contained (no `$`-imports) so the check lives here verbatim.
 @ __is_ident_char i ch → b {
     ^ | | | & >= ch 65 <= ch 90 & >= ch 97 <= ch 122 & >= ch 48 <= ch 57 == ch 95
 }
 
-// Pure-NURL replacements for the historic `nurl_str_*` C wrappers
-// in `stdlib/runtime.c §2` (PURIFY.md Phase 5, 2026-05-23). Each
-// is mirrored in `stdlib/core/string.nu` for user code; the
-// duplication is because `nurlc.nu` has no `$`-imports — the
-// linker sees only this local copy in the nurlc binary, only the
-// stdlib copy in user binaries.
+// Pure-NURL `nurl_str_*` helpers. Each is mirrored in
+// `stdlib/core/string.nu` for user code; the duplication is because
+// `nurlc.nu` has no `$`-imports — the linker sees only this local
+// copy in the nurlc binary, only the stdlib copy in user binaries.
 
 @ nurl_memcmp_lex s a i la s b i lb → i {
     : i n ? < la lb la lb
@@ -2030,7 +2023,7 @@
     ^ v
 }
 
-// ── PURIFY.md Phase 9a (2026-05-24): §7 codegen counters ──────────
+// ── codegen counters ──────────────────────────────────────────────
 // Handle is a `nurl_zalloc`'d 16-byte block: slot 0 = next register
 // number, slot 1 = next label number. The handle is opaque to all
 // callers (passed back into _reg / _lbl / _reset / never deref'd
@@ -2038,18 +2031,17 @@
 // caller binding shape. Cast to `s` (== i8*) inside this file for
 // `nurl_peek` / `nurl_poke` access.
 //
-// IMPORTANT — Phase 2B owned-string auto-detection: the @-fn bodies
-// below deliberately return the `nurl_str_cat` result without an
+// IMPORTANT — owned-string auto-detection: the @-fn bodies below
+// deliberately return the `nurl_str_cat` result without an
 // intervening `: s` binding. That keeps `__last_ident_name__` on an
 // i64 binding (`n`) at fn exit, so the auto-detector at gen_fn_decl
-// epilogue doesn't tag `nurl_cg_reg__ret_owned = "str"`. The C
-// runtime version of these helpers was NOT marked owned either, so
-// every caller in `gen_*` (e.g. `gen_agg_lit`'s `= result r` chain)
-// reads the malloc'd register-name string as a borrow that lives
-// for the rest of compilation. Same intentional leak as the C
-// version. Adding `: s tmp` here would flip the auto-tag and break
-// gen_agg_lit's insertvalue chain (the binding would auto-drop
-// before its register name is read in the next iteration).
+// epilogue doesn't tag `nurl_cg_reg__ret_owned = "str"`. Callers
+// (e.g. `gen_agg_lit`'s `= result r` chain) read the malloc'd
+// register-name string as a borrow that lives for the rest of
+// compilation — an intentional leak. Adding `: s tmp` here would
+// flip the auto-tag and break gen_agg_lit's insertvalue chain (the
+// binding would auto-drop before its register name is read in the
+// next iteration).
 
 @ nurl_cg_new → i {
     ^ # i ( nurl_zalloc 16 )
@@ -2075,13 +2067,13 @@
     ( nurl_poke p 1 0 )
 }
 
-// ── PURIFY.md Phase 9a (2026-05-24): §8 "last type" sideband ──────
+// ── "last type" sideband ──────────────────────────────────────────
 // Module-level i8* held in `g_last_type_ptr` (stored as i64 — the
 // `: i` slot can carry any pointer value). Initial 0 means "use the
 // default `i64`". `nurl_set_last_type` strdup's the input and frees
 // the previous value; `nurl_get_last_type` strdup's the current
 // value so callers always receive an owned heap copy they can drop
-// freely. Matches the runtime.c §8 contract byte-for-byte.
+// freely.
 
 : i g_last_type_ptr 0
 
@@ -2096,7 +2088,7 @@
     ? != old 0 { ( free # s old ) } {}
 }
 
-// ── PURIFY.md Phase 9b (2026-05-24): §6b symbol table ─────────────
+// ── symbol table ──────────────────────────────────────────────────
 // Scoped flat-array map of (depth, name, type) entries. Handle is
 // a `nurl_zalloc`'d 48-byte block, 6 i64 slots:
 //   0: count          (number of valid entries)
@@ -2111,16 +2103,13 @@
 // scan only fetches name pointers (8 B per entry, 8 entries per 64 B
 // cache line), and only touches the types array on a match.
 //
-// Grow-by-2× starting at cap=64. The C version preallocated 1M
-// entries (24 MB) per table; this pays only for what each table
-// actually uses. nurl_sym_pop frees every (name, type) strdup at
-// the current depth, matching the C version's pop semantics.
+// Grow-by-2× starting at cap=64. nurl_sym_pop frees every (name,
+// type) strdup at the current depth.
 //
 // nurl_sym_get returns a strdup'd copy of the matched type, or a
-// strdup'd `""` on miss — same contract as the runtime.c §6 body.
-// The C version was sym_def'd as `i8*` (no `__ret_owned`) so callers
-// leak the result; the @-fn below is shaped to avoid Phase 2B's
-// auto-owned tag (returns `^ # s (strdup ...)` with no intervening
+// strdup'd `""` on miss. The function is shaped to avoid the
+// owned-string auto-tag (returns `^ # s (strdup ...)` with no
+// intervening
 // `: s tmp` binding holding an owned-string call result), preserving
 // the same caller contract.
 
@@ -2224,10 +2213,10 @@
 }
 
 // ══════════════════════════════════════════════════════════════════
-// ── PURIFY.md Phase 10 (2026-05-24): §6a Lexer ───────────────────
+// ── Lexer ────────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════
 //
-// Pure-NURL replacement for runtime.c §6a. Handle is a `nurl_zalloc`'d
+// Pure-NURL lexer. Handle is a `nurl_zalloc`'d
 // 280-byte heap block, 35 i64 slots. Layout (slot offsets):
 //
 //   0:  src       (i8*)         — strdup'd source bytes
@@ -3046,7 +3035,7 @@
     : b is_variadic ( seq ( nurl_sym_get syms ( nurl_str_cat fname `__variadic` ) ) `1` )
     : s vf_str ( nurl_sym_get syms ( nurl_str_cat fname `__variadic_fixed` ) )
     : i fixed_count ? == 0 ( nurl_str_len vf_str ) 0 ( nurl_str_to_int vf_str )
-    // Closure-escape gate (docs/GOTCHAS.md item 8 / BORROW.md Phase 3).
+    // Closure-escape gate (docs/GOTCHAS.md item 8).
     // These four callees take an argument that outlives the current
     // scope — pushing into a heap-backed container or detaching onto a
     // worker thread. A value that is a *stack reference* (a closure
@@ -3055,28 +3044,26 @@
     // borrowck_fn_end) MUST NOT escape through any of these without
     // first being moved to a heap-backed handle, or the captured
     // stack slot dangles the moment its owning function returns. The
-    // check is --borrowck-gated and warns (not dies) — BORROW.md
-    // watch #3: a new rule ships as a warning until proven
-    // false-positive-free across the whole corpus.
+    // check is --borrowck-gated.
     : b is_escape_call | | |
         ( seq fname `vec_push` )
         ( seq fname `vec_insert` )
         ( seq fname `vec_set` )
         ( seq fname `thread_spawn` )
-    // Phase 1 borrow: a `*_free` destructor consumes (frees) its first
-    // argument. `nurl_free` is excluded — it frees raw *T / i8* FFI
-    // memory, which BORROW.md item 5 leaves unchecked.
+    // A `*_free` destructor consumes (frees) its first argument.
+    // `nurl_free` is excluded — it frees raw *T / i8* FFI memory,
+    // which the borrow checker does not track.
     : b is_consume_call & ( bck_is_destructor_name fname )
         ! ( seq fname `nurl_free` )
     : i arg_idx 0
-    // BORROW.md Phase 4: space-separated 0-based indices of the
-    // callee's `inout` parameters (recorded into g_fn_inout by
-    // gen_fn_decl_concrete as the callee is compiled). An argument at
-    // one of these positions is passed by address — see the
-    // per-argument handling below. Empty for an ordinary function.
+    // Space-separated 0-based indices of the callee's `inout`
+    // parameters (recorded into g_fn_inout by gen_fn_decl_concrete as
+    // the callee is compiled). An argument at one of these positions
+    // is passed by address — see the per-argument handling below.
+    // Empty for an ordinary function.
     : ~ s callee_inout ( nurl_sym_get g_fn_inout call_name )
-    // BORROW.md Phase 4: indices of the callee's `sink` parameters —
-    // an argument there is consumed (move-checked at the call site).
+    // Indices of the callee's `sink` parameters — an argument there
+    // is consumed (move-checked at the call site).
     : ~ s callee_sink ( nurl_sym_get g_fn_sink call_name )
     // Generic call: g_fn_inout / g_fn_sink for a generic function are
     // keyed by the GENERIC name (the index sets are type-independent,
@@ -3110,12 +3097,12 @@
     // Convention: callees borrow i8* args and must `strdup` if they retain
     // (see runtime.c hardening for nurl_set_last_type, nurl_sym_get, ...).
     : s owned_arg_temps ``
-    // BORROW.md Phase 5 (N-readers-XOR-1-writer): a binding passed to
-    // this call as `inout` is mutably borrowed for the call's
-    // duration; it must be the *exclusive* path to that value at the
-    // call. `p5_seen` accumulates every bare-identifier argument and
-    // `p5_inout_seen` the `inout` ones, so a binding that is both
-    // mutably borrowed and aliased by another argument is flagged.
+    // N-readers-XOR-1-writer: a binding passed to this call as
+    // `inout` is mutably borrowed for the call's duration; it must
+    // be the *exclusive* path to that value at the call. `p5_seen`
+    // accumulates every bare-identifier argument and `p5_inout_seen`
+    // the `inout` ones, so a binding that is both mutably borrowed
+    // and aliased by another argument is flagged.
     : ~ s p5_seen ``
     : ~ s p5_inout_seen ``
     ~ != ( nurl_lex_type lex ) TT_RPAREN {
@@ -3135,27 +3122,26 @@
         // Reset the escape side-channel so the escape check observes
         // only what THIS argument expression publishes.
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
-        // BORROW.md Phase 4: an argument at an `inout` parameter
-        // position is passed BY ADDRESS, not by value. It must be a
-        // bare mutable (`: ~`) binding — the callee mutates it in
-        // place. Pass the binding's backing pointer (`__ptr`) typed
-        // `<T>*`; emit no value load. Everything else is the ordinary
-        // by-value path.
+        // An argument at an `inout` parameter position is passed BY
+        // ADDRESS, not by value. It must be a bare mutable (`: ~`)
+        // binding — the callee mutates it in place. Pass the
+        // binding's backing pointer (`__ptr`) typed `<T>*`; emit no
+        // value load. Everything else is the ordinary by-value path.
         : b is_inout_arg ( str_contains_word callee_inout ( nurl_str_int arg_idx ) )
-        // BORROW.md Phase 5: exclusive-access check. A bare-identifier
-        // argument that is mutably borrowed (`inout`) here must not be
-        // aliased by another bare-identifier argument of the SAME call
-        // (whether that other one is `inout` or a plain by-value read)
-        // — N readers XOR 1 writer. Reading a binding through a nested
-        // sub-expression argument is a known gap (a later phase).
-        // BORROW.md Phase 5+ (strict mode): also consider the ROOT
-        // identifier of `. obj field` argument expressions for the
-        // aliasing test below. `obj` is the binding actually being
-        // touched; without this the existing bare-identifier-only
-        // check misses `( fn inout obj . obj field )`. Only consulted
-        // under --strict-borrowck. The deep peek-val read is cheap
-        // because the lexer's LX_PEEK slot is materialised on demand
-        // and we don't advance.
+        // Exclusive-access check. A bare-identifier argument that is
+        // mutably borrowed (`inout`) here must not be aliased by
+        // another bare-identifier argument of the SAME call (whether
+        // that other one is `inout` or a plain by-value read) — N
+        // readers XOR 1 writer. Reading a binding through a nested
+        // sub-expression argument is a known gap.
+        // Strict mode: also consider the ROOT identifier of
+        // `. obj field` argument expressions for the aliasing test
+        // below. `obj` is the binding actually being touched; without
+        // this the bare-identifier-only check misses
+        // `( fn inout obj . obj field )`. Only consulted under
+        // --strict-borrowck. The deep peek-val read is cheap because
+        // the lexer's LX_PEEK slot is materialised on demand and we
+        // don't advance.
         : ~ s bck_arg_root bck_arg_val
         ? & != g_strict_borrowck 0 == bck_arg_tt TT_DOT {
             : i pk_t ( nurl_lex_peek_type lex )
@@ -3180,14 +3166,14 @@
             { = p5_inout_seen ? == 0 ( nurl_str_len p5_inout_seen )
                 bck_arg_root ( nurl_str_cat3 p5_inout_seen ` ` bck_arg_root ) }
             {}
-            // BORROW.md Phase 6: iterator invalidation. If this
-            // argument names a container currently being iterated
-            // by an enclosing `~` foreach, and the call mutates it
-            // — the receiver (arg 0) of a stdlib container mutator,
-            // or any `inout` argument — the loop's borrowed cursor
-            // would be invalidated. Uses bck_arg_root so strict
-            // mode also catches `( fn inout . obj field )` inside a
-            // `~ x : obj { ... }` loop.
+            // Iterator invalidation: if this argument names a
+            // container currently being iterated by an enclosing `~`
+            // foreach, and the call mutates it — the receiver (arg 0)
+            // of a stdlib container mutator, or any `inout` argument
+            // — the loop's borrowed cursor would be invalidated. Uses
+            // bck_arg_root so strict mode also catches
+            // `( fn inout . obj field )` inside a `~ x : obj { ... }`
+            // loop.
             : b fe_iterated ( str_contains_word
                 ( nurl_sym_get g_bck `iter_containers` ) bck_arg_root )
             : b fe_mutates & == arg_idx 0 ( bck_is_container_mutator fname )
@@ -3201,7 +3187,7 @@
         : ~ s at ``
         ? is_inout_arg
         { ? == bck_arg_tt TT_DOT
-            { // BORROW.md Phase 4: `inout` field target — `. obj field`.
+            { // `inout` field target — `. obj field`.
               // Pass the field's address so the callee mutates exactly
               // that field of the caller's struct in place.
                 = av ( gen_inout_field_addr lex syms cg fname )
@@ -3245,9 +3231,9 @@
             { ( die lex `string_len expects %String, got 'i8*' (raw C-string). Use 'nurl_str_len' for raw C-string pointers. See docs/GOTCHAS.md item 7.` ) }
             {} }
         {}
-        // Escape analysis (BORROW.md Phase 3, closes docs/GOTCHAS.md
-        // item 8). If this call is one of the four ownership-taking
-        // helpers AND this argument is a stack reference — a closure
+        // Escape analysis (closes docs/GOTCHAS.md item 8). If this
+        // call is one of the four ownership-taking helpers AND this
+        // argument is a stack reference — a closure
         // literal capturing a binding by pointer, or a binding /
         // aggregate holding one — warn: the captured stack slot will
         // dangle the moment the surrounding function returns.
@@ -3255,26 +3241,26 @@
         { ( bck_esc_check_call_arg lex syms bck_arg_line
             ( nurl_sym_get syms `__last_ident_name__` ) fname ) }
         {}
-        // Phase 1 borrow: a `*_free` destructor's first argument, when
-        // it is a bare identifier, names a binding being consumed —
-        // stash it as a move (flushed after the enclosing statement).
+        // A `*_free` destructor's first argument, when it is a bare
+        // identifier, names a binding being consumed — stash it as a
+        // move (flushed after the enclosing statement).
         ? & & is_consume_call == arg_idx 0 ( is_ident_tok bck_arg_tt )
         { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) )
-            // Auto-sink inference (critic v0.9.0 §2): if the consumed
-            // bare-ident is the enclosing fn's parameter, record its
-            // index so gen_fn_decl_concrete can append it to
-            // g_fn_sink[fname]. Closes the indirect use-after-free
-            // case where `( wrapper x )` frees `x` inside `wrapper`'s
-            // body and the caller then reads `x`.
+            // Auto-sink inference: if the consumed bare-ident is the
+            // enclosing fn's parameter, record its index so
+            // gen_fn_decl_concrete can append it to g_fn_sink[fname].
+            // Closes the indirect use-after-free case where
+            // `( wrapper x )` frees `x` inside `wrapper`'s body and
+            // the caller then reads `x`.
             ( bck_record_inferred_sink syms bck_arg_val ) }
         {}
-        // BORROW.md Phase 4: a `sink` parameter consumes its argument.
-        // When the argument is a bare-identifier binding, record it as
-        // moved so any later use is a use-after-move. A binding that
-        // the compiler auto-drops (owned slice / string / Drop value /
-        // struct with owned fields) cannot yet be `sink`-passed — that
-        // needs drop-ownership transfer to the callee (deferred); it
-        // is rejected here rather than risking a double free.
+        // A `sink` parameter consumes its argument. When the argument
+        // is a bare-identifier binding, record it as moved so any
+        // later use is a use-after-move. A binding that the compiler
+        // auto-drops (owned slice / string / Drop value / struct with
+        // owned fields) cannot yet be `sink`-passed — that needs
+        // drop-ownership transfer to the callee (deferred); it is
+        // rejected here rather than risking a double free.
         ? & ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
              ( is_ident_tok bck_arg_tt )
         { : s sink_ptr ( nurl_sym_get syms ( nurl_str_cat bck_arg_val `__ptr` ) )
@@ -3284,12 +3270,12 @@
                   ( str_contains_word ( nurl_sym_get syms `__owned_struct_fields__` ) sink_ptr )
             { ( die lex ( nurl_str_cat3
                 `'` bck_arg_val
-                `' is a compiler-auto-dropped value; passing it to a 'sink' parameter is not yet supported (BORROW.md Phase 4) - pass a Vec or other manually-managed handle, or pass it as an ordinary parameter` ) ) }
+                `' is a compiler-auto-dropped value; passing it to a 'sink' parameter is not yet supported - pass a Vec or other manually-managed handle, or pass it as an ordinary parameter` ) ) }
             { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) )
-                // Auto-sink cascade (critic v0.9.0 §2): if THIS fn
-                // passes its own parameter as a sink arg to another fn,
-                // mark this parameter as auto-sink too — caller-of-this-
-                // fn likewise loses access to that arg afterwards.
+                // Auto-sink cascade: if THIS fn passes its own
+                // parameter as a sink arg to another fn, mark this
+                // parameter as auto-sink too — the caller of this fn
+                // likewise loses access to that arg afterwards.
                 ( bck_record_inferred_sink syms bck_arg_val ) } }
         {}
         // Variadic position: promote BEFORE owned-temp tracking + argstr
@@ -3343,8 +3329,8 @@
     {}
     ( expect lex TT_RPAREN )
     // Escape analysis: a call's RESULT is never a stack reference —
-    // returning a borrow into a parameter is interprocedural (BORROW.md
-    // Phase 7, not yet implemented). Clear the side-channel an argument
+    // returning a borrow into a parameter is interprocedural (not yet
+    // implemented). Clear the side-channel an argument
     // closure / aggregate literal may have left set, so the enclosing
     // gen_let / gen_ret does not mis-read `( f \ → v {…} )` as one.
     ( nurl_sym_def syms `__last_expr_refdepth__` `` )
@@ -4306,9 +4292,9 @@
 @ gen_foreach i lex i syms i cg → s {
     : s var_name ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
-    // BORROW.md Phase 6: snapshot the iterated container's name (when
-    // it is a bare binding) before gen_expr consumes the token, so
-    // the loop body can be checked for mutation of it.
+    // Snapshot the iterated container's name (when it is a bare
+    // binding) before gen_expr consumes the token, so the loop body
+    // can be checked for mutation of it.
     : s fe_cont ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_lex_val lex ) ``
     : s slice_val ( gen_expr lex syms cg )
     : s slice_ty ( nurl_get_last_type )
@@ -4968,7 +4954,7 @@
     {}
 }
 
-// ── Borrow checker — analysis substrate (BORROW.md Phase 0) ─────────
+// ── Borrow checker — analysis substrate ─────────────────────────────
 //
 // The borrow checker is a diagnostic-only pass: it inspects the
 // program and may emit `error:` / `warning:`, but it NEVER emits IR.
@@ -4976,12 +4962,12 @@
 // whether --borrowck is on or off, and the bootstrap fixed point is
 // unaffected. Every entry point below is a no-op when g_borrowck is 0.
 //
-// Phase 0 lands the substrate only — there are no borrow rules yet,
-// so even with --borrowck on the pass emits nothing. Later phases
-// (move checking, alias/double-free, escape analysis) hang their
+// The substrate hosts the borrow rules (move checking, alias /
+// double-free, escape analysis, iterator invalidation). Each rule
+// is independently gated, so an individual class hangs its
 // rules off the per-function CFG + ownership lattice built here.
 
-// ── Phase 0b: per-function statement-list capture ──────────────────
+// ── Per-function statement-list capture ────────────────────────────
 //
 // As each function body is parsed, guarded hooks in the gen_* walk
 // append a flat statement list into g_bck. Each record is a single
@@ -5077,14 +5063,14 @@
 //
 // A *move* consumes an owned binding. There are two move sources:
 //
-//   Phase 1 — a bare-identifier argument passed to a `*_free`
-//   destructor (the typed NURL heap destructors `vec_free`,
-//   `string_free`, … but NOT raw `nurl_free`, which frees `*T`/i8*
-//   FFI memory that BORROW.md leaves unchecked). gen_call detects it.
+//   1. A bare-identifier argument passed to a `*_free` destructor
+//      (the typed NURL heap destructors `vec_free`, `string_free`,
+//      …) — but NOT raw `nurl_free`, which frees `*T` / i8* FFI
+//      memory the borrow checker does not track. gen_call detects it.
 //
-//   Phase 2 — a binding-to-binding copy `: T b a` of an owned heap
-//   value. `b` becomes the value's owner; `a` is moved. This makes
-//   the silent-alias double-free (`: T b a` then both freed)
+//   2. A binding-to-binding copy `: T b a` of an owned heap value.
+//      `b` becomes the value's owner; `a` is moved. This makes the
+//      silent-alias double-free (`: T b a` then both freed)
 //   impossible: any later use of `a` is a use-after-move. gen_let
 //   detects it. Scalars (Copy) and parameters (borrowed) are excluded.
 //
@@ -5109,7 +5095,7 @@
     ( seq ( nurl_str_slice name - len 5 5 ) `_free` )
 }
 
-// ── Borrow checker — iterator invalidation (BORROW.md Phase 6) ─────
+// ── Borrow checker — iterator invalidation ─────────────────────────
 //
 // A `~ x xs { ... }` foreach loop borrows the container `xs` for the
 // body's duration — gen_foreach snapshots the buffer pointer + length
@@ -5482,8 +5468,8 @@
 
 // Flag any read of a definitely-Moved binding as a use-after-move.
 // MaybeMoved (a conditional move at a CFG join) is deliberately NOT
-// flagged — erroring only on a definite move keeps this first cut
-// false-positive-free (BORROW.md watch #3: warn before you promote).
+// flagged — erroring only on a definite move keeps this check
+// false-positive-free.
 @ bck_check_moved_reads s reads i line s state → v {
     : ~ s rest reads
     ~ != 0 ( nurl_str_len rest ) {
@@ -5665,15 +5651,14 @@
     }
 }
 
-// ── Borrow checker — escape analysis (BORROW.md Phase 3) ───────────
+// ── Borrow checker — escape analysis ───────────────────────────────
 //
-// Phase 3 replaces the old five-shape `__captures_byref` name+flag
-// closure-escape check with a sound *region* check. A region is a
-// scope frame; `g_bck_depth` (the borrowck block-nesting counter,
-// maintained by bck_block_enter / bck_block_exit) names it — the
-// function body is depth 1, every `?` / `~` / `??` / `{ }` block one
-// deeper. An outer (shallower) region outlives every inner one; the
-// caller outlives the whole function (conceptually depth 0).
+// A region is a scope frame; `g_bck_depth` (the borrowck
+// block-nesting counter, maintained by bck_block_enter /
+// bck_block_exit) names it — the function body is depth 1, every
+// `?` / `~` / `??` / `{ }` block one deeper. An outer (shallower)
+// region outlives every inner one; the caller outlives the whole
+// function (conceptually depth 0).
 //
 // A value is a *stack reference* when it carries a pointer into some
 // binding's stack slot. Today the only such values are closures that
@@ -5704,11 +5689,10 @@
 // is a no-op), so emitted IR is byte-identical and the bootstrap
 // fixed point is unaffected.
 //
-// Known boundary (documented, not a bug): `*T` raw pointers stay
-// unchecked (BORROW.md watch #5 — `*T` is NURL's `unsafe` FFI ABI),
-// and a reference passed *through a helper function* needs an
-// interprocedural summary (Phase 7) — a per-function pass cannot see
-// whether the callee retains it.
+// Known boundary: `*T` raw pointers stay unchecked (`*T` is NURL's
+// `unsafe` FFI ABI), and a reference passed *through a helper
+// function* needs an interprocedural summary — a per-function pass
+// cannot see whether the callee retains it.
 
 // Referent depth of the expression just evaluated by gen_expr: the
 // transient `__last_expr_refdepth__` (set by a closure / aggregate
@@ -5728,14 +5712,12 @@
 
 // Emit one borrow-checker `error:` as `file:line: error: <msg>`. The
 // check fires parse-time but away from the offending token (after
-// `gen_expr` has consumed the whole sub-expression), so — like the
-// Phase 1/2 `bck_diag` — it carries the source line explicitly and
-// omits the caret rather than pointing at the wrong token. Increments
-// `g_bck_errors`; main() exits non-zero at end of compile if any were
-// recorded (BORROW.md Phase 8 final, 2026-05-25). Helper kept under
-// its historical `bck_esc_warn` name to limit the diff — the body is
-// shared by Phase 3 escape + Phase 5 aliased-mut + Phase 6 iterator-
-// invalidation diagnostics.
+// `gen_expr` has consumed the whole sub-expression), so — like
+// `bck_diag` — it carries the source line explicitly and omits the
+// caret rather than pointing at the wrong token. Increments
+// `g_bck_errors`; main() exits non-zero at end of compile if any
+// were recorded. The body is shared by escape, aliased-mut, and
+// iterator-invalidation diagnostics.
 @ bck_esc_warn i lex i line s msg → v {
     : s loc ( nurl_str_cat3 ( nurl_lex_filename lex ) `:`
         ( nurl_str_int line ) )
@@ -5913,7 +5895,7 @@
         ( bck_record `let` name bck_line )
         ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
         : b rhs_is_owned_call != 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_owned__` ) )
-        // Escape analysis (BORROW.md Phase 3): stamp this binding's
+        // Escape analysis: stamp this binding's
         // region (block depth) and, when the initialiser was a stack
         // reference — a closure literal capturing a binding by
         // pointer, an aggregate holding one, or a copy of such a
@@ -6047,7 +6029,7 @@
                 ( bck_record `let` name bck_line )
                 ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
                 : b rhs_is_owned_call != 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_owned__` ) )
-                // Escape analysis (BORROW.md Phase 3): stamp region +
+                // Escape analysis: stamp region +
                 // referent depth — see the type-inference path above.
                 ( bck_esc_let syms name ( bck_expr_refdepth syms
                     ? ( is_ident_tok bck_rhs_tt ) bck_rhs_val `` ) )
@@ -6154,7 +6136,7 @@
         ( seq vt `i8*` )
         ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) ptr )
         ? lhs_is_owned_str { ( nurl_sym_def syms `__last_call_ret_owned__` `` ) } {}
-        // Escape analysis (BORROW.md Phase 3): snapshot the RHS's
+        // Escape analysis: snapshot the RHS's
         // first token (a bare identifier may copy a stack reference)
         // and clear the side-channel a closure / aggregate literal
         // RHS would publish.
@@ -6459,7 +6441,7 @@
     : i dtlen ( nurl_str_len dt )
     : b src_ptr == ( nurl_str_get st - stlen 1 ) 42
     : b dst_ptr == ( nurl_str_get dt - dtlen 1 ) 42
-    // BORROW.md Phase 5+ (strict mode): `# *T <owned-binding>` casts
+    // Strict mode: `# *T <owned-binding>` casts
     // hand the caller a raw pointer into a binding the compiler
     // would otherwise auto-drop at scope exit. Even when the pattern
     // is safe in practice, it bypasses the single-owner contract:
@@ -6971,7 +6953,7 @@
     ? == ( nurl_str_get agg_ty 0 ) 37
     { = cur_sname ( nurl_str_slice agg_ty 1 - ( nurl_str_len agg_ty ) 1 ) }
     {}
-    // Closure-escape (docs/GOTCHAS.md item 5/8 / BORROW.md Phase 3):
+    // Closure-escape (docs/GOTCHAS.md item 5/8):
     // track the deepest referent depth among the field values. A field
     // that is a stack reference (a closure capturing a binding by
     // pointer, or a binding / aggregate transitively holding one)
@@ -8057,7 +8039,7 @@
     // A by-pointer capture (mutable multi-field struct) makes this
     // closure carry a pointer into the enclosing function's stack,
     // so it must NOT outlive that frame. The borrow checker's escape
-    // analysis (BORROW.md Phase 3) tags the closure value with a
+    // analysis tags the closure value with a
     // *referent depth* — the deepest block scope it points into — so
     // gen_let / gen_assign / gen_ret / gen_call reject escapes
     // (docs/GOTCHAS.md §8).
@@ -8215,7 +8197,7 @@
 
     ( nurl_set_last_type fn_ptr_type )
 
-    // Escape analysis (BORROW.md Phase 3): advertise this closure
+    // Escape analysis: advertise this closure
     // value's referent depth on `__last_expr_refdepth__` whenever it
     // captures a stack binding by pointer (directly, or transitively
     // via another captured reference). The consuming gen_let /
@@ -8917,7 +8899,7 @@
     ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__tparams` ) tparams )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__gsrc` ) src )
     ( nurl_sym_def syms ( nurl_str_cat fname `__generic` ) `1` )
-    // BORROW.md Phase 4: record this generic function's `inout` / `sink`
+    // Record this generic function's `inout` / `sink`
     // parameter index sets (keyed by the generic name) so a call site
     // can pass `inout` arguments by address and move-mark `sink` ones
     // without waiting for the deferred instantiation to be compiled.
@@ -9201,7 +9183,7 @@
     {}
     : s params_str ``
     : i pct 0
-    // BORROW.md Phase 4: accumulate the 0-based indices of `inout`
+    // Accumulate the 0-based indices of `inout`
     // (and `sink`) parameters as gen_fn_param reports them, then
     // publish the sets to g_fn_inout / g_fn_sink so call sites can
     // pass `inout` arguments by address and move-mark `sink` ones.
@@ -9237,7 +9219,7 @@
         = params_str ( nurl_get_last_type )
         = pct + pct 1
     }
-    // BORROW.md Phase 4: publish this function's inout / sink
+    // Publish this function's inout / sink
     // parameter sets (empty for an ordinary function — harmless,
     // gen_call treats an empty / absent entry the same).
     ( nurl_sym_def g_fn_inout fname inout_acc )
@@ -9403,7 +9385,7 @@
     = g_dbg_current_loc 0
     ( emit_str_globals base_str g_str_idx )
     ( emit_closure_globals )
-    // Borrow checker (BORROW.md): the function body is fully parsed —
+    // Borrow checker: the function body is fully parsed —
     // run the analysis pass before the scope is popped. No-op unless
     // --borrowck is set; never emits IR.
     ( borrowck_fn_end lex syms fname )
@@ -9431,8 +9413,8 @@
 
 // Parse one parameter; return accumulated params_str via nurl_set_last_type.
 // parse_type handles base types, pointer types, and all compound types.
-// Consume an optional parameter-convention marker (BORROW.md Phase 4,
-// Option B — mutable value semantics). Returns the convention:
+// Consume an optional parameter-convention marker. Returns the
+// convention:
 //   0 — default / explicit `in` : immutable borrow, by value (today's
 //       behaviour — a parameter is immutable unless mutated through a
 //       handle's shared buffer)
@@ -9454,17 +9436,17 @@
 
 @ gen_fn_param i lex i syms s cur_params i pct → v {
     ( nurl_sym_def g_res_type_syms `__last_nurl_type__` `` )
-    // BORROW.md Phase 4: `__last_param_inout__` / `__last_param_sink__`
-    // report back to gen_fn_decl_concrete which convention this
-    // parameter used, so it can record the function's inout / sink
-    // index sets in g_fn_inout / g_fn_sink.
+    // `__last_param_inout__` / `__last_param_sink__` report back to
+    // gen_fn_decl_concrete which convention this parameter used, so
+    // it can record the function's inout / sink index sets in
+    // g_fn_inout / g_fn_sink.
     ( nurl_sym_def syms `__last_param_inout__` `` )
     ( nurl_sym_def syms `__last_param_sink__` `` )
-    // BORROW.md Phase 4: optional in/inout/sink convention marker.
-    // A `sink` parameter consumes its argument; codegen-wise it is an
-    // ordinary by-value parameter (the convention is enforced at the
-    // call site — gen_call move-marks the argument), so it needs no
-    // special handling here beyond the side-channel below.
+    // Optional in/inout/sink convention marker. A `sink` parameter
+    // consumes its argument; codegen-wise it is an ordinary by-value
+    // parameter (the convention is enforced at the call site —
+    // gen_call move-marks the argument), so it needs no special
+    // handling here beyond the side-channel below.
     : i pconv ( parse_param_marker lex )
     : s lt ( parse_type lex )
     : s p_nurl_type ( nurl_sym_get g_res_type_syms `__last_nurl_type__` )
@@ -9479,18 +9461,18 @@
         ? ( seq pname `entry` )
         { ( die lex `parameter name 'entry' collides with LLVM's reserved entry: block label. Rename (e.g. 'ent', 'tab_entry'). See docs/GOTCHAS.md item 8.` ) }
         {}
-        // BORROW.md Phase 4: `inout` is a parameter-convention keyword;
-        // banning it as a parameter NAME keeps the scan_fn_sigs
-        // forward-reference check (`<fname>__has_inout`) exact.
+        // `inout` is a parameter-convention keyword; banning it as
+        // a parameter NAME keeps the scan_fn_sigs forward-reference
+        // check (`<fname>__has_inout`) exact.
         ? ( seq pname `inout` )
-        { ( die lex `parameter name 'inout' is a reserved convention keyword (BORROW.md Phase 4) - rename it` ) }
+        { ( die lex `parameter name 'inout' is a reserved convention keyword - rename it` ) }
         {}
         ( nurl_lex_advance lex )
         ( nurl_sym_def syms pname lt )
         // Mark parameter as immutable by design
         ( nurl_sym_def syms ( nurl_str_cat pname `__param` ) `1` )
-        // BORROW.md Phase 4: an `inout` parameter is an exclusive
-        // mutable borrow. It lowers to exactly today's `*T`-by-address
+        // An `inout` parameter is an exclusive mutable borrow. It
+        // lowers to the `*T`-by-address
         // mechanism: the LLVM parameter is `<T>* %name`, and the body
         // sees it as a mutable place whose backing pointer (`__ptr`) is
         // the incoming pointer argument itself — no local alloca, so
@@ -10284,12 +10266,11 @@
     ( emit `declare i32  @printf(i8*, ...)` )
     ( emit `declare i8*  @malloc(i64)` )
     ( emit `declare void @free(i8*)` )
-    // libc string / parse primitives — used by pure-NURL replacements
-    // for the historic `nurl_str_*` C wrappers (PURIFY.md Phase 5,
-    // 2026-05-23). These are globally-callable from NURL programs
-    // and from `nurlc.nu` itself. Returns mapped at their native C
-    // widths (i32 for int-returners, i8* for ptr-returners); NURL
-    // callers do their own widening via `# i` if they need i64.
+    // libc string / parse primitives — declared here so the pure-NURL
+    // `nurl_str_*` helpers can call them globally without per-file
+    // `&`-FFI declarations. Returns mapped at their native C widths
+    // (i32 for int-returners, i8* for ptr-returners); NURL callers do
+    // their own widening via `# i` if they need i64.
     ( emit `declare i64  @strlen(i8*)` )
     ( emit `declare i32  @strcmp(i8*, i8*)` )
     ( emit `declare i32  @strncmp(i8*, i8*, i64)` )
@@ -10301,8 +10282,9 @@
     ( emit `declare double @strtod(i8*, i8**)` )
     ( emit `declare i8*  @memcpy(i8*, i8*, i64)` )
     ( emit `declare i8*  @strdup(i8*)` )
-    // libc stdio primitives — used by pure-NURL replacements for the
-    // historic `nurl_file_*` C wrappers (PURIFY.md Phase 7, 2026-05-23).
+    // libc stdio primitives — declared here so the pure-NURL
+    // `nurl_file_*` helpers in stdlib/std/fs.nu can call them
+    // globally.
     ( emit `declare i8*  @fopen(i8*, i8*)` )
     ( emit `declare i32  @fclose(i8*)` )
     ( emit `declare i32  @fputs(i8*, i8*)` )
@@ -10316,7 +10298,7 @@
     // stat` layout varies per platform). SEEK_END = 2 universally.
     ( emit `declare i32  @fseek(i8*, i64, i32)` )
     ( emit `declare i64  @ftell(i8*)` )
-    // POSIX access(2) for nurl_file_exists pure-NURL @-fn (Phase 7).
+    // POSIX access(2) for the pure-NURL nurl_file_exists @-fn.
     ( emit `declare i32  @access(i8*, i32)` )
     ( emit `declare void @nurl_init(i32, i8**)` )
     ( emit `declare void @nurl_print(i8*)` )
@@ -10327,61 +10309,43 @@
     ( emit `declare void @nurl_print_bool(i1)` )
     ( emit `declare i64  @nurl_read_int()` )
     ( emit `declare i8*  @nurl_read_line()` )
-    // nurl_read_n_bytes → pure NURL `read_n_bytes` in `stdlib/core/io.nu`
-    // (PURIFY 2026-05-24); reads fd 0 via `read(2)` directly.
+    // nurl_read_n_bytes lives as pure NURL `read_n_bytes` in
+    // `stdlib/core/io.nu`; reads fd 0 via `read(2)` directly.
     ( emit `declare i64  @nurl_stdin_eof()` )
     ( emit `declare void @nurl_flush_stdout()` )
     ( emit `declare void @nurl_flush_stderr()` )
-    // PURIFY.md Phase 5 Batch C (2026-05-23): nurl_str_get / _cat /
-    // _cat3 / _cat4 / _slice / _parse_int_range are pure-NURL @-fns
-    // now — declares dropped to avoid clashing with their `define`s
-    // in user code (and the local copies inside nurlc.nu itself).
-    // Batch D' (2026-05-23): _parse_float_range joined them via
-    // strtod. _str_int stays in C — 72 corpus tests use it without
-    // importing stdlib/core/string.nu, and the cost-vs-savings
-    // doesn't justify churning them until a prelude lands. Only
-    // _str_float (printf-family %g, Grisu/Ryu TODO) stays beside it.
+    // nurl_str_get / _cat / _cat3 / _cat4 / _slice / _parse_int_range
+    // / _parse_float_range are pure-NURL @-fns — no preamble declare
+    // here to avoid clashing with their `define`s in user code and
+    // the local copies inside nurlc.nu itself.  _str_int and
+    // _str_float stay in C (printf-family %g, Grisu/Ryu TODO).
     ( emit `declare i8*  @nurl_str_int(i64)` )
     ( emit `declare i8*  @nurl_str_float(double)` )
-    // PURIFY.md Phase 5 (2026-05-23): nurl_str_len / _eq / _cmp /
-    // _to_int / _to_float / _starts / _find / _ends / _memmem_range /
-    // _memcmp_lex are pure-NURL @-fns now (libc-thin wrappers
-    // calling strlen / strcmp / strncmp / strstr / memcmp / memmem /
-    // atoll / atof directly via the global preamble declarations
-    // emitted above).
+    // nurl_str_len / _eq / _cmp / _to_int / _to_float / _starts /
+    // _find / _ends / _memmem_range / _memcmp_lex are pure-NURL
+    // @-fns (libc-thin wrappers calling strlen / strcmp / strncmp /
+    // strstr / memcmp / memmem / atoll / atof directly via the global
+    // preamble declarations emitted above).
     ( emit `declare i64    @nurl_scan_byte3(i8*, i64, i64, i64, i64)` )
     ( emit `declare i64    @nurl_byte_substr(i8*, i64, i8*, i64)` )
     ( emit `declare i64    @nurl_count_byte(i8*, i64, i64)` )
     ( emit `declare double @nurl_fast_atof(i8*, i64)` )
-    // nurl_str_slice — pure-NURL @-fn (PURIFY.md Phase 5 Batch C).
-    // PURIFY.md Phase 9c (2026-05-24): nurl_map_* (string→i64
-    // djb2-chained map) was removed from runtime.c §5; user code
-    // should use the generic `stdlib/std/hashmap.nu` HashMap[K V]
-    // at [s i] instead. See `compiler/tests/hashmap.nu` for the
-    // ported example.
+    // nurl_str_slice is a pure-NURL @-fn.
+    // nurl_map_* (string→i64) is not part of the runtime — use the
+    // generic `stdlib/std/hashmap.nu` HashMap[K V] at [s i] instead.
     ( emit `declare i8*  @nurl_read_file(i8*)` )
     ( emit `declare void @nurl_exit(i64)` )
     ( emit `declare i64  @nurl_argc()` )
     ( emit `declare i8*  @nurl_argv(i64)` )
     ( emit `declare i64  @nurl_argv_count()` )
     ( emit `declare i8*  @nurl_argv_get(i64)` )
-    // PURIFY.md Phase 10 (2026-05-24): nurl_lex_* are pure-NURL
-    // @-fns in compiler/nurlc.nu now (see the §6a Lexer block).
-    // declares + sym_defs deleted in lockstep with the runtime.c §6a
-    // removal.
+    // nurl_lex_* are pure-NURL @-fns in compiler/nurlc.nu (see the
+    // §6a Lexer block).
     ( emit `declare void @nurl_print_buf_start()` )
     ( emit `declare i8*  @nurl_print_buf_stop()` )
     ( emit `declare void @nurl_print_buf_reset()` )
-    // nurl_lex_filename — pure-NURL @-fn (PURIFY Phase 10).
-    // PURIFY.md Phase 9b (2026-05-24): nurl_sym_new / _def / _get /
-    // _push / _pop are pure-NURL @-fns now (see top of this file).
-    // declares + sym_defs deleted in lockstep with the runtime.c §6
-    // removal.
-    // PURIFY.md Phase 9a (2026-05-24): nurl_cg_new / _reg / _lbl /
-    // _reset and nurl_get_last_type / _set_last_type are pure-NURL
-    // @-fns now (see top of this file). Their `declare` lines + the
-    // matching `nurl_sym_def` entries in `init_syms` were deleted in
-    // lockstep with the runtime.c §7+§8 removal.
+    // nurl_lex_filename, nurl_sym_*, nurl_cg_*, nurl_get_last_type
+    // and _set_last_type are pure-NURL @-fns (see top of this file).
     ( emit `declare i8*  @nurl_malloc(i64)` )
     ( emit `declare i8*  @nurl_alloc(i64)` )
     ( emit `declare i8*  @nurl_zalloc(i64)` )
@@ -10392,21 +10356,15 @@
     ( emit `declare void @nurl_memset(i8*, i64, i64)` )
     ( emit `declare i64  @nurl_peek(i8*, i64)` )
     ( emit `declare void @nurl_poke(i8*, i64, i64)` )
-    // PURIFY.md Phase 7 (2026-05-23): nurl_file_open / _write /
-    // _write_range / _write_byte / _close / _read_chunk / _eof are
-    // pure-NURL @-fns now in stdlib/std/fs.nu, calling libc fopen /
-    // fputs / fwrite / fputc / fclose / fread / feof directly.
-    // PURIFY.md Phase 7 (2026-05-23): nurl_file_exists / _del /
-    // _dir_create / _dir_remove are pure-NURL @-fns in
-    // stdlib/std/fs.nu, calling libc access / remove / mkdir / rmdir /
-    // fopen / fseek / ftell / fread / open / mmap / munmap directly.
-    // nurl_errno_kind → pure NURL `errno_kind` in `stdlib/core/posix.nu`
-    // (PURIFY 2026-05-24). Callers $-import posix.nu.
-    // libm wrappers (nurl_sqrt / _fabs / _floor / _ceil / _round /
-    // _pow / _log / _exp / _sin / _cos / _tan / _atan2) and
-    // nurl_iabs / _ipow — moved to pure-NURL (libm direct FFI in
-    // stdlib/std/float.nu; iabs/ipow as plain @-fns in
-    // stdlib/std/int.nu) as PURIFY.md Phase 3 (2026-05-23).
+    // nurl_file_* (open/write/write_range/write_byte/close/read_chunk
+    // /eof/exists/del/dir_create/dir_remove) are pure-NURL @-fns in
+    // stdlib/std/fs.nu, calling libc fopen/fputs/fwrite/fputc/fclose/
+    // fread/feof/access/remove/mkdir/rmdir/fseek/ftell/open/mmap/
+    // munmap directly.
+    // nurl_errno_kind lives as `errno_kind` in `stdlib/core/posix.nu`.
+    // libm wrappers and nurl_iabs / _ipow are pure-NURL (libm direct
+    // FFI in stdlib/std/float.nu; iabs/ipow as plain @-fns in
+    // stdlib/std/int.nu).
     ( emit `declare i64    @nurl_is_nan(double)` )
     ( emit `declare i64    @nurl_is_inf(double)` )
     ( emit `declare i64  @nurl_dir_list_open(i8*)` )
@@ -10414,11 +10372,11 @@
     ( emit `declare void @nurl_dir_list_close(i64)` )
     ( emit `declare i64  @nurl_http_perform_full(i8*, i8*, i8*, i8*)` )
     ( emit `declare i64  @nurl_http_perform_full_to(i8*, i8*, i8*, i8*, i64, i64)` )
-    // The 7 accessors (status / err_kind / body / body_len / header_count
-    // / header_name / header_value) moved to pure-NURL @-fns in
-    // stdlib/ext/http.nu that read the NurlHttpResponse struct via
-    // nurl_peek (PURIFY §14 2026-05-24). Only the C-side freer stays —
-    // it walks the headers array deallocating every name/value pair.
+    // The 7 accessors (status / err_kind / body / body_len /
+    // header_count / header_name / header_value) are pure-NURL @-fns
+    // in stdlib/ext/http.nu that read the NurlHttpResponse struct via
+    // nurl_peek. Only the C-side freer stays — it walks the headers
+    // array deallocating every name/value pair.
     ( emit `declare void @nurl_http_response_free(i64)` )
     ( emit `declare i64  @nurl_http_stream_open_to(i8*, i8*, i8*, i8*, i64, i64)` )
     ( emit `declare i8*  @nurl_http_stream_next(i64)` )
@@ -10445,15 +10403,13 @@
     ( emit `declare i64  @nurl_proc_spawn_kill(i64, i64)` )
     ( emit `declare void @nurl_proc_spawn_free(i64)` )
     // Crypto hash transforms (SHA-1/256/512, MD5, HMAC-SHA-256/512)
-    // moved to pure NURL — `stdlib/std/hash_*.nu` — as PURIFY.md
-    // Phase 4 (2026-05-23). Random surface (`rand_u64` / `rand_hex_str`)
-    // moved to `stdlib/std/random.nu` (2026-05-24); the OS-entropy
-    // bridge `nurl_rand_fill` is declared via `& \`c\`` FFI directly
-    // in `random.nu` — no preamble declare here.
+    // live in pure NURL under `stdlib/std/hash_*.nu`. Random surface
+    // (`rand_u64` / `rand_hex_str`) is in `stdlib/std/random.nu`;
+    // the OS-entropy bridge `nurl_rand_fill` is declared via
+    // `& \`c\`` FFI directly there — no preamble declare here.
     // nurl_read_file_bytes / nurl_write_file_bytes / nurl_last_bytes_len
-    // sideband → pure NURL in `stdlib/std/fs.nu` (PURIFY 2026-05-24);
-    // fread / fwrite write into Vec[u]'s data buffer, vec_set_len records
-    // the count. No more sideband symbol.
+    // are pure NURL in `stdlib/std/fs.nu`; fread / fwrite write into
+    // Vec[u]'s data buffer, vec_set_len records the count.
     ( emit `declare i64  @nurl_tcp_listen(i8*, i64, i64)` )
     ( emit `declare i64  @nurl_tcp_listen_tls(i8*, i64, i64, i8*, i8*)` )
     ( emit `declare i64  @nurl_tcp_listen_tls_alpn(i8*, i64, i64, i8*, i8*, i8*)` )
@@ -10470,10 +10426,11 @@
     ( emit `declare i64  @nurl_tcp_err_kind(i64)` )
     ( emit `declare i8*  @nurl_tcp_peer_addr(i64)` )
     ( emit `declare void @nurl_tcp_set_timeout(i64, i64)` )
-    // Thread / mutex / cond moved to pure-NURL FFI in stdlib/std/thread.nu
-    // (PURIFY.md Phase 6) — libpthread symbols (pthread_create / mutex_*
-    // / cond_*) plus the tiny nurl_pthread_join_ptr / _detach_ptr
-    // trampolines are declared on-demand in that module via `& `c` @ ...`.
+    // Thread / mutex / cond live in pure-NURL FFI in
+    // stdlib/std/thread.nu — libpthread symbols (pthread_create /
+    // mutex_* / cond_*) plus the tiny nurl_pthread_join_ptr /
+    // _detach_ptr trampolines are declared on-demand in that module
+    // via `& `c` @ ...`.
     ( emit `declare void @nurl_signal_install_shutdown(i64)` )
     ( emit `declare void @nurl_signal_trigger_shutdown()` )
     ( emit `declare void @nurl_panic(i8*)` )
@@ -10522,32 +10479,29 @@
     ( nurl_sym_def syms `__imported_files__` `` )
     ( nurl_sym_def syms `__scanned_files__` `` )
     // i8*-returning runtime functions
-    // nurl_lex_val / _filename / _line_text / nurl_diag_caret — pure-NURL @-fns (Phase 10).
-    // PURIFY.md Phase 9a (2026-05-24): nurl_cg_reg / _lbl /
-    // _get_last_type — pure-NURL @-fns now; types come from the
-    // @-fn declaration itself.
-    // nurl_sym_get type comes from @-fn declaration (Phase 9b).
+    // nurl_lex_val / _filename / _line_text / nurl_diag_caret /
+    // nurl_cg_reg / _lbl / _get_last_type / nurl_sym_get are
+    // pure-NURL @-fns; types come from the @-fn declarations.
     ( nurl_sym_def syms `nurl_argv` `i8*` )
     ( nurl_sym_def syms `nurl_argv_get` `i8*` )
     ( nurl_sym_def syms `nurl_read_file` `i8*` )
     ( nurl_sym_def syms `nurl_read_line` `i8*` )
-    // PURIFY.md Phase 5 Batches C+D' (2026-05-23): nurl_str_cat /
-    // _cat3 / _cat4 / _slice / _str_int are pure-NURL @-fns now.
-    // The sym_def keeps cross-module callers typed correctly even
-    // when they don't `$`-import string.nu — omitting it makes
+    // nurl_str_cat / _cat3 / _cat4 / _slice / _str_int are pure-NURL
+    // @-fns. The sym_def keeps cross-module callers typed correctly
+    // even when they don't `$`-import string.nu — omitting it makes
     // nurlc emit `call i64 @nurl_str_cat(...)` and the LLVM verifier
-    // rejects the type mismatch. nurl_str_float (Batch D) still has
-    // a C body.
+    // rejects the type mismatch. nurl_str_float still has a C body.
     ( nurl_sym_def syms `nurl_str_cat` `i8*` )
     ( nurl_sym_def syms `nurl_str_cat3` `i8*` )
     ( nurl_sym_def syms `nurl_str_cat4` `i8*` )
     ( nurl_sym_def syms `nurl_str_int` `i8*` )
     ( nurl_sym_def syms `nurl_str_float` `i8*` )
     ( nurl_sym_def syms `nurl_str_slice` `i8*` )
-    // Phase 2B: mark allocating string runtime calls as returning OWNED str.
-    // Gated on g_auto_drop_strings — off by default to keep the compiler's
-    // own source compilable without false-positive auto-drops. The sideband
-    // `__ret_owned` carries kind: "1" = slice (Phase 2A), "str" = string.
+    // Mark allocating string runtime calls as returning OWNED str.
+    // Gated on g_auto_drop_strings — off by default to keep the
+    // compiler's own source compilable without false-positive
+    // auto-drops. The sideband `__ret_owned` carries kind: "1" =
+    // slice, "str" = string.
     ? != 0 g_auto_drop_strings
     { ( nurl_sym_def syms `nurl_str_cat__ret_owned` `str` )
         ( nurl_sym_def syms `nurl_str_cat3__ret_owned` `str` )
@@ -10564,7 +10518,7 @@
     ( nurl_sym_def syms `nurl_alloc` `i8*` )
     ( nurl_sym_def syms `nurl_zalloc` `i8*` )
     ( nurl_sym_def syms `nurl_realloc` `i8*` )
-    // libc string / parse primitives (PURIFY.md Phase 5, 2026-05-23)
+    // libc string / parse primitives
     ( nurl_sym_def syms `strlen` `i64` )
     ( nurl_sym_def syms `strcmp` `i32` )
     ( nurl_sym_def syms `strncmp` `i32` )
@@ -10576,9 +10530,9 @@
     ( nurl_sym_def syms `strtod` `double` )
     ( nurl_sym_def syms `memcpy` `i8*` )
     ( nurl_sym_def syms `strdup` `i8*` )
-    // libc stdio (PURIFY.md Phase 7, 2026-05-23) — i64-typed returns
-    // align with how the @-fns capture them. fopen returns FILE*
-    // (i8*); fread/fwrite return size_t which we treat as i64.
+    // libc stdio — i64-typed returns align with how the @-fns
+    // capture them. fopen returns FILE* (i8*); fread/fwrite return
+    // size_t which we treat as i64.
     ( nurl_sym_def syms `fopen` `i8*` )
     ( nurl_sym_def syms `fclose` `i32` )
     ( nurl_sym_def syms `fputs` `i32` )
@@ -10603,17 +10557,16 @@
     // double-returning runtime functions
     // nurl_lex_fnum — pure-NURL @-fn (Phase 10).
     ( nurl_sym_def syms `nurl_parse_float_range` `double` )
-    // libm wrappers + iabs/ipow removed in PURIFY.md Phase 3 — see
-    // `stdlib/std/float.nu` (libm FFI) and `stdlib/std/int.nu`
-    // (pure-NURL int_abs / int_pow).
+    // libm wrappers + iabs/ipow live in `stdlib/std/float.nu` (libm
+    // FFI) and `stdlib/std/int.nu` (pure-NURL int_abs / int_pow).
     // i64-returning math/parse helpers (still C-side)
     ( nurl_sym_def syms `nurl_is_nan` `i64` )
     ( nurl_sym_def syms `nurl_is_inf` `i64` )
     ( nurl_sym_def syms `nurl_parse_int_range` `i64` )
     // nurl_str_len / _eq / _cmp / _to_int / _to_float / _starts /
-    // _find / _ends / _memmem_range / _memcmp_lex — pure-NURL
-    // @-fns now (PURIFY.md Phase 5, 2026-05-23). Their return
-    // types are discovered from the @-fn declaration itself.
+    // _find / _ends / _memmem_range / _memcmp_lex are pure-NURL
+    // @-fns. Their return types are discovered from the @-fn
+    // declaration itself.
     ( nurl_sym_def syms `nurl_scan_byte3` `i64` )
     ( nurl_sym_def syms `nurl_byte_substr` `i64` )
     ( nurl_sym_def syms `nurl_count_byte` `i64` )
@@ -10628,9 +10581,9 @@
     // __ret_owned=str marker — the caller MUST NOT auto-free them.
     ( nurl_sym_def syms `nurl_http_perform_full` `i64` )
     ( nurl_sym_def syms `nurl_http_perform_full_to` `i64` )
-    // accessors (status/err_kind/body/body_len/header_count/_name/_value)
-    // now pure NURL in stdlib/ext/http.nu — see runtime.c §14 + nurlc
-    // preamble note above (PURIFY §14 2026-05-24).
+    // accessors (status/err_kind/body/body_len/header_count/_name/
+    // _value) are pure NURL in stdlib/ext/http.nu — see runtime.c
+    // §14 + nurlc preamble note above.
     ( nurl_sym_def syms `nurl_http_response_free` `void` )
     // HTTP streaming (runtime.c §14b). Pull-based — NURL drives one
     // chunk at a time. `nurl_http_stream_next` returns a heap-owned
@@ -10670,9 +10623,8 @@
     // (caller frees via nurl_free); not auto-marked __ret_owned because
     // the wrappers in stdlib/std/hash.nu and stdlib/std/random.nu do
     // their own copy + free.
-    // Crypto hash sym_defs — see PURIFY.md Phase 4 comment above.
-    // Binary file I/O (runtime §4 extension) — moved to pure NURL in
-    // `stdlib/std/fs.nu` (PURIFY 2026-05-24). No more sideband symbol.
+    // Crypto hash sym_defs live in their pure-NURL modules.
+    // Binary file I/O lives as pure NURL in `stdlib/std/fs.nu`.
     // TCP sockets (runtime §18). Handles are i64-cast heap pointers; the
     // peer-addr accessor returns a BORROWED view into the handle struct,
     // so it is intentionally NOT __ret_owned-marked (caller copies via
@@ -10693,11 +10645,11 @@
     ( nurl_sym_def syms `nurl_tcp_err_kind` `i64` )
     ( nurl_sym_def syms `nurl_tcp_peer_addr` `i8*` )
     ( nurl_sym_def syms `nurl_tcp_set_timeout` `void` )
-    // Thread / mutex / cond entirely on the pure-NURL FFI side now
-    // (PURIFY Phase 6): pthread_create / pthread_mutex_* /
-    // pthread_cond_* plus the nurl_pthread_join_ptr / _detach_ptr
-    // trampolines are declared in stdlib/std/thread.nu via `& `c` @ ...`,
-    // so no sym_def registrations are needed here.
+    // Thread / mutex / cond live on the pure-NURL FFI side:
+    // pthread_create / pthread_mutex_* / pthread_cond_* plus the
+    // nurl_pthread_join_ptr / _detach_ptr trampolines are declared
+    // in stdlib/std/thread.nu via `& `c` @ ...`, so no sym_def
+    // registrations are needed here.
     ( nurl_sym_def syms `nurl_signal_install_shutdown` `void` )
     ( nurl_sym_def syms `nurl_signal_trigger_shutdown` `void` )
     ( nurl_sym_def syms `nurl_panic` `void` )
@@ -10710,17 +10662,16 @@
     ( nurl_sym_def syms `nurl_print_int` `void` )
     ( nurl_sym_def syms `nurl_print_str` `void` )
     ( nurl_sym_def syms `nurl_print_bool` `void` )
-    // nurl_lex_advance — pure-NURL @-fn (Phase 10).
-    // nurl_sym_def / _push / _pop types come from @-fn declarations (Phase 9b).
-    // PURIFY.md Phase 9a (2026-05-24): nurl_cg_reset / _set_last_type
-    // are pure-NURL @-fns now.
+    // nurl_lex_advance, nurl_sym_def / _push / _pop, nurl_cg_reset
+    // and nurl_set_last_type are pure-NURL @-fns; their types come
+    // from the @-fn declarations.
     ( nurl_sym_def syms `nurl_exit` `void` )
     ( nurl_sym_def syms `nurl_flush_stdout` `void` )
     ( nurl_sym_def syms `nurl_flush_stderr` `void` )
     ( nurl_sym_def syms `nurl_stdin_eof` `i64` )
     ( nurl_sym_def syms `free` `void` )
     ( nurl_sym_def syms `nurl_free` `void` )
-    // PURIFY.md Phase 9c (2026-05-24): nurl_map_* gone (see emit_preamble).
+    // nurl_map_* lives as the generic HashMap[K V] — see emit_preamble.
     ( nurl_sym_def syms `nurl_memcpy` `void` )
     ( nurl_sym_def syms `nurl_memmove` `void` )
     ( nurl_sym_def syms `nurl_poke` `void` )
@@ -11172,11 +11123,11 @@
 
 // scan_skip_type — lexically advance past ONE type expression in a
 // function-signature parameter region. Mirrors parse_type's grammar
-// shape but emits no IR and calls no parse_* helper: a parse_type call
-// inside scan_fn_sigs desyncs the scan (BORROW.md Phase 4). Returns 1
-// on success, 0 on a shape it cannot classify (an anonymous enum type,
-// say); the caller then abandons the arity count for that function —
-// a missed check, never a wrong one.
+// shape but emits no IR and calls no parse_* helper: a parse_type
+// call inside scan_fn_sigs desyncs the scan. Returns 1 on success,
+// 0 on a shape it cannot classify (an anonymous enum type, say); the
+// caller then abandons the arity count for that function — a missed
+// check, never a wrong one.
 @ scan_skip_type i lex → i {
     : i tt ( nurl_lex_type lex )
     ? == tt TT_STAR   { ( nurl_lex_advance lex ) ^ ( scan_skip_type lex ) } {}
@@ -11255,8 +11206,8 @@
                 { ~ != ( nurl_lex_type lex ) TT_RBRACK { ( nurl_lex_advance lex ) }
                     ( nurl_lex_advance lex )  // consume ']'
                     ( nurl_sym_def syms ( nurl_str_cat fname `__generic` ) `1` )
-                    // BORROW.md Phase 4: scan the parameter region (from
-                    // here to the body `{`) for the `inout` marker, just
+                    // Scan the parameter region (from here to the
+                    // body `{`) for the `inout` marker, just
                     // as the non-generic branch below does. `inout` is
                     // banned as a parameter NAME so a bare `inout` token
                     // here is exact. This lets a forward call to a
@@ -11275,8 +11226,8 @@
                     {}
                     ( skip_balanced lex )
                 }
-                { // BORROW.md Phase 4 + arity: walk the parameter
-                  // region counting parameters — one `[marker] TYPE
+                { // Walk the parameter region counting parameters —
+                  // one `[marker] TYPE
                   // NAME` triple each, the TYPE skipped purely
                   // lexically via scan_skip_type — and note whether the
                   // `inout` marker appears. `inout` is banned as a
@@ -11408,9 +11359,9 @@
 // reference). Without it a forward-referenced payload type is misparsed
 // as a phantom extra variant.
 //
-// Purely lexical + brace-depth-tracked — no parse_type call (the
-// scan_fn_sigs param-walk desync lesson, BORROW.md Phase 4). Only
-// depth-0 `:` decls are inspected; variant names live inside the `{}`
+// Purely lexical + brace-depth-tracked — no parse_type call (a
+// parse_type call inside scan_* desyncs the scan). Only depth-0 `:`
+// decls are inspected; variant names live inside the `{}`
 // body at depth > 0 and are never registered here. A constant
 // (`: ~? Type name value`) carries its name in 2nd position with no
 // `{`/`[` after the 1st token, so it is correctly skipped.
@@ -11512,9 +11463,9 @@
     // CLI: `nurlc [--g] [--no-borrowck] <file.nu>`. Optional flags in
     // any order; the lone non-flag argument is the source path.
     //   --g / -g       toggle DWARF emission (nurl.sh forwards --debug)
-    //   --no-borrowck  disable the borrow-checker analysis pass; it is
-    //                  ON by default (BORROW.md Phase 8)
-    //   --borrowck     accepted for compatibility — now a no-op, since
+    //   --no-borrowck  disable the borrow-checker analysis pass; it
+    //                  is ON by default
+    //   --borrowck     accepted for compatibility — a no-op, since
     //                  the pass is on by default
     : ~ s path ``
     : ~ i ai 1
@@ -11575,11 +11526,11 @@
     // Emit all deferred generic instantiations collected during compilation.
     ( flush_deferred_instantiations syms cg )
     ( dbg_flush )
-    // BORROW.md Phase 8 final (2026-05-25): borrow-checker diagnostics
-    // are errors, not warnings. We let parse_program walk every
-    // function so every violation surfaces in one run, then exit
-    // non-zero here if any were recorded. A borrow-clean program
-    // leaves g_bck_errors at 0 and this is a no-op.
+    // Borrow-checker diagnostics are errors, not warnings. We let
+    // parse_program walk every function so every violation surfaces
+    // in one run, then exit non-zero here if any were recorded. A
+    // borrow-clean program leaves g_bck_errors at 0 and this is a
+    // no-op.
     ? > g_bck_errors 0
     { ( nurl_eprintln ( nurl_str_cat3 `error: compilation aborted - `
         ( nurl_str_int g_bck_errors )

@@ -34,12 +34,9 @@ $ `stdlib/core/string.nu`
 
 // ── Operations ─────────────────────────────────────────────────────
 
-// Pure-NURL replacements for the historic `nurl_iabs` / `nurl_ipow` C
-// helpers — runtime §11 dropped 2026-05-23 as PURIFY.md Phase 3.
-
 // LLONG_MIN (`- -9223372036854775807 1`) is its own negation in
-// two's-complement; the saturate-to-LLONG_MIN match preserves the
-// historic behaviour rather than wrapping to +0.
+// two's-complement; the saturate-to-LLONG_MIN match prevents the
+// wrap to +0.
 @ int_abs i n → i {
     ? == n - -9223372036854775807 1 { ^ n } {}
     ? < n 0 { ^ - 0 n } {}

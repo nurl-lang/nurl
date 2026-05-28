@@ -1,8 +1,10 @@
-// borrow_strict_field_alias.nu — BORROW.md Phase 5+ (strict mode):
-// the existing N-readers-XOR-1-writer check fires only when both
-// aliasing arguments are BARE identifiers; under `--strict-borrowck`
-// it also fires when one or both arguments reach the same binding
-// through a `. obj field` projection.
+// borrow_strict_field_alias.nu — strict-mode extension of the
+// N-readers-XOR-1-writer check.
+//
+// The default check fires only when both aliasing arguments are BARE
+// identifiers; under `--strict-borrowck` it also fires when one or
+// both arguments reach the same binding through a `. obj field`
+// projection.
 //
 // This file compiles cleanly under default `--borrowck` (the bare-
 // identifier check does not see `. c n` as aliasing `c`) and only

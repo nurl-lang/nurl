@@ -1,13 +1,8 @@
-// HashMap runtime test — string keys, int values
+// HashMap runtime test — string keys, int values.
 //
-// PURIFY.md Phase 9c (2026-05-24): the historic runtime.c §5
-// `nurl_map_*` API was a string→i64-only djb2-chained hashmap. It
-// has been deleted; the same surface is provided by the generic
-// `stdlib/std/hashmap.nu` HashMap[K V] instantiated at [s i]. This
-// test exercises the same operations the runtime version did
-// (new / put / get / size / contains / overwrite / delete / free)
-// and produces byte-identical output so the baseline diff is the
-// same line-for-line as before the §5 removal.
+// Exercises the generic `stdlib/std/hashmap.nu` HashMap[K V]
+// instantiated at [s i]: new / put / get / size / contains /
+// overwrite / delete / free.
 
 $ `stdlib/std/hashmap.nu`
 $ `stdlib/core/option.nu`

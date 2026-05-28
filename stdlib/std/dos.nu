@@ -1,16 +1,11 @@
 // stdlib/std/dos.nu — concurrent + per-IP connection caps
 //
-// PURIFY.md Phase 11 (2026-05-23): formerly stdlib/runtime.c §23 — the
-// whole 196-LOC C body migrated here. Mutex + condvar primitives come
-// from stdlib/std/thread.nu (Phase 6 pure-NURL pthread FFI); the IP
-// table is two parallel heap-allocated arrays (i8* / i64) hand-managed
-// via nurl_alloc / nurl_realloc.
+// Mutex + condvar primitives come from stdlib/std/thread.nu (pure-NURL
+// pthread FFI); the IP table is two parallel heap-allocated arrays
+// (i8* / i64) hand-managed via nurl_alloc / nurl_realloc.
 //
-// API (unchanged from the pre-purify C ABI — the public name dropped
-// the `nurl_` prefix in line with how Phase 3 / Phase 4 / Phase 6
-// migrated their surfaces, but the raw-pointer-as-`i` handle shape
-// stays identical so HttpServer's `dos_state` field can keep its
-// `s` type with a `# i` cast):
+// API (the raw-pointer-as-`i` handle shape lets HttpServer's
+// `dos_state` field keep its `s` type with a `# i` cast):
 //
 //   ( dos_state_new          i max_concurrent i max_per_ip ) → i
 //   ( dos_state_try_acquire  i state s ip )                  → i  0/1

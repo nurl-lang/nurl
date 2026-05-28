@@ -1,15 +1,14 @@
 // stdlib/core/posix.nu — pure-NURL POSIX syscall surface.
 //
-// PURIFY.md Phase 8 scaffolding (2026-05-23). FFI declarations for
-// the libc syscalls needed by the upcoming process-spawn / proc-run
-// ports, plus the constant + errno + waitpid-status helpers that
+// FFI declarations for the libc syscalls used by process-spawn /
+// proc-run, plus the constant + errno + waitpid-status helpers that
 // runtime.c §2 exposes.
 //
 // Audience: stdlib modules that need raw POSIX semantics
-// (`stdlib/std/process.nu` after Phase 8 lands, future `stdlib/std/signal.nu`,
-// possible `stdlib/std/fs.nu` operations). User code is generally
-// expected to use the higher-level wrappers — direct POSIX FFI is
-// fine, but `process_run` / `file_open` / etc. are friendlier.
+// (`stdlib/std/process.nu`, future `stdlib/std/signal.nu`, parts of
+// `stdlib/std/fs.nu`). User code is generally expected to use the
+// higher-level wrappers — direct POSIX FFI is fine, but
+// `process_run` / `file_open` / etc. are friendlier.
 //
 // Platform gating: every symbol below is POSIX-only. Win32 builds
 // resolve them against winpthreads / msvcrt where applicable

@@ -8,10 +8,9 @@
  * Link:     clang program.ll stdlib/runtime.o -o program
  *
  * Most language primitives (string/file/process/threads/crypto/etc.)
- * have moved to pure-NURL FFI in `stdlib/` modules over libc / libpthread
- * / libcurl / libsqlite3 / libz; what remains here is irreducible
+ * live in pure-NURL FFI in `stdlib/` modules over libc / libpthread /
+ * libcurl / libsqlite3 / libz; what remains here is irreducible
  * syscall-shaped glue and state-cached external-library bridges.
- * See PURIFY.md for the per-section inventory.
  *
  * All functions use the "nurl_" prefix to avoid colliding with libc.
  */

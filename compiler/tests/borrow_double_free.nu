@@ -1,4 +1,4 @@
-// Borrow checker (BORROW.md Phase 2) — alias double-free regression.
+// Borrow checker — alias double-free regression.
 // The harness compiles `borrow_*` tests with --borrowck. The copy
 // `: (Vec i) b a` moves `a` into `b`, its new owner; freeing `a`
 // afterwards uses the moved-from binding — the silent-alias double

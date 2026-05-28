@@ -1,5 +1,5 @@
-// should_fail_inout_field_immut.nu — BORROW.md Phase 4: an `inout`
-// field target `. obj field` requires `obj` to be a mutable (`: ~`)
+// should_fail_inout_field_immut.nu — an `inout` field target
+// `. obj field` requires `obj` to be a mutable (`: ~`)
 // binding, since the callee mutates that field in place. A field
 // target naming an immutable struct binding is rejected. Expect
 // COMPILE FAIL.

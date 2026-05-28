@@ -1,5 +1,5 @@
-// should_fail_inout_forward.nu — BORROW.md Phase 4: an `inout`
-// function must be DEFINED before it is called. The inout-parameter
+// should_fail_inout_forward.nu — an `inout` function must be DEFINED
+// before it is called. The inout-parameter
 // set is recorded as each function is compiled; a call compiled
 // before the definition would not know to pass the argument by
 // address and would miscompile silently. scan_fn_sigs records

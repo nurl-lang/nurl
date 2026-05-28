@@ -1,5 +1,7 @@
-// borrow_strict_raw_ptr_escape.nu — BORROW.md Phase 5+ (strict mode):
-// a `# *T <owned-binding>` cast hands the caller a raw pointer into
+// borrow_strict_raw_ptr_escape.nu — strict-mode raw-pointer-escape
+// check.
+//
+// A `# *T <owned-binding>` cast hands the caller a raw pointer into
 // a binding the compiler will auto-drop at scope exit. Even when the
 // pattern is safe in this specific function, it bypasses the single-
 // owner contract: any later reassignment, sink-pass, explicit free,

@@ -153,8 +153,9 @@ for src in "${tests[@]}"; do
     stdout_log="$LOGDIR/$name.stdout"
     stderr_log="$LOGDIR/$name.stderr"
 
-    # borrow_* — BORROW.md baseline tests. They contain *deliberate*
-    # use-after-free / double-free / use-after-move patterns whose
+    # borrow_* — borrow-checker baseline tests. They contain
+    # *deliberate* use-after-free / double-free / use-after-move
+    # patterns whose
     # purpose is to exercise the borrow checker's warning path. The
     # normal run_tests.sh compiles them with `--borrowck` and never
     # links or runs them; we mirror that here so ASan isn't asked to

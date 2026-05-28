@@ -150,7 +150,6 @@ EOF
         -v "$SCRIPT_DIR/stdlib/core:/opt/nurl/stdlib/core:ro" \
         -v "$SCRIPT_DIR/stdlib/std:/opt/nurl/stdlib/std:ro" \
         -v "$SCRIPT_DIR/stdlib/ext:/opt/nurl/stdlib/ext:ro" \
-        -v "$SCRIPT_DIR/stdlib/STDLIB.md:/opt/nurl/stdlib/STDLIB.md:ro" \
         -v "$RUNTIME_WASM:/opt/nurl/stdlib/runtime.wasm.o:ro" \
         -v "$SCRIPT_DIR/examples:/opt/nurl/examples:ro" \
         -v "$SCRIPT_DIR/compiler/tests:/opt/nurl/compiler/tests:ro" \

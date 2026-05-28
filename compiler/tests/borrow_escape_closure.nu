@@ -1,15 +1,15 @@
-// borrow_escape_closure.nu — BORROW.md Phase 3 escape analysis.
-// docs/GOTCHAS.md item 5 foot-gun: a closure that captures a
-// `: ~`-mutable multi-field struct is captured by POINTER into the
-// enclosing function's stack frame. Returning it (or storing it
-// somewhere that outlives the caller) dangles the pointer — any
-// later invocation is use-after-free.
+// borrow_escape_closure.nu — escape analysis for closure-captured
+// mutable struct pointers.
+//
+// docs/GOTCHAS.md item 5: a closure that captures a `: ~`-mutable
+// multi-field struct is captured by POINTER into the enclosing
+// function's stack frame. Returning it (or storing it somewhere that
+// outlives the caller) dangles the pointer — any later invocation is
+// use-after-free.
 //
 // The borrow checker tags such a closure value with a referent depth
 // (the scope frame it points into) and rejects `^`-returning it past
-// that frame. The harness compiles `borrow_*` tests with --borrowck
-// and records the diagnostic in the baseline; the check is inert
-// without the flag (it moves to on-by-default in BORROW.md Phase 8).
+// that frame.
 //
 // Two positive cases (both warn) + two negative controls (no warning).
 

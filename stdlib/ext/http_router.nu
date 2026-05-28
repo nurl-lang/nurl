@@ -1,8 +1,7 @@
-// stdlib/ext/http_router.nu — Phase 6 of HTTP_SERVER_PLAN.md.
-// Method + path routing with named captures and tail wildcards.
-// Sits on top of `stdlib/ext/http_request.nu` (HttpRequest + QueryPair)
-// and `stdlib/ext/http_response.nu` (HttpResponse). Pure NURL — no
-// runtime/compiler additions.
+// stdlib/ext/http_router.nu — method + path routing with named
+// captures and tail wildcards. Sits on top of
+// `stdlib/ext/http_request.nu` (HttpRequest + QueryPair) and
+// `stdlib/ext/http_response.nu` (HttpResponse). Pure NURL.
 //
 // Pattern syntax (Express/Sinatra-style):
 //
@@ -60,8 +59,7 @@
 //     a fresh closure handle. The caller owns the resulting closure
 //     identically to a hand-written one — no extra cleanup.
 //
-// Notes on language gaps inherited from earlier phases (see
-// HTTP_SERVER_PLAN.md "Cross-cutting prerequisites"):
+// Notes on inherited language gaps:
 //
 //   * Multi-field structs can't ride `! T E` Ok arms. `router_handle`
 //     can't fail (it always either dispatches or 404s) so it returns

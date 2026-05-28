@@ -2,9 +2,8 @@
 
 This document is the single reference for how NURL manages memory: who
 owns a heap allocation, when it is freed, and what the compiler checks
-statically. It covers the model as actually implemented in `nurlc.nu`
-(grammar v2.1). The phased roadmap for the static analysis lives in
-[`../BORROW.md`](../BORROW.md).
+statically. It covers the model as implemented in `nurlc.nu` (grammar
+v2.1).
 
 ## TL;DR
 
@@ -14,16 +13,16 @@ statically. It covers the model as actually implemented in `nurlc.nu`
   reference counting for ordinary values (closure environments are
   the one exception — they are RC'd).
 - **A borrow checker runs by default.** A diagnostic analysis pass
-  (BORROW.md Phases 1-3) catches use-after-move, alias double-free,
-  and closures that escape the stack frame they point into. It is on
-  unless you pass `--no-borrowck`.
+  catches use-after-move, alias double-free, and closures that escape
+  the stack frame they point into. It is on unless you pass
+  `--no-borrowck`.
 - **It is a diagnostic pass and its diagnostics are hard errors.**
-  Since 2026-05-25 the borrow checker emits `error:` lines and the
-  compiler exits non-zero with a count of violations after walking
-  the whole program (so every error surfaces in one run). It *never*
-  changes generated code — a borrow-clean program compiles to
-  byte-identical IR with or without the checker. `--no-borrowck`
-  remains the escape hatch for a false positive.
+  The borrow checker emits `error:` lines and the compiler exits
+  non-zero with a count of violations after walking the whole
+  program (so every error surfaces in one run). It *never* changes
+  generated code — a borrow-clean program compiles to byte-identical
+  IR with or without the checker. `--no-borrowck` remains the
+  escape hatch for a false positive.
 
 ## 1. Ownership and auto-drop
 
@@ -67,8 +66,7 @@ entry (C/Go/Zig semantics), and `= . p field val` inside the callee
 writes that local copy, leaving the caller's struct unchanged.
 
 To let a callee mutate the caller's value in place, mark the
-parameter **`inout`** (BORROW.md Phase 4, Option B — mutable value
-semantics):
+parameter **`inout`**:
 
 ```
 @ bump inout Counter c → v { = . c n + . c n 1 }
@@ -121,12 +119,8 @@ diagnostics and never lowers anything, a borrow-clean program produces
 the exact same IR either way — the bootstrap fixed point is
 unaffected.
 
-All five rules emit `error:` as of 2026-05-25. They were introduced as
-`warning:` (BORROW.md watch #3 — a new rule ships as a warning and is
-promoted to a hard error only once proven false-positive-free across
-the whole compiler + stdlib + test + example corpus) and promoted
-after a clean 5-day soak. Use `--no-borrowck` for the escape hatch if
-a corner case slips through.
+All five rules emit `error:`. Use `--no-borrowck` for the escape
+hatch if a corner case slips through.
 
 ### 2.1 Move checking — use-after-move
 
@@ -159,9 +153,9 @@ double-free: two live bindings can no longer own the same buffer
 unnoticed.
 
 A *mutable* copy `: ~ T b a` is treated as a working cursor (a borrow,
-not a move) and is left alone — distinguishing a borrow from a move in
-the general case is the job of the reference surface in BORROW.md
-Phase 4.
+not a move) and is left alone — distinguishing a borrow from a move
+in the general case is the job of the parameter-convention surface
+(`in` / `inout` / `sink`).
 
 ### 2.3 Escape analysis
 
@@ -238,17 +232,15 @@ The borrow checker targets the bug classes that ordinary NURL code
 hits in practice. It deliberately does **not** yet cover:
 
 - **Aliased mutation beyond a single call.** The exclusive-access
-  check (2.4) covers a binding aliased among one call's arguments. A
-  binding read through a *nested* sub-expression argument, and any
-  longer-range aliased-mutation analysis, is not yet done — BORROW.md
-  Phase 5 (remainder).
+  check (2.4) covers a binding aliased among one call's arguments.
+  A binding read through a *nested* sub-expression argument, and
+  any longer-range aliased-mutation analysis, is not yet done.
 - **`*T` raw pointers.** `*T` is the FFI ABI escape hatch — NURL's
-  `unsafe`. A `*T` taken of a local, stored, returned, or captured is
-  *not* checked. Treat `*T` lifetimes as your responsibility.
+  `unsafe`. A `*T` taken of a local, stored, returned, or captured
+  is *not* checked. Treat `*T` lifetimes as your responsibility.
 - **Interprocedural escape.** A stack reference passed *through a
   helper function* that retains it cannot be caught by a
-  per-function pass; that needs function summaries (BORROW.md
-  Phase 7).
+  per-function pass; that would need function summaries.
 - **`recover` / panic edges.** Owned values in a `recover` scope leak
   on panic; the checker treats `recover` as an ordinary call and does
   not model panic control flow.
@@ -271,16 +263,13 @@ hits in practice. It deliberately does **not** yet cover:
 
 ## 5. Status
 
-| Bug class | Checked? | BORROW.md phase |
-|---|---|---|
-| Use-after-move | yes (`error:`) | Phase 1 |
-| Alias double-free | yes (`error:`) | Phase 2 |
-| Closure / stack-reference escape | yes (`error:`) | Phase 3 |
-| `inout` exclusive access (call-site aliasing) | yes (`error:`) | Phases 4-5 |
-| Iterator invalidation (mutate container in `~`-foreach) | yes (`error:`) | Phase 6 |
-| Aliased mutation via nested-argument reads | no | Phase 5 (remainder) |
-| Returned borrows / lifetime inference | no | Phase 7 |
-| `*T` raw pointers | no (by design) | n/a |
-
-See [`../BORROW.md`](../BORROW.md) for the full design rationale,
-the per-phase implementation notes, and the open roadmap.
+| Bug class | Checked? |
+|---|---|
+| Use-after-move | yes (`error:`) |
+| Alias double-free | yes (`error:`) |
+| Closure / stack-reference escape | yes (`error:`) |
+| `inout` exclusive access (call-site aliasing) | yes (`error:`) |
+| Iterator invalidation (mutate container in `~`-foreach) | yes (`error:`) |
+| Aliased mutation via nested-argument reads | no |
+| Returned borrows / lifetime inference | no |
+| `*T` raw pointers | no (by design) |

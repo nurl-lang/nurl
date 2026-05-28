@@ -1,19 +1,7 @@
-# Async Runtime — Design & Phased Implementation Plan
+# Async Runtime — Design
 
-> **Status (2026-05-23): Design only — no code shipped yet.**
-> This document is the design for adding *stackful M:N work-stealing
-> fibers* to NURL. It precedes any `runtime.c` change so the API and
-> runtime shape can be reviewed in one place.
->
-> Closes the open ROADMAP.md §1 item "Async/Await Design" and the
-> critic.md §5 critique ("no panic / unwind model … no effect system,
-> no async/await, no Future\[T\]. Concurrency today is raw threads and
-> channels").
->
-> Same structure as `HTTP_SERVER_PLAN.md` and `BORROW.md`: each phase is
-> independently testable, leaves the tree green, and documents what the
-> previous phase set up. Bootstrap fixed point must hold after every
-> phase.
+> This document describes the *stackful M:N work-stealing fibers*
+> design for NURL's async runtime.
 
 ---
 
@@ -358,11 +346,11 @@ fiber-agnostic.
 
 ### IV.3  Capture-by-pointer (`: ~` mutable struct in closure)
 
-The existing `BORROW.md` Phase 3 escape-analysis warning already
-covers the dangerous shape — a `: ~`-mutable struct captured by
-pointer into a closure that escapes via `vec_push`/`thread_spawn`/
-return. The new `spawn` adds one more name to the warning's
-recognised-shape list. *No new safety hole.*
+The existing escape-analysis warning already covers the dangerous
+shape — a `: ~`-mutable struct captured by pointer into a closure
+that escapes via `vec_push`/`thread_spawn`/return. The new `spawn`
+adds one more name to the warning's recognised-shape list. *No new
+safety hole.*
 
 ### IV.4  Cancellation
 
@@ -580,8 +568,7 @@ now.
    flag `--no-async` that drops every fiber primitive from the
    runtime, for users targeting truly embedded systems where mmap +
    pthread is unavailable? *Suggested:* yes — same shape as
-   `BORROW.md`'s `--no-borrowck`, sentinel-checked at the FFI declaration
-   site.
+   `--no-borrowck`, sentinel-checked at the FFI declaration site.
 
 ---
 

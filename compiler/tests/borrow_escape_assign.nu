@@ -1,6 +1,5 @@
-// borrow_escape_assign.nu — BORROW.md Phase 3: the *region* part of
-// escape analysis, plus copy propagation. These are the two shapes
-// the old `__captures_byref` name+flag hack could not see:
+// borrow_escape_assign.nu — region tracking + copy propagation in the
+// escape analysis. Two shapes a name+flag heuristic alone would miss:
 //
 //   * `= outer inner` — a closure created in an inner block, capturing
 //     an inner-block `: ~` binding, assigned to a binding declared in

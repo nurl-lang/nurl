@@ -1,6 +1,5 @@
 // json_parse — parse bench/data.json 50 times, print parses-OK count.
 // Uses NURL's stdlib JSON parser (stdlib/ext/json.nu).
-$ `stdlib/core/io.nu`
 $ `stdlib/ext/json.nu`
 
 @ main → i {
@@ -15,6 +14,6 @@ $ `stdlib/ext/json.nu`
         }
         = iters - iters 1
     }
-    ( puts ( nurl_str_int ok ) )
+    ( nurl_print_int ok )
     ^ 0
 }

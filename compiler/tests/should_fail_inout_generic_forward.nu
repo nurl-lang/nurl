@@ -1,6 +1,5 @@
-// should_fail_inout_generic_forward.nu — BORROW.md Phase 4: a GENERIC
-// `inout` function, exactly like an ordinary one, must be DEFINED
-// before it is called.
+// should_fail_inout_generic_forward.nu — a GENERIC `inout` function,
+// exactly like an ordinary one, must be DEFINED before it is called.
 //
 // compute_generic_inout_sink records the type-independent inout index
 // set when the generic template is stored (gen_generic_fn_store), and

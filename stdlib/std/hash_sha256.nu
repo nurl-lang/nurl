@@ -1,9 +1,5 @@
 // stdlib/std/hash_sha256.nu — FIPS 180-4 SHA-256 in pure NURL.
 //
-// PURIFY.md Phase 4 (2026-05-23). Replaces the self-contained SHA-256
-// transform in `stdlib/runtime.c §17` (the `nurl_sha256_*` C bridge).
-// Same 256-bit digest, byte-identical output for every test vector.
-//
 // API:
 //   ( sha256_pure ( Vec u ) data )       → ( Vec u )   32-byte digest
 //   ( hmac_sha256_pure ( Vec u ) key

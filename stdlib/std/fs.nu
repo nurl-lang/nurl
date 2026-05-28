@@ -477,11 +477,9 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 // linked). nurl_path_type: 0 missing, 1 file, 2 dir, 3 symlink, 4 other.
 & `c` @ nurl_path_type       s path        → i
 
-// ── PURIFY.md Phase 7 (2026-05-23): nurl_file_* C→NURL via libc stdio ──
+// ── nurl_file_* via libc stdio ─────────────────────────────────────
 // fopen / fclose / fputs / fwrite / fputc / fread / feof come from
-// the nurlc preamble (globally declared); each @-fn below mirrors
-// the historic C wrapper bit-for-bit minus the (void*) casts that
-// the C version threaded through. Handles are *v throughout.
+// the nurlc preamble (globally declared). Handles are *v throughout.
 
 // fopen wrapper. Returns NULL handle on failure (NURL callers check
 // via `# i h == 0`).
@@ -518,15 +516,14 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ^ ? != 0 # i ( feof # s h ) 1 0
 }
 
-// PURIFY (2026-05-24): nurl_file_read_chunk moved to pure NURL —
 // `file_read_chunk` below calls fread(buf, 1, n, h) directly into a
 // Vec[u]'s data buffer; ferror gates the read-error path.
 & `c` @ ferror s h → i32
 
-// ── PURIFY.md Phase 7 batch 2 (2026-05-23): probe + mutation ──
+// ── probe + mutation ───────────────────────────────────────────────
 // access(2) / remove(3) / mkdir(2) / rmdir(2) wrappers. `access`
-// uses F_OK (0) for "does this path exist at all". `mkdir` mode
-// is 0755 (decimal 493) to match the historic C wrapper.
+// uses F_OK (0) for "does this path exist at all". `mkdir` mode is
+// 0755 (decimal 493).
 
 & `c` @ remove s path                      → i32
 & `c` @ mkdir  s path i32 mode             → i32

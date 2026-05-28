@@ -1,4 +1,5 @@
-// borrow_iter_invalidation.nu — BORROW.md Phase 6.
+// borrow_iter_invalidation.nu — iterator invalidation check.
+//
 // A `~ x xs { ... }` foreach loop borrows the container `xs` for the
 // body's duration: gen_foreach snapshots the buffer pointer + length
 // once, up front. Mutating `xs` inside the body — `vec_push` (which

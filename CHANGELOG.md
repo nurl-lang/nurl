@@ -8,76 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Release summary
+### Summary
 
-The "interop conformance" release. NURL's HTTP/2 + HPACK + WebSocket
-stacks are now driven by the canonical conformance suites — and pass
-them. h2spec 2.6.0 reports **146/146 cases green** against the
-included `examples/h2c_server.nu`; the autobahn-testsuite fuzzing
-client reports **294 OK / 4 NON-STRICT / 3 INFORMATIONAL / 0 FAILED**
-across all 301 RFC 6455 cases against `examples/ws_echo.nu`. Both
-binaries run under ASan + UBSan without findings.
+HTTP/2 + HPACK + WebSocket conformance suites green. h2spec 2.6.0
+reports 146/146 cases against `examples/h2c_server.nu`; the
+autobahn-testsuite fuzzing client reports 294 OK / 4 NON-STRICT /
+3 INFORMATIONAL / 0 FAILED across all 301 RFC 6455 cases against
+`examples/ws_echo.nu`. Both binaries run under ASan + UBSan
+without findings.
 
-The journey there flushed out **seven concrete reliability bugs** in
-the HTTP/2 + HPACK stack (mostly use-after-free / aliased-Vec /
-sign-extension that had been latent because the relevant files were
-never on the build's test path), **two WebSocket close-validation
-gaps** that broke RFC 6455 §5.5.1 / §7.4.2 conformance, and **one
-compiler bug** — `scan_fn_sigs` did not track brace depth and so
-mis-parsed the `@` inside a closure-shaped struct-field type
-(`( @ HttpResponse HttpRequest ) handler`) as a function declaration,
-silently overwriting `syms["HttpResponse"]` with the next struct's
-type. Every fix is at the root cause; no work-arounds remain in
-`examples/`.
-
-Also lands: an async/fiber-based accept loop for the h2c test
-server (the h2spec ServerDataLength probe arrives back-to-back with
-the test connection and required concurrent serving), flow-control-
-respecting response writes with an inline WINDOW_UPDATE pump,
-TCP_NODELAY at accept-time (small framing ACKs were getting pinned
-by Nagle), and `NURL_SAN=1` support inside `nurl.sh` so example
-binaries can be built with the same sanitizer flags `./build.sh
---san` uses.
-
-Bootstrap fixed point holds at **1 620 300 B** (stage1 ≡ stage2
-byte-identical IR). `./build.sh` corpus + sanitiser corpus green.
-
-**Headline wins:**
-
-- **h2spec 2.6.0: 146/146 green** — `examples/h2c_server.nu` passes
-  every generic + http2 + hpack conformance test in the suite, with
-  zero failures and zero skips. ASan + UBSan clean.
-- **autobahn-testsuite: 0 FAILED** across the full 301-case
-  fuzzingclient run (294 OK / 4 NON-STRICT / 3 INFORMATIONAL).
-- **`scan_fn_sigs` brace-depth fix** — closes a -O1+-only compiler
-  bug where the `@` inside a closure-typed struct field
-  (`( @ HttpResponse HttpRequest ) handler`) was treated as a phantom
-  function-decl opener, silently overwriting `syms["HttpResponse"]`
-  with the next struct type and tripping `gen_match`'s wide-payload
-  reconstruction on any `! HttpResponse WsErr` result. `examples/
-  ws_echo.nu` now uses `ws_perform_handshake` directly with no
-  workarounds.
-- **Seven latent HTTP/2 reliability bugs fixed** — parenthesised
-  operator-call diagnostics that had never been triggered against
-  `http2_conn.nu`, pointer arithmetic via load-byte instead of
-  offset-cast, missing enum-tag casts in `??`-arm bodies, double-free
-  on `req.query` when no `?` is present, aliased-Vec UAF in
-  `HpackDynTable` round-trip (two distinct sites), and an unsafe
-  `cur`-free in HPACK's failure path.
-- **HTTP/2 spec validation surface filled in** — pseudo-header
-  validation (§8.3), stream-self-dependency (§5.3.1), PUSH_PROMISE
-  rejection (§6.6), flow-control window overflow (§6.9.1, stream +
-  conn), idle-stream WINDOW_UPDATE (§5.1), HPACK §4.2 dyn-table-
-  size-update placement, content-length consistency (§8.1.1),
-  HEADERS-on-open-stream as trailers (§8.1), invalid-preface GOAWAY
-  (§3.4), and the sign-extension byte-mask gotcha in SETTINGS +
-  WINDOW_UPDATE byte assembly.
-- **`nurl.sh` honours `NURL_SAN=1`** — example builds now get ASan
-  + UBSan + use-after-scope under the same flag set
-  `./build.sh --san` uses, against a side-by-side
-  `stdlib/runtime_san.o` (non-LTO, matching sanitiser flags). The
-  comment in `build.sh` had promised this since v0.8 but `nurl.sh`
-  had never read the env var.
+Bootstrap fixed point at 1 620 300 B (stage1 ≡ stage2 byte-identical
+IR).
 
 ### Added
 
@@ -182,8 +123,7 @@ byte-identical IR). `./build.sh` corpus + sanitiser corpus green.
   / TT_DOLLAR / TT_PERCENT openers at depth 0 trigger their
   respective dispatch branches; everything inside `{ ... }` advances
   silently. Matches the pattern `scan_type_names` already used (see
-  the docstring there). Closes the family of param-walk-desync bugs
-  the previous BORROW.md Phase 4 note had warned about.
+  the docstring there). Closes the family of param-walk-desync bugs.
 - **HTTP/2 GOAWAY-receive no longer triggers immediate shutdown** —
   per RFC 9113 §6.8 the receiver of GOAWAY MUST keep processing in-
   flight frames (PING, RST_STREAM, in-progress streams) until the
@@ -281,48 +221,44 @@ byte-identical IR). `./build.sh` corpus + sanitiser corpus green.
   `bench/run.sh 5` on a fixed `ubuntu-latest` 2-vCPU runner, and
   uploads the results as a workflow artifact. Manual / scheduled
   runs additionally commit a refreshed `bench/RESULTS_CI.md` back
-  to main. Closes TODO Tier 1.2 — the README's headline numbers
-  (captured on a 12-core Intel @ 3.5 GHz) stay in `RESULTS.md` as
-  the "best-known" hand-captured figures; `RESULTS_CI.md` is the
-  reproducible falsifiable baseline anyone can compare against.
+  to main. The README's headline numbers (captured on a 12-core Intel
+  @ 3.5 GHz) stay in `RESULTS.md` as the hand-captured figures;
+  `RESULTS_CI.md` is the reproducible baseline.
 
 ### Tokeniser-aware token-efficiency baseline
 
 - **`bench/token_efficiency.py` + `bench/TOKEN_EFFICIENCY.md`** —
-  honest, BPE-aware counterpart to the older whitespace-atom claim
-  ('Python ~15 / C ~12 / NURL ~4 tokens for add two ints'). Counts
-  real BPE tokens using `tiktoken`'s `cl100k_base`
+  BPE-aware token counts using `tiktoken`'s `cl100k_base`
   (GPT-3.5 / GPT-4 / Claude legacy), `o200k_base` (GPT-4o /
-  o-series), and `gpt2` (Llama-3 byte-pair proxy — Llama 3's own
-  tokeniser is HF-gated) against every cross-language benchmark in
-  `bench/`. The result is honest: NURL/Python BPE-aware token-count
-  ratios on these three benchmarks are **0.89–0.90× (LCG,
-  modern encoders) / 2.08–2.25× (sieve) / 1.70–1.88×
-  (json_parse)** — small win on the operator-heavy inner-loop case,
-  meaningful loss on the cases the BPE encoders were trained on
-  Python-heavy. The report's "How to read" section names the two
-  reasons (NURL not in any tokeniser's corpus; atom-count framing
-  inflated NURL's apparent efficiency) and the two caveats (small
-  benchmark set; Rust's Serde tokens dominate `json_parse`).
-- Closes TODO Tier 2.5. The original README claim was removed in
-  commit `1277711`; this lands the BPE-aware replacement as a
-  bench artifact rather than a marketing line.
+  o-series), and `gpt2` (proxy for Llama-3, which is HF-gated)
+  against every cross-language benchmark in `bench/`. NURL/Python
+  BPE-aware token-count ratios on these three benchmarks are
+  0.82–0.95× (LCG, all encoders) / 1.88–2.06× (sieve) /
+  1.60–1.77× (json_parse).
+- **`bench/{lcg,sieve,json_parse}.nu` cleanup** — dropped the
+  redundant `$ "stdlib/core/io.nu"` import (the `puts` and
+  `nurl_str_int` calls resolve through the compiler's libc/runtime
+  prelude) and switched the trailing print from
+  `( puts ( nurl_str_int x ) )` to the one-call
+  `( nurl_print_int x )`. `sieve.nu` also drops the redundant FFI
+  decls for `malloc` and `free` (both pre-registered by
+  `init_syms`). Net result: −29 to −80 source bytes per file, NURL
+  token counts down ~6–10 % across every encoder, and `@main` LLVM
+  IR is byte-identical for both compute benchmarks.
 
 ### Borrow checker
 
 - **`--strict-borrowck` (off by default)** — opt-in mode that
-  extends two existing on-by-default checks against the documented
-  `not-yet-checked` list in `docs/MEMORY.md`:
-    - **Phase 5 extension: aliased mutation through `. obj field`
-      arguments.** The default N-readers-XOR-1-writer check fires
-      only when both aliasing arguments at a call site are bare
-      identifiers. Strict mode also recognises `. obj field` as an
-      access of the root binding `obj`, so
-      `( swap c . c n )` is now flagged when one of the arguments
-      is `inout`. The Phase-6 iterator-invalidation check is widened
-      in the same shape.
+  extends two existing on-by-default checks:
+    - **Aliased mutation through `. obj field` arguments.** The
+      default N-readers-XOR-1-writer check fires only when both
+      aliasing arguments at a call site are bare identifiers.
+      Strict mode also recognises `. obj field` as an access of the
+      root binding `obj`, so `( swap c . c n )` is now flagged when
+      one of the arguments is `inout`. The iterator-invalidation
+      check is widened in the same shape.
     - **`# *T <owned-binding>` raw-pointer escape.** When a `*T`
-      cast's source binding sits on any of the existing auto-drop
+      cast's source binding sits on any of the auto-drop
       side-tables (`__owned_strings__` / `__owned_slices__` /
       `__owned_struct_fields__`) OR is a non-parameter heap binding
       (%Struct / enum / aggregate, mirroring the move-tracker's
@@ -333,10 +269,6 @@ byte-identical IR). `./build.sh` corpus + sanitiser corpus green.
   compile cleanly under the default checker and error out under
   `--strict-borrowck`. `compiler/tests/run_tests.sh` recognises any
   `borrow_strict_*` filename and adds the flag automatically.
-- BORROW.md ships a new "Phase 5+ / Strict Mode" section that
-  documents the additional checks, the accept-and-document false-
-  positive patterns, and why Phase 7 (returned borrows + lifetime
-  inference) stays deferred.
 - Bootstrap fixed point unchanged: strict mode is purely a
   diagnostic-only analysis pass.
 
@@ -344,55 +276,24 @@ byte-identical IR). `./build.sh` corpus + sanitiser corpus green.
 
 ## [0.9.2] — 2026-05-28
 
-### Release summary
+### Summary
 
-The "pure-NURL playground" release. `play.nurl-lang.org` no longer runs
-Python at runtime — `nurlapi/` is a 3 000+-LOC NURL HTTP server that
-replaces the FastAPI playground, ships a full Model Context Protocol
-server over `/mcp` (15 tools, 7 resources, 1 prompt), and serves five
-cross-compile build targets end-to-end (native ELF, wasm32-wasi,
-mingw-w64 PE32+, macOS Intel, macOS Apple Silicon + the rest of the
-`/build_target` registry). One static NURL binary is PID 1 inside the
-runtime image; the `api/` Python container remains for parity testing.
+`play.nurl-lang.org` no longer runs Python at runtime. `nurlapi/` is
+a 3 000+-LOC NURL HTTP server with a full Model Context Protocol
+server over `/mcp` (15 tools, 7 resources, 1 prompt), serving five
+cross-compile build targets (native ELF, wasm32-wasi, mingw-w64
+PE32+, macOS Intel, macOS Apple Silicon + the rest of the
+`/build_target` registry). One static NURL binary is PID 1 inside
+the runtime image.
 
-The release also closes a long-standing reliability bug: a
-**`nurl_poke` / `nurl_peek` byte-vs-slot index overrun** in
+A `nurl_poke` / `nurl_peek` byte-vs-slot index overrun in
 `server_run_pool` (and three other call sites) that scribbled 7×N
-bytes past a worker-handles buffer. The symptom — random route /
-closure corruption under thread load — had been misdiagnosed for
-months as a `Vec[T]` stride hazard; ASan caught the real root cause
-when nurlapi's router grew past 20 routes. Bootstrap fixed point
-holds at **1 620 300 B** (stage1 ≡ stage2 byte-identical IR).
-
-**Headline wins:**
-
-- **Pure-NURL playground** — `nurlapi/main.nu` (980 → 3 094 LOC over
-  the release window) over the stdlib HTTP / router / json /
-  multipart / static stack. Zero Python at runtime; one static
-  binary as PID 1.
-- **MCP server over `/mcp`** — Streamable HTTP transport, FastMCP
-  handshake parity, opaque stateless session IDs (survives container
-  restarts), 16-worker concurrent request handling (50 concurrent
-  `tools/list` in 65 ms wall on a single host).
-- **Multi-stage Windows build fix** — `clang -c` then
-  `x86_64-w64-mingw32-gcc` link. Closes the last "structured error
-  only, no real .exe" gap; `/build_windows` now produces a 1.18 MB
-  PE32+ executable end-to-end.
-- **`http_router` HEAD + OPTIONS** out of the box — every registered
-  route now answers HEAD (RFC 7231 §4.3.2) and OPTIONS (§4.3.7)
-  without handler changes.
-- **Critical fix: `nurl_poke` slot-index overrun** — four call sites
-  in `stdlib/ext/http_server.nu`, `stdlib/ext/postgres.nu` and
-  `compiler/tests/thread_basic.nu`. ASan-verified regression test
-  `nurl_poke_slot_index.nu` added; the `http_router` boxed-handle
-  workaround comment block was rewritten to credit the real cause.
-- **Playground init no longer blocks on a CDN** — `@bjorn3/browser_
-  wasi_shim` moved from a top-level ES-module import to a lazy
-  `import()` inside `run()`. The health pill and dropdowns now
-  initialise even when esm.sh is unreachable.
+bytes past a worker-handles buffer is fixed. The overrun had
+manifested as random route / closure corruption under thread load.
 
 Full test corpus + sanitiser corpus (ASan + UBSan + LSan, 281 tests)
-green. Bootstrap fixed point unchanged at **1 620 300 B**.
+green. Bootstrap fixed point at 1 620 300 B (stage1 ≡ stage2
+byte-identical IR).
 
 ### Added — pure-NURL playground server (`nurlapi/`)
 
@@ -667,49 +568,33 @@ Five compile targets now produce real binaries end-to-end:
 
 ## [0.9.1] — 2026-05-26
 
-### Release summary
+### Summary
 
-The "critic v0.9.0 backlog closes" release. v0.9.0's external peer
-review (`critic.md`, 24 May 2026) distilled into `IMPROVEMENTS.md`
-across Tiers A–E; v0.9.1 ships the entire remaining set (20 of 20
-actionable items) and a handful of opportunistic perf + stdlib wins
-that landed in the same window. `IMPROVEMENTS.md` is retired this
-release — the surviving long-running item (Mobile / Embedded
-targets) graduated to ROADMAP §4.
-
-**Headline wins:**
-
-- **Borrow checker promoted to hard errors by default** (BORROW.md
-  Phase 8 final). Five bug classes are now compile errors: use-after-
-  move, alias double-free, closure escape, aliased mutable-borrow at
-  call sites, iterator invalidation. `--no-borrowck` is the escape
-  hatch.
-- **Networking complete:** UDP datagrams (dual-stack IPv4/IPv6 with
-  multicast) + standalone DNS resolver (`getaddrinfo` /
-  `getnameinfo`) land alongside the existing TCP / TLS / HTTP stack.
-- **JSON parser ~34× faster** — pure-NURL `stdlib/ext/json.nu`
-  rewritten around a single-pass scanner; 479 ms → 14 ms on the
+- Borrow checker promoted to hard errors by default. Five bug
+  classes are compile errors: use-after-move, alias double-free,
+  closure escape, aliased mutable-borrow at call sites, iterator
+  invalidation. `--no-borrowck` is the escape hatch.
+- UDP datagrams (dual-stack IPv4/IPv6 with multicast) + standalone
+  DNS resolver (`getaddrinfo` / `getnameinfo`).
+- JSON parser ~34× faster — pure-NURL `stdlib/ext/json.nu` rewritten
+  around a single-pass scanner; 479 ms → 14 ms on the
   `bench/json_parse` micro-benchmark.
-- **First peer benchmarks shipped** — `bench/` v1 compares NURL with
-  Python / Rust / Node on three reproducible micro-benches plus an
-  HTTP-server-vs-Rust-hyper / Node-http sweep. NURL parity with Rust
-  on compute-bound work; NURL holds the lowest tail latency across
-  the whole HTTP concurrency sweep (p99 0.62 ms at C=200 vs Rust's
-  6.19 ms).
-- **CI lit up** — GitHub Actions workflow with parallel build-test +
-  sanitizer (ASan + UBSan) jobs.
-- **Formal language spec** — `docs/spec.md` (~1 000 lines) covers the
-  semantic side the grammar EBNF doesn't.
-- **Generic signal handling** + **structured logging** + **silent-
-  miscompile diagnostics** round out the stdlib + compiler surface.
+- Peer benchmarks in `bench/` compare NURL with Python / Rust / Node
+  on three reproducible micro-benches plus an HTTP-server-vs-Rust-
+  hyper / Node-http sweep.
+- GitHub Actions workflow with parallel build-test + sanitizer
+  (ASan + UBSan) jobs.
+- `docs/spec.md` (~1 000 lines) covers the semantic side the grammar
+  EBNF does not.
+- Generic signal handling, structured logging, silent-miscompile
+  diagnostics.
 
-Bootstrap fixed point at release time: stage1 ≡ stage2 byte-identical
-IR at **1 620 300 B**. Full test corpus + sanitizers green.
+Bootstrap fixed point: stage1 ≡ stage2 byte-identical IR at
+1 620 300 B. Full test corpus + sanitizers green.
 
-### Added — UDP datagram sockets + full DNS resolver (Tier D #6, 2026-05-26)
+### Added — UDP datagram sockets + full DNS resolver
 
-Closes the last `IMPROVEMENTS.md` Tier D Roadmap §3 item the v0.9.0
-critic flagged as missing for v1.0. Three new public surfaces:
+Three new public surfaces:
 
 1. **`stdlib/std/udp.nu`** — pure-NURL wrapper over runtime §18b. Dual-
    stack IPv4/IPv6 by default (wildcard `udp_bind("", 0)` creates an
@@ -909,10 +794,7 @@ round-trips every JSON line emitted by the test.
 Closes the four "grammar-legal but semantically dead" cases the
 external review flagged as silent compiles. Each is a small, local
 compiler change; bootstrap fixed point holds (stage1 ≡ stage2
-byte-identical IR at **1 620 300 B**); full test corpus green. The
-original critic-driven backlog (`IMPROVEMENTS.md`) was retired
-2026-05-26 after all 20/21 items shipped and the final Mobile/Embedded
-row graduated to ROADMAP §4 as a long-running roadmap item.
+byte-identical IR at **1 620 300 B**); full test corpus green.
 
 1. **`^` vs `^^` XOR confusion `warning:`** — `gen_ret` peeks the
    token after the returned expression. If it is on the same source
@@ -1002,8 +884,7 @@ language N times (default 5) with a per-run `timeout`, and prints a
 median-wall-clock-ms table. Missing tools render as `n/a`; a cell that
 hits the timeout renders as `>30s` instead of hanging the suite.
 
-`bench/RESULTS.md` captures the numbers from one specific machine plus
-honest commentary:
+`bench/RESULTS.md` captures the numbers from one specific machine:
 
 * On `lcg` and `sieve` NURL lands within measurement noise of Rust —
   same LLVM `-O2 -flto` codegen on both sides.
@@ -1013,53 +894,37 @@ honest commentary:
   the explanation, and a zero-copy slice-based rewrite would close
   most of the gap — tracked as a follow-up.
 
-This addresses `critic.md` §10's central complaint ("the 38× keep-alive
-speedup is NURL-vs-NURL, not NURL-vs-peers — there is no published
-benchmark against any peer server"). The HTTP-server-vs-`net/http`
-peer benchmark the critic actually asked for needs a Go install and a
-`wrk`-shaped harness and is tracked as the next benchmark suite.
+An HTTP-server-vs-`net/http` peer benchmark is not included; that
+would need a Go install and a `wrk`-shaped harness.
 
 ### Changed — borrow-checker diagnostics are now hard errors
 
-`BORROW.md` Phase 8 final landed on 2026-05-25. The borrow checker has
-been on by default since 2026-05-20 and ran clean across the whole
-compiler + stdlib + 250+-file test/example corpus over the 5-day soak.
-Promotion to error is now live:
-
-* `bck_diag` (Phase 1 use-after-move) and `bck_esc_warn` (Phase 3
-  escape analysis + Phase 5 aliased-mut + Phase 6 iterator
-  invalidation) emit `: error: ` instead of `: warning: ` and bump a
-  new `g_bck_errors` counter. `main()` exits non-zero after
-  `parse_program` if any violation was recorded — every error
-  surfaces in one run (same shape as a C compiler), not one at a
-  time.
-* The test harness now treats `borrow_*` tests as **expected compile
-  failures with an `ERRORS` baseline blob** rather than "compile OK +
-  WARNINGS". The exact error text remains regression-protected
-  (BORROW.md watch #2).
+* `bck_diag` (use-after-move) and `bck_esc_warn` (escape analysis +
+  aliased-mut + iterator invalidation) emit `: error: ` instead of
+  `: warning: ` and bump a new `g_bck_errors` counter. `main()` exits
+  non-zero after `parse_program` if any violation was recorded —
+  every error surfaces in one run (same shape as a C compiler).
+* The test harness now treats `borrow_*` tests as expected compile
+  failures with an `ERRORS` baseline blob rather than "compile OK +
+  WARNINGS". The exact error text remains regression-protected.
 * `--no-borrowck` remains the escape hatch; the abort message points
   at it so a user hitting a false positive is never wedged.
 * Bootstrap fixed point holds (the checker is diagnostic-only — IR is
   byte-identical with or without `--no-borrowck`): stage1 ≡ stage2 at
   **1 602 394 B**.
 
-This closes `critic.md` §4's central complaint — the "vibes-based
-memory model" framing no longer applies. Bug classes 1 (use-after-
-move), 2 (alias double-free), 3 (closure escape), 5 (call-site
-aliased mutation) and 6 (iterator invalidation) are now COMPILE
-ERRORS by default. Bug class 4 (`*T` raw pointers) and the
-remainder of Phase 5 (aliased mutation through nested-argument
-reads) are documented as `--no-borrowck`-style escape hatches in
+Five bug classes are now compile errors by default: use-after-move,
+alias double-free, closure escape, call-site aliased mutation, and
+iterator invalidation. `*T` raw pointers and aliased mutation through
+nested-argument reads remain unchecked; see
 [`docs/MEMORY.md`](docs/MEMORY.md).
-
-`README.md`, `docs/MEMORY.md` and `BORROW.md` updated to match.
 
 ## [0.9.0] — 2026-05-24
 
 ### Changed — `refactor/nurlify` branch
 
 Picks up where `refactor/pure-nurl` left off and drives `stdlib/runtime.c`
-the rest of the way down. Per the PURIFY.md tracker:
+the rest of the way down:
 
 * **`stdlib/runtime.c`: 6 265 → 4 540 LOC (−1 725, −27.5 %).** Combined
   with the prior branch the total reduction since v0.8.0 is **8 879 →
@@ -1144,10 +1009,9 @@ the rest of the way down. Per the PURIFY.md tracker:
 
 ### Changed — `refactor/pure-nurl` branch
 
-The `refactor/pure-nurl` branch (42 commits, 2026-05-23 → 2026-05-24)
-took the bulk of `stdlib/runtime.c` out of C and into pure NURL —
-either as pure-NURL @-fns or as direct `& \`c\`` / `& \`pthread\`` /
-`& \`sqlite3\`` FFI declarations. Per the PURIFY.md tracker:
+The `refactor/pure-nurl` branch took the bulk of `stdlib/runtime.c`
+out of C and into pure NURL — either as pure-NURL @-fns or as direct
+`& \`c\`` / `& \`pthread\`` / `& \`sqlite3\`` FFI declarations.
 
 * **`stdlib/runtime.c`: 8 879 → 6 265 LOC (−2 614, −29.4 %).** The
   bootstrap fixed point held on every shipped phase and the full
@@ -1164,7 +1028,7 @@ either as pure-NURL @-fns or as direct `& \`c\`` / `& \`pthread\`` /
   `stdlib/std/rc.nu`, `stdlib/std/arc.nu`. `% Drop` auto-fires;
   `nurl_native_sizeof` + `nurl_atomic_i64_*` runtime primitives
   added. This unblocked Phases 6 / 8 / 11 / 12 of the purification.
-* **PURIFY phases shipped** (per-phase detail in PURIFY.md Part VII):
+* **Per-phase migration:**
   - Phase 1 §3 char classification (`stdlib/core/char.nu`, −11 C)
   - Phase 2 §15 logging level (`stdlib/std/log.nu`, −7 C)
   - Phase 3 §11 libm + integer helpers (`& \`m\`` / `& \`c\`` FFI, −17 C)
@@ -1401,8 +1265,7 @@ either as pure-NURL @-fns or as direct `& \`c\`` / `& \`pthread\`` /
   exercises the Variable Byte Integer round-trip, the unsigned byte
   reader, MQTT UTF-8 string framing, the CONNECT byte layout, CONNACK
   reason extraction, MQTT 5 user-property parsing, the typed `MqttErr`
-  names, and topic matching — no network, CI-safe (closes the bulk of
-  MQTT_PLAN.md Phase 5).
+  names, and topic matching — no network, CI-safe.
 
 ## [0.8.1] — 2026-05-21
 
@@ -1536,7 +1399,6 @@ either as pure-NURL @-fns or as direct `& \`c\`` / `& \`pthread\`` /
   work; the field may itself be a struct (`( bump . g score )`).
   Single-level access (`. obj field`) only. Regression test
   `compiler/tests/inout_field.nu` (+ `should_fail_inout_field_immut.nu`).
-  See `BORROW.md` Phase 4.
 
 * **`inout` / `sink` parameter conventions on generic functions.**
   A generic function may now mark a parameter `inout` (exclusive
@@ -1559,7 +1421,7 @@ either as pure-NURL @-fns or as direct `& \`c\`` / `& \`pthread\`` /
   forward call to a generic `inout` function is rejected with the same
   define-before-call diagnostic as the non-generic case. Regression
   tests `compiler/tests/inout_generic.nu` and
-  `should_fail_inout_generic_forward.nu`. See `BORROW.md` Phase 4.
+  `should_fail_inout_generic_forward.nu`.
 
 * **Forward references for enum-variant payload types.** An enum
   variant whose payload is a struct or enum declared *later* in the
@@ -1677,20 +1539,19 @@ either as pure-NURL @-fns or as direct `& \`c\`` / `& \`pthread\`` /
   Grammar (`spec/grammar.ebnf`) and `nurlfmt` updated; regression
   tests `xor_op.nu` + `should_fail_xor_float.nu`.
 
-* **`inout` and `sink` parameter conventions (BORROW.md Phase 4,
-  Option B — mutable value semantics).** `in` / `inout` / `sink` are
-  contextual keywords recognised only as a parameter's leading token
-  (no lexer change); `in` is the default.
+* **`inout` and `sink` parameter conventions.** `in` / `inout` /
+  `sink` are contextual keywords recognised only as a parameter's
+  leading token (no lexer change); `in` is the default.
   A parameter marked **`inout`** is an exclusive mutable borrow: the
   callee mutates the caller's binding in place. `inout T` lowers to a
   by-address `<T>*` parameter — the body reads/writes the caller's
   storage with no local copy — replacing the `*T`-parameter and
   return-the-struct mutation idioms. The argument must be a mutable
   (`: ~`) binding; an `inout` function must be defined before it is
-  called. Exclusive-access check (BORROW.md Phase 5): a binding
-  passed `inout` must be the only argument path to its value at that
-  call — passing it again, as a second `inout` or a plain by-value
-  argument, is a `warning:`.
+  called. Exclusive-access check: a binding passed `inout` must be
+  the only argument path to its value at that call — passing it
+  again, as a second `inout` or a plain by-value argument, is a
+  `warning:`.
   A parameter marked **`sink`** consumes (takes ownership of) its
   argument: it lowers to an ordinary by-value parameter, and the
   borrow checker records the argument binding as moved so a later
@@ -1699,9 +1560,9 @@ either as pure-NURL @-fns or as direct `& \`c\`` / `& \`pthread\`` /
   (owned string / slice / `Drop` value / struct with owned fields)
   to a `sink` parameter is rejected pending drop-ownership transfer.
 
-* **Static borrow checker, on by default (BORROW.md Phases 0-3 + 6 +
-  8-partial).** A diagnostic analysis pass (disable with
-  `--no-borrowck`) that never changes generated code — a
+* **Static borrow checker, on by default.** A diagnostic analysis
+  pass (disable with `--no-borrowck`) that never changes generated
+  code — a
   borrow-clean program compiles to byte-identical IR. Closes four
   bug classes with `warning:` diagnostics: use-after-move (a binding
   read after its ownership moved), alias double-free (`: T b a` of an
@@ -1772,8 +1633,7 @@ either as pure-NURL @-fns or as direct `& \`c\`` / `& \`pthread\`` /
   `ptype` + `print` + field-access over the new test. Bootstrap
   fixed point holds — non-debug IR is byte-identical.
 
-  Closes the open Phase 6 follow-up in `DWARF.md`. Phase 7
-  (per-instantiation source-line precision for generics) remains
+  Per-instantiation source-line precision for generics remains
   deferred.
 
 ## [0.7.2] — 2026-05-19
@@ -1886,14 +1746,12 @@ either as pure-NURL @-fns or as direct `& \`c\`` / `& \`pthread\`` /
   New helper: `tools/mcp_spec_drift_check.sh` fetches the spec
   site's versioning page, parses the current revision, compares
   to NURL's pinned value, exits 1 on drift with a pointer at the
-  changelog URL. Drop-in for CI or a weekly cron. Closes
-  critic.md #4 ("MCP spec governance shifted ... continuous
-  integration against the moving spec is not yet automated").
+  changelog URL. Drop-in for CI or a weekly cron.
 
 ### Added
 
-* **DWARF debug-info support (compiler + driver, phased per
-  `DWARF.md`).** `nurlc --g foo.nu` now emits LLVM `!DICompileUnit` /
+* **DWARF debug-info support (compiler + driver).** `nurlc --g
+  foo.nu` now emits LLVM `!DICompileUnit` /
   `!DIFile` / per-fn `!DISubprogram` / per-stmt `!DILocation` /
   per-`:`-binding `!DILocalVariable` + `llvm.dbg.declare` metadata.
   `nurl.sh --debug foo.nu` forwards `--g`, drops `-flto` (which
@@ -1910,7 +1768,7 @@ either as pure-NURL @-fns or as direct `& \`c\`` / `& \`pthread\`` /
   `./tools/dwarf_test.sh` (gracefully skipped if `gdb` is absent).
   Composite-type rendering (`!DICompositeType` for `%Vec` /
   user structs) and per-instantiation source-line precision for
-  generics are tracked in `DWARF.md` as Phase 6 / 7 follow-ups.
+  generics are not currently implemented.
 
 * **Compiler: closure-escape warnings for `vec_push` / `vec_insert` /
   `vec_set` / `thread_spawn`.** Extends the existing 2026-05-15
@@ -2027,8 +1885,8 @@ either as pure-NURL @-fns or as direct `& \`c\`` / `& \`pthread\`` /
 
 * **TLS extras: SNI + live cert reload + mTLS.** Three additions
   that close the critical-path tuotantopuutteet in the TLS stack
-  identified by `critic.md` §10. All built on top of the existing
-  `tcp_listen_tls` listener — the new operations attach to an
+  built on top of the existing `tcp_listen_tls` listener — the new
+  operations attach to an
   already-created listener and take effect on subsequent handshakes.
 
     - `tcp_tls_add_sni listener hostname cert_path key_path → !v NetErr`
@@ -2081,9 +1939,9 @@ either as pure-NURL @-fns or as direct `& \`c\`` / `& \`pthread\`` /
 
 ## [0.7.0] — 2026-05-18
 
-Headline: **full HTTP/2 server stack (RFC 9113 + RFC 7541)** lands
-alongside **WebSocket (RFC 6455)**, **gzip wire format (RFC 1952)**,
-and an **AddressSanitizer + UndefinedBehaviorSanitizer quality gate**.
+Full HTTP/2 server stack (RFC 9113 + RFC 7541) alongside WebSocket
+(RFC 6455), gzip wire format (RFC 1952), and an AddressSanitizer +
+UndefinedBehaviorSanitizer quality gate.
 Three compiler fixes (single-pointer-handle Result coercion, `?u`
 match-arm unsigned propagation, `gen_assign` last-type publishing) +
 one new language feature (integer-literal match arms) round out the
@@ -2760,8 +2618,7 @@ recovery); Tier C module-system extended (`pub` for types/enums/
 consts, alias rewrite for everything); Tier D ecosystem advanced
 (SQLite + PostgreSQL FFI, compile-time FFI library check).
 
-The full per-feature breakdown follows; ROADMAP.md keeps an
-engineering-narrative log per ship.
+The full per-feature breakdown follows.
 
 ### Added
 
@@ -3200,10 +3057,9 @@ releases are measured.
   graceful shutdown) + 9 partial (multipart/form-data, reverse-
   proxy streaming pass-through).
 * 80+ snapshot tests with `compiler/tests/run_tests.sh` runner.
-* Documentation: `README.md` (project overview), `ROADMAP.md`
-  (development plan), `docs/GOTCHAS.md` (compiler quirks),
-  `HTTP_SERVER_PLAN.md` (multi-phase server design), `spec/grammar.ebnf`
-  (v1.7 grammar).
+* Documentation: `README.md` (project overview),
+  `docs/GOTCHAS.md` (compiler quirks),
+  `spec/grammar.ebnf` (v1.7 grammar).
 * Tooling: VS Code extension (`tooling/vscode-nurl/`), Dockerised
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).

@@ -1,5 +1,5 @@
-// borrow_escape_struct.nu — BORROW.md Phase 3: escape analysis must
-// see through a struct wrapper.
+// borrow_escape_struct.nu — escape analysis must see through a
+// struct wrapper.
 //
 // docs/GOTCHAS.md item 5 / item 8: a closure that captures a
 // `: ~`-mutable multi-field struct is captured BY POINTER into the

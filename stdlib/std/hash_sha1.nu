@@ -1,9 +1,5 @@
 // stdlib/std/hash_sha1.nu — RFC 3174 SHA-1 in pure NURL.
 //
-// PURIFY.md Phase 4 (2026-05-23). Replaces the self-contained
-// `nurl_sha1_bytes` C transform in `stdlib/runtime.c §17`. Same
-// 160-bit digest, byte-identical output for every test vector.
-//
 // Algorithm strength: SHA-1 is collision-broken and MUST NOT be used
 // for new security-sensitive authentication. Provided for protocols
 // that mandate it — WebSocket handshake `Sec-WebSocket-Accept` per

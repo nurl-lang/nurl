@@ -1,6 +1,5 @@
 // http_form.nu — acceptance test for parse_form_urlencoded +
-// request_form_pairs (Phase 7 form-parsing close-out, see ROADMAP.md
-// "Form parsing"). Pure offline: no socket, no filesystem reads.
+// request_form_pairs. Pure offline: no socket, no filesystem reads.
 //
 // Coverage:
 //   * parse_form_urlencoded — empty, single, multi, bare-key,

@@ -1,8 +1,9 @@
-// inout_basic.nu — BORROW.md Phase 4 (Option B): the `inout`
-// parameter convention. An `inout` parameter is an exclusive mutable
-// borrow — the callee mutates the caller's binding in place. It
-// lowers to a `<T>*`-by-address parameter, so a call's effect is
-// visible to the caller without returning the modified value.
+// inout_basic.nu — the `inout` parameter convention.
+//
+// An `inout` parameter is an exclusive mutable borrow — the callee
+// mutates the caller's binding in place. It lowers to a
+// `<T>*`-by-address parameter, so a call's effect is visible to the
+// caller without returning the modified value.
 //
 // Exercises a struct `inout`, a scalar `inout`, an `inout` parameter
 // alongside an ordinary by-value parameter, and an `inout` re-pass

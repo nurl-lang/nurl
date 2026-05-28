@@ -1,15 +1,9 @@
-// cell_pthread.nu — Phase-6 path demonstrator.
+// cell_pthread.nu — direct libpthread FFI over Cell-allocated storage.
 //
 // Builds a Mutex primitive directly from `pthread_mutex_init` /
 // `_lock` / `_unlock` / `_destroy` over a Cell-allocated buffer
 // whose size comes from `nurl_native_sizeof("pthread_mutex_t")`.
 // No C-side `nurl_mutex_*` helper involved.
-//
-// This is exactly the shape PURIFY.md Phase 6 wants for moving the
-// existing C-side wrappers (§19 in stdlib/runtime.c) out: declare the
-// libc symbols via `&`-FFI, hand them a Cell-allocated storage block,
-// done. Existing `nurl_mutex_*` callers can migrate without touching
-// the call sites.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/cell.nu`

@@ -1,4 +1,4 @@
-// should_fail_bare_ident_stmt.nu — critic.md v0.9.0 §1 PoC.
+// should_fail_bare_ident_stmt.nu — bare-callable-as-statement check.
 //
 // `nurl_print` is an FFI runtime function. Writing it without parens
 // as a statement is the classic "forgot the parens" foot-gun: the

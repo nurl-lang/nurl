@@ -1,11 +1,10 @@
-// stdlib/ext/http_proxy.nu — Reverse-proxy / streaming pass-through
-// (Phase 9 leftover of HTTP_SERVER_PLAN.md). Combines the HTTP client
-// (`stdlib/ext/http.nu` + libcurl multi streaming in `runtime.c §14b`)
-// with the chunked response writer (`stdlib/ext/http_response.nu`) so
-// a NURL program can sit in front of any upstream HTTP origin —
-// typically an AI provider (Anthropic / OpenAI / Google / local
-// Ollama) — and stream responses back to the client without buffering
-// full payloads in memory.
+// stdlib/ext/http_proxy.nu — Reverse-proxy / streaming pass-through.
+// Combines the HTTP client (`stdlib/ext/http.nu` + libcurl multi
+// streaming in `runtime.c §14b`) with the chunked response writer
+// (`stdlib/ext/http_response.nu`) so a NURL program can sit in front
+// of any upstream HTTP origin — typically an AI provider (Anthropic
+// / OpenAI / Google / local Ollama) — and stream responses back to
+// the client without buffering full payloads in memory.
 //
 // `proxy_stream_to_conn` opens an HTTP stream against upstream, pumps
 // headers, then writes a `Transfer-Encoding: chunked` response straight

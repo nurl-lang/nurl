@@ -93,9 +93,8 @@ $ `stdlib/std/hash_sha512.nu`
 // Runtime entries — binary-clean, write the digest into a caller buffer
 // (resolved from runtime.o; libc is always linked).
 
-// Crypto algorithms all moved to pure NURL submodules above
-// (PURIFY.md Phase 4, 2026-05-23). The runtime no longer ships any
-// hash transform — `secure_random` is the only crypto FFI left.
+// Crypto algorithms live in pure NURL submodules above. The runtime
+// ships no hash transform — `secure_random` is the only crypto FFI.
 
 @ sha512_bytes ( Vec u ) data → ( Vec u ) {
     ^ ( sha512_pure data )

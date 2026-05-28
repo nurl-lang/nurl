@@ -23,8 +23,8 @@
 //          --data '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hello"}}}'
 //
 // Bind to 0.0.0.0 instead of 127.0.0.1 to expose on the LAN. For
-// production use, put NURL behind nginx/caddy for TLS — Phase 9 of
-// HTTP_SERVER_PLAN.md will add native TLS.
+// production use, put NURL behind nginx/caddy for TLS or use the
+// native TLS in `stdlib/ext/http_server.nu` (`tcp_listen_tls`).
 
 $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/mcp_http.nu`

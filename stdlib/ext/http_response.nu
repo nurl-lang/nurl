@@ -1,8 +1,8 @@
-// stdlib/ext/http_response.nu — HTTP/1.1 response writer (Phase 3 of
-// HTTP_SERVER_PLAN.md). Pure NURL — `response_serialize` produces an
-// owned `( Vec u )` wire-payload; `response_begin_chunked` /
-// `response_write_chunk` / `response_end_chunked` stream directly to
-// a TcpConn for SSE / Server-Sent Events use.
+// stdlib/ext/http_response.nu — HTTP/1.1 response writer. Pure NURL.
+// `response_serialize` produces an owned `( Vec u )` wire-payload;
+// `response_begin_chunked` / `response_write_chunk` /
+// `response_end_chunked` stream directly to a TcpConn for SSE /
+// Server-Sent Events use.
 //
 // API (this revision):
 //
@@ -59,8 +59,7 @@
 //     bytes; nothing is moved. The transition Connection: close is
 //     not implied — caller manages keep-alive separately.
 //
-// Notes on language gaps inherited from Phase 2 (see
-// HTTP_SERVER_PLAN.md "Cross-cutting prerequisites"):
+// Notes on inherited language gaps:
 //
 //   * Multi-field structs can't ride `! T E` Ok arms. `response_*`
 //     constructors return HttpResponse directly (it's a pure

@@ -1,15 +1,14 @@
 // examples/static_server.nu — production-style static file server.
 //
-// One-file demo that exercises the full HTTP server stack shipped
-// through Phases 1, 4, 6, 7 and 8 of HTTP_SERVER_PLAN.md:
+// One-file demo that exercises the full HTTP server stack:
 //
-//     tcp_listen / server_new / server_run         (Phase 1 + 4)
-//     router_get + named/wildcard captures         (Phase 6)
-//     serve_static + mime_for_ext                  (Phase 7)
-//     with_cors_default                            (Phase 6 helper)
-//     with_metrics + metrics_handler               (Phase 8)
-//     with_access_log                              (Phase 8)
-//     signal_install_shutdown (Ctrl+C / SIGTERM)   (Phase 8)
+//     tcp_listen / server_new / server_run
+//     router_get + named/wildcard captures
+//     serve_static + mime_for_ext
+//     with_cors_default
+//     with_metrics + metrics_handler
+//     with_access_log
+//     signal_install_shutdown (Ctrl+C / SIGTERM)
 //
 // Build & run:
 //

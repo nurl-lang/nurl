@@ -1,7 +1,7 @@
-// stdlib/ext/http_request.nu — HTTP/1.1 request parser (Phase 2 of
-// HTTP_SERVER_PLAN.md). Pure NURL — no socket dependency in the parser
-// proper; the body reader (`read_body`) layers on top of `std/net.nu`
-// once a TcpConn is available.
+// stdlib/ext/http_request.nu — HTTP/1.1 request parser. Pure NURL —
+// no socket dependency in the parser proper; the body reader
+// (`read_body`) layers on top of `std/net.nu` once a TcpConn is
+// available.
 //
 // The parser operates on a `( Vec u )` byte buffer that the caller
 // fills incrementally from the network. `parse_request_head` looks
