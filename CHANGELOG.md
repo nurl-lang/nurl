@@ -11,6 +11,329 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 (Empty — the next ship lands its `### Added` / `### Changed` / `### Fixed`
 notes here.)
 
+## [0.9.2] — 2026-05-28
+
+### Release summary
+
+The "pure-NURL playground" release. `play.nurl-lang.org` no longer runs
+Python at runtime — `nurlapi/` is a 3 000+-LOC NURL HTTP server that
+replaces the FastAPI playground, ships a full Model Context Protocol
+server over `/mcp` (15 tools, 7 resources, 1 prompt), and serves five
+cross-compile build targets end-to-end (native ELF, wasm32-wasi,
+mingw-w64 PE32+, macOS Intel, macOS Apple Silicon + the rest of the
+`/build_target` registry). One static NURL binary is PID 1 inside the
+runtime image; the `api/` Python container remains for parity testing.
+
+The release also closes a long-standing reliability bug: a
+**`nurl_poke` / `nurl_peek` byte-vs-slot index overrun** in
+`server_run_pool` (and three other call sites) that scribbled 7×N
+bytes past a worker-handles buffer. The symptom — random route /
+closure corruption under thread load — had been misdiagnosed for
+months as a `Vec[T]` stride hazard; ASan caught the real root cause
+when nurlapi's router grew past 20 routes. Bootstrap fixed point
+holds at **1 620 300 B** (stage1 ≡ stage2 byte-identical IR).
+
+**Headline wins:**
+
+- **Pure-NURL playground** — `nurlapi/main.nu` (980 → 3 094 LOC over
+  the release window) over the stdlib HTTP / router / json /
+  multipart / static stack. Zero Python at runtime; one static
+  binary as PID 1.
+- **MCP server over `/mcp`** — Streamable HTTP transport, FastMCP
+  handshake parity, opaque stateless session IDs (survives container
+  restarts), 16-worker concurrent request handling (50 concurrent
+  `tools/list` in 65 ms wall on a single host).
+- **Multi-stage Windows build fix** — `clang -c` then
+  `x86_64-w64-mingw32-gcc` link. Closes the last "structured error
+  only, no real .exe" gap; `/build_windows` now produces a 1.18 MB
+  PE32+ executable end-to-end.
+- **`http_router` HEAD + OPTIONS** out of the box — every registered
+  route now answers HEAD (RFC 7231 §4.3.2) and OPTIONS (§4.3.7)
+  without handler changes.
+- **Critical fix: `nurl_poke` slot-index overrun** — four call sites
+  in `stdlib/ext/http_server.nu`, `stdlib/ext/postgres.nu` and
+  `compiler/tests/thread_basic.nu`. ASan-verified regression test
+  `nurl_poke_slot_index.nu` added; the `http_router` boxed-handle
+  workaround comment block was rewritten to credit the real cause.
+- **Playground init no longer blocks on a CDN** — `@bjorn3/browser_
+  wasi_shim` moved from a top-level ES-module import to a lazy
+  `import()` inside `run()`. The health pill and dropdowns now
+  initialise even when esm.sh is unreachable.
+
+Full test corpus + sanitiser corpus (ASan + UBSan + LSan, 281 tests)
+green. Bootstrap fixed point unchanged at **1 620 300 B**.
+
+### Added — pure-NURL playground server (`nurlapi/`)
+
+Replaces the Python FastAPI playground end-to-end. One static NURL
+binary as PID 1; the runtime image is a slim Debian-bookworm stage
+that only needs clang-16 + the cross-compile toolchains baked in.
+
+**Route surface** (POST unless noted):
+
+- `/build` → native Linux x86_64 ELF
+- `/build_wasm` → wasm32-wasi (uses `prepare_ir_for_wasi` IR shim;
+  wasm32 ABI rename + libc shims for `malloc` / `puts` / `write` etc.)
+- `/build_windows` → mingw-w64 PE32+ via two-stage `clang -c` then
+  `x86_64-w64-mingw32-gcc` link (static libcurl chain when the
+  `runtime.win.curl` marker is present)
+- `/build_macos` → Mach-O via zig cc
+- `/build_target` → multi-target dispatch (linux-x64-musl,
+  linux-arm64-musl/-gnu, linux-riscv64-musl, macos-x64, macos-arm64,
+  windows-x64) over a single shared `_build_zig_cross` helper
+- `GET /examples`, `GET /examples/*name` — bundled example listing +
+  individual source
+- `GET /stdlib`, `GET /stdlib/*path` — recursive .nu listing (84
+  entries) + per-file `{name, source, bytes}` JSON
+- `GET /tests`, `GET /tests/*path` — same shape for the compiler
+  test corpus (281 entries)
+- `GET /targets` — target registry (the dropdown the UI builds from)
+- `GET /readme` / `/readme.md`, `/roadmap` / `/roadmap.md`,
+  `/gotchas` / `/gotchas.md`, `/grammar.ebnf` — doc passthroughs +
+  HTML-rendered alternates (pure-NURL Markdown→HTML renderer:
+  headings, fenced code, bold/em, code spans, links, autolinks,
+  images, ul/ol, blockquote, hr; tables + nested lists deferred)
+- `GET /LICENSE-MIT`, `/LICENSE-APACHE`, `/NOTICE`, `/license`,
+  `/license/{mit,apache}` — license endpoints (raw + HTML-wrapped)
+- `GET /openapi.json` — minimal but valid OpenAPI 3.1 doc enumerating
+  every public route
+- `GET /health` → toolchain status (60+ stdlib modules + per-tool
+  liveness)
+- `GET /mcp-info` → MCP server probe (tools / resources / prompts
+  catalogue + a `client_config_example` built from the request's
+  Host header or `NURL_PUBLIC_URL`)
+- `GET /download/:id/:file` → built artifact download
+- OAuth 2.0 / OIDC rubber-stamp stubs so Claude-Desktop-class MCP
+  clients that probe `.well-known/*` succeed: `oauth-protected-
+  resource` (+`/mcp`), `oauth-authorization-server`, `openid-
+  configuration`, `POST /register`, `GET /authorize` (instant 302),
+  `POST /token`
+- Static UI at `/`, `/favicon.{ico,svg}`, `/static/*`, `/*path`
+
+**Build response shape** mirrors `api/` (Python) exactly: combined
+`stdout` / `stderr`, parsed `nurlc_errors[]` (`{file, line, col,
+message}`), `ll_artifact` + `binary_artifact` with `{name, bytes,
+download_url, token}`, `nurlc_returncode` / `clang_returncode`,
+`uses_canvas` / `uses_audio`. New shared helpers:
+`parse_nurlc_diagnostics`, `combine_stderr`, `make_artifact_json`,
+`stamp_build_response`, `nurlc_failure_response`,
+`push_native_runtime_libs`.
+
+`nurlapi/Dockerfile` — two-stage Debian bookworm image. Stage 1
+bootstraps nurlc, downloads WASI SDK 24 + Zig 0.13, builds a static
+libcurl-mingw for the Windows target, pre-builds the six zig-target
+runtime objects + warms the zig per-target libc cache so the first
+`/build_target` per target is a fast cache hit rather than a cold
+multi-second libc compile, compiles the nurlapi binary itself.
+Stage 2 is a slim runtime image (clang-16 + cross-compile toolchains
+only, no Python).
+
+`nurlapi.sh` — bring-up wrapper. `./nurlapi.sh` builds + runs on
+port 8000; `./nurlapi.sh bind` skips the Docker rebuild and bind-
+mounts the freshly-built local binary + stdlib + examples + tests
++ root docs into the running container (inner dev loop: edit `.nu`
+→ `./nurlapi.sh bind` → hit endpoint, ~30 s vs ~10 min). Flags:
+`--no-cache` / `--port=N` / `--rm` / `--detach` / `--build-only` /
+`--name=NAME` / `--help`.
+
+`nurlapi/e2e_test.{py,sh}` — end-to-end test driver covering every
+endpoint.
+
+### Added — full MCP server over `/mcp`
+
+`stdlib/ext/mcp_http.nu` + `nurlapi/main.nu`. Streamable HTTP
+transport (POST /mcp), FastMCP handshake parity:
+
+- `initialize` (protocolVersion `2025-03-26`, FastMCP capabilities
+  shape, `instructions` blurb verbatim, serverInfo `nurl-playground
+  0.9.2`)
+- `ping`, `tools/list` (15 tools), `tools/call` (dispatch by name)
+- `resources/list` (7 `nurl://` URIs), `resources/read`
+- `prompts/list` (1 prompt: `nurl_coding_assistant`), `prompts/get`
+- `notifications/*` (no reply, 202 Accepted)
+- JSON-RPC 2.0 batches (top-level array → array reply,
+  notifications dropped per spec)
+
+**Tools (full Python parity):**
+
+- Build (5) — `nurl_build_native`, `nurl_build_wasm`,
+  `nurl_build_windows`, `nurl_build_macos`, `nurl_build_target`
+  (enum-typed target id)
+- Browse (3) — `nurl_list_examples`, `nurl_list_stdlib`,
+  `nurl_list_tests`
+- Read (7) — `nurl_read_example`, `nurl_read_stdlib`,
+  `nurl_read_test`, `nurl_read_grammar`, `nurl_read_readme`,
+  `nurl_read_roadmap`, `nurl_read_gotchas`
+
+Build tools dispatch via loopback HTTP to the server's own `/build`
+endpoints (`NURL_MCP_LOOPBACK_URL`, default `http://127.0.0.1:8000`):
+zero duplication of the canonical handler logic.
+
+**Reliability fixes vs Python reference:**
+
+1. **Session persistence across container restarts.** Python
+   validated `Mcp-Session-Id` against a per-process in-memory
+   whitelist — fresh pod = fresh whitelist = previously-issued sids
+   rejected. NURL approach: session ID is opaque to the server.
+   First request (no sid) → server generates 16-hex-char sid, echoed
+   in `Mcp-Session-Id` response header; subsequent requests with sid
+   → echoed verbatim, no validation. Pod restart → client sid still
+   accepted, no reconnect required.
+2. **Burst handling.** Python's asyncio event loop serialised
+   request handling. NURL piggybacks on `server_run_pool`'s
+   16-pthread worker pool — every POST /mcp gets its own worker
+   thread, no serialisation. Measured: 50 concurrent `tools/list`
+   in 65 ms wall on a single host (~770 req/s peak).
+
+**Streamable HTTP content-negotiation** in `stdlib/ext/mcp_http.nu`:
+when the client sends `Accept: text/event-stream` (every official
+SDK does), the JSON-RPC reply is wrapped as `event: message\r\ndata:
+<json>\r\n\r\n` with `Content-Type: text/event-stream` +
+`Cache-Control: no-cache`. Legacy clients without the Accept header
+still get plain `application/json`.
+
+### Added — `http_router` HEAD + OPTIONS
+
+`router_handle` now answers HEAD and OPTIONS requests without each
+handler having to know about them — same shape FastAPI / Express /
+most modern HTTP frameworks ship by default.
+
+- **HEAD** (RFC 7231 §4.3.2): treated as a GET for the purpose of
+  route matching — falls through to the GET handler, then pins
+  `Content-Length` to the GET body's would-have-been length and
+  clears the body Vec so the wire-level serialisation emits headers
+  + blank line + zero bytes.
+- **OPTIONS** (RFC 7231 §4.3.7): the router answers directly, no
+  handler involved. Walks every registered route, collects distinct
+  methods whose pattern matches the request path, auto-adds HEAD
+  (when GET is among them) and OPTIONS (always), returns 204 No
+  Content with the assembled `Allow:` header. Root-level catch-alls
+  (patterns starting with `/*`) are excluded from OPTIONS
+  enumeration so they don't pollute the advertised method list.
+
+Two new helpers: `__strip_body_for_head`, `__router_options`.
+
+Verified live against nurlapi: `OPTIONS /health` → 204 `GET, HEAD,
+OPTIONS`; `OPTIONS /build` → 204 `POST, OPTIONS`; `OPTIONS
+/nonexistent` → 404 (catch-all filter working); `HEAD /health` →
+200 `Content-Length: 1570`, body 0 bytes.
+
+### Fixed — `nurl_poke` / `nurl_peek` byte-vs-slot heap overrun (critical)
+
+`server_run_pool` in `stdlib/ext/http_server.nu` allocated an N×8-byte
+buffer for N worker thread handles and then wrote into it with
+`nurl_poke thandles (* j 8) traw` — passing a **byte offset** where
+`nurl_poke` expects a **slot index**. `nurl_poke` scales by 8
+internally, so each "write at byte offset j*8" actually landed at
+byte offset j*64 — scribbling 7×N bytes past the buffer end.
+
+The overrun survived for years because it consistently hit the
+malloc arena's slack-padding zone, which on glibc was unallocated
+"redzone-shaped" space between the worker-handles block and the
+next live allocation. The behaviour only collapsed once enough other
+heap traffic crowded the arena and a real load-bearing allocation
+landed in the spillover window — at which point one of the routes,
+or its `RouteImpl` pointer, or its closure environment, would get
+clobbered and the next request through that route would crash.
+
+This was previously misdiagnosed as a `Vec[Route]` multi-field-struct
+stride hazard under pthread + clang -O2 (the boxed-handle pattern in
+`stdlib/ext/http_router.nu` was added as a workaround for the
+symptom). Route storage was always sound; routes just happened to
+share the arena page that got smashed. The `http_router.nu` comment
+block has been rewritten to credit the real cause.
+
+ASan caught the real root cause when `nurlapi/main.nu` grew from 14
+to 22 routes — the bigger router-build allocation budget shifted
+what landed in the spillover. Same anti-pattern was present in three
+other call sites, fixed atomically:
+
+- `stdlib/ext/http_server.nu` `server_run_pool` (3 sites: 2 poke + 1 peek)
+- `stdlib/ext/postgres.nu` `pg_exec_params` (2 sites)
+- `compiler/tests/thread_basic.nu` (2 sites — masked by malloc slack)
+
+Each: `(nurl_poke buf (* j 8) v)` → `(nurl_poke buf j v)`.
+
+Regression test `compiler/tests/nurl_poke_slot_index.nu` allocates
+an N×8 buffer (N=32, well past any malloc-slack forgiveness zone),
+writes N distinct markers, reads them back, verifies bit-for-bit.
+Under ASan in `run_san_tests.sh` it fails-fast as
+`heap-buffer-overflow` on the first overrun if anyone reintroduces
+the byte-as-slot mistake.
+
+### Fixed — playground init no longer blocks on a CDN
+
+`<script type="module">` in `api/static/index.html` and
+`nurlapi/static/index.html` started with a top-level
+`import { … } from "https://esm.sh/@bjorn3/browser_wasi_shim@0.3.0"`.
+ES-module top-level imports are awaited before any statement in the
+module body runs — if esm.sh is slow, blocked, or rejected by the
+browser (ad-blocker, CSP, offline cache, transient DNS), the module
+never reached its first statement, so `refreshHealth()`,
+`loadExamples()` and `loadTargets()` never fired. The health pill
+stayed "checking…", dropdowns stayed empty, and the page looked
+like the server's `/health` was down even though the server was fine.
+
+Fix: replace the static import with a lazy `import(WASI_SHIM_URL)`
+inside a `loadWasiShim()` helper, called only from inside `run()` —
+the one place that actually needs the shim. The module body now has
+zero top-level awaitable imports and initialises synchronously. A
+CDN failure surfaces in `run()`'s `logLine` path and aborts only
+that one Run-click, not the whole page.
+
+### Changed — `/build_windows` two-step compile (clang) + link (mingw-gcc)
+
+Mirrors Python `api/`'s approach: `clang --target=x86_64-w64-mingw32`
+is great at parsing IR but its mingw linker driver can't resolve
+mingw-w64's installed support libraries (`-lgcc`, `-lwinpthread`,
+`crtbeginS.o`, etc.). Single-step `clang ... runtime.win.o -o
+out.exe` therefore fails with `/usr/bin/x86_64-w64-mingw32-ld:
+cannot find -lgcc`. Two steps fix it:
+
+1. `clang --target=x86_64-w64-mingw32 -c file.ll -o file.o` — clang
+   compiles IR to a mingw-flavoured object.
+2. `x86_64-w64-mingw32-gcc file.o runtime.win.o -lpthread …
+   [optional libcurl] -o file.exe` — mingw's own gcc owns its
+   libgcc / libwinpthread / CRT search paths and finishes the link
+   cleanly.
+
+The optional libcurl chain (`-L<curl-mingw>/lib -lcurl -lws2_32
+-lcrypt32 -lbcrypt -lncrypt -lsecur32 -ladvapi32`) is added only
+when the `stdlib/runtime.win.curl` marker is present — same gate
+Python uses. Combined stderr now layers all three stages
+(`nurlc` → `clang -c` → mingw-gcc link) so the playground's "BUILD
+FAILED" panel surfaces whichever stage actually errored;
+`final_rc` prefers the compile return code over the link return
+code (a failing compile produces the more actionable diagnostic).
+
+Five compile targets now produce real binaries end-to-end:
+
+- `/build` → 78 KB Linux ELF
+- `/build_wasm` → 232 KB wasm32-wasi
+- `/build_windows` → 1.18 MB PE32+ EXE
+- `/build_macos` → 19 KB Mach-O (Intel)
+- `/build_target macos-arm64` → 52 KB Mach-O (Apple Silicon)
+
+### Changed — small fixes & perf polish
+
+- `stdlib/std/bytes.nu` — speed-up to the byte-walk helpers used on
+  parser hot paths (direct `*u` pointer reads where the bounds check
+  is already proven by the loop invariant).
+- `stdlib/ext/http_response.nu` — minor allocation-count reduction
+  on the response-build path.
+- `bench/http_server.nu`, `bench/run.sh`, `bench/run_http.sh` —
+  small harness tweaks for the local bench host.
+- `README.md` — updated headline benchmark numbers;
+  `nurlapi/README.md` added (96-line operator manual for the
+  pure-NURL playground + inner-loop dev workflow).
+- `examples/{enigma,fizzbuzz,msgpack_demo,wordcount}.nu` — minor
+  polish picked up while testing playground rendering.
+- `nurlapi/static/viewer.html` — new stdlib / tests source viewer
+  (linked from the playground UI).
+- `cloudflare/Dockerfile`, `dockerpush.sh`, `startdev.sh` — incidental
+  updates so the prod image build & local dev port (8001 vs api/'s
+  8000) coexist cleanly.
+
 ## [0.9.1] — 2026-05-26
 
 ### Release summary
