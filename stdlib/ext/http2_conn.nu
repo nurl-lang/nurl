@@ -98,16 +98,17 @@ $ `stdlib/ext/http2_hpack.nu`
 }
 
 @ __h2_frame_err_to_conn H2FrameErr e → H2ConnErr {
-    ^ ?? e {
-        H2FrameBadPreface         → H2ConnPreface
-        H2FrameReadIo             → H2ConnReadIo
-        H2FrameReadShort          → H2ConnReadShort
-        H2FrameWriteIo            → H2ConnWriteIo
-        H2FrameOversized          → H2ConnFrameSize
-        H2FrameBadStreamId        → H2ConnProtocol
-        H2FrameBadPadding         → H2ConnProtocol
-        H2FrameOther              → H2ConnOther
+    ?? e {
+        H2FrameBadPreface  → { ^ # H2ConnErr H2ConnPreface }
+        H2FrameReadIo      → { ^ # H2ConnErr H2ConnReadIo }
+        H2FrameReadShort   → { ^ # H2ConnErr H2ConnReadShort }
+        H2FrameWriteIo     → { ^ # H2ConnErr H2ConnWriteIo }
+        H2FrameOversized   → { ^ # H2ConnErr H2ConnFrameSize }
+        H2FrameBadStreamId → { ^ # H2ConnErr H2ConnProtocol }
+        H2FrameBadPadding  → { ^ # H2ConnErr H2ConnProtocol }
+        H2FrameOther       → { ^ # H2ConnErr H2ConnOther }
     }
+    ^ # H2ConnErr H2ConnOther
 }
 
 // ── Settings ──────────────────────────────────────────────────────────
@@ -307,7 +308,7 @@ $ `stdlib/ext/http2_hpack.nu`
 
 @ __h2_apply_settings H2Connection c H2Frame f → ! H2Connection H2ConnErr {
     : i n ( vec_len [u] . f payload )
-    ? != 0 ( % n 6 ) {
+    ? != 0 % n 6 {
         ^ @ ! H2Connection H2ConnErr { F H2ConnFrameSize }
     } {}
     : ~ H2Connection cur c
@@ -421,8 +422,12 @@ $ `stdlib/ext/http2_hpack.nu`
                 \ Header h → v { ( header_free h ) } )
             = . s decoded_headers . dd headers
             = . s headers_decoded T
-            // Update dec_dyn from the result (may have mutated)
-            ( hpack_dyn_free . cur dec_dyn )
+            // Update dec_dyn from the result. hpack_decode_block mutates
+            // the dyn table's entries Vec in place and returns the same
+            // (aliased) handle wrapped in a fresh HpackDynTable struct, so
+            // the old cur.dec_dyn and dd.dyn share storage. Overwriting
+            // is correct — explicitly freeing the old would double-free
+            // through the aliased entries pointer.
             = . cur dec_dyn . dd dyn
             ( __h2_set_stream cur sidx s )
             ^ @ ! H2Connection H2ConnErr { T cur }
@@ -467,8 +472,8 @@ $ `stdlib/ext/http2_hpack.nu`
                     = j + j 1
                 }
                 ( string_free . req path )
-                ( string_free . req query )
                 ? >= qi 0 {
+                    ( string_free . req query )
                     = . req path ( string_from_n vl qi )
                     = . req query ( string_from_n
                                     ( nurl_str_slice_unsafe vl + qi 1 )
@@ -521,8 +526,7 @@ $ `stdlib/ext/http2_hpack.nu`
     // pointer gives us a substring view at the cost of losing the
     // NUL-termination property (the slice is still NUL-terminated at
     // the original buffer's NUL — caller must respect `len` limits).
-    : *u rp # *u raw
-    ^ # s ( . rp from )
+    ^ # s + # i raw from
 }
 
 // ── Response emission ────────────────────────────────────────────────

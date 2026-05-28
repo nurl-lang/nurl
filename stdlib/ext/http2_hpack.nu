@@ -258,7 +258,7 @@ $ `stdlib/ext/http.nu`
 //     emit (value - (2^N - 1)) in continuation bytes:
 //       repeat: emit (rem & 0x7F) | (more ? 0x80 : 0), rem >>= 7
 
-@ __pow2 i n → i {
+@ __hpack_pow2 i n → i {
     : ~ i r 1
     : ~ i k 0
     ~ < k n { = r * r 2  = k + k 1 }
@@ -269,7 +269,7 @@ $ `stdlib/ext/http.nu`
 // high (8 - prefix_bits) bits are filled with `first_byte_or` so the
 // caller can pre-stamp the representation flags.
 @ hpack_encode_int ( Vec u ) out i prefix_bits i first_byte_or i value → v {
-    : i max_prefix - ( __pow2 prefix_bits ) 1
+    : i max_prefix - ( __hpack_pow2 prefix_bits ) 1
     ? < value max_prefix {
         ( vec_push [u] out # u | first_byte_or value )
     } {
@@ -294,7 +294,7 @@ $ `stdlib/ext/http.nu`
         ^ @ ! HpackInt HpackErr { F HpackTruncated }
     } {}
     : *u p ( vec_data [u] buf )
-    : i max_prefix - ( __pow2 prefix_bits ) 1
+    : i max_prefix - ( __hpack_pow2 prefix_bits ) 1
     : i first & # i . p from max_prefix
     ? < first max_prefix {
         ^ @ ! HpackInt HpackErr {
@@ -480,7 +480,12 @@ $ `stdlib/ext/http.nu`
     }
     ? ! ok {
         ( vec_free_with [Header] hdrs \ Header h → v { ( header_free h ) } )
-        ( hpack_dyn_free cur )
+        // Do NOT free `cur`: `cur` was initialised from `dyn` (struct
+        // copy) and HpackDynTable.entries is shared by ctl pointer with
+        // the caller's table. Freeing here would leave the caller with
+        // a dangling entries Vec; the caller (typically h2_conn_free
+        // after the COMPRESSION_ERROR GOAWAY per RFC 9113 §4.3) will
+        // free it once via the input table.
         ^ @ ! HpackDecoded HpackErr { F last_err }
     } {}
     ^ @ ! HpackDecoded HpackErr {
@@ -545,6 +550,28 @@ $ `stdlib/ext/http.nu`
     }
 }
 
+// Internal: lowercase a header-field name into a freshly malloc'd
+// NUL-terminated `s`. RFC 9113 §8.2.2 mandates header field names be
+// sent in lowercase ("A request or response containing uppercase header
+// field names MUST be treated as malformed"). Pseudo-headers like
+// `:status` pass through unchanged (the ':' is below 'A'). Caller frees
+// with `nurl_free`.
+@ __hpack_lower_name_dup s name → s {
+    : i n ( nurl_str_len name )
+    : s out # s ( malloc + n 1 )
+    : *u op # *u out
+    : *u sp # *u name
+    : ~ i k 0
+    ~ < k n {
+        : i c & # i . sp k 255
+        ? & >= c 65 <= c 90 { = c + c 32 } {}
+        = . op k # u c
+        = k + k 1
+    }
+    = . op n # u 0
+    ^ out
+}
+
 // ── Encoder (literal, no Huffman, no indexing) ───────────────────────
 @ hpack_encode_headers ( Vec Header ) headers → ( Vec u ) {
     : i n ( vec_len [Header] headers )
@@ -554,7 +581,9 @@ $ `stdlib/ext/http.nu`
     ~ < k n {
         : Header h . hp k
         ( vec_push [u] out # u 0 )
-        ( hpack_encode_string out ( string_data . h name ) )
+        : s lc_name ( __hpack_lower_name_dup ( string_data . h name ) )
+        ( hpack_encode_string out lc_name )
+        ( nurl_free lc_name )
         ( hpack_encode_string out ( string_data . h value ) )
         = k + k 1
     }
@@ -618,7 +647,7 @@ $ `stdlib/ext/http.nu`
                 ? >= bits_avail 8 {
                     = ok F
                 } {
-                    : i pad_mask << - ( __pow2 bits_avail ) 1 - 32 bits_avail
+                    : i pad_mask << - ( __hpack_pow2 bits_avail ) 1 - 32 bits_avail
                     : i expected pad_mask
                     : i got & bit_window pad_mask
                     ? != got expected {
