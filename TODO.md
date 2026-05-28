@@ -6,16 +6,7 @@ Lähde: ulkoinen tekninen review (47/100). Tärkein punainen lippu: **`play.nurl
 
 ## Tier 1 — pakolliset ennen kuin voidaan väittää tuotantokelpoiseksi
 
-- [ ] **Pushaa loput repoa `main`iin.** MCP:n README/ROADMAP viittaa tiedostoihin/hakemistoihin joita ei ole julkisessa puussa:
-  - [ ] `bench/` + `bench/RESULTS.md` + `bench/HTTP_RESULTS.md`
-  - [ ] `tools/nurlfmt/`
-  - [ ] `tools/nurl-lsp/`
-  - [ ] `tools/nurlpkg/`
-  - [ ] `BORROW.md`
-  - [ ] `docs/MEMORY.md`
-  - [ ] `docs/spec.md`
-  - [ ] `.github/workflows/ci.yml` (CI näkyvissä `main`-HEADissä)
-  - [ ] Vaihtoehto: jos `Improvements`-branchia ei mergetä, **laske dokumentaatio takaisin** siihen mitä on oikeasti shipattu.
+- [x] ~~**Pushaa loput repoa `main`iin.**~~ — Tarkistettu 2026-05-28: kaikki reviewerin "puuttuvaksi" väittämät artefaktit ovat jo `origin/main`issa (`bench/`, `tools/{nurlfmt,nurl-lsp,nurlpkg}`, `BORROW.md`, `docs/{MEMORY,spec}.md`, `.github/workflows/ci.yml`). Reviewer katsoi väärää lähdettä — tämä oli iso punainen lippu joka ei ollut todellinen.
 
 - [ ] **Julkaise reprodusoitavat benchmark-skriptit.**
   - [ ] `bench/run.sh` (yhden komennon ajo)
@@ -28,10 +19,33 @@ Lähde: ulkoinen tekninen review (47/100). Tärkein punainen lippu: **`play.nurl
 
 ## Tier 2 — kunnollisen kielen hygienia
 
-- [ ] **Aja HTTP/2 + WebSocket interop-suite oikeita työkaluja vasten** ("offline RFC-vector verification" = unit test, ei interop):
-  - [ ] `h2spec v2.4.0` (146 conformance casea RFC 7540 + RFC 7541 HPACK vasten)
-  - [ ] `autobahn-testsuite` (WebSocket)
+- [~] **Aja HTTP/2 + WebSocket interop-suite oikeita työkaluja vasten** ("offline RFC-vector verification" = unit test, ei interop):
+  - [~] `h2spec v2.6.0` (146 conformance casea RFC 7540 + RFC 7541 HPACK vasten)
+    - **Tila 2026-05-28: 90/146 läpäisee** (lähtö 0/146; ei UAF:ää, build vihreä)
+    - Korjatut juurisyyt (commitit `9f1f12b`, `52426e6`):
+      - 4 parenthesoitua operaattori-ilmaisua (`( % n 6 )`, `( . rp from )`) — diagnoosi olemassa 2026-05-22 jälkeen, http2_conn.nu vain ei ollut build-pathilla
+      - `nurl_str_slice_unsafe` löi load-byten pointer-aritmetiikan sijaan
+      - `__h2_frame_err_to_conn` ei castannut bare enum-tagia paluuarvon enum-tyyppiin (vrt. `__net_err_of` -konventio)
+      - `__h2_stream_to_request` vapautti `req.query`:n ehdoitta mutta uudelleenassignoi vain `?`-haaroitusbranchissa → use-after-free `request_free`:ssa
+      - `__h2_decode_stream_headers` vapautti `cur.dec_dyn`:n ennen kuin assignoi `dd.dyn`:in; HpackDynTable-rakennetta välitetään arvona mutta sisempi entries-Vec on aliasoitu → kaksoisvapautus
+      - `hpack_decode_block`-virhepolku vapautti `cur`:in (= aliasoitu input dyn) → kutsuja sai dangling-pointterin
+      - HPACK encoder ei lowercase-änyt header-nimiä (RFC 9113 §8.2.2 vaatii) → curl/h2 hylkäsi `Content-Type`
+      - SETTINGS/GOAWAY/RST_STREAM/PRIORITY/DATA stream-ID + length + ACK -säännöt lisätty
+      - GOAWAY-vastaanotto: ei enää välitön sulkeminen vaan §6.8 mukainen in-flight-frame-käsittely
+    - **Jäljellä ~28 uniikkia failurea klustereittain (~ETA per klusteri):**
+      - HEADERS pseudo-header -validointi §8.3 (~12 testiä, ~3 h) — uppercase reject, pakolliset `:method`/`:scheme`/`:path`, duplikaatit, pseudo-headerit trailereissa, connection-specific headerit (`Connection`, `TE != trailers`), tyhjä `:path`
+      - CONTINUATION-järjestys §6.10 (6 testiä, ~2 h) — välitön HEADERS+END_HEADERS jälkeen, eri stream id:n välissä, DATA välissä
+      - Flow-control overflow §6.9.1 (3 testiä, ~2 h) — WINDOW_UPDATE summa > 2^31-1 detektio (stream + connection level), negative initial_window_size, INITIAL_WINDOW_SIZE > 2^31-1
+      - HPACK reverse-validointi (5 testiä, ~3 h) — index 0, invalid index, dyn table size update sijoituspaikka, Huffman padding >7 bits, Huffman zero-padding, EOS-symboli payloadissa
+      - Stream depends-on-itself §5.3.1 (2 testiä, ~1 h) — PRIORITY/HEADERS streamin riippuvuus itseensä
+      - Yksittäisiä (~6 testiä, ~3 h): POST trailers (4. POST request with trailers), PUSH_PROMISE reject, invalid preface drain ennen sulkua, content-length mismatch DATA payloadiin, HEADERS toinen ilman END_STREAM
+  - [ ] `autobahn-testsuite` (WebSocket) — vielä aloittamatta. `crossbario/autobahn-testsuite` -Docker image valmis ajettavaksi.
   - [ ] Konteksti: CVE-2023-44487 ("HTTP/2 Rapid Reset"), CVE-2019-9511…9518 -klusteri, CVE-2026-23918 (Apache `mod_http2` double-free) — RFC-appendix-vektorit eivät kata näitä
+  - **Työkalut:**
+    - `/home/wau/.local/bin/h2spec` (v2.6.0) asennettu
+    - `examples/h2c_server.nu` minimal h2c-prior-knowledge serveri portissa 8443
+    - Sanitizer-build-skripti `/tmp/build_san.sh` (ASan+UBSan, native runtime.o ilman LTO:ta) — käytä bug-debuggaukseen
+    - Ajo: `/tmp/h2c_san > /tmp/svr.log 2>&1 &; h2spec -h 127.0.0.1 -p 8443 -o 3 > /tmp/h2spec.log 2>&1`
 
 - [ ] **Julkaise tokenizer-aware token-tehokkuusvertailu.**
   - [ ] Aja Claude (cl100k variant), GPT-4o (o200k), Llama 3 BPE-tokenizerit ekvivalenttia NURL/Python/C/Rust-koodia vasten eri kokoluokissa
@@ -49,9 +63,11 @@ Lähde: ulkoinen tekninen review (47/100). Tärkein punainen lippu: **`play.nurl
   - [ ] Zero external community on tällä hetkellä äänekkäin punainen lippu
   - [ ] Algolia API: `nbHits=0` sekä `nurl-lang` että `"Neural Unified Representation Language"` -hauilla
 
-- [ ] **Poista "non-human readable" -framing.** Marketing-haava.
-  - [ ] Kielen oikeat ominaisuudet (regular grammar, local semantics, deterministic compilation) tekevät siitä **helpommin** ihmis-reviewattavan
-  - [ ] Lean into that — älä piiloutta että LLM "voi tuottaa" jotain mitä ihminen ei voi lukea
+- [x] **Poista "non-human readable" -framing.** Marketing-haava. (Commit `1277711`)
+  - [x] README otsikon "(or Non-hUman Readable Language)" poistettu
+  - [x] Tagline ja "Why NURL?" rewritetty defensible-property-listaukseksi (regular grammar, local semantics, determinism, single-owner memory + borrow checker, LLVM reach)
+  - [x] "Token efficiency in practice" + Python/NURL token-vertailu poistettu
+  - [x] `bench/README.md` ja `docs/FORMAT.md` siivottu vastaavasti
 
 ---
 
