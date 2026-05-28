@@ -232,7 +232,15 @@ $ `stdlib/ext/http2_hpack.nu`
     : ! v H2FrameErr pr ( h2_read_preface tcp )
     ?? pr {
         T _ → {}
-        F e → { ^ @ ! H2Connection H2ConnErr { F ( __h2_frame_err_to_conn e ) } }
+        F e → {
+            // §3.4 — an invalid preface MAY (and h2spec expects) be
+            // signalled with a GOAWAY before tearing the connection.
+            // last_peer_stream_id is 0 since no peer streams existed.
+            : ! v H2FrameErr ga ( h2_send_goaway tcp 0
+                ( h2_err_protocol_error ) `` )
+            ?? ga { T _ → {} F _ → {} }
+            ^ @ ! H2Connection H2ConnErr { F ( __h2_frame_err_to_conn e ) }
+        }
     }
     // Our defaults — push disabled (server never pushes), 256 stream cap
     // covers typical workloads, others spec defaults.
