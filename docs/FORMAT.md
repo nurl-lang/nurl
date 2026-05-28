@@ -133,9 +133,9 @@ emits.
 2. NURL's call form `( fn arg arg )` already gives the user a
    natural wrap point (each arg on its own indented line) when they
    want it; preserving that decision avoids fighting the user.
-3. Statement-level wrapping is rarely needed because the language is
-   token-dense — even long-looking forms fit comfortably on 100
-   columns once stripped of decorative whitespace.
+3. Statement-level wrapping is rarely needed — even long-looking
+   forms fit comfortably on 100 columns once stripped of decorative
+   whitespace.
 
 A future v2 may add a soft column budget (probably 100), but v1's
 contract is "preserve the user's expression-internal newlines if

@@ -61,8 +61,8 @@
 // §4.7 `+` / `#` wildcard rules for client-side dispatch when one
 // connection carries several subscriptions.
 //
-// Not yet implemented: pipelined (multiple-in-flight) publishing — the
-// calls are synchronous, one packet in flight. See MQTT_PLAN.md.
+// Not yet implemented: pipelined (multiple-in-flight) publishing —
+// the calls are synchronous, one packet in flight.
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/bytes.nu`

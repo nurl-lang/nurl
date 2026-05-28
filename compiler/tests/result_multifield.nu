@@ -1,10 +1,7 @@
-// Test: `! T E` where T is a multi-field struct. Previously the Result
-// payload encoding only carried single-pointer-handle structs; multi-
-// field structs forced the workaround tagged-struct pattern documented
-// in HTTP_SERVER_PLAN.md.
+// Test: `! T E` where T is a multi-field struct.
 //
-// Compiler now heap-boxes multi-field T transparently: alloc + store +
-// ptrtoint into the i64 payload slot at construction; the matching
+// The compiler heap-boxes multi-field T transparently: alloc + store
+// + ptrtoint into the i64 payload slot at construction; the matching
 // `??` arm inttoptr + load + free at destructure.
 
 $ `stdlib/core/string.nu`

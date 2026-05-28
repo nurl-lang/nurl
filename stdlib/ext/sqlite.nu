@@ -1,13 +1,11 @@
 // stdlib/ext/sqlite.nu — SQLite bindings (Tier 3 stdlib).
 //
-// PURIFY.md Phase 12 §21 (2026-05-23): the entire 330-LOC C bridge
-// in stdlib/runtime.c §21 migrated here. The module now declares
-// libsqlite3 symbols directly via `& `sqlite3` @ … → …` (eighteen
-// FFI lines) and manages the small handle structs (Database +
-// Statement) in opaque NURL-allocated 32-byte heap blocks. The C
+// Declares libsqlite3 symbols directly via `& `sqlite3` @ … → …`
+// (eighteen FFI lines) and manages the small handle structs (Database
+// + Statement) in opaque NURL-allocated 32-byte heap blocks. The C
 // side is a 5-LOC link-time stub.
 //
-// API (unchanged for callers — same Database / Statement / SqliteErr):
+// API:
 //
 //   ( sqlite_open s path )                 → ! Database SqliteErr
 //   ( sqlite_close Database db )           → v

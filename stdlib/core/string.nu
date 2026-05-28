@@ -53,13 +53,11 @@ $ `stdlib/core/char.nu`
 // the compiler to reference %String before its body is emitted. We keep
 // this module self-contained on Vec[u] primitives only.
 
-// ── PURIFY.md Phase 5 (2026-05-23): pure-NURL replacements for
-//    the historic `nurl_str_*` / `nurl_memcmp_lex` / `nurl_memmem_range`
-//    / `nurl_parse_int_range` C wrappers in `stdlib/runtime.c §2`.
-//    Direct libc FFI — `strlen` / `strcmp` / `strncmp` / `strstr` /
-//    `memcmp` / `memmem` / `atoll` / `atof` / `memcpy` / `strdup`
-//    are declared globally by the nurlc preamble, so call sites
-//    don't need a per-file `&`-FFI declaration.
+// ── nurl_str_* / nurl_memcmp_lex / nurl_memmem_range / ─────────────
+//    nurl_parse_int_range — direct libc FFI. `strlen` / `strcmp` /
+//    `strncmp` / `strstr` / `memcmp` / `memmem` / `atoll` / `atof` /
+//    `memcpy` / `strdup` are declared globally by the nurlc preamble,
+//    so call sites don't need a per-file `&`-FFI declaration.
 
 @ nurl_memcmp_lex s a i la s b i lb → i {
     : i n ? < la lb la lb
@@ -128,7 +126,7 @@ $ `stdlib/core/char.nu`
     ^ - # i p # i hay
 }
 
-// ── PURIFY.md Phase 5 Batch C (2026-05-23): allocation-style ops ──
+// ── allocation-style ops ───────────────────────────────────────────
 // Direct malloc + memcpy through the preamble libc declarations.
 // `malloc` / `memcpy` already declared globally; no `&`-FFI needed.
 
@@ -233,7 +231,6 @@ $ `stdlib/core/char.nu`
     ^ * acc sign
 }
 
-// ── PURIFY.md Phase 5 Batch D' (2026-05-23) ──
 // strtod via FFI for byte-range float parsing. nurl_str_int and
 // nurl_str_float keep their C bodies — str_int because moving it
 // would force `$ stdlib/core/string.nu` into 72 corpus tests that

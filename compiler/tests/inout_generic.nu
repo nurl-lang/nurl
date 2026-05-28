@@ -1,5 +1,5 @@
-// inout_generic.nu — BORROW.md Phase 4 (Option B): the `inout` and
-// `sink` parameter conventions on GENERIC functions.
+// inout_generic.nu — `inout` and `sink` parameter conventions on
+// GENERIC functions.
 //
 // A parameter convention is a property of parameter POSITION, not of
 // the type arguments — so the `inout` / `sink` index sets are computed

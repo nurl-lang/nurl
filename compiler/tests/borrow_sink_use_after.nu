@@ -1,5 +1,5 @@
-// borrow_sink_use_after.nu — BORROW.md Phase 4: a `sink` parameter
-// consumes its argument. Once a binding is handed to a `sink`
+// borrow_sink_use_after.nu — a `sink` parameter consumes its
+// argument. Once a binding is handed to a `sink`
 // parameter the caller has given up ownership; using it afterwards
 // is a use-after-move. The borrow checker records the `sink`
 // argument as moved, so a later read is flagged exactly like a use

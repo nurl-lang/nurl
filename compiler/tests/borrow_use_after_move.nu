@@ -1,4 +1,4 @@
-// Borrow checker (BORROW.md Phase 1) — use-after-move regression.
+// Borrow checker — use-after-move regression.
 // The harness compiles `borrow_*` tests with --borrowck and records
 // the diagnostic in the baseline. `v` is consumed by vec_free, then
 // read again by vec_len: a use-after-move. Expect one warning.

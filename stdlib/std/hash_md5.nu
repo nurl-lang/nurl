@@ -1,9 +1,5 @@
 // stdlib/std/hash_md5.nu — RFC 1321 MD5 in pure NURL.
 //
-// PURIFY.md Phase 4 (2026-05-23). Replaces the self-contained
-// `nurl_md5_bytes` C transform in `stdlib/runtime.c §17`. Same
-// 128-bit digest, byte-identical output for every test vector.
-//
 // Algorithm strength: MD5 is collision-broken and MUST NOT be used to
 // authenticate data or hash secrets. Provided for compatibility with
 // protocols and formats that mandate it (RFC 1321 itself, S3 ETags,

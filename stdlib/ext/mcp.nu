@@ -20,8 +20,8 @@
 // uniformly. The user writes the dispatch loop themselves — see
 // `examples/mcp_echo_server.nu` for the canonical shape.
 //
-// HTTP/SSE and Streamable-HTTP transports are left for STDLIB.md §32
-// + Tier 4 §25 (HTTP server).
+// HTTP/SSE and Streamable-HTTP transports live in
+// `stdlib/ext/mcp_http.nu`.
 //
 // ── API ─────────────────────────────────────────────────────────────
 //

@@ -725,8 +725,8 @@ least the return-type arrow `→` and a body block.
 
 ### 7.2 Parameter conventions
 
-NURL uses **mutable value semantics** (Option B in [`BORROW.md` Part
-III](../BORROW.md)). A parameter is one of three conventions:
+NURL uses **mutable value semantics**. A parameter is one of three
+conventions:
 
 - **`in`** (default) — immutable borrow by value. Struct-typed
   parameters are copied into a fresh `alloca` at function entry;
@@ -914,8 +914,8 @@ legal.
 - `*T` raw pointer lifetimes (the FFI escape hatch).
 - Interprocedural escape (a stack reference passed *through* a helper
   function that retains it).
-- Aliased mutation beyond a single call (a longer-range "exclusive
-  reference" analysis is BORROW.md Phase 7, deferred).
+- Aliased mutation beyond a single call (longer-range "exclusive
+  reference" analysis is not currently implemented).
 - Panic / `recover` control flow (the checker treats `recover` as an
   ordinary call and does not model panic unwind).
 
@@ -1024,13 +1024,9 @@ IR blob + deterministic compiler + fixed-point check) mirrors Zig.
 - [`spec/grammar.ebnf`](../spec/grammar.ebnf) — authoritative grammar.
 - [`docs/MEMORY.md`](MEMORY.md) — memory model and borrow checker
   programmer's guide.
-- [`BORROW.md`](../BORROW.md) — borrow checker design notes (phased
-  plan, decision rationale).
-- [`docs/GOTCHAS.md`](GOTCHAS.md) — historical foot-guns and the
-  diagnostics that now catch them.
+- [`docs/GOTCHAS.md`](GOTCHAS.md) — compiler gotchas and the
+  diagnostics that catch them.
 - [`docs/FORMAT.md`](FORMAT.md) — `nurlfmt` rules.
 - [`docs/ASYNC.md`](ASYNC.md) — async runtime design.
 - [`README.md`](../README.md) — project overview and tutorials.
-- [`ROADMAP.md`](../ROADMAP.md) — forward plan and per-section status.
-- [`CHANGELOG.md`](../CHANGELOG.md) — release history and per-ship
-  notes.
+- [`CHANGELOG.md`](../CHANGELOG.md) — release notes.

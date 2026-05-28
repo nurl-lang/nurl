@@ -1,4 +1,5 @@
-// borrow_aliased_mut.nu — BORROW.md Phase 5: N-readers-XOR-1-writer.
+// borrow_aliased_mut.nu — N-readers-XOR-1-writer check at call sites.
+//
 // A binding passed to a call as `inout` is mutably borrowed for that
 // call; it must be the exclusive path to the value at the call site.
 // Passing the same binding as another argument of the SAME call —

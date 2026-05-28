@@ -2,10 +2,8 @@
 //
 // Pure-NURL FFI to libm — `sqrt` / `fabs` / `sin` / `cos` / … are
 // declared directly via `& `m` @ … → …` below, no `runtime.c`
-// pass-through. (Old C bridge in §11 deleted 2026-05-23 as
-// PURIFY.md Phase 3.) All trigonometric functions take/return
-// radians; `atan2 y x` returns the principal angle of the point
-// (x, y).
+// pass-through. All trigonometric functions take/return radians;
+// `atan2 y x` returns the principal angle of the point (x, y).
 //
 //   ( float_abs   x )       → f
 //   ( float_sqrt  x )       → f

@@ -1,10 +1,10 @@
 // stdlib/std/random.nu — secure random numbers (pure-NURL FFI)
 //
-// PURIFY.md Phase 14 (2026-05-24). The runtime now ships a single
-// syscall-shaped bridge — `nurl_rand_fill(buf, n)` — that picks the
-// right OS entropy source per platform (getrandom / arc4random_buf /
-// BCryptGenRandom + /dev/urandom fallback). Everything else (the i64
-// pack, the hex encoder, the cap-to-4096 wrapper) is pure NURL here.
+// The runtime ships a single syscall-shaped bridge —
+// `nurl_rand_fill(buf, n)` — that picks the right OS entropy source
+// per platform (getrandom / arc4random_buf / BCryptGenRandom +
+// /dev/urandom fallback). Everything else (the i64 pack, the hex
+// encoder, the cap-to-4096 wrapper) is pure NURL here.
 //
 //   ( rand_u64 )                → i        full-range 64-bit signed
 //                                          (interpret as unsigned for

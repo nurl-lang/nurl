@@ -1,4 +1,4 @@
-// should_warn_caret_xor.nu — critic.md v0.9.0 §1.
+// should_warn_caret_xor.nu — `^` vs `^^` confusion warning.
 //
 // `^ a b` looks like XOR but `^` is the return operator (arity 1),
 // so this parses as `^ a` and `b` is left over as a separate (dead)

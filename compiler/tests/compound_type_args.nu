@@ -1,7 +1,5 @@
 // Test: compound type-args `( Vec ( Pair K V ) )` in struct fields,
-// locals, and return types. Previously parse_type_paren read raw
-// tokens and miscompiled nested generics — caller had to wrap them
-// in named structs (see HTTP_SERVER_PLAN.md cross-cutting prereq).
+// locals, and return types.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/pair.nu`

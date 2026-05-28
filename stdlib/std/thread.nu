@@ -1,15 +1,10 @@
 // stdlib/std/thread.nu — Threads, mutexes, condition variables
 //
-// Foundation for thread-per-connection HTTP serving (HTTP_SERVER_PLAN.md
-// Phase 5) and any producer/consumer NURL code that needs message
-// passing.
+// Pure-NURL FFI over libpthread. On POSIX `pthread_mutex_*` /
+// `pthread_cond_*` / `pthread_create` are libc symbols; on Windows
+// mingw-w64 supplies them via libwinpthread (link with -lpthread).
 //
-// PURIFY.md Phase 6 (2026-05-23): the whole surface is now pure-NURL
-// FFI over libpthread. On POSIX `pthread_mutex_*` / `pthread_cond_*` /
-// `pthread_create` are libc symbols; on Windows mingw-w64 supplies
-// them via libwinpthread (link with -lpthread).
-//
-// What's left on the C side (runtime.c §19):
+// What stays on the C side (runtime.c §19):
 //
 //   * `nurl_pthread_join_ptr` / `nurl_pthread_detach_ptr` — pthread_t
 //     is passed BY VALUE to pthread_join / pthread_detach, and on

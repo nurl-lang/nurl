@@ -6,7 +6,7 @@
 #     3. if link OK, run the binary with a timeout and capture
 #        stdout+stderr + exit code
 #
-#  Output (since PURIFY.md Phase 5, 2026-05-23):
+#  Output:
 #   - success.txt — only the tests whose outcome matched the
 #                   expectation (normal tests: COMPILE+LINK+RUN
 #                   success; should_fail_*: COMPILE FAIL;
@@ -262,13 +262,22 @@ for src in "${tests[@]}"; do
         continue
     fi
 
-    # ── borrow_* — borrow violations are now compile errors (BORROW.md
-    #               Phase 8 final, 2026-05-25). Each test file contains
-    #               one or more positive cases that MUST trip the
-    #               checker; the run is expected to fail and the error
-    #               text is baselined for regression protection.
+    # ── borrow_* — borrow violations are compile errors. Each test
+    #               file contains one or more positive cases that MUST
+    #               trip the checker; the run is expected to fail and
+    #               the error text is baselined for regression
+    #               protection.
+    #
+    # `borrow_strict_*` variants compile cleanly under the default
+    # checker (would let them through) and only fire under
+    # `--strict-borrowck`. Same expected-failure shape, just with the
+    # extra flag — the baseline still records the diagnostic text.
     if [[ "$name" == borrow_* ]]; then
-        if "$NURLC" "$src" > "$ll" 2>"$err"; then
+        _bck_flag=""
+        if [[ "$name" == borrow_strict_* ]]; then
+            _bck_flag="--strict-borrowck"
+        fi
+        if "$NURLC" $_bck_flag "$src" > "$ll" 2>"$err"; then
             record_failure "$name" unexpected_compile_ok "$src" "$ll" "$bin" "$err"
             continue
         fi

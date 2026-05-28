@@ -1,5 +1,6 @@
-// inout_field.nu — BORROW.md Phase 4 (Option B): `inout` field
-// targets. An argument of the form `. obj field` at an `inout`
+// inout_field.nu — `inout` field targets.
+//
+// An argument of the form `. obj field` at an `inout`
 // parameter passes the ADDRESS of that struct field, so the callee
 // mutates exactly that field of the caller's struct in place —
 // finer-grained than passing the whole struct `inout`.

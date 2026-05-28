@@ -1,5 +1,5 @@
-// borrow_escape_vec.nu — BORROW.md Phase 3: escape analysis covers
-// the ownership-taking helpers (vec_push / vec_insert / vec_set /
+// borrow_escape_vec.nu — escape analysis covers the ownership-taking
+// helpers (vec_push / vec_insert / vec_set /
 // thread_spawn). These four callees take a value that outlives the
 // current scope, so a `: ~`-mutable multi-field-struct closure
 // captured by pointer escapes when handed to any of them.

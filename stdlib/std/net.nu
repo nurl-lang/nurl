@@ -1,8 +1,8 @@
 // stdlib/std/net.nu — TCP sockets (HTTP server foundation)
 //
-// Wraps the runtime bridge in stdlib/runtime.c (§18). Single-threaded
-// blocking sockets — Phase 1 of HTTP_SERVER_PLAN.md. Concurrency
-// (thread-per-connection or epoll) is layered on top in Phase 5.
+// Wraps the runtime bridge in stdlib/runtime.c (§18). Blocking sockets
+// at this layer; concurrency (thread-per-connection or epoll) is
+// layered on top in the HTTP server.
 //
 // API (this revision):
 //

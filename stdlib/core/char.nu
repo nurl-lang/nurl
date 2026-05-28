@@ -1,13 +1,9 @@
 // stdlib/core/char.nu — ASCII character classification (pure NURL).
 //
-// Pure-NURL replacements for the historic `nurl_is_*` C helpers
-// (§3 of `stdlib/runtime.c`, dropped 2026-05-23 as Phase 1 of
-// PURIFY.md). The C versions delegated to `<ctype.h>` with the
-// default "C" locale, which on every modern libc means ASCII-only
-// — these NURL versions encode the same byte ranges directly and
-// are observably identical on every input in the [0, 255] range.
+// Encodes the same byte ranges as `<ctype.h>` under the "C" locale
+// (ASCII-only).
 //
-// API (i64 → i64 to match the historic `nurl_is_*` ABI shape):
+// API (i64 → i64):
 //
 //   ( is_alpha     i c )  → i      1 if A-Z or a-z, else 0
 //   ( is_digit     i c )  → i      1 if 0-9, else 0

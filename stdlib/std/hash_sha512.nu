@@ -1,8 +1,6 @@
 // stdlib/std/hash_sha512.nu — FIPS 180-4 SHA-512 + HMAC in pure NURL.
 //
-// PURIFY.md Phase 4 (2026-05-23). 64-bit word SHA-2 with 128-byte
-// blocks and 80 rounds; replaces the self-contained C transform
-// in `stdlib/runtime.c §17`.
+// 64-bit word SHA-2 with 128-byte blocks and 80 rounds.
 //
 // API:
 //   ( sha512_pure ( Vec u ) data )       → ( Vec u )   64-byte digest

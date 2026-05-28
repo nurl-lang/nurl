@@ -1,5 +1,5 @@
-// should_fail_sink_autodrop.nu — BORROW.md Phase 4: `sink` v1 does
-// not yet support arguments the compiler auto-drops (an owned string
+// should_fail_sink_autodrop.nu — `sink` does not currently support
+// arguments the compiler auto-drops (an owned string
 // from an allocating call, an owned slice, a Drop-trait value, a
 // struct with owned fields). Transferring the auto-drop obligation
 // to the callee is deferred; until then passing such a value to a

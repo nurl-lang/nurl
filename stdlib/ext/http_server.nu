@@ -1,5 +1,4 @@
-// stdlib/ext/http_server.nu — HTTP/1.1 server with keep-alive
-// (Phases 4 + 5 + 5.4 of HTTP_SERVER_PLAN.md).
+// stdlib/ext/http_server.nu — HTTP/1.1 server with keep-alive.
 //
 // Layering:
 //

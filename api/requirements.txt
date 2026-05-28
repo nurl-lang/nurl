@@ -1,8 +1,0 @@
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-pydantic==2.9.2
-markdown==3.7
-pygments==2.18.0
-# Model Context Protocol server (exposes nurlc as tools/resources to LLMs).
-mcp==1.9.4
-httpx==0.27.2

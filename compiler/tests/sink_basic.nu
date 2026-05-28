@@ -1,5 +1,6 @@
-// sink_basic.nu — BORROW.md Phase 4 (Option B): the `sink` parameter
-// convention. A `sink` parameter consumes (takes ownership of) its
+// sink_basic.nu — the `sink` parameter convention.
+//
+// A `sink` parameter consumes (takes ownership of) its
 // argument — the callee owns the value and is responsible for it,
 // and the caller may not use the argument binding afterwards.
 //

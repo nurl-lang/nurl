@@ -20,9 +20,8 @@
 $ `compiler/tests/should_fail_group_d_lib.nu`
 
 // ── ffi_decl ──────────────────────────────────────────────────────
-// (`strlen` is now declared by the compiler preamble globally —
-// PURIFY.md Phase 5 scaffolding, 2026-05-23 — so a per-file FFI
-// redeclaration is no longer needed and would duplicate-define.)
+// (`strlen` is declared by the compiler preamble globally, so a
+// per-file FFI redeclaration is not needed and would duplicate-define.)
 
 // ── enum_decl ─────────────────────────────────────────────────────
 : | Direction { North South East West }

@@ -2,9 +2,7 @@
 //
 // All output goes to stderr (matches eprintln) so logs don't interleave
 // with stdout. The current threshold lives in this module's mutable
-// `__g_log_level` global (pure NURL since PURIFY.md Phase 2,
-// 2026-05-23 — the historic `nurl_log_level_get/set` C accessors in
-// runtime §15 are gone). Messages whose level is below the threshold
+// `__g_log_level` global. Messages whose level is below the threshold
 // are silently dropped.
 //
 // Levels (low → high):

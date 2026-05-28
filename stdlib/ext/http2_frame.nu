@@ -83,6 +83,7 @@ $ `stdlib/std/net.nu`
 @ h2_default_max_frame_size      → i { ^ 16384 }       // 2^14
 @ h2_max_frame_size_upper_bound  → i { ^ 16777215 }    // 2^24 - 1
 @ h2_default_initial_window_size → i { ^ 65535 }       // 2^16 - 1
+@ h2_default_header_table_size   → i { ^ 4096 }        // §6.5.2 default
 @ h2_max_window_size             → i { ^ 2147483647 }  // 2^31 - 1
 @ h2_max_stream_id               → i { ^ 2147483647 }  // 2^31 - 1 (R bit excluded)
 

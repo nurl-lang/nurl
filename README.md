@@ -1,6 +1,6 @@
-# NURL — Neural Unified Representation Language (or Non-hUman Readable Language)
+# NURL — Neural Unified Representation Language
 
-> A programming language designed exclusively for use by language models. Not meant to be human-readable — maximum information density, deterministic compilation, LLVM-based codegen.
+> A small systems language with a regular prefix-arity grammar, single-owner memory with an opt-in static borrow checker, deterministic compilation, and LLVM-based codegen.
 
 **Project site:** <https://nurl-lang.org> · **Live playground & MCP endpoint:** <https://play.nurl-lang.org>
 
@@ -10,16 +10,16 @@
 
 ## Why NURL?
 
-Existing programming languages were designed for humans:
-- Keywords (`function`, `return`, `class`) consume tokens without adding information
-- Syntactic noise (parentheses, semicolons, indentation) exists for human benefit
-- Grammar exceptions require memorization, not logic
+NURL takes a few design positions that are uncommon together:
 
-LLMs generate and consume code token by token. NURL optimizes this process:
+- **Regular prefix-arity grammar** — every operator has a fixed arity, no infix, no precedence cliffs. The grammar fits on a single page and is LL(k≤4) — recursive-descent with up to 4 tokens of lookahead.
+- **Local semantics** — a construct's meaning is derivable from a short window of surrounding tokens. No long-range dependencies.
+- **Deterministic compiler** — the same source always produces identical output. No UB, no platform-dependent behaviour. The self-hosted compiler reaches a byte-identical fixed point on its own source.
+- **Single-owner memory + opt-in static borrow checker** — auto-drop at scope exit, plus a diagnostic pass that catches use-after-move, alias-double-free, escaping closure-captures, and iterator invalidation as hard errors.
+- **LLVM-based codegen, broad platform reach** — one pipeline targets Linux, macOS, Windows, wasm32-wasi, RISC-V, and ARM64.
 
 | Metric | Python | C | NURL |
 |---|---|---|---|
-| Tokens for "add two ints" | ~15 | ~12 | ~4 |
 | Grammar productions | ~100 | ~200 | ~50 |
 | Runtime performance | slow | fast | fast (LLVM) |
 | Target platforms | one | many | any LLVM target |
@@ -28,22 +28,19 @@ LLMs generate and consume code token by token. NURL optimizes this process:
 
 ## Design Principles
 
-### 1. Token efficiency above all
-Every syntactic construct is designed to minimize token count without information loss. A single character can carry full semantic meaning.
+### 1. Regular grammar
+NURL's grammar has no exceptions — the same construct always works the same way. The grammar fits on a single page.
 
-### 2. Regular grammar
-LLMs predict the next token from context. NURL's grammar has no exceptions — the same construct always works the same way. The grammar fits on a single page.
+### 2. Local semantics
+A construct's meaning is derivable from a short window of surrounding tokens. No long-range dependencies.
 
-### 3. Local semantics
-A token's meaning is derivable from at most 8 tokens of context. No long-range dependencies that could break during generation.
+### 3. Deterministic compiler
+The same source always produces identical output. No UB, no platform differences, no behavioral variation. Code behaves as written.
 
-### 4. Deterministic compiler
-The same source always produces identical output. No UB, no platform differences, no behavioral variation. LLMs can trust code behaves as written.
-
-### 5. Full platform support
+### 4. Full platform support
 One compilation pipeline → all target platforms without porting.
 
-### Performance — head-to-head with Python, Rust, Node
+### Performance
 
 A reproducible micro-benchmark suite lives in [`bench/`](bench/) — one source file per language, `bench/run.sh` compiles + runs every present language N times, prints a median-ms table. [`bench/RESULTS.md`](bench/RESULTS.md) captures the numbers from one specific machine (12-core Intel @ 3.5 GHz):
 
@@ -53,18 +50,16 @@ A reproducible micro-benchmark suite lives in [`bench/`](bench/) — one source 
 | `sieve` (π(10M))               |  69   |  5 898  |  62   |    142  |
 | `json_parse` (5× 64 KB)        |  14   |     34  |   5   |     47  |
 
-(Lower = better, median wall-clock ms across 5 runs.) On compute-bound work NURL lands within measurement noise of Rust — same LLVM `-O2 -flto` codegen. On `json_parse` NURL's pure-NURL parser beats Python's C-extension `json` ~2.4× and trails a hand-written zero-copy Rust parser by ~3×.
+(Lower = better, median wall-clock ms across 5 runs.)
 
 **HTTP server peer bench** — [`bench/HTTP_RESULTS.md`](bench/HTTP_RESULTS.md), driven via [`oha`](https://github.com/hatoo/oha) (10 s × 3 runs, median):
 
 | Concurrency | NURL (req/s) | Rust hyper | Node http | NURL p99 (ms) | Rust p99 | Node p99 |
 |---:|---:|---:|---:|---:|---:|---:|
-|   1 |  14 451  |  14 507  |   8 708  | **0.14** | 0.11 |  0.51 |
-|  10 | **68 960** |  47 703  |  16 726  | **0.56** | 1.16 |  2.43 |
-|  50 |  60 897  | **86 699** |  17 108  | **0.67** | 2.82 | 12.30 |
-| 200 |  59 044  | **114 694** |  15 555  | **0.62** | 6.19 | 21.16 |
-
-Parity with Rust hyper at C=1; NURL **1.45× ahead** at C=10 (the 8-worker pool fits the workload); Rust pulls ahead at C ≥ 50 with deeper async machinery. **NURL holds the lowest tail latency across the whole sweep** — p99 0.62 ms at C=200 vs Rust 6.19 ms, Node 21 ms.
+|   1 |  14 451  |  14 507  |   8 708  |  0.14 | 0.11 |  0.51 |
+|  10 |  68 960  |  47 703  |  16 726  |  0.56 | 1.16 |  2.43 |
+|  50 |  60 897  |  86 699  |  17 108  |  0.67 | 2.82 | 12.30 |
+| 200 |  59 044  | 114 694  |  15 555  |  0.62 | 6.19 | 21.16 |
 
 ---
 
@@ -79,7 +74,7 @@ NURL source (.nu)
         │
         ▼
      Parser
-   (LL(1), ≤4-token lookahead)
+   (LL(k≤4), ≤4-token lookahead)
         │
         ▼
    LLVM IR (.ll)
@@ -178,13 +173,12 @@ folding ranges. Wired to VS Code / Windsurf via the
 
 ## HTTP API & browser playground
 
-A pure-NURL HTTP server under `nurlapi/` (the playground used to run on
-FastAPI; as of 2026-05-27 the API, router, MCP transport and OpenAPI
-emitter are all written in NURL — `nurlapi/main.nu` compiled to a native
-binary at image-build time, no Python in the runtime image) exposes the
-compiler over HTTP and hosts a Monaco-based playground that builds and
-runs NURL programs as **WebAssembly (wasm32-wasi)** directly in the
-browser via
+A pure-NURL HTTP server under `nurlapi/` (the API, router, MCP transport
+and OpenAPI emitter are all written in NURL — `nurlapi/main.nu` compiled
+to a native binary at image-build time, no Python in the runtime image)
+exposes the compiler over HTTP and hosts a Monaco-based playground that
+builds and runs NURL programs as **WebAssembly (wasm32-wasi)** directly
+in the browser via
 [`@bjorn3/browser_wasi_shim`](https://github.com/bjorn3/browser_wasi_shim).
 The same container also serves the public **MCP endpoint** at `/mcp` — see
 the [MCP section below](#mcp-server--let-an-llm-drive-the-toolchain).
@@ -257,9 +251,7 @@ runs the server outside Docker, using the host's `nurlc` and stdlib).
 ### Compiler-in-wasm (offline / embeddable)
 
 The same `POST /build_wasm` pipeline can be pointed at `compiler/nurlc.nu`
-itself, producing a ~316 KB `nurlc.wasm` (verified 2026-05-25 at
-**315 708 bytes**; ROADMAP "Last updated" pins the exact figure per ship)
-that **is** the NURL compiler:
+itself, producing a ~316 KB `nurlc.wasm` that **is** the NURL compiler:
 
 ```bash
 ./startdev.sh        # one terminal: bring up the API container
@@ -500,31 +492,6 @@ surfaces as an "unexpected token" several tokens later.
 
 ---
 
-## Token efficiency in practice
-
-Comparison: sum the numbers 1–100.
-
-**Python (~46 tokens):**
-```python
-def sum_to_hundred():
-    total = 0
-    for i in range(1, 101):
-        total += i
-    return total
-```
-
-**NURL (~13 tokens):**
-```
-@ sumto i n → i {
-  : i acc 0
-  : i k   1
-  ~ <= k n { = acc + acc k  = k + k 1 }
-  ^ acc
-}
-```
-
----
-
 ## Memory model
 
 The current compiler is deliberately minimal:
@@ -535,11 +502,11 @@ The current compiler is deliberately minimal:
 - **Option-style nullability via `?T`** — compiles to `{ i1, T }`, checked with `??` pattern matching.
 - **Struct parameters pass by value, like C / Go / Zig** — the compiler emits `alloca + store` for each struct-typed parameter at function entry, so `= . p field val` inside the callee writes to a fresh local backing. NURL has no `&local` address-of operator; the three ways to share mutation across a call boundary are **(a)** return the modified struct (idiomatic — copy is cheap for small structs), **(b)** declare a `*T` parameter and pass the alloca address, or **(c)** wrap the state in a single-handle struct (`{ ( Vec i ) counters }`) so the heap buffer is shared even though the handle is copied. See `stdlib/ext/http_middleware.nu` `Metrics` for the (c) pattern.
 - **Single-owner + compiler-inserted auto-drop** — the compiler tracks ownership of heap-allocated slices and strings and emits `nurl_free` at scope exit automatically. Closures still use RC for captured env.
-  - Phase 1 — slice-literal ownership with auto-drop at function exit.
-  - Phase 2A — slice-returning function calls transfer ownership to the caller's binding.
-  - Phase 2B — string auto-drop for allocating runtime calls (`nurl_str_cat`, `_cat3/4`, `_int`, `_float`, `_slice`, `nurl_read_file`). Default ON, including for the compiler itself: retaining C runtime helpers (`nurl_lex_new`, `nurl_set_last_type`, `nurl_get_last_type`, `nurl_argv`, `nurl_sym_get`, `nurl_lex_filename`, `nurl_print_buf_stop`) `strdup` their inputs/outputs so callers can auto-drop safely. `?`, `~`, and `??` arms scope their `:` bindings in a new symtab frame so owned-string entries don't leak into sibling branches. Reassigning an owned `i8*` to a fresh allocating call frees the previous value first; allocating-call results passed inline as call arguments are released right after the callee returns (callee-borrows convention — retaining helpers must `strdup`).
-  - Phase 2C — struct-field auto-drop: when a named-struct literal `@ T { ... }` populates a field directly from a fresh owned allocation, the compiler records a per-field drop against the binding's alloca and emits a load + `extractvalue` + `nurl_free` at scope exit. Covers two kinds: (a) `i8*` fields populated from allocating string calls (`nurl_str_cat`, `_cat3/4`, `_int`, `_float`, `_slice`, `nurl_read_file`); (b) slice `[T` fields populated from a slice literal `[ T | ... ]` or a slice-returning call. Conservative by design — only fields populated from a fresh allocation on the spot get a drop, so copying an already-owned binding into a struct does not cause a double-free. Nested owned-struct fields and arm-local struct bindings that fall through (no `^`) still leak, same as the existing arm-scoped string behaviour.
-- **Static borrow checker, on by default — diagnostics are HARD ERRORS** — a diagnostic analysis pass (disable with `--no-borrowck`) catches the mistakes the conservative auto-drop layer cannot detect: reading a binding after its ownership has moved (use-after-move), aliasing an owned heap value so the buffer would be freed twice, closures that capture a `: ~`-mutable struct by pointer and then escape the stack frame they point into (returned, pushed into a container, spawned onto a thread, or assigned into a longer-lived binding), aliased exclusive-access ("N readers XOR 1 writer") at a call site, and mutating a container while a `~`-foreach borrows its elements. Since 2026-05-25 these are **compile errors** — `error: use of moved value …` / `error: cannot mutate 'xs' while iterating over it` — and the compiler exits non-zero with the count of violations. The checker never changes generated code, so a borrow-clean program produces byte-identical IR with or without `--no-borrowck`. Full rules and the not-yet-checked list (`*T`, interprocedural escape): [`docs/MEMORY.md`](docs/MEMORY.md); design and phase log: [`BORROW.md`](BORROW.md).
+  - Slice-literal ownership: a `[ T | ... ]` literal is owned by the binding it is assigned to and dropped at function exit.
+  - Slice-returning function calls transfer ownership to the caller's binding.
+  - String auto-drop for allocating runtime calls (`nurl_str_cat`, `_cat3/4`, `_int`, `_float`, `_slice`, `nurl_read_file`). Retaining C runtime helpers (`nurl_lex_new`, `nurl_set_last_type`, `nurl_get_last_type`, `nurl_argv`, `nurl_sym_get`, `nurl_lex_filename`, `nurl_print_buf_stop`) `strdup` their inputs/outputs so callers can auto-drop safely. `?`, `~`, and `??` arms scope their `:` bindings in a new symtab frame so owned-string entries do not leak into sibling branches. Reassigning an owned `i8*` to a fresh allocating call frees the previous value first; allocating-call results passed inline as call arguments are released right after the callee returns (callee-borrows convention — retaining helpers must `strdup`).
+  - Struct-field auto-drop: when a named-struct literal `@ T { ... }` populates a field directly from a fresh owned allocation, the compiler records a per-field drop against the binding's alloca and emits a load + `extractvalue` + `nurl_free` at scope exit. Covers `i8*` fields populated from allocating string calls and slice `[T` fields populated from a slice literal or a slice-returning call. Only fields populated from a fresh allocation on the spot get a drop, so copying an already-owned binding into a struct does not cause a double-free. Nested owned-struct fields and arm-local struct bindings that fall through (no `^`) still leak, same as the arm-scoped string behaviour.
+- **Static borrow checker, on by default — diagnostics are HARD ERRORS** — a diagnostic analysis pass (disable with `--no-borrowck`) catches the mistakes the conservative auto-drop layer cannot detect: reading a binding after its ownership has moved (use-after-move), aliasing an owned heap value so the buffer would be freed twice, closures that capture a `: ~`-mutable struct by pointer and then escape the stack frame they point into (returned, pushed into a container, spawned onto a thread, or assigned into a longer-lived binding), aliased exclusive-access ("N readers XOR 1 writer") at a call site, and mutating a container while a `~`-foreach borrows its elements. These are **compile errors** — `error: use of moved value …` / `error: cannot mutate 'xs' while iterating over it` — and the compiler exits non-zero with the count of violations. The checker never changes generated code, so a borrow-clean program produces byte-identical IR with or without `--no-borrowck`. Full rules and the not-yet-checked list (`*T`, interprocedural escape): [`docs/MEMORY.md`](docs/MEMORY.md).
 
 ---
 
@@ -566,8 +533,8 @@ exercised by the build scripts today.
 | macOS ARM64       | LLVM + zig cc | cross-compiled via `POST /build_target` (`target=macos-arm64`) — native Apple Silicon Mach-O, links only libSystem. Unsigned, so clear quarantine attribute before running. |
 | WebAssembly       | wasm32-wasi  | supported via the `nurlapi/` container (WASI SDK 24.0); browser execution via `browser_wasi_shim`. The self-hosting compiler itself also builds to wasm — see `buildwasm.sh` / `wasmnurl.sh` below |
 | Linux ARM64 / RISC-V64 | LLVM + zig cc | cross-compiled via `POST /build_target` — fully-static `musl` ELFs (`linux-arm64-musl`, `linux-riscv64-musl`) or dynamic glibc (`linux-arm64-gnu`). Milk-V Duo (RISC-V C906) validated on-device. |
-| Android / iOS     | LLVM cross   | planned (ROADMAP §4)                     |
-| Embedded (no_std) | LLVM         | planned (ROADMAP §4)                     |
+| Android / iOS     | LLVM cross   | planned                                  |
+| Embedded (no_std) | LLVM         | planned                                  |
 | JVM               | JVM bytecode | future                                   |
 | .NET CLR          | CIL          | future                                   |
 
@@ -583,8 +550,7 @@ and integrated with the fiber reactor for async I/O:
 - **TCP server** — `tcp_listen` / `tcp_listen_tls` + `tcp_accept`,
   with a full HTTP/1.1 server stack on top (`stdlib/ext/http_*` —
   routing, static files, middleware, multipart, WebSockets, TLS
-  with SNI + ALPN + mTLS + live cert reload; see
-  `HTTP_SERVER_PLAN.md`).
+  with SNI + ALPN + mTLS + live cert reload).
 - **TCP client** — `tcp_connect` / `tcp_connect_tls` (runtime §18).
   TLS client handshake with SNI; peer-certificate verification is
   an opt-in flag. The primitive behind the MQTT 5.0 client and any
@@ -647,8 +613,7 @@ What it covers:
 - Typed errors (`MqttErr`): transport faults are distinct from broker
   rejections (`MqttBadAuth`, `MqttNotAuthorized`, …).
 
-`MQTT_PLAN.md` tracks the design; `example/mqtt_*.nu` are runnable
-demos verified against a live broker.
+`example/mqtt_*.nu` are runnable demos verified against a live broker.
 
 ---
 
@@ -657,8 +622,7 @@ demos verified against a live broker.
 ```
 nurl/
 ├── spec/                      — formal language specification
-│   ├── grammar.ebnf           ✓ current (v1.7)
-│   ├── grammar_v0.1.ebnf …    — historical snapshots (v0.1 → v1.7)
+│   ├── grammar.ebnf           ✓ current grammar
 │   ├── types.md
 │   ├── ir.md
 │   └── bootstrapping.md
@@ -695,14 +659,6 @@ nurl/
 ├── nurl.sh  / nurl.bat        — convenience wrapper to compile a `.nu` file
 └── nurlc                      — symlink to build/nurlc (Linux/macOS)
 ```
-
----
-
-## Roadmap
-
-The detailed development plan and status are maintained in [ROADMAP.md](ROADMAP.md).
-
----
 
 ---
 
@@ -874,16 +830,15 @@ frame's `binary+0xOFFSET` through `addr2line -e <binary>` to recover
 `./build.sh --san` already render `.nu` source locations directly.
 
 End-to-end regression test: `./tools/dwarf_test.sh` (no-op when
-`gdb` isn't installed). See `DWARF.md` for the phased work-list.
+`gdb` isn't installed).
 
 ---
 
 ### Bootstrap chain
 
-The build is Python-free as of 2026-05-23. Stage 0 links the
-committed `compiler/nurlc_lastgood.ll` snapshot — pre-compiled IR
-of `compiler/nurlc_lastgood.nu` (a checked-in mirror of the last
-self-host-stable `nurlc.nu`). Anyone with `clang` can clone and
+Stage 0 links the committed `compiler/nurlc_lastgood.ll` snapshot —
+pre-compiled IR of `compiler/nurlc_lastgood.nu` (a checked-in mirror of
+the last self-host-stable `nurlc.nu`). Anyone with `clang` can clone and
 build; no other-language toolchain is required.
 
   - `compiler/nurlc_lastgood.nu` — NURL source of the snapshot
@@ -897,21 +852,15 @@ Snapshot refresh: `./build.sh --refresh-bootstrap` (re-runs the
 EXISTING `build/nurlc` on the current `nurlc.nu` and overwrites
 both `.nu` and `.ll`; commit them together).
 
-The historic Python reference compiler (`compiler/nurlc.py` plus
-`compiler/src/*.py`) has been removed. See `git log` for the
-final Python-era commits if you need to study them.
-
 ---
 
 ## Known Limitations
 
-The following are known limitations of the current compiler (`nurlc.nu`, grammar v2.1).
-They reflect deliberate scope decisions rather than bugs, and are tracked for future work.
+Limitations of the current compiler (`nurlc.nu`, grammar v2.1).
 
-For *active compiler quirks* (workarounds you'll hit while writing real
-code — binary `&` / `|` arity, bare `@-fn` closure coercion, same-line
-parameter shadowing, ternary cascading, `: ~` closure-borrow escape)
-see [`docs/GOTCHAS.md`](docs/GOTCHAS.md).
+For active compiler quirks (binary `&` / `|` arity, bare `@-fn` closure
+coercion, same-line parameter shadowing, ternary cascading, `: ~`
+closure-borrow escape) see [`docs/GOTCHAS.md`](docs/GOTCHAS.md).
 
 ### Type system
 
