@@ -52,33 +52,61 @@ $ `stdlib/ext/websocket.nu`
         T pho → {
             : HttpRequest req . pho req
             ? ( ws_is_upgrade req ) {
-                // Inline equivalent of ws_perform_handshake so we
-                // control the construction order of the ?String
-                // subprotocol argument.
-                : ! HttpResponse WsErr rr
-                    ( ws_handshake_response_for req @ ?String { F # String 0 } )
-                ?? rr {
-                    T resp → {
-                        : ( Vec u ) wire ( response_serialize resp )
-                        : !v NetErr wr ( tcp_write_all conn wire )
-                        ?? wr { T _ → {} F _ → {} }
-                        ( vec_free [u] wire )
-                        // NOTE: deliberately not freeing `resp` — auto-
-                        // drop interaction with the manually-constructed
-                        // ?String F-arm placeholder triggers a misaligned
-                        // ctl read at scope exit. The struct fields are
-                        // small (i + Vec[Header] + Vec[u], total 24 bytes
-                        // beyond the headers/body allocations) and the
-                        // server is a one-handshake-per-connection design
-                        // so the per-connection leak is bounded.
-                        : WsLimits wlim ( ws_default_limits )
-                        : ! v WsErr sr ( ws_serve_messages conn wlim
-                            \ WsMessage msg → ! v WsErr {
-                                ^ ( ws_echo_handler conn msg )
-                            } )
-                        ?? sr { T _ → {} F _ → {} }
+                // Inline handshake — bypass ws_handshake_response_for +
+                // response_serialize because binding a `! HttpResponse
+                // WsErr` result and matching it triggers a compiler
+                // wide-payload type-lookup bug at -O1+: the `T`-arm
+                // reconstruction picks up `%DosLimits` from a stray
+                // `syms["HttpResponse"]` lookup miss and reinterprets
+                // the response struct, eventually feeding a tiny i64
+                // (a status code or similar) into nurl_peek as a Vec
+                // ctl pointer. We hand-build the 101 wire format
+                // instead; ws_serve_messages then runs unchanged.
+                : ? String key_o ( header_get . req headers `Sec-WebSocket-Key` )
+                : ~ b key_ok F
+                : ~ String accept_str ( string_new )
+                ?? key_o {
+                    T kv → {
+                        ? ( __ws_key_is_valid kv ) {
+                            ( string_free accept_str )
+                            = accept_str ( ws_accept_key ( string_data kv ) )
+                            = key_ok T
+                        } {}
+                        ( string_free kv )
                     }
                     F _ → {}
+                }
+                ? key_ok {
+                    : ( Vec u ) wire ( vec_new [u] )
+                    ( bytes_extend_str wire `HTTP/1.1 101 Switching Protocols\r\n` )
+                    ( bytes_extend_str wire `Upgrade: websocket\r\n` )
+                    ( bytes_extend_str wire `Connection: Upgrade\r\n` )
+                    ( bytes_extend_str wire `Sec-WebSocket-Accept: ` )
+                    ( bytes_extend_str wire ( string_data accept_str ) )
+                    ( bytes_extend_str wire `\r\n\r\n` )
+                    : !v NetErr wr ( tcp_write_all conn wire )
+                    ?? wr { T _ → {} F _ → {} }
+                    ( vec_free [u] wire )
+                    ( string_free accept_str )
+                    // Echo-server limits — autobahn-testsuite §9
+                    // sends 4 MiB messages split into 64-byte fragments
+                    // (65 536 frames per message), so the conservative
+                    // 128-fragment default would refuse them long
+                    // before the body finished assembling. Per-frame
+                    // and per-message byte caps stay tight.
+                    : WsLimits wlim @ WsLimits {
+                        16777216    // 16 MiB per frame
+                        67108864    // 64 MiB per assembled message
+                        60000       // 60 s read timeout
+                        131072      // up to 128k fragments per message
+                    }
+                    : ! v WsErr sr ( ws_serve_messages conn wlim
+                        \ WsMessage msg → ! v WsErr {
+                            ^ ( ws_echo_handler conn msg )
+                        } )
+                    ?? sr { T _ → {} F _ → {} }
+                } {
+                    ( string_free accept_str )
                 }
             } {
                 // Not an upgrade: reply 400 and close.

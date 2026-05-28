@@ -51,9 +51,17 @@ Lähde: ulkoinen tekninen review (47/100). Tärkein punainen lippu: **`play.nurl
       - Empty `DATA(END_STREAM)` fallback §6.9.1 — zero-length DATA + END_STREAM permitted regardless of window state
       - TCP_NODELAY at accept — small framing-level ACKs don't get pinned by Nagle for 40 ms
       - Async accept loop (`stdlib/std/async.nu` per-conn fiber) — h2spec's probe+test connection pattern requires concurrent serving
-  - [~] `autobahn-testsuite` (WebSocket) — Docker image asennettu, `examples/ws_echo.nu` -echo-server skissattu.
-    - **Avoin bugi:** `response_serialize` aiheuttaa UBSan misaligned ctl -loadin kun se kutsutaan kontekstissa jossa request on luotu `__read_request_head`-polulta (parsittu TCP-puskurista). Standalone-testi (`/tmp/test_ws_resp.nu`) jossa sama HttpResponse rakennetaan käsin shipped läpi puhtaasti. Ero on jossain request-parsinta-polun tilassa joka karahtaa response-serialisointiin. Vaatii nurlc-IR-tason debugin ennen kuin autobahn voidaan ajaa läpi.
-    - **Reproduktio:** `NURL_SAN=1 ./nurl.sh examples/ws_echo.nu /tmp/ws_echo && /tmp/ws_echo` → handshake-tavut menevät peerille, sitten UBSan tappaa serverin response_serialize:n nurl_peek:in 8-misaligned osoitteeseen (~0x28d).
+  - [x] `autobahn-testsuite` (WebSocket) — `examples/ws_echo.nu` echo-serveri, 301 fuzzingclient-tapausta läpäisee.
+    - **Tila 2026-05-28: 294 OK / 4 NON-STRICT / 3 INFORMATIONAL / 0 FAILED.**
+    - 4 NON-STRICT (§6.4.1-4): fragmentoidun textin streaming-UTF-8-validointi. Spec sallii sekä fail-fast että full-message-validation; meillä on jälkimmäinen. Streaming-validointi vaatisi UTF-8 state-machinen joka jatkuu fragmenttien yli.
+    - 3 INFORMATIONAL (§7.1.6, §7.13.1-2): implementation-defined close-järjestys-edge-caset.
+    - Sanitizer (ASan + UBSan): puhdas autobahn-subset-run (`1.*-7.7.*` = 92/92, 0 errors).
+    - **Korjatut juurisyyt:**
+      - RFC 6455 §5.5.1 close-frame payload-validointi: payload-pituus = 1 → WsInvalidCloseCode → 1002 PROTOCOL_ERROR (oli aiemmin 1000 NORMAL)
+      - §7.4.2 close-koodin validointi: 1000-2999 vain IANA-rekisteröity setti (1000-1003, 1007-1014); 1004/1005/1006/1015/1016+ kaikki rejected
+      - Close-reason UTF-8 validointi (RFC 3629 strict)
+      - WsLimits.fragment_max_count nostettu 128 → 131072 echo-serverille (autobahn §9 lähettää 4 MiB:n viestin 64-tavun fragmenteissa = 65 536 framea)
+    - **Avoin compiler-bugi (kierretty inlinellä):** `: ! HttpResponse WsErr rr (...)` -binding sitten `?? rr { T resp → ... }` -matchin payload-tyyppireslootus eksyy `syms`-haussa väärään struktiin (havainnoitu: `%DosLimits`-load `%HttpResponse`-loadin sijaan). Toistuu vain `-O1+`. `examples/ws_echo.nu` kiertää inlinellämällä handshake-rakennelman raakatavuina, mutta varsinainen virhe vaatii nurlc-IR-tason debuggia (todennäköisesti `__last_res_t_llvm__`-globaalin staleness `gen_match`:n payload-rekonstruktiossa).
   - [ ] Konteksti: CVE-2023-44487 ("HTTP/2 Rapid Reset"), CVE-2019-9511…9518 -klusteri, CVE-2026-23918 (Apache `mod_http2` double-free) — RFC-appendix-vektorit eivät kata näitä
   - **Työkalut:**
     - `/home/wau/.local/bin/h2spec` (v2.6.0) asennettu
