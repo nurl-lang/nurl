@@ -2360,6 +2360,7 @@ typedef SOCKET nurl_sockfd_t;
 #  else
 #    include <sys/socket.h>
 #    include <netinet/in.h>
+#    include <netinet/tcp.h>        /* TCP_NODELAY on accepted conns */
 #    include <arpa/inet.h>
 #    include <netdb.h>             /* getaddrinfo — client-side connect */
 #    include <unistd.h>
@@ -2709,6 +2710,17 @@ long long nurl_tcp_accept(long long listener) {
     c->fd       = fd;
     c->err_kind = NURL_NET_ERR_OK;
     c->peer     = nurl__net_format_peer(&peer);
+    /* Disable Nagle for accepted connections. HTTP/2 servers send small
+     * framing-level acknowledgements (SETTINGS-ACK, PING-ACK,
+     * WINDOW_UPDATE) whose latency matters for interop suites (h2spec)
+     * and for normal request/response patterns where peer is waiting
+     * for these specifically. Without TCP_NODELAY, Nagle can pin a 9-
+     * byte ACK frame for up to 40 ms behind the previous write. */
+    {
+        int one = 1;
+        setsockopt(c->fd, IPPROTO_TCP, TCP_NODELAY,
+                   (const char*)&one, (socklen_t)sizeof(one));
+    }
 #ifdef NURL_HAVE_OPENSSL
     /* TLS listener — spin up per-conn SSL and run the handshake here.
      * Handshake failure → TLS_HANDSHAKE + close fd (no half-open leak). */

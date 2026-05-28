@@ -786,33 +786,114 @@ $ `stdlib/ext/http2_hpack.nu`
     }
 
     // Emit body in DATA frames bounded by min(peer max_frame_size, 16K)
+    // AND by the stream + connection send-windows (RFC 9113 §5.2.1,
+    // §6.9.1). When a window is exhausted, pump WINDOW_UPDATE frames
+    // off the peer until credit is restored. The pump accepts only
+    // WINDOW_UPDATE and silently consumes PRIORITY (RFC 9113 §5.3 —
+    // a deprecated-but-permitted control frame). Anything else means
+    // the peer is doing something we can't service mid-write; bail
+    // and let the main loop handle subsequent frames after the empty
+    // DATA(END_STREAM) tear-down below.
+    : ~ b emitted_end_stream == body_len 0
     ? > body_len 0 {
-        : i max_chunk ? > . cur peer_max_frame_size 16384
-                       16384 . cur peer_max_frame_size
+        : i hw_cap ? > . cur peer_max_frame_size 16384
+                    16384 . cur peer_max_frame_size
         : ~ i pos 0
-        ~ < pos body_len {
-            : i remaining - body_len pos
-            : i chunk ? > remaining max_chunk max_chunk remaining
-            : ( Vec u ) part ( vec_with_cap [u] chunk )
-            : *u bp ( vec_data [u] . r body )
-            : ~ i j 0
-            ~ < j chunk {
-                ( vec_push [u] part # u . bp + pos j )
-                = j + j 1
+        : ~ b bail F
+        ~ & ! bail < pos body_len {
+            : i sidx ( __h2_find_stream_index cur sid )
+            ? < sidx 0 {
+                = bail T
+            } {
+                : H2Stream cs ( __h2_get_stream cur sidx )
+                : i sw . cs send_window
+                : i cw . cur conn_send_window
+                : i window ? > sw cw cw sw
+                ? <= window 0 {
+                    : ! H2Frame H2FrameErr fr ( h2_read_frame . cur tcp
+                                                . cur our_max_frame_size )
+                    ?? fr {
+                        T frame → {
+                            : i ft . frame frame_type
+                            : i fsid . frame stream_id
+                            ? & == ft 8 == ( vec_len [u] . frame payload ) 4 {
+                                : *u wp ( vec_data [u] . frame payload )
+                                : i w0 & # i . wp 0 255
+                                : i w1 & # i . wp 1 255
+                                : i w2 & # i . wp 2 255
+                                : i w3 & # i . wp 3 255
+                                : i inc + + + << & w0 127 24 << w1 16 << w2 8 w3
+                                ? > inc 0 {
+                                    ? == fsid 0 {
+                                        = . cur conn_send_window
+                                            + . cur conn_send_window inc
+                                    } {
+                                        ? == fsid sid {
+                                            : H2Stream usc ( __h2_get_stream cur sidx )
+                                            = . usc send_window + . usc send_window inc
+                                            ( __h2_set_stream cur sidx usc )
+                                        } {}
+                                    }
+                                } {}
+                            } {
+                                ? == ft 2 {
+                                    // PRIORITY — accepted on closed/half-
+                                    // closed streams (§5.3), just discard.
+                                } {
+                                    = bail T
+                                }
+                            }
+                            ( h2_frame_free frame )
+                        }
+                        F _ → { = bail T }
+                    }
+                } {
+                    : i remaining - body_len pos
+                    : i chunk ? > remaining hw_cap hw_cap remaining
+                    ? > chunk window { = chunk window } {}
+                    : ( Vec u ) part ( vec_with_cap [u] chunk )
+                    : *u bp ( vec_data [u] . r body )
+                    : ~ i j 0
+                    ~ < j chunk {
+                        ( vec_push [u] part # u . bp + pos j )
+                        = j + j 1
+                    }
+                    : b is_last >= + pos chunk body_len
+                    : i df_flags ? is_last ( h2_flag_end_stream ) 0
+                    : H2Frame df @ H2Frame {
+                        ( h2_type_data ) df_flags sid part
+                    }
+                    : ! v H2FrameErr wd ( h2_write_frame . cur tcp df
+                                            . cur peer_max_frame_size )
+                    ( h2_frame_free df )
+                    ?? wd {
+                        T _ → {}
+                        F e → { ^ @ ! H2Connection H2ConnErr { F ( __h2_frame_err_to_conn e ) } }
+                    }
+                    = pos + pos chunk
+                    = . cur conn_send_window - . cur conn_send_window chunk
+                    : H2Stream cs2 ( __h2_get_stream cur sidx )
+                    = . cs2 send_window - . cs2 send_window chunk
+                    ( __h2_set_stream cur sidx cs2 )
+                    ? is_last { = emitted_end_stream T } {}
+                }
             }
-            : i df_flags ? >= + pos chunk body_len ( h2_flag_end_stream ) 0
-            : H2Frame df @ H2Frame {
-                ( h2_type_data ) df_flags sid part
-            }
-            : ! v H2FrameErr wd ( h2_write_frame . cur tcp df
-                                    . cur peer_max_frame_size )
-            ( h2_frame_free df )
-            ?? wd {
-                T _ → {}
-                F e → { ^ @ ! H2Connection H2ConnErr { F ( __h2_frame_err_to_conn e ) } }
-            }
-            = pos + pos chunk
         }
+    } {}
+    // If we bailed before the body was fully delivered (peer hit us with
+    // a non-WINDOW_UPDATE non-PRIORITY frame, or a read failed mid-write),
+    // close the stream with an empty DATA(END_STREAM). §6.9.1 explicitly
+    // permits zero-length DATA frames with END_STREAM even when the
+    // flow-control window is 0.
+    ? ! emitted_end_stream {
+        : ( Vec u ) empty ( vec_new [u] )
+        : H2Frame ef @ H2Frame {
+            ( h2_type_data ) ( h2_flag_end_stream ) sid empty
+        }
+        : ! v H2FrameErr we ( h2_write_frame . cur tcp ef
+                                . cur peer_max_frame_size )
+        ( h2_frame_free ef )
+        ?? we { T _ → {} F _ → {} }
     } {}
     ^ @ ! H2Connection H2ConnErr { T cur }
 }
