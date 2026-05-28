@@ -233,12 +233,20 @@ $ `stdlib/ext/http2_hpack.nu`
     ?? pr {
         T _ → {}
         F e → {
-            // §3.4 — an invalid preface MAY (and h2spec expects) be
-            // signalled with a GOAWAY before tearing the connection.
-            // last_peer_stream_id is 0 since no peer streams existed.
-            : ! v H2FrameErr ga ( h2_send_goaway tcp 0
-                ( h2_err_protocol_error ) `` )
-            ?? ga { T _ → {} F _ → {} }
+            // §3.4 — only a structurally-invalid preface (BadPreface)
+            // is signalled with a GOAWAY; a read error (peer never
+            // sent the preface, timed out, or closed the socket
+            // mid-handshake) just tears down silently. Sending a
+            // GOAWAY into a peer that hasn't established protocol
+            // state confuses h2spec's per-test probe connections.
+            ?? e {
+                H2FrameBadPreface → {
+                    : ! v H2FrameErr ga ( h2_send_goaway tcp 0
+                        ( h2_err_protocol_error ) `` )
+                    ?? ga { T _ → {} F _ → {} }
+                }
+                _ → {}
+            }
             ^ @ ! H2Connection H2ConnErr { F ( __h2_frame_err_to_conn e ) }
         }
     }
@@ -1010,7 +1018,8 @@ $ `stdlib/ext/http2_hpack.nu`
                         } {}
                     }
                     1 → {
-                        // HEADERS — start of a new (or continued) stream
+                        // HEADERS — start of a new stream, OR trailers
+                        // on an already-open stream (RFC 9113 §8.1).
                         ? | <= sid 0 == 0 & sid 1 {
                             // Stream ID must be positive AND odd (client-initiated).
                             = err H2ConnProtocol  = ok F
@@ -1022,9 +1031,58 @@ $ `stdlib/ext/http2_hpack.nu`
                                 = err H2ConnProtocol  = ok F
                             } {}
                         } {}
+                        // §8.1 — HEADERS on an existing open stream is
+                        // the trailers section. Handle that case before
+                        // the new-stream path; trailers MUST carry
+                        // END_STREAM (and END_HEADERS, since we don't
+                        // implement multi-frame trailers here).
+                        : ~ b handled_as_trailers F
                         ? ok {
+                            : i ex_idx ( __h2_find_stream_index cur sid )
+                            ? >= ex_idx 0 {
+                                : H2Stream exs ( __h2_get_stream cur ex_idx )
+                                : i exs_state . exs state
+                                ? | == exs_state 1 == exs_state 2 {
+                                    ? == 0 & . frame flags ( h2_flag_end_stream ) {
+                                        = err H2ConnProtocol  = ok F
+                                        = handled_as_trailers T
+                                    } {
+                                        : ! ( Vec u ) H2ConnErr thpr
+                                            ( __h2_extract_headers_payload frame )
+                                        ?? thpr {
+                                            T thb → {
+                                                // The handler only sees the
+                                                // request headers; trailers
+                                                // are accepted but their
+                                                // contents are discarded.
+                                                ( vec_free [u] thb )
+                                                = . exs end_stream_received T
+                                                = . exs state ( h2_state_half_closed_remote )
+                                                ( __h2_set_stream cur ex_idx exs )
+                                                : ! H2Connection H2ConnErr tdisp
+                                                    ( __h2_dispatch cur sid handler )
+                                                ?? tdisp {
+                                                    T newc → { = cur newc }
+                                                    F e → { = err e  = ok F }
+                                                }
+                                                = handled_as_trailers T
+                                            }
+                                            F e → { = err e  = ok F  = handled_as_trailers T }
+                                        }
+                                    }
+                                } {
+                                    // Existing stream in idle/half-closed-
+                                    // remote/closed state — HEADERS is
+                                    // not legal here.
+                                    = err H2ConnProtocol  = ok F
+                                    = handled_as_trailers T
+                                }
+                            } {}
+                        } {}
+                        ? & ok ! handled_as_trailers {
                             ? <= sid . cur last_peer_stream_id {
-                                // Reused or out-of-order stream ID.
+                                // Reused or out-of-order stream ID with no
+                                // open record — closed-stream reuse.
                                 = err H2ConnProtocol  = ok F
                             } {
                                 : i ns ( vec_len [H2Stream] . cur streams )
