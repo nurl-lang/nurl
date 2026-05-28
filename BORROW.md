@@ -704,6 +704,96 @@ DWARF Phase 7.
 
 ---
 
+## Phase 5+ / Strict Mode (`--strict-borrowck`)
+
+> **LANDED 2026-05-28 (initial cut).** Two extensions to the existing
+> checker enabled behind a new opt-in flag. The flag is OFF by default
+> so the v0.9.x corpus + ecosystem code keeps compiling; turn it on
+> per-file or per-CI-job to surface the additional class of bugs.
+
+`--strict-borrowck` enables two new checks alongside the existing
+on-by-default Phases 1/2/3/5/6:
+
+### (a) Phase 5 extension — aliased mutation through field-access args
+
+The Phase-5 N-readers-XOR-1-writer check fires only when both aliasing
+arguments at a call site are bare identifiers. With strict mode on,
+the check also recognises `. obj field` as an access of the root
+binding `obj`, so
+
+```nurl
+( swap_field_and_self c . c n )
+```
+
+(passing `c` `inout` AND the field `c.n` as a by-value read in the
+same call) is now flagged. Bare-identifier-only Phase 5 missed this
+because the second argument's first token is `.`, not `c`.
+
+The Phase-6 iterator-invalidation check is widened in the same shape:
+mutating `( fn inout . obj field )` from inside a `~ x : obj { ... }`
+loop is now caught.
+
+### (b) `# *T <owned-binding>` raw-pointer escape
+
+`# *T <ident>` casts a binding to a raw pointer. When the source
+binding is one the compiler will auto-drop at scope exit — anything
+on the existing `__owned_strings__` / `__owned_slices__` /
+`__owned_struct_fields__` side-tables, OR any non-parameter heap
+binding (`%Struct` / enum / aggregate, mirrors the conservative
+`bck_let_alias` move-tracker) — strict mode flags the cast. The
+binding's auto-drop at scope exit invalidates the pointer; either
+take a `*T` parameter (carries lifetime by reference) or copy the
+bytes before the binding's region ends.
+
+### Known false-positive cases (accept-and-document)
+
+* A bare `# *T <ident>` cast that is consumed BEFORE the binding is
+  dropped is still flagged. The check does not (yet) follow the
+  pointer's use; it triggers on the cast itself.
+* `# *T ( call ... )` where `call` returns a pointer derived from an
+  owned binding flagged through `__last_ident_name__`. The check
+  treats the call's last bare-ident operand as the source — wide
+  enough to cover the obvious `# *u ( string_data s )` cases, but
+  occasionally fires on a `# *T ( clone_into_fresh_alloc ... )`
+  pattern where the lifetime is in fact owned by the new allocation.
+
+Both are acceptable in strict mode by construction — false positives
+are the cost of catching real escapes without interprocedural
+analysis.
+
+### Verification
+
+`compiler/tests/borrow_strict_field_alias.nu` and
+`compiler/tests/borrow_strict_raw_ptr_escape.nu` are the regression
+tests. The test runner (`compiler/tests/run_tests.sh`) recognises any
+`borrow_strict_*` file and compiles it with `--strict-borrowck`;
+default-mode runs of the same file compile cleanly. Bootstrap fixed
+point unchanged (strict mode is diagnostic-only — IR is byte-
+identical with or without the flag).
+
+### Why these two, why not (yet) lifetime inference
+
+The two strict-mode checks were chosen because they:
+
+1. **Share the existing diagnostic substrate** (`bck_esc_warn` +
+   `g_bck_errors` + the test-runner expected-failure shape). No new
+   infrastructure to maintain.
+2. **Need no interprocedural summary**. Phase 7 (returned borrows
+   with lifetime inference) needs every call site to know the
+   callee's return-region wrt parameters; that's a real change to
+   the parse_program iteration order. Phase 5+ extension and the
+   `# *T` cast check are both purely local — they fire while
+   gen_call / gen_cast is already running.
+3. **Have a high signal-to-noise ratio for the specific cases they
+   target.** Field-access aliasing in real NURL code is rare outside
+   the deliberate pattern the test exercises; raw-pointer casts off
+   owned bindings are the canonical "I forgot the lifetime" mistake.
+
+Phase 7 (returned borrows + lifetime inference) remains deferred as
+documented above.
+
+---
+
 ## Phase 8 — Diagnostics polish, docs, flip the default
 
 > **LANDED 2026-05-25 (full).** The 5-day on-by-default soak across

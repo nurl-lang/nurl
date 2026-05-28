@@ -267,8 +267,17 @@ for src in "${tests[@]}"; do
     #               one or more positive cases that MUST trip the
     #               checker; the run is expected to fail and the error
     #               text is baselined for regression protection.
+    #
+    # `borrow_strict_*` variants compile cleanly under the default
+    # checker (would let them through) and only fire under
+    # `--strict-borrowck`. Same expected-failure shape, just with the
+    # extra flag — the baseline still records the diagnostic text.
     if [[ "$name" == borrow_* ]]; then
-        if "$NURLC" "$src" > "$ll" 2>"$err"; then
+        _bck_flag=""
+        if [[ "$name" == borrow_strict_* ]]; then
+            _bck_flag="--strict-borrowck"
+        fi
+        if "$NURLC" $_bck_flag "$src" > "$ll" 2>"$err"; then
             record_failure "$name" unexpected_compile_ok "$src" "$ll" "$bin" "$err"
             continue
         fi

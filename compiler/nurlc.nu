@@ -403,6 +403,17 @@
 // is on or off (the bootstrap fixed point is unaffected). All
 // borrowck_* state below is untouched when the flag is 0.
 : i g_borrowck 1  // 0 when --no-borrowck passed on the CLI
+// Phase 5+ / `--strict-borrowck` (off by default). Enables the
+// additional checks documented in BORROW.md "Phase 5+ / Strict
+// Mode": (1) aliased mutation through `. obj field` arguments at
+// the same call site — a generalisation of the existing
+// bare-identifier-only Phase 5 check, and (2) `# *T` raw-pointer
+// escape from owned bindings whose pointer may outlive the
+// binding's drop. Both are diagnostic-only and emit `error:` like
+// the rest of the borrowck. Disabled by default because the
+// extension has a meaningful false-positive rate against existing
+// stdlib code (cf. BORROW.md "Still deferred").
+: i g_strict_borrowck 0  // 1 when --strict-borrowck passed on the CLI
 : i g_bck 0       // sym handle for the borrow checker's per-function
                   //  data (statement list etc.); allocated in main()
                   //  only when --borrowck is set
@@ -2881,6 +2892,20 @@
     ^ ( nurl_peek p + LX_PEEK TF_TYPE )
 }
 
+// Companion to nurl_lex_peek_type: return the lex VALUE of the
+// LX_PEEK slot (the token AFTER the current one). Used by the
+// borrow-checker's Phase 5+ field-access aliasing detection to
+// recover the root identifier of a `. obj field` argument
+// expression without rolling the current-token state forward.
+// strdup'd, owned by the caller (mirrors nurl_lex_val).
+@ nurl_lex_peek_val i h → s {
+    : s p # s h
+    ? == 0 ( nurl_peek p + LX_PEEK TF_VALID ) {
+        ( __lex_one # i p LX_PEEK )
+    } {}
+    ^ # s ( strdup # s ( nurl_peek p + LX_PEEK TF_VAL ) )
+}
+
 @ nurl_lex_peek2_type i h → i {
     : s p # s h
     ? == 0 ( nurl_peek p + LX_PEEK TF_VALID ) { ( __lex_one # i p LX_PEEK ) } {}
@@ -3123,31 +3148,52 @@
         // (whether that other one is `inout` or a plain by-value read)
         // — N readers XOR 1 writer. Reading a binding through a nested
         // sub-expression argument is a known gap (a later phase).
-        ? & != g_borrowck 0 ( is_ident_tok bck_arg_tt )
-        { ? | & is_inout_arg ( str_contains_word p5_seen bck_arg_val )
-              & ! is_inout_arg ( str_contains_word p5_inout_seen bck_arg_val )
+        // BORROW.md Phase 5+ (strict mode): also consider the ROOT
+        // identifier of `. obj field` argument expressions for the
+        // aliasing test below. `obj` is the binding actually being
+        // touched; without this the existing bare-identifier-only
+        // check misses `( fn inout obj . obj field )`. Only consulted
+        // under --strict-borrowck. The deep peek-val read is cheap
+        // because the lexer's LX_PEEK slot is materialised on demand
+        // and we don't advance.
+        : ~ s bck_arg_root bck_arg_val
+        ? & != g_strict_borrowck 0 == bck_arg_tt TT_DOT {
+            : i pk_t ( nurl_lex_peek_type lex )
+            ? ( is_ident_tok pk_t ) { = bck_arg_root ( nurl_lex_peek_val lex ) } {}
+        } {}
+        // Treat the field-access-rooted arg as a bare ident for
+        // aliasing detection purposes when strict mode is on.
+        : ~ b bck_treat_as_ident ( is_ident_tok bck_arg_tt )
+        ? & != g_strict_borrowck 0 & == bck_arg_tt TT_DOT
+            != 0 ( nurl_str_len bck_arg_root )
+        { = bck_treat_as_ident T } {}
+        ? & != g_borrowck 0 bck_treat_as_ident
+        { ? | & is_inout_arg ( str_contains_word p5_seen bck_arg_root )
+              & ! is_inout_arg ( str_contains_word p5_inout_seen bck_arg_root )
             { ( bck_esc_warn lex bck_arg_line ( nurl_str_cat3
-                `'` bck_arg_val
+                `'` bck_arg_root
                 `' is both mutably borrowed (passed as 'inout') and aliased by another argument of the same call - exclusive access is violated` ) ) }
             {}
             = p5_seen ? == 0 ( nurl_str_len p5_seen )
-                bck_arg_val ( nurl_str_cat3 p5_seen ` ` bck_arg_val )
+                bck_arg_root ( nurl_str_cat3 p5_seen ` ` bck_arg_root )
             ? is_inout_arg
             { = p5_inout_seen ? == 0 ( nurl_str_len p5_inout_seen )
-                bck_arg_val ( nurl_str_cat3 p5_inout_seen ` ` bck_arg_val ) }
+                bck_arg_root ( nurl_str_cat3 p5_inout_seen ` ` bck_arg_root ) }
             {}
             // BORROW.md Phase 6: iterator invalidation. If this
-            // bare-identifier argument names a container currently
-            // being iterated by an enclosing `~` foreach, and the
-            // call mutates it — the receiver (arg 0) of a stdlib
-            // container mutator, or any `inout` argument — the loop's
-            // borrowed cursor would be invalidated.
+            // argument names a container currently being iterated
+            // by an enclosing `~` foreach, and the call mutates it
+            // — the receiver (arg 0) of a stdlib container mutator,
+            // or any `inout` argument — the loop's borrowed cursor
+            // would be invalidated. Uses bck_arg_root so strict
+            // mode also catches `( fn inout . obj field )` inside a
+            // `~ x : obj { ... }` loop.
             : b fe_iterated ( str_contains_word
-                ( nurl_sym_get g_bck `iter_containers` ) bck_arg_val )
+                ( nurl_sym_get g_bck `iter_containers` ) bck_arg_root )
             : b fe_mutates & == arg_idx 0 ( bck_is_container_mutator fname )
             ? & fe_iterated | is_inout_arg fe_mutates
             { ( bck_esc_warn lex bck_arg_line ( nurl_str_cat3
-                `cannot mutate '` bck_arg_val
+                `cannot mutate '` bck_arg_root
                 `' while iterating over it - the '~' loop holds a borrow of the container; move the mutation out of the loop body` ) ) }
             {} }
         {}
@@ -6413,6 +6459,53 @@
     : i dtlen ( nurl_str_len dt )
     : b src_ptr == ( nurl_str_get st - stlen 1 ) 42
     : b dst_ptr == ( nurl_str_get dt - dtlen 1 ) 42
+    // BORROW.md Phase 5+ (strict mode): `# *T <owned-binding>` casts
+    // hand the caller a raw pointer into a binding the compiler
+    // would otherwise auto-drop at scope exit. Even when the pattern
+    // is safe in practice, it bypasses the single-owner contract:
+    // any later reassignment, sink-pass, explicit free, or scope-
+    // exit drop of the source binding invalidates the pointer. Flag
+    // it so the user has a chance to either rebind the pointer's
+    // referent as a `*T` parameter (carries lifetime by reference)
+    // or copy the bytes the pointer points at into a fresh
+    // allocation before the source binding's region ends. Only fires
+    // under --strict-borrowck and only when gen_expr's last side-
+    // channel identifies a SPECIFIC bare-ident source binding —
+    // compound expressions (`# *u ( string_data s )`) leave the
+    // side-channel unreliable.
+    ? & != 0 g_strict_borrowck dst_ptr {
+        : s src_id ( nurl_sym_get syms `__last_ident_name__` )
+        ? != 0 ( nurl_str_len src_id ) {
+            : s src_ty ( nurl_sym_get syms src_id )
+            : b src_is_param
+                ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) src_id )
+            // Three independent sources of "would auto-drop":
+            //   * src_id appears in the per-binding owned-string /
+            //     owned-slice / owned-struct-field side-tables (the
+            //     conservative sink-rejection check in gen_call uses
+            //     the same shape — strings + struct-fields keyed by
+            //     alloca-pointer, slices keyed by name);
+            //   * src_id is a NON-parameter heap binding (%Struct /
+            //     enum / aggregate), which the conservative
+            //     bck_let_alias move-tracker already treats as
+            //     auto-drop territory — covers `: String s
+            //     ( string_from "..." )` style.
+            : s src_ptr ( nurl_sym_get syms ( nurl_str_cat src_id `__ptr` ) )
+            : b owned_slc
+                ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) src_id )
+            : b owned_str & != 0 ( nurl_str_len src_ptr )
+                ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) src_ptr )
+            : b owned_sf & != 0 ( nurl_str_len src_ptr )
+                ( str_contains_word ( nurl_sym_get syms `__owned_struct_fields__` ) src_ptr )
+            : b heap_binding & ! src_is_param ( bck_is_heap_lty src_ty )
+            ? | | | owned_str owned_slc owned_sf heap_binding {
+                ( bck_esc_warn lex ( nurl_lex_line lex ) ( nurl_str_cat3
+                  `'# `
+                  ( nurl_str_cat3 dt ` ` src_id )
+                  `' casts an owned binding to a raw pointer; the binding is auto-dropped at scope exit and the pointer will outlive it. Take a '*T' parameter or copy the bytes before the binding is dropped` ) )
+            } {}
+        } {}
+    } {}
     // Closure-field-extract:  ( # *u f 0 ) → fn ptr (cast to dst)
     //                          ( # *u f 1 ) → env ptr (cast to dst)
     // Trigger: src type is closure-shape `{ R (i8*…)*, i8* }`, dst is pointer,
@@ -11433,11 +11526,13 @@
             { = g_borrowck 1 }
             { ? ( seq a `--no-borrowck` )
                 { = g_borrowck 0 }
-                { = path a } } }
+                { ? ( seq a `--strict-borrowck` )
+                    { = g_borrowck 1 = g_strict_borrowck 1 }
+                    { = path a } } } }
         = ai + ai 1
     }
     ? == 0 ( nurl_str_len path )
-    { ( nurl_eprintln `usage: nurlc [--g] [--no-borrowck] <file.nu>` ) ( nurl_exit 1 ) }
+    { ( nurl_eprintln `usage: nurlc [--g] [--no-borrowck | --strict-borrowck] <file.nu>` ) ( nurl_exit 1 ) }
     {}
     : s src ( nurl_read_file path )
     : s marker ( nurl_str_cat `@@nurl-disable` `-autodrop-strings@@` )

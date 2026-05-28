@@ -273,6 +273,50 @@ byte-identical IR). `./build.sh` corpus + sanitiser corpus green.
   during the interop push (parenthesised-operator calls, sign-
   extension, `__pow2` collision, enum-tag-cast-on-return) is
   diagnosed by the compiler at compile time.
+- **`.github/workflows/bench.yml`** — reproducible CI bench runner.
+  Triggers on push-to-main (paths-filtered to bench/, compiler/,
+  stdlib/, bench.yml itself), `workflow_dispatch`, and a weekly
+  Monday 06:00 UTC cron. Installs clang + rustup stable + the FFI
+  libs the regular `ci.yml` uses, bootstraps nurlc, runs
+  `bench/run.sh 5` on a fixed `ubuntu-latest` 2-vCPU runner, and
+  uploads the results as a workflow artifact. Manual / scheduled
+  runs additionally commit a refreshed `bench/RESULTS_CI.md` back
+  to main. Closes TODO Tier 1.2 — the README's headline numbers
+  (captured on a 12-core Intel @ 3.5 GHz) stay in `RESULTS.md` as
+  the "best-known" hand-captured figures; `RESULTS_CI.md` is the
+  reproducible falsifiable baseline anyone can compare against.
+
+### Borrow checker
+
+- **`--strict-borrowck` (off by default)** — opt-in mode that
+  extends two existing on-by-default checks against the documented
+  `not-yet-checked` list in `docs/MEMORY.md`:
+    - **Phase 5 extension: aliased mutation through `. obj field`
+      arguments.** The default N-readers-XOR-1-writer check fires
+      only when both aliasing arguments at a call site are bare
+      identifiers. Strict mode also recognises `. obj field` as an
+      access of the root binding `obj`, so
+      `( swap c . c n )` is now flagged when one of the arguments
+      is `inout`. The Phase-6 iterator-invalidation check is widened
+      in the same shape.
+    - **`# *T <owned-binding>` raw-pointer escape.** When a `*T`
+      cast's source binding sits on any of the existing auto-drop
+      side-tables (`__owned_strings__` / `__owned_slices__` /
+      `__owned_struct_fields__`) OR is a non-parameter heap binding
+      (%Struct / enum / aggregate, mirroring the move-tracker's
+      `bck_let_alias` heuristic), strict mode flags the cast: the
+      binding's auto-drop at scope exit invalidates the pointer.
+- Regression tests `compiler/tests/borrow_strict_field_alias.nu`
+  and `compiler/tests/borrow_strict_raw_ptr_escape.nu` — both
+  compile cleanly under the default checker and error out under
+  `--strict-borrowck`. `compiler/tests/run_tests.sh` recognises any
+  `borrow_strict_*` filename and adds the flag automatically.
+- BORROW.md ships a new "Phase 5+ / Strict Mode" section that
+  documents the additional checks, the accept-and-document false-
+  positive patterns, and why Phase 7 (returned borrows + lifetime
+  inference) stays deferred.
+- Bootstrap fixed point unchanged: strict mode is purely a
+  diagnostic-only analysis pass.
 
 
 

@@ -74,9 +74,13 @@ Lähde: ulkoinen tekninen review (47/100). Tärkein punainen lippu: **`play.nurl
   - [ ] Julkaise todelliset token-määrät — nykyinen "~15 vs ~4 tokens" laskee whitespace-eroteltuja atomeja, ei BPE-subwordeja
   - [ ] Realistinen tarina luultavasti edelleen NURL-suuntainen, mutta vähemmän dramaattinen
 
-- [ ] **Syvennä borrow-checker (Miri-ekvivalentti memory check).**
-  - [ ] `--strict-borrowck` -mode joka nappaa interprosedural- ja `*T`-escapet jotka nykyinen checker myöntää jättävänsä huomiotta
-  - [ ] Korkea false-positive -kustannus ok — borrow-checker on puolustettavin turvallisuusväite, syvennä sitä
+- [x] **Syvennä borrow-checker (Miri-ekvivalentti memory check).** (Commit `<seuraava>`)
+  - [x] `--strict-borrowck` -mode (off by default) joka aktivoi kaksi lisätarkistusta
+  - [x] Phase 5+: aliased mutation `. obj field`-argumenttien kautta (sama N-readers-XOR-1-writer-sääntö, mutta strict-mode tunnistaa `obj`:n field-projektion juurena). Sama laajennus Phase 6:n iterator-invalidaatioon
+  - [x] `# *T <owned-binding>` raw-pointer escape — kun source on auto-drop-tracked binding (`__owned_strings__`/`__owned_slices__`/`__owned_struct_fields__` tai non-parametri heap-binding %Struct/enum), strict mode flaggaa castin
+  - [x] Regressiotestit `compiler/tests/borrow_strict_field_alias.nu` ja `borrow_strict_raw_ptr_escape.nu`; run_tests.sh tunnistaa `borrow_strict_*` -prefixin ja kääntää `--strict-borrowck`-flagilla
+  - [x] BORROW.md "Phase 5+ / Strict Mode" -osio dokumentoi mitä nappaa, tunnetut false-positive-tapaukset, ja miksi Phase 7 (returned borrows + lifetime inference) jäi deferred-by-default
+  - Tunnetut rajoitukset: interprosedural escape ei vieläkään katettu (vaatii Phase 7); `# *T ( call ... )` -casteissa heuristiikka voi flag-aa myös `clone_into_fresh_alloc` -tyyppisiä turvallisia palautusarvoja — strict-modessa hyväksyttävä
 
 ## Tier 3 — yhteisö & markkinointi
 
