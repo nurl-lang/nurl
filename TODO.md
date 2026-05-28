@@ -21,7 +21,7 @@ Lähde: ulkoinen tekninen review (47/100). Tärkein punainen lippu: **`play.nurl
 
 - [~] **Aja HTTP/2 + WebSocket interop-suite oikeita työkaluja vasten** ("offline RFC-vector verification" = unit test, ei interop):
   - [~] `h2spec v2.6.0` (146 conformance casea RFC 7540 + RFC 7541 HPACK vasten)
-    - **Tila 2026-05-28: 135/146 läpäisee** (lähtö 0/146; ei UAF:ää, build vihreä)
+    - **Tila 2026-05-28: 142/146 läpäisee** (lähtö 0/146; ei UAF:ää, build vihreä)
     - Korjatut juurisyyt (commitit `9f1f12b`, `52426e6`):
       - 4 parenthesoitua operaattori-ilmaisua (`( % n 6 )`, `( . rp from )`) — diagnoosi olemassa 2026-05-22 jälkeen, http2_conn.nu vain ei ollut build-pathilla
       - `nurl_str_slice_unsafe` löi load-byten pointer-aritmetiikan sijaan
@@ -32,7 +32,7 @@ Lähde: ulkoinen tekninen review (47/100). Tärkein punainen lippu: **`play.nurl
       - HPACK encoder ei lowercase-änyt header-nimiä (RFC 9113 §8.2.2 vaatii) → curl/h2 hylkäsi `Content-Type`
       - SETTINGS/GOAWAY/RST_STREAM/PRIORITY/DATA stream-ID + length + ACK -säännöt lisätty
       - GOAWAY-vastaanotto: ei enää välitön sulkeminen vaan §6.8 mukainen in-flight-frame-käsittely
-    - **Korjattu välietapeissa (commitit `52426e6` `0cfeca6` ja `<seuraava>`):**
+    - **Korjattu välietapeissa (commitit `52426e6` `0cfeca6` `2787863` `5bb96a0` `da95ad3`):**
       - Frame-validation pass (SETTINGS/GOAWAY/RST_STREAM/PRIORITY/DATA stream-ID + length + ACK)
       - HEADERS §8.3 pseudo-header validointi (uppercase, duplikaatit, missing/empty, connection-specific, TE != trailers, response-only-pseudo, pseudo-after-regular, unknown-pseudo)
       - PRIORITY / HEADERS-with-PRIORITY-flag self-dependency §5.3.1
@@ -41,14 +41,19 @@ Lähde: ulkoinen tekninen review (47/100). Tärkein punainen lippu: **`play.nurl
       - WINDOW_UPDATE idle stream §5.1
       - SETTINGS/WINDOW_UPDATE byte-mask (sign-extend gotcha)
       - HPACK §4.2 dynamic table size update placement + bound by SETTINGS_HEADER_TABLE_SIZE
-      - Invalid preface → GOAWAY ennen sulkua
-      - h2c-test-serverin per-connection timeout (sekventiaalinen accept-silmukka ei jämähdä)
-    - **Jäljellä 11 uniikkia failurea (kovan luokan jäljelle jättämättömät):**
-      - **3 timing-flakea** — passes alone, fails aggregate. Vaatii concurrent accept-silmukan (async runtime) tai ratkaisun siihen miksi h2spec päättelee ennen serverin ACKia jossain tietyissä testeissä. Tests: "Sends a SETTINGS frame without ACK flag", "Sends multiple CONTINUATION frames preceded by a HEADERS frame", "Sends a SETTINGS_INITIAL_WINDOW_SIZE settings with an exceeded maximum window size value"
-      - **2 content-length** — vaatii: tallenna `content-length` headerista, kerää DATA-tavujen yhteissumma, vertaile END_STREAM:llä
-      - **1 POST trailers (`generic/4/4`)** — HEADERS sallittava jo avoimella streamilla trailerina (state open/half-closed-local, MUST END_STREAM, ei pseudo-headereita); meidän koodi torjuu uudelleenkäytetyn sid:n
-      - **5 SETTINGS edge case** — pääosin timing (passes alone): multi-value INITIAL_WINDOW_SIZE, change-after-HEADERS, init=1+HEADERS, negative window, WINDOW_UPDATE flow-control > 2^31-1 conn-level
-  - [ ] `autobahn-testsuite` (WebSocket) — vielä aloittamatta. `crossbario/autobahn-testsuite` -Docker image valmis ajettavaksi.
+      - Invalid preface → GOAWAY (vain BadPreface, ei read-error)
+      - content-length §8.1.1 validointi (declared = vec_len(body))
+      - HEADERS-on-open-stream = trailers §8.1
+      - h2c-test-serverin per-connection timeout 1s (sekventiaalinen accept-silmukka ei jämähdä)
+    - **Jäljellä 4 failurea (kaikki saman juurisyyn alla):**
+      - "Sends SETTINGS frame to set the initial window size to 1 and sends HEADERS frame"
+      - "Sends multiple values of SETTINGS_INITIAL_WINDOW_SIZE"
+      - "Changes SETTINGS_INITIAL_WINDOW_SIZE after sending HEADERS frame"
+      - (1 skipped, prerequisite-dependent)
+      - **Juurisyy:** `__h2_send_response` kirjoittaa koko response-bodyn yhdellä DATA-framella välittämättä stream send_window:sta. Vaatii partial-state response writerin + resume-on-WINDOW_UPDATE-polun (ei-triviaali rakennemuutos).
+  - [~] `autobahn-testsuite` (WebSocket) — Docker image asennettu, `examples/ws_echo.nu` -echo-server skissattu.
+    - **Avoin bugi:** `response_serialize` aiheuttaa UBSan misaligned ctl -loadin kun se kutsutaan kontekstissa jossa request on luotu `__read_request_head`-polulta (parsittu TCP-puskurista). Standalone-testi (`/tmp/test_ws_resp.nu`) jossa sama HttpResponse rakennetaan käsin shipped läpi puhtaasti. Ero on jossain request-parsinta-polun tilassa joka karahtaa response-serialisointiin. Vaatii nurlc-IR-tason debugin ennen kuin autobahn voidaan ajaa läpi.
+    - **Reproduktio:** `NURL_SAN=1 ./nurl.sh examples/ws_echo.nu /tmp/ws_echo && /tmp/ws_echo` → handshake-tavut menevät peerille, sitten UBSan tappaa serverin response_serialize:n nurl_peek:in 8-misaligned osoitteeseen (~0x28d).
   - [ ] Konteksti: CVE-2023-44487 ("HTTP/2 Rapid Reset"), CVE-2019-9511…9518 -klusteri, CVE-2026-23918 (Apache `mod_http2` double-free) — RFC-appendix-vektorit eivät kata näitä
   - **Työkalut:**
     - `/home/wau/.local/bin/h2spec` (v2.6.0) asennettu
