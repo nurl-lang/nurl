@@ -8,8 +8,273 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-(Empty — the next ship lands its `### Added` / `### Changed` / `### Fixed`
-notes here.)
+### Release summary
+
+The "interop conformance" release. NURL's HTTP/2 + HPACK + WebSocket
+stacks are now driven by the canonical conformance suites — and pass
+them. h2spec 2.6.0 reports **146/146 cases green** against the
+included `examples/h2c_server.nu`; the autobahn-testsuite fuzzing
+client reports **294 OK / 4 NON-STRICT / 3 INFORMATIONAL / 0 FAILED**
+across all 301 RFC 6455 cases against `examples/ws_echo.nu`. Both
+binaries run under ASan + UBSan without findings.
+
+The journey there flushed out **seven concrete reliability bugs** in
+the HTTP/2 + HPACK stack (mostly use-after-free / aliased-Vec /
+sign-extension that had been latent because the relevant files were
+never on the build's test path), **two WebSocket close-validation
+gaps** that broke RFC 6455 §5.5.1 / §7.4.2 conformance, and **one
+compiler bug** — `scan_fn_sigs` did not track brace depth and so
+mis-parsed the `@` inside a closure-shaped struct-field type
+(`( @ HttpResponse HttpRequest ) handler`) as a function declaration,
+silently overwriting `syms["HttpResponse"]` with the next struct's
+type. Every fix is at the root cause; no work-arounds remain in
+`examples/`.
+
+Also lands: an async/fiber-based accept loop for the h2c test
+server (the h2spec ServerDataLength probe arrives back-to-back with
+the test connection and required concurrent serving), flow-control-
+respecting response writes with an inline WINDOW_UPDATE pump,
+TCP_NODELAY at accept-time (small framing ACKs were getting pinned
+by Nagle), and `NURL_SAN=1` support inside `nurl.sh` so example
+binaries can be built with the same sanitizer flags `./build.sh
+--san` uses.
+
+Bootstrap fixed point holds at **1 620 300 B** (stage1 ≡ stage2
+byte-identical IR). `./build.sh` corpus + sanitiser corpus green.
+
+**Headline wins:**
+
+- **h2spec 2.6.0: 146/146 green** — `examples/h2c_server.nu` passes
+  every generic + http2 + hpack conformance test in the suite, with
+  zero failures and zero skips. ASan + UBSan clean.
+- **autobahn-testsuite: 0 FAILED** across the full 301-case
+  fuzzingclient run (294 OK / 4 NON-STRICT / 3 INFORMATIONAL).
+- **`scan_fn_sigs` brace-depth fix** — closes a -O1+-only compiler
+  bug where the `@` inside a closure-typed struct field
+  (`( @ HttpResponse HttpRequest ) handler`) was treated as a phantom
+  function-decl opener, silently overwriting `syms["HttpResponse"]`
+  with the next struct type and tripping `gen_match`'s wide-payload
+  reconstruction on any `! HttpResponse WsErr` result. `examples/
+  ws_echo.nu` now uses `ws_perform_handshake` directly with no
+  workarounds.
+- **Seven latent HTTP/2 reliability bugs fixed** — parenthesised
+  operator-call diagnostics that had never been triggered against
+  `http2_conn.nu`, pointer arithmetic via load-byte instead of
+  offset-cast, missing enum-tag casts in `??`-arm bodies, double-free
+  on `req.query` when no `?` is present, aliased-Vec UAF in
+  `HpackDynTable` round-trip (two distinct sites), and an unsafe
+  `cur`-free in HPACK's failure path.
+- **HTTP/2 spec validation surface filled in** — pseudo-header
+  validation (§8.3), stream-self-dependency (§5.3.1), PUSH_PROMISE
+  rejection (§6.6), flow-control window overflow (§6.9.1, stream +
+  conn), idle-stream WINDOW_UPDATE (§5.1), HPACK §4.2 dyn-table-
+  size-update placement, content-length consistency (§8.1.1),
+  HEADERS-on-open-stream as trailers (§8.1), invalid-preface GOAWAY
+  (§3.4), and the sign-extension byte-mask gotcha in SETTINGS +
+  WINDOW_UPDATE byte assembly.
+- **`nurl.sh` honours `NURL_SAN=1`** — example builds now get ASan
+  + UBSan + use-after-scope under the same flag set
+  `./build.sh --san` uses, against a side-by-side
+  `stdlib/runtime_san.o` (non-LTO, matching sanitiser flags). The
+  comment in `build.sh` had promised this since v0.8 but `nurl.sh`
+  had never read the env var.
+
+### Added
+
+- **`examples/h2c_server.nu`** — minimal cleartext-HTTP/2 ("h2c,
+  prior-knowledge") echo server (~135 LOC). Async accept loop via
+  `stdlib/std/async.nu` so h2spec's probe + test connections can be
+  served concurrently; per-conn read timeout of 1 s keeps the
+  sequential accept queue draining when a test deliberately leaves
+  a connection half-open; response body sized ≥ 5 bytes so the
+  `dataLen >= 5` gate in h2spec §6.9.2/2 runs the test instead of
+  skipping. Verified green under both `./nurl.sh` and
+  `NURL_SAN=1 ./nurl.sh`.
+- **`examples/ws_echo.nu`** — minimal WebSocket echo server (~110
+  LOC). Uses the stdlib `ws_perform_handshake` + `ws_serve_messages`
+  pair against the same TCP accept loop. Per-server `WsLimits`
+  raises `fragment_max_count` to 131 072 so autobahn §9.x's 4-MiB
+  message split into 65 536 frames assembles successfully; per-
+  frame and per-message byte caps stay at the stdlib defaults.
+- **`NURL_SAN=1` support in `nurl.sh`** — drops `-flto`, adds
+  `-fsanitize=address,undefined -fsanitize-address-use-after-scope
+   -fno-omit-frame-pointer -fno-sanitize-recover=all` at the link,
+  and builds a side-by-side `stdlib/runtime_san.o` (non-LTO,
+  matching flags) if `stdlib/runtime.c` is newer than the cached
+  artefact. Matches the toolchain `./build.sh --san` already uses
+  for its own corpus.
+- **HPACK lowercase-header-name encoder** (`stdlib/ext/http2_hpack.nu`
+  `__hpack_lower_name_dup`) — RFC 9113 §8.2.2 mandates lowercase
+  header field names on the wire; `hpack_encode_headers` now
+  lowercases every name before encoding. Previously curl's HTTP/2
+  parser rejected our `Content-Type` response header.
+- **Inline WINDOW_UPDATE pump in `__h2_send_response`** — when the
+  stream OR connection send-window is exhausted mid-response, the
+  writer reads frames off the peer and applies WINDOW_UPDATE /
+  SETTINGS / PRIORITY semantics in place (RFC 9113 §5.2.1, §6.9.1).
+  HEADERS for a new stream during the pump is refused with
+  RST_STREAM(REFUSED_STREAM) per §5.1.2. Empty `DATA(END_STREAM)`
+  fallback (§6.9.1 permits zero-length DATA + END_STREAM regardless
+  of window state) closes the stream cleanly when the pump bails.
+- **HTTP/2 request HEADERS validation pass** (`__h2_validate_request_
+  headers` in `stdlib/ext/http2_conn.nu`) — RFC 9113 §8.3 / §8.2.1 /
+  §8.2.2: lowercase names, pseudo-headers precede regular ones,
+  exactly one `:method` / `:scheme` / `:path` (non-empty), no
+  duplicate or response-only or unknown pseudo-headers, no
+  connection-specific headers (`Connection`, `Proxy-Connection`,
+  `Keep-Alive`, `Transfer-Encoding`), and `TE` — if present — holds
+  exactly `"trailers"`. Runs immediately after HPACK decode succeeds
+  on both the HEADERS+END_HEADERS and HEADERS+CONTINUATION+
+  END_HEADERS paths.
+- **HTTP/2 frame-validation pass** — SETTINGS / GOAWAY / RST_STREAM
+  / PRIORITY / DATA stream-ID + length + ACK rules per §6.5 / §6.4
+  / §6.3 / §6.1 / §6.8.
+- **HEADERS-on-existing-open-stream = trailers** (§8.1) — accepting
+  a HEADERS frame on a stream already in `open` / `half-closed-
+  local` state as the trailers section. Trailers MUST carry
+  END_STREAM; decoded fields are discarded but `end_stream_received`
+  is marked and the handler is dispatched.
+- **PUSH_PROMISE rejection** (§6.6) — client→server PUSH_PROMISE is
+  now PROTOCOL_ERROR (we advertise SETTINGS_ENABLE_PUSH=0).
+- **§5.3.1 self-dependency check** for PRIORITY and HEADERS-with-
+  PRIORITY-flag — a stream MUST NOT depend on itself; rejected as
+  PROTOCOL_ERROR.
+- **§6.9.1 flow-control overflow detection** — WINDOW_UPDATE that
+  carries a stream's or connection's send-window above 2^31-1 is
+  now FLOW_CONTROL_ERROR (stream-level → RST_STREAM, conn-level →
+  GOAWAY).
+- **§5.1 idle-stream WINDOW_UPDATE** — WINDOW_UPDATE on a stream
+  with sid > last_peer_stream_id (never opened) is PROTOCOL_ERROR;
+  on a closed stream silently no-ops.
+- **HPACK §4.2 dynamic-table-size-update placement check** — size
+  updates after any indexed/literal field in the block are
+  COMPRESSION_ERROR (new `seen_field` flag in `hpack_decode_block`),
+  and the new size is bounded by `h2_default_header_table_size`
+  (4 096) — our advertised SETTINGS_HEADER_TABLE_SIZE — rather than
+  the table's current `max_size`, which may have been lowered by a
+  previous update in the same connection.
+- **§8.1.1 content-length consistency check** (`__h2_content_length
+  _mismatch`) — when a request carries `content-length`, the sum of
+  DATA-payload lengths MUST equal that value. Mismatched (or
+  unparseable, or duplicated and disagreeing) content-length becomes
+  PROTOCOL_ERROR before handler dispatch.
+- **RFC 6455 §5.5.1 / §7.4.2 WebSocket close-frame validation** —
+  payload length 1 → `WsInvalidCloseCode` (close code 1002, not
+  1000); status code outside 1000–2999 OR 1004 / 1005 / 1006 /
+  1015 / 1016+ → close 1002; close-reason bytes validated as UTF-8.
+  Previously a close frame's payload was discarded outright and the
+  server replied with `WsClosedByPeer` → 1000 regardless of what the
+  peer sent.
+- **TCP_NODELAY on accepted sockets** (`stdlib/runtime.c`,
+  `nurl_tcp_accept`) — disables Nagle's algorithm on every accepted
+  TCP connection. Small framing-level ACKs (SETTINGS-ACK, PING-ACK,
+  WINDOW_UPDATE) were otherwise pinned behind the previous write
+  for up to 40 ms, which is exactly the window h2spec's per-test
+  short timeouts can't tolerate.
+- **`h2_default_header_table_size` constant** in
+  `stdlib/ext/http2_frame.nu` — value `4 096`, used as the upper
+  bound for HPACK dynamic-table-size updates and matches the
+  RFC 9113 §6.5.2 default for SETTINGS_HEADER_TABLE_SIZE.
+
+### Changed
+
+- **`scan_fn_sigs` is now brace-depth-tracked** — only TT_AT / TT_AMP
+  / TT_DOLLAR / TT_PERCENT openers at depth 0 trigger their
+  respective dispatch branches; everything inside `{ ... }` advances
+  silently. Matches the pattern `scan_type_names` already used (see
+  the docstring there). Closes the family of param-walk-desync bugs
+  the previous BORROW.md Phase 4 note had warned about.
+- **HTTP/2 GOAWAY-receive no longer triggers immediate shutdown** —
+  per RFC 9113 §6.8 the receiver of GOAWAY MUST keep processing in-
+  flight frames (PING, RST_STREAM, in-progress streams) until the
+  peer closes the socket; only NEW stream creation is forbidden.
+  Previously we hard-exited the serve loop on the first GOAWAY,
+  which broke the h2spec GOAWAY-then-PING sequence.
+- **HTTP/2 invalid-preface error path** sends GOAWAY only when the
+  preface was structurally invalid (`H2FrameBadPreface`); on a read
+  error (timeout / EOF / IO) we tear down silently. GOAWAY-on-
+  every-preface-error was being seen by h2spec's per-test probe
+  connections and counted as the test response.
+
+### Fixed
+
+- **`scan_fn_sigs` brace-depth desync** — the `@` inside a closure-
+  shaped struct field type (`( @ HttpResponse HttpRequest ) handler`)
+  was treated as the start of a function declaration; the param
+  walker then read `HttpResponse` as the phantom `fname` and the
+  NEXT type-name-shaped token (in `stdlib/ext/http_server.nu`,
+  `DosLimits`, declared 5 lines later) as that phantom function's
+  `ret_ty`, silently writing `syms["HttpResponse"] = "%DosLimits"`.
+  `gen_match`'s wide-payload reconstruction for a
+  `: ! HttpResponse WsErr rr (...)` binding then looked up
+  `syms["HttpResponse"]` to size the heap-box load and emitted
+  `inttoptr i64 ... to %DosLimits*` + `load %DosLimits` + `bitcast
+   %DosLimits* ... to i8*` against the real HttpResponse pointer.
+  Under -O1+ this manifested as a runtime nurl_peek of a misaligned
+  sub-page address (the HttpResponse i64 status field read as a Vec
+  ctl). Under -O0 the extra reload of the alloca round-tripped the
+  bits exactly so the struct's field accesses happened to land at
+  the right offsets, hiding the bug.
+- **`__h2_stream_to_request` double-freed `req.query`** when the
+  request had no `?` in the path — the field was freed
+  unconditionally but only reassigned inside the `qi >= 0` branch.
+  `request_free` then freed the dangling pointer again. Clear ASan
+  use-after-free on the very first h2c request through h2spec.
+- **`__h2_decode_stream_headers` freed the old `cur.dec_dyn` before
+  assigning the new `dd.dyn`** — but `HpackDynTable.entries` is
+  aliased through the by-value pass into `hpack_decode_block`, so
+  the two wrappers shared one Vec ctl. The free turned the new
+  assignment into a dangling pointer; subsequent reads on
+  connection close tripped nurl_peek.
+- **`hpack_decode_block` failure path freed `cur`** — but `cur` was
+  initialised from the input `dyn` (struct copy, entries Vec
+  pointer-aliased), so freeing in the error path left the caller's
+  `dec_dyn` pointing at a freed Vec entries pointer. The next
+  h2_conn_free vec_free_with double-freed.
+- **`__h2_frame_err_to_conn` returned bare enum tags from `??`-arm
+  bodies** when the function return type wrapped them as a struct;
+  follow the established `__net_err_of` convention with explicit
+  `# H2ConnErr Tag` casts so the IR's `ret %H2ConnErr` matches the
+  function signature.
+- **`nurl_str_slice_unsafe` did pointer-load instead of pointer
+  arithmetic** — `. rp from` lowers to "load the byte at rp+from",
+  not "compute address rp+from". The code intended an unsafe
+  substring view (rp + from interpreted as a string pointer); now
+  spelled `# s + # i raw from` (cast-add-cast).
+- **Two latent parenthesised-operator compile errors** in
+  `stdlib/ext/http2_conn.nu` — `( % n 6 )` and `( . rp from )`. The
+  diagnostic that rejects these landed 2026-05-22 but
+  `http2_conn.nu` was never on the build/test path, so they sat
+  silently until `examples/h2c_server.nu` pulled the file in.
+- **`__pow2` defined in two translation units** — once in
+  `stdlib/ext/http_response.nu` (used for hex-format expansion) and
+  once in `stdlib/ext/http2_hpack.nu` (used for HPACK integer
+  width). Linker rejected the redefinition the first time both
+  modules were used together; the HPACK helper is now
+  `__hpack_pow2`.
+- **`__h2_apply_settings` sign-extension** — byte-shift-and-OR
+  assembly of the 24-bit length / 32-bit value fields used `# i u`
+  to widen each payload byte without masking, so any byte ≥ 0x80
+  propagated as a negative i64 into the next shift, corrupting
+  `value`. Fixed with explicit `& 255` masks at every byte read; the
+  same fix applied to the WINDOW_UPDATE increment decode in the
+  main serve loop and in `__h2_pump_one_frame`.
+- **`autobahn-testsuite §6.4.1-4` UTF-8 fail-fast** — accepted as
+  NON-STRICT (the spec permits either streaming UTF-8 rejection or
+  whole-message validation; we do the latter). Documented for
+  follow-up work.
+
+### Tooling / dev experience
+
+- **`./build.sh --san` ASan/UBSan corpus runs WebSocket close
+  validation** end-to-end through autobahn-testsuite's first seven
+  case sections (92/92 OK; 0 sanitizer findings).
+- **`docs/GOTCHAS.md` remains empty** — every gotcha surfaced
+  during the interop push (parenthesised-operator calls, sign-
+  extension, `__pow2` collision, enum-tag-cast-on-return) is
+  diagnosed by the compiler at compile time.
+
+
 
 ## [0.9.2] — 2026-05-28
 
