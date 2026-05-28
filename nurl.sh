@@ -13,12 +13,23 @@
 #    -O0 | -O1 | -O2 | -O3     Clang optimisation level (default -O2)
 #    -g | --debug              Pass -g to clang (DWARF line tables)
 #
+#  Environment:
+#    NURL_OPT=-O0..-O3   Override default -O2 when no CLI flag given
+#    NURL_SAN=1          Link with AddressSanitizer + UndefinedBehaviorSanitizer.
+#                        Auto-builds a side-by-side stdlib/runtime_san.o (non-LTO,
+#                        same -fsanitize flags). LTO is dropped because clang's
+#                        LTO + sanitizers combination produces opaque link-time
+#                        diagnostics on NURL's cross-module function-pointer
+#                        patterns. Set automatically by `./build.sh --san`.
+#                        Combine with ASAN_OPTIONS / UBSAN_OPTIONS at runtime.
+#
 #  Examples:
 #    ./nurl.sh hello.nu             → ./hello
 #    ./nurl.sh src/myprog.nu prog   → ./prog
 #    ./nurl.sh --emit-ir hello.nu   → ./hello.ll  (skip link)
 #    ./nurl.sh --emit-asm hello.nu  → ./hello.s   (skip link)
 #    ./nurl.sh -O0 -g hello.nu      → ./hello with debug info, no opt
+#    NURL_SAN=1 ./nurl.sh hello.nu  → ./hello linked with ASan + UBSan
 #
 #  Requires nurlc and stdlib/runtime.o in the same directory
 #  as this script (or nurlc in PATH).
@@ -229,9 +240,34 @@ fi
 # A side-by-side non-LTO build of runtime.c restores .debug_info in
 # the final binary; the LTO inline win for stdlib FFI is gone, but
 # that's the right trade for a debug build.
+#
+# NURL_SAN=1 (set by `build.sh --san`, or in the environment for a
+# one-off build) forces a sanitized link: ASan + UBSan with the same
+# flag set the main build uses, against a sidecar non-LTO runtime
+# compiled with the same -fsanitize options. LTO is dropped because
+# clang's combination of LTO + sanitizers produces opaque link-time
+# diagnostics on NURL's cross-module function-pointer pattern.
 LTO_FLAG="-flto"
 RUNTIME_TO_LINK="$RUNTIME"
-if [[ $DEBUG_INFO -eq 1 ]]; then
+SAN_LINK_FLAGS=()
+if [[ "${NURL_SAN:-0}" == "1" ]]; then
+    LTO_FLAG=""
+    SAN_LINK_FLAGS=(-fsanitize=address,undefined -fsanitize-address-use-after-scope -fno-omit-frame-pointer -fno-sanitize-recover=all)
+    SAN_RUNTIME="$SCRIPT_DIR/stdlib/runtime_san.o"
+    if [[ ! -f "$SAN_RUNTIME" || "$SCRIPT_DIR/stdlib/runtime.c" -nt "$SAN_RUNTIME" ]]; then
+        echo "[runtime-san] rebuilding stdlib/runtime_san.o (non-LTO, with ASan+UBSan)"
+        CFLAGS_SAN="-O1 -g -fsanitize=address,undefined -fsanitize-address-use-after-scope -fno-omit-frame-pointer -fno-sanitize-recover=all"
+        for sentinel_flag in NURL_HAVE_LIBCURL:libcurl NURL_HAVE_OPENSSL:openssl NURL_HAVE_SQLITE3:sqlite3 NURL_HAVE_ZLIB:zlib; do
+            d="${sentinel_flag%%:*}"; p="${sentinel_flag##*:}"
+            if pkg-config --exists "$p" 2>/dev/null; then
+                CFLAGS_SAN="$CFLAGS_SAN -D$d $(pkg-config --cflags "$p")"
+            fi
+        done
+        # shellcheck disable=SC2086
+        clang $CFLAGS_SAN -c "$SCRIPT_DIR/stdlib/runtime.c" -o "$SAN_RUNTIME"
+    fi
+    RUNTIME_TO_LINK="$SAN_RUNTIME"
+elif [[ $DEBUG_INFO -eq 1 ]]; then
     LTO_FLAG=""
     DBG_RUNTIME="$SCRIPT_DIR/stdlib/runtime_debug.o"
     if [[ ! -f "$DBG_RUNTIME" || "$SCRIPT_DIR/stdlib/runtime.c" -nt "$DBG_RUNTIME" ]]; then
@@ -248,14 +284,14 @@ if [[ $DEBUG_INFO -eq 1 ]]; then
     fi
     RUNTIME_TO_LINK="$DBG_RUNTIME"
 fi
-echo "[2/2] $LLFILE → $OUTBASE  ($OPT${LTO_FLAG:+ $LTO_FLAG}${DEBUG_FLAGS[*]:+ ${DEBUG_FLAGS[*]}}${EXTRA_LIBS[*]:+ ${EXTRA_LIBS[*]}})"
+echo "[2/2] $LLFILE → $OUTBASE  ($OPT${LTO_FLAG:+ $LTO_FLAG}${DEBUG_FLAGS[*]:+ ${DEBUG_FLAGS[*]}}${SAN_LINK_FLAGS[*]:+ ${SAN_LINK_FLAGS[*]}}${EXTRA_LIBS[*]:+ ${EXTRA_LIBS[*]}})"
 # `-flto` is required because stdlib/runtime.o is compiled with -flto
 # (build.sh) and therefore carries LLVM bitcode instead of native code.
 # The matching link-time flag here drives the LTO pipeline, inlining
 # every vec_data / nurl_peek / nurl_poke / nurl_print across the
 # runtime ↔ user-code boundary.
 # shellcheck disable=SC2086
-clang $OPT $LTO_FLAG "${DEBUG_FLAGS[@]}" "$LLFILE" "$RUNTIME_TO_LINK" "${EXTRA_OBJS[@]}" -o "$OUTBASE" -lm -lpthread "${EXTRA_LIBS[@]}"
+clang $OPT $LTO_FLAG "${DEBUG_FLAGS[@]}" "${SAN_LINK_FLAGS[@]}" "$LLFILE" "$RUNTIME_TO_LINK" "${EXTRA_OBJS[@]}" -o "$OUTBASE" -lm -lpthread "${EXTRA_LIBS[@]}"
 
 echo ""
 echo "Done: $OUTBASE"
