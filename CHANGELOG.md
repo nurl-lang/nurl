@@ -22,6 +22,23 @@ IR).
 
 ### Added
 
+- **`HttpOptions` struct (HTTP client)** — `stdlib/ext/http.nu` gained
+  `HttpOptions { i timeout_ms, i connect_timeout_ms, i follow_redirects,
+  i max_redirects, i verify_tls, s user_agent }` bundling the per-request
+  transport overrides that were previously hardcoded in the libcurl
+  orchestrator. New entry points: `http_options_default → HttpOptions`,
+  `http_request_with_opts`, and `http_get_opts` / `http_post_opts`
+  conveniences. The orchestrator body moved into
+  `__libcurl_perform_full_opts` (wires `CURLOPT_FOLLOWLOCATION` /
+  `MAXREDIRS` / `SSL_VERIFYPEER` / `SSL_VERIFYHOST` / `USERAGENT` from the
+  struct); the legacy timeout-only `__libcurl_perform_full_to` is now a
+  thin shim over it, so `http_request` / `http_request_to` are
+  behaviour-preserving. `user_agent` is borrowed `s` so HttpOptions owns
+  nothing (no free fn, safe by-value). WinHTTP / stub backends honour
+  only the two timeouts (redirect / TLS / UA ignored — documented).
+  Stdlib-only; compiler IR unperturbed. Tests: offline
+  `compiler/tests/http_options.nu` (always-on) + a live `GET_OPTS` case
+  in `compiler/tests/http_basic.nu`.
 - **`examples/h2c_server.nu`** — minimal cleartext-HTTP/2 ("h2c,
   prior-knowledge") echo server (~135 LOC). Async accept loop via
   `stdlib/std/async.nu` so h2spec's probe + test connections can be
