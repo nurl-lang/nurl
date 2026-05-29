@@ -10,8 +10,8 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/ext/manifest.nu`
 
 @ dump Manifest m → v {
-    ( nurl_print `name=` )       ( nurl_print ( string_data . m name ) )       ( nurl_print `\n` )
-    ( nurl_print `version=` )    ( nurl_print ( string_data . m version ) )    ( nurl_print `\n` )
+    ( nurl_print `name=` ) ( nurl_print ( string_data . m name ) ) ( nurl_print `\n` )
+    ( nurl_print `version=` ) ( nurl_print ( string_data . m version ) ) ( nurl_print `\n` )
     ( nurl_print `description=` )
     ? > ( string_len . m description ) 0 {
         ( nurl_print ( string_data . m description ) )
@@ -55,7 +55,7 @@ some-lib = { path = "../some-lib" }
 `
 
     ( nurl_print `-- good manifest --\n` )
-    : ! Manifest ManifestErr r ( manifest_parse good `nurl.toml` )
+    : !Manifest ManifestErr r ( manifest_parse good `nurl.toml` )
     ?? r {
         F e → { ( nurl_print `err=` ) ( nurl_print ( manifest_err_name e ) ) ( nurl_print `\n` ) }
         T m → {
@@ -69,7 +69,7 @@ some-lib = { path = "../some-lib" }
     `[package]
 version = "0.1.0"
 `
-    : ! Manifest ManifestErr r2 ( manifest_parse bad `bad.toml` )
+    : !Manifest ManifestErr r2 ( manifest_parse bad `bad.toml` )
     ?? r2 {
         F e → { ( nurl_print `err=` ) ( nurl_print ( manifest_err_name e ) ) ( nurl_print `\n` ) }
         T m → { ( nurl_print `unexpected ok\n` ) ( manifest_free m ) }

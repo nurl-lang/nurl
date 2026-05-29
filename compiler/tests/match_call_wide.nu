@@ -9,7 +9,7 @@
 // gen_match now synthesises the binding metadata from the call's NURL
 // return type, so the direct form reconstructs identically to `?? r`.
 
-: W { i a  i b  i c  i d  i e  i f  i g  i h }
+: W { i a i b i c i d i e i f i g i h }
 : | WErr { Bad }
 
 @ mk_w i base → !W WErr {

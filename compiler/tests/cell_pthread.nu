@@ -10,9 +10,12 @@ $ `stdlib/core/cell.nu`
 
 // Direct pthread FFI. `pthread_mutex_init`'s second arg is a
 // `pthread_mutexattr_t *` (or NULL for defaults); we pass NULL.
-& `c` @ pthread_mutex_init    *u m *u attr → i
-& `c` @ pthread_mutex_lock    *u m → i
-& `c` @ pthread_mutex_unlock  *u m → i
+& `c` @ pthread_mutex_init *u m *u attr → i
+
+& `c` @ pthread_mutex_lock *u m → i
+
+& `c` @ pthread_mutex_unlock *u m → i
+
 & `c` @ pthread_mutex_destroy *u m → i
 
 @ pure_mutex_new → Cell {

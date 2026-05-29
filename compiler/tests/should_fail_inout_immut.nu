@@ -4,7 +4,7 @@
 // silently discard the mutation. The compiler rejects it at the call
 // site. Expect COMPILE FAIL.
 
-: Counter { i n  i max }
+: Counter { i n i max }
 
 @ bump inout Counter c → v {
     = . c n + . c n 1

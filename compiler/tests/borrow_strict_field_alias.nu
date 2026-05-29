@@ -12,9 +12,9 @@
 //
 // One positive case + one negative control.
 
-: Counter { i n  i tag }
+: Counter { i n i tag }
 
-@ swap_field_and_self inout Counter a  i  b → v {
+@ swap_field_and_self inout Counter a i b → v {
     = . a n b
 }
 

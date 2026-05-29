@@ -5,11 +5,14 @@
 
 $ `stdlib/core/string.nu`
 
-: Point { i x  i y }
+: Point { i x i y }
 
 @ zero → i { ^ 7 }
+
 @ one i a → i { ^ * a 2 }
+
 @ three i a i b i c → i { ^ + + a b c }
+
 @ takes_struct Point pt → i { ^ + . pt x . pt y }
 
 @ main → i {

@@ -80,20 +80,20 @@ $ `stdlib/ext/http_server.nu`
 @ run_sni_section → v {
     ( nurl_print `--- §1 SNI ---\n` )
     : !TcpListener NetErr lr ( tcp_listen_tls `127.0.0.1` 18790
-                                `/tmp/nurl_tls_default.crt`
-                                `/tmp/nurl_tls_default.key` )
+    `/tmp/nurl_tls_default.crt`
+    `/tmp/nurl_tls_default.key` )
     ?? lr {
         T listener → {
             : !v NetErr a1 ( tcp_tls_add_sni listener `api.example.com`
-                                `/tmp/nurl_tls_api.crt`
-                                `/tmp/nurl_tls_api.key` )
+            `/tmp/nurl_tls_api.crt`
+            `/tmp/nurl_tls_api.key` )
             ?? a1 {
                 T _ → ( println_label `add_sni_api` `ok` )
                 F e → ( println_label `add_sni_api` ( net_err_name e ) )
             }
             : !v NetErr a2 ( tcp_tls_add_sni listener `www.example.com`
-                                `/tmp/nurl_tls_www.crt`
-                                `/tmp/nurl_tls_www.key` )
+            `/tmp/nurl_tls_www.crt`
+            `/tmp/nurl_tls_www.key` )
             ?? a2 {
                 T _ → ( println_label `add_sni_www` `ok` )
                 F e → ( println_label `add_sni_www` ( net_err_name e ) )
@@ -164,8 +164,8 @@ $ `stdlib/ext/http_server.nu`
 @ run_reload_section → v {
     ( nurl_print `--- §2 live reload ---\n` )
     : !TcpListener NetErr lr ( tcp_listen_tls `127.0.0.1` 18791
-                                `/tmp/nurl_tls_default.crt`
-                                `/tmp/nurl_tls_default.key` )
+    `/tmp/nurl_tls_default.crt`
+    `/tmp/nurl_tls_default.key` )
     ?? lr {
         T listener → {
             : ( @ HttpResponse HttpRequest ) h \ HttpRequest req → HttpResponse { ^ ( tls_handler req ) }
@@ -191,8 +191,8 @@ $ `stdlib/ext/http_server.nu`
 
             // Live swap to reloaded.example.com
             : !v NetErr rr ( tcp_tls_reload listener ``
-                                `/tmp/nurl_tls_reload.crt`
-                                `/tmp/nurl_tls_reload.key` )
+            `/tmp/nurl_tls_reload.crt`
+            `/tmp/nurl_tls_reload.key` )
             ?? rr {
                 T _ → ( println_label `reload_swap` `ok` )
                 F e → ( println_label `reload_swap` ( net_err_name e ) )
@@ -227,12 +227,12 @@ $ `stdlib/ext/http_server.nu`
 @ run_mtls_section → v {
     ( nurl_print `--- §3 mTLS ---\n` )
     : !TcpListener NetErr lr ( tcp_listen_tls `127.0.0.1` 18792
-                                `/tmp/nurl_tls_default.crt`
-                                `/tmp/nurl_tls_default.key` )
+    `/tmp/nurl_tls_default.crt`
+    `/tmp/nurl_tls_default.key` )
     ?? lr {
         T listener → {
             : !v NetErr mr ( tcp_tls_require_client_cert listener
-                                `/tmp/nurl_tls_ca.crt` T )
+            `/tmp/nurl_tls_ca.crt` T )
             ?? mr {
                 T _ → ( println_label `mtls_setup` `ok` )
                 F e → ( println_label `mtls_setup` ( net_err_name e ) )

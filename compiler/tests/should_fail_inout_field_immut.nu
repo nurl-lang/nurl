@@ -4,14 +4,14 @@
 // target naming an immutable struct binding is rejected. Expect
 // COMPILE FAIL.
 
-: Counter { i n  i max }
+: Counter { i n i max }
 
 @ add100 inout i x → v {
     = x + x 100
 }
 
 @ main → i {
-    : Counter c @ Counter { 5 10 }    // immutable — no ': ~'
-    ( add100 . c n )                  // field target on immutable c — rejected
+    : Counter c @ Counter { 5 10 }  // immutable — no ': ~'
+    ( add100 . c n )  // field target on immutable c — rejected
     ^ 0
 }

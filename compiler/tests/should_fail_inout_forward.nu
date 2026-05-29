@@ -6,11 +6,11 @@
 // `<fname>__has_inout`, which lets the call site reject this case
 // with a clear diagnostic instead. Expect COMPILE FAIL.
 
-: Counter { i n  i max }
+: Counter { i n i max }
 
 @ main → i {
     : ~ Counter c @ Counter { 0 10 }
-    ( bump c )            // `bump` is defined below — rejected here
+    ( bump c )  // `bump` is defined below — rejected here
     ^ 0
 }
 

@@ -18,7 +18,7 @@
 : | Color { Red Green Blue }
 : | DbErr { NotFound Conflict Timeout Other }
 
-@ classify_db !i DbErr r → s {
+@ classify_db ! i DbErr r → s {
     ^ ?? r {
         T n → `ok`
         F e → ?? e {

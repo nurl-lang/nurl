@@ -10,10 +10,10 @@
 
 @ main → i {
     : ~ i n 0
-    ( bump_g [i] n 7 )      // `bump_g` is generic + defined below — rejected
+    ( bump_g [i] n 7 )  // `bump_g` is generic + defined below — rejected
     ^ 0
 }
 
-@ bump_g [A] inout i slot  A item → v {
+@ bump_g [A] inout i slot A item → v {
     = slot + slot 1
 }

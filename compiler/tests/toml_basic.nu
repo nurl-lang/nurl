@@ -24,7 +24,7 @@ $ `stdlib/ext/toml.nu`
 @ show_str s label TomlValue v → v {
     ( nurl_print label )
     ( nurl_print `=` )
-    : ? String r ( toml_as_str v )
+    : ?String r ( toml_as_str v )
     ?? r {
         T s → {
             ( nurl_print ( string_data s ) )
@@ -38,7 +38,7 @@ $ `stdlib/ext/toml.nu`
 @ show_int s label TomlValue v → v {
     ( nurl_print label )
     ( nurl_print `=` )
-    : ? i r ( toml_as_int v )
+    : ?i r ( toml_as_int v )
     ?? r {
         T n → {
             ( nurl_print ( nurl_str_int n ) )
@@ -51,7 +51,7 @@ $ `stdlib/ext/toml.nu`
 @ show_bool s label TomlValue v → v {
     ( nurl_print label )
     ( nurl_print `=` )
-    : ? b r ( toml_as_bool v )
+    : ?b r ( toml_as_bool v )
     ?? r {
         T x → ( nurl_print ? x `T\n` `F\n` )
         F _ → ( nurl_print `<not-bool>\n` )
@@ -59,7 +59,7 @@ $ `stdlib/ext/toml.nu`
 }
 
 @ probe s label TomlValue root s path b kind → v {
-    : ? TomlValue r ( toml_get_path root path )
+    : ?TomlValue r ( toml_get_path root path )
     ?? r {
         T v → {
             ? == kind 0 { ( show_str label v ) } {}
@@ -89,7 +89,7 @@ some-lib = { path = "../some-lib" }
 msg = "hello \"world\"\n"
 `
 
-    : ! TomlValue TomlErr r ( toml_parse manifest )
+    : !TomlValue TomlErr r ( toml_parse manifest )
     ?? r {
         F e → {
             ( nurl_print `parse_err=` )
@@ -109,7 +109,7 @@ msg = "hello \"world\"\n"
             ( probe `some_path` root `dependencies.some-lib.path` 0 )
 
             // Array-of-strings extraction.
-            : ? TomlValue ar ( toml_get_path root `package.authors` )
+            : ?TomlValue ar ( toml_get_path root `package.authors` )
             ?? ar {
                 T av → {
                     ?? av {
@@ -148,7 +148,7 @@ version = "1.0.0"
 source = "path+file:///abs/path/to/some-lib"
 `
 
-    : ! TomlValue TomlErr lr ( toml_parse lockfile )
+    : !TomlValue TomlErr lr ( toml_parse lockfile )
     ?? lr {
         F e → {
             ( nurl_print `lockfile_err=` )
@@ -156,7 +156,7 @@ source = "path+file:///abs/path/to/some-lib"
             ( nurl_print `\n` )
         }
         T lroot → {
-            : ? TomlValue pkgs ( toml_get lroot `package` )
+            : ?TomlValue pkgs ( toml_get lroot `package` )
             ?? pkgs {
                 T pkv → {
                     ?? pkv {

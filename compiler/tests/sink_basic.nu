@@ -34,7 +34,7 @@ $ `stdlib/core/option.nu`
     ( vec_push [i] xs 10 )
     ( vec_push [i] xs 20 )
     ( vec_push [i] xs 12 )
-    : i s ( sum_and_free xs )      // xs is consumed here
+    : i s ( sum_and_free xs )  // xs is consumed here
     ( nurl_print `sum=` ) ( nurl_print ( nurl_str_int s ) ) ( nurl_print `\n` )
     ^ 0
 }

@@ -26,7 +26,7 @@ $ `stdlib/core/slice.nu`
         F → ( nurl_print `oob ok\n` )
     }
 
-    : ? ( Slice i ) sub_o ( slice_sub [i] s 1 3 )
+    : ?( Slice i ) sub_o ( slice_sub [i] s 1 3 )
     ?? sub_o {
         T sub → {
             ( nurl_print `sub_len=` ) ( nurl_print ( nurl_str_int ( slice_len [i] sub ) ) ) ( nurl_print `\n` )

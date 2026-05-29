@@ -19,7 +19,7 @@ $ `stdlib/core/option.nu`
     : String s1 ( string_new )
     ( string_push_str s1 `hello` )
     : String s2 ( string_clone s1 )
-    ( string_push_str s1 ` world` )            // mutate the source only
+    ( string_push_str s1 ` world` )  // mutate the source only
     ( nurl_print `str: src=` )
     ( nurl_print ( string_data s1 ) )
     ( nurl_print ` clone=` )
@@ -34,7 +34,7 @@ $ `stdlib/core/option.nu`
     ( vec_push [i] vi 20 )
     ( vec_push [i] vi 30 )
     : ( Vec i ) vic ( vec_clone [i] vi )
-    : b _e0 ( vec_set [i] vi 0 999 )           // mutate the source only
+    : b _e0 ( vec_set [i] vi 0 999 )  // mutate the source only
     ( nurl_print `vec_i: src0=` )
     ( nurl_print ( nurl_str_int ( opt_unwrap_or [i] ( vec_get [i] vi 0 ) -1 ) ) )
     ( nurl_print ` clone0=` )
@@ -57,7 +57,7 @@ $ `stdlib/core/option.nu`
     ( vec_push [String] vs ( string_from `beta` ) )
     ( vec_push [String] vs ( string_from `gamma` ) )
     : ( Vec String ) vsc ( vec_clone_with [String] vs sclone )
-    ( vec_push [String] vs ( string_from `delta` ) )   // grow source only
+    ( vec_push [String] vs ( string_from `delta` ) )  // grow source only
     ( nurl_print `vec_str: srclen=` )
     ( nurl_print ( nurl_str_int ( vec_len [String] vs ) ) )
     ( nurl_print ` clonelen=` )
@@ -86,7 +86,7 @@ $ `stdlib/core/option.nu`
     ( map_set [s i] mi `two` 2 hs es )
     ( map_set [s i] mi `three` 3 hs es )
     : ( HashMap s i ) mic ( map_clone [s i] mi )
-    ( map_set [s i] mi `four` 4 hs es )         // add to the source only
+    ( map_set [s i] mi `four` 4 hs es )  // add to the source only
     ( nurl_print `map_i: srclen=` )
     ( nurl_print ( nurl_str_int ( map_len [s i] mi ) ) )
     ( nurl_print ` clonelen=` )

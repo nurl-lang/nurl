@@ -18,7 +18,7 @@
 //
 // Two positive cases (both warn) + one negative control (no warning).
 
-: Counter { i n  i max }
+: Counter { i n i max }
 
 // POSITIVE — closure captures a `~`-loop-local `c` (region depth 3:
 // fn body / loop body), then is assigned to `holder`, declared at the

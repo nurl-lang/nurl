@@ -11,15 +11,15 @@
 //
 // Two positive cases (both warn) + one negative control (no warning).
 
-: Counter { i n  i max }
+: Counter { i n i max }
 
-@ swap_counters inout Counter a  inout Counter b → v {
+@ swap_counters inout Counter a inout Counter b → v {
     : i t . a n
     = . a n . b n
     = . b n t
 }
 
-@ bump_by_other inout Counter a  Counter b → v {
+@ bump_by_other inout Counter a Counter b → v {
     = . a n + . a n . b n
 }
 

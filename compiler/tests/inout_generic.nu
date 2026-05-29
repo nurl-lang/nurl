@@ -13,11 +13,11 @@
 // same generic `inout` function.
 
 // A generic struct, to exercise `inout` / `sink` on a generic type.
-: Box [A] { A val  i tag }
+: Box [A] { A val i tag }
 
 // inout on a concrete scalar parameter, beside a tparam-typed
 // by-value parameter — instantiated below at both [i] and [s].
-@ store_g [A] inout i slot  A item → v {
+@ store_g [A] inout i slot A item → v {
     = slot + slot 1
 }
 
@@ -34,11 +34,11 @@
 
 @ main → i {
     : ~ i n 0
-    ( store_g [i] n 7 )            // n = 1
-    ( store_g [s] n `hi` )         // n = 2  (a second instantiation)
+    ( store_g [i] n 7 )  // n = 1
+    ( store_g [s] n `hi` )  // n = 2  (a second instantiation)
     : ~ ( Box i ) bi @ ( Box i ) { 5 10 }
-    ( retag_g [i] bi )             // bi.tag = 110
-    : i t ( tag_of_g [i] bi )      // bi is consumed here
+    ( retag_g [i] bi )  // bi.tag = 110
+    : i t ( tag_of_g [i] bi )  // bi is consumed here
     ( nurl_print `n=` ) ( nurl_print ( nurl_str_int n ) ) ( nurl_print `\n` )
     ( nurl_print `tag=` ) ( nurl_print ( nurl_str_int t ) ) ( nurl_print `\n` )
     ^ 0

@@ -6,5 +6,5 @@
 $ `compiler/tests/should_fail_pub_type_helper.nu`
 
 @ main → i {
-    ^ + PRIV_CONST 1   // FAIL — private global constant
+    ^ + PRIV_CONST 1  // FAIL — private global constant
 }

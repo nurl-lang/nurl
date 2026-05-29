@@ -17,7 +17,7 @@
 $ `stdlib/std/panic.nu`
 $ `stdlib/core/string.nu`
 
-: Counter { i n  i max }
+: Counter { i n i max }
 
 @ noisy → v {
     ( nurl_print `noisy: before panic\n` )

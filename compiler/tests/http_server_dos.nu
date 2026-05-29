@@ -101,7 +101,7 @@ print(f'rejected={n_rejected}')
     }
 }
 
-@ thread_join_safe !Thread ThreadErr tr → i {
+@ thread_join_safe ! Thread ThreadErr tr → i {
     ?? tr {
         T th → ( thread_join th )
         F _ → 0

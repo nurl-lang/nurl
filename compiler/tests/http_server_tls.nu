@@ -42,7 +42,7 @@ $ `stdlib/ext/http_server.nu`
 
 @ run_live_tls_test → v {
     : s cert `/tmp/nurl_test_tls.crt`
-    : s key  `/tmp/nurl_test_tls.key`
+    : s key `/tmp/nurl_test_tls.key`
     : s gen_cmd
     `openssl req -nodes -x509 -days 1 -newkey rsa:2048 -keyout /tmp/nurl_test_tls.key -out /tmp/nurl_test_tls.crt -subj '/CN=localhost' 2>/dev/null`
     : !Output ProcessErr gen_r ( process_run_shell gen_cmd )

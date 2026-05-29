@@ -34,7 +34,7 @@ $ `stdlib/core/string.nu`
             : ?i r ( chan_recv [i] b2a )
             ?? r {
                 T v → { = a_count + a_count 1 }
-                F → { = i 1000 }   // channel closed early; bail
+                F → { = i 1000 }  // channel closed early; bail
             }
             = i + i 1
         }

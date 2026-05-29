@@ -12,21 +12,21 @@
 //   1
 //   1
 
-: | Col { Red  Grn  Blu }
+: | Col { Red Grn Blu }
 
 // Wide enum: a payload-carrying variant still yields its tag.
-: | Sig { Lo  Hi i }
+: | Sig { Lo Hi i }
 
 @ main → v {
     : Col a Red
-    ( nurl_print_int # i a )           // 0 — first variant
+    ( nurl_print_int # i a )  // 0 — first variant
 
     : Col b Blu
-    ( nurl_print_int # i b )           // 2 — third variant
+    ( nurl_print_int # i b )  // 2 — third variant
 
     : Col c Grn
-    ( nurl_print_int # i # i8 c )      // 1 — tag truncs to i8, widens back
+    ( nurl_print_int # i # i8 c )  // 1 — tag truncs to i8, widens back
 
     : Sig s @ Sig { Hi 7 }
-    ( nurl_print_int # i s )           // 1 — wide-enum variant tag
+    ( nurl_print_int # i s )  // 1 — wide-enum variant tag
 }

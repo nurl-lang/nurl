@@ -90,12 +90,12 @@ $ `stdlib/ext/mcp_registry.nu`
     ( json_obj_set echo_props `text` text_prop )
     ( json_obj_set echo_schema `properties` echo_props )
     ( mcp_registry_add_tool r `echo` `Echo input` echo_schema
-        \ Json a → Json { ^ ( echo_tool a ) } )
+    \ Json a → Json { ^ ( echo_tool a ) } )
 
     : Json add_schema ( json_obj_new )
     ( json_obj_set add_schema `type` ( json_str_lit `object` ) )
     ( mcp_registry_add_tool r `add` `Add two numbers` add_schema
-        \ Json a → Json { ^ ( add_tool a ) } )
+    \ Json a → Json { ^ ( add_tool a ) } )
 
     : Json greet_args ( json_arr_new )
     : Json greet_arg ( json_obj_new )
@@ -103,14 +103,14 @@ $ `stdlib/ext/mcp_registry.nu`
     ( json_obj_set greet_arg `required` ( json_bool F ) )
     ( json_arr_push greet_args greet_arg )
     ( mcp_registry_add_prompt r `greet` `Friendly greeting` greet_args
-        \ Json a → Json { ^ ( greet_prompt a ) } )
+    \ Json a → Json { ^ ( greet_prompt a ) } )
 
     ( mcp_registry_add_resource r
-        `mcp://hello`
-        `Hello`
-        `text/plain`
-        `A friendly hello`
-        \ → Json { ^ ( hello_resource ) } )
+    `mcp://hello`
+    `Hello`
+    `text/plain`
+    `A friendly hello`
+    \ → Json { ^ ( hello_resource ) } )
 
     ^ r
 }

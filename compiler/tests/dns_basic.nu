@@ -53,7 +53,7 @@ $ `stdlib/core/vec.nu`
             T elem → {
                 : s ed ( string_data elem )
                 ? & == ( nurl_str_len ed ) nlen == ( nurl_str_eq ed needle ) 1
-                    { ^ T } {}
+                { ^ T } {}
             }
             F _ → {}
         }
@@ -102,7 +102,7 @@ $ `stdlib/core/vec.nu`
         T addrs → {
             ( print_label_int `with_port_count` ( vec_len [String] addrs ) )
             ( print_label_bool `with_port_includes_8080`
-                ( vec_contains_str addrs `127.0.0.1:8080` ) )
+            ( vec_contains_str addrs `127.0.0.1:8080` ) )
             ( free_str_vec addrs )
         }
         F e → ( print_label_str `with_port_err` ( net_err_name e ) )
@@ -113,7 +113,7 @@ $ `stdlib/core/vec.nu`
         T addrs → {
             ( print_label_int `v6_port_count` ( vec_len [String] addrs ) )
             ( print_label_bool `v6_port_bracketed`
-                ( vec_contains_str addrs `[::1]:8080` ) )
+            ( vec_contains_str addrs `[::1]:8080` ) )
             ( free_str_vec addrs )
         }
         F e → ( print_label_str `v6_port_err` ( net_err_name e ) )

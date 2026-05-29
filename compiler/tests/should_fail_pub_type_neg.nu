@@ -7,6 +7,6 @@
 $ `compiler/tests/should_fail_pub_type_helper.nu`
 
 @ main → i {
-    : PrivPoint p @ PrivPoint { 1 2 }   // FAIL — private type
+    : PrivPoint p @ PrivPoint { 1 2 }  // FAIL — private type
     ^ . p x
 }

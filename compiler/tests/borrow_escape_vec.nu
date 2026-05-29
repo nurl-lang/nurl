@@ -17,7 +17,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/thread.nu`
 
-: Counter { i n  i max }
+: Counter { i n i max }
 
 // CASE A — thread_spawn of a byref-capturing closure.
 @ case_thread_spawn → v {
