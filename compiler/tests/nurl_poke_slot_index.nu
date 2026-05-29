@@ -34,7 +34,7 @@ $ `stdlib/core/string.nu`
     // Write n markers — exactly fills the buffer.
     : ~ i k 0
     ~ < k n {
-        : i marker + * k 7 1     // 1, 8, 15, 22, … — distinct per k
+        : i marker + * k 7 1  // 1, 8, 15, 22, … — distinct per k
         ( nurl_poke buf k marker )
         = k + k 1
     }

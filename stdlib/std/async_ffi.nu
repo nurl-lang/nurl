@@ -13,20 +13,32 @@
 // once and is reached through `$`-import.
 
 & `c` @ nurl_fiber_spawn *u fn *u env → i
+
 & `c` @ nurl_fiber_spawn_joinable *u fn *u env → i
+
 & `c` @ nurl_fiber_join i fiber → v
+
 & `c` @ nurl_fiber_yield → v
+
 & `c` @ nurl_fiber_current → i
+
 & `c` @ nurl_fiber_worker_id → i
+
 & `c` @ nurl_fiber_park_with_mutex i mutex_h → v
+
 & `c` @ nurl_fiber_unpark i fiber_h → v
+
 & `c` @ nurl_runtime_init i workers → v
+
 & `c` @ nurl_runtime_run → v
+
 & `c` @ nurl_runtime_shutdown → v
 
 // Phase 5: I/O reactor + timer wheel.
 //   *_wait_read/write return 1 on ready, 0 on timeout, -1 on bad ctx.
 //   sleep_ms always returns 0.
 & `c` @ nurl_reactor_wait_read i fd i timeout_ms → i
+
 & `c` @ nurl_reactor_wait_write i fd i timeout_ms → i
+
 & `c` @ nurl_fiber_sleep_ms i ms → i

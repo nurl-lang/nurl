@@ -55,15 +55,15 @@ $ `stdlib/core/vec.nu`
     ^ w
 }
 
-@ wrap_push [A] *( Wrap A ) w A x → v {
+@ wrap_push [A] * ( Wrap A ) w A x → v {
     ( vec_push [A] . w items x )
 }
 
-@ wrap_len [A] *( Wrap A ) w → i {
+@ wrap_len [A] * ( Wrap A ) w → i {
     ^ ( vec_len [A] . w items )
 }
 
-@ wrap_free [A] *( Wrap A ) w → v {
+@ wrap_free [A] * ( Wrap A ) w → v {
     ( vec_free [A] . w items )
     ( nurl_free # s w )
 }

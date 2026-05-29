@@ -238,7 +238,7 @@ $ `stdlib/core/option.nu`
     : ~ i cur p
     ~ ! done {
         ? >= cur n {
-            = err T  = ek # TomlErr TomlUnterminated  = done T
+            = err T = ek # TomlErr TomlUnterminated = done T
         } {
             : i c ( nurl_str_get src cur )
             ? == c 34 {
@@ -247,15 +247,15 @@ $ `stdlib/core/option.nu`
             } {
                 ? == c 92 {
                     ? >= + cur 1 n {
-                        = err T  = ek # TomlErr TomlUnterminated  = done T
+                        = err T = ek # TomlErr TomlUnterminated = done T
                     } {
                         : i nc ( nurl_str_get src + cur 1 )
-                        ? == nc 110 { ( string_push_char out 10 )  = cur + cur 2 } {
-                            ? == nc 116 { ( string_push_char out 9 )  = cur + cur 2 } {
-                                ? == nc 114 { ( string_push_char out 13 )  = cur + cur 2 } {
-                                    ? == nc 92 { ( string_push_char out 92 )  = cur + cur 2 } {
-                                        ? == nc 34 { ( string_push_char out 34 )  = cur + cur 2 } {
-                                            = err T  = ek # TomlErr TomlBadEscape  = done T
+                        ? == nc 110 { ( string_push_char out 10 ) = cur + cur 2 } {
+                            ? == nc 116 { ( string_push_char out 9 ) = cur + cur 2 } {
+                                ? == nc 114 { ( string_push_char out 13 ) = cur + cur 2 } {
+                                    ? == nc 92 { ( string_push_char out 92 ) = cur + cur 2 } {
+                                        ? == nc 34 { ( string_push_char out 34 ) = cur + cur 2 } {
+                                            = err T = ek # TomlErr TomlBadEscape = done T
                                         }
                                     }
                                 }
@@ -298,18 +298,18 @@ $ `stdlib/core/option.nu`
     ? ( __t_is_alpha c ) {
         : i tlen ? <= + p 4 n 4 - n p
         ? & == tlen 4
-            & == ( nurl_str_get src p ) 116
-            & == ( nurl_str_get src + p 1 ) 114
-            & == ( nurl_str_get src + p 2 ) 117
-              == ( nurl_str_get src + p 3 ) 101 {
+        & == ( nurl_str_get src p ) 116
+        & == ( nurl_str_get src + p 1 ) 114
+        & == ( nurl_str_get src + p 2 ) 117
+        == ( nurl_str_get src + p 3 ) 101 {
             ^ ( __valresult_ok @ TomlValue { TBool T } + p 4 )
         } {}
         ? & >= - n p 5
-            & == ( nurl_str_get src p ) 102
-            & == ( nurl_str_get src + p 1 ) 97
-            & == ( nurl_str_get src + p 2 ) 108
-            & == ( nurl_str_get src + p 3 ) 115
-              == ( nurl_str_get src + p 4 ) 101 {
+        & == ( nurl_str_get src p ) 102
+        & == ( nurl_str_get src + p 1 ) 97
+        & == ( nurl_str_get src + p 2 ) 108
+        & == ( nurl_str_get src + p 3 ) 115
+        == ( nurl_str_get src + p 4 ) 101 {
             ^ ( __valresult_ok @ TomlValue { TBool F } + p 5 )
         } {}
         ^ ( __valresult_err # TomlErr TomlSyntax p )
@@ -358,7 +358,7 @@ $ `stdlib/core/option.nu`
     ~ ! done {
         = cur ( __t_skip_all src n cur )
         ? >= cur n {
-            = err T  = ek # TomlErr TomlUnterminated  = done T
+            = err T = ek # TomlErr TomlUnterminated = done T
         } {
             : i c ( nurl_str_get src cur )
             ? == c 93 {
@@ -372,10 +372,10 @@ $ `stdlib/core/option.nu`
                     : i nc ( __t_get src cur n )
                     ? == nc 44 { = cur + cur 1 } {
                         ? != nc 93 {
-                            = err T  = ek . vr err  = done T
+                            = err T = ek . vr err = done T
                         } {}
                     }
-                } { = err T  = ek . vr err  = done T }
+                } { = err T = ek . vr err = done T }
             }
         }
     }
@@ -415,7 +415,7 @@ $ `stdlib/core/option.nu`
                 = cur ( __t_skip_inline src n . kr pos )
                 ? != ( __t_get src cur n ) 61 {
                     ( string_free . kr key )
-                    = err T  = done T
+                    = err T = done T
                 } {
                     = cur + cur 1
                     : ValueResult vr ( __t_parse_value src n cur )
@@ -425,15 +425,15 @@ $ `stdlib/core/option.nu`
                         : i nc ( __t_get src cur n )
                         ? == nc 44 { = cur + cur 1 } {
                             ? != nc 125 {
-                                = err T  = done T
+                                = err T = done T
                             } {}
                         }
                     } {
                         ( string_free . kr key )
-                        = err T  = ek . vr err  = done T
+                        = err T = ek . vr err = done T
                     }
                 }
-            } { = err T  = ek . kr err  = done T }
+            } { = err T = ek . kr err = done T }
         }
     }
     ? err {
@@ -578,11 +578,11 @@ $ `stdlib/core/option.nu`
                         }
                     } {}
                     = done T
-                } { = err T  = done T }
+                } { = err T = done T }
             }
         } {
             ( string_free . kr key )
-            = err T  = done T
+            = err T = done T
         }
     }
     ? err {
@@ -604,7 +604,7 @@ $ `stdlib/core/option.nu`
 
 // ── Top-level driver ─────────────────────────────────────────────
 
-@ toml_parse s src → ! TomlValue TomlErr {
+@ toml_parse s src → !TomlValue TomlErr {
     : i n ( nurl_str_len src )
     : ~ ( Vec TomlEntry ) root ( vec_new [TomlEntry] )
     : ~ ( Vec TomlEntry ) current root
@@ -632,14 +632,14 @@ $ `stdlib/core/option.nu`
                     }
                     ( vec_free [String] . hr path )
                     = pos . hr pos
-                } { = err T  = ek # TomlErr TomlSyntax  = pos . hr pos }
+                } { = err T = ek # TomlErr TomlSyntax = pos . hr pos }
             } {
                 : KeyResult kr ( __t_parse_key src n pos )
                 ? . kr ok {
                     : i ap ( __t_skip_inline src n . kr pos )
                     ? != ( __t_get src ap n ) 61 {
                         ( string_free . kr key )
-                        = err T  = ek # TomlErr TomlSyntax  = pos ap
+                        = err T = ek # TomlErr TomlSyntax = pos ap
                     } {
                         : ValueResult vr ( __t_parse_value src n + ap 1 )
                         ? . vr ok {
@@ -647,23 +647,23 @@ $ `stdlib/core/option.nu`
                             = pos . vr pos
                         } {
                             ( string_free . kr key )
-                            = err T  = ek . vr err  = pos . vr pos
+                            = err T = ek . vr err = pos . vr pos
                         }
                     }
-                } { = err T  = ek . kr err  = pos . kr pos }
+                } { = err T = ek . kr err = pos . kr pos }
             }
         }
     }
     ? err {
         ( toml_value_free @ TomlValue { TTable root } )
-        ^ @ ! TomlValue TomlErr { F ek }
+        ^ @ !TomlValue TomlErr { F ek }
     } {}
-    ^ @ ! TomlValue TomlErr { T @ TomlValue { TTable root } }
+    ^ @ !TomlValue TomlErr { T @ TomlValue { TTable root } }
 }
 
 // ── Query helpers ────────────────────────────────────────────────
 
-@ toml_get TomlValue v s key → ? TomlValue {
+@ toml_get TomlValue v s key → ?TomlValue {
     ?? v {
         TTable entries → {
             : i n ( vec_len [TomlEntry] entries )
@@ -673,7 +673,7 @@ $ `stdlib/core/option.nu`
                 ?? ek {
                     T ev → {
                         ? ( nurl_str_eq ( string_data . ev key ) key ) {
-                            ^ @ ? TomlValue { T . ev value }
+                            ^ @ ?TomlValue { T . ev value }
                         } {}
                     }
                     F _ → {}
@@ -683,12 +683,12 @@ $ `stdlib/core/option.nu`
         }
         _ → {}
     }
-    ^ @ ? TomlValue { F # TomlValue TBool }
+    ^ @ ?TomlValue { F # TomlValue TBool }
 }
 
 // Walk a dotted path like "package.name". Returns the leaf value or
 // None at the first missing segment.
-@ toml_get_path TomlValue v s path → ? TomlValue {
+@ toml_get_path TomlValue v s path → ?TomlValue {
     : i n ( nurl_str_len path )
     : ~ i start 0
     : ~ TomlValue cur v
@@ -704,7 +704,7 @@ $ `stdlib/core/option.nu`
             ( string_push_char seg ( nurl_str_get path j ) )
             = j + j 1
         }
-        : ? TomlValue nx ( toml_get cur ( string_data seg ) )
+        : ?TomlValue nx ( toml_get cur ( string_data seg ) )
         ( string_free seg )
         ?? nx {
             T v2 → = cur v2
@@ -712,32 +712,32 @@ $ `stdlib/core/option.nu`
         }
         = start ? < end n + end 1 end
     }
-    ? ok { ^ @ ? TomlValue { T cur } } {}
-    ^ @ ? TomlValue { F # TomlValue TBool }
+    ? ok { ^ @ ?TomlValue { T cur } } {}
+    ^ @ ?TomlValue { F # TomlValue TBool }
 }
 
-@ toml_as_str TomlValue v → ? String {
+@ toml_as_str TomlValue v → ?String {
     ?? v {
-        TStr s → ^ @ ? String { T ( string_from ( string_data s ) ) }
+        TStr s → ^ @ ?String { T ( string_from ( string_data s ) ) }
         _ → {}
     }
-    ^ @ ? String { F ( string_new ) }
+    ^ @ ?String { F ( string_new ) }
 }
 
-@ toml_as_int TomlValue v → ? i {
+@ toml_as_int TomlValue v → ?i {
     ?? v {
-        TInt n → ^ @ ? i { T n }
+        TInt n → ^ @ ?i { T n }
         _ → {}
     }
-    ^ @ ? i { F 0 }
+    ^ @ ?i { F 0 }
 }
 
-@ toml_as_bool TomlValue v → ? b {
+@ toml_as_bool TomlValue v → ?b {
     ?? v {
-        TBool x → ^ @ ? b { T x }
+        TBool x → ^ @ ?b { T x }
         _ → {}
     }
-    ^ @ ? b { F F }
+    ^ @ ?b { F F }
 }
 
 // ── Serialization (TomlValue → TOML text) ────────────────────────

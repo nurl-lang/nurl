@@ -22,7 +22,7 @@ $ `stdlib/ext/http_full.nu`
             : Router r ( router_new )
             ( router_get r `/` \ HttpRequest req Params params → HttpResponse { ^ ( hello req params ) } )
             : ( @ HttpResponse HttpRequest ) base
-                \ HttpRequest req → HttpResponse { ^ ( router_handle r req ) }
+            \ HttpRequest req → HttpResponse { ^ ( router_handle r req ) }
 
             ( signal_install_shutdown listener )
 

@@ -130,7 +130,7 @@ $ `stdlib/std/thread.nu`
 }
 
 @ dos_state_try_acquire i state s ip → i {
-    ? == state 0 { ^ 1 } {}                                // no state → permit
+    ? == state 0 { ^ 1 } {}  // no state → permit
     : s sp # s state
     ( __dos_lock state )
     : i max_conc ( nurl_peek sp 0 )

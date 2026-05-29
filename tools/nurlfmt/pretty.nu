@@ -112,6 +112,14 @@ $ `tools/nurlfmt/tokenize.nu`
     : ~ s prev_text ``
     : ~ i prev_kind 0
     : ~ s prev_top_starter ``  // first-token text of the most recent depth-0 decl
+    // True between a depth-0 `&` (FFI lib tag) and its `@`. An FFI decl
+    // `& `lib` @ name params → ret` is ONE declaration, so its `@` must
+    // glue inline after the lib tag rather than being treated as a new
+    // top-level decl (which would force a blank line and split it).
+    : ~ b ffi_pending F
+    // True from an FFI decl's `@` until its `→`: the param-type region,
+    // where type-prefix sigils glue (so `*u` formats tight, not `* u`).
+    : ~ b in_ffi_params F
     : ~ b last_line_open T  // true → current line has no content yet
     // type-prefix tightness: when `*T` / `?T` / `[T` appears as a TYPE,
     // the type-prefix sigil glues to the following type identifier with
@@ -145,63 +153,71 @@ $ `tools/nurlfmt/tokenize.nu`
                     : ~ i pre_newlines 0
                     : ~ b pre_two_space F
 
+                    // The `@` of an FFI decl (`& `lib` @ name …`) is not a
+                    // new top-level declaration — glue it inline after the
+                    // lib tag with a single space, collapsing any newline
+                    // the source (or a prior bad format) put before it.
+                    : b ffi_at & & & == bd 0 == pd 0
+                    ( __pp_text_eq text `@` ) ffi_pending
                     ? ! emitted_any {
                         // First token in the file. Drop any leading
                         // blank lines but keep the token at column 0.
                         = pre_newlines 0
-                    } {
-                        // Top-level decl boundary forces a blank line
-                        // unless the preceding token was a comment that
-                        // belongs to this decl (its nl_before == 1 path
-                        // already keeps the comment glued to the next
-                        // token at the same indent), OR the boundary is
-                        // between two consecutive `$` imports (which
-                        // stay packed by convention).
-                        // Grammar v2.0: `pub` glues to its decl-starter.
-                        // When the previous top-level token was `pub`,
-                        // the following `@`/`:`/`&`/`%`/`$` is part of
-                        // the same logical decl, so we suppress the
-                        // top-boundary blank line that would normally
-                        // appear here. The user's original nl_before is
-                        // respected (typically 0 → single space).
-                        : b at_top_boundary & == bd 0
-                        & == pd 0
-                        & ( __pp_starts_top_decl text )
-                        & ! prev_was_pub
-                        ! == prev_kind TT_FMT_COMMENT
-                        // A "compact chain" is two consecutive top-
-                        // level decls of the same one-byte starter
-                        // (`$` imports, `&` ffi decls, repeated `:`
-                        // consts/struct/enum decls). Collapse the
-                        // mandatory blank line for these — the
-                        // resulting block is the dense token-table
-                        // style the codebase already uses.
-                        : b compact_chain
-                        & ( __pp_text_eq text prev_top_starter )
-                        | ( __pp_text_eq text `$` )
-                        | ( __pp_text_eq text `&` )
-                        ( __pp_text_eq text `:` )
-                        ? & at_top_boundary ! compact_chain
-                        {
-                            = pre_newlines 2
+                    } { ? ffi_at {
+                            = pre_newlines 0
                         } {
-                            // Otherwise respect the user's
-                            // newline-count, with two specialisations:
-                            //   * the empty-pair case keeps both
-                            //     tokens on one line with no inner
-                            //     space,
-                            //   * a comment that follows a same-line
-                            //     token gets two leading spaces.
-                            ? & == nl 0 ( __pp_is_empty_pair prev_text text ) {
-                                = pre_newlines 0
+                            // Top-level decl boundary forces a blank line
+                            // unless the preceding token was a comment that
+                            // belongs to this decl (its nl_before == 1 path
+                            // already keeps the comment glued to the next
+                            // token at the same indent), OR the boundary is
+                            // between two consecutive `$` imports (which
+                            // stay packed by convention).
+                            // Grammar v2.0: `pub` glues to its decl-starter.
+                            // When the previous top-level token was `pub`,
+                            // the following `@`/`:`/`&`/`%`/`$` is part of
+                            // the same logical decl, so we suppress the
+                            // top-boundary blank line that would normally
+                            // appear here. The user's original nl_before is
+                            // respected (typically 0 → single space).
+                            : b at_top_boundary & == bd 0
+                            & == pd 0
+                            & ( __pp_starts_top_decl text )
+                            & ! prev_was_pub
+                            ! == prev_kind TT_FMT_COMMENT
+                            // A "compact chain" is two consecutive top-
+                            // level decls of the same one-byte starter
+                            // (`$` imports, `&` ffi decls, repeated `:`
+                            // consts/struct/enum decls). Collapse the
+                            // mandatory blank line for these — the
+                            // resulting block is the dense token-table
+                            // style the codebase already uses.
+                            : b compact_chain
+                            & ( __pp_text_eq text prev_top_starter )
+                            | ( __pp_text_eq text `$` )
+                            | ( __pp_text_eq text `&` )
+                            ( __pp_text_eq text `:` )
+                            ? & at_top_boundary ! compact_chain
+                            {
+                                = pre_newlines 2
                             } {
-                                = pre_newlines nl
-                                ? & == nl 0 == kind TT_FMT_COMMENT {
-                                    = pre_two_space T
-                                } {}
+                                // Otherwise respect the user's
+                                // newline-count, with two specialisations:
+                                //   * the empty-pair case keeps both
+                                //     tokens on one line with no inner
+                                //     space,
+                                //   * a comment that follows a same-line
+                                //     token gets two leading spaces.
+                                ? & == nl 0 ( __pp_is_empty_pair prev_text text ) {
+                                    = pre_newlines 0
+                                } {
+                                    = pre_newlines nl
+                                    ? & == nl 0 == kind TT_FMT_COMMENT {
+                                        = pre_two_space T
+                                    } {}
+                                }
                             }
-                        }
-                    }
+                        } }
 
                     // Decide tight-with-previous (no space at all).
                     : ~ b tight_with_prev F
@@ -306,7 +322,12 @@ $ `tools/nurlfmt/tokenize.nu`
                     | ( __pp_text_eq prev_text `Z` )
                     | ( __pp_text_eq prev_text `@` )
                     ( __pp_text_eq prev_text `(@` )
-                    ? & is_sigil | prev_is_trigger prev_is_type_prefix {
+                    // FFI parameter positions (`& `lib` @ name TYPE… → ret`)
+                    // are type context too, but the type that starts a
+                    // param follows the fn-name / previous param-name (an
+                    // IDENT, not a trigger). `in_ffi_params` marks that
+                    // region so `*u` / `?T` / `!T E` glue there as well.
+                    ? & is_sigil | | prev_is_trigger prev_is_type_prefix in_ffi_params {
                         = prev_is_type_prefix T
                     } {
                         = prev_is_type_prefix F
@@ -317,7 +338,17 @@ $ `tools/nurlfmt/tokenize.nu`
                     // next boundary can identify `$`-only chains.
                     ? & ( __pp_starts_top_decl text ) == bd 0 {
                         = prev_top_starter text
+                        // Arm FFI-glue only for `&`; any other depth-0
+                        // decl-starter (incl. the FFI's own `@`, which
+                        // consumes the flag here) disarms it.
+                        = ffi_pending ( __pp_text_eq text `&` )
                     } {}
+
+                    // FFI param-type region: opens at the FFI `@`, closes
+                    // at the `→` that introduces the return type (which the
+                    // `→` trigger already handles).
+                    ? ffi_at { = in_ffi_params T } {}
+                    ? & in_ffi_params ( __pp_text_eq text `→` ) { = in_ffi_params F } {}
 
                     // Track whether the just-emitted token is `pub`
                     // at depth 0 so the following decl-starter knows

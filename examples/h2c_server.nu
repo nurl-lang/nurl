@@ -30,8 +30,8 @@ $ `stdlib/ext/http2_server.nu`
 @ serve_one TcpConn conn → v {
     ( tcp_set_timeout conn 1000 )
     : ( @ HttpResponse HttpRequest ) h
-        \ HttpRequest req → HttpResponse { ^ ( h2c_handler req ) }
-    : ! v H2ConnErr sr ( http2_serve conn h )
+    \ HttpRequest req → HttpResponse { ^ ( h2c_handler req ) }
+    : !v H2ConnErr sr ( http2_serve conn h )
     ?? sr { T _ → {} F _ → {} }
     ( tcp_close_conn conn )
 }
@@ -52,7 +52,7 @@ $ `stdlib/ext/http2_server.nu`
             F e → {
                 : s nm ( net_err_name e )
                 ? | != 0 ( nurl_str_eq nm `NetClosed` )
-                  != 0 ( nurl_str_eq nm `NetAccept` ) {
+                != 0 ( nurl_str_eq nm `NetAccept` ) {
                     = done T
                 } {
                     ( nurl_print `accept err: ` )

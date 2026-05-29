@@ -264,7 +264,7 @@ $ `stdlib/ext/http_response.nu`
 // sub-object. Returns the handler's tool-result envelope verbatim.
 // Errors (unknown tool) returned as the spec-defined tool error
 // envelope ({content: [...], isError: true}).
-@ __mcp_dispatch_tools_call McpRegistry r ?Json params → Json {
+@ __mcp_dispatch_tools_call McpRegistry r ? Json params → Json {
     : ~ s tool_name ``
     : ~ Json args ( json_null )
     ?? params {
@@ -326,7 +326,7 @@ $ `stdlib/ext/http_response.nu`
 // prompts/get: invoke the prompt handler with `arguments`. Handler
 // returns the spec-shaped {description, messages} object (or just
 // messages; we wrap if missing).
-@ __mcp_dispatch_prompts_get McpRegistry r ?Json params → Json {
+@ __mcp_dispatch_prompts_get McpRegistry r ? Json params → Json {
     : ~ s pname ``
     : ~ Json args ( json_null )
     ?? params {
@@ -389,7 +389,7 @@ $ `stdlib/ext/http_response.nu`
 // resources/read: lookup by uri, invoke handler. Spec response shape
 // is {contents: [{uri, mimeType, text|blob}]}. Handler returns the
 // inner content object; we wrap it.
-@ __mcp_dispatch_resources_read McpRegistry r ?Json params → Json {
+@ __mcp_dispatch_resources_read McpRegistry r ? Json params → Json {
     : ~ s uri ``
     ?? params {
         T p → {
@@ -444,7 +444,7 @@ $ `stdlib/ext/http_response.nu`
 // Unknown methods OR dispatch failures: returns a Json object with a
 // `__error__` field — caller turns that into a JSON-RPC error response
 // (method not found / internal error).
-@ mcp_registry_dispatch McpRegistry r s method ?Json params → Json {
+@ mcp_registry_dispatch McpRegistry r s method ? Json params → Json {
     ? != 0 ( nurl_str_eq method `initialize` ) {
         ^ ( __mcp_dispatch_initialize r )
     } {}
@@ -500,9 +500,9 @@ $ `stdlib/ext/http_response.nu`
 
 @ mcp_serve_err_name McpServeErr e → s {
     ^ ?? e {
-        McpServeReadIo  → `McpServeReadIo`
+        McpServeReadIo → `McpServeReadIo`
         McpServeWriteIo → `McpServeWriteIo`
-        McpServeOther   → `McpServeOther`
+        McpServeOther → `McpServeOther`
     }
 }
 
@@ -575,12 +575,12 @@ $ `stdlib/ext/http_response.nu`
     }
 }
 
-@ mcp_serve_stdio McpRegistry r → ! v McpServeErr {
+@ mcp_serve_stdio McpRegistry r → !v McpServeErr {
     : ~ b done F
     ~ ! done {
         = done ( __mcp_serve_stdio_once r )
     }
-    ^ @ ! v McpServeErr { T 0 }
+    ^ @ !v McpServeErr { T 0 }
 }
 
 // ── HTTP transport adapter ───────────────────────────────────────────
@@ -602,7 +602,7 @@ $ `stdlib/ext/http_response.nu`
 //   : HttpServer s ( server_new listener h )
 //   ( server_run s )
 
-@ mcp_registry_envelope McpRegistry r Json req → ? Json {
+@ mcp_registry_envelope McpRegistry r Json req → ?Json {
     : String method ( __mcp_extract_method req )
     : b had_id ( __mcp_has_id req )
     : Json id ( __mcp_extract_id_or_null req )
@@ -611,13 +611,13 @@ $ `stdlib/ext/http_response.nu`
     ( string_free method )
     ? had_id {
         : Json resp ( __mcp_envelope_response result id )
-        ^ @ ? Json { T resp }
+        ^ @ ?Json { T resp }
     } {
         // Notification — caller (mcp_http_handler) maps this to a
         // 202 Accepted with no body.
         ( json_free result )
         ( json_free id )
-        ^ @ ? Json { F ( json_null ) }
+        ^ @ ?Json { F ( json_null ) }
     }
 }
 
@@ -655,7 +655,7 @@ $ `stdlib/ext/http_response.nu`
                         : ~ i k 0
                         ~ & match < k tlen {
                             ? != ( nurl_str_get avs + 7 k )
-                                  ( nurl_str_get expected_token k )
+                            ( nurl_str_get expected_token k )
                             { = match F } {}
                             = k + k 1
                         }

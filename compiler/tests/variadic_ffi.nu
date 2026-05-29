@@ -27,7 +27,7 @@
     : i32 a 42
     : u32 b 12345
     : f32 c # f32 3.5
-    : i d 9000000000   // plain `i` = i64
+    : i d 9000000000  // plain `i` = i64
     : s e `hello`
 
     ( printf `i32=%d u32=%u f32=%g i64=%lld s=%s\n` a b c d e )

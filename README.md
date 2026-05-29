@@ -120,7 +120,7 @@ CLI (`code` / `cursor` / `windsurf`, whichever is on PATH). Flags:
 **Manual install from a local checkout:**
 1. `./build.sh` then `./tools/nurl-lsp/build.sh`
 2. `Ctrl+Shift+P` → "Extensions: Install from VSIX..."
-3. Select `tooling/vscode-nurl/nurl-0.4.4.vsix`
+3. Select `tooling/vscode-nurl/nurl-0.5.0.vsix`
 
 The browser-based playground (see below) ships a Monaco port of the same
 tokenizer — no install required.

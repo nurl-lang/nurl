@@ -190,6 +190,18 @@ const char* nurl_read_line(void) {
 
 long long nurl_stdin_eof(void) { return g_stdin_eof_flag ? 1 : 0; }
 
+/* Buffered binary read from stdin that shares nurl_read_line's FILE*
+ * buffer. Framed stdio protocols (LSP / DAP / JSON-RPC) read the
+ * Content-Length header line with nurl_read_line (fgetc) and then the
+ * opaque body with this — both go through stdin's stdio buffer, so the
+ * header read can't silently swallow body bytes that a raw read(2) on
+ * the descriptor would then miss. Returns the number of bytes read
+ * (0 at EOF). */
+long long nurl_stdin_read(void *buf, long long n) {
+    if (n <= 0) return 0;
+    return (long long)fread(buf, 1, (size_t)n, stdin);
+}
+
 void nurl_flush_stdout(void) { fflush(stdout); }
 void nurl_flush_stderr(void) { fflush(stderr); }
 

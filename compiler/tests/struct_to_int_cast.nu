@@ -12,18 +12,18 @@
 //   -3
 //   123
 
-: Point { i x  i y }
+: Point { i x i y }
 : Tiny { i8 t }
-: Handle { *i p }
+: Handle { * i p }
 
 @ main → v {
     // field 0 is a plain i64 — passes straight through
     : Point pt @ Point { 42 99 }
-    ( nurl_print_int # i pt )          // 42
+    ( nurl_print_int # i pt )  // 42
 
     // field 0 is i8 — sign-extends through the cast
     : Tiny tn @ Tiny { # i8 -3 }
-    ( nurl_print_int # i tn )          // -3
+    ( nurl_print_int # i tn )  // -3
 
     // field 0 is a pointer — round-trip struct → i64 → pointer
     : *i cell # *i ( malloc Z i )
@@ -31,5 +31,5 @@
     : Handle h @ Handle { cell }
     : i raw # i h
     : *i back # *i raw
-    ( nurl_print_int . back 0 )        // 123
+    ( nurl_print_int . back 0 )  // 123
 }

@@ -5,6 +5,7 @@
     { "include": "#comments" },
     { "include": "#strings" },
     { "include": "#constants" },
+    { "include": "#keywords" },
     { "include": "#function-def" },
     { "include": "#function-call" },
     { "include": "#declarations" },
@@ -26,6 +27,18 @@
         {
           "match": "\\\\[nrt\\\\]",
           "name": "constant.character.escape.nurl"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "match": "(?<![A-Za-z0-9_])pub(?![A-Za-z0-9_])",
+          "name": "storage.modifier.visibility.nurl"
+        },
+        {
+          "match": "(?<![A-Za-z0-9_])(inout|sink|in)(?![A-Za-z0-9_])",
+          "name": "storage.modifier.param.nurl"
         }
       ]
     },
@@ -130,6 +143,14 @@
           "name": "keyword.operator.arrow.nurl"
         },
         {
+          "match": "\\.\\.\\.",
+          "name": "keyword.operator.variadic.nurl"
+        },
+        {
+          "match": "\\^\\^",
+          "name": "keyword.operator.xor.nurl"
+        },
+        {
           "match": "\\^",
           "name": "keyword.control.return.nurl"
         },
@@ -168,6 +189,10 @@
         {
           "match": "[+\\-*/%]",
           "name": "keyword.operator.arithmetic.nurl"
+        },
+        {
+          "match": "(&&|\\|\\|)",
+          "name": "keyword.operator.logical.nurl"
         },
         {
           "match": "[&|!]",

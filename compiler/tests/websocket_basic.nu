@@ -57,7 +57,7 @@ $ `stdlib/ext/websocket.nu`
 @ make_request_for_upgrade → HttpRequest {
     : HttpRequest r ( request_new )
     ( string_free . r method ) = . r method ( string_from `GET` )
-    ( string_free . r path )   = . r path   ( string_from `/ws` )
+    ( string_free . r path ) = . r path ( string_from `/ws` )
     ( string_free . r version ) = . r version ( string_from `HTTP/1.1` )
     ( vec_push [Header] . r headers ( header_new `Host` `example.com` ) )
     ( vec_push [Header] . r headers ( header_new `Upgrade` `websocket` ) )
@@ -320,7 +320,7 @@ $ `stdlib/ext/websocket.nu`
     ( vec_push [u] cr # u 98 ) ( vec_push [u] cr # u 121 ) ( vec_push [u] cr # u 101 )
     : WsCloseInfo ci4 ( ws_parse_close cr )
     ( print_bool `code_reason` & == . ci4 code 1001
-                                  != 0 ( nurl_str_eq ( string_data . ci4 reason ) `bye` ) )
+    != 0 ( nurl_str_eq ( string_data . ci4 reason ) `bye` ) )
     ( ws_close_info_free ci4 )
     ( vec_free [u] cr )
 }

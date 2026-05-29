@@ -13,7 +13,7 @@
 
 $ `stdlib/ext/serde.nu`
 
-: Point { i x  i y }
+: Point { i x i y }
 
 // The SAME JsonSerialize impl JSON uses — MsgPack reuses it.
 % JsonSerialize Point {
@@ -61,7 +61,7 @@ $ `stdlib/ext/serde.nu`
     // directly to `??` with a wide `Vec` payload tickles a known nurlc
     // generic-monomorphize IR bug (see nurl_lang_gotchas memory). The
     // scrutinee binding works around it.
-    : ! ( Vec u ) MsgpackErr _enc_res ( msgpack_encode j )
+    : !( Vec u ) MsgpackErr _enc_res ( msgpack_encode j )
     ?? _enc_res {
         T bytes → {
             ( nurl_print `encoded:  ` )
@@ -94,7 +94,7 @@ $ `stdlib/ext/serde.nu`
     // A scalar needs no struct plumbing — from_msgpack_i decodes
     // straight to an i.
     : Json sj ( json_int 1729 )
-    : ! ( Vec u ) MsgpackErr _enc_sj ( msgpack_encode sj )
+    : !( Vec u ) MsgpackErr _enc_sj ( msgpack_encode sj )
     ?? _enc_sj {
         T sb → {
             : !i MsgpackErr _dec_sj ( from_msgpack_i sb )

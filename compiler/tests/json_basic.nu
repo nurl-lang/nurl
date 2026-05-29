@@ -440,7 +440,7 @@ $ `stdlib/ext/json.nu`
     //     to the JSON-spec \uNNNN form, not a raw byte.
     : String raw_ctrl ( string_with_cap 4 )
     ( string_push_char raw_ctrl 111 )  // 'o'
-    ( string_push_char raw_ctrl 1 )    // 0x01
+    ( string_push_char raw_ctrl 1 )  // 0x01
     ( string_push_char raw_ctrl 107 )  // 'k'
     : Json jctrl @ Json { JStr raw_ctrl }
     : String serialized ( json_stringify jctrl )

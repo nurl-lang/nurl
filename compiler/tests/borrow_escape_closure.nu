@@ -13,7 +13,7 @@
 //
 // Two positive cases (both warn) + two negative controls (no warning).
 
-: Counter { i n  i max }
+: Counter { i n i max }
 
 // CASE A — returning a NAMED closure binding that captures byref.
 @ make_counter_bind → ( @ v ) {

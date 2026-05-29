@@ -66,9 +66,11 @@ $ `stdlib/core/mem.nu`
 //   nurl_atomic_i64_inc(p)       → old value (fetch-add 1)
 //   nurl_atomic_i64_dec_fetch(p) → NEW value (sub-fetch 1)
 //   nurl_atomic_i64_load(p)      → current value (acquire-load)
-& `c` @ nurl_atomic_i64_inc       *u p → i
+& `c` @ nurl_atomic_i64_inc *u p → i
+
 & `c` @ nurl_atomic_i64_dec_fetch *u p → i
-& `c` @ nurl_atomic_i64_load      *u p → i
+
+& `c` @ nurl_atomic_i64_load *u p → i
 
 : ArcImpl [T] {
     i count

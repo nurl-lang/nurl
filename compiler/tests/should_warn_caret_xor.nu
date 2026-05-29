@@ -17,20 +17,20 @@
 @ xor_confused_in_binding → i {
     : i a 5
     : i b 3
-    : i x ^ a b     // ← warns: `^` returns `a`, `b` is dead
+    : i x ^ a b  // ← warns: `^` returns `a`, `b` is dead
     ^ x
 }
 
 @ xor_confused_at_stmt i a i b → i {
-    ^ a b           // ← warns: `^` returns `a`, `b` is dead
+    ^ a b  // ← warns: `^` returns `a`, `b` is dead
 }
 
 @ xor_confused_with_lit i a → i {
-    ^ a 42          // ← warns: `^` returns `a`, the `42` is dead
+    ^ a 42  // ← warns: `^` returns `a`, the `42` is dead
 }
 
 @ fine i a i b → i {
-    ^ + a b         // OK — `+ a b` is one expression, `^` returns it
+    ^ + a b  // OK — `+ a b` is one expression, `^` returns it
 }
 
 @ main → i {

@@ -126,9 +126,9 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
         ^ buf
     } {}
     : *u m ( mmap # *u 0 sz
-              # i32 ( posix_const `PROT_READ` )
-              # i32 ( posix_const `MAP_PRIVATE` )
-              fd 0 )
+    # i32 ( posix_const `PROT_READ` )
+    # i32 ( posix_const `MAP_PRIVATE` )
+    fd 0 )
     : i _c ( close # i fd )
     // MAP_FAILED = (void*)-1 on every supported target; check via ptrtoint.
     ? == # i m -1 { ^ # s 0 } {}
@@ -475,7 +475,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 
 // Runtime filesystem helpers (resolved from runtime.o; libc is always
 // linked). nurl_path_type: 0 missing, 1 file, 2 dir, 3 symlink, 4 other.
-& `c` @ nurl_path_type       s path        → i
+& `c` @ nurl_path_type s path → i
 
 // ── nurl_file_* via libc stdio ─────────────────────────────────────
 // fopen / fclose / fputs / fwrite / fputc / fread / feof come from
@@ -488,30 +488,30 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ^ # *v h
 }
 
-@ nurl_file_close *v h → v {
+@ nurl_file_close * v h → v {
     ? != 0 # i h { : i32 _ ( fclose # s h ) } {}
 }
 
 // fputs the NUL-terminated `str` to `h`. NULL-safe on both args.
-@ nurl_file_write *v h s str → v {
+@ nurl_file_write * v h s str → v {
     ? & != 0 # i h != 0 # i str {
         : i32 _ ( fputs str # s h )
     } {}
 }
 
 // fwrite `len` bytes from `p` to `h`. NULL-safe; len<=0 is a no-op.
-@ nurl_file_write_range *v h s p i len → v {
+@ nurl_file_write_range * v h s p i len → v {
     ? & & != 0 # i h != 0 # i p > len 0 {
         : i _ ( fwrite p 1 len # s h )
     } {}
 }
 
 // fputc one byte. NULL-safe.
-@ nurl_file_write_byte *v h i c → v {
+@ nurl_file_write_byte * v h i c → v {
     ? != 0 # i h { : i32 _ ( fputc # i32 c # s h ) } {}
 }
 
-@ nurl_file_eof *v h → i {
+@ nurl_file_eof * v h → i {
     ? == # i h 0 { ^ 1 } {}
     ^ ? != 0 # i ( feof # s h ) 1 0
 }
@@ -525,9 +525,11 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 // uses F_OK (0) for "does this path exist at all". `mkdir` mode is
 // 0755 (decimal 493).
 
-& `c` @ remove s path                      → i32
-& `c` @ mkdir  s path i32 mode             → i32
-& `c` @ rmdir  s path                      → i32
+& `c` @ remove s path → i32
+
+& `c` @ mkdir s path i32 mode → i32
+
+& `c` @ rmdir s path → i32
 
 @ nurl_file_exists s path → i {
     ? == # i path 0 { ^ 0 } {}

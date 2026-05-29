@@ -8,6 +8,6 @@
 $ `compiler/tests/should_fail_pub_type_helper.nu`
 
 @ main → i {
-    : PrivColor c # PrivColor Black   // FAIL — private enum variant
+    : PrivColor c # PrivColor Black  // FAIL — private enum variant
     ^ # i c
 }

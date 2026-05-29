@@ -109,7 +109,7 @@ $ `stdlib/ext/manifest.nu`
             = rc 1
         }
         T m → {
-            ( nurl_print `package:      ` ) ( nurl_print ( string_data . m name ) )    ( nurl_print `\n` )
+            ( nurl_print `package:      ` ) ( nurl_print ( string_data . m name ) ) ( nurl_print `\n` )
             ( nurl_print `version:      ` ) ( nurl_print ( string_data . m version ) ) ( nurl_print `\n` )
             ? > ( string_len . m description ) 0 {
                 ( nurl_print `description:  ` ) ( nurl_print ( string_data . m description ) ) ( nurl_print `\n` )
@@ -299,7 +299,7 @@ $ `stdlib/ext/manifest.nu`
                         : ~ i fk 0
                         ~ < fk fn {
                             : ?String fpk ( vec_get [String] lines fk )
-                            ?? fpk { T s → ( string_free s )  F _ → {} }
+                            ?? fpk { T s → ( string_free s ) F _ → {} }
                             = fk + fk 1
                         }
                         ( vec_free [String] lines )
@@ -363,7 +363,7 @@ $ `stdlib/ext/manifest.nu`
     : ~ i fk 0
     ~ < fk fn {
         : ?String fpk ( vec_get [String] lines fk )
-        ?? fpk { T s → ( string_free s )  F _ → {} }
+        ?? fpk { T s → ( string_free s ) F _ → {} }
         = fk + fk 1
     }
     ( vec_free [String] lines )
@@ -373,7 +373,7 @@ $ `stdlib/ext/manifest.nu`
     : ~ i jfk 0
     ~ < jfk jfn {
         : ?String fpk ( vec_get [String] out_lines jfk )
-        ?? fpk { T s → ( string_free s )  F _ → {} }
+        ?? fpk { T s → ( string_free s ) F _ → {} }
         = jfk + jfk 1
     }
     ( vec_free [String] out_lines )
@@ -450,7 +450,7 @@ $ `stdlib/ext/manifest.nu`
     : ~ i fk 0
     ~ < fk nlines {
         : ?String fpk ( vec_get [String] lines fk )
-        ?? fpk { T s → ( string_free s )  F _ → {} }
+        ?? fpk { T s → ( string_free s ) F _ → {} }
         = fk + fk 1
     }
     ( vec_free [String] lines )
@@ -463,7 +463,7 @@ $ `stdlib/ext/manifest.nu`
         : ~ i jfk 0
         ~ < jfk jfn {
             : ?String fpk ( vec_get [String] out_lines jfk )
-            ?? fpk { T s → ( string_free s )  F _ → {} }
+            ?? fpk { T s → ( string_free s ) F _ → {} }
             = jfk + jfk 1
         }
         ( vec_free [String] out_lines )
@@ -475,7 +475,7 @@ $ `stdlib/ext/manifest.nu`
     : ~ i jfk 0
     ~ < jfk jfn {
         : ?String fpk ( vec_get [String] out_lines jfk )
-        ?? fpk { T s → ( string_free s )  F _ → {} }
+        ?? fpk { T s → ( string_free s ) F _ → {} }
         = jfk + jfk 1
     }
     ( vec_free [String] out_lines )
@@ -746,7 +746,7 @@ $ `stdlib/ext/manifest.nu`
                 : ~ i fk 0
                 ~ < fk fn {
                     : ?String pk ( vec_get [String] entries fk )
-                    ?? pk { T s → ( string_free s )  F _ → {} }
+                    ?? pk { T s → ( string_free s ) F _ → {} }
                     = fk + fk 1
                 }
                 ( vec_free [String] entries )
@@ -811,7 +811,7 @@ $ `stdlib/ext/manifest.nu`
     : ~ i nfree 0
     ~ < nfree nn {
         : ?String pk ( vec_get [String] names nfree )
-        ?? pk { T s → ( string_free s )  F _ → {} }
+        ?? pk { T s → ( string_free s ) F _ → {} }
         = nfree + nfree 1
     }
     ( vec_free [String] names )
@@ -860,7 +860,7 @@ $ `stdlib/ext/manifest.nu`
         ( nurl_eprintln `nurlpkg: failed to read nurl.lock` )
         ^ 1
     } {}
-    : ! TomlValue TomlErr tr ( toml_parse lock_src )
+    : !TomlValue TomlErr tr ( toml_parse lock_src )
     : ~ i rc 0
     ?? tr {
         F _ → {
@@ -943,7 +943,7 @@ $ `stdlib/ext/manifest.nu`
                         : ~ i fk 0
                         ~ < fk fn {
                             : ?String pk ( vec_get [String] entries fk )
-                            ?? pk { T s → ( string_free s )  F _ → {} }
+                            ?? pk { T s → ( string_free s ) F _ → {} }
                             = fk + fk 1
                         }
                         ( vec_free [String] entries )
@@ -994,14 +994,14 @@ $ `stdlib/ext/manifest.nu`
             : ~ i fk 0
             ~ < fk ne {
                 : ?String pk ( vec_get [String] expected fk )
-                ?? pk { T s → ( string_free s )  F _ → {} }
+                ?? pk { T s → ( string_free s ) F _ → {} }
                 = fk + fk 1
             }
             ( vec_free [String] expected )
             : ~ i fa 0
             ~ < fa na {
                 : ?String pk ( vec_get [String] actual fa )
-                ?? pk { T s → ( string_free s )  F _ → {} }
+                ?? pk { T s → ( string_free s ) F _ → {} }
                 = fa + fa 1
             }
             ( vec_free [String] actual )
@@ -1122,7 +1122,7 @@ $ `stdlib/ext/manifest.nu`
                 : ~ i fk 0
                 ~ < fk nq {
                     : ?String pkj ( vec_get [String] next_queue fk )
-                    ?? pkj { T pk → ( string_free pk )  F _ → {} }
+                    ?? pkj { T pk → ( string_free pk ) F _ → {} }
                     = fk + fk 1
                 }
                 ( vec_free [String] next_queue )
@@ -1148,7 +1148,7 @@ $ `stdlib/ext/manifest.nu`
             : ~ i si 0
             ~ < si sn {
                 : ?String pk ( vec_get [String] seen si )
-                ?? pk { T s → ( string_free s )  F _ → {} }
+                ?? pk { T s → ( string_free s ) F _ → {} }
                 = si + si 1
             }
             ( vec_free [String] seen )

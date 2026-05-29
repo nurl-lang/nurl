@@ -35,22 +35,22 @@ $ `stdlib/ext/http2_conn.nu`
 // Drive a single HTTP/2 session. Returns Ok on clean shutdown, Err on
 // protocol or I/O failure. Caller still owns the TcpConn — close it
 // after this returns.
-@ http2_serve TcpConn conn ( @ HttpResponse HttpRequest ) handler → ! v H2ConnErr {
-    : ! H2Connection H2ConnErr cr ( h2_conn_new conn )
+@ http2_serve TcpConn conn ( @ HttpResponse HttpRequest ) handler → !v H2ConnErr {
+    : !H2Connection H2ConnErr cr ( h2_conn_new conn )
     ?? cr {
         T h2c → {
-            : ! v H2ConnErr sr ( h2_conn_serve h2c handler )
+            : !v H2ConnErr sr ( h2_conn_serve h2c handler )
             ( h2_conn_free h2c )
             ^ sr
         }
-        F e → { ^ @ ! v H2ConnErr { F e } }
+        F e → { ^ @ !v H2ConnErr { F e } }
     }
 }
 
 // Accept one connection, check ALPN, dispatch h2 OR h1 keep-alive.
 // Mirrors `server_run_once`'s shape so it slots into the same loop.
-@ server_run_once_h2_capable HttpServer s → ! v NetErr {
-    : ! TcpConn NetErr ar ( tcp_accept . s listener )
+@ server_run_once_h2_capable HttpServer s → !v NetErr {
+    : !TcpConn NetErr ar ( tcp_accept . s listener )
     ?? ar {
         T conn → {
             : i ito . s idle_timeout_ms
@@ -59,39 +59,39 @@ $ `stdlib/ext/http2_conn.nu`
             : b is_h2 != 0 ( nurl_str_eq ( string_data proto ) `h2` )
             ( string_free proto )
             ? is_h2 {
-                : ! v H2ConnErr hr ( http2_serve conn . s handler )
+                : !v H2ConnErr hr ( http2_serve conn . s handler )
                 // Map H2ConnErr → NetErr for the listener-loop's sake.
                 // h2 errors at the per-connection level shouldn't bring
                 // the whole listener down; log and move on.
                 ?? hr {
                     T _ → {}
-                    F _ → {}   // already GOAWAY'd from inside h2_conn_serve
+                    F _ → {}  // already GOAWAY'd from inside h2_conn_serve
                 }
             } {
                 ( __serve_keepalive_loop s conn )
             }
             ( tcp_close_conn conn )
-            ^ @ ! v NetErr { T 0 }
+            ^ @ !v NetErr { T 0 }
         }
-        F e → { ^ @ ! v NetErr { F e } }
+        F e → { ^ @ !v NetErr { F e } }
     }
 }
 
 // Accept loop using the ALPN-dispatching per-conn handler. Same exit
 // semantics as `server_run` (NetClosed / NetAccept → clean shutdown,
 // anything else → propagate).
-@ server_run_h2_capable HttpServer s → ! v NetErr {
+@ server_run_h2_capable HttpServer s → !v NetErr {
     : ~ b done F
     : ~ b had_err F
     : ~ NetErr last_err NetClosed
     ~ ! done {
-        : ! v NetErr r ( server_run_once_h2_capable s )
+        : !v NetErr r ( server_run_once_h2_capable s )
         ?? r {
             T _ → {}
             F e → {
                 : s nm ( net_err_name e )
                 ? | != 0 ( nurl_str_eq nm `NetClosed` )
-                  != 0 ( nurl_str_eq nm `NetAccept` ) {
+                != 0 ( nurl_str_eq nm `NetAccept` ) {
                     = done T
                 } {
                     = last_err e
@@ -101,6 +101,6 @@ $ `stdlib/ext/http2_conn.nu`
             }
         }
     }
-    ? had_err { ^ @ ! v NetErr { F last_err } } {}
-    ^ @ ! v NetErr { T 0 }
+    ? had_err { ^ @ !v NetErr { F last_err } } {}
+    ^ @ !v NetErr { T 0 }
 }

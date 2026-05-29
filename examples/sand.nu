@@ -1,41 +1,23 @@
 // sand.nu — Interaktiivinen Falling Sand -simulaatio
 
-& `libc`
+& `libc` @ rand → i
 
-@ rand → i
+& `canvas` @ canvas_open i w i h → *i
 
-& `canvas`
+& `canvas` @ canvas_present → v
 
-@ canvas_open i w i h → *i
+& `canvas` @ canvas_sleep i ms → v
 
-& `canvas`
+& `canvas` @ canvas_should_close → i
 
-@ canvas_present → v
-
-& `canvas`
-
-@ canvas_sleep i ms → v
-
-& `canvas`
-
-@ canvas_should_close → i
-
-& `canvas`
-
-@ canvas_close → v
+& `canvas` @ canvas_close → v
 
 // Hiirifunktiot (FFI C-kirjastosta tai WASM shimistä)
-& `canvas`
+& `canvas` @ canvas_mouse_x → i
 
-@ canvas_mouse_x → i
+& `canvas` @ canvas_mouse_y → i
 
-& `canvas`
-
-@ canvas_mouse_y → i
-
-& `canvas`
-
-@ canvas_mouse_btn → i
+& `canvas` @ canvas_mouse_btn → i
 
 : i W 320
 : i H 180

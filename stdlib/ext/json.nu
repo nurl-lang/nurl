@@ -924,10 +924,10 @@ $ `stdlib/core/result.nu`
                                     ? & >= c 0 < c 32 {
                                         // Remaining control bytes (0x00..0x1F without a named
                                         // escape) → `\u00XX`. Required for strict-parser safety.
-                                        ( string_push_char out 92 )    // '\\'
-                                        ( string_push_char out 117 )   // 'u'
-                                        ( string_push_char out 48 )    // '0'
-                                        ( string_push_char out 48 )    // '0'
+                                        ( string_push_char out 92 )  // '\\'
+                                        ( string_push_char out 117 )  // 'u'
+                                        ( string_push_char out 48 )  // '0'
+                                        ( string_push_char out 48 )  // '0'
                                         ( __js_hex_nibble out & >> c 4 15 )
                                         ( __js_hex_nibble out & c 15 )
                                     } {
@@ -1376,22 +1376,22 @@ $ `stdlib/core/result.nu`
 @ json_as_str Json j → s {
     ^ ?? j {
         JStr s → ( string_data s )
-        _      → ``
+        _ → ``
     }
 }
 
 @ json_as_int Json j → i {
     ^ ?? j {
         JNum s → ( nurl_str_to_int ( string_data s ) )
-        JBool b → ? b 1 0
-        _      → 0
+        JBool b → ?b 1 0
+        _ → 0
     }
 }
 
 @ json_as_bool Json j → b {
     ^ ?? j {
         JBool b → b
-        _       → F
+        _ → F
     }
 }
 

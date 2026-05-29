@@ -14,8 +14,8 @@
 //
 // One positive case (warns) + one negative control (no warning).
 
-: Counter { i n  i max }
-: Slot    { ( @ v ) cb }
+: Counter { i n i max }
+: Slot { ( @ v ) cb }
 
 // POSITIVE — closure captures `c` byref, is wrapped in a Slot, and the
 // Slot is returned. The captured pointer dangles once make_slot exits.

@@ -15,13 +15,13 @@
 //   0
 
 // Enum declared BEFORE both of the types it uses as payloads.
-: | Shape { Dot  Box Geom  Hue Color }
+: | Shape { Dot Box Geom Hue Color }
 
 // Forward-referenced STRUCT payload.
-: Geom { i w  i h }
+: Geom { i w i h }
 
 // Forward-referenced ENUM payload.
-: | Color { Red  Green }
+: | Color { Red Green }
 
 @ shape_val Shape s → i {
     ?? s {
@@ -37,12 +37,12 @@
 @ main → v {
     : Geom g @ Geom { 3 5 }
     : Shape a @ Shape { Box g }
-    ( nurl_print_int ( shape_val a ) )    // 3 — struct payload field
+    ( nurl_print_int ( shape_val a ) )  // 3 — struct payload field
 
     : Color c Green
     : Shape b @ Shape { Hue c }
-    ( nurl_print_int ( shape_val b ) )    // 200 — enum payload, nested match
+    ( nurl_print_int ( shape_val b ) )  // 200 — enum payload, nested match
 
     : Shape d Dot
-    ( nurl_print_int ( shape_val d ) )    // 0 — tag-only variant
+    ( nurl_print_int ( shape_val d ) )  // 0 — tag-only variant
 }

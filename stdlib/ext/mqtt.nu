@@ -76,14 +76,14 @@ $ `stdlib/core/pair.nu`
 // ── error type ───────────────────────────────────────────────────────
 
 : | MqttErr {
-    MqttTransport      // TCP / TLS / socket failure
-    MqttTimeout        // a socket read or write timed out
-    MqttClosed         // the connection was closed by the peer
-    MqttProtocol       // malformed or unexpected packet from the broker
-    MqttRefused        // CONNECT rejected by the broker — unspecified
-    MqttBadAuth        // CONNECT rejected — bad username or password
+    MqttTransport  // TCP / TLS / socket failure
+    MqttTimeout  // a socket read or write timed out
+    MqttClosed  // the connection was closed by the peer
+    MqttProtocol  // malformed or unexpected packet from the broker
+    MqttRefused  // CONNECT rejected by the broker — unspecified
+    MqttBadAuth  // CONNECT rejected — bad username or password
     MqttNotAuthorized  // CONNECT rejected — client not authorized
-    MqttSubFailed      // SUBSCRIBE / UNSUBSCRIBE rejected by the broker
+    MqttSubFailed  // SUBSCRIBE / UNSUBSCRIBE rejected by the broker
 }
 
 // Render a MqttErr variant name as a raw `s` for log lines.
@@ -121,10 +121,10 @@ $ `stdlib/core/pair.nu`
 
 // Classify a CONNACK reason code (>= 0x80 means refused) into a MqttErr.
 @ __mqtt_connack_err i reason → MqttErr {
-    ? == reason 134 { ^ # MqttErr MqttBadAuth } {}        // 0x86 bad user/pass
+    ? == reason 134 { ^ # MqttErr MqttBadAuth } {}  // 0x86 bad user/pass
     ? == reason 135 { ^ # MqttErr MqttNotAuthorized } {}  // 0x87 not authorized
-    ? == reason 4   { ^ # MqttErr MqttBadAuth } {}        // v3.1.1 0x04
-    ? == reason 5   { ^ # MqttErr MqttNotAuthorized } {}  // v3.1.1 0x05
+    ? == reason 4 { ^ # MqttErr MqttBadAuth } {}  // v3.1.1 0x04
+    ? == reason 5 { ^ # MqttErr MqttNotAuthorized } {}  // v3.1.1 0x05
     ^ # MqttErr MqttRefused
 }
 
@@ -135,8 +135,9 @@ $ `stdlib/core/pair.nu`
 // runtime object. Both return a CONN-kind handle (i64); err_kind != 0
 // means the connect / TLS handshake failed.
 
-& `libc` @ nurl_tcp_connect      s host i port            → i
-& `libc` @ nurl_tcp_connect_tls  s host i port i verify   → i
+& `libc` @ nurl_tcp_connect s host i port → i
+
+& `libc` @ nurl_tcp_connect_tls s host i port i verify → i
 
 // Open a TLS client connection. `verify` T = check the broker cert
 // chain + hostname against the system trust store; F = encrypt but
@@ -178,11 +179,11 @@ $ `stdlib/core/pair.nu`
 // `keepalive_ms` 0 disables keep-alive. `next_pid` is the rotating
 // 1..65535 packet-identifier allocator (0 is reserved by the spec).
 : MqttClient {
-    TcpConn   conn
+    TcpConn conn
     ( Vec u ) rxbuf
-    i         ping_deadline
-    i         keepalive_ms
-    i         next_pid
+    i ping_deadline
+    i keepalive_ms
+    i next_pid
 }
 
 // An inbound application message. `props` holds the MQTT 5 user
@@ -585,7 +586,7 @@ $ `stdlib/core/pair.nu`
     : ~ i b0 48
     ? == qos 1 { = b0 | b0 2 } {}
     ? == qos 2 { = b0 | b0 4 } {}
-    ? retain   { = b0 | b0 1 } {}
+    ? retain { = b0 | b0 1 } {}
     : ~ i pid 0
     ? > qos 0 { = pid ( __mqtt_next_pid cl ) } {}
 
@@ -635,8 +636,10 @@ $ `stdlib/core/pair.nu`
 }
 
 // PUBLISH at QoS 0 / 1 / 2 — fire-and-forget, at-least-once, exactly-once.
-@ mqtt_publish  MqttClient cl s topic s payload → !v MqttErr { ^ ( __mqtt_publish_plain cl topic payload 0 F ) }
+@ mqtt_publish MqttClient cl s topic s payload → !v MqttErr { ^ ( __mqtt_publish_plain cl topic payload 0 F ) }
+
 @ mqtt_publish1 MqttClient cl s topic s payload → !v MqttErr { ^ ( __mqtt_publish_plain cl topic payload 1 F ) }
+
 @ mqtt_publish2 MqttClient cl s topic s payload → !v MqttErr { ^ ( __mqtt_publish_plain cl topic payload 2 F ) }
 
 // PUBLISH with the retain flag — the broker stores the message and

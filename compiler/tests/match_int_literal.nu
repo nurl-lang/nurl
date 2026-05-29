@@ -10,13 +10,13 @@ $ `stdlib/core/string.nu`
 
 @ classify i n → s {
     ^ ?? n {
-        0     → `zero`
-        1     → `one`
-        2     → `two`
-        42    → `meaning`
-        -1    → `neg-one`
+        0 → `zero`
+        1 → `one`
+        2 → `two`
+        42 → `meaning`
+        -1 → `neg-one`
         65536 → `2^16`
-        _     → `other`
+        _ → `other`
     }
 }
 
@@ -25,18 +25,18 @@ $ `stdlib/core/string.nu`
         100 → `c100`
         200 → `c200`
         404 → `c404`
-        _   → `c-other`
+        _ → `c-other`
     }
 }
 
 @ main → i {
-    ( nurl_print ( classify 0 ) )      ( nurl_print `\n` )
-    ( nurl_print ( classify 1 ) )      ( nurl_print `\n` )
-    ( nurl_print ( classify 2 ) )      ( nurl_print `\n` )
-    ( nurl_print ( classify 5 ) )      ( nurl_print `\n` )
-    ( nurl_print ( classify 42 ) )     ( nurl_print `\n` )
-    ( nurl_print ( classify -1 ) )     ( nurl_print `\n` )
-    ( nurl_print ( classify 65536 ) )  ( nurl_print `\n` )
+    ( nurl_print ( classify 0 ) ) ( nurl_print `\n` )
+    ( nurl_print ( classify 1 ) ) ( nurl_print `\n` )
+    ( nurl_print ( classify 2 ) ) ( nurl_print `\n` )
+    ( nurl_print ( classify 5 ) ) ( nurl_print `\n` )
+    ( nurl_print ( classify 42 ) ) ( nurl_print `\n` )
+    ( nurl_print ( classify -1 ) ) ( nurl_print `\n` )
+    ( nurl_print ( classify 65536 ) ) ( nurl_print `\n` )
 
     ( nurl_print ( classify_i32 # i32 100 ) ) ( nurl_print `\n` )
     ( nurl_print ( classify_i32 # i32 200 ) ) ( nurl_print `\n` )

@@ -39,9 +39,11 @@ $ `stdlib/std/net.nu`
 
 // ── Runtime FFI bridge (§18c) ──────────────────────────────────────
 
-& `c` @ nurl_dns_resolve       s host → s
-& `c` @ nurl_dns_resolve_port  s host i port → s
-& `c` @ nurl_dns_reverse       s ip → s
+& `c` @ nurl_dns_resolve s host → s
+
+& `c` @ nurl_dns_resolve_port s host i port → s
+
+& `c` @ nurl_dns_reverse s ip → s
 
 // ── Helpers ────────────────────────────────────────────────────────
 

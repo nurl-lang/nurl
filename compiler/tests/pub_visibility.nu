@@ -9,7 +9,7 @@
 $ `compiler/tests/should_fail_pub_helper.nu`
 
 @ main → i {
-    ( pub_greet )         // direct pub call — OK
-    ( pub_calls_priv )    // pub fn delegates internally to priv — OK
+    ( pub_greet )  // direct pub call — OK
+    ( pub_calls_priv )  // pub fn delegates internally to priv — OK
     ^ 0
 }

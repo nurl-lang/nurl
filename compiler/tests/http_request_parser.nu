@@ -78,7 +78,7 @@ $ `stdlib/ext/http.nu`
 @ run_case s label s raw → v {
     ( nurl_print `── ` ) ( nurl_print label ) ( nurl_print ` ──\n` )
     : ( Vec u ) buf ( buf_from_raw raw )
-    : ! ParsedHeadOk HttpReqErr ph ( parse_request_head buf )
+    : !ParsedHeadOk HttpReqErr ph ( parse_request_head buf )
     ?? ph {
         T pho → {
             : HttpRequest req . pho head
@@ -114,7 +114,7 @@ $ `stdlib/ext/http.nu`
         ( vec_push [u] buf # u 65 )
         = k + k 1
     }
-    : ! ParsedHeadOk HttpReqErr ph ( parse_request_head buf )
+    : !ParsedHeadOk HttpReqErr ph ( parse_request_head buf )
     ?? ph {
         T pho → {
             ( println_lit `  unexpected Ok` )

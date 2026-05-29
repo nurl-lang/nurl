@@ -14,25 +14,15 @@
 //     canvas_should_close— non-zero when the user closes the window
 //     canvas_close       — teardown
 
-& `canvas`
+& `canvas` @ canvas_open i w i h → *i
 
-@ canvas_open i w i h → *i
+& `canvas` @ canvas_present → v
 
-& `canvas`
+& `canvas` @ canvas_sleep i ms → v
 
-@ canvas_present → v
+& `canvas` @ canvas_should_close → i
 
-& `canvas`
-
-@ canvas_sleep i ms → v
-
-& `canvas`
-
-@ canvas_should_close → i
-
-& `canvas`
-
-@ canvas_close → v
+& `canvas` @ canvas_close → v
 
 : i W 160
 : i H 90

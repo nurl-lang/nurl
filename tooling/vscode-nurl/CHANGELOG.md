@@ -4,6 +4,27 @@ All notable changes to the "nurl" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.5.0] — 2026-05-29
+
+### Added
+
+- **`Find All References`** (`textDocument/references`) via the
+  language server.
+- **Unused-import diagnostics**: a `$`-import whose provided symbols
+  are never referenced in the file is flagged as a warning.
+- **Lint warnings**: the server now passes `--lint` to `nurlc`, so
+  unused local bindings and unused private (`pub`-less) functions
+  surface live in the editor. `pub` functions and legacy (no-`pub`)
+  files are never flagged.
+
+### Fixed
+
+- **Syntax highlighting** caught up to grammar v2.1: `pub`,
+  `^^` (XOR), `&&` / `||` (two-char logical), `...` (variadic FFI
+  marker), and the `in` / `inout` / `sink` param modifiers are now
+  highlighted as distinct tokens instead of being broken into their
+  shorter single-char prefixes.
+
 ## [0.3.0] — 2026-05-16
 
 ### Added

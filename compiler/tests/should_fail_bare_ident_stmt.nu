@@ -11,6 +11,6 @@
 // first bare-callable-as-statement site with a `( name args )`-cure
 // pointer. Expect COMPILE FAIL.
 @ main → i {
-  nurl_print `oops, forgot parens\n`
-  ^ 0
+    nurl_print `oops, forgot parens\n`
+    ^ 0
 }

@@ -135,7 +135,7 @@ $ `stdlib/core/posix.nu`
 // Read a little-endian i32 at byte offset `off` in `*u p`. Returns
 // the value as a non-negative i for low values (we only use this on
 // fds + errno which fit in 31 bits).
-@ __le32_read *u p i off → i {
+@ __le32_read * u p i off → i {
     : i b0 & 255 # i . p + off 0
     : i b1 & 255 # i . p + off 1
     : i b2 & 255 # i . p + off 2
@@ -143,7 +143,7 @@ $ `stdlib/core/posix.nu`
     ^ | | b0 << b1 8 | << b2 16 << b3 24
 }
 
-@ __le32_write *u p i off i val → v {
+@ __le32_write * u p i off i val → v {
     = . p + off 0 # u & val 255
     = . p + off 1 # u & >> val 8 255
     = . p + off 2 # u & >> val 16 255
@@ -307,8 +307,8 @@ $ `stdlib/core/posix.nu`
 
 // Map a child-side exec errno to NurlProcResult err_kind.
 @ __map_exec_errno i e → i {
-    ? == e ( posix_const `ENOENT` ) { ^ 1 } {}    // NotFound
-    ^ 2                                           // ExecFailed
+    ? == e ( posix_const `ENOENT` ) { ^ 1 } {}  // NotFound
+    ^ 2  // ExecFailed
 }
 
 // Decode waitpid status (raw int) into a (exit_code, err_kind) pair.
@@ -318,18 +318,18 @@ $ `stdlib/core/posix.nu`
         ( nurl_poke r 0 -1 )
         ( nurl_poke r 1 ( __map_exec_errno child_errno ) )
     } { ? != io_err 0 {
-        ( nurl_poke r 0 -1 )
-        ( nurl_poke r 1 3 )                                    // Io
-    } { ? == ( nurl_wait_is_exited raw_status ) 1 {
-        ( nurl_poke r 0 ( nurl_wait_exit_status raw_status ) )
-        ( nurl_poke r 1 0 )                                    // ok
-    } { ? == ( nurl_wait_is_signaled raw_status ) 1 {
-        ( nurl_poke r 0 + 128 ( nurl_wait_term_sig raw_status ) )
-        ( nurl_poke r 1 0 )                                    // ok
-    } {
-        ( nurl_poke r 0 -1 )
-        ( nurl_poke r 1 4 )                                    // Other
-    } } } }
+            ( nurl_poke r 0 -1 )
+            ( nurl_poke r 1 3 )  // Io
+        } { ? == ( nurl_wait_is_exited raw_status ) 1 {
+                ( nurl_poke r 0 ( nurl_wait_exit_status raw_status ) )
+                ( nurl_poke r 1 0 )  // ok
+            } { ? == ( nurl_wait_is_signaled raw_status ) 1 {
+                    ( nurl_poke r 0 + 128 ( nurl_wait_term_sig raw_status ) )
+                    ( nurl_poke r 1 0 )  // ok
+                } {
+                    ( nurl_poke r 0 -1 )
+                    ( nurl_poke r 1 4 )  // Other
+                } } } }
 }
 
 // Main entry — translated step-by-step from runtime.c §16
@@ -339,7 +339,7 @@ $ `stdlib/core/posix.nu`
 
     : i cmd_len ( nurl_str_len cmd )
     ? <= cmd_len 0 {
-        ( nurl_poke r 1 1 )                                // NotFound
+        ( nurl_poke r 1 1 )  // NotFound
         ( nurl_poke r 2 # i ( __proc_empty_buf ) )
         ( nurl_poke r 4 # i ( __proc_empty_buf ) )
         ^ ( __process_dispatch # i r )
@@ -371,7 +371,7 @@ $ `stdlib/core/posix.nu`
         } {}
         ( nurl_free sin_p ) ( nurl_free sout_p )
         ( nurl_free serr_p ) ( nurl_free err_p )
-        ( nurl_poke r 1 3 )                                // Io
+        ( nurl_poke r 1 3 )  // Io
         ( nurl_poke r 2 # i ( __proc_empty_buf ) )
         ( nurl_poke r 4 # i ( __proc_empty_buf ) )
         ^ ( __process_dispatch # i r )
@@ -391,7 +391,7 @@ $ `stdlib/core/posix.nu`
         ( nurl_free sin_p ) ( nurl_free sout_p )
         ( nurl_free serr_p ) ( nurl_free err_p )
         ( nurl_free full )
-        ( nurl_poke r 1 3 )                                // Io
+        ( nurl_poke r 1 3 )  // Io
         ( nurl_poke r 2 # i ( __proc_empty_buf ) )
         ( nurl_poke r 4 # i ( __proc_empty_buf ) )
         ^ ( __process_dispatch # i r )
@@ -728,9 +728,9 @@ $ `stdlib/core/posix.nu`
 
 @ __pc_alloc → s {
     : s c ( nurl_zalloc 128 )
-    ( nurl_poke c 2 -1 )                                // exit_code = -1
-    ( nurl_poke c 7 -1 )                                // fd_in = -1
-    ( nurl_poke c 8 -1 )                                // fd_out = -1
+    ( nurl_poke c 2 -1 )  // exit_code = -1
+    ( nurl_poke c 7 -1 )  // fd_in = -1
+    ( nurl_poke c 8 -1 )  // fd_out = -1
     ^ c
 }
 
@@ -772,11 +772,11 @@ $ `stdlib/core/posix.nu`
     : ~ i i 0
     ~ < i scratch_len {
         : i b & 255 # i . sp i
-        ? == b 10 {                                     // '\n'
+        ? == b 10 {  // '\n'
             : ~ i take i
             ? > take 0 {
                 : i prev & 255 # i . sp - take 1
-                ? == prev 13 { = take - take 1 } {}     // '\r'
+                ? == prev 13 { = take - take 1 } {}  // '\r'
             } {}
             ( __pc_line_reserve c take )
             : s line # s ( nurl_peek c 12 )
@@ -811,7 +811,7 @@ $ `stdlib/core/posix.nu`
 
     : i cmd_len ( nurl_str_len cmd )
     ? <= cmd_len 0 {
-        ( nurl_poke c 0 1 )                             // NotFound
+        ( nurl_poke c 0 1 )  // NotFound
         ^ ( __proc_spawn_dispatch # i c )
     } {}
 
@@ -833,7 +833,7 @@ $ `stdlib/core/posix.nu`
             ( close ( __pipe_fd err_p 0 ) ) ( close ( __pipe_fd err_p 1 ) )
         } {}
         ( nurl_free sin_p ) ( nurl_free sout_p ) ( nurl_free err_p )
-        ( nurl_poke c 0 3 )                             // Io
+        ( nurl_poke c 0 3 )  // Io
         ( nurl_poke c 1 ( nurl_errno_get ) )
         ^ ( __proc_spawn_dispatch # i c )
     } {}
@@ -849,7 +849,7 @@ $ `stdlib/core/posix.nu`
         ( close ( __pipe_fd sout_p 0 ) ) ( close ( __pipe_fd sout_p 1 ) )
         ( close ( __pipe_fd err_p 0 ) ) ( close ( __pipe_fd err_p 1 ) )
         ( nurl_free sin_p ) ( nurl_free sout_p ) ( nurl_free err_p )
-        ( nurl_poke c 0 3 )                             // Io
+        ( nurl_poke c 0 3 )  // Io
         ( nurl_poke c 1 ( nurl_errno_get ) )
         ^ ( __proc_spawn_dispatch # i c )
     } {}
@@ -893,10 +893,10 @@ $ `stdlib/core/posix.nu`
     // Non-blocking on stdout so timeout-driven read_line doesn't wedge.
     ( __set_nonblock sout_rfd )
 
-    ( nurl_poke c 5 pid )                                // pid_or_0
-    ( nurl_poke c 6 pid )                                // pid
-    ( nurl_poke c 7 sin_wfd )                            // fd_in
-    ( nurl_poke c 8 sout_rfd )                           // fd_out
+    ( nurl_poke c 5 pid )  // pid_or_0
+    ( nurl_poke c 6 pid )  // pid
+    ( nurl_poke c 7 sin_wfd )  // fd_in
+    ( nurl_poke c 8 sout_rfd )  // fd_out
     ^ ( __proc_spawn_dispatch # i c )
 }
 
@@ -918,7 +918,7 @@ $ `stdlib/core/posix.nu`
                     ( signal ( posix_const `SIGPIPE` ) old_pipe )
                     ^ -1
                 }
-            } { = total n }                              // w == 0: break
+            } { = total n }  // w == 0: break
         }
     }
     ( signal ( posix_const `SIGPIPE` ) old_pipe )
@@ -952,7 +952,7 @@ $ `stdlib/core/posix.nu`
 
     : i fd_out ( nurl_peek c 8 )
     ? < fd_out 0 {
-        ( nurl_poke c 3 1 )                             // eof
+        ( nurl_poke c 3 1 )  // eof
         ^ ``
     } {}
 
@@ -976,10 +976,10 @@ $ `stdlib/core/posix.nu`
         }
         ? == pr 0 {
             ( nurl_free pollfds ) ( nurl_free chunk )
-            ^ ``                                        // timeout
+            ^ ``  // timeout
         } {}
         ? < pr 0 {
-            ( nurl_poke c 0 3 )                         // Io
+            ( nurl_poke c 0 3 )  // Io
             ( nurl_poke c 1 ( nurl_errno_get ) )
             ( nurl_free pollfds ) ( nurl_free chunk )
             ^ ``
@@ -1003,7 +1003,7 @@ $ `stdlib/core/posix.nu`
                     ? == rd 0 {
                         ( close fd_out )
                         ( nurl_poke c 8 -1 )
-                        ( nurl_poke c 3 1 )             // eof
+                        ( nurl_poke c 3 1 )  // eof
                         = drain_done 1
                     } {
                         : i re ( nurl_errno_get )
@@ -1051,7 +1051,7 @@ $ `stdlib/core/posix.nu`
         ? != hup_or_err 0 {
             ( close fd_out )
             ( nurl_poke c 8 -1 )
-            ( nurl_poke c 3 1 )                         // eof
+            ( nurl_poke c 3 1 )  // eof
             ? == 1 ( __pc_drain_line c ) {
                 ( nurl_free pollfds ) ( nurl_free chunk )
                 : s line # s ( nurl_peek c 12 )
@@ -1114,7 +1114,7 @@ $ `stdlib/core/posix.nu`
         } {}
     }
     ( nurl_poke c 2 ec )
-    ( nurl_poke c 4 1 )                                 // waited
+    ( nurl_poke c 4 1 )  // waited
     ^ ec
 }
 
@@ -1159,7 +1159,7 @@ $ `stdlib/core/posix.nu`
             ( waitpid pid status_p 0 )
         } {}
         ( nurl_free status_buf )
-        ( nurl_poke c 4 1 )                             // waited
+        ( nurl_poke c 4 1 )  // waited
     }
 }
 
@@ -1272,8 +1272,8 @@ $ `stdlib/core/posix.nu`
     : s rp . p raw
     : i raw # i rp
     : s view ? != ( posix_const `O_NONBLOCK` ) -1
-        ( __proc_read_line_posix raw timeout_ms )
-        ( nurl_proc_spawn_read_line raw timeout_ms )
+    ( __proc_read_line_posix raw timeout_ms )
+    ( nurl_proc_spawn_read_line raw timeout_ms )
     : i n ( nurl_proc_spawn_read_line_len raw )
     ? == n 0 { ^ @ ?String { F # String 0 } } {}
     ^ @ ?String { T ( string_from view ) }

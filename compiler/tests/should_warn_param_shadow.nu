@@ -16,7 +16,7 @@
 // fired on the non-shadowing path.
 
 @ shadowing i z → i {
-    : i z + z 7   // ← warns: 'z' shadows parameter z
+    : i z + z 7  // ← warns: 'z' shadows parameter z
     ^ z
 }
 

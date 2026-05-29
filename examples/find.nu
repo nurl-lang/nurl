@@ -70,7 +70,8 @@ $ `stdlib/ext/regex.nu`
 // Terminal helpers added to stdlib/runtime.c: report whether stdout is
 // a real terminal, and (Windows only) turn on ANSI escape processing.
 & `c` @ nurl_stdout_isatty → i
-& `c` @ nurl_enable_vt     → v
+
+& `c` @ nurl_enable_vt → v
 
 // ── ANSI colour ─────────────────────────────────────────────────────
 //
@@ -134,8 +135,10 @@ $ `stdlib/ext/regex.nu`
 // while still carrying enough to highlight the exact substring.
 
 @ pack_span i start i len → i { ^ + * start 4294967296 len }
+
 @ span_start i packed → i { ^ / packed 4294967296 }
-@ span_len   i packed → i { ^ & packed 4294967295 }
+
+@ span_len i packed → i { ^ & packed 4294967295 }
 
 // Literal matcher. `needles` are already lower-cased by the caller when
 // `ci` is set; we then lower-case each line before searching so the
@@ -344,6 +347,7 @@ $ `stdlib/ext/regex.nu`
 }
 
 @ seq s a s b → b { ^ == ( nurl_str_eq a b ) 1 }
+
 @ is_flag s a → b { ^ == 45 ( find_first_byte a ) }
 
 @ main → i {
@@ -355,7 +359,7 @@ $ `stdlib/ext/regex.nu`
     : ~ b strict F
     : ~ b recursive F
     : ~ b context F
-    : ~ i color_mode 0   // 0 = auto, 1 = always, 2 = never
+    : ~ i color_mode 0  // 0 = auto, 1 = always, 2 = never
     : ~ b bad F
     : ~ b show_help F
 
@@ -364,27 +368,27 @@ $ `stdlib/ext/regex.nu`
         : s a ( nurl_argv_get ai )
         ? ( is_flag a ) {
             ? | ( seq a `-e` ) ( seq a `--regex` ) { = use_regex T } {
-            ? | ( seq a `-s` ) ( seq a `--strict` ) { = strict T } {
-            ? | ( seq a `-r` ) ( seq a `--recursive` ) { = recursive T } {
-            ? | ( seq a `-C` ) ( seq a `--context` ) { = context T } {
-            ? | ( seq a `-h` ) ( seq a `--help` ) { = show_help T } {
-            ? | ( seq a `-p` ) ( seq a `--path` ) {
-                = ai + ai 1
-                ? < ai argc { ( string_free path ) = path ( string_from ( nurl_argv_get ai ) ) }
-                             { ( nurl_eprint `find: -p requires an argument\n` ) = bad T }
-            } {
-            ? ( string_starts_with ( string_from a ) `--color=` ) {
-                : String ca ( string_from a )
-                : String cv ( string_substr ca 8 - ( string_len ca ) 8 )
-                : s v ( string_data cv )
-                ? ( seq v `always` ) { = color_mode 1 } {
-                ? ( seq v `never` )  { = color_mode 2 } {
-                ? ( seq v `auto` )   { = color_mode 0 } {
-                    ( nurl_eprint `find: --color must be auto, always, or never\n` ) = bad T } } }
-                ( string_free ca ) ( string_free cv )
-            } {
-                ( nurl_eprint `find: unknown option: ` ) ( nurl_eprint a ) ( nurl_eprint `\n` ) = bad T
-            } } } } } } }
+                ? | ( seq a `-s` ) ( seq a `--strict` ) { = strict T } {
+                    ? | ( seq a `-r` ) ( seq a `--recursive` ) { = recursive T } {
+                        ? | ( seq a `-C` ) ( seq a `--context` ) { = context T } {
+                            ? | ( seq a `-h` ) ( seq a `--help` ) { = show_help T } {
+                                ? | ( seq a `-p` ) ( seq a `--path` ) {
+                                    = ai + ai 1
+                                    ? < ai argc { ( string_free path ) = path ( string_from ( nurl_argv_get ai ) ) }
+                                    { ( nurl_eprint `find: -p requires an argument\n` ) = bad T }
+                                } {
+                                    ? ( string_starts_with ( string_from a ) `--color=` ) {
+                                        : String ca ( string_from a )
+                                        : String cv ( string_substr ca 8 - ( string_len ca ) 8 )
+                                        : s v ( string_data cv )
+                                        ? ( seq v `always` ) { = color_mode 1 } {
+                                            ? ( seq v `never` ) { = color_mode 2 } {
+                                                ? ( seq v `auto` ) { = color_mode 0 } {
+                                                    ( nurl_eprint `find: --color must be auto, always, or never\n` ) = bad T } } }
+                                        ( string_free ca ) ( string_free cv )
+                                    } {
+                                        ( nurl_eprint `find: unknown option: ` ) ( nurl_eprint a ) ( nurl_eprint `\n` ) = bad T
+                                    } } } } } } }
         } {
             ( vec_push [String] terms ( string_from a ) )
         }
@@ -400,8 +404,8 @@ $ `stdlib/ext/regex.nu`
 
     : ~ b use_color F
     ? == color_mode 1 { = use_color T } {
-    ? == color_mode 2 { = use_color F } {
-        = use_color == ( nurl_stdout_isatty ) 1 } }
+        ? == color_mode 2 { = use_color F } {
+            = use_color == ( nurl_stdout_isatty ) 1 } }
     ? use_color { ( nurl_enable_vt ) } {}
 
     : ( Vec i ) flag ( vec_new [i] ) ( vec_push [i] flag 0 )
@@ -428,7 +432,7 @@ $ `stdlib/ext/regex.nu`
             = ti + ti 1
         }
         ? ok { = hits ( walk ( string_data path ) ( make_regex_matcher rxs ) context recursive use_color flag ) }
-             { = rc 2 }
+        { = rc 2 }
         ( vec_free_with [Regex] rxs \ Regex r → v { ( regex_free r ) } )
     } {
         : b ci ? strict F T
@@ -439,7 +443,7 @@ $ `stdlib/ext/regex.nu`
             ?? te {
                 T ts → {
                     ? ci { ( vec_push [String] needles ( string_to_lower ts ) ) }
-                         { ( vec_push [String] needles ( string_from ( string_data ts ) ) ) }
+                    { ( vec_push [String] needles ( string_from ( string_data ts ) ) ) }
                 }
                 F → {}
             }

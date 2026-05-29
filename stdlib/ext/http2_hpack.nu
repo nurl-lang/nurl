@@ -32,22 +32,22 @@ $ `stdlib/ext/http.nu`
 // ── Errors ────────────────────────────────────────────────────────────
 
 : | HpackErr {
-    HpackIntegerOverflow       // §5.1 — encoded integer wouldn't fit i64
-    HpackTruncated             // input ended mid-field
-    HpackBadIndex              // static/dynamic table lookup out of range
-    HpackBadHuffman            // invalid Huffman code OR EOS within data
-    HpackTableSizeExceeded     // dynamic table size update > peer limit
+    HpackIntegerOverflow  // §5.1 — encoded integer wouldn't fit i64
+    HpackTruncated  // input ended mid-field
+    HpackBadIndex  // static/dynamic table lookup out of range
+    HpackBadHuffman  // invalid Huffman code OR EOS within data
+    HpackTableSizeExceeded  // dynamic table size update > peer limit
     HpackOther
 }
 
 @ hpack_err_name HpackErr e → s {
     ^ ?? e {
-        HpackIntegerOverflow   → `HpackIntegerOverflow`
-        HpackTruncated         → `HpackTruncated`
-        HpackBadIndex          → `HpackBadIndex`
-        HpackBadHuffman        → `HpackBadHuffman`
+        HpackIntegerOverflow → `HpackIntegerOverflow`
+        HpackTruncated → `HpackTruncated`
+        HpackBadIndex → `HpackBadIndex`
+        HpackBadHuffman → `HpackBadHuffman`
         HpackTableSizeExceeded → `HpackTableSizeExceeded`
-        HpackOther             → `HpackOther`
+        HpackOther → `HpackOther`
     }
 }
 
@@ -57,15 +57,15 @@ $ `stdlib/ext/http.nu`
 
 @ hpack_static_name i idx → s {
     ^ ?? idx {
-        1  → `:authority`
-        2  → `:method`
-        3  → `:method`
-        4  → `:path`
-        5  → `:path`
-        6  → `:scheme`
-        7  → `:scheme`
-        8  → `:status`
-        9  → `:status`
+        1 → `:authority`
+        2 → `:method`
+        3 → `:method`
+        4 → `:path`
+        5 → `:path`
+        6 → `:scheme`
+        7 → `:scheme`
+        8 → `:status`
+        9 → `:status`
         10 → `:status`
         11 → `:status`
         12 → `:status`
@@ -118,27 +118,27 @@ $ `stdlib/ext/http.nu`
         59 → `vary`
         60 → `via`
         61 → `www-authenticate`
-        _  → ``
+        _ → ``
     }
 }
 
 @ hpack_static_value i idx → s {
     ^ ?? idx {
-        2  → `GET`
-        3  → `POST`
-        4  → `/`
-        5  → `/index.html`
-        6  → `http`
-        7  → `https`
-        8  → `200`
-        9  → `204`
+        2 → `GET`
+        3 → `POST`
+        4 → `/`
+        5 → `/index.html`
+        6 → `http`
+        7 → `https`
+        8 → `200`
+        9 → `204`
         10 → `206`
         11 → `304`
         12 → `400`
         13 → `404`
         14 → `500`
         16 → `gzip, deflate`
-        _  → ``
+        _ → ``
     }
 }
 
@@ -158,9 +158,9 @@ $ `stdlib/ext/http.nu`
 // pushes existing dynamic entries one slot higher.
 
 : HpackDynTable {
-    ( Vec Header ) entries     // OWNED; index 0 = newest
-    i current_size             // sum of (name_len + value_len + 32)
-    i max_size                 // peer-set via SETTINGS_HEADER_TABLE_SIZE
+    ( Vec Header ) entries  // OWNED; index 0 = newest
+    i current_size  // sum of (name_len + value_len + 32)
+    i max_size  // peer-set via SETTINGS_HEADER_TABLE_SIZE
 }
 
 @ hpack_dyn_new i max_size → HpackDynTable {
@@ -186,7 +186,7 @@ $ `stdlib/ext/http.nu`
         ? == n 0 { = done T } {
             ? <= + . cur current_size incoming . cur max_size
             { = done T } {
-                : ? Header tail ( vec_pop [Header] . cur entries )
+                : ?Header tail ( vec_pop [Header] . cur entries )
                 ?? tail {
                     T th → {
                         : i sz ( __hpack_entry_size th )
@@ -228,23 +228,23 @@ $ `stdlib/ext/http.nu`
 // Lookup by combined HPACK index (1-indexed). Static range first, then
 // dynamic. Returns an OWNED Header (caller `header_free`s) or None
 // when out of range.
-@ hpack_dyn_lookup HpackDynTable t i hidx → ? Header {
-    ? <= hidx 0 { ^ @ ? Header { F # Header 0 } } {}
+@ hpack_dyn_lookup HpackDynTable t i hidx → ?Header {
+    ? <= hidx 0 { ^ @ ?Header { F # Header 0 } } {}
     : i ss ( hpack_static_table_size )
     ? <= hidx ss {
-        ^ @ ? Header {
+        ^ @ ?Header {
             T ( header_new ( hpack_static_name hidx )
-                            ( hpack_static_value hidx ) )
+            ( hpack_static_value hidx ) )
         }
     } {}
     : i didx - hidx + ss 1
     : i n ( vec_len [Header] . t entries )
-    ? >= didx n { ^ @ ? Header { F # Header 0 } } {}
-    : ? Header got ( vec_get [Header] . t entries didx )
+    ? >= didx n { ^ @ ?Header { F # Header 0 } } {}
+    : ?Header got ( vec_get [Header] . t entries didx )
     ?? got {
-        T h → { ^ @ ? Header { T ( header_new ( string_data . h name )
-                                                ( string_data . h value ) ) } }
-        F _ → { ^ @ ? Header { F # Header 0 } }
+        T h → { ^ @ ?Header { T ( header_new ( string_data . h name )
+                ( string_data . h value ) ) } }
+        F _ → { ^ @ ?Header { F # Header 0 } }
     }
 }
 
@@ -261,7 +261,7 @@ $ `stdlib/ext/http.nu`
 @ __hpack_pow2 i n → i {
     : ~ i r 1
     : ~ i k 0
-    ~ < k n { = r * r 2  = k + k 1 }
+    ~ < k n { = r * r 2 = k + k 1 }
     ^ r
 }
 
@@ -283,21 +283,21 @@ $ `stdlib/ext/http.nu`
     }
 }
 
-: HpackInt { i value  i consumed }
+: HpackInt { i value i consumed }
 
 // Decode at offset `from`. Returns HpackTruncated if input ends
 // mid-continuation; HpackIntegerOverflow if more than 10 continuation
 // bytes (a malicious peer could otherwise force an unbounded shift).
-@ hpack_decode_int ( Vec u ) buf i from i prefix_bits → ! HpackInt HpackErr {
+@ hpack_decode_int ( Vec u ) buf i from i prefix_bits → !HpackInt HpackErr {
     : i n ( vec_len [u] buf )
     ? >= from n {
-        ^ @ ! HpackInt HpackErr { F HpackTruncated }
+        ^ @ !HpackInt HpackErr { F HpackTruncated }
     } {}
     : *u p ( vec_data [u] buf )
     : i max_prefix - ( __hpack_pow2 prefix_bits ) 1
     : i first & # i . p from max_prefix
     ? < first max_prefix {
-        ^ @ ! HpackInt HpackErr {
+        ^ @ !HpackInt HpackErr {
             T @ HpackInt { first 1 }
         }
     } {}
@@ -318,47 +318,47 @@ $ `stdlib/ext/http.nu`
     }
     ? ! ok {
         ? > shift 63 {
-            ^ @ ! HpackInt HpackErr { F HpackIntegerOverflow }
+            ^ @ !HpackInt HpackErr { F HpackIntegerOverflow }
         } {}
-        ^ @ ! HpackInt HpackErr { F HpackTruncated }
+        ^ @ !HpackInt HpackErr { F HpackTruncated }
     } {}
-    ^ @ ! HpackInt HpackErr {
+    ^ @ !HpackInt HpackErr {
         T @ HpackInt { value - k from }
     }
 }
 
 // ── String codec (RFC 7541 §5.2) ─────────────────────────────────────
 
-: HpackString { String value  i consumed }
+: HpackString { String value i consumed }
 
 @ hpack_string_free HpackString s → v { ( string_free . s value ) }
 
-@ hpack_decode_string ( Vec u ) buf i from → ! HpackString HpackErr {
+@ hpack_decode_string ( Vec u ) buf i from → !HpackString HpackErr {
     : i n ( vec_len [u] buf )
     ? >= from n {
-        ^ @ ! HpackString HpackErr { F HpackTruncated }
+        ^ @ !HpackString HpackErr { F HpackTruncated }
     } {}
     : *u p ( vec_data [u] buf )
     : i first # i . p from
     : b huffman != 0 & first 128
-    : ! HpackInt HpackErr li ( hpack_decode_int buf from 7 )
+    : !HpackInt HpackErr li ( hpack_decode_int buf from 7 )
     : ~ i length 0
     : ~ i len_consumed 0
     ?? li {
-        T iv → { = length . iv value  = len_consumed . iv consumed }
-        F e → { ^ @ ! HpackString HpackErr { F e } }
+        T iv → { = length . iv value = len_consumed . iv consumed }
+        F e → { ^ @ !HpackString HpackErr { F e } }
     }
     : i data_off + from len_consumed
     ? < - n data_off length {
-        ^ @ ! HpackString HpackErr { F HpackTruncated }
+        ^ @ !HpackString HpackErr { F HpackTruncated }
     } {}
     : ~ String s ( string_new )
     ? huffman {
         ( string_free s )
-        : ! String HpackErr hr ( __hpack_huffman_decode buf data_off length )
+        : !String HpackErr hr ( __hpack_huffman_decode buf data_off length )
         ?? hr {
             T text → { = s text }
-            F e → { ^ @ ! HpackString HpackErr { F e } }
+            F e → { ^ @ !HpackString HpackErr { F e } }
         }
     } {
         : ~ i k 0
@@ -368,7 +368,7 @@ $ `stdlib/ext/http.nu`
             = k + k 1
         }
     }
-    ^ @ ! HpackString HpackErr {
+    ^ @ !HpackString HpackErr {
         T @ HpackString { s + len_consumed length }
     }
 }
@@ -405,7 +405,7 @@ $ `stdlib/ext/http.nu`
     i consumed
 }
 
-@ hpack_decode_block ( Vec u ) buf HpackDynTable dyn → ! HpackDecoded HpackErr {
+@ hpack_decode_block ( Vec u ) buf HpackDynTable dyn → !HpackDecoded HpackErr {
     : i n ( vec_len [u] buf )
     : ~ ( Vec Header ) hdrs ( vec_new [Header] )
     : ~ HpackDynTable cur dyn
@@ -422,35 +422,35 @@ $ `stdlib/ext/http.nu`
         : i b0 # i . p off
         ? != 0 & b0 128 {
             // 6.1 Indexed
-            : ! HpackInt HpackErr ir ( hpack_decode_int buf off 7 )
+            : !HpackInt HpackErr ir ( hpack_decode_int buf off 7 )
             ?? ir {
                 T iv → {
-                    : ? Header opt ( hpack_dyn_lookup cur . iv value )
+                    : ?Header opt ( hpack_dyn_lookup cur . iv value )
                     ?? opt {
                         T h → { ( vec_push [Header] hdrs h ) }
-                        F _ → { = last_err HpackBadIndex  = ok F }
+                        F _ → { = last_err HpackBadIndex = ok F }
                     }
                     = off + off . iv consumed
                     = seen_field T
                 }
-                F e → { = last_err e  = ok F }
+                F e → { = last_err e = ok F }
             }
         } {
             ? != 0 & b0 64 {
                 // 6.2.1 Literal with Incremental Indexing
-                : ! HpackLitResult HpackErr lr ( __hpack_decode_lit_call buf off 6 T cur )
+                : !HpackLitResult HpackErr lr ( __hpack_decode_lit_call buf off 6 T cur )
                 ?? lr {
                     T lr_ → {
                         ( vec_push [Header] hdrs ( header_new
-                            ( string_data . lr_ name )
-                            ( string_data . lr_ value ) ) )
+                        ( string_data . lr_ name )
+                        ( string_data . lr_ value ) ) )
                         ( string_free . lr_ name )
                         ( string_free . lr_ value )
                         = cur . lr_ dyn
                         = off + off . lr_ consumed
                         = seen_field T
                     }
-                    F e → { = last_err e  = ok F }
+                    F e → { = last_err e = ok F }
                 }
             } {
                 ? != 0 & b0 32 {
@@ -459,9 +459,9 @@ $ `stdlib/ext/http.nu`
                     // has been decoded, a size update is a malformed
                     // representation.
                     ? seen_field {
-                        = last_err HpackOther  = ok F
+                        = last_err HpackOther = ok F
                     } {
-                        : ! HpackInt HpackErr ir ( hpack_decode_int buf off 5 )
+                        : !HpackInt HpackErr ir ( hpack_decode_int buf off 5 )
                         ?? ir {
                             T iv → {
                                 // §4.2 — new size MUST be ≤ our advertised
@@ -474,31 +474,31 @@ $ `stdlib/ext/http.nu`
                                 // size update, but peers may still raise
                                 // back up to the ceiling.)
                                 ? > . iv value ( h2_default_header_table_size ) {
-                                    = last_err HpackOther  = ok F
+                                    = last_err HpackOther = ok F
                                 } {
                                     = cur ( hpack_dyn_set_max cur . iv value )
                                     = off + off . iv consumed
                                 }
                             }
-                            F e → { = last_err e  = ok F }
+                            F e → { = last_err e = ok F }
                         }
                     }
                 } {
                     // 6.2.2 (top 4 = 0000) or 6.2.3 (top 4 = 0001) —
                     // both are "literal, do NOT add to dyn table".
-                    : ! HpackLitResult HpackErr lr ( __hpack_decode_lit_call buf off 4 F cur )
+                    : !HpackLitResult HpackErr lr ( __hpack_decode_lit_call buf off 4 F cur )
                     ?? lr {
                         T lr_ → {
                             ( vec_push [Header] hdrs ( header_new
-                                ( string_data . lr_ name )
-                                ( string_data . lr_ value ) ) )
+                            ( string_data . lr_ name )
+                            ( string_data . lr_ value ) ) )
                             ( string_free . lr_ name )
                             ( string_free . lr_ value )
                             = cur . lr_ dyn
                             = off + off . lr_ consumed
                             = seen_field T
                         }
-                        F e → { = last_err e  = ok F }
+                        F e → { = last_err e = ok F }
                     }
                 }
             }
@@ -513,9 +513,9 @@ $ `stdlib/ext/http.nu`
         // a dangling entries Vec; the caller (typically h2_conn_free
         // after the COMPRESSION_ERROR GOAWAY per RFC 9113 §4.3) will
         // free it once via the input table.
-        ^ @ ! HpackDecoded HpackErr { F last_err }
+        ^ @ !HpackDecoded HpackErr { F last_err }
     } {}
-    ^ @ ! HpackDecoded HpackErr {
+    ^ @ !HpackDecoded HpackErr {
         T @ HpackDecoded { hdrs cur }
     }
 }
@@ -523,38 +523,38 @@ $ `stdlib/ext/http.nu`
 // Decode a literal-field representation starting at `off`. `prefix_bits`
 // is 6 for §6.2.1, 4 for §6.2.2 / §6.2.3. `indexing` says whether to
 // insert the resulting field into the dynamic table.
-@ __hpack_decode_lit_call ( Vec u ) buf i off i prefix_bits b indexing HpackDynTable dyn → ! HpackLitResult HpackErr {
-    : ! HpackInt HpackErr ni ( hpack_decode_int buf off prefix_bits )
+@ __hpack_decode_lit_call ( Vec u ) buf i off i prefix_bits b indexing HpackDynTable dyn → !HpackLitResult HpackErr {
+    : !HpackInt HpackErr ni ( hpack_decode_int buf off prefix_bits )
     : ~ i name_idx 0
     : ~ i cur_off 0
     ?? ni {
-        T iv → { = name_idx . iv value  = cur_off + off . iv consumed }
-        F e → { ^ @ ! HpackLitResult HpackErr { F e } }
+        T iv → { = name_idx . iv value = cur_off + off . iv consumed }
+        F e → { ^ @ !HpackLitResult HpackErr { F e } }
     }
     : ~ String name ( string_new )
     ? > name_idx 0 {
-        : ? Header opt ( hpack_dyn_lookup dyn name_idx )
+        : ?Header opt ( hpack_dyn_lookup dyn name_idx )
         ?? opt {
             T h → {
                 ( string_free name )
                 = name ( string_from ( string_data . h name ) )
                 ( header_free h )
             }
-            F _ → { ^ @ ! HpackLitResult HpackErr { F HpackBadIndex } }
+            F _ → { ^ @ !HpackLitResult HpackErr { F HpackBadIndex } }
         }
     } {
-        : ! HpackString HpackErr ns ( hpack_decode_string buf cur_off )
+        : !HpackString HpackErr ns ( hpack_decode_string buf cur_off )
         ?? ns {
             T hs → {
                 ( string_free name )
                 = name . hs value
                 = cur_off + cur_off . hs consumed
             }
-            F e → { ^ @ ! HpackLitResult HpackErr { F e } }
+            F e → { ^ @ !HpackLitResult HpackErr { F e } }
         }
     }
     : ~ String value ( string_new )
-    : ! HpackString HpackErr vs ( hpack_decode_string buf cur_off )
+    : !HpackString HpackErr vs ( hpack_decode_string buf cur_off )
     ?? vs {
         T hs → {
             ( string_free value )
@@ -564,15 +564,15 @@ $ `stdlib/ext/http.nu`
         F e → {
             ( string_free name )
             ( string_free value )
-            ^ @ ! HpackLitResult HpackErr { F e }
+            ^ @ !HpackLitResult HpackErr { F e }
         }
     }
     : ~ HpackDynTable cur dyn
     ? indexing {
         = cur ( hpack_dyn_insert cur
-                ( string_data name ) ( string_data value ) )
+        ( string_data name ) ( string_data value ) )
     } {}
-    ^ @ ! HpackLitResult HpackErr {
+    ^ @ !HpackLitResult HpackErr {
         T @ HpackLitResult { name value cur - cur_off off }
     }
 }
@@ -623,7 +623,7 @@ $ `stdlib/ext/http.nu`
 // codes by length (5..30 bits); first match wins because the codes are
 // prefix-free. EOS (symbol 256) inside data is a protocol error.
 
-@ __hpack_huffman_decode ( Vec u ) buf i from i length → ! String HpackErr {
+@ __hpack_huffman_decode ( Vec u ) buf i from i length → !String HpackErr {
     : ~ String out ( string_new )
     : ~ i bit_window 0
     : ~ i bits_avail 0
@@ -686,9 +686,9 @@ $ `stdlib/ext/http.nu`
     }
     ? ! ok {
         ( string_free out )
-        ^ @ ! String HpackErr { F HpackBadHuffman }
+        ^ @ !String HpackErr { F HpackBadHuffman }
     } {}
-    ^ @ ! String HpackErr { T out }
+    ^ @ !String HpackErr { T out }
 }
 
 // Length-by-length sym lookup. Returns -1 on no match. NURL's `??`
@@ -717,7 +717,7 @@ $ `stdlib/ext/http.nu`
         27 → ( __hpack_huffman_l27 code )
         28 → ( __hpack_huffman_l28 code )
         30 → ( __hpack_huffman_l30 code )
-        _  → -1
+        _ → -1
     }
 }
 
@@ -734,7 +734,7 @@ $ `stdlib/ext/http.nu`
         7 → 111
         8 → 115
         9 → 116
-        _  → -1
+        _ → -1
     }
 }
 
@@ -767,7 +767,7 @@ $ `stdlib/ext/http.nu`
         43 → 112
         44 → 114
         45 → 117
-        _  → -1
+        _ → -1
     }
 }
 
@@ -806,7 +806,7 @@ $ `stdlib/ext/http.nu`
         121 → 120
         122 → 121
         123 → 122
-        _  → -1
+        _ → -1
     }
 }
 
@@ -819,7 +819,7 @@ $ `stdlib/ext/http.nu`
         251 → 59
         252 → 88
         253 → 90
-        _  → -1
+        _ → -1
     }
 }
 
@@ -831,7 +831,7 @@ $ `stdlib/ext/http.nu`
         1018 → 40
         1019 → 41
         1020 → 63
-        _  → -1
+        _ → -1
     }
 }
 
@@ -841,7 +841,7 @@ $ `stdlib/ext/http.nu`
         2042 → 39
         2043 → 43
         2044 → 124
-        _  → -1
+        _ → -1
     }
 }
 
@@ -850,7 +850,7 @@ $ `stdlib/ext/http.nu`
     ^ ?? c {
         4090 → 35
         4091 → 62
-        _  → -1
+        _ → -1
     }
 }
 
@@ -863,7 +863,7 @@ $ `stdlib/ext/http.nu`
         8187 → 91
         8188 → 93
         8189 → 126
-        _  → -1
+        _ → -1
     }
 }
 
@@ -872,7 +872,7 @@ $ `stdlib/ext/http.nu`
     ^ ?? c {
         16380 → 94
         16381 → 125
-        _  → -1
+        _ → -1
     }
 }
 
@@ -882,7 +882,7 @@ $ `stdlib/ext/http.nu`
         32764 → 60
         32765 → 96
         32766 → 123
-        _  → -1
+        _ → -1
     }
 }
 
@@ -892,7 +892,7 @@ $ `stdlib/ext/http.nu`
         524272 → 92
         524273 → 195
         524274 → 208
-        _  → -1
+        _ → -1
     }
 }
 
@@ -907,7 +907,7 @@ $ `stdlib/ext/http.nu`
         1048555 → 194
         1048556 → 224
         1048557 → 226
-        _  → -1
+        _ → -1
     }
 }
 
@@ -927,7 +927,7 @@ $ `stdlib/ext/http.nu`
         2097126 → 227
         2097127 → 229
         2097128 → 230
-        _  → -1
+        _ → -1
     }
 }
 
@@ -960,7 +960,7 @@ $ `stdlib/ext/http.nu`
         4194281 → 228
         4194282 → 232
         4194283 → 233
-        _  → -1
+        _ → -1
     }
 }
 
@@ -996,7 +996,7 @@ $ `stdlib/ext/http.nu`
         8388594 → 197
         8388595 → 231
         8388596 → 239
-        _  → -1
+        _ → -1
     }
 }
 
@@ -1015,7 +1015,7 @@ $ `stdlib/ext/http.nu`
         16777203 → 225
         16777204 → 236
         16777205 → 237
-        _  → -1
+        _ → -1
     }
 }
 
@@ -1026,7 +1026,7 @@ $ `stdlib/ext/http.nu`
         33554413 → 207
         33554414 → 234
         33554415 → 235
-        _  → -1
+        _ → -1
     }
 }
 
@@ -1048,7 +1048,7 @@ $ `stdlib/ext/http.nu`
         67108844 → 242
         67108845 → 243
         67108846 → 255
-        _  → -1
+        _ → -1
     }
 }
 
@@ -1074,7 +1074,7 @@ $ `stdlib/ext/http.nu`
         134217710 → 252
         134217711 → 253
         134217712 → 254
-        _  → -1
+        _ → -1
     }
 }
 
@@ -1110,7 +1110,7 @@ $ `stdlib/ext/http.nu`
         268435452 → 127
         268435453 → 220
         268435454 → 249
-        _  → -1
+        _ → -1
     }
 }
 
@@ -1121,6 +1121,6 @@ $ `stdlib/ext/http.nu`
         1073741821 → 13
         1073741822 → 22
         1073741823 → 256
-        _  → -1
+        _ → -1
     }
 }

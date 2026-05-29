@@ -91,40 +91,45 @@ $ `stdlib/ext/http_response.nu`
 // the inner read/write loops.
 
 @ ws_opcode_continuation → i { ^ 0 }
-@ ws_opcode_text         → i { ^ 1 }
-@ ws_opcode_binary       → i { ^ 2 }
-@ ws_opcode_close        → i { ^ 8 }
-@ ws_opcode_ping         → i { ^ 9 }
-@ ws_opcode_pong         → i { ^ 10 }
+
+@ ws_opcode_text → i { ^ 1 }
+
+@ ws_opcode_binary → i { ^ 2 }
+
+@ ws_opcode_close → i { ^ 8 }
+
+@ ws_opcode_ping → i { ^ 9 }
+
+@ ws_opcode_pong → i { ^ 10 }
 
 : WsFrame {
-    i  opcode      // 0,1,2,8,9,10
-    b  fin
-    ( Vec u ) payload   // OWNED
+    i opcode  // 0,1,2,8,9,10
+    b fin
+    ( Vec u ) payload  // OWNED
 }
 
 : WsMessage {
-    i  opcode      // 1 (text) or 2 (binary)
-    ( Vec u ) payload   // OWNED, assembled across continuation frames
+    i opcode  // 1 (text) or 2 (binary)
+    ( Vec u ) payload  // OWNED, assembled across continuation frames
 }
 
 : WsCloseInfo {
-    i  code        // 1000..4999, or 1005 (no body)
+    i code  // 1000..4999, or 1005 (no body)
     String reason  // OWNED
 }
 
 : WsLimits {
-    i  max_frame_bytes       // single frame payload cap; default 16 MiB
-    i  max_message_bytes     // assembled message cap; default 64 MiB
-    i  read_timeout_ms       // per-frame socket recv deadline; default 60s
-    i  fragment_max_count    // max fragments per message; default 128
+    i max_frame_bytes  // single frame payload cap; default 16 MiB
+    i max_message_bytes  // assembled message cap; default 64 MiB
+    i read_timeout_ms  // per-frame socket recv deadline; default 60s
+    i fragment_max_count  // max fragments per message; default 128
 }
 
 @ ws_default_limits → WsLimits {
     ^ @ WsLimits {
-        16777216    // 16 MiB
-        67108864    // 64 MiB
-        60000       // 60s
+        16777216  // 16 MiB
+        67108864  // 64 MiB
+        60000  // 60s
         128
     }
 }
@@ -140,7 +145,7 @@ $ `stdlib/ext/http_response.nu`
     WsHandshakeWriteFailed
     // Frame I/O
     WsReadIo
-    WsReadShort                    // peer closed mid-frame
+    WsReadShort  // peer closed mid-frame
     WsWriteFailed
     // Protocol violations (RFC 6455 §5)
     WsProtocolReservedBit
@@ -165,30 +170,30 @@ $ `stdlib/ext/http_response.nu`
 
 @ ws_err_name WsErr e → s {
     ^ ?? e {
-        WsHandshakeMethodNotGet     → `WsHandshakeMethodNotGet`
-        WsHandshakeMissingHost      → `WsHandshakeMissingHost`
-        WsHandshakeBadUpgrade       → `WsHandshakeBadUpgrade`
-        WsHandshakeBadConnection    → `WsHandshakeBadConnection`
-        WsHandshakeBadVersion       → `WsHandshakeBadVersion`
-        WsHandshakeBadKey           → `WsHandshakeBadKey`
-        WsHandshakeWriteFailed      → `WsHandshakeWriteFailed`
-        WsReadIo                    → `WsReadIo`
-        WsReadShort                 → `WsReadShort`
-        WsWriteFailed               → `WsWriteFailed`
-        WsProtocolReservedBit       → `WsProtocolReservedBit`
-        WsProtocolBadOpcode         → `WsProtocolBadOpcode`
-        WsProtocolControlTooLarge   → `WsProtocolControlTooLarge`
+        WsHandshakeMethodNotGet → `WsHandshakeMethodNotGet`
+        WsHandshakeMissingHost → `WsHandshakeMissingHost`
+        WsHandshakeBadUpgrade → `WsHandshakeBadUpgrade`
+        WsHandshakeBadConnection → `WsHandshakeBadConnection`
+        WsHandshakeBadVersion → `WsHandshakeBadVersion`
+        WsHandshakeBadKey → `WsHandshakeBadKey`
+        WsHandshakeWriteFailed → `WsHandshakeWriteFailed`
+        WsReadIo → `WsReadIo`
+        WsReadShort → `WsReadShort`
+        WsWriteFailed → `WsWriteFailed`
+        WsProtocolReservedBit → `WsProtocolReservedBit`
+        WsProtocolBadOpcode → `WsProtocolBadOpcode`
+        WsProtocolControlTooLarge → `WsProtocolControlTooLarge`
         WsProtocolControlFragmented → `WsProtocolControlFragmented`
-        WsProtocolUnmasked          → `WsProtocolUnmasked`
-        WsProtocolBadContinuation   → `WsProtocolBadContinuation`
-        WsProtocolBadFragmentation  → `WsProtocolBadFragmentation`
-        WsFrameTooLarge             → `WsFrameTooLarge`
-        WsMessageTooLarge           → `WsMessageTooLarge`
-        WsTooManyFragments          → `WsTooManyFragments`
-        WsInvalidUtf8               → `WsInvalidUtf8`
-        WsInvalidCloseCode          → `WsInvalidCloseCode`
-        WsClosedByPeer              → `WsClosedByPeer`
-        WsOther                     → `WsOther`
+        WsProtocolUnmasked → `WsProtocolUnmasked`
+        WsProtocolBadContinuation → `WsProtocolBadContinuation`
+        WsProtocolBadFragmentation → `WsProtocolBadFragmentation`
+        WsFrameTooLarge → `WsFrameTooLarge`
+        WsMessageTooLarge → `WsMessageTooLarge`
+        WsTooManyFragments → `WsTooManyFragments`
+        WsInvalidUtf8 → `WsInvalidUtf8`
+        WsInvalidCloseCode → `WsInvalidCloseCode`
+        WsClosedByPeer → `WsClosedByPeer`
+        WsOther → `WsOther`
     }
 }
 
@@ -200,26 +205,28 @@ $ `stdlib/ext/http_response.nu`
 // cases because the socket itself is suspect.
 @ __ws_err_to_close WsErr e → i {
     ^ ?? e {
-        WsProtocolReservedBit       → 1002    // protocol error
-        WsProtocolBadOpcode         → 1002
-        WsProtocolControlTooLarge   → 1002
+        WsProtocolReservedBit → 1002  // protocol error
+        WsProtocolBadOpcode → 1002
+        WsProtocolControlTooLarge → 1002
         WsProtocolControlFragmented → 1002
-        WsProtocolUnmasked          → 1002
-        WsProtocolBadContinuation   → 1002
-        WsProtocolBadFragmentation  → 1002
-        WsInvalidUtf8               → 1007    // invalid frame payload data
-        WsInvalidCloseCode          → 1002
-        WsFrameTooLarge             → 1009    // message too big
-        WsMessageTooLarge           → 1009
-        WsTooManyFragments          → 1009
-        _                           → 1011    // internal error / unknown
+        WsProtocolUnmasked → 1002
+        WsProtocolBadContinuation → 1002
+        WsProtocolBadFragmentation → 1002
+        WsInvalidUtf8 → 1007  // invalid frame payload data
+        WsInvalidCloseCode → 1002
+        WsFrameTooLarge → 1009  // message too big
+        WsMessageTooLarge → 1009
+        WsTooManyFragments → 1009
+        _ → 1011  // internal error / unknown
     }
 }
 
 // ── Free helpers ─────────────────────────────────────────────────────
 
 @ ws_frame_free WsFrame f → v { ( vec_free [u] . f payload ) }
+
 @ ws_message_free WsMessage m → v { ( vec_free [u] . m payload ) }
+
 @ ws_close_info_free WsCloseInfo c → v { ( string_free . c reason ) }
 
 // ── Handshake (RFC 6455 §4) ───────────────────────────────────────────
@@ -366,14 +373,14 @@ $ `stdlib/ext/http_response.nu`
 // Returns the error for any validation failure; the serve loop turns
 // those into a 4xx HTTP response (handshake errors are NOT close-frame
 // errors — the WebSocket protocol hasn't started yet).
-@ ws_handshake_response_for HttpRequest req ?String subprotocol → ! HttpResponse WsErr {
+@ ws_handshake_response_for HttpRequest req ? String subprotocol → !HttpResponse WsErr {
     ? ! ( __ws_str_eq_ci . req method `GET` ) {
-        ^ @ ! HttpResponse WsErr { F WsHandshakeMethodNotGet }
+        ^ @ !HttpResponse WsErr { F WsHandshakeMethodNotGet }
     } {}
     : ?String host ( header_get . req headers `Host` )
     ?? host {
         T h → { ( string_free h ) }
-        F _ → { ^ @ ! HttpResponse WsErr { F WsHandshakeMissingHost } }
+        F _ → { ^ @ !HttpResponse WsErr { F WsHandshakeMissingHost } }
     }
     : ?String upg ( header_get . req headers `Upgrade` )
     : b upg_ok ?? upg {
@@ -384,7 +391,7 @@ $ `stdlib/ext/http_response.nu`
         }
         F _ → F
     }
-    ? ! upg_ok { ^ @ ! HttpResponse WsErr { F WsHandshakeBadUpgrade } } {}
+    ? ! upg_ok { ^ @ !HttpResponse WsErr { F WsHandshakeBadUpgrade } } {}
     : ?String conn ( header_get . req headers `Connection` )
     : b conn_ok ?? conn {
         T cv → {
@@ -394,7 +401,7 @@ $ `stdlib/ext/http_response.nu`
         }
         F _ → F
     }
-    ? ! conn_ok { ^ @ ! HttpResponse WsErr { F WsHandshakeBadConnection } } {}
+    ? ! conn_ok { ^ @ !HttpResponse WsErr { F WsHandshakeBadConnection } } {}
     : ?String ver ( header_get . req headers `Sec-WebSocket-Version` )
     : b ver_ok ?? ver {
         T vv → {
@@ -404,7 +411,7 @@ $ `stdlib/ext/http_response.nu`
         }
         F _ → F
     }
-    ? ! ver_ok { ^ @ ! HttpResponse WsErr { F WsHandshakeBadVersion } } {}
+    ? ! ver_ok { ^ @ !HttpResponse WsErr { F WsHandshakeBadVersion } } {}
     : ?String key ( header_get . req headers `Sec-WebSocket-Key` )
     : ~ String accept ( string_new )
     : ~ b key_ok F
@@ -421,7 +428,7 @@ $ `stdlib/ext/http_response.nu`
     }
     ? ! key_ok {
         ( string_free accept )
-        ^ @ ! HttpResponse WsErr { F WsHandshakeBadKey }
+        ^ @ !HttpResponse WsErr { F WsHandshakeBadKey }
     } {}
     : HttpResponse r ( response_new 101 )
     ( response_set_header r `Upgrade` `websocket` )
@@ -434,19 +441,19 @@ $ `stdlib/ext/http_response.nu`
         F _ → {}
     }
     ( string_free accept )
-    ^ @ ! HttpResponse WsErr { T r }
+    ^ @ !HttpResponse WsErr { T r }
 }
 
 // Convenience: validate + build + write the 101 response in one shot,
 // no subprotocol selection. After this returns Ok, the TcpConn is in
 // WebSocket framing mode and the caller switches to `ws_read_frame` /
 // `ws_send_*` for I/O.
-@ ws_perform_handshake TcpConn conn HttpRequest req → ! v WsErr {
+@ ws_perform_handshake TcpConn conn HttpRequest req → !v WsErr {
     ^ ( ws_perform_handshake_with conn req @ ?String { F ( string_new ) } )
 }
 
-@ ws_perform_handshake_with TcpConn conn HttpRequest req ?String subprotocol → ! v WsErr {
-    : ! HttpResponse WsErr rr ( ws_handshake_response_for req subprotocol )
+@ ws_perform_handshake_with TcpConn conn HttpRequest req ? String subprotocol → !v WsErr {
+    : !HttpResponse WsErr rr ( ws_handshake_response_for req subprotocol )
     ?? rr {
         T resp → {
             : ( Vec u ) wire ( response_serialize resp )
@@ -454,11 +461,11 @@ $ `stdlib/ext/http_response.nu`
             ( vec_free [u] wire )
             ( http_response_free resp )
             ?? wr {
-                T _ → { ^ @ ! v WsErr { T 0 } }
-                F _ → { ^ @ ! v WsErr { F WsHandshakeWriteFailed } }
+                T _ → { ^ @ !v WsErr { T 0 } }
+                F _ → { ^ @ !v WsErr { F WsHandshakeWriteFailed } }
             }
         }
-        F e → { ^ @ ! v WsErr { F e } }
+        F e → { ^ @ !v WsErr { F e } }
     }
 }
 
@@ -484,7 +491,7 @@ $ `stdlib/ext/http_response.nu`
     } {}
     : ( Vec u ) buf ( vec_with_cap [u] n )
     : ~ i remaining n
-    : ~ i status 1   // 1 = ok, 0 = err
+    : ~ i status 1  // 1 = ok, 0 = err
     : ~ WsErr last WsReadIo
     ~ & == status 1 > remaining 0 {
         : i want ? > remaining 4096 4096 remaining
@@ -534,7 +541,7 @@ $ `stdlib/ext/http_response.nu`
 //   7. Payload length MUST be ≤ lim.max_frame_bytes.
 //
 // Masking key is applied to the payload before return.
-@ ws_read_frame TcpConn conn WsLimits lim → ! WsFrame WsErr {
+@ ws_read_frame TcpConn conn WsLimits lim → !WsFrame WsErr {
     : !( Vec u ) WsErr hdr_r ( __ws_read_exact conn 2 )
     : ~ b ok F
     : ~ b fin F
@@ -559,22 +566,22 @@ $ `stdlib/ext/http_response.nu`
         }
         F e → { = err e }
     }
-    ? ! ok { ^ @ ! WsFrame WsErr { F err } } {}
+    ? ! ok { ^ @ !WsFrame WsErr { F err } } {}
     // Opcode validity
     ? ! ( __ws_opcode_is_valid opcode ) {
-        ^ @ ! WsFrame WsErr { F WsProtocolBadOpcode }
+        ^ @ !WsFrame WsErr { F WsProtocolBadOpcode }
     } {}
     // Control-frame rules: FIN MUST be 1, length ≤ 125
     : b is_ctl ( __ws_opcode_is_control opcode )
     ? & is_ctl ! fin {
-        ^ @ ! WsFrame WsErr { F WsProtocolControlFragmented }
+        ^ @ !WsFrame WsErr { F WsProtocolControlFragmented }
     } {}
     ? & is_ctl > len7 125 {
-        ^ @ ! WsFrame WsErr { F WsProtocolControlTooLarge }
+        ^ @ !WsFrame WsErr { F WsProtocolControlTooLarge }
     } {}
     // Masking: server MUST close 1002 on unmasked frames (RFC §5.1).
     ? ! masked {
-        ^ @ ! WsFrame WsErr { F WsProtocolUnmasked }
+        ^ @ !WsFrame WsErr { F WsProtocolUnmasked }
     } {}
     // Resolve full payload length
     : ~ i payload_len 0
@@ -588,7 +595,7 @@ $ `stdlib/ext/http_response.nu`
                 = payload_len + << e0 8 e1
                 ( vec_free [u] eb )
             }
-            F e → { ^ @ ! WsFrame WsErr { F e } }
+            F e → { ^ @ !WsFrame WsErr { F e } }
         }
     } {}
     ? == len7 127 {
@@ -608,27 +615,27 @@ $ `stdlib/ext/http_response.nu`
                 // the value fits in i63). Lower 56 bits go into payload_len.
                 ? != e0 0 {
                     ( vec_free [u] eb )
-                    ^ @ ! WsFrame WsErr { F WsFrameTooLarge }
+                    ^ @ !WsFrame WsErr { F WsFrameTooLarge }
                 } {}
                 : i hi + << e1 48 + << e2 40 + << e3 32 << e4 24
                 : i lo + + << e5 16 << e6 8 e7
                 = payload_len + hi lo
                 ( vec_free [u] eb )
             }
-            F e → { ^ @ ! WsFrame WsErr { F e } }
+            F e → { ^ @ !WsFrame WsErr { F e } }
         }
     } {}
     ? < len7 126 { = payload_len len7 } {}
     // Frame-size cap
     ? > payload_len . lim max_frame_bytes {
-        ^ @ ! WsFrame WsErr { F WsFrameTooLarge }
+        ^ @ !WsFrame WsErr { F WsFrameTooLarge }
     } {}
     : !( Vec u ) WsErr ppr ( __ws_read_masked_payload conn payload_len )
     ?? ppr {
         T payload → {
-            ^ @ ! WsFrame WsErr { T @ WsFrame { opcode fin payload } }
+            ^ @ !WsFrame WsErr { T @ WsFrame { opcode fin payload } }
         }
-        F e → { ^ @ ! WsFrame WsErr { F e } }
+        F e → { ^ @ !WsFrame WsErr { F e } }
     }
 }
 
@@ -687,17 +694,17 @@ $ `stdlib/ext/http_response.nu`
 // Err on local validation failures so a misuse fails before reaching
 // the wire. Useful directly for offline frame-format tests; the
 // `ws_write_frame` wrapper composes this with `tcp_write_all`.
-@ ws_serialize_frame b fin i opcode ( Vec u ) payload → ! ( Vec u ) WsErr {
+@ ws_serialize_frame b fin i opcode ( Vec u ) payload → !( Vec u ) WsErr {
     : i n ( vec_len [u] payload )
     : b is_ctl ( __ws_opcode_is_control opcode )
     ? & is_ctl ! fin {
-        ^ @ ! ( Vec u ) WsErr { F WsProtocolControlFragmented }
+        ^ @ !( Vec u ) WsErr { F WsProtocolControlFragmented }
     } {}
     ? & is_ctl > n 125 {
-        ^ @ ! ( Vec u ) WsErr { F WsProtocolControlTooLarge }
+        ^ @ !( Vec u ) WsErr { F WsProtocolControlTooLarge }
     } {}
     ? ! ( __ws_opcode_is_valid opcode ) {
-        ^ @ ! ( Vec u ) WsErr { F WsProtocolBadOpcode }
+        ^ @ !( Vec u ) WsErr { F WsProtocolBadOpcode }
     } {}
     // Assemble header (≤10 bytes: 2 + 8 ext len) then append payload.
     : ( Vec u ) out ( vec_with_cap [u] + 10 n )
@@ -723,44 +730,44 @@ $ `stdlib/ext/http_response.nu`
         }
     }
     ? > n 0 { ( vec_extend [u] out payload ) } {}
-    ^ @ ! ( Vec u ) WsErr { T out }
+    ^ @ !( Vec u ) WsErr { T out }
 }
 
 // Write a single frame to `conn`. Server-side: MASK bit is always 0
 // (see `ws_serialize_frame`).
-@ ws_write_frame TcpConn conn b fin i opcode ( Vec u ) payload → ! v WsErr {
-    : ! ( Vec u ) WsErr sr ( ws_serialize_frame fin opcode payload )
+@ ws_write_frame TcpConn conn b fin i opcode ( Vec u ) payload → !v WsErr {
+    : !( Vec u ) WsErr sr ( ws_serialize_frame fin opcode payload )
     ?? sr {
         T out → {
             : !v NetErr wr ( tcp_write_all conn out )
             ( vec_free [u] out )
             ?? wr {
-                T _ → { ^ @ ! v WsErr { T 0 } }
-                F _ → { ^ @ ! v WsErr { F WsWriteFailed } }
+                T _ → { ^ @ !v WsErr { T 0 } }
+                F _ → { ^ @ !v WsErr { F WsWriteFailed } }
             }
         }
-        F e → { ^ @ ! v WsErr { F e } }
+        F e → { ^ @ !v WsErr { F e } }
     }
 }
 
 // ── Convenience writers ───────────────────────────────────────────────
 
-@ ws_send_text TcpConn conn s text → ! v WsErr {
+@ ws_send_text TcpConn conn s text → !v WsErr {
     : ( Vec u ) buf ( bytes_from_str text )
-    : ! v WsErr r ( ws_write_frame conn T ( ws_opcode_text ) buf )
+    : !v WsErr r ( ws_write_frame conn T ( ws_opcode_text ) buf )
     ( vec_free [u] buf )
     ^ r
 }
 
-@ ws_send_binary TcpConn conn ( Vec u ) data → ! v WsErr {
+@ ws_send_binary TcpConn conn ( Vec u ) data → !v WsErr {
     ^ ( ws_write_frame conn T ( ws_opcode_binary ) data )
 }
 
-@ ws_send_ping TcpConn conn ( Vec u ) data → ! v WsErr {
+@ ws_send_ping TcpConn conn ( Vec u ) data → !v WsErr {
     ^ ( ws_write_frame conn T ( ws_opcode_ping ) data )
 }
 
-@ ws_send_pong TcpConn conn ( Vec u ) data → ! v WsErr {
+@ ws_send_pong TcpConn conn ( Vec u ) data → !v WsErr {
     ^ ( ws_write_frame conn T ( ws_opcode_pong ) data )
 }
 
@@ -768,22 +775,22 @@ $ `stdlib/ext/http_response.nu`
 // RFC 6455 §7.4.1) and UTF-8 reason. Reason MAY be empty; status code
 // MAY be absent on the wire by passing -1, in which case no payload is
 // sent (interpreted as "no status code given" per §7.1.5).
-@ ws_send_close TcpConn conn i code s reason → ! v WsErr {
+@ ws_send_close TcpConn conn i code s reason → !v WsErr {
     ? < code 0 {
         : ( Vec u ) empty ( vec_new [u] )
-        : ! v WsErr r ( ws_write_frame conn T ( ws_opcode_close ) empty )
+        : !v WsErr r ( ws_write_frame conn T ( ws_opcode_close ) empty )
         ( vec_free [u] empty )
         ^ r
     } {}
     ? | < code 1000 > code 4999 {
-        ^ @ ! v WsErr { F WsInvalidCloseCode }
+        ^ @ !v WsErr { F WsInvalidCloseCode }
     } {}
     : ( Vec u ) buf ( vec_with_cap [u] + 2 ( nurl_str_len reason ) )
     ( vec_push [u] buf # u & 255 >> code 8 )
     ( vec_push [u] buf # u & 255 code )
     : i rn ( nurl_str_len reason )
     ? > rn 0 { ( bytes_extend_str buf reason ) } {}
-    : ! v WsErr r ( ws_write_frame conn T ( ws_opcode_close ) buf )
+    : !v WsErr r ( ws_write_frame conn T ( ws_opcode_close ) buf )
     ( vec_free [u] buf )
     ^ r
 }
@@ -917,9 +924,9 @@ $ `stdlib/ext/http_response.nu`
 // per logical message, including control frames interleaved between
 // fragments — a malicious peer cannot stall the server with infinite
 // pings between continuation frames.
-@ ws_read_message TcpConn conn WsLimits lim → ! WsMessage WsErr {
+@ ws_read_message TcpConn conn WsLimits lim → !WsMessage WsErr {
     : ~ ( Vec u ) acc ( vec_new [u] )
-    : ~ i kind 0          // 0 = no fragment in progress, 1 = text, 2 = binary
+    : ~ i kind 0  // 0 = no fragment in progress, 1 = text, 2 = binary
     : ~ i frame_count 0
     : ~ b done F
     : ~ b have_message F
@@ -931,7 +938,7 @@ $ `stdlib/ext/http_response.nu`
             = err WsTooManyFragments
             = done T
         } {
-            : ! WsFrame WsErr fr ( ws_read_frame conn lim )
+            : !WsFrame WsErr fr ( ws_read_frame conn lim )
             ?? fr {
                 T frm → {
                     : i op . frm opcode
@@ -941,7 +948,7 @@ $ `stdlib/ext/http_response.nu`
                         // Control frame: handle in-band
                         ? == op 9 {
                             // Ping → reply with Pong, same payload
-                            : ! v WsErr pr ( ws_send_pong conn pl )
+                            : !v WsErr pr ( ws_send_pong conn pl )
                             ?? pr {
                                 T _ → {}
                                 F we → { = err we = done T }
@@ -975,9 +982,9 @@ $ `stdlib/ext/http_response.nu`
                                             : i cb1 & # i . clp 1 255
                                             : i code + << cb0 8 cb1
                                             : b code_bad | | | |
-                                                < code 1000 > code 4999
-                                                == code 1004 == code 1005
-                                                | == code 1006 == code 1015
+                                            < code 1000 > code 4999
+                                            == code 1004 == code 1005
+                                            | == code 1006 == code 1015
                                             ? & ! code_bad & >= code 1000 < code 3000 {
                                                 // 1000–2999 are reserved
                                                 // for the protocol; only
@@ -986,12 +993,12 @@ $ `stdlib/ext/http_response.nu`
                                                 // the wire (1004/1005/1006/
                                                 // 1015 already filtered).
                                                 ? & & & & & & & & & & &
-                                                    != code 1000 != code 1001
-                                                    != code 1002 != code 1003
-                                                    != code 1007 != code 1008
-                                                    != code 1009 != code 1010
-                                                    != code 1011 != code 1012
-                                                    != code 1013 != code 1014
+                                                != code 1000 != code 1001
+                                                != code 1002 != code 1003
+                                                != code 1007 != code 1008
+                                                != code 1009 != code 1010
+                                                != code 1011 != code 1012
+                                                != code 1013 != code 1014
                                                 { = code_bad T } {}
                                             } {}
                                             ? code_bad {
@@ -1104,10 +1111,10 @@ $ `stdlib/ext/http_response.nu`
     }
     ( vec_free [u] acc )
     ? have_message {
-        ^ @ ! WsMessage WsErr { T @ WsMessage { kind msg_payload } }
+        ^ @ !WsMessage WsErr { T @ WsMessage { kind msg_payload } }
     } {
         ( vec_free [u] msg_payload )
-        ^ @ ! WsMessage WsErr { F err }
+        ^ @ !WsMessage WsErr { F err }
     }
 }
 
@@ -1130,15 +1137,15 @@ $ `stdlib/ext/http_response.nu`
 // On any TCP error the loop bails without further writes (the socket is
 // suspect). The caller is still responsible for tcp_close_conn after
 // this returns.
-@ ws_serve_messages TcpConn conn WsLimits lim ( @ ! v WsErr WsMessage ) handler → ! v WsErr {
+@ ws_serve_messages TcpConn conn WsLimits lim ( @ !v WsErr WsMessage ) handler → !v WsErr {
     : ~ b done F
-    : ~ b clean_close F          // T = peer-initiated close, return Ok
+    : ~ b clean_close F  // T = peer-initiated close, return Ok
     : ~ WsErr last WsOther
     ~ ! done {
-        : ! WsMessage WsErr mr ( ws_read_message conn lim )
+        : !WsMessage WsErr mr ( ws_read_message conn lim )
         ?? mr {
             T msg → {
-                : ! v WsErr hr ( handler msg )
+                : !v WsErr hr ( handler msg )
                 ( ws_message_free msg )
                 ?? hr {
                     T _ → {}
@@ -1150,7 +1157,7 @@ $ `stdlib/ext/http_response.nu`
                 = done T
                 ?? we {
                     WsClosedByPeer → { = clean_close T }
-                    _              → {}
+                    _ → {}
                 }
             }
         }
@@ -1158,11 +1165,11 @@ $ `stdlib/ext/http_response.nu`
     // Best-effort outbound close — ignore write failures because the
     // socket may already be suspect after the trigger that ended the loop.
     : i code ? clean_close 1000 ( __ws_err_to_close last )
-    : ! v WsErr _cr ( ws_send_close conn code `` )
+    : !v WsErr _cr ( ws_send_close conn code `` )
     ?? _cr { T _ → {} F _ → {} }
     ? clean_close {
-        ^ @ ! v WsErr { T 0 }
+        ^ @ !v WsErr { T 0 }
     } {
-        ^ @ ! v WsErr { F last }
+        ^ @ !v WsErr { F last }
     }
 }

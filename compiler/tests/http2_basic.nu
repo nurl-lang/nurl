@@ -24,21 +24,21 @@ $ `stdlib/ext/http2_hpack.nu`
 
     // RFC 9113 §6.5.3 — SETTINGS ACK: empty payload, type=4, flags=ACK
     : H2Frame f1 @ H2Frame { 4 1 0 ( vec_new [u] ) }
-    : ! ( Vec u ) H2FrameErr s1 ( h2_serialize_frame f1 16384 )
+    : !( Vec u ) H2FrameErr s1 ( h2_serialize_frame f1 16384 )
     ?? s1 {
         T w → {
             : i n ( vec_len [u] w )
             : *u p ( vec_data [u] w )
             : b shape & & & & & & & & == n 9
-                                  == # i . p 0 0
-                                  == # i . p 1 0
-                                  == # i . p 2 0
-                                  == # i . p 3 4
-                                  == # i . p 4 1
-                                  == # i . p 5 0
-                                  == # i . p 6 0
-                                  == # i . p 7 0
-                                  == # i . p 8 0
+            == # i . p 0 0
+            == # i . p 1 0
+            == # i . p 2 0
+            == # i . p 3 4
+            == # i . p 4 1
+            == # i . p 5 0
+            == # i . p 6 0
+            == # i . p 7 0
+            == # i . p 8 0
             ( print_bool `settings_ack_wire` shape )
             ( vec_free [u] w )
         }
@@ -49,18 +49,18 @@ $ `stdlib/ext/http2_hpack.nu`
     // PING (8 bytes opaque, type=6, no flags, stream 0)
     : ( Vec u ) opaque ( vec_new [u] )
     : ~ i k 0
-    ~ < k 8 { ( vec_push [u] opaque # u + 16 k )  = k + k 1 }
+    ~ < k 8 { ( vec_push [u] opaque # u + 16 k ) = k + k 1 }
     : H2Frame f2 @ H2Frame { 6 0 0 opaque }
-    : ! ( Vec u ) H2FrameErr s2 ( h2_serialize_frame f2 16384 )
+    : !( Vec u ) H2FrameErr s2 ( h2_serialize_frame f2 16384 )
     ?? s2 {
         T w → {
-            : ! H2ParsedFrame H2FrameErr pr ( h2_parse_frame w 0 )
+            : !H2ParsedFrame H2FrameErr pr ( h2_parse_frame w 0 )
             ?? pr {
                 T pp → {
                     : H2Frame ff . pp frame
                     : b ok & & & == . ff frame_type 6 == . ff flags 0
-                                  == . ff stream_id 0
-                                  == ( vec_len [u] . ff payload ) 8
+                    == . ff stream_id 0
+                    == ( vec_len [u] . ff payload ) 8
                     ( print_bool `ping_roundtrip` ok )
                     ( h2_parsed_frame_free pp )
                 }
@@ -75,18 +75,18 @@ $ `stdlib/ext/http2_hpack.nu`
     // DATA on stream 5 with END_STREAM, payload "abc"
     : ( Vec u ) body ( bytes_from_str `abc` )
     : H2Frame f3 @ H2Frame { 0 1 5 body }
-    : ! ( Vec u ) H2FrameErr s3 ( h2_serialize_frame f3 16384 )
+    : !( Vec u ) H2FrameErr s3 ( h2_serialize_frame f3 16384 )
     ?? s3 {
         T w → {
             : *u wp ( vec_data [u] w )
             : i sid_byte # i . wp 8
             : b ok & & & & & & == ( vec_len [u] w ) 12
-                              == # i . wp 0 0
-                              == # i . wp 1 0
-                              == # i . wp 2 3
-                              == # i . wp 3 0
-                              == # i . wp 4 1
-                              == sid_byte 5
+            == # i . wp 0 0
+            == # i . wp 1 0
+            == # i . wp 2 3
+            == # i . wp 3 0
+            == # i . wp 4 1
+            == sid_byte 5
             ( print_bool `data_wire` ok )
             ( vec_free [u] w )
         }
@@ -100,7 +100,7 @@ $ `stdlib/ext/http2_hpack.nu`
     : ~ i bk 0
     ~ < bk 16384 { ( vec_push [u] big # u 0 ) = bk + bk 1 }
     : H2Frame f4 @ H2Frame { 0 0 7 big }
-    : ! ( Vec u ) H2FrameErr s4 ( h2_serialize_frame f4 16384 )
+    : !( Vec u ) H2FrameErr s4 ( h2_serialize_frame f4 16384 )
     ?? s4 {
         T w → {
             : *u wp ( vec_data [u] w )
@@ -117,7 +117,7 @@ $ `stdlib/ext/http2_hpack.nu`
     : ~ i hk 0
     ~ < hk 17000 { ( vec_push [u] huge # u 0 ) = hk + hk 1 }
     : H2Frame f5 @ H2Frame { 0 0 9 huge }
-    : ! ( Vec u ) H2FrameErr s5 ( h2_serialize_frame f5 16384 )
+    : !( Vec u ) H2FrameErr s5 ( h2_serialize_frame f5 16384 )
     ?? s5 {
         T w → { ( nurl_print `unexpected_oversize_ok\n` ) ( vec_free [u] w ) }
         F e → ( print_label `oversize_err` ( h2_frame_err_name e ) )
@@ -142,12 +142,12 @@ $ `stdlib/ext/http2_hpack.nu`
     ( hpack_encode_int o2 5 0 1337 )
     : *u p2 ( vec_data [u] o2 )
     : b m12 & & & == ( vec_len [u] o2 ) 3
-                  == # i . p2 0 31
-                  == # i . p2 1 154
-                  == # i . p2 2 10
+    == # i . p2 0 31
+    == # i . p2 1 154
+    == # i . p2 2 10
     ( print_bool `c1_2_match` m12 )
     // Round-trip decode
-    : ! HpackInt HpackErr di ( hpack_decode_int o2 0 5 )
+    : !HpackInt HpackErr di ( hpack_decode_int o2 0 5 )
     ?? di {
         T iv → ( print_bool `c1_2_decode` & == . iv value 1337 == . iv consumed 3 )
         F _ → ( nurl_print `c1_2_decode_err\n` )
@@ -177,7 +177,7 @@ $ `stdlib/ext/http2_hpack.nu`
     ( print_label `roundtrip_blob_len` ( nurl_str_int blen ) )
 
     : HpackDynTable dt ( hpack_dyn_new 4096 )
-    : ! HpackDecoded HpackErr dr ( hpack_decode_block blob dt )
+    : !HpackDecoded HpackErr dr ( hpack_decode_block blob dt )
     ?? dr {
         T dd → {
             : i hn ( vec_len [Header] . dd headers )
@@ -185,8 +185,8 @@ $ `stdlib/ext/http2_hpack.nu`
             : Header h0 . hp 0
             : Header h1 . hp 1
             : b ok & & == hn 2
-                       != 0 ( nurl_str_eq ( string_data . h0 name ) `:status` )
-                       != 0 ( nurl_str_eq ( string_data . h1 value ) `text/plain` )
+            != 0 ( nurl_str_eq ( string_data . h0 name ) `:status` )
+            != 0 ( nurl_str_eq ( string_data . h1 value ) `text/plain` )
             ( print_bool `roundtrip_ok` ok )
             ( hpack_decoded_free dd )
         }
@@ -208,13 +208,13 @@ $ `stdlib/ext/http2_hpack.nu`
     : ( Vec u ) idx ( vec_new [u] )
     ( vec_push [u] idx # u 130 )
     : HpackDynTable dt ( hpack_dyn_new 4096 )
-    : ! HpackDecoded HpackErr ir ( hpack_decode_block idx dt )
+    : !HpackDecoded HpackErr ir ( hpack_decode_block idx dt )
     ?? ir {
         T dd → {
             : *Header hp ( vec_data [Header] . dd headers )
             : Header h . hp 0
             : b ok & != 0 ( nurl_str_eq ( string_data . h name ) `:method` )
-                   != 0 ( nurl_str_eq ( string_data . h value ) `GET` )
+            != 0 ( nurl_str_eq ( string_data . h value ) `GET` )
             ( print_bool `c4_1_indexed` ok )
             ( hpack_decoded_free dd )
         }
@@ -240,7 +240,7 @@ $ `stdlib/ext/http2_hpack.nu`
     ( vec_push [u] huf # u 144 )
     ( vec_push [u] huf # u 244 )
     ( vec_push [u] huf # u 255 )
-    : ! String HpackErr hr ( __hpack_huffman_decode huf 0 12 )
+    : !String HpackErr hr ( __hpack_huffman_decode huf 0 12 )
     ?? hr {
         T s → {
             ( print_label `huffman_www_example` ( string_data s ) )

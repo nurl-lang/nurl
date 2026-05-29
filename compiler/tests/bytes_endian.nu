@@ -98,9 +98,9 @@ $ `stdlib/core/vec.nu`
     : ?u b64_7 ( vec_get [u] buf64 7 )
     : ?u b64_8 ( vec_get [u] buf64 8 )
     : ?u b64_15 ( vec_get [u] buf64 15 )
-    ?? b64_0 { T b → ( print_byte `u64_be[0]` b ) F → {} }   // 0x01 = 1
-    ?? b64_7 { T b → ( print_byte `u64_be[7]` b ) F → {} }   // 0xEF = 239
-    ?? b64_8 { T b → ( print_byte `u64_le[0]` b ) F → {} }   // 0xEF = 239
+    ?? b64_0 { T b → ( print_byte `u64_be[0]` b ) F → {} }  // 0x01 = 1
+    ?? b64_7 { T b → ( print_byte `u64_be[7]` b ) F → {} }  // 0xEF = 239
+    ?? b64_8 { T b → ( print_byte `u64_le[0]` b ) F → {} }  // 0xEF = 239
     ?? b64_15 { T b → ( print_byte `u64_le[7]` b ) F → {} }  // 0x01 = 1
     : ?u64 r64_be ( bytes_read_u64_be buf64 0 )
     : ?u64 r64_le ( bytes_read_u64_le buf64 8 )

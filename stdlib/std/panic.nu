@@ -69,18 +69,18 @@ $ `stdlib/core/string.nu`
 // void-returning closure (`(@ v)` shape). Returns Ok(0) if the closure
 // completed normally, Err(PanicInfo) if it called `panic`. Nested
 // recover scopes are supported — `panic` unwinds to the nearest one.
-@ recover ( @ v ) closure → ! v PanicInfo {
+@ recover ( @ v ) closure → !v PanicInfo {
     // Decompose the closure into (fn_ptr, env_ptr) — the C trampoline
     // calls fn_ptr(env_ptr). Mirrors thread_spawn's shape.
     : *u fnp # *u closure 0
     : *u env # *u closure 1
     : i rv ( nurl_recover fnp env )
     ? == rv 0 {
-        ^ @ ! v PanicInfo { T 0 }
+        ^ @ !v PanicInfo { T 0 }
     } {}
     // Copy the borrowed message slot into an owned String — the
     // runtime overwrites its slot on the next panic.
     : s raw ( nurl_panic_last_msg )
     : String msg ( string_from raw )
-    ^ @ ! v PanicInfo { F @ PanicInfo { msg } }
+    ^ @ !v PanicInfo { F @ PanicInfo { msg } }
 }

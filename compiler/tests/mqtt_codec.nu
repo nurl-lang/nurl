@@ -102,17 +102,17 @@ $ `stdlib/std/bytes.nu`
 
     ( nurl_print `-- CONNACK reason --\n` )
     : ( Vec u ) cok ( vec_new [u] )
-    ( vec_push [u] cok # u 32 )    // CONNACK fixed-header type
-    ( vec_push [u] cok # u 2 )     // remaining length
-    ( vec_push [u] cok # u 0 )     // acknowledge flags
-    ( vec_push [u] cok # u 0 )     // reason code 0 = Success
+    ( vec_push [u] cok # u 32 )  // CONNACK fixed-header type
+    ( vec_push [u] cok # u 2 )  // remaining length
+    ( vec_push [u] cok # u 0 )  // acknowledge flags
+    ( vec_push [u] cok # u 0 )  // reason code 0 = Success
     ( nurl_print `connack_ok=` ) ( nurl_print ( nurl_str_int ( mqtt_connack_reason cok ) ) ) ( nurl_print `\n` )
     ( vec_free [u] cok )
     : ( Vec u ) cbad ( vec_new [u] )
     ( vec_push [u] cbad # u 32 )
     ( vec_push [u] cbad # u 2 )
     ( vec_push [u] cbad # u 0 )
-    ( vec_push [u] cbad # u 134 ) // 0x86 Bad User Name or Password
+    ( vec_push [u] cbad # u 134 )  // 0x86 Bad User Name or Password
     ( nurl_print `connack_bad=` ) ( nurl_print ( nurl_str_int ( mqtt_connack_reason cbad ) ) ) ( nurl_print `\n` )
     ( vec_free [u] cbad )
     : ( Vec u ) cshort ( vec_new [u] )
@@ -122,8 +122,8 @@ $ `stdlib/std/bytes.nu`
 
     ( nurl_print `-- user-property parse --\n` )
     : ( Vec u ) props ( vec_new [u] )
-    ( vec_push [u] props # u 38 )       // 0x26 User Property
-    ( __mqtt_put_str props `unit` )     // key
+    ( vec_push [u] props # u 38 )  // 0x26 User Property
+    ( __mqtt_put_str props `unit` )  // key
     ( __mqtt_put_str props `celsius` )  // value
     : ( Vec ( Pair String String ) ) parsed ( vec_new [( Pair String String )] )
     ( __mqtt_parse_props props 0 ( vec_len [u] props ) parsed )

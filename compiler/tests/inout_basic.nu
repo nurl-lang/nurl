@@ -9,7 +9,7 @@
 // alongside an ordinary by-value parameter, and an `inout` re-pass
 // (a callee handing its own `inout` parameter on to another).
 
-: Counter { i n  i max }
+: Counter { i n i max }
 
 // Struct inout: mutate a field of the caller's Counter.
 @ bump inout Counter c → v {
@@ -17,7 +17,7 @@
 }
 
 // inout beside an ordinary by-value parameter.
-@ bump_by inout Counter c  i d → v {
+@ bump_by inout Counter c i d → v {
     = . c n + . c n d
 }
 
@@ -35,11 +35,11 @@
 
 @ main → i {
     : ~ Counter c @ Counter { 0 10 }
-    ( bump c )                  // n = 1
-    ( bump_by c 5 )             // n = 6
-    ( bump_twice c )            // n = 8
+    ( bump c )  // n = 1
+    ( bump_by c 5 )  // n = 6
+    ( bump_twice c )  // n = 8
     : ~ i k 7
-    ( add100 k )                // k = 107
+    ( add100 k )  // k = 107
     ( nurl_print `c.n=` ) ( nurl_print ( nurl_str_int . c n ) ) ( nurl_print `\n` )
     ( nurl_print `k=` ) ( nurl_print ( nurl_str_int k ) ) ( nurl_print `\n` )
     ^ 0

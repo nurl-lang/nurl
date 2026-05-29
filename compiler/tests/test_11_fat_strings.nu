@@ -7,9 +7,7 @@
 
 // FFI-liitännät libc:hen — `strlen` tulee kääntäjän preamblesta
 // globaalisti, joten per-tiedosto-redeklaraatio jäi pois.
-& `libc`
-
-@ write i fd s buf i count → i
+& `libc` @ write i fd s buf i count → i
 
 // 1. Määritellään Fat Pointer -merkkijono, sama layout kuin slicellä!
 : String {

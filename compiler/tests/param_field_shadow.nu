@@ -22,10 +22,11 @@
     ^ b
 }
 
-@ box_get_cap *Box b → i { ^ . b cap }
-@ box_get_len *Box b → i { ^ . b len }
+@ box_get_cap * Box b → i { ^ . b cap }
 
-@ box_free *Box b → v { ( nurl_free # s b ) }
+@ box_get_len * Box b → i { ^ . b len }
+
+@ box_free * Box b → v { ( nurl_free # s b ) }
 
 // Negative control: variable-index array store on a *Match-like pointer
 // must still work. The Vec[A] vec_push pattern (`= . data len x` where
@@ -33,7 +34,7 @@
 // field) depends on this routing.
 : Pt { i x i y }
 
-@ pt_fill *Pt arr i n → v {
+@ pt_fill * Pt arr i n → v {
     : ~ i len 0  // local index var; NOT a param
     ~ < len n {
         // Pt has field `x` and `y` — neither matches `len`, so this is

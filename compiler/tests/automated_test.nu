@@ -310,7 +310,7 @@ $ `stdlib/core/option.nu`
 
     // Hae arvoja — opt_unwrap_or oletusarvo 0 jos avain puuttuu.
     : i alice_age ( opt_unwrap_or [i] ( map_get [s i] m `alice` hs es ) 0 )
-    : i bob_age   ( opt_unwrap_or [i] ( map_get [s i] m `bob`   hs es ) 0 )
+    : i bob_age ( opt_unwrap_or [i] ( map_get [s i] m `bob` hs es ) 0 )
 
     : b test1_ok == alice_age 42
     : b test2_ok == bob_age 17
@@ -323,10 +323,10 @@ $ `stdlib/core/option.nu`
     ( test_result test3_ok `HashMap: size = 2` )
 
     // Tarkista contains
-    : b has_alice   ( map_contains [s i] m `alice`   hs es )
+    : b has_alice ( map_contains [s i] m `alice` hs es )
     : b has_charlie ( map_contains [s i] m `charlie` hs es )
-    : b test4_ok    has_alice
-    : b test5_ok  ! has_charlie
+    : b test4_ok has_alice
+    : b test5_ok ! has_charlie
     ( test_result test4_ok `HashMap: has alice = true` )
     ( test_result test5_ok `HashMap: has charlie = false` )
 

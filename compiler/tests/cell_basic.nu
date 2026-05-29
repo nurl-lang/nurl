@@ -11,8 +11,8 @@ $ `stdlib/core/cell.nu`
     ( nurl_print `\n` )
 
     // Byte writes / reads.
-    ( cell_write_u8 c 0 65 )   // 'A'
-    ( cell_write_u8 c 1 66 )   // 'B'
+    ( cell_write_u8 c 0 65 )  // 'A'
+    ( cell_write_u8 c 1 66 )  // 'B'
     ( cell_write_u8 c 31 255 )
     ( nurl_print `[0]=` ) ( nurl_print ( nurl_str_int ( cell_read_u8 c 0 ) ) )
     ( nurl_print ` [1]=` ) ( nurl_print ( nurl_str_int ( cell_read_u8 c 1 ) ) )

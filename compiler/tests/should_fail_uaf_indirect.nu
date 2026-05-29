@@ -8,12 +8,12 @@
 $ `stdlib/core/string.nu`
 
 @ take String s → v {
-  ( string_free s )
+    ( string_free s )
 }
 
 @ main → i {
-  : String s ( string_from `hello` )
-  ( take s )
-  ( nurl_print ( string_data s ) )   // ← use after move
-  ^ 0
+    : String s ( string_from `hello` )
+    ( take s )
+    ( nurl_print ( string_data s ) )  // ← use after move
+    ^ 0
 }

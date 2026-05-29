@@ -23,7 +23,7 @@ $ `stdlib/core/string.nu`
 : ~ i joined 0
 
 @ main → i {
-    ( runtime_init 4 )                  // pin to 4 workers for the test
+    ( runtime_init 4 )  // pin to 4 workers for the test
     : Mutex m ( mutex_new )
 
     // ── A: spawn_joinable + fiber_join round-trip ──────────────────

@@ -1,28 +1,16 @@
 // gameoflife.nu — Conway's Life, classic two-color, big and clear
 
-& libc
+& libc @ rand → i
 
-@ rand → i
+& canvas @ canvas_open i w i h → *i
 
-& canvas
+& canvas @ canvas_present → v
 
-@ canvas_open i w i h → *i
+& canvas @ canvas_sleep i ms → v
 
-& canvas
+& canvas @ canvas_should_close → i
 
-@ canvas_present → v
-
-& canvas
-
-@ canvas_sleep i ms → v
-
-& canvas
-
-@ canvas_should_close → i
-
-& canvas
-
-@ canvas_close → v
+& canvas @ canvas_close → v
 
 : i CELL 8  // pixels per cell side
 : i GW 80  // grid width in cells

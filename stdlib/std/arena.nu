@@ -78,7 +78,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/mem.nu`
 
 : ArenaImpl {
-    *u data
+    * u data
     i used
     i cap
 }

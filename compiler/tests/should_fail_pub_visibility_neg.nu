@@ -7,6 +7,6 @@
 $ `compiler/tests/should_fail_pub_helper.nu`
 
 @ main → i {
-    ( __priv_greet )      // FAIL — private to the helper file
+    ( __priv_greet )  // FAIL — private to the helper file
     ^ 0
 }

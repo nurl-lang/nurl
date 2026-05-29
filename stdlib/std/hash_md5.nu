@@ -100,12 +100,12 @@ $ `stdlib/std/bytes.nu`
         ~ < j 16 {
             : i mod4 & j 3
             : i sval ? == g 0
-                ? == mod4 0 7 ? == mod4 1 12 ? == mod4 2 17 22
-                ? == g 1
-                ? == mod4 0 5 ? == mod4 1 9 ? == mod4 2 14 20
-                ? == g 2
-                ? == mod4 0 4 ? == mod4 1 11 ? == mod4 2 16 23
-                ? == mod4 0 6 ? == mod4 1 10 ? == mod4 2 15 21
+            ? == mod4 0 7 ? == mod4 1 12 ? == mod4 2 17 22
+            ? == g 1
+            ? == mod4 0 5 ? == mod4 1 9 ? == mod4 2 14 20
+            ? == g 2
+            ? == mod4 0 4 ? == mod4 1 11 ? == mod4 2 16 23
+            ? == mod4 0 6 ? == mod4 1 10 ? == mod4 2 15 21
             ( vec_push [u] s # u sval )
             = j + j 1
         }
@@ -210,10 +210,10 @@ $ `stdlib/std/bytes.nu`
 
     // State: A, B, C, D per RFC 1321 §3.3.
     : ( Vec u32 ) state ( vec_with_cap [u32] 4 )
-    ( vec_push [u32] state # u32 1732584193 )    // 0x67452301
-    ( vec_push [u32] state # u32 4023233417 )    // 0xefcdab89
-    ( vec_push [u32] state # u32 2562383102 )    // 0x98badcfe
-    ( vec_push [u32] state # u32 271733878 )     // 0x10325476
+    ( vec_push [u32] state # u32 1732584193 )  // 0x67452301
+    ( vec_push [u32] state # u32 4023233417 )  // 0xefcdab89
+    ( vec_push [u32] state # u32 2562383102 )  // 0x98badcfe
+    ( vec_push [u32] state # u32 271733878 )  // 0x10325476
 
     : i n ( vec_len [u] data )
 

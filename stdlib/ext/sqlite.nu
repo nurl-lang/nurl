@@ -49,24 +49,41 @@ $ `stdlib/core/cell.nu`
 // i64). Caller-owned out-pointer slots are 8-byte buffers we
 // nurl_alloc immediately before the call and free immediately after.
 
-& `sqlite3` @ sqlite3_open            s filename  *u out_db        → i
-& `sqlite3` @ sqlite3_close           s db                          → i
-& `sqlite3` @ sqlite3_exec            s db s sql *u cb *u data *u out_err → i
-& `sqlite3` @ sqlite3_prepare_v2      s db s sql i n *u out_stmt *u tail  → i
-& `sqlite3` @ sqlite3_step            s stmt                        → i
-& `sqlite3` @ sqlite3_finalize        s stmt                        → i
-& `sqlite3` @ sqlite3_reset           s stmt                        → i
-& `sqlite3` @ sqlite3_clear_bindings  s stmt                        → i
-& `sqlite3` @ sqlite3_bind_int64      s stmt i idx i value          → i
-& `sqlite3` @ sqlite3_bind_text       s stmt i idx s value i n *u destructor → i
-& `sqlite3` @ sqlite3_bind_null       s stmt i idx                  → i
-& `sqlite3` @ sqlite3_column_int64    s stmt i idx                  → i
-& `sqlite3` @ sqlite3_column_text     s stmt i idx                  → s
-& `sqlite3` @ sqlite3_column_count    s stmt                        → i
-& `sqlite3` @ sqlite3_column_type     s stmt i idx                  → i
-& `sqlite3` @ sqlite3_changes         s db                          → i
-& `sqlite3` @ sqlite3_errmsg          s db                          → s
-& `sqlite3` @ sqlite3_free            s p                           → v
+& `sqlite3` @ sqlite3_open s filename *u out_db → i
+
+& `sqlite3` @ sqlite3_close s db → i
+
+& `sqlite3` @ sqlite3_exec s db s sql *u cb *u data *u out_err → i
+
+& `sqlite3` @ sqlite3_prepare_v2 s db s sql i n *u out_stmt *u tail → i
+
+& `sqlite3` @ sqlite3_step s stmt → i
+
+& `sqlite3` @ sqlite3_finalize s stmt → i
+
+& `sqlite3` @ sqlite3_reset s stmt → i
+
+& `sqlite3` @ sqlite3_clear_bindings s stmt → i
+
+& `sqlite3` @ sqlite3_bind_int64 s stmt i idx i value → i
+
+& `sqlite3` @ sqlite3_bind_text s stmt i idx s value i n *u destructor → i
+
+& `sqlite3` @ sqlite3_bind_null s stmt i idx → i
+
+& `sqlite3` @ sqlite3_column_int64 s stmt i idx → i
+
+& `sqlite3` @ sqlite3_column_text s stmt i idx → s
+
+& `sqlite3` @ sqlite3_column_count s stmt → i
+
+& `sqlite3` @ sqlite3_column_type s stmt i idx → i
+
+& `sqlite3` @ sqlite3_changes s db → i
+
+& `sqlite3` @ sqlite3_errmsg s db → s
+
+& `sqlite3` @ sqlite3_free s p → v
 
 // SQLITE_TRANSIENT — the documented constant value `((sqlite3_destructor_type)-1)`
 // telling sqlite3_bind_text to copy the caller's bytes immediately.
@@ -77,27 +94,27 @@ $ `stdlib/core/cell.nu`
 }
 
 // SQLite return codes we map on the result-enum side.
-: i SQLITE_OK         0
-: i SQLITE_ROW        100
-: i SQLITE_DONE       101
+: i SQLITE_OK 0
+: i SQLITE_ROW 100
+: i SQLITE_DONE 101
 // Sentinel for "build host has no libsqlite3" — never produced by
 // libsqlite3 itself (it would have failed to link). Surfaced for API
 // continuity with the previous C bridge.
 : i NURL_SQLITE_UNSUPPORTED 99
 
 : | SqliteErr {
-    SqliteUnsupported   // build host lacked libsqlite3-dev
-    SqliteOpen          // open failed (bad path, perm)
-    SqliteSyntax        // SQL parse error (SQLITE_ERROR == 1)
-    SqliteBusy          // SQLITE_BUSY == 5
-    SqliteLocked        // SQLITE_LOCKED == 6
-    SqliteConstraint    // SQLITE_CONSTRAINT == 19
-    SqliteMisuse        // SQLITE_MISUSE == 21
-    SqliteIo            // SQLITE_IOERR == 10
-    SqliteOther         // anything else, including unmapped codes
+    SqliteUnsupported  // build host lacked libsqlite3-dev
+    SqliteOpen  // open failed (bad path, perm)
+    SqliteSyntax  // SQL parse error (SQLITE_ERROR == 1)
+    SqliteBusy  // SQLITE_BUSY == 5
+    SqliteLocked  // SQLITE_LOCKED == 6
+    SqliteConstraint  // SQLITE_CONSTRAINT == 19
+    SqliteMisuse  // SQLITE_MISUSE == 21
+    SqliteIo  // SQLITE_IOERR == 10
+    SqliteOther  // anything else, including unmapped codes
 }
 
-: Database  { s raw }
+: Database { s raw }
 : Statement { s raw }
 
 @ sqlite_err_name SqliteErr e → s {
@@ -128,6 +145,7 @@ $ `stdlib/core/cell.nu`
 // ── Internal handle helpers ────────────────────────────────────────
 
 @ __db_alloc → s { ^ ( nurl_zalloc 32 ) }
+
 @ __stmt_alloc → s { ^ ( nurl_zalloc 32 ) }
 
 @ __db_set_errmsg s h_db → v {

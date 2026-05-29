@@ -378,9 +378,9 @@ $ `stdlib/ext/http_response.nu`
         : *RouteImpl impl # *RouteImpl . route ctl
         : s rmethod ( string_data . impl method )
         : b method_ok
-            | | != 0 ( nurl_str_eq rmethod `*` )
-                != 0 ( nurl_str_eq rmethod req_method )
-                & is_head != 0 ( nurl_str_eq rmethod `GET` )
+        | | != 0 ( nurl_str_eq rmethod `*` )
+        != 0 ( nurl_str_eq rmethod req_method )
+        & is_head != 0 ( nurl_str_eq rmethod `GET` )
         ? method_ok {
             : Params params ( params_new )
             : s pattern ( string_data . impl pattern )
