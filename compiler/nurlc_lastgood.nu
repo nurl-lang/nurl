@@ -1,5 +1,5 @@
 // nurlc.nu — NURL compiler written in NURL.
-// Grammar: v2.0
+// Grammar: v2.1
 //
 // Copyright (c) 2026 The NURL Project Developers
 // SPDX-License-Identifier: MIT OR Apache-2.0
@@ -867,6 +867,41 @@
 : i g_pending_pub 0
 : i g_vis_syms 0
 
+// Unused-symbol lint (opt-in via `--lint`). Default OFF so ordinary
+// builds — and the compiler's own bootstrap, which never passes
+// `--lint` — emit byte-identical IR and stay at their fixed point.
+// Every lint hook below is guarded on `g_lint`, writes only to the
+// sym handles here + stderr, and never touches codegen state, so IR
+// output is unaffected when the flag is off.
+//
+//   g_lint_syms  — keys `top` (top-level source path), `fns`
+//                  (compile-global "name\tline\tcol\tfile\n" rows for
+//                  every @-decl in the top file) and `binds` (the
+//                  current function's "name\tline\tcol\n" rows).
+//   g_lint_used  — compile-global set: every name passed to gen_call
+//                  or read in gen_ident. A private @-fn whose name is
+//                  absent here was never referenced.
+//   g_lint_reads — per-function read set, keyed "<gen> <name>". The
+//                  generation (g_lint_gen) bumps each function so a
+//                  read in one function never satisfies a same-named
+//                  binding in another — no reset / handle churn needed.
+//                  Reads are recorded UNCONDITIONALLY (unlike the
+//                  borrow checker, which suppresses inside closures),
+//                  so a binding used only by a captured closure is
+//                  correctly seen as used.
+: i g_lint 0
+: i g_lint_syms 0
+: i g_lint_used 0
+: i g_lint_reads 0
+: i g_lint_gen 0
+// 1 only during the main parse_program pass. Cleared before
+// flush_deferred_instantiations so synthetic generic monomorphisations
+// (e.g. vec_with_cap__i64), which are emitted after the parse and carry
+// the top file's current-src-file, are NOT recorded as the user's own
+// unused functions / bindings. Reference + use capture stays on
+// throughout so the used-set remains complete.
+: i g_lint_recording 0
+
 @ vis_current_src_file → s {
     ^ ( nurl_sym_get g_vis_syms `__current_src_file__` )
 }
@@ -947,6 +982,179 @@
                 ( nurl_str_cat3 ` '` name `' is not visible across files; defined in '` )
                 ( nurl_str_cat callee_sf `'` ) ) ) }
             {}
+        }
+    }
+}
+
+// ── Unused-symbol lint helpers (all inert unless `--lint`) ─────────
+
+// Set up lint state. Called once from main when `--lint` is passed,
+// after the top-level source path is known.
+@ lint_init s top → v {
+    = g_lint_syms ( nurl_sym_new )
+    = g_lint_used ( nurl_sym_new )
+    = g_lint_reads ( nurl_sym_new )
+    ( nurl_sym_def g_lint_syms `top` top )
+    ( nurl_sym_def g_lint_syms `fns` `` )
+    ( nurl_sym_def g_lint_syms `binds` `` )
+}
+
+// True when the file being parsed right now is the user's top-level
+// file (not a transitively `$`-imported one): unused-symbol lints
+// only fire for the file the user is actually editing, so a stdlib
+// helper the program happens not to use is never flagged.
+@ lint_in_top_file → b {
+    ? == g_lint 0 { ^ F } {}
+    ^ ( seq ( vis_current_src_file ) ( nurl_sym_get g_lint_syms `top` ) )
+}
+
+// Emit one `<file>:<line>:<col>: warning: <msg>` line in the exact
+// shape nurlc's `warn` uses, so the LSP's diagnostic parser surfaces
+// it as a Warning.
+@ lint_warn s file i line i col s msg → v {
+    ( nurl_eprintln ( nurl_str_cat
+        ( nurl_str_cat3 file `:` ( nurl_str_int line ) )
+        ( nurl_str_cat4 `:` ( nurl_str_int col ) `: warning: ` msg ) ) )
+}
+
+// Record that `name` was referenced (called via gen_call or read via
+// gen_ident) anywhere in the program. Drives the unused-function check.
+@ lint_note_used s name → v {
+    ? != g_lint 0 { ( nurl_sym_def g_lint_used name `1` ) } {}
+}
+
+// Record an identifier read in the current function. Recorded for
+// every file (cheap) but only queried for top-level-file bindings.
+@ lint_note_read s name → v {
+    ? != g_lint 0
+    { ( nurl_sym_def g_lint_reads
+        ( nurl_str_cat3 ( nurl_str_int g_lint_gen ) ` ` name ) `1` ) }
+    {}
+}
+
+// Begin a fresh per-function lint scope: bump the read generation and
+// clear the binding roster. Called at every function-body start.
+@ lint_fn_begin → v {
+    ? != g_lint 0
+    { = g_lint_gen + g_lint_gen 1
+        ( nurl_sym_def g_lint_syms `binds` `` ) }
+    {}
+}
+
+// Record a `:` binding's name + source position for the unused-binding
+// check. Any name beginning with `_` is the conventional "intentionally
+// unused" throwaway (`_`, `_ok`, `_unused`, …) and is never flagged.
+@ lint_note_bind i lex s name → v {
+    ? & & != g_lint 0 != g_lint_recording 0 ( lint_in_top_file )
+    { ? == ( nurl_str_get name 0 ) 95 {}
+        { : s row ( nurl_str_cat
+            ( nurl_str_cat3 name `\t` ( nurl_str_int ( nurl_lex_line lex ) ) )
+            ( nurl_str_cat3 `\t` ( nurl_str_int ( nurl_lex_col lex ) ) `\n` ) )
+            : s cur ( nurl_sym_get g_lint_syms `binds` )
+            ( nurl_sym_def g_lint_syms `binds` ( nurl_str_cat cur row ) ) }
+    }
+    {}
+}
+
+// Parse one "name\tline\tcol" binding row and warn if `name` was never
+// read in the current generation. Factored out so the loop stays flat.
+@ lint_check_bind s file s row → v {
+    : i t1 ( nurl_str_find row `\t` )
+    ? < t1 0 {} {
+        : i rl ( nurl_str_len row )
+        : s nm ( nurl_str_slice row 0 t1 )
+        : s tail ( nurl_str_slice row + t1 1 - rl + t1 1 )
+        : i t2 ( nurl_str_find tail `\t` )
+        ? < t2 0 {} {
+            : i tl ( nurl_str_len tail )
+            : s ln ( nurl_str_slice tail 0 t2 )
+            : s cl ( nurl_str_slice tail + t2 1 - tl + t2 1 )
+            : s key ( nurl_str_cat3 ( nurl_str_int g_lint_gen ) ` ` nm )
+            ? == 0 ( nurl_str_len ( nurl_sym_get g_lint_reads key ) )
+            { ( lint_warn file ( nurl_str_to_int ln ) ( nurl_str_to_int cl )
+                ( nurl_str_cat3 `unused binding '` nm
+                    `' is never read - prefix with '_' or remove it` ) ) }
+            {}
+        }
+    }
+}
+
+// At function-body end, warn for every recorded `:` binding never read
+// in this function. Reads were tracked unconditionally (including
+// inside closures), so a binding used only by a captured closure is
+// correctly seen as used.
+@ lint_fn_end i lex → v {
+    ? & != g_lint 0 ( lint_in_top_file )
+    { : s file ( nurl_lex_filename lex )
+        : ~ s rest ( nurl_sym_get g_lint_syms `binds` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : i nl ( nurl_str_find rest `\n` )
+            : i rl ( nurl_str_len rest )
+            : s row ? < nl 0 rest ( nurl_str_slice rest 0 nl )
+            = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - rl + nl 1 )
+            ( lint_check_bind file row )
+        }
+    }
+    {}
+}
+
+// Record an @-decl (function) defined in the top file for the
+// unused-function check. `line`/`col` mark the name token.
+@ lint_note_fn i lex s name i line i col → v {
+    ? & & != g_lint 0 != g_lint_recording 0 ( lint_in_top_file )
+    { : s file ( vis_current_src_file )
+        : s row ( nurl_str_cat
+            ( nurl_str_cat3 name `\t` ( nurl_str_int line ) )
+            ( nurl_str_cat
+                ( nurl_str_cat3 `\t` ( nurl_str_int col ) `\t` )
+                ( nurl_str_cat file `\n` ) ) )
+        : s cur ( nurl_sym_get g_lint_syms `fns` )
+        ( nurl_sym_def g_lint_syms `fns` ( nurl_str_cat cur row ) ) }
+    {}
+}
+
+// Parse one "name\tline\tcol\tfile" fn row and warn when it names a
+// private (non-`pub`) function in a strict-mode file that was never
+// referenced. `main`, `pub` functions, and legacy (no-`pub`) files are
+// skipped — in a file that never opts into visibility every @-fn is
+// globally callable, so disuse cannot be proved from one compilation.
+@ lint_check_fn s row → v {
+    : i t1 ( nurl_str_find row `\t` )
+    ? < t1 0 {} {
+        : i rl ( nurl_str_len row )
+        : s nm ( nurl_str_slice row 0 t1 )
+        : s r1 ( nurl_str_slice row + t1 1 - rl + t1 1 )
+        : i t2 ( nurl_str_find r1 `\t` )
+        : i r1l ( nurl_str_len r1 )
+        : s ln ( nurl_str_slice r1 0 t2 )
+        : s r2 ( nurl_str_slice r1 + t2 1 - r1l + t2 1 )
+        : i t3 ( nurl_str_find r2 `\t` )
+        : i r2l ( nurl_str_len r2 )
+        : s cl ( nurl_str_slice r2 0 t3 )
+        : s file ( nurl_str_slice r2 + t3 1 - r2l + t3 1 )
+        : s is_pub ( nurl_sym_get g_vis_syms ( nurl_str_cat nm `__pub` ) )
+        : s strict ( nurl_sym_get g_vis_syms ( nurl_str_cat file `__strict` ) )
+        : s used ( nurl_sym_get g_lint_used nm )
+        ? & ! ( seq nm `main` ) & ( seq strict `1` ) & ! ( seq is_pub `1` ) == 0 ( nurl_str_len used )
+        { ( lint_warn file ( nurl_str_to_int ln ) ( nurl_str_to_int cl )
+            ( nurl_str_cat3 `unused function '` nm
+                `' is defined but never called (private to this file)` ) ) }
+        {}
+    }
+}
+
+// After the whole program is compiled (and every deferred generic is
+// instantiated, so all call sites have been seen), walk the recorded
+// top-file @-decls and report the unused private ones.
+@ lint_report_unused_fns → v {
+    ? == g_lint 0 {} {
+        : ~ s rest ( nurl_sym_get g_lint_syms `fns` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : i nl ( nurl_str_find rest `\n` )
+            : i rl ( nurl_str_len rest )
+            : s row ? < nl 0 rest ( nurl_str_slice rest 0 nl )
+            = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - rl + nl 1 )
+            ( lint_check_fn row )
         }
     }
 }
@@ -1149,7 +1357,7 @@
     : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
     ? & & ( seq lt `void` ) != 0 ( nurl_str_len fn_rt ) ! ( seq fn_rt `void` )
     { : s hint ? returning_match
-        `) — match arms contain '^' so '?? …' is statement-form, not an expression. Refactor to ': ~ T rc init / ?? mr { … = rc v } / ^ rc'. See docs/GOTCHAS.md item 6.`
+        `) — match arms contain '^' so '?? …' is statement-form, not an expression. Refactor to ': ~ T rc init / ?? mr { … = rc v } / ^ rc'.`
         `) — likely a conditional with incompatible branch types`
         ( die lex ( nurl_str_cat `return expression has no value (expected `
             ( nurl_str_cat ( llvm_to_nurl fn_rt ) hint ) ) ) }
@@ -1336,6 +1544,11 @@
         ( nurl_lex_advance lex )
         // Borrow checker: every value-position identifier is a read.
         ( bck_note_read name )
+        // Lint: mark the name as read (unused-binding) and referenced
+        // (unused-function). Unlike bck_note_read this is NOT suppressed
+        // inside closures, so a binding captured by a closure counts.
+        ( lint_note_read name )
+        ( lint_note_used name )
         : s lt ( nurl_sym_get syms name )
         ( nurl_set_last_type ? == 0 ( nurl_str_len lt ) `i64` lt )
         : s ptr ( nurl_sym_get syms ( nurl_str_cat name `__ptr` ) )
@@ -1351,7 +1564,7 @@
         // (not a const / enum variant). Die with the canonical
         // wrap-in-closure-literal cure.
         ? & & == 0 ( nurl_str_len ptr ) == 0 ( nurl_str_len glb ) != 0 ( nurl_str_len ( nurl_sym_get g_vis_syms ( nurl_str_cat name `__src_file` ) ) )
-        { : s tail ( nurl_str_cat name ` args ) }'. See docs/GOTCHAS.md item 11.` )
+        { : s tail ( nurl_str_cat name ` args ) }'.` )
             ( die lex ( nurl_str_cat4
                 `bare '@-fn' name '` name
                 `' does not auto-coerce to a closure value. Wrap it: '\ args → R { ( `
@@ -1772,6 +1985,8 @@
     {}
     : s obj ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
+    // Lint: `inout . obj field` reads obj's pointer directly (no gen_ident).
+    ( lint_note_read obj )
     : s objptr ( nurl_sym_get syms ( nurl_str_cat obj `__ptr` ) )
     : s objty ( nurl_sym_get syms obj )
     ? == 0 ( nurl_str_len objptr )
@@ -2945,6 +3160,12 @@
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
+    // Lint: the callee is both a global reference (unused-function) and,
+    // when it names a local closure binding, a read of it (unused-binding).
+    // gen_call consumes the name directly, bypassing gen_ident, so record
+    // both here.
+    ( lint_note_used fname )
+    ( lint_note_read fname )
     ? ( __is_operator_callee ( nurl_lex_type lex ) )
     { ( die lex ( nurl_str_cat3
         `operator '` fname
@@ -3205,6 +3426,9 @@
                 { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' must be a mutable ': ~' binding - the callee mutates it in place` ) ) }
                 {}
                 ( nurl_lex_advance lex )
+                // Lint: `inout name` passes the binding by address (no
+                // gen_ident load) — mutating it in place is a use.
+                ( lint_note_read bck_arg_val )
                 = av iptr
                 = at ( nurl_str_cat ity `*` )
             }
@@ -3223,12 +3447,12 @@
         // call time. Die — the result is silent UB otherwise.
         ? & == arg_idx 0 ( seq fname `nurl_str_len` )
         { ? ( seq at `%String` )
-            { ( die lex `nurl_str_len expects 's' (i8* C-string), got %String. Use 'string_len' for String values. See docs/GOTCHAS.md item 7.` ) }
+            { ( die lex `nurl_str_len expects 's' (i8* C-string), got %String. Use 'string_len' for String values.` ) }
             {} }
         {}
         ? & == arg_idx 0 ( seq fname `string_len` )
         { ? ( seq at `i8*` )
-            { ( die lex `string_len expects %String, got 'i8*' (raw C-string). Use 'nurl_str_len' for raw C-string pointers. See docs/GOTCHAS.md item 7.` ) }
+            { ( die lex `string_len expects %String, got 'i8*' (raw C-string). Use 'nurl_str_len' for raw C-string pointers.` ) }
             {} }
         {}
         // Escape analysis (closes docs/GOTCHAS.md item 8). If this
@@ -3583,7 +3807,7 @@
     // `{ ... }` blocks then run as side-effect statements. Warn —
     // the program compiles but the conditional logic is wrong.
     ? == ( nurl_lex_type lex ) TT_LBRACE
-    { ( warn lex `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary). See docs/GOTCHAS.md item 1.` ) }
+    { ( warn lex `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary).` ) }
     {}
     // pick a consistent phi type: prefer the non-void live branch type;
     // if both live and types differ, fall back to void (no phi needed).
@@ -5751,7 +5975,7 @@
             ? < bdv refdepth
             { ( bck_esc_warn lex line ( nurl_str_cat3
                 `assigning to '` name
-                `' a value that references a more deeply scoped binding by pointer - it dangles once that inner scope exits (see docs/GOTCHAS.md item 8)` ) ) }
+                `' a value that references a more deeply scoped binding by pointer - it dangles once that inner scope exits` ) ) }
             {}
         } {}
     }
@@ -5762,7 +5986,7 @@
 // container / a worker thread all outlive every in-function region).
 @ bck_esc_check_return i lex i syms i line s ident → v {
     ? & != g_borrowck 0 > ( bck_expr_refdepth syms ident ) 0
-    { ( bck_esc_warn lex line `returning a value that references a stack binding by pointer - it dangles after this function returns (move the captured data to a heap-backed handle; see docs/GOTCHAS.md item 5)` ) }
+    { ( bck_esc_warn lex line `returning a value that references a stack binding by pointer - it dangles after this function returns (move the captured data to a heap-backed handle)` ) }
     {}
 }
 
@@ -5770,7 +5994,7 @@
     ? & != g_borrowck 0 > ( bck_expr_refdepth syms ident ) 0
     { ( bck_esc_warn lex line ( nurl_str_cat3
         `passing a value that references a stack binding by pointer to '` fname
-        `' - it escapes the current stack frame and dangles (move it to a heap-backed handle; see docs/GOTCHAS.md item 8)` ) ) }
+        `' - it escapes the current stack frame and dangles (move it to a heap-backed handle)` ) ) }
     {}
 }
 
@@ -5854,7 +6078,7 @@
 @ __warn_if_shadows_param i lex i syms s name → v {
     : s param_names ( nurl_sym_get syms `__fn_param_names__` )
     ? & != 0 ( nurl_str_len param_names ) ( str_contains_word param_names name )
-    { ( warn lex ( nurl_str_cat3 `'` name `' shadows the enclosing function's parameter - rename (see docs/GOTCHAS.md item 3)` ) ) }
+    { ( warn lex ( nurl_str_cat3 `'` name `' shadows the enclosing function's parameter - rename` ) ) }
     {}
 }
 
@@ -5873,13 +6097,14 @@
     // warning is advisory; suggest the immutable `: *T` alternative
     // or re-fetching the pointer per iteration.
     ? & is_mutable == ( nurl_lex_type lex ) TT_STAR
-    { ( warn lex `mutable pointer binding ': ~ *T' miscompiles in long-running write loops (deterministic crash ~tens-of-thousands of iterations). Prefer immutable ': *T' + re-fetch on grow, or carry the address as an i64 and cast per use. See docs/GOTCHAS.md item 10.` ) }
+    { ( warn lex `mutable pointer binding ': ~ *T' miscompiles in long-running write loops. Prefer immutable ': *T' + re-fetch on grow, or carry the address as an i64 and cast per use.` ) }
     {}
     // Check if first token could be a type name by looking it up in symbol table
     ? & == ( nurl_lex_type lex ) TT_IDENT == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_lex_val lex ) ) )
     {  // Type inference: plain IDENT that's not a known type
         : s name ( nurl_lex_val lex )
         ( __warn_if_shadows_param lex syms name )
+        ( lint_note_bind lex name )
         ( nurl_lex_advance lex )
         : b rhs_is_slice_lit == ( nurl_lex_type lex ) TT_LBRACK
         // Borrow checker (Phase 2): snapshot the RHS's first token —
@@ -5961,6 +6186,7 @@
         ? ( is_ident_tok ( nurl_lex_type lex ) )
         { : s name ( nurl_lex_val lex )
             ( __warn_if_shadows_param lex syms name )
+            ( lint_note_bind lex name )
             ( nurl_lex_advance lex )
             // Tag the binding with its NURL source type + signedness
             // (consulted at gen_cast / coerce_store_val sites). Empty
@@ -6429,7 +6655,7 @@
         ? | != 0 ( nurl_str_len is_enum ) != 0 ( nurl_str_len is_struct )
         { ( die lex ( nurl_str_cat3
             `'#' is the cast operator; struct/enum literals use '@'. Write '@ `
-            tname ` { ... }' instead. See docs/GOTCHAS.md item 9.` ) ) }
+            tname ` { ... }' instead.` ) ) }
         {}
     }
     {}
@@ -6857,6 +7083,10 @@
             ? ( is_ident_tok ( nurl_lex_type lex ) )
             { : s fname ( nurl_lex_val lex )
                 ( nurl_lex_advance lex )
+                // Lint: a slice variable-index access `. slice i` loads the
+                // index binding directly below (not via gen_ident), so mark
+                // it read here. Harmless for struct field names / ptr/length.
+                ( lint_note_read fname )
                 // Slice type check: compound type starts with '{' (ASCII 123)
                 // Slice layout: { T*, i64 }  — ptr at index 0, length at index 1
                 ? == ( nurl_str_get ot 0 ) 123
@@ -9119,12 +9349,17 @@
     ( nurl_lex_advance lex )
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s fname ( nurl_lex_val lex )
+        // Lint: snapshot the name token's position before advancing past
+        // it (used by the unused-function report's warning location).
+        : i lint_fn_line ( nurl_lex_line lex )
+        : i lint_fn_col ( nurl_lex_col lex )
         ( nurl_lex_advance lex )
         // Grammar v2.0: re-record (idempotent) the source-file + public
         // flag during the parse_program pass. scan_fn_sigs has already
         // populated g_vis_syms; calling here ensures g_pending_pub is
         // cleared so a stray `pub` doesn't leak to a later decl.
         ( vis_record_fn fname ( vis_take_pending_pub ) )
+        ( lint_note_fn lex fname lint_fn_line lint_fn_col )
         // Generic declaration: store template, emit no IR now.
         // Disambiguation: [T] / [K V] are generic, [ T name / [i x are slice param.
         // Generic param list ends with ']' shortly. Slice never has ']' in its type.
@@ -9159,6 +9394,7 @@
     ( nurl_cg_reset cg )
     // Borrow checker: start a fresh per-function statement list.
     ( bck_fn_begin )
+    ( lint_fn_begin )
     // Snapshot the lex position for DWARF DISubprogram.line / scopeLine
     // before we consume any tokens — by the time we reach the `define`
     // emit, the lexer has advanced past the param list and `→`, so a
@@ -9389,6 +9625,8 @@
     // run the analysis pass before the scope is popped. No-op unless
     // --borrowck is set; never emits IR.
     ( borrowck_fn_end lex syms fname )
+    // Lint: warn for this function's `:` bindings that were never read.
+    ( lint_fn_end lex )
     // Snapshot owned-return flags BEFORE pop: nurl_sym_get returns a pointer
     // into the current scope's entry, which nurl_sym_pop then frees.
     : i fn_ret_owned_flag ? != 0 ( nurl_str_len ( nurl_sym_get syms `__fn_ret_owned__` ) ) 1 0
@@ -9459,7 +9697,7 @@
         // cryptic "unable to create block named 'entry'" LLVM error
         // far from the source. Close GOTCHAS.md item 3.
         ? ( seq pname `entry` )
-        { ( die lex `parameter name 'entry' collides with LLVM's reserved entry: block label. Rename (e.g. 'ent', 'tab_entry'). See docs/GOTCHAS.md item 8.` ) }
+        { ( die lex `parameter name 'entry' collides with LLVM's reserved entry: block label. Rename (e.g. 'ent', 'tab_entry').` ) }
         {}
         // `inout` is a parameter-convention keyword; banning it as
         // a parameter NAME keeps the scan_fn_sigs forward-reference
@@ -10310,7 +10548,8 @@
     ( emit `declare i64  @nurl_read_int()` )
     ( emit `declare i8*  @nurl_read_line()` )
     // nurl_read_n_bytes lives as pure NURL `read_n_bytes` in
-    // `stdlib/core/io.nu`; reads fd 0 via `read(2)` directly.
+    // `stdlib/core/io.nu`; it reads stdin via `nurl_stdin_read`
+    // (declared by FFI in stdlib/core/posix.nu, no built-in declare).
     ( emit `declare i64  @nurl_stdin_eof()` )
     ( emit `declare void @nurl_flush_stdout()` )
     ( emit `declare void @nurl_flush_stderr()` )
@@ -11473,18 +11712,21 @@
         : s a ( nurl_argv ai )
         ? | ( seq a `--g` ) ( seq a `-g` )
         { = g_dbg_enabled 1 }
-        { ? ( seq a `--borrowck` )
-            { = g_borrowck 1 }
-            { ? ( seq a `--no-borrowck` )
-                { = g_borrowck 0 }
-                { ? ( seq a `--strict-borrowck` )
-                    { = g_borrowck 1 = g_strict_borrowck 1 }
-                    { = path a } } } }
+        { ? ( seq a `--lint` )
+            { = g_lint 1 }
+            { ? ( seq a `--borrowck` )
+                { = g_borrowck 1 }
+                { ? ( seq a `--no-borrowck` )
+                    { = g_borrowck 0 }
+                    { ? ( seq a `--strict-borrowck` )
+                        { = g_borrowck 1 = g_strict_borrowck 1 }
+                        { = path a } } } } }
         = ai + ai 1
     }
     ? == 0 ( nurl_str_len path )
-    { ( nurl_eprintln `usage: nurlc [--g] [--no-borrowck | --strict-borrowck] <file.nu>` ) ( nurl_exit 1 ) }
+    { ( nurl_eprintln `usage: nurlc [--g] [--lint] [--no-borrowck | --strict-borrowck] <file.nu>` ) ( nurl_exit 1 ) }
     {}
+    ? != g_lint 0 { ( lint_init path ) } {}
     : s src ( nurl_read_file path )
     : s marker ( nurl_str_cat `@@nurl-disable` `-autodrop-strings@@` )
     ? >= ( nurl_str_find src marker ) 0
@@ -11522,10 +11764,18 @@
     : i lex_tn ( nurl_lex_new src path )
     ( scan_type_names lex_tn syms )
     : i lex ( nurl_lex_new src path )
+    ? != g_lint 0 { = g_lint_recording 1 } {}
     ( parse_program lex syms cg )
+    // Stop recording new lint targets before flushing generic
+    // monomorphisations — those are synthetic, not the user's source.
+    = g_lint_recording 0
     // Emit all deferred generic instantiations collected during compilation.
     ( flush_deferred_instantiations syms cg )
     ( dbg_flush )
+    // Unused-symbol lint (--lint): every call site (incl. generic
+    // instantiations) has now been seen, so report the unused private
+    // functions of the top-level file. No-op unless --lint is set.
+    ( lint_report_unused_fns )
     // Borrow-checker diagnostics are errors, not warnings. We let
     // parse_program walk every function so every violation surfaces
     // in one run, then exit non-zero here if any were recorded. A
