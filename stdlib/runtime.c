@@ -193,6 +193,31 @@ long long nurl_stdin_eof(void) { return g_stdin_eof_flag ? 1 : 0; }
 void nurl_flush_stdout(void) { fflush(stdout); }
 void nurl_flush_stderr(void) { fflush(stderr); }
 
+/* ── Terminal / ANSI colour support ──────────────────────────────
+ * Two small helpers so callers can colourise output safely on both
+ * platforms: nurl_stdout_isatty reports whether stdout is a real
+ * terminal (so colour can default to off when piped), and
+ * nurl_enable_vt turns on ANSI escape-sequence processing — required
+ * on Windows 10+ consoles, a no-op everywhere else. */
+#ifdef _WIN32
+#  include <io.h>
+#  ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#    define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#  endif
+long long nurl_stdout_isatty(void) { return _isatty(_fileno(stdout)) ? 1 : 0; }
+void nurl_enable_vt(void) {
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (h == INVALID_HANDLE_VALUE) return;
+    DWORD mode = 0;
+    if (!GetConsoleMode(h, &mode)) return;
+    SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+}
+#else
+#  include <unistd.h>
+long long nurl_stdout_isatty(void) { return isatty(fileno(stdout)) ? 1 : 0; }
+void nurl_enable_vt(void) {}
+#endif
+
 /* Output-buffer stack for deferred emission of closure bodies.
  *
  * `start` pushes a fresh buffering frame; `stop` snapshots it to a
