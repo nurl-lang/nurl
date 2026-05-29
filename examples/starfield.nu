@@ -1,29 +1,17 @@
 // starfield.nu — 3D Warp Speed Starfield with Motion Blur
 // NURL Canvas demo.
 
-& `libc`
+& `libc` @ rand → i
 
-@ rand → i
+& `canvas` @ canvas_open i w i h → *i
 
-& `canvas`
+& `canvas` @ canvas_present → v
 
-@ canvas_open i w i h → *i
+& `canvas` @ canvas_sleep i ms → v
 
-& `canvas`
+& `canvas` @ canvas_should_close → i
 
-@ canvas_present → v
-
-& `canvas`
-
-@ canvas_sleep i ms → v
-
-& `canvas`
-
-@ canvas_should_close → i
-
-& `canvas`
-
-@ canvas_close → v
+& `canvas` @ canvas_close → v
 
 // Suurempi resoluutio ja 60 FPS
 : i W 640

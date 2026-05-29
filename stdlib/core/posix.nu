@@ -50,6 +50,7 @@ $ `stdlib/core/cell.nu`
 // immediately after a -1-returning syscall — any intervening libc call
 // may have clobbered it.
 & `c` @ nurl_errno_get → i
+
 & `c` @ nurl_errno_set i e → v
 
 // Classify the current errno as one of the IoErr enum tags from
@@ -69,9 +70,9 @@ $ `stdlib/core/cell.nu`
     : i e ( nurl_errno_get )
     ? == e ( posix_const `ENOENT` ) { ^ 0 } {}
     ? == e ( posix_const `EACCES` ) { ^ 1 } {}
-    ? == e ( posix_const `EPERM` )  { ^ 1 } {}
+    ? == e ( posix_const `EPERM` ) { ^ 1 } {}
     ? == e ( posix_const `EEXIST` ) { ^ 2 } {}
-    ? == e ( posix_const `EINTR` )  { ^ 3 } {}
+    ? == e ( posix_const `EINTR` ) { ^ 3 } {}
     ^ 7
 }
 
@@ -80,10 +81,10 @@ $ `stdlib/core/cell.nu`
 // WIFEXITED / WEXITSTATUS / WIFSIGNALED / WTERMSIG are preprocessor
 // macros in C; the runtime exposes them as plain functions because
 // NURL has no preprocessor.
-& `c` @ nurl_wait_is_exited   i status → i   // 1 / 0
-& `c` @ nurl_wait_exit_status i status → i   // exit code or -1
-& `c` @ nurl_wait_is_signaled i status → i   // 1 / 0
-& `c` @ nurl_wait_term_sig    i status → i   // signal number or 0
+& `c` @ nurl_wait_is_exited i status → i  // 1 / 0
+& `c` @ nurl_wait_exit_status i status → i  // exit code or -1
+& `c` @ nurl_wait_is_signaled i status → i  // 1 / 0
+& `c` @ nurl_wait_term_sig i status → i  // signal number or 0
 
 // ── Process lifecycle ─────────────────────────────────────────────
 
@@ -129,7 +130,8 @@ $ `stdlib/core/cell.nu`
 
 // read(2) / write(2): bytes through `*u` buffer. Return count
 // (positive), 0 (EOF on read), -1 with errno on error.
-& `c` @ read  i fd *u buf i n → i
+& `c` @ read i fd *u buf i n → i
+
 & `c` @ write i fd *u buf i n → i
 
 // Buffered binary read from stdin (NURL runtime `fread(stdin)`). Shares
@@ -143,7 +145,7 @@ $ `stdlib/core/cell.nu`
 // open(2): low-level fd-based file open. `flags` is `O_RDONLY` / etc.
 // from `posix_const`; `mode` matters only when O_CREAT is set
 // (typical caller passes 0). Returns the new fd or -1 with errno.
-& `c` @ open  s path i32 flags i32 mode → i32
+& `c` @ open s path i32 flags i32 mode → i32
 
 // lseek(2): reposition the read/write head. `whence` is 0 (SET) /
 // 1 (CUR) / 2 (END) — universal POSIX values. Returns the new
@@ -155,7 +157,7 @@ $ `stdlib/core/cell.nu`
 // caller's address space. `prot` is `PROT_READ` / etc.; `flags` is
 // `MAP_PRIVATE` for a copy-on-write file mapping. Returns the
 // mapping pointer or `MAP_FAILED` ((void*)-1) on failure.
-& `c` @ mmap   *u addr i length i32 prot i32 flags i32 fd i offset → *u
+& `c` @ mmap *u addr i length i32 prot i32 flags i32 fd i offset → *u
 
 // munmap(2): release a previous mmap.
 & `c` @ munmap *u addr i length → i32
@@ -174,10 +176,13 @@ $ `stdlib/core/cell.nu`
 // per platform (Linux glibc = 19, macOS = 21) and porting that
 // offset table into NURL buys nothing.
 
-& `c` @ opendir   s path → s
-& `c` @ readdir   s dirp → s
-& `c` @ closedir  s dirp → i32
-& `c` @ nurl_dirent_name s de → s   // borrowed `de->d_name`
+& `c` @ opendir s path → s
+
+& `c` @ readdir s dirp → s
+
+& `c` @ closedir s dirp → i32
+
+& `c` @ nurl_dirent_name s de → s  // borrowed `de->d_name`
 
 // ── Signal handling ───────────────────────────────────────────────
 
@@ -213,7 +218,7 @@ $ `stdlib/core/cell.nu`
 // Layout: { int fd @ 0, short events @ 4, short revents @ 6 } = 8 B.
 // NURL has no pointer-resliceing — write each byte at `fds + off + N`
 // directly. `. p i` on `*u` indexes a single byte slot.
-@ posix_pollfd_set *u fds i off i fd i events → v {
+@ posix_pollfd_set * u fds i off i fd i events → v {
     // fd is a 32-bit int at offset 0; emit four little-endian bytes.
     = . fds + off 0 # u & fd 255
     = . fds + off 1 # u & >> fd 8 255
@@ -229,7 +234,7 @@ $ `stdlib/core/cell.nu`
 
 // Read revents (short at offset 6) from the pollfd entry at byte
 // offset `off`. Returns the 16-bit value as a non-negative i.
-@ posix_pollfd_revents *u fds i off → i {
+@ posix_pollfd_revents * u fds i off → i {
     : i lo & 255 # i . fds + off 6
     : i hi & 255 # i . fds + off 7
     ^ | lo << hi 8

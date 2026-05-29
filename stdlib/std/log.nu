@@ -164,20 +164,20 @@ $ `stdlib/std/fmt.nu`
     ~ < k n {
         : i c & # i . p k 255
         ? == c 34 { ( string_push_char out 92 ) ( string_push_char out 34 ) } {
-        ? == c 92 { ( string_push_char out 92 ) ( string_push_char out 92 ) } {
-        ? == c 10 { ( string_push_char out 92 ) ( string_push_char out 110 ) } {
-        ? == c 13 { ( string_push_char out 92 ) ( string_push_char out 114 ) } {
-        ? == c 9  { ( string_push_char out 92 ) ( string_push_char out 116 ) } {
-        ? < c 32 {
-            ( string_push_char out 92 )
-            ( string_push_char out 117 )
-            ( string_push_char out 48 )
-            ( string_push_char out 48 )
-            ( __log_json_hex out & >> c 4 15 )
-            ( __log_json_hex out & c 15 )
-        } {
-            ( string_push_char out c )
-        } } } } } }
+            ? == c 92 { ( string_push_char out 92 ) ( string_push_char out 92 ) } {
+                ? == c 10 { ( string_push_char out 92 ) ( string_push_char out 110 ) } {
+                    ? == c 13 { ( string_push_char out 92 ) ( string_push_char out 114 ) } {
+                        ? == c 9 { ( string_push_char out 92 ) ( string_push_char out 116 ) } {
+                            ? < c 32 {
+                                ( string_push_char out 92 )
+                                ( string_push_char out 117 )
+                                ( string_push_char out 48 )
+                                ( string_push_char out 48 )
+                                ( __log_json_hex out & >> c 4 15 )
+                                ( __log_json_hex out & c 15 )
+                            } {
+                                ( string_push_char out c )
+                            } } } } } }
         = k + k 1
     }
     ( string_push_char out 34 )
@@ -187,7 +187,7 @@ $ `stdlib/std/fmt.nu`
 // programmer error here, never reached on the public API path).
 @ __log_vec_at ( Vec s ) v i idx → s {
     : ?s o ( vec_get [s] v idx )
-    ?? o { T sv → sv  F → `` }
+    ?? o { T sv → sv F → `` }
 }
 
 // Single internal dispatch: takes the level, the rendered message,
@@ -206,9 +206,9 @@ $ `stdlib/std/fmt.nu`
             : i n ( vec_len [s] keys )
             : ~ i k 0
             ~ < k n {
-                ( string_push_char line 44 )   // ','
+                ( string_push_char line 44 )  // ','
                 ( __log_json_emit_raw line ( __log_vec_at keys k ) )
-                ( string_push_char line 58 )   // ':'
+                ( string_push_char line 58 )  // ':'
                 ( __log_json_emit_raw line ( __log_vec_at vals k ) )
                 = k + k 1
             }

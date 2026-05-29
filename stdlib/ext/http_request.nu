@@ -650,34 +650,34 @@ $ `stdlib/ext/http.nu`
 
 // ── parse_request_head ────────────────────────────────────────────────
 
-@ parse_request_head ( Vec u ) buf → ! ParsedHeadOk HttpReqErr {
+@ parse_request_head ( Vec u ) buf → !ParsedHeadOk HttpReqErr {
     ^ ( parse_request_head_with buf ( http_default_limits ) )
 }
 
-@ parse_request_head_with ( Vec u ) buf HttpLimits limits → ! ParsedHeadOk HttpReqErr {
+@ parse_request_head_with ( Vec u ) buf HttpLimits limits → !ParsedHeadOk HttpReqErr {
     : i head_max . limits head_max_bytes
     : i header_max . limits header_max_count
     : i blen ( vec_len [u] buf )
     : i head_end ( __find_head_end buf 0 )
     ? < head_end 0 {
         ? > blen head_max {
-            ^ @ ! ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqTooLarge }
+            ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqTooLarge }
         } {}
-        ^ @ ! ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqIncomplete }
+        ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqIncomplete }
     } {}
     ? > + head_end 4 head_max {
-        ^ @ ! ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqTooLarge }
+        ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqTooLarge }
     } {}
 
     : i line_end ( __bindex_crlf buf 0 head_end )
     ? < line_end 0 {
-        ^ @ ! ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
+        ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
     } {}
 
     : ReqLineParts rl ( __parse_request_line buf 0 line_end )
     ? ! . rl ok {
         ( __req_line_parts_free rl )
-        ^ @ ! ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
+        ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
     } {}
 
     : s vraw ( string_data . rl version )
@@ -685,7 +685,7 @@ $ `stdlib/ext/http.nu`
     : b v11 != 0 ( nurl_str_eq vraw `HTTP/1.1` )
     ? ! | v10 v11 {
         ( __req_line_parts_free rl )
-        ^ @ ! ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqUnsupportedVersion }
+        ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqUnsupportedVersion }
     } {}
 
     // `head_end` is the position of the FIRST CRLF in the closing
@@ -698,9 +698,9 @@ $ `stdlib/ext/http.nu`
         ( __req_line_parts_free rl )
         ( headers_free . hr headers )
         ? == hstatus 2 {
-            ^ @ ! ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqTooLarge }
+            ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqTooLarge }
         } {}
-        ^ @ ! ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
+        ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
     } {}
 
     : HttpRequest req @ HttpRequest {
@@ -711,7 +711,7 @@ $ `stdlib/ext/http.nu`
         . hr headers
         ( vec_new [u] )
     }
-    ^ @ ! ParsedHeadOk HttpReqErr { T @ ParsedHeadOk { req + head_end 4 } }
+    ^ @ !ParsedHeadOk HttpReqErr { T @ ParsedHeadOk { req + head_end 4 } }
 }
 
 // ── Body reader (Phase 2.3) ───────────────────────────────────────────

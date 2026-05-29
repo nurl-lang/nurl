@@ -57,18 +57,29 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get for strtod ERANGE dete
 // in `__ffi_lib_check`'s whitelist so no `stdlib/runtime.m`
 // sentinel is needed.
 
-& `m` @ sqrt   f x → f
-& `m` @ fabs   f x → f
-& `m` @ floor  f x → f
-& `m` @ ceil   f x → f
-& `m` @ round  f x → f
-& `m` @ log    f x → f
-& `m` @ exp    f x → f
-& `m` @ sin    f x → f
-& `m` @ cos    f x → f
-& `m` @ tan    f x → f
-& `m` @ pow    f x f y → f
-& `m` @ atan2  f y f x → f
+& `m` @ sqrt f x → f
+
+& `m` @ fabs f x → f
+
+& `m` @ floor f x → f
+
+& `m` @ ceil f x → f
+
+& `m` @ round f x → f
+
+& `m` @ log f x → f
+
+& `m` @ exp f x → f
+
+& `m` @ sin f x → f
+
+& `m` @ cos f x → f
+
+& `m` @ tan f x → f
+
+& `m` @ pow f x f y → f
+
+& `m` @ atan2 f y f x → f
 
 // ── float_* wrappers ──────────────────────────────────────────────
 

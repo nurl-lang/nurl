@@ -146,7 +146,7 @@ $ `stdlib/ext/http_response.nu`
 // keeps the server's per-conn cost down for the next legitimate client.
 : DosLimits {
     i max_concurrent_conns  // 0 = unlimited
-    i max_conns_per_ip      // 0 = unlimited (per-IP tracking disabled)
+    i max_conns_per_ip  // 0 = unlimited (per-IP tracking disabled)
 }
 
 @ dos_default_limits → DosLimits {
@@ -214,7 +214,7 @@ $ `stdlib/ext/http_response.nu`
 // extend this helper if a uniform full-knob variant is needed later.
 @ server_new_with_dos TcpListener listener ( @ HttpResponse HttpRequest ) handler DosLimits dos_limits → HttpServer {
     : i st ( dos_state_new . dos_limits max_concurrent_conns
-                              . dos_limits max_conns_per_ip )
+    . dos_limits max_conns_per_ip )
     ^ @ HttpServer { listener handler
         ( server_default_idle_timeout_ms )
         ( server_default_max_keepalive_requests )
@@ -288,7 +288,7 @@ $ `stdlib/ext/http_response.nu`
 // UnsupportedVersion). Carry's state is unspecified on Err (caller is
 // about to close).
 
-@ __read_request_head TcpConn conn ( Vec u ) carry HttpLimits limits → ! ParsedHeadOk HttpReqErr {
+@ __read_request_head TcpConn conn ( Vec u ) carry HttpLimits limits → !ParsedHeadOk HttpReqErr {
     : ~ b done F
     : ~ b had_err F
     : ~ HttpReqErr err # HttpReqErr HttpReqIo
@@ -297,13 +297,13 @@ $ `stdlib/ext/http_response.nu`
         // First try parsing whatever's already in carry (might be the
         // pipelined successor's full head from the previous request's
         // read).
-        : ! ParsedHeadOk HttpReqErr ph ( parse_request_head_with carry limits )
+        : !ParsedHeadOk HttpReqErr ph ( parse_request_head_with carry limits )
         ?? ph {
             T pho → {
                 : i used . pho consumed
                 ( __vec_drop_front_u carry used )
                 = done T
-                ^ @ ! ParsedHeadOk HttpReqErr { T pho }
+                ^ @ !ParsedHeadOk HttpReqErr { T pho }
             }
             F e → {
                 : s nm ( http_req_err_name e )
@@ -339,7 +339,7 @@ $ `stdlib/ext/http_response.nu`
             }
         }
     }
-    ^ @ ! ParsedHeadOk HttpReqErr { F err }
+    ^ @ !ParsedHeadOk HttpReqErr { F err }
 }
 
 // ── Top up body from Content-Length, draining carry first ─────────────
@@ -593,7 +593,7 @@ $ `stdlib/ext/http_response.nu`
     : ~ b done F
     : ~ i n_served 0
     ~ ! done {
-        : ! ParsedHeadOk HttpReqErr ph ( __read_request_head conn carry lim )
+        : !ParsedHeadOk HttpReqErr ph ( __read_request_head conn carry lim )
         ?? ph {
             T pho → {
                 // Snapshot the request-start wall-clock right after the

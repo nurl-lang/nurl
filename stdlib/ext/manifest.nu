@@ -51,11 +51,11 @@ $ `stdlib/ext/toml.nu`
 }
 
 : | ManifestErr {
-    ManifestReadFailed     // file_read returned empty / nurl_read_file failed
-    ManifestParseFailed    // TOML didn't parse
-    ManifestMissingName    // [package].name missing
-    ManifestMissingVersion // [package].version missing
-    ManifestBadShape       // dependencies entry isn't a string or inline table
+    ManifestReadFailed  // file_read returned empty / nurl_read_file failed
+    ManifestParseFailed  // TOML didn't parse
+    ManifestMissingName  // [package].name missing
+    ManifestMissingVersion  // [package].version missing
+    ManifestBadShape  // dependencies entry isn't a string or inline table
 }
 
 @ manifest_err_name ManifestErr e → s {
@@ -108,7 +108,7 @@ $ `stdlib/ext/toml.nu`
         T tv → {
             : ?String s ( toml_as_str tv )
             ?? s {
-                T sv → { ( string_free out )  = out sv }
+                T sv → { ( string_free out ) = out sv }
                 F empty → ( string_free empty )
             }
         }
@@ -131,7 +131,7 @@ $ `stdlib/ext/toml.nu`
 // Parameter must not be named `entry` because LLVM reserves that
 // identifier for every function's entry block — the resulting
 // `%entry` register collides with `entry:` and refuses to emit.
-@ __dep_from_entry TomlEntry ent → ! Dep ManifestErr {
+@ __dep_from_entry TomlEntry ent → !Dep ManifestErr {
     : String name ( string_from ( string_data . ent key ) )
     : String path ( string_new )
     : String version ( string_new )
@@ -170,32 +170,32 @@ $ `stdlib/ext/toml.nu`
             ( string_free name )
             ( string_free path )
             ( string_free version )
-            ^ @ ! Dep ManifestErr { F # ManifestErr ManifestBadShape }
+            ^ @ !Dep ManifestErr { F # ManifestErr ManifestBadShape }
         }
     }
-    ^ @ ! Dep ManifestErr { T @ Dep { name path version } }
+    ^ @ !Dep ManifestErr { T @ Dep { name path version } }
 }
 
 // ── Top-level parser ─────────────────────────────────────────────
 
-@ manifest_parse s src s path_for_diag → ! Manifest ManifestErr {
-    : ! TomlValue TomlErr tr ( toml_parse src )
+@ manifest_parse s src s path_for_diag → !Manifest ManifestErr {
+    : !TomlValue TomlErr tr ( toml_parse src )
     ?? tr {
-        F _ → ^ @ ! Manifest ManifestErr { F # ManifestErr ManifestParseFailed }
+        F _ → ^ @ !Manifest ManifestErr { F # ManifestErr ManifestParseFailed }
         T root → {
             // Required fields.
             : String name ( __field_str root `package.name` )
             ? == 0 ( string_len name ) {
                 ( string_free name )
                 ( toml_value_free root )
-                ^ @ ! Manifest ManifestErr { F # ManifestErr ManifestMissingName }
+                ^ @ !Manifest ManifestErr { F # ManifestErr ManifestMissingName }
             } {}
             : String version ( __field_str root `package.version` )
             ? == 0 ( string_len version ) {
                 ( string_free name )
                 ( string_free version )
                 ( toml_value_free root )
-                ^ @ ! Manifest ManifestErr { F # ManifestErr ManifestMissingVersion }
+                ^ @ !Manifest ManifestErr { F # ManifestErr ManifestMissingVersion }
             } {}
             // Optional fields.
             : String description ( __field_str root `package.description` )
@@ -214,7 +214,7 @@ $ `stdlib/ext/toml.nu`
                                 : ?TomlEntry ek ( vec_get [TomlEntry] entries k )
                                 ?? ek {
                                     T ev → {
-                                        : ! Dep ManifestErr dr ( __dep_from_entry ev )
+                                        : !Dep ManifestErr dr ( __dep_from_entry ev )
                                         ?? dr {
                                             T d → ( vec_push [Dep] deps d )
                                             F _ → {}
@@ -231,17 +231,17 @@ $ `stdlib/ext/toml.nu`
                 F _ → {}
             }
             ( toml_value_free root )
-            ^ @ ! Manifest ManifestErr { T @ Manifest { name version description license deps } }
+            ^ @ !Manifest ManifestErr { T @ Manifest { name version description license deps } }
         }
     }
 }
 
 // Read `path` from disk and parse it. Returns ManifestReadFailed when
 // the file can't be read OR is empty.
-@ manifest_load s path → ! Manifest ManifestErr {
+@ manifest_load s path → !Manifest ManifestErr {
     : s raw ( nurl_read_file path )
     ? == 0 ( nurl_str_len raw ) {
-        ^ @ ! Manifest ManifestErr { F # ManifestErr ManifestReadFailed }
+        ^ @ !Manifest ManifestErr { F # ManifestErr ManifestReadFailed }
     } {}
     ^ ( manifest_parse raw path )
 }

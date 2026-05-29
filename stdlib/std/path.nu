@@ -460,13 +460,13 @@ $ `stdlib/core/vec.nu`
 // want.
 & `c` @ realpath s path s resolved → s
 
-@ path_canonical Path p → ? Path {
+@ path_canonical Path p → ?Path {
     : s raw ( realpath ( path_str p ) # s 0 )
-    ? == 0 # i raw { ^ @ ? Path { F # Path 0 } } {}
+    ? == 0 # i raw { ^ @ ?Path { F # Path 0 } } {}
     : String s ( string_from raw )
     ( nurl_free raw )
     : Path rp @ Path { s }
-    ^ @ ? Path { T rp }
+    ^ @ ?Path { T rp }
 }
 
 // Lexical relative path from `base` to `target`: the result, appended
@@ -476,19 +476,19 @@ $ `stdlib/core/vec.nu`
 // target's remaining segments. Purely lexical — no filesystem access,
 // no symlink awareness. None when the two are not comparable: one
 // absolute and one relative, or rooted on different Windows drives.
-@ path_relative_to Path base Path target → ? Path {
+@ path_relative_to Path base Path target → ?Path {
     : ( @ v String ) drop_str \ String s → v { ( string_free s ) }
     : s bs ( path_str base )
     : s ts ( path_str target )
     ? != ( path_is_absolute bs ) ( path_is_absolute ts ) {
-        ^ @ ? Path { F # Path 0 }
+        ^ @ ?Path { F # Path 0 }
     } {}
     ? != ( __has_drive bs ) ( __has_drive ts ) {
-        ^ @ ? Path { F # Path 0 }
+        ^ @ ?Path { F # Path 0 }
     } {}
     ? ( __has_drive bs ) {
         ? != ( nurl_str_get bs 0 ) ( nurl_str_get ts 0 ) {
-            ^ @ ? Path { F # Path 0 }
+            ^ @ ?Path { F # Path 0 }
         } {}
     } {}
     : String bn ( path_normalize bs )
@@ -542,5 +542,5 @@ $ `stdlib/core/vec.nu`
     ( vec_free_with [String] bsegs drop_str )
     ( vec_free_with [String] tsegs drop_str )
     : Path rp @ Path { out }
-    ^ @ ? Path { T rp }
+    ^ @ ?Path { T rp }
 }

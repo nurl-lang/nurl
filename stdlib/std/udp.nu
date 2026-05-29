@@ -65,25 +65,43 @@ $ `stdlib/std/async_ffi.nu`
 
 // ── Runtime FFI bridge (§18b) ──────────────────────────────────────
 
-& `c` @ nurl_udp_bind                s host i port → i
-& `c` @ nurl_udp_connect             i handle s host i port → i
-& `c` @ nurl_udp_send_to             i handle s buf i n s host i port → i
-& `c` @ nurl_udp_recv_from           i handle s buf i n → i
-& `c` @ nurl_udp_send                i handle s buf i n → i
-& `c` @ nurl_udp_recv                i handle s buf i n → i
-& `c` @ nurl_udp_peer_addr           i handle → s
-& `c` @ nurl_udp_local_addr          i handle → s
-& `c` @ nurl_udp_err_kind            i handle → i
-& `c` @ nurl_udp_get_fd              i handle → i
-& `c` @ nurl_udp_family              i handle → i
-& `c` @ nurl_udp_set_nonblock        i handle i on → v
-& `c` @ nurl_udp_set_timeout         i handle i ms → v
-& `c` @ nurl_udp_close               i handle → v
-& `c` @ nurl_udp_set_broadcast       i handle i on → i
-& `c` @ nurl_udp_join_group          i handle s group s iface → i
-& `c` @ nurl_udp_leave_group         i handle s group s iface → i
-& `c` @ nurl_udp_set_multicast_ttl   i handle i ttl → i
-& `c` @ nurl_udp_set_multicast_loop  i handle i on → i
+& `c` @ nurl_udp_bind s host i port → i
+
+& `c` @ nurl_udp_connect i handle s host i port → i
+
+& `c` @ nurl_udp_send_to i handle s buf i n s host i port → i
+
+& `c` @ nurl_udp_recv_from i handle s buf i n → i
+
+& `c` @ nurl_udp_send i handle s buf i n → i
+
+& `c` @ nurl_udp_recv i handle s buf i n → i
+
+& `c` @ nurl_udp_peer_addr i handle → s
+
+& `c` @ nurl_udp_local_addr i handle → s
+
+& `c` @ nurl_udp_err_kind i handle → i
+
+& `c` @ nurl_udp_get_fd i handle → i
+
+& `c` @ nurl_udp_family i handle → i
+
+& `c` @ nurl_udp_set_nonblock i handle i on → v
+
+& `c` @ nurl_udp_set_timeout i handle i ms → v
+
+& `c` @ nurl_udp_close i handle → v
+
+& `c` @ nurl_udp_set_broadcast i handle i on → i
+
+& `c` @ nurl_udp_join_group i handle s group s iface → i
+
+& `c` @ nurl_udp_leave_group i handle s group s iface → i
+
+& `c` @ nurl_udp_set_multicast_ttl i handle i ttl → i
+
+& `c` @ nurl_udp_set_multicast_loop i handle i on → i
 
 // ── Public types ───────────────────────────────────────────────────
 
@@ -91,7 +109,7 @@ $ `stdlib/std/async_ffi.nu`
 
 : UdpPacket {
     ( Vec u ) data
-    String    peer
+    String peer
 }
 
 // ── Lifecycle ──────────────────────────────────────────────────────
@@ -468,8 +486,8 @@ $ `stdlib/std/async_ffi.nu`
     : s pbuf # s p
     ~ T {
         : i sent ? <= n 0
-            ( nurl_udp_send_to raw `` 0 host port )
-            ( nurl_udp_send_to raw pbuf n host port )
+        ( nurl_udp_send_to raw `` 0 host port )
+        ( nurl_udp_send_to raw pbuf n host port )
         ? >= sent 0 { ^ @ !i NetErr { T sent } } {}
         : i ek ( nurl_udp_err_kind raw )
         ? == ek 7 {
@@ -492,8 +510,8 @@ $ `stdlib/std/async_ffi.nu`
     : s pbuf # s p
     ~ T {
         : i sent ? <= n 0
-            ( nurl_udp_send raw `` 0 )
-            ( nurl_udp_send raw pbuf n )
+        ( nurl_udp_send raw `` 0 )
+        ( nurl_udp_send raw pbuf n )
         ? >= sent 0 { ^ @ !i NetErr { T sent } } {}
         : i ek ( nurl_udp_err_kind raw )
         ? == ek 7 {

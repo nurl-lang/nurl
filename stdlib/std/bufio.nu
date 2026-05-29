@@ -63,9 +63,11 @@ $ `stdlib/core/posix.nu`  // errno_kind
 // globally declared as (i8*, i64, i64, i8*) → i64; the per-file
 // declaration with *u clashes with that. Drop the local one and
 // adjust the call site to use the global shape.
-& `c` @ memchr  *u hay i needle i n             → s
-& `c` @ memmove *u dst *u src i n               → *u
-& `c` @ fdopen  i fd s mode                     → *v
+& `c` @ memchr *u hay i needle i n → s
+
+& `c` @ memmove *u dst *u src i n → *u
+
+& `c` @ fdopen i fd s mode → *v
 
 // Default read buffer: 64 KiB. Grows (×2) only for a line longer than
 // the current buffer; never shrinks.

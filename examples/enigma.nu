@@ -6,9 +6,7 @@
 // - Prefix hell and literal-match fallthrough
 // - Borrowed foreach slices
 
-& `libc`
-
-@ malloc i → *v
+& `libc` @ malloc i → *v
 
 : O { i _ i __ }
 : P { O ___ [i ____ }

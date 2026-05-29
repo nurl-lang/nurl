@@ -17,53 +17,29 @@
 // native SDL2 back-end is *not* wired up for audio today, so running
 // this via `nurl.sh` will link-fail with unresolved host imports.
 
-& `libc`
+& `libc` @ rand → i
 
-@ rand → i
+& `canvas` @ canvas_open i w i h → *i
 
-& `canvas`
+& `canvas` @ canvas_present → v
 
-@ canvas_open i w i h → *i
+& `canvas` @ canvas_sleep i ms → v
 
-& `canvas`
+& `canvas` @ canvas_should_close → i
 
-@ canvas_present → v
+& `canvas` @ canvas_close → v
 
-& `canvas`
+& `audio` @ audio_level → f
 
-@ canvas_sleep i ms → v
+& `audio` @ audio_peak_bin → i
 
-& `canvas`
+& `audio` @ audio_centroid → f
 
-@ canvas_should_close → i
+& `audio` @ audio_bin_count → i
 
-& `canvas`
+& `audio` @ audio_is_silent i pct → i
 
-@ canvas_close → v
-
-& `audio`
-
-@ audio_level → f
-
-& `audio`
-
-@ audio_peak_bin → i
-
-& `audio`
-
-@ audio_centroid → f
-
-& `audio`
-
-@ audio_bin_count → i
-
-& `audio`
-
-@ audio_is_silent i pct → i
-
-& `audio`
-
-@ audio_ready → i
+& `audio` @ audio_ready → i
 
 : i W 480
 : i H 270

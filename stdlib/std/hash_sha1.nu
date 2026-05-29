@@ -34,10 +34,10 @@ $ `stdlib/std/bytes.nu`
 // ── Round constants for the four 20-round groups ───────────────────
 
 @ __sha1_K i group → u32 {
-    ? == group 0 { ^ # u32 1518500249 } {}    // 0x5A827999
-    ? == group 1 { ^ # u32 1859775393 } {}    // 0x6ED9EBA1
-    ? == group 2 { ^ # u32 2400959708 } {}    // 0x8F1BBCDC (signed: -1894007588)
-    ^ # u32 3395469782                         // 0xCA62C1D6
+    ? == group 0 { ^ # u32 1518500249 } {}  // 0x5A827999
+    ? == group 1 { ^ # u32 1859775393 } {}  // 0x6ED9EBA1
+    ? == group 2 { ^ # u32 2400959708 } {}  // 0x8F1BBCDC (signed: -1894007588)
+    ^ # u32 3395469782  // 0xCA62C1D6
 }
 
 // ── Transform: one 64-byte block. Mutates `state` (5 × u32) in place.
@@ -109,11 +109,11 @@ $ `stdlib/std/bytes.nu`
 
 @ sha1_pure ( Vec u ) data → ( Vec u ) {
     : ( Vec u32 ) state ( vec_with_cap [u32] 5 )
-    ( vec_push [u32] state # u32 1732584193 )    // 0x67452301
-    ( vec_push [u32] state # u32 4023233417 )    // 0xEFCDAB89
-    ( vec_push [u32] state # u32 2562383102 )    // 0x98BADCFE
-    ( vec_push [u32] state # u32 271733878 )     // 0x10325476
-    ( vec_push [u32] state # u32 3285377520 )    // 0xC3D2E1F0
+    ( vec_push [u32] state # u32 1732584193 )  // 0x67452301
+    ( vec_push [u32] state # u32 4023233417 )  // 0xEFCDAB89
+    ( vec_push [u32] state # u32 2562383102 )  // 0x98BADCFE
+    ( vec_push [u32] state # u32 271733878 )  // 0x10325476
+    ( vec_push [u32] state # u32 3285377520 )  // 0xC3D2E1F0
 
     : i n ( vec_len [u] data )
 

@@ -422,6 +422,7 @@ $ `stdlib/core/errors.nu`
 $ `stdlib/std/async_ffi.nu`
 
 & `c` @ nurl_tcp_get_fd i handle → i
+
 & `c` @ nurl_tcp_set_nonblock i handle i on → v
 
 // Set non-blocking mode (idempotent). Used internally by the async
@@ -458,7 +459,7 @@ $ `stdlib/std/async_ffi.nu`
             ^ @ !TcpConn NetErr { T c }
         } {
             ( nurl_tcp_close craw )
-            ? == ek 7 {     // NetTimeout / EAGAIN
+            ? == ek 7 {  // NetTimeout / EAGAIN
                 : i rc ( nurl_reactor_wait_read fd - 0 1 )
                 // wait_readable returns -1 outside a fiber; in that
                 // case the sync accept already blocked, so EAGAIN

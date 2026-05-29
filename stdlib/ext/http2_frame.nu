@@ -32,91 +32,117 @@ $ `stdlib/std/net.nu`
 // ── Constants ─────────────────────────────────────────────────────────
 
 // RFC 9113 §11.1 — frame type registry.
-@ h2_type_data          → i { ^ 0 }
-@ h2_type_headers       → i { ^ 1 }
-@ h2_type_priority      → i { ^ 2 }   // deprecated (RFC 9218); ignored
-@ h2_type_rst_stream    → i { ^ 3 }
-@ h2_type_settings      → i { ^ 4 }
-@ h2_type_push_promise  → i { ^ 5 }   // deprecated; we never send
-@ h2_type_ping          → i { ^ 6 }
-@ h2_type_goaway        → i { ^ 7 }
+@ h2_type_data → i { ^ 0 }
+
+@ h2_type_headers → i { ^ 1 }
+
+@ h2_type_priority → i { ^ 2 }  // deprecated (RFC 9218); ignored
+@ h2_type_rst_stream → i { ^ 3 }
+
+@ h2_type_settings → i { ^ 4 }
+
+@ h2_type_push_promise → i { ^ 5 }  // deprecated; we never send
+@ h2_type_ping → i { ^ 6 }
+
+@ h2_type_goaway → i { ^ 7 }
+
 @ h2_type_window_update → i { ^ 8 }
-@ h2_type_continuation  → i { ^ 9 }
+
+@ h2_type_continuation → i { ^ 9 }
 
 // RFC 9113 §6 — flag bit registry (positions; combine via |).
-@ h2_flag_end_stream   → i { ^ 1 }    // DATA, HEADERS
-@ h2_flag_ack          → i { ^ 1 }    // SETTINGS, PING (same bit, different mnemonic)
-@ h2_flag_end_headers  → i { ^ 4 }    // HEADERS, PUSH_PROMISE, CONTINUATION
-@ h2_flag_padded       → i { ^ 8 }    // DATA, HEADERS, PUSH_PROMISE
-@ h2_flag_priority     → i { ^ 32 }   // HEADERS
+@ h2_flag_end_stream → i { ^ 1 }  // DATA, HEADERS
+@ h2_flag_ack → i { ^ 1 }  // SETTINGS, PING (same bit, different mnemonic)
+@ h2_flag_end_headers → i { ^ 4 }  // HEADERS, PUSH_PROMISE, CONTINUATION
+@ h2_flag_padded → i { ^ 8 }  // DATA, HEADERS, PUSH_PROMISE
+@ h2_flag_priority → i { ^ 32 }  // HEADERS
 
 // RFC 9113 §3.4 — connection preface. Exact 24-byte ASCII string the
 // client MUST send before any frame.
 @ h2_conn_preface → s { ^ `PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n` }
+
 @ h2_conn_preface_len → i { ^ 24 }
 
 // RFC 9113 §6.5.2 — SETTINGS parameter identifiers.
-@ h2_settings_header_table_size      → i { ^ 1 }
-@ h2_settings_enable_push            → i { ^ 2 }
+@ h2_settings_header_table_size → i { ^ 1 }
+
+@ h2_settings_enable_push → i { ^ 2 }
+
 @ h2_settings_max_concurrent_streams → i { ^ 3 }
-@ h2_settings_initial_window_size    → i { ^ 4 }
-@ h2_settings_max_frame_size         → i { ^ 5 }
-@ h2_settings_max_header_list_size   → i { ^ 6 }
+
+@ h2_settings_initial_window_size → i { ^ 4 }
+
+@ h2_settings_max_frame_size → i { ^ 5 }
+
+@ h2_settings_max_header_list_size → i { ^ 6 }
 
 // RFC 9113 §7 — error code registry.
-@ h2_err_no_error            → i { ^ 0 }
-@ h2_err_protocol_error      → i { ^ 1 }
-@ h2_err_internal_error      → i { ^ 2 }
-@ h2_err_flow_control_error  → i { ^ 3 }
-@ h2_err_settings_timeout    → i { ^ 4 }
-@ h2_err_stream_closed       → i { ^ 5 }
-@ h2_err_frame_size_error    → i { ^ 6 }
-@ h2_err_refused_stream      → i { ^ 7 }
-@ h2_err_cancel              → i { ^ 8 }
-@ h2_err_compression_error   → i { ^ 9 }
-@ h2_err_connect_error       → i { ^ 10 }
-@ h2_err_enhance_your_calm   → i { ^ 11 }
+@ h2_err_no_error → i { ^ 0 }
+
+@ h2_err_protocol_error → i { ^ 1 }
+
+@ h2_err_internal_error → i { ^ 2 }
+
+@ h2_err_flow_control_error → i { ^ 3 }
+
+@ h2_err_settings_timeout → i { ^ 4 }
+
+@ h2_err_stream_closed → i { ^ 5 }
+
+@ h2_err_frame_size_error → i { ^ 6 }
+
+@ h2_err_refused_stream → i { ^ 7 }
+
+@ h2_err_cancel → i { ^ 8 }
+
+@ h2_err_compression_error → i { ^ 9 }
+
+@ h2_err_connect_error → i { ^ 10 }
+
+@ h2_err_enhance_your_calm → i { ^ 11 }
+
 @ h2_err_inadequate_security → i { ^ 12 }
-@ h2_err_http_1_1_required   → i { ^ 13 }
+
+@ h2_err_http_1_1_required → i { ^ 13 }
 
 // Default + spec-mandated SETTINGS values (RFC 9113 §6.5.2).
-@ h2_default_max_frame_size      → i { ^ 16384 }       // 2^14
-@ h2_max_frame_size_upper_bound  → i { ^ 16777215 }    // 2^24 - 1
-@ h2_default_initial_window_size → i { ^ 65535 }       // 2^16 - 1
-@ h2_default_header_table_size   → i { ^ 4096 }        // §6.5.2 default
-@ h2_max_window_size             → i { ^ 2147483647 }  // 2^31 - 1
-@ h2_max_stream_id               → i { ^ 2147483647 }  // 2^31 - 1 (R bit excluded)
+@ h2_default_max_frame_size → i { ^ 16384 }  // 2^14
+@ h2_max_frame_size_upper_bound → i { ^ 16777215 }  // 2^24 - 1
+@ h2_default_initial_window_size → i { ^ 65535 }  // 2^16 - 1
+@ h2_default_header_table_size → i { ^ 4096 }  // §6.5.2 default
+@ h2_max_window_size → i { ^ 2147483647 }  // 2^31 - 1
+@ h2_max_stream_id → i { ^ 2147483647 }  // 2^31 - 1 (R bit excluded)
 
 // ── Types ─────────────────────────────────────────────────────────────
 
 : H2Frame {
-    i frame_type     // 0..9 per h2_type_*
-    i flags          // bit field; meaning depends on type
-    i stream_id      // 0 for connection frames, odd for client-initiated
-    ( Vec u ) payload   // OWNED; serialized payload bytes (post-padding-strip)
+    i frame_type  // 0..9 per h2_type_*
+    i flags  // bit field; meaning depends on type
+    i stream_id  // 0 for connection frames, odd for client-initiated
+    ( Vec u ) payload  // OWNED; serialized payload bytes (post-padding-strip)
 }
 
 : | H2FrameErr {
-    H2FrameBadPreface         // connection preface didn't match
-    H2FrameReadIo             // socket read failed
-    H2FrameReadShort          // peer closed mid-frame
-    H2FrameWriteIo            // socket write failed
-    H2FrameOversized          // length > MAX_FRAME_SIZE
-    H2FrameBadStreamId        // reserved bit set or zero where positive required
-    H2FrameBadPadding         // pad length > payload length
+    H2FrameBadPreface  // connection preface didn't match
+    H2FrameReadIo  // socket read failed
+    H2FrameReadShort  // peer closed mid-frame
+    H2FrameWriteIo  // socket write failed
+    H2FrameOversized  // length > MAX_FRAME_SIZE
+    H2FrameBadStreamId  // reserved bit set or zero where positive required
+    H2FrameBadPadding  // pad length > payload length
     H2FrameOther
 }
 
 @ h2_frame_err_name H2FrameErr e → s {
     ^ ?? e {
-        H2FrameBadPreface     → `H2FrameBadPreface`
-        H2FrameReadIo         → `H2FrameReadIo`
-        H2FrameReadShort      → `H2FrameReadShort`
-        H2FrameWriteIo        → `H2FrameWriteIo`
-        H2FrameOversized      → `H2FrameOversized`
-        H2FrameBadStreamId    → `H2FrameBadStreamId`
-        H2FrameBadPadding     → `H2FrameBadPadding`
-        H2FrameOther          → `H2FrameOther`
+        H2FrameBadPreface → `H2FrameBadPreface`
+        H2FrameReadIo → `H2FrameReadIo`
+        H2FrameReadShort → `H2FrameReadShort`
+        H2FrameWriteIo → `H2FrameWriteIo`
+        H2FrameOversized → `H2FrameOversized`
+        H2FrameBadStreamId → `H2FrameBadStreamId`
+        H2FrameBadPadding → `H2FrameBadPadding`
+        H2FrameOther → `H2FrameOther`
     }
 }
 
@@ -128,10 +154,10 @@ $ `stdlib/std/net.nu`
 // payload length (`max_frame_size`) prevents an accidental oversend.
 // Stream ID is masked to 31 bits — caller-supplied negative or
 // over-2^31 values silently clip rather than emit garbage R bit.
-@ h2_serialize_frame H2Frame f i max_frame_size → ! ( Vec u ) H2FrameErr {
+@ h2_serialize_frame H2Frame f i max_frame_size → !( Vec u ) H2FrameErr {
     : i n ( vec_len [u] . f payload )
     ? > n max_frame_size {
-        ^ @ ! ( Vec u ) H2FrameErr { F H2FrameOversized }
+        ^ @ !( Vec u ) H2FrameErr { F H2FrameOversized }
     } {}
     : ( Vec u ) out ( vec_with_cap [u] + 9 n )
     // Length: 24-bit big-endian
@@ -147,14 +173,14 @@ $ `stdlib/std/net.nu`
     ( bytes_push_u32_be out # u32 sid )
     // Payload
     ? > n 0 { ( vec_extend [u] out . f payload ) } {}
-    ^ @ ! ( Vec u ) H2FrameErr { T out }
+    ^ @ !( Vec u ) H2FrameErr { T out }
 }
 
 // ── Pure parser (for offline tests + buffer-based servers) ────────────
 
 : H2ParsedFrame {
     H2Frame frame
-    i consumed     // bytes consumed from input (9 + payload_len)
+    i consumed  // bytes consumed from input (9 + payload_len)
 }
 
 @ h2_parsed_frame_free H2ParsedFrame p → v { ( h2_frame_free . p frame ) }
@@ -162,10 +188,10 @@ $ `stdlib/std/net.nu`
 // Parse one frame from a byte buffer starting at `from`. Returns
 // H2FrameReadShort when fewer than 9+payload_len bytes are available
 // (caller fills the buffer further and retries). Pure — no I/O.
-@ h2_parse_frame ( Vec u ) buf i from → ! H2ParsedFrame H2FrameErr {
+@ h2_parse_frame ( Vec u ) buf i from → !H2ParsedFrame H2FrameErr {
     : i n ( vec_len [u] buf )
     ? < - n from 9 {
-        ^ @ ! H2ParsedFrame H2FrameErr { F H2FrameReadShort }
+        ^ @ !H2ParsedFrame H2FrameErr { F H2FrameReadShort }
     } {}
     : *u p ( vec_data [u] buf )
     : i l0 # i . p + from 0
@@ -181,7 +207,7 @@ $ `stdlib/std/net.nu`
     // Mask off the reserved bit (top bit of s0).
     : i stream_id + + + << & s0 127 24 << s1 16 << s2 8 s3
     ? < - n + from 9 length {
-        ^ @ ! H2ParsedFrame H2FrameErr { F H2FrameReadShort }
+        ^ @ !H2ParsedFrame H2FrameErr { F H2FrameReadShort }
     } {}
     : ( Vec u ) payload ( vec_with_cap [u] length )
     : ~ i k 0
@@ -189,7 +215,7 @@ $ `stdlib/std/net.nu`
         ( vec_push [u] payload # u . p + + from 9 k )
         = k + k 1
     }
-    ^ @ ! H2ParsedFrame H2FrameErr {
+    ^ @ !H2ParsedFrame H2FrameErr {
         T @ H2ParsedFrame {
             @ H2Frame { ftype fflags stream_id payload }
             + 9 length
@@ -200,9 +226,9 @@ $ `stdlib/std/net.nu`
 // ── Socket I/O ────────────────────────────────────────────────────────
 
 // Read exactly N bytes from `conn`. Mirrors __ws_read_exact's shape.
-@ __h2_read_exact TcpConn conn i n → ! ( Vec u ) H2FrameErr {
+@ __h2_read_exact TcpConn conn i n → !( Vec u ) H2FrameErr {
     ? <= n 0 {
-        ^ @ ! ( Vec u ) H2FrameErr { T ( vec_new [u] ) }
+        ^ @ !( Vec u ) H2FrameErr { T ( vec_new [u] ) }
     } {}
     : ( Vec u ) buf ( vec_with_cap [u] n )
     : ~ i remaining n
@@ -210,7 +236,7 @@ $ `stdlib/std/net.nu`
     : ~ H2FrameErr last H2FrameReadIo
     ~ & == status 1 > remaining 0 {
         : i want ? > remaining 4096 4096 remaining
-        : ! ( Vec u ) NetErr r ( tcp_read_chunk conn want )
+        : !( Vec u ) NetErr r ( tcp_read_chunk conn want )
         ?? r {
             T chunk → {
                 : i got ( vec_len [u] chunk )
@@ -229,16 +255,16 @@ $ `stdlib/std/net.nu`
     }
     ? == status 0 {
         ( vec_free [u] buf )
-        ^ @ ! ( Vec u ) H2FrameErr { F last }
+        ^ @ !( Vec u ) H2FrameErr { F last }
     } {}
-    ^ @ ! ( Vec u ) H2FrameErr { T buf }
+    ^ @ !( Vec u ) H2FrameErr { T buf }
 }
 
 // Validate the 24-byte client connection preface. Caller invokes this
 // before any other read. Returns H2FrameBadPreface on mismatch — the
 // server SHOULD reply with a GOAWAY+protocol_error and close.
-@ h2_read_preface TcpConn conn → ! v H2FrameErr {
-    : ! ( Vec u ) H2FrameErr r ( __h2_read_exact conn ( h2_conn_preface_len ) )
+@ h2_read_preface TcpConn conn → !v H2FrameErr {
+    : !( Vec u ) H2FrameErr r ( __h2_read_exact conn ( h2_conn_preface_len ) )
     ?? r {
         T buf → {
             : i n ( vec_len [u] buf )
@@ -252,20 +278,20 @@ $ `stdlib/std/net.nu`
             }
             ( vec_free [u] buf )
             ? ok {
-                ^ @ ! v H2FrameErr { T 0 }
+                ^ @ !v H2FrameErr { T 0 }
             } {
-                ^ @ ! v H2FrameErr { F H2FrameBadPreface }
+                ^ @ !v H2FrameErr { F H2FrameBadPreface }
             }
         }
-        F e → { ^ @ ! v H2FrameErr { F e } }
+        F e → { ^ @ !v H2FrameErr { F e } }
     }
 }
 
 // Read one frame off `conn`. Honours `max_frame_size` (peer SETTINGS) —
 // frames larger than that MUST be rejected with FRAME_SIZE_ERROR per
 // RFC 9113 §4.2.
-@ h2_read_frame TcpConn conn i max_frame_size → ! H2Frame H2FrameErr {
-    : ! ( Vec u ) H2FrameErr hr ( __h2_read_exact conn 9 )
+@ h2_read_frame TcpConn conn i max_frame_size → !H2Frame H2FrameErr {
+    : !( Vec u ) H2FrameErr hr ( __h2_read_exact conn 9 )
     : ~ i length 0
     : ~ i ftype 0
     : ~ i fflags 0
@@ -286,45 +312,45 @@ $ `stdlib/std/net.nu`
             = stream_id + + + << & s0 127 24 << s1 16 << s2 8 s3
             ( vec_free [u] hdr )
         }
-        F e → { ^ @ ! H2Frame H2FrameErr { F e } }
+        F e → { ^ @ !H2Frame H2FrameErr { F e } }
     }
     ? > length max_frame_size {
-        ^ @ ! H2Frame H2FrameErr { F H2FrameOversized }
+        ^ @ !H2Frame H2FrameErr { F H2FrameOversized }
     } {}
-    : ! ( Vec u ) H2FrameErr pr ( __h2_read_exact conn length )
+    : !( Vec u ) H2FrameErr pr ( __h2_read_exact conn length )
     ?? pr {
         T payload → {
-            ^ @ ! H2Frame H2FrameErr {
+            ^ @ !H2Frame H2FrameErr {
                 T @ H2Frame { ftype fflags stream_id payload }
             }
         }
-        F e → { ^ @ ! H2Frame H2FrameErr { F e } }
+        F e → { ^ @ !H2Frame H2FrameErr { F e } }
     }
 }
 
 // Write a frame. Borrows the payload; caller still owns it.
-@ h2_write_frame TcpConn conn H2Frame f i max_frame_size → ! v H2FrameErr {
-    : ! ( Vec u ) H2FrameErr sr ( h2_serialize_frame f max_frame_size )
+@ h2_write_frame TcpConn conn H2Frame f i max_frame_size → !v H2FrameErr {
+    : !( Vec u ) H2FrameErr sr ( h2_serialize_frame f max_frame_size )
     ?? sr {
         T wire → {
-            : ! v NetErr wr ( tcp_write_all conn wire )
+            : !v NetErr wr ( tcp_write_all conn wire )
             ( vec_free [u] wire )
             ?? wr {
-                T _ → { ^ @ ! v H2FrameErr { T 0 } }
-                F _ → { ^ @ ! v H2FrameErr { F H2FrameWriteIo } }
+                T _ → { ^ @ !v H2FrameErr { T 0 } }
+                F _ → { ^ @ !v H2FrameErr { F H2FrameWriteIo } }
             }
         }
-        F e → { ^ @ ! v H2FrameErr { F e } }
+        F e → { ^ @ !v H2FrameErr { F e } }
     }
 }
 
 // ── One-shot connection-level senders ────────────────────────────────
 
-: H2Setting { i id  i value }
+: H2Setting { i id i value }
 
 // SETTINGS frame with N (id,value) pairs. Stream ID is always 0
 // (RFC 9113 §6.5).
-@ h2_send_settings TcpConn conn ( Vec H2Setting ) settings → ! v H2FrameErr {
+@ h2_send_settings TcpConn conn ( Vec H2Setting ) settings → !v H2FrameErr {
     : i n ( vec_len [H2Setting] settings )
     : ( Vec u ) payload ( vec_with_cap [u] * n 6 )
     : *H2Setting sp ( vec_data [H2Setting] settings )
@@ -336,46 +362,46 @@ $ `stdlib/std/net.nu`
         = k + k 1
     }
     : H2Frame f @ H2Frame { ( h2_type_settings ) 0 0 payload }
-    : ! v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
+    : !v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
     ( h2_frame_free f )
     ^ r
 }
 
 // SETTINGS ACK — empty payload, ACK flag set.
-@ h2_send_settings_ack TcpConn conn → ! v H2FrameErr {
+@ h2_send_settings_ack TcpConn conn → !v H2FrameErr {
     : H2Frame f @ H2Frame {
         ( h2_type_settings ) ( h2_flag_ack ) 0 ( vec_new [u] )
     }
-    : ! v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
+    : !v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
     ( h2_frame_free f )
     ^ r
 }
 
 // PING with opaque 8-byte payload — peer responds with same payload +
 // ACK flag. Used for RTT measurement and idle-connection keepalive.
-@ h2_send_ping TcpConn conn ( Vec u ) opaque → ! v H2FrameErr {
+@ h2_send_ping TcpConn conn ( Vec u ) opaque → !v H2FrameErr {
     ? != 8 ( vec_len [u] opaque ) {
-        ^ @ ! v H2FrameErr { F H2FrameOther }
+        ^ @ !v H2FrameErr { F H2FrameOther }
     } {}
     : ( Vec u ) p ( vec_with_cap [u] 8 )
     ( vec_extend [u] p opaque )
     : H2Frame f @ H2Frame { ( h2_type_ping ) 0 0 p }
-    : ! v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
+    : !v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
     ( h2_frame_free f )
     ^ r
 }
 
 // PING ACK — same 8-byte payload as the inbound PING, ACK flag set.
-@ h2_send_ping_ack TcpConn conn ( Vec u ) opaque → ! v H2FrameErr {
+@ h2_send_ping_ack TcpConn conn ( Vec u ) opaque → !v H2FrameErr {
     ? != 8 ( vec_len [u] opaque ) {
-        ^ @ ! v H2FrameErr { F H2FrameOther }
+        ^ @ !v H2FrameErr { F H2FrameOther }
     } {}
     : ( Vec u ) p ( vec_with_cap [u] 8 )
     ( vec_extend [u] p opaque )
     : H2Frame f @ H2Frame {
         ( h2_type_ping ) ( h2_flag_ack ) 0 p
     }
-    : ! v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
+    : !v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
     ( h2_frame_free f )
     ^ r
 }
@@ -383,7 +409,7 @@ $ `stdlib/std/net.nu`
 // GOAWAY — signal graceful shutdown. last_stream_id is the highest
 // stream the server PROMISES to process; streams above will be
 // refused. Debug info is borrowed.
-@ h2_send_goaway TcpConn conn i last_stream_id i error_code s debug → ! v H2FrameErr {
+@ h2_send_goaway TcpConn conn i last_stream_id i error_code s debug → !v H2FrameErr {
     : i dn ( nurl_str_len debug )
     : ( Vec u ) p ( vec_with_cap [u] + 8 dn )
     : i lsid & 2147483647 last_stream_id
@@ -391,29 +417,29 @@ $ `stdlib/std/net.nu`
     ( bytes_push_u32_be p # u32 error_code )
     ? > dn 0 { ( bytes_extend_str p debug ) } {}
     : H2Frame f @ H2Frame { ( h2_type_goaway ) 0 0 p }
-    : ! v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
+    : !v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
     ( h2_frame_free f )
     ^ r
 }
 
 // WINDOW_UPDATE — grant flow-control credit. stream_id=0 means
 // connection-level; non-zero targets a specific stream.
-@ h2_send_window_update TcpConn conn i stream_id i increment → ! v H2FrameErr {
+@ h2_send_window_update TcpConn conn i stream_id i increment → !v H2FrameErr {
     : ( Vec u ) p ( vec_with_cap [u] 4 )
     : i inc & 2147483647 increment
     ( bytes_push_u32_be p # u32 inc )
     : H2Frame f @ H2Frame { ( h2_type_window_update ) 0 stream_id p }
-    : ! v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
+    : !v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
     ( h2_frame_free f )
     ^ r
 }
 
 // RST_STREAM — abort a single stream with an error code.
-@ h2_send_rst_stream TcpConn conn i stream_id i error_code → ! v H2FrameErr {
+@ h2_send_rst_stream TcpConn conn i stream_id i error_code → !v H2FrameErr {
     : ( Vec u ) p ( vec_with_cap [u] 4 )
     ( bytes_push_u32_be p # u32 error_code )
     : H2Frame f @ H2Frame { ( h2_type_rst_stream ) 0 stream_id p }
-    : ! v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
+    : !v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
     ( h2_frame_free f )
     ^ r
 }
@@ -425,21 +451,21 @@ $ `stdlib/std/net.nu`
 // read DATA payload, returning just the application data range.
 //
 // Returns H2FrameBadPadding if pad_length > payload_length - 1.
-@ h2_data_strip_padding H2Frame f → ! ( Vec u ) H2FrameErr {
+@ h2_data_strip_padding H2Frame f → !( Vec u ) H2FrameErr {
     : i n ( vec_len [u] . f payload )
     : b padded != 0 & . f flags ( h2_flag_padded )
     ? ! padded {
         : ( Vec u ) copy ( vec_with_cap [u] n )
         ( vec_extend [u] copy . f payload )
-        ^ @ ! ( Vec u ) H2FrameErr { T copy }
+        ^ @ !( Vec u ) H2FrameErr { T copy }
     } {}
     ? < n 1 {
-        ^ @ ! ( Vec u ) H2FrameErr { F H2FrameBadPadding }
+        ^ @ !( Vec u ) H2FrameErr { F H2FrameBadPadding }
     } {}
     : *u p ( vec_data [u] . f payload )
     : i pad_len # i . p 0
     ? > + pad_len 1 n {
-        ^ @ ! ( Vec u ) H2FrameErr { F H2FrameBadPadding }
+        ^ @ !( Vec u ) H2FrameErr { F H2FrameBadPadding }
     } {}
     : i data_len - - n 1 pad_len
     : ( Vec u ) out ( vec_with_cap [u] data_len )
@@ -448,5 +474,5 @@ $ `stdlib/std/net.nu`
         ( vec_push [u] out # u . p + 1 k )
         = k + k 1
     }
-    ^ @ ! ( Vec u ) H2FrameErr { T out }
+    ^ @ !( Vec u ) H2FrameErr { T out }
 }

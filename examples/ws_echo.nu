@@ -24,7 +24,7 @@ $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_server.nu`
 $ `stdlib/ext/websocket.nu`
 
-@ ws_echo_handler TcpConn conn WsMessage msg → ! v WsErr {
+@ ws_echo_handler TcpConn conn WsMessage msg → !v WsErr {
     : i op . msg opcode
     ? == op ( ws_opcode_text ) {
         // Echo the raw bytes verbatim — RFC 6455 §8.1 already validates
@@ -37,7 +37,7 @@ $ `stdlib/ext/websocket.nu`
         } {
             // Should not happen — ws_read_message only surfaces text /
             // binary messages; control frames are handled inside the loop.
-            ^ @ ! v WsErr { T 0 }
+            ^ @ !v WsErr { T 0 }
         }
     }
 }
@@ -47,12 +47,12 @@ $ `stdlib/ext/websocket.nu`
     // carry-buffer pipeline.
     : ( Vec u ) carry ( vec_new [u] )
     : HttpLimits lim ( http_default_limits )
-    : ! ParsedHeadOk HttpReqErr ph ( __read_request_head conn carry lim )
+    : !ParsedHeadOk HttpReqErr ph ( __read_request_head conn carry lim )
     ?? ph {
         T pho → {
             : HttpRequest req . pho req
             ? ( ws_is_upgrade req ) {
-                : ! v WsErr hr ( ws_perform_handshake conn req )
+                : !v WsErr hr ( ws_perform_handshake conn req )
                 ?? hr {
                     T _ → {
                         // Echo-server limits — autobahn-testsuite §9
@@ -63,15 +63,15 @@ $ `stdlib/ext/websocket.nu`
                         // assembling. Per-frame and per-message byte
                         // caps stay tight.
                         : WsLimits wlim @ WsLimits {
-                            16777216    // 16 MiB per frame
-                            67108864    // 64 MiB per assembled message
-                            60000       // 60 s read timeout
-                            131072      // up to 128k fragments per message
+                            16777216  // 16 MiB per frame
+                            67108864  // 64 MiB per assembled message
+                            60000  // 60 s read timeout
+                            131072  // up to 128k fragments per message
                         }
-                        : ! v WsErr sr ( ws_serve_messages conn wlim
-                            \ WsMessage msg → ! v WsErr {
-                                ^ ( ws_echo_handler conn msg )
-                            } )
+                        : !v WsErr sr ( ws_serve_messages conn wlim
+                        \ WsMessage msg → !v WsErr {
+                            ^ ( ws_echo_handler conn msg )
+                        } )
                         ?? sr { T _ → {} F _ → {} }
                     }
                     F _ → {}
@@ -114,7 +114,7 @@ $ `stdlib/ext/websocket.nu`
                     F e → {
                         : s nm ( net_err_name e )
                         ? | != 0 ( nurl_str_eq nm `NetClosed` )
-                          != 0 ( nurl_str_eq nm `NetAccept` ) {
+                        != 0 ( nurl_str_eq nm `NetAccept` ) {
                             = done T
                         } {
                             ( nurl_print `accept err: ` )

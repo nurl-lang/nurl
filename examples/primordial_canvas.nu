@@ -19,25 +19,15 @@
 // so AC (red + blue) draws purple, ABCD draws all-channel-on = white,
 // and so on. Catalysts punch bright white pixels through the soup.
 
-& `canvas`
+& `canvas` @ canvas_open i w i h → *i
 
-@ canvas_open i w i h → *i
+& `canvas` @ canvas_present → v
 
-& `canvas`
+& `canvas` @ canvas_sleep i ms → v
 
-@ canvas_present → v
+& `canvas` @ canvas_should_close → i
 
-& `canvas`
-
-@ canvas_sleep i ms → v
-
-& `canvas`
-
-@ canvas_should_close → i
-
-& `canvas`
-
-@ canvas_close → v
+& `canvas` @ canvas_close → v
 
 // ── Config ────────────────────────────────────────────────────
 : i W 180

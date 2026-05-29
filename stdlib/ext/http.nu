@@ -148,45 +148,65 @@ $ `stdlib/core/errors.nu`
 //     pointers; `nurl_curl_attach_callbacks` wires them up so the
 //     callback symbols stay fully encapsulated.
 
-& `c` @ nurl_curl_easy_init                                            → *u
-& `c` @ nurl_curl_easy_cleanup     *u eh                               → v
-& `c` @ nurl_curl_easy_perform     *u eh                               → i
-& `c` @ nurl_curl_setopt_l         *u eh i opt i val                   → i
-& `c` @ nurl_curl_setopt_s         *u eh i opt s val                   → i
-& `c` @ nurl_curl_setopt_p         *u eh i opt *u val                  → i
-& `c` @ nurl_curl_getinfo_l        *u eh i info *u out                 → i
-& `c` @ nurl_curl_slist_append     *u list s str                       → *u
-& `c` @ nurl_curl_slist_free_all   *u list                             → v
-& `c` @ nurl_curl_attach_callbacks *u eh *u body_buf *u hdr_buf        → i
-& `c` @ nurl_curl_available                                            → i
+& `c` @ nurl_curl_easy_init → *u
+
+& `c` @ nurl_curl_easy_cleanup *u eh → v
+
+& `c` @ nurl_curl_easy_perform *u eh → i
+
+& `c` @ nurl_curl_setopt_l *u eh i opt i val → i
+
+& `c` @ nurl_curl_setopt_s *u eh i opt s val → i
+
+& `c` @ nurl_curl_setopt_p *u eh i opt *u val → i
+
+& `c` @ nurl_curl_getinfo_l *u eh i info *u out → i
+
+& `c` @ nurl_curl_slist_append *u list s str → *u
+
+& `c` @ nurl_curl_slist_free_all *u list → v
+
+& `c` @ nurl_curl_attach_callbacks *u eh *u body_buf *u hdr_buf → i
+
+& `c` @ nurl_curl_available → i
 
 // Multi-handle trampolines + NurlHttpStream state helpers — drive
 // the streaming pump loop from NURL. See stdlib/runtime.c §14b.
-& `c` @ nurl_curl_multi_init                                           → *u
-& `c` @ nurl_curl_multi_cleanup           *u m                         → i
-& `c` @ nurl_curl_multi_add_handle        *u m *u easy                 → i
-& `c` @ nurl_curl_multi_remove_handle     *u m *u easy                 → i
-& `c` @ nurl_curl_multi_perform           *u m                         → i
-& `c` @ nurl_curl_multi_wait              *u m i timeout_ms            → i
-& `c` @ nurl_curl_multi_drain_done        *u m                         → i
-& `c` @ nurl_curl_stream_alloc                                         → *u
-& `c` @ nurl_curl_stream_attach_callbacks *u h *u easy                 → i
-& `c` @ nurl_curl_stream_take_body        *u h                         → s
-& `c` @ nurl_curl_stream_finalize         *u h i curle_result          → v
+& `c` @ nurl_curl_multi_init → *u
+
+& `c` @ nurl_curl_multi_cleanup *u m → i
+
+& `c` @ nurl_curl_multi_add_handle *u m *u easy → i
+
+& `c` @ nurl_curl_multi_remove_handle *u m *u easy → i
+
+& `c` @ nurl_curl_multi_perform *u m → i
+
+& `c` @ nurl_curl_multi_wait *u m i timeout_ms → i
+
+& `c` @ nurl_curl_multi_drain_done *u m → i
+
+& `c` @ nurl_curl_stream_alloc → *u
+
+& `c` @ nurl_curl_stream_attach_callbacks *u h *u easy → i
+
+& `c` @ nurl_curl_stream_take_body *u h → s
+
+& `c` @ nurl_curl_stream_finalize *u h i curle_result → v
 
 // CURLcode → NURL_HTTP_ERR_* (matches stdlib/runtime.c §14). Unknown
 // codes collapse to HttpOther. libcurl's CURLE_* numbers are part of
 // its public ABI (documented in curl/curl.h) and stable across
 // versions, so hard-coding them here is safe.
 @ __curle_to_http_err i rc → i {
-    ? == rc 6  { ^ 4 } {}    // CURLE_COULDNT_RESOLVE_HOST → HttpDns
-    ? == rc 7  { ^ 1 } {}    // CURLE_COULDNT_CONNECT      → HttpConnect
-    ? == rc 28 { ^ 2 } {}    // CURLE_OPERATION_TIMEDOUT   → HttpTimeout
-    ? == rc 35 { ^ 3 } {}    // CURLE_SSL_CONNECT_ERROR    → HttpTls
-    ? == rc 60 { ^ 3 } {}    // CURLE_PEER_FAILED_VERIFICATION → HttpTls
-    ? == rc 3  { ^ 5 } {}    // CURLE_URL_MALFORMAT        → HttpInvalidUrl
-    ? == rc 1  { ^ 5 } {}    // CURLE_UNSUPPORTED_PROTOCOL → HttpInvalidUrl
-    ^ 6                      // HttpOther
+    ? == rc 6 { ^ 4 } {}  // CURLE_COULDNT_RESOLVE_HOST → HttpDns
+    ? == rc 7 { ^ 1 } {}  // CURLE_COULDNT_CONNECT      → HttpConnect
+    ? == rc 28 { ^ 2 } {}  // CURLE_OPERATION_TIMEDOUT   → HttpTimeout
+    ? == rc 35 { ^ 3 } {}  // CURLE_SSL_CONNECT_ERROR    → HttpTls
+    ? == rc 60 { ^ 3 } {}  // CURLE_PEER_FAILED_VERIFICATION → HttpTls
+    ? == rc 3 { ^ 5 } {}  // CURLE_URL_MALFORMAT        → HttpInvalidUrl
+    ? == rc 1 { ^ 5 } {}  // CURLE_UNSUPPORTED_PROTOCOL → HttpInvalidUrl
+    ^ 6  // HttpOther
 }
 
 // Walk a CRLF-delimited "Name: Value\r\n…" blob and append each line
@@ -198,7 +218,7 @@ $ `stdlib/core/errors.nu`
     ? == # i blob 0 { ^ # *u 0 } {}
     : i blen ( nurl_str_len blob )
     ? == blen 0 { ^ # *u 0 } {}
-    : ~ *u list # *u 0
+    : ~ * u list # *u 0
     : ~ i i 0
     ~ < i blen {
         : ~ i j i
@@ -236,23 +256,23 @@ $ `stdlib/core/errors.nu`
 // allocation failure — every other failure mode populates err_kind and
 // returns a non-zero pointer.
 @ __libcurl_perform_full_to s url s method s body s headers_blob
-                            i timeout_ms i connect_timeout_ms → i {
+i timeout_ms i connect_timeout_ms → i {
     : i resp # i ( nurl_zalloc 48 )
     ? == resp 0 { ^ 0 } {}
     : *u rp # *u resp
 
     ? || == # i url 0 == ( nurl_str_len url ) 0 {
-        ( nurl_poke rp 1 5 )                       // err_kind = HttpInvalidUrl
+        ( nurl_poke rp 1 5 )  // err_kind = HttpInvalidUrl
         ( nurl_poke rp 4 # i ( strdup `` ) )
         ^ resp
     } {}
 
-    : i tmo ? <= timeout_ms         0 30000 timeout_ms
+    : i tmo ? <= timeout_ms 0 30000 timeout_ms
     : i cto ? <= connect_timeout_ms 0 10000 connect_timeout_ms
 
     : *u eh ( nurl_curl_easy_init )
     ? == # i eh 0 {
-        ( nurl_poke rp 1 6 )                       // err_kind = HttpOther
+        ( nurl_poke rp 1 6 )  // err_kind = HttpOther
         ( nurl_poke rp 4 # i ( strdup `` ) )
         ^ resp
     } {}
@@ -263,38 +283,38 @@ $ `stdlib/core/errors.nu`
     : i hbuf # i ( nurl_zalloc 24 )
 
     // Common options.
-    ( nurl_curl_setopt_s eh 10002 url             )    // CURLOPT_URL
-    ( nurl_curl_setopt_l eh 52    1               )    // CURLOPT_FOLLOWLOCATION
-    ( nurl_curl_setopt_l eh 99    1               )    // CURLOPT_NOSIGNAL (thread-safe)
-    ( nurl_curl_setopt_l eh 155   tmo             )    // CURLOPT_TIMEOUT_MS
-    ( nurl_curl_setopt_l eh 156   cto             )    // CURLOPT_CONNECTTIMEOUT_MS
-    ( nurl_curl_setopt_s eh 10018 `nurl-http/0.1` )    // CURLOPT_USERAGENT
-    ( nurl_curl_setopt_s eh 10102 ``              )    // CURLOPT_ACCEPT_ENCODING
+    ( nurl_curl_setopt_s eh 10002 url )  // CURLOPT_URL
+    ( nurl_curl_setopt_l eh 52 1 )  // CURLOPT_FOLLOWLOCATION
+    ( nurl_curl_setopt_l eh 99 1 )  // CURLOPT_NOSIGNAL (thread-safe)
+    ( nurl_curl_setopt_l eh 155 tmo )  // CURLOPT_TIMEOUT_MS
+    ( nurl_curl_setopt_l eh 156 cto )  // CURLOPT_CONNECTTIMEOUT_MS
+    ( nurl_curl_setopt_s eh 10018 `nurl-http/0.1` )  // CURLOPT_USERAGENT
+    ( nurl_curl_setopt_s eh 10102 `` )  // CURLOPT_ACCEPT_ENCODING
 
     ( nurl_curl_attach_callbacks eh # *u bbuf # *u hbuf )
 
     : *u slist ( __curl_build_slist headers_blob )
     ? != # i slist 0 {
-        ( nurl_curl_setopt_p eh 10023 slist )          // CURLOPT_HTTPHEADER
+        ( nurl_curl_setopt_p eh 10023 slist )  // CURLOPT_HTTPHEADER
     } {}
 
-    : i is_post   ( nurl_str_eq method `POST`   )
-    : i is_put    ( nurl_str_eq method `PUT`    )
-    : i is_del    ( nurl_str_eq method `DELETE` )
-    : i is_patch  ( nurl_str_eq method `PATCH`  )
-    : i has_body  && != # i body 0 != ( nurl_str_len body ) 0
+    : i is_post ( nurl_str_eq method `POST` )
+    : i is_put ( nurl_str_eq method `PUT` )
+    : i is_del ( nurl_str_eq method `DELETE` )
+    : i is_patch ( nurl_str_eq method `PATCH` )
+    : i has_body && != # i body 0 != ( nurl_str_len body ) 0
     : s post_body ? != has_body 0 body ``
-    : i post_len  ? != has_body 0 ( nurl_str_len body ) 0
+    : i post_len ? != has_body 0 ( nurl_str_len body ) 0
     ? != is_post 0 {
-        ( nurl_curl_setopt_l eh 47    1         )         // CURLOPT_POST
-        ( nurl_curl_setopt_s eh 10015 post_body )         // CURLOPT_POSTFIELDS
-        ( nurl_curl_setopt_l eh 60    post_len  )         // CURLOPT_POSTFIELDSIZE
+        ( nurl_curl_setopt_l eh 47 1 )  // CURLOPT_POST
+        ( nurl_curl_setopt_s eh 10015 post_body )  // CURLOPT_POSTFIELDS
+        ( nurl_curl_setopt_l eh 60 post_len )  // CURLOPT_POSTFIELDSIZE
     } {
         ? || || != is_put 0 != is_del 0 != is_patch 0 {
-            ( nurl_curl_setopt_s eh 10036 method )        // CURLOPT_CUSTOMREQUEST
+            ( nurl_curl_setopt_s eh 10036 method )  // CURLOPT_CUSTOMREQUEST
             ? != has_body 0 {
-                ( nurl_curl_setopt_s eh 10015 body     )
-                ( nurl_curl_setopt_l eh 60    post_len )
+                ( nurl_curl_setopt_s eh 10015 body )
+                ( nurl_curl_setopt_l eh 60 post_len )
             } {}
         } {}
     }
@@ -307,7 +327,7 @@ $ `stdlib/core/errors.nu`
         // LP64). zalloc gives 8; reading slot 0 as i64 picks up the
         // value either way because the trailing pad stays zeroed.
         : i cbuf # i ( nurl_zalloc 8 )
-        ( nurl_curl_getinfo_l eh 2097154 # *u cbuf )   // CURLINFO_RESPONSE_CODE
+        ( nurl_curl_getinfo_l eh 2097154 # *u cbuf )  // CURLINFO_RESPONSE_CODE
         ( nurl_poke rp 0 ( nurl_peek # *u cbuf 0 ) )
         ( nurl_free # s cbuf )
     }
@@ -321,15 +341,15 @@ $ `stdlib/core/errors.nu`
     : *u bbp # *u bbuf
     : *u hbp # *u hbuf
     : i bdata ( nurl_peek bbp 0 )
-    : i blen  ( nurl_peek bbp 1 )
+    : i blen ( nurl_peek bbp 1 )
     ? != bdata 0 {
         ( nurl_poke rp 4 bdata )
-        ( nurl_poke rp 5 blen  )
+        ( nurl_poke rp 5 blen )
     } {
         ( nurl_poke rp 4 # i ( strdup `` ) )
     }
-    ( nurl_poke rp 3 ( nurl_peek hbp 0 ) )    // headers
-    ( nurl_poke rp 2 ( nurl_peek hbp 1 ) )    // header_count
+    ( nurl_poke rp 3 ( nurl_peek hbp 0 ) )  // headers
+    ( nurl_poke rp 2 ( nurl_peek hbp 1 ) )  // header_count
 
     ( nurl_free # s bbuf )
     ( nurl_free # s hbuf )
@@ -595,68 +615,68 @@ $ `stdlib/core/errors.nu`
 // when libcurl is linked — NURL drives via this path). Returns the
 // i64 heap pointer; 0 only on the state-struct allocation failure.
 @ __http_stream_open_to_libcurl s method s url s body s headers_blob
-                                i timeout_ms i connect_timeout_ms → i {
+i timeout_ms i connect_timeout_ms → i {
     : *u state ( nurl_curl_stream_alloc )
     ? == # i state 0 { ^ 0 } {}
 
     : *u multi ( nurl_curl_multi_init )
-    : *u easy  ( nurl_curl_easy_init )
+    : *u easy ( nurl_curl_easy_init )
     ? || == # i multi 0 == # i easy 0 {
         ? != # i multi 0 { ( nurl_curl_multi_cleanup multi ) } {}
-        ? != # i easy  0 { ( nurl_curl_easy_cleanup  easy  ) } {}
-        ( nurl_poke state 13 6 )                          // err_kind = HttpOther
-        ( nurl_poke state 11 1 )                          // finished
+        ? != # i easy 0 { ( nurl_curl_easy_cleanup easy ) } {}
+        ( nurl_poke state 13 6 )  // err_kind = HttpOther
+        ( nurl_poke state 11 1 )  // finished
         ^ # i state
     } {}
     ( nurl_poke state 0 # i multi )
-    ( nurl_poke state 1 # i easy  )
+    ( nurl_poke state 1 # i easy )
 
-    : i tmo ? <= timeout_ms         0 30000 timeout_ms
+    : i tmo ? <= timeout_ms 0 30000 timeout_ms
     : i cto ? <= connect_timeout_ms 0 10000 connect_timeout_ms
     : s url_or_empty ? == # i url 0 `` url
 
-    ( nurl_curl_setopt_s easy 10002 url_or_empty   )       // CURLOPT_URL
-    ( nurl_curl_setopt_l easy 52    1              )       // CURLOPT_FOLLOWLOCATION
-    ( nurl_curl_setopt_l easy 99    1              )       // CURLOPT_NOSIGNAL
-    ( nurl_curl_setopt_l easy 155   tmo            )       // CURLOPT_TIMEOUT_MS
-    ( nurl_curl_setopt_l easy 156   cto            )       // CURLOPT_CONNECTTIMEOUT_MS
-    ( nurl_curl_setopt_s easy 10018 `nurl-http/0.1`)       // CURLOPT_USERAGENT
-    ( nurl_curl_setopt_s easy 10102 ``             )       // CURLOPT_ACCEPT_ENCODING
+    ( nurl_curl_setopt_s easy 10002 url_or_empty )  // CURLOPT_URL
+    ( nurl_curl_setopt_l easy 52 1 )  // CURLOPT_FOLLOWLOCATION
+    ( nurl_curl_setopt_l easy 99 1 )  // CURLOPT_NOSIGNAL
+    ( nurl_curl_setopt_l easy 155 tmo )  // CURLOPT_TIMEOUT_MS
+    ( nurl_curl_setopt_l easy 156 cto )  // CURLOPT_CONNECTTIMEOUT_MS
+    ( nurl_curl_setopt_s easy 10018 `nurl-http/0.1` )  // CURLOPT_USERAGENT
+    ( nurl_curl_setopt_s easy 10102 `` )  // CURLOPT_ACCEPT_ENCODING
 
     ( nurl_curl_stream_attach_callbacks state easy )
 
     : *u slist ( __curl_build_slist headers_blob )
     ? != # i slist 0 {
         ( nurl_poke state 2 # i slist )
-        ( nurl_curl_setopt_p easy 10023 slist )            // CURLOPT_HTTPHEADER
+        ( nurl_curl_setopt_p easy 10023 slist )  // CURLOPT_HTTPHEADER
     } {}
 
     : i is_post ( nurl_str_eq method `POST` )
-    : i is_get  ( nurl_str_eq method `GET`  )
-    : i has_body  && != # i body 0 != ( nurl_str_len body ) 0
+    : i is_get ( nurl_str_eq method `GET` )
+    : i has_body && != # i body 0 != ( nurl_str_len body ) 0
     : s post_body ? != has_body 0 body ``
-    : i post_len  ? != has_body 0 ( nurl_str_len body ) 0
+    : i post_len ? != has_body 0 ( nurl_str_len body ) 0
     ? != is_post 0 {
-        ( nurl_curl_setopt_l easy 47    1         )        // CURLOPT_POST
-        ( nurl_curl_setopt_s easy 10015 post_body )        // CURLOPT_POSTFIELDS
-        ( nurl_curl_setopt_l easy 60    post_len  )        // CURLOPT_POSTFIELDSIZE
+        ( nurl_curl_setopt_l easy 47 1 )  // CURLOPT_POST
+        ( nurl_curl_setopt_s easy 10015 post_body )  // CURLOPT_POSTFIELDS
+        ( nurl_curl_setopt_l easy 60 post_len )  // CURLOPT_POSTFIELDSIZE
     } {
         ? == is_get 0 {
-            ( nurl_curl_setopt_s easy 10036 method )       // CURLOPT_CUSTOMREQUEST
+            ( nurl_curl_setopt_s easy 10036 method )  // CURLOPT_CUSTOMREQUEST
             ? != has_body 0 {
-                ( nurl_curl_setopt_s easy 10015 body     )
-                ( nurl_curl_setopt_l easy 60    post_len )
+                ( nurl_curl_setopt_s easy 10015 body )
+                ( nurl_curl_setopt_l easy 60 post_len )
             } {}
         } {}
     }
 
     : i mrc ( nurl_curl_multi_add_handle multi easy )
     ? != mrc 0 {
-        ( nurl_poke state 13 6 )                          // err_kind = HttpOther
-        ( nurl_poke state 11 1 )                          // finished
+        ( nurl_poke state 13 6 )  // err_kind = HttpOther
+        ( nurl_poke state 11 1 )  // finished
         ^ # i state
     } {}
-    ( nurl_poke state 10 1 )                              // still_running = 1
+    ( nurl_poke state 10 1 )  // still_running = 1
     ^ # i state
 }
 
@@ -664,12 +684,12 @@ $ `stdlib/core/errors.nu`
 // should keep pumping, 0 if we've reached a stop condition (finished,
 // CURLM error, or fresh data). Used by both __http_stream_next_libcurl
 // and __http_stream_pump_headers_libcurl.
-@ __http_stream_pump_once *u state → v {
+@ __http_stream_pump_once * u state → v {
     : *u multi # *u ( nurl_peek state 0 )
     : i still ( nurl_curl_multi_perform multi )
     ? < still 0 {
-        ( nurl_poke state 13 6 )                          // err_kind = HttpOther
-        ( nurl_poke state 11 1 )                          // finished
+        ( nurl_poke state 13 6 )  // err_kind = HttpOther
+        ( nurl_poke state 11 1 )  // finished
         ^ # v 0
     } {}
     ( nurl_poke state 10 still )
@@ -704,8 +724,8 @@ $ `stdlib/core/errors.nu`
 i timeout_ms i connect_timeout_ms
 → !HttpStream HttpErr {
     : i raw ? != ( nurl_curl_available ) 0
-        ( __http_stream_open_to_libcurl method url body headers_blob timeout_ms connect_timeout_ms )
-        ( nurl_http_stream_open_to method url body headers_blob timeout_ms connect_timeout_ms )
+    ( __http_stream_open_to_libcurl method url body headers_blob timeout_ms connect_timeout_ms )
+    ( nurl_http_stream_open_to method url body headers_blob timeout_ms connect_timeout_ms )
     ? == raw 0 {
         ^ @ !HttpStream HttpErr { F # HttpErr HttpOther }
     } {}
@@ -733,8 +753,8 @@ i timeout_ms i connect_timeout_ms
 @ http_stream_next HttpStream st → ?String {
     : i raw . st raw
     : s p ? != ( nurl_curl_available ) 0
-        ( __http_stream_next_libcurl raw )
-        ( nurl_http_stream_next raw )
+    ( __http_stream_next_libcurl raw )
+    ( nurl_http_stream_next raw )
     ? == # i p 0 { ^ @ ?String { F # String 0 } } {}
     : String s ( string_from p )
     ^ @ ?String { T s }
@@ -780,8 +800,8 @@ i timeout_ms i connect_timeout_ms
 @ http_stream_pump_headers HttpStream st → i {
     : i raw . st raw
     ^ ? != ( nurl_curl_available ) 0
-        ( __http_stream_pump_headers_libcurl raw )
-        ( nurl_http_stream_pump_headers raw )
+    ( __http_stream_pump_headers_libcurl raw )
+    ( nurl_http_stream_pump_headers raw )
 }
 
 @ http_stream_header_count HttpStream st → i {

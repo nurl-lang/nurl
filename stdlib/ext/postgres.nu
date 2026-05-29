@@ -54,14 +54,14 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 : | PgErr {
-    PgConnectFailed   // PQstatus(conn) != CONNECTION_OK after PQconnectdb
-    PgExecFailed      // PQresultStatus != PGRES_COMMAND_OK / PGRES_TUPLES_OK
-    PgNullResult      // PQexec / PQexecParams returned NULL (OOM / fatal)
-    PgOther           // anything else
+    PgConnectFailed  // PQstatus(conn) != CONNECTION_OK after PQconnectdb
+    PgExecFailed  // PQresultStatus != PGRES_COMMAND_OK / PGRES_TUPLES_OK
+    PgNullResult  // PQexec / PQexecParams returned NULL (OOM / fatal)
+    PgOther  // anything else
 }
 
 : Connection { s raw }
-: PgResult   { s raw }
+: PgResult { s raw }
 
 @ pg_err_name PgErr e → s {
     ^ ?? e {
@@ -79,22 +79,33 @@ $ `stdlib/core/vec.nu`
 // `PGconn*` / `PGresult*` opaque handles. We thread those handles
 // through NURL Connection / PgResult value structs as `s raw`.
 
-& `pq` @ PQconnectdb       s conninfo                    → s
-& `pq` @ PQfinish          s conn                        → v
-& `pq` @ PQstatus          s conn                        → i32
-& `pq` @ PQerrorMessage    s conn                        → s
-& `pq` @ PQexec            s conn s sql                  → s
-& `pq` @ PQclear           s res                         → v
-& `pq` @ PQresultStatus    s res                         → i32
-& `pq` @ PQntuples         s res                         → i32
-& `pq` @ PQnfields         s res                         → i32
-& `pq` @ PQgetvalue        s res i32 row i32 col         → s
-& `pq` @ PQgetisnull       s res i32 row i32 col         → i32
-& `pq` @ PQfname           s res i32 col                 → s
+& `pq` @ PQconnectdb s conninfo → s
+
+& `pq` @ PQfinish s conn → v
+
+& `pq` @ PQstatus s conn → i32
+
+& `pq` @ PQerrorMessage s conn → s
+
+& `pq` @ PQexec s conn s sql → s
+
+& `pq` @ PQclear s res → v
+
+& `pq` @ PQresultStatus s res → i32
+
+& `pq` @ PQntuples s res → i32
+
+& `pq` @ PQnfields s res → i32
+
+& `pq` @ PQgetvalue s res i32 row i32 col → s
+
+& `pq` @ PQgetisnull s res i32 row i32 col → i32
+
+& `pq` @ PQfname s res i32 col → s
 // Parameterised exec — text format only (paramTypes / paramLengths /
 // paramFormats / resultFormat all set to 0/NULL so libpq treats every
 // param as a NUL-terminated UTF-8 string and returns text rows).
-& `pq` @ PQexecParams      s conn s sql i32 n_params *u types **u values *i32 lens *i32 fmts i32 res_fmt → s
+& `pq` @ PQexecParams s conn s sql i32 n_params *u types **u values *i32 lens *i32 fmts i32 res_fmt → s
 
 // PQstatus return codes (from libpq-fe.h):
 //   CONNECTION_OK = 0

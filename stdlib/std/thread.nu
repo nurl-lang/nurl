@@ -63,15 +63,23 @@ $ `stdlib/core/cell.nu`
 // a held mutex) or an OOM the caller can't recover from. thread_spawn
 // IS error-checking because pthread_create's EAGAIN ("would exceed
 // thread cap") is a real recoverable condition.
-& `c` @ pthread_mutex_init     *u m *u attr → i
-& `c` @ pthread_mutex_lock     *u m → i
-& `c` @ pthread_mutex_unlock   *u m → i
-& `c` @ pthread_mutex_destroy  *u m → i
-& `c` @ pthread_cond_init      *u cv *u attr → i
-& `c` @ pthread_cond_wait      *u cv *u m → i
-& `c` @ pthread_cond_signal    *u cv → i
+& `c` @ pthread_mutex_init *u m *u attr → i
+
+& `c` @ pthread_mutex_lock *u m → i
+
+& `c` @ pthread_mutex_unlock *u m → i
+
+& `c` @ pthread_mutex_destroy *u m → i
+
+& `c` @ pthread_cond_init *u cv *u attr → i
+
+& `c` @ pthread_cond_wait *u cv *u m → i
+
+& `c` @ pthread_cond_signal *u cv → i
+
 & `c` @ pthread_cond_broadcast *u cv → i
-& `c` @ pthread_cond_destroy   *u cv → i
+
+& `c` @ pthread_cond_destroy *u cv → i
 
 // pthread_create's start_routine signature is `void *(*)(void *)`.
 // NURL closures compile to `void(*)(void *env)` — same arg shape; the
@@ -83,7 +91,8 @@ $ `stdlib/core/cell.nu`
 // pthread_t is by-value and 16-byte struct on winpthreads — NURL has
 // no struct-by-value FFI. These two trampolines (runtime.c §19) take
 // pthread_t* and dereference inside C.
-& `c` @ nurl_pthread_join_ptr   *u t → i
+& `c` @ nurl_pthread_join_ptr *u t → i
+
 & `c` @ nurl_pthread_detach_ptr *u t → v
 
 // ── ThreadErr ─────────────────────────────────────────────────────
@@ -111,8 +120,8 @@ $ `stdlib/core/cell.nu`
 // — a 16-byte Cell wouldn't fit those slots.
 // Mutex / Cond don't have that constraint, so they store a full Cell.
 : Thread { s raw }
-: Mutex  { Cell c }
-: Cond   { Cell c }
+: Mutex { Cell c }
+: Cond { Cell c }
 
 // ── Thread lifecycle ──────────────────────────────────────────────
 

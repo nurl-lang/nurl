@@ -218,7 +218,7 @@ $ `stdlib/core/char.nu`
     : ~ i i 0
     : ~ i sign 1
     : u first . q 0
-    ? == & # i first 255 45 { = sign -1  = i 1 } {}
+    ? == & # i first 255 45 { = sign -1 = i 1 } {}
     ? == & # i first 255 43 { = i 1 } {}
     : ~ i acc 0
     ~ < i len {

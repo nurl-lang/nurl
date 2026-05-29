@@ -57,9 +57,9 @@ $ `stdlib/core/mem.nu`
 $ `stdlib/core/cell.nu`  // nurl_native_sizeof for z_stream alloc
 
 : | CompressErr {
-    CompressBufTooSmall   // dst buffer overflow on grow-and-retry
-    CompressData          // malformed input (zlib Z_DATA_ERROR / zstd error code)
-    CompressMemory        // libz Z_MEM_ERROR / zstd out-of-memory
+    CompressBufTooSmall  // dst buffer overflow on grow-and-retry
+    CompressData  // malformed input (zlib Z_DATA_ERROR / zstd error code)
+    CompressMemory  // libz Z_MEM_ERROR / zstd out-of-memory
     CompressOther
 }
 
@@ -91,9 +91,11 @@ $ `stdlib/core/cell.nu`  // nurl_native_sizeof for z_stream alloc
 // `compressBound(sourceLen)` returns the maximum size compress2 will
 // produce. Add a small constant safety margin (libz documents this).
 
-& `z` @ compress2     *u dest *i destLen *u source i sourceLen i32 level → i32
-& `z` @ uncompress    *u dest *i destLen *u source i sourceLen           → i32
-& `z` @ compressBound i sourceLen                                          → i
+& `z` @ compress2 *u dest *i destLen *u source i sourceLen i32 level → i32
+
+& `z` @ uncompress *u dest *i destLen *u source i sourceLen → i32
+
+& `z` @ compressBound i sourceLen → i
 
 // Gzip wire format (RFC 1952) — pure-NURL FFI over libz's streaming
 // `deflateInit2_(windowBits=15+16)` / `inflateInit2_(windowBits=15+32)`.
@@ -106,26 +108,34 @@ $ `stdlib/core/cell.nu`  // nurl_native_sizeof for z_stream alloc
 // `nurl_native_sizeof "z_stream"`.
 
 & `z` @ deflateInit2_ *u zs i32 level i32 method i32 windowBits i32 memLevel i32 strategy s version i32 streamSize → i32
-& `z` @ deflate       *u zs i32 flush → i32
-& `z` @ deflateEnd    *u zs → i32
+
+& `z` @ deflate *u zs i32 flush → i32
+
+& `z` @ deflateEnd *u zs → i32
+
 & `z` @ inflateInit2_ *u zs i32 windowBits s version i32 streamSize → i32
-& `z` @ inflate       *u zs i32 flush → i32
-& `z` @ inflateEnd    *u zs → i32
+
+& `z` @ inflate *u zs i32 flush → i32
+
+& `z` @ inflateEnd *u zs → i32
+
 & `z` @ zlibVersion → s
-& `c` @ nurl_z_setup     *u zs *u in i avail_in *u out i avail_out → v
+
+& `c` @ nurl_z_setup *u zs *u in i avail_in *u out i avail_out → v
+
 & `c` @ nurl_z_total_out *u zs → i
 
 // Returns 0 on success or libz error code (-5 = Z_BUF_ERROR ⇒ caller
 // grows dst; -98 = NURL_GZIP_ERR_UNSUPPORTED ⇒ build lacked zlib).
 // Z_DEFLATED = 8, Z_DEFAULT_STRATEGY = 0, Z_FINISH = 4, Z_STREAM_END = 1.
-@ __gzip_compress_pure *u dst *i dst_len *u src i src_len i32 level → i32 {
+@ __gzip_compress_pure * u dst * i dst_len * u src i src_len i32 level → i32 {
     : i zs_size ( nurl_native_sizeof `z_stream` )
     ? <= zs_size 0 { ^ # i32 -98 } {}
     : *u zs # *u ( nurl_zalloc zs_size )
     ? == 0 # i zs { ^ # i32 -4 } {}  // Z_MEM_ERROR
     ( nurl_z_setup zs src src_len dst ( nurl_peek # s dst_len 0 ) )
     : i32 rc1 ( deflateInit2_ zs level # i32 8 # i32 31 # i32 8 # i32 0
-                              ( zlibVersion ) # i32 zs_size )
+    ( zlibVersion ) # i32 zs_size )
     ? != rc1 # i32 0 { ( nurl_free # s zs ) ^ rc1 } {}
     : i32 rc2 ( deflate zs # i32 4 )
     ? != rc2 # i32 1 {
@@ -139,7 +149,7 @@ $ `stdlib/core/cell.nu`  // nurl_native_sizeof for z_stream alloc
     ^ rc3
 }
 
-@ __gzip_decompress_pure *u dst *i dst_len *u src i src_len → i32 {
+@ __gzip_decompress_pure * u dst * i dst_len * u src i src_len → i32 {
     : i zs_size ( nurl_native_sizeof `z_stream` )
     ? <= zs_size 0 { ^ # i32 -98 } {}
     : *u zs # *u ( nurl_zalloc zs_size )
@@ -173,11 +183,15 @@ $ `stdlib/core/cell.nu`  // nurl_native_sizeof for z_stream alloc
 //   (-2ULL) when the frame is streamed without a size field or invalid.
 // `ZSTD_isError(code) → unsigned` — 1 if `code` is an error.
 
-& `zstd` @ ZSTD_compress              *u dst i dstCap *u src i srcSize i32 level → i
-& `zstd` @ ZSTD_decompress            *u dst i dstCap *u src i srcSize           → i
-& `zstd` @ ZSTD_compressBound         i srcSize                                    → i
-& `zstd` @ ZSTD_getFrameContentSize   *u src i srcSize                             → i
-& `zstd` @ ZSTD_isError               i code                                       → i32
+& `zstd` @ ZSTD_compress *u dst i dstCap *u src i srcSize i32 level → i
+
+& `zstd` @ ZSTD_decompress *u dst i dstCap *u src i srcSize → i
+
+& `zstd` @ ZSTD_compressBound i srcSize → i
+
+& `zstd` @ ZSTD_getFrameContentSize *u src i srcSize → i
+
+& `zstd` @ ZSTD_isError i code → i32
 
 // ── zlib public API ───────────────────────────────────────────────
 

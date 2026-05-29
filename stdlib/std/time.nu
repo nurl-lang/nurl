@@ -70,7 +70,8 @@ $ `stdlib/std/async_ffi.nu`
 // returns the 32-bit `tv_nsec` extended with zeros — the correct value.
 
 & `c` @ clock_gettime i32 clock_id *u tp → i32
-& `c` @ nanosleep     *u req         *u rem → i32
+
+& `c` @ nanosleep *u req *u rem → i32
 
 @ now_ms → i {
     : s ts ( nurl_zalloc 16 )
@@ -274,15 +275,15 @@ $ `stdlib/std/async_ffi.nu`
 //   }
 @ time_make i year i month i day i hour i min i sec → !i ParseErr {
     ? | < month 1 > month 12
-        { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
+    { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
     ? | < day 1 > day ( days_in_month year month )
-        { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
+    { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
     ? | < hour 0 > hour 23
-        { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
+    { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
     ? | < min 0 > min 59
-        { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
+    { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
     ? | < sec 0 > sec 59
-        { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
+    { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
     ^ @ !i ParseErr { T ( time_to_unix @ Time { year month day hour min sec 0 0 } ) }
 }
 

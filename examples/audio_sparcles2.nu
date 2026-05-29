@@ -1,50 +1,26 @@
-& `libc`
+& `libc` @ rand → i
 
-@ rand → i
+& `libc` @ malloc i size → *i
 
-& `libc`
+& `canvas` @ canvas_open i w i h → *i
 
-@ malloc i size → *i
+& `canvas` @ canvas_present → v
 
-& `canvas`
+& `canvas` @ canvas_sleep i ms → v
 
-@ canvas_open i w i h → *i
+& `canvas` @ canvas_should_close → i
 
-& `canvas`
+& `canvas` @ canvas_close → v
 
-@ canvas_present → v
+& `audio` @ audio_level → f
 
-& `canvas`
+& `audio` @ audio_peak_bin → i
 
-@ canvas_sleep i ms → v
+& `audio` @ audio_centroid → f
 
-& `canvas`
+& `audio` @ audio_is_silent i pct → i
 
-@ canvas_should_close → i
-
-& `canvas`
-
-@ canvas_close → v
-
-& `audio`
-
-@ audio_level → f
-
-& `audio`
-
-@ audio_peak_bin → i
-
-& `audio`
-
-@ audio_centroid → f
-
-& `audio`
-
-@ audio_is_silent i pct → i
-
-& `audio`
-
-@ audio_ready → i
+& `audio` @ audio_ready → i
 
 : i W 480
 : i H 270

@@ -33,11 +33,15 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get
 // errno = ERANGE when the buffer is too small (the loop below doubles
 // the buffer and retries up to a 1 MB ceiling).
 
-& `c` @ getenv   s name                        → s
-& `c` @ setenv   s name s value i32 overwrite → i32
-& `c` @ unsetenv s name                        → i32
-& `c` @ getcwd   s buf  i      size            → s
-& `c` @ chdir    s path                        → i32
+& `c` @ getenv s name → s
+
+& `c` @ setenv s name s value i32 overwrite → i32
+
+& `c` @ unsetenv s name → i32
+
+& `c` @ getcwd s buf i size → s
+
+& `c` @ chdir s path → i32
 
 @ env_args_count → i {
     ^ ( nurl_argv_count )
@@ -82,7 +86,7 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get
 
 @ env_set s name s value → !v IoErr {
     ? | == # i name 0 == # i value 0
-        { ^ @ !v IoErr { F @ IoErr { Other } } } {}
+    { ^ @ !v IoErr { F @ IoErr { Other } } } {}
     : i32 rc ( setenv name value # i32 1 )
     ? == rc # i32 0 { ^ @ !v IoErr { T 0 } } {}
     ^ @ !v IoErr { F @ IoErr { Other } }

@@ -381,7 +381,7 @@ $ `stdlib/ext/http_server.nu`
                 // already bounds).
                 : ( Vec u ) carry ( vec_with_cap [u] 4096 )
                 : HttpLimits lim ( http_default_limits )
-                : ! ParsedHeadOk HttpReqErr ph ( __read_request_head conn carry lim )
+                : !ParsedHeadOk HttpReqErr ph ( __read_request_head conn carry lim )
                 ?? ph {
                     T pho → {
                         : HttpRequest req . pho head

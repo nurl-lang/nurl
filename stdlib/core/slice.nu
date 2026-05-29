@@ -35,7 +35,7 @@ $ `stdlib/core/option.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/mem.nu`
 
-: Slice [A] { *A data  i len }
+: Slice [A] { * A data i len }
 
 // ── Constructors ─────────────────────────────────────────────────────
 
@@ -51,7 +51,7 @@ $ `stdlib/core/mem.nu`
 // Sub-range view `[from, to)`. Bounds are clamped to `[0, len(s))` —
 // `from > to` after clamping returns None; equal indices returns an
 // empty slice (data still points into v but len == 0).
-@ slice_sub [A] ( Slice A ) s i from i to → ? ( Slice A ) {
+@ slice_sub [A] ( Slice A ) s i from i to → ?( Slice A ) {
     : i n . s len
     : ~ i lo from
     ? < lo 0 { = lo 0 } {}
@@ -59,16 +59,16 @@ $ `stdlib/core/mem.nu`
     : ~ i hi to
     ? < hi 0 { = hi 0 } {}
     ? > hi n { = hi n } {}
-    ? > lo hi { ^ @ ? ( Slice A ) { F @ ( Slice A ) { # *A 0  0 } } } {}
+    ? > lo hi { ^ @ ?( Slice A ) { F @ ( Slice A ) { # *A 0 0 } } } {}
     : *A base . s data
     : *A start # *A + # i base * lo * Z A 1
-    ^ @ ? ( Slice A ) { T @ ( Slice A ) { start - hi lo } }
+    ^ @ ?( Slice A ) { T @ ( Slice A ) { start - hi lo } }
 }
 
 // Raw-pointer + length constructor. Caller MUST guarantee the storage
 // holds `len` elements starting at `data`. Use only when interfacing
 // with FFI buffers that the stdlib hasn't wrapped yet.
-@ slice_from_raw [A] *A data i len → ( Slice A ) {
+@ slice_from_raw [A] * A data i len → ( Slice A ) {
     ^ @ ( Slice A ) { data len }
 }
 

@@ -48,15 +48,15 @@ $ `stdlib/std/fs.nu`
             //    (bare `@`-fn names don't auto-coerce to `( @ R P P )`).
             : Router r ( router_new )
             ( router_get r `/`
-                \ HttpRequest req Params params → HttpResponse { ^ ( root_handler req params ) } )
+            \ HttpRequest req Params params → HttpResponse { ^ ( root_handler req params ) } )
             ( router_get r `/api/health`
-                \ HttpRequest req Params params → HttpResponse { ^ ( health_handler req params ) } )
+            \ HttpRequest req Params params → HttpResponse { ^ ( health_handler req params ) } )
 
             // Middleware compose, innermost-first — same shape as the
             // sync `examples/static_server.nu`.
             : Metrics mtr ( metrics_new )
             : ( @ HttpResponse HttpRequest ) base
-                \ HttpRequest req → HttpResponse { ^ ( router_handle r req ) }
+            \ HttpRequest req → HttpResponse { ^ ( router_handle r req ) }
             : ( @ HttpResponse HttpRequest ) metered ( with_metrics mtr base )
             : ( @ HttpResponse HttpRequest ) logged ( with_access_log metered )
 

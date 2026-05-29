@@ -11,7 +11,7 @@ $ `stdlib/ext/serde.nu`
 
 // ── A typical leaf struct ──────────────────────────────────────────
 
-: Point { i x  i y }
+: Point { i x i y }
 
 // to_json: build a JObj, set each field via `to_json` recursively.
 % JsonSerialize Point {
@@ -55,7 +55,7 @@ $ `stdlib/ext/serde.nu`
     : Point p @ Point { 3 4 }
 
     // Encode side: trait dispatch routes ( to_json p ) to our Point impl.
-    : Json   j ( to_json p )
+    : Json j ( to_json p )
     : String s ( json_stringify j )
     ( nurl_print `encoded:  ` ) ( nurl_print ( string_data s ) ) ( nurl_print `\n` )
 

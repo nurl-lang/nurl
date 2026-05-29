@@ -91,13 +91,19 @@ $ `stdlib/core/posix.nu`  // nurl_native_constant / SIG* lookups
 
 // ── FFI declarations ────────────────────────────────────────────
 
-& `c` @ nurl_signal_register   i sig *u fn *u env → i
+& `c` @ nurl_signal_register i sig *u fn *u env → i
+
 & `c` @ nurl_signal_unregister i sig → v
-& `c` @ nurl_signal_pending    i sig → i
+
+& `c` @ nurl_signal_pending i sig → i
+
 & `c` @ nurl_signal_poll → i
+
 & `c` @ nurl_signal_dispatch → v
+
 & `c` @ nurl_signal_pipe_fd → i
-& `c` @ nurl_signal_raise      i sig → i
+
+& `c` @ nurl_signal_raise i sig → i
 
 // ── Generic API ─────────────────────────────────────────────────
 
@@ -166,9 +172,9 @@ $ `stdlib/core/posix.nu`  // nurl_native_constant / SIG* lookups
 // unrecognised values so the result is always a borrowable string
 // literal (no allocation, no free required by caller).
 @ signal_name i sig → s {
-    ? == sig ( nurl_native_constant `SIGINT`  ) { ^ `SIGINT`  } {}
+    ? == sig ( nurl_native_constant `SIGINT` ) { ^ `SIGINT` } {}
     ? == sig ( nurl_native_constant `SIGTERM` ) { ^ `SIGTERM` } {}
-    ? == sig ( nurl_native_constant `SIGHUP`  ) { ^ `SIGHUP`  } {}
+    ? == sig ( nurl_native_constant `SIGHUP` ) { ^ `SIGHUP` } {}
     ? == sig ( nurl_native_constant `SIGQUIT` ) { ^ `SIGQUIT` } {}
     ? == sig ( nurl_native_constant `SIGUSR1` ) { ^ `SIGUSR1` } {}
     ? == sig ( nurl_native_constant `SIGUSR2` ) { ^ `SIGUSR2` } {}
@@ -176,13 +182,13 @@ $ `stdlib/core/posix.nu`  // nurl_native_constant / SIG* lookups
     ? == sig ( nurl_native_constant `SIGALRM` ) { ^ `SIGALRM` } {}
     ? == sig ( nurl_native_constant `SIGCHLD` ) { ^ `SIGCHLD` } {}
     ? == sig ( nurl_native_constant `SIGABRT` ) { ^ `SIGABRT` } {}
-    ? == sig ( nurl_native_constant `SIGFPE`  ) { ^ `SIGFPE`  } {}
-    ? == sig ( nurl_native_constant `SIGILL`  ) { ^ `SIGILL`  } {}
+    ? == sig ( nurl_native_constant `SIGFPE` ) { ^ `SIGFPE` } {}
+    ? == sig ( nurl_native_constant `SIGILL` ) { ^ `SIGILL` } {}
     ? == sig ( nurl_native_constant `SIGSEGV` ) { ^ `SIGSEGV` } {}
-    ? == sig ( nurl_native_constant `SIGBUS`  ) { ^ `SIGBUS`  } {}
+    ? == sig ( nurl_native_constant `SIGBUS` ) { ^ `SIGBUS` } {}
     ? == sig ( nurl_native_constant `SIGCONT` ) { ^ `SIGCONT` } {}
     ? == sig ( nurl_native_constant `SIGTSTP` ) { ^ `SIGTSTP` } {}
-    ? == sig ( nurl_native_constant `SIGWINCH`) { ^ `SIGWINCH`} {}
+    ? == sig ( nurl_native_constant `SIGWINCH` ) { ^ `SIGWINCH` } {}
     ^ `SIG?`
 }
 
