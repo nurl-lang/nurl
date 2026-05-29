@@ -1034,12 +1034,16 @@ $ `stdlib/ext/mcp_http.nu`
                       ( vec_push [s] link_args `-ladvapi32` )
                     } {
                       // The curl-free runtime still carries the TCP
-                      // (winsock) and random (advapi32/bcrypt) paths, so
-                      // link those tiny import libs to avoid undefined
-                      // symbols for programs using raw sockets or rand.
+                      // (winsock), random (advapi32/bcrypt) and WinHTTP
+                      // paths. Without libcurl the HTTP backend falls
+                      // back to WinHTTP (nurl_http_perform_full_to), so
+                      // -lwinhttp is required even for non-HTTP programs
+                      // since the whole object is linked. These are all
+                      // tiny system import libs — no static bloat.
                       ( vec_push [s] link_args `-lws2_32` )
                       ( vec_push [s] link_args `-ladvapi32` )
                       ( vec_push [s] link_args `-lbcrypt` )
+                      ( vec_push [s] link_args `-lwinhttp` )
                     }
                     ( vec_push [s] link_args `-o` )
                     ( vec_push [s] link_args ( string_data bin_path ) )
