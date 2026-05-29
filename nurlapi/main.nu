@@ -978,7 +978,18 @@ $ `stdlib/ext/mcp_http.nu`
                     ( vec_push [s] link_args opt )
                     ( vec_push [s] link_args ( string_data obj_path ) )
                     ( vec_push [s] link_args ( string_data ( get_runtime_win_o ) ) )
+                    // Static-link libgcc + winpthread so the .exe doesn't
+                    // depend on libgcc_s_seh-1.dll / libwinpthread-1.dll
+                    // — those aren't present on a stock Windows install,
+                    // and missing them makes the program exit silently
+                    // with STATUS_DLL_NOT_FOUND (0xC0000135), which looks
+                    // exactly like "the exe runs but prints nothing".
+                    // System DLL imports (-lws2_32 etc.) stay dynamic via
+                    // the trailing -Wl,-Bdynamic.
+                    ( vec_push [s] link_args `-static-libgcc` )
+                    ( vec_push [s] link_args `-Wl,-Bstatic` )
                     ( vec_push [s] link_args `-lpthread` )
+                    ( vec_push [s] link_args `-Wl,-Bdynamic` )
                     : String curl_marker ( path_join ( string_data ( get_stdlib_dir ) ) `runtime.win.curl` )
                     : String curl_L ( string_with_cap 64 )
                     ? ( file_exists ( string_data curl_marker ) ) {
