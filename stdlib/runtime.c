@@ -54,6 +54,99 @@
 #  define NURL_HAVE_EXECINFO 1
 #endif
 
+/* ── Win32 portability shims ────────────────────────────────────
+ *
+ * The stdlib declares POSIX symbols (`memmem`, `mmap`/`munmap`/
+ * `madvise`, `setenv`/`unsetenv`, `nurl_dirent_name`) via `& \`c\``
+ * FFI. The NURL caller gates the actual call on `posix_const` /
+ * platform detection, but the LLVM IR still carries `call` and
+ * `declare` lines for these symbols, so the link step needs them
+ * resolved. We provide implementations or unreachable stubs here. */
+#ifdef _WIN32
+#include <stddef.h>
+
+/* memmem polyfill — Windows libc lacks it. */
+void *memmem(const void *haystack, size_t hlen,
+             const void *needle,  size_t nlen) {
+    if (nlen == 0) return (void*)haystack;
+    if (!haystack || !needle || hlen < nlen) return NULL;
+    const unsigned char *h = (const unsigned char*)haystack;
+    const unsigned char *n = (const unsigned char*)needle;
+    for (size_t i = 0; i + nlen <= hlen; i++) {
+        if (h[i] == n[0] && memcmp(h + i, n, nlen) == 0)
+            return (void*)(h + i);
+    }
+    return NULL;
+}
+
+/* mmap / munmap / madvise — unreachable on Windows callers; provided
+ * so the linker resolves the references. */
+void *mmap(void *addr, size_t length, int prot,
+           int flags, int fd, long long offset) {
+    (void)addr; (void)length; (void)prot;
+    (void)flags; (void)fd; (void)offset;
+    errno = ENOSYS;
+    return (void*)-1;
+}
+int munmap(void *addr, size_t length) {
+    (void)addr; (void)length;
+    errno = ENOSYS;
+    return -1;
+}
+int madvise(void *addr, size_t length, int advice) {
+    (void)addr; (void)length; (void)advice;
+    return 0;
+}
+
+/* setenv / unsetenv via Win32 _putenv_s. */
+int setenv(const char *name, const char *value, int overwrite) {
+    (void)overwrite;
+    if (!name || !*name || strchr(name, '=')) {
+        errno = EINVAL;
+        return -1;
+    }
+    return _putenv_s(name, value ? value : "") == 0 ? 0 : -1;
+}
+int unsetenv(const char *name) {
+    if (!name || !*name || strchr(name, '=')) {
+        errno = EINVAL;
+        return -1;
+    }
+    return _putenv_s(name, "") == 0 ? 0 : -1;
+}
+
+/* nurl_dirent_name — Windows dir-list uses `FindFirstFileA` /
+ * `FindNextFileA`, not POSIX dirent. The stdlib only reaches this
+ * symbol from the POSIX path, so a NULL stub is sufficient to
+ * satisfy the linker. */
+const char* nurl_dirent_name(const void *de) {
+    (void)de;
+    return NULL;
+}
+
+/* realpath via Win32 _fullpath. Returns NULL for non-existent paths
+ * (matches POSIX.1-2008 — the playground's mingw doesn't always pull
+ * libmingwex's realpath into the link). */
+char *realpath(const char *path, char *resolved) {
+    if (!path) { errno = EINVAL; return NULL; }
+    char *buf = resolved ? resolved : (char*)malloc(MAX_PATH);
+    if (!buf) { errno = ENOMEM; return NULL; }
+    char *r = _fullpath(buf, path, MAX_PATH);
+    if (!r) {
+        if (!resolved) free(buf);
+        errno = ENOENT;
+        return NULL;
+    }
+    DWORD attrs = GetFileAttributesA(r);
+    if (attrs == INVALID_FILE_ATTRIBUTES) {
+        if (!resolved) free(buf);
+        errno = ENOENT;
+        return NULL;
+    }
+    return r;
+}
+#endif
+
 /* ── §1  Basic I/O ─────────────────────────────────────────────── */
 
 void nurl_print_int(long long n)  { printf("%lld\n", n); }
