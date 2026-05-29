@@ -235,6 +235,7 @@ for src in "${tests[@]}"; do
     if [[ "$name" == http_* \
           && "$name" != "http_request_parser" \
           && "$name" != "http_response_builder" \
+          && "$name" != "http_options" \
           && "$name" != "http_router" \
           && "$name" != "http_extras" \
           && "$name" != "http_middleware" \

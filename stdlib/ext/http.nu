@@ -32,6 +32,13 @@
 //   ( http_delete    s url )                         → ! Response HttpErr
 //   ( http_patch     s url s body s content_type )   → ! Response HttpErr
 //
+//   ( http_options_default )                         → HttpOptions
+//   ( http_request_with_opts s method s url s body s headers_blob HttpOptions opt )
+//                                                    → ! Response HttpErr
+//   ( http_get_opts  s url HttpOptions opt )         → ! Response HttpErr
+//   ( http_post_opts s url s body s content_type HttpOptions opt )
+//                                                    → ! Response HttpErr
+//
 //   ( http_status   Response r )                     → i      shortcut
 //   ( http_body_str Response r )                     → s      borrowed view
 //   ( http_header_count Response r )                 → i
@@ -103,6 +110,43 @@ $ `stdlib/core/errors.nu`
 // All accessors go through the FFI helpers in runtime §14 so the
 // representation can change without touching call sites.
 : Response { s raw }
+
+// HttpOptions bundles the per-request transport overrides that used to
+// be hardcoded inside the libcurl orchestrator. Pass one to
+// `http_request_with_opts` (or the `*_opts` convenience wrappers) for
+// fine control over timeouts, redirect policy, TLS verification and the
+// User-Agent header.
+//
+//   timeout_ms          total request budget; <=0 → 30000 (30 s)
+//   connect_timeout_ms  TCP/TLS connect budget; <=0 → 10000 (10 s)
+//   follow_redirects    1 = follow 3xx Location (default), 0 = don't
+//   max_redirects       cap on followed hops; <0 → unlimited. Ignored
+//                       when follow_redirects is 0.
+//   verify_tls          1 = verify peer cert + hostname (default),
+//                       0 = INSECURE (skip both — dev/self-signed only)
+//   user_agent          override; empty `` → `nurl-http/0.1`. BORROWED
+//                       (must outlive the call; never freed here).
+//
+// `user_agent` is a raw `s` (borrowed) so HttpOptions carries no owned
+// resources — it needs no free function and is safe to pass by value.
+//
+// Note: these overrides apply only on the libcurl backend. The native
+// WinHTTP / stub backends honour just the two timeouts; redirect / TLS /
+// user-agent fields are silently ignored there.
+: HttpOptions {
+    i timeout_ms
+    i connect_timeout_ms
+    i follow_redirects
+    i max_redirects
+    i verify_tls
+    s user_agent
+}
+
+// Default options: runtime-default timeouts, follow redirects with no
+// cap, verify TLS, stock User-Agent.
+@ http_options_default → HttpOptions {
+    ^ @ HttpOptions { 0 0 1 -1 1 `` }
+}
 
 @ header_new s name s value → Header {
     : String n ( string_from name )
@@ -255,8 +299,12 @@ $ `stdlib/core/errors.nu`
 // (consumed by __http_dispatch). Returns 0 only on the response-struct
 // allocation failure — every other failure mode populates err_kind and
 // returns a non-zero pointer.
-@ __libcurl_perform_full_to s url s method s body s headers_blob
-i timeout_ms i connect_timeout_ms → i {
+//
+// All per-request knobs (timeouts, redirect policy, TLS verification,
+// User-Agent) ride in `opt`. The timeout-only `__libcurl_perform_full_to`
+// below is a thin shim that builds a default-options struct.
+@ __libcurl_perform_full_opts s url s method s body s headers_blob
+HttpOptions opt → i {
     : i resp # i ( nurl_zalloc 48 )
     ? == resp 0 { ^ 0 } {}
     : *u rp # *u resp
@@ -267,6 +315,8 @@ i timeout_ms i connect_timeout_ms → i {
         ^ resp
     } {}
 
+    : i timeout_ms . opt timeout_ms
+    : i connect_timeout_ms . opt connect_timeout_ms
     : i tmo ? <= timeout_ms 0 30000 timeout_ms
     : i cto ? <= connect_timeout_ms 0 10000 connect_timeout_ms
 
@@ -282,13 +332,26 @@ i timeout_ms i connect_timeout_ms → i {
     : i bbuf # i ( nurl_zalloc 24 )
     : i hbuf # i ( nurl_zalloc 24 )
 
+    // Per-request overrides from HttpOptions.
+    : i follow . opt follow_redirects
+    : i maxr . opt max_redirects
+    : i verify . opt verify_tls
+    : s ua_in . opt user_agent
+    : i has_ua && != # i ua_in 0 != ( nurl_str_len ua_in ) 0
+    : s ua ? != has_ua 0 ua_in `nurl-http/0.1`
+
     // Common options.
     ( nurl_curl_setopt_s eh 10002 url )  // CURLOPT_URL
-    ( nurl_curl_setopt_l eh 52 1 )  // CURLOPT_FOLLOWLOCATION
+    ( nurl_curl_setopt_l eh 52 ? != follow 0 1 0 )  // CURLOPT_FOLLOWLOCATION
+    ? != follow 0 {
+        ( nurl_curl_setopt_l eh 68 maxr )  // CURLOPT_MAXREDIRS (<0 = unlimited)
+    } {}
+    ( nurl_curl_setopt_l eh 64 ? != verify 0 1 0 )  // CURLOPT_SSL_VERIFYPEER
+    ( nurl_curl_setopt_l eh 81 ? != verify 0 2 0 )  // CURLOPT_SSL_VERIFYHOST
     ( nurl_curl_setopt_l eh 99 1 )  // CURLOPT_NOSIGNAL (thread-safe)
     ( nurl_curl_setopt_l eh 155 tmo )  // CURLOPT_TIMEOUT_MS
     ( nurl_curl_setopt_l eh 156 cto )  // CURLOPT_CONNECTTIMEOUT_MS
-    ( nurl_curl_setopt_s eh 10018 `nurl-http/0.1` )  // CURLOPT_USERAGENT
+    ( nurl_curl_setopt_s eh 10018 ua )  // CURLOPT_USERAGENT
     ( nurl_curl_setopt_s eh 10102 `` )  // CURLOPT_ACCEPT_ENCODING
 
     ( nurl_curl_attach_callbacks eh # *u bbuf # *u hbuf )
@@ -356,6 +419,15 @@ i timeout_ms i connect_timeout_ms → i {
     ^ resp
 }
 
+// Timeout-only shim over the orchestrator: builds a default-options
+// struct (follow redirects, verify TLS, stock UA) overriding just the
+// two timeouts. Kept for the existing http_request_to call path.
+@ __libcurl_perform_full_to s url s method s body s headers_blob
+i timeout_ms i connect_timeout_ms → i {
+    : HttpOptions opt @ HttpOptions { timeout_ms connect_timeout_ms 1 -1 1 `` }
+    ^ ( __libcurl_perform_full_opts url method body headers_blob opt )
+}
+
 // Internal: dispatch the runtime call result onto a NURL ! Response HttpErr.
 // `raw` is the i64 returned by `nurl_http_perform_full` — 0 means the
 // runtime couldn't even allocate; non-zero is a heap pointer whose
@@ -415,6 +487,34 @@ i timeout_ms i connect_timeout_ms → i {
     : i raw ( nurl_http_perform_full_to url method body headers_blob
     timeout_ms connect_timeout_ms )
     ^ ( __http_dispatch raw )
+}
+
+// Full-control entry point: every transport knob comes from `opt`
+// (see HttpOptions). On the libcurl backend all fields are honoured; on
+// the WinHTTP / stub backends only the two timeouts apply (redirect /
+// TLS / user-agent are ignored — same degradation as http_request_to).
+@ http_request_with_opts s method s url s body s headers_blob HttpOptions opt
+→ !Response HttpErr {
+    ? != ( nurl_curl_available ) 0 {
+        : i raw ( __libcurl_perform_full_opts url method body headers_blob opt )
+        ^ ( __http_dispatch raw )
+    } {}
+    : i otmo . opt timeout_ms
+    : i octo . opt connect_timeout_ms
+    : i raw ( nurl_http_perform_full_to url method body headers_blob otmo octo )
+    ^ ( __http_dispatch raw )
+}
+
+// Convenience: GET / POST with an explicit HttpOptions.
+@ http_get_opts s url HttpOptions opt → !Response HttpErr {
+    ^ ( http_request_with_opts `GET` url `` `` opt )
+}
+
+@ http_post_opts s url s body s content_type HttpOptions opt → !Response HttpErr {
+    : String hb ( __with_ct content_type `` )
+    : !Response HttpErr res ( http_request_with_opts `POST` url body ( string_data hb ) opt )
+    ( string_free hb )
+    ^ res
 }
 
 // ── GET ─────────────────────────────────────────────────────────────

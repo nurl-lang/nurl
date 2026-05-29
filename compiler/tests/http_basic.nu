@@ -71,5 +71,10 @@ $ `stdlib/ext/json.nu`
     ( http_post_json `https://httpbin.org/post` obj ) )
     ( json_free obj )
 
+    // HttpOptions path: custom UA + explicit timeouts, redirects on.
+    : HttpOptions opt @ HttpOptions { 15000 8000 1 5 1 `nurl-http-test/1.0` }
+    ( show `GET_OPTS`
+    ( http_get_opts `https://httpbin.org/user-agent` opt ) )
+
     ^ 0
 }
