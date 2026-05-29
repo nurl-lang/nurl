@@ -23,6 +23,7 @@ $ `stdlib/ext/mcp_http.nu`
 @ get_canvas_wasm_o → String { ^ ( env_var_or `NURL_CANVAS_WASM_O` `/opt/nurl/stdlib/canvas.wasm.o` ) }
 @ get_audio_wasm_o → String { ^ ( env_var_or `NURL_AUDIO_WASM_O` `/opt/nurl/stdlib/audio_wasm.o` ) }
 @ get_runtime_win_o → String { ^ ( env_var_or `NURL_RUNTIME_WIN_O` `/opt/nurl/stdlib/runtime.win.o` ) }
+@ get_runtime_win_curl_o → String { ^ ( env_var_or `NURL_RUNTIME_WIN_CURL_O` `/opt/nurl/stdlib/runtime.win.curl.o` ) }
 @ get_runtime_mac_o → String { ^ ( env_var_or `NURL_RUNTIME_MAC_O` `/opt/nurl/stdlib/runtime.mac.o` ) }
 @ get_zig → String { ^ ( env_var_or `NURL_ZIG` `/opt/zig/zig` ) }
 @ get_wasm_opt → String { ^ ( env_var_or `NURL_WASM_OPT` `wasm-opt` ) }
@@ -983,30 +984,43 @@ $ `stdlib/ext/mcp_http.nu`
                     : ( Vec s ) link_args ( vec_new [s] )
                     ( vec_push [s] link_args opt )
                     // -s strips the COFF symbol table + DWARF debug
-                    // sections (the bulk of an unstripped mingw binary);
-                    // --gc-sections discards unreferenced function/data
-                    // sections (see -ffunction-sections above). Together
-                    // they roughly halve the .exe and shed crypto/winsock
-                    // imports for programs that don't use them.
+                    // sections, which are the bulk of an unstripped mingw
+                    // binary (~halves the .exe on its own). --gc-sections
+                    // is kept too, but mingw's PE linker barely acts on it
+                    // — it does NOT drop unused runtime code on COFF the
+                    // way ELF ld does. That dead-code removal is handled
+                    // instead by the curl-variant split below.
                     ( vec_push [s] link_args `-s` )
                     ( vec_push [s] link_args `-Wl,--gc-sections` )
                     ( vec_push [s] link_args ( string_data obj_path ) )
-                    ( vec_push [s] link_args ( string_data ( get_runtime_win_o ) ) )
+
+                    // Pick the runtime variant. The default runtime.win.o
+                    // is built WITHOUT libcurl; a program only needs the
+                    // curl bridge when it pulls in stdlib/ext/http.nu,
+                    // which surfaces as nurl_curl_* references in the IR.
+                    // For those we swap in runtime.win.curl.o and link
+                    // static libcurl + its Schannel deps. This keeps
+                    // libcurl (a few hundred KB of .text, plus the
+                    // bcrypt/crypt32/secur32 imports) out of every
+                    // non-HTTP exe — which PE --gc-sections cannot do.
+                    : String curl_marker ( path_join ( string_data ( get_stdlib_dir ) ) `runtime.win.curl` )
+                    : b uses_curl & ( file_exists ( string_data curl_marker ) ) >= ( nurl_str_find ( output_stdout n_out ) `nurl_curl` ) 0
+                    ? uses_curl { ( vec_push [s] link_args ( string_data ( get_runtime_win_curl_o ) ) ) }
+                                { ( vec_push [s] link_args ( string_data ( get_runtime_win_o ) ) ) }
+
                     // Static-link libgcc + winpthread so the .exe doesn't
                     // depend on libgcc_s_seh-1.dll / libwinpthread-1.dll
                     // — those aren't present on a stock Windows install,
                     // and missing them makes the program exit silently
                     // with STATUS_DLL_NOT_FOUND (0xC0000135), which looks
                     // exactly like "the exe runs but prints nothing".
-                    // System DLL imports (-lws2_32 etc.) stay dynamic via
-                    // the trailing -Wl,-Bdynamic.
+                    // System DLL imports stay dynamic via -Wl,-Bdynamic.
                     ( vec_push [s] link_args `-static-libgcc` )
                     ( vec_push [s] link_args `-Wl,-Bstatic` )
                     ( vec_push [s] link_args `-lpthread` )
                     ( vec_push [s] link_args `-Wl,-Bdynamic` )
-                    : String curl_marker ( path_join ( string_data ( get_stdlib_dir ) ) `runtime.win.curl` )
                     : String curl_L ( string_with_cap 64 )
-                    ? ( file_exists ( string_data curl_marker ) ) {
+                    ? uses_curl {
                       ( string_push_str curl_L `-L` )
                       ( string_push_str curl_L ( string_data ( get_mingw_curl_prefix ) ) )
                       ( string_push_str curl_L `/lib` )
@@ -1018,7 +1032,15 @@ $ `stdlib/ext/mcp_http.nu`
                       ( vec_push [s] link_args `-lncrypt` )
                       ( vec_push [s] link_args `-lsecur32` )
                       ( vec_push [s] link_args `-ladvapi32` )
-                    } {}
+                    } {
+                      // The curl-free runtime still carries the TCP
+                      // (winsock) and random (advapi32/bcrypt) paths, so
+                      // link those tiny import libs to avoid undefined
+                      // symbols for programs using raw sockets or rand.
+                      ( vec_push [s] link_args `-lws2_32` )
+                      ( vec_push [s] link_args `-ladvapi32` )
+                      ( vec_push [s] link_args `-lbcrypt` )
+                    }
                     ( vec_push [s] link_args `-o` )
                     ( vec_push [s] link_args ( string_data bin_path ) )
                     : ! Output ProcessErr link_res ( process_run ( string_data ( get_mingw_gcc ) ) link_args `` )

@@ -98,16 +98,23 @@ RUN /opt/wasi-sdk/bin/clang --target=wasm32-wasi -O2 \
     && /opt/wasi-sdk/bin/clang --target=wasm32-wasi -O2 \
         -c stdlib/audio_wasm.c -o stdlib/audio.wasm.o
 
-# 3. Windows (x86_64-w64-mingw32)
-# -ffunction-sections/-fdata-sections put every runtime function and
-# datum in its own section so the per-build link can pass
-# -Wl,--gc-sections and drop whatever a given program never calls
-# (e.g. the TCP/TLS paths that otherwise pull in ws2_32/crypt32/bcrypt).
+# 3. Windows (x86_64-w64-mingw32) — two runtime variants.
+# mingw's PE linker does not honour --gc-sections for COFF, so unused
+# runtime code (notably static libcurl + its bcrypt/crypt32/secur32
+# Schannel deps) cannot be dropped at link time. Instead we ship a lean
+# default object built WITHOUT libcurl, plus a curl-enabled variant the
+# server selects only when the program references the nurl_curl_* bridge
+# (i.e. pulls in stdlib/ext/http.nu). Non-HTTP exes thus skip libcurl
+# entirely. -ffunction-sections/-fdata-sections are kept so the user IR
+# can still be trimmed and in case a future ld improves PE gc.
+RUN x86_64-w64-mingw32-gcc -O2 \
+        -ffunction-sections -fdata-sections \
+        -c stdlib/runtime.c -o stdlib/runtime.win.o
 RUN x86_64-w64-mingw32-gcc -O2 \
         -ffunction-sections -fdata-sections \
         -DNURL_HAVE_LIBCURL -DCURL_STATICLIB \
         -I/opt/curl-mingw/include \
-        -c stdlib/runtime.c -o stdlib/runtime.win.o \
+        -c stdlib/runtime.c -o stdlib/runtime.win.curl.o \
     && echo 1 > stdlib/runtime.win.curl
 
 # 4. macOS x86_64 (kept as runtime.mac.o for /build_macos backwards
@@ -175,6 +182,7 @@ ENV NURLC_PATH=/opt/nurl/build/nurlc \
     NURL_CANVAS_WASM_O=/opt/nurl/stdlib/canvas.wasm.o \
     NURL_AUDIO_WASM_O=/opt/nurl/stdlib/audio.wasm.o \
     NURL_RUNTIME_WIN_O=/opt/nurl/stdlib/runtime.win.o \
+    NURL_RUNTIME_WIN_CURL_O=/opt/nurl/stdlib/runtime.win.curl.o \
     NURL_MINGW_CURL_PREFIX=/opt/curl-mingw \
     NURL_MINGW_GCC=/usr/bin/x86_64-w64-mingw32-gcc \
     NURL_ZIG=/opt/zig/zig \
