@@ -961,6 +961,12 @@ $ `stdlib/ext/mcp_http.nu`
                 ( vec_push [s] clang_args opt )
                 ( vec_push [s] clang_args `-Wno-override-module` )
                 ( vec_push [s] clang_args `--target=x86_64-w64-mingw32` )
+                // Emit one section per function/datum so the linker's
+                // --gc-sections (below) can drop the parts of the runtime
+                // this program never calls — e.g. the TCP/TLS code that
+                // otherwise drags in ws2_32 / crypt32 / bcrypt imports.
+                ( vec_push [s] clang_args `-ffunction-sections` )
+                ( vec_push [s] clang_args `-fdata-sections` )
                 ( vec_push [s] clang_args `-c` )
                 ( vec_push [s] clang_args ( string_data ll_path ) )
                 ( vec_push [s] clang_args `-o` )
@@ -976,6 +982,14 @@ $ `stdlib/ext/mcp_http.nu`
                     // exits with its own (informative) error.
                     : ( Vec s ) link_args ( vec_new [s] )
                     ( vec_push [s] link_args opt )
+                    // -s strips the COFF symbol table + DWARF debug
+                    // sections (the bulk of an unstripped mingw binary);
+                    // --gc-sections discards unreferenced function/data
+                    // sections (see -ffunction-sections above). Together
+                    // they roughly halve the .exe and shed crypto/winsock
+                    // imports for programs that don't use them.
+                    ( vec_push [s] link_args `-s` )
+                    ( vec_push [s] link_args `-Wl,--gc-sections` )
                     ( vec_push [s] link_args ( string_data obj_path ) )
                     ( vec_push [s] link_args ( string_data ( get_runtime_win_o ) ) )
                     // Static-link libgcc + winpthread so the .exe doesn't

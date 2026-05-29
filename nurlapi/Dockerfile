@@ -99,7 +99,12 @@ RUN /opt/wasi-sdk/bin/clang --target=wasm32-wasi -O2 \
         -c stdlib/audio_wasm.c -o stdlib/audio.wasm.o
 
 # 3. Windows (x86_64-w64-mingw32)
+# -ffunction-sections/-fdata-sections put every runtime function and
+# datum in its own section so the per-build link can pass
+# -Wl,--gc-sections and drop whatever a given program never calls
+# (e.g. the TCP/TLS paths that otherwise pull in ws2_32/crypt32/bcrypt).
 RUN x86_64-w64-mingw32-gcc -O2 \
+        -ffunction-sections -fdata-sections \
         -DNURL_HAVE_LIBCURL -DCURL_STATICLIB \
         -I/opt/curl-mingw/include \
         -c stdlib/runtime.c -o stdlib/runtime.win.o \
