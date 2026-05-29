@@ -258,78 +258,78 @@ $ `stdlib/core/vec.nu`
                                 = i + i 3
                             } {
 
-                            // 6b) Ellipsis `...` — grammar v1.9 variadic-FFI
-                            //     marker. Must precede the single-byte `.`
-                            //     fallback so three dots fuse into one OP
-                            //     token rather than three. nurl_str_get
-                            //     returns 0 for OOB indices, so the third-
-                            //     byte check is bounds-safe at end-of-input.
-                            ? & & == c 46 == c2 46 == ( nurl_str_get src + i 2 ) 46 {
-                                ( __fmt_emit toks src i + i 3 TT_FMT_OP nl_acc )
-                                = nl_acc 0
-                                = i + i 3
-                            } {
-
-                                // 7) Two-char operators
-                                ? & == c 61 == c2 61 {  // ==
-                                    ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                // 6b) Ellipsis `...` — grammar v1.9 variadic-FFI
+                                //     marker. Must precede the single-byte `.`
+                                //     fallback so three dots fuse into one OP
+                                //     token rather than three. nurl_str_get
+                                //     returns 0 for OOB indices, so the third-
+                                //     byte check is bounds-safe at end-of-input.
+                                ? & & == c 46 == c2 46 == ( nurl_str_get src + i 2 ) 46 {
+                                    ( __fmt_emit toks src i + i 3 TT_FMT_OP nl_acc )
                                     = nl_acc 0
-                                    = i + i 2
+                                    = i + i 3
                                 } {
-                                    ? & == c 33 == c2 61 {  // !=
+
+                                    // 7) Two-char operators
+                                    ? & == c 61 == c2 61 {  // ==
                                         ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
                                         = nl_acc 0
                                         = i + i 2
                                     } {
-                                        ? & == c 60 == c2 61 {  // <=
+                                        ? & == c 33 == c2 61 {  // !=
                                             ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
                                             = nl_acc 0
                                             = i + i 2
                                         } {
-                                            ? & == c 62 == c2 61 {  // >=
+                                            ? & == c 60 == c2 61 {  // <=
                                                 ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
                                                 = nl_acc 0
                                                 = i + i 2
                                             } {
-                                                ? & == c 60 == c2 60 {  // <<
+                                                ? & == c 62 == c2 61 {  // >=
                                                     ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
                                                     = nl_acc 0
                                                     = i + i 2
                                                 } {
-                                                    ? & == c 62 == c2 62 {  // >>
+                                                    ? & == c 60 == c2 60 {  // <<
                                                         ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
                                                         = nl_acc 0
                                                         = i + i 2
                                                     } {
-                                                        ? & == c 63 == c2 63 {  // ??
+                                                        ? & == c 62 == c2 62 {  // >>
                                                             ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
                                                             = nl_acc 0
                                                             = i + i 2
                                                         } {
-                                                          ? & == c 94 == c2 94 {  // ^^
-                                                            ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
-                                                            = nl_acc 0
-                                                            = i + i 2
-                                                          } {
-                                                           ? & == c 124 == c2 124 {  // ||
-                                                            ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
-                                                            = nl_acc 0
-                                                            = i + i 2
-                                                           } {
-                                                            ? & == c 38 == c2 38 {  // &&
-                                                             ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
-                                                             = nl_acc 0
-                                                             = i + i 2
+                                                            ? & == c 63 == c2 63 {  // ??
+                                                                ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                                                = nl_acc 0
+                                                                = i + i 2
                                                             } {
+                                                                ? & == c 94 == c2 94 {  // ^^
+                                                                    ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                                                    = nl_acc 0
+                                                                    = i + i 2
+                                                                } {
+                                                                    ? & == c 124 == c2 124 {  // ||
+                                                                        ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                                                        = nl_acc 0
+                                                                        = i + i 2
+                                                                    } {
+                                                                        ? & == c 38 == c2 38 {  // &&
+                                                                            ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                                                            = nl_acc 0
+                                                                            = i + i 2
+                                                                        } {
 
-                                                            // 8) Fallback: emit any single byte as an OP token. Whitelisted
-                                                            //    grammar bytes go through this path; unknown bytes too,
-                                                            //    so the round-trip test catches any mismatch.
-                                                            ( __fmt_emit toks src i + i 1 TT_FMT_OP nl_acc )
-                                                            = nl_acc 0
-                                                            = i + i 1
+                                                                            // 8) Fallback: emit any single byte as an OP token. Whitelisted
+                                                                            //    grammar bytes go through this path; unknown bytes too,
+                                                                            //    so the round-trip test catches any mismatch.
+                                                                            ( __fmt_emit toks src i + i 1 TT_FMT_OP nl_acc )
+                                                                            = nl_acc 0
+                                                                            = i + i 1
 
-                                                          } } } } } } } } } } } } } } } }
+                                                                        } } } } } } } } } } } } } } } }
         } {}
     }
 

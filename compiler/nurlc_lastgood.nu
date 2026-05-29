@@ -74,8 +74,8 @@
 : i TT_ELLIPSIS 43
 : i TT_PUB 44
 : i TT_CARETCARET 45  // `^^` — bitwise / logical XOR (lexer pairs `^^`)
-: i TT_OROR       46  // `||` — short-circuit logical OR  (binary, bool only)
-: i TT_ANDAND     47  // `&&` — short-circuit logical AND (binary, bool only)
+: i TT_OROR 46  // `||` — short-circuit logical OR  (binary, bool only)
+: i TT_ANDAND 47  // `&&` — short-circuit logical AND (binary, bool only)
 
 // ── Abort helpers ─────────────────────────────────────────────────
 
@@ -411,22 +411,22 @@
 // the extension has a meaningful false-positive rate against existing
 // stdlib code.
 : i g_strict_borrowck 0  // 1 when --strict-borrowck passed on the CLI
-: i g_bck 0       // sym handle for the borrow checker's per-function
-                  //  data (statement list etc.); allocated in main()
-                  //  only when --borrowck is set
-: i g_bck_depth 0 // block-nesting depth during the statement walk
-: i g_bck_closure_depth 0 // >0 while parsing a closure body — the bck
-                  //  capture hooks no-op so closure statements do not
-                  //  inline into the enclosing function's list (so
-                  //  closure scopes stay segregated)
-: ~ i g_bck_errors 0 // count of borrow errors emitted so far. Errors
-                  //  do not abort on the spot — every violation is
-                  //  surfaced in one run, the same as a C compiler;
-                  //  the diagnostic helpers bump this counter and
-                  //  main() exits non-zero if it
-                  //  is > 0 once parsing finishes. --no-borrowck and
-                  //  borrow-clean programs both leave this at 0 so
-                  //  the bootstrap fixed point is unaffected.
+: i g_bck 0  // sym handle for the borrow checker's per-function
+//  data (statement list etc.); allocated in main()
+//  only when --borrowck is set
+: i g_bck_depth 0  // block-nesting depth during the statement walk
+: i g_bck_closure_depth 0  // >0 while parsing a closure body — the bck
+//  capture hooks no-op so closure statements do not
+//  inline into the enclosing function's list (so
+//  closure scopes stay segregated)
+: ~ i g_bck_errors 0  // count of borrow errors emitted so far. Errors
+//  do not abort on the spot — every violation is
+//  surfaced in one run, the same as a C compiler;
+//  the diagnostic helpers bump this counter and
+//  main() exits non-zero if it
+//  is > 0 once parsing finishes. --no-borrowck and
+//  borrow-clean programs both leave this at 0 so
+//  the bootstrap fixed point is unaffected.
 
 // Per-function inout-parameter map.
 // `g_fn_inout[fname]` is the space-separated list of 0-based indices
@@ -453,33 +453,33 @@
 // is byte-identical to a pre-DWARF build. Toggled in main().
 : i g_dbg_enabled 0  // 1 when --g passed on the CLI
 : i g_dbg_next_id 100  // metadata-id allocator; starts above any
-                       //  module-flag id we might add later
+//  module-flag id we might add later
 : i g_dbg_blob_syms 0  // sym handle holding queued !N = !DI… lines;
-                       //  flushed at end-of-module by dbg_flush
+//  flushed at end-of-module by dbg_flush
 : i g_dbg_file_id 0  // !DIFile id (allocated once at startup)
 : i g_dbg_cu_id 0  // !DICompileUnit id
 : i g_dbg_current_subprogram 0  // current function's !DISubprogram id
-                                 //  (0 outside any function)
+//  (0 outside any function)
 : i g_dbg_current_loc 0  // current !DILocation id (0 = no location;
-                          //  emit_dbg_eol then omits `, !dbg !N`)
+//  emit_dbg_eol then omits `, !dbg !N`)
 : i g_dbg_subroutine_ty 0  // shared !DISubroutineType id; allocated by
-                            //  dbg_init and reused for every fn. Phase 6
-                            //  will replace with per-fn signature types.
+//  dbg_init and reused for every fn. Phase 6
+//  will replace with per-fn signature types.
 : i g_dbg_placeholder_ty 0  // shared !DIBasicType id (i64-signed) used as
-                             //  the type for every local until Phase 6
-                             //  lays down per-LLVM-type DIBasicType
-                             //  entries indexed by `vt`.
+//  the type for every local until Phase 6
+//  lays down per-LLVM-type DIBasicType
+//  entries indexed by `vt`.
 : i g_dbg_override_line 0  // Phase 7: when non-zero, gen_fn_decl_concrete
-                            //  uses this instead of `nurl_lex_line` for
-                            //  the !DISubprogram source line. Set by
-                            //  emit_one_instantiation so per-mono
-                            //  subprograms point at the original generic
-                            //  decl line, not synthetic `<generic>:1`.
+//  uses this instead of `nurl_lex_line` for
+//  the !DISubprogram source line. Set by
+//  emit_one_instantiation so per-mono
+//  subprograms point at the original generic
+//  decl line, not synthetic `<generic>:1`.
 : i g_dbg_type_syms 0  // Phase 6 type-id cache: LLVM type string
-                        //  (e.g. `i64`, `i8*`, `%String`) → metadata id
-                        //  of its DIBasicType / DIDerivedType /
-                        //  DICompositeType. Populated lazily by
-                        //  dbg_type_id_for on first reference.
+//  (e.g. `i64`, `i8*`, `%String`) → metadata id
+//  of its DIBasicType / DIDerivedType /
+//  DICompositeType. Populated lazily by
+//  dbg_type_id_for on first reference.
 
 // End-of-line for an instruction that may need a `!dbg` attachment
 // (calls + terminators under a !DISubprogram). When DWARF is off, or
@@ -489,7 +489,7 @@
 @ emit_dbg_eol → v {
     ? & != g_dbg_enabled 0 != g_dbg_current_loc 0
     { ( nurl_print `, !dbg !` )
-      ( nurl_print ( nurl_str_int g_dbg_current_loc ) ) }
+        ( nurl_print ( nurl_str_int g_dbg_current_loc ) ) }
     {}
     ( nurl_print `\n` )
 }
@@ -543,23 +543,23 @@
     = g_dbg_cu_id ( dbg_alloc_id )
     = g_dbg_subroutine_ty ( dbg_alloc_id )
     ( dbg_buffer_meta g_dbg_file_id
-        ( nurl_str_cat3
-            `!DIFile(filename: "` path `", directory: ".")` ) )
+    ( nurl_str_cat3
+    `!DIFile(filename: "` path `", directory: ".")` ) )
     ( dbg_buffer_meta g_dbg_cu_id
-        ( nurl_str_cat3
-            `distinct !DICompileUnit(language: DW_LANG_C, file: !`
-            ( nurl_str_int g_dbg_file_id )
-            `, producer: "nurlc", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)` ) )
+    ( nurl_str_cat3
+    `distinct !DICompileUnit(language: DW_LANG_C, file: !`
+    ( nurl_str_int g_dbg_file_id )
+    `, producer: "nurlc", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)` ) )
     // One shared !DISubroutineType for every function until Phase 6
     // emits per-signature variants. `!{null}` means "no params, void
     // return"; the verifier accepts it as a placeholder.
     ( dbg_buffer_meta g_dbg_subroutine_ty `!DISubroutineType(types: !{null})` )
     = g_dbg_placeholder_ty ( dbg_alloc_id )
     ( dbg_buffer_meta g_dbg_placeholder_ty
-        `!DIBasicType(name: "i", size: 64, encoding: DW_ATE_signed)` )
+    `!DIBasicType(name: "i", size: 64, encoding: DW_ATE_signed)` )
     = g_dbg_type_syms ( nurl_sym_new )
     ( nurl_sym_def g_dbg_type_syms `i64`
-        ( nurl_str_int g_dbg_placeholder_ty ) )
+    ( nurl_str_int g_dbg_placeholder_ty ) )
 }
 
 // Phase 6 layout helpers: LLVM "natural" alignment + size in BITS for
@@ -574,23 +574,23 @@
 // fall back to pointer width (64 bits) — they are always either
 // pointer-handles or by-pointer references in NURL's lowering.
 @ dbg_size_bits s vt → i {
-    ? ( seq vt `i1` )     { ^ 8 } {}
-    ? ( seq vt `i8` )     { ^ 8 } {}
-    ? ( seq vt `i16` )    { ^ 16 } {}
-    ? ( seq vt `i32` )    { ^ 32 } {}
-    ? ( seq vt `i64` )    { ^ 64 } {}
-    ? ( seq vt `float` )  { ^ 32 } {}
+    ? ( seq vt `i1` ) { ^ 8 } {}
+    ? ( seq vt `i8` ) { ^ 8 } {}
+    ? ( seq vt `i16` ) { ^ 16 } {}
+    ? ( seq vt `i32` ) { ^ 32 } {}
+    ? ( seq vt `i64` ) { ^ 64 } {}
+    ? ( seq vt `float` ) { ^ 32 } {}
     ? ( seq vt `double` ) { ^ 64 } {}
     ^ 64
 }
 
 @ dbg_align_bits s vt → i {
-    ? ( seq vt `i1` )     { ^ 8 } {}
-    ? ( seq vt `i8` )     { ^ 8 } {}
-    ? ( seq vt `i16` )    { ^ 16 } {}
-    ? ( seq vt `i32` )    { ^ 32 } {}
-    ? ( seq vt `i64` )    { ^ 64 } {}
-    ? ( seq vt `float` )  { ^ 32 } {}
+    ? ( seq vt `i1` ) { ^ 8 } {}
+    ? ( seq vt `i8` ) { ^ 8 } {}
+    ? ( seq vt `i16` ) { ^ 16 } {}
+    ? ( seq vt `i32` ) { ^ 32 } {}
+    ? ( seq vt `i64` ) { ^ 64 } {}
+    ? ( seq vt `float` ) { ^ 32 } {}
     ? ( seq vt `double` ) { ^ 64 } {}
     ^ 64
 }
@@ -622,39 +622,39 @@
     // Base types we render with NURL-flavoured names so `print x` in
     // gdb shows "i" / "u8" / "b" instead of "i64" / "i8" / "i1".
     ? ( seq vt `i64` )
-        { = id ( dbg_alloc_id )
-          ( dbg_buffer_meta id `!DIBasicType(name: "i", size: 64, encoding: DW_ATE_signed)` ) }
+    { = id ( dbg_alloc_id )
+        ( dbg_buffer_meta id `!DIBasicType(name: "i", size: 64, encoding: DW_ATE_signed)` ) }
     ? ( seq vt `i32` )
-        { = id ( dbg_alloc_id )
-          ( dbg_buffer_meta id `!DIBasicType(name: "i32", size: 32, encoding: DW_ATE_signed)` ) }
+    { = id ( dbg_alloc_id )
+        ( dbg_buffer_meta id `!DIBasicType(name: "i32", size: 32, encoding: DW_ATE_signed)` ) }
     ? ( seq vt `i16` )
-        { = id ( dbg_alloc_id )
-          ( dbg_buffer_meta id `!DIBasicType(name: "i16", size: 16, encoding: DW_ATE_signed)` ) }
+    { = id ( dbg_alloc_id )
+        ( dbg_buffer_meta id `!DIBasicType(name: "i16", size: 16, encoding: DW_ATE_signed)` ) }
     ? ( seq vt `i8` )
-        { = id ( dbg_alloc_id )
-          ( dbg_buffer_meta id `!DIBasicType(name: "u8", size: 8, encoding: DW_ATE_unsigned)` ) }
+    { = id ( dbg_alloc_id )
+        ( dbg_buffer_meta id `!DIBasicType(name: "u8", size: 8, encoding: DW_ATE_unsigned)` ) }
     ? ( seq vt `i1` )
-        { = id ( dbg_alloc_id )
-          ( dbg_buffer_meta id `!DIBasicType(name: "b", size: 8, encoding: DW_ATE_boolean)` ) }
+    { = id ( dbg_alloc_id )
+        ( dbg_buffer_meta id `!DIBasicType(name: "b", size: 8, encoding: DW_ATE_boolean)` ) }
     ? ( seq vt `double` )
-        { = id ( dbg_alloc_id )
-          ( dbg_buffer_meta id `!DIBasicType(name: "f", size: 64, encoding: DW_ATE_float)` ) }
+    { = id ( dbg_alloc_id )
+        ( dbg_buffer_meta id `!DIBasicType(name: "f", size: 64, encoding: DW_ATE_float)` ) }
     ? ( seq vt `float` )
-        { = id ( dbg_alloc_id )
-          ( dbg_buffer_meta id `!DIBasicType(name: "f32", size: 32, encoding: DW_ATE_float)` ) }
+    { = id ( dbg_alloc_id )
+        ( dbg_buffer_meta id `!DIBasicType(name: "f32", size: 32, encoding: DW_ATE_float)` ) }
     ? ( seq vt `i8*` )
-        { = id ( dbg_alloc_id )
-          : i u8_id ( dbg_type_id_for `i8` syms )
-          ( dbg_buffer_meta id
-            ( nurl_str_cat3
-                `!DIDerivedType(tag: DW_TAG_pointer_type, baseType: !`
-                ( nurl_str_int u8_id )
-                `, size: 64)` ) ) }
+    { = id ( dbg_alloc_id )
+        : i u8_id ( dbg_type_id_for `i8` syms )
+        ( dbg_buffer_meta id
+        ( nurl_str_cat3
+        `!DIDerivedType(tag: DW_TAG_pointer_type, baseType: !`
+        ( nurl_str_int u8_id )
+        `, size: 64)` ) ) }
     // Named structs (handle: '%' prefix). Try the composite-type path
     // — if syms knows the struct, emit !DICompositeType + per-field
     // !DIDerivedType DW_TAG_member entries. Otherwise fall through.
     ? & == id 0 == 37 ( nurl_str_get vt 0 )
-        { = id ( dbg_emit_composite vt syms ) }
+    { = id ( dbg_emit_composite vt syms ) }
     // Everything else (closures, slices, [N x T] arrays, unknown):
     // i64 placeholder so the verifier accepts the DILocalVariable.
     ? == id 0 { = id g_dbg_placeholder_ty } {}
@@ -693,12 +693,12 @@
     : ~ i fidx 0
     ~ < fidx n {
         : s fname ( nurl_sym_get syms
-            ( nurl_str_cat3 base `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__name` ) ) )
+        ( nurl_str_cat3 base `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__name` ) ) )
         : s ftype ( nurl_sym_get syms
-            ( nurl_str_cat3 base `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__type` ) ) )
+        ( nurl_str_cat3 base `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__type` ) ) )
         ? == 0 ( nurl_str_len ftype ) { = ftype `i64` } {}
         ? == 0 ( nurl_str_len fname )
-            { = fname ( nurl_str_cat `f` ( nurl_str_int fidx ) ) } {}
+        { = fname ( nurl_str_cat `f` ( nurl_str_int fidx ) ) } {}
         : i fsize ( dbg_size_bits ftype )
         : i falign ( dbg_align_bits ftype )
         = off ( dbg_align_up off falign )
@@ -706,16 +706,16 @@
         : i base_ty_id ( dbg_type_id_for ftype syms )
         : i mid ( dbg_alloc_id )
         ( dbg_buffer_meta mid
-            ( nurl_str_cat
-                ( nurl_str_cat4
-                    `!DIDerivedType(tag: DW_TAG_member, name: "`
-                    fname `", baseType: !` ( nurl_str_int base_ty_id ) )
-                ( nurl_str_cat4
-                    `, size: ` ( nurl_str_int fsize )
-                    `, offset: ` ( nurl_str_cat ( nurl_str_int off ) `)` ) ) ) )
+        ( nurl_str_cat
+        ( nurl_str_cat4
+        `!DIDerivedType(tag: DW_TAG_member, name: "`
+        fname `", baseType: !` ( nurl_str_int base_ty_id ) )
+        ( nurl_str_cat4
+        `, size: ` ( nurl_str_int fsize )
+        `, offset: ` ( nurl_str_cat ( nurl_str_int off ) `)` ) ) ) )
         ? == fidx 0
-            { = elems ( nurl_str_cat `!` ( nurl_str_int mid ) ) }
-            { = elems ( nurl_str_cat3 elems `, !` ( nurl_str_int mid ) ) }
+        { = elems ( nurl_str_cat `!` ( nurl_str_int mid ) ) }
+        { = elems ( nurl_str_cat3 elems `, !` ( nurl_str_int mid ) ) }
         = off + off fsize
         = fidx + fidx 1
     }
@@ -723,13 +723,13 @@
     // the same so sizeof(struct) is align-multiple).
     : i total ( dbg_align_up off max_align )
     ( dbg_buffer_meta id
-        ( nurl_str_cat
-            ( nurl_str_cat4
-                `!DICompositeType(tag: DW_TAG_structure_type, name: "`
-                base `", file: !` ( nurl_str_int g_dbg_file_id ) )
-            ( nurl_str_cat4
-                `, size: ` ( nurl_str_int total )
-                `, elements: !{` ( nurl_str_cat elems `})` ) ) ) )
+    ( nurl_str_cat
+    ( nurl_str_cat4
+    `!DICompositeType(tag: DW_TAG_structure_type, name: "`
+    base `", file: !` ( nurl_str_int g_dbg_file_id ) )
+    ( nurl_str_cat4
+    `, size: ` ( nurl_str_int total )
+    `, elements: !{` ( nurl_str_cat elems `})` ) ) ) )
     ^ id
 }
 
@@ -745,17 +745,17 @@
     : i sp_id ( dbg_alloc_id )
     : s ls ( nurl_str_int line )
     : s fid ( nurl_str_int g_dbg_file_id )
-    : s cu  ( nurl_str_int g_dbg_cu_id )
+    : s cu ( nurl_str_int g_dbg_cu_id )
     : s part1 ( nurl_str_cat3 `distinct !DISubprogram(name: "` lname `"` )
     : s part2 ( nurl_str_cat3 `, scope: !` fid `, file: !` )
     : s part3 ( nurl_str_cat3 fid `, line: ` ls )
     : s part4 ( nurl_str_cat3 `, scopeLine: ` ls `, unit: !` )
-    : s ty  ( nurl_str_int g_dbg_subroutine_ty )
+    : s ty ( nurl_str_int g_dbg_subroutine_ty )
     : s body
-        ( nurl_str_cat4
-            part1 part2 part3
-            ( nurl_str_cat4 part4 cu `, type: !`
-                ( nurl_str_cat3 ty `, spFlags: DISPFlagDefinition` `)` ) ) )
+    ( nurl_str_cat4
+    part1 part2 part3
+    ( nurl_str_cat4 part4 cu `, type: !`
+    ( nurl_str_cat3 ty `, spFlags: DISPFlagDefinition` `)` ) ) )
     ( dbg_buffer_meta sp_id body )
     ^ sp_id
 }
@@ -776,11 +776,11 @@
         : s lns ( nurl_str_int line )
         : s ty_s ( nurl_str_int ( dbg_type_id_for vt syms ) )
         : s body
-            ( nurl_str_cat4
-                ( nurl_str_cat3 `!DILocalVariable(name: "` name `"` )
-                ( nurl_str_cat3 `, arg: ` ( nurl_str_int argk ) `, scope: !` )
-                ( nurl_str_cat4 sp `, file: !` fi `, line: ` )
-                ( nurl_str_cat4 lns `, type: !` ty_s `)` ) )
+        ( nurl_str_cat4
+        ( nurl_str_cat3 `!DILocalVariable(name: "` name `"` )
+        ( nurl_str_cat3 `, arg: ` ( nurl_str_int argk ) `, scope: !` )
+        ( nurl_str_cat4 sp `, file: !` fi `, line: ` )
+        ( nurl_str_cat4 lns `, type: !` ty_s `)` ) )
         ( dbg_buffer_meta var_id body )
         ( nurl_print `  call void @llvm.dbg.declare(metadata ` )
         ( nurl_print vt ) ( nurl_print `* ` ) ( nurl_print ptr )
@@ -798,11 +798,11 @@
 @ dbg_emit_location i line i col i sp_id → i {
     : i loc_id ( dbg_alloc_id )
     : s body
-        ( nurl_str_cat4
-            `!DILocation(line: ` ( nurl_str_int line )
-            `, column: ` ( nurl_str_cat4
-                ( nurl_str_int col )
-                `, scope: !` ( nurl_str_int sp_id ) `)` ) )
+    ( nurl_str_cat4
+    `!DILocation(line: ` ( nurl_str_int line )
+    `, column: ` ( nurl_str_cat4
+    ( nurl_str_int col )
+    `, scope: !` ( nurl_str_int sp_id ) `)` ) )
     ( dbg_buffer_meta loc_id body )
     ^ loc_id
 }
@@ -837,7 +837,7 @@
             : s def ( nurl_sym_get g_dbg_blob_syms ( nurl_str_int mi ) )
             ? != 0 ( nurl_str_len def )
             { ( nurl_print `!` ) ( nurl_print ( nurl_str_int mi ) )
-              ( nurl_print ` = ` ) ( nurl_print def ) ( nurl_print `\n` ) }
+                ( nurl_print ` = ` ) ( nurl_print def ) ( nurl_print `\n` ) }
             {}
             = mi + mi 1
         }
@@ -1013,8 +1013,8 @@
 // it as a Warning.
 @ lint_warn s file i line i col s msg → v {
     ( nurl_eprintln ( nurl_str_cat
-        ( nurl_str_cat3 file `:` ( nurl_str_int line ) )
-        ( nurl_str_cat4 `:` ( nurl_str_int col ) `: warning: ` msg ) ) )
+    ( nurl_str_cat3 file `:` ( nurl_str_int line ) )
+    ( nurl_str_cat4 `:` ( nurl_str_int col ) `: warning: ` msg ) ) )
 }
 
 // Record that `name` was referenced (called via gen_call or read via
@@ -1073,7 +1073,7 @@
             ? == 0 ( nurl_str_len ( nurl_sym_get g_lint_reads key ) )
             { ( lint_warn file ( nurl_str_to_int ln ) ( nurl_str_to_int cl )
                 ( nurl_str_cat3 `unused binding '` nm
-                    `' is never read - prefix with '_' or remove it` ) ) }
+                `' is never read - prefix with '_' or remove it` ) ) }
             {}
         }
     }
@@ -1104,10 +1104,10 @@
     ? & & != g_lint 0 != g_lint_recording 0 ( lint_in_top_file )
     { : s file ( vis_current_src_file )
         : s row ( nurl_str_cat
-            ( nurl_str_cat3 name `\t` ( nurl_str_int line ) )
-            ( nurl_str_cat
-                ( nurl_str_cat3 `\t` ( nurl_str_int col ) `\t` )
-                ( nurl_str_cat file `\n` ) ) )
+        ( nurl_str_cat3 name `\t` ( nurl_str_int line ) )
+        ( nurl_str_cat
+        ( nurl_str_cat3 `\t` ( nurl_str_int col ) `\t` )
+        ( nurl_str_cat file `\n` ) ) )
         : s cur ( nurl_sym_get g_lint_syms `fns` )
         ( nurl_sym_def g_lint_syms `fns` ( nurl_str_cat cur row ) ) }
     {}
@@ -1138,7 +1138,7 @@
         ? & ! ( seq nm `main` ) & ( seq strict `1` ) & ! ( seq is_pub `1` ) == 0 ( nurl_str_len used )
         { ( lint_warn file ( nurl_str_to_int ln ) ( nurl_str_to_int cl )
             ( nurl_str_cat3 `unused function '` nm
-                `' is defined but never called (private to this file)` ) ) }
+            `' is defined but never called (private to this file)` ) ) }
         {}
     }
 }
@@ -1307,10 +1307,10 @@
     // extra calls between the tail-call and `ret`, which LLVM would
     // silently degrade. defer chains likewise force a non-tail call.
     ? & & & ( seq ( nurl_sym_get syms `__owned_strings__` ) `` )
-             ( seq ( nurl_sym_get syms `__owned_slices__` ) `` )
-             ( seq ( nurl_sym_get syms `__owned_struct_fields__` ) `` )
-        & ( seq ( nurl_sym_get syms `__user_drops__` ) `` )
-          ( seq ( nurl_sym_get syms `__defer_top__` ) `` )
+    ( seq ( nurl_sym_get syms `__owned_slices__` ) `` )
+    ( seq ( nurl_sym_get syms `__owned_struct_fields__` ) `` )
+    & ( seq ( nurl_sym_get syms `__user_drops__` ) `` )
+    ( seq ( nurl_sym_get syms `__defer_top__` ) `` )
     { ( nurl_sym_def syms `__tail_call_pending__` `1` ) }
     {}
     : s val ( gen_expr lex syms cg )
@@ -1325,8 +1325,8 @@
     // shape for the then-arm of a `?` ternary whose else-arm follows
     // on the same line: `? cond ^ then_val { else_block }`.
     : b __xor_blocks | | | | | | | == __xor_nt TT_COLON == __xor_nt TT_EQ
-        == __xor_nt TT_SEMICOL == __xor_nt TT_RBRACE == __xor_nt TT_RPAREN
-        == __xor_nt TT_RBRACK == __xor_nt TT_LBRACE == __xor_nt TT_EOF
+    == __xor_nt TT_SEMICOL == __xor_nt TT_RBRACE == __xor_nt TT_RPAREN
+    == __xor_nt TT_RBRACK == __xor_nt TT_LBRACE == __xor_nt TT_EOF
     ? & == __xor_nl bck_line ! __xor_blocks
     { ( warn lex `'^' is the return operator; did you mean '^^' for XOR? (Two adjacent carets, no space between them)` ) }
     {}
@@ -1346,7 +1346,7 @@
     // (`^ binding`), and the struct wrapper (`^ @ Slot { cb }`)
     // uniformly. Only consulted when --borrowck is on.
     ( bck_esc_check_return lex syms bck_line
-        ( nurl_sym_get syms `__last_ident_name__` ) )
+    ( nurl_sym_get syms `__last_ident_name__` ) )
     // Diagnose cases where gen_expr produced no usable value (last_type =
     // void, e.g. a `? cond then else` whose two arms have incompatible
     // types so gen_cond degrades silently to void) while the function
@@ -1360,7 +1360,7 @@
         `) — match arms contain '^' so '?? …' is statement-form, not an expression. Refactor to ': ~ T rc init / ?? mr { … = rc v } / ^ rc'.`
         `) — likely a conditional with incompatible branch types`
         ( die lex ( nurl_str_cat `return expression has no value (expected `
-            ( nurl_str_cat ( llvm_to_nurl fn_rt ) hint ) ) ) }
+        ( nurl_str_cat ( llvm_to_nurl fn_rt ) hint ) ) ) }
     {}
     : s dtop ( nurl_sym_get syms `__defer_top__` )
     // Determine which owned-slice binding (if any) is escaping as the return value.
@@ -1446,14 +1446,14 @@
 // __tok_label — a human-readable name for a token that turned up where
 // a value expression was required. Used only on the diagnostic path.
 @ __tok_label i tt s val → s {
-    ? == tt TT_COLON   { ^ `':' (a ':' binding starts here)` } {}
-    ? == tt TT_EQ      { ^ `'=' (an assignment starts here)` } {}
+    ? == tt TT_COLON { ^ `':' (a ':' binding starts here)` } {}
+    ? == tt TT_EQ { ^ `'=' (an assignment starts here)` } {}
     ? == tt TT_SEMICOL { ^ `';' (a ';' defer starts here)` } {}
-    ? == tt TT_RBRACE  { ^ `'}' (the enclosing block ends here)` } {}
-    ? == tt TT_RPAREN  { ^ `')'` } {}
-    ? == tt TT_RBRACK  { ^ `']'` } {}
-    ? == tt TT_EOF     { ^ `end of input` } {}
-    ? == tt TT_ARROW   { ^ `'->'` } {}
+    ? == tt TT_RBRACE { ^ `'}' (the enclosing block ends here)` } {}
+    ? == tt TT_RPAREN { ^ `')'` } {}
+    ? == tt TT_RBRACK { ^ `']'` } {}
+    ? == tt TT_EOF { ^ `end of input` } {}
+    ? == tt TT_ARROW { ^ `'->'` } {}
     ? != 0 ( nurl_str_len val ) { ^ ( nurl_str_cat3 `'` val `'` ) } {}
     `this token`
 }
@@ -1566,9 +1566,9 @@
         ? & & == 0 ( nurl_str_len ptr ) == 0 ( nurl_str_len glb ) != 0 ( nurl_str_len ( nurl_sym_get g_vis_syms ( nurl_str_cat name `__src_file` ) ) )
         { : s tail ( nurl_str_cat name ` args ) }'.` )
             ( die lex ( nurl_str_cat4
-                `bare '@-fn' name '` name
-                `' does not auto-coerce to a closure value. Wrap it: '\ args → R { ( `
-                tail ) ) }
+            `bare '@-fn' name '` name
+            `' does not auto-coerce to a closure value. Wrap it: '\ args → R { ( `
+            tail ) ) }
         {}
         // Cross-file visibility check for globals (consts + enum
         // variants). Locals have a `__ptr` entry and skip this entirely
@@ -1601,12 +1601,12 @@
         // sits past the current statement's start line, point back at
         // the real culprit instead of blaming this innocent line.
         : b blocks_value | | | | == ut TT_COLON == ut TT_EQ == ut TT_SEMICOL
-            == ut TT_RBRACE | == ut TT_EOF | == ut TT_RPAREN == ut TT_RBRACK
+        == ut TT_RBRACE | == ut TT_EOF | == ut TT_RPAREN == ut TT_RBRACK
         ? blocks_value
         { : s where ? > uln g_stmt_line
             ( nurl_str_cat3 ` the statement starting at line ` ( nurl_str_int g_stmt_line ) ` is still being parsed, so` )
             ``
-          ( die lex ( nurl_str_cat3
+            ( die lex ( nurl_str_cat3
             ( nurl_str_cat3 `unexpected ` un ` where a value expression is required —` )
             where
             ` a prefix operator is short an argument: every NURL operator has fixed arity and no closing bracket, so a missing operand silently consumes whatever follows. See README -> Known Limitations -> Grammar.` ) ) }
@@ -2010,9 +2010,9 @@
     ( nurl_lex_advance lex )
     : s sname ( nurl_str_slice objty 1 - ( nurl_str_len objty ) 1 )
     : s idx_s ( nurl_sym_get syms
-        ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fld `__idx` ) ) ) )
+    ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fld `__idx` ) ) ) )
     : s fty ( nurl_sym_get syms
-        ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fld `__type` ) ) ) )
+    ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fld `__type` ) ) ) )
     ? == 0 ( nurl_str_len idx_s )
     { ( die lex ( nurl_str_cat4
         `inout field argument: struct '` sname `' has no field '` fld ) ) }
@@ -2192,7 +2192,7 @@
     : ~ i i 0
     : ~ i sign 1
     : u first . q 0
-    ? == & # i first 255 45 { = sign -1  = i 1 } {}
+    ? == & # i first 255 45 { = sign -1 = i 1 } {}
     ? == & # i first 255 43 { = i 1 } {}
     : ~ i acc 0
     ~ < i len {
@@ -2211,7 +2211,7 @@
 
 @ nurl_file_exists s path → i {
     ? == # i path 0 { ^ 0 } {}
-    : i32 rc ( access path # i32 0 )    // F_OK = 0
+    : i32 rc ( access path # i32 0 )  // F_OK = 0
     ^ ? == # i rc 0 1 0
 }
 
@@ -2461,25 +2461,25 @@
 // so callers can stash a stable copy across `nurl_lex_advance` calls.
 // Same contract as runtime.c.
 
-: i LX_SRC      0
+: i LX_SRC 0
 : i LX_FILENAME 1
-: i LX_POS      2
-: i LX_LEN      3
-: i LX_LINE     4
-: i LX_CUR      5
-: i LX_PEEK    11
-: i LX_PEEK2   17
-: i LX_PEEK3   23
-: i LX_PEEK4   29
+: i LX_POS 2
+: i LX_LEN 3
+: i LX_LINE 4
+: i LX_CUR 5
+: i LX_PEEK 11
+: i LX_PEEK2 17
+: i LX_PEEK3 23
+: i LX_PEEK4 29
 
-: i TF_TYPE  0
-: i TF_VAL   1
-: i TF_INUM  2
-: i TF_LINE  3
+: i TF_TYPE 0
+: i TF_VAL 1
+: i TF_INUM 2
+: i TF_LINE 3
 : i TF_START 4
 : i TF_VALID 5
 
-: i LX_SIZE 280   // 35 slots × 8 bytes
+: i LX_SIZE 280  // 35 slots × 8 bytes
 
 // ── ASCII byte-class predicates ──────────────────────────────────
 
@@ -2510,10 +2510,10 @@
 // from strdup or an inline malloc). Marks the slot valid.
 @ __tok_write i lex i base i type s val i inum i line i start → v {
     : s p # s lex
-    ( nurl_poke p + base TF_TYPE  type )
-    ( nurl_poke p + base TF_VAL   # i val )
-    ( nurl_poke p + base TF_INUM  inum )
-    ( nurl_poke p + base TF_LINE  line )
+    ( nurl_poke p + base TF_TYPE type )
+    ( nurl_poke p + base TF_VAL # i val )
+    ( nurl_poke p + base TF_INUM inum )
+    ( nurl_poke p + base TF_LINE line )
     ( nurl_poke p + base TF_START start )
     ( nurl_poke p + base TF_VALID 1 )
 }
@@ -2522,10 +2522,10 @@
 // Both must be valid token-slot bases.
 @ __tok_shift i lex i src_base i dst_base → v {
     : s p # s lex
-    ( nurl_poke p + dst_base TF_TYPE  ( nurl_peek p + src_base TF_TYPE  ) )
-    ( nurl_poke p + dst_base TF_VAL   ( nurl_peek p + src_base TF_VAL   ) )
-    ( nurl_poke p + dst_base TF_INUM  ( nurl_peek p + src_base TF_INUM  ) )
-    ( nurl_poke p + dst_base TF_LINE  ( nurl_peek p + src_base TF_LINE  ) )
+    ( nurl_poke p + dst_base TF_TYPE ( nurl_peek p + src_base TF_TYPE ) )
+    ( nurl_poke p + dst_base TF_VAL ( nurl_peek p + src_base TF_VAL ) )
+    ( nurl_poke p + dst_base TF_INUM ( nurl_peek p + src_base TF_INUM ) )
+    ( nurl_poke p + dst_base TF_LINE ( nurl_peek p + src_base TF_LINE ) )
     ( nurl_poke p + dst_base TF_START ( nurl_peek p + src_base TF_START ) )
     ( nurl_poke p + dst_base TF_VALID 1 )
 }
@@ -2551,8 +2551,8 @@
             }
         }
         ? & & < + pos 1 len
-            == & # i . src pos 255 47
-            == & # i . src + pos 1 255 47 {
+        == & # i . src pos 255 47
+        == & # i . src + pos 1 255 47 {
             // line comment — skip to end of line (exclusive of '\n').
             ~ & < pos len != & # i . src pos 255 10 { = pos + pos 1 }
         } { = done T }
@@ -2585,9 +2585,9 @@
     // ── UTF-8 arrow → (E2 86 92) ──
     ? ! done {
         ? & & & < + pos 2 len
-            == & # i . src pos 255 226
-            == & # i . src + pos 1 255 134
-            == & # i . src + pos 2 255 146 {
+        == & # i . src pos 255 226
+        == & # i . src + pos 1 255 134
+        == & # i . src + pos 2 255 146 {
             = pos + pos 3
             ( __tok_write lex base TT_ARROW # i ( strdup `→` ) 0 line start )
             = done T
@@ -2637,16 +2637,16 @@
                 ? & == ch 92 < + rp 1 scan {
                     : i nx & # i . src + rp 1 255
                     ? == nx 110 {
-                        = . bp blen # u 10  = blen + blen 1  = rp + rp 2
+                        = . bp blen # u 10 = blen + blen 1 = rp + rp 2
                     } {
                         ? == nx 116 {
-                            = . bp blen # u 9   = blen + blen 1  = rp + rp 2
+                            = . bp blen # u 9 = blen + blen 1 = rp + rp 2
                         } {
                             ? == nx 114 {
-                                = . bp blen # u 13  = blen + blen 1  = rp + rp 2
+                                = . bp blen # u 13 = blen + blen 1 = rp + rp 2
                             } {
                                 ? == nx 92 {
-                                    = . bp blen # u 92  = blen + blen 1  = rp + rp 2
+                                    = . bp blen # u 92 = blen + blen 1 = rp + rp 2
                                 } {
                                     // unknown \X — write the lone `\`
                                     // and advance 1 byte; the next
@@ -2659,7 +2659,7 @@
                         }
                     }
                 } {
-                    = . bp blen # u ch    = blen + blen 1    = rp + rp 1
+                    = . bp blen # u ch = blen + blen 1 = rp + rp 1
                 }
             }
             = . bp blen # u 0
@@ -2675,25 +2675,25 @@
     //    whitespace (`- a b`); a tight `-5` is a single token.
     ? ! done {
         ? & == & # i . src pos 255 45
-            & < + pos 1 len
-            ( __lx_is_digit & # i . src + pos 1 255 ) {
+        & < + pos 1 len
+        ( __lx_is_digit & # i . src + pos 1 255 ) {
             : i lit_start pos
-            = pos + pos 1   // consume '-'
+            = pos + pos 1  // consume '-'
             ~ & < pos len ( __lx_is_digit & # i . src pos 255 ) { = pos + pos 1 }
             : ~ b is_float F
             ? & & < + pos 1 len
-                == & # i . src pos 255 46
-                ( __lx_is_digit & # i . src + pos 1 255 ) {
+            == & # i . src pos 255 46
+            ( __lx_is_digit & # i . src + pos 1 255 ) {
                 = is_float T
                 = pos + pos 1
                 ~ & < pos len ( __lx_is_digit & # i . src pos 255 ) { = pos + pos 1 }
                 ? & < pos len
-                    | == & # i . src pos 255 101
-                      == & # i . src pos 255 69 {
+                | == & # i . src pos 255 101
+                == & # i . src pos 255 69 {
                     = pos + pos 1
                     ? & < pos len
-                        | == & # i . src pos 255 43
-                          == & # i . src pos 255 45 {
+                    | == & # i . src pos 255 43
+                    == & # i . src pos 255 45 {
                         = pos + pos 1
                     } {}
                     ~ & < pos len ( __lx_is_digit & # i . src pos 255 ) { = pos + pos 1 }
@@ -2721,18 +2721,18 @@
             ~ & < pos len ( __lx_is_digit & # i . src pos 255 ) { = pos + pos 1 }
             : ~ b is_float F
             ? & & < + pos 1 len
-                == & # i . src pos 255 46
-                ( __lx_is_digit & # i . src + pos 1 255 ) {
+            == & # i . src pos 255 46
+            ( __lx_is_digit & # i . src + pos 1 255 ) {
                 = is_float T
                 = pos + pos 1
                 ~ & < pos len ( __lx_is_digit & # i . src pos 255 ) { = pos + pos 1 }
                 ? & < pos len
-                    | == & # i . src pos 255 101
-                      == & # i . src pos 255 69 {
+                | == & # i . src pos 255 101
+                == & # i . src pos 255 69 {
                     = pos + pos 1
                     ? & < pos len
-                        | == & # i . src pos 255 43
-                          == & # i . src pos 255 45 {
+                    | == & # i . src pos 255 43
+                    == & # i . src pos 255 45 {
                         = pos + pos 1
                     } {}
                     ~ & < pos len ( __lx_is_digit & # i . src pos 255 ) { = pos + pos 1 }
@@ -2761,9 +2761,9 @@
             // Each `::` is exactly two ASCII bytes followed by an
             // ident-start char (alpha or _).
             ~ & & < + pos 2 len
-                & == & # i . src pos 255 58
-                  == & # i . src + pos 1 255 58
-                ( __lx_is_alpha_us & # i . src + pos 2 255 ) {
+            & == & # i . src pos 255 58
+            == & # i . src + pos 1 255 58
+            ( __lx_is_alpha_us & # i . src + pos 2 255 ) {
                 = pos + pos 2
                 ~ & < pos len ( __lx_is_ident_cont & # i . src pos 255 ) { = pos + pos 1 }
             }
@@ -2776,8 +2776,8 @@
             : ~ i k 0
             ~ < k n {
                 ? & == & # i . idp k 255 58
-                    & < + k 1 n
-                    == & # i . idp + k 1 255 58 {
+                & < + k 1 n
+                == & # i . idp + k 1 255 58 {
                     = . idp k # u 95
                     = . idp + k 1 # u 95
                     = k + k 2
@@ -2792,17 +2792,17 @@
             // and fixed-width int/float kws (i8/i16/i32/i64/u16/u32/u64/f32).
             ? == n 1 {
                 : i c0 & # i . idp 0 255
-                ? == c0 84 { = ttype TT_BOOL = inum 1 } {}    // 'T'
-                ? == c0 70 { = ttype TT_BOOL = inum 0 } {}    // 'F'
-                ? == c0 90 { = ttype TT_SIZEOF } {}            // 'Z'
+                ? == c0 84 { = ttype TT_BOOL = inum 1 } {}  // 'T'
+                ? == c0 70 { = ttype TT_BOOL = inum 0 } {}  // 'F'
+                ? == c0 90 { = ttype TT_SIZEOF } {}  // 'Z'
                 ? | | | | | == c0 105 == c0 117 == c0 102 == c0 98 == c0 115 == c0 118 {
                     = ttype TT_TYPE_KW
                 } {}
             } {}
             ? & == ttype TT_IDENT == n 3 {
                 ? & == & # i . idp 0 255 112
-                    & == & # i . idp 1 255 117
-                      == & # i . idp 2 255 98 {
+                & == & # i . idp 1 255 117
+                == & # i . idp 2 255 98 {
                     = ttype TT_PUB
                 } {}
             } {}
@@ -2812,14 +2812,14 @@
                 ? | | == c0 105 == c0 117 == c0 102 {
                     ? == n 2 {
                         : i c1 & # i . idp 1 255
-                        ? == c1 56 { = ttype TT_TYPE_KW } {}   // 'i8'
+                        ? == c1 56 { = ttype TT_TYPE_KW } {}  // 'i8'
                     } {}
                     ? == n 3 {
                         : i c1 & # i . idp 1 255
                         : i c2 & # i . idp 2 255
-                        ? & == c1 49 == c2 54 { = ttype TT_TYPE_KW } {}   // ?16
-                        ? & == c1 51 == c2 50 { = ttype TT_TYPE_KW } {}   // ?32
-                        ? & == c1 54 == c2 52 { = ttype TT_TYPE_KW } {}   // ?64
+                        ? & == c1 49 == c2 54 { = ttype TT_TYPE_KW } {}  // ?16
+                        ? & == c1 51 == c2 50 { = ttype TT_TYPE_KW } {}  // ?32
+                        ? & == c1 54 == c2 52 { = ttype TT_TYPE_KW } {}  // ?64
                     } {}
                 } {}
             } {}
@@ -2831,9 +2831,9 @@
     // ── Three-char `...` ellipsis ──
     ? ! done {
         ? & & < + pos 2 len
-            == & # i . src pos 255 46
-            & == & # i . src + pos 1 255 46
-              == & # i . src + pos 2 255 46 {
+        == & # i . src pos 255 46
+        & == & # i . src + pos 1 255 46
+        == & # i . src + pos 2 255 46 {
             = pos + pos 3
             ( __tok_write lex base TT_ELLIPSIS # i ( strdup `...` ) 0 line start )
             = done T
@@ -2845,16 +2845,16 @@
         ? < + pos 1 len {
             : i c1 & # i . src pos 255
             : i c2 & # i . src + pos 1 255
-            ? & == c1 61 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_EQEQ       # i ( strdup `==` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 33 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_NE         # i ( strdup `!=` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 60 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_LE         # i ( strdup `<=` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 62 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_GE         # i ( strdup `>=` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 60 == c2 60 { = pos + pos 2 ( __tok_write lex base TT_SHL        # i ( strdup `<<` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 62 == c2 62 { = pos + pos 2 ( __tok_write lex base TT_SHR        # i ( strdup `>>` ) 0 line start ) = done T } {}
+            ? & == c1 61 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_EQEQ # i ( strdup `==` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 33 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_NE # i ( strdup `!=` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 60 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_LE # i ( strdup `<=` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 62 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_GE # i ( strdup `>=` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 60 == c2 60 { = pos + pos 2 ( __tok_write lex base TT_SHL # i ( strdup `<<` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 62 == c2 62 { = pos + pos 2 ( __tok_write lex base TT_SHR # i ( strdup `>>` ) 0 line start ) = done T } {}
             ? & ! done & == c1 63 == c2 63 { = pos + pos 2 ( __tok_write lex base TT_QUESTQUEST # i ( strdup `??` ) 0 line start ) = done T } {}
             ? & ! done & == c1 94 == c2 94 { = pos + pos 2 ( __tok_write lex base TT_CARETCARET # i ( strdup `^^` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 124 == c2 124 { = pos + pos 2 ( __tok_write lex base TT_OROR     # i ( strdup `||` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 38 == c2 38 { = pos + pos 2 ( __tok_write lex base TT_ANDAND     # i ( strdup `&&` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 124 == c2 124 { = pos + pos 2 ( __tok_write lex base TT_OROR # i ( strdup `||` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 38 == c2 38 { = pos + pos 2 ( __tok_write lex base TT_ANDAND # i ( strdup `&&` ) 0 line start ) = done T } {}
         } {}
     } {}
 
@@ -2862,38 +2862,38 @@
     ? ! done {
         : i c & # i . src pos 255
         = pos + pos 1
-        ? == c 64  { ( __tok_write lex base TT_AT        # i ( strdup `@`  ) 0 line start ) = done T } {}
-        ? & ! done == c 58 { ( __tok_write lex base TT_COLON     # i ( strdup `:`  ) 0 line start ) = done T } {}
-        ? & ! done == c 61 { ( __tok_write lex base TT_EQ        # i ( strdup `=`  ) 0 line start ) = done T } {}
-        ? & ! done == c 94 { ( __tok_write lex base TT_CARET     # i ( strdup `^`  ) 0 line start ) = done T } {}
-        ? & ! done == c 63 { ( __tok_write lex base TT_QUEST     # i ( strdup `?`  ) 0 line start ) = done T } {}
-        ? & ! done == c 126 { ( __tok_write lex base TT_TILDE    # i ( strdup `~`  ) 0 line start ) = done T } {}
-        ? & ! done == c 40 { ( __tok_write lex base TT_LPAREN    # i ( strdup `(`  ) 0 line start ) = done T } {}
-        ? & ! done == c 41 { ( __tok_write lex base TT_RPAREN    # i ( strdup `)`  ) 0 line start ) = done T } {}
-        ? & ! done == c 123 { ( __tok_write lex base TT_LBRACE   # i ( strdup `{`  ) 0 line start ) = done T } {}
-        ? & ! done == c 125 { ( __tok_write lex base TT_RBRACE   # i ( strdup `}`  ) 0 line start ) = done T } {}
-        ? & ! done == c 46 { ( __tok_write lex base TT_DOT       # i ( strdup `.`  ) 0 line start ) = done T } {}
-        ? & ! done == c 35 { ( __tok_write lex base TT_HASH      # i ( strdup `#`  ) 0 line start ) = done T } {}
-        ? & ! done == c 33 { ( __tok_write lex base TT_BANG      # i ( strdup `!`  ) 0 line start ) = done T } {}
-        ? & ! done == c 43 { ( __tok_write lex base TT_PLUS      # i ( strdup `+`  ) 0 line start ) = done T } {}
-        ? & ! done == c 45 { ( __tok_write lex base TT_MINUS     # i ( strdup `-`  ) 0 line start ) = done T } {}
-        ? & ! done == c 42 { ( __tok_write lex base TT_STAR      # i ( strdup `*`  ) 0 line start ) = done T } {}
-        ? & ! done == c 47 { ( __tok_write lex base TT_SLASH     # i ( strdup `/`  ) 0 line start ) = done T } {}
-        ? & ! done == c 37 { ( __tok_write lex base TT_PERCENT   # i ( strdup `%`  ) 0 line start ) = done T } {}
-        ? & ! done == c 38 { ( __tok_write lex base TT_AMP       # i ( strdup `&`  ) 0 line start ) = done T } {}
-        ? & ! done == c 124 { ( __tok_write lex base TT_PIPE     # i ( strdup `|`  ) 0 line start ) = done T } {}
-        ? & ! done == c 60 { ( __tok_write lex base TT_LT        # i ( strdup `<`  ) 0 line start ) = done T } {}
-        ? & ! done == c 62 { ( __tok_write lex base TT_GT        # i ( strdup `>`  ) 0 line start ) = done T } {}
-        ? & ! done == c 91 { ( __tok_write lex base TT_LBRACK    # i ( strdup `[`  ) 0 line start ) = done T } {}
-        ? & ! done == c 93 { ( __tok_write lex base TT_RBRACK    # i ( strdup `]`  ) 0 line start ) = done T } {}
-        ? & ! done == c 59 { ( __tok_write lex base TT_SEMICOL   # i ( strdup `;`  ) 0 line start ) = done T } {}
+        ? == c 64 { ( __tok_write lex base TT_AT # i ( strdup `@` ) 0 line start ) = done T } {}
+        ? & ! done == c 58 { ( __tok_write lex base TT_COLON # i ( strdup `:` ) 0 line start ) = done T } {}
+        ? & ! done == c 61 { ( __tok_write lex base TT_EQ # i ( strdup `=` ) 0 line start ) = done T } {}
+        ? & ! done == c 94 { ( __tok_write lex base TT_CARET # i ( strdup `^` ) 0 line start ) = done T } {}
+        ? & ! done == c 63 { ( __tok_write lex base TT_QUEST # i ( strdup `?` ) 0 line start ) = done T } {}
+        ? & ! done == c 126 { ( __tok_write lex base TT_TILDE # i ( strdup `~` ) 0 line start ) = done T } {}
+        ? & ! done == c 40 { ( __tok_write lex base TT_LPAREN # i ( strdup `(` ) 0 line start ) = done T } {}
+        ? & ! done == c 41 { ( __tok_write lex base TT_RPAREN # i ( strdup `)` ) 0 line start ) = done T } {}
+        ? & ! done == c 123 { ( __tok_write lex base TT_LBRACE # i ( strdup `{` ) 0 line start ) = done T } {}
+        ? & ! done == c 125 { ( __tok_write lex base TT_RBRACE # i ( strdup `}` ) 0 line start ) = done T } {}
+        ? & ! done == c 46 { ( __tok_write lex base TT_DOT # i ( strdup `.` ) 0 line start ) = done T } {}
+        ? & ! done == c 35 { ( __tok_write lex base TT_HASH # i ( strdup `#` ) 0 line start ) = done T } {}
+        ? & ! done == c 33 { ( __tok_write lex base TT_BANG # i ( strdup `!` ) 0 line start ) = done T } {}
+        ? & ! done == c 43 { ( __tok_write lex base TT_PLUS # i ( strdup `+` ) 0 line start ) = done T } {}
+        ? & ! done == c 45 { ( __tok_write lex base TT_MINUS # i ( strdup `-` ) 0 line start ) = done T } {}
+        ? & ! done == c 42 { ( __tok_write lex base TT_STAR # i ( strdup `*` ) 0 line start ) = done T } {}
+        ? & ! done == c 47 { ( __tok_write lex base TT_SLASH # i ( strdup `/` ) 0 line start ) = done T } {}
+        ? & ! done == c 37 { ( __tok_write lex base TT_PERCENT # i ( strdup `%` ) 0 line start ) = done T } {}
+        ? & ! done == c 38 { ( __tok_write lex base TT_AMP # i ( strdup `&` ) 0 line start ) = done T } {}
+        ? & ! done == c 124 { ( __tok_write lex base TT_PIPE # i ( strdup `|` ) 0 line start ) = done T } {}
+        ? & ! done == c 60 { ( __tok_write lex base TT_LT # i ( strdup `<` ) 0 line start ) = done T } {}
+        ? & ! done == c 62 { ( __tok_write lex base TT_GT # i ( strdup `>` ) 0 line start ) = done T } {}
+        ? & ! done == c 91 { ( __tok_write lex base TT_LBRACK # i ( strdup `[` ) 0 line start ) = done T } {}
+        ? & ! done == c 93 { ( __tok_write lex base TT_RBRACK # i ( strdup `]` ) 0 line start ) = done T } {}
+        ? & ! done == c 59 { ( __tok_write lex base TT_SEMICOL # i ( strdup `;` ) 0 line start ) = done T } {}
         ? & ! done == c 92 { ( __tok_write lex base TT_BACKSLASH # i ( strdup `\\` ) 0 line start ) = done T } {}
-        ? & ! done == c 36 { ( __tok_write lex base TT_DOLLAR    # i ( strdup `$`  ) 0 line start ) = done T } {}
+        ? & ! done == c 36 { ( __tok_write lex base TT_DOLLAR # i ( strdup `$` ) 0 line start ) = done T } {}
         // Unknown byte — emit IDENT "?XX" so caller can diagnose.
         ? ! done {
             : s buf # s ( malloc 4 )
             : *u bp # *u buf
-            = . bp 0 # u 63   // '?'
+            = . bp 0 # u 63  // '?'
             : i hi / c 16
             : i lo & c 15
             = . bp 1 # u + ? < hi 10 + 48 hi + 55 hi 0
@@ -2912,11 +2912,11 @@
 
 @ nurl_lex_new s src s filename → i {
     : s lx # s ( nurl_zalloc LX_SIZE )
-    ( nurl_poke lx LX_SRC      # i ( strdup src ) )
+    ( nurl_poke lx LX_SRC # i ( strdup src ) )
     ( nurl_poke lx LX_FILENAME # i ( strdup filename ) )
-    ( nurl_poke lx LX_POS      0 )
-    ( nurl_poke lx LX_LEN      ( strlen src ) )
-    ( nurl_poke lx LX_LINE     1 )
+    ( nurl_poke lx LX_POS 0 )
+    ( nurl_poke lx LX_LEN ( strlen src ) )
+    ( nurl_poke lx LX_LINE 1 )
     // Prime cur token.
     ( __lex_one # i lx LX_CUR )
     ^ # i lx
@@ -2974,7 +2974,7 @@
     ? < pos 0 { = pos 0 } {}
     ? > pos len { = pos len } {}
     : ~ i col 1
-    ~ & > pos 0 != & # i . src - pos 1 255 10 { = pos - pos 1   = col + col 1 }
+    ~ & > pos 0 != & # i . src - pos 1 255 10 { = pos - pos 1 = col + col 1 }
     ^ col
 }
 
@@ -3014,7 +3014,7 @@
     : s out # s ( malloc + pad 2 )
     : *u op # *u out
     : ~ i i 0
-    ~ < i pad { = . op i # u 32   = i + i 1 }
+    ~ < i pad { = . op i # u 32 = i + i 1 }
     = . op pad # u 94
     = . op + pad 1 # u 0
     ^ out
@@ -3045,7 +3045,7 @@
     ? < np 0 { = np 0 } {}
     ? > np len { = np len } {}
     // Invalidate lookahead.
-    ( nurl_poke p + LX_PEEK  TF_VALID 0 )
+    ( nurl_poke p + LX_PEEK TF_VALID 0 )
     ( nurl_poke p + LX_PEEK2 TF_VALID 0 )
     ( nurl_poke p + LX_PEEK3 TF_VALID 0 )
     ( nurl_poke p + LX_PEEK4 TF_VALID 0 )
@@ -3267,15 +3267,15 @@
     // stack slot dangles the moment its owning function returns. The
     // check is --borrowck-gated.
     : b is_escape_call | | |
-        ( seq fname `vec_push` )
-        ( seq fname `vec_insert` )
-        ( seq fname `vec_set` )
-        ( seq fname `thread_spawn` )
+    ( seq fname `vec_push` )
+    ( seq fname `vec_insert` )
+    ( seq fname `vec_set` )
+    ( seq fname `thread_spawn` )
     // A `*_free` destructor consumes (frees) its first argument.
     // `nurl_free` is excluded — it frees raw *T / i8* FFI memory,
     // which the borrow checker does not track.
     : b is_consume_call & ( bck_is_destructor_name fname )
-        ! ( seq fname `nurl_free` )
+    ! ( seq fname `nurl_free` )
     : i arg_idx 0
     // Space-separated 0-based indices of the callee's `inout`
     // parameters (recorded into g_fn_inout by gen_fn_decl_concrete as
@@ -3306,7 +3306,7 @@
     // both ordinary and generic functions: scan_fn_sigs records
     // `<fname>__has_inout` for either. Reject it.
     ? & == 0 ( nurl_str_len callee_inout )
-          ( seq ( nurl_sym_get syms ( nurl_str_cat fname `__has_inout` ) ) `1` )
+    ( seq ( nurl_sym_get syms ( nurl_str_cat fname `__has_inout` ) ) `1` )
     { ( die lex ( nurl_str_cat3
         `function '` fname
         `' has 'inout' parameters and must be defined before it is called - move its definition above this call site` ) ) }
@@ -3372,17 +3372,17 @@
         // aliasing detection purposes when strict mode is on.
         : ~ b bck_treat_as_ident ( is_ident_tok bck_arg_tt )
         ? & != g_strict_borrowck 0 & == bck_arg_tt TT_DOT
-            != 0 ( nurl_str_len bck_arg_root )
+        != 0 ( nurl_str_len bck_arg_root )
         { = bck_treat_as_ident T } {}
         ? & != g_borrowck 0 bck_treat_as_ident
         { ? | & is_inout_arg ( str_contains_word p5_seen bck_arg_root )
-              & ! is_inout_arg ( str_contains_word p5_inout_seen bck_arg_root )
+            & ! is_inout_arg ( str_contains_word p5_inout_seen bck_arg_root )
             { ( bck_esc_warn lex bck_arg_line ( nurl_str_cat3
                 `'` bck_arg_root
                 `' is both mutably borrowed (passed as 'inout') and aliased by another argument of the same call - exclusive access is violated` ) ) }
             {}
             = p5_seen ? == 0 ( nurl_str_len p5_seen )
-                bck_arg_root ( nurl_str_cat3 p5_seen ` ` bck_arg_root )
+            bck_arg_root ( nurl_str_cat3 p5_seen ` ` bck_arg_root )
             ? is_inout_arg
             { = p5_inout_seen ? == 0 ( nurl_str_len p5_inout_seen )
                 bck_arg_root ( nurl_str_cat3 p5_inout_seen ` ` bck_arg_root ) }
@@ -3396,7 +3396,7 @@
             // `( fn inout . obj field )` inside a `~ x : obj { ... }`
             // loop.
             : b fe_iterated ( str_contains_word
-                ( nurl_sym_get g_bck `iter_containers` ) bck_arg_root )
+            ( nurl_sym_get g_bck `iter_containers` ) bck_arg_root )
             : b fe_mutates & == arg_idx 0 ( bck_is_container_mutator fname )
             ? & fe_iterated | is_inout_arg fe_mutates
             { ( bck_esc_warn lex bck_arg_line ( nurl_str_cat3
@@ -3408,9 +3408,9 @@
         : ~ s at ``
         ? is_inout_arg
         { ? == bck_arg_tt TT_DOT
-            { // `inout` field target — `. obj field`.
-              // Pass the field's address so the callee mutates exactly
-              // that field of the caller's struct in place.
+            {  // `inout` field target — `. obj field`.
+                // Pass the field's address so the callee mutates exactly
+                // that field of the caller's struct in place.
                 = av ( gen_inout_field_addr lex syms cg fname )
                 = at ( nurl_get_last_type )
             }
@@ -3486,12 +3486,12 @@
         // drop-ownership transfer to the callee (deferred); it is
         // rejected here rather than risking a double free.
         ? & ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
-             ( is_ident_tok bck_arg_tt )
+        ( is_ident_tok bck_arg_tt )
         { : s sink_ptr ( nurl_sym_get syms ( nurl_str_cat bck_arg_val `__ptr` ) )
             ? | | ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) bck_arg_val )
-                  ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) sink_ptr )
-                | ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) sink_ptr )
-                  ( str_contains_word ( nurl_sym_get syms `__owned_struct_fields__` ) sink_ptr )
+            ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) sink_ptr )
+            | ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) sink_ptr )
+            ( str_contains_word ( nurl_sym_get syms `__owned_struct_fields__` ) sink_ptr )
             { ( die lex ( nurl_str_cat3
                 `'` bck_arg_val
                 `' is a compiler-auto-dropped value; passing it to a 'sink' parameter is not yet supported - pass a Vec or other manually-managed handle, or pass it as an ordinary parameter` ) ) }
@@ -3541,8 +3541,8 @@
     // the name (different parameter counts) — skip the check then.
     : s ar_s ( nurl_sym_get syms ( nurl_str_cat fname `__arity` ) )
     ? & & & & ( seq call_name fname ) ! is_variadic
-          != 0 ( nurl_str_len ar_s ) ! ( seq ar_s `?` )
-          == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__ptr` ) ) )
+    != 0 ( nurl_str_len ar_s ) ! ( seq ar_s `?` )
+    == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__ptr` ) ) )
     { : i ar_want ( nurl_str_to_int ar_s )
         ? != ar_want arg_idx
         { ( die lex ( nurl_str_cat3
@@ -3674,9 +3674,9 @@
             // when the caller's return type also happens to be i64.
             : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
             : b tail_ok & & & is_tail_position
-                ! ( seq rlt `void` )
-                ! is_variadic
-                ( seq rlt fn_rt )
+            ! ( seq rlt `void` )
+            ! is_variadic
+            ( seq rlt fn_rt )
             : s tail_kw ? tail_ok `tail ` ``
             ? ( seq rlt `void` )
             { ( nurl_print `  call void @` ) ( nurl_print call_name )
@@ -3904,7 +3904,7 @@
     // binding name and populate those keys from the call's NURL return
     // type so the direct-call form reconstructs identically to `?? r`.
     ? & == 0 ( nurl_str_len match_var_name )
-          != 0 ( nurl_str_len ( nurl_sym_get syms `__last_nurl_call__` ) )
+    != 0 ( nurl_str_len ( nurl_sym_get syms `__last_nurl_call__` ) )
     { : s mcall_nurl ( nurl_sym_get syms `__last_nurl_call__` )
         : s msynth ( nurl_str_cat `__matchtmp` ( nurl_cg_lbl cg `mt` ) )
         : s minner_t ( str_first_word ( str_skip_word mcall_nurl ) )
@@ -4022,85 +4022,85 @@
                 = has_wildcard 1
                 ( nurl_print `  br label %` ) ( nurl_print arm_label ) ( emit_dbg_eol )
             } { ? is_int_pat {
-                // Integer-literal arm: direct equality compare against
-                // the match value. No enum tag, no payload, no
-                // exhaustiveness contribution. `match_type` must be an
-                // integer LLVM type — we don't currently validate that,
-                // a non-integer match would produce invalid IR LLVM
-                // catches at link time.
-                = next_label ( nurl_cg_lbl cg `next` )
-                : s cmp_reg ( nurl_cg_reg cg )
-                ( nurl_print `  ` ) ( nurl_print cmp_reg )
-                ( nurl_print ` = icmp eq ` ) ( nurl_print match_type )
-                ( nurl_print ` ` ) ( nurl_print match_val )
-                ( nurl_print `, ` ) ( nurl_print pattern_name ) ( nurl_print `\n` )
-                ( nurl_print `  br i1 ` ) ( nurl_print cmp_reg )
-                ( nurl_print `, label %` ) ( nurl_print arm_label )
-                ( nurl_print `, label %` ) ( nurl_print next_label ) ( emit_dbg_eol )
-            } {
-                // Named variant.  Literal-constrained arms (e.g. `Ok 200`) do NOT
-                // exhaustively cover the variant — only catch-all arms (no literals)
-                // count towards exhaustiveness and as duplicate-arm blockers.
-                ? ( str_contains_word seen_variants pattern_name ) {
-                    ( die lex ( nurl_str_cat `duplicate match arm for variant: ` pattern_name ) )
-                } {}
-                ? has_lit {} {
-                    = seen_variants ? == 0 ( nurl_str_len seen_variants )
-                    pattern_name
-                    ( nurl_str_cat seen_variants ( nurl_str_cat ` ` pattern_name ) )
-                }
-                // T/F: bool pattern matching i1 tag of Option — no global load needed
-                : b is_bool_pat | ( seq pattern_name `T` ) ( seq pattern_name `F` )
-                // If match_val is already a bare scalar tag (i1 from
-                // `?? some_bool`; i64 from a nested `?? e` where `e` was
-                // bound from an `F`-arm of `! T E` and is the enum's
-                // raw i64 tag), use it directly — extractvalue is only
-                // valid on aggregate types (`%Enum`, `{ i1, T }`,
-                // `{ i64, ptr }` etc.). Without the i64 skip, the inner
-                // emit `extractvalue i64 %tag, 0` triggered LLVM's
-                // "extractvalue operand must be aggregate type". Closes
-                // docs/GOTCHAS.md item 6 / memory gotcha #6.
-                : b match_is_bare_tag | ( seq match_type `i1` ) ( seq match_type `i64` )
-                : s tag_reg ? match_is_bare_tag match_val ( nurl_cg_reg cg )
-                ? match_is_bare_tag {} {
-                    ( nurl_print `  ` ) ( nurl_print tag_reg )
-                    ( nurl_print ` = extractvalue ` ) ( nurl_print match_type )
-                    ( nurl_print ` ` ) ( nurl_print match_val ) ( nurl_print `, 0\n` )
-                }
-
-                : s cmp_reg ( nurl_cg_reg cg )
-                ? is_bool_pat
-                { ( nurl_print `  ` ) ( nurl_print cmp_reg )
-                    ( nurl_print ` = icmp eq i1 ` ) ( nurl_print tag_reg )
-                    ( nurl_print `, ` )
-                    ( nurl_print ? ( seq pattern_name `T` ) `1` `0` ) ( nurl_print `\n` )
-                }
-                { : s enum_const ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print enum_const )
-                    ( nurl_print ` = load i64, i64* @` )
-                    ( nurl_print pattern_name ) ( nurl_print `\n` )
+                    // Integer-literal arm: direct equality compare against
+                    // the match value. No enum tag, no payload, no
+                    // exhaustiveness contribution. `match_type` must be an
+                    // integer LLVM type — we don't currently validate that,
+                    // a non-integer match would produce invalid IR LLVM
+                    // catches at link time.
+                    = next_label ( nurl_cg_lbl cg `next` )
+                    : s cmp_reg ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print cmp_reg )
-                    ( nurl_print ` = icmp eq i64 ` ) ( nurl_print tag_reg )
-                    ( nurl_print `, ` ) ( nurl_print enum_const ) ( nurl_print `\n` )
-                }
+                    ( nurl_print ` = icmp eq ` ) ( nurl_print match_type )
+                    ( nurl_print ` ` ) ( nurl_print match_val )
+                    ( nurl_print `, ` ) ( nurl_print pattern_name ) ( nurl_print `\n` )
+                    ( nurl_print `  br i1 ` ) ( nurl_print cmp_reg )
+                    ( nurl_print `, label %` ) ( nurl_print arm_label )
+                    ( nurl_print `, label %` ) ( nurl_print next_label ) ( emit_dbg_eol )
+                } {
+                    // Named variant.  Literal-constrained arms (e.g. `Ok 200`) do NOT
+                    // exhaustively cover the variant — only catch-all arms (no literals)
+                    // count towards exhaustiveness and as duplicate-arm blockers.
+                    ? ( str_contains_word seen_variants pattern_name ) {
+                        ( die lex ( nurl_str_cat `duplicate match arm for variant: ` pattern_name ) )
+                    } {}
+                    ? has_lit {} {
+                        = seen_variants ? == 0 ( nurl_str_len seen_variants )
+                        pattern_name
+                        ( nurl_str_cat seen_variants ( nurl_str_cat ` ` pattern_name ) )
+                    }
+                    // T/F: bool pattern matching i1 tag of Option — no global load needed
+                    : b is_bool_pat | ( seq pattern_name `T` ) ( seq pattern_name `F` )
+                    // If match_val is already a bare scalar tag (i1 from
+                    // `?? some_bool`; i64 from a nested `?? e` where `e` was
+                    // bound from an `F`-arm of `! T E` and is the enum's
+                    // raw i64 tag), use it directly — extractvalue is only
+                    // valid on aggregate types (`%Enum`, `{ i1, T }`,
+                    // `{ i64, ptr }` etc.). Without the i64 skip, the inner
+                    // emit `extractvalue i64 %tag, 0` triggered LLVM's
+                    // "extractvalue operand must be aggregate type". Closes
+                    // docs/GOTCHAS.md item 6 / memory gotcha #6.
+                    : b match_is_bare_tag | ( seq match_type `i1` ) ( seq match_type `i64` )
+                    : s tag_reg ? match_is_bare_tag match_val ( nurl_cg_reg cg )
+                    ? match_is_bare_tag {} {
+                        ( nurl_print `  ` ) ( nurl_print tag_reg )
+                        ( nurl_print ` = extractvalue ` ) ( nurl_print match_type )
+                        ( nurl_print ` ` ) ( nurl_print match_val ) ( nurl_print `, 0\n` )
+                    }
 
-                = next_label ( nurl_cg_lbl cg `next` )
-                // If the pattern has literal constraints, jump to a literal-check
-                // block first; otherwise branch straight to the arm body.
-                : s tag_ok_label ? has_lit ( nurl_cg_lbl cg `litchk` ) arm_label
-                ( nurl_print `  br i1 ` ) ( nurl_print cmp_reg )
-                ( nurl_print `, label %` ) ( nurl_print tag_ok_label )
-                ( nurl_print `, label %` ) ( nurl_print next_label ) ( emit_dbg_eol )
-                // Emit chained literal comparisons.  Each failure jumps to next_label;
-                // the last successful check falls through to arm_label.
-                ? has_lit {
-                    ( nurl_print tag_ok_label ) ( nurl_print `:\n` )
-                    ( emit_lit_check cg syms match_val match_type pattern_name 0 lit0 next_label )
-                    ( emit_lit_check cg syms match_val match_type pattern_name 1 lit1 next_label )
-                    ( emit_lit_check cg syms match_val match_type pattern_name 2 lit2 next_label )
-                    ( nurl_print `  br label %` ) ( nurl_print arm_label ) ( emit_dbg_eol )
-                } {}
-            } }
+                    : s cmp_reg ( nurl_cg_reg cg )
+                    ? is_bool_pat
+                    { ( nurl_print `  ` ) ( nurl_print cmp_reg )
+                        ( nurl_print ` = icmp eq i1 ` ) ( nurl_print tag_reg )
+                        ( nurl_print `, ` )
+                        ( nurl_print ? ( seq pattern_name `T` ) `1` `0` ) ( nurl_print `\n` )
+                    }
+                    { : s enum_const ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print enum_const )
+                        ( nurl_print ` = load i64, i64* @` )
+                        ( nurl_print pattern_name ) ( nurl_print `\n` )
+                        ( nurl_print `  ` ) ( nurl_print cmp_reg )
+                        ( nurl_print ` = icmp eq i64 ` ) ( nurl_print tag_reg )
+                        ( nurl_print `, ` ) ( nurl_print enum_const ) ( nurl_print `\n` )
+                    }
+
+                    = next_label ( nurl_cg_lbl cg `next` )
+                    // If the pattern has literal constraints, jump to a literal-check
+                    // block first; otherwise branch straight to the arm body.
+                    : s tag_ok_label ? has_lit ( nurl_cg_lbl cg `litchk` ) arm_label
+                    ( nurl_print `  br i1 ` ) ( nurl_print cmp_reg )
+                    ( nurl_print `, label %` ) ( nurl_print tag_ok_label )
+                    ( nurl_print `, label %` ) ( nurl_print next_label ) ( emit_dbg_eol )
+                    // Emit chained literal comparisons.  Each failure jumps to next_label;
+                    // the last successful check falls through to arm_label.
+                    ? has_lit {
+                        ( nurl_print tag_ok_label ) ( nurl_print `:\n` )
+                        ( emit_lit_check cg syms match_val match_type pattern_name 0 lit0 next_label )
+                        ( emit_lit_check cg syms match_val match_type pattern_name 1 lit1 next_label )
+                        ( emit_lit_check cg syms match_val match_type pattern_name 2 lit2 next_label )
+                        ( nurl_print `  br label %` ) ( nurl_print arm_label ) ( emit_dbg_eol )
+                    } {}
+                } }
 
             // Generate the arm code
             ( nurl_print arm_label ) ( nurl_print `:\n` )
@@ -4282,17 +4282,17 @@
                             ( nurl_print ` ` ) ( nurl_print pr0 ) ( nurl_print `, 0\n` ) }
                         { ( nurl_print `  ` ) ( nurl_print cv0 )
                             ? | == ( nurl_str_get pt0 0 ) 123
-                                & == ( nurl_str_get pt0 0 ) 37
-                                  != ( nurl_str_get pt0 - ( nurl_str_len pt0 ) 1 ) 42
+                            & == ( nurl_str_get pt0 0 ) 37
+                            != ( nurl_str_get pt0 - ( nurl_str_len pt0 ) 1 ) 42
                             {  // Anonymous aggregate (`{ i1, i64 }`) OR a named
-                               // non-pointer type (`%Geom` multi-field struct /
-                               // `%Color` enum) — the payload slot holds a
-                               // heap-box pointer to the whole value (see the
-                               // symmetric heap-box in gen_agg_lit's enum-
-                               // construction path). Load the value back
-                               // through it. A pointer payload (`%Ast*`) keeps
-                               // the bitcast-fallthrough below — the slot holds
-                               // the pointer itself, not a box.
+                                // non-pointer type (`%Geom` multi-field struct /
+                                // `%Color` enum) — the payload slot holds a
+                                // heap-box pointer to the whole value (see the
+                                // symmetric heap-box in gen_agg_lit's enum-
+                                // construction path). Load the value back
+                                // through it. A pointer payload (`%Ast*`) keeps
+                                // the bitcast-fallthrough below — the slot holds
+                                // the pointer itself, not a box.
                                 ( nurl_print ` = load ` ) ( nurl_print pt0 )
                                 ( nurl_print `, ptr ` ) ( nurl_print pr0 ) ( nurl_print `\n` )
                             }
@@ -5264,7 +5264,7 @@
     ? & != g_borrowck 0 == g_bck_closure_depth 0 {
         : s cur ( nurl_sym_get g_bck `reads` )
         ( nurl_sym_def g_bck `reads`
-            ? == 0 ( nurl_str_len cur ) name ( nurl_str_cat3 cur ` ` name ) )
+        ? == 0 ( nurl_str_len cur ) name ( nurl_str_cat3 cur ` ` name ) )
     } {}
 }
 
@@ -5278,7 +5278,7 @@
         : s rec ( nurl_str_cat3 body `\t` ( nurl_str_int g_bck_depth ) )
         : s cur ( nurl_sym_get g_bck `stmts` )
         ( nurl_sym_def g_bck `stmts`
-            ? == 0 ( nurl_str_len cur ) rec ( nurl_str_cat3 cur `\n` rec ) )
+        ? == 0 ( nurl_str_len cur ) rec ( nurl_str_cat3 cur `\n` rec ) )
         ( nurl_sym_def g_bck `reads` `` )
     } {}
 }
@@ -5335,8 +5335,8 @@
 // elements) — the receiver is always the first value argument.
 @ bck_is_container_mutator s fname → b {
     ( str_contains_word
-        `vec_push vec_insert vec_remove vec_pop vec_clear vec_set vec_set_len vec_reserve vec_shrink_to_fit vec_extend vec_free vec_free_with vec_swap vec_reverse`
-        fname )
+    `vec_push vec_insert vec_remove vec_pop vec_clear vec_set vec_set_len vec_reserve vec_shrink_to_fit vec_extend vec_free vec_free_with vec_swap vec_reverse`
+    fname )
 }
 
 // Push `cont` onto the iterated-container stack; return the prior
@@ -5382,7 +5382,7 @@
 // immutability of the destination is the heuristic.
 @ bck_let_alias i syms b is_mut i rhs_tt s rhs_val s vt i line → v {
     ? & & & ! is_mut ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt )
-        ! ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) rhs_val )
+    ! ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) rhs_val )
     { ( bck_stash_move rhs_val line ) }
     {}
 }
@@ -5393,7 +5393,7 @@
         : s cur ( nurl_sym_get g_bck `pmoves` )
         : s add ( nurl_str_cat3 name ` ` ( nurl_str_int line ) )
         ( nurl_sym_def g_bck `pmoves`
-            ? == 0 ( nurl_str_len cur ) add ( nurl_str_cat3 cur ` ` add ) )
+        ? == 0 ( nurl_str_len cur ) add ( nurl_str_cat3 cur ` ` add ) )
     } {}
 }
 
@@ -5435,7 +5435,7 @@
 // disarm — their body parser always opens a block, always consuming.
 @ bck_set_block_kind s kind → v {
     ? & != g_borrowck 0 == g_bck_closure_depth 0
-        { ( nurl_sym_def g_bck `pending_kind` kind ) } {}
+    { ( nurl_sym_def g_bck `pending_kind` kind ) } {}
 }
 
 // Block-boundary markers. enter records a `block` row (carrying any
@@ -5446,8 +5446,8 @@
     ? & != g_borrowck 0 == g_bck_closure_depth 0 {
         : s kind ( nurl_sym_get g_bck `pending_kind` )
         ( bck_record `block`
-            ? == 0 ( nurl_str_len kind ) `plain` kind
-            line )
+        ? == 0 ( nurl_str_len kind ) `plain` kind
+        line )
         ( nurl_sym_def g_bck `pending_kind` `` )
         = g_bck_depth + g_bck_depth 1
     } {}
@@ -5555,8 +5555,8 @@
         = rest ( str_skip_word rest )
         ? ( seq ( bck_tok_name tok ) name ) {} {
             = out ? == 0 ( nurl_str_len out )
-                ( nurl_str_cat tok `` )
-                ( nurl_str_cat3 out ` ` tok )
+            ( nurl_str_cat tok `` )
+            ( nurl_str_cat3 out ` ` tok )
         }
     }
     : s nt ( nurl_str_cat3 name `=` ( nurl_str_int val ) )
@@ -5579,8 +5579,8 @@
         : i vj ( bck_join ( bck_tok_val tok ) ( bck_st_get b nm ) )
         : s nt ( nurl_str_cat3 nm `=` ( nurl_str_int vj ) )
         = out ? == 0 ( nurl_str_len out )
-            ( nurl_str_cat nt `` )
-            ( nurl_str_cat3 out ` ` nt )
+        ( nurl_str_cat nt `` )
+        ( nurl_str_cat3 out ` ` nt )
     }
     : ~ s rest2 b
     ~ != 0 ( nurl_str_len rest2 ) {
@@ -5588,8 +5588,8 @@
         = rest2 ( str_skip_word rest2 )
         ? == BCK_UNINIT ( bck_st_get a ( bck_tok_name tok ) ) {
             = out ? == 0 ( nurl_str_len out )
-                ( nurl_str_cat tok `` )
-                ( nurl_str_cat3 out ` ` tok )
+            ( nurl_str_cat tok `` )
+            ( nurl_str_cat3 out ` ` tok )
         } {}
     }
     out
@@ -5632,7 +5632,7 @@
     ~ < pos len {
         ? == ( nurl_str_get txt pos ) 10 {
             ( nurl_sym_def g_bck ( nurl_str_cat `r` ( nurl_str_int n ) )
-                ( nurl_str_slice txt start - pos start ) )
+            ( nurl_str_slice txt start - pos start ) )
             = n + n 1
             = start + pos 1
         } {}
@@ -5640,7 +5640,7 @@
     }
     ? > len start {
         ( nurl_sym_def g_bck ( nurl_str_cat `r` ( nurl_str_int n ) )
-            ( nurl_str_slice txt start - len start ) )
+        ( nurl_str_slice txt start - len start ) )
         = n + n 1
     } {}
     ( nurl_sym_def g_bck `rn` ( nurl_str_int n ) )
@@ -5678,13 +5678,13 @@
     : s ws ( nurl_sym_get g_bck `warnset` )
     ? ( str_contains_word ws tag ) {} {
         ( nurl_sym_def g_bck `warnset`
-            ? == 0 ( nurl_str_len ws ) tag ( nurl_str_cat3 ws ` ` tag ) )
+        ? == 0 ( nurl_str_len ws ) tag ( nurl_str_cat3 ws ` ` tag ) )
         : s ml ( nurl_sym_get g_bck ( nurl_str_cat `ml_` name ) )
         : s loc ( nurl_str_cat3 ( nurl_sym_get g_bck `file` ) `:`
-            ( nurl_str_int useline ) )
+        ( nurl_str_int useline ) )
         : s msg ( nurl_str_cat4 `: error: use of moved value '` name
-            `' - it was consumed at line ` ( nurl_str_cat3 ml
-            ` (pass a fresh value or rebind it before reuse)` `` ) )
+        `' - it was consumed at line ` ( nurl_str_cat3 ml
+        ` (pass a fresh value or rebind it before reuse)` `` ) )
         ( nurl_eprintln ( nurl_str_cat loc msg ) )
         = g_bck_errors + g_bck_errors 1
     }
@@ -5720,7 +5720,7 @@
         // Checked before this row's own writes so a consuming call
         // (move flushed AFTER it) reads its arg while still Owned.
         ( bck_check_moved_reads ( bck_field rec 2 )
-            ( nurl_str_to_int ( bck_field rec 3 ) ) st )
+        ( nurl_str_to_int ( bck_field rec 3 ) ) st )
         ? ( seq kind `let` ) {
             // A `let` (re)binds the name — Owned, reviving a Moved one.
             = st ( bck_st_set st ( bck_field rec 1 ) BCK_OWNED )
@@ -5738,7 +5738,7 @@
             : s mvn ( bck_field rec 1 )
             = st ( bck_st_set st mvn BCK_MOVED )
             ( nurl_sym_def g_bck ( nurl_str_cat `ml_` mvn )
-                ( bck_field rec 3 ) )
+            ( bck_field rec 3 ) )
             = p + p 1
             = done T
         } {}
@@ -5796,9 +5796,9 @@
             : i eb ( bck_match_close j `block` `endblock` )
             : s bk ( bck_field rec 1 )
             ? ( seq bk `cond-then` )
-                { = s_then ( bck_walk_seq + j 1 eb state ) } {}
+            { = s_then ( bck_walk_seq + j 1 eb state ) } {}
             ? ( seq bk `cond-else` )
-                { = s_else ( bck_walk_seq + j 1 eb state ) } {}
+            { = s_else ( bck_walk_seq + j 1 eb state ) } {}
             = j + eb 1
             = adv T
         } {}
@@ -5944,7 +5944,7 @@
 // iterator-invalidation diagnostics.
 @ bck_esc_warn i lex i line s msg → v {
     : s loc ( nurl_str_cat3 ( nurl_lex_filename lex ) `:`
-        ( nurl_str_int line ) )
+    ( nurl_str_int line ) )
     ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` msg ) )
     = g_bck_errors + g_bck_errors 1
 }
@@ -5955,9 +5955,9 @@
 @ bck_esc_let i syms s name i refdepth → v {
     ? == g_borrowck 0 {} {
         ( nurl_sym_def syms ( nurl_str_cat name `__bdepth` )
-            ( nurl_str_int g_bck_depth ) )
+        ( nurl_str_int g_bck_depth ) )
         ( nurl_sym_def syms ( nurl_str_cat name `__refdepth` )
-            ? > refdepth 0 ( nurl_str_int refdepth ) `` )
+        ? > refdepth 0 ( nurl_str_int refdepth ) `` )
     }
 }
 
@@ -5968,7 +5968,7 @@
 @ bck_esc_assign i lex i syms i line s name i refdepth → v {
     ? == g_borrowck 0 {} {
         ( nurl_sym_def syms ( nurl_str_cat name `__refdepth` )
-            ? > refdepth 0 ( nurl_str_int refdepth ) `` )
+        ? > refdepth 0 ( nurl_str_int refdepth ) `` )
         ? > refdepth 0 {
             : s bd ( nurl_sym_get syms ( nurl_str_cat name `__bdepth` ) )
             : i bdv ? == 0 ( nurl_str_len bd ) 1 ( nurl_str_to_int bd )
@@ -6021,9 +6021,9 @@
     ? == tt TT_TILDE ( gen_loop lex syms cg )
     ? == tt TT_SEMICOL ( gen_defer lex syms cg )
     {  // Bare expression in statement position. Record a `call`-shaped
-       // statement only for a parenthesised call `( fn ... )`; `?` / `??`
-       // control flow is captured by the gen_block_ret depth markers
-       // instead, so it is not double-recorded here.
+        // statement only for a parenthesised call `( fn ... )`; `?` / `??`
+        // control flow is captured by the gen_block_ret depth markers
+        // instead, so it is not double-recorded here.
         // Bare-identifier-as-statement (critic v0.9.0 §1): if the leading
         // token is a name registered in syms with NO `__ptr` (i.e. not a
         // local/parameter) and NO `__global` (i.e. not a const / enum
@@ -6036,14 +6036,14 @@
         // shape this matches.
         ? == tt TT_IDENT
         { : s __bc_nm ( nurl_lex_val lex )
-            : s __bc_ty  ( nurl_sym_get syms __bc_nm )
+            : s __bc_ty ( nurl_sym_get syms __bc_nm )
             : s __bc_ptr ( nurl_sym_get syms ( nurl_str_cat __bc_nm `__ptr` ) )
             : s __bc_glb ( nurl_sym_get syms ( nurl_str_cat __bc_nm `__global` ) )
             : s __bc_par ( nurl_sym_get syms ( nurl_str_cat __bc_nm `__param` ) )
             ? & & & != 0 ( nurl_str_len __bc_ty )
-                    == 0 ( nurl_str_len __bc_ptr )
-                    == 0 ( nurl_str_len __bc_glb )
-                    == 0 ( nurl_str_len __bc_par )
+            == 0 ( nurl_str_len __bc_ptr )
+            == 0 ( nurl_str_len __bc_glb )
+            == 0 ( nurl_str_len __bc_par )
             { ( die lex ( nurl_str_cat3
                 `bare identifier '` __bc_nm
                 `' as a statement has no effect — calls in NURL are written '( name args )', not 'name args'. Did you forget the parens?` ) ) }
@@ -6127,7 +6127,7 @@
         // binding — its referent depth, so gen_ret / gen_assign /
         // gen_call reject escapes (docs/GOTCHAS.md item 8).
         ( bck_esc_let syms name ( bck_expr_refdepth syms
-            ? ( is_ident_tok bck_rhs_tt ) bck_rhs_val `` ) )
+        ? ( is_ident_tok bck_rhs_tt ) bck_rhs_val `` ) )
         : s ptr ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print ptr )
         ( nurl_print ` = alloca ` ) ( nurl_print vt ) ( nurl_print `\n` )
@@ -6258,7 +6258,7 @@
                 // Escape analysis: stamp region +
                 // referent depth — see the type-inference path above.
                 ( bck_esc_let syms name ( bck_expr_refdepth syms
-                    ? ( is_ident_tok bck_rhs_tt ) bck_rhs_val `` ) )
+                ? ( is_ident_tok bck_rhs_tt ) bck_rhs_val `` ) )
 
                 // Debug: show types being converted
                 ( nurl_print `  ; DEBUG: val=` ) ( nurl_print val ) ( nurl_print ` vt=` ) ( nurl_print vt ) ( nurl_print ` ptype=` ) ( nurl_print ptype ) ( nurl_print `\n` )
@@ -6376,7 +6376,7 @@
         // reference into a region deeper than `name`'s own, the
         // reference outlives its referent — an escape.
         ( bck_esc_assign lex syms bck_line name ( bck_expr_refdepth syms
-            ? ( is_ident_tok bck_rhs_tt ) bck_rhs_val `` ) )
+        ? ( is_ident_tok bck_rhs_tt ) bck_rhs_val `` ) )
         : b rhs_is_owned_call & lhs_is_owned_str
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
         ? rhs_is_owned_call
@@ -6686,7 +6686,7 @@
         ? != 0 ( nurl_str_len src_id ) {
             : s src_ty ( nurl_sym_get syms src_id )
             : b src_is_param
-                ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) src_id )
+            ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) src_id )
             // Three independent sources of "would auto-drop":
             //   * src_id appears in the per-binding owned-string /
             //     owned-slice / owned-struct-field side-tables (the
@@ -6700,17 +6700,17 @@
             //     ( string_from "..." )` style.
             : s src_ptr ( nurl_sym_get syms ( nurl_str_cat src_id `__ptr` ) )
             : b owned_slc
-                ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) src_id )
+            ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) src_id )
             : b owned_str & != 0 ( nurl_str_len src_ptr )
-                ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) src_ptr )
+            ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) src_ptr )
             : b owned_sf & != 0 ( nurl_str_len src_ptr )
-                ( str_contains_word ( nurl_sym_get syms `__owned_struct_fields__` ) src_ptr )
+            ( str_contains_word ( nurl_sym_get syms `__owned_struct_fields__` ) src_ptr )
             : b heap_binding & ! src_is_param ( bck_is_heap_lty src_ty )
             ? | | | owned_str owned_slc owned_sf heap_binding {
                 ( bck_esc_warn lex ( nurl_lex_line lex ) ( nurl_str_cat3
-                  `'# `
-                  ( nurl_str_cat3 dt ` ` src_id )
-                  `' casts an owned binding to a raw pointer; the binding is auto-dropped at scope exit and the pointer will outlive it. Take a '*T' parameter or copy the bytes before the binding is dropped` ) )
+                `'# `
+                ( nurl_str_cat3 dt ` ` src_id )
+                `' casts an owned binding to a raw pointer; the binding is auto-dropped at scope exit and the pointer will outlive it. Take a '*T' parameter or copy the bytes before the binding is dropped` ) )
             } {}
         } {}
     } {}
@@ -6758,7 +6758,7 @@
     { : s sname_c ( nurl_str_slice st 1 - stlen 1 )
         : s is_enum_c ( nurl_sym_get syms ( nurl_str_cat sname_c `__variants` ) )
         : s f0t ? != 0 ( nurl_str_len is_enum_c ) `i64`
-            ( nurl_sym_get syms ( nurl_str_cat3 sname_c `__idx_0` `__type` ) )
+        ( nurl_sym_get syms ( nurl_str_cat3 sname_c `__idx_0` `__type` ) )
         ? == 0 ( nurl_str_len f0t )
         { ( die lex ( nurl_str_cat3 `cannot cast '` st `' to an integer` ) ) }
         {}
@@ -7212,7 +7212,7 @@
         // gen_agg_lit just advertised one, or the field named a binding
         // tagged `<name>__refdepth`. Carry up the deepest such depth.
         : i fld_refdepth ( bck_expr_refdepth syms
-            ( nurl_sym_get syms `__last_ident_name__` ) )
+        ( nurl_sym_get syms `__last_ident_name__` ) )
         ? > fld_refdepth agg_refdepth { = agg_refdepth fld_refdepth } {}
         : s ret_owned ( nurl_sym_get syms `__last_call_ret_owned__` )
         : b is_str_fresh & ( seq fty `i8*` ) ( seq ret_owned `str` )
@@ -7478,7 +7478,7 @@
                         = actual_fty `ptr`
                     }
                     ? & == ( nurl_str_get fty 0 ) 37
-                        != ( nurl_str_get fty - ( nurl_str_len fty ) 1 ) 42
+                    != ( nurl_str_get fty - ( nurl_str_len fty ) 1 ) 42
                     {  // Named NON-POINTER payload (`%Geom`, `%Color`, `%Vec__T`).
                         // A pointer payload (`%Ast*`) is left untouched — the
                         // pointer goes straight into the enum's ptr slot.
@@ -7494,8 +7494,8 @@
                         : s vlist3 ( nurl_sym_get syms ( nurl_str_cat sname3 `__variants` ) )
                         : s f0_ty3 ( nurl_sym_get syms ( nurl_str_cat3 sname3 `__idx_0` `__type` ) )
                         : b is_handle & & == 0 ( nurl_str_len vlist3 )
-                            != 0 ( nurl_str_len f0_ty3 )
-                            == ( nurl_str_get f0_ty3 - ( nurl_str_len f0_ty3 ) 1 ) 42
+                        != 0 ( nurl_str_len f0_ty3 )
+                        == ( nurl_str_get f0_ty3 - ( nurl_str_len f0_ty3 ) 1 ) 42
                         ? is_handle
                         { : s xv3 ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print xv3 )
@@ -7552,9 +7552,9 @@
         // this is skipped. Pointer / float / struct-typed field
         // mismatches are left for an explicit `#`-cast.
         : s decl_fty ? != 0 ( nurl_str_len cur_sname )
-            ( nurl_sym_get syms ( nurl_str_cat3 cur_sname
-                ( nurl_str_cat `__idx_` idx_str ) `__type` ) )
-            ``
+        ( nurl_sym_get syms ( nurl_str_cat3 cur_sname
+        ( nurl_str_cat `__idx_` idx_str ) `__type` ) )
+        ``
         : i decl_iw ( int_width decl_fty )
         : i have_iw ( int_width actual_fty )
         ? & & > decl_iw 0 > have_iw 0 != decl_iw have_iw
@@ -7597,7 +7597,7 @@
     // Composes through nesting: an outer aggregate's field loop sees
     // an inner aggregate's published depth the same way.
     ( nurl_sym_def syms `__last_expr_refdepth__`
-        ? > agg_refdepth 0 ( nurl_str_int agg_refdepth ) `` )
+    ? > agg_refdepth 0 ( nurl_str_int agg_refdepth ) `` )
     result
 }
 
@@ -7766,16 +7766,16 @@
             ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
             ^ r }
         {  // Single-pointer-handle struct (`{ s ctl }`-shape — Vec[A],
-           // String, Channel[A], Thread, ArenaImpl). When a Result Ok-arm
-           // extract returns the raw i64 payload and the LHS is the
-           // handle struct itself, wrap via inttoptr + insertvalue at
-           // field 0. Without this, code that does
-           //   `: ( Vec u ) v <result-ok-payload>`
-           // emits `store %Vec__i8 i64`, an IR type mismatch.
-           // Skip if the struct has more than one field (multi-field
-           // Result T is heap-boxed at construction so the i64 slot is
-           // a heap pointer, not the f0 field value) — those go through
-           // the gen_match reconstruction path above.
+            // String, Channel[A], Thread, ArenaImpl). When a Result Ok-arm
+            // extract returns the raw i64 payload and the LHS is the
+            // handle struct itself, wrap via inttoptr + insertvalue at
+            // field 0. Without this, code that does
+            //   `: ( Vec u ) v <result-ok-payload>`
+            // emits `store %Vec__i8 i64`, an IR type mismatch.
+            // Skip if the struct has more than one field (multi-field
+            // Result T is heap-boxed at construction so the i64 slot is
+            // a heap pointer, not the f0 field value) — those go through
+            // the gen_match reconstruction path above.
             : s f0_ty ( nurl_sym_get syms ( nurl_str_cat3 tname `__idx_0` `__type` ) )
             : s f1_ty ( nurl_sym_get syms ( nurl_str_cat3 tname `__idx_1` `__type` ) )
             : b is_single_handle & & != 0 ( nurl_str_len f0_ty )
@@ -9053,12 +9053,12 @@
 @ compute_generic_inout_sink s fname → v {
     : s gsrc ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__gsrc` ) )
     ? != 0 ( nurl_str_len gsrc )
-    { // Substitute every type parameter with a concrete primitive (`i`)
-      // before parsing. A bare tparam letter such as `T` or `F` lexes
-      // as TT_BOOL, which parse_type rejects with `expected type`; the
-      // real instantiation path dodges this because emit_one_instantiation
-      // substitutes the tparams away first. The substitution is
-      // type-irrelevant here — only parameter POSITIONS are read.
+    {  // Substitute every type parameter with a concrete primitive (`i`)
+        // before parsing. A bare tparam letter such as `T` or `F` lexes
+        // as TT_BOOL, which parse_type rejects with `expected type`; the
+        // real instantiation path dodges this because emit_one_instantiation
+        // substitutes the tparams away first. The substitution is
+        // type-irrelevant here — only parameter POSITIONS are read.
         : ~ s probe gsrc
         : ~ s tpr ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__tparams` ) )
         ~ != 0 ( nurl_str_len tpr )
@@ -9073,7 +9073,7 @@
         // Walk the parameter region only — stop at `→` (or, defensively,
         // at the body `{` if a malformed template lacks the arrow).
         ~ & & != ( nurl_lex_type lexp ) TT_ARROW != ( nurl_lex_type lexp ) TT_EOF
-                != ( nurl_lex_type lexp ) TT_LBRACE
+        != ( nurl_lex_type lexp ) TT_LBRACE
         { : i mk ( parse_param_marker lexp )
             ? == mk 1
             { = ia ? == 0 ( nurl_str_len ia )
@@ -9107,7 +9107,7 @@
     // of the synthetic `<generic>` lex emit_one_instantiation uses.
     : i src_line ( nurl_lex_line lex )
     ( nurl_sym_def g_generic_syms
-        ( nurl_str_cat fname `__src_line` ) ( nurl_str_int src_line ) )
+    ( nurl_str_cat fname `__src_line` ) ( nurl_str_int src_line ) )
     ( expect lex TT_LBRACK )
     : s tparams ``
     ~ != ( nurl_lex_type lex ) TT_RBRACK {
@@ -9404,8 +9404,8 @@
     // so the mono's subprogram points there instead of the synthetic
     // `<generic>:1` of the inflated source.
     : i fn_src_line ? != g_dbg_enabled 0
-        ? != g_dbg_override_line 0 g_dbg_override_line ( nurl_lex_line lex )
-        0
+    ? != g_dbg_override_line 0 g_dbg_override_line ( nurl_lex_line lex )
+    0
     ( nurl_sym_push syms )
     ( nurl_sym_def syms `__owned_slices__` `` )
     ( nurl_sym_def syms `__last_ident_name__` `` )
@@ -9762,8 +9762,8 @@
         ( nurl_sym_def syms `__fn_param_names__` name_next )
         // An `inout` parameter's LLVM type is a pointer to T.
         : s entry ? == pconv 1
-            ( nurl_str_cat4 lt `* %` pname `` )
-            ( nurl_str_cat3 lt ` %` pname )
+        ( nurl_str_cat4 lt `* %` pname `` )
+        ( nurl_str_cat3 lt ` %` pname )
         ? == pct 0
         ( nurl_set_last_type entry )
         ( nurl_set_last_type ( nurl_str_cat3 cur_params `, ` entry ) )
@@ -10018,9 +10018,9 @@
         // Strip a leading `lib` prefix if present (`libcurl` → `curl`).
         : ~ s norm lib
         ? & >= llen 3
-          & == ( nurl_str_get lib 0 ) 108
-          & == ( nurl_str_get lib 1 ) 105
-            == ( nurl_str_get lib 2 ) 98
+        & == ( nurl_str_get lib 0 ) 108
+        & == ( nurl_str_get lib 1 ) 105
+        == ( nurl_str_get lib 2 ) 98
         { = norm ( nurl_str_slice lib 3 - llen 3 ) } {}
         // Whitelist: always-linked system libs (`c`/`m`/`pthread`/`dl`) plus
         // NURL-shipped FFI bridges (`canvas`, `audio`) whose backing C lives
@@ -10034,8 +10034,8 @@
             : s sentinel ( nurl_str_cat `stdlib/runtime.` norm )
             ? == ( nurl_file_exists sentinel ) 1 {} {
                 : s msg ( nurl_str_cat4
-                    `FFI library '` lib `' is required but no build-time sentinel '`
-                    ( nurl_str_cat sentinel `' found - install lib` ) )
+                `FFI library '` lib `' is required but no build-time sentinel '`
+                ( nurl_str_cat sentinel `' found - install lib` ) )
                 : s msg2 ( nurl_str_cat3 msg norm `-dev (or equivalent) and run build.sh again` )
                 ( die lex msg2 )
             }
@@ -10249,8 +10249,8 @@
                         }
                         { ? & == depth 0 == tt TT_PUB
                             {  // `pub` prefix on any decl — skip the keyword,
-                               // the following decl will be picked up by its
-                               // own branch on the next iteration.
+                                // the following decl will be picked up by its
+                                // own branch on the next iteration.
                                 ( nurl_lex_advance lx )
                             }
                             { ? & == depth 0 == tt TT_COLON
@@ -10302,7 +10302,7 @@
                                         }
                                         { ? == tt2 TT_IDENT
                                             {  // `: Name { ... }` (struct) OR
-                                               // `: Name [tparams] { ... }` (generic struct).
+                                                // `: Name [tparams] { ... }` (generic struct).
                                                 : s sn ( nurl_lex_val lx )
                                                 = names ? == 0 ( nurl_str_len names ) sn ( nurl_str_cat3 names ` ` sn )
                                                 ( nurl_lex_advance lx )
@@ -10456,9 +10456,9 @@
     // site so any diagnostic emitted while re-parsing the substituted
     // body points the user at THEIR code, not the opaque `<generic>`.
     : s synth_name ? & != 0 ( nurl_str_len caller_file ) != 0 ( nurl_str_len caller_line )
-        ( nurl_str_cat3 `<generic ` mangled
-            ( nurl_str_cat4 ` from ` caller_file `:` ( nurl_str_cat caller_line `>` ) ) )
-        ( nurl_str_cat3 `<generic ` mangled `>` )
+    ( nurl_str_cat3 `<generic ` mangled
+    ( nurl_str_cat4 ` from ` caller_file `:` ( nurl_str_cat caller_line `>` ) ) )
+    ( nurl_str_cat3 `<generic ` mangled `>` )
     : i lex2 ( nurl_lex_new full_src synth_name )
     // DWARF Phase 7: stash the original generic-decl line so
     // gen_fn_decl_concrete points this mono's !DISubprogram at the
@@ -11369,8 +11369,8 @@
 // check, never a wrong one.
 @ scan_skip_type i lex → i {
     : i tt ( nurl_lex_type lex )
-    ? == tt TT_STAR   { ( nurl_lex_advance lex ) ^ ( scan_skip_type lex ) } {}
-    ? == tt TT_QUEST  { ( nurl_lex_advance lex ) ^ ( scan_skip_type lex ) } {}
+    ? == tt TT_STAR { ( nurl_lex_advance lex ) ^ ( scan_skip_type lex ) } {}
+    ? == tt TT_QUEST { ( nurl_lex_advance lex ) ^ ( scan_skip_type lex ) } {}
     ? == tt TT_LBRACK { ( nurl_lex_advance lex ) ^ ( scan_skip_type lex ) } {}
     ? == tt TT_BANG
     { ( nurl_lex_advance lex )
@@ -11401,191 +11401,191 @@
         { ? == ( nurl_lex_type lex ) TT_RBRACE
             { = bdepth - bdepth 1 ( nurl_lex_advance lex ) }
             {
-        ? != bdepth 0
-        { ( nurl_lex_advance lex ) }
-        {
-        // Grammar v2.0: a top-level decl may be prefixed by `pub` to
-        // mark it public. The flag is recorded in g_pending_pub and
-        // consumed by vis_record_fn / vis_take_pending_pub at the
-        // matching @-decl. Pre-step BEFORE reading tt so the dispatch
-        // ternary chain below sees the post-pub token.
-        ? == ( nurl_lex_type lex ) TT_PUB
-        { ( nurl_lex_advance lex )
-            = g_pending_pub 1
-        }
-        {}
-        : i tt ( nurl_lex_type lex )
-        ? == tt TT_AT
-        { ( nurl_lex_advance lex )
-            ? ( is_ident_tok ( nurl_lex_type lex ) )
-            { : s fname ( nurl_lex_val lex )
-                ( nurl_lex_advance lex )
-                // Grammar v2.0: record per-fn source-file origin and (if the
-                // preceding token was `pub`) the public flag. Strict-mode for
-                // the current file flips to "1" the first time a pub @ is
-                // seen, which gen_call later consults to enforce visibility.
-                ( vis_record_fn fname ( vis_take_pending_pub ) )
-                // Generic function [T U ...]: skip type params, mark as generic.
-                // Slice type param [type name]: treat like regular params (not generic).
-                // Must match the disambiguation in gen_fn_decl: accept IDENT *or*
-                // BOOL for the param name (the bare letter `T` lexes as TT_BOOL),
-                // and require ']' immediately after 1 or 2 param names.
-                : b at_lbrack == ( nurl_lex_type lex ) TT_LBRACK
-                : i p1s ? at_lbrack ( nurl_lex_peek_type lex ) 0
-                : i p2s ? at_lbrack ( nurl_lex_peek2_type lex ) 0
-                : i p3s ? at_lbrack ( nurl_lex_peek3_type lex ) 0
-                : b n1s | == p1s TT_IDENT == p1s TT_BOOL
-                : b n2s | == p2s TT_IDENT == p2s TT_BOOL
-                : b n3s | == p3s TT_IDENT == p3s TT_BOOL
-                : b gen1s & n1s == p2s TT_RBRACK
-                : b gen2s & & n1s n2s == p3s TT_RBRACK
-                : i p4s ? & at_lbrack & & n1s n2s n3s ( nurl_lex_peek4_type lex ) 0
-                : b gen3s & & & n1s n2s n3s == p4s TT_RBRACK
-                ? & at_lbrack | | gen1s gen2s gen3s
-                { ~ != ( nurl_lex_type lex ) TT_RBRACK { ( nurl_lex_advance lex ) }
-                    ( nurl_lex_advance lex )  // consume ']'
-                    ( nurl_sym_def syms ( nurl_str_cat fname `__generic` ) `1` )
-                    // Scan the parameter region (from here to the
-                    // body `{`) for the `inout` marker, just
-                    // as the non-generic branch below does. `inout` is
-                    // banned as a parameter NAME so a bare `inout` token
-                    // here is exact. This lets a forward call to a
-                    // generic `inout` function be rejected cleanly — the
-                    // index set itself is computed by
-                    // compute_generic_inout_sink at gen_generic_fn_store.
-                    : ~ b g_saw_inout F
-                    ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF
-                    { ? & ( is_ident_tok ( nurl_lex_type lex ) )
-                          ( seq ( nurl_lex_val lex ) `inout` )
-                        { = g_saw_inout T }
-                        {}
-                        ( nurl_lex_advance lex ) }
-                    ? g_saw_inout
-                    { ( nurl_sym_def syms ( nurl_str_cat fname `__has_inout` ) `1` ) }
-                    {}
-                    ( skip_balanced lex )
-                }
-                { // Walk the parameter region counting parameters —
-                  // one `[marker] TYPE
-                  // NAME` triple each, the TYPE skipped purely
-                  // lexically via scan_skip_type — and note whether the
-                  // `inout` marker appears. `inout` is banned as a
-                  // parameter NAME (see gen_fn_param) so a bare `inout`
-                  // here is exact: `<fname>__has_inout` lets a forward
-                  // call site reject calling an `inout` function before
-                  // its definition is compiled. If the walk meets a
-                  // shape scan_skip_type can't classify it abandons the
-                  // count (pc_ok → F) and blind-advances the rest, so
-                  // `<fname>__arity` is simply not recorded — a missed
-                  // arity check, never a wrong one.
-                    : ~ b saw_inout F
-                    : ~ i pcount 0
-                    : ~ b pc_ok T
-                    ~ & & pc_ok != ( nurl_lex_type lex ) TT_ARROW
-                          != ( nurl_lex_type lex ) TT_EOF
-                    { ? & ( is_ident_tok ( nurl_lex_type lex ) )
-                          ( __is_param_marker_word ( nurl_lex_val lex ) )
-                        { ? ( seq ( nurl_lex_val lex ) `inout` )
-                            { = saw_inout T } {}
-                            ( nurl_lex_advance lex ) }
-                        {}
-                        ? == 0 ( scan_skip_type lex )
-                        { = pc_ok F }
-                        { ? ( is_ident_tok ( nurl_lex_type lex ) )
-                            { ( nurl_lex_advance lex ) = pcount + pcount 1 }
-                            { = pc_ok F } } }
-                    // If the count was abandoned mid-region, advance the
-                    // rest blind so the `->` / ret-type handling still
-                    // runs (the arity entry is just not written).
-                    ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF
-                    { ( nurl_lex_advance lex ) }
-                    ? saw_inout
-                    { ( nurl_sym_def syms ( nurl_str_cat fname `__has_inout` ) `1` ) }
-                    {}
-                    ? pc_ok
-                    { : s ar_key ( nurl_str_cat fname `__arity` )
-                        : s ar_prev ( nurl_sym_get syms ar_key )
-                        : s ar_new ( nurl_str_int pcount )
-                        // Two definitions of the same name with
-                        // different parameter counts (a latent stdlib
-                        // collision) — neither arity can be trusted at
-                        // a call site, so mark it ambiguous (`?`) and
-                        // let gen_call skip the check rather than
-                        // blame an innocent call.
-                        ? & != 0 ( nurl_str_len ar_prev ) ! ( seq ar_prev ar_new )
-                        { ( nurl_sym_def syms ar_key `?` ) }
-                        { ( nurl_sym_def syms ar_key ar_new ) } }
-                    {}
-                    ? == ( nurl_lex_type lex ) TT_ARROW
+                ? != bdepth 0
+                { ( nurl_lex_advance lex ) }
+                {
+                    // Grammar v2.0: a top-level decl may be prefixed by `pub` to
+                    // mark it public. The flag is recorded in g_pending_pub and
+                    // consumed by vis_record_fn / vis_take_pending_pub at the
+                    // matching @-decl. Pre-step BEFORE reading tt so the dispatch
+                    // ternary chain below sees the post-pub token.
+                    ? == ( nurl_lex_type lex ) TT_PUB
                     { ( nurl_lex_advance lex )
-                        : s ret_ty ( parse_type lex )
-                        ( nurl_sym_def syms fname ret_ty )
+                        = g_pending_pub 1
                     }
                     {}
-                    ( skip_balanced lex )
-                }
-            }
-            { ( skip_balanced lex ) }
-        }
-        // import_decl: $ `path` alias?  — scan the imported file too
-        ? == tt TT_DOLLAR
-        { ( nurl_lex_advance lex )  // skip '$'
-            : s path ( __norm_import_path ( nurl_lex_val lex ) )
-            ( nurl_lex_advance lex )  // skip path STR
-            : s alias ``
-            ? ( is_ident_tok ( nurl_lex_type lex ) )
-            { = alias ( nurl_lex_val lex )
-                ( nurl_lex_advance lex )
-            }
-            {}
-            : s scanned ( nurl_sym_get syms `__scanned_files__` )
-            ? ( str_contains_word scanned path )
-            {}
-            { : s new_scanned ? == 0 ( nurl_str_len scanned )
-                path
-                ( nurl_str_cat3 scanned ` ` path )
-                ( nurl_sym_def syms `__scanned_files__` new_scanned )
-                : s src2 ( nurl_read_file path )
-                : s eff_src2 ? != 0 ( nurl_str_len alias )
-                { : s names ( collect_alias_targets src2 path )
-                    ( alias_rewrite_source src2 names ( nurl_str_cat alias `__` ) )
-                }
-                src2
-                : i lex2 ( nurl_lex_new eff_src2 path )
-                // Save / restore the current source-file across the nested
-                // scan so vis_record_fn attributes decls in the imported
-                // file to that file's path, not the importer's.
-                : s saved_sf ( vis_current_src_file )
-                ( vis_set_current_src_file path )
-                ( scan_fn_sigs lex2 syms )
-                ( vis_set_current_src_file saved_sf )
-            }
-        }
+                    : i tt ( nurl_lex_type lex )
+                    ? == tt TT_AT
+                    { ( nurl_lex_advance lex )
+                        ? ( is_ident_tok ( nurl_lex_type lex ) )
+                        { : s fname ( nurl_lex_val lex )
+                            ( nurl_lex_advance lex )
+                            // Grammar v2.0: record per-fn source-file origin and (if the
+                            // preceding token was `pub`) the public flag. Strict-mode for
+                            // the current file flips to "1" the first time a pub @ is
+                            // seen, which gen_call later consults to enforce visibility.
+                            ( vis_record_fn fname ( vis_take_pending_pub ) )
+                            // Generic function [T U ...]: skip type params, mark as generic.
+                            // Slice type param [type name]: treat like regular params (not generic).
+                            // Must match the disambiguation in gen_fn_decl: accept IDENT *or*
+                            // BOOL for the param name (the bare letter `T` lexes as TT_BOOL),
+                            // and require ']' immediately after 1 or 2 param names.
+                            : b at_lbrack == ( nurl_lex_type lex ) TT_LBRACK
+                            : i p1s ? at_lbrack ( nurl_lex_peek_type lex ) 0
+                            : i p2s ? at_lbrack ( nurl_lex_peek2_type lex ) 0
+                            : i p3s ? at_lbrack ( nurl_lex_peek3_type lex ) 0
+                            : b n1s | == p1s TT_IDENT == p1s TT_BOOL
+                            : b n2s | == p2s TT_IDENT == p2s TT_BOOL
+                            : b n3s | == p3s TT_IDENT == p3s TT_BOOL
+                            : b gen1s & n1s == p2s TT_RBRACK
+                            : b gen2s & & n1s n2s == p3s TT_RBRACK
+                            : i p4s ? & at_lbrack & & n1s n2s n3s ( nurl_lex_peek4_type lex ) 0
+                            : b gen3s & & & n1s n2s n3s == p4s TT_RBRACK
+                            ? & at_lbrack | | gen1s gen2s gen3s
+                            { ~ != ( nurl_lex_type lex ) TT_RBRACK { ( nurl_lex_advance lex ) }
+                                ( nurl_lex_advance lex )  // consume ']'
+                                ( nurl_sym_def syms ( nurl_str_cat fname `__generic` ) `1` )
+                                // Scan the parameter region (from here to the
+                                // body `{`) for the `inout` marker, just
+                                // as the non-generic branch below does. `inout` is
+                                // banned as a parameter NAME so a bare `inout` token
+                                // here is exact. This lets a forward call to a
+                                // generic `inout` function be rejected cleanly — the
+                                // index set itself is computed by
+                                // compute_generic_inout_sink at gen_generic_fn_store.
+                                : ~ b g_saw_inout F
+                                ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF
+                                { ? & ( is_ident_tok ( nurl_lex_type lex ) )
+                                    ( seq ( nurl_lex_val lex ) `inout` )
+                                    { = g_saw_inout T }
+                                    {}
+                                    ( nurl_lex_advance lex ) }
+                                ? g_saw_inout
+                                { ( nurl_sym_def syms ( nurl_str_cat fname `__has_inout` ) `1` ) }
+                                {}
+                                ( skip_balanced lex )
+                            }
+                            {  // Walk the parameter region counting parameters —
+                                // one `[marker] TYPE
+                                // NAME` triple each, the TYPE skipped purely
+                                // lexically via scan_skip_type — and note whether the
+                                // `inout` marker appears. `inout` is banned as a
+                                // parameter NAME (see gen_fn_param) so a bare `inout`
+                                // here is exact: `<fname>__has_inout` lets a forward
+                                // call site reject calling an `inout` function before
+                                // its definition is compiled. If the walk meets a
+                                // shape scan_skip_type can't classify it abandons the
+                                // count (pc_ok → F) and blind-advances the rest, so
+                                // `<fname>__arity` is simply not recorded — a missed
+                                // arity check, never a wrong one.
+                                : ~ b saw_inout F
+                                : ~ i pcount 0
+                                : ~ b pc_ok T
+                                ~ & & pc_ok != ( nurl_lex_type lex ) TT_ARROW
+                                != ( nurl_lex_type lex ) TT_EOF
+                                { ? & ( is_ident_tok ( nurl_lex_type lex ) )
+                                    ( __is_param_marker_word ( nurl_lex_val lex ) )
+                                    { ? ( seq ( nurl_lex_val lex ) `inout` )
+                                        { = saw_inout T } {}
+                                        ( nurl_lex_advance lex ) }
+                                    {}
+                                    ? == 0 ( scan_skip_type lex )
+                                    { = pc_ok F }
+                                    { ? ( is_ident_tok ( nurl_lex_type lex ) )
+                                        { ( nurl_lex_advance lex ) = pcount + pcount 1 }
+                                        { = pc_ok F } } }
+                                // If the count was abandoned mid-region, advance the
+                                // rest blind so the `->` / ret-type handling still
+                                // runs (the arity entry is just not written).
+                                ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF
+                                { ( nurl_lex_advance lex ) }
+                                ? saw_inout
+                                { ( nurl_sym_def syms ( nurl_str_cat fname `__has_inout` ) `1` ) }
+                                {}
+                                ? pc_ok
+                                { : s ar_key ( nurl_str_cat fname `__arity` )
+                                    : s ar_prev ( nurl_sym_get syms ar_key )
+                                    : s ar_new ( nurl_str_int pcount )
+                                    // Two definitions of the same name with
+                                    // different parameter counts (a latent stdlib
+                                    // collision) — neither arity can be trusted at
+                                    // a call site, so mark it ambiguous (`?`) and
+                                    // let gen_call skip the check rather than
+                                    // blame an innocent call.
+                                    ? & != 0 ( nurl_str_len ar_prev ) ! ( seq ar_prev ar_new )
+                                    { ( nurl_sym_def syms ar_key `?` ) }
+                                    { ( nurl_sym_def syms ar_key ar_new ) } }
+                                {}
+                                ? == ( nurl_lex_type lex ) TT_ARROW
+                                { ( nurl_lex_advance lex )
+                                    : s ret_ty ( parse_type lex )
+                                    ( nurl_sym_def syms fname ret_ty )
+                                }
+                                {}
+                                ( skip_balanced lex )
+                            }
+                        }
+                        { ( skip_balanced lex ) }
+                    }
+                    // import_decl: $ `path` alias?  — scan the imported file too
+                    ? == tt TT_DOLLAR
+                    { ( nurl_lex_advance lex )  // skip '$'
+                        : s path ( __norm_import_path ( nurl_lex_val lex ) )
+                        ( nurl_lex_advance lex )  // skip path STR
+                        : s alias ``
+                        ? ( is_ident_tok ( nurl_lex_type lex ) )
+                        { = alias ( nurl_lex_val lex )
+                            ( nurl_lex_advance lex )
+                        }
+                        {}
+                        : s scanned ( nurl_sym_get syms `__scanned_files__` )
+                        ? ( str_contains_word scanned path )
+                        {}
+                        { : s new_scanned ? == 0 ( nurl_str_len scanned )
+                            path
+                            ( nurl_str_cat3 scanned ` ` path )
+                            ( nurl_sym_def syms `__scanned_files__` new_scanned )
+                            : s src2 ( nurl_read_file path )
+                            : s eff_src2 ? != 0 ( nurl_str_len alias )
+                            { : s names ( collect_alias_targets src2 path )
+                                ( alias_rewrite_source src2 names ( nurl_str_cat alias `__` ) )
+                            }
+                            src2
+                            : i lex2 ( nurl_lex_new eff_src2 path )
+                            // Save / restore the current source-file across the nested
+                            // scan so vis_record_fn attributes decls in the imported
+                            // file to that file's path, not the importer's.
+                            : s saved_sf ( vis_current_src_file )
+                            ( vis_set_current_src_file path )
+                            ( scan_fn_sigs lex2 syms )
+                            ( vis_set_current_src_file saved_sf )
+                        }
+                    }
 
-        // ffi_decl: & STR @ name params → type  (no body block to skip)
-        ? == tt TT_AMP
-        { ( nurl_lex_advance lex )  // skip '&'
-            ( nurl_lex_advance lex )  // skip library STR
-            ( nurl_lex_advance lex )  // skip '@'
-            ? ( is_ident_tok ( nurl_lex_type lex ) )
-            { : s fname ( nurl_lex_val lex )
-                ( nurl_lex_advance lex )
-                ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF
-                { ( nurl_lex_advance lex ) }
-                ? == ( nurl_lex_type lex ) TT_ARROW
-                { ( nurl_lex_advance lex )
-                    : s ret_ty ( parse_type lex )
-                    ( nurl_sym_def syms fname ret_ty )
-                }
-                {}
-            }
-            {}
-        }
-        { ? == tt TT_PERCENT
-            { ( scan_impl_decl lex syms ) }
-            { ( nurl_lex_advance lex ) }
-        }
-        } } }
+                    // ffi_decl: & STR @ name params → type  (no body block to skip)
+                    ? == tt TT_AMP
+                    { ( nurl_lex_advance lex )  // skip '&'
+                        ( nurl_lex_advance lex )  // skip library STR
+                        ( nurl_lex_advance lex )  // skip '@'
+                        ? ( is_ident_tok ( nurl_lex_type lex ) )
+                        { : s fname ( nurl_lex_val lex )
+                            ( nurl_lex_advance lex )
+                            ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF
+                            { ( nurl_lex_advance lex ) }
+                            ? == ( nurl_lex_type lex ) TT_ARROW
+                            { ( nurl_lex_advance lex )
+                                : s ret_ty ( parse_type lex )
+                                ( nurl_sym_def syms fname ret_ty )
+                            }
+                            {}
+                        }
+                        {}
+                    }
+                    { ? == tt TT_PERCENT
+                        { ( scan_impl_decl lex syms ) }
+                        { ( nurl_lex_advance lex ) }
+                    }
+                } } }
     }
 }
 
@@ -11614,8 +11614,8 @@
             { = depth - depth 1 ( nurl_lex_advance lex ) }
             { ? & == depth 0 == tt TT_DOLLAR
                 {  // Nested import: register its type names too, applying
-                   // alias rewriting so an aliased import's types resolve
-                   // under their `alias__` prefix (mirrors scan_fn_sigs).
+                    // alias rewriting so an aliased import's types resolve
+                    // under their `alias__` prefix (mirrors scan_fn_sigs).
                     ( nurl_lex_advance lex )
                     ? == ( nurl_lex_type lex ) TT_STR
                     { : s path ( __norm_import_path ( nurl_lex_val lex ) )
@@ -11654,7 +11654,7 @@
                             {}
                         }
                         {  // struct iff a pure IDENT is immediately followed
-                           // by `{` (struct body) or `[` (generic params).
+                            // by `{` (struct body) or `[` (generic params).
                             ? == ( nurl_lex_type lex ) TT_IDENT
                             { : i nxt ( nurl_lex_peek_type lex )
                                 ? | == nxt TT_LBRACE == nxt TT_LBRACK
@@ -11785,6 +11785,6 @@
     { ( nurl_eprintln ( nurl_str_cat3 `error: compilation aborted - `
         ( nurl_str_int g_bck_errors )
         ` borrow-checker violations (re-run with --no-borrowck to bypass)` ) )
-      ( nurl_exit 1 ) }
+        ( nurl_exit 1 ) }
     {}
 }

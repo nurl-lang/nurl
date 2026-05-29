@@ -168,10 +168,10 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 // follow-up "<source>" and "<pad>^" decoration lines or anything that
 // doesn't match the prefix shape.
 
-@ __parse_diag_line s line → ? Json {
+@ __parse_diag_line s line → ?Json {
     : i n ( nurl_str_len line )
     // Must contain at least two ':' separators; brute-force scan.
-    : i lc1 ( __index_of_byte line 0 n 58 )    // first ':'
+    : i lc1 ( __index_of_byte line 0 n 58 )  // first ':'
     ? < lc1 0 { ^ @ ?Json { F ( json_null ) } } {}
     : i lc2 ( __index_of_byte line + lc1 1 n 58 )
     ? < lc2 0 { ^ @ ?Json { F ( json_null ) } } {}
@@ -183,14 +183,14 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     : !i ParseErr lr ( string_to_int ls )
     ( string_free ls )
     : i ln 0
-    : b ok_ln ?? lr { T n → { = ln n  T } F _ → F }
+    : b ok_ln ?? lr { T n → { = ln n T } F _ → F }
     ? ! ok_ln { ^ @ ?Json { F ( json_null ) } } {}
 
     : String cs ( __substr line + lc2 1 lc3 )
     : !i ParseErr cr ( string_to_int cs )
     ( string_free cs )
     : i cn 0
-    : b ok_cn ?? cr { T n → { = cn n  T } F _ → F }
+    : b ok_cn ?? cr { T n → { = cn n T } F _ → F }
     ? ! ok_cn { ^ @ ?Json { F ( json_null ) } } {}
 
     // Message starts after the third ':' plus a space (skip leading
@@ -227,13 +227,13 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 @ __uri_to_path s uri → String {
     : i n ( nurl_str_len uri )
     ? & >= n 7
-      & == ( nurl_str_get uri 0 ) 102
-      & == ( nurl_str_get uri 1 ) 105
-      & == ( nurl_str_get uri 2 ) 108
-      & == ( nurl_str_get uri 3 ) 101
-      & == ( nurl_str_get uri 4 ) 58
-      & == ( nurl_str_get uri 5 ) 47
-        == ( nurl_str_get uri 6 ) 47
+    & == ( nurl_str_get uri 0 ) 102
+    & == ( nurl_str_get uri 1 ) 105
+    & == ( nurl_str_get uri 2 ) 108
+    & == ( nurl_str_get uri 3 ) 101
+    & == ( nurl_str_get uri 4 ) 58
+    & == ( nurl_str_get uri 5 ) 47
+    == ( nurl_str_get uri 6 ) 47
     {
         // Three slashes total: `file:///`. Skip the first two only,
         // keeping the third as the absolute-path leading slash.
@@ -483,29 +483,29 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     : i n ( nurl_str_len content )
     : ~ i pos 0
     : ~ i line 1
-    : ~ i depth 0       // {} brace depth
-    : ~ i in_string 0   // 1 while inside `…` backtick string
+    : ~ i depth 0  // {} brace depth
+    : ~ i in_string 0  // 1 while inside `…` backtick string
     : ~ i in_comment 0  // 1 while inside // line comment
     : ~ i at_line_start 1
     ~ < pos n {
         : i c ( nurl_str_get content pos )
         ? != in_string 0 {
             ? == c 96 { = in_string 0 } {}
-            ? == c 10 { = line + line 1  = at_line_start 1 } {}
+            ? == c 10 { = line + line 1 = at_line_start 1 } {}
             = pos + pos 1
         } {
             ? != in_comment 0 {
-                ? == c 10 { = in_comment 0  = line + line 1  = at_line_start 1 } {}
+                ? == c 10 { = in_comment 0 = line + line 1 = at_line_start 1 } {}
                 = pos + pos 1
             } {
-                ? == c 96 { = in_string 1  = pos + pos 1  = at_line_start 0 } {
+                ? == c 96 { = in_string 1 = pos + pos 1 = at_line_start 0 } {
                     ? & == c 47 & < + pos 1 n == ( nurl_str_get content + pos 1 ) 47 {
                         = in_comment 1
                         = pos + pos 2
                     } {
-                        ? == c 123 { = depth + depth 1  = pos + pos 1  = at_line_start 0 } {
-                            ? == c 125 { = depth - depth 1  = pos + pos 1  = at_line_start 0 } {
-                                ? == c 10 { = line + line 1  = at_line_start 1  = pos + pos 1 } {
+                        ? == c 123 { = depth + depth 1 = pos + pos 1 = at_line_start 0 } {
+                            ? == c 125 { = depth - depth 1 = pos + pos 1 = at_line_start 0 } {
+                                ? == c 10 { = line + line 1 = at_line_start 1 = pos + pos 1 } {
                                     ? ( __is_space c ) { = pos + pos 1 } {
                                         // Non-whitespace, non-comment, non-string, top-level?
                                         ? & == depth 0 != at_line_start 0 {
@@ -560,9 +560,9 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                                         : ~ i body_line line
                                                                         ~ & < wp n > body_depth 0 {
                                                                             : i wc ( nurl_str_get content wp )
-                                                                            ? == wc 123 { = body_depth + body_depth 1  = wp + wp 1 } {
-                                                                                ? == wc 125 { = body_depth - body_depth 1  = wp + wp 1 } {
-                                                                                    ? == wc 10 { = body_line + body_line 1  = wp + wp 1 } {
+                                                                            ? == wc 123 { = body_depth + body_depth 1 = wp + wp 1 } {
+                                                                                ? == wc 125 { = body_depth - body_depth 1 = wp + wp 1 } {
+                                                                                    ? == wc 10 { = body_line + body_line 1 = wp + wp 1 } {
                                                                                         ? ( __is_space wc ) { = wp + wp 1 } {
                                                                                             : i ve ( __scan_ident content wp n )
                                                                                             ? > ve wp {
@@ -652,8 +652,8 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     : i n ( nurl_str_len rel )
     : ~ i k 0
     ~ & >= n + k 2
-      & == ( nurl_str_get rel k ) 46
-        == ( nurl_str_get rel + k 1 ) 47
+    & == ( nurl_str_get rel k ) 46
+    == ( nurl_str_get rel + k 1 ) 47
     { = k + k 2 }
     : String tail ( __substr rel k n )
     : s root ( __get_workspace_root )
@@ -708,7 +708,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                         = pos + pos 2
                         = prev_was_dollar 0
                     } {
-                        ? == c 36 { = prev_was_dollar 1  = pos + pos 1 } {
+                        ? == c 36 { = prev_was_dollar 1 = pos + pos 1 } {
                             ? ( __is_space c ) { = pos + pos 1 } {
                                 = prev_was_dollar 0
                                 = pos + pos 1
@@ -1271,12 +1271,12 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 // CompletionItemKind for the five kinds we emit.
 
 @ __completion_kind i symbol_kind → i {
-    ? == symbol_kind 12 { ^ 3 } {}    // Function
-    ? == symbol_kind 23 { ^ 22 } {}   // Struct
-    ? == symbol_kind 10 { ^ 13 } {}   // Enum
-    ? == symbol_kind 22 { ^ 20 } {}   // EnumMember
-    ? == symbol_kind 14 { ^ 21 } {}   // Constant
-    ^ 1                                // Text fallback
+    ? == symbol_kind 12 { ^ 3 } {}  // Function
+    ? == symbol_kind 23 { ^ 22 } {}  // Struct
+    ? == symbol_kind 10 { ^ 13 } {}  // Enum
+    ? == symbol_kind 22 { ^ 20 } {}  // EnumMember
+    ? == symbol_kind 14 { ^ 21 } {}  // Constant
+    ^ 1  // Text fallback
 }
 
 // Extract the IDENT-prefix immediately left of `(line, col)`.
@@ -1606,10 +1606,10 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                 = pos + pos 1
             } {
                 ? != in_comment 0 {
-                    ? == c 10 { = in_comment 0  = line + line 1 } {}
+                    ? == c 10 { = in_comment 0 = line + line 1 } {}
                     = pos + pos 1
                 } {
-                    ? == c 96 { = in_string 1  = pos + pos 1 } {
+                    ? == c 96 { = in_string 1 = pos + pos 1 } {
                         ? & == c 47 & < + pos 1 n == ( nurl_str_get content + pos 1 ) 47 {
                             = in_comment 1
                             = pos + pos 2
@@ -1721,7 +1721,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     : ~ i in_com 0
     ~ < pos n {
         : i c ( nurl_str_get content pos )
-        ? == c 10 { = line + line 1  = pos + pos 1  = line_start pos  = in_com 0 } {
+        ? == c 10 { = line + line 1 = pos + pos 1 = line_start pos = in_com 0 } {
             ? != in_str 0 {
                 ? == c 96 { = in_str 0 } {}
                 = pos + pos 1
@@ -1922,7 +1922,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     : ~ i d_col 0
     ~ < pos n {
         : i c ( nurl_str_get content pos )
-        ? == c 10 { = line + line 1  = pos + pos 1  = line_start pos  = in_com 0  = prev_dollar 0 } {
+        ? == c 10 { = line + line 1 = pos + pos 1 = line_start pos = in_com 0 = prev_dollar 0 } {
             ? != in_str 0 {
                 ? == c 96 { = in_str 0 } {}
                 = pos + pos 1
@@ -1945,11 +1945,11 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                         }
                     } {
                         ? & & == c 47 < + pos 1 n == ( nurl_str_get content + pos 1 ) 47 {
-                            = in_com 1  = pos + pos 2  = prev_dollar 0
+                            = in_com 1 = pos + pos 2 = prev_dollar 0
                         } {
-                            ? == c 36 { = prev_dollar 1  = d_line line  = d_col - pos line_start  = pos + pos 1 } {
+                            ? == c 36 { = prev_dollar 1 = d_line line = d_col - pos line_start = pos + pos 1 } {
                                 ? ( __is_space c ) { = pos + pos 1 } {
-                                    = prev_dollar 0  = pos + pos 1
+                                    = prev_dollar 0 = pos + pos 1
                                 }
                             }
                         }
