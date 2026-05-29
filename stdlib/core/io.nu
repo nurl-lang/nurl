@@ -113,10 +113,17 @@ $ `stdlib/core/posix.nu`  // read(2) for the pure-NURL stdin slurp
 // body is opaque bytes — possibly containing newlines or even NULs —
 // so `read_line` would corrupt it.
 //
-// PURIFY (2026-05-24): reads fd 0 via `read(2)` in a retry loop until
-// `n` bytes are accumulated or read returns 0 (EOF) / -1 (error). No
-// more runtime-side sideband — the byte count is the returned Vec's
-// length. Caller frees via `vec_free [u]` or auto-drop.
+// PURIFY (2026-05-24): reads stdin in a retry loop until `n` bytes are
+// accumulated or a read returns 0 (EOF). No more runtime-side sideband —
+// the byte count is the returned Vec's length. Caller frees via
+// `vec_free [u]` or auto-drop.
+//
+// Reads through `nurl_stdin_read` (a buffered `fread(stdin)`) rather
+// than a raw `read(2)` on fd 0 so that it stays coherent with
+// `read_line`'s buffered `fgetc`: a framed protocol that reads the
+// header line with `read_line` and the body with this must share one
+// stdio buffer, or the header read silently swallows body bytes the raw
+// descriptor read would then miss (LSP/DAP body truncation).
 @ read_n_bytes i n → ( Vec u ) {
     ? <= n 0 { ^ ( vec_new [u] ) } {}
     : ( Vec u ) out ( vec_with_cap [u] n )
@@ -127,7 +134,7 @@ $ `stdlib/core/posix.nu`  // read(2) for the pure-NURL stdin slurp
         : i room - n got
         ? <= room 0 { = done T } {
             : *u at # *u + # i dst got
-            : i r ( read # i32 0 at room )
+            : i r ( nurl_stdin_read at room )
             ? <= r 0 { = done T } {
                 = got + got r
             }

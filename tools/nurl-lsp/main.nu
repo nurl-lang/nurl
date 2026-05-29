@@ -16,6 +16,7 @@
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
+$ `stdlib/core/symtab.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/ext/json.nu`
@@ -28,6 +29,13 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 // URI (e.g. `file:///path/to/x.nu`); value = raw file content. nurl_sym
 // copies both, so callers can free their inputs.
 : ~ i g_docs 0
+
+// Newline-separated list of every document URI opened this session.
+// g_docs is a sym map (not enumerable), so this parallel roster lets
+// textDocument/references sweep all open buffers. Append-once (deduped
+// in __track_doc_uri); didClose entries linger harmlessly — the sweep
+// reads g_docs[uri] and skips a missing/empty body.
+: ~ i g_doc_uris 0
 
 // name → "uri\tline\tkind" decl index, populated by the per-line
 // scanner. `kind` is the LSP SymbolKind integer: 12=Function,
@@ -69,6 +77,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     // Full document sync: every didChange carries the whole buffer.
     ( json_obj_set caps `textDocumentSync` ( json_int 1 ) )
     ( json_obj_set caps `definitionProvider` ( json_bool T ) )
+    ( json_obj_set caps `referencesProvider` ( json_bool T ) )
     ( json_obj_set caps `documentSymbolProvider` ( json_bool T ) )
     ( json_obj_set caps `hoverProvider` ( json_bool T ) )
     // Completion: no trigger characters — VS Code invokes completion
@@ -87,7 +96,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 @ __build_server_info → Json {
     : Json info ( json_obj_new )
     ( json_obj_set info `name` ( json_str_lit `nurl-lsp` ) )
-    ( json_obj_set info `version` ( json_str_lit `0.4.4` ) )
+    ( json_obj_set info `version` ( json_str_lit `0.5.0` ) )
     ^ info
 }
 
@@ -319,7 +328,14 @@ $ `tools/nurl-lsp/jsonrpc.nu`
         }
     }
 
-    : !Output ProcessErr pr ( process_run1 `build/nurlc` ( string_data tmp ) )
+    // `--lint` enables the unused-binding / unused-private-function
+    // warnings; they ride out on stderr in the same `file:line:col:
+    // warning:` shape the diag parser already understands.
+    : ( Vec s ) nc_args ( vec_with_cap [s] 2 )
+    ( vec_push [s] nc_args `--lint` )
+    ( vec_push [s] nc_args ( string_data tmp ) )
+    : !Output ProcessErr pr ( process_run `build/nurlc` nc_args `` )
+    ( vec_free [s] nc_args )
     : Json diags ( json_arr_new )
     ?? pr {
         F _ → { ( string_free tmp ) ^ diags }
@@ -770,6 +786,10 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 @ __recompile_and_publish s uri → v {
     : s text ( nurl_sym_get g_docs uri )
     : Json diags ( __compile_diagnostics text )
+    // Merge in unused-import warnings (computed from the symbol index,
+    // not the compiler — the compiler never sees which file a symbol
+    // came from once it is in scope).
+    ( __unused_import_diags text diags )
     ( __publish_diagnostics uri diags )
 }
 
@@ -799,6 +819,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                 ?? txt {
                     T tj → {
                         ( nurl_sym_def g_docs uri ( json_str_data tj ) )
+                        ( __track_doc_uri uri )
                         ( __index_uri uri )
                         ( __recompile_and_publish uri )
                     }
@@ -1628,6 +1649,317 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ( json_free resp )
 }
 
+// ── References (textDocument/references) ────────────────────────────
+//
+// Sweeps every OPEN document (g_doc_uris) for whole-word identifier
+// matches of the symbol under the cursor and returns them as LSP
+// Locations. Limited to open buffers — files indexed only for go-to-
+// definition are not re-read here — which covers the common
+// multi-file editing session. `context.includeDeclaration` is ignored:
+// the declaration token is itself an identifier occurrence, so it is
+// always included.
+
+// Compare content[st .. st+len) to `name` byte-for-byte (no alloc).
+@ __slice_eq s content i st i len s name → b {
+    ? != len ( nurl_str_len name ) { ^ F } {}
+    : ~ i k 0
+    : ~ b eq T
+    ~ & < k len eq {
+        ? != ( nurl_str_get content + st k ) ( nurl_str_get name k ) { = eq F } {}
+        = k + k 1
+    }
+    ^ eq
+}
+
+// True when `name` occurs as a whole-word identifier in `content`,
+// skipping backtick strings and `//` comments so a match inside a
+// string literal (e.g. an import-path token) never counts as a use.
+@ __name_referenced s content s name → b {
+    : i n ( nurl_str_len content )
+    : ~ i pos 0
+    : ~ i in_str 0
+    : ~ i in_com 0
+    : ~ b found F
+    ~ & < pos n ! found {
+        : i c ( nurl_str_get content pos )
+        ? != in_str 0 {
+            ? == c 96 { = in_str 0 } {}
+            = pos + pos 1
+        } {
+            ? != in_com 0 {
+                ? == c 10 { = in_com 0 } {}
+                = pos + pos 1
+            } {
+                ? == c 96 { = in_str 1 = pos + pos 1 } {
+                    ? & & == c 47 < + pos 1 n == ( nurl_str_get content + pos 1 ) 47 {
+                        = in_com 1 = pos + pos 2
+                    } {
+                        ? ( __is_ident_start c ) {
+                            : i st pos
+                            ~ & < pos n ( __is_ident_byte ( nurl_str_get content pos ) ) { = pos + pos 1 }
+                            ? ( __slice_eq content st - pos st name ) { = found T } {}
+                        } {
+                            = pos + pos 1
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ^ found
+}
+
+// Append a Location for every whole-word occurrence of `name` in one
+// document's content, skipping strings + comments. Positions are
+// emitted 0-based (LSP coordinates) directly.
+@ __collect_refs_in_doc s uri s content s name Json out → v {
+    : i n ( nurl_str_len content )
+    : ~ i pos 0
+    : ~ i line 0
+    : ~ i line_start 0
+    : ~ i in_str 0
+    : ~ i in_com 0
+    ~ < pos n {
+        : i c ( nurl_str_get content pos )
+        ? == c 10 { = line + line 1  = pos + pos 1  = line_start pos  = in_com 0 } {
+            ? != in_str 0 {
+                ? == c 96 { = in_str 0 } {}
+                = pos + pos 1
+            } {
+                ? != in_com 0 { = pos + pos 1 } {
+                    ? == c 96 { = in_str 1 = pos + pos 1 } {
+                        ? & & == c 47 < + pos 1 n == ( nurl_str_get content + pos 1 ) 47 {
+                            = in_com 1 = pos + pos 2
+                        } {
+                            ? ( __is_ident_start c ) {
+                                : i st pos
+                                ~ & < pos n ( __is_ident_byte ( nurl_str_get content pos ) ) { = pos + pos 1 }
+                                : i len - pos st
+                                ? ( __slice_eq content st len name ) {
+                                    : i scol - st line_start
+                                    : Json range ( json_obj_new )
+                                    ( json_obj_set range `start` ( __build_position line scol ) )
+                                    ( json_obj_set range `end` ( __build_position line + scol len ) )
+                                    : Json loc ( json_obj_new )
+                                    ( json_obj_set loc `uri` ( json_str_lit uri ) )
+                                    ( json_obj_set loc `range` range )
+                                    ( json_arr_push out loc )
+                                } {}
+                            } {
+                                = pos + pos 1
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Sweep every open document for references to `name`, appending to `out`.
+@ __refs_all_docs s name Json out → v {
+    : s list ( nurl_sym_get g_doc_uris `list` )
+    : i n ( nurl_str_len list )
+    : ~ i pos 0
+    ~ < pos n {
+        : i nl ( __index_of_byte list pos n 10 )
+        : i end ? < nl 0 n nl
+        : String duri ( __substr list pos end )
+        : s dc ( nurl_sym_get g_docs ( string_data duri ) )
+        ? > ( nurl_str_len dc ) 0 { ( __collect_refs_in_doc ( string_data duri ) dc name out ) } {}
+        ( string_free duri )
+        = pos ? < nl 0 n + nl 1
+    }
+}
+
+@ __handle_references Json id Json params → v {
+    : s uri ( __extract_uri params )
+    : Json result ( json_arr_new )
+    ? > ( nurl_str_len uri ) 0 {
+        : ?Json pos_o ( json_obj_get params `position` )
+        ?? pos_o {
+            T pos_j → {
+                : ?Json ln_o ( json_obj_get pos_j `line` )
+                : ?Json ch_o ( json_obj_get pos_j `character` )
+                ?? ln_o {
+                    T ln_j → {
+                        ?? ch_o {
+                            T ch_j → {
+                                : ?i line_p ( json_num_as_i ln_j )
+                                : ?i col_p ( json_num_as_i ch_j )
+                                ?? line_p {
+                                    T ln → {
+                                        ?? col_p {
+                                            T cn → {
+                                                : s content ( nurl_sym_get g_docs uri )
+                                                ? > ( nurl_str_len content ) 0 {
+                                                    : ?String tk ( __token_at content ln cn )
+                                                    ?? tk {
+                                                        T name → {
+                                                            ( __refs_all_docs ( string_data name ) result )
+                                                            ( string_free name )
+                                                        }
+                                                        F _ → {}
+                                                    }
+                                                } {}
+                                            }
+                                            F _ → {}
+                                        }
+                                    }
+                                    F _ → {}
+                                }
+                            }
+                            F _ → {}
+                        }
+                    }
+                    F _ → {}
+                }
+            }
+            F _ → {}
+        }
+    } {}
+    : Json resp ( __make_response id result )
+    ( write_message resp )
+    ( json_free resp )
+}
+
+// ── Open-document roster (for the references sweep) ─────────────────
+
+// True when `uri` already appears as a full line in the newline-
+// separated roster.
+@ __uri_in_list s list s uri → b {
+    : i n ( nurl_str_len list )
+    : ~ i pos 0
+    : ~ b found F
+    ~ & < pos n ! found {
+        : i nl ( __index_of_byte list pos n 10 )
+        : i end ? < nl 0 n nl
+        ? ( __slice_eq list pos - end pos uri ) { = found T } {}
+        = pos ? < nl 0 n + nl 1
+    }
+    ^ found
+}
+
+@ __track_doc_uri s uri → v {
+    : s cur ( nurl_sym_get g_doc_uris `list` )
+    ? ( __uri_in_list cur uri ) {} {
+        : String acc ( string_with_cap + + ( nurl_str_len cur ) ( nurl_str_len uri ) 1 )
+        ? > ( nurl_str_len cur ) 0 { ( string_push_str acc cur ) ( string_push_char acc 10 ) } {}
+        ( string_push_str acc uri )
+        ( nurl_sym_def g_doc_uris `list` ( string_data acc ) )
+        ( string_free acc )
+    }
+}
+
+// ── Unused-import diagnostics ───────────────────────────────────────
+//
+// An `$ `path`` import is unused when NONE of the top-level symbols the
+// imported file defines (per the symbol index, g_defs_by_uri) is
+// referenced anywhere in the importing file. Conservative by design:
+// any whole-word match — even one inside an unrelated expression —
+// counts as "used", so we never warn on a genuinely-needed import. If
+// the imported file was not indexed (path not found), we skip silently.
+
+// True when any decl name listed in `defs` is referenced in `content`.
+// `defs` is g_defs_by_uri's flat tab-separated stream of (name, line,
+// kind) triplets — `name\tline\tkind\tname\tline\tkind\t…`, NOT newline
+// per row — so the name fields are the ones whose field index ≡ 0 mod 3.
+// Stops at the first referenced name.
+@ __any_def_referenced s defs s content → b {
+    : i n ( nurl_str_len defs )
+    : ~ i pos 0
+    : ~ i fieldidx 0
+    : ~ b used F
+    ~ & < pos n ! used {
+        : i tab ( __index_of_byte defs pos n 9 )
+        : i end ? < tab 0 n tab
+        ? == 0 % fieldidx 3 {
+            ? > - end pos 0 {
+                : String nm ( __substr defs pos end )
+                ? ( __name_referenced content ( string_data nm ) ) { = used T } {}
+                ( string_free nm )
+            } {}
+        } {}
+        = fieldidx + fieldidx 1
+        = pos ? < tab 0 n + tab 1
+    }
+    ^ used
+}
+
+// Check one import; append an unused-import Warning at (line,col)
+// (0-based) when none of its symbols are referenced in `content`.
+@ __check_one_import s path i line i col s content Json diags → v {
+    : String abs ( __resolve_import_path path )
+    : String uri ( __path_to_uri ( string_data abs ) )
+    : s defs ( nurl_sym_get g_defs_by_uri ( string_data uri ) )
+    ? > ( nurl_str_len defs ) 0 {
+        ? ( __any_def_referenced defs content ) {} {
+            : String msg ( string_with_cap 96 )
+            ( string_push_str msg `unused import: no symbol from '` )
+            ( string_push_str msg path )
+            ( string_push_str msg `' is referenced in this file` )
+            // __build_diagnostic converts 1-based → 0-based, so feed it
+            // the 1-based form of our 0-based scan coordinates.
+            ( json_arr_push diags ( __build_diagnostic + line 1 + col 1 2 ( string_data msg ) ) )
+            ( string_free msg )
+        }
+    } {}
+    ( string_free uri )
+    ( string_free abs )
+}
+
+// Walk `content`, find every `$ `path`` import (tracking its line/col),
+// and append an unused-import diagnostic for each unused one.
+@ __unused_import_diags s content Json diags → v {
+    : i n ( nurl_str_len content )
+    : ~ i pos 0
+    : ~ i line 0
+    : ~ i line_start 0
+    : ~ i in_str 0
+    : ~ i in_com 0
+    : ~ i prev_dollar 0
+    : ~ i d_line 0
+    : ~ i d_col 0
+    ~ < pos n {
+        : i c ( nurl_str_get content pos )
+        ? == c 10 { = line + line 1  = pos + pos 1  = line_start pos  = in_com 0  = prev_dollar 0 } {
+            ? != in_str 0 {
+                ? == c 96 { = in_str 0 } {}
+                = pos + pos 1
+            } {
+                ? != in_com 0 { = pos + pos 1 } {
+                    ? == c 96 {
+                        ? != prev_dollar 0 {
+                            : ~ i ep + pos 1
+                            ~ & < ep n != ( nurl_str_get content ep ) 96 { = ep + ep 1 }
+                            ? < ep n {
+                                : String path ( __substr content + pos 1 ep )
+                                ( __check_one_import ( string_data path ) d_line d_col content diags )
+                                ( string_free path )
+                                = pos + ep 1
+                            } { = pos n }
+                            = prev_dollar 0
+                        } {
+                            = in_str 1
+                            = pos + pos 1
+                        }
+                    } {
+                        ? & & == c 47 < + pos 1 n == ( nurl_str_get content + pos 1 ) 47 {
+                            = in_com 1  = pos + pos 2  = prev_dollar 0
+                        } {
+                            ? == c 36 { = prev_dollar 1  = d_line line  = d_col - pos line_start  = pos + pos 1 } {
+                                ? ( __is_space c ) { = pos + pos 1 } {
+                                    = prev_dollar 0  = pos + pos 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ── Request / notification dispatch ────────────────────────────────
 
 @ __handle_initialize Json id Json params → v {
@@ -1783,7 +2115,19 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                             }
                                                         }
                                                     } {
-                                                        ( __handle_unknown_request id method )
+                                                        ? ( nurl_str_eq method `textDocument/references` ) {
+                                                            : ?Json params_o ( json_obj_get msg `params` )
+                                                            ?? params_o {
+                                                                T params_j → ( __handle_references id params_j )
+                                                                F _ → {
+                                                                    : Json resp ( __make_response id ( json_arr_new ) )
+                                                                    ( write_message resp )
+                                                                    ( json_free resp )
+                                                                }
+                                                            }
+                                                        } {
+                                                            ( __handle_unknown_request id method )
+                                                        }
                                                     }
                                                 }
                                             }
@@ -1829,6 +2173,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 
 @ main → i {
     = g_docs ( nurl_sym_new )
+    = g_doc_uris ( nurl_sym_new )
     = g_defs ( nurl_sym_new )
     = g_defs_by_uri ( nurl_sym_new )
     = g_all_names ( nurl_sym_new )

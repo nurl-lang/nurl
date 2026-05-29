@@ -132,6 +132,12 @@ $ `stdlib/core/cell.nu`
 & `c` @ read  i fd *u buf i n → i
 & `c` @ write i fd *u buf i n → i
 
+// Buffered binary read from stdin (NURL runtime `fread(stdin)`). Shares
+// nurl_read_line's stdio buffer so framed stdio protocols (LSP/DAP) can
+// read a header line with `read_line` (fgetc) then the body with
+// `read_n_bytes` without a buffered-vs-raw split losing body bytes.
+& `c` @ nurl_stdin_read *u buf i n → i
+
 // ── File descriptor / mmap primitives ─────────────────────────────
 //
 // open(2): low-level fd-based file open. `flags` is `O_RDONLY` / etc.
