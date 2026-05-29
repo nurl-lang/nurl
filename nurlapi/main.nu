@@ -23,6 +23,7 @@ $ `stdlib/ext/mcp_http.nu`
 @ get_canvas_wasm_o → String { ^ ( env_var_or `NURL_CANVAS_WASM_O` `/opt/nurl/stdlib/canvas.wasm.o` ) }
 @ get_audio_wasm_o → String { ^ ( env_var_or `NURL_AUDIO_WASM_O` `/opt/nurl/stdlib/audio_wasm.o` ) }
 @ get_runtime_win_o → String { ^ ( env_var_or `NURL_RUNTIME_WIN_O` `/opt/nurl/stdlib/runtime.win.o` ) }
+@ get_runtime_win_curl_o → String { ^ ( env_var_or `NURL_RUNTIME_WIN_CURL_O` `/opt/nurl/stdlib/runtime.win.curl.o` ) }
 @ get_runtime_mac_o → String { ^ ( env_var_or `NURL_RUNTIME_MAC_O` `/opt/nurl/stdlib/runtime.mac.o` ) }
 @ get_zig → String { ^ ( env_var_or `NURL_ZIG` `/opt/zig/zig` ) }
 @ get_wasm_opt → String { ^ ( env_var_or `NURL_WASM_OPT` `wasm-opt` ) }
@@ -108,8 +109,56 @@ $ `stdlib/ext/mcp_http.nu`
 
 // ── IR Shimming for WASM ─────────────────────────────────────────────
 
+// The WASM shimming below rewrites IR symbols with whole-string
+// string_replace (rename `@main` → `@__main_argc_argv`, libc fns →
+// width-shims, POSIX fns → stubs). That is safe for ordinary programs,
+// but a program that *emits* LLVM IR — notably the nurlc compiler
+// itself — carries those exact tokens inside `c"..."` string constants
+// (e.g. `c"define i32 @main(...){\00"`, `c"declare i8* @malloc(i64)"`).
+// A naive replace rewrites the constant's *contents* without touching
+// its `[N x i8]` length, so clang rejects it with a constant-type
+// mismatch and the whole build fails.
+//
+// To keep the replaces oblivious to string-constant data we mask every
+// `@` that lives on a constant line (any line carrying `c"`) to a
+// sentinel before rewriting, then restore it at the very end. The
+// sentinel has no `@`, so none of the `@name(` patterns can match it,
+// and the gate checks (`string_contains res ...`) stop seeing
+// string-constant occurrences too — so we only shim symbols that are
+// genuinely referenced as code.
+@ __ir_at_sentinel → s { ^ `__NURL_IR_AT_SENTINEL__` }
+
+@ mask_ir_str_consts String ir → String {
+  : ( Vec String ) lines ( string_split ir `\n` )
+  : String out ( string_with_cap ( string_len ir ) )
+  : i n ( vec_len [String] lines )
+  : ~ i i 0
+  ~ < i n {
+    : ?String le ( vec_get [String] lines i )
+    ?? le {
+      T line → {
+        ? > i 0 { ( string_push_char out 10 ) } {}
+        ? ( string_contains line `c"` ) {
+          : String m ( string_replace line `@` ( __ir_at_sentinel ) )
+          ( string_push_str out ( string_data m ) ) ( string_free m )
+        } { ( string_push_str out ( string_data line ) ) }
+      }
+      F → {}
+    }
+    = i + i 1
+  }
+  ( vec_free_with [String] lines \ String s → v { ( string_free s ) } )
+  ^ out
+}
+
 @ prepare_ir_for_wasi String ir → String {
   : String res ( string_from ( string_data ir ) )
+
+  // 0. Mask `@` inside string constants so the symbol rewrites below
+  //    can't corrupt emitted-IR data (see note above). Restored at the
+  //    end of the function.
+  : String masked ( mask_ir_str_consts res )
+  ( string_free res ) = res masked
 
   // 1. Rename main definition robustly.
   : String r1 ( string_replace res ` @main(` ` @__main_argc_argv(` )
@@ -398,8 +447,13 @@ $ `stdlib/ext/mcp_http.nu`
   }
   ( vec_free [s] posix_names ) ( vec_free [s] posix_bodies )
 
-  : String final ( string_concat res shims )
+  : String joined ( string_concat res shims )
   ( string_free res ) ( string_free shims )
+
+  // Restore the `@` masked in step 0. The sentinel only exists inside
+  // string constants we masked; the appended shims never contain it.
+  : String final ( string_replace joined ( __ir_at_sentinel ) `@` )
+  ( string_free joined )
   ^ final
 }
 
@@ -961,6 +1015,12 @@ $ `stdlib/ext/mcp_http.nu`
                 ( vec_push [s] clang_args opt )
                 ( vec_push [s] clang_args `-Wno-override-module` )
                 ( vec_push [s] clang_args `--target=x86_64-w64-mingw32` )
+                // Emit one section per function/datum so the linker's
+                // --gc-sections (below) can drop the parts of the runtime
+                // this program never calls — e.g. the TCP/TLS code that
+                // otherwise drags in ws2_32 / crypt32 / bcrypt imports.
+                ( vec_push [s] clang_args `-ffunction-sections` )
+                ( vec_push [s] clang_args `-fdata-sections` )
                 ( vec_push [s] clang_args `-c` )
                 ( vec_push [s] clang_args ( string_data ll_path ) )
                 ( vec_push [s] clang_args `-o` )
@@ -976,12 +1036,44 @@ $ `stdlib/ext/mcp_http.nu`
                     // exits with its own (informative) error.
                     : ( Vec s ) link_args ( vec_new [s] )
                     ( vec_push [s] link_args opt )
+                    // -s strips the COFF symbol table + DWARF debug
+                    // sections, which are the bulk of an unstripped mingw
+                    // binary (~halves the .exe on its own). --gc-sections
+                    // is kept too, but mingw's PE linker barely acts on it
+                    // — it does NOT drop unused runtime code on COFF the
+                    // way ELF ld does. That dead-code removal is handled
+                    // instead by the curl-variant split below.
+                    ( vec_push [s] link_args `-s` )
+                    ( vec_push [s] link_args `-Wl,--gc-sections` )
                     ( vec_push [s] link_args ( string_data obj_path ) )
-                    ( vec_push [s] link_args ( string_data ( get_runtime_win_o ) ) )
-                    ( vec_push [s] link_args `-lpthread` )
+
+                    // Pick the runtime variant. The default runtime.win.o
+                    // is built WITHOUT libcurl; a program only needs the
+                    // curl bridge when it pulls in stdlib/ext/http.nu,
+                    // which surfaces as nurl_curl_* references in the IR.
+                    // For those we swap in runtime.win.curl.o and link
+                    // static libcurl + its Schannel deps. This keeps
+                    // libcurl (a few hundred KB of .text, plus the
+                    // bcrypt/crypt32/secur32 imports) out of every
+                    // non-HTTP exe — which PE --gc-sections cannot do.
                     : String curl_marker ( path_join ( string_data ( get_stdlib_dir ) ) `runtime.win.curl` )
+                    : b uses_curl & ( file_exists ( string_data curl_marker ) ) >= ( nurl_str_find ( output_stdout n_out ) `nurl_curl` ) 0
+                    ? uses_curl { ( vec_push [s] link_args ( string_data ( get_runtime_win_curl_o ) ) ) }
+                                { ( vec_push [s] link_args ( string_data ( get_runtime_win_o ) ) ) }
+
+                    // Static-link libgcc + winpthread so the .exe doesn't
+                    // depend on libgcc_s_seh-1.dll / libwinpthread-1.dll
+                    // — those aren't present on a stock Windows install,
+                    // and missing them makes the program exit silently
+                    // with STATUS_DLL_NOT_FOUND (0xC0000135), which looks
+                    // exactly like "the exe runs but prints nothing".
+                    // System DLL imports stay dynamic via -Wl,-Bdynamic.
+                    ( vec_push [s] link_args `-static-libgcc` )
+                    ( vec_push [s] link_args `-Wl,-Bstatic` )
+                    ( vec_push [s] link_args `-lpthread` )
+                    ( vec_push [s] link_args `-Wl,-Bdynamic` )
                     : String curl_L ( string_with_cap 64 )
-                    ? ( file_exists ( string_data curl_marker ) ) {
+                    ? uses_curl {
                       ( string_push_str curl_L `-L` )
                       ( string_push_str curl_L ( string_data ( get_mingw_curl_prefix ) ) )
                       ( string_push_str curl_L `/lib` )
@@ -993,7 +1085,19 @@ $ `stdlib/ext/mcp_http.nu`
                       ( vec_push [s] link_args `-lncrypt` )
                       ( vec_push [s] link_args `-lsecur32` )
                       ( vec_push [s] link_args `-ladvapi32` )
-                    } {}
+                    } {
+                      // The curl-free runtime still carries the TCP
+                      // (winsock), random (advapi32/bcrypt) and WinHTTP
+                      // paths. Without libcurl the HTTP backend falls
+                      // back to WinHTTP (nurl_http_perform_full_to), so
+                      // -lwinhttp is required even for non-HTTP programs
+                      // since the whole object is linked. These are all
+                      // tiny system import libs — no static bloat.
+                      ( vec_push [s] link_args `-lws2_32` )
+                      ( vec_push [s] link_args `-ladvapi32` )
+                      ( vec_push [s] link_args `-lbcrypt` )
+                      ( vec_push [s] link_args `-lwinhttp` )
+                    }
                     ( vec_push [s] link_args `-o` )
                     ( vec_push [s] link_args ( string_data bin_path ) )
                     : ! Output ProcessErr link_res ( process_run ( string_data ( get_mingw_gcc ) ) link_args `` )

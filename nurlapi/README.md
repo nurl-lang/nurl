@@ -1,4 +1,4 @@
-  # NURL - Neural Unified Representation Language (Or **N**on h**U**man **R**eadable **L**anguage)
+  # NURL - Neural Unified Representation Language
 
   Self-hosted compiler for the **NURL** programming language, packaged with a pure-NURL HTTP API server, a Monaco-based browser playground, and a Model
   Context Protocol (MCP) server — all in one image. No Python; the playground server itself is a NURL program (`nurlapi/main.nu`).

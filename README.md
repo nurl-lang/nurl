@@ -251,7 +251,7 @@ runs the server outside Docker, using the host's `nurlc` and stdlib).
 ### Compiler-in-wasm (offline / embeddable)
 
 The same `POST /build_wasm` pipeline can be pointed at `compiler/nurlc.nu`
-itself, producing a ~316 KB `nurlc.wasm` that **is** the NURL compiler:
+itself, producing a ~480 KB `nurlc.wasm` that **is** the NURL compiler:
 
 ```bash
 ./startdev.sh        # one terminal: bring up the API container
@@ -844,7 +844,7 @@ build; no other-language toolchain is required.
   - `compiler/nurlc_lastgood.nu` — NURL source of the snapshot
     (human-readable; identical to `nurlc.nu` at the point it was
     captured).
-  - `compiler/nurlc_lastgood.ll` — LLVM IR text (~1.5 MB),
+  - `compiler/nurlc_lastgood.ll` — LLVM IR text (~1.6 MB),
     diffable in git, target-triple-agnostic so the same blob
     bootstraps Linux / macOS / Windows.
 

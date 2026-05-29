@@ -1,5 +1,5 @@
 // nurlc.nu — NURL compiler written in NURL.
-// Grammar: v2.0
+// Grammar: v2.1
 //
 // Copyright (c) 2026 The NURL Project Developers
 // SPDX-License-Identifier: MIT OR Apache-2.0
@@ -1149,7 +1149,7 @@
     : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
     ? & & ( seq lt `void` ) != 0 ( nurl_str_len fn_rt ) ! ( seq fn_rt `void` )
     { : s hint ? returning_match
-        `) — match arms contain '^' so '?? …' is statement-form, not an expression. Refactor to ': ~ T rc init / ?? mr { … = rc v } / ^ rc'. See docs/GOTCHAS.md item 6.`
+        `) — match arms contain '^' so '?? …' is statement-form, not an expression. Refactor to ': ~ T rc init / ?? mr { … = rc v } / ^ rc'.`
         `) — likely a conditional with incompatible branch types`
         ( die lex ( nurl_str_cat `return expression has no value (expected `
             ( nurl_str_cat ( llvm_to_nurl fn_rt ) hint ) ) ) }
@@ -1351,7 +1351,7 @@
         // (not a const / enum variant). Die with the canonical
         // wrap-in-closure-literal cure.
         ? & & == 0 ( nurl_str_len ptr ) == 0 ( nurl_str_len glb ) != 0 ( nurl_str_len ( nurl_sym_get g_vis_syms ( nurl_str_cat name `__src_file` ) ) )
-        { : s tail ( nurl_str_cat name ` args ) }'. See docs/GOTCHAS.md item 11.` )
+        { : s tail ( nurl_str_cat name ` args ) }'.` )
             ( die lex ( nurl_str_cat4
                 `bare '@-fn' name '` name
                 `' does not auto-coerce to a closure value. Wrap it: '\ args → R { ( `
@@ -3223,12 +3223,12 @@
         // call time. Die — the result is silent UB otherwise.
         ? & == arg_idx 0 ( seq fname `nurl_str_len` )
         { ? ( seq at `%String` )
-            { ( die lex `nurl_str_len expects 's' (i8* C-string), got %String. Use 'string_len' for String values. See docs/GOTCHAS.md item 7.` ) }
+            { ( die lex `nurl_str_len expects 's' (i8* C-string), got %String. Use 'string_len' for String values.` ) }
             {} }
         {}
         ? & == arg_idx 0 ( seq fname `string_len` )
         { ? ( seq at `i8*` )
-            { ( die lex `string_len expects %String, got 'i8*' (raw C-string). Use 'nurl_str_len' for raw C-string pointers. See docs/GOTCHAS.md item 7.` ) }
+            { ( die lex `string_len expects %String, got 'i8*' (raw C-string). Use 'nurl_str_len' for raw C-string pointers.` ) }
             {} }
         {}
         // Escape analysis (closes docs/GOTCHAS.md item 8). If this
@@ -3583,7 +3583,7 @@
     // `{ ... }` blocks then run as side-effect statements. Warn —
     // the program compiles but the conditional logic is wrong.
     ? == ( nurl_lex_type lex ) TT_LBRACE
-    { ( warn lex `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary). See docs/GOTCHAS.md item 1.` ) }
+    { ( warn lex `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary).` ) }
     {}
     // pick a consistent phi type: prefer the non-void live branch type;
     // if both live and types differ, fall back to void (no phi needed).
@@ -5751,7 +5751,7 @@
             ? < bdv refdepth
             { ( bck_esc_warn lex line ( nurl_str_cat3
                 `assigning to '` name
-                `' a value that references a more deeply scoped binding by pointer - it dangles once that inner scope exits (see docs/GOTCHAS.md item 8)` ) ) }
+                `' a value that references a more deeply scoped binding by pointer - it dangles once that inner scope exits` ) ) }
             {}
         } {}
     }
@@ -5762,7 +5762,7 @@
 // container / a worker thread all outlive every in-function region).
 @ bck_esc_check_return i lex i syms i line s ident → v {
     ? & != g_borrowck 0 > ( bck_expr_refdepth syms ident ) 0
-    { ( bck_esc_warn lex line `returning a value that references a stack binding by pointer - it dangles after this function returns (move the captured data to a heap-backed handle; see docs/GOTCHAS.md item 5)` ) }
+    { ( bck_esc_warn lex line `returning a value that references a stack binding by pointer - it dangles after this function returns (move the captured data to a heap-backed handle)` ) }
     {}
 }
 
@@ -5770,7 +5770,7 @@
     ? & != g_borrowck 0 > ( bck_expr_refdepth syms ident ) 0
     { ( bck_esc_warn lex line ( nurl_str_cat3
         `passing a value that references a stack binding by pointer to '` fname
-        `' - it escapes the current stack frame and dangles (move it to a heap-backed handle; see docs/GOTCHAS.md item 8)` ) ) }
+        `' - it escapes the current stack frame and dangles (move it to a heap-backed handle)` ) ) }
     {}
 }
 
@@ -5854,7 +5854,7 @@
 @ __warn_if_shadows_param i lex i syms s name → v {
     : s param_names ( nurl_sym_get syms `__fn_param_names__` )
     ? & != 0 ( nurl_str_len param_names ) ( str_contains_word param_names name )
-    { ( warn lex ( nurl_str_cat3 `'` name `' shadows the enclosing function's parameter - rename (see docs/GOTCHAS.md item 3)` ) ) }
+    { ( warn lex ( nurl_str_cat3 `'` name `' shadows the enclosing function's parameter - rename` ) ) }
     {}
 }
 
@@ -5873,7 +5873,7 @@
     // warning is advisory; suggest the immutable `: *T` alternative
     // or re-fetching the pointer per iteration.
     ? & is_mutable == ( nurl_lex_type lex ) TT_STAR
-    { ( warn lex `mutable pointer binding ': ~ *T' miscompiles in long-running write loops (deterministic crash ~tens-of-thousands of iterations). Prefer immutable ': *T' + re-fetch on grow, or carry the address as an i64 and cast per use. See docs/GOTCHAS.md item 10.` ) }
+    { ( warn lex `mutable pointer binding ': ~ *T' miscompiles in long-running write loops. Prefer immutable ': *T' + re-fetch on grow, or carry the address as an i64 and cast per use.` ) }
     {}
     // Check if first token could be a type name by looking it up in symbol table
     ? & == ( nurl_lex_type lex ) TT_IDENT == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_lex_val lex ) ) )
@@ -6429,7 +6429,7 @@
         ? | != 0 ( nurl_str_len is_enum ) != 0 ( nurl_str_len is_struct )
         { ( die lex ( nurl_str_cat3
             `'#' is the cast operator; struct/enum literals use '@'. Write '@ `
-            tname ` { ... }' instead. See docs/GOTCHAS.md item 9.` ) ) }
+            tname ` { ... }' instead.` ) ) }
         {}
     }
     {}
@@ -9459,7 +9459,7 @@
         // cryptic "unable to create block named 'entry'" LLVM error
         // far from the source. Close GOTCHAS.md item 3.
         ? ( seq pname `entry` )
-        { ( die lex `parameter name 'entry' collides with LLVM's reserved entry: block label. Rename (e.g. 'ent', 'tab_entry'). See docs/GOTCHAS.md item 8.` ) }
+        { ( die lex `parameter name 'entry' collides with LLVM's reserved entry: block label. Rename (e.g. 'ent', 'tab_entry').` ) }
         {}
         // `inout` is a parameter-convention keyword; banning it as
         // a parameter NAME keeps the scan_fn_sigs forward-reference
