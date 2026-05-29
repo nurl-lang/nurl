@@ -22,6 +22,21 @@ IR).
 
 ### Added
 
+- **Stdlib numeric + text utility round-out** — four pure-NURL
+  additions (no compiler changes, each with an offline test):
+  - `stdlib/std/int.nu`: `int_gcd`, `int_lcm`, `int_isqrt` (Newton-method
+    exact floor sqrt). Test `compiler/tests/int_extra.nu`.
+  - `stdlib/std/float.nu`: `float_trunc`, `float_cbrt`, `float_hypot`,
+    `float_log2`, `float_log10` (direct libm FFI) + pure-NURL
+    `float_sign`. Test `compiler/tests/float_extra.nu`.
+  - `stdlib/core/string.nu`: `string_join` (complement of `string_split`)
+    and `string_count` (non-overlapping occurrence count). Test
+    `compiler/tests/string_join_count.nu`.
+  - `stdlib/core/char.nu`: `is_upper`, `is_lower`, `is_hexdigit`,
+    `to_upper_ascii`, `to_lower_ascii`, `hex_val`. New predicates return
+    canonical 1/0 (ternary value-form) rather than the older predicates'
+    `# i <bool-expr>` shape that sign-extends i1 true to -1. Test
+    `compiler/tests/char_extra.nu`.
 - **`HttpOptions` struct (HTTP client)** — `stdlib/ext/http.nu` gained
   `HttpOptions { i timeout_ms, i connect_timeout_ms, i follow_redirects,
   i max_redirects, i verify_tls, s user_agent }` bundling the per-request
