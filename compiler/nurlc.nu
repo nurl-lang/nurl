@@ -3157,6 +3157,36 @@
     ^ F
 }
 
+// check_generic_bounds: at a generic call site `( f [Ta...] … )`, verify
+// each bounded type parameter's concrete type implements the required
+// trait(s). Dispatch already works through monomorphisation; this turns
+// a missing impl from a cryptic unresolved-call link error into a clear
+// compile-time diagnostic at the bound. No-op for unbounded generics.
+@ check_generic_bounds i lex s fname s type_args → v {
+    : ~ s tp_rest ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__tparams` ) )
+    : ~ s ta_rest type_args
+    ~ != 0 ( nurl_str_len tp_rest ) {
+        : s tp ( str_first_word tp_rest )
+        = tp_rest ( str_skip_word tp_rest )
+        : s ta ( str_first_word ta_rest )
+        = ta_rest ( str_skip_word ta_rest )
+        : s bounds ( nurl_sym_get g_generic_syms ( nurl_str_cat3 fname `__bound__` tp ) )
+        ? & != 0 ( nurl_str_len bounds ) != 0 ( nurl_str_len ta ) {
+            : s ta_llvm ( llvm_type ta )
+            : ~ s br bounds
+            ~ != 0 ( nurl_str_len br ) {
+                : s bt ( str_first_word br )
+                = br ( str_skip_word br )
+                ? == 0 ( nurl_str_len ( nurl_sym_get g_trait_syms ( nurl_str_cat3 bt `##` ta_llvm ) ) )
+                { : s m1 ( nurl_str_cat4 `type '` ta `' does not implement trait '` bt )
+                    : s m2 ( nurl_str_cat3 m1 `' required by bound ` ( nurl_str_cat3 tp `: ` bt ) )
+                    ( die lex ( nurl_str_cat3 m2 ` on generic '` ( nurl_str_cat fname `'` ) ) ) }
+                {}
+            }
+        } {}
+    }
+}
+
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
@@ -3228,6 +3258,9 @@
         }
         ( expect lex TT_RBRACK )
         : s mangled ( nurl_str_cat fname mangle_sfx )
+        // Trait-bound check: each `A: Trait` tparam's concrete type must
+        // have an impl of Trait (no-op for unbounded generics).
+        ( check_generic_bounds lex fname type_args )
         // Dedup uses a global key (g_generic_syms is scope-free) because
         // local `syms` is push/popped per block — registering ret_ty in
         // syms inside a loop body would vanish when that block ends, and
@@ -3877,11 +3910,215 @@
     }
 }
 
+// gen_select — Go-style `select` over channels, spelled `?? { … }`
+// (a `??` whose scrutinee is immediately `{` has no value to match, so
+// it is unambiguously a select; a normal match always has a scrutinee
+// expression first). Each case is
+//
+//     [T] chexpr → bind { body }       // bind is a ?T (None ⇒ closed)
+//     _          → { body }            // optional non-blocking default
+//
+// We desugar the whole construct into synthesised NURL source built from
+// the verbatim user channel-exprs + bodies (extracted with
+// nurl_lex_src_slice) and compile it through a sub-lexer that shares the
+// same codegen + symbol table. So the normal pipeline handles the
+// generic `chan_try_recv [T]`, the field/cast ops and every branch — no
+// raw IR, no mangled names. The blocking rendezvous (arm / wait / fire /
+// disarm) lives in stdlib/std/channel.nu.
+//
+// Lowering (no default):
+//   { : i W ( select_waiter_new )
+//     : i CTLk  # i . ( chexpr_k ) ctl          // once per case
+//     : ~ b DONE F
+//     ~ ! DONE {
+//       ( select_waiter_prepare W )
+//       ( chan_raw_arm CTLk W )                  // every case
+//       ? ! DONE { : ?Tk bind ( chan_try_recv [Tk] ( chexpr_k ) )
+//                  ? | ( opt_is_some [Tk] bind ) ( chan_raw_closed CTLk )
+//                    { = DONE T <body_k> } {} } {}
+//       ? ! DONE { ( select_waiter_wait W ) } {}
+//       ( chan_raw_disarm CTLk W ) }            // every case
+//     ( select_waiter_free W ) }
+//
+// With a `_` default arm there is no waiter and no loop: poll each case
+// once, then run the default body.
+@ gen_select i lex i syms i cg → s {
+    ( expect lex TT_LBRACE )  // consume the '{'
+
+    : s uid ( nurl_cg_lbl cg `sel` )
+    : s w_name ( nurl_str_cat `__` ( nurl_str_cat uid `w` ) )
+    : s done_name ( nurl_str_cat `__` ( nurl_str_cat uid `done` ) )
+
+    : ~ s ctl_decls ``
+    : ~ s arm_block ``
+    : ~ s disarm_block ``
+    : ~ s poll_block ``
+    : ~ s default_body ``
+    : ~ i has_default 0
+    : ~ i bidx 0
+
+    ~ != ( nurl_lex_type lex ) TT_RBRACE {
+        ? == ( nurl_lex_type lex ) TT_LBRACK {
+            // ── [T] chexpr → bind { body } ──
+            ( nurl_lex_advance lex )  // consume '['
+            : i tstart ( nurl_lex_cur_start lex )
+            : ~ i bdepth 1
+            ~ > bdepth 0 {
+                : i tt ( nurl_lex_type lex )
+                ? == tt TT_EOF { ( die lex `unterminated [type] in select case` ) } {}
+                ? == tt TT_LBRACK { = bdepth + bdepth 1 } {}
+                ? == tt TT_RBRACK { = bdepth - bdepth 1 } {}
+                ? > bdepth 0 { ( nurl_lex_advance lex ) } {}
+            }
+            : i tend ( nurl_lex_cur_start lex )  // at ']'
+            : s ttext ( nurl_lex_src_slice lex tstart - tend tstart )
+            ( nurl_lex_advance lex )  // consume ']'
+
+            : i chstart ( nurl_lex_cur_start lex )
+            : ~ i pdepth 0
+            ~ | != ( nurl_lex_type lex ) TT_ARROW != pdepth 0 {
+                : i tt ( nurl_lex_type lex )
+                ? == tt TT_EOF { ( die lex `expected -> in select case` ) } {}
+                ? | == tt TT_LPAREN == tt TT_LBRACK { = pdepth + pdepth 1 } {}
+                ? | == tt TT_RPAREN == tt TT_RBRACK { = pdepth - pdepth 1 } {}
+                ( nurl_lex_advance lex )
+            }
+            : i chend ( nurl_lex_cur_start lex )  // at '→'
+            : s chtext ( nurl_lex_src_slice lex chstart - chend chstart )
+            ( nurl_lex_advance lex )  // consume '→'
+
+            ? ! ( is_ident_tok ( nurl_lex_type lex ) )
+            { ( die lex `expected binding name after -> in select case` ) } {}
+            : s bind ( nurl_lex_val lex )
+            ( nurl_lex_advance lex )  // consume binding name
+
+            ? != ( nurl_lex_type lex ) TT_LBRACE
+            { ( die lex `expected { body } in select case` ) } {}
+            : i bstart ( nurl_lex_cur_start lex )
+            ( skip_balanced lex )  // cur now sits just after the body's '}'
+            : i bend ( nurl_lex_cur_start lex )
+            : s btext ( nurl_lex_src_slice lex bstart - bend bstart )
+
+            : s ctl_name ( nurl_str_cat3 `__` uid ( nurl_str_cat `ctl` ( nurl_str_int bidx ) ) )
+            // The channel operand is READ inline (never let-bound to a
+            // fresh `( Channel T )` local — that would move it under the
+            // borrow checker, and a `( ch )` wrapper would lex as a
+            // call). `: i CTL # i . <ch> ctl` binds only an i64, so no
+            // move; chtext must be a simple read (identifier or a
+            // parenthesised call), `. <ch> ctl` resolving its `ctl`
+            // field. The poll's chan_try_recv reads it the same way.
+            = ctl_decls ( nurl_str_cat ctl_decls
+                ( nurl_str_cat4 `: i ` ctl_name ( nurl_str_cat3 ` # i . ` chtext ` ctl` ) `\n` ) )
+            = arm_block ( nurl_str_cat arm_block
+                ( nurl_str_cat4 `( chan_raw_arm ` ctl_name ( nurl_str_cat ` ` w_name ) ` )\n` ) )
+            = disarm_block ( nurl_str_cat disarm_block
+                ( nurl_str_cat4 `( chan_raw_disarm ` ctl_name ( nurl_str_cat ` ` w_name ) ` )\n` ) )
+
+            // Readiness is fully type-erased (chan_raw_poll reads only
+            // the queue length + closed flag), so the element type is
+            // needed only for the chosen arm's chan_try_recv. poll:
+            //   ? ! DONE {
+            //     : i P ( chan_raw_poll CTL )       // 0 none / 1 value / 2 closed
+            //     ? > P 0 { = DONE T : ?T bind ( chan_try_recv [T] ( CH ) ) <body> } {}
+            //   } {}
+            : s poll_name ( nurl_str_cat3 `__` uid ( nurl_str_cat `p` ( nurl_str_int bidx ) ) )
+            : s recv_call ( nurl_str_cat4 `( chan_try_recv [` ttext `] ` ( nurl_str_cat chtext ` )` ) )
+            : s decl ( nurl_str_cat4 `: ?` ttext ( nurl_str_cat3 ` ` bind ` ` ) recv_call )
+            : s p_decl ( nurl_str_cat4 `: i ` poll_name ` ( chan_raw_poll ` ( nurl_str_cat ctl_name ` )` ) )
+            : s fire ( nurl_str_cat4 `= ` done_name ( nurl_str_cat3 ` T ` decl ` ` ) btext )
+            : s guard ( nurl_str_cat4 `? > ` poll_name ( nurl_str_cat3 ` 0 { ` fire ` } {}` ) `` )
+            : s poll ( nurl_str_cat4 `? ! ` done_name
+                ( nurl_str_cat4 ` { ` p_decl ( nurl_str_cat ` ` guard ) ` } {}\n` ) `` )
+            = poll_block ( nurl_str_cat poll_block poll )
+            = bidx + bidx 1
+        } {
+            // ── _ → { body }  (default / non-blocking) ──
+            ? ! ( is_ident_tok ( nurl_lex_type lex ) )
+            { ( die lex `select case must start with [T] or _` ) } {}
+            ? != 0 has_default { ( die lex `select has more than one default (_) arm` ) } {}
+            ( nurl_lex_advance lex )  // consume '_'
+            ( expect lex TT_ARROW )
+            ? != ( nurl_lex_type lex ) TT_LBRACE
+            { ( die lex `expected { body } in select default` ) } {}
+            : i dstart ( nurl_lex_cur_start lex )
+            ( skip_balanced lex )
+            : i dend ( nurl_lex_cur_start lex )
+            = default_body ( nurl_lex_src_slice lex dstart - dend dstart )
+            = has_default 1
+        }
+    }
+    ( expect lex TT_RBRACE )  // consume select's closing '}'
+
+    ? == bidx 0 { ( die lex `select has no channel cases` ) } {}
+
+    // ── Assemble the synthesised source ──
+    : ~ s src `{\n`
+    = src ( nurl_str_cat src ctl_decls )
+    = src ( nurl_str_cat4 src `: ~ b ` done_name ` F\n` )
+    ? != 0 has_default {
+        // Non-blocking: poll once, then default.
+        = src ( nurl_str_cat src poll_block )
+        : s dhead ( nurl_str_cat3 `? ! ` done_name ` { ` )
+        : s dtail ( nurl_str_cat3 ` = ` done_name ` T } {}\n` )
+        = src ( nurl_str_cat4 src dhead default_body dtail )
+    } {
+        // Blocking: arm / poll / wait / disarm loop.
+        = src ( nurl_str_cat4 src `: i ` w_name ` ( select_waiter_new )\n` )
+        = src ( nurl_str_cat4 src `~ ! ` done_name ` {\n` )
+        = src ( nurl_str_cat4 src `( select_waiter_prepare ` w_name ` )\n` )
+        = src ( nurl_str_cat src arm_block )
+        = src ( nurl_str_cat src poll_block )
+        = src ( nurl_str_cat4 src ( nurl_str_cat3 `? ! ` done_name ` { ( select_waiter_wait ` )
+            ( nurl_str_cat3 w_name ` )` ` } {}\n` ) `` )
+        = src ( nurl_str_cat src disarm_block )
+        = src ( nurl_str_cat src `}\n` )
+        = src ( nurl_str_cat4 src `( select_waiter_free ` w_name ` )\n` )
+    }
+    = src ( nurl_str_cat src `}\n` )
+
+    // ── Compile the synthesised block through a sub-lexer ──
+    : i sub ( nurl_lex_new src `<select>` )
+    ( gen_stmt sub syms cg )
+    ( nurl_set_last_type `void` )
+    ^ ``
+}
+
+// emit_or_chain: lower the alternatives of an or-pattern `A | B | C →`.
+// `tag_reg` holds the scrutinee's i64 variant tag. Starting at
+// `first_label`, each alternative loads its variant tag constant,
+// compares, and branches to `tag_ok_label` (the arm body) on a match or
+// to the next alternative — the last falling through to `next_label`.
+@ emit_or_chain i cg s tag_reg s or_names s tag_ok_label s next_label s first_label → v {
+    : ~ s rest or_names
+    : ~ s cur_lbl first_label
+    ~ != 0 ( nurl_str_len rest ) {
+        : s vname ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : b is_last == 0 ( nurl_str_len rest )
+        : s miss_lbl ? is_last next_label ( nurl_cg_lbl cg `oralt` )
+        ( nurl_print cur_lbl ) ( nurl_print `:\n` )
+        : s c ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print c )
+        ( nurl_print ` = load i64, i64* @` ) ( nurl_print vname ) ( nurl_print `\n` )
+        : s m ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print m )
+        ( nurl_print ` = icmp eq i64 ` ) ( nurl_print tag_reg )
+        ( nurl_print `, ` ) ( nurl_print c ) ( nurl_print `\n` )
+        ( nurl_print `  br i1 ` ) ( nurl_print m )
+        ( nurl_print `, label %` ) ( nurl_print tag_ok_label )
+        ( nurl_print `, label %` ) ( nurl_print miss_lbl ) ( emit_dbg_eol )
+        = cur_lbl miss_lbl
+    }
+}
+
 @ gen_match i lex i syms i cg → s {
     // Borrow checker (Phase 0d): source line of the `??`, for the
     // `match`/`endmatch` structural markers bracketing this match.
     : i bck_mline ( nurl_lex_line lex )
     ( nurl_lex_advance lex )  // consume '??'
+
+    // `?? {` (no scrutinee) is a Go-style channel select, not a match.
+    ? == ( nurl_lex_type lex ) TT_LBRACE { ^ ( gen_select lex syms cg ) } {}
 
     // Peek the variable name (if any) BEFORE gen_expr consumes it, so we
     // can later look up `<name>__res_nurl_T` (set by gen_let_or_struct)
@@ -3977,6 +4214,26 @@
             : s pattern_name ( nurl_lex_val lex )
             ( nurl_lex_advance lex )
 
+            // Or-patterns: `A | B | C → body`. Several tag-only variants
+            // share one body. Collected here as a space-separated list
+            // of the EXTRA names (pattern_name is the first). Restricted
+            // to named variants with no payload + no literal constraint —
+            // the alternatives would bind different payload shapes, so
+            // only the tag is compared.
+            : ~ s or_names ``
+            ? ! is_int_pat
+            { ~ == ( nurl_lex_type lex ) TT_PIPE {
+                ( nurl_lex_advance lex )  // consume '|'
+                ? ( is_ident_tok ( nurl_lex_type lex ) )
+                { = or_names ? == 0 ( nurl_str_len or_names )
+                    ( nurl_lex_val lex )
+                    ( nurl_str_cat3 or_names ` ` ( nurl_lex_val lex ) )
+                    ( nurl_lex_advance lex ) }
+                { ( die lex `expected variant name after '|' in or-pattern` ) }
+            } }
+            {}
+            : b has_or != 0 ( nurl_str_len or_names )
+
             // Collect up to 3 payload slots before the arrow.  Each slot is either
             // an identifier (binds the payload) or an integer literal (compared).
             // Int-literal patterns carry no payload — skip the loop entirely.
@@ -3987,7 +4244,7 @@
             : s lit1 ``
             : s lit2 ``
             : i pvc 0
-            ~ & ! is_int_pat != ( nurl_lex_type lex ) TT_ARROW {
+            ~ & & ! is_int_pat != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_QUEST {
                 : i pst ( nurl_lex_type lex )
                 ? ( is_ident_tok pst ) {
                     ? == pvc 0 { = pv0 ( nurl_lex_val lex ) } {}
@@ -4012,11 +4269,41 @@
             != 0 ( nurl_str_len lit1 )
             != 0 ( nurl_str_len lit2 )
 
+            // Optional guard: `Pattern payloads ? <cond> → body`. The
+            // guard is evaluated AFTER payload binding (so it can read
+            // the bound payloads) — a false guard falls through to the
+            // next arm. Record its source position now and skip it; it
+            // is replayed at the arm body via set_pos.
+            : ~ i has_guard 0
+            : ~ i guard_pos 0
+            ? == ( nurl_lex_type lex ) TT_QUEST {
+                = has_guard 1
+                ( nurl_lex_advance lex )  // consume '?'
+                = guard_pos ( nurl_lex_cur_start lex )
+                : ~ i gd 0
+                ~ | != ( nurl_lex_type lex ) TT_ARROW != gd 0 {
+                    : i gt ( nurl_lex_type lex )
+                    ? == gt TT_EOF { ( die lex `expected -> after match guard` ) } {}
+                    ? | == gt TT_LPAREN == gt TT_LBRACK { = gd + gd 1 } {}
+                    ? | == gt TT_RPAREN == gt TT_RBRACK { = gd - gd 1 } {}
+                    ( nurl_lex_advance lex )
+                }
+            } {}
+
             ( expect lex TT_ARROW )  // expect '→'
+            : i body_pos ( nurl_lex_cur_start lex )
 
             // Generate arm label; wildcard skips comparison and jumps directly
             : s arm_label ( nurl_cg_lbl cg `arm` )
             : s next_label ``
+            // Guards need a `next_label` to fall through to on a false
+            // guard; a wildcard arm has none (and a guarded catch-all is
+            // a contradiction anyway). Or-patterns + guards are kept
+            // orthogonal for v1.
+            ? & != 0 has_guard ( seq pattern_name `_` )
+            { ( die lex `a guard (? cond) on a wildcard arm is not supported - guard a specific pattern instead` ) } {}
+            ? & != 0 has_guard has_or
+            { ( die lex `cannot combine an or-pattern with a guard` ) } {}
             ? ( seq pattern_name `_` ) {
                 // Wildcard: unconditional branch — no tag load, no icmp
                 = has_wildcard 1
@@ -4044,7 +4331,10 @@
                     ? ( str_contains_word seen_variants pattern_name ) {
                         ( die lex ( nurl_str_cat `duplicate match arm for variant: ` pattern_name ) )
                     } {}
-                    ? has_lit {} {
+                    // A guarded arm does NOT cover its variant for
+                    // exhaustiveness (the guard may be false) — same as a
+                    // literal-constrained arm.
+                    ? | has_lit != 0 has_guard {} {
                         = seen_variants ? == 0 ( nurl_str_len seen_variants )
                         pattern_name
                         ( nurl_str_cat seen_variants ( nurl_str_cat ` ` pattern_name ) )
@@ -4084,13 +4374,39 @@
                         ( nurl_print `, ` ) ( nurl_print enum_const ) ( nurl_print `\n` )
                     }
 
+                    // Or-pattern bookkeeping (tag-only; no payload, no
+                    // literal, named variants only). Record every
+                    // alternative for exhaustiveness + duplicate checks.
+                    ? has_or {
+                        ? != 0 pvc { ( die lex `or-pattern variants cannot bind payloads` ) } {}
+                        ? has_lit { ( die lex `or-pattern cannot mix literal constraints` ) } {}
+                        ? is_bool_pat { ( die lex `or-pattern applies to named enum variants, not T/F` ) } {}
+                        : ~ s orr or_names
+                        ~ != 0 ( nurl_str_len orr ) {
+                            : s vn ( str_first_word orr )
+                            = orr ( str_skip_word orr )
+                            ? ( str_contains_word seen_variants vn )
+                            { ( die lex ( nurl_str_cat `duplicate match arm for variant: ` vn ) ) } {}
+                            = seen_variants ? == 0 ( nurl_str_len seen_variants )
+                            vn ( nurl_str_cat3 seen_variants ` ` vn )
+                        }
+                    } {}
+
                     = next_label ( nurl_cg_lbl cg `next` )
                     // If the pattern has literal constraints, jump to a literal-check
                     // block first; otherwise branch straight to the arm body.
                     : s tag_ok_label ? has_lit ( nurl_cg_lbl cg `litchk` ) arm_label
+                    // On a first-variant miss: an or-pattern falls through
+                    // its alternative chain; a plain arm goes to next_label.
+                    : s first_miss ? has_or ( nurl_cg_lbl cg `oralt` ) next_label
                     ( nurl_print `  br i1 ` ) ( nurl_print cmp_reg )
                     ( nurl_print `, label %` ) ( nurl_print tag_ok_label )
-                    ( nurl_print `, label %` ) ( nurl_print next_label ) ( emit_dbg_eol )
+                    ( nurl_print `, label %` ) ( nurl_print first_miss ) ( emit_dbg_eol )
+                    // Or-pattern alternatives: compare the tag to each
+                    // further variant; any match jumps to the arm body.
+                    ? has_or
+                    { ( emit_or_chain cg tag_reg or_names tag_ok_label next_label first_miss ) }
+                    {}
                     // Emit chained literal comparisons.  Each failure jumps to next_label;
                     // the last successful check falls through to arm_label.
                     ? has_lit {
@@ -4393,6 +4709,31 @@
                 ( nurl_print `* ` ) ( nurl_print vp2 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv2 pt2 )
                 ( nurl_sym_def syms ( nurl_str_cat pv2 `__ptr` ) vp2 )
+            } {}
+
+            // Guard test (after payload binding so it sees the bound
+            // payloads): replay the recorded guard expression, branch to
+            // the body on true and to the next arm on false, then restore
+            // the lexer to the body for gen_stmt below.
+            ? != 0 has_guard {
+                ( nurl_lex_set_pos lex guard_pos )
+                : s gv ( gen_expr lex syms cg )
+                : s gvt ( nurl_get_last_type )
+                : ~ s gcond gv
+                ? ( seq gvt `i1` ) {} {
+                    : s gz ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print gz )
+                    ( nurl_print ` = icmp ne ` ) ( nurl_print gvt )
+                    ( nurl_print ` ` ) ( nurl_print gv ) ( nurl_print `, 0\n` )
+                    = gcond gz
+                }
+                : s gbody ( nurl_cg_lbl cg `gbody` )
+                ( nurl_print `  br i1 ` ) ( nurl_print gcond )
+                ( nurl_print `, label %` ) ( nurl_print gbody )
+                ( nurl_print `, label %` ) ( nurl_print next_label ) ( emit_dbg_eol )
+                ( nurl_print gbody ) ( nurl_print `:\n` )
+                ( nurl_sym_def syms `__cur_lbl__` gbody )
+                ( nurl_lex_set_pos lex body_pos )
             } {}
 
             = g_did_ret 0
@@ -9124,6 +9465,20 @@
         ( nurl_lex_advance lex )
         = tparams ? == 0 ( nurl_str_len tparams ) tp
         ( nurl_str_cat tparams ( nurl_str_cat ` ` tp ) )
+        // Optional trait bound `A: Ord`. Recorded per-tparam; checked at
+        // each instantiation (the dispatch itself already works through
+        // monomorphisation — the bound turns a missing impl from a
+        // cryptic unresolved call into a clear diagnostic, and documents
+        // the requirement). Multiple bounds via repeated `: Trait`.
+        ~ == ( nurl_lex_type lex ) TT_COLON {
+            ( nurl_lex_advance lex )  // consume ':'
+            : s bound ( nurl_lex_val lex )
+            ( nurl_lex_advance lex )  // consume trait name
+            : s bkey ( nurl_str_cat3 fname `__bound__` tp )
+            : s prev ( nurl_sym_get g_generic_syms bkey )
+            ( nurl_sym_def g_generic_syms bkey
+            ? == 0 ( nurl_str_len prev ) bound ( nurl_str_cat3 prev ` ` bound ) )
+        }
     }
     ( expect lex TT_RBRACK )
     // Collect params/return/body tokens until EOF
@@ -9390,7 +9745,13 @@
             // disambiguates.
             : i p4 ? & & is_name1 is_name2 is_name3 ( nurl_lex_peek4_type lex ) 0
             : b gen3 & & & is_name1 is_name2 is_name3 == p4 TT_RBRACK
-            ? | | gen1 gen2 gen3
+            // Bounded tparam list `[A: Trait …]`. A slice param's type
+            // never contains a `:`, so a colon anywhere in the bracket
+            // (within peek range) unambiguously marks a generic. Covers
+            // `[A: Ord]`, `[A B: Hash]`, `[A: Ord B]`, `[A B C: H]`.
+            : i p4c ( nurl_lex_peek4_type lex )
+            : b genb & is_name1 | | == p2 TT_COLON == p3 TT_COLON == p4c TT_COLON
+            ? | | | gen1 gen2 gen3 genb
             { ( gen_generic_fn_store lex syms fname ) }
             { ( gen_fn_decl_concrete fname lex syms cg ) }
         }
@@ -9926,6 +10287,62 @@
     ( nurl_sym_def syms ( nurl_str_cat sname `__field_count` ) ( nurl_str_int fidx ) )
 }
 
+// Narrow compile-time constant folding for integer-typed top-level
+// consts. Lets `: i SECS * * 60 60 24` and `: i INT_MIN - -9223372036854775807 1`
+// work where only a single literal was previously accepted. Pure prefix
+// arithmetic over INT literals; no identifiers, no calls — fully
+// transparent (it only computes a value, never hides control flow).
+// `%` (TT_PERCENT) is deliberately excluded: at a top-level position
+// `%` is the trait / impl / Drop decl sigil, which the lexical
+// pre-passes dispatch on, so a `% a b` const value mis-scans. The other
+// nine integer operators do not collide.
+@ __is_const_int_op i tt → b {
+    ? == tt TT_PLUS T
+    ? == tt TT_MINUS T
+    ? == tt TT_STAR T
+    ? == tt TT_SLASH T
+    ? == tt TT_AMP T
+    ? == tt TT_PIPE T
+    ? == tt TT_SHL T
+    ? == tt TT_SHR T
+    ? == tt TT_CARETCARET T
+    F
+}
+
+// XOR via `(a|b) - (a&b)` so nurlc.nu itself stays `^^`-free (the
+// stage-0 nurlc.py does not lex `^^`).
+@ __const_int_apply i tt i a i b → i {
+    ? == tt TT_PLUS { ^ + a b } {}
+    ? == tt TT_MINUS { ^ - a b } {}
+    ? == tt TT_STAR { ^ * a b } {}
+    ? == tt TT_SLASH { ? == b 0 { ^ 0 } {} ^ / a b } {}
+    ? == tt TT_AMP { ^ & a b } {}
+    ? == tt TT_PIPE { ^ | a b } {}
+    ? == tt TT_SHL { ^ << a b } {}
+    ? == tt TT_SHR { ^ >> a b } {}
+    ? == tt TT_CARETCARET { ^ - | a b & a b } {}
+    ^ 0
+}
+
+// Recursive-descent evaluator for a prefix integer const expression.
+// Consumes tokens; returns the folded i64.
+@ const_eval_int i lex → i {
+    : i tt ( nurl_lex_type lex )
+    ? == tt TT_INT {
+        : i v ( nurl_lex_inum lex )
+        ( nurl_lex_advance lex )
+        ^ v
+    } {}
+    ? ( __is_const_int_op tt ) {
+        ( nurl_lex_advance lex )
+        : i a ( const_eval_int lex )
+        : i b ( const_eval_int lex )
+        ^ ( __const_int_apply tt a b )
+    } {}
+    ( die lex `const expression must be integer literals combined with + - * / << >> & | ^^ (use a precomputed literal for %)` )
+    ^ 0
+}
+
 @ gen_const_decl s ty_tok b is_mutable i lex i syms → v {
     : s lt ( llvm_type ty_tok )
     // Grammar v2.0+: consume staged `pub` flag, record origin + public
@@ -9992,6 +10409,20 @@
             ( nurl_print strname ) ( nurl_print `, i64 0, i64 0)\n\n` )
             ( nurl_sym_def syms cname `i8*` )
             ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
+        }
+        // Integer const-expression RHS (operator-led): fold to a single
+        // value at compile time. Gated on an integer LLVM type wider
+        // than i1 so bool consts keep their dedicated branch above.
+        ? & ( __is_const_int_op tt ) > ( int_width lt ) 1
+        { : i n ( const_eval_int lex )
+            ( nurl_print `@` ) ( nurl_print cname )
+            ( nurl_print ` = global ` ) ( nurl_print lt ) ( nurl_print ` ` )
+            ( nurl_print ( nurl_str_int n ) ) ( nurl_print `\n\n` )
+            ( nurl_sym_def syms cname lt )
+            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
+            ? is_mutable
+            { ( nurl_sym_def syms ( nurl_str_cat cname `__mutable` ) `1` ) }
+            {}
         }
         { ( nurl_lex_advance lex ) }  // unknown literal — skip
     }
@@ -11085,6 +11516,9 @@
         : s impl_nurl ( capture_impl_nurl_name lex )
         : s impl_llvm ( parse_type lex )  // e.g. "i64", "i8*", "%Point"
         : s impl_mangle ( mangle_type impl_llvm )
+        // Record that `tname` is implemented for this LLVM type, so a
+        // generic bound `A: tname` can be verified at instantiation.
+        ( nurl_sym_def g_trait_syms ( nurl_str_cat3 tname `##` impl_llvm ) `1` )
         ( expect lex TT_LBRACE )
         : s provided ``
         ~ != ( nurl_lex_type lex ) TT_RBRACE {

@@ -109,8 +109,18 @@ ffi_param  = type IDENT? ;
 (* [T], [K V] — type variable list for generic declarations.
    Declaration-site list of single-letter (or multi-letter) type names.
    The type variable 'T' lexes as the boolean literal token and is
-   disambiguated by context (in a [...] list and in parameter position). *)
-type_params = '[' IDENT+ ']' ;
+   disambiguated by context (in a [...] list and in parameter position).
+
+   A type variable may carry one or more TRAIT BOUNDS via `: Trait`,
+   e.g. `[A: Ord]` or `[K: Hash V]` or `[A: Ord: Show]`. A bound is
+   checked at every instantiation: the concrete type substituted for the
+   variable must have an `impl` of the named trait, else a compile error
+   names the unsatisfied bound. (Method dispatch inside the body already
+   resolves to the concrete impl through monomorphisation; the bound adds
+   the up-front guarantee + documentation.) Disambiguation from a slice
+   parameter relies on the colon — a slice param type never contains one.
+   Example:  @ my_max [A: Ord] A x A y → A { … }  — A must implement Ord *)
+type_params = '[' ( IDENT ( ':' IDENT )* )+ ']' ;
 
 
 (* @ name [T]? param* → ret { body }
@@ -176,8 +186,20 @@ enum_variant = IDENT type* ;
    Example:  : i MAX_CONN 100       — immutable global constant
    Example:  : ~ i counter 0        — mutable global variable
    Example:  : s GREETING `hello`   — immutable string
-   Example:  : ~ b debug_mode F     — mutable boolean flag *)
-const_decl = ':' '~'? type IDENT literal ;
+   Example:  : ~ b debug_mode F     — mutable boolean flag
+
+   An INTEGER-typed const (i / u / sized ints, not b) may instead take a
+   compile-time-foldable prefix expression over integer literals — the
+   operators '+ - * / << >> & | ^^' (NOT '%', which collides with the
+   trait/impl decl sigil). Folded to a single value by const_eval_int.
+   Example:  : i SECS_PER_DAY * * 60 60 24            — 86400
+   Example:  : i INT_MIN - -9223372036854775807 1     — two's-complement min
+   Example:  : i PAGE << 1 12                         — 4096 *)
+const_decl  = ':' '~'? type IDENT const_value ;
+const_value = literal | const_int_expr ;
+const_int_expr = INT
+              | ( '+' | '-' | '*' | '/' | '<<' | '>>' | '&' | '|' | '^^' )
+                const_int_expr const_int_expr ;
 
 
 (* % Name [T]? { ( fn_header | fn_decl )* }
@@ -534,8 +556,46 @@ cast_expr = '#' type expr [ INT ] ;
                  T v → v
                  F   → 0                               — BOOL pattern on ?T *)
 match_expr    = '??' expr '{' match_arm* '}' ;
-match_arm     = ( IDENT | BOOL | '_' ) match_payload* '→' expr ;
+match_arm     = pattern match_payload* guard? '→' expr ;
+pattern       = ( IDENT | BOOL | '_' )
+              | IDENT ( '|' IDENT )+ ;   (* or-pattern: tag-only variants,
+                                            no payload / literal / guard *)
 match_payload = IDENT | INT ;
+guard         = '?' expr ;   (* evaluated AFTER payload binding; a false
+                                guard falls through to the next arm, so a
+                                guarded arm does NOT satisfy exhaustiveness
+                                for its variant — a catch-all is still
+                                required. Not allowed on a '_' wildcard
+                                arm or combined with an or-pattern. *)
+
+(* ?? { select_arm* }
+   Go-style select over channels. A '??' whose scrutinee is immediately
+   '{' has no value to match, so it is unambiguously a channel select.
+   Each channel arm receives from one channel; the construct proceeds
+   with the FIRST ready arm. With no '_' default arm it BLOCKS until some
+   channel becomes ready (a value is sent OR the channel is closed);
+   with a '_' default arm it never blocks — the default runs when no
+   channel is ready. Arms are tried in source order (deterministic
+   priority).
+
+   Each channel arm is '[' type ']' chan_expr '→' IDENT '{' body '}'.
+   The bound IDENT is the '? T' option that a receive yields: T v ⇒ a
+   value, F ⇒ the channel is closed and drained. chan_expr must be a
+   simple read (an identifier or a parenthesised call); it is evaluated
+   under the borrow checker as a borrow, not a move.
+
+   Example:  ?? {
+                 [i]      jobs    → o { ?? o { T n → … F → … } }
+                 [String] control → o { ?? o { T s → … F → … } }
+                 _                → { /* nothing ready */ }
+             }
+
+   Lowers to the chan_raw_* / select_waiter_* rendezvous in
+   stdlib/std/channel.nu (arm every channel, block on a shared waiter,
+   disarm on wake) — see gen_select in compiler/nurlc.nu. *)
+select_expr   = '??' '{' select_arm* '}' ;
+select_arm    = ( '[' type ']' expr '→' IDENT block )
+              | ( '_' '→' block ) ;
 
 
 (* ── TYPES ────────────────────────────────────────────────────── *)

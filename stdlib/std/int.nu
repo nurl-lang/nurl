@@ -28,11 +28,16 @@ $ `stdlib/core/string.nu`
 
 : i INT_MAX 9223372036854775807
 
-// Module-level `: i FOO <expr>` only accepts literal RHS, so INT_MIN is
-// exposed as a niladic function that evaluates the two's-complement
-// minimum at call time.
+// Two's-complement minimum. The bare literal -9223372036854775808 cannot
+// be lexed (its magnitude overflows a positive i64 before the sign is
+// applied), but compile-time const folding evaluates the subtraction.
+: i INT_MIN - -9223372036854775807 1
+
+// Retained for source compatibility — predates const folding, when a
+// module-level `: i FOO <expr>` accepted only a literal RHS. New code
+// should prefer the `INT_MIN` constant above.
 @ int_min_val → i {
-    ^ - -9223372036854775807 1
+    ^ INT_MIN
 }
 
 // ── Operations ─────────────────────────────────────────────────────

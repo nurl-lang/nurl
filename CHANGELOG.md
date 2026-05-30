@@ -22,6 +22,73 @@ IR).
 
 ### Added
 
+- **Trait bounds on generic functions — `[A: Trait]`.** A generic type
+  parameter may now carry one or more trait bounds: `@ my_max [A: Ord] A
+  x A y → A { … }`. Trait-method dispatch inside a generic body already
+  resolved to the concrete `impl` through monomorphisation (dispatch is
+  keyed on the first argument's LLVM type, which becomes concrete at
+  instantiation); the bound adds the up-front guarantee. `scan_impl_decl`
+  now registers each `% Trait Type {}` as `Trait##<llvm>` in
+  `g_trait_syms`; `gen_generic_fn_store` records per-tparam bounds; and
+  `check_generic_bounds` (called from `gen_call` at every generic call
+  site) verifies each bounded tparam's concrete type has the impl —
+  turning a missing impl from a cryptic unresolved-call link error into a
+  clear "type 'X' does not implement trait 'Y' required by bound A: Y"
+  diagnostic. Generic detection in `gen_fn_decl` extended to recognise a
+  colon anywhere in the `[…]` (a slice param's type never contains one).
+  This removes the need to pass `Ord`/`Hash`/`eq` closures into generic
+  helpers when an `impl` exists. Tests `compiler/tests/trait_bounds.nu`
+  (positive, i + String) and `should_fail_trait_bound.nu` (bound
+  violation → COMPILE FAIL). Bootstrap fixed point holds (stage1 ≡ stage2
+  byte-identical at 1 730 148 B).
+- **`??` match guards + or-patterns.** Two additions to `gen_match`:
+  - **Guards** — `Pattern payloads ? <cond> → body`. The guard is
+    evaluated *after* payload binding (so it can read the bound
+    payloads); a false guard falls through to the next arm. Implemented
+    by recording the guard's source span during arm parse and replaying
+    it via `nurl_lex_set_pos` at the arm body, branching to the body or
+    the next arm. A guarded arm does NOT satisfy exhaustiveness for its
+    variant — a catch-all (unguarded or `_`) is still required. Not
+    allowed on a `_` wildcard arm or combined with an or-pattern.
+  - **Or-patterns** — `A | B | C → body`: several tag-only named
+    variants share one body (`emit_or_chain` lowers the alternatives to
+    a tag-compare chain). No payload binding or literal constraints; all
+    listed variants count toward exhaustiveness.
+
+  Test `compiler/tests/match_guards_or.nu`. Bootstrap fixed point holds
+  (stage1 ≡ stage2 byte-identical at 1 720 428 B).
+- **Compile-time const folding for integer globals.** A top-level
+  integer const (`: i NAME …`, or u / sized ints — not `b`) may now take
+  a prefix expression over integer literals instead of a single literal:
+  `+ - * / << >> & | ^^` (not `%`, which collides with the trait/impl
+  decl sigil at scan time). `const_eval_int` in `gen_const_decl` folds it
+  to one value. Fixes the long-standing wart where e.g. the
+  two's-complement minimum needed a niladic helper — `stdlib/std/int.nu`
+  now exposes `: i INT_MIN - -9223372036854775807 1` directly
+  (`int_min_val` retained, delegating to it). Transparent (computes a
+  value, hides no control flow); fits the parse-directed architecture.
+  Test `compiler/tests/const_eval.nu`. Bootstrap fixed point holds.
+- **`select` over channels — `?? { … }`** — Go-style select. A `??`
+  whose scrutinee is immediately `{` (no value to match) is a channel
+  select; each arm `[T] ch → bind { body }` receives from one channel
+  and the construct proceeds with the first ready arm. With no `_`
+  default it BLOCKS until some channel is ready (value sent or channel
+  closed); a `_ → { … }` default makes it non-blocking. `bind` is the
+  `?T` the receive yields (None ⇒ closed). Arms are heterogeneous (each
+  channel may carry a different element type) and tried in source order.
+  Implemented in `gen_select` (compiler/nurlc.nu) as a desugaring that
+  synthesises NURL source from the verbatim user channel-exprs + bodies
+  and compiles it through a sub-lexer — no raw IR, no new lexer token.
+  The blocking rendezvous (a shared `SelectWaiter` armed on every
+  channel, fired by senders/closers under the channel mutex) lives in
+  `stdlib/std/channel.nu` via the type-erased `chan_raw_poll` /
+  `chan_raw_arm` / `chan_raw_disarm` / `select_waiter_*` helpers — the
+  element type drops out of the orchestration, so one non-generic code
+  path serves channels of any type. Test
+  `compiler/tests/select_basic.nu` (deterministic default / value /
+  closed / priority cases always-on; concurrent blocking path gated on
+  `NURL_NET_TESTS=1`). Bootstrap fixed point holds (stage1 ≡ stage2
+  byte-identical at 1 691 603 B).
 - **Stdlib numeric + text utility round-out** — four pure-NURL
   additions (no compiler changes, each with an offline test):
   - `stdlib/std/int.nu`: `int_gcd`, `int_lcm`, `int_isqrt` (Newton-method
