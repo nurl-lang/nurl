@@ -4050,6 +4050,34 @@
     ^ ``
 }
 
+// emit_or_chain: lower the alternatives of an or-pattern `A | B | C →`.
+// `tag_reg` holds the scrutinee's i64 variant tag. Starting at
+// `first_label`, each alternative loads its variant tag constant,
+// compares, and branches to `tag_ok_label` (the arm body) on a match or
+// to the next alternative — the last falling through to `next_label`.
+@ emit_or_chain i cg s tag_reg s or_names s tag_ok_label s next_label s first_label → v {
+    : ~ s rest or_names
+    : ~ s cur_lbl first_label
+    ~ != 0 ( nurl_str_len rest ) {
+        : s vname ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : b is_last == 0 ( nurl_str_len rest )
+        : s miss_lbl ? is_last next_label ( nurl_cg_lbl cg `oralt` )
+        ( nurl_print cur_lbl ) ( nurl_print `:\n` )
+        : s c ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print c )
+        ( nurl_print ` = load i64, i64* @` ) ( nurl_print vname ) ( nurl_print `\n` )
+        : s m ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print m )
+        ( nurl_print ` = icmp eq i64 ` ) ( nurl_print tag_reg )
+        ( nurl_print `, ` ) ( nurl_print c ) ( nurl_print `\n` )
+        ( nurl_print `  br i1 ` ) ( nurl_print m )
+        ( nurl_print `, label %` ) ( nurl_print tag_ok_label )
+        ( nurl_print `, label %` ) ( nurl_print miss_lbl ) ( emit_dbg_eol )
+        = cur_lbl miss_lbl
+    }
+}
+
 @ gen_match i lex i syms i cg → s {
     // Borrow checker (Phase 0d): source line of the `??`, for the
     // `match`/`endmatch` structural markers bracketing this match.
@@ -4153,6 +4181,26 @@
             : s pattern_name ( nurl_lex_val lex )
             ( nurl_lex_advance lex )
 
+            // Or-patterns: `A | B | C → body`. Several tag-only variants
+            // share one body. Collected here as a space-separated list
+            // of the EXTRA names (pattern_name is the first). Restricted
+            // to named variants with no payload + no literal constraint —
+            // the alternatives would bind different payload shapes, so
+            // only the tag is compared.
+            : ~ s or_names ``
+            ? ! is_int_pat
+            { ~ == ( nurl_lex_type lex ) TT_PIPE {
+                ( nurl_lex_advance lex )  // consume '|'
+                ? ( is_ident_tok ( nurl_lex_type lex ) )
+                { = or_names ? == 0 ( nurl_str_len or_names )
+                    ( nurl_lex_val lex )
+                    ( nurl_str_cat3 or_names ` ` ( nurl_lex_val lex ) )
+                    ( nurl_lex_advance lex ) }
+                { ( die lex `expected variant name after '|' in or-pattern` ) }
+            } }
+            {}
+            : b has_or != 0 ( nurl_str_len or_names )
+
             // Collect up to 3 payload slots before the arrow.  Each slot is either
             // an identifier (binds the payload) or an integer literal (compared).
             // Int-literal patterns carry no payload — skip the loop entirely.
@@ -4163,7 +4211,7 @@
             : s lit1 ``
             : s lit2 ``
             : i pvc 0
-            ~ & ! is_int_pat != ( nurl_lex_type lex ) TT_ARROW {
+            ~ & & ! is_int_pat != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_QUEST {
                 : i pst ( nurl_lex_type lex )
                 ? ( is_ident_tok pst ) {
                     ? == pvc 0 { = pv0 ( nurl_lex_val lex ) } {}
@@ -4188,11 +4236,41 @@
             != 0 ( nurl_str_len lit1 )
             != 0 ( nurl_str_len lit2 )
 
+            // Optional guard: `Pattern payloads ? <cond> → body`. The
+            // guard is evaluated AFTER payload binding (so it can read
+            // the bound payloads) — a false guard falls through to the
+            // next arm. Record its source position now and skip it; it
+            // is replayed at the arm body via set_pos.
+            : ~ i has_guard 0
+            : ~ i guard_pos 0
+            ? == ( nurl_lex_type lex ) TT_QUEST {
+                = has_guard 1
+                ( nurl_lex_advance lex )  // consume '?'
+                = guard_pos ( nurl_lex_cur_start lex )
+                : ~ i gd 0
+                ~ | != ( nurl_lex_type lex ) TT_ARROW != gd 0 {
+                    : i gt ( nurl_lex_type lex )
+                    ? == gt TT_EOF { ( die lex `expected -> after match guard` ) } {}
+                    ? | == gt TT_LPAREN == gt TT_LBRACK { = gd + gd 1 } {}
+                    ? | == gt TT_RPAREN == gt TT_RBRACK { = gd - gd 1 } {}
+                    ( nurl_lex_advance lex )
+                }
+            } {}
+
             ( expect lex TT_ARROW )  // expect '→'
+            : i body_pos ( nurl_lex_cur_start lex )
 
             // Generate arm label; wildcard skips comparison and jumps directly
             : s arm_label ( nurl_cg_lbl cg `arm` )
             : s next_label ``
+            // Guards need a `next_label` to fall through to on a false
+            // guard; a wildcard arm has none (and a guarded catch-all is
+            // a contradiction anyway). Or-patterns + guards are kept
+            // orthogonal for v1.
+            ? & != 0 has_guard ( seq pattern_name `_` )
+            { ( die lex `a guard (? cond) on a wildcard arm is not supported - guard a specific pattern instead` ) } {}
+            ? & != 0 has_guard has_or
+            { ( die lex `cannot combine an or-pattern with a guard` ) } {}
             ? ( seq pattern_name `_` ) {
                 // Wildcard: unconditional branch — no tag load, no icmp
                 = has_wildcard 1
@@ -4220,7 +4298,10 @@
                     ? ( str_contains_word seen_variants pattern_name ) {
                         ( die lex ( nurl_str_cat `duplicate match arm for variant: ` pattern_name ) )
                     } {}
-                    ? has_lit {} {
+                    // A guarded arm does NOT cover its variant for
+                    // exhaustiveness (the guard may be false) — same as a
+                    // literal-constrained arm.
+                    ? | has_lit != 0 has_guard {} {
                         = seen_variants ? == 0 ( nurl_str_len seen_variants )
                         pattern_name
                         ( nurl_str_cat seen_variants ( nurl_str_cat ` ` pattern_name ) )
@@ -4260,13 +4341,39 @@
                         ( nurl_print `, ` ) ( nurl_print enum_const ) ( nurl_print `\n` )
                     }
 
+                    // Or-pattern bookkeeping (tag-only; no payload, no
+                    // literal, named variants only). Record every
+                    // alternative for exhaustiveness + duplicate checks.
+                    ? has_or {
+                        ? != 0 pvc { ( die lex `or-pattern variants cannot bind payloads` ) } {}
+                        ? has_lit { ( die lex `or-pattern cannot mix literal constraints` ) } {}
+                        ? is_bool_pat { ( die lex `or-pattern applies to named enum variants, not T/F` ) } {}
+                        : ~ s orr or_names
+                        ~ != 0 ( nurl_str_len orr ) {
+                            : s vn ( str_first_word orr )
+                            = orr ( str_skip_word orr )
+                            ? ( str_contains_word seen_variants vn )
+                            { ( die lex ( nurl_str_cat `duplicate match arm for variant: ` vn ) ) } {}
+                            = seen_variants ? == 0 ( nurl_str_len seen_variants )
+                            vn ( nurl_str_cat3 seen_variants ` ` vn )
+                        }
+                    } {}
+
                     = next_label ( nurl_cg_lbl cg `next` )
                     // If the pattern has literal constraints, jump to a literal-check
                     // block first; otherwise branch straight to the arm body.
                     : s tag_ok_label ? has_lit ( nurl_cg_lbl cg `litchk` ) arm_label
+                    // On a first-variant miss: an or-pattern falls through
+                    // its alternative chain; a plain arm goes to next_label.
+                    : s first_miss ? has_or ( nurl_cg_lbl cg `oralt` ) next_label
                     ( nurl_print `  br i1 ` ) ( nurl_print cmp_reg )
                     ( nurl_print `, label %` ) ( nurl_print tag_ok_label )
-                    ( nurl_print `, label %` ) ( nurl_print next_label ) ( emit_dbg_eol )
+                    ( nurl_print `, label %` ) ( nurl_print first_miss ) ( emit_dbg_eol )
+                    // Or-pattern alternatives: compare the tag to each
+                    // further variant; any match jumps to the arm body.
+                    ? has_or
+                    { ( emit_or_chain cg tag_reg or_names tag_ok_label next_label first_miss ) }
+                    {}
                     // Emit chained literal comparisons.  Each failure jumps to next_label;
                     // the last successful check falls through to arm_label.
                     ? has_lit {
@@ -4569,6 +4676,31 @@
                 ( nurl_print `* ` ) ( nurl_print vp2 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv2 pt2 )
                 ( nurl_sym_def syms ( nurl_str_cat pv2 `__ptr` ) vp2 )
+            } {}
+
+            // Guard test (after payload binding so it sees the bound
+            // payloads): replay the recorded guard expression, branch to
+            // the body on true and to the next arm on false, then restore
+            // the lexer to the body for gen_stmt below.
+            ? != 0 has_guard {
+                ( nurl_lex_set_pos lex guard_pos )
+                : s gv ( gen_expr lex syms cg )
+                : s gvt ( nurl_get_last_type )
+                : ~ s gcond gv
+                ? ( seq gvt `i1` ) {} {
+                    : s gz ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print gz )
+                    ( nurl_print ` = icmp ne ` ) ( nurl_print gvt )
+                    ( nurl_print ` ` ) ( nurl_print gv ) ( nurl_print `, 0\n` )
+                    = gcond gz
+                }
+                : s gbody ( nurl_cg_lbl cg `gbody` )
+                ( nurl_print `  br i1 ` ) ( nurl_print gcond )
+                ( nurl_print `, label %` ) ( nurl_print gbody )
+                ( nurl_print `, label %` ) ( nurl_print next_label ) ( emit_dbg_eol )
+                ( nurl_print gbody ) ( nurl_print `:\n` )
+                ( nurl_sym_def syms `__cur_lbl__` gbody )
+                ( nurl_lex_set_pos lex body_pos )
             } {}
 
             = g_did_ret 0

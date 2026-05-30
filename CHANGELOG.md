@@ -22,6 +22,22 @@ IR).
 
 ### Added
 
+- **`??` match guards + or-patterns.** Two additions to `gen_match`:
+  - **Guards** — `Pattern payloads ? <cond> → body`. The guard is
+    evaluated *after* payload binding (so it can read the bound
+    payloads); a false guard falls through to the next arm. Implemented
+    by recording the guard's source span during arm parse and replaying
+    it via `nurl_lex_set_pos` at the arm body, branching to the body or
+    the next arm. A guarded arm does NOT satisfy exhaustiveness for its
+    variant — a catch-all (unguarded or `_`) is still required. Not
+    allowed on a `_` wildcard arm or combined with an or-pattern.
+  - **Or-patterns** — `A | B | C → body`: several tag-only named
+    variants share one body (`emit_or_chain` lowers the alternatives to
+    a tag-compare chain). No payload binding or literal constraints; all
+    listed variants count toward exhaustiveness.
+
+  Test `compiler/tests/match_guards_or.nu`. Bootstrap fixed point holds
+  (stage1 ≡ stage2 byte-identical at 1 720 428 B).
 - **Compile-time const folding for integer globals.** A top-level
   integer const (`: i NAME …`, or u / sized ints — not `b`) may now take
   a prefix expression over integer literals instead of a single literal:

@@ -546,8 +546,17 @@ cast_expr = '#' type expr [ INT ] ;
                  T v → v
                  F   → 0                               — BOOL pattern on ?T *)
 match_expr    = '??' expr '{' match_arm* '}' ;
-match_arm     = ( IDENT | BOOL | '_' ) match_payload* '→' expr ;
+match_arm     = pattern match_payload* guard? '→' expr ;
+pattern       = ( IDENT | BOOL | '_' )
+              | IDENT ( '|' IDENT )+ ;   (* or-pattern: tag-only variants,
+                                            no payload / literal / guard *)
 match_payload = IDENT | INT ;
+guard         = '?' expr ;   (* evaluated AFTER payload binding; a false
+                                guard falls through to the next arm, so a
+                                guarded arm does NOT satisfy exhaustiveness
+                                for its variant — a catch-all is still
+                                required. Not allowed on a '_' wildcard
+                                arm or combined with an or-pattern. *)
 
 (* ?? { select_arm* }
    Go-style select over channels. A '??' whose scrutinee is immediately
