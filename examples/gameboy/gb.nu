@@ -37,6 +37,18 @@ $ `stdlib/ext/env.nu`
 : i g_cycles 0
 : String g_serial 0   // captured serial output
 
+// ── Cartridge / MBC state ────────────────────────────────────────
+: s g_rom 0           // full cartridge ROM (*u, all banks)
+: i g_romsize 0       // ROM size in bytes (a power of two)
+: s g_eram 0          // external cartridge RAM (*u, up to 128 KiB)
+: i g_mbc 0           // mapper: 0 none, 1 MBC1, 3 MBC3, 5 MBC5
+: i g_rombank 1       // current 0x4000-0x7FFF ROM bank
+: i g_rambank 0       // current 0xA000-0xBFFF RAM bank
+: i g_ram_en 0        // external RAM enabled
+: i g_mode 0          // MBC1 banking mode (0 ROM, 1 RAM)
+: i g_joyp 0          // joypad button state (1 = pressed), bits below
+: i g_joysel 0        // last write to JOYP select bits (P14/P15)
+
 // ── PPU state ────────────────────────────────────────────────────
 : s g_fb 0            // 160×144 framebuffer of shades (0=white..3=black)
 : s g_bgidx 0         // per-scanline BG colour indices (for sprite priority)
@@ -61,19 +73,85 @@ $ `stdlib/ext/env.nu`
 // ── Memory ────────────────────────────────────────────────────────
 @ mem_raw → *u { ^ # *u g_mem }
 
+// Raw cartridge-ROM byte, masked to the ROM size (a power of two).
+@ rom_byte i off → i {
+    : *u r # *u g_rom
+    ^ & # i . r & off - g_romsize 1 255
+}
+
+// ── Joypad (JOYP / P1, 0xFF00) ───────────────────────────────────
+// g_joyp bits (1 = pressed): 0 right,1 left,2 up,3 down,4 A,5 B,
+// 6 select,7 start. The CPU selects either the d-pad (P14=0) or the
+// buttons (P15=0) and reads the low nibble (0 = pressed).
+@ joypad_read → i {
+    : ~ i lo 0x0F
+    ? == 0 & g_joysel 0x10 {              // P14 low → d-pad
+        ? != 0 & g_joyp 0x01 { = lo & lo 0x0E } {}   // right
+        ? != 0 & g_joyp 0x02 { = lo & lo 0x0D } {}   // left
+        ? != 0 & g_joyp 0x04 { = lo & lo 0x0B } {}   // up
+        ? != 0 & g_joyp 0x08 { = lo & lo 0x07 } {}   // down
+    } {}
+    ? == 0 & g_joysel 0x20 {              // P15 low → buttons
+        ? != 0 & g_joyp 0x10 { = lo & lo 0x0E } {}   // A
+        ? != 0 & g_joyp 0x20 { = lo & lo 0x0D } {}   // B
+        ? != 0 & g_joyp 0x40 { = lo & lo 0x0B } {}   // select
+        ? != 0 & g_joyp 0x80 { = lo & lo 0x07 } {}   // start
+    } {}
+    ^ | 0xC0 | & g_joysel 0x30 lo
+}
+
 @ rd8 i addr → i {
     : i a & addr 0xFFFF
-    // Joypad: report "nothing pressed".
-    ? == a 0xFF00 { ^ 0xCF } {}
+    ? == a 0xFF00 { ^ ( joypad_read ) } {}
+    ? < a 0x4000 { ^ ( rom_byte a ) } {}                       // ROM bank 0
+    ? < a 0x8000 { ^ ( rom_byte + * g_rombank 0x4000 - a 0x4000 ) } {}  // banked ROM
+    ? & >= a 0xA000 < a 0xC000 {                               // external RAM
+        ? == 0 g_ram_en { ^ 0xFF } {}
+        : *u er # *u g_eram
+        ^ & # i . er + * g_rambank 0x2000 - a 0xA000 255
+    } {}
     : *u m ( mem_raw )
     ^ & # i . m a 255
+}
+
+// MBC register writes (0x0000-0x7FFF) for MBC1 / MBC3 / MBC5.
+@ mbc_write i a i b → v {
+    ? == g_mbc 0 { ^ v } {}
+    ? < a 0x2000 { = g_ram_en ? == & b 0x0F 0x0A 1 0  ^ v } {}   // RAM enable
+    ? < a 0x4000 {                                                // ROM bank low
+        ?? g_mbc {
+            1 → { : i lo & b 0x1F  = g_rombank | & g_rombank 0x60 ? == lo 0 1 lo }
+            3 → { : i lo & b 0x7F  = g_rombank ? == lo 0 1 lo }
+            5 → { ? < a 0x3000 { = g_rombank | & g_rombank 0x100 b } { = g_rombank | & g_rombank 0xFF << & b 1 8 } }
+            _ → {}
+        }
+        ^ v
+    } {}
+    ? < a 0x6000 {                                               // RAM bank / ROM hi
+        ?? g_mbc {
+            1 → { ? != 0 g_mode { = g_rambank & b 3 } { = g_rombank | & g_rombank 0x1F << & b 3 5 } }
+            3 → { = g_rambank & b 3 }
+            5 → { = g_rambank & b 0x0F }
+            _ → {}
+        }
+        ^ v
+    } {}
+    ? == g_mbc 1 { = g_mode & b 1 } {}                           // MBC1 banking mode
+    ^ v
 }
 
 @ wr8 i addr i val → v {
     : i a & addr 0xFFFF
     : i b & val 0xFF
-    // Cartridge ROM is read-only on a 32 KiB (MBC-less) cart.
-    ? < a 0x8000 { ^ v } {}
+    ? < a 0x8000 { ( mbc_write a b ) ^ v } {}
+    ? & >= a 0xA000 < a 0xC000 {                                 // external RAM
+        ? != 0 g_ram_en {
+            : *u er # *u g_eram
+            = . er + * g_rambank 0x2000 - a 0xA000 # u b
+        } {}
+        ^ v
+    } {}
+    ? == a 0xFF00 { = g_joysel & b 0x30  ^ v } {}                // JOYP select
     : *u m ( mem_raw )
     // Serial: writing 0x81 to SC starts a transfer; emit SB and ack.
     ? == a 0xFF02 {
@@ -82,15 +160,19 @@ $ `stdlib/ext/env.nu`
             ( string_push_char g_serial sb )
             = . m 0xFF01 # u 0xFF
             = . m 0xFF02 # u & b 0x7F
-            // Request the serial interrupt.
             = . m 0xFF0F # u | & # i . m 0xFF0F 255 0x08
             ^ v
         } {}
         = . m a # u b
         ^ v
     } {}
-    // DIV: any write resets the whole internal divider.
-    ? == a 0xFF04 { = g_div 0  = . m 0xFF04 # u 0  ^ v } {}
+    ? == a 0xFF04 { = g_div 0  = . m 0xFF04 # u 0  ^ v } {}       // DIV reset
+    ? == a 0xFF46 {                                              // OAM DMA
+        : i src << b 8
+        : ~ i k 0
+        ~ < k 160 { = . m + 0xFE00 k # u ( rd8 + src k )  = k + k 1 }
+        ^ v
+    } {}
     = . m a # u b
     ^ v
 }
@@ -838,27 +920,70 @@ $ `stdlib/ext/env.nu`
     ( string_free row )
 }
 
+// ── Cartridge loading ────────────────────────────────────────────
+@ next_pow2 i n → i {
+    : ~ i p 1
+    ~ < p n { = p << p 1 }
+    ^ p
+}
+
+@ mbc_of i ct → i {
+    ?? ct {
+        1 → ^ 1
+        2 → ^ 1
+        3 → ^ 1
+        0x0F → ^ 3
+        0x10 → ^ 3
+        0x11 → ^ 3
+        0x12 → ^ 3
+        0x13 → ^ 3
+        0x19 → ^ 5
+        0x1A → ^ 5
+        0x1B → ^ 5
+        0x1C → ^ 5
+        0x1D → ^ 5
+        0x1E → ^ 5
+        _ → ^ 0
+    }
+}
+
+// Set up the machine for a freshly-loaded `n`-byte ROM at `rp`: zero the
+// 64 KiB address space, copy the full ROM into a power-of-two-sized
+// buffer, allocate external RAM, and pick the mapper from the cart-type
+// byte. Resets the PPU scratch + serial too.
+@ cart_load * u rp i n → v {
+    = g_mem ( nurl_zalloc 65536 )
+    = g_fb ( nurl_zalloc 23040 )
+    = g_bgidx ( nurl_zalloc 160 )
+    = g_spr ( nurl_zalloc 16 )
+    : i romcap ? > n 0x8000 ( next_pow2 n ) 0x8000
+    = g_romsize romcap
+    = g_rom ( nurl_zalloc romcap )
+    : *u rom # *u g_rom
+    : ~ i i 0
+    ~ < i n { = . rom i . rp i  = i + i 1 }
+    = g_eram ( nurl_zalloc 0x20000 )
+    = g_mbc ( mbc_of & # i . rp 0x147 255 )
+    = g_rombank 1
+    = g_rambank 0
+    = g_ram_en 0
+    = g_mode 0
+    = g_joyp 0
+    = g_joysel 0
+    = g_serial ( string_with_cap 64 )
+    = g_frames 0
+    = g_dot 0
+    ( boot_state )
+}
+
 // Run a ROM for `frames` frames, then dump the framebuffer.
 @ run_rom_ppu s path i frames → i {
     : !( Vec u ) IoErr rr ( read_file_bytes path )
     ?? rr {
         F _ → { ( nurl_print `cannot read ROM\n` ) ^ 2 }
         T rom → {
-            = g_mem ( nurl_alloc 65536 )
-            = g_fb ( nurl_alloc 23040 )
-            = g_bgidx ( nurl_alloc 160 )
-            = g_spr ( nurl_alloc 16 )
-            : *u m ( mem_raw )
-            : i n ( vec_len [u] rom )
-            : *u rp ( vec_data [u] rom )
-            : i lim ? > n 0x8000 0x8000 n
-            : ~ i i 0
-            ~ < i lim { = . m i . rp i  = i + i 1 }
+            ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) )
             ( vec_free [u] rom )
-            = g_serial ( string_with_cap 64 )
-            ( boot_state )
-            = g_frames 0
-            = g_dot 0
             : ~ i guard 0
             ~ & < g_frames frames < guard 2000000000 {
                 : ~ i used 4
@@ -903,16 +1028,8 @@ $ `stdlib/ext/env.nu`
             = status 2
         }
         T rom → {
-            = g_mem ( nurl_alloc 65536 )
-            : *u m ( mem_raw )
-            : i n ( vec_len [u] rom )
-            : *u rp ( vec_data [u] rom )
-            : i lim ? > n 0x8000 0x8000 n
-            : ~ i i 0
-            ~ < i lim { = . m i . rp i  = i + i 1 }
+            ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) )
             ( vec_free [u] rom )
-            = g_serial ( string_with_cap 256 )
-            ( boot_state )
 
             : ~ i instr 0
             : ~ i done 0
