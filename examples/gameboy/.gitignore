@@ -1,2 +1,4 @@
 # Test ROMs are fetched separately (see README.md) — not committed.
 roms/
+# Compiled emulator binary (build artifact).
+gb
