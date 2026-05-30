@@ -73,6 +73,10 @@ into the compiler):
   invalid bare-integer initialiser.
 * **Hex literals in `match` patterns** (`?? op { 0xCB → … }`) and enum
   field-constraints — the literal's parsed value now reaches the IR.
+* **Dangling-operand detection** — a bare literal in a discard position
+  (`& x 255 0x40` parses as `& x 255` and silently drops the `0x40`) is
+  now a compile error instead of dead code. This exact prefix-arity
+  slip cost a long debugging session on the dmg-acid2 LYC handler.
 
 ## PPU (dmg-acid2)
 
@@ -86,16 +90,29 @@ the reference image:
 ./gb roms/dmg-acid2.gb --ppu 40 > out.txt
 ```
 
-It renders a **recognisable dmg-acid2 face** (HELLO WORLD!, the head, the
-nose, the left eye, palettes — all correct; ~92 % pixel match). The
-remaining differences (mohawk hair, right eye via the window, the smile,
-and the bottom credit line) are dmg-acid2's deliberate failure indicators
-for its **per-row raster effects**: the ROM rewrites LCDC / SCX / WX /
-tile-data region on specific scanlines via LY=LYC STAT interrupts during
-mode 2. Reproducing those *pixel-exactly* needs cycle-accurate CPU timing
-to keep each interrupt handler locked to its scanline — beyond this
-instruction-granular core. So the frame is rendered once from the settled
-state, which is correct for everything except the raster tricks.
+It renders **dmg-acid2 pixel-perfectly — a 100 % match (0/23040 pixels
+differ)**: HELLO WORLD!, the head, both eyes, the nose, the smile, the
+bottom credit line, and every palette.
+
+dmg-acid2 is a *raster* test: the ROM rewrites LCDC / SCX / WX / the
+tile-data region on 13 specific scanlines (8, 16, 48, 56, 63, 88, 104,
+112, 128, 129, 130, 143, 144) via LY=LYC STAT interrupts, whose handler
+(`jp hl`) chains to the next via HL. To reproduce it the PPU is a
+**per-scanline** renderer: each line is drawn at the end of its 456-dot
+period, by which time the line's STAT handler has run (during mode 2) and
+set that line's registers. A line-based renderer is sufficient — no
+T-cycle accuracy is required (per the dmg-acid2 spec). Two bugs had to be
+fixed to get there:
+
+* The STAT-bit-6 (LYC-interrupt-enable) mask was mis-written with a
+  single `&` (`& m 255 0x40`) instead of two (`& & m 255 0x40`), so the
+  trailing `0x40` was silently dropped and the coincidence fired on
+  *every* line. This footgun is now a **compile error** (see below).
+* The window has its own internal line counter (not LY−WY) that resets
+  each frame and advances only on lines where the window is actually
+  drawn (WX ≤ 166). dmg-acid2 leaves the window enabled but off-screen
+  (WX = 240) above the right eye, so without this the eye read the wrong
+  window-map row.
 
 ## WebAssembly browser demo
 
@@ -141,10 +158,10 @@ underlying `-O0`/`-O1` codegen leak is a separate item still to fix.
 ## Roadmap
 
 - [x] MMU + full CPU + interrupts + timer → `cpu_instrs` 11/11
-- [x] PPU (background / window / sprites) → recognisable `dmg-acid2` face (~92 %)
+- [x] PPU (background / window / sprites) + LY=LYC raster → **`dmg-acid2` 100 % pixel-perfect**
 - [x] WebAssembly build + `/gameboydemo` browser page (canvas + joypad, MBC1/3/5)
 - [ ] Fix the `-O0`/`-O1` shadow-stack leak in the interrupt path
-- [ ] Cycle-accurate CPU/PPU timing → pixel-exact `dmg-acid2`, `instr_timing`
+- [ ] T-cycle-accurate timing → `instr_timing`, mid-scanline (mode 3) effects
 - [ ] CGB (colour) support → run Tobu Tobu Girl Deluxe etc.
 
 [blargg]: https://github.com/retrio/gb-test-roms

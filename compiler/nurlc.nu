@@ -1538,6 +1538,17 @@
 // the real culprit instead of blaming the innocent next statement.
 : i g_stmt_line 0
 
+// g_stmt_bare_lit — set by gen_stmt to 1 when the statement it just
+// parsed was a bare numeric/string LITERAL in expression position (no
+// side effect). The block iterators (gen_block_stmts / gen_block_ret)
+// read it to reject such a statement when its value is discarded — a
+// literal in non-return position is dead, and the usual cause is a
+// prefix operator handed one operand too many (a dangling operand),
+// e.g. `& x 255 0x40` parses as `& x 255` and silently drops `0x40`.
+// Match arms whose body is a bare literal call gen_stmt directly (not
+// via a block iterator), so this never false-flags an arm value.
+: i g_stmt_bare_lit 0
+
 // __tok_label — a human-readable name for a token that turned up where
 // a value expression was required. Used only on the diagnostic path.
 @ __tok_label i tt s val → s {
@@ -5344,12 +5355,19 @@
     last
 }
 
+@ __dangling_operand_msg → s {
+    ^ `literal as a statement has no effect — its value is discarded. This usually means a prefix operator was given one operand too many (a dangling operand): e.g. '& x 255 0x40' parses as '& x 255' and silently drops the 0x40. Check the operator's arity.`
+}
+
 @ gen_block_stmts i lex i syms i cg → v {
     : i bck_line ( nurl_lex_line lex )
     ( expect lex TT_LBRACE )
     ( bck_block_enter bck_line )
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         ( gen_stmt lex syms cg )
+        // Every statement in a void block has its value discarded, so a
+        // bare literal here is dead — reject it (dangling operand).
+        ? != 0 g_stmt_bare_lit { ( die lex ( __dangling_operand_msg ) ) } {}
     }
     ( expect lex TT_RBRACE )
     ( bck_block_exit )
@@ -5367,6 +5385,12 @@
     : s last `undef`
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         = last ( gen_stmt lex syms cg )
+        // A bare literal that is NOT the block's final expression (its
+        // return value) has its value discarded — reject it as a dangling
+        // operand. The final literal (next token `}`) is the legitimate
+        // block result and is left alone.
+        ? & != 0 g_stmt_bare_lit != ( nurl_lex_type lex ) TT_RBRACE
+        { ( die lex ( __dangling_operand_msg ) ) } {}
     }
     ( expect lex TT_RBRACE )
     ( bck_block_exit )
@@ -6560,6 +6584,7 @@
     // Record this statement's start line for gen_ident's cascade-aware
     // "unexpected token" diagnostic (see g_stmt_line).
     = g_stmt_line bck_line
+    = g_stmt_bare_lit 0
     : s gs_rv ? == tt TT_COLON ( gen_let_or_struct lex syms cg )
     ? == tt TT_EQ ( gen_assign lex syms cg )
     ? == tt TT_TILDE ( gen_loop lex syms cg )
@@ -6601,6 +6626,12 @@
     // `move` rows — placed AFTER the statement's own record so the
     // consuming call itself reads the binding while still Owned.
     ( bck_flush_moves )
+    // Flag a bare numeric/string literal statement for the block iterator's
+    // dangling-operand check. A statement whose LEADING token is a literal
+    // is, under prefix notation, exactly a bare literal (operators lead
+    // their operands), so this is robust against nested blocks overwriting
+    // the flag mid-parse. See g_stmt_bare_lit.
+    = g_stmt_bare_lit ? | | == tt TT_INT == tt TT_FLOAT == tt TT_STR 1 0
     gs_rv
 }
 

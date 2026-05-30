@@ -46,6 +46,7 @@ $ `stdlib/core/vec.nu`
 : s g_bgidx 0         // per-scanline BG colour indices (for sprite priority)
 : s g_spr 0           // scratch: OAM indices of the ≤10 sprites on a line
 : i g_dot 0           // dot counter within the current scanline
+: i g_wly 0           // window internal line counter (advances only when drawn)
 : i g_frames 0        // completed frames (incremented at vblank)
 
 // ── Flag register helpers (F = Z N H C 0 0 0 0) ──────────────────
@@ -753,12 +754,17 @@ $ `stdlib/core/vec.nu`
     : i bg_map ? != 0 & lcdc 0x08 0x9C00 0x9800
     : i win_map ? != 0 & lcdc 0x40 0x9C00 0x9800
     : i udata & lcdc 0x10
+    // The window has its own line counter (g_wly) that only advances on
+    // scanlines where the window is actually drawn — it is NOT LY-WY. So
+    // when the window is switched on partway down the frame (as dmg-acid2
+    // does at LY=112), its first visible row reads window-map row 0.
+    : i win_active ? & & != 0 win_on >= y wy <= wx 166 1 0
     : ~ i x 0
     ~ < x 160 {
         : ~ i cidx 0
         ? != 0 bg_on {
-            ? & & != 0 win_on >= y wy >= x - wx 7 {
-                = cidx ( tile_color_at win_map udata - x - wx 7 - y wy )
+            ? & != 0 win_active >= x - wx 7 {
+                = cidx ( tile_color_at win_map udata - x - wx 7 g_wly )
             } {
                 = cidx ( tile_color_at bg_map udata & + x scx 0xFF & + y scy 0xFF )
             }
@@ -767,6 +773,7 @@ $ `stdlib/core/vec.nu`
         = . fb + * y 160 x # u & >> bgp * cidx 2 3
         = x + x 1
     }
+    ? != 0 win_active { = g_wly + g_wly 1 } {}
 }
 
 // p should be drawn BEFORE q (p is the lower-priority sprite) iff p has
@@ -843,25 +850,14 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ ppu_render_frame → v {
-    : ~ i y 0
-    ~ < y 144 {
-        ( ppu_render_bg y )
-        ( ppu_render_sprites y )
-        = y + y 1
-    }
-}
-
-// Advance the PPU by `cyc` T-cycles: step LY through 0..153, maintain
-// the STAT mode/LYC bits, raise the vblank interrupt, and render the
-// whole frame from the settled VRAM/OAM/register state at vblank entry.
-//
-// dmg-acid2 also drives per-row register changes (mohawk BG-disable,
-// window eyes, signed tile-data) via LY=LYC STAT interrupts during each
-// line's mode 2. Reproducing those pixel-exactly needs cycle-accurate
-// CPU timing so each handler stays locked to its scanline — beyond this
-// instruction-granular core, which renders a recognisable face but not
-// the raster effects. So we render once per frame from the final state.
+// Advance the PPU by `cyc` T-cycles. Per-SCANLINE renderer: each visible
+// line is drawn at the END of its 456-dot period — by then any LY=LYC
+// STAT-interrupt handler that fired at the line's start has run (during
+// the line's mode 2 OAM scan) and reprogrammed this line's registers
+// (LCDC / SCX / SCY / WX / tile-data region). This is exactly the
+// mechanism dmg-acid2 uses for the mohawk, the window-drawn right eye,
+// the smile and the credit line. A line-based renderer suffices — no
+// T-cycle accuracy needed (per the dmg-acid2 spec).
 @ tick_ppu i cyc → v {
     : *u m ( mem_raw )
     : i lcdc & # i . m 0xFF40 255
@@ -875,12 +871,20 @@ $ `stdlib/core/vec.nu`
     ~ >= g_dot 456 {
         = g_dot - g_dot 456
         : i ly & # i . m 0xFF44 255
+        // The line `ly` has fully scanned out — its registers are final.
+        ? < ly 144 { ( ppu_render_bg ly ) ( ppu_render_sprites ly ) } {}
         : i nly ? > + ly 1 153 0 + ly 1
+        ? == nly 0 { = g_wly 0 } {}           // window line counter resets each frame
         = . m 0xFF44 # u nly
+        // LY=LYC coincidence STAT interrupt (STAT bit 6) for the new line,
+        // so its handler runs during the upcoming line and sets that
+        // line's registers before it renders.
+        ? & == nly & # i . m 0xFF45 255 != 0 & & # i . m 0xFF41 255 0x40 {
+            = . m 0xFF0F # u | & # i . m 0xFF0F 255 0x02
+        } {}
         ? == nly 144 {
             = . m 0xFF0F # u | & # i . m 0xFF0F 255 0x01   // vblank IRQ
             ? != 0 & & # i . m 0xFF41 255 0x10 { = . m 0xFF0F # u | & # i . m 0xFF0F 255 0x02 } {}
-            ( ppu_render_frame )
             = g_frames + g_frames 1
         } {}
     }
