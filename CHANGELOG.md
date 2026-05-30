@@ -22,6 +22,27 @@ IR).
 
 ### Added
 
+- **`select` over channels — `?? { … }`** — Go-style select. A `??`
+  whose scrutinee is immediately `{` (no value to match) is a channel
+  select; each arm `[T] ch → bind { body }` receives from one channel
+  and the construct proceeds with the first ready arm. With no `_`
+  default it BLOCKS until some channel is ready (value sent or channel
+  closed); a `_ → { … }` default makes it non-blocking. `bind` is the
+  `?T` the receive yields (None ⇒ closed). Arms are heterogeneous (each
+  channel may carry a different element type) and tried in source order.
+  Implemented in `gen_select` (compiler/nurlc.nu) as a desugaring that
+  synthesises NURL source from the verbatim user channel-exprs + bodies
+  and compiles it through a sub-lexer — no raw IR, no new lexer token.
+  The blocking rendezvous (a shared `SelectWaiter` armed on every
+  channel, fired by senders/closers under the channel mutex) lives in
+  `stdlib/std/channel.nu` via the type-erased `chan_raw_poll` /
+  `chan_raw_arm` / `chan_raw_disarm` / `select_waiter_*` helpers — the
+  element type drops out of the orchestration, so one non-generic code
+  path serves channels of any type. Test
+  `compiler/tests/select_basic.nu` (deterministic default / value /
+  closed / priority cases always-on; concurrent blocking path gated on
+  `NURL_NET_TESTS=1`). Bootstrap fixed point holds (stage1 ≡ stage2
+  byte-identical at 1 691 603 B).
 - **Stdlib numeric + text utility round-out** — four pure-NURL
   additions (no compiler changes, each with an offline test):
   - `stdlib/std/int.nu`: `int_gcd`, `int_lcm`, `int_isqrt` (Newton-method

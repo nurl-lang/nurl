@@ -3877,11 +3877,187 @@
     }
 }
 
+// gen_select — Go-style `select` over channels, spelled `?? { … }`
+// (a `??` whose scrutinee is immediately `{` has no value to match, so
+// it is unambiguously a select; a normal match always has a scrutinee
+// expression first). Each case is
+//
+//     [T] chexpr → bind { body }       // bind is a ?T (None ⇒ closed)
+//     _          → { body }            // optional non-blocking default
+//
+// We desugar the whole construct into synthesised NURL source built from
+// the verbatim user channel-exprs + bodies (extracted with
+// nurl_lex_src_slice) and compile it through a sub-lexer that shares the
+// same codegen + symbol table. So the normal pipeline handles the
+// generic `chan_try_recv [T]`, the field/cast ops and every branch — no
+// raw IR, no mangled names. The blocking rendezvous (arm / wait / fire /
+// disarm) lives in stdlib/std/channel.nu.
+//
+// Lowering (no default):
+//   { : i W ( select_waiter_new )
+//     : i CTLk  # i . ( chexpr_k ) ctl          // once per case
+//     : ~ b DONE F
+//     ~ ! DONE {
+//       ( select_waiter_prepare W )
+//       ( chan_raw_arm CTLk W )                  // every case
+//       ? ! DONE { : ?Tk bind ( chan_try_recv [Tk] ( chexpr_k ) )
+//                  ? | ( opt_is_some [Tk] bind ) ( chan_raw_closed CTLk )
+//                    { = DONE T <body_k> } {} } {}
+//       ? ! DONE { ( select_waiter_wait W ) } {}
+//       ( chan_raw_disarm CTLk W ) }            // every case
+//     ( select_waiter_free W ) }
+//
+// With a `_` default arm there is no waiter and no loop: poll each case
+// once, then run the default body.
+@ gen_select i lex i syms i cg → s {
+    ( expect lex TT_LBRACE )  // consume the '{'
+
+    : s uid ( nurl_cg_lbl cg `sel` )
+    : s w_name ( nurl_str_cat `__` ( nurl_str_cat uid `w` ) )
+    : s done_name ( nurl_str_cat `__` ( nurl_str_cat uid `done` ) )
+
+    : ~ s ctl_decls ``
+    : ~ s arm_block ``
+    : ~ s disarm_block ``
+    : ~ s poll_block ``
+    : ~ s default_body ``
+    : ~ i has_default 0
+    : ~ i bidx 0
+
+    ~ != ( nurl_lex_type lex ) TT_RBRACE {
+        ? == ( nurl_lex_type lex ) TT_LBRACK {
+            // ── [T] chexpr → bind { body } ──
+            ( nurl_lex_advance lex )  // consume '['
+            : i tstart ( nurl_lex_cur_start lex )
+            : ~ i bdepth 1
+            ~ > bdepth 0 {
+                : i tt ( nurl_lex_type lex )
+                ? == tt TT_EOF { ( die lex `unterminated [type] in select case` ) } {}
+                ? == tt TT_LBRACK { = bdepth + bdepth 1 } {}
+                ? == tt TT_RBRACK { = bdepth - bdepth 1 } {}
+                ? > bdepth 0 { ( nurl_lex_advance lex ) } {}
+            }
+            : i tend ( nurl_lex_cur_start lex )  // at ']'
+            : s ttext ( nurl_lex_src_slice lex tstart - tend tstart )
+            ( nurl_lex_advance lex )  // consume ']'
+
+            : i chstart ( nurl_lex_cur_start lex )
+            : ~ i pdepth 0
+            ~ | != ( nurl_lex_type lex ) TT_ARROW != pdepth 0 {
+                : i tt ( nurl_lex_type lex )
+                ? == tt TT_EOF { ( die lex `expected -> in select case` ) } {}
+                ? | == tt TT_LPAREN == tt TT_LBRACK { = pdepth + pdepth 1 } {}
+                ? | == tt TT_RPAREN == tt TT_RBRACK { = pdepth - pdepth 1 } {}
+                ( nurl_lex_advance lex )
+            }
+            : i chend ( nurl_lex_cur_start lex )  // at '→'
+            : s chtext ( nurl_lex_src_slice lex chstart - chend chstart )
+            ( nurl_lex_advance lex )  // consume '→'
+
+            ? ! ( is_ident_tok ( nurl_lex_type lex ) )
+            { ( die lex `expected binding name after -> in select case` ) } {}
+            : s bind ( nurl_lex_val lex )
+            ( nurl_lex_advance lex )  // consume binding name
+
+            ? != ( nurl_lex_type lex ) TT_LBRACE
+            { ( die lex `expected { body } in select case` ) } {}
+            : i bstart ( nurl_lex_cur_start lex )
+            ( skip_balanced lex )  // cur now sits just after the body's '}'
+            : i bend ( nurl_lex_cur_start lex )
+            : s btext ( nurl_lex_src_slice lex bstart - bend bstart )
+
+            : s ctl_name ( nurl_str_cat3 `__` uid ( nurl_str_cat `ctl` ( nurl_str_int bidx ) ) )
+            // The channel operand is READ inline (never let-bound to a
+            // fresh `( Channel T )` local — that would move it under the
+            // borrow checker, and a `( ch )` wrapper would lex as a
+            // call). `: i CTL # i . <ch> ctl` binds only an i64, so no
+            // move; chtext must be a simple read (identifier or a
+            // parenthesised call), `. <ch> ctl` resolving its `ctl`
+            // field. The poll's chan_try_recv reads it the same way.
+            = ctl_decls ( nurl_str_cat ctl_decls
+                ( nurl_str_cat4 `: i ` ctl_name ( nurl_str_cat3 ` # i . ` chtext ` ctl` ) `\n` ) )
+            = arm_block ( nurl_str_cat arm_block
+                ( nurl_str_cat4 `( chan_raw_arm ` ctl_name ( nurl_str_cat ` ` w_name ) ` )\n` ) )
+            = disarm_block ( nurl_str_cat disarm_block
+                ( nurl_str_cat4 `( chan_raw_disarm ` ctl_name ( nurl_str_cat ` ` w_name ) ` )\n` ) )
+
+            // Readiness is fully type-erased (chan_raw_poll reads only
+            // the queue length + closed flag), so the element type is
+            // needed only for the chosen arm's chan_try_recv. poll:
+            //   ? ! DONE {
+            //     : i P ( chan_raw_poll CTL )       // 0 none / 1 value / 2 closed
+            //     ? > P 0 { = DONE T : ?T bind ( chan_try_recv [T] ( CH ) ) <body> } {}
+            //   } {}
+            : s poll_name ( nurl_str_cat3 `__` uid ( nurl_str_cat `p` ( nurl_str_int bidx ) ) )
+            : s recv_call ( nurl_str_cat4 `( chan_try_recv [` ttext `] ` ( nurl_str_cat chtext ` )` ) )
+            : s decl ( nurl_str_cat4 `: ?` ttext ( nurl_str_cat3 ` ` bind ` ` ) recv_call )
+            : s p_decl ( nurl_str_cat4 `: i ` poll_name ` ( chan_raw_poll ` ( nurl_str_cat ctl_name ` )` ) )
+            : s fire ( nurl_str_cat4 `= ` done_name ( nurl_str_cat3 ` T ` decl ` ` ) btext )
+            : s guard ( nurl_str_cat4 `? > ` poll_name ( nurl_str_cat3 ` 0 { ` fire ` } {}` ) `` )
+            : s poll ( nurl_str_cat4 `? ! ` done_name
+                ( nurl_str_cat4 ` { ` p_decl ( nurl_str_cat ` ` guard ) ` } {}\n` ) `` )
+            = poll_block ( nurl_str_cat poll_block poll )
+            = bidx + bidx 1
+        } {
+            // ── _ → { body }  (default / non-blocking) ──
+            ? ! ( is_ident_tok ( nurl_lex_type lex ) )
+            { ( die lex `select case must start with [T] or _` ) } {}
+            ? != 0 has_default { ( die lex `select has more than one default (_) arm` ) } {}
+            ( nurl_lex_advance lex )  // consume '_'
+            ( expect lex TT_ARROW )
+            ? != ( nurl_lex_type lex ) TT_LBRACE
+            { ( die lex `expected { body } in select default` ) } {}
+            : i dstart ( nurl_lex_cur_start lex )
+            ( skip_balanced lex )
+            : i dend ( nurl_lex_cur_start lex )
+            = default_body ( nurl_lex_src_slice lex dstart - dend dstart )
+            = has_default 1
+        }
+    }
+    ( expect lex TT_RBRACE )  // consume select's closing '}'
+
+    ? == bidx 0 { ( die lex `select has no channel cases` ) } {}
+
+    // ── Assemble the synthesised source ──
+    : ~ s src `{\n`
+    = src ( nurl_str_cat src ctl_decls )
+    = src ( nurl_str_cat4 src `: ~ b ` done_name ` F\n` )
+    ? != 0 has_default {
+        // Non-blocking: poll once, then default.
+        = src ( nurl_str_cat src poll_block )
+        : s dhead ( nurl_str_cat3 `? ! ` done_name ` { ` )
+        : s dtail ( nurl_str_cat3 ` = ` done_name ` T } {}\n` )
+        = src ( nurl_str_cat4 src dhead default_body dtail )
+    } {
+        // Blocking: arm / poll / wait / disarm loop.
+        = src ( nurl_str_cat4 src `: i ` w_name ` ( select_waiter_new )\n` )
+        = src ( nurl_str_cat4 src `~ ! ` done_name ` {\n` )
+        = src ( nurl_str_cat4 src `( select_waiter_prepare ` w_name ` )\n` )
+        = src ( nurl_str_cat src arm_block )
+        = src ( nurl_str_cat src poll_block )
+        = src ( nurl_str_cat4 src ( nurl_str_cat3 `? ! ` done_name ` { ( select_waiter_wait ` )
+            ( nurl_str_cat3 w_name ` )` ` } {}\n` ) `` )
+        = src ( nurl_str_cat src disarm_block )
+        = src ( nurl_str_cat src `}\n` )
+        = src ( nurl_str_cat4 src `( select_waiter_free ` w_name ` )\n` )
+    }
+    = src ( nurl_str_cat src `}\n` )
+
+    // ── Compile the synthesised block through a sub-lexer ──
+    : i sub ( nurl_lex_new src `<select>` )
+    ( gen_stmt sub syms cg )
+    ( nurl_set_last_type `void` )
+    ^ ``
+}
+
 @ gen_match i lex i syms i cg → s {
     // Borrow checker (Phase 0d): source line of the `??`, for the
     // `match`/`endmatch` structural markers bracketing this match.
     : i bck_mline ( nurl_lex_line lex )
     ( nurl_lex_advance lex )  // consume '??'
+
+    // `?? {` (no scrutinee) is a Go-style channel select, not a match.
+    ? == ( nurl_lex_type lex ) TT_LBRACE { ^ ( gen_select lex syms cg ) } {}
 
     // Peek the variable name (if any) BEFORE gen_expr consumes it, so we
     // can later look up `<name>__res_nurl_T` (set by gen_let_or_struct)
