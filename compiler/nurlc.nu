@@ -126,7 +126,7 @@
 // is_type_start: true if tt can start a type expression.
 @ is_type_start i tt → b {
     | == tt TT_TYPE_KW | == tt TT_IDENT | == tt TT_STAR
-    | == tt TT_QUEST | == tt TT_LBRACK | == tt TT_BANG
+    | == tt TT_QUEST | == tt TT_QUESTQUEST | == tt TT_LBRACK | == tt TT_BANG
     | == tt TT_LPAREN == tt TT_PIPE
 }
 
@@ -180,6 +180,11 @@
     : i tt ( nurl_lex_type lex )
     ? == tt TT_STAR { ^ ( parse_type_ptr lex ) } {}
     ? == tt TT_QUEST { ^ ( parse_type_opt lex ) } {}
+    // The lexer fuses adjacent `?` into one `??`, so a nested option
+    // written `??T` arrives here as a single token. In type position it
+    // unambiguously means option-of-option — the natural type of
+    // `vec_get` over a `Vec ?T`.
+    ? == tt TT_QUESTQUEST { ^ ( parse_type_optopt lex ) } {}
     ? == tt TT_LBRACK { ^ ( parse_type_slice lex ) } {}
     ? == tt TT_BANG { ^ ( parse_type_res lex ) } {}
     ? == tt TT_LPAREN { ^ ( parse_type_paren lex ) } {}
@@ -277,7 +282,11 @@
             : s mangle_sfx ``
             ~ != ( nurl_lex_type lex ) TT_RPAREN {
                 : ~ s ta_lty ``
-                ? == ( nurl_lex_type lex ) TT_LPAREN
+                : i ta_tt ( nurl_lex_type lex )
+                // Paren-compound and prefix (`?T` / `??T` / `*T`) args go
+                // through parse_type, which yields their LLVM type
+                // directly; a bare base name takes the single-token path.
+                ? | | == ta_tt TT_LPAREN == ta_tt TT_QUEST | == ta_tt TT_QUESTQUEST == ta_tt TT_STAR
                 { = ta_lty ( parse_type lex ) }
                 { : s ta ( nurl_lex_val lex )
                     ( nurl_lex_advance lex )
@@ -327,6 +336,65 @@
     ( nurl_sym_def g_res_type_syms `__last_opt_nurl_t__` inner_tok )
     ( nurl_sym_def g_res_type_syms `__last_opt_t_llvm__` inner )
     ( nurl_str_cat `{ i1, ` ( nurl_str_cat inner ` }` ) )
+}
+
+// ?? T  →  { i1, { i1, T } }   (option-of-option)
+// `??` is one fused token; the outer wrapper's payload is the inner
+// option type. Record the side-channels for the OUTER option so a
+// binding's `T inner →` arm reconstructs `inner` at the inner-option
+// type `{ i1, T }`.
+@ parse_type_optopt i lex → s {
+    ( nurl_lex_advance lex )  // consume '??'
+    : s inner_tok ( nurl_lex_val lex )
+    : s inner ( parse_type lex )
+    : s inner_opt ( nurl_str_cat `{ i1, ` ( nurl_str_cat inner ` }` ) )
+    ( nurl_sym_def g_res_type_syms `__last_opt_nurl_t__` inner_tok )
+    ( nurl_sym_def g_res_type_syms `__last_opt_t_llvm__` inner_opt )
+    ^ ( nurl_str_cat `{ i1, ` ( nurl_str_cat inner_opt ` }` ) )
+}
+
+// Convert a NURL-source type spelling (e.g. "?String", "??i", "*u",
+// "Vec__u", "String") to its LLVM type. Handles the `?` / `??` / `*`
+// prefix constructors recursively and delegates base names to
+// `llvm_type`. Used by generic instantiation to mangle compound
+// (option / pointer) type arguments.
+@ nurl_src_to_llvm s src → s {
+    : i n ( nurl_str_len src )
+    ? == n 0 { ^ `i8*` } {}
+    : i c0 ( nurl_str_get src 0 )
+    ? & & == c0 63 >= n 2 == ( nurl_str_get src 1 ) 63
+    { ^ ( nurl_str_cat `{ i1, ` ( nurl_str_cat ( nurl_src_to_llvm ( nurl_str_slice src 2 - n 2 ) ) ` }` ) ) }
+    {}
+    ? == c0 63
+    { ^ ( nurl_str_cat `{ i1, ` ( nurl_str_cat ( nurl_src_to_llvm ( nurl_str_slice src 1 - n 1 ) ) ` }` ) ) }
+    {}
+    ? == c0 42
+    { : s inner ( nurl_src_to_llvm ( nurl_str_slice src 1 - n 1 ) )
+        ? ( seq inner `void` ) { ^ `i8*` } { ^ ( nurl_str_cat inner `*` ) } }
+    {}
+    ^ ( llvm_type src )
+}
+
+// Capture the NURL-source spelling of a type argument at the current
+// lexer position, consuming its tokens. Handles the prefix constructors
+// `?` / `??` (the lexer fuses adjacent `?`) / `*` so a compound option /
+// pointer type argument like `?String` is kept as one substitutable
+// word — `nurl_lex_val` alone would grab only the leading `?`. Paren-
+// compound args are handled separately by the caller.
+@ capture_type_arg_src i lex → s {
+    : i tt ( nurl_lex_type lex )
+    ? == tt TT_QUEST
+    { ( nurl_lex_advance lex ) ^ ( nurl_str_cat `?` ( capture_type_arg_src lex ) ) }
+    {}
+    ? == tt TT_QUESTQUEST
+    { ( nurl_lex_advance lex ) ^ ( nurl_str_cat `??` ( capture_type_arg_src lex ) ) }
+    {}
+    ? == tt TT_STAR
+    { ( nurl_lex_advance lex ) ^ ( nurl_str_cat `*` ( capture_type_arg_src lex ) ) }
+    {}
+    : s v ( nurl_lex_val lex )
+    ( nurl_lex_advance lex )
+    ^ v
 }
 
 // [ T  →  { T*, i64 }
@@ -3208,7 +3276,7 @@
         = ta_rest ( str_skip_word ta_rest )
         : s bounds ( nurl_sym_get g_generic_syms ( nurl_str_cat3 fname `__bound__` tp ) )
         ? & != 0 ( nurl_str_len bounds ) != 0 ( nurl_str_len ta ) {
-            : s ta_llvm ( llvm_type ta )
+            : s ta_llvm ( nurl_src_to_llvm ta )
             : ~ s br bounds
             ~ != 0 ( nurl_str_len br ) {
                 : s bt ( str_first_word br )
@@ -3285,12 +3353,15 @@
                 { = ta ( nurl_str_slice lt 1 - ll 1 ) }
                 { = ta lt }
             }
-            { = ta ( nurl_lex_val lex )
-                ( nurl_lex_advance lex )
+            { // Base or prefix-compound (`?T` / `??T` / `*T`) type arg.
+              // capture_type_arg_src keeps a compound arg as one word so
+              // it substitutes whole into the generic body; nurl_lex_val
+              // alone would grab only the leading `?` / `*`.
+                = ta ( capture_type_arg_src lex )
             }
             = type_args ? == 0 ( nurl_str_len type_args ) ta
             ( nurl_str_cat type_args ( nurl_str_cat ` ` ta ) )
-            = mangle_sfx ( nurl_str_cat mangle_sfx ( nurl_str_cat `__` ( mangle_type ( llvm_type ta ) ) ) )
+            = mangle_sfx ( nurl_str_cat mangle_sfx ( nurl_str_cat `__` ( mangle_type ( nurl_src_to_llvm ta ) ) ) )
         }
         ( expect lex TT_RBRACK )
         : s mangled ( nurl_str_cat fname mangle_sfx )
@@ -6805,8 +6876,12 @@
     : s pv ( gen_expr lex syms cg )  // pointer/aggregate value
     : s pt ( nurl_get_last_type )  // LLVM type, e.g. "%Node*", "i64*", "{ T*, i64 }", or "%Pair"
 
-    // Slice aggregate "{ T*, i64 }": extract data ptr, then GEP + store
-    ? == ( nurl_str_get pt 0 ) 123
+    // Slice aggregate "{ T*, i64 }": extract data ptr, then GEP + store.
+    // Must NOT match a pointer-to-aggregate "{ … }*" (e.g. an option-
+    // element backing store `{ i1, %String }*`): those end in `*` and
+    // belong to the pointer-index path below, which strips the `*` and
+    // GEPs over the aggregate element directly.
+    ? & == ( nurl_str_get pt 0 ) 123 != ( nurl_str_get pt - ( nurl_str_len pt ) 1 ) 42
     { : i ptlen ( nurl_str_len pt )
         : s ptr_ty ( nurl_str_slice pt 2 - - ptlen 7 2 )
         : s elem_ty ( nurl_str_slice ptr_ty 0 - ( nurl_str_len ptr_ty ) 1 )
@@ -7300,7 +7375,17 @@
                                 ^ `zeroinitializer` }
                         }
                     }
-                    {  // Integer-width conversion (iN → iM).  Sub-cases:
+                    {  // Integer → anonymous aggregate (`{ … }` option /
+                        // slice / result, or `[ … ]`): the only meaningful
+                        // such cast is the `# A 0` dummy-payload idiom where
+                        // the element type A is itself an aggregate (e.g.
+                        // `vec_get [?String]` → `@ ?A { F # A 0 }`). LLVM
+                        // forbids an integer constant at aggregate type, so
+                        // produce a zero-initialised aggregate.
+                        ? & > ( int_width st ) 0 | == ( nurl_str_get dt 0 ) 123 == ( nurl_str_get dt 0 ) 91
+                        { ( nurl_set_last_type dt ) ^ `zeroinitializer` }
+                        {}
+                        // Integer-width conversion (iN → iM).  Sub-cases:
                         //   * Narrow (sw > dw): trunc.
                         //   * Widen, source is i1 (a boolean from a
                         //     comparison / `&` / `|` / `!`): zext ALWAYS.
@@ -8548,7 +8633,7 @@
         // Add to parameter lists
         = param_types ? == 0 param_count
         pty
-        ( nurl_str_cat ( nurl_str_cat param_types ` ` ) pty )
+        ( nurl_str_cat ( nurl_str_cat param_types `;` ) pty )
         = param_names ? == 0 param_count
         pname
         ( nurl_str_cat ( nurl_str_cat param_names ` ` ) pname )
@@ -8610,10 +8695,10 @@
     : i bi 0
     ~ < bi param_count {
         ( nurl_print `, ` )
-        : s bpty ( str_first_word body_param_types )
+        : s bpty ( seplist_first body_param_types )
         : s bpname ( str_first_word body_param_names )
         ( nurl_print bpty ) ( nurl_print ` %` ) ( nurl_print bpname )
-        = body_param_types ( str_skip_word body_param_types )
+        = body_param_types ( seplist_rest body_param_types )
         = body_param_names ( str_skip_word body_param_names )
         = bi + bi 1
     }
@@ -8641,7 +8726,7 @@
     : i bpi 0
     ~ < bpi param_count {
         : s bpname ( str_first_word bp_names )
-        : s bptype ( str_first_word bp_types )
+        : s bptype ( seplist_first bp_types )
         // Alloca for each param so it can be loaded
         : s bpptr ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print bpptr )
@@ -8656,7 +8741,7 @@
         : s c_name_roster ( nurl_sym_get body_syms `__fn_param_names__` )
         : s c_name_next ? == 0 ( nurl_str_len c_name_roster ) bpname ( nurl_str_cat3 c_name_roster ` ` bpname )
         ( nurl_sym_def body_syms `__fn_param_names__` c_name_next )
-        = bp_types ( str_skip_word bp_types )
+        = bp_types ( seplist_rest bp_types )
         = bp_names ( str_skip_word bp_names )
         = bpi + bpi 1
     }
@@ -8787,8 +8872,8 @@
     : s types1 param_types
     : i j 0
     ~ < j param_count {
-        = fn_ptr_type ( nurl_str_cat ( nurl_str_cat fn_ptr_type `, ` ) ( str_first_word types1 ) )
-        = types1 ( str_skip_word types1 )
+        = fn_ptr_type ( nurl_str_cat ( nurl_str_cat fn_ptr_type `, ` ) ( seplist_first types1 ) )
+        = types1 ( seplist_rest types1 )
         = j + j 1
     }
     = fn_ptr_type ( nurl_str_cat fn_ptr_type `)*, i8* }` )
@@ -8809,8 +8894,8 @@
     : s types2 param_types
     : i k 0
     ~ < k param_count {
-        ( nurl_print `, ` ) ( nurl_print ( str_first_word types2 ) )
-        = types2 ( str_skip_word types2 )
+        ( nurl_print `, ` ) ( nurl_print ( seplist_first types2 ) )
+        = types2 ( seplist_rest types2 )
         = k + k 1
     }
     ( nurl_print `)* @` ) ( nurl_print closure_fn_name ) ( nurl_print `, 0\n` )
@@ -8837,6 +8922,32 @@
     {}
 
     result2
+}
+
+// ── Semicolon-separated field list ───────────────────────────────
+// Closure parameter TYPES are stored joined by ';' rather than spaces,
+// because an aggregate LLVM type (option `{ i1, %String }`, slice
+// `{ T*, i64 }`, result, nested closure) contains its own spaces and
+// commas — `str_first_word` would truncate it at the first space. ';'
+// never appears in an LLVM type string, so it is a safe field delimiter.
+@ seplist_first s str → s {
+    : i n ( nurl_str_len str )
+    : ~ i i 0
+    ~ < i n {
+        ? == ( nurl_str_get str i ) 59 { ^ ( nurl_str_slice str 0 i ) } {}
+        = i + i 1
+    }
+    ^ str
+}
+
+@ seplist_rest s str → s {
+    : i n ( nurl_str_len str )
+    : ~ i i 0
+    ~ < i n {
+        ? == ( nurl_str_get str i ) 59 { ^ ( nurl_str_slice str + i 1 - n + i 1 ) } {}
+        = i + i 1
+    }
+    ^ ``
 }
 
 // ── String Helpers ───────────────────────────────────────────────
@@ -9341,6 +9452,13 @@
     ? ( seq lty `i1` ) ^ `i1`
     ? ( seq lty `i8*` ) ^ `str`
     ? ( seq lty `void` ) ^ `void`
+    // Option / option-of-option `{ i1, X }` → `opt_<mangle X>`. Must
+    // precede the pointer + `%Name` cases. (Result is also `{ i1, i64 }`
+    // but never appears as a generic type argument, so the collision is
+    // harmless — it round-trips back to `?i` either way.)
+    ? & >= ( nurl_str_len lty ) 8 ( seq ( nurl_str_slice lty 0 6 ) `{ i1, ` )
+    ^ ( nurl_str_cat `opt_` ( mangle_type ( nurl_str_slice lty 6 - ( nurl_str_len lty ) 8 ) ) )
+    {}
     ? == ( nurl_str_get lty - ( nurl_str_len lty ) 1 ) 42
     ^ ( nurl_str_cat `ptr_` ( mangle_type ( nurl_str_slice lty 0 - ( nurl_str_len lty ) 1 ) ) )
     {}
@@ -9363,6 +9481,9 @@
     ? ( seq mty `i1` ) ^ `i1`
     ? ( seq mty `str` ) ^ `i8*`
     ? ( seq mty `void` ) ^ `void`
+    ? != 0 ( nurl_str_starts mty `opt_` )
+    ^ ( nurl_str_cat `{ i1, ` ( nurl_str_cat ( demangle_type ( nurl_str_slice mty 4 - ( nurl_str_len mty ) 4 ) ) ` }` ) )
+    {}
     ? != 0 ( nurl_str_starts mty `ptr_` )
     ^ ( nurl_str_cat ( demangle_type ( nurl_str_slice mty 4 - ( nurl_str_len mty ) 4 ) ) `*` )
     {}
@@ -9632,7 +9753,7 @@
                 : s ta ( str_first_word ta_r )
                 = ta_r ( str_skip_word ta_r )
                 = mangled ( nurl_str_cat mangled
-                ( nurl_str_cat `__` ( mangle_type ( llvm_type ta ) ) ) )
+                ( nurl_str_cat `__` ( mangle_type ( nurl_src_to_llvm ta ) ) ) )
             }
             // Dedupe — each distinct instantiation emitted at most once.
             : s done_key ( nurl_str_cat mangled `__done` )
@@ -10591,7 +10712,7 @@
 // Check if current token could be a payload type (without consuming it)
 @ could_be_payload_type i lex i syms → b {
     : i tt ( nurl_lex_type lex )
-    ? | == tt TT_TYPE_KW | == tt TT_STAR | == tt TT_QUEST | == tt TT_LBRACK | == tt TT_BANG == tt TT_LPAREN
+    ? | == tt TT_TYPE_KW | == tt TT_STAR | == tt TT_QUEST | == tt TT_QUESTQUEST | == tt TT_LBRACK | == tt TT_BANG == tt TT_LPAREN
     ^ T
     ? == tt TT_IDENT
     { : s maybe ( nurl_lex_val lex )
@@ -11703,9 +11824,8 @@
             = ta_word inner
             = ta_lty ( nurl_str_cat `%` inner )
         }
-        { = ta_word ( nurl_lex_val lex )
-            ( nurl_lex_advance lex )
-            = ta_lty ( llvm_type ta_word )
+        { = ta_word ( capture_type_arg_src lex )
+            = ta_lty ( nurl_src_to_llvm ta_word )
         }
         = ta_list ? == 0 ( nurl_str_len ta_list )
         ta_word
@@ -11788,9 +11908,7 @@
                         : ~ s ta ``
                         ? == ( nurl_lex_type lex ) TT_LPAREN
                         { = ta ( scan_compound_ta_inner lex syms ) }
-                        { = ta ( nurl_lex_val lex )
-                            ( nurl_lex_advance lex )
-                        }
+                        { = ta ( capture_type_arg_src lex ) }
                         = ta_list ? == 0 ( nurl_str_len ta_list ) ta
                         ( nurl_str_cat ta_list ( nurl_str_cat ` ` ta ) )
                     }
@@ -11860,6 +11978,7 @@
     : i tt ( nurl_lex_type lex )
     ? == tt TT_STAR { ( nurl_lex_advance lex ) ^ ( scan_skip_type lex ) } {}
     ? == tt TT_QUEST { ( nurl_lex_advance lex ) ^ ( scan_skip_type lex ) } {}
+    ? == tt TT_QUESTQUEST { ( nurl_lex_advance lex ) ^ ( scan_skip_type lex ) } {}
     ? == tt TT_LBRACK { ( nurl_lex_advance lex ) ^ ( scan_skip_type lex ) } {}
     ? == tt TT_BANG
     { ( nurl_lex_advance lex )
