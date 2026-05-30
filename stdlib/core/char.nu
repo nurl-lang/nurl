@@ -41,22 +41,17 @@
     ^ # i | | != ( is_alpha c ) 0 != ( is_digit c ) 0 == c 95
 }
 
-// NB: the older predicates above (is_alpha / is_digit / …) end in
-// `# i <bool-expr>`, which sign-extends the i1 true to -1 rather than 1
-// — harmless for their `!= 0` callers but it contradicts the "→ 1"
-// contract. The predicates below normalise to a canonical 1/0 via the
-// ternary value-form so they can be compared against 1 directly.
 @ is_upper i c → i {
-    ^ ? & >= c 65 <= c 90 1 0
+    ^ # i & >= c 65 <= c 90
 }
 
 @ is_lower i c → i {
-    ^ ? & >= c 97 <= c 122 1 0
+    ^ # i & >= c 97 <= c 122
 }
 
 // 0-9 (48-57) OR A-F (65-70) OR a-f (97-102) — the C `isxdigit` table.
 @ is_hexdigit i c → i {
-    ^ ? | | & >= c 48 <= c 57 & >= c 65 <= c 70 & >= c 97 <= c 102 1 0
+    ^ # i | | & >= c 48 <= c 57 & >= c 65 <= c 70 & >= c 97 <= c 102
 }
 
 // ASCII case folding. Non-letter bytes pass through unchanged; no

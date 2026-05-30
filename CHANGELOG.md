@@ -33,10 +33,26 @@ IR).
     and `string_count` (non-overlapping occurrence count). Test
     `compiler/tests/string_join_count.nu`.
   - `stdlib/core/char.nu`: `is_upper`, `is_lower`, `is_hexdigit`,
-    `to_upper_ascii`, `to_lower_ascii`, `hex_val`. New predicates return
-    canonical 1/0 (ternary value-form) rather than the older predicates'
-    `# i <bool-expr>` shape that sign-extends i1 true to -1. Test
-    `compiler/tests/char_extra.nu`.
+    `to_upper_ascii`, `to_lower_ascii`, `hex_val`. Predicates use the
+    same `# i <bool-expr>` shape as the existing `is_alpha` / `is_digit`
+    family — now returning a canonical 1/0 thanks to the cast fix below.
+    Test `compiler/tests/char_extra.nu`.
+
+### Fixed
+
+- **`# i <bool>` now zero-extends (was -1 for true).** Casting a boolean
+  (an `i1` from a comparison / `&` / `|` / `!`) to a wider integer
+  emitted `sext i1`, so `# i true` was -1 instead of 1. Harmless for the
+  ubiquitous `!= 0` callers, but it silently broke every predicate
+  documented as "→ 1": `is_alpha` / `is_digit` / `is_space` /
+  `is_alnum_us` all returned -1 for true. NURL has no signed 1-bit type,
+  so a boolean true is canonically 1 — `gen_cast` now forces `zext` for
+  any `i1` source (comparisons never set the `__last_unsigned__`
+  side-channel that the unsigned-widen path relies on, hence the explicit
+  guard). Latent fix across the whole stdlib; no existing test output
+  changed (nothing depended on the -1). Regression
+  `compiler/tests/cast_bool_int.nu`. Bootstrap fixed point holds
+  (stage1 ≡ stage2 byte-identical at 1 660 838 B).
 - **`HttpOptions` struct (HTTP client)** — `stdlib/ext/http.nu` gained
   `HttpOptions { i timeout_ms, i connect_timeout_ms, i follow_redirects,
   i max_redirects, i verify_tls, s user_agent }` bundling the per-request
