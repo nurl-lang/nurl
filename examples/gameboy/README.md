@@ -74,11 +74,34 @@ into the compiler):
 * **Hex literals in `match` patterns** (`?? op { 0xCB → … }`) and enum
   field-constraints — the literal's parsed value now reaches the IR.
 
+## PPU (dmg-acid2)
+
+A background / window / sprite renderer is implemented (8×8 and 8×16
+objects, X/Y flip, OBJ-to-BG priority, the 10-objects-per-line limit,
+OBP0/1 + BGP palettes). Run it with the `--ppu` flag to render N frames
+and dump the 160×144 framebuffer as shade digits (0–3), diffable against
+the reference image:
+
+```sh
+./gb roms/dmg-acid2.gb --ppu 40 > out.txt
+```
+
+It renders a **recognisable dmg-acid2 face** (HELLO WORLD!, the head, the
+nose, the left eye, palettes — all correct; ~92 % pixel match). The
+remaining differences (mohawk hair, right eye via the window, the smile,
+and the bottom credit line) are dmg-acid2's deliberate failure indicators
+for its **per-row raster effects**: the ROM rewrites LCDC / SCX / WX /
+tile-data region on specific scanlines via LY=LYC STAT interrupts during
+mode 2. Reproducing those *pixel-exactly* needs cycle-accurate CPU timing
+to keep each interrupt handler locked to its scanline — beyond this
+instruction-granular core. So the frame is rendered once from the settled
+state, which is correct for everything except the raster tricks.
+
 ## Roadmap
 
 - [x] MMU + full CPU + interrupts + timer → `cpu_instrs` 11/11
-- [ ] Precise timing → `instr_timing`, `mem_timing`
-- [ ] PPU (background / window / sprites) → `dmg-acid2` pixel-exact
+- [x] PPU (background / window / sprites) → recognisable `dmg-acid2` face (~92 %)
+- [ ] Cycle-accurate CPU/PPU timing → pixel-exact `dmg-acid2`, `instr_timing`, `mem_timing`
 - [ ] SDL canvas output + joypad input
 
 [blargg]: https://github.com/retrio/gb-test-roms

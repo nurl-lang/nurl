@@ -37,6 +37,13 @@ $ `stdlib/ext/env.nu`
 : i g_cycles 0
 : String g_serial 0   // captured serial output
 
+// ── PPU state ────────────────────────────────────────────────────
+: s g_fb 0            // 160×144 framebuffer of shades (0=white..3=black)
+: s g_bgidx 0         // per-scanline BG colour indices (for sprite priority)
+: s g_spr 0           // scratch: OAM indices of the ≤10 sprites on a line
+: i g_dot 0           // dot counter within the current scanline
+: i g_frames 0        // completed frames (incremented at vblank)
+
 // ── Flag register helpers (F = Z N H C 0 0 0 0) ──────────────────
 @ set_flags i z i n i h i c → v {
     : ~ i f 0
@@ -632,6 +639,241 @@ $ `stdlib/ext/env.nu`
     = . m 0xFFFF # u 0x00     // IE
 }
 
+// ── PPU (background / window / sprites) ──────────────────────────
+//
+// A whole-frame renderer driven off the scanline timing: the dot counter
+// advances LY through 0..153, fires the vblank + STAT interrupts, and at
+// the start of vblank renders the completed frame from the current VRAM /
+// OAM / register state into `g_fb`. Sufficient for static reference
+// images (dmg-acid2); mid-scanline register tricks are out of scope.
+
+// Raw byte read (no joypad/IO interception) — for VRAM/OAM/register reads.
+@ pb i addr → i { : *u m ( mem_raw )  ^ & # i . m & addr 0xFFFF 255 }
+
+// Colour index 0..3 of a background/window tile pixel at (px,py) in the
+// 256×256 map space rooted at `map_base`.
+@ tile_color_at i map_base i unsigned_data i px i py → i {
+    : i tx & >> px 3 31
+    : i ty & >> py 3 31
+    : i tile_idx ( pb + map_base + * ty 32 tx )
+    : i signed_idx ? > tile_idx 127 - tile_idx 256 tile_idx
+    : i tile_addr ? != 0 unsigned_data + 0x8000 * tile_idx 16 + 0x9000 * signed_idx 16
+    : i row & py 7
+    : i lo ( pb + tile_addr * row 2 )
+    : i hi ( pb + tile_addr + * row 2 1 )
+    : i bit - 7 & px 7
+    ^ | << & >> hi bit 1 1 & >> lo bit 1
+}
+
+@ ppu_render_bg i y → v {
+    : *u fb # *u g_fb
+    : *u bgi # *u g_bgidx
+    : i lcdc ( pb 0xFF40 )
+    : i bgp ( pb 0xFF47 )
+    : i scx ( pb 0xFF43 )
+    : i scy ( pb 0xFF42 )
+    : i wy ( pb 0xFF4A )
+    : i wx ( pb 0xFF4B )
+    : i bg_on & lcdc 0x01
+    : i win_on & lcdc 0x20
+    : i bg_map ? != 0 & lcdc 0x08 0x9C00 0x9800
+    : i win_map ? != 0 & lcdc 0x40 0x9C00 0x9800
+    : i udata & lcdc 0x10
+    : ~ i x 0
+    ~ < x 160 {
+        : ~ i cidx 0
+        ? != 0 bg_on {
+            ? & & != 0 win_on >= y wy >= x - wx 7 {
+                = cidx ( tile_color_at win_map udata - x - wx 7 - y wy )
+            } {
+                = cidx ( tile_color_at bg_map udata & + x scx 0xFF & + y scy 0xFF )
+            }
+        } {}
+        = . bgi x # u cidx
+        = . fb + * y 160 x # u & >> bgp * cidx 2 3
+        = x + x 1
+    }
+}
+
+// p should be drawn BEFORE q (p is the lower-priority sprite) iff p has
+// the larger X, or equal X and the larger OAM index. DMG rule.
+@ pri_before i p i q → b {
+    : i xp ( pb + + 0xFE00 * p 4 1 )
+    : i xq ( pb + + 0xFE00 * q 4 1 )
+    ? > xp xq { ^ T } {}
+    ? < xp xq { ^ F } {}
+    ^ > p q
+}
+
+@ ppu_render_sprites i y → v {
+    : i lcdc ( pb 0xFF40 )
+    ? == 0 & lcdc 0x02 { ^ v } {}
+    : *u fb # *u g_fb
+    : *u bgi # *u g_bgidx
+    : *u spr # *u g_spr
+    : i sh ? != 0 & lcdc 0x04 16 8
+    // Pick the first ≤10 sprites (OAM order) covering this line.
+    : ~ i cnt 0
+    : ~ i si 0
+    ~ & < si 40 < cnt 10 {
+        : i oy - ( pb + 0xFE00 * si 4 ) 16
+        ? & >= y oy < y + oy sh { = . spr cnt # u si  = cnt + cnt 1 } {}
+        = si + si 1
+    }
+    // Insertion-sort selected by lowest-priority-first so the highest-
+    // priority sprite is drawn last (on top).
+    : ~ i a 1
+    ~ < a cnt {
+        : i key # i . spr a
+        : ~ i b - a 1
+        ~ & >= b 0 ( pri_before key # i . spr b ) {
+            = . spr + b 1 . spr b
+            = b - b 1
+        }
+        = . spr + b 1 # u key
+        = a + a 1
+    }
+    // Draw.
+    : ~ i k 0
+    ~ < k cnt {
+        : i idx # i . spr k
+        : i base + 0xFE00 * idx 4
+        : i oy - ( pb base ) 16
+        : i ox - ( pb + base 1 ) 8
+        : i tile ( pb + base 2 )
+        : i attr ( pb + base 3 )
+        : i behind & attr 0x80
+        : i obp ? != 0 & attr 0x10 ( pb 0xFF49 ) ( pb 0xFF48 )
+        : ~ i row - y oy
+        ? != 0 & attr 0x40 { = row - - sh 1 row } {}   // Y-flip
+        : ~ i tnum ? == sh 16 & tile 0xFE tile
+        ? & == sh 16 >= row 8 { = tnum | tnum 1  = row - row 8 } {}
+        : i taddr + 0x8000 * tnum 16
+        : i lo ( pb + taddr * row 2 )
+        : i hi ( pb + taddr + * row 2 1 )
+        : ~ i px 0
+        ~ < px 8 {
+            : i sxp + ox px
+            ? & >= sxp 0 < sxp 160 {
+                : i bit ? != 0 & attr 0x20 px - 7 px   // X-flip
+                : i cidx | << & >> hi bit 1 1 & >> lo bit 1
+                ? != 0 cidx {
+                    ? | == 0 behind == 0 # i . bgi sxp {
+                        = . fb + * y 160 sxp # u & >> obp * cidx 2 3
+                    } {}
+                } {}
+            } {}
+            = px + px 1
+        }
+        = k + k 1
+    }
+}
+
+@ ppu_render_frame → v {
+    : ~ i y 0
+    ~ < y 144 {
+        ( ppu_render_bg y )
+        ( ppu_render_sprites y )
+        = y + y 1
+    }
+}
+
+// Advance the PPU by `cyc` T-cycles: step LY through 0..153, maintain
+// the STAT mode/LYC bits, raise the vblank interrupt, and render the
+// whole frame from the settled VRAM/OAM/register state at vblank entry.
+//
+// dmg-acid2 also drives per-row register changes (mohawk BG-disable,
+// window eyes, signed tile-data) via LY=LYC STAT interrupts during each
+// line's mode 2. Reproducing those pixel-exactly needs cycle-accurate
+// CPU timing so each handler stays locked to its scanline — beyond this
+// instruction-granular core, which renders a recognisable face but not
+// the raster effects. So we render once per frame from the final state.
+@ tick_ppu i cyc → v {
+    : *u m ( mem_raw )
+    : i lcdc & # i . m 0xFF40 255
+    ? == 0 & lcdc 0x80 {        // LCD off → LY=0, mode 0
+        = g_dot 0
+        = . m 0xFF44 # u 0
+        = . m 0xFF41 # u & # i . m 0xFF41 255 0xFC
+        ^ v
+    } {}
+    = g_dot + g_dot cyc
+    ~ >= g_dot 456 {
+        = g_dot - g_dot 456
+        : i ly & # i . m 0xFF44 255
+        : i nly ? > + ly 1 153 0 + ly 1
+        = . m 0xFF44 # u nly
+        ? == nly 144 {
+            = . m 0xFF0F # u | & # i . m 0xFF0F 255 0x01   // vblank IRQ
+            ? != 0 & # i . m 0xFF41 255 0x10 { = . m 0xFF0F # u | & # i . m 0xFF0F 255 0x02 } {}
+            ( ppu_render_frame )
+            = g_frames + g_frames 1
+        } {}
+    }
+    // STAT: LYC coincidence (bit 2) + mode (bits 0-1).
+    : i ly2 & # i . m 0xFF44 255
+    : i lyc & # i . m 0xFF45 255
+    : i mode ? >= ly2 144 1 ? < g_dot 80 2 ? < g_dot 252 3 0
+    : i coin ? == ly2 lyc 0x04 0
+    : i stat | & & # i . m 0xFF41 255 0xF8 | coin mode
+    = . m 0xFF41 # u stat
+}
+
+// Dump the framebuffer as 144 lines of 160 shade digits (0..3) — diffable
+// against the reference image.
+@ ppu_dump → v {
+    : *u fb # *u g_fb
+    : String row ( string_with_cap 168 )
+    : ~ i y 0
+    ~ < y 144 {
+        ( string_clear row )
+        : ~ i x 0
+        ~ < x 160 {
+            ( string_push_char row + 48 & # i . fb + * y 160 x 255 )
+            = x + x 1
+        }
+        ( nurl_print ( string_data row ) ) ( nurl_print `\n` )
+        = y + y 1
+    }
+    ( string_free row )
+}
+
+// Run a ROM for `frames` frames, then dump the framebuffer.
+@ run_rom_ppu s path i frames → i {
+    : !( Vec u ) IoErr rr ( read_file_bytes path )
+    ?? rr {
+        F _ → { ( nurl_print `cannot read ROM\n` ) ^ 2 }
+        T rom → {
+            = g_mem ( nurl_alloc 65536 )
+            = g_fb ( nurl_alloc 23040 )
+            = g_bgidx ( nurl_alloc 160 )
+            = g_spr ( nurl_alloc 16 )
+            : *u m ( mem_raw )
+            : i n ( vec_len [u] rom )
+            : *u rp ( vec_data [u] rom )
+            : i lim ? > n 0x8000 0x8000 n
+            : ~ i i 0
+            ~ < i lim { = . m i . rp i  = i + i 1 }
+            ( vec_free [u] rom )
+            = g_serial ( string_with_cap 64 )
+            ( boot_state )
+            = g_frames 0
+            = g_dot 0
+            : ~ i guard 0
+            ~ & < g_frames frames < guard 2000000000 {
+                : ~ i used 4
+                ? == g_halt 0 { = used ( step ) } {}
+                ( tick_timer used )
+                ( tick_ppu used )
+                ( service_interrupts )
+                = guard + guard used
+            }
+            ( ppu_dump )
+            ^ 0
+        }
+    }
+}
+
 // ── Run a test ROM headlessly, watching the serial output ────────
 @ contains_word String hay s needle → b {
     : i hn ( string_len hay )
@@ -704,10 +946,28 @@ $ `stdlib/ext/env.nu`
     : ( Vec String ) args ( env_args_list )
     ? < ( vec_len [String] args ) 2 {
         ( nurl_print `usage: gb <rom.gb> [instr-budget]\n` )
+        ( nurl_print `       gb <rom.gb> --ppu [frames]   (render N frames, dump framebuffer)\n` )
         ^ 2
     } {}
     : ~ s path ``
     ?? ( vec_get [String] args 1 ) { T a → = path ( string_data a )  F _ → {} }
+    // PPU dump mode: `gb <rom> --ppu [frames]`.
+    : ~ b ppu_mode F
+    : ~ i frames 60
+    ? > ( vec_len [String] args ) 2 {
+        ?? ( vec_get [String] args 2 ) {
+            T b → {
+                ? ( nurl_str_eq ( string_data b ) `--ppu` ) {
+                    = ppu_mode T
+                    ? > ( vec_len [String] args ) 3 {
+                        ?? ( vec_get [String] args 3 ) { T f → = frames ( nurl_str_to_int ( string_data f ) )  F _ → {} }
+                    } {}
+                } {}
+            }
+            F _ → {}
+        }
+    } {}
+    ? ppu_mode { ^ ( run_rom_ppu path frames ) } {}
     : ~ i budget 300000000
     ? > ( vec_len [String] args ) 2 {
         ?? ( vec_get [String] args 2 ) { T b → = budget ( nurl_str_to_int ( string_data b ) )  F _ → {} }
