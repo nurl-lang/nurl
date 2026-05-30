@@ -1953,11 +1953,6 @@ s combined_stdout s combined_stderr → v {
         ( string_free mtmp ) ( string_free ptmp )
         ^ ( h_favicon req ( params_new ) )
     } {}
-    ? & is_get ( string_eq ptmp ( string_from `/gameboydemo` ) ) {
-        ( string_free mtmp ) ( string_free ptmp )
-        ( nurl_print `[srv] GET /gameboydemo\n` )
-        ^ ( __serve_gameboydemo )
-    } {}
     ? & is_get ( string_eq ptmp ( string_from `/` ) ) {
         ( string_free mtmp ) ( string_free ptmp )
         ^ ( h_static req ( params_new ) )
@@ -4002,6 +3997,7 @@ s combined_stdout s combined_stderr → v {
             ( router_get r `/NOTICE` \ HttpRequest req Params params → HttpResponse { ^ ( h_notice_raw req params ) } )
             ( router_get r `/stdlib-viewer` \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_viewer req params ) } )
             ( router_get r `/tests-viewer` \ HttpRequest req Params params → HttpResponse { ^ ( h_tests_viewer req params ) } )
+            ( router_get r `/gameboydemo` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_gameboydemo ) } )
             ( router_get r `/stdlib` \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_list req params ) } )
             ( router_get r `/tests` \ HttpRequest req Params params → HttpResponse { ^ ( h_tests_list req params ) } )
             ( router_get r `/stdlib/*path` \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_file req params ) } )
