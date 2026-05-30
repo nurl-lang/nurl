@@ -10102,6 +10102,62 @@
     ( nurl_sym_def syms ( nurl_str_cat sname `__field_count` ) ( nurl_str_int fidx ) )
 }
 
+// Narrow compile-time constant folding for integer-typed top-level
+// consts. Lets `: i SECS * * 60 60 24` and `: i INT_MIN - -9223372036854775807 1`
+// work where only a single literal was previously accepted. Pure prefix
+// arithmetic over INT literals; no identifiers, no calls — fully
+// transparent (it only computes a value, never hides control flow).
+// `%` (TT_PERCENT) is deliberately excluded: at a top-level position
+// `%` is the trait / impl / Drop decl sigil, which the lexical
+// pre-passes dispatch on, so a `% a b` const value mis-scans. The other
+// nine integer operators do not collide.
+@ __is_const_int_op i tt → b {
+    ? == tt TT_PLUS T
+    ? == tt TT_MINUS T
+    ? == tt TT_STAR T
+    ? == tt TT_SLASH T
+    ? == tt TT_AMP T
+    ? == tt TT_PIPE T
+    ? == tt TT_SHL T
+    ? == tt TT_SHR T
+    ? == tt TT_CARETCARET T
+    F
+}
+
+// XOR via `(a|b) - (a&b)` so nurlc.nu itself stays `^^`-free (the
+// stage-0 nurlc.py does not lex `^^`).
+@ __const_int_apply i tt i a i b → i {
+    ? == tt TT_PLUS { ^ + a b } {}
+    ? == tt TT_MINUS { ^ - a b } {}
+    ? == tt TT_STAR { ^ * a b } {}
+    ? == tt TT_SLASH { ? == b 0 { ^ 0 } {} ^ / a b } {}
+    ? == tt TT_AMP { ^ & a b } {}
+    ? == tt TT_PIPE { ^ | a b } {}
+    ? == tt TT_SHL { ^ << a b } {}
+    ? == tt TT_SHR { ^ >> a b } {}
+    ? == tt TT_CARETCARET { ^ - | a b & a b } {}
+    ^ 0
+}
+
+// Recursive-descent evaluator for a prefix integer const expression.
+// Consumes tokens; returns the folded i64.
+@ const_eval_int i lex → i {
+    : i tt ( nurl_lex_type lex )
+    ? == tt TT_INT {
+        : i v ( nurl_lex_inum lex )
+        ( nurl_lex_advance lex )
+        ^ v
+    } {}
+    ? ( __is_const_int_op tt ) {
+        ( nurl_lex_advance lex )
+        : i a ( const_eval_int lex )
+        : i b ( const_eval_int lex )
+        ^ ( __const_int_apply tt a b )
+    } {}
+    ( die lex `const expression must be integer literals combined with + - * / << >> & | ^^ (use a precomputed literal for %)` )
+    ^ 0
+}
+
 @ gen_const_decl s ty_tok b is_mutable i lex i syms → v {
     : s lt ( llvm_type ty_tok )
     // Grammar v2.0+: consume staged `pub` flag, record origin + public
@@ -10168,6 +10224,20 @@
             ( nurl_print strname ) ( nurl_print `, i64 0, i64 0)\n\n` )
             ( nurl_sym_def syms cname `i8*` )
             ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
+        }
+        // Integer const-expression RHS (operator-led): fold to a single
+        // value at compile time. Gated on an integer LLVM type wider
+        // than i1 so bool consts keep their dedicated branch above.
+        ? & ( __is_const_int_op tt ) > ( int_width lt ) 1
+        { : i n ( const_eval_int lex )
+            ( nurl_print `@` ) ( nurl_print cname )
+            ( nurl_print ` = global ` ) ( nurl_print lt ) ( nurl_print ` ` )
+            ( nurl_print ( nurl_str_int n ) ) ( nurl_print `\n\n` )
+            ( nurl_sym_def syms cname lt )
+            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
+            ? is_mutable
+            { ( nurl_sym_def syms ( nurl_str_cat cname `__mutable` ) `1` ) }
+            {}
         }
         { ( nurl_lex_advance lex ) }  // unknown literal — skip
     }

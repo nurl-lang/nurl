@@ -176,8 +176,20 @@ enum_variant = IDENT type* ;
    Example:  : i MAX_CONN 100       — immutable global constant
    Example:  : ~ i counter 0        — mutable global variable
    Example:  : s GREETING `hello`   — immutable string
-   Example:  : ~ b debug_mode F     — mutable boolean flag *)
-const_decl = ':' '~'? type IDENT literal ;
+   Example:  : ~ b debug_mode F     — mutable boolean flag
+
+   An INTEGER-typed const (i / u / sized ints, not b) may instead take a
+   compile-time-foldable prefix expression over integer literals — the
+   operators '+ - * / << >> & | ^^' (NOT '%', which collides with the
+   trait/impl decl sigil). Folded to a single value by const_eval_int.
+   Example:  : i SECS_PER_DAY * * 60 60 24            — 86400
+   Example:  : i INT_MIN - -9223372036854775807 1     — two's-complement min
+   Example:  : i PAGE << 1 12                         — 4096 *)
+const_decl  = ':' '~'? type IDENT const_value ;
+const_value = literal | const_int_expr ;
+const_int_expr = INT
+              | ( '+' | '-' | '*' | '/' | '<<' | '>>' | '&' | '|' | '^^' )
+                const_int_expr const_int_expr ;
 
 
 (* % Name [T]? { ( fn_header | fn_decl )* }

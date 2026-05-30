@@ -22,6 +22,17 @@ IR).
 
 ### Added
 
+- **Compile-time const folding for integer globals.** A top-level
+  integer const (`: i NAME …`, or u / sized ints — not `b`) may now take
+  a prefix expression over integer literals instead of a single literal:
+  `+ - * / << >> & | ^^` (not `%`, which collides with the trait/impl
+  decl sigil at scan time). `const_eval_int` in `gen_const_decl` folds it
+  to one value. Fixes the long-standing wart where e.g. the
+  two's-complement minimum needed a niladic helper — `stdlib/std/int.nu`
+  now exposes `: i INT_MIN - -9223372036854775807 1` directly
+  (`int_min_val` retained, delegating to it). Transparent (computes a
+  value, hides no control flow); fits the parse-directed architecture.
+  Test `compiler/tests/const_eval.nu`. Bootstrap fixed point holds.
 - **`select` over channels — `?? { … }`** — Go-style select. A `??`
   whose scrutinee is immediately `{` (no value to match) is a channel
   select; each arm `[T] ch → bind { body }` receives from one channel
