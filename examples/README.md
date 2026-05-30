@@ -18,7 +18,7 @@ clang -O2 -flto /tmp/fizzbuzz.ll stdlib/runtime.o -lm -lpthread -o /tmp/fizzbuzz
 /tmp/fizzbuzz
 ```
 
-## Catalogue (36 examples)
+## Catalogue (37 examples)
 
 Each example is tagged for where it can run:
 
@@ -80,6 +80,12 @@ Each example is tagged for where it can run:
 | [`async_http_server.nu`](async_http_server.nu) | Same handler contract as `static_server.nu` but runs the request handlers on the M:N fiber runtime. | local (server listener) |
 | [`mcp_echo_server.nu`](mcp_echo_server.nu) | Minimal MCP server over stdio — one `echo` tool. Wire it into an MCP-aware client (Claude Desktop, Claude Code, etc.) and the tool is callable. | local (stdio + MCP client) |
 | [`mcp_echo_server_http.nu`](mcp_echo_server_http.nu) | Same business logic as `mcp_echo_server.nu`, but exposed over HTTP transport. | local (server listener) |
+
+### Databases
+
+| File | What it does | Tag |
+|---|---|---|
+| [`psql.nu`](psql.nu) | A real `psql`-style PostgreSQL client on `stdlib/ext/postgres.nu` (direct libpq FFI): reads SQL from stdin one `;`-terminated statement at a time, renders result sets as aligned tables, reports command tags / `ERROR:` messages, and supports `\dt \d \l \du \conninfo \? \q` plus `-c "SQL"` one-shot mode. Connect via a conninfo arg, `$PG_CONNINFO`, or libpq's own `PG*` env defaults. | local (PostgreSQL + libpq) |
 
 ### LLM / Anthropic API
 
