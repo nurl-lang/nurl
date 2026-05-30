@@ -1549,6 +1549,17 @@
         // inside closures, so a binding captured by a closure counts.
         ( lint_note_read name )
         ( lint_note_used name )
+        // The void keyword `v` in value position (canonically `^ v` from
+        // a void function) denotes the unit/void value — UNLESS a binding
+        // of the same name shadows it (e.g. `: f v ( strtod … ) ^ v`).
+        // Without this, an unshadowed `v` fell through to the generic
+        // ident path, which set last_type to i64 and emitted `%v` — an
+        // undefined SSA value at the wrong type, silently invalid IR.
+        ? & ( seq name `v` ) == 0 ( nurl_str_len ( nurl_sym_get syms name ) )
+        { ( nurl_sym_def syms `__last_ident_name__` name )
+            ( nurl_set_last_type `void` )
+            ^ `void` }
+        {}
         : s lt ( nurl_sym_get syms name )
         ( nurl_set_last_type ? == 0 ( nurl_str_len lt ) `i64` lt )
         : s ptr ( nurl_sym_get syms ( nurl_str_cat name `__ptr` ) )
@@ -1634,6 +1645,7 @@
     : s lu_snap ( nurl_sym_get syms `__last_unsigned__` )
     ( nurl_sym_def syms `__last_unsigned__` `` )
     : s rv ( gen_expr lex syms cg )
+    : s rt ( nurl_get_last_type )
     : s ru_snap ( nurl_sym_get syms `__last_unsigned__` )
     : s res ( nurl_cg_reg cg )
     : b isf | ( seq lt `double` ) ( seq lt `float` )
@@ -1651,9 +1663,33 @@
     : b isu | | ( seq lt `i8` ) != 0 ( nurl_str_len lu_snap )
     != 0 ( nurl_str_len ru_snap )
     : s ins ( binop_instr tt isf isu )
+    // Pointer comparison coercion. LLVM forbids `icmp <op> i8* %p, 0`
+    // (integer constant at pointer type) and rejects comparing two
+    // differently-typed pointers. For comparison operators, ptrtoint
+    // any pointer operand to i64 and compare in i64 — handles null-
+    // checks (`== raw 0`), `!= ptr 0`, and pointer↔pointer equality
+    // uniformly. ptrtoint is a no-op at the machine level, so this is
+    // free. Arithmetic ops are untouched.
+    : b is_cmp | & >= tt TT_LT <= tt TT_GE | == tt TT_EQEQ == tt TT_NE
+    : s cmp_ty lt
+    ? & is_cmp | ( is_ptr_ty lt ) ( is_ptr_ty rt ) {
+        ? ( is_ptr_ty lt ) {
+            : s lvi ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print lvi ) ( nurl_print ` = ptrtoint ` )
+            ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print lv ) ( nurl_print ` to i64\n` )
+            = lv lvi
+        } {}
+        ? ( is_ptr_ty rt ) {
+            : s rvi ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print rvi ) ( nurl_print ` = ptrtoint ` )
+            ( nurl_print rt ) ( nurl_print ` ` ) ( nurl_print rv ) ( nurl_print ` to i64\n` )
+            = rv rvi
+        } {}
+        = cmp_ty `i64`
+    } {}
     ( nurl_print `  ` ) ( nurl_print res ) ( nurl_print ` = ` )
     ( nurl_print ins ) ( nurl_print ` ` )
-    ( nurl_print lt ) ( nurl_print ` ` )
+    ( nurl_print cmp_ty ) ( nurl_print ` ` )
     ( nurl_print lv ) ( nurl_print `, ` ) ( nurl_print rv ) ( nurl_print `\n` )
     ? | & >= tt TT_LT <= tt TT_GE | == tt TT_EQEQ == tt TT_NE
     ( nurl_set_last_type `i1` )
@@ -6978,6 +7014,16 @@
     ? ( seq ty `i32` ) 32
     ? ( seq ty `i64` ) 64
     0
+}
+
+// An LLVM type string denotes a pointer iff it ends in `*` (e.g.
+// `i8*`, `%Foo*`, `i8**`). Used by comparison codegen to coerce
+// pointer operands to i64 before `icmp`, so `== ptr 0` / `!= ptr 0`
+// null-checks and pointer↔pointer compares emit valid IR.
+@ is_ptr_ty s ty → b {
+    : i n ( nurl_str_len ty )
+    ? == n 0 { ^ F } {}
+    ^ == ( nurl_str_get ty - n 1 ) 42
 }
 
 @ gen_cast i lex i syms i cg → s {
