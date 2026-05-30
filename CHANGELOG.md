@@ -22,6 +22,25 @@ IR).
 
 ### Added
 
+- **Trait bounds on generic functions — `[A: Trait]`.** A generic type
+  parameter may now carry one or more trait bounds: `@ my_max [A: Ord] A
+  x A y → A { … }`. Trait-method dispatch inside a generic body already
+  resolved to the concrete `impl` through monomorphisation (dispatch is
+  keyed on the first argument's LLVM type, which becomes concrete at
+  instantiation); the bound adds the up-front guarantee. `scan_impl_decl`
+  now registers each `% Trait Type {}` as `Trait##<llvm>` in
+  `g_trait_syms`; `gen_generic_fn_store` records per-tparam bounds; and
+  `check_generic_bounds` (called from `gen_call` at every generic call
+  site) verifies each bounded tparam's concrete type has the impl —
+  turning a missing impl from a cryptic unresolved-call link error into a
+  clear "type 'X' does not implement trait 'Y' required by bound A: Y"
+  diagnostic. Generic detection in `gen_fn_decl` extended to recognise a
+  colon anywhere in the `[…]` (a slice param's type never contains one).
+  This removes the need to pass `Ord`/`Hash`/`eq` closures into generic
+  helpers when an `impl` exists. Tests `compiler/tests/trait_bounds.nu`
+  (positive, i + String) and `should_fail_trait_bound.nu` (bound
+  violation → COMPILE FAIL). Bootstrap fixed point holds (stage1 ≡ stage2
+  byte-identical at 1 730 148 B).
 - **`??` match guards + or-patterns.** Two additions to `gen_match`:
   - **Guards** — `Pattern payloads ? <cond> → body`. The guard is
     evaluated *after* payload binding (so it can read the bound

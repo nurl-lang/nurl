@@ -109,8 +109,18 @@ ffi_param  = type IDENT? ;
 (* [T], [K V] — type variable list for generic declarations.
    Declaration-site list of single-letter (or multi-letter) type names.
    The type variable 'T' lexes as the boolean literal token and is
-   disambiguated by context (in a [...] list and in parameter position). *)
-type_params = '[' IDENT+ ']' ;
+   disambiguated by context (in a [...] list and in parameter position).
+
+   A type variable may carry one or more TRAIT BOUNDS via `: Trait`,
+   e.g. `[A: Ord]` or `[K: Hash V]` or `[A: Ord: Show]`. A bound is
+   checked at every instantiation: the concrete type substituted for the
+   variable must have an `impl` of the named trait, else a compile error
+   names the unsatisfied bound. (Method dispatch inside the body already
+   resolves to the concrete impl through monomorphisation; the bound adds
+   the up-front guarantee + documentation.) Disambiguation from a slice
+   parameter relies on the colon — a slice param type never contains one.
+   Example:  @ my_max [A: Ord] A x A y → A { … }  — A must implement Ord *)
+type_params = '[' ( IDENT ( ':' IDENT )* )+ ']' ;
 
 
 (* @ name [T]? param* → ret { body }

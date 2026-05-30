@@ -3157,6 +3157,36 @@
     ^ F
 }
 
+// check_generic_bounds: at a generic call site `( f [Ta...] … )`, verify
+// each bounded type parameter's concrete type implements the required
+// trait(s). Dispatch already works through monomorphisation; this turns
+// a missing impl from a cryptic unresolved-call link error into a clear
+// compile-time diagnostic at the bound. No-op for unbounded generics.
+@ check_generic_bounds i lex s fname s type_args → v {
+    : ~ s tp_rest ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__tparams` ) )
+    : ~ s ta_rest type_args
+    ~ != 0 ( nurl_str_len tp_rest ) {
+        : s tp ( str_first_word tp_rest )
+        = tp_rest ( str_skip_word tp_rest )
+        : s ta ( str_first_word ta_rest )
+        = ta_rest ( str_skip_word ta_rest )
+        : s bounds ( nurl_sym_get g_generic_syms ( nurl_str_cat3 fname `__bound__` tp ) )
+        ? & != 0 ( nurl_str_len bounds ) != 0 ( nurl_str_len ta ) {
+            : s ta_llvm ( llvm_type ta )
+            : ~ s br bounds
+            ~ != 0 ( nurl_str_len br ) {
+                : s bt ( str_first_word br )
+                = br ( str_skip_word br )
+                ? == 0 ( nurl_str_len ( nurl_sym_get g_trait_syms ( nurl_str_cat3 bt `##` ta_llvm ) ) )
+                { : s m1 ( nurl_str_cat4 `type '` ta `' does not implement trait '` bt )
+                    : s m2 ( nurl_str_cat3 m1 `' required by bound ` ( nurl_str_cat3 tp `: ` bt ) )
+                    ( die lex ( nurl_str_cat3 m2 ` on generic '` ( nurl_str_cat fname `'` ) ) ) }
+                {}
+            }
+        } {}
+    }
+}
+
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
@@ -3228,6 +3258,9 @@
         }
         ( expect lex TT_RBRACK )
         : s mangled ( nurl_str_cat fname mangle_sfx )
+        // Trait-bound check: each `A: Trait` tparam's concrete type must
+        // have an impl of Trait (no-op for unbounded generics).
+        ( check_generic_bounds lex fname type_args )
         // Dedup uses a global key (g_generic_syms is scope-free) because
         // local `syms` is push/popped per block — registering ret_ty in
         // syms inside a loop body would vanish when that block ends, and
@@ -9432,6 +9465,20 @@
         ( nurl_lex_advance lex )
         = tparams ? == 0 ( nurl_str_len tparams ) tp
         ( nurl_str_cat tparams ( nurl_str_cat ` ` tp ) )
+        // Optional trait bound `A: Ord`. Recorded per-tparam; checked at
+        // each instantiation (the dispatch itself already works through
+        // monomorphisation — the bound turns a missing impl from a
+        // cryptic unresolved call into a clear diagnostic, and documents
+        // the requirement). Multiple bounds via repeated `: Trait`.
+        ~ == ( nurl_lex_type lex ) TT_COLON {
+            ( nurl_lex_advance lex )  // consume ':'
+            : s bound ( nurl_lex_val lex )
+            ( nurl_lex_advance lex )  // consume trait name
+            : s bkey ( nurl_str_cat3 fname `__bound__` tp )
+            : s prev ( nurl_sym_get g_generic_syms bkey )
+            ( nurl_sym_def g_generic_syms bkey
+            ? == 0 ( nurl_str_len prev ) bound ( nurl_str_cat3 prev ` ` bound ) )
+        }
     }
     ( expect lex TT_RBRACK )
     // Collect params/return/body tokens until EOF
@@ -9698,7 +9745,13 @@
             // disambiguates.
             : i p4 ? & & is_name1 is_name2 is_name3 ( nurl_lex_peek4_type lex ) 0
             : b gen3 & & & is_name1 is_name2 is_name3 == p4 TT_RBRACK
-            ? | | gen1 gen2 gen3
+            // Bounded tparam list `[A: Trait …]`. A slice param's type
+            // never contains a `:`, so a colon anywhere in the bracket
+            // (within peek range) unambiguously marks a generic. Covers
+            // `[A: Ord]`, `[A B: Hash]`, `[A: Ord B]`, `[A B C: H]`.
+            : i p4c ( nurl_lex_peek4_type lex )
+            : b genb & is_name1 | | == p2 TT_COLON == p3 TT_COLON == p4c TT_COLON
+            ? | | | gen1 gen2 gen3 genb
             { ( gen_generic_fn_store lex syms fname ) }
             { ( gen_fn_decl_concrete fname lex syms cg ) }
         }
@@ -11463,6 +11516,9 @@
         : s impl_nurl ( capture_impl_nurl_name lex )
         : s impl_llvm ( parse_type lex )  // e.g. "i64", "i8*", "%Point"
         : s impl_mangle ( mangle_type impl_llvm )
+        // Record that `tname` is implemented for this LLVM type, so a
+        // generic bound `A: tname` can be verified at instantiation.
+        ( nurl_sym_def g_trait_syms ( nurl_str_cat3 tname `##` impl_llvm ) `1` )
         ( expect lex TT_LBRACE )
         : s provided ``
         ~ != ( nurl_lex_type lex ) TT_RBRACE {
