@@ -15,6 +15,12 @@
 //   ( float_exp   x )       → f      e^x
 //   ( float_sin / cos / tan x ) → f
 //   ( float_atan2 y x )     → f      angle of (x, y), range [-π, π]
+//   ( float_trunc x )       → f      round toward zero
+//   ( float_cbrt  x )       → f      real cube root (handles x < 0)
+//   ( float_hypot x y )     → f      sqrt(x²+y²) without over/underflow
+//   ( float_log2  x )       → f      base-2 log
+//   ( float_log10 x )       → f      base-10 log
+//   ( float_sign  x )       → f      -1.0 / 0.0 / +1.0 (0 and NaN → 0.0)
 //
 // Predicates (no libm needed — pure NURL):
 //   ( float_is_nan x )      → b      NaN ≠ itself by IEEE-754
@@ -81,6 +87,12 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get for strtod ERANGE dete
 
 & `m` @ atan2 f y f x → f
 
+& `m` @ trunc f x → f
+& `m` @ cbrt f x → f
+& `m` @ hypot f x f y → f
+& `m` @ log2 f x → f
+& `m` @ log10 f x → f
+
 // ── float_* wrappers ──────────────────────────────────────────────
 
 @ float_abs f x → f { ^ ( fabs x ) }
@@ -106,6 +118,30 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get for strtod ERANGE dete
 @ float_pow f x f y → f { ^ ( pow x y ) }
 
 @ float_atan2 f y f x → f { ^ ( atan2 y x ) }
+
+// Round toward zero (drop the fractional part). Distinct from floor:
+// trunc(-2.7) = -2.0 where floor(-2.7) = -3.0.
+@ float_trunc f x → f { ^ ( trunc x ) }
+
+// Real cube root — handles negative inputs (cbrt(-8) = -2.0), unlike
+// pow(x, 1.0/3.0) which is NaN for x < 0.
+@ float_cbrt f x → f { ^ ( cbrt x ) }
+
+// sqrt(x*x + y*y) without intermediate overflow/underflow (libm hypot).
+@ float_hypot f x f y → f { ^ ( hypot x y ) }
+
+// Base-2 / base-10 logarithms (libm). Domain error (x <= 0) yields the
+// platform libm result (-inf at 0, NaN below) — probe with float_is_*.
+@ float_log2 f x → f { ^ ( log2 x ) }
+@ float_log10 f x → f { ^ ( log10 x ) }
+
+// Sign as a float: -1.0 / 0.0 / +1.0. Zero and NaN both map to 0.0
+// (NaN compares false to everything).
+@ float_sign f x → f {
+    ? < x 0.0 { ^ - 0.0 1.0 } {}
+    ? > x 0.0 { ^ 1.0 } {}
+    ^ 0.0
+}
 
 // ── Predicates ─────────────────────────────────────────────────────
 

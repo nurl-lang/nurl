@@ -6913,8 +6913,16 @@
                                 ^ `zeroinitializer` }
                         }
                     }
-                    {  // Integer-width conversion (iN → iM).  Three sub-cases:
+                    {  // Integer-width conversion (iN → iM).  Sub-cases:
                         //   * Narrow (sw > dw): trunc.
+                        //   * Widen, source is i1 (a boolean from a
+                        //     comparison / `&` / `|` / `!`): zext ALWAYS.
+                        //     NURL has no signed 1-bit type, so boolean
+                        //     true is canonically 1 — `sext i1 1` would
+                        //     yield -1 and silently break every `# i
+                        //     <bool>` (is_digit / is_alpha returned -1).
+                        //     Comparisons never set `__last_unsigned__`,
+                        //     hence this explicit guard.
                         //   * Widen, source unsigned (`__last_unsigned__`
                         //     side-channel set by gen_ident from the
                         //     binding's `__unsigned` flag): zext.
@@ -6924,7 +6932,8 @@
                         : i dw ( int_width dt )
                         ? & & > sw 0 > dw 0 != sw dw
                         { : s lu ( nurl_sym_get syms `__last_unsigned__` )
-                            : s widen_inst ? != 0 ( nurl_str_len lu ) ` = zext ` ` = sext `
+                            : b src_is_bool ( seq st `i1` )
+                            : s widen_inst ? | src_is_bool != 0 ( nurl_str_len lu ) ` = zext ` ` = sext `
                             ( nurl_print `  ` ) ( nurl_print res )
                             ( nurl_print ? > dw sw widen_inst ` = trunc ` )
                             ( nurl_print st ) ( nurl_print ` ` ) ( nurl_print val )

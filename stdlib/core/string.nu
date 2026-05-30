@@ -820,3 +820,49 @@ $ `stdlib/core/char.nu`
     }
     ^ out
 }
+
+// Concatenate every element of `parts` into a fresh owned String,
+// inserting `sep` between adjacent elements (not before the first or
+// after the last). The complement of `string_split`:
+// `string_join ( string_split s "," ) ","` reproduces `s`. `parts` is
+// borrowed — its Strings are not consumed.
+@ string_join ( Vec String ) parts s sep → String {
+    : i n ( vec_len [String] parts )
+    : i slen ( nurl_str_len sep )
+    : String out ( string_new )
+    : ~ i k 0
+    ~ < k n {
+        ? > k 0 {
+            ? > slen 0 { ( string_push_str out sep ) } {}
+        } {}
+        : ?String elem ( vec_get [String] parts k )
+        ?? elem {
+            T part → { ( string_push_str out ( string_data part ) ) }
+            F → {}
+        }
+        = k + k 1
+    }
+    ^ out
+}
+
+// Count non-overlapping occurrences of `needle` in `str`. Empty needle
+// returns 0. After a match the scan resumes past the whole match, so
+// `string_count "aaaa" "aa"` is 2, not 3.
+@ string_count String str s needle → i {
+    : i nlen ( nurl_str_len needle )
+    ? == nlen 0 { ^ 0 } {}
+    : ~ i start 0
+    : ~ i count 0
+    : ~ b going T
+    ~ going {
+        : s cur # s + # i ( string_data str ) start
+        : i found ( nurl_str_find cur needle )
+        ? < found 0 {
+            = going F
+        } {
+            = count + count 1
+            = start + start + found nlen
+        }
+    }
+    ^ count
+}

@@ -4,6 +4,9 @@
 //   ( int_pow x y )       → i        x^y for y ≥ 0; returns 0 when y < 0
 //                                    (use float_pow for fractional/negative)
 //   ( int_sign n )        → i        -1 / 0 / +1
+//   ( int_gcd a b )       → i        greatest common divisor (non-negative)
+//   ( int_lcm a b )       → i        least common multiple (non-negative)
+//   ( int_isqrt n )       → i        floor(sqrt n); negative n → 0
 //   ( int_parse s )       → ! i ParseErr   strict decimal parse from raw s
 //                                          - empty / sign-only        → Empty
 //                                          - non-digit byte           → BadFormat
@@ -62,6 +65,42 @@ $ `stdlib/core/string.nu`
     ? < n 0 { ^ -1 } {}
     ? > n 0 { ^ 1 } {}
     ^ 0
+}
+
+// Greatest common divisor via the Euclidean algorithm. Operates on the
+// magnitudes, so the result is always non-negative; `gcd(0, 0)` is 0 and
+// `gcd(0, n)` is `|n|`.
+@ int_gcd i a i b → i {
+    : ~ i x ( int_abs a )
+    : ~ i y ( int_abs b )
+    ~ != y 0 {
+        : i t % x y
+        = x y
+        = y t
+    }
+    ^ x
+}
+
+// Least common multiple. Non-negative; `lcm(0, n)` is 0. Computed as
+// `|a| / gcd * |b|` (divide first to reduce overflow pressure); the
+// product can still overflow for large inputs — caller's responsibility.
+@ int_lcm i a i b → i {
+    ? | == a 0 == b 0 { ^ 0 } {}
+    : i g ( int_gcd a b )
+    ^ * / ( int_abs a ) g ( int_abs b )
+}
+
+// Integer (floor) square root via Newton's method: the largest `r` with
+// `r*r <= n`. Negative `n` returns 0. Exact — no float round-off.
+@ int_isqrt i n → i {
+    ? <= n 0 { ^ 0 } {}
+    : ~ i x n
+    : ~ i y >> + x 1 1
+    ~ < y x {
+        = x y
+        = y >> + x / n x 1
+    }
+    ^ x
 }
 
 // Strict decimal parse from raw `s`. Accepts optional leading '-' or '+'
