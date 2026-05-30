@@ -26,6 +26,7 @@
 //   Statement execution
 //     ( pg_exec Connection s sql )                       → ! PgResult PgErr
 //     ( pg_exec_params Connection s sql ( Vec String ) ) → ! PgResult PgErr  (all-text, no NULLs)
+//     ( pg_exec_params_opt Conn s sql ( Vec ?String ) )  → ! PgResult PgErr  (option-typed; None = SQL NULL)
 //     ( pg_exec_params_b Connection s sql PgParams )     → ! PgResult PgErr  (typed + NULL binds)
 //     ( pg_prepare Conn s name s query i nparams )       → ! PgResult PgErr
 //     ( pg_exec_prepared Conn s name ( Vec String ) )    → ! PgResult PgErr
@@ -52,6 +53,8 @@
 //     ( pg_ftype PgResult i col )          → i       column type OID
 //     ( pg_get_value PgResult i row i col )→ String  OWNED
 //     ( pg_get_is_null PgResult i row i col) → b
+//     ( pg_get_opt PgResult i row i col )  → ?String  None on SQL NULL (OWNED on Some)
+//     ( pg_get_opt_int PgResult i row i col) → ?i      None on SQL NULL
 //     ( pg_get_int / pg_get_i64 … i col )  → i       text → integer
 //     ( pg_get_f64 … )                     → f       text → double
 //     ( pg_get_bool … )                    → b       't'/'f' → true/false
@@ -261,6 +264,43 @@ $ `stdlib/core/vec.nu`
     ( nurl_free vals )
     // Exec done — libpq copied the params, safe to release the Strings.
     ( vec_free_with [String] params \ String s → v { ( string_free s ) } )
+    ^ res
+}
+
+// Option-typed NULL-aware parameterised exec. `params` is a `Vec ?String`
+// where a `T text` element binds that text and an `F` (None) element
+// binds SQL NULL — the idiomatic way to express "this column may be NULL"
+// with the language's own option type. CONSUMES `params` (frees every
+// Some-String and the Vec backing after the exec).
+//
+//   : ( Vec ?String ) ps ( vec_with_cap [?String] 2 )
+//   ( vec_push [?String] ps @ ?String { T ( string_from `alice` ) } )
+//   ( vec_push [?String] ps @ ?String { F # String 0 } )   // → SQL NULL
+//   : !PgResult PgErr r ( pg_exec_params_opt c `INSERT … VALUES ($1,$2)` ps )
+@ pg_exec_params_opt Connection c s sql ( Vec ?String ) params → !PgResult PgErr {
+    : i n ( vec_len [?String] params )
+    : s vals ( nurl_alloc * ? > n 0 n 1 8 )
+    : ~ i k 0
+    ~ < k n {
+        // vec_get over a `Vec ?String` yields `??String`: the outer
+        // option is the bounds check, the inner is the value-or-NULL.
+        : ??String pk ( vec_get [?String] params k )
+        ?? pk {
+            T inner → {
+                ?? inner {
+                    T sv → ( nurl_poke vals k # i ( string_data sv ) )
+                    F _ → ( nurl_poke vals k 0 )
+                }
+            }
+            F _ → ( nurl_poke vals k 0 )
+        }
+        = k + k 1
+    }
+    : !PgResult PgErr res ( __pg_exec_params_raw c sql n vals )
+    ( nurl_free vals )
+    ( vec_free_with [?String] params \ ?String o → v {
+        ?? o { T sv → ( string_free sv )  F _ → {} }
+    } )
     ^ res
 }
 
@@ -509,6 +549,22 @@ $ `stdlib/core/vec.nu`
     : i32 r32 # i32 row
     : i32 c32 # i32 col
     ^ != 0 # i ( PQgetisnull . r raw r32 c32 )
+}
+
+// Option-typed cell read: `F` (None) for a SQL NULL, `T text` (an OWNED
+// String the caller frees) otherwise. Lets a caller handle nullability
+// with the language's own option type:
+//
+//   ?? ( pg_get_opt r row col ) { T s → … ( string_free s )  F _ → … }
+@ pg_get_opt PgResult r i row i col → ?String {
+    ? ( pg_get_is_null r row col ) { ^ @ ?String { F # String 0 } } {}
+    ^ @ ?String { T ( pg_get_value r row col ) }
+}
+
+// Option-typed integer read: `F` for SQL NULL, `T n` otherwise.
+@ pg_get_opt_int PgResult r i row i col → ?i {
+    ? ( pg_get_is_null r row col ) { ^ @ ?i { F # i 0 } } {}
+    ^ @ ?i { T ( pg_get_int r row col ) }
 }
 
 // Typed accessors — read the text cell directly (no owned-String copy)

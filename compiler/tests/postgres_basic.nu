@@ -90,6 +90,25 @@ $ `stdlib/ext/postgres.nu`
         }
     }
 
+    // INSERT id=6 with a NULL body via the OPTION-typed params API
+    // (`Vec ?String`, None = SQL NULL — internally walked with
+    // `vec_get [?String]` → `??String`).
+    : ( Vec ?String ) op ( vec_with_cap [?String] 4 )
+    ( vec_push [?String] op @ ?String { T ( string_from `6` ) } )
+    ( vec_push [?String] op @ ?String { F # String 0 } )
+    ( vec_push [?String] op @ ?String { T ( string_from `106` ) } )
+    ( vec_push [?String] op @ ?String { T ( string_from `t` ) } )
+    : !PgResult PgErr inso ( pg_exec_params_opt c `INSERT INTO pg_notes (id, body, score, ok) VALUES ($1,$2,$3,$4)` op )
+    ?? inso {
+        F e → ( fail_pg c `insert_opt` e )
+        T r → {
+            : String cs ( pg_cmd_status r )
+            ( kv `insert_opt` ( string_data cs ) )
+            ( string_free cs )
+            ( pg_clear r )
+        }
+    }
+
     // Transaction: insert id=5 inside begin/commit.
     : !i PgErr bt ( pg_begin c )
     ?? bt { F e → ( fail_pg c `begin` e )  T _ → {} }
@@ -133,17 +152,18 @@ $ `stdlib/ext/postgres.nu`
             ~ < row nrows {
                 : i id ( pg_get_int r row 0 )
                 ( nurl_print `row id=` ) ( nurl_print ( nurl_str_int id ) )
-                ? ( pg_get_is_null r row 1 ) {
-                    ( nurl_print ` body=<null>` )
-                } {
-                    : String body ( pg_get_value r row 1 )
-                    ( nurl_print ` body=` ) ( nurl_print ( string_data body ) )
-                    ( string_free body )
+                // Option-typed read: body comes back as ?String (None on NULL).
+                ?? ( pg_get_opt r row 1 ) {
+                    T body → {
+                        ( nurl_print ` body=` ) ( nurl_print ( string_data body ) )
+                        ( string_free body )
+                    }
+                    F _ → ( nurl_print ` body=<null>` )
                 }
-                ? ( pg_get_is_null r row 2 ) {
-                    ( nurl_print ` score=<null>` )
-                } {
-                    ( nurl_print ` score=` ) ( nurl_print ( nurl_str_int ( pg_get_int r row 2 ) ) )
+                // Option-typed integer read for the (nullable) score.
+                ?? ( pg_get_opt_int r row 2 ) {
+                    T sc → { ( nurl_print ` score=` ) ( nurl_print ( nurl_str_int sc ) ) }
+                    F _ → ( nurl_print ` score=<null>` )
                 }
                 ( nurl_print ` ok=` ) ( nurl_print ? ( pg_get_bool r row 3 ) `T` `F` )
                 ( nurl_print `\n` )

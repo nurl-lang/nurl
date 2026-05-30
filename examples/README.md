@@ -18,7 +18,7 @@ clang -O2 -flto /tmp/fizzbuzz.ll stdlib/runtime.o -lm -lpthread -o /tmp/fizzbuzz
 /tmp/fizzbuzz
 ```
 
-## Catalogue (37 examples)
+## Catalogue (38 examples)
 
 Each example is tagged for where it can run:
 
@@ -86,6 +86,7 @@ Each example is tagged for where it can run:
 | File | What it does | Tag |
 |---|---|---|
 | [`psql.nu`](psql.nu) | A real `psql`-style PostgreSQL client on `stdlib/ext/postgres.nu` (direct libpq FFI): reads SQL from stdin one `;`-terminated statement at a time, renders result sets as aligned tables, reports command tags / `ERROR:` messages, and supports `\dt \d \l \du \conninfo \? \q` plus `-c "SQL"` one-shot mode. Connect via a conninfo arg, `$PG_CONNINFO`, or libpq's own `PG*` env defaults. | local (PostgreSQL + libpq) |
+| [`pg_optional.nu`](pg_optional.nu) | PostgreSQL with the language's **option types**: binds nullable parameters with `Vec ?String` (`F` = SQL NULL) via `pg_exec_params_opt` — internally walked with `vec_get [?String]` → `??String` — and reads nullable columns back as `?String` / `?i` via `pg_get_opt` / `pg_get_opt_int`, matched with `??`. | local (PostgreSQL + libpq) |
 
 ### LLM / Anthropic API
 
