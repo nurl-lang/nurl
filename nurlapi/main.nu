@@ -1953,6 +1953,11 @@ s combined_stdout s combined_stderr → v {
         ( string_free mtmp ) ( string_free ptmp )
         ^ ( h_favicon req ( params_new ) )
     } {}
+    ? & is_get ( string_eq ptmp ( string_from `/gameboydemo` ) ) {
+        ( string_free mtmp ) ( string_free ptmp )
+        ( nurl_print `[srv] GET /gameboydemo\n` )
+        ^ ( __serve_gameboydemo )
+    } {}
     ? & is_get ( string_eq ptmp ( string_from `/` ) ) {
         ( string_free mtmp ) ( string_free ptmp )
         ^ ( h_static req ( params_new ) )
@@ -2884,6 +2889,24 @@ s combined_stdout s combined_stderr → v {
             ^ r
         }
         F _ → { ^ ( response_text 500 `viewer.html not found in static dir\n` ) }
+    }
+}
+
+// Serve the Game Boy WebAssembly demo page (static/gameboydemo.html).
+@ __serve_gameboydemo → HttpResponse {
+    : String sdir ( get_static_dir )
+    : String fp ( path_join ( string_data sdir ) `gameboydemo.html` )
+    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+    ( string_free sdir ) ( string_free fp )
+    ?? rd {
+        T body → {
+            : HttpResponse r ( response_new 200 )
+            ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+            ( response_set_body_bytes r body )
+            ( vec_free [u] body )
+            ^ r
+        }
+        F _ → { ^ ( response_text 500 `gameboydemo.html not found in static dir\n` ) }
     }
 }
 

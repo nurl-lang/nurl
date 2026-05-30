@@ -97,11 +97,54 @@ to keep each interrupt handler locked to its scanline — beyond this
 instruction-granular core. So the frame is rendered once from the settled
 state, which is correct for everything except the raster tricks.
 
+## WebAssembly browser demo
+
+The emulator also runs in the browser. The engine lives in `core.nu`; two
+front-ends share it:
+
+* **`gb.nu`** — the native CLI above.
+* **`gb_wasm.nu`** — a `wasm32-wasi` build that renders to a `<canvas>`
+  via the playground's canvas FFI, pulls ROM bytes + live joypad state
+  from the host (`env.host_rom_size` / `host_rom_byte` / `host_joypad`),
+  and runs one `run_one_frame` per displayed frame.
+
+It's wired into the playground at **`/gameboydemo`** (link in the
+playground header): pick a bundled test ROM or load your own `.gb`, and
+play with the arrow keys + Z/X/Enter/Shift. MBC1/3/5 cartridges work.
+
+### Building the wasm
+
+`examples/gameboy/gb_wasm_full.nu` is `core.nu` + `gb_wasm.nu`
+concatenated into one file (the API's `/build_wasm` compiles a single
+source). Regenerate it after editing either part, then build **at -O2**:
+
+```sh
+# regenerate the combined source
+python3 - <<'PY'
+core=open("examples/gameboy/core.nu").read()
+wasm=[l for l in open("examples/gameboy/gb_wasm.nu") if l.strip()!="$ `examples/gameboy/core.nu`"]
+open("examples/gameboy/gb_wasm_full.nu","w").write(core+"\n\n"+"".join(wasm))
+PY
+# build via the running API container (startdev.sh), -O2 REQUIRED:
+curl -s localhost:8000/build_wasm -H 'content-type: application/json' \
+  -d "{\"source\":$(python3 -c 'import json;print(json.dumps(open("examples/gameboy/gb_wasm_full.nu").read()))'),\"opt\":\"-O2\"}" \
+  | python3 -c 'import sys,json,base64;open("nurlapi/static/gameboy_gb.wasm","wb").write(base64.b64decode(json.load(sys.stdin)["wasm_base64"]))'
+```
+
+**Why -O2 is required:** at `-O0`/`-O1` the wasm build leaks the C
+shadow-stack pointer on the interrupt-dispatch code path (~one slot per
+dispatch), overflowing the 64 KiB stack within a few frames — a NURL→wasm
+codegen bug. `-O2` optimises the offending path away and runs cleanly
+(verified rendering dmg-acid2 + cpu_instrs for hundreds of frames). The
+underlying `-O0`/`-O1` codegen leak is a separate item still to fix.
+
 ## Roadmap
 
 - [x] MMU + full CPU + interrupts + timer → `cpu_instrs` 11/11
 - [x] PPU (background / window / sprites) → recognisable `dmg-acid2` face (~92 %)
-- [ ] Cycle-accurate CPU/PPU timing → pixel-exact `dmg-acid2`, `instr_timing`, `mem_timing`
-- [ ] SDL canvas output + joypad input
+- [x] WebAssembly build + `/gameboydemo` browser page (canvas + joypad, MBC1/3/5)
+- [ ] Fix the `-O0`/`-O1` shadow-stack leak in the interrupt path
+- [ ] Cycle-accurate CPU/PPU timing → pixel-exact `dmg-acid2`, `instr_timing`
+- [ ] CGB (colour) support → run Tobu Tobu Girl Deluxe etc.
 
 [blargg]: https://github.com/retrio/gb-test-roms

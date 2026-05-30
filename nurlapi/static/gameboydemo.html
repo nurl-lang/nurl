@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>NURL Game Boy — WebAssembly emulator</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; background: #0f1115; color: #d7dae0;
+    font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header { padding: 18px 22px 6px; }
+  header h1 { margin: 0 0 4px; font-size: 20px; }
+  header a { color: #7aa2f7; }
+  .sub { color: #9aa0ab; font-size: 13px; }
+  main {
+    display: flex; flex-wrap: wrap; gap: 24px; padding: 14px 22px 28px;
+    align-items: flex-start;
+  }
+  #screenWrap {
+    background: #000; border: 1px solid #2a2f3a; border-radius: 8px;
+    padding: 10px; line-height: 0;
+  }
+  canvas {
+    image-rendering: pixelated; image-rendering: crisp-edges;
+    display: block; background: #9bbc0f;
+  }
+  .panel { min-width: 280px; max-width: 360px; }
+  .panel h2 { font-size: 14px; margin: 0 0 8px; color: #c0c5cf; }
+  .roms { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  button, label.file {
+    background: #1b2030; color: #d7dae0; border: 1px solid #2f3650;
+    border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer;
+  }
+  button:hover, label.file:hover { background: #232a40; }
+  button.active { background: #2d4a7a; border-color: #3f63a8; }
+  label.file input { display: none; }
+  #status { font-size: 13px; color: #9aa0ab; min-height: 1.4em; margin: 8px 0; }
+  table.keys { border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+  table.keys td { padding: 2px 10px 2px 0; color: #b8bdc8; }
+  table.keys td.k { color: #e6e9ef; font-family: ui-monospace, monospace; }
+  .credit { font-size: 12px; color: #7e8593; margin-top: 16px; }
+  .credit a { color: #7aa2f7; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎮 NURL Game Boy emulator <span class="sub">· compiled to WebAssembly</span></h1>
+  <div class="sub">
+    A Game Boy (DMG) emulator written in <a href="/">NURL</a>, built to
+    <code>wasm32-wasi</code> and rendered to a canvas. Pick a ROM or load your own.
+    <a href="/">← back to the playground</a>
+  </div>
+</header>
+<main>
+  <div id="screenWrap">
+    <canvas id="screen" width="160" height="144" style="width:480px;height:432px"></canvas>
+  </div>
+  <div class="panel">
+    <h2>ROM</h2>
+    <div class="roms" id="roms">
+      <button data-rom="gameboy_roms/dmg-acid2.gb">dmg-acid2 (PPU)</button>
+      <button data-rom="gameboy_roms/cpu_instrs.gb">cpu_instrs (MBC1)</button>
+      <button data-rom="gameboy_roms/01-special.gb">cpu 01-special</button>
+      <button data-rom="gameboy_roms/10-bit_ops.gb">cpu 10-bit ops</button>
+      <label class="file">Load .gb…<input id="file" type="file" accept=".gb,.gbc"></label>
+    </div>
+    <div id="status">Loading WebAssembly runtime…</div>
+    <h2>Controls</h2>
+    <table class="keys">
+      <tr><td class="k">← ↑ → ↓</td><td>D-pad</td><td class="k">Z</td><td>A</td></tr>
+      <tr><td class="k">X</td><td>B</td><td class="k">Enter</td><td>Start</td></tr>
+      <tr><td class="k">Shift</td><td>Select</td><td></td><td></td></tr>
+    </table>
+    <div class="credit">
+      DMG only (no colour). Bundled ROMs: Blargg's <code>cpu_instrs</code> and
+      Matt Currie's <code>dmg-acid2</code> (freely redistributable PPU test).
+      MBC1/3/5 cartridges are supported — load your own DMG ROM above.
+    </div>
+  </div>
+</main>
+
+<script type="module">
+const WASI_SHIM_URL = "https://esm.sh/@bjorn3/browser_wasi_shim@0.3.0";
+const screen = document.getElementById("screen");
+const statusEl = document.getElementById("status");
+const setStatus = (s) => { statusEl.textContent = s; };
+
+// ── Canvas host: bind the <canvas> to the wasm framebuffer ───────
+class CanvasHost {
+  constructor(el) { this.el = el; this.ctx = null; this.img = null;
+    this.memory = null; this.fbPtr = 0; this.w = 0; this.h = 0; this.shouldClose = 0; }
+  attachMemory(m) { this.memory = m; }
+  open(w, h, fbPtr) {
+    this.w = Number(w); this.h = Number(h); this.fbPtr = fbPtr | 0;
+    this.el.width = this.w; this.el.height = this.h;
+    this.ctx = this.el.getContext("2d");
+    this.img = this.ctx.createImageData(this.w, this.h);
+  }
+  present() {
+    if (!this.ctx || !this.memory) return;
+    // Each pixel is an i64 whose low 32 bits hold ARGB8888 (0xAARRGGBB);
+    // ImageData wants RGBA little-endian (0xAABBGGRR), so swap R↔B.
+    const n = this.w * this.h;
+    const src32 = new Uint32Array(this.memory.buffer, this.fbPtr, n * 2);
+    const dst32 = new Uint32Array(this.img.data.buffer);
+    for (let i = 0, j = 0; i < n; i++, j += 2) {
+      const argb = src32[j];
+      dst32[i] = (argb & 0xff00ff00)
+               | ((argb & 0x00ff0000) >>> 16)
+               | ((argb & 0x000000ff) << 16)
+               | 0xff000000;
+    }
+    this.ctx.putImageData(this.img, 0, 0);
+  }
+}
+
+// ── Asyncify runtime: lets the synchronous canvas_sleep yield ────
+const ASY_NONE = 0, ASY_UNWINDING = 1, ASY_REWINDING = 2;
+class AsyncifyRuntime {
+  constructor() { this.exports = null; this.memory = null; this.stackPtr = 0;
+    this.stackSize = 4096; this.pendingResult = undefined; this.pendingPromise = null; this.stopped = false; }
+  attach(inst) { this.exports = inst.exports; this.memory = inst.exports.memory; }
+  ensureStack() {
+    if (this.stackPtr) return;
+    const getPtr = this.exports.__nurl_asyncify_stack_ptr;
+    const getSize = this.exports.__nurl_asyncify_stack_size;
+    if (!getPtr || !getSize) throw new Error("module missing __nurl_asyncify_stack_* exports");
+    const base = getPtr() | 0; this.stackSize = getSize() | 0; this.stackPtr = base;
+    const view = new DataView(this.memory.buffer);
+    view.setInt32(base, base + 8, true);
+    view.setInt32(base + 4, base + this.stackSize, true);
+  }
+  wrap(fn) {
+    const self = this;
+    return function (...args) {
+      const st = self.exports.asyncify_get_state();
+      if (st === ASY_NONE) { self.ensureStack();
+        self.pendingPromise = Promise.resolve(fn(...args));
+        self.exports.asyncify_start_unwind(self.stackPtr); return 0; }
+      if (st === ASY_REWINDING) { self.exports.asyncify_stop_rewind(); return self.pendingResult; }
+      throw new Error("asyncify: unexpected state " + st);
+    };
+  }
+  async drive(entry) {
+    let exit = 0;
+    const run = () => { try { entry(); } catch (e) {
+      if (typeof e === "number") { exit = e; return "exit"; }
+      if (e && typeof e.code === "number") { exit = e.code; return "exit"; }
+      throw e; } return "ok"; };
+    let res = run();
+    while (res !== "exit" && this.exports.asyncify_get_state() === ASY_UNWINDING) {
+      this.exports.asyncify_stop_unwind();
+      this.pendingResult = await this.pendingPromise;
+      if (this.stopped) { exit = 0; break; }
+      this.exports.asyncify_start_rewind(this.stackPtr);
+      res = run();
+    }
+    return exit;
+  }
+}
+
+// ── Joypad: keyboard → g_joyp bitmask ────────────────────────────
+// bit0 right,1 left,2 up,3 down,4 A,5 B,6 select,7 start
+const KEYMAP = {
+  ArrowRight: 0x01, ArrowLeft: 0x02, ArrowUp: 0x04, ArrowDown: 0x08,
+  KeyZ: 0x10, KeyX: 0x20, ShiftLeft: 0x40, ShiftRight: 0x40, Enter: 0x80,
+};
+let joyState = 0;
+window.addEventListener("keydown", (e) => {
+  const b = KEYMAP[e.code]; if (b !== undefined) { joyState |= b; e.preventDefault(); }
+});
+window.addEventListener("keyup", (e) => {
+  const b = KEYMAP[e.code]; if (b !== undefined) { joyState &= ~b; e.preventDefault(); }
+});
+
+// ── ROM + run management ─────────────────────────────────────────
+let currentRom = new Uint8Array(0);
+let activeRun = null;     // { stop }
+let WASI, File, OpenFile, ConsoleStdout, PreopenDirectory;
+let wasmBytes = null;
+
+async function loadDeps() {
+  ({ WASI, File, OpenFile, ConsoleStdout, PreopenDirectory } = await import(WASI_SHIM_URL));
+  wasmBytes = new Uint8Array(await (await fetch("gameboy_gb.wasm")).arrayBuffer());
+}
+
+async function runRom(bytes, label) {
+  if (activeRun) { activeRun.stop(); activeRun = null; await new Promise(r => setTimeout(r, 30)); }
+  currentRom = bytes;
+  setStatus(`Running ${label} — ${bytes.length.toLocaleString()} bytes`);
+  joyState = 0;
+  screen.focus();
+
+  const canvasHost = new CanvasHost(screen);
+  const asy = new AsyncifyRuntime();
+  const stdout = ConsoleStdout.lineBuffered(() => {});
+  const stderr = ConsoleStdout.lineBuffered((l) => console.warn("[gb]", l));
+  const fds = [
+    new OpenFile(new File(new Uint8Array())), stdout, stderr,
+    new PreopenDirectory(".", new Map()),
+  ];
+  const wasi = new WASI(["gb.wasm"], [], fds);
+
+  const imports = {
+    wasi_snapshot_preview1: wasi.wasiImport,
+    canvas: {
+      open: (w, h, fb) => canvasHost.open(w, h, fb),
+      present: () => canvasHost.present(),
+      sleep: asy.wrap((ms) => new Promise((r) => setTimeout(r, Number(ms)))),
+      should_close: () => BigInt(canvasHost.shouldClose | (asy.stopped ? 1 : 0)),
+    },
+    env: {
+      host_rom_size: () => BigInt(currentRom.length),
+      host_rom_byte: (i) => BigInt(currentRom[Number(i)] | 0),
+      host_joypad: () => BigInt(joyState & 0xff),
+    },
+  };
+
+  let instance;
+  try {
+    const module = await WebAssembly.compile(wasmBytes);
+    instance = await WebAssembly.instantiate(module, imports);
+  } catch (e) { setStatus("instantiation failed: " + e.message); return; }
+
+  try { if (wasi.initialize && instance.exports._initialize) wasi.initialize(instance); } catch (_) {}
+  canvasHost.attachMemory(instance.exports.memory);
+  asy.attach(instance);
+  const thisRun = { stop: () => { canvasHost.shouldClose = 1; asy.stopped = true; } };
+  activeRun = thisRun;
+  try {
+    await asy.drive(() => wasi.start(instance));
+  } catch (e) {
+    if (typeof e !== "number" && !(e && typeof e.code === "number")) console.error(e);
+  }
+  if (activeRun === thisRun) activeRun = null;
+}
+
+function markActive(btn) {
+  document.querySelectorAll("#roms button").forEach(b => b.classList.remove("active"));
+  if (btn) btn.classList.add("active");
+}
+
+document.querySelectorAll("#roms button[data-rom]").forEach(btn => {
+  btn.addEventListener("click", async () => {
+    markActive(btn);
+    setStatus("fetching " + btn.dataset.rom + " …");
+    const bytes = new Uint8Array(await (await fetch(btn.dataset.rom)).arrayBuffer());
+    runRom(bytes, btn.textContent);
+  });
+});
+document.getElementById("file").addEventListener("change", async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  markActive(null);
+  const bytes = new Uint8Array(await f.arrayBuffer());
+  runRom(bytes, f.name);
+});
+
+screen.tabIndex = 0;
+(async () => {
+  try {
+    await loadDeps();
+    setStatus("Ready — pick a ROM above.");
+    // Auto-start with the dmg-acid2 PPU demo.
+    const first = document.querySelector('#roms button[data-rom]');
+    first.click();
+  } catch (e) { setStatus("failed to load runtime: " + e.message); }
+})();
+</script>
+</body>
+</html>
