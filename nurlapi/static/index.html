@@ -665,6 +665,64 @@ class CanvasHost {
 }
 const canvasHost = new CanvasHost(nurlCanvas);
 
+// ── Audio output sink ──────────────────────────────────────────
+//
+// A NURL program can emit sound by filling a buffer of packed-stereo
+// i64 samples (low 16 bits = left, high 16 bits = right, both signed
+// 16-bit) and calling the host import:
+//
+//   & `canvas` @ audio_out_push i buf i n → v   // n samples from buf
+//   & `canvas` @ audio_out_open  i rate i ch → v // optional: set rate
+//
+// We copy each pushed block into a 1-second float ring that a 48 kHz
+// ScriptProcessor drains. The AudioContext is created lazily on the
+// first push (the Run-button click counts as the user gesture browsers
+// require). Mirrors the standalone Game Boy demo's audio path.
+class AudioSink {
+  constructor() { this.ctx = null; this.node = null; this.memory = null;
+    this.stopped = false; this.rate = 48000; this.size = 48000;
+    this.bufL = new Float32Array(this.size); this.bufR = new Float32Array(this.size);
+    this.rd = 0; this.wr = 0; }
+  attachMemory(m) { this.memory = m; }
+  reset() { this.stop(); this.ctx = null; this.node = null; this.stopped = false; this.rd = 0; this.wr = 0; }
+  open(rate, channels) { if (rate > 0) this.rate = rate; this.ensure(); }
+  ensure() {
+    if (this.ctx) return;
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new AC({ sampleRate: this.rate });
+      if (this.ctx.state === "suspended") this.ctx.resume();
+      this.node = this.ctx.createScriptProcessor(2048, 0, 2);
+      this.node.onaudioprocess = (e) => {
+        const oL = e.outputBuffer.getChannelData(0), oR = e.outputBuffer.getChannelData(1);
+        for (let i = 0; i < oL.length; i++) {
+          if (this.rd !== this.wr) { oL[i] = this.bufL[this.rd]; oR[i] = this.bufR[this.rd]; this.rd = (this.rd + 1) % this.size; }
+          else { oL[i] = 0; oR[i] = 0; }
+        }
+      };
+      this.node.connect(this.ctx.destination);
+    } catch (e) { logLine("audio out: init failed — " + e.message, "warn"); this.ctx = null; }
+  }
+  push(ptr, n) {
+    if (this.stopped || n <= 0) return;
+    this.ensure();
+    if (!this.ctx || !this.memory) return;
+    const v = new Int32Array(this.memory.buffer, ptr, n * 2);
+    for (let k = 0; k < n; k++) {
+      const nx = (this.wr + 1) % this.size;
+      if (nx === this.rd) break;            // ring full — drop to stay in sync
+      const x = v[k * 2];
+      this.bufL[this.wr] = ((x << 16) >> 16) / 32768;
+      this.bufR[this.wr] = (x >> 16) / 32768;
+      this.wr = nx;
+    }
+  }
+  stop() { this.stopped = true;
+    try { this.node && this.node.disconnect(); } catch (_) {}
+    try { this.ctx && this.ctx.close(); } catch (_) {} }
+}
+const audioSink = new AudioSink();
+
 // ── Asyncify runtime ───────────────────────────────────────────
 //
 // wasm-opt --asyncify instruments the module so that any import we
@@ -769,6 +827,7 @@ async function run() {
   section("RUN");
   outInfo.textContent = "running…";
   canvasHost.reset();
+  audioSink.reset();
   if (currentUsesCanvas) canvasHost.show(); else canvasHost.hide();
 
   // If the program uses the audio FFI we proactively request mic
@@ -836,7 +895,15 @@ async function run() {
     ready:       ()  => BigInt(audioHost.ready()),
   };
 
-  const imports = { wasi_snapshot_preview1: wasi.wasiImport };
+  // Audio OUTPUT shim — lands in wasm module "env" (bare FFI symbols not
+  // resolved by a linked lib import from "env"). Always provided; unused
+  // by programs that don't import it.
+  const audioOutImports = {
+    audio_out_push: (ptr, n) => audioSink.push(Number(ptr), Number(n)),
+    audio_out_open: (rate, ch) => audioSink.open(Number(rate), Number(ch)),
+  };
+
+  const imports = { wasi_snapshot_preview1: wasi.wasiImport, env: audioOutImports };
   if (currentUsesCanvas) imports.canvas = canvasImports;
   if (currentUsesAudio)  imports.audio  = audioImports;
 
@@ -862,10 +929,12 @@ async function run() {
   // Expose an external Stop handle before driving.
   canvasHost.shouldClose = 0;
   canvasHost.attachMemory(instance.exports.memory);
+  audioSink.attachMemory(instance.exports.memory);
   asy.attach(instance);
   currentRun = {
     stop: () => {
       canvasHost.requestClose();
+      audioSink.stop();
       asy.stopped = true;
       logLine("\n[stop requested]", "warn");
     },
@@ -901,6 +970,7 @@ async function run() {
     logLine("runtime error: " + (e?.message ?? e), "stderr");
   }
 
+  audioSink.stop();
   const ms = Math.round(performance.now() - t0);
   logLine(`\n[exit ${exitCode} · ${ms} ms]`, exitCode === 0 ? "ok" : "stderr");
   outInfo.textContent = `exit ${exitCode} · ${ms} ms`;
