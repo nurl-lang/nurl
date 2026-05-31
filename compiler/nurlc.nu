@@ -10559,8 +10559,25 @@
     // gen_call move-marks the argument), so it needs no special
     // handling here beyond the side-channel below.
     : i pconv ( parse_param_marker lex )
+    // Reset the result/option side-channels so a `! T E` / `? T` parameter
+    // type leaves fresh metadata here (and a non-result param doesn't
+    // inherit a previous param's stale values). Mirrors the resets
+    // gen_fn_decl_concrete does before parsing the return type.
+    ( nurl_sym_def g_res_type_syms `__last_res_nurl__` `` )
+    ( nurl_sym_def g_res_type_syms `__last_res_t_llvm__` `` )
+    ( nurl_sym_def g_res_type_syms `__last_res_err_llvm__` `` )
+    ( nurl_sym_def g_res_type_syms `__last_opt_nurl_t__` `` )
     : s lt ( parse_type lex )
     : s p_nurl_type ( nurl_sym_get g_res_type_syms `__last_nurl_type__` )
+    // Capture the `! T E` / `? T` payload metadata for this parameter so a
+    // `?? <param> { T x → … }` match can reconstruct a struct / pointer
+    // payload from its i64 slot — exactly as gen_let_or_struct does for a
+    // let-bound result var. Without this a struct-typed T-arm binding on a
+    // result PARAMETER stayed a raw i64 (miscompiled `^ x` to `ret i64`).
+    : s p_res_nurl ( nurl_sym_get g_res_type_syms `__last_res_nurl__` )
+    : s p_res_t_llvm ( nurl_sym_get g_res_type_syms `__last_res_t_llvm__` )
+    : s p_res_e_llvm ( nurl_sym_get g_res_type_syms `__last_res_err_llvm__` )
+    : s p_opt_nurl_t ( nurl_sym_get g_res_type_syms `__last_opt_nurl_t__` )
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s pname ( nurl_lex_val lex )
         // Reject parameter names that collide with LLVM reserved basic-
@@ -10611,6 +10628,24 @@
             ? ( nurl_type_is_unsigned p_nurl_type )
             { ( nurl_sym_def syms ( nurl_str_cat pname `__unsigned` ) `1` ) }
             {} }
+        {}
+        // Stash `! T E` / `? T` payload metadata for this parameter, mirroring
+        // gen_let_or_struct, so a `?? <param>` match can reconstruct a struct /
+        // pointer / unsigned payload binding rather than leaving it a raw i64.
+        ? != 0 ( nurl_str_len p_res_nurl )
+        { : s pinner_t ( str_first_word ( str_skip_word p_res_nurl ) )
+            : s pinner_e ( str_first_word ( str_skip_word ( str_skip_word p_res_nurl ) ) )
+            ( nurl_sym_def syms ( nurl_str_cat pname `__res_nurl_T` ) pinner_t )
+            ( nurl_sym_def syms ( nurl_str_cat pname `__res_nurl_E` ) pinner_e ) }
+        {}
+        ? != 0 ( nurl_str_len p_res_t_llvm )
+        { ( nurl_sym_def syms ( nurl_str_cat pname `__res_t_llvm` ) p_res_t_llvm ) }
+        {}
+        ? != 0 ( nurl_str_len p_res_e_llvm )
+        { ( nurl_sym_def syms ( nurl_str_cat pname `__res_e_llvm` ) p_res_e_llvm ) }
+        {}
+        ? != 0 ( nurl_str_len p_opt_nurl_t )
+        { ( nurl_sym_def syms ( nurl_str_cat pname `__opt_nurl_T` ) p_opt_nurl_t ) }
         {}
         // Append this param's name + LLVM type to the function's param
         // roster so gen_fn_decl_concrete can later (post-`entry:`) emit
