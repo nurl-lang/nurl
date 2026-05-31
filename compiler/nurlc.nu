@@ -3845,6 +3845,12 @@
     : s rlt ? == 0 ( nurl_str_len rl ) `i64` rl
     // Track NURL return type for try-propagation type checking
     ( nurl_sym_def syms `__last_nurl_call__` ( nurl_sym_get syms ( nurl_str_cat call_name `__nurl_ret` ) ) )
+    // Pre-computed LLVM type of the callee's Ok-payload T, so a direct-call
+    // `?? ( f … )` scrutinee can reconstruct a handle/pointer payload in the
+    // T-arm without re-deriving it from the NURL return-type string (which
+    // str_first_word mangles for paren-compounds like `( Vec u )` → `(`).
+    ( nurl_sym_def syms `__last_call_res_t_llvm__` ( nurl_sym_get syms ( nurl_str_cat call_name `__res_t_llvm` ) ) )
+    ( nurl_sym_def syms `__last_call_res_e_llvm__` ( nurl_sym_get syms ( nurl_str_cat call_name `__res_e_llvm` ) ) )
     // Propagate slice-ownership from callee to caller's let-binding.
     // Values: "1" = owned slice (Phase 2A), "str" = owned string (Phase 2B).
     // When Phase 2B is off no function ever gets "str" registered, so behaviour
@@ -4355,6 +4361,8 @@
     // means the scrutinee's outermost operation was a call, and the
     // value is that callee's NURL return type (`! T E`).
     ( nurl_sym_def syms `__last_nurl_call__` `` )
+    ( nurl_sym_def syms `__last_call_res_t_llvm__` `` )
+    ( nurl_sym_def syms `__last_call_res_e_llvm__` `` )
     : s match_val ( gen_expr lex syms cg )
     : s match_type ( nurl_get_last_type )
 
@@ -4373,9 +4381,21 @@
         : s minner_e ( str_first_word ( str_skip_word ( str_skip_word mcall_nurl ) ) )
         ( nurl_sym_def syms ( nurl_str_cat msynth `__res_nurl_T` ) minner_t )
         ( nurl_sym_def syms ( nurl_str_cat msynth `__res_nurl_E` ) minner_e )
-        : s minner_llvm ( nurl_sym_get syms minner_t )
+        // LLVM type of T: prefer the callee's pre-computed `__res_t_llvm`
+        // (set at the callee's decl — correct for paren-compound handles
+        // `( Vec u )` → `%Vec__i8` AND pointer payloads `s` → `i8*`, neither
+        // of which `nurl_sym_get syms minner_t` can resolve). Fall back to
+        // the by-name struct lookup when the side-channel is empty.
+        : s minner_llvm ( nurl_sym_get syms `__last_call_res_t_llvm__` )
+        ? == 0 ( nurl_str_len minner_llvm ) { = minner_llvm ( nurl_sym_get syms minner_t ) } {}
         ? != 0 ( nurl_str_len minner_llvm )
         { ( nurl_sym_def syms ( nurl_str_cat msynth `__res_t_llvm` ) minner_llvm ) }
+        {}
+        // Same for the Err-payload E's LLVM type, so an `F e → e` arm whose
+        // E is a bare pointer reconstructs too (enum E resolves by name).
+        : s minner_e_llvm ( nurl_sym_get syms `__last_call_res_e_llvm__` )
+        ? != 0 ( nurl_str_len minner_e_llvm )
+        { ( nurl_sym_def syms ( nurl_str_cat msynth `__res_e_llvm` ) minner_e_llvm ) }
         {}
         = match_var_name msynth }
     {}
@@ -4713,11 +4733,41 @@
                         // `nurl_inner_t` was the literal `(` token from
                         // parse_type_res's `nurl_lex_val`-before-parse capture,
                         // which doesn't look up to anything. Use the saved
-                        // LLVM type instead (T-arm only — F-arm reconstruction
-                        // uses single-token enum names like NetErr/WsErr that
-                        // round-trip through the NURL-source path fine).
+                        // LLVM type instead. T uses `__res_t_llvm`, F uses
+                        // `__res_e_llvm`. Enum error types (NetErr/WsErr/…)
+                        // resolve via their single-token NURL name above and
+                        // never reach this fallback; it only fills the gap for
+                        // pointer / paren-compound payloads.
                         ? & == 0 ( nurl_str_len nurl_inner_llvm ) ( seq pattern_name `T` )
                         { = nurl_inner_llvm ( nurl_sym_get syms ( nurl_str_cat match_var_name `__res_t_llvm` ) ) }
+                        {}
+                        ? & == 0 ( nurl_str_len nurl_inner_llvm ) ( seq pattern_name `F` )
+                        { = nurl_inner_llvm ( nurl_sym_get syms ( nurl_str_cat match_var_name `__res_e_llvm` ) ) }
+                        {}
+                        // Bare-pointer payload (`s` → `i8*`): the i64 slot
+                        // holds the pointer via ptrtoint, so one inttoptr
+                        // recovers it. Distinct from the `%`-struct branch
+                        // below (a handle whose f0 pointer must be re-wrapped
+                        // by insertvalue) — this is non-`%` AND `*`-suffixed,
+                        // so it never collides with that branch (`%T*` raw
+                        // pointers are `%`-prefixed and stay on that path).
+                        // Without this
+                        // the payload stayed a raw i64 and the arm's value
+                        // disagreed with the other arms' pointer type, so
+                        // gen_match emitted no phi and stored `undef` into the
+                        // binding (silent garbage — the `! s E` half of the
+                        // critic's bound-`??` miscompile). Both arms — an
+                        // enum error payload is `%`-prefixed and skips this.
+                        ? & & != 0 ( nurl_str_len nurl_inner_llvm )
+                        != ( nurl_str_get nurl_inner_llvm 0 ) 37
+                        == ( nurl_str_get nurl_inner_llvm - ( nurl_str_len nurl_inner_llvm ) 1 ) 42
+                        { : s ptv_r ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print ptv_r )
+                            ( nurl_print ` = inttoptr i64 ` ) ( nurl_print pr0 )
+                            ( nurl_print ` to ` ) ( nurl_print nurl_inner_llvm ) ( nurl_print `\n` )
+                            = pt0_eff nurl_inner_llvm
+                            = pr0_eff ptv_r
+                            = did_reconstruct T }
                         {}
                         ? & != 0 ( nurl_str_len nurl_inner_llvm )
                         == ( nurl_str_get nurl_inner_llvm 0 ) 37
@@ -6810,6 +6860,13 @@
             : s let_res_t_llvm ( nurl_sym_get g_res_type_syms `__last_res_t_llvm__` )
             ? != 0 ( nurl_str_len let_res_t_llvm )
             { ( nurl_sym_def syms ( nurl_str_cat name `__res_t_llvm` ) let_res_t_llvm ) }
+            {}
+            // Same for E, so a bound `?? r { F e → e }` with a bare-pointer
+            // error type reconstructs the F-arm payload (enum E resolves by
+            // its NURL name and doesn't reach this fallback).
+            : s let_res_e_llvm ( nurl_sym_get g_res_type_syms `__last_res_err_llvm__` )
+            ? != 0 ( nurl_str_len let_res_e_llvm )
+            { ( nurl_sym_def syms ( nurl_str_cat name `__res_e_llvm` ) let_res_e_llvm ) }
             {}
             // Mirror for `? T`: stash inner-T's NURL token + LLVM type
             // so gen_match's T-arm payload binding can propagate the
@@ -10142,15 +10199,32 @@
     ( nurl_sym_def g_fn_inout fname inout_acc )
     ( nurl_sym_def g_fn_sink fname sink_acc )
     ( expect lex TT_ARROW )
-    // Reset last_res_nurl so we can detect if parse_type_res was called for this return type
+    // Reset last_res_nurl / last_res_t_llvm so we can detect if
+    // parse_type_res ran for this return type (only result types set them).
     ( nurl_sym_def g_res_type_syms `__last_res_nurl__` `` )
+    ( nurl_sym_def g_res_type_syms `__last_res_t_llvm__` `` )
+    ( nurl_sym_def g_res_type_syms `__last_res_err_llvm__` `` )
     : s ret_ty ( parse_type lex )
     : s nurl_ret ( nurl_sym_get g_res_type_syms `__last_res_nurl__` )
+    // LLVM type of the Ok-payload T (e.g. `%Vec__i8` for `! ( Vec u ) s`,
+    // `i8*` for `! s E`). Recorded per-function — mirrors `<fname>__nurl_ret`
+    // — so a `?? ( call ) { … }` whose scrutinee is a DIRECT CALL (no
+    // binding to hang `<name>__res_t_llvm` off, the way gen_let_or_struct
+    // does for `?? r`) can still reconstruct a single-pointer-handle or
+    // pointer payload in the T-arm. Empty for non-result returns.
+    : s res_t_llvm ( nurl_sym_get g_res_type_syms `__last_res_t_llvm__` )
+    // LLVM type of the Err-payload E — the F-arm counterpart of res_t_llvm,
+    // for an `F e → e` arm whose E is a bare pointer (`! T s`). Enum errors
+    // resolve via their NURL name and don't need this; it only fills the
+    // gap for pointer / paren-compound error payloads.
+    : s res_e_llvm ( nurl_sym_get g_res_type_syms `__last_res_err_llvm__` )
     ( nurl_sym_def syms fname ret_ty )
     ( nurl_sym_def syms `__fn_ret_ty__` ret_ty )
     // Store NURL return type for try-propagation type checking
     ( nurl_sym_def syms `__fn_nurl_ret__` nurl_ret )
     ( nurl_sym_def syms ( nurl_str_cat fname `__nurl_ret` ) nurl_ret )
+    ( nurl_sym_def syms ( nurl_str_cat fname `__res_t_llvm` ) res_t_llvm )
+    ( nurl_sym_def syms ( nurl_str_cat fname `__res_e_llvm` ) res_e_llvm )
     : s lname ? ( seq fname `main` ) `_nurl_main` fname
     ( nurl_print `define ` ) ( nurl_print ret_ty )
     ( nurl_print ` @` ) ( nurl_print lname )
@@ -10318,6 +10392,8 @@
     ( nurl_sym_def syms fname ret_ty )
     // Re-store NURL ret type in outer scope (inner scope was just popped)
     ( nurl_sym_def syms ( nurl_str_cat fname `__nurl_ret` ) nurl_ret )
+    ( nurl_sym_def syms ( nurl_str_cat fname `__res_t_llvm` ) res_t_llvm )
+    ( nurl_sym_def syms ( nurl_str_cat fname `__res_e_llvm` ) res_e_llvm )
     // Persist "returns owned X" flag: "1" = slice, "str" = string.
     // A function returns at most one kind of owned value, so one sideband
     // key suffices. When Phase 2B is off `fn_ret_str_owned_flag` is always 0.
