@@ -25,7 +25,6 @@ $ `stdlib/core/vec.nu`
 : i g_halt 0
 : i g_halt_bug 0      // HALT with IME=0 and a pending interrupt
 : i g_div 0           // internal 16-bit divider; DIV is its high byte
-: i g_tima_sub 0      // accumulated cycles toward the next TIMA tick
 : i g_cycles 0
 : String g_serial 0   // captured serial output
 
@@ -415,27 +414,27 @@ $ `stdlib/core/vec.nu`
 
 // ── Timer ────────────────────────────────────────────────────────
 // DIV is the high byte of a 16-bit counter clocked every T-cycle.
-// TIMA increments at the rate selected by TAC, overflowing to TMA and
-// raising the timer interrupt.
-@ tac_period i tac → i {
-    ?? & tac 3 {
-        0 → ^ 1024
-        1 → ^ 16
-        2 → ^ 64
-        3 → ^ 256
-        _ → ^ 1024
-    }
-}
+// TIMA increments on the falling edge of a specific bit of the 16-bit DIV
+// counter (DMG behaviour) — NOT on a free-running accumulator. The bit is
+// selected by TAC: clock 00→bit 9 (4096 Hz), 01→bit 3, 10→bit 5, 11→bit 7.
+// The number of falling edges of bit `b` while the counter advances from
+// `old` to `new` is (new >> (b+1)) − (old >> (b+1)); keep the counter
+// unmasked across the step so a 16-bit wrap still counts its edges, then
+// mask DIV for storage. Tying the timer to DIV's absolute phase (rather
+// than a private accumulator) is what keeps timer-IRQ-driven games — e.g.
+// Tobu Tobu Girl — in sync with real hardware.
 @ tick_timer i cyc → v {
     : *u m ( mem_raw )
-    = g_div & + g_div cyc 0xFFFF
+    : i old g_div
+    : i new + g_div cyc
+    = g_div & new 0xFFFF
     = . m 0xFF04 # u & >> g_div 8 0xFF
     : i tac & # i . m 0xFF07 255
     ? == & tac 0x04 0 { ^ v } {}
-    : i period ( tac_period tac )
-    = g_tima_sub + g_tima_sub cyc
-    ~ >= g_tima_sub period {
-        = g_tima_sub - g_tima_sub period
+    : i sel & tac 3
+    : i sh ? == sel 0 10 ? == sel 1 4 ? == sel 2 6 8
+    : ~ i edges - >> new sh >> old sh
+    ~ > edges 0 {
         : i t + & # i . m 0xFF05 255 1
         ? > t 0xFF {
             = . m 0xFF05 # u & # i . m 0xFF06 255
@@ -443,6 +442,7 @@ $ `stdlib/core/vec.nu`
         } {
             = . m 0xFF05 # u & t 0xFF
         }
+        = edges - edges 1
     }
 }
 
