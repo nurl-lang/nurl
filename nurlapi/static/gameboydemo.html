@@ -189,14 +189,61 @@ async function loadDeps() {
   wasmBytes = new Uint8Array(await (await fetch("gameboy_gb.wasm")).arrayBuffer());
 }
 
+// ── Audio: drain the wasm APU ring into Web Audio ────────────────
+// The wasm fills a packed-stereo i64 ring (low16 = L, bits16-31 = R, both
+// signed 16-bit) and calls host_audio(ptr, nSamples) once per frame. We
+// copy into a 1 s float ring that a ScriptProcessor pulls at 48 kHz.
+class AudioStreamer {
+  constructor() { this.ctx = null; this.node = null; this.memory = null;
+    this.stopped = false; this.size = 48000;
+    this.bufL = new Float32Array(this.size); this.bufR = new Float32Array(this.size);
+    this.rd = 0; this.wr = 0; }
+  attachMemory(m) { this.memory = m; }
+  async start() {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new AC({ sampleRate: 48000 });
+      if (this.ctx.state === "suspended") await this.ctx.resume();
+      this.node = this.ctx.createScriptProcessor(2048, 0, 2);
+      this.node.onaudioprocess = (e) => {
+        const oL = e.outputBuffer.getChannelData(0), oR = e.outputBuffer.getChannelData(1);
+        for (let i = 0; i < oL.length; i++) {
+          if (this.rd !== this.wr) { oL[i] = this.bufL[this.rd]; oR[i] = this.bufR[this.rd]; this.rd = (this.rd + 1) % this.size; }
+          else { oL[i] = 0; oR[i] = 0; }
+        }
+      };
+      this.node.connect(this.ctx.destination);
+    } catch (e) { console.warn("[gb] audio init failed:", e); this.ctx = null; }
+  }
+  push(ptr, n) {
+    if (!this.memory || !this.ctx || this.stopped || n <= 0) return;
+    const view = new Int32Array(this.memory.buffer, ptr, n * 2);
+    for (let k = 0; k < n; k++) {
+      const nx = (this.wr + 1) % this.size;
+      if (nx === this.rd) break;            // ring full — drop (stay in sync)
+      const v = view[k * 2];
+      this.bufL[this.wr] = ((v << 16) >> 16) / 32768;
+      this.bufR[this.wr] = (v >> 16) / 32768;
+      this.wr = nx;
+    }
+  }
+  stop() { this.stopped = true;
+    try { this.node && this.node.disconnect(); } catch (_) {}
+    try { this.ctx && this.ctx.close(); } catch (_) {} }
+}
+let audio = null;
+
 async function runRom(bytes, label) {
   if (activeRun) { activeRun.stop(); activeRun = null; await new Promise(r => setTimeout(r, 30)); }
+  if (audio) { audio.stop(); audio = null; }
   currentRom = bytes;
   setStatus(`Running ${label} — ${bytes.length.toLocaleString()} bytes`);
   joyState = 0;
   screen.focus();
 
   const canvasHost = new CanvasHost(screen);
+  audio = new AudioStreamer();
+  await audio.start();
   const asy = new AsyncifyRuntime();
   const stdout = ConsoleStdout.lineBuffered(() => {});
   const stderr = ConsoleStdout.lineBuffered((l) => console.warn("[gb]", l));
@@ -218,6 +265,7 @@ async function runRom(bytes, label) {
       host_rom_size: () => BigInt(currentRom.length),
       host_rom_byte: (i) => BigInt(currentRom[Number(i)] | 0),
       host_joypad: () => BigInt(joyState & 0xff),
+      host_audio: (ptr, n) => { if (audio) audio.push(Number(ptr), Number(n)); },
     },
   };
 
@@ -229,8 +277,9 @@ async function runRom(bytes, label) {
 
   try { if (wasi.initialize && instance.exports._initialize) wasi.initialize(instance); } catch (_) {}
   canvasHost.attachMemory(instance.exports.memory);
+  audio.attachMemory(instance.exports.memory);
   asy.attach(instance);
-  const thisRun = { stop: () => { canvasHost.shouldClose = 1; asy.stopped = true; } };
+  const thisRun = { stop: () => { canvasHost.shouldClose = 1; asy.stopped = true; if (audio) audio.stop(); } };
   activeRun = thisRun;
   try {
     await asy.drive(() => wasi.start(instance));
