@@ -40,6 +40,40 @@ $ `stdlib/core/vec.nu`
 : i g_joyp 0          // joypad button state (1 = pressed), bits below
 : i g_joysel 0        // last write to JOYP select bits (P14/P15)
 
+// ── APU (sound) state ────────────────────────────────────────────
+// Four channels mixed to a packed-stereo i64 ring (low16=L, bits16-31=R)
+// the host drains each frame into Web Audio. Output sample rate is fixed
+// (g_smp_rate); the frame sequencer ticks at 512 Hz (every 8192 T-cycles).
+: i g_apu_on 0        // NR52 bit7 (master power)
+: i g_nr50 0          // master volume + VIN select (FF24)
+: i g_nr51 0          // channel→L/R panning (FF25)
+: i g_fs_acc 0        // frame-sequencer T-cycle accumulator
+: i g_fs_step 0       // frame-sequencer step 0..7
+: i g_smp_acc 0       // resampling accumulator (adds rate/cycle; emit at 4194304)
+: i g_smp_rate 48000  // output sample rate (Hz)
+: s g_audio 0         // *i stereo sample ring
+: i g_audio_len 0     // samples written since the last host drain
+: i g_audio_cap 0     // ring capacity (samples)
+: i g_hp_l 0          // DC estimate for the L high-pass (DMG capacitor)
+: i g_hp_r 0          // DC estimate for the R high-pass
+
+// Channel 1 — square + frequency sweep
+: i c1_en 0   : i c1_dac 0   : i c1_freq 0  : i c1_tmr 0
+: i c1_duty 0 : i c1_dpos 0  : i c1_len 0   : i c1_lenen 0
+: i c1_vol 0  : i c1_envdir 0 : i c1_envper 0 : i c1_envtmr 0
+: i c1_swper 0 : i c1_swdir 0 : i c1_swsh 0 : i c1_swtmr 0 : i c1_swen 0 : i c1_shadow 0
+// Channel 2 — square
+: i c2_en 0   : i c2_dac 0   : i c2_freq 0  : i c2_tmr 0
+: i c2_duty 0 : i c2_dpos 0  : i c2_len 0   : i c2_lenen 0
+: i c2_vol 0  : i c2_envdir 0 : i c2_envper 0 : i c2_envtmr 0
+// Channel 3 — wave (32×4-bit samples from wave RAM 0xFF30..0xFF3F)
+: i c3_en 0   : i c3_dac 0   : i c3_freq 0  : i c3_tmr 0
+: i c3_pos 0  : i c3_len 0   : i c3_lenen 0 : i c3_volcode 0 : i c3_sample 0
+// Channel 4 — noise (LFSR)
+: i c4_en 0   : i c4_dac 0   : i c4_tmr 0   : i c4_lfsr 0
+: i c4_len 0  : i c4_lenen 0 : i c4_width 0 : i c4_div 0 : i c4_shift 0
+: i c4_vol 0  : i c4_envdir 0 : i c4_envper 0 : i c4_envtmr 0
+
 // ── PPU state ────────────────────────────────────────────────────
 : s g_fb 0            // 160×144 framebuffer of shades (0=white..3=black)
 : s g_bgidx 0         // per-scanline BG colour indices (for sprite priority)
@@ -165,6 +199,8 @@ $ `stdlib/core/vec.nu`
         ~ < k 160 { = . m + 0xFE00 k # u ( rd8 + src k )  = k + k 1 }
         ^ v
     } {}
+    // APU control registers — update channel state, then store for read-back.
+    ? & >= a 0xFF10 <= a 0xFF26 { ( apu_write a b ) } {}
     = . m a # u b
     ^ v
 }
@@ -443,6 +479,262 @@ $ `stdlib/core/vec.nu`
             = . m 0xFF05 # u & t 0xFF
         }
         = edges - edges 1
+    }
+}
+
+// ── APU (sound) ──────────────────────────────────────────────────
+// Lazily allocate the host-drained stereo ring (one i64 per sample,
+// low16 = L, bits16-31 = R as 16-bit two's-complement).
+@ apu_alloc → v {
+    ? == g_audio 0 {
+        = g_audio_cap 8192
+        = g_audio ( nurl_zalloc * g_audio_cap 8 )
+    } {}
+}
+
+// Square duty: 1 when the wave is high at step `pos` (MSB-first patterns).
+@ duty_bit i duty i pos → i {
+    : i pat ?? duty { 0 → 0x01  1 → 0x81  2 → 0x87  3 → 0x7E  _ → 0x81 }
+    ^ & >> pat - 7 pos 1
+}
+
+// Current 4-bit wave-RAM nibble for channel 3 at its sample position.
+@ wave_nibble → i {
+    : *u m ( mem_raw )
+    : i byte & # i . m + 0xFF30 >> c3_pos 1 255
+    ^ ? == 0 & c3_pos 1 & >> byte 4 15 & byte 15
+}
+
+// Per-channel digital level 0..15 (0 when off), mapped to a centred
+// analogue swing −15..+15 (0 when the DAC is off — avoids DC pops).
+@ sq_level i en i dac i duty i dpos i vol → i {
+    ? | == en 0 == dac 0 { ^ 0 } {}
+    ^ - * ? != 0 ( duty_bit duty dpos ) vol 0 2 15
+}
+@ ch3_level → i {
+    ? | == c3_en 0 == c3_dac 0 { ^ 0 } {}
+    : i out ? == c3_volcode 0 0 >> c3_sample - c3_volcode 1
+    ^ - * out 2 15
+}
+@ ch4_level → i {
+    ? | == c4_en 0 == c4_dac 0 { ^ 0 } {}
+    ^ - * ? == 0 & c4_lfsr 1 c4_vol 0 2 15
+}
+
+// Mix the four channels into one packed-stereo sample and push it.
+@ apu_sample → v {
+    ? >= g_audio_len g_audio_cap { ^ v } {}
+    : i a1 ( sq_level c1_en c1_dac c1_duty c1_dpos c1_vol )
+    : i a2 ( sq_level c2_en c2_dac c2_duty c2_dpos c2_vol )
+    : i a3 ( ch3_level )
+    : i a4 ( ch4_level )
+    : i lv | & >> g_nr50 4 7 0    // left master volume 0..7
+    : i rv & g_nr50 7             // right master volume 0..7
+    : ~ i l 0
+    : ~ i r 0
+    ? != 0 & g_nr51 0x10 { = l + l a1 } {}
+    ? != 0 & g_nr51 0x20 { = l + l a2 } {}
+    ? != 0 & g_nr51 0x40 { = l + l a3 } {}
+    ? != 0 & g_nr51 0x80 { = l + l a4 } {}
+    ? != 0 & g_nr51 0x01 { = r + r a1 } {}
+    ? != 0 & g_nr51 0x02 { = r + r a2 } {}
+    ? != 0 & g_nr51 0x04 { = r + r a3 } {}
+    ? != 0 & g_nr51 0x08 { = r + r a4 } {}
+    // sum −60..60 × (vol+1) × 34 → ±~32600; clamp to i16.
+    = l * * l + lv 1 34
+    = r * * r + rv 1 34
+    // Integer one-pole high-pass (~15 Hz) — emulates the DMG output
+    // capacitor, removing the DC step that channel on/off would otherwise
+    // leave (which clicks/pops and wastes headroom).
+    = g_hp_l + g_hp_l / - l g_hp_l 512
+    = g_hp_r + g_hp_r / - r g_hp_r 512
+    = l - l g_hp_l
+    = r - r g_hp_r
+    ? > l 32767 { = l 32767 } {}  ? < l -32767 { = l -32767 } {}
+    ? > r 32767 { = r 32767 } {}  ? < r -32767 { = r -32767 } {}
+    ( nurl_poke g_audio g_audio_len | & l 0xFFFF << & r 0xFFFF 16 )
+    = g_audio_len + g_audio_len 1
+}
+
+// Frequency-sweep recompute for channel 1; returns the candidate freq.
+@ sweep_calc → i {
+    : i d >> c1_shadow c1_swsh
+    ^ ? != 0 c1_swdir - c1_shadow d + c1_shadow d
+}
+@ sweep_tick → v {
+    ? == c1_swtmr 0 {} {
+        = c1_swtmr - c1_swtmr 1
+        ? == c1_swtmr 0 {
+            = c1_swtmr ? != 0 c1_swper c1_swper 8
+            ? & != 0 c1_swen != 0 c1_swper {
+                : i nf ( sweep_calc )
+                ? > nf 2047 { = c1_en 0 } {
+                    ? != 0 c1_swsh {
+                        = c1_freq nf  = c1_shadow nf
+                        ? > ( sweep_calc ) 2047 { = c1_en 0 } {}
+                    } {}
+                }
+            } {}
+        } {}
+    }
+}
+
+// Frame sequencer: length @256 Hz (steps 0,2,4,6), sweep @128 Hz (2,6),
+// envelope @64 Hz (step 7).
+@ len_tick → v {
+    ? & != 0 c1_lenen != 0 c1_len { = c1_len - c1_len 1  ? == c1_len 0 { = c1_en 0 } {} } {}
+    ? & != 0 c2_lenen != 0 c2_len { = c2_len - c2_len 1  ? == c2_len 0 { = c2_en 0 } {} } {}
+    ? & != 0 c3_lenen != 0 c3_len { = c3_len - c3_len 1  ? == c3_len 0 { = c3_en 0 } {} } {}
+    ? & != 0 c4_lenen != 0 c4_len { = c4_len - c4_len 1  ? == c4_len 0 { = c4_en 0 } {} } {}
+}
+@ env_tick → v {
+    ? != 0 c1_envper { = c1_envtmr - c1_envtmr 1
+        ? == c1_envtmr 0 { = c1_envtmr c1_envper
+            ? & != 0 c1_envdir < c1_vol 15 { = c1_vol + c1_vol 1 } {}
+            ? & == 0 c1_envdir > c1_vol 0 { = c1_vol - c1_vol 1 } {} } {} } {}
+    ? != 0 c2_envper { = c2_envtmr - c2_envtmr 1
+        ? == c2_envtmr 0 { = c2_envtmr c2_envper
+            ? & != 0 c2_envdir < c2_vol 15 { = c2_vol + c2_vol 1 } {}
+            ? & == 0 c2_envdir > c2_vol 0 { = c2_vol - c2_vol 1 } {} } {} } {}
+    ? != 0 c4_envper { = c4_envtmr - c4_envtmr 1
+        ? == c4_envtmr 0 { = c4_envtmr c4_envper
+            ? & != 0 c4_envdir < c4_vol 15 { = c4_vol + c4_vol 1 } {}
+            ? & == 0 c4_envdir > c4_vol 0 { = c4_vol - c4_vol 1 } {} } {} } {}
+}
+@ fs_step → v {
+    ? | == g_fs_step 0 | == g_fs_step 2 | == g_fs_step 4 == g_fs_step 6 { ( len_tick ) } {}
+    ? | == g_fs_step 2 == g_fs_step 6 { ( sweep_tick ) } {}
+    ? == g_fs_step 7 { ( env_tick ) } {}
+    = g_fs_step & + g_fs_step 1 7
+}
+
+// Noise period divisor: 0→8, else n×16.
+@ noise_div i n → i { ^ ? == n 0 8 * n 16 }
+
+// Advance all channels + the frame sequencer + the resampler by `cyc`.
+@ tick_apu i cyc → v {
+    ? == g_apu_on 0 { ^ v } {}
+    // Channel 1 square
+    ? != 0 c1_en {
+        = c1_tmr - c1_tmr cyc
+        ~ <= c1_tmr 0 { = c1_tmr + c1_tmr * - 2048 c1_freq 4  = c1_dpos & + c1_dpos 1 7 }
+    } {}
+    // Channel 2 square
+    ? != 0 c2_en {
+        = c2_tmr - c2_tmr cyc
+        ~ <= c2_tmr 0 { = c2_tmr + c2_tmr * - 2048 c2_freq 4  = c2_dpos & + c2_dpos 1 7 }
+    } {}
+    // Channel 3 wave
+    ? != 0 c3_en {
+        = c3_tmr - c3_tmr cyc
+        ~ <= c3_tmr 0 { = c3_tmr + c3_tmr * - 2048 c3_freq 2  = c3_pos & + c3_pos 1 31  = c3_sample ( wave_nibble ) }
+    } {}
+    // Channel 4 noise
+    ? != 0 c4_en {
+        = c4_tmr - c4_tmr cyc
+        ~ <= c4_tmr 0 {
+            = c4_tmr + c4_tmr << ( noise_div c4_div ) c4_shift
+            : i x & ^^ c4_lfsr >> c4_lfsr 1 1
+            = c4_lfsr | >> c4_lfsr 1 << x 14
+            ? != 0 c4_width { = c4_lfsr | & c4_lfsr 0xBF << x 6 } {}
+        }
+    } {}
+    // Frame sequencer @ 512 Hz (8192 T-cycles)
+    = g_fs_acc + g_fs_acc cyc
+    ~ >= g_fs_acc 8192 { = g_fs_acc - g_fs_acc 8192  ( fs_step ) }
+    // Resample to g_smp_rate
+    = g_smp_acc + g_smp_acc * cyc g_smp_rate
+    ~ >= g_smp_acc 4194304 { = g_smp_acc - g_smp_acc 4194304  ( apu_sample ) }
+}
+
+// ── APU register writes (0xFF10..0xFF26, wave RAM 0xFF30..0xFF3F) ──
+@ apu_trigger1 → v {
+    ? != 0 c1_dac { = c1_en 1 } {}
+    ? == c1_len 0 { = c1_len 64 } {}
+    = c1_tmr * - 2048 c1_freq 4
+    = c1_envtmr c1_envper
+    = c1_shadow c1_freq
+    = c1_swtmr ? != 0 c1_swper c1_swper 8
+    = c1_swen ? | != 0 c1_swper != 0 c1_swsh 1 0
+    ? != 0 c1_swsh { ? > ( sweep_calc ) 2047 { = c1_en 0 } {} } {}
+}
+@ apu_trigger2 → v {
+    ? != 0 c2_dac { = c2_en 1 } {}
+    ? == c2_len 0 { = c2_len 64 } {}
+    = c2_tmr * - 2048 c2_freq 4
+    = c2_envtmr c2_envper
+}
+@ apu_trigger3 → v {
+    ? != 0 c3_dac { = c3_en 1 } {}
+    ? == c3_len 0 { = c3_len 256 } {}
+    = c3_tmr * - 2048 c3_freq 2
+    = c3_pos 0
+}
+@ apu_trigger4 → v {
+    ? != 0 c4_dac { = c4_en 1 } {}
+    ? == c4_len 0 { = c4_len 64 } {}
+    = c4_tmr << ( noise_div c4_div ) c4_shift
+    = c4_envtmr c4_envper
+    = c4_lfsr 0x7FFF
+}
+@ apu_write i a i b → v {
+    ? == g_apu_on 0 { ? != a 0xFF26 { ? & >= a 0xFF30 <= a 0xFF3F {} { ^ v } } {} } {}
+    ?? a {
+        0xFF10 → {                                  // NR10 sweep
+            = c1_swper & >> b 4 7  = c1_swdir & >> b 3 1  = c1_swsh & b 7
+        }
+        0xFF11 → { = c1_duty & >> b 6 3  = c1_len - 64 & b 63 }   // NR11 duty/len
+        0xFF12 → {                                  // NR12 envelope
+            = c1_vol & >> b 4 15  = c1_envdir & >> b 3 1  = c1_envper & b 7
+            = c1_dac ? != 0 & b 0xF8 1 0  ? == c1_dac 0 { = c1_en 0 } {}
+        }
+        0xFF13 → { = c1_freq | & c1_freq 0x700 b }  // NR13 freq lo
+        0xFF14 → {                                  // NR14 freq hi / trigger / len-en
+            = c1_freq | & c1_freq 0xFF << & b 7 8
+            = c1_lenen & >> b 6 1
+            ? != 0 & b 0x80 { ( apu_trigger1 ) } {}
+        }
+        0xFF16 → { = c2_duty & >> b 6 3  = c2_len - 64 & b 63 }   // NR21
+        0xFF17 → {                                  // NR22
+            = c2_vol & >> b 4 15  = c2_envdir & >> b 3 1  = c2_envper & b 7
+            = c2_dac ? != 0 & b 0xF8 1 0  ? == c2_dac 0 { = c2_en 0 } {}
+        }
+        0xFF18 → { = c2_freq | & c2_freq 0x700 b }  // NR23
+        0xFF19 → {                                  // NR24
+            = c2_freq | & c2_freq 0xFF << & b 7 8
+            = c2_lenen & >> b 6 1
+            ? != 0 & b 0x80 { ( apu_trigger2 ) } {}
+        }
+        0xFF1A → { = c3_dac & >> b 7 1  ? == c3_dac 0 { = c3_en 0 } {} }   // NR30 DAC
+        0xFF1B → { = c3_len - 256 b }               // NR31 length
+        0xFF1C → { = c3_volcode & >> b 5 3 }        // NR32 volume code
+        0xFF1D → { = c3_freq | & c3_freq 0x700 b }  // NR33
+        0xFF1E → {                                  // NR34
+            = c3_freq | & c3_freq 0xFF << & b 7 8
+            = c3_lenen & >> b 6 1
+            ? != 0 & b 0x80 { ( apu_trigger3 ) } {}
+        }
+        0xFF20 → { = c4_len - 64 & b 63 }           // NR41 length
+        0xFF21 → {                                  // NR42 envelope
+            = c4_vol & >> b 4 15  = c4_envdir & >> b 3 1  = c4_envper & b 7
+            = c4_dac ? != 0 & b 0xF8 1 0  ? == c4_dac 0 { = c4_en 0 } {}
+        }
+        0xFF22 → { = c4_shift & >> b 4 15  = c4_width & >> b 3 1  = c4_div & b 7 }  // NR43
+        0xFF23 → {                                  // NR44 trigger / len-en
+            = c4_lenen & >> b 6 1
+            ? != 0 & b 0x80 { ( apu_trigger4 ) } {}
+        }
+        0xFF24 → { = g_nr50 b }                      // NR50 master vol
+        0xFF25 → { = g_nr51 b }                      // NR51 panning
+        0xFF26 → {                                   // NR52 power
+            : i was g_apu_on
+            = g_apu_on & >> b 7 1
+            ? & != 0 was == g_apu_on 0 {             // power-off → reset
+                = g_nr50 0  = g_nr51 0
+                = c1_en 0  = c2_en 0  = c3_en 0  = c4_en 0
+            } {}
+        }
+        _ → {}
     }
 }
 
@@ -955,13 +1247,17 @@ $ `stdlib/core/vec.nu`
     = g_serial ( string_with_cap 64 )
     = g_frames 0
     = g_dot 0
+    ( apu_alloc )
+    = g_apu_on 0  = g_audio_len 0  = g_fs_acc 0  = g_fs_step 0  = g_smp_acc 0
+    = g_hp_l 0  = g_hp_r 0
+    = c1_en 0  = c2_en 0  = c3_en 0  = c4_en 0
     ( boot_state )
 }
 
 // Run a ROM for `frames` frames, then dump the framebuffer.
 
 // Advance the timer + PPU together by `n` T-cycles.
-@ clock i n → v { ( tick_timer n ) ( tick_ppu n ) }
+@ clock i n → v { ( tick_timer n ) ( tick_ppu n ) ( tick_apu n ) }
 
 // Execute one CPU step with sub-instruction-accurate clocking, returning
 // the T-cycles consumed. The opcode-fetch M-cycle (4 T-cycles) is clocked

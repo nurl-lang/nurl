@@ -41,6 +41,41 @@ $ `stdlib/ext/env.nu`
     }
 }
 
+// `gb <rom> --audio <frames> [out.pcm]` runs N frames and writes the APU
+// output as raw interleaved 16-bit little-endian stereo PCM (48 kHz) — for
+// verifying sound generation (plot/play with `ffplay -f s16le -ar 48000
+// -ch_layout stereo out.pcm`).
+@ audio_dump s path i frames s outpath → i {
+    : !( Vec u ) IoErr rr ( read_file_bytes path )
+    ?? rr {
+        F _ → { ( nurl_print `cannot read ROM\n` ) ^ 2 }
+        T rom → { ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) )  ( vec_free [u] rom ) }
+    }
+    : ( Vec u ) pcm ( vec_new [u] )
+    : ~ i nz 0
+    : ~ i fi 0
+    ~ < fi frames {
+        ( run_one_frame )
+        : ~ i i 0
+        ~ < i g_audio_len {
+            : i s ( nurl_peek g_audio i )
+            : i l & s 0xFFFF
+            : i r & >> s 16 0xFFFF
+            ? != 0 l { = nz + nz 1 } {}
+            ( vec_push [u] pcm # u & l 255 ) ( vec_push [u] pcm # u & >> l 8 255 )
+            ( vec_push [u] pcm # u & r 255 ) ( vec_push [u] pcm # u & >> r 8 255 )
+            = i + i 1
+        }
+        = g_audio_len 0
+        = fi + fi 1
+    }
+    ?? ( write_file_bytes outpath pcm ) { T _ → {}  F _ → { ( nurl_print `write failed\n` ) } }
+    ( nurl_print `wrote ` ) ( nurl_print ( nurl_str_int ( vec_len [u] pcm ) ) )
+    ( nurl_print ` PCM bytes, nonzero-L samples: ` ) ( nurl_print ( nurl_str_int nz ) ) ( nurl_print `\n` )
+    ( vec_free [u] pcm )
+    ^ 0
+}
+
 // ── Run a test ROM headlessly, watching the serial output ────────
 @ contains_word String hay s needle → b {
     : i hn ( string_len hay )
@@ -123,6 +158,16 @@ $ `stdlib/ext/env.nu`
         }
     } {}
     ? ppu_mode { ^ ( run_rom_ppu path frames ) } {}
+    // Audio dump mode: `gb <rom> --audio <frames> [out.pcm]`.
+    : ~ b audio_mode F
+    ?? ( vec_get [String] args 2 ) { T b → ? ( nurl_str_eq ( string_data b ) `--audio` ) { = audio_mode T } {}  F _ → {} }
+    ? audio_mode {
+        : ~ i af 300
+        : ~ s ap `gb_audio.pcm`
+        ?? ( vec_get [String] args 3 ) { T b → = af ( nurl_str_to_int ( string_data b ) )  F _ → {} }
+        ?? ( vec_get [String] args 4 ) { T b → = ap ( string_data b )  F _ → {} }
+        ^ ( audio_dump path af ap )
+    } {}
     : ~ i budget 300000000
     ? > ( vec_len [String] args ) 2 {
         ?? ( vec_get [String] args 2 ) { T b → = budget ( nurl_str_to_int ( string_data b ) )  F _ → {} }

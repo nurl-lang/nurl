@@ -20,6 +20,7 @@ $ `examples/gameboy/core.nu`
 & `canvas` @ host_rom_size → i             // ROM length in bytes
 & `canvas` @ host_rom_byte i idx → i       // ROM[idx]
 & `canvas` @ host_joypad → i            // button bitmask (see g_joyp)
+& `canvas` @ host_audio i ptr i nsamples → v   // drain APU ring → Web Audio
 
 // GB shade (0=white..3=black) → ARGB8888 0xAARRGGBB (host swaps R/B).
 @ shade_argb i s → i {
@@ -61,6 +62,8 @@ $ `examples/gameboy/core.nu`
         ( run_one_frame )
         ( blit fb )
         ( canvas_present )
+        ( host_audio # i g_audio g_audio_len )   // hand this frame's samples to Web Audio
+        = g_audio_len 0
         ( canvas_sleep 16 )
         ? != 0 ( canvas_should_close ) { = running 0 } {}
     }
