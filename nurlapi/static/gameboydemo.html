@@ -265,9 +265,8 @@ screen.tabIndex = 0;
   try {
     await loadDeps();
     setStatus("Ready — pick a ROM above.");
-    // Auto-start with the dmg-acid2 PPU demo (pixel-perfect). Tobu Tobu
-    // Girl is the featured first button — click it to boot the game.
-    const auto = document.querySelector('#roms button[data-rom="gameboy_roms/dmg-acid2.gb"]');
+    // Auto-start with Tobu Tobu Girl — boots logo → title → gameplay.
+    const auto = document.querySelector('#roms button[data-rom="gameboy_roms/tobu.gb"]');
     (auto || document.querySelector('#roms button[data-rom]')).click();
   } catch (e) { setStatus("failed to load runtime: " + e.message); }
 })();
