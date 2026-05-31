@@ -702,7 +702,9 @@ $ `stdlib/core/vec.nu`
     = sp 0xFFFE
     = pc 0x0100
     = g_ime 0
+    = g_div 0xABCC           // internal divider at DMG boot-ROM handoff
     : *u m ( mem_raw )
+    = . m 0xFF04 # u 0xAB     // DIV (high byte of g_div)
     = . m 0xFF05 # u 0x00     // TIMA
     = . m 0xFF06 # u 0x00     // TMA
     = . m 0xFF07 # u 0x00     // TAC
