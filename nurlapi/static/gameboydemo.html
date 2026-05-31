@@ -61,6 +61,7 @@
   <div class="panel">
     <h2>ROM</h2>
     <div class="roms" id="roms">
+      <button data-rom="gameboy_roms/tobu.gb">▶ Tobu Tobu Girl</button>
       <button data-rom="gameboy_roms/dmg-acid2.gb">dmg-acid2 (PPU)</button>
       <button data-rom="gameboy_roms/cpu_instrs.gb">cpu_instrs (MBC1)</button>
       <button data-rom="gameboy_roms/01-special.gb">cpu 01-special</button>
@@ -75,8 +76,9 @@
       <tr><td class="k">Shift</td><td>Select</td><td></td><td></td></tr>
     </table>
     <div class="credit">
-      DMG only (no colour). Bundled ROMs: Blargg's <code>cpu_instrs</code> and
-      Matt Currie's <code>dmg-acid2</code> (freely redistributable PPU test).
+      DMG only (no colour). Bundled ROMs: <a href="https://tangramgames.dk/tobutobugirl/">Tobu
+      Tobu Girl</a> (a freeware game by SIMON, MBC1), Blargg's <code>cpu_instrs</code>
+      and Matt Currie's <code>dmg-acid2</code> (freely redistributable PPU test).
       MBC1/3/5 cartridges are supported — load your own DMG ROM above.
     </div>
   </div>
@@ -263,9 +265,10 @@ screen.tabIndex = 0;
   try {
     await loadDeps();
     setStatus("Ready — pick a ROM above.");
-    // Auto-start with the dmg-acid2 PPU demo.
-    const first = document.querySelector('#roms button[data-rom]');
-    first.click();
+    // Auto-start with the dmg-acid2 PPU demo (pixel-perfect). Tobu Tobu
+    // Girl is the featured first button — click it to boot the game.
+    const auto = document.querySelector('#roms button[data-rom="gameboy_roms/dmg-acid2.gb"]');
+    (auto || document.querySelector('#roms button[data-rom]')).click();
   } catch (e) { setStatus("failed to load runtime: " + e.message); }
 })();
 </script>
