@@ -1702,6 +1702,23 @@
         // function returns — Phase 1A defaults those to signed).
         : s u_flag ( nurl_sym_get syms ( nurl_str_cat name `__unsigned` ) )
         ( nurl_sym_def syms `__last_unsigned__` u_flag )
+        // Root-cause guard for the arity-cascade footgun (critic.md §4).
+        // Reaching this point means the name is none of: a local / match-
+        // payload / loop / inout / closure-capture binding (all carry a
+        // `__ptr`), a const or enum variant (`__global`), the void literal
+        // `v` (handled above), or a bare @-fn (dies above). The only
+        // legitimate remaining case is a by-value function parameter, which
+        // resolves to its SSA register `%name` and carries `__param`. Any
+        // other name is simply not in scope. The old code fell through to
+        // `( nurl_str_cat `%` name )` unconditionally, emitting an undefined
+        // SSA value (`%a`) that nurlc accepted with status 0 and only clang
+        // later rejected. Reject it in the front-end so the diagnostic
+        // lands on the source, making GOTCHAS.md's "every trap is a compiler
+        // diagnostic" claim true end-to-end.
+        ? & & == 0 ( nurl_str_len ptr ) == 0 ( nurl_str_len glb )
+        == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat name `__param` ) ) )
+        { ( die lex ( nurl_str_cat3 `use of undefined identifier '` name `' - no binding, parameter, constant, enum variant, or function with this name is in scope` ) ) }
+        {}
         ^ ? != 0 ( nurl_str_len ptr )
         ( load_var cg lt ptr )
         ? != 0 ( nurl_str_len glb )
