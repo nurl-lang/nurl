@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **MQTT: multi-topic SUBSCRIBE** (`mqtt_subscribe_many`) sends one
+  SUBSCRIBE for N filters at a shared max QoS and validates every
+  per-filter SUBACK reason code (a new `__mqtt_check_suback` that parses
+  the property block instead of assuming a single trailing byte —
+  `mqtt_subscribe_qos` now uses it too).
 - **PostgreSQL advanced protocol features — binary, async, LISTEN/NOTIFY,
   COPY** (`stdlib/ext/postgres.nu`). Closes the last Tier-5 Postgres gap;
   all four are pure-NURL libpq FFI (no `runtime.c` bridge) and are
@@ -46,9 +51,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vars, so `gen_match` reconstructs struct / pointer / unsigned payloads
   for a parameter scrutinee exactly as it does for a let binding. Bootstrap
   fixed point held; regression `compiler/tests/match_param_payload.nu`.
+- **Compiler: undefined identifier in value position no longer emits an
+  undefined SSA value with exit status 0** (PR #25 / `Fixes`). `gen_ident`'s
+  bare `%<name>` fallback fired for *any* name lacking a `__ptr` / `__global`
+  binding — so `: i x ^ a b c` emitted `ret i64 %a` that nurlc accepted and
+  only clang rejected. The fallback now requires a by-value parameter and
+  otherwise dies with "use of undefined identifier". This was critic.md §4's
+  headline contradiction of "every trap is a compiler diagnostic".
+  Regression `compiler/tests/should_fail_undef_ident.nu`.
+- **Compiler: a within-statement prefix-arity cascade that swallowed the
+  next `^` silently returned early** (PR #25 / `Fixes`). `: i x + 1` /
+  `^ a` parsed as `+ 1 (^ a)` → `ret %a` plus a dead `add`, exiting 0. A new
+  `g_ret_forbidden` flag (armed by a `gen_operand` wrapper around every
+  value-operand parse, reset by `gen_stmt` and the `?` / `??` arm bodies)
+  makes `gen_ret` refuse to emit a `ret` in operand position. Regression
+  `compiler/tests/should_fail_cascade_caret.nu`.
+- **Compiler: `??`-match on a direct-call scrutinee dropped pointer/handle
+  payloads and option signedness** (PR #25 / `Fixes`). `: ( Vec u ) x ?? ( f
+  … ) { … }` / `: s x ?? ( f … ) { … }` left the binding `undef` (no T-arm
+  reconstruction, no result phi) for handle/pointer payloads, and `?? (
+  vec_get [u] … ) { T b → # i b }` sign-extended an unsigned byte. The
+  callee's Ok/Err-payload LLVM types and option-inner token are now recorded
+  per function and surfaced to `gen_match`'s direct-call synthesis (with a
+  bare-`i8*` inttoptr path for both arms). Regressions
+  `compiler/tests/match_bind_call_handle.nu`, `match_call_opt_unsigned.nu`.
+- **Compiler: option/result construction from a sized-int literal didn't
+  truncate** (PR #25 / `Fixes`). `@ ?u { T 0x86 }` emitted `insertvalue {
+  i1, i8 } …, i64 134, 1`, which clang rejected. `gen_agg_lit`'s opt/res
+  payload coercion now truncs/sexts/zexts the literal to the payload width
+  (option = T's real width, result = i64). Regression
+  `compiler/tests/opt_lit_payload_width.nu`.
+- **MQTT inbound QoS 2 is now exactly-once.** A retransmitted (DUP)
+  QoS 2 PUBLISH was acknowledged but re-delivered to the application. The
+  client now tracks inbound packet ids across their PUBREC…PUBCOMP window
+  (`MqttClient.qos2_rx`, bounded, oldest evicted past 256), acknowledges a
+  duplicate but delivers it only once. `__mqtt_parse_publish` returns
+  `?MqttMessage` (None on a de-duplicated retransmit) and the dedup policy
+  is unit-tested in `compiler/tests/mqtt_qos2_dedup.nu`. The doc-drift
+  comment on `__mqtt_do_publish` (claimed a fixed packet id) was corrected.
 
 ### Security
 
+- **MQTT TLS certificate verification is now configurable and on by
+  default.** `mqtt_connect_cfg` / `mqtt_reconnect` previously hard-coded
+  `verify = F`, so every TLS connection was effectively `--insecure`
+  (MITM-able). `MqttConfig` gained a `tls_verify` field, threaded through to
+  `tcp_connect_tls`; `mqtt_config` defaults it to T (peer-cert chain + host
+  name verified against the system trust store). Set it F only for a
+  self-signed broker in a trusted environment.
 - **`pg_listen` SQL injection (critical) — fixed.** A channel name is a SQL
   *identifier* and cannot be a bound parameter, so it now goes through
   `pg_escape_identifier` (PQescapeIdentifier) before interpolation; raw

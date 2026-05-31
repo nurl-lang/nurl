@@ -34,6 +34,7 @@
 //                        ( Vec ( Pair String String ) ) props ) → ! v MqttErr
 //   ( mqtt_subscribe    MqttClient s topic )                   → ! v MqttErr
 //   ( mqtt_subscribe_qos MqttClient s topic i qos )            → ! v MqttErr
+//   ( mqtt_subscribe_many MqttClient ( Vec String ) topics i qos ) → ! v MqttErr
 //   ( mqtt_unsubscribe  MqttClient s topic )                   → ! v MqttErr
 //   ( mqtt_ping         MqttClient )                           → ! v MqttErr
 //   ( mqtt_keepalive_tick MqttClient )                         → ! v MqttErr
@@ -61,8 +62,15 @@
 // §4.7 `+` / `#` wildcard rules for client-side dispatch when one
 // connection carries several subscriptions.
 //
+// Security: TLS certificate verification is controlled by
+// `MqttConfig.tls_verify` and defaults ON (`mqtt_config`). Leave it on for
+// any connection over an untrusted network — disabling it makes the link
+// MITM-able. Inbound QoS 2 PUBLISHes are de-duplicated (a DUP retransmit
+// is acknowledged but delivered to the application only once).
+//
 // Not yet implemented: pipelined (multiple-in-flight) publishing —
-// the calls are synchronous, one packet in flight.
+// the calls are synchronous, one packet in flight. (Inbound QoS 2 is
+// strictly exactly-once; outbound QoS 2 is one exchange at a time.)
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/bytes.nu`
@@ -184,6 +192,7 @@ $ `stdlib/core/pair.nu`
     i ping_deadline
     i keepalive_ms
     i next_pid
+    ( Vec i ) qos2_rx
 }
 
 // An inbound application message. `props` holds the MQTT 5 user
@@ -198,6 +207,12 @@ $ `stdlib/core/pair.nu`
 
 // CONNECT configuration. An empty `will_topic` means no will message;
 // a `session_expiry` of 0 with `clean_start` T is a clean session.
+//
+// `tls_verify` controls X.509 verification of the broker's certificate
+// (host name + chain to a trusted root). It defaults to T (secure) in
+// `mqtt_config`. Set it F ONLY for a self-signed broker in a trusted
+// test environment — F over an untrusted network is MITM-able. It has no
+// effect on a plaintext broker (the client connects over TLS).
 : MqttConfig {
     s client_id
     s username
@@ -208,13 +223,15 @@ $ `stdlib/core/pair.nu`
     s will_payload
     i will_qos
     i session_expiry
+    b tls_verify
 }
 
 // Common-case config: keep-alive 60 s, clean start, no will, no session
-// expiry. For a will message / session resume, build a MqttConfig
-// literally and call mqtt_connect_cfg.
+// expiry, TLS certificate verification ON. For a will message, session
+// resume, or to disable verification (self-signed test broker), build a
+// MqttConfig literally and call mqtt_connect_cfg.
 @ mqtt_config s client_id s username s password → MqttConfig {
-    ^ @ MqttConfig { client_id username password 60 T `` `` 0 0 }
+    ^ @ MqttConfig { client_id username password 60 T `` `` 0 0 T }
 }
 
 // Allocate the next packet identifier — returns the current value and
@@ -466,12 +483,12 @@ $ `stdlib/core/pair.nu`
 // (MqttBadAuth / MqttNotAuthorized / MqttRefused); the Ok value is a
 // live, authenticated client.
 @ mqtt_connect_cfg s host i port MqttConfig cfg → !MqttClient MqttErr {
-    : !TcpConn MqttErr cr ( tcp_connect_tls host port F )
+    : !TcpConn MqttErr cr ( tcp_connect_tls host port . cfg tls_verify )
     ?? cr {
         T conn → {
             ( tcp_set_timeout conn 15000 )
             : i kams * . cfg keepalive 1000
-            : MqttClient cl @ MqttClient { conn ( vec_new [u] ) + ( now_ms ) kams kams 1 }
+            : MqttClient cl @ MqttClient { conn ( vec_new [u] ) + ( now_ms ) kams kams 1 ( vec_new [i] ) }
 
             : ( Vec u ) pkt ( vec_with_cap [u] 96 )
             ( __mqtt_encode_connect pkt cfg )
@@ -481,6 +498,7 @@ $ `stdlib/core/pair.nu`
                 T → {}
                 F we → {
                     ( vec_free [u] . cl rxbuf )
+                    ( vec_free [i] . cl qos2_rx )
                     ( tcp_close_conn conn )
                     ^ @ !MqttClient MqttErr { F ( __mqtt_of_net we ) }
                 }
@@ -498,12 +516,14 @@ $ `stdlib/core/pair.nu`
                         ( nurl_eprint ( nurl_str_int reason ) )
                         ( nurl_eprint `\n` )
                         ( vec_free [u] . cl rxbuf )
+                        ( vec_free [i] . cl qos2_rx )
                         ( tcp_close_conn conn )
                         ^ @ !MqttClient MqttErr { F ( __mqtt_connack_err reason ) }
                     }
                 }
                 F re → {
                     ( vec_free [u] . cl rxbuf )
+                    ( vec_free [i] . cl qos2_rx )
                     ( tcp_close_conn conn )
                     ^ @ !MqttClient MqttErr { F re }
                 }
@@ -579,9 +599,10 @@ $ `stdlib/core/pair.nu`
     ^ @ !v MqttErr { F # MqttErr MqttProtocol }
 }
 
-// Core PUBLISH — any QoS (0/1/2) and the retain flag. A synchronous
-// client keeps one packet in flight, so a fixed id (1) is safe. QoS 1
-// blocks for PUBACK, QoS 2 for the full PUBREC/PUBREL/PUBCOMP exchange.
+// Core PUBLISH — any QoS (0/1/2) and the retain flag. A QoS 1/2 publish
+// allocates a fresh packet id via __mqtt_next_pid (the synchronous client
+// keeps one in flight, but each carries its own wire id). QoS 1 blocks for
+// PUBACK, QoS 2 for the full PUBREC/PUBREL/PUBCOMP exchange.
 @ __mqtt_do_publish MqttClient cl s topic s payload i qos b retain ( Vec ( Pair String String ) ) uprops → !v MqttErr {
     : ~ i b0 48
     ? == qos 1 { = b0 | b0 2 } {}
@@ -657,6 +678,33 @@ $ `stdlib/core/pair.nu`
 
 // ── subscribe / unsubscribe ──────────────────────────────────────────
 
+// Validate a SUBACK against the SUBSCRIBE we sent: fixed-header type 9
+// (0x90), matching packet id, and exactly `ntopics` granted reason codes
+// (each < 0x80 — 0x80+ is a failure/not-authorised per filter). The
+// variable header is the 2-byte packet id followed by an MQTT 5 property
+// block; the per-filter reason codes are the remaining payload bytes.
+@ __mqtt_check_suback ( Vec u ) resp i pid i ntopics → !v MqttErr {
+    : i n ( vec_len [u] resp )
+    ? < n 4 { ^ @ !v MqttErr { F # MqttErr MqttSubFailed } } {}
+    ? != & ( __mqtt_byte resp 0 ) 240 144 { ^ @ !v MqttErr { F # MqttErr MqttSubFailed } } {}
+    : MqttVarint rl ( __mqtt_decode_varint resp 1 )
+    : i body + 1 . rl nbytes
+    : i spid + * ( __mqtt_byte resp body ) 256 ( __mqtt_byte resp + body 1 )
+    ? != spid pid { ^ @ !v MqttErr { F # MqttErr MqttSubFailed } } {}
+    : MqttVarint pr ( __mqtt_decode_varint resp + body 2 )
+    : i rc_start + + + body 2 . pr nbytes . pr value
+    : i rc_count - n rc_start
+    ? != rc_count ntopics { ^ @ !v MqttErr { F # MqttErr MqttSubFailed } } {}
+    : ~ i k 0
+    ~ < k rc_count {
+        ? >= ( __mqtt_byte resp + rc_start k ) 128 {
+            ^ @ !v MqttErr { F # MqttErr MqttSubFailed }
+        } {}
+        = k + k 1
+    }
+    ^ @ !v MqttErr { T 0 }
+}
+
 // SUBSCRIBE to one topic filter at max QoS `qos` (0/1/2), then read +
 // check the SUBACK. The subscription-options byte's low 2 bits are the
 // maximum QoS the broker may deliver on this filter.
@@ -686,18 +734,9 @@ $ `stdlib/core/pair.nu`
     : !( Vec u ) MqttErr rd ( __mqtt_read_packet cl )
     ?? rd {
         T resp → {
-            : i b0 ( __mqtt_byte resp 0 )
-            : i n ( vec_len [u] resp )
-            : i spid + * ( __mqtt_byte resp 2 ) 256 ( __mqtt_byte resp 3 )
-            : ~ i rc 255
-            ? > n 0 { = rc ( __mqtt_byte resp - n 1 ) } {}
+            : !v MqttErr res ( __mqtt_check_suback resp pid 1 )
             ( vec_free [u] resp )
-            // SUBACK type 9 (0x90), matching packet id, reason < 0x80 = granted.
-            ? & & == & b0 240 144 == spid pid < rc 128 {
-                ^ @ !v MqttErr { T 0 }
-            } {
-                ^ @ !v MqttErr { F # MqttErr MqttSubFailed }
-            }
+            ^ res
         }
         F re → { ^ @ !v MqttErr { F re } }
     }
@@ -706,6 +745,55 @@ $ `stdlib/core/pair.nu`
 // SUBSCRIBE to one topic filter at QoS 0.
 @ mqtt_subscribe MqttClient cl s topic → !v MqttErr {
     ^ ( mqtt_subscribe_qos cl topic 0 )
+}
+
+// SUBSCRIBE to many topic filters in a single packet, all at the same max
+// QoS, then read + check the one SUBACK (which carries one reason code per
+// filter, in order — every one must be < 0x80). CONSUMES nothing; the
+// caller still owns `topics`. One round-trip for N filters instead of N.
+@ mqtt_subscribe_many MqttClient cl ( Vec String ) topics i qos → !v MqttErr {
+    : i nt ( vec_len [String] topics )
+    ? == nt 0 { ^ @ !v MqttErr { T 0 } } {}
+    : i pid ( __mqtt_next_pid cl )
+    : ( Vec u ) vh ( vec_with_cap [u] 8 )
+    ( bytes_push_u16_be vh pid )
+    ( vec_push [u] vh # u 0 )
+
+    : ( Vec u ) pl ( vec_with_cap [u] * nt 32 )
+    : ~ i ti 0
+    ~ < ti nt {
+        ?? ( vec_get [String] topics ti ) {
+            T tp → {
+                ( __mqtt_put_str pl ( string_data tp ) )
+                ( vec_push [u] pl # u & qos 3 )
+            }
+            F _ → {}
+        }
+        = ti + ti 1
+    }
+
+    : ( Vec u ) pkt ( vec_with_cap [u] + 8 ( vec_len [u] pl ) )
+    ( vec_push [u] pkt # u 130 )
+    : i remlen + ( vec_len [u] vh ) ( vec_len [u] pl )
+    ( __mqtt_put_varint pkt remlen )
+    ( vec_extend [u] pkt vh )
+    ( vec_extend [u] pkt pl )
+
+    : !v NetErr w ( tcp_write_all . cl conn pkt )
+    ( vec_free [u] vh )
+    ( vec_free [u] pl )
+    ( vec_free [u] pkt )
+    ?? w { T → {} F we → { ^ @ !v MqttErr { F ( __mqtt_of_net we ) } } }
+
+    : !( Vec u ) MqttErr rd ( __mqtt_read_packet cl )
+    ?? rd {
+        T resp → {
+            : !v MqttErr res ( __mqtt_check_suback resp pid nt )
+            ( vec_free [u] resp )
+            ^ res
+        }
+        F re → { ^ @ !v MqttErr { F re } }
+    }
 }
 
 // UNSUBSCRIBE from one topic filter, then read + check the UNSUBACK.
@@ -811,12 +899,14 @@ $ `stdlib/core/pair.nu`
 // unless the session was resumed via session-expiry + clean-start F).
 @ mqtt_reconnect MqttClient cl s host i port MqttConfig cfg → !v MqttErr {
     ( tcp_close_conn . cl conn )
-    : !TcpConn MqttErr cr ( tcp_connect_tls host port F )
+    : !TcpConn MqttErr cr ( tcp_connect_tls host port . cfg tls_verify )
     ?? cr {
         T nc → {
             ( tcp_set_timeout nc 15000 )
             = . cl conn nc
             ( vec_clear [u] . cl rxbuf )
+            // New session → fresh inbound QoS 2 window; drop stale ids.
+            ( vec_clear [i] . cl qos2_rx )
 
             : ( Vec u ) pkt ( vec_with_cap [u] 96 )
             ( __mqtt_encode_connect pkt cfg )
@@ -859,25 +949,70 @@ $ `stdlib/core/pair.nu`
     ( vec_free [u] pkt )
 }
 
+// ── inbound QoS 2 de-duplication ─────────────────────────────────────
+//
+// A QoS 2 receiver must deliver each PUBLISH to the application exactly
+// once even when the broker retransmits it (DUP flag) because an ack was
+// lost. We track the packet identifiers in their QoS 2 receive window
+// — recorded when a PUBLISH is first accepted, discarded once the
+// PUBREL/PUBCOMP handshake completes cleanly — so a redelivered PUBLISH
+// whose id is still pending is acknowledged again but NOT handed up a
+// second time. The set is bounded; the oldest id is evicted past the cap
+// so a stuck (never-completing) exchange cannot grow it without limit.
+@ __mqtt_qos2_cap → i { ^ 256 }
+
+// True iff `pid` is already pending (a duplicate). Otherwise records it
+// and returns F. Evicts the oldest id when the set is at capacity. Takes
+// the id set directly (not the client) so the policy is unit-testable.
+@ __mqtt_qos2_seen_or_add ( Vec i ) s i pid → b {
+    : i n ( vec_len [i] s )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [i] s k ) { T v → { ? == v pid { ^ T } {} }  F _ → {} }
+        = k + k 1
+    }
+    ? >= n ( __mqtt_qos2_cap ) { ?? ( vec_remove [i] s 0 ) { T _ → {}  F _ → {} } } {}
+    ( vec_push [i] s pid )
+    ^ F
+}
+
+// Drop `pid` from the pending set once its handshake has completed.
+@ __mqtt_qos2_forget ( Vec i ) s i pid → v {
+    : i n ( vec_len [i] s )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [i] s k ) {
+            T v → { ? == v pid { ?? ( vec_remove [i] s k ) { T _ → {}  F _ → {} }  = k n } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+}
+
 // Finish the receiver side of a QoS 2 exchange for an inbound PUBLISH:
-// PUBREC out, wait for PUBREL, PUBCOMP out.
-@ __mqtt_qos2_inbound MqttClient cl i pid → v {
+// PUBREC out, wait for PUBREL, PUBCOMP out. Returns T iff a real PUBREL
+// was seen (clean completion) — F means the wait timed out or the link
+// errored, in which case the caller keeps the id pending so a later
+// retransmit is still de-duplicated.
+@ __mqtt_qos2_inbound MqttClient cl i pid → b {
     ( __mqtt_send_ack2 cl 80 pid )
     : ~ i guard 0
-    : ~ b done F
-    ~ & ! done < guard 50 {
+    : ~ b saw_rel F
+    : ~ b stop F
+    ~ & ! stop < guard 50 {
         = guard + guard 1
         : !( Vec u ) MqttErr rp ( __mqtt_read_packet cl )
         ?? rp {
             T pkt → {
                 : i pt & >> ( __mqtt_byte pkt 0 ) 4 15
                 ( vec_free [u] pkt )
-                ? == pt 6 { = done T } {}
+                ? == pt 6 { = saw_rel T  = stop T } {}
             }
-            F _ → { = done T }
+            F _ → { = stop T }
         }
     }
     ( __mqtt_send_ack2 cl 112 pid )
+    ^ saw_rel
 }
 
 // Build an owned String from `len` bytes of `pkt` starting at `start`.
@@ -947,7 +1082,7 @@ $ `stdlib/core/pair.nu`
 // Parse a PUBLISH packet into an MqttMessage — topic, payload, and the
 // user properties — and free `pkt`. An inbound QoS 1 PUBLISH is PUBACK'd
 // and a QoS 2 PUBLISH gets the PUBREC/PUBCOMP exchange before returning.
-@ __mqtt_parse_publish MqttClient cl ( Vec u ) pkt → MqttMessage {
+@ __mqtt_parse_publish MqttClient cl ( Vec u ) pkt → ?MqttMessage {
     : i b0 ( __mqtt_byte pkt 0 )
     : i qos & >> b0 1 3
     : MqttVarint rl ( __mqtt_decode_varint pkt 1 )
@@ -972,8 +1107,22 @@ $ `stdlib/core/pair.nu`
     ( vec_free [u] pkt )
     : i inpid + * pidhi 256 pidlo
     ? == qos 1 { ( __mqtt_send_ack2 cl 64 inpid ) } {}
-    ? == qos 2 { ( __mqtt_qos2_inbound cl inpid ) } {}
-    ^ @ MqttMessage { topic payload props }
+    ? == qos 2 {
+        // Record the id BEFORE the handshake so a DUP retransmit arriving
+        // in a later receive is recognised; complete PUBREC/PUBREL/PUBCOMP
+        // to satisfy the broker either way; forget the id on clean
+        // completion. A duplicate is acked but not re-delivered.
+        : b dup ( __mqtt_qos2_seen_or_add . cl qos2_rx inpid )
+        : b done ( __mqtt_qos2_inbound cl inpid )
+        ? done { ( __mqtt_qos2_forget . cl qos2_rx inpid ) } {}
+        ? dup {
+            ( string_free topic )
+            ( string_free payload )
+            ( mqtt_props_free props )
+            ^ @ ?MqttMessage { F # MqttMessage 0 }
+        } {}
+    } {}
+    ^ @ ?MqttMessage { T @ MqttMessage { topic payload props } }
 }
 
 // Read the next inbound application message. PINGRESP and other control
@@ -990,7 +1139,12 @@ $ `stdlib/core/pair.nu`
             T pkt → {
                 : i ptype & >> ( __mqtt_byte pkt 0 ) 4 15
                 ? == ptype 3 {
-                    ^ @ !MqttMessage MqttErr { T ( __mqtt_parse_publish cl pkt ) }
+                    // A de-duplicated QoS 2 retransmit yields None — keep
+                    // looping for the next real message rather than return.
+                    ?? ( __mqtt_parse_publish cl pkt ) {
+                        T m → { ^ @ !MqttMessage MqttErr { T m } }
+                        F _ → {}
+                    }
                 } {
                     ( vec_free [u] pkt )
                     ? == ptype 14 {
@@ -1204,9 +1358,14 @@ $ `stdlib/core/pair.nu`
                 T pkt → {
                     : i ptype & >> ( __mqtt_byte pkt 0 ) 4 15
                     ? == ptype 3 {
-                        : MqttMessage m ( __mqtt_parse_publish cl pkt )
-                        : b ok ( chan_send [MqttMessage] inbox m )
-                        ? ok {} { = running F }
+                        // None = de-duplicated QoS 2 retransmit; skip it.
+                        ?? ( __mqtt_parse_publish cl pkt ) {
+                            T m → {
+                                : b ok ( chan_send [MqttMessage] inbox m )
+                                ? ok {} { = running F }
+                            }
+                            F _ → {}
+                        }
                     } {
                         ( vec_free [u] pkt )
                         ? == ptype 14 { = running F } {}
@@ -1238,6 +1397,7 @@ $ `stdlib/core/pair.nu`
         }
         ( chan_close [MqttMessage] inbox )
         ( vec_free [u] . cl rxbuf )
+        ( vec_free [i] . cl qos2_rx )
         ( tcp_close_conn . cl conn )
     }
 
@@ -1279,5 +1439,6 @@ $ `stdlib/core/pair.nu`
     ?? w { T → {} F _ → {} }
     ( vec_free [u] pkt )
     ( vec_free [u] . cl rxbuf )
+    ( vec_free [i] . cl qos2_rx )
     ( tcp_close_conn . cl conn )
 }
