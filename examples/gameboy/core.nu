@@ -960,6 +960,34 @@ $ `stdlib/core/vec.nu`
 
 // Run a ROM for `frames` frames, then dump the framebuffer.
 
+// Advance the timer + PPU together by `n` T-cycles.
+@ clock i n → v { ( tick_timer n ) ( tick_ppu n ) }
+
+// Execute one CPU step with sub-instruction-accurate clocking, returning
+// the T-cycles consumed. The opcode-fetch M-cycle (4 T-cycles) is clocked
+// BEFORE the instruction body, so a memory-mapped read inside the body
+// (e.g. `LDH A,(FF44)` sampling LY, or reading TIMA/STAT) observes the
+// timer/PPU at the correct cycle rather than a stale instruction-boundary
+// value. The remaining cycles are clocked after. This keeps each
+// instruction's *total* timing identical (instr_timing stays exact) while
+// fixing the phase at which time-varying registers are sampled — which is
+// what timer/LY-driven games like Tobu Tobu Girl depend on.
+@ cpu_advance → i {
+    : ~ i used 4
+    ? == g_halt 0 {
+        ( clock 4 )
+        = used ( step )
+        ? > used 4 { ( clock - used 4 ) } {}
+    } {
+        ( clock 4 )                 // HALT idles 4 T-cycles
+    }
+    // Interrupt dispatch costs 20 T-cycles — clock them too (else the
+    // timer/PPU drift slow by 20 cycles per serviced interrupt).
+    : i ic ( service_interrupts )
+    ? != ic 0 { ( clock ic )  = used + used ic } {}
+    ^ used
+}
+
 // Run the emulator until the next vblank (one full frame ≈ 70224 cycles).
 // Shared by the browser build's per-rAF step. The guard bounds a frame
 // in case the LCD is off (no vblank) so the loop always returns.
@@ -967,14 +995,7 @@ $ `stdlib/core/vec.nu`
     : i start g_frames
     : ~ i guard 0
     ~ & == g_frames start < guard 400000 {
-        : ~ i used 4
-        ? == g_halt 0 { = used ( step ) } {}
-        ( tick_timer used )
-        ( tick_ppu used )
-        // Interrupt dispatch costs 20 T-cycles — advance the timer/PPU by
-        // them too, or they drift slow by 20 cycles per serviced interrupt.
-        : i ic ( service_interrupts )
-        ? != ic 0 { ( tick_timer ic ) ( tick_ppu ic ) } {}
+        ( cpu_advance )
         = guard + guard 1
     }
 }

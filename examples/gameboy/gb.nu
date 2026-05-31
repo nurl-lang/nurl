@@ -33,13 +33,7 @@ $ `stdlib/ext/env.nu`
             ( vec_free [u] rom )
             : ~ i guard 0
             ~ & < g_frames frames < guard 2000000000 {
-                : ~ i used 4
-                ? == g_halt 0 { = used ( step ) } {}
-                ( tick_timer used )
-                ( tick_ppu used )
-                : i ic ( service_interrupts )
-                ? != ic 0 { ( tick_timer ic ) ( tick_ppu ic ) } {}
-                = guard + guard used
+                = guard + guard ( cpu_advance )
             }
             ( ppu_dump )
             ^ 0
@@ -85,13 +79,8 @@ $ `stdlib/ext/env.nu`
                 // While halted the CPU executes nothing — it idles 4
                 // T-cycles per loop, keeping the timer running, until
                 // `service_interrupts` sees a pending interrupt and wakes
-                // it (clearing g_halt).
-                : ~ i used 4
-                ? == g_halt 0 { = used ( step ) } {}
-                ( tick_timer used )
-                : i ic ( service_interrupts )
-                ? != ic 0 { ( tick_timer ic ) } {}
-                = g_cycles + g_cycles used
+                // it (clearing g_halt). cpu_advance clocks timer + PPU.
+                = g_cycles + g_cycles ( cpu_advance )
                 = instr + instr 1
                 // Check the captured serial text for a verdict.
                 ? != 0 & instr 0x3FFF {} {
