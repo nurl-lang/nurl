@@ -8,6 +8,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **PostgreSQL advanced protocol features — binary, async, LISTEN/NOTIFY,
+  COPY** (`stdlib/ext/postgres.nu`). Closes the last Tier-5 Postgres gap;
+  all four are pure-NURL libpq FFI (no `runtime.c` bridge) and are
+  exercised end to end by the new `examples/pg_advanced.nu`, live-verified
+  against PostgreSQL 16.14.
+  - *Binary result protocol*: `pg_exec_params_binary` requests
+    `resultFormat = 1`; `pg_get_i16_bin` / `_i32_bin` / `_i64_bin` /
+    `_bool_bin` / `_f64_bin` decode network-byte-order cells (`float8`
+    reinterpreted from its IEEE-754 bit pattern, not a numeric cast), with
+    `pg_get_length` / `pg_field_format` / `pg_binary_tuples`.
+  - *Asynchronous queries*: `pg_send` / `pg_send_params` dispatch without
+    blocking; `pg_get_result` (→ `?PgResult`, `None` when finished) and the
+    blocking convenience `pg_await` collect results; `pg_consume_input` /
+    `pg_is_busy` / `pg_socket` / `pg_flush` / `pg_set_nonblocking` hook into
+    an event loop.
+  - *LISTEN/NOTIFY*: `pg_listen`, `pg_notify_send`, `pg_notifies`
+    (→ `?PgNotify { relname, be_pid, extra }`, read after
+    `pg_consume_input`) and `pg_notify_free`.
+  - *COPY*: `pg_copy_start` (accepts the `PGRES_COPY_IN` / `COPY_OUT`
+    handshake that plain `pg_exec` rejects), `pg_put_copy_data` /
+    `pg_put_copy_str` / `pg_put_copy_end` for `COPY … FROM STDIN`, and
+    `pg_get_copy_data` (→ `?String`) for `COPY … TO STDOUT`.
+
+### Fixed
+
+- **Compiler: `??`-match on a result/option-typed *parameter* dropped its
+  payload.** `@ f !S E r → S { ?? r { T x → ^ x } }` emitted `ret i64`
+  against the `%S` return type (an LLVM "value doesn't match function
+  result type" error), and the same gap mishandled a `( Vec u )` handle
+  payload and dropped the unsigned flag on a `?u` parameter (sign-extending
+  a byte ≥ `0x80`). `gen_fn_param` now records the
+  `<param>__res_nurl_T` / `__res_t_llvm` / `__res_e_llvm` / `__opt_nurl_T`
+  metadata that `gen_let_or_struct` already records for let-bound result
+  vars, so `gen_match` reconstructs struct / pointer / unsigned payloads
+  for a parameter scrutinee exactly as it does for a let binding. Bootstrap
+  fixed point held; regression `compiler/tests/match_param_payload.nu`.
+
+### Security
+
+- **`pg_listen` SQL injection (critical) — fixed.** A channel name is a SQL
+  *identifier* and cannot be a bound parameter, so it now goes through
+  `pg_escape_identifier` (PQescapeIdentifier) before interpolation; raw
+  concatenation previously let `pg_listen c "x; DROP TABLE …; --"` execute
+  the injected statement. (`pg_notify_send` was already safe — it binds the
+  channel as a value to `pg_notify($1, $2)`.)
+- **Out-of-bounds read in the binary accessors (medium) — fixed.** A new
+  `PQgetlength`-checked `__pg_bin_ptr` guards every `pg_get_*_bin`:
+  reading an `int4` cell with the 8-byte `pg_get_i64_bin`, or any accessor
+  on a binary SQL `NULL` (0 bytes), now returns `0` instead of reading past
+  the cell into adjacent libpq buffer memory.
+- **TLS is not verified by default — documented.** `pg_connect` and the
+  file header now carry a prominent warning that libpq's default
+  `sslmode=prefer` neither prevents a silent plaintext fallback nor
+  verifies the server certificate (MITM-able), recommending
+  `sslmode=verify-full sslrootcert=…` for non-local connections. Not
+  force-defaulted, as that would break legitimate unix-socket / trusted-LAN
+  connections. Minor: `pg_get_bool` gained a NULL-pointer guard, and the
+  empty-on-NULL behaviour of `pg_escape_literal` / `pg_escape_identifier`
+  is now documented.
+
 ## [0.9.3] — 2026-05-31
 
 ### Summary
