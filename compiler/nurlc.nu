@@ -7972,6 +7972,10 @@
         : b fld_is_slice_lit == ( nurl_lex_type lex ) TT_LBRACK
         : s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
+        // Snapshot the value's unsigned-ness for the int-width coercion of
+        // an option payload below (zext vs sext when widening into a wider
+        // payload field). Empty for signed / untagged values.
+        : s fld_unsigned ( nurl_sym_get syms `__last_unsigned__` )
         // Field is a stack reference if gen_closure_expr / a nested
         // gen_agg_lit just advertised one, or the field named a binding
         // tagged `<name>__refdepth`. Carry up the deepest such depth.
@@ -8172,7 +8176,31 @@
                         = actual_fval db_bc
                         = actual_fty `i64`
                     }
-                    {}  // i64/i32: use as-is
+                    {  // Integer payload whose width differs from the value's.
+                        // For `! T E` the payload slot is always i64, so an
+                        // i64 value lands here and uses itself as-is. But an
+                        // OPTION `? T` payload field carries T's REAL width
+                        // (`? u` → i8, `? u16` → i16, `? i32` → i32), so an
+                        // i64 literal / value must be narrowed — without this
+                        // `@ ?u { T 0x86 }` emitted `insertvalue { i1, i8 }
+                        // …, i64 134, 1` and clang rejected the type mismatch.
+                        // trunc when the value is wider; sext/zext (per the
+                        // value's unsigned flag) when narrower than the field.
+                        : i __pw ( int_width payload_ty )
+                        : i __vw ( int_width fty )
+                        ? & & > __pw 0 > __vw 0 != __pw __vw
+                        { : s __cv ( nurl_cg_reg cg )
+                            : s __op ? > __vw __pw `trunc`
+                            ? != 0 ( nurl_str_len fld_unsigned ) `zext` `sext`
+                            ( nurl_print `  ` ) ( nurl_print __cv )
+                            ( nurl_print ` = ` ) ( nurl_print __op )
+                            ( nurl_print ` ` ) ( nurl_print fty ) ( nurl_print ` ` )
+                            ( nurl_print fval ) ( nurl_print ` to ` ) ( nurl_print payload_ty )
+                            ( nurl_print `\n` )
+                            = actual_fval __cv
+                            = actual_fty payload_ty }
+                        {}  // equal width / non-int: use as-is
+                    }
                 }
             }
             {  // Check if this is actually an enum type
