@@ -969,7 +969,10 @@ $ `stdlib/core/vec.nu`
         ? == g_halt 0 { = used ( step ) } {}
         ( tick_timer used )
         ( tick_ppu used )
-        ( service_interrupts )
+        // Interrupt dispatch costs 20 T-cycles — advance the timer/PPU by
+        // them too, or they drift slow by 20 cycles per serviced interrupt.
+        : i ic ( service_interrupts )
+        ? != ic 0 { ( tick_timer ic ) ( tick_ppu ic ) } {}
         = guard + guard 1
     }
 }

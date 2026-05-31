@@ -37,7 +37,8 @@ $ `stdlib/ext/env.nu`
                 ? == g_halt 0 { = used ( step ) } {}
                 ( tick_timer used )
                 ( tick_ppu used )
-                ( service_interrupts )
+                : i ic ( service_interrupts )
+                ? != ic 0 { ( tick_timer ic ) ( tick_ppu ic ) } {}
                 = guard + guard used
             }
             ( ppu_dump )
@@ -88,7 +89,8 @@ $ `stdlib/ext/env.nu`
                 : ~ i used 4
                 ? == g_halt 0 { = used ( step ) } {}
                 ( tick_timer used )
-                ( service_interrupts )
+                : i ic ( service_interrupts )
+                ? != ic 0 { ( tick_timer ic ) } {}
                 = g_cycles + g_cycles used
                 = instr + instr 1
                 // Check the captured serial text for a verdict.
