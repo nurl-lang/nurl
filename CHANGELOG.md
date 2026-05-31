@@ -8,20 +8,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] — 2026-05-31
+
 ### Summary
 
-HTTP/2 + HPACK + WebSocket conformance suites green. h2spec 2.6.0
+A full **Game Boy (DMG) emulator written in NURL** now plays commercial
+games with sound. `examples/gameboy/` passes Blargg `cpu_instrs` 11/11,
+`instr_timing` and `02-interrupts`, is 100 %/pixel-perfect on dmg-acid2,
+and runs *Tobu Tobu Girl* end to end — full gameplay plus a complete
+4-channel APU mixed to stereo — in the browser at `/gameboydemo` via the
+WebAssembly target. Building it drove three new language/compiler
+features (**hex/binary integer literals**, pointer/aggregate global
+initialisers, hex literals in `match`) and turned one
+silently-accepted bare-literal statement into a hard compile error.
+
+**Generics now range over option and pointer element types** — `Vec ?T`,
+`vec_get [?T] → ??T`, `??T` parameters/returns and nested `??` matching
+all compile (five front-end root-cause fixes). The PostgreSQL client is
+**production-grade** (`stdlib/ext/postgres.nu` + `examples/psql.nu`),
+including option-typed nullable params and getters
+(`pg_exec_params_opt`, `pg_get_opt`), verified live against
+PostgreSQL 16 under AddressSanitizer.
+
+HTTP/2 + HPACK + WebSocket conformance suites remain green: h2spec 2.6.0
 reports 146/146 cases against `examples/h2c_server.nu`; the
 autobahn-testsuite fuzzing client reports 294 OK / 4 NON-STRICT /
 3 INFORMATIONAL / 0 FAILED across all 301 RFC 6455 cases against
 `examples/ws_echo.nu`. Both binaries run under ASan + UBSan
 without findings.
 
-Bootstrap fixed point at 1 620 300 B (stage1 ≡ stage2 byte-identical
+Bootstrap fixed point at 1 772 342 B (stage1 ≡ stage2 byte-identical
 IR).
 
 ### Added
 
+- **Game Boy (DMG) emulator — `examples/gameboy/`.** A cycle-aware Sharp
+  LR35902 core (every opcode + CB-prefix, exact Z/N/H/C flags + DAA,
+  EI/DI IME enable-delay, HALT + HALT-bug, DIV/TIMA timer, interrupt
+  dispatch) passing **Blargg `cpu_instrs` 11/11, `instr_timing` and
+  `02-interrupts`**; a BG/window/sprite PPU that is **100 %/pixel-perfect
+  on dmg-acid2** (0/23040 diff — LYC raster + window internal line
+  counter); MBC1/3/5 mappers, joypad and OAM DMA; and a complete
+  **4-channel APU** (2 square w/ sweep, 4-bit wave RAM, 15-bit-LFSR
+  noise, 512 Hz frame sequencer, NR50/51 mix, DMG high-pass) mixed to
+  stereo. The engine is split into a shared `core.nu` with `gb.nu` (CLI)
+  and `gb_wasm*.nu` (wasm32-wasi → canvas) front-ends; the browser demo
+  at **`/gameboydemo`** auto-starts *Tobu Tobu Girl* and plays it with
+  sound through the playground audio shim. Two sub-instruction timing
+  fixes (TIMA increments on the DIV falling edge; the fetch M-cycle is
+  clocked before the instruction body) took it from a title-screen crash
+  to full gameplay. Build the wasm at `-O2` (lower `-O` leaks the C
+  shadow-stack pointer on the interrupt-dispatch path).
+- **Generics over option / pointer element types.** Option (and pointer)
+  element types are now first-class generic type arguments:
+  `vec_get [?String] → ??String`, `Vec ?T` / `vec_push` / `vec_set` /
+  `vec_free_with`, `??T` as a parameter and return type, and nested
+  `?? o { T inner → ?? inner { … } }` matching all compile — every one of
+  these previously failed at compile time. Five front-end root-cause
+  fixes, each verified by a full bootstrap + test-suite run and an
+  ASan-clean probe: (1) `parse_type_optopt` for the fused `??T` token;
+  (2) `capture_type_arg_src` + `nurl_src_to_llvm` + an `opt_`
+  mangle/demangle round-trip so compound type args like `[?String]` are
+  one substitutable word; (3) `;`-separated closure parameter types so an
+  aggregate type (`{ i1, %String }`) no longer truncates at its first
+  space; (4) slice-vs-pointer store discrimination; (5) `int → aggregate`
+  zeroinit. Test corpus on branch `feature/generic-option-types` (PR #21).
+- **Hex / binary integer literals — `0xFF`, `0b1010`.** Added to the
+  number lexer; the token carries the parsed value and keeps its spelling
+  for diagnostics. Two companion compiler fixes: pointer- and
+  aggregate-typed global initialisers (`: s g 0` → `global i8* null`,
+  `: String g 0` → `zeroinitializer`, `inttoptr` for a nonzero address),
+  and hex-literal normalisation in `match` (int-patterns `?? op { 0xCB →
+  … }` and enum field-constraints `Code 0xFF → …` are rewritten to
+  decimal before the `icmp`, since LLVM reads `0x…` as a hex float).
+  Regression test `compiler/tests/hex_literals.nu`.
+- **Production-grade PostgreSQL client + `psql` CLI.**
+  `stdlib/ext/postgres.nu` reaches production grade: a `PgParams` builder
+  (`pg_bind_text/str/int/bool/null`) for typed + NULL parameter binds the
+  libpq/pgx way, `pg_prepare` / `pg_exec_prepared`, `pg_run`,
+  `pg_begin/commit/rollback`, typed getters (`pg_get_int/f64/bool`),
+  `pg_reset` / `pg_err_msg` / `pg_server_version` / `pg_escape_literal` /
+  `pg_escape_identifier`, and — now that generics range over option types
+  — option-typed nullable params/getters `pg_exec_params_opt
+  ( Vec ?String )`, `pg_get_opt → ?String`, `pg_get_opt_int → ?i`. New
+  `examples/psql.nu` (aligned-table renderer, command tags, multi-line
+  `;` accumulation, `\dt \d \l \du \conninfo` meta-commands, `-c "SQL"`
+  one-shot) and `examples/pg_optional.nu`. Verified live against
+  PostgreSQL 16 under ASan (PRs #20 / #22).
+- **Audio output in the WASM playground.** An `env.audio_out_push` host
+  shim streams packed-stereo `i64` samples to 48 kHz Web Audio, letting
+  WASM programs emit sound; demonstrated by `examples/audio_tone.nu` and
+  used by the Game Boy demo's APU output.
 - **Trait bounds on generic functions — `[A: Trait]`.** A generic type
   parameter may now carry one or more trait bounds: `@ my_max [A: Ord] A
   x A y → A { … }`. Trait-method dispatch inside a generic body already
@@ -107,6 +184,21 @@ IR).
 
 ### Fixed
 
+- **Pointer-vs-integer comparison emitted invalid IR.** `gen_binary`
+  produced `icmp eq i8* %p, 0`; comparison operators now `ptrtoint` any
+  pointer operand to `i64` and compare in `i64`, so `== raw 0`
+  null-checks compile. Found bringing `postgres.nu` to production grade.
+- **`^ <void-call>` (returning a `→ v` call) emitted a value return.**
+  Returning the result of a void function now lowers to `ret void`
+  instead of attempting to return a non-existent value. Found in the
+  postgres work.
+- **A bare numeric/string literal as a statement is now a hard compile
+  error.** Previously `& m 255 0x40` (single `&`) silently discarded the
+  trailing `0x40` — a bare-literal discard statement the compiler
+  accepted — which masked a real masking bug in the Game Boy PPU's
+  STAT-bit-6 handling. `gen_block_stmts` / `gen_block_ret` now reject a
+  bare literal whose value is unused. (The no-workarounds dividend from
+  debugging dmg-acid2.)
 - **`# i <bool>` now zero-extends (was -1 for true).** Casting a boolean
   (an `i1` from a comparison / `&` / `|` / `!`) to a wider integer
   emitted `sext i1`, so `# i true` was -1 instead of 1. Harmless for the
@@ -3179,7 +3271,11 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.3...HEAD
+[0.9.3]: https://github.com/nurl-lang/nurl/compare/v0.9.2...v0.9.3
+[0.9.2]: https://github.com/nurl-lang/nurl/compare/v0.9.1...v0.9.2
+[0.9.1]: https://github.com/nurl-lang/nurl/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/nurl-lang/nurl/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/nurl-lang/nurl/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/nurl-lang/nurl/compare/v0.7.3...v0.8.0
 [0.2.0]: https://github.com/nurl-lang/nurl/compare/v0.1.0...v0.2.0
