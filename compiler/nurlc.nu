@@ -123,6 +123,33 @@
     | == tt TT_IDENT == tt TT_TYPE_KW
 }
 
+// Normalise an integer-literal's SOURCE SPELLING to a decimal string:
+// `0x…` / `0b…` → decimal, everything else passed through verbatim.
+// Used wherever a pattern's literal token text is emitted straight into
+// LLVM IR (match int-patterns, enum field-constraints) — LLVM reads a
+// `0x…` constant as a hex FLOAT, so the spelling must be converted. The
+// lexer's parsed inum is unreliable here (it is overwritten by the
+// parser's lookahead peeks), so we re-parse the spelling instead.
+@ __norm_int_lit s txt → s {
+    : i n ( nurl_str_len txt )
+    ? < n 3 { ^ txt } {}
+    ? != ( nurl_str_get txt 0 ) 48 { ^ txt } {}   // not leading '0'
+    : i c1 ( nurl_str_get txt 1 )
+    ? | == c1 120 == c1 88 {                        // 0x / 0X
+        : ~ i acc 0
+        : ~ i i 2
+        ~ < i n { = acc + * acc 16 ( __lx_hex_val ( nurl_str_get txt i ) )  = i + i 1 }
+        ^ ( nurl_str_int acc )
+    } {}
+    ? | == c1 98 == c1 66 {                         // 0b / 0B
+        : ~ i acc 0
+        : ~ i i 2
+        ~ < i n { = acc + * acc 2 - ( nurl_str_get txt i ) 48  = i + i 1 }
+        ^ ( nurl_str_int acc )
+    } {}
+    ^ txt
+}
+
 // is_type_start: true if tt can start a type expression.
 @ is_type_start i tt → b {
     | == tt TT_TYPE_KW | == tt TT_IDENT | == tt TT_STAR
@@ -1511,6 +1538,17 @@
 // the real culprit instead of blaming the innocent next statement.
 : i g_stmt_line 0
 
+// g_stmt_bare_lit — set by gen_stmt to 1 when the statement it just
+// parsed was a bare numeric/string LITERAL in expression position (no
+// side effect). The block iterators (gen_block_stmts / gen_block_ret)
+// read it to reject such a statement when its value is discarded — a
+// literal in non-return position is dead, and the usual cause is a
+// prefix operator handed one operand too many (a dangling operand),
+// e.g. `& x 255 0x40` parses as `& x 255` and silently drops `0x40`.
+// Match arms whose body is a bare literal call gen_stmt directly (not
+// via a block iterator), so this never false-flags an arm value.
+: i g_stmt_bare_lit 0
+
 // __tok_label — a human-readable name for a token that turned up where
 // a value expression was required. Used only on the diagnostic path.
 @ __tok_label i tt s val → s {
@@ -2591,6 +2629,25 @@
     ^ & >= c 48 <= c 57
 }
 
+// Hex-digit predicate + value, for `0x…` integer literals.
+@ __lx_is_hex_digit i c → b {
+    ? ( __lx_is_digit c ) { ^ T } {}
+    ? & >= c 97 <= c 102 { ^ T } {}  // a-f
+    ? & >= c 65 <= c 70 { ^ T } {}   // A-F
+    ^ F
+}
+
+@ __lx_hex_val i c → i {
+    ? ( __lx_is_digit c ) { ^ - c 48 } {}
+    ? & >= c 97 <= c 102 { ^ + 10 - c 97 } {}  // a-f
+    ^ + 10 - c 65                              // A-F
+}
+
+// Binary-digit predicate, for `0b…` integer literals.
+@ __lx_is_bin_digit i c → b {
+    ^ | == c 48 == c 49
+}
+
 @ __lx_is_alpha i c → b {
     ^ | & >= c 65 <= c 90 & >= c 97 <= c 122
 }
@@ -2814,6 +2871,50 @@
             } {
                 ( __tok_write lex base TT_INT sv ( atoll sv ) line start )
             }
+            = done T
+        } {}
+    } {}
+
+    // ── Hex / binary integer literal: 0x… / 0b… ──
+    // Checked before the decimal path so `0x…` / `0b…` don't lex as a
+    // bare `0` followed by an identifier. The token's inum carries the
+    // parsed value; sv keeps the original spelling for diagnostics.
+    ? & ! done & == & # i . src pos 255 48 < + pos 1 len {
+        : i c1 & # i . src + pos 1 255
+        ? | == c1 120 == c1 88 {  // 'x' / 'X'
+            : i lit0 pos
+            = pos + pos 2
+            : ~ i hacc 0
+            : i hdig0 pos
+            ~ & < pos len ( __lx_is_hex_digit & # i . src pos 255 ) {
+                = hacc + * hacc 16 ( __lx_hex_val & # i . src pos 255 )
+                = pos + pos 1
+            }
+            ? == pos hdig0 { ( die lex `malformed hex literal: expected hex digit after '0x'` ) } {}
+            : i hn - pos lit0
+            : s hsv # s ( malloc + hn 1 )
+            ( memcpy hsv # s + # i # *u # s ( nurl_peek p LX_SRC ) lit0 hn )
+            : *u hsvp # *u hsv
+            = . hsvp hn # u 0
+            ( __tok_write lex base TT_INT hsv hacc line start )
+            = done T
+        } {}
+        ? & ! done | == c1 98 == c1 66 {  // 'b' / 'B'
+            : i lit0 pos
+            = pos + pos 2
+            : ~ i bacc 0
+            : i bdig0 pos
+            ~ & < pos len ( __lx_is_bin_digit & # i . src pos 255 ) {
+                = bacc + * bacc 2 - & # i . src pos 255 48
+                = pos + pos 1
+            }
+            ? == pos bdig0 { ( die lex `malformed binary literal: expected 0/1 after '0b'` ) } {}
+            : i bn - pos lit0
+            : s bsv # s ( malloc + bn 1 )
+            ( memcpy bsv # s + # i # *u # s ( nurl_peek p LX_SRC ) lit0 bn )
+            : *u bsvp # *u bsv
+            = . bsvp bn # u 0
+            ( __tok_write lex base TT_INT bsv bacc line start )
             = done T
         } {}
     } {}
@@ -4318,7 +4419,11 @@
             //     exhaustiveness tracking, and enum-variant lookup paths;
             //     a wildcard arm is required to cover the residual.
             : b is_int_pat == pat_tt TT_INT
-            : s pattern_name ( nurl_lex_val lex )
+            // For an integer-literal pattern normalise the spelling so a
+            // `0x…` / `0b…` literal doesn't reach the `icmp` constant as
+            // raw text (LLVM would read `0x…` as a hex float). Decimal
+            // text passes through unchanged.
+            : s pattern_name ? is_int_pat ( __norm_int_lit ( nurl_lex_val lex ) ) ( nurl_lex_val lex )
             ( nurl_lex_advance lex )
 
             // Or-patterns: `A | B | C → body`. Several tag-only variants
@@ -4361,7 +4466,9 @@
                     ( nurl_lex_advance lex )
                 } {
                     ? == pst TT_INT {
-                        : s ival ( nurl_lex_val lex )
+                        // Normalise so a `0x…` / `0b…` field-constraint
+                        // reaches the IR as decimal, not raw hex text.
+                        : s ival ( __norm_int_lit ( nurl_lex_val lex ) )
                         ? == pvc 0 { = lit0 ival } {}
                         ? == pvc 1 { = lit1 ival } {}
                         ? == pvc 2 { = lit2 ival } {}
@@ -5248,12 +5355,19 @@
     last
 }
 
+@ __dangling_operand_msg → s {
+    ^ `literal as a statement has no effect — its value is discarded. This usually means a prefix operator was given one operand too many (a dangling operand): e.g. '& x 255 0x40' parses as '& x 255' and silently drops the 0x40. Check the operator's arity.`
+}
+
 @ gen_block_stmts i lex i syms i cg → v {
     : i bck_line ( nurl_lex_line lex )
     ( expect lex TT_LBRACE )
     ( bck_block_enter bck_line )
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         ( gen_stmt lex syms cg )
+        // Every statement in a void block has its value discarded, so a
+        // bare literal here is dead — reject it (dangling operand).
+        ? != 0 g_stmt_bare_lit { ( die lex ( __dangling_operand_msg ) ) } {}
     }
     ( expect lex TT_RBRACE )
     ( bck_block_exit )
@@ -5271,6 +5385,12 @@
     : s last `undef`
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         = last ( gen_stmt lex syms cg )
+        // A bare literal that is NOT the block's final expression (its
+        // return value) has its value discarded — reject it as a dangling
+        // operand. The final literal (next token `}`) is the legitimate
+        // block result and is left alone.
+        ? & != 0 g_stmt_bare_lit != ( nurl_lex_type lex ) TT_RBRACE
+        { ( die lex ( __dangling_operand_msg ) ) } {}
     }
     ( expect lex TT_RBRACE )
     ( bck_block_exit )
@@ -6464,6 +6584,7 @@
     // Record this statement's start line for gen_ident's cascade-aware
     // "unexpected token" diagnostic (see g_stmt_line).
     = g_stmt_line bck_line
+    = g_stmt_bare_lit 0
     : s gs_rv ? == tt TT_COLON ( gen_let_or_struct lex syms cg )
     ? == tt TT_EQ ( gen_assign lex syms cg )
     ? == tt TT_TILDE ( gen_loop lex syms cg )
@@ -6505,6 +6626,12 @@
     // `move` rows — placed AFTER the statement's own record so the
     // consuming call itself reads the binding while still Owned.
     ( bck_flush_moves )
+    // Flag a bare numeric/string literal statement for the block iterator's
+    // dangling-operand check. A statement whose LEADING token is a literal
+    // is, under prefix notation, exactly a bare literal (operators lead
+    // their operands), so this is robust against nested blocks overwriting
+    // the flag mid-parse. See g_stmt_bare_lit.
+    = g_stmt_bare_lit ? | | == tt TT_INT == tt TT_FLOAT == tt TT_STR 1 0
     gs_rv
 }
 
@@ -10526,7 +10653,21 @@
             ( nurl_lex_advance lex )
             ( nurl_print `@` ) ( nurl_print cname )
             ( nurl_print ` = global ` ) ( nurl_print lt ) ( nurl_print ` ` )
-            ( nurl_print ( nurl_str_int n ) ) ( nurl_print `\n\n` )
+            // A bare integer initialiser is only valid for an integer-
+            // typed global. A pointer global (`: s g 0`, `: *u buf 0`)
+            // needs `null` / an `inttoptr` constant; an aggregate or
+            // named-struct global (`: String g 0`, `: Point p 0`) needs
+            // `zeroinitializer`.
+            : i lt0 ( nurl_str_get lt 0 )
+            ? == ( nurl_str_get lt - ( nurl_str_len lt ) 1 ) 42
+            { ? == n 0
+                { ( nurl_print `null` ) }
+                { ( nurl_print `inttoptr (i64 ` ) ( nurl_print ( nurl_str_int n ) )
+                    ( nurl_print ` to ` ) ( nurl_print lt ) ( nurl_print `)` ) } }
+            { ? | | == lt0 37 == lt0 123 == lt0 91
+                { ( nurl_print `zeroinitializer` ) }
+                { ( nurl_print ( nurl_str_int n ) ) } }
+            ( nurl_print `\n\n` )
             ( nurl_sym_def syms cname lt )
             ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
             ? is_mutable

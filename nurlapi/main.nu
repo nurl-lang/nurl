@@ -2887,6 +2887,24 @@ s combined_stdout s combined_stderr → v {
     }
 }
 
+// Serve the Game Boy WebAssembly demo page (static/gameboydemo.html).
+@ __serve_gameboydemo → HttpResponse {
+    : String sdir ( get_static_dir )
+    : String fp ( path_join ( string_data sdir ) `gameboydemo.html` )
+    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+    ( string_free sdir ) ( string_free fp )
+    ?? rd {
+        T body → {
+            : HttpResponse r ( response_new 200 )
+            ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+            ( response_set_body_bytes r body )
+            ( vec_free [u] body )
+            ^ r
+        }
+        F _ → { ^ ( response_text 500 `gameboydemo.html not found in static dir\n` ) }
+    }
+}
+
 @ h_stdlib_viewer HttpRequest req Params params → HttpResponse {
     ( nurl_print `[srv] GET /stdlib-viewer\n` )
     ^ ( __serve_viewer_html )
@@ -3979,6 +3997,7 @@ s combined_stdout s combined_stderr → v {
             ( router_get r `/NOTICE` \ HttpRequest req Params params → HttpResponse { ^ ( h_notice_raw req params ) } )
             ( router_get r `/stdlib-viewer` \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_viewer req params ) } )
             ( router_get r `/tests-viewer` \ HttpRequest req Params params → HttpResponse { ^ ( h_tests_viewer req params ) } )
+            ( router_get r `/gameboydemo` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_gameboydemo ) } )
             ( router_get r `/stdlib` \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_list req params ) } )
             ( router_get r `/tests` \ HttpRequest req Params params → HttpResponse { ^ ( h_tests_list req params ) } )
             ( router_get r `/stdlib/*path` \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_file req params ) } )
