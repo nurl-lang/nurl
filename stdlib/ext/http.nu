@@ -281,9 +281,13 @@ $ `stdlib/core/errors.nu`
                 = k + k 1
             }
             ? != has_colon 0 {
+                // `line` is an owned slice of `blob`; curl_slist_append
+                // copies the bytes, so `line` is dropped at this arm's
+                // exit by the compiler's owned-string auto-drop. Do NOT
+                // also free it by hand — that is a double free (the auto
+                // drop already releases it).
                 : s line ( nurl_str_slice blob i n )
                 : *u next ( nurl_curl_slist_append list line )
-                ( nurl_free # s line )
                 ? != # i next 0 { = list next } {}
             } {}
         } {}
