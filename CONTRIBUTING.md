@@ -86,8 +86,11 @@ enough — we'll iterate on the design in the issue thread.
 - **Add or update tests** for compiler changes. New language features
   belong in `compiler/tests/` as `.nu` snippets with their expected
   output checked in via `correct.txt`.
-- **Update docs** if you change observable behaviour. README, the
-  EBNF grammar in `spec/`, or `docs/GOTCHAS.md` as appropriate.
+- **Update docs** if you change observable behaviour. The README is a
+  thin overview that links to topic docs under [`docs/`](docs/); update
+  the relevant one (`docs/spec.md`, `docs/LIMITATIONS.md`,
+  `docs/NETWORKING.md`, …), the EBNF grammar in `spec/`, or
+  `docs/GOTCHAS.md`, and add a `CHANGELOG.md` entry, as appropriate.
 - **Keep commit messages descriptive.** A one-line subject is fine
   for small fixes; multi-line bodies are welcome for larger changes
   that warrant context.
@@ -122,8 +125,8 @@ Compile and run a single program:
 ./nurl.sh examples/fizzbuzz.nu
 ```
 
-The browser playground lives under `api/`; see its `README.md` for
-the container/dev setup.
+The browser playground lives under `nurlapi/`; see its `README.md`
+(and [`docs/PLAYGROUND.md`](docs/PLAYGROUND.md)) for the container/dev setup.
 
 ## Style conventions
 

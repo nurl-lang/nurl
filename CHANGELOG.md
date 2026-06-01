@@ -8,6 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **Playground now renders linked docs instead of 404ing.** Clicking a
+  relative link inside a rendered doc (e.g. `docs/LIMITATIONS.md` from the
+  README, or `../spec/grammar.ebnf` from a `docs/` page) used to hit "not
+  found". `nurlapi` now serves the repo doc tree by its natural path —
+  `/docs/*`, `/spec/*`, `/bench/*`, and the capitalised top-level
+  `/README.md` · `/ROADMAP.md` · `/CHANGELOG.md` · `/CONTRIBUTING.md` —
+  rendering `.md` to HTML (`__serve_repo_doc`, path-traversal-guarded) and
+  serving other files as text; `examples/*.md` renders too (`.nu` stays
+  JSON for the editor). Because the route hierarchy mirrors the repo, the
+  browser's own relative-link resolution chains correctly between docs. The
+  container image now copies the **whole `docs/` tree** (was only
+  `GOTCHAS.md`) plus `CHANGELOG.md`, `CONTRIBUTING.md`, and `bench/`.
+- **README refactored into a slim overview + topic docs.** The 991-line
+  kitchen-sink README is now a ~230-line overview (why/principles,
+  architecture, quick start, syntax-at-a-glance, a documentation index, and
+  project layout) that links out to focused pages under `docs/`. New:
+  `docs/BUILDING.md`, `docs/TOOLING.md`, `docs/PLATFORMS.md`,
+  `docs/PLAYGROUND.md` (HTTP API + playground + MCP), `docs/NETWORKING.md`
+  (sockets + MQTT), `docs/LIMITATIONS.md`. Syntax/type/memory sections now
+  point to the existing authoritative homes (`spec/grammar.ebnf`,
+  `docs/spec.md`, `docs/MEMORY.md`) instead of duplicating them.
+- **Removed stale / frequently-changing content.** The README no longer
+  hard-codes a grammar version, benchmark tables (point to `bench/`), the
+  example file list, the MCP tool count, or the `.vsix` version. The
+  PostgreSQL "Known Limitations" (claimed no binary protocol / async /
+  LISTEN-NOTIFY / COPY — all shipped) and the MQTT section (TLS-only +
+  verify-on-by-default + exactly-once QoS 2 + `subscribe_many`) are now
+  accurate. Dropped references to non-existent `spec/types.md` / `ir.md` /
+  `bootstrapping.md`, fixed `CONTRIBUTING.md`'s `api/` → `nurlapi/`, a dead
+  `HTTP_SERVER_PLAN.md` link in `ROADMAP.md`, the compiler's prefix-arity
+  diagnostic (pointed at the moved README section → `docs/LIMITATIONS.md`),
+  and `docs/GOTCHAS.md`'s cross-reference. All internal doc links verified.
+
 ### Added
 
 - **MQTT: multi-topic SUBSCRIBE** (`mqtt_subscribe_many`) sends one
