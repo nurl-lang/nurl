@@ -1,0 +1,3 @@
+# Defaults are fine for this example — the blink yields via vTaskDelay, so the
+# interrupt/task watchdogs stay enabled. `idf.py set-target esp32` regenerates
+# sdkconfig from these defaults.

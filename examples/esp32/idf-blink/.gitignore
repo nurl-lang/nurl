@@ -1,0 +1,5 @@
+/build/
+/sdkconfig
+/sdkconfig.old
+nurl/nurl_blink.ll
+nurl/nurl_blink.o
