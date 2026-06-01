@@ -148,7 +148,7 @@ product types via structs), with no subtyping and no implicit conversions.
 | HTTP API, playground & MCP server | [`docs/PLAYGROUND.md`](docs/PLAYGROUND.md) |
 | Target platforms | [`docs/PLATFORMS.md`](docs/PLATFORMS.md) |
 | Known limitations | [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) |
-| Compiler quirks / diagnostics | [`docs/GOTCHAS.md`](docs/GOTCHAS.md) |
+| Gotchas (compiler-diagnosed) | [`docs/GOTCHAS.md`](docs/GOTCHAS.md) |
 | Examples catalogue | [`examples/README.md`](examples/README.md) |
 | Roadmap · Changelog · Contributing | [`ROADMAP.md`](ROADMAP.md) · [`CHANGELOG.md`](CHANGELOG.md) · [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 

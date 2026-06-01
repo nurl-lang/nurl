@@ -108,8 +108,7 @@ $ `stdlib/ext/http_request.nu`
 // matches `target` (case-sensitive — form fields keep their wire
 // casing). -1 when no part matches. Caller pulls the part out via
 // `vec_data [MultipartPart]` + pointer indexing (the multi-field
-// `vec_get [MultipartPart]` default-construction path miscompiles —
-// see GOTCHAS.md item 4).
+// `vec_get [MultipartPart]` default-construction path miscompiles).
 @ multipart_find_first ( Vec MultipartPart ) parts s target → i {
     : i n ( vec_len [MultipartPart] parts )
     : *MultipartPart data ( vec_data [MultipartPart] parts )
@@ -157,7 +156,7 @@ $ `stdlib/ext/http_request.nu`
 // Bounded variant of `__find_head_end`: search for `\r\n\r\n` only
 // within `[start, end)`. Nested `?`s avoid the binary-`&` arity
 // trap (chaining four conditions through `&` only binds two args
-// per operator, see GOTCHAS.md item 1).
+// per operator — docs/LIMITATIONS.md → Grammar).
 @ __find_crlf_crlf_bounded ( Vec u ) buf i start i end → i {
     : i stop - end 3
     : ~ i i start

@@ -836,7 +836,7 @@ in a struct, passed to multiple functions, and returned freely. The
 backing environment is freed when the last reference is dropped.
 
 A closure may *capture by pointer* a mutable (`: ~`) multi-field struct
-binding (see [`docs/GOTCHAS.md` §5](GOTCHAS.md) for the lifetime rule):
+binding (see [`docs/MEMORY.md` §2.3](MEMORY.md) for the lifetime rule):
 the env block stores the caller's alloca pointer rather than a value
 snapshot, so writes through the closure reach the caller's binding. A
 by-pointer capture borrows the caller's stack frame and MUST NOT
@@ -1024,8 +1024,8 @@ IR blob + deterministic compiler + fixed-point check) mirrors Zig.
 - [`spec/grammar.ebnf`](../spec/grammar.ebnf) — authoritative grammar.
 - [`docs/MEMORY.md`](MEMORY.md) — memory model and borrow checker
   programmer's guide.
-- [`docs/GOTCHAS.md`](GOTCHAS.md) — compiler gotchas and the
-  diagnostics that catch them.
+- [`docs/GOTCHAS.md`](GOTCHAS.md) — source-level traps (currently none;
+  the compiler diagnoses them at the point of error).
 - [`docs/FORMAT.md`](FORMAT.md) — `nurlfmt` rules.
 - [`docs/ASYNC.md`](ASYNC.md) — async runtime design.
 - [`README.md`](../README.md) — project overview and tutorials.
