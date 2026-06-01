@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **BLAKE3 hash (pure NURL) — completes the hash family.** New
+  `stdlib/std/hash_blake3.nu` implements full BLAKE3 (the ChaCha-derived
+  compression function, 1024-byte chunks split into 64-byte blocks with
+  CHUNK_START/CHUNK_END flags, the binary Merkle tree of chaining values,
+  and the ROOT-flagged final node), exposed via `blake3_bytes` /
+  `blake3_hex` in `stdlib/std/hash.nu` (unkeyed, 32-byte output). All-NURL
+  u32 wrapping arithmetic, little-endian, binary-clean over `( Vec u )` —
+  **no C at all** (compiler and runtime untouched). Verified
+  digest-for-digest against the official BLAKE3 reference across every
+  structural path (empty, sub-block, the 1024-byte single chunk, the
+  1025-byte two-chunk boundary, balanced multi-chunk trees up to 5000
+  bytes); regression `compiler/tests/blake3.nu`; clean under ASan/UBSan/LSan.
+  Closes the ROADMAP "Extended Hash Family" item — SHA-1/256/512, MD5,
+  HMAC, and BLAKE3 are all shipped.
+
 - **`volatile_load` / `volatile_store` compiler intrinsics for MMIO.** Emit
   `load volatile` / `store volatile` as pure IR (no runtime call, so they
   work on a freestanding target). The optimizer can no longer hoist an MMIO
