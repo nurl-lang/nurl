@@ -35,6 +35,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `sqlite_close`/`sqlite_finalize`. Teardown zeroes the handle slot after
     closing, so a stale internal re-entry is a no-op. Verified leak-free
     and double-free-free under ASan + UBSan (`compiler/tests/sqlite_hardening.nu`).
+  - **Tier 3 — datatypes & transactions.** `sqlite_bind_double` /
+    `sqlite_column_double` (REAL columns), `sqlite_column_is_null`,
+    `sqlite_begin` / `commit` / `rollback`, and a closure-based
+    `with_transaction` that COMMITs on `Ok` and ROLLBACKs on `Err`
+    (propagating the original error).
+  - **Tier 4 — hardening for untrusted SQL/DB.** Extended result codes are
+    enabled on every open, so constraint failures now map to distinct
+    variants (`SqliteConstraintUnique` / `…ForeignKey` / `…NotNull` /
+    `…PrimaryKey` / `…Check`). Added `sqlite_last_insert_rowid`;
+    `sqlite_set_defensive` / `sqlite_enable_load_extension` /
+    `sqlite_harden` (DEFENSIVE on + extension-loading off — blocks
+    corruption/RCE from a hostile DB); `sqlite_limit` (bound query
+    complexity); a closure-based `sqlite_set_authorizer` /
+    `sqlite_clear_authorizer` that installs a sandbox callback with the
+    exact C ABI libsqlite expects (the closure's compiled function +
+    captured env are passed as `xAuth` + `pUserData`, the same mechanism
+    `thread_spawn` uses for `pthread_create` — no C bridge); and PRAGMA
+    helpers `sqlite_journal_wal` / `sqlite_foreign_keys` /
+    `sqlite_synchronous`. Verified under ASan + UBSan
+    (`compiler/tests/sqlite_tier34.nu`).
 
 ### Changed
 

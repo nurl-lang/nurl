@@ -18,16 +18,38 @@
 //   ( sqlite_prepare Database db s sql )         → ! Statement SqliteErr
 //   ( sqlite_bind_int Statement s i idx i val )       → ! v SqliteErr
 //   ( sqlite_bind_text Statement s i idx String val ) → ! v SqliteErr     NUL-safe, explicit length
+//   ( sqlite_bind_double Statement s i idx f val )    → ! v SqliteErr
 //   ( sqlite_bind_blob Statement s i idx ( Vec u ) data ) → ! v SqliteErr
 //   ( sqlite_bind_null Statement s i idx )            → ! v SqliteErr
 //   ( sqlite_step Statement s )                  → ! b SqliteErr          T = row, F = done
 //   ( sqlite_column_count Statement s )          → i
 //   ( sqlite_column_type Statement s i idx )     → i             1=int 2=float 3=text 4=blob 5=null
 //   ( sqlite_column_int Statement s i idx )      → i
+//   ( sqlite_column_double Statement s i idx )   → f
 //   ( sqlite_column_text Statement s i idx )     → String        OWNED, NUL-safe (exact byte length)
 //   ( sqlite_column_blob Statement s i idx )     → ( Vec u )      OWNED
+//   ( sqlite_column_is_null Statement s i idx )  → b
 //   ( sqlite_finalize Statement s )              → v
 //   ( sqlite_reset Statement s )                 → ! v SqliteErr  reset cursor + clear bindings
+//
+//   Transactions:
+//   ( sqlite_begin / commit / rollback Database db )  → ! i SqliteErr
+//   ( with_transaction Database db ( @ !v SqliteErr Database ) body ) → ! v SqliteErr
+//                                                COMMIT on Ok, ROLLBACK on Err
+//
+//   Introspection / hardening (untrusted SQL/DB):
+//   ( sqlite_last_insert_rowid Database db )     → i
+//   ( sqlite_set_defensive Database db b on )    → ! v SqliteErr
+//   ( sqlite_enable_load_extension Database db b on ) → ! v SqliteErr
+//   ( sqlite_harden Database db )                → ! v SqliteErr  DEFENSIVE on + load_ext off
+//   ( sqlite_limit Database db i id i newVal )   → i              prior value
+//   ( sqlite_set_authorizer Database db ( @ i i s s s s ) auth ) → ! v SqliteErr
+//   ( sqlite_clear_authorizer Database db )      → ! v SqliteErr
+//
+//   PRAGMA helpers:
+//   ( sqlite_journal_wal Database db )           → ! i SqliteErr
+//   ( sqlite_foreign_keys Database db b on )     → ! i SqliteErr
+//   ( sqlite_synchronous Database db s mode )    → ! i SqliteErr  "OFF"/"NORMAL"/"FULL"/"EXTRA"
 //
 // Handle layout (i64 slots, nurl_zalloc'd):
 //
@@ -91,6 +113,10 @@ $ `stdlib/core/cell.nu`
 
 & `sqlite3` @ sqlite3_bind_null s stmt i idx → i
 
+& `sqlite3` @ sqlite3_bind_double s stmt i idx f value → i
+
+& `sqlite3` @ sqlite3_column_double s stmt i idx → f
+
 & `sqlite3` @ sqlite3_column_int64 s stmt i idx → i
 
 & `sqlite3` @ sqlite3_column_text s stmt i idx → s
@@ -108,6 +134,21 @@ $ `stdlib/core/cell.nu`
 & `sqlite3` @ sqlite3_errmsg s db → s
 
 & `sqlite3` @ sqlite3_free s p → v
+
+& `sqlite3` @ sqlite3_last_insert_rowid s db → i
+
+& `sqlite3` @ sqlite3_extended_result_codes s db i onoff → i
+
+& `sqlite3` @ sqlite3_extended_errcode s db → i
+
+& `sqlite3` @ sqlite3_limit s db i id i newVal → i
+
+& `sqlite3` @ sqlite3_set_authorizer s db *u xAuth *u pUserData → i
+
+// sqlite3_db_config(sqlite3*, int op, ...) is variadic in C. For the
+// (int onoff, int *pRes) verbs we use (DEFENSIVE / ENABLE_LOAD_EXTENSION)
+// the `...` marker makes nurlc emit the correct variadic-call ABI.
+& `sqlite3` @ sqlite3_db_config s db i op ... → i
 
 // SQLITE_TRANSIENT — the documented constant value `((sqlite3_destructor_type)-1)`
 // telling sqlite3_bind_text / _blob to copy the caller's bytes immediately.
@@ -138,6 +179,47 @@ $ `stdlib/core/cell.nu`
 : i SQLITE_OPEN_FULLMUTEX 0x00010000
 : i SQLITE_OPEN_NOFOLLOW 0x01000000
 
+// ── db_config verbs (sqlite3.h SQLITE_DBCONFIG_*) ─────────────────
+: i SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION 1005
+: i SQLITE_DBCONFIG_DEFENSIVE 1010
+
+// ── limit categories (sqlite3.h SQLITE_LIMIT_*) ───────────────────
+: i SQLITE_LIMIT_LENGTH 0
+: i SQLITE_LIMIT_SQL_LENGTH 1
+: i SQLITE_LIMIT_COLUMN 2
+: i SQLITE_LIMIT_EXPR_DEPTH 3
+: i SQLITE_LIMIT_COMPOUND_SELECT 4
+: i SQLITE_LIMIT_VDBE_OP 5
+: i SQLITE_LIMIT_FUNCTION_ARG 6
+: i SQLITE_LIMIT_ATTACHED 7
+: i SQLITE_LIMIT_LIKE_PATTERN_LENGTH 8
+: i SQLITE_LIMIT_VARIABLE_NUMBER 9
+: i SQLITE_LIMIT_TRIGGER_DEPTH 10
+
+// ── authorizer return codes (xAuth must return one of these) ──────
+// SQLITE_OK (0) = allow. The two below are the only other legal returns.
+: i SQLITE_DENY 1    // abort the SQL statement with an error
+: i SQLITE_IGNORE 2  // disallow the action but don't error (NULL/skip)
+
+// ── authorizer action codes (2nd arg to xAuth) — common subset ────
+: i SQLITE_CREATE_INDEX 1
+: i SQLITE_CREATE_TABLE 2
+: i SQLITE_CREATE_TEMP_TABLE 4
+: i SQLITE_CREATE_TRIGGER 7
+: i SQLITE_DELETE 9
+: i SQLITE_DROP_INDEX 10
+: i SQLITE_DROP_TABLE 11
+: i SQLITE_DROP_TRIGGER 14
+: i SQLITE_INSERT 18
+: i SQLITE_PRAGMA 19
+: i SQLITE_READ 20
+: i SQLITE_SELECT 21
+: i SQLITE_TRANSACTION 22
+: i SQLITE_UPDATE 23
+: i SQLITE_ATTACH 24
+: i SQLITE_DETACH 25
+: i SQLITE_FUNCTION 31
+
 : | SqliteErr {
     SqliteUnsupported  // build host lacked libsqlite3-dev
     SqliteOpen  // open failed (bad path, perm)
@@ -145,7 +227,14 @@ $ `stdlib/core/cell.nu`
     SqliteBusy  // SQLITE_BUSY == 5
     SqliteLocked  // SQLITE_LOCKED == 6
     SqliteReadOnly  // SQLITE_READONLY == 8 (write to a read-only DB)
-    SqliteConstraint  // SQLITE_CONSTRAINT == 19
+    SqliteConstraint  // SQLITE_CONSTRAINT == 19 (unmapped extended sub-code)
+    // Extended constraint sub-codes (surfaced once extended result
+    // codes are enabled — they are, automatically, on every open).
+    SqliteConstraintUnique      // SQLITE_CONSTRAINT_UNIQUE     == 2067
+    SqliteConstraintForeignKey  // SQLITE_CONSTRAINT_FOREIGNKEY == 787
+    SqliteConstraintNotNull     // SQLITE_CONSTRAINT_NOTNULL    == 1299
+    SqliteConstraintPrimaryKey  // SQLITE_CONSTRAINT_PRIMARYKEY == 1555
+    SqliteConstraintCheck       // SQLITE_CONSTRAINT_CHECK      == 275
     SqliteMisuse  // SQLITE_MISUSE == 21
     SqliteIo  // SQLITE_IOERR == 10
     SqliteOther  // anything else, including unmapped codes
@@ -163,6 +252,11 @@ $ `stdlib/core/cell.nu`
         SqliteLocked → `SqliteLocked`
         SqliteReadOnly → `SqliteReadOnly`
         SqliteConstraint → `SqliteConstraint`
+        SqliteConstraintUnique → `SqliteConstraintUnique`
+        SqliteConstraintForeignKey → `SqliteConstraintForeignKey`
+        SqliteConstraintNotNull → `SqliteConstraintNotNull`
+        SqliteConstraintPrimaryKey → `SqliteConstraintPrimaryKey`
+        SqliteConstraintCheck → `SqliteConstraintCheck`
         SqliteMisuse → `SqliteMisuse`
         SqliteIo → `SqliteIo`
         SqliteOther → `SqliteOther`
@@ -171,13 +265,24 @@ $ `stdlib/core/cell.nu`
 
 @ __sqlite_err_of i ek → SqliteErr {
     ? == ek NURL_SQLITE_UNSUPPORTED { ^ # SqliteErr SqliteUnsupported } {}
-    ? == ek 1 { ^ # SqliteErr SqliteSyntax } {}
-    ? == ek 5 { ^ # SqliteErr SqliteBusy } {}
-    ? == ek 6 { ^ # SqliteErr SqliteLocked } {}
-    ? == ek 8 { ^ # SqliteErr SqliteReadOnly } {}
-    ? == ek 10 { ^ # SqliteErr SqliteIo } {}
-    ? == ek 19 { ^ # SqliteErr SqliteConstraint } {}
-    ? == ek 21 { ^ # SqliteErr SqliteMisuse } {}
+    // Extended constraint sub-codes first (specific → general). These
+    // are what `sqlite3_extended_result_codes(db, 1)` surfaces so the
+    // caller can tell a UNIQUE violation from a FOREIGN KEY one.
+    ? == ek 2067 { ^ # SqliteErr SqliteConstraintUnique } {}
+    ? == ek 787 { ^ # SqliteErr SqliteConstraintForeignKey } {}
+    ? == ek 1299 { ^ # SqliteErr SqliteConstraintNotNull } {}
+    ? == ek 1555 { ^ # SqliteErr SqliteConstraintPrimaryKey } {}
+    ? == ek 275 { ^ # SqliteErr SqliteConstraintCheck } {}
+    // Primary code fallback: the low byte of any (extended or not) code
+    // is the historical primary result code.
+    : i prim & ek 0xFF
+    ? == prim 1 { ^ # SqliteErr SqliteSyntax } {}
+    ? == prim 5 { ^ # SqliteErr SqliteBusy } {}
+    ? == prim 6 { ^ # SqliteErr SqliteLocked } {}
+    ? == prim 8 { ^ # SqliteErr SqliteReadOnly } {}
+    ? == prim 10 { ^ # SqliteErr SqliteIo } {}
+    ? == prim 19 { ^ # SqliteErr SqliteConstraint } {}
+    ? == prim 21 { ^ # SqliteErr SqliteMisuse } {}
     ^ # SqliteErr SqliteOther
 }
 
@@ -251,6 +356,9 @@ $ `stdlib/core/cell.nu`
         ( __sqlite_db_destroy # s h )
         ^ @ !Database SqliteErr { F ( __sqlite_err_of rc ) }
     } {}
+    // Surface extended result codes (e.g. CONSTRAINT_UNIQUE vs
+    // CONSTRAINT_FOREIGNKEY) on every error from this connection.
+    ( sqlite3_extended_result_codes db 1 )
     : s rp # s h
     ^ @ !Database SqliteErr { T @ Database { rp } }
 }
@@ -409,6 +517,19 @@ $ `stdlib/core/cell.nu`
     ^ @ !v SqliteErr { T 0 }
 }
 
+// Bind an f64 (REAL) parameter.
+@ sqlite_bind_double Statement s i idx f val → !v SqliteErr {
+    : s rp . s raw
+    : i raw # i rp
+    : s h # s raw
+    : s stmt # s ( nurl_peek h 0 )
+    ? == # i stmt 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteUnsupported } } {}
+    : i rc ( sqlite3_bind_double stmt idx val )
+    ( nurl_poke h 1 rc )
+    ? != rc SQLITE_OK { ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
+    ^ @ !v SqliteErr { T 0 }
+}
+
 // Bind a BLOB from a `Vec u`. The exact byte count is passed and the
 // bytes are copied immediately (SQLITE_TRANSIENT). The only fully
 // binary-safe write path.
@@ -521,6 +642,188 @@ $ `stdlib/core/cell.nu`
     ( nurl_memcpy dst src n )
     : b _ok ( vec_set_len [u] out n )
     ^ out
+}
+
+// Read an f64 (REAL) column. Returns 0.0 on a closed statement.
+@ sqlite_column_double Statement s i idx → f {
+    : s rp . s raw
+    : i raw # i rp
+    : s h # s raw
+    : s stmt # s ( nurl_peek h 0 )
+    ? == # i stmt 0 { ^ # f 0 } {}
+    ^ ( sqlite3_column_double stmt idx )
+}
+
+// NULL check for a column (column_type == SQLITE_NULL == 5).
+@ sqlite_column_is_null Statement s i idx → b {
+    ^ == ( sqlite_column_type s idx ) 5
+}
+
+// ── Transactions (§9) ─────────────────────────────────────────────
+
+@ sqlite_begin Database db → !i SqliteErr {
+    ^ ( sqlite_exec db `BEGIN` )
+}
+
+@ sqlite_commit Database db → !i SqliteErr {
+    ^ ( sqlite_exec db `COMMIT` )
+}
+
+@ sqlite_rollback Database db → !i SqliteErr {
+    ^ ( sqlite_exec db `ROLLBACK` )
+}
+
+// Run `body` inside a transaction: BEGIN, then call the closure; COMMIT
+// on Ok, ROLLBACK on Err (propagating the original error). The closure
+// receives the (borrowed) Database so it can prepare/exec inside the
+// transaction. `db` is NOT closed here — it is a borrow.
+@ with_transaction Database db ( @ !v SqliteErr Database ) body → !v SqliteErr {
+    : !i SqliteErr bg ( sqlite_begin db )
+    ?? bg {
+        F e → { ^ @ !v SqliteErr { F e } }
+        T _ → {}
+    }
+    : !v SqliteErr r ( body db )
+    ?? r {
+        F e → {
+            : !i SqliteErr _rb ( sqlite_rollback db )
+            ^ @ !v SqliteErr { F e }
+        }
+        T _ → {
+            : !i SqliteErr cm ( sqlite_commit db )
+            ?? cm {
+                F e2 → { ^ @ !v SqliteErr { F e2 } }
+                T _ → { ^ @ !v SqliteErr { T 0 } }
+            }
+        }
+    }
+}
+
+// ── Introspection (§12) ───────────────────────────────────────────
+
+@ sqlite_last_insert_rowid Database db → i {
+    : s rp . db raw
+    : i raw # i rp
+    ? == raw 0 { ^ 0 } {}
+    : s h # s raw
+    : s db_ptr # s ( nurl_peek h 0 )
+    ? == # i db_ptr 0 { ^ 0 } {}
+    ^ ( sqlite3_last_insert_rowid db_ptr )
+}
+
+// ── Hardening for untrusted SQL / DB (§13 / §14) ──────────────────
+
+// SQLITE_DBCONFIG_DEFENSIVE: refuse SQL that can corrupt the DB (writes
+// to shadow tables, schema poking). Recommended for untrusted SQL.
+@ sqlite_set_defensive Database db b on → !v SqliteErr {
+    : s rp . db raw
+    : i raw # i rp
+    ? == raw 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteOther } } {}
+    : s h # s raw
+    : s db_ptr # s ( nurl_peek h 0 )
+    ? == # i db_ptr 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteUnsupported } } {}
+    : i rc ( sqlite3_db_config db_ptr SQLITE_DBCONFIG_DEFENSIVE ? on 1 0 # *u 0 )
+    ? != rc SQLITE_OK { ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
+    ^ @ !v SqliteErr { T 0 }
+}
+
+// SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION: gate the load_extension() SQL
+// function + C API. Disable it (on = F) to block extension-loading RCE
+// from a hostile DB / SQL string.
+@ sqlite_enable_load_extension Database db b on → !v SqliteErr {
+    : s rp . db raw
+    : i raw # i rp
+    ? == raw 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteOther } } {}
+    : s h # s raw
+    : s db_ptr # s ( nurl_peek h 0 )
+    ? == # i db_ptr 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteUnsupported } } {}
+    : i rc ( sqlite3_db_config db_ptr SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION ? on 1 0 # *u 0 )
+    ? != rc SQLITE_OK { ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
+    ^ @ !v SqliteErr { T 0 }
+}
+
+// One-call hardening for opening an untrusted database: turn DEFENSIVE
+// on and extension-loading off.
+@ sqlite_harden Database db → !v SqliteErr {
+    : !v SqliteErr d ( sqlite_set_defensive db T )
+    ?? d { F e → { ^ @ !v SqliteErr { F e } } T _ → {} }
+    ^ ( sqlite_enable_load_extension db F )
+}
+
+// Lower a complexity limit (e.g. SQLITE_LIMIT_SQL_LENGTH,
+// _LIKE_PATTERN_LENGTH, _EXPR_DEPTH, _VDBE_OP) to bound the cost of
+// untrusted SQL. Returns the PRIOR value of the limit (sqlite3_limit
+// semantics); a negative `newVal` queries without changing.
+@ sqlite_limit Database db i id i newVal → i {
+    : s rp . db raw
+    : i raw # i rp
+    ? == raw 0 { ^ -1 } {}
+    : s h # s raw
+    : s db_ptr # s ( nurl_peek h 0 )
+    ? == # i db_ptr 0 { ^ -1 } {}
+    ^ ( sqlite3_limit db_ptr id newVal )
+}
+
+// Install an authorizer callback to sandbox untrusted SQL. The closure
+// is invoked by libsqlite during prepare as
+//   ( auth action arg1 arg2 db_name trigger_or_view )
+// and must return SQLITE_OK (allow), SQLITE_DENY (abort), or
+// SQLITE_IGNORE (silently skip / NULL the column). The closure's
+// compiled function has the exact C ABI libsqlite expects
+// (`int(void* env, int action, const char*, const char*, const char*,
+// const char*)`) — its env pointer is passed as pUserData. The closure
+// must outlive the registration; keep it alive (e.g. a top-level /
+// capture-free closure) until `sqlite_clear_authorizer` or close.
+@ sqlite_set_authorizer Database db ( @ i i s s s s ) auth → !v SqliteErr {
+    : s rp . db raw
+    : i raw # i rp
+    ? == raw 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteOther } } {}
+    : s h # s raw
+    : s db_ptr # s ( nurl_peek h 0 )
+    ? == # i db_ptr 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteUnsupported } } {}
+    : *u fnp # *u auth 0
+    : *u env # *u auth 1
+    : i rc ( sqlite3_set_authorizer db_ptr fnp env )
+    ( nurl_poke h 1 rc )
+    ? != rc SQLITE_OK { ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
+    ^ @ !v SqliteErr { T 0 }
+}
+
+// Remove a previously-installed authorizer.
+@ sqlite_clear_authorizer Database db → !v SqliteErr {
+    : s rp . db raw
+    : i raw # i rp
+    ? == raw 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteOther } } {}
+    : s h # s raw
+    : s db_ptr # s ( nurl_peek h 0 )
+    ? == # i db_ptr 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteUnsupported } } {}
+    : i rc ( sqlite3_set_authorizer db_ptr # *u 0 # *u 0 )
+    ? != rc SQLITE_OK { ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
+    ^ @ !v SqliteErr { T 0 }
+}
+
+// ── PRAGMA helpers (§16) ──────────────────────────────────────────
+
+// PRAGMA journal_mode=WAL — write-ahead logging (better concurrency).
+@ sqlite_journal_wal Database db → !i SqliteErr {
+    ^ ( sqlite_exec db `PRAGMA journal_mode=WAL` )
+}
+
+// PRAGMA foreign_keys=ON|OFF — enforce FK constraints (off by default
+// in SQLite for legacy reasons).
+@ sqlite_foreign_keys Database db b on → !i SqliteErr {
+    ^ ( sqlite_exec db ? on `PRAGMA foreign_keys=ON` `PRAGMA foreign_keys=OFF` )
+}
+
+// PRAGMA synchronous=<mode>. `mode` is "OFF" / "NORMAL" / "FULL" /
+// "EXTRA". NORMAL is the recommended setting under WAL.
+@ sqlite_synchronous Database db s mode → !i SqliteErr {
+    : String sql ( string_with_cap 32 )
+    ( string_push_str sql `PRAGMA synchronous=` )
+    ( string_push_str sql mode )
+    : !i SqliteErr r ( sqlite_exec db ( string_data sql ) )
+    ( string_free sql )
+    ^ r
 }
 
 // ── Auto-drop (Drop trait) ────────────────────────────────────────
