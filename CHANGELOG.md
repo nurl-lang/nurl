@@ -8,6 +8,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **SQLite production hardening (Tier 1 + Tier 2).** `stdlib/ext/sqlite.nu`
+  is now binary-safe and resource-safe:
+  - **NUL-safe text I/O.** `sqlite_column_text` reads the column's exact
+    byte length via `sqlite3_column_bytes` (was `strlen`, which truncated
+    at the first embedded NUL), and `sqlite_bind_text` now takes a `String`
+    and passes an explicit byte length to `sqlite3_bind_text` instead of
+    `-1` — strings with embedded NULs round-trip intact.
+  - **BLOB support.** New `sqlite_bind_blob` (`Vec u` → `sqlite3_bind_blob`
+    + `SQLITE_TRANSIENT`) and `sqlite_column_blob` (`sqlite3_column_blob` +
+    `_bytes` → owned `Vec u`) — the binary-safe write/read path.
+  - **`sqlite_open_v2` with open flags.** `SQLITE_OPEN_READONLY` /
+    `READWRITE` / `CREATE` / `URI` / `NOMUTEX` / `FULLMUTEX` / `NOFOLLOW`
+    constants exposed; `sqlite_open` is now `READWRITE|CREATE` over
+    `open_v2`. A read-only connection refuses writes (new `SqliteReadOnly`
+    error variant) instead of silently creating a file.
+  - **`sqlite_busy_timeout`** wraps `sqlite3_busy_timeout` so `SQLITE_BUSY`
+    blocks-and-retries under concurrent access rather than failing
+    immediately.
+  - **`% Drop` auto-close.** `Database` and `Statement` implement the Drop
+    trait; a scope-local handle — including one unwrapped from a
+    `! Database E` / `! Statement E` result in a match arm — closes itself
+    on every path (Ok, Err, early return) with no manual
+    `sqlite_close`/`sqlite_finalize`. Teardown zeroes the handle slot after
+    closing, so a stale internal re-entry is a no-op. Verified leak-free
+    and double-free-free under ASan + UBSan (`compiler/tests/sqlite_hardening.nu`).
+  - **Tier 3 — datatypes & transactions.** `sqlite_bind_double` /
+    `sqlite_column_double` (REAL columns), `sqlite_column_is_null`,
+    `sqlite_begin` / `commit` / `rollback`, and a closure-based
+    `with_transaction` that COMMITs on `Ok` and ROLLBACKs on `Err`
+    (propagating the original error).
+  - **Tier 4 — hardening for untrusted SQL/DB.** Extended result codes are
+    enabled on every open, so constraint failures now map to distinct
+    variants (`SqliteConstraintUnique` / `…ForeignKey` / `…NotNull` /
+    `…PrimaryKey` / `…Check`). Added `sqlite_last_insert_rowid`;
+    `sqlite_set_defensive` / `sqlite_enable_load_extension` /
+    `sqlite_harden` (DEFENSIVE on + extension-loading off — blocks
+    corruption/RCE from a hostile DB); `sqlite_limit` (bound query
+    complexity); a closure-based `sqlite_set_authorizer` /
+    `sqlite_clear_authorizer` that installs a sandbox callback with the
+    exact C ABI libsqlite expects (the closure's compiled function +
+    captured env are passed as `xAuth` + `pUserData`, the same mechanism
+    `thread_spawn` uses for `pthread_create` — no C bridge); and PRAGMA
+    helpers `sqlite_journal_wal` / `sqlite_foreign_keys` /
+    `sqlite_synchronous`. Verified under ASan + UBSan
+    (`compiler/tests/sqlite_tier34.nu`).
+
+### Changed
+
+- **Match-arm payload bindings now participate in auto-drop.** A `% Drop`
+  type bound as a `??` match-arm payload (e.g. `?? r { T db → … }`) — or a
+  `:` let inside a match arm — is now dropped at arm scope exit, on the same
+  void-arm-only rule used for owned strings/structs. Previously such
+  bindings were never dropped (a latent leak); this is what lets the SQLite
+  handles above close automatically in the idiomatic result-unwrap flow.
+
 ### Documentation
 
 - **ROADMAP brought up to date.** The Status header now reads **Grammar v2.1**

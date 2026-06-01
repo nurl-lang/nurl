@@ -1,9 +1,7 @@
 // stdlib/ext/postgres.nu — PostgreSQL client via direct libpq FFI.
 //
 // **Pure-NURL FFI** — every libpq symbol is declared with `& `pq` @ ...`
-// directly in this file. There is no `runtime.c` bridge, in contrast
-// to `stdlib/ext/sqlite.nu` which routes through `nurl_sqlite_*`
-// runtime wrappers. The compiler's FFI-lib-check (`gen_ffi_decl`)
+// directly in this file. The compiler's FFI-lib-check (`gen_ffi_decl`)
 // scans every `&`-decl for a build-time sentinel `stdlib/runtime.pq`;
 // absent libpq-dev → clear compile-time diagnostic, not a cryptic
 // linker error.

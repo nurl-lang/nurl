@@ -4754,9 +4754,11 @@
             // don't leak into sibling arms (see gen_cond for the same reasoning).
             : s old_strs_m ``
             : s old_structs_m ``
+            : s old_user_m ``
             ? != 0 g_auto_drop_strings
             { = old_strs_m ( nurl_sym_get syms `__owned_strings__` )
                 = old_structs_m ( nurl_sym_get syms `__owned_struct_fields__` )
+                = old_user_m ( nurl_sym_get syms `__user_drops__` )
                 ( nurl_sym_push syms )
             } {}
 
@@ -4985,6 +4987,21 @@
                 ( nurl_print `* ` ) ( nurl_print vp0 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv0 pt0_eff )
                 ( nurl_sym_def syms ( nurl_str_cat pv0 `__ptr` ) vp0 )
+                // Phase 2D: a match-arm payload binding OWNS its value just
+                // like a `:` let, so a `% Drop` impl on the payload type must
+                // fire at arm scope exit. Register it here (mirrors gen_let's
+                // user-drop registration) so an unwrapped `! Database E` /
+                // `? Statement` handle auto-closes without a manual call even
+                // on the Err / early-exit paths. Skipped if the value escapes
+                // the arm (mem_drop_new_user_drops only fires on a void arm).
+                ? != 0 g_auto_drop_strings
+                { : s arm_impl_key ( nurl_str_cat `drop##` pt0_eff )
+                    : s arm_impl_mangle ( nurl_sym_get g_impl_name_syms arm_impl_key )
+                    ? != 0 ( nurl_str_len arm_impl_mangle )
+                    { ( mem_own_add_user_drop syms vp0 pt0_eff ) }
+                    {}
+                }
+                {}
                 // Propagate unsigned flag for `?u` / `?u16` / `?u32` /
                 // `?u64` matches. T-arm only (F-arm has no payload).
                 // Without this, the alloca drops the unsigned-ness and a
@@ -5033,6 +5050,13 @@
                 ( nurl_print `* ` ) ( nurl_print vp1 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv1 pt1 )
                 ( nurl_sym_def syms ( nurl_str_cat pv1 `__ptr` ) vp1 )
+                ? != 0 g_auto_drop_strings
+                { : s a1_key ( nurl_str_cat `drop##` pt1 )
+                    ? != 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms a1_key ) )
+                    { ( mem_own_add_user_drop syms vp1 pt1 ) }
+                    {}
+                }
+                {}
             } {}
             // Bind third payload variable (enum field 3)
             ? != 0 ( nurl_str_len pv2 ) {
@@ -5068,6 +5092,13 @@
                 ( nurl_print `* ` ) ( nurl_print vp2 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv2 pt2 )
                 ( nurl_sym_def syms ( nurl_str_cat pv2 `__ptr` ) vp2 )
+                ? != 0 g_auto_drop_strings
+                { : s a2_key ( nurl_str_cat `drop##` pt2 )
+                    ? != 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms a2_key ) )
+                    { ( mem_own_add_user_drop syms vp2 pt2 ) }
+                    {}
+                }
+                {}
             } {}
 
             // Guard test (after payload binding so it sees the bound
@@ -5113,7 +5144,8 @@
             // through to the phi consumer; freeing here would UAF).
             ? & & != 0 g_auto_drop_strings ( seq arm_type `void` ) == arm_did_ret 0
             { ( mem_drop_new_strings syms cg old_strs_m )
-                ( mem_drop_new_struct_fields syms cg old_structs_m ) } {}
+                ( mem_drop_new_struct_fields syms cg old_structs_m )
+                ( mem_drop_new_user_drops syms cg old_user_m ) } {}
             ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
 
             // Branch to end + record phi entry only when the arm didn't
