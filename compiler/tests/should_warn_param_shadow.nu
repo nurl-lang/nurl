@@ -1,4 +1,4 @@
-// should_warn_param_shadow.nu — exercises the docs/GOTCHAS.md item 3
+// should_warn_param_shadow.nu — exercises the same-line param-shadow
 // foot-gun pattern: a `:` binding declares a name that matches one of
 // the enclosing function's parameters. The classic case is the one
 // from the gotcha doc: `: i z + z 7` where `z` is a parameter. The

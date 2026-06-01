@@ -1,7 +1,7 @@
 // borrow_escape_closure.nu — escape analysis for closure-captured
 // mutable struct pointers.
 //
-// docs/GOTCHAS.md item 5: a closure that captures a `: ~`-mutable
+// docs/MEMORY.md §2.3: a closure that captures a `: ~`-mutable
 // multi-field struct is captured by POINTER into the enclosing
 // function's stack frame. Returning it (or storing it somewhere that
 // outlives the caller) dangles the pointer — any later invocation is

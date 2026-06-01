@@ -8,7 +8,7 @@
 // enum type (`<name>__variants` side-table set) and emits an
 // `insertvalue %Enum undef, i64 val, 0` wrapper before the store.
 //
-// Closes docs/GOTCHAS.md §3. Also incidentally closes the same shape
+// Covers `: ~ MyEnum` mutable enum binding. Also incidentally the same shape
 // in the immutable case (`: NetErr last NetOther`), which was equally
 // broken but undocumented.
 

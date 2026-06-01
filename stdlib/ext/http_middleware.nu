@@ -95,7 +95,7 @@ $ `stdlib/core/vec.nu`
 // by value — `=` writes inside `with_metrics` would land on a dead
 // local copy. The 2026-05-14 fix to mutable multi-field-struct
 // captures (`: ~ Metrics m` is now captured by pointer, see
-// docs/GOTCHAS.md §2) makes the plain-fields shape viable for new
+// docs/MEMORY.md §2.3) makes the plain-fields shape viable for new
 // code. We keep the Vec[i] shape here because (a) it's already
 // shipped, tested, and exposed through `metrics_render` / Prometheus
 // exposition, and (b) the handle shape composes cleanly with

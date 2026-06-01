@@ -1,7 +1,7 @@
 // borrow_escape_struct.nu — escape analysis must see through a
 // struct wrapper.
 //
-// docs/GOTCHAS.md item 5 / item 8: a closure that captures a
+// docs/MEMORY.md §2.3: a closure that captures a
 // `: ~`-mutable multi-field struct is captured BY POINTER into the
 // enclosing frame. The escape check rejects returning such a closure
 // directly (`^ closure`); it must also reject wrapping it in a struct

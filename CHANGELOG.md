@@ -10,6 +10,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- **ROADMAP brought up to date.** The Status header now reads **Grammar v2.1**
+  (was v2.0) and points at `spec/grammar.ebnf`. Items that were marked pending
+  but are in fact shipped are now `[x]`: the **async runtime** (stackful M:N
+  fibers — the Coroutines-vs-async/await decision is settled), **HTTP server
+  Phase 8** (production hardening) and **Phase 9** server-side (TLS+SNI+ALPN+
+  mTLS+reload, HTTP/2, WebSocket — client-side remains), the **optional
+  `-lcurl`** sentinel-gated linking, and the **`nurlc_lastgood.nu` refresh**
+  lifecycle (documented via `--refresh-bootstrap`). Added an explicit
+  "What's actually left" summary to the Status section (HTTP/2+WebSocket
+  client-side; mobile/`no_std` targets; SQLite BLOB/double; reverse-proxy
+  binary bodies; blake3; MCP SSE/sessions/auth; the `runtime.c` file-split;
+  a compiler-embedded LLM; bench peers). Stale build-size figures left only
+  in dated historical "shipped" entries (records, not current claims).
+
+- **Removed hard-coded build-artifact sizes from the reference docs.** The
+  `~480 KB nurlc.wasm` (`docs/PLAYGROUND.md`) and `~1.6 MB`
+  `nurlc_lastgood.ll` (`docs/BUILDING.md`) figures drift every build and
+  mislead when the real artifact differs. Build sizes belong in the
+  changelog/release notes (tied to a specific version), not in
+  instructional docs.
+
+- **Cleaned stale `GOTCHAS.md item N` / `§N` references out of code comments.**
+  After `docs/GOTCHAS.md` lost its numbered list, ~44 source comments (in
+  `compiler/nurlc.nu`, the `nurlc_lastgood.nu` snapshot mirror, nine
+  `compiler/tests/*.nu`, and `stdlib/ext/{http_middleware}.nu`) still pointed
+  at item/section numbers that no longer exist. Each now points at the real
+  home (escape/lifetime → `docs/MEMORY.md` §2.3, grammar → `docs/LIMITATIONS.md`)
+  or simply describes the behaviour inline. The `nurlc_lastgood.nu` edits are
+  comment-only — verified to produce byte-identical IR, so the committed
+  bootstrap `nurlc_lastgood.ll` is unchanged; the build still reaches its
+  fixed point and the full test suite passes.
+
 - **`docs/GOTCHAS.md` reduced to "Currently no known gotchas."** Every
   source-level trap is now a compiler diagnostic (`error:`/`warning:` with a
   caret + cure), so the page no longer lists a museum of resolved issues.
