@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- **`docs/LIMITATIONS.md` scoped to actual language/compiler limitations.**
+  Removed the standard-library capability tables (PostgreSQL, SQLite,
+  panic/recover) that were never language limitations — that information
+  lives with each module (stdlib headers, `ROADMAP.md`, `TODO.md`). Moved
+  the HTTPS/TLS table to [`docs/NETWORKING.md`](docs/NETWORKING.md) where it
+  belongs. Removed two entries that were **stale** (the behaviour already
+  works, verified empirically): "no tail-call optimisation" (self-recursive
+  tail calls emit `tail call` → LLVM sibcall-opt; 50M-deep tail recursion
+  runs without overflow) and "enum forward references unsupported"
+  (`scan_type_names` registers type names before codegen, so a struct
+  payload can be declared after its enum). The page now lists only
+  language/compiler constraints (Type system, Functions/calls, Enums,
+  Imports, Grammar).
 - **Playground now renders linked docs instead of 404ing.** Clicking a
   relative link inside a rendered doc (e.g. `docs/LIMITATIONS.md` from the
   README, or `../spec/grammar.ebnf` from a `docs/` page) used to hit "not

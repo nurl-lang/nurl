@@ -8,7 +8,7 @@ reactor for async I/O.
 - **TCP server** — `tcp_listen` / `tcp_listen_tls` + `tcp_accept`, with a full
   HTTP/1.1 server stack on top (`stdlib/ext/http_*` — routing, static files,
   middleware, multipart, WebSockets, TLS with SNI + ALPN + mTLS + live cert
-  reload; see [`LIMITATIONS.md` → HTTPS/TLS](LIMITATIONS.md)).
+  reload; see [HTTPS / TLS](#https--tls) below).
 - **TCP client** — `tcp_connect` / `tcp_connect_tls`. TLS client handshake
   with SNI; the `verify` flag turns on peer-certificate chain + host-name
   verification against the system trust store. The primitive behind the MQTT
@@ -76,3 +76,19 @@ What it covers:
 
 > **Not yet:** pipelined (multiple-in-flight) publishing — calls are
 > synchronous, one packet in flight.
+
+## HTTPS / TLS
+
+TLS (server and client) is provided by the runtime's `libssl` integration
+(build-time dependency: `libssl`, via pkg-config). The HTTP server stack
+picks it up transparently — swap `tcp_listen` for `tcp_listen_tls`.
+
+| Capability | Notes |
+|---|---|
+| **TLS server-side** — `tcp_listen_tls host port cert_path key_path → !TcpListener NetErr` | HttpServer integrates without code changes. |
+| **TLS client-side** — `tcp_connect_tls host port verify` | Client handshake with SNI; `verify` enables peer-certificate chain + host-name verification against the system trust store. The primitive behind the MQTT client and any outbound TLS. |
+| TLS 1.2 minimum | TLS 1.0 / 1.1 / SSL 3.0 disabled in the SSL_CTX. |
+| **SNI** (RFC 6066 §3) — `tcp_tls_add_sni listener hostname cert key` | Multi-tenant HTTPS — per-hostname cert/key pairs on one listener; handshake-time selection; no-match falls through to the default cert. |
+| **ALPN** (RFC 7301) — `tcp_listen_tls_with_alpn`; `tcp_alpn_protocol conn` | Required by HTTP/2-over-TLS (RFC 9113 §3.3). |
+| **Mutual TLS (mTLS)** — `tcp_tls_require_client_cert listener ca_bundle strict?`; `tcp_peer_cert_subject conn` | Strict (handshake fails without a cert) and opportunistic modes. |
+| **Live cert reload** — `tcp_tls_reload listener hostname cert key` | Hot-swaps the SSL_CTX under a per-listener mutex; in-flight reads/writes on the old ctx survive until close. Standard Let's Encrypt-rotation use case. |
