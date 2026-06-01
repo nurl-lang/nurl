@@ -52,7 +52,7 @@ $ `stdlib/ext/sqlite.nu`
                             F e → ( die_with `bind_int` e )
                             T _ → {}
                         }
-                        : !v SqliteErr bi2 ( sqlite_bind_text ins 2 ( string_data body ) )
+                        : !v SqliteErr bi2 ( sqlite_bind_text ins 2 body )
                         ?? bi2 {
                             F e → ( die_with `bind_text` e )
                             T _ → {}
@@ -70,7 +70,7 @@ $ `stdlib/ext/sqlite.nu`
                         ( string_free body )
                         = k + k 1
                     }
-                    ( sqlite_finalize ins )
+                    // `ins` auto-closes here (Drop on the match-arm binding).
                 }
             }
 
@@ -102,11 +102,10 @@ $ `stdlib/ext/sqlite.nu`
                         }
                     }
                     ( nurl_print `nrows=` ) ( nurl_print ( nurl_str_int nrows ) ) ( nurl_print `\n` )
-                    ( sqlite_finalize q )
+                    // `q` auto-closes here (Drop on the match-arm binding).
                 }
             }
-
-            ( sqlite_close db )
+            // `db` auto-closes at the end of this arm (Drop).
         }
     }
     ^ 0
