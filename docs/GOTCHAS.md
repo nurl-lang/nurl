@@ -3,8 +3,8 @@
 > Every trap that previously needed memorisation now surfaces as a
 > compiler `error:` / `warning:` with a pointing caret and the
 > concrete cure inline. The remaining edge — prefix-arity strictness
-> — is documented in README's **Known Limitations → Grammar**
-> section, since it is a grammar property (no closing token, every
+> — is documented in [`docs/LIMITATIONS.md`](LIMITATIONS.md) **→ Grammar**,
+> since it is a grammar property (no closing token, every
 > operator has fixed arity), not a surprise the model can't predict
 > from the spec. (`^` is the return operator; XOR is the distinct
 > `^^` operator — see `spec/grammar.ebnf`.)

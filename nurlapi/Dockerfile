@@ -215,7 +215,12 @@ COPY --from=builder /src/examples                /opt/nurl/examples
 COPY --from=builder /src/compiler/tests          /opt/nurl/compiler/tests
 COPY --from=builder /src/README.md               /opt/nurl/README.md
 COPY --from=builder /src/ROADMAP.md              /opt/nurl/ROADMAP.md
-COPY --from=builder /src/docs/GOTCHAS.md         /opt/nurl/docs/GOTCHAS.md
+COPY --from=builder /src/CHANGELOG.md            /opt/nurl/CHANGELOG.md
+COPY --from=builder /src/CONTRIBUTING.md         /opt/nurl/CONTRIBUTING.md
+# Whole docs/ tree (was just GOTCHAS.md) so every topic doc the README
+# links to renders instead of 404ing; bench/ for the benchmark pages.
+COPY --from=builder /src/docs                    /opt/nurl/docs
+COPY --from=builder /src/bench                   /opt/nurl/bench
 COPY --from=builder /src/LICENSE-MIT             /opt/nurl/LICENSE-MIT
 COPY --from=builder /src/LICENSE-APACHE          /opt/nurl/LICENSE-APACHE
 COPY --from=builder /src/NOTICE                  /opt/nurl/NOTICE

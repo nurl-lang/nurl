@@ -1779,7 +1779,7 @@
             ( die lex ( nurl_str_cat3
             ( nurl_str_cat3 `unexpected ` un ` where a value expression is required —` )
             where
-            ` a prefix operator is short an argument: every NURL operator has fixed arity and no closing bracket, so a missing operand silently consumes whatever follows. See README -> Known Limitations -> Grammar.` ) ) }
+            ` a prefix operator is short an argument: every NURL operator has fixed arity and no closing bracket, so a missing operand silently consumes whatever follows. See docs/LIMITATIONS.md -> Grammar.` ) ) }
         { ( die lex ( nurl_str_cat3 `unexpected ` un ` in expression` ) ) } }
 }
 

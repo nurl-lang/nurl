@@ -1291,6 +1291,19 @@ s combined_stdout s combined_stderr → v {
     ( nurl_print `\n` )
     : ?String name_opt ( params_get params `name` )
     ?? name_opt { T name → {
+            // A `.md` (e.g. examples/README.md) renders as HTML; `.nu` source
+            // stays JSON for the playground's examples dropdown / wasm runner.
+            : i nlen ( string_len name )
+            ? & & & >= nlen 4
+                == ( nurl_str_get ( string_data name ) - nlen 3 ) 46
+                == ( nurl_str_get ( string_data name ) - nlen 2 ) 109
+                == ( nurl_str_get ( string_data name ) - nlen 1 ) 100 {
+                : String rel ( string_with_cap + nlen 10 )
+                ( string_push_str rel `examples/` ) ( string_push_str rel ( string_data name ) )
+                : HttpResponse mr ( __serve_repo_doc ( string_data rel ) )
+                ( string_free rel ) ( string_free name )
+                ^ mr
+            } {}
             : String edir ( get_examples_dir )
             : String fpath ( path_join ( string_data edir ) ( string_data name ) )
             : !String IoErr cr ( read_file ( string_data fpath ) )
@@ -2545,6 +2558,50 @@ s combined_stdout s combined_stderr → v {
         F _ → { ^ ( response_text 404 not_found_msg ) }
     }
 }
+
+// Serve any repo file by its repo-relative path (under the work root):
+// `.md` rendered as HTML with the doc chrome, everything else as plain
+// text. The route hierarchy mirrors the repo layout (`/docs/…`, `/spec/…`,
+// `/bench/…`, `/ROADMAP.md`, …) so that the relative links the browser
+// finds inside a rendered README/doc resolve to a live, rendered target
+// instead of a 404. Path traversal is rejected.
+@ __serve_repo_doc s rel → HttpResponse {
+    ? ( __has_dotdot_segment rel ) { ^ ( response_text 403 `forbidden\n` ) } {}
+    : String root ( get_work_root )
+    : String fp ( path_join ( string_data root ) rel )
+    : i rn ( nurl_str_len rel )
+    : b is_md & & & >= rn 4
+        == ( nurl_str_get rel - rn 3 ) 46
+        == ( nurl_str_get rel - rn 2 ) 109
+        == ( nurl_str_get rel - rn 1 ) 100
+    : String rawp ( string_with_cap + rn 1 )
+    ( string_push_char rawp 47 ) ( string_push_str rawp rel )
+    : HttpResponse r ? is_md
+        ( __serve_md_as_html ( string_data fp ) rel ( string_data rawp ) `not found\n` )
+        ( __serve_file_text ( string_data fp ) `text/plain; charset=utf-8` `not found\n` )
+    ( string_free root ) ( string_free fp ) ( string_free rawp )
+    ^ r
+}
+
+// Wildcard doc handlers — prepend the route's repo subdirectory to the
+// captured `*path` tail, then hand off to __serve_repo_doc.
+@ __serve_repo_subdir Params params s subdir → HttpResponse {
+    ?? ( params_get params `path` ) {
+        T tail → {
+            : String rel ( string_with_cap + ( string_len tail ) 8 )
+            ( string_push_str rel subdir )
+            ( string_push_str rel ( string_data tail ) )
+            : HttpResponse r ( __serve_repo_doc ( string_data rel ) )
+            ( string_free rel ) ( string_free tail )
+            ^ r
+        }
+        F _ → { ^ ( response_text 400 `path missing\n` ) }
+    }
+}
+
+@ h_docs_file HttpRequest req Params params → HttpResponse { ^ ( __serve_repo_subdir params `docs/` ) }
+@ h_spec_file HttpRequest req Params params → HttpResponse { ^ ( __serve_repo_subdir params `spec/` ) }
+@ h_bench_file HttpRequest req Params params → HttpResponse { ^ ( __serve_repo_subdir params `bench/` ) }
 
 // ── Doc passthrough — README.md / grammar.ebnf ────────────────────
 
@@ -3989,6 +4046,15 @@ s combined_stdout s combined_stderr → v {
             ( router_get r `/gotchas.md` \ HttpRequest req Params params → HttpResponse { ^ ( h_gotchas_md req params ) } )
             ( router_get r `/grammar` \ HttpRequest req Params params → HttpResponse { ^ ( h_grammar req params ) } )
             ( router_get r `/grammar.ebnf` \ HttpRequest req Params params → HttpResponse { ^ ( h_grammar_ebnf req params ) } )
+            // Render repo docs by their natural path so relative links inside
+            // README / docs resolve to a live rendered target (not a 404).
+            ( router_get r `/docs/*path` \ HttpRequest req Params params → HttpResponse { ^ ( h_docs_file req params ) } )
+            ( router_get r `/spec/*path` \ HttpRequest req Params params → HttpResponse { ^ ( h_spec_file req params ) } )
+            ( router_get r `/bench/*path` \ HttpRequest req Params params → HttpResponse { ^ ( h_bench_file req params ) } )
+            ( router_get r `/README.md` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_repo_doc `README.md` ) } )
+            ( router_get r `/ROADMAP.md` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_repo_doc `ROADMAP.md` ) } )
+            ( router_get r `/CHANGELOG.md` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_repo_doc `CHANGELOG.md` ) } )
+            ( router_get r `/CONTRIBUTING.md` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_repo_doc `CONTRIBUTING.md` ) } )
             ( router_get r `/license` \ HttpRequest req Params params → HttpResponse { ^ ( h_license req params ) } )
             ( router_get r `/license/mit` \ HttpRequest req Params params → HttpResponse { ^ ( h_license_mit req params ) } )
             ( router_get r `/license/apache` \ HttpRequest req Params params → HttpResponse { ^ ( h_license_apache req params ) } )
