@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Keyword arguments — default parameter values + named call arguments.**
+  A trailing parameter may carry a default: `@ f s a s b = `x` i n = 3 → R`
+  (the default is a single source token — literal / const / atom). A call
+  may then omit defaulted trailing arguments — `( f val )` — and/or pass
+  arguments by name in any order, mixed with leading positional ones:
+  `( f a: 1 b: 2 )`, `( f val n: 5 )`, `( greet greeting: `Hi` name: `Bob` )`.
+  Implemented as a call-site desugaring to an ordinary positional call:
+  `scan_fn_sigs` records each function's parameter names + default sources;
+  `gen_call` fills omitted trailing defaults inline, and routes a call that
+  uses `name:` labels through `gen_call_kwargs`, which evaluates arguments
+  in source order and assembles them in parameter order. Existing positional
+  calls take the unchanged path (byte-identical IR — bootstrap fixed point
+  holds). Regression: `compiler/tests/kwargs.nu`. Current limits (documented
+  in the grammar): not on generic functions, FFI/variadic, or parameters
+  with the `inout`/`sink` convention; `**kwargs`-style collection is not
+  provided (pass a `Json`/struct).
+
 - **BLAKE3 hash (pure NURL) — completes the hash family.** New
   `stdlib/std/hash_blake3.nu` implements full BLAKE3 (the ChaCha-derived
   compression function, 1024-byte chunks split into 64-byte blocks with
