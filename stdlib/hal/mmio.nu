@@ -10,27 +10,30 @@
 //   ( mmio_set32    i addr i32 mask ) → v      *(u32*)addr |= mask
 //   ( mmio_clear32  i addr i32 mask ) → v      *(u32*)addr &= ~mask
 //
-// IMPORTANT — no `volatile` in NURL (yet). At -O2 the optimizer may hoist a
-// read out of a polling loop (LICM), so anything that *spins on* an MMIO
-// read (UART FIFO status, etc.) must be compiled at -O0/-O1. Plain one-shot
-// reads/writes are fine at any optimization level. See examples/esp32.
+// VOLATILE — these use the compiler's `volatile_load` / `volatile_store`
+// intrinsics, which emit `load volatile` / `store volatile`. The optimizer
+// therefore never hoists an MMIO read out of a polling loop (LICM),
+// reorders the accesses, or coalesces repeated reads/writes. Spinning on a
+// device status register (UART FIFO, etc.) is now correct at ANY
+// optimization level — the former -O0 workaround is no longer needed. Pure
+// IR, no runtime call, so this works on a freestanding target.
 
 @ mmio_read32 i addr → i {
     : *i32 p # *i32 addr
-    ^ # i . p 0
+    ^ # i ( volatile_load p )
 }
 
 @ mmio_write32 i addr i32 val → v {
     : *i32 p # *i32 addr
-    = . p 0 val
+    ( volatile_store p val )
 }
 
 @ mmio_set32 i addr i32 mask → v {
     : *i32 p # *i32 addr
-    = . p 0 # i32 | # i . p 0 # i mask
+    ( volatile_store p # i32 | # i ( volatile_load p ) # i mask )
 }
 
 @ mmio_clear32 i addr i32 mask → v {
     : *i32 p # *i32 addr
-    = . p 0 # i32 & # i . p 0 ~ # i mask
+    ( volatile_store p # i32 & # i ( volatile_load p ) ~ # i mask )
 }

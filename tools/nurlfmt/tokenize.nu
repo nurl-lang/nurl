@@ -45,6 +45,14 @@ $ `stdlib/core/vec.nu`
     ^ & >= c 48 <= c 57
 }
 
+// Base marker that follows a leading `0` in a non-decimal integer
+// literal: x/X (hex), b/B (binary), o/O (octal). Used so the numeric
+// scanner keeps `0x3FF44008` as ONE token — the hex body is otherwise
+// `is_alpha`, so the decimal scan would split it into `0` + `x3FF44008`.
+@ fmt_is_base_marker i c → b {
+    ^ | | | | | == c 120 == c 88 == c 98 == c 66 == c 111 == c 79
+}
+
 @ fmt_is_alpha i c → b {
     ^ | & >= c 65 <= c 90 & >= c 97 <= c 122
 }
@@ -200,6 +208,21 @@ $ `stdlib/core/vec.nu`
                         ? == c 45 {
                             = j + j 1
                         } {}
+                        // Base-prefixed integer (0x.. / 0b.. / 0o..): the
+                        // body digits are alphanumeric, so scan the whole
+                        // run as one token instead of letting the decimal
+                        // loop stop at the `x`/`b`/`o` and split the literal.
+                        ? & == ( nurl_str_get src j ) 48
+                        ( fmt_is_base_marker ( nurl_str_get src + j 1 ) )
+                        {
+                            = j + j 2
+                            ~ & < j n ( fmt_is_ident_cont ( nurl_str_get src j ) ) {
+                                = j + j 1
+                            }
+                            ( __fmt_emit toks src i j TT_FMT_INT nl_acc )
+                            = nl_acc 0
+                            = i j
+                        } {
                         ~ & < j n ( fmt_is_digit ( nurl_str_get src j ) ) {
                             = j + j 1
                         }
@@ -228,6 +251,7 @@ $ `stdlib/core/vec.nu`
                         ( __fmt_emit toks src i j kind nl_acc )
                         = nl_acc 0
                         = i j
+                        }
                     } {
 
                         // 5) Identifier (folds in type keywords and T/F bool).

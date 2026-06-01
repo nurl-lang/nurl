@@ -5,8 +5,10 @@
 // polls the RX FIFO and writes the TX FIFO directly through device registers.
 //
 // The whole read-echo cycle lives in NURL: C's app_main just calls this once
-// and it never returns. Built at -O0 so the FIFO-status spin loops survive
-// (NURL has no `volatile` yet — see stdlib/hal/mmio.nu).
+// and it never returns. The FIFO-status spin loops are now safe at any
+// optimization level: stdlib/hal/mmio.nu reads/writes via the compiler's
+// `volatile_load` / `volatile_store` intrinsics, so the optimizer never
+// hoists an MMIO poll out of its loop (the former -O0 workaround is gone).
 
 $ `stdlib/hal/esp32.nu`
 

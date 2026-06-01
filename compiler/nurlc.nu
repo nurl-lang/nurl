@@ -3451,6 +3451,64 @@
     }
 }
 
+// ── Volatile MMIO intrinsics ───────────────────────────────────────
+// `( volatile_load *T p )` → T  and  `( volatile_store *T p T val )` → v
+// emit `load volatile` / `store volatile`, so the optimiser never hoists
+// (LICM), reorders, or elides a memory-mapped I/O access. This is the
+// missing piece for spinning on a device status register at -O2 — without
+// it the read is lifted out of the polling loop and the spin never ends.
+// Pure IR (no runtime call), so they work on a freestanding target. The
+// access width comes from the pointer's pointee type, so this one pair
+// covers i8 / i16 / i32 / i64 MMIO. The stored value must already match
+// the pointee width (cast at the call site, e.g. `# i32`).
+
+// Strip the trailing '*' from a pointer LLVM type ("i32*" → "i32").
+@ __ptr_pointee s pt → s {
+    : i n ( nurl_str_len pt )
+    ? & > n 0 == ( nurl_str_get pt - n 1 ) 42
+    { ^ ( nurl_str_slice pt 0 - n 1 ) }
+    { ^ pt }
+}
+
+@ __is_ptr_ty s pt → b {
+    : i n ( nurl_str_len pt )
+    ^ & > n 0 == ( nurl_str_get pt - n 1 ) 42
+}
+
+@ gen_volatile_load i lex i syms i cg → s {
+    : s pv ( gen_operand lex syms cg )
+    : s pt ( nurl_get_last_type )
+    ( expect lex TT_RPAREN )
+    ? ! ( __is_ptr_ty pt )
+    { ( die lex `volatile_load expects a typed pointer argument (*T)` ) }
+    {}
+    : s et ( __ptr_pointee pt )
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r )
+    ( nurl_print ` = load volatile ` ) ( nurl_print et )
+    ( nurl_print `, ` ) ( nurl_print pt ) ( nurl_print ` ` ) ( nurl_print pv )
+    ( emit_dbg_eol )
+    ( nurl_set_last_type et )
+    ^ r
+}
+
+@ gen_volatile_store i lex i syms i cg → s {
+    : s pv ( gen_operand lex syms cg )
+    : s pt ( nurl_get_last_type )
+    ? ! ( __is_ptr_ty pt )
+    { ( die lex `volatile_store expects a typed pointer first argument (*T)` ) }
+    {}
+    : s et ( __ptr_pointee pt )
+    : s vv ( gen_operand lex syms cg )
+    ( expect lex TT_RPAREN )
+    ( nurl_print `  store volatile ` ) ( nurl_print et )
+    ( nurl_print ` ` ) ( nurl_print vv ) ( nurl_print `, ` )
+    ( nurl_print pt ) ( nurl_print ` ` ) ( nurl_print pv )
+    ( emit_dbg_eol )
+    ( nurl_set_last_type `void` )
+    ^ `void`
+}
+
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
@@ -3473,6 +3531,14 @@
     // we're still building the outermost call's argument list).
     : b is_tail_position ( seq ( nurl_sym_get syms `__tail_call_pending__` ) `1` )
     ( nurl_sym_def syms `__tail_call_pending__` `` )
+    // Volatile MMIO intrinsics — intercepted before normal call dispatch.
+    // lex is positioned at the first argument.
+    ? ( seq fname `volatile_load` )
+    { ^ ( gen_volatile_load lex syms cg ) }
+    {}
+    ? ( seq fname `volatile_store` )
+    { ^ ( gen_volatile_store lex syms cg ) }
+    {}
     // Visibility check (grammar v2.0). If the base fname is an @-defined
     // function registered by scan_fn_sigs, we know its source-file of
     // origin. A cross-file call is rejected when the callee's file is in
