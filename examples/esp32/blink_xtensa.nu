@@ -12,31 +12,31 @@
 // ============================================================
 
 // --- Classic ESP32 GPIO register map (TRM "IO_MUX / GPIO matrix") ---
-: i REG_GPIO_OUT_W1TS    1073086472   // 0x3FF4_4008  set output bits
-: i REG_GPIO_OUT_W1TC    1073086476   // 0x3FF4_400C  clear output bits
-: i REG_GPIO_ENABLE_W1TS 1073086500   // 0x3FF4_4024  enable as output
-: i PIN_MASK             4            // 1 << 2       GPIO2 (common LED)
+: i REG_GPIO_OUT_W1TS 1072971784  // 0x3FF4_4008  set output bits
+: i REG_GPIO_OUT_W1TC 1072971788  // 0x3FF4_400C  clear output bits
+: i REG_GPIO_ENABLE_W1TS 1072971812  // 0x3FF4_4024  enable as output
+: i PIN_MASK 4  // 1 << 2       GPIO2 (common LED)
 
 @ poke i addr i32 val → v {
-  : *i32 p # *i32 addr
-  = . p 0 val
+    : *i32 p # *i32 addr
+    = . p 0 val
 }
 
 @ delay i n → v {
-  : ~ i k 0
-  ~ < k n { = k + k 1 }
+    : ~ i k 0
+    ~ < k n { = k + k 1 }
 }
 
 @ main → i {
-  ( poke REG_GPIO_ENABLE_W1TS # i32 PIN_MASK )
+    ( poke REG_GPIO_ENABLE_W1TS # i32 PIN_MASK )
 
-  : ~ i n 0
-  ~ < n 1000000 {
-    ( poke REG_GPIO_OUT_W1TS # i32 PIN_MASK )   // LED on
-    ( delay 200000 )
-    ( poke REG_GPIO_OUT_W1TC # i32 PIN_MASK )   // LED off
-    ( delay 200000 )
-    = n + n 1
-  }
-  ^ 0
+    : ~ i n 0
+    ~ < n 1000000 {
+        ( poke REG_GPIO_OUT_W1TS # i32 PIN_MASK )  // LED on
+        ( delay 200000 )
+        ( poke REG_GPIO_OUT_W1TC # i32 PIN_MASK )  // LED off
+        ( delay 200000 )
+        = n + n 1
+    }
+    ^ 0
 }

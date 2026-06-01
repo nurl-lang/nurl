@@ -15,8 +15,8 @@
 //  self-contained symbols that link straight into an ESP-IDF app.
 //
 //  Register addresses verified against ESP-IDF soc/{gpio,io_mux}_reg.h.
-//  LED is GPIO2 on most ESP32 "mini" boards; change PIN_MASK and the
-//  IO_MUX address for a different pin.
+//  Decimal literals (hex in comments): nurlc takes 0x.. but nurlfmt splits
+//  it, so shipped sources stay decimal. LED is GPIO2 on most ESP32 boards.
 // ============================================================
 
 // Pure compute, no MMIO — proves the C->NURL windowed cross-call works.
@@ -24,16 +24,16 @@
 
 // 32-bit memory-mapped write: *(volatile u32*)addr = val
 @ poke i addr i32 val → v {
-  : *i32 p # *i32 addr
-  = . p 0 val
+    : *i32 p # *i32 addr
+    = . p 0 val
 }
 
 // Configure GPIO2 as a push-pull output, entirely via raw registers.
 @ nurl_led_setup → v {
-  ( poke 0x3FF49040 # i32 0x2000 )   // IO_MUX_GPIO2_REG:       MCU_SEL=2 -> GPIO function
-  ( poke 0x3FF44538 # i32 0x100 )    // GPIO_FUNC2_OUT_SEL_CFG: route pad to GPIO_OUT (idx 256)
-  ( poke 0x3FF44024 # i32 0x4 )      // GPIO_ENABLE_W1TS_REG:   bit2 -> drive as output
+    ( poke 1072992320 # i32 8192 )  // IO_MUX_GPIO2 (0x3FF49040): MCU_SEL=2 -> GPIO
+    ( poke 1072973112 # i32 256 )  // GPIO_FUNC2_OUT_SEL_CFG (0x3FF44538): pad -> GPIO_OUT
+    ( poke 1072971812 # i32 4 )  // GPIO_ENABLE_W1TS (0x3FF44024): bit2 -> output
 }
 
-@ nurl_led_on  → v { ( poke 0x3FF44008 # i32 0x4 ) }   // GPIO_OUT_W1TS_REG: GPIO2 high
-@ nurl_led_off → v { ( poke 0x3FF4400C # i32 0x4 ) }   // GPIO_OUT_W1TC_REG: GPIO2 low
+@ nurl_led_on → v { ( poke 1072971784 # i32 4 ) }  // GPIO_OUT_W1TS (0x3FF44008): GPIO2 high
+@ nurl_led_off → v { ( poke 1072971788 # i32 4 ) }  // GPIO_OUT_W1TC (0x3FF4400C): GPIO2 low

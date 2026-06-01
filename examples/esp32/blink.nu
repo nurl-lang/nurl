@@ -20,34 +20,34 @@
 // --- ESP32-C3 GPIO register map (TRM ch. "IO MUX and GPIO Matrix") ---
 //     addresses are `i` (i64) because in this nurlc `u` lowers to i8;
 //     the MMIO access itself is a 32-bit store via a `*i32` pointer.
-: i REG_GPIO_OUT_W1TS    1610629128   // 0x6000_4008  set output bits
-: i REG_GPIO_OUT_W1TC    1610629132   // 0x6000_400C  clear output bits
-: i REG_GPIO_ENABLE_W1TS 1610629156   // 0x6000_4024  enable as output
-: i PIN_MASK             256          // 1 << 8       GPIO8
+: i REG_GPIO_OUT_W1TS 1610629128  // 0x6000_4008  set output bits
+: i REG_GPIO_OUT_W1TC 1610629132  // 0x6000_400C  clear output bits
+: i REG_GPIO_ENABLE_W1TS 1610629156  // 0x6000_4024  enable as output
+: i PIN_MASK 256  // 1 << 8       GPIO8
 
 // 32-bit memory-mapped write: *(volatile u32*)addr = val
 @ poke i addr i32 val → v {
-  : *i32 p # *i32 addr
-  = . p 0 val
+    : *i32 p # *i32 addr
+    = . p 0 val
 }
 
 // crude busy-wait — at -O0 the loop survives; see README on volatile.
 @ delay i n → v {
-  : ~ i k 0
-  ~ < k n { = k + k 1 }
+    : ~ i k 0
+    ~ < k n { = k + k 1 }
 }
 
 @ main → i {
-  // configure GPIO8 as a push-pull output
-  ( poke REG_GPIO_ENABLE_W1TS # i32 PIN_MASK )
+    // configure GPIO8 as a push-pull output
+    ( poke REG_GPIO_ENABLE_W1TS # i32 PIN_MASK )
 
-  : ~ i n 0
-  ~ < n 1000000 {
-    ( poke REG_GPIO_OUT_W1TS # i32 PIN_MASK )   // LED on
-    ( delay 200000 )
-    ( poke REG_GPIO_OUT_W1TC # i32 PIN_MASK )   // LED off
-    ( delay 200000 )
-    = n + n 1
-  }
-  ^ 0
+    : ~ i n 0
+    ~ < n 1000000 {
+        ( poke REG_GPIO_OUT_W1TS # i32 PIN_MASK )  // LED on
+        ( delay 200000 )
+        ( poke REG_GPIO_OUT_W1TC # i32 PIN_MASK )  // LED off
+        ( delay 200000 )
+        = n + n 1
+    }
+    ^ 0
 }
