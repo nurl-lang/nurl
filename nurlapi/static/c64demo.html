@@ -63,6 +63,11 @@
   <div class="panel">
     <h2>System</h2>
     <div id="status">Loading WebAssembly runtime…</div>
+    <div style="margin:8px 0">
+      <button id="demoBtn">▶ Built-in demo</button>
+      <label class="file">Load .prg / .d64…<input id="fprg" type="file" accept=".prg,.d64"></label>
+      <span class="sub">or drag a <code>.prg</code> / <code>.d64</code> onto the screen</span>
+    </div>
     <div id="romPick">
       <div class="sub">The C64 ROMs are Commodore copyright and aren't bundled.
         Load your own <code>KERNAL</code>, <code>BASIC</code> and
@@ -77,12 +82,14 @@
       <tr><td class="k">A–Z 0–9</td><td>as labelled</td><td class="k">Enter</td><td>RETURN</td></tr>
       <tr><td class="k">Shift</td><td>SHIFT</td><td class="k">Backspace</td><td>INST/DEL</td></tr>
       <tr><td class="k">Arrows</td><td>cursor</td><td class="k">Esc</td><td>RUN/STOP</td></tr>
+      <tr><td class="k">PageUp</td><td>RESTORE</td><td class="k">Esc+PgUp</td><td>warm reset</td></tr>
     </table>
     <div class="credit">
-      Click the screen to give it keyboard focus. The full documented 6510
-      instruction set is validated against Klaus Dormann's 6502 functional
-      test. VIC-II text mode + CIA1 (timer IRQ + keyboard); SID/sprites are
-      future work.
+      Click the screen to give it keyboard focus (also starts audio). The
+      full documented 6510 instruction set is validated against Klaus
+      Dormann's 6502 functional test. VIC-II (text, bitmap, sprites, raster
+      IRQ), CIA1 (timer + keyboard), and a 3-voice SID — try the demo, then
+      drag in your own <code>.prg</code>.
     </div>
   </div>
 </main>
@@ -180,7 +187,10 @@ const KEYMAP = {
   Digit1:[7,0], Backquote:[7,1], ControlLeft:[7,2], ControlRight:[7,2], Digit2:[7,3], Space:[7,4], AltLeft:[7,5], KeyQ:[7,6], Escape:[7,7],
 };
 const kbMatrix = new Uint8Array(8);
+let restoreDown = 0;        // RESTORE key (PageUp) — wired to the NMI line
 function setKey(code, down) {
+  // RESTORE is not in the matrix; it drives /NMI directly.
+  if (code === "PageUp") { restoreDown = down ? 1 : 0; return true; }
   // Cursor up/left = SHIFT + cursor down/right on the C64.
   if (code === "ArrowUp")   { press([1,7], down); press([0,7], down); return; }
   if (code === "ArrowLeft") { press([1,7], down); press([0,2], down); return; }
@@ -195,8 +205,22 @@ window.addEventListener("keyup",   (e) => { if (setKey(e.code, false) !== false)
 
 // ── ROM management ───────────────────────────────────────────────
 let roms = [null, null, null];   // 0 KERNAL, 1 BASIC, 2 CHARGEN
+let pendingPrg = null, prgBytes = null;     // a .prg queued for the running machine
+let pendingDisk = null, diskBytes = null;   // a .d64 queued for virtual drive 8
 let WASI, File, OpenFile, ConsoleStdout, PreopenDirectory;
 let wasmBytes = null;
+
+// Dispatch a dropped/picked file by extension: .d64 → disk, else → .prg.
+function loadFile(bytes, name) {
+  if (/\.d64$/i.test(name)) {
+    pendingDisk = bytes;        // picked up next frame by host_disk_pending
+    setStatus("inserted disk " + name + " (" + bytes.length + " B) — loading first program…");
+  } else {
+    pendingPrg = bytes;         // picked up next frame by host_prg_pending
+    setStatus("loaded " + name + " (" + bytes.length + " B) — running…");
+  }
+  screen.focus();
+}
 
 async function loadDeps() {
   ({ WASI, File, OpenFile, ConsoleStdout, PreopenDirectory } = await import(WASI_SHIM_URL));
@@ -218,10 +242,58 @@ async function tryFetchRoms() {
   } catch { return false; }
 }
 
+// ── Audio: drain the wasm SID ring into Web Audio (same packed-stereo
+// i32 layout as the Game Boy demo: low16 = L, bits16-31 = R, signed 16) ──
+class AudioStreamer {
+  constructor() { this.ctx = null; this.node = null; this.memory = null;
+    this.stopped = false; this.size = 48000;
+    this.bufL = new Float32Array(this.size); this.bufR = new Float32Array(this.size);
+    this.rd = 0; this.wr = 0; }
+  attachMemory(m) { this.memory = m; }
+  async start() {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new AC({ sampleRate: 48000 });
+      if (this.ctx.state === "suspended") await this.ctx.resume();
+      this.node = this.ctx.createScriptProcessor(2048, 0, 2);
+      this.node.onaudioprocess = (e) => {
+        const oL = e.outputBuffer.getChannelData(0), oR = e.outputBuffer.getChannelData(1);
+        for (let i = 0; i < oL.length; i++) {
+          if (this.rd !== this.wr) { oL[i] = this.bufL[this.rd]; oR[i] = this.bufR[this.rd]; this.rd = (this.rd + 1) % this.size; }
+          else { oL[i] = 0; oR[i] = 0; }
+        }
+      };
+      this.node.connect(this.ctx.destination);
+    } catch (e) { console.warn("[c64] audio init failed:", e); this.ctx = null; }
+  }
+  resume() { if (this.ctx && this.ctx.state === "suspended") this.ctx.resume(); }
+  push(ptr, n) {
+    if (!this.memory || !this.ctx || this.stopped || n <= 0) return;
+    const view = new Int32Array(this.memory.buffer, ptr, n * 2);
+    for (let k = 0; k < n; k++) {
+      const nx = (this.wr + 1) % this.size;
+      if (nx === this.rd) break;            // ring full — drop to stay in sync
+      const v = view[k * 2];
+      this.bufL[this.wr] = ((v << 16) >> 16) / 32768;
+      this.bufR[this.wr] = (v >> 16) / 32768;
+      this.wr = nx;
+    }
+  }
+  stop() { this.stopped = true;
+    try { this.node && this.node.disconnect(); } catch (_) {}
+    try { this.ctx && this.ctx.close(); } catch (_) {} }
+}
+let audio = null;
+// Browsers suspend AudioContext until a user gesture — resume on any input.
+["click", "keydown"].forEach(ev => window.addEventListener(ev, () => audio && audio.resume()));
+
 async function run() {
   setStatus("Booting…");
   screen.focus();
   kbMatrix.fill(0);
+  if (audio) audio.stop();
+  audio = new AudioStreamer();
+  await audio.start();
 
   const canvasHost = new CanvasHost(screen);
   const asy = new AsyncifyRuntime();
@@ -244,6 +316,12 @@ async function run() {
     env: {
       host_rom_byte: (bank, idx) => { const r = roms[Number(bank)]; return BigInt(r ? (r[Number(idx)] | 0) : 0); },
       host_kb_col: (col) => BigInt(kbMatrix[Number(col) & 7] & 0xff),
+      host_prg_pending: () => { if (pendingPrg) { prgBytes = pendingPrg; pendingPrg = null; return BigInt(prgBytes.length); } return 0n; },
+      host_prg_byte: (idx) => BigInt(prgBytes ? (prgBytes[Number(idx)] | 0) : 0),
+      host_disk_pending: () => { if (pendingDisk) { diskBytes = pendingDisk; pendingDisk = null; return BigInt(diskBytes.length); } return 0n; },
+      host_disk_byte: (idx) => BigInt(diskBytes ? (diskBytes[Number(idx)] | 0) : 0),
+      host_restore: () => BigInt(restoreDown),
+      host_audio: (ptr, n) => { if (audio) audio.push(Number(ptr), Number(n)); },
     },
   };
 
@@ -255,6 +333,7 @@ async function run() {
 
   try { if (wasi.initialize && instance.exports._initialize) wasi.initialize(instance); } catch (_) {}
   canvasHost.attachMemory(instance.exports.memory);
+  audio.attachMemory(instance.exports.memory);
   asy.attach(instance);
   setStatus("Running — click the screen, then type.");
   try {
@@ -282,6 +361,26 @@ function wireRomPicker() {
     run();
   });
 }
+
+// Built-in demo .prg (autostart: a hardware sprite + a raster-split border).
+const DEMO_PRG_B64 = "AQgLCAoAnjIwNjQAAAAAAACiPqn/nYADyhD4qQ6N+AepoI0A0KmCjQHQqQeNJ9CpAY0d0KkBjRfQqQGNFdCpAI0F1KnwjQbUqXGNF9SpAI0V1KlgjRbUqR+NGNSpIY0E1KkAhQR4qX+NDdypwI0UA6kIjRUDqRuNEdCplo0S0KkBjRrQqQGNGdBYYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK0S0MmW8CSpBo0g0KmWjRLQpgS9/QiNANS9AAmNAdTo4AOQAqIAhgRM9QipDo0g0KkKjRLQqQGNGdBMgepm7RQRFRo=";
+function b64ToBytes(b64) { const s = atob(b64); const a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return a; }
+document.getElementById("demoBtn").addEventListener("click", () => loadFile(b64ToBytes(DEMO_PRG_B64), "demo.prg"));
+
+// ── program / disk loading: file picker + drag-and-drop onto the canvas ──
+document.getElementById("fprg").addEventListener("change", async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  loadFile(new Uint8Array(await f.arrayBuffer()), f.name);
+});
+["dragover", "dragenter"].forEach(ev =>
+  screen.addEventListener(ev, (e) => { e.preventDefault(); screen.style.outline = "2px solid #7aa2f7"; }));
+["dragleave", "drop"].forEach(ev =>
+  screen.addEventListener(ev, () => { screen.style.outline = ""; }));
+screen.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0]; if (!f) return;
+  loadFile(new Uint8Array(await f.arrayBuffer()), f.name);
+});
 
 screen.tabIndex = 0;
 (async () => {

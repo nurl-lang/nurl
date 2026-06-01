@@ -23,6 +23,18 @@ $ `examples/c64/core.nu`
 & `canvas` @ host_rom_byte i bank i idx → i
 // Keyboard matrix: returns the row bitmask for column `col` (bit set = key down).
 & `canvas` @ host_kb_col i col → i
+// RESTORE key (wired to the NMI line, not the matrix): 1 while held.
+& `canvas` @ host_restore → i
+// A queued .prg to autostart: host_prg_pending returns its length once
+// (clearing the queue), then host_prg_byte serves its bytes.
+& `canvas` @ host_prg_pending → i
+& `canvas` @ host_prg_byte i idx → i
+// Hand this frame's SID samples (packed-stereo i64 ring) to Web Audio.
+& `canvas` @ host_audio i ptr i nsamples → v
+// A queued .d64 disk image: host_disk_pending returns its length once
+// (clearing the queue), then host_disk_byte serves its bytes.
+& `canvas` @ host_disk_pending → i
+& `canvas` @ host_disk_byte i idx → i
 
 // ── C64 16-colour palette (Pepto) → ARGB 0xAARRGGBB (host swaps R/B) ──
 @ pal_argb i c → i {
@@ -82,10 +94,33 @@ $ `examples/c64/core.nu`
         // Refresh the keyboard matrix from the host.
         : ~ i col 0
         ~ < col 8 { = . kb col # u & ( host_kb_col col ) 255  = col + col 1 }
-        ( run_one_frame )
-        ( render_frame )
+        = g_restore & ( host_restore ) 1
+        // A .prg queued by the host? Pull it in and autostart it.
+        : i pn ( host_prg_pending )
+        ? > pn 0 {
+            : s pb ( nurl_alloc pn )
+            : *u pp # *u pb
+            : ~ i k 0
+            ~ < k pn { = . pp k # u ( host_prg_byte k )  = k + k 1 }
+            ( prg_autostart # *u pb pn )
+            ( nurl_free pb )
+        } {}
+        // A .d64 queued by the host? Attach it (drive 8) and autostart.
+        : i dn ( host_disk_pending )
+        ? > dn 0 {
+            : s db ( nurl_alloc dn )
+            : *u dp # *u db
+            : ~ i j 0
+            ~ < j dn { = . dp j # u ( host_disk_byte j )  = j + j 1 }
+            ( disk_attach # *u db dn )
+            ( nurl_free db )
+            ( disk_autostart )
+        } {}
+        ( run_one_frame )       // also rasterises the frame (framebuffer + collisions)
         ( blit fb )
         ( canvas_present )
+        ( host_audio # i g_audio g_audio_len )   // drain this frame's SID samples
+        = g_audio_len 0
         ( canvas_sleep 20 )
         ? != 0 ( canvas_should_close ) { = running 0 } {}
     }

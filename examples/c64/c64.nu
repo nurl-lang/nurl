@@ -101,12 +101,191 @@ $ `stdlib/ext/env.nu`
     ^ 0
 }
 
+// ── PRG mode: boot, load a .prg, autostart it, dump the text screen ──
+@ load_rom_into s path i bank → b {       // bank: 0 kernal, 1 basic, 2 chargen
+    ?? ( read_file_bytes path ) {
+        T d → {
+            ?? bank {
+                0 → ( load_kernal ( vec_data [u] d ) ( vec_len [u] d ) )
+                1 → ( load_basic ( vec_data [u] d ) ( vec_len [u] d ) )
+                _ → ( load_chargen ( vec_data [u] d ) ( vec_len [u] d ) )
+            }
+            ( vec_free [u] d )
+            ^ T
+        }
+        F _ → { ( nurl_print `cannot read ROM: ` ) ( nurl_print path ) ( nurl_print `\n` )  ^ F }
+    }
+}
+@ run_prg s kpath s bpath s cpath s prog i frames → i {
+    ( c64_alloc )
+    ? ( load_rom_into kpath 0 ) {} { ^ 2 }
+    ? ( load_rom_into bpath 1 ) {} { ^ 2 }
+    ? ( load_rom_into cpath 2 ) {} { ^ 2 }
+    ( c64_boot )
+    : ~ i f 0
+    ~ < f 150 { ( run_one_frame )  = f + f 1 }    // boot to READY first
+    ?? ( read_file_bytes prog ) {
+        T p → {
+            : i addr ( prg_autostart ( vec_data [u] p ) ( vec_len [u] p ) )
+            ( vec_free [u] p )
+            ( nurl_print `loaded ` ) ( nurl_print prog ) ( nurl_print ` @ ` ) ( print_hex16 addr ) ( nurl_print `\n` )
+        }
+        F _ → { ( nurl_print `cannot read prg: ` ) ( nurl_print prog ) ( nurl_print `\n` )  ^ 2 }
+    }
+    : ~ i g 0
+    ~ < g frames { ( run_one_frame )  = g + g 1 }
+    ( nurl_print `--- screen ---\n` )
+    ( screen_dump )
+    ( render_frame )
+    ( nurl_print `border top=` ) ( nurl_print ( nurl_str_int ( fb_color_at 5 5 ) ) )
+    ( nurl_print ` border bottom=` ) ( nurl_print ( nurl_str_int ( fb_color_at 5 260 ) ) )
+    ( nurl_print `  framebuffer colour histogram: ` ) ( fb_hist )
+    ( nurl_print `collision D01E(spr-spr)=` ) ( nurl_print ( nurl_str_int ( rd8 0xD01E ) ) )
+    ( nurl_print ` D01F(spr-bg)=` ) ( nurl_print ( nurl_str_int ( rd8 0xD01F ) ) ) ( nurl_print `\n` )
+    // Capture a fresh window of SID output (the ring isn't drained natively).
+    = g_audio_len 0
+    : ~ i af 0
+    ~ < af 5 { ( run_one_frame )  = af + af 1 }
+    ( audio_stats )
+    ^ 0
+}
+
+// ── Disk mode: boot, attach a .d64, autostart its first program ─────
+@ run_d64 s kpath s bpath s cpath s dpath i frames → i {
+    ( c64_alloc )
+    ? ( load_rom_into kpath 0 ) {} { ^ 2 }
+    ? ( load_rom_into bpath 1 ) {} { ^ 2 }
+    ? ( load_rom_into cpath 2 ) {} { ^ 2 }
+    ( c64_boot )
+    : ~ i f 0
+    ~ < f 150 { ( run_one_frame )  = f + f 1 }
+    ?? ( read_file_bytes dpath ) {
+        T d → {
+            ( disk_attach ( vec_data [u] d ) ( vec_len [u] d ) )
+            ( vec_free [u] d )
+            : i addr ( disk_autostart )
+            ( nurl_print `attached ` ) ( nurl_print dpath ) ( nurl_print `, autostarted @ ` ) ( print_hex16 addr ) ( nurl_print `\n` )
+        }
+        F _ → { ( nurl_print `cannot read d64: ` ) ( nurl_print dpath ) ( nurl_print `\n` )  ^ 2 }
+    }
+    : ~ i g 0
+    ~ < g frames { ( run_one_frame )  = g + g 1 }
+    ( nurl_print `--- screen ---\n` )
+    ( screen_dump )
+    ( render_frame )
+    ( nurl_print `border top=` ) ( nurl_print ( nurl_str_int ( fb_color_at 5 5 ) ) )
+    ( nurl_print ` bottom=` ) ( nurl_print ( nurl_str_int ( fb_color_at 5 260 ) ) )
+    ( nurl_print `  hist: ` ) ( fb_hist )
+    = g_audio_len 0
+    : ~ i af 0
+    ~ < af 5 { ( run_one_frame )  = af + af 1 }
+    ( audio_stats )
+    ^ 0
+}
+
+// Type a string into the KERNAL keyboard buffer (PETSCII), then run.
+@ type_line s txt i frames → v {
+    : i n ( nurl_str_len txt )
+    : ~ i i 0
+    ~ < i n {
+        ( kbuf_push ( nurl_str_get txt i ) )
+        ( run_one_frame )  ( run_one_frame )       // drip-feed so the buffer never overflows
+        = i + i 1
+    }
+    ( kbuf_push 0x0D )
+    : ~ i f 0
+    ~ < f frames { ( run_one_frame )  = f + f 1 }
+}
+// Exercise the KERNAL LOAD trap: LOAD"$",8 then LIST the directory.
+@ run_d64dir s kpath s bpath s cpath s dpath → i {
+    ( c64_alloc )
+    ? ( load_rom_into kpath 0 ) {} { ^ 2 }
+    ? ( load_rom_into bpath 1 ) {} { ^ 2 }
+    ? ( load_rom_into cpath 2 ) {} { ^ 2 }
+    ( c64_boot )
+    : ~ i f 0
+    ~ < f 150 { ( run_one_frame )  = f + f 1 }
+    ?? ( read_file_bytes dpath ) {
+        T d → { ( disk_attach ( vec_data [u] d ) ( vec_len [u] d ) )  ( vec_free [u] d ) }
+        F _ → { ( nurl_print `cannot read d64\n` )  ^ 2 }
+    }
+    ( type_line `LOAD"$",8` 40 )
+    ( type_line `LIST` 40 )
+    ( nurl_print `--- screen (directory) ---\n` )
+    ( screen_dump )
+    // Named LOAD + RUN of TONE.PRG (exercises disk_find by name).
+    ( type_line `NEW` 10 )
+    ( type_line `LOAD"TONE",8` 60 )
+    ( type_line `RUN` 30 )
+    = g_audio_len 0
+    : ~ i af 0
+    ~ < af 5 { ( run_one_frame )  = af + af 1 }
+    ( nurl_print `after LOAD"TONE",8 : RUN — ` ) ( audio_stats )
+    ^ 0
+}
+
+// Verify RUN/STOP+RESTORE: a .prg blacks the border, then the NMI warm-start
+// restores it. (STOP = keyboard matrix col7/row7; RESTORE = the NMI line.)
+@ run_nmi s kpath s bpath s cpath s prog → i {
+    ( c64_alloc )
+    ? ( load_rom_into kpath 0 ) {} { ^ 2 }
+    ? ( load_rom_into bpath 1 ) {} { ^ 2 }
+    ? ( load_rom_into cpath 2 ) {} { ^ 2 }
+    ( c64_boot )
+    : ~ i f 0
+    ~ < f 150 { ( run_one_frame )  = f + f 1 }
+    ?? ( read_file_bytes prog ) {
+        T p → { ( prg_autostart ( vec_data [u] p ) ( vec_len [u] p ) )  ( vec_free [u] p ) }
+        F _ → { ( nurl_print `cannot read prg\n` )  ^ 2 }
+    }
+    : ~ i g 0
+    ~ < g 30 { ( run_one_frame )  = g + g 1 }
+    ( render_frame )
+    ( nurl_print `border after program = ` ) ( nurl_print ( nurl_str_int ( fb_color_at 5 5 ) ) ) ( nurl_print ` (program set it black)\n` )
+    // Hold RUN/STOP (matrix col7,row7) and pulse RESTORE → NMI warm-start.
+    : *u kb # *u g_kb
+    = . kb 7 # u 0x80
+    = g_restore 1
+    ( run_one_frame )
+    = g_restore 0
+    : ~ i h 0
+    ~ < h 30 { ( run_one_frame )  = h + h 1 }
+    = . kb 7 # u 0
+    : ~ i j 0
+    ~ < j 10 { ( run_one_frame )  = j + j 1 }
+    ( render_frame )
+    ( nurl_print `border after RUN/STOP+RESTORE = ` ) ( nurl_print ( nurl_str_int ( fb_color_at 5 5 ) ) ) ( nurl_print ` (warm-start should restore 14)\n` )
+    ^ 0
+}
+
 @ main → i {
     : ( Vec String ) args ( env_args_list )
     ? < ( vec_len [String] args ) 2 {
         ( nurl_print `usage: c64 <6502_functional_test.bin> [instr-budget]\n` )
         ( nurl_print `       c64 --boot <kernal> <basic> <chargen> [frames]\n` )
+        ( nurl_print `       c64 --prg <kernal> <basic> <chargen> <prog.prg> [frames]\n` )
+        ( nurl_print `       c64 --d64 <kernal> <basic> <chargen> <disk.d64> [frames]\n` )
         ^ 2
+    } {}
+    : ~ s a0 ``
+    ?? ( vec_get [String] args 1 ) { T a → = a0 ( string_data a )  F _ → {} }
+    ? ( nurl_str_eq a0 `--nmi` ) {
+        ? < ( vec_len [String] args ) 6 { ( nurl_print `usage: c64 --nmi <k> <b> <c> <prog.prg>\n` )  ^ 2 } {}
+        : ~ s kp ``  : ~ s bp ``  : ~ s cp ``  : ~ s pg ``
+        ?? ( vec_get [String] args 2 ) { T a → = kp ( string_data a )  F _ → {} }
+        ?? ( vec_get [String] args 3 ) { T a → = bp ( string_data a )  F _ → {} }
+        ?? ( vec_get [String] args 4 ) { T a → = cp ( string_data a )  F _ → {} }
+        ?? ( vec_get [String] args 5 ) { T a → = pg ( string_data a )  F _ → {} }
+        ^ ( run_nmi kp bp cp pg )
+    } {}
+    ? ( nurl_str_eq a0 `--d64dir` ) {
+        ? < ( vec_len [String] args ) 6 { ( nurl_print `usage: c64 --d64dir <k> <b> <c> <disk.d64>\n` )  ^ 2 } {}
+        : ~ s kp ``  : ~ s bp ``  : ~ s cp ``  : ~ s dp ``
+        ?? ( vec_get [String] args 2 ) { T a → = kp ( string_data a )  F _ → {} }
+        ?? ( vec_get [String] args 3 ) { T a → = bp ( string_data a )  F _ → {} }
+        ?? ( vec_get [String] args 4 ) { T a → = cp ( string_data a )  F _ → {} }
+        ?? ( vec_get [String] args 5 ) { T a → = dp ( string_data a )  F _ → {} }
+        ^ ( run_d64dir kp bp cp dp )
     } {}
     : ~ s a1 ``
     ?? ( vec_get [String] args 1 ) { T a → = a1 ( string_data a )  F _ → {} }
@@ -121,6 +300,32 @@ $ `stdlib/ext/env.nu`
             ?? ( vec_get [String] args 5 ) { T a → = frames ( nurl_str_to_int ( string_data a ) )  F _ → {} }
         } {}
         ^ ( run_boot kp bp cp frames )
+    } {}
+    ? ( nurl_str_eq a1 `--prg` ) {
+        ? < ( vec_len [String] args ) 6 { ( nurl_print `usage: c64 --prg <kernal> <basic> <chargen> <prog.prg> [frames]\n` )  ^ 2 } {}
+        : ~ s kp ``  : ~ s bp ``  : ~ s cp ``  : ~ s pg ``
+        : ~ i frames 120
+        ?? ( vec_get [String] args 2 ) { T a → = kp ( string_data a )  F _ → {} }
+        ?? ( vec_get [String] args 3 ) { T a → = bp ( string_data a )  F _ → {} }
+        ?? ( vec_get [String] args 4 ) { T a → = cp ( string_data a )  F _ → {} }
+        ?? ( vec_get [String] args 5 ) { T a → = pg ( string_data a )  F _ → {} }
+        ? > ( vec_len [String] args ) 6 {
+            ?? ( vec_get [String] args 6 ) { T a → = frames ( nurl_str_to_int ( string_data a ) )  F _ → {} }
+        } {}
+        ^ ( run_prg kp bp cp pg frames )
+    } {}
+    ? ( nurl_str_eq a1 `--d64` ) {
+        ? < ( vec_len [String] args ) 6 { ( nurl_print `usage: c64 --d64 <kernal> <basic> <chargen> <disk.d64> [frames]\n` )  ^ 2 } {}
+        : ~ s kp ``  : ~ s bp ``  : ~ s cp ``  : ~ s dp ``
+        : ~ i frames 180
+        ?? ( vec_get [String] args 2 ) { T a → = kp ( string_data a )  F _ → {} }
+        ?? ( vec_get [String] args 3 ) { T a → = bp ( string_data a )  F _ → {} }
+        ?? ( vec_get [String] args 4 ) { T a → = cp ( string_data a )  F _ → {} }
+        ?? ( vec_get [String] args 5 ) { T a → = dp ( string_data a )  F _ → {} }
+        ? > ( vec_len [String] args ) 6 {
+            ?? ( vec_get [String] args 6 ) { T a → = frames ( nurl_str_to_int ( string_data a ) )  F _ → {} }
+        } {}
+        ^ ( run_d64 kp bp cp dp frames )
     } {}
     : ~ s path ``
     ?? ( vec_get [String] args 1 ) { T a → = path ( string_data a )  F _ → {} }

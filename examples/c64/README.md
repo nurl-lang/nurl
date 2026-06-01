@@ -52,6 +52,10 @@ BASIC straight away (`PRINT 3` ⏎ → `3`).
 
 # Boot to BASIC and dump the text screen (optional 5th arg = frames):
 ./examples/c64/c64 --boot roms/kernal-901227-03.bin roms/basic-901226-01.bin roms/chargen-901225-01.bin
+
+# Load + run a .prg, or auto-run the first program on a .d64:
+./examples/c64/c64 --prg <kernal> <basic> <chargen> game.prg
+./examples/c64/c64 --d64 <kernal> <basic> <chargen> disk.d64
 ```
 
 ## Fetching the test ROM
@@ -89,8 +93,45 @@ prompts for them if they aren't served.
   plain 64 KiB image.
 * **Chips layered on the I/O window.** `io_read` / `io_write` dispatch
   `$D000-$DFFF` to the VIC-II register file, SID, the 1 K colour RAM, and
-  CIA1 (full Timer-A/B down-counters + the keyboard matrix) — CIA1's
-  Timer-A underflow raises the IRQ the KERNAL services 60×/s.
+  the two CIAs (full Timer-A/B down-counters + interrupt control). CIA1's
+  Timer-A underflow raises the **IRQ** the KERNAL services 60×/s and scans
+  the keyboard matrix; CIA2's output and the RESTORE key drive the **NMI**,
+  so RUN/STOP+RESTORE warm-resets the machine.
+* **Raster interrupts + per-scanline colour.** The raster counter latches
+  `$D019` when it hits the `$D012`/`$D011`-bit-8 compare line; if `$D01A`
+  enables it the CPU vectors through `$FFFE` (→ the program's `$0314`
+  handler). Because a program can change `$D020`/`$D021` mid-frame, the
+  renderer snapshots the border + background colour **per scanline**, so
+  raster splits and colour bars actually appear. Sprites and character
+  cells are still rasterised once per frame from the final VRAM state.
+* **Hardware sprites.** All 8 sprites: 9-bit X, hi-res and multicolour
+  data, per-sprite colour, X/Y expansion, drawn 7→0 so sprite 0 wins.
+  Sprite-to-background priority ($D01B) is honoured via a per-pixel
+  foreground mask the character/bitmap renderer fills in. The same pass
+  records a per-pixel sprite-coverage mask, so **collisions** — sprite↔
+  sprite ($D01E) and sprite↔background ($D01F) — are latched each frame
+  (and raise their $D019 IRQ sources), which is how games do hit-testing.
+* **All VIC display modes.** Standard + multicolour text, and hi-res
+  (320×200) + multicolour (160×200) bitmap, selected per frame from
+  `$D011`/`$D016`. Colours are sourced exactly as the chip does (text:
+  colour RAM; bitmap: the video-matrix nibbles + colour RAM for MC `11`).
+* **SID (6581).** Three voices with 24-bit phase accumulators, triangle /
+  sawtooth / pulse / noise (LFSR) waveforms, full ADSR envelopes (the
+  attack/decay/release rate tables + exponential decay), per-voice gating,
+  and the master-volume mix. Voices routed through the filter ($D417) feed
+  a Chamberlin **state-variable filter** (fixed-point) whose LP/BP/HP taps
+  are selected by $D418, with an 11-bit cutoff and 4-bit resonance. The
+  output is resampled from the ~1 MHz SID clock to 48 kHz and handed to Web
+  Audio through the same packed-stereo ring the Game Boy APU uses. The
+  voice-to-voice **hard sync** (a voice's accumulator is zeroed when the
+  previous voice overflows) and **ring modulation** (the triangle's fold
+  bit XORed with the previous voice's MSB) are wired as on the chip.
+* **`.d64` as a virtual drive 8.** Rather than emulating the 1541's own
+  6502, the CBM DOS filesystem is parsed directly (BAM, directory, and the
+  track/sector chains) and the KERNAL LOAD routine is trapped at `$F4A5`:
+  `LOAD"NAME",8` / `LOAD"*",8,1` serve the file straight from the image,
+  and `LOAD"$",8` synthesises the classic directory BASIC program. Dropping
+  a `.d64` auto-runs its first program.
 * **Exact integer semantics.** Every value is masked to its width
   (`& 0xFF` / `& 0xFFFF`) and every flag is computed explicitly — the
   discipline Klaus's test checks. `op_adc` / `op_sbc` implement the full
@@ -131,8 +172,17 @@ curl -s localhost:8000/build_wasm -H 'content-type: application/json' \
 - [x] 6510 CPU + flags + decimal mode + indirect-JMP bug → `6502_functional_test` PASS
 - [x] PLA banking (`$0001` port) + KERNAL/BASIC/CHARGEN mapping + CIA1 timer IRQ + keyboard + VIC-II text → **boots to `READY.`**, type BASIC
 - [x] WebAssembly build + `/c64demo` browser page (canvas + keyboard)
-- [ ] VIC-II bitmap + sprites, raster IRQ, badlines
-- [ ] SID (3 voices, ADSR, filter)
-- [ ] CIA2 timers + NMI (RESTORE), `.prg` autoload, `.d64` drive
+- [x] `.prg` load + autostart (RUN for `$0801`, else SYS) — drag a `.prg` onto the screen
+- [x] VIC-II hardware sprites (hi-res + multicolour + X/Y expand) + raster-compare IRQ + per-scanline border/background → raster splits & colour bars (try the built-in demo)
+- [x] VIC-II bitmap mode (hi-res 320×200 + multicolour 160×200), multicolour text, and sprite-to-background priority
+- [x] SID (6581): 3 voices, tri/saw/pulse/noise, ADSR envelopes → 48 kHz Web Audio (the built-in demo plays an arpeggio)
+- [x] SID multimode filter (LP / BP / HP + resonance, per-voice routing) — the demo runs its saw lead through a resonant low-pass
+- [x] `.d64` virtual drive 8 — `LOAD"*",8,1` / `LOAD"NAME",8` / `LOAD"$",8` via a KERNAL trap; drag a `.d64` onto the screen to auto-run its first program
+- [x] Sprite collision detection — sprite-to-sprite ($D01E) and sprite-to-background ($D01F) latches + their raster IRQ sources
+- [x] CIA2 (timers A/B + interrupt control) wired to the /NMI line, plus the RESTORE key → RUN/STOP+RESTORE warm-resets the machine
+- [x] SID oscillator interaction — hard sync ($D404 bit1) and ring modulation ($D404 bit2), wired voice→voice as the chip does
+- [ ] The 6581 cutoff-curve table, ADSR delay bug
+- [ ] Badlines / cycle-exact VIC timing
+- [ ] `.d64` writing / SAVE, REU / cartridge support
 
 [klaus]: https://github.com/Klaus2m5/6502_65C02_functional_tests
