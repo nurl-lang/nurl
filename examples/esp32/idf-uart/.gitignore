@@ -1,0 +1,5 @@
+/build/
+/sdkconfig
+/sdkconfig.old
+nurl/nurl_uart.ll
+nurl/nurl_uart.o

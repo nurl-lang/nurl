@@ -1,0 +1,3 @@
+# The echo task intentionally runs a tight, never-yielding NURL I/O loop, so
+# the task watchdog (which monitors idle-task starvation) is turned off.
+CONFIG_ESP_TASK_WDT_INIT=n

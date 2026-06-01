@@ -76,6 +76,38 @@ change the pin mask + the IO_MUX address in `nurl/nurl_blink.nu`.
 
 ---
 
+## Xtensa: UART echo, fully NURL-driven (`idf-uart/`)
+
+A second ESP-IDF project that shows NURL doing **bidirectional** hardware I/O,
+not just output. The whole read-echo cycle is in NURL — C's `app_main` calls
+`nurl_uart_echo()` once and never returns. NURL polls UART0's RX FIFO and
+writes its TX FIFO directly through device registers (TX via the APB FIFO, RX
+via the AHB FIFO at `0x60000000` to dodge an ESP32 RX erratum).
+
+It's built on a **new hardware-abstraction stdlib**:
+
+- `stdlib/hal/mmio.nu`  — generic 32-bit MMIO primitives (`mmio_read32` /
+  `mmio_write32` / `mmio_set32` / `mmio_clear32`).
+- `stdlib/hal/esp32.nu` — ESP32 register map: GPIO + UART0, built on `mmio`.
+
+```sh
+. $IDF_PATH/export.sh
+cd idf-uart
+idf.py set-target esp32
+idf.py -p /dev/ttyUSB0 flash monitor      # type — NURL echoes every byte
+```
+
+Verified on hardware: typing `Hello, NURL!⏎` returns `Hello, NURL!` with the
+Enter turned into a fresh `> ` prompt, all by NURL register pokes.
+
+**`-O0` matters here.** `esp32_uart_getc/putc` spin on a FIFO-status read, and
+NURL has no `volatile`, so at `-O2` LLVM's LICM can hoist that read out of the
+loop and the spin never exits. `gen_object.sh` builds the UART object at `-O0`;
+the blink (no spin loops) stays at `-O2`. The task watchdog is turned off in
+`sdkconfig.defaults` because the echo task intentionally owns the CPU.
+
+---
+
 ## RISC-V: build a linked ELF (stock LLVM)
 
 `blink.nu` is the same blink for the RISC-V ESP32 variants. Stock LLVM's
@@ -113,18 +145,26 @@ stock toolchain handles ESP32-C3/C6/H2 directly.
 ## Files
 
 ```
-idf-blink/                 ESP-IDF project — the Xtensa blink that runs on hardware
+idf-blink/                 ESP-IDF project — Xtensa GPIO blink, runs on hardware
   main/app_main.c          C entry: vTaskDelay timing + serial log; calls into NURL
   main/CMakeLists.txt      auto-runs nurlc + esp-clang, links the NURL object
   nurl/nurl_blink.nu       all GPIO register control, in NURL
   nurl/gen_object.sh       nurlc -> .ll -> esp-clang -> .o
   sdkconfig.defaults
 
+idf-uart/                  ESP-IDF project — Xtensa UART echo, fully NURL-driven
+  main/app_main.c          C entry: hands UART0 to NURL and never returns
+  nurl/nurl_uart.nu        greeting + RX->TX echo loop; imports stdlib/hal/esp32.nu
+  nurl/gen_object.sh       same pipeline, built at -O0 (MMIO spin loops)
+
 blink.nu                   RISC-V (ESP32-C3) blink — buildable with stock LLVM
 blink_xtensa.nu            standalone Xtensa blink (IR/codegen demo, no IDF)
 start.c, esp32c3.ld        freestanding startup + linker script for the RISC-V ELF
 build.sh                   RISC-V pipeline driver -> build/blink.elf
 ```
+
+The reusable hardware HAL lives in the main tree:
+`stdlib/hal/mmio.nu` (generic MMIO) and `stdlib/hal/esp32.nu` (ESP32 GPIO + UART).
 
 ---
 
