@@ -44,6 +44,7 @@ $ `stdlib/std/hash_md5.nu`
 $ `stdlib/std/hash_sha1.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/hash_sha512.nu`
+$ `stdlib/std/hash_blake3.nu`
 
 // Helper: copy a NUL-terminated raw `s` into an owned Vec[u].
 @ __hash_str_to_bytes s str → ( Vec u ) {
@@ -83,6 +84,19 @@ $ `stdlib/std/hash_sha512.nu`
 
 @ sha1_hex ( Vec u ) data → String {
     : ( Vec u ) digest ( sha1_bytes data )
+    : String out ( bytes_to_hex digest )
+    ( vec_free [u] digest )
+    ^ out
+}
+
+// ── BLAKE3 (32-byte default output) ─────────────────────────────────
+
+@ blake3_bytes ( Vec u ) data → ( Vec u ) {
+    ^ ( blake3_pure data )
+}
+
+@ blake3_hex ( Vec u ) data → String {
+    : ( Vec u ) digest ( blake3_bytes data )
     : String out ( bytes_to_hex digest )
     ( vec_free [u] digest )
     ^ out
