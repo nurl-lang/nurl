@@ -5524,11 +5524,22 @@
     ( nurl_lex_advance lex )
     ( bck_block_enter bck_line )
     : s last `undef`
+    : ~ b any F
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         = last ( gen_stmt lex syms cg )
+        = any T
     }
     ( nurl_lex_advance lex )
     ( bck_block_exit )
+    // An empty block `{}` is the unit / void value. Without typing it as
+    // void, `nurl_get_last_type` retains whatever it was before the block
+    // (i64 by default, i1 inside a conditional), so a `^ {}` in a void
+    // function emitted `ret i64 undef` — invalid IR. Typing it void also
+    // makes a value-position `? c { v } {}` (empty else) consistently
+    // void rather than a dead `phi [v, undef]`, which in turn lets the
+    // owned-string auto-drop fire correctly at the arm boundary.
+    // (A non-empty block's type is set by its trailing statement.)
+    ? ! any { ( nurl_set_last_type `void` ) } {}
     last
 }
 
