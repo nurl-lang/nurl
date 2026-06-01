@@ -12,9 +12,9 @@
 // ============================================================
 
 // --- Classic ESP32 GPIO register map (TRM "IO_MUX / GPIO matrix") ---
-: i REG_GPIO_OUT_W1TS 1072971784  // 0x3FF4_4008  set output bits
-: i REG_GPIO_OUT_W1TC 1072971788  // 0x3FF4_400C  clear output bits
-: i REG_GPIO_ENABLE_W1TS 1072971812  // 0x3FF4_4024  enable as output
+: i REG_GPIO_OUT_W1TS 0x3FF44008  // set output bits
+: i REG_GPIO_OUT_W1TC 0x3FF4400C  // clear output bits
+: i REG_GPIO_ENABLE_W1TS 0x3FF44024  // enable as output
 : i PIN_MASK 4  // 1 << 2       GPIO2 (common LED)
 
 @ poke i addr i32 val → v {

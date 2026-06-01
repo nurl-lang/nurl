@@ -10,6 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`volatile_load` / `volatile_store` compiler intrinsics for MMIO.** Emit
+  `load volatile` / `store volatile` as pure IR (no runtime call, so they
+  work on a freestanding target). The optimizer can no longer hoist an MMIO
+  read out of a polling loop (LICM), reorder accesses, or coalesce repeated
+  reads/writes — the missing piece for spinning on a device status register
+  at `-O2`. The access width comes from the typed pointer argument (`*T`),
+  so one pair covers i8/i16/i32/i64. `stdlib/hal/mmio.nu`
+  (`mmio_read32`/`write32`/`set32`/`clear32`) now uses them, so the ESP32
+  UART/GPIO drivers no longer need the `-O0` workaround. Regression:
+  `compiler/tests/volatile_mmio.nu`; verified at `-O2` the volatile load
+  stays inside the loop body.
+
+### Fixed
+
+- **nurlfmt split hex/binary/octal integer literals.** The tokenizer's
+  numeric scanner stopped at the first non-decimal digit, so `0x3FF44008`
+  became two tokens (`0` + identifier `x3FF44008`) and the reformatted
+  source miscompiled — silently, because `--check` is idempotent on its own
+  broken output. `tools/nurlfmt/tokenize.nu` now scans a `0x`/`0b`/`0o`
+  prefix and its body as one token. Verified by the
+  `nurlfmt_idempotent.sh` gate (450 files, IR-transparent) and by restoring
+  the hex literals in the `examples/esp32/*` register maps that had been
+  worked around with decimal constants.
+
 - **SQLite production hardening (Tier 1 + Tier 2).** `stdlib/ext/sqlite.nu`
   is now binary-safe and resource-safe:
   - **NUL-safe text I/O.** `sqlite_column_text` reads the column's exact
