@@ -3509,6 +3509,130 @@
     ^ `void`
 }
 
+// Does the call's argument list (lexer at the first argument) use any
+// `name:` label at the call's top level? A token scan with bracket-depth
+// tracking; restores the lexer position. `IDENT :` at depth 0 is a named
+// argument (a bare `:` never appears in a positional arg expression).
+@ __kw_has_named i lex → b {
+    : i save ( nurl_lex_cur_start lex )
+    : ~ i depth 0
+    : ~ b found F
+    : ~ b done F
+    ~ ! done {
+        : i tt ( nurl_lex_type lex )
+        ? == tt TT_EOF { = done T } {
+        ? | | == tt TT_LPAREN == tt TT_LBRACK == tt TT_LBRACE
+        { = depth + depth 1 ( nurl_lex_advance lex ) } {
+        ? == tt TT_RPAREN
+        { ? == depth 0 { = done T } { = depth - depth 1 ( nurl_lex_advance lex ) } } {
+        ? | == tt TT_RBRACK == tt TT_RBRACE
+        { = depth - depth 1 ( nurl_lex_advance lex ) } {
+        ? & & == depth 0 ( is_ident_tok tt ) == ( nurl_lex_peek_type lex ) TT_COLON
+        { = found T = done T }
+        { ( nurl_lex_advance lex ) } } } } }
+    }
+    ( nurl_lex_set_pos lex save )
+    ^ found
+}
+
+// Per-call scratch key for the argstr piece chosen for parameter `i`.
+// `seq` is a unique per-call id (g_func_count) so nested kwargs calls
+// (an argument that is itself a kwargs call) never clobber each other.
+@ __kw_slot_key i sq i i → s {
+    ^ ( nurl_str_cat4 `__kwslot_` ( nurl_str_int sq ) `_` ( nurl_str_int i ) )
+}
+
+// argstr piece for parameter k that was not supplied: its default, or a
+// missing-argument error.
+@ __kw_default_or_die i lex i syms i cg s fname i k → s {
+    : s dsrc ( nurl_sym_get syms ( __kw_key fname `pd` k ) )
+    ? == 0 ( nurl_str_len dsrc )
+    { ( die lex ( nurl_str_cat3
+        `call to '` fname
+        ( nurl_str_cat3 `' is missing required argument '`
+        ( nurl_sym_get syms ( __kw_key fname `pn` k ) ) `'` ) ) ) }
+    {}
+    ^ ( __kw_emit_default syms cg dsrc )
+}
+
+// Named-argument call path. Evaluates each argument (positional or
+// `name:`-labelled) in source order, then assembles the call with values
+// in PARAMETER order, filling omitted parameters from their defaults.
+// Restricted to ordinary @-functions with no inout/sink parameters
+// (guarded by the caller); generics/FFI/variadic never reach here.
+@ gen_call_kwargs i lex i syms i cg s fname → s {
+    : i kw_n ( nurl_str_to_int ( nurl_sym_get syms ( nurl_str_cat fname `__kw_n` ) ) )
+    = g_func_count + g_func_count 1
+    : i kwseq g_func_count
+    : ~ s owned_temps ``
+    : ~ i posk 0
+    : ~ b seen_named F
+    ~ != ( nurl_lex_type lex ) TT_RPAREN {
+        : i tt ( nurl_lex_type lex )
+        : b named & ( is_ident_tok tt ) == ( nurl_lex_peek_type lex ) TT_COLON
+        : ~ i slot -1
+        ? named
+        { = seen_named T
+            : s aname ( nurl_lex_val lex )
+            ( nurl_lex_advance lex )  // name
+            ( nurl_lex_advance lex )  // ':'
+            : ~ i j 0
+            ~ < j kw_n {
+                ? ( seq ( nurl_sym_get syms ( __kw_key fname `pn` j ) ) aname )
+                { = slot j = j kw_n } { = j + j 1 }
+            }
+            ? == slot -1
+            { ( die lex ( nurl_str_cat3 `call to '` fname
+                ( nurl_str_cat3 `' has no parameter named '` aname `'` ) ) ) }
+            {}
+        }
+        { ? seen_named
+            { ( die lex `positional argument after a named argument is not allowed` ) } {}
+            = slot posk
+            = posk + posk 1
+        }
+        : s av ( gen_operand lex syms cg )
+        : s at ( nurl_get_last_type )
+        ( nurl_sym_def syms ( __kw_slot_key kwseq slot ) ( nurl_str_cat3 at ` ` av ) )
+        ? & & != 0 g_auto_drop_strings ( seq at `i8*` )
+        ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
+        { = owned_temps ? == 0 ( nurl_str_len owned_temps ) av ( nurl_str_cat3 owned_temps ` ` av ) }
+        {}
+    }
+    ( expect lex TT_RPAREN )
+    : ~ s argstr ``
+    : ~ i k 0
+    ~ < k kw_n {
+        : s piece ( nurl_sym_get syms ( __kw_slot_key kwseq k ) )
+        : s use_piece ? != 0 ( nurl_str_len piece ) piece ( __kw_default_or_die lex syms cg fname k )
+        = argstr ? == 0 ( nurl_str_len argstr ) use_piece ( nurl_str_cat3 argstr `, ` use_piece )
+        = k + k 1
+    }
+    // Result metadata — mirror gen_call's ordinary-call setup so the
+    // caller's `??` / try / let-binding sees the right payload + ownership.
+    ( nurl_sym_def syms `__last_nurl_call__` ( nurl_sym_get syms ( nurl_str_cat fname `__nurl_ret` ) ) )
+    ( nurl_sym_def syms `__last_call_res_t_llvm__` ( nurl_sym_get syms ( nurl_str_cat fname `__res_t_llvm` ) ) )
+    ( nurl_sym_def syms `__last_call_res_e_llvm__` ( nurl_sym_get syms ( nurl_str_cat fname `__res_e_llvm` ) ) )
+    ( nurl_sym_def syms `__last_call_opt_nurl_t__` ( nurl_sym_get syms ( nurl_str_cat fname `__opt_nurl_t` ) ) )
+    ( nurl_sym_def syms `__last_call_ret_owned__` ( nurl_sym_get syms ( nurl_str_cat fname `__ret_owned` ) ) )
+    : s rl ( nurl_sym_get syms fname )
+    : s rlt ? == 0 ( nurl_str_len rl ) `i64` rl
+    ? ( seq rlt `void` )
+    { ( nurl_print `  call void @` ) ( nurl_print fname )
+        ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
+        ( mem_drop_arg_temps owned_temps )
+        ( nurl_set_last_type `void` )
+        ^ `undef` }
+    {}
+    : s res ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print res ) ( nurl_print ` = call ` ) ( nurl_print rlt )
+    ( nurl_print ` @` ) ( nurl_print fname )
+    ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
+    ( mem_drop_arg_temps owned_temps )
+    ( nurl_set_last_type rlt )
+    ^ res
+}
+
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
@@ -3696,6 +3820,18 @@
     // never released and leaks for the rest of the function's lifetime.
     // Convention: callees borrow i8* args and must `strdup` if they retain
     // (see runtime.c hardening for nurl_set_last_type, nurl_sym_get, ...).
+    // Keyword-args — named call arguments. When the callee is an ordinary
+    // @-function (kw_n recorded) with no inout/sink parameters, not
+    // shadowed by a local, and the call uses `name:` labels, route to the
+    // reordering path. A `name:` label never appears at a positional call's
+    // top level, so legacy calls never divert → byte-identical codegen.
+    ? & & & & != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__kw_n` ) ) )
+    == 0 ( nurl_str_len callee_inout )
+    == 0 ( nurl_str_len callee_sink )
+    == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__ptr` ) ) )
+    ( __kw_has_named lex )
+    { ^ ( gen_call_kwargs lex syms cg fname ) }
+    {}
     : s owned_arg_temps ``
     // N-readers-XOR-1-writer: a binding passed to this call as
     // `inout` is mutably borrowed for the call's duration; it must
@@ -3905,6 +4041,30 @@
         { = argstr ( nurl_str_cat argstr ( nurl_str_cat4 `, ` at ` ` av ) ) }
         = arg_idx + arg_idx 1
     }
+    // Keyword-args — default values. Fill omitted TRAILING parameters
+    // with their declared defaults: when the callee recorded defaults
+    // (`__kw_hasdef`) and the call supplied fewer positional args than
+    // parameters, each default's single-token source is parsed here and
+    // appended as an ordinary positional argument, so the arity check
+    // below then passes. Stops at the first omitted parameter that has no
+    // default, so a genuine missing argument still errors there. Existing
+    // fully-supplied calls never enter the loop → byte-identical codegen.
+    ? & ( seq ( nurl_sym_get syms ( nurl_str_cat fname `__kw_hasdef` ) ) `1` )
+    ( seq call_name fname )
+    { : s kw_n_s ( nurl_sym_get syms ( nurl_str_cat fname `__kw_n` ) )
+        : i kw_n ? == 0 ( nurl_str_len kw_n_s ) 0 ( nurl_str_to_int kw_n_s )
+        : ~ b kw_stop F
+        ~ & & < arg_idx kw_n ! kw_stop
+        != 0 ( nurl_str_len ( nurl_sym_get syms ( __kw_key fname `pd` arg_idx ) ) )
+        { : s dsrc ( nurl_sym_get syms ( __kw_key fname `pd` arg_idx ) )
+            : s argpiece ( __kw_emit_default syms cg dsrc )
+            ? == 0 ( nurl_str_len argstr )
+            { = argstr argpiece = first 0 }
+            { = argstr ( nurl_str_cat3 argstr `, ` argpiece ) }
+            = arg_idx + arg_idx 1
+        }
+    }
+    {}
     // Call-arity check. scan_fn_sigs records every non-generic
     // @-function's declared parameter count as `<fname>__arity`. A call
     // with the wrong argument count otherwise emits a malformed `call`
@@ -10705,6 +10865,12 @@
         { ( die lex `parameter name 'inout' is a reserved convention keyword - rename it` ) }
         {}
         ( nurl_lex_advance lex )
+        // Default value `= <single-token>` (keyword-args). The callee does
+        // not use it — callers splice it for omitted arguments — so here
+        // we only consume the tokens. Only fires when `=` is present.
+        ? == ( nurl_lex_type lex ) TT_EQ
+        { ( nurl_lex_advance lex ) ( nurl_lex_advance lex ) }
+        {}
         ( nurl_sym_def syms pname lt )
         // Mark parameter as immutable by design
         ( nurl_sym_def syms ( nurl_str_cat pname `__param` ) `1` )
@@ -12485,6 +12651,46 @@
 }
 
 // scan_fn_sigs: register return types of all @ and & declarations.
+// ── Keyword arguments (default params + named call args) ──────────
+//
+// scan_fn_sigs records, for every non-generic @-function:
+//   <fname>__kw_n        parameter count
+//   <fname>__kw_pn_<i>   i-th parameter NAME
+//   <fname>__kw_pd_<i>   i-th parameter's default-value SOURCE ("" = none)
+//   <fname>__kw_hasdef   "1" if any parameter carries a default
+// gen_call consults these to desugar a call that uses `name:` labels or
+// omits trailing defaulted arguments into an ordinary positional call.
+// A default value is a single source token (literal / const / atom),
+// which covers the common cases (`= `Task``, `= 50`, `= F`); a richer
+// default can be a named const.
+
+@ __kw_key s fname s tag i idx → s {
+    ^ ( nurl_str_cat fname ( nurl_str_cat4 `__kw_` tag `_` ( nurl_str_int idx ) ) )
+}
+
+// Trim trailing whitespace from a captured source slice.
+@ __kw_trim s raw → s {
+    : ~ i n ( nurl_str_len raw )
+    ~ > n 0 {
+        : i c ( nurl_str_get raw - n 1 )
+        ? | | | == c 32 == c 9 == c 13 == c 10
+        { = n - n 1 }
+        { ^ ( nurl_str_slice raw 0 n ) }
+    }
+    ^ ( nurl_str_slice raw 0 n )
+}
+
+// Evaluate a parameter default's source (e.g. ``Task`` / `50`) through a
+// sub-lexer that shares the caller's codegen + symbol state, and return
+// the `"<llvm-type> <value>"` piece to splice into a call's argument
+// list. The value instruction is emitted into the current output.
+@ __kw_emit_default i syms i cg s src → s {
+    : i sub ( nurl_lex_new src `<kw-default>` )
+    : s v ( gen_operand sub syms cg )
+    : s t ( nurl_get_last_type )
+    ^ ( nurl_str_cat3 t ` ` v )
+}
+
 @ scan_fn_sigs i lex i syms → v {
     // Brace-depth tracker. A `:` struct decl body or any `@`-function body
     // contains `{ ... }`; the `@` inside a closure-shaped struct field
@@ -12594,7 +12800,23 @@
                                     ? == 0 ( scan_skip_type lex )
                                     { = pc_ok F }
                                     { ? ( is_ident_tok ( nurl_lex_type lex ) )
-                                        { ( nurl_lex_advance lex ) = pcount + pcount 1 }
+                                        { : s pnm ( nurl_lex_val lex )
+                                            ( nurl_lex_advance lex )
+                                            ( nurl_sym_def syms ( __kw_key fname `pn` pcount ) pnm )
+                                            // Optional default value: `= <single-token>`.
+                                            // Only fires when `=` is present, so existing
+                                            // param regions scan byte-identically.
+                                            ? == ( nurl_lex_type lex ) TT_EQ
+                                            { ( nurl_lex_advance lex )
+                                                : i kds ( nurl_lex_cur_start lex )
+                                                ( nurl_lex_advance lex )
+                                                : i kde ( nurl_lex_cur_start lex )
+                                                ( nurl_sym_def syms ( __kw_key fname `pd` pcount )
+                                                ( __kw_trim ( nurl_lex_src_slice lex kds - kde kds ) ) )
+                                                ( nurl_sym_def syms ( nurl_str_cat fname `__kw_hasdef` ) `1` )
+                                            }
+                                            {}
+                                            = pcount + pcount 1 }
                                         { = pc_ok F } } }
                                 // If the count was abandoned mid-region, advance the
                                 // rest blind so the `->` / ret-type handling still
@@ -12605,7 +12827,8 @@
                                 { ( nurl_sym_def syms ( nurl_str_cat fname `__has_inout` ) `1` ) }
                                 {}
                                 ? pc_ok
-                                { : s ar_key ( nurl_str_cat fname `__arity` )
+                                { ( nurl_sym_def syms ( nurl_str_cat fname `__kw_n` ) ( nurl_str_int pcount ) )
+                                    : s ar_key ( nurl_str_cat fname `__arity` )
                                     : s ar_prev ( nurl_sym_get syms ar_key )
                                     : s ar_new ( nurl_str_int pcount )
                                     // Two definitions of the same name with

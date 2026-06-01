@@ -140,8 +140,16 @@ type_params = '[' ( IDENT ( ':' IDENT )* )+ ']' ;
    Example:  @ id [T] T x → T { ^ x }          — generic
    Example:  @ bump inout Counter c → v { = . c n + . c n 1 } *)
 fn_decl   = '@' IDENT type_params? param* '→' type block ;
-param     = param_conv? type IDENT ;
+param     = param_conv? type IDENT ( '=' atom )? ;
 param_conv = 'in' | 'inout' | 'sink' ;
+
+(* Default parameter value (keyword args). `= atom` gives a trailing
+   parameter a default; `atom` is a single token (literal / const name /
+   T / F). A call may then omit defaulted trailing arguments. Defaults
+   are filled at the CALL SITE (the callee receives a full argument
+   list), so a function with a default is an ordinary fixed-arity
+   function. Not available on generic functions, FFI / variadic decls,
+   or parameters carrying the `inout` / `sink` convention. *)
 
 
 (* : Name type_params? { field* }
@@ -474,8 +482,17 @@ block_expr = '{' stmt* '}' ;
    monomorphises by mangling on these identifier tokens.
    Example:  ( add 3 4 )              ( nurl_print `hello\n` )
    Example:  ( id [i] 42 )            — monomorphise generic id with T=i
-   Example:  ( alloc [Point] 16 )     — Point is a struct name *)
-call_expr = '(' IDENT ( '[' IDENT+ ']' )? expr* ')' ;
+   Example:  ( alloc [Point] 16 )     — Point is a struct name
+
+   A call argument may be NAMED with an `IDENT ':'` label (keyword
+   args). Named arguments may appear in any order and follow any leading
+   positional ones; omitted parameters fall back to their defaults. A
+   bare `:` never begins a positional argument, so `IDENT ':'` at a
+   call's top level is unambiguously a label.
+   Example:  ( create_issue key summary issue_type: `Bug` )
+   Example:  ( greet greeting: `Hi` name: `Bob` )                       *)
+call_arg  = ( IDENT ':' )? expr ;
+call_expr = '(' IDENT ( '[' IDENT+ ']' )? call_arg* ')' ;
 
 (* [ type | expr* ]  — slice literal
    Allocates a heap array, stores values, returns { T*, i64 } slice struct.
