@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- **`docs/GOTCHAS.md` reduced to "Currently no known gotchas."** Every
+  source-level trap is now a compiler diagnostic (`error:`/`warning:` with a
+  caret + cure), so the page no longer lists a museum of resolved issues.
+  The real content that lived there was relocated to its proper home: the
+  fiber-runtime operational caveats (non-blocking handle flipping,
+  `runtime_run` blocking, stack-borrow capture, plus runtime-maintainer
+  notes on TLS-under-LTO and the reactor park/unpark ordering) moved to
+  [`docs/ASYNC.md`](docs/ASYNC.md) → Operational caveats, and the
+  `: ~`-capture lifetime rule now points at [`docs/MEMORY.md`](docs/MEMORY.md)
+  §2.3. Updated every back-reference (`docs/spec.md`, `docs/LIMITATIONS.md`,
+  `ROADMAP.md`'s "5 active quirks" status line, the VS Code extension
+  README, and stale `GOTCHAS.md item N` comments in `stdlib/ext/toml.nu`,
+  `mcp_http.nu`, `http_multipart.nu`). All internal links verified.
 - **`docs/LIMITATIONS.md` scoped to actual language/compiler limitations.**
   Removed the standard-library capability tables (PostgreSQL, SQLite,
   panic/recover) that were never language limitations — that information

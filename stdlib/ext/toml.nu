@@ -98,7 +98,7 @@ $ `stdlib/core/option.nu`
 // ── Char-class predicates ────────────────────────────────────────
 
 @ __t_is_ws i c → b {
-    // `|` is strictly binary (docs/GOTCHAS.md item 1) — pair via
+    // `|` is strictly binary (docs/LIMITATIONS.md → Grammar) — pair via
     // intermediate bindings instead of nesting parens (which would
     // be parsed as `( fn args )` calls).
     : b a | == c 32 == c 9

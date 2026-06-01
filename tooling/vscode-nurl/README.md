@@ -111,7 +111,7 @@ Then run `npm install` inside that folder so the
 * **Compile errors point at the wrong location**: NURL diagnostics
   use 1-based line/column and prefix-notation, which the extension
   translates to LSP's 0-based positions. The caret position is the
-  one the compiler emits — see [`docs/GOTCHAS.md`] item 4 for why
+  one the compiler emits — see [`docs/LIMITATIONS.md`] → Grammar for why
   prefix-arity errors sometimes report the wrong line.
 
 ## Release Notes

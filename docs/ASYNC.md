@@ -474,8 +474,8 @@ Benchmark recorded in `docs/ASYNC.md` Part VII.
 - `examples/async_echo.nu` — minimal echo server
 - `examples/async_http_server.nu` — full HTTP server
 - `examples/async_ping_pong.nu` — Channel\[A\] benchmark
-- `docs/GOTCHAS.md` — new fiber-specific traps (e.g., capturing a
-  stack-allocated struct into a spawned closure)
+- Fiber-specific operational caveats (e.g., capturing a stack-allocated
+  struct into a spawned closure) — see [Operational caveats](#operational-caveats) above
 - `README.md` — Concurrency Model section rewrite
 - Bootstrap fixed point: stage1 ≡ stage2 byte-identical IR across the
   whole change
@@ -611,4 +611,47 @@ continues to work unchanged.
 
 ---
 
-*Last updated: 2026-05-23 — initial draft.*
+## Operational caveats
+
+The fiber runtime is designed to look and feel like ordinary code (no
+`async`/`await` colouring), but a few platform and usage realities leak
+through. None of these are *language* surprises the compiler can diagnose —
+they are runtime/operational notes; the compiler's own diagnostics cover the
+source-level traps.
+
+- **One async call flips the handle to non-blocking.** Once any of
+  `tcp_accept_async` / `tcp_read_chunk_async` / `tcp_write_all_async` runs on
+  a `TcpListener` / `TcpConn`, the underlying socket has `O_NONBLOCK` set. A
+  subsequent **sync** call on the same handle from a non-fiber context then
+  surfaces `EAGAIN` as `NetTimeout`. Stay in async mode for that handle, or
+  call `tcp_set_nonblock_*` to flip it back.
+- **`runtime_run` blocks until `pending = 0`.** Every un-reaped `spawn` (the
+  fire-and-forget shape) bumps the pending count; every fiber that runs to
+  completion decrements it. A long-running accept fiber that never returns
+  keeps `runtime_run` blocked forever — which is exactly what a server wants.
+  Call `server_stop` / `runtime_shutdown` to drain on demand.
+- **Capturing a stack-borrowed pointer in a spawned closure** is the same
+  hazard as `thread_spawn`. The borrow checker's escape analysis catches the
+  documented shapes (see [`MEMORY.md` §2.3](MEMORY.md)); for shared mutable
+  state across fibers use a heap-backed handle (`Mutex` + `Vec[i]`, …) rather
+  than a `: ~`-captured stack struct.
+
+### Implementation notes (runtime maintainers)
+
+- **TLS reads must stay un-inlined under LTO.** Any `runtime.c §24` function
+  that reads `nurl__tls_worker` carries `__attribute__((noinline))`:
+  cross-TU inlining of a `__thread` access under `clang -O2 -flto` lowers the
+  segment-register-relative load incorrectly, returning a stale/NULL worker
+  pointer (symptom: `nurl_fiber_current` returns 0 inside a resumed fiber, so
+  fiber-aware `tcp_accept` falls through to the blocking path and surfaces
+  `NetTimeout`). A new TLS-reading runtime entry point must be annotated the
+  same way.
+- **Reactor park-vs-unpark ordering.** `nurl__reactor_wait` registers the
+  wait entry with `active = 0`; the worker loop flips it via
+  `nurl__reactor_activate` only after the parking fiber's `swapcontext`
+  completes, so an unpark cannot fire before the context is fully saved.
+  Channel-coordinated parks use the symmetric `pending_unlock` deferral.
+
+---
+
+*Last updated: 2026-06-01 — operational caveats relocated from docs/GOTCHAS.md.*
