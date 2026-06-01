@@ -470,6 +470,17 @@
 : i g_str_idx 0
 : i g_str_syms 0  // sym handle for string-literal metadata (never pushed/popped)
 : i g_did_ret 0  // set to 1 by gen_ret; checked/reset by gen_cond
+// Cascade guard: 1 while parsing a VALUE OPERAND (a binary/unary/cast/
+// member operand, a call argument, a `?`/`??` condition/scrutinee, or a
+// return value). `^` (return) is control flow and is meaningless in those
+// positions — encountering it means a preceding fixed-arity prefix
+// operator was short an argument and silently consumed the `^`, so
+// gen_ret dies with a cascade diagnostic instead of emitting a `ret`
+// mid-expression (dead code after the terminator — a silent miscompile).
+// Default 0 (statement / tail position, where `^` is legal); set to 1 by
+// gen_operand around operand parses, and reset to 0 by the control-flow
+// handlers for their arm/body sub-parses (which ARE legal `^` positions).
+: i g_ret_forbidden 0
 : i g_defer_count 0  // number of active defers in the current function
 : i g_generic_syms 0  // sym handle for stored generic function templates (Group E)
 : i g_generic_struct_syms 0  // generic struct templates (Group E-structs).
@@ -1372,10 +1383,22 @@
 }
 
 @ gen_ret i lex i syms i cg → s {
+    // Cascade guard: a `^` reached here while parsing a value operand
+    // (g_ret_forbidden set by gen_operand / a `?`-condition / `??`-
+    // scrutinee / a return value) means a preceding fixed-arity prefix
+    // operator was short an argument and swallowed this `^`. Emitting a
+    // `ret` would terminate the block mid-expression, leaving the
+    // operator's result as dead code after the terminator — a silent
+    // miscompile (e.g. `: i x + 1` / `^ a` lowered `+ 1 (^ a)` to
+    // `ret %a` then a dead `add`). Reject it on the `^`. Closes the
+    // within-statement half of the prefix-arity cascade gotcha.
+    ? != 0 g_ret_forbidden
+    { ( die lex `'^' (return) cannot appear here — it is being read as a value operand. A preceding prefix operator is short an argument and consumed this '^': every NURL operator has fixed arity and no closing bracket, so a missing operand silently swallows what follows. Count the operands on the operator before this '^'.` ) }
+    {}
     // Borrow checker: source line of the `^` token.
     : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
-    // GOTCHAS.md item 1: `^ ?? value { F e → {…} T m → {…} }` looks
+    // The `^ ?? value { F e → {…} T m → {…} }` shape looks
     // like "return a match expression", but when ANY arm contains its
     // own `^`, the `??` becomes statement-form and yields `void`, so
     // the outer `^` has nothing to return. Snapshot whether the next
@@ -1386,7 +1409,7 @@
     ( nurl_sym_def syms `__last_ident_name__` `` )
     // Reset the escape side-channel so we can tell whether the
     // returned expression is itself a stack reference — a closure
-    // literal capturing a binding by pointer (docs/GOTCHAS.md item 5).
+    // literal capturing a binding by pointer (docs/MEMORY.md §2.3).
     ( nurl_sym_def syms `__last_expr_refdepth__` `` )
     // Tail-call optimisation: mark the upcoming expression as
     // "tail-position" so gen_call can emit `tail call` (the LLVM
@@ -1408,7 +1431,7 @@
     ( seq ( nurl_sym_get syms `__defer_top__` ) `` )
     { ( nurl_sym_def syms `__tail_call_pending__` `1` ) }
     {}
-    : s val ( gen_expr lex syms cg )
+    : s val ( gen_operand lex syms cg )
     // XOR confusion (critic v0.9.0 §1): `^ X Y` on the same line is
     // almost always the user thinking `^` is XOR. `^^` (two adjacent
     // carets, no space) IS XOR; `^ X` returns X and any tail tokens
@@ -1515,7 +1538,7 @@
 
 @ gen_unary_not i lex i syms i cg → s {
     ( nurl_lex_advance lex )
-    : s v ( gen_expr lex syms cg )
+    : s v ( gen_operand lex syms cg )
     : s res ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print res )
     ( nurl_print ` = xor i1 ` ) ( nurl_print v ) ( nurl_print `, 1\n` )
@@ -1589,6 +1612,19 @@
     ( gen_ident lex syms cg )
 }
 
+// gen_operand: parse a VALUE sub-expression that will be consumed by an
+// enclosing operator / call / condition. Sets g_ret_forbidden so a `^`
+// (return) appearing here — the tell-tale of a short-an-argument prefix
+// cascade — is rejected by gen_ret rather than emitting a stray `ret`.
+// Save/restore makes nesting and the control-flow reset points compose.
+@ gen_operand i lex i syms i cg → s {
+    : i saved g_ret_forbidden
+    = g_ret_forbidden 1
+    : s v ( gen_expr lex syms cg )
+    = g_ret_forbidden saved
+    ^ v
+}
+
 // ── `||` / `&&` — strict binary short-circuit (bool only) ─────────────
 // Unlike `|` / `&` (which dispatch to bitwise vs short-circuit based on
 // operand type and chain N+1 operands per N tokens), the two-char
@@ -1598,7 +1634,7 @@
 // IR is identical to gen_logical_or / gen_logical_and's i1 path.
 @ gen_oror i lex i syms i cg → s {
     ( nurl_lex_advance lex )
-    : s lv ( gen_expr lex syms cg )
+    : s lv ( gen_operand lex syms cg )
     : s lt ( nurl_get_last_type )
     ? ! ( seq lt `i1` )
     { ( die lex `operator || requires bool operands — left operand has non-bool type` ) }
@@ -1609,7 +1645,7 @@
 
 @ gen_andand i lex i syms i cg → s {
     ( nurl_lex_advance lex )
-    : s lv ( gen_expr lex syms cg )
+    : s lv ( gen_operand lex syms cg )
     : s lt ( nurl_get_last_type )
     ? ! ( seq lt `i1` )
     { ( die lex `operator && requires bool operands — left operand has non-bool type` ) }
@@ -1670,7 +1706,7 @@
         ( nurl_set_last_type ? == 0 ( nurl_str_len lt ) `i64` lt )
         : s ptr ( nurl_sym_get syms ( nurl_str_cat name `__ptr` ) )
         : s glb ( nurl_sym_get syms ( nurl_str_cat name `__global` ) )
-        // GOTCHAS.md item 11: bare `@-fn` names don't auto-coerce to a
+        // Bare `@-fn` names don't auto-coerce to a
         // `(@ R P*)` closure parameter. A bare @-fn ident used as a
         // value (i.e. NOT as a call's callee — gen_call's own path
         // consumes the name before reaching here) currently emits IR
@@ -1702,6 +1738,23 @@
         // function returns — Phase 1A defaults those to signed).
         : s u_flag ( nurl_sym_get syms ( nurl_str_cat name `__unsigned` ) )
         ( nurl_sym_def syms `__last_unsigned__` u_flag )
+        // Root-cause guard for the arity-cascade footgun (critic.md §4).
+        // Reaching this point means the name is none of: a local / match-
+        // payload / loop / inout / closure-capture binding (all carry a
+        // `__ptr`), a const or enum variant (`__global`), the void literal
+        // `v` (handled above), or a bare @-fn (dies above). The only
+        // legitimate remaining case is a by-value function parameter, which
+        // resolves to its SSA register `%name` and carries `__param`. Any
+        // other name is simply not in scope. The old code fell through to
+        // `( nurl_str_cat `%` name )` unconditionally, emitting an undefined
+        // SSA value (`%a`) that nurlc accepted with status 0 and only clang
+        // later rejected. Reject it in the front-end so the diagnostic
+        // lands on the source, making GOTCHAS.md's "every trap is a compiler
+        // diagnostic" claim true end-to-end.
+        ? & & == 0 ( nurl_str_len ptr ) == 0 ( nurl_str_len glb )
+        == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat name `__param` ) ) )
+        { ( die lex ( nurl_str_cat3 `use of undefined identifier '` name `' - no binding, parameter, constant, enum variant, or function with this name is in scope` ) ) }
+        {}
         ^ ? != 0 ( nurl_str_len ptr )
         ( load_var cg lt ptr )
         ? != 0 ( nurl_str_len glb )
@@ -1726,7 +1779,7 @@
             ( die lex ( nurl_str_cat3
             ( nurl_str_cat3 `unexpected ` un ` where a value expression is required —` )
             where
-            ` a prefix operator is short an argument: every NURL operator has fixed arity and no closing bracket, so a missing operand silently consumes whatever follows. See README -> Known Limitations -> Grammar.` ) ) }
+            ` a prefix operator is short an argument: every NURL operator has fixed arity and no closing bracket, so a missing operand silently consumes whatever follows. See docs/LIMITATIONS.md -> Grammar.` ) ) }
         { ( die lex ( nurl_str_cat3 `unexpected ` un ` in expression` ) ) } }
 }
 
@@ -1746,11 +1799,11 @@
     // or legacy `u` → i8). Clear the marker before LHS so a literal-LHS
     // expression doesn't inherit stale state from a prior load.
     ( nurl_sym_def syms `__last_unsigned__` `` )
-    : s lv ( gen_expr lex syms cg )
+    : s lv ( gen_operand lex syms cg )
     : s lt ( nurl_get_last_type )
     : s lu_snap ( nurl_sym_get syms `__last_unsigned__` )
     ( nurl_sym_def syms `__last_unsigned__` `` )
-    : s rv ( gen_expr lex syms cg )
+    : s rv ( gen_operand lex syms cg )
     : s rt ( nurl_get_last_type )
     : s ru_snap ( nurl_sym_get syms `__last_unsigned__` )
     : s res ( nurl_cg_reg cg )
@@ -1895,6 +1948,10 @@
 // ── Type-based dispatch for & and | ──────────────────────────────────
 @ gen_logical_or_bitwise_and i lex i syms i cg → s {
     ( nurl_lex_advance lex )
+    // All operands of this n-ary `&` are values — forbid `^` across the
+    // whole chain (lv here + the rest parsed by gen_logical_and /
+    // gen_bitwise_binary). gen_stmt / control-flow arms reset the flag.
+    = g_ret_forbidden 1
     : s lv ( gen_expr lex syms cg )
     : s lt ( nurl_get_last_type )
     : s left_lbl ( nurl_sym_get syms `__cur_lbl__` )
@@ -1916,6 +1973,8 @@
 
 @ gen_logical_or_bitwise_or i lex i syms i cg → s {
     ( nurl_lex_advance lex )
+    // All operands of this n-ary `|` are values — see gen_logical_or_bitwise_and.
+    = g_ret_forbidden 1
     : s lv ( gen_expr lex syms cg )
     : s lt ( nurl_get_last_type )
     : s left_lbl ( nurl_sym_get syms `__cur_lbl__` )
@@ -3475,6 +3534,15 @@
         // the next call site outside the loop would defer again.
         : s gkey ( nurl_str_cat `__inst_` mangled )
         : s g_already ( nurl_sym_get g_generic_syms gkey )
+        // Both branches below resolve the instance's return type via
+        // compute_generic_ret_ty (directly, or inside defer_instantiation),
+        // whose parse_type leaves the SUBSTITUTED option/result inner-type
+        // tokens in g_res_type_syms. Reset first, then persist the option
+        // inner token under the mangled name so a direct-call `?? ( call )`
+        // match can recover signedness. The dedup-skip path runs neither
+        // compute, leaving the marker empty — so guard the store and keep
+        // the value recorded on this instance's first call in scope.
+        ( nurl_sym_def g_res_type_syms `__last_opt_nurl_t__` `` )
         ? == 0 ( nurl_str_len g_already )
         { ( defer_instantiation lex fname mangled type_args syms )
             ( nurl_sym_def g_generic_syms gkey `1` ) }
@@ -3483,6 +3551,10 @@
             { : s rt ( compute_generic_ret_ty fname type_args )
                 ( nurl_sym_def syms mangled rt ) }
             {} }
+        : s mont ( nurl_sym_get g_res_type_syms `__last_opt_nurl_t__` )
+        ? != 0 ( nurl_str_len mont )
+        { ( nurl_sym_def syms ( nurl_str_cat mangled `__opt_nurl_t` ) mont ) }
+        {}
         = call_name mangled
     }
     {}
@@ -3497,7 +3569,7 @@
     : b is_variadic ( seq ( nurl_sym_get syms ( nurl_str_cat fname `__variadic` ) ) `1` )
     : s vf_str ( nurl_sym_get syms ( nurl_str_cat fname `__variadic_fixed` ) )
     : i fixed_count ? == 0 ( nurl_str_len vf_str ) 0 ( nurl_str_to_int vf_str )
-    // Closure-escape gate (docs/GOTCHAS.md item 8).
+    // Closure-escape gate (docs/MEMORY.md §2.3).
     // These four callees take an argument that outlives the current
     // scope — pushing into a heap-backed container or detaching onto a
     // worker thread. A value that is a *stack reference* (a closure
@@ -3674,11 +3746,11 @@
                 = at ( nurl_str_cat ity `*` )
             }
         }
-        { = av ( gen_expr lex syms cg )
+        { = av ( gen_operand lex syms cg )
             = at ( nurl_get_last_type )
         }
         : s lu_arg ( nurl_sym_get syms `__last_unsigned__` )
-        // GOTCHAS.md item 2: `nurl_str_len` vs `string_len` confusion.
+        // Diagnose `nurl_str_len` vs `string_len` confusion.
         // `nurl_str_len` is the FFI to libc strlen and expects `s`
         // (i8*); passing a `%String` struct reads the struct bytes as
         // a pointer and returns garbage (bit us in manifest_parse).
@@ -3696,7 +3768,7 @@
             { ( die lex `string_len expects %String, got 'i8*' (raw C-string). Use 'nurl_str_len' for raw C-string pointers.` ) }
             {} }
         {}
-        // Escape analysis (closes docs/GOTCHAS.md item 8). If this
+        // Escape analysis (docs/MEMORY.md §2.3). If this
         // call is one of the four ownership-taking helpers AND this
         // argument is a stack reference — a closure
         // literal capturing a binding by pointer, or a binding /
@@ -3828,6 +3900,15 @@
     : s rlt ? == 0 ( nurl_str_len rl ) `i64` rl
     // Track NURL return type for try-propagation type checking
     ( nurl_sym_def syms `__last_nurl_call__` ( nurl_sym_get syms ( nurl_str_cat call_name `__nurl_ret` ) ) )
+    // Pre-computed LLVM type of the callee's Ok-payload T, so a direct-call
+    // `?? ( f … )` scrutinee can reconstruct a handle/pointer payload in the
+    // T-arm without re-deriving it from the NURL return-type string (which
+    // str_first_word mangles for paren-compounds like `( Vec u )` → `(`).
+    ( nurl_sym_def syms `__last_call_res_t_llvm__` ( nurl_sym_get syms ( nurl_str_cat call_name `__res_t_llvm` ) ) )
+    ( nurl_sym_def syms `__last_call_res_e_llvm__` ( nurl_sym_get syms ( nurl_str_cat call_name `__res_e_llvm` ) ) )
+    // Inner NURL type of a `? T`-returning callee, so a direct-call
+    // `?? ( f … ) { T b → … }` match propagates the unsigned flag to `b`.
+    ( nurl_sym_def syms `__last_call_opt_nurl_t__` ( nurl_sym_get syms ( nurl_str_cat call_name `__opt_nurl_t` ) ) )
     // Propagate slice-ownership from callee to caller's let-binding.
     // Values: "1" = owned slice (Phase 2A), "str" = owned string (Phase 2B).
     // When Phase 2B is off no function ever gets "str" registered, so behaviour
@@ -3947,7 +4028,8 @@
     // `cond`/`endcond` structural markers bracketing this conditional.
     : i bck_cline ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
-    : s cv ( gen_expr lex syms cg )
+    // The condition is a value operand — a `^` here is a cascade.
+    : s cv ( gen_operand lex syms cg )
     : s ct ( nurl_get_last_type )
     // Allow non-i1 integer conditions (e.g. `? & i64a i64b { … }`) by
     // narrowing to i1 via `icmp ne … 0`.
@@ -3980,6 +4062,9 @@
     // `{` as a forward join (Phase 0c).
     ( bck_record `cond` `` bck_cline )
     ( bck_set_block_kind `cond-then` )
+    // The arm body is a fresh tail position — `^` is legal here even if
+    // this `?` was itself parsed as an operand.
+    = g_ret_forbidden 0
     : s tv ( gen_expr lex syms cg )
     : s tt2 ( nurl_get_last_type )
     : s tlbl ( nurl_sym_get syms `__cur_lbl__` )
@@ -4013,6 +4098,7 @@
     // Setting this also re-arms over any `cond-then` left pending by a
     // bare (block-less) then-arm.
     ( bck_set_block_kind `cond-else` )
+    = g_ret_forbidden 0
     : s ev ( gen_expr lex syms cg )
     : s et2 ( nurl_get_last_type )
     : s elbl ( nurl_sym_get syms `__cur_lbl__` )
@@ -4040,7 +4126,7 @@
     // `br`, producing label cascades with no terminators (LLVM error
     // "expected instruction opcode").
     ? & != 0 tdr != 0 edr { ( emit_call_term `unreachable` ) = g_did_ret 1 } { = g_did_ret 0 }
-    // GOTCHAS.md item 1 + grammar: `?` consumed bare expressions for
+    // Prefix-arity grammar: `?` consumed bare expressions for
     // then/else, but the very next token is `{`. Almost always the
     // n-ary `&`/`|` foot-gun: user wrote `? & a b c d { then } { else }`
     // intending an n-ary AND, but `& a b` only takes 2 operands so
@@ -4338,27 +4424,56 @@
     // means the scrutinee's outermost operation was a call, and the
     // value is that callee's NURL return type (`! T E`).
     ( nurl_sym_def syms `__last_nurl_call__` `` )
-    : s match_val ( gen_expr lex syms cg )
+    ( nurl_sym_def syms `__last_call_res_t_llvm__` `` )
+    ( nurl_sym_def syms `__last_call_res_e_llvm__` `` )
+    ( nurl_sym_def syms `__last_call_opt_nurl_t__` `` )
+    : s match_val ( gen_operand lex syms cg )
     : s match_type ( nurl_get_last_type )
 
     // A `?? ( f … )` whose scrutinee is a direct call has no binding
-    // name, so the wide-payload reconstruction below (keyed on
-    // `<name>__res_nurl_T` / `__res_t_llvm`) would be skipped — and a
-    // wide `! T E` payload (a multi-field value struct) would be read
-    // as its raw heap-box pointer (silent garbage). Synthesise a
-    // binding name and populate those keys from the call's NURL return
-    // type so the direct-call form reconstructs identically to `?? r`.
+    // name, so the payload metadata below (keyed on `<name>__res_nurl_T`
+    // / `__res_t_llvm` for `! T E`, and `<name>__opt_nurl_T` for `? T`)
+    // would be skipped — a wide / handle / pointer payload would be read
+    // as its raw i64 slot, and an unsigned `? u` payload would drop its
+    // signedness flag (silent garbage / wrong sign-extension). Synthesise
+    // a binding name and populate those keys from the callee's return
+    // type so the direct-call form behaves identically to `?? r`.
+    : s mcall_nurl ( nurl_sym_get syms `__last_nurl_call__` )
+    : s mcall_opt_t ( nurl_sym_get syms `__last_call_opt_nurl_t__` )
     ? & == 0 ( nurl_str_len match_var_name )
-    != 0 ( nurl_str_len ( nurl_sym_get syms `__last_nurl_call__` ) )
-    { : s mcall_nurl ( nurl_sym_get syms `__last_nurl_call__` )
-        : s msynth ( nurl_str_cat `__matchtmp` ( nurl_cg_lbl cg `mt` ) )
-        : s minner_t ( str_first_word ( str_skip_word mcall_nurl ) )
-        : s minner_e ( str_first_word ( str_skip_word ( str_skip_word mcall_nurl ) ) )
-        ( nurl_sym_def syms ( nurl_str_cat msynth `__res_nurl_T` ) minner_t )
-        ( nurl_sym_def syms ( nurl_str_cat msynth `__res_nurl_E` ) minner_e )
-        : s minner_llvm ( nurl_sym_get syms minner_t )
-        ? != 0 ( nurl_str_len minner_llvm )
-        { ( nurl_sym_def syms ( nurl_str_cat msynth `__res_t_llvm` ) minner_llvm ) }
+    | != 0 ( nurl_str_len mcall_nurl ) != 0 ( nurl_str_len mcall_opt_t )
+    { : s msynth ( nurl_str_cat `__matchtmp` ( nurl_cg_lbl cg `mt` ) )
+        // `! T E` callee: reconstruct T (and E) payloads.
+        ? != 0 ( nurl_str_len mcall_nurl )
+        { : s minner_t ( str_first_word ( str_skip_word mcall_nurl ) )
+            : s minner_e ( str_first_word ( str_skip_word ( str_skip_word mcall_nurl ) ) )
+            ( nurl_sym_def syms ( nurl_str_cat msynth `__res_nurl_T` ) minner_t )
+            ( nurl_sym_def syms ( nurl_str_cat msynth `__res_nurl_E` ) minner_e )
+            // LLVM type of T: prefer the callee's pre-computed `__res_t_llvm`
+            // (correct for paren-compound handles `( Vec u )` → `%Vec__i8`
+            // AND pointer payloads `s` → `i8*`, neither of which
+            // `nurl_sym_get syms minner_t` can resolve). Fall back to the
+            // by-name struct lookup when the side-channel is empty.
+            : s minner_llvm ( nurl_sym_get syms `__last_call_res_t_llvm__` )
+            ? == 0 ( nurl_str_len minner_llvm ) { = minner_llvm ( nurl_sym_get syms minner_t ) } {}
+            ? != 0 ( nurl_str_len minner_llvm )
+            { ( nurl_sym_def syms ( nurl_str_cat msynth `__res_t_llvm` ) minner_llvm ) }
+            {}
+            // Same for the Err-payload E's LLVM type, so an `F e → e` arm
+            // whose E is a bare pointer reconstructs too (enum E resolves
+            // by name).
+            : s minner_e_llvm ( nurl_sym_get syms `__last_call_res_e_llvm__` )
+            ? != 0 ( nurl_str_len minner_e_llvm )
+            { ( nurl_sym_def syms ( nurl_str_cat msynth `__res_e_llvm` ) minner_e_llvm ) }
+            {} }
+        {}
+        // `? T` callee: carry the inner NURL type token so the T-arm
+        // payload binding propagates the unsigned flag (`? u` / `? u16`
+        // / …). Without this a `# i b` widen on the bound byte sign-
+        // extends (0x86 → -122) instead of zero-extending. Mirrors
+        // gen_let_or_struct's `<name>__opt_nurl_T` for `?? r`.
+        ? != 0 ( nurl_str_len mcall_opt_t )
+        { ( nurl_sym_def syms ( nurl_str_cat msynth `__opt_nurl_T` ) mcall_opt_t ) }
         {}
         = match_var_name msynth }
     {}
@@ -4563,7 +4678,7 @@
                     // `{ i64, ptr }` etc.). Without the i64 skip, the inner
                     // emit `extractvalue i64 %tag, 0` triggered LLVM's
                     // "extractvalue operand must be aggregate type". Closes
-                    // docs/GOTCHAS.md item 6 / memory gotcha #6.
+                    // (`: ~ *T` mutable-pointer binding.)
                     : b match_is_bare_tag | ( seq match_type `i1` ) ( seq match_type `i64` )
                     : s tag_reg ? match_is_bare_tag match_val ( nurl_cg_reg cg )
                     ? match_is_bare_tag {} {
@@ -4696,11 +4811,41 @@
                         // `nurl_inner_t` was the literal `(` token from
                         // parse_type_res's `nurl_lex_val`-before-parse capture,
                         // which doesn't look up to anything. Use the saved
-                        // LLVM type instead (T-arm only — F-arm reconstruction
-                        // uses single-token enum names like NetErr/WsErr that
-                        // round-trip through the NURL-source path fine).
+                        // LLVM type instead. T uses `__res_t_llvm`, F uses
+                        // `__res_e_llvm`. Enum error types (NetErr/WsErr/…)
+                        // resolve via their single-token NURL name above and
+                        // never reach this fallback; it only fills the gap for
+                        // pointer / paren-compound payloads.
                         ? & == 0 ( nurl_str_len nurl_inner_llvm ) ( seq pattern_name `T` )
                         { = nurl_inner_llvm ( nurl_sym_get syms ( nurl_str_cat match_var_name `__res_t_llvm` ) ) }
+                        {}
+                        ? & == 0 ( nurl_str_len nurl_inner_llvm ) ( seq pattern_name `F` )
+                        { = nurl_inner_llvm ( nurl_sym_get syms ( nurl_str_cat match_var_name `__res_e_llvm` ) ) }
+                        {}
+                        // Bare-pointer payload (`s` → `i8*`): the i64 slot
+                        // holds the pointer via ptrtoint, so one inttoptr
+                        // recovers it. Distinct from the `%`-struct branch
+                        // below (a handle whose f0 pointer must be re-wrapped
+                        // by insertvalue) — this is non-`%` AND `*`-suffixed,
+                        // so it never collides with that branch (`%T*` raw
+                        // pointers are `%`-prefixed and stay on that path).
+                        // Without this
+                        // the payload stayed a raw i64 and the arm's value
+                        // disagreed with the other arms' pointer type, so
+                        // gen_match emitted no phi and stored `undef` into the
+                        // binding (silent garbage — the `! s E` half of the
+                        // critic's bound-`??` miscompile). Both arms — an
+                        // enum error payload is `%`-prefixed and skips this.
+                        ? & & != 0 ( nurl_str_len nurl_inner_llvm )
+                        != ( nurl_str_get nurl_inner_llvm 0 ) 37
+                        == ( nurl_str_get nurl_inner_llvm - ( nurl_str_len nurl_inner_llvm ) 1 ) 42
+                        { : s ptv_r ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print ptv_r )
+                            ( nurl_print ` = inttoptr i64 ` ) ( nurl_print pr0 )
+                            ( nurl_print ` to ` ) ( nurl_print nurl_inner_llvm ) ( nurl_print `\n` )
+                            = pt0_eff nurl_inner_llvm
+                            = pr0_eff ptv_r
+                            = did_reconstruct T }
                         {}
                         ? & != 0 ( nurl_str_len nurl_inner_llvm )
                         == ( nurl_str_get nurl_inner_llvm 0 ) 37
@@ -6585,6 +6730,10 @@
     // "unexpected token" diagnostic (see g_stmt_line).
     = g_stmt_line bck_line
     = g_stmt_bare_lit 0
+    // A statement is a legal `^` position — clear any operand-context
+    // guard inherited from an enclosing expression (e.g. a `?`/`??` arm
+    // that descends back into statements).
+    = g_ret_forbidden 0
     : s gs_rv ? == tt TT_COLON ( gen_let_or_struct lex syms cg )
     ? == tt TT_EQ ( gen_assign lex syms cg )
     ? == tt TT_TILDE ( gen_loop lex syms cg )
@@ -6635,7 +6784,7 @@
     gs_rv
 }
 
-// Soft check for the docs/GOTCHAS.md §3 pattern: a `:` binding declares
+// Soft check for the same-line shadow pattern: a `:` binding declares
 // a name that already names a parameter of the enclosing function (or
 // closure). The classic foot-gun is `: i z + z 719468` where `z` is a
 // parameter; the new `z` shadows the parameter from this line forward
@@ -6665,7 +6814,7 @@
     : b had_mutability_check | == ( nurl_lex_type lex ) TT_TILDE ( is_type_start ( nurl_lex_type lex ) )
     : b is_mutable == ( nurl_lex_type lex ) TT_TILDE
     ? is_mutable { ( nurl_lex_advance lex ) } {}
-    // GOTCHAS.md item 6: `: ~ * T name init` (mutable pointer to T)
+    // `: ~ * T name init` (mutable pointer to T)
     // miscompiles in long-running write loops — confirmed via the CSV
     // P2c hoist attempt where writes started segfaulting at ~row 66k.
     // Warn (don't `die`) because trivial isolated cases work and the
@@ -6700,7 +6849,7 @@
         // reference — a closure literal capturing a binding by
         // pointer, an aggregate holding one, or a copy of such a
         // binding — its referent depth, so gen_ret / gen_assign /
-        // gen_call reject escapes (docs/GOTCHAS.md item 8).
+        // gen_call reject escapes (docs/MEMORY.md §2.3).
         ( bck_esc_let syms name ( bck_expr_refdepth syms
         ? ( is_ident_tok bck_rhs_tt ) bck_rhs_val `` ) )
         : s ptr ( nurl_cg_reg cg )
@@ -6793,6 +6942,13 @@
             : s let_res_t_llvm ( nurl_sym_get g_res_type_syms `__last_res_t_llvm__` )
             ? != 0 ( nurl_str_len let_res_t_llvm )
             { ( nurl_sym_def syms ( nurl_str_cat name `__res_t_llvm` ) let_res_t_llvm ) }
+            {}
+            // Same for E, so a bound `?? r { F e → e }` with a bare-pointer
+            // error type reconstructs the F-arm payload (enum E resolves by
+            // its NURL name and doesn't reach this fallback).
+            : s let_res_e_llvm ( nurl_sym_get g_res_type_syms `__last_res_err_llvm__` )
+            ? != 0 ( nurl_str_len let_res_e_llvm )
+            { ( nurl_sym_def syms ( nurl_str_cat name `__res_e_llvm` ) let_res_e_llvm ) }
             {}
             // Mirror for `? T`: stash inner-T's NURL token + LLVM type
             // so gen_match's T-arm payload binding can propagate the
@@ -6944,7 +7100,7 @@
         : i bck_rhs_tt ( nurl_lex_type lex )
         : s bck_rhs_val ( nurl_lex_val lex )
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
-        : s val ( gen_expr lex syms cg )
+        : s val ( gen_operand lex syms cg )
         // Borrow checker: record this assignment.
         ( bck_record `assign` name bck_line )
         // Escape analysis: re-target `name`. If the RHS is a stack
@@ -7095,7 +7251,7 @@
                     // 2026-05-17 the param branch silently took the
                     // array-store path and emitted `getelementptr %S, %S*
                     // %impl, i64 %cap` (value-as-index, no field offset).
-                    // Closes docs/GOTCHAS.md item 10.
+                    // Closes a value-as-index field-offset codegen quirk.
                     : i stlen ( nurl_str_len st )
                     : s sname ( nurl_str_slice st 1 - stlen 1 )
                     : s fname ( nurl_lex_val lex )
@@ -7231,7 +7387,7 @@
 @ gen_cast i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s dt ( parse_type lex )
-    // GOTCHAS.md item 4: `# T { ... }` parses as cast-to-T applied to a
+    // Diagnose `# T { ... }` parsing as cast-to-T applied to a
     // block expression, NOT as a struct/enum literal. Users coming
     // from Rust / TypeScript reflexively write `#` here and silently
     // get wrong shapes. Detect the unambiguous pattern (target is a
@@ -7248,7 +7404,7 @@
         {}
     }
     {}
-    : s val ( gen_expr lex syms cg )
+    : s val ( gen_operand lex syms cg )
     : s st ( nurl_get_last_type )
     : s res ( nurl_cg_reg cg )
     // Detect pointer source/destination (LLVM type ends with '*')
@@ -7468,7 +7624,7 @@
                         //       dummy-payload idiom used throughout stdlib
                         //       (vec_get, hashmap, iter combinators) for
                         //       multi-field T whose f0 isn't i64-shaped.
-                        //       Closes docs/GOTCHAS.md §4 — vec_get on
+                        //       Closes a vec_get codegen bug on
                         //       multi-field T no longer miscompiles.
                         : s sname ( nurl_str_slice dt 1 - dtlen 1 )
                         : s f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_0` `__type` ) )
@@ -7552,7 +7708,7 @@
 
 @ gen_member i lex i syms i cg → s {
     ( nurl_lex_advance lex )
-    : s ov ( gen_expr lex syms cg )
+    : s ov ( gen_operand lex syms cg )
     : s ot ( nurl_get_last_type )
     // Snapshot the object pointer's unsigned-ness BEFORE we parse the
     // index (which may itself clobber `__last_unsigned__` via gen_ident).
@@ -7791,7 +7947,7 @@
     ? == ( nurl_str_get agg_ty 0 ) 37
     { = cur_sname ( nurl_str_slice agg_ty 1 - ( nurl_str_len agg_ty ) 1 ) }
     {}
-    // Closure-escape (docs/GOTCHAS.md item 5/8):
+    // Closure-escape (docs/MEMORY.md §2.3):
     // track the deepest referent depth among the field values. A field
     // that is a stack reference (a closure capturing a binding by
     // pointer, or a binding / aggregate transitively holding one)
@@ -7816,6 +7972,10 @@
         : b fld_is_slice_lit == ( nurl_lex_type lex ) TT_LBRACK
         : s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
+        // Snapshot the value's unsigned-ness for the int-width coercion of
+        // an option payload below (zext vs sext when widening into a wider
+        // payload field). Empty for signed / untagged values.
+        : s fld_unsigned ( nurl_sym_get syms `__last_unsigned__` )
         // Field is a stack reference if gen_closure_expr / a nested
         // gen_agg_lit just advertised one, or the field named a binding
         // tagged `<name>__refdepth`. Carry up the deepest such depth.
@@ -8016,7 +8176,31 @@
                         = actual_fval db_bc
                         = actual_fty `i64`
                     }
-                    {}  // i64/i32: use as-is
+                    {  // Integer payload whose width differs from the value's.
+                        // For `! T E` the payload slot is always i64, so an
+                        // i64 value lands here and uses itself as-is. But an
+                        // OPTION `? T` payload field carries T's REAL width
+                        // (`? u` → i8, `? u16` → i16, `? i32` → i32), so an
+                        // i64 literal / value must be narrowed — without this
+                        // `@ ?u { T 0x86 }` emitted `insertvalue { i1, i8 }
+                        // …, i64 134, 1` and clang rejected the type mismatch.
+                        // trunc when the value is wider; sext/zext (per the
+                        // value's unsigned flag) when narrower than the field.
+                        : i __pw ( int_width payload_ty )
+                        : i __vw ( int_width fty )
+                        ? & & > __pw 0 > __vw 0 != __pw __vw
+                        { : s __cv ( nurl_cg_reg cg )
+                            : s __op ? > __vw __pw `trunc`
+                            ? != 0 ( nurl_str_len fld_unsigned ) `zext` `sext`
+                            ( nurl_print `  ` ) ( nurl_print __cv )
+                            ( nurl_print ` = ` ) ( nurl_print __op )
+                            ( nurl_print ` ` ) ( nurl_print fty ) ( nurl_print ` ` )
+                            ( nurl_print fval ) ( nurl_print ` to ` ) ( nurl_print payload_ty )
+                            ( nurl_print `\n` )
+                            = actual_fval __cv
+                            = actual_fty payload_ty }
+                        {}  // equal width / non-int: use as-is
+                    }
                 }
             }
             {  // Check if this is actually an enum type
@@ -8358,7 +8542,7 @@
     // via the registered `<name>__variants` side-table; non-enum named
     // types (structs) fall through unchanged.
     //
-    // Closes docs/GOTCHAS.md §3 — `: ~ MyEnum x …` mutable enum binding
+    // Handles `: ~ MyEnum x …` mutable enum binding
     // and the symmetric immutable case. The earlier sentinel-flag-bool
     // workaround in `stdlib/ext/http_server.nu:329–360` is no longer
     // required.
@@ -8521,7 +8705,7 @@
 //     exists in syms) — single-field handle structs like %String /
 //     %Vec already share through their inner pointer, so capturing
 //     by value preserves mutation visibility.
-// Closes docs/GOTCHAS.md §2 — `=` writes through a captured Counter
+// Lets `=` write through a captured Counter
 // land on the caller's alloca instead of a dead local copy.
 @ __is_capture_byref s var i syms → b {
     : s mut ( nurl_sym_get syms ( nurl_str_cat var `__mutable` ) )
@@ -8880,7 +9064,7 @@
     // analysis tags the closure value with a
     // *referent depth* — the deepest block scope it points into — so
     // gen_let / gen_assign / gen_ret / gen_call reject escapes
-    // (docs/GOTCHAS.md §8).
+    // (docs/MEMORY.md §2.3).
     : ~ i closure_refdepth 0
     ? > captured_count 0
     {
@@ -8898,7 +9082,7 @@
         //     read/write inside the closure body reaches the caller's
         //     allocation through this shared pointer. The body sees the same
         //     binding shape (`__ptr` + native type), so no other path needs
-        //     to special-case it. Closes docs/GOTCHAS.md §2.
+        //     to special-case it.
         : s caps captured_vars
         : i cap_idx 1
         ~ != 0 ( nurl_str_len caps ) {
@@ -10095,7 +10279,7 @@
     // emitted and back struct-typed params with alloca slots.
     ( nurl_sym_def syms `__fn_params__` `` )
     // Also reset the space-separated name-only roster consulted by
-    // gen_let_or_struct's shadow check (docs/GOTCHAS.md §3). Closures
+    // gen_let_or_struct's shadow check. Closures
     // shadow this key inside their own body via the `nurl_sym_push`
     // / `nurl_sym_pop` scope, so a `:` inside a closure body checks
     // against the closure's params — not the enclosing function's.
@@ -10125,15 +10309,37 @@
     ( nurl_sym_def g_fn_inout fname inout_acc )
     ( nurl_sym_def g_fn_sink fname sink_acc )
     ( expect lex TT_ARROW )
-    // Reset last_res_nurl so we can detect if parse_type_res was called for this return type
+    // Reset last_res_nurl / last_res_t_llvm so we can detect if
+    // parse_type_res ran for this return type (only result types set them).
     ( nurl_sym_def g_res_type_syms `__last_res_nurl__` `` )
+    ( nurl_sym_def g_res_type_syms `__last_res_t_llvm__` `` )
+    ( nurl_sym_def g_res_type_syms `__last_res_err_llvm__` `` )
+    ( nurl_sym_def g_res_type_syms `__last_opt_nurl_t__` `` )
     : s ret_ty ( parse_type lex )
     : s nurl_ret ( nurl_sym_get g_res_type_syms `__last_res_nurl__` )
+    // LLVM type of the Ok-payload T (e.g. `%Vec__i8` for `! ( Vec u ) s`,
+    // `i8*` for `! s E`). Recorded per-function — mirrors `<fname>__nurl_ret`
+    // — so a `?? ( call ) { … }` whose scrutinee is a DIRECT CALL (no
+    // binding to hang `<name>__res_t_llvm` off, the way gen_let_or_struct
+    // does for `?? r`) can still reconstruct a single-pointer-handle or
+    // pointer payload in the T-arm. Empty for non-result returns.
+    : s res_t_llvm ( nurl_sym_get g_res_type_syms `__last_res_t_llvm__` )
+    // LLVM type of the Err-payload E — the F-arm counterpart of res_t_llvm,
+    // for an `F e → e` arm whose E is a bare pointer (`! T s`). Enum errors
+    // resolve via their NURL name and don't need this; it only fills the
+    // gap for pointer / paren-compound error payloads.
+    : s res_e_llvm ( nurl_sym_get g_res_type_syms `__last_res_err_llvm__` )
+    // Inner NURL type token of a `? T` return (e.g. `u`), for the direct-
+    // call option-match signedness path. Empty for non-option returns.
+    : s opt_nurl_t ( nurl_sym_get g_res_type_syms `__last_opt_nurl_t__` )
     ( nurl_sym_def syms fname ret_ty )
     ( nurl_sym_def syms `__fn_ret_ty__` ret_ty )
     // Store NURL return type for try-propagation type checking
     ( nurl_sym_def syms `__fn_nurl_ret__` nurl_ret )
     ( nurl_sym_def syms ( nurl_str_cat fname `__nurl_ret` ) nurl_ret )
+    ( nurl_sym_def syms ( nurl_str_cat fname `__res_t_llvm` ) res_t_llvm )
+    ( nurl_sym_def syms ( nurl_str_cat fname `__res_e_llvm` ) res_e_llvm )
+    ( nurl_sym_def syms ( nurl_str_cat fname `__opt_nurl_t` ) opt_nurl_t )
     : s lname ? ( seq fname `main` ) `_nurl_main` fname
     ( nurl_print `define ` ) ( nurl_print ret_ty )
     ( nurl_print ` @` ) ( nurl_print lname )
@@ -10301,6 +10507,9 @@
     ( nurl_sym_def syms fname ret_ty )
     // Re-store NURL ret type in outer scope (inner scope was just popped)
     ( nurl_sym_def syms ( nurl_str_cat fname `__nurl_ret` ) nurl_ret )
+    ( nurl_sym_def syms ( nurl_str_cat fname `__res_t_llvm` ) res_t_llvm )
+    ( nurl_sym_def syms ( nurl_str_cat fname `__res_e_llvm` ) res_e_llvm )
+    ( nurl_sym_def syms ( nurl_str_cat fname `__opt_nurl_t` ) opt_nurl_t )
     // Persist "returns owned X" flag: "1" = slice, "str" = string.
     // A function returns at most one kind of owned value, so one sideband
     // key suffices. When Phase 2B is off `fn_ret_str_owned_flag` is always 0.
@@ -10350,8 +10559,25 @@
     // gen_call move-marks the argument), so it needs no special
     // handling here beyond the side-channel below.
     : i pconv ( parse_param_marker lex )
+    // Reset the result/option side-channels so a `! T E` / `? T` parameter
+    // type leaves fresh metadata here (and a non-result param doesn't
+    // inherit a previous param's stale values). Mirrors the resets
+    // gen_fn_decl_concrete does before parsing the return type.
+    ( nurl_sym_def g_res_type_syms `__last_res_nurl__` `` )
+    ( nurl_sym_def g_res_type_syms `__last_res_t_llvm__` `` )
+    ( nurl_sym_def g_res_type_syms `__last_res_err_llvm__` `` )
+    ( nurl_sym_def g_res_type_syms `__last_opt_nurl_t__` `` )
     : s lt ( parse_type lex )
     : s p_nurl_type ( nurl_sym_get g_res_type_syms `__last_nurl_type__` )
+    // Capture the `! T E` / `? T` payload metadata for this parameter so a
+    // `?? <param> { T x → … }` match can reconstruct a struct / pointer
+    // payload from its i64 slot — exactly as gen_let_or_struct does for a
+    // let-bound result var. Without this a struct-typed T-arm binding on a
+    // result PARAMETER stayed a raw i64 (miscompiled `^ x` to `ret i64`).
+    : s p_res_nurl ( nurl_sym_get g_res_type_syms `__last_res_nurl__` )
+    : s p_res_t_llvm ( nurl_sym_get g_res_type_syms `__last_res_t_llvm__` )
+    : s p_res_e_llvm ( nurl_sym_get g_res_type_syms `__last_res_err_llvm__` )
+    : s p_opt_nurl_t ( nurl_sym_get g_res_type_syms `__last_opt_nurl_t__` )
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s pname ( nurl_lex_val lex )
         // Reject parameter names that collide with LLVM reserved basic-
@@ -10359,7 +10585,7 @@
         // its first label; a param named `entry` then collides at
         // `%entry` lookup time and the bootstrap compiler emits a
         // cryptic "unable to create block named 'entry'" LLVM error
-        // far from the source. Close GOTCHAS.md item 3.
+        // far from the source.
         ? ( seq pname `entry` )
         { ( die lex `parameter name 'entry' collides with LLVM's reserved entry: block label. Rename (e.g. 'ent', 'tab_entry').` ) }
         {}
@@ -10402,6 +10628,24 @@
             ? ( nurl_type_is_unsigned p_nurl_type )
             { ( nurl_sym_def syms ( nurl_str_cat pname `__unsigned` ) `1` ) }
             {} }
+        {}
+        // Stash `! T E` / `? T` payload metadata for this parameter, mirroring
+        // gen_let_or_struct, so a `?? <param>` match can reconstruct a struct /
+        // pointer / unsigned payload binding rather than leaving it a raw i64.
+        ? != 0 ( nurl_str_len p_res_nurl )
+        { : s pinner_t ( str_first_word ( str_skip_word p_res_nurl ) )
+            : s pinner_e ( str_first_word ( str_skip_word ( str_skip_word p_res_nurl ) ) )
+            ( nurl_sym_def syms ( nurl_str_cat pname `__res_nurl_T` ) pinner_t )
+            ( nurl_sym_def syms ( nurl_str_cat pname `__res_nurl_E` ) pinner_e ) }
+        {}
+        ? != 0 ( nurl_str_len p_res_t_llvm )
+        { ( nurl_sym_def syms ( nurl_str_cat pname `__res_t_llvm` ) p_res_t_llvm ) }
+        {}
+        ? != 0 ( nurl_str_len p_res_e_llvm )
+        { ( nurl_sym_def syms ( nurl_str_cat pname `__res_e_llvm` ) p_res_e_llvm ) }
+        {}
+        ? != 0 ( nurl_str_len p_opt_nurl_t )
+        { ( nurl_sym_def syms ( nurl_str_cat pname `__opt_nurl_T` ) p_opt_nurl_t ) }
         {}
         // Append this param's name + LLVM type to the function's param
         // roster so gen_fn_decl_concrete can later (post-`entry:`) emit
@@ -10451,7 +10695,7 @@
 // (`__param=1` triggers the "cannot assign to immutable parameter"
 // error in gen_assign), and field-on-enum syntax isn't valid.
 //
-// Closes the field-mutation half of docs/GOTCHAS.md §2 for the
+// Closes the field-mutation half (struct by-value / inout) for the
 // function-parameter case (previously the closure capture half was
 // closed by the by-pointer capture fix earlier today).
 @ __alloca_struct_params i syms i cg → v {
