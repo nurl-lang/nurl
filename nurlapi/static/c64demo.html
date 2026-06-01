@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>NURL Commodore 64 — WebAssembly emulator</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; background: #0f1115; color: #d7dae0;
+    font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header { padding: 18px 22px 6px; }
+  header h1 { margin: 0 0 4px; font-size: 20px; }
+  header a { color: #7aa2f7; }
+  .sub { color: #9aa0ab; font-size: 13px; }
+  main {
+    display: flex; flex-wrap: wrap; gap: 24px; padding: 14px 22px 28px;
+    align-items: flex-start;
+  }
+  #screenWrap {
+    background: #000; border: 1px solid #2a2f3a; border-radius: 8px;
+    padding: 10px; line-height: 0;
+  }
+  canvas {
+    image-rendering: pixelated; image-rendering: crisp-edges;
+    display: block; background: #352879;
+  }
+  .panel { min-width: 280px; max-width: 380px; }
+  .panel h2 { font-size: 14px; margin: 0 0 8px; color: #c0c5cf; }
+  button, label.file {
+    background: #1b2030; color: #d7dae0; border: 1px solid #2f3650;
+    border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer;
+  }
+  button:hover, label.file:hover { background: #232a40; }
+  label.file input { display: none; }
+  #status { font-size: 13px; color: #9aa0ab; min-height: 1.4em; margin: 8px 0; }
+  #romPick { display: none; margin: 10px 0; }
+  #romPick .row { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+  #romPick .row span { width: 84px; color: #b8bdc8; }
+  table.keys { border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+  table.keys td { padding: 2px 10px 2px 0; color: #b8bdc8; }
+  table.keys td.k { color: #e6e9ef; font-family: ui-monospace, monospace; }
+  .credit { font-size: 12px; color: #7e8593; margin-top: 16px; }
+  .credit a { color: #7aa2f7; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🕹️ NURL Commodore 64 emulator <span class="sub">· compiled to WebAssembly</span></h1>
+  <div class="sub">
+    A MOS 6510 (C64) emulator written in <a href="/">NURL</a>, built to
+    <code>wasm32-wasi</code> and rendered to a canvas. It boots to the
+    BASIC <code>READY.</code> prompt — type away.
+    <a href="/">← back to the playground</a>
+  </div>
+</header>
+<main>
+  <div id="screenWrap">
+    <canvas id="screen" width="384" height="272" style="width:768px;height:544px"></canvas>
+  </div>
+  <div class="panel">
+    <h2>System</h2>
+    <div id="status">Loading WebAssembly runtime…</div>
+    <div id="romPick">
+      <div class="sub">The C64 ROMs are Commodore copyright and aren't bundled.
+        Load your own <code>KERNAL</code>, <code>BASIC</code> and
+        <code>CHARGEN</code> images (8K / 8K / 4K):</div>
+      <div class="row"><span>KERNAL</span><label class="file">choose…<input id="fk" type="file"></label><span id="sk"></span></div>
+      <div class="row"><span>BASIC</span><label class="file">choose…<input id="fb" type="file"></label><span id="sb"></span></div>
+      <div class="row"><span>CHARGEN</span><label class="file">choose…<input id="fc" type="file"></label><span id="sc"></span></div>
+      <button id="bootBtn">Boot</button>
+    </div>
+    <h2>Keyboard</h2>
+    <table class="keys">
+      <tr><td class="k">A–Z 0–9</td><td>as labelled</td><td class="k">Enter</td><td>RETURN</td></tr>
+      <tr><td class="k">Shift</td><td>SHIFT</td><td class="k">Backspace</td><td>INST/DEL</td></tr>
+      <tr><td class="k">Arrows</td><td>cursor</td><td class="k">Esc</td><td>RUN/STOP</td></tr>
+    </table>
+    <div class="credit">
+      Click the screen to give it keyboard focus. The full documented 6510
+      instruction set is validated against Klaus Dormann's 6502 functional
+      test. VIC-II text mode + CIA1 (timer IRQ + keyboard); SID/sprites are
+      future work.
+    </div>
+  </div>
+</main>
+
+<script type="module">
+const WASI_SHIM_URL = "https://esm.sh/@bjorn3/browser_wasi_shim@0.3.0";
+const screen = document.getElementById("screen");
+const statusEl = document.getElementById("status");
+const setStatus = (s) => { statusEl.textContent = s; };
+
+// ── Canvas host: bind the <canvas> to the wasm framebuffer ───────
+class CanvasHost {
+  constructor(el) { this.el = el; this.ctx = null; this.img = null;
+    this.memory = null; this.fbPtr = 0; this.w = 0; this.h = 0; this.shouldClose = 0; }
+  attachMemory(m) { this.memory = m; }
+  open(w, h, fbPtr) {
+    this.w = Number(w); this.h = Number(h); this.fbPtr = fbPtr | 0;
+    this.el.width = this.w; this.el.height = this.h;
+    this.ctx = this.el.getContext("2d");
+    this.img = this.ctx.createImageData(this.w, this.h);
+  }
+  present() {
+    if (!this.ctx || !this.memory) return;
+    // Each pixel is an i64 whose low 32 bits hold ARGB8888 (0xAARRGGBB);
+    // ImageData wants RGBA little-endian, so swap R↔B.
+    const n = this.w * this.h;
+    const src32 = new Uint32Array(this.memory.buffer, this.fbPtr, n * 2);
+    const dst32 = new Uint32Array(this.img.data.buffer);
+    for (let i = 0, j = 0; i < n; i++, j += 2) {
+      const argb = src32[j];
+      dst32[i] = (argb & 0xff00ff00)
+               | ((argb & 0x00ff0000) >>> 16)
+               | ((argb & 0x000000ff) << 16)
+               | 0xff000000;
+    }
+    this.ctx.putImageData(this.img, 0, 0);
+  }
+}
+
+// ── Asyncify runtime: lets the synchronous canvas_sleep yield ────
+const ASY_NONE = 0, ASY_UNWINDING = 1, ASY_REWINDING = 2;
+class AsyncifyRuntime {
+  constructor() { this.exports = null; this.memory = null; this.stackPtr = 0;
+    this.stackSize = 4096; this.pendingResult = undefined; this.pendingPromise = null; this.stopped = false; }
+  attach(inst) { this.exports = inst.exports; this.memory = inst.exports.memory; }
+  ensureStack() {
+    if (this.stackPtr) return;
+    const getPtr = this.exports.__nurl_asyncify_stack_ptr;
+    const getSize = this.exports.__nurl_asyncify_stack_size;
+    if (!getPtr || !getSize) throw new Error("module missing __nurl_asyncify_stack_* exports");
+    const base = getPtr() | 0; this.stackSize = getSize() | 0; this.stackPtr = base;
+    const view = new DataView(this.memory.buffer);
+    view.setInt32(base, base + 8, true);
+    view.setInt32(base + 4, base + this.stackSize, true);
+  }
+  wrap(fn) {
+    const self = this;
+    return function (...args) {
+      const st = self.exports.asyncify_get_state();
+      if (st === ASY_NONE) { self.ensureStack();
+        self.pendingPromise = Promise.resolve(fn(...args));
+        self.exports.asyncify_start_unwind(self.stackPtr); return 0; }
+      if (st === ASY_REWINDING) { self.exports.asyncify_stop_rewind(); return self.pendingResult; }
+      throw new Error("asyncify: unexpected state " + st);
+    };
+  }
+  async drive(entry) {
+    let exit = 0;
+    const run = () => { try { entry(); } catch (e) {
+      if (typeof e === "number") { exit = e; return "exit"; }
+      if (e && typeof e.code === "number") { exit = e.code; return "exit"; }
+      throw e; } return "ok"; };
+    let res = run();
+    while (res !== "exit" && this.exports.asyncify_get_state() === ASY_UNWINDING) {
+      this.exports.asyncify_stop_unwind();
+      this.pendingResult = await this.pendingPromise;
+      if (this.stopped) { exit = 0; break; }
+      this.exports.asyncify_start_rewind(this.stackPtr);
+      res = run();
+    }
+    return exit;
+  }
+}
+
+// ── Keyboard: browser keys → C64 8x8 matrix (g_kb, bit row set = down) ──
+// [col, row]; col = CIA1 PA line, row = CIA1 PB line.
+const KEYMAP = {
+  Backspace:[0,0], Enter:[0,1], ArrowRight:[0,2], F7:[0,3], F1:[0,4], F3:[0,5], F5:[0,6], ArrowDown:[0,7],
+  Digit3:[1,0], KeyW:[1,1], KeyA:[1,2], Digit4:[1,3], KeyZ:[1,4], KeyS:[1,5], KeyE:[1,6], ShiftLeft:[1,7],
+  Digit5:[2,0], KeyR:[2,1], KeyD:[2,2], Digit6:[2,3], KeyC:[2,4], KeyF:[2,5], KeyT:[2,6], KeyX:[2,7],
+  Digit7:[3,0], KeyY:[3,1], KeyG:[3,2], Digit8:[3,3], KeyB:[3,4], KeyH:[3,5], KeyU:[3,6], KeyV:[3,7],
+  Digit9:[4,0], KeyI:[4,1], KeyJ:[4,2], Digit0:[4,3], KeyM:[4,4], KeyK:[4,5], KeyO:[4,6], KeyN:[4,7],
+  Equal:[5,0], KeyP:[5,1], KeyL:[5,2], Minus:[5,3], Period:[5,4], Semicolon:[5,5], BracketLeft:[5,6], Comma:[5,7],
+  Backslash:[6,1], Quote:[6,2], Home:[6,3], ShiftRight:[6,4], BracketRight:[6,5], Slash:[6,7],
+  Digit1:[7,0], Backquote:[7,1], ControlLeft:[7,2], ControlRight:[7,2], Digit2:[7,3], Space:[7,4], AltLeft:[7,5], KeyQ:[7,6], Escape:[7,7],
+};
+const kbMatrix = new Uint8Array(8);
+function setKey(code, down) {
+  // Cursor up/left = SHIFT + cursor down/right on the C64.
+  if (code === "ArrowUp")   { press([1,7], down); press([0,7], down); return; }
+  if (code === "ArrowLeft") { press([1,7], down); press([0,2], down); return; }
+  const m = KEYMAP[code]; if (!m) return false;
+  press(m, down); return true;
+}
+function press([col,row], down) {
+  if (down) kbMatrix[col] |= (1 << row); else kbMatrix[col] &= ~(1 << row);
+}
+window.addEventListener("keydown", (e) => { if (setKey(e.code, true)  !== false) e.preventDefault(); });
+window.addEventListener("keyup",   (e) => { if (setKey(e.code, false) !== false) e.preventDefault(); });
+
+// ── ROM management ───────────────────────────────────────────────
+let roms = [null, null, null];   // 0 KERNAL, 1 BASIC, 2 CHARGEN
+let WASI, File, OpenFile, ConsoleStdout, PreopenDirectory;
+let wasmBytes = null;
+
+async function loadDeps() {
+  ({ WASI, File, OpenFile, ConsoleStdout, PreopenDirectory } = await import(WASI_SHIM_URL));
+  wasmBytes = new Uint8Array(await (await fetch("c64.wasm")).arrayBuffer());
+}
+
+async function tryFetchRoms() {
+  const grab = async (p, n) => {
+    const r = await fetch(p); if (!r.ok) throw new Error(p);
+    const b = new Uint8Array(await r.arrayBuffer());
+    if (b.length < n) throw new Error(p + " too small");
+    return b;
+  };
+  try {
+    roms[0] = await grab("c64roms/kernal.bin", 8192);
+    roms[1] = await grab("c64roms/basic.bin", 8192);
+    roms[2] = await grab("c64roms/chargen.bin", 4096);
+    return true;
+  } catch { return false; }
+}
+
+async function run() {
+  setStatus("Booting…");
+  screen.focus();
+  kbMatrix.fill(0);
+
+  const canvasHost = new CanvasHost(screen);
+  const asy = new AsyncifyRuntime();
+  const stdout = ConsoleStdout.lineBuffered(() => {});
+  const stderr = ConsoleStdout.lineBuffered((l) => console.warn("[c64]", l));
+  const fds = [
+    new OpenFile(new File(new Uint8Array())), stdout, stderr,
+    new PreopenDirectory(".", new Map()),
+  ];
+  const wasi = new WASI(["c64.wasm"], [], fds);
+
+  const imports = {
+    wasi_snapshot_preview1: wasi.wasiImport,
+    canvas: {
+      open: (w, h, fb) => canvasHost.open(w, h, fb),
+      present: () => canvasHost.present(),
+      sleep: asy.wrap((ms) => new Promise((r) => setTimeout(r, Number(ms)))),
+      should_close: () => BigInt(canvasHost.shouldClose | (asy.stopped ? 1 : 0)),
+    },
+    env: {
+      host_rom_byte: (bank, idx) => { const r = roms[Number(bank)]; return BigInt(r ? (r[Number(idx)] | 0) : 0); },
+      host_kb_col: (col) => BigInt(kbMatrix[Number(col) & 7] & 0xff),
+    },
+  };
+
+  let instance;
+  try {
+    const module = await WebAssembly.compile(wasmBytes);
+    instance = await WebAssembly.instantiate(module, imports);
+  } catch (e) { setStatus("instantiation failed: " + e.message); return; }
+
+  try { if (wasi.initialize && instance.exports._initialize) wasi.initialize(instance); } catch (_) {}
+  canvasHost.attachMemory(instance.exports.memory);
+  asy.attach(instance);
+  setStatus("Running — click the screen, then type.");
+  try {
+    await asy.drive(() => wasi.start(instance));
+  } catch (e) {
+    if (typeof e !== "number" && !(e && typeof e.code === "number")) console.error(e);
+  }
+}
+
+// File-picker fallback when the ROMs aren't served from c64roms/.
+function wireRomPicker() {
+  document.getElementById("romPick").style.display = "block";
+  const bind = (inputId, sizeId, slot, need) => {
+    document.getElementById(inputId).addEventListener("change", async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      const b = new Uint8Array(await f.arrayBuffer());
+      roms[slot] = b;
+      document.getElementById(sizeId).textContent = b.length + " B" + (b.length < need ? " ⚠" : " ✓");
+    });
+  };
+  bind("fk", "sk", 0, 8192); bind("fb", "sb", 1, 8192); bind("fc", "sc", 2, 4096);
+  document.getElementById("bootBtn").addEventListener("click", () => {
+    if (!roms[0] || !roms[1] || !roms[2]) { setStatus("load all three ROM files first"); return; }
+    document.getElementById("romPick").style.display = "none";
+    run();
+  });
+}
+
+screen.tabIndex = 0;
+(async () => {
+  try {
+    await loadDeps();
+    if (await tryFetchRoms()) {
+      setStatus("ROMs loaded — booting…");
+      run();
+    } else {
+      setStatus("Supply the three C64 ROM images to boot.");
+      wireRomPicker();
+    }
+  } catch (e) { setStatus("failed to load runtime: " + e.message); }
+})();
+</script>
+</body>
+</html>

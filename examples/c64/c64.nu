@@ -78,11 +78,49 @@ $ `stdlib/ext/env.nu`
     ^ status
 }
 
+// ── Boot mode: load the three C64 ROMs, run, dump the text screen ───
+@ run_boot s kpath s bpath s cpath i frames → i {
+    ( c64_alloc )
+    ?? ( read_file_bytes kpath ) {
+        T k → { ( load_kernal ( vec_data [u] k ) ( vec_len [u] k ) )  ( vec_free [u] k ) }
+        F _ → { ( nurl_print `cannot read KERNAL: ` ) ( nurl_print kpath ) ( nurl_print `\n` )  ^ 2 }
+    }
+    ?? ( read_file_bytes bpath ) {
+        T b → { ( load_basic ( vec_data [u] b ) ( vec_len [u] b ) )  ( vec_free [u] b ) }
+        F _ → { ( nurl_print `cannot read BASIC: ` ) ( nurl_print bpath ) ( nurl_print `\n` )  ^ 2 }
+    }
+    ?? ( read_file_bytes cpath ) {
+        T c → { ( load_chargen ( vec_data [u] c ) ( vec_len [u] c ) )  ( vec_free [u] c ) }
+        F _ → { ( nurl_print `cannot read CHARGEN: ` ) ( nurl_print cpath ) ( nurl_print `\n` )  ^ 2 }
+    }
+    ( c64_boot )
+    : ~ i f 0
+    ~ < f frames { ( run_one_frame )  = f + f 1 }
+    ( nurl_print `--- screen after ` ) ( nurl_print ( nurl_str_int frames ) ) ( nurl_print ` frames ---\n` )
+    ( screen_dump )
+    ^ 0
+}
+
 @ main → i {
     : ( Vec String ) args ( env_args_list )
     ? < ( vec_len [String] args ) 2 {
         ( nurl_print `usage: c64 <6502_functional_test.bin> [instr-budget]\n` )
+        ( nurl_print `       c64 --boot <kernal> <basic> <chargen> [frames]\n` )
         ^ 2
+    } {}
+    : ~ s a1 ``
+    ?? ( vec_get [String] args 1 ) { T a → = a1 ( string_data a )  F _ → {} }
+    ? ( nurl_str_eq a1 `--boot` ) {
+        ? < ( vec_len [String] args ) 5 { ( nurl_print `usage: c64 --boot <kernal> <basic> <chargen> [frames]\n` )  ^ 2 } {}
+        : ~ s kp ``  : ~ s bp ``  : ~ s cp ``
+        : ~ i frames 150         // ~3 s emulated — enough to reach the READY prompt
+        ?? ( vec_get [String] args 2 ) { T a → = kp ( string_data a )  F _ → {} }
+        ?? ( vec_get [String] args 3 ) { T a → = bp ( string_data a )  F _ → {} }
+        ?? ( vec_get [String] args 4 ) { T a → = cp ( string_data a )  F _ → {} }
+        ? > ( vec_len [String] args ) 5 {
+            ?? ( vec_get [String] args 5 ) { T a → = frames ( nurl_str_to_int ( string_data a ) )  F _ → {} }
+        } {}
+        ^ ( run_boot kp bp cp frames )
     } {}
     : ~ s path ``
     ?? ( vec_get [String] args 1 ) { T a → = path ( string_data a )  F _ → {} }
