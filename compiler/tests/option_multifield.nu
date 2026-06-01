@@ -7,8 +7,8 @@
 //
 // Fix: gen_cast's i64→struct branch now emits zeroinitializer when f0
 // is neither a pointer nor i64, servicing the standard None-payload
-// idiom across vec_get / hashmap / iter combinators. Closes
-// docs/GOTCHAS.md §4.
+// idiom across vec_get / hashmap / iter combinators (a multi-field
+// option-payload codegen case).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

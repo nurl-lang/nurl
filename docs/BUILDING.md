@@ -127,7 +127,7 @@ no other-language toolchain is required.
 
 - `compiler/nurlc_lastgood.nu` — NURL source of the snapshot (human-readable;
   identical to `nurlc.nu` at the point it was captured).
-- `compiler/nurlc_lastgood.ll` — LLVM IR text (~1.6 MB), diffable in git and
+- `compiler/nurlc_lastgood.ll` — LLVM IR text, diffable in git and
   target-triple-agnostic, so the same blob bootstraps Linux / macOS / Windows.
 
 Snapshot refresh: `./build.sh --refresh-bootstrap` (re-runs the existing

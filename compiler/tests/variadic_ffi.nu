@@ -1,7 +1,7 @@
 // Test: variadic FFI + automatic argument promotion (grammar v1.9).
 //
 // Shipped 2026-05-14 as the natural follow-on to Phase 1A/1B fixed-
-// size types. Closes docs/GOTCHAS.md §9 — calling printf with mixed
+// size types. Covers calling printf with mixed
 // integer/float widths no longer needs hand-rolled widening at every
 // call site.
 //

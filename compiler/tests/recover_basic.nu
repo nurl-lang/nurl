@@ -52,7 +52,7 @@ $ `stdlib/core/string.nu`
     // env block as POINTERS (the `: ~`-byref-capture path) so writes
     // inside the closure reach the outer alloca. Scalars + single-
     // handle structs are captured by VALUE, so this idiom only works
-    // for multi-field structs (mirrors docs/GOTCHAS.md item 8).
+    // for multi-field structs (mirrors docs/MEMORY.md §2.3).
     //
     // Non-panicking call: the assignment reaches the outer alloca →
     // out_a.n is 42 after recover returns.

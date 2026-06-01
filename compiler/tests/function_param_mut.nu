@@ -22,7 +22,7 @@
 // LOCAL copy of the struct; the caller's binding is unchanged. To
 // share mutation, return the modified struct (or pass `*T`).
 //
-// Closes the parameter half of docs/GOTCHAS.md §2.
+// Closes the parameter half (struct by-value / inout mutation).
 
 : Counter { i n i max }
 

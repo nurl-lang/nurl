@@ -1398,7 +1398,7 @@
     // Borrow checker: source line of the `^` token.
     : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
-    // GOTCHAS.md item 1: `^ ?? value { F e → {…} T m → {…} }` looks
+    // The `^ ?? value { F e → {…} T m → {…} }` shape looks
     // like "return a match expression", but when ANY arm contains its
     // own `^`, the `??` becomes statement-form and yields `void`, so
     // the outer `^` has nothing to return. Snapshot whether the next
@@ -1409,7 +1409,7 @@
     ( nurl_sym_def syms `__last_ident_name__` `` )
     // Reset the escape side-channel so we can tell whether the
     // returned expression is itself a stack reference — a closure
-    // literal capturing a binding by pointer (docs/GOTCHAS.md item 5).
+    // literal capturing a binding by pointer (docs/MEMORY.md §2.3).
     ( nurl_sym_def syms `__last_expr_refdepth__` `` )
     // Tail-call optimisation: mark the upcoming expression as
     // "tail-position" so gen_call can emit `tail call` (the LLVM
@@ -1706,7 +1706,7 @@
         ( nurl_set_last_type ? == 0 ( nurl_str_len lt ) `i64` lt )
         : s ptr ( nurl_sym_get syms ( nurl_str_cat name `__ptr` ) )
         : s glb ( nurl_sym_get syms ( nurl_str_cat name `__global` ) )
-        // GOTCHAS.md item 11: bare `@-fn` names don't auto-coerce to a
+        // Bare `@-fn` names don't auto-coerce to a
         // `(@ R P*)` closure parameter. A bare @-fn ident used as a
         // value (i.e. NOT as a call's callee — gen_call's own path
         // consumes the name before reaching here) currently emits IR
@@ -3569,7 +3569,7 @@
     : b is_variadic ( seq ( nurl_sym_get syms ( nurl_str_cat fname `__variadic` ) ) `1` )
     : s vf_str ( nurl_sym_get syms ( nurl_str_cat fname `__variadic_fixed` ) )
     : i fixed_count ? == 0 ( nurl_str_len vf_str ) 0 ( nurl_str_to_int vf_str )
-    // Closure-escape gate (docs/GOTCHAS.md item 8).
+    // Closure-escape gate (docs/MEMORY.md §2.3).
     // These four callees take an argument that outlives the current
     // scope — pushing into a heap-backed container or detaching onto a
     // worker thread. A value that is a *stack reference* (a closure
@@ -3750,7 +3750,7 @@
             = at ( nurl_get_last_type )
         }
         : s lu_arg ( nurl_sym_get syms `__last_unsigned__` )
-        // GOTCHAS.md item 2: `nurl_str_len` vs `string_len` confusion.
+        // Diagnose `nurl_str_len` vs `string_len` confusion.
         // `nurl_str_len` is the FFI to libc strlen and expects `s`
         // (i8*); passing a `%String` struct reads the struct bytes as
         // a pointer and returns garbage (bit us in manifest_parse).
@@ -3768,7 +3768,7 @@
             { ( die lex `string_len expects %String, got 'i8*' (raw C-string). Use 'nurl_str_len' for raw C-string pointers.` ) }
             {} }
         {}
-        // Escape analysis (closes docs/GOTCHAS.md item 8). If this
+        // Escape analysis (docs/MEMORY.md §2.3). If this
         // call is one of the four ownership-taking helpers AND this
         // argument is a stack reference — a closure
         // literal capturing a binding by pointer, or a binding /
@@ -4126,7 +4126,7 @@
     // `br`, producing label cascades with no terminators (LLVM error
     // "expected instruction opcode").
     ? & != 0 tdr != 0 edr { ( emit_call_term `unreachable` ) = g_did_ret 1 } { = g_did_ret 0 }
-    // GOTCHAS.md item 1 + grammar: `?` consumed bare expressions for
+    // Prefix-arity grammar: `?` consumed bare expressions for
     // then/else, but the very next token is `{`. Almost always the
     // n-ary `&`/`|` foot-gun: user wrote `? & a b c d { then } { else }`
     // intending an n-ary AND, but `& a b` only takes 2 operands so
@@ -4678,7 +4678,7 @@
                     // `{ i64, ptr }` etc.). Without the i64 skip, the inner
                     // emit `extractvalue i64 %tag, 0` triggered LLVM's
                     // "extractvalue operand must be aggregate type". Closes
-                    // docs/GOTCHAS.md item 6 / memory gotcha #6.
+                    // (`: ~ *T` mutable-pointer binding.)
                     : b match_is_bare_tag | ( seq match_type `i1` ) ( seq match_type `i64` )
                     : s tag_reg ? match_is_bare_tag match_val ( nurl_cg_reg cg )
                     ? match_is_bare_tag {} {
@@ -6784,7 +6784,7 @@
     gs_rv
 }
 
-// Soft check for the docs/GOTCHAS.md §3 pattern: a `:` binding declares
+// Soft check for the same-line shadow pattern: a `:` binding declares
 // a name that already names a parameter of the enclosing function (or
 // closure). The classic foot-gun is `: i z + z 719468` where `z` is a
 // parameter; the new `z` shadows the parameter from this line forward
@@ -6814,7 +6814,7 @@
     : b had_mutability_check | == ( nurl_lex_type lex ) TT_TILDE ( is_type_start ( nurl_lex_type lex ) )
     : b is_mutable == ( nurl_lex_type lex ) TT_TILDE
     ? is_mutable { ( nurl_lex_advance lex ) } {}
-    // GOTCHAS.md item 6: `: ~ * T name init` (mutable pointer to T)
+    // `: ~ * T name init` (mutable pointer to T)
     // miscompiles in long-running write loops — confirmed via the CSV
     // P2c hoist attempt where writes started segfaulting at ~row 66k.
     // Warn (don't `die`) because trivial isolated cases work and the
@@ -6849,7 +6849,7 @@
         // reference — a closure literal capturing a binding by
         // pointer, an aggregate holding one, or a copy of such a
         // binding — its referent depth, so gen_ret / gen_assign /
-        // gen_call reject escapes (docs/GOTCHAS.md item 8).
+        // gen_call reject escapes (docs/MEMORY.md §2.3).
         ( bck_esc_let syms name ( bck_expr_refdepth syms
         ? ( is_ident_tok bck_rhs_tt ) bck_rhs_val `` ) )
         : s ptr ( nurl_cg_reg cg )
@@ -7251,7 +7251,7 @@
                     // 2026-05-17 the param branch silently took the
                     // array-store path and emitted `getelementptr %S, %S*
                     // %impl, i64 %cap` (value-as-index, no field offset).
-                    // Closes docs/GOTCHAS.md item 10.
+                    // Closes a value-as-index field-offset codegen quirk.
                     : i stlen ( nurl_str_len st )
                     : s sname ( nurl_str_slice st 1 - stlen 1 )
                     : s fname ( nurl_lex_val lex )
@@ -7387,7 +7387,7 @@
 @ gen_cast i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s dt ( parse_type lex )
-    // GOTCHAS.md item 4: `# T { ... }` parses as cast-to-T applied to a
+    // Diagnose `# T { ... }` parsing as cast-to-T applied to a
     // block expression, NOT as a struct/enum literal. Users coming
     // from Rust / TypeScript reflexively write `#` here and silently
     // get wrong shapes. Detect the unambiguous pattern (target is a
@@ -7624,7 +7624,7 @@
                         //       dummy-payload idiom used throughout stdlib
                         //       (vec_get, hashmap, iter combinators) for
                         //       multi-field T whose f0 isn't i64-shaped.
-                        //       Closes docs/GOTCHAS.md §4 — vec_get on
+                        //       Closes a vec_get codegen bug on
                         //       multi-field T no longer miscompiles.
                         : s sname ( nurl_str_slice dt 1 - dtlen 1 )
                         : s f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_0` `__type` ) )
@@ -7947,7 +7947,7 @@
     ? == ( nurl_str_get agg_ty 0 ) 37
     { = cur_sname ( nurl_str_slice agg_ty 1 - ( nurl_str_len agg_ty ) 1 ) }
     {}
-    // Closure-escape (docs/GOTCHAS.md item 5/8):
+    // Closure-escape (docs/MEMORY.md §2.3):
     // track the deepest referent depth among the field values. A field
     // that is a stack reference (a closure capturing a binding by
     // pointer, or a binding / aggregate transitively holding one)
@@ -8542,7 +8542,7 @@
     // via the registered `<name>__variants` side-table; non-enum named
     // types (structs) fall through unchanged.
     //
-    // Closes docs/GOTCHAS.md §3 — `: ~ MyEnum x …` mutable enum binding
+    // Handles `: ~ MyEnum x …` mutable enum binding
     // and the symmetric immutable case. The earlier sentinel-flag-bool
     // workaround in `stdlib/ext/http_server.nu:329–360` is no longer
     // required.
@@ -8705,7 +8705,7 @@
 //     exists in syms) — single-field handle structs like %String /
 //     %Vec already share through their inner pointer, so capturing
 //     by value preserves mutation visibility.
-// Closes docs/GOTCHAS.md §2 — `=` writes through a captured Counter
+// Lets `=` write through a captured Counter
 // land on the caller's alloca instead of a dead local copy.
 @ __is_capture_byref s var i syms → b {
     : s mut ( nurl_sym_get syms ( nurl_str_cat var `__mutable` ) )
@@ -9064,7 +9064,7 @@
     // analysis tags the closure value with a
     // *referent depth* — the deepest block scope it points into — so
     // gen_let / gen_assign / gen_ret / gen_call reject escapes
-    // (docs/GOTCHAS.md §8).
+    // (docs/MEMORY.md §2.3).
     : ~ i closure_refdepth 0
     ? > captured_count 0
     {
@@ -9082,7 +9082,7 @@
         //     read/write inside the closure body reaches the caller's
         //     allocation through this shared pointer. The body sees the same
         //     binding shape (`__ptr` + native type), so no other path needs
-        //     to special-case it. Closes docs/GOTCHAS.md §2.
+        //     to special-case it.
         : s caps captured_vars
         : i cap_idx 1
         ~ != 0 ( nurl_str_len caps ) {
@@ -10279,7 +10279,7 @@
     // emitted and back struct-typed params with alloca slots.
     ( nurl_sym_def syms `__fn_params__` `` )
     // Also reset the space-separated name-only roster consulted by
-    // gen_let_or_struct's shadow check (docs/GOTCHAS.md §3). Closures
+    // gen_let_or_struct's shadow check. Closures
     // shadow this key inside their own body via the `nurl_sym_push`
     // / `nurl_sym_pop` scope, so a `:` inside a closure body checks
     // against the closure's params — not the enclosing function's.
@@ -10585,7 +10585,7 @@
         // its first label; a param named `entry` then collides at
         // `%entry` lookup time and the bootstrap compiler emits a
         // cryptic "unable to create block named 'entry'" LLVM error
-        // far from the source. Close GOTCHAS.md item 3.
+        // far from the source.
         ? ( seq pname `entry` )
         { ( die lex `parameter name 'entry' collides with LLVM's reserved entry: block label. Rename (e.g. 'ent', 'tab_entry').` ) }
         {}
@@ -10695,7 +10695,7 @@
 // (`__param=1` triggers the "cannot assign to immutable parameter"
 // error in gen_assign), and field-on-enum syntax isn't valid.
 //
-// Closes the field-mutation half of docs/GOTCHAS.md §2 for the
+// Closes the field-mutation half (struct by-value / inout) for the
 // function-parameter case (previously the closure capture half was
 // closed by the by-pointer capture fix earlier today).
 @ __alloca_struct_params i syms i cg → v {

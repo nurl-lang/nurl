@@ -86,7 +86,7 @@ image at build time.
 ## Compiler-in-wasm (offline / embeddable)
 
 The same `POST /build_wasm` pipeline can be pointed at `compiler/nurlc.nu`
-itself, producing a ~480 KB `nurlc.wasm` that **is** the NURL compiler:
+itself, producing a `nurlc.wasm` that **is** the NURL compiler:
 
 ```bash
 ./startdev.sh        # one terminal: bring up the API container

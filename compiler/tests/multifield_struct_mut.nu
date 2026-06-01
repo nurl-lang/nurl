@@ -12,7 +12,7 @@
 // the closure captures by POINTER instead of by value. The env field
 // type becomes `T*`, the body reads the pointer back, and registers
 // it as the binding's `__ptr` directly — every read/write reaches
-// the caller's alloca. Closes docs/GOTCHAS.md §2.
+// the caller's alloca (struct by-value / inout mutation).
 //
 // Backward-compatible: immutable captures (`: Counter c …`) keep the
 // snapshot behaviour. Single-field handle structs (`%String`, `%Vec`)
