@@ -102,6 +102,62 @@ class Cast(Node):
         return wrap(self.child.eval(), self.ty)
 
 
+class Var(Node):
+    """A reference to a previously `let`-bound local of known type + value."""
+    def __init__(self, ty, name, value):
+        super().__init__(ty)
+        self.name = name
+        self._value = value
+
+    def render(self):
+        return self.name
+
+    def eval(self):
+        return self._value
+
+
+class Cmp(Node):
+    """A comparison — value type i64 (0 or 1, via i1→i64 zext). Exercises the
+    signed-vs-unsigned icmp selection (`< # i8 …` must be slt, not ult)."""
+    def __init__(self, op, a, b):           # a, b share a type
+        super().__init__("i64")
+        self.op, self.a, self.b = op, a, b
+
+    def render(self):
+        return f"# i64 {self.op} {self.a.render()} {self.b.render()}"
+
+    def eval(self):
+        w, signed = TYPES[self.a.ty]
+        va, vb = self.a.eval(), self.b.eval()
+        if not signed:
+            va, vb = va & mask(w), vb & mask(w)
+        r = {"==": va == vb, "!=": va != vb, "<": va < vb,
+             "<=": va <= vb, ">": va > vb, ">=": va >= vb}[self.op]
+        return 1 if r else 0
+
+
+# Integer types small enough that an int→float→int round-trip is EXACT:
+# f64 keeps integers < 2^53 (all ≤32-bit values qualify); f32 keeps < 2^24.
+SMALL_F64 = ["i8", "i16", "i32", "u", "u16", "u32"]
+SMALL_F32 = ["i8", "i16", "u", "u16"]
+
+
+class FloatRT(Node):
+    """An int→float→int round-trip: `# i64 # <ftype> <small-int>`. With an
+    exactly-representable source it must return the original integer, so it
+    probes int→float (uitofp/sitofp by source signedness) and float→int
+    (fptosi) without needing to print a float bit-exactly."""
+    def __init__(self, ftype, child):
+        super().__init__("i64")
+        self.ftype, self.child = ftype, child
+
+    def render(self):
+        return f"# i64 # {self.ftype} {self.child.render()}"
+
+    def eval(self):
+        return self.child.eval()          # exact round-trip
+
+
 class Bin(Node):
     def __init__(self, ty, op, a, b):
         super().__init__(ty)
@@ -160,8 +216,15 @@ class Bin(Node):
 class Gen:
     def __init__(self, rng):
         self.rng = rng
+        self.env = []                          # available Var bindings
 
     def leaf(self, ty):
+        # Reuse a live local of this exact type ~40% of the time — exercises
+        # the binding reload path (gen_ident must re-assert the binding's
+        # signedness) and lets store-coerced values flow into expressions.
+        cands = [v for v in self.env if v.ty == ty]
+        if cands and self.rng.random() < 0.4:
+            return self.rng.choice(cands)
         w, _ = TYPES[ty]
         # 64-bit literals stay in non-negative i64 range to dodge literal
         # parsing edges; high-bit / negative 64-bit values still arise via
@@ -176,9 +239,11 @@ class Gen:
     def gen(self, ty, depth):
         if depth <= 0:
             return self.leaf(ty)
-        kind = self.rng.choice(
-            ["cast", "arith", "arith", "divrem", "bitwise", "shift", "leaf"]
-        )
+        kinds = ["cast", "arith", "arith", "divrem", "bitwise", "shift", "leaf"]
+        if ty == "i64":
+            kinds.append("cmp")            # a comparison zext'd to i64 (0/1)
+            kinds.append("floatrt")        # int→float→int round-trip
+        kind = self.rng.choice(kinds)
         if kind == "leaf":
             return self.leaf(ty)
         if kind == "cast":
@@ -198,6 +263,15 @@ class Gen:
             op = self.rng.choice(["<<", ">>"])
             sh = Lit(ty, self.rng.randrange(w))   # 0..w-1, defined shift
             return Bin(ty, op, self.gen(ty, depth - 1), sh)
+        if kind == "cmp":
+            s = self.rng.choice(TYPE_NAMES)
+            op = self.rng.choice(["==", "!=", "<", "<=", ">", ">="])
+            return Cmp(op, self.gen(s, depth - 1), self.gen(s, depth - 1))
+        if kind == "floatrt":
+            ftype = self.rng.choice(["f", "f32"])
+            pool = SMALL_F32 if ftype == "f32" else SMALL_F64
+            s = self.rng.choice(pool)
+            return FloatRT(ftype, self.gen(s, depth - 1))
         raise AssertionError(kind)
 
 
@@ -229,15 +303,30 @@ $ `stdlib/core/string.nu`
 def build(seed, n_exprs, depth):
     rng = random.Random(seed)
     g = Gen(rng)
+    # A prelude of `let` bindings whose declared type may differ from the
+    # initialiser's — exercises coerce_store_val's store-time width coercion
+    # (a DIFFERENT int-width branch than `# T` casts). The stored value is
+    # the source value adjusted to the binding type (trunc / sext / zext per
+    # the source signedness), which `wrap(init.eval(), bty)` models exactly.
+    lets = []
+    for i in range(rng.randint(0, 5)):
+        bty = rng.choice(TYPE_NAMES)
+        ity = rng.choice(TYPE_NAMES)
+        init = g.gen(ity, max(1, depth - 1))
+        name = f"v{i}"
+        lets.append((name, bty, init))
+        g.env.append(Var(bty, name, wrap(init.eval(), bty)))
     nodes = []
     for _ in range(n_exprs):
         ty = rng.choice(TYPE_NAMES)
         nodes.append((ty, g.gen(ty, depth)))
-    return nodes
+    return lets, nodes
 
 
-def emit_program(nodes):
+def emit_program(lets, nodes):
     lines = [PRELUDE]
+    for name, bty, init in lets:
+        lines.append(f"    : {bty} {name} {init.render()}")
     for ty, node in nodes:
         lines.append(f"    ( phex # i64 {node.render()} )")
     lines.append("    ^ 0")
@@ -245,7 +334,7 @@ def emit_program(nodes):
     return "\n".join(lines) + "\n"
 
 
-def emit_oracle(nodes):
+def emit_oracle(lets, nodes):
     out = []
     for ty, node in nodes:
         bits = to_u64_bits(node.eval(), ty)
@@ -265,8 +354,9 @@ def main():
         n_exprs = int(args[args.index("--exprs") + 1])
     if "--depth" in args:
         depth = int(args[args.index("--depth") + 1])
-    nodes = build(seed, n_exprs, depth)
-    sys.stdout.write(emit_oracle(nodes) if oracle else emit_program(nodes))
+    lets, nodes = build(seed, n_exprs, depth)
+    sys.stdout.write(emit_oracle(lets, nodes) if oracle
+                     else emit_program(lets, nodes))
 
 
 if __name__ == "__main__":
