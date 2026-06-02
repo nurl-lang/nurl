@@ -8,6 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Binary-safe HTTP request bodies — `http_*_bytes` family.** The s-body
+  `http_request` / `http_post` / `http_put` family recovers the body length
+  via `strlen`, so a request body with embedded NUL bytes (binary file
+  uploads, MessagePack, protobuf) truncated at the first NUL. New
+  length-carrying variants take the body as a `( Vec u )` and ship it via
+  `CURLOPT_COPYPOSTFIELDS` + an explicit `POSTFIELDSIZE`, so the exact byte
+  count is sent: `http_request_bytes` / `http_request_bytes_to`,
+  `http_post_bytes`, `http_put_bytes`, and the streaming
+  `http_stream_open_bytes_to`. The `body` argument is borrowed (the caller
+  still owns it). Binary fidelity requires the libcurl backend; the
+  WinHTTP/stub fallback round-trips through a NUL-terminated `s` and
+  degrades to the old truncation. `stdlib/ext/http.nu`.
+
+### Fixed
+
+- **Reverse-proxy request body is now binary-safe + a latent use-after-free
+  is closed.** `proxy_stream_to_conn_with` forwarded the upstream request
+  body by converting the request's `( Vec u )` body to a NUL-terminated `s`
+  and shipping it through `CURLOPT_POSTFIELDS` (strlen-sized), truncating
+  binary uploads at the first NUL. Worse, the streaming opener set
+  non-copying `CURLOPT_POSTFIELDS` and the proxy freed the body buffer
+  *before* the first `multi_perform` read it — a dangling-pointer read that
+  only escaped notice on small JSON bodies. Both are fixed by routing the
+  length-tracked body through `http_stream_open_bytes_to`, which uses
+  `CURLOPT_COPYPOSTFIELDS` (libcurl snapshots the bytes at open time, so the
+  caller may free immediately and embedded NULs survive). Regression:
+  `compiler/tests/http_binary_body.nu` (NURL client `http_post_bytes` of a
+  5-byte `A B \0 C D` body to a loopback NURL server, asserting the server
+  parsed all 5 bytes; `NURL_NET_TESTS=1`). Verified clean under ASan/UBSan.
+  `stdlib/ext/http.nu`, `stdlib/ext/http_proxy.nu`.
+
 ## [0.9.4] — 2026-06-02
 
 ### Added
