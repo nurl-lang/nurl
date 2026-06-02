@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **WebSocket client (RFC 6455 §4.1 + §5.3).** `stdlib/ext/websocket.nu`
+  gained the full client side to match the existing server. `ws_connect`
+  / `ws_connect_with` parse a `ws://…` / `wss://…` URL, dial out (plain or
+  TLS-with-cert-verification via the runtime client-connect primitives),
+  send the HTTP Upgrade request with a fresh random `Sec-WebSocket-Key`,
+  and validate the `101` response's `Sec-WebSocket-Accept`. Outbound frames
+  are masked with a CSPRNG-drawn 4-byte key (`ws_client_send_text` /
+  `_binary` / `_ping` / `_pong` / `_close`, `ws_client_write_frame`,
+  `ws_serialize_frame_masked`); inbound server frames are read and required
+  to be unmasked (`ws_client_read_frame` / `_read_message` /
+  `_serve_messages`, which auto-pong masked). The frame reader/assembler is
+  now shared between both directions via an internal `__ws_read_frame_ex` /
+  `__ws_read_message_ex` parameterised on direction — no duplicated framing
+  logic. Regression: `compiler/tests/websocket_client.nu` (RFC 6455 §5.7
+  masked-frame byte vector, URL parsing, and a live `NURL_NET_TESTS=1`
+  client↔server echo round-trip proving interop with the server stack).
+  Example: `examples/ws_client.nu` (pairs with `examples/ws_echo.nu`).
+
 ## [0.9.4] — 2026-06-02
 
 ### Added
