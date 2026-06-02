@@ -1812,15 +1812,16 @@
     ? & == tt TT_CARETCARET isf
     { ( die lex `operator '^^' (XOR) requires integer or bool operands, not a float` ) }
     {}
-    // Unsigned operand path. Three triggers, OR-ed:
-    //   * Legacy 8-bit byte (`u` → i8): retained for v1.6 compatibility.
-    //   * Either operand carries the `__unsigned` flag (sized u types).
-    // NURL is strongly typed (no implicit conversions), so lt == rt
-    // always holds for arithmetic operands — the OR over both operands'
-    // flags is defensive against asymmetric loss along complex paths
-    // rather than meaningful signedness coercion.
-    : b isu | | ( seq lt `i8` ) != 0 ( nurl_str_len lu_snap )
-    != 0 ( nurl_str_len ru_snap )
+    // Unsigned operand path. Triggered ONLY by the `__unsigned` side-channel
+    // (set by gen_ident from a binding's `__unsigned` flag and by gen_cast
+    // from a cast to an unsigned target). We must NOT infer unsignedness from
+    // the LLVM type `i8`: both the unsigned NURL `u` (byte) AND the SIGNED
+    // `i8` lower to LLVM i8, so a `seq lt i8` heuristic would mis-select
+    // udiv/urem/lshr/icmp-u for signed i8 arithmetic and mark its result
+    // unsigned (silently zext-widening a negative value). NURL is strongly
+    // typed (lt == rt for arithmetic operands), so the OR over both operands'
+    // flags is defensive against asymmetric loss along complex paths.
+    : b isu | != 0 ( nurl_str_len lu_snap ) != 0 ( nurl_str_len ru_snap )
     : s ins ( binop_instr tt isf isu )
     // Pointer comparison coercion. LLVM forbids `icmp <op> i8* %p, 0`
     // (integer constant at pointer type) and rejects comparing two
@@ -7656,6 +7657,16 @@
 @ gen_cast i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s dt ( parse_type lex )
+    // Capture the cast TARGET's signedness from the raw NURL token now,
+    // before `gen_operand` (below) parses the cast subject and clobbers
+    // the `__last_nurl_type__` side-channel. Used at the integer-result
+    // return paths to mark `__last_unsigned__` so an ENCLOSING widening
+    // cast / binop / shift sees the right signedness — e.g. the inner
+    // `# u …` in `# i64 # u <expr>` must make the outer widen a `zext`,
+    // not a `sext`. (Without this, only casts whose subject was a typed
+    // BINDING — where gen_ident sets the flag — widened correctly; a
+    // nested cast-to-unsigned silently sign-extended.)
+    : b dst_unsigned ( nurl_type_is_unsigned ( nurl_sym_get g_res_type_syms `__last_nurl_type__` ) )
     // Diagnose `# T { ... }` parsing as cast-to-T applied to a
     // block expression, NOT as a struct/enum literal. Users coming
     // from Rust / TypeScript reflexively write `#` here and silently
@@ -7963,9 +7974,21 @@
                             ( nurl_print st ) ( nurl_print ` ` ) ( nurl_print val )
                             ( nurl_print ` to ` ) ( nurl_print dt ) ( nurl_print `\n` )
                             ( nurl_set_last_type dt )
+                            // The result is now the cast TARGET's type — record
+                            // its signedness so an ENCLOSING widening cast /
+                            // binop / shift reads the right flag (e.g. the inner
+                            // `# u …` in `# i64 # u <expr>` must make the outer
+                            // widen a zext, not a sext).
+                            ( nurl_sym_def syms `__last_unsigned__` ? dst_unsigned `1` `` )
                             ^ res
                         }
-                        { ( nurl_set_last_type dt ) ^ val }
+                        { ( nurl_set_last_type dt )
+                            // Same-width reinterpret (e.g. `# u <i8>`): still
+                            // record destination signedness for an enclosing op.
+                            ? > ( int_width dt ) 0
+                            { ( nurl_sym_def syms `__last_unsigned__` ? dst_unsigned `1` `` ) }
+                            {}
+                            ^ val }
                     }
                 }
             }
