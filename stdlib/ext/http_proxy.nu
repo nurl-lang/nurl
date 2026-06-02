@@ -61,11 +61,11 @@
 //
 // Limitations (v1):
 //
-//   * Request body is shipped via `CURLOPT_POSTFIELDS` which uses
-//     `strlen(body)` on the C runtime side — embedded NUL bytes in
-//     the request body are truncated. JSON / text payloads work as
-//     expected; binary file uploads through the proxy are not
-//     guaranteed lossless until a length-aware POSTFIELDS path lands.
+//   * Request body is now binary-safe: it ships via
+//     `http_stream_open_bytes_to`, which carries the length-tracked
+//     `( Vec u )` request body through `CURLOPT_COPYPOSTFIELDS` +
+//     an explicit `POSTFIELDSIZE`, so embedded NUL bytes (binary file
+//     uploads) survive the proxy hop.
 //   * Streaming-mode response body chunks travel through a NUL-
 //     terminated `char*` carrier in `nurl_http_stream_next`; binary
 //     responses with embedded NULs would be truncated. SSE / JSON /
@@ -246,20 +246,20 @@ $ `stdlib/ext/http_server.nu`
 
 @ proxy_stream_to_conn_with TcpConn conn HttpRequest req s upstream_url ProxyOpts opts → !v ProxyErr {
     : String headers_blob ( __build_request_headers_blob req opts )
-    : i bn ( vec_len [u] . req body )
-    : *u bdata ( vec_data [u] . req body )
-    : String body_s ( string_from_bytes bdata bn )
 
-    : !HttpStream HttpErr or ( http_stream_open_to
+    // The request body is a length-carrying ( Vec u ); ship it through
+    // the binary-safe stream opener so embedded NUL bytes (binary
+    // uploads) survive the proxy hop. COPYPOSTFIELDS snapshots the
+    // bytes during open, so `req.body` stays the caller's to free.
+    : !HttpStream HttpErr or ( http_stream_open_bytes_to
     ( string_data . req method )
     upstream_url
-    ( string_data body_s )
+    . req body
     ( string_data headers_blob )
     . opts timeout_ms
     . opts connect_timeout_ms )
 
     ( string_free headers_blob )
-    ( string_free body_s )
 
     ?? or {
         T st → {

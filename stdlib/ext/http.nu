@@ -95,6 +95,7 @@
 //   HttpOther      6   anything else / runtime built without libcurl
 
 $ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
 $ `stdlib/core/errors.nu`
 
 // HttpErr tags — see stdlib/runtime.c §14 NURL_HTTP_ERR_*.
@@ -307,7 +308,7 @@ $ `stdlib/core/errors.nu`
 // All per-request knobs (timeouts, redirect policy, TLS verification,
 // User-Agent) ride in `opt`. The timeout-only `__libcurl_perform_full_to`
 // below is a thin shim that builds a default-options struct.
-@ __libcurl_perform_full_opts s url s method s body s headers_blob
+@ __libcurl_perform_full_opts s url s method *u body_ptr i body_len s headers_blob
 HttpOptions opt → i {
     : i resp # i ( nurl_zalloc 48 )
     ? == resp 0 { ^ 0 } {}
@@ -369,19 +370,24 @@ HttpOptions opt → i {
     : i is_put ( nurl_str_eq method `PUT` )
     : i is_del ( nurl_str_eq method `DELETE` )
     : i is_patch ( nurl_str_eq method `PATCH` )
-    : i has_body && != # i body 0 != ( nurl_str_len body ) 0
-    : s post_body ? != has_body 0 body ``
-    : i post_len ? != has_body 0 ( nurl_str_len body ) 0
+    : i has_body && != # i body_ptr 0 > body_len 0
     ? != is_post 0 {
         ( nurl_curl_setopt_l eh 47 1 )  // CURLOPT_POST
-        ( nurl_curl_setopt_s eh 10015 post_body )  // CURLOPT_POSTFIELDS
-        ( nurl_curl_setopt_l eh 60 post_len )  // CURLOPT_POSTFIELDSIZE
+        ? != has_body 0 {
+            // POSTFIELDSIZE before COPYPOSTFIELDS so libcurl copies the
+            // exact byte count (embedded NULs survive) rather than strlen.
+            ( nurl_curl_setopt_l eh 60 body_len )  // CURLOPT_POSTFIELDSIZE
+            ( nurl_curl_setopt_p eh 10165 body_ptr )  // CURLOPT_COPYPOSTFIELDS
+        } {
+            ( nurl_curl_setopt_l eh 60 0 )  // CURLOPT_POSTFIELDSIZE
+            ( nurl_curl_setopt_s eh 10015 `` )  // CURLOPT_POSTFIELDS (empty)
+        }
     } {
         ? || || != is_put 0 != is_del 0 != is_patch 0 {
             ( nurl_curl_setopt_s eh 10036 method )  // CURLOPT_CUSTOMREQUEST
             ? != has_body 0 {
-                ( nurl_curl_setopt_s eh 10015 body )
-                ( nurl_curl_setopt_l eh 60 post_len )
+                ( nurl_curl_setopt_l eh 60 body_len )  // CURLOPT_POSTFIELDSIZE
+                ( nurl_curl_setopt_p eh 10165 body_ptr )  // CURLOPT_COPYPOSTFIELDS
             } {}
         } {}
     }
@@ -426,10 +432,10 @@ HttpOptions opt → i {
 // Timeout-only shim over the orchestrator: builds a default-options
 // struct (follow redirects, verify TLS, stock UA) overriding just the
 // two timeouts. Kept for the existing http_request_to call path.
-@ __libcurl_perform_full_to s url s method s body s headers_blob
+@ __libcurl_perform_full_to s url s method *u body_ptr i body_len s headers_blob
 i timeout_ms i connect_timeout_ms → i {
     : HttpOptions opt @ HttpOptions { timeout_ms connect_timeout_ms 1 -1 1 `` }
-    ^ ( __libcurl_perform_full_opts url method body headers_blob opt )
+    ^ ( __libcurl_perform_full_opts url method body_ptr body_len headers_blob opt )
 }
 
 // Internal: dispatch the runtime call result onto a NURL ! Response HttpErr.
@@ -485,7 +491,8 @@ i timeout_ms i connect_timeout_ms → i {
 @ http_request_to s method s url s body s headers_blob i timeout_ms i connect_timeout_ms
 → !Response HttpErr {
     ? != ( nurl_curl_available ) 0 {
-        : i raw ( __libcurl_perform_full_to url method body headers_blob timeout_ms connect_timeout_ms )
+        // s-body path: recover length via strlen (text/JSON callers).
+        : i raw ( __libcurl_perform_full_to url method # *u body ( nurl_str_len body ) headers_blob timeout_ms connect_timeout_ms )
         ^ ( __http_dispatch raw )
     } {}
     : i raw ( nurl_http_perform_full_to url method body headers_blob
@@ -500,7 +507,7 @@ i timeout_ms i connect_timeout_ms → i {
 @ http_request_with_opts s method s url s body s headers_blob HttpOptions opt
 → !Response HttpErr {
     ? != ( nurl_curl_available ) 0 {
-        : i raw ( __libcurl_perform_full_opts url method body headers_blob opt )
+        : i raw ( __libcurl_perform_full_opts url method # *u body ( nurl_str_len body ) headers_blob opt )
         ^ ( __http_dispatch raw )
     } {}
     : i otmo . opt timeout_ms
@@ -581,6 +588,49 @@ i timeout_ms i connect_timeout_ms → i {
 
 @ http_delete s url → !Response HttpErr {
     ^ ( http_request `DELETE` url `` `` )
+}
+
+// ── Binary-safe body (length-carrying ( Vec u )) ───────────────────
+//
+// The s-body http_request_* family recovers the body length via
+// strlen, so a body with embedded NUL bytes (binary file uploads,
+// MessagePack, protobuf, …) truncates at the first NUL. These
+// variants carry the body as a length-tracked ( Vec u ) and ship it
+// via CURLOPT_COPYPOSTFIELDS + an explicit POSTFIELDSIZE, so the exact
+// byte count is sent. `body` is BORROWED — the caller still owns it.
+//
+// Backend note: binary fidelity requires the libcurl backend (the
+// default on Linux/macOS/Windows builds with -DNURL_HAVE_LIBCURL). On
+// the WinHTTP / stub fallback the body round-trips through a
+// NUL-terminated s and truncates at the first embedded NUL.
+@ http_request_bytes_to s method s url ( Vec u ) body s headers_blob
+i timeout_ms i connect_timeout_ms → !Response HttpErr {
+    ? != ( nurl_curl_available ) 0 {
+        : i raw ( __libcurl_perform_full_to url method ( vec_data [u] body ) ( vec_len [u] body ) headers_blob timeout_ms connect_timeout_ms )
+        ^ ( __http_dispatch raw )
+    } {}
+    : String tmp ( string_from_bytes ( vec_data [u] body ) ( vec_len [u] body ) )
+    : i raw ( nurl_http_perform_full_to url method ( string_data tmp ) headers_blob timeout_ms connect_timeout_ms )
+    ( string_free tmp )
+    ^ ( __http_dispatch raw )
+}
+
+@ http_request_bytes s method s url ( Vec u ) body s headers_blob → !Response HttpErr {
+    ^ ( http_request_bytes_to method url body headers_blob 0 0 )
+}
+
+@ http_post_bytes s url ( Vec u ) body s content_type → !Response HttpErr {
+    : String hb ( __with_ct content_type `` )
+    : !Response HttpErr res ( http_request_bytes `POST` url body ( string_data hb ) )
+    ( string_free hb )
+    ^ res
+}
+
+@ http_put_bytes s url ( Vec u ) body s content_type → !Response HttpErr {
+    : String hb ( __with_ct content_type `` )
+    : !Response HttpErr res ( http_request_bytes `PUT` url body ( string_data hb ) )
+    ( string_free hb )
+    ^ res
 }
 
 // ── Accessors (borrowed views) — pure NURL over the NurlHttpResponse
@@ -718,7 +768,7 @@ i timeout_ms i connect_timeout_ms → i {
 // nurl_http_stream_open_to in stdlib/runtime.c §14b (now stub-only
 // when libcurl is linked — NURL drives via this path). Returns the
 // i64 heap pointer; 0 only on the state-struct allocation failure.
-@ __http_stream_open_to_libcurl s method s url s body s headers_blob
+@ __http_stream_open_to_libcurl s method s url *u body_ptr i body_len s headers_blob
 i timeout_ms i connect_timeout_ms → i {
     : *u state ( nurl_curl_stream_alloc )
     ? == # i state 0 { ^ 0 } {}
@@ -757,19 +807,25 @@ i timeout_ms i connect_timeout_ms → i {
 
     : i is_post ( nurl_str_eq method `POST` )
     : i is_get ( nurl_str_eq method `GET` )
-    : i has_body && != # i body 0 != ( nurl_str_len body ) 0
-    : s post_body ? != has_body 0 body ``
-    : i post_len ? != has_body 0 ( nurl_str_len body ) 0
+    : i has_body && != # i body_ptr 0 > body_len 0
     ? != is_post 0 {
         ( nurl_curl_setopt_l easy 47 1 )  // CURLOPT_POST
-        ( nurl_curl_setopt_s easy 10015 post_body )  // CURLOPT_POSTFIELDS
-        ( nurl_curl_setopt_l easy 60 post_len )  // CURLOPT_POSTFIELDSIZE
+        ? != has_body 0 {
+            // COPYPOSTFIELDS copies body_len bytes at setopt time, so the
+            // caller may free the buffer right after open — and embedded
+            // NULs survive (POSTFIELDSIZE set first).
+            ( nurl_curl_setopt_l easy 60 body_len )  // CURLOPT_POSTFIELDSIZE
+            ( nurl_curl_setopt_p easy 10165 body_ptr )  // CURLOPT_COPYPOSTFIELDS
+        } {
+            ( nurl_curl_setopt_l easy 60 0 )  // CURLOPT_POSTFIELDSIZE
+            ( nurl_curl_setopt_s easy 10015 `` )  // CURLOPT_POSTFIELDS (empty)
+        }
     } {
         ? == is_get 0 {
             ( nurl_curl_setopt_s easy 10036 method )  // CURLOPT_CUSTOMREQUEST
             ? != has_body 0 {
-                ( nurl_curl_setopt_s easy 10015 body )
-                ( nurl_curl_setopt_l easy 60 post_len )
+                ( nurl_curl_setopt_l easy 60 body_len )  // CURLOPT_POSTFIELDSIZE
+                ( nurl_curl_setopt_p easy 10165 body_ptr )  // CURLOPT_COPYPOSTFIELDS
             } {}
         } {}
     }
@@ -824,18 +880,13 @@ i timeout_ms i connect_timeout_ms → i {
 
 : HttpStream { i raw }
 
-@ http_stream_open_to s method s url s body s headers_blob
-i timeout_ms i connect_timeout_ms
-→ !HttpStream HttpErr {
-    : i raw ? != ( nurl_curl_available ) 0
-    ( __http_stream_open_to_libcurl method url body headers_blob timeout_ms connect_timeout_ms )
-    ( nurl_http_stream_open_to method url body headers_blob timeout_ms connect_timeout_ms )
+// Shared open-result dispatch for both the s-body and ( Vec u )-body
+// stream openers. Probes err_kind in case open succeeded structurally
+// but libcurl refused (e.g. malformed URL).
+@ __http_stream_dispatch_open i raw → !HttpStream HttpErr {
     ? == raw 0 {
         ^ @ !HttpStream HttpErr { F # HttpErr HttpOther }
     } {}
-    // Probe err_kind in case open succeeded structurally but libcurl
-    // refused (e.g. malformed URL) — match the dispatch shape used by
-    // the synchronous wrapper so call sites stay symmetric.
     : i ek ( nurl_peek # *u raw 13 )
     ? != ek 0 {
         ( nurl_http_stream_close raw )
@@ -847,6 +898,34 @@ i timeout_ms i connect_timeout_ms
         ^ @ !HttpStream HttpErr { F # HttpErr HttpOther }
     } {}
     ^ @ !HttpStream HttpErr { T @ HttpStream { raw } }
+}
+
+@ http_stream_open_to s method s url s body s headers_blob
+i timeout_ms i connect_timeout_ms
+→ !HttpStream HttpErr {
+    : i raw ? != ( nurl_curl_available ) 0
+    ( __http_stream_open_to_libcurl method url # *u body ( nurl_str_len body ) headers_blob timeout_ms connect_timeout_ms )
+    ( nurl_http_stream_open_to method url body headers_blob timeout_ms connect_timeout_ms )
+    ^ ( __http_stream_dispatch_open raw )
+}
+
+// Binary-safe streaming open: the body is a length-carrying ( Vec u ),
+// so embedded NUL bytes survive (the s-body opener recovers length via
+// strlen). COPYPOSTFIELDS copies the bytes during open, so `body` may be
+// freed as soon as this returns. libcurl backend only — the stub
+// fallback round-trips through a NUL-terminated s (truncates at the
+// first embedded NUL).
+@ http_stream_open_bytes_to s method s url ( Vec u ) body s headers_blob
+i timeout_ms i connect_timeout_ms
+→ !HttpStream HttpErr {
+    ? != ( nurl_curl_available ) 0 {
+        : i raw ( __http_stream_open_to_libcurl method url ( vec_data [u] body ) ( vec_len [u] body ) headers_blob timeout_ms connect_timeout_ms )
+        ^ ( __http_stream_dispatch_open raw )
+    } {}
+    : String tmp ( string_from_bytes ( vec_data [u] body ) ( vec_len [u] body ) )
+    : i raw ( nurl_http_stream_open_to method url ( string_data tmp ) headers_blob timeout_ms connect_timeout_ms )
+    ( string_free tmp )
+    ^ ( __http_stream_dispatch_open raw )
 }
 
 @ http_stream_open s method s url s body s headers_blob
