@@ -60,7 +60,9 @@ Failures are saved under `tools/fuzz/failures/` as `seed_N.nu` +
 
 ## Probe dimensions
 
-- Integer expression trees: `+ - * / % & | << >>` and `# T` width casts.
+- Integer expression trees: `+ - * / % & | ^^ << >>` and `# T` width casts.
+- Float arithmetic: `# i64 OP # f a # f b` (fadd/fsub/fmul/fdiv) over
+  bounded int-derived doubles, truncated back to i64 — exact f64 oracle.
 - `let` bindings with a declared type that may differ from the initialiser
   (store coercion via `coerce_store_val`), plus variable reuse (binding
   reload signedness).

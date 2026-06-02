@@ -158,6 +158,38 @@ class FloatRT(Node):
         return self.child.eval()          # exact round-trip
 
 
+# Small integer types for float-arithmetic operands: |value| < 2^16, so a
+# product stays < 2^32 — exactly representable in f64 and far from i64
+# overflow / infinity, keeping the round-tripped oracle exact.
+SMALL_ARITH = ["i8", "i16", "u", "u16"]
+
+
+class FloatArith(Node):
+    """A binary float op on two int-derived doubles, truncated back to i64:
+    `# i64 OP # f <a> # f <b>`. Probes fadd/fsub/fmul/fdiv codegen. The
+    oracle evaluates in Python f64 (bit-identical to LLVM `double` for
+    +-*/) then truncates toward zero (matching fptosi). Value type i64."""
+    def __init__(self, op, a, b):
+        super().__init__("i64")
+        self.op, self.a, self.b = op, a, b
+
+    def render(self):
+        return f"# i64 {self.op} # f {self.a.render()} # f {self.b.render()}"
+
+    def eval(self):
+        fa, fb = float(self.a.eval()), float(self.b.eval())
+        op = self.op
+        if op == "+":
+            r = fa + fb
+        elif op == "-":
+            r = fa - fb
+        elif op == "*":
+            r = fa * fb
+        else:                              # "/" — divisor guaranteed nonzero
+            r = fa / fb
+        return int(r)                      # truncate toward zero == fptosi
+
+
 class Bin(Node):
     def __init__(self, ty, op, a, b):
         super().__init__(ty)
@@ -180,6 +212,8 @@ class Bin(Node):
             r = (va & mask(w)) & (vb & mask(w))
         elif op == "|":
             r = (va & mask(w)) | (vb & mask(w))
+        elif op == "^^":                   # NURL XOR is `^^` (`^` is return)
+            r = (va & mask(w)) ^ (vb & mask(w))
         elif op == "/":
             r = self._divrem(va, vb, signed, w, rem=False)
         elif op == "%":
@@ -243,6 +277,7 @@ class Gen:
         if ty == "i64":
             kinds.append("cmp")            # a comparison zext'd to i64 (0/1)
             kinds.append("floatrt")        # int→float→int round-trip
+            kinds.append("floatarith")     # fadd/fsub/fmul/fdiv → i64
         kind = self.rng.choice(kinds)
         if kind == "leaf":
             return self.leaf(ty)
@@ -256,7 +291,7 @@ class Gen:
             op = self.rng.choice(["/", "%"])
             return Bin(ty, op, self.gen(ty, depth - 1), self.small_pos(ty))
         if kind == "bitwise":
-            op = self.rng.choice(["&", "|"])
+            op = self.rng.choice(["&", "|", "^^"])
             return Bin(ty, op, self.gen(ty, depth - 1), self.gen(ty, depth - 1))
         if kind == "shift":
             w, _ = TYPES[ty]
@@ -272,6 +307,16 @@ class Gen:
             pool = SMALL_F32 if ftype == "f32" else SMALL_F64
             s = self.rng.choice(pool)
             return FloatRT(ftype, self.gen(s, depth - 1))
+        if kind == "floatarith":
+            op = self.rng.choice(["+", "-", "*", "/"])
+            a = self.leaf(self.rng.choice(SMALL_ARITH))
+            if op == "/":                  # nonzero divisor (no inf/poison)
+                sb = self.rng.choice(SMALL_ARITH)
+                wb, _ = TYPES[sb]
+                b = Lit(sb, self.rng.randint(1, (1 << wb) - 1))
+            else:
+                b = self.leaf(self.rng.choice(SMALL_ARITH))
+            return FloatArith(op, a, b)
         raise AssertionError(kind)
 
 
