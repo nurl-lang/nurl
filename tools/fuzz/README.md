@@ -58,24 +58,42 @@ python3 tools/fuzz/gen.py 42 --exprs 12 --depth 5 --oracle   # expected output
 Failures are saved under `tools/fuzz/failures/` as `seed_N.nu` +
 `seed_N.expected` + `seed_N.out0/.out2` + `seed_N.diff_o0` for triage.
 
-## Bugs found (2026-06-02, first run)
+## Probe dimensions
 
-Two silent miscompiles, both fixed at the root in `compiler/nurlc.nu`;
-locked in by `compiler/tests/cast_signedness.nu`:
+- Integer expression trees: `+ - * / % & | ^^ << >>` and `# T` width casts.
+- Float arithmetic: `# i64 OP # f a # f b` (fadd/fsub/fmul/fdiv) over
+  bounded int-derived doubles, truncated back to i64 — exact f64 oracle.
+- `let` bindings with a declared type that may differ from the initialiser
+  (store coercion via `coerce_store_val`), plus variable reuse (binding
+  reload signedness).
+- Comparison operators (`== != < <= > >=`) — signed-vs-unsigned `icmp`.
+- `int → float → int` round-trips (`# i64 # f # T v` / `# f32`) over
+  exactly-representable values — probes `uitofp`/`sitofp`, `fptosi`, and
+  side-channel cleanliness across the float conversion, all without needing
+  to print a float bit-exactly.
 
-1. **`# i64 # u 217` sign-extended an unsigned byte** (gave −39, not 217).
-   A nested cast-to-unsigned never set `__last_unsigned__`, so the
-   enclosing widen defaulted to `sext`. Fixed: `gen_cast` records the cast
-   target's signedness for an enclosing op.
-2. **Signed `i8` arithmetic treated as unsigned.** `gen_binary` inferred
-   unsignedness from the LLVM type `i8` — but both NURL `u` and signed
-   `i8` lower to LLVM i8. Signed i8 `/ % >> <` picked udiv/urem/lshr/icmp-u
-   and the result was marked unsigned (zero-extending a negative value).
-   Fixed: signedness comes only from the `__last_unsigned__` flag.
+## Bugs found (2026-06-02)
+
+Five silent miscompiles, all fixed at the root in `compiler/nurlc.nu`;
+locked in by `compiler/tests/cast_signedness.nu` + `cast_int_float.nu`.
+Every one is the same underlying hazard: **the LLVM integer type cannot
+carry NURL's signedness, so it must ride the `__last_unsigned__`
+side-channel — and any path that forgets to set/clear it miscompiles.**
+
+1. `# i64 # u 217` sign-extended an unsigned byte (−39, not 217). A nested
+   cast-to-unsigned never set `__last_unsigned__`.
+2. Signed `i8` arithmetic treated as unsigned: `gen_binary` inferred
+   unsignedness from the LLVM type `i8`, which both `u` and signed `i8`
+   share. Signed i8 `/ % >> <` picked udiv/urem/lshr/icmp-u.
+3. Unsigned int → float used `sitofp` (unsigned values went negative).
+4. Float → int ignored target signedness (no `fptoui`).
+5. A float result leaked its source int's stale unsigned flag into a later
+   `*`/`/` (negative product divided with `udiv`).
 
 ## Scope / future
 
-v1 covers integer value semantics. Natural extensions: float arithmetic
-(needs a rounding-aware oracle), option/result construction + `??` match
-payload widths, struct field round-trips, and `-O0`-vs-`-O2` divergence on
+Covers integer + int↔float value semantics. Natural extensions: float
+*arithmetic* with a rounding-aware oracle (currently only exact-integer
+round-trips), option/result construction + `??` match payload widths,
+struct field round-trips, and `-O0`-vs-`-O2` divergence on
 loop/recursion-heavy programs.

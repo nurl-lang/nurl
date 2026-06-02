@@ -7835,7 +7835,10 @@
     : b src_is_fp | src_is_double src_is_float
     : b dst_is_fp | dst_is_double dst_is_float
     ? & src_is_fp dst_is_fp
-    {  // float ↔ double conversions.
+    {  // float ↔ double conversions. The result is a float — clear the
+       // integer-signedness side-channel so a later int op doesn't inherit
+       // a stale `__last_unsigned__` from the float's original int source.
+        ( nurl_sym_def syms `__last_unsigned__` `` )
         ? ( seq st dt )
         { ( nurl_set_last_type dt ) ^ val }
         { ( nurl_print `  ` ) ( nurl_print res )
@@ -7846,19 +7849,36 @@
     }
     {}
     ? & src_is_fp ! dst_is_fp
-    { ( nurl_print `  ` ) ( nurl_print res )
-        ( nurl_print ` = fptosi ` ) ( nurl_print st ) ( nurl_print ` ` )
+    {  // float-or-double → int: fptoui when the TARGET is unsigned (so a
+       // value above the signed max converts correctly instead of becoming
+       // poison via fptosi), else fptosi.
+        ( nurl_print `  ` ) ( nurl_print res )
+        ( nurl_print ? dst_unsigned ` = fptoui ` ` = fptosi ` )
+        ( nurl_print st ) ( nurl_print ` ` )
         ( nurl_print val ) ( nurl_print ` to ` ) ( nurl_print dt )
         ( nurl_print `\n` )
         ( nurl_set_last_type dt )
+        // The integer result's signedness is the cast TARGET's.
+        ( nurl_sym_def syms `__last_unsigned__` ? dst_unsigned `1` `` )
         ^ res
     }
     ? & ! src_is_fp dst_is_fp
-    { ( nurl_print `  ` ) ( nurl_print res )
-        ( nurl_print ` = sitofp ` ) ( nurl_print st )
+    {  // int → float-or-double: uitofp when the SOURCE is unsigned (an
+       // unsigned value with the high bit set must NOT be read as a
+       // negative number), else sitofp. The source's signedness rides the
+       // `__last_unsigned__` side-channel (LLVM's i8/i16/i32 can't carry it).
+        : s lu_i2f ( nurl_sym_get syms `__last_unsigned__` )
+        ( nurl_print `  ` ) ( nurl_print res )
+        ( nurl_print ? != 0 ( nurl_str_len lu_i2f ) ` = uitofp ` ` = sitofp ` )
+        ( nurl_print st )
         ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print ` to ` )
         ( nurl_print dt ) ( nurl_print `\n` )
         ( nurl_set_last_type dt )
+        // The result is a float — clear the integer-signedness flag so a
+        // downstream int op (the surrounding `# i64 # f …` round-trip's
+        // multiply / divide) doesn't see the source int's stale unsigned
+        // marker and pick udiv/lshr.
+        ( nurl_sym_def syms `__last_unsigned__` `` )
         ^ res
     }
     { ? & src_ptr ( seq dt `i64` )

@@ -32,6 +32,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `compiler/tests/cast_signedness.nu` (12 known-answer checks). Validated
   by 340 fuzzer seeds (0 divergences).
 
+- **Three silent int↔float conversion miscompiles** (same fuzzer, extended
+  with float round-trip + comparison + store-coercion probes; fixed in
+  `gen_cast`). Same root cause — the LLVM integer type can't carry
+  signedness, so it must ride the `__last_unsigned__` side-channel.
+  1. **Unsigned int → float used `sitofp`.** `# f # u32 0x80000001` became a
+     *negative* float (≈ −2.1e9 instead of +2.1e9); `# f # u 200` became
+     −56. Now `uitofp` when the source is unsigned.
+  2. **Float → int ignored target signedness.** Now `fptoui` for an unsigned
+     target (a value above the signed max no longer becomes poison), else
+     `fptosi`.
+  3. **A float result leaked its source int's stale unsigned flag.** After
+     `# i64 # f # u …`, the still-set `__last_unsigned__` made a surrounding
+     `*`/`/` pick `udiv` on a negative product (e.g. `−65 / 7` computed as
+     an unsigned divide → garbage). Float-producing casts now clear the
+     flag; float→int casts set it from the target. Regression
+     `compiler/tests/cast_int_float.nu` (9 known-answer checks). Validated by
+     600 fuzzer seeds with the new float dimension (0 divergences).
+
 ### Added
 
 - **Differential fuzzer for `nurlc` integer codegen (`tools/fuzz`).**
@@ -44,7 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   toward the historically fragile surface (width coercions, unsigned
   arithmetic, mixed signed/unsigned); generates no UB. Found and fixed two
   silent miscompiles on its first run (see Fixed, above). See
-  `tools/fuzz/README.md`.
+  `tools/fuzz/README.md`. Subsequently extended with `let`-binding store
+  coercion, variable reuse, comparison operators, and int→float→int
+  round-trips — which surfaced three more (see Fixed).
 
 - **USTAR tar reader + writer — `stdlib/ext/tar.nu`.** Pure-NURL POSIX.1-1988
   tar: `tar_create` (entries → archive bytes), `tar_parse` (bytes → entries,
