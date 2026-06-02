@@ -8076,6 +8076,7 @@
             : s var_t ( nurl_sym_get syms fname )
             : s fidx_s ``
             : s ftype ``
+            : ~ s fld_uns ``
             ? & elem_is_struct ( is_ident_tok ( nurl_lex_type lex ) )
             { ? > ( int_width var_t ) 0
                 {}  // Integer variable index: skip field access check
@@ -8085,6 +8086,7 @@
                     { = is_field_access T
                         = fidx_s fidx_check
                         = ftype ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__type` ) ) ) )
+                        = fld_uns ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__unsigned` ) ) ) )
                     }
                     {}
                 }
@@ -8105,6 +8107,8 @@
                 ( nurl_print `, ` ) ( nurl_print ftype )
                 ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
                 ( nurl_set_last_type ftype )
+                // Field's NURL signedness for an enclosing widening cast.
+                ( nurl_sym_def syms `__last_unsigned__` fld_uns )
                 ^ res
             }
             {  // Variable / arbitrary expression index → array-style access
@@ -8228,6 +8232,10 @@
                     ( nurl_print ` ` ) ( nurl_print ov )
                     ( nurl_print `, ` ) ( nurl_print ( nurl_str_int fidx ) ) ( nurl_print `\n` )
                     ( nurl_set_last_type ftype )
+                    // Surface the field's NURL signedness so an enclosing
+                    // widening cast picks zext (unsigned field) vs sext.
+                    ( nurl_sym_def syms `__last_unsigned__`
+                    ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__unsigned` ) ) ) ) )
                     ^ res
                 }
             }
@@ -8663,8 +8671,14 @@
         : i have_iw ( int_width actual_fty )
         ? & & > decl_iw 0 > have_iw 0 != decl_iw have_iw
         { : s cv ( nurl_cg_reg cg )
+            // Widen with zext when the VALUE is unsigned (`fld_unsigned`,
+            // snapshotted from `__last_unsigned__` above) — storing a `u`
+            // byte 130 into an i64 field must give 130, not −126. sext only
+            // for a signed source; trunc when the field is narrower.
+            : s widen_op ? != 0 ( nurl_str_len fld_unsigned ) ` = zext ` ` = sext `
+            : s coerce_op ? > decl_iw have_iw widen_op ` = trunc `
             ( nurl_print `  ` ) ( nurl_print cv )
-            ( nurl_print ? > decl_iw have_iw ` = sext ` ` = trunc ` )
+            ( nurl_print coerce_op )
             ( nurl_print actual_fty ) ( nurl_print ` ` ) ( nurl_print actual_fval )
             ( nurl_print ` to ` ) ( nurl_print decl_fty ) ( nurl_print `\n` )
             = actual_fval cv
@@ -11129,6 +11143,18 @@
             ( nurl_sym_def syms
             ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__name` ) )
             fname )
+            // Record the field's NURL-level signedness — the LLVM type
+            // `flt` (i8/i16/i32) can't distinguish `u`/`u16`/`u32` from the
+            // signed `i8`/`i16`/`i32`, so a field load must consult this to
+            // widen with zext (unsigned) vs sext (signed). Captured from the
+            // `__last_nurl_type__` side-channel parse_type_base just set.
+            : b fld_uns ( nurl_type_is_unsigned ( nurl_sym_get g_res_type_syms `__last_nurl_type__` ) )
+            ( nurl_sym_def syms
+            ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__unsigned` ) )
+            ? fld_uns `1` `` )
+            ( nurl_sym_def syms
+            ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__unsigned` ) ) )
+            ? fld_uns `1` `` )
         }
         {}
         ? != first 0

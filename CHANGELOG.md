@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two silent struct-field signedness miscompiles** (same fuzzer, extended
+  with a struct dimension; same root cause — the LLVM field type can't carry
+  NURL's signedness). Both fixed in `compiler/nurlc.nu`; regression
+  `compiler/tests/struct_field_signedness.nu` (8 known-answer checks);
+  validated by 600 fuzzer seeds with the struct dimension.
+  1. **Reading an unsigned field sign-extended.** `# i . rec u8field` over a
+     `u`/`u16`/`u32` field holding e.g. 200 read back −56: `gen_member` never
+     surfaced the field's declared signedness onto `__last_unsigned__`.
+     `gen_struct_decl` now records `<S>__<field>__unsigned`, and both the
+     value (extractvalue) and pointer (GEP+load) field-load paths set the
+     flag from it.
+  2. **Constructing a wider field from a narrower unsigned value
+     sign-extended.** `@ Wide { # u 130 }` into an `i64` field stored −126
+     instead of 130 — `gen_agg_lit`'s field-store widening hardcoded `sext`.
+     It now picks `zext` when the field value is unsigned (the
+     `__last_unsigned__` snapshot it already takes), `sext` otherwise.
+
 - **Two silent integer miscompiles, found by a new differential fuzzer
   (`tools/fuzz`) and fixed at the root in `compiler/nurlc.nu`.** Both
   produced wrong values with no error — the worst class of bug.
