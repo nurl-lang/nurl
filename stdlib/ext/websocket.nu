@@ -1,4 +1,4 @@
-// stdlib/ext/websocket.nu — RFC 6455 WebSocket server-side.
+// stdlib/ext/websocket.nu — RFC 6455 WebSocket, server + client.
 //
 // Composes on top of the HTTP/1.1 server stack:
 //
@@ -12,8 +12,13 @@
 // runtime §18 routes `wss://` connections through `tcp_listen_tls` + the
 // existing accept loop with zero additional code in this module.
 //
-// API surface (server-side only — client-side is symmetric and tracked
-// for a follow-on ship if a real consumer asks):
+// The client-side API mirrors the server with the masking direction
+// inverted (RFC 6455 §5.1): a client masks every outbound frame with a
+// fresh CSPRNG key and requires the server's frames to be unmasked. See
+// the CLIENT-SIDE section at the bottom of this file —
+// `ws_connect` / `ws_client_send_*` / `ws_client_read_message`.
+//
+// Server-side API surface:
 //
 //   Handshake:
 //     ( ws_is_upgrade HttpRequest req )                        → b
@@ -75,6 +80,7 @@ $ `stdlib/core/mem.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hash.nu`
 $ `stdlib/std/encode.nu`
+$ `stdlib/std/random.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
@@ -143,6 +149,11 @@ $ `stdlib/ext/http_response.nu`
     WsHandshakeBadVersion
     WsHandshakeBadKey
     WsHandshakeWriteFailed
+    // Client handshake (RFC 6455 §4.1)
+    WsConnectFailed  // TCP / TLS dial failed
+    WsBadUrl  // ws://… / wss://… could not be parsed
+    WsClientBadStatus  // server response was not 101 Switching Protocols
+    WsClientBadAccept  // Sec-WebSocket-Accept did not match our key
     // Frame I/O
     WsReadIo
     WsReadShort  // peer closed mid-frame
@@ -153,6 +164,7 @@ $ `stdlib/ext/http_response.nu`
     WsProtocolControlTooLarge
     WsProtocolControlFragmented
     WsProtocolUnmasked
+    WsProtocolMasked  // server → client frame was masked (RFC §5.1)
     WsProtocolBadContinuation
     WsProtocolBadFragmentation
     // Resource limits
@@ -177,6 +189,10 @@ $ `stdlib/ext/http_response.nu`
         WsHandshakeBadVersion → `WsHandshakeBadVersion`
         WsHandshakeBadKey → `WsHandshakeBadKey`
         WsHandshakeWriteFailed → `WsHandshakeWriteFailed`
+        WsConnectFailed → `WsConnectFailed`
+        WsBadUrl → `WsBadUrl`
+        WsClientBadStatus → `WsClientBadStatus`
+        WsClientBadAccept → `WsClientBadAccept`
         WsReadIo → `WsReadIo`
         WsReadShort → `WsReadShort`
         WsWriteFailed → `WsWriteFailed`
@@ -185,6 +201,7 @@ $ `stdlib/ext/http_response.nu`
         WsProtocolControlTooLarge → `WsProtocolControlTooLarge`
         WsProtocolControlFragmented → `WsProtocolControlFragmented`
         WsProtocolUnmasked → `WsProtocolUnmasked`
+        WsProtocolMasked → `WsProtocolMasked`
         WsProtocolBadContinuation → `WsProtocolBadContinuation`
         WsProtocolBadFragmentation → `WsProtocolBadFragmentation`
         WsFrameTooLarge → `WsFrameTooLarge`
@@ -210,6 +227,7 @@ $ `stdlib/ext/http_response.nu`
         WsProtocolControlTooLarge → 1002
         WsProtocolControlFragmented → 1002
         WsProtocolUnmasked → 1002
+        WsProtocolMasked → 1002
         WsProtocolBadContinuation → 1002
         WsProtocolBadFragmentation → 1002
         WsInvalidUtf8 → 1007  // invalid frame payload data
@@ -541,7 +559,14 @@ $ `stdlib/ext/http_response.nu`
 //   7. Payload length MUST be ≤ lim.max_frame_bytes.
 //
 // Masking key is applied to the payload before return.
-@ ws_read_frame TcpConn conn WsLimits lim → !WsFrame WsErr {
+//
+// `client` selects the masking discipline (RFC 6455 §5.1):
+//   * client = F (server reading client frames): the MASK bit MUST be 1;
+//     an unmasked frame → WsProtocolUnmasked. Payload is XOR-unmasked
+//     with the 4-byte key that follows the length.
+//   * client = T (client reading server frames): the MASK bit MUST be 0;
+//     a masked frame → WsProtocolMasked. Payload is read verbatim.
+@ __ws_read_frame_ex TcpConn conn WsLimits lim b client → !WsFrame WsErr {
     : !( Vec u ) WsErr hdr_r ( __ws_read_exact conn 2 )
     : ~ b ok F
     : ~ b fin F
@@ -579,10 +604,13 @@ $ `stdlib/ext/http_response.nu`
     ? & is_ctl > len7 125 {
         ^ @ !WsFrame WsErr { F WsProtocolControlTooLarge }
     } {}
-    // Masking: server MUST close 1002 on unmasked frames (RFC §5.1).
-    ? ! masked {
-        ^ @ !WsFrame WsErr { F WsProtocolUnmasked }
-    } {}
+    // Masking direction (RFC §5.1): a server requires the client to mask,
+    // a client requires the server NOT to mask.
+    ? client {
+        ? masked { ^ @ !WsFrame WsErr { F WsProtocolMasked } } {}
+    } {
+        ? ! masked { ^ @ !WsFrame WsErr { F WsProtocolUnmasked } } {}
+    }
     // Resolve full payload length
     : ~ i payload_len 0
     ? == len7 126 {
@@ -630,13 +658,25 @@ $ `stdlib/ext/http_response.nu`
     ? > payload_len . lim max_frame_bytes {
         ^ @ !WsFrame WsErr { F WsFrameTooLarge }
     } {}
-    : !( Vec u ) WsErr ppr ( __ws_read_masked_payload conn payload_len )
+    : !( Vec u ) WsErr ppr ? client
+    ( __ws_read_exact conn payload_len )
+    ( __ws_read_masked_payload conn payload_len )
     ?? ppr {
         T payload → {
             ^ @ !WsFrame WsErr { T @ WsFrame { opcode fin payload } }
         }
         F e → { ^ @ !WsFrame WsErr { F e } }
     }
+}
+
+// Server-side frame reader (client → server frames MUST be masked).
+@ ws_read_frame TcpConn conn WsLimits lim → !WsFrame WsErr {
+    ^ ( __ws_read_frame_ex conn lim F )
+}
+
+// Client-side frame reader (server → client frames MUST NOT be masked).
+@ ws_client_read_frame TcpConn conn WsLimits lim → !WsFrame WsErr {
+    ^ ( __ws_read_frame_ex conn lim T )
 }
 
 // Bitwise XOR of two byte-sized ints. NURL has no infix XOR operator
@@ -924,7 +964,7 @@ $ `stdlib/ext/http_response.nu`
 // per logical message, including control frames interleaved between
 // fragments — a malicious peer cannot stall the server with infinite
 // pings between continuation frames.
-@ ws_read_message TcpConn conn WsLimits lim → !WsMessage WsErr {
+@ __ws_read_message_ex TcpConn conn WsLimits lim b client → !WsMessage WsErr {
     : ~ ( Vec u ) acc ( vec_new [u] )
     : ~ i kind 0  // 0 = no fragment in progress, 1 = text, 2 = binary
     : ~ i frame_count 0
@@ -938,7 +978,9 @@ $ `stdlib/ext/http_response.nu`
             = err WsTooManyFragments
             = done T
         } {
-            : !WsFrame WsErr fr ( ws_read_frame conn lim )
+            : !WsFrame WsErr fr ? client
+            ( ws_client_read_frame conn lim )
+            ( ws_read_frame conn lim )
             ?? fr {
                 T frm → {
                     : i op . frm opcode
@@ -947,8 +989,11 @@ $ `stdlib/ext/http_response.nu`
                     ? ( __ws_opcode_is_control op ) {
                         // Control frame: handle in-band
                         ? == op 9 {
-                            // Ping → reply with Pong, same payload
-                            : !v WsErr pr ( ws_send_pong conn pl )
+                            // Ping → reply with Pong, same payload. The
+                            // reply MUST be masked when we are the client.
+                            : !v WsErr pr ? client
+                            ( ws_client_send_pong conn pl )
+                            ( ws_send_pong conn pl )
                             ?? pr {
                                 T _ → {}
                                 F we → { = err we = done T }
@@ -1118,6 +1163,17 @@ $ `stdlib/ext/http_response.nu`
     }
 }
 
+// Server-side message reader (auto-pongs unmasked).
+@ ws_read_message TcpConn conn WsLimits lim → !WsMessage WsErr {
+    ^ ( __ws_read_message_ex conn lim F )
+}
+
+// Client-side message reader: reads UNmasked server frames and auto-pongs
+// with a MASKED pong frame.
+@ ws_client_read_message TcpConn conn WsLimits lim → !WsMessage WsErr {
+    ^ ( __ws_read_message_ex conn lim T )
+}
+
 // ── Serve loop ────────────────────────────────────────────────────────
 
 // Drive a WebSocket session to completion. Reads messages in a loop,
@@ -1171,5 +1227,542 @@ $ `stdlib/ext/http_response.nu`
         ^ @ !v WsErr { T 0 }
     } {
         ^ @ !v WsErr { F last }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// CLIENT-SIDE (RFC 6455 §4.1 handshake + §5.3 masking)
+// ═══════════════════════════════════════════════════════════════════════
+//
+// A WebSocket client dials OUT, sends the HTTP/1.1 Upgrade request with a
+// random 16-byte Sec-WebSocket-Key, validates the 101 response's
+// Sec-WebSocket-Accept, then switches to the frame protocol. Two
+// directional rules invert relative to the server (RFC 6455 §5.1):
+//
+//   * Every client → server frame MUST be masked with a fresh,
+//     unpredictable 4-byte key (§5.3 + §10.3). The masking writers below
+//     draw the key from the runtime CSPRNG (`rand_u64`).
+//   * Every server → client frame MUST NOT be masked; a masked frame is a
+//     protocol error (WsProtocolMasked). The client reader enforces this.
+//
+//   API surface (client-side):
+//     ( ws_connect      s url )                     → ! WsClient WsErr
+//     ( ws_connect_with s url ?String subprotocol ) → ! WsClient WsErr
+//     ( ws_client_conn  WsClient c )                → TcpConn
+//     ( ws_client_close WsClient c )                → v
+//     ( ws_client_send_text   TcpConn conn s text )            → ! v WsErr
+//     ( ws_client_send_binary TcpConn conn ( Vec u ) data )    → ! v WsErr
+//     ( ws_client_send_ping   TcpConn conn ( Vec u ) data )    → ! v WsErr
+//     ( ws_client_send_pong   TcpConn conn ( Vec u ) data )    → ! v WsErr
+//     ( ws_client_send_close  TcpConn conn i code s reason )   → ! v WsErr
+//     ( ws_client_read_frame   TcpConn conn WsLimits lim )     → ! WsFrame WsErr
+//     ( ws_client_read_message TcpConn conn WsLimits lim )     → ! WsMessage WsErr
+//     ( ws_client_serve_messages TcpConn conn WsLimits lim h ) → ! v WsErr
+//
+// runtime.c §18b/§18c export the client-connect primitives; `& `libc``
+// just emits the extern (the symbols resolve from the runtime object,
+// libc is always linked). Both return a CONN-kind handle (i64); a 0 or
+// non-zero err_kind means the dial / TLS handshake failed.
+
+& `libc` @ nurl_tcp_connect s host i port → i
+
+& `libc` @ nurl_tcp_connect_tls s host i port i verify → i
+
+// A connected, handshaken client. Wraps the underlying TcpConn so the
+// frame API can be reached via `( ws_client_conn c )` and the link torn
+// down with `ws_client_close`.
+: WsClient {
+    TcpConn conn
+}
+
+@ ws_client_conn WsClient c → TcpConn { ^ . c conn }
+
+@ ws_client_close WsClient c → v { ( tcp_close_conn . c conn ) }
+
+// ── Masking frame writer (RFC 6455 §5.3) ──────────────────────────────
+
+// Serialise a CLIENT frame: identical framing to ws_serialize_frame but
+// the MASK bit is set, the 4-byte masking key is appended after the
+// length field, and every payload byte is XOR'd with key[i % 4]. The key
+// is passed explicitly so the framing is deterministically testable
+// offline; ws_client_write_frame draws an unpredictable key from the
+// CSPRNG for live use.
+@ ws_serialize_frame_masked b fin i opcode ( Vec u ) payload i m0 i m1 i m2 i m3 → !( Vec u ) WsErr {
+    : i n ( vec_len [u] payload )
+    : b is_ctl ( __ws_opcode_is_control opcode )
+    ? & is_ctl ! fin {
+        ^ @ !( Vec u ) WsErr { F WsProtocolControlFragmented }
+    } {}
+    ? & is_ctl > n 125 {
+        ^ @ !( Vec u ) WsErr { F WsProtocolControlTooLarge }
+    } {}
+    ? ! ( __ws_opcode_is_valid opcode ) {
+        ^ @ !( Vec u ) WsErr { F WsProtocolBadOpcode }
+    } {}
+    // Header (≤14 bytes: 2 + 8 ext len + 4 mask key) then masked payload.
+    : ( Vec u ) out ( vec_with_cap [u] + 14 n )
+    : i b0 + ? fin 128 0 & opcode 15
+    ( vec_push [u] out # u b0 )
+    // The MASK bit (0x80) is OR'd into the first length byte.
+    ? < n 126 {
+        ( vec_push [u] out # u + 128 & n 127 )
+    } {
+        ? <= n 65535 {
+            ( vec_push [u] out # u + 128 126 )
+            ( vec_push [u] out # u & 255 >> n 8 )
+            ( vec_push [u] out # u & 255 n )
+        } {
+            ( vec_push [u] out # u + 128 127 )
+            ( vec_push [u] out # u & 255 >> n 56 )
+            ( vec_push [u] out # u & 255 >> n 48 )
+            ( vec_push [u] out # u & 255 >> n 40 )
+            ( vec_push [u] out # u & 255 >> n 32 )
+            ( vec_push [u] out # u & 255 >> n 24 )
+            ( vec_push [u] out # u & 255 >> n 16 )
+            ( vec_push [u] out # u & 255 >> n 8 )
+            ( vec_push [u] out # u & 255 n )
+        }
+    }
+    // 4-byte masking key, then the masked payload.
+    ( vec_push [u] out # u & m0 255 )
+    ( vec_push [u] out # u & m1 255 )
+    ( vec_push [u] out # u & m2 255 )
+    ( vec_push [u] out # u & m3 255 )
+    ? > n 0 {
+        : *u pp ( vec_data [u] payload )
+        : ~ i k 0
+        ~ < k n {
+            : i bb & 255 # i . pp k
+            : i mb ? == & k 3 0 m0 ? == & k 3 1 m1 ? == & k 3 2 m2 m3
+            ( vec_push [u] out # u ( __ws_xor8 bb & mb 255 ) )
+            = k + k 1
+        }
+    } {}
+    ^ @ !( Vec u ) WsErr { T out }
+}
+
+// Write one masked frame to `conn`, drawing a fresh 4-byte key from the
+// runtime CSPRNG (RFC 6455 §10.3: the key MUST NOT be predictable).
+@ ws_client_write_frame TcpConn conn b fin i opcode ( Vec u ) payload → !v WsErr {
+    : i r ( rand_u64 )
+    : i m0 & 255 r
+    : i m1 & 255 >> r 8
+    : i m2 & 255 >> r 16
+    : i m3 & 255 >> r 24
+    : !( Vec u ) WsErr sr ( ws_serialize_frame_masked fin opcode payload m0 m1 m2 m3 )
+    ?? sr {
+        T out → {
+            : !v NetErr wr ( tcp_write_all conn out )
+            ( vec_free [u] out )
+            ?? wr {
+                T _ → { ^ @ !v WsErr { T 0 } }
+                F _ → { ^ @ !v WsErr { F WsWriteFailed } }
+            }
+        }
+        F e → { ^ @ !v WsErr { F e } }
+    }
+}
+
+// ── Client convenience writers (always masked) ────────────────────────
+
+@ ws_client_send_text TcpConn conn s text → !v WsErr {
+    : ( Vec u ) buf ( bytes_from_str text )
+    : !v WsErr r ( ws_client_write_frame conn T ( ws_opcode_text ) buf )
+    ( vec_free [u] buf )
+    ^ r
+}
+
+@ ws_client_send_binary TcpConn conn ( Vec u ) data → !v WsErr {
+    ^ ( ws_client_write_frame conn T ( ws_opcode_binary ) data )
+}
+
+@ ws_client_send_ping TcpConn conn ( Vec u ) data → !v WsErr {
+    ^ ( ws_client_write_frame conn T ( ws_opcode_ping ) data )
+}
+
+@ ws_client_send_pong TcpConn conn ( Vec u ) data → !v WsErr {
+    ^ ( ws_client_write_frame conn T ( ws_opcode_pong ) data )
+}
+
+@ ws_client_send_close TcpConn conn i code s reason → !v WsErr {
+    ? < code 0 {
+        : ( Vec u ) empty ( vec_new [u] )
+        : !v WsErr r ( ws_client_write_frame conn T ( ws_opcode_close ) empty )
+        ( vec_free [u] empty )
+        ^ r
+    } {}
+    ? | < code 1000 > code 4999 {
+        ^ @ !v WsErr { F WsInvalidCloseCode }
+    } {}
+    : ( Vec u ) buf ( vec_with_cap [u] + 2 ( nurl_str_len reason ) )
+    ( vec_push [u] buf # u & 255 >> code 8 )
+    ( vec_push [u] buf # u & 255 code )
+    ? > ( nurl_str_len reason ) 0 { ( bytes_extend_str buf reason ) } {}
+    : !v WsErr r ( ws_client_write_frame conn T ( ws_opcode_close ) buf )
+    ( vec_free [u] buf )
+    ^ r
+}
+
+// ── Client serve loop ─────────────────────────────────────────────────
+
+// Mirror of ws_serve_messages for the client side: reads UNmasked server
+// frames, auto-pongs (masked), dispatches each message to `handler`, and
+// runs the close handshake with MASKED close frames.
+@ ws_client_serve_messages TcpConn conn WsLimits lim ( @ !v WsErr WsMessage ) handler → !v WsErr {
+    : ~ b done F
+    : ~ b clean_close F
+    : ~ WsErr last WsOther
+    ~ ! done {
+        : !WsMessage WsErr mr ( ws_client_read_message conn lim )
+        ?? mr {
+            T msg → {
+                : !v WsErr hr ( handler msg )
+                ( ws_message_free msg )
+                ?? hr {
+                    T _ → {}
+                    F he → { = last he = done T }
+                }
+            }
+            F we → {
+                = last we
+                = done T
+                ?? we {
+                    WsClosedByPeer → { = clean_close T }
+                    _ → {}
+                }
+            }
+        }
+    }
+    : i code ? clean_close 1000 ( __ws_err_to_close last )
+    : !v WsErr _cr ( ws_client_send_close conn code `` )
+    ?? _cr { T _ → {} F _ → {} }
+    ? clean_close {
+        ^ @ !v WsErr { T 0 }
+    } {
+        ^ @ !v WsErr { F last }
+    }
+}
+
+// ── Client handshake (RFC 6455 §4.1) ──────────────────────────────────
+
+// Case-insensitive ASCII prefix test: does raw `s` begin with `pfx`?
+@ __ws_prefix_ci s str s pfx → b {
+    : i pl ( nurl_str_len pfx )
+    : i sl ( nurl_str_len str )
+    ? < sl pl { ^ F } {}
+    : ~ i k 0
+    ~ < k pl {
+        : i a ( nurl_str_get str k )
+        : i b ( nurl_str_get pfx k )
+        ? & >= a 65 <= a 90 { = a + a 32 } {}
+        ? & >= b 65 <= b 90 { = b + b 32 } {}
+        ? != a b { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+// True iff the response status line carries a 101 status code. The status
+// line is "HTTP/1.x 101 ..."; we skip to the first SP and read the three
+// digits that follow.
+@ __ws_status_101 ( Vec u ) head → b {
+    : i n ( vec_len [u] head )
+    ? < n 12 { ^ F } {}
+    : *u p ( vec_data [u] head )
+    : ~ i k 0
+    ~ & < k n != & 255 # i . p k 32 { = k + k 1 }
+    = k + k 1
+    ? > + k 3 n { ^ F } {}
+    ^ & & == & 255 # i . p k 49 == & 255 # i . p + k 1 48 == & 255 # i . p + k 2 49
+}
+
+// True iff line [ls, le) is "<name>:" (case-insensitive name, RFC 7230
+// forbids OWS between field-name and colon).
+@ __ws_line_is_header *u p i ls i le s name i namelen → b {
+    ? > + ls + namelen 1 le { ^ F } {}
+    : ~ i k 0
+    ~ < k namelen {
+        : i a & 255 # i . p + ls k
+        : i b ( nurl_str_get name k )
+        ? & >= a 65 <= a 90 { = a + a 32 } {}
+        ? & >= b 65 <= b 90 { = b + b 32 } {}
+        ? != a b { ^ F } {}
+        = k + k 1
+    }
+    ^ == & 255 # i . p + ls namelen 58
+}
+
+// Find header `name` in a raw HTTP head byte buffer (lines split on LF,
+// trailing CR stripped) and return its OWS-trimmed value as an owned
+// String. None if absent.
+@ __ws_head_get_value ( Vec u ) head s name → ?String {
+    : i n ( vec_len [u] head )
+    : *u p ( vec_data [u] head )
+    : i namelen ( nurl_str_len name )
+    : ~ i ls 0
+    : ~ i k 0
+    : ~ b found F
+    : ~ String val ( string_new )
+    ~ & ! found < k n {
+        : i c & 255 # i . p k
+        ? == c 10 {
+            : i le ? & > k ls == & 255 # i . p - k 1 13 - k 1 k
+            ? ( __ws_line_is_header p ls le name namelen ) {
+                : ~ i vs + ls + namelen 1
+                ~ & < vs le | == & 255 # i . p vs 32 == & 255 # i . p vs 9 {
+                    = vs + vs 1
+                }
+                : ~ i ve le
+                ~ & > ve vs | == & 255 # i . p - ve 1 32 == & 255 # i . p - ve 1 9 {
+                    = ve - ve 1
+                }
+                ( string_free val )
+                = val ( string_new )
+                : ~ i vi vs
+                ~ < vi ve {
+                    ( string_push_char val & 255 # i . p vi )
+                    = vi + vi 1
+                }
+                = found T
+            } {}
+            = ls + k 1
+        } {}
+        = k + k 1
+    }
+    ? found {
+        ^ @ ?String { T val }
+    } {
+        ( string_free val )
+        ^ @ ?String { F ( string_new ) }
+    }
+}
+
+// Read the HTTP response head one byte at a time until the CRLFCRLF
+// terminator, so no bytes of the following frame stream are consumed.
+// Capped at 16 KiB → WsClientBadStatus on overflow.
+@ __ws_read_http_head TcpConn conn → !( Vec u ) WsErr {
+    : ( Vec u ) buf ( vec_new [u] )
+    : ~ b done F
+    : ~ b ok F
+    : ~ WsErr err WsReadIo
+    ~ ! done {
+        ? > ( vec_len [u] buf ) 16384 {
+            = err WsClientBadStatus
+            = done T
+        } {
+            : !( Vec u ) WsErr br ( __ws_read_exact conn 1 )
+            ?? br {
+                T one → {
+                    : *u op ( vec_data [u] one )
+                    : i bv & 255 # i . op 0
+                    ( vec_push [u] buf # u bv )
+                    ( vec_free [u] one )
+                    : i bn ( vec_len [u] buf )
+                    ? >= bn 4 {
+                        : *u bp ( vec_data [u] buf )
+                        ? & & & == & 255 # i . bp - bn 4 13 == & 255 # i . bp - bn 3 10
+                        == & 255 # i . bp - bn 2 13 == & 255 # i . bp - bn 1 10 {
+                            = ok T
+                            = done T
+                        } {}
+                    } {}
+                }
+                F e → { = err e = done T }
+            }
+        }
+    }
+    ? ok {
+        ^ @ !( Vec u ) WsErr { T buf }
+    } {
+        ( vec_free [u] buf )
+        ^ @ !( Vec u ) WsErr { F err }
+    }
+}
+
+// Perform the client handshake over an already-connected TcpConn: send the
+// Upgrade request with a fresh random key, read + validate the 101
+// response (status + Sec-WebSocket-Accept). `host` populates the Host
+// header; `path` is the request target (e.g. "/ws"). On Ok the conn is in
+// frame mode.
+@ ws_client_handshake TcpConn conn s host s path ? String subprotocol → !v WsErr {
+    // 16-byte random nonce → base64 Sec-WebSocket-Key.
+    : ( Vec u ) nonce ( vec_with_cap [u] 16 )
+    : i r0 ( rand_u64 )
+    : i r1 ( rand_u64 )
+    : ~ i bi 0
+    ~ < bi 8 {
+        ( vec_push [u] nonce # u & 255 >> r0 * bi 8 )
+        = bi + bi 1
+    }
+    = bi 0
+    ~ < bi 8 {
+        ( vec_push [u] nonce # u & 255 >> r1 * bi 8 )
+        = bi + bi 1
+    }
+    : String key64 ( b64_encode_vec nonce )
+    ( vec_free [u] nonce )
+    // Build and send the request head.
+    : ( Vec u ) req ( vec_new [u] )
+    ( bytes_extend_str req `GET ` )
+    ( bytes_extend_str req path )
+    ( bytes_extend_str req ` HTTP/1.1\r\nHost: ` )
+    ( bytes_extend_str req host )
+    ( bytes_extend_str req `\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ` )
+    ( bytes_extend_str req ( string_data key64 ) )
+    ( bytes_extend_str req `\r\nSec-WebSocket-Version: 13\r\n` )
+    ?? subprotocol {
+        T sp → {
+            ( bytes_extend_str req `Sec-WebSocket-Protocol: ` )
+            ( bytes_extend_str req ( string_data sp ) )
+            ( bytes_extend_str req `\r\n` )
+        }
+        F _ → {}
+    }
+    ( bytes_extend_str req `\r\n` )
+    : !v NetErr wr ( tcp_write_all conn req )
+    ( vec_free [u] req )
+    ?? wr {
+        T _ → {}
+        F _ → {
+            ( string_free key64 )
+            ^ @ !v WsErr { F WsConnectFailed }
+        }
+    }
+    // Read + validate the response head.
+    : !( Vec u ) WsErr hr ( __ws_read_http_head conn )
+    ?? hr {
+        T head → {
+            ? ! ( __ws_status_101 head ) {
+                ( vec_free [u] head )
+                ( string_free key64 )
+                ^ @ !v WsErr { F WsClientBadStatus }
+            } {}
+            : String expect ( ws_accept_key ( string_data key64 ) )
+            ( string_free key64 )
+            : ?String got ( __ws_head_get_value head `Sec-WebSocket-Accept` )
+            ( vec_free [u] head )
+            : ~ b accept_ok F
+            ?? got {
+                T gv → {
+                    = accept_ok != 0 ( nurl_str_eq ( string_data gv ) ( string_data expect ) )
+                    ( string_free gv )
+                }
+                F _ → {}
+            }
+            ( string_free expect )
+            ? ! accept_ok {
+                ^ @ !v WsErr { F WsClientBadAccept }
+            } {}
+            ^ @ !v WsErr { T 0 }
+        }
+        F e → {
+            ( string_free key64 )
+            ^ @ !v WsErr { F e }
+        }
+    }
+}
+
+// ── URL parsing + one-shot connect ────────────────────────────────────
+
+// A parsed ws://… / wss://… URL. `host` / `path` are OWNED.
+: WsUrl {
+    b tls
+    String host
+    i port
+    String path
+}
+
+@ ws_url_free WsUrl u → v {
+    ( string_free . u host )
+    ( string_free . u path )
+}
+
+// Parse "ws://host[:port][/path]" or "wss://host[:port][/path]". Default
+// port is 80 (ws) / 443 (wss); default path is "/". None on a bad scheme
+// or empty host.
+@ __ws_parse_url s url → ?WsUrl {
+    : i n ( nurl_str_len url )
+    : ~ b tls F
+    : ~ i pos 0
+    ? ( __ws_prefix_ci url `wss://` ) {
+        = tls T
+        = pos 6
+    } {
+        ? ( __ws_prefix_ci url `ws://` ) {
+            = tls F
+            = pos 5
+        } {
+            ^ @ ?WsUrl { F # WsUrl 0 }
+        }
+    }
+    : String host ( string_new )
+    ~ & < pos n & != ( nurl_str_get url pos ) 58 != ( nurl_str_get url pos ) 47 {
+        ( string_push_char host ( nurl_str_get url pos ) )
+        = pos + pos 1
+    }
+    ? == 0 ( string_len host ) {
+        ( string_free host )
+        ^ @ ?WsUrl { F # WsUrl 0 }
+    } {}
+    : ~ i port ? tls 443 80
+    ? & < pos n == ( nurl_str_get url pos ) 58 {
+        = pos + pos 1
+        : ~ i pv 0
+        : ~ b anyd F
+        ~ & < pos n & >= ( nurl_str_get url pos ) 48 <= ( nurl_str_get url pos ) 57 {
+            = pv + * pv 10 - ( nurl_str_get url pos ) 48
+            = anyd T
+            = pos + pos 1
+        }
+        ? anyd { = port pv } {}
+    } {}
+    : String path ( string_new )
+    ? & < pos n == ( nurl_str_get url pos ) 47 {
+        ~ < pos n {
+            ( string_push_char path ( nurl_str_get url pos ) )
+            = pos + pos 1
+        }
+    } {
+        ( string_push_char path 47 )
+    }
+    ^ @ ?WsUrl { T @ WsUrl { tls host port path } }
+}
+
+// Dial + handshake in one shot, no subprotocol. wss:// verifies the
+// server certificate chain + hostname against the system trust store.
+@ ws_connect s url → !WsClient WsErr {
+    ^ ( ws_connect_with url @ ?String { F ( string_new ) } )
+}
+
+@ ws_connect_with s url ? String subprotocol → !WsClient WsErr {
+    : ?WsUrl pu ( __ws_parse_url url )
+    ?? pu {
+        T u → {
+            : i craw ? . u tls
+            ( nurl_tcp_connect_tls ( string_data . u host ) . u port 1 )
+            ( nurl_tcp_connect ( string_data . u host ) . u port )
+            ? == craw 0 {
+                ( ws_url_free u )
+                ^ @ !WsClient WsErr { F WsConnectFailed }
+            } {}
+            : i ek ( nurl_tcp_err_kind craw )
+            ? != ek 0 {
+                ( nurl_tcp_close craw )
+                ( ws_url_free u )
+                ^ @ !WsClient WsErr { F WsConnectFailed }
+            } {}
+            : s crp # s craw
+            : TcpConn conn @ TcpConn { crp }
+            : !v WsErr hsr ( ws_client_handshake conn ( string_data . u host ) ( string_data . u path ) subprotocol )
+            ( ws_url_free u )
+            ?? hsr {
+                T _ → { ^ @ !WsClient WsErr { T @ WsClient { conn } } }
+                F e → {
+                    ( tcp_close_conn conn )
+                    ^ @ !WsClient WsErr { F e }
+                }
+            }
+        }
+        F _ → { ^ @ !WsClient WsErr { F WsBadUrl } }
     }
 }
