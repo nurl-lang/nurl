@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Narrow sized-int enum payloads now compile and round-trip correctly.**
+  An enum variant carrying a `u`/`i8`/`u16`/`i16`/`u32`/`i32` payload (e.g.
+  `: | E { None Val u }`) was accepted by the front-end but emitted invalid
+  IR: `gen_agg_lit` only converted i64/i32 payloads into the enum's pointer
+  slot (so an i8 payload hit `insertvalue …, i8 …` against a `ptr` field —
+  clang reject), and `gen_match` only un-converted i1/i64 (storing a `ptr`
+  into an `i8` binding). Now construction widens a narrow payload to i64
+  (zext for an unsigned payload, sext for signed — from the payload
+  signedness `gen_enum_decl` now records) before `inttoptr`, and the match
+  `ptrtoint`s back and truncs to the payload width, carrying the payload's
+  signedness onto the binding so a later widen zero-extends an unsigned
+  payload. Found by hand-probing the fuzzer's struct dimension outward.
+  Bootstrap fixed point holds; full suite + ASan/UBSan green. Regression
+  `compiler/tests/enum_payload_signedness.nu` (5 known-answer checks).
+
 - **Two silent struct-field signedness miscompiles** (same fuzzer, extended
   with a struct dimension; same root cause — the LLVM field type can't carry
   NURL's signedness). Both fixed in `compiler/nurlc.nu`; regression

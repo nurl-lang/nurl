@@ -5156,12 +5156,17 @@
                 : s cv0 ? did_reconstruct pr0_eff
                 ? pt0_is_opt_bool pr0 ( nurl_cg_reg cg )
                 ? pt0_is_opt_bool {} {
-                    ? ( seq pt0 `i1` ) {
+                    ? & > ( int_width pt0 ) 0 < ( int_width pt0 ) 64 {
+                        // Narrow integer payload (i1 / i8 / i16 / i32, incl.
+                        // the unsigned u/u16/u32): the value rode the ptr slot
+                        // widened to i64 (gen_agg_lit), so ptrtoint back to i64
+                        // and trunc to the payload's width. Signedness for a
+                        // later widen is set on the binding below.
                         : s t64 ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print t64 )
                         ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr0 ) ( nurl_print ` to i64\n` )
                         ( nurl_print `  ` ) ( nurl_print cv0 )
-                        ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to i1\n` )
+                        ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt0 ) ( nurl_print `\n` )
                     } {
                         // Struct-handle payload (e.g. %Vec__Json, %String): the payload
                         // ptr stored in the enum slot IS the struct's field-0 pointer
@@ -5214,6 +5219,11 @@
                 ( nurl_print `* ` ) ( nurl_print vp0 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv0 pt0_eff )
                 ( nurl_sym_def syms ( nurl_str_cat pv0 `__ptr` ) vp0 )
+                // Carry the payload's NURL signedness onto the binding so a
+                // later `# i <b>` widen zero-extends a `u`-family payload
+                // (gen_ident copies `<name>__unsigned` → `__last_unsigned__`).
+                ( nurl_sym_def syms ( nurl_str_cat pv0 `__unsigned` )
+                ( nurl_sym_get syms ( nurl_str_cat pattern_name `__payload__0__unsigned` ) ) )
                 // Phase 2D: a match-arm payload binding OWNS its value just
                 // like a `:` let, so a `% Drop` impl on the payload type must
                 // fire at arm scope exit. Register it here (mirrors gen_let's
@@ -8556,12 +8566,25 @@
                         = actual_fval conv_reg2
                         = actual_fty `ptr`
                     }
-                    ? | ( seq fty `i64` ) ( seq fty `i32` )
-                    {  // Convert integer to ptr
+                    ? & > ( int_width fty ) 0 ! ( seq fty `i1` )
+                    {  // Integer payload → ptr slot. A NARROW int (i8/i16/i32,
+                        // incl. the unsigned u/u16/u32) must first widen to i64
+                        // so the value survives the ptr round-trip — zext when
+                        // the payload value is unsigned (`fld_unsigned`), sext
+                        // otherwise. `inttoptr i8 … to ptr` would zero-extend
+                        // unconditionally and corrupt a signed payload. i64
+                        // payloads inttoptr directly.
+                        : s wide_val fval
+                        ? < ( int_width fty ) 64
+                        { : s ext_reg ( nurl_cg_reg cg )
+                            : s ext_op ? != 0 ( nurl_str_len fld_unsigned ) ` = zext ` ` = sext `
+                            ( nurl_print `  ` ) ( nurl_print ext_reg ) ( nurl_print ext_op )
+                            ( nurl_print fty ) ( nurl_print ` ` ) ( nurl_print fval ) ( nurl_print ` to i64\n` )
+                            = wide_val ext_reg }
+                        {}
                         : s conv_reg ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print conv_reg )
-                        ( nurl_print ` = inttoptr ` ) ( nurl_print fty ) ( nurl_print ` ` )
-                        ( nurl_print fval ) ( nurl_print ` to ptr\n` )
+                        ( nurl_print ` = inttoptr i64 ` ) ( nurl_print wide_val ) ( nurl_print ` to ptr\n` )
                         = actual_fval conv_reg
                         = actual_fty `ptr`
                     }
@@ -11491,6 +11514,12 @@
         ~ & != ( nurl_lex_type lex ) TT_RBRACE ( could_be_payload_type lex syms ) {
             : s pt ( parse_type lex )
             ( nurl_sym_def syms ( nurl_str_cat vname ( nurl_str_cat `__payload__` ( nurl_str_int pcount ) ) ) pt )
+            // Record the payload's NURL signedness (the LLVM type can't carry
+            // it) so the match binding widens with zext for a `u`-family
+            // payload — same hazard as struct fields.
+            ( nurl_sym_def syms
+            ( nurl_str_cat vname ( nurl_str_cat `__payload__` ( nurl_str_cat ( nurl_str_int pcount ) `__unsigned` ) ) )
+            ? ( nurl_type_is_unsigned ( nurl_sym_get g_res_type_syms `__last_nurl_type__` ) ) `1` `` )
             = pcount + pcount 1
         }
         ( nurl_sym_def syms ( nurl_str_cat vname `__paycount` ) ( nurl_str_int pcount ) )
