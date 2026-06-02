@@ -8,7 +8,7 @@ NURL has achieved a stable self-hosted compiler (Grammar v2.1 — see [`spec/gra
 **What's actually left (not yet shipped):**
 - **HTTP/2 + WebSocket client-side** (both are server-side only today).
 - **Mobile / embedded targets** (Android NDK, iOS, `no_std`) — Milk-V Duo RISC-V is already validated; the rest follow the same cross-compile shape.
-- **reverse-proxy binary-body** pass-through (request/response currently NUL-truncate). *(SQLite BLOB/double/transactions shipped 2026-06-01; the full SHA/MD5/HMAC/BLAKE3 hash family is complete.)*
+- **reverse-proxy binary-body** pass-through: **request side fixed** (the `http_*_bytes` family ships the length-tracked body via `CURLOPT_COPYPOSTFIELDS` — binary uploads through the proxy are now lossless); the **response** stream still NUL-truncates (chunks ride a NUL-terminated `char*` carrier in `nurl_http_stream_next`). *(SQLite BLOB/double/transactions shipped 2026-06-01; the full SHA/MD5/HMAC/BLAKE3 hash family is complete.)*
 - **MCP**: continuous SSE stream, stateful sessions, Bearer-auth middleware (batch + GET-SSE stub + session-id echo already shipped).
 - **Organisational / aspirational:** split `runtime.c` into bootstrap-vs-stdlib-FFI files (PURIFY shrank it 8 254 → ~5 750 LOC but it is still one file); a compiler-embedded LLM for self-correcting errors; bench peers (Go) + a compiler self-host benchmark.
 
