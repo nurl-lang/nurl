@@ -4141,6 +4141,12 @@
     // When Phase 2B is off no function ever gets "str" registered, so behaviour
     // is identical to the Phase 2A-only build.
     ( nurl_sym_def syms `__last_call_ret_owned__` ( nurl_sym_get syms ( nurl_str_cat call_name `__ret_owned` ) ) )
+    // Record the callee's return signedness (from its recorded NURL return
+    // type) so the regular @-fn dispatch can re-assert it on `__last_unsigned__`
+    // AFTER the call — an enclosing `# i ( f )` over a `u`-returning `f` must
+    // zero-extend. (The LLVM return type i8/i16/i32 can't carry it.)
+    ( nurl_sym_def syms `__last_call_ret_unsigned__`
+    ( nurl_sym_get syms ( nurl_str_cat call_name `__ret_unsigned` ) ) )
 
     // Check if this is a stored closure variable first
     : s var_ptr ( nurl_sym_get syms ( nurl_str_cat call_name `__ptr` ) )
@@ -4242,6 +4248,10 @@
                 ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
                 ( mem_drop_arg_temps owned_arg_temps )
                 ( nurl_set_last_type rlt )
+                // Re-assert the callee's return signedness (cleared/overwritten
+                // by argument evaluation) so an enclosing `# i ( f )` widens a
+                // `u`-returning call with zext.
+                ( nurl_sym_def syms `__last_unsigned__` ( nurl_sym_get syms `__last_call_ret_unsigned__` ) )
                 res
             }
         }
@@ -12947,6 +12957,14 @@
                                 { ( nurl_lex_advance lex )
                                     : s ret_ty ( parse_type lex )
                                     ( nurl_sym_def syms fname ret_ty )
+                                    // Persistent (pre-pass) record of the return
+                                    // signedness — read at call sites to widen a
+                                    // `u`-returning call with zext. gen_fn_decl's
+                                    // own recording lives in a scope that doesn't
+                                    // reach call sites, so this is the source of
+                                    // truth.
+                                    ( nurl_sym_def syms ( nurl_str_cat fname `__ret_unsigned` )
+                                    ? ( nurl_type_is_unsigned ( nurl_sym_get g_res_type_syms `__last_nurl_type__` ) ) `1` `` )
                                 }
                                 {}
                                 ( skip_balanced lex )

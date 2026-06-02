@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A call to an unsigned-returning function sign-extended at the call
+  site.** `# i ( f )` where `f → u` returns 200 gave −56 (and likewise for
+  `u16`/`u32`): the call site never carried the callee's return signedness
+  onto the `__last_unsigned__` side-channel the enclosing widening cast
+  reads (the LLVM return type i8/i16/i32 can't distinguish `u` from `i8`).
+  `scan_fn_sigs` now records `<fn>__ret_unsigned` in the persistent pre-pass
+  symbol table (the per-function `gen_fn_decl` scope doesn't reach call
+  sites), and `gen_call` re-asserts it on `__last_unsigned__` after the
+  call. Regression `compiler/tests/fn_return_signedness.nu` (5 known-answer
+  checks). Bootstrap fixed point holds; full suite + ASan/UBSan green.
+
 - **Narrow sized-int enum payloads now compile and round-trip correctly.**
   An enum variant carrying a `u`/`i8`/`u16`/`i16`/`u32`/`i32` payload (e.g.
   `: | E { None Val u }`) was accepted by the front-end but emitted invalid
