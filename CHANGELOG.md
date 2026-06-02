@@ -8,7 +8,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two silent integer miscompiles, found by a new differential fuzzer
+  (`tools/fuzz`) and fixed at the root in `compiler/nurlc.nu`.** Both
+  produced wrong values with no error — the worst class of bug.
+  1. **Unsigned-byte cast widening sign-extended.** `# i64 # u 217` gave
+     −39 instead of 217: a nested cast-to-unsigned never set the
+     `__last_unsigned__` side-channel the enclosing widening cast consults,
+     so it defaulted to `sext`. `gen_cast` now records the cast target's
+     signedness for an enclosing widen / binop / shift. (Previously only
+     casts whose subject was a typed *binding* — where `gen_ident` sets the
+     flag — widened correctly.)
+  2. **Signed `i8` arithmetic treated as unsigned.** `gen_binary` inferred
+     unsignedness from the LLVM type `i8`, but both the unsigned NURL `u`
+     and the *signed* `i8` lower to LLVM i8 — so signed i8 `/ % >> <`
+     selected `udiv`/`urem`/`lshr`/`icmp u*` and the result was marked
+     unsigned, silently zero-extending a negative value at the next widen.
+     Signedness now comes solely from the `__last_unsigned__` flag (set by
+     `gen_ident` from a binding's `__unsigned` and by `gen_cast` from an
+     unsigned cast target), never from the ambiguous LLVM type.
+  Bootstrap fixed point holds; full suite + ASan/UBSan green. Regression
+  `compiler/tests/cast_signedness.nu` (12 known-answer checks). Validated
+  by 340 fuzzer seeds (0 divergences).
+
 ### Added
+
+- **Differential fuzzer for `nurlc` integer codegen (`tools/fuzz`).**
+  `gen.py` generates random sized-integer expression trees and, from the
+  same tree, both a self-checking NURL program (prints each result's exact
+  64-bit pattern) and a Python reference oracle with explicit
+  two's-complement / width / signedness semantics. `fuzz.sh` compiles each
+  at `-O0` and `-O2` and requires `stdout(-O0) == stdout(-O2) == oracle`,
+  catching miscompiles that are wrong at every optimisation level. Biased
+  toward the historically fragile surface (width coercions, unsigned
+  arithmetic, mixed signed/unsigned); generates no UB. Found and fixed two
+  silent miscompiles on its first run (see Fixed, above). See
+  `tools/fuzz/README.md`.
 
 - **WebSocket client (RFC 6455 §4.1 + §5.3).** `stdlib/ext/websocket.nu`
   gained the full client side to match the existing server. `ws_connect`
