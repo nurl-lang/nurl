@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4] — 2026-06-02
+
 ### Added
 
 - **Keyword arguments — default parameter values + named call arguments.**
@@ -53,6 +55,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   UART/GPIO drivers no longer need the `-O0` workaround. Regression:
   `compiler/tests/volatile_mmio.nu`; verified at `-O2` the volatile load
   stays inside the loop body.
+
+- **ESP32 bare-metal register HAL (`stdlib/hal/esp32.nu`).** Pure-NURL GPIO
+  and UART0 over the chip's memory-mapped registers (built on
+  `stdlib/hal/mmio.nu`) — no ESP-IDF, no FFI. GPIO output enable / set /
+  clear, and a blocking UART console (`esp32_uart_putc` / `getc` / `puts`
+  with FIFO-count helpers), with register addresses taken from the ESP32 TRM
+  and cross-checked against ESP-IDF's `soc/*_reg.h`. Demonstrated by the new
+  fully-NURL UART echo example (`examples/esp32/idf-uart`).
+
+- **C64 emulator example (`examples/c64`).** A MOS 6510 / Commodore 64
+  emulator in pure NURL — a single `core.nu` engine shared by a native CLI
+  and a WebAssembly browser front-end. The CPU core passes Klaus Dormann's
+  `6502_functional_test` (the canonical 6502 correctness oracle, validated
+  headlessly), and with stock KERNAL/BASIC/CHARGEN ROMs the machine boots
+  through the full power-on sequence — PLA banking, CIA1 jiffy IRQ — to the
+  BASIC `READY.` prompt.
 
 ### Fixed
 
@@ -257,6 +275,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vars, so `gen_match` reconstructs struct / pointer / unsigned payloads
   for a parameter scrutinee exactly as it does for a let binding. Bootstrap
   fixed point held; regression `compiler/tests/match_param_payload.nu`.
+- **Compiler: an empty block `{}` returned from a void function emitted
+  invalid IR.** An empty block is the unit/void value, but `gen_block` left
+  the "last type" at whatever preceded it (i64 by default, i1 inside a
+  conditional), so `^ {}` in a void function produced `ret i64 undef` —
+  rejected by LLVM. The block now types as `void` when it has no trailing
+  statement.
 - **Compiler: undefined identifier in value position no longer emits an
   undefined SSA value with exit status 0** (PR #25 / `Fixes`). `gen_ident`'s
   bare `%<name>` fallback fired for *any* name lacking a `__ptr` / `__global`
@@ -3589,7 +3613,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.4...HEAD
+[0.9.4]: https://github.com/nurl-lang/nurl/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/nurl-lang/nurl/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/nurl-lang/nurl/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/nurl-lang/nurl/compare/v0.9.0...v0.9.1
