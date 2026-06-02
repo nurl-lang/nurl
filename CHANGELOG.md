@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **USTAR tar reader + writer — `stdlib/ext/tar.nu`.** Pure-NURL POSIX.1-1988
+  tar: `tar_create` (entries → archive bytes), `tar_parse` (bytes → entries,
+  in-memory), and `tar_unpack` (path-safe extract to disk). Composes with
+  `gzip_compress`/`_decompress` to make the `.tar.gz` package format the
+  registry will use. The reader treats archives as untrusted input:
+  `tar_unpack` rejects absolute paths and `..` components (TarUnsafePath) and
+  refuses symlink/hardlink/device members (TarUnsupported) so nothing can
+  escape the destination; every header checksum is verified (TarBadChecksum)
+  and an over-long declared size is TarTruncated. v1 supports the 100-byte
+  `name` field on write (TarPathTooLong otherwise) and honours the `prefix`
+  field on read. Bidirectionally interop-tested against GNU tar (NURL→`tar
+  xf` and `tar cf`→NURL both round-trip). Regression:
+  `compiler/tests/tar_basic.nu` (round-trip incl. embedded NUL in file data,
+  gzip composition, checksum tamper, `../` rejection, unpack + binary
+  read-back); verified clean under ASan/UBSan. First building block of the
+  registry-backed package manager (ROADMAP §4).
+
 - **WebSocket client (RFC 6455 §4.1 + §5.3).** `stdlib/ext/websocket.nu`
   gained the full client side to match the existing server. `ws_connect`
   / `ws_connect_with` parse a `ws://…` / `wss://…` URL, dial out (plain or
