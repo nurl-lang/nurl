@@ -21,6 +21,10 @@
 : | EW { NoneW  WideV  u16 }   // unsigned 16 payload
 : | EH { NoneH  HalfV  i16 }   // signed 16 payload
 : | ED { NoneD  DwV    u32 }   // unsigned 32 payload
+// Multi-payload variants — each payload slot (pt0/pt1/pt2) needs the same
+// narrow-int widen/trunc + signedness, not just slot 0.
+: | MP { NoneM  Pair  u i16 }
+: | T3 { NoneT  Trip  u u16 u32 }
 
 @ chk i got i want s tag → i {
     ? == got want {
@@ -42,5 +46,24 @@
     = f + f ?? e { HalfV b → ( chk # i64 # i64 b - 0 15536 `i16_payload_sext` )  NoneH → 1 }
     : ED g @ ED { DwV # u32 2147483649 }
     = f + f ?? g { DwV b → ( chk # i64 # i b 2147483649 `u32_payload_zext` )  NoneD → 1 }
+    // Multi-payload: slots 0 + 1 (u8 zext, i16 sext).
+    : MP p @ MP { Pair # u 200 # i16 50000 }
+    ?? p {
+        Pair a b → {
+            = f + f ( chk # i64 # i a 200 `mp_slot0_u8` )
+            = f + f ( chk # i64 # i64 b - 0 15536 `mp_slot1_i16` )
+        }
+        NoneM → {}
+    }
+    // Multi-payload: slots 0 + 1 + 2, all unsigned (zext).
+    : T3 t @ T3 { Trip # u 200 # u16 50000 # u32 2147483649 }
+    ?? t {
+        Trip a b c → {
+            = f + f ( chk # i64 # i a 200 `t3_slot0_u8` )
+            = f + f ( chk # i64 # i b 50000 `t3_slot1_u16` )
+            = f + f ( chk # i64 # i c 2147483649 `t3_slot2_u32` )
+        }
+        NoneT → {}
+    }
     ^ f
 }

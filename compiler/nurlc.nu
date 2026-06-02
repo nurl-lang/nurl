@@ -5261,12 +5261,12 @@
                 ( nurl_print ` = extractvalue ` ) ( nurl_print match_type )
                 ( nurl_print ` ` ) ( nurl_print match_val ) ( nurl_print `, 2\n` )
                 : s cv1 ( nurl_cg_reg cg )
-                ? ( seq pt1 `i1` ) {
+                ? & > ( int_width pt1 ) 0 < ( int_width pt1 ) 64 {
                     : s t64 ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print t64 )
                     ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i64\n` )
                     ( nurl_print `  ` ) ( nurl_print cv1 )
-                    ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to i1\n` )
+                    ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt1 ) ( nurl_print `\n` )
                 } {
                     ( nurl_print `  ` ) ( nurl_print cv1 )
                     ? == ( nurl_str_get pt1 0 ) 123
@@ -5287,6 +5287,8 @@
                 ( nurl_print `* ` ) ( nurl_print vp1 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv1 pt1 )
                 ( nurl_sym_def syms ( nurl_str_cat pv1 `__ptr` ) vp1 )
+                ( nurl_sym_def syms ( nurl_str_cat pv1 `__unsigned` )
+                ( nurl_sym_get syms ( nurl_str_cat pattern_name `__payload__1__unsigned` ) ) )
                 ? != 0 g_auto_drop_strings
                 { : s a1_key ( nurl_str_cat `drop##` pt1 )
                     ? != 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms a1_key ) )
@@ -5303,12 +5305,12 @@
                 ( nurl_print ` = extractvalue ` ) ( nurl_print match_type )
                 ( nurl_print ` ` ) ( nurl_print match_val ) ( nurl_print `, 3\n` )
                 : s cv2 ( nurl_cg_reg cg )
-                ? ( seq pt2 `i1` ) {
+                ? & > ( int_width pt2 ) 0 < ( int_width pt2 ) 64 {
                     : s t64 ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print t64 )
                     ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i64\n` )
                     ( nurl_print `  ` ) ( nurl_print cv2 )
-                    ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to i1\n` )
+                    ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt2 ) ( nurl_print `\n` )
                 } {
                     ( nurl_print `  ` ) ( nurl_print cv2 )
                     ? == ( nurl_str_get pt2 0 ) 123
@@ -5329,6 +5331,8 @@
                 ( nurl_print `* ` ) ( nurl_print vp2 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv2 pt2 )
                 ( nurl_sym_def syms ( nurl_str_cat pv2 `__ptr` ) vp2 )
+                ( nurl_sym_def syms ( nurl_str_cat pv2 `__unsigned` )
+                ( nurl_sym_get syms ( nurl_str_cat pattern_name `__payload__2__unsigned` ) ) )
                 ? != 0 g_auto_drop_strings
                 { : s a2_key ( nurl_str_cat `drop##` pt2 )
                     ? != 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms a2_key ) )
