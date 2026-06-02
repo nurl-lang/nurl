@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two more silent unsigned-widening miscompiles** (same `__last_unsigned__`
+  side-channel hazard; fixed in `compiler/nurlc.nu`). Regression
+  `compiler/tests/const_ternary_signedness.nu` (7 known-answer checks).
+  1. **An unsigned global const load sign-extended.** `# i GU` over
+     `: u GU 200` gave −56. `gen_const_decl` now records `<const>__unsigned`
+     (which `gen_ident` already turns into `__last_unsigned__` on load).
+  2. **A `?` (ternary) result didn't carry its arms' signedness.**
+     `# i ? c (# u 200) (# u 100)` sign-extended the selected value.
+     `gen_cond` now snapshots each arm's `__last_unsigned__` and sets the
+     result flag (the arms share a type, so either suffices).
+
 - **A call to an unsigned-returning function sign-extended at the call
   site.** `# i ( f )` where `f → u` returns 200 gave −56 (and likewise for
   `u16`/`u32`): the call site never carried the callee's return signedness

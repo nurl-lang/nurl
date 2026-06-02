@@ -4304,6 +4304,8 @@
     = g_ret_forbidden 0
     : s tv ( gen_expr lex syms cg )
     : s tt2 ( nurl_get_last_type )
+    // Snapshot the then-arm's signedness for the `?`-result flag below.
+    : s then_unsigned ( nurl_sym_get syms `__last_unsigned__` )
     : s tlbl ( nurl_sym_get syms `__cur_lbl__` )
     : i tdr g_did_ret
     ? == tdr 0
@@ -4338,6 +4340,7 @@
     = g_ret_forbidden 0
     : s ev ( gen_expr lex syms cg )
     : s et2 ( nurl_get_last_type )
+    : s else_unsigned ( nurl_sym_get syms `__last_unsigned__` )
     : s elbl ( nurl_sym_get syms `__cur_lbl__` )
     : i edr g_did_ret
     ? == edr 0
@@ -4407,6 +4410,11 @@
         { ( nurl_set_last_type `void` ) }
     }
     {}
+    // The `?`-result is unsigned iff its arms are (NURL types match across
+    // arms, so either flag suffices — OR them defensively). Lets an enclosing
+    // `# i ? c (# u …) (# u …)` widen the selected value with zext.
+    ( nurl_sym_def syms `__last_unsigned__`
+    ? | != 0 ( nurl_str_len then_unsigned ) != 0 ( nurl_str_len else_unsigned ) `1` `` )
     result
 }
 
@@ -11295,6 +11303,11 @@
             ( nurl_print `\n\n` )
             ( nurl_sym_def syms cname lt )
             ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
+            // Record the const's signedness (the LLVM type can't carry it) so
+            // gen_ident sets `__last_unsigned__` on load and an enclosing
+            // `# i GU` over a `: u GU 200` widens with zext, not sext.
+            ( nurl_sym_def syms ( nurl_str_cat cname `__unsigned` )
+            ? ( nurl_type_is_unsigned ty_tok ) `1` `` )
             ? is_mutable
             { ( nurl_sym_def syms ( nurl_str_cat cname `__mutable` ) `1` ) }
             {}
