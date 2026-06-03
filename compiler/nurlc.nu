@@ -481,6 +481,12 @@
 // gen_operand around operand parses, and reset to 0 by the control-flow
 // handlers for their arm/body sub-parses (which ARE legal `^` positions).
 : i g_ret_forbidden 0
+// Non-zero while parsing a `??` match-arm body. The XOR-confusion warning
+// in gen_ret keys off "a non-terminator token follows `^ X` on the same
+// line", but in an unbraced arm body that token is the NEXT ARM's pattern
+// (`T x → ^ x  F _ → …`), not a stray XOR operand — so the warning is
+// suppressed inside arm bodies. Save/restore (nested matches).
+: i g_in_match_arm 0
 : i g_defer_count 0  // number of active defers in the current function
 : i g_generic_syms 0  // sym handle for stored generic function templates (Group E)
 : i g_generic_struct_syms 0  // generic struct templates (Group E-structs).
@@ -1445,7 +1451,9 @@
     : b __xor_blocks | | | | | | | == __xor_nt TT_COLON == __xor_nt TT_EQ
     == __xor_nt TT_SEMICOL == __xor_nt TT_RBRACE == __xor_nt TT_RPAREN
     == __xor_nt TT_RBRACK == __xor_nt TT_LBRACE == __xor_nt TT_EOF
-    ? & == __xor_nl bck_line ! __xor_blocks
+    // Suppressed inside a `??` arm body: there the token after `^ X` is the
+    // next arm's pattern (`T x → ^ x  F _ → …`), not a stray XOR operand.
+    ? & & == __xor_nl bck_line ! __xor_blocks == g_in_match_arm 0
     { ( warn lex `'^' is the return operator; did you mean '^^' for XOR? (Two adjacent carets, no space between them)` ) }
     {}
     // Borrow checker: record this return statement.
@@ -5437,7 +5445,10 @@
             // next arm re-arms it, and the post-loop disarm clears a
             // trailing bare arm's residue.
             ( bck_set_block_kind `match-arm` )
+            : i __saved_in_arm g_in_match_arm
+            = g_in_match_arm 1
             : s arm_result ( gen_stmt lex syms cg )
+            = g_in_match_arm __saved_in_arm
             : s arm_type ( nurl_get_last_type )
             : s arm_lbl ( nurl_sym_get syms `__cur_lbl__` )
             : i arm_did_ret g_did_ret

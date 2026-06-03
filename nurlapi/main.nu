@@ -690,6 +690,37 @@ s combined_stdout s combined_stderr → v {
     ^ hr
 }
 
+// Detect a native-only library dependency that the WebAssembly / Windows
+// cross-builds can't satisfy (those targets don't ship the library), so we
+// can report a clear message instead of the raw linker wall of undefined
+// symbols (e.g. `undefined symbol: PQexec`). Returns a human description of
+// the library, or empty if the source needs none. Keyed off the stdlib
+// import path — the reliable signal.
+@ native_only_dep s source → s {
+    ? >= ( nurl_str_find source `stdlib/ext/postgres.nu` ) 0
+    { ^ `the PostgreSQL client (libpq, via stdlib/ext/postgres.nu)` } {}
+    ^ ``
+}
+
+// A clean "BUILD FAILED" JSON response for a program whose native-only
+// dependency has no build on `target` ("WebAssembly" / "Windows"). Renders
+// through the playground's normal failure path (status=error, message +
+// stderr), not a scary linker dump.
+@ unsupported_target_response s filename s libdesc s target → HttpResponse {
+    : String msg ( string_from `This program uses ` )
+    ( string_push_str msg libdesc )
+    ( string_push_str msg `, which has no ` )
+    ( string_push_str msg target )
+    ( string_push_str msg ` build — only the Native (Linux) target can link it. Switch to the Native target to build and run this example.` )
+    : Json res ( json_obj_new )
+    ( stamp_build_response res `error` ( string_data msg ) filename F
+    0 `` 0 - 0 1 `` `` `` ( string_data msg ) )
+    : String body ( json_stringify res )
+    : HttpResponse hr ( response_text 200 ( string_data body ) )
+    ( response_set_header hr `Content-Type` `application/json` )
+    ^ hr
+}
+
 @ get_body_str HttpRequest req → String {
     : i blen ( vec_len [u] . req body )
     : String body_str ( string_with_cap + blen 1 )
@@ -817,6 +848,12 @@ s combined_stdout s combined_stderr → v {
             : s source ( get_common_json root `source` `` )
             ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s filename ( get_common_json root `filename` `main.nu` )
+            // Native-only dependency (e.g. libpq) → no wasm build; report
+            // cleanly instead of dumping the wasm-ld undefined-symbol wall.
+            : s __wasm_nodep ( native_only_dep source )
+            ? != 0 ( nurl_str_len __wasm_nodep )
+            { ( json_free root ) ( string_free body_str )
+                ^ ( unsupported_target_response filename __wasm_nodep `WebAssembly` ) } {}
             : b emit_ll ( get_common_bool root `emit_ll` F )
             // /build_wasm opt level — defaults to -O1 (was -O2). On serde_demo /
             // claude_chat / json_basic the -O2 link step accounted for 14-24 s of
@@ -1010,6 +1047,12 @@ s combined_stdout s combined_stderr → v {
             : s source ( get_common_json root `source` `` )
             ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s filename ( get_common_json root `filename` `main.nu` )
+            // Native-only dependency (e.g. libpq) → no Windows cross-build;
+            // report cleanly instead of the mingw undefined-reference wall.
+            : s __win_nodep ( native_only_dep source )
+            ? != 0 ( nurl_str_len __win_nodep )
+            { ( json_free root ) ( string_free body_str )
+                ^ ( unsupported_target_response filename __win_nodep `Windows` ) } {}
             : s opt ( get_common_json root `opt` `-O2` )
             : String build_id ( create_build_id )
             : String build_dir ( path_join ( string_data ( get_output_dir ) ) ( string_data build_id ) )
@@ -1549,7 +1592,7 @@ s combined_stdout s combined_stderr → v {
 @ h_docs_html HttpRequest req Params params → HttpResponse {
     ( nurl_print `[srv] GET /docs\n` )
     : String html ( string_with_cap 1024 )
-    ( string_push_str html `<!doctype html>\n<html lang="en"><head>\n<meta charset="utf-8" />\n<title>NURL Compiler API · Swagger UI</title>\n<meta name="viewport" content="width=device-width,initial-scale=1" />\n<link rel="icon" type="image/svg+xml" href="/favicon.svg" />\n<link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />\n<style>body{margin:0;background:#0f1115}</style>\n</head><body>\n<div id="swagger-ui"></div>\n<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" crossorigin></script>\n<script>\nwindow.onload = () => {\n  window.ui = SwaggerUIBundle({\n    url: '/openapi.json',\n    dom_id: '#swagger-ui',\n    deepLinking: true,\n    presets: [SwaggerUIBundle.presets.apis],\n    layout: 'BaseLayout'\n  });\n};\n</script>\n</body></html>\n` )
+    ( string_push_str html `<!doctype html>\n<html lang="en"><head>\n<meta charset="utf-8" />\n<title>NURL Compiler API · Swagger UI</title>\n<meta name="viewport" content="width=device-width,initial-scale=1" />\n<link rel="icon" type="image/svg+xml" href="/favicon.svg" />\n<link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />\n<style>body{margin:0;background:#0f1115;color:#e6e6e6}.swagger-ui{color:#e6e6e6}.swagger-ui .info .title,.swagger-ui .info p,.swagger-ui .info li,.swagger-ui .info a,.swagger-ui .info h1,.swagger-ui .info h2,.swagger-ui .info h3,.swagger-ui .info h4,.swagger-ui .info h5{color:#e6e6e6}.swagger-ui .scheme-container{background:#171a21;box-shadow:none}.swagger-ui .opblock-tag{color:#dbeeff;border-bottom-color:#2a2f3a}.swagger-ui .opblock-tag small{color:#9aa4b2}.swagger-ui .opblock .opblock-summary-path,.swagger-ui .opblock .opblock-summary-path__deprecated,.swagger-ui .opblock .opblock-summary-description{color:#e6e6e6}.swagger-ui .opblock-description-wrapper p,.swagger-ui .opblock-title_normal p,.swagger-ui .markdown p,.swagger-ui .markdown li,.swagger-ui .renderedMarkdown p,.swagger-ui .renderedMarkdown li{color:#cfd6e0}.swagger-ui .opblock{background:#141821;border-color:#2a2f3a;box-shadow:none}.swagger-ui .opblock .opblock-section-header{background:#171a21;box-shadow:none}.swagger-ui .opblock .opblock-section-header h4,.swagger-ui .opblock .opblock-section-header>label{color:#e6e6e6}.swagger-ui .tab li,.swagger-ui .parameter__name,.swagger-ui .parameter__type,.swagger-ui table thead tr td,.swagger-ui table thead tr th,.swagger-ui .response-col_status,.swagger-ui .response-col_links,.swagger-ui .col_header,.swagger-ui label{color:#e6e6e6}.swagger-ui .parameter__in,.swagger-ui .parameter__extension{color:#9aa4b2}.swagger-ui table{border-color:#2a2f3a}.swagger-ui table tbody tr td{color:#cfd6e0;border-color:#2a2f3a}.swagger-ui .responses-inner h4,.swagger-ui .responses-inner h5{color:#e6e6e6}.swagger-ui input[type=text],.swagger-ui input[type=password],.swagger-ui input[type=email],.swagger-ui textarea,.swagger-ui select{background:#0f1115;color:#e6e6e6;border-color:#2a2f3a}.swagger-ui section.models{border-color:#2a2f3a}.swagger-ui section.models h4,.swagger-ui .model-title,.swagger-ui .model{color:#e6e6e6}.swagger-ui section.models .model-container{background:#141821}.swagger-ui .prop-type{color:#7fd0ff}.swagger-ui .prop-format{color:#9aa4b2}.swagger-ui svg{fill:#cfd6e0}.swagger-ui .model-toggle:after{filter:invert(1)}.swagger-ui .topbar{background:#171a21}.swagger-ui .btn{color:#e6e6e6;border-color:#3a4150;background:#1a1f29}.swagger-ui .opblock-body pre.microlight,.swagger-ui .highlight-code>.microlight{background:#0b0d11;color:#e6e6e6}.swagger-ui .info .base-url,.swagger-ui .info hgroup.main a{color:#9aa4b2}</style>\n</head><body>\n<div id="swagger-ui"></div>\n<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" crossorigin></script>\n<script>\nwindow.onload = () => {\n  window.ui = SwaggerUIBundle({\n    url: '/openapi.json',\n    dom_id: '#swagger-ui',\n    deepLinking: true,\n    presets: [SwaggerUIBundle.presets.apis],\n    layout: 'BaseLayout'\n  });\n};\n</script>\n</body></html>\n` )
     : HttpResponse r ( response_text 200 ( string_data html ) )
     ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
     ( string_free html )
@@ -2366,6 +2409,83 @@ s combined_stdout s combined_stderr → v {
 }
 
 // Convert `src` (markdown) to HTML. Returns an owned String.
+// ── GFM table support ────────────────────────────────────────────────
+
+// Index of the next '\n' at/after `pos`, or -1 if none.
+@ __md_nl_at s src i pos i n → i {
+    : ~ i scan pos
+    ~ < scan n { ? == ( nurl_str_get src scan ) 10 { ^ scan } { = scan + scan 1 } }
+    ^ - 0 1
+}
+
+// Start of the line after the one beginning at `pos`.
+@ __md_next_pos s src i pos i n → i {
+    : i nl ( __md_nl_at src pos n )
+    ^ ? >= nl 0 + nl 1 n
+}
+
+// The line beginning at `pos` as an owned String, sans trailing \r / \n.
+@ __md_read_line s src i pos i n → String {
+    : i nl ( __md_nl_at src pos n )
+    : i hard_end ? >= nl 0 nl n
+    : i line_end ? & > hard_end pos == ( nurl_str_get src - hard_end 1 ) 13 - hard_end 1 hard_end
+    : String line ( string_with_cap + - line_end pos 1 )
+    : ~ i k pos ~ < k line_end { ( string_push_char line ( nurl_str_get src k ) ) = k + k 1 }
+    ( __string_seal line )
+    ^ line
+}
+
+@ __md_has_pipe s line i n → b {
+    : ~ i i 0
+    ~ < i n { ? == ( nurl_str_get line i ) 124 { ^ T } {} = i + i 1 }
+    ^ F
+}
+
+// A GFM delimiter row: only `| - : space tab`, with at least one `-`.
+@ __md_is_table_delim s line i n → b {
+    ? == n 0 { ^ F } {}
+    : ~ b seen_dash F
+    : ~ i i 0
+    ~ < i n {
+        : i c ( nurl_str_get line i )
+        ? | | | | == c 124 == c 45 == c 58 == c 32 == c 9 {
+            ? == c 45 { = seen_dash T } {}
+        } { ^ F }
+        = i + i 1
+    }
+    ^ seen_dash
+}
+
+// Emit one `<tr>` of cells. `celltag` is "th" or "td". Splits on `|`,
+// dropping the empty segments a leading/trailing `|` produces, and trims
+// each cell before inline-formatting it.
+@ __md_table_row s line i n String out s celltag → v {
+    // Content range [s0, e0): skip outer whitespace + one outer pipe each end.
+    : ~ i s0 0
+    ~ & < s0 n | == ( nurl_str_get line s0 ) 32 == ( nurl_str_get line s0 ) 9 { = s0 + s0 1 }
+    ? & < s0 n == ( nurl_str_get line s0 ) 124 { = s0 + s0 1 } {}
+    : ~ i e0 n
+    ~ & > e0 s0 | == ( nurl_str_get line - e0 1 ) 32 == ( nurl_str_get line - e0 1 ) 9 { = e0 - e0 1 }
+    ? & > e0 s0 == ( nurl_str_get line - e0 1 ) 124 { = e0 - e0 1 } {}
+    // Walk cells between pipes in [s0, e0].
+    : ~ i cell_start s0
+    : ~ i i s0
+    ~ <= i e0 {
+        ? | == i e0 & < i e0 == ( nurl_str_get line i ) 124 {
+            // Trim [cell_start, i).
+            : ~ i cs cell_start
+            ~ & < cs i | == ( nurl_str_get line cs ) 32 == ( nurl_str_get line cs ) 9 { = cs + cs 1 }
+            : ~ i ce i
+            ~ & > ce cs | == ( nurl_str_get line - ce 1 ) 32 == ( nurl_str_get line - ce 1 ) 9 { = ce - ce 1 }
+            ( string_push_char out 60 ) ( string_push_str out celltag ) ( string_push_char out 62 )
+            ( __md_inline line cs ce out )
+            ( string_push_str out `</` ) ( string_push_str out celltag ) ( string_push_char out 62 )
+            = cell_start + i 1
+        } {}
+        = i + i 1
+    }
+}
+
 @ md_to_html s src → String {
     : i n ( nurl_str_len src )
     : String out ( string_with_cap n )
@@ -2382,7 +2502,7 @@ s combined_stdout s combined_stderr → v {
             ? == ( nurl_str_get src scan ) 10 { = nl_at scan = scan n } { = scan + scan 1 }
         }
         : i hard_end ? >= nl_at 0 nl_at n
-        : i next_pos ? >= nl_at 0 + nl_at 1 n
+        : ~ i next_pos ? >= nl_at 0 + nl_at 1 n
         : i line_end ? & > hard_end pos == ( nurl_str_get src - hard_end 1 ) 13 - hard_end 1 hard_end
         : i line_len - line_end pos
 
@@ -2465,10 +2585,42 @@ s combined_stdout s combined_stderr → v {
                                         ( __md_inline lp text_idx line_len out )
                                         ( string_push_str out `</li>\n` )
                                     } {
-                                        // Paragraph
-                                        ( __md_open_block state 1 out `p` )
-                                        ( __md_inline lp 0 line_len out )
-                                        ( string_push_char out 32 )
+                                        // GFM table? Current line has a `|` and
+                                        // the next line is a delimiter row.
+                                        : ~ b is_table F
+                                        ? ( __md_has_pipe lp line_len ) {
+                                            : String dline ( __md_read_line src next_pos n )
+                                            = is_table ( __md_is_table_delim ( string_data dline ) ( string_len dline ) )
+                                            ( string_free dline )
+                                        } {}
+                                        ? is_table {
+                                            ( __md_close_block state out )
+                                            ( string_push_str out `<table>\n<thead>\n<tr>` )
+                                            ( __md_table_row lp line_len out `th` )
+                                            ( string_push_str out `</tr>\n</thead>\n<tbody>\n` )
+                                            // Skip past the delimiter row, then
+                                            // consume contiguous `|`-bearing rows.
+                                            : ~ i tp ( __md_next_pos src next_pos n )
+                                            : ~ b done F
+                                            ~ & ! done < tp n {
+                                                : String row ( __md_read_line src tp n )
+                                                : i rl ( string_len row )
+                                                ? & > rl 0 ( __md_has_pipe ( string_data row ) rl ) {
+                                                    ( string_push_str out `<tr>` )
+                                                    ( __md_table_row ( string_data row ) rl out `td` )
+                                                    ( string_push_str out `</tr>\n` )
+                                                    = tp ( __md_next_pos src tp n )
+                                                } { = done T }
+                                                ( string_free row )
+                                            }
+                                            ( string_push_str out `</tbody>\n</table>\n` )
+                                            = next_pos tp
+                                        } {
+                                            // Paragraph
+                                            ( __md_open_block state 1 out `p` )
+                                            ( __md_inline lp 0 line_len out )
+                                            ( string_push_char out 32 )
+                                        }
                                     } } } } }
                 } }
         }
