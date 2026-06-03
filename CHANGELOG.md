@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Verified registry install — `stdlib/ext/pkg_fetch.nu` (ROADMAP §4
+  phase 4b).** The I/O side that turns a resolved `LockPkg` into files on
+  disk against a static-HTTP registry (R2 + CDN shape). `pkg_fetch_index`
+  GETs `<registry>/index/<name>.json`; `pkg_install_one` downloads
+  `<registry>/pkgs/<name>/<name>-<v>.tar.gz`, **verifies its SHA-256
+  against the recorded checksum**, gunzips, and path-safe `tar_unpack`s it
+  into `<dest>/<name>` — composing the whole pure-NURL package stack (http
+  binary body + sha256 + gzip + tar). Capstone regression
+  `compiler/tests/pkg_install_e2e.nu` stands up a **loopback NURL registry
+  server** (serves a real `tar_create`+`gzip` tarball + an index carrying
+  its true checksum) and drives the full pipeline resolve → download →
+  verify → unpack end-to-end, plus a wrong-checksum rejection
+  (PkgChecksumMismatch); `NURL_NET_TESTS=1`. Clean under ASan/UBSan. The
+  remaining piece is wiring this into the `nurlpkg` CLI install command.
+
 - **Binary-safe HTTP response body — `http_body_bytes` / `http_body_len`.**
   `http_body_str` reads the response body through a NUL-terminated carrier
   (truncates at the first embedded NUL). The new `http_body_bytes` returns
