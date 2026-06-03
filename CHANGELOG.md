@@ -22,8 +22,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server** (serves a real `tar_create`+`gzip` tarball + an index carrying
   its true checksum) and drives the full pipeline resolve → download →
   verify → unpack end-to-end, plus a wrong-checksum rejection
-  (PkgChecksumMismatch); `NURL_NET_TESTS=1`. Clean under ASan/UBSan. The
-  remaining piece is wiring this into the `nurlpkg` CLI install command.
+  (PkgChecksumMismatch); `NURL_NET_TESTS=1`. Clean under ASan/UBSan.
+
+  **`nurlpkg install` is now registry-aware.** It resolves the manifest's
+  registry deps (`foo = "^1.2"` or `{ version, registry }`), downloads +
+  verifies + unpacks each into `deps/<name>`, and writes a `nurl.lock`
+  whose registry entries carry `source = "registry+<url>"` + the tarball
+  `checksum` (path deps keep their local source). The registry URL comes
+  from `$NURL_REGISTRY` → `[package].registry` → a built-in default. A
+  failed download or checksum mismatch makes `install` exit non-zero.
+  Verified end-to-end against a static `python -m http.server` registry
+  serving a GNU-`tar --format=ustar | gzip` package (differential interop):
+  the happy path installs + locks with the `sha256sum`-computed checksum,
+  and a tampered index checksum is rejected with the package left
+  uninstalled.
 
 - **Binary-safe HTTP response body — `http_body_bytes` / `http_body_len`.**
   `http_body_str` reads the response body through a NUL-terminated carrier
