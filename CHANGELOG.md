@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Registry resolution core — `stdlib/ext/registry_index.nu` +
+  `stdlib/ext/resolver.nu` (ROADMAP §4 phase 4).** The read side of the
+  package registry. A registry serves a static JSON index per package at
+  `<registry>/index/<name>.json` (versions, each with a tarball SHA-256
+  `checksum`, `yanked` flag, and `deps`); tarballs live at the
+  content-addressed `<registry>/pkgs/<name>/<name>-<ver>.tar.gz`, so the
+  whole read path is a cacheable CDN with no compute.
+  `registry_index.nu` parses an index and `regindex_select` picks the
+  highest non-yanked version satisfying a semver requirement.
+  `resolver.nu`'s `resolve_registry` walks the transitive dependency graph
+  (BFS) and emits a `Vec[LockPkg]` ready for `lock_serialize` — the index
+  fetcher is injected as a closure (`name → index-JSON`), so resolution is
+  pure and offline-testable; nurlpkg will wire it to an HTTP GET. v1 policy:
+  one version per name (first requirement wins; a later one must share that
+  version or it's ResolveConflict), sub-deps from the parent's registry,
+  path deps left to the existing symlink installer. Regressions:
+  `compiler/tests/registry_index_basic.nu` (parse + select + yanked
+  exclusion + tarball URL) and `compiler/tests/resolver_basic.nu`
+  (transitive resolve with a mock index, ResolveNoMatch, ResolveNotFound).
+  Both clean under ASan/UBSan and leak-free.
+
 ### Changed
 
 - **Signedness is now coupled to the value's type instead of a free-floating
