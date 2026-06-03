@@ -63,6 +63,10 @@ Failures are saved under `tools/fuzz/failures/` as `seed_N.nu` +
 - Integer expression trees: `+ - * / % & | ^^ << >>` and `# T` width casts.
 - Float arithmetic: `# i64 OP # f a # f b` (fadd/fsub/fmul/fdiv) over
   bounded int-derived doubles, truncated back to i64 — exact f64 oracle.
+- Structs: declare a struct of random-typed fields, construct an instance
+  (field initialisers of a different type → field store coercion), and read
+  each field back — probes `gen_member` field-load + `gen_agg_lit`
+  field-store signedness.
 - `let` bindings with a declared type that may differ from the initialiser
   (store coercion via `coerce_store_val`), plus variable reuse (binding
   reload signedness).
@@ -74,8 +78,9 @@ Failures are saved under `tools/fuzz/failures/` as `seed_N.nu` +
 
 ## Bugs found (2026-06-02)
 
-Five silent miscompiles, all fixed at the root in `compiler/nurlc.nu`;
-locked in by `compiler/tests/cast_signedness.nu` + `cast_int_float.nu`.
+Seven silent miscompiles, all fixed at the root in `compiler/nurlc.nu`;
+locked in by `compiler/tests/cast_signedness.nu` + `cast_int_float.nu` +
+`struct_field_signedness.nu`.
 Every one is the same underlying hazard: **the LLVM integer type cannot
 carry NURL's signedness, so it must ride the `__last_unsigned__`
 side-channel — and any path that forgets to set/clear it miscompiles.**
@@ -89,6 +94,10 @@ side-channel — and any path that forgets to set/clear it miscompiles.**
 4. Float → int ignored target signedness (no `fptoui`).
 5. A float result leaked its source int's stale unsigned flag into a later
    `*`/`/` (negative product divided with `udiv`).
+6. Reading an unsigned struct field sign-extended (`gen_member` didn't
+   surface the field's signedness).
+7. Constructing a wider field from a narrower unsigned value sign-extended
+   (`gen_agg_lit` field-store hardcoded `sext`).
 
 ## Scope / future
 

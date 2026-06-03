@@ -10,6 +10,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two more silent unsigned-widening miscompiles** (same `__last_unsigned__`
+  side-channel hazard; fixed in `compiler/nurlc.nu`). Regression
+  `compiler/tests/const_ternary_signedness.nu` (7 known-answer checks).
+  1. **An unsigned global const load sign-extended.** `# i GU` over
+     `: u GU 200` gave −56. `gen_const_decl` now records `<const>__unsigned`
+     (which `gen_ident` already turns into `__last_unsigned__` on load).
+  2. **A `?` (ternary) result didn't carry its arms' signedness.**
+     `# i ? c (# u 200) (# u 100)` sign-extended the selected value.
+     `gen_cond` now snapshots each arm's `__last_unsigned__` and sets the
+     result flag (the arms share a type, so either suffices).
+
+- **A call to an unsigned-returning function sign-extended at the call
+  site.** `# i ( f )` where `f → u` returns 200 gave −56 (and likewise for
+  `u16`/`u32`): the call site never carried the callee's return signedness
+  onto the `__last_unsigned__` side-channel the enclosing widening cast
+  reads (the LLVM return type i8/i16/i32 can't distinguish `u` from `i8`).
+  `scan_fn_sigs` now records `<fn>__ret_unsigned` in the persistent pre-pass
+  symbol table (the per-function `gen_fn_decl` scope doesn't reach call
+  sites), and `gen_call` re-asserts it on `__last_unsigned__` after the
+  call. Regression `compiler/tests/fn_return_signedness.nu` (5 known-answer
+  checks). Bootstrap fixed point holds; full suite + ASan/UBSan green.
+
+- **Narrow sized-int enum payloads now compile and round-trip correctly.**
+  An enum variant carrying a `u`/`i8`/`u16`/`i16`/`u32`/`i32` payload (e.g.
+  `: | E { None Val u }`) was accepted by the front-end but emitted invalid
+  IR: `gen_agg_lit` only converted i64/i32 payloads into the enum's pointer
+  slot (so an i8 payload hit `insertvalue …, i8 …` against a `ptr` field —
+  clang reject), and `gen_match` only un-converted i1/i64 (storing a `ptr`
+  into an `i8` binding). Now construction widens a narrow payload to i64
+  (zext for an unsigned payload, sext for signed — from the payload
+  signedness `gen_enum_decl` now records) before `inttoptr`, and the match
+  `ptrtoint`s back and truncs to the payload width, carrying the payload's
+  signedness onto the binding so a later widen zero-extends an unsigned
+  payload. Found by hand-probing the fuzzer's struct dimension outward.
+  Bootstrap fixed point holds; full suite + ASan/UBSan green. Regression
+  `compiler/tests/enum_payload_signedness.nu` (5 known-answer checks).
+
+- **Two silent struct-field signedness miscompiles** (same fuzzer, extended
+  with a struct dimension; same root cause — the LLVM field type can't carry
+  NURL's signedness). Both fixed in `compiler/nurlc.nu`; regression
+  `compiler/tests/struct_field_signedness.nu` (8 known-answer checks);
+  validated by 600 fuzzer seeds with the struct dimension.
+  1. **Reading an unsigned field sign-extended.** `# i . rec u8field` over a
+     `u`/`u16`/`u32` field holding e.g. 200 read back −56: `gen_member` never
+     surfaced the field's declared signedness onto `__last_unsigned__`.
+     `gen_struct_decl` now records `<S>__<field>__unsigned`, and both the
+     value (extractvalue) and pointer (GEP+load) field-load paths set the
+     flag from it.
+  2. **Constructing a wider field from a narrower unsigned value
+     sign-extended.** `@ Wide { # u 130 }` into an `i64` field stored −126
+     instead of 130 — `gen_agg_lit`'s field-store widening hardcoded `sext`.
+     It now picks `zext` when the field value is unsigned (the
+     `__last_unsigned__` snapshot it already takes), `sext` otherwise.
+
 - **Two silent integer miscompiles, found by a new differential fuzzer
   (`tools/fuzz`) and fixed at the root in `compiler/nurlc.nu`.** Both
   produced wrong values with no error — the worst class of bug.

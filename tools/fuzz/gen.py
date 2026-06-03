@@ -116,6 +116,22 @@ class Var(Node):
         return self._value
 
 
+class FieldRead(Node):
+    """Read a struct field: `. <inst> <field>`. The field's NURL type is its
+    declared type; its value is the construction value coerced to that type
+    (store coercion). Probes gen_member's field-load signedness — a u-field
+    must widen with zext, not sext."""
+    def __init__(self, ty, inst, field, value):
+        super().__init__(ty)
+        self.inst, self.field, self._value = inst, field, value
+
+    def render(self):
+        return f". {self.inst} {self.field}"
+
+    def eval(self):
+        return self._value
+
+
 class Cmp(Node):
     """A comparison — value type i64 (0 or 1, via i1→i64 zext). Exercises the
     signed-vs-unsigned icmp selection (`< # i8 …` must be slt, not ult)."""
@@ -340,14 +356,27 @@ $ `stdlib/core/string.nu`
     ( nurl_print `\\n` )
     ( string_free s )
 }
-
-@ main → i {
 """
 
 
 def build(seed, n_exprs, depth):
     rng = random.Random(seed)
     g = Gen(rng)
+    # ~60% of programs declare a struct whose fields span random sized types,
+    # construct one instance (field initialisers of a possibly-different type
+    # → field store coercion), and expose each field as a readable leaf —
+    # exercising gen_member's field-load signedness + field store coercion.
+    struct = None
+    if rng.random() < 0.6:
+        fields = []                        # (fname, ftype, init_node, value)
+        for i in range(rng.randint(2, 5)):
+            ftype = rng.choice(TYPE_NAMES)
+            init = g.gen(rng.choice(TYPE_NAMES), max(1, depth - 1))
+            fname = f"g{i}"
+            fields.append((fname, ftype, init, wrap(init.eval(), ftype)))
+        struct = ("FZ", fields)
+        for fname, ftype, _init, val in fields:
+            g.env.append(FieldRead(ftype, "fz", fname, val))
     # A prelude of `let` bindings whose declared type may differ from the
     # initialiser's — exercises coerce_store_val's store-time width coercion
     # (a DIFFERENT int-width branch than `# T` casts). The stored value is
@@ -365,13 +394,25 @@ def build(seed, n_exprs, depth):
     for _ in range(n_exprs):
         ty = rng.choice(TYPE_NAMES)
         nodes.append((ty, g.gen(ty, depth)))
-    return lets, nodes
+    return struct, lets, nodes
 
 
-def emit_program(lets, nodes):
+def emit_program(struct, lets, nodes):
     lines = [PRELUDE]
-    for name, bty, init in lets:
-        lines.append(f"    : {bty} {name} {init.render()}")
+    if struct:
+        name, fields = struct
+        lines.append(f": {name} {{")
+        for fname, ftype, _init, _val in fields:
+            lines.append(f"    {ftype} {fname}")
+        lines.append("}")
+    lines.append("")
+    lines.append("@ main → i {")
+    if struct:
+        name, fields = struct
+        inits = " ".join(init.render() for _f, _t, init, _v in fields)
+        lines.append(f"    : {name} fz @ {name} {{ {inits} }}")
+    for vname, bty, init in lets:
+        lines.append(f"    : {bty} {vname} {init.render()}")
     for ty, node in nodes:
         lines.append(f"    ( phex # i64 {node.render()} )")
     lines.append("    ^ 0")
@@ -379,7 +420,7 @@ def emit_program(lets, nodes):
     return "\n".join(lines) + "\n"
 
 
-def emit_oracle(lets, nodes):
+def emit_oracle(struct, lets, nodes):
     out = []
     for ty, node in nodes:
         bits = to_u64_bits(node.eval(), ty)
@@ -399,9 +440,9 @@ def main():
         n_exprs = int(args[args.index("--exprs") + 1])
     if "--depth" in args:
         depth = int(args[args.index("--depth") + 1])
-    lets, nodes = build(seed, n_exprs, depth)
-    sys.stdout.write(emit_oracle(lets, nodes) if oracle
-                     else emit_program(lets, nodes))
+    struct, lets, nodes = build(seed, n_exprs, depth)
+    sys.stdout.write(emit_oracle(struct, lets, nodes) if oracle
+                     else emit_program(struct, lets, nodes))
 
 
 if __name__ == "__main__":
