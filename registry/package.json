@@ -1,0 +1,17 @@
+{
+  "name": "nurl-registry",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "migrate:local": "wrangler d1 migrations apply REG_DB --local",
+    "migrate:remote": "wrangler d1 migrations apply REG_DB --remote"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250601.0",
+    "typescript": "^5.5.0",
+    "wrangler": "^4.0.0"
+  }
+}

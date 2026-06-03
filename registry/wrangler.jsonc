@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nurl-registry",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-01",
+  "observability": { "enabled": true },
+
+  // Non-secret config. GITHUB_CLIENT_ID is public; the client SECRET and
+  // TOKEN_PEPPER are set out-of-band:  wrangler secret put GITHUB_CLIENT_SECRET
+  //                                    wrangler secret put TOKEN_PEPPER
+  "vars": {
+    "GITHUB_CLIENT_ID": "REPLACE_WITH_OAUTH_CLIENT_ID",
+    "REGISTRY_URL": "https://reg.nurl-lang.org"
+  },
+
+  // R2 holds the static read path (index/*.json + pkgs/**.tar.gz). Create:
+  //   wrangler r2 bucket create nurl-registry
+  "r2_buckets": [
+    { "binding": "REG_BUCKET", "bucket_name": "nurl-registry" }
+  ],
+
+  // D1 holds users / tokens / ownership / versions. Create + migrate:
+  //   wrangler d1 create nurl-registry   (paste the id below)
+  //   wrangler d1 migrations apply REG_DB --remote
+  "d1_databases": [
+    {
+      "binding": "REG_DB",
+      "database_name": "nurl-registry",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
