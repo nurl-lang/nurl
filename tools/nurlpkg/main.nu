@@ -41,6 +41,9 @@ $ `stdlib/ext/semver.nu`
 $ `stdlib/ext/registry_index.nu`
 $ `stdlib/ext/resolver.nu`
 $ `stdlib/ext/pkg_fetch.nu`
+$ `stdlib/ext/pkg_publish.nu`
+$ `stdlib/std/hash_sha256.nu`
+$ `stdlib/std/bytes.nu`
 
 // ── registry config ──────────────────────────────────────────────
 //
@@ -99,6 +102,7 @@ $ `stdlib/ext/pkg_fetch.nu`
     ( nurl_print `  nurlpkg deps           List dependencies, one per line.\n` )
     ( nurl_print `  nurlpkg install        Resolve path-deps and symlink them under ./deps/.\n` )
     ( nurl_print `  nurlpkg lock           Regenerate nurl.lock from the current deps/ tree.\n` )
+    ( nurl_print `  nurlpkg publish        Pack + upload this package to the registry ($NURL_TOKEN).\n` )
     ( nurl_print `  nurlpkg add <name> [--path P] [--version V]\n` )
     ( nurl_print `                         Add a dependency entry to nurl.toml.\n` )
     ( nurl_print `  nurlpkg remove <name>  Delete a dependency entry from nurl.toml.\n` )
@@ -1154,6 +1158,81 @@ $ `stdlib/ext/pkg_fetch.nu`
     ^ rc
 }
 
+// ── publish ─────────────────────────────────────────────────────
+//
+// Pack the current project into a .tar.gz and upload it to the registry's
+// write endpoint with the Bearer token from $NURL_TOKEN. The registry is
+// resolved like install ($NURL_REGISTRY → [package].registry → default).
+@ __cmd_publish → i {
+    ? ! ( file_exists `nurl.toml` ) {
+        ( nurl_eprintln `nurlpkg: no nurl.toml in the current directory` )
+        ^ 1
+    } {}
+    : !Manifest ManifestErr mr ( manifest_load `nurl.toml` )
+    : ~ i rc 0
+    ?? mr {
+        F e → {
+            ( nurl_eprint `nurlpkg: failed to parse nurl.toml (` )
+            ( nurl_eprint ( manifest_err_name e ) )
+            ( nurl_eprintln `)` )
+            = rc 1
+        }
+        T m → {
+            : ?String tok ( env_get `NURL_TOKEN` )
+            ?? tok {
+                F → {
+                    ( nurl_eprintln `nurlpkg: no auth token — set $NURL_TOKEN to publish` )
+                    = rc 1
+                }
+                T token → {
+                    : String reg ( __registry_url m )
+                    : !( Vec u ) PackErr pr ( pkg_pack `.` )
+                    ?? pr {
+                        F pe → {
+                            ( nurl_eprint `nurlpkg: packaging failed (` )
+                            ( nurl_eprint ( pack_err_name pe ) )
+                            ( nurl_eprintln `)` )
+                            = rc 1
+                        }
+                        T tarball → {
+                            : ( Vec u ) digest ( sha256_pure tarball )
+                            : String hex ( bytes_to_hex digest )
+                            ( nurl_print `publishing ` )
+                            ( nurl_print ( string_data . m name ) )
+                            ( nurl_print ` ` )
+                            ( nurl_print ( string_data . m version ) )
+                            ( nurl_print ` (` )
+                            ( nurl_print ( nurl_str_int ( vec_len [u] tarball ) ) )
+                            ( nurl_print ` bytes, sha256 ` )
+                            ( nurl_print ( string_data hex ) )
+                            ( nurl_print `)\nto ` )
+                            ( nurl_print ( string_data reg ) )
+                            ( nurl_print `\n` )
+                            : !i PublishErr ur ( pkg_publish ( string_data reg ) ( string_data token ) tarball ( string_data . m name ) ( string_data . m version ) )
+                            ?? ur {
+                                T _ → ( nurl_print `published.\n` )
+                                F ue → {
+                                    ( nurl_eprint `nurlpkg: publish failed (` )
+                                    ( nurl_eprint ( publish_err_name ue ) )
+                                    ( nurl_eprintln `)` )
+                                    = rc 1
+                                }
+                            }
+                            ( vec_free [u] digest )
+                            ( string_free hex )
+                            ( vec_free [u] tarball )
+                        }
+                    }
+                    ( string_free reg )
+                    ( string_free token )
+                }
+            }
+            ( manifest_free m )
+        }
+    }
+    ^ rc
+}
+
 @ __cmd_install → i {
     ? ! ( file_exists `nurl.toml` ) {
         ( nurl_eprintln `nurlpkg: no nurl.toml in the current directory (run 'nurlpkg init <name>' first)` )
@@ -1381,6 +1460,10 @@ $ `stdlib/ext/pkg_fetch.nu`
     ? != 0 ( nurl_str_eq s_sub `lock` ) {
         ( string_free sub )
         ^ ( __cmd_lock )
+    } {}
+    ? != 0 ( nurl_str_eq s_sub `publish` ) {
+        ( string_free sub )
+        ^ ( __cmd_publish )
     } {}
     ? != 0 ( nurl_str_eq s_sub `add` ) {
         // Parse: nurlpkg add <name> [--path P] [--version V]

@@ -10,6 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Package publishing — `stdlib/ext/pkg_publish.nu` + `nurlpkg publish`
+  (ROADMAP §4 phase 5).** The write side. `pkg_pack` walks a project tree
+  into a `.tar.gz` (excluding `deps`, `.git`/dotfiles, `nurl.lock`,
+  `target`, `build`); `pkg_publish` uploads it with `POST
+  <registry>/api/v1/publish`, `Authorization: Bearer <token>`, and
+  `X-Nurl-Package` / `X-Nurl-Version` headers (binary body via
+  `http_request_bytes`), mapping status to PubAuth (401/403) / PubConflict
+  (409, version immutability) / PubRejected. `nurlpkg publish` packs the
+  current project, prints its size + SHA-256, and uploads using the token
+  from `$NURL_TOKEN` and the registry from `$NURL_REGISTRY` →
+  `[package].registry` → default; a missing token or any non-2xx exits
+  non-zero. The registry recomputes the checksum server-side — no
+  client-supplied digest is trusted. Regression
+  `compiler/tests/pkg_pack_basic.nu` (offline pack + gunzip + tar_parse
+  membership: nested source included, deps/ + dotfiles excluded), clean
+  under ASan/UBSan + leak-free. Verified end-to-end against a static
+  `python` registry: a full **publish → install round-trip** (a library
+  packed, uploaded with a Bearer token, then resolved + installed into a
+  consumer's `deps/`), plus immutability (409), bad-token (401), and
+  no-token rejections. This is the exact contract the Cloudflare
+  Worker + R2 write endpoint (phase 6) will implement.
+
 - **Verified registry install — `stdlib/ext/pkg_fetch.nu` (ROADMAP §4
   phase 4b).** The I/O side that turns a resolved `LockPkg` into files on
   disk against a static-HTTP registry (R2 + CDN shape). `pkg_fetch_index`
