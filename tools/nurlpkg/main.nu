@@ -685,6 +685,7 @@ $ `stdlib/ext/manifest.nu`
                                 ( string_from ( string_data . d name ) )
                                 new_path
                                 ( string_from ( string_data . d version ) )
+                                ( string_from ( string_data . d registry ) )
                             }
                             ( vec_push [Dep] out dn )
                         } {}
@@ -1078,6 +1079,7 @@ $ `stdlib/ext/manifest.nu`
                         ( string_from ( string_data . d name ) )
                         ( string_from ( string_data . d path ) )
                         ( string_from ( string_data . d version ) )
+                        ( string_from ( string_data . d registry ) )
                     } )
                     F _ → {}
                 }

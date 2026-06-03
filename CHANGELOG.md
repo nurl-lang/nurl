@@ -161,6 +161,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read-back); verified clean under ASan/UBSan. First building block of the
   registry-backed package manager (ROADMAP §4).
 
+- **Semantic Versioning 2.0.0 — `stdlib/ext/semver.nu`.** Pure-NURL semver
+  parse / compare / render with full precedence ordering, including the
+  prerelease rules (§11: numeric < alphanumeric identifiers, fewer < more
+  identifiers, prerelease < release; build metadata ignored). Plus
+  **version requirements**: `semver_req_parse` turns a constraint (`^1.2.3`,
+  `~1.2`, `>=1.0`, `<2.0.0`, `=1.2.3`, `1.*`, `*`, or a bare `1.2.3`) into a
+  half-open range, `semver_req_matches` tests a version, and
+  `semver_req_max_satisfying` picks the highest matching version — the
+  resolution primitive the registry-backed package manager needs (ROADMAP
+  §4). Constraint dialect is **Cargo-shaped**: a bare `1.2.3` means `^1.2.3`,
+  use `=1.2.3` to pin. v1 matches prereleases by pure range containment (no
+  Cargo-style prerelease comparator special-casing yet). Regression:
+  `compiler/tests/semver_basic.nu` (round-trip, the canonical §11 precedence
+  chain, every constraint operator, `max_satisfying`, parse errors); clean
+  under ASan/UBSan and leak-free.
+
+- **Registry-ready manifest + typed lockfile.** `stdlib/ext/manifest.nu`'s
+  `Dep` gained a `registry` field and `Manifest` gained a default
+  `[package].registry`, so a dependency can now be expressed as a path dep
+  (`{ path = "…" }`), a bare registry dep (`foo = "^1.2"`, default
+  registry), or an explicit registry dep
+  (`{ version = "1.0", registry = "…" }`); `dep_is_path` / `dep_is_registry`
+  discriminate. New `stdlib/ext/lockfile.nu` is a typed view over
+  `nurl.lock`: a `LockPkg { name, version, source, checksum }` with
+  `lock_serialize` (deterministic, name-sorted, Cargo-shaped `[[package]]`
+  blocks; `source`/`checksum` omitted for path/local packages) and
+  `lock_parse` / `lock_load` (round-trips through `toml.nu`'s
+  array-of-tables). `checksum` is the hex SHA-256 of the package tarball —
+  the integrity pin a registry install verifies. Regressions:
+  `compiler/tests/manifest_registry.nu`, `compiler/tests/lockfile_basic.nu`;
+  clean under ASan/UBSan, leak-free. ROADMAP §4 phase 3 (data model for
+  registry deps). `nurlpkg`'s two `Dep` construction sites updated for the
+  new field.
+
 - **WebSocket client (RFC 6455 §4.1 + §5.3).** `stdlib/ext/websocket.nu`
   gained the full client side to match the existing server. `ws_connect`
   / `ws_connect_with` parse a `ws://…` / `wss://…` URL, dial out (plain or

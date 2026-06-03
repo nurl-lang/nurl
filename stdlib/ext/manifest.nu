@@ -5,21 +5,28 @@
 // raw TomlValue can still be carried alongside for tooling that needs
 // to inspect unknown fields (e.g. linter or schema validator).
 //
-// Manifest schema (Cargo-shaped, MVP):
+// Manifest schema (Cargo-shaped):
 //
 //   [package]
 //   name = "demo"               # required
 //   version = "0.1.0"           # required
 //   description = "..."         # optional
 //   license = "MIT"             # optional
+//   registry = "https://..."    # optional: default registry for bare deps
 //   authors = ["A", "B"]        # optional (not yet exposed on Manifest)
 //
 //   [dependencies]
-//   foo = { path = "../foo", version = "0.2.0" }
-//   bar = { path = "../bar" }
+//   foo = { path = "../foo", version = "0.2.0" }   # path dependency
+//   bar = "^1.2"                                    # registry dep (default registry)
+//   baz = { version = "1.0", registry = "https://reg.example/" }  # explicit registry
 //
-// MVP scope:
-//   * Only path-based dependencies (no git / registry).
+// A dependency is a PATH dep when `path` is non-empty, otherwise a
+// REGISTRY dep whose `version` is a semver requirement (see
+// `stdlib/ext/semver.nu`) resolved against `registry` (or, when empty,
+// the manifest's `[package].registry`, or the tool's built-in default).
+// Use `dep_is_path` / `dep_is_registry` to discriminate.
+//
+// Scope:
 //   * Single [dependencies] section (no dev-dependencies / target.*).
 //   * No workspace support.
 //
@@ -29,6 +36,7 @@
 //   ( manifest_load s path )                  → ! Manifest ManifestErr
 //   ( manifest_free Manifest m )              → v
 //   ( dep_free Dep d )                        → v
+//   ( dep_is_path Dep d )  / ( dep_is_registry Dep d ) → b
 //   ( manifest_err_name ManifestErr e )       → s
 
 $ `stdlib/core/string.nu`
@@ -38,8 +46,9 @@ $ `stdlib/ext/toml.nu`
 
 : Dep {
     String name
-    String path
-    String version
+    String path      // non-empty → path dependency
+    String version   // semver requirement (registry dep) or pinned version
+    String registry  // registry URL; empty → manifest/tool default
 }
 
 : Manifest {
@@ -47,6 +56,7 @@ $ `stdlib/ext/toml.nu`
     String version
     String description
     String license
+    String registry  // default registry URL for bare deps; empty → tool default
     ( Vec Dep ) dependencies
 }
 
@@ -74,6 +84,17 @@ $ `stdlib/ext/toml.nu`
     ( string_free . d name )
     ( string_free . d path )
     ( string_free . d version )
+    ( string_free . d registry )
+}
+
+// A dependency resolved from a local path (`path` set) vs. fetched from
+// a registry by semver requirement (`path` empty).
+@ dep_is_path Dep d → b {
+    ^ > ( string_len . d path ) 0
+}
+
+@ dep_is_registry Dep d → b {
+    ^ == ( string_len . d path ) 0
 }
 
 @ manifest_free Manifest m → v {
@@ -81,6 +102,7 @@ $ `stdlib/ext/toml.nu`
     ( string_free . m version )
     ( string_free . m description )
     ( string_free . m license )
+    ( string_free . m registry )
     : i n ( vec_len [Dep] . m dependencies )
     : ~ i k 0
     ~ < k n {
@@ -135,14 +157,16 @@ $ `stdlib/ext/toml.nu`
     : String name ( string_from ( string_data . ent key ) )
     : String path ( string_new )
     : String version ( string_new )
+    : String registry ( string_new )
     ?? . ent value {
         TStr sv → {
-            // Bare version string. Copy as version, leave path empty.
+            // Bare version string → registry dep against the default
+            // registry. Copy as version, leave path + registry empty.
             ( string_free version )
             = version ( string_from ( string_data sv ) )
         }
         TTable _ → {
-            // Inline table form — pull path + version sub-fields.
+            // Inline table form — pull path + version + registry.
             : ?TomlValue pv ( toml_get . ent value `path` )
             ?? pv {
                 T pj → {
@@ -165,15 +189,27 @@ $ `stdlib/ext/toml.nu`
                 }
                 F _ → {}
             }
+            : ?TomlValue rv ( toml_get . ent value `registry` )
+            ?? rv {
+                T rj → {
+                    : ?String rs ( toml_as_str rj )
+                    ?? rs {
+                        T s → { ( string_free registry ) = registry s }
+                        F empty → ( string_free empty )
+                    }
+                }
+                F _ → {}
+            }
         }
         _ → {
             ( string_free name )
             ( string_free path )
             ( string_free version )
+            ( string_free registry )
             ^ @ !Dep ManifestErr { F # ManifestErr ManifestBadShape }
         }
     }
-    ^ @ !Dep ManifestErr { T @ Dep { name path version } }
+    ^ @ !Dep ManifestErr { T @ Dep { name path version registry } }
 }
 
 // ── Top-level parser ─────────────────────────────────────────────
@@ -200,6 +236,7 @@ $ `stdlib/ext/toml.nu`
             // Optional fields.
             : String description ( __field_str root `package.description` )
             : String license ( __field_str root `package.license` )
+            : String registry ( __field_str root `package.registry` )
 
             // Dependencies.
             : ( Vec Dep ) deps ( vec_new [Dep] )
@@ -231,7 +268,7 @@ $ `stdlib/ext/toml.nu`
                 F _ → {}
             }
             ( toml_value_free root )
-            ^ @ !Manifest ManifestErr { T @ Manifest { name version description license deps } }
+            ^ @ !Manifest ManifestErr { T @ Manifest { name version description license registry deps } }
         }
     }
 }
