@@ -1737,7 +1737,7 @@
         // Empty when the binding wasn't tagged (literals, struct fields,
         // function returns — Phase 1A defaults those to signed).
         : s u_flag ( nurl_sym_get syms ( nurl_str_cat name `__unsigned` ) )
-        ( nurl_sym_def syms `__last_unsigned__` u_flag )
+        ( nurl_mark_unsigned u_flag )
         // Root-cause guard for the arity-cascade footgun (critic.md §4).
         // Reaching this point means the name is none of: a local / match-
         // payload / loop / inout / closure-capture binding (all carry a
@@ -1798,14 +1798,14 @@
     // when an operand was declared as a sized unsigned type (u16/u32/u64,
     // or legacy `u` → i8). Clear the marker before LHS so a literal-LHS
     // expression doesn't inherit stale state from a prior load.
-    ( nurl_sym_def syms `__last_unsigned__` `` )
+    ( nurl_mark_unsigned `` )
     : s lv ( gen_operand lex syms cg )
     : s lt ( nurl_get_last_type )
-    : s lu_snap ( nurl_sym_get syms `__last_unsigned__` )
-    ( nurl_sym_def syms `__last_unsigned__` `` )
+    : s lu_snap ( nurl_last_unsigned )
+    ( nurl_mark_unsigned `` )
     : s rv ( gen_operand lex syms cg )
     : s rt ( nurl_get_last_type )
-    : s ru_snap ( nurl_sym_get syms `__last_unsigned__` )
+    : s ru_snap ( nurl_last_unsigned )
     : s res ( nurl_cg_reg cg )
     : b isf | ( seq lt `double` ) ( seq lt `float` )
     // `^^` (XOR) is integer/bool-only — LLVM has no float `xor`.
@@ -1856,7 +1856,7 @@
     ( nurl_set_last_type lt )
     // Propagate the result's signedness so a nested binop ( + a + b c )
     // emits the right ops for the outer +.
-    ( nurl_sym_def syms `__last_unsigned__` ? isu `1` `` )
+    ( nurl_mark_unsigned ? isu `1` `` )
     res
 }
 
@@ -1924,8 +1924,15 @@
 
 // ── Bitwise operations for integers ──────────────────────────────────
 @ gen_bitwise_binary s lv s lt i lex i syms i cg i tt → s {
+    // Capture the LHS signedness before the RHS eval overwrites it. `&`/`|`
+    // are sign-agnostic OPERATIONS, but the RESULT value keeps the operands'
+    // signedness (types match, so either suffices) — it must survive for a
+    // downstream widen. (Previously this rode the leaky side-channel's
+    // implicit survival; now the type-setter clears it, so set it explicitly.)
+    : s lhs_u ( nurl_last_unsigned )
     : s rv ( gen_expr lex syms cg )
     : s rt ( nurl_get_last_type )
+    : s rhs_u ( nurl_last_unsigned )
     // Check type compatibility
     ? ! ( seq lt rt )
     { : s op_name ? == tt TT_AMP `&` `|`
@@ -1943,6 +1950,8 @@
     ( nurl_print lt ) ( nurl_print ` ` )
     ( nurl_print lv ) ( nurl_print `, ` ) ( nurl_print rv ) ( nurl_print `\n` )
     ( nurl_set_last_type lt )
+    ? | != 0 ( nurl_str_len lhs_u ) != 0 ( nurl_str_len rhs_u )
+    { ( nurl_mark_unsigned `1` ) } {}
     res
 }
 
@@ -2499,10 +2508,47 @@
     ^ # s ( strdup # s g_last_type_ptr )
 }
 
+// ── last-value SIGNEDNESS, coupled to the last type ───────────────────
+//
+// Signedness is a property OF the value whose type sits in g_last_type_ptr,
+// so it lives RIGHT NEXT TO it and is reset by the very same setter every
+// value-producing site already calls. This is the structural fix for the
+// `u`-vs-signed `i8` hazard: the LLVM type can't carry signedness, and a
+// free-floating side-channel that each site had to remember to update was
+// forgotten ~67 of 83 times. Here `nurl_set_last_type` ALWAYS clears the
+// flag (signed default), so a stale "unsigned" can never leak into a later
+// widen; the handful of unsigned-PRODUCING sites set it explicitly with
+// `nurl_set_last_type_u` / `nurl_mark_unsigned` AFTER the type, and the
+// widen/op-selection readers consult `nurl_last_unsigned`. Stored as the
+// same `"1"` / `""` string the old syms entry used, so readers keep the
+// `nurl_str_len`-nonempty idiom. Empty pointer ⇒ signed (`""`).
+: i g_last_unsigned_p 0
+
+@ nurl_last_unsigned → s {
+    ? == g_last_unsigned_p 0 { ^ # s ( strdup `` ) } {}
+    ^ # s ( strdup # s g_last_unsigned_p )
+}
+
+@ nurl_mark_unsigned s u → v {
+    : i old g_last_unsigned_p
+    = g_last_unsigned_p # i ( strdup u )
+    ? != old 0 { ( free # s old ) } {}
+}
+
 @ nurl_set_last_type s t → v {
     : i old g_last_type_ptr
     = g_last_type_ptr # i ( strdup t )
     ? != old 0 { ( free # s old ) } {}
+    // Couple: setting a type resets its signedness to signed. Unsigned
+    // values re-assert it via nurl_set_last_type_u / nurl_mark_unsigned.
+    ( nurl_mark_unsigned `` )
+}
+
+// Set the type AND mark the value unsigned in one atomic step — for the
+// sites that produce a `u`/`u16`/`u32`/`u64` value.
+@ nurl_set_last_type_u s t → v {
+    ( nurl_set_last_type t )
+    ( nurl_mark_unsigned `1` )
 }
 
 // ── symbol table ──────────────────────────────────────────────────
@@ -3852,7 +3898,7 @@
         : s bck_arg_val ( nurl_lex_val lex )
         : i bck_arg_line ( nurl_lex_line lex )
         ( nurl_sym_def syms `__last_call_ret_owned__` `` )
-        ( nurl_sym_def syms `__last_unsigned__` `` )
+        ( nurl_mark_unsigned `` )
         // Reset __last_ident_name__ so the post-gen_expr check below
         // sees an ident only when this argument actually loaded one.
         ( nurl_sym_def syms `__last_ident_name__` `` )
@@ -3952,7 +3998,7 @@
         { = av ( gen_operand lex syms cg )
             = at ( nurl_get_last_type )
         }
-        : s lu_arg ( nurl_sym_get syms `__last_unsigned__` )
+        : s lu_arg ( nurl_last_unsigned )
         // Diagnose `nurl_str_len` vs `string_len` confusion.
         // `nurl_str_len` is the FFI to libc strlen and expects `s`
         // (i8*); passing a `%String` struct reads the struct bytes as
@@ -4251,7 +4297,7 @@
                 // Re-assert the callee's return signedness (cleared/overwritten
                 // by argument evaluation) so an enclosing `# i ( f )` widens a
                 // `u`-returning call with zext.
-                ( nurl_sym_def syms `__last_unsigned__` ( nurl_sym_get syms `__last_call_ret_unsigned__` ) )
+                ( nurl_mark_unsigned ( nurl_sym_get syms `__last_call_ret_unsigned__` ) )
                 res
             }
         }
@@ -4305,7 +4351,7 @@
     : s tv ( gen_expr lex syms cg )
     : s tt2 ( nurl_get_last_type )
     // Snapshot the then-arm's signedness for the `?`-result flag below.
-    : s then_unsigned ( nurl_sym_get syms `__last_unsigned__` )
+    : s then_unsigned ( nurl_last_unsigned )
     : s tlbl ( nurl_sym_get syms `__cur_lbl__` )
     : i tdr g_did_ret
     ? == tdr 0
@@ -4340,7 +4386,7 @@
     = g_ret_forbidden 0
     : s ev ( gen_expr lex syms cg )
     : s et2 ( nurl_get_last_type )
-    : s else_unsigned ( nurl_sym_get syms `__last_unsigned__` )
+    : s else_unsigned ( nurl_last_unsigned )
     : s elbl ( nurl_sym_get syms `__cur_lbl__` )
     : i edr g_did_ret
     ? == edr 0
@@ -4413,7 +4459,7 @@
     // The `?`-result is unsigned iff its arms are (NURL types match across
     // arms, so either flag suffices — OR them defensively). Lets an enclosing
     // `# i ? c (# u …) (# u …)` widen the selected value with zext.
-    ( nurl_sym_def syms `__last_unsigned__`
+    ( nurl_mark_unsigned
     ? | != 0 ( nurl_str_len then_unsigned ) != 0 ( nurl_str_len else_unsigned ) `1` `` )
     result
 }
@@ -7867,10 +7913,9 @@
     : b src_is_fp | src_is_double src_is_float
     : b dst_is_fp | dst_is_double dst_is_float
     ? & src_is_fp dst_is_fp
-    {  // float ↔ double conversions. The result is a float — clear the
-       // integer-signedness side-channel so a later int op doesn't inherit
-       // a stale `__last_unsigned__` from the float's original int source.
-        ( nurl_sym_def syms `__last_unsigned__` `` )
+    {  // float ↔ double conversions. The result is a float; `nurl_set_last_type`
+       // below resets signedness to signed, so no stale integer-unsigned flag
+       // survives into a later int op (the coupling does this automatically).
         ? ( seq st dt )
         { ( nurl_set_last_type dt ) ^ val }
         { ( nurl_print `  ` ) ( nurl_print res )
@@ -7891,7 +7936,7 @@
         ( nurl_print `\n` )
         ( nurl_set_last_type dt )
         // The integer result's signedness is the cast TARGET's.
-        ( nurl_sym_def syms `__last_unsigned__` ? dst_unsigned `1` `` )
+        ( nurl_mark_unsigned ? dst_unsigned `1` `` )
         ^ res
     }
     ? & ! src_is_fp dst_is_fp
@@ -7899,18 +7944,16 @@
        // unsigned value with the high bit set must NOT be read as a
        // negative number), else sitofp. The source's signedness rides the
        // `__last_unsigned__` side-channel (LLVM's i8/i16/i32 can't carry it).
-        : s lu_i2f ( nurl_sym_get syms `__last_unsigned__` )
+        : s lu_i2f ( nurl_last_unsigned )
         ( nurl_print `  ` ) ( nurl_print res )
         ( nurl_print ? != 0 ( nurl_str_len lu_i2f ) ` = uitofp ` ` = sitofp ` )
         ( nurl_print st )
         ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print ` to ` )
         ( nurl_print dt ) ( nurl_print `\n` )
+        // The result is a float; nurl_set_last_type reset signedness to signed,
+        // so the surrounding `# i64 # f …` round-trip's later multiply/divide
+        // can't inherit a stale unsigned marker (no more bug-#5 udiv/lshr).
         ( nurl_set_last_type dt )
-        // The result is a float — clear the integer-signedness flag so a
-        // downstream int op (the surrounding `# i64 # f …` round-trip's
-        // multiply / divide) doesn't see the source int's stale unsigned
-        // marker and pick udiv/lshr.
-        ( nurl_sym_def syms `__last_unsigned__` `` )
         ^ res
     }
     { ? & src_ptr ( seq dt `i64` )
@@ -8018,7 +8061,7 @@
                         : i sw ( int_width st )
                         : i dw ( int_width dt )
                         ? & & > sw 0 > dw 0 != sw dw
-                        { : s lu ( nurl_sym_get syms `__last_unsigned__` )
+                        { : s lu ( nurl_last_unsigned )
                             : b src_is_bool ( seq st `i1` )
                             : s widen_inst ? | src_is_bool != 0 ( nurl_str_len lu ) ` = zext ` ` = sext `
                             ( nurl_print `  ` ) ( nurl_print res )
@@ -8031,14 +8074,14 @@
                             // binop / shift reads the right flag (e.g. the inner
                             // `# u …` in `# i64 # u <expr>` must make the outer
                             // widen a zext, not a sext).
-                            ( nurl_sym_def syms `__last_unsigned__` ? dst_unsigned `1` `` )
+                            ( nurl_mark_unsigned ? dst_unsigned `1` `` )
                             ^ res
                         }
                         { ( nurl_set_last_type dt )
                             // Same-width reinterpret (e.g. `# u <i8>`): still
                             // record destination signedness for an enclosing op.
                             ? > ( int_width dt ) 0
-                            { ( nurl_sym_def syms `__last_unsigned__` ? dst_unsigned `1` `` ) }
+                            { ( nurl_mark_unsigned ? dst_unsigned `1` `` ) }
                             {}
                             ^ val }
                     }
@@ -8064,7 +8107,7 @@
     // and restore after the load so downstream `# i …` casts pick zext
     // — without this, a high-bit-set byte (`0x89`) sign-extends to
     // `0xFFFFFFFFFFFFFF89` and corrupts every subsequent shift+add.
-    : s obj_unsigned_snap ( nurl_sym_get syms `__last_unsigned__` )
+    : s obj_unsigned_snap ( nurl_last_unsigned )
 
     // Check object type first to determine access method
     : i otlen ( nurl_str_len ot )
@@ -8095,7 +8138,7 @@
             ( nurl_set_last_type elem_type )
             // Restore unsigned flag from object pointer — for raw-ptr
             // loads, the element shares the pointer's NURL signedness.
-            ( nurl_sym_def syms `__last_unsigned__` obj_unsigned_snap )
+            ( nurl_mark_unsigned obj_unsigned_snap )
             ^ res
         }
         { : s elem_type ( nurl_str_slice ot 0 - otlen 1 )
@@ -8140,7 +8183,7 @@
                 ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
                 ( nurl_set_last_type ftype )
                 // Field's NURL signedness for an enclosing widening cast.
-                ( nurl_sym_def syms `__last_unsigned__` fld_uns )
+                ( nurl_mark_unsigned fld_uns )
                 ^ res
             }
             {  // Variable / arbitrary expression index → array-style access
@@ -8159,7 +8202,7 @@
                 ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
                 ( nurl_set_last_type elem_type )
                 // Restore — see obj_unsigned_snap comment above.
-                ( nurl_sym_def syms `__last_unsigned__` obj_unsigned_snap )
+                ( nurl_mark_unsigned obj_unsigned_snap )
                 ^ res
             }
         }
@@ -8266,7 +8309,7 @@
                     ( nurl_set_last_type ftype )
                     // Surface the field's NURL signedness so an enclosing
                     // widening cast picks zext (unsigned field) vs sext.
-                    ( nurl_sym_def syms `__last_unsigned__`
+                    ( nurl_mark_unsigned
                     ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__unsigned` ) ) ) ) )
                     ^ res
                 }
@@ -8327,7 +8370,7 @@
         // Snapshot the value's unsigned-ness for the int-width coercion of
         // an option payload below (zext vs sext when widening into a wider
         // payload field). Empty for signed / untagged values.
-        : s fld_unsigned ( nurl_sym_get syms `__last_unsigned__` )
+        : s fld_unsigned ( nurl_last_unsigned )
         // Field is a stack reference if gen_closure_expr / a nested
         // gen_agg_lit just advertised one, or the field named a binding
         // tagged `<name>__refdepth`. Carry up the deepest such depth.
@@ -8978,7 +9021,7 @@
             ( nurl_print ` ` ) ( nurl_print val )
             ( nurl_print ` to ` ) ( nurl_print to_ty ) ( nurl_print `\n` )
             ^ r }
-        { : s lu ( nurl_sym_get syms `__last_unsigned__` )
+        { : s lu ( nurl_last_unsigned )
             : s inst ? != 0 ( nurl_str_len lu ) `zext` `sext`
             : s r ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print r )
