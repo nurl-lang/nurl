@@ -10,6 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Package registry service — Cloudflare Worker + R2 + D1 (`registry/`,
+  ROADMAP §4 phase 6).** The deployable server side of the ecosystem, in
+  TypeScript. The read path serves the static `index/<name>.json` +
+  content-addressed `pkgs/<name>/<name>-<v>.tar.gz` from R2 (cacheable, no
+  compute); the write path `POST /api/v1/publish` authenticates a Bearer
+  token (peppered SHA-256 looked up in D1), enforces **first-publisher name
+  ownership** + **version immutability**, **recomputes the tarball SHA-256
+  server-side** (never trusts a client digest), and writes the tarball +
+  updated index to R2. Identity bootstraps via **GitHub OAuth** (`/login` →
+  `/auth/callback` mints a one-time CLI token). D1 schema in
+  `migrations/0001_init.sql` (users / tokens / packages / versions).
+  Implements exactly the wire contract the NURL client already drives.
+  **Validated end-to-end locally** (no Cloudflare account): under
+  `wrangler dev` (miniflare R2 + D1), the real `nurlpkg` binary completes a
+  full publish → install round-trip plus immutability (409) and bad-token
+  (401) rejections — `registry/test-local.sh`. Ships with
+  `registry/DEPLOY.md`, a `registry-deploy.yml` GitHub Actions workflow
+  (guarded so a placeholder token can't trigger a broken deploy), and
+  secrets kept out of the repo (`wrangler secret put` for
+  `GITHUB_CLIENT_SECRET` / `TOKEN_PEPPER`; GH Actions secrets for the
+  Cloudflare deploy token). This completes the registry-backed package
+  manager: `nurlpkg publish` + `nurlpkg install` against a deployable
+  registry, all pure-NURL on the client and standing up locally today.
+
 - **Package publishing — `stdlib/ext/pkg_publish.nu` + `nurlpkg publish`
   (ROADMAP §4 phase 5).** The write side. `pkg_pack` walks a project tree
   into a `.tar.gz` (excluding `deps`, `.git`/dotfiles, `nurl.lock`,
