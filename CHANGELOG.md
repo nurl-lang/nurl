@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Signedness is now coupled to the value's type instead of a free-floating
+  side-channel — the structural fix for the whole `u`-vs-signed-`i8` bug
+  class.** The LLVM type (`i8`/`i16`/`i32`) can't distinguish NURL's unsigned
+  `u`/`u16`/`u32` from the signed types, so signedness travelled in a
+  separate `__last_unsigned__` syms entry that each of ~83 value-producing
+  sites had to remember to update — and ~67 didn't, leaving a stale flag
+  that silently sign- or zero-extended the next widen (the source of a long
+  run of miscompiles). Now signedness lives in `g_last_unsigned_p` right
+  next to `g_last_type_ptr`, and **`nurl_set_last_type` always resets it**
+  (signed default): every value-producing site already calls the type-setter
+  (IR needs the type), so a stale "unsigned" can no longer leak. The handful
+  of unsigned-PRODUCING sites assert it atomically with the type via
+  `nurl_set_last_type_u` / `nurl_mark_unsigned`, and widen/op-selection
+  readers consult `nurl_last_unsigned`. This eliminated the stale-leak
+  subclass structurally; the migration also surfaced and fixed a latent gap
+  the old leaky channel had masked by accident — bitwise `&`/`|`
+  (`gen_bitwise_binary`) never set its result's signedness, relying on the
+  last operand's flag happening to survive. Net: fewer, simpler, faster
+  (a global vs a string-keyed map) and no longer forgettable. Bootstrap
+  fixed point holds; full suite + ASan/UBSan green; 500 fuzzer seeds clean
+  across every dimension.
+
 ### Fixed
 
 - **Two more silent unsigned-widening miscompiles** (same `__last_unsigned__`
