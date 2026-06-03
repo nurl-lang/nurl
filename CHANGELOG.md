@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Binary-safe HTTP response body — `http_body_bytes` / `http_body_len`.**
+  `http_body_str` reads the response body through a NUL-terminated carrier
+  (truncates at the first embedded NUL). The new `http_body_bytes` returns
+  an owned, length-accurate `( Vec u )` copy, and `http_body_len` exposes
+  the byte count — required for binary downloads (package tarballs, images,
+  compressed payloads). Completes the binary HTTP story alongside the
+  earlier binary-safe request body. Regression:
+  `compiler/tests/http_response_binary.nu` (loopback server replies a
+  5-byte `A B \0 C D` body; client confirms full length + the NUL via
+  `http_body_bytes`; `NURL_NET_TESTS=1`). Clean under ASan/UBSan.
+  `stdlib/ext/http.nu`.
+
 - **Registry resolution core — `stdlib/ext/registry_index.nu` +
   `stdlib/ext/resolver.nu` (ROADMAP §4 phase 4).** The read side of the
   package registry. A registry serves a static JSON index per package at

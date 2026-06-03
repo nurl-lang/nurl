@@ -656,6 +656,34 @@ i timeout_ms i connect_timeout_ms → !Response HttpErr {
     ^ ? == bp 0 `` # s bp
 }
 
+@ http_body_len Response r → i {
+    : s rp . r raw
+    : *u rawp # *u rp
+    ^ ( nurl_peek rawp 5 )
+}
+
+// Owned, length-accurate binary copy of the response body. Unlike
+// http_body_str (which stops at the first NUL via strlen on the carrier),
+// this preserves embedded NUL bytes — required for binary downloads
+// (package tarballs, images, compressed payloads). Caller frees with
+// `( vec_free [u] … )`.
+@ http_body_bytes Response r → ( Vec u ) {
+    : s rp . r raw
+    : *u rawp # *u rp
+    : i bp ( nurl_peek rawp 4 )
+    : i blen ( nurl_peek rawp 5 )
+    : ( Vec u ) out ( vec_with_cap [u] ? > blen 0 blen 1 )
+    ? & != bp 0 > blen 0 {
+        : *u src # *u bp
+        : ~ i k 0
+        ~ < k blen {
+            ( vec_push [u] out . src k )
+            = k + k 1
+        }
+    } {}
+    ^ out
+}
+
 @ http_header_count Response r → i {
     : s rp . r raw
     : *u rawp # *u rp
