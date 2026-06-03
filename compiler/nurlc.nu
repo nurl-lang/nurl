@@ -7913,10 +7913,9 @@
     : b src_is_fp | src_is_double src_is_float
     : b dst_is_fp | dst_is_double dst_is_float
     ? & src_is_fp dst_is_fp
-    {  // float ↔ double conversions. The result is a float — clear the
-       // integer-signedness side-channel so a later int op doesn't inherit
-       // a stale `__last_unsigned__` from the float's original int source.
-        ( nurl_mark_unsigned `` )
+    {  // float ↔ double conversions. The result is a float; `nurl_set_last_type`
+       // below resets signedness to signed, so no stale integer-unsigned flag
+       // survives into a later int op (the coupling does this automatically).
         ? ( seq st dt )
         { ( nurl_set_last_type dt ) ^ val }
         { ( nurl_print `  ` ) ( nurl_print res )
@@ -7951,12 +7950,10 @@
         ( nurl_print st )
         ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print ` to ` )
         ( nurl_print dt ) ( nurl_print `\n` )
+        // The result is a float; nurl_set_last_type reset signedness to signed,
+        // so the surrounding `# i64 # f …` round-trip's later multiply/divide
+        // can't inherit a stale unsigned marker (no more bug-#5 udiv/lshr).
         ( nurl_set_last_type dt )
-        // The result is a float — clear the integer-signedness flag so a
-        // downstream int op (the surrounding `# i64 # f …` round-trip's
-        // multiply / divide) doesn't see the source int's stale unsigned
-        // marker and pick udiv/lshr.
-        ( nurl_mark_unsigned `` )
         ^ res
     }
     { ? & src_ptr ( seq dt `i64` )
