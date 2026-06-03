@@ -248,6 +248,7 @@ for src in "${tests[@]}"; do
           && "$name" != "http_server_tls" \
           && "$name" != "http_server_panic" \
           && "$name" != "http_binary_body" \
+          && "$name" != "http_response_binary" \
           && "$ENABLE_HTTP_TESTS" != "1" ]]; then
         continue
     fi
@@ -256,7 +257,8 @@ for src in "${tests[@]}"; do
             || "$name" == "http_server_limits" \
             || "$name" == "http_server_tls" \
             || "$name" == "http_server_panic" \
-            || "$name" == "http_binary_body" ) \
+            || "$name" == "http_binary_body" \
+            || "$name" == "http_response_binary" ) \
           && "$ENABLE_NET_TESTS" != "1" ]]; then
         continue
     fi

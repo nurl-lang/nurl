@@ -8,6 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Binary-safe HTTP response body — `http_body_bytes` / `http_body_len`.**
+  `http_body_str` reads the response body through a NUL-terminated carrier
+  (truncates at the first embedded NUL). The new `http_body_bytes` returns
+  an owned, length-accurate `( Vec u )` copy, and `http_body_len` exposes
+  the byte count — required for binary downloads (package tarballs, images,
+  compressed payloads). Completes the binary HTTP story alongside the
+  earlier binary-safe request body. Regression:
+  `compiler/tests/http_response_binary.nu` (loopback server replies a
+  5-byte `A B \0 C D` body; client confirms full length + the NUL via
+  `http_body_bytes`; `NURL_NET_TESTS=1`). Clean under ASan/UBSan.
+  `stdlib/ext/http.nu`.
+
+- **Registry resolution core — `stdlib/ext/registry_index.nu` +
+  `stdlib/ext/resolver.nu` (ROADMAP §4 phase 4).** The read side of the
+  package registry. A registry serves a static JSON index per package at
+  `<registry>/index/<name>.json` (versions, each with a tarball SHA-256
+  `checksum`, `yanked` flag, and `deps`); tarballs live at the
+  content-addressed `<registry>/pkgs/<name>/<name>-<ver>.tar.gz`, so the
+  whole read path is a cacheable CDN with no compute.
+  `registry_index.nu` parses an index and `regindex_select` picks the
+  highest non-yanked version satisfying a semver requirement.
+  `resolver.nu`'s `resolve_registry` walks the transitive dependency graph
+  (BFS) and emits a `Vec[LockPkg]` ready for `lock_serialize` — the index
+  fetcher is injected as a closure (`name → index-JSON`), so resolution is
+  pure and offline-testable; nurlpkg will wire it to an HTTP GET. v1 policy:
+  one version per name (first requirement wins; a later one must share that
+  version or it's ResolveConflict), sub-deps from the parent's registry,
+  path deps left to the existing symlink installer. Regressions:
+  `compiler/tests/registry_index_basic.nu` (parse + select + yanked
+  exclusion + tarball URL) and `compiler/tests/resolver_basic.nu`
+  (transitive resolve with a mock index, ResolveNoMatch, ResolveNotFound).
+  Both clean under ASan/UBSan and leak-free.
+
 ### Changed
 
 - **Signedness is now coupled to the value's type instead of a free-floating
