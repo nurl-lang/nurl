@@ -161,6 +161,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read-back); verified clean under ASan/UBSan. First building block of the
   registry-backed package manager (ROADMAP §4).
 
+- **Semantic Versioning 2.0.0 — `stdlib/ext/semver.nu`.** Pure-NURL semver
+  parse / compare / render with full precedence ordering, including the
+  prerelease rules (§11: numeric < alphanumeric identifiers, fewer < more
+  identifiers, prerelease < release; build metadata ignored). Plus
+  **version requirements**: `semver_req_parse` turns a constraint (`^1.2.3`,
+  `~1.2`, `>=1.0`, `<2.0.0`, `=1.2.3`, `1.*`, `*`, or a bare `1.2.3`) into a
+  half-open range, `semver_req_matches` tests a version, and
+  `semver_req_max_satisfying` picks the highest matching version — the
+  resolution primitive the registry-backed package manager needs (ROADMAP
+  §4). Constraint dialect is **Cargo-shaped**: a bare `1.2.3` means `^1.2.3`,
+  use `=1.2.3` to pin. v1 matches prereleases by pure range containment (no
+  Cargo-style prerelease comparator special-casing yet). Regression:
+  `compiler/tests/semver_basic.nu` (round-trip, the canonical §11 precedence
+  chain, every constraint operator, `max_satisfying`, parse errors); clean
+  under ASan/UBSan and leak-free.
+
 - **WebSocket client (RFC 6455 §4.1 + §5.3).** `stdlib/ext/websocket.nu`
   gained the full client side to match the existing server. `ws_connect`
   / `ws_connect_with` parse a `ws://…` / `wss://…` URL, dial out (plain or
