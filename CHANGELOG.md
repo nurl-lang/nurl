@@ -177,6 +177,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chain, every constraint operator, `max_satisfying`, parse errors); clean
   under ASan/UBSan and leak-free.
 
+- **Registry-ready manifest + typed lockfile.** `stdlib/ext/manifest.nu`'s
+  `Dep` gained a `registry` field and `Manifest` gained a default
+  `[package].registry`, so a dependency can now be expressed as a path dep
+  (`{ path = "…" }`), a bare registry dep (`foo = "^1.2"`, default
+  registry), or an explicit registry dep
+  (`{ version = "1.0", registry = "…" }`); `dep_is_path` / `dep_is_registry`
+  discriminate. New `stdlib/ext/lockfile.nu` is a typed view over
+  `nurl.lock`: a `LockPkg { name, version, source, checksum }` with
+  `lock_serialize` (deterministic, name-sorted, Cargo-shaped `[[package]]`
+  blocks; `source`/`checksum` omitted for path/local packages) and
+  `lock_parse` / `lock_load` (round-trips through `toml.nu`'s
+  array-of-tables). `checksum` is the hex SHA-256 of the package tarball —
+  the integrity pin a registry install verifies. Regressions:
+  `compiler/tests/manifest_registry.nu`, `compiler/tests/lockfile_basic.nu`;
+  clean under ASan/UBSan, leak-free. ROADMAP §4 phase 3 (data model for
+  registry deps). `nurlpkg`'s two `Dep` construction sites updated for the
+  new field.
+
 - **WebSocket client (RFC 6455 §4.1 + §5.3).** `stdlib/ext/websocket.nu`
   gained the full client side to match the existing server. `ws_connect`
   / `ws_connect_with` parse a `ws://…` / `wss://…` URL, dial out (plain or
