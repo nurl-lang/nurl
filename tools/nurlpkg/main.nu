@@ -36,6 +36,58 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/manifest.nu`
+$ `stdlib/ext/lockfile.nu`
+$ `stdlib/ext/semver.nu`
+$ `stdlib/ext/registry_index.nu`
+$ `stdlib/ext/resolver.nu`
+$ `stdlib/ext/pkg_fetch.nu`
+
+// ── registry config ──────────────────────────────────────────────
+//
+// The registry a bare/registry dependency resolves against, in priority
+// order: $NURL_REGISTRY env var → the manifest's [package].registry →
+// the built-in default. The env override is the hook tests + air-gapped
+// mirrors use to point nurlpkg at a loopback or internal registry.
+
+@ __default_registry → s {
+    ^ `https://reg.nurl-lang.org/`
+}
+
+@ __registry_url Manifest m → String {
+    : ?String ev ( env_get `NURL_REGISTRY` )
+    ?? ev {
+        T e → { ? > ( string_len e ) 0 { ^ e } { ( string_free e ) } }
+        F → {}
+    }
+    ? > ( string_len . m registry ) 0 {
+        ^ ( string_from ( string_data . m registry ) )
+    } {}
+    ^ ( string_from ( __default_registry ) )
+}
+
+@ __count_registry ( Vec Dep ) deps → i {
+    : i n ( vec_len [Dep] deps )
+    : ~ i c 0
+    : ~ i k 0
+    ~ < k n {
+        : ?Dep dk ( vec_get [Dep] deps k )
+        ?? dk { T d → { ? ( dep_is_registry d ) { = c + c 1 } {} } F → {} }
+        = k + k 1
+    }
+    ^ c
+}
+
+// Index of the registry LockPkg named `name`, or -1.
+@ __reg_lookup ( Vec LockPkg ) regpkgs s name → i {
+    : i n ( vec_len [LockPkg] regpkgs )
+    : ~ i k 0
+    ~ < k n {
+        : ?LockPkg po ( vec_get [LockPkg] regpkgs k )
+        ?? po { T p → { ? != 0 ( nurl_str_eq ( string_data . p name ) name ) { ^ k } {} } F → {} }
+        = k + k 1
+    }
+    ^ -1
+}
 
 // ── usage ────────────────────────────────────────────────────────
 
@@ -585,9 +637,8 @@ $ `stdlib/ext/manifest.nu`
     : s name ( string_data . d name )
     : s relpath ( string_data . d path )
     ? == 0 ( string_len . d path ) {
-        ( nurl_eprint `  ` )
-        ( nurl_eprint name )
-        ( nurl_eprintln `: skip (no path; registry deps are not supported in v1)` )
+        // Registry dep — resolved + installed by the registry pass
+        // (__install_registry), not the path-dep BFS. Skip silently here.
         ^ 0
     } {}
     : String target ( __abs_join cwd relpath )
@@ -727,7 +778,7 @@ $ `stdlib/ext/manifest.nu`
 // any I/O failure. Missing deps/ is treated as an empty install →
 // writes an empty lockfile (so a project with zero deps still gets
 // a tracked file for reproducibility).
-@ __write_lockfile → i {
+@ __write_lockfile ( Vec LockPkg ) regpkgs → i {
     : ( Vec String ) names ( vec_new [String] )
     ? ( file_exists `deps` ) {
         : !( Vec String ) IoErr lr ( dir_list `deps` )
@@ -785,10 +836,27 @@ $ `stdlib/ext/manifest.nu`
                             ( string_push_str body `\n[[package]]\n` )
                             ( __lock_kv_str body `name` ( string_data . m name ) )
                             ( __lock_kv_str body `version` ( string_data . m version ) )
-                            : String src ( string_from `deps/` )
-                            ( string_push_str src ( string_data name ) )
-                            ( __lock_kv_str body `source` ( string_data src ) )
-                            ( string_free src )
+                            : i ridx ( __reg_lookup regpkgs ( string_data . m name ) )
+                            ? >= ridx 0 {
+                                // Registry dep: pin the registry source +
+                                // tarball checksum from resolution.
+                                : ?LockPkg rpo ( vec_get [LockPkg] regpkgs ridx )
+                                ?? rpo {
+                                    T rp → {
+                                        ( __lock_kv_str body `source` ( string_data . rp source ) )
+                                        ? > ( string_len . rp checksum ) 0 {
+                                            ( __lock_kv_str body `checksum` ( string_data . rp checksum ) )
+                                        } {}
+                                    }
+                                    F → {}
+                                }
+                            } {
+                                // Path dep: source is the local deps/ entry.
+                                : String src ( string_from `deps/` )
+                                ( string_push_str src ( string_data name ) )
+                                ( __lock_kv_str body `source` ( string_data src ) )
+                                ( string_free src )
+                            }
                             ( manifest_free m )
                         }
                         F _ → {
@@ -1018,8 +1086,71 @@ $ `stdlib/ext/manifest.nu`
         ( nurl_eprintln `nurlpkg: no nurl.toml in the current directory` )
         ^ 1
     } {}
-    : i rc ( __write_lockfile )
+    // `lock` regenerates from the on-disk deps/ tree only; it does not
+    // re-resolve registry deps over the network, so registry checksums
+    // come from `install`. Pass an empty registry set here.
+    : ( Vec LockPkg ) empty ( vec_new [LockPkg] )
+    : i rc ( __write_lockfile empty )
+    ( lockpkgs_free empty )
     ? == rc 0 { ( nurl_print `wrote nurl.lock\n` ) } {}
+    ^ rc
+}
+
+// Resolve + download + verify + unpack the registry dependencies of `m`
+// into deps/<name>. Pushes a LockPkg (with source + tarball checksum) into
+// `out` for each SUCCESSFULLY installed package, so the lockfile reflects
+// exactly what landed on disk. Returns 0 on full success, 1 if resolution
+// or any package install failed (so `nurlpkg install` exits non-zero).
+@ __install_registry Manifest m ( Vec LockPkg ) out → i {
+    ? == ( __count_registry . m dependencies ) 0 { ^ 0 } {}
+    : String reg ( __registry_url m )
+    ( nurl_print `resolving registry dependencies against ` )
+    ( nurl_print ( string_data reg ) )
+    ( nurl_print `\n` )
+    : ( @ String s ) fetch \ s nm → String { ^ ( pkg_fetch_index ( string_data reg ) nm ) }
+    : ~ i rc 0
+    : !( Vec LockPkg ) ResolveErr rr ( resolve_registry . m dependencies ( string_data reg ) fetch )
+    ?? rr {
+        F e → {
+            ( nurl_eprint `nurlpkg: registry resolution failed (` )
+            ( nurl_eprint ( resolve_err_name e ) )
+            ( nurl_eprintln `)` )
+            = rc 1
+        }
+        T locked → {
+            : i ln ( vec_len [LockPkg] locked )
+            : ~ i k 0
+            ~ < k ln {
+                : ?LockPkg po ( vec_get [LockPkg] locked k )
+                ?? po {
+                    T p → {
+                        : !i PkgFetchErr ir ( pkg_install_one ( string_data reg ) ( string_data . p name ) ( string_data . p version ) ( string_data . p checksum ) `deps` )
+                        ?? ir {
+                            T _ → {
+                                ( nurl_print `  ` ) ( nurl_print ( string_data . p name ) )
+                                ( nurl_print ` ` ) ( nurl_print ( string_data . p version ) )
+                                ( nurl_print ` (registry)\n` )
+                                ( vec_push [LockPkg] out ( lock_pkg_new
+                                    ( string_data . p name )
+                                    ( string_data . p version )
+                                    ( string_data . p source )
+                                    ( string_data . p checksum ) ) )
+                            }
+                            F fe → {
+                                ( nurl_eprint `  ` ) ( nurl_eprint ( string_data . p name ) )
+                                ( nurl_eprint `: ` ) ( nurl_eprintln ( pkg_err_name fe ) )
+                                = rc 1
+                            }
+                        }
+                    }
+                    F → {}
+                }
+                = k + k 1
+            }
+            ( lockpkgs_free locked )
+        }
+    }
+    ( string_free reg )
     ^ rc
 }
 
@@ -1154,12 +1285,19 @@ $ `stdlib/ext/manifest.nu`
                 = si + si 1
             }
             ( vec_free [String] seen )
+            // Registry pass: resolve + download + verify + unpack the
+            // registry deps (path deps were handled by the BFS above).
+            : ( Vec LockPkg ) regpkgs ( vec_new [LockPkg] )
+            : i reg_rc ( __install_registry root regpkgs )
+            ? != reg_rc 0 { = rc 1 } {}
             ( manifest_free root )
-            // Regenerate the lockfile from the resulting deps/ tree.
-            // We do this even if some deps failed — a partial
-            // lockfile correctly reflects what's actually installed.
-            : i lr ( __write_lockfile )
+            // Regenerate the lockfile from the resulting deps/ tree. We do
+            // this even if some deps failed — a partial lockfile correctly
+            // reflects what's actually installed. Registry entries carry
+            // their resolved source + tarball checksum.
+            : i lr ( __write_lockfile regpkgs )
             ? != lr 0 { = rc 1 } {}
+            ( lockpkgs_free regpkgs )
             ( nurl_print `done.\n` )
         }
     }
