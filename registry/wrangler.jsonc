@@ -9,24 +9,24 @@
   // TOKEN_PEPPER are set out-of-band:  wrangler secret put GITHUB_CLIENT_SECRET
   //                                    wrangler secret put TOKEN_PEPPER
   "vars": {
-    "GITHUB_CLIENT_ID": "REPLACE_WITH_OAUTH_CLIENT_ID",
+    "GITHUB_CLIENT_ID": "Ov23liDzg24EWi7yFSgE",
     "REGISTRY_URL": "https://reg.nurl-lang.org"
   },
 
-  // R2 holds the static read path (index/*.json + pkgs/**.tar.gz). Create:
+  // R2 holds the static read path (index/*.json + pkgs/**.tar.gz).
   //   wrangler r2 bucket create nurl-registry
   "r2_buckets": [
     { "binding": "REG_BUCKET", "bucket_name": "nurl-registry" }
   ],
 
-  // D1 holds users / tokens / ownership / versions. Create + migrate:
-  //   wrangler d1 create nurl-registry   (paste the id below)
+  // D1 holds users / tokens / ownership / versions.
+  //   wrangler d1 create nurl-registry
   //   wrangler d1 migrations apply REG_DB --remote
   "d1_databases": [
     {
       "binding": "REG_DB",
       "database_name": "nurl-registry",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "5a3eb209-3194-467d-a002-712bd291afec",
       "migrations_dir": "migrations"
     }
   ]
