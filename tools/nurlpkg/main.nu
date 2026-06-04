@@ -42,6 +42,9 @@ $ `stdlib/ext/registry_index.nu`
 $ `stdlib/ext/resolver.nu`
 $ `stdlib/ext/pkg_fetch.nu`
 $ `stdlib/ext/pkg_publish.nu`
+$ `stdlib/ext/credentials.nu`
+$ `stdlib/ext/json.nu`
+$ `stdlib/core/io.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/bytes.nu`
 
@@ -66,6 +69,28 @@ $ `stdlib/std/bytes.nu`
         ^ ( string_from ( string_data . m registry ) )
     } {}
     ^ ( string_from ( __default_registry ) )
+}
+
+// Registry for project-independent commands (login/search/yank): the
+// $NURL_REGISTRY override, else the built-in default.
+@ __reg_default → String {
+    : ?String ev ( env_get `NURL_REGISTRY` )
+    ?? ev {
+        T e → { ? > ( string_len e ) 0 { ^ e } { ( string_free e ) } }
+        F → {}
+    }
+    ^ ( string_from ( __default_registry ) )
+}
+
+// Publish/yank auth token: $NURL_TOKEN first, then the stored credential
+// for `registry` (from `nurlpkg login`). Returns "" if neither is set.
+@ __resolve_token s registry → String {
+    : ?String ev ( env_get `NURL_TOKEN` )
+    ?? ev {
+        T e → { ? > ( string_len e ) 0 { ^ e } { ( string_free e ) } }
+        F → {}
+    }
+    ^ ( creds_get registry )
 }
 
 @ __count_registry ( Vec Dep ) deps → i {
@@ -134,7 +159,12 @@ $ `stdlib/std/bytes.nu`
     ( nurl_print `  nurlpkg deps           List dependencies, one per line.\n` )
     ( nurl_print `  nurlpkg install        Resolve path-deps and symlink them under ./deps/.\n` )
     ( nurl_print `  nurlpkg lock           Regenerate nurl.lock from the current deps/ tree.\n` )
-    ( nurl_print `  nurlpkg publish        Pack + upload this package to the registry ($NURL_TOKEN).\n` )
+    ( nurl_print `  nurlpkg publish        Pack + upload this package to the registry.\n` )
+    ( nurl_print `  nurlpkg login          Store a publish token in ~/.nurl/credentials.\n` )
+    ( nurl_print `  nurlpkg logout [--revoke]  Forget the local token (and optionally revoke it).\n` )
+    ( nurl_print `  nurlpkg search <q>     Search the registry for packages.\n` )
+    ( nurl_print `  nurlpkg info <name>    Show a package's published versions.\n` )
+    ( nurl_print `  nurlpkg yank|unyank <name> <version>  Hide/unhide a published version.\n` )
     ( nurl_print `  nurlpkg add <name> [--path P] [--version V]\n` )
     ( nurl_print `                         Add a dependency entry to nurl.toml.\n` )
     ( nurl_print `  nurlpkg remove <name>  Delete a dependency entry from nurl.toml.\n` )
@@ -1190,11 +1220,171 @@ $ `stdlib/std/bytes.nu`
     ^ rc
 }
 
+// ── login / logout ───────────────────────────────────────────────
+
+@ __cmd_login → i {
+    : String reg ( __reg_default )
+    ( nurl_print `Registry: ` ) ( nurl_print ( string_data reg ) ) ( nurl_print `\n` )
+    ( nurl_print `Paste a publish token (get one at <registry>/login): ` )
+    : String token ( read_line )
+    : ~ i rc 0
+    ? == ( string_len token ) 0 {
+        ( nurl_eprintln `nurlpkg: empty token; aborted` )
+        = rc 1
+    } {
+        : !v IoErr sr ( creds_set ( string_data reg ) ( string_data token ) )
+        ?? sr {
+            T _ → {
+                : String p ( creds_path )
+                ( nurl_print `Saved token to ` ) ( nurl_print ( string_data p ) ) ( nurl_print `\n` )
+                ( string_free p )
+            }
+            F _ → { ( nurl_eprintln `nurlpkg: failed to write credentials` ) = rc 1 }
+        }
+    }
+    ( string_free token )
+    ( string_free reg )
+    ^ rc
+}
+
+@ __cmd_logout i revoke → i {
+    : String reg ( __reg_default )
+    : ~ i rc 0
+    ? != revoke 0 {
+        : String tok ( creds_get ( string_data reg ) )
+        ? > ( string_len tok ) 0 {
+            : !i PublishErr rr ( pkg_revoke ( string_data reg ) ( string_data tok ) )
+            ?? rr {
+                T _ → ( nurl_print `Revoked token server-side.\n` )
+                F e → { ( nurl_eprint `nurlpkg: revoke failed (` ) ( nurl_eprint ( publish_err_name e ) ) ( nurl_eprintln `)` ) = rc 1 }
+            }
+        } { ( nurl_print `No stored token to revoke.\n` ) }
+        ( string_free tok )
+    } {}
+    : !v IoErr cr ( creds_remove ( string_data reg ) )
+    ?? cr {
+        T _ → ( nurl_print `Removed local credential.\n` )
+        F _ → { ( nurl_eprintln `nurlpkg: failed to update credentials` ) = rc 1 }
+    }
+    ( string_free reg )
+    ^ rc
+}
+
+// ── search / info ────────────────────────────────────────────────
+
+@ __cmd_search s query → i {
+    : String reg ( __reg_default )
+    : String body ( pkg_search ( string_data reg ) query )
+    : ~ i rc 0
+    ? == ( string_len body ) 0 {
+        ( nurl_eprintln `nurlpkg: search failed (no response)` )
+        = rc 1
+    } {
+        : !Json JsonError jr ( json_parse ( string_data body ) )
+        ?? jr {
+            F _ → { ( nurl_eprintln `nurlpkg: bad search response` ) = rc 1 }
+            T root → {
+                : ?Json ra ( json_obj_get root `results` )
+                ?? ra {
+                    T arr → {
+                        : i n ( json_arr_len arr )
+                        ? == n 0 { ( nurl_print `No matches.\n` ) } {}
+                        : ~ i k 0
+                        ~ < k n {
+                            : ?Json eo ( json_arr_get arr k )
+                            ?? eo {
+                                T e → {
+                                    : ?Json no ( json_obj_get e `name` )
+                                    ?? no { T nm → ( nurl_print ( json_as_str nm ) ) F → {} }
+                                    : ?Json vo ( json_obj_get e `version` )
+                                    ?? vo { T vv → { ( nurl_print `  ` ) ( nurl_print ( json_as_str vv ) ) } F → {} }
+                                    ( nurl_print `\n` )
+                                }
+                                F → {}
+                            }
+                            = k + k 1
+                        }
+                    }
+                    F → {}
+                }
+                ( json_free root )
+            }
+        }
+    }
+    ( string_free body )
+    ( string_free reg )
+    ^ rc
+}
+
+@ __cmd_registry_info s name → i {
+    : String reg ( __reg_default )
+    : String body ( pkg_fetch_index ( string_data reg ) name )
+    : ~ i rc 0
+    ? == ( string_len body ) 0 {
+        ( nurl_eprint `nurlpkg: package not found: ` ) ( nurl_eprintln name )
+        = rc 1
+    } {
+        : !RegIndex RegIndexErr ir ( regindex_parse ( string_data body ) )
+        ?? ir {
+            F _ → { ( nurl_eprintln `nurlpkg: bad index response` ) = rc 1 }
+            T idx → {
+                ( nurl_print ( string_data . idx name ) ) ( nurl_print `\nversions:\n` )
+                : i n ( vec_len [IdxVersion] . idx versions )
+                : ~ i k 0
+                ~ < k n {
+                    : ?IdxVersion vo ( vec_get [IdxVersion] . idx versions k )
+                    ?? vo {
+                        T v → {
+                            ( nurl_print `  ` ) ( nurl_print ( string_data . v version ) )
+                            ? . v yanked { ( nurl_print ` (yanked)` ) } {}
+                            ( nurl_print `\n` )
+                        }
+                        F → {}
+                    }
+                    = k + k 1
+                }
+                ( regindex_free idx )
+            }
+        }
+    }
+    ( string_free body )
+    ( string_free reg )
+    ^ rc
+}
+
+// ── yank / unyank ────────────────────────────────────────────────
+
+@ __cmd_yank s name s version i yank → i {
+    : String reg ( __reg_default )
+    : String token ( __resolve_token ( string_data reg ) )
+    : ~ i rc 0
+    ? == ( string_len token ) 0 {
+        ( nurl_eprintln `nurlpkg: no auth token — run 'nurlpkg login' or set $NURL_TOKEN` )
+        = rc 1
+    } {
+        : !i PublishErr yr ( pkg_yank ( string_data reg ) ( string_data token ) name version yank )
+        ?? yr {
+            T _ → {
+                ( nurl_print ? != yank 0 `yanked ` `unyanked ` )
+                ( nurl_print name ) ( nurl_print ` ` ) ( nurl_print version ) ( nurl_print `\n` )
+            }
+            F e → {
+                ( nurl_eprint `nurlpkg: ` ) ( nurl_eprint ? != yank 0 `yank` `unyank` )
+                ( nurl_eprint ` failed (` ) ( nurl_eprint ( publish_err_name e ) ) ( nurl_eprintln `)` )
+                = rc 1
+            }
+        }
+    }
+    ( string_free token )
+    ( string_free reg )
+    ^ rc
+}
+
 // ── publish ─────────────────────────────────────────────────────
 //
 // Pack the current project into a .tar.gz and upload it to the registry's
-// write endpoint with the Bearer token from $NURL_TOKEN. The registry is
-// resolved like install ($NURL_REGISTRY → [package].registry → default).
+// write endpoint. The token comes from $NURL_TOKEN or `nurlpkg login`; the
+// registry from $NURL_REGISTRY → [package].registry → default.
 @ __cmd_publish → i {
     ? ! ( file_exists `nurl.toml` ) {
         ( nurl_eprintln `nurlpkg: no nurl.toml in the current directory` )
@@ -1210,14 +1400,12 @@ $ `stdlib/std/bytes.nu`
             = rc 1
         }
         T m → {
-            : ?String tok ( env_get `NURL_TOKEN` )
-            ?? tok {
-                F → {
-                    ( nurl_eprintln `nurlpkg: no auth token — set $NURL_TOKEN to publish` )
-                    = rc 1
-                }
-                T token → {
-                    : String reg ( __registry_url m )
+            : String reg ( __registry_url m )
+            : String token ( __resolve_token ( string_data reg ) )
+            ? == ( string_len token ) 0 {
+                ( nurl_eprintln `nurlpkg: no auth token — run 'nurlpkg login' or set $NURL_TOKEN` )
+                = rc 1
+            } {
                     : !( Vec u ) PackErr pr ( pkg_pack `.` )
                     ?? pr {
                         F pe → {
@@ -1257,10 +1445,9 @@ $ `stdlib/std/bytes.nu`
                             ( vec_free [u] tarball )
                         }
                     }
-                    ( string_free reg )
-                    ( string_free token )
-                }
             }
+            ( string_free reg )
+            ( string_free token )
             ( manifest_free m )
         }
     }
@@ -1480,6 +1667,14 @@ $ `stdlib/std/bytes.nu`
         ^ rc
     } {}
     ? != 0 ( nurl_str_eq s_sub `info` ) {
+        // `info` (no arg) → local manifest; `info <name>` → registry package.
+        ? >= argc 3 {
+            : String name ( env_arg 2 )
+            : i rc ( __cmd_registry_info ( string_data name ) )
+            ( string_free name )
+            ( string_free sub )
+            ^ rc
+        } {}
         ( string_free sub )
         ^ ( __cmd_info )
     } {}
@@ -1498,6 +1693,44 @@ $ `stdlib/std/bytes.nu`
     ? != 0 ( nurl_str_eq s_sub `publish` ) {
         ( string_free sub )
         ^ ( __cmd_publish )
+    } {}
+    ? != 0 ( nurl_str_eq s_sub `login` ) {
+        ( string_free sub )
+        ^ ( __cmd_login )
+    } {}
+    ? != 0 ( nurl_str_eq s_sub `logout` ) {
+        // nurlpkg logout [--revoke]
+        : ~ i revoke 0
+        ? >= argc 3 {
+            : String f ( env_arg 2 )
+            ? != 0 ( nurl_str_eq ( string_data f ) `--revoke` ) { = revoke 1 } {}
+            ( string_free f )
+        } {}
+        ( string_free sub )
+        ^ ( __cmd_logout revoke )
+    } {}
+    ? != 0 ( nurl_str_eq s_sub `search` ) {
+        : ~ String q ( string_new )
+        ? >= argc 3 { = q ( env_arg 2 ) } {}
+        : i rc ( __cmd_search ( string_data q ) )
+        ( string_free q )
+        ( string_free sub )
+        ^ rc
+    } {}
+    ? | != 0 ( nurl_str_eq s_sub `yank` ) != 0 ( nurl_str_eq s_sub `unyank` ) {
+        : i yk ( nurl_str_eq s_sub `yank` )
+        ? < argc 4 {
+            ( nurl_eprintln `nurlpkg: usage: nurlpkg yank|unyank <name> <version>` )
+            ( string_free sub )
+            ^ 1
+        } {}
+        : String name ( env_arg 2 )
+        : String version ( env_arg 3 )
+        : i rc ( __cmd_yank ( string_data name ) ( string_data version ) yk )
+        ( string_free version )
+        ( string_free name )
+        ( string_free sub )
+        ^ rc
     } {}
     ? != 0 ( nurl_str_eq s_sub `add` ) {
         // Parse: nurlpkg add <name> [--path P] [--version V]
