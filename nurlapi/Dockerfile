@@ -200,6 +200,11 @@ WORKDIR /app
 COPY --from=builder /src/nurlapi/nurlapi /app/nurlapi
 COPY --from=builder /src/nurlapi/static /app/static
 
+# Stamp the deployed version into the playground UI. api-deploy.yml passes the
+# released semver via --build-arg NURL_VERSION=vX.Y.Z; local builds get "dev".
+ARG NURL_VERSION=dev
+RUN sed -i "s/__NURL_VERSION__/${NURL_VERSION}/g" /app/static/index.html
+
 # Bring in all cross-compilation artifacts
 RUN mkdir -p /opt/nurl/build /opt/nurl/stdlib /app/output /opt/nurl/examples /opt/nurl/compiler /opt/nurl/spec /opt/nurl/docs
 COPY --from=builder /src/build/nurlc             /opt/nurl/build/nurlc

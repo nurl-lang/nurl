@@ -57,6 +57,7 @@ jobs:
           file: nurlapi/Dockerfile
           push: true
           tags: nurllang/nurl:${{ steps.ver.outputs.version }}
+          build-args: NURL_VERSION=${{ steps.ver.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
