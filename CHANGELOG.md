@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Transitive registry dependencies — `nurlpkg publish` sends `X-Nurl-Deps`.**
+  Publishing now includes the manifest's registry dependencies (a JSON
+  `[{name, req}]` built by `__deps_json`) as the `X-Nurl-Deps` header, which
+  the registry records in the package index. `pkg_publish` gained a
+  `deps_json` parameter. With the deps in the index, `resolve_registry`
+  pulls **sub-dependencies transitively** — previously the index always
+  recorded `deps: []`, so only leaf registry packages installed correctly.
+  Verified end-to-end against the local Cloudflare Worker: publish `tdep-b`,
+  publish `tdep-a` (depends on `tdep-b ^1.0`), then `install` a consumer of
+  only `tdep-a` → both land in `deps/` and the lock. Registry now supports
+  real dependency graphs. `stdlib/ext/pkg_publish.nu`, `tools/nurlpkg/main.nu`.
+
 - **Package registry service — Cloudflare Worker + R2 + D1 (`registry/`,
   ROADMAP §4 phase 6).** The deployable server side of the ecosystem, in
   TypeScript. The read path serves the static `index/<name>.json` +

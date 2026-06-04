@@ -80,6 +80,38 @@ $ `stdlib/std/bytes.nu`
     ^ c
 }
 
+// Build the X-Nurl-Deps JSON array of { name, req } from a manifest's
+// REGISTRY dependencies (path deps are local and not part of the published
+// package's index entry). Names/reqs are simple tokens (no JSON-special
+// chars), so a direct build is safe. Empty deps → "[]".
+@ __deps_json Manifest m → String {
+    : String out ( string_with_cap 64 )
+    ( string_push_char out 91 )    // [
+    : i n ( vec_len [Dep] . m dependencies )
+    : ~ i first 1
+    : ~ i k 0
+    ~ < k n {
+        : ?Dep dk ( vec_get [Dep] . m dependencies k )
+        ?? dk {
+            T d → {
+                ? ( dep_is_registry d ) {
+                    ? == first 0 { ( string_push_char out 44 ) } {}    // ,
+                    = first 0
+                    ( string_push_str out `{"name":"` )
+                    ( string_push_str out ( string_data . d name ) )
+                    ( string_push_str out `","req":"` )
+                    ( string_push_str out ( string_data . d version ) )
+                    ( string_push_str out `"}` )
+                } {}
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ( string_push_char out 93 )    // ]
+    ^ out
+}
+
 // Index of the registry LockPkg named `name`, or -1.
 @ __reg_lookup ( Vec LockPkg ) regpkgs s name → i {
     : i n ( vec_len [LockPkg] regpkgs )
@@ -1208,7 +1240,9 @@ $ `stdlib/std/bytes.nu`
                             ( nurl_print `)\nto ` )
                             ( nurl_print ( string_data reg ) )
                             ( nurl_print `\n` )
-                            : !i PublishErr ur ( pkg_publish ( string_data reg ) ( string_data token ) tarball ( string_data . m name ) ( string_data . m version ) )
+                            : String deps_json ( __deps_json m )
+                            : !i PublishErr ur ( pkg_publish ( string_data reg ) ( string_data token ) tarball ( string_data . m name ) ( string_data . m version ) ( string_data deps_json ) )
+                            ( string_free deps_json )
                             ?? ur {
                                 T _ → ( nurl_print `published.\n` )
                                 F ue → {
