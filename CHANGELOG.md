@@ -10,6 +10,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Package manager → MLP: login/search/info, yank, token-revoke, catalog UI
+  (ROADMAP §4).** Rounds the registry out into a minimum *lovable* product.
+  - **CLI ergonomics.** `nurlpkg login` stores a per-registry publish token
+    in `~/.nurl/credentials` (chmod 600) — `publish`/`yank` resolve the token
+    `$NURL_TOKEN` → credentials, so it no longer has to live in the
+    environment. `nurlpkg logout [--revoke]` forgets it (and optionally
+    revokes it server-side). `nurlpkg search <q>` and `nurlpkg info <name>`
+    query the registry (`info` with no arg still prints the local manifest).
+    New `stdlib/ext/credentials.nu`.
+  - **Registry hygiene.** `nurlpkg yank|unyank <name> <version>` flips a
+    version's yanked flag (owner-only, via `POST /api/v1/{yank,unyank}`); the
+    resolver already skips yanked versions, so a yanked release disappears
+    from resolution. `nurlpkg logout --revoke` (`POST /api/v1/revoke`) deletes
+    the presented token from D1.
+  - **Catalog UI.** The Worker's `/` is now a searchable package list and
+    `/packages/<name>` a detail page (versions with yank state, latest
+    dependencies, an install snippet); `GET /api/v1/search?q=` backs the CLI.
+  - Client helpers: `pkg_search` (`pkg_fetch.nu`), `pkg_yank` / `pkg_revoke`
+    (`pkg_publish.nu`). Regression `compiler/tests/credentials_basic.nu`
+    (set/get/upsert/multi-registry/remove; gated `NURL_CREDS_TESTS=1`, clean
+    under ASan/UBSan). Whole feature set verified end-to-end against the
+    Worker under `wrangler dev`: login → creds-based publish → search → info
+    → yank (install then fails ResolveNoMatch) → unyank → catalog → logout
+    --revoke → publish rejected (PubAuth).
+
 - **Transitive registry dependencies — `nurlpkg publish` sends `X-Nurl-Deps`.**
   Publishing now includes the manifest's registry dependencies (a JSON
   `[{name, req}]` built by `__deps_json`) as the `X-Nurl-Deps` header, which

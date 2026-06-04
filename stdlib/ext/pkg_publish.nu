@@ -212,3 +212,72 @@ $ `stdlib/ext/http.nu`
         }
     }
 }
+
+// ── Yank / unyank / token revoke (authenticated, no body) ─────────────
+
+@ __reg_api_url s registry s path → String {
+    : String out ( string_with_cap 64 )
+    ( string_push_str out registry )
+    : i rn ( nurl_str_len registry )
+    ? > rn 0 { ? != ( nurl_str_get registry - rn 1 ) 47 { ( string_push_char out 47 ) } {} } {}
+    ( string_push_str out path )
+    ^ out
+}
+
+@ __pub_status_map i st → !i PublishErr {
+    ? & >= st 200 < st 300 { ^ @ !i PublishErr { T 0 } } {}
+    ? | == st 401 == st 403 { ^ @ !i PublishErr { F # PublishErr PubAuth } } {}
+    ? == st 409 { ^ @ !i PublishErr { F # PublishErr PubConflict } } {}
+    ^ @ !i PublishErr { F # PublishErr PubRejected }
+}
+
+// POST <registry>/api/v1/revoke — deletes the presented token server-side.
+@ pkg_revoke s registry s token → !i PublishErr {
+    ? == ( nurl_str_len token ) 0 { ^ @ !i PublishErr { F # PublishErr PubNoToken } } {}
+    : String url ( __reg_api_url registry `api/v1/revoke` )
+    : String hb ( string_with_cap 96 )
+    ( string_push_str hb `Authorization: Bearer ` )
+    ( string_push_str hb token )
+    ( string_push_str hb `\r\n` )
+    : !Response HttpErr rr ( http_request `POST` ( string_data url ) `` ( string_data hb ) )
+    ( string_free url )
+    ( string_free hb )
+    ?? rr {
+        F _ → ^ @ !i PublishErr { F # PublishErr PubHttp }
+        T resp → {
+            : i st ( http_status resp )
+            ( response_free resp )
+            ^ ( __pub_status_map st )
+        }
+    }
+}
+
+// POST <registry>/api/v1/{yank,unyank} — owner-only; flips the version's
+// yanked flag (the resolver then skips yanked versions). `yank` != 0 to
+// yank, 0 to unyank.
+@ pkg_yank s registry s token s name s version i yank → !i PublishErr {
+    ? == ( nurl_str_len token ) 0 { ^ @ !i PublishErr { F # PublishErr PubNoToken } } {}
+    : s ep ? != yank 0 `api/v1/yank` `api/v1/unyank`
+    : String url ( __reg_api_url registry ep )
+    : String hb ( string_with_cap 160 )
+    ( string_push_str hb `Authorization: Bearer ` )
+    ( string_push_str hb token )
+    ( string_push_str hb `\r\n` )
+    ( string_push_str hb `X-Nurl-Package: ` )
+    ( string_push_str hb name )
+    ( string_push_str hb `\r\n` )
+    ( string_push_str hb `X-Nurl-Version: ` )
+    ( string_push_str hb version )
+    ( string_push_str hb `\r\n` )
+    : !Response HttpErr rr ( http_request `POST` ( string_data url ) `` ( string_data hb ) )
+    ( string_free url )
+    ( string_free hb )
+    ?? rr {
+        F _ → ^ @ !i PublishErr { F # PublishErr PubHttp }
+        T resp → {
+            : i st ( http_status resp )
+            ( response_free resp )
+            ^ ( __pub_status_map st )
+        }
+    }
+}

@@ -136,3 +136,30 @@ $ `stdlib/ext/registry_index.nu`
         }
     }
 }
+
+// ── Search (read side) ────────────────────────────────────────────────
+
+// GET <registry>/api/v1/search?q=<query> → the JSON body, or "" on
+// non-200 / transport failure. Caller parses the {"results":[...]} JSON.
+@ pkg_search s registry s query → String {
+    : String url ( string_with_cap 80 )
+    ( string_push_str url registry )
+    : i rn ( nurl_str_len registry )
+    ? > rn 0 { ? != ( nurl_str_get registry - rn 1 ) 47 { ( string_push_char url 47 ) } {} } {}
+    ( string_push_str url `api/v1/search?q=` )
+    ( string_push_str url query )
+    : !Response HttpErr rr ( http_get ( string_data url ) )
+    ( string_free url )
+    ?? rr {
+        T resp → {
+            : ~ String out ( string_new )
+            ? == ( http_status resp ) 200 {
+                ( string_free out )
+                = out ( string_from ( http_body_str resp ) )
+            } {}
+            ( response_free resp )
+            ^ out
+        }
+        F → ^ ( string_new )
+    }
+}

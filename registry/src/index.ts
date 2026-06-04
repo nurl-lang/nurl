@@ -162,12 +162,110 @@ async function handlePublish(req: Request, env: Env): Promise<Response> {
 
 // ── GitHub OAuth (token bootstrap) ────────────────────────────────────
 
-function htmlPage(title: string, bodyHtml: string): Response {
+function htmlPage(title: string, bodyHtml: string, status = 200): Response {
   return new Response(
     `<!doctype html><meta charset=utf-8><title>${title}</title>` +
       `<body style="font-family:system-ui;max-width:42rem;margin:3rem auto;padding:0 1rem">${bodyHtml}</body>`,
-    { headers: { "content-type": "text/html; charset=utf-8" } },
+    { status, headers: { "content-type": "text/html; charset=utf-8" } },
   );
+}
+
+function esc(s: string): string {
+  return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+}
+
+// ── Catalog UI + search ───────────────────────────────────────────────
+
+interface CatalogRow { name: string; latest: string | null; }
+
+// Most-recently-published non-yanked version per package (display only).
+const LATEST_SUBQUERY =
+  `(SELECT v.version FROM versions v WHERE v.name = p.name AND v.yanked = 0
+      ORDER BY v.published_at DESC LIMIT 1)`;
+
+async function handleCatalog(url: URL, env: Env): Promise<Response> {
+  const q = (url.searchParams.get("q") ?? "").toLowerCase().slice(0, 64);
+  const like = q ? `%${q.replace(/[%_\\]/g, "")}%` : "%";
+  const rows = await env.REG_DB.prepare(
+    `SELECT p.name AS name, ${LATEST_SUBQUERY} AS latest
+       FROM packages p WHERE p.name LIKE ? ORDER BY p.name LIMIT 200`,
+  ).bind(like).all<CatalogRow>();
+  const items = rows.results ?? [];
+  const list = items.length
+    ? `<ul>${items.map((p) =>
+        `<li><a href="/packages/${esc(p.name)}">${esc(p.name)}</a> ` +
+        (p.latest ? `<code>${esc(p.latest)}</code>` : `<em>(all versions yanked)</em>`) + `</li>`).join("")}</ul>`
+    : `<p>No packages${q ? ` matching “${esc(q)}”` : " published"} yet.</p>`;
+  return htmlPage("NURL registry",
+    `<h1>NURL package registry</h1>` +
+    `<form method=get><input name=q value="${esc(q)}" placeholder="search packages" ` +
+      `style="padding:.4rem;width:60%"> <button>Search</button></form>` +
+    `<p style="color:#666">${items.length} package(s) · <a href="/login">get a publish token →</a></p>` +
+    list);
+}
+
+async function handlePackageDetail(env: Env, name: string): Promise<Response> {
+  if (!NAME_RE.test(name)) return htmlPage("not found", `<p>Invalid package name.</p>`, 404);
+  const idx = await readIndex(env, name);
+  if (idx.versions.length === 0) {
+    return htmlPage("not found", `<p><a href="/">← all packages</a></p><h1>${esc(name)}</h1><p>Not found.</p>`, 404);
+  }
+  const newestFirst = [...idx.versions].reverse();
+  const latest = newestFirst.find((v) => !v.yanked);
+  const versionsHtml = newestFirst.map((v) =>
+    `<li><code>${esc(v.version)}</code>${v.yanked ? ` <span style="color:#b00">(yanked)</span>` : ""}</li>`).join("");
+  const depsHtml = latest && latest.deps.length
+    ? `<ul>${latest.deps.map((d) =>
+        `<li><a href="/packages/${esc(d.name)}">${esc(d.name)}</a> <code>${esc(d.req)}</code></li>`).join("")}</ul>`
+    : `<p>None.</p>`;
+  const reqStr = latest ? `^${latest.version}` : "*";
+  return htmlPage(name,
+    `<p><a href="/">← all packages</a></p><h1>${esc(name)}</h1>` +
+    `<h3>Install</h3><pre style="background:#f4f4f4;padding:1rem;border-radius:6px">` +
+      `[dependencies]\n${esc(name)} = "${esc(reqStr)}"</pre>` +
+    `<h3>Versions</h3><ul>${versionsHtml}</ul>` +
+    `<h3>Dependencies (latest)</h3>${depsHtml}`);
+}
+
+async function handleSearch(url: URL, env: Env): Promise<Response> {
+  const q = (url.searchParams.get("q") ?? "").toLowerCase().slice(0, 64);
+  const like = q ? `%${q.replace(/[%_\\]/g, "")}%` : "%";
+  const rows = await env.REG_DB.prepare(
+    `SELECT p.name AS name, ${LATEST_SUBQUERY} AS latest
+       FROM packages p WHERE p.name LIKE ? ORDER BY p.name LIMIT 50`,
+  ).bind(like).all<CatalogRow>();
+  return json({ results: (rows.results ?? []).map((r) => ({ name: r.name, version: r.latest })) });
+}
+
+// ── Yank / unyank (owner-only) + token revoke ─────────────────────────
+
+async function handleYank(req: Request, env: Env, yank: boolean): Promise<Response> {
+  const user = await userFromAuth(req, env);
+  if (!user) return json({ error: "unauthorized" }, 401);
+  const name = (req.headers.get("x-nurl-package") ?? "").toLowerCase();
+  const version = req.headers.get("x-nurl-version") ?? "";
+  if (!NAME_RE.test(name)) return json({ error: "invalid_name" }, 400);
+  if (!VERSION_RE.test(version)) return json({ error: "invalid_version" }, 400);
+  const owner = await env.REG_DB.prepare(`SELECT owner_user_id FROM packages WHERE name = ?`)
+    .bind(name).first<{ owner_user_id: number }>();
+  if (!owner) return json({ error: "not_found" }, 404);
+  if (owner.owner_user_id !== user.id) return json({ error: "not_owner" }, 403);
+  const res = await env.REG_DB.prepare(`UPDATE versions SET yanked = ? WHERE name = ? AND version = ?`)
+    .bind(yank ? 1 : 0, name, version).run();
+  if ((res.meta?.changes ?? 0) === 0) return json({ error: "version_not_found" }, 404);
+  const idx = await readIndex(env, name);
+  for (const v of idx.versions) if (v.version === version) v.yanked = yank;
+  await env.REG_BUCKET.put(`index/${name}.json`, JSON.stringify(idx));
+  return json({ ok: true, name, version, yanked: yank });
+}
+
+async function handleRevoke(req: Request, env: Env): Promise<Response> {
+  const m = (req.headers.get("authorization") ?? "").match(/^Bearer\s+(.+)$/i);
+  if (!m) return json({ error: "unauthorized" }, 401);
+  const hash = await hashToken(m[1].trim(), env.TOKEN_PEPPER);
+  const res = await env.REG_DB.prepare(`DELETE FROM tokens WHERE token_hash = ?`).bind(hash).run();
+  if ((res.meta?.changes ?? 0) === 0) return json({ error: "unknown_token" }, 401);
+  return json({ ok: true, revoked: true });
 }
 
 function handleLogin(env: Env): Response {
@@ -242,11 +340,13 @@ export default {
     const path = url.pathname;
 
     if (req.method === "GET") {
-      if (path === "/") {
-        return htmlPage("NURL registry", `<h1>NURL package registry</h1><p>Visit <a href="/login">/login</a> to get a publish token.</p>`);
-      }
+      if (path === "/") return handleCatalog(url, env);
       if (path === "/login") return handleLogin(env);
       if (path === "/auth/callback") return handleCallback(req, env);
+      if (path === "/api/v1/search") return handleSearch(url, env);
+      if (path.startsWith("/packages/")) {
+        return handlePackageDetail(env, decodeURIComponent(path.slice("/packages/".length)).toLowerCase());
+      }
       if (path.startsWith("/index/") && path.endsWith(".json")) {
         const name = path.slice("/index/".length, -".json".length).toLowerCase();
         if (!NAME_RE.test(name)) return json({ error: "invalid_name" }, 400);
@@ -260,8 +360,11 @@ export default {
       return json({ error: "not_found" }, 404);
     }
 
-    if (req.method === "POST" && path === "/api/v1/publish") {
-      return handlePublish(req, env);
+    if (req.method === "POST") {
+      if (path === "/api/v1/publish") return handlePublish(req, env);
+      if (path === "/api/v1/yank") return handleYank(req, env, true);
+      if (path === "/api/v1/unyank") return handleYank(req, env, false);
+      if (path === "/api/v1/revoke") return handleRevoke(req, env);
     }
     return json({ error: "not_found" }, 404);
   },
