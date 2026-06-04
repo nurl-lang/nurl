@@ -26,6 +26,8 @@
 //   ( mqtt_config       s client_id s user s pass )           → MqttConfig
 //   ( mqtt_connect      s host i port s client_id s user s pass ) → ! MqttClient MqttErr
 //   ( mqtt_connect_cfg  s host i port MqttConfig cfg )         → ! MqttClient MqttErr
+//   ( mqtt_connect_ws    s url s client_id s user s pass )      → ! MqttClient MqttErr
+//   ( mqtt_connect_ws_cfg s url MqttConfig cfg )               → ! MqttClient MqttErr
 //   ( mqtt_publish      MqttClient s topic s payload )         → ! v MqttErr   (QoS 0)
 //   ( mqtt_publish1     MqttClient s topic s payload )         → ! v MqttErr   (QoS 1 + PUBACK)
 //   ( mqtt_publish2     MqttClient s topic s payload )         → ! v MqttErr   (QoS 2, 4-way)
@@ -80,6 +82,7 @@ $ `stdlib/std/channel.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/pair.nu`
+$ `stdlib/ext/websocket.nu`
 
 // ── error type ───────────────────────────────────────────────────────
 
@@ -138,14 +141,11 @@ $ `stdlib/core/pair.nu`
 
 // ── client-side connect (runtime.c §18b/§18c) ────────────────────────
 //
-// runtime.o exports these; `& `libc`` just makes nurlc emit the extern
-// declaration — libc is always linked and the symbols resolve from the
-// runtime object. Both return a CONN-kind handle (i64); err_kind != 0
-// means the connect / TLS handshake failed.
-
-& `libc` @ nurl_tcp_connect s host i port → i
-
-& `libc` @ nurl_tcp_connect_tls s host i port i verify → i
+// runtime.o exports `nurl_tcp_connect` / `nurl_tcp_connect_tls` (both
+// return a CONN-kind handle as i64; err_kind != 0 means the connect /
+// TLS handshake failed). Their `& `libc`` extern declarations come in
+// via the websocket.nu import above — declaring them again here would be
+// a duplicate symbol in the merged module, so we rely on that one copy.
 
 // Open a TLS client connection. `verify` T = check the broker cert
 // chain + hostname against the system trust store; F = encrypt but
@@ -193,6 +193,7 @@ $ `stdlib/core/pair.nu`
     i keepalive_ms
     i next_pid
     ( Vec i ) qos2_rx
+    b ws  // T = MQTT-over-WebSocket: each control packet rides in a binary frame
 }
 
 // An inbound application message. `props` holds the MQTT 5 user
@@ -424,8 +425,75 @@ $ `stdlib/core/pair.nu`
     ( vec_free [u] tmp )
 }
 
-// Read from the socket until `rxbuf` holds at least `need` bytes.
+// ── transport: raw TCP/TLS or MQTT-over-WebSocket ────────────────────
+//
+// On a WebSocket transport every MQTT control packet travels as the
+// payload of one binary WS frame (MQTT-over-WS uses the `mqtt`
+// subprotocol and binary frames). The three helpers below are the only
+// code that touches the wire format; the codec, the framed packet
+// reader, and publish / subscribe / receive are all transport-blind.
+
+// Write one complete MQTT control packet. A raw transport sends the
+// bytes verbatim; a WebSocket transport wraps them in a single masked
+// binary frame. Does NOT free `pkt` (the caller owns it) — same
+// ownership contract as tcp_write_all, so call sites are interchangeable.
+@ __mqtt_write_pkt MqttClient cl ( Vec u ) pkt → !v NetErr {
+    ? . cl ws {
+        : !v WsErr w ( ws_client_write_frame . cl conn T ( ws_opcode_binary ) pkt )
+        ?? w {
+            T → { ^ @ !v NetErr { T 0 } }
+            F _ → { ^ @ !v NetErr { F # NetErr NetWrite } }
+        }
+    } {}
+    ^ ( tcp_write_all . cl conn pkt )
+}
+
+// WebSocket variant of __mqtt_fill: pull whole WS frames, append each
+// data frame's payload to rxbuf, and answer control frames inline (pong
+// a ping, treat close as a closed connection). The WS reader folds an
+// idle socket-read timeout into a generic read error, so anything that
+// is not an explicit close surfaces as MqttTimeout — the keep-alive path
+// then either pings successfully (idle) or trips the real fault on its
+// next write.
+@ __mqtt_ws_fill MqttClient cl i need → !v MqttErr {
+    ~ < ( vec_len [u] . cl rxbuf ) need {
+        : !WsFrame WsErr fr ( ws_client_read_frame . cl conn ( ws_default_limits ) )
+        ?? fr {
+            T f → {
+                : i op . f opcode
+                ? == op ( ws_opcode_close ) {
+                    ( ws_frame_free f )
+                    ^ @ !v MqttErr { F # MqttErr MqttClosed }
+                } {}
+                ? == op ( ws_opcode_ping ) {
+                    : !v WsErr pg ( ws_client_send_pong . cl conn . f payload )
+                    ?? pg { T → {} F _ → {} }
+                    ( ws_frame_free f )
+                } {
+                    ? == op ( ws_opcode_pong ) {
+                        ( ws_frame_free f )
+                    } {
+                        // continuation / binary / text → MQTT byte stream
+                        ( vec_extend [u] . cl rxbuf . f payload )
+                        ( ws_frame_free f )
+                    }
+                }
+            }
+            F e → {
+                ?? e {
+                    WsClosedByPeer → { ^ @ !v MqttErr { F # MqttErr MqttClosed } }
+                    WsReadShort → { ^ @ !v MqttErr { F # MqttErr MqttClosed } }
+                    _ → { ^ @ !v MqttErr { F # MqttErr MqttTimeout } }
+                }
+            }
+        }
+    }
+    ^ @ !v MqttErr { T 0 }
+}
+
+// Read from the connection until `rxbuf` holds at least `need` bytes.
 @ __mqtt_fill MqttClient cl i need → !v MqttErr {
+    ? . cl ws { ^ ( __mqtt_ws_fill cl need ) } {}
     ~ < ( vec_len [u] . cl rxbuf ) need {
         : !( Vec u ) NetErr rd ( tcp_read_chunk . cl conn 4096 )
         ?? rd {
@@ -477,6 +545,52 @@ $ `stdlib/core/pair.nu`
 
 // ── connect ──────────────────────────────────────────────────────────
 
+// Run the MQTT CONNECT / CONNACK handshake on an already-dialled client
+// (raw or WebSocket): send CONNECT through the client's transport, read
+// the CONNACK, return the live client or a typed error. On any failure it
+// tears down rxbuf / qos2_rx and closes the socket. Shared by every
+// connect entrypoint so the handshake lives in exactly one place.
+@ __mqtt_finish_connect MqttClient cl MqttConfig cfg → !MqttClient MqttErr {
+    : ( Vec u ) pkt ( vec_with_cap [u] 96 )
+    ( __mqtt_encode_connect pkt cfg )
+    : !v NetErr wr ( __mqtt_write_pkt cl pkt )
+    ( vec_free [u] pkt )
+    ?? wr {
+        T → {}
+        F we → {
+            ( vec_free [u] . cl rxbuf )
+            ( vec_free [i] . cl qos2_rx )
+            ( tcp_close_conn . cl conn )
+            ^ @ !MqttClient MqttErr { F ( __mqtt_of_net we ) }
+        }
+    }
+
+    : !( Vec u ) MqttErr rd ( __mqtt_read_packet cl )
+    ?? rd {
+        T resp → {
+            : i reason ( mqtt_connack_reason resp )
+            ( vec_free [u] resp )
+            ? == reason 0 {
+                ^ @ !MqttClient MqttErr { T cl }
+            } {
+                ( nurl_eprint `mqtt: broker refused CONNECT, reason code ` )
+                ( nurl_eprint ( nurl_str_int reason ) )
+                ( nurl_eprint `\n` )
+                ( vec_free [u] . cl rxbuf )
+                ( vec_free [i] . cl qos2_rx )
+                ( tcp_close_conn . cl conn )
+                ^ @ !MqttClient MqttErr { F ( __mqtt_connack_err reason ) }
+            }
+        }
+        F re → {
+            ( vec_free [u] . cl rxbuf )
+            ( vec_free [i] . cl qos2_rx )
+            ( tcp_close_conn . cl conn )
+            ^ @ !MqttClient MqttErr { F re }
+        }
+    }
+}
+
 // Connect to an MQTT 5.0 broker over TLS with full control via `cfg`
 // (will message, session expiry, clean-start, keep-alive). A non-zero
 // CONNACK reason code is logged and surfaced as a typed MqttErr
@@ -488,46 +602,8 @@ $ `stdlib/core/pair.nu`
         T conn → {
             ( tcp_set_timeout conn 15000 )
             : i kams * . cfg keepalive 1000
-            : MqttClient cl @ MqttClient { conn ( vec_new [u] ) + ( now_ms ) kams kams 1 ( vec_new [i] ) }
-
-            : ( Vec u ) pkt ( vec_with_cap [u] 96 )
-            ( __mqtt_encode_connect pkt cfg )
-            : !v NetErr wr ( tcp_write_all conn pkt )
-            ( vec_free [u] pkt )
-            ?? wr {
-                T → {}
-                F we → {
-                    ( vec_free [u] . cl rxbuf )
-                    ( vec_free [i] . cl qos2_rx )
-                    ( tcp_close_conn conn )
-                    ^ @ !MqttClient MqttErr { F ( __mqtt_of_net we ) }
-                }
-            }
-
-            : !( Vec u ) MqttErr rd ( __mqtt_read_packet cl )
-            ?? rd {
-                T resp → {
-                    : i reason ( mqtt_connack_reason resp )
-                    ( vec_free [u] resp )
-                    ? == reason 0 {
-                        ^ @ !MqttClient MqttErr { T cl }
-                    } {
-                        ( nurl_eprint `mqtt: broker refused CONNECT, reason code ` )
-                        ( nurl_eprint ( nurl_str_int reason ) )
-                        ( nurl_eprint `\n` )
-                        ( vec_free [u] . cl rxbuf )
-                        ( vec_free [i] . cl qos2_rx )
-                        ( tcp_close_conn conn )
-                        ^ @ !MqttClient MqttErr { F ( __mqtt_connack_err reason ) }
-                    }
-                }
-                F re → {
-                    ( vec_free [u] . cl rxbuf )
-                    ( vec_free [i] . cl qos2_rx )
-                    ( tcp_close_conn conn )
-                    ^ @ !MqttClient MqttErr { F re }
-                }
-            }
+            : MqttClient cl @ MqttClient { conn ( vec_new [u] ) + ( now_ms ) kams kams 1 ( vec_new [i] ) F }
+            ^ ( __mqtt_finish_connect cl cfg )
         }
         F e → { ^ @ !MqttClient MqttErr { F e } }
     }
@@ -537,6 +613,48 @@ $ `stdlib/core/pair.nu`
 // no will. For will messages or session resume, use mqtt_connect_cfg.
 @ mqtt_connect s host i port s client_id s username s password → !MqttClient MqttErr {
     ^ ( mqtt_connect_cfg host port ( mqtt_config client_id username password ) )
+}
+
+// ── connect over WebSocket ───────────────────────────────────────────
+
+// Map a WebSocket-layer error onto the MQTT error space for the connect
+// path: a peer close is MqttClosed, everything else (failed dial, bad
+// URL, non-101 status, mismatched accept) is transport.
+@ __mqtt_ws_connect_err WsErr e → MqttErr {
+    ^ ?? e {
+        WsClosedByPeer → # MqttErr MqttClosed
+        WsReadShort → # MqttErr MqttClosed
+        _ → # MqttErr MqttTransport
+    }
+}
+
+// Connect to an MQTT broker over WebSocket with full control via `cfg`.
+// `url` is the broker's MQTT-over-WS endpoint, e.g.
+// `wss://broker.example:8084/mqtt` (a `wss://` URL gives TLS with
+// certificate verification ON; `ws://` is plaintext). The `mqtt`
+// subprotocol is negotiated automatically and every control packet then
+// rides in a binary frame. After the WS upgrade the normal MQTT CONNECT
+// handshake runs, so CONNACK refusals surface as the same typed errors
+// as the TCP path. NOTE: `tls_verify` in `cfg` is ignored here — TLS is
+// governed by the URL scheme; the WS client always verifies for `wss://`.
+@ mqtt_connect_ws_cfg s url MqttConfig cfg → !MqttClient MqttErr {
+    : !WsClient WsErr wr ( ws_connect_with url @ ?String { T ( string_from `mqtt` ) } )
+    ?? wr {
+        T wc → {
+            : TcpConn conn ( ws_client_conn wc )
+            ( tcp_set_timeout conn 15000 )
+            : i kams * . cfg keepalive 1000
+            : MqttClient cl @ MqttClient { conn ( vec_new [u] ) + ( now_ms ) kams kams 1 ( vec_new [i] ) T }
+            ^ ( __mqtt_finish_connect cl cfg )
+        }
+        F e → { ^ @ !MqttClient MqttErr { F ( __mqtt_ws_connect_err e ) } }
+    }
+}
+
+// Connect over WebSocket with the common-case defaults — keep-alive 60 s,
+// clean start, no will. See mqtt_connect_ws_cfg for `url` and TLS notes.
+@ mqtt_connect_ws s url s client_id s username s password → !MqttClient MqttErr {
+    ^ ( mqtt_connect_ws_cfg url ( mqtt_config client_id username password ) )
 }
 
 // ── publish ──────────────────────────────────────────────────────────
@@ -637,7 +755,7 @@ $ `stdlib/core/pair.nu`
     ( vec_extend [u] pkt vh )
     ( bytes_extend_str pkt payload )
 
-    : !v NetErr w ( tcp_write_all . cl conn pkt )
+    : !v NetErr w ( __mqtt_write_pkt cl pkt )
     ( vec_free [u] vh )
     ( vec_free [u] pkt )
     ?? w { T → {} F we → { ^ @ !v MqttErr { F ( __mqtt_of_net we ) } } }
@@ -725,7 +843,7 @@ $ `stdlib/core/pair.nu`
     ( vec_extend [u] pkt vh )
     ( vec_extend [u] pkt pl )
 
-    : !v NetErr w ( tcp_write_all . cl conn pkt )
+    : !v NetErr w ( __mqtt_write_pkt cl pkt )
     ( vec_free [u] vh )
     ( vec_free [u] pl )
     ( vec_free [u] pkt )
@@ -779,7 +897,7 @@ $ `stdlib/core/pair.nu`
     ( vec_extend [u] pkt vh )
     ( vec_extend [u] pkt pl )
 
-    : !v NetErr w ( tcp_write_all . cl conn pkt )
+    : !v NetErr w ( __mqtt_write_pkt cl pkt )
     ( vec_free [u] vh )
     ( vec_free [u] pl )
     ( vec_free [u] pkt )
@@ -813,7 +931,7 @@ $ `stdlib/core/pair.nu`
     ( vec_extend [u] pkt vh )
     ( vec_extend [u] pkt pl )
 
-    : !v NetErr w ( tcp_write_all . cl conn pkt )
+    : !v NetErr w ( __mqtt_write_pkt cl pkt )
     ( vec_free [u] vh )
     ( vec_free [u] pl )
     ( vec_free [u] pkt )
@@ -844,7 +962,7 @@ $ `stdlib/core/pair.nu`
     : ( Vec u ) pkt ( vec_with_cap [u] 2 )
     ( vec_push [u] pkt # u 192 )
     ( vec_push [u] pkt # u 0 )
-    : !v NetErr w ( tcp_write_all . cl conn pkt )
+    : !v NetErr w ( __mqtt_write_pkt cl pkt )
     ( vec_free [u] pkt )
     ?? w { T → {} F we → { ^ @ !v MqttErr { F ( __mqtt_of_net we ) } } }
 
@@ -874,7 +992,7 @@ $ `stdlib/core/pair.nu`
     : ( Vec u ) pkt ( vec_with_cap [u] 2 )
     ( vec_push [u] pkt # u 192 )
     ( vec_push [u] pkt # u 0 )
-    : !v NetErr w ( tcp_write_all . cl conn pkt )
+    : !v NetErr w ( __mqtt_write_pkt cl pkt )
     ?? w { T → {} F _ → {} }
     ( vec_free [u] pkt )
     = . cl ping_deadline + ( now_ms ) . cl keepalive_ms
@@ -897,7 +1015,11 @@ $ `stdlib/core/pair.nu`
 // `cfg` again. On success the MqttClient is reusable; the caller must
 // re-issue any SUBSCRIBEs (the broker starts a fresh subscription set
 // unless the session was resumed via session-expiry + clean-start F).
+// Raw transports only — a WebSocket client carries no URL to redo the
+// upgrade, so it must be rebuilt with mqtt_connect_ws; calling this on
+// one yields MqttTransport rather than silently dialling plain MQTT.
 @ mqtt_reconnect MqttClient cl s host i port MqttConfig cfg → !v MqttErr {
+    ? . cl ws { ^ @ !v MqttErr { F # MqttErr MqttTransport } } {}
     ( tcp_close_conn . cl conn )
     : !TcpConn MqttErr cr ( tcp_connect_tls host port . cfg tls_verify )
     ?? cr {
@@ -944,7 +1066,7 @@ $ `stdlib/core/pair.nu`
     ( vec_push [u] pkt # u first )
     ( vec_push [u] pkt # u 2 )
     ( bytes_push_u16_be pkt pid )
-    : !v NetErr w ( tcp_write_all . cl conn pkt )
+    : !v NetErr w ( __mqtt_write_pkt cl pkt )
     ?? w { T → {} F _ → {} }
     ( vec_free [u] pkt )
 }
@@ -1430,14 +1552,19 @@ $ `stdlib/core/pair.nu`
 // ── disconnect ───────────────────────────────────────────────────────
 
 // Send a Normal-disconnection DISCONNECT, close the socket, free the
-// receive buffer.
+// receive buffer. On a WebSocket transport the MQTT DISCONNECT is
+// followed by a WS Close frame so the upgrade is torn down cleanly too.
 @ mqtt_disconnect MqttClient cl → v {
     : ( Vec u ) pkt ( vec_with_cap [u] 2 )
     ( vec_push [u] pkt # u 224 )
     ( vec_push [u] pkt # u 0 )
-    : !v NetErr w ( tcp_write_all . cl conn pkt )
+    : !v NetErr w ( __mqtt_write_pkt cl pkt )
     ?? w { T → {} F _ → {} }
     ( vec_free [u] pkt )
+    ? . cl ws {
+        : !v WsErr wc ( ws_client_send_close . cl conn 1000 `` )
+        ?? wc { T → {} F _ → {} }
+    } {}
     ( vec_free [u] . cl rxbuf )
     ( vec_free [i] . cl qos2_rx )
     ( tcp_close_conn . cl conn )
