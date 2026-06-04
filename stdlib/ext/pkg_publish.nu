@@ -8,6 +8,7 @@
 //   Authorization: Bearer <token>
 //   X-Nurl-Package: <name>
 //   X-Nurl-Version: <version>
+//   X-Nurl-Deps: [{"name":"bar","req":"^0.3"}]   (registry deps; for the index)
 //   Content-Type: application/gzip
 //   <body = the .tar.gz bytes>
 //
@@ -22,7 +23,7 @@
 //
 // API:
 //   ( pkg_pack root )                              → ! ( Vec u ) PackErr
-//   ( pkg_publish registry token tarball name ver ) → ! i PublishErr (0 = ok)
+//   ( pkg_publish registry token tarball name ver deps_json ) → ! i PublishErr (0 = ok)
 //   ( pack_err_name e ) / ( publish_err_name e )    → s
 
 $ `stdlib/core/string.nu`
@@ -173,10 +174,14 @@ $ `stdlib/ext/http.nu`
     ^ out
 }
 
-@ pkg_publish s registry s token ( Vec u ) tarball s name s version → !i PublishErr {
+// `deps_json` is a JSON array of { name, req } for this package's registry
+// dependencies (built by the caller from the manifest), sent as
+// X-Nurl-Deps so the registry records them in the index and transitive
+// registry resolution works. Pass `[]` (or empty) for none.
+@ pkg_publish s registry s token ( Vec u ) tarball s name s version s deps_json → !i PublishErr {
     ? == ( nurl_str_len token ) 0 { ^ @ !i PublishErr { F # PublishErr PubNoToken } } {}
     : String url ( __publish_url registry )
-    : String hb ( string_with_cap 200 )
+    : String hb ( string_with_cap 256 )
     ( string_push_str hb `Authorization: Bearer ` )
     ( string_push_str hb token )
     ( string_push_str hb `\r\n` )
@@ -186,6 +191,11 @@ $ `stdlib/ext/http.nu`
     ( string_push_str hb `X-Nurl-Version: ` )
     ( string_push_str hb version )
     ( string_push_str hb `\r\n` )
+    ? > ( nurl_str_len deps_json ) 0 {
+        ( string_push_str hb `X-Nurl-Deps: ` )
+        ( string_push_str hb deps_json )
+        ( string_push_str hb `\r\n` )
+    } {}
     ( string_push_str hb `Content-Type: application/gzip\r\n` )
     : !Response HttpErr rr ( http_request_bytes `POST` ( string_data url ) tarball ( string_data hb ) )
     ( string_free url )
