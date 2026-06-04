@@ -41,6 +41,11 @@
   }
   .status-pill.ok { color: var(--accent-2); border-color: #2b4a2a; }
   .status-pill.bad { color: var(--err); border-color: #4a2b2b; }
+  .ver-pill {
+    font-size: .72rem; color: var(--accent); cursor: default;
+    padding: .2rem .5rem; border: 1px solid var(--border); border-radius: 999px;
+    font-variant-numeric: tabular-nums;
+  }
 
   main {
     flex: 1; display: grid;
@@ -140,6 +145,10 @@
 <body>
 <header>
   <h1>NURL Playground</h1>
+  <!-- Version pill: the token below is replaced at image build time from the
+       NURL_VERSION build-arg (api-deploy.yml passes the released semver;
+       local builds default to "dev"). -->
+  <span id="version" class="ver-pill" title="Deployed NURL version">__NURL_VERSION__</span>
   <span id="health" class="status-pill">checking…</span>
   <div class="spacer"></div>
   <a href="/readme" target="_blank" rel="noopener">README</a>

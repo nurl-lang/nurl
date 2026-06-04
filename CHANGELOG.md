@@ -8,7 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.5] — 2026-06-04
+
 ### Added
+
+- **Playground shows its deployed version, and the API auto-deploys on
+  release tags.** The playground header now carries a version pill — a
+  `__NURL_VERSION__` placeholder in `index.html` is stamped at image-build
+  time from the `NURL_VERSION` build-arg (`dev` for local builds). A new
+  `.github/workflows/api-deploy.yml` builds the API image on a `v*` tag (or
+  manual dispatch), pushes it to Docker Hub under the exact semver
+  (`nurllang/nurl:vX.Y.Z` — no `:latest`), pins `cloudflare/Dockerfile`'s
+  `FROM` to that tag and runs `wrangler deploy`, so a git tag is now a
+  reproducible playground release. The Docker image was renamed
+  `hindurable/nurl` → `nurllang/nurl`; `registry-deploy.yml` is now
+  manual-only (the registry changes rarely).
+
+- **MQTT-over-WebSocket transport — `mqtt_connect_ws`.** Adds a WebSocket
+  transport alongside the raw TCP/TLS path so a client can reach a broker's
+  MQTT-over-WS endpoint (e.g. `wss://host:8084/mqtt`) — handy when a firewall
+  only permits the WS port inbound. `wss://` enables TLS with certificate
+  verification and negotiates the `mqtt` subprotocol automatically; the codec
+  and framed packet reader stay transport-blind behind two chokepoints. New
+  entrypoints `mqtt_connect_ws` / `mqtt_connect_ws_cfg`; `mqtt_disconnect`
+  also sends a WS Close frame, and `mqtt_reconnect` rejects WS clients (no URL
+  to redo the upgrade). `stdlib/ext/mqtt.nu`.
 
 - **Package manager → MLP: login/search/info, yank, token-revoke, catalog UI
   (ROADMAP §4).** Rounds the registry out into a minimum *lovable* product.
