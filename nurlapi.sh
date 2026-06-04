@@ -51,7 +51,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-IMAGE="hindurable/nurl"
+IMAGE="nurllang/nurl"
 HOST_PORT=8000
 NO_CACHE=""
 RM_FLAG=""

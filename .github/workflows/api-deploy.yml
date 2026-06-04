@@ -1,0 +1,89 @@
+name: Deploy playground API
+
+# Builds the NURL toolchain image (nurlapi/Dockerfile), pushes it to Docker Hub
+# under an explicit semver tag (nurllang/nurl:v1.2.3 — no :latest), then pins
+# cloudflare/Dockerfile's FROM to that exact tag and deploys the Cloudflare
+# Container Worker in cloudflare/. Pinning makes each deploy reproducible.
+# Triggered by pushing a v* tag, or manually via the Actions tab.
+#
+# Required GitHub Actions repo secrets:
+#   DOCKERHUB_USERNAME, DOCKERHUB_TOKEN  — Docker Hub push credentials
+#   CLOUDFLARE_API_TOKEN                 — token with Workers + Containers edit rights
+#   CLOUDFLARE_ACCOUNT_ID                — Cloudflare account id
+# When CLOUDFLARE_API_TOKEN is unset / still the REPLACE_ME placeholder every
+# step skips and the job is a green no-op (e.g. on forks).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # `secrets` can't be used in an `if:` directly, so derive a boolean in
+    # job-level `env` and gate each step on it.
+    env:
+      DEPLOY_ENABLED: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_API_TOKEN != 'REPLACE_ME' }}
+    steps:
+      - if: env.DEPLOY_ENABLED == 'true'
+        uses: actions/checkout@v4
+
+      # Tag pushes give v1.2.3; a manual run on a branch has no tag, so fall
+      # back to a short-sha label for the image version tag.
+      - name: Derive image version tag
+        if: env.DEPLOY_ENABLED == 'true'
+        id: ver
+        run: |
+          v="${GITHUB_REF_NAME}"
+          case "$v" in v*) ;; *) v="manual-$(git rev-parse --short HEAD)";; esac
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - if: env.DEPLOY_ENABLED == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: env.DEPLOY_ENABLED == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & push API image
+        if: env.DEPLOY_ENABLED == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: nurlapi/Dockerfile
+          push: true
+          tags: nurllang/nurl:${{ steps.ver.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - if: env.DEPLOY_ENABLED == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Cloudflare deps
+        if: env.DEPLOY_ENABLED == 'true'
+        working-directory: cloudflare
+        run: npm ci
+
+      # Point the container image at the exact tag we just pushed (no :latest),
+      # so this deploy is reproducible. The edit is ephemeral (CI checkout only).
+      - name: Pin container image to released version
+        if: env.DEPLOY_ENABLED == 'true'
+        run: |
+          sed -i -E "s#^FROM docker\.io/nurllang/nurl:.*#FROM docker.io/nurllang/nurl:${{ steps.ver.outputs.version }}#" cloudflare/Dockerfile
+          grep '^FROM' cloudflare/Dockerfile
+
+      # wrangler pulls the pinned image, retags it into the Cloudflare managed
+      # registry and deploys the Worker + Container.
+      - name: Deploy to Cloudflare
+        if: env.DEPLOY_ENABLED == 'true'
+        working-directory: cloudflare
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

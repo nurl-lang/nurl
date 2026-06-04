@@ -1,17 +1,16 @@
 name: Deploy registry Worker
 
-# Deploys the NURL package registry (registry/) to Cloudflare on pushes to
-# main that touch it. Requires two GitHub Actions repo secrets (placeholders
-# are pre-created; fill them in Settings → Secrets and variables → Actions):
+# Deploys the NURL package registry (registry/) to Cloudflare. The registry
+# changes rarely, so this is triggered manually from the Actions tab
+# (Run workflow) rather than on every push. Requires two GitHub Actions repo
+# secrets (placeholders are pre-created; fill them in Settings → Secrets and
+# variables → Actions):
 #   CLOUDFLARE_API_TOKEN   — a token with Workers + R2 + D1 edit rights
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
 # Runtime secrets (GITHUB_CLIENT_SECRET, TOKEN_PEPPER) are NOT here — they
 # are set once with `wrangler secret put` (see registry/DEPLOY.md).
 
 on:
-  push:
-    branches: [main]
-    paths: ["registry/**", ".github/workflows/registry-deploy.yml"]
   workflow_dispatch: {}
 
 jobs:
