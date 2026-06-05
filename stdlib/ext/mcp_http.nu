@@ -75,16 +75,23 @@
 //   * On the None arm, the placeholder Json (a JNull node) is freed
 //     by the handler. Cost is one tiny allocation per notification.
 //
+// Stateful transport (sessions + SSE + reverse RPC) — SHIPPED. The
+// `mcp_http_handler_session store dispatch` handler (bottom of this file,
+// built on `mcp_session.nu`) issues an `Mcp-Session-Id` on `initialize`,
+// validates it on later requests (404 on an unknown id), drains a
+// per-session outbound queue to SSE `message` events on GET, settles
+// server→client (reverse) RPC responses (`sampling/createMessage`), and
+// tears the session down on DELETE. The `mcp_sse_*` chunked helpers give
+// a custom accept loop the pieces for a continuous long-lived stream.
+// The plain `mcp_http_handler` below stays the stateless single/batch
+// path.
+//
 // Limitations / not yet implemented (each is straight-line work, just
 // outside the MVP):
-//   * GET /mcp continuous SSE stream — v2 returns a single ready
-//     event then closes the connection. Pushing notifications over
-//     time needs a notification queue + Last-Event-ID resumption + a
-//     custom accept loop using the chunked streaming primitives
-//     (`response_begin_chunked` / `_write_chunk` / `_end_chunked`).
-//   * Mcp-Session-Id state pinning — v2 echoes the header but stores
-//     no per-session state. Stateful dispatch needs a session-id →
-//     state map + per-session dispatcher closure.
+//   * Last-Event-ID resumption for the continuous SSE stream (the queue
+//     is fire-and-forget; a dropped connection loses un-flushed events).
+//   * Session-aware handler is single-request only — batch arrays still
+//     go through the stateless `mcp_http_handler`.
 //   * (BATCH NOW SHIPPED) Top-level `[req1, req2, ...]` arrays route
 //     through `dispatch` per element; non-notification responses are
 //     collected into an array response; pure-notification batches
@@ -96,6 +103,7 @@
 //     using `http_router.nu`'s closure-wrapping pattern.
 
 $ `stdlib/ext/mcp.nu`
+$ `stdlib/ext/mcp_session.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
@@ -391,4 +399,268 @@ s host i port
         }
         F e → ^ @ !v NetErr { F e }
     }
+}
+
+// ── Stateful session transport (sessions + SSE + reverse RPC) ─────────
+//
+// `mcp_http_handler_session` upgrades the stateless handler with the
+// `McpSessionStore` from `mcp_session.nu`:
+//
+//   * POST initialize → a fresh session id is minted and returned in the
+//     `Mcp-Session-Id` response header. The client echoes it on every
+//     later request.
+//   * POST with a `Mcp-Session-Id` that the store does not know → 404
+//     (per the MCP spec's "session expired" semantics). A request with
+//     NO session id is allowed through (lenient — many tools omit it
+//     until they've seen one).
+//   * POST that is itself a JSON-RPC RESPONSE (no `method`, carries
+//     `result`/`error`) → routed to `mcp_session_resolve_rpc`, settling
+//     a server→client reverse RPC (e.g. `sampling/createMessage`); the
+//     server replies 202 Accepted.
+//   * GET → drains the session's outbound queue and writes each queued
+//     message as an SSE `message` event (a real notification flush, not
+//     the static stub). With no/invalid session it emits a `ready` event.
+//   * DELETE → tears the session down in the store.
+//
+// Batch arrays are not handled here — point batch clients at the
+// stateless `mcp_http_handler`; sessions are a single-request flow.
+//
+// For a CONTINUOUS (long-lived) SSE stream, a custom accept loop owns
+// the TcpConn and uses the `mcp_sse_*` chunked helpers below; the
+// per-request GET drain above is the simple, handler-compatible path.
+
+@ __mcp_session_get_method Json req → s {
+    : ?Json mo ( json_obj_get req `method` )
+    ^ ?? mo {
+        T mj → { ? ( json_is_str mj ) { ^ ( json_str_data mj ) } {} ^ `` }
+        F → ``
+    }
+}
+
+@ __mcp_req_is_response Json req → b {
+    // A JSON-RPC response carries result/error and no method.
+    ? ( json_obj_has req `method` ) { ^ F } {}
+    ^ | ( json_obj_has req `result` ) ( json_obj_has req `error` )
+}
+
+@ mcp_http_handler_session
+McpSessionStore store
+( @ ?Json Json ) dispatch
+→ ( @ HttpResponse HttpRequest ) {
+    ^ \ HttpRequest req → HttpResponse {
+        : s rm ( string_data . req method )
+
+        ? != 0 ( nurl_str_eq rm `OPTIONS` ) {
+            : HttpResponse pre ( response_status_only 204 )
+            ( response_set_header pre `Access-Control-Allow-Methods` `POST, GET, DELETE, OPTIONS` )
+            ( response_set_header pre `Access-Control-Max-Age` `86400` )
+            ( __mcp_http_apply_cors pre )
+            ( __mcp_http_echo_session req pre )
+            ^ pre
+        } {}
+
+        // GET: flush the session's outbound queue as SSE events.
+        ? != 0 ( nurl_str_eq rm `GET` ) {
+            : String body ( string_new )
+            : ~ b have F
+            : ?String sido ( header_get . req headers `Mcp-Session-Id` )
+            ?? sido {
+                T s → {
+                    ? ( mcp_session_valid store ( string_data s ) ) {
+                        = have T
+                        : ( Vec Json ) q ( mcp_session_drain_notify store ( string_data s ) )
+                        : i n ( vec_len [Json] q )
+                        : ~ i k 0
+                        ~ < k n {
+                            : ?Json e ( vec_get [Json] q k )
+                            ?? e {
+                                T jv → {
+                                    : String f ( mcp_sse_frame `message` jv )
+                                    ( string_push_str body ( string_data f ) )
+                                    ( string_free f )
+                                    ( json_free jv )
+                                }
+                                F → {}
+                            }
+                            = k + k 1
+                        }
+                        ( vec_free [Json] q )
+                    } {}
+                    ( string_free s )
+                }
+                F _ → {}
+            }
+            ? ! have { ( string_push_str body `event: ready\r\ndata: {"server":"nurl-mcp"}\r\n\r\n` ) } {}
+            : HttpResponse r ( response_text 200 ( string_data body ) )
+            ( string_free body )
+            ( response_set_header r `Content-Type` `text/event-stream` )
+            ( response_set_header r `Cache-Control` `no-cache` )
+            ( __mcp_http_apply_cors r )
+            ( __mcp_http_echo_session req r )
+            ^ r
+        } {}
+
+        // DELETE: tear the session down.
+        ? != 0 ( nurl_str_eq rm `DELETE` ) {
+            : ?String sido ( header_get . req headers `Mcp-Session-Id` )
+            ?? sido { T s → { ( mcp_session_delete store ( string_data s ) ) ( string_free s ) } F _ → {} }
+            : HttpResponse r ( response_status_only 204 )
+            ( __mcp_http_apply_cors r )
+            ( __mcp_http_echo_session req r )
+            ^ r
+        } {}
+
+        ? != 0 ( nurl_str_eq rm `POST` ) {} {
+            : HttpResponse r ( response_text 405 `Method Not Allowed\n` )
+            ( response_set_header r `Allow` `POST, GET, DELETE, OPTIONS` )
+            ( __mcp_http_apply_cors r )
+            ^ r
+        }
+
+        : i bn ( vec_len [u] . req body )
+        ? <= bn 0 {
+            : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_invalid_request `empty request body` )
+            ( __mcp_http_apply_cors r )
+            ( __mcp_http_echo_session req r )
+            ^ r
+        } {}
+
+        : String body_str ( bytes_to_str . req body )
+        : !Json JsonError pj ( json_parse ( string_data body_str ) )
+        ( string_free body_str )
+
+        ?? pj {
+            T jreq → {
+                // Reverse-RPC response from the client → settle it.
+                ? ( __mcp_req_is_response jreq ) {
+                    : ?String sido ( header_get . req headers `Mcp-Session-Id` )
+                    ?? sido {
+                        T s → { ( mcp_session_resolve_rpc store ( string_data s ) jreq ) ( string_free s ) }
+                        F _ → { ( json_free jreq ) }
+                    }
+                    : HttpResponse r ( response_status_only 202 )
+                    ( __mcp_http_apply_cors r )
+                    ( __mcp_http_echo_session req r )
+                    ^ r
+                } {}
+
+                : s method ( __mcp_session_get_method jreq )
+                : b is_init ( nurl_str_eq method `initialize` )
+
+                // Validate a provided-but-unknown session id (not on init).
+                : ~ b reject F
+                ? == is_init 0 {
+                    : ?String sv ( header_get . req headers `Mcp-Session-Id` )
+                    ?? sv {
+                        T s → {
+                            ? & > ( string_len s ) 0 ! ( mcp_session_valid store ( string_data s ) ) { = reject T } {}
+                            ( string_free s )
+                        }
+                        F _ → {}
+                    }
+                } {}
+                ? reject {
+                    ( json_free jreq )
+                    : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_invalid_request `unknown or expired Mcp-Session-Id` )
+                    = . r status 404
+                    ( __mcp_http_apply_cors r )
+                    ^ r
+                } {}
+
+                : ?Json reply ( dispatch jreq )
+                ( json_free jreq )
+
+                ?? reply {
+                    T resp_json → {
+                        : HttpResponse r ( __mcp_http_response_for_json req resp_json )
+                        // On initialize, mint and attach a new session id.
+                        ? is_init {
+                            : String newsid ( mcp_session_create store )
+                            ( response_set_header r `Mcp-Session-Id` ( string_data newsid ) )
+                            ( string_free newsid )
+                        } {
+                            ( __mcp_http_echo_session req r )
+                        }
+                        ( __mcp_http_apply_cors r )
+                        ^ r
+                    }
+                    F empty → {
+                        ( json_free empty )
+                        : HttpResponse r ( response_status_only 202 )
+                        ( __mcp_http_apply_cors r )
+                        ( __mcp_http_echo_session req r )
+                        ^ r
+                    }
+                }
+            }
+            F _ → {
+                : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_parse_error `request body is not valid JSON` )
+                ( __mcp_http_apply_cors r )
+                ^ r
+            }
+        }
+    }
+}
+
+// ── Continuous chunked SSE primitives (custom accept loop) ────────────
+//
+// Building blocks for a long-lived server→client stream. A custom accept
+// loop that owns the TcpConn calls mcp_sse_begin once, then loops:
+// mcp_sse_flush_session (push any queued messages) + mcp_sse_heartbeat
+// (keep the connection alive) on an interval, and mcp_sse_end on close.
+// Frame bytes are produced by the unit-tested `mcp_sse_frame`.
+
+@ mcp_sse_begin TcpConn conn → !v NetErr {
+    : ( Vec Header ) hs ( vec_new [Header] )
+    ( vec_push [Header] hs ( header_new `Content-Type` `text/event-stream` ) )
+    ( vec_push [Header] hs ( header_new `Cache-Control` `no-cache` ) )
+    ( vec_push [Header] hs ( header_new `Connection` `keep-alive` ) )
+    : !v NetErr r ( response_begin_chunked conn 200 hs )
+    ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
+    ^ r
+}
+
+@ mcp_sse_write_event TcpConn conn s event Json data → !v NetErr {
+    : String f ( mcp_sse_frame event data )
+    : ( Vec u ) bytes ( bytes_from_str ( string_data f ) )
+    ( string_free f )
+    : !v NetErr r ( response_write_chunk conn bytes )
+    ( vec_free [u] bytes )
+    ^ r
+}
+
+// Drain a session's outbound queue to the live stream. Returns the
+// number of events written, or -1 on a write error.
+@ mcp_sse_flush_session TcpConn conn McpSessionStore store s sid → i {
+    : ( Vec Json ) q ( mcp_session_drain_notify store sid )
+    : i n ( vec_len [Json] q )
+    : ~ i k 0
+    : ~ i wrote 0
+    : ~ b err F
+    ~ & ! err < k n {
+        : ?Json e ( vec_get [Json] q k )
+        ?? e {
+            T jv → {
+                : !v NetErr wr ( mcp_sse_write_event conn `message` jv )
+                ?? wr { T _ → { = wrote + wrote 1 } F → { = err T } }
+                ( json_free jv )
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ( vec_free [Json] q )
+    ? err { ^ -1 } {}
+    ^ wrote
+}
+
+@ mcp_sse_heartbeat TcpConn conn → !v NetErr {
+    : ( Vec u ) bytes ( bytes_from_str `: keep-alive\r\n\r\n` )
+    : !v NetErr r ( response_write_chunk conn bytes )
+    ( vec_free [u] bytes )
+    ^ r
+}
+
+@ mcp_sse_end TcpConn conn → !v NetErr {
+    ^ ( response_end_chunked conn )
 }
