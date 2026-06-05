@@ -15,6 +15,11 @@
 //   ( b64_decode s )           → ! String ParseErr   standard, padding optional
 //   ( b64_url_encode s )       → String              URL-safe (- _), no padding
 //   ( b64_url_decode s )       → ! String ParseErr   URL-safe, padding optional
+//   ( b32_encode s )           → String              standard alphabet, padded
+//   ( b32_encode_len s i )     → String              binary-safe (NUL ok)
+//   ( b32_encode_vec (Vec u) ) → String              binary-safe
+//   ( b32_decode s )           → ! String ParseErr   standard, padding optional,
+//                                                     case-insensitive (TOTP)
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/errors.nu`
@@ -235,6 +240,147 @@ $ `stdlib/core/errors.nu`
 @ b64_url_decode s str → !String ParseErr {
     : String out ( string_with_cap ( nurl_str_len str ) )
     : !v ParseErr r ( __b64_decode_into out str T )
+    ?? r {
+        T _ → { ^ @ !String ParseErr { T out } }
+        F e → {
+            ( string_free out )
+            ^ @ !String ParseErr { F e }
+        }
+    }
+}
+
+// ── Base32 (RFC 4648) ───────────────────────────────────────────────
+//
+// Standard alphabet `A-Z2-7`, padded with `=` to an 8-char boundary.
+// This is the alphabet RFC 6238 TOTP secrets use. The decoder is
+// case-insensitive, ignores ASCII whitespace, and treats padding as
+// optional, so a bare uppercase TOTP secret decodes without massaging.
+
+// Encode index n in 0..31 to its alphabet character.
+@ __b32_digit i n → i {
+    ? < n 26 { ^ + 65 n } {}  // 'A' + n
+    ^ + 50 - n 26  // '2' + (n-26)
+}
+
+// Binary-safe emitter. Processes exactly n_in bytes from str, packing
+// 5 bits per output char via an MSB-first bit accumulator. Trailing
+// bits are zero-padded up to the final 5-bit group; `pad` then appends
+// `=` to the next 8-char boundary (count fixed by n_in mod 5).
+@ __b32_emit String out s str i n_in b pad → v {
+    : *u data # *u str
+    : ~ i acc 0
+    : ~ i nbits 0
+    : ~ i i 0
+    ~ < i n_in {
+        : i bb & 255 # i . data i
+        = acc + * acc 256 bb
+        = nbits + nbits 8
+        = i + i 1
+        ~ >= nbits 5 {
+            = nbits - nbits 5
+            ( string_push_char out ( __b32_digit & 31 >> acc nbits ) )
+            : i mask - << 1 nbits 1
+            = acc & acc mask
+        }
+    }
+    ? > nbits 0 {
+        // Left-justify the residual bits into a final 5-bit group.
+        ( string_push_char out ( __b32_digit & 31 << acc - 5 nbits ) )
+    } {}
+    ? pad {
+        : i rem % n_in 5
+        : ~ i padn 0
+        ? == rem 1 { = padn 6 } {}
+        ? == rem 2 { = padn 4 } {}
+        ? == rem 3 { = padn 3 } {}
+        ? == rem 4 { = padn 1 } {}
+        : ~ i p 0
+        ~ < p padn {
+            ( string_push_char out 61 )  // '='
+            = p + p 1
+        }
+    } {}
+    ( __string_seal out )
+}
+
+@ b32_encode s str → String {
+    : i len ( nurl_str_len str )
+    ^ ( b32_encode_len str len )
+}
+
+@ b32_encode_len s str i len → String {
+    : String out ( string_with_cap * 8 + 1 / len 5 )
+    ( __b32_emit out str len T )
+    ^ out
+}
+
+@ b32_encode_vec ( Vec u ) v → String {
+    : i len ( vec_len [u] v )
+    : s data # s ( vec_data [u] v )
+    ^ ( b32_encode_len data len )
+}
+
+// Returns 0..31, or -1 on non-alphabet byte. Padding `=` (61) returns
+// -2. Both letter cases map to the same value (case-insensitive).
+@ __b32_value i c → i {
+    ? & >= c 65 <= c 90 { ^ - c 65 } {}  // A-Z → 0..25
+    ? & >= c 97 <= c 122 { ^ - c 97 } {}  // a-z → 0..25
+    ? & >= c 50 <= c 55 { ^ + 26 - c 50 } {}  // '2'-'7' → 26..31
+    ? == c 61 { ^ -2 } {}  // '='
+    ^ -1
+}
+
+// Internal decoder: ignores ASCII whitespace, fills `out` with bytes,
+// returns ! v ParseErr.
+@ __b32_decode_into String out s str → !v ParseErr {
+    : i len ( nurl_str_len str )
+    : ~ i pad 0
+    : ~ i acc 0
+    : ~ i nbits 0
+    : ~ i i 0
+    ~ < i len {
+        : i c ( nurl_str_get str i )
+        = i + i 1
+        // Skip ASCII whitespace: space, tab, lf, cr, ff, vt
+        ? | | | | | == c 32 == c 9 == c 10 == c 13 == c 12 == c 11 {} {
+            : i v ( __b32_value c )
+            ? == v -2 {
+                = pad + pad 1
+                ? > pad 6 {
+                    ^ @ !v ParseErr { F @ ParseErr { TrailingGarbage } }
+                } {}
+            } {
+                ? > pad 0 {
+                    // Non-padding char after '=' is malformed.
+                    ^ @ !v ParseErr { F @ ParseErr { TrailingGarbage } }
+                } {}
+                ? < v 0 {
+                    ^ @ !v ParseErr { F @ ParseErr { BadFormat } }
+                } {}
+                = acc + * acc 32 v
+                = nbits + nbits 5
+                ? >= nbits 8 {
+                    = nbits - nbits 8
+                    : i mask - << 1 nbits 1
+                    : i byte & 255 >> acc nbits
+                    ( string_push_char out byte )
+                    = acc & acc mask
+                } {}
+            }
+        }
+    }
+    // Partial group with non-zero residual bits is malformed.
+    ? > nbits 0 {
+        ? != acc 0 {
+            ^ @ !v ParseErr { F @ ParseErr { BadFormat } }
+        } {}
+    } {}
+    ^ @ !v ParseErr { T 0 }
+}
+
+@ b32_decode s str → !String ParseErr {
+    : String out ( string_with_cap ( nurl_str_len str ) )
+    : !v ParseErr r ( __b32_decode_into out str )
     ?? r {
         T _ → { ^ @ !String ParseErr { T out } }
         F e → {
