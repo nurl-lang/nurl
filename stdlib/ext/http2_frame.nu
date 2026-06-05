@@ -287,6 +287,19 @@ $ `stdlib/std/net.nu`
     }
 }
 
+// Client-side counterpart to h2_read_preface: write the 24-byte
+// connection preface. A client MUST send this (RFC 9113 §3.4) as the
+// very first bytes on the connection, before its SETTINGS frame.
+@ h2_write_preface TcpConn conn → !v H2FrameErr {
+    : ( Vec u ) buf ( bytes_from_str ( h2_conn_preface ) )
+    : !v NetErr wr ( tcp_write_all conn buf )
+    ( vec_free [u] buf )
+    ?? wr {
+        T _ → { ^ @ !v H2FrameErr { T 0 } }
+        F _ → { ^ @ !v H2FrameErr { F H2FrameWriteIo } }
+    }
+}
+
 // Read one frame off `conn`. Honours `max_frame_size` (peer SETTINGS) —
 // frames larger than that MUST be rejected with FRAME_SIZE_ERROR per
 // RFC 9113 §4.2.

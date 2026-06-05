@@ -975,7 +975,7 @@ $ `stdlib/ext/http2_hpack.nu`
                 // While a HEADERS+CONTINUATION sequence is in flight,
                 // ONLY CONTINUATION frames on that stream are allowed
                 // (§6.10).
-                ? & != . cur partial_headers_stream 0 {
+                ? != . cur partial_headers_stream 0 {
                     ? | != ft ( h2_type_continuation )
                     != sid . cur partial_headers_stream
                     { = err H2ConnProtocol = ok F } {}
