@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Seedable, deterministic PRNG — `stdlib/std/rng.nu` (xoshiro256\*\*).**
+  Companion to `std/random.nu`'s OS CSPRNG, which draws from the kernel
+  entropy pool and *cannot be seeded*. `rng.nu` gives a reproducible stream:
+  `( rng_seed s )` expands any i64 seed into a 256-bit xoshiro256\*\* state
+  via SplitMix64 (so even `0`/`1` produce well-distributed, uncorrelated
+  streams), and the same seed yields a **byte-identical sequence on every
+  platform and build** — the determinism guarantee extends here because the
+  generator is integer-only (no float state, `>>` lowers to a logical
+  `lshr` on the `u64`-typed words). Surface: `rng_next` (raw 64-bit),
+  `rng_below` (unbiased, rejection-sampled `[0,n)`), `rng_range`, `rng_u01`
+  (uniform double in `[0,1)`, 53-bit), `rng_bool`, `rng_free`. Opaque-handle
+  lifecycle (same shape as `Arena`/`Channel`/`String`); state mutates in
+  place. **Not** a CSPRNG — predictable, so never for security; use
+  `std/random.nu` there. Regression `compiler/tests/rng_seedable.nu` pins
+  the exact stream for seeds `0` and `0x1234` against an independent
+  reference implementation, and checks determinism, `rng_below` bounds, and
+  the inverted-range guard.
+
 ## [0.9.5] — 2026-06-04
 
 ### Added
