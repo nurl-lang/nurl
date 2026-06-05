@@ -9,6 +9,11 @@ nurlc.wasm
 *.ll
 *.wasm
 
+# Playground demo wasm modules are shipped assets, not build output — they must
+# ride in the deployed image (the CI deploy builds from the committed tree).
+!nurlapi/static/c64.wasm
+!nurlapi/static/gameboy_gb.wasm
+
 # Compiler output (keep the last good version)
 !compiler/nurlc_lastgood.ll
 

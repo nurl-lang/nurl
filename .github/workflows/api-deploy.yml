@@ -12,6 +12,17 @@ name: Deploy playground API
 #   CLOUDFLARE_ACCOUNT_ID                — Cloudflare account id
 # When CLOUDFLARE_API_TOKEN is unset / still the REPLACE_ME placeholder every
 # step skips and the job is a green no-op (e.g. on forks).
+#
+# Optional secret:
+#   C64_ROMS_TGZ_B64  — base64 of a gzipped tar of the copyrighted Commodore
+#                       C64 ROMs (kernal.bin, basic.bin, chargen.bin). These
+#                       are NOT committed (see nurlapi/.gitignore); they are
+#                       injected into the build context so the playground can
+#                       serve /c64roms/*.bin. Generate with:
+#                         tar -cz -C nurlapi/static/c64roms \
+#                             kernal.bin basic.bin chargen.bin | base64 -w0
+#                         gh secret set C64_ROMS_TGZ_B64 < <paste>
+#                       Unset → C64 demo falls back to its in-page file-picker.
 
 on:
   push:
@@ -25,6 +36,7 @@ jobs:
     # job-level `env` and gate each step on it.
     env:
       DEPLOY_ENABLED: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_API_TOKEN != 'REPLACE_ME' }}
+      ROMS_ENABLED: ${{ secrets.C64_ROMS_TGZ_B64 != '' }}
     steps:
       - if: env.DEPLOY_ENABLED == 'true'
         uses: actions/checkout@v4
@@ -48,6 +60,19 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # The C64 KERNAL/BASIC/CHARGEN ROMs are copyrighted Commodore binaries and
+      # are deliberately NOT committed (nurlapi/.gitignore: static/c64roms/).
+      # Materialize them into the build context from the base64'd tarball secret
+      # so nurlapi/Dockerfile's `COPY .../static` picks them up and the worker can
+      # serve /c64roms/*.bin. Unset secret → step skips and c64demo.html falls
+      # back to its in-page ROM file-picker.
+      - name: Inject C64 ROMs into build context
+        if: env.DEPLOY_ENABLED == 'true' && env.ROMS_ENABLED == 'true'
+        run: |
+          mkdir -p nurlapi/static/c64roms
+          echo "${{ secrets.C64_ROMS_TGZ_B64 }}" | base64 -d | tar -xz -C nurlapi/static/c64roms
+          ls -l nurlapi/static/c64roms
 
       - name: Build & push API image
         if: env.DEPLOY_ENABLED == 'true'
