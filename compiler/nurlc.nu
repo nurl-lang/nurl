@@ -5306,7 +5306,11 @@
                 ? != 0 g_auto_drop_strings
                 { : s arm_impl_key ( nurl_str_cat `drop##` pt0_eff )
                     : s arm_impl_mangle ( nurl_sym_get g_impl_name_syms arm_impl_key )
-                    ? != 0 ( nurl_str_len arm_impl_mangle )
+                    // Skip COMPILER-auto drops on a match-arm payload — it is
+                    // commonly a borrow (vec_get / accessor); only a user
+                    // `% Drop` consumes its arm payload.
+                    ? & != 0 ( nurl_str_len arm_impl_mangle )
+                    == 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms ( nurl_str_cat `autodrop##` pt0_eff ) ) )
                     { ( mem_own_add_user_drop syms vp0 pt0_eff ) }
                     {}
                 }
@@ -5363,7 +5367,8 @@
                 ( nurl_sym_get syms ( nurl_str_cat pattern_name `__payload__1__unsigned` ) ) )
                 ? != 0 g_auto_drop_strings
                 { : s a1_key ( nurl_str_cat `drop##` pt1 )
-                    ? != 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms a1_key ) )
+                    ? & != 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms a1_key ) )
+                    == 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms ( nurl_str_cat `autodrop##` pt1 ) ) )
                     { ( mem_own_add_user_drop syms vp1 pt1 ) }
                     {}
                 }
@@ -5407,7 +5412,8 @@
                 ( nurl_sym_get syms ( nurl_str_cat pattern_name `__payload__2__unsigned` ) ) )
                 ? != 0 g_auto_drop_strings
                 { : s a2_key ( nurl_str_cat `drop##` pt2 )
-                    ? != 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms a2_key ) )
+                    ? & != 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms a2_key ) )
+                    == 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms ( nurl_str_cat `autodrop##` pt2 ) ) )
                     { ( mem_own_add_user_drop syms vp2 pt2 ) }
                     {}
                 }
@@ -11555,6 +11561,340 @@
     ^ F
 }
 
+// ── Auto-generated recursive Drop for boxed-payload enums ─────────────
+//
+// A variant payload that is a multi-field / non-pointer-f0 struct does
+// not fit in the enum's 8-byte ptr slot, so gen_agg_lit heap-boxes it
+// (nurl_alloc). Nothing reclaimed that box → leak. We generate a
+// `drop__<E>` function that tag-dispatches and frees the box(es) of the
+// active variant, and register it as the enum's `% Drop` impl so the
+// existing auto-drop machinery (`:`-binding + void match-arm) fires it at
+// scope exit. The box is compiler-managed memory that no manual code can
+// reach, so freeing it here cannot double-free with user code.
+
+// A payload type is "boxed" iff it is a named, non-pointer STRUCT whose
+// field 0 is itself non-pointer (a single-pointer-handle struct such as
+// String / Vec rides the slot directly; an enum payload is handled by
+// its own drop; a `*`-suffixed pointer payload is not owned here).
+@ __drop_is_boxed s pt i syms → b {
+    : i n ( nurl_str_len pt )
+    ? == 0 n { ^ F } {}
+    ? != ( nurl_str_get pt 0 ) 37 { ^ F } {}
+    ? == ( nurl_str_get pt - n 1 ) 42 { ^ F } {}
+    : s sname ( nurl_str_slice pt 1 - n 1 )
+    ? != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat sname `__variants` ) ) ) { ^ F } {}
+    : s f0 ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_0` `__type` ) )
+    ? == 0 ( nurl_str_len f0 ) { ^ F } {}
+    ? == ( nurl_str_get f0 - ( nurl_str_len f0 ) 1 ) 42 { ^ F } {}
+    ^ T
+}
+
+// True if variant `vname` has at least one boxed payload slot.
+@ __drop_variant_has_box s vname i syms → b {
+    : s pcs ( nurl_sym_get syms ( nurl_str_cat vname `__paycount` ) )
+    : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
+    : ~ i i 0
+    : ~ b r F
+    ~ < i pc {
+        : s pt ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int i ) ) )
+        ? ( __drop_is_boxed pt syms ) { = r T } {}
+        = i + i 1
+    }
+    ^ r
+}
+
+// Strip a leading `%` to form a drop-function name suffix.
+@ __drop_mangle s ty → s {
+    ? & != 0 ( nurl_str_len ty ) == ( nurl_str_get ty 0 ) 37
+    { ^ ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 ) } {}
+    ^ ty
+}
+
+// `%Vec__<m>` → the element's LLVM type (via demangle).
+@ __vec_elem_llvm s ty → s {
+    ^ ( demangle_type ( nurl_str_slice ty 6 - ( nurl_str_len ty ) 6 ) )
+}
+
+// Fresh local register/label name (%d<n>) backed by a 1-slot counter.
+@ __dr s ctr → s {
+    : i n ( nurl_peek ctr 0 )
+    ( nurl_poke ctr 0 + n 1 )
+    ^ ( nurl_str_cat `%d` ( nurl_str_int n ) )
+}
+
+// Does an owned value of LLVM type `ty` need a drop? String / Vec own
+// storage unconditionally; a named struct needs one iff a field does; a
+// named enum iff a variant payload does. Vec/String short-circuit so the
+// struct↔enum recursion is finite (value-nesting is acyclic).
+@ __type_needs_drop s ty i syms → b {
+    ? == 0 ( nurl_str_len ty ) { ^ F } {}
+    ? ( seq ty `%String` ) { ^ T } {}
+    ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ T } {}
+    ? != ( nurl_str_get ty 0 ) 37 { ^ F } {}
+    ? == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
+    : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
+    : s vlist ( nurl_sym_get syms ( nurl_str_cat sname `__variants` ) )
+    ? != 0 ( nurl_str_len vlist ) { ^ ( __enum_needs_drop vlist syms ) } {}
+    : s fcs ( nurl_sym_get syms ( nurl_str_cat sname `__field_count` ) )
+    : i fc ? != 0 ( nurl_str_len fcs ) ( nurl_str_to_int fcs ) 0
+    : ~ i i 0
+    : ~ b r F
+    ~ < i fc {
+        : s ft ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
+        ? ( __type_needs_drop ft syms ) { = r T } {}
+        = i + i 1
+    }
+    ^ r
+}
+
+// One payload type owns a resource if it is String / Vec / a boxed
+// struct / a wide (boxed) enum. (Narrow tag-only enum or scalar: no.)
+@ __payload_needs_drop s pt i syms → b {
+    ? == 0 ( nurl_str_len pt ) { ^ F } {}
+    ? ( seq pt `%String` ) { ^ T } {}
+    ? != 0 ( nurl_str_starts pt `%Vec__` ) { ^ T } {}
+    ? ( __drop_is_boxed pt syms ) { ^ T } {}
+    ? & == ( nurl_str_get pt 0 ) 37 != ( nurl_str_get pt - ( nurl_str_len pt ) 1 ) 42 {
+        : s sn ( nurl_str_slice pt 1 - ( nurl_str_len pt ) 1 )
+        ? != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat sn `__variants` ) ) ) {
+            : s mp ( nurl_sym_get syms ( nurl_str_cat sn `__max_payloads` ) )
+            ? & != 0 ( nurl_str_len mp ) > ( nurl_str_to_int mp ) 0 { ^ T } {}
+        } {}
+    } {}
+    ^ F
+}
+
+@ __enum_needs_drop s variants i syms → b {
+    : ~ s scan variants
+    : ~ b r F
+    ~ != 0 ( nurl_str_len scan ) {
+        : s vname ( str_first_word scan )
+        = scan ( str_skip_word scan )
+        : s pcs ( nurl_sym_get syms ( nurl_str_cat vname `__paycount` ) )
+        : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
+        : ~ i i 0
+        ~ < i pc {
+            : s pt ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int i ) ) )
+            ? ( __payload_needs_drop pt syms ) { = r T } {}
+            = i + i 1
+        }
+    }
+    ^ r
+}
+
+// Emit IR that drops an in-register value `valreg` of LLVM type `ty`.
+// String / Vec reclaim their backing store via nurl_vec_drop (passing a
+// drop_ptr thunk for owned elements); a struct / enum delegates to its
+// generated drop__ function.
+@ emit_drop_value s ty s valreg s ctr i syms → v {
+    ? ( seq ty `%String` ) {
+        : s c ( __dr ctr )
+        ( nurl_print `  ` ) ( nurl_print c ) ( nurl_print ` = extractvalue %String ` ) ( nurl_print valreg ) ( nurl_print `, 0\n` )
+        ( nurl_print `  call void @nurl_vec_drop(i8* ` ) ( nurl_print c ) ( nurl_print `, ptr null, i64 1)\n` )
+        ^ v
+    } {}
+    ? != 0 ( nurl_str_starts ty `%Vec__` ) {
+        : s c ( __dr ctr )
+        ( nurl_print `  ` ) ( nurl_print c ) ( nurl_print ` = extractvalue ` ) ( nurl_print ty ) ( nurl_print ` ` ) ( nurl_print valreg ) ( nurl_print `, 0\n` )
+        : s elem ( __vec_elem_llvm ty )
+        ? ( __type_needs_drop elem syms ) {
+            : s szp ( __dr ctr )
+            ( nurl_print `  ` ) ( nurl_print szp ) ( nurl_print ` = getelementptr ` ) ( nurl_print elem ) ( nurl_print `, ` ) ( nurl_print elem ) ( nurl_print `* null, i32 1\n` )
+            : s szi ( __dr ctr )
+            ( nurl_print `  ` ) ( nurl_print szi ) ( nurl_print ` = ptrtoint ` ) ( nurl_print elem ) ( nurl_print `* ` ) ( nurl_print szp ) ( nurl_print ` to i64\n` )
+            ( nurl_print `  call void @nurl_vec_drop(i8* ` ) ( nurl_print c ) ( nurl_print `, ptr @drop_ptr__` ) ( nurl_print ( __drop_mangle elem ) ) ( nurl_print `, i64 ` ) ( nurl_print szi ) ( nurl_print `)\n` )
+        } {
+            ( nurl_print `  call void @nurl_vec_drop(i8* ` ) ( nurl_print c ) ( nurl_print `, ptr null, i64 1)\n` )
+        }
+        ^ v
+    } {}
+    ? & == ( nurl_str_get ty 0 ) 37 != ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 {
+        ? ( __type_needs_drop ty syms ) {
+            ( nurl_print `  call void @drop__` ) ( nurl_print ( __drop_mangle ty ) ) ( nurl_print `(` ) ( nurl_print ty ) ( nurl_print ` ` ) ( nurl_print valreg ) ( nurl_print `)\n` )
+        } {}
+        ^ v
+    } {}
+    ^ v
+}
+
+// `define void @drop_ptr__<m>(i8* %p)` — load an element through `%p`
+// and drop it. Passed by value to nurl_vec_drop for owned Vec elements.
+@ emit_drop_ptr_thunk s elem i syms → v {
+    : s m ( __drop_mangle elem )
+    : s ctr ( nurl_zalloc 8 )
+    ( nurl_print `define void @drop_ptr__` ) ( nurl_print m ) ( nurl_print `(i8* %p) {\nentry:\n` )
+    : s ep ( __dr ctr )
+    ( nurl_print `  ` ) ( nurl_print ep ) ( nurl_print ` = bitcast i8* %p to ` ) ( nurl_print elem ) ( nurl_print `*\n` )
+    : s ev ( __dr ctr )
+    ( nurl_print `  ` ) ( nurl_print ev ) ( nurl_print ` = load ` ) ( nurl_print elem ) ( nurl_print `, ` ) ( nurl_print elem ) ( nurl_print `* ` ) ( nurl_print ep ) ( nurl_print `\n` )
+    ( emit_drop_value elem ev ctr syms )
+    ( nurl_print `  ret void\n}\n` )
+}
+
+@ emit_drop_struct_fn s sname i syms → v {
+    : s ctr ( nurl_zalloc 8 )
+    ( nurl_print `define void @drop__` ) ( nurl_print sname )
+    ( nurl_print `(%` ) ( nurl_print sname ) ( nurl_print ` %v) {\nentry:\n` )
+    : s fcs ( nurl_sym_get syms ( nurl_str_cat sname `__field_count` ) )
+    : i fc ? != 0 ( nurl_str_len fcs ) ( nurl_str_to_int fcs ) 0
+    : ~ i i 0
+    ~ < i fc {
+        : s ft ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
+        ? ( __type_needs_drop ft syms ) {
+            : s fr ( __dr ctr )
+            ( nurl_print `  ` ) ( nurl_print fr ) ( nurl_print ` = extractvalue %` ) ( nurl_print sname ) ( nurl_print ` %v, ` ) ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
+            ( emit_drop_value ft fr ctr syms )
+        } {}
+        = i + i 1
+    }
+    ( nurl_print `  ret void\n}\n` )
+}
+
+// Drop one payload slot (enum field index `fidx`) of a known payload
+// type. String / Vec slots hold the unwrapped handle (its f0); a boxed
+// struct / wide-enum slot holds a heap-box pointer (load → drop → free).
+@ emit_drop_enum_payload s ename s pt i fidx s ctr i syms → v {
+    : s slot ( __dr ctr )
+    ( nurl_print `  ` ) ( nurl_print slot ) ( nurl_print ` = extractvalue %` ) ( nurl_print ename ) ( nurl_print ` %v, ` ) ( nurl_print ( nurl_str_int fidx ) ) ( nurl_print `\n` )
+    ? ( seq pt `%String` ) {
+        ( nurl_print `  call void @nurl_vec_drop(i8* ` ) ( nurl_print slot ) ( nurl_print `, ptr null, i64 1)\n` )
+        ^ v
+    } {}
+    ? != 0 ( nurl_str_starts pt `%Vec__` ) {
+        : s elem ( __vec_elem_llvm pt )
+        ? ( __type_needs_drop elem syms ) {
+            : s szp ( __dr ctr )
+            ( nurl_print `  ` ) ( nurl_print szp ) ( nurl_print ` = getelementptr ` ) ( nurl_print elem ) ( nurl_print `, ` ) ( nurl_print elem ) ( nurl_print `* null, i32 1\n` )
+            : s szi ( __dr ctr )
+            ( nurl_print `  ` ) ( nurl_print szi ) ( nurl_print ` = ptrtoint ` ) ( nurl_print elem ) ( nurl_print `* ` ) ( nurl_print szp ) ( nurl_print ` to i64\n` )
+            ( nurl_print `  call void @nurl_vec_drop(i8* ` ) ( nurl_print slot ) ( nurl_print `, ptr @drop_ptr__` ) ( nurl_print ( __drop_mangle elem ) ) ( nurl_print `, i64 ` ) ( nurl_print szi ) ( nurl_print `)\n` )
+        } {
+            ( nurl_print `  call void @nurl_vec_drop(i8* ` ) ( nurl_print slot ) ( nurl_print `, ptr null, i64 1)\n` )
+        }
+        ^ v
+    } {}
+    // boxed struct OR wide enum: load the payload through the box, drop
+    // it recursively, free the box.
+    : s bp ( __dr ctr )
+    ( nurl_print `  ` ) ( nurl_print bp ) ( nurl_print ` = bitcast i8* ` ) ( nurl_print slot ) ( nurl_print ` to ` ) ( nurl_print pt ) ( nurl_print `*\n` )
+    : s bv ( __dr ctr )
+    ( nurl_print `  ` ) ( nurl_print bv ) ( nurl_print ` = load ` ) ( nurl_print pt ) ( nurl_print `, ` ) ( nurl_print pt ) ( nurl_print `* ` ) ( nurl_print bp ) ( nurl_print `\n` )
+    ( emit_drop_value pt bv ctr syms )
+    ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print slot ) ( nurl_print `)\n` )
+}
+
+@ emit_drop_enum_fn s ename s variants i syms → v {
+    : s ctr ( nurl_zalloc 8 )
+    ( nurl_print `define void @drop__` ) ( nurl_print ename )
+    ( nurl_print `(%` ) ( nurl_print ename ) ( nurl_print ` %v) {\nentry:\n` )
+    ( nurl_print `  %dtag = extractvalue %` ) ( nurl_print ename ) ( nurl_print ` %v, 0\n` )
+    : ~ i vk 0
+    : ~ s rest variants
+    ~ != 0 ( nurl_str_len rest ) {
+        : s vname ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s pcs ( nurl_sym_get syms ( nurl_str_cat vname `__paycount` ) )
+        : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
+        : ~ b vneed F
+        : ~ i ci 0
+        ~ < ci pc {
+            : s pt ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int ci ) ) )
+            ? ( __payload_needs_drop pt syms ) { = vneed T } {}
+            = ci + ci 1
+        }
+        ? vneed {
+            : s cmpr ( __dr ctr )
+            : s ld ( nurl_str_cat `Ld` ( nurl_str_int vk ) )
+            : s ln ( nurl_str_cat `Ln` ( nurl_str_int vk ) )
+            ( nurl_print `  ` ) ( nurl_print cmpr ) ( nurl_print ` = icmp eq i64 %dtag, ` ) ( nurl_print ( nurl_str_int vk ) ) ( nurl_print `\n` )
+            ( nurl_print `  br i1 ` ) ( nurl_print cmpr ) ( nurl_print `, label %` ) ( nurl_print ld ) ( nurl_print `, label %` ) ( nurl_print ln ) ( nurl_print `\n` )
+            ( nurl_print ld ) ( nurl_print `:\n` )
+            : ~ i pi 0
+            ~ < pi pc {
+                : s pt ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) )
+                ? ( __payload_needs_drop pt syms ) {
+                    ( emit_drop_enum_payload ename pt + pi 1 ctr syms )
+                } {}
+                = pi + pi 1
+            }
+            ( nurl_print `  br label %` ) ( nurl_print ln ) ( nurl_print `\n` )
+            ( nurl_print ln ) ( nurl_print `:\n` )
+        } {}
+        = vk + vk 1
+    }
+    ( nurl_print `  ret void\n}\n` )
+}
+
+// Recursively emit the drop graph rooted at `ty` (dedup via dgen## keys
+// in g_impl_name_syms). Marks `ty` done BEFORE recursing so self/mutual
+// references (e.g. Xml ↔ XmlElem ↔ Vec Xml) terminate via forward refs.
+@ gen_drop_for_type s ty i syms → v {
+    ? ! ( __type_needs_drop ty syms ) { ^ v } {}
+    : s mangle ( __drop_mangle ty )
+    : s donekey ( nurl_str_cat `dgen##` mangle )
+    ? != 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms donekey ) ) { ^ v } {}
+    ( nurl_sym_def g_impl_name_syms donekey `1` )
+    ? ( seq ty `%String` ) { ^ v } {}
+    ? != 0 ( nurl_str_starts ty `%Vec__` ) {
+        : s elem ( __vec_elem_llvm ty )
+        ? ( __type_needs_drop elem syms ) {
+            ( gen_drop_for_type elem syms )
+            ( emit_drop_ptr_thunk elem syms )
+        } {}
+        ^ v
+    } {}
+    : s vlist ( nurl_sym_get syms ( nurl_str_cat mangle `__variants` ) )
+    ? != 0 ( nurl_str_len vlist ) {
+        : ~ s scan vlist
+        ~ != 0 ( nurl_str_len scan ) {
+            : s vname ( str_first_word scan )
+            = scan ( str_skip_word scan )
+            : s pcs ( nurl_sym_get syms ( nurl_str_cat vname `__paycount` ) )
+            : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
+            : ~ i i 0
+            ~ < i pc {
+                : s pt ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int i ) ) )
+                ( gen_drop_for_type pt syms )
+                = i + i 1
+            }
+        }
+        ( emit_drop_enum_fn mangle vlist syms )
+        ^ v
+    } {}
+    // struct: recurse field types, then emit
+    : s fcs ( nurl_sym_get syms ( nurl_str_cat mangle `__field_count` ) )
+    : i fc ? != 0 ( nurl_str_len fcs ) ( nurl_str_to_int fcs ) 0
+    : ~ i i 0
+    ~ < i fc {
+        : s ft ( nurl_sym_get syms ( nurl_str_cat3 mangle `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
+        ( gen_drop_for_type ft syms )
+        = i + i 1
+    }
+    ( emit_drop_struct_fn mangle syms )
+}
+
+// Entry: auto-drop is generated ONLY for enums that heap-box a payload
+// (a multi-field / non-pointer-f0 struct) — the box is compiler-managed
+// memory no user code can reach, so reclaiming it (and, recursively, the
+// boxed struct's owned String/Vec/nested fields) cannot collide with the
+// pervasive manual-free model. Enums whose payloads are all single
+// handles (String, Vec) or scalars — Json, TomlValue, Result, Option,
+// … — are deliberately EXCLUDED: they are managed by hand (json_free,
+// …) and an auto-drop would double-free. Returns T (so the caller
+// registers `drop##%E`) iff a drop graph was emitted.
+@ emit_auto_drop s ename s variants i syms → b {
+    : ~ b has_box F
+    : ~ s scan variants
+    ~ != 0 ( nurl_str_len scan ) {
+        : s vname ( str_first_word scan )
+        = scan ( str_skip_word scan )
+        ? ( __drop_variant_has_box vname syms ) { = has_box T } {}
+    }
+    ? ! has_box { ^ F } {}
+    ( gen_drop_for_type ( nurl_str_cat `%` ename ) syms )
+    ^ T
+}
+
 // ── Enum declaration: : | Name { Variant (type?)* } ───────────────
 // Each variant becomes a global i64 constant (tag value 0, 1, …).
 
@@ -11627,6 +11967,24 @@
     // Register the enum type in symbol table
     ( nurl_sym_def syms ename ( nurl_str_cat `%` ename ) )
     ( nurl_sym_def syms ( nurl_str_cat ename `__is_type` ) `1` )
+
+    // Auto-generate a recursive Drop that reclaims heap-boxed struct
+    // payloads. Register it as the enum's `% Drop` impl so `:`-binding /
+    // void match-arm auto-drop fires it — unless the user wrote their own.
+    ? != 0 g_auto_drop_strings {
+        : s dkey ( nurl_str_cat `drop##%` ename )
+        ? == 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms dkey ) ) {
+            ? ( emit_auto_drop ename variants_str syms )
+            { ( nurl_sym_def g_impl_name_syms dkey ename )
+                // Mark this as a COMPILER-auto drop (vs a user `% Drop`).
+                // Auto drops fire only on owned `:`-bindings — never on a
+                // match-arm payload, which is frequently a borrow (vec_get
+                // returns an aliasing copy); dropping it would double-free
+                // the container that still owns the value.
+                ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `autodrop##%` ename ) `1` ) }
+            {}
+        } {}
+    } {}
 
     ( nurl_print `\n` )
 }
@@ -12041,6 +12399,7 @@
     ( emit `declare void @nurl_memset(i8*, i64, i64)` )
     ( emit `declare i64  @nurl_peek(i8*, i64)` )
     ( emit `declare void @nurl_poke(i8*, i64, i64)` )
+    ( emit `declare void @nurl_vec_drop(i8*, ptr, i64)` )
     // nurl_file_* (open/write/write_range/write_byte/close/read_chunk
     // /eof/exists/del/dir_create/dir_remove) are pure-NURL @-fns in
     // stdlib/std/fs.nu, calling libc fopen/fputs/fwrite/fputc/fclose/
