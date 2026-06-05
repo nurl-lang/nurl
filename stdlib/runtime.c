@@ -574,6 +574,29 @@ void nurl_poke(void *base, long long idx, long long val) {
     ((long long*)base)[(size_t)idx] = val;
 }
 
+/* Recursively reclaim a Vec/String backing store. `ctl` is the Vec
+ * control block (slot 0 = data ptr, slot 1 = len, slot 2 = cap). When
+ * `elem_drop` is non-NULL it is invoked on a POINTER to each live
+ * element (`data + i*elem_size`) before the buffer is freed — the
+ * compiler passes a generated `drop_ptr__T` thunk for element types
+ * that own resources, or NULL for trivial elements. Mirrors vec.nu's
+ * free, including the packed-string layout (data sits at ctl+24) where
+ * the data buffer must NOT be freed separately. NULL ctl is a no-op so
+ * an empty/None-derived handle is safe. Used by the auto-generated
+ * Drop functions for boxed-payload enum trees. */
+void nurl_vec_drop(void *ctl, void (*elem_drop)(void*), long long elem_size) {
+    if (!ctl) return;
+    long long *c = (long long*)ctl;
+    void *data = (void*)(intptr_t)c[0];
+    long long len = c[1];
+    if (elem_drop && data && elem_size > 0) {
+        char *base = (char*)data;
+        for (long long i = 0; i < len; i++) elem_drop(base + i*elem_size);
+    }
+    if (data && data != (void*)((char*)ctl + 24)) free(data);
+    free(ctl);
+}
+
 /* Back-compat alias. */
 void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
 

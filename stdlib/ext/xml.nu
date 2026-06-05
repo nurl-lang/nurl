@@ -35,11 +35,19 @@
 // free); accessors that return ? String / String return owned copies the
 // caller frees.
 //
-// Node representation: a tagged struct rather than an enum-with-struct
-// payload. NURL heap-boxes a multi-field struct carried inside an enum
-// variant and the box is not reclaimable from a match arm (it leaks),
-// so `Xml` is a flat struct with a `kind` discriminator — text nodes
-// leave the element fields empty and vice-versa.
+// Node representation: a tagged struct with a `kind` discriminator
+// (text nodes leave the element fields empty and vice-versa). This was
+// ORIGINALLY a workaround — NURL used to heap-box a multi-field struct
+// carried inside an enum variant and never reclaim the box. That box
+// leak is now fixed at the compiler level: a boxed-payload enum gets a
+// compiler-generated recursive Drop that reclaims the box (and the
+// payload's owned String/Vec/nested fields) when an owned value goes out
+// of scope, so an `: | Xml { XText String  XElem XmlElem }` enum tree
+// self-frees with no manual `xml_free` (see compiler/tests/enum_tree_drop.nu
+// for the proof). The flat struct is retained here because the parser's
+// incremental, error-path-heavy construction is simpler with explicit
+// `xml_free` control than with pure scope-exit auto-drop — a style
+// choice now, no longer a forced workaround.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
