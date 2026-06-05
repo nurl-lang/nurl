@@ -481,6 +481,12 @@
 // gen_operand around operand parses, and reset to 0 by the control-flow
 // handlers for their arm/body sub-parses (which ARE legal `^` positions).
 : i g_ret_forbidden 0
+// Non-zero while parsing a `??` match-arm body. The XOR-confusion warning
+// in gen_ret keys off "a non-terminator token follows `^ X` on the same
+// line", but in an unbraced arm body that token is the NEXT ARM's pattern
+// (`T x → ^ x  F _ → …`), not a stray XOR operand — so the warning is
+// suppressed inside arm bodies. Save/restore (nested matches).
+: i g_in_match_arm 0
 : i g_defer_count 0  // number of active defers in the current function
 : i g_generic_syms 0  // sym handle for stored generic function templates (Group E)
 : i g_generic_struct_syms 0  // generic struct templates (Group E-structs).
@@ -1445,7 +1451,9 @@
     : b __xor_blocks | | | | | | | == __xor_nt TT_COLON == __xor_nt TT_EQ
     == __xor_nt TT_SEMICOL == __xor_nt TT_RBRACE == __xor_nt TT_RPAREN
     == __xor_nt TT_RBRACK == __xor_nt TT_LBRACE == __xor_nt TT_EOF
-    ? & == __xor_nl bck_line ! __xor_blocks
+    // Suppressed inside a `??` arm body: there the token after `^ X` is the
+    // next arm's pattern (`T x → ^ x  F _ → …`), not a stray XOR operand.
+    ? & & == __xor_nl bck_line ! __xor_blocks == g_in_match_arm 0
     { ( warn lex `'^' is the return operator; did you mean '^^' for XOR? (Two adjacent carets, no space between them)` ) }
     {}
     // Borrow checker: record this return statement.
@@ -1737,7 +1745,7 @@
         // Empty when the binding wasn't tagged (literals, struct fields,
         // function returns — Phase 1A defaults those to signed).
         : s u_flag ( nurl_sym_get syms ( nurl_str_cat name `__unsigned` ) )
-        ( nurl_sym_def syms `__last_unsigned__` u_flag )
+        ( nurl_mark_unsigned u_flag )
         // Root-cause guard for the arity-cascade footgun (critic.md §4).
         // Reaching this point means the name is none of: a local / match-
         // payload / loop / inout / closure-capture binding (all carry a
@@ -1798,29 +1806,30 @@
     // when an operand was declared as a sized unsigned type (u16/u32/u64,
     // or legacy `u` → i8). Clear the marker before LHS so a literal-LHS
     // expression doesn't inherit stale state from a prior load.
-    ( nurl_sym_def syms `__last_unsigned__` `` )
+    ( nurl_mark_unsigned `` )
     : s lv ( gen_operand lex syms cg )
     : s lt ( nurl_get_last_type )
-    : s lu_snap ( nurl_sym_get syms `__last_unsigned__` )
-    ( nurl_sym_def syms `__last_unsigned__` `` )
+    : s lu_snap ( nurl_last_unsigned )
+    ( nurl_mark_unsigned `` )
     : s rv ( gen_operand lex syms cg )
     : s rt ( nurl_get_last_type )
-    : s ru_snap ( nurl_sym_get syms `__last_unsigned__` )
+    : s ru_snap ( nurl_last_unsigned )
     : s res ( nurl_cg_reg cg )
     : b isf | ( seq lt `double` ) ( seq lt `float` )
     // `^^` (XOR) is integer/bool-only — LLVM has no float `xor`.
     ? & == tt TT_CARETCARET isf
     { ( die lex `operator '^^' (XOR) requires integer or bool operands, not a float` ) }
     {}
-    // Unsigned operand path. Three triggers, OR-ed:
-    //   * Legacy 8-bit byte (`u` → i8): retained for v1.6 compatibility.
-    //   * Either operand carries the `__unsigned` flag (sized u types).
-    // NURL is strongly typed (no implicit conversions), so lt == rt
-    // always holds for arithmetic operands — the OR over both operands'
-    // flags is defensive against asymmetric loss along complex paths
-    // rather than meaningful signedness coercion.
-    : b isu | | ( seq lt `i8` ) != 0 ( nurl_str_len lu_snap )
-    != 0 ( nurl_str_len ru_snap )
+    // Unsigned operand path. Triggered ONLY by the `__unsigned` side-channel
+    // (set by gen_ident from a binding's `__unsigned` flag and by gen_cast
+    // from a cast to an unsigned target). We must NOT infer unsignedness from
+    // the LLVM type `i8`: both the unsigned NURL `u` (byte) AND the SIGNED
+    // `i8` lower to LLVM i8, so a `seq lt i8` heuristic would mis-select
+    // udiv/urem/lshr/icmp-u for signed i8 arithmetic and mark its result
+    // unsigned (silently zext-widening a negative value). NURL is strongly
+    // typed (lt == rt for arithmetic operands), so the OR over both operands'
+    // flags is defensive against asymmetric loss along complex paths.
+    : b isu | != 0 ( nurl_str_len lu_snap ) != 0 ( nurl_str_len ru_snap )
     : s ins ( binop_instr tt isf isu )
     // Pointer comparison coercion. LLVM forbids `icmp <op> i8* %p, 0`
     // (integer constant at pointer type) and rejects comparing two
@@ -1855,7 +1864,7 @@
     ( nurl_set_last_type lt )
     // Propagate the result's signedness so a nested binop ( + a + b c )
     // emits the right ops for the outer +.
-    ( nurl_sym_def syms `__last_unsigned__` ? isu `1` `` )
+    ( nurl_mark_unsigned ? isu `1` `` )
     res
 }
 
@@ -1923,8 +1932,15 @@
 
 // ── Bitwise operations for integers ──────────────────────────────────
 @ gen_bitwise_binary s lv s lt i lex i syms i cg i tt → s {
+    // Capture the LHS signedness before the RHS eval overwrites it. `&`/`|`
+    // are sign-agnostic OPERATIONS, but the RESULT value keeps the operands'
+    // signedness (types match, so either suffices) — it must survive for a
+    // downstream widen. (Previously this rode the leaky side-channel's
+    // implicit survival; now the type-setter clears it, so set it explicitly.)
+    : s lhs_u ( nurl_last_unsigned )
     : s rv ( gen_expr lex syms cg )
     : s rt ( nurl_get_last_type )
+    : s rhs_u ( nurl_last_unsigned )
     // Check type compatibility
     ? ! ( seq lt rt )
     { : s op_name ? == tt TT_AMP `&` `|`
@@ -1942,6 +1958,8 @@
     ( nurl_print lt ) ( nurl_print ` ` )
     ( nurl_print lv ) ( nurl_print `, ` ) ( nurl_print rv ) ( nurl_print `\n` )
     ( nurl_set_last_type lt )
+    ? | != 0 ( nurl_str_len lhs_u ) != 0 ( nurl_str_len rhs_u )
+    { ( nurl_mark_unsigned `1` ) } {}
     res
 }
 
@@ -2498,10 +2516,47 @@
     ^ # s ( strdup # s g_last_type_ptr )
 }
 
+// ── last-value SIGNEDNESS, coupled to the last type ───────────────────
+//
+// Signedness is a property OF the value whose type sits in g_last_type_ptr,
+// so it lives RIGHT NEXT TO it and is reset by the very same setter every
+// value-producing site already calls. This is the structural fix for the
+// `u`-vs-signed `i8` hazard: the LLVM type can't carry signedness, and a
+// free-floating side-channel that each site had to remember to update was
+// forgotten ~67 of 83 times. Here `nurl_set_last_type` ALWAYS clears the
+// flag (signed default), so a stale "unsigned" can never leak into a later
+// widen; the handful of unsigned-PRODUCING sites set it explicitly with
+// `nurl_set_last_type_u` / `nurl_mark_unsigned` AFTER the type, and the
+// widen/op-selection readers consult `nurl_last_unsigned`. Stored as the
+// same `"1"` / `""` string the old syms entry used, so readers keep the
+// `nurl_str_len`-nonempty idiom. Empty pointer ⇒ signed (`""`).
+: i g_last_unsigned_p 0
+
+@ nurl_last_unsigned → s {
+    ? == g_last_unsigned_p 0 { ^ # s ( strdup `` ) } {}
+    ^ # s ( strdup # s g_last_unsigned_p )
+}
+
+@ nurl_mark_unsigned s u → v {
+    : i old g_last_unsigned_p
+    = g_last_unsigned_p # i ( strdup u )
+    ? != old 0 { ( free # s old ) } {}
+}
+
 @ nurl_set_last_type s t → v {
     : i old g_last_type_ptr
     = g_last_type_ptr # i ( strdup t )
     ? != old 0 { ( free # s old ) } {}
+    // Couple: setting a type resets its signedness to signed. Unsigned
+    // values re-assert it via nurl_set_last_type_u / nurl_mark_unsigned.
+    ( nurl_mark_unsigned `` )
+}
+
+// Set the type AND mark the value unsigned in one atomic step — for the
+// sites that produce a `u`/`u16`/`u32`/`u64` value.
+@ nurl_set_last_type_u s t → v {
+    ( nurl_set_last_type t )
+    ( nurl_mark_unsigned `1` )
 }
 
 // ── symbol table ──────────────────────────────────────────────────
@@ -3509,6 +3564,130 @@
     ^ `void`
 }
 
+// Does the call's argument list (lexer at the first argument) use any
+// `name:` label at the call's top level? A token scan with bracket-depth
+// tracking; restores the lexer position. `IDENT :` at depth 0 is a named
+// argument (a bare `:` never appears in a positional arg expression).
+@ __kw_has_named i lex → b {
+    : i save ( nurl_lex_cur_start lex )
+    : ~ i depth 0
+    : ~ b found F
+    : ~ b done F
+    ~ ! done {
+        : i tt ( nurl_lex_type lex )
+        ? == tt TT_EOF { = done T } {
+        ? | | == tt TT_LPAREN == tt TT_LBRACK == tt TT_LBRACE
+        { = depth + depth 1 ( nurl_lex_advance lex ) } {
+        ? == tt TT_RPAREN
+        { ? == depth 0 { = done T } { = depth - depth 1 ( nurl_lex_advance lex ) } } {
+        ? | == tt TT_RBRACK == tt TT_RBRACE
+        { = depth - depth 1 ( nurl_lex_advance lex ) } {
+        ? & & == depth 0 ( is_ident_tok tt ) == ( nurl_lex_peek_type lex ) TT_COLON
+        { = found T = done T }
+        { ( nurl_lex_advance lex ) } } } } }
+    }
+    ( nurl_lex_set_pos lex save )
+    ^ found
+}
+
+// Per-call scratch key for the argstr piece chosen for parameter `i`.
+// `seq` is a unique per-call id (g_func_count) so nested kwargs calls
+// (an argument that is itself a kwargs call) never clobber each other.
+@ __kw_slot_key i sq i i → s {
+    ^ ( nurl_str_cat4 `__kwslot_` ( nurl_str_int sq ) `_` ( nurl_str_int i ) )
+}
+
+// argstr piece for parameter k that was not supplied: its default, or a
+// missing-argument error.
+@ __kw_default_or_die i lex i syms i cg s fname i k → s {
+    : s dsrc ( nurl_sym_get syms ( __kw_key fname `pd` k ) )
+    ? == 0 ( nurl_str_len dsrc )
+    { ( die lex ( nurl_str_cat3
+        `call to '` fname
+        ( nurl_str_cat3 `' is missing required argument '`
+        ( nurl_sym_get syms ( __kw_key fname `pn` k ) ) `'` ) ) ) }
+    {}
+    ^ ( __kw_emit_default syms cg dsrc )
+}
+
+// Named-argument call path. Evaluates each argument (positional or
+// `name:`-labelled) in source order, then assembles the call with values
+// in PARAMETER order, filling omitted parameters from their defaults.
+// Restricted to ordinary @-functions with no inout/sink parameters
+// (guarded by the caller); generics/FFI/variadic never reach here.
+@ gen_call_kwargs i lex i syms i cg s fname → s {
+    : i kw_n ( nurl_str_to_int ( nurl_sym_get syms ( nurl_str_cat fname `__kw_n` ) ) )
+    = g_func_count + g_func_count 1
+    : i kwseq g_func_count
+    : ~ s owned_temps ``
+    : ~ i posk 0
+    : ~ b seen_named F
+    ~ != ( nurl_lex_type lex ) TT_RPAREN {
+        : i tt ( nurl_lex_type lex )
+        : b named & ( is_ident_tok tt ) == ( nurl_lex_peek_type lex ) TT_COLON
+        : ~ i slot -1
+        ? named
+        { = seen_named T
+            : s aname ( nurl_lex_val lex )
+            ( nurl_lex_advance lex )  // name
+            ( nurl_lex_advance lex )  // ':'
+            : ~ i j 0
+            ~ < j kw_n {
+                ? ( seq ( nurl_sym_get syms ( __kw_key fname `pn` j ) ) aname )
+                { = slot j = j kw_n } { = j + j 1 }
+            }
+            ? == slot -1
+            { ( die lex ( nurl_str_cat3 `call to '` fname
+                ( nurl_str_cat3 `' has no parameter named '` aname `'` ) ) ) }
+            {}
+        }
+        { ? seen_named
+            { ( die lex `positional argument after a named argument is not allowed` ) } {}
+            = slot posk
+            = posk + posk 1
+        }
+        : s av ( gen_operand lex syms cg )
+        : s at ( nurl_get_last_type )
+        ( nurl_sym_def syms ( __kw_slot_key kwseq slot ) ( nurl_str_cat3 at ` ` av ) )
+        ? & & != 0 g_auto_drop_strings ( seq at `i8*` )
+        ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
+        { = owned_temps ? == 0 ( nurl_str_len owned_temps ) av ( nurl_str_cat3 owned_temps ` ` av ) }
+        {}
+    }
+    ( expect lex TT_RPAREN )
+    : ~ s argstr ``
+    : ~ i k 0
+    ~ < k kw_n {
+        : s piece ( nurl_sym_get syms ( __kw_slot_key kwseq k ) )
+        : s use_piece ? != 0 ( nurl_str_len piece ) piece ( __kw_default_or_die lex syms cg fname k )
+        = argstr ? == 0 ( nurl_str_len argstr ) use_piece ( nurl_str_cat3 argstr `, ` use_piece )
+        = k + k 1
+    }
+    // Result metadata — mirror gen_call's ordinary-call setup so the
+    // caller's `??` / try / let-binding sees the right payload + ownership.
+    ( nurl_sym_def syms `__last_nurl_call__` ( nurl_sym_get syms ( nurl_str_cat fname `__nurl_ret` ) ) )
+    ( nurl_sym_def syms `__last_call_res_t_llvm__` ( nurl_sym_get syms ( nurl_str_cat fname `__res_t_llvm` ) ) )
+    ( nurl_sym_def syms `__last_call_res_e_llvm__` ( nurl_sym_get syms ( nurl_str_cat fname `__res_e_llvm` ) ) )
+    ( nurl_sym_def syms `__last_call_opt_nurl_t__` ( nurl_sym_get syms ( nurl_str_cat fname `__opt_nurl_t` ) ) )
+    ( nurl_sym_def syms `__last_call_ret_owned__` ( nurl_sym_get syms ( nurl_str_cat fname `__ret_owned` ) ) )
+    : s rl ( nurl_sym_get syms fname )
+    : s rlt ? == 0 ( nurl_str_len rl ) `i64` rl
+    ? ( seq rlt `void` )
+    { ( nurl_print `  call void @` ) ( nurl_print fname )
+        ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
+        ( mem_drop_arg_temps owned_temps )
+        ( nurl_set_last_type `void` )
+        ^ `undef` }
+    {}
+    : s res ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print res ) ( nurl_print ` = call ` ) ( nurl_print rlt )
+    ( nurl_print ` @` ) ( nurl_print fname )
+    ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
+    ( mem_drop_arg_temps owned_temps )
+    ( nurl_set_last_type rlt )
+    ^ res
+}
+
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
@@ -3696,6 +3875,18 @@
     // never released and leaks for the rest of the function's lifetime.
     // Convention: callees borrow i8* args and must `strdup` if they retain
     // (see runtime.c hardening for nurl_set_last_type, nurl_sym_get, ...).
+    // Keyword-args — named call arguments. When the callee is an ordinary
+    // @-function (kw_n recorded) with no inout/sink parameters, not
+    // shadowed by a local, and the call uses `name:` labels, route to the
+    // reordering path. A `name:` label never appears at a positional call's
+    // top level, so legacy calls never divert → byte-identical codegen.
+    ? & & & & != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__kw_n` ) ) )
+    == 0 ( nurl_str_len callee_inout )
+    == 0 ( nurl_str_len callee_sink )
+    == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__ptr` ) ) )
+    ( __kw_has_named lex )
+    { ^ ( gen_call_kwargs lex syms cg fname ) }
+    {}
     : s owned_arg_temps ``
     // N-readers-XOR-1-writer: a binding passed to this call as
     // `inout` is mutably borrowed for the call's duration; it must
@@ -3715,7 +3906,7 @@
         : s bck_arg_val ( nurl_lex_val lex )
         : i bck_arg_line ( nurl_lex_line lex )
         ( nurl_sym_def syms `__last_call_ret_owned__` `` )
-        ( nurl_sym_def syms `__last_unsigned__` `` )
+        ( nurl_mark_unsigned `` )
         // Reset __last_ident_name__ so the post-gen_expr check below
         // sees an ident only when this argument actually loaded one.
         ( nurl_sym_def syms `__last_ident_name__` `` )
@@ -3815,7 +4006,7 @@
         { = av ( gen_operand lex syms cg )
             = at ( nurl_get_last_type )
         }
-        : s lu_arg ( nurl_sym_get syms `__last_unsigned__` )
+        : s lu_arg ( nurl_last_unsigned )
         // Diagnose `nurl_str_len` vs `string_len` confusion.
         // `nurl_str_len` is the FFI to libc strlen and expects `s`
         // (i8*); passing a `%String` struct reads the struct bytes as
@@ -3905,6 +4096,30 @@
         { = argstr ( nurl_str_cat argstr ( nurl_str_cat4 `, ` at ` ` av ) ) }
         = arg_idx + arg_idx 1
     }
+    // Keyword-args — default values. Fill omitted TRAILING parameters
+    // with their declared defaults: when the callee recorded defaults
+    // (`__kw_hasdef`) and the call supplied fewer positional args than
+    // parameters, each default's single-token source is parsed here and
+    // appended as an ordinary positional argument, so the arity check
+    // below then passes. Stops at the first omitted parameter that has no
+    // default, so a genuine missing argument still errors there. Existing
+    // fully-supplied calls never enter the loop → byte-identical codegen.
+    ? & ( seq ( nurl_sym_get syms ( nurl_str_cat fname `__kw_hasdef` ) ) `1` )
+    ( seq call_name fname )
+    { : s kw_n_s ( nurl_sym_get syms ( nurl_str_cat fname `__kw_n` ) )
+        : i kw_n ? == 0 ( nurl_str_len kw_n_s ) 0 ( nurl_str_to_int kw_n_s )
+        : ~ b kw_stop F
+        ~ & & < arg_idx kw_n ! kw_stop
+        != 0 ( nurl_str_len ( nurl_sym_get syms ( __kw_key fname `pd` arg_idx ) ) )
+        { : s dsrc ( nurl_sym_get syms ( __kw_key fname `pd` arg_idx ) )
+            : s argpiece ( __kw_emit_default syms cg dsrc )
+            ? == 0 ( nurl_str_len argstr )
+            { = argstr argpiece = first 0 }
+            { = argstr ( nurl_str_cat3 argstr `, ` argpiece ) }
+            = arg_idx + arg_idx 1
+        }
+    }
+    {}
     // Call-arity check. scan_fn_sigs records every non-generic
     // @-function's declared parameter count as `<fname>__arity`. A call
     // with the wrong argument count otherwise emits a malformed `call`
@@ -3980,6 +4195,12 @@
     // When Phase 2B is off no function ever gets "str" registered, so behaviour
     // is identical to the Phase 2A-only build.
     ( nurl_sym_def syms `__last_call_ret_owned__` ( nurl_sym_get syms ( nurl_str_cat call_name `__ret_owned` ) ) )
+    // Record the callee's return signedness (from its recorded NURL return
+    // type) so the regular @-fn dispatch can re-assert it on `__last_unsigned__`
+    // AFTER the call — an enclosing `# i ( f )` over a `u`-returning `f` must
+    // zero-extend. (The LLVM return type i8/i16/i32 can't carry it.)
+    ( nurl_sym_def syms `__last_call_ret_unsigned__`
+    ( nurl_sym_get syms ( nurl_str_cat call_name `__ret_unsigned` ) ) )
 
     // Check if this is a stored closure variable first
     : s var_ptr ( nurl_sym_get syms ( nurl_str_cat call_name `__ptr` ) )
@@ -4081,6 +4302,10 @@
                 ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
                 ( mem_drop_arg_temps owned_arg_temps )
                 ( nurl_set_last_type rlt )
+                // Re-assert the callee's return signedness (cleared/overwritten
+                // by argument evaluation) so an enclosing `# i ( f )` widens a
+                // `u`-returning call with zext.
+                ( nurl_mark_unsigned ( nurl_sym_get syms `__last_call_ret_unsigned__` ) )
                 res
             }
         }
@@ -4133,6 +4358,8 @@
     = g_ret_forbidden 0
     : s tv ( gen_expr lex syms cg )
     : s tt2 ( nurl_get_last_type )
+    // Snapshot the then-arm's signedness for the `?`-result flag below.
+    : s then_unsigned ( nurl_last_unsigned )
     : s tlbl ( nurl_sym_get syms `__cur_lbl__` )
     : i tdr g_did_ret
     ? == tdr 0
@@ -4167,6 +4394,7 @@
     = g_ret_forbidden 0
     : s ev ( gen_expr lex syms cg )
     : s et2 ( nurl_get_last_type )
+    : s else_unsigned ( nurl_last_unsigned )
     : s elbl ( nurl_sym_get syms `__cur_lbl__` )
     : i edr g_did_ret
     ? == edr 0
@@ -4236,6 +4464,11 @@
         { ( nurl_set_last_type `void` ) }
     }
     {}
+    // The `?`-result is unsigned iff its arms are (NURL types match across
+    // arms, so either flag suffices — OR them defensively). Lets an enclosing
+    // `# i ? c (# u …) (# u …)` widen the selected value with zext.
+    ( nurl_mark_unsigned
+    ? | != 0 ( nurl_str_len then_unsigned ) != 0 ( nurl_str_len else_unsigned ) `1` `` )
     result
 }
 
@@ -4995,12 +5228,17 @@
                 : s cv0 ? did_reconstruct pr0_eff
                 ? pt0_is_opt_bool pr0 ( nurl_cg_reg cg )
                 ? pt0_is_opt_bool {} {
-                    ? ( seq pt0 `i1` ) {
+                    ? & > ( int_width pt0 ) 0 < ( int_width pt0 ) 64 {
+                        // Narrow integer payload (i1 / i8 / i16 / i32, incl.
+                        // the unsigned u/u16/u32): the value rode the ptr slot
+                        // widened to i64 (gen_agg_lit), so ptrtoint back to i64
+                        // and trunc to the payload's width. Signedness for a
+                        // later widen is set on the binding below.
                         : s t64 ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print t64 )
                         ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr0 ) ( nurl_print ` to i64\n` )
                         ( nurl_print `  ` ) ( nurl_print cv0 )
-                        ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to i1\n` )
+                        ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt0 ) ( nurl_print `\n` )
                     } {
                         // Struct-handle payload (e.g. %Vec__Json, %String): the payload
                         // ptr stored in the enum slot IS the struct's field-0 pointer
@@ -5053,6 +5291,11 @@
                 ( nurl_print `* ` ) ( nurl_print vp0 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv0 pt0_eff )
                 ( nurl_sym_def syms ( nurl_str_cat pv0 `__ptr` ) vp0 )
+                // Carry the payload's NURL signedness onto the binding so a
+                // later `# i <b>` widen zero-extends a `u`-family payload
+                // (gen_ident copies `<name>__unsigned` → `__last_unsigned__`).
+                ( nurl_sym_def syms ( nurl_str_cat pv0 `__unsigned` )
+                ( nurl_sym_get syms ( nurl_str_cat pattern_name `__payload__0__unsigned` ) ) )
                 // Phase 2D: a match-arm payload binding OWNS its value just
                 // like a `:` let, so a `% Drop` impl on the payload type must
                 // fire at arm scope exit. Register it here (mirrors gen_let's
@@ -5090,12 +5333,12 @@
                 ( nurl_print ` = extractvalue ` ) ( nurl_print match_type )
                 ( nurl_print ` ` ) ( nurl_print match_val ) ( nurl_print `, 2\n` )
                 : s cv1 ( nurl_cg_reg cg )
-                ? ( seq pt1 `i1` ) {
+                ? & > ( int_width pt1 ) 0 < ( int_width pt1 ) 64 {
                     : s t64 ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print t64 )
                     ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i64\n` )
                     ( nurl_print `  ` ) ( nurl_print cv1 )
-                    ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to i1\n` )
+                    ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt1 ) ( nurl_print `\n` )
                 } {
                     ( nurl_print `  ` ) ( nurl_print cv1 )
                     ? == ( nurl_str_get pt1 0 ) 123
@@ -5116,6 +5359,8 @@
                 ( nurl_print `* ` ) ( nurl_print vp1 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv1 pt1 )
                 ( nurl_sym_def syms ( nurl_str_cat pv1 `__ptr` ) vp1 )
+                ( nurl_sym_def syms ( nurl_str_cat pv1 `__unsigned` )
+                ( nurl_sym_get syms ( nurl_str_cat pattern_name `__payload__1__unsigned` ) ) )
                 ? != 0 g_auto_drop_strings
                 { : s a1_key ( nurl_str_cat `drop##` pt1 )
                     ? != 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms a1_key ) )
@@ -5132,12 +5377,12 @@
                 ( nurl_print ` = extractvalue ` ) ( nurl_print match_type )
                 ( nurl_print ` ` ) ( nurl_print match_val ) ( nurl_print `, 3\n` )
                 : s cv2 ( nurl_cg_reg cg )
-                ? ( seq pt2 `i1` ) {
+                ? & > ( int_width pt2 ) 0 < ( int_width pt2 ) 64 {
                     : s t64 ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print t64 )
                     ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i64\n` )
                     ( nurl_print `  ` ) ( nurl_print cv2 )
-                    ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to i1\n` )
+                    ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt2 ) ( nurl_print `\n` )
                 } {
                     ( nurl_print `  ` ) ( nurl_print cv2 )
                     ? == ( nurl_str_get pt2 0 ) 123
@@ -5158,6 +5403,8 @@
                 ( nurl_print `* ` ) ( nurl_print vp2 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv2 pt2 )
                 ( nurl_sym_def syms ( nurl_str_cat pv2 `__ptr` ) vp2 )
+                ( nurl_sym_def syms ( nurl_str_cat pv2 `__unsigned` )
+                ( nurl_sym_get syms ( nurl_str_cat pattern_name `__payload__2__unsigned` ) ) )
                 ? != 0 g_auto_drop_strings
                 { : s a2_key ( nurl_str_cat `drop##` pt2 )
                     ? != 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms a2_key ) )
@@ -5198,7 +5445,10 @@
             // next arm re-arms it, and the post-loop disarm clears a
             // trailing bare arm's residue.
             ( bck_set_block_kind `match-arm` )
+            : i __saved_in_arm g_in_match_arm
+            = g_in_match_arm 1
             : s arm_result ( gen_stmt lex syms cg )
+            = g_in_match_arm __saved_in_arm
             : s arm_type ( nurl_get_last_type )
             : s arm_lbl ( nurl_sym_get syms `__cur_lbl__` )
             : i arm_did_ret g_did_ret
@@ -7496,6 +7746,16 @@
 @ gen_cast i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s dt ( parse_type lex )
+    // Capture the cast TARGET's signedness from the raw NURL token now,
+    // before `gen_operand` (below) parses the cast subject and clobbers
+    // the `__last_nurl_type__` side-channel. Used at the integer-result
+    // return paths to mark `__last_unsigned__` so an ENCLOSING widening
+    // cast / binop / shift sees the right signedness — e.g. the inner
+    // `# u …` in `# i64 # u <expr>` must make the outer widen a `zext`,
+    // not a `sext`. (Without this, only casts whose subject was a typed
+    // BINDING — where gen_ident sets the flag — widened correctly; a
+    // nested cast-to-unsigned silently sign-extended.)
+    : b dst_unsigned ( nurl_type_is_unsigned ( nurl_sym_get g_res_type_syms `__last_nurl_type__` ) )
     // Diagnose `# T { ... }` parsing as cast-to-T applied to a
     // block expression, NOT as a struct/enum literal. Users coming
     // from Rust / TypeScript reflexively write `#` here and silently
@@ -7664,7 +7924,9 @@
     : b src_is_fp | src_is_double src_is_float
     : b dst_is_fp | dst_is_double dst_is_float
     ? & src_is_fp dst_is_fp
-    {  // float ↔ double conversions.
+    {  // float ↔ double conversions. The result is a float; `nurl_set_last_type`
+       // below resets signedness to signed, so no stale integer-unsigned flag
+       // survives into a later int op (the coupling does this automatically).
         ? ( seq st dt )
         { ( nurl_set_last_type dt ) ^ val }
         { ( nurl_print `  ` ) ( nurl_print res )
@@ -7675,18 +7937,33 @@
     }
     {}
     ? & src_is_fp ! dst_is_fp
-    { ( nurl_print `  ` ) ( nurl_print res )
-        ( nurl_print ` = fptosi ` ) ( nurl_print st ) ( nurl_print ` ` )
+    {  // float-or-double → int: fptoui when the TARGET is unsigned (so a
+       // value above the signed max converts correctly instead of becoming
+       // poison via fptosi), else fptosi.
+        ( nurl_print `  ` ) ( nurl_print res )
+        ( nurl_print ? dst_unsigned ` = fptoui ` ` = fptosi ` )
+        ( nurl_print st ) ( nurl_print ` ` )
         ( nurl_print val ) ( nurl_print ` to ` ) ( nurl_print dt )
         ( nurl_print `\n` )
         ( nurl_set_last_type dt )
+        // The integer result's signedness is the cast TARGET's.
+        ( nurl_mark_unsigned ? dst_unsigned `1` `` )
         ^ res
     }
     ? & ! src_is_fp dst_is_fp
-    { ( nurl_print `  ` ) ( nurl_print res )
-        ( nurl_print ` = sitofp ` ) ( nurl_print st )
+    {  // int → float-or-double: uitofp when the SOURCE is unsigned (an
+       // unsigned value with the high bit set must NOT be read as a
+       // negative number), else sitofp. The source's signedness rides the
+       // `__last_unsigned__` side-channel (LLVM's i8/i16/i32 can't carry it).
+        : s lu_i2f ( nurl_last_unsigned )
+        ( nurl_print `  ` ) ( nurl_print res )
+        ( nurl_print ? != 0 ( nurl_str_len lu_i2f ) ` = uitofp ` ` = sitofp ` )
+        ( nurl_print st )
         ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print ` to ` )
         ( nurl_print dt ) ( nurl_print `\n` )
+        // The result is a float; nurl_set_last_type reset signedness to signed,
+        // so the surrounding `# i64 # f …` round-trip's later multiply/divide
+        // can't inherit a stale unsigned marker (no more bug-#5 udiv/lshr).
         ( nurl_set_last_type dt )
         ^ res
     }
@@ -7795,7 +8072,7 @@
                         : i sw ( int_width st )
                         : i dw ( int_width dt )
                         ? & & > sw 0 > dw 0 != sw dw
-                        { : s lu ( nurl_sym_get syms `__last_unsigned__` )
+                        { : s lu ( nurl_last_unsigned )
                             : b src_is_bool ( seq st `i1` )
                             : s widen_inst ? | src_is_bool != 0 ( nurl_str_len lu ) ` = zext ` ` = sext `
                             ( nurl_print `  ` ) ( nurl_print res )
@@ -7803,9 +8080,21 @@
                             ( nurl_print st ) ( nurl_print ` ` ) ( nurl_print val )
                             ( nurl_print ` to ` ) ( nurl_print dt ) ( nurl_print `\n` )
                             ( nurl_set_last_type dt )
+                            // The result is now the cast TARGET's type — record
+                            // its signedness so an ENCLOSING widening cast /
+                            // binop / shift reads the right flag (e.g. the inner
+                            // `# u …` in `# i64 # u <expr>` must make the outer
+                            // widen a zext, not a sext).
+                            ( nurl_mark_unsigned ? dst_unsigned `1` `` )
                             ^ res
                         }
-                        { ( nurl_set_last_type dt ) ^ val }
+                        { ( nurl_set_last_type dt )
+                            // Same-width reinterpret (e.g. `# u <i8>`): still
+                            // record destination signedness for an enclosing op.
+                            ? > ( int_width dt ) 0
+                            { ( nurl_mark_unsigned ? dst_unsigned `1` `` ) }
+                            {}
+                            ^ val }
                     }
                 }
             }
@@ -7829,7 +8118,7 @@
     // and restore after the load so downstream `# i …` casts pick zext
     // — without this, a high-bit-set byte (`0x89`) sign-extends to
     // `0xFFFFFFFFFFFFFF89` and corrupts every subsequent shift+add.
-    : s obj_unsigned_snap ( nurl_sym_get syms `__last_unsigned__` )
+    : s obj_unsigned_snap ( nurl_last_unsigned )
 
     // Check object type first to determine access method
     : i otlen ( nurl_str_len ot )
@@ -7860,7 +8149,7 @@
             ( nurl_set_last_type elem_type )
             // Restore unsigned flag from object pointer — for raw-ptr
             // loads, the element shares the pointer's NURL signedness.
-            ( nurl_sym_def syms `__last_unsigned__` obj_unsigned_snap )
+            ( nurl_mark_unsigned obj_unsigned_snap )
             ^ res
         }
         { : s elem_type ( nurl_str_slice ot 0 - otlen 1 )
@@ -7873,6 +8162,7 @@
             : s var_t ( nurl_sym_get syms fname )
             : s fidx_s ``
             : s ftype ``
+            : ~ s fld_uns ``
             ? & elem_is_struct ( is_ident_tok ( nurl_lex_type lex ) )
             { ? > ( int_width var_t ) 0
                 {}  // Integer variable index: skip field access check
@@ -7882,6 +8172,7 @@
                     { = is_field_access T
                         = fidx_s fidx_check
                         = ftype ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__type` ) ) ) )
+                        = fld_uns ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__unsigned` ) ) ) )
                     }
                     {}
                 }
@@ -7902,6 +8193,8 @@
                 ( nurl_print `, ` ) ( nurl_print ftype )
                 ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
                 ( nurl_set_last_type ftype )
+                // Field's NURL signedness for an enclosing widening cast.
+                ( nurl_mark_unsigned fld_uns )
                 ^ res
             }
             {  // Variable / arbitrary expression index → array-style access
@@ -7920,7 +8213,7 @@
                 ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
                 ( nurl_set_last_type elem_type )
                 // Restore — see obj_unsigned_snap comment above.
-                ( nurl_sym_def syms `__last_unsigned__` obj_unsigned_snap )
+                ( nurl_mark_unsigned obj_unsigned_snap )
                 ^ res
             }
         }
@@ -8025,6 +8318,10 @@
                     ( nurl_print ` ` ) ( nurl_print ov )
                     ( nurl_print `, ` ) ( nurl_print ( nurl_str_int fidx ) ) ( nurl_print `\n` )
                     ( nurl_set_last_type ftype )
+                    // Surface the field's NURL signedness so an enclosing
+                    // widening cast picks zext (unsigned field) vs sext.
+                    ( nurl_mark_unsigned
+                    ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__unsigned` ) ) ) ) )
                     ^ res
                 }
             }
@@ -8084,7 +8381,7 @@
         // Snapshot the value's unsigned-ness for the int-width coercion of
         // an option payload below (zext vs sext when widening into a wider
         // payload field). Empty for signed / untagged values.
-        : s fld_unsigned ( nurl_sym_get syms `__last_unsigned__` )
+        : s fld_unsigned ( nurl_last_unsigned )
         // Field is a stack reference if gen_closure_expr / a nested
         // gen_agg_lit just advertised one, or the field named a binding
         // tagged `<name>__refdepth`. Carry up the deepest such depth.
@@ -8345,12 +8642,25 @@
                         = actual_fval conv_reg2
                         = actual_fty `ptr`
                     }
-                    ? | ( seq fty `i64` ) ( seq fty `i32` )
-                    {  // Convert integer to ptr
+                    ? & > ( int_width fty ) 0 ! ( seq fty `i1` )
+                    {  // Integer payload → ptr slot. A NARROW int (i8/i16/i32,
+                        // incl. the unsigned u/u16/u32) must first widen to i64
+                        // so the value survives the ptr round-trip — zext when
+                        // the payload value is unsigned (`fld_unsigned`), sext
+                        // otherwise. `inttoptr i8 … to ptr` would zero-extend
+                        // unconditionally and corrupt a signed payload. i64
+                        // payloads inttoptr directly.
+                        : s wide_val fval
+                        ? < ( int_width fty ) 64
+                        { : s ext_reg ( nurl_cg_reg cg )
+                            : s ext_op ? != 0 ( nurl_str_len fld_unsigned ) ` = zext ` ` = sext `
+                            ( nurl_print `  ` ) ( nurl_print ext_reg ) ( nurl_print ext_op )
+                            ( nurl_print fty ) ( nurl_print ` ` ) ( nurl_print fval ) ( nurl_print ` to i64\n` )
+                            = wide_val ext_reg }
+                        {}
                         : s conv_reg ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print conv_reg )
-                        ( nurl_print ` = inttoptr ` ) ( nurl_print fty ) ( nurl_print ` ` )
-                        ( nurl_print fval ) ( nurl_print ` to ptr\n` )
+                        ( nurl_print ` = inttoptr i64 ` ) ( nurl_print wide_val ) ( nurl_print ` to ptr\n` )
                         = actual_fval conv_reg
                         = actual_fty `ptr`
                     }
@@ -8460,8 +8770,14 @@
         : i have_iw ( int_width actual_fty )
         ? & & > decl_iw 0 > have_iw 0 != decl_iw have_iw
         { : s cv ( nurl_cg_reg cg )
+            // Widen with zext when the VALUE is unsigned (`fld_unsigned`,
+            // snapshotted from `__last_unsigned__` above) — storing a `u`
+            // byte 130 into an i64 field must give 130, not −126. sext only
+            // for a signed source; trunc when the field is narrower.
+            : s widen_op ? != 0 ( nurl_str_len fld_unsigned ) ` = zext ` ` = sext `
+            : s coerce_op ? > decl_iw have_iw widen_op ` = trunc `
             ( nurl_print `  ` ) ( nurl_print cv )
-            ( nurl_print ? > decl_iw have_iw ` = sext ` ` = trunc ` )
+            ( nurl_print coerce_op )
             ( nurl_print actual_fty ) ( nurl_print ` ` ) ( nurl_print actual_fval )
             ( nurl_print ` to ` ) ( nurl_print decl_fty ) ( nurl_print `\n` )
             = actual_fval cv
@@ -8716,7 +9032,7 @@
             ( nurl_print ` ` ) ( nurl_print val )
             ( nurl_print ` to ` ) ( nurl_print to_ty ) ( nurl_print `\n` )
             ^ r }
-        { : s lu ( nurl_sym_get syms `__last_unsigned__` )
+        { : s lu ( nurl_last_unsigned )
             : s inst ? != 0 ( nurl_str_len lu ) `zext` `sext`
             : s r ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print r )
@@ -10705,6 +11021,12 @@
         { ( die lex `parameter name 'inout' is a reserved convention keyword - rename it` ) }
         {}
         ( nurl_lex_advance lex )
+        // Default value `= <single-token>` (keyword-args). The callee does
+        // not use it — callers splice it for omitted arguments — so here
+        // we only consume the tokens. Only fires when `=` is present.
+        ? == ( nurl_lex_type lex ) TT_EQ
+        { ( nurl_lex_advance lex ) ( nurl_lex_advance lex ) }
+        {}
         ( nurl_sym_def syms pname lt )
         // Mark parameter as immutable by design
         ( nurl_sym_def syms ( nurl_str_cat pname `__param` ) `1` )
@@ -10920,6 +11242,18 @@
             ( nurl_sym_def syms
             ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__name` ) )
             fname )
+            // Record the field's NURL-level signedness — the LLVM type
+            // `flt` (i8/i16/i32) can't distinguish `u`/`u16`/`u32` from the
+            // signed `i8`/`i16`/`i32`, so a field load must consult this to
+            // widen with zext (unsigned) vs sext (signed). Captured from the
+            // `__last_nurl_type__` side-channel parse_type_base just set.
+            : b fld_uns ( nurl_type_is_unsigned ( nurl_sym_get g_res_type_syms `__last_nurl_type__` ) )
+            ( nurl_sym_def syms
+            ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__unsigned` ) )
+            ? fld_uns `1` `` )
+            ( nurl_sym_def syms
+            ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__unsigned` ) ) )
+            ? fld_uns `1` `` )
         }
         {}
         ? != first 0
@@ -11023,6 +11357,11 @@
             ( nurl_print `\n\n` )
             ( nurl_sym_def syms cname lt )
             ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
+            // Record the const's signedness (the LLVM type can't carry it) so
+            // gen_ident sets `__last_unsigned__` on load and an enclosing
+            // `# i GU` over a `: u GU 200` widens with zext, not sext.
+            ( nurl_sym_def syms ( nurl_str_cat cname `__unsigned` )
+            ? ( nurl_type_is_unsigned ty_tok ) `1` `` )
             ? is_mutable
             { ( nurl_sym_def syms ( nurl_str_cat cname `__mutable` ) `1` ) }
             {}
@@ -11256,6 +11595,12 @@
         ~ & != ( nurl_lex_type lex ) TT_RBRACE ( could_be_payload_type lex syms ) {
             : s pt ( parse_type lex )
             ( nurl_sym_def syms ( nurl_str_cat vname ( nurl_str_cat `__payload__` ( nurl_str_int pcount ) ) ) pt )
+            // Record the payload's NURL signedness (the LLVM type can't carry
+            // it) so the match binding widens with zext for a `u`-family
+            // payload — same hazard as struct fields.
+            ( nurl_sym_def syms
+            ( nurl_str_cat vname ( nurl_str_cat `__payload__` ( nurl_str_cat ( nurl_str_int pcount ) `__unsigned` ) ) )
+            ? ( nurl_type_is_unsigned ( nurl_sym_get g_res_type_syms `__last_nurl_type__` ) ) `1` `` )
             = pcount + pcount 1
         }
         ( nurl_sym_def syms ( nurl_str_cat vname `__paycount` ) ( nurl_str_int pcount ) )
@@ -12485,6 +12830,46 @@
 }
 
 // scan_fn_sigs: register return types of all @ and & declarations.
+// ── Keyword arguments (default params + named call args) ──────────
+//
+// scan_fn_sigs records, for every non-generic @-function:
+//   <fname>__kw_n        parameter count
+//   <fname>__kw_pn_<i>   i-th parameter NAME
+//   <fname>__kw_pd_<i>   i-th parameter's default-value SOURCE ("" = none)
+//   <fname>__kw_hasdef   "1" if any parameter carries a default
+// gen_call consults these to desugar a call that uses `name:` labels or
+// omits trailing defaulted arguments into an ordinary positional call.
+// A default value is a single source token (literal / const / atom),
+// which covers the common cases (`= `Task``, `= 50`, `= F`); a richer
+// default can be a named const.
+
+@ __kw_key s fname s tag i idx → s {
+    ^ ( nurl_str_cat fname ( nurl_str_cat4 `__kw_` tag `_` ( nurl_str_int idx ) ) )
+}
+
+// Trim trailing whitespace from a captured source slice.
+@ __kw_trim s raw → s {
+    : ~ i n ( nurl_str_len raw )
+    ~ > n 0 {
+        : i c ( nurl_str_get raw - n 1 )
+        ? | | | == c 32 == c 9 == c 13 == c 10
+        { = n - n 1 }
+        { ^ ( nurl_str_slice raw 0 n ) }
+    }
+    ^ ( nurl_str_slice raw 0 n )
+}
+
+// Evaluate a parameter default's source (e.g. ``Task`` / `50`) through a
+// sub-lexer that shares the caller's codegen + symbol state, and return
+// the `"<llvm-type> <value>"` piece to splice into a call's argument
+// list. The value instruction is emitted into the current output.
+@ __kw_emit_default i syms i cg s src → s {
+    : i sub ( nurl_lex_new src `<kw-default>` )
+    : s v ( gen_operand sub syms cg )
+    : s t ( nurl_get_last_type )
+    ^ ( nurl_str_cat3 t ` ` v )
+}
+
 @ scan_fn_sigs i lex i syms → v {
     // Brace-depth tracker. A `:` struct decl body or any `@`-function body
     // contains `{ ... }`; the `@` inside a closure-shaped struct field
@@ -12594,7 +12979,23 @@
                                     ? == 0 ( scan_skip_type lex )
                                     { = pc_ok F }
                                     { ? ( is_ident_tok ( nurl_lex_type lex ) )
-                                        { ( nurl_lex_advance lex ) = pcount + pcount 1 }
+                                        { : s pnm ( nurl_lex_val lex )
+                                            ( nurl_lex_advance lex )
+                                            ( nurl_sym_def syms ( __kw_key fname `pn` pcount ) pnm )
+                                            // Optional default value: `= <single-token>`.
+                                            // Only fires when `=` is present, so existing
+                                            // param regions scan byte-identically.
+                                            ? == ( nurl_lex_type lex ) TT_EQ
+                                            { ( nurl_lex_advance lex )
+                                                : i kds ( nurl_lex_cur_start lex )
+                                                ( nurl_lex_advance lex )
+                                                : i kde ( nurl_lex_cur_start lex )
+                                                ( nurl_sym_def syms ( __kw_key fname `pd` pcount )
+                                                ( __kw_trim ( nurl_lex_src_slice lex kds - kde kds ) ) )
+                                                ( nurl_sym_def syms ( nurl_str_cat fname `__kw_hasdef` ) `1` )
+                                            }
+                                            {}
+                                            = pcount + pcount 1 }
                                         { = pc_ok F } } }
                                 // If the count was abandoned mid-region, advance the
                                 // rest blind so the `->` / ret-type handling still
@@ -12605,7 +13006,8 @@
                                 { ( nurl_sym_def syms ( nurl_str_cat fname `__has_inout` ) `1` ) }
                                 {}
                                 ? pc_ok
-                                { : s ar_key ( nurl_str_cat fname `__arity` )
+                                { ( nurl_sym_def syms ( nurl_str_cat fname `__kw_n` ) ( nurl_str_int pcount ) )
+                                    : s ar_key ( nurl_str_cat fname `__arity` )
                                     : s ar_prev ( nurl_sym_get syms ar_key )
                                     : s ar_new ( nurl_str_int pcount )
                                     // Two definitions of the same name with
@@ -12622,6 +13024,14 @@
                                 { ( nurl_lex_advance lex )
                                     : s ret_ty ( parse_type lex )
                                     ( nurl_sym_def syms fname ret_ty )
+                                    // Persistent (pre-pass) record of the return
+                                    // signedness — read at call sites to widen a
+                                    // `u`-returning call with zext. gen_fn_decl's
+                                    // own recording lives in a scope that doesn't
+                                    // reach call sites, so this is the source of
+                                    // truth.
+                                    ( nurl_sym_def syms ( nurl_str_cat fname `__ret_unsigned` )
+                                    ? ( nurl_type_is_unsigned ( nurl_sym_get g_res_type_syms `__last_nurl_type__` ) ) `1` `` )
                                 }
                                 {}
                                 ( skip_balanced lex )
