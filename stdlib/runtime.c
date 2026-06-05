@@ -3041,6 +3041,84 @@ long long nurl_tcp_connect_tls(const char *host, long long port,
 #endif
 }
 
+/* Client-side TLS connect WITH ALPN (RFC 7301) — required to speak
+ * HTTP/2 ("h2") to real-world servers, which only switch to h2 when the
+ * client offers it via ALPN (RFC 9113 §3.3). Identical to
+ * nurl_tcp_connect_tls plus an SSL_set_alpn_protos before the
+ * handshake. `alpn_protocols` is a space-separated preference list in
+ * the same "h2 http/1.1" form the listener API accepts; it's packed to
+ * ALPN wire-format (length-prefixed) via nurl__alpn_pack. After the
+ * handshake the negotiated protocol is read with nurl_tcp_alpn_selected.
+ * Empty/NULL list ⇒ no ALPN sent (behaves like nurl_tcp_connect_tls). */
+long long nurl_tcp_connect_tls_alpn(const char *host, long long port,
+                                    long long verify,
+                                    const char *alpn_protocols) {
+#ifndef NURL_HAVE_OPENSSL
+    (void)host; (void)port; (void)verify; (void)alpn_protocols;
+    NurlTcp *h = nurl__tcp_new_handle(NURL_TCP_KIND_CONN);
+    if (!h) return 0;
+    h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+    return (long long)(uintptr_t)h;
+#else
+    long long ch = nurl_tcp_connect(host, port);
+    NurlTcp *h = (NurlTcp*)(uintptr_t)ch;
+    if (!h || h->err_kind != NURL_NET_ERR_OK) return ch;
+
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    if (!ctx) {
+        nurl_close_sock(h->fd); h->fd = NURL_INVALID_SOCK;
+        h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+        return ch;
+    }
+    SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+    if (verify) {
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+        SSL_CTX_set_default_verify_paths(ctx);
+    } else {
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
+    }
+
+    SSL *ssl = SSL_new(ctx);
+    if (!ssl) {
+        SSL_CTX_free(ctx);
+        nurl_close_sock(h->fd); h->fd = NURL_INVALID_SOCK;
+        h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+        return ch;
+    }
+    /* SNI — multi-tenant servers require it. */
+    SSL_set_tlsext_host_name(ssl, host);
+    if (verify) SSL_set1_host(ssl, host);
+
+    /* Offer ALPN. SSL_set_alpn_protos returns 0 on success; a non-zero
+     * return (OOM / malformed list) is non-fatal — we just handshake
+     * without ALPN and the caller's post-handshake "h2" check fails
+     * cleanly. */
+    if (alpn_protocols && *alpn_protocols) {
+        size_t wlen = 0;
+        unsigned char *wire = nurl__alpn_pack(alpn_protocols, &wlen);
+        if (wire && wlen > 0) {
+            SSL_set_alpn_protos(ssl, wire, (unsigned int)wlen);
+        }
+        free(wire);
+    }
+
+    SSL_set_fd(ssl, (int)h->fd);
+
+    if (SSL_connect(ssl) != 1) {
+        SSL_free(ssl);
+        SSL_CTX_free(ctx);
+        nurl_close_sock(h->fd); h->fd = NURL_INVALID_SOCK;
+        h->err_kind = NURL_NET_ERR_TLS_HANDSHAKE;
+        return ch;
+    }
+
+    h->ssl      = ssl;
+    h->ssl_ctx  = ctx;
+    h->err_kind = NURL_NET_ERR_OK;
+    return ch;
+#endif
+}
+
 /* TLS listener + ALPN. alpn_protocols is a space-separated server-
  * preference list ("h2 http/1.1"). Clients that offer no listed
  * protocol still handshake (SSL_TLSEXT_ERR_NOACK) — server treats them
