@@ -725,19 +725,40 @@ $ `stdlib/std/bytes.nu`
     : String linkpath ( __deps_path name )
     : s linkpath_s ( string_data linkpath )
     ? ( file_exists linkpath_s ) {
-        // Without lstat/readlink primitives we can't verify the
-        // existing entry points where we expect. v1: treat any
-        // existing entry as already-installed so `nurlpkg install`
-        // is idempotent. Name collisions across transitive deps
-        // will land here too — surface in the deps listing instead.
-        ( nurl_print `  ` ) ( nurl_print name )
-        ( nurl_print ` (already installed)\n` )
+        // An entry already exists. Use readlink(2) to confirm it's a
+        // symlink pointing where we expect — a mismatch means a name
+        // collision across transitive deps (two different targets want
+        // the same `deps/<name>` slot), which we surface as an error.
+        // A non-symlink entry (readlink → EINVAL) falls back to the v1
+        // idempotent behaviour: treat it as already-installed.
+        : ~ i existing_rc 0
+        : !String IoErr rl ( fs_readlink linkpath_s )
+        ?? rl {
+            T existing → {
+                ? != 0 ( nurl_str_eq ( string_data existing ) target_s ) {
+                    ( nurl_print `  ` ) ( nurl_print name )
+                    ( nurl_print ` (already installed, verified)\n` )
+                } {
+                    ( nurl_eprint `  ` ) ( nurl_eprint name )
+                    ( nurl_eprint `: existing link points to ` )
+                    ( nurl_eprint ( string_data existing ) )
+                    ( nurl_eprint ` not ` )
+                    ( nurl_eprintln target_s )
+                    = existing_rc 1
+                }
+                ( string_free existing )
+            }
+            F _ → {
+                ( nurl_print `  ` ) ( nurl_print name )
+                ( nurl_print ` (already installed)\n` )
+            }
+        }
         // Record it as seen so the transitive walker doesn't try
         // to re-process the same target.
         ( vec_push [String] seen ( string_from target_s ) )
         ( string_free linkpath )
         ( string_free target )
-        ^ 0
+        ^ existing_rc
     } {}
     : !v IoErr sr ( fs_symlink target_s linkpath_s )
     : ~ i rc 0

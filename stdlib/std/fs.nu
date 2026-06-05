@@ -303,6 +303,31 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ^ @ !v IoErr { F e }
 }
 
+// POSIX readlink(2) — writes the symlink's target into `buf` (NOT
+// NUL-terminated) and returns the byte count, or -1 with errno set
+// (EINVAL when `path` is not a symlink). `bufsiz` caps the write.
+& `c` @ readlink s path s buf i bufsiz → i
+
+// Read the target a symbolic link points to, as an owned String.
+// Returns IoErr {Other} when `path` is not a symlink (errno = EINVAL),
+// {NotFound} when it doesn't exist, etc. The target is captured into a
+// zero-filled PATH_MAX buffer so the returned String is always NUL-
+// terminated; targets longer than 4095 bytes (above the Linux symlink
+// ceiling) are truncated.
+@ fs_readlink s path → !String IoErr {
+    : i cap 4096
+    : s buf ( nurl_zalloc + cap 1 )
+    : i n ( readlink path buf cap )
+    ? < n 0 {
+        ( nurl_free buf )
+        : IoErr e ( __io_err_of_kind ( errno_kind ) )
+        ^ @ !String IoErr { F e }
+    } {}
+    : String out ( string_from buf )
+    ( nurl_free buf )
+    ^ @ !String IoErr { T out }
+}
+
 // Remove an empty directory. Returns NotFound when missing, Other when
 // the directory is non-empty (errno = ENOTEMPTY) — the errno-kind table
 // folds the latter into Other rather than introducing a new variant.
