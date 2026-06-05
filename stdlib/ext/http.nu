@@ -97,6 +97,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/errors.nu`
+$ `stdlib/std/bytes.nu`
 
 // HttpErr tags — see stdlib/runtime.c §14 NURL_HTTP_ERR_*.
 //
@@ -969,6 +970,42 @@ i timeout_ms i connect_timeout_ms
     ? == # i p 0 { ^ @ ?String { F # String 0 } } {}
     : String s ( string_from p )
     ^ @ ?String { T s }
+}
+
+// Binary-safe body-chunk pull. Reads the stream's accumulated byte
+// length from the state (slot 4) BEFORE swapping the buffer out, then
+// copies exactly that many bytes — so embedded NUL bytes survive,
+// unlike `http_stream_next` whose `?String` carrier truncates at the
+// first NUL. Use this when forwarding arbitrary / binary upstream
+// bodies (the reverse proxy). None at end-of-stream or on error —
+// consult `http_stream_err` to tell them apart.
+@ __http_stream_next_bytes_libcurl i raw → ?( Vec u ) {
+    : *u state # *u raw
+    ~ && == ( nurl_peek state 4 ) 0 == ( nurl_peek state 11 ) 0 {
+        ( __http_stream_pump_once state )
+    }
+    : i blen ( nurl_peek state 4 )  // body_buf.len, before take resets it
+    ? == blen 0 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+    : s p ( nurl_curl_stream_take_body state )
+    ? == # i p 0 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+    : ( Vec u ) out ( vec_with_cap [u] blen )
+    ( bytes_extend_raw out p blen )
+    ( nurl_free p )
+    ^ @ ?( Vec u ) { T out }
+}
+
+@ http_stream_next_bytes HttpStream st → ?( Vec u ) {
+    : i raw . st raw
+    ? != ( nurl_curl_available ) 0 {
+        ^ ( __http_stream_next_bytes_libcurl raw )
+    } {}
+    // Stub / WinHTTP backend: no length channel, so fall back through
+    // the NUL-terminated carrier (truncates at the first embedded NUL —
+    // the same limitation the s-body stream path already documents).
+    : s p ( nurl_http_stream_next raw )
+    ? == # i p 0 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+    : ( Vec u ) out ( bytes_from_str p )
+    ^ @ ?( Vec u ) { T out }
 }
 
 @ http_stream_status HttpStream st → i {

@@ -221,6 +221,29 @@ $ `stdlib/std/fs.nu`
         }
     }
 
+    // ── bytes_extend_raw is BINARY-SAFE: copies an exact byte count
+    //    straight past embedded NULs, where bytes_extend_str (strlen)
+    //    would truncate at the first NUL. Build A \0 B \0 C and confirm
+    //    all 5 bytes land (len 5, byte[4] == 'C' = 67). ──────────────
+    : s rawbuf ( nurl_alloc 5 )
+    : *u rb # *u rawbuf
+    = . rb 0 # u 65  // 'A'
+    = . rb 1 # u 0  // NUL
+    = . rb 2 # u 66  // 'B'
+    = . rb 3 # u 0  // NUL
+    = . rb 4 # u 67  // 'C'
+    : ( Vec u ) raw_v ( vec_new [u] )
+    ( bytes_extend_raw raw_v rawbuf 5 )
+    ( nurl_print `extend_raw len: ` )
+    ( nurl_print ( nurl_str_int ( vec_len [u] raw_v ) ) )  // 5
+    ( nurl_print `\n` )
+    : *u rvp ( vec_data [u] raw_v )
+    ( nurl_print `extend_raw byte4: ` )
+    ( nurl_print ( nurl_str_int & 255 # i . rvp 4 ) )  // 67
+    ( nurl_print `\n` )
+    ( vec_free [u] raw_v )
+    ( nurl_free rawbuf )
+
     ( vec_free [u] hello )
     ^ 0
 }
