@@ -41,8 +41,9 @@
 //   - `now_ms` is wall-clock; subject to NTP slew. Use `monotonic_ns`
 //     for elapsed-time measurements.
 //   - All timestamps are i64; ns-precision overflows i64 in ~292 years.
-//   - Calendar arithmetic is UTC only. No timezone or DST handling —
-//     callers that need local time should keep the offset themselves.
+//   - The calendar core (above) is UTC only. Local-time conversion and
+//     DST live in §12b below (tz_parse / time_from_unix_tz / …), driven
+//     by a POSIX TZ string; there is no IANA tzdata region lookup.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/errors.nu`
@@ -593,4 +594,304 @@ $ `stdlib/std/async_ffi.nu`
     : i unix_local ( time_to_unix @ Time { y mo d hh mm ss 0 0 } )
     : i unix_utc - unix_local * offset_min 60
     ^ @ !i ParseErr { T unix_utc }
+}
+
+// ── §12b Timezones / DST — POSIX TZ-string rules ─────────────────────
+//
+// Local-time conversion with daylight-saving transitions, driven by a
+// POSIX TZ string (the `TZ` env-var format, e.g. `EST5EDT,M3.2.0,M11.1.0`
+// or `CET-1CEST,M3.5.0,M10.5.0/3`). This is the format IANA tzdata
+// compiles each zone's final rule into, and it covers every real DST
+// regime in use (US / EU / Australia all use the `Mm.w.d` rule form).
+//
+// NOT in scope (and not needed for conversion): the full IANA tzdata
+// database keyed by region name like "America/New_York", and historical
+// rule changes — a single POSIX TZ string encodes one current ruleset.
+// The caller supplies the TZ string (read it from the `TZ` env var, a
+// config value, or hard-code the zone you target).
+//
+//   ( tz_utc )                       → TimeZone     UTC, no DST
+//   ( tz_fixed off_secs )            → TimeZone     fixed offset east of UTC
+//   ( tz_parse posix_str )           → ! TimeZone ParseErr
+//   ( tz_offset_at tz utc_secs )     → i            seconds east of UTC in effect
+//   ( tz_is_dst tz utc_secs )        → b            is DST active at that instant
+//   ( time_from_unix_tz utc tz )     → Time         broken-down LOCAL fields
+//   ( time_now_tz tz )               → Time         local "now"
+//   ( time_to_unix_tz local tz )     → i            local civil fields → UTC secs
+//   ( time_format_offset t off )     → String       ISO 8601 + numeric offset
+//   ( time_format_iso_tz utc tz )    → String       one-shot UTC instant → local ISO
+//
+// TimeZone is a plain value type (all integer fields) — copy it freely,
+// no free needed. Only the `Mm.w.d[/time]` rule form is parsed; the
+// `Jn` / `n` (Julian-day) forms return ParseErr.BadFormat. Ambiguous or
+// nonexistent local times across a transition resolve to the
+// standard-time interpretation.
+
+: TimeZone {
+    i std_off   // seconds east of UTC during standard time
+    i dst_off   // seconds east of UTC during DST (== std_off when no DST)
+    i has_dst   // 0 / 1
+    i s_mon     // DST start rule: month 1..12
+    i s_week    // week 1..5 (5 = last)
+    i s_dow     // weekday 0=Sun..6=Sat
+    i s_time    // seconds after local midnight (default 02:00:00)
+    i e_mon     // DST end rule
+    i e_week
+    i e_dow
+    i e_time
+}
+
+: __TzOff { i secs i endpos }
+: __TzRule { i mon i week i dow i time i endpos i ok }
+
+@ __tz_is_alpha i c → b {
+    ^ | & >= c 65 <= c 90 & >= c 97 <= c 122
+}
+
+@ __tz_is_digit i c → b {
+    ^ & >= c 48 <= c 57
+}
+
+// Skip a zone abbreviation: a `<...>` quoted name, or a run of letters.
+@ __tz_skip_name s buf i pos i n → i {
+    ? & < pos n == ( nurl_str_get buf pos ) 60 {   // '<'
+        : ~ i p + pos 1
+        ~ & < p n != ( nurl_str_get buf p ) 62 { = p + p 1 }
+        ? & < p n == ( nurl_str_get buf p ) 62 { = p + p 1 } {}
+        ^ p
+    } {}
+    : ~ i p pos
+    ~ & < p n ( __tz_is_alpha ( nurl_str_get buf p ) ) { = p + p 1 }
+    ^ p
+}
+
+// Parse `h[:m[:s]]` (no sign). endpos == pos when no digits were read.
+@ __tz_parse_hms s buf i pos → __TzOff {
+    : ~ i p pos
+    : ~ i hh 0
+    : ~ b any F
+    ~ ( __tz_is_digit ( nurl_str_get buf p ) ) { = hh + * hh 10 - ( nurl_str_get buf p ) 48 = p + p 1 = any T }
+    ? ! any { ^ @ __TzOff { 0 pos } } {}
+    : ~ i mm 0
+    ? == ( nurl_str_get buf p ) 58 {   // ':'
+        = p + p 1
+        ~ ( __tz_is_digit ( nurl_str_get buf p ) ) { = mm + * mm 10 - ( nurl_str_get buf p ) 48 = p + p 1 }
+    } {}
+    : ~ i ss 0
+    ? == ( nurl_str_get buf p ) 58 {
+        = p + p 1
+        ~ ( __tz_is_digit ( nurl_str_get buf p ) ) { = ss + * ss 10 - ( nurl_str_get buf p ) 48 = p + p 1 }
+    } {}
+    : i secs + + * hh 3600 * mm 60 ss
+    ^ @ __TzOff { secs p }
+}
+
+// Parse a POSIX offset `[+|-]h[:m[:s]]` → seconds EAST of UTC. POSIX
+// offsets are seconds WEST (added to local to reach UTC), so the sign is
+// inverted here. endpos == pos when no offset is present.
+@ __tz_parse_offset s buf i pos → __TzOff {
+    : ~ i p pos
+    : ~ i sign 1
+    : i c0 ( nurl_str_get buf p )
+    ? == c0 45 { = sign -1 = p + p 1 } {}   // '-'
+    ? == c0 43 { = p + p 1 } {}             // '+'
+    : __TzOff h ( __tz_parse_hms buf p )
+    ? == . h endpos p { ^ @ __TzOff { 0 pos } } {}
+    : i east * -1 * sign . h secs
+    ^ @ __TzOff { east . h endpos }
+}
+
+// Parse one `Mm.w.d[/time]` transition rule. ok == 0 on any deviation
+// (including the unsupported Jn / n forms).
+@ __tz_parse_rule s buf i pos i n → __TzRule {
+    : ~ i p pos
+    ? | >= p n != ( nurl_str_get buf p ) 77 { ^ @ __TzRule { 0 0 0 7200 p 0 } } {}   // 'M'
+    = p + p 1
+    : ~ i mon 0
+    : ~ b d1 F
+    ~ & < p n ( __tz_is_digit ( nurl_str_get buf p ) ) { = mon + * mon 10 - ( nurl_str_get buf p ) 48 = p + p 1 = d1 T }
+    ? | ! d1 != ( nurl_str_get buf p ) 46 { ^ @ __TzRule { 0 0 0 7200 p 0 } } {}   // '.'
+    = p + p 1
+    : ~ i week 0
+    : ~ b d2 F
+    ~ & < p n ( __tz_is_digit ( nurl_str_get buf p ) ) { = week + * week 10 - ( nurl_str_get buf p ) 48 = p + p 1 = d2 T }
+    ? | ! d2 != ( nurl_str_get buf p ) 46 { ^ @ __TzRule { 0 0 0 7200 p 0 } } {}   // '.'
+    = p + p 1
+    : ~ i dow 0
+    : ~ b d3 F
+    ~ & < p n ( __tz_is_digit ( nurl_str_get buf p ) ) { = dow + * dow 10 - ( nurl_str_get buf p ) 48 = p + p 1 = d3 T }
+    ? ! d3 { ^ @ __TzRule { 0 0 0 7200 p 0 } } {}
+    : ~ i tsec 7200
+    ? & < p n == ( nurl_str_get buf p ) 47 {   // '/'
+        = p + p 1
+        : __TzOff th ( __tz_parse_hms buf p )
+        ? != . th endpos p { = tsec . th secs = p . th endpos } {}
+    } {}
+    ? | | | < mon 1 > mon 12 | < week 1 > week 5 | < dow 0 > dow 6 {
+        ^ @ __TzRule { 0 0 0 7200 p 0 }
+    } {}
+    ^ @ __TzRule { mon week dow tsec p 1 }
+}
+
+@ tz_utc → TimeZone {
+    ^ @ TimeZone { 0 0 0 0 0 0 7200 0 0 0 7200 }
+}
+
+@ tz_fixed i off → TimeZone {
+    ^ @ TimeZone { off off 0 0 0 0 7200 0 0 0 7200 }
+}
+
+@ tz_parse s p → !TimeZone ParseErr {
+    : i n ( nurl_str_len p )
+    ? == n 0 { ^ @ !TimeZone ParseErr { F @ ParseErr { Empty } } } {}
+    : ~ i pos 0
+    = pos ( __tz_skip_name p pos n )
+    : __TzOff so ( __tz_parse_offset p pos )
+    ? == . so endpos pos { ^ @ !TimeZone ParseErr { F @ ParseErr { BadFormat } } } {}
+    : i std_off . so secs
+    = pos . so endpos
+    : ~ i has_dst 0
+    : ~ i dst_off std_off
+    ? & < pos n != ( nurl_str_get p pos ) 44 {   // not ',' → DST abbrev present
+        = has_dst 1
+        = pos ( __tz_skip_name p pos n )
+        : __TzOff doff ( __tz_parse_offset p pos )
+        ? == . doff endpos pos {
+            = dst_off + std_off 3600
+        } {
+            = dst_off . doff secs
+            = pos . doff endpos
+        }
+    } {}
+    : ~ i s_mon 0
+    : ~ i s_week 0
+    : ~ i s_dow 0
+    : ~ i s_time 7200
+    : ~ i e_mon 0
+    : ~ i e_week 0
+    : ~ i e_dow 0
+    : ~ i e_time 7200
+    ? == has_dst 1 {
+        ? | >= pos n != ( nurl_str_get p pos ) 44 { ^ @ !TimeZone ParseErr { F @ ParseErr { BadFormat } } } {}
+        = pos + pos 1
+        : __TzRule r1 ( __tz_parse_rule p pos n )
+        ? == . r1 ok 0 { ^ @ !TimeZone ParseErr { F @ ParseErr { BadFormat } } } {}
+        = s_mon . r1 mon
+        = s_week . r1 week
+        = s_dow . r1 dow
+        = s_time . r1 time
+        = pos . r1 endpos
+        ? | >= pos n != ( nurl_str_get p pos ) 44 { ^ @ !TimeZone ParseErr { F @ ParseErr { BadFormat } } } {}
+        = pos + pos 1
+        : __TzRule r2 ( __tz_parse_rule p pos n )
+        ? == . r2 ok 0 { ^ @ !TimeZone ParseErr { F @ ParseErr { BadFormat } } } {}
+        = e_mon . r2 mon
+        = e_week . r2 week
+        = e_dow . r2 dow
+        = e_time . r2 time
+        = pos . r2 endpos
+    } {}
+    ^ @ !TimeZone ParseErr { T @ TimeZone { std_off dst_off has_dst s_mon s_week s_dow s_time e_mon e_week e_dow e_time } }
+}
+
+// Day-of-month of the `week`-th `dow` (0=Sun) in (year, mon). week 1..4
+// selects the n-th; week 5 (or any overshoot) selects the last.
+@ __tz_nth_dow i year i mon i week i dow → i {
+    : i days1 ( __days_from_civil year mon 1 )
+    : i wday1 ( __i_mod + days1 4 7 )
+    : i first + 1 ( __i_mod - + dow 7 wday1 7 )
+    : i cand + first * - week 1 7
+    : i dim ( days_in_month year mon )
+    ? > cand dim { ^ - cand 7 } {}
+    ^ cand
+}
+
+// UTC instant of a transition in `year`. which: 0 = DST start, 1 = end.
+// The rule time is local; just before the START it is standard time, and
+// just before the END it is daylight time — so we subtract the offset in
+// effect immediately before the transition.
+@ __tz_trans_utc TimeZone tz i year i which → i {
+    : i mon ? == which 0 . tz s_mon . tz e_mon
+    : i week ? == which 0 . tz s_week . tz e_week
+    : i dow ? == which 0 . tz s_dow . tz e_dow
+    : i tsec ? == which 0 . tz s_time . tz e_time
+    : i dom ( __tz_nth_dow year mon week dow )
+    : i localdays ( __days_from_civil year mon dom )
+    : i localsecs + * localdays 86400 tsec
+    : i off ? == which 0 . tz std_off . tz dst_off
+    ^ - localsecs off
+}
+
+@ tz_is_dst TimeZone tz i utc → b {
+    ? == . tz has_dst 0 { ^ F } {}
+    : Time u ( time_from_unix utc )
+    : i start ( __tz_trans_utc tz . u year 0 )
+    : i end ( __tz_trans_utc tz . u year 1 )
+    ? < start end { ^ & >= utc start < utc end } {}
+    // Southern hemisphere: DST spans the year boundary.
+    ^ | >= utc start < utc end
+}
+
+@ tz_offset_at TimeZone tz i utc → i {
+    ? ( tz_is_dst tz utc ) { ^ . tz dst_off } {}
+    ^ . tz std_off
+}
+
+@ time_from_unix_tz i utc TimeZone tz → Time {
+    ^ ( time_from_unix + utc ( tz_offset_at tz utc ) )
+}
+
+@ time_now_tz TimeZone tz → Time {
+    ^ ( time_from_unix_tz ( now_seconds ) tz )
+}
+
+// Interpret broken-down LOCAL fields as a wall-clock time in `tz` and
+// return the UTC timestamp. Guesses with the standard offset, then
+// refines to the DST offset if that instant falls inside the DST window.
+@ time_to_unix_tz Time t TimeZone tz → i {
+    : i localsecs ( time_to_unix t )
+    : i guess - localsecs . tz std_off
+    ? ( tz_is_dst tz guess ) { ^ - localsecs . tz dst_off } {}
+    ^ guess
+}
+
+@ __tz_push_offset String out i off → v {
+    ? == off 0 {
+        ( string_push_char out 90 )   // 'Z'
+    } {
+        : i a ? < off 0 - 0 off off
+        : i sign ? < off 0 45 43
+        ( string_push_char out sign )
+        : i hh / a 3600
+        : i mm / - a * hh 3600 60
+        ( __push_2digit out hh )
+        ( string_push_char out 58 )   // ':'
+        ( __push_2digit out mm )
+    }
+}
+
+// ISO 8601 with a numeric UTC offset, e.g. "2026-07-01T08:30:00-04:00"
+// (or "…Z" when off == 0). `t` must already hold LOCAL fields.
+@ time_format_offset Time t i off → String {
+    : String out ( string_with_cap 32 )
+    ( __push_4digit out . t year )
+    ( string_push_char out 45 )
+    ( __push_2digit out . t month )
+    ( string_push_char out 45 )
+    ( __push_2digit out . t day )
+    ( string_push_char out 84 )   // 'T'
+    ( __push_2digit out . t hour )
+    ( string_push_char out 58 )
+    ( __push_2digit out . t min )
+    ( string_push_char out 58 )
+    ( __push_2digit out . t sec )
+    ( __tz_push_offset out off )
+    ^ out
+}
+
+// One-shot: a UTC instant → local ISO 8601 with the offset for `tz`.
+@ time_format_iso_tz i utc TimeZone tz → String {
+    : i off ( tz_offset_at tz utc )
+    : Time t ( time_from_unix + utc off )
+    ^ ( time_format_offset t off )
 }
