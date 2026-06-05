@@ -15,6 +15,8 @@
 //   total: 20
 //   content: 0123456789ABCDEFGHIJ
 //   eof: T
+//   readlink: match
+//   readlink non-link: err
 //   remove_all: ok
 //   exists after remove: F
 //   remove_all missing: not found
@@ -118,6 +120,43 @@ $ `stdlib/core/errors.nu`
             ( nurl_print ( io_err_msg # IoErr e ) )
             ( nurl_print `\n` )
         }
+    }
+
+    // 4b. fs_symlink + fs_readlink round-trip. Create a link inside the
+    //     tree pointing at the data file, read its target back, and
+    //     confirm it matches. Then readlink a NON-symlink (the data file)
+    //     and confirm it errors (EINVAL).
+    : s link_path `nurl_fs_adv_test/link.bin`
+    ?? ( fs_symlink data_path link_path ) {
+        T → {
+            ?? ( fs_readlink link_path ) {
+                T tgt → {
+                    ( nurl_print `readlink: ` )
+                    ? != 0 ( nurl_str_eq ( string_data tgt ) data_path ) {
+                        ( nurl_print `match` )
+                    } { ( nurl_print `MISMATCH` ) }
+                    ( nurl_print `\n` )
+                    ( string_free tgt )
+                }
+                F e → {
+                    ( nurl_print `readlink: err ` )
+                    ( nurl_print ( io_err_msg # IoErr e ) )
+                    ( nurl_print `\n` )
+                }
+            }
+        }
+        F e → {
+            ( nurl_print `symlink: err ` )
+            ( nurl_print ( io_err_msg # IoErr e ) )
+            ( nurl_print `\n` )
+        }
+    }
+    ?? ( fs_readlink data_path ) {
+        T t → {
+            ( nurl_print `readlink non-link: unexpected ok\n` )
+            ( string_free t )
+        }
+        F _ → ( nurl_print `readlink non-link: err\n` )
     }
 
     // 5. dir_remove_all — wipe the whole tree (nested dirs + the file).
