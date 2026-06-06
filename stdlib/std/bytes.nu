@@ -84,6 +84,24 @@ $ `stdlib/core/errors.nu`
     } {}
 }
 
+// Append exactly `n` raw bytes from pointer `raw` onto `v` — the
+// length-explicit, BINARY-SAFE sibling of `bytes_extend_str` (which
+// stops at the first NUL via strlen). Use this to copy out a runtime-
+// owned byte buffer whose length is known independently of any NUL
+// terminator (e.g. a streamed HTTP body chunk that may contain NULs).
+// `raw` is BORROWED. No-op when `n <= 0`.
+@ bytes_extend_raw ( Vec u ) v s raw i n → v {
+    ? > n 0 {
+        ( vec_reserve [u] v n )
+        : *u src # *u raw
+        : *u dst ( vec_data [u] v )
+        : i len ( vec_len [u] v )
+        : *u dst_at # *u + # i dst len
+        ( nurl_memcpy dst_at src n )
+        ( vec_set_len [u] v + len n )
+    } {}
+}
+
 // Append the decimal-text bytes of `n` onto `v` (no leading zeros, '-' for
 // negatives). Convenience over `bytes_extend_str ( nurl_str_int n )` —
 // hides the malloc'd intermediate from caller-side accounting.

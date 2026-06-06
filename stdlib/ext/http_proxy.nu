@@ -66,10 +66,12 @@
 //     `( Vec u )` request body through `CURLOPT_COPYPOSTFIELDS` +
 //     an explicit `POSTFIELDSIZE`, so embedded NUL bytes (binary file
 //     uploads) survive the proxy hop.
-//   * Streaming-mode response body chunks travel through a NUL-
-//     terminated `char*` carrier in `nurl_http_stream_next`; binary
-//     responses with embedded NULs would be truncated. SSE / JSON /
-//     text (i.e. every LLM output today) is fine.
+//   * Streaming-mode response body is now binary-safe too: chunks are
+//     pulled via `http_stream_next_bytes`, which reads the libcurl
+//     stream's byte length and copies exactly that many bytes into a
+//     `( Vec u )` — so embedded NUL bytes survive instead of being
+//     truncated at the first NUL (the old `http_stream_next` `?String`
+//     carrier). (The stub / WinHTTP fallback still truncates.)
 //   * `proxy_serve_run` accepts every connection unconditionally —
 //     no auth, no rate limit. For those, build the loop yourself
 //     with `tcp_accept` + your auth check + `proxy_stream_to_conn`.
@@ -297,21 +299,18 @@ $ `stdlib/ext/http_server.nu`
             : ~ b done F
             : ~ i status_local 0  // 0 = ok, 1 = client_write, 2 = upstream
             ~ ! done {
-                : ?String chunk_opt ( http_stream_next st )
+                : ?( Vec u ) chunk_opt ( http_stream_next_bytes st )
                 ?? chunk_opt {
-                    T chunk → {
-                        : i clen ( string_len chunk )
+                    T cb → {
+                        : i clen ( vec_len [u] cb )
                         ? > clen 0 {
-                            : ( Vec u ) cb ( vec_with_cap [u] clen )
-                            ( bytes_extend_str cb ( string_data chunk ) )
                             : !v NetErr wr ( response_write_chunk conn cb )
-                            ( vec_free [u] cb )
                             ?? wr {
                                 T _ → {}
                                 F _ → { = status_local 1 = done T }
                             }
                         } {}
-                        ( string_free chunk )
+                        ( vec_free [u] cb )
                     }
                     F _ → { = done T }
                 }
