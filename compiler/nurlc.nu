@@ -5597,6 +5597,16 @@
         // ret_borrow.
         ( nurl_sym_def syms `__last_value_borrow__`
         ? ( __is_autodrop_enum phi_type syms ) match_scrut_borrow `` )
+        // A SCALAR match result (i*/double) cannot alias the scrutinee's
+        // storage, so clear `__last_ident_name__` (which still names the
+        // scrutinee binding from its eval). Otherwise `^ ?? owned { _ → 0 }`
+        // makes gen_ret mistake `owned` for the returned value and SKIP its
+        // auto-drop — leaking it. For a non-scalar result we leave the name
+        // as-is (conservative: it MIGHT be a payload view of the
+        // scrutinee, and skipping the drop avoids a use-after-free).
+        ? | > ( int_width phi_type ) 0 ( seq phi_type `double` )
+        { ( nurl_sym_def syms `__last_ident_name__` `` ) }
+        {}
         ^ final_reg
     } {}
     ( nurl_set_last_type `void` )
