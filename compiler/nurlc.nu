@@ -113,7 +113,10 @@
 
 @ expect i lex i tt → v {
     ? != ( nurl_lex_type lex ) tt
-    { ( die lex ( nurl_str_cat `unexpected token, expected tt=` ( nurl_str_int tt ) ) ) }
+    { ( die lex ( nurl_str_cat3
+        ( nurl_str_cat `expected ` ( __tok_label tt `` ) )
+        ` but found `
+        ( __tok_label ( nurl_lex_type lex ) ( nurl_lex_val lex ) ) ) ) }
     {}
     ( nurl_lex_advance lex )
 }
@@ -1595,6 +1598,10 @@
     ? == tt TT_RBRACE { ^ `'}' (the enclosing block ends here)` } {}
     ? == tt TT_RPAREN { ^ `')'` } {}
     ? == tt TT_RBRACK { ^ `']'` } {}
+    ? == tt TT_LBRACE { ^ `'{'` } {}
+    ? == tt TT_LPAREN { ^ `'('` } {}
+    ? == tt TT_LBRACK { ^ `'['` } {}
+    ? == tt TT_AT { ^ `'@'` } {}
     ? == tt TT_EOF { ^ `end of input` } {}
     ? == tt TT_ARROW { ^ `'->'` } {}
     ? != 0 ( nurl_str_len val ) { ^ ( nurl_str_cat3 `'` val `'` ) } {}
@@ -13673,7 +13680,23 @@
         ? == tt TT_AMP { ( gen_ffi_decl lex syms ) }
         ? == tt TT_DOLLAR { ( gen_import_decl lex syms cg ) }
         ? == tt TT_PERCENT { ( gen_trait_or_impl lex syms cg ) }
-        { ( nurl_lex_advance lex ) }
+        // A bare `|` is the most common near-miss: enums are declared
+        // `: | Name { … }`, not `| Name { … }`. (The `:`-less spelling
+        // used to be silently skipped — and only "worked" when the enum
+        // was also imported under the same name; now it's a diagnostic.)
+        ? == tt TT_PIPE { ( die lex `enum declarations start with ': |', not a bare '|' — write ': | Name { Variant... }'` ) }
+        // Anything else at the top level is a hard error. The decl loop
+        // used to silently advance past stray tokens — which is exactly
+        // how an unbalanced-brace function body slipped through: an extra
+        // `}` closed the body early, and the leftover statements (`^ x`,
+        // a stray `}`, …) leaked here and were swallowed, leaving the
+        // truncated function to silently miscompile (undef return) or to
+        // desync the scan_fn_sigs pre-pass. Refusing them turns that whole
+        // class into a diagnostic at the first leaked token.
+        { ( die lex ( nurl_str_cat3
+            `unexpected `
+            ( __tok_label tt ( nurl_lex_val lex ) )
+            ` at the top level — expected a declaration (@ fn, : const/struct/enum, & ffi, $ import, or % trait/impl). A stray '}' or leftover expression here usually means an earlier function body has unbalanced braces.` ) ) }
     }
 }
 

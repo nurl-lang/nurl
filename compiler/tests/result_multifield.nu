@@ -28,31 +28,36 @@ $ `stdlib/core/string.nu`
     i count
 }
 
-| ParseErr {
-    Empty
-    BadFormat
+// Self-contained error enum. Uses unique variant names so it doesn't
+// collide with the ParseErr (Empty/BadFormat) that string.nu pulls in
+// transitively via errors.nu. (This was written `| ParseErr` with a
+// bare `|`, which the front-end used to silently skip — now a hard
+// error; the canonical spelling is `: |`.)
+: | MfErr {
+    MfEmpty
+    MfBad
 }
 
-@ make_pt i x i y → !Pt2 ParseErr {
-    ? < x 0 { ^ @ !Pt2 ParseErr { F Empty } } {}
+@ make_pt i x i y → !Pt2 MfErr {
+    ? < x 0 { ^ @ !Pt2 MfErr { F MfEmpty } } {}
     : Pt2 p @ Pt2 { x y }
-    ^ @ !Pt2 ParseErr { T p }
+    ^ @ !Pt2 MfErr { T p }
 }
 
-@ make_quad → !Quad ParseErr {
+@ make_quad → !Quad MfErr {
     : Quad q @ Quad { 7 11 13 17 }
-    ^ @ !Quad ParseErr { T q }
+    ^ @ !Quad MfErr { T q }
 }
 
-@ make_tagged s lbl i n → !Tagged ParseErr {
-    ? < n 0 { ^ @ !Tagged ParseErr { F BadFormat } } {}
+@ make_tagged s lbl i n → !Tagged MfErr {
+    ? < n 0 { ^ @ !Tagged MfErr { F MfBad } } {}
     : Tagged t @ Tagged { ( string_from lbl ) n }
-    ^ @ !Tagged ParseErr { T t }
+    ^ @ !Tagged MfErr { T t }
 }
 
 @ main → i {
     // ── Pt2 (i, i) ─────────────────────────────────────────────────
-    : !Pt2 ParseErr r1 ( make_pt 3 4 )
+    : !Pt2 MfErr r1 ( make_pt 3 4 )
     ?? r1 {
         T p → {
             : Pt2 pp # Pt2 p
@@ -68,14 +73,14 @@ $ `stdlib/core/string.nu`
     }
 
     // Error path: should NOT trigger heap-box load (different variant).
-    : !Pt2 ParseErr r2 ( make_pt - 0 5 1 )
+    : !Pt2 MfErr r2 ( make_pt - 0 5 1 )
     ?? r2 {
         T p → ( nurl_print `pt-neg: ok\n` )
         F e → ( nurl_print `pt-neg: err\n` )
     }
 
     // ── Quad (4 fields) ────────────────────────────────────────────
-    : !Quad ParseErr r3 ( make_quad )
+    : !Quad MfErr r3 ( make_quad )
     ?? r3 {
         T q → {
             : Quad qq # Quad q
@@ -93,7 +98,7 @@ $ `stdlib/core/string.nu`
     }
 
     // ── Tagged (String, i) — f0 is a STRUCT (%String). ────────────
-    : !Tagged ParseErr r4 ( make_tagged `hello` 42 )
+    : !Tagged MfErr r4 ( make_tagged `hello` 42 )
     ?? r4 {
         T t → {
             : Tagged tt # Tagged t
