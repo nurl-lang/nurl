@@ -20,11 +20,11 @@
 //   * tools/list, tools/call
 //   * prompts/list, prompts/get
 //   * resources/list, resources/read
+//   * completion/complete (argument autocompletion for prompts/resources)
 //   * ping (heartbeat — empty result)
 //
 // Out of scope here (deferred):
 //   * resources/subscribe + change notifications (needs SSE push)
-//   * completion/complete (rarely-used spec feature)
 //   * sampling/createMessage (server→client; bidirectional reverse RPC)
 //   * roots/list (client-side feature)
 //
@@ -80,6 +80,19 @@ $ `stdlib/ext/http_response.nu`
     ( @ Json ) handler
 }
 
+// Completion provider (spec §6.7, completion/complete). Bound to a
+// single reference — a prompt (`ref/prompt` + name) or a resource
+// template (`ref/resource` + uri). The handler receives the request's
+// `argument` object (`{name, value}` — the argument being completed and
+// the partial text typed so far) and returns a Json ARRAY of candidate
+// string values. The dispatcher wraps that array in the spec-shaped
+// `{completion: {values, total, hasMore}}` envelope.
+: McpCompletion {
+    String ref_type
+    String ref_id
+    ( @ Json Json ) handler
+}
+
 // ── Registry ──────────────────────────────────────────────────────────
 
 : McpRegistry {
@@ -88,6 +101,7 @@ $ `stdlib/ext/http_response.nu`
     ( Vec McpTool ) tools
     ( Vec McpPrompt ) prompts
     ( Vec McpResource ) resources
+    ( Vec McpCompletion ) completions
 }
 
 @ mcp_registry_new s name s version → McpRegistry {
@@ -97,6 +111,7 @@ $ `stdlib/ext/http_response.nu`
         ( vec_new [McpTool] )
         ( vec_new [McpPrompt] )
         ( vec_new [McpResource] )
+        ( vec_new [McpCompletion] )
     }
 }
 
@@ -140,6 +155,17 @@ $ `stdlib/ext/http_response.nu`
         = k + k 1
     }
     ( vec_free [McpResource] . r resources )
+    // Completions
+    : i cn ( vec_len [McpCompletion] . r completions )
+    : *McpCompletion cp ( vec_data [McpCompletion] . r completions )
+    = k 0
+    ~ < k cn {
+        : McpCompletion c . cp k
+        ( string_free . c ref_type )
+        ( string_free . c ref_id )
+        = k + k 1
+    }
+    ( vec_free [McpCompletion] . r completions )
 }
 
 // CONSUMES `name`, `description`, `schema`. Handler is borrowed.
@@ -172,6 +198,20 @@ $ `stdlib/ext/http_response.nu`
         handler
     }
     ( vec_push [McpResource] . r resources res )
+}
+
+// Register a completion provider. `ref_type` is `ref/prompt` or
+// `ref/resource`; `ref_id` is the prompt name or resource URI the
+// completion is attached to. The handler receives the `argument`
+// object and returns a Json array of candidate string values.
+// CONSUMES `ref_type`, `ref_id`. Handler is borrowed.
+@ mcp_registry_add_completion McpRegistry r s ref_type s ref_id ( @ Json Json ) handler → v {
+    : McpCompletion c @ McpCompletion {
+        ( string_from ref_type )
+        ( string_from ref_id )
+        handler
+    }
+    ( vec_push [McpCompletion] . r completions c )
 }
 
 // ── Lookup helpers ────────────────────────────────────────────────────
@@ -215,6 +255,21 @@ $ `stdlib/ext/http_response.nu`
     ^ found
 }
 
+@ __mcp_find_completion_index McpRegistry r s ref_type s ref_id → i {
+    : i n ( vec_len [McpCompletion] . r completions )
+    : *McpCompletion cp ( vec_data [McpCompletion] . r completions )
+    : ~ i k 0
+    : ~ i found -1
+    ~ & == found -1 < k n {
+        : McpCompletion c . cp k
+        ? & != 0 ( nurl_str_eq ( string_data . c ref_type ) ref_type )
+        != 0 ( nurl_str_eq ( string_data . c ref_id ) ref_id )
+        { = found k } {}
+        = k + k 1
+    }
+    ^ found
+}
+
 // ── Per-method dispatchers ────────────────────────────────────────────
 
 // initialize: returns server capabilities + info per spec §3.2.
@@ -232,6 +287,8 @@ $ `stdlib/ext/http_response.nu`
     { ( json_obj_set caps `prompts` ( json_obj_new ) ) } {}
     ? > ( vec_len [McpResource] . r resources ) 0
     { ( json_obj_set caps `resources` ( json_obj_new ) ) } {}
+    ? > ( vec_len [McpCompletion] . r completions ) 0
+    { ( json_obj_set caps `completions` ( json_obj_new ) ) } {}
 
     : Json out ( json_obj_new )
     ( json_obj_set out `protocolVersion` ( json_str_lit ( mcp_protocol_version ) ) )
@@ -435,6 +492,66 @@ $ `stdlib/ext/http_response.nu`
     ^ out
 }
 
+// Wrap a values array in the spec-shaped completion result. CONSUMES
+// `values`. `total` is the array length; `hasMore` is always false (we
+// never truncate — a provider that wants paging caps its own array, and
+// the spec's 100-value soft limit is the provider's responsibility).
+@ __mcp_completion_envelope Json values → Json {
+    : i total ( json_arr_len values )
+    : Json comp ( json_obj_new )
+    ( json_obj_set comp `values` values )
+    ( json_obj_set comp `total` ( json_int total ) )
+    ( json_obj_set comp `hasMore` ( json_bool F ) )
+    : Json out ( json_obj_new )
+    ( json_obj_set out `completion` comp )
+    ^ out
+}
+
+// completion/complete (spec §6.7): resolve a completion provider by its
+// ref — `ref/prompt` + name, or `ref/resource` + uri — and invoke it
+// with the request's `argument` object. Returns
+// {completion: {values, total, hasMore}}. An unknown ref yields an empty
+// completion list rather than an error (per spec: completion is a hint).
+@ __mcp_dispatch_completion McpRegistry r ? Json params → Json {
+    : ~ s ref_type ``
+    : ~ s ref_id ``
+    : ~ Json arg ( json_null )
+    ?? params {
+        T p → {
+            : ?Json rf ( json_obj_get p `ref` )
+            ?? rf {
+                T jr → {
+                    : ?Json rt ( json_obj_get jr `type` )
+                    ?? rt { T x → { = ref_type ( json_as_str x ) } F _ → {} }
+                    : ?Json rn ( json_obj_get jr `name` )
+                    ?? rn { T x → { = ref_id ( json_as_str x ) } F _ → {} }
+                    ? == 0 ( nurl_str_len ref_id ) {
+                        : ?Json ru ( json_obj_get jr `uri` )
+                        ?? ru { T x → { = ref_id ( json_as_str x ) } F _ → {} }
+                    } {}
+                }
+                F _ → {}
+            }
+            : ?Json ag ( json_obj_get p `argument` )
+            ?? ag { T x → { ( json_free arg ) = arg ( json_clone x ) } F _ → {} }
+        }
+        F _ → {}
+    }
+    : i idx ( __mcp_find_completion_index r ref_type ref_id )
+    ? < idx 0 {
+        ( json_free arg )
+        ^ ( __mcp_completion_envelope ( json_arr_new ) )
+    } {}
+    : *McpCompletion cp ( vec_data [McpCompletion] . r completions )
+    : McpCompletion c . cp idx
+    : ( @ Json Json ) h . c handler
+    : ~ Json values ( h arg )
+    ( json_free arg )
+    // Defensive: a provider that returns a non-array gets an empty list.
+    ? ( json_is_arr values ) {} { ( json_free values ) = values ( json_arr_new ) }
+    ^ ( __mcp_completion_envelope values )
+}
+
 // ── Dispatcher ────────────────────────────────────────────────────────
 //
 // Single entry point routing JSON-RPC method names to the per-method
@@ -465,6 +582,9 @@ $ `stdlib/ext/http_response.nu`
     } {}
     ? != 0 ( nurl_str_eq method `resources/read` ) {
         ^ ( __mcp_dispatch_resources_read r params )
+    } {}
+    ? != 0 ( nurl_str_eq method `completion/complete` ) {
+        ^ ( __mcp_dispatch_completion r params )
     } {}
     ? != 0 ( nurl_str_eq method `ping` ) {
         ^ ( json_obj_new )
