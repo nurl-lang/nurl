@@ -5384,15 +5384,44 @@
                     ( nurl_print `  ` ) ( nurl_print cv1 )
                     ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt1 ) ( nurl_print `\n` )
                 } {
-                    ( nurl_print `  ` ) ( nurl_print cv1 )
-                    ? == ( nurl_str_get pt1 0 ) 123
-                    {  // Anonymous aggregate: load value from ptr
-                        ( nurl_print ` = load ` ) ( nurl_print pt1 )
-                        ( nurl_print `, ptr ` ) ( nurl_print pr1 ) ( nurl_print `\n` )
-                    }
-                    ? ( seq pt1 `i64` )
-                    { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i64\n` ) }
-                    { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i8*\n` ) }
+                    // Mirror slot-0 reconstruction (the inverse of
+                    // gen_agg_lit's enum-construction boxing). A `%`-named
+                    // payload is either a single-pointer handle (Vec/String/…:
+                    // f0 is a pointer, stashed bare → rebuild via insertvalue)
+                    // or a multi-field struct / enum / anon aggregate (heap-
+                    // boxed → load through the box pointer). Without this,
+                    // slots 1-2 fell straight to the i8* bitcast and stored a
+                    // `ptr` into a `%Struct` slot (clang reject — the
+                    // non-slot-0 struct-payload hole).
+                    : b pt1_is_struct_handle F
+                    : s pt1_f0_ty ``
+                    ? == ( nurl_str_get pt1 0 ) 37
+                    { : s sname_pt1 ( nurl_str_slice pt1 1 - ( nurl_str_len pt1 ) 1 )
+                        : s var_list_pt1 ( nurl_sym_get syms ( nurl_str_cat sname_pt1 `__variants` ) )
+                        ? == 0 ( nurl_str_len var_list_pt1 )
+                        { = pt1_f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname_pt1 `__idx_0` `__type` ) )
+                            ? & != 0 ( nurl_str_len pt1_f0_ty )
+                            == ( nurl_str_get pt1_f0_ty - ( nurl_str_len pt1_f0_ty ) 1 ) 42
+                            { = pt1_is_struct_handle T } {} }
+                        {} }
+                    {}
+                    ? pt1_is_struct_handle
+                    { ( nurl_print `  ` ) ( nurl_print cv1 )
+                        ( nurl_print ` = insertvalue ` ) ( nurl_print pt1 )
+                        ( nurl_print ` undef, ` ) ( nurl_print pt1_f0_ty )
+                        ( nurl_print ` ` ) ( nurl_print pr1 ) ( nurl_print `, 0\n` ) }
+                    { ( nurl_print `  ` ) ( nurl_print cv1 )
+                        ? | == ( nurl_str_get pt1 0 ) 123
+                        & == ( nurl_str_get pt1 0 ) 37
+                        != ( nurl_str_get pt1 - ( nurl_str_len pt1 ) 1 ) 42
+                        {  // Anon aggregate OR named non-pointer struct / enum:
+                            // load the whole value back through the box pointer.
+                            ( nurl_print ` = load ` ) ( nurl_print pt1 )
+                            ( nurl_print `, ptr ` ) ( nurl_print pr1 ) ( nurl_print `\n` )
+                        }
+                        ? ( seq pt1 `i64` )
+                        { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i64\n` ) }
+                        { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i8*\n` ) } }
                 }
                 : s vp1 ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print vp1 )
@@ -5429,15 +5458,37 @@
                     ( nurl_print `  ` ) ( nurl_print cv2 )
                     ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt2 ) ( nurl_print `\n` )
                 } {
-                    ( nurl_print `  ` ) ( nurl_print cv2 )
-                    ? == ( nurl_str_get pt2 0 ) 123
-                    {  // Anonymous aggregate: load value from ptr
-                        ( nurl_print ` = load ` ) ( nurl_print pt2 )
-                        ( nurl_print `, ptr ` ) ( nurl_print pr2 ) ( nurl_print `\n` )
-                    }
-                    ? ( seq pt2 `i64` )
-                    { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i64\n` ) }
-                    { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i8*\n` ) }
+                    // Mirror slot-0 reconstruction — same struct-payload hole
+                    // as slot 1, one slot over (enum field 3).
+                    : b pt2_is_struct_handle F
+                    : s pt2_f0_ty ``
+                    ? == ( nurl_str_get pt2 0 ) 37
+                    { : s sname_pt2 ( nurl_str_slice pt2 1 - ( nurl_str_len pt2 ) 1 )
+                        : s var_list_pt2 ( nurl_sym_get syms ( nurl_str_cat sname_pt2 `__variants` ) )
+                        ? == 0 ( nurl_str_len var_list_pt2 )
+                        { = pt2_f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname_pt2 `__idx_0` `__type` ) )
+                            ? & != 0 ( nurl_str_len pt2_f0_ty )
+                            == ( nurl_str_get pt2_f0_ty - ( nurl_str_len pt2_f0_ty ) 1 ) 42
+                            { = pt2_is_struct_handle T } {} }
+                        {} }
+                    {}
+                    ? pt2_is_struct_handle
+                    { ( nurl_print `  ` ) ( nurl_print cv2 )
+                        ( nurl_print ` = insertvalue ` ) ( nurl_print pt2 )
+                        ( nurl_print ` undef, ` ) ( nurl_print pt2_f0_ty )
+                        ( nurl_print ` ` ) ( nurl_print pr2 ) ( nurl_print `, 0\n` ) }
+                    { ( nurl_print `  ` ) ( nurl_print cv2 )
+                        ? | == ( nurl_str_get pt2 0 ) 123
+                        & == ( nurl_str_get pt2 0 ) 37
+                        != ( nurl_str_get pt2 - ( nurl_str_len pt2 ) 1 ) 42
+                        {  // Anon aggregate OR named non-pointer struct / enum:
+                            // load the whole value back through the box pointer.
+                            ( nurl_print ` = load ` ) ( nurl_print pt2 )
+                            ( nurl_print `, ptr ` ) ( nurl_print pr2 ) ( nurl_print `\n` )
+                        }
+                        ? ( seq pt2 `i64` )
+                        { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i64\n` ) }
+                        { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i8*\n` ) } }
                 }
                 : s vp2 ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print vp2 )
