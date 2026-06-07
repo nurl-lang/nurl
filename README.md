@@ -91,8 +91,9 @@ sets up the editor extension and language server in one step. Full instructions
 ## Syntax at a glance
 
 NURL uses **prefix notation** — the structure is always `OP ARG1 ARG2 … ARGN`.
-Types are single letters (`i` int64, `u` uint64, `f` float64, `b` bool,
-`s` string, `v` void, `*T` pointer); operators are sigils (`:` bind, `=`
+Types are single letters (`i` int64, `u` byte/uint8, `f` float64, `b` bool,
+`s` string, `v` void, `*T` pointer; sized variants `i8`/`i16`/`i32`,
+`u16`/`u32`/`u64`, `f32`); operators are sigils (`:` bind, `=`
 assign, `@` define, `→` arrow, `.` member, `?` ternary/option, `??` match,
 `~` loop/mutability, `!` not/Result, `\` closure/try, `^` return, `#` cast,
 `%` trait, `$` import).
