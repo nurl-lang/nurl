@@ -22,19 +22,24 @@ $ `stdlib/core/string.nu`
     i count
 }
 
-| Err1 {
-    Empty
-    BadFormat
+// Self-contained error enum with unique variant names (string.nu pulls
+// in errors.nu's Empty/BadFormat transitively, so reusing those would
+// collide). This was written `| Err1` with a bare `|`, which the
+// front-end used to silently skip — now a hard error; the canonical
+// spelling is `: |`.
+: | Err1 {
+    Err1Empty
+    Err1Bad
 }
 
 @ make_pt i x i y → !Pt2 Err1 {
-    ? < x 0 { ^ @ !Pt2 Err1 { F Empty } } {}
+    ? < x 0 { ^ @ !Pt2 Err1 { F Err1Empty } } {}
     : Pt2 p @ Pt2 { x y }
     ^ @ !Pt2 Err1 { T p }
 }
 
 @ make_tagged s lbl i n → !Tagged Err1 {
-    ? < n 0 { ^ @ !Tagged Err1 { F BadFormat } } {}
+    ? < n 0 { ^ @ !Tagged Err1 { F Err1Bad } } {}
     : Tagged t @ Tagged { ( string_from lbl ) n }
     ^ @ !Tagged Err1 { T t }
 }
