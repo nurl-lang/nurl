@@ -2,11 +2,10 @@
 
 This roadmap describes where NURL is **today** and where it is going. It is
 forward-looking and deliberately concise — the full, reverse-chronological
-record of *what shipped when* lives in [`CHANGELOG.md`](CHANGELOG.md), and the
-previous changelog-style roadmap is preserved as
-[`ROADMAP_old.md`](ROADMAP_old.md). Anything marked done here has a regression
-test in [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap
-fixed point.
+record of *what shipped when* lives in [`CHANGELOG.md`](CHANGELOG.md).
+Anything marked done here has a regression test in
+[`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
+point.
 
 _Last reviewed: 2026-06-07 · Current release: **0.9.5** · Language: **Grammar
 v2.2** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
