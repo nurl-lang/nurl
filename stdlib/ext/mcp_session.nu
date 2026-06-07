@@ -36,6 +36,11 @@
 //   ( mcp_session_delete store sid )                → b
 //   ( mcp_session_push_notify store sid msg )       → b   CONSUMES msg
 //   ( mcp_session_drain_notify store sid )          → ( Vec Json )  owned
+//   ( mcp_session_subscribe store sid uri )         → b
+//   ( mcp_session_unsubscribe store sid uri )       → b
+//   ( mcp_session_is_subscribed store sid uri )     → b
+//   ( mcp_session_notify_resource_updated store uri ) → i   sessions notified
+//   ( mcp_resource_updated_notification uri )       → Json  notification msg
 //   ( mcp_session_begin_rpc store sid method params ) → i  request id, CONSUMES params
 //   ( mcp_session_request_sampling store sid msgs system max_tokens ) → i
 //   ( mcp_session_is_pending store sid id )         → b
@@ -59,10 +64,11 @@ $ `stdlib/core/vec.nu`
     String id
     i created_ms
     i last_ms
-    i next_rpc_id           // server→client request id allocator (1-based)
-    ( Vec Json ) notify     // outbound queue (notifications + reverse-RPC requests)
-    ( Vec i ) pending_ids   // reverse-RPC request ids awaiting a response
-    ( Vec Json ) results    // inbound reverse-RPC responses, matched by their "id"
+    i next_rpc_id  // server→client request id allocator (1-based)
+    ( Vec Json ) notify  // outbound queue (notifications + reverse-RPC requests)
+    ( Vec i ) pending_ids  // reverse-RPC request ids awaiting a response
+    ( Vec Json ) results  // inbound reverse-RPC responses, matched by their "id"
+    ( Vec String ) subscriptions  // resource URIs this session subscribed to
 }
 
 : McpSessionStore { ( Vec McpSession ) sessions }
@@ -99,6 +105,7 @@ $ `stdlib/core/vec.nu`
     : McpSession se @ McpSession {
         id now now 1
         ( vec_new [Json] ) ( vec_new [i] ) ( vec_new [Json] )
+        ( vec_new [String] )
     }
     ( vec_push [McpSession] . store sessions se )
     ^ ret
@@ -131,6 +138,7 @@ $ `stdlib/core/vec.nu`
     ( vec_free_with [Json] . se notify \ Json j → v { ( json_free j ) } )
     ( vec_free [i] . se pending_ids )
     ( vec_free_with [Json] . se results \ Json j → v { ( json_free j ) } )
+    ( vec_free_with [String] . se subscriptions \ String s → v { ( string_free s ) } )
 }
 
 @ mcp_session_delete McpSessionStore store s sid → b {
@@ -184,6 +192,107 @@ $ `stdlib/core/vec.nu`
         F → {}
     }
     ^ out
+}
+
+// ── Resource subscriptions (spec §6.5) ────────────────────────────────
+//
+// A session may subscribe to individual resource URIs; when the server
+// observes a change it calls `mcp_session_notify_resource_updated`, which
+// enqueues a `notifications/resources/updated` message onto every
+// subscribed session's outbound queue (delivered over the SSE stream by
+// the existing drain path). Subscription URIs are owned String copies.
+
+@ __mcp_sub_index ( Vec String ) subs s uri → i {
+    : i n ( vec_len [String] subs )
+    : ~ i k 0
+    : ~ i res -1
+    ~ < k n {
+        : ?String so ( vec_get [String] subs k )
+        ?? so {
+            T s → { ? == 1 ( nurl_str_eq ( string_data s ) uri ) { = res k = k n } {} }
+            F → {}
+        }
+        = k + k 1
+    }
+    ^ res
+}
+
+// Subscribe `sid` to `uri`. Idempotent: a duplicate URI is a no-op.
+// Returns F if the session is unknown.
+@ mcp_session_subscribe McpSessionStore store s sid s uri → b {
+    : i idx ( __mcp_session_find store sid )
+    ? < idx 0 { ^ F } {}
+    : ?McpSession so ( vec_get [McpSession] . store sessions idx )
+    ?? so {
+        T se → {
+            // Subscriptions ride the heap-stable Vec ctl, so a push
+            // persists through the struct copy without a vec_set.
+            ? >= ( __mcp_sub_index . se subscriptions uri ) 0
+            {}
+            { ( vec_push [String] . se subscriptions ( string_from uri ) ) }
+            ^ T
+        }
+        F → { ^ F }
+    }
+}
+
+// Unsubscribe `sid` from `uri`. Returns T iff the URI was subscribed.
+@ mcp_session_unsubscribe McpSessionStore store s sid s uri → b {
+    : i idx ( __mcp_session_find store sid )
+    ? < idx 0 { ^ F } {}
+    : ?McpSession so ( vec_get [McpSession] . store sessions idx )
+    ?? so {
+        T se → {
+            : i si ( __mcp_sub_index . se subscriptions uri )
+            ? < si 0 { ^ F } {}
+            : ?String victim ( vec_get [String] . se subscriptions si )
+            ?? victim { T s → ( string_free s ) F → {} }
+            ( vec_remove [String] . se subscriptions si )
+            ^ T
+        }
+        F → { ^ F }
+    }
+}
+
+@ mcp_session_is_subscribed McpSessionStore store s sid s uri → b {
+    : i idx ( __mcp_session_find store sid )
+    ? < idx 0 { ^ F } {}
+    : ?McpSession so ( vec_get [McpSession] . store sessions idx )
+    ?? so {
+        T se → { ^ >= ( __mcp_sub_index . se subscriptions uri ) 0 }
+        F → { ^ F }
+    }
+}
+
+// Build the spec-shaped `notifications/resources/updated` message for a
+// changed `uri` (no id — it is a notification, not a request).
+@ mcp_resource_updated_notification s uri → Json {
+    : Json params ( json_obj_new )
+    ( json_obj_set params `uri` ( json_str_lit uri ) )
+    ^ ( mcp_notification `notifications/resources/updated` params )
+}
+
+// Notify every session subscribed to `uri` that the resource changed.
+// Enqueues one `notifications/resources/updated` per subscribed session.
+// Returns the number of sessions notified.
+@ mcp_session_notify_resource_updated McpSessionStore store s uri → i {
+    : i n ( vec_len [McpSession] . store sessions )
+    : ~ i k 0
+    : ~ i count 0
+    ~ < k n {
+        : ?McpSession so ( vec_get [McpSession] . store sessions k )
+        ?? so {
+            T se → {
+                ? >= ( __mcp_sub_index . se subscriptions uri ) 0 {
+                    ( vec_push [Json] . se notify ( mcp_resource_updated_notification uri ) )
+                    = count + count 1
+                } {}
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ^ count
 }
 
 // ── Reverse RPC (server → client) ─────────────────────────────────────

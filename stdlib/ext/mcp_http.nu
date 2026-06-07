@@ -437,6 +437,22 @@ s host i port
     }
 }
 
+// Build a JSON-RPC success envelope with an empty result object, echoing
+// the request's `id`. Used for resources/(un)subscribe acks.
+@ __mcp_subscribe_reply Json req → Json {
+    : ?Json idf ( json_obj_get req `id` )
+    : Json res ( json_obj_new )
+    ?? idf {
+        T j → { ^ ( mcp_response_result j res ) }
+        F → {
+            : Json nullid ( json_null )
+            : Json env ( mcp_response_result nullid res )
+            ( json_free nullid )
+            ^ env
+        }
+    }
+}
+
 @ __mcp_req_is_response Json req → b {
     // A JSON-RPC response carries result/error and no method.
     ? ( json_obj_has req `method` ) { ^ F } {}
@@ -563,6 +579,43 @@ McpSessionStore store
                     ( json_free jreq )
                     : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_invalid_request `unknown or expired Mcp-Session-Id` )
                     = . r status 404
+                    ( __mcp_http_apply_cors r )
+                    ^ r
+                } {}
+
+                // resources/subscribe & resources/unsubscribe are
+                // session-scoped: handle them here (the dispatch closure is
+                // session-agnostic) by recording the subscription against
+                // this request's Mcp-Session-Id, then reply with an empty
+                // result. The change-notification side is driven by the
+                // application calling mcp_session_notify_resource_updated.
+                : b is_sub ( nurl_str_eq method `resources/subscribe` )
+                : b is_unsub ( nurl_str_eq method `resources/unsubscribe` )
+                ? | is_sub is_unsub {
+                    : ~ s sub_uri ``
+                    : ?Json prm ( json_obj_get jreq `params` )
+                    ?? prm {
+                        T pj → {
+                            : ?Json uj ( json_obj_get pj `uri` )
+                            ?? uj { T x → { = sub_uri ( json_as_str x ) } F _ → {} }
+                        }
+                        F _ → {}
+                    }
+                    : ?String ssid ( header_get . req headers `Mcp-Session-Id` )
+                    ?? ssid {
+                        T s → {
+                            ? & is_sub != 0 ( nurl_str_len sub_uri )
+                            { ( mcp_session_subscribe store ( string_data s ) sub_uri ) } {}
+                            ? & is_unsub != 0 ( nurl_str_len sub_uri )
+                            { ( mcp_session_unsubscribe store ( string_data s ) sub_uri ) } {}
+                            ( string_free s )
+                        }
+                        F _ → {}
+                    }
+                    : Json env ( __mcp_subscribe_reply jreq )
+                    ( json_free jreq )
+                    : HttpResponse r ( __mcp_http_response_for_json req env )
+                    ( __mcp_http_echo_session req r )
                     ( __mcp_http_apply_cors r )
                     ^ r
                 } {}
