@@ -27,6 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- **The `sink`-of-auto-dropped-value boundary is documented as an
+  intentional, locked limitation** (`docs/MEMORY.md` §1,
+  `docs/LIMITATIONS.md`). Passing a compiler-auto-dropped value (owned
+  string / slice / `Drop` value / owned-field struct) to a `sink`
+  parameter is rejected by design: the auto-drop obligation is tracked in
+  per-scope owned-sets that are snapshotted/restored across `?` / `??` /
+  loop boundaries, so transferring it to the callee would be silently
+  undone by an enclosing arm's restore — reintroducing a double-free.
+  Reframed from "a future step" to a sound, conscious 1.0 decision with
+  the rationale and workaround; pinned by
+  `compiler/tests/should_fail_sink_autodrop.nu`.
+
 - **The `pub` visibility contract is now stated exactly and locked by
   tests** (`docs/spec.md` §3.3). Cross-file enforcement covers
   `@`-functions, structs, enums, top-level consts, and enum variants; `pub`
