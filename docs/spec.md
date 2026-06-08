@@ -207,12 +207,26 @@ file:line:col: error: private function 'X' is not visible across files;
                        defined in 'Y'
 ```
 
-**Enforcement scope as of v2.0:** only `@`-function calls observe the
-visibility check. `pub` on struct/enum/const decls is parsed and
-recorded forward-compat but does not yet gate cross-file references.
-`pub` on FFI and trait/impl decls is parsed forward-compat and has no
-runtime effect — FFI symbols are linker-level globals; trait dispatch
-is type-mangled.
+**Enforcement scope.** In strict mode the cross-file visibility check
+covers `@`-functions, structs, enums, top-level consts, and enum
+variants — referencing an unmarked one of these from another file is a
+hard compile error (e.g. `private type 'X' is not visible across files`).
+
+`pub` on **traits, impl methods, and FFI** declarations is accepted
+(forward-compat) but has **no cross-file effect, by design** — this is a
+deliberate, locked decision, not a missing feature:
+
+- trait dispatch is resolved by the *type-mangled method name* produced at
+  monomorphisation, not by the trait's own name, so a trait/impl has no
+  name-based identity to gate; and
+- FFI symbols are linker-level ABI globals with no NURL-source identity —
+  the linker resolves them across the whole program regardless of which
+  file declared them.
+
+The contract is pinned by tests: `pub_trait_ffi_visibility.nu` proves the
+unenforced surface (a non-`pub` trait method + FFI) stays callable across
+files, and the `should_fail_pub_*` tests prove the enforced surface (a
+private fn / struct / const / enum variant) is rejected.
 
 ## 4. Types
 
