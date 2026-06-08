@@ -4176,8 +4176,22 @@
     // gen_let / gen_ret does not mis-read `( f \ → v {…} )` as one.
     ( nurl_sym_def syms `__last_expr_refdepth__` `` )
     // Group F: impl method dispatch based on first arg's LLVM type
-    : s impl_key ( nurl_str_cat fname ( nurl_str_cat `##` first_arg_type ) )
-    : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
+    : ~ s impl_key ( nurl_str_cat fname ( nurl_str_cat `##` first_arg_type ) )
+    : ~ s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
+    // `inout` receiver: the first argument is passed as `%T*`, but impls
+    // are registered by the value type `%T` (g_impl_name_syms key
+    // `method##%T`). On a miss with a pointer-typed first arg, retry with
+    // the trailing `*` stripped so an `inout`/`sink` impl method still
+    // dispatches. (Without this, applying `inout` pointerised the arg and
+    // the dispatch fell through to an undefined bare `@method`.)
+    ? & == 0 ( nurl_str_len impl_mangle_key )
+    & > ( nurl_str_len first_arg_type ) 1
+    == ( nurl_str_get first_arg_type - ( nurl_str_len first_arg_type ) 1 ) 42
+    { : s __fa_base ( nurl_str_slice first_arg_type 0 - ( nurl_str_len first_arg_type ) 1 )
+        = impl_key ( nurl_str_cat fname ( nurl_str_cat `##` __fa_base ) )
+        = impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
+    }
+    {}
     ? != 0 ( nurl_str_len impl_mangle_key )
     { : s impl_ret ( nurl_sym_get g_impl_ret_syms impl_key )
         : s impl_name ( nurl_str_cat fname ( nurl_str_cat `__` impl_mangle_key ) )
@@ -13156,6 +13170,24 @@
                     : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
                     // gen_fn_decl_concrete reads params, →, ret, body from lex
                     ( gen_fn_decl_concrete mangled lex syms cg )
+                    // gen_fn_decl_concrete recorded the inout/sink parameter
+                    // sets under the MANGLED name (`bump__Counter`), but a
+                    // call site dispatches by the BARE method name
+                    // (`( bump c )` → call_name `bump`) and looks the sets up
+                    // there. Mirror them onto the bare name so an `inout` /
+                    // `sink` impl-method argument is passed by address /
+                    // moved — without this the receiver was passed BY VALUE
+                    // into a `T*` parameter, corrupting memory (segfault).
+                    // All impls of a trait method share the trait's parameter
+                    // conventions, so the bare-name entry is consistent across
+                    // implementing types. Only mirror non-empty sets so an
+                    // impl with no inout/sink can't clobber another's entry.
+                    : s __impl_io ( nurl_sym_get g_fn_inout mangled )
+                    : s __impl_sk ( nurl_sym_get g_fn_sink mangled )
+                    ? != 0 ( nurl_str_len __impl_io )
+                    { ( nurl_sym_def g_fn_inout mname __impl_io ) } {}
+                    ? != 0 ( nurl_str_len __impl_sk )
+                    { ( nurl_sym_def g_fn_sink mname __impl_sk ) } {}
                 }
                 { ( die lex `expected method name in impl` ) }
             }
