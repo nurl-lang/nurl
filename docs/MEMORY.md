@@ -103,13 +103,26 @@ use-after-move):
 ( give_away xs )                 // xs is consumed; using it now is a move error
 ```
 
-`sink` lowers to an ordinary by-value parameter (no IR change). In
-this version it applies to `Vec` and other manually-managed handles;
-passing a *compiler-auto-dropped* value (an owned string, an owned
-slice, a `Drop`-trait value, a struct with owned fields) to a `sink`
-parameter is rejected — transferring the auto-drop obligation to the
-callee is a future step. Generic functions may take `sink`
-parameters (`@ consume [A] sink ( Box A ) b → v`).
+`sink` lowers to an ordinary by-value parameter (no IR change), and the
+callee is responsible for releasing the value (the `vec_free` above) — a
+`sink` parameter is **not** auto-dropped. It therefore applies to `Vec`
+and other manually-managed handles. `sink` works on ordinary functions
+and on trait **impl methods** (`% Bumpable (Counter) { @ take sink … }`).
+
+Passing a *compiler-auto-dropped* value — an owned string (from an
+allocating call), an owned slice, a `Drop`-trait value, or a struct with
+owned fields — to a `sink` parameter is **rejected by design**, not a
+missing feature. The auto-drop obligation for such values is tracked in
+per-scope owned-sets that are snapshotted and restored across `?` / `??`
+/ loop boundaries; transferring the obligation to the callee by
+un-tracking the value would be silently undone by an enclosing arm's
+restore, reintroducing the very double-free the checker exists to
+prevent. The conservative rejection keeps the model sound. **Workaround:**
+wrap the value in a manually-managed handle (a one-field `{ s data }`
+struct, or a `Vec`), or pass it as an ordinary by-value parameter and let
+the caller's scope drop it. `compiler/tests/should_fail_sink_autodrop.nu`
+pins the diagnostic. Generic functions may take `sink` parameters
+(`@ consume [A] sink ( Box A ) b → v`).
 
 ## 2. The borrow checker
 
