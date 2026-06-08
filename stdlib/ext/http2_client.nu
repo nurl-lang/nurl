@@ -46,10 +46,17 @@
 //   * Single-owner: one driver, one socket reader. Not safe to use a
 //     single H2Client from multiple fibers concurrently (mirrors the
 //     server's per-connection model).
-//   * The driver interleaves reads and writes single-threaded; a very
-//     large request body could in theory deadlock if the peer withholds
-//     WINDOW_UPDATE until we read while we block writing — acceptable
-//     for v1 (TCP buffering covers ordinary sizes).
+//   * The driver interleaves reads and writes single-threaded: each pump
+//     step DRAINS every inbound frame already available (readiness-probed
+//     with `nurl_reactor_wait_read`, so a frame read only ever blocks for
+//     the rest of a frame the peer is actively sending) BEFORE flushing
+//     pending DATA. Draining first keeps the peer's send buffer to us
+//     empty, so the peer never blocks writing and keeps reading our DATA —
+//     which is what lets our (blocking) DATA writes drain instead of
+//     deadlocking on a large request body. A peer that advertises a large
+//     window and then stalls reading entirely is bounded by the 30 s
+//     socket timeout rather than hanging forever. Single-owner: not safe
+//     to share one client across fibers concurrently.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -184,6 +191,14 @@ $ `stdlib/ext/http2_hpack.nu`
 
 @ __h2c_set_conn_window H2Client c i v → v { ( nurl_poke . c st 1 v ) }
 
+// Underlying socket fd, for readiness polling (nurl_reactor_wait_*).
+@ __h2c_fd H2Client c → i { ^ ( nurl_tcp_get_fd # i . . c tcp raw ) }
+
+// Non-blocking readiness probes. `nurl_reactor_wait_{read,write}` return
+// >= 0 when the fd is ready and < 0 on timeout; a 0 ms timeout makes them
+// pure polls. (Runtime builtins, also used by std/net.nu's async path.)
+@ __h2c_readable i fd → b { ^ >= ( nurl_reactor_wait_read fd 0 ) 0 }
+
 @ __h2c_goaway H2Client c → i { ^ ( nurl_peek . c st 7 ) }
 
 // ── Small byte / string helpers ───────────────────────────────────────
@@ -288,9 +303,13 @@ $ `stdlib/ext/http2_hpack.nu`
         : i v2 & 255 # i . p + k 4
         : i v3 & 255 # i . p + k 5
         : i value + + + << v0 24 << v1 16 << v2 8 v3
+        // SETTINGS parameter IDs (RFC 9113 §6.5.2):
+        //   1 HEADER_TABLE_SIZE   2 ENABLE_PUSH   3 MAX_CONCURRENT_STREAMS
+        //   4 INITIAL_WINDOW_SIZE 5 MAX_FRAME_SIZE 6 MAX_HEADER_LIST_SIZE
         ?? id {
-            1 → { ( nurl_poke . c st 5 value ) }
-            3 → {
+            1 → { ( nurl_poke . c st 5 value ) }  // HEADER_TABLE_SIZE
+            3 → { ( nurl_poke . c st 6 value ) }  // MAX_CONCURRENT_STREAMS
+            4 → {  // INITIAL_WINDOW_SIZE — the per-stream send-window seed.
                 ? > value ( h2_max_window_size ) {
                     = err # H2ClientErr H2CFlowControl
                     = status 1
@@ -310,7 +329,7 @@ $ `stdlib/ext/http2_hpack.nu`
                     }
                 }
             }
-            5 → {
+            5 → {  // MAX_FRAME_SIZE
                 ? | < value 16384 > value ( h2_max_frame_size_upper_bound ) {
                     = err # H2ClientErr H2CProtocol
                     = status 1
@@ -318,8 +337,7 @@ $ `stdlib/ext/http2_hpack.nu`
                     ( nurl_poke . c st 4 value )
                 }
             }
-            6 → { ( nurl_poke . c st 6 value ) }
-            _ → {}  // ENABLE_PUSH / MAX_HEADER_LIST_SIZE / unknown — ignore
+            _ → {}  // ENABLE_PUSH(2) / MAX_HEADER_LIST_SIZE(6) / unknown — ignore
         }
         = k + k 6
     }
@@ -890,19 +908,62 @@ $ `stdlib/ext/http2_hpack.nu`
     ^ @ !v H2ClientErr { T 0 }
 }
 
-// Flush sendable DATA, then read + dispatch exactly one inbound frame.
+// One driver step. Interleaves reads and writes so a large request body
+// can't deadlock the single socket: we DRAIN every inbound frame already
+// available (readiness-probed, so a frame read only blocks for the rest
+// of a frame the peer is actively sending) BEFORE flushing pending DATA.
+// Draining first keeps the peer's send buffer to us empty, so it never
+// blocks writing and keeps reading our DATA — which lets our writes drain.
+// Only when nothing was readable do we block, on the read that can
+// actually unblock us (a WINDOW_UPDATE or the response).
 @ h2_client_pump_once H2Client c → !v H2ClientErr {
+    : i fd ( __h2c_fd c )
+    : ~ b did F
+    : ~ i status 0
+    : ~ H2ClientErr err H2COther
+
+    // 1. Drain every frame already available. We only enter h2_read_frame
+    //    when the socket reports readable, so a blocking frame read only
+    //    waits for the remainder of a frame the peer is actively sending.
+    ~ & == status 0 ( __h2c_readable fd ) {
+        : !H2Frame H2FrameErr rf ( h2_read_frame . c tcp 16384 )
+        ?? rf {
+            T frame → {
+                : !v H2ClientErr dr ( __h2c_dispatch c frame )
+                ( h2_frame_free frame )
+                ?? dr { T _ → { = did T } F e → { = err e = status 1 } }
+            }
+            F e → { = err ( __h2c_frame_err_to_client e ) = status 1 }
+        }
+    }
+    ? == status 1 { ^ @ !v H2ClientErr { F err } } {}
+
+    // 2. Flush as much sendable DATA as the flow-control windows permit
+    //    (stops at window==0 / body done). Because step 1 already drained
+    //    inbound frames, any WINDOW_UPDATE the peer sent has reopened the
+    //    window here, and the peer's send buffer to us is empty — so it is
+    //    not blocked writing and keeps reading our DATA, which is what lets
+    //    these (blocking) writes complete instead of deadlocking.
     : !v H2ClientErr fr ( __h2c_flush_pending c )
     ?? fr { T _ → {} F e → { ^ @ !v H2ClientErr { F e } } }
-    : !H2Frame H2FrameErr rf ( h2_read_frame . c tcp 16384 )
-    ?? rf {
-        T frame → {
-            : !v H2ClientErr dr ( __h2c_dispatch c frame )
-            ( h2_frame_free frame )
-            ^ dr
+
+    // 3. If nothing was readable in step 1, block for the peer's next
+    //    frame — progress now depends on it (a WINDOW_UPDATE to reopen the
+    //    window, or the response). The 30 s socket timeout bounds a peer
+    //    that goes fully silent.
+    ? ! did {
+        : !H2Frame H2FrameErr rf2 ( h2_read_frame . c tcp 16384 )
+        ?? rf2 {
+            T frame → {
+                : !v H2ClientErr dr ( __h2c_dispatch c frame )
+                ( h2_frame_free frame )
+                ?? dr { T _ → {} F e → { = err e = status 1 } }
+            }
+            F e → { = err ( __h2c_frame_err_to_client e ) = status 1 }
         }
-        F e → { ^ @ !v H2ClientErr { F ( __h2c_frame_err_to_client e ) } }
-    }
+    } {}
+    ? == status 1 { ^ @ !v H2ClientErr { F err } } {}
+    ^ @ !v H2ClientErr { T 0 }
 }
 
 // Pump until every submitted stream has completed (or a fatal error).

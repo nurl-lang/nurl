@@ -10,6 +10,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **HTTP/2 client: request bodies larger than 256 bytes now work, and a
+  large body no longer deadlocks the driver.** Three related fixes:
+  - **SETTINGS parameter-ID mismap (critical).** The client's SETTINGS
+    parser handled id `3` (`MAX_CONCURRENT_STREAMS`) as
+    `INITIAL_WINDOW_SIZE` and ignored id `4` (the real
+    `INITIAL_WINDOW_SIZE`), so every stream's send window was seeded with
+    the peer's max-concurrent-streams value (typically 256) instead of its
+    advertised window (65535). Any POST/PUT body over ~256 bytes stalled
+    forever waiting for a WINDOW_UPDATE that never needed to come. IDs are
+    now mapped correctly.
+  - **Driver read/write interleave.** Each pump step now drains every
+    inbound frame already available (readiness-probed via
+    `nurl_reactor_wait_read`) *before* flushing pending DATA, keeping the
+    peer's send buffer to us empty so it never blocks writing and keeps
+    reading our DATA — removing the documented single-socket deadlock on a
+    large request body.
+  - **Server per-stream WINDOW_UPDATE** (`stdlib/ext/http2_conn.nu`). The
+    h2 server replenished only the connection window, so it could not
+    receive a request body larger than the 64 KB initial *stream* window;
+    it now also replenishes each stream's window as it consumes DATA.
+
+  Regression: `compiler/tests/http2_client.nu` gains a live 200 KB POST
+  (spanning many DATA frames and several flow-control windows) over the
+  in-repo h2 server, gated on `NURL_NET_TESTS=1`.
+
 - **`inout` / `sink` parameter conventions now work on trait impl
   methods** (grammar-v2 borrow checker). An `inout` (or `sink`) parameter
   on an impl method silently miscompiled: the convention was recorded

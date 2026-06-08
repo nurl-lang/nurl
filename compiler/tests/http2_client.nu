@@ -183,6 +183,43 @@ $ `stdlib/ext/http2_client.nu`
     }
 }
 
+// Large-body POST: ~200 KB spans many DATA frames and far exceeds the
+// default 64 KB flow-control window, so the client must send a burst,
+// block on the window, read the server's WINDOW_UPDATE, and resume —
+// the exact read/write interleave the single-socket driver depends on.
+// Reuses the already-connected client + server connection.
+@ check_big_post H2Client client → i {
+    : ~ i fails 0
+    : ( Vec Header ) h ( vec_new [Header] )
+    : ( Vec u ) body ( vec_new [u] )
+    : ~ i bi 0
+    ~ < bi 200000 {
+        ( vec_push [u] body # u 65 )
+        = bi + bi 1
+    }
+    // submit takes ownership of `body` (mirrors the empty-body calls below).
+    : !i H2ClientErr sr ( h2_client_submit client `POST` `http`
+    `127.0.0.1` `/big` h body )
+    ( vec_free_with [Header] h \ Header hh → v { ( header_free hh ) } )
+    ?? sr {
+        T sid → {
+            : !v H2ClientErr rr ( h2_client_run_until_complete client )
+            ?? rr {
+                T _ → { = fails + fails ( check_resp client sid `/big` ) }
+                F e → {
+                    ( nurl_print `  big_run_err=` ) ( nurl_print ( h2_client_err_name e ) ) ( nurl_print `\n` )
+                    = fails + fails 1
+                }
+            }
+        }
+        F e → {
+            ( nurl_print `  big_submit_err=` ) ( nurl_print ( h2_client_err_name e ) ) ( nurl_print `\n` )
+            = fails + fails 1
+        }
+    }
+    ^ fails
+}
+
 @ run_live_test → i {
     : ~ i fails 0
     : !TcpListener NetErr lr ( tcp_listen `127.0.0.1` 18811 )
@@ -225,6 +262,8 @@ $ `stdlib/ext/http2_client.nu`
                                         T _ → {
                                             = fails + fails ( check_resp client sid1 `/alpha` )
                                             = fails + fails ( check_resp client sid2 `/beta` )
+                                            // Large-body POST over the same connection.
+                                            = fails + fails ( check_big_post client )
                                         }
                                         F e → {
                                             ( nurl_print `  run_err=` )
