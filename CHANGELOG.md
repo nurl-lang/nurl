@@ -8,7 +8,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.6] — 2026-06-08
+
 ### Added
+
+- **HTTP/2 client — native, multiplexed (`stdlib/ext/http2_client.nu`).**
+  Completes the HTTP/2 stack (server + client). Reuses the direction-neutral
+  framing/HPACK: `h2_client_connect_tls` (TLS + ALPN `h2`) /
+  `h2_client_connect_h2c` / `h2_client_attach` → `h2_client_submit` (N
+  concurrent streams) → `h2_client_run_until_complete` →
+  `h2_client_take_response`, plus one-shot `h2_get` / `h2_request`. Full HPACK
+  (connection-global decoder), per-stream + connection flow control,
+  WINDOW_UPDATE / SETTINGS / PING / GOAWAY / RST_STREAM. Added runtime
+  `nurl_tcp_connect_tls_alpn`. Example `examples/h2_client.nu`.
+
+- **MCP server: stateful sessions, SSE stream, and `sampling/createMessage`
+  reverse RPC (`stdlib/ext/mcp_session.nu`).** The pure, socket-free stateful
+  core: an `McpSessionStore` keyed by a CSPRNG `Mcp-Session-Id`, a per-session
+  outbound notification queue, and server→client reverse-RPC correlation.
+  `mcp_http.nu` gains `mcp_http_handler_session` (mints/validates session ids,
+  drains the queue to SSE on GET, settles reverse-RPC responses, tears down on
+  DELETE) plus chunked `mcp_sse_*` helpers for a long-lived stream.
+
+- **MCP server: `completion/complete` argument autocompletion.**
+  `mcp_registry_add_completion r ref_type ref_id handler` registers a
+  completion provider for a prompt argument (`ref/prompt`) or resource template
+  (`ref/resource`); `completion/complete` resolves it and returns the
+  spec-shaped `{completion: {values, total, hasMore}}`. Unknown refs yield an
+  empty list (per spec). Works over both stdio and HTTP transports.
+
+- **MCP server: `resources/subscribe` + `notifications/resources/updated`.**
+  Per-session resource subscriptions: `mcp_session_subscribe` /
+  `_unsubscribe` / `_is_subscribed`, and `mcp_session_notify_resource_updated`
+  which fans an update notification out to every subscribed session over the
+  SSE queue. The session HTTP handler services subscribe/unsubscribe against
+  the request's `Mcp-Session-Id`.
+
+- **XML parser + serializer — `stdlib/ext/xml.nu`.** Parses the common subset
+  (elements, attributes, nesting, self-closing, text, comments, CDATA,
+  declarations, the 5 predefined entities + numeric refs) into an `Xml` tree;
+  `xml_stringify` round-trips with entity encoding. Accessors + builders. Out
+  of scope: DTD/DOCTYPE, namespace resolution.
+
+- **YAML parser + serializer — `stdlib/ext/yaml.nu`.** Parses a pragmatic
+  subset into the shared `Json` value (so every `json_*` accessor works on a
+  parsed doc): block mappings/sequences, the seq-under-a-key idiom, plain and
+  quoted scalars resolved per the YAML 1.2 core schema, flow collections,
+  comments, `---`/`...` markers. `yaml_stringify` emits block style with
+  round-trip-safe quoting. Out of scope: block scalars, anchors/aliases/tags,
+  multi-doc streams.
+
+- **Timezone / DST support in `stdlib/std/time.nu`.** Local-time conversion +
+  DST driven by a POSIX TZ string (`EST5EDT,M3.2.0,M11.1.0`, `IST-5:30`, …) —
+  the format IANA tzdata compiles each zone's current ruleset into (covers
+  US/EU/AU). `tz_utc` / `tz_fixed` / `tz_parse` / `tz_offset_at` / `tz_is_dst`
+  / `time_from_unix_tz` / `time_now_tz` / `time_to_unix_tz` /
+  `time_format_iso_tz`. Not in scope: IANA region-name lookup.
+
+- **Growing arena + typed allocation — `stdlib/std/arena.nu`.**
+  `arena_growing chunk_sz` returns a chained-chunk arena: when the current
+  chunk fills, a fresh chunk is linked in and old ones are never moved, so
+  every pointer handed out before a grow stays valid (the canonical
+  pointer-stable arena model). `arena_alloc_n [T] a count → *T` allocates
+  `count` contiguous items of `T`. `arena_new` / `arena_with_cap` remain fixed
+  (NULL on overflow) — byte-identical behaviour for existing callers.
+
+- **Counting semaphore — `stdlib/std/thread.nu`.** `sem_new` / `sem_acquire`
+  / `sem_try_acquire` / `sem_release` / `sem_avail` / `sem_free`, built on the
+  existing `Mutex` + `Cond`. The permit count lives in a heap cell, so a
+  by-value copy (e.g. a worker-closure capture) shares state across threads —
+  the classic tool for bounding concurrency (see the nurlapi compile gate
+  below).
+
+- **`readlink(2)` FFI — `stdlib/std/fs.nu`.** `fs_readlink` reads a symlink's
+  target as an owned `String` via a direct `& \`c\`` binding (no runtime
+  change). `nurlpkg` now reads and verifies an existing `deps/<name>` link
+  target, catching transitive name collisions.
 
 - **Seedable, deterministic PRNG — `stdlib/std/rng.nu` (xoshiro256\*\*).**
   Companion to `std/random.nu`'s OS CSPRNG, which draws from the kernel
@@ -27,6 +102,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the exact stream for seeds `0` and `0x1234` against an independent
   reference implementation, and checks determinism, `rng_below` bounds, and
   the inverted-range guard.
+
+### Changed
+
+- **nurlapi: bound concurrent compiles to stop OOM crashes.** The container
+  runs a 16-worker pool, so up to 16 requests run at once; each compile spawns
+  `clang -O2 -flto` (hundreds of MB), and 16 simultaneously could exceed the
+  container memory cap and get the whole process OOM-killed ("container is not
+  listening"). The accept pool stays wide (light requests keep flowing) but the
+  heavy compile step is now bounded by a counting semaphore: `POST /build*` and
+  `POST /mcp` take a permit before dispatch and release after (panic-safe),
+  default 4, tunable via `NURL_COMPILE_SLOTS`.
+
+- **Reverse proxy: binary-safe streaming response bodies.** Streaming
+  responses were forwarded via a NUL-terminated carrier and truncated at the
+  first embedded NUL (only SSE/JSON/text survived). The proxy now reads the
+  stream's true byte length and copies exactly that many bytes. New
+  `bytes_extend_raw` + `http_stream_next_bytes` (→ `( Vec u )`).
+
+- **ROADMAP.md rewritten** as a concise, forward-looking document (status →
+  toward-1.0 → planned), with the per-feature history delegated to this
+  changelog. Bootstrap snapshot refreshed.
+
+### Fixed
+
+- **Compiler: struct payloads in enum match slots 1 and 2.** A multi-field
+  struct value carried as an enum payload anywhere but the first slot
+  (`: | E { Nil  V  i Pt }`) emitted invalid IR (`store %Pt <ptr>`) and was
+  rejected by clang — construction heap-boxed it for every slot but the
+  match/unbox path only reconstructed slot 0. Slots 1/2 now mirror slot 0.
+
+- **Compiler: recursive auto-`Drop` for boxed-payload enum trees.** A
+  `% Drop`-free enum whose variants box struct/enum payloads now gets a
+  compiler-generated recursive drop, so nested owned payloads are freed at
+  scope exit instead of leaking.
+
+- **Compiler: borrow provenance for auto-`Drop` enum bindings off a
+  borrow-returning accessor.** A binding taken from an accessor that returns a
+  *view* into its parent is no longer treated as owned, fixing a double-free.
+
+- **Compiler: drop the scrutinee of `^ ?? owned { … }` that returns a
+  scalar.** The owned match scrutinee in a returning `??` whose arms yield a
+  scalar was leaked; it is now dropped before the return.
+
+- **Compiler: reject unbalanced braces / stray top-level tokens.** Malformed
+  brace nesting and stray tokens at top level are now hard errors with source
+  locations instead of reaching the backend.
+
+- **C64 emulator** correctness fix (`examples/`).
 
 ## [0.9.5] — 2026-06-04
 
@@ -4039,7 +4162,9 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.4...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.6...HEAD
+[0.9.6]: https://github.com/nurl-lang/nurl/compare/v0.9.5...v0.9.6
+[0.9.5]: https://github.com/nurl-lang/nurl/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/nurl-lang/nurl/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/nurl-lang/nurl/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/nurl-lang/nurl/compare/v0.9.1...v0.9.2
