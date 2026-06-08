@@ -11,6 +11,7 @@ $ `stdlib/std/random.nu`
 $ `stdlib/ext/regex.nu`
 $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/mcp_http.nu`
+$ `stdlib/std/thread.nu`
 
 // ── Globals ──────────────────────────────────────────────────────────
 
@@ -1338,9 +1339,9 @@ s combined_stdout s combined_stderr → v {
             // stays JSON for the playground's examples dropdown / wasm runner.
             : i nlen ( string_len name )
             ? & & & >= nlen 4
-                == ( nurl_str_get ( string_data name ) - nlen 3 ) 46
-                == ( nurl_str_get ( string_data name ) - nlen 2 ) 109
-                == ( nurl_str_get ( string_data name ) - nlen 1 ) 100 {
+            == ( nurl_str_get ( string_data name ) - nlen 3 ) 46
+            == ( nurl_str_get ( string_data name ) - nlen 2 ) 109
+            == ( nurl_str_get ( string_data name ) - nlen 1 ) 100 {
                 : String rel ( string_with_cap + nlen 10 )
                 ( string_push_str rel `examples/` ) ( string_push_str rel ( string_data name ) )
                 : HttpResponse mr ( __serve_repo_doc ( string_data rel ) )
@@ -2723,14 +2724,14 @@ s combined_stdout s combined_stderr → v {
     : String fp ( path_join ( string_data root ) rel )
     : i rn ( nurl_str_len rel )
     : b is_md & & & >= rn 4
-        == ( nurl_str_get rel - rn 3 ) 46
-        == ( nurl_str_get rel - rn 2 ) 109
-        == ( nurl_str_get rel - rn 1 ) 100
+    == ( nurl_str_get rel - rn 3 ) 46
+    == ( nurl_str_get rel - rn 2 ) 109
+    == ( nurl_str_get rel - rn 1 ) 100
     : String rawp ( string_with_cap + rn 1 )
     ( string_push_char rawp 47 ) ( string_push_str rawp rel )
     : HttpResponse r ? is_md
-        ( __serve_md_as_html ( string_data fp ) rel ( string_data rawp ) `not found\n` )
-        ( __serve_file_text ( string_data fp ) `text/plain; charset=utf-8` `not found\n` )
+    ( __serve_md_as_html ( string_data fp ) rel ( string_data rawp ) `not found\n` )
+    ( __serve_file_text ( string_data fp ) `text/plain; charset=utf-8` `not found\n` )
     ( string_free root ) ( string_free fp ) ( string_free rawp )
     ^ r
 }
@@ -2752,7 +2753,9 @@ s combined_stdout s combined_stderr → v {
 }
 
 @ h_docs_file HttpRequest req Params params → HttpResponse { ^ ( __serve_repo_subdir params `docs/` ) }
+
 @ h_spec_file HttpRequest req Params params → HttpResponse { ^ ( __serve_repo_subdir params `spec/` ) }
+
 @ h_bench_file HttpRequest req Params params → HttpResponse { ^ ( __serve_repo_subdir params `bench/` ) }
 
 // ── Doc passthrough — README.md / grammar.ebnf ────────────────────
@@ -4175,6 +4178,56 @@ s combined_stdout s combined_stderr → v {
     ^ ( wrapped req )
 }
 
+// ── Compile-concurrency gate ──────────────────────────────────────────
+//
+// The worker pool (server_run_pool, NURL_WORKERS=16) lets up to 16
+// requests run at once. A compile request spawns `clang -O2 -flto`, which
+// can use hundreds of MB; 16 of those simultaneously can blow the
+// container's memory cap and get the whole process OOM-killed (the
+// "container is not listening" symptom). The accept pool stays wide so
+// light requests (docs, examples, MCP tools/list, SSE) keep flowing, but
+// the heavy COMPILE step is bounded by a counting semaphore. Default 4
+// concurrent compiles; tune with NURL_COMPILE_SLOTS.
+@ get_compile_slots → i {
+    : String s ( env_var_or `NURL_COMPILE_SLOTS` `4` )
+    : i n ?? ( int_parse ( string_data s ) ) { T v → v F _ → 4 }
+    ( string_free s )
+    ^ ? > n 0 n 1
+}
+
+// A request that triggers a compile: POST /build* (native/wasm/win/mac/
+// target) or POST /mcp (the build_* MCP tools). GET /mcp is the light SSE
+// drain and is deliberately NOT gated.
+@ __is_compile_route HttpRequest req → b {
+    : s m ( string_data . req method )
+    ? == 0 ( nurl_str_eq m `POST` ) { ^ F } {}
+    : s p ( string_data . req path )
+    ? != 0 ( nurl_str_eq p `/mcp` ) { ^ T } {}
+    : String ps ( string_from p )
+    : b hit ( string_starts_with ps `/build` )
+    ( string_free ps )
+    ^ hit
+}
+
+// Dispatch a request, holding a compile permit across the handler for
+// compile routes. The permit is released even if the handler panics
+// (NURL `recover` would otherwise let the server-level recovery skip our
+// release, leaking a permit and eventually deadlocking the gate). Kept a
+// top-level fn — not a closure body — so the inner `recover` closure is
+// not nested inside another closure.
+@ __gated_handle Router r Semaphore gate HttpRequest req → HttpResponse {
+    ? ( __is_compile_route req ) {
+        ( sem_acquire gate )
+        : ~ HttpResponse resp ( response_text 500 `internal error: handler panicked\n` )
+        : !v PanicInfo pr ( recover \ → v { = resp ( router_handle r req ) } )
+        ( sem_release gate )
+        ?? pr { T _ → {} F p → { ( panic_info_free p ) } }
+        ^ resp
+    } {
+        ^ ( router_handle r req )
+    }
+}
+
 @ main → i {
     // Anchor the process at NURL_WORK_ROOT so that nurlc subprocesses inherit
     // a cwd from which `$ "stdlib/std/time.nu"`-style imports resolve. NURL's
@@ -4258,7 +4311,11 @@ s combined_stdout s combined_stderr → v {
             ( router_get r `/` \ HttpRequest req Params params → HttpResponse { ^ ( h_static req params ) } )
             ( router_get r `/*path` \ HttpRequest req Params params → HttpResponse { ^ ( h_static req params ) } )
 
-            : ( @ HttpResponse HttpRequest ) base \ HttpRequest req → HttpResponse { ^ ( router_handle r req ) }
+            // Compile-concurrency gate: bound how many `clang` compiles run
+            // at once so a wide worker pool can't OOM the container.
+            : i compile_slots ( get_compile_slots )
+            : Semaphore compile_gate ( sem_new compile_slots )
+            : ( @ HttpResponse HttpRequest ) base \ HttpRequest req → HttpResponse { ^ ( __gated_handle r compile_gate req ) }
             : ( @ HttpResponse HttpRequest ) logged ( with_access_log base )
             ( signal_install_shutdown listener )
 
@@ -4270,10 +4327,12 @@ s combined_stdout s combined_stderr → v {
             ( nurl_print `[boot] registered routes: ` ) ( nurl_print ( nurl_str_int ( router_count r ) ) ) ( nurl_print `\n` )
             ( nurl_print `NURL API listening on http://0.0.0.0:8000/ (workers=` )
             ( nurl_print ( nurl_str_int workers ) )
+            ( nurl_print `, compile_slots=` )
+            ( nurl_print ( nurl_str_int compile_slots ) )
             ( nurl_print `, idle=5000ms)\n` )
             : HttpServer srv ( server_new_with_timeout listener logged 5000 )
             : !v NetErr rr ( server_run_pool srv workers )
-            ( signal_clear_shutdown ) ( server_stop srv ) ( router_free r )
+            ( signal_clear_shutdown ) ( server_stop srv ) ( sem_free compile_gate ) ( router_free r )
             ?? rr { T _ → { ^ 0 } F e → { ( nurl_eprint `[srv] runtime error: ` ) ( nurl_eprint ( net_err_name e ) ) ( nurl_eprint `\n` ) ^ 1 } }
         }
         F e → { ( nurl_eprint `[boot] could not bind 0.0.0.0:8000: ` ) ( nurl_eprint ( net_err_name e ) ) ( nurl_eprint `\n` ) ^ 1 }

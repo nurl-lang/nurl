@@ -34,6 +34,12 @@
 //   ( cond_signal    Cond c )              → v
 //   ( cond_broadcast Cond c )              → v
 //   ( cond_free      Cond c )              → v
+//   ( sem_new        i n )                 → Semaphore  n permits
+//   ( sem_acquire    Semaphore s )         → v   block for a permit
+//   ( sem_try_acquire Semaphore s )        → b   non-blocking
+//   ( sem_release    Semaphore s )         → v   return a permit
+//   ( sem_avail      Semaphore s )         → i   free permits (diagnostic)
+//   ( sem_free       Semaphore s )         → v
 //   ( thread_err_name ThreadErr e )        → s
 //
 // Memory model:
@@ -122,6 +128,16 @@ $ `stdlib/core/cell.nu`
 : Thread { s raw }
 : Mutex { Cell c }
 : Cond { Cell c }
+
+// Counting semaphore built on Mutex + Cond. The permit count lives in a
+// heap cell (`* i count`) so copying a Semaphore by value — e.g.
+// capturing it in a worker closure — shares the same count, mutex, and
+// condvar across threads (same handle-sharing as Mutex/Cond).
+: Semaphore {
+    Mutex m
+    Cond c
+    * i count
+}
 
 // ── Thread lifecycle ──────────────────────────────────────────────
 
@@ -225,4 +241,78 @@ $ `stdlib/core/cell.nu`
         ( pthread_cond_destroy ( cell_ptr cell ) )
     }
     ( cell_free cell )
+}
+
+// ── Semaphore ─────────────────────────────────────────────────────
+//
+// Counting semaphore: at most `n` holders may hold a permit at once.
+// `sem_acquire` blocks until a permit is free; `sem_release` returns one
+// and wakes a waiter. The classic tool for bounding concurrency — e.g.
+// capping how many worker threads run a memory-heavy job (a compiler
+// invocation, a large download) simultaneously while leaving the rest of
+// the pool free to serve light requests.
+//
+//   : Semaphore gate ( sem_new 4 )
+//   // on each worker, around the heavy section:
+//   ( sem_acquire gate )  ( do_heavy_work )  ( sem_release gate )
+//   // ... at shutdown:
+//   ( sem_free gate )
+
+@ sem_new i n → Semaphore {
+    : Mutex m ( mutex_new )
+    : Cond c ( cond_new )
+    : *i count # *i ( nurl_alloc 8 )
+    = . count 0 ? > n 0 n 0
+    ^ @ Semaphore { m c count }
+}
+
+// Block until a permit is available, then take one.
+@ sem_acquire Semaphore s → v {
+    : *i cp . s count
+    ( mutex_lock . s m )
+    ~ <= . cp 0 0 {
+        ( cond_wait . s c . s m )
+    }
+    = . cp 0 - . cp 0 1
+    ( mutex_unlock . s m )
+}
+
+// Take a permit if one is free right now; never blocks. Returns T iff a
+// permit was acquired (caller must sem_release on T).
+@ sem_try_acquire Semaphore s → b {
+    : *i cp . s count
+    ( mutex_lock . s m )
+    : ~ b ok F
+    ? > . cp 0 0 {
+        = . cp 0 - . cp 0 1
+        = ok T
+    } {}
+    ( mutex_unlock . s m )
+    ^ ok
+}
+
+// Return a permit and wake one waiter.
+@ sem_release Semaphore s → v {
+    : *i cp . s count
+    ( mutex_lock . s m )
+    = . cp 0 + . cp 0 1
+    ( cond_signal . s c )
+    ( mutex_unlock . s m )
+}
+
+// Current free-permit count. A point-in-time read (no lock held by the
+// caller) — for diagnostics, not for acquire decisions (use
+// sem_try_acquire, which is atomic).
+@ sem_avail Semaphore s → i {
+    : *i cp . s count
+    ( mutex_lock . s m )
+    : i v . cp 0
+    ( mutex_unlock . s m )
+    ^ v
+}
+
+@ sem_free Semaphore s → v {
+    ( mutex_free . s m )
+    ( cond_free . s c )
+    ( nurl_free # s . s count )
 }
