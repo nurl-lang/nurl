@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`inout` / `sink` parameter conventions now work on trait impl
+  methods** (grammar-v2 borrow checker). An `inout` (or `sink`) parameter
+  on an impl method silently miscompiled: the convention was recorded
+  under the mangled method name (`bump__Counter`) while the call site
+  dispatches by the bare name (`( bump c )`), so the receiver was passed
+  **by value** into a `%T*` parameter — memory corruption / segfault.
+  Fixing that surfaced a second bug (applying `inout` pointerised the
+  first argument to `%T*`, which missed the `method##%T` impl-dispatch key
+  and emitted an undefined bare `@method`). Both are fixed: the bare-name
+  convention is mirrored at emission, and the impl-dispatch lookup retries
+  with the receiver pointer stripped. Regression
+  `compiler/tests/impl_inout_sink.nu` (struct `inout`, `inout` + by-value,
+  a second implementing type, and a `sink` impl method; ASan + leak
+  clean).
+
 ### Documentation
 
 - **The `pub` visibility contract is now stated exactly and locked by
