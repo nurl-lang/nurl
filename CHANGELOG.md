@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **The `pub` visibility contract is now stated exactly and locked by
+  tests** (`docs/spec.md` §3.3). Cross-file enforcement covers
+  `@`-functions, structs, enums, top-level consts, and enum variants; `pub`
+  on **traits, impl methods, and FFI** is accepted but has no cross-file
+  effect *by design* — trait dispatch resolves by type-mangled method name
+  (no trait-name identity to gate) and FFI symbols are linker-level ABI
+  globals. New `compiler/tests/pub_trait_ffi_visibility.nu` pins the
+  unenforced surface (a non-`pub` trait method + FFI stays callable across
+  files) so it can't silently regress into enforcement; the existing
+  `should_fail_pub_*` tests pin the enforced surface. (Corrects the stale
+  "only `@`-function calls observe the check" wording.)
+
 ## [0.9.6] — 2026-06-08
 
 ### Added
