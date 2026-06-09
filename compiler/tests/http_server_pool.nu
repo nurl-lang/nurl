@@ -72,6 +72,10 @@ $ `stdlib/core/string.nu`
                     }
                     ( thread_join t )
                     ( server_stop srv )  // Final free — no thread is still reading h.
+                    // Release the shutdown closure's heap-captured env now
+                    // that its thread has joined (thread_spawn borrows it).
+                    : *u shutdown_env # *u shutdown 1
+                    ( nurl_free # s shutdown_env )
                 }
                 F e → {
                     ( nurl_print `shutdown thread spawn failed: ` )
