@@ -352,7 +352,130 @@ $ `stdlib/ext/http_response.nu`
 //
 // Returns T on success, F on transport / format error.
 
+// Ensure `carry` holds at least `n` bytes, topping up from the socket.
+// Returns F on EOF / IO before reaching `n`.
+@ __carry_ensure TcpConn conn ( Vec u ) carry i n → b {
+    : ~ b ok T
+    ~ & ok < ( vec_len [u] carry ) n {
+        : !( Vec u ) NetErr r ( tcp_read_chunk conn 4096 )
+        ?? r {
+            T chunk → {
+                : i got ( vec_len [u] chunk )
+                ( vec_extend [u] carry chunk )
+                ( vec_free [u] chunk )
+                ? <= got 0 { = ok F } {}
+            }
+            F _ → { = ok F }
+        }
+    }
+    ^ ok
+}
+
+// Index of the next CRLF in `carry`, topping up from the socket until
+// found or `cap` bytes have accumulated. Returns the CR index, or -1 on
+// EOF / IO / cap exceeded (a chunk-size or trailer line longer than `cap`
+// is rejected, mirroring __read_crlf_line's 8 KiB guard).
+@ __carry_find_crlf TcpConn conn ( Vec u ) carry i cap → i {
+    : ~ i found -1
+    : ~ b stop F
+    ~ & == found -1 ! stop {
+        : i len ( vec_len [u] carry )
+        : *u p ( vec_data [u] carry )
+        : ~ i k 0
+        ~ & == found -1 < k - len 1 {
+            ? & == 13 & 255 # i . p k == 10 & 255 # i . p + k 1 { = found k } {}
+            = k + k 1
+        }
+        ? >= found 0 {} {
+            ? >= len cap { = stop T } {
+                : !( Vec u ) NetErr r ( tcp_read_chunk conn 4096 )
+                ?? r {
+                    T chunk → {
+                        : i got ( vec_len [u] chunk )
+                        ( vec_extend [u] carry chunk )
+                        ( vec_free [u] chunk )
+                        ? <= got 0 { = stop T } {}
+                    }
+                    F _ → { = stop T }
+                }
+            }
+        }
+    }
+    ^ found
+}
+
+// Decode a Transfer-Encoding: chunked body off `carry` (+ socket top-ups)
+// into `req.body`, leaving any pipelined-successor bytes after the
+// terminating chunk in `carry`. Mirrors read_body's chunked decoder but
+// is carry-aware so it works inside the keep-alive loop. Returns F on
+// malformed framing, IO error, or a body exceeding `body_max`.
+@ __finish_body_chunked TcpConn conn HttpRequest req ( Vec u ) carry i body_max → b {
+    : ~ b done F
+    : ~ b ok T
+    ~ & ok ! done {
+        : i crlf ( __carry_find_crlf conn carry 8192 )
+        ? < crlf 0 { = ok F } {
+            : String szline ( __bsubstr carry 0 crlf )
+            ( __vec_drop_front_u carry + crlf 2 )
+            : !i ParseErr szr ( __parse_hex_size szline )
+            ( string_free szline )
+            ?? szr {
+                T n → {
+                    ? < n 0 { = ok F } {
+                        ? == n 0 {
+                            // Terminating chunk: consume trailer lines up to
+                            // the closing empty line.
+                            : ~ b tdone F
+                            ~ & ok ! tdone {
+                                : i tc ( __carry_find_crlf conn carry 8192 )
+                                ? < tc 0 { = ok F } {
+                                    ( __vec_drop_front_u carry + tc 2 )
+                                    ? == tc 0 { = tdone T } {}
+                                }
+                            }
+                            = done T
+                        } {
+                            ? > + ( vec_len [u] . req body ) n body_max { = ok F } {
+                                // Need n bytes of data + the trailing CRLF.
+                                ? ( __carry_ensure conn carry + n 2 ) {
+                                    : *u cd ( vec_data [u] carry )
+                                    : ~ i k 0
+                                    ~ < k n {
+                                        ( vec_push [u] . req body & 255 # i . cd k )
+                                        = k + k 1
+                                    }
+                                    ( __vec_drop_front_u carry + n 2 )
+                                } { = ok F }
+                            }
+                        }
+                    }
+                }
+                F _ → { = ok F }
+            }
+        }
+    }
+    ^ ok
+}
+
 @ __finish_body TcpConn conn HttpRequest req ( Vec u ) carry i body_max → b {
+    // Transfer-Encoding takes precedence (RFC 7230 §3.3.3). A chunked body
+    // MUST be drained here too — otherwise its bytes are left in `carry`,
+    // handed to the handler as an empty body, and mis-parsed as the next
+    // request on a keep-alive connection (a desync / smuggling vector).
+    : ?String te ( header_get . req headers `Transfer-Encoding` )
+    ?? te {
+        T tev → {
+            : String te_lc ( string_to_lower tev )
+            : b is_chunked != 0 ( nurl_str_eq ( string_data te_lc ) `chunked` )
+            ( string_free te_lc )
+            ( string_free tev )
+            ? is_chunked { ^ ( __finish_body_chunked conn req carry body_max ) } {}
+            // Non-chunked Transfer-Encoding is unsupported (and CL+TE is
+            // already rejected at head parse) — fail the body read.
+            ^ F
+        }
+        F _ → {}
+    }
     : ?String cl ( header_get . req headers `Content-Length` )
     ?? cl {
         T clv → {

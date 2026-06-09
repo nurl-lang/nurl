@@ -10,6 +10,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **HTTP/1.1 server hardening — four root-cause bug fixes from a focused
+  security bughunt** (`stdlib/ext/http_request.nu`, `http_server.nu`,
+  `http_response.nu`):
+  - **Chunked request bodies were silently dropped on keep-alive
+    connections.** `__finish_body` only handled `Content-Length`, so a
+    `Transfer-Encoding: chunked` body was left undrained in the connection
+    carry buffer — the handler saw an *empty* body and the leftover bytes
+    were mis-parsed as the next request (a desync / request-smuggling
+    vector). `__finish_body` now decodes chunked bodies carry-aware
+    (draining from the buffer + socket, leaving any pipelined successor).
+  - **Chunk-size integer overflow → smuggling/DoS.** `__parse_hex_size`
+    accumulated an unbounded hex value; `0x10000000000000000` wrapped i64
+    to `0` (read as the terminating chunk, ending the body early) or to a
+    small positive (wrong boundary) — both smuggling vectors, and a huge
+    positive could drive an enormous allocation. Now rejects any value
+    past a sane ceiling, well clear of i64 overflow.
+  - **Content-Length + Transfer-Encoding smuggling.** A request carrying
+    both framing headers (RFC 7230 §3.3.3) is now rejected at head parse
+    (and in `read_body_to`) instead of silently letting `Transfer-Encoding`
+    win — the classic CL.TE desync.
+  - **HTTP response splitting (CWE-113).** Response header names/values
+    were serialised verbatim, so a value reflected from untrusted input
+    (a redirect `Location`, an echoed header) could inject
+    `\r\n<header>` and split the response. The serialiser (and the chunked
+    `response_begin_chunked` path) now strips CR/LF from every emitted
+    header name and value.
+
+  Regressions: `compiler/tests/http_request_parser.nu` (CL+TE rejection,
+  chunk-size overflow rejection), `http_response_builder.nu` (header
+  CR/LF stripping), and a new live `http_server_chunked.nu` (chunked body
+  decoded + keep-alive survives a chunked request, gated on
+  `NURL_NET_TESTS=1`).
+
 - **HTTP/2 client: request bodies larger than 256 bytes now work, and a
   large body no longer deadlocks the driver.** Three related fixes:
   - **SETTINGS parameter-ID mismap (critical).** The client's SETTINGS

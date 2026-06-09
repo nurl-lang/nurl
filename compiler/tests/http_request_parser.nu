@@ -174,7 +174,34 @@ $ `stdlib/ext/http.nu`
     ( run_case `malformed_request_line`
     `BADREQUEST\r\n\r\n` )
 
+    // Request smuggling: BOTH Content-Length and Transfer-Encoding present
+    // (RFC 7230 §3.3.3) → rejected at head parse → HttpReqMalformed.
+    ( run_case `cl_te_smuggling`
+    `POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n` )
+
+    ( run_hex )
     ( run_oversized )
     ( run_query_decode )
     ^ 0
+}
+
+// __parse_hex_size must reject overflowing chunk-size lines (a 17-digit
+// hex wraps i64 to a small value → request smuggling) and accept valid
+// sizes. Pins the overflow guard.
+@ run_hex → v {
+    ( nurl_print `── chunk_hex_size ──\n` )
+    ( show_hex `1a` )  // valid → 26
+    ( show_hex `0` )  // valid → 0 (terminating chunk)
+    ( show_hex `200` )  // valid → 512
+    ( show_hex `10000000000000000` )  // 2^64 → would wrap to 0 → reject
+    ( show_hex `ffffffffffffffff` )  // 2^64-1 → would wrap to -1 → reject
+}
+
+@ show_hex s raw → v {
+    : String s ( string_from raw )
+    ?? ( __parse_hex_size s ) {
+        T n → ( println_int ( nurl_str_cat `  ` ( nurl_str_cat raw ` -> ` ) ) n )
+        F _ → ( println_str `  ` ( nurl_str_cat raw ` -> reject` ) )
+    }
+    ( string_free s )
 }

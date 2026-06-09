@@ -201,6 +201,22 @@ $ `stdlib/ext/json.nu`
 // owned — caller frees with `( vec_free [u] out )`. Content-Length is
 // auto-prepended unless the response carries a Transfer-Encoding
 // header (RFC 7230 §3.3.2). Headers are emitted in insertion order.
+// Append `str`'s bytes to `out`, dropping any CR (13) / LF (10). Header
+// field names and values are emitted through this so a value reflected
+// from untrusted input (a redirect Location, an echoed header, …) cannot
+// inject `\r\n<injected-header>` and split the response (CWE-113). RFC
+// 9110 §5.5 forbids CR/LF in field values anyway, so stripping them is
+// lossless for any well-formed header.
+@ __push_header_no_crlf ( Vec u ) out s str → v {
+    : i n ( nurl_str_len str )
+    : ~ i k 0
+    ~ < k n {
+        : i c & 255 ( nurl_str_get str k )
+        ? | == c 13 == c 10 {} { ( vec_push [u] out # u c ) }
+        = k + k 1
+    }
+}
+
 @ response_serialize HttpResponse r → ( Vec u ) {
     : ( Vec u ) out ( vec_with_cap [u] + 64 ( vec_len [u] . r body ) )
 
@@ -217,9 +233,9 @@ $ `stdlib/ext/json.nu`
     : ~ i k 0
     ~ < k hcount {
         : Header h . hdata k
-        ( bytes_extend_str out ( string_data . h name ) )
+        ( __push_header_no_crlf out ( string_data . h name ) )
         ( bytes_extend_str out `: ` )
-        ( bytes_extend_str out ( string_data . h value ) )
+        ( __push_header_no_crlf out ( string_data . h value ) )
         ( bytes_extend_str out `\r\n` )
         = k + k 1
     }
@@ -361,9 +377,9 @@ $ `stdlib/ext/json.nu`
         : b is_te != 0 ( nurl_str_eq nm `Transfer-Encoding` )
         : b is_cl != 0 ( nurl_str_eq nm `Content-Length` )
         ? & ! is_te ! is_cl {
-            ( bytes_extend_str head nm )
+            ( __push_header_no_crlf head nm )
             ( bytes_extend_str head `: ` )
-            ( bytes_extend_str head ( string_data . h value ) )
+            ( __push_header_no_crlf head ( string_data . h value ) )
             ( bytes_extend_str head `\r\n` )
         } {}
         = k + k 1

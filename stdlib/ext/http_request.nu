@@ -703,6 +703,21 @@ $ `stdlib/ext/http.nu`
         ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
     } {}
 
+    // Request-smuggling defence (RFC 7230 §3.3.3): a message carrying BOTH
+    // Transfer-Encoding and Content-Length is ambiguous — a front-end and
+    // back-end may disagree on the body framing. Reject it outright rather
+    // than silently letting Transfer-Encoding win (the classic CL.TE
+    // desync). Checked here, at head parse, so every caller is covered.
+    : ?String __te ( header_get . hr headers `Transfer-Encoding` )
+    : ?String __cl ( header_get . hr headers `Content-Length` )
+    : b __has_te ?? __te { T x → { ( string_free x ) T } F _ → F }
+    : b __has_cl ?? __cl { T x → { ( string_free x ) T } F _ → F }
+    ? & __has_te __has_cl {
+        ( __req_line_parts_free rl )
+        ( headers_free . hr headers )
+        ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
+    } {}
+
     : HttpRequest req @ HttpRequest {
         . rl method
         . rl path
@@ -729,6 +744,14 @@ $ `stdlib/ext/http.nu`
     : ?String te ( header_get . req headers `Transfer-Encoding` )
     ?? te {
         T tev → {
+            // CL.TE smuggling defence (also enforced at head parse): a body
+            // with both Transfer-Encoding and Content-Length is ambiguous.
+            : ?String __cl2 ( header_get . req headers `Content-Length` )
+            : b __both ?? __cl2 { T x → { ( string_free x ) T } F _ → F }
+            ? __both {
+                ( string_free tev )
+                ^ @ !( Vec u ) HttpReqErr { F # HttpReqErr HttpReqMalformed }
+            } {}
             : String tev_lc ( string_to_lower tev )
             : b is_chunked != 0 ( nurl_str_eq ( string_data tev_lc ) `chunked` )
             ( string_free tev_lc )
@@ -938,8 +961,19 @@ $ `stdlib/ext/http.nu`
         ? == c 59 { = k n } {
             : i v ( __hex_val c )
             ? < v 0 { = ok F } {
-                = acc + * acc 16 v
-                = k + k 1
+                // Overflow guard: a chunk-size line can be up to 8192 hex
+                // digits (see __read_crlf_line), which would wrap i64 —
+                // `0x10000000000000000` wraps to 0 (read as the terminating
+                // chunk, ending the body early) or to a small positive value
+                // (wrong chunk boundary): both are request-smuggling vectors.
+                // Reject once `acc` passes a ceiling far above any legitimate
+                // chunk (2^48, vastly larger than any body limit) yet well
+                // clear of i64 overflow in the `* acc 16` below and in the
+                // caller's `vec_len + n` bound check.
+                ? > acc 0xFFFFFFFFFFFF { = ok F } {
+                    = acc + * acc 16 v
+                    = k + k 1
+                }
             }
         }
     }
