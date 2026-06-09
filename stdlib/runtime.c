@@ -2538,6 +2538,25 @@ typedef struct NurlTcp {
     long long     err_kind;
     int           kind;
     char         *peer;     /* owned "ip:port" or "" */
+    /* Listener-only accept wakeup. close(fd) from another thread does NOT
+     * interrupt a thread blocked in accept() on Linux, so a cross-thread
+     * nurl_tcp_shutdown needs an explicit wakeup: accept() polls
+     * {fd, wake_rfd}; shutdown sets `shutting_down` and writes one
+     * never-drained byte to wake_wfd → every current and future poll
+     * returns. wake_* are NURL_INVALID_SOCK on conns / when pipe() failed
+     * (then accept falls back to plain blocking accept). POSIX only. */
+    nurl_sockfd_t wake_rfd;
+    nurl_sockfd_t wake_wfd;
+    volatile int  shutting_down;
+    /* Set by nurl_tcp_set_nonblock: the fiber/reactor accept path drives
+     * its own readiness wait, so accept() must do ONE non-blocking accept
+     * and hand EAGAIN back rather than entering the blocking poll loop. */
+    int           nonblock;
+    /* Reference count (atomic). Created at 1; nurl_tcp_close releases that
+     * ref. server_run_async takes an extra ref so a concurrent close (e.g.
+     * server_stop from another thread) defers the struct free until the
+     * parked accept fiber has resumed and stopped touching the handle. */
+    int           refcount;
 #ifdef NURL_HAVE_OPENSSL
     /* TLS state — non-NULL fields turn the handle into a TLS variant.
      *   ssl_ctx is on a LISTENER from nurl_tcp_listen_tls; accept()
@@ -2564,6 +2583,14 @@ typedef struct NurlTcp {
     int             tls_lock_init;
 #endif
 } NurlTcp;
+
+/* Wake the async reactor (if running) so it re-polls. Called after a fd is
+ * closed: a fiber parked on that fd would otherwise never wake (poll does
+ * not re-evaluate an fd closed by another thread mid-call). After the wake
+ * the reactor's next poll reports POLLNVAL for the closed fd and fails the
+ * wait, so the parked fiber resumes and sees EBADF. Real impl lives with
+ * the reactor; a no-op stub covers WASI/Windows. */
+void nurl__reactor_wake_if_started(void);
 
 #ifdef NURL_HAVE_OPENSSL
 static void nurl__tls_lock_ensure(NurlTcp *h) {
@@ -2699,6 +2726,11 @@ static NurlTcp *nurl__tcp_new_handle(int kind) {
     h->err_kind = NURL_NET_ERR_OTHER;
     h->kind     = kind;
     h->peer     = NULL;
+    h->wake_rfd = NURL_INVALID_SOCK;
+    h->wake_wfd = NURL_INVALID_SOCK;
+    h->shutting_down = 0;
+    h->nonblock = 0;
+    h->refcount = 1;
     return h;
 }
 
@@ -2776,6 +2808,27 @@ long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
 
     h->fd       = fd;
     h->err_kind = NURL_NET_ERR_OK;
+
+#ifndef _WIN32
+    /* Accept-wakeup self-pipe (see struct comment). Best-effort: if pipe()
+     * fails we leave wake_* invalid and accept() blocks the old way — only
+     * the cross-thread-shutdown path degrades, never the happy path. */
+    {
+        int p[2];
+        if (pipe(p) == 0) {
+            h->wake_rfd = p[0];
+            h->wake_wfd = p[1];
+            fcntl(h->wake_rfd, F_SETFD, FD_CLOEXEC);
+            fcntl(h->wake_wfd, F_SETFD, FD_CLOEXEC);
+            fcntl(h->wake_wfd, F_SETFL, O_NONBLOCK);
+            /* Non-blocking listen fd: after poll reports POLLIN we accept;
+             * if a sibling worker grabbed the connection first, accept
+             * returns EAGAIN and we re-poll instead of blocking. */
+            int fl = fcntl(fd, F_GETFL, 0);
+            if (fl != -1) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+        }
+    }
+#endif
     return (long long)(uintptr_t)h;
 }
 
@@ -2849,16 +2902,69 @@ long long nurl_tcp_accept(long long listener) {
     socklen_t peerlen = (socklen_t)sizeof(peer);
 #endif
     memset(&peer, 0, sizeof(peer));
-    nurl_sockfd_t fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
-    if (fd == NURL_INVALID_SOCK) {
+    nurl_sockfd_t fd = NURL_INVALID_SOCK;
 #ifdef _WIN32
+    fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
+    if (fd == NURL_INVALID_SOCK) {
         int we = WSAGetLastError();
         c->err_kind = nurl__net_map_wsa(we, NURL_NET_ERR_ACCEPT);
-#else
-        c->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_ACCEPT);
-#endif
         return (long long)(uintptr_t)c;
     }
+#else
+    if (l->nonblock) {
+        /* Fiber/reactor accept path: ONE non-blocking accept; the caller
+         * (tcp_accept_async) parks on the reactor for EAGAIN. Must not
+         * enter the blocking poll loop below. */
+        fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
+        if (fd == NURL_INVALID_SOCK) {
+            c->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_ACCEPT);
+            return (long long)(uintptr_t)c;
+        }
+    } else
+    /* Blocking accept (single-threaded + server_run_pool). If this listener
+     * has no wakeup pipe (pipe() failed at listen) the loop's poll is
+     * skipped and we do a plain blocking accept. Otherwise poll
+     * {fd, wake_rfd} so a cross-thread nurl_tcp_shutdown reliably unblocks
+     * every worker. */
+    for (;;) {
+        if (l->shutting_down) {
+            c->err_kind = NURL_NET_ERR_ACCEPT;
+            return (long long)(uintptr_t)c;
+        }
+        if (l->wake_rfd != NURL_INVALID_SOCK) {
+            struct pollfd pfds[2];
+            pfds[0].fd = l->fd;       pfds[0].events = POLLIN; pfds[0].revents = 0;
+            pfds[1].fd = l->wake_rfd; pfds[1].events = POLLIN; pfds[1].revents = 0;
+            int pr = poll(pfds, 2, -1);
+            if (pr < 0) {
+                if (errno == EINTR) continue;
+                c->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_ACCEPT);
+                return (long long)(uintptr_t)c;
+            }
+            /* Shutdown wins: the wake byte is never drained, so this stays
+             * readable for every worker, not just the first to wake. */
+            if (l->shutting_down ||
+                (pfds[1].revents & (POLLIN | POLLHUP | POLLERR))) {
+                c->err_kind = NURL_NET_ERR_ACCEPT;
+                return (long long)(uintptr_t)c;
+            }
+            if (!(pfds[0].revents & (POLLIN | POLLHUP | POLLERR))) continue;
+        }
+        fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
+        if (fd == NURL_INVALID_SOCK) {
+            if (errno == EINTR || errno == ECONNABORTED ||
+                errno == EAGAIN || errno == EWOULDBLOCK) {
+                /* Spurious wake or sibling stole the connection — re-poll.
+                 * (A blocking listener without a wakeup pipe never reports
+                 * EAGAIN, so this cannot spin there.) */
+                continue;
+            }
+            c->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_ACCEPT);
+            return (long long)(uintptr_t)c;
+        }
+        break;
+    }
+#endif
     c->fd       = fd;
     c->err_kind = NURL_NET_ERR_OK;
     c->peer     = nurl__net_format_peer(&peer);
@@ -3537,11 +3643,14 @@ void nurl_tcp_set_nonblock(long long handle, long long on) {
     else    fl &= ~O_NONBLOCK;
     fcntl(h->fd, F_SETFL, fl);
 #endif
+    h->nonblock = on ? 1 : 0;
 }
 
-void nurl_tcp_close(long long handle) {
-    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
-    if (!h) return;
+/* Full teardown — the destructor reached when the last reference drops.
+ * Conn closes run this immediately (refcount 1 → 0); listeners that an
+ * async accept fiber still references defer it until that fiber's ref is
+ * released (see nurl_tcp_close / nurl_tcp_ref). */
+static void nurl__tcp_destroy(NurlTcp *h) {
 #ifdef NURL_HAVE_OPENSSL
     /* Best-effort one-way SSL_shutdown (skip bidirectional close — keeps
      * workers fast). SSL_free does not close the underlying fd. */
@@ -3573,8 +3682,58 @@ void nurl_tcp_close(long long handle) {
         nurl_close_sock(h->fd);
         h->fd = NURL_INVALID_SOCK;
     }
+#ifndef _WIN32
+    if (h->wake_rfd != NURL_INVALID_SOCK) { close(h->wake_rfd); h->wake_rfd = NURL_INVALID_SOCK; }
+    if (h->wake_wfd != NURL_INVALID_SOCK) { close(h->wake_wfd); h->wake_wfd = NURL_INVALID_SOCK; }
+#endif
     free(h->peer);
     free(h);
+}
+
+/* Take an extra reference so the handle survives past a concurrent
+ * nurl_tcp_close. server_run_async uses this: a parked accept fiber holds
+ * the listener while another thread may call server_stop. */
+void nurl_tcp_ref(long long handle) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return;
+    __atomic_fetch_add(&h->refcount, 1, __ATOMIC_SEQ_CST);
+}
+
+/* Drop a reference taken with nurl_tcp_ref; the last drop destroys. */
+void nurl_tcp_unref(long long handle) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return;
+    if (__atomic_sub_fetch(&h->refcount, 1, __ATOMIC_SEQ_CST) == 0)
+        nurl__tcp_destroy(h);
+}
+
+void nurl_tcp_close(long long handle) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return;
+    /* For a LISTENER, perform the stop + wakeup side-effects IMMEDIATELY,
+     * even if the struct free is deferred (an async accept fiber may still
+     * hold a ref): close the fd, raise the shutdown flag, poke the
+     * accept self-pipe (blocking pool) and the async reactor (fiber). A
+     * fiber/worker then resumes, sees the fd gone, and exits — at which
+     * point its ref drop runs the destructor. Conns take the plain
+     * release path (refcount 1 → 0 → destroy), preserving the exact
+     * SSL_shutdown-before-fd-close ordering inside nurl__tcp_destroy. */
+    if (h->kind == NURL_TCP_KIND_LISTENER) {
+#ifndef _WIN32
+        h->shutting_down = 1;
+        if (h->wake_wfd != NURL_INVALID_SOCK) {
+            char b = 1;
+            ssize_t w = write(h->wake_wfd, &b, 1);
+            (void)w;
+        }
+#endif
+        if (h->fd != NURL_INVALID_SOCK) {
+            nurl_close_sock(h->fd);
+            h->fd = NURL_INVALID_SOCK;
+        }
+        nurl__reactor_wake_if_started();
+    }
+    nurl_tcp_unref(handle);
 }
 
 /* Soft-shutdown — close the socket but KEEP the struct. server_run_pool's
@@ -3585,10 +3744,32 @@ void nurl_tcp_close(long long handle) {
 void nurl_tcp_shutdown(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return;
+    h->shutting_down = 1;
+#ifndef _WIN32
+    /* Wake every worker blocked in accept()'s poll via the self-pipe. We
+     * must NOT close(h->fd) here: another thread may be mid-accept on it,
+     * and on Linux close() neither interrupts that accept nor is safe
+     * against fd reuse (the old close-from-another-thread relied on a
+     * wakeup that never happens → workers hang, join never returns). The
+     * fd is released by nurl_tcp_close once all workers have joined. */
+    if (h->wake_wfd != NURL_INVALID_SOCK) {
+        char b = 1;
+        ssize_t w = write(h->wake_wfd, &b, 1);
+        (void)w;
+    } else if (h->fd != NURL_INVALID_SOCK) {
+        /* No wakeup pipe (pipe() failed at listen): best-effort old path. */
+        nurl_close_sock(h->fd);
+        h->fd = NURL_INVALID_SOCK;
+    }
+#else
+    /* Win32: closesocket does interrupt a blocked accept. */
     if (h->fd != NURL_INVALID_SOCK) {
         nurl_close_sock(h->fd);
         h->fd = NURL_INVALID_SOCK;
     }
+#endif
+    /* Also unblock a fiber parked on this listener via the async reactor. */
+    nurl__reactor_wake_if_started();
 }
 
 long long nurl_tcp_err_kind(long long handle) {
@@ -4435,6 +4616,8 @@ void nurl_tcp_set_timeout(long long h, long long ms) { (void)h; (void)ms; }
  * WASI because the underlying tcp_listen/_accept returned 0). */
 long long nurl_tcp_get_fd(long long h)                 { (void)h; return -1; }
 void nurl_tcp_set_nonblock(long long h, long long on)  { (void)h; (void)on; }
+void nurl_tcp_ref(long long h)                         { (void)h; }
+void nurl_tcp_unref(long long h)                       { (void)h; }
 
 /* §18b / §18c WASI stubs — wasi-libc has no socket layer. */
 long long nurl_udp_bind(const char *h, long long p) {
@@ -5621,6 +5804,10 @@ static void nurl__reactor_wake(void) {
     (void)r;
 }
 
+void nurl__reactor_wake_if_started(void) {
+    if (nurl__reactor.started) nurl__reactor_wake();
+}
+
 /* Reactor loop: build pollfd[], compute min-deadline, poll, wake
  * ready / timed-out fibers. */
 static void *nurl__reactor_loop(void *arg) {
@@ -5841,6 +6028,7 @@ void nurl__reactor_shutdown(void) {
 #else  /* WASI / Windows — Phase 5 stubs */
 
 void nurl__reactor_shutdown(void) {}
+void nurl__reactor_wake_if_started(void) {}
 
 long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
     (void)fd; (void)timeout_ms; return -1;

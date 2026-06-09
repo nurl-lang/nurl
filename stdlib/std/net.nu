@@ -425,6 +425,27 @@ $ `stdlib/std/async_ffi.nu`
 
 & `c` @ nurl_tcp_set_nonblock i handle i on → v
 
+& `c` @ nurl_tcp_ref i handle → v
+
+& `c` @ nurl_tcp_unref i handle → v
+
+// Take/drop an extra reference on a listener handle so it survives a
+// concurrent `tcp_close_listener` (e.g. `server_stop` fired from another
+// thread). `server_run_async` retains the listener for the life of its
+// accept fiber and releases it once the fiber has exited — without this,
+// closing the listener mid-accept frees the struct out from under the
+// parked fiber (use-after-free). Each retain MUST be paired with one
+// release.
+@ tcp_listener_retain TcpListener l → v {
+    : s rp . l raw
+    ( nurl_tcp_ref # i rp )
+}
+
+@ tcp_listener_release TcpListener l → v {
+    : s rp . l raw
+    ( nurl_tcp_unref # i rp )
+}
+
 // Set non-blocking mode (idempotent). Used internally by the async
 // wrappers on first call. Exposed in case callers want to manage the
 // mode explicitly (e.g. a custom proactor loop).
