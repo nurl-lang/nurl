@@ -85,6 +85,15 @@ $ `stdlib/ext/env.nu`
             ?? d { T _ → {} F → {} }
             ?? ct { T t → { ( thread_join t ) } F _ → {} }
 
+            // The client thread has joined and server_run_async has
+            // returned (all fibers drained), so both closures' heap-
+            // captured envs are now dead — release them (spawn /
+            // thread_spawn borrow the env; they never free it).
+            : *u client_env # *u client 1
+            ( nurl_free # s client_env )
+            : *u handler_env # *u async_test_handler_cl 1
+            ( nurl_free # s handler_env )
+
             ( nurl_print `client_ok=` )
             ( nurl_print ( nurl_str_int client_ok ) )
             ( nurl_print `\n` )
