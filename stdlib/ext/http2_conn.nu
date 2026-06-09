@@ -1358,6 +1358,24 @@ $ `stdlib/ext/http2_hpack.nu`
                                         = . s end_stream_received T
                                         = . s state ( h2_state_half_closed_remote )
                                     } {}
+                                    // Replenish the PER-STREAM window too (the
+                                    // connection-level grant below covers stream
+                                    // 0 only). Without this the peer's stream
+                                    // send_window hits 0 after the initial 64 KB
+                                    // and never reopens, so a request body larger
+                                    // than the stream window can never be fully
+                                    // received. Skip once END_STREAM is in — no
+                                    // more DATA will arrive on this stream.
+                                    ? & ! . s end_stream_received
+                                    < . s recv_window / ( h2_default_initial_window_size ) 2
+                                    {
+                                        : i sgrant - ( h2_default_initial_window_size )
+                                        . s recv_window
+                                        : !v H2FrameErr swu
+                                        ( h2_send_window_update . cur tcp sid sgrant )
+                                        ?? swu { T _ → {} F _ → {} }
+                                        = . s recv_window ( h2_default_initial_window_size )
+                                    } {}
                                     ( __h2_set_stream cur idx s )
                                     // Replenish flow-control credit when
                                     // window drops below half. Keeps the
