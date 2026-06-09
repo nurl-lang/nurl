@@ -187,8 +187,8 @@ nurl/
 
 ## Name
 
-**NURL** = **N**eural **U**nified **R**epresentation **L**anguage — also
-**N**on-h**U**man **R**eadable **L**anguage. File extension: `.nu`.
+**NURL** = **N**eural **U**nified **R**epresentation **L**anguage. File
+extension: `.nu`.
 
 ---
 

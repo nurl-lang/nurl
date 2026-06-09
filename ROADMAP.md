@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-06-08 · Current release: **0.9.6** · Language: **Grammar
+_Last reviewed: 2026-06-09 · Current release: **0.9.6** · Language: **Grammar
 v2.2** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -92,7 +92,8 @@ platform-specific shims.
 - **core** — `string`, `vec`, `option`, `result`, `errors`, `char`, `slice`,
   `pair`, `box`, `cell`, `mem`, `io`, `symtab`, `posix`.
 - **std/collections & algorithms** — `hashmap`, `set`, `deque`, `heap`,
-  `ordmap`, `iter`, `sort`, `cmp`, `bytes`, `bufio`, `fmt`, `int`, `float`.
+  `ordmap`, `iter`, `sort`, `cmp`, `bytes`, `bufio`, `fmt`, `int`, `float`,
+  `bigint` (arbitrary-precision integers).
 - **std/runtime services** — `async`, `thread`, `channel`, `arc`, `rc`,
   `arena`, `signal`, `panic`/`recover`, `process`, `log` (text + JSON),
   `time` (incl. timezone/DST), `args` (CLI parser).
@@ -108,7 +109,10 @@ platform-specific shims.
   metrics, DoS caps, graceful shutdown, per-request timeouts, panic recovery),
   HTTP client, **TLS** (SNI + ALPN + mTLS + live cert reload), **HTTP/2**
   (RFC 9113 + HPACK, **server and client**), **WebSocket** (RFC 6455, **server
-  and client**), reverse proxy with binary-safe streaming.
+  and client**), reverse proxy with binary-safe streaming. The stack has had a
+  dedicated security-hardening pass (path-traversal, SSRF, request-smuggling,
+  HTTP/2 CONTINUATION-flood + stream-accounting, and clean cross-thread
+  listener shutdown) with regression tests.
 - **ext/data services** — `sqlite` (production-hardened), `postgres` (binary
   protocol, async, LISTEN/NOTIFY, COPY), `mqtt` 5.0 client.
 - **ext/AI & agents** — `mcp` (+ `client`, `http`, `session`, `stdio`,
@@ -180,8 +184,11 @@ Not blocking 1.0; ordered roughly by likely value.
 - **Mobile & embedded targets** — Android (NDK), iOS, and a `no_std`-style
   embedded profile. The RISC-V / ARM64 static cross-compiles already prove the
   shape; these extend it.
-- **Numeric breadth** — arbitrary-precision integers and/or fixed-point
-  decimal. Acceptable to omit for systems work today; tracked for completeness.
+- **Numeric breadth** — arbitrary-precision integers shipped (`std/bigint`:
+  signed, base-2¹⁶ limbs, add/sub/mul, comparison, base-10 parse/format;
+  bignum÷bignum division is the remaining follow-up). Fixed-point decimal is
+  still open. Acceptable to omit for systems work today; tracked for
+  completeness.
 - **Runtime split (organisational)** — separate `stdlib/runtime.c` into
   bootstrap-internal helpers vs. stdlib FFI shims. The PURIFY effort already
   moved most platform code into pure-NURL `& \`c\`` FFI; the file-level split
