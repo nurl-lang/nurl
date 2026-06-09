@@ -144,48 +144,73 @@ $ `stdlib/std/bytes.nu`
     ^ found
 }
 
+@ __is_sep_byte i c → b {
+    ? == c 47 { ^ T } {}
+    ? == c 92 { ^ T } {}
+    ^ F
+}
+
+// Build the relative request tail: strip ALL leading separators so the
+// result can never be an absolute path. Stripping only ONE separator
+// (the old behaviour) left "//etc/passwd" → "/etc/passwd", which
+// path_join treats as an absolute `b` and returns verbatim — discarding
+// `dir` and serving an arbitrary file outside the static root. Stripping
+// every leading '/' and '\\' guarantees the tail is relative, so the
+// path_join result always stays under `dir`. (A Windows drive-letter
+// tail like "C:/.." survives separator-stripping and is rejected
+// separately by serve_static's path_is_absolute guard.)
+@ __static_rel_tail s path → String {
+    : i pn ( nurl_str_len path )
+    : ~ i start 0
+    ~ & < start pn ( __is_sep_byte ( nurl_str_get path start ) ) {
+        = start + start 1
+    }
+    : String out ( string_with_cap - pn start )
+    : ~ i k start
+    ~ < k pn {
+        ( string_push_char out ( nurl_str_get path k ) )
+        = k + k 1
+    }
+    ^ out
+}
+
 // ── serve_static ─────────────────────────────────────────────────────
 //
-// Path resolution is intentionally simple:
+// Path resolution:
 //
-//   * If the request path is just "/", serve `dir/index.html`.
-//   * Otherwise strip leading '/' from the request path and join with
-//     `dir`. Empty `dir` means CWD-relative.
-//   * Any '..' segment in the request path → 403.
-//   * read_file_bytes failure → 404.
+//   * Strip ALL leading separators from the request path to obtain a
+//     guaranteed-relative tail (see __static_rel_tail).
+//   * Empty tail ("/" or all-separators) → serve `dir/index.html`.
+//   * Reject (403) any '..' segment, or a tail that is still absolute
+//     (a drive-letter form like "C:/..") after separator-stripping.
+//   * Join the tail with `dir` (empty `dir` means CWD-relative) and read
+//     the file; read_file_bytes / file_size failure → 404.
 //
 // The body Vec is OWNED by the response after `response_set_body_bytes`
 // copies it; we then free the original buffer to avoid double ownership.
 
-@ __resolve_static_path s dir String req_path → String {
-    : i pn ( string_len req_path )
-    // "/" → "index.html" relative to dir.
-    ? <= pn 1 {
-        : ?i found_slash ( string_index_of req_path `/` )
-        ?? found_slash {
-            T _ → { ^ ( path_join dir `index.html` ) }
-            F _ → { ^ ( path_join dir ( string_data req_path ) ) }
-        }
-    } {}
-    // Strip the leading '/' (every well-formed HTTP target starts with one).
-    : i first ( string_get req_path 0 )
-    ? == first 47 {
-        : String tail ( string_substr req_path 1 - pn 1 )
-        : String full ( path_join dir ( string_data tail ) )
-        ( string_free tail )
-        ^ full
-    } {}
-    ^ ( path_join dir ( string_data req_path ) )
-}
-
 @ serve_static s dir HttpRequest req → HttpResponse {
-    // Path-traversal defence runs on the raw request path BEFORE join,
-    // so even an attacker-controlled `..` blocked even if `dir` is empty.
-    ? ( __has_dotdot_segment ( string_data . req path ) ) {
+    // Resolve to a guaranteed-relative tail FIRST (strips every leading
+    // separator), then run the traversal defences on that tail — so a
+    // "//etc/passwd" or "/C:/secret" can never escape `dir`, even when
+    // `dir` is empty.
+    : String rel ( __static_rel_tail ( string_data . req path ) )
+    : s rels ( string_data rel )
+    // Reject any ".." segment, and reject a tail that is still absolute
+    // after separator-stripping (a Windows drive-letter form, which
+    // path_join would otherwise honour and serve outside `dir`).
+    ? | ( __has_dotdot_segment rels ) ( path_is_absolute rels ) {
+        ( string_free rel )
         ^ ( response_text 403 `forbidden\n` )
     } {}
 
-    : String full ( __resolve_static_path dir . req path )
+    // Empty tail ("/" or all-separators) → directory index.
+    : ~ String full ( path_join dir `index.html` )
+    ? > ( string_len rel ) 0 {
+        ( string_free full )
+        = full ( path_join dir rels )
+    } {}
+    ( string_free rel )
 
     // Refuse to serve a directory entry directly (e.g. someone requested
     // `/static/css/`). file_exists returns F for directories under POSIX

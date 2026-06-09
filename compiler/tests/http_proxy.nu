@@ -102,6 +102,25 @@ $ `stdlib/core/vec.nu`
     ( string_free u4 )
     ( request_free r4 )
 
+    // SSRF defence: base WITHOUT a trailing slash + a target WITHOUT a
+    // leading slash must NOT merge into the authority. Pre-fix these
+    // produced "https://api.example.com@evil.com" (userinfo split →
+    // host evil.com) and "https://api.example.comevil.com" — both let
+    // the client choose the upstream host. The fix inserts exactly one
+    // '/' so the host stays api.example.com and the token lands in the
+    // path.
+    : HttpRequest r5 ( make_req `GET` `@evil.com/x` `` )
+    : String u5 ( __build_upstream_url `https://api.example.com` r5 )
+    ( println_s `  ssrf_userinfo=` ( string_data u5 ) )
+    ( string_free u5 )
+    ( request_free r5 )
+
+    : HttpRequest r6 ( make_req `GET` `evil.com/x` `` )
+    : String u6 ( __build_upstream_url `https://api.example.com` r6 )
+    ( println_s `  ssrf_hostmerge=` ( string_data u6 ) )
+    ( string_free u6 )
+    ( request_free r6 )
+
     // ── 5. __build_request_headers_blob ──────────────────────────
     ( nurl_print `── __build_request_headers_blob ──\n` )
     : HttpRequest hr ( make_req `POST` `/v1/messages` `` )

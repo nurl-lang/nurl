@@ -853,11 +853,24 @@ $ `stdlib/ext/http.nu`
                     T n → {
                         ? < n 0 { = status 0 = done T } {}
                         ? == n 0 {
-                            // Trailer-headers terminator: read an empty line.
-                            : !String HttpReqErr trailer ( __read_crlf_line conn 0 )
-                            ?? trailer {
-                                T t → ( string_free t )
-                                F _ → = status 0
+                            // Terminating chunk. Consume the trailer section
+                            // (RFC 7230 §4.1.2) up to its closing empty line —
+                            // zero or more trailer header lines may follow the
+                            // "0" chunk. Reading only the first line would
+                            // leave the remaining trailers + the empty
+                            // terminator on the socket, desyncing a persistent
+                            // connection (a request-smuggling vector).
+                            : ~ b tdone F
+                            ~ & == status 1 ! tdone {
+                                : !String HttpReqErr trailer ( __read_crlf_line conn 0 )
+                                ?? trailer {
+                                    T t → {
+                                        : i tl ( string_len t )
+                                        ( string_free t )
+                                        ? == tl 0 { = tdone T } {}
+                                    }
+                                    F _ → { = status 0 = tdone T }
+                                }
                             }
                             = done T
                         } {

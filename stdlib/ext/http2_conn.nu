@@ -319,6 +319,59 @@ $ `stdlib/ext/http2_hpack.nu`
     = . sp idx s
 }
 
+// Drop every CLOSED stream from the connection's stream table, freeing
+// its owned buffers, and keep the rest. Two problems are solved here:
+//
+//   1. CORRECTNESS / availability. RFC 9113 §5.1.2 says only streams in
+//      the "open" or a "half-closed" state count toward
+//      SETTINGS_MAX_CONCURRENT_STREAMS — closed streams do NOT. The new-
+//      stream admission check counts `vec_len streams`, so without
+//      pruning a long-lived connection's closed records accumulate and,
+//      once 256 (our advertised max) have piled up, EVERY further request
+//      is answered with REFUSED_STREAM even though nothing is actually in
+//      flight. That breaks HTTP/2's core connection-reuse model.
+//
+//   2. MEMORY / DoS. The table otherwise grows without bound for the life
+//      of the connection (the memory dimension of the Rapid Reset attack,
+//      CVE-2023-44487: open + immediate RST_STREAM never lowers the
+//      count). Pruning bounds the table to the genuinely-active streams.
+//
+// Safe because closed-stream reuse is rejected via `last_peer_stream_id`
+// (which never decreases), independently of whether a record is present:
+// a HEADERS / WINDOW_UPDATE / RST_STREAM / DATA frame arriving for a
+// pruned id takes the same `idx < 0` path it would for any other
+// already-closed stream.
+//
+// MUST compact the stream table IN PLACE. A `Vec` is a boxed handle
+// (pointer to a shared {data,len,cap} control block); every by-value copy
+// of the H2Connection — including the one the caller of h2_conn_serve
+// holds for its final h2_conn_free — shares that same control block.
+// Freeing it and swapping in a fresh Vec would leave those other copies
+// pointing at freed memory (use-after-free at connection teardown). So we
+// keep the same control block: free each closed stream's buffers, slide
+// the survivors down, and shrink the length via vec_set_len. The
+// abandoned tail slots are outside [0,len) and are never traversed again
+// (their buffers now live in the lower survivor slots — no double free).
+@ __h2_prune_closed H2Connection c → H2Connection {
+    : ~ H2Connection cur c
+    : i n ( vec_len [H2Stream] . cur streams )
+    : *H2Stream sp ( vec_data [H2Stream] . cur streams )
+    : ~ i w 0
+    : ~ i r 0
+    ~ < r n {
+        : H2Stream s . sp r
+        ? == . s state ( h2_state_closed ) {
+            ( __h2_stream_free s )
+        } {
+            ? != w r { = . sp w s } {}
+            = w + w 1
+        }
+        = r + r 1
+    }
+    : b _sl ( vec_set_len [H2Stream] . cur streams w )
+    ^ cur
+}
+
 // ── SETTINGS application ─────────────────────────────────────────────
 //
 // Apply received settings to peer_settings + adjust derived state.
@@ -403,6 +456,14 @@ $ `stdlib/ext/http2_hpack.nu`
 // 31-bit dependency value masked of the exclusive-bit, or -1 if the
 // flag is not set / the payload is malformed (caller falls back on its
 // own length check).
+// Hard cap on the accumulated HEADERS+CONTINUATION block per stream.
+// `our_max_header_list_size` defaults to 0 (unadvertised / unlimited), so
+// without this a peer could open HEADERS without END_HEADERS and append
+// unbounded CONTINUATION frames, growing `header_block` without limit
+// (the CONTINUATION-flood DoS, CVE-2024-27316 class). 64 KiB of ENCODED
+// header bytes is far beyond any legitimate request yet bounds memory.
+@ __h2_max_header_block_bytes → i { ^ 65536 }
+
 @ __h2_headers_priority_dep H2Frame f → i {
     ? == 0 & . f flags ( h2_flag_priority ) { ^ -1 } {}
     : i n ( vec_len [u] . f payload )
@@ -1205,6 +1266,11 @@ $ `stdlib/ext/http2_hpack.nu`
                                 // open record — closed-stream reuse.
                                 = err H2ConnProtocol = ok F
                             } {
+                                // Reclaim closed streams before counting, so
+                                // the cap reflects only genuinely-active
+                                // streams (RFC 9113 §5.1.2) and the table
+                                // stays bounded (see __h2_prune_closed).
+                                = cur ( __h2_prune_closed cur )
                                 : i ns ( vec_len [H2Stream] . cur streams )
                                 ? & > . cur our_max_concurrent_streams 0
                                 >= ns . cur our_max_concurrent_streams
@@ -1222,6 +1288,9 @@ $ `stdlib/ext/http2_hpack.nu`
                                         T hb → {
                                             ( vec_extend [u] . new_s header_block hb )
                                             ( vec_free [u] hb )
+                                            ? > ( vec_len [u] . new_s header_block ) ( __h2_max_header_block_bytes ) {
+                                                = err H2ConnProtocol = ok F
+                                            } {}
                                             = . new_s state ( h2_state_open )
                                             ? != 0 & . frame flags ( h2_flag_end_stream ) {
                                                 = . new_s end_stream_received T
@@ -1236,7 +1305,8 @@ $ `stdlib/ext/http2_hpack.nu`
                                             ( vec_push [H2Stream] . cur streams new_s )
                                             = . cur last_peer_stream_id sid
                                             // If complete, decode + dispatch
-                                            ? . new_s headers_complete {
+                                            // (skip if the cap guard tripped).
+                                            ? & ok . new_s headers_complete {
                                                 : i sidx ( __h2_find_stream_index cur sid )
                                                 : !H2Connection H2ConnErr dr
                                                 ( __h2_decode_stream_headers cur sidx )
@@ -1283,12 +1353,18 @@ $ `stdlib/ext/http2_hpack.nu`
                             } {
                                 : H2Stream s ( __h2_get_stream cur idx )
                                 ( vec_extend [u] . s header_block . frame payload )
+                                // CONTINUATION-flood guard: bound the total
+                                // accumulated header block (see
+                                // __h2_max_header_block_bytes).
+                                ? > ( vec_len [u] . s header_block ) ( __h2_max_header_block_bytes ) {
+                                    = err H2ConnProtocol = ok F
+                                } {}
                                 ? != 0 & . frame flags ( h2_flag_end_headers ) {
                                     = . s headers_complete T
                                     = . cur partial_headers_stream 0
                                 } {}
                                 ( __h2_set_stream cur idx s )
-                                ? . s headers_complete {
+                                ? & ok . s headers_complete {
                                     : !H2Connection H2ConnErr dr
                                     ( __h2_decode_stream_headers cur idx )
                                     ?? dr {

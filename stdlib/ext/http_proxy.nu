@@ -146,8 +146,18 @@ $ `stdlib/ext/http_server.nu`
 }
 
 // Build the upstream URL by joining `base` with `req.path` + `?` +
-// `req.query`. If `base` ends with `/` AND `req.path` starts with `/`
-// we strip one to avoid `https://api.example.com//v1/foo`.
+// `req.query`.
+//
+// The separator handling is security-critical, not cosmetic. The request
+// target is NOT guaranteed to start with `/` (the request-line parser
+// accepts any non-empty target — absolute-form, authority-form, or a
+// bare token). If `base` has no trailing `/` AND the path has no leading
+// `/`, naive concatenation merges them into the authority: base
+// "http://api" + path "@evil.com" → "http://api@evil.com" (userinfo
+// split → host evil.com), or + "evil.com" → "http://apievil.com". Both
+// are SSRF — the client picks the upstream host. So we guarantee EXACTLY
+// one `/` between base and path: strip a duplicate when both supply one,
+// and INSERT one when neither does.
 @ __build_upstream_url s base HttpRequest req → String {
     : i bn ( nurl_str_len base )
     : i pn ( string_len . req path )
@@ -160,6 +170,9 @@ $ `stdlib/ext/http_server.nu`
     ? > pn 0 { ? == ( string_get . req path 0 ) 47 { = path_slash T } {} } {}
     : ~ i path_start 0
     ? & base_slash path_slash { = path_start 1 } {}
+    // Neither side supplies a separator → insert one so the path can
+    // never bleed into the authority (SSRF defence, see above).
+    ? & ! base_slash ! path_slash { ( string_push_char url 47 ) } {}
     ? > pn path_start {
         : ~ i k path_start
         ~ < k pn {
