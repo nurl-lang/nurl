@@ -1008,9 +1008,17 @@ $ `stdlib/std/async.nu`
 }
 
 @ server_run_async HttpServer s → !v NetErr {
+    // Retain the listener for the lifetime of the accept fiber. server_stop
+    // (often called from another thread) closes the listener to break the
+    // accept loop; the close wakes the parked accept fiber via the reactor,
+    // but freeing the listener struct there would race the fiber's next
+    // touch of it. The extra ref defers the free until we release it below,
+    // after runtime_run has drained every fiber.
+    ( tcp_listener_retain . s listener )
     // Spawn one accept fiber; runtime_run blocks until the accept
     // fiber exits AND every in-flight conn fiber drains (pending=0).
     ( spawn \ → v { ( __async_accept_loop s ) } )
     ( runtime_run )
+    ( tcp_listener_release . s listener )
     ^ @ !v NetErr { T 0 }
 }
