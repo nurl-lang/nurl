@@ -126,6 +126,15 @@ $ `stdlib/core/vec.nu`
     ( response_add_header r4 `Set-Cookie` `b=2; Path=/admin` )
     ( run_case `add_header_repeats` r4 )
 
+    // ── Response-splitting defence (CWE-113): a header value carrying an
+    //    embedded CRLF + injected header must be emitted CR/LF-stripped,
+    //    i.e. on a single line — NOT split into an extra header. The
+    //    snapshot shows `X-Evil: aInjected: 1` on one line (no `\r\n`
+    //    inside the value), proving the injection was neutralised. ──
+    : HttpResponse r5 ( response_text 200 `x` )
+    ( response_set_header r5 `X-Evil` `a\r\nInjected: 1` )
+    ( run_case `header_crlf_strip` r5 )
+
     // ── chunk-size hex formatter sanity (exercises __append_hex_size
     //    via response_write_chunk's frame builder, but we can probe it
     //    by using a fresh response_begin_chunked output? No — needs a
