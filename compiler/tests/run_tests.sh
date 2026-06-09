@@ -237,6 +237,7 @@ for src in "${tests[@]}"; do
           && "$name" != "http_response_builder" \
           && "$name" != "http_options" \
           && "$name" != "http_router" \
+          && "$name" != "http_static_traversal" \
           && "$name" != "http_extras" \
           && "$name" != "http_middleware" \
           && "$name" != "http_form" \
