@@ -55,6 +55,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/mem.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/net.nu`
+$ `stdlib/std/panic.nu`
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
@@ -159,7 +160,14 @@ $ `stdlib/ext/http2_hpack.nu`
     i recv_window  // bytes peer can send on this stream
 }
 
-@ __h2_stream_new i id i initial_window → H2Stream {
+// `send_init` is the credit WE may send on this stream — it equals the
+// PEER's advertised SETTINGS_INITIAL_WINDOW_SIZE. `recv_init` is the credit
+// the peer may send to US — it equals OUR advertised window. These are
+// distinct: seeding recv_window from the peer's value (the old single-arg
+// shape did) makes our receive accounting disagree with what the peer
+// believes its send window is, which breaks flow-control enforcement the
+// moment a peer changes its INITIAL_WINDOW_SIZE.
+@ __h2_stream_new i id i send_init i recv_init → H2Stream {
     ^ @ H2Stream {
         id
         ( h2_state_idle )
@@ -169,8 +177,8 @@ $ `stdlib/ext/http2_hpack.nu`
         ( vec_new [Header] )
         ( vec_new [u] )
         F
-        initial_window
-        initial_window
+        send_init
+        recv_init
     }
 }
 
@@ -463,6 +471,16 @@ $ `stdlib/ext/http2_hpack.nu`
 // (the CONTINUATION-flood DoS, CVE-2024-27316 class). 64 KiB of ENCODED
 // header bytes is far beyond any legitimate request yet bounds memory.
 @ __h2_max_header_block_bytes → i { ^ 65536 }
+
+// Hard cap on the accumulated DATA body per stream. HTTP/2 receive flow
+// control (the recv_window enforcement below) bounds the IN-FLIGHT unacked
+// bytes, but because we replenish the window via WINDOW_UPDATE as data
+// arrives, the cumulative body a peer can stream on one request is
+// otherwise unbounded — buffering it all in `stream.body` is a memory-
+// exhaustion DoS. 10 MiB matches the HTTP/1.1 server's body_default_max so
+// both protocols enforce the same request-body ceiling. A stream that
+// exceeds it is reset with ENHANCE_YOUR_CALM; the connection survives.
+@ __h2_max_body_bytes → i { ^ 10485760 }
 
 @ __h2_headers_priority_dep H2Frame f → i {
     ? == 0 & . f flags ( h2_flag_priority ) { ^ -1 } {}
@@ -1281,7 +1299,8 @@ $ `stdlib/ext/http2_hpack.nu`
                                     ?? rs { T _ → {} F _ → {} }
                                 } {
                                     : H2Stream new_s ( __h2_stream_new sid
-                                    . cur peer_initial_window_size )
+                                    . cur peer_initial_window_size
+                                    . cur our_initial_window_size )
                                     : !( Vec u ) H2ConnErr hpr
                                     ( __h2_extract_headers_payload frame )
                                     ?? hpr {
@@ -1424,56 +1443,95 @@ $ `stdlib/ext/http2_hpack.nu`
                             : !( Vec u ) H2FrameErr dr ( h2_data_strip_padding frame )
                             ?? dr {
                                 T data → {
-                                    ( vec_extend [u] . s body data )
-                                    : i dn ( vec_len [u] data )
+                                    // §6.9.1 — flow control counts the ENTIRE
+                                    // DATA frame payload (pad-length octet +
+                                    // data + padding), not just the stripped
+                                    // bytes. `data_ok` gates the accept path:
+                                    // it is cleared on a flow-control overrun
+                                    // (fatal, connection error) or once an
+                                    // over-cap stream has been reset (the
+                                    // connection survives — see below).
+                                    : i flow_len ( vec_len [u] . frame payload )
+                                    : ~ b data_ok T
+                                    // Enforce that the peer respected the window
+                                    // WE advertised. A peer that sends more than
+                                    // we granted is a FLOW_CONTROL_ERROR (§6.9);
+                                    // without this it could burst-flood our
+                                    // buffers faster than we ACK.
+                                    ? | > flow_len . s recv_window
+                                    > flow_len . cur conn_recv_window {
+                                        = err H2ConnFlowControl = ok F = data_ok F
+                                    } {}
+                                    ? data_ok {
+                                        ( vec_extend [u] . s body data )
+                                    } {}
                                     ( vec_free [u] data )
-                                    = . s recv_window - . s recv_window dn
-                                    = . cur conn_recv_window
-                                    - . cur conn_recv_window dn
-                                    ? != 0 & . frame flags ( h2_flag_end_stream ) {
-                                        = . s end_stream_received T
-                                        = . s state ( h2_state_half_closed_remote )
-                                    } {}
-                                    // Replenish the PER-STREAM window too (the
-                                    // connection-level grant below covers stream
-                                    // 0 only). Without this the peer's stream
-                                    // send_window hits 0 after the initial 64 KB
-                                    // and never reopens, so a request body larger
-                                    // than the stream window can never be fully
-                                    // received. Skip once END_STREAM is in — no
-                                    // more DATA will arrive on this stream.
-                                    ? & ! . s end_stream_received
-                                    < . s recv_window / ( h2_default_initial_window_size ) 2
-                                    {
-                                        : i sgrant - ( h2_default_initial_window_size )
-                                        . s recv_window
-                                        : !v H2FrameErr swu
-                                        ( h2_send_window_update . cur tcp sid sgrant )
-                                        ?? swu { T _ → {} F _ → {} }
-                                        = . s recv_window ( h2_default_initial_window_size )
-                                    } {}
-                                    ( __h2_set_stream cur idx s )
-                                    // Replenish flow-control credit when
-                                    // window drops below half. Keeps the
-                                    // peer's data tap open at steady state.
-                                    ? < . cur conn_recv_window
-                                    / ( h2_default_initial_window_size ) 2
-                                    {
-                                        : i grant - ( h2_default_initial_window_size )
-                                        . cur conn_recv_window
-                                        : !v H2FrameErr wu
-                                        ( h2_send_window_update . cur tcp 0 grant )
-                                        ?? wu { T _ → {} F _ → {} }
+                                    ? data_ok {
+                                        = . s recv_window - . s recv_window flow_len
                                         = . cur conn_recv_window
-                                        ( h2_default_initial_window_size )
+                                        - . cur conn_recv_window flow_len
+                                        ? != 0 & . frame flags ( h2_flag_end_stream ) {
+                                            = . s end_stream_received T
+                                            = . s state ( h2_state_half_closed_remote )
+                                        } {}
+                                        // Absolute body cap — backstop against
+                                        // unbounded cumulative buffering across
+                                        // many WINDOW_UPDATE-replenished frames
+                                        // (see __h2_max_body_bytes). Reset just
+                                        // this stream with ENHANCE_YOUR_CALM and
+                                        // keep the connection alive.
+                                        ? > ( vec_len [u] . s body ) ( __h2_max_body_bytes ) {
+                                            : !v H2FrameErr rbc
+                                            ( h2_send_rst_stream . cur tcp sid
+                                            ( h2_err_enhance_your_calm ) )
+                                            ?? rbc { T _ → {} F _ → {} }
+                                            = . s state ( h2_state_closed )
+                                            ( __h2_set_stream cur idx s )
+                                            = data_ok F
+                                        } {}
                                     } {}
-                                    ? & . s end_stream_received . s headers_decoded {
-                                        : !H2Connection H2ConnErr disp
-                                        ( __h2_dispatch cur sid handler )
-                                        ?? disp {
-                                            T newc → { = cur newc }
-                                            F e → { = err e = ok F }
-                                        }
+                                    ? data_ok {
+                                        // Replenish the PER-STREAM window too (the
+                                        // connection-level grant below covers stream
+                                        // 0 only). Without this the peer's stream
+                                        // send_window hits 0 after the initial 64 KB
+                                        // and never reopens, so a request body larger
+                                        // than the stream window can never be fully
+                                        // received. Skip once END_STREAM is in — no
+                                        // more DATA will arrive on this stream.
+                                        ? & ! . s end_stream_received
+                                        < . s recv_window / ( h2_default_initial_window_size ) 2
+                                        {
+                                            : i sgrant - ( h2_default_initial_window_size )
+                                            . s recv_window
+                                            : !v H2FrameErr swu
+                                            ( h2_send_window_update . cur tcp sid sgrant )
+                                            ?? swu { T _ → {} F _ → {} }
+                                            = . s recv_window ( h2_default_initial_window_size )
+                                        } {}
+                                        ( __h2_set_stream cur idx s )
+                                        // Replenish flow-control credit when
+                                        // window drops below half. Keeps the
+                                        // peer's data tap open at steady state.
+                                        ? < . cur conn_recv_window
+                                        / ( h2_default_initial_window_size ) 2
+                                        {
+                                            : i grant - ( h2_default_initial_window_size )
+                                            . cur conn_recv_window
+                                            : !v H2FrameErr wu
+                                            ( h2_send_window_update . cur tcp 0 grant )
+                                            ?? wu { T _ → {} F _ → {} }
+                                            = . cur conn_recv_window
+                                            ( h2_default_initial_window_size )
+                                        } {}
+                                        ? & . s end_stream_received . s headers_decoded {
+                                            : !H2Connection H2ConnErr disp
+                                            ( __h2_dispatch cur sid handler )
+                                            ?? disp {
+                                                T newc → { = cur newc }
+                                                F e → { = err e = ok F }
+                                            }
+                                        } {}
                                     } {}
                                 }
                                 F fe → {
@@ -1579,7 +1637,20 @@ $ `stdlib/ext/http2_hpack.nu`
         ^ @ !H2Connection H2ConnErr { F H2ConnProtocol }
     } {}
     : HttpRequest req ( __h2_stream_to_request s )
-    : HttpResponse resp ( handler req )
+    // Wrap the handler in `recover` so a panic inside it doesn't unwind the
+    // whole connection serve loop (and, under server_run_pool, kill the
+    // worker thread). Mirrors the HTTP/1.1 path: on panic the default 500
+    // flows back to the client over this stream and the message is logged.
+    : ( @ HttpResponse HttpRequest ) f handler
+    : ~ HttpResponse resp ( response_text 500 `internal server error\n` )
+    : !v PanicInfo pr ( recover \ → v { = resp ( f req ) } )
+    ?? pr {
+        T _ → {}
+        F p → {
+            ( nurl_eprintln ( nurl_str_cat `[panic] HTTP/2 handler: ` ( string_data . p msg ) ) )
+            ( panic_info_free p )
+        }
+    }
     ( request_free req )
     : !H2Connection H2ConnErr wr ( __h2_send_response cur sid resp )
     ( http_response_free resp )

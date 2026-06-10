@@ -37,6 +37,7 @@ $ `stdlib/ext/http.nu`
     HpackBadIndex  // static/dynamic table lookup out of range
     HpackBadHuffman  // invalid Huffman code OR EOS within data
     HpackTableSizeExceeded  // dynamic table size update > peer limit
+    HpackListTooLarge  // decoded header list exceeded the size cap (bomb guard)
     HpackOther
 }
 
@@ -47,9 +48,22 @@ $ `stdlib/ext/http.nu`
         HpackBadIndex → `HpackBadIndex`
         HpackBadHuffman → `HpackBadHuffman`
         HpackTableSizeExceeded → `HpackTableSizeExceeded`
+        HpackListTooLarge → `HpackListTooLarge`
         HpackOther → `HpackOther`
     }
 }
+
+// Hard cap on the cumulative DECODED header-list size (RFC 7541 §4.1
+// accounting: name + value + 32 per entry). The encoded header block is
+// already bounded by the caller (http2_conn caps it at 64 KiB), but HPACK
+// indexing lets a few KiB of indexed references to a ~4 KiB dynamic-table
+// entry expand to >100 MiB of decoded headers — the classic HPACK bomb
+// (decompression amplification). Bounding the decoded total here defends
+// BOTH the server (request headers) and the client (response headers).
+// 2 MiB is far beyond any legitimate header set yet caps the blast radius;
+// the +32 per-entry term also bounds the entry COUNT (2 MiB / 32 ≈ 64 K),
+// so a flood of tiny headers can't explode the Header vector either.
+@ hpack_max_decoded_bytes → i { ^ 2097152 }
 
 // ── Static table (RFC 7541 Appendix A) ───────────────────────────────
 
@@ -413,6 +427,9 @@ $ `stdlib/ext/http.nu`
     : ~ b done F
     : ~ b ok T
     : ~ HpackErr last_err HpackOther
+    // Cumulative decoded-list size (RFC 7541 §4.1 accounting) — bomb guard,
+    // see hpack_max_decoded_bytes.
+    : ~ i total_decoded 0
     // RFC 7541 §4.2 — dynamic table size update MUST occur at the start
     // of the header block, never after a literal/indexed field. Track
     // whether any non-size-update has been processed.
@@ -427,7 +444,11 @@ $ `stdlib/ext/http.nu`
                 T iv → {
                     : ?Header opt ( hpack_dyn_lookup cur . iv value )
                     ?? opt {
-                        T h → { ( vec_push [Header] hdrs h ) }
+                        T h → {
+                            = total_decoded + total_decoded
+                            + + ( string_len . h name ) ( string_len . h value ) 32
+                            ( vec_push [Header] hdrs h )
+                        }
                         F _ → { = last_err HpackBadIndex = ok F }
                     }
                     = off + off . iv consumed
@@ -441,6 +462,8 @@ $ `stdlib/ext/http.nu`
                 : !HpackLitResult HpackErr lr ( __hpack_decode_lit_call buf off 6 T cur )
                 ?? lr {
                     T lr_ → {
+                        = total_decoded + total_decoded
+                        + + ( string_len . lr_ name ) ( string_len . lr_ value ) 32
                         ( vec_push [Header] hdrs ( header_new
                         ( string_data . lr_ name )
                         ( string_data . lr_ value ) ) )
@@ -489,6 +512,8 @@ $ `stdlib/ext/http.nu`
                     : !HpackLitResult HpackErr lr ( __hpack_decode_lit_call buf off 4 F cur )
                     ?? lr {
                         T lr_ → {
+                            = total_decoded + total_decoded
+                            + + ( string_len . lr_ name ) ( string_len . lr_ value ) 32
                             ( vec_push [Header] hdrs ( header_new
                             ( string_data . lr_ name )
                             ( string_data . lr_ value ) ) )
@@ -503,6 +528,10 @@ $ `stdlib/ext/http.nu`
                 }
             }
         }
+        // Bomb guard — abort as soon as the decoded list blows the cap.
+        ? & ok > total_decoded ( hpack_max_decoded_bytes ) {
+            = last_err HpackListTooLarge = ok F
+        } {}
         ? >= off n { = done T } {}
     }
     ? ! ok {
