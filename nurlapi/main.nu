@@ -180,7 +180,7 @@ $ `stdlib/std/thread.nu`
 }
 
 @ prepare_ir_for_wasi String ir → String {
-    : String res ( string_from ( string_data ir ) )
+    : ~ String res ( string_from ( string_data ir ) )
 
     // 0. Mask `@` inside string constants so the symbol rewrites below
     //    can't corrupt emitted-IR data (see note above). Restored at the
@@ -226,7 +226,7 @@ $ `stdlib/std/thread.nu`
         ?? entry_opt { T entry → {
                 : ( Vec String ) parts ( string_split entry `:` )
                 ? == ( vec_len [String] parts ) 3 {
-                    : String name ( string_new ) : String ret ( string_new ) : String pms ( string_new )
+                    : ~ String name ( string_new ) : ~ String ret ( string_new ) : ~ String pms ( string_new )
                     : ?String n_o ( vec_get [String] parts 0 ) ?? n_o { T s → { ( string_free name ) = name ( string_from ( string_data s ) ) } F → {} }
                     : ?String r_o ( vec_get [String] parts 1 ) ?? r_o { T s → { ( string_free ret ) = ret ( string_from ( string_data s ) ) } F → {} }
                     : ?String p_o ( vec_get [String] parts 2 ) ?? p_o { T s → { = pms ( string_from ( string_data s ) ) } F → {} }
@@ -236,7 +236,7 @@ $ `stdlib/std/thread.nu`
                     ? ( string_contains res ( string_data pat ) ) {
                         : String sname ( string_from `@__nurl_` ) ( string_push_str sname ( string_data name ) ) ( string_push_str sname `_shim(` )
 
-                        : b already_shimmed F
+                        : ~ b already_shimmed F
                         : ~ i si 0 ~ < si ( vec_len [String] shimmed ) {
                             : ?String s_o ( vec_get [String] shimmed si ) ?? s_o { T s → { ? ( string_eq s name ) { = already_shimmed T } {} } F → {} }
                             = si + si 1
@@ -750,14 +750,13 @@ s combined_stdout s combined_stderr → v {
                 T _ → {
                     : String nu_path ( path_join ( string_data build_dir ) filename )
                     ( write_file ( string_data nu_path ) source )
-                    : String bin_name ( string_from filename )
+                    : ~ String bin_name ( string_from filename )
                     ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
                     : String ll_name ( string_from ( string_data bin_name ) ) ( string_push_str ll_name `.ll` )
                     : String ll_path ( path_join ( string_data build_dir ) ( string_data ll_name ) )
                     : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
 
                     : b uses_canvas >= ( nurl_str_find source `stdlib/ext/canvas.nu` ) 0
-                    : b uses_audio >= ( nurl_str_find source `stdlib/ext/audio.nu` ) 0
 
                     : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
                     : !Output ProcessErr nurlc_res ( process_run ( string_data ( get_nurlc_path ) ) nurlc_args `` ) ( vec_free [s] nurlc_args )
@@ -871,13 +870,13 @@ s combined_stdout s combined_stderr → v {
                 T _ → {
                     : String nu_path ( path_join ( string_data build_dir ) filename )
                     ( write_file ( string_data nu_path ) source )
-                    : String bin_name ( string_from filename )
+                    : ~ String bin_name ( string_from filename )
                     ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
                     : String ll_name ( string_from ( string_data bin_name ) ) ( string_push_str ll_name `.ll` )
                     : String wasm_name ( string_from ( string_data bin_name ) ) ( string_push_str wasm_name `.wasm` )
 
                     : String ll_path ( path_join ( string_data build_dir ) ( string_data ll_name ) )
-                    : String wasm_path ( path_join ( string_data build_dir ) ( string_data wasm_name ) )
+                    : ~ String wasm_path ( path_join ( string_data build_dir ) ( string_data wasm_name ) )
 
                     : b uses_canvas >= ( nurl_str_find source `stdlib/ext/canvas.nu` ) 0
                     : b uses_audio >= ( nurl_str_find source `stdlib/ext/audio.nu` ) 0
@@ -901,11 +900,11 @@ s combined_stdout s combined_stderr → v {
                                 // via stdlib/ext/canvas.nu) only show up in the post-IR scan,
                                 // so this matters — sand.nu and doomfire.nu silently failed
                                 // to link canvas.wasm.o until this fix.
-                                : b uses_canvas F
+                                : ~ b uses_canvas F
                                 : !Regex ParseErr re_canv ( regex_compile `@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mouse_btn)\(` )
                                 ?? re_canv { T rc → { = uses_canvas ( regex_test rc ( string_data ir_fixed ) ) ( regex_free rc ) } F _ → {} }
 
-                                : b uses_audio F
+                                : ~ b uses_audio F
                                 : !Regex ParseErr re_aud ( regex_compile `@audio_(level|bin|bin_count|peak_bin|centroid|freq_of|sample_rate|is_silent|ready)\(` )
                                 ?? re_aud { T ra → { = uses_audio ( regex_test ra ( string_data ir_fixed ) ) ( regex_free ra ) } F _ → {} }
 
@@ -995,7 +994,7 @@ s combined_stdout s combined_stderr → v {
                                         ( json_obj_set res `uses_canvas` ( json_bool uses_canvas ) )
                                         ( json_obj_set res `uses_audio` ( json_bool uses_audio ) )
 
-                                        : String b64 ( string_new ) : String wasm_url ( string_new )
+                                        : ~ String b64 ( string_new ) : ~ String wasm_url ( string_new )
                                         ? == c_rc 0 {
                                             : !i IoErr wasm_size_res ( file_size ( string_data wasm_path ) )
                                             : i w_bytes ?? wasm_size_res { T s → s F _ → 0 }
@@ -1063,7 +1062,7 @@ s combined_stdout s combined_stderr → v {
                     : String nu_path ( path_join ( string_data build_dir ) filename )
                     ( write_file ( string_data nu_path ) source )
                     : String ll_path ( path_join ( string_data build_dir ) `main.ll` )
-                    : String bin_name ( string_from filename )
+                    : ~ String bin_name ( string_from filename )
                     ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
                     ( string_push_str bin_name `.exe` )
                     : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
@@ -1247,7 +1246,7 @@ s combined_stdout s combined_stderr → v {
                     : String nu_path ( path_join ( string_data build_dir ) filename )
                     ( write_file ( string_data nu_path ) source )
                     : String ll_path ( path_join ( string_data build_dir ) `main.ll` )
-                    : String bin_name ( string_from filename )
+                    : ~ String bin_name ( string_from filename )
                     ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
                     : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
                     : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
@@ -2541,7 +2540,7 @@ s combined_stdout s combined_stderr → v {
                     = in_code T
                 } {
                     // Heading?
-                    : i hcount 0
+                    : ~ i hcount 0
                     : ~ i hi 0
                     ~ < hi line_len {
                         ? & == ( nurl_str_get lp hi ) 35 < hi 6 { = hcount + hcount 1 = hi + hi 1 } { = hi line_len }
@@ -3297,7 +3296,7 @@ s combined_stdout s combined_stderr → v {
                     : String nu_path ( path_join ( string_data build_dir ) filename )
                     ( write_file ( string_data nu_path ) source )
                     : String ll_path ( path_join ( string_data build_dir ) `main.ll` )
-                    : String bin_name ( string_from filename )
+                    : ~ String bin_name ( string_from filename )
                     ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
                     : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
                     : String rt_o ( get_runtime_target_o target )
