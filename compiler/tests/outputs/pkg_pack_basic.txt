@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+gz_nonempty=T
+count=2
+
+has_nurl.toml=T
+has_src/lib.nu=T
+excl_deps=F
+excl_dotfile=F
+done

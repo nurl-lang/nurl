@@ -40,6 +40,16 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Wall-clock timers (bash $SECONDS, integer). BUILD_T0 marks the start of
+# the whole build; TEST_T0 is set just before the test runner. fmt_dur
+# renders seconds as "1m 20s" / "12s" for the summary line.
+BUILD_T0=$SECONDS
+fmt_dur() {
+    local s=$1
+    if (( s >= 60 )); then printf '%dm %02ds' $(( s / 60 )) $(( s % 60 ))
+    else printf '%ds' "$s"; fi
+}
+
 RUN_TESTS=1
 SAN=0
 REFRESH_BOOTSTRAP=0
@@ -353,17 +363,23 @@ else
 fi
 
 # ── Test suite ───────────────────────────────────────────────
+BUILD_SECS=$(( SECONDS - BUILD_T0 ))
 if (( RUN_TESTS == 0 )); then
     if (( SAN == 1 )); then
         echo "BUILD SUCCESS (sanitized — run ./compiler/tests/run_san_tests.sh next)"
     else
         echo "BUILD SUCCESS (tests skipped via --no-tests)"
     fi
+    echo "Build time: $(fmt_dur "$BUILD_SECS")"
     exit 0
 fi
 
-if TEST_OUT="$(compiler/tests/run_tests.sh 2>&1)"; then
+TEST_T0=$SECONDS
+TEST_OUT="$(compiler/tests/run_tests.sh 2>&1)"; TEST_RC=$?
+TEST_SECS=$(( SECONDS - TEST_T0 ))
+if (( TEST_RC == 0 )); then
     echo "BUILD SUCCESS & TESTS PASSED"
+    echo "Build time: $(fmt_dur "$BUILD_SECS")  ·  Test time: $(fmt_dur "$TEST_SECS")"
     # NOTE: nurlc_lastgood.{nu,ll} are NOT auto-updated on a
     # successful build. They are the committed bootstrap snapshot
     # and only the explicit `./build.sh --refresh-bootstrap` flag
@@ -373,6 +389,7 @@ if TEST_OUT="$(compiler/tests/run_tests.sh 2>&1)"; then
 fi
 
 echo "BUILD DIDN'T FAIL but TESTS FAILED"
+echo "Build time: $(fmt_dur "$BUILD_SECS")  ·  Test time: $(fmt_dur "$TEST_SECS")"
 echo "===================================================="
 echo "$TEST_OUT"
 exit 1

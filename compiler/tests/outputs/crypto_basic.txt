@@ -1,0 +1,33 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+ok sha256("")
+ok sha256("abc")
+ok sha256(56-byte)
+ok hmac("","")
+ok hmac(key,fox)
+ok b64("")
+ok b64("f")
+ok b64("fo")
+ok b64("foo")
+ok b64("foob")
+ok b64("fooba")
+ok b64("foobar")
+ok b64d("Zm9vYmFy") -> foobar
+ok b64d("Zm9vYg==") -> foob
+ok b64d("Zg==") -> f
+ok b64_url(0xfb 0xff 0xff)
+ok b64_std(0xfb 0xff 0xff)
+ok b64_url("-___") -> fbffff
+err b64d("a===") -> trailing garbage
+err b64d("@@@@") -> bad format
+ok hex("hi!")
+ok hexd("DEADBEEF") -> deadbeef
+err hexd("Z0") -> bad format
+err hexd("abc") -> bad format
+err hexd("") -> empty input
+ok rand_hex_str(8) length
+ok rand_hex_str non-degenerate
+ok rand_range bounds
+done

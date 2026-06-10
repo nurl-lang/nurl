@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+x=3
+y=4
+shade=Light
+pi=314

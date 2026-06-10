@@ -1,0 +1,6 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+tag=2
+tag=4 inner_count=2

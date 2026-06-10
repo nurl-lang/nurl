@@ -1,0 +1,52 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+── two_text_fields ──
+  count=2
+  [0] name=username filename=<none> ct=text/plain data=alice
+  [1] name=role filename=<none> ct=text/plain data=admin
+── file_upload ──
+  count=2
+  [0] name=title filename=<none> ct=text/plain data=hello
+  [1] name=upload filename=hi.bin ct=application/octet-stream data=[0][1][2][3]
+── with_preamble ──
+  count=1
+  [0] name=x filename=<none> ct=text/plain data=42
+── truncated ──
+  count=1
+  [0] name=ok filename=<none> ct=text/plain data=parsed
+── no_disposition ──
+  count=1
+  [0] name=kept filename=<none> ct=text/plain data=survives
+── default_ct ──
+  count=1
+  [0] name=readme filename=readme.txt ct=text/plain data=txt body
+── empty_boundary ──
+  count=0
+── no_marker ──
+  count=0
+── request: match ──
+  some=T count=2
+  [0] name=username filename=<none> ct=text/plain data=alice
+  [1] name=role filename=<none> ct=text/plain data=admin
+── request: quoted ──
+  some=T count=2
+  [0] name=username filename=<none> ct=text/plain data=alice
+  [1] name=role filename=<none> ct=text/plain data=admin
+── request: case ──
+  some=T count=2
+  [0] name=username filename=<none> ct=text/plain data=alice
+  [1] name=role filename=<none> ct=text/plain data=admin
+── request: with_charset ──
+  some=T count=2
+  [0] name=username filename=<none> ct=text/plain data=alice
+  [1] name=role filename=<none> ct=text/plain data=admin
+── request: wrong_ct ──
+  some=F
+── request: no_boundary ──
+  some=F
+── multipart_find_first ──
+  username=0
+  role=1
+  missing=-1

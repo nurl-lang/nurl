@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+const_decl all types test...
+MAX_CONN: 100
+PI: 3.14159
+GREETING: hello
+VERBOSE: on
+MAX_CONN after increment: 101

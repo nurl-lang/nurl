@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- 4.4 Test 1: Immutable basic ---
+x=42 y=50
+PASS

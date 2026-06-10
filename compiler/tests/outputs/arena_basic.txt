@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+p1 nonnull=T used=100
+p2-p1=104 (expect 104 due to 8-byte align)
+p3 offset=208 expect=208
+used=225 cap=1024 rem=799
+oom nonnull=F
+after reset used=0 cap=1024
+post-reset q offset=0
+aligned 16 check (0 means ok)=0
+done

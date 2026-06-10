@@ -1,0 +1,15 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+zero
+one
+two
+other
+meaning
+neg-one
+2^16
+c100
+c200
+c404
+c-other

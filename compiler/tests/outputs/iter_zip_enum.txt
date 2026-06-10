@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+zip_eq=(0,100)(1,101)(2,102)(3,103)
+zip_short_count=3
+enum=[0:10][1:20][2:30]
+dot_sum=75
+enum_str=0=apple 1=banana 2=cherry 
+abandon_first=0,0
+done

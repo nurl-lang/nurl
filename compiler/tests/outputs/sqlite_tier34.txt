@@ -1,0 +1,19 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+rowid=1 (expect 1)
+dbl_x10=25 (expect 25)
+note_is_null=1 (expect 1)
+unique_err=SqliteConstraintUnique
+fk_err=SqliteConstraintForeignKey
+txn_rolled_back_err=SqliteConstraintPrimaryKey
+rows_after_rollback=0 (expect 0)
+drop_denied=SqliteOther
+drop_after_clear=ok
+limit_prior_positive=1
+long_sql_blocked=SqliteOther
+harden=ok
+wal=ok
+sync=ok
+done

@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+pt: 13 24
+pt-neg: propagated
+tag: hello/7

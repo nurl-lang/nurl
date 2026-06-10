@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+[INFO]  hello
+[INFO]  user logged in user_id=42
+[INFO]  request ip=1.2.3.4 path=/health
+[WARN]  near limit pct=92 host=db ip=10.0.0.5
+{"level":"info","msg":"hello"}
+{"level":"info","msg":"user logged in","user_id":"42"}
+{"level":"warn","msg":"near limit","pct":"92","host":"db"}
+{"level":"error","msg":"with \"quote\" and \\","detail":"line\nbreak"}

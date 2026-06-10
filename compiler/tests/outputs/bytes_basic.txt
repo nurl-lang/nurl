@@ -1,0 +1,42 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+3
+5
+hello
+hello world
+68656c6c6f20776f726c64
+11
+roundtrip ok
+empty -> empty input
+odd -> bad format
+bad -> bad format
+find('o') -> 4
+find('z') -> none
+idx 'world' -> 6
+idx 'wox' -> none
+idx '' -> 0
+idx 'hello world' -> 0
+idx '!' -> none
+starts 'he' ok
+starts 'xx' ok
+starts long ok
+ends 'ld' ok
+ends 'Z!' ok
+ends long ok
+hello
+world
+0
+hello world
+hell
+0
+42-73.5
+len-mismatch ok
+write ok
+read ok
+11
+delete ok
+miss -> not found
+extend_raw len: 5
+extend_raw byte4: 67

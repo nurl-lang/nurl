@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+Parsed rows: 3
+Round-trip output:
+name,city,note
+alice,new york,"hello
+world"
+bob,la,"""quote"" test"

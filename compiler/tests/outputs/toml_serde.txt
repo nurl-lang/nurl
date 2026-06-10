@@ -1,0 +1,17 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+enc int: ok
+enc bool: ok
+enc str: ok
+dec int: ok
+dec bool: ok
+dec str: ok
+dec mismatch: ok
+stringify table: ok
+rt name: ok
+rt n: ok
+rt ok: ok
+struct port: ok
+struct tls: ok

@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+Start foreach
+Processing: 10
+Dropping inner id: 10
+Processing: 20
+Dropping inner id: 20
+Processing: 30
+Dropping inner id: 30
+End foreach

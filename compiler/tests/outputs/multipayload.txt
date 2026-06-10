@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+Multi-payload test...
+Pos 3 7: 21
+Size 1920 1080: 2073600
+Empty: 0

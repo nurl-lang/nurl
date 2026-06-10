@@ -1,0 +1,28 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- initialize ---
+protocolVersion=2025-11-25
+serverInfo.name=nurl-test-server
+--- tools/list ---
+tools_count=2
+--- tools/call echo ---
+echo_result=hello world
+--- tools/call add ---
+add_result=sum=42
+--- tools/call unknown ---
+unknown_isError=T
+--- prompts/list ---
+prompts_count=1
+--- prompts/get ---
+prompt_text=Hello, NURL!
+--- resources/list ---
+resources_count=1
+--- resources/read ---
+resource_uri=mcp://hello
+resource_text=hello from MCP resource
+--- unknown method ---
+unknown_method_err=method not found
+--- ping ---
+ping_obj_kind=obj

@@ -1,0 +1,17 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+start=[10,20,30]
+insert_head_ok=T → [5,10,20,30]
+insert_mid → [5,10,15,20,30]
+insert_end → [5,10,15,20,30,99]
+insert_oor=F
+negative_oor=F
+removed_head=5 → [10,15,20,30,99]
+removed_mid=15 → [10,20,30,99]
+removed_last=99 → [10,20,30]
+remove_oob_none=YES
+empty_insert → [7]
+empty_remove=7 len=0
+done

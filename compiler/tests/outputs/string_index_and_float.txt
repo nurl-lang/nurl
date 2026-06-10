@@ -1,0 +1,26 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+hello world / world -> some 6
+hello world / lo -> some 3
+hello world / xyz -> none
+hello world /  -> some 0
+ / x -> none
+'3.14' -> some 3.14
+'-2.5' -> some -2.5
+'+1' -> some 1
+'0.5' -> some 0.5
+'.5' -> some 0.5
+'1.' -> some 1
+'1e3' -> some 1000
+'-1.5e2' -> some -150
+'2E-1' -> some 0.2
+'' -> none
+'-' -> none
+'.' -> none
+'1e' -> none
+'1e+' -> none
+'abc' -> none
+'1.2.3' -> none
+'12x' -> none

@@ -113,7 +113,10 @@
 
 @ expect i lex i tt → v {
     ? != ( nurl_lex_type lex ) tt
-    { ( die lex ( nurl_str_cat `unexpected token, expected tt=` ( nurl_str_int tt ) ) ) }
+    { ( die lex ( nurl_str_cat3
+        ( nurl_str_cat `expected ` ( __tok_label tt `` ) )
+        ` but found `
+        ( __tok_label ( nurl_lex_type lex ) ( nurl_lex_val lex ) ) ) ) }
     {}
     ( nurl_lex_advance lex )
 }
@@ -1515,6 +1518,12 @@
     ? != 0 ( nurl_str_len skip )
     { ( nurl_sym_def syms `__fn_ret_owned__` `1` ) }
     {}
+    // Borrow provenance: if the returned value is a borrow (derived from a
+    // parameter), this function returns a borrow — callers must NOT
+    // auto-drop a `:`-binding off it.
+    ? != 0 ( nurl_str_len ( nurl_sym_get syms `__last_value_borrow__` ) )
+    { ( nurl_sym_def syms `__fn_ret_borrow__` `1` ) }
+    {}
     ? != 0 ( nurl_str_len dtop )
     {  // defers active: store return value then branch to defer chain
         ? ! ( seq lt `void` )
@@ -1589,6 +1598,10 @@
     ? == tt TT_RBRACE { ^ `'}' (the enclosing block ends here)` } {}
     ? == tt TT_RPAREN { ^ `')'` } {}
     ? == tt TT_RBRACK { ^ `']'` } {}
+    ? == tt TT_LBRACE { ^ `'{'` } {}
+    ? == tt TT_LPAREN { ^ `'('` } {}
+    ? == tt TT_LBRACK { ^ `'['` } {}
+    ? == tt TT_AT { ^ `'@'` } {}
     ? == tt TT_EOF { ^ `end of input` } {}
     ? == tt TT_ARROW { ^ `'->'` } {}
     ? != 0 ( nurl_str_len val ) { ^ ( nurl_str_cat3 `'` val `'` ) } {}
@@ -1740,6 +1753,9 @@
         { ( vis_check_xref lex name `global` ) }
         {}
         ( nurl_sym_def syms `__last_ident_name__` name )
+        // Borrow provenance: loading a `__borrow`-marked binding yields a
+        // borrow; any other ident load yields a non-borrow (resets the flag).
+        ( nurl_sym_def syms `__last_value_borrow__` ( nurl_sym_get syms ( nurl_str_cat name `__borrow` ) ) )
         // Propagate the binding's unsigned-ness as a side-channel so
         // downstream casts / stores can choose sext vs zext correctly.
         // Empty when the binding wasn't tagged (literals, struct fields,
@@ -3670,6 +3686,13 @@
     ( nurl_sym_def syms `__last_call_res_e_llvm__` ( nurl_sym_get syms ( nurl_str_cat fname `__res_e_llvm` ) ) )
     ( nurl_sym_def syms `__last_call_opt_nurl_t__` ( nurl_sym_get syms ( nurl_str_cat fname `__opt_nurl_t` ) ) )
     ( nurl_sym_def syms `__last_call_ret_owned__` ( nurl_sym_get syms ( nurl_str_cat fname `__ret_owned` ) ) )
+    // Borrow provenance: the result is a borrow if the callee is marked
+    // ret_borrow, or it is a vec_get* accessor (which returns a borrow of
+    // an element the Vec still owns). The flag only changes behaviour for
+    // an auto-Drop enum binding/match downstream — inert otherwise.
+    ( nurl_sym_def syms `__last_value_borrow__`
+    ? | != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__ret_borrow` ) ) )
+    != 0 ( nurl_str_starts fname `vec_get` ) `1` `` )
     : s rl ( nurl_sym_get syms fname )
     : s rlt ? == 0 ( nurl_str_len rl ) `i64` rl
     ? ( seq rlt `void` )
@@ -4153,8 +4176,22 @@
     // gen_let / gen_ret does not mis-read `( f \ → v {…} )` as one.
     ( nurl_sym_def syms `__last_expr_refdepth__` `` )
     // Group F: impl method dispatch based on first arg's LLVM type
-    : s impl_key ( nurl_str_cat fname ( nurl_str_cat `##` first_arg_type ) )
-    : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
+    : ~ s impl_key ( nurl_str_cat fname ( nurl_str_cat `##` first_arg_type ) )
+    : ~ s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
+    // `inout` receiver: the first argument is passed as `%T*`, but impls
+    // are registered by the value type `%T` (g_impl_name_syms key
+    // `method##%T`). On a miss with a pointer-typed first arg, retry with
+    // the trailing `*` stripped so an `inout`/`sink` impl method still
+    // dispatches. (Without this, applying `inout` pointerised the arg and
+    // the dispatch fell through to an undefined bare `@method`.)
+    ? & == 0 ( nurl_str_len impl_mangle_key )
+    & > ( nurl_str_len first_arg_type ) 1
+    == ( nurl_str_get first_arg_type - ( nurl_str_len first_arg_type ) 1 ) 42
+    { : s __fa_base ( nurl_str_slice first_arg_type 0 - ( nurl_str_len first_arg_type ) 1 )
+        = impl_key ( nurl_str_cat fname ( nurl_str_cat `##` __fa_base ) )
+        = impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
+    }
+    {}
     ? != 0 ( nurl_str_len impl_mangle_key )
     { : s impl_ret ( nurl_sym_get g_impl_ret_syms impl_key )
         : s impl_name ( nurl_str_cat fname ( nurl_str_cat `__` impl_mangle_key ) )
@@ -4195,6 +4232,11 @@
     // When Phase 2B is off no function ever gets "str" registered, so behaviour
     // is identical to the Phase 2A-only build.
     ( nurl_sym_def syms `__last_call_ret_owned__` ( nurl_sym_get syms ( nurl_str_cat call_name `__ret_owned` ) ) )
+    // Borrow provenance (see the kw-args path above): ret_borrow callee or
+    // a vec_get* element accessor yields a borrow.
+    ( nurl_sym_def syms `__last_value_borrow__`
+    ? | != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat call_name `__ret_borrow` ) ) )
+    != 0 ( nurl_str_starts call_name `vec_get` ) `1` `` )
     // Record the callee's return signedness (from its recorded NURL return
     // type) so the regular @-fn dispatch can re-assert it on `__last_unsigned__`
     // AFTER the call — an enclosing `# i ( f )` over a `u`-returning `f` must
@@ -4728,6 +4770,12 @@
     ( nurl_sym_def syms `__last_call_opt_nurl_t__` `` )
     : s match_val ( gen_operand lex syms cg )
     : s match_type ( nurl_get_last_type )
+    // Borrow provenance: snapshot whether the SCRUTINEE was a borrow. A
+    // match that yields a value out of a borrowed scrutinee conservatively
+    // yields a borrow (the arms commonly return a payload view); restored
+    // onto __last_value_borrow__ at every return below so a `^ ?? …` makes
+    // the function ret_borrow. (Only consequential for auto-Drop enums.)
+    : s match_scrut_borrow ( nurl_sym_get syms `__last_value_borrow__` )
 
     // A `?? ( f … )` whose scrutinee is a direct call has no binding
     // name, so the payload metadata below (keyed on `<name>__res_nurl_T`
@@ -5315,6 +5363,12 @@
                     {}
                 }
                 {}
+                // Borrow provenance: a match-arm payload of an auto-Drop
+                // enum is a VIEW into the matched value (a borrow) — mark it
+                // so a `^ payload` return propagates ret_borrow.
+                ? ( __is_autodrop_enum pt0_eff syms )
+                { ( nurl_sym_def syms ( nurl_str_cat pv0 `__borrow` ) `1` ) }
+                {}
                 // Propagate unsigned flag for `?u` / `?u16` / `?u32` /
                 // `?u64` matches. T-arm only (F-arm has no payload).
                 // Without this, the alloca drops the unsigned-ness and a
@@ -5344,15 +5398,44 @@
                     ( nurl_print `  ` ) ( nurl_print cv1 )
                     ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt1 ) ( nurl_print `\n` )
                 } {
-                    ( nurl_print `  ` ) ( nurl_print cv1 )
-                    ? == ( nurl_str_get pt1 0 ) 123
-                    {  // Anonymous aggregate: load value from ptr
-                        ( nurl_print ` = load ` ) ( nurl_print pt1 )
-                        ( nurl_print `, ptr ` ) ( nurl_print pr1 ) ( nurl_print `\n` )
-                    }
-                    ? ( seq pt1 `i64` )
-                    { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i64\n` ) }
-                    { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i8*\n` ) }
+                    // Mirror slot-0 reconstruction (the inverse of
+                    // gen_agg_lit's enum-construction boxing). A `%`-named
+                    // payload is either a single-pointer handle (Vec/String/…:
+                    // f0 is a pointer, stashed bare → rebuild via insertvalue)
+                    // or a multi-field struct / enum / anon aggregate (heap-
+                    // boxed → load through the box pointer). Without this,
+                    // slots 1-2 fell straight to the i8* bitcast and stored a
+                    // `ptr` into a `%Struct` slot (clang reject — the
+                    // non-slot-0 struct-payload hole).
+                    : b pt1_is_struct_handle F
+                    : s pt1_f0_ty ``
+                    ? == ( nurl_str_get pt1 0 ) 37
+                    { : s sname_pt1 ( nurl_str_slice pt1 1 - ( nurl_str_len pt1 ) 1 )
+                        : s var_list_pt1 ( nurl_sym_get syms ( nurl_str_cat sname_pt1 `__variants` ) )
+                        ? == 0 ( nurl_str_len var_list_pt1 )
+                        { = pt1_f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname_pt1 `__idx_0` `__type` ) )
+                            ? & != 0 ( nurl_str_len pt1_f0_ty )
+                            == ( nurl_str_get pt1_f0_ty - ( nurl_str_len pt1_f0_ty ) 1 ) 42
+                            { = pt1_is_struct_handle T } {} }
+                        {} }
+                    {}
+                    ? pt1_is_struct_handle
+                    { ( nurl_print `  ` ) ( nurl_print cv1 )
+                        ( nurl_print ` = insertvalue ` ) ( nurl_print pt1 )
+                        ( nurl_print ` undef, ` ) ( nurl_print pt1_f0_ty )
+                        ( nurl_print ` ` ) ( nurl_print pr1 ) ( nurl_print `, 0\n` ) }
+                    { ( nurl_print `  ` ) ( nurl_print cv1 )
+                        ? | == ( nurl_str_get pt1 0 ) 123
+                        & == ( nurl_str_get pt1 0 ) 37
+                        != ( nurl_str_get pt1 - ( nurl_str_len pt1 ) 1 ) 42
+                        {  // Anon aggregate OR named non-pointer struct / enum:
+                            // load the whole value back through the box pointer.
+                            ( nurl_print ` = load ` ) ( nurl_print pt1 )
+                            ( nurl_print `, ptr ` ) ( nurl_print pr1 ) ( nurl_print `\n` )
+                        }
+                        ? ( seq pt1 `i64` )
+                        { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i64\n` ) }
+                        { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i8*\n` ) } }
                 }
                 : s vp1 ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print vp1 )
@@ -5389,15 +5472,37 @@
                     ( nurl_print `  ` ) ( nurl_print cv2 )
                     ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt2 ) ( nurl_print `\n` )
                 } {
-                    ( nurl_print `  ` ) ( nurl_print cv2 )
-                    ? == ( nurl_str_get pt2 0 ) 123
-                    {  // Anonymous aggregate: load value from ptr
-                        ( nurl_print ` = load ` ) ( nurl_print pt2 )
-                        ( nurl_print `, ptr ` ) ( nurl_print pr2 ) ( nurl_print `\n` )
-                    }
-                    ? ( seq pt2 `i64` )
-                    { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i64\n` ) }
-                    { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i8*\n` ) }
+                    // Mirror slot-0 reconstruction — same struct-payload hole
+                    // as slot 1, one slot over (enum field 3).
+                    : b pt2_is_struct_handle F
+                    : s pt2_f0_ty ``
+                    ? == ( nurl_str_get pt2 0 ) 37
+                    { : s sname_pt2 ( nurl_str_slice pt2 1 - ( nurl_str_len pt2 ) 1 )
+                        : s var_list_pt2 ( nurl_sym_get syms ( nurl_str_cat sname_pt2 `__variants` ) )
+                        ? == 0 ( nurl_str_len var_list_pt2 )
+                        { = pt2_f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname_pt2 `__idx_0` `__type` ) )
+                            ? & != 0 ( nurl_str_len pt2_f0_ty )
+                            == ( nurl_str_get pt2_f0_ty - ( nurl_str_len pt2_f0_ty ) 1 ) 42
+                            { = pt2_is_struct_handle T } {} }
+                        {} }
+                    {}
+                    ? pt2_is_struct_handle
+                    { ( nurl_print `  ` ) ( nurl_print cv2 )
+                        ( nurl_print ` = insertvalue ` ) ( nurl_print pt2 )
+                        ( nurl_print ` undef, ` ) ( nurl_print pt2_f0_ty )
+                        ( nurl_print ` ` ) ( nurl_print pr2 ) ( nurl_print `, 0\n` ) }
+                    { ( nurl_print `  ` ) ( nurl_print cv2 )
+                        ? | == ( nurl_str_get pt2 0 ) 123
+                        & == ( nurl_str_get pt2 0 ) 37
+                        != ( nurl_str_get pt2 - ( nurl_str_len pt2 ) 1 ) 42
+                        {  // Anon aggregate OR named non-pointer struct / enum:
+                            // load the whole value back through the box pointer.
+                            ( nurl_print ` = load ` ) ( nurl_print pt2 )
+                            ( nurl_print `, ptr ` ) ( nurl_print pr2 ) ( nurl_print `\n` )
+                        }
+                        ? ( seq pt2 `i64` )
+                        { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i64\n` ) }
+                        { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i8*\n` ) } }
                 }
                 : s vp2 ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print vp2 )
@@ -5557,6 +5662,23 @@
         ( nurl_print ` = phi ` ) ( nurl_print phi_type )
         ( nurl_print ` ` ) ( nurl_print phi_full ) ( nurl_print `\n` )
         ( nurl_set_last_type phi_type )
+        // Borrow propagation only matters when the match YIELDS an auto-Drop
+        // enum (the value a `:`-binding might wrongly drop). For any other
+        // result type — String, i, … — reset so a match on a borrowed param
+        // that returns a non-enum (string_from, a count) is NOT mis-marked
+        // ret_borrow.
+        ( nurl_sym_def syms `__last_value_borrow__`
+        ? ( __is_autodrop_enum phi_type syms ) match_scrut_borrow `` )
+        // A SCALAR match result (i*/double) cannot alias the scrutinee's
+        // storage, so clear `__last_ident_name__` (which still names the
+        // scrutinee binding from its eval). Otherwise `^ ?? owned { _ → 0 }`
+        // makes gen_ret mistake `owned` for the returned value and SKIP its
+        // auto-drop — leaking it. For a non-scalar result we leave the name
+        // as-is (conservative: it MIGHT be a payload view of the
+        // scrutinee, and skipping the drop avoids a use-after-free).
+        ? | > ( int_width phi_type ) 0 ( seq phi_type `double` )
+        { ( nurl_sym_def syms `__last_ident_name__` `` ) }
+        {}
         ^ final_reg
     } {}
     ( nurl_set_last_type `void` )
@@ -7203,8 +7325,13 @@
         ( nurl_sym_def syms `__last_call_ret_owned__` `` )
         ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
+        ( nurl_sym_def syms `__last_value_borrow__` `` )
         : s val ( gen_expr lex syms cg )
         : s vt ( nurl_get_last_type )
+        // Borrow provenance: did the RHS produce a borrow (a value aliasing
+        // something the caller still owns)? If so, an auto-Drop binding here
+        // must NOT register its drop — the owner reclaims it.
+        : s rhs_borrow ( nurl_sym_get syms `__last_value_borrow__` )
         // Borrow checker: record this binding (inference path).
         ( bck_record `let` name bck_line )
         ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
@@ -7246,15 +7373,20 @@
         ? != 0 g_auto_drop_strings
         { ( mem_register_agg_owned_fields syms ptr vt ) }
         {}
-        // Phase 2D: User Drop trait
-        ? != 0 g_auto_drop_strings
+        // Phase 2D: User Drop trait. A COMPILER-auto Drop is skipped when
+        // the RHS is a borrow (vec_get / a ret_borrow accessor) — dropping
+        // it would double-free the container that still owns the value. The
+        // binding inherits `__borrow` so it propagates further.
+        ? & & != 0 g_auto_drop_strings ( __is_autodrop_enum vt syms ) != 0 ( nurl_str_len rhs_borrow )
+        { ( nurl_sym_def syms ( nurl_str_cat name `__borrow` ) `1` ) }
+        { ? != 0 g_auto_drop_strings
         { : s impl_key ( nurl_str_cat `drop##` vt )
             : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
             ? != 0 ( nurl_str_len impl_mangle_key )
             { ( mem_own_add_user_drop syms ptr vt ) }
             {}
         }
-        {}
+        {} }
         // Mark as having new syntax only if mutability was checked
         // TEMPORARILY DISABLED: ? had_mutability_check
         //   { ( nurl_sym_def syms ( nurl_str_cat name `__newsyntax` ) `1` ) }
@@ -7345,8 +7477,12 @@
                 ( nurl_sym_def syms `__last_call_ret_owned__` `` )
                 ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
                 ( nurl_sym_def syms `__last_expr_refdepth__` `` )
+                ( nurl_sym_def syms `__last_value_borrow__` `` )
                 : s val ( gen_expr lex syms cg )
                 : s vt ( nurl_get_last_type )
+                // Borrow provenance (typed path): a borrow RHS must not
+                // register an auto-Drop — the owner reclaims it.
+                : s rhs_borrow ( nurl_sym_get syms `__last_value_borrow__` )
                 // Borrow checker: record this binding (typed path).
                 ( bck_record `let` name bck_line )
                 ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
@@ -7392,15 +7528,19 @@
                 ? != 0 g_auto_drop_strings
                 { ( mem_register_agg_owned_fields syms ptr ptype ) }
                 {}
-                // Phase 2D: User Drop trait
-                ? != 0 g_auto_drop_strings
+                // Phase 2D: User Drop trait. Skip a COMPILER-auto Drop when
+                // the RHS is a borrow (would double-free the owner); mark the
+                // binding `__borrow` so it propagates.
+                ? & & != 0 g_auto_drop_strings ( __is_autodrop_enum ptype syms ) != 0 ( nurl_str_len rhs_borrow )
+                { ( nurl_sym_def syms ( nurl_str_cat name `__borrow` ) `1` ) }
+                { ? != 0 g_auto_drop_strings
                 { : s impl_key ( nurl_str_cat `drop##` ptype )
                     : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
                     ? != 0 ( nurl_str_len impl_mangle_key )
                     { ( mem_own_add_user_drop syms ptr ptype ) }
                     {}
                 }
-                {}
+                {} }
                 // Mark as having new syntax only if mutability was checked
                 // TEMPORARILY DISABLED: ? had_mutability_check
                 //   { ( nurl_sym_def syms ( nurl_str_cat name `__newsyntax` ) `1` ) }
@@ -8802,6 +8942,11 @@
     }
     ( expect lex TT_RBRACE )  // consume '}'
     ( nurl_set_last_type agg_ty )
+    // Borrow provenance: a freshly-constructed `@ T { … }` aggregate is
+    // OWNED — never a borrow. Reset the flag so the value's last
+    // sub-expression (e.g. a string_from inside) cannot leave a stale
+    // borrow mark that would wrongly suppress the binding's auto-Drop.
+    ( nurl_sym_def syms `__last_value_borrow__` `` )
     // Phase 2C: expose the owned-field index list so a binding on the RHS
     // can register drops. Only named-struct aggregates get tracked; anon
     // aggregates like `{ i1, i64 }` are excluded (they have different
@@ -10689,6 +10834,9 @@
     ( nurl_sym_def syms `__owned_slices__` `` )
     ( nurl_sym_def syms `__last_ident_name__` `` )
     ( nurl_sym_def syms `__fn_ret_owned__` `` )
+    // Borrow provenance: does THIS function return a borrow (a value that
+    // aliases a parameter)? Set by gen_ret from __last_value_borrow__.
+    ( nurl_sym_def syms `__fn_ret_borrow__` `` )
     ? != 0 g_auto_drop_strings
     { ( nurl_sym_def syms `__owned_strings__` `` )
         ( nurl_sym_def syms `__owned_struct_fields__` `` )
@@ -10818,6 +10966,15 @@
     // merge into g_fn_sink[fname] happens after the body finishes.
     ( nurl_sym_def syms `__fn_inferred_sink__` `` )
     : s last ( gen_block_ret lex syms cg )
+    // Borrow provenance for an IMPLICIT (no `^`) block return: the body's
+    // final expression IS the return value, so if it left a borrow on
+    // __last_value_borrow__ (e.g. a `?? param { … }` yielding a payload
+    // view), this function returns a borrow. Mirrors the explicit-`^`
+    // gen_ret. (gen_ret also sets the flag, so this only ADDS the
+    // implicit case; idempotent for explicit returns.)
+    ? != 0 ( nurl_str_len ( nurl_sym_get syms `__last_value_borrow__` ) )
+    { ( nurl_sym_def syms `__fn_ret_borrow__` `1` ) }
+    {}
     // Auto-sink inference (critic v0.9.0 §2): merge any inferred sinks
     // into g_fn_sink[fname], deduping against the explicit `sink`
     // marker set already published above.
@@ -10934,6 +11091,7 @@
     : i fn_ret_str_owned_flag ? != 0 g_auto_drop_strings
     ? != 0 ( nurl_str_len ( nurl_sym_get syms `__fn_ret_str_owned__` ) ) 1 0
     0
+    : i fn_ret_borrow_flag ? != 0 ( nurl_str_len ( nurl_sym_get syms `__fn_ret_borrow__` ) ) 1 0
     ( nurl_sym_pop syms )
     ( nurl_sym_def syms fname ret_ty )
     // Re-store NURL ret type in outer scope (inner scope was just popped)
@@ -10950,6 +11108,11 @@
         { ( nurl_sym_def syms ( nurl_str_cat fname `__ret_owned` ) `1` ) }
         {}
     }
+    // Persist "returns a borrow" so a caller's `:`-binding off this fn
+    // skips its auto-Drop (borrow-provenance pass).
+    ? != 0 fn_ret_borrow_flag
+    { ( nurl_sym_def syms ( nurl_str_cat fname `__ret_borrow` ) `1` ) }
+    {}
     ? ( seq fname `main` ) ( emit_main_wrapper ret_ty ) {}
 }
 
@@ -11036,6 +11199,14 @@
         ( nurl_sym_def syms pname lt )
         // Mark parameter as immutable by design
         ( nurl_sym_def syms ( nurl_str_cat pname `__param` ) `1` )
+        // Borrow-provenance origin: an auto-Drop enum parameter is a
+        // BORROW (the caller owns it). Values derived from it (vec_get,
+        // field access, returned through it) inherit `__borrow`, so a
+        // caller's `:`-binding off a borrow-returning accessor skips its
+        // auto-drop instead of double-freeing the still-owned source.
+        ? & == pconv 0 ( __is_autodrop_enum lt syms )
+        { ( nurl_sym_def syms ( nurl_str_cat pname `__borrow` ) `1` ) }
+        {}
         // An `inout` parameter is an exclusive mutable borrow. It
         // lowers to the `*T`-by-address
         // mechanism: the LLVM parameter is `<T>* %name`, and the body
@@ -11601,6 +11772,17 @@
         = i + i 1
     }
     ^ r
+}
+
+// True if LLVM type `ty` is an enum that carries a compiler-auto Drop
+// (`autodrop##%E` registered). Used by the borrow-provenance pass: a
+// value of such a type can be EITHER owned or a borrow, and the
+// `:`-binding auto-drop must skip the borrow case to avoid a double-free.
+@ __is_autodrop_enum s ty i syms → b {
+    ? == 0 ( nurl_str_len ty ) { ^ F } {}
+    ? != ( nurl_str_get ty 0 ) 37 { ^ F } {}
+    ? == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
+    ^ != 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms ( nurl_str_cat `autodrop##` ty ) ) )
 }
 
 // Strip a leading `%` to form a drop-function name suffix.
@@ -12988,6 +13170,24 @@
                     : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
                     // gen_fn_decl_concrete reads params, →, ret, body from lex
                     ( gen_fn_decl_concrete mangled lex syms cg )
+                    // gen_fn_decl_concrete recorded the inout/sink parameter
+                    // sets under the MANGLED name (`bump__Counter`), but a
+                    // call site dispatches by the BARE method name
+                    // (`( bump c )` → call_name `bump`) and looks the sets up
+                    // there. Mirror them onto the bare name so an `inout` /
+                    // `sink` impl-method argument is passed by address /
+                    // moved — without this the receiver was passed BY VALUE
+                    // into a `T*` parameter, corrupting memory (segfault).
+                    // All impls of a trait method share the trait's parameter
+                    // conventions, so the bare-name entry is consistent across
+                    // implementing types. Only mirror non-empty sets so an
+                    // impl with no inout/sink can't clobber another's entry.
+                    : s __impl_io ( nurl_sym_get g_fn_inout mangled )
+                    : s __impl_sk ( nurl_sym_get g_fn_sink mangled )
+                    ? != 0 ( nurl_str_len __impl_io )
+                    { ( nurl_sym_def g_fn_inout mname __impl_io ) } {}
+                    ? != 0 ( nurl_str_len __impl_sk )
+                    { ( nurl_sym_def g_fn_sink mname __impl_sk ) } {}
                 }
                 { ( die lex `expected method name in impl` ) }
             }
@@ -13563,7 +13763,23 @@
         ? == tt TT_AMP { ( gen_ffi_decl lex syms ) }
         ? == tt TT_DOLLAR { ( gen_import_decl lex syms cg ) }
         ? == tt TT_PERCENT { ( gen_trait_or_impl lex syms cg ) }
-        { ( nurl_lex_advance lex ) }
+        // A bare `|` is the most common near-miss: enums are declared
+        // `: | Name { … }`, not `| Name { … }`. (The `:`-less spelling
+        // used to be silently skipped — and only "worked" when the enum
+        // was also imported under the same name; now it's a diagnostic.)
+        ? == tt TT_PIPE { ( die lex `enum declarations start with ': |', not a bare '|' — write ': | Name { Variant... }'` ) }
+        // Anything else at the top level is a hard error. The decl loop
+        // used to silently advance past stray tokens — which is exactly
+        // how an unbalanced-brace function body slipped through: an extra
+        // `}` closed the body early, and the leftover statements (`^ x`,
+        // a stray `}`, …) leaked here and were swallowed, leaving the
+        // truncated function to silently miscompile (undef return) or to
+        // desync the scan_fn_sigs pre-pass. Refusing them turns that whole
+        // class into a diagnostic at the first leaked token.
+        { ( die lex ( nurl_str_cat3
+            `unexpected `
+            ( __tok_label tt ( nurl_lex_val lex ) )
+            ` at the top level — expected a declaration (@ fn, : const/struct/enum, & ffi, $ import, or % trait/impl). A stray '}' or leftover expression here usually means an earlier function body has unbalanced braces.` ) ) }
     }
 }
 

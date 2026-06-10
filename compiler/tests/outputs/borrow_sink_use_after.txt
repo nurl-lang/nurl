@@ -1,0 +1,4 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_sink_use_after.nu:26: error: use of moved value 'xs' - it was consumed at line 25 (pass a fresh value or rebind it before reuse)
+error: compilation aborted - 1 borrow-checker violations (re-run with --no-borrowck to bypass)

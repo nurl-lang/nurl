@@ -1,0 +1,6 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+dedup=ok
+vec_len=3

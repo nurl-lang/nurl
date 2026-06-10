@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+txt_len=3 (expect 3)
+blob_len=5 (expect 5)
+blob[3]=255 (expect 255)
+readonly_write_blocked=SqliteReadOnly
+done

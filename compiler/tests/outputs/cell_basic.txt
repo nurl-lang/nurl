@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+size=32 is_null=F
+[0]=65 [1]=66 [31]=255 [oob]=0
+after zero_fill [1]=0 [31]=0
+pthread_mutex_t size>0 = T
+pthread_cond_t size>0 = T
+unknown = -1
+mt cell is_null=F size=>0
+done

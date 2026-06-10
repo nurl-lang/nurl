@@ -1,0 +1,41 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+test_hello=T
+match_full=T
+match_partial=F
+find_hello=4,5
+ab*c/ac=T
+ab*c/abc=T
+ab*c/abbbc=T
+ab*c/adc=F
+ab+c/ac=F
+ab+c/abc=T
+colou?r/color=T
+colou?r/colour=T
+a.c/abc=T
+a.c/a_c=T
+a.c/ac=F
+cat|dog/cat=T
+cat|dog/dog=T
+cat|dog/bird=F
+[aeiou]/a=T
+[aeiou]/z=F
+lower_word=1,4
+non_digit=2,7
+digits=4,3
+word=2,8
+ws=2,3
+^foo/foobar=T
+^foo/barfoo=F
+bar$/foobar=T
+bar$/barfoo=F
+(ab)+/abab=T
+(ab)+/aab=F
+find_all_count=3
+replaced=had N cats and N dogs
+split_count=4
+empty_err=empty input
+unclosed_err=bad format
+done

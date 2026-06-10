@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+zlib round_trip=T comp_len=59 decomp_len=720
+zstd round_trip=T comp_len=65 decomp_len=720
+zlib empty ok len=0
+zstd empty ok len=0
+zlib bad err=CompressData
+zstd bad err=CompressData
+orig_len=720

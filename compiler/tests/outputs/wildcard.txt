@@ -1,0 +1,37 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+Wildcard pattern matching test...
+
+level_emoji:
+  Debug: [.]
+  Info:  [.]
+  Warn:  [.]
+  Error: [!]
+  Fatal: [X]
+
+is_critical:
+  Debug: no
+  Warn:  no
+  Error: yes
+  Fatal: yes
+
+describe_packet:
+  Data:  hello
+  Ack:   42
+  Ping:  control
+  Pong:  control
+  Reset: control
+  Close: 99
+
+packet_exists:
+  Ping:  yes
+  Reset: yes
+
+severity:
+  Debug: 1
+  Info:  1
+  Warn:  3
+  Error: 4
+  Fatal: 5

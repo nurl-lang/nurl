@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+secs_per_day ok = 86400
+int_min      ok = -9223372036854775808
+one_mb       ok = 1048576
+low_byte     ok = 52
+high_or      ok = 255
+xored        ok = 6
+nested       ok = 20
+narrow_i32   ok = 42
+shifted_down ok = 64

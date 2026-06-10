@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+requests=3 bytes_in=2300 bytes_out=336
+zero requests=0 bytes_in=0
+done

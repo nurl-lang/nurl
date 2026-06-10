@@ -1,0 +1,49 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+parse null ok type=null
+parse true ok type=bool val=T
+parse false ok type=bool val=F
+parse 42 ok type=num as_i=42
+parse -3.5 ok type=num as_f=-3.5
+parse "hi\n" ok type=str data=hi
+parse [1,2,3] ok type=arr len=3 first=1
+parse obj ok type=obj a=1 b_len=2
+stringify roundtrip ok
+err empty: empty input
+err bad: bad format
+err trailing: trailing garbage
+pretty:
+{
+  "x": 1,
+  "y": [
+    true,
+    null
+  ],
+  "z": "q"
+}
+keys=x,y,z
+y_each=bool,null,
+obj_each=x=num;y=arr;z=str;
+empty_pretty:
+{
+  "a": [],
+  "b": {}
+}
+built={"id":7,"score":0.95,"tag":"alpha","items":[10,20,30]}
+id=7
+items.1=20
+items.99=none
+id_after=999
+eq_after_clone=F
+orig_id=999
+eq_same=T eq_diff=F
+diag bad@line=2 col=3
+diag trailing@line=1 col=4
+depth overflow detected
+ctrl escape ok: "o\u0001k"
+formatted=bad format at line 2 col 3
+reentrant a:1:5 b:3:1
+01 rejected as bad format
+unterminated str@col=4

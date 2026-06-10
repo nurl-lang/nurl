@@ -1,0 +1,18 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+create_all nested: ok
+exists root: T
+exists a/b/c: T
+create_all again: ok
+wrote data file
+chunks: 3
+total: 20
+content: 0123456789ABCDEFGHIJ
+eof: T
+readlink: match
+readlink non-link: err
+remove_all: ok
+exists after remove: F
+remove_all missing: not found

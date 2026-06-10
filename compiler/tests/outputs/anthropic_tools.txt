@@ -1,0 +1,37 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+{"role":"user","content":"hello"}
+{"role":"assistant","content":"hi back"}
+{"role":"assistant","content":[{"type":"text","text":"ok"}]}
+{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_a","content":"42"},{"type":"tool_result","tool_use_id":"toolu_b","content":"boom","is_error":true}]}
+{"name":"get_weather","description":"Look up weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}}}}
+{"model":"m","max_tokens":16,"messages":[],"tools":[{"name":"noop","description":"does nothing","input_schema":{"type":"object"}}]}
+{"model":"m","max_tokens":16,"messages":[],"tools":[{"name":"noop","description":"does nothing","input_schema":{"type":"object"}}],"tool_choice":{"type":"auto"}}
+{"model":"m","max_tokens":16,"messages":[],"tools":[{"name":"noop","description":"does nothing","input_schema":{"type":"object"}}],"tool_choice":{"type":"any"}}
+{"model":"m","max_tokens":16,"messages":[],"tools":[{"name":"noop","description":"does nothing","input_schema":{"type":"object"}}],"tool_choice":{"type":"none"}}
+{"model":"m","max_tokens":16,"messages":[],"tools":[{"name":"noop","description":"does nothing","input_schema":{"type":"object"}}],"tool_choice":{"type":"tool","name":"get_weather"}}
+{"model":"m","max_tokens":32,"system":"sys","messages":[],"tools":[{"name":"noop","description":"does nothing","input_schema":{"type":"object"}}],"tool_choice":{"type":"auto"}}
+has_tool_use=T
+text=let me check
+tool_calls_n=2
+  id=toolu_01 name=get_weather input={"city":"Helsinki"}
+  id=toolu_02 name=get_time input={}
+stop_reason=tool_use
+{"role":"user","content":[{"type":"text","text":"cache me","cache_control":{"type":"ephemeral"}}]}
+{"role":"assistant","content":[{"type":"text","text":"cached reply","cache_control":{"type":"ephemeral"}}]}
+{"model":"m","max_tokens":64,"system":[{"type":"text","text":"you are claude","cache_control":{"type":"ephemeral"}}],"messages":[],"tools":[{"name":"t1","description":"first","input_schema":{"type":"object"}},{"name":"t2","description":"second","input_schema":{"type":"object"}}],"tool_choice":{"type":"auto"}}
+{"model":"m","max_tokens":64,"system":"you are claude","messages":[],"tools":[{"name":"t1","description":"first","input_schema":{"type":"object"}},{"name":"t2","description":"second","input_schema":{"type":"object"},"cache_control":{"type":"ephemeral"}}],"tool_choice":{"type":"auto"}}
+{"model":"m","max_tokens":1024,"system":[{"type":"text","text":"you are claude","cache_control":{"type":"ephemeral"}}],"thinking":{"type":"enabled","budget_tokens":4096},"messages":[],"tools":[{"name":"t1","description":"first","input_schema":{"type":"object"}},{"name":"t2","description":"second","input_schema":{"type":"object"},"cache_control":{"type":"ephemeral"}}],"tool_choice":{"type":"auto"}}
+{"model":"m","max_tokens":64,"messages":[],"tools":[{"name":"t1","description":"first","input_schema":{"type":"object"}},{"name":"t2","description":"second","input_schema":{"type":"object"}}],"tool_choice":{"type":"auto"}}
+cache_create=1234
+cache_read=5678
+cache_create_missing=0
+{"type":"text","text":"Describe this image:"}
+{"type":"image","source":{"type":"url","url":"https://example.com/cat.png"}}
+{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}
+{"type":"document","source":{"type":"url","url":"https://example.com/paper.pdf"}}
+{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBERi0xLjQK"}}
+{"role":"user","content":[{"type":"text","text":"What is in this picture?"},{"type":"image","source":{"type":"url","url":"https://example.com/cat.png"}}]}
+auth_full: ClaudeAuth

@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+pair_sum=7
+mixed.first=42 mixed.second=hello
+triple=1 2 3
+done

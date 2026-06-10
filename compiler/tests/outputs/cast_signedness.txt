@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+u8_zext ok
+u16_zext ok
+u32_zext ok
+i8_sext ok
+i8_i16_sext ok
+i8_sdiv ok
+i8_ashr ok
+i8_slt ok
+i8_shl_widen ok
+u8_udiv ok
+u8_lshr ok
+u8_ult ok

@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+== Pattern Matching & Literal Test ==
+res1 (Ok 200):        10
+res2 (ClientErr 404): 20
+res3 (ClientErr 400): 30
+
+TOTAL CHECKSUM: 115

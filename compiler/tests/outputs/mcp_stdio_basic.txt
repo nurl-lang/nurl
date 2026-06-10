@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+=== cat echo ===
+jsonrpc=2.0
+method=initialize
+has_id=T
+missing=McpStdioSpawn
+dead_server=McpStdioEof

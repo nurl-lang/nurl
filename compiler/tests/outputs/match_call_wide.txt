@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+direct_ok: 10 13 17
+direct_err: rejected
+bound_ok : 100 103 107

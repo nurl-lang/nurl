@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+cell is_null=F size>0=T
+locked
+unlocked
+round-trip 2 ok
+done

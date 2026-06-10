@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+struct=hello
+veclen=2
+optu=134
+optn=-1

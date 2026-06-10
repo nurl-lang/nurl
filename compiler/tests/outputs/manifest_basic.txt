@@ -1,0 +1,15 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+-- good manifest --
+name=demo-app
+version=0.1.0
+description=Demo of the manifest parser
+license=MIT OR Apache-2.0
+deps_count=2
+dep[0] http-router path=../router version=0.2.0
+dep[1] some-lib path=../some-lib version=
+
+-- missing name --
+err=ManifestMissingName

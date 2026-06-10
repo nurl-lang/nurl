@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+registry=https://reg.nurl-lang.org/
+deps=3
+
+- local path=../local ver=0.1.0 reg=<default> [path]
+- bare path=<none> ver=^1.2 reg=<default> [registry]
+- explicit path=<none> ver=2.0 reg=https://other.example/ [registry]
+done
