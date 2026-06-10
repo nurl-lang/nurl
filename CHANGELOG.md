@@ -34,6 +34,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Auto-drop: arm-local trailing declarations leaked; `^ ( call )`
+  string ownership now propagates; aliasing escapes transfer ownership**
+  (`compiler/nurlc.nu`, critic A4). Three coupled fixes: (1) a `:`
+  declaration as an arm's LAST statement made the arm look
+  value-producing (gen_let_or_struct left the RHS type in last_type),
+  which suppressed the Phase 2D fall-through drop — leaking the binding
+  on every `?`/`??`/loop arm ending in a decl — and emitted a bogus phi
+  over the discarded value; declaration statements now publish `void`.
+  (2) `__fn_ret_str_owned__` was only set for identifier returns, so
+  `@ helper → s { ^ ( nurl_str_cat … ) }` was never marked
+  `__ret_owned=str` and `: s x ( helper )` leaked one buffer per call;
+  gen_ret now consults the outermost call's `__last_call_ret_owned__`
+  for direct parenthesised-call returns, making ownership compose
+  through helper chains. (3) The widened tracking exposed missing
+  ownership TRANSFER on aliasing escapes: `= outer x` and ternary/match
+  arms whose value is a bare load of an owned binding now cancel that
+  binding's scheduled drop (`mem_remove_owned_str`; the arm delta-drop
+  protocol switched from prefix-length to word-membership to stay
+  consistent under mid-list deletion). Conservative direction
+  throughout: worst case a leak, never a use-after-free — the
+  pre-transfer behavior freed buffers that had escaped through phis,
+  which miscompiled the compiler itself (gen_cast's
+  `: s norm ? … xv ( nurl_cg_reg cg )` returned a freed register
+  name). Bootstrap snapshot refreshed (`--refresh-bootstrap`).
+  Regressions: `arm_local_trailing_drop.nu` +
+  `ret_owned_propagation.nu`, both ASan+LSan zero, with manual-free
+  double-free locks on the transfer paths. Known residual filed as
+  critic A4c: fn-returned structs with owned fields still transfer
+  nothing (needs an ownership-model decision against the stdlib's
+  manual `*_free` handle conventions).
+
 - **`server_stop` from another thread freed the listener under blocked
   pool workers** (`stdlib/ext/http_server.nu`). `server_run_pool`'s
   documented shutdown — call `server_stop s` from another thread while
