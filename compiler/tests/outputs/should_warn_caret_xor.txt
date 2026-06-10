@@ -3,6 +3,9 @@ WARNINGS
 compiler/tests/should_warn_caret_xor.nu:20:15: warning: '^' is the return operator; did you mean '^^' for XOR? (Two adjacent carets, no space between them)
     : i x ^ a b  // ← warns: `^` returns `a`, `b` is dead
               ^
+compiler/tests/should_warn_caret_xor.nu:21:5: warning: the statement on line 20 has no effect — it produces a value that is discarded. If it was meant as an operand, the prefix operator before it is short an argument (fixed arity, no closing bracket); otherwise bind the value (': T name …') or remove the statement.
+    ^ x
+    ^
 compiler/tests/should_warn_caret_xor.nu:25:9: warning: '^' is the return operator; did you mean '^^' for XOR? (Two adjacent carets, no space between them)
     ^ a b  // ← warns: `^` returns `a`, `b` is dead
         ^

@@ -1636,6 +1636,19 @@
 // via a block iterator), so this never false-flags an arm value.
 : ~ i g_stmt_bare_lit 0
 
+// g_stmt_bare_value — the literal flag's general sibling (critic A2,
+// the last silent prefix-arity cascade): set by gen_stmt to 1 when the
+// statement it just parsed produced a VALUE without being a call or
+// control flow — a bare local/param/const identifier, an operator
+// expression (`+ a 1`), a `#` cast, a `.` field read, an `@` aggregate
+// literal. Such a statement's value is discarded; the block iterators
+// WARN (not die — unlike a literal, these shapes at least name real
+// bindings) unless it is a value-block's final expression (the block
+// result). Recomputed unconditionally at the END of every gen_stmt
+// from the statement's own leading token + result type, so nested
+// blocks parsed mid-statement cannot leak a stale flag outward.
+: ~ i g_stmt_bare_value 0
+
 // __tok_label — a human-readable name for a token that turned up where
 // a value expression was required. Used only on the diagnostic path.
 @ __tok_label i tt s val → s {
@@ -6084,6 +6097,20 @@
     ^ `literal as a statement has no effect — its value is discarded. This usually means a prefix operator was given one operand too many (a dangling operand): e.g. '& x 255 0x40' parses as '& x 255' and silently drops the 0x40. Check the operator's arity.`
 }
 
+// The literal diagnostic's general sibling (critic A2): a bare
+// identifier / operator expression / cast / field read in statement
+// position whose value is discarded. WARN rather than die — unlike a
+// bare literal these shapes name real bindings, and the residual
+// prefix-arity cascade they catch (an operator short an argument
+// swallowed the next statement's leading token, leaving this dead
+// remainder) is otherwise completely silent. `line` is the dead
+// statement's own line — lex has already advanced to the next
+// statement when the block iterator fires this.
+@ __dead_value_msg i line → s {
+    ^ ( nurl_str_cat3 `the statement on line ` ( nurl_str_int line )
+    ` has no effect — it produces a value that is discarded. If it was meant as an operand, the prefix operator before it is short an argument (fixed arity, no closing bracket); otherwise bind the value (': T name …') or remove the statement.` )
+}
+
 @ gen_block_stmts i lex i syms i cg → v {
     : i bck_line ( nurl_lex_line lex )
     ( expect lex TT_LBRACE )
@@ -6093,6 +6120,7 @@
         // Every statement in a void block has its value discarded, so a
         // bare literal here is dead — reject it (dangling operand).
         ? != 0 g_stmt_bare_lit { ( die lex ( __dangling_operand_msg ) ) } {}
+        ? != 0 g_stmt_bare_value { ( warn lex ( __dead_value_msg g_stmt_bare_value ) ) } {}
     }
     ( expect lex TT_RBRACE )
     ( bck_block_exit )
@@ -6113,9 +6141,12 @@
         // A bare literal that is NOT the block's final expression (its
         // return value) has its value discarded — reject it as a dangling
         // operand. The final literal (next token `}`) is the legitimate
-        // block result and is left alone.
+        // block result and is left alone. Same tail exemption for the
+        // dead-value warning below.
         ? & != 0 g_stmt_bare_lit != ( nurl_lex_type lex ) TT_RBRACE
         { ( die lex ( __dangling_operand_msg ) ) } {}
+        ? & != 0 g_stmt_bare_value != ( nurl_lex_type lex ) TT_RBRACE
+        { ( warn lex ( __dead_value_msg g_stmt_bare_value ) ) } {}
     }
     ( expect lex TT_RBRACE )
     ( bck_block_exit )
@@ -7392,7 +7423,33 @@
     // their operands), so this is robust against nested blocks overwriting
     // the flag mid-parse. See g_stmt_bare_lit.
     = g_stmt_bare_lit ? | | == tt TT_INT == tt TT_FLOAT == tt TT_STR 1 0
+    // Flag a non-call value-producing statement for the block iterator's
+    // dead-value warning (see g_stmt_bare_value). Computed from this
+    // statement's own leading token + final last_type, overwriting
+    // whatever nested blocks set mid-parse. Calls (effects), `?`/`??`
+    // (their arms may be effectful calls), and the void-publishing
+    // statement forms (`:`/`=`/`~`/`;`) are excluded; literals carry
+    // their own harder diagnostic and are excluded to keep it single.
+    // The flag carries the dead statement's own LINE (not just 1): by
+    // the time the block iterator reads it, lex already points at the
+    // NEXT statement, so the diagnostic embeds the real line instead
+    // of blaming the innocent neighbour.
+    = g_stmt_bare_value ? ( __stmt_is_bare_value tt ( nurl_get_last_type ) ) bck_line 0
     gs_rv
+}
+
+// True when a statement with leading token `tt` whose generation left
+// `lt` in last_type is a dead value expression: not a declaration /
+// assignment / loop / defer / call / conditional / match / literal,
+// and the produced type is non-void.
+@ __stmt_is_bare_value i tt s lt → b {
+    ? | | | == tt TT_COLON == tt TT_EQ == tt TT_TILDE == tt TT_SEMICOL
+    { ^ F } {}
+    ? | | == tt TT_LPAREN == tt TT_QUEST == tt TT_QUESTQUEST
+    { ^ F } {}
+    ? | | == tt TT_INT == tt TT_FLOAT == tt TT_STR
+    { ^ F } {}
+    ^ ! ( seq lt `void` )
 }
 
 // Soft check for the same-line shadow pattern: a `:` binding declares
