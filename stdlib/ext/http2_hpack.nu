@@ -619,7 +619,7 @@ $ `stdlib/ext/http.nu`
     : *u sp # *u name
     : ~ i k 0
     ~ < k n {
-        : i c & # i . sp k 255
+        : ~ i c & # i . sp k 255
         ? & >= c 65 <= c 90 { = c + c 32 } {}
         = . op k # u c
         = k + k 1

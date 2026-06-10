@@ -40,7 +40,7 @@
     : i seg / hue 60
     : i f * % hue 60 4
     : i q - 255 f
-    : i r 0 : i g 0 : i b 0
+    : ~ i r 0 : ~ i g 0 : ~ i b 0
     ? == seg 0 { = r 255 = g f = b 0 } {}
     ? == seg 1 { = r q = g 255 = b 0 } {}
     ? == seg 2 { = r 0 = g 255 = b f } {}
@@ -99,7 +99,7 @@
         : i silent ( audio_is_silent 2 )
 
         // 3️⃣  Spawn new particles proportional to loudness.
-        : i spawn_cnt # i * lvl 500.0
+        : ~ i spawn_cnt # i * lvl 500.0
         ? != 0 silent { = spawn_cnt 0 } {}
 
         // Colour based on dominant pitch.
@@ -108,12 +108,12 @@
 
         // 4️⃣  Vertical bias from centroid (bright sound → top).
         : i cen_i # i cen
-        : i bias_y - H / * cen_i H 8000
+        : ~ i bias_y - H / * cen_i H 8000
         ? < bias_y 0 { = bias_y 0 } {}
         ? >= bias_y H { = bias_y - H 1 } {}
 
         // 5️⃣  Spawn particles.
-        : i s 0
+        : ~ i s 0
         ~ < s spawn_cnt {
             // Find a free slot (plife == 0).
             : ~ i slot 0

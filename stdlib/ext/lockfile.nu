@@ -174,7 +174,7 @@ $ `stdlib/ext/toml.nu`
 // ── Parse ─────────────────────────────────────────────────────────────
 
 @ __lock_get_str TomlValue tbl s key → String {
-    : String out ( string_new )
+    : ~ String out ( string_new )
     : ?TomlValue v ( toml_get tbl key )
     ?? v {
         T tv → {

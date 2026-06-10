@@ -30,7 +30,7 @@ $ `stdlib/core/string.nu`
 
     // sec * 1000 should be within 5s of ms (covers the boundary where
     // ms and sec straddle a second tick).
-    : i diff - ms * sec 1000
+    : ~ i diff - ms * sec 1000
     ? < diff 0 { = diff - 0 diff } {}
     ( pb < diff 5000 `now_ms_seconds_consistent` )
 

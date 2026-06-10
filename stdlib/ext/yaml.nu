@@ -607,7 +607,7 @@ $ `stdlib/core/option.nu`
                     ( json_free keyj )
                     : i rstart ( __yaml_skip_sp text + col 1 tn )
                     = . p cur + . p cur 1
-                    : Json val @ Json { JNull }
+                    : ~ Json val @ Json { JNull }
                     ? < rstart tn {
                         : String rests ( __yaml_substr text rstart - tn rstart )
                         = val ( __yaml_scalar_to_json p ( string_data rests ) )
@@ -639,7 +639,7 @@ $ `stdlib/core/option.nu`
                 ? ! ( __yaml_is_seq_item text ) { = more F } {
                     : i tn ( nurl_str_len text )
                     : i after ( __yaml_skip_sp text 1 tn )
-                    : Json item @ Json { JNull }
+                    : ~ Json item @ Json { JNull }
                     ? >= after tn {
                         = . p cur + . p cur 1
                         = item ( __yaml_parse_node p + ind 1 )

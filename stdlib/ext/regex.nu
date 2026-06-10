@@ -364,7 +364,7 @@ $ `stdlib/core/result.nu`
 @ __parse_class * RxParser p → i {
     // ASSUMES position past '['. Builds a class and emits a class state
     // fragment. Returns fragment, or -1 on error.
-    : i neg 0
+    : ~ i neg 0
     ? == ( __rx_peek p ) 94 {
         = . p pos + . p pos 1
         = neg 1
@@ -664,10 +664,10 @@ $ `stdlib/core/result.nu`
     : ( Vec i ) class_starts . impl class_starts
     : i start . impl start
     : i nstates / ( vec_len [i] states ) 4
-    : ( Vec i ) cur ( vec_with_cap [i] nstates )
-    : ( Vec i ) nxt ( vec_with_cap [i] nstates )
-    : ( Vec i ) marked_cur ( vec_with_cap [i] nstates )
-    : ( Vec i ) marked_nxt ( vec_with_cap [i] nstates )
+    : ~ ( Vec i ) cur ( vec_with_cap [i] nstates )
+    : ~ ( Vec i ) nxt ( vec_with_cap [i] nstates )
+    : ~ ( Vec i ) marked_cur ( vec_with_cap [i] nstates )
+    : ~ ( Vec i ) marked_nxt ( vec_with_cap [i] nstates )
     // Initialize marked vectors to length nstates with 0.
     : ~ i k 0
     ~ < k nstates {

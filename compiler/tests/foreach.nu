@@ -1,7 +1,7 @@
 // For-each iteration over slices
 
 @ sum [i data → i {
-    : i total 0
+    : ~ i total 0
     ~ val data {
         = total + total val
     }
@@ -9,7 +9,7 @@
 }
 
 @ find_max [i data → i {
-    : i best . . data ptr 0
+    : ~ i best . . data ptr 0
     ~ val data {
         = best ? > val best val best
     }
@@ -30,7 +30,7 @@
     ( nurl_print `\n` )
 
     // Nested: sum of squares
-    : i sq_sum 0
+    : ~ i sq_sum 0
     ~ val nums {
         = sq_sum + sq_sum * val val
     }

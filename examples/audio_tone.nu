@@ -67,7 +67,7 @@
         ~ < x W {
             : i si / * x spf W
             : i s . scope si
-            : i y + / H 2 / * s / H 2 32768
+            : ~ i y + / H 2 / * s / H 2 32768
             ? < y 0 { = y 0 } {}
             ? >= y H { = y - H 1 } {}
             = . fb + * y W x 0xFF33FF66

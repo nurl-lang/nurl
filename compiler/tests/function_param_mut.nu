@@ -41,7 +41,7 @@
 }
 
 @ main → i {
-    : Counter c @ Counter { 0 10 }
+    : ~ Counter c @ Counter { 0 10 }
 
     // Three calls of `inc` — each mutates a separate local copy.
     // Compiles cleanly (was invalid IR before the fix).

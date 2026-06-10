@@ -61,7 +61,7 @@ $ `stdlib/std/bytes.nu`
     ? != n m { ^ F } {}
     : ~ i k 0
     ~ < k n {
-        : i a ( nurl_str_get ext k )
+        : ~ i a ( nurl_str_get ext k )
         : i b ( nurl_str_get lit k )
         ? & >= a 65 <= a 90 { = a + a 32 } {}
         ? != a b { ^ F } {}

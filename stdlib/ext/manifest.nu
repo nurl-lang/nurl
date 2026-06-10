@@ -155,9 +155,9 @@ $ `stdlib/ext/toml.nu`
 // `%entry` register collides with `entry:` and refuses to emit.
 @ __dep_from_entry TomlEntry ent → !Dep ManifestErr {
     : String name ( string_from ( string_data . ent key ) )
-    : String path ( string_new )
-    : String version ( string_new )
-    : String registry ( string_new )
+    : ~ String path ( string_new )
+    : ~ String version ( string_new )
+    : ~ String registry ( string_new )
     ?? . ent value {
         TStr sv → {
             // Bare version string → registry dep against the default

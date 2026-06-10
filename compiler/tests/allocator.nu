@@ -12,7 +12,7 @@
     ( nurl_poke buf 4 40 )
 
     ( nurl_print `filled: ` )
-    : i n 0
+    : ~ i n 0
     ~ < n 5 {
         ( nurl_print ( nurl_str_int ( nurl_peek buf n ) ) )
         ( nurl_print ` ` )

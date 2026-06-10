@@ -156,7 +156,7 @@ $ `stdlib/std/thread.nu`
             ? < ip_count 256 {
                 : i ip_cap ( nurl_peek sp 4 )
                 ? >= ip_count ip_cap {
-                    : i newcap ? == ip_cap 0 16 * ip_cap 2
+                    : ~ i newcap ? == ip_cap 0 16 * ip_cap 2
                     ? > newcap 256 { = newcap 256 } {}
                     ( __dos_ip_grow state newcap )
                 } {}

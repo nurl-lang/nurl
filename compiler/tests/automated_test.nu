@@ -45,8 +45,8 @@ $ `stdlib/core/option.nu`
 }
 
 @ sumto i n → i {
-    : i acc 0
-    : i k 1
+    : ~ i acc 0
+    : ~ i k 1
     ~ <= k n {
         = acc + acc k
         = k + k 1
@@ -162,8 +162,8 @@ $ `stdlib/core/option.nu`
 // ══════════════════════════════════════════════════════════════════════
 
 @ factorial i n → i {
-    : i result 1
-    : i i 1
+    : ~ i result 1
+    : ~ i i 1
     ~ <= i n {
         = result * result i
         = i + i 1
@@ -198,7 +198,7 @@ $ `stdlib/core/option.nu`
     : i nums_4 4
 
     // Laske summa manuaalisesti
-    : i sum 0
+    : ~ i sum 0
     = sum + sum nums_0
     = sum + sum nums_1
     = sum + sum nums_2
@@ -446,7 +446,7 @@ $ `stdlib/core/option.nu`
     : b test12_result ( test_floats )
 
     // Laske onnistuneet testit
-    : i passed_count 0
+    : ~ i passed_count 0
     ? test1_result { = passed_count + passed_count 1 } {}
     ? test2_result { = passed_count + passed_count 1 } {}
     ? test3_result { = passed_count + passed_count 1 } {}

@@ -657,7 +657,7 @@ $ `stdlib/std/hashmap.nu`
     : i max_row_i64 * 256 2
 
     // Pre-size the row index vectors. One pair (start, len) per row.
-    : i row_est / clen 100
+    : ~ i row_est / clen 100
     ? < row_est 16 { = row_est 16 } {}
     ( vec_reserve [i] . t row_starts row_est )
     ( vec_reserve [i] . t row_lens row_est )

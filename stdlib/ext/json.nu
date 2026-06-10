@@ -366,7 +366,7 @@ $ `stdlib/core/result.nu`
 
 @ __jp_err_at * JsonParser p i pos_override ParseErr kind → JsonError {
     : i n . p len
-    : i target pos_override
+    : ~ i target pos_override
     ? > target n { = target n } {}
     ? < target 0 { = target 0 } {}
     : s raw . p src

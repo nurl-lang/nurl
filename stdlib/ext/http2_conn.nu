@@ -967,7 +967,7 @@ $ `stdlib/ext/http2_hpack.nu`
                     }
                 } {
                     : i remaining - body_len pos
-                    : i chunk ? > remaining hw_cap hw_cap remaining
+                    : ~ i chunk ? > remaining hw_cap hw_cap remaining
                     ? > chunk window { = chunk window } {}
                     : ( Vec u ) part ( vec_with_cap [u] chunk )
                     : *u bp ( vec_data [u] . r body )
@@ -1027,8 +1027,8 @@ $ `stdlib/ext/http2_hpack.nu`
     : ~ i k 0
     : ~ i ok 1
     ~ & == ok 1 < k la {
-        : i ca ( nurl_str_get a k )
-        : i cb ( nurl_str_get b k )
+        : ~ i ca ( nurl_str_get a k )
+        : ~ i cb ( nurl_str_get b k )
         ? & >= ca 65 <= ca 90 { = ca + ca 32 } {}
         ? & >= cb 65 <= cb 90 { = cb + cb 32 } {}
         ? != ca cb { = ok 0 } {}

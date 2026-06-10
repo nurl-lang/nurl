@@ -61,7 +61,7 @@
     : i seg / hue 60
     : i f * % hue 60 4  // 0..236 within segment
     : i q - 255 f
-    : i r 0 : i g 0 : i b 0
+    : ~ i r 0 : ~ i g 0 : ~ i b 0
     ? == seg 0 { = r 255 = g f = b 0 } {}
     ? == seg 1 { = r q = g 255 = b 0 } {}
     ? == seg 2 { = r 0 = g 255 = b f } {}
@@ -117,7 +117,7 @@
 
         // ── 3. Spawn up to N new particles proportional to loudness.
         //      lvl is 0..1; typical speech/music peaks around 0.2–0.5.
-        : i spawn_cnt # i * lvl 300.0
+        : ~ i spawn_cnt # i * lvl 300.0
         ? != 0 silent { = spawn_cnt 0 } {}
 
         : i hue ( hue_from_bin peak )
@@ -126,7 +126,7 @@
         // cen is in Hz; map a rough 50–8000 Hz range to vertical bias
         // 0 (top) .. H (bottom). Bright pitches aim up.
         : i cen_i # i cen
-        : i bias_y - H / * cen_i H 8000
+        : ~ i bias_y - H / * cen_i H 8000
         ? < bias_y 0 { = bias_y 0 } {}
         ? >= bias_y H { = bias_y - H 1 } {}
 

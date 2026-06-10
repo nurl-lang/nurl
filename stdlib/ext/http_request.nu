@@ -186,7 +186,7 @@ $ `stdlib/ext/http.nu`
 // Copy bytes [from..to) of `buf` into a fresh owned String.
 @ __bsubstr ( Vec u ) buf i from i to → String {
     : i n ( vec_len [u] buf )
-    : i a ? < from 0 0 from
+    : ~ i a ? < from 0 0 from
     : i b ? > to n n to
     ? > a b { = a b } {}
     : i out_n - b a
@@ -430,8 +430,8 @@ $ `stdlib/ext/http.nu`
             ( string_push_char out c )
         } {
             ( string_push_char out 37 )
-            : i hi ( __hex_digit_hi c )
-            : i lo ( __hex_digit_lo c )
+            : ~ i hi ( __hex_digit_hi c )
+            : ~ i lo ( __hex_digit_lo c )
             // Switch lowercase hex from __hex_digit_* to uppercase
             // (RFC 3986 §2.1 RECOMMENDED for percent-encoding output).
             ? & >= hi 97 <= hi 102 { = hi - hi 32 } {}
@@ -917,7 +917,7 @@ $ `stdlib/ext/http.nu`
 // (the parser handles that). Cap line length at 8192 to defend
 // against pathological clients sending an unbounded chunk-size line.
 @ __read_crlf_line TcpConn conn i expect_min → !String HttpReqErr {
-    : String line ( string_with_cap ? > expect_min 0 expect_min 16 )
+    : ~ String line ( string_with_cap ? > expect_min 0 expect_min 16 )
     : ~ i status 1
     : ~ b done F
     : ~ i seen 0

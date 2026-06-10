@@ -7,8 +7,8 @@
 //   /tmp/sum ; echo $?   # → 55
 
 @ sumto i n → i {
-    : i acc 0
-    : i k 1
+    : ~ i acc 0
+    : ~ i k 1
     ~ <= k n {
         = acc + acc k
         = k + k 1

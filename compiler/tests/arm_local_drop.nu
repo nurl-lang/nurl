@@ -27,7 +27,7 @@ $ `stdlib/core/string.nu`
     {}
 
     // Loop body owned string — dropped per iteration.
-    : i i 0
+    : ~ i i 0
     ~ < i 2 {
         : s ls ( nurl_str_cat `loop ` ( nurl_str_int i ) )
         ( nurl_print ls ) ( nurl_print `\n` )

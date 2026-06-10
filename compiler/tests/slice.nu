@@ -11,8 +11,8 @@
 
 // Versio 1: Token-optimoitu (4 tokenia)
 @ sum_slice_direct * i data i length → i {
-    : i total 0
-    : i index 0
+    : ~ i total 0
+    : ~ i index 0
 
     ~ < index length {
         // Haetaan arvo: data[index]
@@ -25,8 +25,8 @@
 
 // Versio 2: Struct-versio (8 tokenia, mutta tyyppiturva)
 @ sum_slice_struct Slice slice → i {
-    : i total 0
-    : i index 0
+    : ~ i total 0
+    : ~ i index 0
     : i length . slice length
     : *i data . slice data
 

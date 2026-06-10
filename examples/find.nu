@@ -206,7 +206,7 @@ $ `stdlib/ext/regex.nu`
 // only when the parent actually contains one; otherwise we default to
 // '/', which every Windows file API also accepts.
 @ join_path s parent s name → String {
-    : String out ( string_from parent )
+    : ~ String out ( string_from parent )
     : i pl ( nurl_str_len parent )
     ? > pl 0 {
         : i lastc & # i . # *u parent - pl 1 255

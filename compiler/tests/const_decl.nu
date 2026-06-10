@@ -1,6 +1,6 @@
 // const_decl with all literal types
 
-: i MAX_CONN 100
+: ~ i MAX_CONN 100
 : f PI 3.14159
 : s GREETING `hello`
 : b VERBOSE T

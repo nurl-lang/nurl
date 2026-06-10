@@ -1,7 +1,7 @@
 // test_logic_and_shortcircuit.nu
 // & F expr → expr EI evaluoida, sivuvaikutusta ei tapahdu
 
-: i COUNTER 0
+: ~ i COUNTER 0
 
 @ side_effect → b {
     = COUNTER + COUNTER 1

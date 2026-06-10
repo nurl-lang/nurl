@@ -635,10 +635,10 @@ $ `stdlib/core/char.nu`
 
 @ string_substr String str i from i len → String {
     : i slen ( string_len str )
-    : i start from
+    : ~ i start from
     ? < start 0 { = start 0 } {}
     ? > start slen { = start slen } {}
-    : i n len
+    : ~ i n len
     ? < n 0 { = n 0 } {}
     ? > + start n slen { = n - slen start } {}
 

@@ -2,8 +2,8 @@
 // T & expr → expr PITÄÄ evaluoida
 // F | expr → expr PITÄÄ evaluoida
 
-: i AND_CTR 0
-: i OR_CTR 0
+: ~ i AND_CTR 0
+: ~ i OR_CTR 0
 
 @ and_side → b {
     = AND_CTR + AND_CTR 1
