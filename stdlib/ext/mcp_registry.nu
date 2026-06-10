@@ -835,7 +835,7 @@ $ `stdlib/ext/http_response.nu`
 // helper that calls `CRYPTO_memcmp`).
 @ mcp_http_with_bearer_auth ( @ HttpResponse HttpRequest ) inner s expected_token → ( @ HttpResponse HttpRequest ) {
     ^ \ HttpRequest req → HttpResponse {
-        : b ok F
+        : ~ b ok F
         : ?String auth ( header_get . req headers `Authorization` )
         ?? auth {
             T av → {

@@ -149,7 +149,7 @@ $ `stdlib/core/vec.nu`
 // rather than a bare `application/json` body. Otherwise fall back to
 // plain JSON for legacy clients. CONSUMES `resp_json`.
 @ __mcp_http_response_for_json HttpRequest req Json resp_json → HttpResponse {
-    : b want_sse F
+    : ~ b want_sse F
     : ?String accept ( header_get . req headers `Accept` )
     ?? accept {
         T s → {

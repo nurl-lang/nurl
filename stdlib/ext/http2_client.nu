@@ -224,8 +224,8 @@ $ `stdlib/ext/http2_hpack.nu`
     : ~ i k 0
     : ~ i ok 1
     ~ & == ok 1 < k la {
-        : i ca ( nurl_str_get a k )
-        : i cb ( nurl_str_get b k )
+        : ~ i ca ( nurl_str_get a k )
+        : ~ i cb ( nurl_str_get b k )
         ? & >= ca 65 <= ca 90 { = ca + ca 32 } {}
         ? & >= cb 65 <= cb 90 { = cb + cb 32 } {}
         ? != ca cb { = ok 0 } {}
@@ -1021,7 +1021,7 @@ $ `stdlib/ext/http2_hpack.nu`
     : ~ i k 0
     : ~ b ok T
     ~ & ok < k lp {
-        : i a ( nurl_str_get str k )
+        : ~ i a ( nurl_str_get str k )
         : i b ( nurl_str_get pre k )
         ? & >= a 65 <= a 90 { = a + a 32 } {}
         ? != a b { = ok F } {}

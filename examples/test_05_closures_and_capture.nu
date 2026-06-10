@@ -71,7 +71,7 @@
     ( puts `\n` )
 
     // (2) Closure kaappaa paikallisen ARVON
-    : i x 10
+    : ~ i x 10
     : ( @ s ) show_x \ → s {
         ( puts `captured x=` )
         ( puts ( nurl_str_int x ) )

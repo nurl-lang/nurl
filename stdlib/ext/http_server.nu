@@ -571,8 +571,8 @@ $ `stdlib/ext/http_response.nu`
     ? != la lb { ^ F } {}
     : ~ i k 0
     ~ < k la {
-        : i ca ( string_get value k )
-        : i cb ( nurl_str_get lit k )
+        : ~ i ca ( string_get value k )
+        : ~ i cb ( nurl_str_get lit k )
         ? & >= ca 65 <= ca 90 { = ca + ca 32 } {}
         ? & >= cb 65 <= cb 90 { = cb + cb 32 } {}
         ? != ca cb { ^ F } {}

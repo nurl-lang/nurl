@@ -262,8 +262,8 @@ $ `stdlib/ext/http_response.nu`
     ? != la lb { ^ F } {}
     : ~ i k 0
     ~ < k la {
-        : i ca ( string_get a k )
-        : i cb ( nurl_str_get b k )
+        : ~ i ca ( string_get a k )
+        : ~ i cb ( nurl_str_get b k )
         ? & >= ca 65 <= ca 90 { = ca + ca 32 } {}
         ? & >= cb 65 <= cb 90 { = cb + cb 32 } {}
         ? != ca cb { ^ F } {}
@@ -288,8 +288,8 @@ $ `stdlib/ext/http_response.nu`
         : ~ i j 0
         : ~ b match T
         ~ & match < j nl {
-            : i ca ( string_get value + start j )
-            : i cb ( nurl_str_get needle j )
+            : ~ i ca ( string_get value + start j )
+            : ~ i cb ( nurl_str_get needle j )
             ? & >= ca 65 <= ca 90 { = ca + ca 32 } {}
             ? & >= cb 65 <= cb 90 { = cb + cb 32 } {}
             ? != ca cb { = match F } {}
@@ -1026,7 +1026,7 @@ $ `stdlib/ext/http_response.nu`
                                             : i cb0 & # i . clp 0 255
                                             : i cb1 & # i . clp 1 255
                                             : i code + << cb0 8 cb1
-                                            : b code_bad | | | |
+                                            : ~ b code_bad | | | |
                                             < code 1000 > code 4999
                                             == code 1004 == code 1005
                                             | == code 1006 == code 1015
@@ -1452,8 +1452,8 @@ $ `stdlib/ext/http_response.nu`
     ? < sl pl { ^ F } {}
     : ~ i k 0
     ~ < k pl {
-        : i a ( nurl_str_get str k )
-        : i b ( nurl_str_get pfx k )
+        : ~ i a ( nurl_str_get str k )
+        : ~ i b ( nurl_str_get pfx k )
         ? & >= a 65 <= a 90 { = a + a 32 } {}
         ? & >= b 65 <= b 90 { = b + b 32 } {}
         ? != a b { ^ F } {}
@@ -1482,8 +1482,8 @@ $ `stdlib/ext/http_response.nu`
     ? > + ls + namelen 1 le { ^ F } {}
     : ~ i k 0
     ~ < k namelen {
-        : i a & 255 # i . p + ls k
-        : i b ( nurl_str_get name k )
+        : ~ i a & 255 # i . p + ls k
+        : ~ i b ( nurl_str_get name k )
         ? & >= a 65 <= a 90 { = a + a 32 } {}
         ? & >= b 65 <= b 90 { = b + b 32 } {}
         ? != a b { ^ F } {}

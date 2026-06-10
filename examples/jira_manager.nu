@@ -248,7 +248,7 @@ $ `stdlib/std/fs.nu`
         F e → { ^ @ !Json JiraErr { F e } }
         T tjson → {
             : ?Json otrans ( json_obj_get tjson `transitions` )
-            : String tid ( string_from `` )
+            : ~ String tid ( string_from `` )
             ?? otrans {
                 F → {}
                 T trans → {

@@ -49,7 +49,7 @@
     ( nurl_print ` (expected: 105)\n` )
 
     // --- VAIHE 3: Monen muuttujan kaappaus structiin ---
-    : ( @ i i ) pipe ( make_math_pipeline 2 10 )  // a=2, b=10
+    : ~ ( @ i i ) pipe ( make_math_pipeline 2 10 )  // a=2, b=10
     : i res3 ( pipe 5 )  // Odotettu: (5 * 2) + 10 = 20
 
     ( nurl_print `[Test 2]   pipe(5)        = ` )

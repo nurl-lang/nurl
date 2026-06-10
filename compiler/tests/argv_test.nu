@@ -17,7 +17,7 @@ $ `stdlib/core/string.nu`
     ( nurl_print `\n` )
 
     // Print all args
-    : i idx 0
+    : ~ i idx 0
     ~ < idx argc {
         ( nurl_print `  arg[` )
         ( nurl_print ( nurl_str_int idx ) )

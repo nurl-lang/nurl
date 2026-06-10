@@ -284,8 +284,8 @@ $ `stdlib/ext/json.nu`
     ? != la lb { ^ F } {}
     : ~ i k 0
     ~ < k la {
-        : i ca ( string_get name k )
-        : i cb ( nurl_str_get raw k )
+        : ~ i ca ( string_get name k )
+        : ~ i cb ( nurl_str_get raw k )
         ? & >= ca 65 <= ca 90 { = ca + ca 32 } {}
         ? & >= cb 65 <= cb 90 { = cb + cb 32 } {}
         ? != ca cb { ^ F } {}

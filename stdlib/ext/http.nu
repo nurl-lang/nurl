@@ -1155,9 +1155,9 @@ i timeout_ms i connect_timeout_ms
 // separator). Returns an owned SseEvent — empty fields are valid (e.g.
 // no `event:` line → name = ""). Caller frees with `sse_event_free`.
 @ sse_parse_frame s frame i frame_len → SseEvent {
-    : String name ( string_new )
+    : ~ String name ( string_new )
     : String data ( string_new )
-    : String id ( string_new )
+    : ~ String id ( string_new )
     : ~ b first_data_line T
 
     : ~ i ls 0
@@ -1180,7 +1180,7 @@ i timeout_ms i connect_timeout_ms
                         }
                     }
                     : i fld_len - ci ls
-                    : i vstart ? found + ci 1 i
+                    : ~ i vstart ? found + ci 1 i
                     ? & found < vstart i {
                         ? == ( nurl_str_get frame vstart ) 32 { = vstart + vstart 1 } {}
                     } {}

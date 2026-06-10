@@ -60,7 +60,7 @@ $ `stdlib/core/errors.nu`
     ? < sn pn { ^ F } {}
     : ~ i k 0
     ~ < k pn {
-        : i a ( string_get s k )
+        : ~ i a ( string_get s k )
         ? & >= a 65 <= a 90 { = a + a 32 } {}
         : i b ( nurl_str_get prefix k )
         ? != a b { ^ F } {}

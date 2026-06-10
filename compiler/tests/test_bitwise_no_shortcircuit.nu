@@ -1,7 +1,7 @@
 // test_bitwise_no_shortcircuit.nu
 // i & i on aina eager — molemmat evaluoidaan aina
 
-: i COUNTER 0
+: ~ i COUNTER 0
 
 @ counted_val i x → i {
     = COUNTER + COUNTER 1

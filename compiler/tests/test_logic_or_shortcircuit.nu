@@ -1,7 +1,7 @@
 // test_logic_or_shortcircuit.nu
 // | T expr → expr EI evaluoida
 
-: i COUNTER 0
+: ~ i COUNTER 0
 
 @ side_effect → b {
     = COUNTER + COUNTER 1

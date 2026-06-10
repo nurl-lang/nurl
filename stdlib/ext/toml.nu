@@ -553,7 +553,7 @@ $ `stdlib/core/option.nu`
 
 @ __t_parse_header s src i n i pos → HeaderResult {
     : ( Vec String ) path ( vec_new [String] )
-    : i p + pos 1
+    : ~ i p + pos 1
     : ~ b as_array F
     ? & < p n == ( nurl_str_get src p ) 91 {
         = p + p 1

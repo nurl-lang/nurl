@@ -111,6 +111,16 @@
     ( nurl_eprintln ( nurl_diag_caret col ) )
 }
 
+// Record where a binding was declared, so a later "cannot assign to
+// immutable …" diagnostic can point the author at the exact line to
+// add `~` to. Keyed off the binding name; declfile carries the source
+// path because a global may be assigned from a different file than the
+// one that declared it.
+@ rec_decl_loc i syms s name i line i lex → v {
+    ( nurl_sym_def syms ( nurl_str_cat name `__declline` ) ( nurl_str_int line ) )
+    ( nurl_sym_def syms ( nurl_str_cat name `__declfile` ) ( nurl_lex_filename lex ) )
+}
+
 @ expect i lex i tt → v {
     ? != ( nurl_lex_type lex ) tt
     { ( die lex ( nurl_str_cat3
@@ -168,7 +178,7 @@
 // ── Res-type NURL tracking (must be declared before parse_type_res) ──
 // g_res_type_syms is initialized to a new sym handle in main().
 // parse_type_res stores "__last_res_nurl__" and "__last_res_err_llvm__" here.
-: i g_res_type_syms 0
+: ~ i g_res_type_syms 0
 
 // ── Type parsing ──────────────────────────────────────────────────
 
@@ -286,7 +296,7 @@
     ? == ( nurl_lex_type lex ) TT_AT
     { ( nurl_lex_advance lex )  // consume '@'
         : s ret ( parse_type lex )
-        : s params ``
+        : ~ s params ``
         ~ != ( nurl_lex_type lex ) TT_RPAREN {
             : s p ( parse_type lex )
             = params ? == 0 ( nurl_str_len params )
@@ -295,7 +305,7 @@
         }
         ( expect lex TT_RPAREN )  // consume ')'
         // Return a closure struct type: { ret (i8*, params...)*, i8* }
-        : s fn_sig ( nurl_str_cat ret ` (i8*` )
+        : ~ s fn_sig ( nurl_str_cat ret ` (i8*` )
         ? != 0 ( nurl_str_len params )
         { = fn_sig ( nurl_str_cat fn_sig ( nurl_str_cat `, ` params ) ) }
         {}
@@ -309,7 +319,7 @@
         ? ( is_ident_tok ( nurl_lex_type lex ) )
         { : s sname ( nurl_lex_val lex )
             ( nurl_lex_advance lex )
-            : s mangle_sfx ``
+            : ~ s mangle_sfx ``
             ~ != ( nurl_lex_type lex ) TT_RPAREN {
                 : ~ s ta_lty ``
                 : i ta_tt ( nurl_lex_type lex )
@@ -470,9 +480,9 @@
 
 // ── String literal encoding ───────────────────────────────────────
 
-: i g_str_idx 0
-: i g_str_syms 0  // sym handle for string-literal metadata (never pushed/popped)
-: i g_did_ret 0  // set to 1 by gen_ret; checked/reset by gen_cond
+: ~ i g_str_idx 0
+: ~ i g_str_syms 0  // sym handle for string-literal metadata (never pushed/popped)
+: ~ i g_did_ret 0  // set to 1 by gen_ret; checked/reset by gen_cond
 // Cascade guard: 1 while parsing a VALUE OPERAND (a binary/unary/cast/
 // member operand, a call argument, a `?`/`??` condition/scrutinee, or a
 // return value). `^` (return) is control flow and is meaningless in those
@@ -483,31 +493,31 @@
 // Default 0 (statement / tail position, where `^` is legal); set to 1 by
 // gen_operand around operand parses, and reset to 0 by the control-flow
 // handlers for their arm/body sub-parses (which ARE legal `^` positions).
-: i g_ret_forbidden 0
+: ~ i g_ret_forbidden 0
 // Non-zero while parsing a `??` match-arm body. The XOR-confusion warning
 // in gen_ret keys off "a non-terminator token follows `^ X` on the same
 // line", but in an unbraced arm body that token is the NEXT ARM's pattern
 // (`T x → ^ x  F _ → …`), not a stray XOR operand — so the warning is
 // suppressed inside arm bodies. Save/restore (nested matches).
-: i g_in_match_arm 0
-: i g_defer_count 0  // number of active defers in the current function
-: i g_generic_syms 0  // sym handle for stored generic function templates (Group E)
-: i g_generic_struct_syms 0  // generic struct templates (Group E-structs).
+: ~ i g_in_match_arm 0
+: ~ i g_defer_count 0  // number of active defers in the current function
+: ~ i g_generic_syms 0  // sym handle for stored generic function templates (Group E)
+: ~ i g_generic_struct_syms 0  // generic struct templates (Group E-structs).
 //   <sname>__stparams → space-separated type-var names (e.g. "T" or "K V")
 //   <sname>__sbody    → raw body source incl. outer "{ ... }"
-: i g_struct_inst_syms 0  // dedupe marker — <mangled>__done → "1" once emitted
-: i g_impl_ret_syms 0  // Group F: method##llvm_type → ret_type string
-: i g_impl_name_syms 0  // Group F: method##llvm_type → mangle_suffix string
-: i g_trait_syms 0  // Trait default implementations.
+: ~ i g_struct_inst_syms 0  // dedupe marker — <mangled>__done → "1" once emitted
+: ~ i g_impl_ret_syms 0  // Group F: method##llvm_type → ret_type string
+: ~ i g_impl_name_syms 0  // Group F: method##llvm_type → mangle_suffix string
+: ~ i g_trait_syms 0  // Trait default implementations.
 //   <Trait>__tparam           → trait's generic type-var name (e.g. "T")
 //   <Trait>__defaults         → space-separated method names with defaults
 //   <Trait>__<method>__src    → raw source "params → ret { body }"
-: i g_closure_defs 0  // Deferred closure function definitions
-: i g_closure_types 0  // Deferred closure type definitions
-: i g_type_count 0  // Count of closure types stored
-: i g_func_count 0  // Count of closure functions stored
-: i g_closure_emit_base 0  // Next func index to emit (watermark)
-: i g_type_emit_base 0  // Next type index to emit
+: ~ i g_closure_defs 0  // Deferred closure function definitions
+: ~ i g_closure_types 0  // Deferred closure type definitions
+: ~ i g_type_count 0  // Count of closure types stored
+: ~ i g_func_count 0  // Count of closure functions stored
+: ~ i g_closure_emit_base 0  // Next func index to emit (watermark)
+: ~ i g_type_emit_base 0  // Next type index to emit
 
 // ── Borrow-checker state ─────────────────────────────────────────
 // g_borrowck is 1 (ON) by default; `--no-borrowck` turns it back off.
@@ -516,7 +526,7 @@
 // whether the flag is on or off (the bootstrap fixed point is
 // unaffected). All borrowck_* state below is untouched when the flag
 // is 0.
-: i g_borrowck 1  // 0 when --no-borrowck passed on the CLI
+: ~ i g_borrowck 1  // 0 when --no-borrowck passed on the CLI
 // `--strict-borrowck` (off by default) enables two additional checks:
 // (1) aliased mutation through `. obj field` arguments at the same
 // call site — a generalisation of the bare-identifier-only check, and
@@ -525,12 +535,12 @@
 // `error:` like the rest of the borrowck. Disabled by default because
 // the extension has a meaningful false-positive rate against existing
 // stdlib code.
-: i g_strict_borrowck 0  // 1 when --strict-borrowck passed on the CLI
-: i g_bck 0  // sym handle for the borrow checker's per-function
+: ~ i g_strict_borrowck 0  // 1 when --strict-borrowck passed on the CLI
+: ~ i g_bck 0  // sym handle for the borrow checker's per-function
 //  data (statement list etc.); allocated in main()
 //  only when --borrowck is set
-: i g_bck_depth 0  // block-nesting depth during the statement walk
-: i g_bck_closure_depth 0  // >0 while parsing a closure body — the bck
+: ~ i g_bck_depth 0  // block-nesting depth during the statement walk
+: ~ i g_bck_closure_depth 0  // >0 while parsing a closure body — the bck
 //  capture hooks no-op so closure statements do not
 //  inline into the enclosing function's list (so
 //  closure scopes stay segregated)
@@ -551,7 +561,7 @@
 // an `inout` function must be defined before it is called (a forward
 // call would pass the argument by value and LLVM would reject the
 // type mismatch — loud, never silent).
-: i g_fn_inout 0
+: ~ i g_fn_inout 0
 
 // Per-function sink-parameter map.
 // `g_fn_sink[fname]` is the space-separated list of 0-based indices
@@ -561,36 +571,36 @@
 // the caller cannot use it afterwards. Unlike g_fn_inout, a forward
 // call needs no guard — it merely misses the move diagnostic, it is
 // never miscompiled. Allocated in main().
-: i g_fn_sink 0
+: ~ i g_fn_sink 0
 
 // ── DWARF debug-info state ───────────────────────────────────────
 // All zero/empty when --g is OFF; emit helpers then produce IR that
 // is byte-identical to a pre-DWARF build. Toggled in main().
-: i g_dbg_enabled 0  // 1 when --g passed on the CLI
-: i g_dbg_next_id 100  // metadata-id allocator; starts above any
+: ~ i g_dbg_enabled 0  // 1 when --g passed on the CLI
+: ~ i g_dbg_next_id 100  // metadata-id allocator; starts above any
 //  module-flag id we might add later
-: i g_dbg_blob_syms 0  // sym handle holding queued !N = !DI… lines;
+: ~ i g_dbg_blob_syms 0  // sym handle holding queued !N = !DI… lines;
 //  flushed at end-of-module by dbg_flush
-: i g_dbg_file_id 0  // !DIFile id (allocated once at startup)
-: i g_dbg_cu_id 0  // !DICompileUnit id
-: i g_dbg_current_subprogram 0  // current function's !DISubprogram id
+: ~ i g_dbg_file_id 0  // !DIFile id (allocated once at startup)
+: ~ i g_dbg_cu_id 0  // !DICompileUnit id
+: ~ i g_dbg_current_subprogram 0  // current function's !DISubprogram id
 //  (0 outside any function)
-: i g_dbg_current_loc 0  // current !DILocation id (0 = no location;
+: ~ i g_dbg_current_loc 0  // current !DILocation id (0 = no location;
 //  emit_dbg_eol then omits `, !dbg !N`)
-: i g_dbg_subroutine_ty 0  // shared !DISubroutineType id; allocated by
+: ~ i g_dbg_subroutine_ty 0  // shared !DISubroutineType id; allocated by
 //  dbg_init and reused for every fn. Phase 6
 //  will replace with per-fn signature types.
-: i g_dbg_placeholder_ty 0  // shared !DIBasicType id (i64-signed) used as
+: ~ i g_dbg_placeholder_ty 0  // shared !DIBasicType id (i64-signed) used as
 //  the type for every local until Phase 6
 //  lays down per-LLVM-type DIBasicType
 //  entries indexed by `vt`.
-: i g_dbg_override_line 0  // Phase 7: when non-zero, gen_fn_decl_concrete
+: ~ i g_dbg_override_line 0  // Phase 7: when non-zero, gen_fn_decl_concrete
 //  uses this instead of `nurl_lex_line` for
 //  the !DISubprogram source line. Set by
 //  emit_one_instantiation so per-mono
 //  subprograms point at the original generic
 //  decl line, not synthetic `<generic>:1`.
-: i g_dbg_type_syms 0  // Phase 6 type-id cache: LLVM type string
+: ~ i g_dbg_type_syms 0  // Phase 6 type-id cache: LLVM type string
 //  (e.g. `i64`, `i8*`, `%String`) → metadata id
 //  of its DIBasicType / DIDerivedType /
 //  DICompositeType. Populated lazily by
@@ -733,7 +743,7 @@
 @ dbg_type_id_for s vt i syms → i {
     : s hit ( nurl_sym_get g_dbg_type_syms vt )
     ? != 0 ( nurl_str_len hit ) { ^ ( nurl_str_to_int hit ) } {}
-    : i id 0
+    : ~ i id 0
     // Base types we render with NURL-flavoured names so `print x` in
     // gdb shows "i" / "u8" / "b" instead of "i64" / "i8" / "i1".
     ? ( seq vt `i64` )
@@ -807,9 +817,9 @@
     : ~ s elems ``
     : ~ i fidx 0
     ~ < fidx n {
-        : s fname ( nurl_sym_get syms
+        : ~ s fname ( nurl_sym_get syms
         ( nurl_str_cat3 base `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__name` ) ) )
-        : s ftype ( nurl_sym_get syms
+        : ~ s ftype ( nurl_sym_get syms
         ( nurl_str_cat3 base `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__type` ) ) )
         ? == 0 ( nurl_str_len ftype ) { = ftype `i64` } {}
         ? == 0 ( nurl_str_len fname )
@@ -964,7 +974,7 @@
 // reassigned with = x literal) that Phase 2B string tracking can't handle
 // safely, so nurlc.nu disables the pass for itself via a file-level pragma.
 // See main() for the opt-out marker.
-: i g_auto_drop_strings 1
+: ~ i g_auto_drop_strings 1
 
 // Visibility (grammar v2.0). Tracks the source-file of every @-defined
 // function and per-file strict-mode opt-in.
@@ -979,8 +989,8 @@
 // handler reads-and-clears it and records the public flag.
 // Stored in nurl_sym rather than as a top-level `: s` global because
 // the Python bootstrap compiler does not yet handle string globals.
-: i g_pending_pub 0
-: i g_vis_syms 0
+: ~ i g_pending_pub 0
+: ~ i g_vis_syms 0
 
 // Unused-symbol lint (opt-in via `--lint`). Default OFF so ordinary
 // builds — and the compiler's own bootstrap, which never passes
@@ -1004,18 +1014,18 @@
 //                  borrow checker, which suppresses inside closures),
 //                  so a binding used only by a captured closure is
 //                  correctly seen as used.
-: i g_lint 0
-: i g_lint_syms 0
-: i g_lint_used 0
-: i g_lint_reads 0
-: i g_lint_gen 0
+: ~ i g_lint 0
+: ~ i g_lint_syms 0
+: ~ i g_lint_used 0
+: ~ i g_lint_reads 0
+: ~ i g_lint_gen 0
 // 1 only during the main parse_program pass. Cleared before
 // flush_deferred_instantiations so synthetic generic monomorphisations
 // (e.g. vec_with_cap__i64), which are emitted after the parse and carry
 // the top file's current-src-file, are NOT recorded as the user's own
 // unused functions / bindings. Reference + use capture stays on
 // throughout so the used-set remains complete.
-: i g_lint_recording 0
+: ~ i g_lint_recording 0
 
 @ vis_current_src_file → s {
     ^ ( nurl_sym_get g_vis_syms `__current_src_file__` )
@@ -1500,8 +1510,8 @@
     ret_ident
     ``
     // Phase 2B: owned-string escape analysis on the returned identifier.
-    : s skip_str_ptr ``
-    : s skip_user_ptr ``
+    : ~ s skip_str_ptr ``
+    : ~ s skip_user_ptr ``
     ? != 0 g_auto_drop_strings
     { : s rid_ptr ( nurl_sym_get syms ( nurl_str_cat ret_ident `__ptr` ) )
         = skip_str_ptr ? & ( seq lt `i8*` ) ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) rid_ptr )
@@ -1576,7 +1586,7 @@
 // an argument — the classic NURL arity cascade), the offending token
 // lands on a LATER line than this, which lets the error point back at
 // the real culprit instead of blaming the innocent next statement.
-: i g_stmt_line 0
+: ~ i g_stmt_line 0
 
 // g_stmt_bare_lit — set by gen_stmt to 1 when the statement it just
 // parsed was a bare numeric/string LITERAL in expression position (no
@@ -1587,7 +1597,7 @@
 // e.g. `& x 255 0x40` parses as `& x 255` and silently drops `0x40`.
 // Match arms whose body is a bare literal call gen_stmt directly (not
 // via a block iterator), so this never false-flags an arm value.
-: i g_stmt_bare_lit 0
+: ~ i g_stmt_bare_lit 0
 
 // __tok_label — a human-readable name for a token that turned up where
 // a value expression was required. Used only on the diagnostic path.
@@ -1823,11 +1833,11 @@
     // or legacy `u` → i8). Clear the marker before LHS so a literal-LHS
     // expression doesn't inherit stale state from a prior load.
     ( nurl_mark_unsigned `` )
-    : s lv ( gen_operand lex syms cg )
+    : ~ s lv ( gen_operand lex syms cg )
     : s lt ( nurl_get_last_type )
     : s lu_snap ( nurl_last_unsigned )
     ( nurl_mark_unsigned `` )
-    : s rv ( gen_operand lex syms cg )
+    : ~ s rv ( gen_operand lex syms cg )
     : s rt ( nurl_get_last_type )
     : s ru_snap ( nurl_last_unsigned )
     : s res ( nurl_cg_reg cg )
@@ -1855,7 +1865,7 @@
     // uniformly. ptrtoint is a no-op at the machine level, so this is
     // free. Arithmetic ops are untouched.
     : b is_cmp | & >= tt TT_LT <= tt TT_GE | == tt TT_EQEQ == tt TT_NE
-    : s cmp_ty lt
+    : ~ s cmp_ty lt
     ? & is_cmp | ( is_ptr_ty lt ) ( is_ptr_ty rt ) {
         ? ( is_ptr_ty lt ) {
             : s lvi ( nurl_cg_reg cg )
@@ -2098,12 +2108,12 @@
     // Simple parsing for function pointer types like "i64 (i64)*" or "void ()*"
     // or closure struct types like "{ i64 (i8*)*, i8* }"
     : i len ( nurl_str_len fn_ptr_type )
-    : i start_pos 0
+    : ~ i start_pos 0
     // Skip leading "{ " for closure struct types
     ? & >= len 2 == ( nurl_str_get fn_ptr_type 0 ) 123 { = start_pos 2 } {}
 
-    : b contains_space_paren F
-    : i i start_pos
+    : ~ b contains_space_paren F
+    : ~ i i start_pos
     ~ < i - len 1 {
         ? & == ( nurl_str_get fn_ptr_type i ) 32  // space character
         == ( nurl_str_get fn_ptr_type + i 1 ) 40  // '(' character
@@ -2117,8 +2127,8 @@
         // Must track brace depth: for nested struct returns like
         // `{ { i1, i64 } (i8*, i64)*, i8* }`, the first raw space sits inside
         // the inner `{}` and must be skipped.
-        : i space_idx start_pos
-        : i depth 0
+        : ~ i space_idx start_pos
+        : ~ i depth 0
         ~ < space_idx len {
             : i ch ( nurl_str_get fn_ptr_type space_idx )
             ? == ch 123 { = depth + depth 1 } {}  // '{' deeper
@@ -2189,7 +2199,7 @@
 // (space-separated). Called by gen_call after a callee returns to release
 // owned-string argument temporaries (Phase 2B parameter-ownership).
 @ mem_drop_arg_temps s temps → v {
-    : s rest temps
+    : ~ s rest temps
     ~ != 0 ( nurl_str_len rest ) {
         : s reg ( str_first_word rest )
         = rest ( str_skip_word rest )
@@ -2525,7 +2535,7 @@
 // value so callers always receive an owned heap copy they can drop
 // freely.
 
-: i g_last_type_ptr 0
+: ~ i g_last_type_ptr 0
 
 @ nurl_get_last_type → s {
     ? == g_last_type_ptr 0 { ^ # s ( strdup `i64` ) } {}
@@ -2546,7 +2556,7 @@
 // widen/op-selection readers consult `nurl_last_unsigned`. Stored as the
 // same `"1"` / `""` string the old syms entry used, so readers keep the
 // `nurl_str_len`-nonempty idiom. Empty pointer ⇒ signed (`""`).
-: i g_last_unsigned_p 0
+: ~ i g_last_unsigned_p 0
 
 @ nurl_last_unsigned → s {
     ? == g_last_unsigned_p 0 { ^ # s ( strdup `` ) } {}
@@ -3121,8 +3131,8 @@
                 }
             }
             = . idp n # u 0
-            : i ttype TT_IDENT
-            : i inum 0
+            : ~ i ttype TT_IDENT
+            : ~ i inum 0
             // Bool literals, sizeof, pub, base type kws (`i u f b s v`),
             // and fixed-width int/float kws (i8/i16/i32/i64/u16/u32/u64/f32).
             ? == n 1 {
@@ -3759,14 +3769,14 @@
     }
     {}
     // Generic instantiation: ( fname [T1 T2...] args... )
-    : s call_name fname
+    : ~ s call_name fname
     ? == ( nurl_lex_type lex ) TT_LBRACK
     { ( nurl_lex_advance lex )  // consume '['
-        : s type_args ``
-        : s mangle_sfx ``
+        : ~ s type_args ``
+        : ~ s mangle_sfx ``
         ~ != ( nurl_lex_type lex ) TT_RBRACK {
             : i tt_arg ( nurl_lex_type lex )
-            : s ta ``
+            : ~ s ta ``
             // Compound named-struct type arg `( Name X Y ... )` is parsed
             // via parse_type → returns "%Name__X__Y...". Strip the leading
             // '%' so the result is a single ident-shaped word that
@@ -3826,9 +3836,9 @@
         = call_name mangled
     }
     {}
-    : s argstr ``
-    : i first 1
-    : s first_arg_type ``
+    : ~ s argstr ``
+    : ~ i first 1
+    : ~ s first_arg_type ``
     // Variadic FFI (grammar v1.9): if gen_ffi_decl tagged this function
     // with `<fname>__variadic`, apply C default argument promotions to
     // every arg whose 0-based index is >= the fixed-param count. FFI
@@ -3857,7 +3867,7 @@
     // which the borrow checker does not track.
     : b is_consume_call & ( bck_is_destructor_name fname )
     ! ( seq fname `nurl_free` )
-    : i arg_idx 0
+    : ~ i arg_idx 0
     // Space-separated 0-based indices of the callee's `inout`
     // parameters (recorded into g_fn_inout by gen_fn_decl_concrete as
     // the callee is compiled). An argument at one of these positions
@@ -3910,7 +3920,7 @@
     ( __kw_has_named lex )
     { ^ ( gen_call_kwargs lex syms cg fname ) }
     {}
-    : s owned_arg_temps ``
+    : ~ s owned_arg_temps ``
     // N-readers-XOR-1-writer: a binding passed to this call as
     // `inout` is mutably borrowed for the call's duration; it must
     // be the *exclusive* path to that value at the call. `p5_seen`
@@ -4265,7 +4275,7 @@
         ( nurl_print `, ` ) ( nurl_print call_type ) ( nurl_print `* ` )
         ( nurl_print var_ptr ) ( nurl_print `\n` )
 
-        : s final_result ``
+        : ~ s final_result ``
         ? ( str_contains call_type `{` )
         {
             // Closure struct - extract function pointer and call with environment
@@ -4288,7 +4298,7 @@
     { ? is_function_pointer
         {
             // This is a function pointer parameter
-            : s final_result ``
+            : ~ s final_result ``
             ? ( str_contains call_type `{` )
             {  // Closure struct parameter
                 = final_result ( call_closure_function var_llvm_val call_type argstr cg )
@@ -4362,7 +4372,7 @@
     : i bck_cline ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
     // The condition is a value operand — a `^` here is a cascade.
-    : s cv ( gen_operand lex syms cg )
+    : ~ s cv ( gen_operand lex syms cg )
     : s ct ( nurl_get_last_type )
     // Allow non-i1 integer conditions (e.g. `? & i64a i64b { … }`) by
     // narrowing to i1 via `icmp ne … 0`.
@@ -4379,9 +4389,9 @@
     // arm's autodrop list. Without this, a return in the else-arm would emit
     // free() calls for allocas that are only populated on the then-arm path,
     // producing invalid IR that crashes LLVM's register allocator under -O2.
-    : s old_strs_t ``
-    : s old_structs_t ``
-    : s old_user_t ``
+    : ~ s old_strs_t ``
+    : ~ s old_structs_t ``
+    : ~ s old_user_t ``
     ? != 0 g_auto_drop_strings
     { = old_strs_t ( nurl_sym_get syms `__owned_strings__` )
         = old_structs_t ( nurl_sym_get syms `__owned_struct_fields__` )
@@ -4418,9 +4428,9 @@
     } {}
     ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
     ( emit ( nurl_str_cat le `:` ) )
-    : s old_strs_e ``
-    : s old_structs_e ``
-    : s old_user_e ``
+    : ~ s old_strs_e ``
+    : ~ s old_structs_e ``
+    : ~ s old_user_e ``
     ? != 0 g_auto_drop_strings
     { = old_strs_e ( nurl_sym_get syms `__owned_strings__` )
         = old_structs_e ( nurl_sym_get syms `__owned_struct_fields__` )
@@ -4476,7 +4486,7 @@
     // if both live and types differ, fall back to void (no phi needed).
     : s phi_ty ? != 0 tdr et2 tt2
     : b types_ok | != 0 tdr | != 0 edr ( seq tt2 et2 )
-    : s result `undef`
+    : ~ s result `undef`
     ? == 0 g_did_ret
     { ? & ! ( seq phi_ty `void` ) types_ok
         { : s res ( nurl_cg_reg cg )
@@ -4801,7 +4811,7 @@
             // AND pointer payloads `s` → `i8*`, neither of which
             // `nurl_sym_get syms minner_t` can resolve). Fall back to the
             // by-name struct lookup when the side-channel is empty.
-            : s minner_llvm ( nurl_sym_get syms `__last_call_res_t_llvm__` )
+            : ~ s minner_llvm ( nurl_sym_get syms `__last_call_res_t_llvm__` )
             ? == 0 ( nurl_str_len minner_llvm ) { = minner_llvm ( nurl_sym_get syms minner_t ) } {}
             ? != 0 ( nurl_str_len minner_llvm )
             { ( nurl_sym_def syms ( nurl_str_cat msynth `__res_t_llvm` ) minner_llvm ) }
@@ -4859,8 +4869,8 @@
     : ~ s fallback_pred ``
 
     // Exhaustive match tracking
-    : s seen_variants ``
-    : i has_wildcard 0
+    : ~ s seen_variants ``
+    : ~ i has_wildcard 0
 
     // Borrow checker (Phase 0d): open the match — the `match` row
     // carries the scrutinee's reads. `endmatch` closes it after the
@@ -4911,13 +4921,13 @@
             // Collect up to 3 payload slots before the arrow.  Each slot is either
             // an identifier (binds the payload) or an integer literal (compared).
             // Int-literal patterns carry no payload — skip the loop entirely.
-            : s pv0 ``
-            : s pv1 ``
-            : s pv2 ``
-            : s lit0 ``
-            : s lit1 ``
-            : s lit2 ``
-            : i pvc 0
+            : ~ s pv0 ``
+            : ~ s pv1 ``
+            : ~ s pv2 ``
+            : ~ s lit0 ``
+            : ~ s lit1 ``
+            : ~ s lit2 ``
+            : ~ i pvc 0
             ~ & & ! is_int_pat != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_QUEST {
                 : i pst ( nurl_lex_type lex )
                 ? ( is_ident_tok pst ) {
@@ -4971,7 +4981,7 @@
 
             // Generate arm label; wildcard skips comparison and jumps directly
             : s arm_label ( nurl_cg_lbl cg `arm` )
-            : s next_label ``
+            : ~ s next_label ``
             // Guards need a `next_label` to fall through to on a false
             // guard; a wildcard arm has none (and a guarded catch-all is
             // a contradiction anyway). Or-patterns + guards are kept
@@ -5099,9 +5109,9 @@
             ( nurl_sym_def syms `__cur_lbl__` arm_label )
             // Scope each match arm so payload bindings and owned-string entries
             // don't leak into sibling arms (see gen_cond for the same reasoning).
-            : s old_strs_m ``
-            : s old_structs_m ``
-            : s old_user_m ``
+            : ~ s old_strs_m ``
+            : ~ s old_structs_m ``
+            : ~ s old_user_m ``
             ? != 0 g_auto_drop_strings
             { = old_strs_m ( nurl_sym_get syms `__owned_strings__` )
                 = old_structs_m ( nurl_sym_get syms `__owned_struct_fields__` )
@@ -5111,13 +5121,13 @@
 
             // Bind first payload variable (enum field 1)
             ? != 0 ( nurl_str_len pv0 ) {
-                : s pt0 ( nurl_sym_get syms ( nurl_str_cat pattern_name `__payload__0` ) )
+                : ~ s pt0 ( nurl_sym_get syms ( nurl_str_cat pattern_name `__payload__0` ) )
                 // Bool patterns (T/F) on opt/res have no symbol entry — the payload
                 // type lives inside match_type as `{ i1, X }`. Strip the `{ i1, `
                 // prefix and ` }` suffix to recover X. Unlike named-enum variants
                 // whose payload is stored as opaque ptr, opt/res field 1 is already
                 // stored at its real type, so no ptr→X conversion is required.
-                : b pt0_is_opt_bool F
+                : ~ b pt0_is_opt_bool F
                 ? & == 0 ( nurl_str_len pt0 )
                 & | ( seq pattern_name `T` ) ( seq pattern_name `F` )
                 & >= ( nurl_str_len match_type ) 6
@@ -5292,8 +5302,8 @@
                         // ptr stored in the enum slot IS the struct's field-0 pointer
                         // (because aggregate construction does the inverse — extractvalue
                         // 0 + ptrtoint into the i64 slot). Reconstruct by insertvalue.
-                        : b pt0_is_struct_handle F
-                        : s pt0_f0_ty ``
+                        : ~ b pt0_is_struct_handle F
+                        : ~ s pt0_f0_ty ``
                         ? == ( nurl_str_get pt0 0 ) 37
                         { : s sname0 ( nurl_str_slice pt0 1 - ( nurl_str_len pt0 ) 1 )
                             : s var_list0 ( nurl_sym_get syms ( nurl_str_cat sname0 `__variants` ) )
@@ -5407,8 +5417,8 @@
                     // slots 1-2 fell straight to the i8* bitcast and stored a
                     // `ptr` into a `%Struct` slot (clang reject — the
                     // non-slot-0 struct-payload hole).
-                    : b pt1_is_struct_handle F
-                    : s pt1_f0_ty ``
+                    : ~ b pt1_is_struct_handle F
+                    : ~ s pt1_f0_ty ``
                     ? == ( nurl_str_get pt1 0 ) 37
                     { : s sname_pt1 ( nurl_str_slice pt1 1 - ( nurl_str_len pt1 ) 1 )
                         : s var_list_pt1 ( nurl_sym_get syms ( nurl_str_cat sname_pt1 `__variants` ) )
@@ -5474,8 +5484,8 @@
                 } {
                     // Mirror slot-0 reconstruction — same struct-payload hole
                     // as slot 1, one slot over (enum field 3).
-                    : b pt2_is_struct_handle F
-                    : s pt2_f0_ty ``
+                    : ~ b pt2_is_struct_handle F
+                    : ~ s pt2_f0_ty ``
                     ? == ( nurl_str_get pt2 0 ) 37
                     { : s sname_pt2 ( nurl_str_slice pt2 1 - ( nurl_str_len pt2 ) 1 )
                         : s var_list_pt2 ( nurl_sym_get syms ( nurl_str_cat sname_pt2 `__variants` ) )
@@ -5654,7 +5664,7 @@
     // non-void type.  Otherwise the match is treated as a statement.
     ? & & != 0 phi_count phi_ok ! ( seq phi_type `void` ) {
         : s final_reg ( nurl_cg_reg cg )
-        : s phi_full phi_entries
+        : ~ s phi_full phi_entries
         ? != 0 ( nurl_str_len fallback_pred ) {
             = phi_full ( nurl_str_cat phi_entries ( nurl_str_cat `, [ undef, %` ( nurl_str_cat fallback_pred ` ]` ) ) )
         } {}
@@ -5806,9 +5816,9 @@
     ( nurl_print elem_val ) ( nurl_print `, ` )
     ( nurl_print ptr_ty ) ( nurl_print ` ` ) ( nurl_print elem_ptr ) ( nurl_print `\n` )
     // Scope foreach body (see gen_cond / gen_loop).
-    : s old_strs_fe ``
-    : s old_structs_fe ``
-    : s old_user_fe ``
+    : ~ s old_strs_fe ``
+    : ~ s old_structs_fe ``
+    : ~ s old_user_fe ``
     ? != 0 g_auto_drop_strings
     { = old_strs_fe ( nurl_sym_get syms `__owned_strings__` )
         = old_structs_fe ( nurl_sym_get syms `__owned_struct_fields__` )
@@ -5869,7 +5879,7 @@
     ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
     ( emit ( nurl_str_cat lc `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lc )
-    : s cv ( gen_expr lex syms cg )
+    : ~ s cv ( gen_expr lex syms cg )
     : s cvt ( nurl_get_last_type )
     ? == ( nurl_lex_type lex ) TT_LBRACE
     {
@@ -5882,8 +5892,8 @@
         ( emit ( nurl_str_cat lb `:` ) )
         // Scope the loop body so `:` bindings don't leak into the outer
         // `__owned_strings__` list (see gen_cond for the same reasoning).
-        : s old_strs_lp ``
-        : s old_structs_lp ``
+        : ~ s old_strs_lp ``
+        : ~ s old_structs_lp ``
         ? != 0 g_auto_drop_strings
         { = old_strs_lp ( nurl_sym_get syms `__owned_strings__` )
             = old_structs_lp ( nurl_sym_get syms `__owned_struct_fields__` )
@@ -5967,7 +5977,7 @@
     : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
     ( bck_block_enter bck_line )
-    : s last `undef`
+    : ~ s last `undef`
     : ~ b any F
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         = last ( gen_stmt lex syms cg )
@@ -6014,7 +6024,7 @@
     // read-accumulator holds, i.e. the controlling `?`/`~`/`??`
     // condition that was evaluated just before this arm.
     ( bck_block_enter bck_line )
-    : s last `undef`
+    : ~ s last `undef`
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         = last ( gen_stmt lex syms cg )
         // A bare literal that is NOT the block's final expression (its
@@ -6057,7 +6067,7 @@
 @ mem_drop_owned i syms i cg s skip_name → v {
     : s dtop ( nurl_sym_get syms `__defer_top__` )
     ? == 0 ( nurl_str_len dtop )
-    { : s rest ( nurl_sym_get syms `__owned_slices__` )
+    { : ~ s rest ( nurl_sym_get syms `__owned_slices__` )
         ~ != 0 ( nurl_str_len rest ) {
             : s name ( str_first_word rest )
             = rest ( str_skip_word rest )
@@ -6105,7 +6115,7 @@
 @ mem_drop_owned_strings i syms i cg s skip_ptr → v {
     : s dtop ( nurl_sym_get syms `__defer_top__` )
     ? == 0 ( nurl_str_len dtop )
-    { : s rest ( nurl_sym_get syms `__owned_strings__` )
+    { : ~ s rest ( nurl_sym_get syms `__owned_strings__` )
         ~ != 0 ( nurl_str_len rest ) {
             : s ptr ( str_first_word rest )
             = rest ( str_skip_word rest )
@@ -6144,8 +6154,8 @@
 @ mem_path_to_indices s path → s {
     : i n ( nurl_str_len path )
     ? == n 0 { ^ `` } {}
-    : s out `, `
-    : i i 0
+    : ~ s out `, `
+    : ~ i i 0
     ~ < i n {
         : i c ( nurl_str_get path i )
         ? == c 46
@@ -6158,7 +6168,7 @@
 
 @ mem_own_add_struct_field i syms s ptr s sname s path s kind s leaf_sname s leaf_idx → v {
     : s cur ( nurl_sym_get syms `__owned_struct_fields__` )
-    : s entry ( nurl_str_cat3 ptr ` ` sname )
+    : ~ s entry ( nurl_str_cat3 ptr ` ` sname )
     = entry ( nurl_str_cat3 entry ` ` path )
     = entry ( nurl_str_cat3 entry ` ` kind )
     = entry ( nurl_str_cat3 entry ` ` leaf_sname )
@@ -6178,7 +6188,7 @@
     : s idxs ( nurl_sym_get syms `__last_agg_owned_fields__` )
     ? & != 0 ( nurl_str_len idxs ) == ( nurl_str_get vt 0 ) 37
     { : s sname ( nurl_str_slice vt 1 - ( nurl_str_len vt ) 1 )
-        : s rest idxs
+        : ~ s rest idxs
         ~ != 0 ( nurl_str_len rest ) {
             : s tok ( str_first_word rest )
             = rest ( str_skip_word rest )
@@ -6240,7 +6250,7 @@
 @ mem_drop_owned_struct_fields i syms i cg → v {
     : s dtop ( nurl_sym_get syms `__defer_top__` )
     ? == 0 ( nurl_str_len dtop )
-    { : s rest ( nurl_sym_get syms `__owned_struct_fields__` )
+    { : ~ s rest ( nurl_sym_get syms `__owned_struct_fields__` )
         ~ != 0 ( nurl_str_len rest ) {
             : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
             : s sname ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -6272,7 +6282,7 @@
         : i cur_len ( nurl_str_len cur )
         ? > cur_len old_len
         { : i skip ? == old_len 0 0 + old_len 1
-            : s rest ( nurl_str_slice cur skip - cur_len skip )
+            : ~ s rest ( nurl_str_slice cur skip - cur_len skip )
             ~ != 0 ( nurl_str_len rest ) {
                 : s ptr ( str_first_word rest )
                 = rest ( str_skip_word rest )
@@ -6295,7 +6305,7 @@
         : i cur_len ( nurl_str_len cur )
         ? > cur_len old_len
         { : i skip ? == old_len 0 0 + old_len 1
-            : s rest ( nurl_str_slice cur skip - cur_len skip )
+            : ~ s rest ( nurl_str_slice cur skip - cur_len skip )
             ~ != 0 ( nurl_str_len rest ) {
                 : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
                 : s sname ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -6323,7 +6333,7 @@
 @ mem_drop_user_drops i syms i cg s skip_ptr → v {
     : s dtop ( nurl_sym_get syms `__defer_top__` )
     ? == 0 ( nurl_str_len dtop )
-    { : s rest ( nurl_sym_get syms `__user_drops__` )
+    { : ~ s rest ( nurl_sym_get syms `__user_drops__` )
         ~ != 0 ( nurl_str_len rest ) {
             : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
             : s vt ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -6355,7 +6365,7 @@
         : i cur_len ( nurl_str_len cur )
         ? > cur_len old_len
         { : i skip ? == old_len 0 0 + old_len 1
-            : s rest ( nurl_str_slice cur skip - cur_len skip )
+            : ~ s rest ( nurl_str_slice cur skip - cur_len skip )
             ~ != 0 ( nurl_str_len rest ) {
                 : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
                 : s vt ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -7352,6 +7362,7 @@
         ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
         ( dbg_declare_local name ptr vt ( nurl_lex_line lex ) 0 syms )
         ( nurl_sym_def syms name vt )
+        ( rec_decl_loc syms name bck_line lex )
         ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
         // Only mark mutability if explicitly specified with ~
         ? is_mutable
@@ -7509,6 +7520,7 @@
                 ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
                 ( dbg_declare_local name ptr ptype ( nurl_lex_line lex ) 0 syms )
                 ( nurl_sym_def syms name ptype )
+                ( rec_decl_loc syms name bck_line lex )
                 ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
                 // Only mark mutability if explicitly specified with ~
                 ? is_mutable
@@ -7563,31 +7575,32 @@
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s name ( nurl_lex_val lex )
         ( nurl_lex_advance lex )
-        // Check mutability before allowing assignment
+        // Mutability enforcement. A binding introduced with `:` (and no
+        // `~`) is immutable; `= name expr` targeting it is a compile
+        // error. Mutability is opt-in and recorded as `<name>__mutable`
+        // at the declaration site — `: ~` locals/globals and `~`/inout
+        // parameters all set it. We only fire for a *known* binding (its
+        // type `vt` is recorded), so unknown / forward names fall
+        // through to the normal undefined-symbol path instead of a
+        // misleading immutability error.
         : s mut_check ( nurl_sym_get syms ( nurl_str_cat name `__mutable` ) )
         : s vt ( nurl_sym_get syms name )
         : s ptr ( nurl_sym_get syms ( nurl_str_cat name `__ptr` ) )
         : s glb ( nurl_sym_get syms ( nurl_str_cat name `__global` ) )
         : s param_check ( nurl_sym_get syms ( nurl_str_cat name `__param` ) )
-        // Check mutability only for variables using new syntax
-        : s newsyntax_check ( nurl_sym_get syms ( nurl_str_cat name `__newsyntax` ) )
-        ? != 0 ( nurl_str_len newsyntax_check )
-        {  // Variable uses new syntax, check if it's mutable
-            ? == 0 ( nurl_str_len mut_check )
-            {  // Variable exists with new syntax but is immutable
-                ? != 0 ( nurl_str_len param_check )
-                { ( die lex ( nurl_str_cat `cannot assign to immutable parameter: ` name ) ) }
-                { ? != 0 ( nurl_str_len glb )
-                    { ( die lex ( nurl_str_cat `cannot assign to immutable global: ` name ) ) }
-                    { ( die lex ( nurl_str_cat `cannot assign to immutable variable: ` name ) ) }
-                }
-            }
-            {}
+        ? & != 0 ( nurl_str_len vt ) == 0 ( nurl_str_len mut_check )
+        {  // known binding, declared immutable. Point the diagnostic at
+           // the declaration (recorded via rec_decl_loc) so the author
+           // knows exactly where to add `~`.
+            : s dfile ( nurl_sym_get syms ( nurl_str_cat name `__declfile` ) )
+            : s dline ( nurl_sym_get syms ( nurl_str_cat name `__declline` ) )
+            : s where ? != 0 ( nurl_str_len dline )
+            ( nurl_str_cat3 ` (declared at ` ( nurl_str_cat3 dfile `:` dline ) `; add ': ~' there to make it mutable)` )
+            ``
+            : s kind ? != 0 ( nurl_str_len param_check ) `parameter`
+            ? != 0 ( nurl_str_len glb ) `global` `variable`
+            ( die lex ( nurl_str_cat3 ( nurl_str_cat `cannot assign to immutable ` kind ) ( nurl_str_cat `: ` name ) where ) )
         }
-        {}
-        // Always check parameters regardless of syntax
-        ? & == 0 ( nurl_str_len mut_check ) != 0 ( nurl_str_len param_check )
-        { ( die lex ( nurl_str_cat `cannot assign to immutable parameter: ` name ) ) }
         {}
         // Phase 2B reassignment-drop: if the LHS is an owned i8* binding and
         // the RHS is a fresh allocating call, free the old value before
@@ -8303,11 +8316,11 @@
             // Struct pointer (%T*): if the IDENT names a struct field,
             // emit `gep %T, %T* ov, i32 0, i32 fidx` + load.
             // Prioritize integer variable index if it exists.
-            : b is_field_access F
+            : ~ b is_field_access F
             : s fname ( nurl_lex_val lex )
             : s var_t ( nurl_sym_get syms fname )
-            : s fidx_s ``
-            : s ftype ``
+            : ~ s fidx_s ``
+            : ~ s ftype ``
             : ~ s fld_uns ``
             ? & elem_is_struct ( is_ident_tok ( nurl_lex_type lex ) )
             { ? > ( int_width var_t ) 0
@@ -8484,8 +8497,8 @@
     ( nurl_lex_advance lex )  // consume '@'
     : s agg_ty ( parse_type lex )  // parse the aggregate type
     ( expect lex TT_LBRACE )  // consume '{'
-    : s result `undef`
-    : i idx 0
+    : ~ s result `undef`
+    : ~ i idx 0
     // Phase 2C/2D: collect indices of fields populated by a fresh allocating
     // call (i8* via nurl_str_cat et al, or slice via `[T | ...]` literal /
     // slice-returning call), AND nested owned subfields from inner struct
@@ -8493,9 +8506,9 @@
     // space-separated tokens `<path>:<kind>:<leaf_sname>:<leaf_idx>` — path
     // is dot-separated (flat: single int; nested: e.g. `0.1`). Only applies
     // to named-struct aggregates (agg_ty starting with %).
-    : s owned_field_idxs ``
+    : ~ s owned_field_idxs ``
     // Current struct's bare name (without leading %). Empty for anon aggs.
-    : s cur_sname ``
+    : ~ s cur_sname ``
     ? == ( nurl_str_get agg_ty 0 ) 37
     { = cur_sname ( nurl_str_slice agg_ty 1 - ( nurl_str_len agg_ty ) 1 ) }
     {}
@@ -8558,7 +8571,7 @@
         // in both branches so owned_field_idxs never aliases ptok (which is
         // freed by the loop-body scope-exit drop).
         ? & != 0 g_auto_drop_strings != 0 ( nurl_str_len cur_sname )
-        { : s sub ( nurl_sym_get syms `__last_agg_owned_fields__` )
+        { : ~ s sub ( nurl_sym_get syms `__last_agg_owned_fields__` )
             ~ != 0 ( nurl_str_len sub ) {
                 : s subtok ( str_first_word sub )
                 = sub ( str_skip_word sub )
@@ -8571,8 +8584,8 @@
 
         // For payload fields (idx > 0): conversion depends on aggregate type.
         // opt/res types ({ i1, ... }) need i64 coercion; enum types need ptr coercion.
-        : s actual_fval fval
-        : s actual_fty fty
+        : ~ s actual_fval fval
+        : ~ s actual_fty fty
         ? > idx 0
         {  // Detect opt/res aggregate: starts with "{ i1, " (6 chars).
             // For opt types the payload field type = T (may be struct %Foo or i64 or i8*).
@@ -8757,10 +8770,10 @@
             }
             {  // Check if this is actually an enum type
                 // Extract type name from agg_ty (e.g., "%Slice" from "%Slice")
-                : s type_name ``
+                : ~ s type_name ``
                 ? == ( nurl_str_get agg_ty 0 ) 37
                 {  // Named type starting with '%' - extract name
-                    : i end_pos 1
+                    : ~ i end_pos 1
                     ~ & < end_pos ( nurl_str_len agg_ty ) != ( nurl_str_get agg_ty end_pos ) 32 {
                         = end_pos + end_pos 1
                     }
@@ -8796,7 +8809,7 @@
                         // otherwise. `inttoptr i8 … to ptr` would zero-extend
                         // unconditionally and corrupt a signed payload. i64
                         // payloads inttoptr directly.
-                        : s wide_val fval
+                        : ~ s wide_val fval
                         ? < ( int_width fty ) 64
                         { : s ext_reg ( nurl_cg_reg cg )
                             : s ext_op ? != 0 ( nurl_str_len fld_unsigned ) ` = zext ` ` = sext `
@@ -8978,8 +8991,8 @@
     : s elem_ty ( parse_type lex )  // e.g. "i64"
     ( expect lex TT_PIPE )  // consume '|'
     // Collect value registers (space-separated) and count
-    : s vals ``
-    : i count 0
+    : ~ s vals ``
+    : ~ i count 0
     ~ != ( nurl_lex_type lex ) TT_RBRACK {
         : s v ( gen_expr lex syms cg )
         = vals ? == 0 count v ( nurl_str_cat vals ( nurl_str_cat ` ` v ) )
@@ -9008,8 +9021,8 @@
     ( nurl_print ` = bitcast i8* ` ) ( nurl_print raw_ptr )
     ( nurl_print ` to ` ) ( nurl_print elem_ty ) ( nurl_print `*\n` )
     // Store each value at successive GEP indices
-    : s rest vals
-    : i idx 0
+    : ~ s rest vals
+    : ~ i idx 0
     ~ < idx count {
         : s v ( str_first_word rest )
         = rest ( str_skip_word rest )
@@ -9302,11 +9315,11 @@
     { ^ `` }  // No captures
     {}
 
-    : s ty `{ i64`  // field 0: refcount
-    : s vars captured_vars
+    : ~ s ty `{ i64`  // field 0: refcount
+    : ~ s vars captured_vars
     ~ != 0 ( nurl_str_len vars ) {
         : s var ( str_first_word vars )
-        : s vt ( nurl_sym_get syms var )
+        : ~ s vt ( nurl_sym_get syms var )
         ? == 0 ( nurl_str_len vt ) { = vt `i64` } {}
         // Mutable multi-field structs are captured by pointer so writes
         // through the closure observe the caller's alloca.
@@ -9367,8 +9380,8 @@
     // ALLOCA POINTER itself — the env field type is `T*`, the body
     // reads the pointer back and uses it as the var's `__ptr` so
     // every read/write reaches the caller's alloca.
-    : s vars captured_vars
-    : i field_idx 1
+    : ~ s vars captured_vars
+    : ~ i field_idx 1
     ~ != 0 ( nurl_str_len vars ) {
         : s var ( str_first_word vars )
         : s var_type ( nurl_sym_get syms var )
@@ -9377,7 +9390,7 @@
 
         // Effective env-field type and the value we store there.
         : s eff_type ? cap_byref ( nurl_str_cat var_type `*` ) var_type
-        : s loaded ( nurl_cg_reg cg )
+        : ~ s loaded ( nurl_cg_reg cg )
         ? cap_byref
         {  // Store the alloca pointer itself — no load, no copy.
             = loaded var_alloca }
@@ -9501,9 +9514,9 @@
 @ gen_closure_expr i lex i syms i cg → s {
 
     // Parse parameters: type name pairs before arrow
-    : s param_types ``
-    : s param_names ``
-    : i param_count 0
+    : ~ s param_types ``
+    : ~ s param_names ``
+    : ~ i param_count 0
 
     // Parse parameters until we see arrow
     ~ != ( nurl_lex_type lex ) TT_ARROW {
@@ -9549,7 +9562,7 @@
 
     // Build inline env struct type (e.g., "{ i64, i64 }") if there are captures.
     // Using inline types avoids LLVM named-struct forward-reference issues.
-    : s env_struct_name ``
+    : ~ s env_struct_name ``
     ? > captured_count 0
     { = env_struct_name ( gen_env_struct_type `` captured_vars syms ) }
     { = env_struct_name `null` }
@@ -9567,7 +9580,7 @@
     // their original `!dbg !N` attachments.
     : i saved_dbg_sp g_dbg_current_subprogram
     : i saved_dbg_loc g_dbg_current_loc
-    : i closure_sp_id 0
+    : ~ i closure_sp_id 0
     ? != g_dbg_enabled 0
     { = closure_sp_id ( dbg_emit_subprogram closure_fn_name ( nurl_lex_line lex ) )
         = g_dbg_current_subprogram closure_sp_id
@@ -9577,9 +9590,9 @@
     // Emit function header
     ( nurl_print `\ndefine ` ) ( nurl_print ret_type ) ( nurl_print ` @` )
     ( nurl_print closure_fn_name ) ( nurl_print `(i8* %__env` )
-    : s body_param_types param_types
-    : s body_param_names param_names
-    : i bi 0
+    : ~ s body_param_types param_types
+    : ~ s body_param_names param_names
+    : ~ i bi 0
     ~ < bi param_count {
         ( nurl_print `, ` )
         : s bpty ( seplist_first body_param_types )
@@ -9608,9 +9621,9 @@
     ( nurl_sym_def body_syms `__fn_param_names__` `` )
 
     // Register closure parameters
-    : s bp_types param_types
-    : s bp_names param_names
-    : i bpi 0
+    : ~ s bp_types param_types
+    : ~ s bp_names param_names
+    : ~ i bpi 0
     ~ < bpi param_count {
         : s bpname ( str_first_word bp_names )
         : s bptype ( seplist_first bp_types )
@@ -9659,11 +9672,11 @@
         //     allocation through this shared pointer. The body sees the same
         //     binding shape (`__ptr` + native type), so no other path needs
         //     to special-case it.
-        : s caps captured_vars
-        : i cap_idx 1
+        : ~ s caps captured_vars
+        : ~ i cap_idx 1
         ~ != 0 ( nurl_str_len caps ) {
             : s cap_name ( str_first_word caps )
-            : s cap_type ( nurl_sym_get syms cap_name )
+            : ~ s cap_type ( nurl_sym_get syms cap_name )
             ? == 0 ( nurl_str_len cap_type ) { = cap_type `i64` } {}
             : b cap_byref ( __is_capture_byref cap_name syms )
             // Escape analysis: a by-pointer capture references
@@ -9754,10 +9767,10 @@
     = g_dbg_current_loc saved_dbg_loc
 
     // Return a function pointer constant
-    : s fn_ptr_type ( nurl_str_cat `{ ` ( nurl_str_cat ret_type `(` ) )
+    : ~ s fn_ptr_type ( nurl_str_cat `{ ` ( nurl_str_cat ret_type `(` ) )
     = fn_ptr_type ( nurl_str_cat fn_ptr_type `i8*` )
-    : s types1 param_types
-    : i j 0
+    : ~ s types1 param_types
+    : ~ i j 0
     ~ < j param_count {
         = fn_ptr_type ( nurl_str_cat ( nurl_str_cat fn_ptr_type `, ` ) ( seplist_first types1 ) )
         = types1 ( seplist_rest types1 )
@@ -9766,7 +9779,7 @@
     = fn_ptr_type ( nurl_str_cat fn_ptr_type `)*, i8* }` )
 
     // Allocate and populate environment if there are captures
-    : s env_ptr `null`
+    : ~ s env_ptr `null`
     ? > captured_count 0
     {
         = env_ptr ( gen_env_allocation env_struct_name captured_vars syms cg )
@@ -9778,8 +9791,8 @@
     ( nurl_print `  ` ) ( nurl_print result )
     ( nurl_print ` = insertvalue ` ) ( nurl_print fn_ptr_type )
     ( nurl_print ` undef, ` ) ( nurl_print ret_type ) ( nurl_print `(i8*` )
-    : s types2 param_types
-    : i k 0
+    : ~ s types2 param_types
+    : ~ i k 0
     ~ < k param_count {
         ( nurl_print `, ` ) ( nurl_print ( seplist_first types2 ) )
         = types2 ( seplist_rest types2 )
@@ -9842,8 +9855,8 @@
 @ count_words s word_list → i {
     ? == 0 ( nurl_str_len word_list ) ^ 0 {}
 
-    : i count 0
-    : s remaining word_list
+    : ~ i count 0
+    : ~ s remaining word_list
     ~ != 0 ( nurl_str_len remaining ) {
         = remaining ( str_skip_word remaining )
         = count + count 1
@@ -9855,7 +9868,7 @@
 @ str_contains s word_list s target → b {
     ? == 0 ( nurl_str_len word_list ) ^ F {}
 
-    : s remaining word_list
+    : ~ s remaining word_list
     ~ != 0 ( nurl_str_len remaining ) {
         : s current_word ( str_first_word remaining )
         ? ( seq current_word target ) ^ T {}
@@ -9868,12 +9881,12 @@
 // Returns a space-separated string of captured variable names
 
 @ simple_capture_analysis i lex i outer_syms s closure_params → s {
-    : s captured_vars ``
-    : i captured_count 0
+    : ~ s captured_vars ``
+    : ~ i captured_count 0
     ( nurl_lex_advance lex )  // consume opening '{'
 
     // Scan tokens in closure body until closing brace
-    : i brace_depth 1
+    : ~ i brace_depth 1
     ~ > brace_depth 0 {
         : i tt ( nurl_lex_type lex )
 
@@ -10011,14 +10024,14 @@
         {
             // For non-void functions, return a constant value for now
             : s result ( nurl_cg_reg cg )
-            : s code ( nurl_str_cat `  ` result )
+            : ~ s code ( nurl_str_cat `  ` result )
             = code ( nurl_str_cat code ` = add i64 42, 0\n` )
             code
         }
     }
     {
         // Has captures - extract from environment and return first one
-        : s code ``
+        : ~ s code ``
 
         // Cast environment pointer to proper struct type
         : s typed_env ( nurl_cg_reg cg )
@@ -10178,7 +10191,7 @@
     // struct here so let_stmt can bind it to the declared type without a
     // separate cast. Only fires for res types (! T E lowers to { i1, i64 }).
     : s call_nurl2 ( nurl_sym_get syms `__last_nurl_call__` )
-    : s inner_nurl ``
+    : ~ s inner_nurl ``
     : b is_res & >= ( nurl_str_len call_nurl2 ) 2
     ( seq ( nurl_str_slice call_nurl2 0 2 ) `! ` )
     ? is_res
@@ -10191,10 +10204,10 @@
     //       Pt2, Tagged): i64 is a heap-box %X* — inttoptr + load + nurl_free.
     //   (c) X is a wide enum (max_payloads > 0): same heap-box unbox as (b).
     // Mirrors gen_match's match-arm reconstruction at lines ~1442–1502.
-    : b is_struct_handle F
-    : b is_heapbox_struct F
-    : b is_heapbox_enum F
-    : s f0_ty ``
+    : ~ b is_struct_handle F
+    : ~ b is_heapbox_struct F
+    : ~ b is_heapbox_enum F
+    : ~ s f0_ty ``
     ? & ( seq inner_ty `i64` ) & != 0 ( nurl_str_len struct_ty ) == ( nurl_str_get struct_ty 0 ) 37
     { : s sname ( nurl_str_slice struct_ty 1 - ( nurl_str_len struct_ty ) 1 )
         : s vlist ( nurl_sym_get syms ( nurl_str_cat sname `__variants` ) )
@@ -10247,7 +10260,7 @@
 // str_first_word: first space-delimited word in str.
 @ str_first_word s str → s {
     : i slen ( nurl_str_len str )
-    : i pos 0
+    : ~ i pos 0
     ~ & < pos slen != ( nurl_str_get str pos ) 32 { = pos + pos 1 }
     ( nurl_str_slice str 0 pos )
 }
@@ -10255,7 +10268,7 @@
 // str_skip_word: str with first word (and following space) removed.
 @ str_skip_word s str → s {
     : i slen ( nurl_str_len str )
-    : i pos 0
+    : ~ i pos 0
     ~ & < pos slen != ( nurl_str_get str pos ) 32 { = pos + pos 1 }
     ? & < pos slen == ( nurl_str_get str pos ) 32 { = pos + pos 1 } {}
     ( nurl_str_slice str pos - slen pos )
@@ -10263,7 +10276,7 @@
 
 // str_contains_word: true if 'word' appears as a whole word in space-separated 'list'.
 @ str_contains_word s list s word → b {
-    : s rest list
+    : ~ s rest list
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest )
         = rest ( str_skip_word rest )
@@ -10320,7 +10333,7 @@
     ? == has_wildcard 0 {
         : s all ( nurl_sym_get syms ( nurl_str_cat ename `__variants` ) )
         ? != 0 ( nurl_str_len all ) {
-            : s rest all
+            : ~ s rest all
             ~ != 0 ( nurl_str_len rest ) {
                 : s vname ( str_first_word rest )
                 = rest ( str_skip_word rest )
@@ -10380,8 +10393,8 @@
 // subst_source: replace whole-word occurrences of 'from' with 'to' in src.
 // Words are space-separated tokens as produced by collect_fn_body.
 @ subst_source s src s from s to → s {
-    : s result ``
-    : s rest src
+    : ~ s result ``
+    : ~ s rest src
     ~ != 0 ( nurl_str_len rest ) {
         : s word ( str_first_word rest )
         = rest ( str_skip_word rest )
@@ -10395,10 +10408,10 @@
 // in a raw source string (preserves whitespace, backticks, punctuation).
 // Identifier chars: alpha, digit, underscore (95).
 @ subst_source_raw s src s from s to → s {
-    : s result ``
+    : ~ s result ``
     : i slen ( nurl_str_len src )
-    : i pos 0
-    : i word_start 0
+    : ~ i pos 0
+    : ~ i word_start 0
     ~ < pos slen {
         : i ch ( nurl_str_get src pos )
         : b is_ident ( __is_ident_char ch )
@@ -10426,9 +10439,9 @@
 // Returns space-separated token text. String literals lack their backtick
 // delimiters and will not re-lex correctly; avoid them in generic bodies.
 @ collect_fn_body i lex → s {
-    : s result ( nurl_str_cat ( nurl_lex_val lex ) ` ` )
+    : ~ s result ( nurl_str_cat ( nurl_lex_val lex ) ` ` )
     ( nurl_lex_advance lex )
-    : i depth 1
+    : ~ i depth 1
     ~ != depth 0 {
         : i tt2 ( nurl_lex_type lex )
         ? == tt2 TT_LBRACE { = depth + depth 1 } {}
@@ -10513,7 +10526,7 @@
     ( nurl_sym_def g_generic_syms
     ( nurl_str_cat fname `__src_line` ) ( nurl_str_int src_line ) )
     ( expect lex TT_LBRACK )
-    : s tparams ``
+    : ~ s tparams ``
     ~ != ( nurl_lex_type lex ) TT_RBRACK {
         : s tp ( nurl_lex_val lex )
         ( nurl_lex_advance lex )
@@ -10536,7 +10549,7 @@
     }
     ( expect lex TT_RBRACK )
     // Collect params/return/body tokens until EOF
-    : s src ``
+    : ~ s src ``
     ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF {
         = src ( nurl_str_cat src ( nurl_str_cat ( nurl_lex_val lex ) ` ` ) )
         ( nurl_lex_advance lex )
@@ -10559,9 +10572,9 @@
 @ compute_generic_ret_ty s fname s type_args → s {
     : s tparams ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__tparams` ) )
     : s gsrc ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__gsrc` ) )
-    : s subst_src gsrc
-    : s tp_rest tparams
-    : s ta_rest type_args
+    : ~ s subst_src gsrc
+    : ~ s tp_rest tparams
+    : ~ s ta_rest type_args
     ~ != 0 ( nurl_str_len tp_rest ) {
         : s tp ( str_first_word tp_rest )
         = tp_rest ( str_skip_word tp_rest )
@@ -10575,7 +10588,7 @@
     ~ & != ( nurl_lex_type lex2 ) TT_ARROW != ( nurl_lex_type lex2 ) TT_EOF {
         ( nurl_lex_advance lex2 )
     }
-    : s ret_ty `i64`
+    : ~ s ret_ty `i64`
     ? == ( nurl_lex_type lex2 ) TT_ARROW
     { ( nurl_lex_advance lex2 )
         = ret_ty ( parse_type lex2 )
@@ -10631,7 +10644,7 @@
         }
         ? ! skip {
             // Compute mangled name by walking tparams + ta_list in parallel.
-            : s mangled sname
+            : ~ s mangled sname
             : ~ s tp_r tparams
             : ~ s ta_r ta_list
             ~ & != 0 ( nurl_str_len tp_r ) != 0 ( nurl_str_len ta_r ) {
@@ -10733,7 +10746,7 @@
 // emit_str_globals: emit global constants for string literals [base..top).
 @ emit_str_globals i base i top → v {
     : i sg g_str_syms
-    : i k base
+    : ~ i k base
     ~ < k top {
         : s kstr ( nurl_str_int k )
         : s enc ( nurl_sym_get sg ( nurl_str_cat `__enc_` kstr ) )
@@ -10750,7 +10763,7 @@
 @ emit_closure_globals → v {
     // Emit new closure function definitions (from watermark to current)
     : i defs_syms g_closure_defs
-    : i idx g_closure_emit_base
+    : ~ i idx g_closure_emit_base
     ~ < idx g_func_count {
         : s funcdef ( nurl_sym_get defs_syms ( nurl_str_int idx ) )
         ? != 0 ( nurl_str_len funcdef )
@@ -10844,8 +10857,8 @@
         ( nurl_sym_def syms `__fn_ret_str_owned__` `` )
     }
     {}
-    : s params_str ``
-    : i pct 0
+    : ~ s params_str ``
+    : ~ i pct 0
     // Accumulate the 0-based indices of `inout`
     // (and `sink`) parameters as gen_fn_param reports them, then
     // publish the sets to g_fn_inout / g_fn_sink so call sites can
@@ -10949,7 +10962,7 @@
     ( nurl_sym_def syms `__defer_top__` `` )
     // Pre-allocate return-value slot for defer routing (non-void functions).
     // Unused if no defers are registered; optimiser removes it.
-    : s ret_val_ptr ``
+    : ~ s ret_val_ptr ``
     ? ! ( seq ret_ty `void` )
     { : s p ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print p )
@@ -11002,8 +11015,8 @@
     ``
     // Phase 2B: compute skip_str_ptr — the alloca ptr of the owned string
     // being returned (if any), so mem_drop_owned_strings doesn't free it.
-    : s skip_str_ptr ``
-    : s skip_user_ptr ``
+    : ~ s skip_str_ptr ``
+    : ~ s skip_user_ptr ``
     ? != 0 g_auto_drop_strings
     { : s rid_ptr ( nurl_sym_get syms ( nurl_str_cat ret_ident `__ptr` ) )
         = skip_str_ptr ? & ( seq ret_ty `i8*` ) ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) rid_ptr )
@@ -11307,17 +11320,17 @@
 // function-parameter case (previously the closure capture half was
 // closed by the by-pointer capture fix earlier today).
 @ __alloca_struct_params i syms i cg → v {
-    : s roster ( nurl_sym_get syms `__fn_params__` )
+    : ~ s roster ( nurl_sym_get syms `__fn_params__` )
     ~ != 0 ( nurl_str_len roster ) {
         // Take one (name,type) pair: everything up to the next '|'.
         : i rlen ( nurl_str_len roster )
-        : i pi 0
+        : ~ i pi 0
         ~ & < pi rlen != ( nurl_str_get roster pi ) 124 { = pi + pi 1 }
         : s pair ( nurl_str_slice roster 0 pi )
         = roster ? < pi rlen ( nurl_str_slice roster + pi 1 - rlen - pi 1 ) ``
         // Split pair on '\t'.
         : i plen ( nurl_str_len pair )
-        : i ti 0
+        : ~ i ti 0
         ~ & < ti plen != ( nurl_str_get pair ti ) 9 { = ti + ti 1 }
         : s pname ( nurl_str_slice pair 0 ti )
         : s ptype ? < ti plen ( nurl_str_slice pair + ti 1 - plen - ti 1 ) ``
@@ -11392,8 +11405,8 @@
     // can be checked at parse_type_base / gen_agg_lit time.
     ( vis_record_type sname ( vis_take_pending_pub ) )
     ( nurl_print `%` ) ( nurl_print sname ) ( nurl_print ` = type { ` )
-    : i first 1
-    : i fidx 0
+    : ~ i first 1
+    : ~ i fidx 0
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         : s flt ( parse_type lex )
         ? ( is_ident_tok ( nurl_lex_type lex ) )
@@ -11510,6 +11523,7 @@
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s cname ( nurl_lex_val lex )
         ( vis_record_const cname const_pub )
+        ( rec_decl_loc syms cname ( nurl_lex_line lex ) lex )
         ( nurl_lex_advance lex )
         : i tt ( nurl_lex_type lex )
         ? == tt TT_INT
@@ -11675,8 +11689,8 @@
     ( expect lex TT_AT )  // consume '@'
     : s fname ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
-    : s params_str ``
-    : i pct 0
+    : ~ s params_str ``
+    : ~ i pct 0
     ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF {
         ? == ( nurl_lex_type lex ) TT_ELLIPSIS
         { ( nurl_lex_advance lex )  // consume '...'
@@ -12091,9 +12105,9 @@
     ( vis_record_type ename enum_pub )
     ( nurl_print `; enum ` ) ( nurl_print ename ) ( nurl_print `\n` )
     ( expect lex TT_LBRACE )
-    : i tag 0
-    : i max_payloads 0
-    : s variants_str ``
+    : ~ i tag 0
+    : ~ i max_payloads 0
+    : ~ s variants_str ``
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         : s vname ( nurl_lex_val lex )
         ( nurl_lex_advance lex )
@@ -12113,7 +12127,7 @@
         // Collect payload types indexed: vname__payload__0, vname__payload__1, ...
         // TYPE_KW / sigils → always a type, never a variant name.
         // IDENT → payload only if it is a known struct type (starts with '%' in syms).
-        : i pcount 0
+        : ~ i pcount 0
         ~ & != ( nurl_lex_type lex ) TT_RBRACE ( could_be_payload_type lex syms ) {
             : s pt ( parse_type lex )
             ( nurl_sym_def syms ( nurl_str_cat vname ( nurl_str_cat `__payload__` ( nurl_str_int pcount ) ) ) pt )
@@ -12139,7 +12153,7 @@
     // Generate LLVM type declaration: { i64, ptr, ptr, ... } with max_payloads ptr slots
     ( nurl_print `%` ) ( nurl_print ename )
     ( nurl_print ` = type { i64` )
-    : i pi 0
+    : ~ i pi 0
     ~ < pi max_payloads {
         ( nurl_print `, ptr` )
         = pi + pi 1
@@ -12314,12 +12328,12 @@
 // comments are preserved verbatim so that name mangling does not touch
 // strings or documentation.
 @ alias_rewrite_source s src s names s prefix → s {
-    : s result ``
+    : ~ s result ``
     : i slen ( nurl_str_len src )
-    : i pos 0
-    : i word_start 0
-    : i in_string 0  // 1 while scanning inside a backtick-delimited string
-    : i in_comment 0  // 1 while scanning inside a // line comment
+    : ~ i pos 0
+    : ~ i word_start 0
+    : ~ i in_string 0  // 1 while scanning inside a backtick-delimited string
+    : ~ i in_comment 0  // 1 while scanning inside a // line comment
     ~ < pos slen {
         : i ch ( nurl_str_get src pos )
         ? != in_string 0
@@ -12380,7 +12394,7 @@
     ( nurl_lex_advance lex )  // consume '$'
     : s path ( __norm_import_path ( nurl_lex_val lex ) )
     ( nurl_lex_advance lex )  // consume path STR
-    : s alias ``
+    : ~ s alias ``
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { = alias ( nurl_lex_val lex )
         ( nurl_lex_advance lex )
@@ -12425,9 +12439,9 @@
 @ emit_one_instantiation s fname s mangled s type_args s caller_file s caller_line i syms i cg → v {
     : s tparams ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__tparams` ) )
     : s gsrc ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__gsrc` ) )
-    : s subst_src gsrc
-    : s tp_rest tparams
-    : s ta_rest type_args
+    : ~ s subst_src gsrc
+    : ~ s tp_rest tparams
+    : ~ s ta_rest type_args
     ~ != 0 ( nurl_str_len tp_rest ) {
         : s tp ( str_first_word tp_rest )
         = tp_rest ( str_skip_word tp_rest )
@@ -12462,7 +12476,7 @@
 // flush_deferred_instantiations: emit all queued generic instantiations.
 // Re-reads count each iteration so transitive generics are also emitted.
 @ flush_deferred_instantiations i syms i cg → v {
-    : i k 0
+    : ~ i k 0
     ~ < k ( nurl_str_to_int ( nurl_sym_get g_generic_syms `__deferred_count__` ) ) {
         : s base ( nurl_str_cat `__def` ( nurl_str_int k ) )
         : s fname ( nurl_sym_get g_generic_syms ( nurl_str_cat base `_fn` ) )
@@ -12923,7 +12937,7 @@
     // observe TT_EOF on its next step.
     ? == ( nurl_lex_type lex ) TT_LBRACE
     { ( nurl_lex_advance lex )
-        : i depth 1
+        : ~ i depth 1
         ~ & != depth 0 != ( nurl_lex_type lex ) TT_EOF {
             : i tt2 ( nurl_lex_type lex )
             ? == tt2 TT_LBRACE { = depth + depth 1 } {}
@@ -12986,7 +13000,7 @@
     ~ & != ( nurl_lex_type lex2 ) TT_ARROW != ( nurl_lex_type lex2 ) TT_EOF {
         ( nurl_lex_advance lex2 )
     }
-    : s ret `i64`
+    : ~ s ret `i64`
     ? == ( nurl_lex_type lex2 ) TT_ARROW
     { ( nurl_lex_advance lex2 )
         = ret ( parse_type lex2 )
@@ -13000,7 +13014,7 @@
 // ret_ty) so that call sites resolve. Called during impl scan.
 @ register_missing_defaults s tname s impl_nurl s impl_llvm s impl_mangle s provided i syms → v {
     : s tparam ( nurl_sym_get g_trait_syms ( nurl_str_cat tname `__tparam` ) )
-    : s defaults ( nurl_sym_get g_trait_syms ( nurl_str_cat tname `__defaults` ) )
+    : ~ s defaults ( nurl_sym_get g_trait_syms ( nurl_str_cat tname `__defaults` ) )
     ~ != 0 ( nurl_str_len defaults ) {
         : s mname ( str_first_word defaults )
         = defaults ( str_skip_word defaults )
@@ -13042,7 +13056,7 @@
     : s tname ( nurl_lex_val lex )
     ( nurl_lex_advance lex )  // skip trait name
     // Capture optional type param [T]  (bare letter T lexes as TT_BOOL)
-    : s tparam ``
+    : ~ s tparam ``
     ? == ( nurl_lex_type lex ) TT_LBRACK
     { ( nurl_lex_advance lex )
         : i tpt ( nurl_lex_type lex )
@@ -13067,7 +13081,7 @@
         // generic bound `A: tname` can be verified at instantiation.
         ( nurl_sym_def g_trait_syms ( nurl_str_cat3 tname `##` impl_llvm ) `1` )
         ( expect lex TT_LBRACE )
-        : s provided ``
+        : ~ s provided ``
         ~ != ( nurl_lex_type lex ) TT_RBRACE {
             ? == ( nurl_lex_type lex ) TT_AT
             { ( nurl_lex_advance lex )  // skip '@'
@@ -13111,7 +13125,7 @@
 // "@ mname__ImplMangle", and re-lex/emit via gen_fn_decl.
 @ emit_missing_defaults s tname s impl_nurl s impl_mangle s provided i syms i cg → v {
     : s tparam ( nurl_sym_get g_trait_syms ( nurl_str_cat tname `__tparam` ) )
-    : s defaults ( nurl_sym_get g_trait_syms ( nurl_str_cat tname `__defaults` ) )
+    : ~ s defaults ( nurl_sym_get g_trait_syms ( nurl_str_cat tname `__defaults` ) )
     ~ != 0 ( nurl_str_len defaults ) {
         : s mname ( str_first_word defaults )
         = defaults ( str_skip_word defaults )
@@ -13157,7 +13171,7 @@
         : s impl_llvm ( parse_type lex )
         : s impl_mangle ( mangle_type impl_llvm )
         ( expect lex TT_LBRACE )
-        : s provided ``
+        : ~ s provided ``
         ~ != ( nurl_lex_type lex ) TT_RBRACE {
             ? == ( nurl_lex_type lex ) TT_AT
             { ( nurl_lex_advance lex )  // skip '@'
@@ -13212,8 +13226,8 @@
     ( nurl_lex_advance lex )  // consume '('
     : s sname ( nurl_lex_val lex )
     ( nurl_lex_advance lex )  // consume Name
-    : s ta_list ``
-    : s mangle_sfx ``
+    : ~ s ta_list ``
+    : ~ s mangle_sfx ``
     ~ & != ( nurl_lex_type lex ) TT_RPAREN != ( nurl_lex_type lex ) TT_EOF {
         : ~ s ta_word ``
         : ~ s ta_lty ``
@@ -13271,7 +13285,7 @@
                 ( nurl_lex_advance lex )
                 ? == ( nurl_lex_type lex ) TT_LBRACK {
                     ( nurl_lex_advance lex )
-                    : s tparams ``
+                    : ~ s tparams ``
                     ~ & != ( nurl_lex_type lex ) TT_RBRACK != ( nurl_lex_type lex ) TT_EOF {
                         : s tp ( nurl_lex_val lex )
                         ( nurl_lex_advance lex )
@@ -13301,7 +13315,7 @@
                 : s tparams ( nurl_sym_get g_generic_struct_syms ( nurl_str_cat cand `__stparams` ) )
                 ? != 0 ( nurl_str_len tparams ) {
                     ( nurl_lex_advance lex )  // past cand ident
-                    : s ta_list ``
+                    : ~ s ta_list ``
                     ~ & != ( nurl_lex_type lex ) TT_RPAREN != ( nurl_lex_type lex ) TT_EOF {
                         : ~ s ta ``
                         ? == ( nurl_lex_type lex ) TT_LPAREN
@@ -13355,7 +13369,7 @@
 @ scan_skip_paren i lex → i {
     ? != ( nurl_lex_type lex ) TT_LPAREN { ^ 0 } {}
     ( nurl_lex_advance lex )
-    : i depth 1
+    : ~ i depth 1
     ~ & != depth 0 != ( nurl_lex_type lex ) TT_EOF {
         : i t2 ( nurl_lex_type lex )
         ? == t2 TT_LPAREN { = depth + depth 1 } {}
@@ -13603,7 +13617,7 @@
                     { ( nurl_lex_advance lex )  // skip '$'
                         : s path ( __norm_import_path ( nurl_lex_val lex ) )
                         ( nurl_lex_advance lex )  // skip path STR
-                        : s alias ``
+                        : ~ s alias ``
                         ? ( is_ident_tok ( nurl_lex_type lex ) )
                         { = alias ( nurl_lex_val lex )
                             ( nurl_lex_advance lex )

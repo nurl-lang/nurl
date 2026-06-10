@@ -218,8 +218,8 @@ $ `stdlib/ext/http_request.nu`
                     : ~ b match T
                     : ~ i ci 0
                     ~ & match < ci klen {
-                        : i a ( nurl_str_get text + sp ci )
-                        : i b ( nurl_str_get key ci )
+                        : ~ i a ( nurl_str_get text + sp ci )
+                        : ~ i b ( nurl_str_get key ci )
                         ? & >= a 65 <= a 90 { = a + a 32 } {}
                         ? & >= b 65 <= b 90 { = b + b 32 } {}
                         ? != a b { = match F } {}
@@ -464,7 +464,7 @@ $ `stdlib/ext/http_request.nu`
 // Trim ASCII spaces / tabs from a slice of a raw `s`. Used for the
 // media-type and parameter halves of a Content-Type header.
 @ __subraw_trim s text i from i to → String {
-    : i a ? < from 0 0 from
+    : ~ i a ? < from 0 0 from
     : i b ? > to ( nurl_str_len text ) ( nurl_str_len text ) to
     ~ < a b {
         : i c ( nurl_str_get text a )

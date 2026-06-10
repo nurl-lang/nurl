@@ -6,7 +6,7 @@ $ `stdlib/core/mem.nu`
 
     // alloc[i] 5: uninitialised i64 buffer, fill with 0,10,20,30,40
     : *i buf ( alloc [i] 5 )
-    : i n 0
+    : ~ i n 0
     ~ < n 5 {
         ( nurl_poke # s buf n * n 10 )
         = n + n 1

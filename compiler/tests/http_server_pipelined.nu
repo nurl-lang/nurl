@@ -46,7 +46,7 @@ $ `stdlib/ext/http_server.nu`
 // `ok\n` body for the client side.
 @ pipelined_handler HttpRequest req → HttpResponse {
     : i bn ( vec_len [u] . req body )
-    : i first_byte 0
+    : ~ i first_byte 0
     ? > bn 0 {
         : *u bdata ( vec_data [u] . req body )
         : u b0 . bdata 0
