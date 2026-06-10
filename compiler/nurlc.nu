@@ -320,6 +320,7 @@
         { : s sname ( nurl_lex_val lex )
             ( nurl_lex_advance lex )
             : ~ s mangle_sfx ``
+            : ~ b has_tparam_arg F
             ~ != ( nurl_lex_type lex ) TT_RPAREN {
                 : ~ s ta_lty ``
                 : i ta_tt ( nurl_lex_type lex )
@@ -330,12 +331,26 @@
                 { = ta_lty ( parse_type lex ) }
                 { : s ta ( nurl_lex_val lex )
                     ( nurl_lex_advance lex )
+                    ? ( is_tparam_like ta ) { = has_tparam_arg T } {}
                     = ta_lty ( llvm_type ta )
                 }
                 = mangle_sfx ( nurl_str_cat mangle_sfx
                 ( nurl_str_cat `__` ( mangle_type ta_lty ) ) )
             }
             ( expect lex TT_RPAREN )
+            // Unknown-generic check (critic A7): `( Vec i )` with no
+            // generic struct template named `Vec` in scope produces a
+            // `%Vec__i64` reference that nothing ever defines — LLVM
+            // then rejects the unsized type with a cryptic "loading
+            // unsized types is not allowed" far from the real cause
+            // (usually a missing `$` import). Die here instead, at the
+            // use site. Exemptions: abstract instantiations whose args
+            // are still tparams (`( Vec T )` inside a generic template
+            // — the concrete pass re-enters with real args), and a
+            // mangled name some earlier pass already defined.
+            ? ! has_tparam_arg
+            { ( __die_if_unknown_generic lex sname mangle_sfx ) }
+            {}
             ^ ( nurl_str_cat `%` ( nurl_str_cat sname mangle_sfx ) )
         }
         { ( die lex `( in type position must be followed by @ or type name` ) ^ `i64` }
@@ -5037,6 +5052,25 @@
             != 0 ( nurl_str_len lit1 )
             != 0 ( nurl_str_len lit2 )
 
+            // Payload-arity check (critic A7, ghost-variant half). When
+            // the pattern names a DECLARED enum variant (it has a
+            // `__paycount` record — `T`/`F` result/option arms and
+            // wildcards don't), binding more slots than the variant
+            // declares would emit an out-of-bounds extractvalue: either
+            // invalid IR (clang rejects far from the cause) or, when a
+            // SIBLING variant's payload slot exists, a silent garbage
+            // read. The classic trigger is a payload TYPE name in the
+            // enum declaration that wasn't defined/imported — the
+            // parser then reads it as a separate variant and the
+            // intended payload silently vanishes.
+            : s __pc_s ( nurl_sym_get syms ( nurl_str_cat pattern_name `__paycount` ) )
+            ? & != 0 ( nurl_str_len __pc_s ) > pvc ( nurl_str_to_int __pc_s )
+            { ( die lex ( nurl_str_cat3
+                ( nurl_str_cat3 `match arm binds ` ( nurl_str_int pvc ) ` payload(s) but variant '` )
+                pattern_name
+                ( nurl_str_cat3 `' declares only ` __pc_s ` — if a CamelCase name in the enum declaration was meant as this variant's payload TYPE, note that an unknown/unimported type name parses as a SEPARATE variant; define or import the type before the enum.` ) ) ) }
+            {}
+
             // Optional guard: `Pattern payloads ? <cond> → body`. The
             // guard is evaluated AFTER payload binding (so it can read
             // the bound payloads) — a false guard falls through to the
@@ -8699,6 +8733,28 @@
     ? == ( nurl_str_get agg_ty 0 ) 37
     { = cur_sname ( nurl_str_slice agg_ty 1 - ( nurl_str_len agg_ty ) 1 ) }
     {}
+    // Enum-literal payload-arity check (critic A7, ghost-variant half):
+    // when this literal constructs a DECLARED enum, snapshot the leading
+    // variant ident + its `__paycount` now; after the field loop, more
+    // supplied values than the variant declares is a hard error (the
+    // overflow value would land in a slot the variant doesn't own —
+    // invalid IR or a silently misread sibling slot). Underflow stays
+    // legal: zeroinitializer backs the payload-less `@ ?T { F }` idiom.
+    : ~ i enum_paycount -1
+    : ~ s enum_vname ``
+    ? & != 0 ( nurl_str_len cur_sname )
+    != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat cur_sname `__variants` ) ) )
+    { ? ( is_ident_tok ( nurl_lex_type lex ) )
+        { : s __ev ( nurl_lex_val lex )
+            : s __ev_pc ( nurl_sym_get syms ( nurl_str_cat __ev `__paycount` ) )
+            ? != 0 ( nurl_str_len __ev_pc )
+            { = enum_vname __ev
+                = enum_paycount ( nurl_str_to_int __ev_pc ) }
+            {}
+        }
+        {}
+    }
+    {}
     // Closure-escape (docs/MEMORY.md §2.3):
     // track the deepest referent depth among the field values. A field
     // that is a stack reference (a closure capturing a binding by
@@ -9141,6 +9197,14 @@
         = idx + idx 1
     }
     ( expect lex TT_RBRACE )  // consume '}'
+    // Enum-literal payload-arity check (snapshot taken above the loop;
+    // idx counted the variant tag as field 0, so payloads = idx - 1).
+    ? & >= enum_paycount 0 > - idx 1 enum_paycount
+    { ( die lex ( nurl_str_cat3
+        ( nurl_str_cat3 `enum literal supplies ` ( nurl_str_int - idx 1 ) ` payload value(s) but variant '` )
+        enum_vname
+        ( nurl_str_cat3 `' declares only ` ( nurl_str_int enum_paycount ) ` — if a CamelCase name in the enum declaration was meant as this variant's payload TYPE, note that an unknown/unimported type name parses as a SEPARATE variant; define or import the type before the enum.` ) ) ) }
+    {}
     ( nurl_set_last_type agg_ty )
     // Borrow provenance: a freshly-constructed `@ T { … }` aggregate is
     // OWNED — never a borrow. Reset the flag so the value's last
@@ -10812,6 +10876,30 @@
     ? == n 1 { ^ T } {}
     : i c1 ( nurl_str_get tok 1 )
     ? & >= c1 48 <= c1 57 { ^ T } { ^ F }
+}
+
+// Unknown-generic check for parse_type_paren (critic A7). Defined here
+// (after the g_generic_struct_syms / g_struct_inst_syms globals) and
+// forward-called from the parser: globals cannot be forward-referenced,
+// functions can. Dies when `( sname … )` names a generic with no stored
+// template AND no already-materialised `%sname__sfx` instantiation —
+// the reference would stay an unsized opaque type and clang would
+// reject it far from the real cause (usually a missing `$` import).
+// Both sym handles being initialised gates out the early-boot window.
+@ __die_if_unknown_generic i lex s sname s mangle_sfx → v {
+    // Zero type-args (`( VtfWidget )` as a trait-impl target or any
+    // parenthesised plain type) is not a generic instantiation at all —
+    // nothing to size, skip.
+    ? & & & != 0 ( nurl_str_len mangle_sfx )
+    != 0 g_generic_struct_syms != 0 g_struct_inst_syms
+    == 0 ( nurl_str_len ( nurl_sym_get g_generic_struct_syms ( nurl_str_cat sname `__stparams` ) ) )
+    { : s done_chk ( nurl_str_cat sname ( nurl_str_cat mangle_sfx `__done` ) )
+        ? == 0 ( nurl_str_len ( nurl_sym_get g_struct_inst_syms done_chk ) )
+        { ( die lex ( nurl_str_cat3 `unknown generic type '( ` ( nurl_str_cat sname ` … )` )
+            `' — no generic struct of that name is defined or imported here, so the type cannot be sized. Missing a '$' import (stdlib/core/vec.nu for Vec)?` ) ) }
+        {}
+    }
+    {}
 }
 
 @ ensure_struct_instantiated i syms s sname s ta_list → v {
