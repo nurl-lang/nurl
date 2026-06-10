@@ -38,6 +38,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/mem.nu`
+$ `stdlib/std/panic.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/http.nu`
@@ -355,7 +356,29 @@ $ `stdlib/ext/http_response.nu`
     : *McpTool tp ( vec_data [McpTool] . r tools )
     : McpTool t . tp idx
     : ( @ Json Json ) h . t handler
-    : Json result ( h args )
+    // Run the user handler under `recover` so a panic inside it doesn't
+    // unwind the dispatch — which over stdio (mcp_serve_stdio has no outer
+    // recover) would kill the whole server process. The handler's result is
+    // carried OUT of the recover closure through a shared-ctl Vec sink: a
+    // closure captures locals by value, so a direct `= result ...` inside it
+    // would NOT propagate, but `vec_push` mutates the Vec's shared control
+    // block in place and does. An empty sink after recover means the handler
+    // panicked, so the stock tool-error envelope stands.
+    : ( Vec Json ) sink ( vec_with_cap [Json] 1 )
+    : !v PanicInfo pr ( recover \ → v { ( vec_push [Json] sink ( h args ) ) } )
+    : ~ Json result ( mcp_tool_result_error `tool handler panicked` )
+    ?? pr {
+        T _ → {}
+        F p → {
+            ( mcp_log ( nurl_str_cat `tool handler panicked: ` ( string_data . p msg ) ) )
+            ( panic_info_free p )
+        }
+    }
+    ? > ( vec_len [Json] sink ) 0 {
+        : ?Json e0 ( vec_get [Json] sink 0 )
+        ?? e0 { T jv → { ( json_free result ) = result jv } F → {} }
+    } {}
+    ( vec_free [Json] sink )
     ( json_free args )
     ^ result
 }
@@ -417,7 +440,27 @@ $ `stdlib/ext/http_response.nu`
     : *McpPrompt pp ( vec_data [McpPrompt] . r prompts )
     : McpPrompt p . pp idx
     : ( @ Json Json ) h . p handler
-    : Json result ( h args )
+    // Panic-guard via a shared-ctl Vec sink (see __mcp_dispatch_tools_call
+    // for why a direct closure assignment can't carry the value out). On
+    // panic the default `__error__` shape — which the envelope layer maps to
+    // a JSON-RPC error — stands.
+    : ( Vec Json ) sink ( vec_with_cap [Json] 1 )
+    : !v PanicInfo pr ( recover \ → v { ( vec_push [Json] sink ( h args ) ) } )
+    : Json perr ( json_obj_new )
+    ( json_obj_set perr `__error__` ( json_str_lit `prompt handler panicked` ) )
+    : ~ Json result perr
+    ?? pr {
+        T _ → {}
+        F pi → {
+            ( mcp_log ( nurl_str_cat `prompt handler panicked: ` ( string_data . pi msg ) ) )
+            ( panic_info_free pi )
+        }
+    }
+    ? > ( vec_len [Json] sink ) 0 {
+        : ?Json e0 ( vec_get [Json] sink 0 )
+        ?? e0 { T jv → { ( json_free result ) = result jv } F → {} }
+    } {}
+    ( vec_free [Json] sink )
     ( json_free args )
     ^ result
 }
@@ -472,7 +515,28 @@ $ `stdlib/ext/http_response.nu`
     : *McpResource rp ( vec_data [McpResource] . r resources )
     : McpResource res . rp idx
     : ( @ Json ) h . res handler
-    : Json content ( h )
+    // Panic-guard via a shared-ctl Vec sink (see __mcp_dispatch_tools_call).
+    // An empty sink after recover means the handler panicked → return the
+    // bare `__error__` object; otherwise post-process the content and wrap
+    // it in the spec-shaped {contents:[...]} envelope.
+    : ( Vec Json ) sink ( vec_with_cap [Json] 1 )
+    : !v PanicInfo pr ( recover \ → v { ( vec_push [Json] sink ( h ) ) } )
+    ?? pr {
+        T _ → {}
+        F pi → {
+            ( mcp_log ( nurl_str_cat `resource handler panicked: ` ( string_data . pi msg ) ) )
+            ( panic_info_free pi )
+        }
+    }
+    ? <= ( vec_len [Json] sink ) 0 {
+        ( vec_free [Json] sink )
+        : Json rerr ( json_obj_new )
+        ( json_obj_set rerr `__error__` ( json_str_lit `resource handler panicked` ) )
+        ^ rerr
+    } {}
+    : ?Json c0 ( vec_get [Json] sink 0 )
+    : Json content ?? c0 { T jv → jv F → ( json_null ) }
+    ( vec_free [Json] sink )
     // Ensure the content has the expected fields. If handler didn't
     // include `uri` / `mimeType`, splice them in from the registry.
     : ?Json have_uri ( json_obj_get content `uri` )
@@ -545,7 +609,25 @@ $ `stdlib/ext/http_response.nu`
     : *McpCompletion cp ( vec_data [McpCompletion] . r completions )
     : McpCompletion c . cp idx
     : ( @ Json Json ) h . c handler
-    : ~ Json values ( h arg )
+    // Panic-guard via a shared-ctl Vec sink (see __mcp_dispatch_tools_call).
+    // `values` defaults to an empty array — completion is a hint, so a broken
+    // provider must not take the connection (or stdio process) down; an empty
+    // sink after recover means the handler panicked.
+    : ( Vec Json ) sink ( vec_with_cap [Json] 1 )
+    : !v PanicInfo pr ( recover \ → v { ( vec_push [Json] sink ( h arg ) ) } )
+    : ~ Json values ( json_arr_new )
+    ?? pr {
+        T _ → {}
+        F pi → {
+            ( mcp_log ( nurl_str_cat `completion handler panicked: ` ( string_data . pi msg ) ) )
+            ( panic_info_free pi )
+        }
+    }
+    ? > ( vec_len [Json] sink ) 0 {
+        : ?Json e0 ( vec_get [Json] sink 0 )
+        ?? e0 { T jv → { ( json_free values ) = values jv } F → {} }
+    } {}
+    ( vec_free [Json] sink )
     ( json_free arg )
     // Defensive: a provider that returns a non-array gets an empty list.
     ? ( json_is_arr values ) {} { ( json_free values ) = values ( json_arr_new ) }
@@ -771,15 +853,20 @@ $ `stdlib/ext/http_response.nu`
                 {
                     : i tlen ( nurl_str_len expected_token )
                     ? == - avn 7 tlen {
-                        : ~ b match T
+                        // Constant-time compare: accumulate byte differences
+                        // with no early exit, so the loop's duration does not
+                        // leak how many leading bytes matched (a timing oracle
+                        // that recovers the token byte-by-byte). `diff` stays 0
+                        // iff every byte is equal. Length is checked above —
+                        // leaking token length is standard (cf. compare_digest).
+                        : ~ i diff 0
                         : ~ i k 0
-                        ~ & match < k tlen {
-                            ? != ( nurl_str_get avs + 7 k )
+                        ~ < k tlen {
+                            = diff | diff - ( nurl_str_get avs + 7 k )
                             ( nurl_str_get expected_token k )
-                            { = match F } {}
                             = k + k 1
                         }
-                        ? match { = ok T } {}
+                        ? == diff 0 { = ok T } {}
                     } {}
                 } {}
                 ( string_free av )
