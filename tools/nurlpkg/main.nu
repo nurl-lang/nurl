@@ -1540,7 +1540,7 @@ $ `stdlib/std/bytes.nu`
             // Drain the queue. After each successful install, enqueue
             // the sub-manifest's own deps with paths re-anchored.
             : ~ i tx 0
-            : ( Vec String ) next_queue ( vec_new [String] )
+            : ~ ( Vec String ) next_queue ( vec_new [String] )
             ~ > ( vec_len [Dep] dq ) tx {
                 : ?Dep dk ( vec_get [Dep] dq tx )
                 ?? dk {

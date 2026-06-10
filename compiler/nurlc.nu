@@ -775,11 +775,31 @@
         `!DIDerivedType(tag: DW_TAG_pointer_type, baseType: !`
         ( nurl_str_int u8_id )
         `, size: 64)` ) ) }
+    // Pointer to a named struct (`%Name*`, `%Name**`, …): emit a
+    // DW_TAG_pointer_type wrapping the pointee's DI type so gdb can
+    // `print *p` and `p->field`. Recursion peels one `*` per level.
+    ? & == id 0 & == 37 ( nurl_str_get vt 0 ) == 42 ( nurl_str_get vt - ( nurl_str_len vt ) 1 )
+    { : s pointee ( nurl_str_slice vt 0 - ( nurl_str_len vt ) 1 )
+        : i base_id ( dbg_type_id_for pointee syms )
+        = id ( dbg_alloc_id )
+        ( dbg_buffer_meta id
+        ( nurl_str_cat3
+        `!DIDerivedType(tag: DW_TAG_pointer_type, baseType: !`
+        ( nurl_str_int base_id ) `, size: 64)` ) ) }
+    {}
     // Named structs (handle: '%' prefix). Try the composite-type path
     // — if syms knows the struct, emit !DICompositeType + per-field
     // !DIDerivedType DW_TAG_member entries. Otherwise fall through.
+    //
+    // The explicit `{}` else is load-bearing: a chain of single-branch
+    // `?` statements nests each following `?` as the previous one's
+    // ELSE, so without it the placeholder fallback below was the
+    // composite-?'s else — skipped exactly when the composite branch
+    // RAN and returned 0 (unknown struct), leaking `type: !0` into the
+    // metadata and failing the whole --g build at the clang stage.
     ? & == id 0 == 37 ( nurl_str_get vt 0 )
     { = id ( dbg_emit_composite vt syms ) }
+    {}
     // Everything else (closures, slices, [N x T] arrays, unknown):
     // i64 placeholder so the verifier accepts the DILocalVariable.
     ? == id 0 { = id g_dbg_placeholder_ty } {}
@@ -8497,7 +8517,13 @@
     ( nurl_lex_advance lex )  // consume '@'
     : s agg_ty ( parse_type lex )  // parse the aggregate type
     ( expect lex TT_LBRACE )  // consume '{'
-    : ~ s result `undef`
+    // zeroinitializer (not undef) so fields the literal leaves out are
+    // all-zero. Matters for payload-less None — `@ ?T { F }` — where the
+    // payload slot must read as a NULL handle (the runtime and stdlib
+    // treat NULL as an explicit safe no-op everywhere: nurl_peek,
+    // string_free, vec_free…), never as undef garbage that trips
+    // UBSan/ASan when a defensive read touches it.
+    : ~ s result `zeroinitializer`
     : ~ i idx 0
     // Phase 2C/2D: collect indices of fields populated by a fresh allocating
     // call (i8* via nurl_str_cat et al, or slice via `[T | ...]` literal /

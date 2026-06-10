@@ -747,7 +747,25 @@ $ `stdlib/ext/http_response.nu`
                     // Owned allocations inside the handler that didn't
                     // run their auto-drop leak — see
                     // stdlib/std/panic.nu's header for the cost model.
-                    : ~ HttpResponse resp ( response_text 500 `internal server error\n` )
+                    //
+                    // `panic_resp` keeps a handle on the pre-allocated
+                    // 500 so it can be freed once the handler replaces
+                    // `resp` — without it the default leaked (headers
+                    // Vec + body Vec + strings) on EVERY successful
+                    // request.
+                    //
+                    // Replacement is detected by comparing the body-Vec
+                    // DATA pointers, not via a captured flag: closures
+                    // capture struct bindings by reference but scalar
+                    // bindings by value, so a `= done T` inside the
+                    // recover closure never reaches this scope while
+                    // `= resp …` does. Two live responses can never
+                    // share a body allocation, so pointer inequality
+                    // is exact; and if `= resp` ever failed to
+                    // propagate, the compare degrades to "not
+                    // replaced" — a leak, never a use-after-free.
+                    : HttpResponse panic_resp ( response_text 500 `internal server error\n` )
+                    : ~ HttpResponse resp panic_resp
                     : !v PanicInfo pr ( recover \ → v { = resp ( f req ) } )
                     ?? pr {
                         T _ → {}
@@ -756,6 +774,8 @@ $ `stdlib/ext/http_response.nu`
                             ( panic_info_free p )
                         }
                     }
+                    ? != # i ( vec_data [u] . resp body ) # i ( vec_data [u] . panic_resp body )
+                    { ( http_response_free panic_resp ) } {}
                     // Per-request total timeout enforcement: free the
                     // handler's response and substitute 504 if we blew
                     // the budget. `should_close` forces `Connection:

@@ -90,7 +90,7 @@ $ `stdlib/std/bytes.nu`
 // Parse a 36-character UUID string into 16 bytes
 @ uuid_parse s input → ?( Vec u ) {
     : i len ( nurl_str_len input )
-    ? != len 36 { ^ @ ?( Vec u ) { F ( vec_new [u] ) } } {}
+    ? != len 36 { ^ @ ?( Vec u ) { F } } {}
 
     : ( Vec u ) bytes ( vec_with_cap [u] 16 )
     : ~ i i 0
@@ -101,7 +101,7 @@ $ `stdlib/std/bytes.nu`
         ? | | | == i 8 == i 13 == i 18 == i 23 {
             ? != c 45 {
                 ( vec_free [u] bytes )
-                ^ @ ?( Vec u ) { F ( vec_new [u] ) }
+                ^ @ ?( Vec u ) { F }
             } {}
             = i + i 1
         } {
@@ -112,7 +112,7 @@ $ `stdlib/std/bytes.nu`
 
             ? | == high -1 == low -1 {
                 ( vec_free [u] bytes )
-                ^ @ ?( Vec u ) { F ( vec_new [u] ) }
+                ^ @ ?( Vec u ) { F }
             } {}
 
             ( vec_push [u] bytes # u | << high 4 low )

@@ -172,26 +172,26 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     : i n ( nurl_str_len line )
     // Must contain at least two ':' separators; brute-force scan.
     : i lc1 ( __index_of_byte line 0 n 58 )  // first ':'
-    ? < lc1 0 { ^ @ ?Json { F ( json_null ) } } {}
+    ? < lc1 0 { ^ @ ?Json { F } } {}
     : i lc2 ( __index_of_byte line + lc1 1 n 58 )
-    ? < lc2 0 { ^ @ ?Json { F ( json_null ) } } {}
+    ? < lc2 0 { ^ @ ?Json { F } } {}
     : i lc3 ( __index_of_byte line + lc2 1 n 58 )
-    ? < lc3 0 { ^ @ ?Json { F ( json_null ) } } {}
+    ? < lc3 0 { ^ @ ?Json { F } } {}
 
     // Line and column must parse as decimal ints.
     : String ls ( __substr line + lc1 1 lc2 )
     : !i ParseErr lr ( string_to_int ls )
     ( string_free ls )
-    : i ln 0
+    : ~ i ln 0
     : b ok_ln ?? lr { T n → { = ln n T } F _ → F }
-    ? ! ok_ln { ^ @ ?Json { F ( json_null ) } } {}
+    ? ! ok_ln { ^ @ ?Json { F } } {}
 
     : String cs ( __substr line + lc2 1 lc3 )
     : !i ParseErr cr ( string_to_int cs )
     ( string_free cs )
-    : i cn 0
+    : ~ i cn 0
     : b ok_cn ?? cr { T n → { = cn n T } F _ → F }
-    ? ! ok_cn { ^ @ ?Json { F ( json_null ) } } {}
+    ? ! ok_cn { ^ @ ?Json { F } } {}
 
     // Message starts after the third ':' plus a space (skip leading
     // whitespace defensively).
@@ -201,7 +201,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     }
     : String msg_s ( __substr line mstart n )
 
-    : i severity 1
+    : ~ i severity 1
     // Warning if the message text begins with "warning: ".
     ? & >= ( string_len msg_s ) 9 ( __string_starts_with msg_s `warning: ` ) {
         = severity 2
@@ -537,7 +537,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                 } {
                                                     ? == c2 58 {
                                                         // `:` — either struct, enum, or const.
-                                                        : i cp ( __skip_ws content + p 1 n )
+                                                        : ~ i cp ( __skip_ws content + p 1 n )
                                                         // Optional `~`
                                                         ? & < cp n == ( nurl_str_get content cp ) 126 {
                                                             = cp ( __skip_ws content + cp 1 n )
@@ -897,10 +897,10 @@ $ `tools/nurl-lsp/jsonrpc.nu`
         = pos + pos 1
         = k + k 1
     }
-    ? >= pos n { ^ @ ?String { F ( string_new ) } } {}
+    ? >= pos n { ^ @ ?String { F } } {}
     : i c ( nurl_str_get content pos )
-    ? == c 10 { ^ @ ?String { F ( string_new ) } } {}
-    ? ! ( __is_ident_byte c ) { ^ @ ?String { F ( string_new ) } } {}
+    ? == c 10 { ^ @ ?String { F } } {}
+    ? ! ( __is_ident_byte c ) { ^ @ ?String { F } } {}
     // Expand left.
     : ~ i lo pos
     ~ & > lo line_start ( __is_ident_byte ( nurl_str_get content - lo 1 ) ) {
@@ -923,7 +923,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 
 @ __handle_definition Json id Json params → v {
     : s uri ( __extract_uri params )
-    : Json result ( json_null )
+    : ~ Json result ( json_null )
     ? > ( nurl_str_len uri ) 0 {
         : ?Json pos_o ( json_obj_get params `position` )
         ?? pos_o {
@@ -1132,7 +1132,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 }
 
 @ __handle_hover Json id Json params → v {
-    : Json result ( json_null )
+    : ~ Json result ( json_null )
     : s uri ( __extract_uri params )
     ? > ( nurl_str_len uri ) 0 {
         : ?Json pos_o ( json_obj_get params `position` )
@@ -1524,7 +1524,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     : Json items ( json_arr_new )
     // Extract `query` (a JSON string). Spec says it's always present.
     : ?Json q_o ( json_obj_get params `query` )
-    : s query ``
+    : ~ s query ``
     ?? q_o {
         T qj → = query ( json_str_data qj )
         F _ → {}

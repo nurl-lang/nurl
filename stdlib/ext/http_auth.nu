@@ -162,13 +162,13 @@ $ `stdlib/core/errors.nu`
             : i n ( string_len token )
             ? == n 0 {
                 ( string_free token )
-                ^ @ ?String { F ( string_new ) }
+                ^ @ ?String { F }
             } {}
             ^ @ ?String { T token }
         }
         F empty → {
             ( string_free empty )
-            ^ @ ?String { F ( string_new ) }
+            ^ @ ?String { F }
         }
     }
 }
@@ -252,11 +252,11 @@ $ `stdlib/core/errors.nu`
                 ^ @ ?String { T value }
             } {}
             ( string_free h )
-            ^ @ ?String { F ( string_new ) }
+            ^ @ ?String { F }
         }
         F empty → {
             ( string_free empty )
-            ^ @ ?String { F ( string_new ) }
+            ^ @ ?String { F }
         }
     }
 }
