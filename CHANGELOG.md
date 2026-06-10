@@ -34,6 +34,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`server_stop` from another thread freed the listener under blocked
+  pool workers** (`stdlib/ext/http_server.nu`). `server_run_pool`'s
+  documented shutdown — call `server_stop s` from another thread while
+  workers block in accept — was a heap-use-after-free: workers hold no
+  reference on the listener, so the stop's `nurl_tcp_close` dropped the
+  last ref and freed the struct while every worker was still polling
+  its `shutting_down` flag and wake-pipe fd (3/3 reproducible under
+  ASan; single-threaded `server_run` raced identically). `server_run`
+  and `server_run_pool` now retain the listener for the whole
+  run→join window and release it only after no worker can touch the
+  handle — the same contract `server_run_async` already followed for
+  its accept fiber. The two-phase `tcp_shutdown_listener` → join →
+  `server_stop` pattern remains valid; it is simply no longer the only
+  safe shutdown. Regression `compiler/tests/http_server_stop_direct.nu`
+  drives both fixed paths with a direct cross-thread stop (ASan-clean
+  10/10 under `NURL_NET_TESTS=1`). Closes critic.md B19 together with
+  the earlier accept-wake fix (f470571).
+
 - **`recover` leaked the closure's captured environment**
   (`stdlib/std/panic.nu`). `recover` decomposes its closure into
   `(fn_ptr, env_ptr)` and hands them to the C trampoline; passing the
