@@ -121,7 +121,7 @@ $ `stdlib/ext/http_response.nu`
         } {}
         = k + k 1
     }
-    ^ @ ?String { F ( string_new ) }
+    ^ @ ?String { F }
 }
 
 // ── Route ─────────────────────────────────────────────────────────────
@@ -152,6 +152,13 @@ $ `stdlib/ext/http_response.nu`
     : *RouteImpl impl # *RouteImpl . route ctl
     ( string_free . impl method )
     ( string_free . impl pattern )
+    // The router owns the handler closure registered via router_any.
+    // A closure value is a by-value { fn_ptr, env_ptr } pair; only the
+    // env is heap-allocated (NULL for capture-less lambdas) and
+    // closures have no auto-drop, so release it here — the same
+    // convention std/panic.nu's recover uses.
+    : ( @ HttpResponse HttpRequest Params ) h . impl handler
+    ( nurl_free # s # *u h 1 )
     ( nurl_free # s impl )
 }
 

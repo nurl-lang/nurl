@@ -498,10 +498,10 @@ $ `stdlib/core/vec.nu`
         }
         = k + k 1
     }
-    ? < best 0 { ^ @ ?Semver { F ( __sv_make 0 0 0 ) } } {}
+    ? < best 0 { ^ @ ?Semver { F } } {}
     : ?Semver wo ( vec_get [Semver] versions best )
     ?? wo {
         T w → ^ @ ?Semver { T ( semver_clone w ) }
-        F → ^ @ ?Semver { F ( __sv_make 0 0 0 ) }
+        F → ^ @ ?Semver { F }
     }
 }

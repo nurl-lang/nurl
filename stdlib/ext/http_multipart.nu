@@ -503,11 +503,11 @@ $ `stdlib/ext/http_request.nu`
                 ^ @ ?( Vec MultipartPart ) { T parts }
             } {}
             ( string_free boundary )
-            ^ @ ?( Vec MultipartPart ) { F ( vec_new [MultipartPart] ) }
+            ^ @ ?( Vec MultipartPart ) { F }
         }
         F miss → {
             ( string_free miss )
-            ^ @ ?( Vec MultipartPart ) { F ( vec_new [MultipartPart] ) }
+            ^ @ ?( Vec MultipartPart ) { F }
         }
     }
 }

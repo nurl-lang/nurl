@@ -1749,7 +1749,7 @@ s combined_stdout s combined_stderr → v {
 @ __oauth_query_get ( Vec QueryPair ) pairs s name → ?String {
     : i n ( vec_len [QueryPair] pairs )
     : ~ i k 0
-    : ~ ? String found @ ?String { F ( string_new ) }
+    : ~ ? String found @ ?String { F }
     ~ < k n {
         ?? ( vec_get [QueryPair] pairs k ) {
             T p → {
@@ -4356,7 +4356,7 @@ s combined_stdout s combined_stderr → v {
     // Notifications: never reply, regardless of method.
     ? is_notification {
         ( json_free id )
-        ^ @ ?Json { F ( json_null ) }
+        ^ @ ?Json { F }
     } {}
 
     // Method routing.
@@ -4483,7 +4483,17 @@ s combined_stdout s combined_stderr → v {
     : ( @ ?Json Json ) disp \ Json r → ?Json { ^ ( mcp_dispatch r ) }
     : ( @ HttpResponse HttpRequest ) base ( mcp_http_handler disp )
     : ( @ HttpResponse HttpRequest ) wrapped ( mcp_http_with_session base )
-    ^ ( wrapped req )
+    : HttpResponse out ( wrapped req )
+    // These three closures are built per request and die here. A closure
+    // is a by-value { fn_ptr, env_ptr } pair whose env is a heap
+    // allocation with no auto-drop — release the envs explicitly
+    // (std/panic.nu recover's convention; nurl_free is NULL-safe for the
+    // capture-less `disp`). Without this every /mcp request leaked the
+    // two capturing envs.
+    ( nurl_free # s # *u wrapped 1 )
+    ( nurl_free # s # *u base 1 )
+    ( nurl_free # s # *u disp 1 )
+    ^ out
 }
 
 // ── Compile-concurrency gate ──────────────────────────────────────────
@@ -4641,6 +4651,11 @@ s combined_stdout s combined_stderr → v {
             : HttpServer srv ( server_new_with_timeout listener logged 5000 )
             : !v NetErr rr ( server_run_pool srv workers )
             ( signal_clear_shutdown ) ( server_stop srv ) ( sem_free compile_gate ) ( router_free r )
+            // The handler chain (`logged` wraps `base`) is dead once the
+            // worker pool has returned — release the closure envs so a
+            // clean shutdown reports zero leaks under LeakSanitizer.
+            ( nurl_free # s # *u logged 1 )
+            ( nurl_free # s # *u base 1 )
             ?? rr { T _ → { ^ 0 } F e → { ( nurl_eprint `[srv] runtime error: ` ) ( nurl_eprint ( net_err_name e ) ) ( nurl_eprint `\n` ) ^ 1 } }
         }
         F e → { ( nurl_eprint `[boot] could not bind 0.0.0.0:8000: ` ) ( nurl_eprint ( net_err_name e ) ) ( nurl_eprint `\n` ) ^ 1 }

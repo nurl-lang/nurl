@@ -288,7 +288,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ mcp_stdio_ping McpStdioClient c → !Json McpStdioErr {
-    ^ ( mcp_stdio_call c `ping` @ ?Json { F ( json_null ) } 0 )
+    ^ ( mcp_stdio_call c `ping` @ ?Json { F } 0 )
 }
 
 @ __mcp_stdio_extract_array Json r s field → ( Vec Json ) {
@@ -312,7 +312,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ mcp_stdio_tools_list McpStdioClient c → !( Vec Json ) McpStdioErr {
-    : !Json McpStdioErr r ( mcp_stdio_call c `tools/list` @ ?Json { F ( json_null ) } 0 )
+    : !Json McpStdioErr r ( mcp_stdio_call c `tools/list` @ ?Json { F } 0 )
     ?? r {
         T resp → {
             : ( Vec Json ) tools ( __mcp_stdio_extract_array resp `tools` )
@@ -324,7 +324,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ mcp_stdio_prompts_list McpStdioClient c → !( Vec Json ) McpStdioErr {
-    : !Json McpStdioErr r ( mcp_stdio_call c `prompts/list` @ ?Json { F ( json_null ) } 0 )
+    : !Json McpStdioErr r ( mcp_stdio_call c `prompts/list` @ ?Json { F } 0 )
     ?? r {
         T resp → {
             : ( Vec Json ) ps ( __mcp_stdio_extract_array resp `prompts` )
@@ -336,7 +336,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ mcp_stdio_resources_list McpStdioClient c → !( Vec Json ) McpStdioErr {
-    : !Json McpStdioErr r ( mcp_stdio_call c `resources/list` @ ?Json { F ( json_null ) } 0 )
+    : !Json McpStdioErr r ( mcp_stdio_call c `resources/list` @ ?Json { F } 0 )
     ?? r {
         T resp → {
             : ( Vec Json ) rs ( __mcp_stdio_extract_array resp `resources` )

@@ -42,7 +42,7 @@ $ `stdlib/ext/json.nu`
     : ~ i k 0
     : s want `content-length:`
     ~ < k 15 {
-        : i lc ( nurl_str_get line k )
+        : ~ i lc ( nurl_str_get line k )
         : i wc ( nurl_str_get want k )
         // upper → lower on the line byte for comparison
         ? & >= lc 65 <= lc 90 { = lc + lc 32 } {}
@@ -91,7 +91,7 @@ $ `stdlib/ext/json.nu`
         : i ll ( string_len line )
         ? ( stdin_eof ) {
             ( string_free line )
-            ^ @ ?Json { F ( json_null ) }
+            ^ @ ?Json { F }
         } {}
         // Blank line (or pure "\r") terminates the header block.
         : b is_blank | == ll 0 & == ll 1 == ( string_get line 0 ) 13
@@ -111,7 +111,7 @@ $ `stdlib/ext/json.nu`
     }
     ? ! have_clen {
         ( nurl_eprintln `[lsp] malformed header: Content-Length missing or unparseable` )
-        ^ @ ?Json { F ( json_null ) }
+        ^ @ ?Json { F }
     } {}
     // Read the body as exactly `clen` bytes.
     : ( Vec u ) body ( read_n_bytes clen )
@@ -119,7 +119,7 @@ $ `stdlib/ext/json.nu`
     ? < got clen {
         ( nurl_eprintln `[lsp] short read: body truncated by EOF` )
         ( vec_free [u] body )
-        ^ @ ?Json { F ( json_null ) }
+        ^ @ ?Json { F }
     } {}
     // The body bytes are UTF-8 JSON; copy into a NUL-terminated String
     // for the json_parse entry point. JSON itself can't contain a raw
@@ -139,7 +139,7 @@ $ `stdlib/ext/json.nu`
         T j → ^ @ ?Json { T j }
         F _ → {
             ( nurl_eprintln `[lsp] body is not valid JSON` )
-            ^ @ ?Json { F ( json_null ) }
+            ^ @ ?Json { F }
         }
     }
 }

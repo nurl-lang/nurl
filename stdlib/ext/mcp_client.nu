@@ -228,7 +228,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ mcp_ping McpClient c → !Json McpErr {
-    ^ ( mcp_call c `ping` @ ?Json { F ( json_null ) } )
+    ^ ( mcp_call c `ping` @ ?Json { F } )
 }
 
 // Send tools/list, then unwrap result.tools into an OWNED Vec[Json]
@@ -256,7 +256,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ mcp_tools_list McpClient c → !( Vec Json ) McpErr {
-    : !Json McpErr r ( mcp_call c `tools/list` @ ?Json { F ( json_null ) } )
+    : !Json McpErr r ( mcp_call c `tools/list` @ ?Json { F } )
     ?? r {
         T resp → {
             : ( Vec Json ) tools ( __extract_array_field resp `tools` )
@@ -268,7 +268,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ mcp_prompts_list McpClient c → !( Vec Json ) McpErr {
-    : !Json McpErr r ( mcp_call c `prompts/list` @ ?Json { F ( json_null ) } )
+    : !Json McpErr r ( mcp_call c `prompts/list` @ ?Json { F } )
     ?? r {
         T resp → {
             : ( Vec Json ) ps ( __extract_array_field resp `prompts` )
@@ -280,7 +280,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ mcp_resources_list McpClient c → !( Vec Json ) McpErr {
-    : !Json McpErr r ( mcp_call c `resources/list` @ ?Json { F ( json_null ) } )
+    : !Json McpErr r ( mcp_call c `resources/list` @ ?Json { F } )
     ?? r {
         T resp → {
             : ( Vec Json ) rs ( __extract_array_field resp `resources` )

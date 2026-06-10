@@ -721,7 +721,7 @@ $ `stdlib/core/option.nu`
         TStr s → ^ @ ?String { T ( string_from ( string_data s ) ) }
         _ → {}
     }
-    ^ @ ?String { F ( string_new ) }
+    ^ @ ?String { F }
 }
 
 @ toml_as_int TomlValue v → ?i {

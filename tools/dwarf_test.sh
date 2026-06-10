@@ -135,5 +135,42 @@ else
     pass "ptype p lists fields x and y by name"
 fi
 
+# ── Pointer-to-struct DI types ──────────────────────────────────────
+PTR_SRC="$ROOT_DIR/compiler/tests/dwarf_ptr_struct.nu"
+PTR_BIN="$ROOT_DIR/build/dwarf_ptr_struct_dbg"
+if [[ ! -f "$PTR_SRC" ]]; then
+    echo "WARN: $PTR_SRC not present — skipping pointer-struct phase" >&2
+else
+    echo "[6/6] pointer-to-struct DI — DW_TAG_pointer_type over %Cell*"
+    # The build alone locks the headline bug: a *Struct local used to
+    # emit `type: !0` (undefined metadata), failing every --debug build
+    # whose code held a pointer-to-struct binding.
+    if ! "$ROOT_DIR/nurl.sh" --debug -O0 "$PTR_SRC" "$PTR_BIN"             >/tmp/dwarf_ptr.build 2>&1; then
+        cat /tmp/dwarf_ptr.build
+        fail "nurl.sh --debug failed on $PTR_SRC (type: !0 regression?)"
+    fi
+    pass "dwarf_ptr_struct.nu built with --debug"
+
+    PTR_OUT=$(gdb -batch \
+        -ex 'set debuginfod enabled off' \
+        -ex "break dwarf_ptr_struct.nu:23" \
+        -ex 'run' \
+        -ex 'print *p' \
+        -ex 'ptype p' \
+        -ex 'quit' "$PTR_BIN" 2>&1)
+
+    echo "$PTR_OUT" | grep -Eq 'v = ?7.*w = ?9|w = ?9.*v = ?7' \
+        || fail "print *p did not show {v = 7, w = 9}"
+    pass "print *p renders pointee as {v = 7, w = 9}"
+
+    # gdb renders the pointer type multi-line:
+    #   type = struct Cell { i v; i w; } *
+    echo "$PTR_OUT" | grep -q 'struct Cell' \
+        || fail "ptype p did not show 'struct Cell'"
+    echo "$PTR_OUT" | grep -Eq '\} ?\*' \
+        || fail "ptype p type is not a pointer (missing trailing *)"
+    pass "ptype p shows 'struct Cell … *'"
+fi
+
 echo
 echo "DWARF TEST PASSED"

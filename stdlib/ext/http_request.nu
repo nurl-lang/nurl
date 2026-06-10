@@ -329,7 +329,7 @@ $ `stdlib/ext/http.nu`
         } {}
         = k + k 1
     }
-    ^ @ ?String { F ( string_new ) }
+    ^ @ ?String { F }
 }
 
 // ── HttpRequest lifecycle ─────────────────────────────────────────────
@@ -1082,11 +1082,11 @@ $ `stdlib/ext/http.nu`
                 : ( Vec QueryPair ) pairs ( parse_form_urlencoded . req body )
                 ^ @ ?( Vec QueryPair ) { T pairs }
             } {}
-            ^ @ ?( Vec QueryPair ) { F ( vec_new [QueryPair] ) }
+            ^ @ ?( Vec QueryPair ) { F }
         }
         F miss → {
             ( string_free miss )
-            ^ @ ?( Vec QueryPair ) { F ( vec_new [QueryPair] ) }
+            ^ @ ?( Vec QueryPair ) { F }
         }
     }
 }

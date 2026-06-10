@@ -467,7 +467,7 @@ $ `stdlib/ext/http_response.nu`
 // WebSocket framing mode and the caller switches to `ws_read_frame` /
 // `ws_send_*` for I/O.
 @ ws_perform_handshake TcpConn conn HttpRequest req → !v WsErr {
-    ^ ( ws_perform_handshake_with conn req @ ?String { F ( string_new ) } )
+    ^ ( ws_perform_handshake_with conn req @ ?String { F } )
 }
 
 @ ws_perform_handshake_with TcpConn conn HttpRequest req ? String subprotocol → !v WsErr {
@@ -1533,7 +1533,7 @@ $ `stdlib/ext/http_response.nu`
         ^ @ ?String { T val }
     } {
         ( string_free val )
-        ^ @ ?String { F ( string_new ) }
+        ^ @ ?String { F }
     }
 }
 
@@ -1731,7 +1731,7 @@ $ `stdlib/ext/http_response.nu`
 // Dial + handshake in one shot, no subprotocol. wss:// verifies the
 // server certificate chain + hostname against the system trust store.
 @ ws_connect s url → !WsClient WsErr {
-    ^ ( ws_connect_with url @ ?String { F ( string_new ) } )
+    ^ ( ws_connect_with url @ ?String { F } )
 }
 
 @ ws_connect_with s url ? String subprotocol → !WsClient WsErr {

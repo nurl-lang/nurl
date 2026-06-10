@@ -819,7 +819,7 @@ $ `stdlib/ext/http_response.nu`
         // 202 Accepted with no body.
         ( json_free result )
         ( json_free id )
-        ^ @ ?Json { F ( json_null ) }
+        ^ @ ?Json { F }
     }
 }
 
