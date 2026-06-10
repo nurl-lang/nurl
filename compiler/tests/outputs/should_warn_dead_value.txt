@@ -1,0 +1,19 @@
+COMPILE OK
+WARNINGS
+compiler/tests/should_warn_dead_value.nu:25:5: warning: the statement on line 22 has no effect — it produces a value that is discarded. If it was meant as an operand, the prefix operator before it is short an argument (fixed arity, no closing bracket); otherwise bind the value (': T name …') or remove the statement.
+    + a 1
+    ^
+compiler/tests/should_warn_dead_value.nu:28:5: warning: the statement on line 25 has no effect — it produces a value that is discarded. If it was meant as an operand, the prefix operator before it is short an argument (fixed arity, no closing bracket); otherwise bind the value (': T name …') or remove the statement.
+    # i8 a
+    ^
+compiler/tests/should_warn_dead_value.nu:31:5: warning: the statement on line 28 has no effect — it produces a value that is discarded. If it was meant as an operand, the prefix operator before it is short an argument (fixed arity, no closing bracket); otherwise bind the value (': T name …') or remove the statement.
+    . p x
+    ^
+compiler/tests/should_warn_dead_value.nu:34:5: warning: the statement on line 31 has no effect — it produces a value that is discarded. If it was meant as an operand, the prefix operator before it is short an argument (fixed arity, no closing bracket); otherwise bind the value (': T name …') or remove the statement.
+    : i b ? > a 0 { + a 10 } { 0 }
+    ^
+LINK OK
+EXIT 0
+OUTPUT
+15
+ok

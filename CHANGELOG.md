@@ -10,6 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **"Statement has no effect" warning — the last silent prefix-arity
+  cascade is now diagnosed** (`compiler/nurlc.nu`, critic A2). A
+  statement that produces a value without being a call or control flow
+  (bare local identifier, operator expression like `+ a 1`, a `#` cast,
+  a `.` field read) discards that value silently — under prefix
+  notation with fixed arity and no closing token, this is exactly the
+  residue left when an operator short an argument swallows the next
+  statement's leading token. The bare-literal flavor was already a
+  hard error (dangling operand); these shapes name real bindings, so
+  they warn. Value-block tail expressions (the block result), calls,
+  and `?`/`??` statements (their arms may be effectful) are exempt.
+  The diagnostic embeds the dead statement's own line — by the time
+  the block iterator sees the flag, the lexer already points at the
+  next statement. Tree-wide false-positive check: nurlc.nu
+  self-compile, the full stdlib, nurlapi, and examples produce ZERO
+  warnings. Locks: `should_warn_dead_value.nu` (four dead shapes warn;
+  tail/call/return stay silent), and `should_warn_caret_xor.nu` now
+  also catches the previously silent dead `b` in `: i x ^ a b`. This
+  closes the last undiagnosed half of the prefix-arity cascade family
+  (critic §4); the A3 closing-delimiter decision can cite it as the
+  mitigation.
+
 - **`std/bigint`: arbitrary-precision division and modulo** —
   `bigint_div` / `bigint_rem` (`stdlib/std/bigint.nu`), closing the last
   gap in the bigint arithmetic surface. The magnitude core is Knuth
