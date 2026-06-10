@@ -835,6 +835,14 @@ $ `stdlib/ext/http_response.nu`
 // server_stop), Err on infrastructure failure mid-flight.
 
 @ server_run HttpServer s → !v NetErr {
+    // Retain the listener for the duration of the loop. `server_stop`
+    // fired from another thread closes the listener fd + wakes the
+    // blocked accept, but its struct free must wait until this thread
+    // has returned from `tcp_accept` and stopped reading the handle —
+    // without the ref, the close frees the struct mid-poll
+    // (heap-use-after-free, observed under ASan). Same contract
+    // `server_run_async` already follows for its accept fiber.
+    ( tcp_listener_retain . s listener )
     // Loop forever (until either a clean stop or a real error). One
     // NURL compiler quirk still shapes this implementation:
     //   * Multiple early-`^`-returns inside `?? r { T → … F → … }` arms
@@ -863,6 +871,7 @@ $ `stdlib/ext/http_response.nu`
             }
         }
     }
+    ( tcp_listener_release . s listener )
     ? had_err
     { ^ @ !v NetErr { F last_err } }
     {}
@@ -903,6 +912,16 @@ $ `stdlib/ext/http_response.nu`
 //     exits. That's fine but observable as a small lag.
 @ server_run_pool HttpServer s i n_workers → !v NetErr {
     ? <= n_workers 1 { ^ ( server_run s ) } {}
+
+    // Retain the listener across the workers' whole lifetime. Workers
+    // blocked in `tcp_accept` hold no reference of their own, so a
+    // `server_stop` fired from another thread used to free the
+    // listener struct while every worker was still polling it
+    // (heap-use-after-free at runtime.c's shutting_down check). The
+    // ref spans spawn → join; the release below runs only after no
+    // worker can touch the handle. Same contract `server_run_async`
+    // follows for its accept fiber.
+    ( tcp_listener_retain . s listener )
 
     // Storage for n thread handles, indexed by worker number.
     : s thandles ( nurl_alloc * n_workers 8 )
@@ -973,6 +992,7 @@ $ `stdlib/ext/http_response.nu`
     // mirroring the per-server cleanup contract.
     : *u worker_env # *u worker 1
     ( nurl_free # s worker_env )
+    ( tcp_listener_release . s listener )
     ^ @ !v NetErr { T 0 }
 }
 
