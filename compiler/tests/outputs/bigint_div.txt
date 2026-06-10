@@ -1,0 +1,21 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+  ok   7/2 → q=3 r=1
+  ok   -7/2 → q=-3 r=-1
+  ok   7/-2 → q=-3 r=1
+  ok   -7/-2 → q=3 r=-1
+  ok   0/5 → q=0 r=0
+  ok   -3/5 → q=0 r=-3
+  ok   5/5 → q=1 r=0
+  ok   -10/5 → q=-2 r=0
+  ok   10^30/7 → q=142857142857142857142857142857 r=1
+  ok   (10^30+12345)/10^15 → q=1000000000000000 r=12345
+  ok   25!/23! → q=600 r=0
+  ok   add-back 1 → q=65534 r=140737488289794
+  ok   add-back 2 → q=65535 r=2147483647
+  ok   39-digit/21-digit → q=124999998860937500 r=14172067901781269289
+  ok   invariant sweep 60 rounds x 2 probes
+  ok   div by zero → panic: bigint_div: division by zero
+bigint_div: all checks passed

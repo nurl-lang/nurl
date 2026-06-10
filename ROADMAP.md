@@ -185,8 +185,8 @@ Not blocking 1.0; ordered roughly by likely value.
   embedded profile. The RISC-V / ARM64 static cross-compiles already prove the
   shape; these extend it.
 - **Numeric breadth** — arbitrary-precision integers shipped (`std/bigint`:
-  signed, base-2¹⁶ limbs, add/sub/mul, comparison, base-10 parse/format;
-  bignum÷bignum division is the remaining follow-up). Fixed-point decimal is
+  signed, base-2¹⁶ limbs, add/sub/mul, truncated div/rem via Knuth
+  Algorithm D, comparison, base-10 parse/format). Fixed-point decimal is
   still open. Acceptable to omit for systems work today; tracked for
   completeness.
 - **Runtime split (organisational)** — separate `stdlib/runtime.c` into
