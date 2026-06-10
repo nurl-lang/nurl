@@ -1470,6 +1470,13 @@
     ( seq ( nurl_sym_get syms `__defer_top__` ) `` )
     { ( nurl_sym_def syms `__tail_call_pending__` `1` ) }
     {}
+    // Snapshot whether the return expression is a direct parenthesised
+    // call — `^ ( f … )`. Used below to propagate string-return
+    // ownership: a direct call's `__last_call_ret_owned__` is always
+    // (re)set by the OUTERMOST call's emit site, so consulting it is
+    // exact for this shape and never stale (any other expression shape
+    // skips the check entirely).
+    : b ret_is_direct_call == ( nurl_lex_type lex ) TT_LPAREN
     : s val ( gen_operand lex syms cg )
     // XOR confusion (critic v0.9.0 §1): `^ X Y` on the same line is
     // almost always the user thinking `^` is XOR. `^^` (two adjacent
@@ -1538,6 +1545,16 @@
         rid_ptr
         ``
         ? != 0 ( nurl_str_len skip_str_ptr )
+        { ( nurl_sym_def syms `__fn_ret_str_owned__` `1` ) }
+        {}
+        // `^ ( f … )` returning a fresh owned string: the value never
+        // lived in a local (nothing to skip), but the OWNERSHIP must
+        // still propagate to this function's `__ret_owned` marker —
+        // otherwise `: s x ( g )` off a `@ g → s { ^ ( nurl_str_cat … ) }`
+        // composes helpers into a leak. `__last_call_ret_owned__` was
+        // (re)set by the outermost call's emit site just above.
+        ? & & ret_is_direct_call ( seq lt `i8*` )
+        ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
         { ( nurl_sym_def syms `__fn_ret_str_owned__` `1` ) }
         {}
         = skip_user_ptr ? ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) rid_ptr )
@@ -4428,8 +4445,16 @@
     // The arm body is a fresh tail position — `^` is legal here even if
     // this `?` was itself parsed as an operand.
     = g_ret_forbidden 0
+    // Reset the ident side-channel so we can tell whether this arm's
+    // value is a bare load of a named binding — if that binding is a
+    // tracked owned string, its buffer ESCAPES the arm through the phi
+    // below and its scheduled drop must be cancelled (see the phi
+    // block). Copy the snapshot via nurl_str_cat: sym_get returns a
+    // pointer into the arm scope's entry, which nurl_sym_pop frees.
+    ( nurl_sym_def syms `__last_ident_name__` `` )
     : s tv ( gen_expr lex syms cg )
     : s tt2 ( nurl_get_last_type )
+    : s t_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
     // Snapshot the then-arm's signedness for the `?`-result flag below.
     : s then_unsigned ( nurl_last_unsigned )
     : s tlbl ( nurl_sym_get syms `__cur_lbl__` )
@@ -4464,8 +4489,11 @@
     // bare (block-less) then-arm.
     ( bck_set_block_kind `cond-else` )
     = g_ret_forbidden 0
+    // Mirror of the then-arm's escaping-ident snapshot above.
+    ( nurl_sym_def syms `__last_ident_name__` `` )
     : s ev ( gen_expr lex syms cg )
     : s et2 ( nurl_get_last_type )
+    : s e_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
     : s else_unsigned ( nurl_last_unsigned )
     : s elbl ( nurl_sym_get syms `__cur_lbl__` )
     : i edr g_did_ret
@@ -4510,6 +4538,27 @@
     ? == 0 g_did_ret
     { ? & ! ( seq phi_ty `void` ) types_ok
         { : s res ( nurl_cg_reg cg )
+            // Ownership transfer out of the arms: an arm whose value is
+            // a bare load of a tracked owned i8* binding hands that
+            // buffer to the phi consumer — cancel the binding's
+            // scheduled drop or the scope-exit free dangles every later
+            // use of the phi value (bit the compiler itself: gen_cast's
+            // `: s norm ? … xv ( nurl_cg_reg cg )` returned norm while
+            // the epilogue freed xv). Worst case (ident was merely the
+            // last load inside a trailing call) the buffer leaks —
+            // never a use-after-free. Only arms live into the phi
+            // transfer; a `^`-returning arm keeps its own path's drops.
+            ? ( seq phi_ty `i8*` )
+            { ? == 0 tdr
+                { ( mem_remove_owned_str syms
+                    ( nurl_sym_get syms ( nurl_str_cat t_retid `__ptr` ) ) ) }
+                {}
+                ? == 0 edr
+                { ( mem_remove_owned_str syms
+                    ( nurl_sym_get syms ( nurl_str_cat e_retid `__ptr` ) ) ) }
+                {}
+            }
+            {}
             ? & != 0 tdr == 0 edr
             { ( nurl_print `  ` ) ( nurl_print res )
                 ( nurl_print ` = phi ` ) ( nurl_print phi_ty )
@@ -5588,9 +5637,17 @@
             ( bck_set_block_kind `match-arm` )
             : i __saved_in_arm g_in_match_arm
             = g_in_match_arm 1
+            // Escaping-ident snapshot, mirroring gen_cond: if this
+            // arm's value is a bare load of a tracked owned i8*
+            // binding, the buffer escapes through the match phi and
+            // the binding's drop must be cancelled when the phi entry
+            // is recorded below. Copy via nurl_str_cat — sym_get's
+            // pointer dies at the arm scope's nurl_sym_pop.
+            ( nurl_sym_def syms `__last_ident_name__` `` )
             : s arm_result ( gen_stmt lex syms cg )
             = g_in_match_arm __saved_in_arm
             : s arm_type ( nurl_get_last_type )
+            : s arm_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
             : s arm_lbl ( nurl_sym_get syms `__cur_lbl__` )
             : i arm_did_ret g_did_ret
             = arms_total + arms_total 1
@@ -5615,6 +5672,12 @@
                 ? ! ( seq arm_type `void` ) {
                     ? == phi_count 0 { = phi_type arm_type } {}
                     ? & != phi_count 0 ! ( seq arm_type phi_type ) { = phi_ok F } {}
+                    // Ownership transfer out of the arm (see snapshot
+                    // above): the value lives on through the phi.
+                    ? ( seq arm_type `i8*` )
+                    { ( mem_remove_owned_str syms
+                        ( nurl_sym_get syms ( nurl_str_cat arm_retid `__ptr` ) ) ) }
+                    {}
                     : s entry ( nurl_str_cat `[ ` ( nurl_str_cat arm_result ( nurl_str_cat `, %` ( nurl_str_cat arm_lbl ` ]` ) ) ) )
                     = phi_entries ? == 0 ( nurl_str_len phi_entries )
                     entry
@@ -6290,29 +6353,29 @@
 // arm or they leak. `mem_own_add_str` / `mem_own_add_struct_field` store
 // the concatenation of the parent's list plus arm-local entries in the
 // pushed scope's `__owned_strings__` / `__owned_struct_fields__`. To drop
-// only the arm-local tail, snapshot the parent's list string before
-// `nurl_sym_push`, then at fall-through skip that prefix (plus its
-// trailing space, if non-empty) and iterate what remains.
+// only the arm-local delta, snapshot the parent's list string before
+// `nurl_sym_push`, then at fall-through drop every entry whose alloca
+// pointer is NOT word-contained in that snapshot. Membership (not
+// prefix-length) is the protocol because `mem_remove_owned_str` —
+// ownership transfer on `= outer x` — may delete a word from the
+// MIDDLE of the current list mid-arm; alloca register names are unique
+// per function, so word membership is exact.
 
 @ mem_drop_new_strings i syms i cg s old_list → v {
     : s dtop ( nurl_sym_get syms `__defer_top__` )
     ? == 0 ( nurl_str_len dtop )
-    { : s cur ( nurl_sym_get syms `__owned_strings__` )
-        : i old_len ( nurl_str_len old_list )
-        : i cur_len ( nurl_str_len cur )
-        ? > cur_len old_len
-        { : i skip ? == old_len 0 0 + old_len 1
-            : ~ s rest ( nurl_str_slice cur skip - cur_len skip )
-            ~ != 0 ( nurl_str_len rest ) {
-                : s ptr ( str_first_word rest )
-                = rest ( str_skip_word rest )
-                : s v ( nurl_cg_reg cg )
+    { : ~ s rest ( nurl_sym_get syms `__owned_strings__` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s ptr ( str_first_word rest )
+            = rest ( str_skip_word rest )
+            ? ( str_contains_word old_list ptr )
+            {}
+            { : s v ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print v )
                 ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
                 ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
             }
         }
-        {}
     }
     {}
 }
@@ -6320,23 +6383,21 @@
 @ mem_drop_new_struct_fields i syms i cg s old_list → v {
     : s dtop ( nurl_sym_get syms `__defer_top__` )
     ? == 0 ( nurl_str_len dtop )
-    { : s cur ( nurl_sym_get syms `__owned_struct_fields__` )
-        : i old_len ( nurl_str_len old_list )
-        : i cur_len ( nurl_str_len cur )
-        ? > cur_len old_len
-        { : i skip ? == old_len 0 0 + old_len 1
-            : ~ s rest ( nurl_str_slice cur skip - cur_len skip )
-            ~ != 0 ( nurl_str_len rest ) {
-                : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
-                : s sname ( str_first_word rest ) = rest ( str_skip_word rest )
-                : s path ( str_first_word rest ) = rest ( str_skip_word rest )
-                : s kind ( str_first_word rest ) = rest ( str_skip_word rest )
-                : s leaf_sname ( str_first_word rest ) = rest ( str_skip_word rest )
-                : s leaf_idx ( str_first_word rest ) = rest ( str_skip_word rest )
-                ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx )
-            }
+    { : ~ s rest ( nurl_sym_get syms `__owned_struct_fields__` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
+            : s sname ( str_first_word rest ) = rest ( str_skip_word rest )
+            : s path ( str_first_word rest ) = rest ( str_skip_word rest )
+            : s kind ( str_first_word rest ) = rest ( str_skip_word rest )
+            : s leaf_sname ( str_first_word rest ) = rest ( str_skip_word rest )
+            : s leaf_idx ( str_first_word rest ) = rest ( str_skip_word rest )
+            // A binding's several owned fields share one alloca ptr and
+            // are registered together, so ptr-membership decides for
+            // the whole group consistently.
+            ? ( str_contains_word old_list ptr )
+            {}
+            { ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx ) }
         }
-        {}
     }
     {}
 }
@@ -6380,30 +6441,52 @@
 @ mem_drop_new_user_drops i syms i cg s old_list → v {
     : s dtop ( nurl_sym_get syms `__defer_top__` )
     ? == 0 ( nurl_str_len dtop )
-    { : s cur ( nurl_sym_get syms `__user_drops__` )
-        : i old_len ( nurl_str_len old_list )
-        : i cur_len ( nurl_str_len cur )
-        ? > cur_len old_len
-        { : i skip ? == old_len 0 0 + old_len 1
-            : ~ s rest ( nurl_str_slice cur skip - cur_len skip )
-            ~ != 0 ( nurl_str_len rest ) {
-                : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
-                : s vt ( str_first_word rest ) = rest ( str_skip_word rest )
-                : s impl_key ( nurl_str_cat `drop##` vt )
-                : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
-                ? != 0 ( nurl_str_len impl_mangle_key )
-                { : s impl_name ( nurl_str_cat `drop__` impl_mangle_key )
-                    : s v ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print v )
-                    ( nurl_print ` = load ` ) ( nurl_print vt ) ( nurl_print `, ` ) ( nurl_print vt )
-                    ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
-                    ( nurl_print `  call void @` ) ( nurl_print impl_name )
-                    ( nurl_print `(` ) ( nurl_print vt ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
-                }
-                {}
+    { : ~ s rest ( nurl_sym_get syms `__user_drops__` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
+            : s vt ( str_first_word rest ) = rest ( str_skip_word rest )
+            : s impl_key ( nurl_str_cat `drop##` vt )
+            : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
+            ? | ( str_contains_word old_list ptr )
+            == 0 ( nurl_str_len impl_mangle_key )
+            {}
+            { : s impl_name ( nurl_str_cat `drop__` impl_mangle_key )
+                : s v ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print v )
+                ( nurl_print ` = load ` ) ( nurl_print vt ) ( nurl_print `, ` ) ( nurl_print vt )
+                ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+                ( nurl_print `  call void @` ) ( nurl_print impl_name )
+                ( nurl_print `(` ) ( nurl_print vt ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
             }
         }
-        {}
+    }
+    {}
+}
+
+// ── Ownership transfer on assignment ──────────────────────────────
+// `= outer x` where x is an owned i8* binding COPIES the pointer: the
+// heap buffer now lives on through `outer`, so x's scheduled drop must
+// be cancelled or the arm/loop/fn-exit free turns `outer` into a
+// dangling pointer (observed as corrupted IR when the compiler's own
+// `: s r ( nurl_cg_reg cg )` arm-locals escaped into outer mutables).
+// Conservative direction: remove x's entry — worst case the buffer
+// leaks (when `outer` itself is untracked), never a use-after-free.
+// Removal filters x's alloca-ptr word out of the CURRENT scope's
+// `__owned_strings__`; the membership-based delta protocol above stays
+// consistent under mid-list deletion.
+@ mem_remove_owned_str i syms s ptr → v {
+    : s cur ( nurl_sym_get syms `__owned_strings__` )
+    ? & != 0 ( nurl_str_len ptr ) ( str_contains_word cur ptr )
+    { : ~ s out ``
+        : ~ s rest cur
+        ~ != 0 ( nurl_str_len rest ) {
+            : s w ( str_first_word rest )
+            = rest ( str_skip_word rest )
+            ? ( seq w ptr )
+            {}
+            { = out ? == 0 ( nurl_str_len out ) w ( nurl_str_cat3 out ` ` w ) }
+        }
+        ( nurl_sym_def syms `__owned_strings__` out )
     }
     {}
 }
@@ -7288,6 +7371,17 @@
         ? == tt TT_LPAREN { ( bck_record `expr` `` bck_line ) } {}
         bck_ev
     }
+    // A `:` declaration is a STATEMENT — it must not type the enclosing
+    // block/arm as value-producing. gen_let_or_struct leaves the RHS's
+    // type in last_type as a side effect; an arm whose LAST statement is
+    // a decl then looked value-typed to gen_cond/gen_match, which (a)
+    // suppressed the Phase 2D arm-local fall-through drop ("value may
+    // flow to the phi consumer") — leaking the binding — and (b) emitted
+    // a bogus phi over the discarded decl value. `=` assignment is NOT
+    // reset here: gen_assign publishes the LHS type deliberately (its
+    // store_val legitimately feeds `?? r { F e → { = rc e } }`-shaped
+    // arm phis; see gen_assign's tail comment).
+    ? == tt TT_COLON { ( nurl_set_last_type `void` ) } {}
     // Borrow checker (Phase 1): drain this statement's move stash into
     // `move` rows — placed AFTER the statement's own record so the
     // consuming call itself reads the binding while still Owned.
@@ -7654,6 +7748,16 @@
             ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
             ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print old_reg ) ( nurl_print `)` ) ( emit_dbg_eol )
         }
+        {}
+        // Ownership transfer: `= name x` with a bare-identifier RHS
+        // copies x's pointer into `name`. If x was a tracked owned
+        // string, cancel ITS scheduled drop — the buffer lives on
+        // through `name` now (whose own registration, if any, frees it
+        // exactly once at scope exit). Without this, the arm/loop
+        // delta-drop frees x while `name` still aliases it.
+        ? & & != 0 g_auto_drop_strings ( seq vt `i8*` ) ( is_ident_tok bck_rhs_tt )
+        { ( mem_remove_owned_str syms
+            ( nurl_sym_get syms ( nurl_str_cat bck_rhs_val `__ptr` ) ) ) }
         {}
         // Widen i1 short-circuit / comparison results to the LHS's
         // declared integer width, so `= myi64 & a b` stores cleanly.
