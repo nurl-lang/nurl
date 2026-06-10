@@ -21,20 +21,27 @@
 //   ( bigint_add     BigInt x BigInt y )  → BigInt
 //   ( bigint_sub     BigInt x BigInt y )  → BigInt
 //   ( bigint_mul     BigInt x BigInt y )  → BigInt
+//   ( bigint_div     BigInt x BigInt y )  → BigInt  (truncated quotient)
+//   ( bigint_rem     BigInt x BigInt y )  → BigInt  (sign of the dividend)
 //   ( bigint_to_string BigInt x )         → String  (base 10, signed)
+//
+// Division is TRUNCATED (the quotient rounds toward zero, the remainder
+// takes the dividend's sign), matching the native `/` and `%` on `i` —
+// so for any y ≠ 0:  x == (x/y)*y + x%y  and  |x%y| < |y|.
+// Division by zero PANICS (`panic`, recoverable via `recover`): it is a
+// program defect, not a data error, so it is not threaded through `!`.
+// The magnitude core is Knuth Algorithm D (TAOCP vol. 2, 4.3.1) over the
+// base-2^16 limbs; a single-limb divisor short-circuits through
+// __mag_divmod_small_inplace.
 //
 // Memory: every BigInt OWNS its limb vector. Operations BORROW their
 // arguments (never freed) and return a freshly-allocated BigInt; the
 // caller frees each BigInt it holds with `bigint_free` (mirrors the
 // `http_response_free` / `query_pairs_free` convention — plain structs
 // are not auto-dropped). bigint_to_string returns an OWNED String.
-//
-// Not yet implemented: bignum ÷ bignum division / modulo (Knuth
-// Algorithm D). Division by a single small limb exists internally
-// (__mag_divmod_small_inplace) and powers base-10 formatting; the full
-// quotient is tracked as a follow-up (see ROADMAP "Numeric breadth").
 
 $ `stdlib/core/errors.nu`
+$ `stdlib/std/panic.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/option.nu`
@@ -203,6 +210,121 @@ $ `stdlib/core/option.nu`
     ( __norm a )
 }
 
+// Magnitude divmod (Knuth Algorithm D). Both inputs NORMALIZED, `bdiv`
+// non-empty. Returns a fresh normalized quotient magnitude; the
+// normalized remainder limbs are appended to `rem` (caller passes it in
+// EMPTY). Borrows `a` and `bdiv`.
+@ __mag_divmod ( Vec i ) a ( Vec i ) bdiv ( Vec i ) rem → ( Vec i ) {
+    // a < b: quotient zero, remainder a.
+    ? < ( __mag_cmp a bdiv ) 0 {
+        : i nca ( vec_len [i] a )
+        : ~ i t 0
+        ~ < t nca {
+            ( vec_push [i] rem ( __limb a t ) )
+            = t + t 1
+        }
+        ^ ( vec_new [i] )
+    } {}
+    : i nb ( vec_len [i] bdiv )
+    // Single-limb divisor: the small in-place routine is exact.
+    ? == nb 1 {
+        : ( Vec i ) q ( __mag_clone a )
+        : i r ( __mag_divmod_small_inplace q ( __limb bdiv 0 ) )
+        ? > r 0 { ( vec_push [i] rem r ) } {}
+        ^ q
+    } {}
+    : i na ( vec_len [i] a )
+    // D1 normalize: scale both by d = 2^k so the top divisor limb is
+    // >= base/2 (makes every trial digit off by at most 1). Reuses the
+    // small-multiply helper, so no shift primitives are needed.
+    : ~ i d 1
+    : ~ i top ( __limb bdiv - nb 1 )
+    ~ < top 32768 {
+        = top * top 2
+        = d * d 2
+    }
+    : ( Vec i ) un ( __mag_clone a )
+    ( __mag_mul_add_small_inplace un d 0 )
+    ~ < ( vec_len [i] un ) + na 1 { ( vec_push [i] un 0 ) }
+    : ( Vec i ) vn ( __mag_clone bdiv )
+    ( __mag_mul_add_small_inplace vn d 0 )
+    : i m - na nb
+    : ( Vec i ) q ( vec_with_cap [i] + m 1 )
+    : ~ i z 0
+    ~ <= z m {
+        ( vec_push [i] q 0 )
+        = z + z 1
+    }
+    // No more pushes into un/vn/q past here → data pointers stay valid.
+    : *i up ( vec_data [i] un )
+    : *i vp ( vec_data [i] vn )
+    : *i qp ( vec_data [i] q )
+    : i vh # i . vp - nb 1
+    : i vl # i . vp - nb 2
+    : ~ i j m
+    ~ >= j 0 {
+        // D3 trial digit from the top two dividend limbs; the two-limb
+        // value is < base^2 so it stays well inside i64.
+        : i u2 + * # i . up + j nb ( __big_base ) # i . up - + j nb 1
+        : ~ i qhat / u2 vh
+        : ~ i rhat % u2 vh
+        : i ulo # i . up + j - nb 2
+        : ~ b adj T
+        ~ adj {
+            ? | >= qhat ( __big_base ) > * qhat vl + * rhat ( __big_base ) ulo {
+                = qhat - qhat 1
+                = rhat + rhat vh
+                ? >= rhat ( __big_base ) { = adj F } {}
+            } { = adj F }
+        }
+        // D4 multiply-and-subtract: u[j .. j+nb] -= qhat * v, schoolbook
+        // with a per-limb {0,1} borrow (no negative shifts needed).
+        : ( Vec i ) qv ( __mag_clone vn )
+        ( __mag_mul_add_small_inplace qv qhat 0 )
+        : ~ i borrow 0
+        : ~ i t2 0
+        ~ <= t2 nb {
+            : ~ i dd - - # i . up + t2 j ( __limb qv t2 ) borrow
+            ? < dd 0 {
+                = dd + dd ( __big_base )
+                = borrow 1
+            } { = borrow 0 }
+            = . up + t2 j dd
+            = t2 + t2 1
+        }
+        ( vec_free [i] qv )
+        // D6 add back (rare: probability ~2/base per digit): the trial
+        // digit was one too large — undo by adding v once. The top-limb
+        // carry wraps mod base, cancelling the outstanding borrow.
+        ? > borrow 0 {
+            = qhat - qhat 1
+            : ~ i c2 0
+            : ~ i t3 0
+            ~ < t3 nb {
+                : i s2 + + # i . up + t3 j # i . vp t3 c2
+                = . up + t3 j & s2 ( __big_mask )
+                = c2 >> s2 ( __big_shift )
+                = t3 + t3 1
+            }
+            = . up + j nb & + # i . up + j nb c2 ( __big_mask )
+        } {}
+        = . qp j qhat
+        = j - j 1
+    }
+    // D8 un-normalize: the remainder is u[0 .. nb) / d.
+    : ~ i t4 0
+    ~ < t4 nb {
+        ( vec_push [i] rem # i . up t4 )
+        = t4 + t4 1
+    }
+    ( __norm rem )
+    ? > d 1 { : i _r ( __mag_divmod_small_inplace rem d ) } {}
+    ( vec_free [i] un )
+    ( vec_free [i] vn )
+    ( __norm q )
+    ^ q
+}
+
 // ── Public constructors ───────────────────────────────────────────────
 
 @ bigint_zero → BigInt {
@@ -294,6 +416,28 @@ $ `stdlib/core/option.nu`
     : ( Vec i ) m ( __mag_mul . x limbs . y limbs )
     : b neg & != . x neg . y neg > ( vec_len [i] m ) 0
     ^ @ BigInt { neg m }
+}
+
+// Truncated quotient (rounds toward zero), matching the native `/`.
+// Panics on a zero divisor.
+@ bigint_div BigInt x BigInt y → BigInt {
+    ? ( bigint_is_zero y ) { ( panic `bigint_div: division by zero` ) } {}
+    : ( Vec i ) rm ( vec_new [i] )
+    : ( Vec i ) qm ( __mag_divmod . x limbs . y limbs rm )
+    ( vec_free [i] rm )
+    : b neg & != . x neg . y neg > ( vec_len [i] qm ) 0
+    ^ @ BigInt { neg qm }
+}
+
+// Remainder of truncated division (takes the dividend's sign), matching
+// the native `%`: x == (x/y)*y + x%y. Panics on a zero divisor.
+@ bigint_rem BigInt x BigInt y → BigInt {
+    ? ( bigint_is_zero y ) { ( panic `bigint_rem: division by zero` ) } {}
+    : ( Vec i ) rm ( vec_new [i] )
+    : ( Vec i ) qm ( __mag_divmod . x limbs . y limbs rm )
+    ( vec_free [i] qm )
+    : b neg & . x neg > ( vec_len [i] rm ) 0
+    ^ @ BigInt { neg rm }
 }
 
 // ── Formatting / parsing ──────────────────────────────────────────────

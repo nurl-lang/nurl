@@ -8,7 +8,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`std/bigint`: arbitrary-precision division and modulo** —
+  `bigint_div` / `bigint_rem` (`stdlib/std/bigint.nu`), closing the last
+  gap in the bigint arithmetic surface. The magnitude core is Knuth
+  Algorithm D (TAOCP vol. 2, §4.3.1) over the base-2¹⁶ limbs: D1
+  normalization reuses the existing small-multiply helper (top divisor
+  limb ≥ base/2, so every trial digit is off by at most one), the
+  multiply-and-subtract step uses a per-limb {0,1} borrow (no negative
+  shifts), and the rare add-back step is exercised by both classic
+  Hacker's Delight `divmnu` trigger vectors. A single-limb divisor
+  short-circuits through `__mag_divmod_small_inplace`. Semantics are
+  truncated division exactly like the native `/` and `%`: the quotient
+  rounds toward zero, the remainder takes the dividend's sign, and
+  `x == (x/y)*y + x%y` holds for every `y ≠ 0`. Division by zero panics
+  (recoverable via `recover`) — a defect, not a data error, so it is not
+  threaded through `!`. Regression `compiler/tests/bigint_div.nu`: all
+  four sign combinations, zero/`a<b`/exact edges, both add-back vectors,
+  a 39-digit ÷ 21-digit case, a 60-round deterministic invariant sweep
+  (reconstruction, `|r| < |y|`, remainder sign) over growing multi-limb
+  operands, and the recovered divide-by-zero panic; ASan+UBSan clean,
+  leak-free. Additionally verified against Python on 300 random cases
+  (mixed limb counts/signs, near-power-of-2¹⁶ divisors).
+
 ### Fixed
+
+- **`recover` leaked the closure's captured environment**
+  (`stdlib/std/panic.nu`). `recover` decomposes its closure into
+  `(fn_ptr, env_ptr)` and hands them to the C trampoline; passing the
+  raw env pointer onward suppresses the parameter's auto-drop (the
+  compiler must assume the env escapes — and in `thread_spawn`, whose
+  shape this mirrors, it really does). But `nurl_recover` is
+  synchronous: once it returns, the closure can never run again, so the
+  env was simply leaked — one allocation per `recover` call with a
+  capturing closure, panic or not. `recover` now frees the env right
+  after `nurl_recover` returns (NULL-safe for capture-less closures),
+  on both the normal and the unwind path. Found via ASan on the new
+  `bigint_div` divide-by-zero regression; the existing
+  `recover_basic` / `http_server_panic` goldens are unaffected (output
+  is unchanged — only the leak is gone).
 
 - **HTTP/1.1 server hardening — four root-cause bug fixes from a focused
   security bughunt** (`stdlib/ext/http_request.nu`, `http_server.nu`,
