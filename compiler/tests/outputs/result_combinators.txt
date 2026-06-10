@@ -1,0 +1,19 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+ok1_is_ok
+ok1_no_err
+err1_no_ok
+err1_is_err
+bad format
+ok2_is_ok
+err2_is_err
+42
+0
+43
+map_err_preserved
+84
+and_then_err_preserved
+map_err_is_err
+overflow

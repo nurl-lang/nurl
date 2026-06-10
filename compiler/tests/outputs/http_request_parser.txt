@@ -1,0 +1,50 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+── well_formed_get ──
+  method=GET
+  path=/index.html
+  query=
+  version=HTTP/1.1
+  consumed=70
+  headers=2
+  hdr host=example.com
+  hdr HOST=example.com
+  hdr X-Multi=<absent>
+  hdr Missing=<absent>
+── well_formed_post_with_query ──
+  method=POST
+  path=/api
+  query=x=1&y=hello%20world
+  version=HTTP/1.1
+  consumed=108
+  headers=3
+  hdr host=api.example.com
+  hdr HOST=api.example.com
+  hdr X-Multi=a, b
+  hdr Missing=<absent>
+── unsupported_version ──
+  err=HttpReqUnsupportedVersion
+── incomplete_head ──
+  err=HttpReqIncomplete
+── malformed_request_line ──
+  err=HttpReqMalformed
+── cl_te_smuggling ──
+  err=HttpReqMalformed
+── chunk_hex_size ──
+  1a -> 26
+  0 -> 0
+  200 -> 512
+  10000000000000000 -> reject
+  ffffffffffffffff -> reject
+── oversized_no_crlfcrlf ──
+  err=HttpReqTooLarge
+── parse_query / percent codec ──
+  pairs=4
+  name=hello world
+  greet=hi there
+  flag=
+  empty=
+  percent_decode=a b c/
+  percent_encode=a%20b%2Fc

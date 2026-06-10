@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+src=[1,2,3,4,5]
+sqs=[1,4,9,16,25]
+evens=[2,4]
+find_gt3=4
+find_gt99=none
+any_even=T all_even=F
+all_pos=T
+empty_any=F empty_all=T
+done

@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+i64=42
+i32_from_ffi_positive=T
+i16_max=32767
+i8_max=127
+u16_max=65535
+u32_max=4294967295
+u64_neg1=-1

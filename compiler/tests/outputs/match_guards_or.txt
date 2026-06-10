@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+g500=big
+g50=small-pos
+g-5=non-pos
+g0=non-pos
+gNone=none
+North=vertical
+West=horizontal
+Up=depth
+South=vertical

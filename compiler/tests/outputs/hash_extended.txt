@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+md5 empty: ok
+md5 abc: ok
+md5 alnum: ok
+sha512 empty: ok
+sha512 abc: ok
+sha512 112b: ok
+hmac tc2: ok
+hmac tc1: ok
+hmac tc6: ok

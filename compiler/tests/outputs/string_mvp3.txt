@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+hello, world
+HELLO, WORLD
+edcba
+abababab
+[trim me  
+ ]
+[  	  trim me]
+[trim me]
+THE quick brown fox jumps over THE lazy dog
+a--b--c--d
+xyz
+done

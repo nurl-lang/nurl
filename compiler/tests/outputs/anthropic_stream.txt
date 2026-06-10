@@ -1,0 +1,39 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+text_delta_hit=Hello
+text_delta_ijd=<none>
+text_delta_idx=0
+ijd_text_delta=<none>
+ijd_partial={"city":
+ijd_index=1
+accumulated={"city":"Helsinki"}
+cbs_text_idx=0
+cbs_text_kind=text
+cbs_text_id=<none>
+cbs_text_name=<none>
+cbs_tu_idx=1
+cbs_tu_kind=tool_use
+cbs_tu_id=toolu_01ABC
+cbs_tu_name=get_weather
+cbstop_idx=1
+cbstop_kind=<none>
+md_stop=tool_use
+md_idx=<none>
+md_text=<none>
+md2_stop=end_turn
+err_type=overloaded_error
+err_message=Servers are overloaded
+err_text=<none>
+err_stop=<none>
+ping_text=<none>
+ping_ijd=<none>
+ping_idx=<none>
+ping_kind=<none>
+ping_tu_id=<none>
+ping_tu_name=<none>
+ping_stop=<none>
+ping_etype=<none>
+ping_emsg=<none>
+done

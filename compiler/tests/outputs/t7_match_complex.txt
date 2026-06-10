@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- 4.1 Test 7: Complex enum + wildcard ---
+Click:    click
+KeyPress: key
+Close:    other
+Resize:   other
+PASS

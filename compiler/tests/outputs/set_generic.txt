@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+len0=0 empty=T
+add_alice=T add_alice2=F
+len3=3 cap=8
+has_alice=T has_dave=F
+rm_bob=T rm_bob2=F
+len_after_rm=2
+fold_count=2
+set_i_len=12 cap=32
+has_5=T has_99=F
+done

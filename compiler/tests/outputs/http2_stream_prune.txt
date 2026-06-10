@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+  ok   mixed: active count = 2
+  ok   mixed: survivor[0] id = 3
+  ok   mixed: survivor[0] state = 1
+  ok   mixed: survivor[1] id = 7
+  ok   mixed: survivor[1] state = 3
+  ok   all-closed: count = 0
+  ok   all-active: count = 2
+http2_stream_prune: all checks passed

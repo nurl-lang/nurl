@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+Hello, world!
+len=13
+pi=314
+eq
+ne
+byte0=97
+cleared len=0

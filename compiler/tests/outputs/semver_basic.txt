@@ -1,0 +1,61 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+── round-trip ──
+major=1
+
+minor=2
+
+patch=3
+
+pre=alpha.1
+build=build.7
+render=1.2.3-alpha.1+build.7
+── precedence ──
+c_1.0.0_lt_2.0.0=-1
+
+c_2.1.0_lt_2.1.1=-1
+
+c_eq=0
+
+c_pre_lt_release=-1
+
+c_alpha_lt_alpha.1=-1
+
+c_alpha.1_lt_alpha.beta=-1
+
+c_beta.2_lt_beta.11=-1
+
+c_rc.1_lt_release=-1
+
+c_build_ignored=0
+
+── ranges ──
+caret_1.2.3__1.2.3=T
+caret_1.2.3__1.9.9=T
+caret_1.2.3__2.0.0=F
+caret_1.2.3__1.2.2=F
+caret_0.2.3__0.2.9=T
+caret_0.2.3__0.3.0=F
+tilde_1.2.3__1.2.9=T
+tilde_1.2.3__1.3.0=F
+exact_1.2.3__1.2.3=T
+exact_1.2.3__1.2.4=F
+gte_1.0.0__1.0.0=T
+gt_1.0.0__1.0.0=F
+lt_2.0.0__1.9.9=T
+lt_2.0.0__2.0.0=F
+wild_1star__1.5.0=T
+wild_1star__2.0.0=F
+any__9.9.9=T
+bare_1.2.3__1.8.0=T
+bare_1.2.3__2.0.0=F
+── max_satisfying ──
+max_caret_1.2.0=1.4.9
+── errors ──
+empty=SvEmpty
+one=SvMissingMinor
+two=SvMissingPatch
+xcore=SvBadNumber
+done

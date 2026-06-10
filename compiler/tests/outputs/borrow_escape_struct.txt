@@ -1,0 +1,4 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_escape_struct.nu:28: error: returning a value that references a stack binding by pointer - it dangles after this function returns (move the captured data to a heap-backed handle)
+error: compilation aborted - 1 borrow-checker violations (re-run with --no-borrowck to bypass)

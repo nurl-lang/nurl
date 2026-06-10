@@ -1,0 +1,19 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+frame_end=17
+partial=-1
+event=message id=42 data=<hello world>
+event=chunk id= data=<line1
+line2
+line3>
+event=ping id= data=<ok>
+event=a id= data=<1>
+event=b id= data=<2>
+event=c id=e3 data=<three>
+delta1=Hello
+delta2=<none>
+delta3=<none>
+auth_stream: ClaudeAuth
+done

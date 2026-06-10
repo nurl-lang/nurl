@@ -1,0 +1,26 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- initialize ---
+completions_capability=present
+--- completion prompt (prefix r) ---
+prompt_r.count=2
+prompt_r.first=ruby
+prompt_r.total=2
+prompt_r.hasMore=F
+--- completion prompt (empty prefix) ---
+prompt_all.count=4
+prompt_all.first=python
+prompt_all.total=4
+prompt_all.hasMore=F
+--- completion resource ---
+resource.count=2
+resource.first=main
+resource.total=2
+resource.hasMore=F
+--- completion unknown ref ---
+unknown.count=0
+unknown.first=(none)
+unknown.total=0
+unknown.hasMore=F

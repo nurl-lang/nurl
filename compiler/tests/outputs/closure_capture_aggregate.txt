@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+has_10=T has_20=T has_99=F 
+vec_len=5
+done

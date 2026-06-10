@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+HashMap test...
+alice: 42
+bob: 17
+size: 3
+has alice: yes
+has dave: no
+alice after update: 100
+has bob after del: no
+size after del: 2
+done

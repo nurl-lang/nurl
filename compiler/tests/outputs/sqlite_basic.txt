@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+ddl_changes=0
+row id=1 body=note-1
+row id=2 body=note-2
+row id=3 body=note-3
+nrows=3

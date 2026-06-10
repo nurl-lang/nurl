@@ -1,0 +1,20 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a=127
+b=30000
+c=2000000000
+d=65000
+e=4000000000
+f=100000000000
+nsig back=-1000
+unsig back=4000000000
+narrow=22136
+fz≈3.75: 3.75
+roundtrip≈3.75: 3.75
+Zi8=1
+Zi16=2
+Zi32=4
+Zu64=8
+Zf32=4

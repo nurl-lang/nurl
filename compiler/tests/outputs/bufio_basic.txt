@@ -1,0 +1,19 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+owned:
+  [alpha] len=5
+  [beta] len=4
+  [gamma] len=5
+  [] len=0
+  [omega] len=5
+reused:
+  alpha
+  beta
+  gamma
+  
+  omega
+count=5 eof=T
+missing file rejected
+done

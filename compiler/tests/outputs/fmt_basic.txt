@@ -1,0 +1,18 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+Hello, World!
+answer = 42
+[a|b|c]
+2026-04-30 :: OK
+Alice is 30 years old
+before {} after = mid
+a=1 b={}
+only one kept
+} ok tail
+(x, y, z)
+empty=[]
+{inside}
+warn: disk full (/tmp)
+done

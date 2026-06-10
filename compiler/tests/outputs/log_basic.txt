@@ -1,0 +1,20 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+=== default level (Info) ===
+[INFO]  info ok
+[WARN]  warn ok
+[ERROR] error ok
+=== threshold = Warn ===
+[WARN]  disk /var full
+[ERROR] oops db: code 42
+=== threshold = Off ===
+=== threshold = Debug ===
+[DEBUG] a-b-c
+[INFO]  req GET / took 12ms
+[WARN]  slow query users (1234 rows in 560ms)
+[ERROR] crash: null deref
+cur_level=1
+[INFO]  Bob just turned 42
+done

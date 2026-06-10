@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- 4.3 Test 3: OR short-circuit ---
+result: T
+counter: 0
+short-circuit OK
+PASS

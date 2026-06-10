@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+c1=red
+c2=green
+c3=blue
+db_ok=ok
+db_nf=not_found
+db_cf=conflict
+db_to=other

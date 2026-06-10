@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+write_file ok
+read_file ok: hello fs
+size 8
+append_file ok
+read_file ok: hello fs!
+delete ok
+read_file err: not found
+write_file dir err: not found
+dir_create ok
+dir_create exists err: already exists

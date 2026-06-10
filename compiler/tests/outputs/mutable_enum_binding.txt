@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+c1: red
+c2/init: green
+c2/blue: blue
+c2/red: red
+last_err: timeout
+last_err2: dns
+s: busy
+s2: err=7

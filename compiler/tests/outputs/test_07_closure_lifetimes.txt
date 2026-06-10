@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+== Closure Lifetime & RC Test ==
+[Test 1.1] add_ten(5)     = 15 (expected: 15)
+[Test 1.2] add_hundred(5) = 105 (expected: 105)
+[Test 2]   pipe(5)        = 20 (expected: 20)
+[Test 3]   pipe_new(5)    = 115 (expected: 115)
+
+FINAL CHECKSUM = 255

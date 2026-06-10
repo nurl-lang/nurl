@@ -1,0 +1,30 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+── round-trip ──
+archive_len=3584
+
+entry_count=3
+
+name0=readme.txt
+size0=4
+
+data0_len=4
+
+name2=src/lib.nu
+── gzip ──
+gz_entry_count=3
+
+── tamper ──
+tamper=TarBadChecksum
+── unsafe path ──
+unsafe=TarUnsafePath
+── unpack ──
+unpacked=2
+
+readback_len=4
+
+readback_nul_at2=0
+
+done

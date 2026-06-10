@@ -1,0 +1,17 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+trunc(2.7)     ok
+trunc(-2.7)    ok
+cbrt(8)        ok
+cbrt(-27)      ok
+hypot(3,4)     ok
+hypot(0,0)     ok
+log2(8)        ok
+log2(1)        ok
+log10(1000)    ok
+log10(1)       ok
+sign(-5.5)     ok
+sign(5.5)      ok
+sign(0.0)      ok

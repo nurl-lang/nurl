@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+join3    [a, b, c]
+join_es  [abc]
+join_em  []
+join1    [solo]
+roundtr  [x,y,z]
+count_aa  2
+count_a   4
+count_z   0
+count_es  0
+count_cm  4

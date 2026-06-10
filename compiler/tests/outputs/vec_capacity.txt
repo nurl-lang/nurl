@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+before reserve cap=0
+after reserve(10) cap>=10=T len=0
+reserve_neg_zero_noop=T
+shrunk cap=3 len=3
+empty_shrunk cap=0
+extended dst=[100,200,7,8,9]
+src untouched=[7,8,9]
+dst[2] still 7 = T
+extend_empty_noop=T
+done

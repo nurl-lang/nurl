@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+sum=10
+cnt=4
+keys=alpha bravo charlie delta 
+peek_one=delta
+empty=ok
+done

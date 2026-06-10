@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+now_ms_positive=T
+now_seconds_positive=T
+monotonic_ns_positive=T
+now_ms_seconds_consistent=T
+monotonic_non_decreasing=T
+slept_at_least_30ms=T
+slept_under_5s=T
+nonpositive_sleep_no_op=T
+done

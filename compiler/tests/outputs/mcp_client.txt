@@ -1,0 +1,23 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+── McpErr names ──
+  McpAuth     = McpAuth
+  McpHttp     = McpHttp
+  McpJson     = McpJson
+  McpProtocol = McpProtocol
+  McpOther    = McpOther
+── empty endpoint ──
+  err = McpAuth
+── error response inspect ──
+  is_error    = T
+  error_code  = -32602
+  error_msg   = Invalid params
+── success response inspect ──
+  is_error    = F
+  result.ok   = T
+── tools array extract ──
+  count = 2
+  tool = echo
+  tool = add

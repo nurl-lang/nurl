@@ -1,0 +1,20 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+── register smoke ──
+  cleared twice = ok
+── constant smoke ──
+  SIGTERM available = T
+  signal_name(SIGTERM) = SIGTERM
+  bogus name = -1 ok
+  signal_name(9999) = SIG?
+── generic dispatch ──
+  install rc = 0
+  pending before raise = F
+  pending after  raise = T
+  pending after dispatch = F
+  handler ran = 1
+  handler ran after empty dispatch = 1
+  pending after clear = F
+live signal tests skipped (set NURL_NET_TESTS=1 to enable)

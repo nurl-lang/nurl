@@ -1,0 +1,43 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+int_abs(-7)=7
+int_abs(5)=5
+int_pow(2,10)=1024
+int_pow(3,4)=81
+int_pow(5,0)=1
+int_pow(7,-2)=0
+int_sign(-42)=-1
+int_sign(0)=0
+int_sign(99)=1
+INT_MAX=9223372036854775807
+INT_MIN=-9223372036854775808
+sqrt(16)=4
+sqrt(2)_t=1
+floor(3.7)=3
+ceil(3.2)=4
+round(2.5)=3
+round(-2.5)=-3
+abs(-8.5)_t=8
+pow(2,8)=256
+pow(4,0.5)=2
+exp(0)=1
+log(1)=0
+sin(0)=0
+cos(0)=1
+tan(0)=0
+sin(π/2)=1
+cos(π)=-1
+atan2(1,0)_r=2
+atan2(0,-1)_r=3
+log(e)=1
+is_nan(log(-1))=T
+is_nan(1)=F
+is_inf(exp1000)=T
+is_inf(1)=F
+parse(3.14)_t=3
+parse(empty)=empty input
+parse(garbage)=bad format
+parse(-1.5e2)=-150
+done

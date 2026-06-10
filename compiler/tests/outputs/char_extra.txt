@@ -1,0 +1,25 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+is_upper(A)  ok = 1
+is_upper(z)  ok = 0
+is_upper(5)  ok = 0
+is_lower(z)  ok = 1
+is_lower(A)  ok = 0
+hexd(5)      ok = 1
+hexd(f)      ok = 1
+hexd(F)      ok = 1
+hexd(G)      ok = 0
+hexd(space)  ok = 0
+up(a)        ok = 65
+up(A)        ok = 65
+up(5)        ok = 53
+lo(Z)        ok = 122
+lo(z)        ok = 122
+lo(_)        ok = 95
+hv(0)        ok = 0
+hv(9)        ok = 9
+hv(a)        ok = 10
+hv(F)        ok = 15
+hv(G)        ok = -1

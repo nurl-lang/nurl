@@ -1,0 +1,19 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+new+str: ok
+parent: ok
+name: ok
+push: ok
+is_abs yes: ok
+is_abs no: ok
+is_empty: ok
+clone eq: ok
+eq diff: ok
+rel updown: ok
+rel down: ok
+rel same: ok
+rel mismatch: ok
+canonical abs: ok
+canonical missing: ok

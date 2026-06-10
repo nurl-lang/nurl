@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+Argv test...
+argc: 1
+program: ./argv_test
+  arg[0]: ./argv_test
+done

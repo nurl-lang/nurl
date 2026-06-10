@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+first=F
+dup=T
+other=F
+len=2
+forgot_len=1
+readd=F
+cap_len=256
+has1=T
+after257_len=256
+has1_after=F

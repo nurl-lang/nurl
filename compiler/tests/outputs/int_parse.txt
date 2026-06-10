@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+OK 42
+OK -17
+OK 9
+OK 0
+ERR empty input
+ERR empty input
+ERR empty input
+ERR bad format
+ERR bad format
+ERR bad format
+ERR bad format
+OK 1234567890

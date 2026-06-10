@@ -1,0 +1,18 @@
+COMPILE OK
+WARNINGS
+compiler/tests/should_warn_caret_xor.nu:20:15: warning: '^' is the return operator; did you mean '^^' for XOR? (Two adjacent carets, no space between them)
+    : i x ^ a b  // ← warns: `^` returns `a`, `b` is dead
+              ^
+compiler/tests/should_warn_caret_xor.nu:25:9: warning: '^' is the return operator; did you mean '^^' for XOR? (Two adjacent carets, no space between them)
+    ^ a b  // ← warns: `^` returns `a`, `b` is dead
+        ^
+compiler/tests/should_warn_caret_xor.nu:29:9: warning: '^' is the return operator; did you mean '^^' for XOR? (Two adjacent carets, no space between them)
+    ^ a 42  // ← warns: `^` returns `a`, the `42` is dead
+        ^
+LINK OK
+EXIT 0
+OUTPUT
+binding=5
+stmt=5
+lit=5
+fine=8

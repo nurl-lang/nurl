@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+str: src=hello world clone=hello
+vec_i: src0=999 clone0=10 clonelen=3
+vec_str: srclen=4 clonelen=3 clone=[ alpha beta gamma ]
+filter: kept=3 [ alpha gamma delta ]
+map_i: srclen=4 clonelen=3 clone[two]=2 clone[four]=-1
+map_str: srclen=2 clonelen=2
+done

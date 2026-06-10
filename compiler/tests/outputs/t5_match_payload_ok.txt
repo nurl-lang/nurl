@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- 4.1 Test 5: Payload enum OK ---
+JNull:    null
+JBool T:  true
+JBool F:  false
+JNum 42:  42
+JNum 0:   0
+PASS

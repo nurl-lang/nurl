@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+box.cap=99
+box.len=7
+pt.x=0 pt.y=0
+pt.x=1 pt.y=10
+pt.x=2 pt.y=20

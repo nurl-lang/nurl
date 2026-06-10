@@ -1,0 +1,17 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+grew_multiple_chunks ok
+pointers_valid_across_growth ok
+used_sums_chunks ok
+cap_covers_used ok
+oversize_alloc_ok ok
+alloc_n_nonnull ok
+alloc_n_roundtrip ok
+reset_keeps_one_chunk ok
+reset_zeroes_used ok
+usable_after_reset ok
+fixed_first_ok ok
+fixed_oom_null ok
+fixed_never_grows ok

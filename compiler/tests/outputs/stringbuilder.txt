@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+StringBuilder test...
+basic: hello world
+length: 11
+after int: hello world42
+after float: hello world423.14
+after clear len: 0
+csv:
+name,age,score
+alice,30,95
+done
