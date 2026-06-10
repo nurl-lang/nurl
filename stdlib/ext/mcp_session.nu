@@ -96,7 +96,46 @@ $ `stdlib/core/vec.nu`
     ^ res
 }
 
+// Hard cap on concurrent sessions. `initialize` is unauthenticated, so an
+// abusive client could otherwise mint sessions without bound — each owns a
+// String id plus four Vecs — and exhaust memory. At the cap a fresh
+// `initialize` evicts the least-recently-active session (smallest
+// `last_ms`) so a flood of new sessions can't push out genuinely-active
+// clients ahead of idle ones. `last_ms` is stamped at creation and kept
+// fresh by `mcp_session_touch`; sized for a local / loopback MCP server.
+@ mcp_session_max → i { ^ 4096 }
+
+// Drop the least-recently-active session to make room. Caller guarantees a
+// non-empty store. Frees the evicted session's owned Json / String state.
+@ __mcp_session_evict_lru McpSessionStore store → v {
+    : i n ( vec_len [McpSession] . store sessions )
+    ? > n 0 {
+        : ~ i victim 0
+        : ~ i oldest 0
+        : ~ b have F
+        : ~ i k 0
+        ~ < k n {
+            : ?McpSession so ( vec_get [McpSession] . store sessions k )
+            ?? so {
+                T se → {
+                    ? | ! have < . se last_ms oldest
+                    { = oldest . se last_ms = victim k = have T } {}
+                }
+                F → {}
+            }
+            = k + k 1
+        }
+        : ?McpSession vo ( vec_get [McpSession] . store sessions victim )
+        ?? vo { T se → ( __mcp_session_free se ) F → {} }
+        ( vec_remove [McpSession] . store sessions victim )
+    } {}
+}
+
 @ mcp_session_create McpSessionStore store → String {
+    // Bound the store before adding — evict the LRU session at the cap.
+    ? >= ( vec_len [McpSession] . store sessions ) ( mcp_session_max ) {
+        ( __mcp_session_evict_lru store )
+    } {}
     // 32 hex chars of CSPRNG output — collision-free for any realistic
     // server lifetime, and opaque per the MCP spec.
     : String id ( rand_hex_str 16 )
@@ -369,9 +408,16 @@ $ `stdlib/core/vec.nu`
     : ?McpSession so ( vec_get [McpSession] . store sessions idx )
     ?? so {
         T se → {
-            ( vec_push [Json] . se results response )
+            // Only accept a response whose id matches an OUTSTANDING
+            // reverse-RPC request we actually issued. Without this gate a
+            // client can POST unlimited responses carrying ids we never
+            // sent — each piles into `results` unbounded (memory DoS), and
+            // a forged result could be picked up by a later caller that
+            // reuses the id. A non-pending id is dropped.
             : i pi ( __mcp_pending_index . se pending_ids rid )
-            ? >= pi 0 { ( vec_remove [i] . se pending_ids pi ) } {}
+            ? < pi 0 { ( json_free response ) ^ F } {}
+            ( vec_remove [i] . se pending_ids pi )
+            ( vec_push [Json] . se results response )
             ^ T
         }
         F → { ( json_free response ) ^ F }
