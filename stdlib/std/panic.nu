@@ -75,6 +75,13 @@ $ `stdlib/core/string.nu`
     : *u fnp # *u closure 0
     : *u env # *u closure 1
     : i rv ( nurl_recover fnp env )
+    // nurl_recover is synchronous — whether the closure completed or
+    // longjmp'd back, it can never run again, so its captured env is
+    // dead here. Decomposing into raw pointers above suppressed the
+    // param's auto-drop (the compiler must assume the env escapes, as
+    // it really does in thread_spawn), so release it explicitly.
+    // nurl_free is free(): NULL-safe for capture-less closures.
+    ( nurl_free # s env )
     ? == rv 0 {
         ^ @ !v PanicInfo { T 0 }
     } {}
