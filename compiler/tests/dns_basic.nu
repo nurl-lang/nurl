@@ -67,8 +67,10 @@ $ `stdlib/core/vec.nu`
     : !( Vec String ) NetErr r1 ( dns_resolve `localhost` )
     ?? r1 {
         T addrs → {
-            : i n ( vec_len [String] addrs )
-            ( print_label_int `localhost_count` n )
+            // NB: the *count* is environment-dependent — a dual-stack host
+            // maps localhost to both 127.0.0.1 and ::1 (n=2), a single-stack
+            // one to just 127.0.0.1 (n=1). Assert only the invariant: the
+            // IPv4 loopback is present.
             ( print_label_bool `localhost_has_v4` ( vec_contains_str addrs `127.0.0.1` ) )
             ( free_str_vec addrs )
         }
@@ -119,15 +121,16 @@ $ `stdlib/core/vec.nu`
         F e → ( print_label_str `v6_port_err` ( net_err_name e ) )
     }
 
-    // ── 4. Reverse lookup. Allowed outcomes: Some "<host>" OR None. ─
+    // ── 4. Reverse lookup. The resolved PTR name (or whether one exists
+    //       at all) is environment-dependent — Some "localhost",
+    //       Some "localhost.localdomain", or None are all legal. Assert
+    //       only that the call completed without crashing.
     : ?String rev ( dns_reverse `127.0.0.1` )
     ?? rev {
-        T h → {
-            ( print_label_str `reverse_127` ( string_data h ) )
-            ( string_free h )
-        }
-        F → ( print_label_str `reverse_127` `NONE` )
+        T h → ( string_free h )
+        F → {}
     }
+    ( print_label_bool `reverse_127_done` T )
 
     // ── 5. Empty / bogus input must surface as Err, not crash. ─
     : !( Vec String ) NetErr rb ( dns_resolve `` )

@@ -2,7 +2,6 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-localhost_count=1
 localhost_has_v4=T
 literal_v4_count=1
 literal_v4_first=T
@@ -12,5 +11,5 @@ with_port_count=1
 with_port_includes_8080=T
 v6_port_count=1
 v6_port_bracketed=T
-reverse_127=localhost
+reverse_127_done=T
 empty_in_err=NetOther
