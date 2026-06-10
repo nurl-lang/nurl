@@ -71,6 +71,8 @@ $ `stdlib/std/thread.nu`
 
 @ get_mcp_server_version → String { ^ ( env_var_or `NURL_MCP_SERVER_VERSION` `1.9.4` ) }
 
+@ get_changelog_path → String { ^ ( env_var_or `NURL_CHANGELOG_PATH` `/opt/nurl/CHANGELOG.md` ) }
+
 // Per-zig-target runtime object path. Used by /build_target so we don't
 // have to keep a switch in NURL code — the Dockerfile builds one
 // runtime.<id>.o per registered target and the path lookup follows
@@ -1435,6 +1437,7 @@ s combined_stdout s combined_stderr → v {
     ( __mcp_info_push_str tools `nurl_read_readme` )
     ( __mcp_info_push_str tools `nurl_read_roadmap` )
     ( __mcp_info_push_str tools `nurl_read_gotchas` )
+    ( __mcp_info_push_str tools `nurl_changelog` )
     ( json_obj_set j `tools` tools )
 
     : Json resources ( json_arr_new )
@@ -3441,6 +3444,15 @@ s combined_stdout s combined_stderr → v {
     }
 }
 
+// Integer tool argument: JNum → i; absent / non-numeric → default.
+@ __mcp_args_get_int s key Json args i default → i {
+    : ?Json v ( json_obj_get args key )
+    ?? v {
+        T j → { ^ ?? ( json_num_as_i j ) { T n → n F _ → default } }
+        F _ → { ^ default }
+    }
+}
+
 // ── Tool schemas — small helpers keep the descriptor table terse.
 
 @ __mcp_prop s ptype s desc → Json {
@@ -3631,6 +3643,293 @@ s combined_stdout s combined_stderr → v {
     ^ result
 }
 
+// ── nurl_changelog — targeted CHANGELOG.md retrieval ────────────────
+//
+// CHANGELOG.md is ~240 KB and growing; dumping it whole into a model
+// context to answer "when did X change?" wastes the window. This tool
+// returns COMPLETE changelog entries — one top-level `- ` bullet plus a
+// `[release] — date › category` provenance line — selected by
+// AND-matched case-insensitive terms, optionally narrowed to one
+// release. With no arguments it returns a compact index (releases +
+// ent counts) so a model can orient itself with one cheap call.
+// Output is byte-capped; a trailing note reports how many further
+// matches were omitted so the model knows to refine, not re-read.
+
+// Lowercase an owned copy of a borrowed `s`.
+@ __lc_owned s raw → String {
+    : String tmp ( string_from raw )
+    : String lc ( string_to_lower tmp )
+    ( string_free tmp )
+    ^ lc
+}
+
+@ __cl_is_ws i c → b { ^ | | | == c 10 == c 13 == c 32 == c 9 }
+
+// True iff every non-empty term occurs in `hay_lc` (both lowercase).
+@ __cl_terms_match String hay_lc ( Vec String ) terms → b {
+    : i n ( vec_len [String] terms )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] terms k ) {
+            T t → {
+                ? & > ( string_len t ) 0 < ( nurl_str_find ( string_data hay_lc ) ( string_data t ) ) 0 { ^ F } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ T
+}
+
+// Total output cap (bytes) for one tool call. Entries average ~1-2 KB;
+// 32 KB keeps even a generous `limit` from flooding the caller's
+// context while still fitting ~15-25 full entries.
+@ __cl_out_cap → i { ^ 32768 }
+
+// Flush one accumulated ent: count it, run the release filter and the
+// term match, and append it to `out` when within `limit` and the byte
+// cap. `ctr` is the shared [total, matched, emitted] counter Vec (Vec is
+// a shared boxed handle — mutations are visible to the caller). Clears
+// `ent` so the caller can keep accumulating into the same String.
+@ __cl_flush String ent String cur_rel String cur_rel_lc String cur_cat
+( Vec String ) terms String rel_lc String out i limit ( Vec i ) ctr → v {
+    ? > ( string_len ent ) 0 {
+        // Trim trailing blank lines / whitespace off the body.
+        : ~ i e ( string_len ent )
+        ~ & > e 0 ( __cl_is_ws ( string_get ent - e 1 ) ) { = e - e 1 }
+        : String body ( string_substr ent 0 e )
+
+        : i total ?? ( vec_get [i] ctr 0 ) { T v → v F _ → 0 }
+        ( vec_set [i] ctr 0 + total 1 )
+
+        // Release filter: empty = all; else substring of the heading.
+        : b rel_ok | == ( string_len rel_lc ) 0 >= ( nurl_str_find ( string_data cur_rel_lc ) ( string_data rel_lc ) ) 0
+        ? rel_ok {
+            // Provenance line, e.g. `[0.9.6] — 2026-06-08 › Fixed`.
+            : String prov ( string_with_cap 64 )
+            ( string_push_str prov ( string_data cur_rel ) )
+            ? > ( string_len cur_cat ) 0 {
+                ( string_push_str prov ` › ` )
+                ( string_push_str prov ( string_data cur_cat ) )
+            } {}
+            // Match against provenance + body so terms like `fixed` or a
+            // release date can hit the heading too.
+            : String hay ( string_with_cap + + ( string_len prov ) ( string_len body ) 2 )
+            ( string_push_str hay ( string_data prov ) )
+            ( string_push_char hay 10 )
+            ( string_push_str hay ( string_data body ) )
+            : String hay_lc ( string_to_lower hay )
+            ? ( __cl_terms_match hay_lc terms ) {
+                : i matched ?? ( vec_get [i] ctr 1 ) { T v → v F _ → 0 }
+                ( vec_set [i] ctr 1 + matched 1 )
+                : i emitted ?? ( vec_get [i] ctr 2 ) { T v → v F _ → 0 }
+                ? & < emitted limit < ( string_len out ) ( __cl_out_cap ) {
+                    ( string_push_str out ( string_data prov ) )
+                    ( string_push_char out 10 )
+                    ( string_push_str out ( string_data body ) )
+                    ( string_push_str out `\n\n` )
+                    ( vec_set [i] ctr 2 + emitted 1 )
+                } {}
+            } {}
+            ( string_free hay_lc ) ( string_free hay ) ( string_free prov )
+        } {}
+        ( string_free body )
+        ( string_clear ent )
+    } {}
+}
+
+// Walk the changelog line by line, accumulating top-level `- ` bullets.
+// Continuation lines are indented or blank; a non-indented line that is
+// not a bullet or heading (intro prose, the link-reference definitions
+// at the bottom) terminates the open ent without joining it.
+@ __changelog_entries String src ( Vec String ) terms String rel_lc String out i limit ( Vec i ) ctr → v {
+    : ( Vec String ) lines ( string_split src `\n` )
+    : i nl ( vec_len [String] lines )
+    : ~ String cur_rel ( string_from `` )
+    : ~ String cur_rel_lc ( string_from `` )
+    : ~ String cur_cat ( string_from `` )
+    : String ent ( string_new )
+    : ~ i li 0
+    ~ < li nl {
+        ?? ( vec_get [String] lines li ) {
+            T line → {
+                : i ln ( string_len line )
+                ? ( string_starts_with line `## ` ) {
+                    ( __cl_flush ent cur_rel cur_rel_lc cur_cat terms rel_lc out limit ctr )
+                    ( string_free cur_rel ) = cur_rel ( string_substr line 3 - ln 3 )
+                    ( string_free cur_rel_lc ) = cur_rel_lc ( string_to_lower cur_rel )
+                    ( string_free cur_cat ) = cur_cat ( string_from `` )
+                } {
+                    ? ( string_starts_with line `### ` ) {
+                        ( __cl_flush ent cur_rel cur_rel_lc cur_cat terms rel_lc out limit ctr )
+                        ( string_free cur_cat ) = cur_cat ( string_substr line 4 - ln 4 )
+                    } {
+                        // Both bullet styles appear in the file: `- ` in the
+                        // 0.9.1+ sections, `* ` in the older ones.
+                        ? | ( string_starts_with line `- ` ) ( string_starts_with line `* ` ) {
+                            ( __cl_flush ent cur_rel cur_rel_lc cur_cat terms rel_lc out limit ctr )
+                            ( string_push_str ent ( string_data line ) )
+                            ( string_push_char ent 10 )
+                        } {
+                            : ~ b is_cont F
+                            ? == ln 0 { = is_cont T } {
+                                : i c0 ( string_get line 0 )
+                                ? | == c0 32 == c0 9 { = is_cont T } {}
+                            }
+                            ? is_cont {
+                                ? > ( string_len ent ) 0 {
+                                    ( string_push_str ent ( string_data line ) )
+                                    ( string_push_char ent 10 )
+                                } {}
+                            } {
+                                ( __cl_flush ent cur_rel cur_rel_lc cur_cat terms rel_lc out limit ctr )
+                            }
+                        }
+                    }
+                }
+            }
+            F _ → {}
+        }
+        = li + li 1
+    }
+    ( __cl_flush ent cur_rel cur_rel_lc cur_cat terms rel_lc out limit ctr )
+    ( string_free cur_rel ) ( string_free cur_rel_lc ) ( string_free cur_cat ) ( string_free ent )
+    ( vec_free_with [String] lines \ String l → v { ( string_free l ) } )
+}
+
+@ __cl_idx_line String idx String rel i count → v {
+    ( string_push_str idx ( string_data rel ) )
+    ( string_push_str idx ` — ` )
+    ( string_push_int idx count )
+    ( string_push_str idx ` entries\n` )
+}
+
+// Index mode (no query, no release): release headings + entry counts.
+@ __changelog_index_result String src → Json {
+    : ( Vec String ) lines ( string_split src `\n` )
+    : i nl ( vec_len [String] lines )
+    : String idx ( string_with_cap 1024 )
+    : ~ String cur_rel ( string_from `` )
+    : ~ i cur_count 0
+    : ~ i total 0
+    : ~ i releases 0
+    : ~ i li 0
+    ~ < li nl {
+        ?? ( vec_get [String] lines li ) {
+            T line → {
+                : i ln ( string_len line )
+                ? ( string_starts_with line `## ` ) {
+                    ? > ( string_len cur_rel ) 0 { ( __cl_idx_line idx cur_rel cur_count ) } {}
+                    ( string_free cur_rel ) = cur_rel ( string_substr line 3 - ln 3 )
+                    = cur_count 0
+                    = releases + releases 1
+                } {
+                    ? | ( string_starts_with line `- ` ) ( string_starts_with line `* ` ) {
+                        = cur_count + cur_count 1
+                        = total + total 1
+                    } {}
+                }
+            }
+            F _ → {}
+        }
+        = li + li 1
+    }
+    ? > ( string_len cur_rel ) 0 { ( __cl_idx_line idx cur_rel cur_count ) } {}
+    ( string_free cur_rel )
+    ( vec_free_with [String] lines \ String l → v { ( string_free l ) } )
+
+    : String hdr ( string_with_cap + ( string_len idx ) 256 )
+    ( string_push_str hdr `CHANGELOG.md — ` )
+    ( string_push_int hdr releases )
+    ( string_push_str hdr ` releases, ` )
+    ( string_push_int hdr total )
+    ( string_push_str hdr ` entries. Call again with 'query' (space-separated terms, ALL must match, case-insensitive) and/or 'release' (e.g. 0.9.6 or Unreleased) to fetch full entries; 'limit' defaults to 10.\n\n` )
+    ( string_push_str hdr ( string_data idx ) )
+    : Json result ( __mcp_result_text ( string_data hdr ) )
+    ( string_free hdr ) ( string_free idx )
+    ^ result
+}
+
+@ __mcp_tool_changelog Json args → Json {
+    : s query ( __mcp_args_get `query` args `` )
+    : s release ( __mcp_args_get `release` args `` )
+    : ~ i limit ( __mcp_args_get_int `limit` args 10 )
+    ? < limit 1 { = limit 1 } {}
+    ? > limit 50 { = limit 50 } {}
+
+    : String fp ( get_changelog_path )
+    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+    ( string_free fp )
+    ?? rd {
+        T bytes → {
+            : String src ( bytes_to_str bytes )
+            ( vec_free [u] bytes )
+            ? & == ( nurl_str_len query ) 0 == ( nurl_str_len release ) 0 {
+                : Json r ( __changelog_index_result src )
+                ( string_free src )
+                ^ r
+            } {}
+
+            : String q_lc ( __lc_owned query )
+            : ( Vec String ) terms ( string_split q_lc ` ` )
+            : String rel_lc ( __lc_owned release )
+            : String out ( string_with_cap 4096 )
+            : ( Vec i ) ctr ( vec_new [i] )
+            ( vec_push [i] ctr 0 ) ( vec_push [i] ctr 0 ) ( vec_push [i] ctr 0 )
+            ( __changelog_entries src terms rel_lc out limit ctr )
+            : i total ?? ( vec_get [i] ctr 0 ) { T v → v F _ → 0 }
+            : i matched ?? ( vec_get [i] ctr 1 ) { T v → v F _ → 0 }
+            : i emitted ?? ( vec_get [i] ctr 2 ) { T v → v F _ → 0 }
+
+            : String hdr ( string_with_cap + ( string_len out ) 256 )
+            ( string_push_int hdr matched )
+            ( string_push_str hdr ` of ` )
+            ( string_push_int hdr total )
+            ( string_push_str hdr ` changelog entries match` )
+            ? > ( nurl_str_len query ) 0 {
+                ( string_push_str hdr ` query '` )
+                ( string_push_str hdr query )
+                ( string_push_str hdr `'` )
+            } {}
+            ? > ( nurl_str_len release ) 0 {
+                ( string_push_str hdr ` in release '` )
+                ( string_push_str hdr release )
+                ( string_push_str hdr `'` )
+            } {}
+            ( string_push_str hdr `.\n\n` )
+            ( string_push_str hdr ( string_data out ) )
+            ? == matched 0 {
+                ( string_push_str hdr `No matches — terms are AND-ed substrings; try fewer or shorter terms, or call without arguments for the release index.\n` )
+            } {}
+            ? > matched emitted {
+                ( string_push_str hdr `… ` )
+                ( string_push_int hdr - matched emitted )
+                ( string_push_str hdr ` more matching entries omitted (limit/byte cap) — narrow the query, filter by release, or raise 'limit'.\n` )
+            } {}
+            : Json result ( __mcp_result_text ( string_data hdr ) )
+            ( string_free hdr ) ( string_free out ) ( string_free rel_lc )
+            ( vec_free_with [String] terms \ String t → v { ( string_free t ) } )
+            ( string_free q_lc ) ( vec_free [i] ctr ) ( string_free src )
+            ^ result
+        }
+        F _ → { ^ ( __mcp_result_error `CHANGELOG.md not found` ) }
+    }
+}
+
+@ __mcp_schema_changelog → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( json_obj_set props `query`
+    ( __mcp_prop `string` `Space-separated search terms; an entry matches only if EVERY term occurs in it (case-insensitive substring). Omit together with 'release' to get the release index.` ) )
+    ( json_obj_set props `release`
+    ( __mcp_prop `string` `Restrict to one release, e.g. '0.9.6' or 'Unreleased' (substring match on the release heading).` ) )
+    ( json_obj_set props `limit`
+    ( __mcp_prop `integer` `Maximum entries to return (default 10, max 50). Output is also byte-capped at 32 KB.` ) )
+    ( json_obj_set schema `properties` props )
+    ^ schema
+}
+
 // ── Tool dispatch by name ──────────────────────────────────────────
 
 @ __mcp_dispatch_tool s name Json args → Json {
@@ -3729,6 +4028,11 @@ s combined_stdout s combined_stderr → v {
         ( string_free fp ) ^ result
     } {}
 
+    // Targeted changelog retrieval.
+    ? != 0 ( nurl_str_eq name `nurl_changelog` ) {
+        ^ ( __mcp_tool_changelog args )
+    } {}
+
     ^ ( __mcp_result_error `unknown tool` )
 }
 
@@ -3793,6 +4097,11 @@ s combined_stdout s combined_stderr → v {
     ( json_arr_push arr ( __mcp_tool_desc `nurl_read_gotchas`
     `Return docs/GOTCHAS.md verbatim — known compiler quirks with workarounds.`
     ( __mcp_schema_empty ) ) )
+
+    // Changelog.
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_changelog`
+    `Targeted CHANGELOG.md retrieval — the changelog is large (240+ KB) and growing, so never fetch it whole. Call with NO arguments first to get a compact index (releases + entry counts). Then pass query (space-separated terms, ALL must occur, case-insensitive) and/or release (e.g. 0.9.6 or Unreleased) to get complete changelog entries, each prefixed with its '[release] — date › category' provenance, newest first. Use this to find out when/whether a feature, fix, or rename happened. Results respect limit (default 10) and a 32 KB byte cap; a trailing note reports omitted match counts.`
+    ( __mcp_schema_changelog ) ) )
 
     : Json out ( json_obj_new )
     ( json_obj_set out `tools` arr )

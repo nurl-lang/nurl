@@ -186,12 +186,13 @@ def t_mcp_info(c: Client) -> None:
     assert_eq("transport", j.get("transport"), "streamable-http")
     assert_eq("url_path", j.get("url_path"), "/mcp")
     tools = j.get("tools", [])
-    assert_eq("15 tools advertised", len(tools), 15)
+    assert_eq("16 tools advertised", len(tools), 16)
     for t in (
         "nurl_build_native",
         "nurl_build_wasm",
         "nurl_list_examples",
         "nurl_read_grammar",
+        "nurl_changelog",
     ):
         assert_true(f"tool {t} listed", t in tools)
     assert_true(
@@ -243,7 +244,7 @@ def t_tools_list(c: Client) -> None:
     print("\n[MCP] tools/list")
     _, _, env = c.rpc({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
     tools = env.get("result", {}).get("tools", [])
-    assert_eq("15 tools", len(tools), 15)
+    assert_eq("16 tools", len(tools), 16)
     names = {t.get("name") for t in tools}
     for required in (
         "nurl_build_native",
@@ -261,6 +262,7 @@ def t_tools_list(c: Client) -> None:
         "nurl_read_readme",
         "nurl_read_roadmap",
         "nurl_read_gotchas",
+        "nurl_changelog",
     ):
         assert_true(f"tools/list has {required}", required in names)
     # Each tool has description + inputSchema.
@@ -329,6 +331,36 @@ def t_tools_call_reads(c: Client) -> None:
     env = _tool_call(c, "nurl_read_stdlib", {"name": "core/string.nu"})
     text = _tool_text(env)
     assert_true("core/string.nu returned (non-empty)", len(text) > 0)
+
+
+def t_tools_call_changelog(c: Client) -> None:
+    print("\n[MCP] tools/call nurl_changelog (index / query / release / no-match)")
+
+    # Index mode: no arguments → release index with entry counts.
+    env = _tool_call(c, "nurl_changelog", {})
+    text = _tool_text(env)
+    assert_true("index lists releases", "releases," in text and "[Unreleased]" in text)
+    assert_true("index shows entry counts", " entries" in text)
+
+    # Query mode: every release heading carries a date, so 'compiler'
+    # is a safe always-matching term; entries come back with provenance.
+    env = _tool_call(c, "nurl_changelog", {"query": "compiler", "limit": 2})
+    text = _tool_text(env)
+    assert_true("query header reports match counts", " changelog entries match query 'compiler'" in text)
+    assert_true("entries carry [release] provenance", "\n[" in text)
+
+    # limit respected: at most 2 entry blocks (3 with header+footer parts).
+    assert_true("limit caps emitted entries", text.count("\n\n[") <= 2)
+
+    # Release filter alone returns that release's entries.
+    env = _tool_call(c, "nurl_changelog", {"release": "Unreleased", "limit": 1})
+    text = _tool_text(env)
+    assert_true("release filter scopes to heading", "in release 'Unreleased'" in text)
+
+    # No-match path gives actionable guidance instead of silence.
+    env = _tool_call(c, "nurl_changelog", {"query": "zzz-no-such-term-zzz"})
+    text = _tool_text(env)
+    assert_true("no-match has guidance", "No matches" in text)
 
 
 def t_tools_call_traversal(c: Client) -> None:
@@ -566,6 +598,7 @@ def main() -> int:
     t_tools_list(c)
     t_tools_call_listing(c)
     t_tools_call_reads(c)
+    t_tools_call_changelog(c)
     t_tools_call_traversal(c)
     t_tools_call_unknown(c)
     if not args.quick:
