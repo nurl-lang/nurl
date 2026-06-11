@@ -11,6 +11,16 @@ CB-prefix instruction, exact Z/N/H/C flag semantics, DAA, the EI/DI/IME
 interrupt-enable delay, HALT (and the HALT bug), and the DIV/TIMA timer
 are implemented and externally verified.
 
+HALT-bug edges (Pan Docs): the PC-replay applies to the next
+*sequential* fetch only — an interrupt dispatch cancels it (it must
+never replay the handler's first instruction). And `EI` immediately
+before `HALT` with an interrupt already pending is *not* the halt bug:
+the interrupt is serviced normally with the HALT's own address as the
+return address. Getting these wrong skewed SP by 2 once per ~3000 idle
+frames in Tobu Tobu Girl (a timer IRQ landing in HALT's own 4-cycle
+window after `EI`) — the deterministic "crashes after ~90 s on the
+title screen" bug.
+
 ```
 01-special              Passed      07-jr,jp,call,ret,rst   Passed
 02-interrupts           Passed      08-misc instrs          Passed

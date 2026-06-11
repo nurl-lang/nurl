@@ -9,78 +9,78 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 // ── Machine state (single instance — module globals) ──────────────
-: s g_mem 0            // 64 KiB flat address space (*u, held as s)
-: i ra 0
-: i rf 0
-: i rb 0
-: i rc 0
-: i rd 0
-: i re 0
-: i rh 0
-: i rl 0
-: i sp 0
-: i pc 0
-: i g_ime 0           // interrupt master enable
-: i g_ime_next 0      // EI enables IME after the FOLLOWING instruction
-: i g_halt 0
-: i g_halt_bug 0      // HALT with IME=0 and a pending interrupt
-: i g_div 0           // internal 16-bit divider; DIV is its high byte
-: i g_cycles 0
-: String g_serial 0   // captured serial output
+: ~ s g_mem 0            // 64 KiB flat address space (*u, held as s)
+: ~ i ra 0
+: ~ i rf 0
+: ~ i rb 0
+: ~ i rc 0
+: ~ i rd 0
+: ~ i re 0
+: ~ i rh 0
+: ~ i rl 0
+: ~ i sp 0
+: ~ i pc 0
+: ~ i g_ime 0           // interrupt master enable
+: ~ i g_ime_next 0      // EI enables IME after the FOLLOWING instruction
+: ~ i g_halt 0
+: ~ i g_halt_bug 0      // HALT with IME=0 and a pending interrupt
+: ~ i g_div 0           // internal 16-bit divider; DIV is its high byte
+: ~ i g_cycles 0
+: ~ String g_serial 0   // captured serial output
 
 // ── Cartridge / MBC state ────────────────────────────────────────
-: s g_rom 0           // full cartridge ROM (*u, all banks)
-: i g_romsize 0       // ROM size in bytes (a power of two)
-: s g_eram 0          // external cartridge RAM (*u, up to 128 KiB)
-: i g_mbc 0           // mapper: 0 none, 1 MBC1, 3 MBC3, 5 MBC5
-: i g_rombank 1       // current 0x4000-0x7FFF ROM bank
-: i g_rambank 0       // current 0xA000-0xBFFF RAM bank
-: i g_ram_en 0        // external RAM enabled
-: i g_mode 0          // MBC1 banking mode (0 ROM, 1 RAM)
-: i g_joyp 0          // joypad button state (1 = pressed), bits below
-: i g_joysel 0        // last write to JOYP select bits (P14/P15)
+: ~ s g_rom 0           // full cartridge ROM (*u, all banks)
+: ~ i g_romsize 0       // ROM size in bytes (a power of two)
+: ~ s g_eram 0          // external cartridge RAM (*u, up to 128 KiB)
+: ~ i g_mbc 0           // mapper: 0 none, 1 MBC1, 3 MBC3, 5 MBC5
+: ~ i g_rombank 1       // current 0x4000-0x7FFF ROM bank
+: ~ i g_rambank 0       // current 0xA000-0xBFFF RAM bank
+: ~ i g_ram_en 0        // external RAM enabled
+: ~ i g_mode 0          // MBC1 banking mode (0 ROM, 1 RAM)
+: ~ i g_joyp 0          // joypad button state (1 = pressed), bits below
+: ~ i g_joysel 0        // last write to JOYP select bits (P14/P15)
 
 // ── APU (sound) state ────────────────────────────────────────────
 // Four channels mixed to a packed-stereo i64 ring (low16=L, bits16-31=R)
 // the host drains each frame into Web Audio. Output sample rate is fixed
 // (g_smp_rate); the frame sequencer ticks at 512 Hz (every 8192 T-cycles).
-: i g_apu_on 0        // NR52 bit7 (master power)
-: i g_nr50 0          // master volume + VIN select (FF24)
-: i g_nr51 0          // channel→L/R panning (FF25)
-: i g_fs_acc 0        // frame-sequencer T-cycle accumulator
-: i g_fs_step 0       // frame-sequencer step 0..7
-: i g_smp_acc 0       // resampling accumulator (adds rate/cycle; emit at 4194304)
+: ~ i g_apu_on 0        // NR52 bit7 (master power)
+: ~ i g_nr50 0          // master volume + VIN select (FF24)
+: ~ i g_nr51 0          // channel→L/R panning (FF25)
+: ~ i g_fs_acc 0        // frame-sequencer T-cycle accumulator
+: ~ i g_fs_step 0       // frame-sequencer step 0..7
+: ~ i g_smp_acc 0       // resampling accumulator (adds rate/cycle; emit at 4194304)
 : i g_smp_rate 48000  // output sample rate (Hz)
-: s g_audio 0         // *i stereo sample ring
-: i g_audio_len 0     // samples written since the last host drain
-: i g_audio_cap 0     // ring capacity (samples)
-: i g_hp_l 0          // DC estimate for the L high-pass (DMG capacitor)
-: i g_hp_r 0          // DC estimate for the R high-pass
+: ~ s g_audio 0         // *i stereo sample ring
+: ~ i g_audio_len 0     // samples written since the last host drain
+: ~ i g_audio_cap 0     // ring capacity (samples)
+: ~ i g_hp_l 0          // DC estimate for the L high-pass (DMG capacitor)
+: ~ i g_hp_r 0          // DC estimate for the R high-pass
 
 // Channel 1 — square + frequency sweep
-: i c1_en 0   : i c1_dac 0   : i c1_freq 0  : i c1_tmr 0
-: i c1_duty 0 : i c1_dpos 0  : i c1_len 0   : i c1_lenen 0
-: i c1_vol 0  : i c1_envdir 0 : i c1_envper 0 : i c1_envtmr 0
-: i c1_swper 0 : i c1_swdir 0 : i c1_swsh 0 : i c1_swtmr 0 : i c1_swen 0 : i c1_shadow 0
+: ~ i c1_en 0   : ~ i c1_dac 0   : ~ i c1_freq 0  : ~ i c1_tmr 0
+: ~ i c1_duty 0 : ~ i c1_dpos 0  : ~ i c1_len 0   : ~ i c1_lenen 0
+: ~ i c1_vol 0  : ~ i c1_envdir 0 : ~ i c1_envper 0 : ~ i c1_envtmr 0
+: ~ i c1_swper 0 : ~ i c1_swdir 0 : ~ i c1_swsh 0 : ~ i c1_swtmr 0 : ~ i c1_swen 0 : ~ i c1_shadow 0
 // Channel 2 — square
-: i c2_en 0   : i c2_dac 0   : i c2_freq 0  : i c2_tmr 0
-: i c2_duty 0 : i c2_dpos 0  : i c2_len 0   : i c2_lenen 0
-: i c2_vol 0  : i c2_envdir 0 : i c2_envper 0 : i c2_envtmr 0
+: ~ i c2_en 0   : ~ i c2_dac 0   : ~ i c2_freq 0  : ~ i c2_tmr 0
+: ~ i c2_duty 0 : ~ i c2_dpos 0  : ~ i c2_len 0   : ~ i c2_lenen 0
+: ~ i c2_vol 0  : ~ i c2_envdir 0 : ~ i c2_envper 0 : ~ i c2_envtmr 0
 // Channel 3 — wave (32×4-bit samples from wave RAM 0xFF30..0xFF3F)
-: i c3_en 0   : i c3_dac 0   : i c3_freq 0  : i c3_tmr 0
-: i c3_pos 0  : i c3_len 0   : i c3_lenen 0 : i c3_volcode 0 : i c3_sample 0
+: ~ i c3_en 0   : ~ i c3_dac 0   : ~ i c3_freq 0  : ~ i c3_tmr 0
+: ~ i c3_pos 0  : ~ i c3_len 0   : ~ i c3_lenen 0 : ~ i c3_volcode 0 : ~ i c3_sample 0
 // Channel 4 — noise (LFSR)
-: i c4_en 0   : i c4_dac 0   : i c4_tmr 0   : i c4_lfsr 0
-: i c4_len 0  : i c4_lenen 0 : i c4_width 0 : i c4_div 0 : i c4_shift 0
-: i c4_vol 0  : i c4_envdir 0 : i c4_envper 0 : i c4_envtmr 0
+: ~ i c4_en 0   : ~ i c4_dac 0   : ~ i c4_tmr 0   : ~ i c4_lfsr 0
+: ~ i c4_len 0  : ~ i c4_lenen 0 : ~ i c4_width 0 : ~ i c4_div 0 : ~ i c4_shift 0
+: ~ i c4_vol 0  : ~ i c4_envdir 0 : ~ i c4_envper 0 : ~ i c4_envtmr 0
 
 // ── PPU state ────────────────────────────────────────────────────
-: s g_fb 0            // 160×144 framebuffer of shades (0=white..3=black)
-: s g_bgidx 0         // per-scanline BG colour indices (for sprite priority)
-: s g_spr 0           // scratch: OAM indices of the ≤10 sprites on a line
-: i g_dot 0           // dot counter within the current scanline
-: i g_wly 0           // window internal line counter (advances only when drawn)
-: i g_frames 0        // completed frames (incremented at vblank)
+: ~ s g_fb 0            // 160×144 framebuffer of shades (0=white..3=black)
+: ~ s g_bgidx 0         // per-scanline BG colour indices (for sprite priority)
+: ~ s g_spr 0           // scratch: OAM indices of the ≤10 sprites on a line
+: ~ i g_dot 0           // dot counter within the current scanline
+: ~ i g_wly 0           // window internal line counter (advances only when drawn)
+: ~ i g_frames 0        // completed frames (incremented at vblank)
 
 // ── Flag register helpers (F = Z N H C 0 0 0 0) ──────────────────
 @ set_flags i z i n i h i c → v {
@@ -445,6 +445,11 @@ $ `stdlib/core/vec.nu`
     ( wr8 0xFF0F & iflag ^^ bit 0xFF )
     ( push16 pc )
     = pc vec
+    // Invariant: the halt bug's "PC fails to advance once" applies to
+    // the next SEQUENTIAL fetch. An interrupt dispatch replaces that
+    // fetch with the handler's — the replay must never leak into the
+    // handler (it would double its first instruction and skew SP).
+    = g_halt_bug 0
     ^ 20
 }
 
@@ -756,7 +761,33 @@ $ `stdlib/core/vec.nu`
         ? == op 0x76 {
             = g_halt 1
             ? == g_ime 0 {
-                ? != 0 & & ( rd8 0xFF0F ) ( rd8 0xFFFF ) 0x1F { = g_halt_bug 1  = g_halt 0 } {}
+                ? != 0 & & ( rd8 0xFF0F ) ( rd8 0xFFFF ) 0x1F {
+                    ? != ime_apply 0 {
+                        // EI immediately before HALT with an interrupt
+                        // already pending: NOT the halt bug (Pan Docs).
+                        // IME rises right after this instruction, the
+                        // interrupt is serviced normally, and the pushed
+                        // return address is the HALT itself — the handler
+                        // returns to the HALT, which then sleeps with the
+                        // interrupt already consumed. Rewind PC onto the
+                        // HALT so service_interrupts pushes its address.
+                        //
+                        // The previous behaviour set g_halt_bug here; the
+                        // flag then survived the interrupt dispatch and
+                        // replayed the HANDLER's first instruction (PC
+                        // failed to advance once inside the handler). For
+                        // Tobu Tobu Girl that doubled the handler's
+                        // PUSH HL, skewing the stack by 2 — RETI returned
+                        // into WRAM data and the game crashed to a RST 38
+                        // loop. The race (IF rising in HALT's own 4-cycle
+                        // window after EI) hits ~once per 3000 idle
+                        // frames, the observed deterministic ~90 s hang.
+                        = g_halt 0
+                        = pc & - pc 1 0xFFFF
+                    } {
+                        = g_halt_bug 1  = g_halt 0
+                    }
+                } {}
             } {}
         } {
             ( set_r & >> op 3 7 ( get_r & op 7 ) )
