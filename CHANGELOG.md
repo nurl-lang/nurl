@@ -8,60 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Auto-drop: fn-returned by-value structs with owned fields now
-  transfer ownership to the caller** (`compiler/nurlc.nu`, critic A4c).
-  Two bugs closed. `^ @ T { ( nurl_str_cat … ) }` (direct construction
-  return) leaked the field — the callee never bound it so never
-  registered a drop, and the caller never registered one either.
-  `^ v` where `v` is a bound struct was worse: a **use-after-free** —
-  the callee's scope-exit drop freed v's owned field while the
-  returned-by-value copy still aliased it, so the caller read freed
-  memory. The fix mirrors the existing owned-string return flag: the
-  callee skip-drops the escaping struct binding and publishes its exact
-  owned-field list (`<fname>__ret_owned_fields`), which the caller's
-  `: T x ( f )` re-registers through the same
-  `mem_register_agg_owned_fields` path — exactly one drop, at the
-  caller's scope exit. Ownership composes through `^ ( mk )` call chains
-  and reaches nested struct fields. Safe against double-free with
-  stdlib's manual `*_free` conventions: only raw-`s`/slice fields filled
-  by a fresh allocation in a *direct* agg-literal return register for
-  transfer — stdlib's struct returns use `String`/`Vec` handle fields
-  (untracked) and build incrementally before `^ binding` (which never
-  registers agg fields), so their manual frees stay correct. Verified:
-  full san suite 0 SAN_FAIL, `tools/leakcheck` zero, suite 340 PASS,
-  and a targeted incremental-build manual-free probe stays single-drop.
-  Regression `ret_struct_owned_transfer.nu` (direct / bound / chain /
-  nested shapes, ASan+LSan zero). No nurlc IR change — fixed point holds
-  without a bootstrap refresh.
-
-### Fixed (examples)
-
-- **Game Boy emulator: deterministic ~90 s crash on Tobu Tobu Girl's
-  title screen** (`examples/gameboy/core.nu`). Root cause was a
-  halt-bug emulation error, found by stack forensics on an
-  instruction trace: `EI` + `HALT` with a timer IRQ landing inside
-  HALT's own 4-cycle window set `g_halt_bug`, the EI delay then raised
-  IME and the interrupt dispatched immediately — and the stale
-  halt-bug flag replayed the HANDLER's first instruction (PC failed to
-  advance once inside the handler). Tobu's handler starts with
-  `PUSH HL`, so SP skewed by 2 and `RETI` returned into WRAM data —
-  the screen froze and execution fell into a RST 38 loop (the gray
-  bars + hang seen on the playground). Two-part fix per Pan Docs:
-  (1) `EI` immediately before `HALT` with a pending interrupt is NOT
-  the halt bug — the interrupt is serviced with the HALT's own address
-  as the return address; (2) invariant: an interrupt dispatch always
-  clears the halt-bug replay (it applies to the next sequential fetch
-  only, never the handler's). Verified: Blargg `cpu_instrs` 11/11 +
-  `02-interrupts` + `instr_timing` still pass, dmg-acid2 renders, and
-  a 40 000-frame idle soak (vs the ~2 918-frame crash) runs ASan-clean
-  with a live framebuffer. Also: migrated `examples/gameboy` to the
-  enforced `:` immutability (97 declarations — it sits outside the
-  test suite, so the tree-wide migration missed it; all gameboy
-  targets compile again, playground build regenerated), and fixed
-  `gbtrace.nu --trace` to drive the real `cpu_advance` path (its
-  hand-rolled step loop was a stale copy that never woke from HALT).
+## [0.9.7] — 2026-06-11
 
 ### Added
 
@@ -131,6 +78,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (mixed limb counts/signs, near-power-of-2¹⁶ divisors).
 
 ### Fixed
+
+- **Auto-drop: fn-returned by-value structs with owned fields now
+  transfer ownership to the caller** (`compiler/nurlc.nu`, critic A4c).
+  Two bugs closed. `^ @ T { ( nurl_str_cat … ) }` (direct construction
+  return) leaked the field — the callee never bound it so never
+  registered a drop, and the caller never registered one either.
+  `^ v` where `v` is a bound struct was worse: a **use-after-free** —
+  the callee's scope-exit drop freed v's owned field while the
+  returned-by-value copy still aliased it, so the caller read freed
+  memory. The fix mirrors the existing owned-string return flag: the
+  callee skip-drops the escaping struct binding and publishes its exact
+  owned-field list (`<fname>__ret_owned_fields`), which the caller's
+  `: T x ( f )` re-registers through the same
+  `mem_register_agg_owned_fields` path — exactly one drop, at the
+  caller's scope exit. Ownership composes through `^ ( mk )` call chains
+  and reaches nested struct fields. Safe against double-free with
+  stdlib's manual `*_free` conventions: only raw-`s`/slice fields filled
+  by a fresh allocation in a *direct* agg-literal return register for
+  transfer — stdlib's struct returns use `String`/`Vec` handle fields
+  (untracked) and build incrementally before `^ binding` (which never
+  registers agg fields), so their manual frees stay correct. Verified:
+  full san suite 0 SAN_FAIL, `tools/leakcheck` zero, suite 340 PASS,
+  and a targeted incremental-build manual-free probe stays single-drop.
+  Regression `ret_struct_owned_transfer.nu` (direct / bound / chain /
+  nested shapes, ASan+LSan zero). No nurlc IR change — fixed point holds
+  without a bootstrap refresh.
+
 
 - **Auto-drop: arm-local trailing declarations leaked; `^ ( call )`
   string ownership now propagates; aliasing escapes transfer ownership**
@@ -268,6 +242,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `compiler/tests/impl_inout_sink.nu` (struct `inout`, `inout` + by-value,
   a second implementing type, and a `sink` impl method; ASan + leak
   clean).
+
+### Fixed (examples)
+
+- **Game Boy emulator: deterministic ~90 s crash on Tobu Tobu Girl's
+  title screen** (`examples/gameboy/core.nu`). Root cause was a
+  halt-bug emulation error, found by stack forensics on an
+  instruction trace: `EI` + `HALT` with a timer IRQ landing inside
+  HALT's own 4-cycle window set `g_halt_bug`, the EI delay then raised
+  IME and the interrupt dispatched immediately — and the stale
+  halt-bug flag replayed the HANDLER's first instruction (PC failed to
+  advance once inside the handler). Tobu's handler starts with
+  `PUSH HL`, so SP skewed by 2 and `RETI` returned into WRAM data —
+  the screen froze and execution fell into a RST 38 loop (the gray
+  bars + hang seen on the playground). Two-part fix per Pan Docs:
+  (1) `EI` immediately before `HALT` with a pending interrupt is NOT
+  the halt bug — the interrupt is serviced with the HALT's own address
+  as the return address; (2) invariant: an interrupt dispatch always
+  clears the halt-bug replay (it applies to the next sequential fetch
+  only, never the handler's). Verified: Blargg `cpu_instrs` 11/11 +
+  `02-interrupts` + `instr_timing` still pass, dmg-acid2 renders, and
+  a 40 000-frame idle soak (vs the ~2 918-frame crash) runs ASan-clean
+  with a live framebuffer. Also: migrated `examples/gameboy` to the
+  enforced `:` immutability (97 declarations — it sits outside the
+  test suite, so the tree-wide migration missed it; all gameboy
+  targets compile again, playground build regenerated), and fixed
+  `gbtrace.nu --trace` to drive the real `cpu_advance` path (its
+  hand-rolled step loop was a stale copy that never woke from HALT).
 
 ### Documentation
 
@@ -4449,7 +4450,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.6...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.7...HEAD
+[0.9.7]: https://github.com/nurl-lang/nurl/compare/v0.9.6...v0.9.7
 [0.9.6]: https://github.com/nurl-lang/nurl/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/nurl-lang/nurl/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/nurl-lang/nurl/compare/v0.9.3...v0.9.4
