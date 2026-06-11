@@ -41,10 +41,8 @@
 //   ( set_free_with [E] s drop ) drop : (@ v E)            → v   (drop each element first)
 //
 // Use the same stock hash/eq as HashMap (`hash_string`/`eq_string`,
-// `hash_int`/`eq_int` from stdlib/std/hashmap.nu).
-
-$ `stdlib/core/mem.nu`
-$ `stdlib/std/hashmap.nu`
+// `hash_int`/`eq_int`) — import `stdlib/std/hashmap.nu` alongside this
+// file to get them; set.nu itself does not depend on it.
 
 : Set [E] { s ctl }
 

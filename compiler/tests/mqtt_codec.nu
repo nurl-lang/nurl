@@ -11,7 +11,6 @@
 
 $ `stdlib/ext/mqtt.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/std/bytes.nu`
 
 // Print a labelled byte buffer as `tag [len] b0 b1 ...`.
 @ dump s tag ( Vec u ) v → v {

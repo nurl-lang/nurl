@@ -11,7 +11,6 @@
 // `stdlib/std/hash.nu`'s `md5_bytes` calls this directly; the public
 // surface is unchanged.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 

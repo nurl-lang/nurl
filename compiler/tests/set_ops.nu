@@ -1,5 +1,6 @@
 // Test: stdlib/std/set.nu — set_union / set_intersect / set_diff
 $ `stdlib/std/set.nu`
+$ `stdlib/std/hashmap.nu`
 
 @ count_via_fold ( Set i ) st → i {
     : ( @ i i i ) inc \ i acc i _x → i { ^ + acc 1 }

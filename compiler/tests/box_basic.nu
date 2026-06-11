@@ -2,7 +2,6 @@
 // raw-pointer borrow. Covers the integer payload — the simplest case
 // where the read-by-value path is safe.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/box.nu`
 
 @ main → i {

@@ -16,7 +16,6 @@
 // generators, one seed → identical streams); rng_below bounds + zero
 // guard; rng_range inverted-range guard.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/std/rng.nu`
 
 // Compare; print a line and return 1 on mismatch, 0 on match.

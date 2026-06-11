@@ -16,7 +16,6 @@
 
 $ `stdlib/std/async.nu`
 $ `stdlib/std/channel.nu`
-$ `stdlib/core/string.nu`
 
 : ~ i a_count 0
 : ~ i b_count 0

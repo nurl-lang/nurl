@@ -178,8 +178,6 @@
 // edit those two literals — the rest of the wrapper is generic.
 
 $ `stdlib/core/string.nu`
-$ `stdlib/core/option.nu`
-$ `stdlib/core/result.nu`
 $ `stdlib/core/errors.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/int.nu`

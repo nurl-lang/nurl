@@ -23,7 +23,6 @@ $ `stdlib/std/process.nu`
 $ `stdlib/std/panic.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/ext/env.nu`
-$ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_server.nu`

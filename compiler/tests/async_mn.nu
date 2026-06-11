@@ -17,7 +17,6 @@
 
 $ `stdlib/std/async.nu`
 $ `stdlib/std/thread.nu`
-$ `stdlib/core/string.nu`
 
 : ~ i counter 0
 : ~ i joined 0

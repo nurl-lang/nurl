@@ -23,8 +23,6 @@
 // regular `./build.sh` run the test is a fast no-op that confirms
 // the slot-indexed accessor pair is consistent.
 
-$ `stdlib/core/mem.nu`
-$ `stdlib/core/string.nu`
 
 @ main → i {
     : i n 32

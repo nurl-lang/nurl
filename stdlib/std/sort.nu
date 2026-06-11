@@ -11,7 +11,6 @@
 // loop on larger" optimization to guarantee O(log N) stack depth.
 
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/option.nu`
 
 // ── Internal helpers ───────────────────────────────────────────────
 

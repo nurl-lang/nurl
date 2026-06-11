@@ -242,6 +242,9 @@
 @ parse_type_base i lex → s {
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s v ( nurl_lex_val lex )
+        // Lint: a type name in type position is a reference — an
+        // import supplying only types must count as used.
+        ( lint_note_used v )
         ( nurl_lex_advance lex )
         // Side-channel: stash the NURL-source name of the base type so
         // callers (let-stmt, gen_fn_param) can decide signedness for
@@ -268,6 +271,7 @@
     ( nurl_lex_advance lex )  // consume '|'
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s v ( nurl_lex_val lex )
+        ( lint_note_used v )
         ( nurl_lex_advance lex )
         ^ ( nurl_str_cat `%` v )
     }
@@ -318,6 +322,7 @@
         // word so the outer mangle composes deterministically.
         ? ( is_ident_tok ( nurl_lex_type lex ) )
         { : s sname ( nurl_lex_val lex )
+            ( lint_note_used sname )
             ( nurl_lex_advance lex )
             : ~ s mangle_sfx ``
             : ~ b has_tparam_arg F
@@ -330,6 +335,7 @@
                 ? | | == ta_tt TT_LPAREN == ta_tt TT_QUEST | == ta_tt TT_QUESTQUEST == ta_tt TT_STAR
                 { = ta_lty ( parse_type lex ) }
                 { : s ta ( nurl_lex_val lex )
+                    ( lint_note_used ta )
                     ( nurl_lex_advance lex )
                     ? ( is_tparam_like ta ) { = has_tparam_arg T } {}
                     = ta_lty ( llvm_type ta )
@@ -1085,6 +1091,7 @@
 // into strict-mode. Called from gen_fn_decl (after fname is read)
 // and from scan_fn_sigs's @ branch.
 @ vis_record_fn s fname b was_pub → v {
+    ( lint_note_def fname )
     : s sf ( vis_current_src_file )
     ( nurl_sym_def g_vis_syms ( nurl_str_cat fname `__src_file` ) sf )
     ? was_pub
@@ -1100,6 +1107,7 @@
 // at the use site reads `<sname>__src_file` + `<sname>__pub` + the
 // file's `__strict` marker. Mirrors vis_record_fn's shape.
 @ vis_record_type s sname b was_pub → v {
+    ( lint_note_def sname )
     : s sf ( vis_current_src_file )
     ( nurl_sym_def g_vis_syms ( nurl_str_cat sname `__src_file` ) sf )
     ? was_pub
@@ -1113,6 +1121,7 @@
 // constant (or `: ~` mutable global). Identical bookkeeping shape
 // as vis_record_type — the use site reads via the same lookup.
 @ vis_record_const s cname b was_pub → v {
+    ( lint_note_def cname )
     : s sf ( vis_current_src_file )
     ( nurl_sym_def g_vis_syms ( nurl_str_cat cname `__src_file` ) sf )
     ? was_pub
@@ -1177,10 +1186,118 @@
     ( nurl_str_cat4 `:` ( nurl_str_int col ) `: warning: ` msg ) ) )
 }
 
-// Record that `name` was referenced (called via gen_call or read via
-// gen_ident) anywhere in the program. Drives the unused-function check.
+// Record that `name` was referenced (called via gen_call, read via
+// gen_ident, or named as a type via parse_type) anywhere in the
+// program. Drives the unused-function check (global key) and the
+// unused-import check (file-scoped `<file> <name>` key: an import is
+// justified only by references in the importing file itself, not by
+// uses from elsewhere in the unit).
 @ lint_note_used s name → v {
-    ? != g_lint 0 { ( nurl_sym_def g_lint_used name `1` ) } {}
+    ? != g_lint 0
+    { ( nurl_sym_def g_lint_used name `1` )
+        // During the instantiation flush, attribute uses to the
+        // generic template's defining file (g_lint_syms `use_file`,
+        // set by emit_one_instantiation) — vis_current_src_file has
+        // already unwound to the top file by then.
+        : s uf ( nurl_sym_get g_lint_syms `use_file` )
+        : s sf ? != 0 ( nurl_str_len uf ) uf ( vis_current_src_file )
+        ( nurl_sym_def g_lint_used ( nurl_str_cat3 sf ` ` name ) `1` ) }
+    {}
+}
+
+// Record one top-level decl `name` as belonging to the file being
+// parsed right now. Builds the per-file `defs:<file>` roster the
+// unused-import lint reads. Called from vis_record_fn / _type /
+// _const (which see every @-fn, struct, enum, and const in every
+// file) and from gen_ffi_decl for `&` externs. Deduped because the
+// scan and parse passes both register the same decls.
+// Explicit-file variant: the generic-struct template scan walks `$`
+// imports recursively WITHOUT updating vis_current_src_file, so the
+// defining file must come from the active lexer's filename there.
+@ lint_note_def_at s name s sf → v {
+    ? != g_lint 0
+    { : s seenkey ( nurl_str_cat4 `defseen:` sf `\t` name )
+        ? != 0 ( nurl_str_len ( nurl_sym_get g_lint_syms seenkey ) ) {}
+        { ( nurl_sym_def g_lint_syms seenkey `1` )
+            : s key ( nurl_str_cat `defs:` sf )
+            : s cur ( nurl_sym_get g_lint_syms key )
+            ( nurl_sym_def g_lint_syms key ( nurl_str_cat3 cur name `\t` ) ) }
+    }
+    {}
+}
+
+// Gated on g_lint_recording: the instantiation flush re-enters
+// gen_fn_decl for synthetic monomorphisations (`vec_push__i64` …)
+// with vis_current_src_file unwound to the TOP file — without the
+// gate those mangled names land in the top file's def roster and a
+// pure-aggregator top file stops looking like one. (The _at variant
+// above stays ungated: the generic-struct pre-scan runs before
+// recording starts and carries the true file in its lexer.)
+@ lint_note_def s name → v {
+    ? & != g_lint 0 != g_lint_recording 0
+    { : s sf ( vis_current_src_file )
+        : s seenkey ( nurl_str_cat4 `defseen:` sf `\t` name )
+        ? != 0 ( nurl_str_len ( nurl_sym_get g_lint_syms seenkey ) ) {}
+        { ( nurl_sym_def g_lint_syms seenkey `1` )
+            : s key ( nurl_str_cat `defs:` sf )
+            : s cur ( nurl_sym_get g_lint_syms key )
+            ( nurl_sym_def g_lint_syms key ( nurl_str_cat3 cur name `\t` ) ) }
+    }
+    {}
+}
+
+// Record a top-file `$` import directive (path + position of the `$`
+// token) for the unused-import report. Imports inside transitively
+// imported files are not recorded — the lint only judges the file the
+// user is editing, same as every other unused-symbol lint here.
+// Note a type-arg source word (`Header`, `?u`, `*T`, …) as a type
+// reference: strip the `?` / `*` / `!` prefix sigils, then record the
+// root name. Builtins (`i`, `u8`, …) record harmlessly — they are in
+// no file's def roster, so the import check never sees them.
+@ lint_note_used_type_word s w → v {
+    ? == g_lint 0 { ^ v } {}
+    : i n ( nurl_str_len w )
+    : ~ i k 0
+    ~ & < k n | | == ( nurl_str_get w k ) 63 == ( nurl_str_get w k ) 42 == ( nurl_str_get w k ) 33
+    { = k + k 1 }
+    ? < k n { ( lint_note_used ( nurl_str_slice w k - n k ) ) } {}
+}
+
+// Explicit-file variant of lint_note_used (same reasons as
+// lint_note_def_at — callers whose vis_current_src_file is stale).
+@ lint_note_used_at s name s sf → v {
+    ? != g_lint 0
+    { ( nurl_sym_def g_lint_used name `1` )
+        ( nurl_sym_def g_lint_used ( nurl_str_cat3 sf ` ` name ) `1` ) }
+    {}
+}
+
+// Conservatively mark every identifier token in a stored generic
+// template source as referenced by `file`. Template bodies are parsed
+// only at instantiation — possibly NEVER when linting a library file
+// standalone — yet `( Pair K V )` inside `map_iter [K V]`'s body is a
+// real reference in hashmap.nu. Lexer-based, so strings and comments
+// are skipped; over-marking (locals, tparams) is harmless — unknown
+// names are in no def roster.
+@ lint_note_template_src s src s file → v {
+    ? == g_lint 0 { ^ v } {}
+    : i lx ( nurl_lex_new src `<lint-template>` )
+    ~ != ( nurl_lex_type lx ) TT_EOF {
+        ? ( is_ident_tok ( nurl_lex_type lx ) )
+        { ( lint_note_used_at ( nurl_lex_val lx ) file ) }
+        {}
+        ( nurl_lex_advance lx )
+    }
+}
+
+@ lint_note_import s path i line i col → v {
+    ? & & != g_lint 0 != g_lint_recording 0 ( lint_in_top_file )
+    { : s row ( nurl_str_cat
+        ( nurl_str_cat3 path `\t` ( nurl_str_int line ) )
+        ( nurl_str_cat3 `\t` ( nurl_str_int col ) `\n` ) )
+        : s cur ( nurl_sym_get g_lint_syms `imports` )
+        ( nurl_sym_def g_lint_syms `imports` ( nurl_str_cat cur row ) ) }
+    {}
 }
 
 // Record an identifier read in the current function. Recorded for
@@ -1316,6 +1433,63 @@
             = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - rl + nl 1 )
             ( lint_check_fn row )
         }
+    }
+}
+
+// Parse one "path\tline\tcol" import row; warn when none of the
+// symbols the imported file defines is referenced (file-scoped key in
+// g_lint_used) by the top file itself.
+@ lint_check_import s top s row → v {
+    : i t1 ( nurl_str_find row `\t` )
+    ? < t1 0 { ^ v } {}
+    : i rl ( nurl_str_len row )
+    : s path ( nurl_str_slice row 0 t1 )
+    : s tail ( nurl_str_slice row + t1 1 - rl + t1 1 )
+    : i t2 ( nurl_str_find tail `\t` )
+    ? < t2 0 { ^ v } {}
+    : i tl ( nurl_str_len tail )
+    : s ln ( nurl_str_slice tail 0 t2 )
+    : s cl ( nurl_str_slice tail + t2 1 - tl + t2 1 )
+    : s defs ( nurl_sym_get g_lint_syms ( nurl_str_cat `defs:` path ) )
+    // No recorded decls → pure aggregator (re-export surface like
+    // stdlib/ext/http_full.nu) or unreadable path; never warn (same
+    // exemption as the LSP).
+    ? == 0 ( nurl_str_len defs ) { ^ v } {}
+    : ~ s drest defs
+    : ~ b used F
+    ~ & != 0 ( nurl_str_len drest ) ! used {
+        : i dt ( nurl_str_find drest `\t` )
+        : i dl ( nurl_str_len drest )
+        : s nm ? < dt 0 drest ( nurl_str_slice drest 0 dt )
+        = drest ? < dt 0 `` ( nurl_str_slice drest + dt 1 - dl + dt 1 )
+        ? == 0 ( nurl_str_len nm ) {}
+        { ? != 0 ( nurl_str_len ( nurl_sym_get g_lint_used
+            ( nurl_str_cat3 top ` ` nm ) ) )
+            { = used T } {} }
+    }
+    ? used {} {
+        ( lint_warn top ( nurl_str_to_int ln ) ( nurl_str_to_int cl )
+        ( nurl_str_cat3 `unused import: no symbol from '` path
+        `' is referenced in this file` ) )
+    }
+}
+
+// After the whole program is compiled, walk the recorded top-file
+// `$` imports and report the unused ones. A top file that defines no
+// symbols of its own is a pure aggregator — its imports exist to be
+// re-exported, so the report is skipped entirely (LSP parity).
+@ lint_report_unused_imports → v {
+    ? == g_lint 0 { ^ v } {}
+    : s top ( nurl_sym_get g_lint_syms `top` )
+    ? == 0 ( nurl_str_len ( nurl_sym_get g_lint_syms ( nurl_str_cat `defs:` top ) ) )
+    { ^ v } {}
+    : ~ s rest ( nurl_sym_get g_lint_syms `imports` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i nl ( nurl_str_find rest `\n` )
+        : i rl ( nurl_str_len rest )
+        : s row ? < nl 0 rest ( nurl_str_slice rest 0 nl )
+        = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - rl + nl 1 )
+        ( lint_check_import top row )
     }
 }
 
@@ -3877,6 +4051,10 @@
               // it substitutes whole into the generic body; nurl_lex_val
               // alone would grab only the leading `?` / `*`.
                 = ta ( capture_type_arg_src lex )
+                // Lint: `vec_len [Header] …` references the Header
+                // type — this path bypasses parse_type, so note it
+                // here or a types-only import looks unused.
+                ( lint_note_used_type_word ta )
             }
             = type_args ? == 0 ( nurl_str_len type_args ) ta
             ( nurl_str_cat type_args ( nurl_str_cat ` ` ta ) )
@@ -4233,6 +4411,28 @@
             = arg_idx + arg_idx 1
         }
     }
+    {}
+    // Unknown callee: nothing registered a return type for this name —
+    // not an @-fn seen by scan_fn_sigs (this file or any '$'-import
+    // processed so far), not an FFI extern, not a runtime builtin from
+    // the register_builtins table, not an impl method (dispatched
+    // below via g_impl_name_syms — exempted through `__impl_seen`),
+    // and not a local closure / fn-pointer binding (no `__ptr`).
+    // The legacy fallthrough assumed `i64` and emitted a call to an
+    // undeclared symbol — invalid IR that surfaced as a clang error far
+    // from the source, or (worse) linked-by-accident when the defining
+    // file happened to be imported later in the unit AND the return
+    // type happened to be i64. Mirror gen_ident's undefined-identifier
+    // diagnostic so the error lands on the call site instead. Runs
+    // while the lexer still sits on the closing ')' so the caret
+    // points at this call.
+    ? & & & == 0 ( nurl_str_len ( nurl_sym_get syms call_name ) )
+    == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__ptr` ) ) )
+    == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__arity` ) ) )
+    == 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms ( nurl_str_cat fname `__impl_seen` ) ) )
+    { ( die lex ( nurl_str_cat3
+        `call to unknown function '` fname
+        `' — it is not defined in this file, not in any '$'-imported file processed so far, and not a known FFI/builtin. Add the missing '$' import (or move it above this file's import in the program), or check the spelling.` ) ) }
     {}
     // Call-arity check. scan_fn_sigs records every non-generic
     // @-function's declared parameter count as `<fname>__arity`. A call
@@ -10890,6 +11090,10 @@
 // Called when '[' is seen after the function name in gen_fn_decl.
 // Stores source template in g_generic_syms; emits no IR.
 @ gen_generic_fn_store i lex i syms s fname → v {
+    // Lint: generic fn templates are decls of the current file (the
+    // scan_fn_sigs @-branch also records them, but belt-and-braces —
+    // the dedup in lint_note_def makes the second call free).
+    ( lint_note_def fname )
     // DWARF Phase 7: snapshot the declaration line BEFORE consuming
     // template tokens so every later instantiation can attach its
     // !DISubprogram to the original source location, not the line
@@ -10897,6 +11101,13 @@
     : i src_line ( nurl_lex_line lex )
     ( nurl_sym_def g_generic_syms
     ( nurl_str_cat fname `__src_line` ) ( nurl_str_int src_line ) )
+    // Defining file of the template. The instantiation flush re-parses
+    // template bodies AFTER the per-file import walk has unwound, so
+    // without this record the lint would attribute every symbol a
+    // stdlib template's body touches to the TOP file — masking the
+    // top file's own unused imports.
+    ( nurl_sym_def g_generic_syms
+    ( nurl_str_cat fname `__src_file` ) ( vis_current_src_file ) )
     ( expect lex TT_LBRACK )
     : ~ s tparams ``
     ~ != ( nurl_lex_type lex ) TT_RBRACK {
@@ -10931,6 +11142,10 @@
     {}
     ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__tparams` ) tparams )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__gsrc` ) src )
+    // Lint: names inside the stored template are references in THIS
+    // file even if no instantiation ever happens (library files
+    // linted standalone instantiate nothing).
+    ( lint_note_template_src src ( vis_current_src_file ) )
     ( nurl_sym_def syms ( nurl_str_cat fname `__generic` ) `1` )
     // Record this generic function's `inout` / `sink`
     // parameter index sets (keyed by the generic name) so a call site
@@ -12101,6 +12316,9 @@
     ( nurl_lex_advance lex )  // skip library STR
     ( expect lex TT_AT )  // consume '@'
     : s fname ( nurl_lex_val lex )
+    // Lint: `&` externs belong to the declaring file's def roster so
+    // an import used only for its FFI surface is not flagged unused.
+    ( lint_note_def fname )
     ( nurl_lex_advance lex )
     : ~ s params_str ``
     : ~ i pct 0
@@ -12804,8 +13022,13 @@
 }
 
 @ gen_import_decl i lex i syms i cg → v {
+    // Lint: capture the `$` token's position before consuming it so
+    // the unused-import warning points at the directive itself.
+    : i __li_line ( nurl_lex_line lex )
+    : i __li_col ( nurl_lex_col lex )
     ( nurl_lex_advance lex )  // consume '$'
     : s path ( __norm_import_path ( nurl_lex_val lex ) )
+    ( lint_note_import path __li_line __li_col )
     ( nurl_lex_advance lex )  // consume path STR
     : ~ s alias ``
     ? ( is_ident_tok ( nurl_lex_type lex ) )
@@ -12852,6 +13075,22 @@
 @ emit_one_instantiation s fname s mangled s type_args s caller_file s caller_line i syms i cg → v {
     : s tparams ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__tparams` ) )
     : s gsrc ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__gsrc` ) )
+    // No stored template for this name: the call site referenced a
+    // generic function whose defining file is not in the import
+    // closure. Without this guard the empty source below re-lexes as
+    // `@ <mangled> ` and dies with an opaque `expected '->' but found
+    // end of input` pointing at synthetic `<generic …>:1` — useless
+    // for finding the actual problem (a missing `$` import).
+    ? == 0 ( nurl_str_len gsrc )
+    { : s loc ? != 0 ( nurl_str_len caller_file )
+        ( nurl_str_cat4 caller_file `:` caller_line `: ` )
+        ``
+        ( nurl_eprintln ( nurl_str_cat3 loc
+        ( nurl_str_cat3 `error: call to generic function '` fname `' but no generic of that name is defined in this file or any '$'-imported file` )
+        ` — add the '$' import for the file that defines it` ) )
+        ( nurl_exit 1 )
+    }
+    {}
     : ~ s subst_src gsrc
     : ~ s tp_rest tparams
     : ~ s ta_rest type_args
@@ -12882,7 +13121,18 @@
     ? != 0 ( nurl_str_len sl_s )
     { = g_dbg_override_line ( nurl_str_to_int sl_s ) }
     {}
-    ( gen_fn_decl lex2 syms cg )
+    // Lint: re-parsing the substituted body records symbol uses; key
+    // them to the template's defining file, not the top file (see
+    // lint_note_used). Saved/restored around the recursive
+    // gen_fn_decl because nested instantiations re-enter here.
+    ? != g_lint 0
+    { : s saved_uf ( nurl_sym_get g_lint_syms `use_file` )
+        ( nurl_sym_def g_lint_syms `use_file`
+        ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__src_file` ) ) )
+        ( gen_fn_decl lex2 syms cg )
+        ( nurl_sym_def g_lint_syms `use_file` saved_uf )
+    }
+    { ( gen_fn_decl lex2 syms cg ) }
     = g_dbg_override_line saved_override
 }
 
@@ -13334,6 +13584,23 @@
     ( nurl_sym_def syms `nurl_print_buf_reset` `void` )
     // lexer position save/restore
     // nurl_lex_cur_start / _src_slice / _set_pos — pure-NURL @-fns (Phase 10).
+    // Header-declared builtins that were MISSING from this table.
+    // They compiled anyway only via gen_call's silent i64 default —
+    // correct for the i64-returning ones by luck, invalid IR for the
+    // rest. The unknown-callee diagnostic (gen_call) now rejects any
+    // unregistered name, so this table must cover every `declare` that
+    // emit_header writes. Keep the two in sync.
+    ( nurl_sym_def syms `nurl_peek` `i64` )
+    ( nurl_sym_def syms `nurl_init` `void` )
+    ( nurl_sym_def syms `nurl_memset` `void` )
+    ( nurl_sym_def syms `nurl_vec_drop` `void` )
+    ( nurl_sym_def syms `nurl_argc` `i64` )
+    ( nurl_sym_def syms `nurl_argv_count` `i64` )
+    ( nurl_sym_def syms `nurl_read_int` `i64` )
+    ( nurl_sym_def syms `puts` `i32` )
+    ( nurl_sym_def syms `printf` `i32` )
+    ( nurl_sym_def syms `printf__variadic` `1` )
+    ( nurl_sym_def syms `printf__variadic_fixed` `1` )
 }
 
 // ── Signature pre-scan (first pass) ──────────────────────────────
@@ -13367,12 +13634,17 @@
 // sequences) for each default method via nurl_lex_src_slice so the
 // template can be re-lexed later even when the body uses string literals.
 @ scan_trait_body i lex s tname → v {
+    // Lint: the trait and its method names are decls of this file —
+    // an import supplying only a trait must not be flagged unused
+    // when a consumer impls it / calls its methods.
+    ( lint_note_def tname )
     ( expect lex TT_LBRACE )
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         ? == ( nurl_lex_type lex ) TT_AT
         { ( nurl_lex_advance lex )  // skip '@'
             ? ( is_ident_tok ( nurl_lex_type lex ) )
             { : s mname ( nurl_lex_val lex )
+                ( lint_note_def mname )
                 ( nurl_lex_advance lex )  // consume method name
                 : i sig_start ( nurl_lex_cur_start lex )
                 // Skip params / → / ret_ty until we hit '{' (body), next '@',
@@ -13442,6 +13714,9 @@
             : s key ( nurl_str_cat mname ( nurl_str_cat `##` impl_llvm ) )
             ( nurl_sym_def g_impl_ret_syms key ret_ty )
             ( nurl_sym_def g_impl_name_syms key impl_mangle )
+            // Mark the bare method name as impl-backed so gen_call's
+            // unknown-callee check lets it through to impl dispatch.
+            ( nurl_sym_def g_impl_name_syms ( nurl_str_cat mname `__impl_seen` ) `1` )
             : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
             ( nurl_sym_def syms mangled ret_ty )
         }
@@ -13514,6 +13789,10 @@
                         : s key ( nurl_str_cat mname ( nurl_str_cat `##` impl_llvm ) )
                         ( nurl_sym_def g_impl_ret_syms key ret_ty )
                         ( nurl_sym_def g_impl_name_syms key impl_mangle )
+                        // Mark the bare method name as impl-backed so
+                        // gen_call's unknown-callee check lets it
+                        // through to impl dispatch.
+                        ( nurl_sym_def g_impl_name_syms ( nurl_str_cat mname `__impl_seen` ) `1` )
                         : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
                         ( nurl_sym_def syms mangled ret_ty )
                     }
@@ -13568,6 +13847,10 @@
     ( vis_take_pending_pub )
     ( nurl_lex_advance lex )  // skip '%'
     : s tname ( nurl_lex_val lex )
+    // Lint: naming a trait here (decl or impl) references it — an
+    // `% Trait ( Type )` impl justifies the import of the trait's
+    // defining file by itself.
+    ( lint_note_used tname )
     ( nurl_lex_advance lex )  // skip trait name
     // Skip optional type params [T] (already captured during scan)
     ? == ( nurl_lex_type lex ) TT_LBRACK
@@ -13710,6 +13993,15 @@
                         : s body ( collect_fn_body lex )
                         ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__stparams` ) tparams )
                         ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__sbody` ) body )
+                        // Lint: generic struct templates never reach
+                        // vis_record_type, so register the name here.
+                        // This scan recurses into imports without
+                        // touching vis_current_src_file — the lexer's
+                        // filename is the real defining file. Field
+                        // types inside the body (`( Vec A ) data`) are
+                        // references in that file too.
+                        ( lint_note_def_at sname ( nurl_lex_filename lex ) )
+                        ( lint_note_template_src body ( nurl_lex_filename lex ) )
                     } {}
                 } {}
             } {}
@@ -14290,6 +14582,7 @@
     // instantiations) has now been seen, so report the unused private
     // functions of the top-level file. No-op unless --lint is set.
     ( lint_report_unused_fns )
+    ( lint_report_unused_imports )
     // Borrow-checker diagnostics are errors, not warnings. We let
     // parse_program walk every function so every violation surfaces
     // in one run, then exit non-zero here if any were recorded. A

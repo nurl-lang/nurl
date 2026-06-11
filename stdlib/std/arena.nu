@@ -78,8 +78,6 @@
 //   }
 //   ( arena_free scratch )
 
-$ `stdlib/core/string.nu`
-$ `stdlib/core/mem.nu`
 
 // One contiguous buffer + its bump cursor. A GROWING arena links these
 // into a list (`next` points at the previously-current chunk); a FIXED

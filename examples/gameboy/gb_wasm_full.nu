@@ -6,7 +6,6 @@
 // which add their own ROM source, output, and run loop.
 
 $ `stdlib/core/string.nu`
-$ `stdlib/core/vec.nu`
 
 // ── Machine state (single instance — module globals) ──────────────
 : ~ s g_mem 0            // 64 KiB flat address space (*u, held as s)

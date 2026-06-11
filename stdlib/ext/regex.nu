@@ -49,8 +49,6 @@
 $ `stdlib/core/errors.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/option.nu`
-$ `stdlib/core/result.nu`
 
 // ── State kinds ─────────────────────────────────────────────────────
 // 0 = Match  (accept; out1/out2 unused)

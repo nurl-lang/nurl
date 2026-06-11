@@ -21,7 +21,6 @@
 // directly.
 
 $ `stdlib/core/string.nu`
-$ `stdlib/std/int.nu`
 
 // Single syscall-shaped runtime bridge. Returns 1 on success, 0 on a
 // total entropy failure (which the degraded /dev/urandom-or-PRNG fallback

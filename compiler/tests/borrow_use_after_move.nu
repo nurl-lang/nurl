@@ -3,7 +3,6 @@
 // the diagnostic in the baseline. `v` is consumed by vec_free, then
 // read again by vec_len: a use-after-move. Expect one warning.
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/option.nu`
 
 @ main → i {
     : ( Vec i ) v ( vec_new [i] )

@@ -18,9 +18,7 @@
 // pure-builder pattern, see run_tests.sh). ASan-clean.
 
 $ `stdlib/ext/http_response.nu`
-$ `stdlib/ext/http.nu`
 $ `stdlib/ext/json.nu`
-$ `stdlib/std/bytes.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 

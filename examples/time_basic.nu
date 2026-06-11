@@ -11,7 +11,6 @@
 //                                                   schedulers can be slow)
 
 $ `stdlib/std/time.nu`
-$ `stdlib/core/string.nu`
 
 @ pb b v s label → v {
     ( nurl_print label ) ( nurl_print `=` )

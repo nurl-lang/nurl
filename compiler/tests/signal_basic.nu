@@ -29,7 +29,6 @@ $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/core/string.nu`
-$ `stdlib/core/io.nu`
 
 // Top-level mutable observed from inside the SIGUSR1 closure.
 : ~ i usr1_count 0

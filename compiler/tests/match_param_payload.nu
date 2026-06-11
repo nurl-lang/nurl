@@ -15,7 +15,6 @@
 //
 // Each printed line is deterministic so the output is baselined.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 : S { s name }

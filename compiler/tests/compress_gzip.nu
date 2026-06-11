@@ -2,7 +2,6 @@
 // helpers in stdlib/ext/compress.nu (RFC 1952 file format via the
 // runtime.c §22 bridge over libz's streaming API).
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/compress.nu`

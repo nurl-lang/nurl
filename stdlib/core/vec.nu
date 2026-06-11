@@ -99,7 +99,6 @@
 // owns heap storage; pass a closure that returns an independently-owned
 // element (e.g. wrap `string_clone` in a `\`).
 
-$ `stdlib/core/mem.nu`
 
 : Vec [A] { s ctl }
 

@@ -22,7 +22,6 @@ $ `stdlib/ext/http_static.nu`
 $ `stdlib/ext/http_auth.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
-$ `stdlib/std/bytes.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/http.nu`

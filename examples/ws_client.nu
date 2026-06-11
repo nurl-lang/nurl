@@ -13,7 +13,6 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/std/bytes.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/websocket.nu`

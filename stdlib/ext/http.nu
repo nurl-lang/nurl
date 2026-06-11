@@ -96,7 +96,6 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/errors.nu`
 $ `stdlib/std/bytes.nu`
 
 // HttpErr tags — see stdlib/runtime.c §14 NURL_HTTP_ERR_*.

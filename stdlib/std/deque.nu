@@ -28,7 +28,6 @@
 //   ( deque_free       [A] d )            → v
 //   ( deque_free_with  [A] d drop )       → v   drop : (@ v A)
 
-$ `stdlib/core/mem.nu`
 
 : Deque [A] { s ctl }
 

@@ -120,8 +120,6 @@
 $ `stdlib/core/errors.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/option.nu`
-$ `stdlib/core/result.nu`
 
 // memchr — glibc's SIMD-vectorised byte search. Used in
 // `__jp_parse_string`'s fast path to find the closing quote and (in

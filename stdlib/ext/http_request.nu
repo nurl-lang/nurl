@@ -77,7 +77,6 @@
 //   http_req_body_default_max    → 10 MiB
 
 $ `stdlib/std/net.nu`
-$ `stdlib/std/bytes.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/errors.nu`

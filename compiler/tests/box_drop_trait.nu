@@ -12,7 +12,6 @@
 // leak if the trait dispatch ever silently breaks; here we just
 // verify the drop side-effect (print) fires.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/box.nu`
 
 % Drop ( Box i ) {

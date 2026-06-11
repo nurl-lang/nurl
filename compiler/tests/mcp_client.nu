@@ -15,7 +15,6 @@
 
 $ `stdlib/ext/mcp_client.nu`
 $ `stdlib/ext/json.nu`
-$ `stdlib/core/string.nu`
 
 @ println_str s prefix s value → v {
     ( nurl_print prefix )

@@ -9,7 +9,6 @@
 // (the load stays inside the loop in the optimized IR); this test pins
 // the functional read-modify-write semantics.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/hal/mmio.nu`
 
 @ main → i {

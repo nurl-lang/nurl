@@ -5,7 +5,6 @@
 // Float results are rounded to integers (or compared by sign / threshold)
 // to keep stdout byte-deterministic across libm implementations.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/errors.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/int.nu`

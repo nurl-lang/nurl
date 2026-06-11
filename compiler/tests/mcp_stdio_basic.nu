@@ -15,7 +15,6 @@
 
 $ `stdlib/ext/mcp_stdio.nu`
 $ `stdlib/ext/json.nu`
-$ `stdlib/core/string.nu`
 
 @ println s line → v {
     ( nurl_print line )

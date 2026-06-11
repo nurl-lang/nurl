@@ -57,7 +57,6 @@
 //   * On WASI, every entry degrades to a no-op stub; `thread_spawn`
 //     surfaces `ThreadCreate` so callers can fall back to a serial path.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/cell.nu`
 
 // FFI: direct libpthread surface. On Linux/macOS these are libc; on

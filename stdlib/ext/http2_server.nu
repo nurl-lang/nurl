@@ -26,7 +26,6 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/std/net.nu`
-$ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_server.nu`

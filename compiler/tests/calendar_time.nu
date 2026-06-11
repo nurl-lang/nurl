@@ -20,7 +20,6 @@
 $ `stdlib/std/time.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/errors.nu`
-$ `stdlib/core/io.nu`
 
 @ println_str s prefix s value → v {
     ( nurl_print prefix )

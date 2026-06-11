@@ -17,7 +17,6 @@
 //
 // Default (gate unset) prints the skip notice.
 
-$ `stdlib/std/process.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/env.nu`

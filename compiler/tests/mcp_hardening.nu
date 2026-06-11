@@ -15,7 +15,6 @@
 // main returns the failure count (0 = pass).
 
 $ `stdlib/core/string.nu`
-$ `stdlib/core/vec.nu`
 $ `stdlib/std/panic.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`

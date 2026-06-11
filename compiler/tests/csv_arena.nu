@@ -14,7 +14,6 @@
 // All tests print compact tags so correct.txt diffs are obvious.
 
 $ `stdlib/core/string.nu`
-$ `stdlib/core/vec.nu`
 $ `stdlib/ext/csv.nu`
 
 @ load_table s csv → *CSVTable {

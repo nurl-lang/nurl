@@ -44,7 +44,6 @@ $ `stdlib/core/errors.nu`
 $ `stdlib/std/panic.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/option.nu`
 
 : BigInt {
     b neg

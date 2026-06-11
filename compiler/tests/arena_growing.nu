@@ -18,7 +18,6 @@
 //
 // main returns the number of failed checks (0 = all pass).
 
-$ `stdlib/core/string.nu`
 $ `stdlib/std/arena.nu`
 
 : Pt { i x i y }

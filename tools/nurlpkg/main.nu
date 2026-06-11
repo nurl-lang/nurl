@@ -37,7 +37,6 @@ $ `stdlib/std/sort.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/manifest.nu`
 $ `stdlib/ext/lockfile.nu`
-$ `stdlib/ext/semver.nu`
 $ `stdlib/ext/registry_index.nu`
 $ `stdlib/ext/resolver.nu`
 $ `stdlib/ext/pkg_fetch.nu`

@@ -70,7 +70,6 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/errors.nu`
 
 : | NetErr {
     NetBind

@@ -1,5 +1,4 @@
 $ `stdlib/core/string.nu`
-$ `stdlib/std/fs.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/csv.nu`
 

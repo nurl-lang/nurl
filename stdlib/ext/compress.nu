@@ -51,9 +51,7 @@
 //     value passes through libz unchanged via `compress2`).
 //   * zstd: -22 (fast negative levels) … 22 (max). Default 3.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/mem.nu`
 $ `stdlib/core/cell.nu`  // nurl_native_sizeof for z_stream alloc
 
 : | CompressErr {

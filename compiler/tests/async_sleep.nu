@@ -17,7 +17,6 @@
 
 $ `stdlib/std/async.nu`
 $ `stdlib/std/thread.nu`
-$ `stdlib/core/string.nu`
 $ `stdlib/std/time.nu`
 
 : ~ i done_count 0

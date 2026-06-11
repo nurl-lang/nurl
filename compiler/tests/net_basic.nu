@@ -6,7 +6,6 @@
 // `net_loopback.nu`, gated behind NURL_NET_TESTS=1.
 
 $ `stdlib/std/net.nu`
-$ `stdlib/core/string.nu`
 
 @ print_label_str s label s value → v {
     ( nurl_print label )

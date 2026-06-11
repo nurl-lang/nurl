@@ -34,8 +34,6 @@ $ `stdlib/std/process.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
-$ `stdlib/core/option.nu`
-$ `stdlib/core/result.nu`
 $ `stdlib/core/errors.nu`
 $ `stdlib/core/vec.nu`
 

@@ -6,7 +6,6 @@
 //   * wildcard catches the residual
 //   * arms returning different kinds of values (string here)
 
-$ `stdlib/core/string.nu`
 
 @ classify i n → s {
     ^ ?? n {

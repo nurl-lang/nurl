@@ -5,7 +5,6 @@
 //   ( hmac_sha256_pure ( Vec u ) key
 //                       ( Vec u ) msg )   → ( Vec u )   32-byte HMAC
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 

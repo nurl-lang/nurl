@@ -93,14 +93,12 @@
 //   * No HTTP/2, no TLS — Phase 9.
 
 $ `stdlib/std/net.nu`
-$ `stdlib/std/bytes.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/dos.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/panic.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 

@@ -13,7 +13,6 @@
 //
 // Two negative controls confirm the warning is stack-reference-only.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/thread.nu`
 

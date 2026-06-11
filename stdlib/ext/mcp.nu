@@ -109,7 +109,6 @@
 //   client requests, as long as it's a revision the server supports).
 
 $ `stdlib/core/string.nu`
-$ `stdlib/core/option.nu`
 $ `stdlib/core/io.nu`
 $ `stdlib/ext/json.nu`
 

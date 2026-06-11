@@ -9,6 +9,7 @@
 //   • cap grows on first insert (lazy alloc through HashMap)
 
 $ `stdlib/std/set.nu`
+$ `stdlib/std/hashmap.nu`
 
 @ main → i {
     : ( @ i s ) hs \ s str → i { ^ ( hash_string str ) }

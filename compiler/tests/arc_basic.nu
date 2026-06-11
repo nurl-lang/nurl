@@ -1,7 +1,6 @@
 // arc_basic.nu — Arc[T] atomic refcount on a single thread.
 // Threaded sharing is exercised in arc_threads.nu.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/std/arc.nu`
 
 @ main → i {

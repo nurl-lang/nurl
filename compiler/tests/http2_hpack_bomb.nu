@@ -15,7 +15,6 @@
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
-$ `stdlib/ext/http2_frame.nu`
 $ `stdlib/ext/http2_hpack.nu`
 
 // HPACK integer with an N-bit prefix where 2^N-1 == `prefix_max`
