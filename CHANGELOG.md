@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Auto-drop: fn-returned by-value structs with owned fields now
+  transfer ownership to the caller** (`compiler/nurlc.nu`, critic A4c).
+  Two bugs closed. `^ @ T { ( nurl_str_cat … ) }` (direct construction
+  return) leaked the field — the callee never bound it so never
+  registered a drop, and the caller never registered one either.
+  `^ v` where `v` is a bound struct was worse: a **use-after-free** —
+  the callee's scope-exit drop freed v's owned field while the
+  returned-by-value copy still aliased it, so the caller read freed
+  memory. The fix mirrors the existing owned-string return flag: the
+  callee skip-drops the escaping struct binding and publishes its exact
+  owned-field list (`<fname>__ret_owned_fields`), which the caller's
+  `: T x ( f )` re-registers through the same
+  `mem_register_agg_owned_fields` path — exactly one drop, at the
+  caller's scope exit. Ownership composes through `^ ( mk )` call chains
+  and reaches nested struct fields. Safe against double-free with
+  stdlib's manual `*_free` conventions: only raw-`s`/slice fields filled
+  by a fresh allocation in a *direct* agg-literal return register for
+  transfer — stdlib's struct returns use `String`/`Vec` handle fields
+  (untracked) and build incrementally before `^ binding` (which never
+  registers agg fields), so their manual frees stay correct. Verified:
+  full san suite 0 SAN_FAIL, `tools/leakcheck` zero, suite 340 PASS,
+  and a targeted incremental-build manual-free probe stays single-drop.
+  Regression `ret_struct_owned_transfer.nu` (direct / bound / chain /
+  nested shapes, ASan+LSan zero). No nurlc IR change — fixed point holds
+  without a bootstrap refresh.
+
 ### Fixed (examples)
 
 - **Game Boy emulator: deterministic ~90 s crash on Tobu Tobu Girl's
