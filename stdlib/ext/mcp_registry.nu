@@ -38,6 +38,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/panic.nu`
+$ `stdlib/std/subtle.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/http_request.nu`
@@ -851,20 +852,14 @@ $ `stdlib/ext/http_response.nu`
                 {
                     : i tlen ( nurl_str_len expected_token )
                     ? == - avn 7 tlen {
-                        // Constant-time compare: accumulate byte differences
-                        // with no early exit, so the loop's duration does not
-                        // leak how many leading bytes matched (a timing oracle
-                        // that recovers the token byte-by-byte). `diff` stays 0
-                        // iff every byte is equal. Length is checked above —
-                        // leaking token length is standard (cf. compare_digest).
-                        : ~ i diff 0
-                        : ~ i k 0
-                        ~ < k tlen {
-                            = diff | diff - ( nurl_str_get avs + 7 k )
-                            ( nurl_str_get expected_token k )
-                            = k + k 1
-                        }
-                        ? == diff 0 { = ok T } {}
+                        // Constant-time compare (std/subtle.nu) so the
+                        // loop's duration cannot leak how many leading
+                        // bytes matched — a timing oracle that recovers
+                        // the token byte-by-byte. Length is checked
+                        // above; leaking length is standard
+                        // (cf. compare_digest).
+                        ? ( constant_time_eq_n # s + # i avs 7 expected_token tlen )
+                        { = ok T } {}
                     } {}
                 } {}
                 ( string_free av )
