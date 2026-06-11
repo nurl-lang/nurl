@@ -156,12 +156,11 @@ $ `stdlib/ext/env.nu`
         ( string_push_str ln ` SP=` ) ( ls_pushhex4 ln sp )
         ( string_push_char ln 10 ) ( nurl_print ( string_data ln ) )
         ( string_free ln )
-        : ~ i used 4
-        ? == g_halt 0 { = used ( step ) } {}
-        ( tick_timer used )
-        ( tick_ppu used )
-        : i ic ( service_interrupts )
-        ? != ic 0 { ( tick_timer ic ) ( tick_ppu ic ) } {}
+        // Drive the REAL execution path. The previous hand-rolled
+        // step/tick_timer/tick_ppu sequence here was a stale copy of an
+        // older cpu_advance — it diverged (HALT never woke), so traces
+        // didn't reflect actual emulator behaviour.
+        ( cpu_advance )
         = k + k 1
     }
     ^ 0

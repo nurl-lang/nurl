@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (examples)
+
+- **Game Boy emulator: deterministic ~90 s crash on Tobu Tobu Girl's
+  title screen** (`examples/gameboy/core.nu`). Root cause was a
+  halt-bug emulation error, found by stack forensics on an
+  instruction trace: `EI` + `HALT` with a timer IRQ landing inside
+  HALT's own 4-cycle window set `g_halt_bug`, the EI delay then raised
+  IME and the interrupt dispatched immediately — and the stale
+  halt-bug flag replayed the HANDLER's first instruction (PC failed to
+  advance once inside the handler). Tobu's handler starts with
+  `PUSH HL`, so SP skewed by 2 and `RETI` returned into WRAM data —
+  the screen froze and execution fell into a RST 38 loop (the gray
+  bars + hang seen on the playground). Two-part fix per Pan Docs:
+  (1) `EI` immediately before `HALT` with a pending interrupt is NOT
+  the halt bug — the interrupt is serviced with the HALT's own address
+  as the return address; (2) invariant: an interrupt dispatch always
+  clears the halt-bug replay (it applies to the next sequential fetch
+  only, never the handler's). Verified: Blargg `cpu_instrs` 11/11 +
+  `02-interrupts` + `instr_timing` still pass, dmg-acid2 renders, and
+  a 40 000-frame idle soak (vs the ~2 918-frame crash) runs ASan-clean
+  with a live framebuffer. Also: migrated `examples/gameboy` to the
+  enforced `:` immutability (97 declarations — it sits outside the
+  test suite, so the tree-wide migration missed it; all gameboy
+  targets compile again, playground build regenerated), and fixed
+  `gbtrace.nu --trace` to drive the real `cpu_advance` path (its
+  hand-rolled step loop was a stale copy that never woke from HALT).
+
 ### Added
 
 - **Enum payload residuals diagnosed — ghost variants and unsized
