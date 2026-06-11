@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Enum payload residuals diagnosed — ghost variants and unsized
+  generics are hard errors now** (`compiler/nurlc.nu`, critic A7).
+  An unknown/unimported type name in an enum variant's payload position
+  parses as a SEPARATE variant (same-file forward references already
+  resolve via the pre-scan, so this fires only for typos and missing
+  imports) — the intended payload silently vanished and downstream
+  code emitted out-of-bounds `extractvalue` / broken `store` IR, or
+  silently read a sibling variant's slot. Three new hard errors:
+  payload-arity checks at the match arm ("match arm binds 1 payload(s)
+  but variant 'V' declares only 0 …") and at the enum literal, both
+  naming the unknown-type-parses-as-variant cause; and an
+  unknown-generic check in `parse_type_paren` — `( Vec i )` with no
+  generic-struct template in scope and no materialised instantiation
+  dies at the use site naming the missing `$` import, instead of
+  clang's "loading unsized types is not allowed" far from the cause
+  (zero-type-arg `( Type )` trait-impl targets are exempt). Locks:
+  `should_fail_ghost_variant_match.nu`,
+  `should_fail_ghost_variant_construct.nu`,
+  `should_fail_unknown_generic_type.nu`. False-positive sweep: full
+  suite 339 PASS + nurlapi + examples clean.
+
 - **"Statement has no effect" warning — the last silent prefix-arity
   cascade is now diagnosed** (`compiler/nurlc.nu`, critic A2). A
   statement that produces a value without being a call or control flow
