@@ -8,7 +8,6 @@
 
 $ `stdlib/std/process.nu`
 $ `stdlib/core/string.nu`
-$ `stdlib/core/vec.nu`
 
 @ println s line → v {
     ( nurl_print line )

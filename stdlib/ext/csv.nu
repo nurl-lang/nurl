@@ -42,6 +42,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/option.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/std/cmp.nu`

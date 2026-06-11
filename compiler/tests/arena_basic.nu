@@ -1,4 +1,3 @@
-$ `stdlib/core/string.nu`
 $ `stdlib/std/arena.nu`
 
 @ main → i {

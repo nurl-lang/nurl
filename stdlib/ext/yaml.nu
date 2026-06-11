@@ -45,7 +45,6 @@
 $ `stdlib/ext/json.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/option.nu`
 
 : | YamlErr { YamlSyntax YamlBadIndent YamlUnterminated YamlOther }
 

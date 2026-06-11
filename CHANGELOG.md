@@ -8,6 +8,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`nurlc --lint` detects unused imports** (`compiler/nurlc.nu`). A
+  top-file `$` import none of whose defined symbols (functions, FFI
+  externs, types, constants — generic templates included) is referenced
+  by the top file itself now warns `unused import: no symbol from
+  '<path>' is referenced in this file`. References count from calls,
+  identifier reads, and type positions; uses recorded while re-parsing
+  generic template bodies during the instantiation flush are attributed
+  to the template's defining file, so stdlib internals never mask a top
+  file's dead import. Pure aggregator files (only `$` directives, no
+  decls of their own — e.g. `stdlib/ext/http_full.nu`) are exempt both
+  as importer and as import target: re-exporting is their purpose. The
+  LSP server (v0.6.0) now surfaces these straight from `nurlc --lint`
+  and drops its former text-heuristic duplicate (~190 LOC removed) —
+  one source of truth for the diagnostic.
+
+- **Unknown callees are compile errors now** (`compiler/nurlc.nu`). A
+  call to a name with no registered return type — not an `@`-fn, FFI
+  extern, builtin, impl method, or local closure — previously fell
+  through as an assumed-`i64` call to an undeclared symbol: invalid IR
+  that clang rejected far from the source, or worse, code that linked
+  by accident when the defining file happened to be imported later in
+  the unit *and* the return type happened to be i64. Now dies at the
+  call site: `call to unknown function 'X' — … add the missing '$'
+  import … or check the spelling.` Same treatment for a generic call
+  whose template is nowhere in the import closure (was: opaque
+  `expected '->' but found end of input` inside the synthetic
+  `<generic …>` source). En route this surfaced — and forced fixing —
+  nine runtime builtins that were header-declared but missing from the
+  compiler's symbol table (`nurl_peek`, `nurl_init`, `nurl_memset`,
+  `nurl_vec_drop`, `nurl_argc`, `nurl_argv_count`, `nurl_read_int`,
+  `puts`, `printf`), all silently riding the i64 default.
+
+### Fixed
+
+- **180 stale `$` imports removed tree-wide** (88 stdlib, 92
+  tests/examples/tools). Several masked real latent bugs, now fixed
+  with explicit imports: `stdlib/ext/csv.nu` used `opt_unwrap_or`
+  without importing `stdlib/core/option.nu` (rode on `sort.nu`'s own
+  stale import), `stdlib/ext/http2_hpack.nu` called
+  `h2_default_header_table_size` without importing
+  `stdlib/ext/http2_frame.nu`, and `stdlib/std/bufio.nu` called
+  `nurl_file_open`/`nurl_file_close` without importing
+  `stdlib/std/fs.nu` — each compiled only when every consumer
+  happened to import the missing file first. `stdlib/std/set.nu` no
+  longer imports `hashmap.nu` for its callers' convenience; import it
+  alongside (the stock `hash_*`/`eq_*` helpers live there).
+
 ## [0.9.7] — 2026-06-11
 
 ### Added

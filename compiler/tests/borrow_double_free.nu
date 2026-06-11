@@ -4,7 +4,6 @@
 // afterwards uses the moved-from binding — the silent-alias double
 // free. Expect one warning, at the vec_free of `a`.
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/option.nu`
 
 @ main → i {
     : ( Vec i ) a ( vec_new [i] )

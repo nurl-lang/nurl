@@ -14,7 +14,6 @@
 //      * Transitively walks `$`-imports starting from each didOpen
 //        file so cross-file jumps land in the right place.
 
-$ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/symtab.nu`
 $ `stdlib/std/fs.nu`
@@ -96,7 +95,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 @ __build_server_info → Json {
     : Json info ( json_obj_new )
     ( json_obj_set info `name` ( json_str_lit `nurl-lsp` ) )
-    ( json_obj_set info `version` ( json_str_lit `0.5.0` ) )
+    ( json_obj_set info `version` ( json_str_lit `0.6.0` ) )
     ^ info
 }
 
@@ -786,10 +785,10 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 @ __recompile_and_publish s uri → v {
     : s text ( nurl_sym_get g_docs uri )
     : Json diags ( __compile_diagnostics text )
-    // Merge in unused-import warnings (computed from the symbol index,
-    // not the compiler — the compiler never sees which file a symbol
-    // came from once it is in scope).
-    ( __unused_import_diags text diags )
+    // Unused-import warnings arrive from `nurlc --lint` itself (it
+    // attributes every decl to its defining file and tracks which file
+    // references what), so no LSP-side text heuristic is layered on
+    // top — one source of truth, no duplicate diagnostics.
     ( __publish_diagnostics uri diags )
 }
 
@@ -1671,44 +1670,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ^ eq
 }
 
-// True when `name` occurs as a whole-word identifier in `content`,
-// skipping backtick strings and `//` comments so a match inside a
-// string literal (e.g. an import-path token) never counts as a use.
-@ __name_referenced s content s name → b {
-    : i n ( nurl_str_len content )
-    : ~ i pos 0
-    : ~ i in_str 0
-    : ~ i in_com 0
-    : ~ b found F
-    ~ & < pos n ! found {
-        : i c ( nurl_str_get content pos )
-        ? != in_str 0 {
-            ? == c 96 { = in_str 0 } {}
-            = pos + pos 1
-        } {
-            ? != in_com 0 {
-                ? == c 10 { = in_com 0 } {}
-                = pos + pos 1
-            } {
-                ? == c 96 { = in_str 1 = pos + pos 1 } {
-                    ? & & == c 47 < + pos 1 n == ( nurl_str_get content + pos 1 ) 47 {
-                        = in_com 1 = pos + pos 2
-                    } {
-                        ? ( __is_ident_start c ) {
-                            : i st pos
-                            ~ & < pos n ( __is_ident_byte ( nurl_str_get content pos ) ) { = pos + pos 1 }
-                            ? ( __slice_eq content st - pos st name ) { = found T } {}
-                        } {
-                            = pos + pos 1
-                        }
-                    }
-                }
-            }
-        }
-    }
-    ^ found
-}
-
 // Append a Location for every whole-word occurrence of `name` in one
 // document's content, skipping strings + comments. Positions are
 // emitted 0-based (LSP coordinates) directly.
@@ -1848,115 +1809,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
         ( string_push_str acc uri )
         ( nurl_sym_def g_doc_uris `list` ( string_data acc ) )
         ( string_free acc )
-    }
-}
-
-// ── Unused-import diagnostics ───────────────────────────────────────
-//
-// An `$ `path`` import is unused when NONE of the top-level symbols the
-// imported file defines (per the symbol index, g_defs_by_uri) is
-// referenced anywhere in the importing file. Conservative by design:
-// any whole-word match — even one inside an unrelated expression —
-// counts as "used", so we never warn on a genuinely-needed import. If
-// the imported file was not indexed (path not found), we skip silently.
-
-// True when any decl name listed in `defs` is referenced in `content`.
-// `defs` is g_defs_by_uri's flat tab-separated stream of (name, line,
-// kind) triplets — `name\tline\tkind\tname\tline\tkind\t…`, NOT newline
-// per row — so the name fields are the ones whose field index ≡ 0 mod 3.
-// Stops at the first referenced name.
-@ __any_def_referenced s defs s content → b {
-    : i n ( nurl_str_len defs )
-    : ~ i pos 0
-    : ~ i fieldidx 0
-    : ~ b used F
-    ~ & < pos n ! used {
-        : i tab ( __index_of_byte defs pos n 9 )
-        : i end ? < tab 0 n tab
-        ? == 0 % fieldidx 3 {
-            ? > - end pos 0 {
-                : String nm ( __substr defs pos end )
-                ? ( __name_referenced content ( string_data nm ) ) { = used T } {}
-                ( string_free nm )
-            } {}
-        } {}
-        = fieldidx + fieldidx 1
-        = pos ? < tab 0 n + tab 1
-    }
-    ^ used
-}
-
-// Check one import; append an unused-import Warning at (line,col)
-// (0-based) when none of its symbols are referenced in `content`.
-@ __check_one_import s path i line i col s content Json diags → v {
-    : String abs ( __resolve_import_path path )
-    : String uri ( __path_to_uri ( string_data abs ) )
-    : s defs ( nurl_sym_get g_defs_by_uri ( string_data uri ) )
-    ? > ( nurl_str_len defs ) 0 {
-        ? ( __any_def_referenced defs content ) {} {
-            : String msg ( string_with_cap 96 )
-            ( string_push_str msg `unused import: no symbol from '` )
-            ( string_push_str msg path )
-            ( string_push_str msg `' is referenced in this file` )
-            // __build_diagnostic converts 1-based → 0-based, so feed it
-            // the 1-based form of our 0-based scan coordinates.
-            ( json_arr_push diags ( __build_diagnostic + line 1 + col 1 2 ( string_data msg ) ) )
-            ( string_free msg )
-        }
-    } {}
-    ( string_free uri )
-    ( string_free abs )
-}
-
-// Walk `content`, find every `$ `path`` import (tracking its line/col),
-// and append an unused-import diagnostic for each unused one.
-@ __unused_import_diags s content Json diags → v {
-    : i n ( nurl_str_len content )
-    : ~ i pos 0
-    : ~ i line 0
-    : ~ i line_start 0
-    : ~ i in_str 0
-    : ~ i in_com 0
-    : ~ i prev_dollar 0
-    : ~ i d_line 0
-    : ~ i d_col 0
-    ~ < pos n {
-        : i c ( nurl_str_get content pos )
-        ? == c 10 { = line + line 1 = pos + pos 1 = line_start pos = in_com 0 = prev_dollar 0 } {
-            ? != in_str 0 {
-                ? == c 96 { = in_str 0 } {}
-                = pos + pos 1
-            } {
-                ? != in_com 0 { = pos + pos 1 } {
-                    ? == c 96 {
-                        ? != prev_dollar 0 {
-                            : ~ i ep + pos 1
-                            ~ & < ep n != ( nurl_str_get content ep ) 96 { = ep + ep 1 }
-                            ? < ep n {
-                                : String path ( __substr content + pos 1 ep )
-                                ( __check_one_import ( string_data path ) d_line d_col content diags )
-                                ( string_free path )
-                                = pos + ep 1
-                            } { = pos n }
-                            = prev_dollar 0
-                        } {
-                            = in_str 1
-                            = pos + pos 1
-                        }
-                    } {
-                        ? & & == c 47 < + pos 1 n == ( nurl_str_get content + pos 1 ) 47 {
-                            = in_com 1 = pos + pos 2 = prev_dollar 0
-                        } {
-                            ? == c 36 { = prev_dollar 1 = d_line line = d_col - pos line_start = pos + pos 1 } {
-                                ? ( __is_space c ) { = pos + pos 1 } {
-                                    = prev_dollar 0 = pos + pos 1
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 

@@ -9,9 +9,7 @@
 // as moved). Here `sum_and_free` consumes a Vec, sums it, and frees
 // it — `main` hands the Vec off and never touches it again.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/option.nu`
 
 // Consumes the Vec: sums its elements, then frees it.
 @ sum_and_free sink ( Vec i ) g → i {

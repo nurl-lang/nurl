@@ -21,11 +21,8 @@
 $ `stdlib/ext/http_middleware.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
-$ `stdlib/ext/http_router.nu`
-$ `stdlib/std/bytes.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/ext/http.nu`
 
 @ println_str s prefix s value → v {
     ( nurl_print prefix )

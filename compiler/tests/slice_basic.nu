@@ -1,4 +1,3 @@
-$ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 

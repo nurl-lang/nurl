@@ -59,7 +59,6 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/errors.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/async_ffi.nu`
 

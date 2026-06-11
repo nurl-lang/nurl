@@ -25,9 +25,9 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/mem.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/http.nu`
+$ `stdlib/ext/http2_frame.nu`
 
 // ── Errors ────────────────────────────────────────────────────────────
 

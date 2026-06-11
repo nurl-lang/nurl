@@ -77,7 +77,6 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/cell.nu`
 
 // ── libsqlite3 FFI ────────────────────────────────────────────────
 //

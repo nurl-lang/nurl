@@ -47,7 +47,6 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/std/bytes.nu`
 
 // ── mime_for_ext ─────────────────────────────────────────────────────
 //

@@ -31,9 +31,7 @@
 //
 // Slices do not own; never free them — let them go out of scope.
 
-$ `stdlib/core/option.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/mem.nu`
 
 : Slice [A] { * A data i len }
 

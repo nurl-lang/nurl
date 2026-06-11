@@ -39,7 +39,6 @@
 $ `stdlib/ext/json.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/errors.nu`
 $ `stdlib/std/bytes.nu`
 
 // IEEE-754 bit access (runtime.c) — `#` casts convert numeric value, not

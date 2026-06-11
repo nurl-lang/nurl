@@ -59,8 +59,6 @@
 //   pointers. For thread-safe owned-T sharing use Arc[Mutex<…>]
 //   plus deep-clone whenever a copy is needed.
 
-$ `stdlib/core/string.nu`
-$ `stdlib/core/mem.nu`
 
 // FFI: atomic refcount primitives (stdlib/runtime.c).
 //   nurl_atomic_i64_inc(p)       → old value (fetch-add 1)

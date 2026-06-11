@@ -8,7 +8,6 @@
 // API:
 //   ( sha1_pure ( Vec u ) data ) → ( Vec u )   20-byte digest (owned)
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 

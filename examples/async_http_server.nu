@@ -25,7 +25,6 @@
 
 $ `stdlib/std/async.nu`
 $ `stdlib/ext/http_full.nu`
-$ `stdlib/std/fs.nu`
 
 @ health_handler HttpRequest req Params params → HttpResponse {
     ^ ( response_text 200 `{"status":"ok"}\n` )

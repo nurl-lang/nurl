@@ -27,7 +27,6 @@ $ `stdlib/ext/serde.nu`
 $ `stdlib/ext/toml.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/errors.nu`
 
 @ say s label b cond → v {
     ? cond {

@@ -79,10 +79,8 @@
 //   * No HTTP/1.1 `Expect: 100-continue` upstream signalling.
 
 $ `stdlib/std/net.nu`
-$ `stdlib/std/bytes.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/errors.nu`
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`

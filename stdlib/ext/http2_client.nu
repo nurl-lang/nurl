@@ -60,8 +60,6 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/mem.nu`
-$ `stdlib/std/bytes.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_response.nu`

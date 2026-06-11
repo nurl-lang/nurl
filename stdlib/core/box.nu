@@ -81,7 +81,6 @@
 //   ( do_work s )                     // s is a single handle, address stable
 //   ( box_free_with s @ DosState d → v { ( map_free . d table ) } )
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/mem.nu`
 
 : Box [T] { s ptr }

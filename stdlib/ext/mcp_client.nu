@@ -52,7 +52,6 @@
 //     and `mcp_response_error_code/message` to read server errors.
 
 $ `stdlib/ext/http.nu`
-$ `stdlib/ext/http_json.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
 $ `stdlib/std/time.nu`

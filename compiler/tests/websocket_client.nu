@@ -17,9 +17,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/ext/env.nu`
-$ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
-$ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_server.nu`
 $ `stdlib/ext/websocket.nu`
 

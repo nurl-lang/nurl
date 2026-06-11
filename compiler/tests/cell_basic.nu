@@ -1,6 +1,5 @@
 // cell_basic.nu — Cell byte-buffer round-trip + native_sizeof.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/cell.nu`
 
 @ main → i {

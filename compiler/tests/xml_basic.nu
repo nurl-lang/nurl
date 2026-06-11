@@ -5,7 +5,6 @@
 
 $ `stdlib/ext/xml.nu`
 $ `stdlib/core/string.nu`
-$ `stdlib/core/vec.nu`
 
 // Compare an owned ?String to an expected literal; frees the payload.
 @ chk ?String got s want s label → i {

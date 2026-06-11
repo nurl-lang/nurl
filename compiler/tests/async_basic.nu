@@ -19,7 +19,6 @@
 
 $ `stdlib/std/async.nu`
 $ `stdlib/std/thread.nu`
-$ `stdlib/core/string.nu`
 
 : ~ i total_yields 0
 : ~ i finished 0

@@ -76,13 +76,11 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/mem.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hash.nu`
 $ `stdlib/std/encode.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/net.nu`
-$ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 

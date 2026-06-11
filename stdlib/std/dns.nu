@@ -34,7 +34,6 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/errors.nu`
 $ `stdlib/std/net.nu`
 
 // ── Runtime FFI bridge (§18c) ──────────────────────────────────────

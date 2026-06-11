@@ -73,8 +73,6 @@
 //   // each rc_clone'd recipient also calls rc_free_with on shutdown;
 //   // the last one runs the drop closure.
 
-$ `stdlib/core/string.nu`
-$ `stdlib/core/mem.nu`
 
 : RcImpl [T] {
     i count

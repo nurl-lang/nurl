@@ -19,7 +19,6 @@ $ `stdlib/std/time.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hash_sha256.nu`
-$ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_server.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_request.nu`
@@ -27,7 +26,6 @@ $ `stdlib/ext/compress.nu`
 $ `stdlib/ext/tar.nu`
 $ `stdlib/ext/manifest.nu`
 $ `stdlib/ext/lockfile.nu`
-$ `stdlib/ext/registry_index.nu`
 $ `stdlib/ext/resolver.nu`
 $ `stdlib/ext/pkg_fetch.nu`
 $ `stdlib/core/string.nu`

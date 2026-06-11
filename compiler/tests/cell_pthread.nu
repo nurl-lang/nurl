@@ -5,7 +5,6 @@
 // whose size comes from `nurl_native_sizeof("pthread_mutex_t")`.
 // No C-side `nurl_mutex_*` helper involved.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/cell.nu`
 
 // Direct pthread FFI. `pthread_mutex_init`'s second arg is a

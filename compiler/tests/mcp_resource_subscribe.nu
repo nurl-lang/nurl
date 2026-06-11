@@ -5,7 +5,6 @@
 
 $ `stdlib/ext/mcp_session.nu`
 $ `stdlib/ext/json.nu`
-$ `stdlib/ext/mcp.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 

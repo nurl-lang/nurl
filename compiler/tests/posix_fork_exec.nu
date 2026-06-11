@@ -7,7 +7,6 @@
 // backend to NURL) has the primitives it needs.
 
 $ `stdlib/core/posix.nu`
-$ `stdlib/core/string.nu`
 $ `stdlib/core/cell.nu`
 
 @ main → i {

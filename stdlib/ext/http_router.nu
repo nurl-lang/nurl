@@ -74,11 +74,8 @@
 //     `with_*` combinators are the v1 substitute — caller composes
 //     middleware around the handler closure they pass to the server.
 
-$ `stdlib/std/net.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/option.nu`
-$ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 

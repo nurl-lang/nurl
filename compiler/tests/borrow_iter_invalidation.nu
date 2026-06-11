@@ -13,9 +13,7 @@
 //
 // Two positive cases (both warn) + two negative controls (no warning).
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/option.nu`
 
 @ main → i {
     : ( Vec i ) xs ( vec_new [i] )

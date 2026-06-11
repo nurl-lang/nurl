@@ -1,6 +1,5 @@
 // rc_basic.nu — Rc[T] shared-ownership semantics.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/std/rc.nu`
 
 @ main → i {

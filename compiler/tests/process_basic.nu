@@ -6,7 +6,6 @@
 // so these resolve regardless of layout.
 
 $ `stdlib/std/process.nu`
-$ `stdlib/core/string.nu`
 
 @ print_int_line s label i n → v {
     ( nurl_print label )

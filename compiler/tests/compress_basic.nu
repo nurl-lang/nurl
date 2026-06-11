@@ -1,7 +1,6 @@
 // compress_basic.nu — round-trip + error coverage for the zlib + zstd
 // bindings shipped in stdlib/ext/compress.nu.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/compress.nu`

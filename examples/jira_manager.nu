@@ -25,7 +25,6 @@
 //   nurl jira_manager.nu search "project = HAL AND status = 'In Progress'"
 
 $ `stdlib/core/string.nu`
-$ `stdlib/core/vec.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/http.nu`
 $ `stdlib/std/encode.nu`

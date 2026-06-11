@@ -6,7 +6,6 @@
 // exercises.
 
 $ `stdlib/core/string.nu`
-$ `stdlib/core/vec.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/mcp_registry.nu`

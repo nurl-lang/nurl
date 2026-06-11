@@ -6,6 +6,7 @@
 // the env with its native LLVM type.
 
 $ `stdlib/std/set.nu`
+$ `stdlib/std/hashmap.nu`
 $ `stdlib/core/vec.nu`
 
 @ main → i {

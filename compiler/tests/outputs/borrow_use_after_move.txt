@@ -1,4 +1,4 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/borrow_use_after_move.nu:12: error: use of moved value 'v' - it was consumed at line 11 (pass a fresh value or rebind it before reuse)
+compiler/tests/borrow_use_after_move.nu:11: error: use of moved value 'v' - it was consumed at line 10 (pass a fresh value or rebind it before reuse)
 error: compilation aborted - 1 borrow-checker violations (re-run with --no-borrowck to bypass)

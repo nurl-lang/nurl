@@ -72,12 +72,8 @@
 //   * Quoted boundary parameters (`boundary="my bound"`) are honoured;
 //     `boundary` parameters with embedded `;` or escaped quotes are not.
 
-$ `stdlib/std/net.nu`
-$ `stdlib/std/bytes.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/option.nu`
-$ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
 
 // ── MultipartPart struct + lifecycle ─────────────────────────────────

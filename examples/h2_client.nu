@@ -11,10 +11,10 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/std/net.nu`
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http2_client.nu`
+$ `stdlib/std/async.nu`  // runtime_init
 
 @ print_resp s label HttpResponse r → v {
     ( nurl_print label )

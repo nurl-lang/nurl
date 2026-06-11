@@ -53,6 +53,14 @@ jobs:
         # the relevant diff so we don't need extra grep here.
         run: ./build.sh
 
+      - name: examples corpus frontend gate
+        # Frontend-compiles every examples/ + bench/ + duo/ program.
+        # Examples have rotted silently twice (immutability-migration
+        # misses in gameboy + c64) because nothing compiled them on
+        # PR; this catches parse/type/import regressions without
+        # linking or running anything.
+        run: ./tools/check_examples.sh
+
   sanitizers:
     name: AddressSanitizer + UndefinedBehaviorSanitizer
     runs-on: ubuntu-latest

@@ -41,8 +41,6 @@
 //   : i b ( rng_next g )          // a != b; stream is deterministic
 //   ( rng_free g )
 
-$ `stdlib/core/string.nu`
-$ `stdlib/core/mem.nu`
 
 // ── State ────────────────────────────────────────────────────────────
 

@@ -10,9 +10,7 @@
 //
 // One positive case (warns) + one negative control (no warning).
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/option.nu`
 
 @ give_away sink ( Vec i ) g → v {
     ( vec_free [i] g )

@@ -24,7 +24,6 @@
 // Each line is deterministic so the output is baselined.
 
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/result.nu`
 
 @ make_vec i n → ! ( Vec u ) s {
     ? < n 0 { ^ @ ! ( Vec u ) s { F `negative` } } {}

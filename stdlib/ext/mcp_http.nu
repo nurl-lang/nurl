@@ -109,7 +109,6 @@ $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_server.nu`
-$ `stdlib/ext/http_router.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/core/string.nu`

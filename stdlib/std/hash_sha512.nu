@@ -12,7 +12,6 @@
 // literal lexer caps at LLONG_MAX). `# u64 -N` is a zero-cost
 // reinterpretation of the i64 bit pattern as u64.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 

@@ -15,7 +15,6 @@
 //
 // Wrapped by stdlib/std/hash.nu as `blake3_bytes` / `blake3_hex`.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 // ── word helpers ──────────────────────────────────────────────────

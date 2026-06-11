@@ -4,7 +4,6 @@
 // address. The point: a single allocation, multiple call sites
 // reading and writing fields through `box_ptr`.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/box.nu`
 
 : Counters {

@@ -37,11 +37,9 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/mem.nu`
 $ `stdlib/std/panic.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
-$ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 

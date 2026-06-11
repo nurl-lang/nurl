@@ -11,7 +11,6 @@
 //
 // Determinism: pure, no clock/socket/env. ASan-clean.
 
-$ `stdlib/core/option.nu`
 
 : | Dir { North South East West Up Down }
 

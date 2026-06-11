@@ -62,7 +62,6 @@
 //   ( hash_int x )         → i        Knuth multiplicative hash
 //   ( eq_int a b )         → b        ==
 
-$ `stdlib/core/mem.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/pair.nu`
 $ `stdlib/core/string.nu`

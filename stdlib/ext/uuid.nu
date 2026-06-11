@@ -10,7 +10,6 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/time.nu`
-$ `stdlib/std/bytes.nu`
 
 // Helper: push n hex nibbles of val to out (most significant first)
 @ __uuid_push_hex String out i val i nibbles → v {

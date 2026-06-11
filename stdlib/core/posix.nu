@@ -34,7 +34,6 @@
 //     `*u`. Decode via `nurl_wait_is_exited` / `_exit_status` /
 //     `_is_signaled` / `_term_sig`.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/cell.nu`
 
 // ── Native constants + errno ──────────────────────────────────────

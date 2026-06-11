@@ -4,7 +4,6 @@
 // generic, sort_by ascending + descending + by-key, sort on empty /
 // singleton / pre-sorted Vec, binary_search hit / miss / empty.
 
-$ `stdlib/core/string.nu`
 $ `stdlib/std/cmp.nu`
 $ `stdlib/std/sort.nu`
 

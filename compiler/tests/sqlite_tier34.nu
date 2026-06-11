@@ -13,8 +13,6 @@
 //
 // Every handle is a scope-local match-arm binding → auto-dropped.
 
-$ `stdlib/core/string.nu`
-$ `stdlib/core/vec.nu`
 $ `stdlib/ext/sqlite.nu`
 
 @ fail s tag SqliteErr e → v {

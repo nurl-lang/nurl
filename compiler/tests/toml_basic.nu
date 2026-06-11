@@ -18,7 +18,6 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/option.nu`
 $ `stdlib/ext/toml.nu`
 
 @ show_str s label TomlValue v → v {

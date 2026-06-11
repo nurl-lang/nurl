@@ -8,9 +8,7 @@
 // No sockets — pure dispatcher exercise (mirrors mcp_registry.nu).
 
 $ `stdlib/core/string.nu`
-$ `stdlib/core/vec.nu`
 $ `stdlib/ext/json.nu`
-$ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/mcp_registry.nu`
 
 @ print_label s tag s value → v {
