@@ -133,6 +133,31 @@ header.site nav a.btn-link:hover { border-color: var(--accent); color: var(--acc
 .btn-secondary:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
 .btn svg { width: 18px; height: 18px; }
 
+/* ── Hero stats strip ─────────────────────────────────────── */
+.hero .stats {
+  display: flex; gap: 0.7rem; justify-content: center; flex-wrap: wrap;
+  margin-top: 2.4rem;
+}
+.hero .stat {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.7rem 1.2rem;
+  display: flex; flex-direction: column; align-items: center;
+  min-width: 120px;
+}
+.hero .stat strong {
+  color: var(--accent);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.hero .stat span {
+  color: var(--fg-faint);
+  font-size: 0.74rem;
+  margin-top: 0.1rem;
+}
+
 /* ── Sections ──────────────────────────────────────────────── */
 section { padding: 4rem 0; border-bottom: 1px solid var(--border); }
 section:last-of-type { border-bottom: none; }
@@ -246,6 +271,7 @@ section:last-of-type { border-bottom: none; }
 .compare-table td.lang { font-weight: 600; }
 .compare-table .nurl-row td { color: var(--accent); }
 .compare-table .nurl-row td.lang { color: var(--accent); }
+.compare-table td.nurl-col, .compare-table th.nurl-col { color: var(--accent); font-weight: 600; }
 
 /* ── Targets list ─────────────────────────────────────────── */
 .targets {
