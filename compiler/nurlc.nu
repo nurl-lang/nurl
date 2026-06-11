@@ -1492,6 +1492,12 @@
     // exact for this shape and never stale (any other expression shape
     // skips the check entirely).
     : b ret_is_direct_call == ( nurl_lex_type lex ) TT_LPAREN
+    // A4c: reset the agg / call struct-ownership side-channels so the
+    // return-value analysis below observes only what THIS expression
+    // sets (a stale `@ T {…}` from an earlier statement must not leak
+    // into a `^ ( plain_struct_fn )` return).
+    ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
+    ( nurl_sym_def syms `__last_call_ret_struct_fields__` `` )
     : s val ( gen_operand lex syms cg )
     // XOR confusion (critic v0.9.0 §1): `^ X Y` on the same line is
     // almost always the user thinking `^` is XOR. `^^` (two adjacent
@@ -1577,6 +1583,13 @@
         ``
     }
     {}
+    // A4c: owned-struct-field ownership transfer. Compute the returned
+    // struct binding to skip-drop (and publish `__fn_ret_struct_owned__`
+    // for the caller to re-register).
+    : ~ s skip_struct_ptr ``
+    ? != 0 g_auto_drop_strings
+    { = skip_struct_ptr ( mem_ret_struct_transfer syms lt ret_ident ) }
+    {}
     ? != 0 ( nurl_str_len skip )
     { ( nurl_sym_def syms `__fn_ret_owned__` `1` ) }
     {}
@@ -1601,7 +1614,7 @@
         ( mem_drop_owned syms cg skip )
         ? != 0 g_auto_drop_strings
         { ( mem_drop_owned_strings syms cg skip_str_ptr )
-            ( mem_drop_owned_struct_fields syms cg )
+            ( mem_drop_owned_struct_fields syms cg skip_struct_ptr )
             ( mem_drop_user_drops syms cg skip_user_ptr )
         }
         {}
@@ -3761,6 +3774,9 @@
     ( nurl_sym_def syms `__last_call_res_e_llvm__` ( nurl_sym_get syms ( nurl_str_cat fname `__res_e_llvm` ) ) )
     ( nurl_sym_def syms `__last_call_opt_nurl_t__` ( nurl_sym_get syms ( nurl_str_cat fname `__opt_nurl_t` ) ) )
     ( nurl_sym_def syms `__last_call_ret_owned__` ( nurl_sym_get syms ( nurl_str_cat fname `__ret_owned` ) ) )
+    // A4c: propagate the callee's returned struct owned-field list so the
+    // caller's `: T x ( f )` re-registers them for drop.
+    ( nurl_sym_def syms `__last_call_ret_struct_fields__` ( nurl_sym_get syms ( nurl_str_cat fname `__ret_owned_fields` ) ) )
     // Borrow provenance: the result is a borrow if the callee is marked
     // ret_borrow, or it is a vec_get* accessor (which returns a borrow of
     // an element the Vec still owns). The flag only changes behaviour for
@@ -4307,6 +4323,9 @@
     // When Phase 2B is off no function ever gets "str" registered, so behaviour
     // is identical to the Phase 2A-only build.
     ( nurl_sym_def syms `__last_call_ret_owned__` ( nurl_sym_get syms ( nurl_str_cat call_name `__ret_owned` ) ) )
+    // A4c: propagate the callee's returned struct owned-field list (see
+    // the kw-args path above).
+    ( nurl_sym_def syms `__last_call_ret_struct_fields__` ( nurl_sym_get syms ( nurl_str_cat call_name `__ret_owned_fields` ) ) )
     // Borrow provenance (see the kw-args path above): ret_borrow callee or
     // a vec_get* element accessor yields a borrow.
     ( nurl_sym_def syms `__last_value_borrow__`
@@ -6395,7 +6414,7 @@
     }
 }
 
-@ mem_drop_owned_struct_fields i syms i cg → v {
+@ mem_drop_owned_struct_fields i syms i cg s skip_ptr → v {
     : s dtop ( nurl_sym_get syms `__defer_top__` )
     ? == 0 ( nurl_str_len dtop )
     { : ~ s rest ( nurl_sym_get syms `__owned_struct_fields__` )
@@ -6406,10 +6425,105 @@
             : s kind ( str_first_word rest ) = rest ( str_skip_word rest )
             : s leaf_sname ( str_first_word rest ) = rest ( str_skip_word rest )
             : s leaf_idx ( str_first_word rest ) = rest ( str_skip_word rest )
-            ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx )
+            // skip_ptr names a struct binding whose owned fields ESCAPE
+            // as the return value (A4c ownership transfer) — the caller
+            // re-registers them, so dropping them here would dangle the
+            // returned copy's field pointers (use-after-free).
+            ? & != 0 ( nurl_str_len skip_ptr ) ( seq ptr skip_ptr )
+            {}
+            { ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx ) }
         }
     }
     {}
+}
+
+// A4c (caller side): a `: T x ( f )` binding whose RHS is a call to a
+// struct-returning function carries its owned fields in
+// `__last_call_ret_struct_fields__` (set by gen_call), but
+// `mem_register_agg_owned_fields` reads `__last_agg_owned_fields__` —
+// only a direct `@ T {…}` RHS populates that. Bridge the two: when the
+// agg list is empty but the call list isn't, copy it over so the
+// caller re-registers exactly the fields the callee transferred out.
+@ __propagate_call_struct_fields i syms → v {
+    : s agg ( nurl_sym_get syms `__last_agg_owned_fields__` )
+    ? & != 0 g_auto_drop_strings == 0 ( nurl_str_len agg )
+    { : s call ( nurl_sym_get syms `__last_call_ret_struct_fields__` )
+        ? != 0 ( nurl_str_len call )
+        { ( nurl_sym_def syms `__last_agg_owned_fields__` call ) }
+        {}
+    }
+    {}
+}
+
+// A4c: compute the owned-struct-field ownership transfer for a return.
+// A function returning a by-value struct with fresh-owned fields
+// transfers those allocations to the caller; the callee must NOT drop
+// them (it never bound the escaping copy) and the caller must register
+// them. Two return shapes:
+//   * `^ v` / implicit `v` — a struct BINDING whose fields are in
+//     `__owned_struct_fields__`. Its drop is skipped (returned ptr),
+//     and its field list is reformatted for the caller.
+//   * `^ @ T { … }` / `^ ( mk )` — a direct construction / a call that
+//     already returns owned fields. No binding to skip;
+//     `__last_agg_owned_fields__` (set by gen_agg_lit) or the callee's
+//     propagated `__last_call_ret_struct_fields__` carries the list.
+// Sets `__fn_ret_struct_owned__` to the colon-format field list the
+// caller re-registers, and returns the binding ptr to skip-drop (empty
+// for the non-binding shapes). NOT fired for single-pointer-handle
+// structs (Vec/String) — those ride the slot and use the string / user-
+// drop paths; only multi-field structs with owned leaf fields qualify,
+// which structurally excludes stdlib's incremental-build-then-`^ binding`
+// returns (they never register agg owned fields on the returned struct).
+@ mem_ret_struct_transfer i syms s lt s ret_ident → s {
+    ? == 0 g_auto_drop_strings { ^ `` } {}
+    // Only a named non-pointer struct return can carry owned fields.
+    ? | == 0 ( nurl_str_len lt ) != ( nurl_str_get lt 0 ) 37 { ^ `` } {}
+    ? == ( nurl_str_get lt - ( nurl_str_len lt ) 1 ) 42 { ^ `` } {}
+    : s rid_ptr ( nurl_sym_get syms ( nurl_str_cat ret_ident `__ptr` ) )
+    : s from_binding ( mem_collect_struct_fields_for syms rid_ptr )
+    ? != 0 ( nurl_str_len from_binding )
+    { ( nurl_sym_def syms `__fn_ret_struct_owned__` from_binding )
+        ^ rid_ptr }
+    {}
+    // Non-binding shapes: a direct `@ T {…}` (gen_agg_lit set
+    // `__last_agg_owned_fields__`) or a call returning owned fields
+    // (gen_call set `__last_call_ret_struct_fields__`).
+    : s from_agg ( nurl_sym_get syms `__last_agg_owned_fields__` )
+    ? != 0 ( nurl_str_len from_agg )
+    { ( nurl_sym_def syms `__fn_ret_struct_owned__` from_agg )
+        ^ `` }
+    {}
+    : s from_call ( nurl_sym_get syms `__last_call_ret_struct_fields__` )
+    ? != 0 ( nurl_str_len from_call )
+    { ( nurl_sym_def syms `__fn_ret_struct_owned__` from_call ) }
+    {}
+    ^ ``
+}
+
+// Collect a returned struct binding's owned fields, reformatted from the
+// `__owned_struct_fields__` 6-token groups (`<ptr> <sname> <path> <kind>
+// <leaf_sname> <leaf_idx>`) into the agg-owned propagation format
+// (`<path>:<kind>:<leaf_sname>:<leaf_idx>`), keeping only entries whose
+// ptr matches `want_ptr`. Empty when the binding owns no fields. Used by
+// gen_ret to hand the caller exactly the field set to re-register (A4c).
+@ mem_collect_struct_fields_for i syms s want_ptr → s {
+    ? == 0 ( nurl_str_len want_ptr ) { ^ `` } {}
+    : ~ s out ``
+    : ~ s rest ( nurl_sym_get syms `__owned_struct_fields__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s sname ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s path ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s kind ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s leaf_sname ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s leaf_idx ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( seq ptr want_ptr )
+        { : s tok ( nurl_str_cat4 path `:` kind ( nurl_str_cat4 `:` leaf_sname `:` leaf_idx ) )
+            = out ? == 0 ( nurl_str_len out ) tok ( nurl_str_cat3 out ` ` tok )
+        }
+        {}
+    }
+    ^ out
 }
 
 // ── Phase 2D: arm-local delta drop ────────────────────────────────
@@ -7539,6 +7653,7 @@
         : s bck_rhs_val ( nurl_lex_val lex )
         ( nurl_sym_def syms `__last_call_ret_owned__` `` )
         ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
+        ( nurl_sym_def syms `__last_call_ret_struct_fields__` `` )
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         ( nurl_sym_def syms `__last_value_borrow__` `` )
         : s val ( gen_expr lex syms cg )
@@ -7585,7 +7700,10 @@
         {}
         // Phase 2C: struct-field ownership — if RHS was `@ T { ... }` and one
         // or more fields came from a fresh allocating i8* call, register a
-        // drop for each such field tied to this binding's alloca.
+        // drop for each such field tied to this binding's alloca. A4c: a
+        // struct-returning CALL RHS routes its transferred fields through
+        // the same registration.
+        ( __propagate_call_struct_fields syms )
         ? != 0 g_auto_drop_strings
         { ( mem_register_agg_owned_fields syms ptr vt ) }
         {}
@@ -7692,6 +7810,7 @@
                 : s bck_rhs_val ( nurl_lex_val lex )
                 ( nurl_sym_def syms `__last_call_ret_owned__` `` )
                 ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
+                ( nurl_sym_def syms `__last_call_ret_struct_fields__` `` )
                 ( nurl_sym_def syms `__last_expr_refdepth__` `` )
                 ( nurl_sym_def syms `__last_value_borrow__` `` )
                 : s val ( gen_expr lex syms cg )
@@ -7742,6 +7861,8 @@
                 }
                 {}
                 // Phase 2C: struct-field ownership (see type-inference path).
+                // A4c: bridge a struct-returning CALL RHS into the same path.
+                ( __propagate_call_struct_fields syms )
                 ? != 0 g_auto_drop_strings
                 { ( mem_register_agg_owned_fields syms ptr ptype ) }
                 {}
@@ -11130,6 +11251,7 @@
         ( nurl_sym_def syms `__owned_struct_fields__` `` )
         ( nurl_sym_def syms `__user_drops__` `` )
         ( nurl_sym_def syms `__fn_ret_str_owned__` `` )
+        ( nurl_sym_def syms `__fn_ret_struct_owned__` `` )
     }
     {}
     : ~ s params_str ``
@@ -11305,6 +11427,11 @@
         ``
     }
     {}
+    // A4c: owned-struct-field transfer for the implicit (fall-off) return.
+    : ~ s skip_struct_ptr ``
+    ? != 0 g_auto_drop_strings
+    { = skip_struct_ptr ( mem_ret_struct_transfer syms ret_ty ret_ident ) }
+    {}
     ? != 0 ( nurl_str_len skip )
     { ( nurl_sym_def syms `__fn_ret_owned__` `1` ) }
     {}
@@ -11315,7 +11442,7 @@
             { ( mem_drop_owned syms cg skip )
                 ? != 0 g_auto_drop_strings
                 { ( mem_drop_owned_strings syms cg skip_str_ptr )
-                    ( mem_drop_owned_struct_fields syms cg )
+                    ( mem_drop_owned_struct_fields syms cg skip_struct_ptr )
                     ( mem_drop_user_drops syms cg skip_user_ptr )
                 }
                 {}
@@ -11333,7 +11460,7 @@
             { ( mem_drop_owned syms cg skip )
                 ? != 0 g_auto_drop_strings
                 { ( mem_drop_owned_strings syms cg skip_str_ptr )
-                    ( mem_drop_owned_struct_fields syms cg )
+                    ( mem_drop_owned_struct_fields syms cg skip_struct_ptr )
                     ( mem_drop_user_drops syms cg skip_user_ptr )
                 }
                 {}
@@ -11380,6 +11507,12 @@
     ? != 0 ( nurl_str_len ( nurl_sym_get syms `__fn_ret_str_owned__` ) ) 1 0
     0
     : i fn_ret_borrow_flag ? != 0 ( nurl_str_len ( nurl_sym_get syms `__fn_ret_borrow__` ) ) 1 0
+    // A4c: snapshot the returned struct's owned-field list (colon format)
+    // BEFORE the pop frees the scope entry. Empty unless this function
+    // returns a by-value struct with fresh-owned fields.
+    : s fn_ret_struct_fields ? != 0 g_auto_drop_strings
+    ( nurl_str_cat ( nurl_sym_get syms `__fn_ret_struct_owned__` ) `` )
+    ``
     ( nurl_sym_pop syms )
     ( nurl_sym_def syms fname ret_ty )
     // Re-store NURL ret type in outer scope (inner scope was just popped)
@@ -11400,6 +11533,11 @@
     // skips its auto-Drop (borrow-provenance pass).
     ? != 0 fn_ret_borrow_flag
     { ( nurl_sym_def syms ( nurl_str_cat fname `__ret_borrow` ) `1` ) }
+    {}
+    // A4c: persist the returned struct's owned-field list so a caller's
+    // `: T x ( fname )` re-registers exactly those fields for drop.
+    ? != 0 ( nurl_str_len fn_ret_struct_fields )
+    { ( nurl_sym_def syms ( nurl_str_cat fname `__ret_owned_fields` ) fn_ret_struct_fields ) }
     {}
     ? ( seq fname `main` ) ( emit_main_wrapper ret_ty ) {}
 }
