@@ -17,27 +17,27 @@
 $ `stdlib/core/string.nu`
 
 // ── CPU registers ───────────────────────────────────────────────────
-: i ra 0            // accumulator
-: i rx 0            // index X
-: i ry 0            // index Y
-: i sp 0xFD         // stack pointer (stack lives at 0x0100..0x01FF)
-: i pc 0            // program counter
-: i rp 0x24         // processor status: N V - B D I Z C (bit5 always 1)
+: ~ i ra 0            // accumulator
+: ~ i rx 0            // index X
+: ~ i ry 0            // index Y
+: ~ i sp 0xFD         // stack pointer (stack lives at 0x0100..0x01FF)
+: ~ i pc 0            // program counter
+: ~ i rp 0x24         // processor status: N V - B D I Z C (bit5 always 1)
 
 // Status-bit masks.
 //   C 0x01  Z 0x02  I 0x04  D 0x08  B 0x10  U 0x20  V 0x40  N 0x80
 
-: i g_cycles 0      // total T-cycles executed
+: ~ i g_cycles 0      // total T-cycles executed
 
 // ── Memory ──────────────────────────────────────────────────────────
-: s g_mem 0         // 64 KiB flat RAM (*u, held as s)
-: s g_kernal 0      // 8 KiB KERNAL ROM   ($E000-$FFFF)
-: s g_basic 0       // 8 KiB BASIC ROM    ($A000-$BFFF)
-: s g_chargen 0     // 4 KiB character ROM ($D000-$DFFF when CHAREN=0)
-: s g_color 0       // 1 KiB colour RAM   ($D800-$DBFF)
-: i g_banked 0      // 0 = flat RAM (CPU test); 1 = full C64 PLA map
-: i g_p01_ddr 0     // $0000 CPU-port data-direction register
-: i g_p01_data 0    // $0001 CPU-port data latch (banking bits 0-2)
+: ~ s g_mem 0         // 64 KiB flat RAM (*u, held as s)
+: ~ s g_kernal 0      // 8 KiB KERNAL ROM   ($E000-$FFFF)
+: ~ s g_basic 0       // 8 KiB BASIC ROM    ($A000-$BFFF)
+: ~ s g_chargen 0     // 4 KiB character ROM ($D000-$DFFF when CHAREN=0)
+: ~ s g_color 0       // 1 KiB colour RAM   ($D800-$DBFF)
+: ~ i g_banked 0      // 0 = flat RAM (CPU test); 1 = full C64 PLA map
+: ~ i g_p01_ddr 0     // $0000 CPU-port data-direction register
+: ~ i g_p01_data 0    // $0001 CPU-port data latch (banking bits 0-2)
 
 @ mem_raw → *u { ^ # *u g_mem }
 
@@ -497,42 +497,42 @@ $ `stdlib/core/string.nu`
 // ════════════════════════════════════════════════════════════════════
 
 // ── I/O register files + video timing ───────────────────────────────
-: s g_vicreg 0      // 64-byte VIC-II register file
-: s g_sidreg 0      // 32-byte SID register file (sound out of scope here)
-: s g_cia2reg 0     // 16-byte CIA2 register file (serial/NMI — dumb here)
-: s g_fb 0          // 384x272 colour-index framebuffer (*u, with border)
-: s g_fg 0          // 384x272 foreground mask (1 = bg-graphics fg pixel) — sprite priority
-: s g_sprcov 0      // 384x272 per-pixel sprite coverage bitmask — collision detection
-: i g_coll_ss 0     // sprite-sprite collisions this frame ($D01E)
-: i g_coll_sb 0     // sprite-background collisions this frame ($D01F)
-: s g_lineborder 0  // per-raster-line border colour (312 bytes) — for raster splits
-: s g_linebg 0      // per-raster-line background colour (312 bytes)
-: i g_raster 0      // current raster line 0..311 (PAL)
-: i g_rasdot 0      // cycle within the current raster line
-: i g_frames 0      // completed video frames
+: ~ s g_vicreg 0      // 64-byte VIC-II register file
+: ~ s g_sidreg 0      // 32-byte SID register file (sound out of scope here)
+: ~ s g_cia2reg 0     // 16-byte CIA2 register file (serial/NMI — dumb here)
+: ~ s g_fb 0          // 384x272 colour-index framebuffer (*u, with border)
+: ~ s g_fg 0          // 384x272 foreground mask (1 = bg-graphics fg pixel) — sprite priority
+: ~ s g_sprcov 0      // 384x272 per-pixel sprite coverage bitmask — collision detection
+: ~ i g_coll_ss 0     // sprite-sprite collisions this frame ($D01E)
+: ~ i g_coll_sb 0     // sprite-background collisions this frame ($D01F)
+: ~ s g_lineborder 0  // per-raster-line border colour (312 bytes) — for raster splits
+: ~ s g_linebg 0      // per-raster-line background colour (312 bytes)
+: ~ i g_raster 0      // current raster line 0..311 (PAL)
+: ~ i g_rasdot 0      // cycle within the current raster line
+: ~ i g_frames 0      // completed video frames
 
 // ── CIA1 (keyboard + the jiffy-IRQ timer) ───────────────────────────
-: s g_kb 0          // 8-byte keyboard matrix (row bit set = key down)
-: i c1_pra 0xFF     // port A (keyboard column select, joystick #2)
-: i c1_prb 0xFF     // port B (keyboard rows, joystick #1)
-: i c1_ddra 0  : i c1_ddrb 0
-: i c1_ta 0xFFFF    // Timer A counter
-: i c1_tb 0xFFFF    // Timer B counter
-: i c1_ta_lo 0 : i c1_ta_hi 0 : i c1_tb_lo 0 : i c1_tb_hi 0
-: i c1_cra 0   : i c1_crb 0
-: i c1_icr 0        // interrupt pending flags (bit0 TA, bit1 TB)
-: i c1_imask 0      // enabled-interrupt mask
+: ~ s g_kb 0          // 8-byte keyboard matrix (row bit set = key down)
+: ~ i c1_pra 0xFF     // port A (keyboard column select, joystick #2)
+: ~ i c1_prb 0xFF     // port B (keyboard rows, joystick #1)
+: ~ i c1_ddra 0  : ~ i c1_ddrb 0
+: ~ i c1_ta 0xFFFF    // Timer A counter
+: ~ i c1_tb 0xFFFF    // Timer B counter
+: ~ i c1_ta_lo 0 : ~ i c1_ta_hi 0 : ~ i c1_tb_lo 0 : ~ i c1_tb_hi 0
+: ~ i c1_cra 0   : ~ i c1_crb 0
+: ~ i c1_icr 0        // interrupt pending flags (bit0 TA, bit1 TB)
+: ~ i c1_imask 0      // enabled-interrupt mask
 
 // ── CIA2 (VIC bank select + serial bus; its IRQ output is the NMI) ──
-: i c2_pra 0x17     // port A (bits 0-1 = inverted VIC bank, serial bus)
-: i c2_prb 0xFF
-: i c2_ddra 0x3F  : i c2_ddrb 0
-: i c2_ta 0xFFFF  : i c2_tb 0xFFFF
-: i c2_ta_lo 0 : i c2_ta_hi 0 : i c2_tb_lo 0 : i c2_tb_hi 0
-: i c2_cra 0   : i c2_crb 0
-: i c2_icr 0   : i c2_imask 0
-: i g_restore 0     // RESTORE key held (wired straight to the NMI line)
-: i g_nmi_prev 0    // previous NMI-line level (NMI is edge-triggered)
+: ~ i c2_pra 0x17     // port A (bits 0-1 = inverted VIC bank, serial bus)
+: ~ i c2_prb 0xFF
+: ~ i c2_ddra 0x3F  : ~ i c2_ddrb 0
+: ~ i c2_ta 0xFFFF  : ~ i c2_tb 0xFFFF
+: ~ i c2_ta_lo 0 : ~ i c2_ta_hi 0 : ~ i c2_tb_lo 0 : ~ i c2_tb_hi 0
+: ~ i c2_cra 0   : ~ i c2_crb 0
+: ~ i c2_icr 0   : ~ i c2_imask 0
+: ~ i g_restore 0     // RESTORE key held (wired straight to the NMI line)
+: ~ i g_nmi_prev 0    // previous NMI-line level (NMI is edge-triggered)
 
 @ vreg i r → i { : *u v # *u g_vicreg  ^ & # i . v & r 0x3F 255 }
 @ cia2_pra → i { ^ c2_pra }
@@ -706,25 +706,25 @@ $ `stdlib/core/string.nu`
 //  resampled to 48 kHz into a stereo ring the host drains via Web Audio
 //  (the same path as the Game Boy APU). No filter yet.
 // ════════════════════════════════════════════════════════════════════
-: s g_audio 0       // i64 ring: low16 = L, bits16-31 = R (both signed 16)
-: i g_audio_len 0
+: ~ s g_audio 0       // i64 ring: low16 = L, bits16-31 = R (both signed 16)
+: ~ i g_audio_len 0
 : i g_audio_cap 4096
-: i g_smp_acc 0     // resample accumulator (adds 48000/cycle; emit at 985248)
-: s g_v_acc 0       // per-voice 24-bit phase accumulator (3 i64)
-: s g_v_lfsr 0      // per-voice 23-bit noise LFSR
-: s g_v_env 0       // per-voice envelope value 0..255
-: s g_v_st 0        // 0 release, 1 attack, 2 decay, 3 sustain
-: s g_v_rc 0        // rate counter
-: s g_v_ec 0        // exponential counter
-: s g_v_gate 0      // previous gate bit
-: s g_v_wrap 0      // did this voice's accumulator overflow this tick (hard sync)
-: i g_f_lp 0        // SID filter state-variable: low-pass integrator
-: i g_f_bp 0        // SID filter state-variable: band-pass integrator
-: s g_disk 0        // attached 1541 .d64 image (virtual drive 8)
-: i g_disk_size 0
-: s g_filebuf 0     // scratch holding one extracted file (raw PRG bytes)
-: i g_file_track 0
-: i g_file_sector 0
+: ~ i g_smp_acc 0     // resample accumulator (adds 48000/cycle; emit at 985248)
+: ~ s g_v_acc 0       // per-voice 24-bit phase accumulator (3 i64)
+: ~ s g_v_lfsr 0      // per-voice 23-bit noise LFSR
+: ~ s g_v_env 0       // per-voice envelope value 0..255
+: ~ s g_v_st 0        // 0 release, 1 attack, 2 decay, 3 sustain
+: ~ s g_v_rc 0        // rate counter
+: ~ s g_v_ec 0        // exponential counter
+: ~ s g_v_gate 0      // previous gate bit
+: ~ s g_v_wrap 0      // did this voice's accumulator overflow this tick (hard sync)
+: ~ i g_f_lp 0        // SID filter state-variable: low-pass integrator
+: ~ i g_f_bp 0        // SID filter state-variable: band-pass integrator
+: ~ s g_disk 0        // attached 1541 .d64 image (virtual drive 8)
+: ~ i g_disk_size 0
+: ~ s g_filebuf 0     // scratch holding one extracted file (raw PRG bytes)
+: ~ i g_file_track 0
+: ~ i g_file_sector 0
 
 @ peek_acc i v → i { ^ ( nurl_peek g_v_acc v ) }
 @ peek_env i v → i { ^ ( nurl_peek g_v_env v ) }
@@ -851,14 +851,14 @@ $ `stdlib/core/string.nu`
         : ~ i rc + ( nurl_peek g_v_rc v ) cyc
         ~ >= rc period {
             = rc - rc period
-            : i env ( nurl_peek g_v_env v )
+            : ~ i env ( nurl_peek g_v_env v )
             : i sustain * & >> sr 4 0x0F 0x11
             ?? st {
                 1 → { = env + env 1  ? >= env 255 { = env 255  ( nurl_poke g_v_st v 2 ) } {} ( nurl_poke g_v_env v env ) }
                 _ → {
                     : i target ? == st 0 0 sustain
                     ? > env target {
-                        : i ec + ( nurl_peek g_v_ec v ) 1
+                        : ~ i ec + ( nurl_peek g_v_ec v ) 1
                         ? >= ec ( sid_exp env ) { = ec 0  ( nurl_poke g_v_env v - env 1 ) } {}
                         ( nurl_poke g_v_ec v ec )
                     } { ? == st 2 { ( nurl_poke g_v_st v 3 ) } {} }
