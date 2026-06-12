@@ -4623,8 +4623,19 @@
             ! is_variadic
             ( seq rlt fn_rt )
             : s tail_kw ? tail_ok `tail ` ``
+            // Variadic FFI: the call must carry the callee's explicit
+            // function type — `call i32 (i8*, ...) @printf(...)`. Without
+            // it LLVM infers a NON-variadic callee type from the arg
+            // list; the x86_64 SysV ABI happens to pass varargs the same
+            // way so Linux works by luck, but Win64 requires variadic FP
+            // args to be mirrored into the integer registers — printf %g
+            // reads garbage from a float promoted at such a call site.
+            : s va_sig ? is_variadic ( nurl_sym_get syms ( nurl_str_cat fname `__variadic_sig` ) ) ``
+            : b has_va_sig != 0 ( nurl_str_len va_sig )
             ? ( seq rlt `void` )
-            { ( nurl_print `  call void @` ) ( nurl_print call_name )
+            { ( nurl_print `  call void ` )
+                ? has_va_sig { ( nurl_print `(` ) ( nurl_print va_sig ) ( nurl_print `) ` ) } {}
+                ( nurl_print `@` ) ( nurl_print call_name )
                 ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
                 ( mem_drop_arg_temps owned_arg_temps )
                 ( nurl_set_last_type `void` )
@@ -4634,6 +4645,7 @@
                 ( nurl_print `  ` ) ( nurl_print res )
                 ( nurl_print ` = ` ) ( nurl_print tail_kw )
                 ( nurl_print `call ` ) ( nurl_print rlt )
+                ? has_va_sig { ( nurl_print ` (` ) ( nurl_print va_sig ) ( nurl_print `)` ) } {}
                 ( nurl_print ` @` ) ( nurl_print call_name )
                 ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
                 ( mem_drop_arg_temps owned_arg_temps )
@@ -12356,6 +12368,10 @@
             ( nurl_sym_def syms ( nurl_str_cat fname `__variadic` ) `1` )
             ( nurl_sym_def syms ( nurl_str_cat fname `__variadic_fixed` ) ( nurl_str_int pct ) )
             = params_str ? == pct 0 `...` ( nurl_str_cat params_str `, ...` )
+            // Full param-type list incl. `...` — gen_call emits it as the
+            // explicit callee function type (`call i32 (i8*, ...) @f`),
+            // which LLVM requires for a correct variadic ABI.
+            ( nurl_sym_def syms ( nurl_str_cat fname `__variadic_sig` ) params_str )
         }
         { : s lt ( parse_type lex )
             ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
@@ -13626,6 +13642,7 @@
     ( nurl_sym_def syms `printf` `i32` )
     ( nurl_sym_def syms `printf__variadic` `1` )
     ( nurl_sym_def syms `printf__variadic_fixed` `1` )
+    ( nurl_sym_def syms `printf__variadic_sig` `i8*, ...` )
 }
 
 // ── Signature pre-scan (first pass) ──────────────────────────────

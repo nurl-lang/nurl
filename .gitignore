@@ -21,6 +21,11 @@ nurlc.wasm
 stdlib/runtime.o
 stdlib/runtime.native.o
 stdlib/runtime.curl
+stdlib/runtime.openssl
+stdlib/runtime.sqlite3
+stdlib/runtime.pq
+stdlib/runtime.z
+stdlib/runtime.zstd
 stdlib/runtime.wasm.o
 stdlib/runtime_debug.o
 stdlib/runtime_san.o

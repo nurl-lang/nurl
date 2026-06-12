@@ -618,7 +618,207 @@ void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
 #  include <windows.h>
-#  include <pthread.h>  /* winpthreads — same names as POSIX */
+/* mingw-w64 ships winpthreads (<pthread.h>, POSIX names). MSVC-target
+ * clang (the official LLVM installer) has no pthread.h at all, so we
+ * provide a minimal Win32-backed shim with the same exported names —
+ * SRWLOCK for mutexes, CONDITION_VARIABLE for condvars, _beginthreadex
+ * for threads. The NURL stdlib (thread.nu/channel.nu/cell.nu) calls
+ * these symbols via FFI, so they must be real exported functions, not
+ * macros. Attr/rwlock types exist only so nurl_native_sizeof can
+ * report a size; no attr/rwlock operations are reachable on Win32. */
+#  if defined(__has_include)
+#    if __has_include(<pthread.h>)
+#      define NURL_HAVE_PTHREAD_H 1
+#    endif
+#  else
+#    define NURL_HAVE_PTHREAD_H 1   /* non-clang compilers: assume winpthreads */
+#  endif
+#  ifdef NURL_HAVE_PTHREAD_H
+#    include <pthread.h>  /* winpthreads — same names as POSIX */
+#  else
+#    define NURL_WIN32_PTHREAD_SHIM 1
+#    include <process.h>  /* _beginthreadex */
+
+typedef SRWLOCK            pthread_mutex_t;
+typedef CONDITION_VARIABLE pthread_cond_t;
+typedef HANDLE             pthread_t;
+typedef void              *pthread_attr_t;
+typedef void              *pthread_mutexattr_t;
+typedef void              *pthread_condattr_t;
+typedef SRWLOCK            pthread_rwlock_t;
+
+/* NURL closures compile to void(*)(void*); the void* return is always
+ * discarded through a throwaway slot on join, same as the POSIX path. */
+typedef struct { void *(*fn)(void *); void *arg; } nurl__thr_boot;
+
+static unsigned __stdcall nurl__thr_tramp(void *p) {
+    nurl__thr_boot b = *(nurl__thr_boot *)p;
+    free(p);
+    b.fn(b.arg);
+    return 0;
+}
+
+int pthread_create(pthread_t *t, const pthread_attr_t *attr,
+                   void *(*fn)(void *), void *arg) {
+    (void)attr;
+    nurl__thr_boot *b = (nurl__thr_boot *)malloc(sizeof *b);
+    if (!b) return EAGAIN;
+    b->fn = fn; b->arg = arg;
+    uintptr_t h = _beginthreadex(NULL, 0, nurl__thr_tramp, b, 0, NULL);
+    if (!h) { free(b); return EAGAIN; }
+    *t = (HANDLE)h;
+    return 0;
+}
+int pthread_join(pthread_t t, void **rv) {
+    if (rv) *rv = NULL;
+    if (!t) return EINVAL;
+    WaitForSingleObject(t, INFINITE);
+    CloseHandle(t);
+    return 0;
+}
+int pthread_detach(pthread_t t) {
+    if (t) CloseHandle(t);
+    return 0;
+}
+
+int pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *a) {
+    (void)a; InitializeSRWLock(m); return 0;
+}
+int pthread_mutex_lock(pthread_mutex_t *m)    { AcquireSRWLockExclusive(m); return 0; }
+int pthread_mutex_unlock(pthread_mutex_t *m)  { ReleaseSRWLockExclusive(m); return 0; }
+int pthread_mutex_destroy(pthread_mutex_t *m) { (void)m; return 0; }
+
+int pthread_cond_init(pthread_cond_t *c, const pthread_condattr_t *a) {
+    (void)a; InitializeConditionVariable(c); return 0;
+}
+int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m) {
+    return SleepConditionVariableSRW(c, m, INFINITE, 0) ? 0 : EINVAL;
+}
+int pthread_cond_signal(pthread_cond_t *c)    { WakeConditionVariable(c); return 0; }
+int pthread_cond_broadcast(pthread_cond_t *c) { WakeAllConditionVariable(c); return 0; }
+int pthread_cond_destroy(pthread_cond_t *c)   { (void)c; return 0; }
+#  endif /* NURL_WIN32_PTHREAD_SHIM */
+
+/* ── MSVC-target libc compat (mingw-w64 ships these, UCRT doesn't) ──
+ *
+ * Three tiers:
+ *   (a) Real implementations for functions the stdlib calls on the
+ *       Windows path too: clock_gettime / nanosleep (std/time.nu) and
+ *       mkstemp (std/fs.nu fs_tempfile).
+ *   (b) CLOCK_* macros so nurl_native_constant's #ifdef blocks below
+ *       report the values our clock_gettime understands.
+ *   (c) Unreachable link-time stubs for POSIX symbols the IR declares
+ *       but only calls on the runtime-gated POSIX path (same pattern
+ *       as the mmap/setenv stubs at the top of this file). */
+#  ifndef __MINGW32__
+#    include <io.h>
+#    include <fcntl.h>
+#    include <share.h>
+#    include <bcrypt.h>
+#    pragma comment(lib, "bcrypt.lib")
+
+#    ifndef CLOCK_REALTIME
+#      define CLOCK_REALTIME  0
+#    endif
+#    ifndef CLOCK_MONOTONIC
+#      define CLOCK_MONOTONIC 1
+#    endif
+
+/* UCRT <time.h> defines struct timespec (time_t tv_sec; long tv_nsec)
+ * but no clock_gettime — only timespec_get. NURL allocates 16 zeroed
+ * bytes and peeks slot 1 as i64, so the 4 pad bytes after the 32-bit
+ * tv_nsec must stay zero — we only ever store through the long. */
+int clock_gettime(int clk, struct timespec *ts) {
+    if (!ts) { errno = EINVAL; return -1; }
+    if (clk == CLOCK_MONOTONIC) {
+        static LARGE_INTEGER freq;  /* benign race: same value either way */
+        if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+        LARGE_INTEGER c;
+        QueryPerformanceCounter(&c);
+        ts->tv_sec  = (time_t)(c.QuadPart / freq.QuadPart);
+        ts->tv_nsec = (long)((c.QuadPart % freq.QuadPart) * 1000000000LL
+                             / freq.QuadPart);
+        return 0;
+    }
+    if (clk != CLOCK_REALTIME) { errno = EINVAL; return -1; }
+    FILETIME ft;
+    GetSystemTimePreciseAsFileTime(&ft);
+    ULARGE_INTEGER u;
+    u.LowPart  = ft.dwLowDateTime;
+    u.HighPart = ft.dwHighDateTime;
+    /* 100 ns ticks, 1601 epoch → Unix epoch. */
+    unsigned long long t = u.QuadPart - 116444736000000000ULL;
+    ts->tv_sec  = (time_t)(t / 10000000ULL);
+    ts->tv_nsec = (long)(t % 10000000ULL) * 100;
+    return 0;
+}
+
+/* Sleep() can't be interrupted by POSIX signals on Windows, so this
+ * never reports EINTR / a remainder. req may alias rem (time.nu passes
+ * the same buffer twice) — read req fully before touching rem. */
+int nanosleep(const struct timespec *req, struct timespec *rem) {
+    if (!req) { errno = EINVAL; return -1; }
+    long long ms = (long long)req->tv_sec * 1000
+                 + (req->tv_nsec + 999999L) / 1000000L;
+    if (rem) { rem->tv_sec = 0; rem->tv_nsec = 0; }
+    if (ms <= 0) return 0;
+    Sleep(ms > 0xFFFFFFFELL ? 0xFFFFFFFEUL : (DWORD)ms);
+    return 0;
+}
+
+int mkstemp(char *tmpl) {
+    static const char alpha[] =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    if (!tmpl) { errno = EINVAL; return -1; }
+    size_t len = strlen(tmpl);
+    if (len < 6 || strcmp(tmpl + len - 6, "XXXXXX") != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    char *x = tmpl + len - 6;
+    for (int attempt = 0; attempt < 128; attempt++) {
+        unsigned char rnd[6];
+        if (BCryptGenRandom(NULL, rnd, sizeof rnd,
+                            BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+            /* RNG failure fallback — _O_EXCL still guarantees no
+             * silent collision, this only affects unpredictability. */
+            unsigned seed = (unsigned)(GetTickCount64()
+                          ^ GetCurrentProcessId()
+                          ^ (uintptr_t)tmpl ^ (unsigned)attempt * 2654435761u);
+            for (int i = 0; i < 6; i++) {
+                seed = seed * 1103515245u + 12345u;
+                rnd[i] = (unsigned char)(seed >> 16);
+            }
+        }
+        for (int i = 0; i < 6; i++) x[i] = alpha[rnd[i] % 62];
+        int fd = -1;
+        if (_sopen_s(&fd, tmpl, _O_CREAT | _O_EXCL | _O_RDWR | _O_BINARY,
+                     _SH_DENYNO, _S_IREAD | _S_IWRITE) == 0)
+            return fd;
+        if (errno != EEXIST) return -1;
+    }
+    errno = EEXIST;
+    return -1;
+}
+
+/* (c) Unreachable on the Windows path (dir listing goes through
+ * FindFirstFileA, process/signal/net through Win32) — these exist so
+ * lld-link resolves the IR's declare lines. */
+void *opendir(const char *path)            { (void)path; errno = ENOSYS; return NULL; }
+void *readdir(void *d)                     { (void)d; errno = ENOSYS; return NULL; }
+int   closedir(void *d)                    { (void)d; errno = ENOSYS; return -1; }
+long long readlink(const char *p, char *buf, unsigned long long n) {
+    (void)p; (void)buf; (void)n; errno = ENOSYS; return -1;
+}
+int  fork(void)                            { errno = ENOSYS; return -1; }
+int  waitpid(int pid, int *st, int flags)  { (void)pid; (void)st; (void)flags; errno = ENOSYS; return -1; }
+int  pipe(int fds[2])                      { (void)fds; errno = ENOSYS; return -1; }
+int  kill(int pid, int sig)                { (void)pid; (void)sig; errno = ENOSYS; return -1; }
+int  fcntl(int fd, int cmd, ...)           { (void)fd; (void)cmd; errno = ENOSYS; return -1; }
+int  poll(void *fds, unsigned long n, int timeout) {
+    (void)fds; (void)n; (void)timeout; errno = ENOSYS; return -1;
+}
+#  endif /* !__MINGW32__ */
 #elif !defined(__wasi__)
 #  include <pthread.h>
 #  include <sys/socket.h>

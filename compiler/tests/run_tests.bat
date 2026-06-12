@@ -68,6 +68,10 @@ REM HTTP tests reach the public internet, so they're opt-in via NURL_HTTP_TESTS=
 REM (mirrors run_tests.sh). Default skips http_*.nu to keep the baseline stable.
 if not defined NURL_HTTP_TESTS set "NURL_HTTP_TESTS=0"
 
+REM net_* tests (except net_basic) need a permissive loopback environment;
+REM opt-in via NURL_NET_TESTS=1 (mirrors run_tests.sh).
+if not defined NURL_NET_TESTS set "NURL_NET_TESTS=0"
+
 set "LINK_FLAGS=-O2 -lwinhttp"
 
 type nul > "%SUCCESS%"
@@ -84,101 +88,7 @@ if "%NTESTS%"=="0" (
     exit /b 2
 )
 
-for /f "usebackq delims=" %%F in ("%FILELIST%") do (
-    set "src=%SCRIPT_DIR%\%%F"
-    set "name=%%~nF"
-    set "ll=%WORKDIR%\!name!.ll"
-    set "bin=%WORKDIR%\!name!.exe"
-    set "out=%WORKDIR%\!name!.out"
-    set "err=%WORKDIR%\!name!.err"
-    if exist "!ll!"  del "!ll!"  >nul 2>&1
-    if exist "!bin!" del "!bin!" >nul 2>&1
-    if exist "!out!" del "!out!" >nul 2>&1
-    if exist "!err!" del "!err!" >nul 2>&1
-
-    REM Skip helper modules (no main).
-    set "SKIP=0"
-    echo !name! | findstr /e /c:"_mod" >nul && set "SKIP=1"
-    echo !name! | findstr /e /c:"_helper" >nul && set "SKIP=1"
-    echo !name! | findstr /e /c:"_lib" >nul && set "SKIP=1"
-
-    REM Skip network-dependent HTTP tests unless explicitly enabled.
-    echo !name! | findstr /b /c:"http_" >nul
-    if !errorlevel! equ 0 if not "%NURL_HTTP_TESTS%"=="1" set "SKIP=1"
-    if "!name!"=="http_request_parser" set "SKIP=0"
-    if "!name!"=="http_response_builder" set "SKIP=0"
-    if "!name!"=="http_router" set "SKIP=0"
-    if "!name!"=="http_extras" set "SKIP=0"
-    if "!name!"=="http_middleware" set "SKIP=0"
-    if "!name!"=="http_form" set "SKIP=0"
-    if "!name!"=="http_multipart" set "SKIP=0"
-    if "!name!"=="http_proxy" set "SKIP=0"
-
-    if "!SKIP!"=="0" (
-        REM should_fail_* expects COMPILE FAIL.
-        set "EXPECT_FAIL=0"
-        echo !name! | findstr /b /c:"should_fail_" >nul && set "EXPECT_FAIL=1"
-
-        "%NURLC%" "!src!" > "!ll!" 2>"!err!"
-        set "CC_EC=!errorlevel!"
-
-        if "!EXPECT_FAIL!"=="1" (
-            if !CC_EC! neq 0 (
-                >>"%SUCCESS%" echo === !name! ===
-                >>"%SUCCESS%" echo COMPILE FAIL
-                >>"%SUCCESS%" echo.
-            ) else (
-                >>"%FAILURES%" echo === !name! ===
-                >>"%FAILURES%" echo [1/2] compiler/tests/!name!.nu -^> build/tests/!name!.ll
-                >>"%FAILURES%" echo ^(expected COMPILE FAIL but compiler accepted the program^)
-                if exist "!err!" type "!err!" >> "%FAILURES%"
-                >>"%FAILURES%" echo.
-            )
-        ) else (
-            if !CC_EC! neq 0 (
-                >>"%FAILURES%" echo === !name! ===
-                >>"%FAILURES%" echo [1/2] compiler/tests/!name!.nu -^> build/tests/!name!.ll
-                if exist "!err!" type "!err!" >> "%FAILURES%"
-                >>"%FAILURES%" echo.
-            ) else (
-                "%CLANG%" -O2 "!ll!" "%RUNTIME%" -lwinhttp -o "!bin!" 2>"!err!"
-                set "LK_EC=!errorlevel!"
-                if !LK_EC! neq 0 (
-                    >>"%FAILURES%" echo === !name! ===
-                    >>"%FAILURES%" echo [1/2] compiler/tests/!name!.nu -^> build/tests/!name!.ll
-                    >>"%FAILURES%" echo [2/2] build/tests/!name!.ll -^> build/tests/!name!.exe  ^(!LINK_FLAGS!^)
-                    if exist "!err!" type "!err!" >> "%FAILURES%"
-                    >>"%FAILURES%" echo.
-                ) else (
-                    REM Run with cwd = WORKDIR and argv[0] = ".\name.exe" so argv-sensitive
-                    REM tests produce the same output regardless of the absolute path
-                    REM where the repo lives.
-                    pushd "%WORKDIR%" >nul
-                    powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; $p = Start-Process -FilePath ('.\\' + '!name!' + '.exe') -RedirectStandardOutput '!out!.o' -RedirectStandardError '!out!.e' -PassThru -NoNewWindow -WorkingDirectory (Get-Location); if (-not $p.WaitForExit(%TIMEOUT% * 1000)) { try { $p.Kill() } catch {}; exit 124 } else { exit $p.ExitCode }"
-                    set "EC=!errorlevel!"
-                    if exist "!out!.o" (
-                        if exist "!out!.e" (
-                            copy /B "!out!.o"+"!out!.e" "!out!" >nul 2>&1
-                        ) else (
-                            copy /B "!out!.o" "!out!" >nul 2>&1
-                        )
-                    ) else (
-                        if exist "!out!.e" ( copy /B "!out!.e" "!out!" >nul 2>&1 ) else ( type nul > "!out!" )
-                    )
-                    del "!out!.o" "!out!.e" >nul 2>&1
-                    popd >nul
-                    >>"%SUCCESS%" echo === !name! ===
-                    >>"%SUCCESS%" echo COMPILE OK
-                    >>"%SUCCESS%" echo LINK OK
-                    >>"%SUCCESS%" echo EXIT !EC!
-                    >>"%SUCCESS%" echo OUTPUT
-                    call :append_output_capped "!out!"
-                    >>"%SUCCESS%" echo.
-                )
-            )
-        )
-    )
-)
+for /f "usebackq delims=" %%F in ("%FILELIST%") do call :run_one "%%F"
 del "%FILELIST%" 2>nul
 
 set "EXIT_STATUS=0"
@@ -209,6 +119,123 @@ if defined FAIL_SIZE if !FAIL_SIZE! gtr 0 (
 
 if "!EXIT_STATUS!"=="0" echo TESTS PASSED
 exit /b !EXIT_STATUS!
+
+REM ── run_one <file.nu> ───────────────────────────────────────────
+REM Compile / link / run a single test and append the verdict to
+REM success.txt or failures.txt. A subroutine (not a loop body) so
+REM plain %var% expansion and goto work without paren-nesting issues.
+:run_one
+set "name=%~n1"
+set "src=%SCRIPT_DIR%\%~1"
+set "ll=%WORKDIR%\%name%.ll"
+set "bin=%WORKDIR%\%name%.exe"
+set "out=%WORKDIR%\%name%.out"
+set "err=%WORKDIR%\%name%.err"
+if exist "%ll%"  del "%ll%"  >nul 2>&1
+if exist "%bin%" del "%bin%" >nul 2>&1
+if exist "%out%" del "%out%" >nul 2>&1
+if exist "%err%" del "%err%" >nul 2>&1
+
+REM Skip helper modules (no main).
+if "%name:~-4%"=="_mod"    exit /b 0
+if "%name:~-7%"=="_helper" exit /b 0
+if "%name:~-4%"=="_lib"    exit /b 0
+
+REM Skip network-dependent HTTP tests unless explicitly enabled; the
+REM pure parser/builder/router subset runs by default (mirrors
+REM run_tests.sh http_runs_by_default).
+set "SKIP=0"
+if "%name:~0,5%"=="http_" if not "%NURL_HTTP_TESTS%"=="1" set "SKIP=1"
+if "%name%"=="http_request_parser"  set "SKIP=0"
+if "%name%"=="http_response_builder" set "SKIP=0"
+if "%name%"=="http_router"     set "SKIP=0"
+if "%name%"=="http_extras"     set "SKIP=0"
+if "%name%"=="http_middleware" set "SKIP=0"
+if "%name%"=="http_form"       set "SKIP=0"
+if "%name%"=="http_multipart"  set "SKIP=0"
+if "%name%"=="http_proxy"      set "SKIP=0"
+
+REM net_* (except net_basic) opt-in via NURL_NET_TESTS=1.
+if "%name:~0,4%"=="net_" if not "%name%"=="net_basic" if not "%NURL_NET_TESTS%"=="1" set "SKIP=1"
+if "%SKIP%"=="1" exit /b 0
+
+REM borrow_* and should_fail_* expect COMPILE FAIL; borrow_strict_*
+REM only fires under the stricter checker flag (mirrors run_tests.sh).
+set "EXPECT_FAIL=0"
+set "CFLAGS="
+if "%name:~0,12%"=="should_fail_" set "EXPECT_FAIL=1"
+if "%name:~0,7%"=="borrow_"       set "EXPECT_FAIL=1"
+if "%name:~0,14%"=="borrow_strict_" set "CFLAGS=--strict-borrowck"
+
+"%NURLC%" %CFLAGS% "%src%" > "%ll%" 2>"%err%"
+set "CC_EC=%errorlevel%"
+
+if "%EXPECT_FAIL%"=="1" goto :ro_expect_fail
+if not "%CC_EC%"=="0" goto :ro_compile_fail
+
+"%CLANG%" -O2 "%ll%" "%RUNTIME%" -lwinhttp -o "%bin%" 2>"%err%"
+if not "%errorlevel%"=="0" goto :ro_link_fail
+
+REM Run with cwd = WORKDIR and argv[0] = ".\name.exe" so argv-sensitive
+REM tests produce the same output regardless of the absolute path
+REM where the repo lives.
+pushd "%WORKDIR%" >nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; $p = Start-Process -FilePath ('.\\' + '%name%' + '.exe') -RedirectStandardOutput '%out%.o' -RedirectStandardError '%out%.e' -PassThru -NoNewWindow -WorkingDirectory (Get-Location); if (-not $p.WaitForExit(%TIMEOUT% * 1000)) { try { $p.Kill() } catch {}; exit 124 } else { exit $p.ExitCode }"
+set "EC=%errorlevel%"
+if exist "%out%.o" (
+    if exist "%out%.e" (
+        copy /B "%out%.o"+"%out%.e" "%out%" >nul 2>&1
+    ) else (
+        copy /B "%out%.o" "%out%" >nul 2>&1
+    )
+) else (
+    if exist "%out%.e" ( copy /B "%out%.e" "%out%" >nul 2>&1 ) else ( type nul > "%out%" )
+)
+del "%out%.o" "%out%.e" >nul 2>&1
+popd >nul
+>>"%SUCCESS%" echo === %name% ===
+>>"%SUCCESS%" echo COMPILE OK
+>>"%SUCCESS%" echo LINK OK
+>>"%SUCCESS%" echo EXIT %EC%
+>>"%SUCCESS%" echo OUTPUT
+call :append_output_capped "%out%"
+>>"%SUCCESS%" echo.
+exit /b 0
+
+:ro_expect_fail
+if "%CC_EC%"=="0" goto :ro_unexpected_pass
+>>"%SUCCESS%" echo === %name% ===
+>>"%SUCCESS%" echo COMPILE FAIL
+>>"%SUCCESS%" echo.
+exit /b 0
+
+:ro_unexpected_pass
+>>"%FAILURES%" echo === %name% ===
+>>"%FAILURES%" echo [1/2] compiler/tests/%name%.nu -^> build/tests/%name%.ll
+>>"%FAILURES%" echo ^(expected COMPILE FAIL but compiler accepted the program^)
+if exist "%err%" type "%err%" >> "%FAILURES%"
+>>"%FAILURES%" echo.
+exit /b 0
+
+:ro_compile_fail
+REM nurlc refuses FFI decls whose external lib wasn't found at build
+REM time ("no build-time sentinel 'stdlib/runtime.<lib>'"). That's an
+REM environment gap, not a regression — skip, like run_tests.sh skips
+REM categories its environment can't run.
+findstr /c:"no build-time sentinel" "%err%" >nul 2>&1 && exit /b 0
+>>"%FAILURES%" echo === %name% ===
+>>"%FAILURES%" echo [1/2] compiler/tests/%name%.nu -^> build/tests/%name%.ll
+if exist "%err%" type "%err%" >> "%FAILURES%"
+>>"%FAILURES%" echo.
+exit /b 0
+
+:ro_link_fail
+>>"%FAILURES%" echo === %name% ===
+>>"%FAILURES%" echo [1/2] compiler/tests/%name%.nu -^> build/tests/%name%.ll
+>>"%FAILURES%" echo [2/2] build/tests/%name%.ll -^> build/tests/%name%.exe  ^(%LINK_FLAGS%^)
+if exist "%err%" type "%err%" >> "%FAILURES%"
+>>"%FAILURES%" echo.
+exit /b 0
 
 :append_output_capped
 set "OF=%~1"
