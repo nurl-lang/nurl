@@ -725,3 +725,351 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     : s hp . f raw
     ? != 0 # i hp { ( nurl_file_close # *v hp ) } {}
 }
+
+// ── Rename / copy / tempfile (B6) ──────────────────────────────────
+
+// libc rename(2): atomically move/rename within a filesystem (cross-
+// filesystem moves fail with EXDEV — use fs_copy_file + file_delete).
+& `c` @ rename s oldp s newp → i32
+
+// libc mkstemp(3): the template's trailing "XXXXXX" is replaced in
+// place with a unique suffix; creates the file 0600 and returns an
+// open fd (or -1). We close the fd and hand back the path — callers
+// write through the normal write_file* helpers.
+& `c` @ mkstemp s template → i32
+
+// Rename / move `from` to `to`. Atomic within a filesystem; an
+// existing `to` is replaced (POSIX rename semantics). Cross-device
+// moves surface as IoErr {Other} (EXDEV) — copy + delete instead.
+@ fs_rename s from s to → !v IoErr {
+    : i32 rc ( rename from to )
+    ? == rc # i32 0 { ^ @ !v IoErr { T 0 } } {}
+    ^ @ !v IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+}
+
+// Copy `src` to `dst` (truncating / creating `dst`). Streams in 64 KiB
+// chunks through libc stdio so arbitrarily large files copy in bounded
+// memory — never slurps the whole file. Does NOT preserve mode/mtime
+// (a plain content copy); layer chmod on top if needed.
+@ fs_copy_file s src s dst → !v IoErr {
+    : s rf # s ( fopen src `rb` )
+    ? == # i rf 0 { ^ @ !v IoErr { F ( __io_err_of_kind ( errno_kind ) ) } } {}
+    : s wf # s ( fopen dst `wb` )
+    ? == # i wf 0 {
+        : i32 _rc ( fclose rf )
+        ^ @ !v IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+    } {}
+    : i chunk 65536
+    : ( Vec u ) buf ( vec_with_cap [u] chunk )
+    : *u dp ( vec_data [u] buf )
+    : ~ b ok T
+    : ~ b going T
+    ~ & going ok {
+        : i got ( fread # s dp 1 chunk rf )
+        ? > got 0 {
+            : i put ( fwrite # s dp 1 got wf )
+            ? != put got { = ok F } {}
+        } {}
+        ? < got chunk { = going F } {}
+    }
+    ( vec_free [u] buf )
+    : i32 _wc ( fclose wf )
+    : i32 _rc2 ( fclose rf )
+    ? ok { ^ @ !v IoErr { T 0 } }
+    { ^ @ !v IoErr { F @ IoErr { WriteFailed } } }
+}
+
+// Create a fresh, uniquely-named empty file under `dir` whose name
+// begins with `prefix`, and return its path (owned String). `dir` ""
+// defaults to ".". The file exists (0600) and is empty on return; the
+// caller writes through write_file / append_file. Uses mkstemp, so the
+// name cannot collide with a concurrent caller.
+@ fs_tempfile s dir s prefix → !String IoErr {
+    : s d ? == 0 ( nurl_str_len dir ) `.` dir
+    : String tmpl ( string_with_cap + + ( nurl_str_len d ) ( nurl_str_len prefix ) 10 )
+    ( string_push_str tmpl d )
+    ( string_push_char tmpl 47 )           // '/'
+    ( string_push_str tmpl prefix )
+    ( string_push_str tmpl `XXXXXX` )
+    : i32 fd ( mkstemp ( string_data tmpl ) )
+    ? < # i fd 0 {
+        ( string_free tmpl )
+        ^ @ !String IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+    } {}
+    : i _c ( close # i fd )
+    ^ @ !String IoErr { T tmpl }   // mkstemp filled XXXXXX in place
+}
+
+// ── Glob (B7) ──────────────────────────────────────────────────────
+//
+// fs_glob expands a shell-style path pattern against the filesystem:
+//   *        any run of characters within one path segment (not '/')
+//   ?        exactly one character (not '/')
+//   [abc]    a character class; [a-z] ranges; [!...] / [^...] negation
+//   **       (as a whole segment) zero or more directory levels
+//
+// A leading-dot name is matched only by a pattern segment that itself
+// starts with '.' (the usual "glob hides dotfiles" rule). The pattern
+// may be absolute ("/etc/*.conf") or relative ("src/**/*.nu"); relative
+// results keep the pattern's own leading form. Returns an OWNED
+// Vec[String] of matching paths, unsorted (sort_by cmp_string for a
+// stable order). A pattern with no metacharacters yields the path iff
+// it exists.
+
+// Match one path SEGMENT `name` against glob segment `pat` (no '/').
+@ __fnmatch_seg s pat s name → b {
+    : i pn ( nurl_str_len pat )
+    : i nn ( nurl_str_len name )
+    // Dotfile rule: '*'/'?'/'[' never match a leading '.'.
+    ? & > nn 0 == ( nurl_str_get name 0 ) 46 {
+        ? & > pn 0 != ( nurl_str_get pat 0 ) 46 { ^ F } {}
+    } {}
+    ^ ( __fnmatch_at pat 0 pn name 0 nn )
+}
+
+// Recursive matcher over pat[pi..pn) vs name[ni..nn).
+@ __fnmatch_at s pat i pi i pn s name i ni i nn → b {
+    : ~ i p pi
+    : ~ i k ni
+    ~ < p pn {
+        : i pc ( nurl_str_get pat p )
+        ? == pc 42 {
+            // '*' — collapse runs, then try every split (no '/' allowed).
+            ~ & < p pn == ( nurl_str_get pat p ) 42 { = p + p 1 }
+            ? >= p pn { ^ T } {}   // trailing '*' matches the rest
+            : ~ i j k
+            ~ <= j nn {
+                ? ( __fnmatch_at pat p pn name j nn ) { ^ T } {}
+                = j + j 1
+            }
+            ^ F
+        } {
+            ? >= k nn { ^ F } {}
+            : i nc ( nurl_str_get name k )
+            ? == pc 63 {
+                = p + p 1 = k + k 1
+            } {
+                ? == pc 91 {
+                    : i pe ( __fnmatch_class pat + p 1 pn nc )
+                    ? < pe 0 { ^ F } {}   // no match / malformed
+                    = p pe = k + k 1
+                } {
+                    ? == pc nc { = p + p 1 = k + k 1 } { ^ F }
+                }
+            }
+        }
+    }
+    ^ == k nn
+}
+
+// Match a '[...]' class beginning at pat[start] (just past '['), against
+// byte `c`. Returns the index just past the closing ']' on a match, or
+// -1 on no-match / malformed (missing ']').
+@ __fnmatch_class s pat i start i pn i c → i {
+    : ~ i p start
+    : ~ b neg F
+    ? & < p pn | == ( nurl_str_get pat p ) 33 == ( nurl_str_get pat p ) 94 {
+        = neg T = p + p 1
+    } {}
+    : ~ b hit F
+    : ~ i first p
+    ~ & < p pn ! & > p first == ( nurl_str_get pat p ) 93 {
+        : i lo ( nurl_str_get pat p )
+        // range "a-z" when a '-' with a following non-']' char
+        ? & & < + p 2 pn == ( nurl_str_get pat + p 1 ) 45 != ( nurl_str_get pat + p 2 ) 93 {
+            : i hi ( nurl_str_get pat + p 2 )
+            ? & >= c lo <= c hi { = hit T } {}
+            = p + p 3
+        } {
+            ? == c lo { = hit T } {}
+            = p + p 1
+        }
+    }
+    ? & < p pn == ( nurl_str_get pat p ) 93 {} { ^ -1 }   // unterminated class
+    : b matched ? neg ! hit hit
+    ? matched { ^ + p 1 } { ^ -1 }
+}
+
+// True iff `seg` contains a glob metacharacter (* ? [).
+@ __glob_has_meta s seg → b {
+    : i n ( nurl_str_len seg )
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_get seg k )
+        ? | | == c 42 == c 63 == c 91 { ^ T } {}
+        = k + k 1
+    }
+    ^ F
+}
+
+// Join `base` + '/' + `name` (base "" → just name; base "/" → "/name").
+@ __glob_join s base s name → String {
+    : i bn ( nurl_str_len base )
+    : String out ( string_with_cap + + bn ( nurl_str_len name ) 2 )
+    ? > bn 0 {
+        ( string_push_str out base )
+        ? != ( nurl_str_get base - bn 1 ) 47 { ( string_push_char out 47 ) } {}
+    } {}
+    ( string_push_str out name )
+    ^ out
+}
+
+// Append every entry of directory `base` whose name matches `seg` to
+// `acc`, as joined paths. `base` "" means the current directory. When
+// `dirs_only` is true, keep only entries that are themselves
+// directories (used for intermediate path segments).
+@ __glob_expand_seg ( Vec String ) acc s base s seg b dirs_only → v {
+    : s listdir ? == 0 ( nurl_str_len base ) `.` base
+    : !( Vec String ) IoErr lr ( dir_list listdir )
+    ?? lr {
+        T entries → {
+            : i ne ( vec_len [String] entries )
+            : ~ i k 0
+            ~ < k ne {
+                : ?String eo ( vec_get [String] entries k )
+                ?? eo {
+                    T name → {
+                        ? ( __fnmatch_seg seg ( string_data name ) ) {
+                            : String full ( __glob_join base ( string_data name ) )
+                            ? dirs_only {
+                                ? == 2 ( nurl_path_type ( string_data full ) )
+                                { ( vec_push [String] acc full ) }
+                                { ( string_free full ) }
+                            } {
+                                ( vec_push [String] acc full )
+                            }
+                        } {}
+                        ( string_free name )
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( vec_free [String] entries )
+        }
+        F _ → {}   // unreadable dir → no matches from it
+    }
+}
+
+// Collect `base` itself plus every descendant directory of `base`
+// (recursive), for '**'. Pushes owned paths into `acc`.
+@ __glob_walk_dirs ( Vec String ) acc s base → v {
+    : s self ? == 0 ( nurl_str_len base ) `.` base
+    ( vec_push [String] acc ( string_from base ) )
+    : !( Vec String ) IoErr lr ( dir_list self )
+    ?? lr {
+        T entries → {
+            : i ne ( vec_len [String] entries )
+            : ~ i k 0
+            ~ < k ne {
+                : ?String eo ( vec_get [String] entries k )
+                ?? eo {
+                    T name → {
+                        // '**' does not descend into dotfile dirs.
+                        ? != ( nurl_str_get ( string_data name ) 0 ) 46 {
+                            : String full ( __glob_join base ( string_data name ) )
+                            ? == 2 ( nurl_path_type ( string_data full ) )
+                            { ( __glob_walk_dirs acc ( string_data full ) ) } {}
+                            ( string_free full )
+                        } {}
+                        ( string_free name )
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( vec_free [String] entries )
+        }
+        F _ → {}
+    }
+}
+
+// Split `pattern` into '/'-separated segments (owned Strings). A leading
+// '/' yields a leading empty segment so the driver can seed an absolute
+// base. Trailing/duplicate slashes collapse to empty segments which the
+// driver skips.
+@ __glob_split s pattern → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    : i n ( nurl_str_len pattern )
+    : ~ i start 0
+    : ~ i k 0
+    ~ <= k n {
+        ? | == k n == ( nurl_str_get pattern k ) 47 {
+            : String seg ( string_with_cap + - k start 1 )
+            : ~ i j start
+            ~ < j k { ( string_push_char seg ( nurl_str_get pattern j ) ) = j + j 1 }
+            ( vec_push [String] out seg )
+            = start + k 1
+        } {}
+        = k + k 1
+    }
+    ^ out
+}
+
+@ fs_glob s pattern → !( Vec String ) IoErr {
+    : ( Vec String ) segs ( __glob_split pattern )
+    : i nseg ( vec_len [String] segs )
+    // Frontier of currently-matched base paths. Seed: "" (relative) or
+    // "/" when the pattern is absolute (first segment empty).
+    : ~ ( Vec String ) frontier ( vec_new [String] )
+    : ~ i first_seg 0
+    : b absolute ? > nseg 0 {
+        : ?String s0 ( vec_get [String] segs 0 )
+        ?? s0 { T s → == 0 ( nurl_str_len ( string_data s ) ) F _ → F }
+    } F
+    ? absolute {
+        ( vec_push [String] frontier ( string_from `/` ) )
+        = first_seg 1
+    } {
+        ( vec_push [String] frontier ( string_from `` ) )
+    }
+    : ~ i si first_seg
+    ~ < si nseg {
+        : ?String seo ( vec_get [String] segs si )
+        : s seg ?? seo { T s → ( string_data s ) F _ → `` }
+        : b is_last == si - nseg 1
+        // skip empty segments (collapsed slashes)
+        ? == 0 ( nurl_str_len seg ) { = si + si 1 } {
+            : ( Vec String ) next ( vec_new [String] )
+            : i nf ( vec_len [String] frontier )
+            : ~ i fi 0
+            ~ < fi nf {
+                : ?String bo ( vec_get [String] frontier fi )
+                : s base ?? bo { T b → ( string_data b ) F _ → `` }
+                ? & == ( nurl_str_get seg 0 ) 42 & == ( nurl_str_get seg 1 ) 42 == ( nurl_str_len seg ) 2 {
+                    // '**' — base + all descendant dirs
+                    ( __glob_walk_dirs next base )
+                } {
+                    ? ( __glob_has_meta seg ) {
+                        ( __glob_expand_seg next base seg ! is_last )
+                    } {
+                        // literal segment: extend if the path exists
+                        : String full ( __glob_join base seg )
+                        : i ty ( nurl_path_type ( string_data full ) )
+                        ? | & is_last > ty 0 & ! is_last == ty 2
+                        { ( vec_push [String] next full ) }
+                        { ( string_free full ) }
+                    }
+                }
+                = fi + fi 1
+            }
+            ( __glob_free_vec frontier )
+            = frontier next
+            = si + si 1
+        }
+    }
+    ( __glob_free_vec segs )
+    ^ @ !( Vec String ) IoErr { T frontier }
+}
+
+// Free an owned Vec[String] (elements + container).
+@ __glob_free_vec ( Vec String ) v → v {
+    : i n ( vec_len [String] v )
+    : ~ i k 0
+    ~ < k n {
+        : ?String eo ( vec_get [String] v k )
+        ?? eo { T s → ( string_free s ) F _ → {} }
+        = k + k 1
+    }
+    ( vec_free [String] v )
+}
