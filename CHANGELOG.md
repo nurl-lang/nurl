@@ -10,6 +10,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **JSON Web Tokens — `stdlib/ext/jwt.nu`** (critic B5). HS256 (HMAC-
+  SHA256) and EdDSA (Ed25519) sign + verify over the existing crypto
+  block and base64url. `jwt_hs256_sign/verify`, `jwt_eddsa_sign/verify`,
+  a `…_verify_at` core taking an explicit epoch `now` (deterministic;
+  the wrapper uses the system clock), and `jwt_decode_unverified`.
+  Validates `exp`/`nbf` time claims; the HS256 signature comparison is
+  constant-time (`std/subtle.nu`). The HS256 path reproduces the
+  canonical jwt.io reference token exactly and EdDSA is goldened against
+  the RFC 8032 test key (Ed25519 signatures are deterministic) in
+  `compiler/tests/jwt_basic.nu`. Adds `b64_url_encode_vec` /
+  `b64_url_decode_vec` to `std/encode.nu` for binary, unpadded
+  base64url (the signature segment).
+
+### Fixed
+
+- **`@ ?Enum { T Variant }` emitted invalid IR** (`compiler/nurlc.nu`,
+  `gen_agg_lit`). Constructing `Some(variant)` of an option whose
+  payload is a no-payload (C-style) enum inserted the variant's bare
+  i64 tag into the option's `%Enum` aggregate slot, which clang
+  rejected (`insertvalue operand and field disagree in type`). The
+  Result form `! T E` always worked because its payload slot is i64;
+  only the option payload field carries the full `%Enum` type. The
+  coercion now wraps the tag with `insertvalue %Enum zeroinitializer,
+  i64 tag, 0`. Found while writing `ext/jwt.nu`. Lock:
+  `compiler/tests/option_enum_payload.nu`.
+
 - **Cryptography block — AEAD, signatures, key exchange, KDFs**
   (`stdlib/ext/crypto.nu`, critic B1–B3). Binds libcrypto's EVP layer
   through pure-NURL `` & `openssl` @ `` FFI (no C bridge, same sentinel

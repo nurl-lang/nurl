@@ -156,6 +156,41 @@ $ `stdlib/core/errors.nu`
     ^ out
 }
 
+// URL-safe, UN-padded base64 over a binary Vec[u]. Unlike
+// `b64_url_encode`, the length comes from `vec_len`, not `strlen`, so
+// material with embedded 0x00 bytes (a raw HMAC tag or Ed25519
+// signature — exactly what JWT base64url-encodes) is encoded whole.
+// `__b64_emit` reads through a `*u` pointer, so the binary input is
+// never truncated.
+@ b64_url_encode_vec ( Vec u ) v → String {
+    : i len ( vec_len [u] v )
+    : s data # s ( vec_data [u] v )
+    : String out ( string_with_cap * 4 + 1 / len 3 )
+    ( __b64_emit out data len T F )
+    ^ out
+}
+
+// URL-safe base64 decode to a binary Vec[u] (tolerates missing padding,
+// as JWT segments are unpadded). The decoded bytes may contain 0x00, so
+// the result is a Vec, not a String — read it with the `. p k` indexed
+// load, never nurl_str_get.
+@ b64_url_decode_vec s str → !( Vec u ) ParseErr {
+    : !String ParseErr r ( b64_url_decode str )
+    ?? r {
+        T sv → {
+            : i n ( string_len sv )
+            : ( Vec u ) v ( vec_with_cap [u] ? > n 0 n 1 )
+            ? > n 0 {
+                ( nurl_memcpy ( vec_data [u] v ) # *u ( string_data sv ) n )
+                : b _ok ( vec_set_len [u] v n )
+            } {}
+            ( string_free sv )
+            ^ @ !( Vec u ) ParseErr { T v }
+        }
+        F e → { ^ @ !( Vec u ) ParseErr { F e } }
+    }
+}
+
 // Returns 0..63, or -1 on non-alphabet byte. `url` selects the URL-safe
 // alphabet (62 = '-', 63 = '_'). Padding `=` (61) returns -2.
 @ __b64_value i c b url → i {

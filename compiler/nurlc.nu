@@ -9328,7 +9328,32 @@
                             ( nurl_print `\n` )
                             = actual_fval __cv
                             = actual_fty payload_ty }
-                        {}  // equal width / non-int: use as-is
+                        {  // payload_ty is not an int. The one remaining
+                            // shape is an OPTION whose payload is a named
+                            // enum (`? E`, payload field `%E`) carrying a
+                            // bare no-payload variant — which evaluates to
+                            // its i64 tag here. The option slot wants the
+                            // whole `%E` aggregate, so wrap the tag with
+                            // `insertvalue %E zeroinitializer, i64 tag, 0`
+                            // (the inverse of the `! T E` tag-extract above;
+                            // a no-payload variant leaves every other enum
+                            // field zero). Without this `@ ?E { T A }`
+                            // emitted `insertvalue { i1, %E } …, i64 …, 1`
+                            // and clang rejected the type mismatch.
+                            ? & == ( nurl_str_get payload_ty 0 ) 37 ( seq fty `i64` )
+                            { : s __en ( nurl_str_slice payload_ty 1 - ( nurl_str_len payload_ty ) 1 )
+                                : s __ev ( nurl_sym_get syms ( nurl_str_cat __en `__variants` ) )
+                                ? != 0 ( nurl_str_len __ev )
+                                { : s __wrap ( nurl_cg_reg cg )
+                                    ( nurl_print `  ` ) ( nurl_print __wrap )
+                                    ( nurl_print ` = insertvalue ` ) ( nurl_print payload_ty )
+                                    ( nurl_print ` zeroinitializer, i64 ` ) ( nurl_print fval )
+                                    ( nurl_print `, 0\n` )
+                                    = actual_fval __wrap
+                                    = actual_fty payload_ty }
+                                {} }
+                            {}
+                        }
                     }
                 }
             }
