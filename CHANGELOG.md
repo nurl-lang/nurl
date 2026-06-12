@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Arbitrary-precision fixed-point decimal — `stdlib/std/decimal.nu`**
+  (critic B14, the last ROADMAP numeric gap). A `Decimal` is a `BigInt`
+  coefficient × 10^-scale, so it is *exact* — `0.1 + 0.2` is `0.3`, not
+  the binary-float `0.30000000000000004` — and never overflows. Exact
+  `dec_add` / `dec_sub` / `dec_mul`; `dec_div a b scale` with an explicit
+  result scale and **banker's rounding** (round half-to-even, the
+  financial default); scale-agnostic `dec_cmp`; `dec_round` / `dec_rescale`
+  / `dec_normalize`; `dec_from_string` (`"-12.340"`, `".5"`, `"42"`) and
+  `dec_to_string`. Builds on the `bigint` div/rem from PR #100. Lock:
+  `compiler/tests/decimal.nu` (exact `0.1+0.2==0.3`, the full
+  half-to-even rounding table incl. negatives, division + div-by-zero,
+  normalize, cross-scale compare; ASan+UBSan+LSan clean — every
+  intermediate `BigInt` freed).
+
 - **Playground: rendered stdlib API reference at `/stdlib-docs`**
   (`nurlapi`). The `nurldoc` library is now wired into the playground
   server: `/stdlib-docs` is an auto-generated index of every stdlib
