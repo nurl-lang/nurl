@@ -61,6 +61,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/net.nu`
+$ `stdlib/std/url.nu`
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http2_frame.nu`
@@ -1011,71 +1012,29 @@ $ `stdlib/ext/http2_hpack.nu`
     ( string_free . u path )
 }
 
-// Case-insensitive prefix test (`pre` is assumed lowercase).
-@ __h2_prefix_ci s str s pre → b {
-    : i lp ( nurl_str_len pre )
-    : i ls ( nurl_str_len str )
-    ? < ls lp { ^ F } {}
-    : ~ i k 0
-    : ~ b ok T
-    ~ & ok < k lp {
-        : ~ i a ( nurl_str_get str k )
-        : i b ( nurl_str_get pre k )
-        ? & >= a 65 <= a 90 { = a + a 32 } {}
-        ? != a b { = ok F } {}
-        = k + k 1
-    }
-    ^ ok
-}
-
-// Parse "https://host[:port][/path]" or "http://…". Default port
+// Parse "https://host[:port][/path]" or "http://...". Default port
 // 443 (https) / 80 (http); default path "/". None on bad scheme / host.
+// Delegates the RFC 3986 split to std/url.nu; this wrapper enforces the
+// http/https scheme and maps to H2Url, preserving the request target
+// (path?query) for the :path pseudo-header.
 @ __h2_parse_url s url → ?H2Url {
-    : i n ( nurl_str_len url )
-    : ~ b tls F
-    : ~ i pos 0
-    ? ( __h2_prefix_ci url `https://` ) {
-        = tls T
-        = pos 8
-    } {
-        ? ( __h2_prefix_ci url `http://` ) {
-            = tls F
-            = pos 7
-        } {
-            ^ @ ?H2Url { F # H2Url 0 }
+    : ?Url pu ( url_parse url )
+    ^ ?? pu {
+        T u → {
+            : s sch ( string_data . u scheme )
+            : ~ b tls F
+            : ~ b ok F
+            ? == 1 ( nurl_str_eq sch `https` ) { = tls T = ok T } {}
+            ? == 1 ( nurl_str_eq sch `http` ) { = tls F = ok T } {}
+            ? ! ok { ( url_free u ) ^ @ ?H2Url { F # H2Url 0 } } {}
+            : i port ( url_port_or_default u )
+            : String host ( string_from ( string_data . u host ) )
+            : String path ( url_request_target u )
+            ( url_free u )
+            ^ @ ?H2Url { T @ H2Url { tls host port path } }
         }
+        F _ → @ ?H2Url { F # H2Url 0 }
     }
-    : String host ( string_new )
-    ~ & < pos n & != ( nurl_str_get url pos ) 58 != ( nurl_str_get url pos ) 47 {
-        ( string_push_char host ( nurl_str_get url pos ) )
-        = pos + pos 1
-    }
-    ? == 0 ( string_len host ) {
-        ( string_free host )
-        ^ @ ?H2Url { F # H2Url 0 }
-    } {}
-    : ~ i port ? tls 443 80
-    ? & < pos n == ( nurl_str_get url pos ) 58 {
-        = pos + pos 1
-        : ~ i pv 0
-        : ~ b anyd F
-        ~ & < pos n & >= ( nurl_str_get url pos ) 48 <= ( nurl_str_get url pos ) 57 {
-            = pv + * pv 10 - ( nurl_str_get url pos ) 48
-            = anyd T
-            = pos + pos 1
-        }
-        ? anyd { = port pv } {}
-    } {}
-    : String path ( string_new )
-    ? & < pos n == ( nurl_str_get url pos ) 47 {
-        ~ < pos n {
-            ( string_push_char path ( nurl_str_get url pos ) )
-            = pos + pos 1
-        }
-    } {
-        ( string_push_char path 47 )
-    }
-    ^ @ ?H2Url { T @ H2Url { tls host port path } }
 }
 
 // One request over a fresh connection. TAKES OWNERSHIP of `body`;

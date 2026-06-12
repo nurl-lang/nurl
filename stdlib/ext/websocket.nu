@@ -81,6 +81,7 @@ $ `stdlib/std/hash.nu`
 $ `stdlib/std/encode.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/net.nu`
+$ `stdlib/std/url.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 
@@ -1443,23 +1444,6 @@ $ `stdlib/ext/http_response.nu`
 
 // ── Client handshake (RFC 6455 §4.1) ──────────────────────────────────
 
-// Case-insensitive ASCII prefix test: does raw `s` begin with `pfx`?
-@ __ws_prefix_ci s str s pfx → b {
-    : i pl ( nurl_str_len pfx )
-    : i sl ( nurl_str_len str )
-    ? < sl pl { ^ F } {}
-    : ~ i k 0
-    ~ < k pl {
-        : ~ i a ( nurl_str_get str k )
-        : ~ i b ( nurl_str_get pfx k )
-        ? & >= a 65 <= a 90 { = a + a 32 } {}
-        ? & >= b 65 <= b 90 { = b + b 32 } {}
-        ? != a b { ^ F } {}
-        = k + k 1
-    }
-    ^ T
-}
-
 // True iff the response status line carries a 101 status code. The status
 // line is "HTTP/1.x 101 ..."; we skip to the first SP and read the three
 // digits that follow.
@@ -1677,53 +1661,27 @@ $ `stdlib/ext/http_response.nu`
 
 // Parse "ws://host[:port][/path]" or "wss://host[:port][/path]". Default
 // port is 80 (ws) / 443 (wss); default path is "/". None on a bad scheme
-// or empty host.
+// or empty host. Delegates the RFC 3986 split to std/url.nu (url_parse);
+// this wrapper only enforces the ws/wss scheme and maps to WsUrl, with
+// the request target (path?query) preserved for the handshake line.
 @ __ws_parse_url s url → ?WsUrl {
-    : i n ( nurl_str_len url )
-    : ~ b tls F
-    : ~ i pos 0
-    ? ( __ws_prefix_ci url `wss://` ) {
-        = tls T
-        = pos 6
-    } {
-        ? ( __ws_prefix_ci url `ws://` ) {
-            = tls F
-            = pos 5
-        } {
-            ^ @ ?WsUrl { F # WsUrl 0 }
+    : ?Url pu ( url_parse url )
+    ^ ?? pu {
+        T u → {
+            : s sch ( string_data . u scheme )
+            : ~ b tls F
+            : ~ b ok F
+            ? == 1 ( nurl_str_eq sch `wss` ) { = tls T = ok T } {}
+            ? == 1 ( nurl_str_eq sch `ws` ) { = tls F = ok T } {}
+            ? ! ok { ( url_free u ) ^ @ ?WsUrl { F # WsUrl 0 } } {}
+            : i port ( url_port_or_default u )
+            : String host ( string_from ( string_data . u host ) )
+            : String path ( url_request_target u )
+            ( url_free u )
+            ^ @ ?WsUrl { T @ WsUrl { tls host port path } }
         }
+        F _ → @ ?WsUrl { F # WsUrl 0 }
     }
-    : String host ( string_new )
-    ~ & < pos n & != ( nurl_str_get url pos ) 58 != ( nurl_str_get url pos ) 47 {
-        ( string_push_char host ( nurl_str_get url pos ) )
-        = pos + pos 1
-    }
-    ? == 0 ( string_len host ) {
-        ( string_free host )
-        ^ @ ?WsUrl { F # WsUrl 0 }
-    } {}
-    : ~ i port ? tls 443 80
-    ? & < pos n == ( nurl_str_get url pos ) 58 {
-        = pos + pos 1
-        : ~ i pv 0
-        : ~ b anyd F
-        ~ & < pos n & >= ( nurl_str_get url pos ) 48 <= ( nurl_str_get url pos ) 57 {
-            = pv + * pv 10 - ( nurl_str_get url pos ) 48
-            = anyd T
-            = pos + pos 1
-        }
-        ? anyd { = port pv } {}
-    } {}
-    : String path ( string_new )
-    ? & < pos n == ( nurl_str_get url pos ) 47 {
-        ~ < pos n {
-            ( string_push_char path ( nurl_str_get url pos ) )
-            = pos + pos 1
-        }
-    } {
-        ( string_push_char path 47 )
-    }
-    ^ @ ?WsUrl { T @ WsUrl { tls host port path } }
 }
 
 // Dial + handshake in one shot, no subprotocol. wss:// verifies the

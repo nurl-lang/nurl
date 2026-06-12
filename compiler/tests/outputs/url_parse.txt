@@ -1,0 +1,17 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+https://example.com/path/to/page?a=1&b=2#section => scheme=https user= host=example.com port=-1 eff=443 path=/path/to/page query=a=1&b=2 frag=section target=/path/to/page?a=1&b=2
+http://example.com => scheme=http user= host=example.com port=-1 eff=80 path= query= frag= target=/
+https://user:pass@host.example.org:8443/secure?token=abc => scheme=https user=user:pass host=host.example.org port=8443 eff=8443 path=/secure query=token=abc frag= target=/secure?token=abc
+ws://localhost:9001/chat => scheme=ws user= host=localhost port=9001 eff=9001 path=/chat query= frag= target=/chat
+wss://stream.example.com/feed => scheme=wss user= host=stream.example.com port=-1 eff=443 path=/feed query= frag= target=/feed
+https://[2001:db8::1]:8080/v6 => scheme=https user= host=2001:db8::1 port=8080 eff=8080 path=/v6 query= frag= target=/v6
+http://[::1]/loopback => scheme=http user= host=::1 port=-1 eff=80 path=/loopback query= frag= target=/loopback
+postgres://db.internal/mydb => scheme=postgres user= host=db.internal port=-1 eff=5432 path=/mydb query= frag= target=/mydb
+not-a-url => NONE
+ftp://files.example.com/pub/ => scheme=ftp user= host=files.example.com port=-1 eff=21 path=/pub/ query= frag= target=/pub/
+encode='a b/c?d=e&f' => a%20b%2Fc%3Fd%3De%26f
+decode roundtrip => a b/c?d=e&f
+query pairs: [name=John Doe] [q=a b] [flag=] [x=1]
