@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`nurldoc` — Markdown API-doc generator** (critic C2). The stdlib's
+  `//`-header + doc-comment discipline (90+ modules) was unrenderable;
+  `nurldoc` extracts each module's header block, top-level declaration
+  signatures (functions trimmed at their `{` body; types/enums/consts
+  keep their full definition), and the doc comment above each, into
+  Markdown. The render logic is an importable library
+  (`stdlib/ext/nurldoc.nu`, `nurldoc_render content title → String`,
+  brace-depth-aware so `:` locals inside bodies are never picked up);
+  `tools/nurldoc/main.nu` is a thin CLI — `nurldoc <file.nu>` to stdout,
+  or `nurldoc <src-dir> <out-dir>` to walk the tree with `fs_glob` and
+  write one `.md` per module. Lock: `compiler/tests/nurldoc.nu`.
+
 - **HTTP-date / RFC 2822 date parsing — `stdlib/std/time.nu`** (critic
   B13). The server formatted HTTP dates (`time_format_http`) but could
   not parse them; `http_date_parse` now accepts all three forms RFC 7231
