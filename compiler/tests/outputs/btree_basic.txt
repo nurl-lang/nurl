@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+len_after_fill=2000 (expect 2000)
+bad_get=0 bad_key_at=0
+min=0 max=1999 val_at(500)=3500
+replace_prev=8638 len_same=T
+removed_3rds=667 len=1333
+bad_after_remove=0 bad_keyat_after=0
+each_count=1333 ascending=T
+drained: len=0 empty=T min=none
+reinsert: len=1 get42=99
+smap len=40 get(k123)=v23
