@@ -12,6 +12,7 @@ $ `stdlib/ext/regex.nu`
 $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/mcp_http.nu`
 $ `stdlib/std/thread.nu`
+$ `stdlib/ext/nurldoc.nu`
 
 // ── Globals ──────────────────────────────────────────────────────────
 
@@ -1557,6 +1558,8 @@ s combined_stdout s combined_stderr → v {
     ( __oa_path paths `/NOTICE` `get` `Third-party attributions` `text/plain.` )
 
     ( __oa_path paths `/stdlib-viewer` `get` `Browsable directory listing for stdlib/` `Lightweight HTML index linking to each .nu file.` )
+    ( __oa_path paths `/stdlib-docs` `get` `Rendered stdlib API reference (index)` `Auto-generated from module sources by nurldoc, rendered as HTML with the doc chrome.` )
+    ( __oa_path paths `/stdlib-docs/{path}` `get` `Rendered API docs for one stdlib module` `nurldoc → Markdown → HTML. Append .md for the raw Markdown.` )
     ( __oa_path paths `/tests-viewer` `get` `Browsable directory listing for compiler/tests/` `Lightweight HTML index linking to each .nu file.` )
 
     ( __oa_path paths `/docs` `get` `Swagger UI for this OpenAPI 3.1 schema` `Loads /openapi.json into swagger-ui-dist served from unpkg CDN.` )
@@ -3208,6 +3211,130 @@ s combined_stdout s combined_stderr → v {
     }
 }
 
+// ── /stdlib-docs — rendered API reference (nurldoc → md_to_html) ──────
+//
+// The stdlib source is self-documenting (a `//` module-header block + doc
+// comments above each declaration); `nurldoc_render` turns one module
+// into Markdown and the existing md_to_html + doc chrome present it with
+// the same dark theme as the README/spec pages. `/stdlib-docs` is an
+// auto-generated index; `/stdlib-docs/<path>` renders one module
+// (`<path>.md` returns the raw Markdown).
+
+// First path segment of `p` ("std/time.nu" → "std"; "json.nu" → "root").
+@ __sd_group s p → String {
+    : i n ( nurl_str_len p )
+    : ~ i slash -1
+    : ~ i k 0
+    ~ & < k n < slash 0 { ? == ( nurl_str_get p k ) 47 { = slash k } {} = k + k 1 }
+    ? < slash 0 { ^ ( string_from `root` ) } {}
+    ^ ( string_from ( nurl_str_slice p 0 slash ) )
+}
+
+@ __stdlib_doc_index → HttpResponse {
+    : Json mods ( list_stdlib_modules )
+    : i nm ( json_arr_len mods )
+    : ( Vec String ) paths ( vec_new [String] )
+    : ~ i i 0
+    ~ < i nm {
+        : ?Json e ( json_arr_get mods i )
+        ?? e { T j → ( vec_push [String] paths ( string_from ( json_str_data j ) ) ) F _ → {} }
+        = i + i 1
+    }
+    ( json_free mods )
+    : ( @ i String String ) cmp \ String a String b → i { ^ ( nurl_str_cmp ( string_data a ) ( string_data b ) ) }
+    ( sort_by [String] paths cmp )
+    : *u cmp_env # *u cmp 1
+    ( nurl_free # s cmp_env )
+
+    : String md ( string_with_cap 8192 )
+    ( string_push_str md `# NURL Standard Library\n\n` )
+    ( string_push_str md `Auto-generated API reference — extracted from each module's source by ` )
+    ( string_push_char md 96 ) ( string_push_str md `nurldoc` ) ( string_push_char md 96 )
+    ( string_push_str md `. Pick a module for its rendered signatures and doc comments.\n` )
+    : ~ String cur ( string_from `` )
+    : ~ i k 0
+    ~ < k ( vec_len [String] paths ) {
+        ?? ( vec_get [String] paths k ) {
+            T p → {
+                : s ps ( string_data p )
+                : String grp ( __sd_group ps )
+                ? == 0 ( nurl_str_eq ( string_data grp ) ( string_data cur ) ) {
+                    ( string_push_str md `\n## ` ) ( string_push_str md ( string_data grp ) ) ( string_push_str md `\n\n` )
+                    ( string_free cur ) = cur ( string_from ( string_data grp ) )
+                } {}
+                ( string_free grp )
+                ( string_push_str md `- [` ) ( string_push_str md ps )
+                ( string_push_str md `](/stdlib-docs/` ) ( string_push_str md ps ) ( string_push_str md `)\n` )
+                ( string_free p )
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( string_free cur )
+    ( vec_free [String] paths )
+
+    : String html ( md_to_html ( string_data md ) )
+    ( string_free md )
+    : String page ( __doc_page_html `NURL Standard Library` html `/stdlib-docs` )
+    ( string_free html )
+    : HttpResponse r ( response_text 200 ( string_data page ) )
+    ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+    ( string_free page )
+    ^ r
+}
+
+@ h_stdlib_docs HttpRequest req Params params → HttpResponse {
+    : ?String tail_opt ( params_get params `path` )
+    ?? tail_opt {
+        T tail → {
+            ( nurl_print `[srv] GET /stdlib-docs/` ) ( nurl_print ( string_data tail ) ) ( nurl_print `\n` )
+            ? ( __has_dotdot_segment ( string_data tail ) ) {
+                ( string_free tail )
+                ^ ( response_text 403 `forbidden\n` )
+            } {}
+            : i tn ( string_len tail )
+            : b is_raw ( string_ends_with tail `.md` )
+            : String rel ? is_raw ( string_from ( nurl_str_slice ( string_data tail ) 0 - tn 3 ) ) ( string_from ( string_data tail ) )
+            : String dir ( get_stdlib_dir )
+            : String fp ( path_join ( string_data dir ) ( string_data rel ) )
+            : !String IoErr cr ( read_file ( string_data fp ) )
+            : HttpResponse res ?? cr {
+                T src → {
+                    : String docmd ( nurldoc_render ( string_data src ) ( string_data rel ) )
+                    ( string_free src )
+                    : HttpResponse r ? is_raw {
+                        : HttpResponse rr ( response_text 200 ( string_data docmd ) )
+                        ( response_set_header rr `Content-Type` `text/markdown; charset=utf-8` )
+                        ^ rr
+                    } {
+                        : String html ( md_to_html ( string_data docmd ) )
+                        : String rawp ( string_with_cap + ( string_len rel ) 20 )
+                        ( string_push_str rawp `/stdlib-docs/` ) ( string_push_str rawp ( string_data rel ) ) ( string_push_str rawp `.md` )
+                        : String page ( __doc_page_html ( string_data rel ) html ( string_data rawp ) )
+                        ( string_free html ) ( string_free rawp )
+                        : HttpResponse rr ( response_text 200 ( string_data page ) )
+                        ( response_set_header rr `Content-Type` `text/html; charset=utf-8` )
+                        ( string_free page )
+                        ^ rr
+                    }
+                    ( string_free docmd )
+                    ^ r
+                }
+                F _ → ( response_text 404 `module not found\n` )
+            }
+            ( string_free fp ) ( string_free dir ) ( string_free rel ) ( string_free tail )
+            ^ res
+        }
+        F _ → { ^ ( response_text 400 `path missing\n` ) }
+    }
+}
+
+@ h_stdlib_docs_index HttpRequest req Params params → HttpResponse {
+    ( nurl_print `[srv] GET /stdlib-docs\n` )
+    ^ ( __stdlib_doc_index )
+}
+
 // ── /targets — JSON list of compile targets (UI dropdown source) ──
 
 // Append one TargetInfo entry to `arr`. Shape mirrors api/'s
@@ -4603,6 +4730,8 @@ s combined_stdout s combined_stderr → v {
             ( router_get r `/LICENSE-APACHE` \ HttpRequest req Params params → HttpResponse { ^ ( h_license_apache_raw req params ) } )
             ( router_get r `/NOTICE` \ HttpRequest req Params params → HttpResponse { ^ ( h_notice_raw req params ) } )
             ( router_get r `/stdlib-viewer` \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_viewer req params ) } )
+            ( router_get r `/stdlib-docs` \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_docs_index req params ) } )
+            ( router_get r `/stdlib-docs/*path` \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_docs req params ) } )
             ( router_get r `/tests-viewer` \ HttpRequest req Params params → HttpResponse { ^ ( h_tests_viewer req params ) } )
             ( router_get r `/gameboydemo` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_gameboydemo ) } )
             ( router_get r `/c64demo` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_c64demo ) } )
