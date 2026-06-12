@@ -828,6 +828,7 @@ int  poll(void *fds, unsigned long n, int timeout) {
 #  include <sys/wait.h>
 #  include <unistd.h>
 #  include <sys/mman.h>
+#  include <termios.h>
 #endif
 #ifdef NURL_HAVE_ZLIB
 #  include <zlib.h>
@@ -860,6 +861,7 @@ long long nurl_native_sizeof(const char *name) {
 #if !defined(_WIN32) && !defined(__wasi__)
     if (strcmp(name, "struct pollfd")       == 0) return (long long)sizeof(struct pollfd);
     if (strcmp(name, "pid_t")               == 0) return (long long)sizeof(pid_t);
+    if (strcmp(name, "struct termios")      == 0) return (long long)sizeof(struct termios);
 #endif
     if (strcmp(name, "int")                 == 0) return (long long)sizeof(int);
     if (strcmp(name, "long")                == 0) return (long long)sizeof(long);
@@ -943,6 +945,9 @@ long long nurl_native_constant(const char *name) {
     /* AF_UNIX / SOCK_STREAM for stdlib/std/unixsock.nu (local IPC). */
     if (strcmp(name, "AF_UNIX")     == 0) return AF_UNIX;
     if (strcmp(name, "SOCK_STREAM") == 0) return SOCK_STREAM;
+    /* termios actions for stdlib/std/term.nu (raw mode). */
+    if (strcmp(name, "TCSANOW")     == 0) return TCSANOW;
+    if (strcmp(name, "TCSAFLUSH")   == 0) return TCSAFLUSH;
 #endif
     /* CLOCK_* values differ per platform (CLOCK_MONOTONIC is 6 on
      * macOS, 1 elsewhere); wasi-libc spells them as pointer macros. */
