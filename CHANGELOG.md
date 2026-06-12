@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **One URL parser — `stdlib/std/url.nu`** (critic B12). RFC 3986
+  `scheme://[userinfo@]host[:port][/path][?query][#fragment]` into an
+  owned `Url`, with bracketed-IPv6 hosts, `url_default_port` /
+  `url_port_or_default` (http/https/ws/wss/ftp/redis/postgres),
+  `url_request_target` (path?query for the request line), a percent
+  codec (`url_percent_encode`/`_decode`), and `url_query_decode` →
+  `Vec[UrlParam]` (form-urlencoded `+`→space, `%xx`). Lives in `std/`
+  with core-only deps so `ext/` layers on it without a cycle. Locked
+  against RFC 3986 component-split vectors in
+  `compiler/tests/url_parse.nu`.
+
 - **JSON Web Tokens — `stdlib/ext/jwt.nu`** (critic B5). HS256 (HMAC-
   SHA256) and EdDSA (Ed25519) sign + verify over the existing crypto
   block and base64url. `jwt_hs256_sign/verify`, `jwt_eddsa_sign/verify`,
@@ -22,6 +33,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `compiler/tests/jwt_basic.nu`. Adds `b64_url_encode_vec` /
   `b64_url_decode_vec` to `std/encode.nu` for binary, unpadded
   base64url (the signature segment).
+
+### Changed
+
+- **`ext/websocket.nu` and `ext/http2_client.nu` delegate URL parsing to
+  `std/url.nu`** (critic B12 consolidation). Both hand-rolled
+  scheme/host/port/path splitting; their `__ws_parse_url` /
+  `__h2_parse_url` are now thin wrappers over `url_parse` that enforce
+  the ws/wss and http/https schemes and map to the existing `WsUrl` /
+  `H2Url` types — same public API, one parser underneath. The new parser
+  also correctly stops the authority at `?`/`#` (the old scanners folded
+  a query into the host when no path was present) and keeps the query in
+  the request target.
 
 ### Fixed
 
