@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CBOR (RFC 8949) — `stdlib/ext/cbor.nu`** (critic B16). The
+  IETF-standard binary serialization (COSE / WebAuthn / CTAP), sibling of
+  MessagePack, over the shared `Json` value: `cbor_encode Json →
+  !( Vec u ) CborErr` and `cbor_decode ( Vec u ) → !Json CborErr`. Encode
+  is canonical-ish — integers and lengths use the shortest head, floats
+  are float64 — so equal documents serialize to equal bytes. Decode is
+  liberal: every definite-length head, signed/unsigned integers at all
+  widths, and **float16 / float32 / float64** (the half-float decoder
+  handles zero / subnormal / normal / inf / NaN). Byte strings, tags,
+  indefinite-length items, and exotic simple values are rejected as
+  `CborUnsupported`; `undefined` (0xf7) → `JNull`. Lock:
+  `compiler/tests/cbor.nu` — Json round-trip with canonical-byte check,
+  the RFC 8949 Appendix A decode vectors (integer boundaries, negatives,
+  nested array/map, all three float widths), and every documented
+  rejection; ASan+UBSan+LSan clean (error paths free the partial tree).
+
 - **Arbitrary-precision fixed-point decimal — `stdlib/std/decimal.nu`**
   (critic B14, the last ROADMAP numeric gap). A `Decimal` is a `BigInt`
   coefficient × 10^-scale, so it is *exact* — `0.1 + 0.2` is `0.3`, not
