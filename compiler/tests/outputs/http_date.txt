@@ -1,0 +1,17 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+imf: 784111777
+rfc850: 784111777
+asctime: 784111777
+epoch: 0
+modern: 1778088645
+utc_off: 1136214245
+neg_off: 1136239445
+pos_off: 1136194445
+no_dow: 1136214245
+roundtrip: Fri, 31 Dec 1999 23:59:59 GMT == T
+bad_month: PARSE_ERR
+garbage: PARSE_ERR
+missing_zone: PARSE_ERR

@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **HTTP-date / RFC 2822 date parsing — `stdlib/std/time.nu`** (critic
+  B13). The server formatted HTTP dates (`time_format_http`) but could
+  not parse them; `http_date_parse` now accepts all three forms RFC 7231
+  §7.1.1.1 requires — IMF-fixdate (`Sun, 06 Nov 1994 08:49:37 GMT`),
+  obsolete RFC 850 (`Sunday, 06-Nov-94 08:49:37 GMT`, 2-digit year via
+  the POSIX <70 pivot), and asctime (`Sun Nov  6 08:49:37 1994`) — for
+  `If-Modified-Since` / `If-Unmodified-Since` / cookie `Expires`.
+  `rfc2822_parse` handles the email `Date:` form with numeric `±HHMM`
+  zones (`Mon, 02 Jan 2006 15:04:05 -0700`). Both return UTC seconds in
+  the `!i ParseErr` shape (pair with `time_from_unix`), matching
+  `time_parse_iso`. Lock: `compiler/tests/http_date.nu` — the three
+  RFC 7231 spellings agree on the spec's own example (784111777), the
+  RFC 2822 `-0700` case equals Go's canonical reference instant, plus
+  round-trip and rejects.
+
 - **JWT bearer-auth middleware — `stdlib/ext/http_jwt.nu`** (B5
   follow-through). `with_jwt_hs256 secret inner` / `with_jwt_eddsa
   pubkey inner` wrap a claims-aware handler
