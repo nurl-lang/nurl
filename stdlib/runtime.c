@@ -938,6 +938,12 @@ long long nurl_native_constant(const char *name) {
     if (strcmp(name, "EWOULDBLOCK") == 0) return EWOULDBLOCK;
     if (strcmp(name, "EPIPE")       == 0) return EPIPE;
     if (strcmp(name, "ERANGE")      == 0) return ERANGE;
+    if (strcmp(name, "EADDRINUSE")  == 0) return EADDRINUSE;
+#if !defined(_WIN32) && !defined(__wasi__)
+    /* AF_UNIX / SOCK_STREAM for stdlib/std/unixsock.nu (local IPC). */
+    if (strcmp(name, "AF_UNIX")     == 0) return AF_UNIX;
+    if (strcmp(name, "SOCK_STREAM") == 0) return SOCK_STREAM;
+#endif
     /* CLOCK_* values differ per platform (CLOCK_MONOTONIC is 6 on
      * macOS, 1 elsewhere); wasi-libc spells them as pointer macros. */
 #ifdef CLOCK_REALTIME
