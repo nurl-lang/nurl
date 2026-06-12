@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Unix domain sockets — `stdlib/std/unixsock.nu`** (critic B9). The
+  local-IPC sibling of `std/net.nu`'s TCP, same API shape but a
+  filesystem path instead of host:port — for Postgres-over-socket,
+  systemd-style services, container control planes. `unix_listen` /
+  `unix_accept` / `unix_connect` / `unix_socketpair` / `unix_read_chunk`
+  / `unix_write_all` / `unix_write_str` / `unix_close_conn` /
+  `unix_close_listener` (which unlinks the socket file). Pure libc FFI
+  (blocking SOCK_STREAM); `unix_listen` unlinks any stale path before
+  binding. Adds `AF_UNIX` / `SOCK_STREAM` / `EADDRINUSE` to the runtime's
+  `nurl_native_constant` table (POSIX-only; the module degrades to a
+  clean `UnixSocket` error on Win32/WASI). Lock:
+  `compiler/tests/unixsock.nu` — a deterministic `socketpair` round-trip
+  (both directions + EOF-after-close) plus a thread-driven
+  listen/accept/connect echo gated on `NURL_NET_TESTS`; ASan+UBSan+LSan
+  clean on both paths.
+
 - **CBOR (RFC 8949) — `stdlib/ext/cbor.nu`** (critic B16). The
   IETF-standard binary serialization (COSE / WebAuthn / CTAP), sibling of
   MessagePack, over the shared `Json` value: `cbor_encode Json →
