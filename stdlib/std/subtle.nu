@@ -30,10 +30,18 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 @ constant_time_eq_n s a s b i n → b {
+    // Read bytes through the `*u` + `. p k` indexed load, NOT
+    // nurl_str_get: that bounds-checks with strlen, so on binary
+    // material (a MAC or key with no trailing NUL — exactly what
+    // constant_time_eq_vec passes) it reads past the buffer end. The
+    // contract already requires n readable bytes in both operands, so
+    // the raw indexed load is both correct and safe here.
+    : *u pa # *u a
+    : *u pb # *u b
     : ~ i diff 0
     : ~ i k 0
     ~ < k n {
-        = diff | diff - ( nurl_str_get a k ) ( nurl_str_get b k )
+        = diff | diff - # i . pa k # i . pb k
         = k + k 1
     }
     ^ == diff 0

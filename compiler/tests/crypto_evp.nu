@@ -90,12 +90,14 @@ $ `stdlib/ext/crypto.nu`
                 }
                 F _ → ( nurl_print `gcm_roundtrip FAILED\n` )
             }
-            // Tamper one ciphertext byte → must reject with CryptoVerify
-            : s cd # s ( vec_data [u] ct )
+            // Tamper one ciphertext byte → must reject with CryptoVerify.
+            // Read via `. cd k`, not nurl_str_get (strlen-bounded → reads
+            // past a non-NUL-terminated binary buffer).
+            : *u cd ( vec_data [u] ct )
             : ( Vec u ) bad ( str_to_vec `` )
             : ~ i k 0
             ~ < k ( vec_len [u] ct ) {
-                : i b ( nurl_str_get cd k )
+                : i b # i . cd k
                 ( vec_push [u] bad # u ? == k 0 ^^ b 255 b )
                 = k + k 1
             }
@@ -153,12 +155,13 @@ $ `stdlib/ext/crypto.nu`
                     ( nurl_print `ed_verify_ok=` )
                     ( nurl_print ? ( ed25519_verify pk empty sig ) `T` `F` )
                     ( nurl_print `\n` )
-                    // Flip a sig byte → must fail
-                    : s sd # s ( vec_data [u] sig )
+                    // Flip a sig byte → must fail. Read via `. sd k`
+                    // (binary sig, no trailing NUL).
+                    : *u sd ( vec_data [u] sig )
                     : ( Vec u ) badsig ( str_to_vec `` )
                     : ~ i k 0
                     ~ < k 64 {
-                        : i b ( nurl_str_get sd k )
+                        : i b # i . sd k
                         ( vec_push [u] badsig # u ? == k 5 ^^ b 255 b )
                         = k + k 1
                     }
