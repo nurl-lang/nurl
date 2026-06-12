@@ -10,6 +10,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **HTTP-date / RFC 2822 date parsing — `stdlib/std/time.nu`** (critic
+  B13). The server formatted HTTP dates (`time_format_http`) but could
+  not parse them; `http_date_parse` now accepts all three forms RFC 7231
+  §7.1.1.1 requires — IMF-fixdate (`Sun, 06 Nov 1994 08:49:37 GMT`),
+  obsolete RFC 850 (`Sunday, 06-Nov-94 08:49:37 GMT`, 2-digit year via
+  the POSIX <70 pivot), and asctime (`Sun Nov  6 08:49:37 1994`) — for
+  `If-Modified-Since` / `If-Unmodified-Since` / cookie `Expires`.
+  `rfc2822_parse` handles the email `Date:` form with numeric `±HHMM`
+  zones (`Mon, 02 Jan 2006 15:04:05 -0700`). Both return UTC seconds in
+  the `!i ParseErr` shape (pair with `time_from_unix`), matching
+  `time_parse_iso`. Lock: `compiler/tests/http_date.nu` — the three
+  RFC 7231 spellings agree on the spec's own example (784111777), the
+  RFC 2822 `-0700` case equals Go's canonical reference instant, plus
+  round-trip and rejects.
+
+- **JWT bearer-auth middleware — `stdlib/ext/http_jwt.nu`** (B5
+  follow-through). `with_jwt_hs256 secret inner` / `with_jwt_eddsa
+  pubkey inner` wrap a claims-aware handler
+  (`( @ HttpResponse HttpRequest Json )`) and return the standard
+  `( @ HttpResponse HttpRequest )` middleware shape, so they compose
+  with `with_access_log` / `with_cors_default` / `router_handle`. A
+  request runs the handler only with a valid `Authorization: Bearer`
+  token; the verified payload claims are passed straight in (no
+  re-parse, no header injection / spoofing surface, borrowed + freed by
+  the middleware). Missing / invalid / expired / not-yet-valid tokens
+  get a 401 with an RFC 6750 `WWW-Authenticate: Bearer` challenge whose
+  `error=` / `error_description=` names the failure. Kept in its own
+  module so the base `ext/http_auth.nu` stays free of the OpenSSL
+  dependency `ext/jwt.nu` pulls in. Lock: `compiler/tests/http_jwt.nu`
+  (valid/expired/tampered/wrong-key/missing × HS256 + EdDSA;
+  ASan+UBSan+LSan clean).
+
 - **Filesystem niceties + glob — `stdlib/std/fs.nu`** (critic B6 + B7).
   `fs_rename` (libc `rename`), `fs_copy_file` (64 KiB-chunk streaming, so
   large files copy in bounded memory), `fs_tempfile` (libc `mkstemp` →
