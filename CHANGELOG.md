@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Filesystem niceties + glob — `stdlib/std/fs.nu`** (critic B6 + B7).
+  `fs_rename` (libc `rename`), `fs_copy_file` (64 KiB-chunk streaming, so
+  large files copy in bounded memory), `fs_tempfile` (libc `mkstemp` →
+  unique 0600 file, returns the path). `fs_glob` expands shell patterns
+  against the tree: `*` / `?` / `[...]` (with `[a-z]` ranges and
+  `[!...]`/`[^...]` negation) within a segment, `**` as a whole segment
+  for recursive descent, the leading-dot rule (`*` never matches a
+  dotfile; an explicit `.` does), absolute or relative patterns. Pure
+  NURL over `dir_list`. Lock: `compiler/tests/fs_glob.nu` (every pattern
+  class + rename/copy/tempfile against a built temp tree).
+
 - **One URL parser — `stdlib/std/url.nu`** (critic B12). RFC 3986
   `scheme://[userinfo@]host[:port][/path][?query][#fragment]` into an
   owned `Url`, with bracketed-IPv6 hosts, `url_default_port` /

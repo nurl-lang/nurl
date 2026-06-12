@@ -1,0 +1,17 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+tempfile_ok=T
+star_nu: a.nu b.nu 
+star_all: a.nu b.nu c.txt src 
+question: a.nu b.nu 
+class: a.nu b.nu 
+class_neg: b.nu 
+dotglob: .hidden 
+nested: src/main.nu src/util.nu 
+doublestar: a.nu b.nu src/main.nu src/sub/deep.nu src/util.nu 
+literal: c.txt 
+nomatch: 
+rename_ok=T a_gone=T renamed_exists=T
+copy_ok=T copy_content=c
