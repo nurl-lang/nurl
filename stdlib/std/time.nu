@@ -596,6 +596,216 @@ $ `stdlib/std/async_ffi.nu`
     ^ @ !i ParseErr { T unix_utc }
 }
 
+// ── §12c HTTP-date / RFC 2822 date parsing ───────────────────────────
+//
+// The server FORMATS HTTP dates (time_format_http) but until now could
+// not PARSE them — needed for `If-Modified-Since`, `If-Unmodified-Since`
+// and cookie `Expires`. RFC 7231 §7.1.1.1 requires a recipient to accept
+// all three historical forms, and email `Date:` (RFC 5322/2822) adds a
+// numeric zone. All return UTC seconds since the Unix epoch in the
+// `!i ParseErr` shape (pair with `time_from_unix` for fields), so they
+// drop in next to `time_parse_iso`:
+//
+//   IMF-fixdate (preferred):  Sun, 06 Nov 1994 08:49:37 GMT
+//   RFC 850 (obsolete):       Sunday, 06-Nov-94 08:49:37 GMT
+//   asctime (obsolete):       Sun Nov  6 08:49:37 1994
+//   RFC 2822 (email Date):    Mon, 02 Jan 2006 15:04:05 -0700
+//
+//   ( http_date_parse s )   → !i ParseErr   the three RFC 7231 forms (GMT)
+//   ( rfc2822_parse   s )   → !i ParseErr   email Date, numeric / GMT zone
+//
+// A 2-digit RFC 850 year uses the POSIX sliding pivot: YY < 70 → 20YY,
+// else 19YY. Obsolete alphabetic US zones (EST/PDT/…) in RFC 2822 are
+// not resolved (their offset is ambiguous by the RFC's own admission) —
+// only GMT/UT/UTC/Z (= +0000) and numeric ±HHMM offsets are accepted.
+
+// Month abbreviation at p[off..off+3] → 1..12, or -1.
+@ __month3_at s p i off i n → i {
+    ? > + off 3 n { ^ -1 } {}
+    : i c0 ( nurl_str_get p off )
+    : i c1 ( nurl_str_get p + off 1 )
+    : i c2 ( nurl_str_get p + off 2 )
+    // J: Jan/Jun/Jul · F: Feb · M: Mar/May · A: Apr/Aug · S: Sep · O: Oct
+    // N: Nov · D: Dec  (compare the 2nd/3rd letters to disambiguate)
+    ? == c0 74 {                                  // 'J'
+        ? & == c1 97 == c2 110 { ^ 1 } {}         // Jan
+        ? & == c1 117 == c2 110 { ^ 6 } {}        // Jun
+        ? & == c1 117 == c2 108 { ^ 7 } {}        // Jul
+        ^ -1
+    } {}
+    ? & & == c0 70 == c1 101 == c2 98 { ^ 2 } {}  // Feb
+    ? == c0 77 {                                  // 'M'
+        ? & == c1 97 == c2 114 { ^ 3 } {}         // Mar
+        ? & == c1 97 == c2 121 { ^ 5 } {}         // May
+        ^ -1
+    } {}
+    ? == c0 65 {                                  // 'A'
+        ? & == c1 112 == c2 114 { ^ 4 } {}        // Apr
+        ? & == c1 117 == c2 103 { ^ 8 } {}        // Aug
+        ^ -1
+    } {}
+    ? & & == c0 83 == c1 101 == c2 112 { ^ 9 } {}  // Sep
+    ? & & == c0 79 == c1 99 == c2 116 { ^ 10 } {}  // Oct
+    ? & & == c0 78 == c1 111 == c2 118 { ^ 11 } {} // Nov
+    ? & & == c0 68 == c1 101 == c2 99 { ^ 12 } {}  // Dec
+    ^ -1
+}
+
+// One token = a maximal run of non-(space/comma) bytes. Writes the
+// token's [start,end) into a 2-slot scratch and returns the index just
+// past it; -1 when no token remains from `from`.
+@ __hd_token s p i n i from s out_start s out_end → i {
+    : ~ i k from
+    ~ & < k n | == ( nurl_str_get p k ) 32 == ( nurl_str_get p k ) 44 { = k + k 1 }
+    ? >= k n { ^ -1 } {}
+    : i st k
+    ~ & < k n & != ( nurl_str_get p k ) 32 != ( nurl_str_get p k ) 44 { = k + k 1 }
+    ( nurl_poke # s out_start 0 st )
+    ( nurl_poke # s out_end 0 k )
+    ^ k
+}
+
+@ __hd_all_digits s p i st i en → b {
+    : ~ i k st
+    : ~ b ok > en st
+    ~ & ok < k en {
+        : i c ( nurl_str_get p k )
+        ? & >= c 48 <= c 57 {} { = ok F }
+        = k + k 1
+    }
+    ^ ok
+}
+
+@ __hd_index_of s p i st i en i ch → i {
+    : ~ i k st
+    ~ < k en { ? == ( nurl_str_get p k ) ch { ^ k } {} = k + k 1 }
+    ^ -1
+}
+
+// Shared flexible parser for every form above. Tokenizes on space/comma,
+// classifies each token (month name / `HH:MM:SS` / `DD-Mon-YY` / number /
+// zone), then folds to UTC seconds. `require_zone` makes a missing zone
+// an error (RFC 2822 mandates one; HTTP forms always end in GMT).
+@ __parse_date_flex s p b require_zone → !i ParseErr {
+    : i n ( nurl_str_len p )
+    ? == n 0 { ^ @ !i ParseErr { F @ ParseErr { Empty } } } {}
+    : s ts ( nurl_zalloc 8 )
+    : s te ( nurl_zalloc 8 )
+    : ~ i pos 0
+    : ~ i day -1
+    : ~ i mon -1
+    : ~ i year -1
+    : ~ i hh -1
+    : ~ i mm 0
+    : ~ i ss 0
+    : ~ i off_min 0
+    : ~ b have_zone F
+    : ~ b bad F
+    : ~ b going T
+    ~ & going ! bad {
+        : i nxt ( __hd_token p n pos ts te )
+        ? < nxt 0 { = going F } {
+            = pos nxt
+            : i st ( nurl_peek ts 0 )
+            : i en ( nurl_peek te 0 )
+            : i len - en st
+            : i m3 ( __month3_at p st n )
+            : i colon ( __hd_index_of p st en 58 )
+            : i dash ( __hd_index_of p st en 45 )
+            : i c0 ( nurl_str_get p st )
+            ? >= m3 0 {
+                // bare month name token
+                ? < mon 0 { = mon m3 } {}
+            } {
+                ? >= colon 0 {
+                    // HH:MM[:SS]
+                    : i h ( __take_ndigits p st 2 n )
+                    : i m2c ( __hd_index_of p + colon 1 en 58 )
+                    : i mi ( __take_ndigits p + colon 1 2 n )
+                    ? | < h 0 < mi 0 { = bad T } {
+                        = hh h = mm mi
+                        ? >= m2c 0 {
+                            : i se ( __take_ndigits p + m2c 1 2 n )
+                            ? < se 0 { = bad T } { = ss se }
+                        } {}
+                    }
+                } {
+                    ? & >= dash 0 >= ( __month3_at p + dash 1 n ) 0 {
+                        // RFC 850 DD-Mon-YY
+                        : i d ( __take_ndigits p st 2 n )
+                        : i mn ( __month3_at p + dash 1 n )
+                        : i dash2 ( __hd_index_of p + dash 1 en 45 )
+                        ? | | < d 0 < mn 0 < dash2 0 { = bad T } {
+                            : i yy ( __take_ndigits p + dash2 1 2 n )
+                            ? < yy 0 { = bad T } {
+                                = day d = mon mn
+                                = year ? < yy 70 + 2000 yy + 1900 yy
+                            }
+                        }
+                    } {
+                        ? | | == c0 43 == c0 45 & ( __hd_all_digits p + st 1 en ) >= len 5 {
+                            // numeric zone ±HHMM
+                            : i sign ? == c0 45 -1 1
+                            : i oh ( __take_ndigits p + st 1 2 n )
+                            : i om ( __take_ndigits p + st 3 2 n )
+                            ? | < oh 0 < om 0 { = bad T } {
+                                = off_min * sign + * oh 60 om = have_zone T
+                            }
+                        } {
+                            ? ( __hd_all_digits p st en ) {
+                                // a number: 4 digits → year, else day
+                                : i v ( __take_ndigits p st len n )
+                                ? < v 0 { = bad T } {
+                                    ? & == len 4 < year 0 { = year v } {
+                                        ? < day 0 { = day v } {
+                                            ? < year 0 { = year v } {}
+                                        }
+                                    }
+                                }
+                            } {
+                                // alphabetic zone: GMT/UT/UTC/Z → 0; any
+                                // other word (e.g. the weekday "Sun") is
+                                // simply ignored. An alpha zone resolves
+                                // only for the UTC set.
+                                ? ( __hd_zone_is_utc p st en )
+                                { = have_zone T } {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ( nurl_free # s ts )
+    ( nurl_free # s te )
+    ? bad { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? | | | < day 0 < mon 0 < year 0 < hh 0 { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? & require_zone ! have_zone { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
+    : !i ParseErr civ ( time_make year mon day hh mm ss )
+    ^ ?? civ {
+        T unix_local → @ !i ParseErr { T - unix_local * off_min 60 }
+        F e → @ !i ParseErr { F e }
+    }
+}
+
+// True iff p[st..en) is GMT / UT / UTC / Z / Z-as-+0000 (all = UTC).
+@ __hd_zone_is_utc s p i st i en → b {
+    : i len - en st
+    ? & == len 1 == ( nurl_str_get p st ) 90 { ^ T } {}   // Z
+    ? & & == len 2 == ( nurl_str_get p st ) 85 == ( nurl_str_get p + st 1 ) 84 { ^ T } {}  // UT
+    ? & & & == len 3 == ( nurl_str_get p st ) 71 == ( nurl_str_get p + st 1 ) 77 == ( nurl_str_get p + st 2 ) 84 { ^ T } {}  // GMT
+    ? & & & == len 3 == ( nurl_str_get p st ) 85 == ( nurl_str_get p + st 1 ) 84 == ( nurl_str_get p + st 2 ) 67 { ^ T } {}  // UTC
+    ^ F
+}
+
+@ http_date_parse s p → !i ParseErr {
+    ^ ( __parse_date_flex p F )
+}
+
+@ rfc2822_parse s p → !i ParseErr {
+    ^ ( __parse_date_flex p T )
+}
+
 // ── §12b Timezones / DST — POSIX TZ-string rules ─────────────────────
 //
 // Local-time conversion with daylight-saving transitions, driven by a
