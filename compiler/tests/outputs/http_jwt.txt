@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+hs256_valid: status=200 body=hello alice
+hs256_expired: status=401 body=Unauthorized
+ www-auth=Bearer error="invalid_token", error_description="token expired"
+hs256_missing: status=401 body=Unauthorized
+ www-auth=Bearer
+hs256_tampered: status=401 body=Unauthorized
+ www-auth=Bearer error="invalid_token", error_description="bad signature"
+hs256_wrongkey: status=401 body=Unauthorized
+ www-auth=Bearer error="invalid_token", error_description="bad signature"
+eddsa_valid: status=200 body=hello bob
+eddsa_missing: status=401 body=Unauthorized
+ www-auth=Bearer
