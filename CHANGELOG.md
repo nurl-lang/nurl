@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Playground: rendered stdlib API reference at `/stdlib-docs`**
+  (`nurlapi`). The `nurldoc` library is now wired into the playground
+  server: `/stdlib-docs` is an auto-generated index of every stdlib
+  module (grouped by `core`/`std`/`ext`/`hal`), and `/stdlib-docs/<path>`
+  renders one module's signatures + doc comments through
+  `nurldoc_render` → the existing `md_to_html` + dark-theme doc chrome
+  (the same presentation as the README/spec pages). Append `.md` for the
+  raw Markdown. Closes the loop the C2 nurldoc PR opened — the "broad
+  stdlib" is now browsable, not just greppable. Listed in the OpenAPI
+  spec; live-verified end-to-end (index + module HTML + raw `.md`,
+  ASan-clean).
+
 - **`nurldoc` — Markdown API-doc generator** (critic C2). The stdlib's
   `//`-header + doc-comment discipline (90+ modules) was unrenderable;
   `nurldoc` extracts each module's header block, top-level declaration
