@@ -10,6 +10,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Cryptography block — AEAD, signatures, key exchange, KDFs**
+  (`stdlib/ext/crypto.nu`, critic B1–B3). Binds libcrypto's EVP layer
+  through pure-NURL `` & `openssl` @ `` FFI (no C bridge, same sentinel
+  pattern as TLS/libpq → "install libssl-dev" at compile time):
+  AES-256-GCM and ChaCha20-Poly1305 one-shot AEAD (tag appended;
+  `CryptoVerify` on tampered input); Ed25519 keygen/sign/verify and
+  X25519 keygen/derive via the EVP_PKEY raw-key API; HKDF-SHA256,
+  PBKDF2-SHA256/512, and scrypt. Every primitive is locked against its
+  published vector (NIST GCM, RFC 8439, RFC 8032 §7.1, RFC 7748 §6.1,
+  RFC 5869 A.1, RFC 7914 §12) in `compiler/tests/crypto_evp.nu`.
+- **`std/subtle.nu` — constant-time comparisons** (critic B4).
+  `constant_time_eq` / `_eq_n` / `_eq_vec` for secret material,
+  promoted from the private bearer-token loop in `ext/mcp_registry.nu`
+  (which now calls it). Length-leaking but content-timing-invariant,
+  matching `hmac.compare_digest` / Go `crypto/subtle`.
+
+### Fixed
+
+- **`ext/crypto.nu` HKDF: binary salt was silently zeroed** before the
+  module shipped — `nurl_str_get` is a NUL-bounded C-string read, so
+  hex-encoding a `Vec u` salt through a `# s` cast truncated at the
+  first `0x00` byte. Switched the binary→hex helper to the `*u` + `. p k`
+  indexed load (the idiom `encode.nu`'s `__b64_emit` already uses). The
+  RFC 5869 test vector caught it; documented as a reuse hazard in
+  `critic.md` B3.
+
 - **`nurlc --lint` detects unused imports** (`compiler/nurlc.nu`). A
   top-file `$` import none of whose defined symbols (functions, FFI
   externs, types, constants — generic templates included) is referenced
