@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **HTTP client cookie jar — `stdlib/ext/cookies.nu`** (critic B23). The
+  server side writes `Set-Cookie` (ext/http_auth.nu); this is the missing
+  client half. `cookie_jar_set` parses one `Set-Cookie` value (Domain,
+  Path, Expires, Max-Age, Secure — Max-Age wins over Expires, an
+  already-expired cookie deletes its stored match) defaulting Domain/Path
+  from the request host/path; `cookie_jar_header` returns the `Cookie:`
+  value for a request, applying RFC 6265 domain matching (§5.1.3,
+  host-only vs subdomain), path matching (§5.1.4), Secure gating, and
+  expiry, longest-path-first. Pure string-in/string-out — decoupled from
+  the HTTP client types, so it round-trips a session over HTTP/1.1, h2,
+  or any header source. `now` (unix seconds) is passed explicitly for
+  deterministic expiry. Lock: `compiler/tests/cookies_basic.nu`
+  (host-only vs Domain, path ordering, Secure, Max-Age/Expires expiry,
+  replacement, Max-Age=0 deletion, malformed rejection); ASan+UBSan+LSan
+  clean.
+
 - **Benchmark harness — `stdlib/std/bench.nu` + `nurlpkg bench`** (critic
   C4). `std/bench.nu` times a no-arg closure over many iterations and
   reports **ns/op** (via the monotonic clock) and **allocations/op**.
