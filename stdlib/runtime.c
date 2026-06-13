@@ -544,8 +544,16 @@ long long nurl_path_type(const char *path) {
 
 /* ── §9  Memory allocation ─────────────────────────────────────── */
 
-void* nurl_alloc(long long bytes)              { return malloc((size_t)bytes); }
-void* nurl_zalloc(long long bytes)             { return calloc(1, (size_t)bytes); }
+/* Process-wide count of NURL-level allocations (every nurl_alloc /
+ * nurl_zalloc — which is what stdlib vec/string/struct ctl blocks route
+ * through). Exposed via nurl_alloc_count() for std/bench.nu's per-op
+ * allocation metric. A relaxed atomic so the increment is correct under
+ * threads while costing nothing measurable next to the malloc itself. */
+static unsigned long long g_nurl_alloc_count = 0;
+
+void* nurl_alloc(long long bytes)              { __atomic_fetch_add(&g_nurl_alloc_count, 1, __ATOMIC_RELAXED); return malloc((size_t)bytes); }
+void* nurl_zalloc(long long bytes)             { __atomic_fetch_add(&g_nurl_alloc_count, 1, __ATOMIC_RELAXED); return calloc(1, (size_t)bytes); }
+long long nurl_alloc_count(void)               { return (long long)__atomic_load_n(&g_nurl_alloc_count, __ATOMIC_RELAXED); }
 void* nurl_realloc(void *ptr, long long bytes) { return realloc(ptr, (size_t)bytes); }
 void  nurl_free(void *ptr)                     { free(ptr); }
 void  nurl_memcpy(void *dst, const void *src, long long bytes) {
