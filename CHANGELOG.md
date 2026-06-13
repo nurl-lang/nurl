@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Benchmark harness — `stdlib/std/bench.nu` + `nurlpkg bench`** (critic
+  C4). `std/bench.nu` times a no-arg closure over many iterations and
+  reports **ns/op** (via the monotonic clock) and **allocations/op**.
+  `bench_run name iters body` runs a short untimed warmup then a timed
+  loop; `bench_auto name body` auto-scales the iteration count until a
+  pass clears ~50 ms, for stable numbers on sub-microsecond operations.
+  `bench_report` prints one line; `bench_result_*` accessors expose the
+  raw numbers. The allocation metric is backed by a new runtime hook,
+  `nurl_alloc_count` (a relaxed-atomic counter on every
+  `nurl_alloc`/`nurl_zalloc` — which is what stdlib vec/string/struct
+  blocks route through), snapshotted around the timed loop so warmup is
+  excluded. `nurlpkg bench` discovers `benches/*.nu`, compiles each at
+  `-O2`, runs it, and streams its report (no goldens — wall time is
+  machine-dependent; a bench fails only on a compile error or nonzero
+  exit). Ships `bench/stdlib_hotpath.nu` (string build / vec push / sort
+  micro-benches). Locks: `compiler/tests/bench_basic.nu` (deterministic
+  surface — report formatting, the alloc counter on a vec cycle vs a
+  no-op body, iteration bookkeeping) and
+  `compiler/tests/nurlpkg_bench_smoke.sh` (runner discovery / streaming /
+  summary / exit codes).
+
 - **`nurlpkg test` — user-facing test runner** (critic C3). Ships the
   compiler suite's per-test pattern as a tool: `nurlpkg test` discovers
   `tests/*.nu`, compiles and runs each, and reports `PASS`/`FAIL` with a

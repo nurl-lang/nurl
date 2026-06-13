@@ -170,6 +170,7 @@ $ `stdlib/std/bytes.nu`
     ( nurl_print `  nurlpkg remove <name>  Delete a dependency entry from nurl.toml.\n` )
     ( nurl_print `  nurlpkg verify         Check deps/ matches nurl.lock (names + versions); exit 1 if drift.\n` )
     ( nurl_print `  nurlpkg test           Build + run every tests/*.nu (exit 0 = pass; optional tests/outputs/ goldens).\n` )
+    ( nurl_print `  nurlpkg bench          Build + run every benches/*.nu and stream their std/bench.nu reports.\n` )
     ( nurl_print `  nurlpkg version        Print the nurlpkg version.\n` )
     ( nurl_print `  nurlpkg help           Show this message.\n` )
 }
@@ -1819,6 +1820,98 @@ $ `stdlib/std/bytes.nu`
     }
 }
 
+// ── bench runner (C4) ─────────────────────────────────────────────
+//
+// `nurlpkg bench` compiles + runs every `benches/*.nu` and streams its
+// stdout (each bench program prints its own std/bench.nu report). No
+// goldens — wall time is machine-dependent. A bench "fails" only if it
+// won't compile or exits nonzero. Build driver as for `test` ($NURL_CC,
+// default ./nurl.sh).
+
+@ __run_bench_one s src s driver → i {
+    : String name ( __test_basename src )
+    : String bin ( string_with_cap 64 )
+    ( string_push_str bin `/tmp/nurlpkg_bench_` )
+    ( string_push_str bin ( string_data name ) )
+
+    : String ccmd ( string_with_cap 128 )
+    ( string_push_str ccmd driver )
+    ( string_push_str ccmd ` -O2 ` )
+    ( string_push_str ccmd src )
+    ( string_push_char ccmd 32 )
+    ( string_push_str ccmd ( string_data bin ) )
+
+    : ~ i result 1
+    : ~ b compiled F
+    ?? ( process_run_shell ( string_data ccmd ) ) {
+        T out → {
+            ? ( output_success out ) { = compiled T } {
+                ( nurl_print `── ` ) ( nurl_print ( string_data name ) ) ( nurl_print ` (compile error)\n` )
+                ( nurl_eprint ( output_stderr out ) )
+            }
+            ( output_free out )
+        }
+        F _ → { ( nurl_print `── ` ) ( nurl_print ( string_data name ) ) ( nurl_print ` (could not launch compiler)\n` ) }
+    }
+    ( string_free ccmd )
+
+    ? compiled {
+        ( nurl_print `── ` ) ( nurl_print ( string_data name ) ) ( nurl_print `\n` )
+        ?? ( process_run_shell ( string_data bin ) ) {
+            T out → {
+                : i olen ( output_stdout_len out )
+                ? > olen 0 { : i _w ( write 1 # *u ( output_stdout out ) olen ) } {}
+                ? == ( output_exit_code out ) 0 { = result 0 } {}
+                ( output_free out )
+            }
+            F _ → { ( nurl_print `(could not run)\n` ) }
+        }
+    } {}
+
+    ( string_free bin )
+    ( string_free name )
+    ^ result
+}
+
+@ __run_benches ( Vec String ) files → i {
+    : ( @ i String String ) cs \ String a String b → i { ^ ( cmp_string a b ) }
+    ( sort_by [String] files cs )
+    : String driver ( __test_driver )
+    : ~ i ran 0
+    : ~ i failed 0
+    : ~ i k 0
+    ~ < k ( vec_len [String] files ) {
+        ?? ( vec_get [String] files k ) {
+            T src → {
+                ? == ( __run_bench_one ( string_data src ) ( string_data driver ) ) 0 { = ran + ran 1 } { = failed + failed 1 }
+                ( string_free src )
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free [String] files )
+    ( string_free driver )
+    ( nurl_print `\nran ` ) ( nurl_print ( nurl_str_int ran ) )
+    ( nurl_print ` · failed ` ) ( nurl_print ( nurl_str_int failed ) ) ( nurl_print `\n` )
+    ^ ? == failed 0 0 1
+}
+
+@ __cmd_bench → i {
+    ^ ?? ( fs_glob `benches/*.nu` ) {
+        F _ → { ( nurl_eprintln `nurlpkg: no benches/ directory (expected benches/*.nu)` ) 1 }
+        T files → {
+            ? == ( vec_len [String] files ) 0 {
+                ( nurl_eprintln `nurlpkg: no benchmarks found (expected benches/*.nu)` )
+                ( vec_free [String] files )
+                1
+            } {
+                ( __run_benches files )
+            }
+        }
+    }
+}
+
 // ── dispatch ─────────────────────────────────────────────────────
 
 @ main → i {
@@ -1951,6 +2044,10 @@ $ `stdlib/std/bytes.nu`
     ? != 0 ( nurl_str_eq s_sub `test` ) {
         ( string_free sub )
         ^ ( __cmd_test )
+    } {}
+    ? != 0 ( nurl_str_eq s_sub `bench` ) {
+        ( string_free sub )
+        ^ ( __cmd_bench )
     } {}
     ? != 0 ( nurl_str_eq s_sub `version` ) {
         ( string_free sub )
