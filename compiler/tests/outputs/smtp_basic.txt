@@ -1,0 +1,27 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+errs=SmtpConnect,SmtpTls,SmtpAuth,SmtpNoStartTls
+auth_plain=AGFsaWNlQGV4YW1wbGUuY29tAHMzY3JldA==
+login_user=YWxpY2VAZXhhbXBsZS5jb20=
+login_pass=czNjcmV0
+multi end=74 code=250
+one end=11 code=220
+trail end=8 code=354
+part end=-1 code=220
+dotstuff: line one<CR><LF>
+..leading dot<CR><LF>
+...two dots<CR><LF>
+last
+mime: From: alice@example.com<CR><LF>
+To: bob@example.org<CR><LF>
+Subject: Hi there<CR><LF>
+Date: Mon, 02 Jan 2006 15:04:05 +0000<CR><LF>
+MIME-Version: 1.0<CR><LF>
+Content-Type: text/plain; charset=utf-8<CR><LF>
+Content-Transfer-Encoding: 8bit<CR><LF>
+<CR><LF>
+Hello,<LF>
+this is a test.<LF>
+
