@@ -10,6 +10,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **REPL — `tools/repl` (`nurl repl`)** (critic C1). An interactive
+  read-eval-print loop on a process-per-eval model: top-level definitions
+  (`@` functions, `&` FFI, `$` imports, and `:` types / enums / globals)
+  accumulate into a persistent session, while every other line is spliced
+  into a fresh `main`, compiled with `./nurl.sh -O0`, and run — its stdout
+  is echoed back. A new definition is validated by a fast `build/nurlc`
+  frontend pass before it joins the session, so a typo never poisons later
+  evaluations. Line editing + history come from `std/term.nu` (the B10
+  work); on a non-tty (pipe / script) it falls back to plain buffered
+  reads. All REPL chrome — prompts, acks, errors, `:help` — goes to
+  stderr, so stdout carries only the evaluated program's output. Meta-
+  commands: `:help`/`:h`, `:quit`/`:q`, `:defs`, `:reset`, `:save FILE`.
+  Multi-line definitions are read until brackets balance. Build with
+  `./tools/repl/build.sh`; smoke-tested by `compiler/tests/repl_smoke.sh`
+  (definitions + globals persist across lines, a bad definition is
+  isolated, stdout stays clean). Note: process-per-eval re-initialises a
+  `:` global on every evaluation — definitions and pure functions persist,
+  but mutation does not accumulate across lines.
+
 - **Bitset — `stdlib/std/bitset.nu`** (critic B18, collections round-out).
   A fixed-size bit array over 64-bit limbs: `bitset_set` / `bitset_clear`
   / `bitset_flip` / `bitset_test` (all bounds-checked, so the unused high
