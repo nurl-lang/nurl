@@ -10,6 +10,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **B-tree ordered map — `stdlib/std/btree.nu`** (critic B18). A
+  `BTree [K V]` with O(log n) insert / lookup / delete, replacing the
+  array-shift backing for large ordered maps. Classic CLRS proactive
+  split-on-descent and borrow/merge-on-descent (minimum degree 8, so up
+  to 15 keys per node) keep the tree balanced; each node also caches its
+  subtree size, which makes `btree_key_at` / `btree_val_at` order-
+  statistic queries (the *i*-th smallest key) O(log n) too. API:
+  `btree_new` / `btree_len` / `btree_is_empty` / `btree_get` /
+  `btree_contains` / `btree_set` / `btree_remove` / `btree_min_key` /
+  `btree_max_key` / `btree_key_at` / `btree_val_at` / `btree_each` /
+  `btree_free` / `btree_free_with`. Nodes are raw 6-slot blocks with
+  typed-pointer access (the same generic-container pattern as
+  `std/set.nu`). Lock: `compiler/tests/btree_basic.nu` — a 2000-key
+  scrambled fill with replace, remove-every-third churn, order-statistic
+  and ascending-iteration checks, and full drain; ASan+UBSan+LSan clean.
+
+- **Terminal control — `stdlib/std/term.nu`** (critic B10). The
+  prerequisite for a REPL and TUI examples: POSIX termios raw mode
+  (`term_raw_enable` / `term_raw_disable`, with `struct termios` sized
+  via `nurl_native_sizeof` so the platform layout never leaks into NURL),
+  `term_is_tty`, a full set of byte-exact ANSI builders (`ansi_reset` /
+  `ansi_sgr` / `ansi_fg` / `ansi_bg` / `ansi_clear` / `ansi_clear_line` /
+  `ansi_cursor_to` / `ansi_cursor_up`/`down`/`right`/`left`), and a
+  minimal raw-mode line editor (`term_read_line`) with printable insert,
+  backspace, ←/→, ↑/↓ history, Ctrl-A/E/K, and a clean not-a-tty None
+  fallback. Adds `TCSANOW` / `TCSAFLUSH` to the runtime's
+  `nurl_native_constant` table (POSIX-only; Win32/WASI return None from
+  raw mode while the ANSI builders still work — Windows Terminal speaks
+  VT). Lock: `compiler/tests/term_basic.nu` — the tty-independent surface
+  (None on a file fd, byte-exact ANSI hex); ASan+UBSan+LSan clean.
+
+- **ZIP archives — `stdlib/ext/zip.nu`** (critic B15). A reader and
+  writer for the ZIP format over the existing zlib FFI. Writer: `zip_new`
+  / `zip_add` (raw-deflate, windowBits −15, falling back to *store* when
+  deflate would not shrink the entry) / `zip_add_stored` / `zip_finish`,
+  emitting local headers, the central directory, and the EOCD with a
+  fixed DOS timestamp so archives are byte-deterministic. Reader:
+  `zip_open` (backward EOCD scan over the comment window, with zip64
+  rejected as unsupported) / `zip_count` / `zip_name_at` / `zip_size_at`
+  / `zip_extract` / `zip_extract_name` / `zip_close`, every extraction
+  CRC-32-validated. Lock: `compiler/tests/zip_basic.nu` — build (deflate
+  + store + a compressible 5000-byte entry), re-open, CRC-checked extract
+  of each entry, by-name extraction, missing-name and junk-archive
+  rejection; cross-checked against system `unzip -t`; ASan+UBSan+LSan
+  clean.
+
+- **SMTP client — `stdlib/ext/smtp.nu`** (critic B17). A mail-submission
+  client over the runtime's client-side TCP/TLS connect: `smtp_connect` /
+  `smtp_connect_tls`, EHLO capability discovery (`smtp_ehlo` /
+  `smtp_has_cap`), `smtp_starttls` (RFC 3207 — upgrades the live
+  plaintext fd to TLS and re-EHLOs), `smtp_auth_plain` / `smtp_auth_login`
+  (RFC 4954), the `smtp_mail_from` / `smtp_rcpt_to` / `smtp_data`
+  envelope (DATA dot-stuffs and terminates per RFC 5321 §4.5.2),
+  `smtp_quit` / `smtp_close`, plus a minimal RFC 5322 MIME builder
+  (`mime_build`), `smtp_dotstuff`, and `smtp_date_now`. STARTTLS needs to
+  upgrade an already-open fd, which the existing connect primitives could
+  not do, so this adds `nurl_tcp_starttls` to the runtime — the
+  client-handshake half of `nurl_tcp_connect_tls` applied in place. Lock:
+  `compiler/tests/smtp_basic.nu` — the offline surface (multiline reply
+  scanner/parser, AUTH PLAIN/LOGIN base64 tokens, dot-stuffing, MIME),
+  ASan+UBSan+LSan clean; `examples/smtp_send.nu` demonstrates the live
+  STARTTLS submission flow.
+
 - **Unix domain sockets — `stdlib/std/unixsock.nu`** (critic B9). The
   local-IPC sibling of `std/net.nu`'s TCP, same API shape but a
   filesystem path instead of host:port — for Postgres-over-socket,

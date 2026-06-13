@@ -1,0 +1,18 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+file_is_tty=F
+raw_on_file=none
+termios_sized=T
+reset=1b5b306d
+bold=1b5b316d
+fg196=1b5b33383b353b3139366d
+bg21=1b5b34383b353b32316d
+clear=1b5b324a1b5b48
+clear_line=1b5b324b0d
+cursor_to_5_10=1b5b353b313048
+up3=1b5b3341
+down2=1b5b3242
+right7=1b5b3743
+left1=1b5b3144

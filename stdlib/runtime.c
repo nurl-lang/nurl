@@ -828,6 +828,7 @@ int  poll(void *fds, unsigned long n, int timeout) {
 #  include <sys/wait.h>
 #  include <unistd.h>
 #  include <sys/mman.h>
+#  include <termios.h>
 #endif
 #ifdef NURL_HAVE_ZLIB
 #  include <zlib.h>
@@ -860,6 +861,7 @@ long long nurl_native_sizeof(const char *name) {
 #if !defined(_WIN32) && !defined(__wasi__)
     if (strcmp(name, "struct pollfd")       == 0) return (long long)sizeof(struct pollfd);
     if (strcmp(name, "pid_t")               == 0) return (long long)sizeof(pid_t);
+    if (strcmp(name, "struct termios")      == 0) return (long long)sizeof(struct termios);
 #endif
     if (strcmp(name, "int")                 == 0) return (long long)sizeof(int);
     if (strcmp(name, "long")                == 0) return (long long)sizeof(long);
@@ -943,6 +945,9 @@ long long nurl_native_constant(const char *name) {
     /* AF_UNIX / SOCK_STREAM for stdlib/std/unixsock.nu (local IPC). */
     if (strcmp(name, "AF_UNIX")     == 0) return AF_UNIX;
     if (strcmp(name, "SOCK_STREAM") == 0) return SOCK_STREAM;
+    /* termios actions for stdlib/std/term.nu (raw mode). */
+    if (strcmp(name, "TCSANOW")     == 0) return TCSANOW;
+    if (strcmp(name, "TCSAFLUSH")   == 0) return TCSAFLUSH;
 #endif
     /* CLOCK_* values differ per platform (CLOCK_MONOTONIC is 6 on
      * macOS, 1 elsewhere); wasi-libc spells them as pointer macros. */
@@ -3373,6 +3378,76 @@ long long nurl_tcp_connect_tls(const char *host, long long port,
     h->ssl_ctx  = ctx;
     h->err_kind = NURL_NET_ERR_OK;
     return ch;
+#endif
+}
+
+/* In-place TLS upgrade of an already-connected plaintext CONN handle —
+ * the STARTTLS pattern (SMTP RFC 3207, IMAP, POP3, XMPP, FTP). The
+ * caller has dialed plaintext with nurl_tcp_connect, exchanged the
+ * protocol's pre-TLS greeting (e.g. EHLO + STARTTLS, read the 220), and
+ * now drives the client handshake over the SAME fd. On success the
+ * handle becomes a TLS conn (read/write dispatch via libssl from here
+ * on); on failure the fd is closed and err_kind is set, exactly like a
+ * failed nurl_tcp_connect_tls. Returns the same handle (as i64) so the
+ * caller re-reads err_kind. `host` drives SNI + (when verify) hostname
+ * verification. A no-op error if the handle is already TLS. */
+long long nurl_tcp_starttls(long long conn, const char *host,
+                            long long verify) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)conn;
+    if (!h) return conn;
+#ifndef NURL_HAVE_OPENSSL
+    (void)host; (void)verify;
+    h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+    return conn;
+#else
+    if (h->ssl) {                       /* already secured — refuse */
+        h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+        return conn;
+    }
+    if (h->fd == NURL_INVALID_SOCK) {
+        h->err_kind = NURL_NET_ERR_CLOSED;
+        return conn;
+    }
+
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    if (!ctx) {
+        nurl_close_sock(h->fd); h->fd = NURL_INVALID_SOCK;
+        h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+        return conn;
+    }
+    SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+    if (verify) {
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+        SSL_CTX_set_default_verify_paths(ctx);
+    } else {
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
+    }
+
+    SSL *ssl = SSL_new(ctx);
+    if (!ssl) {
+        SSL_CTX_free(ctx);
+        nurl_close_sock(h->fd); h->fd = NURL_INVALID_SOCK;
+        h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
+        return conn;
+    }
+    if (host && *host) {
+        SSL_set_tlsext_host_name(ssl, host);
+        if (verify) SSL_set1_host(ssl, host);
+    }
+    SSL_set_fd(ssl, (int)h->fd);
+
+    if (SSL_connect(ssl) != 1) {
+        SSL_free(ssl);
+        SSL_CTX_free(ctx);
+        nurl_close_sock(h->fd); h->fd = NURL_INVALID_SOCK;
+        h->err_kind = NURL_NET_ERR_TLS_HANDSHAKE;
+        return conn;
+    }
+
+    h->ssl      = ssl;
+    h->ssl_ctx  = ctx;
+    h->err_kind = NURL_NET_ERR_OK;
+    return conn;
 #endif
 }
 
