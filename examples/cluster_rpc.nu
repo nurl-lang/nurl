@@ -66,12 +66,26 @@ $ `stdlib/ext/cluster.nu`
 }
 
 // ── Client: scatter 1..10 across the peers, gather the sum ────────────
+//
+// Each peer gets its own CircuitBreaker (open after 2 consecutive
+// failures, 2s cooldown). A dead peer trips its breaker after two slow
+// retried failures; every later task routed to it then fails FAST with
+// ClCircuitOpen instead of burning the full retry+backoff budget.
 @ run_client ( Vec i ) ports → i {
     : i npeers ( vec_len [i] ports )
     ? == npeers 0 {
         ( nurl_print `client: no peer ports given\n` )
         ^ 1
     } {}
+
+    // One breaker per peer.
+    : ( Vec CircuitBreaker ) breakers ( vec_new [CircuitBreaker] )
+    : ~ i bi 0
+    ~ < bi npeers {
+        ( vec_push [CircuitBreaker] breakers ( cb_new 2 2000 ) )
+        = bi + bi 1
+    }
+    : RetryPolicy pol ( retry_default )
 
     : ~ i sum 0
     : ~ i ok 0
@@ -80,9 +94,11 @@ $ `stdlib/ext/cluster.nu`
         // round-robin task → peer
         : i pidx % - task 1 npeers
         : i port ?? ( vec_get [i] ports pidx ) { T p → p F → 0 }
+        : CircuitBreaker cb ?? ( vec_get [CircuitBreaker] breakers pidx )
+        { T c → c F → ( cb_new 1 0 ) }
         : Node n ( node_new `127.0.0.1` port )
 
-        : !Json ClusterErr rr ( call_remote n `square` ( json_int task ) )
+        : !Json ClusterErr rr ( call_remote_cb n `square` ( json_int task ) pol cb )
         ?? rr {
             T result → {
                 : i v ( json_as_int result )
@@ -121,6 +137,9 @@ $ `stdlib/ext/cluster.nu`
     ( string_push_char summary 10 )
     ( nurl_print ( string_data summary ) )
     ( string_free summary )
+
+    ( vec_free_with [CircuitBreaker] breakers
+    \ CircuitBreaker c → v { ( cb_free c ) } )
     ^ 0
 }
 
