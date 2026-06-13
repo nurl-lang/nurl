@@ -10,6 +10,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Bitset — `stdlib/std/bitset.nu`** (critic B18, collections round-out).
+  A fixed-size bit array over 64-bit limbs: `bitset_set` / `bitset_clear`
+  / `bitset_flip` / `bitset_test` (all bounds-checked, so the unused high
+  bits of the last limb stay clear), `bitset_set_all` / `bitset_clear_all`,
+  a popcount-backed `bitset_count`, `bitset_any` / `bitset_all` /
+  `bitset_none`, the in-place combiners `bitset_and_with` / `bitset_or_with`
+  / `bitset_xor_with`, `bitset_clone`, and an ascending `bitset_each_set`.
+  Storage is a flat `nurl_zalloc` word buffer peeked/poked by limb. NURL
+  has no native XOR or NOT operator, so the module uses the exact,
+  carry-free identities `a ^ b = (a|b) - (a&b)` and `~m = -1 - m`. Lock:
+  `compiler/tests/bitset_basic.nu` — cross-limb set/clear/flip, out-of-
+  range no-ops, popcount, `all()` on a full set, the three combiners with
+  an XOR-identity bit check, and clone independence; ASan+UBSan+LSan clean.
+
+- **LRU cache — `stdlib/std/lru.nu`** (critic B18, collections round-out).
+  A fixed-capacity `LruCache [V]` over string keys, backed by a HashMap
+  (key → slot) plus an intrusive doubly-linked recency list over
+  preallocated slot arrays with a free list — so `lru_get` / `lru_put` /
+  `lru_contains` / `lru_remove` are all O(1) and a cache at capacity does
+  no further allocation. `lru_get` moves the key to MRU; `lru_peek` does
+  not; `lru_put` returns the displaced value (replaced or evicted), owned;
+  `lru_each` walks MRU→LRU; `lru_free_with` drops each value on teardown
+  (the owned-element discipline the deque/heap work established). The map's
+  hash/eq closures are non-capturing, so they allocate nothing per call.
+  Lock: `compiler/tests/lru_basic.nu` — eviction order, get-as-touch
+  survival, peek-without-reorder, replace-returns-old, remove, the MRU→LRU
+  walk, and the owned-String `free_with` path; ASan+UBSan+LSan clean. With
+  the B-tree and bitset, this **closes critic B18**.
+
 - **B-tree ordered map — `stdlib/std/btree.nu`** (critic B18). A
   `BTree [K V]` with O(log n) insert / lookup / delete, replacing the
   array-shift backing for large ordered maps. Classic CLRS proactive
