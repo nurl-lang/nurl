@@ -48,8 +48,11 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get
 }
 
 @ env_arg i idx → String {
+    // nurl_argv_get returns a strdup'd heap copy the caller OWNS;
+    // string_from copies the bytes, so free the raw cstr afterwards.
     : s raw ( nurl_argv_get idx )
     : String out ( string_from raw )
+    ( nurl_free raw )
     ^ out
 }
 
@@ -60,6 +63,7 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get
     ~ < i n {
         : s raw ( nurl_argv_get i )
         ( vec_push [String] out ( string_from raw ) )
+        ( nurl_free raw )
         = i + i 1
     }
     ^ out
