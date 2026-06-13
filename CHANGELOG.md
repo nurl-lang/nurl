@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`nurlpkg test` — user-facing test runner** (critic C3). Ships the
+  compiler suite's per-test pattern as a tool: `nurlpkg test` discovers
+  `tests/*.nu`, compiles and runs each, and reports `PASS`/`FAIL` with a
+  summary (exit 0 iff every test passes). A test passes on exit 0; if a
+  `tests/outputs/<name>.txt` golden exists, the program's stdout must
+  match it byte-for-byte instead. Tests run in sorted order for
+  determinism. The build driver is `./nurl.sh` by default, overridable
+  via `$NURL_CC` (a command taking `<flags> <src> <outbin>`) for an
+  installed toolchain. Smoke-tested by
+  `compiler/tests/nurlpkg_test_smoke.sh` (all four verdict paths +
+  all-pass/any-fail exit codes + the empty-tree message).
+
 - **REPL — `tools/repl` (`nurl repl`)** (critic C1). An interactive
   read-eval-print loop on a process-per-eval model: top-level definitions
   (`@` functions, `&` FFI, `$` imports, and `:` types / enums / globals)

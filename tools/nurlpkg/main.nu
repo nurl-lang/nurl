@@ -34,6 +34,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/cmp.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/sort.nu`
+$ `stdlib/std/process.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/manifest.nu`
 $ `stdlib/ext/lockfile.nu`
@@ -168,6 +169,7 @@ $ `stdlib/std/bytes.nu`
     ( nurl_print `                         Add a dependency entry to nurl.toml.\n` )
     ( nurl_print `  nurlpkg remove <name>  Delete a dependency entry from nurl.toml.\n` )
     ( nurl_print `  nurlpkg verify         Check deps/ matches nurl.lock (names + versions); exit 1 if drift.\n` )
+    ( nurl_print `  nurlpkg test           Build + run every tests/*.nu (exit 0 = pass; optional tests/outputs/ goldens).\n` )
     ( nurl_print `  nurlpkg version        Print the nurlpkg version.\n` )
     ( nurl_print `  nurlpkg help           Show this message.\n` )
 }
@@ -1669,6 +1671,154 @@ $ `stdlib/std/bytes.nu`
     ^ rc
 }
 
+// ── test runner (C3) ──────────────────────────────────────────────
+//
+// `nurlpkg test` ships the compiler-suite pattern as a user-facing tool:
+// every `tests/*.nu` is compiled and run; exit 0 = pass. If
+// `tests/outputs/<name>.txt` exists, its bytes must match the program's
+// stdout exactly (a golden); otherwise the exit code alone decides.
+//
+// The build driver is `./nurl.sh` by default; override with $NURL_CC
+// (a command taking `<flags> <src> <outbin>`), e.g. a wrapper around an
+// installed `nurl`. Test binaries land in /tmp.
+
+@ __test_basename s path → String {
+    : i n ( nurl_str_len path )
+    : ~ i start 0
+    : ~ i k 0
+    ~ < k n { ? == ( nurl_str_get path k ) 47 { = start + k 1 } {} = k + k 1 }   // '/'
+    : ~ i end n
+    ? & >= - n start 3 & == ( nurl_str_get path - n 3 ) 46 & == ( nurl_str_get path - n 2 ) 110 == ( nurl_str_get path - n 1 ) 117 { = end - n 3 } {}   // ".nu"
+    : String out ( string_with_cap + - end start 1 )
+    = k start
+    ~ < k end { ( string_push_char out ( nurl_str_get path k ) ) = k + k 1 }
+    ^ out
+}
+
+@ __test_driver → String {
+    ^ ?? ( env_get `NURL_CC` ) {
+        T v → v
+        F _ → { : String d ( string_with_cap 16 ) ( string_push_str d `./nurl.sh` ) d }
+    }
+}
+
+@ __test_report String name s status s detail → v {
+    ( nurl_print `  ` ) ( nurl_print status ) ( nurl_print ` ` ) ( nurl_print ( string_data name ) )
+    ? > ( nurl_str_len detail ) 0 { ( nurl_print ` ` ) ( nurl_print detail ) } {}
+    ( nurl_print `\n` )
+}
+
+// True iff the golden file's bytes equal stdout[0..outlen).
+@ __golden_match s goldp s out i outlen → b {
+    : ~ b ok F
+    ?? ( read_file goldp ) {
+        T g → {
+            ? == ( string_len g ) outlen { = ok == ( memcmp ( string_data g ) out outlen ) 0 } {}
+            ( string_free g )
+        }
+        F _ → {}
+    }
+    ^ ok
+}
+
+// Compile + run one test. Returns 0 on pass.
+@ __run_one s src s driver → i {
+    : String name ( __test_basename src )
+    : String bin ( string_with_cap 64 )
+    ( string_push_str bin `/tmp/nurlpkg_test_` )
+    ( string_push_str bin ( string_data name ) )
+
+    : String ccmd ( string_with_cap 128 )
+    ( string_push_str ccmd driver )
+    ( string_push_str ccmd ` -O0 ` )
+    ( string_push_str ccmd src )
+    ( string_push_char ccmd 32 )
+    ( string_push_str ccmd ( string_data bin ) )
+
+    : ~ i result 1
+    : ~ b compiled F
+    ?? ( process_run_shell ( string_data ccmd ) ) {
+        T out → {
+            ? ( output_success out ) { = compiled T } {
+                ( __test_report name `FAIL` `(compile error)` )
+                ( nurl_eprint ( output_stderr out ) )
+            }
+            ( output_free out )
+        }
+        F _ → { ( __test_report name `FAIL` `(could not launch compiler)` ) }
+    }
+    ( string_free ccmd )
+
+    ? compiled {
+        ?? ( process_run_shell ( string_data bin ) ) {
+            T out → {
+                : i ec ( output_exit_code out )
+                : String goldp ( string_with_cap 64 )
+                ( string_push_str goldp `tests/outputs/` )
+                ( string_push_str goldp ( string_data name ) )
+                ( string_push_str goldp `.txt` )
+                ? ( file_exists ( string_data goldp ) ) {
+                    ? ( __golden_match ( string_data goldp ) ( output_stdout out ) ( output_stdout_len out ) ) {
+                        ( __test_report name `PASS` `` ) = result 0
+                    } {
+                        ( __test_report name `FAIL` `(output mismatch)` )
+                    }
+                } {
+                    ? == ec 0 { ( __test_report name `PASS` `` ) = result 0 } { ( __test_report name `FAIL` `(nonzero exit)` ) }
+                }
+                ( string_free goldp )
+                ( output_free out )
+            }
+            F _ → { ( __test_report name `FAIL` `(could not run)` ) }
+        }
+    } {}
+
+    ( string_free bin )
+    ( string_free name )
+    ^ result
+}
+
+// Owns `files` (the fs_glob result): runs each, frees them, reports.
+@ __run_tests ( Vec String ) files → i {
+    : ( @ i String String ) cs \ String a String b → i { ^ ( cmp_string a b ) }
+    ( sort_by [String] files cs )
+    : String driver ( __test_driver )
+    : ~ i pass 0
+    : ~ i fail 0
+    : ~ i k 0
+    ~ < k ( vec_len [String] files ) {
+        ?? ( vec_get [String] files k ) {
+            T src → {
+                ? == ( __run_one ( string_data src ) ( string_data driver ) ) 0 { = pass + pass 1 } { = fail + fail 1 }
+                ( string_free src )
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free [String] files )
+    ( string_free driver )
+    ( nurl_print `\n` )
+    ( nurl_print `PASS ` ) ( nurl_print ( nurl_str_int pass ) )
+    ( nurl_print ` · FAIL ` ) ( nurl_print ( nurl_str_int fail ) ) ( nurl_print `\n` )
+    ^ ? == fail 0 0 1
+}
+
+@ __cmd_test → i {
+    ^ ?? ( fs_glob `tests/*.nu` ) {
+        F _ → { ( nurl_eprintln `nurlpkg: no tests/ directory (expected tests/*.nu)` ) 1 }
+        T files → {
+            ? == ( vec_len [String] files ) 0 {
+                ( nurl_eprintln `nurlpkg: no tests found (expected tests/*.nu)` )
+                ( vec_free [String] files )
+                1
+            } {
+                ( __run_tests files )
+            }
+        }
+    }
+}
+
 // ── dispatch ─────────────────────────────────────────────────────
 
 @ main → i {
@@ -1797,6 +1947,10 @@ $ `stdlib/std/bytes.nu`
     ? != 0 ( nurl_str_eq s_sub `verify` ) {
         ( string_free sub )
         ^ ( __cmd_verify )
+    } {}
+    ? != 0 ( nurl_str_eq s_sub `test` ) {
+        ( string_free sub )
+        ^ ( __cmd_test )
     } {}
     ? != 0 ( nurl_str_eq s_sub `version` ) {
         ( string_free sub )
