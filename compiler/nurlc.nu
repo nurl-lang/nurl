@@ -11044,18 +11044,55 @@
     result
 }
 
+// __tok_src_text: faithful SOURCE text of the current token, for
+// reconstructing a generic template that will be re-lexed at each
+// instantiation. `nurl_lex_val` strips a string literal's surrounding
+// backticks AND decodes its escapes, so a naive reconstruction turns
+// `` `ok` `` into the bare identifier `ok` (which then fails to resolve in
+// the monomorphised body). Re-wrap TT_STR in backticks and re-introduce
+// the four escapes the lexer recognises (\n \t \r \\). A literal backtick
+// cannot occur in the decoded content — it terminates the string — so it
+// needs no escaping. Every other token type re-lexes verbatim from its val.
+@ __tok_src_text i lex → s {
+    : i tt ( nurl_lex_type lex )
+    : s val ( nurl_lex_val lex )
+    ? != tt TT_STR { ^ val } {}
+    : i n ( nurl_str_len val )
+    // Worst case: every byte escapes to two, plus two backticks + NUL.
+    : s buf # s ( malloc + + * n 2 2 1 )
+    : *u bp # *u buf
+    : *u vp # *u val
+    : ~ i blen 0
+    = . bp blen # u 96  = blen + blen 1          // opening `
+    : ~ i k 0
+    ~ < k n {
+        : i ch # i . vp k
+        ? == ch 10 { = . bp blen # u 92 = blen + blen 1 = . bp blen # u 110 = blen + blen 1 } {
+        ? == ch 9  { = . bp blen # u 92 = blen + blen 1 = . bp blen # u 116 = blen + blen 1 } {
+        ? == ch 13 { = . bp blen # u 92 = blen + blen 1 = . bp blen # u 114 = blen + blen 1 } {
+        ? == ch 92 { = . bp blen # u 92 = blen + blen 1 = . bp blen # u 92  = blen + blen 1 } {
+            = . bp blen # u ch = blen + blen 1
+        } } } }
+        = k + k 1
+    }
+    = . bp blen # u 96  = blen + blen 1          // closing `
+    = . bp blen # u 0
+    ^ buf
+}
+
 // collect_fn_body: collect tokens from current '{' through matching '}'.
-// Returns space-separated token text. String literals lack their backtick
-// delimiters and will not re-lex correctly; avoid them in generic bodies.
+// Returns space-separated, source-faithful token text (string literals
+// keep their backticks via __tok_src_text), so the result re-lexes to the
+// identical token stream — safe for generic template bodies.
 @ collect_fn_body i lex → s {
-    : ~ s result ( nurl_str_cat ( nurl_lex_val lex ) ` ` )
+    : ~ s result ( nurl_str_cat ( __tok_src_text lex ) ` ` )
     ( nurl_lex_advance lex )
     : ~ i depth 1
     ~ != depth 0 {
         : i tt2 ( nurl_lex_type lex )
         ? == tt2 TT_LBRACE { = depth + depth 1 } {}
         ? == tt2 TT_RBRACE { = depth - depth 1 } {}
-        = result ( nurl_str_cat result ( nurl_str_cat ( nurl_lex_val lex ) ` ` ) )
+        = result ( nurl_str_cat result ( nurl_str_cat ( __tok_src_text lex ) ` ` ) )
         ( nurl_lex_advance lex )
     }
     result
@@ -11171,7 +11208,7 @@
     // Collect params/return/body tokens until EOF
     : ~ s src ``
     ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF {
-        = src ( nurl_str_cat src ( nurl_str_cat ( nurl_lex_val lex ) ` ` ) )
+        = src ( nurl_str_cat src ( nurl_str_cat ( __tok_src_text lex ) ` ` ) )
         ( nurl_lex_advance lex )
     }
     ? != ( nurl_lex_type lex ) TT_EOF
