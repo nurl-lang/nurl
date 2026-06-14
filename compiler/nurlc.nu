@@ -3976,6 +3976,25 @@
     ^ res
 }
 
+// The arg_idx-th entry of a `;`-joined param-type-source list (empty when
+// out of range).
+@ __ptypes_nth s lst i idx → s {
+    : ~ s cur lst
+    : ~ i k 0
+    ~ < k idx { = cur ( seplist_rest cur ) = k + k 1 }
+    ^ ( seplist_first cur )
+}
+
+// A one-level pointer-depth mismatch on an identical base — `%X` vs `%X*`
+// (or `i8` vs `i8*`). This is exactly the "passed `*T` where a `T` value is
+// expected, or vice versa" miscompile class (the dchannel / SWIM family);
+// it has zero false positives because the bases must be byte-identical
+// apart from the single trailing `*`.
+@ __arg_ptr_depth_mismatch s at s pt → b {
+    ? | == 0 ( nurl_str_len at ) == 0 ( nurl_str_len pt ) { ^ F } {}
+    ^ | ( seq at ( nurl_str_cat pt `*` ) ) ( seq pt ( nurl_str_cat at `*` ) )
+}
+
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
@@ -4315,6 +4334,32 @@
         ? & == arg_idx 0 ( seq fname `string_len` )
         { ? ( seq at `i8*` )
             { ( die lex `string_len expects %String, got 'i8*' (raw C-string). Use 'nurl_str_len' for raw C-string pointers.` ) }
+            {} }
+        {}
+        // General pointer-vs-value argument check. For a non-generic @-fn
+        // call (call_name == fname), compare this by-value argument's LLVM
+        // type against the declared parameter type (recorded as source in
+        // the pre-pass). Only a one-level pointer-depth mismatch on an
+        // identical base is flagged — `*T` passed where a `T` value is
+        // expected, or vice versa — the silent-miscompile class behind the
+        // dchannel / SWIM bugs. `inout` args legitimately pass `<T>*` and
+        // are skipped; generic callees (call_name ≠ fname) carry tparam
+        // sources and are skipped too.
+        ? & & ( seq call_name fname ) ! is_inout_arg
+        != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__ptypes_src` ) ) )
+        { : s __psrc ( __ptypes_nth ( nurl_sym_get syms ( nurl_str_cat fname `__ptypes_src` ) ) arg_idx )
+            : b __at_ptr & > ( nurl_str_len at ) 0
+            == ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42
+            : b __ps_ptr & > ( nurl_str_len __psrc ) 0 == ( nurl_str_get __psrc 0 ) 42
+            ? & != 0 ( nurl_str_len __psrc ) | __at_ptr __ps_ptr
+            { : i __plx ( nurl_lex_new __psrc `<param>` )
+                : s __pllvm ( parse_type __plx )
+                ? ( __arg_ptr_depth_mismatch at __pllvm )
+                { ( die lex ( nurl_str_cat3
+                    ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                    ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
+                    `' — pointer-vs-value mismatch (a '*T' was passed where a 'T' value is expected, or vice versa)` ) ) }
+                {} }
             {} }
         {}
         // Escape analysis (docs/MEMORY.md §2.3). If this
@@ -14329,6 +14374,11 @@
                                 : ~ b saw_inout F
                                 : ~ i pcount 0
                                 : ~ b pc_ok T
+                                // Per-parameter type SOURCE spans (`;`-joined),
+                                // captured here in the pre-pass so a forward call
+                                // can be argument-type-checked. Parsing to LLVM is
+                                // deferred to the call site (types resolved there).
+                                : ~ s ptypes_src ``
                                 ~ & & pc_ok != ( nurl_lex_type lex ) TT_ARROW
                                 != ( nurl_lex_type lex ) TT_EOF
                                 { ? & ( is_ident_tok ( nurl_lex_type lex ) )
@@ -14337,9 +14387,14 @@
                                         { = saw_inout T } {}
                                         ( nurl_lex_advance lex ) }
                                     {}
+                                    : i __pty_s ( nurl_lex_cur_start lex )
                                     ? == 0 ( scan_skip_type lex )
                                     { = pc_ok F }
-                                    { ? ( is_ident_tok ( nurl_lex_type lex ) )
+                                    { : i __pty_e ( nurl_lex_cur_start lex )
+                                        : s __pty ( nurl_lex_src_slice lex __pty_s - __pty_e __pty_s )
+                                        = ptypes_src ? == 0 ( nurl_str_len ptypes_src )
+                                        __pty ( nurl_str_cat3 ptypes_src `;` __pty )
+                                        ? ( is_ident_tok ( nurl_lex_type lex ) )
                                         { : s pnm ( nurl_lex_val lex )
                                             ( nurl_lex_advance lex )
                                             ( nurl_sym_def syms ( __kw_key fname `pn` pcount ) pnm )
@@ -14368,6 +14423,7 @@
                                 {}
                                 ? pc_ok
                                 { ( nurl_sym_def syms ( nurl_str_cat fname `__kw_n` ) ( nurl_str_int pcount ) )
+                                    ( nurl_sym_def syms ( nurl_str_cat fname `__ptypes_src` ) ptypes_src )
                                     : s ar_key ( nurl_str_cat fname `__arity` )
                                     : s ar_prev ( nurl_sym_get syms ar_key )
                                     : s ar_new ( nurl_str_int pcount )
