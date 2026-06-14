@@ -10,5 +10,10 @@ forward dest pk split: YES
 forward payload split: YES
 deliver type: YES
 deliver src pk split: YES
+gjoin type: YES
+gjoin body == gid: YES
+gsend type: YES
+gsend gid split: YES
+gsend payload split: YES
 incomplete → None: YES
 oversize → None: YES

@@ -76,6 +76,34 @@ $ `stdlib/net/relay.nu`
         F → ( nurl_print `deliver parse failed\n` )
     }
 
+    // ── GROUP JOIN / SEND ────────────────────────────────────────
+    : ( Vec u ) gid ( bytes 200 32 )      // a 32-byte group id
+    : ( Vec u ) gj ( relay_build_group_join gid )
+    : ?RelayFrame fj ( relay_parse gj )
+    ?? fj {
+        T f → {
+            ( pb `gjoin type: ` == . f ftype ( relay_gjoin ) )
+            ( pb `gjoin body == gid: ` ( veq . f body gid ) )
+            ( relay_frame_free f )
+        }
+        F → ( nurl_print `gjoin parse failed\n` )
+    }
+
+    : ( Vec u ) gs ( relay_build_group_send gid data )
+    : ?RelayFrame fg ( relay_parse gs )
+    ?? fg {
+        T f → {
+            ( pb `gsend type: ` == . f ftype ( relay_gsend ) )
+            : ( Vec u ) ggid ( relay_body_pk . f body )
+            : ( Vec u ) gpl ( relay_body_payload . f body )
+            ( pb `gsend gid split: ` ( veq ggid gid ) )
+            ( pb `gsend payload split: ` ( veq gpl data ) )
+            ( vec_free [u] ggid ) ( vec_free [u] gpl )
+            ( relay_frame_free f )
+        }
+        F → ( nurl_print `gsend parse failed\n` )
+    }
+
     // ── incomplete buffer ────────────────────────────────────────
     : ( Vec u ) partial ( vec_new [u] )
     ( vec_push [u] partial # u 2 )                    // type
@@ -90,6 +118,7 @@ $ `stdlib/net/relay.nu`
 
     ( vec_free [u] pk ) ( vec_free [u] data )
     ( vec_free [u] reg ) ( vec_free [u] fwd ) ( vec_free [u] del )
+    ( vec_free [u] gid ) ( vec_free [u] gj ) ( vec_free [u] gs )
     ( vec_free [u] partial ) ( vec_free [u] huge )
     ^ 0
 }

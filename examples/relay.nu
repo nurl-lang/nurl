@@ -35,6 +35,7 @@ $ `stdlib/net/relay.nu`
             : *RelayServer p # *RelayServer ( nurl_alloc Z RelayServer )
             = . p lst . rs lst
             = . p clients . rs clients
+            = . p groups . rs groups
             ( nurl_print `relay listening on ` ) ( nurl_print ( string_data host ) )
             ( nurl_print `:` ) ( nurl_print_int port )
             ( relay_server_run p )   // blocks until the listener is closed

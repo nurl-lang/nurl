@@ -17,6 +17,17 @@
 //     type 2 FORWARD   body = dest_pubkey(32) ++ payload  peer → relay
 //     type 3 DELIVER   body = src_pubkey(32)  ++ payload  relay → peer
 //     type 4 KEEPALIVE body = (empty)                     either way
+//     type 5 GJOIN     body = group_id(32)                peer → relay
+//     type 6 GLEAVE    body = group_id(32)                peer → relay
+//     type 7 GSEND     body = group_id(32) ++ payload     peer → relay
+//
+// GROUP MULTICAST (broadcast to your own group): members JOIN a 32-byte
+// group id; a GSEND fans the OPAQUE payload to every other member of that
+// group as an ordinary DELIVER (src = sender's pubkey). One uplink frame,
+// N downlinks — the bandwidth shape mobile audio/broadcast needs, with the
+// relay still dumb (group_id → connection set, no decryption). The payload
+// is whatever the app puts there: a distributed-compute task or an
+// Opus-encoded audio packet, E2E-encrypted with the group key.
 //
 // The frame codec is pure and deterministic (offline-testable). The
 // server/client wrappers add TCP I/O; the per-conn handler runs as a fiber
@@ -36,10 +47,13 @@ $ `stdlib/std/async.nu`
 & `libc` @ nurl_tcp_connect s host i port → i
 
 // ── frame types ──────────────────────────────────────────────────
-@ relay_reg → i { ^ 1 }
-@ relay_fwd → i { ^ 2 }
-@ relay_del → i { ^ 3 }
-@ relay_ka  → i { ^ 4 }
+@ relay_reg    → i { ^ 1 }
+@ relay_fwd    → i { ^ 2 }
+@ relay_del    → i { ^ 3 }
+@ relay_ka     → i { ^ 4 }
+@ relay_gjoin  → i { ^ 5 }
+@ relay_gleave → i { ^ 6 }
+@ relay_gsend  → i { ^ 7 }
 
 @ __relay_max → i { ^ 131072 }   // reject frames larger than this (DoS guard)
 
@@ -96,6 +110,10 @@ $ `stdlib/std/async.nu`
 }
 @ relay_build_forward ( Vec u ) dest_pk ( Vec u ) payload → ( Vec u ) { ^ ( __frame_addressed ( relay_fwd ) dest_pk payload ) }
 @ relay_build_deliver ( Vec u ) src_pk ( Vec u ) payload → ( Vec u ) { ^ ( __frame_addressed ( relay_del ) src_pk payload ) }
+
+@ relay_build_group_join  ( Vec u ) group_id → ( Vec u ) { ^ ( __frame ( relay_gjoin ) group_id ) }
+@ relay_build_group_leave ( Vec u ) group_id → ( Vec u ) { ^ ( __frame ( relay_gleave ) group_id ) }
+@ relay_build_group_send  ( Vec u ) group_id ( Vec u ) payload → ( Vec u ) { ^ ( __frame_addressed ( relay_gsend ) group_id payload ) }
 
 // First 32 bytes of a FORWARD/DELIVER body = the peer pubkey.
 @ relay_body_pk ( Vec u ) body → ( Vec u ) {
@@ -180,15 +198,21 @@ $ `stdlib/std/async.nu`
     i sending    // 1 = a forward write to this conn is in flight (write lock)
 }
 
+: GroupEntry {
+    ( Vec u ) gid       // 32-byte group id
+    ( Vec s ) members   // *RelayEntry, NON-owning (entries owned via clients)
+}
+
 : RelayServer {
     TcpListener lst
     ( Vec s ) clients   // *RelayEntry
+    ( Vec s ) groups    // *GroupEntry
 }
 
 @ relay_server_start s host i port → !RelayServer NetErr {
     : !TcpListener NetErr lr ( tcp_listen host port )
     : !RelayServer NetErr out ?? lr {
-        T l → @ !RelayServer NetErr { T @ RelayServer { l ( vec_new [s] ) } }
+        T l → @ !RelayServer NetErr { T @ RelayServer { l ( vec_new [s] ) ( vec_new [s] ) } }
         F e → @ !RelayServer NetErr { F e }
     }
     ^ out
@@ -230,6 +254,102 @@ $ `stdlib/std/async.nu`
     = . de sending 0
 }
 
+// ── group multicast tables ───────────────────────────────────────
+
+@ __relay_group_find *RelayServer rs ( Vec u ) gid → s {
+    : i n ( vec_len [s] . rs groups )
+    : ~ s found # s 0
+    : ~ i k 0
+    ~ & == # i found 0 < k n {
+        : s pp ?? ( vec_get [s] . rs groups k ) { T x → x F → # s 0 }
+        ? != # i pp 0 {
+            : *GroupEntry g # *GroupEntry pp
+            ? ( __veq . g gid gid ) { = found pp } {}
+        } {}
+        = k + k 1
+    }
+    ^ found
+}
+
+@ __relay_group_ensure *RelayServer rs ( Vec u ) gid → s {
+    : s ex ( __relay_group_find rs gid )
+    ? != # i ex 0 { ^ ex } {}
+    : *GroupEntry g # *GroupEntry ( nurl_alloc Z GroupEntry )
+    = . g gid ( __cpy gid )
+    = . g members ( vec_new [s] )
+    ( vec_push [s] . rs groups # s g )
+    ^ # s g
+}
+
+// Remove an entry pointer from a group's member list (compacting copy).
+@ __grp_remove_member *GroupEntry g s entry_ptr → v {
+    : i n ( vec_len [s] . g members )
+    : ( Vec s ) keep ( vec_new [s] )
+    : ~ i k 0
+    ~ < k n {
+        : s mp ?? ( vec_get [s] . g members k ) { T x → x F → # s 0 }
+        ? != # i mp entry_ptr { ( vec_push [s] keep mp ) } {}
+        = k + k 1
+    }
+    ( vec_free [s] . g members )
+    = . g members keep
+}
+
+@ __relay_group_join *RelayServer rs s entry_ptr ( Vec u ) gid → v {
+    ? == # i entry_ptr 0 { ^ v } {}
+    : s gp ( __relay_group_ensure rs gid )
+    : *GroupEntry g # *GroupEntry gp
+    : i n ( vec_len [s] . g members )
+    : ~ b have F : ~ i k 0
+    ~ & ! have < k n {
+        : s mp ?? ( vec_get [s] . g members k ) { T x → x F → # s 0 }
+        ? == # i mp entry_ptr { = have T } {}
+        = k + k 1
+    }
+    ? ! have { ( vec_push [s] . g members entry_ptr ) } {}
+}
+
+@ __relay_group_leave *RelayServer rs s entry_ptr ( Vec u ) gid → v {
+    : s gp ( __relay_group_find rs gid )
+    ? == # i gp 0 { ^ v } {}
+    : *GroupEntry g # *GroupEntry gp
+    ( __grp_remove_member g entry_ptr )
+}
+
+@ __relay_drop_from_groups *RelayServer rs s entry_ptr → v {
+    : i gn ( vec_len [s] . rs groups )
+    : ~ i gi 0
+    ~ < gi gn {
+        : s gp ?? ( vec_get [s] . rs groups gi ) { T x → x F → # s 0 }
+        ? != # i gp 0 { : *GroupEntry g # *GroupEntry gp ( __grp_remove_member g entry_ptr ) } {}
+        = gi + gi 1
+    }
+}
+
+// Fan an opaque payload to every live member of a group except the sender,
+// as a DELIVER carrying the sender's pubkey as src. One uplink → N down.
+@ __relay_group_fanout *RelayServer rs s sender_ptr ( Vec u ) gid ( Vec u ) payload → v {
+    ? == # i sender_ptr 0 { ^ v } {}
+    : s gp ( __relay_group_find rs gid )
+    ? == # i gp 0 { ^ v } {}
+    : *GroupEntry g # *GroupEntry gp
+    : *RelayEntry se # *RelayEntry sender_ptr
+    : i n ( vec_len [s] . g members )
+    : ~ i k 0
+    ~ < k n {
+        : s mp ?? ( vec_get [s] . g members k ) { T x → x F → # s 0 }
+        ? & != # i mp 0 != # i mp sender_ptr {
+            : *RelayEntry de # *RelayEntry mp
+            ? == . de live 1 {
+                : ( Vec u ) out ( relay_build_deliver . se pubkey payload )
+                ( __relay_send_locked de out )
+                ( vec_free [u] out )
+            } {}
+        } {}
+        = k + k 1
+    }
+}
+
 @ __relay_handle_conn *RelayServer rs TcpConn c → v {
     : ~ s self_entry # s 0
     : ~ b done F
@@ -257,12 +377,27 @@ $ `stdlib/std/async.nu`
                         ( vec_free [u] pl )
                     } {}
                 } {}
+                ? == ft ( relay_gjoin ) { ( __relay_group_join rs self_entry . f body ) } {}
+                ? == ft ( relay_gleave ) { ( __relay_group_leave rs self_entry . f body ) } {}
+                ? == ft ( relay_gsend ) {
+                    ? != # i self_entry 0 {
+                        : ( Vec u ) gid ( relay_body_pk . f body )
+                        : ( Vec u ) pl ( relay_body_payload . f body )
+                        ( __relay_group_fanout rs self_entry gid pl )
+                        ( vec_free [u] gid )
+                        ( vec_free [u] pl )
+                    } {}
+                } {}
                 ( relay_frame_free f )
             }
             F → { = done T }
         }
     }
-    ? != # i self_entry 0 { : *RelayEntry se # *RelayEntry self_entry = . se live 0 } {}
+    ? != # i self_entry 0 {
+        : *RelayEntry se # *RelayEntry self_entry
+        = . se live 0
+        ( __relay_drop_from_groups rs self_entry )
+    } {}
     ( tcp_close_conn c )
 }
 
@@ -306,6 +441,19 @@ $ `stdlib/std/async.nu`
         = k + k 1
     }
     ( vec_free [s] . rs clients )
+    : i gn ( vec_len [s] . rs groups )
+    : ~ i gi 0
+    ~ < gi gn {
+        : s gp ?? ( vec_get [s] . rs groups gi ) { T x → x F → # s 0 }
+        ? != # i gp 0 {
+            : *GroupEntry g # *GroupEntry gp
+            ( vec_free [u] . g gid )
+            ( vec_free [s] . g members )
+            ( nurl_free # s g )
+        } {}
+        = gi + gi 1
+    }
+    ( vec_free [s] . rs groups )
     ( nurl_free # s rs )
 }
 
@@ -344,6 +492,30 @@ $ `stdlib/std/async.nu`
 
 @ relay_send RelayClient rc ( Vec u ) dest_pk ( Vec u ) payload → !v NetErr {
     : ( Vec u ) f ( relay_build_forward dest_pk payload )
+    : !v NetErr r ( tcp_write_all . rc conn f )
+    ( vec_free [u] f )
+    ^ r
+}
+
+// Join / leave a 32-byte group on the relay (server fans GSEND to members).
+@ relay_group_join RelayClient rc ( Vec u ) group_id → !v NetErr {
+    : ( Vec u ) f ( relay_build_group_join group_id )
+    : !v NetErr r ( tcp_write_all . rc conn f )
+    ( vec_free [u] f )
+    ^ r
+}
+@ relay_group_leave RelayClient rc ( Vec u ) group_id → !v NetErr {
+    : ( Vec u ) f ( relay_build_group_leave group_id )
+    : !v NetErr r ( tcp_write_all . rc conn f )
+    ( vec_free [u] f )
+    ^ r
+}
+
+// Broadcast an opaque payload to every other member of a group. One uplink
+// frame; the relay fans it out. Payload is whatever the app sends — a
+// distributed-compute task or an Opus audio packet (E2E group-key encrypted).
+@ relay_broadcast RelayClient rc ( Vec u ) group_id ( Vec u ) payload → !v NetErr {
+    : ( Vec u ) f ( relay_build_group_send group_id payload )
     : !v NetErr r ( tcp_write_all . rc conn f )
     ( vec_free [u] f )
     ^ r
