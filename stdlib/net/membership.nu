@@ -186,6 +186,24 @@ $ `stdlib/std/lifeguard.nu`
     ^ ( pktable_apply t pk ( pk_alive ) inc now_ns )
 }
 
+// A first-hand observation that a member is alive (we got a direct ack from
+// it). Authoritative for suspect→alive locally without needing a higher
+// incarnation; does NOT revive a dead member (that requires gossip carrying
+// a higher incarnation). Returns T if the member was revived from suspect.
+@ pktable_observe_alive *PkMemberTable t ( Vec u ) pk i now_ns → b {
+    : s pp ( __pk_find t pk )
+    ? == # i pp 0 { ^ F } {}
+    : *PkMember m # *PkMember pp
+    = . m last_ns now_ns
+    ? == . m state 1 {
+        = . m state 0
+        = . m susp_start_ns 0
+        = . m susp_confirms 0
+        ^ T
+    } {}
+    ^ F
+}
+
 // The effective suspicion deadline for a member, with the Lifeguard
 // confirmation scaling AND this node's local-health scaling applied.
 @ __pk_suspicion *PkMemberTable t *PkMember m → Suspicion {
@@ -247,6 +265,23 @@ $ `stdlib/std/lifeguard.nu`
             } {}
         } {}
         = tries + tries 1
+    }
+    ^ out
+}
+
+// Pick up to k alive members (excluding `exclude`) to relay an indirect
+// ping-req through. Returns BORROWED *PkMember pointers into the table.
+@ pktable_pick_relays *PkMemberTable t i k ( Vec u ) exclude → ( Vec s ) {
+    : ( Vec s ) out ( vec_new [s] )
+    : i n ( vec_len [s] . t members )
+    : ~ i idx 0
+    ~ & < idx n < ( vec_len [s] out ) k {
+        : s pp ?? ( vec_get [s] . t members idx ) { T x → x F → # s 0 }
+        ? != # i pp 0 {
+            : *PkMember m # *PkMember pp
+            ? & == . m state 0 ! ( __pk_veq . m pubkey exclude ) { ( vec_push [s] out pp ) } {}
+        } {}
+        = idx + idx 1
     }
     ^ out
 }

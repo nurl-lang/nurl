@@ -1,0 +1,20 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+t=0 emits ping: YES
+ping target is a member: YES
+probing in flight: YES
+direct ack clears probe: YES
+probe cleared: YES
+direct-timeout escalates to ping-req: YES
+ping-req re-targets same member: YES
+ping-req picks a relay: YES
+total-timeout emits no action: YES
+member now suspected: YES
+failed probe bumped LHM: YES
+not dead before scaled ceiling: YES
+dead after scaled ceiling: YES
+roam: escalated to ping-req: YES
+late ack accepted: YES
+member stayed ALIVE across the roam: YES
