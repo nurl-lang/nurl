@@ -58,6 +58,28 @@ $ `stdlib/std/panic.nu`
     }
 }
 
+// Restart strategy (OTP). When a child crashes, which children restart:
+//   OneForOne  — just that child.
+//   OneForAll  — the whole group (all children are terminated + restarted).
+//   RestForOne — that child plus every child started AFTER it (start order).
+: | SupStrategy {
+    OneForOne
+    OneForAll
+    RestForOne
+}
+
+@ sup_strategy_name SupStrategy s → s {
+    ^ ?? s {
+        OneForOne → `one-for-one`
+        OneForAll → `one-for-all`
+        RestForOne → `rest-for-one`
+    }
+}
+
+@ __strategy_code SupStrategy s → i {
+    ^ ?? s { OneForOne → 0  OneForAll → 1  RestForOne → 2 }
+}
+
 : ChildImpl {
     String name
     ( @ v ) start
@@ -73,6 +95,7 @@ $ `stdlib/std/panic.nu`
     i window_ms
     i base_backoff_ms
     i max_backoff_ms
+    i strategy           // SupStrategy code (0/1/2); used by supervisor_start
 }
 
 : Supervisor { s ctl }
@@ -84,7 +107,13 @@ $ `stdlib/std/panic.nu`
     = . sup window_ms window_ms
     = . sup base_backoff_ms 0
     = . sup max_backoff_ms 1000
+    = . sup strategy 0
     ^ @ Supervisor { # s sup }
+}
+
+@ supervisor_set_strategy Supervisor s SupStrategy st → v {
+    : *SupImpl sup # *SupImpl . s ctl
+    = . sup strategy ( __strategy_code st )
 }
 
 // Tune the per-restart backoff (default 0 = restart immediately).
@@ -170,6 +199,106 @@ $ `stdlib/std/panic.nu`
     : *SupImpl sup # *SupImpl . s ctl
     : *ChildImpl child ( __child_at sup idx )
     ( __supervise_loop sup child )
+}
+
+// ── Strategy-driven synchronous group start ──────────────────────────
+//
+// supervisor_start runs all children to a stable state, applying the
+// supervisor's RestartStrategy when one crashes. Each "run" invokes a
+// child's start closure once (under recover); a child that returns is up,
+// a child that panics is down. On a crash the strategy decides which
+// children re-run on the next pass — OneForOne re-runs just the crashed
+// ones, OneForAll the whole group, RestForOne the crashed-and-after. This
+// is the model for supervising finite/startup tasks (init order, batch
+// workers); long-running children use supervisor_run (concurrent fibers).
+// Returns T once the group is stable, F if the restart-intensity cap
+// (max_restarts passes) is exceeded.
+
+// Run child `idx` once under panic recovery. Returns T on clean return,
+// F on a crash (and bumps the child's restart counter).
+@ __run_child_once *SupImpl sup i idx → b {
+    : *ChildImpl child ( __child_at sup idx )
+    : ( @ v ) cl . child start
+    : !v PanicInfo r ( __sup_recover cl )
+    ^ ?? r {
+        T _ → T
+        F pi → {
+            ( panic_info_free pi )
+            = . child restarts + . child restarts 1
+            F
+        }
+    }
+}
+
+@ __min_idx ( Vec i ) v → i {
+    : i n ( vec_len [i] v )
+    : ~ i lo ?? ( vec_get [i] v 0 ) { T x → x  F → 0 }
+    : ~ i k 1
+    ~ < k n {
+        ?? ( vec_get [i] v k ) { T x → ? < x lo { = lo x } {} F → {} }
+        = k + k 1
+    }
+    ^ lo
+}
+
+// The set of children to (re)run next, given the crashed set + strategy.
+@ __next_runset i st ( Vec i ) crashed i n → ( Vec i ) {
+    : ( Vec i ) out ( vec_new [i] )
+    ? == st 1 {                          // OneForAll → whole group
+        : ~ i k 0
+        ~ < k n { ( vec_push [i] out k ) = k + k 1 }
+    } {
+        ? == st 2 {                      // RestForOne → min(crashed)..n
+            : ~ i k ( __min_idx crashed )
+            ~ < k n { ( vec_push [i] out k ) = k + k 1 }
+        } {                              // OneForOne → just the crashed
+            : i cn ( vec_len [i] crashed )
+            : ~ i k 0
+            ~ < k cn {
+                ?? ( vec_get [i] crashed k ) { T x → ( vec_push [i] out x ) F → {} }
+                = k + k 1
+            }
+        }
+    }
+    ^ out
+}
+
+@ supervisor_start Supervisor s → b {
+    : *SupImpl sup # *SupImpl . s ctl
+    : i n ( vec_len [ChildSpec] . sup children )
+
+    : ~ ( Vec i ) runset ( vec_new [i] )
+    : ~ i init 0
+    ~ < init n { ( vec_push [i] runset init ) = init + init 1 }
+
+    : ~ i passes 0
+    : ~ b stable F
+    : ~ b ok T
+    ~ ! stable {
+        : ( Vec i ) crashed ( vec_new [i] )
+        : ~ i ri 0
+        ~ < ri ( vec_len [i] runset ) {
+            : i idx ?? ( vec_get [i] runset ri ) { T x → x  F → 0 }
+            ? ! ( __run_child_once sup idx ) { ( vec_push [i] crashed idx ) } {}
+            = ri + ri 1
+        }
+        ? == ( vec_len [i] crashed ) 0 {
+            = stable T
+        } {
+            = passes + passes 1
+            ? > passes . sup max_restarts {
+                = stable T
+                = ok F
+            } {
+                : ( Vec i ) nxt ( __next_runset . sup strategy crashed n )
+                ( vec_free [i] runset )
+                = runset nxt
+            }
+        }
+        ( vec_free [i] crashed )
+    }
+    ( vec_free [i] runset )
+    ^ ok
 }
 
 // Spawn a supervising fiber per child. Requires runtime_init / runtime_run
