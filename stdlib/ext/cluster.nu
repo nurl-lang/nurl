@@ -70,6 +70,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/rng.nu`
+$ `stdlib/std/trace.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/msgpack.nu`
 $ `stdlib/ext/http.nu`
@@ -306,11 +307,30 @@ $ `stdlib/ext/http_server.nu`
     ^ ( response_json status env )
 }
 
+// Adopt an incoming W3C traceparent (if present) as the current trace, so
+// any call the handler makes propagates the same trace id.
+@ __apply_incoming_trace HttpRequest req → v {
+    : ?String tph ( header_get . req headers `traceparent` )
+    ?? tph {
+        T h → {
+            : TraceParsed p ( traceparent_parse ( string_data h ) )
+            ( string_free h )
+            ? != 0 . p ok { ( trace_set . p trace . p span ) } {}
+        }
+        F h → { ( string_free h ) }
+    }
+}
+
 @ registry_handler Registry r → ( @ HttpResponse HttpRequest ) {
     ^ \ HttpRequest req → HttpResponse {
+        // Save + adopt the incoming trace context; restore it after dispatch
+        // so the worker fiber's trace state doesn't leak between requests.
+        : i __st ( trace_current_trace )
+        : i __ss ( trace_current_span )
+        ( __apply_incoming_trace req )
         : b mp ( __req_is_msgpack req )
         : ?Json reqj ( __req_decode mp req )
-        ^ ?? reqj {
+        : HttpResponse resp ?? reqj {
             T rj → {
                 : Json env ( rpc_dispatch r rj )
                 ( json_free rj )
@@ -325,6 +345,8 @@ $ `stdlib/ext/http_server.nu`
                 rp
             }
         }
+        ( trace_set __st __ss )
+        ^ resp
     }
 }
 
@@ -528,18 +550,39 @@ $ `stdlib/ext/http_server.nu`
 @ cluster_use_msgpack b on → v { = g_cluster_wire ? on 1 0 }
 @ cluster_wire_is_msgpack → b { ^ != g_cluster_wire 0 }
 
+// Build the request headers blob: Content-Type, plus a W3C `traceparent`
+// carrying the current trace id (a fresh child span per call) when a trace
+// is active — so a fan-out's hops share one trace id for log correlation.
+@ __rpc_headers s content_type → String {
+    : String h ( string_from `Content-Type: ` )
+    ( string_push_str h content_type )
+    ( string_push_str h `\r\n` )
+    ? ( trace_active ) {
+        ( string_push_str h `traceparent: ` )
+        : String tp ( traceparent_format ( trace_current_trace ) ( trace_new_span ) )
+        ( string_push_str h ( string_data tp ) )
+        ( string_free tp )
+        ( string_push_str h `\r\n` )
+    } {}
+    ^ h
+}
+
 @ __rpc_send_json s url s body → !Response HttpErr {
-    ^ ( http_request_to `POST` url body `Content-Type: application/json\r\n`
+    : String hdr ( __rpc_headers `application/json` )
+    : !Response HttpErr r ( http_request_to `POST` url body ( string_data hdr )
     ( __cluster_timeout_ms ) ( __cluster_connect_ms ) )
+    ( string_free hdr )
+    ^ r
 }
 
 @ __rpc_send_mp s url Json req → !Response HttpErr {
     : !( Vec u ) MsgpackErr enc ( msgpack_encode req )
     ^ ?? enc {
         T body → {
+            : String hdr ( __rpc_headers `application/msgpack` )
             : !Response HttpErr r2 ( http_request_bytes_to `POST` url body
-            `Content-Type: application/msgpack\r\n`
-            ( __cluster_timeout_ms ) ( __cluster_connect_ms ) )
+            ( string_data hdr ) ( __cluster_timeout_ms ) ( __cluster_connect_ms ) )
+            ( string_free hdr )
             ( vec_free [u] body )
             r2
         }
