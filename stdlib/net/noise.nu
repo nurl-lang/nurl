@@ -63,7 +63,7 @@ $ `stdlib/ext/crypto.nu`
 
 // 12-byte ChaChaPoly nonce per Noise: 4 zero bytes then the 64-bit counter
 // little-endian.
-@ __noise_nonce i n → ( Vec u ) {
+@ noise_nonce i n → ( Vec u ) {
     : ( Vec u ) v ( vec_with_cap [u] 12 )
     : ~ i z 0
     ~ < z 4 { ( vec_push [u] v # u 0 ) = z + z 1 }
@@ -156,7 +156,7 @@ $ `stdlib/ext/crypto.nu`
         ( __sym_mix_hash s pt )
         ^ ( __slice pt 0 ( vec_len [u] pt ) )
     } {}
-    : ( Vec u ) nonce ( __noise_nonce . s nonce )
+    : ( Vec u ) nonce ( noise_nonce . s nonce )
     : ( Vec u ) ct ?? ( chacha20poly1305_encrypt . s k nonce . s h pt )
     { T x → x  F _ → ( vec_new [u] ) }
     ( vec_free [u] nonce )
@@ -171,7 +171,7 @@ $ `stdlib/ext/crypto.nu`
         ( __sym_mix_hash s ct )
         ^ @ !( Vec u ) NoiseErr { T ( __slice ct 0 ( vec_len [u] ct ) ) }
     } {}
-    : ( Vec u ) nonce ( __noise_nonce . s nonce )
+    : ( Vec u ) nonce ( noise_nonce . s nonce )
     : !( Vec u ) CryptoErr dr ( chacha20poly1305_decrypt . s k nonce . s h ct )
     ( vec_free [u] nonce )
     ^ ?? dr {
