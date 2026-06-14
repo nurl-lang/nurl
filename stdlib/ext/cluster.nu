@@ -46,12 +46,30 @@
 //   ( node_new s host i port )                        → Node
 //   ( call_remote Node n s fn_id Json args )          → !Json ClusterErr
 //        — MOVE: consumes `args`. Ok arm is a fresh owned Json the
-//          caller frees with json_free.
+//          caller frees with json_free. Uses retry_default.
+//   ( call_remote_with Node n s fn_id Json args RetryPolicy pol )
+//                                                      → !Json ClusterErr
+//        — as above with an explicit backoff/retry policy.
+//   ( call_remote_cb … RetryPolicy pol CircuitBreaker cb )
+//                                                      → !Json ClusterErr
+//        — guarded by a breaker; ClCircuitOpen when open (args still
+//          consumed). Records success/failure on the breaker.
+//
+// ── Resilience API ───────────────────────────────────────────────────
+//
+//   ( retry_default ) / ( retry_none )                → RetryPolicy
+//   ( retry_new max base_ms max_ms mult_pct jitter )  → RetryPolicy
+//   ( retry_backoff_ms RetryPolicy pol i attempt )    → i  (no jitter)
+//   ( cb_new i threshold i cooldown_ms )              → CircuitBreaker
+//   ( cb_free / cb_allow / cb_record_success /
+//     cb_record_failure / cb_is_open / cb_fails )
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/net.nu`
+$ `stdlib/std/time.nu`
+$ `stdlib/std/rng.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
@@ -67,6 +85,7 @@ $ `stdlib/ext/http_server.nu`
     ClBadResp     // malformed / unexpected response envelope
     ClRemote      // remote handler returned an error
     ClSerialize   // local (de)serialization failure
+    ClCircuitOpen // breaker open — call short-circuited, never sent
 }
 
 @ cluster_err_name ClusterErr e → s {
@@ -77,6 +96,18 @@ $ `stdlib/ext/http_server.nu`
         ClBadResp → `ClBadResp`
         ClRemote → `ClRemote`
         ClSerialize → `ClSerialize`
+        ClCircuitOpen → `ClCircuitOpen`
+    }
+}
+
+// Which ClusterErrs are worth another attempt — transport failures only.
+// ClBadResp / ClRemote / ClNoSuchFn / ClSerialize are deterministic and
+// retrying them just wastes round-trips.
+@ cluster_err_retryable ClusterErr e → b {
+    ^ ?? e {
+        ClNet → T
+        ClTimeout → T
+        _ → F
     }
 }
 
@@ -279,6 +310,124 @@ $ `stdlib/ext/http_server.nu`
     }
 }
 
+// ── Retry policy (exponential backoff + jitter) ──────────────────────
+//
+// Controls call_remote_with's retry loop. Delays grow geometrically:
+// base · (multiplier_pct/100)^k, capped at max_delay_ms. `jitter` adds
+// full-jitter (uniform [0, delay]) to spread thundering-herd retries.
+// Only transport errors (cluster_err_retryable) are retried.
+
+: RetryPolicy {
+    i max_attempts     // total tries incl. the first (clamped ≥ 1)
+    i base_delay_ms    // delay before the 1st retry
+    i max_delay_ms     // cap on any single backoff
+    i multiplier_pct   // geometric growth per retry, percent (200 = ×2)
+    b jitter           // full-jitter the slept delay
+}
+
+@ retry_new i max_attempts i base_delay_ms i max_delay_ms i multiplier_pct b jitter → RetryPolicy {
+    ^ @ RetryPolicy { max_attempts base_delay_ms max_delay_ms multiplier_pct jitter }
+}
+
+// Sensible default: 3 tries, 100ms → 200ms backoff, capped 5s, jittered.
+@ retry_default → RetryPolicy {
+    ^ @ RetryPolicy { 3 100 5000 200 T }
+}
+
+// A single attempt, no backoff — for callers that want fail-fast.
+@ retry_none → RetryPolicy {
+    ^ @ RetryPolicy { 1 0 0 200 F }
+}
+
+@ __grow_delay i d RetryPolicy pol → i {
+    : i nd / * d . pol multiplier_pct 100
+    ? > nd . pol max_delay_ms { ^ . pol max_delay_ms } {}
+    ^ nd
+}
+
+// Deterministic backoff (no jitter) for the delay BEFORE retry `attempt`
+// (0-based). Exposed so callers/tests can reason about timing.
+@ retry_backoff_ms RetryPolicy pol i attempt → i {
+    : ~ i d . pol base_delay_ms
+    : ~ i k 0
+    ~ < k attempt {
+        = d ( __grow_delay d pol )
+        = k + k 1
+    }
+    ^ d
+}
+
+@ __jitter i delay → i {
+    ? <= delay 0 { ^ 0 } {}
+    : Rng g ( rng_seed ( monotonic_ns ) )
+    : i j ( rng_below g + delay 1 )
+    ( rng_free g )
+    ^ j
+}
+
+// ── Circuit breaker ──────────────────────────────────────────────────
+//
+// Per-endpoint failure gate. After `threshold` consecutive failures the
+// breaker OPENS and cb_allow returns F (fail fast) until `cooldown_ms`
+// elapses, after which it goes HALF-OPEN (one probe allowed). A probe
+// success closes it; a probe failure re-opens it. State lives in a heap
+// cell so every holder of the CircuitBreaker shares one counter.
+
+: CbImpl {
+    i threshold
+    i cooldown_ms
+    i fails
+    i opened_at_ns    // -1 when closed
+}
+
+: CircuitBreaker { s ctl }
+
+@ cb_new i threshold i cooldown_ms → CircuitBreaker {
+    : *CbImpl impl # *CbImpl ( nurl_alloc Z CbImpl )
+    = . impl threshold threshold
+    = . impl cooldown_ms cooldown_ms
+    = . impl fails 0
+    = . impl opened_at_ns - 0 1
+    ^ @ CircuitBreaker { # s impl }
+}
+
+@ cb_free CircuitBreaker cb → v {
+    ( nurl_free . cb ctl )
+}
+
+// True if a call may proceed: closed, or open-but-cooled-down (half-open).
+@ cb_allow CircuitBreaker cb → b {
+    : *CbImpl impl # *CbImpl . cb ctl
+    ? < . impl opened_at_ns 0 { ^ T } {}
+    : i elapsed_ms / - ( monotonic_ns ) . impl opened_at_ns 1000000
+    ^ >= elapsed_ms . impl cooldown_ms
+}
+
+@ cb_record_success CircuitBreaker cb → v {
+    : *CbImpl impl # *CbImpl . cb ctl
+    = . impl fails 0
+    = . impl opened_at_ns - 0 1
+}
+
+@ cb_record_failure CircuitBreaker cb → v {
+    : *CbImpl impl # *CbImpl . cb ctl
+    = . impl fails + . impl fails 1
+    ? >= . impl fails . impl threshold {
+        = . impl opened_at_ns ( monotonic_ns )
+    } {}
+}
+
+// Introspection (tests / metrics): consecutive failure count + open flag.
+@ cb_fails CircuitBreaker cb → i {
+    : *CbImpl impl # *CbImpl . cb ctl
+    ^ . impl fails
+}
+
+@ cb_is_open CircuitBreaker cb → b {
+    : *CbImpl impl # *CbImpl . cb ctl
+    ^ >= . impl opened_at_ns 0
+}
+
 // ── Client ───────────────────────────────────────────────────────────
 
 : Node {
@@ -294,10 +443,10 @@ $ `stdlib/ext/http_server.nu`
     ( string_free . n host )
 }
 
-// Per-call total / connect budgets (ms) and retry cap.
+// Per-call total / connect budgets (ms). Retry cadence is the caller's
+// RetryPolicy (see call_remote_with / retry_default).
 @ __cluster_timeout_ms → i { ^ 30000 }
 @ __cluster_connect_ms → i { ^ 5000 }
-@ __cluster_max_attempts → i { ^ 3 }
 
 @ __node_url Node n → String {
     : String u ( string_from `http://` )
@@ -365,7 +514,10 @@ $ `stdlib/ext/http_server.nu`
     }
 }
 
-@ call_remote Node n s fn_id Json args → !Json ClusterErr {
+// Full RPC with an explicit RetryPolicy. MOVES `args`. Retries transient
+// transport errors (cluster_err_retryable) with exponential backoff +
+// optional jitter between attempts; terminal errors stop immediately.
+@ call_remote_with Node n s fn_id Json args RetryPolicy pol → !Json ClusterErr {
     // Build + serialize the request envelope; this MOVES `args` (it is
     // consumed into `req`, then `req` is freed once on the wire).
     : Json req ( json_obj_new )
@@ -376,13 +528,13 @@ $ `stdlib/ext/http_server.nu`
 
     : String url ( __node_url n )
 
-    // at-least-once: retry transient failures up to the attempt cap.
-    : i max ( __cluster_max_attempts )
+    : i max ? > . pol max_attempts 1 . pol max_attempts 1
     : ~ i k 0
     : ~ b done F
     : ~ ClusterErr last @ ClusterErr { ClNet }
     : ~ Json result ( json_null )
     : ~ b have_result F
+    : ~ i delay . pol base_delay_ms
     ~ & ! done < k max {
         : !Json ClusterErr ar ( __rpc_attempt ( string_data url ) ( string_data body ) )
         ?? ar {
@@ -394,10 +546,16 @@ $ `stdlib/ext/http_server.nu`
             F e → {
                 : ClusterErr ce # ClusterErr e
                 = last ce
-                // Only ClNet / ClTimeout are worth another attempt;
-                // ClBadResp / ClRemote are terminal.
-                : b retry ?? ce { ClNet → T ClTimeout → T _ → F }
-                ? ! retry { = done T } {}
+                ? ! ( cluster_err_retryable ce ) {
+                    = done T
+                } {
+                    // Backoff before the next attempt (if any remain).
+                    ? < + k 1 max {
+                        : i d ? . pol jitter ( __jitter delay ) delay
+                        ( sleep_ms d )
+                        = delay ( __grow_delay delay pol )
+                    } {}
+                }
             }
         }
         = k + k 1
@@ -410,4 +568,31 @@ $ `stdlib/ext/http_server.nu`
         ^ @ !Json ClusterErr { T result }
     } {}
     ^ @ !Json ClusterErr { F last }
+}
+
+// Convenience: call_remote_with the default retry policy. MOVES `args`.
+@ call_remote Node n s fn_id Json args → !Json ClusterErr {
+    ^ ( call_remote_with n fn_id args ( retry_default ) )
+}
+
+// call_remote_with guarded by a CircuitBreaker. When the breaker is open
+// (and not yet cooled down) the call short-circuits with ClCircuitOpen —
+// but still CONSUMES `args` to honour the move contract. Otherwise the
+// breaker records the outcome (success closes it, failure trips it).
+@ call_remote_cb Node n s fn_id Json args RetryPolicy pol CircuitBreaker cb → !Json ClusterErr {
+    ? ! ( cb_allow cb ) {
+        ( json_free args )
+        ^ @ !Json ClusterErr { F @ ClusterErr { ClCircuitOpen } }
+    } {}
+    : !Json ClusterErr r ( call_remote_with n fn_id args pol )
+    ?? r {
+        T result → {
+            ( cb_record_success cb )
+            ^ @ !Json ClusterErr { T result }
+        }
+        F e → {
+            ( cb_record_failure cb )
+            ^ @ !Json ClusterErr { F # ClusterErr e }
+        }
+    }
 }
