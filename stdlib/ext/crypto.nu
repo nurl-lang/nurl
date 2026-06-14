@@ -458,7 +458,9 @@ $ `stdlib/core/vec.nu`
 // constants, and hex transport keeps binary salt/ikm/info NUL-safe.
 // Empty salt = RFC's "zero-length salt" path; empty info is valid.
 @ hkdf_sha256 ( Vec u ) ikm ( Vec u ) salt ( Vec u ) info i keylen → !( Vec u ) CryptoErr {
-    ? | <= keylen 0 == ( vec_len [u] ikm ) 0 { ^ @ !( Vec u ) CryptoErr { F CryptoArg } } {}
+    // Empty IKM is valid (RFC 5869 — e.g. Noise's Split derives transport
+    // keys with HKDF(ck, "")). Only a non-positive output length is invalid.
+    ? <= keylen 0 { ^ @ !( Vec u ) CryptoErr { F CryptoArg } } {}
     : s pctx ( EVP_PKEY_CTX_new_id __NID_HKDF # *u 0 )
     ? == # i pctx 0 { ^ @ !( Vec u ) CryptoErr { F CryptoInit } } {}
     : ~ i ok ( EVP_PKEY_derive_init pctx )

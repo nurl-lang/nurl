@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+msg1 verified: YES
+msg2 verified: YES
+responder learned init static: YES
+keys agree (send/recv): YES
+transport round-trip: YES
