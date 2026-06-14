@@ -71,6 +71,7 @@ $ `stdlib/std/net.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/rng.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/ext/msgpack.nu`
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
@@ -267,27 +268,63 @@ $ `stdlib/ext/http_server.nu`
 
 // ── HTTP glue ────────────────────────────────────────────────────────
 
+// Does the request carry a msgpack Content-Type?
+@ __req_is_msgpack HttpRequest req → b {
+    : ?String ct ( header_get . req headers `Content-Type` )
+    : ~ b mp F
+    ?? ct {
+        T cs → { = mp ( string_contains cs `msgpack` ) ( string_free cs ) }
+        F cs → { ( string_free cs ) }
+    }
+    ^ mp
+}
+
+// Decode the request body as Json per its Content-Type. None on failure.
+@ __req_decode b mp HttpRequest req → ?Json {
+    ? mp {
+        : !Json MsgpackErr d ( msgpack_decode . req body )
+        ^ ?? d { T j → @ ?Json { T j }  F _ → @ ?Json { F # Json 0 } }
+    } {}
+    : String bs ( bytes_to_str . req body )
+    : !Json JsonError d ( json_parse ( string_data bs ) )
+    ( string_free bs )
+    ^ ?? d { T j → @ ?Json { T j }  F _ → @ ?Json { F # Json 0 } }
+}
+
+// Build a response carrying `env` in the negotiated wire format.
+@ __resp_send b mp i status Json env → HttpResponse {
+    ? mp {
+        : HttpResponse r ( response_new status )
+        : !( Vec u ) MsgpackErr enc ( msgpack_encode env )
+        ?? enc {
+            T body → { ( response_set_body_bytes r body ) ( vec_free [u] body ) }
+            F _ → {}
+        }
+        ( response_set_header r `Content-Type` `application/msgpack` )
+        ^ r
+    } {}
+    ^ ( response_json status env )
+}
+
 @ registry_handler Registry r → ( @ HttpResponse HttpRequest ) {
     ^ \ HttpRequest req → HttpResponse {
-        : String bs ( bytes_to_str . req body )
-        : !Json JsonError pr ( json_parse ( string_data bs ) )
-        : HttpResponse resp ?? pr {
-            T reqj → {
-                : Json env ( rpc_dispatch r reqj )
-                ( json_free reqj )
-                : HttpResponse rp ( response_json 200 env )
+        : b mp ( __req_is_msgpack req )
+        : ?Json reqj ( __req_decode mp req )
+        ^ ?? reqj {
+            T rj → {
+                : Json env ( rpc_dispatch r rj )
+                ( json_free rj )
+                : HttpResponse rp ( __resp_send mp 200 env )
                 ( json_free env )
                 rp
             }
-            F _ → {
-                : Json env ( __rpc_err_env `bad request json` )
-                : HttpResponse rp ( response_json 400 env )
+            F → {
+                : Json env ( __rpc_err_env `bad request` )
+                : HttpResponse rp ( __resp_send mp 400 env )
                 ( json_free env )
                 rp
             }
         }
-        ( string_free bs )
-        ^ resp
     }
 }
 
@@ -480,11 +517,56 @@ $ `stdlib/ext/http_server.nu`
     }
 }
 
-// One transport attempt. `body` is BORROWED (reused across retries).
-@ __rpc_attempt s url s body → !Json ClusterErr {
-    : !Response HttpErr rr ( http_request_to `POST` url body
-    `Content-Type: application/json\r\n`
+// ── Wire format ──────────────────────────────────────────────────────
+//
+// JSON (text) by default; msgpack (binary) when opted in. Process-wide —
+// set once at startup before issuing calls. Only the CLIENT opts in: the
+// server auto-detects each request's Content-Type and replies in kind, so
+// a msgpack client and a JSON client can share one server.
+: ~ i g_cluster_wire 0
+
+@ cluster_use_msgpack b on → v { = g_cluster_wire ? on 1 0 }
+@ cluster_wire_is_msgpack → b { ^ != g_cluster_wire 0 }
+
+@ __rpc_send_json s url s body → !Response HttpErr {
+    ^ ( http_request_to `POST` url body `Content-Type: application/json\r\n`
     ( __cluster_timeout_ms ) ( __cluster_connect_ms ) )
+}
+
+@ __rpc_send_mp s url Json req → !Response HttpErr {
+    : !( Vec u ) MsgpackErr enc ( msgpack_encode req )
+    ^ ?? enc {
+        T body → {
+            : !Response HttpErr r2 ( http_request_bytes_to `POST` url body
+            `Content-Type: application/msgpack\r\n`
+            ( __cluster_timeout_ms ) ( __cluster_connect_ms ) )
+            ( vec_free [u] body )
+            r2
+        }
+        F _ → @ !Response HttpErr { F @ HttpErr { HttpOther } }
+    }
+}
+
+// Decode a response body as Json per the wire format. None on failure.
+@ __rpc_decode_resp b mp Response resp → ?Json {
+    ? mp {
+        : ( Vec u ) bb ( http_body_bytes resp )
+        : !Json MsgpackErr d ( msgpack_decode bb )
+        ( vec_free [u] bb )
+        ^ ?? d { T j → @ ?Json { T j }  F _ → @ ?Json { F # Json 0 } }
+    } {}
+    : !Json JsonError d ( json_parse ( http_body_str resp ) )
+    ^ ?? d { T j → @ ?Json { T j }  F _ → @ ?Json { F # Json 0 } }
+}
+
+// One transport attempt. `req` is BORROWED (re-serialized per retry).
+@ __rpc_attempt s url Json req → !Json ClusterErr {
+    : b mp ( cluster_wire_is_msgpack )
+    : String jbody ? mp ( string_new ) ( json_stringify req )
+    : ~ !Response HttpErr rr @ !Response HttpErr { F @ HttpErr { HttpOther } }
+    ? mp { = rr ( __rpc_send_mp url req ) }
+    { = rr ( __rpc_send_json url ( string_data jbody ) ) }
+    ( string_free jbody )
     ^ ?? rr {
         T resp → {
             : i st ( http_status resp )
@@ -492,14 +574,14 @@ $ `stdlib/ext/http_server.nu`
                 ( response_free resp )
                 @ !Json ClusterErr { F @ ClusterErr { ClBadResp } }
             } {
-                : !Json JsonError pr ( json_parse ( http_body_str resp ) )
-                : !Json ClusterErr out ?? pr {
+                : ?Json envo ( __rpc_decode_resp mp resp )
+                : !Json ClusterErr out ?? envo {
                     T env → {
                         : !Json ClusterErr r2 ( __rpc_extract_result env )
                         ( json_free env )
                         r2
                     }
-                    F _ → @ !Json ClusterErr { F @ ClusterErr { ClBadResp } }
+                    F → @ !Json ClusterErr { F @ ClusterErr { ClBadResp } }
                 }
                 ( response_free resp )
                 out
@@ -523,8 +605,6 @@ $ `stdlib/ext/http_server.nu`
     : Json req ( json_obj_new )
     ( json_obj_set req `fn` ( json_str_lit fn_id ) )
     ( json_obj_set req `args` args )
-    : String body ( json_stringify req )
-    ( json_free req )
 
     : String url ( __node_url n )
 
@@ -536,7 +616,7 @@ $ `stdlib/ext/http_server.nu`
     : ~ b have_result F
     : ~ i delay . pol base_delay_ms
     ~ & ! done < k max {
-        : !Json ClusterErr ar ( __rpc_attempt ( string_data url ) ( string_data body ) )
+        : !Json ClusterErr ar ( __rpc_attempt ( string_data url ) req )
         ?? ar {
             T r → {
                 = result r
@@ -562,7 +642,7 @@ $ `stdlib/ext/http_server.nu`
     }
 
     ( string_free url )
-    ( string_free body )
+    ( json_free req )
 
     ? have_result {
         ^ @ !Json ClusterErr { T result }
