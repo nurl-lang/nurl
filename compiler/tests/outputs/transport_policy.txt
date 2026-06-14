@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+starts relayed: YES
+promoted to direct: YES
+direct_known set: YES
+stays direct while active: YES
+still direct after 1 idle: YES
+demoted to relay after idle_limit: YES
+direct_known cleared: YES
+re-promote after demotion: YES
+no relay + no direct → none: YES

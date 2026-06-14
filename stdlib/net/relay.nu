@@ -57,13 +57,13 @@ $ `stdlib/std/async.nu`
 
 @ __relay_max → i { ^ 131072 }   // reject frames larger than this (DoS guard)
 
-@ __cpy ( Vec u ) v → ( Vec u ) {
+@ __rcpy ( Vec u ) v → ( Vec u ) {
     : ( Vec u ) o ( vec_with_cap [u] ( vec_len [u] v ) )
     ( vec_extend [u] o v )
     ^ o
 }
 
-@ __veq ( Vec u ) a ( Vec u ) b → b {
+@ __rveq ( Vec u ) a ( Vec u ) b → b {
     : i n ( vec_len [u] a )
     ? != n ( vec_len [u] b ) { ^ F } {}
     : ~ b e T : ~ i k 0
@@ -220,7 +220,7 @@ $ `stdlib/std/async.nu`
 
 @ __relay_register_conn *RelayServer rs TcpConn c ( Vec u ) pk → s {
     : *RelayEntry e # *RelayEntry ( nurl_alloc Z RelayEntry )
-    = . e pubkey ( __cpy pk )
+    = . e pubkey ( __rcpy pk )
     = . e conn c
     = . e live 1
     = . e sending 0
@@ -236,7 +236,7 @@ $ `stdlib/std/async.nu`
         : s pp ?? ( vec_get [s] . rs clients k ) { T x → x F → # s 0 }
         ? != # i pp 0 {
             : *RelayEntry e # *RelayEntry pp
-            ? & == . e live 1 ( __veq . e pubkey pk ) { = found pp } {}
+            ? & == . e live 1 ( __rveq . e pubkey pk ) { = found pp } {}
         } {}
         = k + k 1
     }
@@ -264,7 +264,7 @@ $ `stdlib/std/async.nu`
         : s pp ?? ( vec_get [s] . rs groups k ) { T x → x F → # s 0 }
         ? != # i pp 0 {
             : *GroupEntry g # *GroupEntry pp
-            ? ( __veq . g gid gid ) { = found pp } {}
+            ? ( __rveq . g gid gid ) { = found pp } {}
         } {}
         = k + k 1
     }
@@ -275,7 +275,7 @@ $ `stdlib/std/async.nu`
     : s ex ( __relay_group_find rs gid )
     ? != # i ex 0 { ^ ex } {}
     : *GroupEntry g # *GroupEntry ( nurl_alloc Z GroupEntry )
-    = . g gid ( __cpy gid )
+    = . g gid ( __rcpy gid )
     = . g members ( vec_new [s] )
     ( vec_push [s] . rs groups # s g )
     ^ # s g
