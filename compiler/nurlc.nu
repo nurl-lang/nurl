@@ -8916,27 +8916,31 @@
         { : s elem_type ( nurl_str_slice ot 0 - otlen 1 )
             : b elem_is_struct == ( nurl_str_get elem_type 0 ) 37
             // Struct pointer (%T*): if the IDENT names a struct field,
-            // emit `gep %T, %T* ov, i32 0, i32 fidx` + load.
-            // Prioritize integer variable index if it exists.
+            // emit `gep %T, %T* ov, i32 0, i32 fidx` + load. A struct field
+            // ALWAYS wins over a same-named in-scope variable — you cannot
+            // array-index a struct pointer by a field name, and field access
+            // is the intent. (Previously a field whose name matched an int
+            // variable/param in scope was mis-routed to the variable-index
+            // path below → a silent miscompile, e.g. `. m state` with an `i
+            // state` parameter loaded the param as an array index instead of
+            // reading the field.) The variable-index fallback is reached only
+            // when the IDENT is NOT a field: raw pointers, or array-of-struct
+            // indexed by a (non-field-named) variable.
             : ~ b is_field_access F
             : s fname ( nurl_lex_val lex )
-            : s var_t ( nurl_sym_get syms fname )
             : ~ s fidx_s ``
             : ~ s ftype ``
             : ~ s fld_uns ``
             ? & elem_is_struct ( is_ident_tok ( nurl_lex_type lex ) )
-            { ? > ( int_width var_t ) 0
-                {}  // Integer variable index: skip field access check
-                { : s sname ( nurl_str_slice elem_type 1 - ( nurl_str_len elem_type ) 1 )
-                    : s fidx_check ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__idx` ) ) ) )
-                    ? != 0 ( nurl_str_len fidx_check )
-                    { = is_field_access T
-                        = fidx_s fidx_check
-                        = ftype ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__type` ) ) ) )
-                        = fld_uns ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__unsigned` ) ) ) )
-                    }
-                    {}
+            { : s sname ( nurl_str_slice elem_type 1 - ( nurl_str_len elem_type ) 1 )
+                : s fidx_check ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__idx` ) ) ) )
+                ? != 0 ( nurl_str_len fidx_check )
+                { = is_field_access T
+                    = fidx_s fidx_check
+                    = ftype ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__type` ) ) ) )
+                    = fld_uns ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__unsigned` ) ) ) )
                 }
+                {}
             }
             {}
             ? is_field_access
