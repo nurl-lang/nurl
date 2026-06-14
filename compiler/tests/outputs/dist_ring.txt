@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+ring has 192 points (3 x 64): YES
+key has a valid owner: YES
+ownership deterministic: YES
+no key unowned: YES
+all 3 members carry load: YES
+total accounted: YES
+replica set size 2: YES
+replicas distinct: YES
+ring now 128 points: YES
+non-C keys kept their owner after C left: YES
+some keys were owned by C (and re-homed): YES
+stable + was_c == 300: YES
