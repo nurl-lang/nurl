@@ -147,6 +147,7 @@ $ `stdlib/ext/cluster.nu`
     ( nurl_print `usage:\n` )
     ( nurl_print `  cluster_rpc server <port>\n` )
     ( nurl_print `  cluster_rpc client <port> [port ...]\n` )
+    ( nurl_print `  cluster_rpc client-mp <port> [port ...]   (binary msgpack wire)\n` )
     ^ 1
 }
 
@@ -163,7 +164,10 @@ $ `stdlib/ext/cluster.nu`
         ( string_free ps )
         ( run_server port )
     } {
-        ? != 0 ( nurl_str_eq m `client` ) {
+        ? | != 0 ( nurl_str_eq m `client` ) != 0 ( nurl_str_eq m `client-mp` ) {
+            // `client-mp` opts into the binary msgpack wire; the server
+            // auto-detects the Content-Type and replies in kind.
+            ? != 0 ( nurl_str_eq m `client-mp` ) { ( cluster_use_msgpack T ) } {}
             : ( Vec i ) ports ( vec_new [i] )
             : ~ i k 2
             ~ < k argc {
