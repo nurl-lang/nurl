@@ -1999,7 +1999,7 @@
         // a @-fn) AND no `__ptr` (not a local) AND no `__global`
         // (not a const / enum variant). Die with the canonical
         // wrap-in-closure-literal cure.
-        ? & & == 0 ( nurl_str_len ptr ) == 0 ( nurl_str_len glb ) != 0 ( nurl_str_len ( nurl_sym_get g_vis_syms ( nurl_str_cat name `__src_file` ) ) )
+        ? & & & == 0 ( nurl_str_len ptr ) == 0 ( nurl_str_len glb ) == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat name `__param` ) ) ) != 0 ( nurl_str_len ( nurl_sym_get g_vis_syms ( nurl_str_cat name `__src_file` ) ) )
         { : s tail ( nurl_str_cat name ` args ) }'.` )
             ( die lex ( nurl_str_cat4
             `bare '@-fn' name '` name
@@ -5528,22 +5528,19 @@
                         ? & == 0 ( nurl_str_len nurl_inner_llvm ) ( seq pattern_name `F` )
                         { = nurl_inner_llvm ( nurl_sym_get syms ( nurl_str_cat match_var_name `__res_e_llvm` ) ) }
                         {}
-                        // Bare-pointer payload (`s` → `i8*`): the i64 slot
-                        // holds the pointer via ptrtoint, so one inttoptr
-                        // recovers it. Distinct from the `%`-struct branch
-                        // below (a handle whose f0 pointer must be re-wrapped
-                        // by insertvalue) — this is non-`%` AND `*`-suffixed,
-                        // so it never collides with that branch (`%T*` raw
-                        // pointers are `%`-prefixed and stay on that path).
-                        // Without this
-                        // the payload stayed a raw i64 and the arm's value
-                        // disagreed with the other arms' pointer type, so
-                        // gen_match emitted no phi and stored `undef` into the
-                        // binding (silent garbage — the `! s E` half of the
-                        // critic's bound-`??` miscompile). Both arms — an
-                        // enum error payload is `%`-prefixed and skips this.
-                        ? & & != 0 ( nurl_str_len nurl_inner_llvm )
-                        != ( nurl_str_get nurl_inner_llvm 0 ) 37
+                        // Raw-pointer payload — ANY LLVM type ending in `*`,
+                        // whether `i8*` (bare `s`) or `%Struct*` (a NURL
+                        // `*Struct` pointer). The i64 slot holds the pointer
+                        // via ptrtoint, so one inttoptr recovers it. The
+                        // trailing `*` is the reliable discriminator from the
+                        // `%`-struct-HANDLE branch below (e.g. `%Vec__i8`,
+                        // `%String` — handles never end in `*`). Routing on the
+                        // leading `%` instead used to misclassify `%Struct*`
+                        // pointers as handles: the struct path looked up
+                        // `Struct*__idx_0__type`, found nothing, reconstructed
+                        // nothing, and the binding got the raw i64 slot as
+                        // garbage (the `! *T E` pointer-unwrap miscompile).
+                        ? & != 0 ( nurl_str_len nurl_inner_llvm )
                         == ( nurl_str_get nurl_inner_llvm - ( nurl_str_len nurl_inner_llvm ) 1 ) 42
                         { : s ptv_r ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print ptv_r )
@@ -5553,8 +5550,9 @@
                             = pr0_eff ptv_r
                             = did_reconstruct T }
                         {}
-                        ? & != 0 ( nurl_str_len nurl_inner_llvm )
+                        ? & & != 0 ( nurl_str_len nurl_inner_llvm )
                         == ( nurl_str_get nurl_inner_llvm 0 ) 37
+                        != ( nurl_str_get nurl_inner_llvm - ( nurl_str_len nurl_inner_llvm ) 1 ) 42
                         { : s sname_r ( nurl_str_slice nurl_inner_llvm 1 - ( nurl_str_len nurl_inner_llvm ) 1 )
                             : s vlist_r ( nurl_sym_get syms ( nurl_str_cat sname_r `__variants` ) )
                             ? == 0 ( nurl_str_len vlist_r )
@@ -9178,8 +9176,14 @@
                 // is always i64, so string/bool/enum values are folded to i64.
                 ? payload_matches
                 {}  // value already matches payload_ty: use as-is
-                { ? | ( seq fty `i8*` ) ( seq fty `sref` )
-                    {  // string → i64 via ptrtoint
+                { ? | ( seq fty `sref` ) == ( nurl_str_get fty - ( nurl_str_len fty ) 1 ) 42
+                    {  // Any raw pointer (`i8*`, or a NURL `*Struct` → `%Struct*`)
+                       // — store it directly in the i64 payload slot via
+                       // ptrtoint. A `%Struct*` pointer ends in `*` and must
+                       // NOT fall through to the `%`-named struct branch below
+                       // (which would heap-box it as if it were a by-value
+                       // struct handle). The `?? T p` arm recovers it with a
+                       // single inttoptr.
                         : s conv_reg ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print conv_reg )
                         ( nurl_print ` = ptrtoint ` ) ( nurl_print fty ) ( nurl_print ` ` )

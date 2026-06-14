@@ -1,0 +1,17 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+bytes=59
+type=3
+seq=4000000001
+from=host-a:60000
+tgt=host-t:60001
+gossip=2
+  10.0.0.5:50001
+ inc=3000000000
+ dead
+  node-b:65535
+ inc=7
+ suspect
+empty → SwShort
