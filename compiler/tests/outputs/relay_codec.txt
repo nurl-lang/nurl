@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+register frame len: 37
+register type: YES
+register body == pubkey: YES
+forward type: YES
+forward dest pk split: YES
+forward payload split: YES
+deliver type: YES
+deliver src pk split: YES
+incomplete → None: YES
+oversize → None: YES
