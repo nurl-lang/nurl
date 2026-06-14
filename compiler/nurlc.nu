@@ -8070,6 +8070,17 @@
                 ( nurl_sym_def syms `__last_value_borrow__` `` )
                 : s val ( gen_expr lex syms cg )
                 : s vt ( nurl_get_last_type )
+                // A `String` binding cannot be initialised from a raw
+                // string literal / i8* — a String OWNS a heap control
+                // block + buffer, whereas a literal is a borrowed i8*.
+                // Storing the i8* into the %String slot used to emit IR
+                // that only clang rejected ("ptr but expected %String");
+                // diagnose it here with the canonical cure. (coerce_store_val
+                // deliberately won't insertvalue-wrap an i8* as a String —
+                // that would alias a literal as a control block and crash.)
+                ? & ( seq ptype `%String` ) | ( seq vt `i8*` ) ( seq vt `sref` )
+                { ( die lex `cannot initialise a 'String' binding from a raw string literal / i8* — a String owns a heap buffer, not a borrowed pointer. Wrap it with ( string_from ... ), or use ( string_new ) for empty.` ) }
+                {}
                 // Borrow provenance (typed path): a borrow RHS must not
                 // register an auto-Drop — the owner reclaims it.
                 : s rhs_borrow ( nurl_sym_get syms `__last_value_borrow__` )

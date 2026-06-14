@@ -515,6 +515,18 @@ $ `stdlib/std/async.nu`
 // Two fibers: a receiver (answer PINGs, record ACKs, merge gossip) and
 // the failure detector. Heap-allocated so both fibers share one node.
 
+// A pending indirect probe this node is relaying on a peer's behalf: it
+// PINGed `target` with `probe_seq`; when that ACK arrives it forwards an
+// ACK carrying `orig_seq` back to `req_host:req_port`. `created_ms` ages
+// the entry out if the target never answers.
+: FwdEntry {
+    i probe_seq
+    String req_host
+    i req_port
+    i orig_seq
+    i created_ms
+}
+
 : SwimNode {
     *MemberTable table
     UdpSocket sock
@@ -525,6 +537,9 @@ $ `stdlib/std/async.nu`
     i seq_ctr
     i period_ms
     i ping_timeout_ms
+    i indirect_k         // # of relays for an indirect (PING-REQ) probe
+    Mutex fwd_m
+    ( Vec FwdEntry ) fwd // indirect probes we are relaying
     i running
 }
 
@@ -543,6 +558,9 @@ $ `stdlib/std/async.nu`
             = . n seq_ctr 0
             = . n period_ms period_ms
             = . n ping_timeout_ms ping_timeout_ms
+            = . n indirect_k 2
+            = . n fwd_m ( mutex_new )
+            = . n fwd ( vec_new [FwdEntry] )
             = . n running 1
             @ !*SwimNode NetErr { T n }
         }
@@ -559,6 +577,8 @@ $ `stdlib/std/async.nu`
     ( udp_close . n sock )
     ( mutex_free . n ack_m )
     ( vec_free [i] . n acked )
+    ( vec_free_with [FwdEntry] . n fwd \ FwdEntry e → v { ( string_free . e req_host ) } )
+    ( mutex_free . n fwd_m )
     ( string_free . n host )
     ( nurl_free # s n )
 }
@@ -600,6 +620,21 @@ $ `stdlib/std/async.nu`
         ( mutex_lock . n ack_m )
         ( vec_push [i] . n acked . m seq )
         ( mutex_unlock . n ack_m )
+        // If this ACK completes an indirect probe we are relaying, forward
+        // it to the original requester.
+        ( __try_forward_ack n . m seq )
+    } {}
+    ? == ty 3 {                              // PING-REQ → probe target for peer
+        = . n seq_ctr + . n seq_ctr 1
+        : i probe_seq . n seq_ctr
+        ( mutex_lock . n fwd_m )
+        ( vec_push [FwdEntry] . n fwd @ FwdEntry { probe_seq
+        ( string_from ( string_data . m from_host ) ) . m from_port . m seq
+        / ( monotonic_ns ) 1000000 } )
+        ( mutex_unlock . n fwd_m )
+        : SwimMsg ping ( __mk_msg n @ SwimMsgType { MtPing } probe_seq `` 0 )
+        ( __node_send n ( string_data . m target_host ) . m target_port ping )
+        ( swim_msg_free ping )
     } {}
     ? == ty 4 {                              // JOIN → reply with our view
         : SwimMsg ja ( __mk_msg n @ SwimMsgType { MtJoinAck } . m seq `` 0 )
@@ -607,6 +642,59 @@ $ `stdlib/std/async.nu`
         ( swim_msg_free ja )
     } {}
     // MtJoinAck (5): gossip already merged.
+}
+
+// A target's ACK to one of our relayed probes (`probe_seq`) → forward an
+// ACK carrying the requester's original seq back to them, and drop the
+// pending entry. No-op when `seq` matches no pending relay.
+@ __try_forward_ack *SwimNode n i seq → v {
+    ( mutex_lock . n fwd_m )
+    : i nn ( vec_len [FwdEntry] . n fwd )
+    : ~ i idx - 0 1
+    : ~ b fdone F
+    : ~ i k 0
+    ~ & ! fdone < k nn {
+        ?? ( vec_get [FwdEntry] . n fwd k ) {
+            T e → { ? == . e probe_seq seq { = idx k  = fdone T } {} }
+            F → {}
+        }
+        = k + k 1
+    }
+    ? < idx 0 { ( mutex_unlock . n fwd_m ) } {
+        ?? ( vec_get [FwdEntry] . n fwd idx ) {
+            T e → {
+                : String rh ( string_from ( string_data . e req_host ) )
+                : i rp . e req_port
+                : i oseq . e orig_seq
+                ( string_free . e req_host )
+                ( vec_remove [FwdEntry] . n fwd idx )
+                ( mutex_unlock . n fwd_m )
+                : SwimMsg ack ( __mk_msg n @ SwimMsgType { MtAck } oseq `` 0 )
+                ( __node_send n ( string_data rh ) rp ack )
+                ( swim_msg_free ack )
+                ( string_free rh )
+            }
+            F → ( mutex_unlock . n fwd_m )
+        }
+    }
+}
+
+// Drop relayed probes older than 2× the ping timeout (the target never
+// answered) so the pending list can't grow without bound.
+@ __prune_fwd *SwimNode n → v {
+    ( mutex_lock . n fwd_m )
+    : i now / ( monotonic_ns ) 1000000
+    : i cutoff * . n ping_timeout_ms 2
+    : ~ i k 0
+    ~ < k ( vec_len [FwdEntry] . n fwd ) {
+        : ~ b drop F
+        ?? ( vec_get [FwdEntry] . n fwd k ) {
+            T e → { ? > - now . e created_ms cutoff { = drop T ( string_free . e req_host ) } {} }
+            F → {}
+        }
+        ? drop { ( vec_remove [FwdEntry] . n fwd k ) } { = k + k 1 }
+    }
+    ( mutex_unlock . n fwd_m )
 }
 
 @ __recv_loop *SwimNode n → v {
@@ -639,6 +727,39 @@ $ `stdlib/std/async.nu`
     ^ found
 }
 
+// Ask up to `indirect_k` random members to PING the target on our behalf.
+// Returns T if any relay reports back an ACK within the ping timeout (the
+// target is alive via some path). F when no relay answers — or when there
+// are no relays to ask.
+@ __indirect_probe *SwimNode n String thost i tport → b {
+    = . n seq_ctr + . n seq_ctr 1
+    : i iseq . n seq_ctr
+    : ( Vec Member ) relays ( mtable_pick_relays ( __node_table n ) . n indirect_k ( string_data thost ) tport )
+    : i rn ( vec_len [Member] relays )
+    : ~ i ri 0
+    ~ < ri rn {
+        ?? ( vec_get [Member] relays ri ) {
+            T rly → {
+                : SwimMsg pr ( __mk_msg n @ SwimMsgType { MtPingReq } iseq ( string_data thost ) tport )
+                ( __node_send n ( string_data . rly host ) . rly port pr )
+                ( swim_msg_free pr )
+            }
+            F → {}
+        }
+        = ri + ri 1
+    }
+    ( vec_free_with [Member] relays \ Member d → v { ( member_free d ) } )
+    ? == rn 0 { ^ F } {}
+    : ~ b iok F
+    : ~ i iwaited 0
+    ~ & ! iok < iwaited . n ping_timeout_ms {
+        ( sleep_ms 10 )
+        = iwaited + iwaited 10
+        ? ( __got_ack n iseq ) { = iok T } {}
+    }
+    ^ iok
+}
+
 @ __fd_loop *SwimNode n → v {
     ~ != 0 . n running {
         ( sleep_ms . n period_ms )
@@ -658,7 +779,14 @@ $ `stdlib/std/async.nu`
                     ? ( __got_ack n seq ) { = ok T } {}
                 }
                 ? ! ok {
-                    : b _s ( mtable_suspect ( __node_table n ) ( string_data . mm host ) . mm port )
+                    // Direct PING timed out — don't suspect yet. Ask k
+                    // random members to probe the target indirectly; a
+                    // single lossy path between us and the target then
+                    // can't cause a false positive.
+                    : b iok ( __indirect_probe n . mm host . mm port )
+                    ? ! iok {
+                        : b _s ( mtable_suspect ( __node_table n ) ( string_data . mm host ) . mm port )
+                    } {}
                 } {}
                 ( member_free mm )
             }
@@ -666,6 +794,7 @@ $ `stdlib/std/async.nu`
         }
         : ( Vec Member ) dead ( mtable_sweep ( __node_table n ) )
         ( vec_free_with [Member] dead \ Member d → v { ( member_free d ) } )
+        ( __prune_fwd n )
         ( mutex_lock . n ack_m )
         ( vec_clear [i] . n acked )
         ( mutex_unlock . n ack_m )
