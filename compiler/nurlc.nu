@@ -9771,7 +9771,24 @@
     // TYPE_KW for the param NAME — single-letter vars (e.g. `s`, `i`)
     // lex as TYPE_KW even though they're valid identifiers in this slot.
     : b t2_is_name | == t2 TT_IDENT == t2 TT_TYPE_KW
-    : b is_closure | | | | | == t1 TT_ARROW == t1 TT_TYPE_KW t1_is_type | | | == t1 TT_STAR == t1 TT_QUEST == t1 TT_LBRACK == t1 TT_BANG & == t1 TT_LPAREN == t2 TT_AT & & == t1 TT_IDENT t2_is_name == t3 TT_ARROW
+    // `\ ( <compound-type> ) name → …` — the first closure param has a
+    // parenthesised type, e.g. `( Vec u )` or `( @ R A )`. The token after
+    // `(` introduces a type (closure-type `@`, a type keyword, a pointer/
+    // option/slice/result/enum sigil, or a known type name) — none of which
+    // can begin a function-call expression, so this is unambiguously a
+    // closure literal and not a `\ ( call )` try-expression. (Without this,
+    // only `( @ …` was recognised, so a `( Vec u )` first param fell through
+    // to gen_try_expr and failed — closure params accepted fewer types than
+    // function params.)
+    : s t2v ( nurl_lex_peek_val lex )
+    : s t2m ( nurl_sym_get syms ( nurl_str_cat t2v `__is_type` ) )
+    // A type-name head after `(`: user structs/enums/generic instances carry
+    // `__is_type`; `Vec` is the one pure builtin generic with no `:` def, so
+    // it is named explicitly. None of these is ever a call target, so this
+    // never misreads a `\ ( call )` try-expression.
+    : b t2_is_type & == t2 TT_IDENT | != 0 ( nurl_str_len t2m ) ( seq t2v `Vec` )
+    : b lparen_type & == t1 TT_LPAREN | | | | | | | | == t2 TT_AT == t2 TT_TYPE_KW == t2 TT_STAR == t2 TT_QUEST == t2 TT_QUESTQUEST == t2 TT_LBRACK == t2 TT_BANG == t2 TT_PIPE t2_is_type
+    : b is_closure | | | | | == t1 TT_ARROW == t1 TT_TYPE_KW t1_is_type | | | == t1 TT_STAR == t1 TT_QUEST == t1 TT_LBRACK == t1 TT_BANG lparen_type & & == t1 TT_IDENT t2_is_name == t3 TT_ARROW
     ? is_closure
     { ^ ( gen_closure_expr lex syms cg ) }
     { ^ ( gen_try_expr lex syms cg ) }
