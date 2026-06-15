@@ -1,0 +1,15 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+pncounter round-trips (3): YES
+counter converged (a=13): YES
+counter converged (b=13): YES
+lww round-trips (val 42, ts 1000): YES
+lww merge-from-bytes takes newer (99): YES
+orset round-trips (has 7): YES
+orset round-trips (has 8): YES
+orset round-trips (no 9): YES
+add-wins over the wire (A has 7): YES
+add-wins over the wire (B has 7): YES
+converged on 8 too: YES
