@@ -1,0 +1,5 @@
+# compiled NURL artifacts (binaries have no extension; .ll is codegen output)
+*.ll
+ptt
+test_opus_roundtrip
+test_pipeline
