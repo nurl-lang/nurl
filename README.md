@@ -146,6 +146,7 @@ product types via structs), with no subtyping and no implicit conversions.
 | Memory model & borrow checker | [`docs/MEMORY.md`](docs/MEMORY.md) |
 | Async runtime (fibers) design | [`docs/ASYNC.md`](docs/ASYNC.md) |
 | Networking & MQTT client | [`docs/NETWORKING.md`](docs/NETWORKING.md) |
+| Distributed stack (NAT traversal, overlay, SWIM, CRDTs) | [`docs/DISTRIBUTED.md`](docs/DISTRIBUTED.md) |
 | HTTP API, playground & MCP server | [`docs/PLAYGROUND.md`](docs/PLAYGROUND.md) |
 | Target platforms | [`docs/PLATFORMS.md`](docs/PLATFORMS.md) |
 | Known limitations | [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) |
