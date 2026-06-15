@@ -18,6 +18,7 @@ $ `stdlib/net/relay.nu`
 $ `stdlib/net/transport.nu`
 $ `stdlib/dist/crdt.nu`
 $ `stdlib/dist/replicator.nu`
+$ `stdlib/dist/identity.nu`
 
 @ pk_for i id → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + id k ) = k + k 1 } ^ v }
 @ group_id → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + 200 k ) = k + k 1 } ^ v }
@@ -35,6 +36,10 @@ $ `stdlib/dist/replicator.nu`
     ?? ( relay_dial ( string_data host ) port ) {
         T rc → {
             : ( Vec u ) self_pk ( pk_for + 1 rid )
+            // The CRDT replica id comes from the PUBKEY, not the CLI arg: every
+            // node derives the same id for a given pubkey with no coordination,
+            // so distinct replicas never collide into one counter slot.
+            : i crep ( identity_stable_id self_pk )
             ?? ( relay_register rc self_pk ) { T _ → {} F _ → {} }
             ( relay_set_timeout rc 300 )
             : *Transport tr # *Transport ( transport_open # s 0 rc 1 )
@@ -45,7 +50,7 @@ $ `stdlib/dist/replicator.nu`
 
             : ~ i round 0
             ~ < round 5 {
-                ( pncounter_inc ctr rid 1 )            // count our own work
+                ( pncounter_inc ctr crep 1 )           // count our own work (pubkey-stable slot)
                 : ( Vec u ) wire ( pncounter_encode ctr )
                 ?? ( transport_broadcast tr g wire ) { T _ → {} F _ → {} }
                 ( vec_free [u] wire )

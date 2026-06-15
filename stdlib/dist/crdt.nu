@@ -9,63 +9,82 @@
 //   LwwReg       — last-writer-wins register (value + timestamp + replica).
 //   OrSet        — observed-remove set: concurrent add wins over remove.
 //
-// Replicas are identified by a small integer id (the caller maps node pubkey
-// → replica id). Merge is the gossip primitive: on receiving a peer's CRDT,
-// merge it into the local one.
+// Replicas are identified by a GLOBALLY STABLE integer id derived from the node
+// pubkey (dist/identity.nu's identity_stable_id) — NOT by local arrival order.
+// This matters: the merge aligns replica slots BY ID, so every node must name a
+// replica the same way without coordination, or distinct replicas collide into
+// one slot and the value silently corrupts. Merge is the gossip primitive: on
+// receiving a peer's CRDT, merge it into the local one.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 // ════════════════════════════════════════════════════════════════
 // PNCounter — per-replica increments and decrements; value = Σinc − Σdec.
-// merge = element-wise max of both vectors (a grow-only counter each).
+// Stored SPARSELY as (replica-id, amount) pairs and merged by matching id
+// (each replica's per-id total is a grow-only counter → merge = max per id).
+// Keying by id rather than vector position is what makes convergence correct
+// when replicas are discovered in different orders on different nodes.
 // ════════════════════════════════════════════════════════════════
 
 : PNCounter {
-    ( Vec i ) inc   // inc[r] = total increments by replica r
-    ( Vec i ) dec   // dec[r] = total decrements by replica r
+    ( Vec i ) inc_id    // replica ids that have incremented
+    ( Vec i ) inc_amt   // inc_amt[k] = total increments by replica inc_id[k]
+    ( Vec i ) dec_id
+    ( Vec i ) dec_amt
 }
 
 @ pncounter_new → *PNCounter {
     : *PNCounter c # *PNCounter ( nurl_alloc Z PNCounter )
-    = . c inc ( vec_new [i] )
-    = . c dec ( vec_new [i] )
+    = . c inc_id ( vec_new [i] )
+    = . c inc_amt ( vec_new [i] )
+    = . c dec_id ( vec_new [i] )
+    = . c dec_amt ( vec_new [i] )
     ^ c
 }
-@ pncounter_free *PNCounter c → v { ( vec_free [i] . c inc ) ( vec_free [i] . c dec ) ( nurl_free # s c ) }
+@ pncounter_free *PNCounter c → v {
+    ( vec_free [i] . c inc_id ) ( vec_free [i] . c inc_amt )
+    ( vec_free [i] . c dec_id ) ( vec_free [i] . c dec_amt )
+    ( nurl_free # s c )
+}
 
-@ __pn_ensure ( Vec i ) v i idx → v { ~ <= ( vec_len [i] v ) idx { ( vec_push [i] v 0 ) } }
 @ __pn_at ( Vec i ) v i idx → i { ^ ?? ( vec_get [i] v idx ) { T x → x F → 0 } }
 @ __pn_sum ( Vec i ) v → i {
     : i n ( vec_len [i] v ) : ~ i s 0 : ~ i k 0
     ~ < k n { = s + s ( __pn_at v k ) = k + k 1 }
     ^ s
 }
-
-@ pncounter_inc *PNCounter c i replica i amt → v {
-    ( __pn_ensure . c inc replica )
-    ( vec_set [i] . c inc replica + ( __pn_at . c inc replica ) amt )
+// index of replica `id` in `ids`, or -1
+@ __pn_idx ( Vec i ) ids i id → i {
+    : i n ( vec_len [i] ids ) : ~ i found -1 : ~ i k 0
+    ~ & == found -1 < k n { ? == ?? ( vec_get [i] ids k ) { T x → x F → 0 } id { = found k } {} = k + k 1 }
+    ^ found
 }
-@ pncounter_dec *PNCounter c i replica i amt → v {
-    ( __pn_ensure . c dec replica )
-    ( vec_set [i] . c dec replica + ( __pn_at . c dec replica ) amt )
+// add `amt` to replica `id`'s grow-only slot (append if first seen)
+@ __pn_bump ( Vec i ) ids ( Vec i ) amts i id i amt → v {
+    : i j ( __pn_idx ids id )
+    ? >= j 0 { ( vec_set [i] amts j + ( __pn_at amts j ) amt ) } { ( vec_push [i] ids id ) ( vec_push [i] amts amt ) }
 }
-@ pncounter_value *PNCounter c → i { ^ - ( __pn_sum . c inc ) ( __pn_sum . c dec ) }
 
-@ __pn_max_into ( Vec i ) dst ( Vec i ) src → v {
-    : i ns ( vec_len [i] src )
-    ~ < ( vec_len [i] dst ) ns { ( vec_push [i] dst 0 ) }
-    : ~ i k 0
+@ pncounter_inc *PNCounter c i replica i amt → v { ( __pn_bump . c inc_id . c inc_amt replica amt ) }
+@ pncounter_dec *PNCounter c i replica i amt → v { ( __pn_bump . c dec_id . c dec_amt replica amt ) }
+@ pncounter_value *PNCounter c → i { ^ - ( __pn_sum . c inc_amt ) ( __pn_sum . c dec_amt ) }
+
+// merge src (ids,amts) into dst, taking the max per replica id (insert if new)
+@ __pn_max_into ( Vec i ) dids ( Vec i ) damts ( Vec i ) sids ( Vec i ) samts → v {
+    : i ns ( vec_len [i] sids ) : ~ i k 0
     ~ < k ns {
-        : i sv ( __pn_at src k )
-        ? > sv ( __pn_at dst k ) { ( vec_set [i] dst k sv ) } {}
+        : i id ?? ( vec_get [i] sids k ) { T x → x F → 0 }
+        : i sv ( __pn_at samts k )
+        : i j ( __pn_idx dids id )
+        ? >= j 0 { ? > sv ( __pn_at damts j ) { ( vec_set [i] damts j sv ) } {} } { ( vec_push [i] dids id ) ( vec_push [i] damts sv ) }
         = k + k 1
     }
 }
 // Merge a peer's counter into this one (idempotent, commutative).
 @ pncounter_merge *PNCounter a *PNCounter b → v {
-    ( __pn_max_into . a inc . b inc )
-    ( __pn_max_into . a dec . b dec )
+    ( __pn_max_into . a inc_id . a inc_amt . b inc_id . b inc_amt )
+    ( __pn_max_into . a dec_id . a dec_amt . b dec_id . b dec_amt )
 }
 
 // ════════════════════════════════════════════════════════════════
