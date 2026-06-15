@@ -138,6 +138,25 @@ $ `stdlib/ext/http_response.nu`
     s dos_state
 }
 
+// ── Connection upgrade hook (WebSocket etc.) ─────────────────────
+// The keep-alive loop hands each fully-parsed request to an optional
+// upgrade handler BEFORE the normal HttpResponse handler. If the hook
+// returns T it has TAKEN OVER the connection (e.g. performed the
+// WebSocket 101 handshake and run the frame loop to completion,
+// synchronously, on this worker); the loop then ends and the server
+// closes the now-finished connection as usual — the hook must NOT close
+// it itself. Returning F means "not mine", and the request falls through
+// to the normal handler. Process-global (one server per process here);
+// default unset = behaviour-neutral.
+: __WsUpgrade { ( @ b TcpConn HttpRequest ) fn }
+: ~ i g_ws_upgrade 0
+
+@ server_set_upgrade ( @ b TcpConn HttpRequest ) f → v {
+    : *__WsUpgrade u # *__WsUpgrade ( nurl_alloc Z __WsUpgrade )
+    = . u fn f
+    = g_ws_upgrade # i u
+}
+
 // DoS connection caps (server-wide + per-source-IP). All caps are
 // "soft" — a request that exceeds them is rejected with an immediate
 // close (no canned 503), which is the cheapest possible response and
@@ -736,6 +755,16 @@ $ `stdlib/ext/http_response.nu`
                 : HttpRequest req . pho head
                 : b body_ok ( __finish_body conn req carry body_max )
                 ? body_ok {
+                  // Upgrade hook (e.g. WebSocket) gets first crack. If it takes
+                  // over the connection, run nothing else and let the loop end
+                  // so the server closes the finished conn.
+                  : ~ b __ws_handled F
+                  ? != g_ws_upgrade 0 {
+                      : *__WsUpgrade __wu # *__WsUpgrade g_ws_upgrade
+                      : ( @ b TcpConn HttpRequest ) __upf . __wu fn
+                      ? ( __upf conn req ) { = __ws_handled T } {}
+                  } {}
+                  ? __ws_handled { ( request_free req ) = done T } {
                     : b req_close ( __request_says_close req )
                     : ( @ HttpResponse HttpRequest ) f . s handler
                     // Wrap the handler in `recover` so a panic inside
@@ -801,6 +830,7 @@ $ `stdlib/ext/http_response.nu`
                         }
                         F _ → { = done T }
                     }
+                  }
                 } {
                     : HttpResponse er ( response_text 400 `malformed body\n` )
                     : !v NetErr _wr ( __write_response conn er T )
