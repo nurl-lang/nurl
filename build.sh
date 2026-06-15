@@ -245,6 +245,29 @@ else
     log "[info] libzstd not found — stdlib/ext/compress.nu's zstd_* will return CompressOther"
 fi
 
+# ── libopus detection ──────────────────────────────────────
+# pttvoice/opus.nu binds libopus directly (& `opus` @ …, no runtime.c bridge).
+# Drop the sentinel the nurlc FFI-lib check looks for; nurl.sh auto-links -lopus
+# when the symbols appear. libopus ships no unversioned .so on Debian, so accept
+# either pkg-config or the bare soname.
+if pkg-config --exists opus 2>/dev/null || [ -e /usr/lib/x86_64-linux-gnu/libopus.so.0 ] || [ -e /usr/lib/libopus.so.0 ]; then
+    echo 1 > stdlib/runtime.opus
+    log "[info] libopus detected — Opus codec FFI enabled"
+else
+    rm -f stdlib/runtime.opus
+    log "[info] libopus not found — pttvoice audio codec unavailable"
+fi
+
+# ── ALSA (libasound) detection ─────────────────────────────
+# pttvoice/audio.nu captures/plays PCM via the ALSA snd_pcm_* API.
+if pkg-config --exists alsa 2>/dev/null || [ -e /usr/lib/x86_64-linux-gnu/libasound.so.2 ] || [ -e /usr/lib/libasound.so.2 ]; then
+    echo 1 > stdlib/runtime.asound
+    log "[info] ALSA detected — pttvoice audio I/O enabled"
+else
+    rm -f stdlib/runtime.asound
+    log "[info] ALSA not found — pttvoice audio I/O unavailable"
+fi
+
 # ── Build stages ─────────────────────────────────────────────
 # `-flto` makes runtime.o emit LLVM bitcode so vec/string/io FFI calls
 # inline across the runtime ↔ user-code boundary at link time. The

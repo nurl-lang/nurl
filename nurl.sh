@@ -234,6 +234,29 @@ if [[ -f "$SCRIPT_DIR/stdlib/runtime.zstd" ]]; then
     fi
 fi
 
+# Auto-link libopus / ALSA when the program references their FFI symbols
+# (pttvoice and any audio app). Linked only when actually used, so other
+# programs don't grow a dependency. libopus ships no unversioned .so on
+# Debian/Ubuntu, so link the soname directly.
+if grep -qE '@opus_(encoder_create|encoder_destroy|encode|decoder_create|decoder_destroy|decode|strerror)\b' "$LLFILE"; then
+    if pkg-config --exists opus 2>/dev/null; then
+        # shellcheck disable=SC2046
+        EXTRA_LIBS+=( $(pkg-config --libs opus) )
+    elif [[ -e /usr/lib/x86_64-linux-gnu/libopus.so || -e /usr/lib/libopus.so ]]; then
+        EXTRA_LIBS+=( -lopus )
+    else
+        EXTRA_LIBS+=( -l:libopus.so.0 )
+    fi
+fi
+if grep -qE '@snd_pcm_[A-Za-z_]+\b' "$LLFILE"; then
+    if pkg-config --exists alsa 2>/dev/null; then
+        # shellcheck disable=SC2046
+        EXTRA_LIBS+=( $(pkg-config --libs alsa) )
+    else
+        EXTRA_LIBS+=( -lasound )
+    fi
+fi
+
 # In --debug mode, drop -flto: the LTO link pipeline strips DWARF
 # debug info from .ll input when the matching runtime.o bitcode has
 # no DI counterpart (current build.sh compiles runtime.o without -g).
