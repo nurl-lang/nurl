@@ -18,7 +18,7 @@ clang -O2 -flto /tmp/fizzbuzz.ll stdlib/runtime.o -lm -lpthread -o /tmp/fizzbuzz
 /tmp/fizzbuzz
 ```
 
-## Catalogue (38 examples)
+## Catalogue (45 examples)
 
 Each example is tagged for where it can run:
 
@@ -80,6 +80,21 @@ Each example is tagged for where it can run:
 | [`async_http_server.nu`](async_http_server.nu) | Same handler contract as `static_server.nu` but runs the request handlers on the M:N fiber runtime. | local (server listener) |
 | [`mcp_echo_server.nu`](mcp_echo_server.nu) | Minimal MCP server over stdio — one `echo` tool. Wire it into an MCP-aware client (Claude Desktop, Claude Code, etc.) and the tool is callable. | local (stdio + MCP client) |
 | [`mcp_echo_server_http.nu`](mcp_echo_server_http.nu) | Same business logic as `mcp_echo_server.nu`, but exposed over HTTP transport. | local (server listener) |
+
+### Distributed stack (NAT traversal, overlay, SWIM, CRDTs)
+
+The pubkey-addressed overlay for distributed computing over NAT'd / mobile
+peers. Full design: [`docs/DISTRIBUTED.md`](../docs/DISTRIBUTED.md).
+
+| File | What it does | Tag |
+|---|---|---|
+| [`stun.nu`](stun.nu) | Discover this host's public (server-reflexive) UDP endpoint via a STUN server (`stdlib/net/stun.nu`, RFC 8489). | local (network) |
+| [`nat.nu`](nat.nu) | Gather connection candidates (host + reflexive) and probe the NAT mapping type (cone → punchable vs symmetric → relay) against two public STUN servers. | local (network) |
+| [`relay.nu`](relay.nu) | A deployable DERP-style relay daemon: forwards opaque datagrams by destination pubkey and fans group multicasts out — never decrypts (E2E stays in the peers). | local (server listener) |
+| [`rendezvous.nu`](rendezvous.nu) | A signaling server: peers register `pubkey → candidate endpoints + relay`, others look them up by pubkey. Control plane only. | local (server listener) |
+| [`transport.nu`](transport.nu) | The transport seam in use — open a pubkey-addressed transport over a relay, join a group, broadcast, receive. | local (needs a relay) |
+| [`membership.nu`](membership.nu) | A SWIM membership node over the overlay: the failure detector drives the pubkey member table, probes/acks/gossip ride the transport. | local (needs a relay) |
+| [`replicated_counter.nu`](replicated_counter.nu) | A PNCounter replicated across the group by CRDT gossip — each node increments its replica, broadcasts its encoded counter, merges what it receives, all converge. | local (needs a relay) |
 
 ### Databases
 
