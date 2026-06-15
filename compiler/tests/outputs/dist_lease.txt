@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+new-first: effect ran exactly once: YES
+old-first: effect ran exactly once: YES
+fence advanced to epoch 2: YES
+distinct effect still admitted: YES
+stale-epoch refused even for new idem: YES
+pure tasks leave the lease table empty: YES
