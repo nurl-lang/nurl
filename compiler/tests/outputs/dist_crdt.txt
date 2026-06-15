@@ -1,0 +1,18 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a value = 3: YES
+b value = 10: YES
+merged value = 13: YES
+merge idempotent (still 13): YES
+merge commutative (= 13): YES
+higher ts wins (9): YES
+lww merge commutative: YES
+ts tie → higher replica (9): YES
+tie-break commutative: YES
+added → present: YES
+removed → absent: YES
+add-wins on A: YES
+add-wins on B: YES
+replicas converged: YES
