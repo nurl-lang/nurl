@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>NURL PTT Chat — push-to-talk voice over the overlay</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; background: #0f1115; color: #d7dae0;
+    font: 15px/1.6 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header { padding: 20px 22px 6px; }
+  header h1 { margin: 0 0 4px; font-size: 21px; }
+  header a { color: #7aa2f7; }
+  .sub { color: #9aa0ab; font-size: 13px; }
+  main { display: flex; flex-wrap: wrap; gap: 28px; padding: 16px 22px 32px; align-items: flex-start; }
+  #stageWrap { background: #000; border: 1px solid #2a2f3a; border-radius: 10px; padding: 12px; line-height: 0; }
+  canvas { display: block; background: #101418; border-radius: 6px; width: 480px; height: 220px; }
+  .panel { min-width: 300px; max-width: 440px; }
+  .panel h2 { font-size: 14px; margin: 16px 0 6px; color: #c0c5cf; }
+  .panel p { margin: 6px 0; color: #b8bdc8; font-size: 13.5px; }
+  .micbtn {
+    display: inline-flex; align-items: center; gap: 10px;
+    background: #2d4a7a; color: #eef2ff; border: 1px solid #3f63a8;
+    border-radius: 999px; padding: 12px 22px; font-size: 15px; cursor: pointer;
+    margin: 6px 0 4px;
+  }
+  .micbtn:hover { background: #355aa0; }
+  .micbtn.live { background: #7a2d3a; border-color: #a83f4f; }
+  .micbtn .dot { width: 11px; height: 11px; border-radius: 50%; background: #9aa0ab; }
+  .micbtn.live .dot { background: #ff5d6c; box-shadow: 0 0 8px #ff5d6c; }
+  #status { font-size: 13px; color: #9aa0ab; min-height: 1.4em; margin: 8px 0; }
+  code { background: #1b2030; padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+  .chan { background: #161b26; border: 1px solid #242b39; border-radius: 8px; padding: 10px 12px; margin-top: 10px; font-size: 13px; color: #aeb4c0; }
+  .chan b { color: #d7dae0; }
+  .credit { font-size: 12px; color: #7e8593; margin-top: 18px; }
+  .credit a { color: #7aa2f7; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎙️ NURL PTT Chat <span class="sub">· push-to-talk voice, compiled to WebAssembly</span></h1>
+  <div class="sub">
+    A push-to-talk voice demo built on NURL's distributed overlay.
+    <a href="/">← back to the playground</a>
+  </div>
+</header>
+<main>
+  <div>
+    <div id="stageWrap"><canvas id="stage" width="480" height="220"></canvas></div>
+    <div id="status">Click the microphone to grant permission and start.</div>
+    <button id="mic" class="micbtn"><span class="dot"></span><span id="micLabel">Microphone</span></button>
+  </div>
+
+  <div class="panel">
+    <h2>What this is</h2>
+    <p>
+      Hold a conversation by voice over the same pubkey-addressed mesh the rest
+      of NURL's <a href="/">distributed stack</a> runs on. This page embeds a
+      small NURL program compiled to <code>wasm32-wasi</code> that reads your
+      microphone and draws a live <b>VU meter</b> and <b>frequency spectrum</b> —
+      so you can see your voice being captured before it is encoded and sent.
+    </p>
+
+    <h2>How the voice path works</h2>
+    <p>
+      • <b>Peers are public keys</b>, not IP addresses — the transport finds a
+      <b>direct peer-to-peer</b> path when it can punch through NAT, and falls
+      back to a relay only when it must.<br>
+      • Audio is <b>Opus</b>, 48&nbsp;kHz mono in 20&nbsp;ms frames — pushed to
+      <b>one peer</b> (unicast) or to <b>every member of the channel</b>
+      (group multicast).<br>
+      • Membership and presence converge with <b>SWIM + CRDTs</b> — no central
+      server, no consensus, no coordination.
+    </p>
+
+    <div class="chan">
+      <b>Channel.</b> For this demo everyone shares one public channel. In the
+      mobile app the channel will be a <b>generated secret</b> you share by
+      <b>QR code</b> or link — only invited devices can join and decrypt it.
+    </div>
+
+    <h2>The embedded module</h2>
+    <p>
+      <code>pptchat.nu</code> is ~90 lines of NURL: it opens a canvas, polls the
+      mic through the <code>audio</code> FFI each frame, and paints the meter.
+      The networking layer (Opus + overlay transport) is the
+      <a href="https://github.com/nurl-lang/nurl">native build</a> today; this
+      first web slice focuses on capture.
+    </p>
+
+    <div class="credit">
+      Microphone access needs a secure context — open this page via
+      <code>https://</code> or <code>http://localhost</code>. Audio never leaves
+      your browser in this demo.
+    </div>
+  </div>
+</main>
+
+<script type="module">
+const WASI_SHIM_URL = "https://esm.sh/@bjorn3/browser_wasi_shim@0.3.0";
+const stage = document.getElementById("stage");
+const statusEl = document.getElementById("status");
+const micBtn = document.getElementById("mic");
+const micLabel = document.getElementById("micLabel");
+const setStatus = (s) => { statusEl.textContent = s; };
+const log = (s) => console.log("[pptchat]", s);
+
+// ── Canvas host: bind <canvas> to the wasm framebuffer (i64/pixel ARGB) ──
+class CanvasHost {
+  constructor(el) { this.el = el; this.ctx = null; this.img = null;
+    this.memory = null; this.fbPtr = 0; this.w = 0; this.h = 0; this.shouldClose = 0; }
+  attachMemory(m) { this.memory = m; }
+  open(w, h, fbPtr) {
+    this.w = Number(w); this.h = Number(h); this.fbPtr = fbPtr | 0;
+    this.el.width = this.w; this.el.height = this.h;
+    this.ctx = this.el.getContext("2d");
+    this.img = this.ctx.createImageData(this.w, this.h);
+  }
+  present() {
+    if (!this.ctx || !this.memory) return;
+    const n = this.w * this.h;
+    const src32 = new Uint32Array(this.memory.buffer, this.fbPtr, n * 2);
+    const dst32 = new Uint32Array(this.img.data.buffer);
+    for (let i = 0, j = 0; i < n; i++, j += 2) {
+      const argb = src32[j];                          // 0xAARRGGBB
+      dst32[i] = (argb & 0xff00ff00)
+               | ((argb & 0x00ff0000) >>> 16)
+               | ((argb & 0x000000ff) << 16)
+               | 0xff000000;
+    }
+    this.ctx.putImageData(this.img, 0, 0);
+  }
+}
+
+// ── Asyncify runtime: lets the synchronous canvas_sleep yield to the browser ──
+const ASY_NONE = 0, ASY_UNWINDING = 1, ASY_REWINDING = 2;
+class AsyncifyRuntime {
+  constructor() { this.exports = null; this.memory = null; this.stackPtr = 0;
+    this.stackSize = 4096; this.pendingResult = undefined; this.pendingPromise = null; this.stopped = false; }
+  attach(inst) { this.exports = inst.exports; this.memory = inst.exports.memory; }
+  ensureStack() {
+    if (this.stackPtr) return;
+    const getPtr = this.exports.__nurl_asyncify_stack_ptr;
+    const getSize = this.exports.__nurl_asyncify_stack_size;
+    if (!getPtr || !getSize) throw new Error("module missing __nurl_asyncify_stack_* exports");
+    const base = getPtr() | 0; this.stackSize = getSize() | 0; this.stackPtr = base;
+    const view = new DataView(this.memory.buffer);
+    view.setInt32(base, base + 8, true);
+    view.setInt32(base + 4, base + this.stackSize, true);
+  }
+  wrap(fn) {
+    const self = this;
+    return function (...args) {
+      const st = self.exports.asyncify_get_state();
+      if (st === ASY_NONE) { self.ensureStack();
+        self.pendingPromise = Promise.resolve(fn(...args));
+        self.exports.asyncify_start_unwind(self.stackPtr); return 0; }
+      if (st === ASY_REWINDING) { self.exports.asyncify_stop_rewind(); return self.pendingResult; }
+      throw new Error("asyncify: unexpected state " + st);
+    };
+  }
+  async drive(entry) {
+    let exit = 0;
+    const run = () => { try { entry(); } catch (e) {
+      if (typeof e === "number") { exit = e; return "exit"; }
+      if (e && typeof e.code === "number") { exit = e.code; return "exit"; }
+      throw e; } return "ok"; };
+    let res = run();
+    while (res !== "exit" && this.exports.asyncify_get_state() === ASY_UNWINDING) {
+      this.exports.asyncify_stop_unwind();
+      this.pendingResult = await this.pendingPromise;
+      if (this.stopped) { exit = 0; break; }
+      this.exports.asyncify_start_rewind(this.stackPtr);
+      res = run();
+    }
+    return exit;
+  }
+}
+
+// ── Microphone host: AnalyserNode pollers under the wasm "audio" module ──
+const audioHost = {
+  ctx: null, analyser: null, stream: null,
+  timeBuf: null, freqBuf: null, freqLin: null, hasFrame: false,
+  async init(fftSize = 2048) {
+    if (this.analyser) return true;
+    if (!window.isSecureContext) {
+      setStatus("Mic blocked — open via https:// or http://localhost."); return false;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setStatus("getUserMedia unavailable in this browser/context."); return false;
+    }
+    try { this.stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch (e) { setStatus(`Microphone permission denied (${e.name}).`); return false; }
+    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (this.ctx.state === "suspended") await this.ctx.resume();
+    this.analyser = this.ctx.createAnalyser();
+    this.analyser.fftSize = fftSize;
+    this.analyser.smoothingTimeConstant = 0.5;
+    this.ctx.createMediaStreamSource(this.stream).connect(this.analyser);
+    this.timeBuf = new Float32Array(this.analyser.fftSize);
+    this.freqBuf = new Float32Array(this.analyser.frequencyBinCount);
+    this.freqLin = new Float32Array(this.analyser.frequencyBinCount);
+    this.hasFrame = false;
+    log(`analyser ready (sampleRate=${this.ctx.sampleRate}, bins=${this.analyser.frequencyBinCount})`);
+    return true;
+  },
+  _pullTime() { if (!this.analyser) return false; this.analyser.getFloatTimeDomainData(this.timeBuf); this.hasFrame = true; return true; },
+  _pullFreq() {
+    if (!this.analyser) return false;
+    this.analyser.getFloatFrequencyData(this.freqBuf);
+    for (let i = 0; i < this.freqBuf.length; i++) this.freqLin[i] = Math.max(0, Math.min(1, (this.freqBuf[i] + 100) / 100));
+    this.hasFrame = true; return true;
+  },
+  level() { if (!this._pullTime()) return 0; let s = 0; for (const v of this.timeBuf) s += v * v; return Math.sqrt(s / this.timeBuf.length); },
+  bin(i) { if (!this._pullFreq()) return 0; const n = Number(i); return (n < 0 || n >= this.freqLin.length) ? 0 : this.freqLin[n]; },
+  binCount() { return this.analyser ? this.analyser.frequencyBinCount : 0; },
+  isSilent(thrPct) { return this.level() * 100 < Number(thrPct) ? 1 : 0; },
+  ready() { return this.analyser && this.hasFrame ? 1 : 0; },
+  stop() {
+    try { this.stream && this.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+    try { this.ctx && this.ctx.close(); } catch (_) {}
+    this.ctx = this.analyser = this.stream = null; this.hasFrame = false;
+  },
+};
+
+let WASI, File, OpenFile, ConsoleStdout, PreopenDirectory;
+let wasmBytes = null, deps = false, activeRun = null;
+
+async function loadDeps() {
+  if (deps) return;
+  ({ WASI, File, OpenFile, ConsoleStdout, PreopenDirectory } = await import(WASI_SHIM_URL));
+  wasmBytes = new Uint8Array(await (await fetch("pptchat.wasm")).arrayBuffer());
+  deps = true;
+}
+
+async function run() {
+  const canvasHost = new CanvasHost(stage);
+  const asy = new AsyncifyRuntime();
+  const stdout = ConsoleStdout.lineBuffered(() => {});
+  const stderr = ConsoleStdout.lineBuffered((l) => console.warn("[pptchat]", l));
+  const fds = [ new OpenFile(new File(new Uint8Array())), stdout, stderr, new PreopenDirectory(".", new Map()) ];
+  const wasi = new WASI(["pptchat.wasm"], [], fds);
+
+  const imports = {
+    wasi_snapshot_preview1: wasi.wasiImport,
+    canvas: {
+      open: (w, h, fb) => canvasHost.open(w, h, fb),
+      present: () => canvasHost.present(),
+      sleep: asy.wrap((ms) => new Promise((r) => setTimeout(r, Number(ms)))),
+      should_close: () => BigInt(canvasHost.shouldClose | (asy.stopped ? 1 : 0)),
+      close: () => {},
+    },
+    audio: {
+      level: () => audioHost.level(),
+      bin: (i) => audioHost.bin(i),
+      bin_count: () => BigInt(audioHost.binCount()),
+      is_silent: (t) => BigInt(audioHost.isSilent(t)),
+      ready: () => BigInt(audioHost.ready()),
+    },
+  };
+
+  let instance;
+  try {
+    const module = await WebAssembly.compile(wasmBytes);
+    instance = await WebAssembly.instantiate(module, imports);
+  } catch (e) { setStatus("instantiation failed: " + e.message); return; }
+
+  try { if (wasi.initialize && instance.exports._initialize) wasi.initialize(instance); } catch (_) {}
+  canvasHost.attachMemory(instance.exports.memory);
+  asy.attach(instance);
+  const thisRun = { stop: () => { canvasHost.shouldClose = 1; asy.stopped = true; } };
+  activeRun = thisRun;
+  try { await asy.drive(() => wasi.start(instance)); }
+  catch (e) { if (typeof e !== "number" && !(e && typeof e.code === "number")) console.error(e); }
+  if (activeRun === thisRun) activeRun = null;
+}
+
+let listening = false;
+micBtn.addEventListener("click", async () => {
+  if (listening) {
+    listening = false; micBtn.classList.remove("live"); micLabel.textContent = "Microphone";
+    if (activeRun) activeRun.stop();
+    audioHost.stop();
+    setStatus("Stopped. Click the microphone to start again.");
+    return;
+  }
+  setStatus("Requesting microphone…");
+  try { await loadDeps(); } catch (e) { setStatus("failed to load wasm runtime: " + e.message); return; }
+  const ok = await audioHost.init();
+  if (!ok) return;
+  listening = true; micBtn.classList.add("live"); micLabel.textContent = "Listening — click to stop";
+  setStatus("Listening. Speak — the meter and spectrum track your mic.");
+  run();
+});
+</script>
+</body>
+</html>
