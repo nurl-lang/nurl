@@ -20,6 +20,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/dist/crdt.nu`
+$ `stdlib/dist/ring.nu`
 
 : RcCur { ( Vec u ) buf  i off }
 @ __rc_u16 *RcCur c → i { : i v ?? ( bytes_read_u16_be . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 2 ^ v }
@@ -139,3 +140,78 @@ $ `stdlib/dist/crdt.nu`
     ( orset_merge s o )
     ( orset_free o )
 }
+
+// ════════════════════════════════════════════════════════════════
+// Ownership-scoped anti-entropy (§7.5 Phase 9.2).
+//
+// Whole-group CRDT broadcast is O(N) per delta and makes the ring decorative.
+// Scope gossip to the ring instead: a key's state lives only on its replica
+// set `ring_owners(key, R)`. On a local update the encoded delta is sent only
+// to those R replicas (not the whole group); a non-replica never receives — or
+// stores — a key's delta. Periodic anti-entropy compares a cheap DIGEST of the
+// encoded state between replicas and transfers only on mismatch — so a node
+// that newly joins a key's replica set (after a ring change) converges by
+// pulling, without flooding. This is the same sharding the Phase 11 work
+// dispatch reuses: `ring_owner(key)` runs the task, `ring_owners(key, R)` hold
+// its result.
+// ════════════════════════════════════════════════════════════════
+
+@ __rep_veq ( Vec u ) a ( Vec u ) b → b {
+    : i n ( vec_len [u] a )
+    ? != n ( vec_len [u] b ) { ^ F } {}
+    : ~ b e T : ~ i k 0
+    ~ & e < k n {
+        : i x ?? ( vec_get [u] a k ) { T t → # i t F → -1 }
+        : i y ?? ( vec_get [u] b k ) { T t → # i t F → -2 }
+        ? != x y { = e F } {}
+        = k + k 1
+    }
+    ^ e
+}
+
+// A compact divergence summary of an encoded CRDT (FNV-1a/64). Two replicas
+// with equal digests are in sync and skip the transfer; differing digests
+// trigger a pull. Cheap to gossip in an anti-entropy digest round.
+@ crdt_digest ( Vec u ) bytes → i {
+    : ~ i h 0xcbf29ce484222325
+    : i n ( vec_len [u] bytes )
+    : ~ i k 0
+    ~ < k n {
+        : i bj ?? ( vec_get [u] bytes k ) { T x → # i x F → 0 }
+        = h ^^ h & bj 255
+        = h * h 0x100000001b3
+        = k + k 1
+    }
+    ^ h
+}
+
+// Is `self_pk` in the replica set for `key` (the R members clockwise from the
+// key's position)? A node uses this to decide whether to store / accept a
+// key's state.
+@ is_replica *Ring r ( Vec u ) key i nrep ( Vec u ) self_pk → b {
+    : ( Vec s ) owners ( ring_owners r key nrep )
+    : i n ( vec_len [s] owners )
+    : ~ b found F : ~ i k 0
+    ~ & ! found < k n {
+        : s pp ?? ( vec_get [s] owners k ) { T x → x F → # s 0 }
+        ? != # i pp 0 {
+            : *RingPoint p # *RingPoint pp
+            ? ( __rep_veq . p owner self_pk ) { = found T } {}
+        } {}
+        = k + k 1
+    }
+    ( vec_free [s] owners )
+    ^ found
+}
+
+// How many replicas a key actually has (≤ nrep, ≤ distinct members) — the
+// fan-out of a delta. O(R), independent of cluster size N.
+@ replica_fanout *Ring r ( Vec u ) key i nrep → i {
+    : ( Vec s ) owners ( ring_owners r key nrep )
+    : i n ( vec_len [s] owners )
+    ( vec_free [s] owners )
+    ^ n
+}
+
+// Do two encoded states agree? (Anti-entropy: skip the pull when they do.)
+@ crdt_in_sync ( Vec u ) a ( Vec u ) b → b { ^ == ( crdt_digest a ) ( crdt_digest b ) }
