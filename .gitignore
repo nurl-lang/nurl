@@ -13,7 +13,6 @@ nurlc.wasm
 # ride in the deployed image (the CI deploy builds from the committed tree).
 !nurlapi/static/c64.wasm
 !nurlapi/static/gameboy_gb.wasm
-!nurlapi/static/pptchat.wasm
 
 # Compiler output (keep the last good version)
 !compiler/nurlc_lastgood.ll

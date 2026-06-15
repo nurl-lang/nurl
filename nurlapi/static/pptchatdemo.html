@@ -3,34 +3,30 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>NURL PTT Chat — push-to-talk voice over the overlay</title>
+<title>NURL PTT Chat — push-to-talk voice over a NURL relay</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <style>
   :root { color-scheme: dark; }
-  body {
-    margin: 0; background: #0f1115; color: #d7dae0;
-    font: 15px/1.6 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-  }
+  body { margin: 0; background: #0f1115; color: #d7dae0;
+    font: 15px/1.6 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
   header { padding: 20px 22px 6px; }
   header h1 { margin: 0 0 4px; font-size: 21px; }
   header a { color: #7aa2f7; }
   .sub { color: #9aa0ab; font-size: 13px; }
   main { display: flex; flex-wrap: wrap; gap: 28px; padding: 16px 22px 32px; align-items: flex-start; }
   #stageWrap { background: #000; border: 1px solid #2a2f3a; border-radius: 10px; padding: 12px; line-height: 0; }
-  canvas { display: block; background: #101418; border-radius: 6px; width: 480px; height: 220px; }
+  canvas { display: block; background: #101418; border-radius: 6px; width: 480px; height: 140px; }
   .panel { min-width: 300px; max-width: 440px; }
   .panel h2 { font-size: 14px; margin: 16px 0 6px; color: #c0c5cf; }
   .panel p { margin: 6px 0; color: #b8bdc8; font-size: 13.5px; }
-  .micbtn {
-    display: inline-flex; align-items: center; gap: 10px;
+  .talkbtn { display: inline-flex; align-items: center; gap: 10px;
     background: #2d4a7a; color: #eef2ff; border: 1px solid #3f63a8;
-    border-radius: 999px; padding: 12px 22px; font-size: 15px; cursor: pointer;
-    margin: 6px 0 4px;
-  }
-  .micbtn:hover { background: #355aa0; }
-  .micbtn.live { background: #7a2d3a; border-color: #a83f4f; }
-  .micbtn .dot { width: 11px; height: 11px; border-radius: 50%; background: #9aa0ab; }
-  .micbtn.live .dot { background: #ff5d6c; box-shadow: 0 0 8px #ff5d6c; }
+    border-radius: 999px; padding: 13px 24px; font-size: 15px; cursor: pointer; margin: 8px 0 4px; }
+  .talkbtn:hover { background: #355aa0; }
+  .talkbtn.tx { background: #7a2d3a; border-color: #a83f4f; }
+  .talkbtn .dot { width: 11px; height: 11px; border-radius: 50%; background: #9aa0ab; }
+  .talkbtn.tx .dot { background: #ff5d6c; box-shadow: 0 0 8px #ff5d6c; }
+  .talkbtn[disabled] { opacity: .5; cursor: default; }
   #status { font-size: 13px; color: #9aa0ab; min-height: 1.4em; margin: 8px 0; }
   .chanbar { width: 480px; margin: 0 0 10px; }
   .chanrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -39,6 +35,8 @@
   .ghost { background: #161b26; color: #c0c5cf; border: 1px solid #2a3142; border-radius: 6px; padding: 4px 10px; font-size: 12.5px; cursor: pointer; }
   .ghost:hover { background: #1d2433; }
   .chanhint { font-size: 12px; color: #7e8593; margin-top: 6px; }
+  .pill { display: inline-block; background: #14241a; border: 1px solid #1f3a28; color: #8fe0a8;
+    padding: 3px 10px; border-radius: 999px; font-size: 12.5px; margin-left: 4px; }
   code { background: #1b2030; padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
   .chan { background: #161b26; border: 1px solid #242b39; border-radius: 8px; padding: 10px 12px; margin-top: 10px; font-size: 13px; color: #aeb4c0; }
   .chan b { color: #d7dae0; }
@@ -48,9 +46,9 @@
 </head>
 <body>
 <header>
-  <h1>🎙️ NURL PTT Chat <span class="sub">· push-to-talk voice, compiled to WebAssembly</span></h1>
+  <h1>🎙️ NURL PTT Chat <span class="sub">· push-to-talk voice over a NURL relay</span></h1>
   <div class="sub">
-    A push-to-talk voice demo built on NURL's distributed overlay.
+    Real voice between everyone on a channel, relayed by a NURL WebSocket server.
     <a href="/">← back to the playground</a>
   </div>
 </header>
@@ -60,296 +58,226 @@
       <div class="chanrow">
         <span class="chanlbl">Channel</span>
         <code id="chanId">public</code>
+        <span class="pill" id="presence">offline</span>
         <button id="copyBtn" class="ghost" title="Copy join link">Copy link</button>
         <button id="newBtn" class="ghost">+ Create channel</button>
       </div>
-      <div id="chanHint" class="chanhint">Everyone on this channel hears each other. Share the link to invite others.</div>
+      <div id="chanHint" class="chanhint">Open this link in another tab or device to talk — everyone on the channel hears each other.</div>
     </div>
-    <div id="stageWrap"><canvas id="stage" width="480" height="220"></canvas></div>
-    <div id="status">Click the microphone to grant permission and start.</div>
-    <button id="mic" class="micbtn"><span class="dot"></span><span id="micLabel">Microphone</span></button>
+    <div id="stageWrap"><canvas id="stage" width="480" height="140"></canvas></div>
+    <div id="status">Click “Connect &amp; talk” to join the channel.</div>
+    <button id="talk" class="talkbtn"><span class="dot"></span><span id="talkLabel">Connect &amp; talk</span></button>
   </div>
 
   <div class="panel">
-    <h2>What this is</h2>
+    <h2>What this proves</h2>
     <p>
-      Hold a conversation by voice over the same pubkey-addressed mesh the rest
-      of NURL's <a href="/">distributed stack</a> runs on. This page embeds a
-      small NURL program compiled to <code>wasm32-wasi</code> that reads your
-      microphone and draws a live <b>VU meter</b> and <b>frequency spectrum</b> —
-      so you can see your voice being captured before it is encoded and sent.
+      Two or more browsers on the same channel exchange <b>live microphone audio
+      through a NURL server</b>. The page captures the mic, ships 20 ms PCM
+      frames over a WebSocket to <code>/pptws/&lt;channel&gt;</code>, and the
+      <a href="https://github.com/nurl-lang/nurl">NURL relay</a> fans each frame
+      out to every <i>other</i> member of that channel (the same group-multicast
+      shape as the native overlay's relay). Inbound frames play back through Web
+      Audio. The meter shows your mic; the badge shows how many are connected.
     </p>
 
     <h2>How the voice path works</h2>
     <p>
-      • <b>Peers are public keys</b>, not IP addresses — the transport finds a
-      <b>direct peer-to-peer</b> path when it can punch through NAT, and falls
-      back to a relay only when it must.<br>
-      • Audio is <b>Opus</b>, 48&nbsp;kHz mono in 20&nbsp;ms frames — pushed to
-      <b>one peer</b> (unicast) or to <b>every member of the channel</b>
-      (group multicast).<br>
-      • Membership and presence converge with <b>SWIM + CRDTs</b> — no central
-      server, no consensus, no coordination.
+      • The <b>relay is a NURL program</b> — the playground's own HTTP server
+      gained a WebSocket <i>upgrade hook</i>, and the channel registry +
+      fan-out + presence are ~150 lines of NURL (<code>nurlapi/pptws.nu</code>).<br>
+      • A <b>channel is a group</b>; a frame from one member is forwarded to all
+      others, never echoed back to the sender.<br>
+      • The browser can't reach the native pubkey overlay (raw UDP/TCP), so this
+      is the <b>relayed</b> leg. The native app (<code>pttvoice/</code>) adds the
+      direct peer-to-peer path and Opus.
     </p>
 
     <div class="chan">
-      <b>Channels.</b> Without an id everyone lands on the shared
-      <code>public</code> channel. <b>+ Create channel</b> mints a fresh random
-      id and drops you on it; anyone who opens <code>/pptchat/&lt;id&gt;</code>
-      joins the same one — so the URL <i>is</i> the invite. In the mobile app
-      that id becomes a <b>generated secret</b> shared by <b>QR code</b> or
-      link, so only invited devices can join and decrypt the channel.
+      <b>Channels.</b> No id → the shared <code>public</code> channel.
+      <b>+ Create channel</b> mints a random id and drops you on it; anyone who
+      opens <code>/pptchat/&lt;id&gt;</code> joins the same one — the URL is the
+      invite. In the mobile app that id becomes a <b>generated secret</b> shared
+      by <b>QR code</b> or link, so only invited devices can join and decrypt.
     </div>
 
-    <h2>The embedded module</h2>
-    <p>
-      <code>pptchat.nu</code> is ~90 lines of NURL: it opens a canvas, polls the
-      mic through the <code>audio</code> FFI each frame, and paints the meter.
-      The networking layer (Opus + overlay transport) is the
-      <a href="https://github.com/nurl-lang/nurl">native build</a> today; this
-      first web slice focuses on capture.
-    </p>
-
     <div class="credit">
-      Microphone access needs a secure context — open this page via
-      <code>https://</code> or <code>http://localhost</code>. Audio never leaves
-      your browser in this demo.
+      Microphone access needs a secure context — open via <code>https://</code>
+      or <code>http://localhost</code>. PCM is uncompressed here (Opus is in the
+      native build); fine for a LAN/demo.
     </div>
   </div>
 </main>
 
-<script type="module">
-const WASI_SHIM_URL = "https://esm.sh/@bjorn3/browser_wasi_shim@0.3.0";
+<script>
 const stage = document.getElementById("stage");
+const ctx2d = stage.getContext("2d");
 const statusEl = document.getElementById("status");
-const micBtn = document.getElementById("mic");
-const micLabel = document.getElementById("micLabel");
+const talkBtn = document.getElementById("talk");
+const talkLabel = document.getElementById("talkLabel");
+const presenceEl = document.getElementById("presence");
 const setStatus = (s) => { statusEl.textContent = s; };
-const log = (s) => console.log("[pptchat]", s);
 
-// ── Channel: read from /pptchat/<id>, default "public" ───────────
-// The id is the future overlay group key / shared secret; for now it just
-// scopes who you'd talk to and lives in the shareable URL.
+// ── Channel from /pptchat/<id> (default "public") ────────────────
 const chanIdEl = document.getElementById("chanId");
 const copyBtn  = document.getElementById("copyBtn");
 const newBtn   = document.getElementById("newBtn");
-
 function currentChannel() {
   const m = location.pathname.match(/^\/pptchat\/(.+)$/);
   if (!m) return "public";
-  // keep it to a safe id charset; strip anything else
   const raw = decodeURIComponent(m[1]).replace(/[^A-Za-z0-9_-]/g, "");
   return raw || "public";
 }
 function newChannelId() {
-  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const a = "abcdefghijklmnopqrstuvwxyz0123456789";
   const r = new Uint8Array(13); crypto.getRandomValues(r);
-  let s = ""; for (const b of r) s += alphabet[b % alphabet.length];
-  return s;
+  let s = ""; for (const b of r) s += a[b % a.length]; return s;
 }
 const channel = currentChannel();
 chanIdEl.textContent = channel;
 document.title = `NURL PTT Chat · #${channel}`;
-
 copyBtn.addEventListener("click", async () => {
   const url = `${location.origin}/pptchat/${encodeURIComponent(channel)}`;
   try { await navigator.clipboard.writeText(url); copyBtn.textContent = "Copied!"; }
   catch (_) { copyBtn.textContent = url; }
   setTimeout(() => { copyBtn.textContent = "Copy link"; }, 1500);
 });
-newBtn.addEventListener("click", () => {
-  location.href = `/pptchat/${newChannelId()}`;
-});
+newBtn.addEventListener("click", () => { location.href = `/pptchat/${newChannelId()}`; });
 
-// ── Canvas host: bind <canvas> to the wasm framebuffer (i64/pixel ARGB) ──
-class CanvasHost {
-  constructor(el) { this.el = el; this.ctx = null; this.img = null;
-    this.memory = null; this.fbPtr = 0; this.w = 0; this.h = 0; this.shouldClose = 0; }
-  attachMemory(m) { this.memory = m; }
-  open(w, h, fbPtr) {
-    this.w = Number(w); this.h = Number(h); this.fbPtr = fbPtr | 0;
-    this.el.width = this.w; this.el.height = this.h;
-    this.ctx = this.el.getContext("2d");
-    this.img = this.ctx.createImageData(this.w, this.h);
+// ── Audio engine ─────────────────────────────────────────────────
+const SR = 48000;            // AudioContext sample rate
+const RING = SR * 2;         // 2 s playback ring
+let audioCtx = null, micStream = null, micSource = null;
+let analyser = null, capNode = null, outNode = null, muteGain = null;
+let ws = null, transmitting = false, connected = false;
+let ring = new Float32Array(RING), rd = 0, wr = 0;
+let lastRecvMs = 0;
+
+function f32toI16(f32) {
+  const i16 = new Int16Array(f32.length);
+  for (let i = 0; i < f32.length; i++) {
+    let s = Math.max(-1, Math.min(1, f32[i]));
+    i16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
   }
-  present() {
-    if (!this.ctx || !this.memory) return;
-    const n = this.w * this.h;
-    const src32 = new Uint32Array(this.memory.buffer, this.fbPtr, n * 2);
-    const dst32 = new Uint32Array(this.img.data.buffer);
-    for (let i = 0, j = 0; i < n; i++, j += 2) {
-      const argb = src32[j];                          // 0xAARRGGBB
-      dst32[i] = (argb & 0xff00ff00)
-               | ((argb & 0x00ff0000) >>> 16)
-               | ((argb & 0x000000ff) << 16)
-               | 0xff000000;
-    }
-    this.ctx.putImageData(this.img, 0, 0);
+  return i16;
+}
+function pushSamples(f32) {
+  for (let i = 0; i < f32.length; i++) {
+    const nx = (wr + 1) % RING;
+    if (nx === rd) break;     // ring full — drop to stay in sync
+    ring[wr] = f32[i]; wr = nx;
   }
 }
 
-// ── Asyncify runtime: lets the synchronous canvas_sleep yield to the browser ──
-const ASY_NONE = 0, ASY_UNWINDING = 1, ASY_REWINDING = 2;
-class AsyncifyRuntime {
-  constructor() { this.exports = null; this.memory = null; this.stackPtr = 0;
-    this.stackSize = 4096; this.pendingResult = undefined; this.pendingPromise = null; this.stopped = false; }
-  attach(inst) { this.exports = inst.exports; this.memory = inst.exports.memory; }
-  ensureStack() {
-    if (this.stackPtr) return;
-    const getPtr = this.exports.__nurl_asyncify_stack_ptr;
-    const getSize = this.exports.__nurl_asyncify_stack_size;
-    if (!getPtr || !getSize) throw new Error("module missing __nurl_asyncify_stack_* exports");
-    const base = getPtr() | 0; this.stackSize = getSize() | 0; this.stackPtr = base;
-    const view = new DataView(this.memory.buffer);
-    view.setInt32(base, base + 8, true);
-    view.setInt32(base + 4, base + this.stackSize, true);
-  }
-  wrap(fn) {
-    const self = this;
-    return function (...args) {
-      const st = self.exports.asyncify_get_state();
-      if (st === ASY_NONE) { self.ensureStack();
-        self.pendingPromise = Promise.resolve(fn(...args));
-        self.exports.asyncify_start_unwind(self.stackPtr); return 0; }
-      if (st === ASY_REWINDING) { self.exports.asyncify_stop_rewind(); return self.pendingResult; }
-      throw new Error("asyncify: unexpected state " + st);
-    };
-  }
-  async drive(entry) {
-    let exit = 0;
-    const run = () => { try { entry(); } catch (e) {
-      if (typeof e === "number") { exit = e; return "exit"; }
-      if (e && typeof e.code === "number") { exit = e.code; return "exit"; }
-      throw e; } return "ok"; };
-    let res = run();
-    while (res !== "exit" && this.exports.asyncify_get_state() === ASY_UNWINDING) {
-      this.exports.asyncify_stop_unwind();
-      this.pendingResult = await this.pendingPromise;
-      if (this.stopped) { exit = 0; break; }
-      this.exports.asyncify_start_rewind(this.stackPtr);
-      res = run();
-    }
-    return exit;
-  }
-}
+async function connect() {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SR });
+  if (audioCtx.state === "suspended") await audioCtx.resume();
+  try { micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
+  catch (e) { setStatus(`Microphone denied (${e.name}).`); return false; }
 
-// ── Microphone host: AnalyserNode pollers under the wasm "audio" module ──
-const audioHost = {
-  ctx: null, analyser: null, stream: null,
-  timeBuf: null, freqBuf: null, freqLin: null, hasFrame: false,
-  async init(fftSize = 2048) {
-    if (this.analyser) return true;
-    if (!window.isSecureContext) {
-      setStatus("Mic blocked — open via https:// or http://localhost."); return false;
-    }
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setStatus("getUserMedia unavailable in this browser/context."); return false;
-    }
-    try { this.stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
-    catch (e) { setStatus(`Microphone permission denied (${e.name}).`); return false; }
-    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-    if (this.ctx.state === "suspended") await this.ctx.resume();
-    this.analyser = this.ctx.createAnalyser();
-    this.analyser.fftSize = fftSize;
-    this.analyser.smoothingTimeConstant = 0.5;
-    this.ctx.createMediaStreamSource(this.stream).connect(this.analyser);
-    this.timeBuf = new Float32Array(this.analyser.fftSize);
-    this.freqBuf = new Float32Array(this.analyser.frequencyBinCount);
-    this.freqLin = new Float32Array(this.analyser.frequencyBinCount);
-    this.hasFrame = false;
-    log(`analyser ready (sampleRate=${this.ctx.sampleRate}, bins=${this.analyser.frequencyBinCount})`);
-    return true;
-  },
-  _pullTime() { if (!this.analyser) return false; this.analyser.getFloatTimeDomainData(this.timeBuf); this.hasFrame = true; return true; },
-  _pullFreq() {
-    if (!this.analyser) return false;
-    this.analyser.getFloatFrequencyData(this.freqBuf);
-    for (let i = 0; i < this.freqBuf.length; i++) this.freqLin[i] = Math.max(0, Math.min(1, (this.freqBuf[i] + 100) / 100));
-    this.hasFrame = true; return true;
-  },
-  level() { if (!this._pullTime()) return 0; let s = 0; for (const v of this.timeBuf) s += v * v; return Math.sqrt(s / this.timeBuf.length); },
-  bin(i) { if (!this._pullFreq()) return 0; const n = Number(i); return (n < 0 || n >= this.freqLin.length) ? 0 : this.freqLin[n]; },
-  binCount() { return this.analyser ? this.analyser.frequencyBinCount : 0; },
-  isSilent(thrPct) { return this.level() * 100 < Number(thrPct) ? 1 : 0; },
-  ready() { return this.analyser && this.hasFrame ? 1 : 0; },
-  stop() {
-    try { this.stream && this.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
-    try { this.ctx && this.ctx.close(); } catch (_) {}
-    this.ctx = this.analyser = this.stream = null; this.hasFrame = false;
-  },
-};
+  micSource = audioCtx.createMediaStreamSource(micStream);
+  analyser = audioCtx.createAnalyser(); analyser.fftSize = 1024; analyser.smoothingTimeConstant = 0.4;
+  micSource.connect(analyser);
 
-let WASI, File, OpenFile, ConsoleStdout, PreopenDirectory;
-let wasmBytes = null, deps = false, activeRun = null;
-
-async function loadDeps() {
-  if (deps) return;
-  ({ WASI, File, OpenFile, ConsoleStdout, PreopenDirectory } = await import(WASI_SHIM_URL));
-  // Absolute path: under /pptchat/<channel> a relative "pptchat.wasm" would
-  // resolve to /pptchat/pptchat.wasm and 404.
-  wasmBytes = new Uint8Array(await (await fetch("/pptchat.wasm")).arrayBuffer());
-  deps = true;
-}
-
-async function run() {
-  const canvasHost = new CanvasHost(stage);
-  const asy = new AsyncifyRuntime();
-  const stdout = ConsoleStdout.lineBuffered(() => {});
-  const stderr = ConsoleStdout.lineBuffered((l) => console.warn("[pptchat]", l));
-  const fds = [ new OpenFile(new File(new Uint8Array())), stdout, stderr, new PreopenDirectory(".", new Map()) ];
-  const wasi = new WASI(["pptchat.wasm"], [], fds);
-
-  const imports = {
-    wasi_snapshot_preview1: wasi.wasiImport,
-    canvas: {
-      open: (w, h, fb) => canvasHost.open(w, h, fb),
-      present: () => canvasHost.present(),
-      sleep: asy.wrap((ms) => new Promise((r) => setTimeout(r, Number(ms)))),
-      should_close: () => BigInt(canvasHost.shouldClose | (asy.stopped ? 1 : 0)),
-      close: () => {},
-    },
-    audio: {
-      level: () => audioHost.level(),
-      bin: (i) => audioHost.bin(i),
-      bin_count: () => BigInt(audioHost.binCount()),
-      is_silent: (t) => BigInt(audioHost.isSilent(t)),
-      ready: () => BigInt(audioHost.ready()),
-    },
+  // capture: ScriptProcessor must be in the graph to fire → route through a
+  // muted gain so we don't hear our own mic.
+  capNode = audioCtx.createScriptProcessor(2048, 1, 1);
+  muteGain = audioCtx.createGain(); muteGain.gain.value = 0;
+  micSource.connect(capNode); capNode.connect(muteGain); muteGain.connect(audioCtx.destination);
+  capNode.onaudioprocess = (e) => {
+    if (!transmitting || !ws || ws.readyState !== 1) return;
+    const i16 = f32toI16(e.inputBuffer.getChannelData(0));
+    ws.send(i16.buffer);
   };
 
-  let instance;
-  try {
-    const module = await WebAssembly.compile(wasmBytes);
-    instance = await WebAssembly.instantiate(module, imports);
-  } catch (e) { setStatus("instantiation failed: " + e.message); return; }
+  // playback: pull from the ring
+  outNode = audioCtx.createScriptProcessor(2048, 0, 1);
+  outNode.onaudioprocess = (e) => {
+    const o = e.outputBuffer.getChannelData(0);
+    for (let i = 0; i < o.length; i++) {
+      if (rd !== wr) { o[i] = ring[rd]; rd = (rd + 1) % RING; } else o[i] = 0;
+    }
+  };
+  outNode.connect(audioCtx.destination);
 
-  try { if (wasi.initialize && instance.exports._initialize) wasi.initialize(instance); } catch (_) {}
-  canvasHost.attachMemory(instance.exports.memory);
-  asy.attach(instance);
-  const thisRun = { stop: () => { canvasHost.shouldClose = 1; asy.stopped = true; } };
-  activeRun = thisRun;
-  try { await asy.drive(() => wasi.start(instance)); }
-  catch (e) { if (typeof e !== "number" && !(e && typeof e.code === "number")) console.error(e); }
-  if (activeRun === thisRun) activeRun = null;
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(`${proto}//${location.host}/pptws/${encodeURIComponent(channel)}`);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => { connected = true; setStatus("Connected. Click to talk."); };
+  ws.onclose = () => { connected = false; presenceEl.textContent = "offline"; setStatus("Disconnected."); };
+  ws.onerror = () => { setStatus("WebSocket error — is the relay reachable?"); };
+  ws.onmessage = (ev) => {
+    if (typeof ev.data === "string") {
+      try { const m = JSON.parse(ev.data);
+        if (m.type === "presence") presenceEl.textContent = `${m.count} on channel`;
+      } catch (_) {}
+      return;
+    }
+    const i16 = new Int16Array(ev.data);
+    const f32 = new Float32Array(i16.length);
+    for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 0x8000;
+    pushSamples(f32);
+    lastRecvMs = performance.now();
+  };
+  return true;
 }
 
-let listening = false;
-micBtn.addEventListener("click", async () => {
-  if (listening) {
-    listening = false; micBtn.classList.remove("live"); micLabel.textContent = "Microphone";
-    if (activeRun) activeRun.stop();
-    audioHost.stop();
-    setStatus("Stopped. Click the microphone to start again.");
+function disconnect() {
+  transmitting = false;
+  try { ws && ws.close(); } catch (_) {}
+  try { capNode && (capNode.onaudioprocess = null, capNode.disconnect()); } catch (_) {}
+  try { outNode && (outNode.onaudioprocess = null, outNode.disconnect()); } catch (_) {}
+  try { micStream && micStream.getTracks().forEach(t => t.stop()); } catch (_) {}
+  try { audioCtx && audioCtx.close(); } catch (_) {}
+  audioCtx = ws = null; connected = false;
+  rd = wr = 0;
+}
+
+// ── Meter (mic RMS + remote-activity tint), pure JS on the canvas ─
+const tBuf = () => { const b = new Float32Array(analyser.fftSize); analyser.getFloatTimeDomainData(b); return b; };
+function drawMeter() {
+  const W = stage.width, H = stage.height;
+  ctx2d.fillStyle = "#101418"; ctx2d.fillRect(0, 0, W, H);
+  let rms = 0;
+  if (analyser) { const b = tBuf(); let s = 0; for (const v of b) s += v * v; rms = Math.sqrt(s / b.length); }
+  const lvl = Math.min(1, rms * 3.2);
+  // VU bar
+  const bx = 24, by = 40, bw = W - 48, bh = 26;
+  ctx2d.fillStyle = "#222833"; ctx2d.fillRect(bx, by, bw, bh);
+  const g = ctx2d.createLinearGradient(bx, 0, bx + bw, 0);
+  g.addColorStop(0, "#3ad17a"); g.addColorStop(0.6, "#e8d44d"); g.addColorStop(1, "#ff5d6c");
+  ctx2d.fillStyle = g; ctx2d.fillRect(bx, by, bw * lvl, bh);
+  // labels
+  ctx2d.fillStyle = "#9aa0ab"; ctx2d.font = "12px system-ui";
+  ctx2d.fillText(transmitting ? "🔴 transmitting" : (connected ? "listening" : "idle"), bx, 26);
+  const speaking = (performance.now() - lastRecvMs) < 300;
+  ctx2d.fillStyle = speaking ? "#8fe0a8" : "#3a4150";
+  ctx2d.beginPath(); ctx2d.arc(W - 36, 84, 9, 0, 7); ctx2d.fill();
+  ctx2d.fillStyle = "#9aa0ab"; ctx2d.fillText("remote", W - 92, 88);
+  requestAnimationFrame(drawMeter);
+}
+requestAnimationFrame(drawMeter);
+
+// ── Button: connect, then toggle transmit ────────────────────────
+talkBtn.addEventListener("click", async () => {
+  if (!window.isSecureContext) { setStatus("Mic needs https:// or http://localhost."); return; }
+  if (!connected && !audioCtx) {
+    talkBtn.disabled = true; setStatus("Connecting…");
+    const ok = await connect();
+    talkBtn.disabled = false;
+    if (!ok) { disconnect(); return; }
+    transmitting = true;
+    talkBtn.classList.add("tx"); talkLabel.textContent = "Talking — click to mute";
+    setStatus("Talking. Others on the channel hear you; you hear them.");
     return;
   }
-  setStatus("Requesting microphone…");
-  try { await loadDeps(); } catch (e) { setStatus("failed to load wasm runtime: " + e.message); return; }
-  const ok = await audioHost.init();
-  if (!ok) return;
-  listening = true; micBtn.classList.add("live"); micLabel.textContent = "Listening — click to stop";
-  setStatus("Listening. Speak — the meter and spectrum track your mic.");
-  run();
+  transmitting = !transmitting;
+  talkBtn.classList.toggle("tx", transmitting);
+  talkLabel.textContent = transmitting ? "Talking — click to mute" : "Muted — click to talk";
+  setStatus(transmitting ? "Talking." : "Muted (still hearing the channel).");
 });
+
+window.addEventListener("beforeunload", disconnect);
 </script>
 </body>
 </html>

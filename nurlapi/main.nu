@@ -13,6 +13,7 @@ $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/mcp_http.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/ext/nurldoc.nu`
+$ `nurlapi/pptws.nu`
 
 // ── Globals ──────────────────────────────────────────────────────────
 
@@ -67,6 +68,14 @@ $ `stdlib/ext/nurldoc.nu`
 @ get_notice_path → String { ^ ( env_var_or `NURL_NOTICE_PATH` `/opt/nurl/NOTICE` ) }
 
 @ get_mcp_loopback_url → String { ^ ( env_var_or `NURL_MCP_LOOPBACK_URL` `http://127.0.0.1:8000` ) }
+// Listen port — NURL_PORT overrides the 8000 default (handy for local dev when
+// another instance already holds 8000, and for the WS relay smoke tests).
+@ get_port → i {
+    : String ps ( env_var_or `NURL_PORT` `8000` )
+    : i p ( nurl_str_to_int ( string_data ps ) )
+    ( string_free ps )
+    ^ ? > p 0 p 8000
+}
 
 @ get_mcp_server_name → String { ^ ( env_var_or `NURL_MCP_SERVER_NAME` `nurl` ) }
 
@@ -4710,7 +4719,8 @@ s combined_stdout s combined_stderr → v {
     }
     ( string_free wr )
 
-    : !TcpListener NetErr lr ( tcp_listen `0.0.0.0` 8000 )
+    : i port ( get_port )
+    : !TcpListener NetErr lr ( tcp_listen `0.0.0.0` port )
     ?? lr {
         T listener → {
             : Router r ( router_new )
@@ -4794,12 +4804,15 @@ s combined_stdout s combined_stderr → v {
             ( string_free wkstr )
 
             ( nurl_print `[boot] registered routes: ` ) ( nurl_print ( nurl_str_int ( router_count r ) ) ) ( nurl_print `\n` )
-            ( nurl_print `NURL API listening on http://0.0.0.0:8000/ (workers=` )
+            ( nurl_print `NURL API listening on http://0.0.0.0:` )
+            ( nurl_print ( nurl_str_int port ) )
+            ( nurl_print `/ (workers=` )
             ( nurl_print ( nurl_str_int workers ) )
             ( nurl_print `, compile_slots=` )
             ( nurl_print ( nurl_str_int compile_slots ) )
             ( nurl_print `, idle=5000ms)\n` )
             : HttpServer srv ( server_new_with_timeout listener logged 5000 )
+            ( ppt_install )   // /pptws/<channel> WebSocket voice relay (upgrade hook)
             : !v NetErr rr ( server_run_pool srv workers )
             ( signal_clear_shutdown ) ( server_stop srv ) ( sem_free compile_gate ) ( router_free r )
             // The handler chain (`logged` wraps `base`) is dead once the
