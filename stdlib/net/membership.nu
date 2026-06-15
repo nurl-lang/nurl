@@ -204,6 +204,43 @@ $ `stdlib/std/lifeguard.nu`
     ^ F
 }
 
+// ── self liveness & refutation (§7.5 Phase 10) ──────────────────
+// The non-obvious mobile/compute failure mode: a CPU-bound node misses pings,
+// a peer suspects it, and the node doing real work gets ejected. Lifeguard's
+// LHM protects the ACCUSER; these protect the busy ACCUSED. (Caveat per
+// ASYNC.md: NURL fibers are cooperative — a handler that NEVER yields cannot
+// run the heartbeat at all; the executor must yield between tasks. What this
+// guarantees is that a node which yields even occasionally always wins back
+// its liveness against a stale suspicion.)
+
+@ pktable_self_incarnation *PkMemberTable t → i { ^ . t self_incarnation }
+
+// Refute a suspicion of THIS node: bump our incarnation past `observed_inc`
+// so the Alive fact our next heartbeat carries strictly outranks the stale
+// Suspect/Dead and reinstates us everywhere. T if a bump happened.
+@ pktable_refute *PkMemberTable t i observed_inc → b {
+    ? >= observed_inc . t self_incarnation {
+        = . t self_incarnation + observed_inc 1
+        ^ T
+    } {}
+    ^ F
+}
+
+// Proactive "alive-but-busy" heartbeat fact: an Alive self-fact at our
+// current incarnation, to gossip so peers refresh our liveness without
+// probing us (and, after a refute, to carry the higher incarnation that wins
+// us back). Caller owns the returned *PkMember.
+@ pktable_self_fact *PkMemberTable t → *PkMember {
+    : *PkMember m # *PkMember ( nurl_alloc Z PkMember )
+    = . m pubkey ( __pk_cpy . t self_pk )
+    = . m state ( pk_alive )
+    = . m incarnation . t self_incarnation
+    = . m last_ns 0
+    = . m susp_start_ns 0
+    = . m susp_confirms 0
+    ^ m
+}
+
 // The effective suspicion deadline for a member, with the Lifeguard
 // confirmation scaling AND this node's local-health scaling applied.
 @ __pk_suspicion *PkMemberTable t *PkMember m → Suspicion {
@@ -409,7 +446,14 @@ $ `stdlib/std/lifeguard.nu`
         : s pp ?? ( vec_get [s] . m gossip k ) { T x → x F → # s 0 }
         ? != # i pp 0 {
             : *PkMember mm # *PkMember pp
-            ( pktable_apply t . mm pubkey . mm state . mm incarnation now_ns )
+            ? ( __pk_veq . mm pubkey . t self_pk ) {
+                // Gossip about US. If a peer thinks we're suspect/dead (e.g. it
+                // missed our pings while we were CPU-bound), REFUTE: bump our
+                // incarnation past theirs so our next heartbeat reinstates us.
+                ? != . mm state ( pk_alive ) { ( pktable_refute t . mm incarnation ) } {}
+            } {
+                ( pktable_apply t . mm pubkey . mm state . mm incarnation now_ns )
+            }
         } {}
         = k + k 1
     }
