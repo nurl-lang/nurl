@@ -32,7 +32,7 @@ The whole design follows three invariants:
 ```
    COMPUTE      job.nu           submit→ring_owner executes→result (keystone)
    (The Crown)  lease.nu         fencing tokens for side-effecting tasks
-                identity.nu      stable, never-reused replica ids
+                identity.nu      pubkey-derived stable replica ids
                 sim.nu           deterministic chaos-simulation harness
    ────────────────────────────────────────────────────────────────
    dist/        ring.nu          consistent-hash key ownership
@@ -325,14 +325,20 @@ Replicas are small integer ids, supplied by `dist/identity` (below).
 
 ### `dist/identity.nu` — stable replica identity
 
-CRDT replica ids must never be **reused** under churn — a new pubkey inheriting
-a departed node's PNCounter slot or OR-Set `(replica, seq)` tag space silently
-corrupts the value (the merge stays valid, the data is wrong). This registry
-maps each peer's static pubkey to a **monotonic, never-reused** replica id:
-first sight → the next id; the same pubkey across leave→rejoin → the same id; a
-new pubkey never inherits a retired (tombstoned) id. Feed `dist/crdt` /
-`dist/replicator` from `identity_of(pubkey)`. `identity_new` / `identity_of` /
-`identity_pubkey` / `identity_retire` / `identity_is_live`.
+CRDT replica ids carry two distinct requirements, met by two functions:
+
+- **Globally consistent** — a CRDT merge aligns replica slots **by id**, so
+  every node must name a given pubkey the *same* way with no coordination, or
+  two replicas collide into one slot and the value silently corrupts.
+  `identity_stable_id(pubkey)` derives the id purely from the pubkey (FNV-1a/64),
+  identical on every node. **This is what feeds `dist/crdt` / `dist/replicator`.**
+- **Locally never-reused** — a registry (`identity_of`) maps a pubkey to a
+  monotonic local slot id (first sight → next id; leave→rejoin → same id; a new
+  pubkey never inherits a retired, tombstoned id), used for local bookkeeping,
+  liveness, and dense local tables — *not* across nodes.
+
+`identity_stable_id` / `identity_new` / `identity_of` / `identity_pubkey` /
+`identity_retire` / `identity_is_live`.
 
 ### `dist/replicator.nu` — CRDT gossip wiring, scoped to the ring
 
@@ -461,6 +467,13 @@ probe), [`relay.nu`](../examples/relay.nu) (a relay daemon),
 [`transport.nu`](../examples/transport.nu) (the seam in use),
 [`membership.nu`](../examples/membership.nu) (a SWIM node over the overlay).
 
+The largest consumer is [`pttvoice/`](../pttvoice/) — a Push-To-Talk voice app
+that captures the microphone, Opus-encodes it, and pushes a talkspurt to one
+peer (unicast, p2p when punchable) or to the whole group (multicast), exactly
+the group-broadcast-of-arbitrary-payload shape the relay was built for. A
+browser slice runs in the playground at `/pptchat` (an embedded NURL→wasm mic
+visualiser, with per-channel join URLs).
+
 ---
 
 ## How it is tested
@@ -489,13 +502,24 @@ listen sockets (so unit tests can't bind):
   the codecs, the ring, the CRDTs, the lease) — no sockets, no wall-clock, no
   flakiness. Faults (per-message drop, latency + jitter→reorder, partition,
   heal) are injected from a **seeded RNG before the logic sees anything**, so a
-  run is byte-reproducible and the headline assertions can genuinely fail. The
-  first scenario (`compiler/tests/sim_membership.nu`) asserts that a death fact
-  converges to every node *despite 30% packet loss and reorder* (and that
-  messages were actually dropped), then that a partition isolates a node from
-  the fact and `sim_heal_all` reconverges it. This is the
-  FoundationDB/TigerBeetle/madsim approach: catch the rare interleaving in CI,
-  deterministically, instead of waiting for it in production.
+  run is byte-reproducible and the headline assertions can genuinely fail. Five
+  scenarios cover the compute story end to end:
+    - `sim_membership.nu` — a death fact converges to every node *despite 30%
+      packet loss and reorder*, then a partition isolates a node and
+      `sim_heal_all` reconverges it.
+    - `sim_job.nu` — a keystone task **completes across packet loss** (retry +
+      idempotent execution) and across a **partition then heal**.
+    - `sim_lease.nu` — a side-effecting task fires **at most once** across a
+      split-ownership window, in both orderings (idempotency dedup / epoch
+      fence) and concurrently under loss.
+    - `sim_cpupin.nu` — a CPU-pinned-but-alive node that heartbeats + self-
+      refutes is **not evicted**, while an identically-silent dead node is — the
+      contrast proving the harness can evict.
+    - `sim_crdt.nu` — replicas that derive ids independently and meet peers in
+      different orders **converge** over a lossy + partitioned + healed bus
+      (the scenario that caught the replica-id corruption fixed below).
+  This is the FoundationDB/TigerBeetle/madsim approach: catch the rare
+  interleaving in CI, deterministically, instead of waiting for it in production.
 
 ---
 
@@ -507,16 +531,12 @@ plus Phases 3, 5, and 6 are in. On top of them the **Crown** compute layer is
 landed: stable replica identity (`dist/identity.nu`), self-refutation +
 dedicated-OS-thread heartbeat (`dist/heartbeat.nu`), the job-dispatch keystone
 (`dist/job.nu`), lease/fencing tokens (`dist/lease.nu`), and the deterministic
-chaos-simulation harness (`dist/sim.nu`) with its first converge-under-loss /
-partition-heal scenario. The stack is part of NURL's **post-1.0 direction**
-(see [`ROADMAP.md`](../ROADMAP.md)); what remains is more simulation coverage,
-tuning, and a few tracked deep follow-ups:
+chaos-simulation harness (`dist/sim.nu`) with its five scenarios
+(converge-under-loss, keystone-across-partition, at-most-once-side-effect,
+CPU-pinned-not-evicted, CRDT-converge). The stack is part of NURL's **post-1.0
+direction** (see [`ROADMAP.md`](../ROADMAP.md)); what remains is broader
+simulation coverage, tuning, and a couple of tracked deep follow-ups:
 
-- **More chaos scenarios** (Phase 13, ongoing) — beyond converge-under-loss and
-  partition-heal: a job completing across a partition + heal, *no double
-  side-effect* across split ownership (driving `dist/lease` over the sim bus),
-  and a CPU-pinned node that is heartbeating but skipping probes not getting
-  evicted.
 - **Sim-NAT chaos harness** (Phase 8) — extend the simulator with a NAT model
   (cone vs symmetric, configurable mapping timeout) and a simulated relay, so
   the *transport* layer's network-change behaviour is asserted end-to-end too.
@@ -526,11 +546,6 @@ tuning, and a few tracked deep follow-ups:
 
 Known deep follow-ups (no workarounds — these are tracked for a genuine fix):
 
-- **Cross-node replica-id consistency.** `dist/identity.nu` assigns CRDT replica
-  ids in local first-seen order, so two nodes can map the same pubkey to
-  different slots. Gossiping CRDTs over the sim will expose this; the fix is to
-  key CRDTs by pubkey (or derive the id deterministically from the pubkey)
-  rather than by local arrival order.
 - **Cooperative-scheduler liveness (Tier 2).** The heartbeat runs on a dedicated
   OS thread today (Tier 1), which keeps liveness independent of a long-running
   handler. A fuller fix is compiler-inserted loop back-edge preemption so even a

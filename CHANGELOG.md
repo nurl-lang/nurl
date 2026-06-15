@@ -10,6 +10,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **NAT- and mobile-traversing distributed transport (§7.4).** A complete
+  pubkey-addressed overlay where a peer is a **public key, not an address** —
+  it reaches that key over a direct peer-to-peer path when it can and a relay
+  when it must, and never drops to zero reachability. Built bottom-up:
+  `net/securedgram.nu` (WireGuard-style encrypted UDP over Noise + a session
+  AEAD with a sliding replay window, plus endpoint **roaming** so a peer survives
+  a network change), `net/stun.nu` (RFC 8489 server-reflexive discovery),
+  `net/nat.nu` (candidate gathering, NAT-type classification, UDP hole punch),
+  `net/relay.nu` (DERP-style opaque forwarding **plus group multicast** —
+  broadcast to your own group), `net/rendezvous.nu` (signaling-only directory),
+  `net/transport.nu` (the flat seam: `transport_send`/`broadcast`/`recv`,
+  direct-when-possible/relay-when-forced with promote/demote), and SWIM
+  membership (`net/membership.nu`) hardened by **Lifeguard**
+  (`std/lifeguard.nu`) with a failure-detector control loop
+  (`net/failuredetector.nu`). On top sit the sharding + replicated-state
+  layers: a consistent-hash ring (`dist/ring.nu`), state-based CRDTs
+  (`dist/crdt.nu` — PN-Counter, LWW-Register, OR-Set) and their gossip wiring
+  (`dist/replicator.nu`, anti-entropy scoped to a key's replica set). Documented
+  end to end in [`docs/DISTRIBUTED.md`](docs/DISTRIBUTED.md).
+
+- **The Crown — distributed computation (§7.5).** Turns the distributed *state*
+  above into distributed *work*. `dist/identity.nu` gives each peer a replica
+  id; `dist/job.nu` is the keystone — submit a task keyed by `k`, the ring owner
+  executes it via a registered handler, the result is recorded idempotently, and
+  a key that re-homes mid-flight is **forwarded** to the new owner so the job
+  still completes. `dist/lease.nu` adds fencing tokens (epoch monotonicity +
+  idempotency keys) so a *side-effecting* task fires **at most once** across a
+  split-ownership window. Liveness under load is handled by SWIM
+  **self-refutation** plus a **heartbeat on a dedicated OS thread**
+  (`dist/heartbeat.nu`), so a 100%-CPU node is not falsely evicted. The whole
+  story is verified by a **deterministic chaos-simulation harness**
+  (`dist/sim.nu`): a virtual clock + in-process message bus with seeded fault
+  injection (drop, latency/jitter→reorder, partition/heal) drives the *real*
+  stdlib logic, with scenarios for converge-under-loss, keystone-across-
+  partition, at-most-once-side-effect, and CPU-pinned-not-evicted — all
+  byte-reproducible goldens, ASan-clean.
+
+- **Push-To-Talk voice app — `pttvoice/`.** A distributed PTT voice app on the
+  overlay: captures the microphone, **Opus**-encodes it (48 kHz mono, 20 ms
+  frames via a libopus FFI binding), and pushes a talkspurt either to one peer
+  (unicast — p2p when punchable, relayed otherwise) or to the whole group
+  (multicast); a receiver decodes and plays it. ALSA capture/playback
+  (`audio.nu`), the codec (`opus.nu`), the voice wire frame (`proto.nu`), and
+  the app (`ptt.nu`) live in a self-contained folder. Verified live over a
+  loopback relay (group broadcast and peer unicast). `build.sh` now detects
+  **libopus** and **ALSA** (dropping `stdlib/runtime.{opus,asound}` sentinels)
+  and `nurl.sh` auto-links `-lopus`/`-lasound` when those FFI symbols appear.
+
+- **Playground “🎙️ PTT Chat” demo with channels.** A new `/pptchat` tab: a
+  page with a microphone button and an **embedded NURL→WebAssembly module**
+  (`nurlapi/static/pptchat.nu` → `pptchat.wasm`) that reads the mic through the
+  `audio` FFI and paints a live VU meter + frequency spectrum, framing the
+  distributed voice tech. **Channels**: no id → the shared `public` channel;
+  **+ Create channel** mints a random id and navigates to `/pptchat/<id>`;
+  opening that URL joins the same channel (the URL is the invite, the future
+  shared-secret/QR), with a Copy-link button.
+
+- **Parallel sanitizer test suite.** `compiler/tests/run_san_tests.sh` now runs
+  AddressSanitizer/UBSan checks in parallel (`NURL_SAN_JOBS`, default = cores),
+  cutting the sanitized CI leg from minutes to under one — matching the already-
+  parallel functional runner.
+
 - **HTTP client cookie jar — `stdlib/ext/cookies.nu`** (critic B23). The
   server side writes `Set-Cookie` (ext/http_auth.nu); this is the missing
   client half. `cookie_jar_set` parses one `Set-Cookie` value (Domain,
@@ -320,6 +382,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the request target.
 
 ### Fixed
+
+- **CRDT replica ids must be globally stable** (`dist/crdt.nu`,
+  `dist/replicator.nu`, `dist/identity.nu`). The chaos-simulation harness
+  exposed silent state corruption: `PNCounter` stored increments in a dense
+  vector merged **by position**, while `identity_of` handed out ids in local
+  first-seen order, so every node called itself replica 0 — two distinct
+  replicas collided into one slot and the merge took `max(1,1)=1` instead of
+  summing to 2, converging to the *wrong value with no error*. Fixed deeply:
+  `identity_stable_id(pubkey)` derives a globally consistent id from the pubkey
+  (FNV-1a/64, no coordination); `PNCounter` is now sparse and **keyed by
+  replica id** (merge aligns by identity, not position); the wire carries the
+  id per slot and `pncounter_encode` emits slots in canonical ascending-id
+  order so equal states encode identically (required by the digest anti-entropy).
+
+- **Struct-pointer field access mis-resolved when the field name shadows a
+  variable** (`compiler/nurlc.nu`, `gen_field`). `. p field` on a struct
+  *pointer* resolved `field` as a same-named local integer and emitted a pointer
+  array-index instead of a field load — a silent miscompile only `clang` caught.
+  A struct field now always wins over a same-named variable on the field-load
+  path (the field-*store* `= . p name val` array-index form is unchanged and
+  intentional). Lock: `compiler/tests/ptr_field_name_shadow.nu`.
+
+- **Closure literals rejected parenthesised compound param/return types**
+  (`compiler/nurlc.nu`, `gen_backslash_expr`). `\ ( Vec u ) p → ( Vec u ) { … }`
+  failed with “undefined identifier 'u'” because `\ (` was only treated as a
+  closure when the next token was `@`; a compound type head fell through to the
+  try-expression path. `\ (` is now a closure whenever the next token introduces
+  a type (incl. the builtin `Vec`). Lock: `compiler/tests/closure_compound_param.nu`.
 
 - **`@ ?Enum { T Variant }` emitted invalid IR** (`compiler/nurlc.nu`,
   `gen_agg_lit`). Constructing `Some(variant)` of an option whose
