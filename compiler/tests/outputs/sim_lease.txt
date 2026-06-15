@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+A old-first: effects during old-only phase = 1
+A old-first: effects after new joins      = 0
+A old-first: effect ran EXACTLY once total: YES
+A old-first: fence advanced to new epoch:   YES
+B new-first: effects during new-only phase = 1
+B new-first: effects after old joins       = 0
+B new-first: effect ran EXACTLY once total: YES
+B new-first: token stays at new epoch:      YES
+C concurrent: total effects performed      = 1
+C concurrent: effect ran AT MOST once:      YES
+C concurrent: effect ran AT LEAST once:     YES
+C concurrent: messages were actually dropped: YES
