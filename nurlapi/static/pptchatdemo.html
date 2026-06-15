@@ -32,6 +32,13 @@
   .micbtn .dot { width: 11px; height: 11px; border-radius: 50%; background: #9aa0ab; }
   .micbtn.live .dot { background: #ff5d6c; box-shadow: 0 0 8px #ff5d6c; }
   #status { font-size: 13px; color: #9aa0ab; min-height: 1.4em; margin: 8px 0; }
+  .chanbar { width: 480px; margin: 0 0 10px; }
+  .chanrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .chanlbl { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #7e8593; }
+  #chanId { background: #161b26; border: 1px solid #2a3142; color: #9ecbff; padding: 3px 9px; border-radius: 6px; font-size: 13.5px; }
+  .ghost { background: #161b26; color: #c0c5cf; border: 1px solid #2a3142; border-radius: 6px; padding: 4px 10px; font-size: 12.5px; cursor: pointer; }
+  .ghost:hover { background: #1d2433; }
+  .chanhint { font-size: 12px; color: #7e8593; margin-top: 6px; }
   code { background: #1b2030; padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
   .chan { background: #161b26; border: 1px solid #242b39; border-radius: 8px; padding: 10px 12px; margin-top: 10px; font-size: 13px; color: #aeb4c0; }
   .chan b { color: #d7dae0; }
@@ -49,6 +56,15 @@
 </header>
 <main>
   <div>
+    <div class="chanbar">
+      <div class="chanrow">
+        <span class="chanlbl">Channel</span>
+        <code id="chanId">public</code>
+        <button id="copyBtn" class="ghost" title="Copy join link">Copy link</button>
+        <button id="newBtn" class="ghost">+ Create channel</button>
+      </div>
+      <div id="chanHint" class="chanhint">Everyone on this channel hears each other. Share the link to invite others.</div>
+    </div>
     <div id="stageWrap"><canvas id="stage" width="480" height="220"></canvas></div>
     <div id="status">Click the microphone to grant permission and start.</div>
     <button id="mic" class="micbtn"><span class="dot"></span><span id="micLabel">Microphone</span></button>
@@ -77,9 +93,12 @@
     </p>
 
     <div class="chan">
-      <b>Channel.</b> For this demo everyone shares one public channel. In the
-      mobile app the channel will be a <b>generated secret</b> you share by
-      <b>QR code</b> or link — only invited devices can join and decrypt it.
+      <b>Channels.</b> Without an id everyone lands on the shared
+      <code>public</code> channel. <b>+ Create channel</b> mints a fresh random
+      id and drops you on it; anyone who opens <code>/pptchat/&lt;id&gt;</code>
+      joins the same one — so the URL <i>is</i> the invite. In the mobile app
+      that id becomes a <b>generated secret</b> shared by <b>QR code</b> or
+      link, so only invited devices can join and decrypt the channel.
     </div>
 
     <h2>The embedded module</h2>
@@ -107,6 +126,40 @@ const micBtn = document.getElementById("mic");
 const micLabel = document.getElementById("micLabel");
 const setStatus = (s) => { statusEl.textContent = s; };
 const log = (s) => console.log("[pptchat]", s);
+
+// ── Channel: read from /pptchat/<id>, default "public" ───────────
+// The id is the future overlay group key / shared secret; for now it just
+// scopes who you'd talk to and lives in the shareable URL.
+const chanIdEl = document.getElementById("chanId");
+const copyBtn  = document.getElementById("copyBtn");
+const newBtn   = document.getElementById("newBtn");
+
+function currentChannel() {
+  const m = location.pathname.match(/^\/pptchat\/(.+)$/);
+  if (!m) return "public";
+  // keep it to a safe id charset; strip anything else
+  const raw = decodeURIComponent(m[1]).replace(/[^A-Za-z0-9_-]/g, "");
+  return raw || "public";
+}
+function newChannelId() {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const r = new Uint8Array(13); crypto.getRandomValues(r);
+  let s = ""; for (const b of r) s += alphabet[b % alphabet.length];
+  return s;
+}
+const channel = currentChannel();
+chanIdEl.textContent = channel;
+document.title = `NURL PTT Chat · #${channel}`;
+
+copyBtn.addEventListener("click", async () => {
+  const url = `${location.origin}/pptchat/${encodeURIComponent(channel)}`;
+  try { await navigator.clipboard.writeText(url); copyBtn.textContent = "Copied!"; }
+  catch (_) { copyBtn.textContent = url; }
+  setTimeout(() => { copyBtn.textContent = "Copy link"; }, 1500);
+});
+newBtn.addEventListener("click", () => {
+  location.href = `/pptchat/${newChannelId()}`;
+});
 
 // ── Canvas host: bind <canvas> to the wasm framebuffer (i64/pixel ARGB) ──
 class CanvasHost {
@@ -232,7 +285,9 @@ let wasmBytes = null, deps = false, activeRun = null;
 async function loadDeps() {
   if (deps) return;
   ({ WASI, File, OpenFile, ConsoleStdout, PreopenDirectory } = await import(WASI_SHIM_URL));
-  wasmBytes = new Uint8Array(await (await fetch("pptchat.wasm")).arrayBuffer());
+  // Absolute path: under /pptchat/<channel> a relative "pptchat.wasm" would
+  // resolve to /pptchat/pptchat.wasm and 404.
+  wasmBytes = new Uint8Array(await (await fetch("/pptchat.wasm")).arrayBuffer());
   deps = true;
 }
 
