@@ -30,14 +30,18 @@ The whole design follows three invariants:
 ## The stack at a glance
 
 ```
-                       application  /  distributed compute
+   COMPUTE      job.nu           submit→ring_owner executes→result (keystone)
+   (The Crown)  lease.nu         fencing tokens for side-effecting tasks
+                identity.nu      stable, never-reused replica ids
+                sim.nu           deterministic chaos-simulation harness
    ────────────────────────────────────────────────────────────────
    dist/        ring.nu          consistent-hash key ownership
                 crdt.nu          PN-Counter · LWW-Register · OR-Set
-                replicator.nu    CRDT wire codecs + anti-entropy gossip
+                replicator.nu    CRDT codecs + ownership-scoped anti-entropy
    ────────────────────────────────────────────────────────────────
-   membership   membership.nu    pubkey-keyed SWIM table (+ Lifeguard)
+   membership   membership.nu    pubkey-keyed SWIM table (+ self-refutation)
                 failuredetector  probe loop: ping / ping-req / suspect
+                heartbeat.nu     liveness on a dedicated OS thread
                 lifeguard.nu     local-health + scaled suspicion (anti-FP)
    ────────────────────────────────────────────────────────────────
    net/transport.nu   THE SEAM — send(pubkey,msg) / broadcast(group,msg)
@@ -56,8 +60,11 @@ The whole design follows three invariants:
 ```
 
 Read it bottom-up to understand how a datagram is secured and delivered;
-top-down to understand how an application addresses a peer. The two meet at
-**`net/transport.nu`**, the seam every higher layer binds to.
+top-down to understand how an application addresses a peer. They meet at
+**`net/transport.nu`**, the seam every higher layer binds to — and the top of
+the stack, **The Crown**, mounts *verifiable distributed computation* onto the
+converged-state overlay: work that is submitted, owned, executed, returned,
+and proven correct under churn (see [The Crown](#the-crown--from-distributed-state-to-distributed-computation) below).
 
 ---
 
@@ -263,6 +270,27 @@ relayed path — so a roaming member stays alive. The transport I/O is a thin
 adapter (`examples/membership.nu`); correctness is a deterministic scenario
 test, not a live-socket guess.
 
+### Liveness under load — self-refutation + heartbeat
+
+Lifeguard protects the *accuser*; two more mechanisms protect the busy
+*accused*, so a node doing real work (or roaming) isn't wrongly evicted.
+
+- **Self-refutation** (`net/membership.nu`) — when a node sees gossip claiming
+  *it* is suspect/dead, it bumps its own incarnation past the accuser's
+  (`pktable_refute`); the Alive fact its next heartbeat carries then strictly
+  outranks the stale Suspect/Dead and reinstates it everywhere. `apply_gossip`
+  routes self-facts to refutation rather than dropping them.
+- **`dist/heartbeat.nu`** — the *"I am alive"* signal runs on a **dedicated OS
+  thread**, not a fiber. NURL fibers are cooperative, so a compute handler in a
+  tight loop would starve a fiber-based detector; but the runtime is M:N, so the
+  OS preempts threads and the heartbeat fires on its timer **even when every
+  worker fiber is pinned at 100% CPU**. It gossips the node's Alive self-fact
+  (at its current incarnation, so it also carries any refutation) over its own
+  relay connection. `heartbeat_start(table, relay, group, interval, mutex)` /
+  `heartbeat_stop`. *(Tested live: a node pinned in a 900M-iteration loop with
+  no yield still emits heartbeats — the §7.5 "a 100%-CPU node is not declared
+  dead" guarantee, demonstrated.)*
+
 ---
 
 ## Phase 6 — distributed data
@@ -293,18 +321,95 @@ replicas converge by exchanging state — no coordination, no consensus.
   tag, a remove tombstones observed tags, an element is present iff it has a
   non-tombstoned add-tag → **a concurrent add wins over a remove**.
 
-Replicas are small integer ids (the caller maps node pubkey → id).
+Replicas are small integer ids, supplied by `dist/identity` (below).
 
-### `dist/replicator.nu` — CRDT gossip wiring
+### `dist/identity.nu` — stable replica identity
+
+CRDT replica ids must never be **reused** under churn — a new pubkey inheriting
+a departed node's PNCounter slot or OR-Set `(replica, seq)` tag space silently
+corrupts the value (the merge stays valid, the data is wrong). This registry
+maps each peer's static pubkey to a **monotonic, never-reused** replica id:
+first sight → the next id; the same pubkey across leave→rejoin → the same id; a
+new pubkey never inherits a retired (tombstoned) id. Feed `dist/crdt` /
+`dist/replicator` from `identity_of(pubkey)`. `identity_new` / `identity_of` /
+`identity_pubkey` / `identity_retire` / `identity_is_live`.
+
+### `dist/replicator.nu` — CRDT gossip wiring, scoped to the ring
 
 Turns a CRDT into something that travels: `*_encode` serializes it to an opaque
 byte payload that rides `transport_send` / `transport_broadcast`, and
-`*_merge_bytes` decodes a received payload and merges it into the local
-replica. Because the op is a CRDT merge, repeated anti-entropy exchanges
-converge.
-
+`*_merge_bytes` decodes a received payload and merges it into the local replica.
+Because the op is a CRDT merge, repeated anti-entropy exchanges converge.
 `pncounter_encode` / `decode` / `merge_bytes` (and the `lww_*` / `orset_*`
 equivalents).
+
+Whole-group broadcast is O(N) per delta and makes the ring decorative, so gossip
+is **scoped to the ring**: a key's state lives only on its replica set, and a
+delta fans out only to `ring_owners(key, R)` — a non-replica never receives or
+stores it. A cheap **digest** (`crdt_digest` / `crdt_in_sync`) drives anti-
+entropy: replicas with equal digests skip the transfer; on mismatch the lagging
+one pulls. `is_replica` / `replica_fanout` express the routing. This is the same
+sharding the compute layer reuses.
+
+---
+
+## The Crown — from distributed state to distributed computation
+
+State convergence is the *setting*; the jewel mounted into it is **verifiable
+distributed computation** — work submitted, owned, executed, returned, and
+proven correct under churn and load. It adds one invariant to the carried-over
+three (pubkey identity; reachability never zero; eventual consistency, no
+consensus): **a key is owned by exactly one node per epoch; a task executes
+at-least-once; its effect is idempotent or leased.**
+
+### `dist/job.nu` — distributed work dispatch (the keystone)
+
+Submit a task keyed by `k`; `ring_owner(k)` executes it via a registered closure
+handler; the result returns to the submitter over the transport and is recorded
+by `task_id`, so duplicate delivery is harmless (at-least-once + retry stay
+safe). A node that receives a SUBMIT for a key it **no longer owns** (the ring
+changed) **forwards** it to the current owner — so killing a worker re-homes its
+keys and the job still completes.
+
+`job_node_new` / `job_register(kind, handler)` / `job_submit(key, kind, payload)
+→ task_id` / `job_pump` / `job_await(task_id) → ?result`. Handlers are
+`( @ ( Vec u ) ( Vec u ) )` closures (opaque bytes → bytes), so a headless
+worker cross-compiles to the same RISC-V / wasm targets as everything else — a
+Milk-V Duo becomes a real compute node in the ring, not merely a relay.
+[`examples/distributed_map.nu`](../examples/distributed_map.nu) shards a
+word-count across workers by key and aggregates the result.
+
+### `dist/lease.nu` — fencing for side-effecting tasks
+
+During membership convergence two nodes can briefly both believe they own a
+key. CRDT state is safe (merges commute); an external side effect run twice is
+not. The standard fencing-token discipline, at the resource: a **monotonic
+epoch** per key (bumped on ring change) that a stale owner can't beat
+(`lease_admit` refuses a lower epoch), plus an **idempotency key** (the
+`task_id`) that dedups a re-delivery. Fence + idempotency = at-most-once across a
+split-ownership window *in either ordering*. Pure (no-effect) handlers never call
+it and pay zero overhead. `lease_new` / `lease_admit(key, epoch, idem)` /
+`lease_token`.
+
+### `dist/sim.nu` — the chaos-simulation harness
+
+How you *really* test all of the above: not flaky multi-process socket runs, but
+the **real logic inside a deterministic simulated world** — the approach
+FoundationDB / TigerBeetle / `madsim` use, and the reason every layer was built
+as a pure, time-injected state machine. A **virtual clock** the harness
+advances, an in-process **message bus** carrying the real encoded messages, and
+**fault injection applied before the logic sees anything** — seeded per-message
+drop, latency + jitter (→ reorder), partition / heal, via an n×n reachability
+matrix. A seeded RNG makes every run byte-reproducible; the assertions check
+end-state invariants the code can genuinely violate.
+
+`sim_net_new` / `sim_send` / `sim_due` / `sim_partition` / `sim_heal` /
+`sim_dropped`. The scenario suite (e.g. `compiler/tests/sim_membership.nu` —
+gossip converges under 30% loss + reorder; a partition isolates a fact and a
+heal reconverges it) grows toward the headline assertions: cluster stable across
+a forced network change; a job completes across a partition + heal; a CPU-pinned
+node is not evicted; no double side-effect across split ownership; CRDT
+convergence after churn with no slot corruption.
 
 ---
 
@@ -375,6 +480,22 @@ listen sockets (so unit tests can't bind):
   real STUN servers (Google, Cloudflare), loopback relay forwarding + group
   multicast, the transport seam carrying unicast and broadcast, and the
   replicated counter converging across replicas over a relay.
+- **Deterministic simulation** (`dist/sim.nu`, the Crown's verification ceiling)
+  drives the *real* stdlib logic — the actual membership tables, gossip codec,
+  ring, CRDTs, job dispatch, and lease — inside a fully simulated world: a
+  virtual clock the harness advances and an in-process message bus it fully
+  controls. This is possible only because every layer is a **pure, time-injected
+  state machine** (`fd_tick(now)`, `pktable_sweep(now)`, `suspicion_expired`,
+  the codecs, the ring, the CRDTs, the lease) — no sockets, no wall-clock, no
+  flakiness. Faults (per-message drop, latency + jitter→reorder, partition,
+  heal) are injected from a **seeded RNG before the logic sees anything**, so a
+  run is byte-reproducible and the headline assertions can genuinely fail. The
+  first scenario (`compiler/tests/sim_membership.nu`) asserts that a death fact
+  converges to every node *despite 30% packet loss and reorder* (and that
+  messages were actually dropped), then that a partition isolates a node from
+  the fact and `sim_heal_all` reconverges it. This is the
+  FoundationDB/TigerBeetle/madsim approach: catch the rare interleaving in CI,
+  deterministically, instead of waiting for it in production.
 
 ---
 
@@ -382,20 +503,41 @@ listen sockets (so unit tests can't bind):
 
 The data and control planes are complete and the path
 `Phase 0 → 1 → 2 → 4` (a working pubkey overlay with guaranteed reachability)
-plus Phases 3, 5, and 6 are in. The stack is part of NURL's **post-1.0
-direction** (see [`ROADMAP.md`](../ROADMAP.md)); what remains is largely test
-infrastructure and tuning:
+plus Phases 3, 5, and 6 are in. On top of them the **Crown** compute layer is
+landed: stable replica identity (`dist/identity.nu`), self-refutation +
+dedicated-OS-thread heartbeat (`dist/heartbeat.nu`), the job-dispatch keystone
+(`dist/job.nu`), lease/fencing tokens (`dist/lease.nu`), and the deterministic
+chaos-simulation harness (`dist/sim.nu`) with its first converge-under-loss /
+partition-heal scenario. The stack is part of NURL's **post-1.0 direction**
+(see [`ROADMAP.md`](../ROADMAP.md)); what remains is more simulation coverage,
+tuning, and a few tracked deep follow-ups:
 
-- **Sim-NAT chaos harness** (Phase 8) — a simulated NAT (cone vs symmetric,
-  configurable mapping timeout) with fault injection (loss, latency,
-  mid-session network change) and a simulated relay, to run the whole stack
-  multi-node in CI and assert "the cluster stays stable across a forced network
-  change" end-to-end.
+- **More chaos scenarios** (Phase 13, ongoing) — beyond converge-under-loss and
+  partition-heal: a job completing across a partition + heal, *no double
+  side-effect* across split ownership (driving `dist/lease` over the sim bus),
+  and a CPU-pinned node that is heartbeating but skipping probes not getting
+  evicted.
+- **Sim-NAT chaos harness** (Phase 8) — extend the simulator with a NAT model
+  (cone vs symmetric, configurable mapping timeout) and a simulated relay, so
+  the *transport* layer's network-change behaviour is asserted end-to-end too.
 - **Mobile lifecycle tuning** (Phase 7) — adaptive keepalive, network-change
   re-gather, IPv6 happy-eyeballs, battery/radio budget.
-- **Ring refinements** — churn hysteresis and weighted virtual nodes; scoping
-  CRDT gossip to a key's owner + replicas rather than the whole group.
+- **Ring refinements** — churn hysteresis and weighted virtual nodes.
 
-The mesh PSK is node-wide today (per-peer PSK is a follow-up), and CRDT replica
-ids are caller-assigned integers (a stable pubkey→id mapping is the caller's
-responsibility).
+Known deep follow-ups (no workarounds — these are tracked for a genuine fix):
+
+- **Cross-node replica-id consistency.** `dist/identity.nu` assigns CRDT replica
+  ids in local first-seen order, so two nodes can map the same pubkey to
+  different slots. Gossiping CRDTs over the sim will expose this; the fix is to
+  key CRDTs by pubkey (or derive the id deterministically from the pubkey)
+  rather than by local arrival order.
+- **Cooperative-scheduler liveness (Tier 2).** The heartbeat runs on a dedicated
+  OS thread today (Tier 1), which keeps liveness independent of a long-running
+  handler. A fuller fix is compiler-inserted loop back-edge preemption so even a
+  tight in-fiber loop yields.
+- **Reactor recv-deadline.** A fiber blocked on `tcp_read_chunk` parks on epoll
+  without a timer-wheel deadline, so a recv timeout is ignored under the fiber
+  reactor; single-process multi-node demos use process-per-node until fiber
+  reads are registered on the timer wheel.
+
+The mesh PSK is node-wide today (per-peer PSK is a follow-up).
