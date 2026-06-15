@@ -1,25 +1,29 @@
 #!/usr/bin/env bash
 # ============================================================
 #  run_san_tests.sh — run the .nu test corpus under
-#  AddressSanitizer + UndefinedBehaviorSanitizer.
+#  AddressSanitizer + UndefinedBehaviorSanitizer, IN PARALLEL.
 #
-#  Workflow:
+#  Workflow (per test, run concurrently across NURL_SAN_JOBS workers):
 #     1. Compile each .nu with the freshly-built nurlc.
 #     2. Link with -fsanitize=address,undefined (matching the
 #        sanitized runtime.o that `./build.sh --san` produced).
 #     3. Run; capture stdout (test output) and stderr (sanitizer
 #        reports) separately.
 #     4. Per-test verdict:
-#          - PASS:        exit code 0 AND stderr empty of sanitizer
-#                         markers.
-#          - SAN_FAIL:    stderr contains ASan/UBSan output.
-#          - EXIT_FAIL:   non-zero exit code, no sanitizer report
-#                         (often a `should_fail_*` test that is
-#                         expected to abort).
+#          - PASS:        exit code 0 (or deliberate non-zero) AND
+#                         stderr empty of sanitizer markers.
+#          - SAN_FAIL:    stderr contains ASan/UBSan/LSan output.
 #          - COMPILE_FAIL / LINK_FAIL: as the normal runner.
 #     5. Print per-test summary + grand totals + the first ~40
 #        lines of each sanitizer report so you can triage without
 #        diving into individual log files.
+#
+#  Parallelism mirrors run_tests.sh: a `run_one_san` function is
+#  exported and fanned out with `xargs -P`. The per-test work touches
+#  only $name-keyed files (.ll / bin / logs/$name.*), so there are no
+#  shared-state races. Default worker count is nproc; override with
+#  NURL_SAN_JOBS (CI may cap it to bound peak RAM from concurrent
+#  sanitizer links + sanitized processes).
 #
 #  Pre-req: ./build.sh --san must have been run first so that
 #  stdlib/runtime.o contains the sanitizer-instrumented code.
@@ -31,10 +35,9 @@
 #  LSan would report as "leaks". Set LSAN_DETECT_LEAKS=1 to enable
 #  if you want to triage them anyway.
 #
-#  Environment toggles inherited from run_tests.sh:
-#     NURL_HTTP_TESTS=1   include http_basic.nu live tests
-#     NURL_NET_TESTS=1    include loopback socket tests
-#     NURL_PG_TESTS=1     include postgres_basic.nu live tests
+#  Environment toggles:
+#     NURL_SAN_JOBS=N     worker count (default nproc)
+#     LSAN_DETECT_LEAKS=1 enable leak detection
 #     TIMEOUT=N           per-test timeout in seconds (default 30 —
 #                         sanitized binaries run ~3× slower)
 # ============================================================
@@ -91,157 +94,128 @@ ZLIB_LIBS=""
 [[ -f "$ROOT_DIR/stdlib/runtime.z" ]]       && ZLIB_LIBS="$(pkg-config --libs zlib 2>/dev/null || echo -lz)"
 ZSTD_LIBS=""
 [[ -f "$ROOT_DIR/stdlib/runtime.zstd" ]]    && ZSTD_LIBS="$(pkg-config --libs libzstd 2>/dev/null || echo -lzstd)"
+LINK_LIBS="-lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS"
 
 WORKDIR="$ROOT_DIR/build/tests-san"
 LOGDIR="$WORKDIR/logs"
-SUMMARY="$WORKDIR/SUMMARY.txt"
 mkdir -p "$WORKDIR" "$LOGDIR"
-: > "$SUMMARY"
 
 TIMEOUT="${TIMEOUT:-30}"
+JOBS="${NURL_SAN_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 
 # Leak detection off by default — see file header.
 export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=${LSAN_DETECT_LEAKS:-0}:abort_on_error=0:halt_on_error=0:print_stacktrace=1}"
 export UBSAN_OPTIONS="${UBSAN_OPTIONS:-print_stacktrace=1:halt_on_error=0}"
 
-shopt -s nullglob
-tests=("$SCRIPT_DIR"/*.nu)
-shopt -u nullglob
-IFS=$'\n' tests=($(printf '%s\n' "${tests[@]}" | LC_ALL=C sort))
-unset IFS
+# should_fail_* are compile-time negative tests; nurlfmt_idempotent is a
+# shell round-trip, not a binary; *_mod are helper modules without main().
+SKIP_RE='(should_fail_|nurlfmt_idempotent|alias_rewrite_types_mod)'
 
-n_total=0
-n_pass=0
-n_san_fail=0
-n_compile_fail=0
-n_link_fail=0
-
-# Test names whose sanitizer-relevant behaviour we accept as intentional
-# (e.g. should_fail_* deliberately abort during compilation; live tests
-# need their gating env vars to even run their interesting code).
-SKIP_PATTERNS=(
-    # should_fail_* are compile-time negative tests — irrelevant for ASan
-    "should_fail_"
-    # nurlfmt round-trip shell script, not a .nu binary test
-    "nurlfmt_idempotent"
-    # Helper modules without main() — imported by sibling tests
-    "alias_rewrite_types_mod"
-)
-
-should_skip() {
+# ── per-test worker (exported, fanned out with xargs -P) ─────────
+# Echoes a single "<name> <VERDICT>" line; writes its own logs under
+# $LOGDIR/$name.*  — no shared mutable state, safe to run concurrently.
+run_one_san() {
     local name="$1"
-    for p in "${SKIP_PATTERNS[@]}"; do
-        [[ "$name" == *"$p"* ]] && return 0
-    done
-    return 1
-}
+    local src="$SCRIPT_DIR/$name.nu"
 
-printf '%-44s %s\n' "TEST" "VERDICT"
-printf '%-44s %s\n' "----" "-------"
+    if [[ "$name" =~ $SKIP_RE ]]; then echo "$name SKIP"; return; fi
 
-for src in "${tests[@]}"; do
-    name="$(basename "$src" .nu)"
-    n_total=$((n_total + 1))
+    local ll="$WORKDIR/$name.ll"
+    local bin="$WORKDIR/$name"
+    local stdout_log="$LOGDIR/$name.stdout"
+    local stderr_log="$LOGDIR/$name.stderr"
 
-    if should_skip "$name"; then
-        printf '%-44s %s\n' "$name" "SKIP"
-        continue
-    fi
-
-    ll="$WORKDIR/$name.ll"
-    bin="$WORKDIR/$name"
-    stdout_log="$LOGDIR/$name.stdout"
-    stderr_log="$LOGDIR/$name.stderr"
-
-    # borrow_* — borrow-checker baseline tests. They contain
-    # *deliberate* use-after-free / double-free / use-after-move
-    # patterns whose
-    # purpose is to exercise the borrow checker's warning path. The
-    # normal run_tests.sh compiles them with `--borrowck` and never
-    # links or runs them; we mirror that here so ASan isn't asked to
-    # adjudicate code that's documented to be unsafe. A compile that
-    # produces no diagnostic *at all* is the real regression.
+    # borrow_* — borrow-checker baseline tests with *deliberate*
+    # use-after-free / double-free patterns. The normal runner compiles
+    # them with --borrowck and never links/runs them; mirror that here so
+    # ASan isn't asked to adjudicate code documented to be unsafe. A
+    # compile that produces no diagnostic at all is the real regression.
     if [[ "$name" == borrow_* ]]; then
         if ! "$NURLC" --borrowck "$src" > "$ll" 2>"$stderr_log"; then
-            printf '%-44s %s\n' "$name" "COMPILE_FAIL"
-            echo "COMPILE_FAIL $name" >> "$SUMMARY"
-            n_compile_fail=$((n_compile_fail + 1))
-            continue
+            echo "$name COMPILE_FAIL"; return
         fi
-        printf '%-44s %s\n' "$name" "PASS"
-        n_pass=$((n_pass + 1))
-        continue
+        echo "$name PASS"; return
     fi
 
-    # Compile (uses the just-built nurlc — should always succeed if the
-    # normal run_tests.sh would compile it). We don't capture warnings
-    # here because the focus is runtime-not-compile.
     if ! "$NURLC" "$src" > "$ll" 2>/dev/null; then
-        printf '%-44s %s\n' "$name" "COMPILE_FAIL"
-        echo "COMPILE_FAIL $name" >> "$SUMMARY"
-        n_compile_fail=$((n_compile_fail + 1))
-        continue
+        echo "$name COMPILE_FAIL"; return
     fi
 
     # shellcheck disable=SC2086
     if ! "$CLANG" -O1 -fsanitize=address,undefined -fno-omit-frame-pointer \
-            "$ll" "$RUNTIME" -lm -lpthread \
-            $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS \
-            -o "$bin" 2>"$stderr_log"; then
-        printf '%-44s %s\n' "$name" "LINK_FAIL"
-        echo "LINK_FAIL $name" >> "$SUMMARY"
-        n_link_fail=$((n_link_fail + 1))
-        continue
+            "$ll" "$RUNTIME" $LINK_LIBS -o "$bin" 2>"$stderr_log"; then
+        echo "$name LINK_FAIL"; return
     fi
 
     ( cd "$WORKDIR" && timeout "${TIMEOUT}s" "./$name" >"$stdout_log" 2>"$stderr_log" )
-    exit_code=$?
 
-    # Sanitizer-marker scan. ASan writes "AddressSanitizer:", UBSan
-    # writes "runtime error:" (or "UndefinedBehaviorSanitizer:" in some
-    # paths). LeakSanitizer writes "LeakSanitizer:".
+    # Sanitizer-marker scan: ASan "AddressSanitizer:", UBSan
+    # "runtime error:" / "UndefinedBehaviorSanitizer:", LSan "LeakSanitizer:".
     if grep -qE "AddressSanitizer|UndefinedBehaviorSanitizer|runtime error:|LeakSanitizer" "$stderr_log"; then
-        printf '%-44s %s (exit=%d)\n' "$name" "SAN_FAIL" "$exit_code"
-        echo "SAN_FAIL $name exit=$exit_code" >> "$SUMMARY"
-        n_san_fail=$((n_san_fail + 1))
-        continue
+        echo "$name SAN_FAIL"; return
     fi
 
-    # Non-zero exit code without a sanitizer report is fine from the
-    # ASan/UBSan perspective — the test ran the instrumented runtime
-    # cleanly. Several tests in the corpus exit with a deliberate
-    # non-zero code (e.g. native_sum returns the computed sum;
-    # test_immutable_assign_error aborts to demonstrate the runtime
-    # immutability check). The sanitized runner only cares whether the
-    # sanitizers caught anything — verdict is PASS.
-    if (( exit_code != 0 )); then
-        printf '%-44s %s (exit=%d, no sanitizer report)\n' "$name" "PASS" "$exit_code"
-    else
-        printf '%-44s %s\n' "$name" "PASS"
-    fi
-    n_pass=$((n_pass + 1))
+    # A non-zero exit with no sanitizer report is fine here — several
+    # tests exit non-zero deliberately; the sanitizers caught nothing.
+    echo "$name PASS"
+}
+export -f run_one_san
+export SCRIPT_DIR WORKDIR LOGDIR NURLC RUNTIME CLANG LINK_LIBS TIMEOUT SKIP_RE
+
+# ── collect the test set ────────────────────────────────────────
+shopt -s nullglob
+tests=("$SCRIPT_DIR"/*.nu)
+shopt -u nullglob
+if [[ ${#tests[@]} -eq 0 ]]; then echo "ERROR: no .nu files in $SCRIPT_DIR" >&2; exit 2; fi
+declare -a names=()
+for src in "${tests[@]}"; do names+=("$(basename "$src" .nu)"); done
+IFS=$'\n' names=($(printf '%s\n' "${names[@]}" | LC_ALL=C sort)); unset IFS
+
+# ── run in parallel ─────────────────────────────────────────────
+VERDICTS="$WORKDIR/.verdicts"
+printf '%s\n' "${names[@]}" \
+    | xargs -P "$JOBS" -I{} bash -c 'run_one_san "{}"' \
+    > "$VERDICTS" 2>/dev/null
+
+# ── report ──────────────────────────────────────────────────────
+printf '%-44s %s\n' "TEST" "VERDICT"
+printf '%-44s %s\n' "----" "-------"
+LC_ALL=C sort "$VERDICTS" | while read -r name verdict; do
+    printf '%-44s %s\n' "$name" "$verdict"
 done
+
+n_total=0; n_pass=0; n_san_fail=0; n_compile_fail=0; n_link_fail=0; n_skip=0
+declare -a san_fails=()
+while read -r name verdict; do
+    n_total=$((n_total + 1))
+    case "$verdict" in
+        PASS)         n_pass=$((n_pass + 1)) ;;
+        SKIP)         n_skip=$((n_skip + 1)) ;;
+        SAN_FAIL)     n_san_fail=$((n_san_fail + 1)); san_fails+=("$name") ;;
+        COMPILE_FAIL) n_compile_fail=$((n_compile_fail + 1)) ;;
+        LINK_FAIL)    n_link_fail=$((n_link_fail + 1)) ;;
+    esac
+done < "$VERDICTS"
 
 echo
 echo "── Sanitized run summary ──"
 echo "  total      : $n_total"
 echo "  PASS       : $n_pass     (includes tests with non-zero deliberate exit)"
+echo "  SKIP       : $n_skip"
 echo "  SAN_FAIL   : $n_san_fail     (AddressSanitizer / UBSan / LSan caught a problem)"
 echo "  COMPILE    : $n_compile_fail"
 echo "  LINK       : $n_link_fail"
-echo "  logs       : $LOGDIR"
+echo "  logs       : $LOGDIR     (jobs=$JOBS)"
 echo
 
 if (( n_san_fail > 0 )); then
     echo "── First sanitizer report from each SAN_FAIL test ──"
-    while IFS= read -r line; do
-        [[ "$line" == SAN_FAIL* ]] || continue
-        nm="$(echo "$line" | awk '{print $2}')"
+    for nm in "${san_fails[@]}"; do
         echo
         echo "▶ $nm"
         head -40 "$LOGDIR/$nm.stderr"
         echo "  …(see $LOGDIR/$nm.stderr for the full report)"
-    done < "$SUMMARY"
+    done
     exit 1
 fi
 
