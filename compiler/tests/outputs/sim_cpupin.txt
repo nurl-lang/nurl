@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+B was genuinely suspected at some point (probe failed): YES
+CPU-pinned B is STILL ALIVE (heartbeat + refute won): YES
+silent D was EVICTED to dead (harness can evict): YES
