@@ -1,0 +1,18 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+first ids are 0,1: YES
+identity_of is stable: YES
+reverse lookup resolves: YES
+known reports true: YES
+unknown C reports false: YES
+retired id not live: YES
+new pubkey gets fresh id (2, not 0): YES
+retired id still resolves (tombstone): YES
+rejoin resumes same id: YES
+rejoin revives liveness: YES
+three distinct entries: YES
+crdt via stable ids merges to 12: YES
+D does NOT inherit B slot: YES
+no slot corruption after churn (16): YES
