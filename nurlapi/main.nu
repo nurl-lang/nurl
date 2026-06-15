@@ -4754,6 +4754,9 @@ s combined_stdout s combined_stderr → v {
             ( router_get r `/gameboydemo` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_gameboydemo ) } )
             ( router_get r `/c64demo` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_c64demo ) } )
             ( router_get r `/pptchat` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_pptchatdemo ) } )
+            // Per-channel join URL (e.g. /pptchat/h747gh20z2f4t) — serves the
+            // SAME page; the channel id is read client-side from the path.
+            ( router_get r `/pptchat/*channel` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_pptchatdemo ) } )
             ( router_get r `/stdlib` \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_list req params ) } )
             ( router_get r `/tests` \ HttpRequest req Params params → HttpResponse { ^ ( h_tests_list req params ) } )
             ( router_get r `/stdlib/*path` \ HttpRequest req Params params → HttpResponse { ^ ( h_stdlib_file req params ) } )
