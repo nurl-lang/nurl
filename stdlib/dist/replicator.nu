@@ -11,10 +11,12 @@
 //
 // Wire: integers are 8-byte big-endian (i64 bit pattern via u64), counts are
 // 2-byte big-endian.
-//   PNCounter : u16 ninc, i64*ninc, u16 ndec, i64*ndec
+//   PNCounter : u16 ninc, (i64 id, i64 amt)*ninc, u16 ndec, (i64 id, i64 amt)*ndec
 //   LwwReg    : i64 value, i64 ts, i64 replica
 //   OrSet     : tags(adds) ++ tags(tombs);  tags = u16 n, (i64 elem,
 //               i64 replica, i64 seq)*n
+// PNCounter slots carry their replica id on the wire so a receiver merges by
+// id, not by position — replicas discovered in different orders still converge.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -27,34 +29,53 @@ $ `stdlib/dist/ring.nu`
 @ __rc_u64 *RcCur c → i { : i v ?? ( bytes_read_u64_be . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 8 ^ v }
 
 // ── PNCounter ────────────────────────────────────────────────────
-@ __pn_put ( Vec u ) b ( Vec i ) v → v {
-    : i n ( vec_len [i] v )
+// Emit the sparse (id, amt) slots in ASCENDING id order so the encoding is
+// CANONICAL: two replicas holding the same logical state (possibly inserted in
+// different orders) produce byte-identical output, which is what makes the
+// crdt_digest anti-entropy compare equal when they are in sync.
+@ __pn_put ( Vec u ) b ( Vec i ) ids ( Vec i ) amts → v {
+    : i n ( vec_len [i] ids )
     ( bytes_push_u16_be b # u16 n )
-    : ~ i k 0
-    ~ < k n {
-        : i x ?? ( vec_get [i] v k ) { T t → t F → 0 }
-        ( bytes_push_u64_be b # u64 x )
-        = k + k 1
+    : ( Vec i ) used ( vec_new [i] )
+    : ~ i u 0
+    ~ < u n { ( vec_push [i] used 0 ) = u + u 1 }
+    : ~ i out 0
+    ~ < out n {
+        : ~ i best - 0 1
+        : ~ i bid 0
+        : ~ i k 0
+        ~ < k n {
+            ? == ?? ( vec_get [i] used k ) { T x → x F → 1 } 0 {
+                : i idk ?? ( vec_get [i] ids k ) { T x → x F → 0 }
+                ? | == best - 0 1 < idk bid { = best k = bid idk } {}
+            } {}
+            = k + k 1
+        }
+        ( vec_set [i] used best 1 )
+        ( bytes_push_u64_be b # u64 ?? ( vec_get [i] ids best ) { T t → t F → 0 } )
+        ( bytes_push_u64_be b # u64 ?? ( vec_get [i] amts best ) { T t → t F → 0 } )
+        = out + out 1
     }
+    ( vec_free [i] used )
 }
 @ pncounter_encode *PNCounter c → ( Vec u ) {
     : ( Vec u ) b ( vec_new [u] )
-    ( __pn_put b . c inc )
-    ( __pn_put b . c dec )
+    ( __pn_put b . c inc_id . c inc_amt )
+    ( __pn_put b . c dec_id . c dec_amt )
     ^ b
 }
-@ __pn_get *RcCur cur ( Vec i ) into → v {
+@ __pn_get *RcCur cur ( Vec i ) ids ( Vec i ) amts → v {
     : i n ( __rc_u16 cur )
     : ~ i k 0
-    ~ < k n { ( vec_push [i] into ( __rc_u64 cur ) ) = k + k 1 }
+    ~ < k n { ( vec_push [i] ids ( __rc_u64 cur ) ) ( vec_push [i] amts ( __rc_u64 cur ) ) = k + k 1 }
 }
 @ pncounter_decode ( Vec u ) buf → *PNCounter {
     : *PNCounter c ( pncounter_new )
     : *RcCur cur # *RcCur ( nurl_alloc Z RcCur )
     = . cur buf buf
     = . cur off 0
-    ( __pn_get cur . c inc )
-    ( __pn_get cur . c dec )
+    ( __pn_get cur . c inc_id . c inc_amt )
+    ( __pn_get cur . c dec_id . c dec_amt )
     ( nurl_free # s cur )
     ^ c
 }

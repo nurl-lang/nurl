@@ -18,8 +18,17 @@
 //
 // Retired ids are tombstoned (kept, marked not-live) so stale gossip that
 // still references a dead replica can be interpreted, and so a rejoin revives
-// the original binding. Feed `dist/crdt.nu` / `dist/replicator.nu` from
-// `identity_of(pubkey)` instead of raw caller-assigned ints.
+// the original binding.
+//
+// IMPORTANT — two different "ids" with two different jobs:
+//   * identity_of(pubkey)        — a LOCAL, monotonic, never-reused slot id for
+//     this node's bookkeeping (liveness, tombstones, dense local tables). It is
+//     assigned in arrival order, so it is NOT comparable across nodes.
+//   * identity_stable_id(pubkey) — a GLOBALLY consistent id derived purely from
+//     the pubkey (FNV-1a/64), identical on every node with no coordination.
+//     Feed dist/crdt.nu / dist/replicator.nu REPLICA IDS FROM THIS: a CRDT
+//     merge aligns replicas by id, so two nodes that meet peers in different
+//     orders must still agree on each replica's id or the value corrupts.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -73,6 +82,26 @@ $ `stdlib/core/vec.nu`
 }
 
 @ identity_count *IdRegistry r → i { ^ ( vec_len [s] . r entries ) }
+
+// A globally STABLE replica id derived purely from the pubkey (FNV-1a/64). No
+// registry, no coordination: every node computes the SAME id for a given
+// pubkey, so CRDT replicas land in the same slot everywhere and merges align by
+// identity instead of by local arrival order. Collision probability ~ n²/2^65 —
+// negligible for any real cluster, and the same FNV-1a/64 identity hash
+// dist/ring already trusts for ownership. This is what dist/crdt replica ids
+// should come from (NOT identity_of, which is a local arrival-ordered slot).
+@ identity_stable_id ( Vec u ) pubkey → i {
+    : ~ i h 0xcbf29ce484222325
+    : i n ( vec_len [u] pubkey )
+    : ~ i k 0
+    ~ < k n {
+        : i bj ?? ( vec_get [u] pubkey k ) { T x → # i x F → 0 }
+        = h ^^ h & bj 255
+        = h * h 0x100000001b3
+        = k + k 1
+    }
+    ^ h
+}
 
 @ __id_find *IdRegistry r ( Vec u ) pubkey → s {
     : i n ( vec_len [s] . r entries )
