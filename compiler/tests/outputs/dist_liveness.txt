@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+B starts at incarnation 0: YES
+B bumped incarnation on self-suspicion: YES
+alive-self gossip does not bump: YES
+refute ignores stale inc: YES
+refute bumps past higher inc: YES
+incarnation now 8: YES
+A locally suspects B: YES
+B's heartbeat reinstates B as alive on A: YES
+stale suspicion (old inc) is ignored: YES
