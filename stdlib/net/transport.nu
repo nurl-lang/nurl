@@ -160,7 +160,15 @@ $ `stdlib/net/relay.nu`
 // Send an opaque payload to a peer over whichever leg is currently chosen.
 @ transport_send *Transport t ( Vec u ) pubkey ( Vec u ) payload → !v NetErr {
     : s pp ( __tp_find t pubkey )
-    ? == # i pp 0 { ^ @ !v NetErr { F # NetErr NetOther } } {}
+    // Unknown peer: no direct path is known (it was never added / no
+    // candidate), so reach it over the relay if one is configured. The seam's
+    // contract is "address ANY pubkey" — requiring transport_add_peer first
+    // would break sending to a peer learned at runtime (e.g. a job submitter
+    // replying to a result, or dispatch to a key's current owner).
+    ? == # i pp 0 {
+        ? == . t has_relay 1 { ^ ( relay_send . t relay pubkey payload ) } {}
+        ^ @ !v NetErr { F # NetErr NetOther }
+    } {}
     : *PeerPath p # *PeerPath pp
     : i leg ( transport_pick p . t has_relay )
     ? == leg 2 {
