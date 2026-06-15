@@ -1,0 +1,15 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+submit type/id/kind: YES
+submit submitter/key/payload: YES
+result type/id/payload: YES
+owns key (single-member ring): YES
+result recorded after submit: YES
+awaited result is sum=10: YES
+await unknown task → None: YES
+duplicate delivery is idempotent (keeps first): YES
+key has an owner in 3-node ring: YES
+owner recomputes after removal (re-home): YES
+new owner is a surviving member: YES
