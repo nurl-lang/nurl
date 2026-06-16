@@ -594,6 +594,17 @@
 // never miscompiled. Allocated in main().
 : ~ i g_fn_sink 0
 
+// Per-function escaping-parameter map.
+// `g_fn_escapes[fname]` is the space-separated list of 0-based indices
+// of parameters whose value the body *retains past the call* — stored
+// into a heap container or detached onto a thread (directly, or
+// transitively through another function's escaping parameter). Inferred
+// in codegen order like g_fn_sink (a forward call merely misses the
+// diagnostic, never miscompiles). gen_call consults it to flag a stack
+// reference handed to such a parameter — the interprocedural escape
+// check (docs/MEMORY.md §2.7). Allocated in main().
+: ~ i g_fn_escapes 0
+
 // ── DWARF debug-info state ───────────────────────────────────────
 // All zero/empty when --g is OFF; emit helpers then produce IR that
 // is byte-identical to a pre-DWARF build. Toggled in main().
@@ -4155,6 +4166,13 @@
     // Indices of the callee's `sink` parameters — an argument there
     // is consumed (move-checked at the call site).
     : ~ s callee_sink ( nurl_sym_get g_fn_sink call_name )
+    // Indices of the callee's *escaping* parameters — ones the callee's
+    // body stores into a heap container or detaches onto a thread
+    // (vec_push / vec_insert / vec_set / thread_spawn). Inferred per
+    // function in codegen order (like the auto-sink summary) and
+    // consulted below: a stack reference handed to such a parameter
+    // escapes through the callee, the interprocedural form of §2.3.
+    : ~ s callee_escapes ( nurl_sym_get g_fn_escapes call_name )
     // Generic call: g_fn_inout / g_fn_sink for a generic function are
     // keyed by the GENERIC name (the index sets are type-independent,
     // computed once by compute_generic_inout_sink). The mangled
@@ -4167,6 +4185,9 @@
     {}
     ? & == 0 ( nurl_str_len callee_sink ) ! ( seq call_name fname )
     { = callee_sink ( nurl_sym_get g_fn_sink fname ) }
+    {}
+    ? & == 0 ( nurl_str_len callee_escapes ) ! ( seq call_name fname )
+    { = callee_escapes ( nurl_sym_get g_fn_escapes fname ) }
     {}
     // If the callee is known (scan_fn_sigs) to have `inout` parameters
     // but g_fn_inout still has no entry, it is being called BEFORE its
@@ -4362,15 +4383,33 @@
                 {} }
             {} }
         {}
-        // Escape analysis (docs/MEMORY.md §2.3). If this
-        // call is one of the four ownership-taking helpers AND this
-        // argument is a stack reference — a closure
-        // literal capturing a binding by pointer, or a binding /
-        // aggregate holding one — warn: the captured stack slot will
-        // dangle the moment the surrounding function returns.
-        ? is_escape_call
+        // Escape analysis (docs/MEMORY.md §2.3 + §2.7). An argument
+        // position *escapes* when the callee retains the value past the
+        // call. Two sources:
+        //   * a built-in heap/thread sink — the element of
+        //     vec_push/vec_insert/vec_set (arg >= 1; arg 0 is the
+        //     container, never a stack reference) or the thread_spawn
+        //     closure (arg 0);
+        //   * an inferred *escaping parameter* of a user function
+        //     (callee_escapes) — the interprocedural case.
+        // If the argument there is a stack reference (a closure
+        // capturing a binding by pointer, or an aggregate / binding
+        // holding one) it dangles the moment the surrounding function
+        // returns — warn. And if the argument is itself a bare
+        // parameter of the ENCLOSING function, this position makes that
+        // parameter escape too: record it so the enclosing function's
+        // own summary propagates the escape one level out (transitive,
+        // in codegen order).
+        : b vec_family_call | |
+        ( seq fname `vec_push` ) ( seq fname `vec_insert` ) ( seq fname `vec_set` )
+        : b builtin_escape_slot & is_escape_call ! & vec_family_call == arg_idx 0
+        : b arg_pos_escapes | builtin_escape_slot
+        ( str_contains_word callee_escapes ( nurl_str_int arg_idx ) )
+        ? arg_pos_escapes
         { ( bck_esc_check_call_arg lex syms bck_arg_line
-            ( nurl_sym_get syms `__last_ident_name__` ) fname ) }
+            ( nurl_sym_get syms `__last_ident_name__` ) fname )
+            ? ( is_ident_tok bck_arg_tt )
+            { ( bck_record_inferred_escape syms bck_arg_val ) } {} }
         {}
         // A `*_free` destructor's first argument, when it is a bare
         // identifier, names a binding being consumed — stash it as a
@@ -11069,6 +11108,32 @@
     }
 }
 
+// Escape-summary inference (docs/MEMORY.md §2.7): when a body call
+// hands a bare parameter of the enclosing function to an escaping
+// argument position (a built-in heap/thread sink, or an already-known
+// escaping parameter of the callee), record that parameter's 0-based
+// index for merge into g_fn_escapes[fname]. Call sites of the
+// enclosing function then reject passing a *stack reference* there —
+// the interprocedural form of the §2.3 escape check (` ( keep ref ) `
+// where `keep` stores `ref` in a container that outlives the call).
+// Mirrors bck_record_inferred_sink; the merge runs in
+// gen_fn_decl_concrete after the body finishes parsing.
+@ bck_record_inferred_escape i syms s arg_name → v {
+    ? == g_borrowck 0 {} {
+        : s pn ( nurl_sym_get syms `__fn_param_names__` )
+        : i idx ( str_word_index pn arg_name )
+        ? >= idx 0
+        { : s cur ( nurl_sym_get syms `__fn_inferred_escape__` )
+            : s new ( nurl_str_int idx )
+            ? ! ( str_contains_word cur new )
+            { ( nurl_sym_def syms `__fn_inferred_escape__`
+                ? == 0 ( nurl_str_len cur ) new
+                ( nurl_str_cat3 cur ` ` new ) ) }
+            {} }
+        {}
+    }
+}
+
 // check_exhaustive: compile error if match arms don't cover all enum variants.
 // ename: enum name (e.g. "Color")  seen: space-separated matched variant names
 // has_wildcard: 1 if a '_' arm was present
@@ -11798,6 +11863,10 @@
     // when the consumed arg is a bare parameter of THIS function. The
     // merge into g_fn_sink[fname] happens after the body finishes.
     ( nurl_sym_def syms `__fn_inferred_sink__` `` )
+    // Escape-summary inference (docs/MEMORY.md §2.7): same shape — reset
+    // the accumulator; gen_call appends param indices that reach an
+    // escaping argument position; merged into g_fn_escapes[fname] below.
+    ( nurl_sym_def syms `__fn_inferred_escape__` `` )
     : s last ( gen_block_ret lex syms cg )
     // Borrow provenance for an IMPLICIT (no `^`) block return: the body's
     // final expression IS the return value, so if it left a borrow on
@@ -11824,6 +11893,23 @@
                 ( nurl_str_cat3 __as_merged ` ` __as_w ) }
             {} }
         ( nurl_sym_def g_fn_sink fname __as_merged ) }
+    {}
+    // Escape-summary inference (docs/MEMORY.md §2.7): merge inferred
+    // escaping-parameter indices into g_fn_escapes[fname]. Same merge
+    // shape as the auto-sink block above.
+    : s __ae_inferred ( nurl_sym_get syms `__fn_inferred_escape__` )
+    ? != 0 ( nurl_str_len __ae_inferred )
+    { : ~ s __ae_merged ( nurl_sym_get g_fn_escapes fname )
+        : ~ s __ae_rest __ae_inferred
+        ~ != 0 ( nurl_str_len __ae_rest ) {
+            : s __ae_w ( str_first_word __ae_rest )
+            = __ae_rest ( str_skip_word __ae_rest )
+            ? ! ( str_contains_word __ae_merged __ae_w )
+            { = __ae_merged ? == 0 ( nurl_str_len __ae_merged )
+                __ae_w
+                ( nurl_str_cat3 __ae_merged ` ` __ae_w ) }
+            {} }
+        ( nurl_sym_def g_fn_escapes fname __ae_merged ) }
     {}
     // Implicit return — route through defer chain if defers are active
     : s dtop ( nurl_sym_get syms `__defer_top__` )
@@ -14777,6 +14863,7 @@
     = g_closure_types ( nurl_sym_new )
     = g_fn_inout ( nurl_sym_new )
     = g_fn_sink ( nurl_sym_new )
+    = g_fn_escapes ( nurl_sym_new )
     = g_type_count 0
     = g_func_count 0
     = g_closure_emit_base 0
