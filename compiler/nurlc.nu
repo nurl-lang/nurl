@@ -605,6 +605,18 @@
 // check (docs/MEMORY.md §2.7). Allocated in main().
 : ~ i g_fn_escapes 0
 
+// Deferred interprocedural-escape checks (docs/MEMORY.md §3 forward /
+// generic boundary). A stack reference passed to a *user* function
+// whose escape summary is not yet known at the call site — a forward
+// call, or a generic not yet instantiated — cannot be resolved inline.
+// gen_call parks such a check here as a space-separated 5-tuple
+// `call_name fname arg_idx line file`; resolve_pending_escapes() replays
+// each one against the now-complete g_fn_escapes after the whole module
+// (including the generic instantiation flush) has compiled. Only stack-
+// reference arguments are ever parked, so the list stays tiny.
+// Allocated in main(); the list lives under key `l`.
+: ~ i g_pending_escape 0
+
 // Per-function returned-parameter map.
 // `g_fn_ret_param[fname]` is the space-separated list of 0-based
 // indices of parameters the body may RETURN directly (`^ p` /
@@ -4472,6 +4484,27 @@
         = arg_refdepths ? == 0 ( nurl_str_len arg_refdepths )
         ( nurl_str_int bck_arg_rd )
         ( nurl_str_cat3 arg_refdepths ` ` ( nurl_str_int bck_arg_rd ) )
+        // Deferred interprocedural-escape (docs/MEMORY.md §3 forward /
+        // generic). This argument is a stack reference (`bck_arg_rd > 0`)
+        // that the inline check did NOT flag (`arg_pos_escapes` false —
+        // the callee's escape summary is empty here, because the callee
+        // is defined later, or is a generic not yet instantiated). The
+        // callee must be a known user @-function (has `__arity`, not a
+        // closure binding). Park the check; resolve_pending_escapes()
+        // replays it against the final summary. If the callee turns out
+        // non-escaping, the replay finds nothing — no false positive.
+        ? & & & > bck_arg_rd 0 ! arg_pos_escapes
+        != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__arity` ) ) )
+        == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__ptr` ) ) )
+        { : s __pe_rec ( nurl_str_cat3
+            ( nurl_str_cat3 call_name ` ` fname )
+            ( nurl_str_cat4 ` ` ( nurl_str_int arg_idx ) ` ` ( nurl_str_int bck_arg_line ) )
+            ( nurl_str_cat ` ` ( nurl_lex_filename lex ) ) )
+            : s __pe_cur ( nurl_sym_get g_pending_escape `l` )
+            ( nurl_sym_def g_pending_escape `l`
+            ? == 0 ( nurl_str_len __pe_cur ) __pe_rec
+            ( nurl_str_cat3 __pe_cur ` ` __pe_rec ) ) }
+        {}
         // A `*_free` destructor's first argument, when it is a bare
         // identifier, names a binding being consumed — stash it as a
         // move (flushed after the enclosing statement).
@@ -11289,6 +11322,41 @@
     best
 }
 
+// resolve_pending_escapes: replay the deferred interprocedural-escape
+// checks parked by gen_call (docs/MEMORY.md §3 forward / generic) now
+// that every function — including the generic instantiation flush — has
+// compiled and g_fn_escapes is final. Each parked 5-tuple is
+// `call_name fname arg_idx line file`; if the callee's now-known escape
+// summary covers that argument index, the stack reference handed to it
+// does dangle — emit the same diagnostic the inline check would have.
+// A callee that turned out non-escaping resolves to nothing. Called
+// once from main() after flush_deferred_instantiations.
+@ resolve_pending_escapes → v {
+    ? == g_borrowck 0 {} {
+        : ~ s rest ( nurl_sym_get g_pending_escape `l` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s cn ( str_first_word rest )   = rest ( str_skip_word rest )
+            : s fn ( str_first_word rest )   = rest ( str_skip_word rest )
+            : s ai ( str_first_word rest )   = rest ( str_skip_word rest )
+            : s ln ( str_first_word rest )   = rest ( str_skip_word rest )
+            : s file ( str_first_word rest ) = rest ( str_skip_word rest )
+            // Final escape summary, mangled name first then the generic
+            // name (mirrors gen_call's callee_escapes lookup).
+            : ~ s esc ( nurl_sym_get g_fn_escapes cn )
+            ? == 0 ( nurl_str_len esc ) { = esc ( nurl_sym_get g_fn_escapes fn ) } {}
+            ? ( str_contains_word esc ai ) {
+                : s loc ( nurl_str_cat3 file `:` ln )
+                : s msg ( nurl_str_cat3
+                `: error: passing a value that references a stack binding by pointer to '`
+                fn
+                `' - it escapes the current stack frame and dangles (move it to a heap-backed handle)` )
+                ( nurl_eprintln ( nurl_str_cat loc msg ) )
+                = g_bck_errors + g_bck_errors 1
+            } {}
+        }
+    }
+}
+
 // check_exhaustive: compile error if match arms don't cover all enum variants.
 // ename: enum name (e.g. "Color")  seen: space-separated matched variant names
 // has_wildcard: 1 if a '_' arm was present
@@ -15039,6 +15107,7 @@
     = g_fn_inout ( nurl_sym_new )
     = g_fn_sink ( nurl_sym_new )
     = g_fn_escapes ( nurl_sym_new )
+    = g_pending_escape ( nurl_sym_new )
     = g_fn_ret_param ( nurl_sym_new )
     = g_type_count 0
     = g_func_count 0
@@ -15064,6 +15133,11 @@
     = g_lint_recording 0
     // Emit all deferred generic instantiations collected during compilation.
     ( flush_deferred_instantiations syms cg )
+    // Every function (incl. just-flushed generic instantiations) has now
+    // compiled, so the escape summaries are final: replay the deferred
+    // interprocedural-escape checks parked for forward / generic calls
+    // (docs/MEMORY.md §3). May bump g_bck_errors, checked below.
+    ( resolve_pending_escapes )
     ( dbg_flush )
     // Unused-symbol lint (--lint): every call site (incl. generic
     // instantiations) has now been seen, so report the unused private
