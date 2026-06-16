@@ -10,12 +10,14 @@ v2.1).
 - **Single owner, deterministic drop.** Every heap allocation has
   exactly one owning binding. The compiler inserts the matching free
   at the end of that binding's scope. No garbage collector, no
-  reference counting for ordinary values (closure environments are
-  the one exception — they are RC'd).
+  reference counting. A few **manually-managed handles** sit outside
+  auto-drop — `Vec`, the heap environment of a capturing closure, and
+  `sink` parameters — and are freed explicitly (§7.2).
 - **A borrow checker runs by default.** A diagnostic analysis pass
   catches use-after-move, alias double-free, and closures that escape
   the stack frame they point into. It is on unless you pass
-  `--no-borrowck`.
+  `--no-borrowck`. It is a *diagnostic* layered on the auto-drop base,
+  not a Rust-style borrow system — see the contract in §6.
 - **It is a diagnostic pass and its diagnostics are hard errors.**
   The borrow checker emits `error:` lines and the compiler exits
   non-zero with a count of violations after walking the whole
@@ -358,23 +360,33 @@ forward / generic calls, are not yet summarised.
 ## 3. What is NOT checked
 
 The borrow checker targets the bug classes that ordinary NURL code
-hits in practice. It deliberately does **not** yet cover:
+hits in practice. It deliberately does **not** cover:
 
-- **Aliased mutation beyond a single call.** The exclusive-access
-  check (2.4) covers a binding aliased among one call's arguments.
-  A binding read through a *nested* sub-expression argument, and
-  any longer-range aliased-mutation analysis, is not yet done.
 - **`*T` raw pointers.** `*T` is the FFI ABI escape hatch — NURL's
   `unsafe`. A `*T` taken of a local, stored, returned, or captured
   is *not* checked. Treat `*T` lifetimes as your responsibility.
-- **Interprocedural escape — partial.** A stack reference passed
-  *through a helper* that stores it in a heap container or on a thread
-  IS now caught, via per-function escape summaries (§2.7). The
-  remaining gaps are escape via a *returned* parameter and across a
-  *forward* / generic call (the summary is not yet available there).
-- **`recover` / panic edges.** Owned values in a `recover` scope leak
-  on panic; the checker treats `recover` as an ordinary call and does
-  not model panic control flow.
+- **Aliased mutation beyond a single call.** The exclusive-access
+  check (§2.4) covers a binding aliased among one call's arguments.
+  A binding read through a *nested* sub-expression argument, and
+  any longer-range aliased-mutation analysis, is not done.
+- **Escape across a forward / generic call.** The escape (§2.7) and
+  return-escape (§2.8) summaries are built as each function compiles,
+  so a call placed *before* the callee's definition — or to a generic
+  not yet instantiated — has no summary to consult and the escape is
+  missed. This degrades the *diagnostic* only; it never miscompiles
+  (the lowered code is identical either way). Define helpers before
+  their call sites to get the check.
+- **Escape through a closure capture or a deeply nested aggregate.**
+  §2.8 records a parameter returned directly or as a direct struct
+  field; a parameter returned by being *captured into a closure*
+  (`^ \ → … cb …`), or embedded one aggregate level deeper
+  (`^ @ Outer { @ Inner { cb } }`), is not yet summarised.
+- **`recover` / panic unwind.** A panic is a `setjmp`/`longjmp` jump to
+  the nearest `recover` frame (no exception tables, no unwinding
+  destructors), so owned values allocated inside the recover scope
+  **leak** — see §7. This is a memory *leak*, never a use-after-free;
+  the checker treats `recover` as an ordinary call and does not model
+  the panic edge.
 
 ## 4. Practical guidance
 
@@ -407,3 +419,167 @@ hits in practice. It deliberately does **not** yet cover:
 | Aliased mutation via nested-argument reads | no |
 | Returned borrows / lifetime inference | partial (§2.8) |
 | `*T` raw pointers | no (by design) |
+
+The `no` / `partial` rows are not bugs; they are the boundary of a
+*diagnostic* pass, spelled out in §3 and contracted in §6.
+
+## 6. The soundness contract
+
+This section states precisely what the model guarantees, what it does
+not, and what those guarantees are conditional on. It is the part to
+read before relying on the checker — or before assuming it is Rust.
+
+### 6.1 Two layers, two different jobs
+
+Memory safety in NURL rests on **two** mechanisms, and it is worth
+keeping them apart:
+
+1. **Auto-drop (§1) is what makes the base safe.** It is conservative
+   by construction: it registers a free *only* for a resource it saw
+   allocated directly, and a copy into another binding registers no
+   second free. So the compiler **never emits a double-free of its own
+   accord**, for any program, checked or not. This is a structural
+   property, not an analysis result.
+
+2. **The borrow checker (§2) catches the mistakes a *programmer* can
+   still write** on top of that base — consuming a value and reading it
+   again, aliasing two owners onto one buffer, letting a stack
+   reference outlive its frame. It is a flow-sensitive **diagnostic**
+   pass: it emits `error:` and exits non-zero, and it lowers nothing.
+
+### 6.2 Sound, not complete
+
+The precise claim is a one-directional one: **every diagnostic is a
+real bug** (the checker is *sound* — no false positives, §6.3), but a
+clean compile is **not** a proof of memory safety (it is *not
+complete*). It reliably catches the **definite, common** forms of each
+class:
+
+- **Use-after-free / double-free** — use-after-move, alias double-free,
+  loop-carried double-free, indirect (auto-`sink`) use-after-free
+  (§2.1, §2.2, §2.6).
+- **Dangling stack references** reaching a return, a heap container, a
+  thread, a longer-lived binding, or — interprocedurally — a helper
+  that stores or returns one (§2.3, §2.7, §2.8).
+- **Iterator-invalidating mutation** of a container under a `~ x xs`
+  foreach (§2.5), and an **aliased `inout` writer** sharing a call with
+  another reader of the same binding (§2.4).
+
+It deliberately **does not** flag the *conditional* forms, to keep the
+no-false-positive property exact. The sharp edge is the **maybe-moved**
+case: a value freed on only one arm of a `?` and then freed again is a
+real double-free on the path where the first free ran, yet it is *not*
+reported —
+
+```
+? cond { ( vec_free [i] xs ) } {}
+( vec_free [i] xs )    // double-free when cond was true — NOT flagged
+```
+
+— because flagging it would also reject the many programs where the
+two frees are mutually exclusive. Definite double-frees (both arms, or
+straight-line, or loop-carried) *are* caught; only the genuinely
+conditional one slips. Together with the unchecked classes (§3) and the
+trusted surface (§6.4), this is why "compiles clean" means "free of the
+bug classes the checker *reports*," not "verified memory-safe."
+
+### 6.3 The no-false-positive property
+
+Every rule is tuned to flag only a **definite** fault, never a
+*maybe*: a value moved on one arm of a `?` is `MaybeMoved` and left
+alone (§2.1); only the back-edge-carried, definitely-moved binding is
+flagged in a loop (§2.6); a summary records a parameter broadly but
+only fires when a *real* stack reference is passed (§2.7, §2.8). The
+consequence is a working contract: **if the checker flags your code, it
+has found a real bug** — quote the message and fix it. The whole
+in-tree corpus (compiler + stdlib + tests) is verified borrow-clean and
+runs ASan/UBSan-clean, so a false positive is a compiler bug worth
+reporting, and `--no-borrowck` is the escape hatch meanwhile.
+
+Because the pass lowers nothing, an accepted program compiles to
+**byte-identical IR** with or without it — which is why turning it on
+left the self-hosting bootstrap fixed point untouched.
+
+### 6.4 Trusted computing base
+
+The guarantees in §6.2 hold *modulo* a small surface you are trusted to
+get right:
+
+- **`*T` raw pointers and FFI.** `*T` is NURL's `unsafe`. A `*T` into a
+  local, or any pointer crossing an `& \`lib\`` boundary, is outside the
+  model; its lifetime is yours.
+- **Manually-managed handles.** `Vec`, closure environments, and `sink`
+  parameters are freed by *you*, not by auto-drop (§7.2). The checker
+  tracks their *moves* (so a `vec_free`d handle can't be reused) but not
+  their *freeing* — forget the `vec_free` and it leaks.
+- **Define-before-call ordering.** The escape / sink / return-escape
+  summaries are built in codegen order, so a forward or
+  not-yet-instantiated-generic call misses the diagnostic (§3). It is
+  never miscompiled — only unchecked.
+
+### 6.5 This is not Rust
+
+The model borrows vocabulary — *move*, *borrow*, “N readers XOR 1
+writer” — for ideas that are genuinely analogous, but the machinery is
+deliberately simpler and the equivalence does **not** hold:
+
+- Ownership is **single-owner with deterministic scope-bound drop**
+  (RAII-shaped), not an affine type system. There are **no lifetimes in
+  types**, no lifetime parameters, and no generic borrow inference.
+- `in` / `inout` / `sink` are **call conventions** (by-value copy /
+  by-address exclusive mutation / by-value consume), not
+  lifetime-polymorphic reference types. They are resolved per call, not
+  threaded through signatures as `&'a`.
+- The checker is a **flow-sensitive diagnostic lint** layered on the
+  auto-drop base, not a total borrow system that *proves* a program
+  safe. Its boundary (§3) is real and intentional, not a TODO list of
+  Rust features pending.
+
+## 7. Leaks versus memory safety
+
+A leak is **not** a memory-safety violation: no use-after-free, no
+double-free, no undefined behaviour — just memory the process never
+returns. The checked classes (§5) are all memory-*safety*; leaks are a
+separate axis, and NURL handles them in two tiers.
+
+### 7.1 Ordinary code does not leak
+
+In straight-line code, across `?` / `??` branches, and through loop
+bodies, auto-drop is exhaustive: owned strings, owned slices, `Drop`
+values, and **owned struct fields — including fields nested inside
+inner struct literals** — are all freed at scope exit, and a binding
+declared in a `?` / match / loop arm that *falls through* (no `^`) is
+dropped at arm end, not leaked. These were the historically weak spots
+(“Phase 2D”); they are now closed and pinned by tests that run
+ASan/LSan-clean (`struct_nested_field_drop`, `arm_local_drop`,
+`arm_local_trailing_drop`). Do **not** treat them as open limitations.
+
+### 7.2 Two bounded cases that *do* leak — by design
+
+1. **`recover` / panic unwind.** A panic `longjmp`s straight to the
+   recover frame, skipping the scope-exit drops between (§3); an owned
+   value allocated inside the recover scope leaks. This is the price of
+   a no-EH-table panic model and is intentional — `recover` is
+   crash-mitigation, not a routine error path (use `! T E` + `\` for
+   expected failures). *Mitigation:* keep recover scopes minimal;
+   allocate before the scope, or write results into a `: ~` binding
+   captured by reference so ownership lives in the caller's frame (the
+   pattern `stdlib/std/panic.nu` documents).
+
+2. **Manually-managed handles.** Auto-drop only frees what it saw
+   allocated directly, so three handle kinds are yours to release:
+   `Vec` (`vec_free` / `vec_free_with`); the heap **environment of any
+   capturing closure** (a `\ → … x …` that closes over a binding
+   allocates an env block — the struct carries a refcount slot, but the
+   release path is not currently wired into scope exit, so an unfreed
+   env leaks; free it via the closure's env pointer, e.g. before a
+   `vec_free_with`); and a value passed to a **`sink`** parameter (the
+   callee frees it). These are deliberate seams, not defects: the
+   conservatism that makes auto-drop double-free-proof (§6.1) is exactly
+   what stops it from owning these. The checker still tracks these
+   handles' *moves* — a `vec_free`d `Vec`, or a `sink`-consumed value,
+   cannot be used again (§2.1) — it just does not free them for you.
+
+Everything outside those two cases is expected to be leak-free, and the
+`tools/leakcheck` gate plus the ASan/UBSan test suite hold the stdlib
+and corpus to it.
