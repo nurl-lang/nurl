@@ -605,6 +605,18 @@
 // check (docs/MEMORY.md §2.7). Allocated in main().
 : ~ i g_fn_escapes 0
 
+// Per-function returned-parameter map.
+// `g_fn_ret_param[fname]` is the space-separated list of 0-based
+// indices of parameters the body may RETURN directly (`^ p` /
+// implicit-final `p`). Inferred in codegen order. gen_call uses it to
+// propagate a stack reference OUT through the call result: the result
+// of `( id ref )` carries `ref`'s referent depth, so the existing
+// §2.3 sinks (`^`-return, vec_push, shallower `=`) then catch a
+// returned borrow that dangles. The dual of g_fn_escapes (which
+// propagates a reference INTO a callee). docs/MEMORY.md §2.8.
+// Allocated in main().
+: ~ i g_fn_ret_param 0
+
 // ── DWARF debug-info state ───────────────────────────────────────
 // All zero/empty when --g is OFF; emit helpers then produce IR that
 // is byte-identical to a pre-DWARF build. Toggled in main().
@@ -1683,7 +1695,21 @@
     // into a `^ ( plain_struct_fn )` return).
     ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
     ( nurl_sym_def syms `__last_call_ret_struct_fields__` `` )
+    // Return-escape inference (docs/MEMORY.md §2.8): snapshot whether
+    // this return is a bare identifier (`^ p`) so the post-gen_operand
+    // check can tell a direct parameter passthrough from a derived
+    // expression (`^ + p 1`, `^ ( f p )`).
+    : i ret_first_tt ( nurl_lex_type lex )
+    : s ret_first_val ( nurl_lex_val lex )
     : s val ( gen_operand lex syms cg )
+    // If the returned value WAS exactly that bare identifier and it
+    // names a parameter, record the parameter index: callers then learn
+    // this function may return that argument, propagating a passed-in
+    // stack reference out through the call result.
+    ? & ( is_ident_tok ret_first_tt )
+    ( seq ( nurl_sym_get syms `__last_ident_name__` ) ret_first_val )
+    { ( bck_record_ret_param syms ret_first_val ) }
+    {}
     // XOR confusion (critic v0.9.0 §1): `^ X Y` on the same line is
     // almost always the user thinking `^` is XOR. `^^` (two adjacent
     // carets, no space) IS XOR; `^ X` returns X and any tail tokens
@@ -4173,6 +4199,11 @@
     // consulted below: a stack reference handed to such a parameter
     // escapes through the callee, the interprocedural form of §2.3.
     : ~ s callee_escapes ( nurl_sym_get g_fn_escapes call_name )
+    // Indices of parameters the callee may RETURN — used after the
+    // call to propagate a stack reference out through the result
+    // (docs/MEMORY.md §2.8). Empty for a function that returns a fresh
+    // value.
+    : ~ s callee_ret_param ( nurl_sym_get g_fn_ret_param call_name )
     // Generic call: g_fn_inout / g_fn_sink for a generic function are
     // keyed by the GENERIC name (the index sets are type-independent,
     // computed once by compute_generic_inout_sink). The mangled
@@ -4188,6 +4219,9 @@
     {}
     ? & == 0 ( nurl_str_len callee_escapes ) ! ( seq call_name fname )
     { = callee_escapes ( nurl_sym_get g_fn_escapes fname ) }
+    {}
+    ? & == 0 ( nurl_str_len callee_ret_param ) ! ( seq call_name fname )
+    { = callee_ret_param ( nurl_sym_get g_fn_ret_param fname ) }
     {}
     // If the callee is known (scan_fn_sigs) to have `inout` parameters
     // but g_fn_inout still has no entry, it is being called BEFORE its
@@ -4220,6 +4254,11 @@
     { ^ ( gen_call_kwargs lex syms cg fname ) }
     {}
     : ~ s owned_arg_temps ``
+    // Space-separated referent depths of each positional argument, in
+    // order (0 = not a stack reference). After the call, the result's
+    // referent depth is the max over the callee's returned-parameter
+    // indices — propagating a stack reference out (docs/MEMORY.md §2.8).
+    : ~ s arg_refdepths ``
     // N-readers-XOR-1-writer: a binding passed to this call as
     // `inout` is mutably borrowed for the call's duration; it must
     // be the *exclusive* path to that value at the call. `p5_seen`
@@ -4411,6 +4450,16 @@
             ? ( is_ident_tok bck_arg_tt )
             { ( bck_record_inferred_escape syms bck_arg_val ) } {} }
         {}
+        // Record this argument's referent depth (for §2.8 return-escape
+        // propagation below). Read the same side-channels the escape
+        // check above consults — `__last_expr_refdepth__` (set by a
+        // closure / aggregate literal) or the bound binding's own
+        // refdepth — before the next argument resets them.
+        : i bck_arg_rd ? != g_borrowck 0
+        ( bck_expr_refdepth syms ( nurl_sym_get syms `__last_ident_name__` ) ) 0
+        = arg_refdepths ? == 0 ( nurl_str_len arg_refdepths )
+        ( nurl_str_int bck_arg_rd )
+        ( nurl_str_cat3 arg_refdepths ` ` ( nurl_str_int bck_arg_rd ) )
         // A `*_free` destructor's first argument, when it is a bare
         // identifier, names a binding being consumed — stash it as a
         // move (flushed after the enclosing statement).
@@ -4544,12 +4593,25 @@
         {} }
     {}
     ( expect lex TT_RPAREN )
-    // Escape analysis: a call's RESULT is never a stack reference —
-    // returning a borrow into a parameter is interprocedural (not yet
-    // implemented). Clear the side-channel an argument
-    // closure / aggregate literal may have left set, so the enclosing
-    // gen_let / gen_ret does not mis-read `( f \ → v {…} )` as one.
-    ( nurl_sym_def syms `__last_expr_refdepth__` `` )
+    // Escape analysis (docs/MEMORY.md §2.8): the call result is a stack
+    // reference exactly when the callee RETURNS one of its parameters
+    // (callee_ret_param) and the argument at that position was itself a
+    // stack reference — the result then carries that argument's referent
+    // depth, so `^ ( id ref )` / `( vec_push xs ( id ref ) )` dangle just
+    // like the direct forms. Otherwise the result is not a stack
+    // reference: clear the side-channel an argument closure / aggregate
+    // literal may have left set, so the enclosing gen_let / gen_ret does
+    // not mis-read `( f \ → v {…} )` as one.
+    // Set the result's referent depth *authoritatively* — always a
+    // number, never empty. An empty side-channel would let
+    // bck_expr_refdepth fall back to the now-stale `__last_ident_name__`
+    // (the last argument), so `^ ( f stackref )` mis-flagged the call
+    // result as the argument's reference even when `f` returns a fresh
+    // value. The explicit `0` says "this call result is not a stack
+    // reference"; a positive depth says "it is, with this referent".
+    : i __ret_rd ? & != g_borrowck 0 != 0 ( nurl_str_len callee_ret_param )
+    ( bck_max_ret_refdepth callee_ret_param arg_refdepths ) 0
+    ( nurl_sym_def syms `__last_expr_refdepth__` ( nurl_str_int __ret_rd ) )
     // Group F: impl method dispatch based on first arg's LLVM type
     : ~ s impl_key ( nurl_str_cat fname ( nurl_str_cat `##` first_arg_type ) )
     : ~ s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
@@ -11134,6 +11196,56 @@
     }
 }
 
+// Return-escape inference (docs/MEMORY.md §2.8): record that the
+// enclosing function may RETURN this bare-identifier value when it is
+// one of the function's parameters. Mirrors bck_record_inferred_escape;
+// merged into g_fn_ret_param[fname] in gen_fn_decl_concrete.
+@ bck_record_ret_param i syms s name → v {
+    ? == g_borrowck 0 {} {
+        : s pn ( nurl_sym_get syms `__fn_param_names__` )
+        : i idx ( str_word_index pn name )
+        ? >= idx 0
+        { : s cur ( nurl_sym_get syms `__fn_ret_param__` )
+            : s new ( nurl_str_int idx )
+            ? ! ( str_contains_word cur new )
+            { ( nurl_sym_def syms `__fn_ret_param__`
+                ? == 0 ( nurl_str_len cur ) new
+                ( nurl_str_cat3 cur ` ` new ) ) }
+            {} }
+        {}
+    }
+}
+
+// idx-th space-separated word of `list`, or empty when out of range.
+@ bck_nth_word s list i idx → s {
+    : ~ s rest list
+    : ~ i k 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? == k idx { ^ w } {}
+        = k + k 1
+    }
+    ``
+}
+
+// Max referent depth (docs/MEMORY.md §2.8) over the argument positions
+// the callee may return: for each index in `ret_params`, look up that
+// argument's recorded depth in `arg_refdepths`. 0 ⇒ the result is not a
+// stack reference.
+@ bck_max_ret_refdepth s ret_params s arg_refdepths → i {
+    : ~ i best 0
+    : ~ s rest ret_params
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s rdw ( bck_nth_word arg_refdepths ( nurl_str_to_int w ) )
+        : i rd ? == 0 ( nurl_str_len rdw ) 0 ( nurl_str_to_int rdw )
+        ? > rd best { = best rd } {}
+    }
+    best
+}
+
 // check_exhaustive: compile error if match arms don't cover all enum variants.
 // ename: enum name (e.g. "Color")  seen: space-separated matched variant names
 // has_wildcard: 1 if a '_' arm was present
@@ -11867,6 +11979,10 @@
     // the accumulator; gen_call appends param indices that reach an
     // escaping argument position; merged into g_fn_escapes[fname] below.
     ( nurl_sym_def syms `__fn_inferred_escape__` `` )
+    // Return-escape inference (docs/MEMORY.md §2.8): gen_ret appends the
+    // index of any parameter returned directly; merged into
+    // g_fn_ret_param[fname] after the body.
+    ( nurl_sym_def syms `__fn_ret_param__` `` )
     : s last ( gen_block_ret lex syms cg )
     // Borrow provenance for an IMPLICIT (no `^`) block return: the body's
     // final expression IS the return value, so if it left a borrow on
@@ -11910,6 +12026,22 @@
                 ( nurl_str_cat3 __ae_merged ` ` __ae_w ) }
             {} }
         ( nurl_sym_def g_fn_escapes fname __ae_merged ) }
+    {}
+    // Return-escape inference (docs/MEMORY.md §2.8): merge returned-
+    // parameter indices into g_fn_ret_param[fname]. Same merge shape.
+    : s __rp_inferred ( nurl_sym_get syms `__fn_ret_param__` )
+    ? != 0 ( nurl_str_len __rp_inferred )
+    { : ~ s __rp_merged ( nurl_sym_get g_fn_ret_param fname )
+        : ~ s __rp_rest __rp_inferred
+        ~ != 0 ( nurl_str_len __rp_rest ) {
+            : s __rp_w ( str_first_word __rp_rest )
+            = __rp_rest ( str_skip_word __rp_rest )
+            ? ! ( str_contains_word __rp_merged __rp_w )
+            { = __rp_merged ? == 0 ( nurl_str_len __rp_merged )
+                __rp_w
+                ( nurl_str_cat3 __rp_merged ` ` __rp_w ) }
+            {} }
+        ( nurl_sym_def g_fn_ret_param fname __rp_merged ) }
     {}
     // Implicit return — route through defer chain if defers are active
     : s dtop ( nurl_sym_get syms `__defer_top__` )
@@ -14864,6 +14996,7 @@
     = g_fn_inout ( nurl_sym_new )
     = g_fn_sink ( nurl_sym_new )
     = g_fn_escapes ( nurl_sym_new )
+    = g_fn_ret_param ( nurl_sym_new )
     = g_type_count 0
     = g_func_count 0
     = g_closure_emit_base 0

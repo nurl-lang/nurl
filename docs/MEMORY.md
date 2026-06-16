@@ -313,6 +313,40 @@ safely within scope — flagging it would false-positive), and generic
 functions infer the summary only once a concrete instantiation is
 compiled.
 
+### 2.8 Return escape (a reference passed back out)
+
+§2.7 propagates a stack reference *into* a callee. The mirror image is
+a reference flowing *out* of a call: a helper that **returns one of its
+parameters** hands the reference straight back, so the result of
+`( id ref )` is the reference itself. A per-function pass sees only a
+call result of the right type — not that it aliases an argument.
+
+The checker records a second summary, again in codegen order: a
+parameter is *returned* when the body has `^ p` (a bare-parameter
+return). At a call site, the result's **referent depth** becomes the
+max depth among the arguments at those returned positions. The result
+then carries the reference, so the existing §2.3 / §2.7 sinks fire on
+it uniformly:
+
+```
+@ id ( @ v ) cb → ( @ v ) { ^ cb }   // returns param 0
+...
+: ( @ v ) f \ → v { = . c n + . c n 1 }   // stack ref into this frame
+^ ( id f )                  // error: returning a value that references a
+                            //        stack binding by pointer …
+( thread_spawn ( id f ) )   // error: … escapes … to 'thread_spawn'
+```
+
+A helper that takes the reference but returns a **fresh** value
+(`@ runit ( @ v ) cb → i { ( cb ) ^ 0 }`) is not a passthrough, so
+`( runit f )` is not a reference and may be returned freely. Making the
+call result's referent depth *authoritative* (an explicit `0` when it
+is not a reference) also fixed a latent false positive: previously the
+stale `__last_ident_name__` left by the last argument could make
+`^ ( anycall … ref )` mis-flag the result as that argument. Boundaries:
+escape through a returned **aggregate field** (`^ @ Slot { cb }`) and
+through forward / generic calls is not yet summarised.
+
 ## 3. What is NOT checked
 
 The borrow checker targets the bug classes that ordinary NURL code
@@ -361,6 +395,7 @@ hits in practice. It deliberately does **not** yet cover:
 | Iterator invalidation (mutate container in `~`-foreach) | yes (`error:`) |
 | Loop-carried move (free an outer binding inside a `~` loop) | yes (`error:`) |
 | Interprocedural escape (stack ref stored by a helper) | yes (`error:`) |
+| Return escape (helper returns a passed-in stack ref) | yes (`error:`) |
 | Aliased mutation via nested-argument reads | no |
-| Returned borrows / lifetime inference | no |
+| Returned borrows / lifetime inference | partial (§2.8) |
 | `*T` raw pointers | no (by design) |
