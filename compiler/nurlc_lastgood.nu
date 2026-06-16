@@ -605,6 +605,18 @@
 // check (docs/MEMORY.md §2.7). Allocated in main().
 : ~ i g_fn_escapes 0
 
+// Deferred interprocedural-escape checks (docs/MEMORY.md §3 forward /
+// generic boundary). A stack reference passed to a *user* function
+// whose escape summary is not yet known at the call site — a forward
+// call, or a generic not yet instantiated — cannot be resolved inline.
+// gen_call parks such a check here as a space-separated 5-tuple
+// `call_name fname arg_idx line file`; resolve_pending_escapes() replays
+// each one against the now-complete g_fn_escapes after the whole module
+// (including the generic instantiation flush) has compiled. Only stack-
+// reference arguments are ever parked, so the list stays tiny.
+// Allocated in main(); the list lives under key `l`.
+: ~ i g_pending_escape 0
+
 // Per-function returned-parameter map.
 // `g_fn_ret_param[fname]` is the space-separated list of 0-based
 // indices of parameters the body may RETURN directly (`^ p` /
@@ -4472,6 +4484,27 @@
         = arg_refdepths ? == 0 ( nurl_str_len arg_refdepths )
         ( nurl_str_int bck_arg_rd )
         ( nurl_str_cat3 arg_refdepths ` ` ( nurl_str_int bck_arg_rd ) )
+        // Deferred interprocedural-escape (docs/MEMORY.md §3 forward /
+        // generic). This argument is a stack reference (`bck_arg_rd > 0`)
+        // that the inline check did NOT flag (`arg_pos_escapes` false —
+        // the callee's escape summary is empty here, because the callee
+        // is defined later, or is a generic not yet instantiated). The
+        // callee must be a known user @-function (has `__arity`, not a
+        // closure binding). Park the check; resolve_pending_escapes()
+        // replays it against the final summary. If the callee turns out
+        // non-escaping, the replay finds nothing — no false positive.
+        ? & & & > bck_arg_rd 0 ! arg_pos_escapes
+        != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__arity` ) ) )
+        == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__ptr` ) ) )
+        { : s __pe_rec ( nurl_str_cat3
+            ( nurl_str_cat3 call_name ` ` fname )
+            ( nurl_str_cat4 ` ` ( nurl_str_int arg_idx ) ` ` ( nurl_str_int bck_arg_line ) )
+            ( nurl_str_cat ` ` ( nurl_lex_filename lex ) ) )
+            : s __pe_cur ( nurl_sym_get g_pending_escape `l` )
+            ( nurl_sym_def g_pending_escape `l`
+            ? == 0 ( nurl_str_len __pe_cur ) __pe_rec
+            ( nurl_str_cat3 __pe_cur ` ` __pe_rec ) ) }
+        {}
         // A `*_free` destructor's first argument, when it is a bare
         // identifier, names a binding being consumed — stash it as a
         // move (flushed after the enclosing statement).
@@ -6639,6 +6672,41 @@
 // of i8* bindings whose value was produced by an allocating runtime call
 // (nurl_str_cat, nurl_read_file, ...). We free the loaded value at fn exit.
 
+// Panic-unwind journal: record an owned i8* (loaded from its alloca
+// `slot`) so a panic that longjmps over the scope-exit nurl_free still
+// reclaims it (docs/MEMORY.md §7). nurl_free removes it again on the
+// normal path, so this never causes a double-free. The runtime push is
+// a no-op outside a recover extent, so the cost is one branch.
+@ mem_journal_push_str i cg s slot → v {
+    : s p ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print p )
+    ( nurl_print ` = load i8*, i8** ` ) ( nurl_print slot ) ( nurl_print `\n` )
+    ( nurl_print `  call void @nurl_journal_push(i8* ` ) ( nurl_print p ) ( nurl_print `)\n` )
+}
+
+// Panic-unwind journal for an owned slice. The alloca `slot` holds a
+// `{ T*, i64 }` value; record its buffer pointer (field 0) so a panic
+// reclaims it. Like a string a slice is captured by value (its type is
+// `{ ... }`, not `%Name`), so it cannot escape a recover extent by
+// reference and needs no forget hook.
+@ mem_journal_push_slice i cg s ty s slot → v {
+    : i tylen ( nurl_str_len ty )
+    : s tptr ( nurl_str_slice ty 2 - tylen 9 )
+    : s sv ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print sv )
+    ( nurl_print ` = load ` ) ( nurl_print ty ) ( nurl_print `, ` ) ( nurl_print ty )
+    ( nurl_print `* ` ) ( nurl_print slot ) ( nurl_print `\n` )
+    : s dp ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print dp )
+    ( nurl_print ` = extractvalue ` ) ( nurl_print ty )
+    ( nurl_print ` ` ) ( nurl_print sv ) ( nurl_print `, 0\n` )
+    : s raw ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print raw )
+    ( nurl_print ` = bitcast ` ) ( nurl_print tptr )
+    ( nurl_print ` ` ) ( nurl_print dp ) ( nurl_print ` to i8*\n` )
+    ( nurl_print `  call void @nurl_journal_push(i8* ` ) ( nurl_print raw ) ( nurl_print `)\n` )
+}
+
 @ mem_own_add_str i syms s ptr → v {
     : s cur ( nurl_sym_get syms `__owned_strings__` )
     : s new ? == 0 ( nurl_str_len cur )
@@ -6779,6 +6847,120 @@
         ( nurl_print ` = bitcast ` ) ( nurl_print tptr )
         ( nurl_print ` ` ) ( nurl_print dp ) ( nurl_print ` to i8*\n` )
         ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print raw ) ( nurl_print `)` ) ( emit_dbg_eol )
+    }
+}
+
+// Panic-unwind journal for an owned struct-field leaf. Mirrors
+// mem_emit_struct_field_drop's load + extractvalue chain, but records
+// the leaf pointer for recover-unwind cleanup instead of freeing it
+// (docs/MEMORY.md §7). nurl_free removes it again on the normal path.
+@ mem_journal_push_struct_field i syms i cg s ptr s sname s path s kind s leaf_sname s leaf_idx → v {
+    : s agg_ty ( nurl_str_cat `%` sname )
+    : s idx_list ( mem_path_to_indices path )
+    : s sv ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print sv )
+    ( nurl_print ` = load ` ) ( nurl_print agg_ty )
+    ( nurl_print `, ` ) ( nurl_print agg_ty )
+    ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+    ? ( seq kind `str` )
+    { : s fv ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print fv )
+        ( nurl_print ` = extractvalue ` ) ( nurl_print agg_ty )
+        ( nurl_print ` ` ) ( nurl_print sv ) ( nurl_print idx_list )
+        ( nurl_print `\n` )
+        ( nurl_print `  call void @nurl_journal_push(i8* ` ) ( nurl_print fv ) ( nurl_print `)\n` )
+    }
+    { : s slice_ty ( nurl_sym_get syms ( nurl_str_cat3 leaf_sname `__idx_` ( nurl_str_cat leaf_idx `__type` ) ) )
+        : i slen ( nurl_str_len slice_ty )
+        : s tptr ( nurl_str_slice slice_ty 2 - slen 9 )
+        : s sv2 ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print sv2 )
+        ( nurl_print ` = extractvalue ` ) ( nurl_print agg_ty )
+        ( nurl_print ` ` ) ( nurl_print sv ) ( nurl_print idx_list )
+        ( nurl_print `\n` )
+        : s dp ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print dp )
+        ( nurl_print ` = extractvalue ` ) ( nurl_print slice_ty )
+        ( nurl_print ` ` ) ( nurl_print sv2 ) ( nurl_print `, 0\n` )
+        : s raw ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print raw )
+        ( nurl_print ` = bitcast ` ) ( nurl_print tptr )
+        ( nurl_print ` ` ) ( nurl_print dp ) ( nurl_print ` to i8*\n` )
+        ( nurl_print `  call void @nurl_journal_push(i8* ` ) ( nurl_print raw ) ( nurl_print `)\n` )
+    }
+}
+
+// Emit a journal push for every owned struct-field entry tied to alloca
+// `ptr` (the binding just registered by mem_register_agg_owned_fields).
+@ mem_journal_push_agg_fields i syms i cg s ptr → v {
+    : ~ s rest ( nurl_sym_get syms `__owned_struct_fields__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s eptr ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s sname ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s path ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s kind ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s leaf_sname ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s leaf_idx ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( seq eptr ptr )
+        { ( mem_journal_push_struct_field syms cg eptr sname path kind leaf_sname leaf_idx ) }
+        {}
+    }
+}
+
+// Panic-unwind journal: forget the heap leaves of struct value `sval`
+// (type `vt` = "%Name") that is ESCAPING the current recover extent —
+// e.g. assigned into a by-ref-captured caller binding. Walks the struct
+// type's fields and, for every owned heap field (i8* / slice / nested
+// named struct), removes its pointer from the journal so a later panic's
+// drain does not free what the caller now owns (docs/MEMORY.md §7).
+// Over-approximates: forgetting a field that was never journaled is a
+// harmless no-op, so it is always safe to call.
+@ mem_journal_forget_struct i syms i cg s sval s vt → v {
+    ? != ( nurl_str_get vt 0 ) 37 { ^ v } {}
+    : s sname ( nurl_str_slice vt 1 - ( nurl_str_len vt ) 1 )
+    : s fc ( nurl_sym_get syms ( nurl_str_cat sname `__field_count` ) )
+    ? == 0 ( nurl_str_len fc ) { ^ v } {}
+    : i n ( nurl_str_to_int fc )
+    : ~ i i 0
+    ~ < i n {
+        : s ft ( nurl_sym_get syms
+        ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
+        ? ( seq ft `i8*` )
+        { : s fv ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print fv )
+            ( nurl_print ` = extractvalue ` ) ( nurl_print vt )
+            ( nurl_print ` ` ) ( nurl_print sval ) ( nurl_print `, ` )
+            ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
+            ( nurl_print `  call void @nurl_journal_forget(i8* ` ) ( nurl_print fv ) ( nurl_print `)\n` )
+        }
+        { ? ( mem_is_slice_ty ft )
+            { : i flen ( nurl_str_len ft )
+                : s tptr ( nurl_str_slice ft 2 - flen 9 )
+                : s sv2 ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print sv2 )
+                ( nurl_print ` = extractvalue ` ) ( nurl_print vt )
+                ( nurl_print ` ` ) ( nurl_print sval ) ( nurl_print `, ` )
+                ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
+                : s dp ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print dp )
+                ( nurl_print ` = extractvalue ` ) ( nurl_print ft )
+                ( nurl_print ` ` ) ( nurl_print sv2 ) ( nurl_print `, 0\n` )
+                : s raw ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print raw )
+                ( nurl_print ` = bitcast ` ) ( nurl_print tptr )
+                ( nurl_print ` ` ) ( nurl_print dp ) ( nurl_print ` to i8*\n` )
+                ( nurl_print `  call void @nurl_journal_forget(i8* ` ) ( nurl_print raw ) ( nurl_print `)\n` )
+            }
+            { ? & == ( nurl_str_get ft 0 ) 37 != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat ( nurl_str_slice ft 1 - ( nurl_str_len ft ) 1 ) `__field_count` ) ) )
+                { : s iv ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print iv )
+                    ( nurl_print ` = extractvalue ` ) ( nurl_print vt )
+                    ( nurl_print ` ` ) ( nurl_print sval ) ( nurl_print `, ` )
+                    ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
+                    ( mem_journal_forget_struct syms cg iv ft ) }
+                {} }
+        }
+        = i + i 1
     }
 }
 
@@ -8110,12 +8292,12 @@
         { ( nurl_sym_def syms ( nurl_str_cat name `__mutable` ) `1` ) }
         {}
         ? | rhs_is_slice_lit & rhs_is_owned_call ( mem_is_slice_ty vt )
-        { ( mem_own_add syms name ) }
+        { ( mem_own_add syms name ) ( mem_journal_push_slice cg vt ptr ) }
         {}
         // Phase 2B: string ownership tracking (opt-in)
         ? != 0 g_auto_drop_strings
         { ? & ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) ( seq vt `i8*` )
-            { ( mem_own_add_str syms ptr ) }
+            { ( mem_own_add_str syms ptr ) ( mem_journal_push_str cg ptr ) }
             {}
         }
         {}
@@ -8126,7 +8308,8 @@
         // the same registration.
         ( __propagate_call_struct_fields syms )
         ? != 0 g_auto_drop_strings
-        { ( mem_register_agg_owned_fields syms ptr vt ) }
+        { ( mem_register_agg_owned_fields syms ptr vt )
+            ( mem_journal_push_agg_fields syms cg ptr ) }
         {}
         // Phase 2D: User Drop trait. A COMPILER-auto Drop is skipped when
         // the RHS is a borrow (vec_get / a ret_borrow accessor) — dropping
@@ -8283,12 +8466,12 @@
                 { ( nurl_sym_def syms ( nurl_str_cat name `__mutable` ) `1` ) }
                 {}
                 ? | rhs_is_slice_lit & rhs_is_owned_call ( mem_is_slice_ty ptype )
-                { ( mem_own_add syms name ) }
+                { ( mem_own_add syms name ) ( mem_journal_push_slice cg ptype ptr ) }
                 {}
                 // Phase 2B: string ownership tracking (opt-in)
                 ? != 0 g_auto_drop_strings
                 { ? & ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) ( seq ptype `i8*` )
-                    { ( mem_own_add_str syms ptr ) }
+                    { ( mem_own_add_str syms ptr ) ( mem_journal_push_str cg ptr ) }
                     {}
                 }
                 {}
@@ -8296,7 +8479,8 @@
                 // A4c: bridge a struct-returning CALL RHS into the same path.
                 ( __propagate_call_struct_fields syms )
                 ? != 0 g_auto_drop_strings
-                { ( mem_register_agg_owned_fields syms ptr ptype ) }
+                { ( mem_register_agg_owned_fields syms ptr ptype )
+                    ( mem_journal_push_agg_fields syms cg ptr ) }
                 {}
                 // Phase 2D: User Drop trait. Skip a COMPILER-auto Drop when
                 // the RHS is a borrow (would double-free the owner); mark the
@@ -8419,6 +8603,16 @@
             }
             {}
         }
+        // Panic-unwind journal: assigning an owned struct into a by-ref
+        // capture escapes it to the caller's frame. Forget its heap leaves
+        // so a later panic's drain does not free what the caller now owns
+        // (docs/MEMORY.md §7). Gated on a struct LHS that is a by-ref
+        // capture; a harmless no-op otherwise.
+        ? & & != 0 g_auto_drop_strings
+        == ( nurl_str_get vt 0 ) 37
+        != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat name `__captured_byref` ) ) )
+        { ( mem_journal_forget_struct syms cg store_val vt ) }
+        {}
         // Publish the LHS type as the assignment's result type. If the
         // assignment lands as the last expression of a match arm or block
         // ( `?? r { F e → { = err e } }` ), gen_match's phi-typing logic
@@ -10602,7 +10796,14 @@
             {  // The loaded value IS the caller's alloca pointer.
                 ( nurl_sym_def body_syms cap_name cap_type )
                 ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__ptr` ) cap_val )
-                ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__mutable` ) `1` ) }
+                ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__mutable` ) `1` )
+                // Mark as a by-ref capture: its storage lives in the
+                // CALLER's frame (below any recover mark in this closure's
+                // dynamic extent). An owned value assigned into it ESCAPES
+                // the extent, so the panic-unwind journal must forget that
+                // value's leaves or the drain would free what the caller
+                // now owns (docs/MEMORY.md §7).
+                ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__captured_byref` ) `1` ) }
             {  // Existing path: alloca + store so the body sees a local.
                 : s cap_ptr ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print cap_ptr )
@@ -11287,6 +11488,41 @@
         ? > rd best { = best rd } {}
     }
     best
+}
+
+// resolve_pending_escapes: replay the deferred interprocedural-escape
+// checks parked by gen_call (docs/MEMORY.md §3 forward / generic) now
+// that every function — including the generic instantiation flush — has
+// compiled and g_fn_escapes is final. Each parked 5-tuple is
+// `call_name fname arg_idx line file`; if the callee's now-known escape
+// summary covers that argument index, the stack reference handed to it
+// does dangle — emit the same diagnostic the inline check would have.
+// A callee that turned out non-escaping resolves to nothing. Called
+// once from main() after flush_deferred_instantiations.
+@ resolve_pending_escapes → v {
+    ? == g_borrowck 0 {} {
+        : ~ s rest ( nurl_sym_get g_pending_escape `l` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s cn ( str_first_word rest )   = rest ( str_skip_word rest )
+            : s fn ( str_first_word rest )   = rest ( str_skip_word rest )
+            : s ai ( str_first_word rest )   = rest ( str_skip_word rest )
+            : s ln ( str_first_word rest )   = rest ( str_skip_word rest )
+            : s file ( str_first_word rest ) = rest ( str_skip_word rest )
+            // Final escape summary, mangled name first then the generic
+            // name (mirrors gen_call's callee_escapes lookup).
+            : ~ s esc ( nurl_sym_get g_fn_escapes cn )
+            ? == 0 ( nurl_str_len esc ) { = esc ( nurl_sym_get g_fn_escapes fn ) } {}
+            ? ( str_contains_word esc ai ) {
+                : s loc ( nurl_str_cat3 file `:` ln )
+                : s msg ( nurl_str_cat3
+                `: error: passing a value that references a stack binding by pointer to '`
+                fn
+                `' - it escapes the current stack frame and dangles (move it to a heap-backed handle)` )
+                ( nurl_eprintln ( nurl_str_cat loc msg ) )
+                = g_bck_errors + g_bck_errors 1
+            } {}
+        }
+    }
 }
 
 // check_exhaustive: compile error if match arms don't cover all enum variants.
@@ -13726,6 +13962,8 @@
     ( emit `declare i8*  @nurl_zalloc(i64)` )
     ( emit `declare i8*  @nurl_realloc(i8*, i64)` )
     ( emit `declare void @nurl_free(i8*)` )
+    ( emit `declare void @nurl_journal_push(i8*)` )
+    ( emit `declare void @nurl_journal_forget(i8*)` )
     ( emit `declare void @nurl_memcpy(i8*, i8*, i64)` )
     ( emit `declare void @nurl_memmove(i8*, i8*, i64)` )
     ( emit `declare void @nurl_memset(i8*, i64, i64)` )
@@ -15039,6 +15277,7 @@
     = g_fn_inout ( nurl_sym_new )
     = g_fn_sink ( nurl_sym_new )
     = g_fn_escapes ( nurl_sym_new )
+    = g_pending_escape ( nurl_sym_new )
     = g_fn_ret_param ( nurl_sym_new )
     = g_type_count 0
     = g_func_count 0
@@ -15064,6 +15303,11 @@
     = g_lint_recording 0
     // Emit all deferred generic instantiations collected during compilation.
     ( flush_deferred_instantiations syms cg )
+    // Every function (incl. just-flushed generic instantiations) has now
+    // compiled, so the escape summaries are final: replay the deferred
+    // interprocedural-escape checks parked for forward / generic calls
+    // (docs/MEMORY.md §3). May bump g_bck_errors, checked below.
+    ( resolve_pending_escapes )
     ( dbg_flush )
     // Unused-symbol lint (--lint): every call site (incl. generic
     // instantiations) has now been seen, so report the unused private

@@ -555,7 +555,95 @@ void* nurl_alloc(long long bytes)              { __atomic_fetch_add(&g_nurl_allo
 void* nurl_zalloc(long long bytes)             { __atomic_fetch_add(&g_nurl_alloc_count, 1, __ATOMIC_RELAXED); return calloc(1, (size_t)bytes); }
 long long nurl_alloc_count(void)               { return (long long)__atomic_load_n(&g_nurl_alloc_count, __ATOMIC_RELAXED); }
 void* nurl_realloc(void *ptr, long long bytes) { return realloc(ptr, (size_t)bytes); }
-void  nurl_free(void *ptr)                     { free(ptr); }
+
+/* ── §9b  Panic-unwind allocation journal ──────────────────────────
+ *
+ * A `recover` frame establishes a setjmp landing pad; a `panic` inside
+ * its dynamic extent longjmps straight back, skipping every C frame in
+ * between and therefore every scope-exit `nurl_free` the compiler had
+ * queued. Historically that leaked any owned allocation made inside the
+ * extent. The journal closes that leak WITHOUT exception tables:
+ *
+ *   - while a recover frame is active (`nurl__jrnl_active > 0`) the
+ *     compiler emits a `nurl_journal_push` for every owned heap value it
+ *     registers for auto-drop (owned string, owned slice, owned struct
+ *     field). The journal records the raw POINTER.
+ *   - `nurl_free` — the single choke point through which EVERY auto-drop
+ *     releases an owned value — removes the pointer again. So a value
+ *     freed normally before the panic leaves no entry behind: there is
+ *     no stale-slot hazard.
+ *   - on a panic, `nurl_panic` drains the entries recorded since the
+ *     target recover frame's mark (the allocations still live: neither
+ *     freed nor escaped) and frees them BEFORE the longjmp, while the
+ *     owning stack frames are still valid.
+ *   - on normal completion `nurl_recover` truncates the journal back to
+ *     its mark, which silently forgets any value that legitimately
+ *     escaped the extent (e.g. written into a by-ref-captured caller
+ *     binding) — the caller's own auto-drop owns it now.
+ *
+ * Keyed by pointer + auto-removed in nurl_free ⇒ a value dropped inside
+ * the extent can never be double-freed on unwind, and the drain dedups
+ * aliased co-owners. Thread-local: each thread carries its own recover
+ * stack and journal. */
+static __thread void   **nurl__jrnl        = NULL;
+static __thread long long nurl__jrnl_len   = 0;
+static __thread long long nurl__jrnl_cap   = 0;
+static __thread int       nurl__jrnl_active = 0;   /* recover-extent depth */
+
+/* Record an owned pointer for panic-unwind cleanup. No-op outside a
+ * recover extent (the common case): one branch, no allocation. */
+void nurl_journal_push(void *p) {
+    if (!nurl__jrnl_active || !p) return;
+    if (nurl__jrnl_len == nurl__jrnl_cap) {
+        long long nc = nurl__jrnl_cap ? nurl__jrnl_cap * 2 : 32;
+        void **nb = (void**)realloc(nurl__jrnl, (size_t)nc * sizeof(void*));
+        if (!nb) return;             /* OOM: degrade to a leak, never crash */
+        nurl__jrnl = nb;
+        nurl__jrnl_cap = nc;
+    }
+    nurl__jrnl[nurl__jrnl_len++] = p;
+}
+
+/* Drop every recorded occurrence of `p` without freeing — used at an
+ * escape sink where ownership is handed to a longer-lived binding. */
+void nurl_journal_forget(void *p) {
+    if (nurl__jrnl_len == 0 || !p) return;
+    for (long long i = nurl__jrnl_len; i-- > 0; )
+        if (nurl__jrnl[i] == p) nurl__jrnl[i] = NULL;
+}
+
+/* nurl_free removal — every occurrence, so a value can never resurface
+ * on the unwind path after it was released normally. */
+static void nurl__jrnl_remove(void *p) {
+    for (long long i = nurl__jrnl_len; i-- > 0; )
+        if (nurl__jrnl[i] == p) nurl__jrnl[i] = NULL;
+}
+
+/* Current journal depth — captured by a recover frame as its mark. */
+static long long nurl__jrnl_mark(void) { return nurl__jrnl_len; }
+
+/* Forget entries back to `mark` without freeing (normal completion). */
+static void nurl__jrnl_truncate(long long mark) {
+    if (mark < nurl__jrnl_len) nurl__jrnl_len = mark;
+}
+
+/* Free every still-live entry recorded since `mark`, deduping aliased
+ * co-owners, then truncate. Runs on the panic path while the owning
+ * frames are still valid (before the longjmp). */
+static void nurl__jrnl_drain(long long mark) {
+    for (long long i = nurl__jrnl_len; i-- > mark; ) {
+        void *p = nurl__jrnl[i];
+        if (!p) continue;
+        nurl__jrnl[i] = NULL;
+        /* dedup: null any earlier alias so we free the buffer once */
+        for (long long k = mark; k < i; k++)
+            if (nurl__jrnl[k] == p) nurl__jrnl[k] = NULL;
+        free(p);   /* already removed from the journal above */
+    }
+    nurl__jrnl_len = mark;
+}
+
+void  nurl_free(void *ptr)                     { if (nurl__jrnl_len) nurl__jrnl_remove(ptr); free(ptr); }
 void  nurl_memcpy(void *dst, const void *src, long long bytes) {
     memcpy(dst, src, (size_t)bytes);
 }
@@ -5308,6 +5396,7 @@ void      nurl_signal_trigger_shutdown(void)              {}
 typedef struct NurlPanicFrame {
     jmp_buf                  jb;
     char                    *msg;   /* owned panic message or NULL */
+    long long                jmark; /* journal depth at recover entry */
     struct NurlPanicFrame   *prev;
 } NurlPanicFrame;
 
@@ -5321,15 +5410,27 @@ static __thread char *nurl__panic_last_msg = NULL;
 long long nurl_recover(void *fn_ptr, void *env_ptr) {
     if (!fn_ptr) return 0;
     NurlPanicFrame frame;
-    frame.msg  = NULL;
-    frame.prev = nurl__panic_top;
+    frame.msg   = NULL;
+    frame.jmark = nurl__jrnl_mark();
+    frame.prev  = nurl__panic_top;
     nurl__panic_top = &frame;
+    nurl__jrnl_active++;
     if (setjmp(frame.jb) == 0) {
         ((void (*)(void *))fn_ptr)(env_ptr);
         nurl__panic_top = frame.prev;
+        nurl__jrnl_active--;
+        /* Normal completion: forget anything that escaped the extent
+         * (the caller's auto-drop owns it now). Values that did not
+         * escape were already freed and removed by nurl_free. */
+        nurl__jrnl_truncate(frame.jmark);
         return 0;
     }
     nurl__panic_top = frame.prev;
+    nurl__jrnl_active--;
+    /* nurl_panic already drained + freed the live entries before the
+     * longjmp; truncate defensively in case the jump came from a path
+     * that did not (it always does, but keep the invariant local). */
+    nurl__jrnl_truncate(frame.jmark);
     free(nurl__panic_last_msg);
     nurl__panic_last_msg = frame.msg ? frame.msg : strdup("(no panic message)");
     return 1;
@@ -5369,6 +5470,11 @@ void nurl_panic(const char *msg) {
     }
     nurl__panic_top->msg = (msg && *msg) ? strdup(msg)
                                          : strdup("(no message)");
+    /* Run the scope-exit drops the longjmp is about to skip: free every
+     * owned allocation recorded since this recover frame's mark while
+     * the owning C frames are still valid. Closes the panic-unwind leak
+     * (docs/MEMORY.md §7). */
+    nurl__jrnl_drain(nurl__panic_top->jmark);
     longjmp(nurl__panic_top->jb, 1);
 }
 

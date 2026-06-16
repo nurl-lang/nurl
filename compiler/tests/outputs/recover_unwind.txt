@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+string-scratch-reclaimed-on-panic
+caught s
+slice built
+caught sl
+iter-buffer
+iter-buffer
+iter-buffer
+200
+caught st
+out.code=201
+out.body=escaped-field
+alive
