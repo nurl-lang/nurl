@@ -277,6 +277,42 @@ loop element above look definitely moved — that join is now routed
 through the same `Uninit ⊔ Moved = MaybeMoved` rule as every other
 merge).
 
+### 2.7 Interprocedural escape
+
+§2.3 catches a stack reference that escapes through a sink *in the
+current function*. A reference can also escape through a **helper**:
+hand it to a function that stores it in a heap container or detaches it
+onto a thread, and it outlives the call just the same — but a
+per-function pass cannot see what the callee does with it.
+
+The checker closes this with a per-function **escape summary**,
+computed in codegen order exactly like the auto-`sink` summary (§1). A
+parameter is recorded as *escaping* when the body passes it to an
+escaping argument position: a built-in heap/thread sink (the element of
+`vec_push` / `vec_insert` / `vec_set`, or the `thread_spawn` closure),
+or — transitively — an already-known escaping parameter of another
+function. At a call site, passing a **stack reference** to an escaping
+parameter is then reported:
+
+```
+@ detach ( @ v ) cb → v { ( thread_spawn cb ) ... }   // param 0 escapes
+...
+: ( @ v ) f \ → v { = . c n + . c n 1 }   // captures a `: ~` Counter by pointer
+( detach f )   // error: passing a value that references a stack binding
+               //        by pointer to 'detach' - it escapes …
+```
+
+Because the summary is built as each function compiles, a helper must
+be defined before the call site for the check to fire (a forward call
+merely *misses* the diagnostic — it is diagnostic-only and never
+miscompiles). A parameter that the callee only *reads* or *invokes*
+(not stores) is not escaping, so passing a stack reference to it stays
+legal. Two boundaries remain by design: escape **via a returned
+parameter** is not summarised (the caller often consumes the result
+safely within scope — flagging it would false-positive), and generic
+functions infer the summary only once a concrete instantiation is
+compiled.
+
 ## 3. What is NOT checked
 
 The borrow checker targets the bug classes that ordinary NURL code
@@ -289,9 +325,11 @@ hits in practice. It deliberately does **not** yet cover:
 - **`*T` raw pointers.** `*T` is the FFI ABI escape hatch — NURL's
   `unsafe`. A `*T` taken of a local, stored, returned, or captured
   is *not* checked. Treat `*T` lifetimes as your responsibility.
-- **Interprocedural escape.** A stack reference passed *through a
-  helper function* that retains it cannot be caught by a
-  per-function pass; that would need function summaries.
+- **Interprocedural escape — partial.** A stack reference passed
+  *through a helper* that stores it in a heap container or on a thread
+  IS now caught, via per-function escape summaries (§2.7). The
+  remaining gaps are escape via a *returned* parameter and across a
+  *forward* / generic call (the summary is not yet available there).
 - **`recover` / panic edges.** Owned values in a `recover` scope leak
   on panic; the checker treats `recover` as an ordinary call and does
   not model panic control flow.
@@ -322,6 +360,7 @@ hits in practice. It deliberately does **not** yet cover:
 | `inout` exclusive access (call-site aliasing) | yes (`error:`) |
 | Iterator invalidation (mutate container in `~`-foreach) | yes (`error:`) |
 | Loop-carried move (free an outer binding inside a `~` loop) | yes (`error:`) |
+| Interprocedural escape (stack ref stored by a helper) | yes (`error:`) |
 | Aliased mutation via nested-argument reads | no |
 | Returned borrows / lifetime inference | no |
 | `*T` raw pointers | no (by design) |
