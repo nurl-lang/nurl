@@ -605,6 +605,20 @@
 // check (docs/MEMORY.md §2.7). Allocated in main().
 : ~ i g_fn_escapes 0
 
+// Per-function *invoke-only* parameter map (closure-env reclamation,
+// docs/MEMORY.md §7.4). `g_fn_invoke_only[fname]` is the space-separated
+// list of 0-based parameter indices that the body uses ONLY as the
+// callee of a call (`( f x )`) — never loaded as a value (passed as an
+// argument, returned, stored, decomposed, or captured). Such a parameter
+// is a pure *borrow*: the closure it names cannot outlive the call, so a
+// caller passing an inline closure literal there may free that literal's
+// heap env after the call. This is the POSITIVE dual of g_fn_escapes —
+// it must never over-claim, so any value-load of a parameter drops it
+// from the set (a forward/unknown callee yields the empty set, i.e. no
+// free). Computed deterministically (never gated on the borrow checker)
+// so generated IR is identical with or without it. Allocated in main().
+: ~ i g_fn_invoke_only 0
+
 // Deferred interprocedural-escape checks (docs/MEMORY.md §3 forward /
 // generic boundary). A stack reference passed to a *user* function
 // whose escape summary is not yet known at the call site — a forward
@@ -2030,6 +2044,11 @@
         ( nurl_lex_advance lex )
         // Borrow checker: every value-position identifier is a read.
         ( bck_note_read name )
+        // Closure-env reclamation: a value-position load disqualifies a
+        // parameter from the invoke-only set (§7.4). The callee position
+        // of a call never reaches gen_ident, so a parameter that is only
+        // ever invoked stays invoke-only.
+        ( bck_mark_param_valueread syms name )
         // Lint: mark the name as read (unused-binding) and referenced
         // (unused-function). Unlike bck_note_read this is NOT suppressed
         // inside closures, so a binding captured by a closure counts.
@@ -4278,6 +4297,11 @@
     { ^ ( gen_call_kwargs lex syms cg fname ) }
     {}
     : ~ s owned_arg_temps ``
+    // Heap env pointers of inline closure-literal arguments passed to a
+    // BORROWING (non-escaping) parameter — freed after the call returns
+    // (docs/MEMORY.md §7.4). A literal handed to an escaping parameter
+    // (thread_spawn detach, a helper that stores it) is left alone.
+    : ~ s closure_envs_free ``
     // Space-separated referent depths of each positional argument, in
     // order (0 = not a stack reference). After the call, the result's
     // referent depth is the max over the callee's returned-parameter
@@ -4308,6 +4332,9 @@
         // Reset the escape side-channel so the escape check observes
         // only what THIS argument expression publishes.
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
+        // Reset the closure-env side-channel so it reflects only an inline
+        // closure literal generated for THIS argument.
+        ( nurl_sym_def syms `__last_closure_env__` `` )
         // An argument at an `inout` parameter position is passed BY
         // ADDRESS, not by value. It must be a bare mutable (`: ~`)
         // binding — the callee mutates it in place. Pass the
@@ -4401,6 +4428,22 @@
         { = av ( gen_operand lex syms cg )
             = at ( nurl_get_last_type )
         }
+        // Closure-env reclamation: if this argument was an inline closure
+        // literal that allocated a heap env, and the callee uses this
+        // parameter as a pure borrow — it is in the callee's invoke-only
+        // set (it only ever invokes it, never stores / returns / detaches
+        // / decomposes it) — schedule the env to be freed after the call.
+        // This is the POSITIVE signal: an unknown / forward callee has an
+        // empty set, so the default is to NOT free (a leak, never a UAF).
+        // thread_spawn and recover decompose the closure, so they are not
+        // invoke-only and are correctly skipped.
+        : s __cle ( nurl_sym_get syms `__last_closure_env__` )
+        ? & != 0 ( nurl_str_len __cle )
+        ( str_contains_word ( nurl_sym_get g_fn_invoke_only call_name ) ( nurl_str_int arg_idx ) )
+        { = closure_envs_free ? == 0 ( nurl_str_len closure_envs_free )
+            __cle ( nurl_str_cat3 closure_envs_free ` ` __cle ) }
+        {}
+        ( nurl_sym_def syms `__last_closure_env__` `` )
         : s lu_arg ( nurl_last_unsigned )
         // Diagnose `nurl_str_len` vs `string_len` confusion.
         // `nurl_str_len` is the FFI to libc strlen and expects `s`
@@ -4680,7 +4723,7 @@
         ? ( seq impl_ret `void` )
         { ( nurl_print `  call void @` ) ( nurl_print impl_name )
             ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
-            ( mem_drop_arg_temps owned_arg_temps )
+            ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_arg_temps closure_envs_free )
             ( nurl_set_last_type `void` )
             ^ `undef`
         }
@@ -4689,7 +4732,7 @@
             ( nurl_print ` = call ` ) ( nurl_print impl_ret )
             ( nurl_print ` @` ) ( nurl_print impl_name )
             ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
-            ( mem_drop_arg_temps owned_arg_temps )
+            ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_arg_temps closure_envs_free )
             ( nurl_set_last_type impl_ret )
             ^ res
         }
@@ -4767,7 +4810,7 @@
             ( nurl_set_last_type fn_ret_type )
             = final_result res
         }
-        ( mem_drop_arg_temps owned_arg_temps )
+        ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_arg_temps closure_envs_free )
         final_result
     }
     { ? is_function_pointer
@@ -4788,7 +4831,7 @@
                 ( nurl_set_last_type fn_return_type )
                 = final_result res
             }
-            ( mem_drop_arg_temps owned_arg_temps )
+            ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_arg_temps closure_envs_free )
             final_result
         }
         {
@@ -4828,7 +4871,7 @@
                 ? has_va_sig { ( nurl_print `(` ) ( nurl_print va_sig ) ( nurl_print `) ` ) } {}
                 ( nurl_print `@` ) ( nurl_print call_name )
                 ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
-                ( mem_drop_arg_temps owned_arg_temps )
+                ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_arg_temps closure_envs_free )
                 ( nurl_set_last_type `void` )
                 `undef`
             }
@@ -4839,7 +4882,7 @@
                 ? has_va_sig { ( nurl_print ` (` ) ( nurl_print va_sig ) ( nurl_print `)` ) } {}
                 ( nurl_print ` @` ) ( nurl_print call_name )
                 ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
-                ( mem_drop_arg_temps owned_arg_temps )
+                ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_arg_temps closure_envs_free )
                 ( nurl_set_last_type rlt )
                 // Re-assert the callee's return signedness (cleared/overwritten
                 // by argument evaluation) so an enclosing `# i ( f )` widens a
@@ -10712,6 +10755,16 @@
     : s captured_vars ( simple_capture_analysis lex syms param_names )
     : i captured_count ( count_words captured_vars )
 
+    // Closure-env reclamation: capturing a binding into a closure reads
+    // it as a value, so a captured parameter is NOT invoke-only (§7.4) —
+    // the closure may outlive the call and carry the captured reference.
+    // Mark each captured name value-read in the enclosing scope.
+    : ~ s __cap_scan captured_vars
+    ~ != 0 ( nurl_str_len __cap_scan ) {
+        ( bck_mark_param_valueread syms ( str_first_word __cap_scan ) )
+        = __cap_scan ( str_skip_word __cap_scan )
+    }
+
     // Build inline env struct type (e.g., "{ i64, i64 }") if there are captures.
     // Using inline types avoids LLVM named-struct forward-reference issues.
     : ~ s env_struct_name ``
@@ -10979,6 +11032,18 @@
     { ( nurl_sym_def syms `__last_expr_refdepth__`
         ( nurl_str_int closure_refdepth ) ) }
     {}
+
+    // Closure-env reclamation: advertise this literal's heap env pointer
+    // so a call site that passes the literal DIRECTLY to a borrowing
+    // (non-escaping) parameter can free it after the call — the env is
+    // a manually-managed handle auto-drop never owned, and a bare
+    // literal has no binding to free it at scope exit (docs/MEMORY.md
+    // §7.4). Only set when the closure actually captured (env != null);
+    // the consuming gen_call resets this side-channel before each
+    // argument and reads it after, so it never bleeds across siblings.
+    ? > captured_count 0
+    { ( nurl_sym_def syms `__last_closure_env__` env_ptr ) }
+    { ( nurl_sym_def syms `__last_closure_env__` `` ) }
 
     result2
 }
@@ -11495,6 +11560,21 @@
 // where `keep` stores `ref` in a container that outlives the call).
 // Mirrors bck_record_inferred_sink; the merge runs in
 // gen_fn_decl_concrete after the body finishes parsing.
+// Closure-env reclamation (docs/MEMORY.md §7.4): record that `name` was
+// loaded as a VALUE — disqualifying it from the function's invoke-only
+// set. Called from gen_ident (the value-position choke point; a call's
+// callee is consumed by gen_call before reaching gen_ident) and from the
+// closure-capture path. NOT gated on the borrow checker: the invoke-only
+// summary it feeds drives codegen, so it must be computed identically
+// regardless of --no-borrowck. Cheap symbol-table append; no IR.
+@ bck_mark_param_valueread i syms s name → v {
+    ? == 0 ( nurl_str_len name ) { ^ v } {}
+    : s cur ( nurl_sym_get syms `__fn_param_valueread__` )
+    ? ( str_contains_word cur name ) {} {
+        ( nurl_sym_def syms `__fn_param_valueread__`
+        ? == 0 ( nurl_str_len cur ) name ( nurl_str_cat3 cur ` ` name ) ) }
+}
+
 @ bck_record_inferred_escape i syms s arg_name → v {
     ? == g_borrowck 0 {} {
         : s pn ( nurl_sym_get syms `__fn_param_names__` )
@@ -12329,6 +12409,11 @@
     // the accumulator; gen_call appends param indices that reach an
     // escaping argument position; merged into g_fn_escapes[fname] below.
     ( nurl_sym_def syms `__fn_inferred_escape__` `` )
+    // Invoke-only inference (docs/MEMORY.md §7.4): reset the value-read
+    // accumulator; gen_ident / the capture path append a parameter name
+    // whenever it is loaded as a value; the complement (params never
+    // value-loaded) becomes g_fn_invoke_only[fname] after the body.
+    ( nurl_sym_def syms `__fn_param_valueread__` `` )
     // Return-escape inference (docs/MEMORY.md §2.8): gen_ret appends the
     // index of any parameter returned directly; merged into
     // g_fn_ret_param[fname] after the body.
@@ -12377,6 +12462,26 @@
             {} }
         ( nurl_sym_def g_fn_escapes fname __ae_merged ) }
     {}
+    // Invoke-only inference (docs/MEMORY.md §7.4): a parameter never
+    // loaded as a value (only ever a call's callee, or unused) is a pure
+    // borrow — record its index in g_fn_invoke_only[fname] so a caller
+    // may free an inline closure literal's env after handing it here.
+    // Authoritative per function (overwrite, not merge): the value-read
+    // set is complete once the body is compiled.
+    : s __io_vr ( nurl_sym_get syms `__fn_param_valueread__` )
+    : ~ s __io_names ( nurl_sym_get syms `__fn_param_names__` )
+    : ~ i __io_idx 0
+    : ~ s __io_set ``
+    ~ != 0 ( nurl_str_len __io_names ) {
+        : s __io_p ( str_first_word __io_names )
+        = __io_names ( str_skip_word __io_names )
+        ? ! ( str_contains_word __io_vr __io_p )
+        { : s __io_w ( nurl_str_int __io_idx )
+            = __io_set ? == 0 ( nurl_str_len __io_set ) __io_w ( nurl_str_cat3 __io_set ` ` __io_w ) }
+        {}
+        = __io_idx + __io_idx 1
+    }
+    ( nurl_sym_def g_fn_invoke_only fname __io_set )
     // Return-escape inference (docs/MEMORY.md §2.8): merge returned-
     // parameter indices into g_fn_ret_param[fname]. Same merge shape.
     : s __rp_inferred ( nurl_sym_get syms `__fn_ret_param__` )
@@ -15361,6 +15466,7 @@
     = g_fn_inout ( nurl_sym_new )
     = g_fn_sink ( nurl_sym_new )
     = g_fn_escapes ( nurl_sym_new )
+    = g_fn_invoke_only ( nurl_sym_new )
     = g_pending_escape ( nurl_sym_new )
     = g_fn_ret_param ( nurl_sym_new )
     = g_type_count 0

@@ -637,11 +637,19 @@ are yours to release:
 - **`Vec`** and **`String`** — single boxed handles over a heap buffer;
   free with `vec_free` / `vec_free_with` / `string_free`. (`String` is
   `{ s ctl }`, the same single-handle shape as `Vec[u]`.)
-- the heap **environment of any capturing closure** — a `\ → … x …` that
-  closes over a binding allocates an env block; the struct carries a
-  refcount slot, but the release path is not currently wired into scope
-  exit, so an unfreed env leaks. Free it via the closure's env pointer
-  (e.g. before a `vec_free_with`).
+- the heap **environment of a capturing closure** — a `\ → … x …` that
+  closes over a binding allocates an env block. One common shape is
+  reclaimed automatically: an **inline closure literal** passed directly
+  to a parameter the callee only ever *invokes* (an **invoke-only**
+  parameter — a pure borrow, computed per function and recorded in
+  `g_fn_invoke_only`) has its env freed right after the call, so the
+  frequent `( map xs \ … )` / in-loop-callback pattern no longer leaks.
+  The reclamation is positive-signal only — a literal handed to a callee
+  that stores, returns, detaches (`thread_spawn`), or decomposes
+  (`recover`) the closure, or to a forward/unknown callee, is left alone,
+  so it is never a use-after-free. A closure bound to a `:` name, or one
+  whose env outlives the call, is still yours to release via the env
+  pointer (`# *u f 1`).
 - a value passed to a **`sink`** parameter — the callee frees it.
 
 These are deliberate seams, not defects: the conservatism that makes
