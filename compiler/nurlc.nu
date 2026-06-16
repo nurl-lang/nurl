@@ -7312,10 +7312,16 @@
 }
 
 // State join — least upper bound of two states, binding by binding.
-// A binding present on only one side joins against BCK_UNINIT on the
-// other (and bck_join of UNINIT with x is x, so it carries through).
-// `out` starts fresh and every `= out ...` builds a fresh string —
-// aliasing a loop-local would double-free at auto-drop.
+// A binding present on only one side still joins against BCK_UNINIT on
+// the other — and crucially that join goes through `bck_join`, which
+// maps UNINIT⊔MOVED to MaybeMoved (NOT Moved): a binding moved on only
+// the `b` path must not surface as *definitely* moved at the merge.
+// (Copying the `b`-only token verbatim — the old shortcut — violated
+// that: a foreach element or loop-local freed in the body came back
+// from the loop's fixpoint join as Moved and was wrongly flagged as a
+// use-after-move on re-read.) `out` starts fresh and every `= out ...`
+// builds a fresh string — aliasing a loop-local would double-free at
+// auto-drop.
 @ bck_join_state s a s b → s {
     : ~ s out ( nurl_str_cat `` `` )
     : ~ s rest a
@@ -7333,10 +7339,13 @@
     ~ != 0 ( nurl_str_len rest2 ) {
         : s tok ( str_first_word rest2 )
         = rest2 ( str_skip_word rest2 )
-        ? == BCK_UNINIT ( bck_st_get a ( bck_tok_name tok ) ) {
+        : s nm ( bck_tok_name tok )
+        ? == BCK_UNINIT ( bck_st_get a nm ) {
+            : i vj ( bck_join BCK_UNINIT ( bck_tok_val tok ) )
+            : s nt ( nurl_str_cat3 nm `=` ( nurl_str_int vj ) )
             = out ? == 0 ( nurl_str_len out )
-            ( nurl_str_cat tok `` )
-            ( nurl_str_cat3 out ` ` tok )
+            ( nurl_str_cat nt `` )
+            ( nurl_str_cat3 out ` ` nt )
         } {}
     }
     out
@@ -7505,7 +7514,11 @@
             : i eb ( bck_match_close p `block` `endblock` )
             : s bk ( bck_field rec 1 )
             ? | ( seq bk `loop` ) ( seq bk `foreach` ) {
-                = st ( bck_loop + p 1 eb st )
+                // Pass the controlling `~ cond` reads (carried in the
+                // block row's reads field) and its line so bck_loop can
+                // re-check them against the loop's back-edge state.
+                = st ( bck_loop + p 1 eb st ( bck_field rec 2 )
+                ( nurl_str_to_int ( bck_field rec 3 ) ) )
             } {
                 = st ( bck_walk_seq + p 1 eb st )
             }
@@ -7567,11 +7580,42 @@
     ( nurl_str_cat state `` )
 }
 
+// Build the loop's back-edge seed: the state on entry to iterations
+// >= 2. Every binding that already existed BEFORE the loop (`pre`)
+// keeps its pre value, EXCEPT one the body leaves Moved at exit
+// (`post`) — that one is carried in as Moved, because the previous
+// iteration consumed it. Bindings absent from `pre` (declared inside
+// the loop, or a foreach element) are fresh every iteration and are
+// deliberately dropped, so they never carry a stale Moved state.
+@ bck_loop_carry_seed s pre s post → s {
+    : ~ s out ( nurl_str_cat `` `` )
+    : ~ s rest pre
+    ~ != 0 ( nurl_str_len rest ) {
+        : s tok ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s nm ( bck_tok_name tok )
+        : i carried ? == BCK_MOVED ( bck_st_get post nm )
+        BCK_MOVED ( bck_tok_val tok )
+        : s nt ( nurl_str_cat3 nm `=` ( nurl_str_int carried ) )
+        = out ? == 0 ( nurl_str_len out ) nt ( nurl_str_cat3 out ` ` nt )
+    }
+    out
+}
+
 // `~` loop — the body carries a back-edge, so re-enter it until the
 // state at the loop head stops changing (the join of the head state
 // with the body's exit state). The 16-iteration cap is a safety
 // bound; the height-7 lattice converges in far fewer.
-@ bck_loop i lo i hi s pre → s {
+//
+// After the fixpoint, a second pass catches the loop-carried
+// use-after-move (the classic "free inside a loop" double-free): an
+// outer binding the body moves and never re-binds is Moved on entry
+// to the next iteration, so re-reading it — in the body, or in the
+// `~ cond` re-check (`cond_reads` / `cond_line`) — is a guaranteed
+// use of freed memory. Seeding the verification walk only with the
+// carried Moved state (definite, not MaybeMoved) keeps it
+// false-positive-free, exactly like the straight-line move rule.
+@ bck_loop i lo i hi s pre s cond_reads i cond_line → s {
     : ~ s head ( nurl_str_cat pre `` )
     : ~ i iter 0
     : ~ b done F
@@ -7583,6 +7627,15 @@
         ? ( seq merged head ) { = done T } { = head ( nurl_str_cat merged `` ) }
         = iter + iter 1
     }
+    // Loop-carried verification. `back` is the converged body-exit
+    // state; `verif` is the back-edge seed it implies. The condition is
+    // re-evaluated before each body, so check its reads first, then
+    // walk the body once more under the carried state.
+    : s back ( bck_walk_seq lo hi head )
+    : s verif ( bck_loop_carry_seed pre back )
+    ( bck_check_moved_reads cond_reads cond_line verif )
+    : s vend ( bck_walk_seq lo hi verif )
+    ? != 0 ( nurl_str_len vend ) {} {}
     head
 }
 

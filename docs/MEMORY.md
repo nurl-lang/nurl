@@ -239,6 +239,44 @@ A counter loop (`~ k 0 ...`, a while-loop) borrows nothing, so
 `( vec_set xs k v )` in an index loop stays legal — only the
 element-borrowing `~ x xs` foreach form is guarded.
 
+### 2.6 Loop-carried moves
+
+A `~` loop body runs more than once, so a binding consumed inside it
+is moved on entry to the *next* iteration. If that binding was live
+**before** the loop and the body never re-binds it, re-reading it on
+the second pass is a guaranteed use-after-move — the classic "free
+inside a loop" double-free:
+
+```
+: ( Vec i ) xs ( vec_new [i] )
+~ < k 3 { ( vec_free [i] xs ) = k + k 1 }   // error: use of moved value 'xs'
+```
+
+After the analysis walk reaches the loop's fixpoint, it re-walks the
+body once more, seeded with the loop's *back-edge* state: every outer
+binding the body leaves moved is seeded `Moved`, and the controlling
+`~ cond` is re-checked too (it is re-evaluated each turn). A read of
+such a definitely-moved binding is then reported. The same applies to
+a foreach whose body frees an outer binding (`~ y ys { ( vec_free xs ) }`).
+
+Three shapes are deliberately **not** flagged, because each is freshly
+owned on every iteration:
+
+- freeing the **loop element** — `~ x xs { ( string_free x ) }` (the
+  element is a fresh load each pass);
+- freeing a binding **declared inside** the loop body;
+- freeing an outer binding the body **re-binds** before the next read
+  (`( vec_free buf ) = buf ( vec_new [i] )`).
+
+Only bindings that already existed at loop entry are carried, so none
+of these three false-positive. This rests on the lattice join being
+exact at the back-edge: a binding moved on only the body path joins to
+`MaybeMoved`, never `Moved` (an earlier shortcut that copied a
+body-only binding's `Moved` state verbatim into the loop head made the
+loop element above look definitely moved — that join is now routed
+through the same `Uninit ⊔ Moved = MaybeMoved` rule as every other
+merge).
+
 ## 3. What is NOT checked
 
 The borrow checker targets the bug classes that ordinary NURL code
@@ -283,6 +321,7 @@ hits in practice. It deliberately does **not** yet cover:
 | Closure / stack-reference escape | yes (`error:`) |
 | `inout` exclusive access (call-site aliasing) | yes (`error:`) |
 | Iterator invalidation (mutate container in `~`-foreach) | yes (`error:`) |
+| Loop-carried move (free an outer binding inside a `~` loop) | yes (`error:`) |
 | Aliased mutation via nested-argument reads | no |
 | Returned borrows / lifetime inference | no |
 | `*T` raw pointers | no (by design) |
