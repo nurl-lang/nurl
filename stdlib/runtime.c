@@ -585,27 +585,55 @@ void* nurl_realloc(void *ptr, long long bytes) { return realloc(ptr, (size_t)byt
  * the extent can never be double-freed on unwind, and the drain dedups
  * aliased co-owners. Thread-local: each thread carries its own recover
  * stack and journal. */
-static __thread void   **nurl__jrnl        = NULL;
-static __thread long long nurl__jrnl_len   = 0;
-static __thread long long nurl__jrnl_cap   = 0;
-static __thread int       nurl__jrnl_active = 0;   /* recover-extent depth */
+/* Each entry is a (pointer, dropper) pair. A NULL dropper means the
+ * pointer is a raw heap buffer reclaimed with free() — an owned string /
+ * slice / struct-field buffer, auto-removed when its nurl_free fires. A
+ * non-NULL dropper means the pointer is the ALLOCA of an owned value with
+ * a typed destructor (a user `% Drop`); the dropper loads + drops it on
+ * the unwind path. A typed entry is not a heap pointer, so nurl_free
+ * never matches it — the compiler forgets it explicitly at the value's
+ * normal drop site instead. */
+static __thread void          **nurl__jrnl     = NULL;
+static __thread void          (**nurl__jrnl_fn)(void*) = NULL;
+static __thread long long       nurl__jrnl_len = 0;
+static __thread long long       nurl__jrnl_cap = 0;
+static __thread int             nurl__jrnl_active = 0;   /* recover-extent depth */
 
-/* Record an owned pointer for panic-unwind cleanup. No-op outside a
- * recover extent (the common case): one branch, no allocation. */
-void nurl_journal_push(void *p) {
-    if (!nurl__jrnl_active || !p) return;
-    if (nurl__jrnl_len == nurl__jrnl_cap) {
-        long long nc = nurl__jrnl_cap ? nurl__jrnl_cap * 2 : 32;
-        void **nb = (void**)realloc(nurl__jrnl, (size_t)nc * sizeof(void*));
-        if (!nb) return;             /* OOM: degrade to a leak, never crash */
-        nurl__jrnl = nb;
-        nurl__jrnl_cap = nc;
-    }
-    nurl__jrnl[nurl__jrnl_len++] = p;
+static int nurl__jrnl_grow(void) {
+    if (nurl__jrnl_len != nurl__jrnl_cap) return 1;
+    long long nc = nurl__jrnl_cap ? nurl__jrnl_cap * 2 : 32;
+    void **nb = (void**)realloc(nurl__jrnl, (size_t)nc * sizeof(void*));
+    if (!nb) return 0;               /* OOM: degrade to a leak, never crash */
+    void (**nf)(void*) = (void(**)(void*))realloc(nurl__jrnl_fn,
+                                                  (size_t)nc * sizeof(void(*)(void*)));
+    if (!nf) { nurl__jrnl = nb; return 0; }
+    nurl__jrnl = nb; nurl__jrnl_fn = nf; nurl__jrnl_cap = nc;
+    return 1;
 }
 
-/* Drop every recorded occurrence of `p` without freeing — used at an
- * escape sink where ownership is handed to a longer-lived binding. */
+/* Record an owned heap buffer for panic-unwind cleanup (free on drain).
+ * No-op outside a recover extent (the common case): one branch. */
+void nurl_journal_push(void *p) {
+    if (!nurl__jrnl_active || !p) return;
+    if (!nurl__jrnl_grow()) return;
+    nurl__jrnl[nurl__jrnl_len] = p;
+    nurl__jrnl_fn[nurl__jrnl_len] = NULL;
+    nurl__jrnl_len++;
+}
+
+/* Record an owned value with a typed destructor: `slot` is its alloca,
+ * `fn` a `void(*)(void*)` thunk that loads + drops it. Drained on panic,
+ * forgotten by the compiler at the value's normal drop site. */
+void nurl_journal_push_drop(void *slot, void (*fn)(void*)) {
+    if (!nurl__jrnl_active || !slot || !fn) return;
+    if (!nurl__jrnl_grow()) return;
+    nurl__jrnl[nurl__jrnl_len] = slot;
+    nurl__jrnl_fn[nurl__jrnl_len] = fn;
+    nurl__jrnl_len++;
+}
+
+/* Drop every recorded occurrence of `p` without running its dropper —
+ * used at an escape sink, and at a typed value's normal drop site. */
 void nurl_journal_forget(void *p) {
     if (nurl__jrnl_len == 0 || !p) return;
     for (long long i = nurl__jrnl_len; i-- > 0; )
@@ -622,23 +650,26 @@ static void nurl__jrnl_remove(void *p) {
 /* Current journal depth — captured by a recover frame as its mark. */
 static long long nurl__jrnl_mark(void) { return nurl__jrnl_len; }
 
-/* Forget entries back to `mark` without freeing (normal completion). */
+/* Forget entries back to `mark` without dropping (normal completion). */
 static void nurl__jrnl_truncate(long long mark) {
     if (mark < nurl__jrnl_len) nurl__jrnl_len = mark;
 }
 
-/* Free every still-live entry recorded since `mark`, deduping aliased
+/* Reclaim every still-live entry recorded since `mark`, deduping aliased
  * co-owners, then truncate. Runs on the panic path while the owning
- * frames are still valid (before the longjmp). */
+ * frames are still valid (before the longjmp). A typed entry runs its
+ * dropper on the alloca; a raw entry is freed. */
 static void nurl__jrnl_drain(long long mark) {
     for (long long i = nurl__jrnl_len; i-- > mark; ) {
         void *p = nurl__jrnl[i];
         if (!p) continue;
+        void (*fn)(void*) = nurl__jrnl_fn[i];
         nurl__jrnl[i] = NULL;
-        /* dedup: null any earlier alias so we free the buffer once */
+        /* dedup: null any earlier alias so we reclaim it once */
         for (long long k = mark; k < i; k++)
             if (nurl__jrnl[k] == p) nurl__jrnl[k] = NULL;
-        free(p);   /* already removed from the journal above */
+        if (fn) fn(p);
+        else    free(p);   /* already removed from the journal above */
     }
     nurl__jrnl_len = mark;
 }
