@@ -11,6 +11,10 @@ iter-buffer
 iter-buffer
 200
 caught st
+handle iter
+handle iter
+handle live
+caught d
 out.code=201
 out.body=escaped-field
 alive

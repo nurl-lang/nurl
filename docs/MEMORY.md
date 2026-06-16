@@ -394,9 +394,11 @@ hits in practice. It deliberately does **not** cover:
 - **`recover` / panic unwind — reclaimed, not modelled.** A panic is a
   `setjmp`/`longjmp` jump to the nearest `recover` frame (no exception
   tables, no unwinding destructors). The owned allocations the `longjmp`
-  skips no longer leak: a thread-local **allocation journal** (§7.3)
-  records every owned auto-drop allocation made inside a recover extent
-  and frees the still-live ones *before* the jump. A value that escapes
+  skips no longer leak: a thread-local **allocation journal** (§7.2)
+  records every owned auto-drop allocation made inside a recover extent —
+  raw buffers *and* `% Drop` / autodrop-enum values (whose typed
+  destructor it replays) — and reclaims the still-live ones *before* the
+  jump. A value that escapes
   the extent (assigned into a by-ref-captured caller binding) is
   forgotten from the journal first, so the unwind frees only genuinely
   abandoned scratch — never what the caller now owns. The reclamation is
@@ -579,52 +581,53 @@ scope-exit drop the compiler queued between (§3). Historically that
 leaked any owned allocation made inside the extent. A thread-local
 **allocation journal** closes that gap without exception tables:
 
-- While a `recover` frame is active, the compiler emits a
-  `nurl_journal_push` next to every owned auto-drop allocation it
-  registers — an owned string (`nurl_str_cat` / `nurl_read_file` / …),
-  an owned slice (`[ T | … ]`), and each owned **struct-field buffer**
-  (a fresh string/slice field of a `@ T { … }` literal). The journal
-  records the raw pointer.
-- `nurl_free` — the single choke point every auto-drop release flows
-  through — removes the pointer again. So a value freed normally before
-  the panic leaves no entry behind: there is no stale-slot hazard, and
-  an aliased buffer can only be freed once.
+- While a `recover` frame is active, the compiler records every owned
+  auto-drop allocation it registers, in one of two forms:
+  - a **raw buffer** (`nurl_journal_push`) for an owned string
+    (`nurl_str_cat` / `nurl_read_file` / …), an owned slice
+    (`[ T | … ]`), or each owned **struct-field buffer** (a fresh
+    string/slice field of a `@ T { … }` literal). The journal holds the
+    raw pointer; `nurl_free` — the single choke point every auto-drop
+    release flows through — removes it again, so a value freed normally
+    before the panic leaves no entry (no stale-slot hazard) and an
+    aliased buffer is freed once.
+  - a **typed destructor** (`nurl_journal_push_drop`) for a value with a
+    `% Drop` impl or a heap-boxing autodrop enum. The journal holds the
+    value's *alloca* and a generated `__jdrop_<T>` thunk that loads and
+    runs the destructor; the compiler `forget`s the entry wherever that
+    destructor runs on the normal path (scope exit, branch/loop arm,
+    move-out), so a value dropped before the panic is never re-dropped.
 - On a panic, `nurl_panic` drains the entries recorded since the target
   recover frame's mark — the allocations still live, neither freed nor
-  escaped — and frees them *before* the `longjmp`, while the owning
-  C frames are still valid.
-- A value that **escapes** the extent — a struct assigned into a
-  by-ref-captured caller binding (the `= resp ( f req )` typed-return
-  pattern) — has its heap leaves *forgotten* from the journal at the
-  assignment, so the drain never frees what the caller now owns.
+  escaped — *before* the `longjmp`, while the owning C frames are still
+  valid: a raw entry is freed, a typed entry runs its `__jdrop` thunk.
+- A value that **escapes** the extent — assigned into a by-ref-captured
+  caller binding (the `= resp ( f req )` typed-return pattern) — has its
+  heap leaves (and, for a moved `% Drop` value, its alloca entry)
+  *forgotten* from the journal at the assignment, so the drain never
+  frees what the caller now owns.
 
-The mechanism is keyed by pointer and auto-removed at `nurl_free`, so it
-can never turn a leak into a double-free or use-after-free; the whole
-corpus runs ASan/UBSan-clean (`SAN_FAIL: 0`) with it on, and
+So a panic reclaims **every** kind of allocation auto-drop owns — owned
+strings, owned slices, owned struct-field buffers, and user `% Drop` /
+autodrop-enum values. The mechanism can never turn a leak into a
+double-free or use-after-free (raw entries are pointer-keyed and removed
+at `nurl_free`; typed entries are forgotten at their normal drop site and
+deduped on drain); the corpus runs sanitizer-clean with it on, and
 `recover_unwind` pins the round trip leak-clean under LSan. Single-owner
-scalars (an owned `i8*` string) and slices are captured *by value* by a
-closure, so they cannot escape a recover extent by reference and need no
-forget; only multi-field structs can, which is exactly the case the
-escape-forget covers.
+scalars and slices are captured *by value* by a closure, so they cannot
+escape a recover extent by reference and need no forget; only multi-field
+structs (and the `% Drop` move) can, which the escape-forget covers.
 
-### 7.3 What a panic does **not** yet reclaim
+### 7.3 What a panic does **not** reclaim
 
-Two narrower kinds still leak across a panic. Both are characterised, not
-open-ended, and both have the same mitigation — hold them in the
-*caller's* frame (the `: ~` by-ref-capture pattern `stdlib/std/panic.nu`
-documents), not in the scope the panic abandons.
-
-1. **A user `% Drop` value** allocated inside the extent. On the normal
-   path auto-drop runs its *typed destructor* at scope exit; the journal
-   reclaims raw allocations, not typed drops, so it does not replay that
-   destructor on the panic path. (Routing a per-type drop thunk through
-   the journal is the planned extension.)
-
-2. **Manually-managed handles** (§7.4): `Vec`, `String`, a capturing
-   closure's env, a `sink` argument. These are never auto-dropped, so a
-   panic that abandons one mid-scope leaks it exactly as forgetting the
-   free would — no different from the manual-handle contract everywhere
-   else.
+Only **manually-managed handles** (§7.4) — `Vec`, `String`, a capturing
+closure's env, a `sink` argument — survive a panic unfreed, because they
+are never auto-dropped in the first place: *you* free them. A panic that
+abandons one mid-scope leaks it exactly as forgetting its free would —
+no different from the manual-handle contract everywhere else. The
+mitigation is the same as any manual resource: hold it in the *caller's*
+frame (the `: ~` by-ref-capture pattern `stdlib/std/panic.nu` documents),
+not in the scope the panic abandons.
 
 ### 7.4 Manually-managed handles
 

@@ -13,14 +13,14 @@
 //
 // **What this is NOT:**
 //   * It is NOT an exception system. There is no stack unwinding with
-//     destructor calls. A thread-local allocation journal DOES reclaim
-//     the owned auto-drop allocations the longjmp skips (owned strings,
-//     slices, and struct-field buffers — see docs/MEMORY.md §7.2), so
-//     those no longer leak; a user `% Drop` value's typed destructor is
-//     NOT yet replayed on the panic path, so keep those (and manual
-//     handles like Vec/String) out of the recover scope. Recover is a
-//     crash-mitigation tool, NOT a routine error path. Always prefer
-//     `! T E` + `\` for expected errors.
+//     destructor calls in the C++ sense, but a thread-local allocation
+//     journal DOES reclaim every owned auto-drop allocation the longjmp
+//     skips — owned strings, slices, struct-field buffers, AND user
+//     `% Drop` / autodrop-enum values (their typed destructor is
+//     replayed) — see docs/MEMORY.md §7.2, so those no longer leak. Only
+//     manually-managed handles (Vec / String) survive a panic unfreed,
+//     the same as everywhere. Recover is a crash-mitigation tool, NOT a
+//     routine error path. Always prefer `! T E` + `\` for expected errors.
 //   * It does NOT catch SIGSEGV / SIGFPE / SIGBUS / SIGABRT. Signal
 //     faults remain process-aborts. Async-signal-safety constraints
 //     make bridging signals into the panic model infeasible without
@@ -45,12 +45,12 @@
 //   }
 //   ```
 //
-// **Memory cost per panic:** the allocation journal reclaims the owned
-// auto-drop scratch (strings / slices / struct-field buffers) the
-// closure allocated between recover entry and the panic, so a buggy
-// HTTP handler under attack no longer leaks its per-request scratch.
-// What still leaks is what auto-drop never owned: manually-managed
-// handles (Vec / String) and user `% Drop` values left in the scope.
+// **Memory cost per panic:** the allocation journal reclaims every owned
+// auto-drop allocation (strings / slices / struct-field buffers / `% Drop`
+// values) the closure made between recover entry and the panic, so a
+// buggy HTTP handler under attack no longer leaks its per-request scratch.
+// What still leaks is only what auto-drop never owned: manually-managed
+// handles (Vec / String) left live in the scope.
 
 $ `stdlib/core/string.nu`
 

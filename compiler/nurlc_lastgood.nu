@@ -7140,6 +7140,58 @@
     ( nurl_sym_def syms `__user_drops__` new )
 }
 
+// Emit a `void(i8*)` journal-drop thunk for an owned value of LLVM type
+// `llvm` whose typed destructor is `drop__<mangle>`: load the value from
+// its alloca and run the destructor. Used on the panic-unwind path to
+// replay a typed drop the longjmp skips. Deduped + recorded under
+// `jdrop##<mangle>` so the push site can gate on the thunk existing.
+// Called for both user `% Drop` impls and autodrop enums (both register
+// `drop##` and emit `drop__<mangle>`).
+@ emit_jdrop_thunk s llvm s mangle → v {
+    : s donekey ( nurl_str_cat `jdrop##` mangle )
+    ? != 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms donekey ) ) { ^ v } {}
+    ( nurl_sym_def g_impl_name_syms donekey `1` )
+    ( nurl_print `define void @__jdrop_` ) ( nurl_print mangle )
+    ( nurl_print `(i8* %p) {\nentry:\n` )
+    ( nurl_print `  %t = bitcast i8* %p to ` ) ( nurl_print llvm ) ( nurl_print `*\n` )
+    ( nurl_print `  %v = load ` ) ( nurl_print llvm ) ( nurl_print `, ` ) ( nurl_print llvm ) ( nurl_print `* %t\n` )
+    ( nurl_print `  call void @drop__` ) ( nurl_print mangle )
+    ( nurl_print `(` ) ( nurl_print llvm ) ( nurl_print ` %v)\n  ret void\n}\n` )
+}
+
+// Panic-unwind journal for a user `% Drop` value. `ptr` is its alloca
+// (`<vt>*`); record it with the type's `__jdrop_<mangle>` thunk so a
+// panic replays the typed destructor (docs/MEMORY.md §7). Unlike the raw
+// kinds, the entry is keyed by the alloca (not a heap pointer), so the
+// compiler must forget it explicitly at every normal drop site
+// (mem_drop_user_drops / mem_drop_new_user_drops) — done there.
+@ mem_journal_push_userdrop i syms i cg s ptr s vt → v {
+    : s impl_mangle ( nurl_sym_get g_impl_name_syms ( nurl_str_cat `drop##` vt ) )
+    ? == 0 ( nurl_str_len impl_mangle ) { ^ v } {}
+    // Only journal when the `__jdrop_<mangle>` thunk has been emitted
+    // (gate against a forward-defined impl whose thunk isn't out yet —
+    // skipping just means that value isn't reclaimed on panic, never a
+    // dangling reference to a missing thunk).
+    ? == 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms ( nurl_str_cat `jdrop##` impl_mangle ) ) ) { ^ v } {}
+    : s bc ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print bc )
+    ( nurl_print ` = bitcast ` ) ( nurl_print vt ) ( nurl_print `* ` ) ( nurl_print ptr )
+    ( nurl_print ` to i8*\n` )
+    ( nurl_print `  call void @nurl_journal_push_drop(i8* ` ) ( nurl_print bc )
+    ( nurl_print `, ptr @__jdrop_` ) ( nurl_print impl_mangle ) ( nurl_print `)\n` )
+}
+
+// Forget a user `% Drop` value's journal entry (keyed by its alloca) —
+// emitted wherever its typed drop is run on the normal path, so a later
+// panic in the same extent cannot replay an already-run destructor.
+@ mem_journal_forget_userdrop i cg s ptr s vt → v {
+    : s bc ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print bc )
+    ( nurl_print ` = bitcast ` ) ( nurl_print vt ) ( nurl_print `* ` ) ( nurl_print ptr )
+    ( nurl_print ` to i8*\n` )
+    ( nurl_print `  call void @nurl_journal_forget(i8* ` ) ( nurl_print bc ) ( nurl_print `)\n` )
+}
+
 @ mem_drop_user_drops i syms i cg s skip_ptr → v {
     : s dtop ( nurl_sym_get syms `__defer_top__` )
     ? == 0 ( nurl_str_len dtop )
@@ -7162,6 +7214,11 @@
                 }
                 {}
             }
+            // Forget the journal entry regardless of branch: this scope's
+            // alloca dies at exit, so a later panic must not drain it.
+            // (Whether the value was dropped here or escaped up, its
+            // alloca-keyed entry is now stale.)
+            ( mem_journal_forget_userdrop cg ptr vt )
         }
     }
     {}
@@ -7186,6 +7243,9 @@
                 ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
                 ( nurl_print `  call void @` ) ( nurl_print impl_name )
                 ( nurl_print `(` ) ( nurl_print vt ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
+                // Forget the now-dropped value's journal entry so a later
+                // panic in this function cannot replay its destructor.
+                ( mem_journal_forget_userdrop cg ptr vt )
             }
         }
     }
@@ -8321,7 +8381,7 @@
         { : s impl_key ( nurl_str_cat `drop##` vt )
             : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
             ? != 0 ( nurl_str_len impl_mangle_key )
-            { ( mem_own_add_user_drop syms ptr vt ) }
+            { ( mem_own_add_user_drop syms ptr vt ) ( mem_journal_push_userdrop syms cg ptr vt ) }
             {}
         }
         {} }
@@ -8491,7 +8551,7 @@
                 { : s impl_key ( nurl_str_cat `drop##` ptype )
                     : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
                     ? != 0 ( nurl_str_len impl_mangle_key )
-                    { ( mem_own_add_user_drop syms ptr ptype ) }
+                    { ( mem_own_add_user_drop syms ptr ptype ) ( mem_journal_push_userdrop syms cg ptr ptype ) }
                     {}
                 }
                 {} }
@@ -8586,6 +8646,17 @@
         ? & & != 0 g_auto_drop_strings ( seq vt `i8*` ) ( is_ident_tok bck_rhs_tt )
         { ( mem_remove_owned_str syms
             ( nurl_sym_get syms ( nurl_str_cat bck_rhs_val `__ptr` ) ) ) }
+        {}
+        // Same for a moved user `% Drop` binding: `= name x` transfers x's
+        // value into name, so x is no longer dropped — forget its
+        // alloca-keyed journal entry or a panic would replay its
+        // destructor on a value the destination now owns (§7).
+        ? & & != 0 g_auto_drop_strings ( is_ident_tok bck_rhs_tt )
+        ( str_contains_word ( nurl_sym_get syms `__user_drops__` )
+        ( nurl_sym_get syms ( nurl_str_cat bck_rhs_val `__ptr` ) ) )
+        { ( mem_journal_forget_userdrop cg
+            ( nurl_sym_get syms ( nurl_str_cat bck_rhs_val `__ptr` ) )
+            ( nurl_sym_get syms bck_rhs_val ) ) }
         {}
         // Widen i1 short-circuit / comparison results to the LHS's
         // declared integer width, so `= myi64 & a b` stores cleanly.
@@ -13428,6 +13499,9 @@
     }
     ? ! has_box { ^ F } {}
     ( gen_drop_for_type ( nurl_str_cat `%` ename ) syms )
+    // Panic-unwind journal thunk for this autodrop enum (drop__<ename>
+    // was just emitted; drop##%ename = ename is the registered mangle).
+    ( emit_jdrop_thunk ( nurl_str_cat `%` ename ) ename )
     ^ T
 }
 
@@ -13963,6 +14037,7 @@
     ( emit `declare i8*  @nurl_realloc(i8*, i64)` )
     ( emit `declare void @nurl_free(i8*)` )
     ( emit `declare void @nurl_journal_push(i8*)` )
+    ( emit `declare void @nurl_journal_push_drop(i8*, ptr)` )
     ( emit `declare void @nurl_journal_forget(i8*)` )
     ( emit `declare void @nurl_memcpy(i8*, i8*, i64)` )
     ( emit `declare void @nurl_memmove(i8*, i8*, i64)` )
@@ -14592,6 +14667,15 @@
                     : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
                     // gen_fn_decl_concrete reads params, →, ret, body from lex
                     ( gen_fn_decl_concrete mangled lex syms cg )
+                    // Panic-unwind journal: for the `Drop` trait, emit a
+                    // `void(i8*)` thunk that loads the value from its alloca
+                    // and runs the just-emitted destructor, so a panic can
+                    // replay the typed drop the longjmp skips (§7). One per
+                    // Drop impl — naturally deduped (an impl block appears
+                    // once). Emitted at module scope right after the impl fn.
+                    ? & ( seq tname `Drop` ) ( seq mname `drop` )
+                    { ( emit_jdrop_thunk impl_llvm impl_mangle ) }
+                    {}
                     // gen_fn_decl_concrete recorded the inout/sink parameter
                     // sets under the MANGLED name (`bump__Counter`), but a
                     // call site dispatches by the BARE method name
