@@ -304,16 +304,24 @@ parameter is then reported:
                //        by pointer to 'detach' - it escapes …
 ```
 
-Because the summary is built as each function compiles, a helper must
-be defined before the call site for the check to fire (a forward call
-merely *misses* the diagnostic — it is diagnostic-only and never
-miscompiles). A parameter that the callee only *reads* or *invokes*
-(not stores) is not escaping, so passing a stack reference to it stays
-legal. Two boundaries remain by design: escape **via a returned
-parameter** is not summarised (the caller often consumes the result
-safely within scope — flagging it would false-positive), and generic
-functions infer the summary only once a concrete instantiation is
-compiled.
+The summary is built as each function compiles, so a **forward call** —
+or a call to a **generic** not yet instantiated — has no summary to
+consult inline. Rather than miss it, the call site **parks** the check
+(a stack-reference argument to a not-yet-known user callee is rare, so
+the parked list stays tiny) and `resolve_pending_escapes()` replays it
+once the whole module — including the generic instantiation flush — has
+compiled and the summary is final. So `( detach f )` is flagged whether
+`detach` is defined above or below the call, and a generic escaping
+helper is caught once its instantiation has populated the summary. The
+one residual is a *pure forward chain*: a forward helper that escapes
+its parameter only by handing it to *another* forward-defined helper —
+the first helper's own summary is then still incomplete when parked, so
+nothing resolves (define such chains bottom-up to get the check). A
+parameter that the callee only *reads* or *invokes* (not stores) is not
+escaping, so passing a stack reference to it stays legal — the
+distinction the §2.7 summary turns on. (A reference handed back *out*
+of a helper, rather than stored by it, is the separate return-escape
+case — see §2.8.)
 
 ### 2.8 Return escape (a reference passed back out)
 
@@ -369,13 +377,15 @@ hits in practice. It deliberately does **not** cover:
   check (§2.4) covers a binding aliased among one call's arguments.
   A binding read through a *nested* sub-expression argument, and
   any longer-range aliased-mutation analysis, is not done.
-- **Escape across a forward / generic call.** The escape (§2.7) and
-  return-escape (§2.8) summaries are built as each function compiles,
-  so a call placed *before* the callee's definition — or to a generic
-  not yet instantiated — has no summary to consult and the escape is
-  missed. This degrades the *diagnostic* only; it never miscompiles
-  (the lowered code is identical either way). Define helpers before
-  their call sites to get the check.
+- **Escape across a forward / generic call — mostly closed.** The
+  *interprocedural escape* check (§2.7) now handles a forward or
+  generic call by parking it and replaying it after the whole module
+  compiles (`resolve_pending_escapes`), so definition order no longer
+  matters for it. Two residuals remain: a *pure forward chain* (a
+  forward helper that escapes only via another forward-defined helper —
+  §2.7), and the *return-escape* summary (§2.8), which is still consulted
+  inline and so still misses a forward / generic passthrough. Both
+  degrade the *diagnostic* only — never a miscompile.
 - **Escape through a closure capture or a deeply nested aggregate.**
   §2.8 records a parameter returned directly or as a direct struct
   field; a parameter returned by being *captured into a closure*
@@ -512,10 +522,12 @@ get right:
   parameters are freed by *you*, not by auto-drop (§7.2). The checker
   tracks their *moves* (so a `vec_free`d handle can't be reused) but not
   their *freeing* — forget the `vec_free` and it leaks.
-- **Define-before-call ordering.** The escape / sink / return-escape
-  summaries are built in codegen order, so a forward or
-  not-yet-instantiated-generic call misses the diagnostic (§3). It is
-  never miscompiled — only unchecked.
+- **Definition order, for the residual checks.** Summaries are built in
+  codegen order. The *interprocedural escape* check (§2.7) no longer
+  depends on order — it is parked and replayed after the module compiles
+  — but the *return-escape* (§2.8) and *sink* checks still consult the
+  summary inline, so a forward / generic call to such a callee misses the
+  diagnostic (§3). Never miscompiled — only unchecked.
 
 ### 6.5 This is not Rust
 
