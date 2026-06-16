@@ -1695,6 +1695,7 @@
     // into a `^ ( plain_struct_fn )` return).
     ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
     ( nurl_sym_def syms `__last_call_ret_struct_fields__` `` )
+    ( nurl_sym_def syms `__last_agg_param_idents__` `` )
     // Return-escape inference (docs/MEMORY.md §2.8): snapshot whether
     // this return is a bare identifier (`^ p`) so the post-gen_operand
     // check can tell a direct parameter passthrough from a derived
@@ -1709,6 +1710,17 @@
     ? & ( is_ident_tok ret_first_tt )
     ( seq ( nurl_sym_get syms `__last_ident_name__` ) ret_first_val )
     { ( bck_record_ret_param syms ret_first_val ) }
+    {}
+    // §2.8 (aggregate form): `^ @ T { … param … }` embeds parameters as
+    // fields — the returned struct hands each one back out, so record
+    // them too. gen_agg_lit published the embedded parameter names.
+    ? & != g_borrowck 0 == ret_first_tt TT_AT
+    { : ~ s __rp_rest ( nurl_sym_get syms `__last_agg_param_idents__` )
+        ~ != 0 ( nurl_str_len __rp_rest ) {
+            : s __rp_w ( str_first_word __rp_rest )
+            = __rp_rest ( str_skip_word __rp_rest )
+            ( bck_record_ret_param syms __rp_w )
+        } }
     {}
     // XOR confusion (critic v0.9.0 §1): `^ X Y` on the same line is
     // almost always the user thinking `^` is XOR. `^^` (two adjacent
@@ -9309,6 +9321,14 @@
     // wrapping a byref closure in a struct would silently defeat the
     // `^`-return + escape-call checks.
     : ~ i agg_refdepth 0
+    // Return-escape (docs/MEMORY.md §2.8): names of the enclosing
+    // function's parameters embedded as a field of THIS aggregate. A
+    // parameter is not a stack reference inside its own function (its
+    // refdepth is 0), so agg_refdepth alone can't see that returning
+    // `@ Slot { cb }` hands `cb` back out. gen_ret reads this list to
+    // record those parameters as returned, so a caller passing a stack
+    // reference there is flagged just like `^ cb`.
+    : ~ s agg_param_idents ``
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         ? != 0 g_auto_drop_strings
         { ( nurl_sym_def syms `__last_call_ret_owned__` `` )
@@ -9323,8 +9343,22 @@
         // consumes the token. Slice literals don't go through gen_call so
         // `__last_call_ret_owned__` is never set for them.
         : b fld_is_slice_lit == ( nurl_lex_type lex ) TT_LBRACK
+        // §2.8: snapshot whether this field is a bare identifier, to tell
+        // a direct parameter embed (`{ cb }`) from a derived value.
+        : i fld_first_tt ( nurl_lex_type lex )
+        : s fld_first_val ( nurl_lex_val lex )
         : s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
+        // §2.8: record a field that is exactly a bare parameter of the
+        // enclosing function, so `^ @ T { … param … }` propagates that
+        // parameter's reference out through the returned aggregate.
+        ? & & != g_borrowck 0 ( is_ident_tok fld_first_tt )
+        & ( seq ( nurl_sym_get syms `__last_ident_name__` ) fld_first_val )
+        ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) fld_first_val )
+        { = agg_param_idents ? == 0 ( nurl_str_len agg_param_idents )
+            fld_first_val
+            ( nurl_str_cat3 agg_param_idents ` ` fld_first_val ) }
+        {}
         // Snapshot the value's unsigned-ness for the int-width coercion of
         // an option payload below (zext vs sext when widening into a wider
         // payload field). Empty for signed / untagged values.
@@ -9806,6 +9840,15 @@
     // an inner aggregate's published depth the same way.
     ( nurl_sym_def syms `__last_expr_refdepth__`
     ? > agg_refdepth 0 ( nurl_str_int agg_refdepth ) `` )
+    // §2.8: publish the enclosing-function parameters embedded as direct
+    // fields so gen_ret can record them as returned (an aggregate that
+    // embeds a parameter hands that parameter back out). A parameter
+    // nested one level deeper (`@ Outer { @ Inner { cb } }`) is not in
+    // this list — only a parameter that is already a stack reference
+    // composes through nesting, via agg_refdepth above; an interprocedural
+    // param nested inside an inner aggregate is a remaining boundary.
+    ? != g_borrowck 0
+    { ( nurl_sym_def syms `__last_agg_param_idents__` agg_param_idents ) } {}
     result
 }
 

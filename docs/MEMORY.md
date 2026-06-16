@@ -343,9 +343,17 @@ A helper that takes the reference but returns a **fresh** value
 call result's referent depth *authoritative* (an explicit `0` when it
 is not a reference) also fixed a latent false positive: previously the
 stale `__last_ident_name__` left by the last argument could make
-`^ ( anycall … ref )` mis-flag the result as that argument. Boundaries:
-escape through a returned **aggregate field** (`^ @ Slot { cb }`) and
-through forward / generic calls is not yet summarised.
+`^ ( anycall … ref )` mis-flag the result as that argument.
+
+The summary also covers a parameter returned **inside an aggregate** —
+`@ wrap ( @ v ) cb → Slot { ^ @ Slot { cb } }` records `cb`, because the
+returned struct carries the reference exactly as a bare `^ cb` would, so
+`( wrap f )` propagates `f`'s depth out. An ordinary constructor
+returning a struct of *value* parameters (`@ mk i a i b → Point { @ Point
+{ a b } }`) records them too but never false-positives: an `int` argument
+has depth 0. Boundaries that remain: a parameter returned through a
+closure *capture* (`^ \ → … cb …`) rather than a struct field, and
+forward / generic calls, are not yet summarised.
 
 ## 3. What is NOT checked
 
