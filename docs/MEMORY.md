@@ -10,9 +10,19 @@ v2.1).
 - **Single owner, deterministic drop.** Every heap allocation has
   exactly one owning binding. The compiler inserts the matching free
   at the end of that binding's scope. No garbage collector, no
-  reference counting. A few **manually-managed handles** sit outside
-  auto-drop — `Vec`, the heap environment of a capturing closure, and
-  `sink` parameters — and are freed explicitly (§7.2).
+  reference counting. A small, explicit set of **manually-managed
+  handles** sits outside auto-drop — `Vec`, `String`, a `sink`
+  argument, and a closure that *escapes* its creating frame — and is
+  freed by you, exactly like C's `malloc`/`free` (§7.4).
+- **No known compiler-owned leaks.** The compiler never leaks an
+  allocation it owns — not on the normal path, and not across a
+  `panic`/`recover` unwind (a thread-local journal reclaims the
+  scope-exit drops the `longjmp` skips, §7.2). Owned strings, slices,
+  struct fields, `% Drop` values, and the heap env of a *non-escaping*
+  capturing closure are all reclaimed automatically. The **only**
+  memory you must free yourself is the manual-handle set above; used
+  per that contract, NURL programs are leak-free. There is no
+  "by-design leak" — see §7.
 - **A borrow checker runs by default.** A diagnostic analysis pass
   catches use-after-move, alias double-free, and closures that escape
   the stack frame they point into. It is on unless you pass
@@ -526,10 +536,10 @@ get right:
 - **`*T` raw pointers and FFI.** `*T` is NURL's `unsafe`. A `*T` into a
   local, or any pointer crossing an `& \`lib\`` boundary, is outside the
   model; its lifetime is yours.
-- **Manually-managed handles.** `Vec`, closure environments, and `sink`
-  parameters are freed by *you*, not by auto-drop (§7.2). The checker
-  tracks their *moves* (so a `vec_free`d handle can't be reused) but not
-  their *freeing* — forget the `vec_free` and it leaks.
+- **Manually-managed handles.** `Vec`, `String`, a `sink` argument, and
+  the env of an *escaping* closure are freed by *you*, not by auto-drop
+  (§7.4). The checker tracks their *moves* (so a `vec_free`d handle can't
+  be reused) but not their *freeing* — forget the `vec_free` and it leaks.
 - **Definition order, for the residual checks.** Summaries are built in
   codegen order. The *interprocedural escape* check (§2.7) no longer
   depends on order — it is parked and replayed after the module compiles
@@ -560,7 +570,17 @@ deliberately simpler and the equivalence does **not** hold:
 A leak is **not** a memory-safety violation: no use-after-free, no
 double-free, no undefined behaviour — just memory the process never
 returns. The checked classes (§5) are all memory-*safety*; leaks are a
-separate axis, and NURL handles them in two tiers.
+separate axis.
+
+The contract is sharp: **the compiler never leaks an allocation it
+owns.** Everything auto-drop owns is freed at scope exit on the normal
+path (§7.1) and reclaimed across a `panic` unwind too (§7.2) — so there
+are *no known compiler-owned leaks*. What is left to you is a small,
+explicit set of **manually-managed handles** (§7.4): memory the model
+deliberately does not own, freed by you exactly as C requires `free`
+for `malloc`. Used per that contract, programs are leak-free. There is
+no "leaks by design" tier here — only "the compiler's job" and "your
+job", with the boundary drawn precisely below.
 
 ### 7.1 Ordinary code does not leak
 
@@ -620,19 +640,20 @@ structs (and the `% Drop` move) can, which the escape-forget covers.
 
 ### 7.3 What a panic does **not** reclaim
 
-Only **manually-managed handles** (§7.4) — `Vec`, `String`, a capturing
-closure's env, a `sink` argument — survive a panic unfreed, because they
-are never auto-dropped in the first place: *you* free them. A panic that
-abandons one mid-scope leaks it exactly as forgetting its free would —
-no different from the manual-handle contract everywhere else. The
-mitigation is the same as any manual resource: hold it in the *caller's*
-frame (the `: ~` by-ref-capture pattern `stdlib/std/panic.nu` documents),
-not in the scope the panic abandons.
+Only **manually-managed handles** (§7.4) — `Vec`, `String`, a `sink`
+argument, and the env of a closure that *escapes* its frame — survive a
+panic unfreed, because they are never auto-dropped in the first place:
+*you* free them. A panic that abandons one mid-scope leaks it exactly as
+forgetting its free would — no different from the manual-handle contract
+everywhere else. The mitigation is the same as any manual resource: hold
+it in the *caller's* frame (the `: ~` by-ref-capture pattern
+`stdlib/std/panic.nu` documents), not in the scope the panic abandons.
 
 ### 7.4 Manually-managed handles
 
-Auto-drop only frees what it saw allocated directly, so four handle kinds
-are yours to release:
+Auto-drop only frees what it saw allocated *directly*. The handles below
+sit outside that — the model deliberately does not own them, so they are
+yours to release. This is the complete list; nothing else leaks.
 
 - **`Vec`** and **`String`** — single boxed handles over a heap buffer;
   free with `vec_free` / `vec_free_with` / `string_free`. (`String` is
@@ -664,6 +685,11 @@ them. The checker still tracks these handles' *moves* — a `vec_free`d
 `Vec`, or a `sink`-consumed value, cannot be used again (§2.1) — it just
 does not free them for you.
 
-Everything outside §7.3/§7.4 is expected to be leak-free, and the
-`tools/leakcheck` gate plus the ASan/UBSan test suite hold the stdlib
-and corpus to it.
+Outside this manual-handle set, nothing leaks: the `tools/leakcheck`
+gate plus the ASan/UBSan suite hold the stdlib and corpus to it, and the
+panic-unwind round trip is pinned leak-clean under LSan (`recover_unwind`,
+`closure_env_reclaim`, `closure_env_binding`). The whole-corpus LSan run
+defaults to `detect_leaks=0` for one honest reason: many tests allocate a
+manual handle (`Vec` / `String`) and exit without freeing it — that is
+test brevity exercising the contract, not a compiler defect. A program
+that honours the contract leaks nothing.
