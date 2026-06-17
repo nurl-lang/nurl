@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Decided (toward 1.0 grammar lock)
+
+- **No grouping/closing delimiter — locked.** Fixed prefix arity with no
+  closing token stays the canonical, permanent surface form (CRITIC A3, the
+  last open grammar decision). The call was made on data: a ~77 000-line
+  first-party corpus sweep (the self-hosted compiler, the HTTP/1.1+2 +
+  WebSocket stack, a regex engine, crypto, and the Game Boy / C64 emulators)
+  measured the longest consecutive prefix-operator run per line — ~96 % of
+  operator-bearing lines nest only 1–2 deep, and just **19 lines in the entire
+  corpus** reach depth ≥5, clustered in two idioms (n-ary boolean membership
+  and big-endian byte assembly) that already have ordinary library answers (a
+  predicate helper such as `is_alpha`, or an intermediate `:` binding). The
+  foot-gun shape is caught by the existing dead-value / prefix-arity-cascade
+  diagnostics. Rationale and the depth table are recorded in `docs/spec.md`
+  §6. The decision is safe to revisit additively — an *optional* grouping form
+  could be added post-1.0 without breaking any program; 1.0 locks only the
+  negative.
+
 ### Changed
 
 - **Clearer diagnostics for two call-site papercuts** (surfaced by the
