@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+demo: 42 ns/op  (1000 iters, 3 allocs/op)
+vec_allocs_per_op=1
+iters=1000
+ns_nonneg=T
+noop_allocs_per_op=0

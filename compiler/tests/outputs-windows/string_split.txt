@@ -1,0 +1,15 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+split "a,b,c" by "," → ["a","b","c"]
+split "hello" by "," → ["hello"]
+split "" by "," → [""]
+split ",a,b" by "," → ["","a","b"]
+split "a,b," by "," → ["a","b",""]
+split "a,,b" by "," → ["a","","b"]
+split "aXYbXYcXY" by "XY" → ["a","b","c",""]
+split "ab" by "abcd" → ["ab"]
+split "abc" by "" → ["abc"]
+split ",,," by "," → ["","","",""]
+done

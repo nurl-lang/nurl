@@ -1,0 +1,41 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+rt null: ok
+rt bool: ok
+rt int small: ok
+rt int neg: ok
+rt int negfix: ok
+rt int u16: ok
+rt int i64: ok
+rt int negbig: ok
+rt float: ok
+rt string: ok
+rt string empty: ok
+rt array: ok
+rt object: ok
+rt nested: ok
+enc null: ok
+enc false: ok
+enc true: ok
+enc int 0: ok
+enc int 127: ok
+enc int -1: ok
+enc int -32: ok
+enc int 128: ok
+enc int 100000: ok
+enc str a: ok
+enc str empty: ok
+enc float 1.5: ok
+dec uint8: ok
+dec uint16: ok
+dec uint32: ok
+dec int8: ok
+dec int64: ok
+dec str8: ok
+dec err empty: ok
+dec err bin: ok
+dec err truncated: ok
+dec err reserved: ok
+dec err short array: ok

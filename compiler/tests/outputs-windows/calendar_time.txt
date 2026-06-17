@@ -1,0 +1,29 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+── reference points ──
+epoch      1970-01-01T00:00:00Z wday=4
+millennium 2000-01-01T00:00:00Z wday=6
+leap day   2024-02-29T12:34:56Z wday=4
+pre-epoch  1969-12-31T23:59:59Z wday=3
+── round-trip ──
+  rt 0 → 0
+  rt 1234567890 → 1234567890
+  rt 1709210096 → 1709210096
+  rt -1 → -1
+  rt -1000000 → -1000000
+── format_http ──
+  epoch     = Thu, 01 Jan 1970 00:00:00 GMT
+  20240506  = Mon, 06 May 2024 09:30:00 GMT
+── parse round-trip ──
+  parsed → unix=1709210096
+  reform    2024-02-29T12:34:56Z wday=4
+  lowert+frac → unix=1709210096
+  +05:30 → unix=1709190296
+  -08:00 → unix=1709238896
+── parse errors ──
+  short → Empty
+  bad-sep → BadFormat
+  space-sep → BadFormat
+  trailing → TrailingGarbage

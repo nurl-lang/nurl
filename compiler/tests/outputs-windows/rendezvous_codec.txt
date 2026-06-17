@@ -1,0 +1,21 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+record codec:
+  pubkey matches: YES
+  relay host: YES
+  2 endpoints: YES
+  ep0 = 192.0.2.1:5000: YES
+  ep1 = 198.51.100.7:41000: YES
+register type: YES
+register record:
+  pubkey matches: YES
+  relay host: YES
+  2 endpoints: YES
+  ep0 = 192.0.2.1:5000: YES
+  ep1 = 198.51.100.7:41000: YES
+lookup type: YES
+lookup body == pubkey: YES
+record(found) flag: YES
+record(notfound) flag: YES

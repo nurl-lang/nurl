@@ -1,0 +1,59 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+── proxy_default_opts ──
+  timeout_ms=60000
+  connect_timeout_ms=10000
+  strip_hop_by_hop=T
+  preserve_host_header=F
+  strip_content_encoding=T
+  strip_content_length=T
+── proxy_err_name ──
+  e1=ProxyUpstream
+  e2=ProxyClientWrite
+  e3=ProxyOther
+── __is_hop_by_hop ──
+  connection=T
+  keep-alive=T
+  proxy-authenticate=T
+  proxy-authorization=T
+  te=T
+  trailer=T
+  transfer-encoding=T
+  upgrade=T
+  authorization=F
+  content-type=F
+── __build_upstream_url ──
+  no_slash_path=https://api.example.com/v1/messages
+  base_slash_path_slash=https://api.example.com/v1/messages
+  base_slash_no_path_slash=https://api.example.com/v1/messages
+  with_query=https://api.example.com/search?q=hello&n=10
+  ssrf_userinfo=https://api.example.com/@evil.com/x
+  ssrf_hostmerge=https://api.example.com/evil.com/x
+── __build_request_headers_blob ──
+  default_strip:
+Authorization: Bearer xyz
+
+Content-Type: application/json
+
+  END
+  default_blob_len=59
+  preserve_host:
+Authorization: Bearer xyz
+
+Content-Type: application/json
+
+Host: client.example.com
+
+  END
+── __response_header_dropped ──
+  Connection=T
+  Keep-Alive=T
+  Transfer-Encoding=T
+  Content-Length=T
+  Content-Encoding=T
+  Set-Cookie=F
+  Content-Type=F
+  X-Custom=F
+done

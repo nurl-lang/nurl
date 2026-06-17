@@ -1,0 +1,29 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+name=demo
+name=<not-bool>
+version=0.4.4
+version=<not-bool>
+license=MIT OR Apache-2.0
+license=<not-bool>
+edition=-1
+publishable=<not-string>
+publishable=T
+escaped=hello "world"
+
+escaped=<not-bool>
+router_path=../router
+router_path=<not-bool>
+router_ver=0.2.0
+router_ver=<not-bool>
+some_path=../some-lib
+some_path=<not-bool>
+authors_count=2
+authors[0]=Tero <t@example.com>
+
+-- lockfile --
+pkg_count=2
+pkg[0].name==http-router
+pkg[1].name==some-lib

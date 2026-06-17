@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+u8_field_zext ok
+u16_field_zext ok
+u32_field_zext ok
+i8_field_sext ok
+i16_field_sext ok
+u8_into_i64_field ok
+u16_into_i32_field ok
+u32_into_i64_field ok

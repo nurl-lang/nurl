@@ -1,0 +1,25 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- A frame round-trips ---
+settings_ack_wire=T
+ping_roundtrip=T
+data_wire=T
+data_16k_length_encoding=T
+oversize_err=H2FrameOversized
+--- B HPACK vectors ---
+c1_1_match=T
+c1_2_match=T
+c1_2_decode=T
+c1_3_match=T
+static_2=:method
+static_2_value=GET
+static_8_value=200
+static_28=content-length
+static_61=www-authenticate
+roundtrip_blob_len=38
+roundtrip_ok=T
+--- C HPACK Huffman ---
+c4_1_indexed=T
+huffman_www_example=www.example.com

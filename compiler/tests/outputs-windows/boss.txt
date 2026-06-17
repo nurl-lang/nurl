@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+JSON type system test...
+null  → null  truthy: no
+true  → true  truthy: yes
+42    → 42  truthy: yes
+hello → hello  truthy: yes
+false → false  truthy: no
+0     → 0  truthy: no

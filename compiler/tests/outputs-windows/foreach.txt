@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+For-each test...
+Sum: 39
+Max: 9
+Sum of squares: 249
+Words: hello world from nurl 

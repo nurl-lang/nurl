@@ -137,8 +137,23 @@ copy /Y build\nurlc_self2.exe build\nurlc.exe >nul
 copy /Y build\nurlc.exe nurlc.exe >nul
 
 REM ── Test suite ───────────────────────────────────────────────
+REM Per-test golden runner, ported from run_tests.sh, with Windows
+REM goldens in compiler\tests\outputs-windows\ and parallel execution.
+REM Requires PowerShell 7+ (pwsh) for ForEach-Object -Parallel; the
+REM legacy run_tests.bat (monolithic correct.txt) is kept only as a
+REM Windows-PowerShell 5.1 fallback.
+set "PWSH=pwsh"
+where pwsh >nul 2>&1
+if errorlevel 1 (
+    echo BUILD SUCCESS, but PowerShell 7+ ^(pwsh^) not found - skipping tests.
+    echo Install pwsh and run: pwsh compiler\tests\run_tests.ps1
+    del "%TESTOUT%" 2>nul
+    call :cleanup
+    popd >nul
+    exit /b 0
+)
 set "TESTOUT=%TEMP%\nurl_testout_%RANDOM%%RANDOM%.log"
-call "%SCRIPT_DIR%\compiler\tests\run_tests.bat" > "%TESTOUT%" 2>&1
+"%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%\compiler\tests\run_tests.ps1" > "%TESTOUT%" 2>&1
 if errorlevel 1 goto :tests_failed
 
 echo BUILD SUCCESS ^& TESTS PASSED

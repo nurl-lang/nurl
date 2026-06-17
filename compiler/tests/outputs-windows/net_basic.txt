@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+net_err_name(NetBind)=NetBind
+net_err_name(NetAddrInUse)=NetAddrInUse
+net_err_name(NetAccept)=NetAccept
+net_err_name(NetRead)=NetRead
+net_err_name(NetWrite)=NetWrite
+net_err_name(NetClosed)=NetClosed
+net_err_name(NetTimeout)=NetTimeout
+net_err_name(NetOther)=NetOther
+listen_port_0=NetBind
+listen_bad_host=NetBind

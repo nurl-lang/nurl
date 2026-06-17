@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+sideeffect_cond: bodies=4 evals=5
+pure_cond: sum=10
+complement_stmt: ok

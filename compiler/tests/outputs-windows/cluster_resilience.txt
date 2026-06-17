@@ -1,0 +1,23 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+backoff:
+100
+200
+400
+800
+1000
+allow fresh: true
+open after 1: false
+open after 2: true
+allow open: false
+fails: 2
+allow recovered: true
+open recovered: false
+cb2 open: true
+cb2 halfopen allow: true
+ClCircuitOpen
+net retryable: true
+badresp retryable: false
+circuit retryable: false

@@ -1,0 +1,22 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+NURL showcase v1
+
+evaluated
+
+101
+102
+103
+104
+105
+42
+T
+answer
+(got None as expected)
+
+11
+bye from run_demo
+
+3628800

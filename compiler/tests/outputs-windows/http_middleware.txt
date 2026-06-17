@@ -1,0 +1,51 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+── metrics initial ──
+  requests_total=0
+  in_flight=0
+  bytes_out_total=0
+  errors_total=0
+# HELP nurl_http_requests_total Total HTTP requests dispatched
+# TYPE nurl_http_requests_total counter
+nurl_http_requests_total 0
+# HELP nurl_http_in_flight Currently in-flight HTTP requests
+# TYPE nurl_http_in_flight gauge
+nurl_http_in_flight 0
+# HELP nurl_http_bytes_out_total Total bytes written to response bodies
+# TYPE nurl_http_bytes_out_total counter
+nurl_http_bytes_out_total 0
+# HELP nurl_http_latency_ms_total Cumulative dispatcher latency in ms
+# TYPE nurl_http_latency_ms_total counter
+nurl_http_latency_ms_total 0
+# HELP nurl_http_errors_total Total responses with status >= 500
+# TYPE nurl_http_errors_total counter
+nurl_http_errors_total 0
+# HELP nurl_http_responses_class Total responses by status class
+# TYPE nurl_http_responses_class counter
+nurl_http_responses_class{class="1xx"} 0
+nurl_http_responses_class{class="2xx"} 0
+nurl_http_responses_class{class="3xx"} 0
+nurl_http_responses_class{class="4xx"} 0
+nurl_http_responses_class{class="5xx"} 0
+── metrics dispatch ──
+  a.status=200
+  c.status=404
+  d.status=500
+  requests_total=4
+  in_flight=0
+  errors_total=1
+  bytes_out_total=64
+  latency_ms_total=0
+── metrics_handler ──
+  status=200
+  content-type=text/plain; version=0.0.4; charset=utf-8
+  body-bytes=967
+── access_log ──
+  a.status=200
+  a.body=16
+  b.status=201
+  m.requests_total=1
+[req] GET /200 → 200 16B 0ms
+[req] POST /201 → 201 16B 0ms

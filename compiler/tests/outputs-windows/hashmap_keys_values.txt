@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+klen=4 vlen=4
+keys=1 2 3 4 
+vals=100 200 300 400 
+after_remove keys=1 3 4 
+empty_keys_len=0 empty_vals_len=0
+done

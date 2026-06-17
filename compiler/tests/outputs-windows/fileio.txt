@@ -1,0 +1,27 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+File I/O test...
+wrote 3 lines
+read back:
+line one
+
+line two
+
+line three
+
+after append:
+line one
+
+line two
+
+line three
+
+line four
+
+exists test_output.txt: yes
+exists no_such_file.txt: no
+size: 43 bytes
+after delete exists: no
+done

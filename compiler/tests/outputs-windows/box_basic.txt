@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+b1 get=42
+b1 after set=100
+b1 replace old=100 new=7
+b1 via ptr=999
+b2 clone=999
+b1=-1 b2=999
+b3 zero=0
+b2 into=999
+done

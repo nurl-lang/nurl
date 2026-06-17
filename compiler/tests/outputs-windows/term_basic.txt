@@ -1,0 +1,16 @@
+COMPILE OK
+LINK FAIL
+warning: overriding the module target triple with x86_64-pc-windows-msvc19.44.35222 [-Woverride-module]
+1 warning generated.
+lld-link: error: undefined symbol: tcgetattr
+>>> referenced by term_basic.o:(term_raw_enable)
+
+lld-link: error: undefined symbol: cfmakeraw
+>>> referenced by term_basic.o:(term_raw_enable)
+
+lld-link: error: undefined symbol: tcsetattr
+>>> referenced by term_basic.o:(term_raw_enable)
+>>> referenced by term_basic.o:(term_raw_disable)
+>>> referenced by term_basic.o:(__term_edit)
+>>> referenced 2 more times
+clang: error: linker command failed with exit code 1 (use -v to see invocation)

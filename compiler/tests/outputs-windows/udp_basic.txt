@@ -1,0 +1,22 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+server_bind_local_nonempty=T
+server_port_positive=T
+client_port_positive=T
+send_ping_bytes=4
+srv_recv_payload=ping
+srv_peer_nonempty=T
+srv_peer_port_positive=T
+send_pong_bytes=4
+cli_recv_payload=pong
+zero_send_bytes=0
+zero_recv_bytes=0
+set_broadcast=OK
+set_mttl_4=OK
+set_mloop_off=OK
+connect_ok=T
+conn_send_bytes=2
+conn_srv_payload=hi
+wildcard_local_nonempty=T

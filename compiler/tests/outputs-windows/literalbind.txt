@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+Payload value test...
+Click: 42
+KeyPress: enter
+Close: closed

@@ -1,0 +1,76 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+route_count=7
+── static_root ──
+  status=200
+  body=root
+
+── static_about ──
+  status=200
+  body=about us
+
+── method_post_users ──
+  status=201
+  body=user created
+
+── param_user ──
+  status=200
+  body=user id=42
+
+── param_user_alpha ──
+  status=200
+  body=user id=alice
+
+── param_two ──
+  status=200
+  body=repo=octocat/hello-world
+
+── wildcard_one ──
+  status=200
+  body=static path=css/main.css
+
+── wildcard_deep ──
+  status=200
+  body=static path=a/b/c/d.png
+
+── any_method_get ──
+  status=200
+  body=method=GET
+
+── any_method_delete ──
+  status=200
+  body=method=DELETE
+
+── not_found ──
+  status=404
+  body=not found
+
+── method_mismatch ──
+  status=404
+  body=not found
+
+── trailing_slash ──
+  status=404
+  body=not found
+
+── param_empty_seg ──
+  status=404
+  body=not found
+
+── params_get ──
+  count=2
+  name=alice
+  missing=<absent>
+── middleware (log + cors) ──
+  GET /ping status=200
+  GET /ping body=pong
+
+  CORS=*
+  OPTIONS /ping status=204
+  Allow-Methods=GET, POST, PUT, PATCH, DELETE, OPTIONS
+[req] GET /ping
+[req] GET /ping → 200
+[req] OPTIONS /ping
+[req] OPTIONS /ping → 204

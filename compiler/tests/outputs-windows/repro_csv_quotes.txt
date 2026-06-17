@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+Row 1: [name] [note] 
+Row 2: [alice] [hello
+world] 
+Row 3: [bob] [hi] 
+Total rows: 3

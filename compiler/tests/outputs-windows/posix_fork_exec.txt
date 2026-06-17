@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+O_NONBLOCK>0=F
+POLLIN==1=F
+unknown==-1=T
+exited=F exit_code=-1

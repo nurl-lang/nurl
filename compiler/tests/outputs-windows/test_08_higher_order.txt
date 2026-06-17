@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 24
+OUTPUT
+== Higher-Order Functions Test ==
+Data:            [ 1 2 3 4 5 ]
+Mapped (x*2):    [ 2 4 6 8 10 ]
+Filtered (x>5):  [ 6 8 10 ]
+Folded (sum):    24

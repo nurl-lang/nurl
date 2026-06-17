@@ -1,0 +1,15 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+auth: ClaudeAuth
+ClaudeAuth
+ClaudeHttpConnect
+ClaudeHttpTimeout
+ClaudeHttpTls
+ClaudeHttpDns
+ClaudeHttpInvalidUrl
+ClaudeHttpOther
+ClaudeJson
+ClaudeApi
+ClaudeShape

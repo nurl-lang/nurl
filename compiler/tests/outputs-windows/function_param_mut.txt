@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+inside inc: n=1
+inside inc: n=1
+inside inc: n=1
+caller after inc x3: n=0
+caller after inc_returning x2: n=2

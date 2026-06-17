@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+== Fat Pointer Strings Test ==
+hello
+NURL!
+char1 ('h'): 104
+char2 ('!'): 33
+char3 (OOB): -1
+CHECKSUM: 146

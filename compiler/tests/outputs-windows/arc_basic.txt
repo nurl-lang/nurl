@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+count=1 value=333
+after 3 clones count=4
+a=99 a4=99
+via ptr a=-7 a3=-7
+after 3 frees count=1
+done

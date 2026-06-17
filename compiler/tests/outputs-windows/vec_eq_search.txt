@@ -1,0 +1,15 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+contains_20=T
+contains_99=F
+index_20=1
+index_99_none=YES
+eq_same=T
+eq_diff=F
+eq_lendiff=F
+eq_empty=T
+str_contains_banana=T
+str_index_cherry=2
+done

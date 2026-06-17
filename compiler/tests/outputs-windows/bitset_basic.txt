@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+nbits=130 words=3
+empty_none=T any=F
+count=4
+t0=T t63=T t64=T t129=T t1=F t200=F
+set_idx=0 5 129 
+full_all=T full_count=70
+after_clear_all=F count=69
+and=2 xor=2 or=4
+xor_bits=1001
+orig_t9=F clone_t4=T

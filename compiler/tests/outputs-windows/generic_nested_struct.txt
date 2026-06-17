@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+i_count=1
+s_count=1
+wi_len=3
+ws_len=2
+done

@@ -1,0 +1,43 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+── parse_form_urlencoded ──
+  empty     n=0
+  single    n=1
+    [name]=[alice]
+  multi     n=3
+    [a]=[1]
+    [b]=[2]
+    [c]=[3]
+  bare      n=2
+    [foo]=[]
+    [bar]=[1]
+  plus      n=2
+    [q]=[hello world]
+    [lang]=[fi FI]
+  pct       n=2
+    [msg]=[a b&c]
+    [uä]=[v]
+  empty_v   n=2
+    [k]=[]
+    [j]=[v]
+  empty_k   n=2
+    []=[v]
+    [k]=[2]
+  multi_eq  n=2
+    [expr]=[a=b=c]
+    [z]=[1]
+  trailing  n=2
+    [a]=[1]
+    [b]=[2]
+── request_form_pairs ──
+  match     n=2
+    [name]=[alice]
+    [age]=[30]
+  json      = None
+  case      n=1
+    [mixed]=[case]
+  charset   n=1
+    [q]=[foo]
+  missing  = None

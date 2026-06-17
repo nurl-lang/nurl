@@ -1,0 +1,104 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+── post_initialize ──
+  status=200
+  ct=application/json; charset=utf-8
+  cors=*
+  body_len=150
+  body={"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"nurl-mcp-test","version":"0.1.0"}}}
+── post_notification ──
+  status=202
+  ct=<absent>
+  cors=*
+  body_len=0
+  body=<empty>
+── post_ping ──
+  status=200
+  ct=application/json; charset=utf-8
+  cors=*
+  body_len=36
+  body={"jsonrpc":"2.0","id":2,"result":{}}
+── post_tools_list ──
+  status=200
+  ct=application/json; charset=utf-8
+  cors=*
+  body_len=190
+  body={"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"echo","description":"Echo back the input.","inputSchema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}]}}
+── post_tools_call_echo ──
+  status=200
+  ct=application/json; charset=utf-8
+  cors=*
+  body_len=91
+  body={"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"hi"}],"isError":false}}
+── post_unknown_method ──
+  status=200
+  ct=application/json; charset=utf-8
+  cors=*
+  body_len=75
+  body={"jsonrpc":"2.0","id":5,"error":{"code":-32601,"message":"unknown method"}}
+── post_malformed_json ──
+  status=200
+  ct=application/json; charset=utf-8
+  cors=*
+  body_len=94
+  body={"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"request body is not valid JSON"}}
+── post_empty_body ──
+  status=200
+  ct=application/json; charset=utf-8
+  cors=*
+  body_len=82
+  body={"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"empty request body"}}
+── get_endpoint ──
+  status=200
+  ct=text/event-stream
+  cors=*
+  body_len=69
+  body=event: ready
+data: {"server":"nurl-mcp","streaming":"single-event"}
+
+
+── delete_endpoint ──
+  status=204
+  ct=<absent>
+  cors=*
+  body_len=0
+  body=<empty>
+── options_preflight ──
+  status=204
+  ct=<absent>
+  cors=*
+  body_len=0
+  body=<empty>
+── put_endpoint ──
+  status=405
+  ct=text/plain; charset=utf-8
+  cors=*
+  body_len=19
+  body=Method Not Allowed
+
+── batch_mixed ──
+  status=200
+  ct=application/json; charset=utf-8
+  cors=*
+  body_len=116
+  body=[{"jsonrpc":"2.0","id":10,"result":{}},{"jsonrpc":"2.0","id":11,"error":{"code":-32601,"message":"unknown method"}}]
+── batch_all_notifications ──
+  status=202
+  ct=<absent>
+  cors=*
+  body_len=0
+  body=<empty>
+── batch_empty ──
+  status=200
+  ct=application/json; charset=utf-8
+  cors=*
+  body_len=75
+  body={"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"empty batch"}}
+── session_echo_post ──
+  echoed=sess-abc-123
+── session_echo_get ──
+  echoed=sess-xyz-789
+── session_absent ──
+  echoed=<absent>

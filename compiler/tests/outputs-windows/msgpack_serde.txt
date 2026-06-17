@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+dec int: ok
+dec float: ok
+dec bool: ok
+dec str: ok
+dec mismatch: ok
+dec error: ok

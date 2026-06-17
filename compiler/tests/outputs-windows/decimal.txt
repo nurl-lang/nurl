@@ -1,0 +1,28 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+int: 42
+neg: -12.340
+lt1: 0.5
+negfrac: -0.001
+trailing_dot: 7
+bad: PARSE_ERR
+empty: PARSE_ERR
+garbage: PARSE_ERR
+0.1+0.2=0.3 ==0.3? T
+12.5+0.025=12.525
+12.5-0.025=12.475
+12.5*0.025=0.3125
+round 2.345→2.34
+round 2.355→2.36
+round 2.346→2.35
+round -2.345→-2.34
+round 0.125→0.12
+1/3 @4=0.3333
+10/8 @2=1.25
+1/0=DivZero
+-7/2 @1=-3.5
+normalize 1.2500→1.25
+cmp 1.5 1.50=0 cmp 1.5 1.49=1
+0.10*3 (repeated add)=0.30

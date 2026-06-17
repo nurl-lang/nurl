@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+tf_len=5
+after_typed=3
+tf_col_after=-1
+after_str=1
+tag0=d

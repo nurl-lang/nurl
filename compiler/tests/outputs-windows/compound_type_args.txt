@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+len=3
+alpha=1
+beta=2
+gamma=3
+bag_len=1

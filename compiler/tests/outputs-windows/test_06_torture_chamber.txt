@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 21
+OUTPUT
+== Torture chamber ==
+[1] slice-of-closures ops.length=2
+[2] mask=-1 result-after-match=0
+[3] st.pos=0 st.tokens.length=2
+[4] loop_cnt start=7
+[final] result=21

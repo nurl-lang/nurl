@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- NURL v0.3: Slice & Dynamic Array Test ---
+Token-optimoitu (4 tokenia): 150
+Struct-versio (8 tokenia):   150
+Molemmat toimivat - valitse tarpeesi mukaan!
+Dynaaminen muisti vapautettu.

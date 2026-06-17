@@ -1,0 +1,4 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_ret_escape_sink.nu:19: error: passing a value that references a stack binding by pointer to 'thread_spawn' - it escapes the current stack frame and dangles (move it to a heap-backed handle)
+error: compilation aborted - 1 borrow-checker violations (re-run with --no-borrowck to bypass)

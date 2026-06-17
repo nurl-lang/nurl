@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+pt: x=3 y=4
+pt-neg: err
+quad: 7 11 13 17
+tagged: hello count=42

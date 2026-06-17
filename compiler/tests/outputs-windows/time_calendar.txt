@@ -1,0 +1,38 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+year=2023
+month=11
+day=14
+hour=22
+min=13
+sec=20
+wday=2
+roundtrip=1700000000
+iso=2023-11-14T22:13:20Z
+leap2024=1
+leap2023=0
+leap2000=1
+leap1900=0
+feb2024=29
+feb2023=28
+apr2026=30
+make_ok=2026-05-21T14:39:00Z
+feb29_2023=rejected
+month13=rejected
+yday_2024_12_31=366
+yday_2026_01_01=1
+plus1d_unix=1700086400
+plus90s_unix=1700000090
+cmp_lt=-1
+cmp_gt=1
+cmp_eq=0
+before=1
+after=0
+diff=86400
+fmt=2023/11/14 22:13:20 Tue Nov yday=318 %done
+fmt_full=Tuesday November 14, 2023
+parsed_unix=1700000000
+badparse=rejected
+done

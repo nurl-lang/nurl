@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+count=1 value=1000 unique=T
+after 2 clones count=3 unique=F
+r=4242 r2=4242 r3=4242
+via ptr r=-1 r2=-1
+replace old=-1 new=7
+after 2 frees count=1 value=7
+done

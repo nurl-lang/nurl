@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+pt: x=3 y=4
+pt-neg: none
+quad: 7 11 13 17
+tagged: hello count=42
+vget[1]: second/2
+vget[99]: none

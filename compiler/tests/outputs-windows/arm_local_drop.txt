@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+arm string
+x y z
+loop 0
+loop 1
+done

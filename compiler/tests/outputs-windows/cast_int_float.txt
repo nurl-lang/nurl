@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+u32_to_f ok
+u8_to_f ok
+u16_to_f ok
+i32_to_f ok
+i8_to_f ok
+u16_to_f32 ok
+i16_to_f32 ok
+u8_max_to_f ok
+floatrt_div_sdiv ok

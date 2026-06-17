@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+const_u8_zext ok
+const_u16_zext ok
+const_u32_zext ok
+const_i8_sext ok
+tern_u8_zext ok
+tern_u16_zext ok
+tern_i8_sext ok

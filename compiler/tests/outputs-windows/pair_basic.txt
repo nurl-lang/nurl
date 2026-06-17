@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+pair_ii=3,4
+pair_si=key,42
+eq_p1_p3=T
+eq_p1_p4=F
+owned_first=hello,7
+both_owned=name=nurl
+done

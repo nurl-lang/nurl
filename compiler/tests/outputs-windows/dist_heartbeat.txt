@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+heartbeat is one gossip fact: YES
+heartbeat = self alive @ inc 0: YES
+heartbeat carries refuted incarnation 6: YES

@@ -1,0 +1,15 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+hello world
+foobar
+sw1
+sw0
+ew1
+ew0
+ct1
+ct0
+world
+hello
+ld

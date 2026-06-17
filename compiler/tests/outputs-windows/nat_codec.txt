@@ -1,0 +1,20 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+ping len: 13
+
+ping is punch: YES
+pong is punch: YES
+parsed kind=ping: YES
+token preserved: YES
+junk rejected: YES
+same endpoint → independent: YES
+independent is punchable: YES
+differing port → symmetric: YES
+symmetric NOT punchable: YES
+missing → unknown: YES
+v4 host parsed: YES
+v4 family: YES
+v6 host parsed: YES
+v6 family: YES

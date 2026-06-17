@@ -1,0 +1,18 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+send 10: ok
+send 20: ok
+send 30: full
+len: 2
+recv: ok v=10
+recv: ok v=20
+recv: empty
+close: ok
+recv after close: closed
+send after close: closed
+DSendOk
+DSendFull
+DSendClosed
+DSendErr

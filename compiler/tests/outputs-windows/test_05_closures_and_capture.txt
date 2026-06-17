@@ -1,0 +1,53 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+greet=
+hello
+
+
+captured x=
+10
+
+
+add5(3)=
+8
+
+
+add5(7)=
+12
+
+
+add10(3)=
+13
+
+
+add10(7)=
+17
+
+
+add5 still works: add5(100)=
+105
+
+
+stored closure: 
+49
+
+
+mapped: 
+11
+ 
+12
+ 
+13
+ 
+14
+ 
+15
+ 
+
+
+global counter after: 
+3
+
+

@@ -1,0 +1,30 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+absolute /a/b: T
+absolute foo/bar: F
+absolute C:/x: T
+absolute foo: F
+basename /a/b/c.txt: c.txt
+basename /a/b/: 
+basename foo: foo
+basename .bashrc: .bashrc
+dirname /a/b/c.txt: /a/b
+dirname /a/b/: /a/b
+dirname foo: 
+dirname /foo: /
+ext file.tar.gz: gz
+ext .bashrc: 
+ext noext: 
+ext file.: 
+join a b: a/b
+join a/ /b: /b
+join . b: ./b
+join a /abs: /abs
+normalize a/./b: a/b
+normalize a/b/../c: a/c
+normalize /a/../../b: /b
+normalize //a//b///: /a/b
+normalize ./foo/../bar: bar
+normalize C:/a/./b/../c: C:/a/c

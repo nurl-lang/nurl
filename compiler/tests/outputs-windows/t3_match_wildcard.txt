@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- 4.1 Test 3: Wildcard ---
+Red:   red
+Green: other
+Blue:  other
+PASS

@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- 4.3 Test 5: Bitwise ops ---
+255 & 15 = 15
+240 | 15 = 255
+12 & 10 = 8
+12 | 10 = 14
+0 & 999 = 0
+PASS

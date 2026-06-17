@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+args_count >= 1: T
+missing var: not set
+set/get: hello world
+var_or default: fallback
+var_or set: hello world
+unset/get: not set
+chdir bad: not found

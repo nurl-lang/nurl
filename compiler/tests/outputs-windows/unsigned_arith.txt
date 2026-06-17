@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+udiv=3000000
+urem=0
+lshr=45776
+ult(3B,4B)=T
+slt(=as-i32, 0)=T
+u16 udiv=500
+u64 udiv=1714285714
+i16 and=0
+i16 or=255
+nested half=1353016352

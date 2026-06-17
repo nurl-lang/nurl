@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+42
+true
+3.5
+"abc"
+42
+true
+f-ok
+abc
