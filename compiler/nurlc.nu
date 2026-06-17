@@ -321,7 +321,7 @@
     { ( nurl_lex_advance lex )  // consume '@'
         : s ret ( parse_type lex )
         : ~ s params ``
-        ~ != ( nurl_lex_type lex ) TT_RPAREN {
+        ~ & != ( nurl_lex_type lex ) TT_RPAREN != ( nurl_lex_type lex ) TT_EOF {
             : s p ( parse_type lex )
             = params ? == 0 ( nurl_str_len params )
             p
@@ -346,7 +346,11 @@
             ( nurl_lex_advance lex )
             : ~ s mangle_sfx ``
             : ~ b has_tparam_arg F
-            ~ != ( nurl_lex_type lex ) TT_RPAREN {
+            // EOF guard: an unterminated type application `( Name a b …` (which
+            // can be reached as an enum payload type, e.g. a stray `( foo` with
+            // no `)`) otherwise spins here on a no-op `nurl_lex_advance` at EOF.
+            // The trailing `expect TT_RPAREN` reports a clean error.
+            ~ & != ( nurl_lex_type lex ) TT_RPAREN != ( nurl_lex_type lex ) TT_EOF {
                 : ~ s ta_lty ``
                 : i ta_tt ( nurl_lex_type lex )
                 // A bare anonymous slice (`[ T`) is the one type shape the
@@ -14165,7 +14169,15 @@
     : ~ i tag 0
     : ~ i max_payloads 0
     : ~ s variants_str ``
-    ~ != ( nurl_lex_type lex ) TT_RBRACE {
+    // Stop at '}' OR end-of-input. Without the EOF guard an unterminated enum
+    // body (`: | E { A`, or a stray `//` comment eating the closing brace on a
+    // single-line source) spun this loop forever: `nurl_lex_advance` is a
+    // no-op at EOF, so the loop kept minting empty variants and never
+    // progressed — nurlc hung instead of erroring. The trailing
+    // `expect TT_RBRACE` then reports a clean "expected '}' but found end of
+    // input" at the EOF. (Struct / match / block bodies already terminate
+    // because their inner sub-parsers hit EOF first.)
+    ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
         : s vname ( nurl_lex_val lex )
         ( nurl_lex_advance lex )
         = variants_str ? == 0 ( nurl_str_len variants_str )
@@ -15082,7 +15094,10 @@
     // when a consumer impls it / calls its methods.
     ( lint_note_def tname )
     ( expect lex TT_LBRACE )
-    ~ != ( nurl_lex_type lex ) TT_RBRACE {
+    // EOF guards on both loops: an unterminated trait body (`% T {`, or a
+    // method header with no following `{`/`@`/`}` at EOF) otherwise spins on
+    // no-op `nurl_lex_advance` forever — nurlc hung instead of erroring.
+    ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
         ? == ( nurl_lex_type lex ) TT_AT
         { ( nurl_lex_advance lex )  // skip '@'
             ? ( is_ident_tok ( nurl_lex_type lex ) )
@@ -15092,9 +15107,10 @@
                 : i sig_start ( nurl_lex_cur_start lex )
                 // Skip params / → / ret_ty until we hit '{' (body), next '@',
                 // or '}' (end of trait).
-                ~ & & != ( nurl_lex_type lex ) TT_LBRACE
+                ~ & & & != ( nurl_lex_type lex ) TT_LBRACE
                 != ( nurl_lex_type lex ) TT_AT
-                != ( nurl_lex_type lex ) TT_RBRACE {
+                != ( nurl_lex_type lex ) TT_RBRACE
+                != ( nurl_lex_type lex ) TT_EOF {
                     ( nurl_lex_advance lex )
                 }
                 ? == ( nurl_lex_type lex ) TT_LBRACE
@@ -15118,7 +15134,7 @@
         }
         { ( nurl_lex_advance lex ) }
     }
-    ( nurl_lex_advance lex )  // consume '}'
+    ( expect lex TT_RBRACE )  // consume '}' — clean error if unterminated at EOF
 }
 
 // trait_default_ret: given a default method's substituted source
@@ -15194,8 +15210,8 @@
         ? | ( is_ident_tok tpt ) == tpt TT_BOOL
         { = tparam ( nurl_lex_val lex ) }
         {}
-        ~ != ( nurl_lex_type lex ) TT_RBRACK { ( nurl_lex_advance lex ) }
-        ( nurl_lex_advance lex )  // ']'
+        ~ & != ( nurl_lex_type lex ) TT_RBRACK != ( nurl_lex_type lex ) TT_EOF { ( nurl_lex_advance lex ) }
+        ( expect lex TT_RBRACK )  // ']'
     }
     {}
     // Disambiguate: '{' → trait_decl, else → impl_decl
@@ -15213,7 +15229,7 @@
         ( nurl_sym_def g_trait_syms ( nurl_str_cat3 tname `##` impl_llvm ) `1` )
         ( expect lex TT_LBRACE )
         : ~ s provided ``
-        ~ != ( nurl_lex_type lex ) TT_RBRACE {
+        ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
             ? == ( nurl_lex_type lex ) TT_AT
             { ( nurl_lex_advance lex )  // skip '@'
                 ? ( is_ident_tok ( nurl_lex_type lex ) )
@@ -15246,7 +15262,7 @@
             }
             { ( nurl_lex_advance lex ) }
         }
-        ( nurl_lex_advance lex )  // consume '}'
+        ( expect lex TT_RBRACE )  // consume '}' — clean error if unterminated at EOF
         // After the impl's explicit methods, synthesize dispatch entries for
         // any of the trait's defaults that this impl did not override.
         ? != 0 ( nurl_str_len impl_nurl )
@@ -15298,8 +15314,8 @@
     // Skip optional type params [T] (already captured during scan)
     ? == ( nurl_lex_type lex ) TT_LBRACK
     { ( nurl_lex_advance lex )
-        ~ != ( nurl_lex_type lex ) TT_RBRACK { ( nurl_lex_advance lex ) }
-        ( nurl_lex_advance lex )  // ']'
+        ~ & != ( nurl_lex_type lex ) TT_RBRACK != ( nurl_lex_type lex ) TT_EOF { ( nurl_lex_advance lex ) }
+        ( expect lex TT_RBRACK )  // ']'
     }
     {}
     // Disambiguate: '{' → trait_decl (no IR), else → impl_decl
@@ -15311,7 +15327,7 @@
         : s impl_mangle ( mangle_type impl_llvm )
         ( expect lex TT_LBRACE )
         : ~ s provided ``
-        ~ != ( nurl_lex_type lex ) TT_RBRACE {
+        ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
             ? == ( nurl_lex_type lex ) TT_AT
             { ( nurl_lex_advance lex )  // skip '@'
                 ? ( is_ident_tok ( nurl_lex_type lex ) )
@@ -15355,7 +15371,7 @@
             }
             { ( nurl_lex_advance lex ) }
         }
-        ( nurl_lex_advance lex )  // consume '}'
+        ( expect lex TT_RBRACE )  // consume '}' — clean error if unterminated at EOF
         // Synthesize trait-default copies for any method the impl omitted.
         ? != 0 ( nurl_str_len impl_nurl )
         { ( emit_missing_defaults tname impl_nurl impl_mangle provided syms cg ) }
