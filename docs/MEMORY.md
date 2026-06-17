@@ -144,8 +144,10 @@ diagnostics and never lowers anything, a borrow-clean program produces
 the exact same IR either way — the bootstrap fixed point is
 unaffected.
 
-All five rules emit `error:`. Use `--no-borrowck` for the escape
-hatch if a corner case slips through.
+All eight rules below (§2.1–§2.8) emit `error:`. Use `--no-borrowck`
+for the escape hatch if a corner case slips through, and
+`--strict-borrowck` (off by default) to add two opt-in checks on top —
+see §2.9.
 
 ### 2.1 Move checking — use-after-move
 
@@ -375,6 +377,28 @@ has depth 0. Boundaries that remain: a parameter returned through a
 closure *capture* (`^ \ → … cb …`) rather than a struct field, and
 forward / generic calls, are not yet summarised.
 
+### 2.9 `--strict-borrowck` — two opt-in checks
+
+The eight rules above run by default. `--strict-borrowck` (off by
+default) adds two further checks, both diagnostic-only and both emitting
+`error:` like the rest:
+
+1. **Aliased mutation through a field argument.** §2.4 flags an `inout`
+   binding aliased by another *bare-identifier* argument of the same
+   call. Strict mode generalises this to a `. obj field` argument — a
+   nested field read of the same object passed alongside its `inout`
+   borrow is reported too.
+2. **`# *T` raw-pointer escape.** A raw pointer taken (`# *T …`) from an
+   owned binding whose pointer may outlive that binding's drop is
+   reported — a narrow check on the otherwise-untracked `*T` surface
+   (§3).
+
+It is **off by default** because the extension has a meaningful
+false-positive rate against existing stdlib code; it is a tightening
+knob for auditing a specific module, not part of the standard contract.
+The default-on eight rules remain the guarantee everything else in this
+document refers to.
+
 ## 3. What is NOT checked
 
 The borrow checker targets the bug classes that ordinary NURL code
@@ -382,7 +406,9 @@ hits in practice. It deliberately does **not** cover:
 
 - **`*T` raw pointers.** `*T` is the FFI ABI escape hatch — NURL's
   `unsafe`. A `*T` taken of a local, stored, returned, or captured
-  is *not* checked. Treat `*T` lifetimes as your responsibility.
+  is *not* checked by default. Treat `*T` lifetimes as your
+  responsibility. (`--strict-borrowck` adds one narrow exception — a
+  `# *T` escape from an owned binding, §2.9.)
 - **Aliased mutation beyond a single call.** The exclusive-access
   check (§2.4) covers a binding aliased among one call's arguments.
   A binding read through a *nested* sub-expression argument, and

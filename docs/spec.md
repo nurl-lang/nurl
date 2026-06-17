@@ -155,7 +155,10 @@ declaration is one of:
 | `('pub')? % Name [T]? { ... }` | trait |
 | `('pub')? % Trait [T]? type { methods }` | impl |
 
-There is exactly one entry point: a `@ main → i { ... }` returning `i`.
+There is exactly one entry point, `main`. It returns either `i` — the
+value becomes the process exit code, truncated to 32 bits — or `v`, in
+which case the process exits `0`. (The reference compiler's own `main`
+returns `v`.)
 
 ### 3.2 `$`-imports
 
@@ -794,10 +797,14 @@ signal handlers) the raw fn-ptr / env-ptr pair.
 Z type
 ```
 
-Byte size of *type* as an `i64`. Base types fold to a compile-time
-constant (`0` for `v`, `8` for `i`/`u`/`f`/`s`/any pointer, `1` for
-`b`). Named or aggregate types use a `getelementptr null` trick so LLVM
-computes the size at emission time.
+Byte size of *type* as an `i64`. The fold is keyed on the *LLVM* type:
+a type lowering to `void` (`0`), `i64` (`8` — `i` and `u64`), `double`
+(`8` — `f`), `i1` (`1` — `b`), or any pointer (`8` — `s`, `*T`) folds to
+a compile-time constant. Every other type uses a `getelementptr null`
+trick so LLVM computes the size at emission time, yielding the natural
+width: `u` 1, `i8` 1, `i16` / `u16` 2, `i32` / `u32` 4, `f32` 4, and any
+named or aggregate type. **`Z u` is therefore 1, not 8** — `u` is a
+single byte.
 
 ### 6.9 Aggregate / slice literals
 
@@ -983,11 +990,13 @@ spawning a thread that holds it).
 ## 9. Borrow checker
 
 The borrow checker is a static analysis pass over the parsed program.
-It is **on by default**; `--no-borrowck` disables it. Diagnostics are
-**hard errors** as of grammar v2.1 (2026-05-25); the compiler exits
-non-zero with a count of violations after walking the whole program.
-The checker is **diagnostic-only** — emitted IR is byte-identical with
-or without `--borrowck`.
+It is **on by default**; `--no-borrowck` disables it, and
+`--strict-borrowck` (off by default) adds two opt-in checks on top
+(see [`docs/MEMORY.md` §2.9](MEMORY.md)). Diagnostics are **hard
+errors** as of grammar v2.1 (2026-05-25); the compiler exits non-zero
+with a count of violations after walking the whole program. The checker
+is **diagnostic-only** — emitted IR is byte-identical whether it runs or
+not.
 
 Eight rules are enforced. The semantic level is summarised here; for
 exact phrasing and the soundness contract see
@@ -1078,10 +1087,13 @@ a *fresh* value is not a passthrough and stays legal.
 
 ### 9.9 What is NOT checked
 
-- `*T` raw pointer lifetimes (the FFI escape hatch).
+- `*T` raw pointer lifetimes (the FFI escape hatch) — except the one
+  narrow `# *T`-escape check `--strict-borrowck` adds (§9 intro).
 - Aliased mutation beyond a single call (longer-range "exclusive
   reference" analysis is not currently implemented), and a binding read
-  through a *nested* sub-expression argument (§6.2).
+  through a *nested* sub-expression argument (§6.2) — though
+  `--strict-borrowck` does flag aliased mutation through a `. obj field`
+  argument.
 - A *pure forward chain* of escaping helpers (§9.7) and a parameter
   returned through a closure *capture* rather than a struct field (§9.8) —
   the residual interprocedural gaps. Both degrade the *diagnostic* only,

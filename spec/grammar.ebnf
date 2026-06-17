@@ -460,10 +460,12 @@ try_expr = '\\' expr ;
 closure_expr = '\\' param* '→' type block ;
 
 (* Z type  — byte size of type as i64
-   Base types fold to a constant (0 for v, 8 for i/u/f/s/any pointer,
-   1 for b). Named/aggregate types use a getelementptr-null trick so
-   LLVM computes the size at emission time.
-   Example:  Z i  →  8    Z Point  →  sizeof(Point) *)
+   The fold is keyed on the LLVM type: void→0, i64→8 (i, u64),
+   double→8 (f), i1→1 (b), any pointer→8 (s, *T) fold to a constant.
+   Every other type (u→1, i8→1, i16/u16→2, i32/u32→4, f32→4, and
+   named/aggregate types) uses a getelementptr-null trick so LLVM
+   computes the size at emission time.
+   Example:  Z i  →  8    Z u  →  1    Z Point  →  sizeof(Point) *)
 sizeof_expr = 'Z' type ;
 
 (* ? cond then else  — ternary conditional

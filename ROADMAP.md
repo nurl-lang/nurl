@@ -30,7 +30,7 @@ What is solid today:
   and `f32`), tail-call optimization, and
   **variadic FFI** (the `printf` family callable directly).
 - **Memory & safety.** Single-owner memory with compiler-inserted auto-drop at
-  scope exit — no GC, no hidden boxing. An **opt-in static borrow checker, on
+  scope exit — no GC, no hidden boxing. A **static borrow checker, on
   by default** (`--no-borrowck` to disable, `--strict-borrowck` to tighten),
   catches use-after-move, alias double-free, escaping closure captures, and
   iterator invalidation as hard errors without changing generated code.
