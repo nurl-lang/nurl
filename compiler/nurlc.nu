@@ -111,6 +111,26 @@
     ( nurl_eprintln ( nurl_diag_caret col ) )
 }
 
+// die_if_void: the void/unit literal — produced ONLY by a bare type keyword
+// `v` used in value position (gen_ident returns the literal value `void`) —
+// has no representable SSA value and must never reach an operator, complement,
+// or logical-not. Such a use used to lower to `add void void, …` /
+// `xor void void, -1`: IR that nurlc emitted with status 0 and only clang
+// later rejected ("void type only allowed for function results"). Reject it at
+// the source so the trap is a NURL diagnostic.
+//
+// The check is on the operand VALUE, not its NURL type: a `v`-returning CALL or
+// a void-valued block yields a real register whose type is `void` but whose
+// value is a valid SSA name — and the consuming instruction takes its type
+// from the other (typed) operand, so that IR is well-formed. Only the bare `v`
+// keyword emits the literal value `void`, which is what breaks. `ctx` names the
+// consuming construct.
+@ die_if_void i lex s val s ctx → v {
+    ? ( seq val `void` )
+    { ( die lex ( nurl_str_cat ctx ` operand is the void/unit value 'v' — a bare type keyword yields no value and cannot be used here` ) ) }
+    {}
+}
+
 // Record where a binding was declared, so a later "cannot assign to
 // immutable …" diagnostic can point the author at the exact line to
 // add `~` to. Keyed off the binding name; declfile carries the source
@@ -329,6 +349,15 @@
             ~ != ( nurl_lex_type lex ) TT_RPAREN {
                 : ~ s ta_lty ``
                 : i ta_tt ( nurl_lex_type lex )
+                // A bare anonymous slice (`[ T`) is the one type shape the
+                // monomorphiser cannot mangle as a generic argument: the
+                // single-token path below would grab the lone `[` and emit a
+                // garbage mangled type that only clang rejects. Reject it here
+                // with the documented cure (see spec.md §7.5 / grammar.ebnf
+                // generic_arg).
+                ? == ta_tt TT_LBRACK
+                { ( die lex `a slice type '[ T' cannot be a generic type argument — wrap it in a named struct (e.g. ': Buf [T] { [ T xs }') and instantiate that` ) }
+                {}
                 // Paren-compound and prefix (`?T` / `??T` / `*T`) args go
                 // through parse_type, which yields their LLVM type
                 // directly; a bare base name takes the single-token path.
@@ -1884,6 +1913,7 @@
 @ gen_unary_not i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s v ( gen_operand lex syms cg )
+    ( die_if_void lex v `logical-not '!'` )
     : s res ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print res )
     ( nurl_print ` = xor i1 ` ) ( nurl_print v ) ( nurl_print `, 1\n` )
@@ -2020,6 +2050,7 @@
     ( nurl_lex_advance lex )
     : s v ( gen_expr lex syms cg )
     : s lt ( nurl_get_last_type )
+    ( die_if_void lex v `complement '~'` )
     : s res ( nurl_cg_reg cg )
     ? ( seq lt `double` )
     { ( nurl_print `  ` ) ( nurl_print res )
@@ -2186,6 +2217,8 @@
     : ~ s rv ( gen_operand lex syms cg )
     : s rt ( nurl_get_last_type )
     : s ru_snap ( nurl_last_unsigned )
+    ( die_if_void lex lv `binary operator's left` )
+    ( die_if_void lex rv `binary operator's right` )
     : s res ( nurl_cg_reg cg )
     : b isf | ( seq lt `double` ) ( seq lt `float` )
     // `^^` (XOR) is integer/bool-only — LLVM has no float `xor`.
@@ -4145,6 +4178,13 @@
         ~ != ( nurl_lex_type lex ) TT_RBRACK {
             : i tt_arg ( nurl_lex_type lex )
             : ~ s ta ``
+            // A bare anonymous slice (`[ T`) cannot be mangled as a call
+            // type-argument (the base path below would capture the lone `[`).
+            // Reject it with the documented cure rather than emitting IR that
+            // only clang rejects. See spec.md §7.5 / grammar.ebnf generic_arg.
+            ? == tt_arg TT_LBRACK
+            { ( die lex `a slice type '[ T' cannot be a generic type argument — wrap it in a named struct (e.g. ': Buf [T] { [ T xs }') and instantiate that` ) }
+            {}
             // Compound named-struct type arg `( Name X Y ... )` is parsed
             // via parse_type → returns "%Name__X__Y...". Strip the leading
             // '%' so the result is a single ident-shaped word that
@@ -8867,6 +8907,22 @@
             ( die lex ( nurl_str_cat3 ( nurl_str_cat `cannot assign to immutable ` kind ) ( nurl_str_cat `: ` name ) where ) )
         }
         {}
+        // Silent-snapshot footgun: assigning to a binding the enclosing
+        // closure captured BY VALUE. The write lands on a fresh per-invocation
+        // local copy — it neither persists across calls (each invocation
+        // re-snapshots the captured value) nor reaches the original binding.
+        // The closure-counter `: ~ i n  ^ \ → i { = n + n 1  ^ n }` returns
+        // 1,1,1 instead of 1,2,3 because of this. By design, scalars (and
+        // single-field handles) capture by value; only a `: ~` MULTI-FIELD
+        // struct captures by reference — and that shared form is a stack
+        // reference that cannot escape its frame. So there is no escaping
+        // mutable-state closure: surface the dead store instead of emitting it
+        // silently. Non-fatal (the read/scratch use within one call is valid).
+        ? != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat name `__captured_byval` ) ) )
+        { ( warn lex ( nurl_str_cat3
+            `assignment to '` name
+            `' is discarded when the closure returns — it was captured by value (a snapshot), so writes do not persist across invocations or reach the captured binding. For shared mutable state use a ': ~' multi-field struct captured by reference (which cannot escape the defining frame); an escaping mutable-state closure is not supported.` ) ) }
+        {}
         // Phase 2B reassignment-drop: if the LHS is an owned i8* binding and
         // the RHS is a fresh allocating call, free the old value before
         // overwriting. We gate on RHS being a fresh owned-call (not an alias
@@ -9844,10 +9900,26 @@
                         {  // Variable element index: extract data ptr, GEP, load
                             : s ptr_ty ( nurl_str_slice ot 2 - - ( nurl_str_len ot ) 7 2 )
                             : s elem_ty ( nurl_str_slice ptr_ty 0 - ( nurl_str_len ptr_ty ) 1 )
-                            // Load the index variable (fname is the variable name)
-                            : s idx_lt ( nurl_sym_get syms fname )
+                            // Resolve the index binding (fname) to a value the
+                            // same way gen_ident does: a local / match-payload /
+                            // loop / inout / capture binding carries a `__ptr`
+                            // (load it); a const or enum variant carries
+                            // `__global` (load `@name`); a by-value function
+                            // PARAMETER carries neither and resolves directly to
+                            // its SSA register `%name`. The previous code assumed
+                            // `<name>__ptr` always existed and, for a parameter
+                            // index, emitted `load i64, i64* ` with an EMPTY
+                            // pointer operand — invalid IR that nurlc accepted
+                            // (rc 0, no diagnostic) and only clang rejected.
+                            : s idx_lt0 ( nurl_sym_get syms fname )
+                            : s idx_lt ? == 0 ( nurl_str_len idx_lt0 ) `i64` idx_lt0
                             : s idx_ptr ( nurl_sym_get syms ( nurl_str_cat fname `__ptr` ) )
-                            : s idx_val ( load_var cg idx_lt idx_ptr )
+                            : s idx_glb ( nurl_sym_get syms ( nurl_str_cat fname `__global` ) )
+                            : s idx_val ? != 0 ( nurl_str_len idx_ptr )
+                                ( load_var cg idx_lt idx_ptr )
+                                ? != 0 ( nurl_str_len idx_glb )
+                                ( load_var cg idx_lt ( nurl_str_cat `@` fname ) )
+                                ( nurl_str_cat `%` fname )
                             // Extract data pointer from slice aggregate
                             : s data_ptr ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print data_ptr )
@@ -11293,7 +11365,15 @@
                 ( nurl_print `* ` ) ( nurl_print cap_ptr ) ( nurl_print `\n` )
                 ( nurl_sym_def body_syms cap_name cap_type )
                 ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__ptr` ) cap_ptr )
-                ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__mutable` ) `1` ) }
+                ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__mutable` ) `1` )
+                // Mark this as a BY-VALUE capture (a snapshot into a fresh
+                // per-invocation local). The body may still read/scratch it,
+                // but an assignment is discarded when the closure returns and
+                // never reaches the captured binding — gen_assign warns on
+                // that silent dead store (the counter-closure footgun). This
+                // is distinct from `__captured_byref` (a shared caller-frame
+                // alloca, whose writes DO persist but which cannot escape).
+                ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__captured_byval` ) `1` ) }
             = caps ( str_skip_word caps )
             = cap_idx + cap_idx 1
         }

@@ -360,9 +360,13 @@ copy:
 ( id [s] `hi` )     // → @id__i8ptr
 ```
 
-Type arguments at call sites are *base identifiers* (type keywords or
-named types), not arbitrary type expressions: `( id [*Point] p )` is
-not yet accepted.
+Type arguments at call sites may be *compound types*, not just base
+identifiers: a base IDENT (type keyword or named type), a pointer / option
+(`*T`, `?T`, `??T`), or a nested generic / closure application
+(`( Pair K V )`, `( @ R P* )`). For example `( id [*Point] p )` and
+`( box [( Pair i s )] x )` are both accepted; each argument's lowered type
+is mangled into the call name. The one shape not accepted as a type argument
+is a bare anonymous slice (`[T`) — wrap it in a named struct.
 
 A type parameter may carry one or more **trait bounds** via `: Trait`,
 written `[A: Ord]`, `[K: Hash V]`, or `[A: Ord: Show]`. A bound is
@@ -953,10 +957,12 @@ after the function name:
 @ id [T] T x → T { ^ x }
 ```
 
-Type arguments at call sites are base identifiers (type keywords or
-named types). Each distinct argument list materialises one mangled
-monomorphic copy. The body is stored as source text at the declaration
-and re-parsed per instantiation.
+Type arguments at call sites may be compound types — a base identifier
+(type keyword or named type), a pointer / option (`*T`, `?T`, `??T`), or a
+nested generic / closure application (`( Pair K V )`, `( @ R P* )`); only a
+bare anonymous slice (`[T`) is excluded. Each distinct argument list
+materialises one mangled monomorphic copy. The body is stored as source
+text at the declaration and re-parsed per instantiation.
 
 Generic functions support `inout` and `sink` parameter conventions —
 since parameter conventions depend only on parameter *position*, not

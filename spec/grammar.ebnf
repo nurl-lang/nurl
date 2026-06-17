@@ -478,13 +478,19 @@ cond_expr = '?' expr expr expr ;
 (* { stmt* }  — block used as expression, yields last value *)
 block_expr = '{' stmt* '}' ;
 
-(* ( fn [IDENT+]? arg* )  — function call; optional [IDENT+] for generic
-   instantiation. The type arguments in a call site are BASE IDENTs (type
-   keywords or named types), not arbitrary type expressions: the compiler
-   monomorphises by mangling on these identifier tokens.
+(* ( fn [generic_arg+]? arg* )  — function call; optional [generic_arg+]
+   for generic instantiation. A type argument is a `generic_arg` (see
+   generic_inst, below): a base IDENT (type keyword or named type), a
+   pointer / option (`* T`, `? T`, `?? T`), or a nested generic / closure
+   application (`( Name … )`, `( @ R P* )`). The compiler monomorphises by
+   mangling each argument's lowered type into the call name. The one shape
+   NOT accepted as a call type-argument is a bare anonymous slice / opt / res
+   literal type (`[ T`); name it via a struct if needed.
    Example:  ( add 3 4 )              ( nurl_print `hello\n` )
    Example:  ( id [i] 42 )            — monomorphise generic id with T=i
    Example:  ( alloc [Point] 16 )     — Point is a struct name
+   Example:  ( id [*Point] p )        — compound (pointer) type argument
+   Example:  ( box [( Pair i s )] x ) — compound (nested generic) argument
 
    A call argument may be NAMED with an `IDENT ':'` label (keyword
    args). Named arguments may appear in any order and follow any leading
@@ -494,7 +500,7 @@ block_expr = '{' stmt* '}' ;
    Example:  ( create_issue key summary issue_type: `Bug` )
    Example:  ( greet greeting: `Hi` name: `Bob` )                       *)
 call_arg  = ( IDENT ':' )? expr ;
-call_expr = '(' IDENT ( '[' IDENT+ ']' )? call_arg* ')' ;
+call_expr = '(' IDENT ( '[' generic_arg+ ']' )? call_arg* ')' ;
 
 (* [ type | expr* ]  — slice literal
    Allocates a heap array, stores values, returns { T*, i64 } slice struct.
@@ -650,17 +656,26 @@ res_type     = '!' type type ;
    holding the function pointer and its environment pointer.
    The function pointer takes an implicit leading i8* env argument. *)
 fn_type      = '(' '@' type type* ')' ;
-(* generic_inst: type application at TYPE position. The args are base
-   identifiers (type keywords or named types), monomorphised by name
-   mangling; arbitrary type expressions like '*T' are not accepted here
-   by the current compiler.
+(* generic_inst: type application at TYPE position. The leading IDENT names
+   a generic struct; each following `generic_arg` is a TYPE, monomorphised by
+   name mangling. Arguments MAY be compound — a nested generic application
+   (`( Vec ( Pair K V ) )`), a pointer (`* T`), an option (`? T` / `?? T`),
+   or a closure / fn type (`( @ R P* )`) — and recurse through `type`. A
+   compound arg is mangled into a single ident-shaped word so nesting
+   composes deterministically. The one type shape the monomorphiser does NOT
+   accept as an argument is a bare anonymous slice (`[ T`); wrap it in a
+   named struct if you need a slice-of-generic.
+
+   `generic_arg` is the shared argument grammar for BOTH the type-position
+   form here AND the function call-site `[ … ]` form (see call_expr).
 
    Applies to both generic FUNCTIONS (call-site type args, e.g.
    `( id [i] 42 )` — see call_expr) AND generic STRUCT types
-   (`( Vec i )`, `( Pair i s )`) used in any type position (param,
-   return, let annotation, aggregate constructor). Each distinct
-   instantiation yields one `%Name__T1[__T2...]` named type. *)
-generic_inst = '(' IDENT IDENT+ ')' ;
+   (`( Vec i )`, `( Pair i s )`, `( Pair ( Box i ) i )`) used in any type
+   position (param, return, let annotation, aggregate constructor). Each
+   distinct instantiation yields one `%Name__T1[__T2...]` named type. *)
+generic_arg  = IDENT | ptr_type | opt_type | generic_inst | fn_type ;
+generic_inst = '(' IDENT generic_arg+ ')' ;
 
 
 (* ── LITERALS ─────────────────────────────────────────────────── *)
