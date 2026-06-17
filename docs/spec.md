@@ -1,6 +1,6 @@
 # NURL Language Reference
 
-**Status:** language specification, grammar v2.1. This document is the
+**Status:** language specification, grammar v2.2. This document is the
 normative reference for the NURL — Neural Unified Representation Language —
 source language as implemented by `compiler/nurlc.nu`.
 
@@ -151,7 +151,7 @@ declaration is one of:
 | `('pub')? @ name [T]? params → type { body }` | function |
 | `('pub')? : Name [T]? { fields }` | struct |
 | `('pub')? : | Name { variants }` | enum |
-| `('pub')? : type IDENT literal` | const / global |
+| `('pub')? : type IDENT value` | const / global |
 | `('pub')? % Name [T]? { ... }` | trait |
 | `('pub')? % Trait [T]? type { methods }` | impl |
 
@@ -227,6 +227,26 @@ The contract is pinned by tests: `pub_trait_ffi_visibility.nu` proves the
 unenforced surface (a non-`pub` trait method + FFI) stays callable across
 files, and the `should_fail_pub_*` tests prove the enforced surface (a
 private fn / struct / const / enum variant) is rejected.
+
+### 3.4 Constants and globals
+
+A `: type IDENT value` declaration at top level binds a constant (or, with
+`: ~`, a mutable global). The `value` is normally a single literal.
+
+An **integer-typed** const (`i` / `u` / a sized integer, not `b`) may
+instead take a **compile-time-foldable prefix expression** over integer
+literals, using the operators `+ - * / << >> & | ^^` (not `%`, which
+collides with the trait/impl sigil). The expression is folded to a single
+value at compile time (`const_eval_int`):
+
+```
+: i SECS_PER_DAY * * 60 60 24            // 86400
+: i PAGE        << 1 12                  // 4096
+: i INT_MIN     - -9223372036854775807 1 // two's-complement min
+```
+
+A mutable global (`: ~ type Name value`) may be reassigned at runtime
+with `= Name expr` (§5.2).
 
 ## 4. Types
 
@@ -340,6 +360,23 @@ copy:
 Type arguments at call sites are *base identifiers* (type keywords or
 named types), not arbitrary type expressions: `( id [*Point] p )` is
 not yet accepted.
+
+A type parameter may carry one or more **trait bounds** via `: Trait`,
+written `[A: Ord]`, `[K: Hash V]`, or `[A: Ord: Show]`. A bound is
+checked at every instantiation: the concrete type substituted for the
+variable MUST have an `impl` of the named trait, or the compiler rejects
+the call naming the unsatisfied bound. Method dispatch inside the body
+already resolves to the concrete impl through monomorphisation, so the
+bound is an up-front guarantee and documentation rather than a dispatch
+mechanism. The bound disambiguates from a slice parameter by the colon —
+a slice type never contains one.
+
+```
+@ my_max [A: Ord] A x A y → A { ? > ( ord_cmp x y ) 0 x y }   // A must impl Ord
+```
+
+`should_fail_trait_bound.nu` pins the rejection; `trait_bounds.nu` pins
+the accepted path.
 
 Monomorphisation is deferred — instantiations are queued and emitted
 after the main parse pass. Diagnostics emitted while re-parsing a
@@ -534,6 +571,9 @@ A pattern is one of:
 - `IDENT` — a variant name (or the boolean pattern `T`/`F` when
   matching `?T`).
 - `_` — wildcard, covers all otherwise-unmatched variants.
+- `IDENT | IDENT ...` — an **or-pattern**: one arm covering several
+  tag-only variants (`Spring | Summer → ...`). Or-patterns take no
+  payload binding, no literal constraint, and no guard.
 
 A payload slot is one of:
 
@@ -551,6 +591,21 @@ A payload slot is one of:
 ```
 
 A pattern arm binds at most 3 payload variables.
+
+An arm may carry a **guard** — `? cond` after the payload, before the
+`→` — evaluated *after* the payload bindings are in scope. A false guard
+falls through to the next arm, so a guarded arm does **not** satisfy
+exhaustiveness for its variant: a later catch-all (another arm for the
+variant, or `_`) is still required. Guards are not allowed on a `_`
+wildcard or an or-pattern.
+
+```
+?? msg {
+    Move n ? > n 0 → `forward`
+    Move n         → `back-or-stay`    // catch-all for Move
+    _              → `other`
+}
+```
 
 ### 6.2 Evaluation order
 
@@ -609,10 +664,16 @@ at the next 1–3 tokens:
 ```
 
 A closure compiles to a 16-byte `{ fn_ptr, env_ptr }` value. Captures
-are stored in a heap-allocated environment struct. Closure environments
-are the **one exception** to NURL's single-owner model — they are
-reference-counted so the same closure value can be passed around freely
-(see §8).
+are stored in a heap-allocated environment struct. A closure that
+provably does **not** escape its creating frame has that env reclaimed
+automatically — an inline closure passed to an invoke-only parameter is
+freed right after the call, and a `:`-bound closure is freed at scope
+exit. An env is left for *you* to free (via the env pointer, `# *u f 1`)
+only when the closure genuinely escapes: it is returned, stored into a
+container or struct field, captured into another closure, or detached
+onto a thread. The escaping-closure env is therefore one of the
+manually-managed handles (§8); it is **not** reference-counted. See
+[`docs/MEMORY.md` §7.4](MEMORY.md) for the full reclamation rule.
 
 ### 6.5 Function calls
 
@@ -626,6 +687,34 @@ present only when `fn` is generic.
 A call's first token must be an identifier. Operator tokens are not
 callable: `( . obj field )` is rejected — write `. obj field` directly
 without the parens.
+
+#### Keyword arguments (grammar v2.2)
+
+A trailing parameter may carry a **default value** — `= atom`, where
+`atom` is a single token (a literal, a const name, or `T` / `F`):
+
+```
+@ box s label i width = 10 s fill = `-` → v { ... }
+```
+
+A call may then **omit** defaulted trailing arguments, and may pass any
+argument **by name** with an `IDENT:` label. Named arguments may appear
+in any order and follow any leading positional ones; omitted parameters
+fall back to their defaults:
+
+```
+( box `a` )                    // width=10  fill=`-`
+( box `b` 3 )                  // width=3   fill=`-`
+( box label: `d` fill: `=` )   // named, reordered; width defaults
+( box `e` fill: `#` width: 5 ) // positional + named, reordered
+```
+
+Defaults are filled **at the call site** — the callee receives a full,
+fixed-length argument list, so a defaulted function is an ordinary
+fixed-arity function with no runtime cost. A positional argument after a
+named one is rejected. Defaults and named arguments are **not** available
+on generic functions, FFI / variadic declarations, or parameters carrying
+the `inout` / `sink` convention. `kwargs.nu` pins the feature.
 
 #### Parameter conventions
 
@@ -725,6 +814,30 @@ with the variant name: `@ Json { JNum 42 }`.
 slice owning the buffer. Layout: field 0 = `T*` data, field 1 = `i64`
 length.
 
+### 6.10 Channel select
+
+A `??` whose scrutinee is *immediately* `{` has no value to match and is
+parsed as a **Go-style channel select** (distinct from the `?? expr {`
+match of §6.1). It proceeds with the **first ready** channel arm, in
+source order (deterministic priority):
+
+```
+?? {
+    [i]      jobs    → o { ?? o { T n → ( work n )  F → ( quit ) } }
+    [String] control → o { ?? o { T s → ( handle s ) F → ( quit ) } }
+    _                → { /* nothing ready */ }
+}
+```
+
+Each channel arm is `[ type ] chan_expr → IDENT { body }`: it receives
+from `chan_expr` (a bare identifier or a parenthesised call, evaluated as
+a borrow), binding the result to a `?T` option — `T v` yields a value,
+`F` means the channel is closed and drained. With **no** `_` default arm
+the select **blocks** until some channel is ready; with a `_` arm it
+never blocks — the default runs when nothing is ready. Selects lower to
+the rendezvous primitives in `stdlib/std/channel.nu`; `select_basic.nu`
+pins the construct.
+
 ## 7. Functions
 
 ### 7.1 Declaration
@@ -736,6 +849,10 @@ length.
 Function declarations are top-level only (the `@` token in expression
 position is the aggregate-literal start). A function MUST have at
 least the return-type arrow `→` and a body block.
+
+A trailing parameter may carry a **default value** `= atom`
+(`@ sum3 i a i b = 100 i c = 1000 → i { ... }`); callers may then omit it
+or pass it by name. See §6.5 for the call-site rules and restrictions.
 
 ### 7.2 Parameter conventions
 
@@ -844,10 +961,15 @@ responsibility belongs to the auto-drop machinery.
 
 ### 8.4 Closure environments
 
-Closure environments are the **one exception** to single-ownership.
-They are reference-counted, so the same closure value may be stored
-in a struct, passed to multiple functions, and returned freely. The
-backing environment is freed when the last reference is dropped.
+A closure's heap environment is **not** reference-counted. Instead the
+compiler reclaims it whenever the closure provably does not escape — an
+inline closure handed to an invoke-only parameter is freed right after
+the call, and a `:`-bound closure is freed at scope exit (each iteration
+in a loop body). When the closure genuinely escapes — returned, stored
+into a container or struct field, captured into another closure, or
+detached onto a thread — the env becomes a **manually-managed handle**
+(§6.4): the consumer frees it via the env pointer. See
+[`docs/MEMORY.md` §7.4](MEMORY.md) for the exact escape-site list.
 
 A closure may *capture by pointer* a mutable (`: ~`) multi-field struct
 binding (see [`docs/MEMORY.md` §2.3](MEMORY.md) for the lifetime rule):
@@ -867,8 +989,9 @@ non-zero with a count of violations after walking the whole program.
 The checker is **diagnostic-only** — emitted IR is byte-identical with
 or without `--borrowck`.
 
-Five rules are enforced. The semantic level is summarised here; for
-exact phrasing see [`docs/MEMORY.md` §2](MEMORY.md).
+Eight rules are enforced. The semantic level is summarised here; for
+exact phrasing and the soundness contract see
+[`docs/MEMORY.md` §2 and §6](MEMORY.md).
 
 ### 9.1 Move (use-after-move)
 
@@ -923,15 +1046,55 @@ stdlib container mutator on its receiver arg 0
 Index-based mutation loops (`~ i k 0 ...`) borrow nothing and stay
 legal.
 
-### 9.6 What is NOT checked
+### 9.6 Loop-carried move
+
+A binding consumed inside a `~` loop is moved on entry to the *next*
+iteration. If it was live before the loop and the body never re-binds
+it, re-reading it on the second pass is a guaranteed use-after-move —
+the classic "free inside a loop" double-free — and is rejected. Three
+shapes stay legal because each is freshly owned every iteration: freeing
+the loop element, freeing a binding declared inside the body, and freeing
+an outer binding the body re-binds before the next read.
+
+### 9.7 Interprocedural escape
+
+A stack reference can escape not only directly (§9.3) but through a
+**helper**: passed to a function that stores it in a heap container or
+detaches it onto a thread. The checker computes a per-function *escape
+summary* (which parameters the body lets escape, transitively) and
+rejects passing a stack reference to an escaping parameter. Forward and
+generic calls are handled by parking the check and replaying it after the
+whole module compiles, so definition order does not matter; the one
+residual is a *pure forward chain* of helpers (§9.9).
+
+### 9.8 Return escape
+
+A helper that **returns one of its parameters** (directly, or inside a
+returned struct) hands the reference back out. The checker records a
+second summary of returned-parameter positions; the result of such a call
+carries the max referent depth of the arguments at those positions, so
+the existing escape sinks (§9.3 / §9.7) fire on it. A helper that returns
+a *fresh* value is not a passthrough and stays legal.
+
+### 9.9 What is NOT checked
 
 - `*T` raw pointer lifetimes (the FFI escape hatch).
-- Interprocedural escape (a stack reference passed *through* a helper
-  function that retains it).
 - Aliased mutation beyond a single call (longer-range "exclusive
-  reference" analysis is not currently implemented).
-- Panic / `recover` control flow (the checker treats `recover` as an
-  ordinary call and does not model panic unwind).
+  reference" analysis is not currently implemented), and a binding read
+  through a *nested* sub-expression argument (§6.2).
+- A *pure forward chain* of escaping helpers (§9.7) and a parameter
+  returned through a closure *capture* rather than a struct field (§9.8) —
+  the residual interprocedural gaps. Both degrade the *diagnostic* only,
+  never a miscompile.
+- Panic / `recover` control flow: the checker treats `recover` as an
+  ordinary call and does not model panic unwind. It does not need to —
+  the owned allocations a panic `longjmp` would skip are reclaimed at the
+  panic itself by a thread-local allocation journal, so they leak neither
+  the normal nor the unwind path (see [`docs/MEMORY.md` §7.2](MEMORY.md)).
+- **Conditional** (maybe-moved) double-frees: a value freed on only one
+  arm of a `?` and then freed again is not flagged, to keep every
+  diagnostic a *definite* bug (the no-false-positive contract,
+  [`docs/MEMORY.md` §6.3](MEMORY.md)).
 
 ## 10. Diagnostics
 
@@ -984,13 +1147,14 @@ Four new diagnostics shipped 2026-05-25 closing the remaining
 
 ### 11.1 Grammar version
 
-This document corresponds to **grammar v2.1**. The authoritative
+This document corresponds to **grammar v2.2** (keyword arguments —
+default parameter values + named call arguments). The authoritative
 grammar lives in [`spec/grammar.ebnf`](../spec/grammar.ebnf); changes
 since v1.x are tracked in that file's prelude.
 
-A compiler is "v2.1 conformant" if it accepts every program the EBNF
+A compiler is "v2.2 conformant" if it accepts every program the EBNF
 generates and rejects every program the EBNF does not generate, with
-the semantics defined here. A program is "v2.1 portable" if it relies
+the semantics defined here. A program is "v2.2 portable" if it relies
 only on features documented in this spec or in
 [`spec/grammar.ebnf`](../spec/grammar.ebnf) — not on
 compiler-internal accidents.
