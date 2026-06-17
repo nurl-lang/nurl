@@ -31,12 +31,6 @@ and the borrow checker's not-yet-checked list live in
 | Closures capture by value (snapshot at construction) by default. The `: ~` mutable-struct byref capture path (`stdlib/std/panic.nu` recover-with-typed-result) shares the caller's alloca — see [`docs/MEMORY.md` §2.3](MEMORY.md) for the lifetime rule | Use `: ~ MultiFieldStruct` for shared-mutation closures; for value semantics keep the binding immutable |
 | A `sink` parameter takes a manually-managed handle (`Vec`, single-pointer struct) that the callee frees explicitly. A *compiler-auto-dropped* value (an owned string, owned slice, `Drop` value, or struct with owned fields) is **rejected at the call site by design** — its auto-drop obligation can't be transferred without risking a double-free across `?`/`??`/loop scope restores (see [`docs/MEMORY.md` §1](MEMORY.md)) | Wrap it in a handle (`{ s data }` / `Vec`), or pass it by value as an ordinary parameter and let the caller's scope drop it |
 
-## Enums
-
-| Limitation | Workaround |
-|---|---|
-| Pattern matching binds at most 3 payload variables per arm — variants with 4+ payloads cannot fully destructure in a single arm | Access additional payload fields via separate `.` extraction after matching |
-
 ## Imports
 
 | Limitation | Workaround |

@@ -5516,9 +5516,12 @@
             : ~ s pv0 ``
             : ~ s pv1 ``
             : ~ s pv2 ``
+            : ~ s pv_over ``
             : ~ s lit0 ``
             : ~ s lit1 ``
             : ~ s lit2 ``
+            : ~ s lit_over ``
+            : ~ i over_has_lit 0
             : ~ i pvc 0
             ~ & & ! is_int_pat != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_QUEST {
                 : i pst ( nurl_lex_type lex )
@@ -5526,6 +5529,10 @@
                     ? == pvc 0 { = pv0 ( nurl_lex_val lex ) } {}
                     ? == pvc 1 { = pv1 ( nurl_lex_val lex ) } {}
                     ? == pvc 2 { = pv2 ( nurl_lex_val lex ) } {}
+                    ? >= pvc 3 {
+                        = pv_over ? == 0 ( nurl_str_len pv_over ) ( nurl_lex_val lex ) ( nurl_str_cat3 pv_over ` ` ( nurl_lex_val lex ) )
+                        = lit_over ? == 0 ( nurl_str_len lit_over ) `_` ( nurl_str_cat lit_over ` _` )
+                    } {}
                     = pvc + pvc 1
                     ( nurl_lex_advance lex )
                 } {
@@ -5536,6 +5543,11 @@
                         ? == pvc 0 { = lit0 ival } {}
                         ? == pvc 1 { = lit1 ival } {}
                         ? == pvc 2 { = lit2 ival } {}
+                        ? >= pvc 3 {
+                            = lit_over ? == 0 ( nurl_str_len lit_over ) ival ( nurl_str_cat3 lit_over ` ` ival )
+                            = pv_over ? == 0 ( nurl_str_len pv_over ) `_` ( nurl_str_cat pv_over ` _` )
+                            = over_has_lit 1
+                        } {}
                         = pvc + pvc 1
                         ( nurl_lex_advance lex )
                     } {
@@ -5543,9 +5555,10 @@
                     }
                 }
             }
-            : b has_lit | | != 0 ( nurl_str_len lit0 )
+            : b has_lit | | | != 0 ( nurl_str_len lit0 )
             != 0 ( nurl_str_len lit1 )
             != 0 ( nurl_str_len lit2 )
+            != 0 over_has_lit
 
             // Payload-arity check (critic A7, ghost-variant half). When
             // the pattern names a DECLARED enum variant (it has a
@@ -5711,6 +5724,15 @@
                         ( emit_lit_check cg syms match_val match_type pattern_name 0 lit0 next_label )
                         ( emit_lit_check cg syms match_val match_type pattern_name 1 lit1 next_label )
                         ( emit_lit_check cg syms match_val match_type pattern_name 2 lit2 next_label )
+                        // Literal constraints on payload slots 3+ (rare).
+                        : ~ s lc_rest lit_over
+                        : ~ i lc_idx 3
+                        ~ != 0 ( nurl_str_len lc_rest ) {
+                            : s lc_tok ( str_first_word lc_rest )
+                            = lc_rest ( str_skip_word lc_rest )
+                            ? ! ( seq lc_tok `_` ) { ( emit_lit_check cg syms match_val match_type pattern_name lc_idx lc_tok next_label ) } {}
+                            = lc_idx + lc_idx 1
+                        }
                         ( nurl_print `  br label %` ) ( nurl_print arm_label ) ( emit_dbg_eol )
                     } {}
                 } }
@@ -6153,6 +6175,18 @@
                 }
                 {}
             } {}
+
+            // Bind payload slots 3+ (slot 0 is handled inline above with its
+            // opt/res-aware reconstruction; slots 1/2 just above). One helper
+            // call per slot lifts the former 3-payload destructuring limit.
+            : ~ s pb_rest pv_over
+            : ~ i pb_idx 3
+            ~ != 0 ( nurl_str_len pb_rest ) {
+                : s pb_tok ( str_first_word pb_rest )
+                = pb_rest ( str_skip_word pb_rest )
+                ? ! ( seq pb_tok `_` ) { ( emit_enum_payload_bind pb_tok pb_idx pattern_name match_type match_val syms cg ) } {}
+                = pb_idx + pb_idx 1
+            }
 
             // Guard test (after payload binding so it sees the bound
             // payloads): replay the recorded guard expression, branch to
@@ -9161,6 +9195,82 @@
 // `i8*`, `%Foo*`, `i8**`). Used by comparison codegen to coerce
 // pointer operands to i64 before `icmp`, so `== ptr 0` / `!= ptr 0`
 // null-checks and pointer↔pointer compares emit valid IR.
+// Bind ONE enum payload slot (`pidx` ≥ 1; slot 0 keeps its own opt/res-bool
+// reconstruction inline in gen_match). The payload rode the uniformly-`ptr`
+// enum slot; reconstruct it as the exact inverse of gen_agg_lit's boxing —
+// float via emit_enum_float_extract, a narrow int via ptrtoint+trunc, a
+// single-pointer struct handle via insertvalue, a multi-field struct / enum /
+// anon aggregate via a load through the heap-box pointer, i64 via ptrtoint,
+// else a bare pointer. Then alloca + store + register the binding (with its
+// `__ptr` / `__unsigned` metadata and any user-`Drop`). One call per slot,
+// driven by a loop in gen_match, generalises the former hand-unrolled slot-1 /
+// slot-2 blocks to N payloads — lifting the 3-payload destructuring limit.
+@ emit_enum_payload_bind s pvi i pidx s pattern_name s match_type s match_val i syms i cg → v {
+    : s pkey ( nurl_str_cat3 pattern_name `__payload__` ( nurl_str_int pidx ) )
+    : s pti ( nurl_sym_get syms pkey )
+    : s pri ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print pri )
+    ( nurl_print ` = extractvalue ` ) ( nurl_print match_type )
+    ( nurl_print ` ` ) ( nurl_print match_val )
+    ( nurl_print `, ` ) ( nurl_print ( nurl_str_int + pidx 1 ) ) ( nurl_print `\n` )
+    : s cvi ( nurl_cg_reg cg )
+    ? ( is_float_ty pti )
+    { ( emit_enum_float_extract cvi pti pri cg ) }
+    { ? & > ( int_width pti ) 0 < ( int_width pti ) 64 {
+        : s t64 ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print t64 )
+        ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pri ) ( nurl_print ` to i64\n` )
+        ( nurl_print `  ` ) ( nurl_print cvi )
+        ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pti ) ( nurl_print `\n` )
+    } {
+        : ~ b is_sh F
+        : ~ s f0ty ``
+        ? == ( nurl_str_get pti 0 ) 37
+        { : s snamei ( nurl_str_slice pti 1 - ( nurl_str_len pti ) 1 )
+            : s vlisti ( nurl_sym_get syms ( nurl_str_cat snamei `__variants` ) )
+            ? == 0 ( nurl_str_len vlisti )
+            { = f0ty ( nurl_sym_get syms ( nurl_str_cat3 snamei `__idx_0` `__type` ) )
+                ? & != 0 ( nurl_str_len f0ty )
+                == ( nurl_str_get f0ty - ( nurl_str_len f0ty ) 1 ) 42
+                { = is_sh T } {} }
+            {} }
+        {}
+        ? is_sh
+        { ( nurl_print `  ` ) ( nurl_print cvi )
+            ( nurl_print ` = insertvalue ` ) ( nurl_print pti )
+            ( nurl_print ` undef, ` ) ( nurl_print f0ty )
+            ( nurl_print ` ` ) ( nurl_print pri ) ( nurl_print `, 0\n` ) }
+        { ( nurl_print `  ` ) ( nurl_print cvi )
+            ? | == ( nurl_str_get pti 0 ) 123
+            & == ( nurl_str_get pti 0 ) 37
+            != ( nurl_str_get pti - ( nurl_str_len pti ) 1 ) 42
+            { ( nurl_print ` = load ` ) ( nurl_print pti )
+                ( nurl_print `, ptr ` ) ( nurl_print pri ) ( nurl_print `\n` ) }
+            ? ( seq pti `i64` )
+            { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pri ) ( nurl_print ` to i64\n` ) }
+            { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pri ) ( nurl_print ` to i8*\n` ) } }
+    } }
+    : s vpi ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print vpi )
+    ( nurl_print ` = alloca ` ) ( nurl_print pti ) ( nurl_print `\n` )
+    ( nurl_print `  store ` ) ( nurl_print pti )
+    ( nurl_print ` ` ) ( nurl_print cvi )
+    ( nurl_print `, ` ) ( nurl_print pti )
+    ( nurl_print `* ` ) ( nurl_print vpi ) ( nurl_print `\n` )
+    ( nurl_sym_def syms pvi pti )
+    ( nurl_sym_def syms ( nurl_str_cat pvi `__ptr` ) vpi )
+    ( nurl_sym_def syms ( nurl_str_cat pvi `__unsigned` )
+    ( nurl_sym_get syms ( nurl_str_cat pkey `__unsigned` ) ) )
+    ? != 0 g_auto_drop_strings
+    { : s akey ( nurl_str_cat `drop##` pti )
+        ? & != 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms akey ) )
+        == 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms ( nurl_str_cat `autodrop##` pti ) ) )
+        { ( mem_own_add_user_drop syms vpi pti ) }
+        {}
+    }
+    {}
+}
+
 @ is_ptr_ty s ty → b {
     : i n ( nurl_str_len ty )
     ? == n 0 { ^ F } {}

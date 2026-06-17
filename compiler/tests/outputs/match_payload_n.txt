@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+quad_4bind ok
+five_mixed ok
+withptr_slot3 ok
+quad_slot3_lit ok
+quad_guard_slot3 ok
