@@ -13450,6 +13450,14 @@
             ( nurl_print strname ) ( nurl_print `, i64 0, i64 0)\n\n` )
             ( nurl_sym_def syms cname `i8*` )
             ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
+            // String globals are emitted as `global i8*` (writable storage),
+            // so a `: ~ s g` must record the mutable flag like the i/f/b
+            // branches above — without it, `= g …` was wrongly rejected as an
+            // assignment to an immutable global (the grammar lists `s` as an
+            // updatable mutable-global type).
+            ? is_mutable
+            { ( nurl_sym_def syms ( nurl_str_cat cname `__mutable` ) `1` ) }
+            {}
         }
         // Integer const-expression RHS (operator-led): fold to a single
         // value at compile time. Gated on an integer LLVM type wider

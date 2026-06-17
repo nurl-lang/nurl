@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Mutable string globals (`: ~ s g …`) can now be reassigned.** The
+  declaration was accepted and emitted as writable `global i8*` storage, but
+  `gen_const_decl`'s string branch never recorded the `__mutable` flag (the
+  `i` / `u` / `f` / `b` branches all did), so a later `= g …` was wrongly
+  rejected with *"cannot assign to immutable global"* — even though the
+  grammar lists `s` as an updatable mutable-global type. The string branch now
+  sets the flag like the other scalar branches. Reassignment to a constant or
+  a heap-allocated (`nurl_str_cat`) string both work. The bootstrap fixed
+  point holds (no in-tree code could use a mutable string global, since the
+  bug rejected them, so emitted IR is unchanged). Regression
+  `compiler/tests/mutable_string_global.nu`. Surfaced by an adversarial
+  language-probing sweep for grammar/spec-vs-compiler gaps before the v1.0
+  lock.
+
 ### Changed
 
 - **Pattern matching now binds N payloads per arm (was capped at 3).** The
