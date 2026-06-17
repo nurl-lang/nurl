@@ -495,6 +495,46 @@ parentheses for precedence. Parentheses appear only in function calls
 `( f a b )`, function-type literals `(@ R P)`, and generic-type
 instantiation `( Name A )`.
 
+> **Design decision — no grouping/closing delimiter (locked for 1.0).**
+> Fixed prefix arity with **no closing token** is the permanent surface
+> form. An expression's shape is fully determined by each operator's known
+> arity, so the grammar stays a regular LL(k≤4) with no precedence table and
+> no balancing parentheses — which is the entire point of the notation, and
+> the largest contributor to its token economy.
+>
+> This is the one ergonomics objection a reader raises ("how deep can the
+> un-parenthesised nesting get before it's unreadable?"), so the call was
+> made against data rather than taste. A sweep of the whole first-party
+> corpus (~77 000 lines: the self-hosted compiler, the HTTP/1.1+2 +
+> WebSocket stack, a regex engine, crypto, and the Game Boy / C64
+> emulators) measured, per line, the longest run of consecutive prefix
+> operators:
+>
+> | chain depth | lines | share of operator lines |
+> |------------:|------:|:------------------------|
+> | 1           | 14527 | ~78 %                   |
+> | 2           |  3415 | ~18 %                   |
+> | 3           |   495 | ~2.7 %                  |
+> | 4           |    83 | 0.4 %                   |
+> | ≥5          |    19 | 0.025 % of all lines    |
+>
+> ~96 % of operator-bearing lines nest only one or two deep — trivially
+> readable in prefix — and just 19 lines in the entire corpus reach depth 5.
+> Those few cluster in two recognisable idioms (n-ary boolean membership
+> `| | == c A == c B …`, and big-endian byte assembly), both of which have
+> ordinary library answers — a predicate helper (the codebase already does
+> this: `is_alpha` / `is_digit` / `is_space`) or an intermediate `:`
+> binding. The data shows the bare form is adequate for real, dense code;
+> the foot-gun shape (an operator silently short an operand) is caught by
+> the front-end's dead-value / prefix-arity-cascade diagnostics, not left to
+> the reader.
+>
+> The decision is also **safe to revisit additively**: an *optional*
+> grouping form could be introduced after 1.0 without breaking any existing
+> program, should a genuine need ever emerge. What 1.0 locks is the
+> negative — prefix arity is canonical and there is no required closing
+> token — not a door permanently shut.
+
 ### 6.1 Operator forms and arities
 
 #### Strictly binary (2 operands)
