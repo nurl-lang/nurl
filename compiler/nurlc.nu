@@ -1827,6 +1827,24 @@
         ( die lex ( nurl_str_cat `return expression has no value (expected `
         ( nurl_str_cat ( llvm_to_nurl fn_rt ) hint ) ) ) }
     {}
+    // Return-type agreement (narrow, never-valid clashes only — mirrors the
+    // binary-operator check). NURL has no implicit conversions, so returning a
+    // float where a non-float is declared (or vice versa), or a pointer/string
+    // where a non-pointer scalar is declared, used to emit `ret i64 <double>` /
+    // `ret i64 i8* …` that nurlc accepted (rc 0) and only clang rejected
+    // ("value doesn't match function result type"). Only these two directions
+    // are flagged so the null-as-`0` idiom (`^ 0` from a `*T`-returning fn) and
+    // loose pointer-to-pointer returns stay valid.
+    ? & & != 0 ( nurl_str_len fn_rt ) ! ( seq lt `void` ) ! ( seq fn_rt `void` )
+    {   : b ret_vf | ( seq lt `double` ) ( seq lt `float` )
+        : b ret_df | ( seq fn_rt `double` ) ( seq fn_rt `float` )
+        ? | != ret_vf ret_df & ( is_ptr_ty lt ) ! ( is_ptr_ty fn_rt )
+        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+            `return value type '` lt `' does not match the declared return type '` fn_rt )
+            `' — NURL has no implicit conversions; return a value of the declared type or convert with '# T expr'` ) ) }
+        {}
+    }
+    {}
     : s dtop ( nurl_sym_get syms `__defer_top__` )
     // Determine which owned-slice binding (if any) is escaping as the return value.
     // Ownership transfers only when the return type is itself a slice AND the
@@ -2244,6 +2262,32 @@
     // uniformly. ptrtoint is a no-op at the machine level, so this is
     // free. Arithmetic ops are untouched.
     : b is_cmp | & >= tt TT_LT <= tt TT_GE | == tt TT_EQEQ == tt TT_NE
+    // Operand-type agreement. NURL has NO implicit numeric conversions, so the
+    // two operands of an operator must already share a type (the "lt == rt for
+    // arithmetic operands" invariant noted above). Mixing an int and a float
+    // (`+ 1 1.0`, `* 2.0 3`, `== 1 1.0`), or a pointer/string and an integer in
+    // an arithmetic op (`+ `a` 1`), used to emit `add i64 1, 1.0` / `add i64
+    // i8* …` — IR nurlc accepted (rc 0) and only clang rejected ("floating
+    // point constant invalid for type" / "integer constant must have integer
+    // type"). Reject at the source. (Comparison ops stay exempt for the
+    // pointer cases — the ptrtoint coercion below compares `== ptr 0` and
+    // ptr↔ptr in i64; only the float/non-float split is enforced for them.)
+    : b lf | ( seq lt `double` ) ( seq lt `float` )
+    : b rf | ( seq rt `double` ) ( seq rt `float` )
+    ? != lf rf
+    { ( die lex ( nurl_str_cat ( nurl_str_cat4
+        `operator mixes a float and a non-float operand: left is '` lt
+        `', right is '` rt )
+        `' — NURL has no implicit numeric conversions; make both the same type (cast with '# f expr' or '# i expr')` ) ) }
+    {}
+    : b lp ( is_ptr_ty lt )
+    : b rp ( is_ptr_ty rt )
+    ? & ! is_cmp != lp rp
+    { ( die lex ( nurl_str_cat ( nurl_str_cat4
+        `arithmetic operator mixes a pointer/string and a non-pointer operand: left is '` lt
+        `', right is '` rt )
+        `' — operator-level pointer arithmetic is not supported; index with '. ptr idx' or convert explicitly` ) ) }
+    {}
     : ~ s cmp_ty lt
     ? & is_cmp | ( is_ptr_ty lt ) ( is_ptr_ty rt ) {
         ? ( is_ptr_ty lt ) {
@@ -8805,7 +8849,7 @@
 
                 // Widen i1 short-circuit / comparison results to the declared
                 // integer width before storing (`: i can_l & …` etc.).
-                : s widened_val ( coerce_store_val val vt ptype syms cg )
+                : s widened_val ( coerce_store_val lex val vt ptype syms cg )
                 // Handle closure to function pointer conversion
                 : s store_val ( convert_closure_arg widened_val vt ptype cg )
 
@@ -8987,7 +9031,7 @@
         // Widen i1 short-circuit / comparison results to the LHS's
         // declared integer width, so `= myi64 & a b` stores cleanly.
         : s rhs_ty ( nurl_get_last_type )
-        : s store_val ( coerce_store_val val rhs_ty vt syms cg )
+        : s store_val ( coerce_store_val lex val rhs_ty vt syms cg )
         ? != 0 ( nurl_str_len ptr )
         { ( nurl_print `  store ` ) ( nurl_print vt ) ( nurl_print ` ` )
             ( nurl_print store_val ) ( nurl_print `, ` ) ( nurl_print vt )
@@ -10726,7 +10770,10 @@
 // source is i1 and the destination is a non-i1 integer type, and is a
 // no-op in every other case. Placed here so both the let-binding and
 // `=`-assign paths can share it.
-@ coerce_store_val s val s from_ty s to_ty i syms i cg → s {
+@ coerce_store_val i lex s val s from_ty s to_ty i syms i cg → s {
+    // The void/unit value (a bare type keyword `v`) is never storable —
+    // `: i y v` / `= x v` used to emit `store i64 void`. Reject at the source.
+    ( die_if_void lex val `initialiser / assignment` )
     ? & ( seq from_ty `i1` ) ! ( seq to_ty `i1` )
     { : s r ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print r )
@@ -10817,6 +10864,25 @@
             ( nurl_print from_ty ) ( nurl_print ` ` ) ( nurl_print val )
             ( nurl_print ` to ` ) ( nurl_print to_ty ) ( nurl_print `\n` )
             ^ r } }
+    {}
+    // No coercion above bridged from_ty → to_ty. If they are a never-valid
+    // mix — a float and a non-float, or a pointer/string stored into a
+    // non-pointer scalar — the caller would emit `store <to_ty> <val>` with
+    // disagreeing types: IR nurlc accepted (rc 0) and only clang rejected.
+    // Reject at the source (covers `: i x 1.5`, `: i x `hi``, `= n 1.5`).
+    // Equal types and every coercion above (i1-widen, enum-wrap, single-handle,
+    // int-width; closure→fn-ptr happens next in convert_closure_arg) never
+    // reach here as a clash. The reverse pointer direction (`: *T p 0`,
+    // null-as-0) is intentionally allowed.
+    ? & ! ( seq from_ty to_ty ) != 0 ( nurl_str_len to_ty )
+    {   : b csv_sf | ( seq from_ty `double` ) ( seq from_ty `float` )
+        : b csv_tf | ( seq to_ty `double` ) ( seq to_ty `float` )
+        ? | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty )
+        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+            `value of type '` from_ty `' cannot initialise / assign a binding of type '` to_ty )
+            `' — NURL has no implicit conversions; use a matching value or convert with '# T expr'` ) ) }
+        {}
+    }
     {}
     val
 }
@@ -11252,6 +11318,13 @@
     // exist in this lifted function). Restored on sym_pop (§7.4).
     ( nurl_sym_def body_syms `__owned_closure_envs__` `` )
     ( nurl_sym_def body_syms `__in_call_arg__` `` )
+    // The closure body's `^` returns from the CLOSURE, not the enclosing
+    // function — shadow the return-type key with the closure's own return
+    // type so gen_ret's return-value diagnostics (void-return and the
+    // return-type-agreement check) compare against the right type. Restored
+    // on sym_pop. Without this, `^ msg` in `\ → s { ^ msg }` was checked
+    // against the enclosing fn's return type.
+    ( nurl_sym_def body_syms `__fn_ret_ty__` ret_type )
 
     // Register closure parameters
     : ~ s bp_types param_types
@@ -13365,6 +13438,16 @@
     : ~ i fidx 0
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         : s flt ( parse_type lex )
+        // A field whose type is the struct itself BY VALUE makes the struct
+        // infinitely sized (`: Node { i v  Node next }`). LLVM only rejects the
+        // recursive value type later, at an `insertvalue` / `store` use site,
+        // with a cryptic "operand and field disagree in type". Catch it at the
+        // declaration with the canonical cure: box the field as a pointer.
+        ? ( seq flt ( nurl_str_cat `%` sname ) )
+        { ( die lex ( nurl_str_cat ( nurl_str_cat3
+            `recursive struct '` sname `' has infinite size — a field holds the struct itself by value. Box it as a pointer: '* ` )
+            ( nurl_str_cat sname `'` ) ) ) }
+        {}
         ? ( is_ident_tok ( nurl_lex_type lex ) )
         { : s fname ( nurl_lex_val lex )
             ( nurl_lex_advance lex )

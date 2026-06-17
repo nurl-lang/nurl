@@ -8,6 +8,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Front-end type checking for the common static-error class (adversarial
+  sweep #3).** A sharper probing pass found that a whole family of trivial type
+  errors was accepted by `nurlc` (rc 0, no diagnostic) and emitted IR that only
+  `clang` rejected — the "where is the type checker?" optics. All are now caught
+  at the source, with no implicit conversions introduced (NURL stays explicit):
+  - **Binary-operator operand mismatch** — mixing a float and a non-float in any
+    operator (`+ 1 1.0`, `* 2.0 3`, `== 1 1.0`), or a pointer/string and an
+    integer in an arithmetic op (`+ `a` 1`). `gen_binary` enforces the
+    "operands share a type" invariant it already documented. Pointer
+    comparisons (`== ptr 0`, ptr↔ptr) stay exempt via the existing ptrtoint
+    coercion. Locks `should_fail_binop_int_float`, `should_fail_binop_ptr_int`.
+  - **Binding initialiser / assignment mismatch** — `: i x 1.5`, `: i x `hi``,
+    `= n 1.5`. `coerce_store_val` now rejects the never-valid float/non-float
+    and pointer-into-non-pointer store clashes after its real coercions
+    (i1-widen, enum-wrap, single-handle, int-width) have had their say; the
+    null-as-`0` idiom (`: *T p 0`) stays valid. Locks
+    `should_fail_let_type_mismatch`, `should_fail_assign_type_mismatch`.
+  - **Return-value type mismatch** — `^ `hi`` / `^ 1.5` from a `→ i` function.
+    `gen_ret` checks the returned value's type against the declared return type
+    (same narrow never-valid directions). Locks
+    `should_fail_return_type_mismatch`.
+  - **Void/unit value (`v`) stored or bound** — `: i y v`, `= x v` (the bare
+    type keyword leaking into a value position). Locks `should_fail_store_void`;
+    the operator/complement/not sinks were already guarded.
+  - **Recursive struct of infinite size** — `: Node { i v  Node next }` (a
+    by-value self-reference, the classic missing-pointer mistake) is diagnosed
+    at the declaration with the "box it as `* Node`" cure, instead of a cryptic
+    `insertvalue operand and field disagree` IR error at first construction.
+    Locks `should_fail_recursive_struct`.
+  - **Closure return-type context** — `gen_ret` inside a closure body now sees
+    the *closure's* declared return type (the body scope shadows
+    `__fn_ret_ty__`), not the enclosing function's; this both enables the
+    return check above inside closures and corrects the pre-existing
+    void-return diagnostic there.
+
 ### Decided (toward 1.0 grammar lock)
 
 - **No grouping/closing delimiter — locked.** Fixed prefix arity with no
