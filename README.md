@@ -1,6 +1,6 @@
 # NURL — Neural Unified Representation Language
 
-> A small systems language with a regular prefix-arity grammar, single-owner memory with an opt-in static borrow checker, deterministic compilation, and LLVM-based codegen.
+> A small systems language with a regular prefix-arity grammar, single-owner memory with a default-on static borrow checker, deterministic compilation, and LLVM-based codegen.
 
 **Project site:** <https://nurl-lang.org> · **Live playground & MCP endpoint:** <https://play.nurl-lang.org>
 
@@ -15,7 +15,7 @@ NURL takes a few design positions that are uncommon together:
 - **Regular prefix-arity grammar** — every operator has a fixed arity, no infix, no precedence cliffs. The grammar fits on a single page and is LL(k≤4) — recursive-descent with up to 4 tokens of lookahead.
 - **Local semantics** — a construct's meaning is derivable from a short window of surrounding tokens. No long-range dependencies.
 - **Deterministic compiler** — the same source always produces identical output. No UB, no platform-dependent behaviour. The self-hosted compiler reaches a byte-identical fixed point on its own source.
-- **Single-owner memory + opt-in static borrow checker** — auto-drop at scope exit, plus a diagnostic pass that catches use-after-move, alias-double-free, escaping closure-captures, and iterator invalidation as hard errors.
+- **Single-owner memory + default-on static borrow checker** — auto-drop at scope exit, plus a diagnostic pass (on by default, `--no-borrowck` to disable) that catches use-after-move, alias-double-free, escaping closure-captures, and iterator invalidation as hard errors.
 - **LLVM-based codegen, broad platform reach** — one pipeline targets Linux, macOS, Windows, wasm32-wasi, RISC-V, and ARM64.
 
 | Metric | Python | C | NURL |
@@ -123,11 +123,11 @@ reference** (lexical structure, types, statements, expressions, casts) is
 
 Single-owner memory with compiler-inserted auto-drop at scope exit — no GC,
 no hidden boxing. Bindings are immutable by default (`: i x 0`; opt into
-mutation with `: ~`). An **opt-in static borrow checker** (on by default,
-`--no-borrowck` to disable) catches use-after-move, alias-double-free,
-escaping closure-captures, and iterator invalidation as hard compile errors,
-without ever changing generated code. Full model and the not-yet-checked
-list: [`docs/MEMORY.md`](docs/MEMORY.md).
+mutation with `: ~`). A **static borrow checker** — on by default,
+`--no-borrowck` to disable, `--strict-borrowck` to tighten — catches
+use-after-move, alias-double-free, escaping closure-captures, and iterator
+invalidation as hard compile errors, without ever changing generated code.
+Full model and the not-yet-checked list: [`docs/MEMORY.md`](docs/MEMORY.md).
 
 The type system is strong, static, inferred, algebraic (sum types `|`,
 product types via structs), with no subtyping and no implicit conversions.
