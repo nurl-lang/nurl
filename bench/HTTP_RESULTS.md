@@ -42,7 +42,7 @@ Node trails ~1.7×.
 
 ### Light parallel (C = 10)
 
-NURL's `server_run_pool` runs 8 worker threads (see
+NURL's `server_run_pool` runs 10 worker threads (see
 `bench/http_server.nu`); 10 in-flight connections fit inside that
 pool. Rust's tokio multi-thread runtime defaults to one worker per
 logical core (12 here); at C = 10 the runtime is over-provisioned.
@@ -50,20 +50,20 @@ NURL: 69 k/s, p99 0.56 ms. Rust: 48 k/s, p99 1.16 ms.
 
 ### Moderate parallel (C = 50)
 
-NURL's 8-worker pool is saturated (~62 k/s). Rust's multi-thread
+NURL's 10-worker pool is saturated (~62 k/s). Rust's multi-thread
 scheduler reaches 87 k/s. NURL p50 stays at 0.10 ms; Rust p50 0.41 ms.
 
 ### High parallel (C = 200)
 
 Rust hyper reaches 115 k/s by saturating every core. NURL holds 59 k/s
-— its 8-worker pool is the throughput ceiling. NURL p50 0.11 ms, p99
+— its 10-worker pool is the throughput ceiling. NURL p50 0.11 ms, p99
 0.62 ms. Rust p99 6.19 ms.
 
 Node plateaus at ~16 k/s with rising latency.
 
 ## Configuration notes
 
-- NURL runs 8 worker threads; Rust hyper runs one tokio worker per
+- NURL runs 10 worker threads; Rust hyper runs one tokio worker per
   logical core (12 here). Each implementation uses its conventional
   default configuration.
 - Loopback HTTP/1.1 only. No HTTPS measured. No HTTP/2 measured.

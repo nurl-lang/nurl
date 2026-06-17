@@ -31,7 +31,7 @@ $ `stdlib/ext/http_full.nu`
 
             : HttpServer srv ( server_new listener base )
             // Drive a thread pool so the bench measures the full server
-            // surface rather than a single accept loop. 8 workers is a
+            // surface rather than a single accept loop. 10 workers is a
             // reasonable default for ~12-core hosts (tokio's default
             // multi-thread runtime in the Rust peer uses every core).
             : !v NetErr rr ( server_run_pool srv 10 )
