@@ -4673,13 +4673,39 @@
     // diagnostic so the error lands on the call site instead. Runs
     // while the lexer still sits on the closing ')' so the caret
     // points at this call.
+    //
+    // A pure-NURL stdlib helper (`nurl_str_cat` / `_cat3` / `_cat4` /
+    // `_slice`) is pre-registered in init_syms for cross-module typing but
+    // has no C body — so if the program never imported its module it is
+    // undefined at link (clang: "use of undefined value '@nurl_str_cat'").
+    // It carries a `__needs_stdlib` marker but no `__arity` (scan_fn_sigs, a
+    // complete whole-program pre-pass, sets `__arity` for any real
+    // definition before any call is generated). Name the missing import at
+    // the call site instead of leaking the clang error.
+    ? & != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__needs_stdlib` ) ) )
+    == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__arity` ) ) )
+    { ( die lex ( nurl_str_cat3
+        ( nurl_str_cat3 `'` fname `' is defined in ` )
+        ( nurl_sym_get syms ( nurl_str_cat fname `__needs_stdlib` ) )
+        ` (a pure-NURL stdlib helper, not a runtime builtin) — add a '$' import of that file to use it.` ) ) }
+    {}
     ? & & & == 0 ( nurl_str_len ( nurl_sym_get syms call_name ) )
     == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__ptr` ) ) )
     == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__arity` ) ) )
     == 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms ( nurl_str_cat fname `__impl_seen` ) ) )
-    { ( die lex ( nurl_str_cat3
-        `call to unknown function '` fname
-        `' — it is not defined in this file, not in any '$'-imported file processed so far, and not a known FFI/builtin. Add the missing '$' import (or move it above this file's import in the program), or check the spelling.` ) ) }
+    {  // A GENERIC function called with no `[T …]` type arguments lands
+       // here — it carries `__tparams` but no `__arity` / mangled
+       // call_name (NURL does not infer type args from value args). Name
+       // the real cause instead of the misleading "unknown function".
+        : s __gtp ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__tparams` ) )
+        ? != 0 ( nurl_str_len __gtp )
+        { ( die lex ( nurl_str_cat3
+            ( nurl_str_cat3 `generic function '` fname `' needs explicit type argument(s): write ( ` )
+            ( nurl_str_cat3 fname ` [` ( nurl_str_cat __gtp `] … ) ` ) )
+            `— NURL does not infer generic type arguments from value arguments.` ) ) }
+        { ( die lex ( nurl_str_cat3
+            `call to unknown function '` fname
+            `' — it is not defined in this file, not in any '$'-imported file processed so far, and not a known FFI/builtin. Add the missing '$' import (or move it above this file's import in the program), or check the spelling.` ) ) } }
     {}
     // Call-arity check. scan_fn_sigs records every non-generic
     // @-function's declared parameter count as `<fname>__arity`. A call
@@ -14640,6 +14666,19 @@
     ( nurl_sym_def syms `nurl_str_int` `i8*` )
     ( nurl_sym_def syms `nurl_str_float` `i8*` )
     ( nurl_sym_def syms `nurl_str_slice` `i8*` )
+    // The four cat/slice helpers are PURE-NURL (defined in core/string.nu,
+    // NOT in runtime.o) — unlike nurl_str_int / _float / read_* which have C
+    // bodies and always link. The type pre-registration above keeps a
+    // cross-module caller typed, but if NO file in the program imports
+    // string.nu the symbol is undefined at link (clang: "use of undefined
+    // value '@nurl_str_cat'"). Mark them so gen_call can name the missing
+    // import at the call site instead. Safe: scan_fn_sigs is a COMPLETE
+    // pre-pass over the whole program (it follows `$` imports), so a real
+    // definition anywhere sets `<name>__arity` before any call is generated.
+    ( nurl_sym_def syms `nurl_str_cat__needs_stdlib` `stdlib/core/string.nu` )
+    ( nurl_sym_def syms `nurl_str_cat3__needs_stdlib` `stdlib/core/string.nu` )
+    ( nurl_sym_def syms `nurl_str_cat4__needs_stdlib` `stdlib/core/string.nu` )
+    ( nurl_sym_def syms `nurl_str_slice__needs_stdlib` `stdlib/core/string.nu` )
     // Mark allocating string runtime calls as returning OWNED str.
     // Gated on g_auto_drop_strings — off by default to keep the
     // compiler's own source compilable without false-positive

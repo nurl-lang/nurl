@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Clearer diagnostics for two call-site papercuts** (surfaced by the
+  v1.0-lock language sweep):
+  - A **generic function called without `[T …]` type arguments** now reports
+    *"generic function 'pick' needs explicit type argument(s): write
+    ( pick [T] … ) — NURL does not infer generic type arguments from value
+    arguments"* instead of the misleading *"call to unknown function 'pick'"*
+    (the same message a genuine typo gets). A truly-unknown name still gets the
+    unknown-function message. Lock `compiler/tests/should_fail_generic_no_typeargs.nu`.
+  - A **pure-NURL stdlib helper used without importing its module** —
+    `nurl_str_cat` / `_cat3` / `_cat4` / `_slice`, which are pre-registered for
+    cross-module typing but have no C body (unlike `nurl_str_int` / `_float` /
+    `read_*`) — now reports *"'nurl_str_cat' is defined in
+    stdlib/core/string.nu … add a '$' import of that file"* at the call site,
+    instead of leaking clang's *"use of undefined value '@nurl_str_cat'"* at
+    link. Safe because `scan_fn_sigs` is a complete whole-program pre-pass, so a
+    real definition anywhere sets `__arity` before any call is generated (no
+    false positive for cross-module callers). Lock
+    `compiler/tests/should_fail_stdlib_helper_no_import.nu`. Both are
+    diagnostic-only — the bootstrap fixed point holds.
+
 ### Fixed
 
 - **Mutable string globals (`: ~ s g …`) can now be reassigned.** The
