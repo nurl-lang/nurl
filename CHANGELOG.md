@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Pattern matching now binds N payloads per arm (was capped at 3).** The
+  enum type and construction already supported any number of payload slots;
+  only the match side was limited — the parser stored just three binding
+  names and the emitter had three hand-unrolled slot blocks, so a 4th+ payload
+  was silently dropped (`use of undefined identifier`), forcing a post-match
+  `.` extraction. The parser now collects overflow payload names/literals and
+  the emitter binds slots 1..N-1 through one `emit_enum_payload_bind` helper in
+  a loop (slot 0 keeps its option/result-aware reconstruction); literal
+  constraints on slots 3+ loop the same way. Verified for 4- and 5-payload
+  variants across mixed payload types (int / float / string / pointer /
+  struct), a literal constraint on slot 3, and a guard reading a slot-3
+  binding. The bootstrap fixed point holds without a refresh. Regression
+  `compiler/tests/match_payload_n.nu`. Removes the `docs/LIMITATIONS.md` Enums
+  limitation (CRITIC A6).
+
 ### Fixed
 
 - **Float (`f` / `f32`) enum payloads now compile.** An enum's payload slot
