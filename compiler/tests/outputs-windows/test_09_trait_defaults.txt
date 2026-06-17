@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+== Trait Default Implementations Test ==
+[Default] Shape area: 20
+[Override] Square special area: 36
+
+Total area: 56

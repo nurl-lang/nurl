@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_aliased_mut.nu:31: error: 'c' is both mutably borrowed (passed as 'inout') and aliased by another argument of the same call - exclusive access is violated
+compiler/tests/borrow_aliased_mut.nu:35: error: 'c' is both mutably borrowed (passed as 'inout') and aliased by another argument of the same call - exclusive access is violated
+error: compilation aborted - 2 borrow-checker violations (re-run with --no-borrowck to bypass)

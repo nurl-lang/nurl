@@ -1,0 +1,33 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+set_sid=ok
+set_dom=ok
+exact=[sid=abc123; pref=dark]
+www_sub=[pref=dark]
+other=[]
+count1=2
+set_root=ok
+set_deep=ok
+at_deep=[q=deep; p=root]
+at_root=[p=root]
+at_a=[p=root]
+set_sec=ok
+insecure=[]
+secure=[t=tok]
+set_ma=ok
+before_exp=[e=5]
+after_exp=[]
+set_again=ok
+delete_e=ok
+count4=0
+set_v1=ok
+set_v2=ok
+replaced=[s=v2]
+count5=1
+set_exp=ok
+pre2021=[g=6]
+post2021=[]
+set_bad=bad
+count7=0

@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+each node's own count before gossip (=1): 1
+during partition, node 0 value (sees 0+1 only, =2): 2
+during partition, node 2 is isolated (value 1): YES
+after heal node 0 value: 3
+after heal node 1 value: 3
+after heal node 2 value: 3
+CONVERGED to 3 on every node (no id collision): YES
+messages were actually dropped: YES

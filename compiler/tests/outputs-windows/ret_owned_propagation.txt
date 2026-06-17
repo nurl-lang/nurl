@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+alpha-beta
+alpha-beta
+gamma-delta
+alpha-beta
+alpha-beta
+done

@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+Argv test...
+argc: 1
+program: build\tests\run\argv_test\argv_test.exe
+  arg[0]: build\tests\run\argv_test\argv_test.exe
+done

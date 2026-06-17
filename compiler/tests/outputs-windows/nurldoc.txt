@@ -1,0 +1,27 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+# demo
+
+demo.nu — a tiny module.
+Second header line.
+
+## API
+
+### `@ add i a i b → i`
+
+Add two ints.
+
+### `: Point { i x i y }`
+
+A point.
+
+### `: | Color { Red Green Blue }`
+
+### `& `c` @ getpid → i`
+
+Process id.
+
+### `: i MAX 100`
+

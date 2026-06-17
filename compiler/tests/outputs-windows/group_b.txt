@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+3.14
+8
+8
+8
+1
+8
+before
+work
+after

@@ -1,0 +1,10 @@
+COMPILE OK
+WARNINGS
+compiler/tests/should_warn_param_shadow.nu:19:9: warning: 'z' shadows the enclosing function's parameter - rename
+    : i z + z 7  // ← warns: 'z' shadows parameter z
+        ^
+LINK OK
+EXIT 0
+OUTPUT
+shadow=730
+fine=730

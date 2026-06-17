@@ -1,0 +1,28 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+range_collect=[0,1,2,3,4]
+step_desc=[10,8,6,4,2]
+step0_count=0
+repeat=[7,7,7,7]
+squares=[1,4,9,16,25]
+evens=[0,2,4,6,8]
+take4=[0,1,2,3]
+take_short=[0,1,2]
+skip3=[3,4,5,6]
+skip_overshoot_count=0
+chain=[0,1,2,100,101,102]
+fold_sum_1_10=55
+sum_1_10=55
+count_0_42=42
+each_sum_1_5=15
+any_gt5=T
+any_gt99=F
+all_ge0=T
+all_gt5=F
+find_eq7=Some(7)
+find_miss=None
+pipeline_sum=167
+abandon_first=0
+done

@@ -1,0 +1,38 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+encode_hex=a7626964182a646e616d65644e55524c626f6bf5647461677383010203627069fb400c000000000000636e656726636e696cf6
+roundtrip={"id":42,"name":"NURL","ok":true,"tags":[1,2,3],"pi":3.5,"neg":-7,"nil":null}
+u0: 0
+u23: 23
+u24: 24
+u255: 255
+u256: 256
+u65535: 65535
+u1m: 1000000
+neg1: -1
+neg100: -100
+neg1000: -1000
+str: "IETF"
+emptystr: ""
+arr: [1,2,3]
+nested: [1,[2,3],[4,5]]
+map: {"a":1,"b":[2,3]}
+false: false
+true: true
+null: null
+undef: null
+half_1.0: 1
+half_1.5: 1.5
+half_neg4: -4
+half_0: 0
+single_100000: 100000
+double_1.1: 1.1
+double_pi: 3.14159
+bytestring: unsupported
+tag: unsupported
+indefinite_arr: unsupported
+intkey_map: bad-map-key
+trailing: trailing-bytes
+truncated: truncated

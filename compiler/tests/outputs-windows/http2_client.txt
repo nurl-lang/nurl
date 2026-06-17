@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- A request header round-trip ---
+req_hdr_roundtrip=T
+pseudo_first=T
+--- B url parsing ---
+https_default_port=T
+http_explicit_port=T
+https_default_path=T
+bad_scheme_rejected=T
+live client test skipped (NURL_NET_TESTS != 1)
+all offline assertions passed

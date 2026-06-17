@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+thread_err_name(ThreadCreate)=ThreadCreate
+thread_err_name(ThreadOther)=ThreadOther
+live thread tests skipped (set NURL_NET_TESTS=1 to enable)

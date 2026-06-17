@@ -1,0 +1,32 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+u16 len=4
+u16_be[0]=18
+u16_be[1]=52
+u16_le[0]=52
+u16_le[1]=18
+r_u16_be=4660
+r_u16_le=4660
+r_u16_max=65535
+u32 len=8
+u32_be[0]=18
+u32_be[3]=120
+u32_le[0]=120
+u32_le[3]=18
+r_u32_be=305419896
+r_u32_le=305419896
+r_u32_hi=2147483649
+u64 len=16
+u64_be[0]=1
+u64_be[7]=239
+u64_le[0]=239
+u64_le[7]=1
+r_u64_be=81985529216486895
+r_u64_le=81985529216486895
+oob_u16=None
+oob_u32=None
+oob_u64=None
+neg_u16=None
+done

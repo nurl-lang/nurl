@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+max(3,7)=7
+
+min(3,7)=3
+
+max(9,2)=9
+
+max(apple,pear)=pear
+min(apple,pear)=apple

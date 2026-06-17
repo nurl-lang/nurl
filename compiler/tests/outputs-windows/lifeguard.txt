@@ -1,0 +1,22 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+LHM starts healthy (0): YES
+award at floor stays 0: YES
+two penalties → 2: YES
+scale base 1000 by (1+2) = 3000: YES
+award recovers to 1: YES
+penalty capped at max (8): YES
+timeout @ 0 confirms: 5000
+
+0 confirms → max (5000): YES
+timeout @ 1 confirm: 3000
+
+1 confirm → 3000: YES
+2 confirms strictly between: YES
+k confirms → min (1000): YES
+confirms clamp at k: YES
+lone suspicion alive at t=4000: YES
+lone suspicion expired at t=6000: YES
+corroborated expires fast (t=4000): YES

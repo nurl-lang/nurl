@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+1 2 3 4 5 
+sum=15
+prod=120
+done

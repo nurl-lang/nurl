@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+str[0]=alpha
+str[1]=beta
+str[2]=gamma
+str[3]=<oob>
+int[0]=10
+int[1]=-1
+int[2]=30
+int[3]=-999

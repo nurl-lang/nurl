@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+u8_payload_zext ok
+i8_payload_sext ok
+u16_payload_zext ok
+i16_payload_sext ok
+u32_payload_zext ok
+mp_slot0_u8 ok
+mp_slot1_i16 ok
+t3_slot0_u8 ok
+t3_slot1_u16 ok
+t3_slot2_u32 ok

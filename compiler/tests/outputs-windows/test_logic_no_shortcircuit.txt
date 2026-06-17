@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- 4.3 Test 4: No short-circuit when needed ---
+T & side: T ctr=1
+F | side: T ctr=1
+both evaluated OK
+PASS

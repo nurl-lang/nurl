@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+len=4
+first via ptr=10
+get(0)=10
+oob ok
+sub_len=2
+sub[0]=20
+sub[1]=30
+first=10
+last=40

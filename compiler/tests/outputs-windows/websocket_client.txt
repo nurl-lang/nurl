@@ -1,0 +1,18 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- A masked serialiser ---
+rfc5_7_masked_hello=T
+--- B masked empty/control ---
+empty_masked=T
+ctl_fin0_rejected=T
+--- C URL parsing ---
+ws://example.com/ws=T
+wss://example.com/chat=T
+ws://127.0.0.1:9001/=T
+wss://host:8443/a/b=T
+ws://h=T
+http://example.com/=T
+live client test skipped (NURL_NET_TESTS != 1)
+all offline assertions passed

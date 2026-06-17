@@ -1,0 +1,15 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+ok=42
+ok=-17
+ok=5
+ok=0
+err=empty input
+err=empty input
+err=empty input
+err=bad format
+err=bad format
+err=bad format
+ok=1234567890

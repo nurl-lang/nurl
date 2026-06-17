@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+vec_direct_ok=3
+vec_direct_err=0
+vec_named_ok=3
+str_direct=ok-payload
+str_direct_err=err-payload
+str_named=ok-payload

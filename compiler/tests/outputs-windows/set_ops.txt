@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+union len=6 sum=21
+intersect len=2 sum=7
+diff_a_b len=2 sum=3
+diff_b_a len=2 sum=11
+union_has_5=T union_has_99=F
+intersect_with_empty_len=0
+union_with_empty_sum=10
+done

@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+avail_initial_2 ok
+try1_ok ok
+try2_ok ok
+avail_zero ok
+try3_blocked ok
+avail_after_release ok
+try4_ok ok
+try5_blocked ok
+avail_restored ok
+neg_clamped_to_0 ok
+neg_no_permit ok
+live_concurrency skipped (set NURL_NET_TESTS=1)

@@ -1,0 +1,4 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_loop_carried_foreach.nu:15: error: use of moved value 'xs' - it was consumed at line 15 (pass a fresh value or rebind it before reuse)
+error: compilation aborted - 1 borrow-checker violations (re-run with --no-borrowck to bypass)

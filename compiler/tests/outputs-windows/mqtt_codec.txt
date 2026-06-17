@@ -1,0 +1,57 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+-- varint round-trip --
+varint 0 enc=1B dec=0 nbytes=1 len=1 ok
+varint 127 enc=1B dec=127 nbytes=1 len=1 ok
+varint 128 enc=2B dec=128 nbytes=2 len=2 ok
+varint 16383 enc=2B dec=16383 nbytes=2 len=2 ok
+varint 16384 enc=3B dec=16384 nbytes=3 len=3 ok
+varint 2097151 enc=3B dec=2097151 nbytes=3 len=3 ok
+varint 2097152 enc=4B dec=2097152 nbytes=4 len=4 ok
+varint 268435455 enc=4B dec=268435455 nbytes=4 len=4 ok
+-- unsigned byte reader --
+byte0=0
+byte2=128
+byte3=255
+byteOOB=-1
+-- MQTT string framing --
+str [6] 0 4 77 81 84 84
+-- CONNECT layout --
+connect [19] 16 17 0 4 77 81 84 84 5 2 0 60 0 0 4 99 105 100 55
+-- CONNACK reason --
+connack_ok=0
+connack_bad=134
+connack_short=-1
+-- user-property parse --
+props=1
+  key=unit
+  val=celsius
+-- MqttErr names --
+MqttTransport
+MqttTimeout
+MqttClosed
+MqttProtocol
+MqttBadAuth
+MqttSubFailed
+-- topic matching (MQTT 5.0 ~4.7) --
+'sport/tennis/p1' ~ 'sport/tennis/p1' = match ok
+'sport/tennis' ~ 'sport/tennis/p1' = nomatch ok
+'sport/tennis/+' ~ 'sport/tennis/p1' = match ok
+'sport/tennis/+' ~ 'sport/tennis/p1/rank' = nomatch ok
+'sport/+/p1' ~ 'sport/tennis/p1' = match ok
+'+' ~ 'a' = match ok
+'+' ~ 'a/b' = nomatch ok
+'+/+' ~ 'a/b' = match ok
+'a/+' ~ 'a/' = match ok
+'a/+/c' ~ 'a/b' = nomatch ok
+'sport/#' ~ 'sport/tennis/p1' = match ok
+'sport/#' ~ 'sport' = match ok
+'sport/#' ~ 'sport/' = match ok
+'#' ~ 'a/b/c' = match ok
+'a/b' ~ 'a/b/c' = nomatch ok
+'a/b/c' ~ 'a/b' = nomatch ok
+'#' ~ '$SYS/broker' = nomatch ok
+'+/monitor' ~ '$SYS/monitor' = nomatch ok
+'$SYS/#' ~ '$SYS/broker/load' = match ok

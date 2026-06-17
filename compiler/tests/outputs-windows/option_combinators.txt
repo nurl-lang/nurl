@@ -1,0 +1,15 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+som1
+som0
+non1
+non0
+7
+99
+49
+map_none_ok
+4
+at2_none_ok
+at3_none_ok

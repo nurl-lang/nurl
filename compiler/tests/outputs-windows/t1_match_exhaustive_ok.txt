@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- 4.1 Test 1: Exhaustive match OK ---
+Red:   red
+Green: green
+Blue:  blue
+PASS

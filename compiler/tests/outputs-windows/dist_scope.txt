@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+fan-out is R=2 (not N=4): YES
+exactly 2 members are replicas: YES
+at least one non-replica excluded: YES
+digest flags divergence: YES
+anti-entropy converged (12 / in-sync): YES
+removed replica drops out of the set: YES
+fan-out still R after the change: YES
+new replica empty diverges: YES
+new replica converges by pull (12): YES

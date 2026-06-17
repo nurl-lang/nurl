@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+xor=6
+id=6
+self=0
+zero=10
+nest=7
+TF=1
+TT=0
+FF=0

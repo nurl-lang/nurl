@@ -1,0 +1,18 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+cap=3 empty=T
+len=3
+touch_a=1
+evicted=2
+has_b=F has_a=T has_d=T
+peek_c=3
+evicted2=3
+replace_d_old=4
+d_now=40
+len=3
+remove_a=1 has_a=F len=2
+remove_missing=none
+order=d:40 e:5 
+evicted_val=xv

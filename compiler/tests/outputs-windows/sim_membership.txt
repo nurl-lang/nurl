@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+before gossip only node 0 knows 3 dead: YES
+lossy gossip converged 3-dead on node 1: YES
+lossy gossip converged 3-dead on node 2: YES
+some messages were actually dropped: YES
+partition: nodes 0,1 learn 3 dead: YES
+partition: isolated node 2 does NOT: YES
+after heal node 2 reconverges 3 dead: YES

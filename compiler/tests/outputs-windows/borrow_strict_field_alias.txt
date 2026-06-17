@@ -1,0 +1,4 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_strict_field_alias.nu:32: error: 'c' is both mutably borrowed (passed as 'inout') and aliased by another argument of the same call - exclusive access is violated
+error: compilation aborted - 1 borrow-checker violations (re-run with --no-borrowck to bypass)

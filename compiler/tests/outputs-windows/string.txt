@@ -1,0 +1,15 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+String operations test...
+concat: hello world
+strlen "hello": 5
+substr 6 5: world
+find "world": 6
+find "xyz": -1
+char_at 1: e
+"hello" == "hello": yes
+"hello" == "world": no
+int 42: 42
+float 3.14: 3.14

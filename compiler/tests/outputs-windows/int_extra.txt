@@ -1,0 +1,42 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+gcd(12,18)   = 6
+ ok
+gcd(-12,18)  = 6
+ ok
+gcd(0,0)     = 0
+ ok
+gcd(0,7)     = 7
+ ok
+gcd(17,5)    = 1
+ ok
+lcm(4,6)     = 12
+ ok
+lcm(0,5)     = 0
+ ok
+lcm(-4,6)    = 12
+ ok
+lcm(21,6)    = 42
+ ok
+isqrt(0)     = 0
+ ok
+isqrt(1)     = 1
+ ok
+isqrt(4)     = 2
+ ok
+isqrt(8)     = 2
+ ok
+isqrt(9)     = 3
+ ok
+isqrt(15)    = 3
+ ok
+isqrt(16)    = 4
+ ok
+isqrt(99)    = 9
+ ok
+isqrt(10000) = 100
+ ok
+isqrt(-5)    = 0
+ ok

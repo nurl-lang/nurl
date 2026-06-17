@@ -1,0 +1,23 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+len0=0 empty=T cap=0
+len3=3 cap=8
+alice=42
+bob=17
+nope=none 
+has_alice=T has_dave=F 
+prev_alice=42
+alice2=100
+removed_bob=17 has_bob_after=F
+removed_bob_again=none
+after_grow len=11 cap=16
+alice_after_grow=100
+liam=12
+sum=271
+visited=11
+inv[3]=three
+inv[7]=none
+inv_len=5
+done

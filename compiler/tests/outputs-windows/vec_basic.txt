@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+empty=T len=0 cap=0
+after_push len=5 cap=8
+10 20 30 40 50 
+at2=999
+oob_none=YES
+pop=50 len=4
+rev=10 999 20 40 
+cleared len=0 cap=8
+done

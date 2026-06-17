@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+A1 counter=0
+B1 counter=0
+C1 worker_id_outside=-1
+D1 counter=0

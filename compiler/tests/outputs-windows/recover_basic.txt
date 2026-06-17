@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+c1: closure body
+c1: ok
+noisy: before panic
+c2: caught msg=simulated handler crash
+c3a: out_a.n=42
+noisy: before panic
+c3b: out_b.n=99
+c4: program still alive

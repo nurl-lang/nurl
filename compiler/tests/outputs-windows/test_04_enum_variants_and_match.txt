@@ -1,0 +1,60 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+click at 
+100
+,
+200
+
+
+key 
+A
+ pressed (code 
+65
+)
+
+
+close
+
+
+tick
+
+
+roundtrip: 
+key 
+Z
+ pressed (code 
+90
+)
+
+
+nested: 
+outer-some 
+inner-num 
+42
+
+
+nested: 
+outer-some 
+inner-null
+
+
+nested: 
+outer-none
+
+
+ptr-deref: 
+click at 
+7
+,
+8
+
+
+total clicks: 
+
+
+
+2
+
+

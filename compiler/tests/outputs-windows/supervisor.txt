@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+transient: counter=4
+ restarts=3
+
+temporary: counter=1
+ restarts=0
+
+intensity: counter=3
+ restarts=3
+
+permanent
+transient
+temporary

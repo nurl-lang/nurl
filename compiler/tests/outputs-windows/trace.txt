@@ -1,0 +1,20 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+hex(255)=00000000000000ff
+tp=00-00000000000000000000000012345678-00000000beefcafe-01
+parsed ok=1
+ trace=305419896
+ span=3203386110
+
+round-trip: true
+active (fresh): false
+active (set): true
+cur trace=305419896
+
+active (cleared): false
+tp(big)=00-0000000000000000ffffffffffffffff-ffffffffffffffff-01
+high-bit round-trip: true
+bad ok=0
+

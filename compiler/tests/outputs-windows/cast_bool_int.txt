@@ -1,0 +1,15 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+cmp_true   ok = 1
+cmp_false  ok = 0
+and_true   ok = 1
+and_false  ok = 0
+or_true    ok = 1
+or_false   ok = 0
+not_true   ok = 1
+is_alpha   ok = 1
+is_digit   ok = 1
+is_space   ok = 1
+is_alnum   ok = 1

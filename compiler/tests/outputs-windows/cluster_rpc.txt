@@ -1,0 +1,17 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+count: 1
+
+ok: true
+result: 49
+
+miss ok: false
+err: no such fn
+ClNet
+ClTimeout
+ClNoSuchFn
+ClBadResp
+ClRemote
+ClSerialize

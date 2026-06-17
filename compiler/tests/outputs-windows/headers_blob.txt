@@ -1,0 +1,22 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+blob: Authorization: Bearer xyz
+
+END
+len=27
+
+http_request: HttpInvalidUrl
+http_get: HttpInvalidUrl
+http_post+ct: HttpInvalidUrl
+http_post_with_headers: HttpInvalidUrl
+http_put: HttpInvalidUrl
+http_patch: HttpInvalidUrl
+http_delete: HttpInvalidUrl
+HttpConnect
+HttpTimeout
+HttpTls
+HttpDns
+HttpInvalidUrl
+HttpOther

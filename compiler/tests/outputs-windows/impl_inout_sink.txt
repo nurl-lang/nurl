@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+struct_inout ok
+inout_plus_byval ok
+second_impl_distinct ok
+sink_impl ok

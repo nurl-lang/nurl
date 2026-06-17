@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+── register smoke ──
+  cleared twice = ok
+── constant smoke ──
+  SIGTERM available = T
+  signal_name(SIGTERM) = SIGTERM
+  bogus name = -1 ok
+  signal_name(9999) = SIG?
+── generic dispatch ──
+  SIGUSR1 unavailable on this target — skipped
+live signal tests skipped (set NURL_NET_TESTS=1 to enable)

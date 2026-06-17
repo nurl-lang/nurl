@@ -1,0 +1,24 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+new member alive: YES
+suspect overrides alive @ same inc: YES
+higher inc alive refutes suspect: YES
+dead overrides @ same inc: YES
+alive does NOT revive dead @ same inc: YES
+higher inc revives: YES
+self facts ignored: YES
+lone suspect alive before ceiling (t=4000): YES
+lone suspect dead after ceiling (t=6000): YES
+corroborated dead by t=1500 (floor 1000): YES
+LHM bumped to 1: YES
+unhealthy node holds off at t=6000 (scaled ceiling 10000): YES
+probe ok restores health: YES
+two picks cover both members: YES
+msg type ping: YES
+msg seq: YES
+msg target preserved: YES
+gossip count 2: YES
+gossip applied: b suspect: YES
+gossip applied: c alive: YES

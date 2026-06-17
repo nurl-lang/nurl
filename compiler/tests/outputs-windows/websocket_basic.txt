@@ -1,0 +1,39 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- A handshake ---
+rfc1_3_accept=T
+status_101=T
+accept_header_present=T
+--- B ws_is_upgrade ---
+valid_upgrade=T
+post_rejected=T
+nokey_rejected=T
+no_upgrade_token_rejected=T
+--- C UTF-8 ---
+ascii_ok=T
+2byte_ok=T
+3byte_ok=T
+4byte_ok=T
+overlong_rejected=T
+surrogate_rejected=T
+truncated_rejected=T
+bare_cont_rejected=T
+over_max_rejected=T
+--- D frame serializer ---
+hello_wire=T
+empty_wire=T
+len126_header=T
+len64k_header=T
+cont_wire=T
+ping_wire=T
+--- E close-frame ---
+empty_1005=T
+onebyte_1002=T
+code_1000=T
+code_reason=T
+--- F writer validation ---
+ctl_fin0_err=WsProtocolControlFragmented
+ctl_big_err=WsProtocolControlTooLarge
+op5_err=WsProtocolBadOpcode

@@ -1,0 +1,18 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+name=foo
+versions=4
+
+select ^1.0.0 -> 1.2.0
+select >=1.0.0 -> 2.0.0
+select ^1.3.0 -> none
+select =2.0.0 -> 2.0.0
+select ^3.0.0 -> none
+v120_checksum=bbb
+v120_deps=1
+
+dep0=bar ^0.3
+url=https://reg.nurl-lang.org/pkgs/foo/foo-1.2.0.tar.gz
+done

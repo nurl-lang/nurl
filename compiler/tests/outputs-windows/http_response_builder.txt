@@ -1,0 +1,65 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+reason 100 = Continue
+reason 200 = OK
+reason 204 = No Content
+reason 302 = Found
+reason 404 = Not Found
+reason 500 = Internal Server Error
+reason 999 = Unknown
+── text_200 ──
+HTTP/1.1 200 OK\r\n
+Content-Type: text/plain; charset=utf-8\r\n
+Content-Length: 11\r\n
+\r\n
+hello world── status_only_204 ──
+HTTP/1.1 204 No Content\r\n
+Content-Length: 0\r\n
+\r\n
+── redirect_302 ──
+HTTP/1.1 302 Found\r\n
+Location: /login\r\n
+Content-Length: 0\r\n
+\r\n
+── error_404 ──
+HTTP/1.1 404 Not Found\r\n
+Content-Type: text/plain; charset=utf-8\r\n
+Content-Length: 9\r\n
+\r\n
+not found── json_200 ──
+HTTP/1.1 200 OK\r\n
+Content-Type: application/json; charset=utf-8\r\n
+Content-Length: 21\r\n
+\r\n
+{"ok":true,"count":7}── manual_201 ──
+HTTP/1.1 201 Created\r\n
+Content-Type: application/yaml\r\n
+X-Custom: nurl-test\r\n
+Content-Length: 11\r\n
+\r\n
+result: ok\n
+── pinned_cl ──
+HTTP/1.1 200 OK\r\n
+Content-Length: 4\r\n
+Content-Type: text/plain\r\n
+\r\n
+body── dedup_set_header ──
+HTTP/1.1 200 OK\r\n
+content-type: application/json\r\n
+Content-Length: 7\r\n
+\r\n
+{"k":1}── add_header_repeats ──
+HTTP/1.1 204 No Content\r\n
+Content-Length: 0\r\n
+Set-Cookie: a=1; Path=/\r\n
+Set-Cookie: b=2; Path=/admin\r\n
+\r\n
+── header_crlf_strip ──
+HTTP/1.1 200 OK\r\n
+Content-Type: text/plain; charset=utf-8\r\n
+X-Evil: aInjected: 1\r\n
+Content-Length: 1\r\n
+\r\n
+x

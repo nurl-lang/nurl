@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+c1.n=3
+c1.max=100
+c1.max=999
+c2.n (caller view)=7
+c1 after reassign: n=42, max=84
+c1.max via closure=84

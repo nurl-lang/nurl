@@ -1,0 +1,33 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+cmp_int(3,7)=-1
+cmp_int(7,3)=1
+cmp_int(5,5)=0
+cmp_str(ab,ac)=-1
+cmp_str(ab,ab)=0
+cmp_str(ac,ab)=1
+min_i(3,7)=3
+max_i(3,7)=7
+clamp_i(5,0,10)=5
+clamp_i(-3,0,10)=0
+clamp_i(99,0,10)=10
+min_by(8,4)=4
+max_by(8,4)=8
+clamp_by(15,0,10)=10
+before=[5,1,4,2,3,5,0]
+asc=[0,1,2,3,4,5,5]
+desc=[5,4,3,2,1]
+empty=[]
+singleton=[42]
+presorted=[1,2,3,4]
+words=[apple,banana,cherry,pear]
+byabs=[1,-2,-3,4,-7]
+bs(4)=Some(4)
+bs(0)=Some(0)
+bs(5)=Some(5)
+bs(6)=None
+bs(-1)=None
+bs_empty(7)=None
+done

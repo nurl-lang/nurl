@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+none str ok
+payload
+none vec ok
+none int ok
+none struct ok
+mut none ok
+replaced

@@ -1,0 +1,84 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+── mime_for_ext ──
+  html  → text/html; charset=utf-8
+  HTML  → text/html; charset=utf-8
+  css   → text/css; charset=utf-8
+  js    → application/javascript; charset=utf-8
+  json  → application/json; charset=utf-8
+  png   → image/png
+  jpg   → image/jpeg
+  jpeg  → image/jpeg
+  svg   → image/svg+xml
+  woff2 → font/woff2
+  wasm  → application/wasm
+  pdf   → application/pdf
+  csv   → text/csv; charset=utf-8
+  xyz   → application/octet-stream
+  empty → application/octet-stream
+── parse_basic_auth ──
+  user=alice
+  pass=secret
+  user2=bob
+  pass2=p:wd
+  noheader = None
+  wrongscheme = None
+  badb64 = None
+  nocolon = None
+── parse_bearer_auth ──
+  token=abc.def.ghi
+  trimmed=xyz123
+  empty = None
+  wrong = None
+  missing = None
+── request_cookie ──
+  session=abc123
+  theme=dark
+  user=alice
+  lang=fi
+  missing = None
+  noheader = None
+── response_set_cookie ──
+  plain wire:
+HTTP/1.1 200 OK
+
+Set-Cookie: session=xyz
+
+Content-Length: 0
+
+
+
+
+  full wire:
+HTTP/1.1 200 OK
+
+Set-Cookie: auth=tok123; Path=/admin; Domain=example.com; Max-Age=3600; Secure; HttpOnly; SameSite=Strict
+
+Content-Length: 0
+
+
+
+
+  delete wire:
+HTTP/1.1 200 OK
+
+Set-Cookie: prefs=light; Path=/; Max-Age=0; SameSite=Lax
+
+Content-Length: 0
+
+
+
+
+── __has_dotdot_segment ──
+  /a/b/c        = F
+  /a/../b       = T
+  /../etc       = T
+  /a/b/..       = T
+  /a/.b/c       = F
+  /a/...//b     = F
+  /a\..\b     = T
+  ..            = T
+  /             = F
+  /favicon.ico  = F

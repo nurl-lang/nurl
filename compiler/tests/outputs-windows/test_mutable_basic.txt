@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- 4.4 Test 3: Mutable basic ---
+before: x=0
+after:  x=10
+final:  x=30
+PASS

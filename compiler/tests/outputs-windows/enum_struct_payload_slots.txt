@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+slot1_struct ok
+slot2_struct ok
+slot0_struct ok
+slot0_and_slot1_struct ok
+mix_slot0_struct ok
+mix_slot1_int ok
+mix_slot2_struct ok
