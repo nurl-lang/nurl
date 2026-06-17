@@ -3,7 +3,7 @@
 This document is the single reference for how NURL manages memory: who
 owns a heap allocation, when it is freed, and what the compiler checks
 statically. It covers the model as implemented in `nurlc.nu` (grammar
-v2.1).
+v2.2).
 
 ## TL;DR
 
