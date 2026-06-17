@@ -69,6 +69,8 @@ Each example is tagged for where it can run:
 | [`slice_test.nu`](slice_test.nu) | Slice literals + foreach borrow semantics + struct field access. | playground |
 | [`test_05_closures_and_capture.nu`](test_05_closures_and_capture.nu) | Closure capture semantics (snapshot vs by-pointer) and the closure-as-value calling convention. | playground |
 | [`test_06_torture_chamber.nu`](test_06_torture_chamber.nu) | AST construction, type inference, and memory-layout torture test. | playground |
+| [`chaotic-showcase.nu`](chaotic-showcase.nu) | Adversarial three-corner stress: dense Vec3 float prefix-arithmetic, a recursive symbolic-differentiation ADT, and higher-order parser combinators (closures returning closures). | playground |
+| [`chaotic-aggressor.nu`](chaotic-aggressor.nu) | A hostile pre-1.0 grammar/compiler stress test: a concatenative stack VM combining generics + monomorphisation, trait dispatch, a multi-payload `??` (or-pattern + guard + 2-payload bind), a slice-of-closures jump table, closures-returning-closures, dense prefix Horner arithmetic, const folding and LIFO `defer` — with an "aggressor lab" of minimal compiler-bug repros in its footer. | playground |
 
 ### HTTP & RPC
 
