@@ -12542,6 +12542,52 @@
     ? & >= c1 48 <= c1 57 { ^ T } { ^ F }
 }
 
+// __has_dunder: true if `str` contains "__" — the mark of a compiler-mangled
+// name (a generic instantiation like `Vec__i64`, an aliased import). Such
+// names are always compiler-produced, never a user-typed type name.
+@ __has_dunder s str → b {
+    : i n ( nurl_str_len str )
+    : ~ i i 0
+    ~ < i - n 1 {
+        ? & == ( nurl_str_get str i ) 95 == ( nurl_str_get str + i 1 ) 95 { ^ T } {}
+        = i + i 1
+    }
+    F
+}
+
+// check_type_known: scan an emitted LLVM type string for `%Name` references
+// and reject any that names no declared type. A bare unknown type name (a
+// typo, or a missing `$` import) otherwise leaks into the IR as an undefined
+// `%Name` that nurlc emits with status 0 and only clang / llvm-as rejects
+// ("use of undefined type named 'X'", or the cryptic "cannot allocate unsized
+// type"). Accepted silently: generic type variables (tparam-like — substituted
+// during monomorphisation) and compiler-mangled names (contain `__`, e.g. a
+// `%Vec__i64` instantiation). `syms` carries every declared struct/enum from
+// the pre-scan, so the registry lookup is reliable regardless of declaration
+// order. `ctx` names the position for the diagnostic.
+@ check_type_known i lex i syms s llvm_ty s ctx → v {
+    : i n ( nurl_str_len llvm_ty )
+    : ~ i i 0
+    ~ < i n {
+        ? == ( nurl_str_get llvm_ty i ) 37   // '%'
+        { : ~ i j + i 1
+            ~ & < j n ( __is_ident_char ( nurl_str_get llvm_ty j ) ) { = j + j 1 }
+            : s name ( nurl_str_slice llvm_ty + i 1 - j + i 1 )
+            ? != 0 ( nurl_str_len name )
+            { ? ( is_tparam_like name ) {}
+                { ? ( __has_dunder name ) {}
+                    { ? == 0 ( nurl_str_len ( nurl_sym_get syms name ) )
+                        { ( die lex ( nurl_str_cat
+                            ( nurl_str_cat3 `unknown type '` name `' in ` )
+                            ( nurl_str_cat ctx ` — no struct or enum with this name is declared (a typo, or a missing '$' import?)` ) ) ) }
+                        {} } } }
+            {}
+            = i j
+        }
+        { = i + i 1 }
+    }
+}
+
 // Unknown-generic check for parse_type_paren (critic A7). Defined here
 // (after the g_generic_struct_syms / g_struct_inst_syms globals) and
 // forward-called from the parser: globals cannot be forward-referenced,
@@ -12833,6 +12879,7 @@
             ( nurl_str_cat3 sink_acc ` ` ( nurl_str_int pct ) ) }
         {}
         = params_str ( nurl_get_last_type )
+        ( check_type_known lex syms params_str `a parameter type` )
         = pct + pct 1
     }
     // Publish this function's inout / sink
@@ -12848,6 +12895,7 @@
     ( nurl_sym_def g_res_type_syms `__last_res_err_llvm__` `` )
     ( nurl_sym_def g_res_type_syms `__last_opt_nurl_t__` `` )
     : s ret_ty ( parse_type lex )
+    ( check_type_known lex syms ret_ty `the return type` )
     : s nurl_ret ( nurl_sym_get g_res_type_syms `__last_res_nurl__` )
     // LLVM type of the Ok-payload T (e.g. `%Vec__i8` for `! ( Vec u ) s`,
     // `i8*` for `! s E`). Recorded per-function — mirrors `<fname>__nurl_ret`
@@ -13452,6 +13500,7 @@
             `recursive struct '` sname `' has infinite size — a field holds the struct itself by value. Box it as a pointer: '* ` )
             ( nurl_str_cat sname `'` ) ) ) }
         {}
+        ( check_type_known lex syms flt `a struct field type` )
         ? ( is_ident_tok ( nurl_lex_type lex ) )
         { : s fname ( nurl_lex_val lex )
             ( nurl_lex_advance lex )
@@ -13760,6 +13809,7 @@
             ( nurl_sym_def syms ( nurl_str_cat fname `__variadic_sig` ) params_str )
         }
         { : s lt ( parse_type lex )
+            ( check_type_known lex syms lt `an FFI parameter type` )
             ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
             ? == pct 0
             { = params_str lt }
@@ -13769,6 +13819,7 @@
     }
     ( expect lex TT_ARROW )
     : s ret_ty ( parse_type lex )
+    ( check_type_known lex syms ret_ty `the FFI return type` )
     ( nurl_sym_def syms fname ret_ty )
     // Mark this name as a callable FFI symbol. gen_stmt's bare-ident-
     // as-statement check (critic v0.9.0 §1) uses this to die on
