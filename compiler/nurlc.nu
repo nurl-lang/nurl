@@ -5896,7 +5896,9 @@
                 : s cv0 ? did_reconstruct pr0_eff
                 ? pt0_is_opt_bool pr0 ( nurl_cg_reg cg )
                 ? pt0_is_opt_bool {} {
-                    ? & > ( int_width pt0 ) 0 < ( int_width pt0 ) 64 {
+                    ? ( is_float_ty pt0 )
+                    { ( emit_enum_float_extract cv0 pt0 pr0 cg ) }
+                    { ? & > ( int_width pt0 ) 0 < ( int_width pt0 ) 64 {
                         // Narrow integer payload (i1 / i8 / i16 / i32, incl.
                         // the unsigned u/u16/u32): the value rode the ptr slot
                         // widened to i64 (gen_agg_lit), so ptrtoint back to i64
@@ -5948,6 +5950,7 @@
                             ? ( seq pt0 `i64` )
                             { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr0 ) ( nurl_print ` to i64\n` ) }
                             { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr0 ) ( nurl_print ` to i8*\n` ) } }
+                    }
                     }
                 }
                 : s vp0 ( nurl_cg_reg cg )
@@ -6011,7 +6014,9 @@
                 ( nurl_print ` = extractvalue ` ) ( nurl_print match_type )
                 ( nurl_print ` ` ) ( nurl_print match_val ) ( nurl_print `, 2\n` )
                 : s cv1 ( nurl_cg_reg cg )
-                ? & > ( int_width pt1 ) 0 < ( int_width pt1 ) 64 {
+                ? ( is_float_ty pt1 )
+                { ( emit_enum_float_extract cv1 pt1 pr1 cg ) }
+                { ? & > ( int_width pt1 ) 0 < ( int_width pt1 ) 64 {
                     : s t64 ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print t64 )
                     ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i64\n` )
@@ -6057,6 +6062,7 @@
                         { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i64\n` ) }
                         { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i8*\n` ) } }
                 }
+                }
                 : s vp1 ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print vp1 )
                 ( nurl_print ` = alloca ` ) ( nurl_print pt1 ) ( nurl_print `\n` )
@@ -6085,7 +6091,9 @@
                 ( nurl_print ` = extractvalue ` ) ( nurl_print match_type )
                 ( nurl_print ` ` ) ( nurl_print match_val ) ( nurl_print `, 3\n` )
                 : s cv2 ( nurl_cg_reg cg )
-                ? & > ( int_width pt2 ) 0 < ( int_width pt2 ) 64 {
+                ? ( is_float_ty pt2 )
+                { ( emit_enum_float_extract cv2 pt2 pr2 cg ) }
+                { ? & > ( int_width pt2 ) 0 < ( int_width pt2 ) 64 {
                     : s t64 ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print t64 )
                     ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i64\n` )
@@ -6123,6 +6131,7 @@
                         ? ( seq pt2 `i64` )
                         { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i64\n` ) }
                         { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i8*\n` ) } }
+                }
                 }
                 : s vp2 ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print vp2 )
@@ -9117,6 +9126,28 @@
 // ── Cast # type expr ───────────────────────────────────────────────
 
 // int_width: LLVM integer type string → bit width, or 0 if not iN.
+// Reconstruct a float (`double` / f32 `float`) enum payload out of the
+// uniformly-pointer enum slot. The construction side (gen_agg_lit) bitcast
+// the float to a same-width int and `inttoptr`'d it into the slot; this is
+// the exact inverse: `ptrtoint` the slot back to i64, then bitcast (an f32
+// first truncs to i32). `cv` is the already-allocated destination register.
+@ emit_enum_float_extract s cv s pt s pr i cg → v {
+    : s bits ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print bits )
+    ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr ) ( nurl_print ` to i64\n` )
+    ? ( seq pt `double` )
+    { ( nurl_print `  ` ) ( nurl_print cv )
+        ( nurl_print ` = bitcast i64 ` ) ( nurl_print bits ) ( nurl_print ` to double\n` ) }
+    { : s b32 ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print b32 )
+        ( nurl_print ` = trunc i64 ` ) ( nurl_print bits ) ( nurl_print ` to i32\n` )
+        ( nurl_print `  ` ) ( nurl_print cv )
+        ( nurl_print ` = bitcast i32 ` ) ( nurl_print b32 ) ( nurl_print ` to float\n` ) }
+}
+
+// True iff an LLVM type string is a float type (`double` or f32 `float`).
+@ is_float_ty s ty → b { ^ | ( seq ty `double` ) ( seq ty `float` ) }
+
 @ int_width s ty → i {
     ? ( seq ty `i1` ) 1
     ? ( seq ty `i8` ) 8
@@ -10118,6 +10149,27 @@
                         ( nurl_print `  ` ) ( nurl_print conv_reg2 )
                         ( nurl_print ` = inttoptr i64 ` ) ( nurl_print conv_reg1 ) ( nurl_print ` to ptr\n` )
                         = actual_fval conv_reg2
+                        = actual_fty `ptr`
+                    }
+                    ? ( is_float_ty fty )
+                    {  // Float payload → ptr slot. Bitcast the float to a
+                        // same-width int (f32 widens i32→i64), then inttoptr.
+                        // The match arm inverts this (emit_enum_float_extract).
+                        : ~ s ibits ``
+                        ? ( seq fty `double` )
+                        { = ibits ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print ibits )
+                            ( nurl_print ` = bitcast double ` ) ( nurl_print fval ) ( nurl_print ` to i64\n` ) }
+                        { : s b32 ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print b32 )
+                            ( nurl_print ` = bitcast float ` ) ( nurl_print fval ) ( nurl_print ` to i32\n` )
+                            = ibits ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print ibits )
+                            ( nurl_print ` = zext i32 ` ) ( nurl_print b32 ) ( nurl_print ` to i64\n` ) }
+                        : s conv_regf ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print conv_regf )
+                        ( nurl_print ` = inttoptr i64 ` ) ( nurl_print ibits ) ( nurl_print ` to ptr\n` )
+                        = actual_fval conv_regf
                         = actual_fty `ptr`
                     }
                     ? & > ( int_width fty ) 0 ! ( seq fty `i1` )

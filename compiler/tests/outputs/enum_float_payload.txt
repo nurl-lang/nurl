@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+num_slot0 ok
+pair_slots01 ok
+triple_slots012 ok
+boxed_float_child ok
+f32_roundtrip ok

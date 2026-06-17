@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Float (`f` / `f32`) enum payloads now compile.** An enum's payload slot
+  is uniformly pointer-typed; construction coerced `i1` / integer / string /
+  struct payloads into it, but had no branch for `double` / `float`, so a
+  float payload emitted `insertvalue %E …, double X, 1` into a `ptr` field
+  and clang rejected it (`operand and field disagree in type`). The match
+  side had the symmetric gap. Any sum type with a floating-point payload —
+  a numeric AST, a real-valued JSON, a geometry variant — was uncompilable,
+  although the grammar permits it. Fixed in `gen_agg_lit` (bitcast the float
+  to a same-width int, f32 widens i32→i64, then `inttoptr` into the slot) and
+  `emit_enum_float_extract` (the inverse on the match arm). Verified across
+  payload slots 0/1/2, a mixed float+pointer recursive enum, and a genuine
+  `f32` value; the bootstrap fixed point holds (no existing code used float
+  enum payloads, so emitted IR is unchanged). Regression
+  `compiler/tests/enum_float_payload.nu`; surfaced by the
+  `examples/chaotic-showcase.nu` grammar stress test (recursive symbolic
+  autodiff). An *implicit* double-literal → `f32` narrowing in an enum
+  literal still needs an explicit `# f32` cast, exactly as struct
+  construction requires.
+
 ## [0.9.8] — 2026-06-15
 
 ### Added
