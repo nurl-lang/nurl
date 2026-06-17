@@ -521,8 +521,8 @@ only fires when a *real* stack reference is passed (§2.7, §2.8). The
 consequence is a working contract: **if the checker flags your code, it
 has found a real bug** — quote the message and fix it. The whole
 in-tree corpus (compiler + stdlib + tests) is verified borrow-clean and
-runs ASan/UBSan-clean, so a false positive is a compiler bug worth
-reporting, and `--no-borrowck` is the escape hatch meanwhile.
+passes the sanitizer gate (§6.6), so a false positive is a compiler bug
+worth reporting, and `--no-borrowck` is the escape hatch meanwhile.
 
 Because the pass lowers nothing, an accepted program compiles to
 **byte-identical IR** with or without it — which is why turning it on
@@ -565,6 +565,64 @@ deliberately simpler and the equivalence does **not** hold:
   safe. Its boundary (§3) is real and intentional, not a TODO list of
   Rust features pending.
 
+### 6.6 The gates — how the guarantees are checked
+
+Everything above is enforced by two CI jobs
+(`.github/workflows/ci.yml`) plus a targeted leak tool. This subsection
+is the single source of truth for *what is actually run*; other
+sections point here rather than re-describe it.
+
+**One fact resolves the usual confusion:** on Linux x86-64,
+`-fsanitize=address` **is** the leak detector — ASan integrates LSan and
+runs it at process exit, and `detect_leaks` merely toggles it. So "ASan"
+and "LSan" name the *same* instrumented run with the leak check off or
+on; they are not two separate tools or two separate builds.
+
+1. **Functional gate** — `./build.sh`. The bootstrap fixed point
+   (stage1 ≡ stage2, byte-identical IR) plus the golden-output test
+   corpus (`run_tests.sh`, **no** sanitizers) plus
+   `tools/check_examples.sh` (frontend-compiles every `examples/` /
+   `bench/` / `duo/` program). Catches miscompiles, output regressions,
+   and a broken self-host.
+
+2. **Sanitizer gate** — `./build.sh --san` (runtime + every stage built
+   with `-fsanitize=address,undefined`) then
+   `compiler/tests/run_san_tests.sh`, which links each corpus test with
+   `-fsanitize=address,undefined` and runs it under **ASan + UBSan with
+   `detect_leaks=0`**. This is the gate that catches the dangerous
+   classes — use-after-free, double-free, out-of-bounds,
+   undefined behaviour — across the **whole** corpus; a clean branch is
+   `SAN_FAIL: 0`. It is the gate every claim of "no use-after-free /
+   double-free" in this document refers to.
+
+   **It deliberately does not gate leaks** (`detect_leaks=0`). A
+   corpus-wide leak run would flag two non-defects: the compiler's own
+   process-lifetime arenas (`g_str_pool`, `g_sym_arena`), never freed by
+   design; and the many tests that allocate a manual handle
+   (`Vec` / `String`) and exit without freeing it — test brevity
+   exercising the §7.4 contract. So the corpus-wide gate proves
+   *memory-safety*, not leak-freedom.
+
+3. **Leak verification** — pinned, not corpus-wide. Because gate 2 runs
+   with leaks off, the no-leak guarantees are pinned two ways, both with
+   `detect_leaks=1`:
+   - `LSAN_DETECT_LEAKS=1 run_san_tests.sh` flips the *same* ASan run's
+     leak check on, turning any leak into a `SAN_FAIL`. Used as an audit
+     and on the leak-pinned tests, which run clean:
+     `struct_nested_field_drop`, `arm_local_drop`,
+     `arm_local_trailing_drop` (normal-path drop, §7.1), and
+     `recover_unwind`, `closure_env_reclaim`, `closure_env_binding`
+     (panic-unwind + closure-env reclamation, §7.2 / §7.4).
+   - `tools/leakcheck/run.sh` — an end-to-end gate that builds the HTTP
+     server with ASan+LSan (`detect_leaks=1`), serves 21 requests, and
+     fails on *any* leak; it locks the per-request leak class
+     (None-placeholder allocations, the keepalive-500 response, and
+     router/handler closure envs).
+
+   Neither pinned check is wired into `ci.yml` yet — they are the
+   pre-1.0 review gates; gate 2 with `LSAN_DETECT_LEAKS=1` is the
+   reproducible audit.
+
 ## 7. Leaks versus memory safety
 
 A leak is **not** a memory-safety violation: no use-after-free, no
@@ -590,9 +648,10 @@ values, and **owned struct fields — including fields nested inside
 inner struct literals** — are all freed at scope exit, and a binding
 declared in a `?` / match / loop arm that *falls through* (no `^`) is
 dropped at arm end, not leaked. These were the historically weak spots
-(“Phase 2D”); they are now closed and pinned by tests that run
-ASan/LSan-clean (`struct_nested_field_drop`, `arm_local_drop`,
-`arm_local_trailing_drop`). Do **not** treat them as open limitations.
+(“Phase 2D”); they are now closed and pinned leak-clean by the
+leak-verification tests `struct_nested_field_drop`, `arm_local_drop`,
+`arm_local_trailing_drop` (§6.6). Do **not** treat them as open
+limitations.
 
 ### 7.2 The panic-unwind allocation journal
 
@@ -632,9 +691,10 @@ strings, owned slices, owned struct-field buffers, and user `% Drop` /
 autodrop-enum values. The mechanism can never turn a leak into a
 double-free or use-after-free (raw entries are pointer-keyed and removed
 at `nurl_free`; typed entries are forgotten at their normal drop site and
-deduped on drain); the corpus runs sanitizer-clean with it on, and
-`recover_unwind` pins the round trip leak-clean under LSan. Single-owner
-scalars and slices are captured *by value* by a closure, so they cannot
+deduped on drain); it clears the sanitizer gate, and `recover_unwind` is
+one of the leak-pinned tests (§6.6) that pins the round trip leak-clean.
+Single-owner scalars and slices are captured *by value* by a closure, so
+they cannot
 escape a recover extent by reference and need no forget; only multi-field
 structs (and the `% Drop` move) can, which the escape-forget covers.
 
@@ -685,11 +745,11 @@ them. The checker still tracks these handles' *moves* — a `vec_free`d
 `Vec`, or a `sink`-consumed value, cannot be used again (§2.1) — it just
 does not free them for you.
 
-Outside this manual-handle set, nothing leaks: the `tools/leakcheck`
-gate plus the ASan/UBSan suite hold the stdlib and corpus to it, and the
-panic-unwind round trip is pinned leak-clean under LSan (`recover_unwind`,
-`closure_env_reclaim`, `closure_env_binding`). The whole-corpus LSan run
-defaults to `detect_leaks=0` for one honest reason: many tests allocate a
-manual handle (`Vec` / `String`) and exit without freeing it — that is
-test brevity exercising the contract, not a compiler defect. A program
-that honours the contract leaks nothing.
+Outside this manual-handle set, nothing leaks. The corpus-wide
+sanitizer gate runs with leak detection **off** (§6.6) — deliberately,
+because a leak run would flag the compiler's process-lifetime arenas and
+the many tests that allocate a manual handle and exit without freeing it
+(test brevity exercising this contract, not a defect). The no-leak
+guarantees are instead pinned by the leak-verification tests and
+`tools/leakcheck` (§6.6). A program that honours the contract leaks
+nothing.
