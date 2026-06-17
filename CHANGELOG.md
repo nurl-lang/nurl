@@ -50,6 +50,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Adversarial language-probing sweep #2 (`examples/chaotic-aggressor.nu`) —
+  four edges hardened before the v1.0 lock.** A hostile valid-NURL stress demo
+  (a concatenative stack VM exercising generics, traits, multi-payload `??`,
+  a slice-of-closures jump table, closures-returning-closures and dense prefix
+  float math) flushed out:
+  - **Slice element access by a parameter index emitted malformed IR.**
+    `. slice idx` where `idx` was a bare function parameter lowered the index
+    as a load from a `<name>__ptr` alloca a parameter never has, leaving the
+    `load i64, i64*` pointer operand blank — IR nurlc accepted (rc 0) and only
+    clang rejected (*"expected instruction opcode"*). `gen_member` now resolves
+    the index exactly like `gen_ident` (parameter → `%name`, local → load
+    `__ptr`, const / enum → load `@name`). Regression
+    `compiler/tests/slice_index_by_param.nu`.
+  - **A bare type keyword used as a value emitted `add void void, …`.** The
+    void/unit literal `v` (produced only by a bare type keyword in value
+    position) reaching an operator / complement / logical-not lowered to a
+    void-typed SSA operand — again rc 0, clang-only rejection. New
+    `die_if_void` guard rejects it at the source (covers `: i x + v 100` and
+    the `~ v xs { … }` foreach-binding trap). Lock
+    `compiler/tests/should_fail_void_operand.nu`.
+  - **Closure capture-by-value assignment is no longer silent.** Assigning to a
+    binding a closure captured by value (the counter footgun: `1,1,1` instead
+    of `1,2,3`) now warns at the assignment, pointing at the supported
+    shared-mutation shape (a `: ~` multi-field struct captured by reference,
+    which cannot escape its frame). Baseline
+    `compiler/tests/should_warn_byval_capture_assign.nu`.
+
+### Changed
+
+- **`generic_inst` grammar widened to match the implementation (compound type
+  arguments).** The compiler has always accepted compound generic arguments —
+  a nested application `( Pair ( Box i ) i )`, a pointer `*T`, an option
+  `?T` / `??T`, or a closure `( @ R P* )` — at both the type-position
+  `( Name … )` form and the call-site `[ … ]` form, but `spec/grammar.ebnf`
+  still said *"base identifiers only; `*T` is not accepted."* The grammar and
+  `docs/spec.md` now define a shared `generic_arg` covering those forms, so
+  spec and implementation agree ahead of the 1.0 lock. The one excluded shape —
+  a bare anonymous slice (`[ T`) as an argument — used to emit garbage IR that
+  only clang rejected and now gets a clean source diagnostic with the
+  wrap-in-a-struct cure. Lock `compiler/tests/should_fail_slice_generic_arg.nu`.
+
 - **Mutable string globals (`: ~ s g …`) can now be reassigned.** The
   declaration was accepted and emitted as writable `global i8*` storage, but
   `gen_const_decl`'s string branch never recorded the `__mutable` flag (the

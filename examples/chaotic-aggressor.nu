@@ -186,49 +186,50 @@ $ `stdlib/std/float.nu`
 }
 
 // ============================================================
-// AGGRESSOR LAB — what actually creaked (verified against the HEAD compiler
-// built from compiler/nurlc.nu, not the older playground/MCP deploy). All
-// repros are valid per a plain reading of spec/grammar.ebnf yet misbehave;
-// kept in comments so this file still compiles.
+// AGGRESSOR LAB — four edges this demo flushed out, ALL NOW FIXED on the
+// fix/aggressor-findings branch (compiler/nurlc.nu). Each line below is valid
+// per spec/grammar.ebnf; what changed is how the compiler now treats it. Kept
+// in comments so this file still compiles. Run any snippet through
+// `./check.sh` to see the new behaviour.
 //
-// L1 ★ COMPILER BUG — SLICE ELEMENT ACCESS BY A PARAMETER INDEX → BROKEN IR.
-//   `. slice idx` where `idx` is a bare function PARAMETER lowers the index
-//   as a load from a stack slot the parameter never got, emitting
-//   `load i64, i64*` with an EMPTY pointer operand. nurlc returns 0 with no
-//   diagnostic; only clang rejects it ("expected instruction opcode"):
-//       @ at [ i xs i k → i { ^ . xs k }          // ← malformed IR
-//   Workaround: copy the index into a local first — `: i j k  ^ . xs j`.
-//   (Raw-pointer `. ptr param` and a MATCH-BOUND index both lower fine —
-//   which is exactly why `vm_run` above, indexing `ops` by the match-bound
-//   opcode `c`, is safe. Refactor that `c` into a plain parameter and the
-//   function stops compiling.)
+// L1 ✓ FIXED — SLICE ELEMENT ACCESS BY A PARAMETER INDEX.
+//   `. slice idx` with `idx` a bare PARAMETER used to lower the index as a
+//   load from a stack slot the parameter never had, emitting `load i64, i64*`
+//   with an EMPTY pointer operand — IR nurlc accepted (rc 0) and only clang
+//   rejected. gen_member now resolves the index exactly like gen_ident
+//   (param → `%name`, local → load `__ptr`, const → load `@name`), so it just
+//   works — no local-copy workaround needed:
+//       @ at [ i xs i k → i { ^ . xs k }          // → returns xs[k]
+//   (This is why `vm_run` above can index `ops` by the opcode directly.)
 //
-// L2 ★ COMPILER BUG — TYPE KEYWORD AS A VALUE → INVALID LLVM, NO DIAGNOSTIC.
-//   A bare type keyword (v/i/f/…) in operand position lowers to a void-typed
-//   SSA value; nurlc returns 0 and emits `add void void, 100`, which only
-//   clang rejects ("void type only allowed for function results"):
-//       : i x + v 100
-//   Same trap behind `~ v xs { … }` (using `v` as a foreach binding); a
-//   non-keyword name like `e` instead gives the clean, correct
-//   "cannot assign to immutable variable".
+// L2 ✓ FIXED — TYPE KEYWORD AS A VALUE.
+//   A bare type keyword in operand position used to lower to a void SSA value
+//   (`add void void, 100`) that only clang rejected. The operator / complement
+//   / logical-not paths now reject the void/unit literal `v` at the source via
+//   die_if_void:
+//       : i x + v 100   // error: binary operator's left operand is the
+//                       //        void/unit value 'v' …
+//   (Same diagnostic now covers the `~ v xs { … }` foreach-binding trap.)
 //
-// L3 — NESTED generic_inst ACCEPTED THOUGH GRAMMAR v2.2 FORBIDS IT.
-//   grammar: generic_inst = '(' IDENT IDENT+ ')'  — args are BASE idents.
-//   Yet HEAD happily monomorphises a nested application (the `Stack`/`Wrap`
-//   shapes above rely on exactly this leniency):
-//       : Box [T] { T val }
-//       : Wrap [T] { ( Box T ) inner  i tag }     // ( Box T ) as a type arg
-//   Either the locked grammar must widen or the compiler must reject this —
-//   a spec/impl divergence worth resolving BEFORE the 1.0 grammar lock.
+// L3 ✓ FIXED (grammar widened) — COMPOUND generic_inst ARGUMENTS.
+//   The compiler always accepted compound type arguments — a nested
+//   application `( Pair ( Box i ) i )`, a pointer `* T`, an option `? T` — but
+//   grammar v2.2 said `generic_inst = '(' IDENT IDENT+ ')'` (base idents only).
+//   The grammar + spec now define a shared `generic_arg` allowing those forms
+//   (slice `[T` args remain unsupported and now give a clean diagnostic). Spec
+//   and implementation agree ahead of the 1.0 lock.
 //
-// L4 — ESCAPING `:~` CAPTURE SILENTLY SNAPSHOTS (no diagnostic).
-//   A counter closure that captures a mutable local and escapes prints
-//   1,1,1 (fresh snapshot per call), not 1,2,3 — by-value capture is the
-//   documented rule, but a broken counter with zero warning is a sharp edge:
+// L4 ✓ FIXED (now diagnosed) — ESCAPING `:~` CAPTURE NO LONGER SILENT.
+//   By-value capture of a mutable binding is the documented default, but a
+//   counter closure that mutates it printed 1,1,1 (fresh snapshot per call)
+//   with zero warning. Assigning to a by-value-captured binding now emits a
+//   warning explaining the write is discarded and pointing at the supported
+//   shared-mutation shape (a `: ~` multi-field struct captured by reference):
 //       @ make_counter → ( @ i ) { : ~ i n 0  ^ \ → i { = n + n 1  ^ n } }
+//   (An escaping mutable-state closure is intentionally not expressible: the
+//   by-ref capture is a stack reference the escape checker forbids escaping.)
 //
-// FIXED SINCE v0.9.8 (the playground/MCP deploy) — verified working on HEAD:
-//   • 4-payload `??` destructuring: `?? b { Quad a b c d → + + + a b c d … }`
-//     compiles and returns the right value (was "undefined identifier 'd'"
-//     with a caret on the *next* arm in v0.9.8).
+// ALSO already fixed earlier (was a v0.9.8 playground/MCP-only regression):
+//   4-payload `??` destructuring — `?? b { Quad a b c d → + + + a b c d … }`
+//   compiles and returns the right value.
 // ============================================================
