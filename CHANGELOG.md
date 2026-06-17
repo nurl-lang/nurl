@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Compiler no longer hangs on an unterminated declaration body (fuzz sweep).**
+  A corpus-seeded mutation fuzzer (36k + 15k mutants over `build/nurlc`; oracle:
+  never crash, never hang, and rc 0 ⇒ the IR assembles) found **zero crashes**
+  but a class of infinite loops: several body-parsing loops checked only for
+  their closing token (`}` / `)` / `]`) and not for end-of-input, so an
+  unterminated construct spun forever on a no-op `nurl_lex_advance` at EOF
+  instead of erroring. A playground user mid-keystroke (or any truncated file)
+  could wedge the compiler. Fixed by adding an EOF guard to every such loop and
+  letting the trailing `expect` report a clean "expected '}' / ')' / ']' but
+  found end of input":
+  - enum-variant loop (`: | E { A`),
+  - trait/impl scan + gen loops and the method-signature skip
+    (`% Shape { @ area i s → i`, `% Shape i { …`),
+  - the `[T]` type-param skip, and
+  - `parse_type_paren`'s generic-application and closure-type argument loops
+    (`( Vec i`, reachable in any type position).
+  Struct / match / block / call-argument bodies already terminated (their inner
+  sub-parsers hit EOF first) and were left unchanged. 15k post-fix mutants
+  produce no hangs and no crashes. Locks `should_fail_unterminated_enum`,
+  `_trait`, `_impl`, `_type_paren`.
+
 - **Front-end type checking for the common static-error class (adversarial
   sweep #3).** A sharper probing pass found that a whole family of trivial type
   errors was accepted by `nurlc` (rc 0, no diagnostic) and emitted IR that only
