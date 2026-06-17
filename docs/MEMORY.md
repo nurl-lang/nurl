@@ -637,19 +637,25 @@ are yours to release:
 - **`Vec`** and **`String`** — single boxed handles over a heap buffer;
   free with `vec_free` / `vec_free_with` / `string_free`. (`String` is
   `{ s ctl }`, the same single-handle shape as `Vec[u]`.)
-- the heap **environment of a capturing closure** — a `\ → … x …` that
-  closes over a binding allocates an env block. One common shape is
-  reclaimed automatically: an **inline closure literal** passed directly
-  to a parameter the callee only ever *invokes* (an **invoke-only**
-  parameter — a pure borrow, computed per function and recorded in
-  `g_fn_invoke_only`) has its env freed right after the call, so the
-  frequent `( map xs \ … )` / in-loop-callback pattern no longer leaks.
-  The reclamation is positive-signal only — a literal handed to a callee
-  that stores, returns, detaches (`thread_spawn`), or decomposes
-  (`recover`) the closure, or to a forward/unknown callee, is left alone,
-  so it is never a use-after-free. A closure bound to a `:` name, or one
-  whose env outlives the call, is still yours to release via the env
-  pointer (`# *u f 1`).
+- the heap **environment of a capturing closure** that **escapes** its
+  creating frame — `\ → … x …` allocates an env block, and the compiler
+  now reclaims it automatically whenever it provably does *not* escape:
+  - an **inline closure literal** passed directly to a parameter the
+    callee only ever *invokes* (an **invoke-only** parameter — a pure
+    borrow, recorded in `g_fn_invoke_only`) has its env freed right after
+    the call;
+  - a closure **bound to a `:` name** has its env freed at scope exit
+    (and, in a loop body, each iteration) unless it escapes — covering
+    the `: f \ …` then `( hof f )` callback pattern.
+
+  An env is left for *you* only when the closure genuinely outlives the
+  frame: it is returned (`^ \ …` / `^ f`), stored into a struct field or
+  container, captured into another closure, detached onto a thread
+  (`thread_spawn`), or decomposed (`recover` frees its own). The signal
+  is positive (escape sites untrack the binding; the default is to free
+  nothing), so the reclamation is never a use-after-free — an escaped
+  closure is the consumer's to release via the env pointer (`# *u f 1`),
+  exactly like a returned `Vec`.
 - a value passed to a **`sink`** parameter — the callee frees it.
 
 These are deliberate seams, not defects: the conservatism that makes
