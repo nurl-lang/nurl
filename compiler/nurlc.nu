@@ -351,7 +351,6 @@
             // no `)`) otherwise spins here on a no-op `nurl_lex_advance` at EOF.
             // The trailing `expect TT_RPAREN` reports a clean error.
             ~ & != ( nurl_lex_type lex ) TT_RPAREN != ( nurl_lex_type lex ) TT_EOF {
-                : ~ s ta_lty ``
                 : i ta_tt ( nurl_lex_type lex )
                 // A bare anonymous slice (`[ T`) is the one type shape the
                 // monomorphiser cannot mangle as a generic argument: the
@@ -363,18 +362,20 @@
                 { ( die lex `a slice type '[ T' cannot be a generic type argument — wrap it in a named struct (e.g. ': Buf [T] { [ T xs }') and instantiate that` ) }
                 {}
                 // Paren-compound and prefix (`?T` / `??T` / `*T`) args go
-                // through parse_type, which yields their LLVM type
-                // directly; a bare base name takes the single-token path.
+                // through parse_type, which yields their LLVM type directly
+                // (mangle by LLVM type). A bare base name takes the single-
+                // token path and is mangled SIGNEDNESS-AWARE via mangle_src_word
+                // so `( Vec u64 )` and `( Vec i )` stay distinct monomorphs.
                 ? | | == ta_tt TT_LPAREN == ta_tt TT_QUEST | == ta_tt TT_QUESTQUEST == ta_tt TT_STAR
-                { = ta_lty ( parse_type lex ) }
+                { : s ta_lty ( parse_type lex )
+                    = mangle_sfx ( nurl_str_cat mangle_sfx
+                    ( nurl_str_cat `__` ( mangle_type ta_lty ) ) ) }
                 { : s ta ( nurl_lex_val lex )
                     ( lint_note_used ta )
                     ( nurl_lex_advance lex )
                     ? ( is_tparam_like ta ) { = has_tparam_arg T } {}
-                    = ta_lty ( llvm_type ta )
-                }
-                = mangle_sfx ( nurl_str_cat mangle_sfx
-                ( nurl_str_cat `__` ( mangle_type ta_lty ) ) )
+                    = mangle_sfx ( nurl_str_cat mangle_sfx
+                    ( nurl_str_cat `__` ( mangle_src_word ta ) ) ) }
             }
             ( expect lex TT_RPAREN )
             // Unknown-generic check (critic A7): `( Vec i )` with no
@@ -4304,7 +4305,7 @@
             }
             = type_args ? == 0 ( nurl_str_len type_args ) ta
             ( nurl_str_cat type_args ( nurl_str_cat ` ` ta ) )
-            = mangle_sfx ( nurl_str_cat mangle_sfx ( nurl_str_cat `__` ( mangle_type ( nurl_src_to_llvm ta ) ) ) )
+            = mangle_sfx ( nurl_str_cat mangle_sfx ( nurl_str_cat `__` ( mangle_src_word ta ) ) )
         }
         ( expect lex TT_RBRACK )
         : s mangled ( nurl_str_cat fname mangle_sfx )
@@ -12376,6 +12377,15 @@
     ? ( seq mty `i1` ) ^ `i1`
     ? ( seq mty `str` ) ^ `i8*`
     ? ( seq mty `void` ) ^ `void`
+    // Signedness-aware unsigned-int leaf slugs (see mangle_src_word): they
+    // carry the NURL signedness the LLVM type can't, so the monomorphiser
+    // keeps `( Vec u64 )` and `( Vec i )` distinct. Recovering the LLVM type
+    // (for foreach element load etc.) maps them back to the same width; the
+    // element's unsignedness is not re-derived here (a separate concern).
+    ? ( seq mty `u64` ) ^ `i64`
+    ? ( seq mty `u32` ) ^ `i32`
+    ? ( seq mty `u16` ) ^ `i16`
+    ? ( seq mty `u8` ) ^ `i8`
     ? != 0 ( nurl_str_starts mty `opt_` )
     ^ ( nurl_str_cat `{ i1, ` ( nurl_str_cat ( demangle_type ( nurl_str_slice mty 4 - ( nurl_str_len mty ) 4 ) ) ` }` ) )
     {}
@@ -12391,6 +12401,29 @@
     ^ ( nurl_str_cat `%` ( nurl_str_slice mty el - ( nurl_str_len mty ) el ) )
     {}
     ( nurl_str_cat `%` mty )
+}
+
+// mangle_src_word: signedness-aware mangle of a generic type-ARGUMENT source
+// word (as produced by capture_type_arg_src / nurl_lex_val: a base type kw, a
+// named type, a `%`-stripped compound `Name__…`, or a prefix phrase `*u64`).
+//
+// `mangle_type` keys on the LLVM type, which DROPS signedness: `i` and `u64`
+// both lower to i64, `u`/`i8`, `u16`/`i16`, `u32`/`i32` likewise. Without this
+// the monomorphiser collapses `( gdiv [u64] )` and `( gdiv [i] )` onto ONE
+// body and picks the wrong div/rem/shr/cmp signedness (a silent miscompile).
+// Unsigned-int LEAVES get distinct slugs; everything else (signed ints,
+// floats, bool/string/void, named structs, compound names, and prefix
+// `*`/`?`/`??` phrases) delegates to the existing LLVM-keyed path UNCHANGED,
+// so every generic-arg funnel stays byte-for-byte consistent. Nested generics
+// (`( Box ( Vec u64 ) )`) are covered because their leaf passes through a base
+// case too. Residual: an unsigned int DIRECTLY behind a `*`/`?` prefix as a
+// generic arg (`[ * u64 ]`) still shares a slug with `[ * i ]`.
+@ mangle_src_word s w → s {
+    ? ( seq w `u` )   ^ `u8`
+    ? ( seq w `u16` ) ^ `u16`
+    ? ( seq w `u32` ) ^ `u32`
+    ? ( seq w `u64` ) ^ `u64`
+    ^ ( mangle_type ( nurl_src_to_llvm w ) )
 }
 
 // subst_source: replace whole-word occurrences of 'from' with 'to' in src.
@@ -12787,7 +12820,7 @@
                 : s ta ( str_first_word ta_r )
                 = ta_r ( str_skip_word ta_r )
                 = mangled ( nurl_str_cat mangled
-                ( nurl_str_cat `__` ( mangle_type ( nurl_src_to_llvm ta ) ) ) )
+                ( nurl_str_cat `__` ( mangle_src_word ta ) ) )
             }
             // Dedupe — each distinct instantiation emitted at most once.
             : s done_key ( nurl_str_cat mangled `__done` )
@@ -15601,20 +15634,14 @@
     : ~ s mangle_sfx ``
     ~ & != ( nurl_lex_type lex ) TT_RPAREN != ( nurl_lex_type lex ) TT_EOF {
         : ~ s ta_word ``
-        : ~ s ta_lty ``
         ? == ( nurl_lex_type lex ) TT_LPAREN
-        { : s inner ( scan_compound_ta_inner lex syms )
-            = ta_word inner
-            = ta_lty ( nurl_str_cat `%` inner )
-        }
-        { = ta_word ( capture_type_arg_src lex )
-            = ta_lty ( nurl_src_to_llvm ta_word )
-        }
+        { = ta_word ( scan_compound_ta_inner lex syms ) }
+        { = ta_word ( capture_type_arg_src lex ) }
         = ta_list ? == 0 ( nurl_str_len ta_list )
         ta_word
         ( nurl_str_cat3 ta_list ` ` ta_word )
         = mangle_sfx ( nurl_str_cat mangle_sfx
-        ( nurl_str_cat `__` ( mangle_type ta_lty ) ) )
+        ( nurl_str_cat `__` ( mangle_src_word ta_word ) ) )
     }
     ? == ( nurl_lex_type lex ) TT_RPAREN { ( nurl_lex_advance lex ) } {}
     : s tparams ( nurl_sym_get g_generic_struct_syms ( nurl_str_cat sname `__stparams` ) )
