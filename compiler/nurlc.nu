@@ -4339,6 +4339,14 @@
         ? != 0 ( nurl_str_len mont )
         { ( nurl_sym_def syms ( nurl_str_cat mangled `__opt_nurl_t` ) mont ) }
         {}
+        // Record the monomorph's return signedness from its SUBSTITUTED NURL
+        // return type. The monomorph that would set this is emitted later (the
+        // instantiation is deferred), so derive it now — otherwise an enclosing
+        // `# i ( gmax [u32] … )` sees no unsigned flag and sign-extends an
+        // unsigned-returning generic. (Read back by `__last_call_ret_unsigned__`
+        // below, since call_name == mangled here.)
+        ( nurl_sym_def syms ( nurl_str_cat mangled `__ret_unsigned` )
+        ? ( nurl_type_is_unsigned ( compute_generic_ret_src fname type_args ) ) `1` `` )
         = call_name mangled
     }
     {}
@@ -12683,6 +12691,38 @@
     }
     {}
     ret_ty
+}
+
+// compute_generic_ret_src: like compute_generic_ret_ty but returns the
+// SUBSTITUTED return type's leading SOURCE token (not its LLVM type), so the
+// caller can test its NURL signedness with nurl_type_is_unsigned. The LLVM
+// return type i8/i16/i32 can't carry signedness, and a generic monomorph's
+// `__ret_unsigned` flag is only recorded when the (deferred) instantiation is
+// emitted — AFTER the call site runs — so the call site must derive it here to
+// make an enclosing `# i ( gmax [u32] … )` widen with zext, not sext. Does NOT
+// call parse_type, so it leaves the g_res_type_syms side-channels untouched.
+@ compute_generic_ret_src s fname s type_args → s {
+    : s tparams ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__tparams` ) )
+    : s gsrc ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__gsrc` ) )
+    : ~ s subst_src gsrc
+    : ~ s tp_rest tparams
+    : ~ s ta_rest type_args
+    ~ != 0 ( nurl_str_len tp_rest ) {
+        : s tp ( str_first_word tp_rest )
+        = tp_rest ( str_skip_word tp_rest )
+        : s ta ( str_first_word ta_rest )
+        = ta_rest ( str_skip_word ta_rest )
+        = subst_src ( subst_source subst_src tp ta )
+    }
+    : i lex2 ( nurl_lex_new subst_src `<generic_ret_src>` )
+    ~ & != ( nurl_lex_type lex2 ) TT_ARROW != ( nurl_lex_type lex2 ) TT_EOF {
+        ( nurl_lex_advance lex2 )
+    }
+    ? == ( nurl_lex_type lex2 ) TT_ARROW
+    { ( nurl_lex_advance lex2 )
+        ^ ( nurl_lex_val lex2 ) }
+    {}
+    ^ ``
 }
 
 // ── Generic struct instantiation ───────────────────────────────────
