@@ -6268,6 +6268,17 @@
                     { ( nurl_sym_def syms ( nurl_str_cat pv0 `__unsigned` ) `1` ) }
                     {} }
                 {}
+                // The Err arm (`F e`) of `! T E` binds the ERROR payload E, so an
+                // unsigned E must tag the binding too — same hazard as the Ok arm
+                // above, via `__res_nurl_E` (set by gen_let_or_struct / the
+                // direct-call synthesis). Without this `?? r { F e → % e 10 }`
+                // over an `! T u64` treated e as signed.
+                ? & pt0_is_opt_bool & ( seq pattern_name `F` ) != 0 ( nurl_str_len match_var_name )
+                { : s res_e ( nurl_sym_get syms ( nurl_str_cat match_var_name `__res_nurl_E` ) )
+                    ? ( nurl_type_is_unsigned res_e )
+                    { ( nurl_sym_def syms ( nurl_str_cat pv0 `__unsigned` ) `1` ) }
+                    {} }
+                {}
             } {}
             // Bind second payload variable (enum field 2)
             ? != 0 ( nurl_str_len pv1 ) {
