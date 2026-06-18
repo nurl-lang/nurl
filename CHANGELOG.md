@@ -8,7 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.9] — 2026-06-18
+
 ### Fixed
+
+- **Signedness-aware generic monomorphisation (distinct instantiations for `i` and `u64`).** Generic code using signedness-sensitive operations (like `/`, `%`, `>>`, or comparison operators) now monomorphises correctly based on the concrete type argument's signedness. Previously, types with the same LLVM width (e.g. `i` and `u64`) shared the same mangled slug, causing the compiler to reuse the first generated monomorphisation (e.g., executing `udiv` instead of `sdiv`). Mangles generic type arguments from their source word (`u8`/`u16`/`u32`/`u64` vs `i64`) to force distinct instantiations.
+  Regression: `compiler/tests/generic_signedness_mono.nu`.
+
+- **Correct zero-extension for unsigned-returning generic calls.** Widening casts (`# i ( f … )`) of generic call results now zero-extend (instead of sign-extend) the result when the function's declared return type is unsigned. The return signedness of the monomorphised instantiation is now tracked and resolved at the call site.
+  Regression: `compiler/tests/unsigned_call_result_widen.nu`.
+
+- **Integer literals above `i64` max parsed correctly in `u64` range.** The decimal lexer now accumulates digits using wrapping 64-bit arithmetic instead of `atoll` (which silently saturated at `LLONG_MAX` for literals in `[2^63, 2^64)`).
+  Regression: `compiler/tests/u64_literal_parsing.nu`.
+
+- **Foreach elements inherit container's unsigned element type.** Element variables in `~ x container { … }` loops now correctly inherit the container's unsigned type (recovered from the vector/slice metadata), ensuring signedness-sensitive operations and widening casts inside the loop execute with unsigned semantics.
+  Regression: `compiler/tests/foreach_unsigned_element.nu`.
+
+- **IEEE 754 NaN semantics for float inequality (`!=`).** Float `!=` comparisons now emit `fcmp une` (unordered-or-not-equal) instead of `fcmp one` (ordered, not-equal), correctly returning `true` when either or both operands are NaN.
+  Regression: `compiler/tests/float_ne_nan.nu`.
+
+- **Result Ok-arm payload inherits type's unsigned flag.** Pattern matching over a Result `! T E` now correctly propagates T's unsigned flag to the Ok-arm (`T v`) binding inside the match block, correcting signedness-sensitive operations on the payload.
+  Regression: `compiler/tests/result_payload_unsigned.nu`.
+
+- **Result Err-arm payload inherits type's unsigned flag.** Dual to the Ok-arm fix, the Err-arm (`F e`) binding now correctly inherits E's unsigned flag from a Result `! T E` type.
+  Regression: `compiler/tests/result_err_arm_unsigned.nu`.
+
+- **Monomorphised generic struct fields retain unsigned signedness.** Field type substitutions in `ensure_struct_instantiated` now propagate the unsigned flag, preventing unsigned fields of generic struct instances from being treated as signed on field access (e.g. `. p field`).
+  Regression: `compiler/tests/generic_struct_field_unsigned.nu`.
+
+- **Coercion of float literals to `f32` struct fields.** Float literals (always parsed as `double`) are now correctly truncated to `float` (via `fptrunc`) when initializing `f32` fields of structs/aggregates, resolving "insertvalue operand and field disagree in type" compilation errors.
+  Regression: `compiler/tests/f32_struct_field_literal.nu`.
+
+- **Enum `f32` payload construction support.** Float payloads constructed for `f32` enum variants now correctly perform float narrowing (`fptrunc`) from double literals or values before insertion, allowing float-payload enums to round-trip.
+  Regression: `compiler/tests/enum_f32_payload.nu`.
 
 - **Two more fuzzer BAD_IR shapes diagnosed (bool/int mix, match on a scalar).**
   - **A binary operator mixing a bool (i1) and a non-bool operand**, both
@@ -5197,7 +5229,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.8...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.9...HEAD
+[0.9.9]: https://github.com/nurl-lang/nurl/compare/v0.9.8...v0.9.9
 [0.9.8]: https://github.com/nurl-lang/nurl/compare/v0.9.7...v0.9.8
 [0.9.7]: https://github.com/nurl-lang/nurl/compare/v0.9.6...v0.9.7
 [0.9.6]: https://github.com/nurl-lang/nurl/compare/v0.9.5...v0.9.6
