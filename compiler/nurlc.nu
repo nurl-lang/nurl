@@ -236,6 +236,19 @@
     ^ F
 }
 
+// __slug_is_unsigned: is a mangle SLUG (mangle_src_word output) an unsigned
+// integer leaf? The byte type `u` mangles to `u8`, so this differs from
+// nurl_type_is_unsigned (which speaks NURL source tokens, where the byte is
+// `u`). Used by gen_foreach to recover a Vec element's signedness from the
+// `%Vec__<slug>` carrier suffix.
+@ __slug_is_unsigned s slug → b {
+    ? ( seq slug `u8` ) { ^ T } {}
+    ? ( seq slug `u16` ) { ^ T } {}
+    ? ( seq slug `u32` ) { ^ T } {}
+    ? ( seq slug `u64` ) { ^ T } {}
+    ^ F
+}
+
 @ parse_type i lex → s {
     : i tt ( nurl_lex_type lex )
     ? == tt TT_STAR { ^ ( parse_type_ptr lex ) } {}
@@ -6594,6 +6607,15 @@
     : s fe_cont ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_lex_val lex ) ``
     : s slice_val ( gen_expr lex syms cg )
     : s slice_ty ( nurl_get_last_type )
+    // Snapshot the iterated container's element signedness NOW, before the
+    // ptr/len extraction below runs. For a bound slice (`: [ u64 xs …`) the
+    // let recorded `xs__unsigned` from the element's NURL type, and gen_ident
+    // re-asserted it onto `__last_unsigned__` when it loaded the slice above —
+    // so this snapshot is true exactly when the element is an unsigned integer.
+    // (The Vec carrier instead encodes signedness in its `%Vec__<slug>` suffix,
+    // handled below.) Used to tag the loop element binding so signed-sensitive
+    // ops (`/ % >> < > <= >=`) and `# i` widening on the element are unsigned.
+    : s fe_elem_uns_snap ( nurl_last_unsigned )
     // Two carrier shapes feed `~ x xs { ... }`:
     //
     //   Slice  `[T`        →  slice_ty = "{ T*, i64 }"
@@ -6666,6 +6688,16 @@
     ( nurl_print ` = alloca ` ) ( nurl_print elem_ty ) ( nurl_print `\n` )
     ( nurl_sym_def syms var_name elem_ty )
     ( nurl_sym_def syms ( nurl_str_cat var_name `__ptr` ) elem_ptr )
+    // Propagate the element's unsignedness onto the loop binding (see the
+    // snapshot above): a Vec recovers it from the signedness-aware suffix, a
+    // slice from the snapshot. Without this an unsigned-slice element loaded in
+    // the body defaulted to signed → wrong icmp/udiv/urem/shr and `# i` sext.
+    : b fe_elem_unsigned ? is_vec
+    ( __slug_is_unsigned ( nurl_str_slice slice_ty 6 - ( nurl_str_len slice_ty ) 6 ) )
+    != 0 ( nurl_str_len fe_elem_uns_snap )
+    ? fe_elem_unsigned
+    { ( nurl_sym_def syms ( nurl_str_cat var_name `__unsigned` ) `1` ) }
+    {}
     // Labels
     : s lc ( nurl_cg_lbl cg `foreach_check` )
     : s lb ( nurl_cg_lbl cg `foreach_body` )
