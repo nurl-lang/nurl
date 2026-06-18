@@ -12964,6 +12964,11 @@
                 : ~ i fidx 0
                 ~ & != ( nurl_lex_type lex2 ) TT_RBRACE != ( nurl_lex_type lex2 ) TT_EOF {
                     : s flt ( parse_type lex2 )
+                    // Capture the SUBSTITUTED field's NURL signedness now (the
+                    // monomorphised LLVM type i8/i16/i32 can't carry it). Mirrors
+                    // gen_struct_decl — without it a `( Pair u64 i )` field load
+                    // defaulted to signed (srem/sdiv/sext/icmp s* on the u64).
+                    : b flt_uns ( nurl_type_is_unsigned ( nurl_sym_get g_res_type_syms `__last_nurl_type__` ) )
                     ? ( is_ident_tok ( nurl_lex_type lex2 ) )
                     { : s fname ( nurl_lex_val lex2 )
                         ( nurl_lex_advance lex2 )
@@ -12979,6 +12984,12 @@
                         ( nurl_sym_def syms
                         ( nurl_str_cat3 mangled `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__name` ) )
                         fname )
+                        ( nurl_sym_def syms
+                        ( nurl_str_cat3 mangled `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__unsigned` ) )
+                        ? flt_uns `1` `` )
+                        ( nurl_sym_def syms
+                        ( nurl_str_cat mangled ( nurl_str_cat `__` ( nurl_str_cat fname `__unsigned` ) ) )
+                        ? flt_uns `1` `` )
                     }
                     {}
                     ? != first 0
