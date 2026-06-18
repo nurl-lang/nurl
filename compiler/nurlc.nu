@@ -6256,9 +6256,15 @@
                 // instead of zext for high-bit-set bytes (bit us in
                 // bytes_to_hex over SHA-1 digests printing the wrong
                 // nibbles).
+                // Both `? T` (opt_nurl_T) and `! T E` (res_nurl_T) carry the
+                // payload's NURL type; the Ok/Some arm binds T, so an unsigned
+                // T must tag the binding. Without the res_nurl_T branch a
+                // `?? r { T v → … }` over an `! u64 E` treated v as signed
+                // (srem/sdiv/sext on the high half of the u64 range).
                 ? & pt0_is_opt_bool & ( seq pattern_name `T` ) != 0 ( nurl_str_len match_var_name )
                 { : s opt_t ( nurl_sym_get syms ( nurl_str_cat match_var_name `__opt_nurl_T` ) )
-                    ? ( nurl_type_is_unsigned opt_t )
+                    : s res_t ( nurl_sym_get syms ( nurl_str_cat match_var_name `__res_nurl_T` ) )
+                    ? | ( nurl_type_is_unsigned opt_t ) ( nurl_type_is_unsigned res_t )
                     { ( nurl_sym_def syms ( nurl_str_cat pv0 `__unsigned` ) `1` ) }
                     {} }
                 {}
