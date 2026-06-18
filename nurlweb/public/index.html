@@ -44,7 +44,7 @@
   <p class="tagline">
     NURL is a small, LLVM-backed systems language whose syntax is optimised for
     the way LLMs read and write code — fixed-arity prefix notation, a one-page
-    LL(k≤4) grammar, and single-owner memory with an opt-in static borrow checker.
+    LL(k≤4) grammar, and single-owner memory with a static borrow checker (on by default).
   </p>
   <div class="cta-row">
     <a class="btn btn-primary" href="https://play.nurl-lang.org" target="_blank" rel="noopener">
@@ -57,10 +57,10 @@
     </a>
   </div>
   <div class="stats">
-    <div class="stat"><strong>v0.9.7</strong><span>current release</span></div>
-    <div class="stat"><strong>14,304</strong><span>lines of NURL in the compiler</span></div>
-    <div class="stat"><strong>360</strong><span>compiler test programs</span></div>
-    <div class="stat"><strong>104</strong><span>stdlib modules</span></div>
+    <div class="stat"><strong>v0.9.9</strong><span>current release</span></div>
+    <div class="stat"><strong>16,501</strong><span>lines of NURL in the compiler</span></div>
+    <div class="stat"><strong>477</strong><span>compiler test programs</span></div>
+    <div class="stat"><strong>147</strong><span>stdlib modules</span></div>
     <div class="stat"><strong>10</strong><span>tested targets</span></div>
   </div>
   <p style="margin-top: 1.8rem; color: var(--fg-faint); font-size: 0.88rem;">
@@ -91,7 +91,7 @@
       <div class="card">
         <div class="icon">⛨</div>
         <h3>Single-owner memory</h3>
-        <p>Values auto-drop at scope exit. An opt-in static borrow checker turns use-after-move, alias double-free, escaping closure captures, and iterator invalidation into compile errors.</p>
+        <p>Values auto-drop at scope exit. A static borrow checker (on by default) turns use-after-move, alias double-free, escaping closure captures, interprocedural/return escapes, loop-carried double-frees, and iterator invalidation into compile errors.</p>
       </div>
       <div class="card">
         <div class="icon">⚙</div>
@@ -192,11 +192,11 @@
 
     <p style="color: var(--fg-dim); font-size: 0.92rem; margin-top: 1.5rem;">
       The full feature set goes well beyond these snippets: generics (including
-      over option types), traits with bounds, match guards and or-patterns,
-      try-operator error handling, <code>defer</code>, channels with
+      over option types), traits with bounds, match guards, or-patterns, and
+      N-ary payloads, try-operator error handling, <code>defer</code>, channels with
       <code>select</code>, compile-time const evaluation, and a stackful M:N
       work-stealing async runtime — all exercised by the
-      <a href="https://github.com/nurl-lang/nurl/tree/main/compiler/tests" target="_blank" rel="noopener">360-program test suite</a>.
+      <a href="https://github.com/nurl-lang/nurl/tree/main/compiler/tests" target="_blank" rel="noopener">477-program test suite</a>.
     </p>
   </div>
 </section>
@@ -306,11 +306,11 @@
     <div class="grid">
       <div class="card">
         <h3>Network</h3>
-        <p>HTTP/1.1 and HTTP/2, both client and server. WebSocket client and server (RFC 6455). MQTT 5.0 with TLS. DNS, UDP, TCP/TLS sockets, HTTP routing, static files, proxying, multipart.</p>
+        <p>Distributed systems (secure p2p overlay, STUN, NAT traversal, DERP relay, SWIM membership, CRDTs). HTTP/1.1 and HTTP/2, both client and server. WebSocket, MQTT 5.0, SMTP, Unix sockets, UDP, TCP/TLS.</p>
       </div>
       <div class="card">
         <h3>Data</h3>
-        <p>JSON, TOML, YAML, XML, MessagePack, and CSV with a unified serde layer. PostgreSQL (binary protocol, async, LISTEN/NOTIFY, COPY) and SQLite (transactions, WAL, authorizers) clients.</p>
+        <p>JSON, TOML, YAML, XML, MessagePack, CBOR, and CSV with a unified serde layer. PostgreSQL (binary protocol, async, LISTEN/NOTIFY, COPY) and SQLite (transactions, WAL, authorizers) clients.</p>
       </div>
       <div class="card">
         <h3>Concurrency</h3>
@@ -318,7 +318,7 @@
       </div>
       <div class="card">
         <h3>Core</h3>
-        <p>Vec, HashMap, OrdMap, sets, heaps, deques, slices, arbitrary-precision integers, regex, SHA-1/256/512, MD5, BLAKE3, gzip, tar, UUID, time, paths, processes, signals.</p>
+        <p>Vec, HashMap, OrdMap, BTree, LRU Cache, Bitset, exact fixed-point decimal, arbitrary-precision integers, regex, SHA-1/256/512, MD5, BLAKE3, gzip, tar, UUID, time, paths, processes, signals.</p>
       </div>
       <div class="card">
         <h3>AI-native</h3>
@@ -326,7 +326,7 @@
       </div>
       <div class="card">
         <h3>Tooling</h3>
-        <p>LSP server with references and diagnostics, VS Code extension, <code>nurlfmt</code> formatter, <code>--lint</code> pass, DWARF debug info (<code>--g</code> — gdb shows typed structs), and a differential fuzzer that has already paid for itself.</p>
+        <p>LSP server, VS Code extension, <code>nurlpkg</code> test/bench runner, <code>tools/repl</code>, <code>nurldoc</code>, <code>nurlfmt</code> formatter, <code>--lint</code> pass, DWARF debug info (<code>--g</code>), and a differential fuzzer.</p>
       </div>
     </div>
   </div>
@@ -357,8 +357,8 @@
         <p style="margin-top: 0.8rem;"><a href="https://github.com/nurl-lang/nurl/tree/main/nurlapi" target="_blank" rel="noopener">nurlapi/</a></p>
       </div>
       <div class="card">
-        <h3>49 examples</h3>
-        <p>From an Enigma machine and Game of Life to an HTTP/2 client, MCP echo servers, a Claude-powered agent, and a Commodore 64 emulator — each one builds against the current compiler.</p>
+        <h3>77 examples</h3>
+        <p>From an Enigma machine and Game of Life to a distributed Push-To-Talk voice app, an HTTP/2 client, MCP servers, a Claude-powered agent, and a C64 emulator.</p>
         <p style="margin-top: 0.8rem;"><a href="https://github.com/nurl-lang/nurl/tree/main/examples" target="_blank" rel="noopener">examples/</a></p>
       </div>
     </div>
@@ -480,7 +480,7 @@ cd nurl
       </div>
       <div class="card">
         <h3>Changelog</h3>
-        <p>Every release documented in Keep-a-Changelog format with the reasoning behind each fix — currently at v0.9.7.</p>
+        <p>Every release documented in Keep-a-Changelog format with the reasoning behind each fix — currently at v0.9.9.</p>
         <p style="margin-top: 0.8rem;"><a href="https://github.com/nurl-lang/nurl/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG.md</a></p>
       </div>
       <div class="card">
