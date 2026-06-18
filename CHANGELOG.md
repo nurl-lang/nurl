@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two more fuzzer BAD_IR shapes diagnosed (bool/int mix, match on a scalar).**
+  - **A binary operator mixing a bool (i1) and a non-bool operand**, both
+    non-constant (`< flag n` with `n : i`), emitted a width-mismatched
+    `icmp i1 %flag, %n` that only clang/llvm-as rejected. `gen_binary` now
+    rejects it. A constant operand is still fine — it reinterprets to the other
+    side's width — so `== flag 0` (int literal fits i1) and `== v T` (bool
+    literal fits i64) keep compiling; only two disagreeing registers are
+    flagged.
+  - **Binding a payload while matching a non-aggregate scalar** (`?? n { T a →
+    … }` with `n : i`) emitted an `extractvalue` on the scalar. `gen_match` now
+    rejects payload binding unless the scrutinee is an enum / option / result;
+    integer-literal arms and bare tag matches are unaffected.
+  Locks `should_fail_binop_bool_int`, `should_fail_match_payload_scalar`. (One
+  deeply-contrived fuzz holdout remains: a mutation that makes a match
+  scrutinee's *declared* type claim an option/result while its actual SSA value
+  is a scalar — an inconsistency no real program produces.)
+
 - **Option / Result `??` arm payload arity is enforced (fuzz follow-up #3).** An
   Option (`? T`) or Result (`! T E`) match arm binds at most one payload — the
   T-arm value / Ok payload, or the F-arm error. Binding more (`?? o { T a b → …
