@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Option / Result `??` arm payload arity is enforced (fuzz follow-up #3).** An
+  Option (`? T`) or Result (`! T E`) match arm binds at most one payload — the
+  T-arm value / Ok payload, or the F-arm error. Binding more (`?? o { T a b → …
+  }`) used to emit an out-of-range `extractvalue { i1, T } v, 2` that nurlc
+  accepted (rc 0) and only clang/llvm-as rejected. `gen_match` now reports
+  *"match arm binds N payloads but an option/result 'T' arm binds at most
+  one …"*. (Enum variants already validated per-variant payload arity; this
+  closes the opt/res case, completing the in-`??` out-of-range-extractvalue
+  class.) Locks `should_fail_match_opt_overbind`.
+
 - **More front-end checks for type/field misuse (fuzz follow-up #2).** The
   mutation fuzzer's remaining `BAD_IR` shapes (nurlc rc 0, only clang/llvm-as
   rejecting) were turned into source diagnostics — and one of the new checks
