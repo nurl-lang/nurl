@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+err_mod10=5
+err_direct_mod10=5
+err_gt=1
+ok_mod10=5
