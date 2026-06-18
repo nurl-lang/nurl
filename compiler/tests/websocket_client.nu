@@ -163,7 +163,7 @@ $ `stdlib/ext/websocket.nu`
     : !ParsedHeadOk HttpReqErr ph ( __read_request_head conn carry lim )
     ?? ph {
         T pho → {
-            : HttpRequest req . pho req
+            : HttpRequest req . pho head
             ? ( ws_is_upgrade req ) {
                 : !v WsErr hr ( ws_perform_handshake conn req )
                 ?? hr {

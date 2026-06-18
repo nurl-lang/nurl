@@ -10,6 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **More front-end checks for type/field misuse (fuzz follow-up #2).** The
+  mutation fuzzer's remaining `BAD_IR` shapes (nurlc rc 0, only clang/llvm-as
+  rejecting) were turned into source diagnostics — and one of the new checks
+  caught a genuine latent bug in the corpus:
+  - **A function / FFI symbol name used where a type is expected** now reports
+    *"unknown type 'X'"*. The earlier unknown-type check accepted any name in
+    scope; it now requires a `%`-type, so `@ f rand x → i` (using the FFI symbol
+    `rand` as a parameter type) is rejected too.
+  - **`.` field/element access on a non-aggregate scalar** (`. n x` with `n : i`)
+    is rejected — it used to emit `extractvalue i64 …`.
+  - **An out-of-range integer index into an aggregate** (`. p 9` on a 2-field
+    struct) is rejected — it used to emit an invalid `extractvalue …, 9`.
+  - **Accessing a field a struct does not have** (`. p nope`) now reports
+    *"type 'P' has no field 'nope'"* instead of silently reading field 0 (a
+    miscompile) — this exposed and fixed a real `. pho req` typo in
+    `compiler/tests/websocket_client.nu` that had been reading the right field
+    (`head`, index 0) only by luck.
+  - **An FFI declaration whose `@` is not followed by an identifier**
+    (`& "lib" @ @ foo`) is rejected with *"expected the C function name …"*.
+  Locks `should_fail_{type_is_fn_name, member_on_scalar, member_index_oob,
+  unknown_field, ffi_no_name}`. (Remaining, deferred: a `??` arm that binds more
+  payloads than its variant/option has still emits an out-of-range
+  `extractvalue` — a `gen_match` concern for a future round.)
+
 - **Unknown type names are diagnosed at the source (fuzz follow-up).** An
   undeclared type identifier in a type position — an FFI parameter/return type,
   a function parameter/return type, or a struct field type — used to leak into

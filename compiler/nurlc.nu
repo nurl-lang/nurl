@@ -415,6 +415,36 @@
     `i64`
 }
 
+// agg_field_count: number of fields in an aggregate LLVM type, or -1 when
+// unknown (so the caller skips range-checking rather than risk a false
+// positive). A named struct `%T` reads its registered `<T>__field_count`; an
+// inline aggregate `{ … }` counts the top-level comma separators (depth-aware,
+// so nested `{ }` / `( )` don't inflate the count). Used by gen_member to
+// reject an out-of-range `. agg INT` before it emits an invalid extractvalue.
+@ agg_field_count i syms s ot → i {
+    : i n ( nurl_str_len ot )
+    ? == 0 n { ^ -1 } {}
+    ? == ( nurl_str_get ot 0 ) 37
+    { : s nm ( nurl_str_slice ot 1 - n 1 )
+        : s fc ( nurl_sym_get syms ( nurl_str_cat nm `__field_count` ) )
+        ? != 0 ( nurl_str_len fc ) { ^ ( nurl_str_to_int fc ) } { ^ -1 } }
+    {}
+    ? == ( nurl_str_get ot 0 ) 123
+    { : ~ i depth 0
+        : ~ i count 1
+        : ~ i i 0
+        ~ < i n {
+            : i c ( nurl_str_get ot i )
+            ? | == c 123 == c 40 { = depth + depth 1 } {}
+            ? | == c 125 == c 41 { = depth - depth 1 } {}
+            ? & == depth 1 == c 44 { = count + count 1 } {}
+            = i + i 1
+        }
+        ^ count }
+    {}
+    -1
+}
+
 // ? T  →  { i1, T }
 // Side-channel: "__last_opt_nurl_t__" stashes T's NURL source token
 // (e.g. "u" / "i32" / "String") so gen_let_or_struct can propagate
@@ -9886,7 +9916,18 @@
             }
         }
     }
-    {  // Non-pointer type: handle struct field access or aggregate indexing
+    {  // Non-pointer type: handle struct field access or aggregate indexing.
+        // A field / element access requires an aggregate: a named struct/enum
+        // (`%T`), or an opt / res / slice / closure record (`{ … }`). A scalar
+        // primitive (i64 / double / i1 / i8 / …) has no fields — `. n x` or
+        // `. n 0` on an `i` binding used to emit `extractvalue i64 …`, IR that
+        // nurlc accepted (rc 0) and only clang / llvm-as rejected ("extractvalue
+        // operand must be aggregate type"). Reject it at the source.
+        ? != 0 ( nurl_str_len ot )
+        { ? & != ( nurl_str_get ot 0 ) 123 != ( nurl_str_get ot 0 ) 37
+            { ( die lex ( nurl_str_cat3 `cannot access a field or element of '` ( llvm_to_nurl ot ) `' — it is not a struct, enum, slice, or pointer` ) ) }
+            {} }
+        {}
         ? == ( nurl_lex_type lex ) TT_INT
         {  // Integer literal index for aggregate types
             : i idx ( nurl_lex_inum lex )
@@ -9902,7 +9943,17 @@
                 ( nurl_set_last_type ot )
                 ^ ov
             }
-            {  // Extractvalue for specific field (idx > 0) or primitive types
+            {  // Extractvalue for specific field (idx > 0) or primitive types.
+                // Range-check first: `. agg N` with N past the last field used
+                // to emit `extractvalue … , N` that only clang/llvm-as rejected
+                // ("invalid indices for extractvalue").
+                : i fcount ( agg_field_count syms ot )
+                ? & >= fcount 0 >= idx fcount
+                { ( die lex ( nurl_str_cat
+                    ( nurl_str_cat3 `index ` ( nurl_str_int idx ) ` is out of range for type '` )
+                    ( nurl_str_cat ( llvm_to_nurl ot )
+                    ( nurl_str_cat3 `' — it has ` ( nurl_str_int fcount ) ` field(s)` ) ) ) ) }
+                {}
                 : s ft ( compound_field_type ot idx )
                 : s res ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print res )
@@ -9994,6 +10045,14 @@
                     // Strip '%' to get struct name  e.g. "%Node" → "Node"
                     : s sname ( nurl_str_slice ot 1 - otlen 1 )
                     : s fidx_s ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__idx` ) ) ) )
+                    // No such field: the lookup is empty, and the old code fed
+                    // `nurl_str_to_int ""` = 0 into `extractvalue %T v, 0` —
+                    // silently reading the WRONG field (a miscompile), or
+                    // emitting a malformed index. Reject the typo at the source.
+                    ? == 0 ( nurl_str_len fidx_s )
+                    { ( die lex ( nurl_str_cat3 `type '` ( llvm_to_nurl ot )
+                        ( nurl_str_cat3 `' has no field '` fname `'` ) ) ) }
+                    {}
                     : s ftype ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__type` ) ) ) )
                     : i fidx ( nurl_str_to_int fidx_s )
                     : s res ( nurl_cg_reg cg )
@@ -12576,11 +12635,20 @@
             ? != 0 ( nurl_str_len name )
             { ? ( is_tparam_like name ) {}
                 { ? ( __has_dunder name ) {}
-                    { ? == 0 ( nurl_str_len ( nurl_sym_get syms name ) )
+                    {  // A declared struct/enum maps to `%Name` in syms (set by
+                       // the pre-scan + gen_struct/enum_decl). A bare non-empty
+                       // value that does NOT start with '%' means the name is in
+                       // scope as something else — an @-fn / FFI symbol / const
+                       // whose value is its return/value type — and is NOT a
+                       // type. Require the `%`-type form so `@ f rand x → i`
+                       // (using the FFI symbol `rand` as a parameter type) is
+                       // rejected too, not just a wholly-unknown name.
+                        : s sv ( nurl_sym_get syms name )
+                        ? & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37
+                        {}
                         { ( die lex ( nurl_str_cat
                             ( nurl_str_cat3 `unknown type '` name `' in ` )
-                            ( nurl_str_cat ctx ` — no struct or enum with this name is declared (a typo, or a missing '$' import?)` ) ) ) }
-                        {} } } }
+                            ( nurl_str_cat ctx ` — no struct or enum with this name is declared (a typo, or a missing '$' import?)` ) ) ) } } } }
             {}
             = i j
         }
@@ -12879,7 +12947,6 @@
             ( nurl_str_cat3 sink_acc ` ` ( nurl_str_int pct ) ) }
         {}
         = params_str ( nurl_get_last_type )
-        ( check_type_known lex syms params_str `a parameter type` )
         = pct + pct 1
     }
     // Publish this function's inout / sink
@@ -13256,6 +13323,7 @@
     ( nurl_sym_def g_res_type_syms `__last_res_err_llvm__` `` )
     ( nurl_sym_def g_res_type_syms `__last_opt_nurl_t__` `` )
     : s lt ( parse_type lex )
+    ( check_type_known lex syms lt `a parameter type` )
     : s p_nurl_type ( nurl_sym_get g_res_type_syms `__last_nurl_type__` )
     // Capture the `! T E` / `? T` payload metadata for this parameter so a
     // `?? <param> { T x → … }` match can reconstruct a struct / pointer
@@ -13787,6 +13855,13 @@
     ( __ffi_lib_check lex lib )
     ( nurl_lex_advance lex )  // skip library STR
     ( expect lex TT_AT )  // consume '@'
+    // The C symbol name must be an identifier. A malformed header (`& "lib" @ @
+    // foo`, a stray operator) otherwise took whatever token followed as the
+    // name and emitted `declare T @<garbage>(…)` — IR only clang/llvm-as
+    // rejected ("expected function name").
+    ? ! ( is_ident_tok ( nurl_lex_type lex ) )
+    { ( die lex `expected the C function name (an identifier) after '@' in an FFI declaration` ) }
+    {}
     : s fname ( nurl_lex_val lex )
     // Lint: `&` externs belong to the declaring file's def roster so
     // an import used only for its FFI surface is not flagged unused.
