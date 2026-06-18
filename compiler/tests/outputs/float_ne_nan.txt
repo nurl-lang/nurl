@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+nan_ne_nan=true
+nan_eq_nan=false
+nan_ne_x=true
+x_ne_x=false
+x_ne_3=true
+x_eq_x=true
