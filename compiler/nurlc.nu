@@ -12267,7 +12267,37 @@
     } {}
 }
 
-// mangle_type: LLVM type string → valid identifier fragment.
+// __mangle_struct_esc: the escape marker prefixed onto a NAMED-struct slug
+// whose bare name would otherwise collide with a builtin / compound slug.
+// Must be a valid NURL identifier fragment (the mangled function name is
+// re-lexed as `@ <mangled> …` in emit_one_instantiation), so no `.`/sigil.
+@ __mangle_struct_esc → s { ^ `S__` }
+
+// __mangle_slug_collides: does a NAMED struct's bare-name slug land in the
+// builtin/compound slug space? `str` (i8*), `f64` (double), `i1` (b),
+// `i64` (i/u64) and `void` (v) are all LEGAL struct names (none are
+// lexer-reserved — only i8/i16/i32/u16/u32/u64/f32 are), and a struct may
+// be named starting with `opt_` / `ptr_`. Without escaping, such a struct
+// `%str` mangles to `str` — identical to the string type's slug — so two
+// DISTINCT LLVM types share one monomorphisation and the second silently
+// reuses the first (a layout-corrupting miscompile). We must also escape a
+// name already starting with the escape marker, so the escaped space stays
+// disjoint from the bare space (injectivity by induction).
+@ __mangle_slug_collides s nm → b {
+    ? ( seq nm `i64` ) ^ T
+    ? ( seq nm `f64` ) ^ T
+    ? ( seq nm `i1` ) ^ T
+    ? ( seq nm `str` ) ^ T
+    ? ( seq nm `void` ) ^ T
+    ? != 0 ( nurl_str_starts nm `opt_` ) ^ T
+    ? != 0 ( nurl_str_starts nm `ptr_` ) ^ T
+    ? != 0 ( nurl_str_starts nm ( __mangle_struct_esc ) ) ^ T
+    ^ F
+}
+
+// mangle_type: LLVM type string → valid identifier fragment. INJECTIVE over
+// LLVM type strings (see __mangle_slug_collides) so distinct generic
+// instantiations never share a monomorphisation.
 @ mangle_type s lty → s {
     ? ( seq lty `i64` ) ^ `i64`
     ? ( seq lty `double` ) ^ `f64`
@@ -12285,7 +12315,10 @@
     ^ ( nurl_str_cat `ptr_` ( mangle_type ( nurl_str_slice lty 0 - ( nurl_str_len lty ) 1 ) ) )
     {}
     ? == ( nurl_str_get lty 0 ) 37
-    ^ ( nurl_str_slice lty 1 - ( nurl_str_len lty ) 1 )
+    { : s nm ( nurl_str_slice lty 1 - ( nurl_str_len lty ) 1 )
+        ? ( __mangle_slug_collides nm )
+        { ^ ( nurl_str_cat ( __mangle_struct_esc ) nm ) } {}
+        ^ nm }
     {}
     lty
 }
@@ -12308,6 +12341,14 @@
     {}
     ? != 0 ( nurl_str_starts mty `ptr_` )
     ^ ( nurl_str_cat ( demangle_type ( nurl_str_slice mty 4 - ( nurl_str_len mty ) 4 ) ) `*` )
+    {}
+    // Escaped NAMED-struct slug (see mangle_type): `S__<name>` → `%<name>`.
+    // Strip the marker and recover the struct type. A real struct whose
+    // bare name does NOT collide falls through to the plain `%mty` below.
+    : s esc ( __mangle_struct_esc )
+    : i el ( nurl_str_len esc )
+    ? != 0 ( nurl_str_starts mty esc )
+    ^ ( nurl_str_cat `%` ( nurl_str_slice mty el - ( nurl_str_len mty ) el ) )
     {}
     ( nurl_str_cat `%` mty )
 }
