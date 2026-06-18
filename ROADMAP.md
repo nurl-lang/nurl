@@ -23,16 +23,18 @@ What is solid today:
 
 - **Language (Grammar v2.2).** Sum types (`|`) and product types (structs),
   generics over structs and functions (incl. generics over option/result
-  types), pattern matching with **match guards** and **or-patterns**,
-  **trait bounds** on type parameters (`[A: Ord]`), **compile-time constant
+  types), pattern matching with **match guards**, **or-patterns**, and
+  **N-ary payloads**, **trait bounds** on type parameters (`[A: Ord]`), **compile-time constant
   folding** (`const_eval_int`), a full numeric type set (`i` = i64 and
   `u` = byte/u8, plus sized `i8`/`i16`/`i32`, `u16`/`u32`/`u64`, `f` = f64
   and `f32`), tail-call optimization, and
-  **variadic FFI** (the `printf` family callable directly).
+  **variadic FFI** (the `printf` family callable directly). The grammar decision
+  for prefix-arity (no grouping delimiter) is formally locked.
 - **Memory & safety.** Single-owner memory with compiler-inserted auto-drop at
   scope exit — no GC, no hidden boxing. A **static borrow checker, on
   by default** (`--no-borrowck` to disable, `--strict-borrowck` to tighten),
-  catches use-after-move, alias double-free, escaping closure captures, and
+  catches use-after-move, alias double-free, escaping closure captures,
+  interprocedural/return escape, loop-carried double-frees, and
   iterator invalidation as hard errors without changing generated code.
 - **Concurrency.** A stackful M:N work-stealing async runtime with **no
   `async`/`await` colouring** — ordinary code runs unchanged under the
@@ -40,12 +42,13 @@ What is solid today:
   channel **select**.
 - **Standard library.** A broad pure-NURL stdlib (see the inventory below)
   spanning collections, hashing, serialization, a full HTTP/1.1+2 + WebSocket
-  stack, database clients, MCP, and the Anthropic Claude API.
+  stack, database clients, distributed systems (p2p overlay, CRDTs), MCP, and the Anthropic Claude API.
 - **Targets.** Linux x86_64 (primary), Windows x86_64, macOS x86_64/ARM64,
   `wasm32-wasi`, and static Linux ARM64 / RISC-V64 (musl). See
   [`docs/PLATFORMS.md`](docs/PLATFORMS.md).
 - **Tooling.** `nurlc` (compiler), `nurlfmt` (canonical formatter), `nurl-lsp`
-  (language server), `nurlpkg` (package manager), DWARF debug info (`--g`), a
+  (language server), `nurlpkg` (package manager + test/bench runner), `nurldoc`
+  (API-doc generator), `tools/repl`, DWARF debug info (`--g`), a
   VS Code extension, and `nurlapi` — a compiler-as-a-service container that
   powers the public playground and MCP endpoint.
 
@@ -67,14 +70,15 @@ A high-level map of what exists. Dates and per-feature detail are in
 - Grammar evolved v0.1 → **v2.2** (snapshots in [`spec/`](spec/)). v2.x added:
   visibility (`pub`) enforcement across functions, types, consts, and enum
   variants; trait bounds; match guards + or-patterns; const folding; channel
-  select.
+  select; and locked the prefix-arity grouping decision.
 - Type system: strong, static, inferred, algebraic; no subtyping, no implicit
   conversions. Sized integer/float types with signedness tracking; explicit
   `#` casts with correct `sext`/`zext`/`trunc`/`fpext`/`fptrunc`.
-- Generics: monomorphised generic structs and functions, generic nesting
+- Generics: monomorphised generic structs and functions (signedness-aware), generic nesting
   (`Channel[A]`, `Vec[Thread]`), and generics over `?T` / `!T E`.
 - Memory model: auto-drop, recursive `Drop` for boxed enum/struct payloads,
-  `% Drop` user destructors, move/borrow analysis. Model and known gaps:
+  `% Drop` user destructors, move/borrow analysis (incl. interprocedural and
+  loop-carried escape detection). Model and known gaps:
   [`docs/MEMORY.md`](docs/MEMORY.md).
 - Front-end is diagnostic-first: malformed prefix-arity programs, undefined
   identifiers, call-arity mismatches, unbalanced braces / stray top-level
@@ -92,36 +96,41 @@ platform-specific shims.
 - **core** — `string`, `vec`, `option`, `result`, `errors`, `char`, `slice`,
   `pair`, `box`, `cell`, `mem`, `io`, `symtab`, `posix`.
 - **std/collections & algorithms** — `hashmap`, `set`, `deque`, `heap`,
-  `ordmap`, `iter`, `sort`, `cmp`, `bytes`, `bufio`, `fmt`, `int`, `float`,
-  `bigint` (arbitrary-precision integers).
+  `ordmap`, `btree`, `lru`, `bitset`, `iter`, `sort`, `cmp`, `bytes`, `bufio`, `fmt`, `int`, `float`,
+  `bigint` (arbitrary-precision integers), `decimal` (exact fixed-point).
 - **std/runtime services** — `async`, `thread`, `channel`, `arc`, `rc`,
-  `arena`, `signal`, `panic`/`recover`, `process`, `log` (text + JSON),
-  `time` (incl. timezone/DST), `args` (CLI parser).
+  `arena`, `signal`, `panic`/`recover`, `process`, `unixsock` (local IPC),
+  `log` (text + JSON), `time` (incl. timezone/DST, HTTP/RFC 2822 dates), `args` (CLI parser),
+  `term` (POSIX termios, ANSI).
 - **std/crypto & encoding** — `hash` (SHA-1/256/512, MD5, HMAC),
   `hash_blake3`, `encode` (hex, base64, base32), `random` (OS CSPRNG),
   `rng` (seedable, deterministic xoshiro256\*\*).
 - **std/IO & net** — `fs` (incl. streaming + `readlink`), `path` (typed),
   `net` (TCP/TLS), `udp`, `dns`, `dos`.
-- **ext/serialization** — `json`, `toml`, `csv`, `msgpack`, `xml`, `yaml`,
+- **ext/serialization** — `json`, `toml`, `csv`, `msgpack`, `cbor`, `xml`, `yaml`,
   `serde`, `regex`.
 - **ext/web stack** — full HTTP/1.1 server (keep-alive, pipelining, static,
-  auth, cookies, forms, multipart, router, middleware, access log + Prometheus
+  auth, JWT bearer-auth, cookies, forms, multipart, router, middleware, access log + Prometheus
   metrics, DoS caps, graceful shutdown, per-request timeouts, panic recovery),
-  HTTP client, **TLS** (SNI + ALPN + mTLS + live cert reload), **HTTP/2**
+  HTTP client (with cookie jar), **TLS** (SNI + ALPN + mTLS + live cert reload), **HTTP/2**
   (RFC 9113 + HPACK, **server and client**), **WebSocket** (RFC 6455, **server
   and client**), reverse proxy with binary-safe streaming. The stack has had a
   dedicated security-hardening pass (path-traversal, SSRF, request-smuggling,
   HTTP/2 CONTINUATION-flood + stream-accounting, and clean cross-thread
   listener shutdown) with regression tests.
 - **ext/data services** — `sqlite` (production-hardened), `postgres` (binary
-  protocol, async, LISTEN/NOTIFY, COPY), `mqtt` 5.0 client.
+  protocol, async, LISTEN/NOTIFY, COPY), `mqtt` 5.0 client, `smtp` (mail submission).
 - **ext/AI & agents** — `mcp` (+ `client`, `http`, `session`, `stdio`,
   `registry`) and `anthropic` (Claude Messages API incl. streaming SSE +
   tool-use deltas).
 - **ext/packaging** — `semver`, `manifest`, `lockfile`, `resolver`,
   `registry_index`, `pkg_fetch`, `pkg_publish` (the `nurlpkg` backend).
-- **ext/misc** — `compress` (zlib/zstd/gzip), `tar`, `uuid` (v4/v7),
+- **ext/misc** — `compress` (zlib/zstd/gzip), `zip` (archives), `tar`, `uuid` (v4/v7),
   `credentials`, `env`.
+- **dist/distributed systems** — secure pubkey-addressed p2p overlay, STUN,
+  NAT traversal, DERP relay, SWIM membership, state-based CRDTs (PN-Counter,
+  LWW-Register, OR-Set), gossip replicator, consistent-hash ring, distributed
+  computation (Crown).
 
 ### Targets & tooling
 
@@ -135,7 +144,8 @@ platform-specific shims.
   DWARF debugging, VS Code extension, and the `nurlapi` compiler-as-a-service
   container (playground + cross-compile endpoints + public MCP server).
 - Showcase programs in [`examples/`](examples/) including a Game Boy emulator
-  (with sound), a C64 demo, and ESP32 / Milk-V embedded targets.
+  (with sound), a C64 demo, ESP32 / Milk-V embedded targets, and a
+  Push-To-Talk distributed voice app (`pttvoice/`).
 
 ---
 
@@ -146,15 +156,15 @@ new language features.
 
 ### Documentation precision (safety & soundness)
 
-- [ ] **State the safety contract exactly** — which bug classes the borrow
+- [x] **State the safety contract exactly** — which bug classes the borrow
   checker rejects vs. tolerates, with no implied Rust-equivalence
   ([`docs/MEMORY.md`](docs/MEMORY.md), [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md)).
-- [ ] **Write the soundness story** — decide and document whether
+- [x] **Write the soundness story** — decide and document whether
   interprocedural escape analysis and `*T` raw-pointer flows are on the
   roadmap or out of scope by design; the checker is currently incomplete
-  there by design.
-- [ ] **Document the known auto-drop leaks** (nested owned-struct fields,
-  arm-local fall-through bindings, allocations inside a `recover` scope).
+  there by design. *(Resolved: interprocedural escape and return-escape implemented.)*
+- [x] **Document the known auto-drop leaks** (nested owned-struct fields,
+  arm-local fall-through bindings, allocations inside a `recover` scope). *(Resolved: leaks fixed.)*
 
 ### Evidence for the "LLM-native" thesis
 
@@ -184,11 +194,6 @@ Not blocking 1.0; ordered roughly by likely value.
 - **Mobile & embedded targets** — Android (NDK), iOS, and a `no_std`-style
   embedded profile. The RISC-V / ARM64 static cross-compiles already prove the
   shape; these extend it.
-- **Numeric breadth** — arbitrary-precision integers shipped (`std/bigint`:
-  signed, base-2¹⁶ limbs, add/sub/mul, truncated div/rem via Knuth
-  Algorithm D, comparison, base-10 parse/format). Fixed-point decimal is
-  still open. Acceptable to omit for systems work today; tracked for
-  completeness.
 - **Runtime split (organisational)** — separate `stdlib/runtime.c` into
   bootstrap-internal helpers vs. stdlib FFI shims. The PURIFY effort already
   moved most platform code into pure-NURL `& \`c\`` FFI; the file-level split
