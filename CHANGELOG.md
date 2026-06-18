@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Unknown type names are diagnosed at the source (fuzz follow-up).** An
+  undeclared type identifier in a type position — an FFI parameter/return type,
+  a function parameter/return type, or a struct field type — used to leak into
+  the IR as an undefined `%Name` that `nurlc` emitted with status 0 and only
+  `clang` / `llvm-as` rejected ("use of undefined type named 'X'", or the
+  cryptic "cannot allocate unsized type"). A typo'd type name or a missing `$`
+  import now produces *"unknown type 'X' … (a typo, or a missing '$' import?)"*
+  pointing at the use. The new `check_type_known` scans the emitted LLVM type
+  for `%Name` references and verifies each against the pre-scan type registry;
+  generic type variables (tparam-like, substituted at monomorphisation) and
+  compiler-mangled names (containing `__`, e.g. a `%Vec__i64` instantiation or
+  an aliased import) are accepted unchanged, so generics and imports are
+  unaffected. Locks `should_fail_unknown_type_{ffi,param,return,field}`.
+
 - **Compiler no longer hangs on an unterminated declaration body (fuzz sweep).**
   A corpus-seeded mutation fuzzer (36k + 15k mutants over `build/nurlc`; oracle:
   never crash, never hang, and rc 0 ⇒ the IR assembles) found **zero crashes**
