@@ -2542,7 +2542,12 @@
     ? == tt TT_LT ? isf `fcmp olt` ? isu `icmp ult` `icmp slt`
     ? == tt TT_GT ? isf `fcmp ogt` ? isu `icmp ugt` `icmp sgt`
     ? == tt TT_EQEQ ? isf `fcmp oeq` `icmp eq`
-    ? == tt TT_NE ? isf `fcmp one` `icmp ne`
+    // Float `!=` must be UNORDERED-or-not-equal (`une`), not ordered (`one`):
+    // IEEE 754 requires `x != y` to be TRUE when either operand is NaN, so the
+    // canonical NaN check `!= x x` works. `une` matches C's `!=` and is
+    // identical to `one` for non-NaN operands. (`==` stays `oeq` — NaN == NaN
+    // is false, also matching C.)
+    ? == tt TT_NE ? isf `fcmp une` `icmp ne`
     ? == tt TT_LE ? isf `fcmp ole` ? isu `icmp ule` `icmp sle`
     ? == tt TT_GE ? isf `fcmp oge` ? isu `icmp uge` `icmp sge`
     `add`
