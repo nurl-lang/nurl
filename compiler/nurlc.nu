@@ -10586,17 +10586,48 @@
                     {  // Float payload → ptr slot. Bitcast the float to a
                         // same-width int (f32 widens i32→i64), then inttoptr.
                         // The match arm inverts this (emit_enum_float_extract).
+                        //
+                        // Pick the slot width from the variant's DECLARED payload
+                        // type, NOT the value's: a float LITERAL is always
+                        // `double`, so an `f32` payload (`@ N { F32 2.25 }`) would
+                        // otherwise bitcast the whole double to i64, while
+                        // emit_enum_float_extract reads the low 32 bits back as a
+                        // float → garbage (returned 0). The payload index is
+                        // idx-1 (idx 0 is the tag slot).
+                        : s decl_pt ? & != 0 ( nurl_str_len enum_vname ) >= idx 1
+                        ( nurl_sym_get syms ( nurl_str_cat3 enum_vname `__payload__` ( nurl_str_int - idx 1 ) ) )
+                        fty
                         : ~ s ibits ``
-                        ? ( seq fty `double` )
-                        { = ibits ( nurl_cg_reg cg )
-                            ( nurl_print `  ` ) ( nurl_print ibits )
-                            ( nurl_print ` = bitcast double ` ) ( nurl_print fval ) ( nurl_print ` to i64\n` ) }
-                        { : s b32 ( nurl_cg_reg cg )
+                        ? ( seq decl_pt `float` )
+                        {  // f32 slot: ensure the value is `float` (fptrunc a
+                            // double literal), then bitcast→i32, zext→i64.
+                            : ~ s fv32 fval
+                            ? ( seq fty `double` )
+                            { : s ftr ( nurl_cg_reg cg )
+                                ( nurl_print `  ` ) ( nurl_print ftr )
+                                ( nurl_print ` = fptrunc double ` ) ( nurl_print fval )
+                                ( nurl_print ` to float\n` )
+                                = fv32 ftr }
+                            {}
+                            : s b32 ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print b32 )
-                            ( nurl_print ` = bitcast float ` ) ( nurl_print fval ) ( nurl_print ` to i32\n` )
+                            ( nurl_print ` = bitcast float ` ) ( nurl_print fv32 ) ( nurl_print ` to i32\n` )
                             = ibits ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print ibits )
                             ( nurl_print ` = zext i32 ` ) ( nurl_print b32 ) ( nurl_print ` to i64\n` ) }
+                        {  // double slot: ensure the value is `double` (fpext an
+                            // f32 value), then bitcast→i64.
+                            : ~ s fv64 fval
+                            ? ( seq fty `float` )
+                            { : s fpe ( nurl_cg_reg cg )
+                                ( nurl_print `  ` ) ( nurl_print fpe )
+                                ( nurl_print ` = fpext float ` ) ( nurl_print fval )
+                                ( nurl_print ` to double\n` )
+                                = fv64 fpe }
+                            {}
+                            = ibits ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print ibits )
+                            ( nurl_print ` = bitcast double ` ) ( nurl_print fv64 ) ( nurl_print ` to i64\n` ) }
                         : s conv_regf ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print conv_regf )
                         ( nurl_print ` = inttoptr i64 ` ) ( nurl_print ibits ) ( nurl_print ` to ptr\n` )
