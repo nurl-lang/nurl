@@ -5627,6 +5627,10 @@
             //     exhaustiveness tracking, and enum-variant lookup paths;
             //     a wildcard arm is required to cover the residual.
             : b is_int_pat == pat_tt TT_INT
+            // A BOOL pattern (`T` / `F`) matches an Option (`? T`) or Result
+            // (`! T E`): the T-arm binds the single value / Ok-payload, the
+            // F-arm binds the error (or nothing). Either way at most ONE slot.
+            : b is_bool_pat == pat_tt TT_BOOL
             // For an integer-literal pattern normalise the spelling so a
             // `0x…` / `0b…` literal doesn't reach the `icmp` constant as
             // raw text (LLVM would read `0x…` as a hex float). Decimal
@@ -5721,6 +5725,14 @@
                 ( nurl_str_cat3 `match arm binds ` ( nurl_str_int pvc ) ` payload(s) but variant '` )
                 pattern_name
                 ( nurl_str_cat3 `' declares only ` __pc_s ` — if a CamelCase name in the enum declaration was meant as this variant's payload TYPE, note that an unknown/unimported type name parses as a SEPARATE variant; define or import the type before the enum.` ) ) ) }
+            {}
+            // Option / Result T-or-F arm: at most one payload slot. Binding
+            // more (`?? o { T a b → … }`) used to emit an out-of-range
+            // `extractvalue { i1, T } v, 2` that only clang/llvm-as rejected.
+            ? & is_bool_pat > pvc 1
+            { ( die lex ( nurl_str_cat
+                ( nurl_str_cat3 `match arm binds ` ( nurl_str_int pvc ) ` payloads but an option/result '` )
+                ( nurl_str_cat pattern_name `' arm binds at most one (the T-arm value / Ok payload, or the F-arm error)` ) ) ) }
             {}
 
             // Optional guard: `Pattern payloads ? <cond> → body`. The
