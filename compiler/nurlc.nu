@@ -10744,6 +10744,28 @@
             = actual_fval cv
             = actual_fty decl_fty }
         {}
+        // Float-width coercion (mirrors the int-width block). A float LITERAL is
+        // always emitted as `double`, so placing one in an `f32` (LLVM `float`)
+        // field needs `fptrunc`; an `f32` value in an `f` field needs `fpext`.
+        // Without this `@ Vec3 { 1.5 2.5 3.5 }` inserted a `double` into a
+        // `float` field — IR nurlc accepted but clang rejected ("insertvalue
+        // operand and field disagree in type: 'double' instead of 'float'").
+        // Enum / opt-res payloads have no `__idx_N__type` roster (decl_fty
+        // empty) and ran their own coercion above, so they are unaffected.
+        ? & ( seq decl_fty `float` ) ( seq actual_fty `double` )
+        { : s cvf ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print cvf ) ( nurl_print ` = fptrunc double ` )
+            ( nurl_print actual_fval ) ( nurl_print ` to float\n` )
+            = actual_fval cvf
+            = actual_fty `float` }
+        {}
+        ? & ( seq decl_fty `double` ) ( seq actual_fty `float` )
+        { : s cvd ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print cvd ) ( nurl_print ` = fpext float ` )
+            ( nurl_print actual_fval ) ( nurl_print ` to double\n` )
+            = actual_fval cvd
+            = actual_fty `double` }
+        {}
 
         : s r ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print r )
