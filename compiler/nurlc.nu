@@ -2797,6 +2797,30 @@
     ^ ( atoll str )
 }
 
+// nurl_lex_parse_int_wrap: parse a decimal integer literal's text into its
+// two's-complement i64 bit pattern, accumulating with WRAPPING arithmetic.
+// Unlike C `atoll` — which saturates at LLONG_MAX, silently clamping EVERY
+// literal above i64 max (the entire upper half of the u64 range: e.g.
+// `: u64 x 18446744073709551615` became i64 max 9223372036854775807 instead of
+// all-ones) — this stores the exact bits, matching the hex/binary lexer paths
+// which already accumulate with wrapping. Handles an optional leading '-';
+// i64 MIN round-trips (its magnitude 2^63 wraps to i64 MIN, and negating that
+// wraps back to itself). Input is already validated as `[-]?digit+` by the
+// lexer, so non-digits are simply skipped.
+@ nurl_lex_parse_int_wrap s sv → i {
+    : i n ( nurl_str_len sv )
+    : ~ i idx 0
+    : ~ b neg F
+    ? & > n 0 == ( nurl_str_get sv 0 ) 45 { = neg T  = idx 1 } {}
+    : ~ i acc 0
+    ~ < idx n {
+        : i c ( nurl_str_get sv idx )
+        ? & >= c 48 <= c 57 { = acc + * acc 10 - c 48 } {}
+        = idx + idx 1
+    }
+    ^ ? neg - 0 acc acc
+}
+
 @ nurl_str_to_float s str → f {
     ^ ( atof str )
 }
@@ -3482,7 +3506,7 @@
             ? is_float {
                 ( __tok_write lex base TT_FLOAT sv 0 line start )
             } {
-                ( __tok_write lex base TT_INT sv ( atoll sv ) line start )
+                ( __tok_write lex base TT_INT sv ( nurl_lex_parse_int_wrap sv ) line start )
             }
             = done T
         } {}
@@ -3564,7 +3588,7 @@
             ? is_float {
                 ( __tok_write lex base TT_FLOAT sv 0 line start )
             } {
-                ( __tok_write lex base TT_INT sv ( atoll sv ) line start )
+                ( __tok_write lex base TT_INT sv ( nurl_lex_parse_int_wrap sv ) line start )
             }
             = done T
         } {}
