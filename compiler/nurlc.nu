@@ -2322,6 +2322,21 @@
         `', right is '` rt )
         `' — operator-level pointer arithmetic is not supported; index with '. ptr idx' or convert explicitly` ) ) }
     {}
+    // Bool (i1) vs non-bool. NURL has no implicit bool↔int conversion, so an
+    // operator with exactly one i1 operand emitted e.g. `icmp slt i1 %f, %n`
+    // (the other a wider integer) — IR only clang/llvm-as rejected. A CONSTANT
+    // operand is fine: it reinterprets to the other side's width (a bool
+    // literal `T`/`F` → 0/1 fits i64 in `== v T`; an int literal 0/1 fits i1 in
+    // `== flag 0`). The genuine bug is two NON-constant registers of disagreeing
+    // bool/int width — detected by both values being SSA registers (`%…`).
+    : b l_i1 ( seq lt `i1` )
+    : b r_i1 ( seq rt `i1` )
+    ? & != l_i1 r_i1 & == ( nurl_str_get lv 0 ) 37 == ( nurl_str_get rv 0 ) 37
+    { ( die lex ( nurl_str_cat ( nurl_str_cat4
+        `operator mixes a bool (i1) and a non-bool operand: left is '` lt
+        `', right is '` rt )
+        `' — NURL has no implicit bool↔int conversion; cast one side ('# i expr')` ) ) }
+    {}
     : ~ s cmp_ty lt
     ? & is_cmp | ( is_ptr_ty lt ) ( is_ptr_ty rt ) {
         ? ( is_ptr_ty lt ) {
@@ -5733,6 +5748,19 @@
             { ( die lex ( nurl_str_cat
                 ( nurl_str_cat3 `match arm binds ` ( nurl_str_int pvc ) ` payloads but an option/result '` )
                 ( nurl_str_cat pattern_name `' arm binds at most one (the T-arm value / Ok payload, or the F-arm error)` ) ) ) }
+            {}
+            // Payload binding requires an aggregate scrutinee — an enum (`%E`)
+            // or an option / result (`{ i1, … }`). Binding a payload while
+            // matching a non-aggregate scalar (`?? n { T a → … }` with `n : i`)
+            // emitted an `extractvalue` on the scalar that only clang/llvm-as
+            // rejected. Integer-literal arms (no payload) and bare tag matches
+            // (pvc 0) are unaffected.
+            ? > pvc 0
+            { ? != 0 ( nurl_str_len match_type )
+                { ? & != ( nurl_str_get match_type 0 ) 37 != ( nurl_str_get match_type 0 ) 123
+                    { ( die lex ( nurl_str_cat3 `cannot bind a payload when matching the non-aggregate type '` ( llvm_to_nurl match_type ) `' — only an enum, option, or result carries payloads` ) ) }
+                    {} }
+                {} }
             {}
 
             // Optional guard: `Pattern payloads ? <cond> → body`. The
