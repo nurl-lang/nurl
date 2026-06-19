@@ -64,9 +64,15 @@ name contains `noprimer` is reported as the no-reference condition.
 Smaller/cheaper models (e.g. `claude-haiku-4-5-20251001`) discriminate better
 than large ones on the *arithmetic* tasks: a strong model ceilings at ~100% in
 every language there. On the *held-out string* tasks the spread is visible at
-every size — see `RESULTS.md` for a haiku/sonnet/opus comparison. Some models
-(e.g. `claude-opus-4-8`) reject the `temperature` parameter; `generate.py`
+every size — see `RESULTS.md` for a haiku/sonnet/opus/mercury comparison. Some
+models (e.g. `claude-opus-4-8`) reject the `temperature` parameter; `generate.py`
 detects that and retries without it, so the model runs at its default sampling.
+
+To drive a **non-Anthropic** model, use `generate_inception.py` (Inception Labs'
+Mercury diffusion LLM, an OpenAI-compatible endpoint; needs `INCEPTION_API_KEY`).
+It reuses `generate.py`'s task specs and prompts verbatim, so its output scores
+identically; give a reasoning/diffusion model a generous `--max-tokens` (it can
+spend the budget "thinking" and return empty otherwise).
 
 ## Files
 
@@ -75,9 +81,11 @@ genacc/
 ├── tasks.json          7 self-contained tasks; spec + verified expected output
 ├── primers/nurl.md     the one-page NURL reference (also a drop-in system-prompt
 │                       cheatsheet for any agent writing NURL)
-├── generate.py         calls a fixed model; one program per (task, language)
-│                       --model --runs --temperature --langs --tag
+├── generate.py         calls a fixed Anthropic model; one program per (task, lang)
+│                       --model --runs --temperature --langs --tag --tasks
 │                       --no-primer / --primer-all (primer framing)
+├── generate_inception.py  same, for Inception Labs' Mercury (OpenAI-compatible,
+│                       INCEPTION_API_KEY); reuses generate.py's prompts verbatim
 ├── score.py            compiles + runs each program; reports compile / correct /
 │                       tokens, primer cost broken out; --detail, --md; no model
 ├── RESULTS.md          our runs + interpretation (regenerate with score.py)
