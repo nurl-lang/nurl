@@ -7,6 +7,53 @@
 > This file is curated. `score.py --md` writes a bare scoreboard; the
 > interpretation below is added by hand.
 
+## Headline
+
+A weak model (`claude-haiku-4-5`) cannot write NURL from memory **at all**
+(0/35 — it falls back to writing Rust). Given NURL's **one-page** grammar
+reference, the same model jumps to **80% correct first-try (28/35)** — **equal
+to Rust (80%) and within five points of Python (85%)**, two languages it has
+seen millions of lines of in training. The regular grammar appears genuinely
+learnable from a single page. This is the affirmative LLM-native result the
+token-count study could not provide; raw token count remains a loss for NURL
+(see [`../TOKEN_EFFICIENCY.md`](../TOKEN_EFFICIENCY.md)).
+
+## Run 2 — `claude-haiku-4-5-20251001`, 5 samples/task, temp 0.7 (the discriminating run)
+
+| condition                         | first-pass compile | correct output |
+|-----------------------------------|-------------------:|---------------:|
+| **NURL — no primer** (raw recall) | 0/35 (0%)          | 0/35 (0%)      |
+| **NURL — one-page primer**        | 29/35 (82%)        | 28/35 (80%)    |
+| Python (in-distribution, no primer) | 35/35 (100%)     | 30/35 (85%)    |
+| Rust (in-distribution, no primer) | 33/35 (94%)        | 28/35 (80%)    |
+
+### Reading it honestly
+
+- **The headline signal is the 0% → 80% jump**, not NURL "beating" anyone. With
+  no primer, haiku doesn't know the language exists — every sample is literally
+  Rust (`fn fib(n: i32) -> i32 { return fib(n-1) + fib(n-2); }`), so the NURL
+  compiler rejects it at token 1. One page of reference closes almost the entire
+  gap to languages with massive training presence. That is strong evidence for
+  the regularity/local-semantics claim.
+- **No language dominates per task; the failures are task-specific and small.**
+  NURL missed on `collatz` (3/5), `matmul` (2/5), `rot13` (1/5), `quicksort`
+  (1/5). Python's only misses were `rot13` (5/5 — every sample appended a
+  trailing space to the input string, `7510` vs `7478`). Rust missed `rot13`
+  (5/5, same kind of spec slip) and `quicksort` (2/5). On the string task NURL
+  was actually the *most* reliable. The correct-output spread (80–85%) is within
+  noise for N=35; treat the three primed/in-distribution columns as a tie.
+- **This is a "with reference provided" result** — a statement about how
+  learnable the grammar is from its rules, not about zero-context recall (which
+  is 0%, exactly because the language is out-of-distribution).
+
+### Caveats
+
+Seven small algorithmic tasks, one weak model, 5 samples — a starter signal, not
+a publication. The compile gap (NURL 82% vs Python 100%) is real and worth
+chasing: the NURL compile failures are the most useful artifacts here (they show
+which grammar corners a model still trips on from one page). Extend `tasks.json`
+with non-arithmetic shapes and repeat on more models to firm this up.
+
 ## Run 1 — `claude-sonnet-4-6`, 1 sample/task, temp 0 (NURL primed; Py/Rust not)
 
 | language | first-pass compile | correct output |
