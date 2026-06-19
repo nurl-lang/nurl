@@ -1,0 +1,4 @@
+_build/
+# Keep the reference oracle; ignore real model-generation output.
+solutions/*
+!solutions/_reference/
