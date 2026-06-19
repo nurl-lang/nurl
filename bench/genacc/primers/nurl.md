@@ -31,10 +31,29 @@ to i64), `*u` (pointer to byte), etc.
 
 ## Bindings and assignment
 
+A plain `:` binding is **immutable** — you cannot reassign it. To reassign a
+variable you must declare it mutable with `: ~`. This is the single most common
+mistake: write `: ~` for anything you will later change with `=`.
+
 ```
-: i x 10        // immutable binding:  : TYPE name value
+: i x 10        // immutable binding:  : TYPE name value   (cannot be reassigned)
 : ~ i y 0       // MUTABLE binding:    : ~ TYPE name value
 = y + y 1       // reassign a mutable: = name value
+```
+
+**Function parameters are immutable too.** You cannot write `= n ...` to mutate
+a parameter `n`. Copy it into a `: ~` local first and mutate that:
+
+```
+@ sum_below i n → i {
+    : ~ i total 0      // mutable accumulator
+    : ~ i k 0          // mutable loop counter
+    ~ < k n {          // n (a parameter) is read-only; never `= n ...`
+        = total + total k
+        = k + k 1
+    }
+    ^ total
+}
 ```
 
 ## Operators are all prefix, fixed-arity (no infix!)
@@ -121,6 +140,8 @@ $ `stdlib/core/string.nu`           // imports go at the top, before use
 }
 ```
 
-Common mistakes to avoid: using infix (`n - 1` instead of `- n 1`); using
-`^ 0` in a `→ v` function; forgetting that both `?` branches need braces;
-calling a stdlib function (e.g. `nurl_str_len`) without its `$` import.
+Common mistakes to avoid: reassigning with `=` something declared with a plain
+`:` or a function parameter (both immutable — declare a `: ~` local instead);
+using infix (`n - 1` instead of `- n 1`); using `^ 0` in a `→ v` function;
+forgetting that both `?` branches need braces; calling a stdlib function (e.g.
+`nurl_str_len`) without its `$` import.
