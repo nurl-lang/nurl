@@ -114,6 +114,10 @@ def main() -> int:
                     help="give every language its primer (symmetry)")
     ap.add_argument("--no-primer", action="store_true",
                     help="give no language a primer (raw familiarity test)")
+    ap.add_argument("--tag", default="",
+                    help="suffix the output dir (solutions/<model>__<tag>/) so "
+                         "different conditions — e.g. noprimer, t07 — don't "
+                         "overwrite each other")
     args = ap.parse_args()
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -129,7 +133,8 @@ def main() -> int:
 
     tasks = json.loads((HERE / "tasks.json").read_text())["tasks"]
     safe_model = re.sub(r"[^A-Za-z0-9._-]", "_", args.model)
-    out_root = HERE / "solutions" / safe_model
+    dir_name = f"{safe_model}__{args.tag}" if args.tag else safe_model
+    out_root = HERE / "solutions" / dir_name
 
     total = 0
     for run in range(args.runs):
