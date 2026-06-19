@@ -19,6 +19,10 @@ bench/
 ├── matmul.{nu,py,rs,js}         — 128×128 integer matrix product, print the trace
 ├── quicksort.{nu,py,rs,js}      — in-place quicksort of 5000 ints + checksum
 ├── rot13.{nu,py,rs,js}          — ROT13 a string, sum the byte values
+├── words.{nu,py,rs,js}          — count words (runs of letters) in a string
+├── brackets.{nu,py,rs,js}       — max nesting depth of a bracket string
+├── csv_sum.{nu,py,rs,js}        — sum the integers in a ','/';' grid
+├── histogram.{nu,py,rs,js}      — highest single-digit count in a string
 ├── data.json                    — input for json_parse (regenerated on first run)
 ├── gen_data.py                  — JSON generator (stable seed → deterministic bytes)
 ├── run.sh                       — compute-benches runner (median wall-clock ms)
@@ -68,6 +72,14 @@ server. Output is a single Markdown table.
 | `matmul` | Triple-nested loop + flat-array indexing | Classic dense-compute kernel; index arithmetic dominates. |
 | `quicksort` | Recursion + in-place array mutation | Partition + swap; the checksum only verifies if the sort is correct. |
 | `rot13` | Character-level string scan + arithmetic | The string-processing shape, where NURL's glyph surface is most out-of-distribution for BPE tokenisers. |
+| `words` | Char-level state machine | Counts maximal letter-runs; branchy scan with no array. |
+| `brackets` | Stack + matching | Balanced-bracket check with a manual stack; max nesting depth. |
+| `csv_sum` | Parsing + manual atoi | Splits a separated grid and accumulates integers from digits. |
+| `histogram` | Array-indexed tally | Per-digit counts then a max; the string-plus-small-array shape. |
+
+The four string tasks (`words`/`brackets`/`csv_sum`/`histogram`) were added as a
+**held-out set** for the generation-accuracy study (`genacc/`) — see its
+`RESULTS.md` for why that matters.
 
 The five algorithmic benches use a float64-safe LCG fill (modulus 2²⁰) so
 every language stays bit-exact without any i64-wrap special-casing.

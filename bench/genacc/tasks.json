@@ -35,6 +35,26 @@
       "name": "lcg",
       "spec": "Starting from x=1, iterate the update x = x*6364136223846793005 + 1442695040888963407 exactly one hundred million (100000000) times. The arithmetic is 64-bit and wraps around modulo 2^64 using two's-complement (signed 64-bit) semantics, exactly as it would in C `long long` or Rust `i64` with wrapping. Print only the final value of x interpreted as a signed 64-bit integer, followed by a newline.",
       "expected": "6299863613973285121"
+    },
+    {
+      "name": "words",
+      "spec": "Count the number of words in this exact string: the quick123brown fox, jumps-over the lazy_dog!  -- where a word is a maximal run of ASCII letters (a-z or A-Z), and every other character (digits, spaces, punctuation, underscore) is a separator. Print only that count, followed by a newline.",
+      "expected": "9"
+    },
+    {
+      "name": "brackets",
+      "spec": "Scan this exact string left to right: (([{}]))[]{}  -- tracking bracket nesting with a stack over the three pairs () [] {}. If the string is fully balanced and correctly nested, print the maximum nesting depth reached; if it is not balanced or a close does not match the most recent open, print 0. Print only that single integer, followed by a newline.",
+      "expected": "4"
+    },
+    {
+      "name": "csv_sum",
+      "spec": "This exact string encodes non-negative integers separated by commas and semicolons: 12,3,45;6,78,9;100,2,33  -- print only the sum of all of those integers, followed by a newline.",
+      "expected": "288"
+    },
+    {
+      "name": "histogram",
+      "spec": "Count how many times each digit 0 through 9 appears in this exact string: 314159265358979  -- then print only the single largest of those ten counts, followed by a newline.",
+      "expected": "3"
     }
   ]
 }
