@@ -118,6 +118,9 @@ def main() -> int:
                     help="suffix the output dir (solutions/<model>__<tag>/) so "
                          "different conditions — e.g. noprimer, t07 — don't "
                          "overwrite each other")
+    ap.add_argument("--tasks", default="",
+                    help="comma-separated task names to generate (default: all "
+                         "in tasks.json), e.g. for a held-out subset")
     args = ap.parse_args()
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -132,6 +135,13 @@ def main() -> int:
             return 2
 
     tasks = json.loads((HERE / "tasks.json").read_text())["tasks"]
+    if args.tasks:
+        want = {t.strip() for t in args.tasks.split(",") if t.strip()}
+        tasks = [t for t in tasks if t["name"] in want]
+        missing = want - {t["name"] for t in tasks}
+        if missing:
+            sys.stderr.write(f"unknown task(s): {', '.join(sorted(missing))}\n")
+            return 2
     safe_model = re.sub(r"[^A-Za-z0-9._-]", "_", args.model)
     dir_name = f"{safe_model}__{args.tag}" if args.tag else safe_model
     out_root = HERE / "solutions" / dir_name
