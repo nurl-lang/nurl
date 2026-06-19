@@ -1,0 +1,40 @@
+{
+  "_comment": "Generation-accuracy task specs. Each `spec` is the full natural-language prompt handed to the model; `expected` is the exact stdout a correct program must print (verified byte-identical across NURL/Python/Rust/Node by bench/verify.sh). Outputs are fully determined by the spec alone — no external files.",
+  "tasks": [
+    {
+      "name": "fib",
+      "spec": "Compute the 35th Fibonacci number using naive double recursion, where fib(0)=0 and fib(1)=1. Print only that number, followed by a newline.",
+      "expected": "9227465"
+    },
+    {
+      "name": "collatz",
+      "spec": "For every starting value k from 1 to 99999 inclusive, compute the number of Collatz steps needed to reach 1 (at each step: if n is even, n becomes n/2; if odd, n becomes 3*n+1; count one step each time). Print only the maximum step count found over all k, followed by a newline.",
+      "expected": "350"
+    },
+    {
+      "name": "rot13",
+      "spec": "Take the exact string: the quick brown fox jumps over the lazy dog and then the slow purple turtle naps  -- apply ROT13 to every lowercase ASCII letter a-z (rotate by 13 within a-z; leave all other characters, including spaces, unchanged). Then print only the sum of the byte values of the resulting string, followed by a newline.",
+      "expected": "7478"
+    },
+    {
+      "name": "matmul",
+      "spec": "Build two 128x128 integer matrices A and B, indexed row-major, with A[i][j] = (i*128 + j) % 7 and B[i][j] = (i + j) % 5 (i and j range 0..127). Compute the matrix product C = A * B. Print only the trace of C (the sum of C[i][i] for i in 0..127), followed by a newline.",
+      "expected": "98286"
+    },
+    {
+      "name": "quicksort",
+      "spec": "Create an array of 5000 integers as follows: start with x=1, and for each of the 5000 elements set x = (x*1103515245 + 12345) % 1048576 and store the new x. Sort the array into ascending order using quicksort. Then print only the value of sum over k from 0 to 4999 of (k+1)*a[k], where a is the SORTED array and k is the 0-based index, followed by a newline.",
+      "expected": "8722003263816"
+    },
+    {
+      "name": "sieve",
+      "spec": "Count how many prime numbers are less than or equal to 10000000 (ten million) using the Sieve of Eratosthenes. Print only that count, followed by a newline.",
+      "expected": "664579"
+    },
+    {
+      "name": "lcg",
+      "spec": "Starting from x=1, iterate the update x = x*6364136223846793005 + 1442695040888963407 exactly one hundred million (100000000) times. The arithmetic is 64-bit and wraps around modulo 2^64 using two's-complement (signed 64-bit) semantics, exactly as it would in C `long long` or Rust `i64` with wrapping. Print only the final value of x interpreted as a signed 64-bit integer, followed by a newline.",
+      "expected": "6299863613973285121"
+    }
+  ]
+}

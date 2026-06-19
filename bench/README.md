@@ -99,6 +99,16 @@ python3 -m venv bench/_venv && bench/_venv/bin/pip install tiktoken
 bench/_venv/bin/python bench/token_efficiency.py > bench/TOKEN_EFFICIENCY.md
 ```
 
+## Generation accuracy
+
+Token count is not the LLM-native claim worth defending; **first-pass compile
+success** is. [`genacc/`](genacc/) is a harness that asks a fixed model to
+write each task in each language and scores how often the result compiles and
+runs correctly with zero edits — the dimension the token study cannot measure.
+It ships tasks, a generator, a scorer, and a reference oracle, but no model
+results (running it needs an `ANTHROPIC_API_KEY`). See
+[`genacc/README.md`](genacc/README.md).
+
 ## Scope
 
 Numbers should reproduce within ~20 % on any modern x86_64 host. There
