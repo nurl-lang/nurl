@@ -1,81 +1,95 @@
 # Generation-accuracy harness
 
-The token-efficiency study ([`../TOKEN_EFFICIENCY.md`](../TOKEN_EFFICIENCY.md))
-retired one claim: on today's tokenisers NURL is **not** fewer tokens than
-Python. This harness measures the *affirmative* LLM-native claim that the
-token study cannot — **does a model write correct NURL on the first try more
-reliably than mainstream languages, because the grammar is regular and
-locally decodable?**
+Does a model write **correct code on the first try** more readily when the
+grammar is regular and locally decodable? This harness measures that for NURL
+against mainstream languages, and reports it alongside the BPE token cost of
+what the model emitted.
 
-Two metrics per (task, language):
+It is the affirmative counterpart to the matched-source token study
+([`../TOKEN_EFFICIENCY.md`](../TOKEN_EFFICIENCY.md)). That study retired one
+claim — on today's tokenisers NURL is **not** fewer tokens than Python. This one
+asks the question token count cannot: given the rules, can a model *produce
+working NURL*? Our runs are in [`RESULTS.md`](RESULTS.md).
 
-- **first-pass compile** — does the generated program build with **zero**
-  human edits?
-- **correct output** — does it print exactly the expected bytes?
+Three numbers per program, all **first-pass** (the model's first and only
+attempt — no human edits, no retry loop):
 
-> ⚠️ **Status: harness complete, study not yet run.** This directory ships the
-> tasks, the generator, the scorer, and a reference oracle — but no model
-> results, because running it needs an `ANTHROPIC_API_KEY` that this repo does
-> not carry. Run it yourself (below); do not cite numbers that aren't here.
+- **compile** — built with zero edits?
+- **correct** — printed exactly the expected bytes? (compiles-but-wrong = miss)
+- **tokens** — BPE token cost of the emitted program (cl100k / o200k).
+
+The NURL **primer**'s own token cost is reported separately: in the primed
+condition it is prepended to every NURL prompt, so it is a real recurring
+expense and we do not hide it.
+
+## Why NURL gets a primer and Python/Rust don't
+
+Public LLMs have **zero lines of NURL** in their training data and millions of
+lines of Python and Rust. A "write it from memory" test would therefore measure
+*training exposure*, not the grammar. So by default the model is handed NURL's
+one-page reference (`primers/nurl.md`); Python and Rust, being in-distribution,
+are not. The question becomes: *given the rules, does the regular grammar let a
+model write correct code at a rate comparable to languages it already knows?*
+The `--no-primer` / `--primer-all` flags let you measure the other framings;
+state which you used when quoting a number.
+
+## Reproduce it with any model
+
+You need an `ANTHROPIC_API_KEY` for generation; scoring needs only the NURL
+toolchain (`build/nurlc` + the usual `clang`/`rustc`/`python3`/`node`). Token
+columns need `tiktoken`, so score with the study venv.
+
+```sh
+# 0. one-time: a venv with tiktoken for the token columns
+python3 -m venv bench/_venv && bench/_venv/bin/pip install tiktoken
+
+# 1. generate (pick any Anthropic model id). --tag keeps conditions from
+#    overwriting each other; --runs N draws N samples/task for a rate.
+export ANTHROPIC_API_KEY=sk-ant-...
+python3 bench/genacc/generate.py --model MODEL_ID --runs 5 --temperature 0.7 --tag main
+
+# 2. (optional) the "what the primer buys" contrast: NURL with no reference
+python3 bench/genacc/generate.py --model MODEL_ID --runs 5 --temperature 0.7 \
+        --langs nurl --no-primer --tag noprimer
+
+# 3. score + build the combined report
+bench/_venv/bin/python bench/genacc/score.py \
+        MODEL_ID__main MODEL_ID__noprimer --detail --md bench/genacc/RESULTS.md
+```
+
+`generate.py` writes to `solutions/<model>__<tag>/run<k>/<task>.<ext>`.
+`score.py` takes those directory names and writes the report. A directory whose
+name contains `noprimer` is reported as the no-reference condition.
+
+Smaller/cheaper models (e.g. `claude-haiku-4-5-20251001`) discriminate better
+than large ones: a strong model scores ~100% in every language on these tasks
+(a ceiling), so the language differences only show up once the model is weak
+enough to make mistakes.
 
 ## Files
 
 ```
 genacc/
 ├── tasks.json          7 self-contained tasks; spec + verified expected output
-├── primers/nurl.md     one-page NURL reference (the fair-test input; see below)
-├── generate.py         calls a fixed model, saves one program per (task,lang)
-├── score.py            compiles + runs each program, scores compile & correctness
-├── README.md           this file
+├── primers/nurl.md     the one-page NURL reference (also a drop-in system-prompt
+│                       cheatsheet for any agent writing NURL)
+├── generate.py         calls a fixed model; one program per (task, language)
+│                       --model --runs --temperature --langs --tag
+│                       --no-primer / --primer-all (primer framing)
+├── score.py            compiles + runs each program; reports compile / correct /
+│                       tokens, primer cost broken out; --detail, --md; no model
+├── RESULTS.md          our runs + interpretation (regenerate with score.py)
 └── solutions/
     └── _reference/     ORACLE: the hand-written, verified bench programs.
-                        `score.py _reference` must report 100%/100% — it is the
-                        scorer's self-test, not a model result.
+                        `score.py _reference` is the scorer's 100%/100% self-test,
+                        not a model result. Real model output is gitignored.
 ```
 
-## The fairness question (read before interpreting any result)
+## Extending it
 
-Every model has seen millions of lines of Python and Rust and almost no NURL.
-A naive "write it from memory" test would therefore measure **training
-exposure**, not grammar quality — the same confound that sank the token study.
-
-So the default, honest design tests the *grammar*: the model is handed NURL's
-one-page reference (`primers/nurl.md`) in the system prompt, then asked to
-solve the task. Python and Rust are in-distribution and get no primer. The
-question becomes: *given the language's rules, does NURL's regular grammar let
-a model produce correct code first-try at a rate comparable to (or better
-than) languages it already knows by heart?*
-
-The knobs let you measure the other framings too:
-
-- `--primer-all` — give every language its primer (full symmetry).
-- `--no-primer` — give none (raw from-memory familiarity; expect NURL to lose,
-  and that result is about corpus exposure, not the grammar).
-
-Report which mode produced any number you quote.
-
-## Running it
-
-```sh
-export ANTHROPIC_API_KEY=sk-ant-...
-# generate (default: claude-sonnet-4-6, NURL gets the primer, temp 0)
-python3 bench/genacc/generate.py --model claude-sonnet-4-6 --runs 1
-
-# score what was generated, optionally writing a markdown scoreboard
-python3 bench/genacc/score.py claude-sonnet-4-6 --md bench/genacc/RESULTS.md
-```
-
-`--runs N` draws N independent samples per (task, language) — pair it with
-`--temperature 0.7` to estimate a pass rate rather than a single-shot result.
-Smaller models (e.g. `claude-haiku-4-5-20251001`) tend to show grammar effects
-more starkly than large ones and are cheaper to sample heavily.
-
-## Honest caveats baked in
-
-- **Seven small algorithmic tasks** is a starter set, not a representative
-  sample of agent work. Extend `tasks.json` (add a `spec` + a verified
-  `expected`; confirm the expected output with `bench/verify.sh` first).
-- The result is conditional on **"reference provided"** — it is a statement
-  about the grammar given the rules, not about zero-context recall.
-- `score.py` calls no model; it only builds and runs. Generation and scoring
-  are separate so results are inspectable and re-scorable.
+Add tasks to `tasks.json` (`name`, `spec`, `expected`). The `spec` must fully
+determine the output with no external input. **Verify each new `expected` first**
+by writing the program in every language and running `bench/verify.sh` — the
+study is only meaningful because every task has one agreed-upon answer. Good
+additions are non-arithmetic shapes (parsing, state machines, string munging)
+where a grammar's regularity has more room to matter.
