@@ -78,23 +78,36 @@ def extract_code(text: str) -> str:
     return (m.group(1) if m else text).strip() + "\n"
 
 
+def _post(api_key: str, payload: dict) -> dict:
+    req = urllib.request.Request(
+        API_URL, data=json.dumps(payload).encode("utf-8"), method="POST",
+        headers={"x-api-key": api_key, "anthropic-version": API_VERSION,
+                 "content-type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
 def call_model(api_key: str, model: str, system: str, user: str,
                max_tokens: int, temperature: float) -> str:
-    body = json.dumps({
+    payload = {
         "model": model,
         "max_tokens": max_tokens,
         "temperature": temperature,
         "system": system,
         "messages": [{"role": "user", "content": user}],
-    }).encode("utf-8")
-    req = urllib.request.Request(API_URL, data=body, method="POST", headers={
-        "x-api-key": api_key,
-        "anthropic-version": API_VERSION,
-        "content-type": "application/json",
-    })
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
-    parts = [b.get("text", "") for b in payload.get("content", [])
+    }
+    try:
+        data = _post(api_key, payload)
+    except urllib.error.HTTPError as e:
+        # Some models (e.g. opus-4.8) reject `temperature`; retry without it
+        # rather than fail. The model then uses its own default sampling.
+        msg = e.read().decode("utf-8", "replace") if e.code == 400 else ""
+        if e.code == 400 and "temperature" in msg:
+            payload.pop("temperature", None)
+            data = _post(api_key, payload)
+        else:
+            raise
+    parts = [b.get("text", "") for b in data.get("content", [])
              if b.get("type") == "text"]
     return "".join(parts)
 

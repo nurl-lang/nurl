@@ -62,9 +62,11 @@ bench/_venv/bin/python bench/genacc/score.py \
 name contains `noprimer` is reported as the no-reference condition.
 
 Smaller/cheaper models (e.g. `claude-haiku-4-5-20251001`) discriminate better
-than large ones: a strong model scores ~100% in every language on these tasks
-(a ceiling), so the language differences only show up once the model is weak
-enough to make mistakes.
+than large ones on the *arithmetic* tasks: a strong model ceilings at ~100% in
+every language there. On the *held-out string* tasks the spread is visible at
+every size — see `RESULTS.md` for a haiku/sonnet/opus comparison. Some models
+(e.g. `claude-opus-4-8`) reject the `temperature` parameter; `generate.py`
+detects that and retries without it, so the model runs at its default sampling.
 
 ## Files
 
