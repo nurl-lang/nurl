@@ -93,3 +93,11 @@ by writing the program in every language and running `bench/verify.sh` — the
 study is only meaningful because every task has one agreed-upon answer. Good
 additions are non-arithmetic shapes (parsing, state machines, string munging)
 where a grammar's regularity has more room to matter.
+
+The **primer is a tuned artifact**, not fixed. Its job is to teach the general
+rules a model trips on from cold; when a run surfaces a recurring first-pass
+mistake, the fix belongs in `primers/nurl.md` as a *general* rule (not a
+task-specific hint — that would overfit the eval). It was already revised once
+this way (v1→v2: "`:` bindings and parameters are immutable; use `: ~`"), which
+lifted first-pass NURL compile from 82% to 97% — see `RESULTS.md`. When you
+tighten it against in-sample failures, re-measure on held-out tasks too.

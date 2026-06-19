@@ -236,7 +236,7 @@ def main() -> int:
             c, ok, n = agg[lang]
             t_cl = med(tok.get(lang, {}).get("cl100k", []))
             t_o2 = med(tok.get(lang, {}).get("o200k", []))
-            note = " + 1116 primer" if (lang == "nurl" and primed and pcl) else ""
+            note = f" + {pcl} primer" if (lang == "nurl" and primed and pcl) else ""
             emit(f"| {lang} | {pct(c, n)} | {pct(ok, n)} | {t_cl}{note} | {t_o2} |")
         emit()
 
