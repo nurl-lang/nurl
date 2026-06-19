@@ -60,6 +60,7 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+_venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
