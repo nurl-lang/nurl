@@ -4,6 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
+    "facts": "bash ../tools/gen-site-facts.sh",
+    "sync-installers": "cp ../tools/get-nurl.sh public/install.sh && cp ../tools/get-nurl.ps1 public/install.ps1",
+    "predeploy": "bash ../tools/gen-site-facts.sh && npm run sync-installers",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {
