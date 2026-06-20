@@ -1,0 +1,7 @@
+[package]
+name = "argz"
+version = "0.1.0"
+description = "A tiny, dependency-free command-line argument parser."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
