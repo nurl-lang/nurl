@@ -19,6 +19,12 @@ set "SCRIPT_DIR=%~dp0"
 if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 pushd "%SCRIPT_DIR%" >nul
 
+REM --no-tests: bootstrap only (fixed point), skip the test suite. Used by
+REM the release workflow, which packages the toolchain rather than gating
+REM tests (CI does that separately). Mirrors build.sh --no-tests.
+set "NO_TESTS=0"
+if /i "%~1"=="--no-tests" set "NO_TESTS=1"
+
 set "LOG=%TEMP%\nurl_build_%RANDOM%%RANDOM%.log"
 type nul > "%LOG%"
 
@@ -135,6 +141,13 @@ if errorlevel 1 (
 
 copy /Y build\nurlc_self2.exe build\nurlc.exe >nul
 copy /Y build\nurlc.exe nurlc.exe >nul
+
+if "%NO_TESTS%"=="1" (
+    echo BUILD SUCCESS ^(tests skipped via --no-tests^)
+    call :cleanup
+    popd >nul
+    exit /b 0
+)
 
 REM ── Test suite ───────────────────────────────────────────────
 REM Per-test golden runner, ported from run_tests.sh, with Windows
