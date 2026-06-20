@@ -1,0 +1,118 @@
+@echo off
+REM Copyright (c) 2026 The NURL Project Developers
+REM SPDX-License-Identifier: MIT OR Apache-2.0
+REM ============================================================
+REM  install-toolchain.bat - Windows counterpart of
+REM  install-toolchain.sh. Installs the NURL compiler + package
+REM  manager + stdlib into a self-contained prefix and wires up
+REM  the paths that make them work from any directory.
+REM
+REM  After running this and adding %NURL_HOME%\bin to PATH, `nurl`,
+REM  `nurlc`, and `nurlpkg` are available everywhere, $NURL_STDLIB
+REM  points at the shipped stdlib (so the compiler resolves
+REM  `$ `stdlib/...`` imports from anywhere), and
+REM  `nurlpkg install <name>` can fetch, build, and install
+REM  programs from the registry.
+REM
+REM  Layout (%NURL_HOME%, default %USERPROFILE%\.nurl):
+REM    %PREFIX%\build\nurlc.exe          the compiler
+REM    %PREFIX%\build\nurlpkg.exe        the package manager
+REM    %PREFIX%\stdlib\                  the stdlib tree (+ runtime.o)
+REM    %PREFIX%\nurl.bat                 the .nu -> native build driver
+REM    %PREFIX%\bin\{nurl,nurlc,nurlpkg}.bat   PATH shims (set NURL_STDLIB)
+REM    %PREFIX%\env.bat                  sets NURL_STDLIB + PATH for a session
+REM
+REM  Usage:
+REM    tools\install-toolchain.bat              install to %USERPROFILE%\.nurl
+REM    set NURL_HOME=C:\nurl & tools\install-toolchain.bat
+REM    tools\install-toolchain.bat --uninstall
+REM
+REM  Windows uses copies (not symlinks) and .bat shims; otherwise the
+REM  layout and behaviour mirror install-toolchain.sh exactly.
+REM ============================================================
+setlocal enabledelayedexpansion
+
+set "SCRIPT_DIR=%~dp0"
+if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+REM ROOT is the repo root (parent of tools\).
+for %%I in ("%SCRIPT_DIR%\..") do set "ROOT=%%~fI"
+
+if not defined NURL_HOME set "NURL_HOME=%USERPROFILE%\.nurl"
+set "PREFIX=%NURL_HOME%"
+
+if /i "%~1"=="--uninstall" goto :uninstall
+
+REM ── Preconditions ─────────────────────────────────────────────
+if not exist "%ROOT%\build\nurlc.exe"   ( echo ERROR: build\nurlc.exe missing - run build.bat first 1>&2 & exit /b 1 )
+if not exist "%ROOT%\build\nurlpkg.exe" ( echo ERROR: build\nurlpkg.exe missing - run tools\nurlpkg\build.bat first 1>&2 & exit /b 1 )
+if not exist "%ROOT%\stdlib\runtime.o"  ( echo ERROR: stdlib\runtime.o missing - run build.bat first 1>&2 & exit /b 1 )
+if not exist "%ROOT%\nurl.bat"          ( echo ERROR: nurl.bat missing 1>&2 & exit /b 1 )
+
+echo Installing NURL toolchain -^> %PREFIX%
+if not exist "%PREFIX%\bin"   mkdir "%PREFIX%\bin"
+if not exist "%PREFIX%\build" mkdir "%PREFIX%\build"
+if not exist "%PREFIX%\stdlib" mkdir "%PREFIX%\stdlib"
+
+REM Compiler + package manager.
+copy /y "%ROOT%\build\nurlc.exe"   "%PREFIX%\build\nurlc.exe"   >nul
+copy /y "%ROOT%\build\nurlpkg.exe" "%PREFIX%\build\nurlpkg.exe" >nul
+
+REM Stdlib tree (incl. runtime.o, runtime.<feature> link sentinels, canvas.o).
+xcopy /e /i /y /q "%ROOT%\stdlib" "%PREFIX%\stdlib" >nul
+
+REM Build driver (resolves build\nurlc.exe + stdlib\runtime.o relative to itself).
+copy /y "%ROOT%\nurl.bat" "%PREFIX%\nurl.bat" >nul
+
+REM ── PATH shims ────────────────────────────────────────────────
+REM Each shim defaults NURL_STDLIB to the prefix so the compiler finds the
+REM shipped stdlib from any directory. The nurlpkg shim also points NURL at
+REM the installed driver so `nurlpkg install <name>` builds with it.
+> "%PREFIX%\bin\nurl.bat" (
+  echo @echo off
+  echo if not defined NURL_STDLIB set "NURL_STDLIB=%PREFIX%"
+  echo call "%PREFIX%\nurl.bat" %%*
+)
+> "%PREFIX%\bin\nurlc.bat" (
+  echo @echo off
+  echo if not defined NURL_STDLIB set "NURL_STDLIB=%PREFIX%"
+  echo "%PREFIX%\build\nurlc.exe" %%*
+)
+> "%PREFIX%\bin\nurlpkg.bat" (
+  echo @echo off
+  echo if not defined NURL_STDLIB set "NURL_STDLIB=%PREFIX%"
+  echo if not defined NURL set "NURL=%PREFIX%\bin\nurl.bat"
+  echo "%PREFIX%\build\nurlpkg.exe" %%*
+)
+
+REM ── Sourceable session env ────────────────────────────────────
+> "%PREFIX%\env.bat" (
+  echo @echo off
+  echo set "NURL_HOME=%PREFIX%"
+  echo set "NURL_STDLIB=%PREFIX%"
+  echo set "PATH=%PREFIX%\bin;%%PATH%%"
+)
+
+echo Done.
+echo.
+echo   installed:  nurl, nurlc, nurlpkg  -^> %PREFIX%\bin
+echo   stdlib:     %%NURL_STDLIB%%        -^> %PREFIX%\stdlib
+echo.
+echo Activate it in this shell:
+echo     call "%PREFIX%\env.bat"
+echo.
+echo Make it permanent (adds the bin dir + NURL_STDLIB to your user env):
+echo     setx NURL_STDLIB "%PREFIX%"
+echo     setx PATH "%PREFIX%\bin;%%PATH%%"
+echo.
+echo Then, from anywhere:
+echo     nurlpkg install argz-demo
+exit /b 0
+
+:uninstall
+if exist "%PREFIX%\bin"      rmdir /s /q "%PREFIX%\bin"
+if exist "%PREFIX%\build"    rmdir /s /q "%PREFIX%\build"
+if exist "%PREFIX%\stdlib"   rmdir /s /q "%PREFIX%\stdlib"
+if exist "%PREFIX%\nurl.bat" del /q "%PREFIX%\nurl.bat"
+if exist "%PREFIX%\env.bat"  del /q "%PREFIX%\env.bat"
+echo Removed NURL toolchain from %PREFIX%
+exit /b 0

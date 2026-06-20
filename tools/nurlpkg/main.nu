@@ -157,7 +157,8 @@ $ `stdlib/std/bytes.nu`
     ( nurl_print `  nurlpkg init <name>    Create a new nurl.toml in the current directory.\n` )
     ( nurl_print `  nurlpkg info           Print the parsed manifest in the current directory.\n` )
     ( nurl_print `  nurlpkg deps           List dependencies, one per line.\n` )
-    ( nurl_print `  nurlpkg install        Resolve path-deps and symlink them under ./deps/.\n` )
+    ( nurl_print `  nurlpkg install        Resolve this project's deps and symlink them under ./deps/.\n` )
+    ( nurl_print `  nurlpkg install <name> Fetch, build, and install a program from the registry onto $PATH.\n` )
     ( nurl_print `  nurlpkg lock           Regenerate nurl.lock from the current deps/ tree.\n` )
     ( nurl_print `  nurlpkg publish        Pack + upload this package to the registry.\n` )
     ( nurl_print `  nurlpkg login          Store a publish token in ~/.nurl/credentials.\n` )
@@ -1477,6 +1478,253 @@ $ `stdlib/std/bytes.nu`
     ^ rc
 }
 
+// ── install <name>: fetch + build + install a binary tool ────────────
+//
+// `nurlpkg install` (no arg) resolves the current project's dependencies.
+// `nurlpkg install <name>` is the `cargo install`-shaped sibling: fetch a
+// published package from the registry, resolve ITS dependencies, compile
+// its `src/main.nu` entry point with the installed compiler, and drop the
+// resulting binary on $PATH (under $NURL_HOME/bin, default ~/.nurl/bin).
+//
+// This is the payoff of the installable toolchain: an outside user runs
+// `nurlpkg install argz-demo` and gets a working program built from
+// registry sources against the shipped stdlib (resolved via $NURL_STDLIB),
+// no monorepo checkout required.
+
+// $<name> if set and non-empty, else `fallback`. Returns an OWNED String.
+@ __env_or s name s fallback → String {
+    : ?String ev ( env_get name )
+    ?? ev {
+        T e → { ? > ( string_len e ) 0 { ^ e } { ( string_free e ) } }
+        F → {}
+    }
+    ^ ( string_from fallback )
+}
+
+// Windows host? Windows always exports OS=Windows_NT; nothing else does.
+// Used to pick the binary's extension, the temp root, and how to spawn a
+// build driver (a `.bat` cannot be run by CreateProcess directly).
+@ __is_windows → b {
+    : ?String ev ( env_get `OS` )
+    : ~ b w F
+    ?? ev {
+        T e → { = w ( nurl_str_eq ( string_data e ) `Windows_NT` ) ( string_free e ) }
+        F → {}
+    }
+    ^ w
+}
+
+// Per-platform temp root for the staging dir: %TEMP%/%TMP% on Windows,
+// $TMPDIR else /tmp on POSIX. Returns an OWNED String, no trailing sep.
+@ __tmp_root → String {
+    ? ( __is_windows ) {
+        : ?String t ( env_get `TEMP` )
+        ?? t { T e → { ? > ( string_len e ) 0 { ^ e } { ( string_free e ) } } F → {} }
+        : ?String t2 ( env_get `TMP` )
+        ?? t2 { T e → { ? > ( string_len e ) 0 { ^ e } { ( string_free e ) } } F → {} }
+        ^ ( string_from `.` )
+    } {}
+    : ?String td ( env_get `TMPDIR` )
+    ?? td { T e → { ? > ( string_len e ) 0 { ^ e } { ( string_free e ) } } F → {} }
+    ^ ( string_from `/tmp` )
+}
+
+// Directory binaries are installed into: $NURL_HOME/bin, else the user
+// home (HOME on POSIX, USERPROFILE on Windows) + /.nurl/bin. Forward
+// slashes work on both platforms (Windows fopen/CreateProcess accept them).
+@ __tool_bindir → String {
+    : ?String nh ( env_get `NURL_HOME` )
+    ?? nh {
+        T h → {
+            ? > ( string_len h ) 0 {
+                : String d ( string_concat h ( string_from `/bin` ) )
+                ( string_free h )
+                ^ d
+            } { ( string_free h ) }
+        }
+        F → {}
+    }
+    : String home ? ( __is_windows ) ( __env_or `USERPROFILE` `.` ) ( __env_or `HOME` `.` )
+    : String out ( string_concat home ( string_from `/.nurl/bin` ) )
+    ( string_free home )
+    ^ out
+}
+
+// Spawn `prog args...` WITHOUT a shell (no POSIX-/cmd-specific syntax). On
+// Windows a build driver is a `.bat`, which CreateProcess can't launch
+// directly, so route through `cmd /c`. Returns 1 on success (exit 0).
+// Inherits the current working directory, so callers `env_chdir` first.
+@ __spawn s prog ( Vec s ) args s label → i {
+    : ~ s rprog prog
+    : ( Vec s ) rargs ( vec_new [s] )
+    ? ( __is_windows ) {
+        = rprog `cmd`
+        ( vec_push [s] rargs `/c` )
+        ( vec_push [s] rargs prog )
+    } {}
+    : i n ( vec_len [s] args )
+    : ~ i i 0
+    ~ < i n {
+        ?? ( vec_get [s] args i ) { T a → ( vec_push [s] rargs a ) F _ → {} }
+        = i + i 1
+    }
+    : ~ i ok 0
+    ?? ( process_run rprog rargs `` ) {
+        T out → {
+            ? ( output_success out ) { = ok 1 } {
+                ( nurl_eprint `nurlpkg: ` ) ( nurl_eprint label ) ( nurl_eprintln ` failed:` )
+                ( nurl_eprint ( output_stderr out ) )
+            }
+            ( output_free out )
+        }
+        F _ → { ( nurl_eprint `nurlpkg: ` ) ( nurl_eprint label ) ( nurl_eprintln ` could not launch` ) }
+    }
+    ( vec_free [s] rargs )
+    ^ ok
+}
+
+// pkgdir (absolute) holds the unpacked package (nurl.toml + src/main.nu).
+// Resolve its deps in-process, build the entry point, and install the
+// binary into bindir/name. Cross-platform: uses fs primitives + a
+// shell-free driver spawn, no POSIX coreutils.
+@ __tool_build_and_install s name s pkgdir s binsrc → i {
+    : String nurl ( __env_or `NURL` `nurl` )
+    : String bindir ( __tool_bindir )
+    : b win ( __is_windows )
+
+    // Remember where we started so we can return after building in pkgdir.
+    : ~ String orig ( string_new )
+    ?? ( env_cwd ) { T c → { ( string_free orig ) = orig c } F _ → {} }
+
+    : ~ i rc 1
+    ?? ( env_chdir pkgdir ) {
+        F _ → { ( nurl_eprintln `nurlpkg: cannot enter package directory` ) }
+        T _ → {
+            // 1. Resolve the tool's own deps into pkgdir/deps, IN-PROCESS
+            //    (no recursive nurlpkg spawn). A depless tool resolves 0.
+            : i drc ( __cmd_install )
+            ? != drc 0 { = rc 1 } {
+                // 2. Compile src/main.nu → .nurl-bin via the build driver.
+                : ( Vec s ) cargs ( vec_new [s] )
+                ( vec_push [s] cargs `src/main.nu` )
+                ( vec_push [s] cargs `.nurl-bin` )
+                : i ok2 ( __spawn ( string_data nurl ) cargs `compile` )
+                ( vec_free [s] cargs )
+                ? == ok2 0 { = rc 1 } { = rc 0 }
+            }
+        }
+    }
+
+    // Back to the original directory before touching bindir (which may be
+    // relative, e.g. the "." fallback).
+    ? > ( string_len orig ) 0 {
+        ?? ( env_chdir ( string_data orig ) ) { T _ → {} F _ → {} }
+    } {}
+
+    ? == rc 0 {
+        // 3. Install the freshly built binary onto $PATH. On Windows an
+        //    executable needs the .exe extension to be runnable by name.
+        : String outbin ( string_concat ( string_from pkgdir ) ( string_from `/.nurl-bin` ) )
+        : String dest ( string_with_cap 96 )
+        ( string_push_str dest ( string_data bindir ) )
+        ( string_push_char dest 47 )
+        ( string_push_str dest name )
+        ? win { ( string_push_str dest `.exe` ) } {}
+
+        ?? ( dir_create_all ( string_data bindir ) ) { T _ → {} F _ → {} }
+        ?? ( fs_copy_file ( string_data outbin ) ( string_data dest ) ) {
+            F _ → { ( nurl_eprintln `nurlpkg: failed to install binary` ) = rc 1 }
+            T _ → {
+                // Restore the exec bit (fs_copy_file makes a 0644 content
+                // copy); a no-op concept on Windows, so POSIX-only.
+                ? ! win {
+                    : ( Vec s ) chargs ( vec_new [s] )
+                    ( vec_push [s] chargs `+x` )
+                    ( vec_push [s] chargs ( string_data dest ) )
+                    ?? ( process_run `chmod` chargs `` ) { T o → ( output_free o ) F _ → {} }
+                    ( vec_free [s] chargs )
+                } {}
+                ( nurl_print `Installed ` ) ( nurl_print name )
+                ( nurl_print ` → ` ) ( nurl_print ( string_data dest ) ) ( nurl_print `\n` )
+            }
+        }
+        ( string_free outbin )
+        ( string_free dest )
+    } {}
+
+    ( string_free orig )
+    ( string_free nurl )
+    ( string_free bindir )
+    ^ rc
+}
+
+@ __cmd_install_tool s name → i {
+    : String regS ( __reg_default )
+    : s reg ( string_data regS )
+    : String idx ( pkg_fetch_index reg name )
+    ? == 0 ( string_len idx ) {
+        ( nurl_eprint `nurlpkg: package '` ) ( nurl_eprint name )
+        ( nurl_eprintln `' not found in the registry` )
+        ( string_free idx ) ( string_free regS )
+        ^ 1
+    } {}
+    : !RegIndex RegIndexErr pr ( regindex_parse ( string_data idx ) )
+    ( string_free idx )
+    : ~ i rc 1
+    ?? pr {
+        F e → {
+            ( nurl_eprint `nurlpkg: malformed registry index (` )
+            ( nurl_eprint ( regindex_err_name e ) ) ( nurl_eprintln `)` )
+        }
+        T ridx → {
+            : i sel ( regindex_select ridx `*` )
+            ? < sel 0 { ( nurl_eprintln `nurlpkg: no installable version found` ) } {
+                ?? ( vec_get [IdxVersion] . ridx versions sel ) {
+                    F _ → {}
+                    T iv → {
+                        // Staging dir under the platform temp root (absolute,
+                        // so we can chdir back out after building).
+                        : String troot ( __tmp_root )
+                        : String stage ( string_with_cap 96 )
+                        ( string_push_str stage ( string_data troot ) )
+                        ( string_push_str stage `/nurlpkg-tool-` )
+                        ( string_push_str stage name )
+                        ( string_free troot )
+                        // Clean + recreate it with cross-platform fs ops
+                        // (no rm -rf / mkdir -p shell-out).
+                        ?? ( dir_remove_all ( string_data stage ) ) { T _ → {} F _ → {} }
+                        ?? ( dir_create_all ( string_data stage ) ) { T _ → {} F _ → {} }
+                        : !i PkgFetchErr fr ( pkg_install_one reg name ( string_data . iv version ) ( string_data . iv checksum ) ( string_data stage ) )
+                        ?? fr {
+                            F fe → {
+                                ( nurl_eprint `nurlpkg: download failed (` )
+                                ( nurl_eprint ( pkg_err_name fe ) ) ( nurl_eprintln `)` )
+                            }
+                            T _ → {
+                                : String pkgdir ( string_with_cap 96 )
+                                ( string_push_str pkgdir ( string_data stage ) )
+                                ( string_push_char pkgdir 47 ) ( string_push_str pkgdir name )
+                                : String binsrc ( string_concat ( string_from ( string_data pkgdir ) ) ( string_from `/src/main.nu` ) )
+                                ? ! ( file_exists ( string_data binsrc ) ) {
+                                    ( nurl_eprint `nurlpkg: '` ) ( nurl_eprint name )
+                                    ( nurl_eprintln `' is a library, not an installable program (no src/main.nu)` )
+                                } {
+                                    = rc ( __tool_build_and_install name ( string_data pkgdir ) ( string_data binsrc ) )
+                                }
+                                ( string_free binsrc ) ( string_free pkgdir )
+                            }
+                        }
+                        ( string_free stage )
+                    }
+                }
+            }
+            ( regindex_free ridx )
+        }
+    }
+    ( string_free regS )
+    ^ rc
+}
+
 @ __cmd_install → i {
     ? ! ( file_exists `nurl.toml` ) {
         ( nurl_eprintln `nurlpkg: no nurl.toml in the current directory (run 'nurlpkg init <name>' first)` )
@@ -1947,6 +2195,13 @@ $ `stdlib/std/bytes.nu`
     } {}
     ? != 0 ( nurl_str_eq s_sub `install` ) {
         ( string_free sub )
+        // `install <name>` → install a binary tool; bare `install` → deps.
+        ? >= argc 3 {
+            : String tname ( env_arg 2 )
+            : i rc ( __cmd_install_tool ( string_data tname ) )
+            ( string_free tname )
+            ^ rc
+        } {}
         ^ ( __cmd_install )
     } {}
     ? != 0 ( nurl_str_eq s_sub `lock` ) {

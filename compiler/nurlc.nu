@@ -15061,6 +15061,10 @@
     ( emit `declare i64  @ftell(i8*)` )
     // POSIX access(2) for the pure-NURL nurl_file_exists @-fn.
     ( emit `declare i32  @access(i8*, i32)` )
+    // getenv(3) — import-path resolution consults $NURL_STDLIB so an
+    // installed toolchain finds stdlib regardless of cwd (see
+    // __norm_import_path).
+    ( emit `declare i8*  @getenv(i8*)` )
     ( emit `declare void @nurl_init(i32, i8**)` )
     ( emit `declare void @nurl_print(i8*)` )
     ( emit `declare void @nurl_eprint(i8*)` )
@@ -15225,6 +15229,21 @@
         { = cur ( nurl_str_slice cur 2 - n 2 ) }
         { = done T }
     }
+    // A cwd-relative hit always wins — this is the monorepo / in-tree
+    // build, and keeps the bootstrap behaviour byte-identical (every
+    // stdlib path resolves cwd-relative during self-host).
+    ? == ( nurl_file_exists cur ) 1 { ^ cur } {}
+    // Otherwise consult $NURL_STDLIB: an *installed* toolchain points it
+    // at the prefix that contains `stdlib/`, so a program built from an
+    // arbitrary directory (or a registry-installed package whose own
+    // `$ `stdlib/...`` imports must resolve) finds the shipped stdlib
+    // without vendoring it. No env / no hit → return cur unchanged and
+    // let the normal "cannot read file" error fire.
+    : s root ( getenv `NURL_STDLIB` )
+    ? != # i root 0 {
+        : s joined ( nurl_str_cat3 root `/` cur )
+        ? == ( nurl_file_exists joined ) 1 { ^ joined } {}
+    } {}
     ^ cur
 }
 
@@ -15322,6 +15341,7 @@
     ( nurl_sym_def syms `fseek` `i32` )
     ( nurl_sym_def syms `ftell` `i64` )
     ( nurl_sym_def syms `access` `i32` )
+    ( nurl_sym_def syms `getenv` `i8*` )
     // file I/O
     ( nurl_sym_def syms `nurl_file_open` `i8*` )
     ( nurl_sym_def syms `nurl_file_write` `void` )

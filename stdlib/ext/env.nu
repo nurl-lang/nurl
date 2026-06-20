@@ -33,7 +33,9 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get
 // errno = ERANGE when the buffer is too small (the loop below doubles
 // the buffer and retries up to a 1 MB ceiling).
 
-& `c` @ getenv s name → s
+// `getenv` is declared globally by the compiler (it is used by nurlc's own
+// import-path resolution), so — like fopen/access — it must NOT be
+// re-declared here, or the program would emit two `declare @getenv` lines.
 
 & `c` @ setenv s name s value i32 overwrite → i32
 

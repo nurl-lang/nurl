@@ -721,6 +721,17 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ^ out
 }
 
+// Best-effort read for the indexer / hover paths: the compiler's
+// `nurl_read_file` calls `exit(1)` on a missing file (a missing import
+// is fatal to a COMPILE, but must never be fatal to the language
+// server — e.g. a package whose registry deps under `deps/` aren't
+// installed yet). Probe with `file_exists` first; return "" on a miss
+// so the existing `nurl_str_len > 0` guards skip it gracefully.
+@ __read_if_exists s path → s {
+    ? ( file_exists path ) { ^ ( nurl_read_file path ) } {}
+    ^ ``
+}
+
 // Index one absolute path. Reads the file, marks it indexed, scans
 // for top-level decls, and recurses into its imports. Dedup via
 // g_indexed so cycles + diamonds visit each file once.
@@ -728,7 +739,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     : s marker ( nurl_sym_get g_indexed abs_path )
     ? == 0 ( nurl_str_len marker ) {
         ( nurl_sym_def g_indexed abs_path `1` )
-        : s content ( nurl_read_file abs_path )
+        : s content ( __read_if_exists abs_path )
         ? > ( nurl_str_len content ) 0 {
             : String uri ( __path_to_uri abs_path )
             ( __index_content ( string_data uri ) content )
@@ -1172,7 +1183,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                                                     // Read def-file content, pull the
                                                                                     // signature line, format Markdown.
                                                                                     : String def_path ( __uri_to_path ( string_data def_uri ) )
-                                                                                    : s def_content ( nurl_read_file ( string_data def_path ) )
+                                                                                    : s def_content ( __read_if_exists ( string_data def_path ) )
                                                                                     : String sig ( __extract_source_line def_content - def_line 1 )
                                                                                     : String base ( __basename ( string_data def_path ) )
 
