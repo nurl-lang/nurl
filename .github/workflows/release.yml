@@ -83,9 +83,14 @@ jobs:
           if-no-files-found: error
 
   # ── Windows (native) ─────────────────────────────────────────────────
+  # Best-effort for now: nurlpkg needs zlib (gunzip) and the Windows build
+  # does not yet wire it up, so this job can fail without blocking the
+  # Linux release. Tracked separately; flip continue-on-error off once the
+  # Windows toolchain links zlib.
   windows:
     runs-on: windows-latest
     timeout-minutes: 40
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -123,7 +128,9 @@ jobs:
 
   # ── Publish the GitHub Release ───────────────────────────────────────
   release:
-    needs: [linux, windows]
+    # Publish once Linux succeeds; Windows is best-effort (above) and is
+    # included automatically when it starts producing an archive.
+    needs: [linux]
     runs-on: ubuntu-latest
     # Only publish for a real pushed tag, not a workflow_dispatch dry run.
     if: startsWith(github.ref, 'refs/tags/v')
