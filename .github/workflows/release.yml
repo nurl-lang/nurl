@@ -1,0 +1,145 @@
+name: release
+
+# Build and publish the NURL toolchain (compiler + package manager +
+# stdlib) as relocatable install packages whenever a `v*` tag is pushed.
+#
+# Targets:
+#   - linux-x86_64-glibc   (ubuntu-latest, native)
+#   - linux-arm64-glibc    (ubuntu-24.04-arm, native — free for public repos)
+#   - windows-x86_64       (windows-latest, native)
+#
+# Each job assembles the prefix with tools/install-toolchain.{sh,bat}
+# (relocatable shims) and packages it. The final `release` job attaches
+# every archive + its .sha256 to the GitHub Release. The curl|sh front
+# door (tools/get-nurl.sh / .ps1, served from nurl-lang.org) downloads
+# these by target triple.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v0.1.0); for a dry run without a real tag'
+        required: true
+
+permissions:
+  contents: write    # create releases + upload assets
+
+env:
+  NURL_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  # ── Linux (x86_64 + arm64), native per-arch runners ──────────────────
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64-glibc
+            runner: ubuntu-latest
+          - target: linux-arm64-glibc
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps (clang + FFI libs)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            clang pkg-config \
+            libcurl4-openssl-dev libssl-dev libsqlite3-dev \
+            libpq-dev zlib1g-dev libzstd-dev
+          clang --version
+
+      - name: Build toolchain (nurlc + nurlpkg)
+        run: |
+          ./build.sh --no-tests
+          ./tools/nurlpkg/build.sh
+
+      - name: Assemble relocatable prefix
+        run: NURL_HOME="$PWD/dist/nurl" ./tools/install-toolchain.sh
+
+      - name: Smoke test the assembled toolchain
+        run: |
+          printf '$ `stdlib/core/io.nu`\n@ main \xe2\x86\x92 i { ( nurl_print `ok\\n` ) ^ 0 }\n' > /tmp/s.nu
+          ./dist/nurl/bin/nurl /tmp/s.nu /tmp/s && /tmp/s
+
+      - name: Package
+        run: |
+          PKG="nurl-${NURL_TAG}-${{ matrix.target }}.tar.gz"
+          tar czf "$PKG" -C dist nurl
+          sha256sum "$PKG" > "$PKG.sha256"
+          echo "PKG=$PKG" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            ${{ env.PKG }}
+            ${{ env.PKG }}.sha256
+          if-no-files-found: error
+
+  # ── Windows (native) ─────────────────────────────────────────────────
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM/clang
+        run: choco install llvm -y --no-progress
+        shell: pwsh
+
+      - name: Build toolchain (nurlc + nurlpkg)
+        shell: cmd
+        run: |
+          call build.bat
+          call tools\nurlpkg\build.bat
+
+      - name: Assemble relocatable prefix
+        shell: cmd
+        run: |
+          set "NURL_HOME=%CD%\dist\nurl"
+          call tools\install-toolchain.bat
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $pkg = "nurl-$env:NURL_TAG-windows-x86_64.zip"
+          Compress-Archive -Path dist\nurl -DestinationPath $pkg
+          (Get-FileHash $pkg -Algorithm SHA256).Hash.ToLower() + "  " + $pkg | Out-File "$pkg.sha256" -Encoding ascii
+          "PKG=$pkg" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: |
+            ${{ env.PKG }}
+            ${{ env.PKG }}.sha256
+          if-no-files-found: error
+
+  # ── Publish the GitHub Release ───────────────────────────────────────
+  release:
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    # Only publish for a real pushed tag, not a workflow_dispatch dry run.
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: NURL ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+            artifacts/*.sha256

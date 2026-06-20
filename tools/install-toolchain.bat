@@ -63,33 +63,37 @@ xcopy /e /i /y /q "%ROOT%\stdlib" "%PREFIX%\stdlib" >nul
 REM Build driver (resolves build\nurlc.exe + stdlib\runtime.o relative to itself).
 copy /y "%ROOT%\nurl.bat" "%PREFIX%\nurl.bat" >nul
 
-REM ── PATH shims ────────────────────────────────────────────────
-REM Each shim defaults NURL_STDLIB to the prefix so the compiler finds the
-REM shipped stdlib from any directory. The nurlpkg shim also points NURL at
-REM the installed driver so `nurlpkg install <name>` builds with it.
+REM ── PATH shims (RELOCATABLE) ──────────────────────────────────
+REM Each shim resolves the prefix from its OWN location (%%~dp0..) at
+REM runtime, so the extracted tree works wherever it lands. It defaults
+REM NURL_STDLIB to the prefix so the compiler finds the shipped stdlib
+REM from any directory. The nurlpkg shim also points NURL at the driver.
 > "%PREFIX%\bin\nurl.bat" (
   echo @echo off
-  echo if not defined NURL_STDLIB set "NURL_STDLIB=%PREFIX%"
-  echo call "%PREFIX%\nurl.bat" %%*
+  echo for %%%%I in ^("%%~dp0.."^) do set "NURL_PREFIX=%%%%~fI"
+  echo if not defined NURL_STDLIB set "NURL_STDLIB=%%NURL_PREFIX%%"
+  echo call "%%NURL_PREFIX%%\nurl.bat" %%*
 )
 > "%PREFIX%\bin\nurlc.bat" (
   echo @echo off
-  echo if not defined NURL_STDLIB set "NURL_STDLIB=%PREFIX%"
-  echo "%PREFIX%\build\nurlc.exe" %%*
+  echo for %%%%I in ^("%%~dp0.."^) do set "NURL_PREFIX=%%%%~fI"
+  echo if not defined NURL_STDLIB set "NURL_STDLIB=%%NURL_PREFIX%%"
+  echo "%%NURL_PREFIX%%\build\nurlc.exe" %%*
 )
 > "%PREFIX%\bin\nurlpkg.bat" (
   echo @echo off
-  echo if not defined NURL_STDLIB set "NURL_STDLIB=%PREFIX%"
-  echo if not defined NURL set "NURL=%PREFIX%\bin\nurl.bat"
-  echo "%PREFIX%\build\nurlpkg.exe" %%*
+  echo for %%%%I in ^("%%~dp0.."^) do set "NURL_PREFIX=%%%%~fI"
+  echo if not defined NURL_STDLIB set "NURL_STDLIB=%%NURL_PREFIX%%"
+  echo if not defined NURL set "NURL=%%NURL_PREFIX%%\bin\nurl.bat"
+  echo "%%NURL_PREFIX%%\build\nurlpkg.exe" %%*
 )
 
-REM ── Sourceable session env ────────────────────────────────────
+REM ── Sourceable session env (RELOCATABLE) ──────────────────────
 > "%PREFIX%\env.bat" (
   echo @echo off
-  echo set "NURL_HOME=%PREFIX%"
-  echo set "NURL_STDLIB=%PREFIX%"
-  echo set "PATH=%PREFIX%\bin;%%PATH%%"
+  echo for %%%%I in ^("%%~dp0"^) do set "NURL_HOME=%%%%~fI"
+  echo set "NURL_STDLIB=%%NURL_HOME%%"
+  echo set "PATH=%%NURL_HOME%%\bin;%%PATH%%"
 )
 
 echo Done.

@@ -60,42 +60,52 @@ cp -a "$ROOT/stdlib/." "$PREFIX/stdlib/"
 # Build driver (resolves build/nurlc + stdlib/runtime.o relative to itself).
 install -m755 "$ROOT/nurl.sh" "$PREFIX/nurl.sh"
 
-# ── PATH shims ─────────────────────────────────────────────────────────
-# Each shim defaults $NURL_STDLIB to the prefix so the compiler finds the
-# shipped stdlib from any working directory, even if the user never
-# sourced env. The nurlpkg shim additionally points $NURL / $NURLPKG at
-# the installed driver so `nurlpkg install <name>` builds with them.
-cat > "$PREFIX/bin/nurl" <<EOF
+# ── PATH shims (RELOCATABLE) ───────────────────────────────────────────
+# Each shim resolves the prefix from its OWN location at runtime, so the
+# whole tree can be moved/extracted anywhere (this is what lets the
+# release tarball be unpacked to any path). It defaults $NURL_STDLIB to
+# the prefix so the compiler finds the shipped stdlib from any working
+# directory, even if the user never sourced env. The nurlpkg shim also
+# points $NURL / $NURLPKG at the installed driver so `nurlpkg install
+# <name>` builds with them. Quoted heredoc → no install-time expansion.
+cat > "$PREFIX/bin/nurl" <<'EOF'
 #!/usr/bin/env bash
-export NURL_STDLIB="\${NURL_STDLIB:-$PREFIX}"
-exec "$PREFIX/nurl.sh" "\$@"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export NURL_STDLIB="${NURL_STDLIB:-$HERE}"
+exec "$HERE/nurl.sh" "$@"
 EOF
 
-cat > "$PREFIX/bin/nurlc" <<EOF
+cat > "$PREFIX/bin/nurlc" <<'EOF'
 #!/usr/bin/env bash
-export NURL_STDLIB="\${NURL_STDLIB:-$PREFIX}"
-exec "$PREFIX/build/nurlc" "\$@"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export NURL_STDLIB="${NURL_STDLIB:-$HERE}"
+exec "$HERE/build/nurlc" "$@"
 EOF
 
-cat > "$PREFIX/bin/nurlpkg" <<EOF
+cat > "$PREFIX/bin/nurlpkg" <<'EOF'
 #!/usr/bin/env bash
-export NURL_STDLIB="\${NURL_STDLIB:-$PREFIX}"
-export NURL="\${NURL:-$PREFIX/bin/nurl}"
-export NURLPKG="\${NURLPKG:-$PREFIX/bin/nurlpkg}"
-exec "$PREFIX/build/nurlpkg" "\$@"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export NURL_STDLIB="${NURL_STDLIB:-$HERE}"
+export NURL="${NURL:-$HERE/bin/nurl}"
+export NURLPKG="${NURLPKG:-$HERE/bin/nurlpkg}"
+exec "$HERE/build/nurlpkg" "$@"
 EOF
 
 chmod +x "$PREFIX/bin/nurl" "$PREFIX/bin/nurlc" "$PREFIX/bin/nurlpkg"
 
-# ── Sourceable env ─────────────────────────────────────────────────────
-cat > "$PREFIX/env" <<EOF
+# ── Sourceable env (RELOCATABLE) ───────────────────────────────────────
+# Resolves its own directory when sourced, so a moved/extracted tree still
+# points NURL_HOME / NURL_STDLIB / PATH at the right place.
+cat > "$PREFIX/env" <<'EOF'
 # NURL toolchain environment — source this from your shell rc.
-export NURL_HOME="$PREFIX"
-export NURL_STDLIB="$PREFIX"
-case ":\$PATH:" in
-    *":$PREFIX/bin:"*) ;;
-    *) export PATH="$PREFIX/bin:\$PATH" ;;
+__nurl_here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+export NURL_HOME="$__nurl_here"
+export NURL_STDLIB="$__nurl_here"
+case ":$PATH:" in
+    *":$__nurl_here/bin:"*) ;;
+    *) export PATH="$__nurl_here/bin:$PATH" ;;
 esac
+unset __nurl_here
 EOF
 
 echo "Done."
