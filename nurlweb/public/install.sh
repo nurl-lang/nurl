@@ -1,0 +1,122 @@
+#!/usr/bin/env sh
+# Copyright (c) 2026 The NURL Project Developers
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# ============================================================
+#  get-nurl.sh — one-line installer for the NURL toolchain.
+#
+#  Detects your OS/arch, downloads the matching release archive from
+#  GitHub Releases, verifies its SHA-256, and unpacks the relocatable
+#  toolchain into $NURL_HOME (default ~/.nurl). Then add ~/.nurl/bin to
+#  PATH (the installer prints the exact line).
+#
+#  Usage:
+#    curl -fsSL https://nurl-lang.org/install.sh | sh
+#    curl -fsSL https://nurl-lang.org/install.sh | sh -s -- --version v0.1.0
+#
+#  Env:
+#    NURL_HOME     install prefix (default ~/.nurl)
+#    NURL_VERSION  release tag to install (default: latest)
+#
+#  POSIX sh — no bashisms; works under dash/ash/busybox.
+# ============================================================
+set -eu
+
+REPO="nurl-lang/nurl"
+PREFIX="${NURL_HOME:-$HOME/.nurl}"
+VERSION="${NURL_VERSION:-}"
+
+err() { printf 'error: %s\n' "$*" >&2; exit 1; }
+info() { printf '%s\n' "$*" >&2; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# ── Args ───────────────────────────────────────────────────────────────
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --version) VERSION="${2:-}"; shift 2 ;;
+        --version=*) VERSION="${1#--version=}"; shift ;;
+        --prefix) PREFIX="${2:-}"; shift 2 ;;
+        --prefix=*) PREFIX="${1#--prefix=}"; shift ;;
+        -h|--help)
+            sed -n '5,22p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'
+            exit 0 ;;
+        *) err "unknown argument: $1 (try --help)" ;;
+    esac
+done
+
+# ── Detect target triple ───────────────────────────────────────────────
+os="$(uname -s)"
+arch="$(uname -m)"
+case "$os" in
+    Linux) ;;
+    Darwin) err "macOS packages are not published yet; build from source (see README)." ;;
+    *) err "unsupported OS '$os'. On Windows use the PowerShell installer (install.ps1)." ;;
+esac
+case "$arch" in
+    x86_64|amd64)  target="linux-x86_64-glibc" ;;
+    aarch64|arm64) target="linux-arm64-glibc" ;;
+    *) err "unsupported architecture '$arch'." ;;
+esac
+
+# ── Downloader ─────────────────────────────────────────────────────────
+if have curl; then
+    dl() { curl -fsSL "$1" -o "$2"; }
+    dl_stdout() { curl -fsSL "$1"; }
+elif have wget; then
+    dl() { wget -qO "$2" "$1"; }
+    dl_stdout() { wget -qO- "$1"; }
+else
+    err "need curl or wget on PATH."
+fi
+
+# ── Resolve version (latest release tag if unset) ──────────────────────
+if [ -z "$VERSION" ]; then
+    info "resolving latest release…"
+    VERSION="$(dl_stdout "https://api.github.com/repos/$REPO/releases/latest" \
+        | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)"
+    [ -n "$VERSION" ] || err "could not determine the latest release tag; pass --version vX.Y.Z."
+fi
+
+archive="nurl-${VERSION}-${target}.tar.gz"
+# $NURL_INSTALL_BASE overrides the download base (internal mirror / test).
+base="${NURL_INSTALL_BASE:-https://github.com/$REPO/releases/download/$VERSION}"
+
+# ── Download + verify ──────────────────────────────────────────────────
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+info "downloading $archive ($VERSION)…"
+dl "$base/$archive" "$tmp/$archive" || err "download failed: $base/$archive"
+
+if dl "$base/$archive.sha256" "$tmp/$archive.sha256" 2>/dev/null; then
+    info "verifying checksum…"
+    want="$(awk '{print $1}' "$tmp/$archive.sha256")"
+    if have sha256sum; then
+        got="$(sha256sum "$tmp/$archive" | awk '{print $1}')"
+    elif have shasum; then
+        got="$(shasum -a 256 "$tmp/$archive" | awk '{print $1}')"
+    else
+        got=""; info "warning: no sha256sum/shasum — skipping checksum verification."
+    fi
+    [ -z "$got" ] || [ "$got" = "$want" ] || err "checksum mismatch (expected $want, got $got)."
+else
+    info "warning: no checksum file published — skipping verification."
+fi
+
+# ── Unpack (the archive has a top-level nurl/ dir) ─────────────────────
+info "installing to $PREFIX…"
+rm -rf "$PREFIX"
+mkdir -p "$PREFIX"
+tar xzf "$tmp/$archive" -C "$PREFIX" --strip-components=1
+
+[ -x "$PREFIX/bin/nurl" ] || err "install looks incomplete: $PREFIX/bin/nurl missing."
+
+# ── Done ───────────────────────────────────────────────────────────────
+info ""
+info "NURL $VERSION installed → $PREFIX"
+info ""
+info "Add it to your shell (and your ~/.bashrc / ~/.zshrc):"
+info "    source $PREFIX/env"
+info ""
+info "Or just add the bin dir to PATH:"
+info "    export PATH=\"$PREFIX/bin:\$PATH\""
+info ""
+info "Then:  nurlc --version   ·   nurlpkg install argz-demo"
