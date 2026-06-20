@@ -96,8 +96,8 @@ jobs:
       - name: Build toolchain (nurlc + nurlpkg)
         shell: cmd
         run: |
-          call build.bat
-          call tools\nurlpkg\build.bat
+          call build.bat --no-tests || exit /b 1
+          call tools\nurlpkg\build.bat || exit /b 1
 
       - name: Assemble relocatable prefix
         shell: cmd
