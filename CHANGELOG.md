@@ -8,6 +8,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.10] — 2026-06-20
+
+The "NURL becomes an ecosystem" release: the toolchain is now installable,
+the package registry can host and install real programs, and tagged
+releases ship install packages for Linux and Windows.
+
+### Added
+
+- **`$NURL_STDLIB` import root (the compiler is relocatable).** `nurlc`
+  resolved every `$ `…`` import path relative to the current working
+  directory with no notion of an installed stdlib, so a package could not
+  reference `stdlib/…` outside the monorepo. `__norm_import_path` now falls
+  back to `$NURL_STDLIB/<path>` (via libc `getenv`) when a cwd-relative hit
+  misses; the cwd hit always wins, keeping the bootstrap byte-identical.
+  This is what lets an installed compiler — and registry-installed packages
+  — find the shipped stdlib from any directory.
+
+- **`nurlpkg install <name>` — install a program from the registry.** The
+  `cargo install`-shaped sibling of bare `install`: fetch a published
+  package, resolve its dependencies, compile its `src/main.nu` against the
+  installed stdlib, and drop the binary in `$NURL_HOME/bin` (default
+  `~/.nurl/bin`). A package with `src/main.nu` is an installable program
+  (binary = package name); without it, a library. Shell-free and
+  cross-platform: staging via the language's own filesystem primitives
+  under the platform temp dir, in-process dependency resolution, and a
+  build-driver spawn that wraps `.bat` with `cmd /c` on Windows.
+
+- **Installable toolchain — `tools/install-toolchain.sh` / `.bat`.** Install
+  `nurlc`, `nurlpkg`, and the stdlib into a self-contained prefix (default
+  `~/.nurl`) and wire up `NURL_STDLIB` + `PATH` so the whole toolchain works
+  from any directory. The shims and `env` are relocatable (they resolve the
+  prefix from their own location), so a downloaded archive works wherever it
+  is unpacked.
+
+- **Release pipeline — `.github/workflows/release.yml`.** On a `v*` tag,
+  build the toolchain natively for `linux-x86_64-glibc` (ubuntu-latest),
+  `linux-arm64-glibc` (ubuntu-24.04-arm), and `windows-x86_64`
+  (windows-latest), package each as a relocatable archive + `.sha256`, and
+  attach them to the GitHub Release. `workflow_dispatch` gives a
+  publish-free dry run.
+
+- **One-line installer — `tools/get-nurl.sh` / `get-nurl.ps1`.** The
+  `curl -fsSL https://nurl-lang.org/install.sh | sh` front door: detect
+  OS/arch, resolve the latest (or pinned) release, download the matching
+  archive, verify its SHA-256, and unpack the toolchain into `$NURL_HOME`.
+  `$NURL_INSTALL_BASE` overrides the download base for internal mirrors.
+
+- **First registry packages — `packages/argz` + `packages/argz-demo`.**
+  `argz` is a tiny, dependency-free command-line argument parser (boolean
+  flags, value options, short aliases, `--` separator, positional arguments,
+  auto-generated `--help`), leak-clean under AddressSanitizer/LeakSanitizer.
+  `argz-demo` is an installable greeter that depends on `argz = "^0.1"`.
+  Both are published to `reg.nurl-lang.org`.
+  `tools/nurlpkg/test-install-tool.sh` drives the full fetch → build →
+  install → run loop against a local static registry.
+
+### Fixed
+
+- **The language server no longer crashes on an unresolvable import.** The
+  LSP's workspace indexer read imported files with the compiler's
+  `nurl_read_file`, which calls `exit(1)` on a missing file (a missing
+  import is fatal to a *compile*, but must never be fatal to the *server*).
+  Opening a file whose imports don't resolve — e.g. a package whose registry
+  dependencies aren't installed yet — killed the whole language server. It
+  now probes with `file_exists` first (`__read_if_exists`).
+
+- **Duplicate `getenv` declaration removed from `env.nu`.** Now that the
+  compiler globally declares `getenv` (for import-path resolution), `env.nu`
+  re-declaring it via the `&` FFI form emitted two `declare @getenv` lines
+  and failed to link; `env.nu` relies on the compiler-provided declaration,
+  matching how `fopen`/`access` are handled.
+
+### Documentation
+
+- **`RELEASING.md`** — the distribution model (GitHub Releases + a `curl|sh`
+  front door served from nurl-lang.org; the registry stays the *package*
+  registry), how to cut a release, runtime dependencies, and the
+  Windows/macOS caveats.
+
+- **`packages/README.md`** — the two registry packages and the full
+  install-and-run loop on POSIX and Windows.
+
 ## [0.9.9] — 2026-06-18
 
 ### Fixed
@@ -5229,7 +5311,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.9...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.10...HEAD
+[0.9.10]: https://github.com/nurl-lang/nurl/compare/v0.9.9...v0.9.10
 [0.9.9]: https://github.com/nurl-lang/nurl/compare/v0.9.8...v0.9.9
 [0.9.8]: https://github.com/nurl-lang/nurl/compare/v0.9.7...v0.9.8
 [0.9.7]: https://github.com/nurl-lang/nurl/compare/v0.9.6...v0.9.7
