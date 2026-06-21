@@ -1,0 +1,6 @@
+# Local-dev artifacts produced by `nurlpkg install` / a manual build inside
+# a package directory. The registry packages are sources only; `deps/` is
+# materialised by the package manager and the binary is built on install.
+*/deps/
+*/.nurl-bin
+*/nurl.lock

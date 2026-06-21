@@ -3,11 +3,15 @@
 A Cloudflare Worker (`registry/src/index.ts`) backed by **R2** (the static
 read path: `index/*.json` + `pkgs/**/*.tar.gz`) and **D1** (users, tokens,
 package ownership, versions). The NURL client (`nurlpkg install` /
-`nurlpkg publish`) already drives this exact contract — proven end-to-end
-against this Worker running locally (see "Local testing" below), so the
-deploy is purely wiring the production account.
+`nurlpkg publish`) drives this exact contract.
 
-## What needs a real account (everything else is done + locally tested)
+**Status: LIVE in production at https://reg.nurl-lang.org.** It serves real
+packages today (e.g. `argz` and `argz-demo`, published 2026-06-20), and the
+default `nurlpkg install <name>` resolves against it. The sections below are
+the reference for *reproducing* or re-provisioning that deployment — the
+production instance is already wired.
+
+## Provisioning an instance (reference — production is already live)
 
 1. **A GitHub OAuth App** (https://github.com/settings/developers → *New OAuth App*)
    - Homepage URL: `https://reg.nurl-lang.org`

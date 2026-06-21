@@ -45,6 +45,26 @@ the shipped stdlib (found via `$NURL_STDLIB`), and drops the binary in
 `$NURL_HOME/bin` (default `~/.nurl/bin`, which `install-toolchain.sh` puts
 on `$PATH`).
 
+## `nq/` — a jq-lite JSON query tool (installable program)
+
+A genuinely useful everyday utility: read JSON from stdin (or `--file`),
+apply a small jq-like filter, and print it pretty (default), compact
+(`-c`), or raw (`-r`). Like `argz-demo`, it declares `argz = "^0.1"` as a
+registry dependency for flag parsing; for the JSON itself it leans on the
+shipped `stdlib/ext/json`. Leak-clean under ASan/LSan across every path.
+
+```
+nurlpkg install nq
+echo '{"items":[{"id":1},{"id":2}]}' | nq '.items[].id'   # 1 / 2
+echo '{"user":{"name":"Ada"}}'       | nq -r .user.name   # Ada
+echo '{"a":1,"b":2}'                 | nq -c '. | keys'    # ["a","b"]
+```
+
+Supported filters: `.`, `.path.to.field` (with `.0` / `[0]` indexing), a
+trailing `[]` to iterate an array/object (one result per line, optionally
+projecting `.field` from each), and the `| keys` / `| length` terminals.
+See [`nq/README.md`](nq/README.md) for the full grammar.
+
 ## The full loop
 
 ```bash
