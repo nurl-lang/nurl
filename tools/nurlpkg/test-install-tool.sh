@@ -48,19 +48,23 @@ EOF
 ( cd "$ROOT" && ./nurl.sh "$WORK/pack.nu" "$WORK/pack" >/dev/null 2>&1 ) || { echo "packer build failed"; exit 2; }
 
 REGDIR="$WORK/registry"
-mkdir -p "$REGDIR/index" "$REGDIR/pkgs/argz" "$REGDIR/pkgs/argz-demo" "$REGDIR/pkgs/nq"
+mkdir -p "$REGDIR/index" "$REGDIR/pkgs/argz" "$REGDIR/pkgs/argz-demo" "$REGDIR/pkgs/nq" "$REGDIR/pkgs/md2html"
 "$WORK/pack" "$PKGS/argz"      "$REGDIR/pkgs/argz/argz-0.1.0.tar.gz"           || fail=1
 "$WORK/pack" "$PKGS/argz-demo" "$REGDIR/pkgs/argz-demo/argz-demo-0.1.0.tar.gz" || fail=1
 "$WORK/pack" "$PKGS/nq"        "$REGDIR/pkgs/nq/nq-0.1.0.tar.gz"               || fail=1
+"$WORK/pack" "$PKGS/md2html"   "$REGDIR/pkgs/md2html/md2html-0.1.0.tar.gz"     || fail=1
 SUM_ARGZ=$(sha256sum "$REGDIR/pkgs/argz/argz-0.1.0.tar.gz" | cut -d' ' -f1)
 SUM_DEMO=$(sha256sum "$REGDIR/pkgs/argz-demo/argz-demo-0.1.0.tar.gz" | cut -d' ' -f1)
 SUM_NQ=$(sha256sum "$REGDIR/pkgs/nq/nq-0.1.0.tar.gz" | cut -d' ' -f1)
+SUM_MD=$(sha256sum "$REGDIR/pkgs/md2html/md2html-0.1.0.tar.gz" | cut -d' ' -f1)
 printf '{"name":"argz","versions":[{"version":"0.1.0","checksum":"%s","yanked":false,"deps":[]}]}\n' \
     "$SUM_ARGZ" > "$REGDIR/index/argz.json"
 printf '{"name":"argz-demo","versions":[{"version":"0.1.0","checksum":"%s","yanked":false,"deps":[{"name":"argz","req":"^0.1"}]}]}\n' \
     "$SUM_DEMO" > "$REGDIR/index/argz-demo.json"
 printf '{"name":"nq","versions":[{"version":"0.1.0","checksum":"%s","yanked":false,"deps":[{"name":"argz","req":"^0.1"}]}]}\n' \
     "$SUM_NQ" > "$REGDIR/index/nq.json"
+printf '{"name":"md2html","versions":[{"version":"0.1.0","checksum":"%s","yanked":false,"deps":[{"name":"argz","req":"^0.1"}]}]}\n' \
+    "$SUM_MD" > "$REGDIR/index/md2html.json"
 
 # ── 2. Serve the static registry ──────────────────────────────────────────
 say "serve registry"
@@ -113,6 +117,26 @@ NQ_OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
 echo "$NQ_OUT"
 NQ_WANT=$'1\n2\n3\nEcosystem'
 [[ "$NQ_OUT" == "$NQ_WANT" ]] && echo "run: OK" || { echo "run: FAILED (got '$NQ_OUT')"; fail=1; }
+
+# ── 7. A third tool from the same registry: `md2html` (also depends on argz) ──
+say "nurlpkg install md2html"
+OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
+    source '$PREFIX/env'
+    export NURL_REGISTRY='$REG'
+    nurlpkg install md2html 2>&1
+")
+echo "$OUT"
+echo "$OUT" | grep -q 'Installed md2html' && echo "install: OK" || { echo "install: FAILED"; fail=1; }
+
+say "run installed md2html"
+# Render a tiny Markdown doc and assert the key rendered tags.
+MD_OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
+    source '$PREFIX/env'
+    printf '# Hi\n\nA **bold** word.\n' | md2html
+")
+echo "$MD_OUT"
+echo "$MD_OUT" | grep -q '<h1>Hi</h1>' && echo "  heading: OK" || { echo "  heading: FAILED"; fail=1; }
+echo "$MD_OUT" | grep -q '<strong>bold</strong>' && echo "  bold: OK" || { echo "  bold: FAILED"; fail=1; }
 
 say "RESULT"
 [[ $fail -eq 0 ]] && echo "PASS" || echo "FAIL"
