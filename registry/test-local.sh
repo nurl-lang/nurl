@@ -43,6 +43,21 @@ for i in $(seq 1 60); do curl -sf "$REG" >/dev/null 2>&1 && break; sleep 0.5; do
 mkdir -p "$WORK/foo/src"
 printf '[package]\nname = "foo"\nversion = "1.0.0"\n' > "$WORK/foo/nurl.toml"
 printf '@ answer -> i { ^ 42 }\n' > "$WORK/foo/src/lib.nu"
+# A README that exercises the renderer: heading, code, table, link, and a
+# script-injection attempt that must be neutralised.
+cat > "$WORK/foo/README.md" <<'MD'
+# foo
+
+The `answer` function returns **42**.
+
+| Name | Returns |
+| ---- | ------- |
+| answer | `42` |
+
+See [the docs](https://nurl-lang.org).
+
+<script>alert('xss')</script>
+MD
 
 say "publish"
 ( cd "$WORK/foo" && NURL_REGISTRY="$REG" NURL_TOKEN="$TOKEN" "$NURLPKG" publish ) || fail=1
@@ -53,6 +68,17 @@ printf '[package]\nname = "app"\nversion = "0.1.0"\n\n[dependencies]\nfoo = "^1.
 ( cd "$WORK/app" && NURL_REGISTRY="$REG" "$NURLPKG" install ) || fail=1
 [[ -f "$WORK/app/deps/foo/nurl.toml" && -f "$WORK/app/deps/foo/src/lib.nu" ]] && echo "deps/foo: OK" || { echo "deps/foo: MISSING"; fail=1; }
 grep -q 'checksum =' "$WORK/app/nurl.lock" && echo "lock checksum: OK" || { echo "lock checksum: MISSING"; fail=1; }
+
+say "package page renders README"
+PAGE=$(curl -sf "${REG}packages/foo" || true)
+check_page() { echo "$PAGE" | grep -qF "$1" && echo "  $2: OK" || { echo "  $2: MISSING"; fail=1; }; }
+check_page "<h1>foo</h1>"                  "heading"
+check_page "<code>answer</code>"           "inline code"
+check_page "<strong>42</strong>"           "bold"
+check_page "<table>"                       "table"
+check_page '<a href="https://nurl-lang.org"' "link"
+check_page "&lt;script&gt;"                "script escaped as text"
+if echo "$PAGE" | grep -qF "<script>alert"; then echo "  xss: LEAKED"; fail=1; else echo "  xss: neutralised"; fi
 
 say "republish -> 409"
 ( cd "$WORK/foo" && NURL_REGISTRY="$REG" NURL_TOKEN="$TOKEN" "$NURLPKG" publish ) && { echo "expected failure"; fail=1; } || echo "rejected (correct)"

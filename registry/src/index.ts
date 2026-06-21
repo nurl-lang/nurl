@@ -21,6 +21,9 @@
 // against a static python registry). It runs locally under `wrangler dev`
 // (miniflare simulates R2 + D1) — no Cloudflare account needed to test.
 
+import { renderMarkdown } from "./markdown.ts";
+import { extractReadme } from "./readme.ts";
+
 export interface Env {
   REG_BUCKET: R2Bucket;
   REG_DB: D1Database;
@@ -162,10 +165,29 @@ async function handlePublish(req: Request, env: Env): Promise<Response> {
 
 // ── GitHub OAuth (token bootstrap) ────────────────────────────────────
 
+const PAGE_STYLE =
+  `body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:48rem;` +
+    `margin:3rem auto;padding:0 1rem;line-height:1.6;color:#1a1a1a}` +
+  `a{color:#0b62d6}` +
+  `h1{margin-bottom:.2em}` +
+  `code{background:#f4f4f4;padding:.1em .35em;border-radius:4px;font-size:.92em}` +
+  `pre{background:#f4f4f4;padding:1rem;border-radius:6px;overflow:auto}` +
+  `pre code{background:transparent;padding:0}` +
+  `.readme{border-top:1px solid #e5e5e5;margin-top:2.5rem;padding-top:.5rem}` +
+  `.readme img{max-width:100%}` +
+  `.readme table{border-collapse:collapse;margin:1rem 0}` +
+  `.readme th,.readme td{border:1px solid #ddd;padding:.4rem .7rem;text-align:left}` +
+  `.readme th{background:#f4f4f4}` +
+  `.readme blockquote{border-left:3px solid #ddd;margin:1em 0;padding:.2rem 1rem;color:#555}` +
+  `.readme h1,.readme h2{border-bottom:1px solid #eee;padding-bottom:.2em}` +
+  `.readme hr{border:0;border-top:1px solid #e5e5e5;margin:2rem 0}`;
+
 function htmlPage(title: string, bodyHtml: string, status = 200): Response {
   return new Response(
     `<!doctype html><meta charset=utf-8><title>${title}</title>` +
-      `<body style="font-family:system-ui;max-width:42rem;margin:3rem auto;padding:0 1rem">${bodyHtml}</body>`,
+      `<meta name=viewport content="width=device-width,initial-scale=1">` +
+      `<style>${PAGE_STYLE}</style>` +
+      `<body>${bodyHtml}</body>`,
     { status, headers: { "content-type": "text/html; charset=utf-8" } },
   );
 }
@@ -219,12 +241,25 @@ async function handlePackageDetail(env: Env, name: string): Promise<Response> {
         `<li><a href="/packages/${esc(d.name)}">${esc(d.name)}</a> <code>${esc(d.req)}</code></li>`).join("")}</ul>`
     : `<p>None.</p>`;
   const reqStr = latest ? `^${latest.version}` : "*";
+
+  // README of the latest published version, rendered from its tarball.
+  // Never let a missing/odd archive break the page.
+  let readmeHtml = "";
+  if (latest) {
+    try {
+      const md = await extractReadme(env.REG_BUCKET, name, latest.version);
+      if (md && md.length <= 512 * 1024) {
+        readmeHtml = `<div class="readme">${renderMarkdown(md)}</div>`;
+      }
+    } catch { /* fall through with no README */ }
+  }
+
   return htmlPage(name,
     `<p><a href="/">← all packages</a></p><h1>${esc(name)}</h1>` +
-    `<h3>Install</h3><pre style="background:#f4f4f4;padding:1rem;border-radius:6px">` +
-      `[dependencies]\n${esc(name)} = "${esc(reqStr)}"</pre>` +
+    `<h3>Install</h3><pre>[dependencies]\n${esc(name)} = "${esc(reqStr)}"</pre>` +
     `<h3>Versions</h3><ul>${versionsHtml}</ul>` +
-    `<h3>Dependencies (latest)</h3>${depsHtml}`);
+    `<h3>Dependencies (latest)</h3>${depsHtml}` +
+    readmeHtml);
 }
 
 async function handleSearch(url: URL, env: Env): Promise<Response> {
