@@ -6,6 +6,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
+    "test:readme": "node test-readme.ts",
     "migrate:local": "wrangler d1 migrations apply REG_DB --local",
     "migrate:remote": "wrangler d1 migrations apply REG_DB --remote"
   },
