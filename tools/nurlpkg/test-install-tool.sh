@@ -48,15 +48,19 @@ EOF
 ( cd "$ROOT" && ./nurl.sh "$WORK/pack.nu" "$WORK/pack" >/dev/null 2>&1 ) || { echo "packer build failed"; exit 2; }
 
 REGDIR="$WORK/registry"
-mkdir -p "$REGDIR/index" "$REGDIR/pkgs/argz" "$REGDIR/pkgs/argz-demo"
+mkdir -p "$REGDIR/index" "$REGDIR/pkgs/argz" "$REGDIR/pkgs/argz-demo" "$REGDIR/pkgs/nq"
 "$WORK/pack" "$PKGS/argz"      "$REGDIR/pkgs/argz/argz-0.1.0.tar.gz"           || fail=1
 "$WORK/pack" "$PKGS/argz-demo" "$REGDIR/pkgs/argz-demo/argz-demo-0.1.0.tar.gz" || fail=1
+"$WORK/pack" "$PKGS/nq"        "$REGDIR/pkgs/nq/nq-0.1.0.tar.gz"               || fail=1
 SUM_ARGZ=$(sha256sum "$REGDIR/pkgs/argz/argz-0.1.0.tar.gz" | cut -d' ' -f1)
 SUM_DEMO=$(sha256sum "$REGDIR/pkgs/argz-demo/argz-demo-0.1.0.tar.gz" | cut -d' ' -f1)
+SUM_NQ=$(sha256sum "$REGDIR/pkgs/nq/nq-0.1.0.tar.gz" | cut -d' ' -f1)
 printf '{"name":"argz","versions":[{"version":"0.1.0","checksum":"%s","yanked":false,"deps":[]}]}\n' \
     "$SUM_ARGZ" > "$REGDIR/index/argz.json"
 printf '{"name":"argz-demo","versions":[{"version":"0.1.0","checksum":"%s","yanked":false,"deps":[{"name":"argz","req":"^0.1"}]}]}\n' \
     "$SUM_DEMO" > "$REGDIR/index/argz-demo.json"
+printf '{"name":"nq","versions":[{"version":"0.1.0","checksum":"%s","yanked":false,"deps":[{"name":"argz","req":"^0.1"}]}]}\n' \
+    "$SUM_NQ" > "$REGDIR/index/nq.json"
 
 # ── 2. Serve the static registry ──────────────────────────────────────────
 say "serve registry"
@@ -87,6 +91,28 @@ GREET=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
 ")
 echo "$GREET"
 [[ "$GREET" == "HELLO, ECOSYSTEM!" ]] && echo "run: OK" || { echo "run: FAILED (got '$GREET')"; fail=1; }
+
+# ── 6. A second tool from the same registry: `nq` (also depends on argz) ──
+say "nurlpkg install nq"
+OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
+    source '$PREFIX/env'
+    export NURL_REGISTRY='$REG'
+    nurlpkg install nq 2>&1
+")
+echo "$OUT"
+echo "$OUT" | grep -q 'Installed nq' && echo "install: OK" || { echo "install: FAILED"; fail=1; }
+
+say "run installed nq"
+# Feed a small document and exercise navigation + array iteration + a raw
+# string projection — the everyday jq-lite path.
+NQ_OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
+    source '$PREFIX/env'
+    printf '%s' '{\"items\":[{\"id\":1},{\"id\":2},{\"id\":3}],\"who\":\"Ecosystem\"}' | nq -r '.items[].id'
+    printf '%s' '{\"items\":[{\"id\":1},{\"id\":2},{\"id\":3}],\"who\":\"Ecosystem\"}' | nq -r .who
+")
+echo "$NQ_OUT"
+NQ_WANT=$'1\n2\n3\nEcosystem'
+[[ "$NQ_OUT" == "$NQ_WANT" ]] && echo "run: OK" || { echo "run: FAILED (got '$NQ_OUT')"; fail=1; }
 
 say "RESULT"
 [[ $fail -eq 0 ]] && echo "PASS" || echo "FAIL"

@@ -1,0 +1,8 @@
+[package]
+name = "nq"
+version = "0.1.0"
+description = "A tiny jq-lite JSON query tool: navigate, iterate, and pretty-print JSON from the command line."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+argz = "^0.1"
