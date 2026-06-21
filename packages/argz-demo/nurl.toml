@@ -1,6 +1,6 @@
 [package]
 name = "argz-demo"
-version = "0.1.0"
+version = "0.1.1"
 description = "Friendly greeter CLI demonstrating the argz package."
 license = "MIT OR Apache-2.0"
 
