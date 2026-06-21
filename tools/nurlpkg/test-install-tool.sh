@@ -48,15 +48,17 @@ EOF
 ( cd "$ROOT" && ./nurl.sh "$WORK/pack.nu" "$WORK/pack" >/dev/null 2>&1 ) || { echo "packer build failed"; exit 2; }
 
 REGDIR="$WORK/registry"
-mkdir -p "$REGDIR/index" "$REGDIR/pkgs/argz" "$REGDIR/pkgs/argz-demo" "$REGDIR/pkgs/nq" "$REGDIR/pkgs/md2html"
+mkdir -p "$REGDIR/index" "$REGDIR/pkgs/argz" "$REGDIR/pkgs/argz-demo" "$REGDIR/pkgs/nq" "$REGDIR/pkgs/md2html" "$REGDIR/pkgs/iforest"
 "$WORK/pack" "$PKGS/argz"      "$REGDIR/pkgs/argz/argz-0.1.1.tar.gz"           || fail=1
 "$WORK/pack" "$PKGS/argz-demo" "$REGDIR/pkgs/argz-demo/argz-demo-0.1.1.tar.gz" || fail=1
 "$WORK/pack" "$PKGS/nq"        "$REGDIR/pkgs/nq/nq-0.1.0.tar.gz"               || fail=1
 "$WORK/pack" "$PKGS/md2html"   "$REGDIR/pkgs/md2html/md2html-0.1.0.tar.gz"     || fail=1
+"$WORK/pack" "$PKGS/iforest"   "$REGDIR/pkgs/iforest/iforest-0.1.0.tar.gz"     || fail=1
 SUM_ARGZ=$(sha256sum "$REGDIR/pkgs/argz/argz-0.1.1.tar.gz" | cut -d' ' -f1)
 SUM_DEMO=$(sha256sum "$REGDIR/pkgs/argz-demo/argz-demo-0.1.1.tar.gz" | cut -d' ' -f1)
 SUM_NQ=$(sha256sum "$REGDIR/pkgs/nq/nq-0.1.0.tar.gz" | cut -d' ' -f1)
 SUM_MD=$(sha256sum "$REGDIR/pkgs/md2html/md2html-0.1.0.tar.gz" | cut -d' ' -f1)
+SUM_IF=$(sha256sum "$REGDIR/pkgs/iforest/iforest-0.1.0.tar.gz" | cut -d' ' -f1)
 printf '{"name":"argz","versions":[{"version":"0.1.1","checksum":"%s","yanked":false,"deps":[]}]}\n' \
     "$SUM_ARGZ" > "$REGDIR/index/argz.json"
 printf '{"name":"argz-demo","versions":[{"version":"0.1.1","checksum":"%s","yanked":false,"deps":[{"name":"argz","req":"^0.1"}]}]}\n' \
@@ -65,6 +67,8 @@ printf '{"name":"nq","versions":[{"version":"0.1.0","checksum":"%s","yanked":fal
     "$SUM_NQ" > "$REGDIR/index/nq.json"
 printf '{"name":"md2html","versions":[{"version":"0.1.0","checksum":"%s","yanked":false,"deps":[{"name":"argz","req":"^0.1"}]}]}\n' \
     "$SUM_MD" > "$REGDIR/index/md2html.json"
+printf '{"name":"iforest","versions":[{"version":"0.1.0","checksum":"%s","yanked":false,"deps":[{"name":"argz","req":"^0.1"}]}]}\n' \
+    "$SUM_IF" > "$REGDIR/index/iforest.json"
 
 # ── 2. Serve the static registry ──────────────────────────────────────────
 say "serve registry"
@@ -137,6 +141,26 @@ MD_OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
 echo "$MD_OUT"
 echo "$MD_OUT" | grep -q '<h1>Hi</h1>' && echo "  heading: OK" || { echo "  heading: FAILED"; fail=1; }
 echo "$MD_OUT" | grep -q '<strong>bold</strong>' && echo "  bold: OK" || { echo "  bold: FAILED"; fail=1; }
+
+# ── 8. A fourth tool from the same registry: `iforest` (also depends on argz) ──
+say "nurlpkg install iforest"
+OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
+    source '$PREFIX/env'
+    export NURL_REGISTRY='$REG'
+    nurlpkg install iforest 2>&1
+")
+echo "$OUT"
+echo "$OUT" | grep -q 'Installed iforest' && echo "install: OK" || { echo "install: FAILED"; fail=1; }
+
+say "run installed iforest"
+# A 2-D cluster near the origin plus one obvious outlier on the last row;
+# --top 1 must surface that outlier (row index 8).
+IF_OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
+    source '$PREFIX/env'
+    printf '0,0\n0.1,0\n0,0.1\n0.1,0.1\n0.2,0.1\n0.1,0.2\n0.05,0.15\n0.15,0.05\n9,9\n' | iforest --top 1
+")
+echo "$IF_OUT"
+echo "$IF_OUT" | cut -f1 | grep -qx '8' && echo "  outlier ranked first: OK" || { echo "  outlier: FAILED"; fail=1; }
 
 say "RESULT"
 [[ $fail -eq 0 ]] && echo "PASS" || echo "FAIL"
