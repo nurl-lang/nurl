@@ -1,0 +1,8 @@
+[package]
+name = "iforest"
+version = "0.1.0"
+description = "Isolation Forest anomaly detection — a CLI and a reusable library."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+argz = "^0.1"
