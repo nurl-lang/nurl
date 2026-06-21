@@ -49,17 +49,17 @@ EOF
 
 REGDIR="$WORK/registry"
 mkdir -p "$REGDIR/index" "$REGDIR/pkgs/argz" "$REGDIR/pkgs/argz-demo" "$REGDIR/pkgs/nq" "$REGDIR/pkgs/md2html"
-"$WORK/pack" "$PKGS/argz"      "$REGDIR/pkgs/argz/argz-0.1.0.tar.gz"           || fail=1
-"$WORK/pack" "$PKGS/argz-demo" "$REGDIR/pkgs/argz-demo/argz-demo-0.1.0.tar.gz" || fail=1
+"$WORK/pack" "$PKGS/argz"      "$REGDIR/pkgs/argz/argz-0.1.1.tar.gz"           || fail=1
+"$WORK/pack" "$PKGS/argz-demo" "$REGDIR/pkgs/argz-demo/argz-demo-0.1.1.tar.gz" || fail=1
 "$WORK/pack" "$PKGS/nq"        "$REGDIR/pkgs/nq/nq-0.1.0.tar.gz"               || fail=1
 "$WORK/pack" "$PKGS/md2html"   "$REGDIR/pkgs/md2html/md2html-0.1.0.tar.gz"     || fail=1
-SUM_ARGZ=$(sha256sum "$REGDIR/pkgs/argz/argz-0.1.0.tar.gz" | cut -d' ' -f1)
-SUM_DEMO=$(sha256sum "$REGDIR/pkgs/argz-demo/argz-demo-0.1.0.tar.gz" | cut -d' ' -f1)
+SUM_ARGZ=$(sha256sum "$REGDIR/pkgs/argz/argz-0.1.1.tar.gz" | cut -d' ' -f1)
+SUM_DEMO=$(sha256sum "$REGDIR/pkgs/argz-demo/argz-demo-0.1.1.tar.gz" | cut -d' ' -f1)
 SUM_NQ=$(sha256sum "$REGDIR/pkgs/nq/nq-0.1.0.tar.gz" | cut -d' ' -f1)
 SUM_MD=$(sha256sum "$REGDIR/pkgs/md2html/md2html-0.1.0.tar.gz" | cut -d' ' -f1)
-printf '{"name":"argz","versions":[{"version":"0.1.0","checksum":"%s","yanked":false,"deps":[]}]}\n' \
+printf '{"name":"argz","versions":[{"version":"0.1.1","checksum":"%s","yanked":false,"deps":[]}]}\n' \
     "$SUM_ARGZ" > "$REGDIR/index/argz.json"
-printf '{"name":"argz-demo","versions":[{"version":"0.1.0","checksum":"%s","yanked":false,"deps":[{"name":"argz","req":"^0.1"}]}]}\n' \
+printf '{"name":"argz-demo","versions":[{"version":"0.1.1","checksum":"%s","yanked":false,"deps":[{"name":"argz","req":"^0.1"}]}]}\n' \
     "$SUM_DEMO" > "$REGDIR/index/argz-demo.json"
 printf '{"name":"nq","versions":[{"version":"0.1.0","checksum":"%s","yanked":false,"deps":[{"name":"argz","req":"^0.1"}]}]}\n' \
     "$SUM_NQ" > "$REGDIR/index/nq.json"
