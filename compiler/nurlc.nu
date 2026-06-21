@@ -747,6 +747,19 @@
 //  emit_one_instantiation so per-mono
 //  subprograms point at the original generic
 //  decl line, not synthetic `<generic>:1`.
+
+// Space-separated list of the concrete type-arguments substituted for a
+// generic function's type parameters in the instantiation currently being
+// emitted (set + restored by emit_one_instantiation). Empty outside any
+// instantiation. A struct pointer whose element type is one of these names
+// arose, in the generic SOURCE, from an opaque type variable (`A`) — which
+// has no source-accessible fields. So `. ptr name` / `= . ptr name v` on
+// such a pointer is ALWAYS array indexing, never field access: the field-
+// index lookup in gen_member / gen_field_store is suppressed for these
+// types. This is what makes `( vec_get [T] v idx )` index element `idx`
+// even when `T` happens to have a field literally named `idx` (textual
+// monomorphisation otherwise loses the "this type was a tparam" signal).
+: ~ s g_mono_tparam_tys ``
 : ~ i g_dbg_type_syms 0  // Phase 6 type-id cache: LLVM type string
 //  (e.g. `i64`, `i8*`, `%String`) → metadata id
 //  of its DIBasicType / DIDerivedType /
@@ -9337,7 +9350,11 @@
                     : i stlen ( nurl_str_len st )
                     : s sname ( nurl_str_slice st 1 - stlen 1 )
                     : s fname ( nurl_lex_val lex )
-                    : s fidx_s ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__idx` ) ) ) )
+                    // Tparam-substituted element type → no source-accessible
+                    // fields (opaque type variable in the generic); suppress
+                    // the field lookup so `= . data idx x` stores into the
+                    // array element, matching the read path in gen_member.
+                    : s fidx_s ? ( str_contains_word g_mono_tparam_tys sname ) `` ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__idx` ) ) ) )
                     : b is_field_ident ( is_ident_tok ( nurl_lex_type lex ) )
                     : b is_field_match & is_field_ident != 0 ( nurl_str_len fidx_s )
                     : s is_param ( nurl_sym_get syms ( nurl_str_cat fname `__param` ) )
@@ -9993,7 +10010,10 @@
             : ~ s fld_uns ``
             ? & elem_is_struct ( is_ident_tok ( nurl_lex_type lex ) )
             { : s sname ( nurl_str_slice elem_type 1 - ( nurl_str_len elem_type ) 1 )
-                : s fidx_check ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__idx` ) ) ) )
+                // A tparam-substituted element type has no source-accessible
+                // fields (it was an opaque type variable in the generic) →
+                // suppress the field lookup so `. data idx` indexes the array.
+                : s fidx_check ? ( str_contains_word g_mono_tparam_tys sname ) `` ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__idx` ) ) ) )
                 ? != 0 ( nurl_str_len fidx_check )
                 { = is_field_access T
                     = fidx_s fidx_check
@@ -14981,6 +15001,12 @@
     ? != 0 ( nurl_str_len sl_s )
     { = g_dbg_override_line ( nurl_str_to_int sl_s ) }
     {}
+    // Mark this instantiation's concrete type-args so gen_member /
+    // gen_field_store treat pointers to them as arrays (their generic
+    // origin — opaque type variables — have no accessible fields). Saved
+    // and restored because nested instantiations re-enter here.
+    : s saved_mono_tys g_mono_tparam_tys
+    = g_mono_tparam_tys type_args
     // Lint: re-parsing the substituted body records symbol uses; key
     // them to the template's defining file, not the top file (see
     // lint_note_used). Saved/restored around the recursive
@@ -14994,6 +15020,7 @@
     }
     { ( gen_fn_decl lex2 syms cg ) }
     = g_dbg_override_line saved_override
+    = g_mono_tparam_tys saved_mono_tys
 }
 
 // flush_deferred_instantiations: emit all queued generic instantiations.
