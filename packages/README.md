@@ -65,6 +65,30 @@ trailing `[]` to iterate an array/object (one result per line, optionally
 projecting `.field` from each), and the `| keys` / `| length` terminals.
 See [`nq/README.md`](nq/README.md) for the full grammar.
 
+## `md2html/` — Markdown → HTML (installable program **and** library)
+
+Renders Markdown to HTML. Ships both as an installable CLI (`md2html`,
+reading stdin or `--file`, with an optional `--full` styled page) and as a
+reusable renderer library (`src/markdown.nu`, one function `md_to_html`)
+that other packages can depend on. The renderer is the same one that powers
+the NURL playground's doc viewer, extracted into the registry. Depends on
+`argz` for flags; leak-clean under ASan/LSan.
+
+```
+nurlpkg install md2html
+md2html < README.md              # HTML fragment
+md2html -f README.md --full      # complete styled page
+
+# …or depend on the renderer library:
+#   [dependencies]
+#   md2html = "^0.1"
+#   $ `deps/md2html/src/markdown.nu`
+#   : String html ( md_to_html ( string_data src ) )
+```
+
+See [`md2html/README.md`](md2html/README.md) for the supported Markdown and
+the library API.
+
 ## The full loop
 
 ```bash
