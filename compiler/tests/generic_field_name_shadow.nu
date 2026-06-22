@@ -20,7 +20,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 // BOTH field names (`idx`, `len`) collide with vec.nu's generic identifiers.
-: Slot { i idx  i len }
+: Slot { i idx i len }
 
 @ main → i {
     : ( Vec Slot ) v ( vec_new [Slot] )
@@ -30,20 +30,20 @@ $ `stdlib/core/vec.nu`
 
     // READ: element 1 must be {20,21}, not field 0 of element 0.
     ?? ( vec_get [Slot] v 1 ) {
-        T c → { ( nurl_print_int . c idx ) ( nurl_print_int . c len ) }   // 20 / 21
+        T c → { ( nurl_print_int . c idx ) ( nurl_print_int . c len ) }  // 20 / 21
         F _ → { ( nurl_print `READ_BAD\n` ) }
     }
 
     // STORE: vec_set must overwrite element 2, leaving the others intact.
     ( vec_set [Slot] v 2 @ Slot { 99 98 } )
     ?? ( vec_get [Slot] v 2 ) {
-        T c → { ( nurl_print_int . c idx ) ( nurl_print_int . c len ) }   // 99 / 98
+        T c → { ( nurl_print_int . c idx ) ( nurl_print_int . c len ) }  // 99 / 98
         F _ → { ( nurl_print `STORE_BAD\n` ) }
     }
 
     // Element 0 untouched by the store above.
     ?? ( vec_get [Slot] v 0 ) {
-        T c → { ( nurl_print_int . c idx ) }                              // 10
+        T c → { ( nurl_print_int . c idx ) }  // 10
         F _ → {}
     }
 

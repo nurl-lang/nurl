@@ -50,16 +50,16 @@ $ `stdlib/std/term.nu`
     ( nurl_print ? > ( nurl_native_sizeof `struct termios` ) 0 `T` `F` ) ( nurl_print `\n` )
 
     // ── ANSI builders, byte-exact ──
-    ( show `reset` ( ansi_reset ) )            // 1b5b306d
-    ( show `bold` ( ansi_sgr 1 ) )             // 1b5b316d
-    ( show `fg196` ( ansi_fg 196 ) )           // 1b5b33383b353b3139366d
-    ( show `bg21` ( ansi_bg 21 ) )             // 1b5b34383b353b32316d
-    ( show `clear` ( ansi_clear ) )            // 1b5b324a 1b5b48
+    ( show `reset` ( ansi_reset ) )  // 1b5b306d
+    ( show `bold` ( ansi_sgr 1 ) )  // 1b5b316d
+    ( show `fg196` ( ansi_fg 196 ) )  // 1b5b33383b353b3139366d
+    ( show `bg21` ( ansi_bg 21 ) )  // 1b5b34383b353b32316d
+    ( show `clear` ( ansi_clear ) )  // 1b5b324a 1b5b48
     ( show `clear_line` ( ansi_clear_line ) )  // 1b5b324b0d
     ( show `cursor_to_5_10` ( ansi_cursor_to 5 10 ) )  // 1b5b353b313048
-    ( show `up3` ( ansi_cursor_up 3 ) )        // 1b5b3341
-    ( show `down2` ( ansi_cursor_down 2 ) )    // 1b5b3242
+    ( show `up3` ( ansi_cursor_up 3 ) )  // 1b5b3341
+    ( show `down2` ( ansi_cursor_down 2 ) )  // 1b5b3242
     ( show `right7` ( ansi_cursor_right 7 ) )  // 1b5b3743
-    ( show `left1` ( ansi_cursor_left 1 ) )    // 1b5b3144
+    ( show `left1` ( ansi_cursor_left 1 ) )  // 1b5b3144
     ^ 0
 }

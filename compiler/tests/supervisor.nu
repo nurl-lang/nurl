@@ -20,7 +20,7 @@ $ `stdlib/std/supervisor.nu`
     ^ p
 }
 
-@ report s label *i ctr Supervisor s2 → v {
+@ report s label * i ctr Supervisor s2 → v {
     ( nurl_print label )
     ( nurl_print `counter=` ) ( nurl_print_int ( nurl_peek ctr 0 ) )
     ( nurl_print ` restarts=` ) ( nurl_print_int ( child_restarts s2 0 ) )
@@ -32,11 +32,11 @@ $ `stdlib/std/supervisor.nu`
     : *i c1 ( make_counter )
     : Supervisor s1 ( supervisor_new 10 100000 )
     ( supervisor_add s1 `flaky` @ RestartPolicy { RTransient }
-        \ → v {
-            : i n + 1 ( nurl_peek c1 0 )
-            ( nurl_poke c1 0 n )
-            ? < n 4 { ( panic `boom` ) } {}
-        } )
+    \ → v {
+        : i n + 1 ( nurl_peek c1 0 )
+        ( nurl_poke c1 0 n )
+        ? < n 4 { ( panic `boom` ) } {}
+    } )
     ( supervise_one s1 0 )
     ( report `transient: ` c1 s1 )
     ( supervisor_free s1 )
@@ -46,11 +46,11 @@ $ `stdlib/std/supervisor.nu`
     : *i c2 ( make_counter )
     : Supervisor s2 ( supervisor_new 10 100000 )
     ( supervisor_add s2 `oneshot` @ RestartPolicy { RTemporary }
-        \ → v {
-            : i n + 1 ( nurl_peek c2 0 )
-            ( nurl_poke c2 0 n )
-            ( panic `nope` )
-        } )
+    \ → v {
+        : i n + 1 ( nurl_peek c2 0 )
+        ( nurl_poke c2 0 n )
+        ( panic `nope` )
+    } )
     ( supervise_one s2 0 )
     ( report `temporary: ` c2 s2 )
     ( supervisor_free s2 )
@@ -60,11 +60,11 @@ $ `stdlib/std/supervisor.nu`
     : *i c3 ( make_counter )
     : Supervisor s3 ( supervisor_new 2 100000 )
     ( supervisor_add s3 `hopeless` @ RestartPolicy { RPermanent }
-        \ → v {
-            : i n + 1 ( nurl_peek c3 0 )
-            ( nurl_poke c3 0 n )
-            ( panic `again` )
-        } )
+    \ → v {
+        : i n + 1 ( nurl_peek c3 0 )
+        ( nurl_poke c3 0 n )
+        ( panic `again` )
+    } )
     ( supervise_one s3 0 )
     ( report `intensity: ` c3 s3 )
     ( supervisor_free s3 )

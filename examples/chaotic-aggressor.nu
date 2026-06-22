@@ -43,10 +43,10 @@ $ `stdlib/std/float.nu`
 // straight into `alloc [T]`. Every mutator takes the stack by `inout`
 // (exclusive mutable borrow) so writes hit the caller's binding in place.
 
-: Stack [T] { *T data  i len  i cap }
+: Stack [T] { * T data i len i cap }
 
 @ stack_new [T] i cap → ( Stack T ) {
-    ^ @ ( Stack T ) { # *T ( alloc [T] cap )  0  cap }
+    ^ @ ( Stack T ) { # *T ( alloc [T] cap ) 0 cap }
 }
 
 @ stack_push [T] inout ( Stack T ) s T v → v {
@@ -68,8 +68,10 @@ $ `stdlib/std/float.nu`
 // ── (2) A trait dispatched by concrete first-arg type ───────────────
 
 % Show [T] { @ show T x → v }
+
 % Show f { @ show f x → v { ( nurl_print ( float_to_string x ) ) ( nurl_print `\n` ) } }
-% Show i { @ show i x → v { ( nurl_print ( nurl_str_int   x ) ) ( nurl_print `\n` ) } }
+
+% Show i { @ show i x → v { ( nurl_print ( nurl_str_int x ) ) ( nurl_print `\n` ) } }
 
 // ── (3) The instruction set ─────────────────────────────────────────
 // Lit/Bin carry payloads; Clamp carries TWO; Nop/Halt are tag-only so they
@@ -91,16 +93,16 @@ $ `stdlib/std/float.nu`
 // `ops` is the closure jump table. One `??` carries every match shape the
 // grammar allows at once.
 
-@ vm_run inout ( Stack f ) s [Op prog [ ( @ f f f ) ops → f {
+@ vm_run inout ( Stack f ) s [Op prog [( @ f f f ) ops → f {
     // LIFO defer: registered first, runs last.
     ; { ( nurl_print `[trace] vm halted, depth=` ) ( nurl_print ( nurl_str_int . s len ) ) ( nurl_print `\n` ) }
     ; { ( nurl_print `[trace] vm starting\n` ) }
 
     ~ op prog {
         ?? op {
-            Lit x       → ( stack_push [f] s x )
-            Dup         → { : f t ( stack_peek [f] s ) ( stack_push [f] s t ) }
-            Neg         → { : f t ( stack_pop [f] s ) ( stack_push [f] s - 0.0 t ) }
+            Lit x → ( stack_push [f] s x )
+            Dup → { : f t ( stack_peek [f] s ) ( stack_push [f] s t ) }
+            Neg → { : f t ( stack_pop [f] s ) ( stack_push [f] s - 0.0 t ) }
             // 2-payload binding + a nested ternary with zero grouping tokens:
             //   clamp t into [lo,hi] = (t<lo) ? lo : (t>hi) ? hi : t
             Clamp lo hi → {
@@ -116,10 +118,10 @@ $ `stdlib/std/float.nu`
                 ( stack_push [f] s ( fn lhs rhs ) )
             }
             // OR-PATTERN over two tag-only variants:
-            Nop | Halt  → {}
+            Nop | Halt → {}
             // Catch-all — required because the guarded Bin arm cannot, on its
             // own, satisfy exhaustiveness (a false guard falls through here).
-            _           → ( nurl_print `[trace] bad opcode\n` )
+            _ → ( nurl_print `[trace] bad opcode\n` )
         }
     }
     ^ ( stack_peek [f] s )
@@ -142,38 +144,38 @@ $ `stdlib/std/float.nu`
     ( nurl_print `STACK_CAP (1<<6) = ` ) ( nurl_print ( nurl_str_int STACK_CAP ) ) ( nurl_print `\n` )
 
     // (4) Build the opcode jump table: 0=add 1=sub 2=mul 3=div.
-    : [ ( @ f f f ) ops [ ( @ f f f ) |
-        \ f a f b → f { ^ + a b }
-        \ f a f b → f { ^ - a b }
-        \ f a f b → f { ^ * a b }
-        \ f a f b → f { ^ / a b }
+    : [( @ f f f ) ops [( @ f f f ) |
+    \ f a f b → f { ^ + a b }
+    \ f a f b → f { ^ - a b }
+    \ f a f b → f { ^ * a b }
+    \ f a f b → f { ^ / a b }
     ]
 
     // The program:  3 4 * 5 +  Dup *  Clamp[0,100]
     //   3*4=12 ; 12+5=17 ; dup→17 17 ; *→289 ; clamp→100
     : [Op prog [Op |
-        @ Op { Lit 3.0 }
-        @ Op { Lit 4.0 }
-        @ Op { Bin 2 }
-        @ Op { Lit 5.0 }
-        @ Op { Bin 0 }
-        @ Op { Nop }
-        @ Op { Dup }
-        @ Op { Bin 2 }
-        @ Op { Clamp 0.0 100.0 }
-        @ Op { Halt }
+    @ Op { Lit 3.0 }
+    @ Op { Lit 4.0 }
+    @ Op { Bin 2 }
+    @ Op { Lit 5.0 }
+    @ Op { Bin 0 }
+    @ Op { Nop }
+    @ Op { Dup }
+    @ Op { Bin 2 }
+    @ Op { Clamp 0.0 100.0 }
+    @ Op { Halt }
     ]
 
     // (1) inout stack, forwarded into vm_run which forwards it again.
     : ~ ( Stack f ) st ( stack_new [f] STACK_CAP )
     : f result ( vm_run st prog ops )
 
-    ( nurl_print `vm result = ` ) ( show result )      // (2) trait dispatch on f
+    ( nurl_print `vm result = ` ) ( show result )  // (2) trait dispatch on f
 
     // (5) compose two escaping closures: (x → x+1) then (x → 2x)
-    : ( @ f f ) inc   \ f x → f { ^ + x 1.0 }
-    : ( @ f f ) dbl   \ f x → f { ^ * x 2.0 }
-    : ( @ f f ) xform ( compose dbl inc )              // dbl ∘ inc
+    : ( @ f f ) inc \ f x → f { ^ + x 1.0 }
+    : ( @ f f ) dbl \ f x → f { ^ * x 2.0 }
+    : ( @ f f ) xform ( compose dbl inc )  // dbl ∘ inc
     ( nurl_print `2*(result+1) = ` ) ( show ( xform result ) )
 
     // (6) dense prefix Horner polynomial at x=2 → 3*8 -2*4 +2 -5 = 13

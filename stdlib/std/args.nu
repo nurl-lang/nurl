@@ -51,16 +51,16 @@ $ `stdlib/core/vec.nu`
 : ArgParser {
     String prog
     String about
-    ( Vec String ) longs        // long name per option, "" if none
-    ( Vec i ) shorts            // short char code per option, 0 if none
-    ( Vec i ) kinds             // 0 = flag, 1 = value option
-    ( Vec String ) metavars     // usage placeholder for value options
-    ( Vec String ) helps        // help text per option
-    ( Vec i ) counts            // parse result: times each option was seen
-    ( Vec i ) val_idx           // append-only: option slot for a captured value
-    ( Vec String ) val_str      // append-only: the captured value
+    ( Vec String ) longs  // long name per option, "" if none
+    ( Vec i ) shorts  // short char code per option, 0 if none
+    ( Vec i ) kinds  // 0 = flag, 1 = value option
+    ( Vec String ) metavars  // usage placeholder for value options
+    ( Vec String ) helps  // help text per option
+    ( Vec i ) counts  // parse result: times each option was seen
+    ( Vec i ) val_idx  // append-only: option slot for a captured value
+    ( Vec String ) val_str  // append-only: the captured value
     ( Vec String ) positionals  // collected positional arguments
-    String error                // non-empty after a failed parse
+    String error  // non-empty after a failed parse
 }
 
 @ args_new s prog s about → ArgParser {

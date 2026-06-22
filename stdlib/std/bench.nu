@@ -31,9 +31,13 @@ $ `stdlib/std/time.nu`
 : BenchResult { String name i iters i total_ns i ns_per_op i allocs_per_op }
 
 @ bench_result_name BenchResult r → s { ^ ( string_data . r name ) }
+
 @ bench_result_iters BenchResult r → i { ^ . r iters }
+
 @ bench_result_total_ns BenchResult r → i { ^ . r total_ns }
+
 @ bench_result_ns_per_op BenchResult r → i { ^ . r ns_per_op }
+
 @ bench_result_allocs_per_op BenchResult r → i { ^ . r allocs_per_op }
 
 @ bench_result_free BenchResult r → v { ( string_free . r name ) }

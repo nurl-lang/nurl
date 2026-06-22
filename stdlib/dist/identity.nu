@@ -45,6 +45,7 @@ $ `stdlib/core/vec.nu`
     }
     ^ e
 }
+
 @ __id_cpy ( Vec u ) v → ( Vec u ) {
     : ( Vec u ) o ( vec_with_cap [u] ( vec_len [u] v ) )
     ( vec_extend [u] o v )
@@ -54,12 +55,12 @@ $ `stdlib/core/vec.nu`
 : IdEntry {
     ( Vec u ) pubkey
     i id
-    i live       // 1 = active, 0 = retired (tombstone; id still bound here)
+    i live  // 1 = active, 0 = retired (tombstone; id still bound here)
 }
 
 : IdRegistry {
-    ( Vec s ) entries   // *IdEntry
-    i next_id           // monotonic high-water mark — never decreases
+    ( Vec s ) entries  // *IdEntry
+    i next_id  // monotonic high-water mark — never decreases
 }
 
 @ identity_new → *IdRegistry {
@@ -69,7 +70,7 @@ $ `stdlib/core/vec.nu`
     ^ r
 }
 
-@ identity_free *IdRegistry r → v {
+@ identity_free * IdRegistry r → v {
     : i n ( vec_len [s] . r entries )
     : ~ i k 0
     ~ < k n {
@@ -81,7 +82,7 @@ $ `stdlib/core/vec.nu`
     ( nurl_free # s r )
 }
 
-@ identity_count *IdRegistry r → i { ^ ( vec_len [s] . r entries ) }
+@ identity_count * IdRegistry r → i { ^ ( vec_len [s] . r entries ) }
 
 // A globally STABLE replica id derived purely from the pubkey (FNV-1a/64). No
 // registry, no coordination: every node computes the SAME id for a given
@@ -103,7 +104,7 @@ $ `stdlib/core/vec.nu`
     ^ h
 }
 
-@ __id_find *IdRegistry r ( Vec u ) pubkey → s {
+@ __id_find * IdRegistry r ( Vec u ) pubkey → s {
     : i n ( vec_len [s] . r entries )
     : ~ s found # s 0
     : ~ i k 0
@@ -122,7 +123,7 @@ $ `stdlib/core/vec.nu`
 // a known pubkey (even a retired one) returns its existing id and is marked
 // live again (a rejoin resumes its own slot). A new pubkey never reuses a
 // retired id — next_id only grows.
-@ identity_of *IdRegistry r ( Vec u ) pubkey → i {
+@ identity_of * IdRegistry r ( Vec u ) pubkey → i {
     : s pp ( __id_find r pubkey )
     ? != # i pp 0 {
         : *IdEntry e # *IdEntry pp
@@ -139,13 +140,13 @@ $ `stdlib/core/vec.nu`
 }
 
 // Has this pubkey ever been assigned an id (without allocating one)?
-@ identity_known *IdRegistry r ( Vec u ) pubkey → b { ^ != # i ( __id_find r pubkey ) 0 }
+@ identity_known * IdRegistry r ( Vec u ) pubkey → b { ^ != # i ( __id_find r pubkey ) 0 }
 
 // Reverse lookup: the pubkey bound to a replica id (copied), or None. Resolves
 // retired (tombstoned) ids too, so stale gossip remains interpretable.
-@ identity_pubkey *IdRegistry r i id → ?( Vec u ) {
+@ identity_pubkey * IdRegistry r i id → ?( Vec u ) {
     : i n ( vec_len [s] . r entries )
-    : ~ ?( Vec u ) out @ ?( Vec u ) { F # ( Vec u ) 0 }
+    : ~ ? ( Vec u ) out @ ?( Vec u ) { F # ( Vec u ) 0 }
     : ~ b got F
     : ~ i k 0
     ~ & ! got < k n {
@@ -162,13 +163,13 @@ $ `stdlib/core/vec.nu`
 // Retire a pubkey's slot (it left). The binding is kept as a tombstone — the
 // id is never reassigned, and a later identity_of on the same pubkey revives
 // it. No-op for an unknown pubkey.
-@ identity_retire *IdRegistry r ( Vec u ) pubkey → v {
+@ identity_retire * IdRegistry r ( Vec u ) pubkey → v {
     : s pp ( __id_find r pubkey )
     ? != # i pp 0 { : *IdEntry e # *IdEntry pp = . e live 0 } {}
 }
 
 // Is the id currently live (not retired)? Unknown ids report not-live.
-@ identity_is_live *IdRegistry r i id → b {
+@ identity_is_live * IdRegistry r i id → b {
     : i n ( vec_len [s] . r entries )
     : ~ b live F : ~ i k 0
     ~ & ! live < k n {

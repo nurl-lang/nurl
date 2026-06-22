@@ -28,7 +28,7 @@ $ `stdlib/ext/jwt.nu`
 }
 
 // Print "ok"/"BAD" for a verify result, plus the `sub` claim on success.
-@ show_verify s label !Json JwtErr r → v {
+@ show_verify s label ! Json JwtErr r → v {
     ( nurl_print label )
     ?? r {
         T payload → {

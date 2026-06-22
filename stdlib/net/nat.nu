@@ -31,21 +31,24 @@ $ `stdlib/std/udp.nu`
 $ `stdlib/net/stun.nu`
 
 // ── candidate kinds ──────────────────────────────────────────────
-@ cand_host  → i { ^ 0 }
+@ cand_host → i { ^ 0 }
+
 @ cand_srflx → i { ^ 1 }
+
 @ cand_relay → i { ^ 2 }
 
 : Candidate {
     String host
     i port
-    i family    // 1 = IPv4, 2 = IPv6
-    i kind      // 0 host, 1 server-reflexive, 2 relay
+    i family  // 1 = IPv4, 2 = IPv6
+    i kind  // 0 host, 1 server-reflexive, 2 relay
 }
 
 // ── NAT mapping types ────────────────────────────────────────────
-@ nat_type_unknown     → i { ^ 0 }
-@ nat_type_independent → i { ^ 1 }   // cone — hole punch can work
-@ nat_type_symmetric   → i { ^ 2 }   // per-dest mapping — go straight to relay
+@ nat_type_unknown → i { ^ 0 }
+
+@ nat_type_independent → i { ^ 1 }  // cone — hole punch can work
+@ nat_type_symmetric → i { ^ 2 }  // per-dest mapping — go straight to relay
 
 @ nat_punchable i t → b { ^ == t 1 }
 
@@ -78,10 +81,10 @@ $ `stdlib/net/stun.nu`
     : i n ( string_len addr )
     : *u sp # *u cs
     // bracketed IPv6: [host]:port
-    ? & > n 0 == # i . sp 0 91 {            // '['
+    ? & > n 0 == # i . sp 0 91 {  // '['
         : String h ( string_with_cap n )
         : ~ i e 1
-        ~ & < e n != # i . sp e 93 {        // ']'
+        ~ & < e n != # i . sp e 93 {  // ']'
             ( string_push_char h # i . sp e ) = e + e 1
         }
         ^ ( __unmap h )
@@ -186,14 +189,14 @@ $ `stdlib/net/stun.nu`
 
 @ __box_cand Candidate c → s {
     : *Candidate p # *Candidate ( nurl_alloc Z Candidate )
-    = . p host . c host          // moves the owned String into the heap node
+    = . p host . c host  // moves the owned String into the heap node
     = . p port . c port
     = . p family . c family
     = . p kind . c kind
     ^ # s p
 }
 
-@ __cand_eq *Candidate a Candidate b → b {
+@ __cand_eq * Candidate a Candidate b → b {
     ^ & == . a port . b port != 0 ( nurl_str_eq ( string_data . a host ) ( string_data . b host ) )
 }
 
@@ -244,7 +247,7 @@ $ `stdlib/net/stun.nu`
 
 // Classify from two reflexive observations: same endpoint ⇒ independent
 // (cone), differing ⇒ symmetric. Either missing ⇒ unknown. Pure.
-@ nat_classify ?StunAddr a ?StunAddr b → i {
+@ nat_classify ? StunAddr a ? StunAddr b → i {
     : ~ i t 0
     ?? a {
         T sa → {
@@ -279,14 +282,16 @@ $ `stdlib/net/stun.nu`
 // the rendezvous service in Phase 3) makes a punch packet unspoofable and
 // lets the transport demux punch traffic from session data.
 
-@ __punch_magic → i { ^ 1314080336 }   // "NURP"
+@ __punch_magic → i { ^ 1314080336 }  // "NURP"
 @ punch_ping → i { ^ 0 }
+
 @ punch_pong → i { ^ 1 }
 
 : PunchMsg {
     i kind
     ( Vec u ) token
 }
+
 @ punch_msg_free PunchMsg m → v { ( vec_free [u] . m token ) }
 
 @ nat_punch_build i kind ( Vec u ) token → ( Vec u ) {

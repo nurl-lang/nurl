@@ -99,7 +99,6 @@
 // owns heap storage; pass a closure that returns an independently-owned
 // element (e.g. wrap `string_clone` in a `\`).
 
-
 : Vec [A] { s ctl }
 
 // ── Internal helpers ────────────────────────────────────────────────

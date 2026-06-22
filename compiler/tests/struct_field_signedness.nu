@@ -15,20 +15,20 @@
 // main returns the number of failed checks (0 = all pass).
 
 : Rec {
-    u   b0      // unsigned byte
-    i8  s0      // signed byte
-    u16 w0      // unsigned 16
-    i16 h0      // signed 16
-    u32 d0      // unsigned 32
+    u b0  // unsigned byte
+    i8 s0  // signed byte
+    u16 w0  // unsigned 16
+    i16 h0  // signed 16
+    u32 d0  // unsigned 32
 }
 
 // Wider fields fed NARROWER unsigned values — the construction store must
 // zero-extend (a `u` 130 into an i64 field is 130, not −126), the mirror of
 // the field-LOAD bug, fixed in gen_agg_lit.
 : Wide {
-    i64 a       // fed u8 130
-    i32 b       // fed u16 50000
-    i64 c       // fed u32 0x80000001
+    i64 a  // fed u8 130
+    i32 b  // fed u16 50000
+    i64 c  // fed u32 0x80000001
 }
 
 @ chk i got i want s tag → i {

@@ -45,9 +45,9 @@ $ `stdlib/std/decimal.nu`
     // ── add/sub/mul with differing scales ──
     : Decimal x ( mk `12.5` )
     : Decimal y ( mk `0.025` )
-    : Decimal s1 ( dec_add x y )   ( nurl_print `12.5+0.025=` ) ( pd s1 ) ( nurl_print `\n` )
-    : Decimal s2 ( dec_sub x y )   ( nurl_print `12.5-0.025=` ) ( pd s2 ) ( nurl_print `\n` )
-    : Decimal s3 ( dec_mul x y )   ( nurl_print `12.5*0.025=` ) ( pd s3 ) ( nurl_print `\n` )
+    : Decimal s1 ( dec_add x y ) ( nurl_print `12.5+0.025=` ) ( pd s1 ) ( nurl_print `\n` )
+    : Decimal s2 ( dec_sub x y ) ( nurl_print `12.5-0.025=` ) ( pd s2 ) ( nurl_print `\n` )
+    : Decimal s3 ( dec_mul x y ) ( nurl_print `12.5*0.025=` ) ( pd s3 ) ( nurl_print `\n` )
     ( dec_free x ) ( dec_free y ) ( dec_free s1 ) ( dec_free s2 ) ( dec_free s3 )
 
     // ── banker's rounding (round half to even) to 2 places ──

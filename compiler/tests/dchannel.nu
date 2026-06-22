@@ -67,7 +67,7 @@ $ `stdlib/ext/dchannel.nu`
 
 @ main → i {
     : DStore store ( dstore_new 8 )
-    ( dstore_declare store `q` 2 )       // capacity 2
+    ( dstore_declare store `q` 2 )  // capacity 2
     : Registry reg ( registry_new )
     ( dchan_register store reg )
 
@@ -77,7 +77,7 @@ $ `stdlib/ext/dchannel.nu`
     : Json e2 ( disp reg `dchan/send` ( send_args 20 ) )
     ( pstatus `send 20: ` e2 ) ( json_free e2 )
     : Json e3 ( disp reg `dchan/send` ( send_args 30 ) )
-    ( pstatus `send 30: ` e3 ) ( json_free e3 )    // full
+    ( pstatus `send 30: ` e3 ) ( json_free e3 )  // full
 
     // ── depth ────────────────────────────────────────────────────
     : Json el ( disp reg `dchan/len` ( name_args ) )
@@ -94,15 +94,15 @@ $ `stdlib/ext/dchannel.nu`
     ( nurl_print ` v=` ) ( nurl_print_int ( result_field_int r2 `v` ) )
     ( json_free r2 )
     : Json r3 ( disp reg `dchan/recv` ( name_args ) )
-    ( pstatus `recv: ` r3 ) ( json_free r3 )       // empty
+    ( pstatus `recv: ` r3 ) ( json_free r3 )  // empty
 
     // ── close + post-close behaviour ─────────────────────────────
     : Json ec ( disp reg `dchan/close` ( name_args ) )
     ( pstatus `close: ` ec ) ( json_free ec )
     : Json r4 ( disp reg `dchan/recv` ( name_args ) )
-    ( pstatus `recv after close: ` r4 ) ( json_free r4 )   // closed
+    ( pstatus `recv after close: ` r4 ) ( json_free r4 )  // closed
     : Json e4 ( disp reg `dchan/send` ( send_args 40 ) )
-    ( pstatus `send after close: ` e4 ) ( json_free e4 )   // closed
+    ( pstatus `send after close: ` e4 ) ( json_free e4 )  // closed
 
     // ── DSend variant names ──────────────────────────────────────
     ( nurl_print_str ( dsend_name # DSend DSendOk ) )

@@ -23,12 +23,15 @@ $ `stdlib/dist/identity.nu`
 $ `stdlib/dist/sim.nu`
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
+
 @ pi s label i v → v { ( nurl_print label ) ( nurl_print_int v ) }
+
 @ pk i id → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + id k ) = k + k 1 } ^ v }
+
 @ ctr ( Vec s ) cs i i → *PNCounter { ^ # *PNCounter ?? ( vec_get [s] cs i ) { T x → x F → # s 0 } }
 
 // each node broadcasts its encoded counter to every other node
-@ gossip_all *SimNet net ( Vec s ) cs i n i now → v {
+@ gossip_all * SimNet net ( Vec s ) cs i n i now → v {
     : ~ i i 0
     ~ < i n {
         : ( Vec u ) bytes ( pncounter_encode ( ctr cs i ) )
@@ -39,7 +42,7 @@ $ `stdlib/dist/sim.nu`
     }
 }
 // deliver due deltas, merging each into the destination node's counter
-@ deliver_all *SimNet net ( Vec s ) cs i now → v {
+@ deliver_all * SimNet net ( Vec s ) cs i now → v {
     : ( Vec s ) due ( sim_due net now )
     : i dn ( vec_len [s] due )
     : ~ i k 0
@@ -72,13 +75,13 @@ $ `stdlib/dist/sim.nu`
         ~ < d n {
             : i who % + i d n
             : ( Vec u ) ppk ( pk who )
-            ( identity_of reg ppk )            // would hand out 0,1,2 in THIS order
+            ( identity_of reg ppk )  // would hand out 0,1,2 in THIS order
             ( vec_free [u] ppk )
             = d + d 1
         }
         : ( Vec u ) selfpk ( pk i )
-        : i rid ( identity_stable_id selfpk )   // GLOBALLY stable id for this node
-        ( pncounter_inc c rid 1 )               // each node does exactly one +1
+        : i rid ( identity_stable_id selfpk )  // GLOBALLY stable id for this node
+        ( pncounter_inc c rid 1 )  // each node does exactly one +1
         ( vec_free [u] selfpk )
         ( identity_free reg )
         ( vec_push [s] cs # s c )

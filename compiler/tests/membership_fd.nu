@@ -10,7 +10,9 @@ $ `stdlib/net/membership.nu`
 $ `stdlib/net/failuredetector.nu`
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
+
 @ mkpk i seed → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + seed k ) = k + k 1 } ^ v }
+
 @ veq ( Vec u ) a ( Vec u ) b → b {
     : i n ( vec_len [u] a ) ? != n ( vec_len [u] b ) { ^ F } {}
     : ~ b e T : ~ i k 0
@@ -44,7 +46,7 @@ $ `stdlib/net/failuredetector.nu`
     ( pktable_apply t2 b ( pk_alive ) 1 0 )
     ( pktable_apply t2 c ( pk_alive ) 1 0 )
     : *FdState fd2 ( fd_new # s t2 1000 300 600 2 )
-    : FdAction p0 ( fd_tick fd2 0 )           // ping target X
+    : FdAction p0 ( fd_tick fd2 0 )  // ping target X
     : ( Vec u ) tgt ( vec_with_cap [u] 32 ) ( vec_extend [u] tgt . p0 target )
     ( fd_action_free p0 )
     // no ack; at direct-timeout → ping-req
@@ -73,15 +75,15 @@ $ `stdlib/net/failuredetector.nu`
     : *PkMemberTable t3 ( pktable_new me 1000 5000 3 8 )
     ( pktable_apply t3 b ( pk_alive ) 1 0 )
     : *FdState fd3 ( fd_new # s t3 1000 300 600 2 )
-    : FdAction q0 ( fd_tick fd3 0 )           // ping b, seq known
+    : FdAction q0 ( fd_tick fd3 0 )  // ping b, seq known
     : i bseq . q0 seq
     ( fd_action_free q0 )
-    : FdAction q1 ( fd_tick fd3 300 )         // escalate to ping-req (b slow)
+    : FdAction q1 ( fd_tick fd3 300 )  // escalate to ping-req (b slow)
     ( pb `roam: escalated to ping-req: ` == . q1 kind ( fd_do_preq ) )
     ( fd_action_free q1 )
     // ack finally arrives at t=500 (< total-timeout 600): roam recovered
     ( pb `late ack accepted: ` ( fd_on_ack fd3 bseq 500 ) )
-    : FdAction q2 ( fd_tick fd3 600 )         // would-be suspect time
+    : FdAction q2 ( fd_tick fd3 600 )  // would-be suspect time
     ( fd_action_free q2 )
     : ( Vec s ) sd2 ( fd_sweep fd3 50000 )
     ( pb `member stayed ALIVE across the roam: ` & == ( vec_len [s] sd2 ) 0 == ( pktable_state_of t3 b ) ( pk_alive ) )

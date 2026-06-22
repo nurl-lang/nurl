@@ -31,8 +31,11 @@ $ `stdlib/std/random.nu`
 : ~ i g_cur_span 0
 
 @ trace_active → b { ^ != g_cur_trace 0 }
+
 @ trace_current_trace → i { ^ g_cur_trace }
+
 @ trace_current_span → i { ^ g_cur_span }
+
 @ trace_new_span → i { ^ ( rand_u64 ) }
 
 @ trace_start → v {
@@ -76,7 +79,7 @@ $ `stdlib/std/random.nu`
     : String th ( trace_hex16 tid )
     ( string_push_str s ( string_data th ) )
     ( string_free th )
-    ( string_push_char s 45 )                // '-'
+    ( string_push_char s 45 )  // '-'
     : String sh ( trace_hex16 sid )
     ( string_push_str s ( string_data sh ) )
     ( string_free sh )
@@ -91,9 +94,9 @@ $ `stdlib/std/random.nu`
 }
 
 @ __tr_hex_val i c → i {
-    ? & >= c 48 <= c 57 { ^ - c 48 } {}        // 0-9
-    ? & >= c 97 <= c 102 { ^ - c 87 } {}       // a-f
-    ? & >= c 65 <= c 70 { ^ - c 55 } {}        // A-F
+    ? & >= c 48 <= c 57 { ^ - c 48 } {}  // 0-9
+    ? & >= c 97 <= c 102 { ^ - c 87 } {}  // a-f
+    ? & >= c 65 <= c 70 { ^ - c 55 } {}  // A-F
     ^ - 0 1
 }
 

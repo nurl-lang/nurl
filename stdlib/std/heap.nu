@@ -25,13 +25,13 @@ $ `stdlib/core/vec.nu`
 
 // ── Internal sift helpers (operate on the raw element buffer) ─────────
 
-@ __heap_swap [A] *A data i i i j → v {
+@ __heap_swap [A] * A data i i i j → v {
     : A t . data i
     = . data i . data j
     = . data j t
 }
 
-@ __heap_sift_up [A] *A data i start ( @ i A A ) cmp → v {
+@ __heap_sift_up [A] * A data i start ( @ i A A ) cmp → v {
     : ~ i i start
     : ~ b go ? > i 0 T F
     ~ go {
@@ -46,7 +46,7 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ __heap_sift_down [A] *A data i start i n ( @ i A A ) cmp → v {
+@ __heap_sift_down [A] * A data i start i n ( @ i A A ) cmp → v {
     : ~ i i start
     : ~ b go T
     ~ go {

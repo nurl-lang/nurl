@@ -12,22 +12,26 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
 
 @ ls_hexd i n → i { ^ + ? < n 10 48 87 n }
+
 @ ls_pushhex2 String s i b → v {
     ( string_push_char s ( ls_hexd & >> b 4 15 ) )
     ( string_push_char s ( ls_hexd & b 15 ) )
 }
+
 @ ls_pushhex4 String s i w → v {
     ( ls_pushhex2 s & >> w 8 255 )
     ( ls_pushhex2 s & w 255 )
 }
+
 @ ls_pushhex8 String s i w → v {
     ( ls_pushhex4 s & >> w 16 0xFFFF )
     ( ls_pushhex4 s & w 0xFFFF )
 }
+
 @ mem_sum * u m i lo i hi → i {
     : ~ i s 0
     : ~ i a lo
-    ~ < a hi { = s + s & # i . m a 255  = a + a 1 }
+    ~ < a hi { = s + s & # i . m a 255 = a + a 1 }
     ^ s
 }
 
@@ -41,7 +45,7 @@ $ `stdlib/ext/env.nu`
     : !( Vec u ) IoErr rr ( read_file_bytes rompath )
     ?? rr {
         F _ → { ( nurl_print `cannot read ROM\n` ) ^ 2 }
-        T rom → { ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) )  ( vec_free [u] rom ) }
+        T rom → { ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) ) ( vec_free [u] rom ) }
     }
     : *u m2 ( mem_raw )
     : ~ i fi 0
@@ -79,12 +83,12 @@ $ `stdlib/ext/env.nu`
     : i h12 | & # i . s2 24 255 << & # i . s2 25 255 8
     : i h13 | & # i . s2 26 255 << & # i . s2 27 255 8
     : i h14 | & # i . s2 28 255 << & # i . s2 29 255 8
-    = ra h0  = rf h1  = rb h2  = rc h3  = rd h4  = re h5  = rh h6  = rl h7
-    = sp h8  = pc h9  = g_div h10  = g_rombank h11  = g_rambank h12  = g_ram_en h13  = g_mode h14
-    = g_ime 1  = g_halt 0  = g_dot 0
+    = ra h0 = rf h1 = rb h2 = rc h3 = rd h4 = re h5 = rh h6 = rl h7
+    = sp h8 = pc h9 = g_div h10 = g_rombank h11 = g_rambank h12 = g_ram_en h13 = g_mode h14
+    = g_ime 1 = g_halt 0 = g_dot 0
     : *u m ( mem_raw )
     : ~ i i 0x8000
-    ~ < i 0x10000 { = . m i # u & # i . s2 + 30 - i 0x8000 255  = i + i 1 }
+    ~ < i 0x10000 { = . m i # u & # i . s2 + 30 - i 0x8000 255 = i + i 1 }
     : ~ i fr 0
     ~ < fr nframes {
         ( run_full_frame )
@@ -126,7 +130,7 @@ $ `stdlib/ext/env.nu`
     : !( Vec u ) IoErr rr ( read_file_bytes rompath )
     ?? rr {
         F _ → { ( nurl_print `cannot read ROM\n` ) ^ 2 }
-        T rom → { ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) )  ( vec_free [u] rom ) }
+        T rom → { ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) ) ( vec_free [u] rom ) }
     }
     : !( Vec u ) IoErr sr ( read_file_bytes statepath )
     ?? sr {
@@ -140,7 +144,7 @@ $ `stdlib/ext/env.nu`
     : !( Vec u ) IoErr rr ( read_file_bytes rompath )
     ?? rr {
         F _ → { ( nurl_print `cannot read ROM\n` ) ^ 2 }
-        T rom → { ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) )  ( vec_free [u] rom ) }
+        T rom → { ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) ) ( vec_free [u] rom ) }
     }
     ~ < g_frames fromf { ( run_one_frame ) }
     : ~ i k 0
@@ -174,30 +178,30 @@ $ `stdlib/ext/env.nu`
     } {}
     : ~ s path ``
     : ~ s mode ``
-    ?? ( vec_get [String] args 1 ) { T a → = path ( string_data a )  F _ → {} }
-    ?? ( vec_get [String] args 2 ) { T a → = mode ( string_data a )  F _ → {} }
+    ?? ( vec_get [String] args 1 ) { T a → = path ( string_data a ) F _ → {} }
+    ?? ( vec_get [String] args 2 ) { T a → = mode ( string_data a ) F _ → {} }
     ? ( nurl_str_eq mode `--fp` ) {
         : ~ i nf 200
-        ?? ( vec_get [String] args 3 ) { T b → = nf ( nurl_str_to_int ( string_data b ) )  F _ → {} }
+        ?? ( vec_get [String] args 3 ) { T b → = nf ( nurl_str_to_int ( string_data b ) ) F _ → {} }
         ^ ( fp_run path nf )
     } {}
     ? ( nurl_str_eq mode `--inject` ) {
         : ~ s sp ``
-        ?? ( vec_get [String] args 3 ) { T b → = sp ( string_data b )  F _ → {} }
+        ?? ( vec_get [String] args 3 ) { T b → = sp ( string_data b ) F _ → {} }
         ^ ( inject_run path sp 1 )
     } {}
     ? ( nurl_str_eq mode `--injfree` ) {
         : ~ s sp ``
         : ~ i nf 1
-        ?? ( vec_get [String] args 3 ) { T b → = sp ( string_data b )  F _ → {} }
-        ?? ( vec_get [String] args 4 ) { T b → = nf ( nurl_str_to_int ( string_data b ) )  F _ → {} }
+        ?? ( vec_get [String] args 3 ) { T b → = sp ( string_data b ) F _ → {} }
+        ?? ( vec_get [String] args 4 ) { T b → = nf ( nurl_str_to_int ( string_data b ) ) F _ → {} }
         ^ ( inject_run path sp nf )
     } {}
     ? ( nurl_str_eq mode `--trace` ) {
         : ~ i ff 0
         : ~ i ns 100
-        ?? ( vec_get [String] args 3 ) { T b → = ff ( nurl_str_to_int ( string_data b ) )  F _ → {} }
-        ?? ( vec_get [String] args 4 ) { T b → = ns ( nurl_str_to_int ( string_data b ) )  F _ → {} }
+        ?? ( vec_get [String] args 3 ) { T b → = ff ( nurl_str_to_int ( string_data b ) ) F _ → {} }
+        ?? ( vec_get [String] args 4 ) { T b → = ns ( nurl_str_to_int ( string_data b ) ) F _ → {} }
         ^ ( trace_run path ff ns )
     } {}
     ( nurl_print `unknown mode\n` )

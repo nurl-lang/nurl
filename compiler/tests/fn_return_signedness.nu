@@ -14,10 +14,14 @@
 // main returns the number of failed checks (0 = all pass).
 
 @ ret_u → u { ^ # u 200 }
+
 @ ret_i8 → i8 { ^ # i8 200 }
+
 @ ret_u16 → u16 { ^ # u16 50000 }
+
 @ ret_u32 → u32 { ^ # u32 2147483649 }
-@ add_u u a u b → u { ^ + a b }       // unsigned return computed from params
+
+@ add_u u a u b → u { ^ + a b }  // unsigned return computed from params
 
 @ chk i got i want s tag → i {
     ? == got want {

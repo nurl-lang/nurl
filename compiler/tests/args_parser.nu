@@ -14,7 +14,7 @@ $ `stdlib/core/vec.nu`
 }
 
 // Compare an owned ?String to an expected literal; frees the payload.
-@ expect_val ?String got s exp s label → i {
+@ expect_val ? String got s exp s label → i {
     : ~ i bad 1
     ?? got {
         T s → {
@@ -42,11 +42,11 @@ $ `stdlib/core/vec.nu`
     : ~ i fails 0
 
     : ArgParser p ( args_new `demo` `a demo tool` )
-    ( args_flag p `verbose` 118 `be loud` )       // -v
+    ( args_flag p `verbose` 118 `be loud` )  // -v
     ( args_opt p `output` 111 `FILE` `out path` )  // -o
-    ( args_opt p `count` 99 `N` `repeat count` )    // -c
-    ( args_flag p `aa` 97 `flag a` )               // -a
-    ( args_flag p `bb` 98 `flag b` )               // -b
+    ( args_opt p `count` 99 `N` `repeat count` )  // -c
+    ( args_flag p `aa` 97 `flag a` )  // -a
+    ( args_flag p `bb` 98 `flag b` )  // -b
 
     : ( Vec String ) toks ( vec_new [String] )
     ( push_tok toks `-v` )

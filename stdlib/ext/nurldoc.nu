@@ -69,7 +69,7 @@ $ `stdlib/core/vec.nu`
 // Append the comment text of a `//` line (with the leading `// ` or `//`
 // stripped) to `out`, plus a newline.
 @ __nd_push_comment_body String out s p i st i en → v {
-    : ~ i k + st 2                            // past `//`
+    : ~ i k + st 2  // past `//`
     ? & < k en == ( nurl_str_get p k ) 32 { = k + k 1 } {}  // one optional space
     ~ < k en { ( string_push_char out ( nurl_str_get p k ) ) = k + k 1 }
     ( string_push_char out 10 )
@@ -135,13 +135,13 @@ $ `stdlib/core/vec.nu`
     ( string_push_str out title )
     ( string_push_str out `\n\n` )
 
-    : String header ( string_with_cap 256 )   // top `//` block (module prose)
-    : ~ String pending ( string_with_cap 256 )   // doc comment(s) above next decl
+    : String header ( string_with_cap 256 )  // top `//` block (module prose)
+    : ~ String pending ( string_with_cap 256 )  // doc comment(s) above next decl
     : String body ( string_with_cap + n 256 )  // accumulated "## API" entries
 
     : ~ i pos 0
     : ~ i depth 0
-    : ~ b header_done F   // true once we leave the leading comment block
+    : ~ b header_done F  // true once we leave the leading comment block
     : ~ b any_decl F
     : ~ i pending_n 0
 
@@ -174,7 +174,7 @@ $ `stdlib/core/vec.nu`
                     ? ( __nd_is_decl content sp le ) {
                         = any_decl T
                         ( string_push_str body `### ` )
-                        ( string_push_char body 96 )           // markdown `
+                        ( string_push_char body 96 )  // markdown `
                         ( __nd_push_signature body content sp le ( __nd_is_fn content sp le ) )
                         ( string_push_char body 96 )
                         ( string_push_str body `\n\n` )

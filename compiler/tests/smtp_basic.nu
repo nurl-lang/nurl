@@ -19,12 +19,12 @@ $ `stdlib/ext/smtp.nu`
     ~ < k n {
         : i ch ( string_get v k )
         ? == ch 13 { ( nurl_print `<CR>` ) } {
-        ? == ch 10 { ( nurl_print `<LF>\n` ) } {
-            : String c ( string_with_cap 2 )
-            ( string_push_char c ch )
-            ( nurl_print ( string_data c ) )
-            ( string_free c )
-        } }
+            ? == ch 10 { ( nurl_print `<LF>\n` ) } {
+                : String c ( string_with_cap 2 )
+                ( string_push_char c ch )
+                ( nurl_print ( string_data c ) )
+                ( string_free c )
+            } }
         = k + k 1
     }
     ( nurl_print `\n` )

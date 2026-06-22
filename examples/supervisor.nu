@@ -34,21 +34,21 @@ $ `stdlib/std/supervisor.nu`
 
     // alpha: runs once, cleanly.
     ( supervisor_add sup `alpha` @ RestartPolicy { RTransient }
-        \ → v { ( say `alpha` `working… done` ) } )
+    \ → v { ( say `alpha` `working… done` ) } )
 
     // beta: crashes the first time, succeeds when restarted.
     : *i bc ( make_counter )
     ( supervisor_add sup `beta` @ RestartPolicy { RTransient }
-        \ → v {
-            : i n + 1 ( nurl_peek bc 0 )
-            ( nurl_poke bc 0 n )
-            ? == n 1 {
-                ( say `beta` `crashing on first attempt!` )
-                ( panic `beta failed` )
-            } {
-                ( say `beta` `recovered, working… done` )
-            }
-        } )
+    \ → v {
+        : i n + 1 ( nurl_peek bc 0 )
+        ( nurl_poke bc 0 n )
+        ? == n 1 {
+            ( say `beta` `crashing on first attempt!` )
+            ( panic `beta failed` )
+        } {
+            ( say `beta` `recovered, working… done` )
+        }
+    } )
 
     ( nurl_print `supervisor starting children…\n` )
     ( supervisor_run sup )

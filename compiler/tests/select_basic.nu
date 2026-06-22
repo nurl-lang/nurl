@@ -59,8 +59,8 @@ $ `stdlib/core/string.nu`
     ( chan_send [i] a 1 )
     ( chan_send [i] b 2 )
     ?? {
-        [i] a → oa { ?? oa { T v → { ( nurl_print `prio a=` ) ( nurl_print_int v ) } F → { } } }
-        [i] b → ob { ?? ob { T v → { ( nurl_print `prio b=` ) ( nurl_print_int v ) } F → { } } }
+        [i] a → oa { ?? oa { T v → { ( nurl_print `prio a=` ) ( nurl_print_int v ) } F → {} } }
+        [i] b → ob { ?? ob { T v → { ( nurl_print `prio b=` ) ( nurl_print_int v ) } F → {} } }
         _ → { ( nurl_print `prio default\n` ) }
     }
     ( chan_close [i] a ) ( chan_close [i] b )

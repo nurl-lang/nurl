@@ -72,10 +72,13 @@ $ `stdlib/ext/json.nu`
 $ `stdlib/ext/cluster.nu`
 
 // Wire fn-ids registered on the cluster Registry.
-@ __wire_send  → s { ^ `dchan/send` }
-@ __wire_recv  → s { ^ `dchan/recv` }
+@ __wire_send → s { ^ `dchan/send` }
+
+@ __wire_recv → s { ^ `dchan/recv` }
+
 @ __wire_close → s { ^ `dchan/close` }
-@ __wire_len   → s { ^ `dchan/len` }
+
+@ __wire_len → s { ^ `dchan/len` }
 
 // ── Server: bounded, thread-safe per-name Json queues ────────────────
 //
@@ -92,7 +95,7 @@ $ `stdlib/ext/cluster.nu`
 
 : DStoreEntry {
     String name
-    s q            // *DQueue
+    s q  // *DQueue
 }
 
 : DStore {
@@ -144,7 +147,7 @@ $ `stdlib/ext/cluster.nu`
         : ?DStoreEntry ek ( vec_get [DStoreEntry] . s entries idx )
         ^ ?? ek {
             T e → # *DQueue . e q
-            F → ( __dq_new . s default_cap )   // unreachable
+            F → ( __dq_new . s default_cap )  // unreachable
         }
     } {}
     : *DQueue q ( __dq_new . s default_cap )
@@ -164,7 +167,7 @@ $ `stdlib/ext/cluster.nu`
     ( mutex_unlock . s m )
 }
 
-@ __dq_free *DQueue q → v {
+@ __dq_free * DQueue q → v {
     ( vec_free_with [Json] . q items \ Json j → v { ( json_free j ) } )
     ( mutex_free . q m )
     ( nurl_free # s q )
@@ -190,9 +193,9 @@ $ `stdlib/ext/cluster.nu`
 // ── Server: the four handlers ────────────────────────────────────────
 
 @ __dchan_h_send DStore store Json args → !Json ClusterErr {
-    : ?Json chj ( json_obj_get args `ch` )      // borrow
+    : ?Json chj ( json_obj_get args `ch` )  // borrow
     : s name ?? chj { T x → ( json_as_str x ) F → `` }
-    : ?Json vj ( json_obj_get args `v` )         // borrow
+    : ?Json vj ( json_obj_get args `v` )  // borrow
 
     ( mutex_lock . store m )
     : *DQueue q ( __dstore_get_or_create store name )
@@ -227,9 +230,9 @@ $ `stdlib/ext/cluster.nu`
     ( mutex_lock . q m )
     : Json res ? > ( vec_len [Json] . q items ) 0 {
         : Json env ( __status_env `ok` )
-        : ?Json popped ( vec_remove [Json] . q items 0 )    // owned
+        : ?Json popped ( vec_remove [Json] . q items 0 )  // owned
         ?? popped {
-            T pv → { ( json_obj_set env `v` pv ) }           // move into env
+            T pv → { ( json_obj_set env `v` pv ) }  // move into env
             F → {}
         }
         env
@@ -298,7 +301,7 @@ $ `stdlib/ext/cluster.nu`
     DSendOk
     DSendFull
     DSendClosed
-    DSendErr      // transport failure (channel unreachable)
+    DSendErr  // transport failure (channel unreachable)
 }
 
 @ dsend_name DSend d → s {
@@ -340,9 +343,9 @@ $ `stdlib/ext/cluster.nu`
 // Identity codecs for A = Json (the wire's native type).
 @ dchan_open_json Node node s name RetryPolicy pol i poll_ms → ( DChannel Json ) {
     ^ ( dchan_open [Json] node name pol poll_ms
-        \ Json v → Json { ^ ( json_clone v ) }
-        \ Json j → Json { ^ ( json_clone j ) }
-        \ Json j → v { ( json_free j ) } )
+    \ Json v → Json { ^ ( json_clone v ) }
+    \ Json j → Json { ^ ( json_clone j ) }
+    \ Json j → v { ( json_free j ) } )
 }
 
 @ dchan_free [A] ( DChannel A ) ch → v {
@@ -385,7 +388,7 @@ $ `stdlib/ext/cluster.nu`
 }
 
 // One send RPC. Returns a DSend; never consumes the caller's value.
-@ __send_once [A] *( DChannelImpl A ) impl Json payload → DSend {
+@ __send_once [A] * ( DChannelImpl A ) impl Json payload → DSend {
     : Json args ( __send_args ( string_data . impl name ) payload )
     : !Json ClusterErr rr ( call_remote_with . impl node ( __wire_send ) args . impl pol )
     ^ ?? rr {
@@ -409,7 +412,7 @@ $ `stdlib/ext/cluster.nu`
 @ dchan_send [A] ( DChannel A ) ch A v → b {
     : *( DChannelImpl A ) impl # *( DChannelImpl A ) . ch ctl
     : ( @ Json A ) e . impl enc
-    : Json payload ( e v )                       // BORROWS v
+    : Json payload ( e v )  // BORROWS v
 
     : ~ b done F
     : ~ b ok F
@@ -460,7 +463,7 @@ $ `stdlib/ext/cluster.nu`
     A val
 }
 
-@ __recv_once [A] *( DChannelImpl A ) impl → ( RecvOut A ) {
+@ __recv_once [A] * ( DChannelImpl A ) impl → ( RecvOut A ) {
     : Json args ( __name_args ( string_data . impl name ) )
     : !Json ClusterErr rr ( call_remote_with . impl node ( __wire_recv ) args . impl pol )
     : ( @ A Json ) dec . impl dec
@@ -468,7 +471,7 @@ $ `stdlib/ext/cluster.nu`
         T res → {
             : s st ( __res_status res )
             : ( RecvOut A ) out ? != 0 ( nurl_str_eq st `ok` ) {
-                : ?Json vj ( json_obj_get res `v` )       // borrow
+                : ?Json vj ( json_obj_get res `v` )  // borrow
                 : A val ?? vj { T x → ( dec x ) F → ( __dec_null [A] impl ) }
                 @ ( RecvOut A ) { 2 val }
             } {
@@ -484,7 +487,7 @@ $ `stdlib/ext/cluster.nu`
 
 // A throwaway A produced via dec(null) — placeholder for non-ok recvs and
 // for initialising mutable bindings. Always paired with a drop.
-@ __dec_null [A] *( DChannelImpl A ) impl → A {
+@ __dec_null [A] * ( DChannelImpl A ) impl → A {
     : ( @ A Json ) dec . impl dec
     : Json n ( json_null )
     : A a ( dec n )
@@ -504,22 +507,22 @@ $ `stdlib/ext/cluster.nu`
     ~ ! done {
         : ( RecvOut A ) ro ( __recv_once [A] impl )
         ? == . ro tag 2 {
-            ( dr result )            // release the prior placeholder
+            ( dr result )  // release the prior placeholder
             = result . ro val
             = have T
             = done T
         } {
-            ( dr . ro val )          // discard placeholder
+            ( dr . ro val )  // discard placeholder
             ? == . ro tag 0 {
                 ( sleep_ms wait )
                 = wait ( __poll_grow wait )
-            } { = done T }           // closed or transport error → give up
+            } { = done T }  // closed or transport error → give up
         }
     }
     ? have {
         ^ @ ?A { T result }
     } {}
-    ( dr result )                    // discard the unused placeholder
+    ( dr result )  // discard the unused placeholder
     ^ @ ?A { F # A 0 }
 }
 

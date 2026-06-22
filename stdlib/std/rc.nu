@@ -73,7 +73,6 @@
 //   // each rc_clone'd recipient also calls rc_free_with on shutdown;
 //   // the last one runs the drop closure.
 
-
 : RcImpl [T] {
     i count
     T value

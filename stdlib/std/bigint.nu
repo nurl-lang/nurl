@@ -51,13 +51,15 @@ $ `stdlib/core/vec.nu`
 }
 
 @ __big_base → i { ^ 65536 }
+
 @ __big_mask → i { ^ 65535 }
+
 @ __big_shift → i { ^ 16 }
 
 // Safe limb read: out-of-range index reads as 0 (lets add/sub treat a
 // shorter operand as zero-extended).
 @ __limb ( Vec i ) v i k → i {
-    ^ ?? ( vec_get [i] v k ) { T x → x  F _ → 0 }
+    ^ ?? ( vec_get [i] v k ) { T x → x F _ → 0 }
 }
 
 // Drop high-order zero limbs so the magnitude is canonical (zero = empty).

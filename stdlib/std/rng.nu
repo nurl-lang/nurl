@@ -41,7 +41,6 @@
 //   : i b ( rng_next g )          // a != b; stream is deterministic
 //   ( rng_free g )
 
-
 // ── State ────────────────────────────────────────────────────────────
 
 // 256-bit xoshiro state. Heap-allocated; `Rng` is a single-pointer

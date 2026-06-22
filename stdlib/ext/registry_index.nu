@@ -39,7 +39,7 @@ $ `stdlib/ext/semver.nu`
 
 : IdxDep {
     String name
-    String req       // semver requirement
+    String req  // semver requirement
 }
 
 : IdxVersion {
@@ -55,8 +55,8 @@ $ `stdlib/ext/semver.nu`
 }
 
 : | RegIndexErr {
-    RegIdxParseFailed   // not valid JSON
-    RegIdxBadShape      // JSON parsed but isn't an index object
+    RegIdxParseFailed  // not valid JSON
+    RegIdxBadShape  // JSON parsed but isn't an index object
 }
 
 @ regindex_err_name RegIndexErr e → s {

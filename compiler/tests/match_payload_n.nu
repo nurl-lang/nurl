@@ -18,12 +18,12 @@
 
 $ `stdlib/std/float.nu`
 
-: Pt { i px  i py }
+: Pt { i px i py }
 
 : | E {
     Quad i i i i
     Five i f s i i
-    WithPtr i i i *Pt
+    WithPtr i i i * Pt
     Leaf
 }
 
@@ -36,7 +36,7 @@ $ `stdlib/std/float.nu`
     : E q @ E { Quad 10 20 30 40 }
     ?? q {
         Quad a b c d → { ( ck & & & == a 10 == b 20 == c 30 == d 40 `quad_4bind` ) }
-        Five p w x y z → {}  WithPtr a b c r → {}  Leaf → {}
+        Five p w x y z → {} WithPtr a b c r → {} Leaf → {}
     }
 
     // 5 payloads, mixed int / float / string across slots 0..4
@@ -46,7 +46,7 @@ $ `stdlib/std/float.nu`
         Five p w x y z → {
             ( ck & & & & == p 7 == # i w 2 != 0 ( nurl_str_eq x `hi` ) == y 99 == z 123 `five_mixed` )
         }
-        WithPtr a b c r → {}  Leaf → {}
+        WithPtr a b c r → {} Leaf → {}
     }
 
     // pointer payload at slot 3
@@ -54,7 +54,7 @@ $ `stdlib/std/float.nu`
     = . pp px 8
     : E w @ E { WithPtr 1 2 3 pp }
     ?? w {
-        Quad a b c d → {}  Five p ww x y z → {}
+        Quad a b c d → {} Five p ww x y z → {}
         WithPtr a b c r → { ( ck & & == a 1 == c 3 == . r px 8 `withptr_slot3` ) }
         Leaf → {}
     }
@@ -64,14 +64,14 @@ $ `stdlib/std/float.nu`
     ?? q {
         Quad a b c 40 → { ( ck T `quad_slot3_lit` ) }
         Quad a b c d → { ( ck F `quad_slot3_lit` ) }
-        Five p ww x y z → {}  WithPtr a b c r → {}  Leaf → {}
+        Five p ww x y z → {} WithPtr a b c r → {} Leaf → {}
     }
 
     // guard that reads a slot-3 binding (guard runs AFTER payload binding)
     ?? q {
         Quad a b c d ? == d 40 → { ( ck T `quad_guard_slot3` ) }
         Quad a b c d → { ( ck F `quad_guard_slot3` ) }
-        Five p ww x y z → {}  WithPtr a b c r → {}  Leaf → {}
+        Five p ww x y z → {} WithPtr a b c r → {} Leaf → {}
     }
 
     ^ 0

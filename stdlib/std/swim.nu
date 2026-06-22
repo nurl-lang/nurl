@@ -46,7 +46,7 @@ $ `stdlib/std/async.nu`
 }
 
 @ __state_code MemberState s → i {
-    ^ ?? s { MAlive → 0  MSuspect → 1  MDead → 2 }
+    ^ ?? s { MAlive → 0 MSuspect → 1 MDead → 2 }
 }
 
 @ __state_of i c → MemberState {
@@ -80,13 +80,13 @@ $ `stdlib/std/async.nu`
 : | SwimMsgType {
     MtPing
     MtAck
-    MtPingReq    // indirect probe request: "please ping target for me"
+    MtPingReq  // indirect probe request: "please ping target for me"
     MtJoin
     MtJoinAck
 }
 
 @ __mtype_code SwimMsgType t → i {
-    ^ ?? t { MtPing → 1  MtAck → 2  MtPingReq → 3  MtJoin → 4  MtJoinAck → 5 }
+    ^ ?? t { MtPing → 1 MtAck → 2 MtPingReq → 3 MtJoin → 4 MtJoinAck → 5 }
 }
 
 @ __mtype_of i c → SwimMsgType {
@@ -120,12 +120,12 @@ $ `stdlib/std/async.nu`
 // ── Wire codec ───────────────────────────────────────────────────────
 
 : | SwimErr {
-    SwShort      // truncated datagram
-    SwBadType    // unknown message type byte
+    SwShort  // truncated datagram
+    SwBadType  // unknown message type byte
 }
 
 @ swim_err_name SwimErr e → s {
-    ^ ?? e { SwShort → `SwShort`  SwBadType → `SwBadType` }
+    ^ ?? e { SwShort → `SwShort` SwBadType → `SwBadType` }
 }
 
 // u16-length-prefixed string.
@@ -137,12 +137,12 @@ $ `stdlib/std/async.nu`
 // Read the u16-prefixed string starting at `off`. Returns the String;
 // the caller advances `off` by 2 + its byte length.
 @ __sw_get_str ( Vec u ) b i off → String {
-    : i n ?? ( bytes_read_u16_be b off ) { T x → # i x  F → 0 }
+    : i n ?? ( bytes_read_u16_be b off ) { T x → # i x F → 0 }
     : String s ( string_with_cap n )
     : ~ i k 0
     ~ < k n {
         : ?u byte ( vec_get [u] b + + off 2 k )
-        ?? byte { T bb → ( string_push_char s # i bb )  F → {} }
+        ?? byte { T bb → ( string_push_char s # i bb ) F → {} }
         = k + k 1
     }
     ^ s
@@ -180,37 +180,37 @@ $ `stdlib/std/async.nu`
     : i len ( vec_len [u] b )
     ? < len 1 { ^ @ !SwimMsg SwimErr { F @ SwimErr { SwShort } } } {}
 
-    : i tc ?? ( vec_get [u] b 0 ) { T x → # i x  F → 0 }
+    : i tc ?? ( vec_get [u] b 0 ) { T x → # i x F → 0 }
     ? | < tc 1 > tc 5 { ^ @ !SwimMsg SwimErr { F @ SwimErr { SwBadType } } } {}
     : SwimMsgType mt ( __mtype_of tc )
     : ~ i off 1
 
-    : i seq ?? ( bytes_read_u32_be b off ) { T x → # i x  F → 0 }
+    : i seq ?? ( bytes_read_u32_be b off ) { T x → # i x F → 0 }
     = off + off 4
 
     : String fh ( __sw_get_str b off )
     = off + + off 2 ( string_len fh )
-    : i fp ?? ( bytes_read_u16_be b off ) { T x → # i x  F → 0 }
+    : i fp ?? ( bytes_read_u16_be b off ) { T x → # i x F → 0 }
     = off + off 2
 
     : String th ( __sw_get_str b off )
     = off + + off 2 ( string_len th )
-    : i tp ?? ( bytes_read_u16_be b off ) { T x → # i x  F → 0 }
+    : i tp ?? ( bytes_read_u16_be b off ) { T x → # i x F → 0 }
     = off + off 2
 
-    : i gn ?? ( bytes_read_u16_be b off ) { T x → # i x  F → 0 }
+    : i gn ?? ( bytes_read_u16_be b off ) { T x → # i x F → 0 }
     = off + off 2
 
     : ( Vec Member ) gossip ( vec_new [Member] )
     : ~ i k 0
     ~ < k gn {
-        : i sc ?? ( vec_get [u] b off ) { T x → # i x  F → 0 }
+        : i sc ?? ( vec_get [u] b off ) { T x → # i x F → 0 }
         = off + off 1
-        : i inc ?? ( bytes_read_u32_be b off ) { T x → # i x  F → 0 }
+        : i inc ?? ( bytes_read_u32_be b off ) { T x → # i x F → 0 }
         = off + off 4
         : String mh ( __sw_get_str b off )
         = off + + off 2 ( string_len mh )
-        : i mp ?? ( bytes_read_u16_be b off ) { T x → # i x  F → 0 }
+        : i mp ?? ( bytes_read_u16_be b off ) { T x → # i x F → 0 }
         = off + off 2
         ( vec_push [Member] gossip
         @ Member { mh mp inc ( __state_of sc ) ( monotonic_ns ) } )
@@ -248,7 +248,7 @@ $ `stdlib/std/async.nu`
     ^ t
 }
 
-@ mtable_free *MemberTable t → v {
+@ mtable_free * MemberTable t → v {
     ( vec_free_with [Member] . t members \ Member mm → v { ( member_free mm ) } )
     ( mutex_free . t m )
     ( string_free . t self_host )
@@ -265,7 +265,7 @@ $ `stdlib/std/async.nu`
 }
 
 // Index of (host,port) in members, or -1. Caller holds the lock.
-@ __mtable_find *MemberTable t s host i port → i {
+@ __mtable_find * MemberTable t s host i port → i {
     : i n ( vec_len [Member] . t members )
     : ~ i found - 0 1
     : ~ b done F
@@ -274,7 +274,7 @@ $ `stdlib/std/async.nu`
         ?? ( vec_get [Member] . t members k ) {
             T mm → {
                 ? ( __addr_eq ( string_data . mm host ) . mm port host port ) {
-                    = found k  = done T
+                    = found k = done T
                 } {}
             }
             F → {}
@@ -287,7 +287,7 @@ $ `stdlib/std/async.nu`
 // Merge one membership update under SWIM precedence. Returns T if the
 // local view changed in a way worth re-gossiping (state transition, new
 // member, or self-refutation). `up` is BORROWED (caller still owns it).
-@ mtable_apply *MemberTable t Member up → b {
+@ mtable_apply * MemberTable t Member up → b {
     ( mutex_lock . t m )
     : s uh ( string_data . up host )
     : i up_port . up port
@@ -310,7 +310,7 @@ $ `stdlib/std/async.nu`
         ^ T
     } {}
 
-    : Member cur ?? ( vec_get [Member] . t members idx ) { T x → x  F → up }
+    : Member cur ?? ( vec_get [Member] . t members idx ) { T x → x F → up }
     : i ci . cur incarnation
     : i cs ( __state_code . cur state )
 
@@ -318,13 +318,13 @@ $ `stdlib/std/async.nu`
     // higher inc or equal-inc-over-Alive; Dead wins on >= inc.
     : b accept ? == us 0 { > ui ci }
     { ? == us 1 { | > ui ci & == ui ci == cs 0 }
-      { >= ui ci } }
+        { >= ui ci } }
 
     ? accept {
         : Member nm @ Member { . cur host up_port ui . up state ( monotonic_ns ) }
         ( vec_set [Member] . t members idx nm )
         ( mutex_unlock . t m )
-        ^ != us cs               // re-gossip only on an actual state change
+        ^ != us cs  // re-gossip only on an actual state change
     } {}
     ( mutex_unlock . t m )
     ^ F
@@ -332,11 +332,11 @@ $ `stdlib/std/async.nu`
 
 // Locally mark a member Suspect after a failed probe (keeps its current
 // incarnation — a refutation must out-number it). Returns T if changed.
-@ mtable_suspect *MemberTable t s host i port → b {
+@ mtable_suspect * MemberTable t s host i port → b {
     ( mutex_lock . t m )
     : i idx ( __mtable_find t host port )
     ? < idx 0 { ( mutex_unlock . t m ) ^ F } {}
-    : Member cur ?? ( vec_get [Member] . t members idx ) { T x → x  F → ( member_new host port 0 @ MemberState { MAlive } ) }
+    : Member cur ?? ( vec_get [Member] . t members idx ) { T x → x F → ( member_new host port 0 @ MemberState { MAlive } ) }
     ? == ( __state_code . cur state ) 0 {
         : Member nm @ Member { . cur host port . cur incarnation @ MemberState { MSuspect } ( monotonic_ns ) }
         ( vec_set [Member] . t members idx nm )
@@ -349,7 +349,7 @@ $ `stdlib/std/async.nu`
 
 // Promote Suspect → Dead once the suspicion has aged past the timeout.
 // Returns the newly-dead members (owned copies) for gossip dissemination.
-@ mtable_sweep *MemberTable t → ( Vec Member ) {
+@ mtable_sweep * MemberTable t → ( Vec Member ) {
     ( mutex_lock . t m )
     : ( Vec Member ) dead ( vec_new [Member] )
     : i now ( monotonic_ns )
@@ -376,7 +376,7 @@ $ `stdlib/std/async.nu`
 }
 
 // Self as an Alive member snapshot (for gossip + join).
-@ mtable_self *MemberTable t → Member {
+@ mtable_self * MemberTable t → Member {
     ( mutex_lock . t m )
     : Member s @ Member { ( string_from ( string_data . t self_host ) ) . t self_port . t self_incarnation @ MemberState { MAlive } ( monotonic_ns ) }
     ( mutex_unlock . t m )
@@ -385,7 +385,7 @@ $ `stdlib/std/async.nu`
 
 // Pick a random member that is worth probing (Alive or Suspect). None
 // when the table has no such member. Returns an owned copy.
-@ mtable_pick_probe *MemberTable t → ?Member {
+@ mtable_pick_probe * MemberTable t → ?Member {
     ( mutex_lock . t m )
     : ( Vec i ) cand ( vec_new [i] )
     : i n ( vec_len [Member] . t members )
@@ -403,7 +403,7 @@ $ `stdlib/std/async.nu`
         ( mutex_unlock . t m )
         ^ @ ?Member { F # Member 0 }
     } {}
-    : i pick ?? ( vec_get [i] cand ( rng_below . t rng cn ) ) { T x → x  F → 0 }
+    : i pick ?? ( vec_get [i] cand ( rng_below . t rng cn ) ) { T x → x F → 0 }
     ( vec_free [i] cand )
     : ?Member out ?? ( vec_get [Member] . t members pick ) {
         T mm → @ ?Member { T ( __member_copy mm ) }
@@ -415,7 +415,7 @@ $ `stdlib/std/async.nu`
 
 // Up to `k` random members other than (host,port) — the indirect-probe
 // relays. Owned copies.
-@ mtable_pick_relays *MemberTable t i k s ex_host i ex_port → ( Vec Member ) {
+@ mtable_pick_relays * MemberTable t i k s ex_host i ex_port → ( Vec Member ) {
     ( mutex_lock . t m )
     : ( Vec i ) cand ( vec_new [i] )
     : i n ( vec_len [Member] . t members )
@@ -437,12 +437,12 @@ $ `stdlib/std/async.nu`
     : ~ i taken 0
     ~ & < taken k > ( vec_len [i] cand ) 0 {
         : i ci ( rng_below . t rng ( vec_len [i] cand ) )
-        : i mi ?? ( vec_get [i] cand ci ) { T x → x  F → 0 }
+        : i mi ?? ( vec_get [i] cand ci ) { T x → x F → 0 }
         ?? ( vec_get [Member] . t members mi ) {
             T mm → ( vec_push [Member] out ( __member_copy mm ) )
             F → {}
         }
-        ( vec_remove [i] cand ci )     // sample without replacement
+        ( vec_remove [i] cand ci )  // sample without replacement
         = taken + taken 1
     }
     ( vec_free [i] cand )
@@ -451,7 +451,7 @@ $ `stdlib/std/async.nu`
 }
 
 // Gossip sample: self (Alive) plus up to `max` random members. Owned.
-@ mtable_gossip *MemberTable t i max → ( Vec Member ) {
+@ mtable_gossip * MemberTable t i max → ( Vec Member ) {
     : ( Vec Member ) g ( vec_new [Member] )
     ( vec_push [Member] g ( mtable_self t ) )
     ( mutex_lock . t m )
@@ -470,7 +470,7 @@ $ `stdlib/std/async.nu`
     ^ g
 }
 
-@ mtable_count *MemberTable t → i {
+@ mtable_count * MemberTable t → i {
     ( mutex_lock . t m )
     : i n ( vec_len [Member] . t members )
     ( mutex_unlock . t m )
@@ -478,7 +478,7 @@ $ `stdlib/std/async.nu`
 }
 
 // All members (excluding self) as owned copies — for inspection / UIs.
-@ mtable_snapshot *MemberTable t → ( Vec Member ) {
+@ mtable_snapshot * MemberTable t → ( Vec Member ) {
     ( mutex_lock . t m )
     : ( Vec Member ) out ( vec_new [Member] )
     : i n ( vec_len [Member] . t members )
@@ -495,7 +495,7 @@ $ `stdlib/std/async.nu`
 }
 
 // State of (host,port) as a code (0/1/2), or -1 if unknown. For tests.
-@ mtable_state_of *MemberTable t s host i port → i {
+@ mtable_state_of * MemberTable t s host i port → i {
     ( mutex_lock . t m )
     : i idx ( __mtable_find t host port )
     : i st ? < idx 0 - 0 1 ?? ( vec_get [Member] . t members idx ) { T mm → ( __state_code . mm state ) F → - 0 1 }
@@ -528,18 +528,18 @@ $ `stdlib/std/async.nu`
 }
 
 : SwimNode {
-    *MemberTable table
+    * MemberTable table
     UdpSocket sock
     String host
     i port
     Mutex ack_m
-    ( Vec i ) acked      // ACK seqs seen since the last sweep
+    ( Vec i ) acked  // ACK seqs seen since the last sweep
     i seq_ctr
     i period_ms
     i ping_timeout_ms
-    i indirect_k         // # of relays for an indirect (PING-REQ) probe
+    i indirect_k  // # of relays for an indirect (PING-REQ) probe
     Mutex fwd_m
-    ( Vec FwdEntry ) fwd // indirect probes we are relaying
+    ( Vec FwdEntry ) fwd  // indirect probes we are relaying
     i running
 }
 
@@ -568,11 +568,11 @@ $ `stdlib/std/async.nu`
     }
 }
 
-@ __node_table *SwimNode n → *MemberTable { ^ . n table }
+@ __node_table * SwimNode n → *MemberTable { ^ . n table }
 
-@ swim_table *SwimNode n → *MemberTable { ^ ( __node_table n ) }
+@ swim_table * SwimNode n → *MemberTable { ^ ( __node_table n ) }
 
-@ swim_node_free *SwimNode n → v {
+@ swim_node_free * SwimNode n → v {
     ( mtable_free ( __node_table n ) )
     ( udp_close . n sock )
     ( mutex_free . n ack_m )
@@ -583,7 +583,7 @@ $ `stdlib/std/async.nu`
     ( nurl_free # s n )
 }
 
-@ __node_send *SwimNode n s host i port SwimMsg m → v {
+@ __node_send * SwimNode n s host i port SwimMsg m → v {
     : ( Vec u ) bytes ( swim_msg_encode m )
     : !i NetErr r ( udp_send_to . n sock bytes host port )
     ?? r { T _ → {} F _ → {} }
@@ -591,12 +591,12 @@ $ `stdlib/std/async.nu`
 }
 
 // Build a message of `ty` carrying a fresh gossip sample.
-@ __mk_msg *SwimNode n SwimMsgType ty i seq s th i tp → SwimMsg {
+@ __mk_msg * SwimNode n SwimMsgType ty i seq s th i tp → SwimMsg {
     : ( Vec Member ) g ( mtable_gossip ( __node_table n ) 6 )
     ^ @ SwimMsg { ty seq ( string_from ( string_data . n host ) ) . n port ( string_from th ) tp g }
 }
 
-@ __apply_gossip *SwimNode n ( Vec Member ) g → v {
+@ __apply_gossip * SwimNode n ( Vec Member ) g → v {
     : i gn ( vec_len [Member] g )
     : ~ i k 0
     ~ < k gn {
@@ -608,15 +608,15 @@ $ `stdlib/std/async.nu`
     }
 }
 
-@ __handle *SwimNode n SwimMsg m → v {
+@ __handle * SwimNode n SwimMsg m → v {
     ( __apply_gossip n . m gossip )
     : i ty ( __mtype_code . m mtype )
-    ? == ty 1 {                              // PING → ACK (echo seq)
+    ? == ty 1 {  // PING → ACK (echo seq)
         : SwimMsg ack ( __mk_msg n @ SwimMsgType { MtAck } . m seq `` 0 )
         ( __node_send n ( string_data . m from_host ) . m from_port ack )
         ( swim_msg_free ack )
     } {}
-    ? == ty 2 {                              // ACK → record seq
+    ? == ty 2 {  // ACK → record seq
         ( mutex_lock . n ack_m )
         ( vec_push [i] . n acked . m seq )
         ( mutex_unlock . n ack_m )
@@ -624,19 +624,19 @@ $ `stdlib/std/async.nu`
         // it to the original requester.
         ( __try_forward_ack n . m seq )
     } {}
-    ? == ty 3 {                              // PING-REQ → probe target for peer
+    ? == ty 3 {  // PING-REQ → probe target for peer
         = . n seq_ctr + . n seq_ctr 1
         : i probe_seq . n seq_ctr
         ( mutex_lock . n fwd_m )
         ( vec_push [FwdEntry] . n fwd @ FwdEntry { probe_seq
-        ( string_from ( string_data . m from_host ) ) . m from_port . m seq
-        / ( monotonic_ns ) 1000000 } )
+            ( string_from ( string_data . m from_host ) ) . m from_port . m seq
+            / ( monotonic_ns ) 1000000 } )
         ( mutex_unlock . n fwd_m )
         : SwimMsg ping ( __mk_msg n @ SwimMsgType { MtPing } probe_seq `` 0 )
         ( __node_send n ( string_data . m target_host ) . m target_port ping )
         ( swim_msg_free ping )
     } {}
-    ? == ty 4 {                              // JOIN → reply with our view
+    ? == ty 4 {  // JOIN → reply with our view
         : SwimMsg ja ( __mk_msg n @ SwimMsgType { MtJoinAck } . m seq `` 0 )
         ( __node_send n ( string_data . m from_host ) . m from_port ja )
         ( swim_msg_free ja )
@@ -647,7 +647,7 @@ $ `stdlib/std/async.nu`
 // A target's ACK to one of our relayed probes (`probe_seq`) → forward an
 // ACK carrying the requester's original seq back to them, and drop the
 // pending entry. No-op when `seq` matches no pending relay.
-@ __try_forward_ack *SwimNode n i seq → v {
+@ __try_forward_ack * SwimNode n i seq → v {
     ( mutex_lock . n fwd_m )
     : i nn ( vec_len [FwdEntry] . n fwd )
     : ~ i idx - 0 1
@@ -655,7 +655,7 @@ $ `stdlib/std/async.nu`
     : ~ i k 0
     ~ & ! fdone < k nn {
         ?? ( vec_get [FwdEntry] . n fwd k ) {
-            T e → { ? == . e probe_seq seq { = idx k  = fdone T } {} }
+            T e → { ? == . e probe_seq seq { = idx k = fdone T } {} }
             F → {}
         }
         = k + k 1
@@ -681,7 +681,7 @@ $ `stdlib/std/async.nu`
 
 // Drop relayed probes older than 2× the ping timeout (the target never
 // answered) so the pending list can't grow without bound.
-@ __prune_fwd *SwimNode n → v {
+@ __prune_fwd * SwimNode n → v {
     ( mutex_lock . n fwd_m )
     : i now / ( monotonic_ns ) 1000000
     : i cutoff * . n ping_timeout_ms 2
@@ -697,7 +697,7 @@ $ `stdlib/std/async.nu`
     ( mutex_unlock . n fwd_m )
 }
 
-@ __recv_loop *SwimNode n → v {
+@ __recv_loop * SwimNode n → v {
     ~ != 0 . n running {
         : !UdpPacket NetErr r ( udp_recv_from . n sock 2048 )
         ?? r {
@@ -709,18 +709,18 @@ $ `stdlib/std/async.nu`
                 }
                 ( udp_packet_free pkt )
             }
-            F _ → {}                          // timeout → re-check running
+            F _ → {}  // timeout → re-check running
         }
     }
 }
 
-@ __got_ack *SwimNode n i seq → b {
+@ __got_ack * SwimNode n i seq → b {
     ( mutex_lock . n ack_m )
     : i nn ( vec_len [i] . n acked )
     : ~ b found F
     : ~ i k 0
     ~ & ! found < k nn {
-        ?? ( vec_get [i] . n acked k ) { T x → ? == x seq { = found T } {} F → {} }
+        ?? ( vec_get [i] . n acked k ) { T x → ?== x seq { = found T } {} F → {} }
         = k + k 1
     }
     ( mutex_unlock . n ack_m )
@@ -731,7 +731,7 @@ $ `stdlib/std/async.nu`
 // Returns T if any relay reports back an ACK within the ping timeout (the
 // target is alive via some path). F when no relay answers — or when there
 // are no relays to ask.
-@ __indirect_probe *SwimNode n String thost i tport → b {
+@ __indirect_probe * SwimNode n String thost i tport → b {
     = . n seq_ctr + . n seq_ctr 1
     : i iseq . n seq_ctr
     : ( Vec Member ) relays ( mtable_pick_relays ( __node_table n ) . n indirect_k ( string_data thost ) tport )
@@ -760,7 +760,7 @@ $ `stdlib/std/async.nu`
     ^ iok
 }
 
-@ __fd_loop *SwimNode n → v {
+@ __fd_loop * SwimNode n → v {
     ~ != 0 . n running {
         ( sleep_ms . n period_ms )
         : ?Member tgt ( mtable_pick_probe ( __node_table n ) )
@@ -803,7 +803,7 @@ $ `stdlib/std/async.nu`
 
 // Announce ourselves to a seed node (it learns us via the JOIN's gossip
 // and replies with its own membership).
-@ swim_join *SwimNode n s seed_host i seed_port → v {
+@ swim_join * SwimNode n s seed_host i seed_port → v {
     : SwimMsg j ( __mk_msg n @ SwimMsgType { MtJoin } 0 `` 0 )
     ( __node_send n seed_host seed_port j )
     ( swim_msg_free j )
@@ -811,9 +811,9 @@ $ `stdlib/std/async.nu`
 
 // Spawn the receiver + failure-detector fibers. Requires runtime_init /
 // runtime_run by the caller.
-@ swim_run *SwimNode n → v {
+@ swim_run * SwimNode n → v {
     ( spawn \ → v { ( __recv_loop n ) } )
     ( spawn \ → v { ( __fd_loop n ) } )
 }
 
-@ swim_stop *SwimNode n → v { = . n running 0 }
+@ swim_stop * SwimNode n → v { = . n running 0 }

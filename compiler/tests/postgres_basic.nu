@@ -92,11 +92,11 @@ $ `stdlib/ext/postgres.nu`
     // INSERT id=6 with a NULL body via the OPTION-typed params API
     // (`Vec ?String`, None = SQL NULL — internally walked with
     // `vec_get [?String]` → `??String`).
-    : ( Vec ?String ) op ( vec_with_cap [?String] 4 )
-    ( vec_push [?String] op @ ?String { T ( string_from `6` ) } )
-    ( vec_push [?String] op @ ?String { F # String 0 } )
-    ( vec_push [?String] op @ ?String { T ( string_from `106` ) } )
-    ( vec_push [?String] op @ ?String { T ( string_from `t` ) } )
+    : ( Vec ? String ) op ( vec_with_cap [? String] 4 )
+    ( vec_push [? String] op @ ?String { T ( string_from `6` ) } )
+    ( vec_push [? String] op @ ?String { F # String 0 } )
+    ( vec_push [? String] op @ ?String { T ( string_from `106` ) } )
+    ( vec_push [? String] op @ ?String { T ( string_from `t` ) } )
     : !PgResult PgErr inso ( pg_exec_params_opt c `INSERT INTO pg_notes (id, body, score, ok) VALUES ($1,$2,$3,$4)` op )
     ?? inso {
         F e → ( fail_pg c `insert_opt` e )
@@ -110,16 +110,16 @@ $ `stdlib/ext/postgres.nu`
 
     // Transaction: insert id=5 inside begin/commit.
     : !i PgErr bt ( pg_begin c )
-    ?? bt { F e → ( fail_pg c `begin` e )  T _ → {} }
+    ?? bt { F e → ( fail_pg c `begin` e ) T _ → {} }
     : ( Vec String ) tp ( vec_with_cap [String] 4 )
     ( vec_push [String] tp ( string_from `5` ) )
     ( vec_push [String] tp ( string_from `note-5` ) )
     ( vec_push [String] tp ( string_from `105` ) )
     ( vec_push [String] tp ( string_from `f` ) )
     : !PgResult PgErr tx ( pg_exec_params c `INSERT INTO pg_notes (id, body, score, ok) VALUES ($1,$2,$3,$4)` tp )
-    ?? tx { F e → ( fail_pg c `tx_insert` e )  T r → ( pg_clear r ) }
+    ?? tx { F e → ( fail_pg c `tx_insert` e ) T r → ( pg_clear r ) }
     : !i PgErr ct ( pg_commit c )
-    ?? ct { F e → ( fail_pg c `commit` e )  T _ → ( nurl_print `commit ok\n` ) }
+    ?? ct { F e → ( fail_pg c `commit` e ) T _ → ( nurl_print `commit ok\n` ) }
 
     // Prepared statement: count rows with score above a threshold.
     : !PgResult PgErr pr ( pg_prepare c `cnt` `SELECT count(*) FROM pg_notes WHERE score > $1` 1 )

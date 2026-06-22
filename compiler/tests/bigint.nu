@@ -42,7 +42,7 @@ $ `stdlib/core/errors.nu`
     ?? r {
         T b → { ^ b }
         F _ → {
-            ( nurl_print `  FAIL parse `  ) ( nurl_print lit ) ( nurl_print `\n` )
+            ( nurl_print `  FAIL parse ` ) ( nurl_print lit ) ( nurl_print `\n` )
             ( vec_push [i] fails 1 )
             ^ ( bigint_zero )
         }
@@ -193,6 +193,6 @@ $ `stdlib/core/errors.nu`
 @ main → i {
     : i f ( run )
     ? == f 0 { ( nurl_print `bigint: all checks passed\n` ) }
-            { ( nurl_print `bigint: FAILURES\n` ) }
+    { ( nurl_print `bigint: FAILURES\n` ) }
     ^ f
 }

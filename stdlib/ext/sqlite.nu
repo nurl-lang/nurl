@@ -197,7 +197,7 @@ $ `stdlib/core/vec.nu`
 
 // ── authorizer return codes (xAuth must return one of these) ──────
 // SQLITE_OK (0) = allow. The two below are the only other legal returns.
-: i SQLITE_DENY 1    // abort the SQL statement with an error
+: i SQLITE_DENY 1  // abort the SQL statement with an error
 : i SQLITE_IGNORE 2  // disallow the action but don't error (NULL/skip)
 
 // ── authorizer action codes (2nd arg to xAuth) — common subset ────
@@ -229,11 +229,11 @@ $ `stdlib/core/vec.nu`
     SqliteConstraint  // SQLITE_CONSTRAINT == 19 (unmapped extended sub-code)
     // Extended constraint sub-codes (surfaced once extended result
     // codes are enabled — they are, automatically, on every open).
-    SqliteConstraintUnique      // SQLITE_CONSTRAINT_UNIQUE     == 2067
+    SqliteConstraintUnique  // SQLITE_CONSTRAINT_UNIQUE     == 2067
     SqliteConstraintForeignKey  // SQLITE_CONSTRAINT_FOREIGNKEY == 787
-    SqliteConstraintNotNull     // SQLITE_CONSTRAINT_NOTNULL    == 1299
+    SqliteConstraintNotNull  // SQLITE_CONSTRAINT_NOTNULL    == 1299
     SqliteConstraintPrimaryKey  // SQLITE_CONSTRAINT_PRIMARYKEY == 1555
-    SqliteConstraintCheck       // SQLITE_CONSTRAINT_CHECK      == 275
+    SqliteConstraintCheck  // SQLITE_CONSTRAINT_CHECK      == 275
     SqliteMisuse  // SQLITE_MISUSE == 21
     SqliteIo  // SQLITE_IOERR == 10
     SqliteOther  // anything else, including unmapped codes

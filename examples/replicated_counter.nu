@@ -21,6 +21,7 @@ $ `stdlib/dist/replicator.nu`
 $ `stdlib/dist/identity.nu`
 
 @ pk_for i id → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + id k ) = k + k 1 } ^ v }
+
 @ group_id → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + 200 k ) = k + k 1 } ^ v }
 
 @ main → i {
@@ -50,7 +51,7 @@ $ `stdlib/dist/identity.nu`
 
             : ~ i round 0
             ~ < round 5 {
-                ( pncounter_inc ctr crep 1 )           // count our own work (pubkey-stable slot)
+                ( pncounter_inc ctr crep 1 )  // count our own work (pubkey-stable slot)
                 : ( Vec u ) wire ( pncounter_encode ctr )
                 ?? ( transport_broadcast tr g wire ) { T _ → {} F _ → {} }
                 ( vec_free [u] wire )

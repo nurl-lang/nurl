@@ -11,11 +11,10 @@
 //
 // Determinism: pure, no clock/socket/env. ASan-clean.
 
-
 : | Dir { North South East West Up Down }
 
 // Guards: same variant T appears guarded several times + once bare.
-@ classify ?i o → s {
+@ classify ? i o → s {
     ^ ?? o {
         T v ? > v 100 → `big`
         T v ? > v 0 → `small-pos`

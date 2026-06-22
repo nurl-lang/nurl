@@ -42,7 +42,7 @@ $ `stdlib/core/string.nu`
     ?? e { T p → { ( nurl_print ( nurl_str_int . p x ) ) } F _ → { ( nurl_print `none struct ok\n` ) } }
 
     // Mutable option binding: starts None (payload-less), later Some.
-    : ~ ?String m @ ?String { F }
+    : ~ ? String m @ ?String { F }
     ?? m { T s → { ( string_free s ) ( nurl_print `BUG pre\n` ) } F _ → { ( nurl_print `mut none ok\n` ) } }
     = m @ ?String { T ( string_from `replaced` ) }
     ?? m { T s → { ( nurl_print ( string_data s ) ) ( nurl_print `\n` ) ( string_free s ) } F _ → { ( nurl_print `BUG post\n` ) } }

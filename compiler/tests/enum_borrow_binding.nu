@@ -13,10 +13,11 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 : Elem { String tag ( Vec Node ) kids }
-: | Node { NText String  NElem Elem }
+: | Node { NText String NElem Elem }
 : NBox { Node n }
 
 @ mk_text s t → Node { ^ @ Node { NText ( string_from t ) } }
+
 @ mk_elem s tag → NBox { ^ @ NBox { @ Node { NElem @ Elem { ( string_from tag ) ( vec_new [Node] ) } } } }
 
 // Returns a BORROW: the first child Node aliases `parent`'s kids Vec.
@@ -24,7 +25,7 @@ $ `stdlib/core/vec.nu`
 // the shape that used to double-free.
 @ first_kid Node parent → Node {
     ?? parent {
-        NElem e → ?? ( vec_get [Node] . e kids 0 ) { T y → y  F → parent }
+        NElem e → ?? ( vec_get [Node] . e kids 0 ) { T y → y F → parent }
         NText _ → parent
     }
 }

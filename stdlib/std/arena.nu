@@ -78,7 +78,6 @@
 //   }
 //   ( arena_free scratch )
 
-
 // One contiguous buffer + its bump cursor. A GROWING arena links these
 // into a list (`next` points at the previously-current chunk); a FIXED
 // arena has exactly one. `next` is a self-referential pointer field —

@@ -5,18 +5,18 @@
 // variable as an index → a silent miscompile (clang caught the type
 // mismatch). A struct field always wins over a same-named variable.
 
-: Box { i state  i other }
+: Box { i state i other }
 
 // field name `state` collides with the parameter `state`
-@ via_ptr *Box bx i state → i { ^ + . bx state * 100 state }
+@ via_ptr * Box bx i state → i { ^ + . bx state * 100 state }
 
 // same collision, struct passed BY VALUE (was already correct — guard it)
 @ via_val Box bx i state → i { ^ + . bx state * 100 state }
 
 // field name collides with a LOCAL binding, not a parameter
-@ via_local *Box bx → i {
+@ via_local * Box bx → i {
     : i state 9
-    ^ + . bx state state    // field(.) + local — field must win on the left
+    ^ + . bx state state  // field(.) + local — field must win on the left
 }
 
 @ main → i {
@@ -26,9 +26,9 @@
 
     : Box v @ Box { 7 0 }
 
-    ( nurl_print_int ( via_ptr p 3 ) )    // field 7 + 100*3 = 307
-    ( nurl_print_int ( via_val v 3 ) )    // 307
-    ( nurl_print_int ( via_local p ) )    // field 7 + local 9 = 16
+    ( nurl_print_int ( via_ptr p 3 ) )  // field 7 + 100*3 = 307
+    ( nurl_print_int ( via_val v 3 ) )  // 307
+    ( nurl_print_int ( via_local p ) )  // field 7 + local 9 = 16
     ( nurl_free # s p )
     ^ 0
 }

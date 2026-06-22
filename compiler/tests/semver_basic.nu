@@ -115,10 +115,10 @@ $ `stdlib/core/vec.nu`
     // ── 4. max_satisfying ────────────────────────────────────────
     ( nurl_print `── max_satisfying ──\n` )
     : ( Vec Semver ) vs ( vec_new [Semver] )
-    : !Semver SemverErr a ( semver_parse `1.2.0` )  ?? a { T x → ( vec_push [Semver] vs x ) F → {} }
-    : !Semver SemverErr b ( semver_parse `1.4.2` )  ?? b { T x → ( vec_push [Semver] vs x ) F → {} }
-    : !Semver SemverErr c ( semver_parse `1.4.9` )  ?? c { T x → ( vec_push [Semver] vs x ) F → {} }
-    : !Semver SemverErr d ( semver_parse `2.0.0` )  ?? d { T x → ( vec_push [Semver] vs x ) F → {} }
+    : !Semver SemverErr a ( semver_parse `1.2.0` ) ?? a { T x → ( vec_push [Semver] vs x ) F → {} }
+    : !Semver SemverErr b ( semver_parse `1.4.2` ) ?? b { T x → ( vec_push [Semver] vs x ) F → {} }
+    : !Semver SemverErr c ( semver_parse `1.4.9` ) ?? c { T x → ( vec_push [Semver] vs x ) F → {} }
+    : !Semver SemverErr d ( semver_parse `2.0.0` ) ?? d { T x → ( vec_push [Semver] vs x ) F → {} }
     : !VersionReq SemverErr rq ( semver_req_parse `^1.2.0` )
     ?? rq {
         T r → {

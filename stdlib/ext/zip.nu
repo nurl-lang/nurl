@@ -33,18 +33,18 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
-$ `stdlib/ext/compress.nu`   // & `z` deflate/inflate FFI + zlibVersion
+$ `stdlib/ext/compress.nu`  // & `z` deflate/inflate FFI + zlibVersion
 
 & `z` @ crc32 i crc *u buf i len → i
 
 : | ZipErr {
-    ZipBadArchive    // no/garbled end-of-central-directory or headers
-    ZipUnsupported   // zip64 / encrypted / unknown compression method
-    ZipCrc           // extracted bytes fail the stored CRC-32
-    ZipInflate       // deflate stream is corrupt
-    ZipDeflate       // compression failed
-    ZipNotFound      // zip_extract_name: no such entry
-    ZipTooLarge      // would need zip64
+    ZipBadArchive  // no/garbled end-of-central-directory or headers
+    ZipUnsupported  // zip64 / encrypted / unknown compression method
+    ZipCrc  // extracted bytes fail the stored CRC-32
+    ZipInflate  // deflate stream is corrupt
+    ZipDeflate  // compression failed
+    ZipNotFound  // zip_extract_name: no such entry
+    ZipTooLarge  // would need zip64
 }
 
 @ zip_err_name ZipErr e → s {
@@ -73,11 +73,11 @@ $ `stdlib/ext/compress.nu`   // & `z` deflate/inflate FFI + zlibVersion
     ( vec_push [u] out # u & / v 16777216 255 )
 }
 
-@ __zip_rd_u16 *u p i off → i {
+@ __zip_rd_u16 * u p i off → i {
     ^ + # i . p off * # i . p + off 1 256
 }
 
-@ __zip_rd_u32 *u p i off → i {
+@ __zip_rd_u32 * u p i off → i {
     ^ + + + # i . p off * # i . p + off 1 256 * # i . p + off 2 65536 * # i . p + off 3 16777216
 }
 
@@ -96,18 +96,18 @@ $ `stdlib/ext/compress.nu`   // & `z` deflate/inflate FFI + zlibVersion
     // level 6, method 8 (deflate), windowBits −15 (raw), memLevel 8
     : i32 rc1 ( deflateInit2_ zs # i32 6 # i32 8 # i32 -15 # i32 8 # i32 0 ( zlibVersion ) # i32 zs_size )
     ? != rc1 # i32 0 { ( nurl_free # s zs ) ( vec_free [u] out ) ^ @ ?( Vec u ) { F } } {}
-    : i32 rc2 ( deflate zs # i32 4 )   // Z_FINISH
+    : i32 rc2 ( deflate zs # i32 4 )  // Z_FINISH
     : i produced ( nurl_z_total_out zs )
     : i32 _e ( deflateEnd zs )
     ( nurl_free # s zs )
-    ? != rc2 # i32 1 { ( vec_free [u] out ) ^ @ ?( Vec u ) { F } } {}   // != Z_STREAM_END
+    ? != rc2 # i32 1 { ( vec_free [u] out ) ^ @ ?( Vec u ) { F } } {}  // != Z_STREAM_END
     ? >= produced srclen { ( vec_free [u] out ) ^ @ ?( Vec u ) { F } } {}  // no gain → store
     : b _ok ( vec_set_len [u] out produced )
     ^ @ ?( Vec u ) { T out }
 }
 
 // Inflate exactly `usize` bytes out of src[off .. off+csize).
-@ __zip_inflate *u srcp i off i csize i usize → ?( Vec u ) {
+@ __zip_inflate * u srcp i off i csize i usize → ?( Vec u ) {
     : i zs_size ( nurl_native_sizeof `z_stream` )
     ? <= zs_size 0 { ^ @ ?( Vec u ) { F } } {}
     : ( Vec u ) out ( vec_with_cap [u] ? > usize 0 usize 1 )
@@ -132,14 +132,14 @@ $ `stdlib/ext/compress.nu`   // & `z` deflate/inflate FFI + zlibVersion
 
 : Zip { s ctl ( Vec u ) body ( Vec u ) central }
 
-: i ZIP_DOSDATE 33   // 1980-01-01 → (0<<9)|(1<<5)|1
+: i ZIP_DOSDATE 33  // 1980-01-01 → (0<<9)|(1<<5)|1
 
 @ zip_new → Zip {
     ^ @ Zip { ( nurl_zalloc 8 ) ( vec_new [u] ) ( vec_new [u] ) }
 }
 
 // Shared add: method 8 with `comp` bytes, or method 0 when comp is None.
-@ __zip_add_entry Zip z s name ( Vec u ) data ?( Vec u ) comp → !v ZipErr {
+@ __zip_add_entry Zip z s name ( Vec u ) data ? ( Vec u ) comp → !v ZipErr {
     : i namelen ( nurl_str_len name )
     : i usize ( vec_len [u] data )
     ? | > usize 4294967295 > namelen 65535 { ^ @ !v ZipErr { F ZipTooLarge } } {}
@@ -152,16 +152,16 @@ $ `stdlib/ext/compress.nu`   // & `z` deflate/inflate FFI + zlibVersion
     // ── local file header ──
     : ( Vec u ) b . z body
     ( __zip_push_u32 b 0x04034b50 )
-    ( __zip_push_u16 b 20 )            // version needed
-    ( __zip_push_u16 b 0 )             // flags
+    ( __zip_push_u16 b 20 )  // version needed
+    ( __zip_push_u16 b 0 )  // flags
     ( __zip_push_u16 b method )
-    ( __zip_push_u16 b 0 )             // dos time
+    ( __zip_push_u16 b 0 )  // dos time
     ( __zip_push_u16 b ZIP_DOSDATE )
     ( __zip_push_u32 b crc )
     ( __zip_push_u32 b csize )
     ( __zip_push_u32 b usize )
     ( __zip_push_u16 b namelen )
-    ( __zip_push_u16 b 0 )             // extra len
+    ( __zip_push_u16 b 0 )  // extra len
     ( bytes_extend_str b name )
     ?? comp {
         T c → {
@@ -180,21 +180,21 @@ $ `stdlib/ext/compress.nu`   // & `z` deflate/inflate FFI + zlibVersion
     // ── central directory record ──
     : ( Vec u ) cd . z central
     ( __zip_push_u32 cd 0x02014b50 )
-    ( __zip_push_u16 cd 20 )           // version made by
-    ( __zip_push_u16 cd 20 )           // version needed
-    ( __zip_push_u16 cd 0 )            // flags
+    ( __zip_push_u16 cd 20 )  // version made by
+    ( __zip_push_u16 cd 20 )  // version needed
+    ( __zip_push_u16 cd 0 )  // flags
     ( __zip_push_u16 cd method )
-    ( __zip_push_u16 cd 0 )            // dos time
+    ( __zip_push_u16 cd 0 )  // dos time
     ( __zip_push_u16 cd ZIP_DOSDATE )
     ( __zip_push_u32 cd crc )
     ( __zip_push_u32 cd csize )
     ( __zip_push_u32 cd usize )
     ( __zip_push_u16 cd namelen )
-    ( __zip_push_u16 cd 0 )            // extra
-    ( __zip_push_u16 cd 0 )            // comment
-    ( __zip_push_u16 cd 0 )            // disk start
-    ( __zip_push_u16 cd 0 )            // internal attrs
-    ( __zip_push_u32 cd 0 )            // external attrs
+    ( __zip_push_u16 cd 0 )  // extra
+    ( __zip_push_u16 cd 0 )  // comment
+    ( __zip_push_u16 cd 0 )  // disk start
+    ( __zip_push_u16 cd 0 )  // internal attrs
+    ( __zip_push_u32 cd 0 )  // external attrs
     ( __zip_push_u32 cd offset )
     ( bytes_extend_str cd name )
     ( nurl_poke . z ctl 0 + ( nurl_peek . z ctl 0 ) 1 )
@@ -221,13 +221,13 @@ $ `stdlib/ext/compress.nu`   // & `z` deflate/inflate FFI + zlibVersion
     : ~ i k 0
     ~ < k cd_len { ( vec_push [u] out . cp k ) = k + k 1 }
     ( __zip_push_u32 out 0x06054b50 )  // EOCD
-    ( __zip_push_u16 out 0 )           // disk
-    ( __zip_push_u16 out 0 )           // cd disk
+    ( __zip_push_u16 out 0 )  // disk
+    ( __zip_push_u16 out 0 )  // cd disk
     ( __zip_push_u16 out count )
     ( __zip_push_u16 out count )
     ( __zip_push_u32 out cd_len )
     ( __zip_push_u32 out cd_off )
-    ( __zip_push_u16 out 0 )           // comment len
+    ( __zip_push_u16 out 0 )  // comment len
     ( vec_free [u] . z central )
     ( nurl_free . z ctl )
     ^ out
@@ -287,7 +287,7 @@ $ `stdlib/ext/compress.nu`   // & `z` deflate/inflate FFI + zlibVersion
             : i clen ( __zip_rd_u16 p + pos 32 )
             : i lho ( __zip_rd_u32 p + pos 42 )
             : i eoff * e 7
-            ( nurl_poke entries + eoff 0 + pos 46 )   // name_off
+            ( nurl_poke entries + eoff 0 + pos 46 )  // name_off
             ( nurl_poke entries + eoff 1 nlen )
             ( nurl_poke entries + eoff 2 method )
             ( nurl_poke entries + eoff 3 csize )
@@ -338,7 +338,7 @@ $ `stdlib/ext/compress.nu`   // & `z` deflate/inflate FFI + zlibVersion
     : i lxlen ( __zip_rd_u16 p + lho 28 )
     : i doff + + + lho 30 lnlen lxlen
     ? > + doff csize n { ^ @ !( Vec u ) ZipErr { F ZipBadArchive } } {}
-    : ~ ?( Vec u ) got @ ?( Vec u ) { F }
+    : ~ ? ( Vec u ) got @ ?( Vec u ) { F }
     ? == method 0 {
         : ( Vec u ) out ( vec_with_cap [u] ? > usize 0 usize 1 )
         ( nurl_memcpy ( vec_data [u] out ) # *u + # i p doff csize )

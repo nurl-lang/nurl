@@ -17,39 +17,42 @@
 $ `stdlib/core/string.nu`
 
 // ── CPU registers ───────────────────────────────────────────────────
-: ~ i ra 0            // accumulator
-: ~ i rx 0            // index X
-: ~ i ry 0            // index Y
-: ~ i sp 0xFD         // stack pointer (stack lives at 0x0100..0x01FF)
-: ~ i pc 0            // program counter
-: ~ i rp 0x24         // processor status: N V - B D I Z C (bit5 always 1)
+: ~ i ra 0  // accumulator
+: ~ i rx 0  // index X
+: ~ i ry 0  // index Y
+: ~ i sp 0xFD  // stack pointer (stack lives at 0x0100..0x01FF)
+: ~ i pc 0  // program counter
+: ~ i rp 0x24  // processor status: N V - B D I Z C (bit5 always 1)
 
 // Status-bit masks.
 //   C 0x01  Z 0x02  I 0x04  D 0x08  B 0x10  U 0x20  V 0x40  N 0x80
 
-: ~ i g_cycles 0      // total T-cycles executed
+: ~ i g_cycles 0  // total T-cycles executed
 
 // ── Memory ──────────────────────────────────────────────────────────
-: ~ s g_mem 0         // 64 KiB flat RAM (*u, held as s)
-: ~ s g_kernal 0      // 8 KiB KERNAL ROM   ($E000-$FFFF)
-: ~ s g_basic 0       // 8 KiB BASIC ROM    ($A000-$BFFF)
-: ~ s g_chargen 0     // 4 KiB character ROM ($D000-$DFFF when CHAREN=0)
-: ~ s g_color 0       // 1 KiB colour RAM   ($D800-$DBFF)
-: ~ i g_banked 0      // 0 = flat RAM (CPU test); 1 = full C64 PLA map
-: ~ i g_p01_ddr 0     // $0000 CPU-port data-direction register
-: ~ i g_p01_data 0    // $0001 CPU-port data latch (banking bits 0-2)
+: ~ s g_mem 0  // 64 KiB flat RAM (*u, held as s)
+: ~ s g_kernal 0  // 8 KiB KERNAL ROM   ($E000-$FFFF)
+: ~ s g_basic 0  // 8 KiB BASIC ROM    ($A000-$BFFF)
+: ~ s g_chargen 0  // 4 KiB character ROM ($D000-$DFFF when CHAREN=0)
+: ~ s g_color 0  // 1 KiB colour RAM   ($D800-$DBFF)
+: ~ i g_banked 0  // 0 = flat RAM (CPU test); 1 = full C64 PLA map
+: ~ i g_p01_ddr 0  // $0000 CPU-port data-direction register
+: ~ i g_p01_data 0  // $0001 CPU-port data latch (banking bits 0-2)
 
 @ mem_raw → *u { ^ # *u g_mem }
 
 // Flat-RAM access (the byte under any ROM is always RAM).
-@ ram_rd i a → i { : *u m ( mem_raw )  ^ & # i . m & a 0xFFFF 255 }
-@ ram_wr i a i val → v { : *u m ( mem_raw )  = . m & a 0xFFFF # u & val 0xFF }
-@ rom_rd s rom i off → i { : *u r # *u rom  ^ & # i . r off 255 }
+@ ram_rd i a → i { : *u m ( mem_raw ) ^ & # i . m & a 0xFFFF 255 }
+
+@ ram_wr i a i val → v { : *u m ( mem_raw ) = . m & a 0xFFFF # u & val 0xFF }
+
+@ rom_rd s rom i off → i { : *u r # *u rom ^ & # i . r off 255 }
 
 // The $0001 read: output bits return the latch, input bits float high.
 @ port01_read → i { ^ & | & g_p01_data g_p01_ddr & ^^ g_p01_ddr 0xFF 0xFF 0xFF }
-@ bank_loram → i { ^ & ( port01_read ) 1 }        // BASIC ROM enable
-@ bank_hiram → i { ^ & >> ( port01_read ) 1 1 }   // KERNAL ROM enable
+
+@ bank_loram → i { ^ & ( port01_read ) 1 }  // BASIC ROM enable
+@ bank_hiram → i { ^ & >> ( port01_read ) 1 1 }  // KERNAL ROM enable
 @ bank_charen → i { ^ & >> ( port01_read ) 2 1 }  // I/O (1) vs CHARGEN (0)
 
 // $D000-$DFFF mode: 0 = RAM, 1 = CHARGEN ROM, 2 = I/O.
@@ -65,54 +68,68 @@ $ `stdlib/core/string.nu`
     ? == g_banked 0 { ^ ( ram_rd a ) } {}
     ? == a 0x0000 { ^ g_p01_ddr } {}
     ? == a 0x0001 { ^ ( port01_read ) } {}
-    ? & >= a 0xA000 < a 0xC000 {                       // BASIC ROM / RAM
+    ? & >= a 0xA000 < a 0xC000 {  // BASIC ROM / RAM
         ? & != ( bank_loram ) 0 != ( bank_hiram ) 0 { ^ ( rom_rd g_basic - a 0xA000 ) } {}
         ^ ( ram_rd a )
     } {}
-    ? & >= a 0xD000 < a 0xE000 {                       // I/O / CHARGEN / RAM
+    ? & >= a 0xD000 < a 0xE000 {  // I/O / CHARGEN / RAM
         ?? ( io_mode ) {
             0 → ^ ( ram_rd a )
             1 → ^ ( rom_rd g_chargen - a 0xD000 )
             _ → ^ ( io_read a )
         }
     } {}
-    ? >= a 0xE000 {                                    // KERNAL ROM / RAM
+    ? >= a 0xE000 {  // KERNAL ROM / RAM
         ? != ( bank_hiram ) 0 { ^ ( rom_rd g_kernal - a 0xE000 ) } {}
         ^ ( ram_rd a )
     } {}
     ^ ( ram_rd a )
 }
+
 @ wr8 i addr i val → v {
     : i a & addr 0xFFFF
     : i b & val 0xFF
-    ? == g_banked 0 { ( ram_wr a b )  ^ v } {}
-    ? == a 0x0000 { = g_p01_ddr b  ^ v } {}
-    ? == a 0x0001 { = g_p01_data b  ^ v } {}
-    ? & >= a 0xD000 < a 0xE000 {                       // I/O writes hit chips
-        ? == ( io_mode ) 2 { ( io_write a b )  ^ v } {}
+    ? == g_banked 0 { ( ram_wr a b ) ^ v } {}
+    ? == a 0x0000 { = g_p01_ddr b ^ v } {}
+    ? == a 0x0001 { = g_p01_data b ^ v } {}
+    ? & >= a 0xD000 < a 0xE000 {  // I/O writes hit chips
+        ? == ( io_mode ) 2 { ( io_write a b ) ^ v } {}
     } {}
-    ( ram_wr a b )                                     // RAM under any ROM
+    ( ram_wr a b )  // RAM under any ROM
 }
+
 @ rd16 i addr → i { ^ | ( rd8 addr ) << ( rd8 & + addr 1 0xFFFF ) 8 }
 
-@ fetch8 → i { : i v ( rd8 pc )  = pc & + pc 1 0xFFFF  ^ v }
-@ fetch16 → i { : i v ( rd16 pc )  = pc & + pc 2 0xFFFF  ^ v }
+@ fetch8 → i { : i v ( rd8 pc ) = pc & + pc 1 0xFFFF ^ v }
+
+@ fetch16 → i { : i v ( rd16 pc ) = pc & + pc 2 0xFFFF ^ v }
 
 // ── Status flags (each accessor returns 0/1; setters take any cond) ──
 @ p_c → i { ^ & rp 1 }
+
 @ p_z → i { ^ ? != 0 & rp 0x02 1 0 }
+
 @ p_i → i { ^ ? != 0 & rp 0x04 1 0 }
+
 @ p_d → i { ^ ? != 0 & rp 0x08 1 0 }
+
 @ p_v → i { ^ ? != 0 & rp 0x40 1 0 }
+
 @ p_n → i { ^ ? != 0 & rp 0x80 1 0 }
 
 // Set/clear the bit `mask` according to whether `cond` is nonzero.
 @ pset i mask i cond → v { = rp ? != cond 0 | rp mask & rp & ^^ mask 0xFF 0xFF }
+
 @ set_c i b → v { ( pset 0x01 b ) }
+
 @ set_z i b → v { ( pset 0x02 b ) }
+
 @ set_i i b → v { ( pset 0x04 b ) }
+
 @ set_d i b → v { ( pset 0x08 b ) }
+
 @ set_v i b → v { ( pset 0x40 b ) }
+
 @ set_n i b → v { ( pset 0x80 b ) }
 
 // Set Z and N from an 8-bit result.
@@ -123,17 +140,25 @@ $ `stdlib/core/string.nu`
 }
 
 // ── Stack ───────────────────────────────────────────────────────────
-@ push8 i v → v { ( wr8 | 0x100 sp & v 0xFF )  = sp & - sp 1 0xFF }
-@ pull8 → i { = sp & + sp 1 0xFF  ^ ( rd8 | 0x100 sp ) }
-@ push16 i v → v { ( push8 & >> v 8 0xFF )  ( push8 & v 0xFF ) }
-@ pull16 → i { : i lo ( pull8 )  : i hi ( pull8 )  ^ | lo << hi 8 }
+@ push8 i v → v { ( wr8 | 0x100 sp & v 0xFF ) = sp & - sp 1 0xFF }
+
+@ pull8 → i { = sp & + sp 1 0xFF ^ ( rd8 | 0x100 sp ) }
+
+@ push16 i v → v { ( push8 & >> v 8 0xFF ) ( push8 & v 0xFF ) }
+
+@ pull16 → i { : i lo ( pull8 ) : i hi ( pull8 ) ^ | lo << hi 8 }
 
 // ── Addressing modes (each returns the effective address) ───────────
 @ a_zp → i { ^ ( fetch8 ) }
+
 @ a_zpx → i { ^ & + ( fetch8 ) rx 0xFF }
+
 @ a_zpy → i { ^ & + ( fetch8 ) ry 0xFF }
+
 @ a_abs → i { ^ ( fetch16 ) }
+
 @ a_absx → i { ^ & + ( fetch16 ) rx 0xFFFF }
+
 @ a_absy → i { ^ & + ( fetch16 ) ry 0xFFFF }
 // ($nn,X): zero-page pointer at (nn+X)&0xFF, read with zero-page wrap.
 @ a_indx → i {
@@ -156,17 +181,25 @@ $ `stdlib/core/string.nu`
 }
 
 // ── Loads / stores ──────────────────────────────────────────────────
-@ op_lda i a → v { = ra ( rd8 a )  ( set_zn ra ) }
-@ op_ldx i a → v { = rx ( rd8 a )  ( set_zn rx ) }
-@ op_ldy i a → v { = ry ( rd8 a )  ( set_zn ry ) }
+@ op_lda i a → v { = ra ( rd8 a ) ( set_zn ra ) }
+
+@ op_ldx i a → v { = rx ( rd8 a ) ( set_zn rx ) }
+
+@ op_ldy i a → v { = ry ( rd8 a ) ( set_zn ry ) }
+
 @ op_sta i a → v { ( wr8 a ra ) }
+
 @ op_stx i a → v { ( wr8 a rx ) }
+
 @ op_sty i a → v { ( wr8 a ry ) }
 
 // ── Logic ───────────────────────────────────────────────────────────
-@ op_and i v → v { = ra & ra v  ( set_zn ra ) }
-@ op_ora i v → v { = ra & | ra v 0xFF  ( set_zn ra ) }
-@ op_eor i v → v { = ra & ^^ ra v 0xFF  ( set_zn ra ) }
+@ op_and i v → v { = ra & ra v ( set_zn ra ) }
+
+@ op_ora i v → v { = ra & | ra v 0xFF ( set_zn ra ) }
+
+@ op_eor i v → v { = ra & ^^ ra v 0xFF ( set_zn ra ) }
+
 @ op_bit i v → v {
     ( set_z ? == & ra v 0 1 0 )
     ( set_n & v 0x80 )
@@ -210,14 +243,14 @@ $ `stdlib/core/string.nu`
 @ op_sbc i v → v {
     : i a ra
     : i c ( p_c )
-    : i bin - - a v - 1 c        // a - v - (1-C)
+    : i bin - - a v - 1 c  // a - v - (1-C)
     ( set_v & & ^^ a v ^^ a & bin 0xFF 0x80 )
     ( set_c ? >= bin 0 1 0 )
     ( set_zn & bin 0xFF )
     ? != ( p_d ) 0 {
         : ~ i al - - & a 0x0F & v 0x0F - 1 c
         ? < al 0 { = al - & - al 0x06 0x0F 0x10 } {}
-        : ~ i ah + - & a 0xF0 & v 0xF0 al    // (A&F0) - (B&F0) + AL
+        : ~ i ah + - & a 0xF0 & v 0xF0 al  // (A&F0) - (B&F0) + AL
         ? < ah 0 { = ah - ah 0x60 } {}
         = ra & ah 0xFF
     } {
@@ -226,14 +259,18 @@ $ `stdlib/core/string.nu`
 }
 
 // ── Increment / decrement ───────────────────────────────────────────
-@ op_inc i a → v { : i r & + ( rd8 a ) 1 0xFF  ( wr8 a r )  ( set_zn r ) }
-@ op_dec i a → v { : i r & - ( rd8 a ) 1 0xFF  ( wr8 a r )  ( set_zn r ) }
+@ op_inc i a → v { : i r & + ( rd8 a ) 1 0xFF ( wr8 a r ) ( set_zn r ) }
+
+@ op_dec i a → v { : i r & - ( rd8 a ) 1 0xFF ( wr8 a r ) ( set_zn r ) }
 
 // ── Shifts / rotates (value-in, value-out; flags set here) ──────────
-@ sh_asl i v → i { ( set_c & v 0x80 )  : i r & << v 1 0xFF  ( set_zn r )  ^ r }
-@ sh_lsr i v → i { ( set_c & v 1 )  : i r & >> v 1 0x7F  ( set_zn r )  ^ r }
-@ sh_rol i v → i { : i c ( p_c )  ( set_c & v 0x80 )  : i r & | << v 1 c 0xFF  ( set_zn r )  ^ r }
-@ sh_ror i v → i { : i c ( p_c )  ( set_c & v 1 )  : i r & | >> v 1 << c 7 0xFF  ( set_zn r )  ^ r }
+@ sh_asl i v → i { ( set_c & v 0x80 ) : i r & << v 1 0xFF ( set_zn r ) ^ r }
+
+@ sh_lsr i v → i { ( set_c & v 1 ) : i r & >> v 1 0x7F ( set_zn r ) ^ r }
+
+@ sh_rol i v → i { : i c ( p_c ) ( set_c & v 0x80 ) : i r & | << v 1 c 0xFF ( set_zn r ) ^ r }
+
+@ sh_ror i v → i { : i c ( p_c ) ( set_c & v 1 ) : i r & | >> v 1 << c 7 0xFF ( set_zn r ) ^ r }
 
 // Read-modify-write a memory cell through a shift op selector.
 //   0 ASL  1 LSR  2 ROL  3 ROR
@@ -259,20 +296,22 @@ $ `stdlib/core/string.nu`
 
 // ── Reset / NMI / IRQ vectors ───────────────────────────────────────
 @ cpu_reset → v {
-    = ra 0  = rx 0  = ry 0
+    = ra 0 = rx 0 = ry 0
     = sp 0xFD
     = rp 0x24
     = pc ( rd16 0xFFFC )
     = g_cycles 0
 }
+
 @ cpu_set_pc i v → v { = pc & v 0xFFFF }
+
 @ cpu_pc → i { ^ pc }
 
 // Load an up-to-64 KiB image into memory at `base`.
 @ mem_load * u src i n i base → v {
     : *u m ( mem_raw )
     : ~ i i 0
-    ~ < i n { = . m & + base i 0xFFFF . src i  = i + i 1 }
+    ~ < i n { = . m & + base i 0xFFFF . src i = i + i 1 }
 }
 
 // Allocate the 64 KiB address space (call once before loading an image).
@@ -287,7 +326,7 @@ $ `stdlib/core/string.nu`
     : ~ i cyc 2
     ?? op {
         // ── LDA ──
-        0xA9 → { ( op_lda pc ) = pc & + pc 1 0xFFFF }   // immediate
+        0xA9 → { ( op_lda pc ) = pc & + pc 1 0xFFFF }  // immediate
         0xA5 → { ( op_lda ( a_zp ) ) = cyc 3 }
         0xB5 → { ( op_lda ( a_zpx ) ) = cyc 4 }
         0xAD → { ( op_lda ( a_abs ) ) = cyc 4 }
@@ -324,18 +363,18 @@ $ `stdlib/core/string.nu`
         0x8C → { ( op_sty ( a_abs ) ) = cyc 4 }
 
         // ── Transfers ──
-        0xAA → { = rx ra ( set_zn rx ) }                // TAX
-        0xA8 → { = ry ra ( set_zn ry ) }                // TAY
-        0xBA → { = rx sp ( set_zn rx ) }                // TSX
-        0x8A → { = ra rx ( set_zn ra ) }                // TXA
-        0x9A → { = sp rx }                              // TXS (no flags)
-        0x98 → { = ra ry ( set_zn ra ) }                // TYA
+        0xAA → { = rx ra ( set_zn rx ) }  // TAX
+        0xA8 → { = ry ra ( set_zn ry ) }  // TAY
+        0xBA → { = rx sp ( set_zn rx ) }  // TSX
+        0x8A → { = ra rx ( set_zn ra ) }  // TXA
+        0x9A → { = sp rx }  // TXS (no flags)
+        0x98 → { = ra ry ( set_zn ra ) }  // TYA
 
         // ── Stack ──
-        0x48 → { ( push8 ra ) = cyc 3 }                 // PHA
-        0x08 → { ( push8 | rp 0x30 ) = cyc 3 }          // PHP (B+U set)
-        0x68 → { = ra ( pull8 ) ( set_zn ra ) = cyc 4 } // PLA
-        0x28 → { = rp | & ( pull8 ) 0xEF 0x20 = cyc 4 } // PLP (clear B, set U)
+        0x48 → { ( push8 ra ) = cyc 3 }  // PHA
+        0x08 → { ( push8 | rp 0x30 ) = cyc 3 }  // PHP (B+U set)
+        0x68 → { = ra ( pull8 ) ( set_zn ra ) = cyc 4 }  // PLA
+        0x28 → { = rp | & ( pull8 ) 0xEF 0x20 = cyc 4 }  // PLP (clear B, set U)
 
         // ── Logic (immediate then the addressing variants) ──
         0x29 → { ( op_and ( fetch8 ) ) }
@@ -410,74 +449,74 @@ $ `stdlib/core/string.nu`
         0xCE → { ( op_dec ( a_abs ) ) = cyc 6 }
         0xDE → { ( op_dec ( a_absx ) ) = cyc 7 }
         // ── INX/INY/DEX/DEY ──
-        0xE8 → { = rx & + rx 1 0xFF ( set_zn rx ) }     // INX
-        0xC8 → { = ry & + ry 1 0xFF ( set_zn ry ) }     // INY
-        0xCA → { = rx & - rx 1 0xFF ( set_zn rx ) }     // DEX
-        0x88 → { = ry & - ry 1 0xFF ( set_zn ry ) }     // DEY
+        0xE8 → { = rx & + rx 1 0xFF ( set_zn rx ) }  // INX
+        0xC8 → { = ry & + ry 1 0xFF ( set_zn ry ) }  // INY
+        0xCA → { = rx & - rx 1 0xFF ( set_zn rx ) }  // DEX
+        0x88 → { = ry & - ry 1 0xFF ( set_zn ry ) }  // DEY
 
         // ── Shifts / rotates ──
-        0x0A → { = ra ( sh_asl ra ) }                   // ASL A
+        0x0A → { = ra ( sh_asl ra ) }  // ASL A
         0x06 → { ( rmw 0 ( a_zp ) ) = cyc 5 }
         0x16 → { ( rmw 0 ( a_zpx ) ) = cyc 6 }
         0x0E → { ( rmw 0 ( a_abs ) ) = cyc 6 }
         0x1E → { ( rmw 0 ( a_absx ) ) = cyc 7 }
-        0x4A → { = ra ( sh_lsr ra ) }                   // LSR A
+        0x4A → { = ra ( sh_lsr ra ) }  // LSR A
         0x46 → { ( rmw 1 ( a_zp ) ) = cyc 5 }
         0x56 → { ( rmw 1 ( a_zpx ) ) = cyc 6 }
         0x4E → { ( rmw 1 ( a_abs ) ) = cyc 6 }
         0x5E → { ( rmw 1 ( a_absx ) ) = cyc 7 }
-        0x2A → { = ra ( sh_rol ra ) }                   // ROL A
+        0x2A → { = ra ( sh_rol ra ) }  // ROL A
         0x26 → { ( rmw 2 ( a_zp ) ) = cyc 5 }
         0x36 → { ( rmw 2 ( a_zpx ) ) = cyc 6 }
         0x2E → { ( rmw 2 ( a_abs ) ) = cyc 6 }
         0x3E → { ( rmw 2 ( a_absx ) ) = cyc 7 }
-        0x6A → { = ra ( sh_ror ra ) }                   // ROR A
+        0x6A → { = ra ( sh_ror ra ) }  // ROR A
         0x66 → { ( rmw 3 ( a_zp ) ) = cyc 5 }
         0x76 → { ( rmw 3 ( a_zpx ) ) = cyc 6 }
         0x6E → { ( rmw 3 ( a_abs ) ) = cyc 6 }
         0x7E → { ( rmw 3 ( a_absx ) ) = cyc 7 }
 
         // ── Jumps / calls / returns ──
-        0x4C → { = pc ( a_abs ) = cyc 3 }               // JMP abs
-        0x6C → { = pc ( a_ind ) = cyc 5 }               // JMP (ind)
-        0x20 → {                                        // JSR abs
+        0x4C → { = pc ( a_abs ) = cyc 3 }  // JMP abs
+        0x6C → { = pc ( a_ind ) = cyc 5 }  // JMP (ind)
+        0x20 → {  // JSR abs
             : i target ( fetch16 )
             ( push16 & - pc 1 0xFFFF )
-            = pc target  = cyc 6
+            = pc target = cyc 6
         }
-        0x60 → { = pc & + ( pull16 ) 1 0xFFFF = cyc 6 } // RTS
-        0x40 → {                                        // RTI
+        0x60 → { = pc & + ( pull16 ) 1 0xFFFF = cyc 6 }  // RTS
+        0x40 → {  // RTI
             = rp | & ( pull8 ) 0xEF 0x20
-            = pc ( pull16 )  = cyc 6
+            = pc ( pull16 ) = cyc 6
         }
-        0x00 → {                                        // BRK
+        0x00 → {  // BRK
             = pc & + pc 1 0xFFFF
             ( push16 pc )
             ( push8 | rp 0x30 )
             ( set_i 1 )
-            = pc ( rd16 0xFFFE )  = cyc 7
+            = pc ( rd16 0xFFFE ) = cyc 7
         }
 
         // ── Branches ──
-        0x90 → { ( branch == ( p_c ) 0 ) }              // BCC
-        0xB0 → { ( branch != ( p_c ) 0 ) }              // BCS
-        0xD0 → { ( branch == ( p_z ) 0 ) }              // BNE
-        0xF0 → { ( branch != ( p_z ) 0 ) }              // BEQ
-        0x10 → { ( branch == ( p_n ) 0 ) }              // BPL
-        0x30 → { ( branch != ( p_n ) 0 ) }              // BMI
-        0x50 → { ( branch == ( p_v ) 0 ) }              // BVC
-        0x70 → { ( branch != ( p_v ) 0 ) }              // BVS
+        0x90 → { ( branch == ( p_c ) 0 ) }  // BCC
+        0xB0 → { ( branch != ( p_c ) 0 ) }  // BCS
+        0xD0 → { ( branch == ( p_z ) 0 ) }  // BNE
+        0xF0 → { ( branch != ( p_z ) 0 ) }  // BEQ
+        0x10 → { ( branch == ( p_n ) 0 ) }  // BPL
+        0x30 → { ( branch != ( p_n ) 0 ) }  // BMI
+        0x50 → { ( branch == ( p_v ) 0 ) }  // BVC
+        0x70 → { ( branch != ( p_v ) 0 ) }  // BVS
 
         // ── Flag ops ──
-        0x18 → { ( set_c 0 ) }                          // CLC
-        0x38 → { ( set_c 1 ) }                          // SEC
-        0x58 → { ( set_i 0 ) }                          // CLI
-        0x78 → { ( set_i 1 ) }                          // SEI
-        0xD8 → { ( set_d 0 ) }                          // CLD
-        0xF8 → { ( set_d 1 ) }                          // SED
-        0xB8 → { ( set_v 0 ) }                          // CLV
+        0x18 → { ( set_c 0 ) }  // CLC
+        0x38 → { ( set_c 1 ) }  // SEC
+        0x58 → { ( set_i 0 ) }  // CLI
+        0x78 → { ( set_i 1 ) }  // SEI
+        0xD8 → { ( set_d 0 ) }  // CLD
+        0xF8 → { ( set_d 1 ) }  // SED
+        0xB8 → { ( set_v 0 ) }  // CLV
 
-        0xEA → {}                                       // NOP
+        0xEA → {}  // NOP
         _ → ( bad_op op )
     }
     = g_cycles + g_cycles cyc
@@ -497,44 +536,45 @@ $ `stdlib/core/string.nu`
 // ════════════════════════════════════════════════════════════════════
 
 // ── I/O register files + video timing ───────────────────────────────
-: ~ s g_vicreg 0      // 64-byte VIC-II register file
-: ~ s g_sidreg 0      // 32-byte SID register file (sound out of scope here)
-: ~ s g_cia2reg 0     // 16-byte CIA2 register file (serial/NMI — dumb here)
-: ~ s g_fb 0          // 384x272 colour-index framebuffer (*u, with border)
-: ~ s g_fg 0          // 384x272 foreground mask (1 = bg-graphics fg pixel) — sprite priority
-: ~ s g_sprcov 0      // 384x272 per-pixel sprite coverage bitmask — collision detection
-: ~ i g_coll_ss 0     // sprite-sprite collisions this frame ($D01E)
-: ~ i g_coll_sb 0     // sprite-background collisions this frame ($D01F)
+: ~ s g_vicreg 0  // 64-byte VIC-II register file
+: ~ s g_sidreg 0  // 32-byte SID register file (sound out of scope here)
+: ~ s g_cia2reg 0  // 16-byte CIA2 register file (serial/NMI — dumb here)
+: ~ s g_fb 0  // 384x272 colour-index framebuffer (*u, with border)
+: ~ s g_fg 0  // 384x272 foreground mask (1 = bg-graphics fg pixel) — sprite priority
+: ~ s g_sprcov 0  // 384x272 per-pixel sprite coverage bitmask — collision detection
+: ~ i g_coll_ss 0  // sprite-sprite collisions this frame ($D01E)
+: ~ i g_coll_sb 0  // sprite-background collisions this frame ($D01F)
 : ~ s g_lineborder 0  // per-raster-line border colour (312 bytes) — for raster splits
-: ~ s g_linebg 0      // per-raster-line background colour (312 bytes)
-: ~ i g_raster 0      // current raster line 0..311 (PAL)
-: ~ i g_rasdot 0      // cycle within the current raster line
-: ~ i g_frames 0      // completed video frames
+: ~ s g_linebg 0  // per-raster-line background colour (312 bytes)
+: ~ i g_raster 0  // current raster line 0..311 (PAL)
+: ~ i g_rasdot 0  // cycle within the current raster line
+: ~ i g_frames 0  // completed video frames
 
 // ── CIA1 (keyboard + the jiffy-IRQ timer) ───────────────────────────
-: ~ s g_kb 0          // 8-byte keyboard matrix (row bit set = key down)
-: ~ i c1_pra 0xFF     // port A (keyboard column select, joystick #2)
-: ~ i c1_prb 0xFF     // port B (keyboard rows, joystick #1)
-: ~ i c1_ddra 0  : ~ i c1_ddrb 0
-: ~ i c1_ta 0xFFFF    // Timer A counter
-: ~ i c1_tb 0xFFFF    // Timer B counter
+: ~ s g_kb 0  // 8-byte keyboard matrix (row bit set = key down)
+: ~ i c1_pra 0xFF  // port A (keyboard column select, joystick #2)
+: ~ i c1_prb 0xFF  // port B (keyboard rows, joystick #1)
+: ~ i c1_ddra 0 : ~ i c1_ddrb 0
+: ~ i c1_ta 0xFFFF  // Timer A counter
+: ~ i c1_tb 0xFFFF  // Timer B counter
 : ~ i c1_ta_lo 0 : ~ i c1_ta_hi 0 : ~ i c1_tb_lo 0 : ~ i c1_tb_hi 0
-: ~ i c1_cra 0   : ~ i c1_crb 0
-: ~ i c1_icr 0        // interrupt pending flags (bit0 TA, bit1 TB)
-: ~ i c1_imask 0      // enabled-interrupt mask
+: ~ i c1_cra 0 : ~ i c1_crb 0
+: ~ i c1_icr 0  // interrupt pending flags (bit0 TA, bit1 TB)
+: ~ i c1_imask 0  // enabled-interrupt mask
 
 // ── CIA2 (VIC bank select + serial bus; its IRQ output is the NMI) ──
-: ~ i c2_pra 0x17     // port A (bits 0-1 = inverted VIC bank, serial bus)
+: ~ i c2_pra 0x17  // port A (bits 0-1 = inverted VIC bank, serial bus)
 : ~ i c2_prb 0xFF
-: ~ i c2_ddra 0x3F  : ~ i c2_ddrb 0
-: ~ i c2_ta 0xFFFF  : ~ i c2_tb 0xFFFF
+: ~ i c2_ddra 0x3F : ~ i c2_ddrb 0
+: ~ i c2_ta 0xFFFF : ~ i c2_tb 0xFFFF
 : ~ i c2_ta_lo 0 : ~ i c2_ta_hi 0 : ~ i c2_tb_lo 0 : ~ i c2_tb_hi 0
-: ~ i c2_cra 0   : ~ i c2_crb 0
-: ~ i c2_icr 0   : ~ i c2_imask 0
-: ~ i g_restore 0     // RESTORE key held (wired straight to the NMI line)
-: ~ i g_nmi_prev 0    // previous NMI-line level (NMI is edge-triggered)
+: ~ i c2_cra 0 : ~ i c2_crb 0
+: ~ i c2_icr 0 : ~ i c2_imask 0
+: ~ i g_restore 0  // RESTORE key held (wired straight to the NMI line)
+: ~ i g_nmi_prev 0  // previous NMI-line level (NMI is edge-triggered)
 
-@ vreg i r → i { : *u v # *u g_vicreg  ^ & # i . v & r 0x3F 255 }
+@ vreg i r → i { : *u v # *u g_vicreg ^ & # i . v & r 0x3F 255 }
+
 @ cia2_pra → i { ^ c2_pra }
 
 // ── Keyboard matrix read (port B) ───────────────────────────────────
@@ -571,6 +611,7 @@ $ `stdlib/core/string.nu`
         _ → ^ 0
     }
 }
+
 @ cia1_write i reg i b → v {
     ?? reg {
         0x00 → = c1_pra b
@@ -582,8 +623,8 @@ $ `stdlib/core/string.nu`
         0x06 → = c1_tb_lo b
         0x07 → = c1_tb_hi b
         0x0D → { ? != 0 & b 0x80 { = c1_imask | c1_imask & b 0x1F } { = c1_imask & c1_imask & ^^ b 0xFF 0x1F } }
-        0x0E → { = c1_cra b  ? != 0 & b 0x10 { = c1_ta | c1_ta_lo << c1_ta_hi 8 } {} }
-        0x0F → { = c1_crb b  ? != 0 & b 0x10 { = c1_tb | c1_tb_lo << c1_tb_hi 8 } {} }
+        0x0E → { = c1_cra b ? != 0 & b 0x10 { = c1_ta | c1_ta_lo << c1_ta_hi 8 } {} }
+        0x0F → { = c1_crb b ? != 0 & b 0x10 { = c1_tb | c1_tb_lo << c1_tb_hi 8 } {} }
         _ → {}
     }
 }
@@ -608,6 +649,7 @@ $ `stdlib/core/string.nu`
         }
     } {}
 }
+
 @ cia1_irq → i { ^ ? != 0 & & c1_icr c1_imask 0x1F 1 0 }
 
 // ── CIA2 register access (same shape as CIA1; output drives the NMI) ──
@@ -621,12 +663,13 @@ $ `stdlib/core/string.nu`
         0x05 → ^ & >> c2_ta 8 0xFF
         0x06 → ^ & c2_tb 0xFF
         0x07 → ^ & >> c2_tb 8 0xFF
-        0x0D → { : ~ i vv c2_icr  ? != 0 & & c2_icr c2_imask 0x1F { = vv | vv 0x80 } {}  = c2_icr 0  ^ vv }
+        0x0D → { : ~ i vv c2_icr ? != 0 & & c2_icr c2_imask 0x1F { = vv | vv 0x80 } {} = c2_icr 0 ^ vv }
         0x0E → ^ c2_cra
         0x0F → ^ c2_crb
         _ → ^ 0
     }
 }
+
 @ cia2_write i reg i b → v {
     ?? reg {
         0x00 → = c2_pra b
@@ -638,11 +681,12 @@ $ `stdlib/core/string.nu`
         0x06 → = c2_tb_lo b
         0x07 → = c2_tb_hi b
         0x0D → { ? != 0 & b 0x80 { = c2_imask | c2_imask & b 0x1F } { = c2_imask & c2_imask & ^^ b 0xFF 0x1F } }
-        0x0E → { = c2_cra b  ? != 0 & b 0x10 { = c2_ta | c2_ta_lo << c2_ta_hi 8 } {} }
-        0x0F → { = c2_crb b  ? != 0 & b 0x10 { = c2_tb | c2_tb_lo << c2_tb_hi 8 } {} }
+        0x0E → { = c2_cra b ? != 0 & b 0x10 { = c2_ta | c2_ta_lo << c2_ta_hi 8 } {} }
+        0x0F → { = c2_crb b ? != 0 & b 0x10 { = c2_tb | c2_tb_lo << c2_tb_hi 8 } {} }
         _ → {}
     }
 }
+
 @ cia2_tick i cyc → v {
     ? & != 0 & c2_cra 1 == 0 & c2_cra 0x20 {
         ? >= c2_ta cyc { = c2_ta - c2_ta cyc } {
@@ -665,6 +709,7 @@ $ `stdlib/core/string.nu`
 }
 // CIA2's interrupt output is wired to /NMI; RESTORE is wired there too.
 @ cia2_nmi → i { ^ ? != 0 & & c2_icr c2_imask 0x1F 1 0 }
+
 @ nmi_line → i { ^ ? != 0 | ( cia2_nmi ) g_restore 1 0 }
 
 // ── VIC-II / SID register access ────────────────────────────────────
@@ -673,11 +718,11 @@ $ `stdlib/core/string.nu`
     ? == reg 0x11 { ^ | & & # i . v 0x11 255 0x7F << & >> g_raster 8 1 7 } {}
     ? == reg 0x12 { ^ & g_raster 0xFF } {}
     ? == reg 0x19 { ^ | | & # i . v 0x19 255 0x70 ? != 0 ( vic_irq ) 0x80 0 } {}  // latch + asserted bit
-    ? == reg 0x1A { ^ | & # i . v 0x1A 255 0xF0 } {}   // unused enable bits read 1
-    ? == reg 0x1E { : i cv & # i . v 0x1E 255  = . v 0x1E # u 0  ^ cv } {}  // clear on read
-    ? == reg 0x1F { : i cv & # i . v 0x1F 255  = . v 0x1F # u 0  ^ cv } {}
-    ? >= reg 0x2F { ^ 0xFF } {}                        // unused registers read $FF
-    ? >= reg 0x20 { ^ | & # i . v reg 255 0xF0 } {}    // colour registers: upper nibble 1
+    ? == reg 0x1A { ^ | & # i . v 0x1A 255 0xF0 } {}  // unused enable bits read 1
+    ? == reg 0x1E { : i cv & # i . v 0x1E 255 = . v 0x1E # u 0 ^ cv } {}  // clear on read
+    ? == reg 0x1F { : i cv & # i . v 0x1F 255 = . v 0x1F # u 0 ^ cv } {}
+    ? >= reg 0x2F { ^ 0xFF } {}  // unused registers read $FF
+    ? >= reg 0x20 { ^ | & # i . v reg 255 0xF0 } {}  // colour registers: upper nibble 1
     ^ & # i . v reg 255
 }
 // VIC raster/collision IRQ asserted = any latched source that is enabled.
@@ -685,58 +730,63 @@ $ `stdlib/core/string.nu`
     : *u v # *u g_vicreg
     ^ ? != 0 & & # i . v 0x19 # i . v 0x1A 0x0F 1 0
 }
+
 @ vic_write i reg i b → v {
     : *u v # *u g_vicreg
     ? == reg 0x19 {
-        = . v 0x19 # u & & # i . v 0x19 255 ^^ b 0xFF      // writing 1 acks an IRQ latch bit
+        = . v 0x19 # u & & # i . v 0x19 255 ^^ b 0xFF  // writing 1 acks an IRQ latch bit
     } {
         = . v reg # u b
     }
 }
+
 @ sid_read i reg → i {
     : *u s # *u g_sidreg
-    ? == reg 0x1B { ^ & >> ( peek_acc 2 ) 16 0xFF } {}   // OSC3 = voice-3 waveform hi byte
-    ? == reg 0x1C { ^ & ( peek_env 2 ) 0xFF } {}         // ENV3 = voice-3 envelope
+    ? == reg 0x1B { ^ & >> ( peek_acc 2 ) 16 0xFF } {}  // OSC3 = voice-3 waveform hi byte
+    ? == reg 0x1C { ^ & ( peek_env 2 ) 0xFF } {}  // ENV3 = voice-3 envelope
     ^ & # i . s reg 255
 }
-@ sid_write i reg i b → v { : *u s # *u g_sidreg  = . s reg # u b }
+
+@ sid_write i reg i b → v { : *u s # *u g_sidreg = . s reg # u b }
 
 // ════════════════════════════════════════════════════════════════════
 //  SID (6581) — 3 voices, ADSR envelopes, tri/saw/pulse/noise. Mixed and
 //  resampled to 48 kHz into a stereo ring the host drains via Web Audio
 //  (the same path as the Game Boy APU). No filter yet.
 // ════════════════════════════════════════════════════════════════════
-: ~ s g_audio 0       // i64 ring: low16 = L, bits16-31 = R (both signed 16)
+: ~ s g_audio 0  // i64 ring: low16 = L, bits16-31 = R (both signed 16)
 : ~ i g_audio_len 0
 : i g_audio_cap 4096
-: ~ i g_smp_acc 0     // resample accumulator (adds 48000/cycle; emit at 985248)
-: ~ s g_v_acc 0       // per-voice 24-bit phase accumulator (3 i64)
-: ~ s g_v_lfsr 0      // per-voice 23-bit noise LFSR
-: ~ s g_v_env 0       // per-voice envelope value 0..255
-: ~ s g_v_st 0        // 0 release, 1 attack, 2 decay, 3 sustain
-: ~ s g_v_rc 0        // rate counter
-: ~ s g_v_ec 0        // exponential counter
-: ~ s g_v_gate 0      // previous gate bit
-: ~ s g_v_wrap 0      // did this voice's accumulator overflow this tick (hard sync)
-: ~ i g_f_lp 0        // SID filter state-variable: low-pass integrator
-: ~ i g_f_bp 0        // SID filter state-variable: band-pass integrator
-: ~ s g_disk 0        // attached 1541 .d64 image (virtual drive 8)
+: ~ i g_smp_acc 0  // resample accumulator (adds 48000/cycle; emit at 985248)
+: ~ s g_v_acc 0  // per-voice 24-bit phase accumulator (3 i64)
+: ~ s g_v_lfsr 0  // per-voice 23-bit noise LFSR
+: ~ s g_v_env 0  // per-voice envelope value 0..255
+: ~ s g_v_st 0  // 0 release, 1 attack, 2 decay, 3 sustain
+: ~ s g_v_rc 0  // rate counter
+: ~ s g_v_ec 0  // exponential counter
+: ~ s g_v_gate 0  // previous gate bit
+: ~ s g_v_wrap 0  // did this voice's accumulator overflow this tick (hard sync)
+: ~ i g_f_lp 0  // SID filter state-variable: low-pass integrator
+: ~ i g_f_bp 0  // SID filter state-variable: band-pass integrator
+: ~ s g_disk 0  // attached 1541 .d64 image (virtual drive 8)
 : ~ i g_disk_size 0
-: ~ s g_filebuf 0     // scratch holding one extracted file (raw PRG bytes)
+: ~ s g_filebuf 0  // scratch holding one extracted file (raw PRG bytes)
 : ~ i g_file_track 0
 : ~ i g_file_sector 0
 
 @ peek_acc i v → i { ^ ( nurl_peek g_v_acc v ) }
+
 @ peek_env i v → i { ^ ( nurl_peek g_v_env v ) }
-@ sreg i off → i { : *u s # *u g_sidreg  ^ & # i . s off 255 }
+
+@ sreg i off → i { : *u s # *u g_sidreg ^ & # i . s off 255 }
 
 // ADSR rate-counter period (PAL SID clocks) for rate code 0..15.
 @ sid_rate i n → i {
     ?? & n 15 {
-        0 → ^ 9      1 → ^ 32     2 → ^ 63     3 → ^ 95
-        4 → ^ 149    5 → ^ 220    6 → ^ 267    7 → ^ 313
-        8 → ^ 392    9 → ^ 977    10 → ^ 1954  11 → ^ 3126
-        12 → ^ 3907  13 → ^ 11720 14 → ^ 19532 _ → ^ 31251
+        0 → ^ 9 1 → ^ 32 2 → ^ 63 3 → ^ 95
+        4 → ^ 149 5 → ^ 220 6 → ^ 267 7 → ^ 313
+        8 → ^ 392 9 → ^ 977 10 → ^ 1954 11 → ^ 3126
+        12 → ^ 3907 13 → ^ 11720 14 → ^ 19532 _ → ^ 31251
     }
 }
 // Exponential decay/release: env steps down once per this many rate-ticks.
@@ -756,16 +806,16 @@ $ `stdlib/core/string.nu`
     : i pw | ( sreg + base 2 ) << & ( sreg + base 3 ) 0x0F 8
     : ~ i out 0xFFF
     : ~ i any 0
-    ? != 0 & ctrl 0x10 {                 // triangle (ring-mod XORs the source MSB)
+    ? != 0 & ctrl 0x10 {  // triangle (ring-mod XORs the source MSB)
         : i src ? == v 0 2 - v 1
         : i msb ? != 0 & ctrl 0x04 & ^^ >> acc 23 >> ( nurl_peek g_v_acc src ) 23 1 & >> acc 23 1
         : i t & >> acc 11 0xFFF
         = out & out ? != 0 msb ^^ t 0xFFF t
         = any 1
     } {}
-    ? != 0 & ctrl 0x20 { = out & out & >> acc 12 0xFFF  = any 1 } {}   // sawtooth
-    ? != 0 & ctrl 0x40 { = out & out ? >= & >> acc 12 0xFFF pw 0xFFF 0  = any 1 } {}  // pulse
-    ? != 0 & ctrl 0x80 {                 // noise
+    ? != 0 & ctrl 0x20 { = out & out & >> acc 12 0xFFF = any 1 } {}  // sawtooth
+    ? != 0 & ctrl 0x40 { = out & out ? >= & >> acc 12 0xFFF pw 0xFFF 0 = any 1 } {}  // pulse
+    ? != 0 & ctrl 0x80 {  // noise
         : i lf ( nurl_peek g_v_lfsr v )
         : i n | | | | | | | << & >> lf 22 1 11 << & >> lf 20 1 10 << & >> lf 16 1 9 << & >> lf 13 1 8 << & >> lf 11 1 7 << & >> lf 7 1 6 << & >> lf 4 1 5 << & >> lf 2 1 4
         = out & out & n 0xFFF
@@ -781,9 +831,9 @@ $ `stdlib/core/string.nu`
     ? >= g_audio_len g_audio_cap { ^ v } {}
     : i master & ( sreg 0x18 ) 0x0F
     : i v3off & ( sreg 0x18 ) 0x80
-    : i fen ( sreg 0x17 )            // filter-routing bits (per voice)
-    : ~ i dry 0                      // voices straight to output
-    : ~ i wet 0                      // voices into the filter
+    : i fen ( sreg 0x17 )  // filter-routing bits (per voice)
+    : ~ i dry 0  // voices straight to output
+    : ~ i wet 0  // voices into the filter
     : ~ i v 0
     ~ < v 3 {
         ? & == v 2 != 0 v3off {} {
@@ -795,21 +845,21 @@ $ `stdlib/core/string.nu`
         = v + v 1
     }
     // State-variable filter on the wet sum.
-    : i fc | & ( sreg 0x15 ) 7 << ( sreg 0x16 ) 3        // 11-bit cutoff
-    : i f ? > * fc 3 3600 900 / * fc 3 4                 // f = min(fc*3/4, 900) /1024
+    : i fc | & ( sreg 0x15 ) 7 << ( sreg 0x16 ) 3  // 11-bit cutoff
+    : i f ? > * fc 3 3600 900 / * fc 3 4  // f = min(fc*3/4, 900) /1024
     : i res >> ( sreg 0x17 ) 4
-    : i q ? < - 1024 * res 60 120 120 - 1024 * res 60    // q = max(1024-res*60, 120)
+    : i q ? < - 1024 * res 60 120 120 - 1024 * res 60  // q = max(1024-res*60, 120)
     : i hp - - wet g_f_lp / * q g_f_bp 1024
     : i bp + g_f_bp / * f hp 1024
     : i lp + g_f_lp / * f bp 1024
-    = g_f_bp bp  = g_f_lp lp
+    = g_f_bp bp = g_f_lp lp
     : i mode ( sreg 0x18 )
     : ~ i fout 0
     ? != 0 & mode 0x10 { = fout + fout lp } {}
     ? != 0 & mode 0x20 { = fout + fout bp } {}
     ? != 0 & mode 0x40 { = fout + fout hp } {}
     : i mix + dry fout
-    : ~ i o / * * mix master 4 15      // (mix × master × 4) / 15
+    : ~ i o / * * mix master 4 15  // (mix × master × 4) / 15
     ? > o 32767 { = o 32767 } {}
     ? < o -32767 { = o -32767 } {}
     ( nurl_poke g_audio g_audio_len | & o 0xFFFF << & o 0xFFFF 16 )
@@ -824,12 +874,12 @@ $ `stdlib/core/string.nu`
         : i ctrl ( sreg + base 4 )
         : i gate & ctrl 1
         : i pg ( nurl_peek g_v_gate v )
-        ? & != 0 gate == pg 0 { ( nurl_poke g_v_st v 1 )  ( nurl_poke g_v_rc v 0 ) } {}   // gate↑ → attack
-        ? & == 0 gate != pg 0 { ( nurl_poke g_v_st v 0 ) } {}                              // gate↓ → release
+        ? & != 0 gate == pg 0 { ( nurl_poke g_v_st v 1 ) ( nurl_poke g_v_rc v 0 ) } {}  // gate↑ → attack
+        ? & == 0 gate != pg 0 { ( nurl_poke g_v_st v 0 ) } {}  // gate↓ → release
         ( nurl_poke g_v_gate v gate )
         // Phase accumulator (TEST bit zeroes it); record any overflow for sync.
         : i freq | ( sreg base ) << ( sreg + base 1 ) 8
-        ? != 0 & ctrl 0x08 { ( nurl_poke g_v_acc v 0 )  ( nurl_poke g_v_wrap v 0 ) } {
+        ? != 0 & ctrl 0x08 { ( nurl_poke g_v_acc v 0 ) ( nurl_poke g_v_wrap v 0 ) } {
             : i raw + ( nurl_peek g_v_acc v ) * freq cyc
             ( nurl_poke g_v_wrap v ? >= raw 0x1000000 1 0 )
             ( nurl_poke g_v_acc v & raw 0xFFFFFF )
@@ -854,12 +904,12 @@ $ `stdlib/core/string.nu`
             : ~ i env ( nurl_peek g_v_env v )
             : i sustain * & >> sr 4 0x0F 0x11
             ?? st {
-                1 → { = env + env 1  ? >= env 255 { = env 255  ( nurl_poke g_v_st v 2 ) } {} ( nurl_poke g_v_env v env ) }
+                1 → { = env + env 1 ? >= env 255 { = env 255 ( nurl_poke g_v_st v 2 ) } {} ( nurl_poke g_v_env v env ) }
                 _ → {
                     : i target ? == st 0 0 sustain
                     ? > env target {
                         : ~ i ec + ( nurl_peek g_v_ec v ) 1
-                        ? >= ec ( sid_exp env ) { = ec 0  ( nurl_poke g_v_env v - env 1 ) } {}
+                        ? >= ec ( sid_exp env ) { = ec 0 ( nurl_poke g_v_env v - env 1 ) } {}
                         ( nurl_poke g_v_ec v ec )
                     } { ? == st 2 { ( nurl_poke g_v_st v 3 ) } {} }
                 }
@@ -880,16 +930,17 @@ $ `stdlib/core/string.nu`
     }
     // Resample to the output rate.
     = g_smp_acc + g_smp_acc * 48000 cyc
-    ~ >= g_smp_acc 985248 { = g_smp_acc - g_smp_acc 985248  ( sid_emit ) }
+    ~ >= g_smp_acc 985248 { = g_smp_acc - g_smp_acc 985248 ( sid_emit ) }
 }
+
 @ sid_reset → v {
-    = g_audio_len 0  = g_smp_acc 0
-    = g_f_lp 0  = g_f_bp 0
+    = g_audio_len 0 = g_smp_acc 0
+    = g_f_lp 0 = g_f_bp 0
     : ~ i v 0
     ~ < v 3 {
-        ( nurl_poke g_v_acc v 0 )  ( nurl_poke g_v_lfsr v 0x7FFFFF )
-        ( nurl_poke g_v_env v 0 )  ( nurl_poke g_v_st v 0 )
-        ( nurl_poke g_v_rc v 0 )   ( nurl_poke g_v_ec v 0 )  ( nurl_poke g_v_gate v 0 )
+        ( nurl_poke g_v_acc v 0 ) ( nurl_poke g_v_lfsr v 0x7FFFFF )
+        ( nurl_poke g_v_env v 0 ) ( nurl_poke g_v_st v 0 )
+        ( nurl_poke g_v_rc v 0 ) ( nurl_poke g_v_ec v 0 ) ( nurl_poke g_v_gate v 0 )
         ( nurl_poke g_v_wrap v 0 )
         = v + v 1
     }
@@ -899,17 +950,18 @@ $ `stdlib/core/string.nu`
 @ io_read i a → i {
     ? < a 0xD400 { ^ ( vic_read & a 0x3F ) } {}
     ? < a 0xD800 { ^ ( sid_read & a 0x1F ) } {}
-    ? < a 0xDC00 { : *u c # *u g_color  ^ | & & # i . c & a 0x3FF 255 0x0F 0xF0 } {}
+    ? < a 0xDC00 { : *u c # *u g_color ^ | & & # i . c & a 0x3FF 255 0x0F 0xF0 } {}
     ? < a 0xDD00 { ^ ( cia1_read & a 0x0F ) } {}
     ? < a 0xDE00 { ^ ( cia2_read & a 0x0F ) } {}
     ^ 0xFF
 }
+
 @ io_write i a i b → v {
-    ? < a 0xD400 { ( vic_write & a 0x3F b )  ^ v } {}
-    ? < a 0xD800 { ( sid_write & a 0x1F b )  ^ v } {}
-    ? < a 0xDC00 { : *u c # *u g_color  = . c & a 0x3FF # u & b 0x0F  ^ v } {}
-    ? < a 0xDD00 { ( cia1_write & a 0x0F b )  ^ v } {}
-    ? < a 0xDE00 { ( cia2_write & a 0x0F b )  ^ v } {}
+    ? < a 0xD400 { ( vic_write & a 0x3F b ) ^ v } {}
+    ? < a 0xD800 { ( sid_write & a 0x1F b ) ^ v } {}
+    ? < a 0xDC00 { : *u c # *u g_color = . c & a 0x3FF # u & b 0x0F ^ v } {}
+    ? < a 0xDD00 { ( cia1_write & a 0x0F b ) ^ v } {}
+    ? < a 0xDE00 { ( cia2_write & a 0x0F b ) ^ v } {}
 }
 
 // ── Video timing: advance the raster line by `cyc` cycles ────────────
@@ -927,7 +979,7 @@ $ `stdlib/core/string.nu`
             = . lg g_raster # u & # i . v 0x21 255
         } {}
         = g_raster + g_raster 1
-        ? >= g_raster 312 { = g_raster 0  = g_frames + g_frames 1 } {}
+        ? >= g_raster 312 { = g_raster 0 = g_frames + g_frames 1 } {}
         // Raster compare: latch $D019 bit0 when the line is reached.
         : i cmp | & # i . v 0x12 255 ? != 0 & # i . v 0x11 0x80 0x100 0
         ? == g_raster cmp { = . v 0x19 # u | & # i . v 0x19 255 1 } {}
@@ -937,7 +989,7 @@ $ `stdlib/core/string.nu`
 // ── Interrupts ──────────────────────────────────────────────────────
 @ irq_enter i vec → v {
     ( push16 pc )
-    ( push8 & | rp 0x20 0xEF )       // pushed P: U=1, B=0 (hardware IRQ/NMI)
+    ( push8 & | rp 0x20 0xEF )  // pushed P: U=1, B=0 (hardware IRQ/NMI)
     ( set_i 1 )
     = pc ( rd16 vec )
 }
@@ -958,7 +1010,7 @@ $ `stdlib/core/string.nu`
     ? & == nl 1 == g_nmi_prev 0 {
         ( irq_enter 0xFFFA )
         ( cia1_tick 7 ) ( cia2_tick 7 ) ( vic_tick 7 ) ( sid_tick 7 )
-        = g_cycles + g_cycles 7  = cyc + cyc 7
+        = g_cycles + g_cycles 7 = cyc + cyc 7
         = g_nmi_prev nl
         ^ cyc
     } {}
@@ -966,7 +1018,7 @@ $ `stdlib/core/string.nu`
     ? & != 0 | ( cia1_irq ) ( vic_irq ) == ( p_i ) 0 {
         ( irq_enter 0xFFFE )
         ( cia1_tick 7 ) ( cia2_tick 7 ) ( vic_tick 7 ) ( sid_tick 7 )
-        = g_cycles + g_cycles 7  = cyc + cyc 7
+        = g_cycles + g_cycles 7 = cyc + cyc 7
     } {}
     ^ cyc
 }
@@ -989,8 +1041,9 @@ $ `stdlib/core/string.nu`
 @ blit_into s dst i n * u src → v {
     : *u d # *u dst
     : ~ i i 0
-    ~ < i n { = . d i . src i  = i + i 1 }
+    ~ < i n { = . d i . src i = i + i 1 }
 }
+
 @ c64_alloc → v {
     = g_mem ( nurl_zalloc 65536 )
     = g_kernal ( nurl_zalloc 8192 )
@@ -1001,21 +1054,24 @@ $ `stdlib/core/string.nu`
     = g_sidreg ( nurl_zalloc 32 )
     = g_cia2reg ( nurl_zalloc 16 )
     = g_kb ( nurl_zalloc 8 )
-    = g_fb ( nurl_zalloc 104448 )       // 384 * 272
+    = g_fb ( nurl_zalloc 104448 )  // 384 * 272
     = g_fg ( nurl_zalloc 104448 )
     = g_sprcov ( nurl_zalloc 104448 )
     = g_lineborder ( nurl_zalloc 312 )
     = g_linebg ( nurl_zalloc 312 )
     = g_audio ( nurl_zalloc * g_audio_cap 8 )
-    = g_v_acc ( nurl_zalloc 24 )  = g_v_lfsr ( nurl_zalloc 24 )
-    = g_v_env ( nurl_zalloc 24 )  = g_v_st ( nurl_zalloc 24 )
-    = g_v_rc ( nurl_zalloc 24 )   = g_v_ec ( nurl_zalloc 24 )  = g_v_gate ( nurl_zalloc 24 )
+    = g_v_acc ( nurl_zalloc 24 ) = g_v_lfsr ( nurl_zalloc 24 )
+    = g_v_env ( nurl_zalloc 24 ) = g_v_st ( nurl_zalloc 24 )
+    = g_v_rc ( nurl_zalloc 24 ) = g_v_ec ( nurl_zalloc 24 ) = g_v_gate ( nurl_zalloc 24 )
     = g_v_wrap ( nurl_zalloc 24 )
-    = g_disk ( nurl_zalloc 196608 )  = g_disk_size 0
+    = g_disk ( nurl_zalloc 196608 ) = g_disk_size 0
     = g_filebuf ( nurl_zalloc 65536 )
 }
+
 @ load_kernal * u src i n → v { ( blit_into g_kernal ? > n 8192 8192 n src ) }
+
 @ load_basic * u src i n → v { ( blit_into g_basic ? > n 8192 8192 n src ) }
+
 @ load_chargen * u src i n → v { ( blit_into g_chargen ? > n 4096 4096 n src ) }
 
 // Cold-boot the machine: ROMs must already be loaded. Sets the CPU port
@@ -1025,14 +1081,14 @@ $ `stdlib/core/string.nu`
     = g_banked 1
     = g_p01_ddr 0x2F
     = g_p01_data 0x37
-    = c1_cra 0  = c1_crb 0  = c1_icr 0  = c1_imask 0
-    = c1_ta 0xFFFF  = c1_tb 0xFFFF
-    = c1_ta_lo 0  = c1_ta_hi 0  = c1_tb_lo 0  = c1_tb_hi 0
-    = c1_pra 0xFF  = c1_prb 0xFF  = c1_ddra 0  = c1_ddrb 0
-    = c2_cra 0  = c2_crb 0  = c2_icr 0  = c2_imask 0
-    = c2_ta 0xFFFF  = c2_tb 0xFFFF  = c2_pra 0x17  = c2_prb 0xFF  = c2_ddra 0x3F  = c2_ddrb 0
-    = g_restore 0  = g_nmi_prev 0
-    = g_raster 0  = g_rasdot 0  = g_frames 0  = g_cycles 0
+    = c1_cra 0 = c1_crb 0 = c1_icr 0 = c1_imask 0
+    = c1_ta 0xFFFF = c1_tb 0xFFFF
+    = c1_ta_lo 0 = c1_ta_hi 0 = c1_tb_lo 0 = c1_tb_hi 0
+    = c1_pra 0xFF = c1_prb 0xFF = c1_ddra 0 = c1_ddrb 0
+    = c2_cra 0 = c2_crb 0 = c2_icr 0 = c2_imask 0
+    = c2_ta 0xFFFF = c2_tb 0xFFFF = c2_pra 0x17 = c2_prb 0xFF = c2_ddra 0x3F = c2_ddrb 0
+    = g_restore 0 = g_nmi_prev 0
+    = g_raster 0 = g_rasdot 0 = g_frames 0 = g_cycles 0
     ( sid_reset )
     ( cpu_reset )
 }
@@ -1046,12 +1102,12 @@ $ `stdlib/core/string.nu`
     ? < n 3 { ^ 0 } {}
     : i addr | & # i . src 0 255 << & # i . src 1 255 8
     : ~ i i 2
-    ~ < i n { ( ram_wr & + addr - i 2 0xFFFF & # i . src i 255 )  = i + i 1 }
+    ~ < i n { ( ram_wr & + addr - i 2 0xFFFF & # i . src i 255 ) = i + i 1 }
     : i end & + addr - n 2 0xFFFF
     ? == addr 0x0801 {
-        ( ram_wr 0x2D & end 0xFF )  ( ram_wr 0x2E & >> end 8 0xFF )
-        ( ram_wr 0x2F & end 0xFF )  ( ram_wr 0x30 & >> end 8 0xFF )
-        ( ram_wr 0x31 & end 0xFF )  ( ram_wr 0x32 & >> end 8 0xFF )
+        ( ram_wr 0x2D & end 0xFF ) ( ram_wr 0x2E & >> end 8 0xFF )
+        ( ram_wr 0x2F & end 0xFF ) ( ram_wr 0x30 & >> end 8 0xFF )
+        ( ram_wr 0x31 & end 0xFF ) ( ram_wr 0x32 & >> end 8 0xFF )
     } {}
     ^ addr
 }
@@ -1064,18 +1120,19 @@ $ `stdlib/core/string.nu`
         ( ram_wr 0xC6 + cnt 1 )
     } {}
 }
+
 @ autorun_basic → v {
-    ( kbuf_push 0x52 ) ( kbuf_push 0x55 ) ( kbuf_push 0x4E ) ( kbuf_push 0x0D )   // RUN⏎
+    ( kbuf_push 0x52 ) ( kbuf_push 0x55 ) ( kbuf_push 0x4E ) ( kbuf_push 0x0D )  // RUN⏎
 }
 // Type "SYS<addr>⏎" (decimal). NURL has '/' but no '%', so x%10 = x-10*(x/10).
 @ autorun_sys i addr → v {
-    ( kbuf_push 0x53 ) ( kbuf_push 0x59 ) ( kbuf_push 0x53 )                       // SYS
+    ( kbuf_push 0x53 ) ( kbuf_push 0x59 ) ( kbuf_push 0x53 )  // SYS
     : ~ i div 10000
     : ~ i started 0
     ~ > div 0 {
         : i q / addr div
         : i d - q * 10 / q 10
-        ? != 0 | d started { ( kbuf_push + 0x30 d )  = started 1 } {}
+        ? != 0 | d started { ( kbuf_push + 0x30 d ) = started 1 } {}
         = div / div 10
     }
     ? == started 0 { ( kbuf_push 0x30 ) } {}
@@ -1103,12 +1160,14 @@ $ `stdlib/core/string.nu`
     ? <= t 30 { ^ 18 } {}
     ^ 17
 }
+
 @ d64_off i t i s → i {
     : ~ i sec 0
     : ~ i tt 1
-    ~ < tt t { = sec + sec ( d64_spt tt )  = tt + tt 1 }
+    ~ < tt t { = sec + sec ( d64_spt tt ) = tt + tt 1 }
     ^ * + sec s 256
 }
+
 @ disk_byte i off → i {
     ? | < off 0 >= off g_disk_size { ^ 0 } {}
     : *u d # *u g_disk
@@ -1119,19 +1178,19 @@ $ `stdlib/core/string.nu`
     : ~ i i 0
     ~ < i namelen {
         : i nc & ( ram_rd + nameptr i ) 255
-        ? == nc 42 { ^ 1 } {}                          // '*' → wildcard, rest matches
+        ? == nc 42 { ^ 1 } {}  // '*' → wildcard, rest matches
         ? != nc ( disk_byte + entryoff + 5 i ) { ^ 0 } {}
         = i + i 1
     }
     ? < namelen 16 {
-        : i dc ( disk_byte + entryoff + 5 namelen )    // name must end here ($A0/end)
+        : i dc ( disk_byte + entryoff + 5 namelen )  // name must end here ($A0/end)
         ? & != dc 0xA0 != dc 0 { ^ 0 } {}
     } {}
     ^ 1
 }
 // Find a file (name in C64 RAM). Sets g_file_track/sector; returns 1/0.
 @ disk_find i nameptr i namelen → i {
-    : ~ i t 18  : ~ i s 1  : ~ i guard 0
+    : ~ i t 18 : ~ i s 1 : ~ i guard 0
     ~ & != t 0 < guard 40 {
         : i base ( d64_off t s )
         : i nt ( disk_byte base )
@@ -1148,13 +1207,13 @@ $ `stdlib/core/string.nu`
             } {}
             = e + e 1
         }
-        = t nt  = s ns  = guard + guard 1
+        = t nt = s ns = guard + guard 1
     }
     ^ 0
 }
 // Find the first PRG entry (for autostart). Sets g_file_track/sector.
 @ disk_find_first → i {
-    : ~ i t 18  : ~ i s 1  : ~ i guard 0
+    : ~ i t 18 : ~ i s 1 : ~ i guard 0
     ~ & != t 0 < guard 40 {
         : i base ( d64_off t s )
         : i nt ( disk_byte base )
@@ -1169,33 +1228,34 @@ $ `stdlib/core/string.nu`
             } {}
             = e + e 1
         }
-        = t nt  = s ns  = guard + guard 1
+        = t nt = s ns = guard + guard 1
     }
     ^ 0
 }
 // Follow the track/sector chain from g_file_track/sector into g_filebuf.
 @ disk_read_file → i {
-    : ~ i t g_file_track  : ~ i s g_file_sector
+    : ~ i t g_file_track : ~ i s g_file_sector
     : *u d # *u g_filebuf
-    : ~ i len 0  : ~ i guard 0
+    : ~ i len 0 : ~ i guard 0
     ~ & != t 0 < guard 800 {
         : i base ( d64_off t s )
         : i nt ( disk_byte base )
         : i ns ( disk_byte + base 1 )
-        : i count ? == nt 0 - ns 1 254       // last sector: ns = last used byte index
+        : i count ? == nt 0 - ns 1 254  // last sector: ns = last used byte index
         : ~ i i 0
-        ~ < i count { = . d + len i # u ( disk_byte + base + 2 i )  = i + i 1 }
+        ~ < i count { = . d + len i # u ( disk_byte + base + 2 i ) = i + i 1 }
         = len + len count
-        = t nt  = s ns  = guard + guard 1
+        = t nt = s ns = guard + guard 1
     }
     ^ len
 }
+
 @ disk_attach * u src i n → v {
     : i cap ? > n 196608 196608 n
     = g_disk_size cap
     : *u d # *u g_disk
     : ~ i i 0
-    ~ < i cap { = . d i . src i  = i + i 1 }
+    ~ < i cap { = . d i . src i = i + i 1 }
 }
 // Auto-load + run the first program on the disk (drop-a-.d64 convenience).
 @ disk_autostart → i {
@@ -1206,16 +1266,17 @@ $ `stdlib/core/string.nu`
 }
 
 // ── KERNAL LOAD trap ($F4A5) — serve files straight from the image ──
-@ fbuf_byte i i → i { : *u fb # *u g_filebuf  ^ & # i . fb i 255 }
+@ fbuf_byte i i → i { : *u fb # *u g_filebuf ^ & # i . fb i 255 }
+
 @ disk_rts → v { = pc & + ( pull16 ) 1 0xFFFF }
 // 3-letter file-type mnemonic for the directory listing.
 @ disk_type3 i p i ty → v {
     ?? ty {
-        1 → { ( ram_wr p 83 ) ( ram_wr + p 1 69 ) ( ram_wr + p 2 81 ) }    // SEQ
-        2 → { ( ram_wr p 80 ) ( ram_wr + p 1 82 ) ( ram_wr + p 2 71 ) }    // PRG
-        3 → { ( ram_wr p 85 ) ( ram_wr + p 1 83 ) ( ram_wr + p 2 82 ) }    // USR
-        4 → { ( ram_wr p 82 ) ( ram_wr + p 1 69 ) ( ram_wr + p 2 76 ) }    // REL
-        _ → { ( ram_wr p 68 ) ( ram_wr + p 1 69 ) ( ram_wr + p 2 76 ) }    // DEL
+        1 → { ( ram_wr p 83 ) ( ram_wr + p 1 69 ) ( ram_wr + p 2 81 ) }  // SEQ
+        2 → { ( ram_wr p 80 ) ( ram_wr + p 1 82 ) ( ram_wr + p 2 71 ) }  // PRG
+        3 → { ( ram_wr p 85 ) ( ram_wr + p 1 83 ) ( ram_wr + p 2 82 ) }  // USR
+        4 → { ( ram_wr p 82 ) ( ram_wr + p 1 69 ) ( ram_wr + p 2 76 ) }  // REL
+        _ → { ( ram_wr p 68 ) ( ram_wr + p 1 69 ) ( ram_wr + p 2 76 ) }  // DEL
     }
 }
 // LOAD"$",8 → synthesise a BASIC directory program at $0801.
@@ -1225,16 +1286,16 @@ $ `stdlib/core/string.nu`
     // Header line (line number 0): reverse-video disk name.
     : i l0 p
     = p + p 2
-    ( ram_wr p 0 ) ( ram_wr + p 1 0 )  = p + p 2
-    ( ram_wr p 0x12 )  = p + p 1
-    ( ram_wr p 34 )  = p + p 1
+    ( ram_wr p 0 ) ( ram_wr + p 1 0 ) = p + p 2
+    ( ram_wr p 0x12 ) = p + p 1
+    ( ram_wr p 34 ) = p + p 1
     : ~ i k 0
-    ~ < k 16 { : i c ( disk_byte + bam + 0x90 k )  ( ram_wr p ? == c 0xA0 32 c )  = p + p 1  = k + k 1 }
-    ( ram_wr p 34 )  = p + p 1
-    ( ram_wr p 0 )  = p + p 1
-    ( ram_wr l0 & p 0xFF )  ( ram_wr + l0 1 & >> p 8 0xFF )
+    ~ < k 16 { : i c ( disk_byte + bam + 0x90 k ) ( ram_wr p ? == c 0xA0 32 c ) = p + p 1 = k + k 1 }
+    ( ram_wr p 34 ) = p + p 1
+    ( ram_wr p 0 ) = p + p 1
+    ( ram_wr l0 & p 0xFF ) ( ram_wr + l0 1 & >> p 8 0xFF )
     // One BASIC line per directory entry.
-    : ~ i t 18  : ~ i s 1  : ~ i guard 0
+    : ~ i t 18 : ~ i s 1 : ~ i guard 0
     ~ & != t 0 < guard 40 {
         : i base ( d64_off t s )
         : i nt ( disk_byte base )
@@ -1247,48 +1308,49 @@ $ `stdlib/core/string.nu`
                 : i blocks | ( disk_byte + eo 30 ) << ( disk_byte + eo 31 ) 8
                 : i ll p
                 = p + p 2
-                ( ram_wr p & blocks 0xFF ) ( ram_wr + p 1 & >> blocks 8 0xFF )  = p + p 2
-                ( ram_wr p 32 )  = p + p 1
-                ( ram_wr p 34 )  = p + p 1
+                ( ram_wr p & blocks 0xFF ) ( ram_wr + p 1 & >> blocks 8 0xFF ) = p + p 2
+                ( ram_wr p 32 ) = p + p 1
+                ( ram_wr p 34 ) = p + p 1
                 : ~ i kk 0
-                ~ < kk 16 { : i c ( disk_byte + eo + 5 kk )  ? != c 0xA0 { ( ram_wr p c )  = p + p 1 } {}  = kk + kk 1 }
-                ( ram_wr p 34 )  = p + p 1
-                ( ram_wr p 32 )  = p + p 1
-                ( disk_type3 p ty )  = p + p 3
-                ( ram_wr p 0 )  = p + p 1
-                ( ram_wr ll & p 0xFF )  ( ram_wr + ll 1 & >> p 8 0xFF )
+                ~ < kk 16 { : i c ( disk_byte + eo + 5 kk ) ? != c 0xA0 { ( ram_wr p c ) = p + p 1 } {} = kk + kk 1 }
+                ( ram_wr p 34 ) = p + p 1
+                ( ram_wr p 32 ) = p + p 1
+                ( disk_type3 p ty ) = p + p 3
+                ( ram_wr p 0 ) = p + p 1
+                ( ram_wr ll & p 0xFF ) ( ram_wr + ll 1 & >> p 8 0xFF )
             } {}
             = e + e 1
         }
-        = t nt  = s ns  = guard + guard 1
+        = t nt = s ns = guard + guard 1
     }
     ( ram_wr p 0 ) ( ram_wr + p 1 0 )
     : i endp + p 2
     ( ram_wr 0x2D & endp 0xFF ) ( ram_wr 0x2E & >> endp 8 0xFF )
     ( ram_wr 0x2F & endp 0xFF ) ( ram_wr 0x30 & >> endp 8 0xFF )
     ( ram_wr 0x31 & endp 0xFF ) ( ram_wr 0x32 & >> endp 8 0xFF )
-    = rx & endp 0xFF  = ry & >> endp 8 0xFF
-    ( set_c 0 )  ( ram_wr 0x90 0 )
+    = rx & endp 0xFF = ry & >> endp 8 0xFF
+    ( set_c 0 ) ( ram_wr 0x90 0 )
     ( disk_rts )
 }
+
 @ disk_kernal_load → v {
     : i sec ( rd8 0xB9 )
     : i namelen ( rd8 0xB7 )
     : i nameptr | ( rd8 0xBB ) << ( rd8 0xBC ) 8
     : i first ? > namelen 0 ( ram_rd nameptr ) 0
-    ? & == namelen 1 == first 36 { ( disk_load_dir )  ^ v } {}      // "$" directory
+    ? & == namelen 1 == first 36 { ( disk_load_dir ) ^ v } {}  // "$" directory
     ? == 0 ( disk_find nameptr namelen ) {
-        ( set_c 1 )  ( ram_wr 0x90 0x42 )                            // FILE NOT FOUND
-        ( disk_rts )  ^ v
+        ( set_c 1 ) ( ram_wr 0x90 0x42 )  // FILE NOT FOUND
+        ( disk_rts ) ^ v
     } {}
     : i flen ( disk_read_file )
     : i loadaddr ? == sec 0 | rx << ry 8 | ( fbuf_byte 0 ) << ( fbuf_byte 1 ) 8
     : *u fb # *u g_filebuf
     : ~ i i 2
-    ~ < i flen { ( ram_wr & + loadaddr - i 2 0xFFFF & # i . fb i 255 )  = i + i 1 }
+    ~ < i flen { ( ram_wr & + loadaddr - i 2 0xFFFF & # i . fb i 255 ) = i + i 1 }
     : i end & + loadaddr - flen 2 0xFFFF
-    = rx & end 0xFF  = ry & >> end 8 0xFF
-    ( set_c 0 )  ( ram_wr 0x90 0 )
+    = rx & end 0xFF = ry & >> end 8 0xFF
+    ( set_c 0 ) ( ram_wr 0x90 0 )
     ( disk_rts )
 }
 
@@ -1311,6 +1373,7 @@ $ `stdlib/core/string.nu`
     ? == cbase 0x1800 { ^ & # i . cg + 0x800 + * sc 8 ln 255 } {}
     ^ ( ram_rd + + cbase * sc 8 ln )
 }
+
 @ line_bg i r i ln → i {
     : *u lg # *u g_linebg
     ^ & & # i . lg + 50 + * r 8 ln 255 0x0F
@@ -1324,15 +1387,15 @@ $ `stdlib/core/string.nu`
         : i ras + py 14
         : i bcol & # i . lb ? < ras 312 ras 311 255
         : ~ i px 0
-        ~ < px 384 { = . fb + * py 384 px # u bcol  = px + px 1 }
+        ~ < px 384 { = . fb + * py 384 px # u bcol = px + px 1 }
         = py + py 1
     }
     // Display enable (DEN, $D011 bit4) off → blanked to border.
     ? == 0 & ( vreg 0x11 ) 0x10 { ^ v } {}
     : *u fm # *u g_fg
-    : ~ i i 0  ~ < i 104448 { = . fm i # u 0  = i + i 1 }
-    : i bmm & ( vreg 0x11 ) 0x20      // bitmap mode
-    : i mcm & ( vreg 0x16 ) 0x10      // multicolour
+    : ~ i i 0 ~ < i 104448 { = . fm i # u 0 = i + i 1 }
+    : i bmm & ( vreg 0x11 ) 0x20  // bitmap mode
+    : i mcm & ( vreg 0x16 ) 0x10  // multicolour
     ? != 0 bmm { ( render_bitmap ? != 0 mcm 1 0 ) } { ( render_text ? != 0 mcm 1 0 ) }
     ( render_sprites )
 }
@@ -1444,20 +1507,21 @@ $ `stdlib/core/string.nu`
         : i idx + * fy 384 fx
         : i bit << 1 s
         : i cv & # i . cov idx 255
-        ? != 0 cv { = g_coll_ss | g_coll_ss | bit cv } {}      // overlapped another sprite
+        ? != 0 cv { = g_coll_ss | g_coll_ss | bit cv } {}  // overlapped another sprite
         ? != 0 & # i . fm idx 255 { = g_coll_sb | g_coll_sb bit } {}  // overlapped foreground
         = . cov idx # u | cv bit
         ? & != 0 prio != 0 & # i . fm idx 255 {} { = . fb idx # u c }
     } {}
 }
+
 @ draw_sprite i s i scrbase i vbank i mc i mcm0 i mcm1 i col i xexp i yexp i prio → v {
     : *u v # *u g_vicreg
     : i x | & # i . v * s 2 255 ? != 0 & ( vreg 0x10 ) << 1 s 0x100 0
     : i y & # i . v + * s 2 1 255
     : i ptr & ( ram_rd + + scrbase 0x3F8 s ) 255
     : i data + vbank * ptr 64
-    : i ox + x 8           // VIC X=24 → framebuffer x=32
-    : i oy - y 14          // VIC Y=50 → framebuffer y=36
+    : i ox + x 8  // VIC X=24 → framebuffer x=32
+    : i oy - y 14  // VIC Y=50 → framebuffer y=36
     : i xstep ? != 0 xexp 2 1
     : i ystep ? != 0 yexp 2 1
     : ~ i row 0
@@ -1480,7 +1544,7 @@ $ `stdlib/core/string.nu`
                 : ~ i dy 0
                 ~ < dy ystep {
                     : ~ i dx 0
-                    ~ < dx xstep { ( spr_px + fx0 dx + fy0 dy c s prio )  = dx + dx 1 }
+                    ~ < dx xstep { ( spr_px + fx0 dx + fy0 dy c s prio ) = dx + dx 1 }
                     = dy + dy 1
                 }
             } {}
@@ -1496,8 +1560,8 @@ $ `stdlib/core/string.nu`
     // Reset per-pixel sprite coverage + this frame's collision accumulators.
     : *u cov # *u g_sprcov
     : ~ i z 0
-    ~ < z 104448 { = . cov z # u 0  = z + z 1 }
-    = g_coll_ss 0  = g_coll_sb 0
+    ~ < z 104448 { = . cov z # u 0 = z + z 1 }
+    = g_coll_ss 0 = g_coll_sb 0
     : i vbank * & ^^ ( cia2_pra ) 0xFF 3 0x4000
     : i scrbase + vbank * & >> ( vreg 0x18 ) 4 0xF 0x400
     : i mcm0 & ( vreg 0x25 ) 0x0F
@@ -1525,12 +1589,13 @@ $ `stdlib/core/string.nu`
 // ── Native helper: dump the 40x25 text screen as ASCII ──────────────
 @ scr_to_ascii i sc → i {
     : i c & sc 0x7F
-    ? == c 0 { ^ 64 } {}                 // '@'
-    ? & >= c 1 <= c 26 { ^ + 64 c } {}   // A-Z
+    ? == c 0 { ^ 64 } {}  // '@'
+    ? & >= c 1 <= c 26 { ^ + 64 c } {}  // A-Z
     ? & >= c 27 <= c 31 { ^ + 64 c } {}  // [ \ ] ^ _
-    ? & >= c 32 <= c 63 { ^ c } {}       // space, digits, punctuation (ASCII)
+    ? & >= c 32 <= c 63 { ^ c } {}  // space, digits, punctuation (ASCII)
     ^ 32
 }
+
 @ screen_dump → v {
     : i scrbase + * & ^^ ( cia2_pra ) 0xFF 3 0x4000 * & >> ( vreg 0x18 ) 4 0xF 0x400
     : String row ( string_with_cap 42 )
@@ -1570,14 +1635,15 @@ $ `stdlib/core/string.nu`
 }
 
 // Native helpers for verifying the VIC framebuffer headlessly.
-@ fb_color_at i x i y → i { : *u fb # *u g_fb  ^ & # i . fb + * ? < y 272 y 271 384 ? < x 384 x 383 255 }
+@ fb_color_at i x i y → i { : *u fb # *u g_fb ^ & # i . fb + * ? < y 272 y 271 384 ? < x 384 x 383 255 }
+
 @ fb_hist → v {
     : *u fb # *u g_fb
     : ~ i ci 0
     ~ < ci 16 {
         : ~ i cnt 0
         : ~ i i 0
-        ~ < i 104448 { ? == & # i . fb i 255 ci { = cnt + cnt 1 } {}  = i + i 1 }
+        ~ < i 104448 { ? == & # i . fb i 255 ci { = cnt + cnt 1 } {} = i + i 1 }
         ? > cnt 0 { ( nurl_print `c` ) ( nurl_print ( nurl_str_int ci ) ) ( nurl_print `=` ) ( nurl_print ( nurl_str_int cnt ) ) ( nurl_print ` ` ) } {}
         = ci + ci 1
     }

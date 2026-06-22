@@ -6,7 +6,7 @@
 $ `stdlib/std/ordmap.nu`
 $ `stdlib/core/string.nu`
 
-@ expect_opt_i ?i got i want s label → i {
+@ expect_opt_i ? i got i want s label → i {
     : ~ i bad 1
     ?? got { T v → { ? == v want { = bad 0 } {} } F → {} }
     ? > bad 0 { ( nurl_print `  FAIL opt ` ) ( nurl_print label ) ( nurl_print `\n` ) } {}

@@ -39,11 +39,11 @@ $ `stdlib/ext/registry_index.nu`
             ( nurl_print `name=` ) ( nurl_print ( string_data . idx name ) ) ( nurl_print `\n` )
             ( nurl_print `versions=` ) ( nurl_print_int ( vec_len [IdxVersion] . idx versions ) ) ( nurl_print `\n` )
 
-            ( sel idx `^1.0.0` )     // 1.2.0 (1.4.0 yanked, 2.0.0 out of range)
-            ( sel idx `>=1.0.0` )    // 2.0.0
-            ( sel idx `^1.3.0` )     // none (only 1.4.0 in range, but yanked)
-            ( sel idx `=2.0.0` )     // 2.0.0
-            ( sel idx `^3.0.0` )     // none
+            ( sel idx `^1.0.0` )  // 1.2.0 (1.4.0 yanked, 2.0.0 out of range)
+            ( sel idx `>=1.0.0` )  // 2.0.0
+            ( sel idx `^1.3.0` )  // none (only 1.4.0 in range, but yanked)
+            ( sel idx `=2.0.0` )  // 2.0.0
+            ( sel idx `^3.0.0` )  // none
 
             : i k2 ( regindex_select idx `=1.2.0` )
             : ?IdxVersion v2 ( vec_get [IdxVersion] . idx versions k2 )

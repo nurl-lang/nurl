@@ -30,12 +30,12 @@ $ `stdlib/net/relay.nu`
 }
 
 @ main → i {
-    : ( Vec u ) pk   ( bytes 100 32 )    // a 32-byte pubkey
-    : ( Vec u ) data ( bytes 1 40 )      // opaque payload
+    : ( Vec u ) pk ( bytes 100 32 )  // a 32-byte pubkey
+    : ( Vec u ) data ( bytes 1 40 )  // opaque payload
 
     // ── REGISTER ─────────────────────────────────────────────────
     : ( Vec u ) reg ( relay_build_register pk )
-    ( nurl_print `register frame len: ` ) ( nurl_print_int ( vec_len [u] reg ) )   // 1+4+32 = 37
+    ( nurl_print `register frame len: ` ) ( nurl_print_int ( vec_len [u] reg ) )  // 1+4+32 = 37
     : ?RelayFrame rf ( relay_parse reg )
     ?? rf {
         T f → {
@@ -77,7 +77,7 @@ $ `stdlib/net/relay.nu`
     }
 
     // ── GROUP JOIN / SEND ────────────────────────────────────────
-    : ( Vec u ) gid ( bytes 200 32 )      // a 32-byte group id
+    : ( Vec u ) gid ( bytes 200 32 )  // a 32-byte group id
     : ( Vec u ) gj ( relay_build_group_join gid )
     : ?RelayFrame fj ( relay_parse gj )
     ?? fj {
@@ -106,14 +106,14 @@ $ `stdlib/net/relay.nu`
 
     // ── incomplete buffer ────────────────────────────────────────
     : ( Vec u ) partial ( vec_new [u] )
-    ( vec_push [u] partial # u 2 )                    // type
-    ( bytes_push_u32_be partial # u32 999 )          // claims 999 bytes, none follow
+    ( vec_push [u] partial # u 2 )  // type
+    ( bytes_push_u32_be partial # u32 999 )  // claims 999 bytes, none follow
     ( pb `incomplete → None: ` ?? ( relay_parse partial ) { T f → { ( relay_frame_free f ) F } F → T } )
 
     // ── oversize length rejected ─────────────────────────────────
     : ( Vec u ) huge ( vec_new [u] )
     ( vec_push [u] huge # u 2 )
-    ( bytes_push_u32_be huge # u32 2000000 )         // > __relay_max
+    ( bytes_push_u32_be huge # u32 2000000 )  // > __relay_max
     ( pb `oversize → None: ` ?? ( relay_parse huge ) { T f → { ( relay_frame_free f ) F } F → T } )
 
     ( vec_free [u] pk ) ( vec_free [u] data )

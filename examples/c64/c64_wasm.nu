@@ -14,8 +14,11 @@ $ `examples/c64/core.nu`
 
 // ── Canvas FFI (module "canvas") — same shape as the Game Boy demo ──
 & `canvas` @ canvas_open i w i h → *i
+
 & `canvas` @ canvas_present → v
+
 & `canvas` @ canvas_sleep i ms → v
+
 & `canvas` @ canvas_should_close → i
 
 // ── Host imports wired up by c64demo.html ──
@@ -28,12 +31,14 @@ $ `examples/c64/core.nu`
 // A queued .prg to autostart: host_prg_pending returns its length once
 // (clearing the queue), then host_prg_byte serves its bytes.
 & `canvas` @ host_prg_pending → i
+
 & `canvas` @ host_prg_byte i idx → i
 // Hand this frame's SID samples (packed-stereo i64 ring) to Web Audio.
 & `canvas` @ host_audio i ptr i nsamples → v
 // A queued .d64 disk image: host_disk_pending returns its length once
 // (clearing the queue), then host_disk_byte serves its bytes.
 & `canvas` @ host_disk_pending → i
+
 & `canvas` @ host_disk_byte i idx → i
 
 // ── C64 16-colour palette (Pepto) → ARGB 0xAARRGGBB (host swaps R/B) ──
@@ -75,16 +80,16 @@ $ `examples/c64/core.nu`
     : s buf ( nurl_alloc n )
     : *u bp # *u buf
     : ~ i i 0
-    ~ < i n { = . bp i # u ( host_rom_byte bank i )  = i + i 1 }
+    ~ < i n { = . bp i # u ( host_rom_byte bank i ) = i + i 1 }
     ^ buf
 }
 
 @ main → i {
     ( c64_alloc )
     // Load the three ROMs from the host, then cold-boot.
-    : s kbuf ( pull_rom 0 8192 )   ( load_kernal  # *u kbuf 8192 )  ( nurl_free kbuf )
-    : s bbuf ( pull_rom 1 8192 )   ( load_basic   # *u bbuf 8192 )  ( nurl_free bbuf )
-    : s cbuf ( pull_rom 2 4096 )   ( load_chargen # *u cbuf 4096 )  ( nurl_free cbuf )
+    : s kbuf ( pull_rom 0 8192 ) ( load_kernal # *u kbuf 8192 ) ( nurl_free kbuf )
+    : s bbuf ( pull_rom 1 8192 ) ( load_basic # *u bbuf 8192 ) ( nurl_free bbuf )
+    : s cbuf ( pull_rom 2 4096 ) ( load_chargen # *u cbuf 4096 ) ( nurl_free cbuf )
     ( c64_boot )
 
     : *i fb ( canvas_open 384 272 )
@@ -93,7 +98,7 @@ $ `examples/c64/core.nu`
     ~ != running 0 {
         // Refresh the keyboard matrix from the host.
         : ~ i col 0
-        ~ < col 8 { = . kb col # u & ( host_kb_col col ) 255  = col + col 1 }
+        ~ < col 8 { = . kb col # u & ( host_kb_col col ) 255 = col + col 1 }
         = g_restore & ( host_restore ) 1
         // A .prg queued by the host? Pull it in and autostart it.
         : i pn ( host_prg_pending )
@@ -101,7 +106,7 @@ $ `examples/c64/core.nu`
             : s pb ( nurl_alloc pn )
             : *u pp # *u pb
             : ~ i k 0
-            ~ < k pn { = . pp k # u ( host_prg_byte k )  = k + k 1 }
+            ~ < k pn { = . pp k # u ( host_prg_byte k ) = k + k 1 }
             ( prg_autostart # *u pb pn )
             ( nurl_free pb )
         } {}
@@ -111,15 +116,15 @@ $ `examples/c64/core.nu`
             : s db ( nurl_alloc dn )
             : *u dp # *u db
             : ~ i j 0
-            ~ < j dn { = . dp j # u ( host_disk_byte j )  = j + j 1 }
+            ~ < j dn { = . dp j # u ( host_disk_byte j ) = j + j 1 }
             ( disk_attach # *u db dn )
             ( nurl_free db )
             ( disk_autostart )
         } {}
-        ( run_one_frame )       // also rasterises the frame (framebuffer + collisions)
+        ( run_one_frame )  // also rasterises the frame (framebuffer + collisions)
         ( blit fb )
         ( canvas_present )
-        ( host_audio # i g_audio g_audio_len )   // drain this frame's SID samples
+        ( host_audio # i g_audio g_audio_len )  // drain this frame's SID samples
         = g_audio_len 0
         ( canvas_sleep 20 )
         ? != 0 ( canvas_should_close ) { = running 0 } {}

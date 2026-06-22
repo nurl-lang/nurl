@@ -55,7 +55,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/errors.nu`
 $ `stdlib/core/posix.nu`  // errno_kind
-$ `stdlib/std/fs.nu`      // nurl_file_open / nurl_file_close
+$ `stdlib/std/fs.nu`  // nurl_file_open / nurl_file_close
 
 // ── libc bridges (pure-NURL FFI) ────────────────────────────────────
 // fread is declared globally in nurlc's preamble (Phase 7, 2026-05-23);

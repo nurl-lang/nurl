@@ -473,11 +473,11 @@ $ `stdlib/core/cell.nu`  // nurl_native_sizeof for z_stream alloc
 & `c` @ nurl_z_avail_out *u zs → i
 
 : ZDeflate {
-    *u zs  // heap z_stream; 0 once freed
+    * u zs  // heap z_stream; 0 once freed
 }
 
 : ZInflate {
-    *u zs
+    * u zs
 }
 
 @ __raw_clamp_wbits i window_bits → i {

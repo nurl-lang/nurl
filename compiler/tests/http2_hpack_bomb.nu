@@ -41,12 +41,12 @@ $ `stdlib/ext/http2_hpack.nu`
     : ( Vec u ) blk ( vec_new [u] )
     // Field 1: literal with incremental indexing, new name (0x40).
     ( vec_push [u] blk # u 0x40 )
-    ( enc_int blk 127 1 )            // name length = 1
-    ( vec_push [u] blk # u 0x78 )    // 'x'
-    ( enc_int blk 127 vlen )         // value length
+    ( enc_int blk 127 1 )  // name length = 1
+    ( vec_push [u] blk # u 0x78 )  // 'x'
+    ( enc_int blk 127 vlen )  // value length
     : ~ i k 0
     ~ < k vlen {
-        ( vec_push [u] blk # u 0x61 ) // 'a'
+        ( vec_push [u] blk # u 0x61 )  // 'a'
         = k + k 1
     }
     // 600 one-byte indexed references to dynamic index 62 (0x80 | 62 =

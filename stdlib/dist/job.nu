@@ -35,6 +35,7 @@ $ `stdlib/dist/ring.nu`
 $ `stdlib/net/transport.nu`
 
 @ job_submit_t → i { ^ 1 }
+
 @ job_result_t → i { ^ 2 }
 
 @ __job_cpy ( Vec u ) v → ( Vec u ) {
@@ -42,6 +43,7 @@ $ `stdlib/net/transport.nu`
     ( vec_extend [u] o v )
     ^ o
 }
+
 @ __job_veq ( Vec u ) a ( Vec u ) b → b {
     : i n ( vec_len [u] a )
     ? != n ( vec_len [u] b ) { ^ F } {}
@@ -68,6 +70,7 @@ $ `stdlib/net/transport.nu`
     ( Vec u ) key
     ( Vec u ) payload
 }
+
 @ jobmsg_free JobMsg m → v {
     ( vec_free [u] . m submitter )
     ( vec_free [u] . m key )
@@ -89,6 +92,7 @@ $ `stdlib/net/transport.nu`
     ( vec_extend [u] b payload )
     ^ b
 }
+
 @ job_build_result i task_id ( Vec u ) payload → ( Vec u ) {
     : ( Vec u ) b ( vec_new [u] )
     ( vec_push [u] b # u ( job_result_t ) )
@@ -97,19 +101,25 @@ $ `stdlib/net/transport.nu`
     ^ b
 }
 
-: JCur { ( Vec u ) buf  i off }
-@ __jc_u8 *JCur c → i { : i v ?? ( vec_get [u] . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 1 ^ v }
-@ __jc_u16 *JCur c → i { : i v ?? ( bytes_read_u16_be . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 2 ^ v }
-@ __jc_u32 *JCur c → i { : i v ?? ( bytes_read_u32_be . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 4 ^ v }
-@ __jc_u64 *JCur c → i { : i v ?? ( bytes_read_u64_be . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 8 ^ v }
-@ __jc_blob *JCur c i n → ( Vec u ) {
+: JCur { ( Vec u ) buf i off }
+
+@ __jc_u8 * JCur c → i { : i v ?? ( vec_get [u] . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 1 ^ v }
+
+@ __jc_u16 * JCur c → i { : i v ?? ( bytes_read_u16_be . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 2 ^ v }
+
+@ __jc_u32 * JCur c → i { : i v ?? ( bytes_read_u32_be . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 4 ^ v }
+
+@ __jc_u64 * JCur c → i { : i v ?? ( bytes_read_u64_be . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 8 ^ v }
+
+@ __jc_blob * JCur c i n → ( Vec u ) {
     : ( Vec u ) o ( vec_with_cap [u] n )
     : ~ i k 0
     ~ < k n { ?? ( vec_get [u] . c buf + . c off k ) { T x → ( vec_push [u] o x ) F → {} } = k + k 1 }
     = . c off + . c off n
     ^ o
 }
-@ __jc_rest *JCur c → ( Vec u ) {
+
+@ __jc_rest * JCur c → ( Vec u ) {
     : i n ( vec_len [u] . c buf )
     ^ ( __jc_blob c - n . c off )
 }
@@ -148,13 +158,13 @@ $ `stdlib/net/transport.nu`
     ( Vec u ) result
 }
 : JobNode {
-    s transport       // *Transport (caller-owned; not freed here)
-    s ring            // *Ring     (caller-owned; not freed here)
+    s transport  // *Transport (caller-owned; not freed here)
+    s ring  // *Ring     (caller-owned; not freed here)
     ( Vec u ) self_pk
-    i replica         // this node's stable replica id → unique task ids
+    i replica  // this node's stable replica id → unique task ids
     i next_task
-    ( Vec s ) handlers   // *JobHandler
-    ( Vec s ) results    // *JobResult (idempotent by task_id)
+    ( Vec s ) handlers  // *JobHandler
+    ( Vec s ) results  // *JobResult (idempotent by task_id)
 }
 
 @ job_node_new s transport s ring ( Vec u ) self_pk i replica → *JobNode {
@@ -169,7 +179,7 @@ $ `stdlib/net/transport.nu`
     ^ n
 }
 
-@ job_node_free *JobNode n → v {
+@ job_node_free * JobNode n → v {
     ( vec_free [u] . n self_pk )
     : i hn ( vec_len [s] . n handlers )
     : ~ i k 0
@@ -197,14 +207,14 @@ $ `stdlib/net/transport.nu`
 }
 
 // Register a handler for a task kind: payload bytes → result bytes.
-@ job_register *JobNode n i kind ( @ ( Vec u ) ( Vec u ) ) fn → v {
+@ job_register * JobNode n i kind ( @ ( Vec u ) ( Vec u ) ) fn → v {
     : *JobHandler jh # *JobHandler ( nurl_alloc Z JobHandler )
     = . jh kind kind
     = . jh fn fn
     ( vec_push [s] . n handlers # s jh )
 }
 
-@ __job_handler *JobNode n i kind → s {
+@ __job_handler * JobNode n i kind → s {
     : i hn ( vec_len [s] . n handlers )
     : ~ s found # s 0
     : ~ i k 0
@@ -217,7 +227,7 @@ $ `stdlib/net/transport.nu`
 }
 
 // Run the registered handler for a kind (empty Vec if none registered).
-@ __job_execute *JobNode n i kind ( Vec u ) payload → ( Vec u ) {
+@ __job_execute * JobNode n i kind ( Vec u ) payload → ( Vec u ) {
     : s hp ( __job_handler n kind )
     ? == # i hp 0 { ^ ( vec_new [u] ) } {}
     : *JobHandler jh # *JobHandler hp
@@ -226,7 +236,7 @@ $ `stdlib/net/transport.nu`
 }
 
 // Record a result by task_id, idempotently (a re-delivered RESULT is a no-op).
-@ __job_record *JobNode n i task_id ( Vec u ) result → v {
+@ __job_record * JobNode n i task_id ( Vec u ) result → v {
     : i rn ( vec_len [s] . n results )
     : ~ b have F : ~ i k 0
     ~ & ! have < k rn {
@@ -242,7 +252,7 @@ $ `stdlib/net/transport.nu`
 }
 
 // Has a result for this task_id been recorded?
-@ job_has *JobNode n i task_id → b {
+@ job_has * JobNode n i task_id → b {
     : i rn ( vec_len [s] . n results )
     : ~ b have F : ~ i k 0
     ~ & ! have < k rn {
@@ -254,9 +264,9 @@ $ `stdlib/net/transport.nu`
 }
 
 // The recorded result for a task_id (copied), or None.
-@ job_await *JobNode n i task_id → ?( Vec u ) {
+@ job_await * JobNode n i task_id → ?( Vec u ) {
     : i rn ( vec_len [s] . n results )
-    : ~ ?( Vec u ) out @ ?( Vec u ) { F # ( Vec u ) 0 }
+    : ~ ? ( Vec u ) out @ ?( Vec u ) { F # ( Vec u ) 0 }
     : ~ b got F
     : ~ i k 0
     ~ & ! got < k rn {
@@ -271,15 +281,15 @@ $ `stdlib/net/transport.nu`
 }
 
 // The current owner pubkey for a key (from the live ring), copied or None.
-@ job_owner_pk *JobNode n ( Vec u ) key → ?( Vec u ) { ^ ( ring_owner_pk # *Ring . n ring key ) }
+@ job_owner_pk * JobNode n ( Vec u ) key → ?( Vec u ) { ^ ( ring_owner_pk # *Ring . n ring key ) }
 
 // Does this node currently own `key`?
-@ job_owns *JobNode n ( Vec u ) key → b {
+@ job_owns * JobNode n ( Vec u ) key → b {
     : ?( Vec u ) o ( ring_owner_pk # *Ring . n ring key )
     ^ ?? o { T pk → { : b same ( __job_veq pk . n self_pk ) ( vec_free [u] pk ) same } F → F }
 }
 
-@ __job_unique *JobNode n → i {
+@ __job_unique * JobNode n → i {
     : i id + * . n replica 1000000000 . n next_task
     = . n next_task + . n next_task 1
     ^ id
@@ -290,7 +300,7 @@ $ `stdlib/net/transport.nu`
 // Submit a task keyed by `key`. If this node owns the key it runs the handler
 // immediately and records the result locally; otherwise it routes a SUBMIT to
 // the current owner. Returns the task_id to await.
-@ job_submit *JobNode n i kind ( Vec u ) key ( Vec u ) payload → i {
+@ job_submit * JobNode n i kind ( Vec u ) key ( Vec u ) payload → i {
     : i tid ( __job_unique n )
     ? ( job_owns n key ) {
         : ( Vec u ) res ( __job_execute n kind payload )
@@ -313,7 +323,7 @@ $ `stdlib/net/transport.nu`
 
 // Owner side: a SUBMIT arrived. Execute if we own the key and reply a RESULT
 // to the submitter; otherwise FORWARD to the current owner (re-home).
-@ job_on_submit *JobNode n JobMsg m → v {
+@ job_on_submit * JobNode n JobMsg m → v {
     ? ( job_owns n . m key ) {
         : ( Vec u ) res ( __job_execute n . m kind . m payload )
         : ( Vec u ) reply ( job_build_result . m task_id res )
@@ -337,10 +347,10 @@ $ `stdlib/net/transport.nu`
 }
 
 // Submitter side: a RESULT arrived → record it (idempotent).
-@ job_on_result *JobNode n JobMsg m → v { ( __job_record n . m task_id . m payload ) }
+@ job_on_result * JobNode n JobMsg m → v { ( __job_record n . m task_id . m payload ) }
 
 // Drain inbound transport messages, dispatching SUBMIT / RESULT.
-@ job_pump *JobNode n i max → v {
+@ job_pump * JobNode n i max → v {
     : ~ b more T
     ~ more {
         ?? ( transport_recv # *Transport . n transport max ) {

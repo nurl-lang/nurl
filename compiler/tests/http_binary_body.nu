@@ -47,11 +47,11 @@ $ `stdlib/ext/env.nu`
             : ( @ v ) client \ → v {
                 ( sleep_ms 250 )
                 : ( Vec u ) body ( vec_new [u] )
-                ( vec_push [u] body # u 65 )   // 'A'
-                ( vec_push [u] body # u 66 )   // 'B'
-                ( vec_push [u] body # u 0 )    // embedded NUL
-                ( vec_push [u] body # u 67 )   // 'C'
-                ( vec_push [u] body # u 68 )   // 'D'
+                ( vec_push [u] body # u 65 )  // 'A'
+                ( vec_push [u] body # u 66 )  // 'B'
+                ( vec_push [u] body # u 0 )  // embedded NUL
+                ( vec_push [u] body # u 67 )  // 'C'
+                ( vec_push [u] body # u 68 )  // 'D'
                 : !Response HttpErr r ( http_post_bytes `http://127.0.0.1:18941/echo` body `application/octet-stream` )
                 ?? r {
                     T resp → {

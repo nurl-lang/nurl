@@ -917,11 +917,11 @@ $ `stdlib/std/fs.nu`
                                                         : s sd ( string_data summary )
                                                         ? has_ty {
                                                             ? has_de
-                                                            { = rc ( __jira_run_simple cfg `Issue luotu` ( jira_create_issue cfg pd sd issue_type: ( string_data ty ) description: ( string_data de ) ) ) }
-                                                            { = rc ( __jira_run_simple cfg `Issue luotu` ( jira_create_issue cfg pd sd issue_type: ( string_data ty ) ) ) }
+                                                            { = rc ( __jira_run_simple cfg `Issue luotu` ( jira_create_issue cfg pd sd issue_type : ( string_data ty ) description : ( string_data de ) ) ) }
+                                                            { = rc ( __jira_run_simple cfg `Issue luotu` ( jira_create_issue cfg pd sd issue_type : ( string_data ty ) ) ) }
                                                         } {
                                                             ? has_de
-                                                            { = rc ( __jira_run_simple cfg `Issue luotu` ( jira_create_issue cfg pd sd description: ( string_data de ) ) ) }
+                                                            { = rc ( __jira_run_simple cfg `Issue luotu` ( jira_create_issue cfg pd sd description : ( string_data de ) ) ) }
                                                             { = rc ( __jira_run_simple cfg `Issue luotu` ( jira_create_issue cfg pd sd ) ) }
                                                         }
                                                     }

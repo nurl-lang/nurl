@@ -25,7 +25,9 @@ $ `stdlib/dist/lease.nu`
 $ `stdlib/dist/sim.nu`
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
+
 @ pi s label i v → v { ( nurl_print label ) ( nurl_print_int v ) }
+
 @ bytes4 i a i b i c i d → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) ( vec_push [u] v # u a ) ( vec_push [u] v # u b ) ( vec_push [u] v # u c ) ( vec_push [u] v # u d ) ^ v }
 
 // EXECUTE wire: [epoch:u64][idem:u64][keylen:u16][key…]
@@ -39,7 +41,7 @@ $ `stdlib/dist/sim.nu`
 }
 
 // dispatch an EXECUTE from `src` to the resource node `r` over the bus
-@ dispatch_exec *SimNet net i src i r ( Vec u ) key i epoch i idem i now → v {
+@ dispatch_exec * SimNet net i src i r ( Vec u ) key i epoch i idem i now → v {
     : ( Vec u ) b ( build_exec key epoch idem )
     ( sim_send net src r b now )
     ( vec_free [u] b )
@@ -47,7 +49,7 @@ $ `stdlib/dist/sim.nu`
 
 // resource side: deliver every due EXECUTE, admit via the lease, and return how
 // many effects were actually performed in this batch.
-@ deliver_exec *SimNet net *LeaseTable lease i now → i {
+@ deliver_exec * SimNet net * LeaseTable lease i now → i {
     : ( Vec s ) due ( sim_due net now )
     : i dn ( vec_len [s] due )
     : ~ i ran 0
@@ -74,7 +76,7 @@ $ `stdlib/dist/sim.nu`
 
 // run `rounds`: old owner dispatches iff `old_on`, new owner iff `new_on`;
 // both retry every round (at-least-once); count total effects performed.
-@ run_window *SimNet net *LeaseTable lease ( Vec u ) key i e_old i e_new i idem i r_idx b old_on b new_on i rounds i now0 → i {
+@ run_window * SimNet net * LeaseTable lease ( Vec u ) key i e_old i e_new i idem i r_idx b old_on b new_on i rounds i now0 → i {
     : ~ i now now0
     : ~ i total 0
     : ~ i r 0
@@ -89,17 +91,17 @@ $ `stdlib/dist/sim.nu`
 }
 
 @ main → i {
-    : i R 2                 // node 0 = old owner, 1 = new owner, 2 = resource
+    : i R 2  // node 0 = old owner, 1 = new owner, 2 = resource
     : ( Vec u ) key ( bytes4 42 42 42 42 )
     : i e_old 7
     : i e_new 8
-    : i idem 5000000001     // the task_id, identical across both owners (re-home)
+    : i idem 5000000001  // the task_id, identical across both owners (re-home)
 
     // ── (A) old-first: idempotency dedups the new owner ──────────────
     : *SimNet na ( sim_net_new 3 1111 0 1 0 )
     : *LeaseTable la ( lease_new )
-    : i a_old ( run_window na la key e_old e_new idem R T F 6 0 )      // only old, settles to admitted
-    : i a_both ( run_window na la key e_old e_new idem R T T 6 6 )     // now new joins, retrying
+    : i a_old ( run_window na la key e_old e_new idem R T F 6 0 )  // only old, settles to admitted
+    : i a_both ( run_window na la key e_old e_new idem R T T 6 6 )  // now new joins, retrying
     ( pi `A old-first: effects during old-only phase = ` a_old )
     ( pi `A old-first: effects after new joins      = ` a_both )
     ( pb `A old-first: effect ran EXACTLY once total: ` == + a_old a_both 1 )
@@ -109,8 +111,8 @@ $ `stdlib/dist/sim.nu`
     // ── (B) new-first: stale epoch fences the old owner ──────────────
     : *SimNet nb ( sim_net_new 3 2222 0 1 0 )
     : *LeaseTable lb ( lease_new )
-    : i b_new ( run_window nb lb key e_old e_new idem R F T 6 0 )      // only new
-    : i b_both ( run_window nb lb key e_old e_new idem R T T 6 6 )     // old joins, retrying — fenced
+    : i b_new ( run_window nb lb key e_old e_new idem R F T 6 0 )  // only new
+    : i b_both ( run_window nb lb key e_old e_new idem R T T 6 6 )  // old joins, retrying — fenced
     ( pi `B new-first: effects during new-only phase = ` b_new )
     ( pi `B new-first: effects after old joins       = ` b_both )
     ( pb `B new-first: effect ran EXACTLY once total: ` == + b_new b_both 1 )

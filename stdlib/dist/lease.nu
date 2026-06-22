@@ -39,6 +39,7 @@ $ `stdlib/core/vec.nu`
     }
     ^ e
 }
+
 @ __ls_cpy ( Vec u ) v → ( Vec u ) {
     : ( Vec u ) o ( vec_with_cap [u] ( vec_len [u] v ) )
     ( vec_extend [u] o v )
@@ -46,13 +47,13 @@ $ `stdlib/core/vec.nu`
 }
 
 : LeaseEntry {
-    ( Vec u ) key       // resource key
-    i token             // highest epoch admitted for this key
-    ( Vec i ) applied   // idempotency keys (task_ids) already admitted
+    ( Vec u ) key  // resource key
+    i token  // highest epoch admitted for this key
+    ( Vec i ) applied  // idempotency keys (task_ids) already admitted
 }
 
 : LeaseTable {
-    ( Vec s ) entries   // *LeaseEntry
+    ( Vec s ) entries  // *LeaseEntry
 }
 
 @ lease_new → *LeaseTable {
@@ -60,7 +61,8 @@ $ `stdlib/core/vec.nu`
     = . t entries ( vec_new [s] )
     ^ t
 }
-@ lease_free *LeaseTable t → v {
+
+@ lease_free * LeaseTable t → v {
     : i n ( vec_len [s] . t entries )
     : ~ i k 0
     ~ < k n {
@@ -72,7 +74,7 @@ $ `stdlib/core/vec.nu`
     ( nurl_free # s t )
 }
 
-@ __lease_find *LeaseTable t ( Vec u ) key → s {
+@ __lease_find * LeaseTable t ( Vec u ) key → s {
     : i n ( vec_len [s] . t entries )
     : ~ s found # s 0
     : ~ i k 0
@@ -92,7 +94,7 @@ $ `stdlib/core/vec.nu`
 }
 
 // The current (highest admitted) epoch for a key; 0 if never seen.
-@ lease_token *LeaseTable t ( Vec u ) key → i {
+@ lease_token * LeaseTable t ( Vec u ) key → i {
     : s pp ( __lease_find t key )
     ? == # i pp 0 { ^ 0 } {}
     : *LeaseEntry e # *LeaseEntry pp
@@ -106,7 +108,7 @@ $ `stdlib/core/vec.nu`
 //   * else advance the key's epoch to `epoch`, and REFUSE if `idem` was
 //     already admitted (duplicate delivery / the same task already ran);
 //   * else record `idem` and admit (T).
-@ lease_admit *LeaseTable t ( Vec u ) key i epoch i idem → b {
+@ lease_admit * LeaseTable t ( Vec u ) key i epoch i idem → b {
     : s pp ( __lease_find t key )
     ? == # i pp 0 {
         : *LeaseEntry e # *LeaseEntry ( nurl_alloc Z LeaseEntry )
@@ -118,9 +120,9 @@ $ `stdlib/core/vec.nu`
         ^ T
     } {}
     : *LeaseEntry e # *LeaseEntry pp
-    ? < epoch . e token { ^ F } {}        // stale epoch — fenced out
-    = . e token epoch                     // advance (epoch >= token)
-    ? ( __applied_has . e applied idem ) { ^ F } {}   // duplicate — already ran
+    ? < epoch . e token { ^ F } {}  // stale epoch — fenced out
+    = . e token epoch  // advance (epoch >= token)
+    ? ( __applied_has . e applied idem ) { ^ F } {}  // duplicate — already ran
     ( vec_push [i] . e applied idem )
     ^ T
 }

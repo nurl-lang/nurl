@@ -94,7 +94,7 @@ $ `stdlib/std/time.nu`
 @ __default_path s reqpath → String {
     : String p ( string_with_cap 8 )
     : i n ( nurl_str_len reqpath )
-    ? | == n 0 != ( nurl_str_get reqpath 0 ) 47 {            // empty or not absolute
+    ? | == n 0 != ( nurl_str_get reqpath 0 ) 47 {  // empty or not absolute
         ( string_push_char p 47 )
         ^ p
     } {}
@@ -211,24 +211,24 @@ $ `stdlib/std/time.nu`
                         ( string_free dom ) = dom low = host_only F
                     } { ( string_free low ) }
                 } {
-                ? ( __keyeq key `path` ) {
-                    ? & > ( string_len aval ) 0 == ( string_get aval 0 ) 47 {
-                        ( string_free cpath )
-                        = cpath ( string_with_cap + ( string_len aval ) 1 )
-                        ( string_push_str cpath ( string_data aval ) )
-                    } {}
-                } {
-                ? ( __keyeq key `max-age` ) {
-                    = seen_maxage 1
-                    = expires + now ( nurl_str_to_int ( string_data aval ) )
-                } {
-                ? ( __keyeq key `expires` ) {
-                    ? == seen_maxage 0 {
-                        ?? ( http_date_parse ( string_data aval ) ) { T t → { = expires t } F _ → {} }
-                    } {}
-                } {
-                ? ( __keyeq key `secure` ) { = secure T } {}
-                } } } }
+                    ? ( __keyeq key `path` ) {
+                        ? & > ( string_len aval ) 0 == ( string_get aval 0 ) 47 {
+                            ( string_free cpath )
+                            = cpath ( string_with_cap + ( string_len aval ) 1 )
+                            ( string_push_str cpath ( string_data aval ) )
+                        } {}
+                    } {
+                        ? ( __keyeq key `max-age` ) {
+                            = seen_maxage 1
+                            = expires + now ( nurl_str_to_int ( string_data aval ) )
+                        } {
+                            ? ( __keyeq key `expires` ) {
+                                ? == seen_maxage 0 {
+                                    ?? ( http_date_parse ( string_data aval ) ) { T t → { = expires t } F _ → {} }
+                                } {}
+                            } {
+                                ? ( __keyeq key `secure` ) { = secure T } {}
+                            } } } }
 
                 ( string_free seg ) ( string_free key ) ( string_free aval )
             }
@@ -271,7 +271,7 @@ $ `stdlib/std/time.nu`
                 ?? ( vec_get [Cookie] . j cookies last ) { T lc → { : b _s ( vec_set [Cookie] . j cookies k lc ) } F _ → {} }
             } {}
             : b _t ( vec_set_len [Cookie] . j cookies last )
-            = k ( vec_len [Cookie] . j cookies )   // unique → done
+            = k ( vec_len [Cookie] . j cookies )  // unique → done
         } { = k + k 1 }
     }
 }
@@ -282,7 +282,7 @@ $ `stdlib/std/time.nu`
         T c → {
             ( __jar_remove j c )
             ? & != . c expires -1 <= . c expires now {
-                ( __cookie_free c )                    // already expired → deletion only
+                ( __cookie_free c )  // already expired → deletion only
             } {
                 ( vec_push [Cookie] . j cookies c )
             }
@@ -338,7 +338,7 @@ $ `stdlib/std/time.nu`
             T c → {
                 ? > m 0 { ( string_push_str out `; ` ) } {}
                 ( string_push_str out ( string_data . c name ) )
-                ( string_push_char out 61 )                // '='
+                ( string_push_char out 61 )  // '='
                 ( string_push_str out ( string_data . c value ) )
             }
             F _ → {}

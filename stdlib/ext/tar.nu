@@ -49,18 +49,18 @@ $ `stdlib/std/fs.nu`
     i mode
     i size
     i mtime
-    i typeflag      // ASCII byte: 48 '0' = file, 53 '5' = dir
+    i typeflag  // ASCII byte: 48 '0' = file, 53 '5' = dir
     ( Vec u ) data  // file contents; empty for a directory
 }
 
 : | TarErr {
-    TarTruncated      // header or data block runs past the archive end
-    TarBadHeader      // missing/!= "ustar" magic
-    TarBadChecksum    // header checksum mismatch
-    TarUnsafePath     // absolute path or `..` component on extract
-    TarPathTooLong    // path does not fit the 100-byte USTAR name field
-    TarUnsupported    // entry type is not a regular file or directory
-    TarIoError        // filesystem failure during unpack
+    TarTruncated  // header or data block runs past the archive end
+    TarBadHeader  // missing/!= "ustar" magic
+    TarBadChecksum  // header checksum mismatch
+    TarUnsafePath  // absolute path or `..` component on extract
+    TarPathTooLong  // path does not fit the 100-byte USTAR name field
+    TarUnsupported  // entry type is not a regular file or directory
+    TarIoError  // filesystem failure during unpack
 }
 
 @ tar_err_name TarErr e → s {
@@ -246,14 +246,14 @@ $ `stdlib/std/fs.nu`
     : i sz ? != is_dir 0 0 ( vec_len [u] . e data )
 
     ( __tar_put_str p 0 ( string_data . e path ) 100 )
-    ( __tar_put_octal p 100 mode 7 )    // mode
-    ( __tar_put_octal p 108 0 7 )       // uid
-    ( __tar_put_octal p 116 0 7 )       // gid
-    ( __tar_put_octal p 124 sz 11 )     // size
+    ( __tar_put_octal p 100 mode 7 )  // mode
+    ( __tar_put_octal p 108 0 7 )  // uid
+    ( __tar_put_octal p 116 0 7 )  // gid
+    ( __tar_put_octal p 124 sz 11 )  // size
     ( __tar_put_octal p 136 . e mtime 11 )  // mtime
-    = . p 156 # u ? != is_dir 0 53 48    // typeflag '5' / '0'
-    ( __tar_put_str p 257 `ustar` 5 )   // magic (byte 262 stays NUL)
-    = . p 263 # u 48                // version "00"
+    = . p 156 # u ? != is_dir 0 53 48  // typeflag '5' / '0'
+    ( __tar_put_str p 257 `ustar` 5 )  // magic (byte 262 stays NUL)
+    = . p 263 # u 48  // version "00"
     = . p 264 # u 48
 
     // Checksum: chksum field as spaces, sum, then "%06o\0 ".
@@ -300,7 +300,7 @@ $ `stdlib/std/fs.nu`
         }
         = i + i 1
     }
-    ( __tar_zeros out 1024 )    // two terminating zero blocks
+    ( __tar_zeros out 1024 )  // two terminating zero blocks
     ^ @ !( Vec u ) TarErr { T out }
 }
 
@@ -351,12 +351,12 @@ $ `stdlib/std/fs.nu`
     : i n ( string_len path )
     ? == n 0 { ^ F } {}
     : s d ( string_data path )
-    ? == ( nurl_str_get d 0 ) 47 { ^ F } {}    // absolute
+    ? == ( nurl_str_get d 0 ) 47 { ^ F } {}  // absolute
     : ~ i k 0
     : ~ i comp_start 0
     : ~ i bad 0
     ~ <= k n {
-        : i c ? < k n ( nurl_str_get d k ) 47   // treat end-of-string as '/'
+        : i c ? < k n ( nurl_str_get d k ) 47  // treat end-of-string as '/'
         ? == c 47 {
             ? == - k comp_start 2 {
                 ? & == ( nurl_str_get d comp_start ) 46 == ( nurl_str_get d + comp_start 1 ) 46 {
@@ -409,7 +409,7 @@ $ `stdlib/std/fs.nu`
         T entries → {
             : i n ( vec_len [TarEntry] entries )
             : ~ i count 0
-            : ~ i fail 0          // 0 = ok; otherwise set + carry the variant in `ferr`
+            : ~ i fail 0  // 0 = ok; otherwise set + carry the variant in `ferr`
             : ~ TarErr ferr TarIoError
             : ~ i k 0
             ~ & == fail 0 < k n {

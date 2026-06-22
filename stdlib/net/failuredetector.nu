@@ -24,8 +24,10 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/net/membership.nu`
 $ `stdlib/std/lifeguard.nu`
 
-@ fd_none    → i { ^ 0 }
+@ fd_none → i { ^ 0 }
+
 @ fd_do_ping → i { ^ 1 }
+
 @ fd_do_preq → i { ^ 2 }
 
 @ __fd_cpy ( Vec u ) v → ( Vec u ) {
@@ -36,26 +38,28 @@ $ `stdlib/std/lifeguard.nu`
 
 // What the caller should put on the wire this tick.
 : FdAction {
-    i kind            // 0 none, 1 ping, 2 ping-req
+    i kind  // 0 none, 1 ping, 2 ping-req
     ( Vec u ) target  // pubkey to probe (owned copy; empty for none)
     i seq
     ( Vec s ) relays  // ping-req: borrowed *PkMember relays (table-owned)
 }
+
 @ fd_action_free FdAction a → v { ( vec_free [u] . a target ) ( vec_free [s] . a relays ) }
+
 @ __fd_none → FdAction { ^ @ FdAction { ( fd_none ) ( vec_new [u] ) 0 ( vec_new [s] ) } }
 
 : FdState {
-    s table              // *PkMemberTable
+    s table  // *PkMemberTable
     i period_ns
     i direct_timeout_ns  // direct-ack window before escalating to ping-req
-    i total_timeout_ns   // total window before suspecting
-    i k_indirect         // relays for a ping-req
+    i total_timeout_ns  // total window before suspecting
+    i k_indirect  // relays for a ping-req
     i next_seq
-    i probing            // 1 = a probe is in flight
+    i probing  // 1 = a probe is in flight
     ( Vec u ) probe_target
     i probe_seq
     i probe_start_ns
-    i probe_indirect     // 1 = ping-req already escalated for this probe
+    i probe_indirect  // 1 = ping-req already escalated for this probe
     i last_probe_ns
 }
 
@@ -72,14 +76,16 @@ $ `stdlib/std/lifeguard.nu`
     = . fd probe_seq 0
     = . fd probe_start_ns 0
     = . fd probe_indirect 0
-    = . fd last_probe_ns - 0 period_ns   // eligible to probe immediately
+    = . fd last_probe_ns - 0 period_ns  // eligible to probe immediately
     ^ fd
 }
-@ fd_free *FdState fd → v { ( vec_free [u] . fd probe_target ) ( nurl_free # s fd ) }
-@ fd_probing *FdState fd → i { ^ . fd probing }
+
+@ fd_free * FdState fd → v { ( vec_free [u] . fd probe_target ) ( nurl_free # s fd ) }
+
+@ fd_probing * FdState fd → i { ^ . fd probing }
 
 // Advance the detector. Returns at most one action; the caller performs it.
-@ fd_tick *FdState fd i now → FdAction {
+@ fd_tick * FdState fd i now → FdAction {
     : *PkMemberTable t # *PkMemberTable . fd table
     ? == . fd probing 1 {
         : i elapsed - now . fd probe_start_ns
@@ -122,7 +128,7 @@ $ `stdlib/std/lifeguard.nu`
 
 // A direct ack for the in-flight probe arrived (possibly late, after a roam):
 // the member is alive, local health improves, the probe completes.
-@ fd_on_ack *FdState fd i seq i now → b {
+@ fd_on_ack * FdState fd i seq i now → b {
     ? & == . fd probing 1 == seq . fd probe_seq {
         : *PkMemberTable t # *PkMemberTable . fd table
         ( pktable_observe_alive t . fd probe_target now )
@@ -134,14 +140,14 @@ $ `stdlib/std/lifeguard.nu`
 }
 
 // Merge a peer's piggybacked gossip into the table.
-@ fd_on_gossip *FdState fd PkMsg m i now → v {
+@ fd_on_gossip * FdState fd PkMsg m i now → v {
     : *PkMemberTable t # *PkMemberTable . fd table
     ( pktable_apply_gossip t m now )
 }
 
 // Promote expired suspicions to dead (caller runs each tick); returns the
 // newly-dead as borrowed *PkMember (free the container with __pk_dead_free).
-@ fd_sweep *FdState fd i now → ( Vec s ) {
+@ fd_sweep * FdState fd i now → ( Vec s ) {
     : *PkMemberTable t # *PkMemberTable . fd table
     ^ ( pktable_sweep t now )
 }

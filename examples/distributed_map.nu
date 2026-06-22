@@ -25,6 +25,7 @@ $ `stdlib/dist/ring.nu`
 $ `stdlib/dist/job.nu`
 
 @ pk_for i id → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + id k ) = k + k 1 } ^ v }
+
 @ key_for i id → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) ( vec_push [u] v # u & id 255 ) ( vec_push [u] v # u & >> id 8 255 ) ( vec_push [u] v # u 200 ) ( vec_push [u] v # u 7 ) ^ v }
 
 @ chunk_text i id → String {

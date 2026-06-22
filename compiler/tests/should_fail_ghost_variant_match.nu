@@ -6,7 +6,8 @@
 // out-of-bounds extractvalue: invalid IR, or a silent garbage read
 // when a sibling variant's slot happened to exist. Now a hard error
 // naming the variant, the count, and the likely missing-import cause.
-: | E { Nil  V String }
+: | E { Nil V String }
+
 @ main → i {
     : E e # E V
     ?? e {

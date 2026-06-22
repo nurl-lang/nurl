@@ -76,12 +76,12 @@ $ `stdlib/ext/http2_conn.nu`
     : *H2Stream sp ( vec_data [H2Stream] . c streams )
     ? > ( vec_len [H2Stream] . c streams ) 0 {
         : H2Stream s0 . sp 0
-        ( assert_eq `mixed: survivor[0] id`    . s0 id    3 fails )
+        ( assert_eq `mixed: survivor[0] id` . s0 id 3 fails )
         ( assert_eq `mixed: survivor[0] state` . s0 state ( h2_state_open ) fails )
     } {}
     ? > ( vec_len [H2Stream] . c streams ) 1 {
         : H2Stream s1 . sp 1
-        ( assert_eq `mixed: survivor[1] id`    . s1 id    7 fails )
+        ( assert_eq `mixed: survivor[1] id` . s1 id 7 fails )
         ( assert_eq `mixed: survivor[1] state` . s1 state ( h2_state_half_closed_remote ) fails )
     } {}
     ( h2_conn_free c )
@@ -114,6 +114,6 @@ $ `stdlib/ext/http2_conn.nu`
 @ main → i {
     : i f ( run )
     ? == f 0 { ( nurl_print `http2_stream_prune: all checks passed\n` ) }
-            { ( nurl_print `http2_stream_prune: FAILURES\n` ) }
+    { ( nurl_print `http2_stream_prune: FAILURES\n` ) }
     ^ f
 }

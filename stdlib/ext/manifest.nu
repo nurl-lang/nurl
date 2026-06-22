@@ -45,8 +45,8 @@ $ `stdlib/ext/toml.nu`
 
 : Dep {
     String name
-    String path      // non-empty → path dependency
-    String version   // semver requirement (registry dep) or pinned version
+    String path  // non-empty → path dependency
+    String version  // semver requirement (registry dep) or pinned version
     String registry  // registry URL; empty → manifest/tool default
 }
 

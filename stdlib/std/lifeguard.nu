@@ -29,11 +29,12 @@ $ `stdlib/std/float.nu`
 // ── Local Health Multiplier ──────────────────────────────────────
 
 : LocalHealth {
-    i lhm     // current multiplier, 0 (healthy) .. max
-    i max     // cap (memberlist uses 8)
+    i lhm  // current multiplier, 0 (healthy) .. max
+    i max  // cap (memberlist uses 8)
 }
 
 @ local_health_new i max → LocalHealth { ^ @ LocalHealth { 0 max } }
+
 @ lh_value LocalHealth h → i { ^ . h lhm }
 
 // Successful probe → improve local health (decrement toward 0).
@@ -54,16 +55,17 @@ $ `stdlib/std/float.nu`
 // ── confirmation-scaled suspicion timeout ────────────────────────
 
 : Suspicion {
-    i min_ns      // floor timeout once k confirmations are in
-    i max_ns      // initial timeout with zero confirmations
-    i k           // independent confirmations needed to reach the floor
-    i confirms    // confirmations received so far (0..k)
-    i start_ns    // monotonic time the suspicion began
+    i min_ns  // floor timeout once k confirmations are in
+    i max_ns  // initial timeout with zero confirmations
+    i k  // independent confirmations needed to reach the floor
+    i confirms  // confirmations received so far (0..k)
+    i start_ns  // monotonic time the suspicion began
 }
 
 @ suspicion_new i min_ns i max_ns i k i now_ns → Suspicion {
     ^ @ Suspicion { min_ns max_ns k 0 now_ns }
 }
+
 @ suspicion_confirms Suspicion s → i { ^ . s confirms }
 
 // Register one independent confirmation from a distinct peer (capped at k).

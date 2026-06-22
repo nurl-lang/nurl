@@ -107,7 +107,7 @@ $ `stdlib/core/string.nu`
             // ── 3. checksum tamper ───────────────────────────────
             ( nurl_print `── tamper ──\n` )
             : *u tp ( vec_data [u] arc )
-            = . tp 0 # u 88    // corrupt the name byte; checksum no longer matches
+            = . tp 0 # u 88  // corrupt the name byte; checksum no longer matches
             : !( Vec TarEntry ) TarErr pr3 ( tar_parse arc )
             ?? pr3 {
                 F e → ( println_s `tamper=` ( tar_err_name e ) )

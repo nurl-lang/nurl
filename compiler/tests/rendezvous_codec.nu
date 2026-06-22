@@ -20,6 +20,7 @@ $ `stdlib/net/rendezvous.nu`
 }
 
 @ ep_host s pp → s { : *Endpoint e # *Endpoint pp ^ ( string_data . e host ) }
+
 @ ep_port s pp → i { : *Endpoint e # *Endpoint pp ^ . e port }
 
 @ check_record s rp ( Vec u ) wantpk → v {

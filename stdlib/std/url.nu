@@ -89,7 +89,7 @@ $ `stdlib/core/vec.nu`
     ? & >= c 97 <= c 122 { ^ T } {}
     ? & >= c 48 <= c 57 { ^ T } {}
     ? | | == c 45 == c 95 == c 46 { ^ T } {}  // - _ .
-    ? == c 126 { ^ T } {}                       // ~
+    ? == c 126 { ^ T } {}  // ~
     ^ F
 }
 
@@ -132,7 +132,7 @@ $ `stdlib/core/vec.nu`
         ? ( __url_is_unreserved c ) {
             ( string_push_char out c )
         } {
-            ( string_push_char out 37 )                       // '%'
+            ( string_push_char out 37 )  // '%'
             ( string_push_char out ( __url_hex_digit / c 16 ) )
             ( string_push_char out ( __url_hex_digit % c 16 ) )
         }
@@ -270,6 +270,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ __url_is_alpha i c → b { ^ | & >= c 65 <= c 90 & >= c 97 <= c 122 }
+
 @ __url_is_digit i c → b { ^ & >= c 48 <= c 57 }
 
 // "path[?query]" for the HTTP request line. Path defaults to "/" when

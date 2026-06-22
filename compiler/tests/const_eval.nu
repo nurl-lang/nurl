@@ -9,7 +9,10 @@
 : i SECS_PER_DAY * * 60 60 24
 : i INT_MIN - -9223372036854775807 1
 : i ONE_MB << 1 20
-: i LOW_BYTE & 4660 255
+: i LOW_BYTE
+
+& 4660 255
+
 : i HIGH_OR | 240 15
 : i XORED ^^ 12 10
 : i NESTED + * 3 4 - 10 2

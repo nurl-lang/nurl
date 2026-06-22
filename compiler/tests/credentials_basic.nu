@@ -8,7 +8,7 @@ $ `stdlib/ext/credentials.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/core/string.nu`
 
-@ ignore !v IoErr r → v { ?? r { T _ → {} F _ → {} } }
+@ ignore ! v IoErr r → v { ?? r { T _ → {} F _ → {} } }
 
 @ show s label s reg → v {
     : String t ( creds_get reg )
@@ -22,16 +22,16 @@ $ `stdlib/core/string.nu`
     : s r1 `https://reg.a/`
     : s r2 `https://reg.b/`
     ( ignore ( creds_set r1 `tok-a1` ) )
-    ( show `a` r1 )                 // tok-a1
+    ( show `a` r1 )  // tok-a1
     ( ignore ( creds_set r2 `tok-b1` ) )
-    ( show `a_keep` r1 )            // tok-a1 (still there after 2nd registry)
-    ( show `b` r2 )                 // tok-b1
+    ( show `a_keep` r1 )  // tok-a1 (still there after 2nd registry)
+    ( show `b` r2 )  // tok-b1
     ( ignore ( creds_set r1 `tok-a2` ) )
-    ( show `a_upsert` r1 )          // tok-a2 (replaced, not duplicated)
-    ( show `b_keep` r2 )            // tok-b1
+    ( show `a_upsert` r1 )  // tok-a2 (replaced, not duplicated)
+    ( show `b_keep` r2 )  // tok-b1
     ( ignore ( creds_remove r1 ) )
-    ( show `a_removed` r1 )         // <none>
-    ( show `b_final` r2 )           // tok-b1
+    ( show `a_removed` r1 )  // <none>
+    ( show `b_final` r2 )  // tok-b1
     ( ignore ( creds_remove r2 ) )
 }
 

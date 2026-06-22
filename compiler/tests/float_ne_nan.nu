@@ -9,11 +9,11 @@
 @ main → i {
     : f nan / 0.0 0.0
     : f x 5.0
-    ( prb `nan_ne_nan` != nan nan )   // true  (IEEE)
-    ( prb `nan_eq_nan` == nan nan )   // false
-    ( prb `nan_ne_x`   != nan x )     // true
-    ( prb `x_ne_x`     != x x )       // false (x is not NaN)
-    ( prb `x_ne_3`     != x 3.0 )     // true
-    ( prb `x_eq_x`     == x x )       // true
+    ( prb `nan_ne_nan` != nan nan )  // true  (IEEE)
+    ( prb `nan_eq_nan` == nan nan )  // false
+    ( prb `nan_ne_x` != nan x )  // true
+    ( prb `x_ne_x` != x x )  // false (x is not NaN)
+    ( prb `x_ne_3` != x 3.0 )  // true
+    ( prb `x_eq_x` == x x )  // true
     ^ 0
 }

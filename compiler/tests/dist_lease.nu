@@ -8,10 +8,11 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/dist/lease.nu`
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
+
 @ mkkey i id → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) ( vec_push [u] v # u id ) ( vec_push [u] v # u 9 ) ^ v }
 
 // run the effect iff admitted; bump the shared effect counter via a *i cell
-@ effect *LeaseTable t ( Vec u ) key i epoch i idem *i log → v {
+@ effect * LeaseTable t ( Vec u ) key i epoch i idem * i log → v {
     ? ( lease_admit t key epoch idem ) { = . log 0 + . log 0 1 } {}
 }
 
@@ -22,8 +23,8 @@ $ `stdlib/dist/lease.nu`
     : *LeaseTable t1 ( lease_new )
     : *i log1 # *i ( nurl_alloc 8 ) = . log1 0 0
     // task idem=100. B (new owner, epoch 2) acts; then A (old owner, epoch 1)
-    ( effect t1 k 2 100 log1 )    // B: admitted → effect
-    ( effect t1 k 1 100 log1 )    // A: epoch 1 < 2 → fenced out
+    ( effect t1 k 2 100 log1 )  // B: admitted → effect
+    ( effect t1 k 1 100 log1 )  // A: epoch 1 < 2 → fenced out
     ( pb `new-first: effect ran exactly once: ` == . log1 0 1 )
     ( vec_free [u] k ) ( nurl_free # s log1 ) ( lease_free t1 )
 
@@ -31,8 +32,8 @@ $ `stdlib/dist/lease.nu`
     : ( Vec u ) k2 ( mkkey 1 )
     : *LeaseTable t2 ( lease_new )
     : *i log2 # *i ( nurl_alloc 8 ) = . log2 0 0
-    ( effect t2 k2 1 100 log2 )   // A: admitted (first) → effect
-    ( effect t2 k2 2 100 log2 )   // B: epoch 2 >= 1 advances, but idem 100 already applied → deduped
+    ( effect t2 k2 1 100 log2 )  // A: admitted (first) → effect
+    ( effect t2 k2 2 100 log2 )  // B: epoch 2 >= 1 advances, but idem 100 already applied → deduped
     ( pb `old-first: effect ran exactly once: ` == . log2 0 1 )
     // the fence advanced to the higher epoch even though the effect was deduped
     ( pb `fence advanced to epoch 2: ` == ( lease_token t2 k2 ) 2 )

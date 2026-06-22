@@ -6,7 +6,8 @@
 // clang rejected. parse_type_paren / the call-site loop now reject it at the
 // source with the wrap-in-a-struct cure.
 : Box [T] { T val }
+
 @ main → i {
-    : ( Box [i ) b @ ( Box [i ) { [ i | 1 2 ] }
+    : ( Box [i ) b @ ( Box [i ) { [i | 1 2] }
     ^ 0
 }

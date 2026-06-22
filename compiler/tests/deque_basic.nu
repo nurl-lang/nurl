@@ -14,7 +14,7 @@ $ `stdlib/core/string.nu`
     ^ 1
 }
 
-@ expect_opt_i ?i got i want s label → i {
+@ expect_opt_i ? i got i want s label → i {
     : ~ i bad 1
     ?? got { T v → { ? == v want { = bad 0 } {} } F → {} }
     ? > bad 0 { ( nurl_print `  FAIL opt ` ) ( nurl_print label ) ( nurl_print `\n` ) } {}
@@ -28,13 +28,13 @@ $ `stdlib/core/string.nu`
     ( deque_push_back [i] d 1 )
     ( deque_push_back [i] d 2 )
     ( deque_push_back [i] d 3 )
-    ( deque_push_front [i] d 0 )    // [0,1,2,3]
+    ( deque_push_front [i] d 0 )  // [0,1,2,3]
     = fails + fails ( expect_int ( deque_len [i] d ) 4 `len4` )
     = fails + fails ( expect_opt_i ( deque_front [i] d ) 0 `front` )
     = fails + fails ( expect_opt_i ( deque_back [i] d ) 3 `back` )
     = fails + fails ( expect_opt_i ( deque_get [i] d 2 ) 2 `get2` )
     = fails + fails ( expect_opt_i ( deque_pop_front [i] d ) 0 `pf` )
-    = fails + fails ( expect_opt_i ( deque_pop_back [i] d ) 3 `pb` )   // [1,2]
+    = fails + fails ( expect_opt_i ( deque_pop_back [i] d ) 3 `pb` )  // [1,2]
     = fails + fails ( expect_int ( deque_len [i] d ) 2 `len2` )
 
     // Force several growths while head != 0 so the unwrap path runs.
@@ -60,7 +60,7 @@ $ `stdlib/core/string.nu`
     // Owned String elements + free_with (ASan / leak path).
     : ( Deque String ) sd ( deque_new [String] )
     ( deque_push_back [String] sd ( string_from `a` ) )
-    ( deque_push_front [String] sd ( string_from `b` ) )   // [b, a]
+    ( deque_push_front [String] sd ( string_from `b` ) )  // [b, a]
     = fails + fails ( expect_int ( deque_len [String] sd ) 2 `slen` )
     : ?String fo ( deque_front [String] sd )
     : s fr ?? fo { T s → ( string_data s ) F → `` }

@@ -8,11 +8,12 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/net/stun.nu`
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
+
 @ push ( Vec u ) v i b → v { ( vec_push [u] v # u b ) }
 
 @ fixed_txid → ( Vec u ) {
     : ( Vec u ) t ( vec_new [u] )
-    : ~ i k 0 ~ < k 12 { ( push t 171 ) = k + k 1 }   // 0xAB ×12
+    : ~ i k 0 ~ < k 12 { ( push t 171 ) = k + k 1 }  // 0xAB ×12
     ^ t
 }
 
@@ -20,14 +21,14 @@ $ `stdlib/net/stun.nu`
 // xport = 54321 ^ 0x2112 = 0xF523; xaddr bytes = (203^0x21, 0^0x12, 113^0xA4, 5^0x42).
 @ crafted_response ( Vec u ) txid → ( Vec u ) {
     : ( Vec u ) m ( vec_new [u] )
-    ( push m 1 ) ( push m 1 )           // type 0x0101 (success)
-    ( push m 0 ) ( push m 12 )          // length = 12 (one attr incl header)
-    ( push m 33 ) ( push m 18 ) ( push m 164 ) ( push m 66 )   // cookie 0x2112A442
-    ( vec_extend [u] m txid )           // transaction id
-    ( push m 0 ) ( push m 32 )          // attr type 0x0020 (XOR-MAPPED-ADDRESS)
-    ( push m 0 ) ( push m 8 )           // attr length 8
-    ( push m 0 ) ( push m 1 )           // reserved, family=IPv4
-    ( push m 245 ) ( push m 35 )        // x-port 0xF523
+    ( push m 1 ) ( push m 1 )  // type 0x0101 (success)
+    ( push m 0 ) ( push m 12 )  // length = 12 (one attr incl header)
+    ( push m 33 ) ( push m 18 ) ( push m 164 ) ( push m 66 )  // cookie 0x2112A442
+    ( vec_extend [u] m txid )  // transaction id
+    ( push m 0 ) ( push m 32 )  // attr type 0x0020 (XOR-MAPPED-ADDRESS)
+    ( push m 0 ) ( push m 8 )  // attr length 8
+    ( push m 0 ) ( push m 1 )  // reserved, family=IPv4
+    ( push m 245 ) ( push m 35 )  // x-port 0xF523
     ( push m 234 ) ( push m 18 ) ( push m 213 ) ( push m 71 )  // x-address
     ^ m
 }
@@ -59,7 +60,7 @@ $ `stdlib/net/stun.nu`
 
     // ── wrong transaction id is rejected ─────────────────────────
     : ( Vec u ) wrong ( vec_new [u] )
-    : ~ i w 0 ~ < w 12 { ( push wrong 1 ) = w + w 1 }   // all 0x01, != 0xAB
+    : ~ i w 0 ~ < w 12 { ( push wrong 1 ) = w + w 1 }  // all 0x01, != 0xAB
     : ?StunAddr a2 ( stun_parse resp wrong )
     ( pb `wrong txid rejected: ` ?? a2 { T sa → { ( stun_addr_free sa ) F } F → T } )
 

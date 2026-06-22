@@ -25,14 +25,16 @@ $ `stdlib/net/securedgram.nu`
 }
 
 @ pt s text → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) ( bytes_extend_str v text ) ^ v }
+
 @ asstr ( Vec u ) v → String { ^ ( bytes_to_str v ) }
+
 @ k32 i b → ( Vec u ) { : ( Vec u ) v ( vec_with_cap [u] 32 ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u b ) = k + k 1 } ^ v }
 
 // Pump B until it returns a transport datagram (handshake packets → None).
-@ pump *SecureNode node → ?RecvData {
+@ pump * SecureNode node → ?RecvData {
     : ~ i tries 0
     : ~ b done F
-    : ~ ?RecvData out @ ?RecvData { F # RecvData 0 }
+    : ~ ? RecvData out @ ?RecvData { F # RecvData 0 }
     ~ & ! done < tries 20 {
         : ?RecvData r ( securedgram_recv node 2048 )
         ?? r { T d → { = out @ ?RecvData { T d } = done T } F → {} }
@@ -41,7 +43,7 @@ $ `stdlib/net/securedgram.nu`
     ^ out
 }
 
-@ show s who ?RecvData r ( Vec u ) expect → b {
+@ show s who ? RecvData r ( Vec u ) expect → b {
     ^ ?? r {
         T d → {
             : String got ( asstr . d data )
@@ -63,36 +65,36 @@ $ `stdlib/net/securedgram.nu`
     : !*SecureNode NetErr ar ( securedgram_open `127.0.0.1` 9810 akp psk )
     : !*SecureNode NetErr br ( securedgram_open `127.0.0.1` 9811 bkp psk )
     ?? ar { T an → {
-    ?? br { T bn → {
-        ( securedgram_add_peer an . bkp pk `127.0.0.1` 9811 )
-        ( securedgram_add_peer bn . akp pk `127.0.0.1` 9810 )
+            ?? br { T bn → {
+                    ( securedgram_add_peer an . bkp pk `127.0.0.1` 9811 )
+                    ( securedgram_add_peer bn . akp pk `127.0.0.1` 9810 )
 
-        // handshake: A → msg1, B → msg2, A establishes
-        : !v NetErr _c ( securedgram_connect an . bkp pk )
-        : ?RecvData _h1 ( securedgram_recv bn 2048 )   // B handles init, sends msg2
-        : ?RecvData _h2 ( securedgram_recv an 2048 )   // A handles resp
+                    // handshake: A → msg1, B → msg2, A establishes
+                    : !v NetErr _c ( securedgram_connect an . bkp pk )
+                    : ?RecvData _h1 ( securedgram_recv bn 2048 )  // B handles init, sends msg2
+                    : ?RecvData _h2 ( securedgram_recv an 2048 )  // A handles resp
 
-        // A → B encrypted datagram
-        : ( Vec u ) m1 ( pt `hello over noise` )
-        : !v NetErr _s1 ( securedgram_send an . bkp pk m1 )
-        ( nurl_print `direct: ` ) ( nurl_print ? ( show `B` ( pump bn ) m1 ) `OK\n` `FAIL\n` )
+                    // A → B encrypted datagram
+                    : ( Vec u ) m1 ( pt `hello over noise` )
+                    : !v NetErr _s1 ( securedgram_send an . bkp pk m1 )
+                    ( nurl_print `direct: ` ) ( nurl_print ? ( show `B` ( pump bn ) m1 ) `OK\n` `FAIL\n` )
 
-        // ROAM: A rebinds to a new local port mid-session, then sends again
-        : !v NetErr _rb ( securedgram_rebind an `127.0.0.1` 9820 )
-        : ( Vec u ) m2 ( pt `after roaming` )
-        : !v NetErr _s2 ( securedgram_send an . bkp pk m2 )
-        ( nurl_print `roamed:  ` ) ( nurl_print ? ( show `B` ( pump bn ) m2 ) `OK\n` `FAIL\n` )
+                    // ROAM: A rebinds to a new local port mid-session, then sends again
+                    : !v NetErr _rb ( securedgram_rebind an `127.0.0.1` 9820 )
+                    : ( Vec u ) m2 ( pt `after roaming` )
+                    : !v NetErr _s2 ( securedgram_send an . bkp pk m2 )
+                    ( nurl_print `roamed:  ` ) ( nurl_print ? ( show `B` ( pump bn ) m2 ) `OK\n` `FAIL\n` )
 
-        // B replies — must reach A at its NEW port (proves B learned the new endpoint)
-        : ( Vec u ) rep ( pt `reply to new endpoint` )
-        : !v NetErr _s3 ( securedgram_send bn . akp pk rep )
-        ( nurl_print `reply:   ` ) ( nurl_print ? ( show `A` ( pump an ) rep ) `OK\n` `FAIL\n` )
+                    // B replies — must reach A at its NEW port (proves B learned the new endpoint)
+                    : ( Vec u ) rep ( pt `reply to new endpoint` )
+                    : !v NetErr _s3 ( securedgram_send bn . akp pk rep )
+                    ( nurl_print `reply:   ` ) ( nurl_print ? ( show `A` ( pump an ) rep ) `OK\n` `FAIL\n` )
 
-        ( vec_free [u] m1 ) ( vec_free [u] m2 ) ( vec_free [u] rep )
-        ( securedgram_close bn )
-    } F _ → ( nurl_print `B bind failed\n` ) }
-        ( securedgram_close an )
-    } F _ → ( nurl_print `A bind failed\n` ) }
+                    ( vec_free [u] m1 ) ( vec_free [u] m2 ) ( vec_free [u] rep )
+                    ( securedgram_close bn )
+                } F _ → ( nurl_print `B bind failed\n` ) }
+            ( securedgram_close an )
+        } F _ → ( nurl_print `A bind failed\n` ) }
 
     ( vec_free [u] psk )
     ( vec_free [u] . akp sk ) ( vec_free [u] . akp pk )

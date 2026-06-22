@@ -65,42 +65,73 @@ $ `stdlib/core/vec.nu`
 // the zeroed high half keeps the i64 read exact on little-endian.
 
 & `openssl` @ EVP_CIPHER_CTX_new → s
+
 & `openssl` @ EVP_CIPHER_CTX_free s ctx → v
+
 & `openssl` @ EVP_CIPHER_CTX_ctrl s ctx i cmd i arg *u ptr → i
+
 & `openssl` @ EVP_aes_256_gcm → s
+
 & `openssl` @ EVP_chacha20_poly1305 → s
+
 & `openssl` @ EVP_EncryptInit_ex s ctx s cipher *u engine s key s iv → i
+
 & `openssl` @ EVP_EncryptUpdate s ctx s out *u outl s in i inl → i
+
 & `openssl` @ EVP_EncryptFinal_ex s ctx s out *u outl → i
+
 & `openssl` @ EVP_DecryptInit_ex s ctx s cipher *u engine s key s iv → i
+
 & `openssl` @ EVP_DecryptUpdate s ctx s out *u outl s in i inl → i
+
 & `openssl` @ EVP_DecryptFinal_ex s ctx s out *u outl → i
 
 & `openssl` @ EVP_PKEY_new_raw_private_key i type *u engine s key i keylen → s
+
 & `openssl` @ EVP_PKEY_new_raw_public_key i type *u engine s key i keylen → s
+
 & `openssl` @ EVP_PKEY_get_raw_private_key s pkey s out *u outlen → i
+
 & `openssl` @ EVP_PKEY_get_raw_public_key s pkey s out *u outlen → i
+
 & `openssl` @ EVP_PKEY_free s pkey → v
+
 & `openssl` @ EVP_PKEY_CTX_new s pkey *u engine → s
+
 & `openssl` @ EVP_PKEY_CTX_new_id i id *u engine → s
+
 & `openssl` @ EVP_PKEY_CTX_free s ctx → v
+
 & `openssl` @ EVP_PKEY_CTX_ctrl_str s ctx s type s value → i
+
 & `openssl` @ EVP_PKEY_keygen_init s ctx → i
+
 & `openssl` @ EVP_PKEY_keygen s ctx *u out_pkey → i
+
 & `openssl` @ EVP_PKEY_derive_init s ctx → i
+
 & `openssl` @ EVP_PKEY_derive_set_peer s ctx s peer → i
+
 & `openssl` @ EVP_PKEY_derive s ctx s out *u outlen → i
 
 & `openssl` @ EVP_MD_CTX_new → s
+
 & `openssl` @ EVP_MD_CTX_free s ctx → v
+
 & `openssl` @ EVP_DigestSignInit s ctx *u pctx *u md *u engine s pkey → i
+
 & `openssl` @ EVP_DigestSign s ctx s sig *u siglen s msg i msglen → i
+
 & `openssl` @ EVP_DigestVerifyInit s ctx *u pctx *u md *u engine s pkey → i
+
 & `openssl` @ EVP_DigestVerify s ctx s sig i siglen s msg i msglen → i
 
 & `openssl` @ EVP_sha256 → s
+
 & `openssl` @ EVP_sha512 → s
+
 & `openssl` @ PKCS5_PBKDF2_HMAC s pass i passlen s salt i saltlen i iter s md i keylen s out → i
+
 & `openssl` @ EVP_PBE_scrypt s pass i passlen s salt i saltlen i n i r i p i maxmem s out i keylen → i
 
 // EVP_CIPHER_CTX_ctrl commands (stable ABI constants since 1.0; the

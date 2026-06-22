@@ -9,7 +9,9 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/dist/ring.nu`
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
+
 @ mkpk i seed → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + seed k ) = k + k 1 } ^ v }
+
 @ veq ( Vec u ) a ( Vec u ) b → b {
     : i n ( vec_len [u] a ) ? != n ( vec_len [u] b ) { ^ F } {}
     : ~ b e T : ~ i k 0
@@ -25,7 +27,8 @@ $ `stdlib/dist/ring.nu`
     ( vec_push [u] v # u & >> x 24 255 )
     ^ v
 }
-@ owner_seed *Ring r ( Vec u ) key ( Vec u ) a ( Vec u ) b ( Vec u ) c → i {
+
+@ owner_seed * Ring r ( Vec u ) key ( Vec u ) a ( Vec u ) b ( Vec u ) c → i {
     ^ ?? ( ring_owner_pk r key ) {
         T pk → { : i s ? ( veq pk a ) 1 ? ( veq pk b ) 2 ? ( veq pk c ) 3 0 ( vec_free [u] pk ) s }
         F → 0

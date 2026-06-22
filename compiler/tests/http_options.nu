@@ -22,12 +22,12 @@ $ `stdlib/core/string.nu`
     : i verify . opt verify_tls
     : s ua . opt user_agent
     ( nurl_print label )
-    ( nurl_print ` tmo=` )    ( nurl_print_int tmo )
-    ( nurl_print ` cto=` )    ( nurl_print_int cto )
+    ( nurl_print ` tmo=` ) ( nurl_print_int tmo )
+    ( nurl_print ` cto=` ) ( nurl_print_int cto )
     ( nurl_print ` follow=` ) ( nurl_print ( yn follow ) )
-    ( nurl_print ` maxr=` )   ( nurl_print_int maxr )
+    ( nurl_print ` maxr=` ) ( nurl_print_int maxr )
     ( nurl_print ` verify=` ) ( nurl_print ( yn verify ) )
-    ( nurl_print ` ua=[` )    ( nurl_print ua )
+    ( nurl_print ` ua=[` ) ( nurl_print ua )
     ( nurl_print `]\n` )
 }
 
@@ -38,10 +38,12 @@ $ `stdlib/core/string.nu`
     : i t . opt timeout_ms
     ^ ? <= t 0 30000 t
 }
+
 @ effective_cto HttpOptions opt → i {
     : i c . opt connect_timeout_ms
     ^ ? <= c 0 10000 c
 }
+
 @ effective_ua HttpOptions opt → s {
     : s u . opt user_agent
     : i has && != # i u 0 != ( nurl_str_len u ) 0
@@ -56,13 +58,13 @@ $ `stdlib/core/string.nu`
     ( show_opts `custom  ` c )
 
     ( nurl_print `eff(default) tmo=` ) ( nurl_print_int ( effective_tmo d ) )
-    ( nurl_print ` cto=` )             ( nurl_print_int ( effective_cto d ) )
-    ( nurl_print ` ua=` )              ( nurl_print ( effective_ua d ) )
+    ( nurl_print ` cto=` ) ( nurl_print_int ( effective_cto d ) )
+    ( nurl_print ` ua=` ) ( nurl_print ( effective_ua d ) )
     ( nurl_print `\n` )
 
     ( nurl_print `eff(custom)  tmo=` ) ( nurl_print_int ( effective_tmo c ) )
-    ( nurl_print ` cto=` )             ( nurl_print_int ( effective_cto c ) )
-    ( nurl_print ` ua=` )              ( nurl_print ( effective_ua c ) )
+    ( nurl_print ` cto=` ) ( nurl_print_int ( effective_cto c ) )
+    ( nurl_print ` ua=` ) ( nurl_print ( effective_ua c ) )
     ( nurl_print `\n` )
 
     ^ 0

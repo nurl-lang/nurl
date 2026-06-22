@@ -755,82 +755,82 @@ $ `stdlib/ext/http_response.nu`
                 : HttpRequest req . pho head
                 : b body_ok ( __finish_body conn req carry body_max )
                 ? body_ok {
-                  // Upgrade hook (e.g. WebSocket) gets first crack. If it takes
-                  // over the connection, run nothing else and let the loop end
-                  // so the server closes the finished conn.
-                  : ~ b __ws_handled F
-                  ? != g_ws_upgrade 0 {
-                      : *__WsUpgrade __wu # *__WsUpgrade g_ws_upgrade
-                      : ( @ b TcpConn HttpRequest ) __upf . __wu fn
-                      ? ( __upf conn req ) { = __ws_handled T } {}
-                  } {}
-                  ? __ws_handled { ( request_free req ) = done T } {
-                    : b req_close ( __request_says_close req )
-                    : ( @ HttpResponse HttpRequest ) f . s handler
-                    // Wrap the handler in `recover` so a panic inside
-                    // the handler doesn't kill the worker thread. On
-                    // panic the default `resp` (500) flows out to the
-                    // client; the captured message is logged to stderr.
-                    // Owned allocations inside the handler that didn't
-                    // run their auto-drop leak — see
-                    // stdlib/std/panic.nu's header for the cost model.
-                    //
-                    // `panic_resp` keeps a handle on the pre-allocated
-                    // 500 so it can be freed once the handler replaces
-                    // `resp` — without it the default leaked (headers
-                    // Vec + body Vec + strings) on EVERY successful
-                    // request.
-                    //
-                    // Replacement is detected by comparing the body-Vec
-                    // DATA pointers, not via a captured flag: closures
-                    // capture struct bindings by reference but scalar
-                    // bindings by value, so a `= done T` inside the
-                    // recover closure never reaches this scope while
-                    // `= resp …` does. Two live responses can never
-                    // share a body allocation, so pointer inequality
-                    // is exact; and if `= resp` ever failed to
-                    // propagate, the compare degrades to "not
-                    // replaced" — a leak, never a use-after-free.
-                    : HttpResponse panic_resp ( response_text 500 `internal server error\n` )
-                    : ~ HttpResponse resp panic_resp
-                    : !v PanicInfo pr ( recover \ → v { = resp ( f req ) } )
-                    ?? pr {
-                        T _ → {}
-                        F p → {
-                            ( nurl_eprintln ( nurl_str_cat `[panic] HTTP handler: ` ( string_data . p msg ) ) )
-                            ( panic_info_free p )
-                        }
-                    }
-                    ? != # i ( vec_data [u] . resp body ) # i ( vec_data [u] . panic_resp body )
-                    { ( http_response_free panic_resp ) } {}
-                    // Per-request total timeout enforcement: free the
-                    // handler's response and substitute 504 if we blew
-                    // the budget. `should_close` forces `Connection:
-                    // close` so the client doesn't reuse possibly-
-                    // corrupted state.
-                    : ~ HttpResponse final_resp resp
-                    : ~ b timed_out F
-                    ? > req_timeout_ms 0 {
-                        : i elapsed - ( now_ms ) req_start_ms
-                        ? > elapsed req_timeout_ms {
-                            ( http_response_free resp )
-                            = final_resp ( response_text 504 `request total-timeout exceeded\n` )
-                            = timed_out T
-                        } {}
+                    // Upgrade hook (e.g. WebSocket) gets first crack. If it takes
+                    // over the connection, run nothing else and let the loop end
+                    // so the server closes the finished conn.
+                    : ~ b __ws_handled F
+                    ? != g_ws_upgrade 0 {
+                        : *__WsUpgrade __wu # *__WsUpgrade g_ws_upgrade
+                        : ( @ b TcpConn HttpRequest ) __upf . __wu fn
+                        ? ( __upf conn req ) { = __ws_handled T } {}
                     } {}
-                    : b resp_close ( __response_says_close final_resp )
-                    = n_served + n_served 1
-                    : b at_cap ? > max_req 0 >= n_served max_req T
-                    : b should_close | | | req_close resp_close at_cap timed_out
-                    : !v NetErr wr ( __write_response conn final_resp should_close )
-                    ( request_free req )
-                    ?? wr {
-                        T _ → {
-                            ? should_close { = done T } {}
+                    ? __ws_handled { ( request_free req ) = done T } {
+                        : b req_close ( __request_says_close req )
+                        : ( @ HttpResponse HttpRequest ) f . s handler
+                        // Wrap the handler in `recover` so a panic inside
+                        // the handler doesn't kill the worker thread. On
+                        // panic the default `resp` (500) flows out to the
+                        // client; the captured message is logged to stderr.
+                        // Owned allocations inside the handler that didn't
+                        // run their auto-drop leak — see
+                        // stdlib/std/panic.nu's header for the cost model.
+                        //
+                        // `panic_resp` keeps a handle on the pre-allocated
+                        // 500 so it can be freed once the handler replaces
+                        // `resp` — without it the default leaked (headers
+                        // Vec + body Vec + strings) on EVERY successful
+                        // request.
+                        //
+                        // Replacement is detected by comparing the body-Vec
+                        // DATA pointers, not via a captured flag: closures
+                        // capture struct bindings by reference but scalar
+                        // bindings by value, so a `= done T` inside the
+                        // recover closure never reaches this scope while
+                        // `= resp …` does. Two live responses can never
+                        // share a body allocation, so pointer inequality
+                        // is exact; and if `= resp` ever failed to
+                        // propagate, the compare degrades to "not
+                        // replaced" — a leak, never a use-after-free.
+                        : HttpResponse panic_resp ( response_text 500 `internal server error\n` )
+                        : ~ HttpResponse resp panic_resp
+                        : !v PanicInfo pr ( recover \ → v { = resp ( f req ) } )
+                        ?? pr {
+                            T _ → {}
+                            F p → {
+                                ( nurl_eprintln ( nurl_str_cat `[panic] HTTP handler: ` ( string_data . p msg ) ) )
+                                ( panic_info_free p )
+                            }
                         }
-                        F _ → { = done T }
+                        ? != # i ( vec_data [u] . resp body ) # i ( vec_data [u] . panic_resp body )
+                        { ( http_response_free panic_resp ) } {}
+                        // Per-request total timeout enforcement: free the
+                        // handler's response and substitute 504 if we blew
+                        // the budget. `should_close` forces `Connection:
+                        // close` so the client doesn't reuse possibly-
+                        // corrupted state.
+                        : ~ HttpResponse final_resp resp
+                        : ~ b timed_out F
+                        ? > req_timeout_ms 0 {
+                            : i elapsed - ( now_ms ) req_start_ms
+                            ? > elapsed req_timeout_ms {
+                                ( http_response_free resp )
+                                = final_resp ( response_text 504 `request total-timeout exceeded\n` )
+                                = timed_out T
+                            } {}
+                        } {}
+                        : b resp_close ( __response_says_close final_resp )
+                        = n_served + n_served 1
+                        : b at_cap ? > max_req 0 >= n_served max_req T
+                        : b should_close | | | req_close resp_close at_cap timed_out
+                        : !v NetErr wr ( __write_response conn final_resp should_close )
+                        ( request_free req )
+                        ?? wr {
+                            T _ → {
+                                ? should_close { = done T } {}
+                            }
+                            F _ → { = done T }
+                        }
                     }
-                  }
                 } {
                     : HttpResponse er ( response_text 400 `malformed body\n` )
                     : !v NetErr _wr ( __write_response conn er T )

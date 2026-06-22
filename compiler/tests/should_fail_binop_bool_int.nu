@@ -2,4 +2,4 @@
 // non-bool operand, both non-constant, used to emit a width-mismatched
 // `icmp i1 %f, %n`. A literal operand (e.g. `== flag 0`) stays valid; two
 // disagreeing registers are rejected.
-@ main → i { : b f T  : i n 5  : b r < f n  ^ 0 }
+@ main → i { : b f T : i n 5 : b r < f n ^ 0 }

@@ -66,14 +66,14 @@ $ `stdlib/net/membership.nu`
 
     // ── unhealthy node (high LHM) is slower to accuse ────────────
     : *PkMemberTable t4 ( pktable_new me 1000 5000 3 8 )
-    ( pktable_on_probe_fail t4 )   // LHM 0→1 → timeouts ×2 (ceiling 10000)
+    ( pktable_on_probe_fail t4 )  // LHM 0→1 → timeouts ×2 (ceiling 10000)
     ( pb `LHM bumped to 1: ` == ( lh_value_of t4 ) 1 )
     ( pktable_apply t4 b ( pk_alive ) 1 0 )
     ( pktable_suspect t4 b 0 )
     : ( Vec s ) d4 ( pktable_sweep t4 6000 )
     ( pb `unhealthy node holds off at t=6000 (scaled ceiling 10000): ` == ( vec_len [s] d4 ) 0 )
     ( __pk_dead_free d4 )
-    ( pktable_on_probe_ok t4 )     // LHM back to 0
+    ( pktable_on_probe_ok t4 )  // LHM back to 0
     ( pb `probe ok restores health: ` == ( lh_value_of t4 ) 0 )
     ( pktable_free t4 )
 
@@ -84,12 +84,12 @@ $ `stdlib/net/membership.nu`
     : ?( Vec u ) p1 ( pktable_pick_probe t5 )
     : ?( Vec u ) p2 ( pktable_pick_probe t5 )
     ?? p1 { T x1 → {
-        ?? p2 { T x2 → {
-            ( pb `two picks cover both members: ` | & ( veq x1 b ) ( veq x2 c ) & ( veq x1 c ) ( veq x2 b ) )
-            ( vec_free [u] x2 )
-        } F → ( nurl_print `pick2 none\n` ) }
-        ( vec_free [u] x1 )
-    } F → ( nurl_print `pick1 none\n` ) }
+            ?? p2 { T x2 → {
+                    ( pb `two picks cover both members: ` | & ( veq x1 b ) ( veq x2 c ) & ( veq x1 c ) ( veq x2 b ) )
+                    ( vec_free [u] x2 )
+                } F → ( nurl_print `pick2 none\n` ) }
+            ( vec_free [u] x1 )
+        } F → ( nurl_print `pick1 none\n` ) }
     ( pktable_free t5 )
 
     // ── gossip message codec ─────────────────────────────────────

@@ -14,7 +14,7 @@ $ `stdlib/std/swim.nu`
     ( vec_push [Member] g ( member_new `10.0.0.5` 50001 3000000000 @ MemberState { MDead } ) )
     ( vec_push [Member] g ( member_new `node-b` 65535 7 @ MemberState { MSuspect } ) )
     : SwimMsg m @ SwimMsg { @ SwimMsgType { MtPingReq } 4000000001
-    ( string_from `host-a` ) 60000 ( string_from `host-t` ) 60001 g }
+        ( string_from `host-a` ) 60000 ( string_from `host-t` ) 60001 g }
 
     : ( Vec u ) wire ( swim_msg_encode m )
     ( nurl_print `bytes=` ) ( nurl_print_int ( vec_len [u] wire ) )

@@ -25,18 +25,18 @@
 
 $ `stdlib/core/vec.nu`
 
-@ make_vec i n → ! ( Vec u ) s {
-    ? < n 0 { ^ @ ! ( Vec u ) s { F `negative` } } {}
+@ make_vec i n → !( Vec u ) s {
+    ? < n 0 { ^ @ !( Vec u ) s { F `negative` } } {}
     : ( Vec u ) v ( vec_new [u] )
     ( vec_push [u] v 10 )
     ( vec_push [u] v 20 )
     ( vec_push [u] v 30 )
-    ^ @ ! ( Vec u ) s { T v }
+    ^ @ !( Vec u ) s { T v }
 }
 
-@ make_str b base → ! s s {
-    ? base { ^ @ ! s s { T `ok-payload` } } {}
-    ^ @ ! s s { F `err-payload` }
+@ make_str b base → !s s {
+    ? base { ^ @ !s s { T `ok-payload` } } {}
+    ^ @ !s s { F `err-payload` }
 }
 
 @ main → i {
@@ -55,7 +55,7 @@ $ `stdlib/core/vec.nu`
     ( nurl_print `vec_direct_err=` ) ( nurl_print ( nurl_str_int ( vec_len [u] bad ) ) ) ( nurl_print `\n` )
 
     // (3) handle payload, named scrutinee (must still work — the documented cure).
-    : ! ( Vec u ) s r ( make_vec 1 )
+    : !( Vec u ) s r ( make_vec 1 )
     : ( Vec u ) got2 ?? r {
         T v → v
         F e → ( vec_new [u] )
@@ -63,16 +63,16 @@ $ `stdlib/core/vec.nu`
     ( nurl_print `vec_named_ok=` ) ( nurl_print ( nurl_str_int ( vec_len [u] got2 ) ) ) ( nurl_print `\n` )
 
     // (4) bare-pointer payload, direct-call scrutinee.
-    : s sd ?? ( make_str T ) { T v → v  F e → e }
+    : s sd ?? ( make_str T ) { T v → v F e → e }
     ( nurl_print `str_direct=` ) ( nurl_print sd ) ( nurl_print `\n` )
 
     // (5) bare-pointer payload, error arm.
-    : s se ?? ( make_str F ) { T v → v  F e → e }
+    : s se ?? ( make_str F ) { T v → v F e → e }
     ( nurl_print `str_direct_err=` ) ( nurl_print se ) ( nurl_print `\n` )
 
     // (6) bare-pointer payload, named scrutinee (was ALSO broken).
-    : ! s s rs ( make_str T )
-    : s sn ?? rs { T v → v  F e → e }
+    : !s s rs ( make_str T )
+    : s sn ?? rs { T v → v F e → e }
     ( nurl_print `str_named=` ) ( nurl_print sn ) ( nurl_print `\n` )
     ^ 0
 }

@@ -166,18 +166,18 @@
 @ __norm_int_lit s txt → s {
     : i n ( nurl_str_len txt )
     ? < n 3 { ^ txt } {}
-    ? != ( nurl_str_get txt 0 ) 48 { ^ txt } {}   // not leading '0'
+    ? != ( nurl_str_get txt 0 ) 48 { ^ txt } {}  // not leading '0'
     : i c1 ( nurl_str_get txt 1 )
-    ? | == c1 120 == c1 88 {                        // 0x / 0X
+    ? | == c1 120 == c1 88 {  // 0x / 0X
         : ~ i acc 0
         : ~ i i 2
-        ~ < i n { = acc + * acc 16 ( __lx_hex_val ( nurl_str_get txt i ) )  = i + i 1 }
+        ~ < i n { = acc + * acc 16 ( __lx_hex_val ( nurl_str_get txt i ) ) = i + i 1 }
         ^ ( nurl_str_int acc )
     } {}
-    ? | == c1 98 == c1 66 {                         // 0b / 0B
+    ? | == c1 98 == c1 66 {  // 0b / 0B
         : ~ i acc 0
         : ~ i i 2
-        ~ < i n { = acc + * acc 2 - ( nurl_str_get txt i ) 48  = i + i 1 }
+        ~ < i n { = acc + * acc 2 - ( nurl_str_get txt i ) 48 = i + i 1 }
         ^ ( nurl_str_int acc )
     } {}
     ^ txt
@@ -1884,7 +1884,7 @@
     // are flagged so the null-as-`0` idiom (`^ 0` from a `*T`-returning fn) and
     // loose pointer-to-pointer returns stay valid.
     ? & & != 0 ( nurl_str_len fn_rt ) ! ( seq lt `void` ) ! ( seq fn_rt `void` )
-    {   : b ret_vf | ( seq lt `double` ) ( seq lt `float` )
+    { : b ret_vf | ( seq lt `double` ) ( seq lt `float` )
         : b ret_df | ( seq fn_rt `double` ) ( seq fn_rt `float` )
         ? | != ret_vf ret_df & ( is_ptr_ty lt ) ! ( is_ptr_ty fn_rt )
         { ( die lex ( nurl_str_cat ( nurl_str_cat4
@@ -2829,7 +2829,7 @@
     : i n ( nurl_str_len sv )
     : ~ i idx 0
     : ~ b neg F
-    ? & > n 0 == ( nurl_str_get sv 0 ) 45 { = neg T  = idx 1 } {}
+    ? & > n 0 == ( nurl_str_get sv 0 ) 45 { = neg T = idx 1 } {}
     : ~ i acc 0
     ~ < idx n {
         : i c ( nurl_str_get sv idx )
@@ -3288,14 +3288,14 @@
 @ __lx_is_hex_digit i c → b {
     ? ( __lx_is_digit c ) { ^ T } {}
     ? & >= c 97 <= c 102 { ^ T } {}  // a-f
-    ? & >= c 65 <= c 70 { ^ T } {}   // A-F
+    ? & >= c 65 <= c 70 { ^ T } {}  // A-F
     ^ F
 }
 
 @ __lx_hex_val i c → i {
     ? ( __lx_is_digit c ) { ^ - c 48 } {}
     ? & >= c 97 <= c 102 { ^ + 10 - c 97 } {}  // a-f
-    ^ + 10 - c 65                              // A-F
+    ^ + 10 - c 65  // A-F
 }
 
 // Binary-digit predicate, for `0b…` integer literals.
@@ -4117,15 +4117,15 @@
     ~ ! done {
         : i tt ( nurl_lex_type lex )
         ? == tt TT_EOF { = done T } {
-        ? | | == tt TT_LPAREN == tt TT_LBRACK == tt TT_LBRACE
-        { = depth + depth 1 ( nurl_lex_advance lex ) } {
-        ? == tt TT_RPAREN
-        { ? == depth 0 { = done T } { = depth - depth 1 ( nurl_lex_advance lex ) } } {
-        ? | == tt TT_RBRACK == tt TT_RBRACE
-        { = depth - depth 1 ( nurl_lex_advance lex ) } {
-        ? & & == depth 0 ( is_ident_tok tt ) == ( nurl_lex_peek_type lex ) TT_COLON
-        { = found T = done T }
-        { ( nurl_lex_advance lex ) } } } } }
+            ? | | == tt TT_LPAREN == tt TT_LBRACK == tt TT_LBRACE
+            { = depth + depth 1 ( nurl_lex_advance lex ) } {
+                ? == tt TT_RPAREN
+                { ? == depth 0 { = done T } { = depth - depth 1 ( nurl_lex_advance lex ) } } {
+                    ? | == tt TT_RBRACK == tt TT_RBRACE
+                    { = depth - depth 1 ( nurl_lex_advance lex ) } {
+                        ? & & == depth 0 ( is_ident_tok tt ) == ( nurl_lex_peek_type lex ) TT_COLON
+                        { = found T = done T }
+                        { ( nurl_lex_advance lex ) } } } } }
     }
     ( nurl_lex_set_pos lex save )
     ^ found
@@ -4335,10 +4335,10 @@
                 { = ta ( nurl_str_slice lt 1 - ll 1 ) }
                 { = ta lt }
             }
-            { // Base or prefix-compound (`?T` / `??T` / `*T`) type arg.
-              // capture_type_arg_src keeps a compound arg as one word so
-              // it substitutes whole into the generic body; nurl_lex_val
-              // alone would grab only the leading `?` / `*`.
+            {  // Base or prefix-compound (`?T` / `??T` / `*T`) type arg.
+                // capture_type_arg_src keeps a compound arg as one word so
+                // it substitutes whole into the generic body; nurl_lex_val
+                // alone would grab only the leading `?` / `*`.
                 = ta ( capture_type_arg_src lex )
                 // Lint: `vec_len [Header] …` references the Header
                 // type — this path bypasses parse_type, so note it
@@ -4878,9 +4878,9 @@
     == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__arity` ) ) )
     == 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms ( nurl_str_cat fname `__impl_seen` ) ) )
     {  // A GENERIC function called with no `[T …]` type arguments lands
-       // here — it carries `__tparams` but no `__arity` / mangled
-       // call_name (NURL does not infer type args from value args). Name
-       // the real cause instead of the misleading "unknown function".
+        // here — it carries `__tparams` but no `__arity` / mangled
+        // call_name (NURL does not infer type args from value args). Name
+        // the real cause instead of the misleading "unknown function".
         : s __gtp ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__tparams` ) )
         ? != 0 ( nurl_str_len __gtp )
         { ( die lex ( nurl_str_cat3
@@ -5455,11 +5455,11 @@
             // parenthesised call), `. <ch> ctl` resolving its `ctl`
             // field. The poll's chan_try_recv reads it the same way.
             = ctl_decls ( nurl_str_cat ctl_decls
-                ( nurl_str_cat4 `: i ` ctl_name ( nurl_str_cat3 ` # i . ` chtext ` ctl` ) `\n` ) )
+            ( nurl_str_cat4 `: i ` ctl_name ( nurl_str_cat3 ` # i . ` chtext ` ctl` ) `\n` ) )
             = arm_block ( nurl_str_cat arm_block
-                ( nurl_str_cat4 `( chan_raw_arm ` ctl_name ( nurl_str_cat ` ` w_name ) ` )\n` ) )
+            ( nurl_str_cat4 `( chan_raw_arm ` ctl_name ( nurl_str_cat ` ` w_name ) ` )\n` ) )
             = disarm_block ( nurl_str_cat disarm_block
-                ( nurl_str_cat4 `( chan_raw_disarm ` ctl_name ( nurl_str_cat ` ` w_name ) ` )\n` ) )
+            ( nurl_str_cat4 `( chan_raw_disarm ` ctl_name ( nurl_str_cat ` ` w_name ) ` )\n` ) )
 
             // Readiness is fully type-erased (chan_raw_poll reads only
             // the queue length + closed flag), so the element type is
@@ -5475,7 +5475,7 @@
             : s fire ( nurl_str_cat4 `= ` done_name ( nurl_str_cat3 ` T ` decl ` ` ) btext )
             : s guard ( nurl_str_cat4 `? > ` poll_name ( nurl_str_cat3 ` 0 { ` fire ` } {}` ) `` )
             : s poll ( nurl_str_cat4 `? ! ` done_name
-                ( nurl_str_cat4 ` { ` p_decl ( nurl_str_cat ` ` guard ) ` } {}\n` ) `` )
+            ( nurl_str_cat4 ` { ` p_decl ( nurl_str_cat ` ` guard ) ` } {}\n` ) `` )
             = poll_block ( nurl_str_cat poll_block poll )
             = bidx + bidx 1
         } {
@@ -5516,7 +5516,7 @@
         = src ( nurl_str_cat src arm_block )
         = src ( nurl_str_cat src poll_block )
         = src ( nurl_str_cat4 src ( nurl_str_cat3 `? ! ` done_name ` { ( select_waiter_wait ` )
-            ( nurl_str_cat3 w_name ` )` ` } {}\n` ) `` )
+        ( nurl_str_cat3 w_name ` )` ` } {}\n` ) `` )
         = src ( nurl_str_cat src disarm_block )
         = src ( nurl_str_cat src `}\n` )
         = src ( nurl_str_cat4 src `( select_waiter_free ` w_name ` )\n` )
@@ -5713,14 +5713,14 @@
             : ~ s or_names ``
             ? ! is_int_pat
             { ~ == ( nurl_lex_type lex ) TT_PIPE {
-                ( nurl_lex_advance lex )  // consume '|'
-                ? ( is_ident_tok ( nurl_lex_type lex ) )
-                { = or_names ? == 0 ( nurl_str_len or_names )
-                    ( nurl_lex_val lex )
-                    ( nurl_str_cat3 or_names ` ` ( nurl_lex_val lex ) )
-                    ( nurl_lex_advance lex ) }
-                { ( die lex `expected variant name after '|' in or-pattern` ) }
-            } }
+                    ( nurl_lex_advance lex )  // consume '|'
+                    ? ( is_ident_tok ( nurl_lex_type lex ) )
+                    { = or_names ? == 0 ( nurl_str_len or_names )
+                        ( nurl_lex_val lex )
+                        ( nurl_str_cat3 or_names ` ` ( nurl_lex_val lex ) )
+                        ( nurl_lex_advance lex ) }
+                    { ( die lex `expected variant name after '|' in or-pattern` ) }
+                } }
             {}
             : b has_or != 0 ( nurl_str_len or_names )
 
@@ -6156,58 +6156,58 @@
                     ? ( is_float_ty pt0 )
                     { ( emit_enum_float_extract cv0 pt0 pr0 cg ) }
                     { ? & > ( int_width pt0 ) 0 < ( int_width pt0 ) 64 {
-                        // Narrow integer payload (i1 / i8 / i16 / i32, incl.
-                        // the unsigned u/u16/u32): the value rode the ptr slot
-                        // widened to i64 (gen_agg_lit), so ptrtoint back to i64
-                        // and trunc to the payload's width. Signedness for a
-                        // later widen is set on the binding below.
-                        : s t64 ( nurl_cg_reg cg )
-                        ( nurl_print `  ` ) ( nurl_print t64 )
-                        ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr0 ) ( nurl_print ` to i64\n` )
-                        ( nurl_print `  ` ) ( nurl_print cv0 )
-                        ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt0 ) ( nurl_print `\n` )
-                    } {
-                        // Struct-handle payload (e.g. %Vec__Json, %String): the payload
-                        // ptr stored in the enum slot IS the struct's field-0 pointer
-                        // (because aggregate construction does the inverse — extractvalue
-                        // 0 + ptrtoint into the i64 slot). Reconstruct by insertvalue.
-                        : ~ b pt0_is_struct_handle F
-                        : ~ s pt0_f0_ty ``
-                        ? == ( nurl_str_get pt0 0 ) 37
-                        { : s sname0 ( nurl_str_slice pt0 1 - ( nurl_str_len pt0 ) 1 )
-                            : s var_list0 ( nurl_sym_get syms ( nurl_str_cat sname0 `__variants` ) )
-                            ? == 0 ( nurl_str_len var_list0 )
-                            { = pt0_f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname0 `__idx_0` `__type` ) )
-                                ? & != 0 ( nurl_str_len pt0_f0_ty )
-                                == ( nurl_str_get pt0_f0_ty - ( nurl_str_len pt0_f0_ty ) 1 ) 42
-                                { = pt0_is_struct_handle T } {} }
-                            {} }
-                        {}
-                        ? pt0_is_struct_handle
-                        { ( nurl_print `  ` ) ( nurl_print cv0 )
-                            ( nurl_print ` = insertvalue ` ) ( nurl_print pt0 )
-                            ( nurl_print ` undef, ` ) ( nurl_print pt0_f0_ty )
-                            ( nurl_print ` ` ) ( nurl_print pr0 ) ( nurl_print `, 0\n` ) }
-                        { ( nurl_print `  ` ) ( nurl_print cv0 )
-                            ? | == ( nurl_str_get pt0 0 ) 123
-                            & == ( nurl_str_get pt0 0 ) 37
-                            != ( nurl_str_get pt0 - ( nurl_str_len pt0 ) 1 ) 42
-                            {  // Anonymous aggregate (`{ i1, i64 }`) OR a named
-                                // non-pointer type (`%Geom` multi-field struct /
-                                // `%Color` enum) — the payload slot holds a
-                                // heap-box pointer to the whole value (see the
-                                // symmetric heap-box in gen_agg_lit's enum-
-                                // construction path). Load the value back
-                                // through it. A pointer payload (`%Ast*`) keeps
-                                // the bitcast-fallthrough below — the slot holds
-                                // the pointer itself, not a box.
-                                ( nurl_print ` = load ` ) ( nurl_print pt0 )
-                                ( nurl_print `, ptr ` ) ( nurl_print pr0 ) ( nurl_print `\n` )
-                            }
-                            ? ( seq pt0 `i64` )
-                            { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr0 ) ( nurl_print ` to i64\n` ) }
-                            { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr0 ) ( nurl_print ` to i8*\n` ) } }
-                    }
+                            // Narrow integer payload (i1 / i8 / i16 / i32, incl.
+                            // the unsigned u/u16/u32): the value rode the ptr slot
+                            // widened to i64 (gen_agg_lit), so ptrtoint back to i64
+                            // and trunc to the payload's width. Signedness for a
+                            // later widen is set on the binding below.
+                            : s t64 ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print t64 )
+                            ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr0 ) ( nurl_print ` to i64\n` )
+                            ( nurl_print `  ` ) ( nurl_print cv0 )
+                            ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt0 ) ( nurl_print `\n` )
+                        } {
+                            // Struct-handle payload (e.g. %Vec__Json, %String): the payload
+                            // ptr stored in the enum slot IS the struct's field-0 pointer
+                            // (because aggregate construction does the inverse — extractvalue
+                            // 0 + ptrtoint into the i64 slot). Reconstruct by insertvalue.
+                            : ~ b pt0_is_struct_handle F
+                            : ~ s pt0_f0_ty ``
+                            ? == ( nurl_str_get pt0 0 ) 37
+                            { : s sname0 ( nurl_str_slice pt0 1 - ( nurl_str_len pt0 ) 1 )
+                                : s var_list0 ( nurl_sym_get syms ( nurl_str_cat sname0 `__variants` ) )
+                                ? == 0 ( nurl_str_len var_list0 )
+                                { = pt0_f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname0 `__idx_0` `__type` ) )
+                                    ? & != 0 ( nurl_str_len pt0_f0_ty )
+                                    == ( nurl_str_get pt0_f0_ty - ( nurl_str_len pt0_f0_ty ) 1 ) 42
+                                    { = pt0_is_struct_handle T } {} }
+                                {} }
+                            {}
+                            ? pt0_is_struct_handle
+                            { ( nurl_print `  ` ) ( nurl_print cv0 )
+                                ( nurl_print ` = insertvalue ` ) ( nurl_print pt0 )
+                                ( nurl_print ` undef, ` ) ( nurl_print pt0_f0_ty )
+                                ( nurl_print ` ` ) ( nurl_print pr0 ) ( nurl_print `, 0\n` ) }
+                            { ( nurl_print `  ` ) ( nurl_print cv0 )
+                                ? | == ( nurl_str_get pt0 0 ) 123
+                                & == ( nurl_str_get pt0 0 ) 37
+                                != ( nurl_str_get pt0 - ( nurl_str_len pt0 ) 1 ) 42
+                                {  // Anonymous aggregate (`{ i1, i64 }`) OR a named
+                                    // non-pointer type (`%Geom` multi-field struct /
+                                    // `%Color` enum) — the payload slot holds a
+                                    // heap-box pointer to the whole value (see the
+                                    // symmetric heap-box in gen_agg_lit's enum-
+                                    // construction path). Load the value back
+                                    // through it. A pointer payload (`%Ast*`) keeps
+                                    // the bitcast-fallthrough below — the slot holds
+                                    // the pointer itself, not a box.
+                                    ( nurl_print ` = load ` ) ( nurl_print pt0 )
+                                    ( nurl_print `, ptr ` ) ( nurl_print pr0 ) ( nurl_print `\n` )
+                                }
+                                ? ( seq pt0 `i64` )
+                                { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr0 ) ( nurl_print ` to i64\n` ) }
+                                { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr0 ) ( nurl_print ` to i8*\n` ) } }
+                        }
                     }
                 }
                 : s vp0 ( nurl_cg_reg cg )
@@ -6291,51 +6291,51 @@
                 ? ( is_float_ty pt1 )
                 { ( emit_enum_float_extract cv1 pt1 pr1 cg ) }
                 { ? & > ( int_width pt1 ) 0 < ( int_width pt1 ) 64 {
-                    : s t64 ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print t64 )
-                    ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i64\n` )
-                    ( nurl_print `  ` ) ( nurl_print cv1 )
-                    ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt1 ) ( nurl_print `\n` )
-                } {
-                    // Mirror slot-0 reconstruction (the inverse of
-                    // gen_agg_lit's enum-construction boxing). A `%`-named
-                    // payload is either a single-pointer handle (Vec/String/…:
-                    // f0 is a pointer, stashed bare → rebuild via insertvalue)
-                    // or a multi-field struct / enum / anon aggregate (heap-
-                    // boxed → load through the box pointer). Without this,
-                    // slots 1-2 fell straight to the i8* bitcast and stored a
-                    // `ptr` into a `%Struct` slot (clang reject — the
-                    // non-slot-0 struct-payload hole).
-                    : ~ b pt1_is_struct_handle F
-                    : ~ s pt1_f0_ty ``
-                    ? == ( nurl_str_get pt1 0 ) 37
-                    { : s sname_pt1 ( nurl_str_slice pt1 1 - ( nurl_str_len pt1 ) 1 )
-                        : s var_list_pt1 ( nurl_sym_get syms ( nurl_str_cat sname_pt1 `__variants` ) )
-                        ? == 0 ( nurl_str_len var_list_pt1 )
-                        { = pt1_f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname_pt1 `__idx_0` `__type` ) )
-                            ? & != 0 ( nurl_str_len pt1_f0_ty )
-                            == ( nurl_str_get pt1_f0_ty - ( nurl_str_len pt1_f0_ty ) 1 ) 42
-                            { = pt1_is_struct_handle T } {} }
-                        {} }
-                    {}
-                    ? pt1_is_struct_handle
-                    { ( nurl_print `  ` ) ( nurl_print cv1 )
-                        ( nurl_print ` = insertvalue ` ) ( nurl_print pt1 )
-                        ( nurl_print ` undef, ` ) ( nurl_print pt1_f0_ty )
-                        ( nurl_print ` ` ) ( nurl_print pr1 ) ( nurl_print `, 0\n` ) }
-                    { ( nurl_print `  ` ) ( nurl_print cv1 )
-                        ? | == ( nurl_str_get pt1 0 ) 123
-                        & == ( nurl_str_get pt1 0 ) 37
-                        != ( nurl_str_get pt1 - ( nurl_str_len pt1 ) 1 ) 42
-                        {  // Anon aggregate OR named non-pointer struct / enum:
-                            // load the whole value back through the box pointer.
-                            ( nurl_print ` = load ` ) ( nurl_print pt1 )
-                            ( nurl_print `, ptr ` ) ( nurl_print pr1 ) ( nurl_print `\n` )
-                        }
-                        ? ( seq pt1 `i64` )
-                        { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i64\n` ) }
-                        { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i8*\n` ) } }
-                }
+                        : s t64 ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print t64 )
+                        ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i64\n` )
+                        ( nurl_print `  ` ) ( nurl_print cv1 )
+                        ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt1 ) ( nurl_print `\n` )
+                    } {
+                        // Mirror slot-0 reconstruction (the inverse of
+                        // gen_agg_lit's enum-construction boxing). A `%`-named
+                        // payload is either a single-pointer handle (Vec/String/…:
+                        // f0 is a pointer, stashed bare → rebuild via insertvalue)
+                        // or a multi-field struct / enum / anon aggregate (heap-
+                        // boxed → load through the box pointer). Without this,
+                        // slots 1-2 fell straight to the i8* bitcast and stored a
+                        // `ptr` into a `%Struct` slot (clang reject — the
+                        // non-slot-0 struct-payload hole).
+                        : ~ b pt1_is_struct_handle F
+                        : ~ s pt1_f0_ty ``
+                        ? == ( nurl_str_get pt1 0 ) 37
+                        { : s sname_pt1 ( nurl_str_slice pt1 1 - ( nurl_str_len pt1 ) 1 )
+                            : s var_list_pt1 ( nurl_sym_get syms ( nurl_str_cat sname_pt1 `__variants` ) )
+                            ? == 0 ( nurl_str_len var_list_pt1 )
+                            { = pt1_f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname_pt1 `__idx_0` `__type` ) )
+                                ? & != 0 ( nurl_str_len pt1_f0_ty )
+                                == ( nurl_str_get pt1_f0_ty - ( nurl_str_len pt1_f0_ty ) 1 ) 42
+                                { = pt1_is_struct_handle T } {} }
+                            {} }
+                        {}
+                        ? pt1_is_struct_handle
+                        { ( nurl_print `  ` ) ( nurl_print cv1 )
+                            ( nurl_print ` = insertvalue ` ) ( nurl_print pt1 )
+                            ( nurl_print ` undef, ` ) ( nurl_print pt1_f0_ty )
+                            ( nurl_print ` ` ) ( nurl_print pr1 ) ( nurl_print `, 0\n` ) }
+                        { ( nurl_print `  ` ) ( nurl_print cv1 )
+                            ? | == ( nurl_str_get pt1 0 ) 123
+                            & == ( nurl_str_get pt1 0 ) 37
+                            != ( nurl_str_get pt1 - ( nurl_str_len pt1 ) 1 ) 42
+                            {  // Anon aggregate OR named non-pointer struct / enum:
+                                // load the whole value back through the box pointer.
+                                ( nurl_print ` = load ` ) ( nurl_print pt1 )
+                                ( nurl_print `, ptr ` ) ( nurl_print pr1 ) ( nurl_print `\n` )
+                            }
+                            ? ( seq pt1 `i64` )
+                            { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i64\n` ) }
+                            { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i8*\n` ) } }
+                    }
                 }
                 : s vp1 ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print vp1 )
@@ -6368,44 +6368,44 @@
                 ? ( is_float_ty pt2 )
                 { ( emit_enum_float_extract cv2 pt2 pr2 cg ) }
                 { ? & > ( int_width pt2 ) 0 < ( int_width pt2 ) 64 {
-                    : s t64 ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print t64 )
-                    ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i64\n` )
-                    ( nurl_print `  ` ) ( nurl_print cv2 )
-                    ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt2 ) ( nurl_print `\n` )
-                } {
-                    // Mirror slot-0 reconstruction — same struct-payload hole
-                    // as slot 1, one slot over (enum field 3).
-                    : ~ b pt2_is_struct_handle F
-                    : ~ s pt2_f0_ty ``
-                    ? == ( nurl_str_get pt2 0 ) 37
-                    { : s sname_pt2 ( nurl_str_slice pt2 1 - ( nurl_str_len pt2 ) 1 )
-                        : s var_list_pt2 ( nurl_sym_get syms ( nurl_str_cat sname_pt2 `__variants` ) )
-                        ? == 0 ( nurl_str_len var_list_pt2 )
-                        { = pt2_f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname_pt2 `__idx_0` `__type` ) )
-                            ? & != 0 ( nurl_str_len pt2_f0_ty )
-                            == ( nurl_str_get pt2_f0_ty - ( nurl_str_len pt2_f0_ty ) 1 ) 42
-                            { = pt2_is_struct_handle T } {} }
-                        {} }
-                    {}
-                    ? pt2_is_struct_handle
-                    { ( nurl_print `  ` ) ( nurl_print cv2 )
-                        ( nurl_print ` = insertvalue ` ) ( nurl_print pt2 )
-                        ( nurl_print ` undef, ` ) ( nurl_print pt2_f0_ty )
-                        ( nurl_print ` ` ) ( nurl_print pr2 ) ( nurl_print `, 0\n` ) }
-                    { ( nurl_print `  ` ) ( nurl_print cv2 )
-                        ? | == ( nurl_str_get pt2 0 ) 123
-                        & == ( nurl_str_get pt2 0 ) 37
-                        != ( nurl_str_get pt2 - ( nurl_str_len pt2 ) 1 ) 42
-                        {  // Anon aggregate OR named non-pointer struct / enum:
-                            // load the whole value back through the box pointer.
-                            ( nurl_print ` = load ` ) ( nurl_print pt2 )
-                            ( nurl_print `, ptr ` ) ( nurl_print pr2 ) ( nurl_print `\n` )
-                        }
-                        ? ( seq pt2 `i64` )
-                        { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i64\n` ) }
-                        { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i8*\n` ) } }
-                }
+                        : s t64 ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print t64 )
+                        ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i64\n` )
+                        ( nurl_print `  ` ) ( nurl_print cv2 )
+                        ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt2 ) ( nurl_print `\n` )
+                    } {
+                        // Mirror slot-0 reconstruction — same struct-payload hole
+                        // as slot 1, one slot over (enum field 3).
+                        : ~ b pt2_is_struct_handle F
+                        : ~ s pt2_f0_ty ``
+                        ? == ( nurl_str_get pt2 0 ) 37
+                        { : s sname_pt2 ( nurl_str_slice pt2 1 - ( nurl_str_len pt2 ) 1 )
+                            : s var_list_pt2 ( nurl_sym_get syms ( nurl_str_cat sname_pt2 `__variants` ) )
+                            ? == 0 ( nurl_str_len var_list_pt2 )
+                            { = pt2_f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname_pt2 `__idx_0` `__type` ) )
+                                ? & != 0 ( nurl_str_len pt2_f0_ty )
+                                == ( nurl_str_get pt2_f0_ty - ( nurl_str_len pt2_f0_ty ) 1 ) 42
+                                { = pt2_is_struct_handle T } {} }
+                            {} }
+                        {}
+                        ? pt2_is_struct_handle
+                        { ( nurl_print `  ` ) ( nurl_print cv2 )
+                            ( nurl_print ` = insertvalue ` ) ( nurl_print pt2 )
+                            ( nurl_print ` undef, ` ) ( nurl_print pt2_f0_ty )
+                            ( nurl_print ` ` ) ( nurl_print pr2 ) ( nurl_print `, 0\n` ) }
+                        { ( nurl_print `  ` ) ( nurl_print cv2 )
+                            ? | == ( nurl_str_get pt2 0 ) 123
+                            & == ( nurl_str_get pt2 0 ) 37
+                            != ( nurl_str_get pt2 - ( nurl_str_len pt2 ) 1 ) 42
+                            {  // Anon aggregate OR named non-pointer struct / enum:
+                                // load the whole value back through the box pointer.
+                                ( nurl_print ` = load ` ) ( nurl_print pt2 )
+                                ( nurl_print `, ptr ` ) ( nurl_print pr2 ) ( nurl_print `\n` )
+                            }
+                            ? ( seq pt2 `i64` )
+                            { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i64\n` ) }
+                            { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i8*\n` ) } }
+                    }
                 }
                 : s vp2 ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print vp2 )
@@ -8879,13 +8879,13 @@
         ? & & != 0 g_auto_drop_strings ( __is_autodrop_enum vt syms ) != 0 ( nurl_str_len rhs_borrow )
         { ( nurl_sym_def syms ( nurl_str_cat name `__borrow` ) `1` ) }
         { ? != 0 g_auto_drop_strings
-        { : s impl_key ( nurl_str_cat `drop##` vt )
-            : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
-            ? != 0 ( nurl_str_len impl_mangle_key )
-            { ( mem_own_add_user_drop syms ptr vt ) ( mem_journal_push_userdrop syms cg ptr vt ) }
-            {}
-        }
-        {} }
+            { : s impl_key ( nurl_str_cat `drop##` vt )
+                : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
+                ? != 0 ( nurl_str_len impl_mangle_key )
+                { ( mem_own_add_user_drop syms ptr vt ) ( mem_journal_push_userdrop syms cg ptr vt ) }
+                {}
+            }
+            {} }
         // Mark as having new syntax only if mutability was checked
         // TEMPORARILY DISABLED: ? had_mutability_check
         //   { ( nurl_sym_def syms ( nurl_str_cat name `__newsyntax` ) `1` ) }
@@ -9056,13 +9056,13 @@
                 ? & & != 0 g_auto_drop_strings ( __is_autodrop_enum ptype syms ) != 0 ( nurl_str_len rhs_borrow )
                 { ( nurl_sym_def syms ( nurl_str_cat name `__borrow` ) `1` ) }
                 { ? != 0 g_auto_drop_strings
-                { : s impl_key ( nurl_str_cat `drop##` ptype )
-                    : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
-                    ? != 0 ( nurl_str_len impl_mangle_key )
-                    { ( mem_own_add_user_drop syms ptr ptype ) ( mem_journal_push_userdrop syms cg ptr ptype ) }
-                    {}
-                }
-                {} }
+                    { : s impl_key ( nurl_str_cat `drop##` ptype )
+                        : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
+                        ? != 0 ( nurl_str_len impl_mangle_key )
+                        { ( mem_own_add_user_drop syms ptr ptype ) ( mem_journal_push_userdrop syms cg ptr ptype ) }
+                        {}
+                    }
+                    {} }
                 // Mark as having new syntax only if mutability was checked
                 // TEMPORARILY DISABLED: ? had_mutability_check
                 //   { ( nurl_sym_def syms ( nurl_str_cat name `__newsyntax` ) `1` ) }
@@ -9100,8 +9100,8 @@
         : s param_check ( nurl_sym_get syms ( nurl_str_cat name `__param` ) )
         ? & != 0 ( nurl_str_len vt ) == 0 ( nurl_str_len mut_check )
         {  // known binding, declared immutable. Point the diagnostic at
-           // the declaration (recorded via rec_decl_loc) so the author
-           // knows exactly where to add `~`.
+            // the declaration (recorded via rec_decl_loc) so the author
+            // knows exactly where to add `~`.
             : s dfile ( nurl_sym_get syms ( nurl_str_cat name `__declfile` ) )
             : s dline ( nurl_sym_get syms ( nurl_str_cat name `__declline` ) )
             : s where ? != 0 ( nurl_str_len dline )
@@ -9504,39 +9504,39 @@
     ? ( is_float_ty pti )
     { ( emit_enum_float_extract cvi pti pri cg ) }
     { ? & > ( int_width pti ) 0 < ( int_width pti ) 64 {
-        : s t64 ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print t64 )
-        ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pri ) ( nurl_print ` to i64\n` )
-        ( nurl_print `  ` ) ( nurl_print cvi )
-        ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pti ) ( nurl_print `\n` )
-    } {
-        : ~ b is_sh F
-        : ~ s f0ty ``
-        ? == ( nurl_str_get pti 0 ) 37
-        { : s snamei ( nurl_str_slice pti 1 - ( nurl_str_len pti ) 1 )
-            : s vlisti ( nurl_sym_get syms ( nurl_str_cat snamei `__variants` ) )
-            ? == 0 ( nurl_str_len vlisti )
-            { = f0ty ( nurl_sym_get syms ( nurl_str_cat3 snamei `__idx_0` `__type` ) )
-                ? & != 0 ( nurl_str_len f0ty )
-                == ( nurl_str_get f0ty - ( nurl_str_len f0ty ) 1 ) 42
-                { = is_sh T } {} }
-            {} }
-        {}
-        ? is_sh
-        { ( nurl_print `  ` ) ( nurl_print cvi )
-            ( nurl_print ` = insertvalue ` ) ( nurl_print pti )
-            ( nurl_print ` undef, ` ) ( nurl_print f0ty )
-            ( nurl_print ` ` ) ( nurl_print pri ) ( nurl_print `, 0\n` ) }
-        { ( nurl_print `  ` ) ( nurl_print cvi )
-            ? | == ( nurl_str_get pti 0 ) 123
-            & == ( nurl_str_get pti 0 ) 37
-            != ( nurl_str_get pti - ( nurl_str_len pti ) 1 ) 42
-            { ( nurl_print ` = load ` ) ( nurl_print pti )
-                ( nurl_print `, ptr ` ) ( nurl_print pri ) ( nurl_print `\n` ) }
-            ? ( seq pti `i64` )
-            { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pri ) ( nurl_print ` to i64\n` ) }
-            { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pri ) ( nurl_print ` to i8*\n` ) } }
-    } }
+            : s t64 ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print t64 )
+            ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pri ) ( nurl_print ` to i64\n` )
+            ( nurl_print `  ` ) ( nurl_print cvi )
+            ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pti ) ( nurl_print `\n` )
+        } {
+            : ~ b is_sh F
+            : ~ s f0ty ``
+            ? == ( nurl_str_get pti 0 ) 37
+            { : s snamei ( nurl_str_slice pti 1 - ( nurl_str_len pti ) 1 )
+                : s vlisti ( nurl_sym_get syms ( nurl_str_cat snamei `__variants` ) )
+                ? == 0 ( nurl_str_len vlisti )
+                { = f0ty ( nurl_sym_get syms ( nurl_str_cat3 snamei `__idx_0` `__type` ) )
+                    ? & != 0 ( nurl_str_len f0ty )
+                    == ( nurl_str_get f0ty - ( nurl_str_len f0ty ) 1 ) 42
+                    { = is_sh T } {} }
+                {} }
+            {}
+            ? is_sh
+            { ( nurl_print `  ` ) ( nurl_print cvi )
+                ( nurl_print ` = insertvalue ` ) ( nurl_print pti )
+                ( nurl_print ` undef, ` ) ( nurl_print f0ty )
+                ( nurl_print ` ` ) ( nurl_print pri ) ( nurl_print `, 0\n` ) }
+            { ( nurl_print `  ` ) ( nurl_print cvi )
+                ? | == ( nurl_str_get pti 0 ) 123
+                & == ( nurl_str_get pti 0 ) 37
+                != ( nurl_str_get pti - ( nurl_str_len pti ) 1 ) 42
+                { ( nurl_print ` = load ` ) ( nurl_print pti )
+                    ( nurl_print `, ptr ` ) ( nurl_print pri ) ( nurl_print `\n` ) }
+                ? ( seq pti `i64` )
+                { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pri ) ( nurl_print ` to i64\n` ) }
+                { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pri ) ( nurl_print ` to i8*\n` ) } }
+        } }
     : s vpi ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print vpi )
     ( nurl_print ` = alloca ` ) ( nurl_print pti ) ( nurl_print `\n` )
@@ -9746,8 +9746,8 @@
     : b dst_is_fp | dst_is_double dst_is_float
     ? & src_is_fp dst_is_fp
     {  // float ↔ double conversions. The result is a float; `nurl_set_last_type`
-       // below resets signedness to signed, so no stale integer-unsigned flag
-       // survives into a later int op (the coupling does this automatically).
+        // below resets signedness to signed, so no stale integer-unsigned flag
+        // survives into a later int op (the coupling does this automatically).
         ? ( seq st dt )
         { ( nurl_set_last_type dt ) ^ val }
         { ( nurl_print `  ` ) ( nurl_print res )
@@ -9759,8 +9759,8 @@
     {}
     ? & src_is_fp ! dst_is_fp
     {  // float-or-double → int: fptoui when the TARGET is unsigned (so a
-       // value above the signed max converts correctly instead of becoming
-       // poison via fptosi), else fptosi.
+        // value above the signed max converts correctly instead of becoming
+        // poison via fptosi), else fptosi.
         ( nurl_print `  ` ) ( nurl_print res )
         ( nurl_print ? dst_unsigned ` = fptoui ` ` = fptosi ` )
         ( nurl_print st ) ( nurl_print ` ` )
@@ -9773,9 +9773,9 @@
     }
     ? & ! src_is_fp dst_is_fp
     {  // int → float-or-double: uitofp when the SOURCE is unsigned (an
-       // unsigned value with the high bit set must NOT be read as a
-       // negative number), else sitofp. The source's signedness rides the
-       // `__last_unsigned__` side-channel (LLVM's i8/i16/i32 can't carry it).
+        // unsigned value with the high bit set must NOT be read as a
+        // negative number), else sitofp. The source's signedness rides the
+        // `__last_unsigned__` side-channel (LLVM's i8/i16/i32 can't carry it).
         : s lu_i2f ( nurl_last_unsigned )
         ( nurl_print `  ` ) ( nurl_print res )
         ( nurl_print ? != 0 ( nurl_str_len lu_i2f ) ` = uitofp ` ` = sitofp ` )
@@ -10142,10 +10142,10 @@
                             : s idx_ptr ( nurl_sym_get syms ( nurl_str_cat fname `__ptr` ) )
                             : s idx_glb ( nurl_sym_get syms ( nurl_str_cat fname `__global` ) )
                             : s idx_val ? != 0 ( nurl_str_len idx_ptr )
-                                ( load_var cg idx_lt idx_ptr )
-                                ? != 0 ( nurl_str_len idx_glb )
-                                ( load_var cg idx_lt ( nurl_str_cat `@` fname ) )
-                                ( nurl_str_cat `%` fname )
+                            ( load_var cg idx_lt idx_ptr )
+                            ? != 0 ( nurl_str_len idx_glb )
+                            ( load_var cg idx_lt ( nurl_str_cat `@` fname ) )
+                            ( nurl_str_cat `%` fname )
                             // Extract data pointer from slice aggregate
                             : s data_ptr ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print data_ptr )
@@ -10365,12 +10365,12 @@
                 {}  // value already matches payload_ty: use as-is
                 { ? | ( seq fty `sref` ) == ( nurl_str_get fty - ( nurl_str_len fty ) 1 ) 42
                     {  // Any raw pointer (`i8*`, or a NURL `*Struct` → `%Struct*`)
-                       // — store it directly in the i64 payload slot via
-                       // ptrtoint. A `%Struct*` pointer ends in `*` and must
-                       // NOT fall through to the `%`-named struct branch below
-                       // (which would heap-box it as if it were a by-value
-                       // struct handle). The `?? T p` arm recovers it with a
-                       // single inttoptr.
+                        // — store it directly in the i64 payload slot via
+                        // ptrtoint. A `%Struct*` pointer ends in `*` and must
+                        // NOT fall through to the `%`-named struct branch below
+                        // (which would heap-box it as if it were a by-value
+                        // struct handle). The `?? T p` arm recovers it with a
+                        // single inttoptr.
                         : s conv_reg ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print conv_reg )
                         ( nurl_print ` = ptrtoint ` ) ( nurl_print fty ) ( nurl_print ` ` )
@@ -11118,7 +11118,7 @@
     // reach here as a clash. The reverse pointer direction (`: *T p 0`,
     // null-as-0) is intentionally allowed.
     ? & ! ( seq from_ty to_ty ) != 0 ( nurl_str_len to_ty )
-    {   : b csv_sf | ( seq from_ty `double` ) ( seq from_ty `float` )
+    { : b csv_sf | ( seq from_ty `double` ) ( seq from_ty `float` )
         : b csv_tf | ( seq to_ty `double` ) ( seq to_ty `float` )
         ? | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty )
         { ( die lex ( nurl_str_cat ( nurl_str_cat4
@@ -12406,10 +12406,10 @@
     ? == g_borrowck 0 {} {
         : ~ s rest ( nurl_sym_get g_pending_escape `l` )
         ~ != 0 ( nurl_str_len rest ) {
-            : s cn ( str_first_word rest )   = rest ( str_skip_word rest )
-            : s fn ( str_first_word rest )   = rest ( str_skip_word rest )
-            : s ai ( str_first_word rest )   = rest ( str_skip_word rest )
-            : s ln ( str_first_word rest )   = rest ( str_skip_word rest )
+            : s cn ( str_first_word rest ) = rest ( str_skip_word rest )
+            : s fn ( str_first_word rest ) = rest ( str_skip_word rest )
+            : s ai ( str_first_word rest ) = rest ( str_skip_word rest )
+            : s ln ( str_first_word rest ) = rest ( str_skip_word rest )
             : s file ( str_first_word rest ) = rest ( str_skip_word rest )
             // Final escape summary, mangled name first then the generic
             // name (mirrors gen_call's callee_escapes lookup).
@@ -12558,7 +12558,7 @@
 // case too. Residual: an unsigned int DIRECTLY behind a `*`/`?` prefix as a
 // generic arg (`[ * u64 ]`) still shares a slug with `[ * i ]`.
 @ mangle_src_word s w → s {
-    ? ( seq w `u` )   ^ `u8`
+    ? ( seq w `u` ) ^ `u8`
     ? ( seq w `u16` ) ^ `u16`
     ? ( seq w `u32` ) ^ `u32`
     ? ( seq w `u64` ) ^ `u64`
@@ -12629,19 +12629,19 @@
     : *u bp # *u buf
     : *u vp # *u val
     : ~ i blen 0
-    = . bp blen # u 96  = blen + blen 1          // opening `
+    = . bp blen # u 96 = blen + blen 1  // opening `
     : ~ i k 0
     ~ < k n {
         : i ch # i . vp k
         ? == ch 10 { = . bp blen # u 92 = blen + blen 1 = . bp blen # u 110 = blen + blen 1 } {
-        ? == ch 9  { = . bp blen # u 92 = blen + blen 1 = . bp blen # u 116 = blen + blen 1 } {
-        ? == ch 13 { = . bp blen # u 92 = blen + blen 1 = . bp blen # u 114 = blen + blen 1 } {
-        ? == ch 92 { = . bp blen # u 92 = blen + blen 1 = . bp blen # u 92  = blen + blen 1 } {
-            = . bp blen # u ch = blen + blen 1
-        } } } }
+            ? == ch 9 { = . bp blen # u 92 = blen + blen 1 = . bp blen # u 116 = blen + blen 1 } {
+                ? == ch 13 { = . bp blen # u 92 = blen + blen 1 = . bp blen # u 114 = blen + blen 1 } {
+                    ? == ch 92 { = . bp blen # u 92 = blen + blen 1 = . bp blen # u 92 = blen + blen 1 } {
+                        = . bp blen # u ch = blen + blen 1
+                    } } } }
         = k + k 1
     }
-    = . bp blen # u 96  = blen + blen 1          // closing `
+    = . bp blen # u 96 = blen + blen 1  // closing `
     = . bp blen # u 0
     ^ buf
 }
@@ -12913,7 +12913,7 @@
     : i n ( nurl_str_len llvm_ty )
     : ~ i i 0
     ~ < i n {
-        ? == ( nurl_str_get llvm_ty i ) 37   // '%'
+        ? == ( nurl_str_get llvm_ty i ) 37  // '%'
         { : ~ i j + i 1
             ~ & < j n ( __is_ident_char ( nurl_str_get llvm_ty j ) ) { = j + j 1 }
             : s name ( nurl_str_slice llvm_ty + i 1 - j + i 1 )
@@ -12921,13 +12921,13 @@
             { ? ( is_tparam_like name ) {}
                 { ? ( __has_dunder name ) {}
                     {  // A declared struct/enum maps to `%Name` in syms (set by
-                       // the pre-scan + gen_struct/enum_decl). A bare non-empty
-                       // value that does NOT start with '%' means the name is in
-                       // scope as something else — an @-fn / FFI symbol / const
-                       // whose value is its return/value type — and is NOT a
-                       // type. Require the `%`-type form so `@ f rand x → i`
-                       // (using the FFI symbol `rand` as a parameter type) is
-                       // rejected too, not just a wholly-unknown name.
+                        // the pre-scan + gen_struct/enum_decl). A bare non-empty
+                        // value that does NOT start with '%' means the name is in
+                        // scope as something else — an @-fn / FFI symbol / const
+                        // whose value is its return/value type — and is NOT a
+                        // type. Require the `%`-type form so `@ f rand x → i`
+                        // (using the FFI symbol `rand` as a parameter type) is
+                        // rejected too, not just a wholly-unknown name.
                         : s sv ( nurl_sym_get syms name )
                         ? & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37
                         {}

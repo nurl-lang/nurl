@@ -112,7 +112,7 @@ $ `stdlib/std/cmp.nu`
     ( string_push_str rootstr `/tmp/nurlglob_root_` )
     ( string_push_str rootstr ( nurl_str_int ( getpid ) ) )
     : s root ( string_data rootstr )
-    : !v IoErr _rm0 ( dir_remove_all root )   // clear any stale tree
+    : !v IoErr _rm0 ( dir_remove_all root )  // clear any stale tree
     ?? _rm0 { T _ → {} F _ → {} }
     : !v IoErr _mk ( dir_create root )
     ?? _mk { T _ → {} F _ → ( nurl_print `mkdir root FAILED\n` ) }
@@ -134,11 +134,11 @@ $ `stdlib/std/cmp.nu`
 
     // ── B7 glob patterns ──
     ( globj `star_nu` root `*.nu` )
-    ( globj `star_all` root `*` )          // hides .hidden
-    ( globj `question` root `?.nu` )       // a.nu b.nu
-    ( globj `class` root `[ab].nu` )       // a.nu b.nu
+    ( globj `star_all` root `*` )  // hides .hidden
+    ( globj `question` root `?.nu` )  // a.nu b.nu
+    ( globj `class` root `[ab].nu` )  // a.nu b.nu
     ( globj `class_neg` root `[!a]*.nu` )  // b.nu
-    ( globj `dotglob` root `.*` )          // .hidden
+    ( globj `dotglob` root `.*` )  // .hidden
     ( globj `nested` root `src/*.nu` )
     ( globj `doublestar` root `**/*.nu` )  // recursive
     ( globj `literal` root `c.txt` )

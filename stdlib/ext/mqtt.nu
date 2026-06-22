@@ -1090,10 +1090,10 @@ $ `stdlib/ext/websocket.nu`
     : i n ( vec_len [i] s )
     : ~ i k 0
     ~ < k n {
-        ?? ( vec_get [i] s k ) { T v → { ? == v pid { ^ T } {} }  F _ → {} }
+        ?? ( vec_get [i] s k ) { T v → { ? == v pid { ^ T } {} } F _ → {} }
         = k + k 1
     }
-    ? >= n ( __mqtt_qos2_cap ) { ?? ( vec_remove [i] s 0 ) { T _ → {}  F _ → {} } } {}
+    ? >= n ( __mqtt_qos2_cap ) { ?? ( vec_remove [i] s 0 ) { T _ → {} F _ → {} } } {}
     ( vec_push [i] s pid )
     ^ F
 }
@@ -1104,7 +1104,7 @@ $ `stdlib/ext/websocket.nu`
     : ~ i k 0
     ~ < k n {
         ?? ( vec_get [i] s k ) {
-            T v → { ? == v pid { ?? ( vec_remove [i] s k ) { T _ → {}  F _ → {} }  = k n } {} }
+            T v → { ? == v pid { ?? ( vec_remove [i] s k ) { T _ → {} F _ → {} } = k n } {} }
             F _ → {}
         }
         = k + k 1
@@ -1128,7 +1128,7 @@ $ `stdlib/ext/websocket.nu`
             T pkt → {
                 : i pt & >> ( __mqtt_byte pkt 0 ) 4 15
                 ( vec_free [u] pkt )
-                ? == pt 6 { = saw_rel T  = stop T } {}
+                ? == pt 6 { = saw_rel T = stop T } {}
             }
             F _ → { = stop T }
         }

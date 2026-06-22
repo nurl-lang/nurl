@@ -25,6 +25,7 @@ $ `stdlib/core/string.nu`
 // the stored closure (and its env) outlives the call. `b.cb` is written,
 // so `f` is value-read → not invoke-only.
 : Box { ( @ i ) cb }
+
 @ stash inout Box b ( @ i ) f → v { = . b cb f }
 
 @ main → i {

@@ -27,8 +27,8 @@
 @ main → i {
     : ~ i f 0
     // Unsigned source → uitofp (high-bit-set values stay positive).
-    = f + f ( chk # i64 # f # u32 2147483649 2147483649 `u32_to_f` )   // 0x80000001
-    = f + f ( chk # i64 # f # u 200 200 `u8_to_f` )                    // 0xC8
+    = f + f ( chk # i64 # f # u32 2147483649 2147483649 `u32_to_f` )  // 0x80000001
+    = f + f ( chk # i64 # f # u 200 200 `u8_to_f` )  // 0xC8
     = f + f ( chk # i64 # f # u16 50000 50000 `u16_to_f` )
     // Signed source → sitofp (negatives stay negative).
     = f + f ( chk # i64 # f # i32 - 0 5 - 0 5 `i32_to_f` )

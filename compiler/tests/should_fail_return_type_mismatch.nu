@@ -2,4 +2,5 @@
 // with the declared return type (`^ `hi`` from a `→ i` function). gen_ret now
 // rejects the never-valid float/non-float and pointer/non-pointer cases.
 @ f → i { ^ `hi` }
+
 @ main → i { ^ ( f ) }

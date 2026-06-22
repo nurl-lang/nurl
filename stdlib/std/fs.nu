@@ -788,7 +788,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     : s d ? == 0 ( nurl_str_len dir ) `.` dir
     : String tmpl ( string_with_cap + + ( nurl_str_len d ) ( nurl_str_len prefix ) 10 )
     ( string_push_str tmpl d )
-    ( string_push_char tmpl 47 )           // '/'
+    ( string_push_char tmpl 47 )  // '/'
     ( string_push_str tmpl prefix )
     ( string_push_str tmpl `XXXXXX` )
     : i32 fd ( mkstemp ( string_data tmpl ) )
@@ -797,7 +797,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
         ^ @ !String IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
     } {}
     : i _c ( close # i fd )
-    ^ @ !String IoErr { T tmpl }   // mkstemp filled XXXXXX in place
+    ^ @ !String IoErr { T tmpl }  // mkstemp filled XXXXXX in place
 }
 
 // ── Glob (B7) ──────────────────────────────────────────────────────
@@ -836,7 +836,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
         ? == pc 42 {
             // '*' — collapse runs, then try every split (no '/' allowed).
             ~ & < p pn == ( nurl_str_get pat p ) 42 { = p + p 1 }
-            ? >= p pn { ^ T } {}   // trailing '*' matches the rest
+            ? >= p pn { ^ T } {}  // trailing '*' matches the rest
             : ~ i j k
             ~ <= j nn {
                 ? ( __fnmatch_at pat p pn name j nn ) { ^ T } {}
@@ -851,7 +851,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
             } {
                 ? == pc 91 {
                     : i pe ( __fnmatch_class pat + p 1 pn nc )
-                    ? < pe 0 { ^ F } {}   // no match / malformed
+                    ? < pe 0 { ^ F } {}  // no match / malformed
                     = p pe = k + k 1
                 } {
                     ? == pc nc { = p + p 1 = k + k 1 } { ^ F }
@@ -885,7 +885,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
             = p + p 1
         }
     }
-    ? & < p pn == ( nurl_str_get pat p ) 93 {} { ^ -1 }   // unterminated class
+    ? & < p pn == ( nurl_str_get pat p ) 93 {} { ^ -1 }  // unterminated class
     : b matched ? neg ! hit hit
     ? matched { ^ + p 1 } { ^ -1 }
 }
@@ -947,7 +947,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
             }
             ( vec_free [String] entries )
         }
-        F _ → {}   // unreadable dir → no matches from it
+        F _ → {}  // unreadable dir → no matches from it
     }
 }
 
