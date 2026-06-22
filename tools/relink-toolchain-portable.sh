@@ -32,9 +32,15 @@ ZIG="${NURL_BUNDLE_ZIG:-$ROOT/vendor/zig}/zig"
 [[ -f "$ROOT/build/nurlpkg.ll" ]]     || { echo "ERROR: build/nurlpkg.ll missing — run ./tools/nurlpkg/build.sh first" >&2; exit 1; }
 [[ -f "$ROOT/stdlib/runtime.o" ]]     || { echo "ERROR: stdlib/runtime.o missing — run ./build.sh first" >&2; exit 1; }
 
+# ThinLTO (not monolithic -flto): same result, far lower peak memory. Full
+# LTO of nurlc's large module OOM-killed the arm64 release runner (the link
+# died silently after ~30s); ThinLTO summarises per-module and stays within
+# the runner's RAM.
+LTO=-flto=thin
+
 # nurlc is libc-only — relink straight to the old floor.
 echo "Relinking nurlc → $TARGET"
-"$ZIG" cc -O2 -flto -target "$TARGET" -Wl,--as-needed \
+"$ZIG" cc -O2 "$LTO" -target "$TARGET" -Wl,--as-needed \
     "$ROOT/build/nurlc_self2.ll" "$ROOT/stdlib/runtime.o" -lm -lpthread \
     -o "$ROOT/build/nurlc"
 
@@ -47,7 +53,7 @@ for n in libz.a libzstd.a; do
     [[ -n "$p" ]] && ZA+=("$p")
 done
 echo "Relinking nurlpkg → $TARGET (static: ${ZA[*]:-none found})"
-"$ZIG" cc -O2 -flto -target "$TARGET" -Wl,--as-needed \
+"$ZIG" cc -O2 "$LTO" -target "$TARGET" -Wl,--as-needed \
     "$ROOT/build/nurlpkg.ll" "$ROOT/stdlib/runtime.o" -lm -lpthread "${ZA[@]}" \
     -o "$ROOT/build/nurlpkg"
 
