@@ -114,7 +114,8 @@ platform-specific shims.
   metrics, DoS caps, graceful shutdown, per-request timeouts, panic recovery),
   HTTP client (with cookie jar), **TLS** (SNI + ALPN + mTLS + live cert reload), **HTTP/2**
   (RFC 9113 + HPACK, **server and client**), **WebSocket** (RFC 6455, **server
-  and client**), reverse proxy with binary-safe streaming. The stack has had a
+  and client**, with **permessage-deflate** compression — RFC 7692),
+  reverse proxy with binary-safe streaming. The stack has had a
   dedicated security-hardening pass (path-traversal, SSRF, request-smuggling,
   HTTP/2 CONTINUATION-flood + stream-accounting, and clean cross-thread
   listener shutdown) with regression tests.

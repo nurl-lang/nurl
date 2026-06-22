@@ -84,6 +84,7 @@ $ `stdlib/std/net.nu`
 $ `stdlib/std/url.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
+$ `stdlib/ext/compress.nu`
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -110,11 +111,13 @@ $ `stdlib/ext/http_response.nu`
 : WsFrame {
     i opcode  // 0,1,2,8,9,10
     b fin
+    b rsv1  // RFC 7692: per-message-compressed bit (only on a message's first frame)
     ( Vec u ) payload  // OWNED
 }
 
 : WsMessage {
     i opcode  // 1 (text) or 2 (binary)
+    b compressed  // RFC 7692: payload is still permessage-deflate compressed
     ( Vec u ) payload  // OWNED, assembled across continuation frames
 }
 
@@ -565,10 +568,11 @@ $ `stdlib/ext/http_response.nu`
 //     with the 4-byte key that follows the length.
 //   * client = T (client reading server frames): the MASK bit MUST be 0;
 //     a masked frame → WsProtocolMasked. Payload is read verbatim.
-@ __ws_read_frame_ex TcpConn conn WsLimits lim b client → !WsFrame WsErr {
+@ __ws_read_frame_ex TcpConn conn WsLimits lim b client b allow_rsv1 → !WsFrame WsErr {
     : !( Vec u ) WsErr hdr_r ( __ws_read_exact conn 2 )
     : ~ b ok F
     : ~ b fin F
+    : ~ b rsv1 F
     : ~ i opcode 0
     : ~ b masked F
     : ~ i len7 0
@@ -578,9 +582,13 @@ $ `stdlib/ext/http_response.nu`
             : *u hp ( vec_data [u] hdr )
             : i b0 # i . hp 0
             : i b1 # i . hp 1
-            // RSV1/RSV2/RSV3 MUST be 0 (no extension negotiated in v1).
-            ? != 0 & b0 112 { = err WsProtocolReservedBit }
+            // RSV2/RSV3 (0x30) MUST always be 0. RSV1 (0x40) MUST be 0
+            // unless permessage-deflate was negotiated (allow_rsv1) — then
+            // it marks a per-message-compressed message (RFC 7692 §6).
+            : b rsv_bad | != 0 & b0 48 & ! allow_rsv1 != 0 & b0 64
+            ? rsv_bad { = err WsProtocolReservedBit }
             { = fin != 0 & b0 128
+                = rsv1 != 0 & b0 64
                 = opcode & b0 15
                 = masked != 0 & b1 128
                 = len7 & b1 127
@@ -662,20 +670,22 @@ $ `stdlib/ext/http_response.nu`
     ( __ws_read_masked_payload conn payload_len )
     ?? ppr {
         T payload → {
-            ^ @ !WsFrame WsErr { T @ WsFrame { opcode fin payload } }
+            ^ @ !WsFrame WsErr { T @ WsFrame { opcode fin rsv1 payload } }
         }
         F e → { ^ @ !WsFrame WsErr { F e } }
     }
 }
 
 // Server-side frame reader (client → server frames MUST be masked).
+// RSV1 is rejected (no extension); the deflate-aware readers below
+// pass allow_rsv1=T after a permessage-deflate handshake.
 @ ws_read_frame TcpConn conn WsLimits lim → !WsFrame WsErr {
-    ^ ( __ws_read_frame_ex conn lim F )
+    ^ ( __ws_read_frame_ex conn lim F F )
 }
 
 // Client-side frame reader (server → client frames MUST NOT be masked).
 @ ws_client_read_frame TcpConn conn WsLimits lim → !WsFrame WsErr {
-    ^ ( __ws_read_frame_ex conn lim T )
+    ^ ( __ws_read_frame_ex conn lim T F )
 }
 
 // Bitwise XOR of two byte-sized ints. NURL has no infix XOR operator
@@ -963,12 +973,13 @@ $ `stdlib/ext/http_response.nu`
 // per logical message, including control frames interleaved between
 // fragments — a malicious peer cannot stall the server with infinite
 // pings between continuation frames.
-@ __ws_read_message_ex TcpConn conn WsLimits lim b client → !WsMessage WsErr {
+@ __ws_read_message_ex TcpConn conn WsLimits lim b client b allow_compressed → !WsMessage WsErr {
     : ~ ( Vec u ) acc ( vec_new [u] )
     : ~ i kind 0  // 0 = no fragment in progress, 1 = text, 2 = binary
     : ~ i frame_count 0
     : ~ b done F
     : ~ b have_message F
+    : ~ b compressed F  // RFC 7692: first frame of this message had RSV1
     : ~ WsErr err WsOther
     : ~ ( Vec u ) msg_payload ( vec_new [u] )
     ~ ! done {
@@ -978,13 +989,22 @@ $ `stdlib/ext/http_response.nu`
             = done T
         } {
             : !WsFrame WsErr fr ? client
-            ( ws_client_read_frame conn lim )
-            ( ws_read_frame conn lim )
+            ( __ws_read_frame_ex conn lim T allow_compressed )
+            ( __ws_read_frame_ex conn lim F allow_compressed )
             ?? fr {
                 T frm → {
                     : i op . frm opcode
                     : b fin . frm fin
+                    : b rsv1f . frm rsv1
                     : ( Vec u ) pl . frm payload
+                    // RFC 7692 §6: the compressed bit is valid ONLY on the
+                    // first frame of a data message. RSV1 on a control frame
+                    // or on a continuation frame is a protocol error.
+                    ? & rsv1f | ( __ws_opcode_is_control op ) == op 0 {
+                        ( vec_free [u] pl )
+                        = err WsProtocolReservedBit
+                        = done T
+                    } {
                     ? ( __ws_opcode_is_control op ) {
                         // Control frame: handle in-band
                         ? == op 9 {
@@ -1101,8 +1121,10 @@ $ `stdlib/ext/http_response.nu`
                                     = done T
                                 } {
                                     ? fin {
-                                        // Validate UTF-8 if text
-                                        ? & == kind 1 ! ( ws_validate_utf8 acc ) {
+                                        // Validate UTF-8 if text. Skip when
+                                        // compressed — validation happens
+                                        // after permessage-deflate inflation.
+                                        ? & & == kind 1 ! compressed ! ( ws_validate_utf8 acc ) {
                                             = err WsInvalidUtf8
                                             = done T
                                         } {
@@ -1116,15 +1138,19 @@ $ `stdlib/ext/http_response.nu`
                                 }
                             }
                         } {
-                            // Text or binary opener
+                            // Text or binary opener — first frame of a
+                            // message carries the RSV1 compressed bit.
                             ? != kind 0 {
                                 ( vec_free [u] pl )
                                 = err WsProtocolBadFragmentation
                                 = done T
                             } {
+                                = compressed rsv1f
                                 ? fin {
-                                    // One-shot complete message
-                                    ? & == op 1 ! ( ws_validate_utf8 pl ) {
+                                    // One-shot complete message. Skip UTF-8
+                                    // validation when compressed (validated
+                                    // post-inflation by the deflate reader).
+                                    ? & & == op 1 ! rsv1f ! ( ws_validate_utf8 pl ) {
                                         ( vec_free [u] pl )
                                         = err WsInvalidUtf8
                                         = done T
@@ -1148,6 +1174,7 @@ $ `stdlib/ext/http_response.nu`
                             }
                         }
                     }
+                    }
                 }
                 F we → { = err we = done T }
             }
@@ -1155,22 +1182,23 @@ $ `stdlib/ext/http_response.nu`
     }
     ( vec_free [u] acc )
     ? have_message {
-        ^ @ !WsMessage WsErr { T @ WsMessage { kind msg_payload } }
+        ^ @ !WsMessage WsErr { T @ WsMessage { kind compressed msg_payload } }
     } {
         ( vec_free [u] msg_payload )
         ^ @ !WsMessage WsErr { F err }
     }
 }
 
-// Server-side message reader (auto-pongs unmasked).
+// Server-side message reader (auto-pongs unmasked). RSV1 rejected — for a
+// permessage-deflate session use ws_read_message_deflate.
 @ ws_read_message TcpConn conn WsLimits lim → !WsMessage WsErr {
-    ^ ( __ws_read_message_ex conn lim F )
+    ^ ( __ws_read_message_ex conn lim F F )
 }
 
 // Client-side message reader: reads UNmasked server frames and auto-pongs
 // with a MASKED pong frame.
 @ ws_client_read_message TcpConn conn WsLimits lim → !WsMessage WsErr {
-    ^ ( __ws_read_message_ex conn lim T )
+    ^ ( __ws_read_message_ex conn lim T F )
 }
 
 // ── Serve loop ────────────────────────────────────────────────────────
@@ -1720,5 +1748,680 @@ $ `stdlib/ext/http_response.nu`
             }
         }
         F _ → { ^ @ !WsClient WsErr { F WsBadUrl } }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// permessage-deflate (RFC 7692) — per-message compression, server + client
+// ═══════════════════════════════════════════════════════════════════════
+//
+// permessage-deflate compresses each WebSocket message with raw DEFLATE
+// (RFC 1951) and flags the first frame of a compressed message with the
+// RSV1 bit. The negotiated parameters (RFC 7692 §7.1) control whether the
+// LZ77 sliding window carries between messages ("context takeover") and an
+// upper bound on the window size:
+//
+//   * server_no_context_takeover / client_no_context_takeover — the named
+//     side resets its compressor before every message (cheaper memory,
+//     worse ratio). We honour both directions.
+//   * server_max_window_bits / client_max_window_bits — the named side's
+//     compressor uses a window of at most 2^N bytes (N in 8..15). We honour
+//     a peer-imposed bound on OUR compressor and always decompress at the
+//     maximum window (15), which accepts any encoder window.
+//
+// On the wire (RFC 7692 §7.2): the sender DEFLATEs the payload with
+// Z_SYNC_FLUSH and strips the trailing `00 00 FF FF`; the receiver appends
+// it back before inflating. Both are handled by the raw-DEFLATE streaming
+// codec in stdlib/ext/compress.nu (raw_deflate_*/raw_inflate_*).
+//
+//   API surface:
+//     Negotiation (pure, offline-testable):
+//       ( ws_deflate_default_config )                  → WsDeflateConfig
+//       ( ws_deflate_offer_header    WsDeflateConfig )  → String
+//       ( ws_deflate_response_header WsDeflateConfig )  → String
+//       ( ws_deflate_parse_extensions s value )         → ?WsDeflateConfig
+//     Context lifecycle (owns two heap z_streams — free it):
+//       ( ws_deflate_make WsDeflateConfig cfg b is_server ) → ! WsDeflate WsErr
+//       ( ws_deflate_free WsDeflate d )                     → v
+//     Server-side messaging:
+//       ( ws_send_text_deflate   WsDeflate TcpConn s )           → ! v WsErr
+//       ( ws_send_binary_deflate WsDeflate TcpConn ( Vec u ) )   → ! v WsErr
+//       ( ws_read_message_deflate WsDeflate TcpConn WsLimits )   → ! WsMessage WsErr
+//       ( ws_serve_messages_deflate WsDeflate TcpConn WsLimits h)→ ! v WsErr
+//       ( ws_perform_handshake_deflate TcpConn HttpRequest
+//                       ?String sub WsDeflateConfig policy )     → !WsDeflate WsErr
+//     Client-side messaging (masked):
+//       ( ws_client_send_text_deflate   WsDeflate TcpConn s )         → ! v WsErr
+//       ( ws_client_send_binary_deflate WsDeflate TcpConn ( Vec u ) ) → ! v WsErr
+//       ( ws_client_read_message_deflate WsDeflate TcpConn WsLimits ) → ! WsMessage WsErr
+//       ( ws_client_serve_messages_deflate WsDeflate TcpConn WsLimits h) → ! v WsErr
+//       ( ws_connect_deflate s url ?String sub WsDeflateConfig )      → ! WsDeflateConn WsErr
+
+: WsDeflateConfig {
+    b enabled
+    b server_no_context_takeover
+    b client_no_context_takeover
+    i server_max_window_bits  // 8..15 (default 15)
+    i client_max_window_bits  // 8..15 (default 15)
+}
+
+// Default: enabled, both directions keep context, full 32 KiB windows —
+// the maximum-ratio configuration browsers default to.
+@ ws_deflate_default_config → WsDeflateConfig {
+    ^ @ WsDeflateConfig { T F F 15 15 }
+}
+
+// A persistent permessage-deflate context. Owns one raw-DEFLATE
+// compressor (our outbound direction) and one raw-INFLATE decompressor
+// (inbound). MUST be freed with ws_deflate_free.
+: WsDeflate {
+    ZDeflate deflater
+    ZInflate inflater
+    b deflate_no_takeover  // reset our compressor each message
+    b inflate_no_takeover  // reset our decompressor each message
+    i min_size  // payloads below this are sent uncompressed
+    b active  // F when the extension was NOT negotiated (null streams)
+}
+
+// True iff this context was actually negotiated (vs. a placeholder
+// returned when the peer declined permessage-deflate).
+@ ws_deflate_active WsDeflate d → b { ^ . d active }
+
+// A connected, handshaken client plus the negotiated permessage-deflate
+// context (if any). `have_deflate` is F when the server declined the
+// extension — in that case `deflate` is unused.
+: WsDeflateConn {
+    WsClient client
+    b have_deflate
+    WsDeflate deflate
+}
+
+// ── Extension header negotiation ──────────────────────────────────────
+
+@ __ws_lc i c → i {
+    ? & >= c 65 <= c 90 { ^ + c 32 } {}
+    ^ c
+}
+
+// Case-insensitive search for `needle` in `hay` (a NUL-terminated `s`)
+// starting at `from`. Returns the index or -1.
+@ __ws_ci_find s hay s needle i from → i {
+    : i hl ( nurl_str_len hay )
+    : i nl ( nurl_str_len needle )
+    ? == nl 0 { ^ -1 } {}
+    ? > nl hl { ^ -1 } {}
+    : ~ i i ? < from 0 0 from
+    : ~ i found -1
+    : i last - hl nl
+    ~ & == found -1 <= i last {
+        : ~ i j 0
+        : ~ b match T
+        ~ & match < j nl {
+            ? != ( __ws_lc ( nurl_str_get hay + i j ) ) ( __ws_lc ( nurl_str_get needle j ) ) {
+                = match F
+            } {}
+            = j + j 1
+        }
+        ? match { = found i } {}
+        = i + i 1
+    }
+    ^ found
+}
+
+// Index of the next ',' at or after `from` in `hay`, else its length.
+@ __ws_seg_end s hay i from → i {
+    : i hl ( nurl_str_len hay )
+    : ~ i k from
+    ~ < k hl {
+        ? == ( nurl_str_get hay k ) 44 { ^ k } {}
+        = k + k 1
+    }
+    ^ hl
+}
+
+// Parse an optional `=<digits>` (RFC 7692 quotes the value optionally)
+// starting at `pos`, bounded by `segend`. Returns the integer or -1 when
+// the parameter carried no value.
+@ __ws_window_after s hay i pos i segend → i {
+    : ~ i k pos
+    ~ & < k segend | == ( nurl_str_get hay k ) 32 == ( nurl_str_get hay k ) 9 { = k + k 1 }
+    ? >= k segend { ^ -1 } {}
+    ? != ( nurl_str_get hay k ) 61 { ^ -1 } {}  // '='
+    = k + k 1
+    ~ & < k segend | == ( nurl_str_get hay k ) 32 == ( nurl_str_get hay k ) 9 { = k + k 1 }
+    ? & < k segend == ( nurl_str_get hay k ) 34 { = k + k 1 } {}  // optional '"'
+    : ~ i val 0
+    : ~ b any F
+    ~ & < k segend & >= ( nurl_str_get hay k ) 48 <= ( nurl_str_get hay k ) 57 {
+        = val + * val 10 - ( nurl_str_get hay k ) 48
+        = any T
+        = k + k 1
+    }
+    ? ! any { ^ -1 } {}
+    ^ val
+}
+
+// Clamp a negotiated window-bits value to the codec-usable [9, 15] range
+// (libz cannot do raw windowBits 8 — see compress.nu). A missing value
+// (-1) or out-of-range value falls back to 15.
+@ __ws_clamp_window i v → i {
+    ? < v 8 { ^ 15 } {}
+    ? > v 15 { ^ 15 } {}
+    ? < v 9 { ^ 9 } {}
+    ^ v
+}
+
+// Parse a `Sec-WebSocket-Extensions` value, returning the permessage-deflate
+// parameters if the (first) permessage-deflate offer/response is present,
+// else None. Shared by both the server (parsing the client offer) and the
+// client (parsing the server response): the four parameters carry the same
+// shape on the wire; `ws_deflate_make` interprets them per side.
+@ ws_deflate_parse_extensions s value → ?WsDeflateConfig {
+    : i p ( __ws_ci_find value `permessage-deflate` 0 )
+    ? < p 0 { ^ @ ?WsDeflateConfig { F # WsDeflateConfig 0 } } {}
+    : i segend ( __ws_seg_end value p )
+    : i snto ( __ws_ci_find value `server_no_context_takeover` p )
+    : i cnto ( __ws_ci_find value `client_no_context_takeover` p )
+    : b snto_on & >= snto 0 < snto segend
+    : b cnto_on & >= cnto 0 < cnto segend
+    : i swbp ( __ws_ci_find value `server_max_window_bits` p )
+    : i cwbp ( __ws_ci_find value `client_max_window_bits` p )
+    : i swb ? & >= swbp 0 < swbp segend
+    ( __ws_clamp_window ( __ws_window_after value + swbp 22 segend ) )
+    15
+    : i cwb ? & >= cwbp 0 < cwbp segend
+    ( __ws_clamp_window ( __ws_window_after value + cwbp 22 segend ) )
+    15
+    ^ @ ?WsDeflateConfig { T @ WsDeflateConfig { T snto_on cnto_on swb cwb } }
+}
+
+// Append "; <name>" / "; <name>=<n>" to a header String being built.
+@ __ws_append_param String h s name → v {
+    ( string_push_str h `; ` )
+    ( string_push_str h name )
+}
+
+@ __ws_append_param_n String h s name i n → v {
+    ( string_push_str h `; ` )
+    ( string_push_str h name )
+    ( string_push_char h 61 )  // '='
+    ( string_push_int h n )
+}
+
+// Build the `Sec-WebSocket-Extensions` value a CLIENT offers. Window-bits
+// params are emitted with a value only when the config asks for < 15.
+@ ws_deflate_offer_header WsDeflateConfig cfg → String {
+    : String h ( string_from `permessage-deflate` )
+    ? . cfg client_no_context_takeover { ( __ws_append_param h `client_no_context_takeover` ) } {}
+    ? . cfg server_no_context_takeover { ( __ws_append_param h `server_no_context_takeover` ) } {}
+    ? < . cfg client_max_window_bits 15 { ( __ws_append_param_n h `client_max_window_bits` . cfg client_max_window_bits ) } {}
+    ? < . cfg server_max_window_bits 15 { ( __ws_append_param_n h `server_max_window_bits` . cfg server_max_window_bits ) } {}
+    ^ h
+}
+
+// Build the `Sec-WebSocket-Extensions` value a SERVER returns to confirm
+// the agreed parameters.
+@ ws_deflate_response_header WsDeflateConfig cfg → String {
+    ^ ( ws_deflate_offer_header cfg )
+}
+
+// ── Context lifecycle ─────────────────────────────────────────────────
+
+// Build a live permessage-deflate context from the negotiated config.
+// `is_server` selects which direction is OUR compressor: a server
+// compresses with the server_* parameters, a client with the client_*.
+// We always decompress at the maximum window (15).
+@ ws_deflate_make WsDeflateConfig cfg b is_server → !WsDeflate WsErr {
+    : i dwin ? is_server . cfg server_max_window_bits . cfg client_max_window_bits
+    : b dnto ? is_server . cfg server_no_context_takeover . cfg client_no_context_takeover
+    : b into ? is_server . cfg client_no_context_takeover . cfg server_no_context_takeover
+    : !ZDeflate CompressErr dn ( raw_deflate_new dwin 6 )
+    ?? dn {
+        F _ → { ^ @ !WsDeflate WsErr { F WsOther } }
+        T deflater → {
+            : !ZInflate CompressErr inr ( raw_inflate_new 15 )
+            ?? inr {
+                F _ → {
+                    ( raw_deflate_free deflater )
+                    ^ @ !WsDeflate WsErr { F WsOther }
+                }
+                T inflater → {
+                    ^ @ !WsDeflate WsErr { T @ WsDeflate { deflater inflater dnto into 64 T } }
+                }
+            }
+        }
+    }
+}
+
+@ ws_deflate_free WsDeflate d → v {
+    ( raw_deflate_free . d deflater )
+    ( raw_inflate_free . d inflater )
+}
+
+@ __ws_compresserr_to_wserr CompressErr e → WsErr {
+    ^ ?? e {
+        CompressBufTooSmall → @ WsErr { WsMessageTooLarge }
+        _ → @ WsErr { WsOther }
+    }
+}
+
+// ── Send path ─────────────────────────────────────────────────────────
+
+// OR the RSV1 (0x40) compressed-message bit into a serialized frame's
+// first byte. Position is identical for masked + unmasked frames.
+@ __ws_set_rsv1 ( Vec u ) frame → v {
+    ? > ( vec_len [u] frame ) 0 {
+        : *u p ( vec_data [u] frame )
+        = . p 0 # u | & 255 # i . p 0 64
+    } {}
+}
+
+// Drop the trailing `00 00 FF FF` Z_SYNC_FLUSH marker (RFC 7692 §7.2.1).
+// If that empties the payload, emit a single 0x00 (an empty
+// non-compressed DEFLATE block) so the frame still carries data.
+@ __ws_strip_deflate_tail ( Vec u ) comp → v {
+    : i cn ( vec_len [u] comp )
+    ? >= cn 4 {
+        : *u p ( vec_data [u] comp )
+        ? & & & == # i . p - cn 4 0 == # i . p - cn 3 0
+        == # i . p - cn 2 255 == # i . p - cn 1 255 {
+            : b _t ( vec_set_len [u] comp - cn 4 )
+        } {}
+    } {}
+    ? == ( vec_len [u] comp ) 0 { ( vec_push [u] comp # u 0 ) } {}
+}
+
+// Write a single compressed frame (fin=1, RSV1=1) to `conn`, masked for a
+// client, unmasked for a server.
+@ __ws_write_deflated_frame TcpConn conn i opcode ( Vec u ) comp b client → !v WsErr {
+    : !( Vec u ) WsErr sr ? client
+    ( __ws_serialize_masked_random opcode comp )
+    ( ws_serialize_frame T opcode comp )
+    ?? sr {
+        F e → { ^ @ !v WsErr { F e } }
+        T out → {
+            ( __ws_set_rsv1 out )
+            : !v NetErr wr ( tcp_write_all conn out )
+            ( vec_free [u] out )
+            ?? wr {
+                T _ → { ^ @ !v WsErr { T 0 } }
+                F _ → { ^ @ !v WsErr { F WsWriteFailed } }
+            }
+        }
+    }
+}
+
+// Serialize a masked client frame with a fresh CSPRNG masking key (the
+// same key discipline as ws_client_write_frame, RFC 6455 §10.3).
+@ __ws_serialize_masked_random i opcode ( Vec u ) payload → !( Vec u ) WsErr {
+    : i r ( rand_u64 )
+    : i m0 & 255 r
+    : i m1 & 255 >> r 8
+    : i m2 & 255 >> r 16
+    : i m3 & 255 >> r 24
+    ^ ( ws_serialize_frame_masked T opcode payload m0 m1 m2 m3 )
+}
+
+// Compress + send one message. Payloads below `min_size` are sent
+// uncompressed (RSV1=0) since tiny inputs usually grow under DEFLATE.
+@ __ws_send_message_deflate WsDeflate d TcpConn conn i opcode ( Vec u ) payload b client → !v WsErr {
+    : i n ( vec_len [u] payload )
+    ? < n . d min_size {
+        ^ ? client
+        ( ws_client_write_frame conn T opcode payload )
+        ( ws_write_frame conn T opcode payload )
+    } {}
+    : !( Vec u ) CompressErr cr ( raw_deflate_block . d deflater payload )
+    ?? cr {
+        F e → { ^ @ !v WsErr { F ( __ws_compresserr_to_wserr e ) } }
+        T comp → {
+            ? . d deflate_no_takeover { ( raw_deflate_reset . d deflater ) } {}
+            ( __ws_strip_deflate_tail comp )
+            : !v WsErr r ( __ws_write_deflated_frame conn opcode comp client )
+            ( vec_free [u] comp )
+            ^ r
+        }
+    }
+}
+
+@ ws_send_text_deflate WsDeflate d TcpConn conn s text → !v WsErr {
+    : ( Vec u ) buf ( bytes_from_str text )
+    : !v WsErr r ( __ws_send_message_deflate d conn ( ws_opcode_text ) buf F )
+    ( vec_free [u] buf )
+    ^ r
+}
+
+@ ws_send_binary_deflate WsDeflate d TcpConn conn ( Vec u ) data → !v WsErr {
+    ^ ( __ws_send_message_deflate d conn ( ws_opcode_binary ) data F )
+}
+
+@ ws_client_send_text_deflate WsDeflate d TcpConn conn s text → !v WsErr {
+    : ( Vec u ) buf ( bytes_from_str text )
+    : !v WsErr r ( __ws_send_message_deflate d conn ( ws_opcode_text ) buf T )
+    ( vec_free [u] buf )
+    ^ r
+}
+
+@ ws_client_send_binary_deflate WsDeflate d TcpConn conn ( Vec u ) data → !v WsErr {
+    ^ ( __ws_send_message_deflate d conn ( ws_opcode_binary ) data T )
+}
+
+// ── Receive path ──────────────────────────────────────────────────────
+
+// Inflate a compressed WsMessage in place, validating UTF-8 for text after
+// decompression. The decompressed size is capped at lim.max_message_bytes
+// (decompression-bomb guard). Frees the original compressed payload.
+@ __ws_inflate_message WsDeflate d WsLimits lim WsMessage msg → !WsMessage WsErr {
+    ? ! . msg compressed { ^ @ !WsMessage WsErr { T msg } } {}
+    : i op . msg opcode
+    : ( Vec u ) comp . msg payload
+    : ( Vec u ) framed ( vec_new [u] )
+    ( vec_extend [u] framed comp )
+    ( vec_push [u] framed # u 0 )
+    ( vec_push [u] framed # u 0 )
+    ( vec_push [u] framed # u 255 )
+    ( vec_push [u] framed # u 255 )
+    : !( Vec u ) CompressErr ir ( raw_inflate_block . d inflater framed . lim max_message_bytes )
+    ( vec_free [u] framed )
+    ? . d inflate_no_takeover { ( raw_inflate_reset . d inflater ) } {}
+    ?? ir {
+        F e → {
+            ( vec_free [u] comp )
+            ^ @ !WsMessage WsErr { F ( __ws_compresserr_to_wserr e ) }
+        }
+        T plain → {
+            ( vec_free [u] comp )
+            ? & == op 1 ! ( ws_validate_utf8 plain ) {
+                ( vec_free [u] plain )
+                ^ @ !WsMessage WsErr { F WsInvalidUtf8 }
+            } {}
+            ^ @ !WsMessage WsErr { T @ WsMessage { op F plain } }
+        }
+    }
+}
+
+@ ws_read_message_deflate WsDeflate d TcpConn conn WsLimits lim → !WsMessage WsErr {
+    : !WsMessage WsErr mr ( __ws_read_message_ex conn lim F T )
+    ?? mr {
+        F e → { ^ @ !WsMessage WsErr { F e } }
+        T msg → { ^ ( __ws_inflate_message d lim msg ) }
+    }
+}
+
+@ ws_client_read_message_deflate WsDeflate d TcpConn conn WsLimits lim → !WsMessage WsErr {
+    : !WsMessage WsErr mr ( __ws_read_message_ex conn lim T T )
+    ?? mr {
+        F e → { ^ @ !WsMessage WsErr { F e } }
+        T msg → { ^ ( __ws_inflate_message d lim msg ) }
+    }
+}
+
+// ── Serve loops (deflate-aware) ───────────────────────────────────────
+
+@ __ws_serve_messages_deflate WsDeflate d TcpConn conn WsLimits lim ( @ !v WsErr WsMessage ) handler b client → !v WsErr {
+    : ~ b done F
+    : ~ b clean_close F
+    : ~ WsErr last WsOther
+    ~ ! done {
+        : !WsMessage WsErr mr ? client
+        ( ws_client_read_message_deflate d conn lim )
+        ( ws_read_message_deflate d conn lim )
+        ?? mr {
+            T msg → {
+                : !v WsErr hr ( handler msg )
+                ( ws_message_free msg )
+                ?? hr {
+                    T _ → {}
+                    F he → { = last he = done T }
+                }
+            }
+            F we → {
+                = last we
+                = done T
+                ?? we {
+                    WsClosedByPeer → { = clean_close T }
+                    _ → {}
+                }
+            }
+        }
+    }
+    // Close frames are never compressed (RFC 7692 §6).
+    : i code ? clean_close 1000 ( __ws_err_to_close last )
+    : !v WsErr _cr ? client
+    ( ws_client_send_close conn code `` )
+    ( ws_send_close conn code `` )
+    ?? _cr { T _ → {} F _ → {} }
+    ? clean_close {
+        ^ @ !v WsErr { T 0 }
+    } {
+        ^ @ !v WsErr { F last }
+    }
+}
+
+@ ws_serve_messages_deflate WsDeflate d TcpConn conn WsLimits lim ( @ !v WsErr WsMessage ) handler → !v WsErr {
+    ^ ( __ws_serve_messages_deflate d conn lim handler F )
+}
+
+@ ws_client_serve_messages_deflate WsDeflate d TcpConn conn WsLimits lim ( @ !v WsErr WsMessage ) handler → !v WsErr {
+    ^ ( __ws_serve_messages_deflate d conn lim handler T )
+}
+
+// ── Server handshake convenience ──────────────────────────────────────
+
+// Negotiate permessage-deflate (if the client offered it and `policy`
+// enables it), write the 101 response with the agreed
+// `Sec-WebSocket-Extensions` header, and return the context. The result is
+// always a WsDeflate; check `ws_deflate_active` (F ⇒ the extension was not
+// negotiated and the connection is a plain, uncompressed WebSocket). Either
+// way ws_deflate_free is safe. `policy` gates the feature and may tighten
+// the server's own compressor (force no-context-takeover, lower its window).
+@ ws_perform_handshake_deflate TcpConn conn HttpRequest req ? String subprotocol WsDeflateConfig policy → !WsDeflate WsErr {
+    : !HttpResponse WsErr rr ( ws_handshake_response_for req subprotocol )
+    ?? rr {
+        F e → { ^ @ !WsDeflate WsErr { F e } }
+        T resp → {
+            : ~ b negotiated F
+            : ~ WsDeflateConfig agreed ( ws_deflate_default_config )
+            ? . policy enabled {
+                : ?String ext ( header_get . req headers `Sec-WebSocket-Extensions` )
+                ?? ext {
+                    T ev → {
+                        : ?WsDeflateConfig pc ( ws_deflate_parse_extensions ( string_data ev ) )
+                        ?? pc {
+                            T cfg → {
+                                : b snto ? . policy server_no_context_takeover T . cfg server_no_context_takeover
+                                : b cnto . cfg client_no_context_takeover
+                                : i swb ? < . policy server_max_window_bits . cfg server_max_window_bits . policy server_max_window_bits . cfg server_max_window_bits
+                                = agreed @ WsDeflateConfig { T snto cnto swb . cfg client_max_window_bits }
+                                = negotiated T
+                            }
+                            F _ → {}
+                        }
+                        ( string_free ev )
+                    }
+                    F _ → {}
+                }
+            } {}
+            ? negotiated {
+                : String hv ( ws_deflate_response_header agreed )
+                ( response_set_header resp `Sec-WebSocket-Extensions` ( string_data hv ) )
+                ( string_free hv )
+            } {}
+            : ( Vec u ) wire ( response_serialize resp )
+            : !v NetErr wr ( tcp_write_all conn wire )
+            ( vec_free [u] wire )
+            ( http_response_free resp )
+            ?? wr {
+                F _ → { ^ @ !WsDeflate WsErr { F WsHandshakeWriteFailed } }
+                T _ → {
+                    ? negotiated {
+                        ^ ( ws_deflate_make agreed T )
+                    } {
+                        : ZDeflate nd @ ZDeflate { # *u 0 }
+                        : ZInflate ni @ ZInflate { # *u 0 }
+                        ^ @ !WsDeflate WsErr { T @ WsDeflate { nd ni F F 64 F } }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Client handshake + connect convenience ────────────────────────────
+
+// Client handshake that offers permessage-deflate and parses the server's
+// response. Returns the negotiated config — its `enabled` field is F when
+// the server declined. Mirrors ws_client_handshake but adds the
+// Sec-WebSocket-Extensions offer and inspects the response head.
+@ ws_client_handshake_deflate TcpConn conn s host s path ? String subprotocol WsDeflateConfig cfg → !WsDeflateConfig WsErr {
+    : ( Vec u ) nonce ( vec_with_cap [u] 16 )
+    : i r0 ( rand_u64 )
+    : i r1 ( rand_u64 )
+    : ~ i bi 0
+    ~ < bi 8 {
+        ( vec_push [u] nonce # u & 255 >> r0 * bi 8 )
+        = bi + bi 1
+    }
+    = bi 0
+    ~ < bi 8 {
+        ( vec_push [u] nonce # u & 255 >> r1 * bi 8 )
+        = bi + bi 1
+    }
+    : String key64 ( b64_encode_vec nonce )
+    ( vec_free [u] nonce )
+    : ( Vec u ) req ( vec_new [u] )
+    ( bytes_extend_str req `GET ` )
+    ( bytes_extend_str req path )
+    ( bytes_extend_str req ` HTTP/1.1\r\nHost: ` )
+    ( bytes_extend_str req host )
+    ( bytes_extend_str req `\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ` )
+    ( bytes_extend_str req ( string_data key64 ) )
+    ( bytes_extend_str req `\r\nSec-WebSocket-Version: 13\r\n` )
+    : String offer ( ws_deflate_offer_header cfg )
+    ( bytes_extend_str req `Sec-WebSocket-Extensions: ` )
+    ( bytes_extend_str req ( string_data offer ) )
+    ( bytes_extend_str req `\r\n` )
+    ( string_free offer )
+    ?? subprotocol {
+        T sp → {
+            ( bytes_extend_str req `Sec-WebSocket-Protocol: ` )
+            ( bytes_extend_str req ( string_data sp ) )
+            ( bytes_extend_str req `\r\n` )
+        }
+        F _ → {}
+    }
+    ( bytes_extend_str req `\r\n` )
+    : !v NetErr wr ( tcp_write_all conn req )
+    ( vec_free [u] req )
+    ?? wr {
+        T _ → {}
+        F _ → {
+            ( string_free key64 )
+            ^ @ !WsDeflateConfig WsErr { F WsConnectFailed }
+        }
+    }
+    : !( Vec u ) WsErr hr ( __ws_read_http_head conn )
+    ?? hr {
+        F e → {
+            ( string_free key64 )
+            ^ @ !WsDeflateConfig WsErr { F e }
+        }
+        T head → {
+            ? ! ( __ws_status_101 head ) {
+                ( vec_free [u] head )
+                ( string_free key64 )
+                ^ @ !WsDeflateConfig WsErr { F WsClientBadStatus }
+            } {}
+            : String expect ( ws_accept_key ( string_data key64 ) )
+            ( string_free key64 )
+            : ?String got ( __ws_head_get_value head `Sec-WebSocket-Accept` )
+            : ~ b accept_ok F
+            ?? got {
+                T gv → {
+                    = accept_ok != 0 ( nurl_str_eq ( string_data gv ) ( string_data expect ) )
+                    ( string_free gv )
+                }
+                F _ → {}
+            }
+            ( string_free expect )
+            ? ! accept_ok {
+                ( vec_free [u] head )
+                ^ @ !WsDeflateConfig WsErr { F WsClientBadAccept }
+            } {}
+            : ?String ext ( __ws_head_get_value head `Sec-WebSocket-Extensions` )
+            ( vec_free [u] head )
+            : ~ WsDeflateConfig result @ WsDeflateConfig { F F F 15 15 }
+            ?? ext {
+                T ev → {
+                    : ?WsDeflateConfig pc ( ws_deflate_parse_extensions ( string_data ev ) )
+                    ?? pc {
+                        T c → { = result c }
+                        F _ → {}
+                    }
+                    ( string_free ev )
+                }
+                F _ → {}
+            }
+            ^ @ !WsDeflateConfig WsErr { T result }
+        }
+    }
+}
+
+// Dial + handshake offering permessage-deflate in one shot. On success the
+// returned WsDeflateConn carries the live client and, if the server agreed,
+// a permessage-deflate context (`have_deflate`). When declined the context
+// is null and ws_deflate_free is a no-op, so the teardown is uniform:
+// ws_deflate_free the context, then ws_client_close the client.
+@ ws_connect_deflate s url ? String subprotocol WsDeflateConfig cfg → !WsDeflateConn WsErr {
+    : ?WsUrl pu ( __ws_parse_url url )
+    ?? pu {
+        F _ → { ^ @ !WsDeflateConn WsErr { F WsBadUrl } }
+        T u → {
+            : i craw ? . u tls
+            ( nurl_tcp_connect_tls ( string_data . u host ) . u port 1 )
+            ( nurl_tcp_connect ( string_data . u host ) . u port )
+            ? == craw 0 {
+                ( ws_url_free u )
+                ^ @ !WsDeflateConn WsErr { F WsConnectFailed }
+            } {}
+            : i ek ( nurl_tcp_err_kind craw )
+            ? != ek 0 {
+                ( nurl_tcp_close craw )
+                ( ws_url_free u )
+                ^ @ !WsDeflateConn WsErr { F WsConnectFailed }
+            } {}
+            : s crp # s craw
+            : TcpConn conn @ TcpConn { crp }
+            : !WsDeflateConfig WsErr hsr ( ws_client_handshake_deflate conn ( string_data . u host ) ( string_data . u path ) subprotocol cfg )
+            ( ws_url_free u )
+            ?? hsr {
+                F e → {
+                    ( tcp_close_conn conn )
+                    ^ @ !WsDeflateConn WsErr { F e }
+                }
+                T ncfg → {
+                    : WsClient client @ WsClient { conn }
+                    ? . ncfg enabled {
+                        : !WsDeflate WsErr mk ( ws_deflate_make ncfg F )
+                        ?? mk {
+                            T dctx → {
+                                ^ @ !WsDeflateConn WsErr { T @ WsDeflateConn { client T dctx } }
+                            }
+                            F e → {
+                                ( tcp_close_conn conn )
+                                ^ @ !WsDeflateConn WsErr { F e }
+                            }
+                        }
+                    } {
+                        // Server declined: carry a null context. Its streams
+                        // are 0, so ws_deflate_free is a safe no-op and the
+                        // caller need not special-case it.
+                        : ZDeflate nd @ ZDeflate { # *u 0 }
+                        : ZInflate ni @ ZInflate { # *u 0 }
+                        ^ @ !WsDeflateConn WsErr { T @ WsDeflateConn { client F @ WsDeflate { nd ni F F 64 F } } }
+                    }
+                }
+            }
+        }
     }
 }
