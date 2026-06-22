@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-06-20 · Current release: **0.9.10** · Language: **Grammar
+_Last reviewed: 2026-06-22 · Current release: **0.9.10** · Language: **Grammar
 v2.2** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -171,11 +171,22 @@ new language features.
 
 These convert a hypothesis into measured results.
 
-- [ ] **Tokenizer-level token-count study** — measure real BPE tokens (not
-  characters) for NURL vs Python/Rust on a fixed model; verify rare glyphs
-  (`→`, `^^`, `??`) don't fragment the win.
-- [ ] **Controlled generation-accuracy comparison** — first-pass compile
-  success, NURL vs Python/Rust, one fixed model.
+- [x] **Tokenizer-level token-count study** — measured real BPE tokens (not
+  characters) for NURL vs Python/Rust/JS across 8 matched programs
+  ([`bench/TOKEN_EFFICIENCY.md`](bench/TOKEN_EFFICIENCY.md)). *Result: the
+  raw token-count claim did not survive measurement — on today's tokenisers
+  NURL is ~1.7× Python's tokens (median), losing to out-of-distribution
+  glyph fragmentation. The claim was retired; the defensible arguments are
+  grammar regularity and first-pass compile success.*
+- [x] **Controlled generation-accuracy comparison** — first-pass compile +
+  correctness, NURL vs Python/Rust, across four models (Sonnet 4.6 / Opus
+  4.8 / Haiku 4.5 / mercury-2 diffusion), primed with NURL's one-page
+  reference since the training corpus contains zero NURL
+  ([`bench/genacc/`](bench/genacc/), results in
+  [`bench/genacc/RESULTS.md`](bench/genacc/RESULTS.md)). *Result: from a
+  single page a model reaches the Python/Rust ballpark on several tasks but
+  not parity; failures are out-of-distribution habits (imports, then
+  grouping-parens, then mutability) that targeted primer cues fix in turn.*
 - [ ] **Separate the language claim from the MCP-integration claim** in
   project copy — "an agent can drive the toolchain over MCP" is a tooling
   win, not evidence the *language* is better for LLMs.
