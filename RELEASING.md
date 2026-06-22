@@ -81,6 +81,15 @@ work. Point:
 `raw.githubusercontent.com` path). `$NURL_INSTALL_BASE` overrides the
 download base for internal mirrors / air-gapped installs.
 
+Pushing a `v*` tag also fires `.github/workflows/web-deploy.yml`, which
+runs `npm run deploy` in `nurlweb/`. Its `predeploy` hook regenerates the
+landing-page facts (`tools/gen-site-facts.sh`, version sourced from the top
+`CHANGELOG.md` section) and re-syncs the installer scripts before
+`wrangler deploy`, so `nurl-lang.org` refreshes its version and counts in
+lockstep with each release. The job is a green no-op when
+`CLOUDFLARE_API_TOKEN` is unset (forks), and can also be run manually from
+the Actions tab.
+
 ## Status / caveats
 
 - The Linux client path (download → verify → unpack → run) is verified

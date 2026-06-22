@@ -1,0 +1,60 @@
+name: Deploy nurlweb
+
+# Deploys the landing site (nurlweb/) to Cloudflare whenever a `v*` release
+# tag is pushed — so nurl-lang.org's release-coupled facts (version,
+# line/test/module counts) refresh in lockstep with the release instead of
+# lagging behind it.
+#
+# `npm run deploy` runs the `predeploy` hook first, which regenerates the
+# facts from the tagged repo state (tools/gen-site-facts.sh) and re-syncs
+# the installer scripts (sync-installers) before `wrangler deploy`. The page
+# stays 100% static at serve time; this just rebuilds it from the source of
+# truth at publish.
+#
+# Requires two GitHub Actions repo secrets (shared with the registry/API
+# deploys):
+#   CLOUDFLARE_API_TOKEN   — a token with Workers edit rights
+#   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
+# When the token is unset / still the REPLACE_ME placeholder (e.g. on forks)
+# every step skips and the job is a green no-op.
+#
+# Also runnable manually from the Actions tab (Run workflow) to redeploy
+# without cutting a tag.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # `secrets` can't be used in an `if:` directly, so derive a boolean in
+    # job-level `env` (which may read secrets) and gate each step on it.
+    env:
+      DEPLOY_ENABLED: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_API_TOKEN != 'REPLACE_ME' }}
+    defaults:
+      run:
+        working-directory: nurlweb
+    steps:
+      - if: env.DEPLOY_ENABLED == 'true'
+        uses: actions/checkout@v4
+        # gen-site-facts.sh falls back to `git tag` for the version, so make
+        # sure tags are present in the checkout (the triggering tag is, but
+        # fetch them explicitly for the workflow_dispatch path too).
+        with:
+          fetch-depth: 0
+      - if: env.DEPLOY_ENABLED == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - if: env.DEPLOY_ENABLED == 'true'
+        run: npm ci
+      # `deploy` runs the `predeploy` hook (gen-site-facts + sync-installers)
+      # automatically, then `wrangler deploy`.
+      - name: Deploy
+        if: env.DEPLOY_ENABLED == 'true'
+        run: npm run deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
