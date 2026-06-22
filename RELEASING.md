@@ -69,6 +69,27 @@ least load) and, on a missing-shared-library loader error, prints the
 offending `.so` plus a package-manager hint instead of failing cryptically
 at first use.
 
+### Build-time dependency: an LLVM C compiler (clang)
+
+Running the toolchain (e.g. `nurlc`) needs nothing but libc, but *building*
+a program does: `nurlc` emits LLVM IR (`.ll`), which `clang` lowers to a
+native binary and links against `runtime.o`. gcc/cc cannot consume LLVM IR,
+so this step genuinely requires clang (or another LLVM-based `cc`). Because
+`nurlpkg install <tool>` compiles the package from source, it inherits this
+requirement.
+
+This is *not* bundled (a full LLVM toolchain would dwarf the install). So:
+
+- `nurl.sh` honours `$CLANG`, otherwise probes `clang` / `clang-<N>` / a
+  clang-flavoured `cc`, and on absence exits with install guidance
+  (`apt install clang` / `dnf install clang` / `apk add clang` / …) instead
+  of a raw `clang: command not found`.
+- `get-nurl.sh` prints the same heads-up at install time when no `clang` is
+  on `PATH`, so the requirement is known before the first `nurlpkg install`.
+
+(A prebuilt-binary package channel — install a tool without a local
+compiler — is the future bombproofing here; see the registry roadmap.)
+
 ## Front-door wiring (nurlweb)
 
 `nurl-lang.org` should serve the two installer scripts so the one-liners

@@ -154,3 +154,17 @@ info "Or just add the bin dir to PATH:"
 info "    export PATH=\"$PREFIX/bin:\$PATH\""
 info ""
 info "Then:  nurlc --version   ·   nurlpkg install argz-demo"
+
+# Building a program (and therefore `nurlpkg install <tool>`, which compiles
+# the package from source) needs an LLVM C compiler — `nurlc` emits LLVM IR
+# that clang lowers to a native binary; gcc/cc cannot. The toolchain itself
+# runs without it, so this is a heads-up, not a failure.
+if ! command -v clang >/dev/null 2>&1; then
+    info ""
+    info "Heads-up: to build programs or 'nurlpkg install' a tool you also need"
+    info "clang (an LLVM C compiler) on PATH. Install it with, e.g.:"
+    info "    Debian/Ubuntu:  sudo apt-get install -y clang"
+    info "    Fedora/RHEL:    sudo dnf install -y clang"
+    info "    Alpine:         sudo apk add clang"
+    info "    Arch:           sudo pacman -S clang"
+fi

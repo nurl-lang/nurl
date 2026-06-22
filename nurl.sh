@@ -135,6 +135,41 @@ else
     OPT="${NURL_OPT:--O2}"
 fi
 
+# Resolve an LLVM C compiler to lower nurlc's LLVM IR (.ll) into a native
+# binary. This step *requires* clang (or another LLVM-based `cc`): nurlc
+# emits LLVM IR, which gcc/cc cannot consume. Honour an explicit $CLANG,
+# then probe `clang` and a few versioned names, and otherwise fail with
+# install guidance instead of a raw "clang: command not found".
+resolve_clang() {
+    if [[ -n "${CLANG:-}" ]] && command -v "$CLANG" >/dev/null 2>&1; then
+        return 0
+    fi
+    local c
+    for c in clang clang-20 clang-19 clang-18 clang-17 clang-16 clang-15 clang-14 cc; do
+        # `cc` is accepted only if it is actually clang (it can be gcc).
+        if command -v "$c" >/dev/null 2>&1; then
+            if [[ "$c" == cc ]] && ! "$c" --version 2>/dev/null | grep -qi clang; then
+                continue
+            fi
+            CLANG="$c"
+            return 0
+        fi
+    done
+    {
+        echo "ERROR: NURL needs an LLVM C compiler (clang) to build a program."
+        echo "       nurlc emits LLVM IR, which clang lowers to a native binary;"
+        echo "       gcc/cc cannot do this. Install clang and re-run:"
+        echo "         Debian/Ubuntu:  sudo apt-get install -y clang"
+        echo "         Fedora/RHEL:    sudo dnf install -y clang"
+        echo "         Alpine:         sudo apk add clang"
+        echo "         Arch:           sudo pacman -S clang"
+        echo "         macOS:          xcode-select --install   # or: brew install llvm"
+        echo "       Or set CLANG=/path/to/clang if it is installed under another name."
+    } >&2
+    exit 1
+}
+resolve_clang
+
 # Debug flag passthrough. Without `!dbg` metadata in the IR, `-g` yields
 # only crude line info from the inlined .ll filename; still useful in
 # debuggers for frame isolation and symbol demangling.
@@ -150,7 +185,7 @@ fi
 # --emit-asm: stop after clang -S, skip linking (no runtime needed for .s).
 if [[ $EMIT_ASM -eq 1 ]]; then
     echo "[2/2] $LLFILE → $SFILE  ($OPT${DEBUG_FLAGS[*]:+ ${DEBUG_FLAGS[*]}} -S)"
-    clang $OPT "${DEBUG_FLAGS[@]}" -S "$LLFILE" -o "$SFILE"
+    "$CLANG" $OPT "${DEBUG_FLAGS[@]}" -S "$LLFILE" -o "$SFILE"
     echo ""
     echo "Done: $SFILE"
     exit 0
@@ -287,7 +322,7 @@ if [[ "${NURL_SAN:-0}" == "1" ]]; then
             fi
         done
         # shellcheck disable=SC2086
-        clang $CFLAGS_SAN -c "$SCRIPT_DIR/stdlib/runtime.c" -o "$SAN_RUNTIME"
+        "$CLANG" $CFLAGS_SAN -c "$SCRIPT_DIR/stdlib/runtime.c" -o "$SAN_RUNTIME"
     fi
     RUNTIME_TO_LINK="$SAN_RUNTIME"
 elif [[ $DEBUG_INFO -eq 1 ]]; then
@@ -303,7 +338,7 @@ elif [[ $DEBUG_INFO -eq 1 ]]; then
             fi
         done
         # shellcheck disable=SC2086
-        clang $CFLAGS_DBG -c "$SCRIPT_DIR/stdlib/runtime.c" -o "$DBG_RUNTIME"
+        "$CLANG" $CFLAGS_DBG -c "$SCRIPT_DIR/stdlib/runtime.c" -o "$DBG_RUNTIME"
     fi
     RUNTIME_TO_LINK="$DBG_RUNTIME"
 fi
@@ -319,7 +354,7 @@ echo "[2/2] $LLFILE → $OUTBASE  ($OPT${LTO_FLAG:+ $LTO_FLAG}${DEBUG_FLAGS[*]:+
 # that imports nothing DB-related never inherits libpq/libsqlite3 just
 # because the build machine had them. Positional: it must precede the
 # `-l` libraries to govern them.
-clang $OPT $LTO_FLAG -Wl,--as-needed "${DEBUG_FLAGS[@]}" "${SAN_LINK_FLAGS[@]}" "$LLFILE" "$RUNTIME_TO_LINK" "${EXTRA_OBJS[@]}" -o "$OUTBASE" -lm -lpthread "${EXTRA_LIBS[@]}"
+"$CLANG" $OPT $LTO_FLAG -Wl,--as-needed "${DEBUG_FLAGS[@]}" "${SAN_LINK_FLAGS[@]}" "$LLFILE" "$RUNTIME_TO_LINK" "${EXTRA_OBJS[@]}" -o "$OUTBASE" -lm -lpthread "${EXTRA_LIBS[@]}"
 
 echo ""
 echo "Done: $OUTBASE"
