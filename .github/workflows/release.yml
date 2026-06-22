@@ -79,6 +79,21 @@ jobs:
           mv "vendor/zig-linux-${ZA}-${ZIG_VER}" vendor/zig
           vendor/zig/zig version
 
+      # The CI runner's glibc (2.39) is newer than many target boxes (e.g.
+      # Raspberry Pi OS bullseye = 2.31), and glibc is not forward-compatible
+      # — so a binary built here fails to start there with
+      # `GLIBC_2.34 not found`. Relink the shipped nurlc + nurlpkg with the
+      # bundled zig against an old glibc floor (zig provides the versioned
+      # stubs), so they run on old distros too. Brings the floor to ~2.14.
+      - name: Relink toolchain for old-glibc portability
+        run: |
+          case "${{ matrix.target }}" in
+            linux-x86_64-glibc) A=x86_64 ;;
+            linux-arm64-glibc)  A=aarch64 ;;
+            *) echo "no arch mapping for ${{ matrix.target }}" >&2; exit 1 ;;
+          esac
+          NURL_BUNDLE_ZIG="$PWD/vendor/zig" ./tools/relink-toolchain-portable.sh "$A"
+
       - name: Assemble relocatable prefix
         run: NURL_HOME="$PWD/dist/nurl" NURL_BUNDLE_ZIG="$PWD/vendor/zig" ./tools/install-toolchain.sh
 

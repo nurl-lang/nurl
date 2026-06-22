@@ -108,6 +108,23 @@ link where libpq was absent).
 (A prebuilt-binary package channel — install a tool with no local compile at
 all — remains the future bombproofing; see the registry roadmap.)
 
+### glibc floor: the shipped binaries run on old distros too
+
+The release runners have a recent glibc (2.39), and glibc is backward- but
+**not** forward-compatible — so a `nurlc`/`nurlpkg` built there fails to
+start on an older box (e.g. Raspberry Pi OS bullseye, glibc 2.31) with
+`libc.so.6: version 'GLIBC_2.34' not found` (2.34 is where pthread folded
+into libc). The release therefore **relinks** the shipped `nurlc` + `nurlpkg`
+with the bundled zig against an **old glibc floor**
+(`tools/relink-toolchain-portable.sh`, `zig cc -target <arch>-linux-gnu.2.17`)
+— zig supplies the versioned glibc stubs, so we build on the modern runner
+yet target ~glibc 2.14. This is possible because `nurlc` is libc-only and
+`nurlpkg` adds only static zlib/zstd (ancient symbols). A successful relink
+*caps* the floor at the target (the link fails outright if any code needs a
+newer symbol), so portability is guaranteed by construction. The bundled
+zig and the user programs it builds target the box's *native* glibc, so
+those are unaffected.
+
 ## Front-door wiring (nurlweb)
 
 `nurl-lang.org` should serve the two installer scripts so the one-liners
