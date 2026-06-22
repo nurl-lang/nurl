@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.11] — 2026-06-22
+
+The "dependency-free toolchain + registry programs" release: the installed
+`nurlc` and `nurlpkg` now link **libc only** (no inherited `libpq` /
+`libcurl` / `libsqlite3` / …), several real programs landed on the package
+registry, and the whole source tree is now held to canonical `nurlfmt` form
+by CI.
+
 ### Added
 
 - **WebSocket `permessage-deflate` (RFC 7692), server and client.** Per-message
@@ -31,6 +39,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   layout-absorbing `nurl_z_*` accessors in `runtime.c` let the NURL-side loop
   rebind input/output across the persistent stream. Regression tests
   `compress_rawdeflate.nu` and `ws_permessage_deflate.nu`.
+- **Real programs on the package registry.** Three CLI/library packages were
+  written in NURL and published to `reg.nurl-lang.org`: **`nq`** (a jq-lite
+  JSON query tool), **`md2html`** (a Markdown → HTML converter, CLI + library),
+  and **`iforest`** (Isolation Forest anomaly detection, CLI + library).
+  `argz` / `argz-demo` gained READMEs and published `0.1.1`.
+- **Registry renders each package's README.** A package's detail page now
+  renders the README from its tarball (Markdown → HTML done in TypeScript,
+  XSS-safe).
+- **`nurlweb` auto-generates release-coupled facts and serves the installer.**
+  Site facts (version, line/test/module counts) are generated from the repo
+  state instead of being hand-maintained, and `nurl-lang.org` serves the
+  installer scripts so the `curl … | sh` one-liner works.
+
+### Fixed
+
+- **Bombproof toolchain install — `nurlc` and `nurlpkg` link libc only.** A
+  fresh install could die immediately with
+  `error while loading shared libraries: libpq.so.5`, even though `nurlpkg`
+  never touches Postgres: the monolithic `runtime.o` carries every FFI
+  back-end, and the link lines named them all unconditionally with no
+  `--as-needed`, so each binary inherited whatever the build machine had as a
+  hard `DT_NEEDED`. Every native link line now passes `-Wl,--as-needed`
+  (a binary keeps a dependency only for a library it actually references;
+  LTO drops the dead back-end code first), and `nurlpkg` reaches the registry
+  through the system `curl` **binary** (new `stdlib/ext/http_cli.nu`) with
+  zlib + zstd linked statically — so both `nurlc` and `nurlpkg` now depend on
+  `libc` only. The installer (`get-nurl.sh`) also smoke-tests the unpacked
+  binaries and reports any missing shared library with a package-manager hint.
+- **Windows build.** Build breakage on the Windows target was fixed.
+- **`nurlc`: `Vec[T]` indexing when `T` has a field named like the index
+  variable.** A struct-pointer field access could be mis-resolved as an array
+  index (and vice-versa) when a local index variable shared a name with a
+  struct field; the field/element disambiguation is now correct.
+- **Playground self-heals a wedged container Worker.** When the backing
+  server hangs-but-keeps-running, the Cloudflare container Worker now detects
+  the "not listening" wedge and restarts it instead of serving sticky 500s.
+
+### Changed
+
+- **Canonical-form gate.** The whole tree was canonicalised with `nurlfmt`
+  and a `nurlfmt --check` CI gate now rejects any non-canonical first-party
+  `.nu` file (the formatter is IR-transparent, so this changed no behaviour).
+
+### Docs
+
+- Roadmap: the two LLM-native evidence studies are marked as shipped.
 
 ## [0.9.10] — 2026-06-20
 
@@ -5335,7 +5389,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.10...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.11...HEAD
+[0.9.11]: https://github.com/nurl-lang/nurl/compare/v0.9.10...v0.9.11
 [0.9.10]: https://github.com/nurl-lang/nurl/compare/v0.9.9...v0.9.10
 [0.9.9]: https://github.com/nurl-lang/nurl/compare/v0.9.8...v0.9.9
 [0.9.8]: https://github.com/nurl-lang/nurl/compare/v0.9.7...v0.9.8
