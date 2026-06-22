@@ -60,8 +60,15 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM nurlpkg imports stdlib\ext\compress.nu (gunzip + zstd for registry
+REM tarballs), so it needs zlib + zstd at link time. build.bat records the
+REM resolved link fragment in stdlib\runtime.winlibs when they were
+REM detected (issue #229).
+set "WINLIBS="
+if exist "%ROOT_DIR%\stdlib\runtime.winlibs" set /p WINLIBS=<"%ROOT_DIR%\stdlib\runtime.winlibs"
+
 echo [2/2] build\nurlpkg.ll -^> build\nurlpkg.exe
-"%CLANG%" -O2 "%ROOT_DIR%\build\nurlpkg.ll" "%RUNTIME%" -lwinhttp -o "%ROOT_DIR%\build\nurlpkg.exe"
+"%CLANG%" -O2 "%ROOT_DIR%\build\nurlpkg.ll" "%RUNTIME%" -lwinhttp !WINLIBS! -o "%ROOT_DIR%\build\nurlpkg.exe"
 if errorlevel 1 (
     echo ERROR: clang linking failed 1>&2
     exit /b 1

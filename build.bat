@@ -45,12 +45,79 @@ if errorlevel 1 (
 
 if not exist build mkdir build
 
+REM ── FFI library detection (vcpkg) — issue #229 ───────────────
+REM Mirror build.sh's feature-lib wiring on Windows. Probe the vcpkg
+REM install (static triplet preferred so produced exes carry no DLL
+REM dependency, then x64-windows) for the libs stdlib\ext\compress.nu
+REM declares — zlib (& `z`) and zstd (& `zstd`) — which nurlpkg pulls in
+REM (gunzip + zstd for registry tarballs). For each lib found we drop the
+REM stdlib\runtime.<name> sentinel nurlc's FFI-lib check consults and
+REM accumulate its link fragment in stdlib\runtime.winlibs for nurl.bat /
+REM tools\nurlpkg\build.bat to append. zlib additionally needs
+REM -DNURL_HAVE_ZLIB + its include so runtime.c's gzip bridge (§22) builds;
+REM zstd is pure-NURL FFI (no runtime.c bridge) so it needs sentinel+link
+REM only. Without these, compress.nu's gzip_*/zstd_* and nurlpkg won't build.
+set "ZLIB_CFLAGS="
+set "WINLIBS="
+set "VCPKG_INC="
+set "VCPKG_LIBDIR="
+for %%T in (x64-windows-static x64-windows) do (
+    if not defined VCPKG_INC if exist "%VCPKG_ROOT%\installed\%%T\include" (
+        set "VCPKG_INC=%VCPKG_ROOT%\installed\%%T\include"
+        set "VCPKG_LIBDIR=%VCPKG_ROOT%\installed\%%T\lib"
+    )
+    if not defined VCPKG_INC if exist "C:\vcpkg\installed\%%T\include" (
+        set "VCPKG_INC=C:\vcpkg\installed\%%T\include"
+        set "VCPKG_LIBDIR=C:\vcpkg\installed\%%T\lib"
+    )
+)
+
+REM zlib — vcpkg, or a bundled C:\zlib.
+set "ZLIB_INC="
+set "ZLIB_LIBDIR="
+if defined VCPKG_INC if exist "!VCPKG_INC!\zlib.h" (
+    set "ZLIB_INC=!VCPKG_INC!"
+    set "ZLIB_LIBDIR=!VCPKG_LIBDIR!"
+)
+if not defined ZLIB_INC if exist "C:\zlib\include\zlib.h" (
+    set "ZLIB_INC=C:\zlib\include"
+    set "ZLIB_LIBDIR=C:\zlib\lib"
+)
+if defined ZLIB_INC (
+    set "ZLIB_LIBNAME=zlib"
+    if exist "!ZLIB_LIBDIR!\zlibstatic.lib" set "ZLIB_LIBNAME=zlibstatic"
+    set ZLIB_CFLAGS=-DNURL_HAVE_ZLIB -I"!ZLIB_INC!"
+    > stdlib\runtime.z echo 1
+    set WINLIBS=!WINLIBS! -L"!ZLIB_LIBDIR!" -l!ZLIB_LIBNAME!
+) else (
+    if exist stdlib\runtime.z del /q stdlib\runtime.z
+)
+
+REM zstd — pure-NURL FFI: sentinel + link only.
+set "HAVE_ZSTD="
+if defined VCPKG_INC if exist "!VCPKG_INC!\zstd.h" set "HAVE_ZSTD=1"
+if defined HAVE_ZSTD (
+    > stdlib\runtime.zstd echo 1
+    set WINLIBS=!WINLIBS! -L"!VCPKG_LIBDIR!" -lzstd
+) else (
+    if exist stdlib\runtime.zstd del /q stdlib\runtime.zstd
+)
+
 REM ── runtime ──────────────────────────────────────────────────
 set "LABEL=runtime"
 >>"%LOG%" echo.
->>"%LOG%" echo [%LABEL%] "%CLANG%" -c stdlib/runtime.c -o stdlib/runtime.o
-"%CLANG%" -c stdlib/runtime.c -o stdlib/runtime.o >>"%LOG%" 2>&1
+>>"%LOG%" echo [%LABEL%] "%CLANG%" -c stdlib/runtime.c !ZLIB_CFLAGS! -o stdlib/runtime.o
+"%CLANG%" -c stdlib/runtime.c !ZLIB_CFLAGS! -o stdlib/runtime.o >>"%LOG%" 2>&1
 if errorlevel 1 goto :failed
+
+REM Persist the accumulated link fragment for the FFI consumers.
+if defined WINLIBS (
+    > stdlib\runtime.winlibs echo !WINLIBS!
+    >>"%LOG%" echo [info] FFI libs detected -!WINLIBS!
+) else (
+    if exist stdlib\runtime.winlibs del /q stdlib\runtime.winlibs
+    >>"%LOG%" echo [info] no vcpkg zlib/zstd - compress.nu / nurlpkg unavailable
+)
 
 REM ── canvas ──────────────────────────────────────────────────
 REM canvas.o is ALWAYS built. When SDL2 dev headers are available we

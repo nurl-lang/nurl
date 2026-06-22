@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+gzip magic=31,139,8
+gzip round_trip=T comp_len_gt_18=T decomp_len=720
+gzip lvl0 round_trip=T
+gzip empty ok len=0
+gzip accepts zlib=T
+gzip bad err=CompressData
+orig_len=720

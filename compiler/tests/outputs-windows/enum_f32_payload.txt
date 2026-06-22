@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+f32_single=2.25
+f64_single=3.5
+two_x=1.25
+two_y=2.75
+mix_z=9.5

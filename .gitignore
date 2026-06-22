@@ -26,6 +26,7 @@ stdlib/runtime.sqlite3
 stdlib/runtime.pq
 stdlib/runtime.z
 stdlib/runtime.zstd
+stdlib/runtime.winlibs
 stdlib/runtime.opus
 stdlib/runtime.asound
 stdlib/runtime.wasm.o

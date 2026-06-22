@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+high_bytes=2
+byte_sum=405
+gt1000=1
+mod7_sum=5

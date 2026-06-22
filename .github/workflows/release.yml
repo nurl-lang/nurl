@@ -83,10 +83,14 @@ jobs:
           if-no-files-found: error
 
   # ── Windows (native) ─────────────────────────────────────────────────
-  # Best-effort for now: nurlpkg needs zlib (gunzip) and the Windows build
-  # does not yet wire it up, so this job can fail without blocking the
-  # Linux release. Tracked separately; flip continue-on-error off once the
-  # Windows toolchain links zlib.
+  # nurlpkg needs zlib (gunzip for registry tarballs). build.bat now wires
+  # it up (issue #229) by detecting the vcpkg x64-windows-static install
+  # below: it compiles runtime.c with -DNURL_HAVE_ZLIB, drops the
+  # stdlib\runtime.z sentinel, and records the link fragment that
+  # tools\nurlpkg\build.bat consumes. Still best-effort (continue-on-error)
+  # until a `workflow_dispatch` dry run confirms the job is green; once it
+  # is, drop continue-on-error here and add `windows` to the release job's
+  # `needs`.
   windows:
     runs-on: windows-latest
     timeout-minutes: 40
@@ -97,6 +101,14 @@ jobs:
       - name: Install LLVM/clang
         run: choco install llvm -y --no-progress
         shell: pwsh
+
+      - name: Install zlib + zstd (vcpkg, static)
+        shell: pwsh
+        # windows-latest ships vcpkg at C:\vcpkg, which build.bat probes.
+        # compress.nu (which nurlpkg imports) declares both zlib and zstd
+        # FFI, so nurlc needs both build-time sentinels. Static triplet so
+        # the produced exes carry no zlib1.dll / zstd.dll dependency.
+        run: vcpkg install zlib:x64-windows-static zstd:x64-windows-static
 
       - name: Build toolchain (nurlc + nurlpkg)
         shell: cmd
