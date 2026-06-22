@@ -272,7 +272,16 @@ add_feature_lib() {
     # $1 sentinel basename, $2.. the link flags (e.g. -lssl -lcrypto).
     local sentinel="$1"; shift
     [[ -f "$SCRIPT_DIR/stdlib/$sentinel" ]] || return 0
-    "${CC[@]}" "$__probe_c" "$@" -o "$__probe_o" >/dev/null 2>&1 && EXTRA_LIBS+=( "$@" )
+    # A FAILED probe (lib absent — common: the runtime .so.N is present but
+    # the -dev `.so` linker symlink is not) means "don't link it". Use an
+    # `if`, never `probe && add`: the latter makes this function return the
+    # probe's non-zero exit, which under the caller's `set -e` aborts the
+    # whole build at the first unavailable library. `return 0` keeps the
+    # function total regardless.
+    if "${CC[@]}" "$__probe_c" "$@" -o "$__probe_o" >/dev/null 2>&1; then
+        EXTRA_LIBS+=( "$@" )
+    fi
+    return 0
 }
 add_feature_lib runtime.curl    -lcurl
 add_feature_lib runtime.openssl -lssl -lcrypto
