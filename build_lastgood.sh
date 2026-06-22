@@ -56,13 +56,13 @@ step "clean"         rm -f build/nurlc_lastgood.bin \
                           build/nurlc_self2.ll build/nurlc_self2 \
                           build/nurlc
 
-step "stage0 link"   "$CLANG" -O2 compiler/nurlc_lastgood.ll stdlib/runtime.o -lm -o build/nurlc_lastgood.bin
+step "stage0 link"   "$CLANG" -O2 compiler/nurlc_lastgood.ll stdlib/runtime.o -Wl,--as-needed -lm -o build/nurlc_lastgood.bin
 
 step "stage1 ir"     bash -c './build/nurlc_lastgood.bin compiler/nurlc_lastgood.nu > build/nurlc_self.ll'
-step "stage1 link"   "$CLANG" -O2 build/nurlc_self.ll stdlib/runtime.o -lm -o build/nurlc_self
+step "stage1 link"   "$CLANG" -O2 build/nurlc_self.ll stdlib/runtime.o -Wl,--as-needed -lm -o build/nurlc_self
 
 step "stage2 ir"     bash -c './build/nurlc_self compiler/nurlc_lastgood.nu > build/nurlc_self2.ll'
-step "stage2 link"   "$CLANG" -O2 build/nurlc_self2.ll stdlib/runtime.o -lm -o build/nurlc_self2
+step "stage2 link"   "$CLANG" -O2 build/nurlc_self2.ll stdlib/runtime.o -Wl,--as-needed -lm -o build/nurlc_self2
 
 # Fixed-point: nurlc_self must match nurlc_self2.
 if ! cmp -s build/nurlc_self.ll build/nurlc_self2.ll; then

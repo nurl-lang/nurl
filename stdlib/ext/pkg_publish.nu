@@ -31,7 +31,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/tar.nu`
 $ `stdlib/ext/compress.nu`
-$ `stdlib/ext/http.nu`
+$ `stdlib/ext/http_cli.nu`
 
 : | PackErr {
     PackReadFailed  // dir_list / read_file failed
@@ -197,14 +197,14 @@ $ `stdlib/ext/http.nu`
         ( string_push_str hb `\r\n` )
     } {}
     ( string_push_str hb `Content-Type: application/gzip\r\n` )
-    : !Response HttpErr rr ( http_request_bytes `POST` ( string_data url ) tarball ( string_data hb ) )
+    : !HttpcResp HttpcErr rr ( httpc_request_bytes `POST` ( string_data url ) tarball ( string_data hb ) )
     ( string_free url )
     ( string_free hb )
     ?? rr {
         F _ → ^ @ !i PublishErr { F # PublishErr PubHttp }
         T resp → {
-            : i st ( http_status resp )
-            ( response_free resp )
+            : i st ( httpc_status resp )
+            ( httpc_resp_free resp )
             ? & >= st 200 < st 300 { ^ @ !i PublishErr { T 0 } } {}
             ? | == st 401 == st 403 { ^ @ !i PublishErr { F # PublishErr PubAuth } } {}
             ? == st 409 { ^ @ !i PublishErr { F # PublishErr PubConflict } } {}
@@ -239,14 +239,14 @@ $ `stdlib/ext/http.nu`
     ( string_push_str hb `Authorization: Bearer ` )
     ( string_push_str hb token )
     ( string_push_str hb `\r\n` )
-    : !Response HttpErr rr ( http_request `POST` ( string_data url ) `` ( string_data hb ) )
+    : !HttpcResp HttpcErr rr ( httpc_request `POST` ( string_data url ) `` ( string_data hb ) )
     ( string_free url )
     ( string_free hb )
     ?? rr {
         F _ → ^ @ !i PublishErr { F # PublishErr PubHttp }
         T resp → {
-            : i st ( http_status resp )
-            ( response_free resp )
+            : i st ( httpc_status resp )
+            ( httpc_resp_free resp )
             ^ ( __pub_status_map st )
         }
     }
@@ -269,14 +269,14 @@ $ `stdlib/ext/http.nu`
     ( string_push_str hb `X-Nurl-Version: ` )
     ( string_push_str hb version )
     ( string_push_str hb `\r\n` )
-    : !Response HttpErr rr ( http_request `POST` ( string_data url ) `` ( string_data hb ) )
+    : !HttpcResp HttpcErr rr ( httpc_request `POST` ( string_data url ) `` ( string_data hb ) )
     ( string_free url )
     ( string_free hb )
     ?? rr {
         F _ → ^ @ !i PublishErr { F # PublishErr PubHttp }
         T resp → {
-            : i st ( http_status resp )
-            ( response_free resp )
+            : i st ( httpc_status resp )
+            ( httpc_resp_free resp )
             ^ ( __pub_status_map st )
         }
     }

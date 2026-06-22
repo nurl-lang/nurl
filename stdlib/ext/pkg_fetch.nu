@@ -20,7 +20,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hash_sha256.nu`
-$ `stdlib/ext/http.nu`
+$ `stdlib/ext/http_cli.nu`
 $ `stdlib/ext/compress.nu`
 $ `stdlib/ext/tar.nu`
 $ `stdlib/ext/registry_index.nu`
@@ -68,16 +68,16 @@ $ `stdlib/ext/registry_index.nu`
 // failure (the resolver treats "" as not-found).
 @ pkg_fetch_index s registry s name → String {
     : String url ( __pkg_index_url registry name )
-    : !Response HttpErr rr ( http_get ( string_data url ) )
+    : !HttpcResp HttpcErr rr ( httpc_get ( string_data url ) )
     ( string_free url )
     ?? rr {
         T resp → {
             : ~ String out ( string_new )
-            ? == ( http_status resp ) 200 {
+            ? == ( httpc_status resp ) 200 {
                 ( string_free out )
-                = out ( string_from ( http_body_str resp ) )
+                = out ( string_from ( httpc_body_str resp ) )
             } {}
-            ( response_free resp )
+            ( httpc_resp_free resp )
             ^ out
         }
         F → ^ ( string_new )
@@ -89,17 +89,17 @@ $ `stdlib/ext/registry_index.nu`
 // gunzip, and tar_unpack into <dest>/<name>. Returns 0 on success.
 @ pkg_install_one s registry s name s version s checksum s dest → !i PkgFetchErr {
     : String url ( regindex_tarball_url registry name version )
-    : !Response HttpErr rr ( http_get ( string_data url ) )
+    : !HttpcResp HttpcErr rr ( httpc_get ( string_data url ) )
     ( string_free url )
     ?? rr {
         F _ → ^ @ !i PkgFetchErr { F # PkgFetchErr PkgHttp }
         T resp → {
-            ? != ( http_status resp ) 200 {
-                ( response_free resp )
+            ? != ( httpc_status resp ) 200 {
+                ( httpc_resp_free resp )
                 ^ @ !i PkgFetchErr { F # PkgFetchErr PkgHttp }
             } {}
-            : ( Vec u ) gz ( http_body_bytes resp )
-            ( response_free resp )
+            : ( Vec u ) gz ( httpc_body_bytes resp )
+            ( httpc_resp_free resp )
             ? == ( vec_len [u] gz ) 0 {
                 ( vec_free [u] gz )
                 ^ @ !i PkgFetchErr { F # PkgFetchErr PkgEmpty }
@@ -148,16 +148,16 @@ $ `stdlib/ext/registry_index.nu`
     ? > rn 0 { ? != ( nurl_str_get registry - rn 1 ) 47 { ( string_push_char url 47 ) } {} } {}
     ( string_push_str url `api/v1/search?q=` )
     ( string_push_str url query )
-    : !Response HttpErr rr ( http_get ( string_data url ) )
+    : !HttpcResp HttpcErr rr ( httpc_get ( string_data url ) )
     ( string_free url )
     ?? rr {
         T resp → {
             : ~ String out ( string_new )
-            ? == ( http_status resp ) 200 {
+            ? == ( httpc_status resp ) 200 {
                 ( string_free out )
-                = out ( string_from ( http_body_str resp ) )
+                = out ( string_from ( httpc_body_str resp ) )
             } {}
-            ( response_free resp )
+            ( httpc_resp_free resp )
             ^ out
         }
         F → ^ ( string_new )
