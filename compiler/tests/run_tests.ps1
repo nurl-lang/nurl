@@ -96,6 +96,21 @@ if (-not (Get-Command $Clang -ErrorAction SilentlyContinue) -and -not (Test-Path
 # build.bat compiles runtime.o WITHOUT -flto and links winhttp only, so
 # no -flto here and no pkg-config feature libs — match that link line.
 $LinkLibs    = '-lwinhttp'
+# Feature libs build.bat detected (zlib/zstd → stdlib\runtime.winlibs), so
+# tests importing stdlib\ext\compress.nu link the same way nurl.bat does
+# (mirrors run_tests.sh's pkg-config LINK_LIBS). Parse into clean argv
+# tokens: -L<dir> (quotes stripped; ArgumentList re-quotes if it has spaces)
+# and -l<name>. Empty when no vcpkg zlib/zstd, leaving those tests to skip.
+$WinLibs = @()
+$winFile = Join-Path $RootDir 'stdlib\runtime.winlibs'
+if (Test-Path $winFile) {
+    $winRaw = [System.IO.File]::ReadAllText($winFile)
+    foreach ($m in [regex]::Matches($winRaw, '-L"([^"]*)"|-L(\S+)|-l(\S+)')) {
+        if     ($m.Groups[1].Success) { $WinLibs += ('-L' + $m.Groups[1].Value) }
+        elseif ($m.Groups[2].Success) { $WinLibs += ('-L' + $m.Groups[2].Value) }
+        else                          { $WinLibs += ('-l' + $m.Groups[3].Value) }
+    }
+}
 $MaxOutLines = if ($env:MAX_OUT_LINES) { [int]$env:MAX_OUT_LINES } else { 200 }
 $Timeout     = if ($env:TIMEOUT)       { [int]$env:TIMEOUT }       else { 60 }
 $Jobs        = if ($env:NURL_TEST_JOBS){ [int]$env:NURL_TEST_JOBS} else { [Environment]::ProcessorCount }
@@ -125,6 +140,7 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
     $Nurlc       = $using:Nurlc
     $Runtime     = $using:Runtime
     $Clang       = $using:Clang
+    $WinLibs     = $using:WinLibs
     $MaxOutLines = $using:MaxOutLines
     $Timeout     = $using:Timeout
     $Update      = $using:updateFlag
@@ -195,7 +211,18 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
         $psi.RedirectStandardError  = $true
         $psi.UseShellExecute        = $false
         $psi.CreateNoWindow         = $true
-        $proc = [System.Diagnostics.Process]::Start($psi)
+        # Windows auto-flags exes whose name contains "install"/"setup"/etc.
+        # as requiring UAC elevation (installer-detection heuristic), which
+        # makes Process.Start throw for e.g. pkg_install_e2e.exe. RunAsInvoker
+        # suppresses that so the test runs unprivileged like on Linux.
+        $psi.Environment['__COMPAT_LAYER'] = 'RunAsInvoker'
+        try {
+            $proc = [System.Diagnostics.Process]::Start($psi)
+        } catch {
+            # Couldn't even launch (e.g. still blocked by policy). Record it
+            # as a run failure instead of crashing the whole worker.
+            return @{ Code = -1; Out = "run failed: $($_.Exception.Message)`n" }
+        }
         $o = $proc.StandardOutput.ReadToEndAsync()
         $e = $proc.StandardError.ReadToEndAsync()
         if (-not $proc.WaitForExit($secs * 1000)) {
@@ -280,7 +307,7 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
         } else {
             # IR must hit disk for clang to consume it.
             [System.IO.File]::WriteAllText($ll, $r.Out, $enc0)
-            $linkArgs = @('-O2', $ll, $Runtime, '-lwinhttp', '-o', $bin)
+            $linkArgs = @('-O2', $ll, $Runtime, '-lwinhttp') + $WinLibs + @('-o', $bin)
             $lr = Run-Proc $Clang $linkArgs $RootDir
             if ($lr.Code -ne 0) {
                 $le = Normalize $lr.Err

@@ -203,6 +203,16 @@ if not errorlevel 1 (
     )
 )
 
+REM Auto-link the FFI libs build.bat detected (issue #229). The resolved
+REM link fragment (-L"<dir>" -lzlib -lzstd) was recorded in runtime.winlibs.
+REM Programs importing stdlib\ext\compress.nu (gzip/zlib + zstd FFI) —
+REM nurlpkg among them — need these at link time; other programs link fine
+REM since the symbols only resolve when referenced.
+if exist "%SCRIPTDIR%stdlib\runtime.winlibs" (
+    set /p WINLIBS=<"%SCRIPTDIR%stdlib\runtime.winlibs"
+    set "EXTRA_LIBS=!EXTRA_LIBS! !WINLIBS!"
+)
+
 REM The runtime's HTTP client uses WinHTTP on Windows (stdlib/runtime.c §14),
 REM so every program linked against runtime.o needs winhttp.lib even if it
 REM doesn't import stdlib/ext/http.nu — unreferenced functions still end up

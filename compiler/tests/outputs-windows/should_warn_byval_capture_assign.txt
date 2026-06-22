@@ -1,0 +1,10 @@
+COMPILE OK
+WARNINGS
+compiler/tests/should_warn_byval_capture_assign.nu:12:21: warning: assignment to 'n' is discarded when the closure returns — it was captured by value (a snapshot), so writes do not persist across invocations or reach the captured binding. For shared mutable state use a ': ~' multi-field struct captured by reference (which cannot escape the defining frame); an escaping mutable-state closure is not supported.
+    ^ \ → i { = n + n 1  ^ n }
+                    ^
+LINK OK
+EXIT 0
+OUTPUT
+1
+1

@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+archive_bytes=356
+magic_PK=T
+count=3
+entry 0: greeting.txt size=16 extract_ok=T crc_len=16
+entry 1: tiny.txt size=1 extract_ok=T crc_len=1
+entry 2: dir/big.dat size=5000 extract_ok=T crc_len=5000
+by_name greeting.txt=hello, zip world
+big_roundtrip_len_ok=T
+missing=not-found
+junk=bad-archive

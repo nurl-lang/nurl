@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+first_mod10=5
+first_gt=1
+first_widen=9223372036854775807
+second_div=-3
+q_second=4000000000

@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+x_plus_y=4
+z=4
+dot_ish=24
+d_plus_f=17

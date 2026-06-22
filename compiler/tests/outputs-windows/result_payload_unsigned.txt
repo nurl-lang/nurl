@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+res_mod10=5
+res_gt=true
+res_direct_mod10=5
+opt_mod10=5
