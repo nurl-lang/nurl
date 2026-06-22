@@ -24,7 +24,14 @@ HTML="$ROOT/nurlweb/public/index.html"
 comma() { echo "$1" | sed -E ':a;s/([0-9])([0-9]{3})($|,)/\1,\2\3/;ta'; }
 
 # ── Compute the facts from the repo ────────────────────────────────────
-version="$(git -C "$ROOT" tag --sort=-version:refname 2>/dev/null | grep -E '^v[0-9]' | head -1)"
+# Version = the newest RELEASED section in CHANGELOG.md. The release PR
+# updates the changelog *before* the `v*` tag is cut, so sourcing the
+# version here means the site tracks a release in the same change instead
+# of lagging until the tag exists (which is what left nurlweb showing the
+# previous version). Fall back to the newest git tag, then v0.0.0.
+version="$(grep -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' "$ROOT/CHANGELOG.md" 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
+[[ -n "$version" ]] && version="v$version"
+[[ -n "$version" ]] || version="$(git -C "$ROOT" tag --sort=-version:refname 2>/dev/null | grep -E '^v[0-9]' | head -1)"
 [[ -n "$version" ]] || version="v0.0.0"
 compiler_lines="$(comma "$(wc -l < "$ROOT/compiler/nurlc.nu")")"
 tests="$(comma "$(find "$ROOT/compiler/tests" -maxdepth 1 -name '*.nu' | wc -l | tr -d ' ')")"
