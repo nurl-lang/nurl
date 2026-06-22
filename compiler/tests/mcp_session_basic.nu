@@ -86,7 +86,7 @@ $ `stdlib/core/vec.nu`
     // ── SSE frame format ──
     : Json sse_data ( json_str_lit `ok` )
     : String frame ( mcp_sse_frame `message` sse_data )
-    ( json_free sse_data )   // mcp_sse_frame borrows its data
+    ( json_free sse_data )  // mcp_sse_frame borrows its data
     ? ! ( string_starts_with frame `event: message\r\ndata: ` ) { ( nurl_print `  FAIL sse-prefix\n` ) = fails + fails 1 } {}
     ? ! ( string_ends_with frame `\r\n\r\n` ) { ( nurl_print `  FAIL sse-suffix\n` ) = fails + fails 1 } {}
     ( string_free frame )

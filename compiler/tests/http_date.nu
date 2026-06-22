@@ -40,9 +40,9 @@ $ `stdlib/std/time.nu`
 
     // RFC 2822 email Date with numeric zones
     ( show2822 `utc_off` `Mon, 02 Jan 2006 15:04:05 +0000` )
-    ( show2822 `neg_off` `Mon, 02 Jan 2006 15:04:05 -0700` )   // == 22:04:05 UTC
+    ( show2822 `neg_off` `Mon, 02 Jan 2006 15:04:05 -0700` )  // == 22:04:05 UTC
     ( show2822 `pos_off` `Mon, 02 Jan 2006 15:04:05 +0530` )
-    ( show2822 `no_dow` `2 Jan 2006 15:04:05 GMT` )            // day-of-week optional
+    ( show2822 `no_dow` `2 Jan 2006 15:04:05 GMT` )  // day-of-week optional
 
     // round-trip: parse → format → must equal input
     : !i ParseErr rt ( http_date_parse `Fri, 31 Dec 1999 23:59:59 GMT` )
@@ -60,9 +60,9 @@ $ `stdlib/std/time.nu`
     }
 
     // rejects
-    ( show `bad_month` `Sun, 06 Xyz 1994 08:49:37 GMT` )       // bad month → ERR
+    ( show `bad_month` `Sun, 06 Xyz 1994 08:49:37 GMT` )  // bad month → ERR
     ( show `garbage` `not a date at all` )
-    ( show2822 `missing_zone` `Mon, 02 Jan 2006 15:04:05` )    // RFC 2822 needs a zone
+    ( show2822 `missing_zone` `Mon, 02 Jan 2006 15:04:05` )  // RFC 2822 needs a zone
 
     ^ 0
 }

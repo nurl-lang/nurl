@@ -7,10 +7,10 @@
 // nurlc accepted (rc 0) and only clang rejected. gen_member now resolves the
 // index exactly like gen_ident (param → %name, local → load __ptr, const →
 // load @name).
-@ at [ i xs i k → i { ^ . xs k }
+@ at [i xs i k → i { ^ . xs k }
 
 @ main → i {
-    : [ i xs [ i | 10 20 30 ]
+    : [i xs [i | 10 20 30]
     ( nurl_print ( nurl_str_int ( at xs 0 ) ) ) ( nurl_print `\n` )
     ( nurl_print ( nurl_str_int ( at xs 2 ) ) ) ( nurl_print `\n` )
     ^ 0

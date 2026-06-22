@@ -17,7 +17,7 @@ $ `stdlib/core/char.nu`
 }
 
 @ main → i {
-    : i c 65   // 'A'
+    : i c 65  // 'A'
 
     // Direct bool-expression casts.
     ( ck `cmp_true  ` # i >= c 10 1 )

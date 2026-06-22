@@ -21,6 +21,7 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/ext/postgres.nu`
 
 @ say s msg → v { ( nurl_print msg ) ( nurl_print `\n` ) }
+
 @ sayi s label i n → v {
     ( nurl_print label ) ( nurl_print ( nurl_str_int n ) ) ( nurl_print `\n` )
 }
@@ -36,21 +37,21 @@ $ `stdlib/ext/postgres.nu`
 }
 
 // Unwrap a !PgResult, returning the live result (caller clears it).
-@ must Connection c !PgResult PgErr r s ctx → PgResult {
+@ must Connection c ! PgResult PgErr r s ctx → PgResult {
     ?? r {
         T res → ^ res
-        F e → { ( die c ctx )  ^ @ PgResult { # s 0 } }
+        F e → { ( die c ctx ) ^ @ PgResult { # s 0 } }
     }
 }
 
 // Run a !PgResult command for effect: unwrap, then clear the result.
-@ okc Connection c !PgResult PgErr r s ctx → v {
+@ okc Connection c ! PgResult PgErr r s ctx → v {
     ( pg_clear ( must c r ctx ) )
 }
 
 // Unwrap a !i command (pg_send / copy / notify family) for effect.
-@ oki Connection c !i PgErr r s ctx → v {
-    ?? r { T _ → {}  F e → ( die c ctx ) }
+@ oki Connection c ! i PgErr r s ctx → v {
+    ?? r { T _ → {} F e → ( die c ctx ) }
 }
 
 // ── 1. Binary result protocol ────────────────────────────────────
@@ -61,7 +62,7 @@ $ `stdlib/ext/postgres.nu`
     : PgParams ps ( pg_params 1 )
     ( pg_bind_int ps 1000000 )
     : !PgResult PgErr rr ( pg_exec_params_binary c
-        `SELECT ($1::int8 * 1000)::int8, 42::int4, 7::int2, true, 3.5::float8` ps )
+    `SELECT ($1::int8 * 1000)::int8, 42::int4, 7::int2, true, 3.5::float8` ps )
     : PgResult r ( must c rr `binary select` )
     ( nurl_print `  binary columns? ` )
     ( say ? ( pg_binary_tuples r ) `yes` `no` )
@@ -94,7 +95,7 @@ $ `stdlib/ext/postgres.nu`
 // ── 3. LISTEN / NOTIFY ───────────────────────────────────────────
 @ demo_notify Connection c → v {
     ( say `── 3. LISTEN / NOTIFY ──` )
-    ( oki c ( pg_listen c `chan` ) `listen` )       // LISTEN chan
+    ( oki c ( pg_listen c `chan` ) `listen` )  // LISTEN chan
     ( oki c ( pg_notify_send c `chan` `hello-from-nurl` ) `notify` )
     // Server delivers async notifications on the next socket read.
     ( oki c ( pg_consume_input c ) `consume` )
@@ -124,7 +125,7 @@ $ `stdlib/ext/postgres.nu`
     ( oki c ( pg_put_copy_str c ( string_from `2\tbeta\n` ) ) `put row 2` )
     ( oki c ( pg_put_copy_str c ( string_from `3\tgamma\n` ) ) `put row 3` )
     ( oki c ( pg_put_copy_end c ) `copy end` )
-    ( okc c ( pg_await c ) `copy in result` )    // COMMAND_OK
+    ( okc c ( pg_await c ) `copy in result` )  // COMMAND_OK
     ( say `  loaded 3 rows via COPY FROM STDIN` )
 
     // COPY TO STDOUT — bulk dump them back.
@@ -142,7 +143,7 @@ $ `stdlib/ext/postgres.nu`
             F _ → = more 0
         }
     }
-    ( okc c ( pg_await c ) `copy out result` )   // COMMAND_OK
+    ( okc c ( pg_await c ) `copy out result` )  // COMMAND_OK
     ( sayi `  dumped rows = ` nrows )
 }
 

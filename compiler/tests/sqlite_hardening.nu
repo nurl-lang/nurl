@@ -26,7 +26,7 @@ $ `stdlib/ext/sqlite.nu`
 @ make_nul_text → String {
     : String s ( string_with_cap 8 )
     ( string_push_char s 97 )  // 'a'
-    ( string_push_char s 0 )   // NUL
+    ( string_push_char s 0 )  // NUL
     ( string_push_char s 98 )  // 'b'
     ^ s
 }

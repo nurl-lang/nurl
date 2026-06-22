@@ -18,7 +18,8 @@ $ `stdlib/net/relay.nu`
 $ `stdlib/net/transport.nu`
 
 @ my_pubkey → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + 7 k ) = k + k 1 } ^ v }
-@ group_id  → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + 200 k ) = k + k 1 } ^ v }
+
+@ group_id → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + 200 k ) = k + k 1 } ^ v }
 
 @ frame s text i n → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : *u sp # *u text : ~ i k 0 ~ < k n { ( vec_push [u] v # u . sp k ) = k + k 1 } ^ v }
 

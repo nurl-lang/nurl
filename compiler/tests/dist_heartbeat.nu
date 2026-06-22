@@ -10,7 +10,9 @@ $ `stdlib/net/membership.nu`
 $ `stdlib/dist/heartbeat.nu`
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
+
 @ mkpk i seed → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + seed k ) = k + k 1 } ^ v }
+
 @ veq ( Vec u ) a ( Vec u ) b → b {
     : i n ( vec_len [u] a ) ? != n ( vec_len [u] b ) { ^ F } {}
     : ~ b e T : ~ i k 0

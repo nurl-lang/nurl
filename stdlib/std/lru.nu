@@ -29,7 +29,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/std/hashmap.nu`   // HashMap, map_*, hash_string, eq_string
+$ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 
 // ctl is a 3-word scalar block (boxed so mutations survive the value-
 // passed struct): [0]=head slot, [1]=tail slot (both -1 when empty),
@@ -47,10 +47,15 @@ $ `stdlib/std/hashmap.nu`   // HashMap, map_*, hash_string, eq_string
 }
 
 @ __lru_head s ctl → i { ^ ( nurl_peek ctl 0 ) }
+
 @ __lru_tail s ctl → i { ^ ( nurl_peek ctl 1 ) }
+
 @ __lru_count s ctl → i { ^ ( nurl_peek ctl 2 ) }
+
 @ __lru_set_head s ctl i v → v { ( nurl_poke ctl 0 v ) }
+
 @ __lru_set_tail s ctl i v → v { ( nurl_poke ctl 1 v ) }
+
 @ __lru_set_count s ctl i v → v { ( nurl_poke ctl 2 v ) }
 
 @ __lru_gi ( Vec i ) v i idx → i {
@@ -132,7 +137,9 @@ $ `stdlib/std/hashmap.nu`   // HashMap, map_*, hash_string, eq_string
 }
 
 @ lru_len [V] ( LruCache V ) c → i { ^ ( __lru_count . c ctl ) }
+
 @ lru_cap [V] ( LruCache V ) c → i { ^ . c cap }
+
 @ lru_is_empty [V] ( LruCache V ) c → b { ^ == ( __lru_count . c ctl ) 0 }
 
 @ lru_contains [V] ( LruCache V ) c s key → b {
@@ -160,7 +167,7 @@ $ `stdlib/std/hashmap.nu`   // HashMap, map_*, hash_string, eq_string
 // then claim a free slot. Returns the evicted value (owned) or None.
 @ __lru_insert_new [V] ( LruCache V ) c s key V val → ?V {
     : s ctl . c ctl
-    : ~ ?V evicted @ ?V { F }
+    : ~ ? V evicted @ ?V { F }
     ? >= ( __lru_count ctl ) . c cap {
         : i t ( __lru_tail ctl )
         ? >= t 0 {

@@ -31,16 +31,18 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 
 & `c` @ nurl_f64_bits f x → i
+
 & `c` @ nurl_f64_from_bits i bits → f
+
 & `c` @ nurl_f32_from_bits i bits → f
 
 : | CborErr {
-    CborDepth        // nested past CBOR_MAX_DEPTH
-    CborTruncated    // ran off the end of the buffer
-    CborBadHead      // reserved additional-info (28..30)
+    CborDepth  // nested past CBOR_MAX_DEPTH
+    CborTruncated  // ran off the end of the buffer
+    CborBadHead  // reserved additional-info (28..30)
     CborUnsupported  // byte string / tag / indefinite / exotic simple
-    CborBadType      // non-text map key
-    CborTrailing     // bytes left after one complete value
+    CborBadType  // non-text map key
+    CborTrailing  // bytes left after one complete value
     CborOther
 }
 
@@ -98,7 +100,7 @@ $ `stdlib/std/bytes.nu`
 @ __cbor_enc Json j ( Vec u ) out i depth → i {
     ? > depth CBOR_MAX_DEPTH { ^ 1 } {}
     ^ ?? j {
-        JNull → { ( vec_push [u] out # u 246 ) 0 }      // 0xf6
+        JNull → { ( vec_push [u] out # u 246 ) 0 }  // 0xf6
         JBool bv → {
             ? bv { ( vec_push [u] out # u 245 ) } { ( vec_push [u] out # u 244 ) }  // f5 / f4
             0
@@ -145,7 +147,7 @@ $ `stdlib/std/bytes.nu`
         ?? ( string_to_int s ) {
             T n → {
                 ? >= n 0 { ( __cbor_head out 0 n ) }
-                { ( __cbor_head out 1 - - 0 n 1 ) }     // major 1, arg = -1-n
+                { ( __cbor_head out 1 - - 0 n 1 ) }  // major 1, arg = -1-n
             }
             F → ( __cbor_enc_f64_str s out )
         }
@@ -160,7 +162,7 @@ $ `stdlib/std/bytes.nu`
     : ~ b isint T
     ~ & < k n isint {
         : i c ( string_get s k )
-        ? | | == c 46 == c 101 == c 69 { = isint F } {}   // . e E
+        ? | | == c 46 == c 101 == c 69 { = isint F } {}  // . e E
         = k + k 1
     }
     ^ isint
@@ -168,7 +170,7 @@ $ `stdlib/std/bytes.nu`
 
 @ __cbor_enc_f64_str String s ( Vec u ) out → v {
     : f x ?? ( string_to_float s ) { T fv → fv F → 0.0 }
-    ( vec_push [u] out # u 251 )                         // 0xfb float64
+    ( vec_push [u] out # u 251 )  // 0xfb float64
     ( bytes_push_u64_be out # u64 ( nurl_f64_bits x ) )
 }
 
@@ -185,6 +187,7 @@ $ `stdlib/std/bytes.nu`
 }
 
 @ __cd_free * CborDec p → v { ( nurl_free # s p ) }
+
 @ __cd_remaining * CborDec p → i { ^ - . p len . p pos }
 
 @ __cd_u8 * CborDec p → i {
@@ -308,7 +311,7 @@ $ `stdlib/std/bytes.nu`
     ? == ai 20 { ^ @ !Json CborErr { T ( json_bool F ) } } {}
     ? == ai 21 { ^ @ !Json CborErr { T ( json_bool T ) } } {}
     ? == ai 22 { ^ @ !Json CborErr { T ( json_null ) } } {}
-    ? == ai 23 { ^ @ !Json CborErr { T ( json_null ) } } {}   // undefined → null
+    ? == ai 23 { ^ @ !Json CborErr { T ( json_null ) } } {}  // undefined → null
     ? == ai 25 {
         ? < ( __cd_remaining p ) 2 { ^ @ !Json CborErr { F @ CborErr { CborTruncated } } } {}
         ^ @ !Json CborErr { T ( json_float ( __cbor_half_to_f64 ( __cd_be p 2 ) ) ) }
@@ -328,7 +331,7 @@ $ `stdlib/std/bytes.nu`
 // IEEE half (16-bit) → f64, via the f32 bit pattern (handles zero,
 // subnormal, normal, inf, NaN).
 @ __cbor_half_to_f64 i h → f {
-    : i sign << & / h 32768 1 31           // f32 sign bit
+    : i sign << & / h 32768 1 31  // f32 sign bit
     : i exp & / h 1024 31
     : i mant & h 1023
     : ~ i bits 0
@@ -343,9 +346,9 @@ $ `stdlib/std/bytes.nu`
         }
     } {
         ? == exp 31 {
-            = bits | sign | << 255 23 << mant 13          // inf / NaN
+            = bits | sign | << 255 23 << mant 13  // inf / NaN
         } {
-            = bits | sign | << + - exp 15 127 23 << mant 13   // normal
+            = bits | sign | << + - exp 15 127 23 << mant 13  // normal
         }
     }
     ^ ( nurl_f32_from_bits bits )

@@ -11,14 +11,16 @@ $ `stdlib/core/string.nu`
 % Ord i {
     @ ord_cmp i a i b → i { ? < a b { ^ -1 } {} ? > a b { ^ 1 } {} ^ 0 }
 }
+
 % Ord String {
     @ ord_cmp String a String b → i { ^ ( nurl_str_cmp ( string_data a ) ( string_data b ) ) }
 }
 
-@ my_max [A: Ord] A x A y → A {
+@ my_max [A : Ord] A x A y → A {
     ? > ( ord_cmp x y ) 0 { ^ x } { ^ y }
 }
-@ my_min [A: Ord] A x A y → A {
+
+@ my_min [A : Ord] A x A y → A {
     ? < ( ord_cmp x y ) 0 { ^ x } { ^ y }
 }
 

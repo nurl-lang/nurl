@@ -5,9 +5,9 @@
 
 $ `stdlib/core/string.nu`
 
-: s g_ptr 0          // pointer-typed global → `null` initialiser
-: String g_str 0     // aggregate global → `zeroinitializer`
-: i g_mask 0xFF      // hex integer-global initialiser
+: s g_ptr 0  // pointer-typed global → `null` initialiser
+: String g_str 0  // aggregate global → `zeroinitializer`
+: i g_mask 0xFF  // hex integer-global initialiser
 
 @ classify i op → i {
     ?? op {
@@ -19,7 +19,7 @@ $ `stdlib/core/string.nu`
     }
 }
 
-: | Tagged { TagCode i  TagOther i }
+: | Tagged { TagCode i TagOther i }
 
 // Enum field-constraint with a hex literal.
 @ name_of Tagged t → s {
@@ -33,11 +33,11 @@ $ `stdlib/core/string.nu`
 
 @ main → i {
     // Literals in expressions.
-    ( nurl_print ( nurl_str_int 0xFF ) ) ( nurl_print ` ` )         // 255
-    ( nurl_print ( nurl_str_int 0b1010 ) ) ( nurl_print ` ` )       // 10
+    ( nurl_print ( nurl_str_int 0xFF ) ) ( nurl_print ` ` )  // 255
+    ( nurl_print ( nurl_str_int 0b1010 ) ) ( nurl_print ` ` )  // 10
     ( nurl_print ( nurl_str_int & 0xF0 0x3C ) ) ( nurl_print ` ` )  // 0x30 = 48
-    ( nurl_print ( nurl_str_int << 0x1 4 ) ) ( nurl_print ` ` )     // 16
-    ( nurl_print ( nurl_str_int g_mask ) ) ( nurl_print `\n` )      // 255
+    ( nurl_print ( nurl_str_int << 0x1 4 ) ) ( nurl_print ` ` )  // 16
+    ( nurl_print ( nurl_str_int g_mask ) ) ( nurl_print `\n` )  // 255
 
     // Literals in match patterns.
     ( nurl_print ( nurl_str_int ( classify 0x00 ) ) )
@@ -54,6 +54,6 @@ $ `stdlib/core/string.nu`
 
     // Pointer / aggregate globals initialise cleanly (null / zeroinit).
     ( nurl_print ( nurl_str_int ? == 0 # i g_ptr 1 0 ) ) ( nurl_print ` ` )  // 1
-    ( nurl_print ( nurl_str_int ( string_len g_str ) ) ) ( nurl_print `\n` ) // 0
+    ( nurl_print ( nurl_str_int ( string_len g_str ) ) ) ( nurl_print `\n` )  // 0
     ^ 0
 }

@@ -9,7 +9,7 @@
 // by reference — which cannot escape its frame).
 @ make_counter → ( @ i ) {
     : ~ i n 0
-    ^ \ → i { = n + n 1  ^ n }
+    ^ \ → i { = n + n 1 ^ n }
 }
 
 @ main → i {

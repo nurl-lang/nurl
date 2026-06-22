@@ -50,12 +50,12 @@ $ `stdlib/ext/json.nu`
 $ `stdlib/ext/crypto.nu`
 
 : | JwtErr {
-    JwtMalformed       // not three '.'-separated segments / bad base64url
-    JwtBadSignature    // signature did not verify
-    JwtExpired         // now ≥ exp
-    JwtNotYetValid     // now < nbf
+    JwtMalformed  // not three '.'-separated segments / bad base64url
+    JwtBadSignature  // signature did not verify
+    JwtExpired  // now ≥ exp
+    JwtNotYetValid  // now < nbf
     JwtUnsupportedAlg  // header alg not the one this verifier expects
-    JwtBadClaims       // payload is not a JSON object
+    JwtBadClaims  // payload is not a JSON object
 }
 
 // ── Segment helpers ────────────────────────────────────────────────
@@ -93,9 +93,9 @@ $ `stdlib/ext/crypto.nu`
     : i d2 ( __jwt_dot_at token 2 )
     ? < d0 0 { ^ F } {}
     ? < d1 0 { ^ F } {}
-    ? >= d2 0 { ^ F } {}        // a third dot ⇒ malformed
-    ? <= d0 0 { ^ F } {}        // empty header
-    ? <= - d1 d0 1 { ^ F } {}   // empty payload
+    ? >= d2 0 { ^ F } {}  // a third dot ⇒ malformed
+    ? <= d0 0 { ^ F } {}  // empty header
+    ? <= - d1 d0 1 { ^ F } {}  // empty payload
     ? >= + d1 1 len { ^ F } {}  // empty signature
     ( nurl_poke # s d0p 0 d0 )
     ( nurl_poke # s d1p 0 d1 )

@@ -41,6 +41,7 @@
 }
 
 @ bitset_nbits Bitset bs → i { ^ . bs nbits }
+
 @ bitset_words Bitset bs → i { ^ . bs nwords }
 
 @ __bit_inrange Bitset bs i bit → b {
@@ -61,7 +62,7 @@
         : s w . bs words
         : i limb / bit 64
         : i mask << 1 % bit 64
-        ( nurl_poke w limb & ( nurl_peek w limb ) - -1 mask )   // &= ~mask
+        ( nurl_poke w limb & ( nurl_peek w limb ) - -1 mask )  // &= ~mask
     } {}
 }
 
@@ -71,7 +72,7 @@
         : i limb / bit 64
         : i mask << 1 % bit 64
         : i cur ( nurl_peek w limb )
-        ( nurl_poke w limb - | cur mask & cur mask )            // ^= mask
+        ( nurl_poke w limb - | cur mask & cur mask )  // ^= mask
     } {}
 }
 
@@ -98,8 +99,8 @@
     : ~ i k 0
     ~ < k nw {
         ? & == k - nw 1 != rem 0
-        { ( nurl_poke w k - << 1 rem 1 ) }   // last partial word: low `rem` bits
-        { ( nurl_poke w k -1 ) }             // full word: all ones
+        { ( nurl_poke w k - << 1 rem 1 ) }  // last partial word: low `rem` bits
+        { ( nurl_poke w k -1 ) }  // full word: all ones
         = k + k 1
     }
 }

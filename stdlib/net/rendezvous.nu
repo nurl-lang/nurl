@@ -37,9 +37,12 @@ $ `stdlib/std/async.nu`
 & `libc` @ nurl_tcp_connect s host i port → i
 
 @ rz_register → i { ^ 1 }
-@ rz_lookup  → i { ^ 2 }
-@ rz_ok      → i { ^ 3 }
-@ rz_record  → i { ^ 4 }
+
+@ rz_lookup → i { ^ 2 }
+
+@ rz_ok → i { ^ 3 }
+
+@ rz_record → i { ^ 4 }
 
 @ __rz_max → i { ^ 65536 }
 
@@ -52,12 +55,12 @@ $ `stdlib/std/async.nu`
 
 : PeerRecord {
     ( Vec u ) pubkey
-    ( Vec s ) endpoints   // *Endpoint
+    ( Vec s ) endpoints  // *Endpoint
     String relay_host
     i relay_port
 }
 
-@ endpoint_free *Endpoint e → v { ( string_free . e host ) ( nurl_free # s e ) }
+@ endpoint_free * Endpoint e → v { ( string_free . e host ) ( nurl_free # s e ) }
 
 @ peer_record_new ( Vec u ) pubkey s relay_host i relay_port → s {
     : *PeerRecord r # *PeerRecord ( nurl_alloc Z PeerRecord )
@@ -70,14 +73,14 @@ $ `stdlib/std/async.nu`
     ^ # s r
 }
 
-@ peer_record_add_endpoint *PeerRecord r s host i port → v {
+@ peer_record_add_endpoint * PeerRecord r s host i port → v {
     : *Endpoint e # *Endpoint ( nurl_alloc Z Endpoint )
     = . e host ( string_from host )
     = . e port port
     ( vec_push [s] . r endpoints # s e )
 }
 
-@ peer_record_free *PeerRecord r → v {
+@ peer_record_free * PeerRecord r → v {
     ( vec_free [u] . r pubkey )
     : i n ( vec_len [s] . r endpoints )
     : ~ i k 0
@@ -102,7 +105,7 @@ $ `stdlib/std/async.nu`
     ~ < k n { ( vec_push [u] b # u . sp k ) = k + k 1 }
 }
 
-@ rz_record_encode *PeerRecord r → ( Vec u ) {
+@ rz_record_encode * PeerRecord r → ( Vec u ) {
     : ( Vec u ) b ( vec_new [u] )
     ( vec_extend [u] b . r pubkey )
     ( __rz_put_str b . r relay_host )
@@ -127,24 +130,28 @@ $ `stdlib/std/async.nu`
     ( Vec u ) buf
     i off
 }
-@ __rz_u8 *RzCursor c → i {
+
+@ __rz_u8 * RzCursor c → i {
     : i v ?? ( vec_get [u] . c buf . c off ) { T x → # i x F → 0 }
     = . c off + . c off 1
     ^ v
 }
-@ __rz_u16 *RzCursor c → i {
+
+@ __rz_u16 * RzCursor c → i {
     : i v ?? ( bytes_read_u16_be . c buf . c off ) { T x → # i x F → 0 }
     = . c off + . c off 2
     ^ v
 }
-@ __rz_take *RzCursor c i n → ( Vec u ) {
+
+@ __rz_take * RzCursor c i n → ( Vec u ) {
     : ( Vec u ) o ( vec_with_cap [u] n )
     : ~ i k 0
     ~ < k n { ?? ( vec_get [u] . c buf + . c off k ) { T b → ( vec_push [u] o b ) F → {} } = k + k 1 }
     = . c off + . c off n
     ^ o
 }
-@ __rz_str *RzCursor c → String {
+
+@ __rz_str * RzCursor c → String {
     : i n ( __rz_u16 c )
     : String s ( string_with_cap n )
     : ~ i k 0
@@ -153,7 +160,7 @@ $ `stdlib/std/async.nu`
 }
 
 // Decode a record from a cursor; returns *PeerRecord.
-@ __rz_get_record *RzCursor c → s {
+@ __rz_get_record * RzCursor c → s {
     : *PeerRecord r # *PeerRecord ( nurl_alloc Z PeerRecord )
     = . r pubkey ( __rz_take c 32 )
     = . r relay_host ( __rz_str c )
@@ -187,6 +194,7 @@ $ `stdlib/std/async.nu`
     i ftype
     ( Vec u ) body
 }
+
 @ rz_frame_free RzFrame fr → v { ( vec_free [u] . fr body ) }
 
 @ __rz_frame i ftype ( Vec u ) body → ( Vec u ) {
@@ -197,20 +205,23 @@ $ `stdlib/std/async.nu`
     ^ f
 }
 
-@ rz_build_register *PeerRecord r → ( Vec u ) {
+@ rz_build_register * PeerRecord r → ( Vec u ) {
     : ( Vec u ) body ( rz_record_encode r )
     : ( Vec u ) f ( __rz_frame ( rz_register ) body )
     ( vec_free [u] body )
     ^ f
 }
+
 @ rz_build_lookup ( Vec u ) pubkey → ( Vec u ) { ^ ( __rz_frame ( rz_lookup ) pubkey ) }
+
 @ rz_build_ok → ( Vec u ) {
     : ( Vec u ) empty ( vec_new [u] )
     : ( Vec u ) f ( __rz_frame ( rz_ok ) empty )
     ( vec_free [u] empty )
     ^ f
 }
-@ rz_build_record_found *PeerRecord r → ( Vec u ) {
+
+@ rz_build_record_found * PeerRecord r → ( Vec u ) {
     : ( Vec u ) body ( vec_new [u] )
     ( vec_push [u] body # u 1 )
     : ( Vec u ) rec ( rz_record_encode r )
@@ -220,6 +231,7 @@ $ `stdlib/std/async.nu`
     ( vec_free [u] body )
     ^ f
 }
+
 @ rz_build_record_notfound → ( Vec u ) {
     : ( Vec u ) body ( vec_new [u] )
     ( vec_push [u] body # u 0 )
@@ -263,7 +275,7 @@ $ `stdlib/std/async.nu`
 }
 
 @ rz_read_frame TcpConn c → ?RzFrame {
-    : ~ ?RzFrame out @ ?RzFrame { F # RzFrame 0 }
+    : ~ ? RzFrame out @ ?RzFrame { F # RzFrame 0 }
     : ?( Vec u ) hdr ( __rz_read_exact c 5 )
     ?? hdr {
         T h → {
@@ -289,7 +301,7 @@ $ `stdlib/std/async.nu`
 
 : RzServer {
     TcpListener lst
-    ( Vec s ) records   // *PeerRecord
+    ( Vec s ) records  // *PeerRecord
 }
 
 @ rz_server_start s host i port → !RzServer NetErr {
@@ -314,7 +326,7 @@ $ `stdlib/std/async.nu`
     ^ e
 }
 
-@ __rz_find *RzServer rs ( Vec u ) pk → s {
+@ __rz_find * RzServer rs ( Vec u ) pk → s {
     : i n ( vec_len [s] . rs records )
     : ~ s found # s 0
     : ~ i k 0
@@ -330,7 +342,7 @@ $ `stdlib/std/async.nu`
 }
 
 // Insert or replace the record for a pubkey (latest registration wins).
-@ __rz_upsert *RzServer rs s newrec → v {
+@ __rz_upsert * RzServer rs s newrec → v {
     : *PeerRecord nr # *PeerRecord newrec
     : s old ( __rz_find rs . nr pubkey )
     ? != # i old 0 {
@@ -345,7 +357,7 @@ $ `stdlib/std/async.nu`
     } { ( vec_push [s] . rs records newrec ) }
 }
 
-@ __rz_handle_conn *RzServer rs TcpConn c → v {
+@ __rz_handle_conn * RzServer rs TcpConn c → v {
     : ~ b done F
     ~ ! done {
         : ?RzFrame fr ( rz_read_frame c )
@@ -372,7 +384,7 @@ $ `stdlib/std/async.nu`
     ( tcp_close_conn c )
 }
 
-@ __rz_accept_loop *RzServer rs → v {
+@ __rz_accept_loop * RzServer rs → v {
     : TcpListener lst . rs lst
     : ~ b done F
     ~ ! done {
@@ -384,7 +396,7 @@ $ `stdlib/std/async.nu`
     }
 }
 
-@ rz_server_run *RzServer rs → v {
+@ rz_server_run * RzServer rs → v {
     ( tcp_listener_retain . rs lst )
     : ( @ v ) accept_fiber \ → v { ( __rz_accept_loop rs ) }
     ( spawn accept_fiber )
@@ -394,9 +406,9 @@ $ `stdlib/std/async.nu`
     ( nurl_free # s accept_env )
 }
 
-@ rz_server_stop *RzServer rs → v { ( tcp_close_listener . rs lst ) }
+@ rz_server_stop * RzServer rs → v { ( tcp_close_listener . rs lst ) }
 
-@ rz_server_free *RzServer rs → v {
+@ rz_server_free * RzServer rs → v {
     : i n ( vec_len [s] . rs records )
     : ~ i k 0
     ~ < k n {
@@ -426,7 +438,7 @@ $ `stdlib/std/async.nu`
 }
 
 // Publish our record; waits for the server's OK.
-@ rz_register_self RzClient rc *PeerRecord r → !v NetErr {
+@ rz_register_self RzClient rc * PeerRecord r → !v NetErr {
     : ( Vec u ) f ( rz_build_register r )
     : !v NetErr wr ( tcp_write_all . rc conn f )
     ( vec_free [u] f )

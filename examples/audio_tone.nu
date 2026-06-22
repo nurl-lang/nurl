@@ -9,8 +9,11 @@
 // bits = right (both signed 16-bit) — pushed at 48 kHz.
 
 & `canvas` @ canvas_open i w i h → *i
+
 & `canvas` @ canvas_present → v
+
 & `canvas` @ canvas_sleep i ms → v
+
 & `canvas` @ canvas_should_close → i
 
 // Audio output sink (provided by the playground; a no-op import elsewhere).
@@ -20,8 +23,8 @@
 // A one-octave major scale (C4..C5), in Hz.
 @ note_freq i n → i {
     ?? n {
-        0 → ^ 262   1 → ^ 294   2 → ^ 330   3 → ^ 349
-        4 → ^ 392   5 → ^ 440   6 → ^ 494   7 → ^ 523
+        0 → ^ 262 1 → ^ 294 2 → ^ 330 3 → ^ 349
+        4 → ^ 392 5 → ^ 440 6 → ^ 494 7 → ^ 523
         _ → ^ 440
     }
 }
@@ -30,12 +33,12 @@
     : i W 320
     : i H 140
     : *i fb ( canvas_open W H )
-    : s sbuf ( nurl_zalloc * 2048 8 )       // packed samples handed to audio
-    : *i scope # *i ( malloc * 2048 8 )     // raw signed samples for the scope
+    : s sbuf ( nurl_zalloc * 2048 8 )  // packed samples handed to audio
+    : *i scope # *i ( malloc * 2048 8 )  // raw signed samples for the scope
 
     : i rate 48000
-    : i spf 800                             // samples per frame (≈ 48000 / 60)
-    : i amp 5000                            // square-wave amplitude (modest)
+    : i spf 800  // samples per frame (≈ 48000 / 60)
+    : i amp 5000  // square-wave amplitude (modest)
 
     : ~ i phase 0
     : ~ i note 0
@@ -61,7 +64,7 @@
         // ── draw: clear, then plot the waveform ──
         : i tot * W H
         : ~ i p 0
-        ~ < p tot { = . fb p 0xFF101418  = p + p 1 }
+        ~ < p tot { = . fb p 0xFF101418 = p + p 1 }
 
         : ~ i x 0
         ~ < x W {
@@ -78,7 +81,7 @@
         ( canvas_sleep 16 )
 
         = frame + frame 1
-        ? >= frame 28 { = frame 0  = note % + note 1 8 } {}   // next note ≈ 0.47 s
+        ? >= frame 28 { = frame 0 = note % + note 1 8 } {}  // next note ≈ 0.47 s
     }
     ^ 0
 }

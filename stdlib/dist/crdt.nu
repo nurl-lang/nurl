@@ -28,8 +28,8 @@ $ `stdlib/core/vec.nu`
 // ════════════════════════════════════════════════════════════════
 
 : PNCounter {
-    ( Vec i ) inc_id    // replica ids that have incremented
-    ( Vec i ) inc_amt   // inc_amt[k] = total increments by replica inc_id[k]
+    ( Vec i ) inc_id  // replica ids that have incremented
+    ( Vec i ) inc_amt  // inc_amt[k] = total increments by replica inc_id[k]
     ( Vec i ) dec_id
     ( Vec i ) dec_amt
 }
@@ -42,13 +42,15 @@ $ `stdlib/core/vec.nu`
     = . c dec_amt ( vec_new [i] )
     ^ c
 }
-@ pncounter_free *PNCounter c → v {
+
+@ pncounter_free * PNCounter c → v {
     ( vec_free [i] . c inc_id ) ( vec_free [i] . c inc_amt )
     ( vec_free [i] . c dec_id ) ( vec_free [i] . c dec_amt )
     ( nurl_free # s c )
 }
 
 @ __pn_at ( Vec i ) v i idx → i { ^ ?? ( vec_get [i] v idx ) { T x → x F → 0 } }
+
 @ __pn_sum ( Vec i ) v → i {
     : i n ( vec_len [i] v ) : ~ i s 0 : ~ i k 0
     ~ < k n { = s + s ( __pn_at v k ) = k + k 1 }
@@ -66,9 +68,11 @@ $ `stdlib/core/vec.nu`
     ? >= j 0 { ( vec_set [i] amts j + ( __pn_at amts j ) amt ) } { ( vec_push [i] ids id ) ( vec_push [i] amts amt ) }
 }
 
-@ pncounter_inc *PNCounter c i replica i amt → v { ( __pn_bump . c inc_id . c inc_amt replica amt ) }
-@ pncounter_dec *PNCounter c i replica i amt → v { ( __pn_bump . c dec_id . c dec_amt replica amt ) }
-@ pncounter_value *PNCounter c → i { ^ - ( __pn_sum . c inc_amt ) ( __pn_sum . c dec_amt ) }
+@ pncounter_inc * PNCounter c i replica i amt → v { ( __pn_bump . c inc_id . c inc_amt replica amt ) }
+
+@ pncounter_dec * PNCounter c i replica i amt → v { ( __pn_bump . c dec_id . c dec_amt replica amt ) }
+
+@ pncounter_value * PNCounter c → i { ^ - ( __pn_sum . c inc_amt ) ( __pn_sum . c dec_amt ) }
 
 // merge src (ids,amts) into dst, taking the max per replica id (insert if new)
 @ __pn_max_into ( Vec i ) dids ( Vec i ) damts ( Vec i ) sids ( Vec i ) samts → v {
@@ -82,7 +86,7 @@ $ `stdlib/core/vec.nu`
     }
 }
 // Merge a peer's counter into this one (idempotent, commutative).
-@ pncounter_merge *PNCounter a *PNCounter b → v {
+@ pncounter_merge * PNCounter a * PNCounter b → v {
     ( __pn_max_into . a inc_id . a inc_amt . b inc_id . b inc_amt )
     ( __pn_max_into . a dec_id . a dec_amt . b dec_id . b dec_amt )
 }
@@ -98,9 +102,11 @@ $ `stdlib/core/vec.nu`
     i replica
 }
 
-@ lww_new → LwwReg { ^ @ LwwReg { 0 0 - 0 1 } }   // ts 0, replica -1 = "unset"
+@ lww_new → LwwReg { ^ @ LwwReg { 0 0 - 0 1 } }  // ts 0, replica -1 = "unset"
 @ lww_set LwwReg r i value i ts i replica → LwwReg { ^ @ LwwReg { value ts replica } }
+
 @ lww_value LwwReg r → i { ^ . r value }
+
 @ lww_ts LwwReg r → i { ^ . r ts }
 
 @ lww_merge LwwReg a LwwReg b → LwwReg {
@@ -124,9 +130,9 @@ $ `stdlib/core/vec.nu`
 }
 
 : OrSet {
-    ( Vec s ) adds    // *OrTag
-    ( Vec s ) tombs   // *OrTag
-    i next_seq        // this replica's local tag counter
+    ( Vec s ) adds  // *OrTag
+    ( Vec s ) tombs  // *OrTag
+    i next_seq  // this replica's local tag counter
 }
 
 @ orset_new → *OrSet {
@@ -136,12 +142,14 @@ $ `stdlib/core/vec.nu`
     = . s next_seq 0
     ^ s
 }
+
 @ __orset_free_vec ( Vec s ) v → v {
     : i n ( vec_len [s] v ) : ~ i k 0
     ~ < k n { : s pp ?? ( vec_get [s] v k ) { T x → x F → # s 0 } ? != # i pp 0 { ( nurl_free pp ) } {} = k + k 1 }
     ( vec_free [s] v )
 }
-@ orset_free *OrSet s → v { ( __orset_free_vec . s adds ) ( __orset_free_vec . s tombs ) ( nurl_free # s s ) }
+
+@ orset_free * OrSet s → v { ( __orset_free_vec . s adds ) ( __orset_free_vec . s tombs ) ( nurl_free # s s ) }
 
 @ __tag_in ( Vec s ) v i elem i replica i seq → b {
     : i n ( vec_len [s] v ) : ~ b found F : ~ i k 0
@@ -155,6 +163,7 @@ $ `stdlib/core/vec.nu`
     }
     ^ found
 }
+
 @ __tag_push ( Vec s ) v i elem i replica i seq → v {
     : *OrTag t # *OrTag ( nurl_alloc Z OrTag )
     = . t elem elem = . t replica replica = . t seq seq
@@ -162,13 +171,13 @@ $ `stdlib/core/vec.nu`
 }
 
 // Add an element under this replica's id (gets a fresh unique tag).
-@ orset_add *OrSet s i replica i elem → v {
+@ orset_add * OrSet s i replica i elem → v {
     ( __tag_push . s adds elem replica . s next_seq )
     = . s next_seq + . s next_seq 1
 }
 
 // Remove an element: tombstone every currently-observed add-tag for it.
-@ orset_remove *OrSet s i elem → v {
+@ orset_remove * OrSet s i elem → v {
     : i n ( vec_len [s] . s adds ) : ~ i k 0
     ~ < k n {
         : s pp ?? ( vec_get [s] . s adds k ) { T x → x F → # s 0 }
@@ -183,7 +192,7 @@ $ `stdlib/core/vec.nu`
 }
 
 // Present iff some add-tag for the element is not tombstoned.
-@ orset_contains *OrSet s i elem → b {
+@ orset_contains * OrSet s i elem → b {
     : i n ( vec_len [s] . s adds ) : ~ b found F : ~ i k 0
     ~ & ! found < k n {
         : s pp ?? ( vec_get [s] . s adds k ) { T x → x F → # s 0 }
@@ -208,7 +217,7 @@ $ `stdlib/core/vec.nu`
     }
 }
 // Merge a peer's set (union adds, union tombs) — idempotent, commutative.
-@ orset_merge *OrSet a *OrSet b → v {
+@ orset_merge * OrSet a * OrSet b → v {
     ( __merge_tags . a adds . b adds )
     ( __merge_tags . a tombs . b tombs )
 }

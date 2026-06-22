@@ -99,7 +99,7 @@ $ `stdlib/ext/env.nu`
 }
 
 // Server thread reads one chunk and echoes it back, then closes.
-: ~ i g_srv_path 0   // sym handle carrying the socket path to the thread
+: ~ i g_srv_path 0  // sym handle carrying the socket path to the thread
 : ~ i g_done 0
 
 @ __live_roundtrip → v {

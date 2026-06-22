@@ -137,11 +137,11 @@ $ `stdlib/ext/env.nu`
         F → {}
     }
     ( string_push_str body registry )
-    ( string_push_char body 9 )    // TAB
+    ( string_push_char body 9 )  // TAB
     ( string_push_str body token )
-    ( string_push_char body 10 )   // \n
+    ( string_push_char body 10 )  // \n
     : !v IoErr wr ( write_file ( string_data path ) ( string_data body ) )
-    ( chmod ( string_data path ) 384 )    // 0600
+    ( chmod ( string_data path ) 384 )  // 0600
     ( string_free body )
     ( string_free path )
     ^ wr
@@ -160,7 +160,7 @@ $ `stdlib/ext/env.nu`
             ( string_free body )
             ( string_free content )
         }
-        F → {}    // no file → nothing to remove
+        F → {}  // no file → nothing to remove
     }
     ( string_free path )
     ? != rc 0 { ^ @ !v IoErr { F # IoErr WriteFailed } } {}

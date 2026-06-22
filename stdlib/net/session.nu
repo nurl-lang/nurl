@@ -20,8 +20,8 @@ $ `stdlib/net/noise.nu`
     ( Vec u ) send_key
     ( Vec u ) recv_key
     i send_n
-    i recv_max     // highest accepted recv counter (-1 = none yet)
-    i recv_mask    // 64-bit window; bit 0 = recv_max, bit k = recv_max-k
+    i recv_max  // highest accepted recv counter (-1 = none yet)
+    i recv_mask  // 64-bit window; bit 0 = recv_max, bit k = recv_max-k
 }
 
 @ __vcopy ( Vec u ) v → ( Vec u ) {
@@ -40,7 +40,7 @@ $ `stdlib/net/noise.nu`
     ^ s
 }
 
-@ session_free *NoiseSession s → v {
+@ session_free * NoiseSession s → v {
     ( vec_free [u] . s send_key )
     ( vec_free [u] . s recv_key )
     ( nurl_free # s s )
@@ -53,11 +53,11 @@ $ `stdlib/net/noise.nu`
 
 @ sealed_free Sealed s → v { ( vec_free [u] . s ct ) }
 
-@ session_seal *NoiseSession s ( Vec u ) ad ( Vec u ) pt → Sealed {
+@ session_seal * NoiseSession s ( Vec u ) ad ( Vec u ) pt → Sealed {
     : i ctr . s send_n
     : ( Vec u ) nonce ( noise_nonce ctr )
     : ( Vec u ) ct ?? ( chacha20poly1305_encrypt . s send_key nonce ad pt )
-    { T x → x  F _ → ( vec_new [u] ) }
+    { T x → x F _ → ( vec_new [u] ) }
     ( vec_free [u] nonce )
     = . s send_n + . s send_n 1
     ^ @ Sealed { ctr ct }
@@ -66,7 +66,7 @@ $ `stdlib/net/noise.nu`
 // Sliding-window replay check + commit. Returns T (accept) only for a
 // counter not already seen and not older than the 64-wide window. Mutates
 // the window on accept. Call ONLY after a successful AEAD decrypt.
-@ __replay_ok *NoiseSession s i c → b {
+@ __replay_ok * NoiseSession s i c → b {
     : i mx . s recv_max
     ? > c mx {
         : i shift - c mx
@@ -83,7 +83,7 @@ $ `stdlib/net/noise.nu`
     ^ T
 }
 
-@ session_open *NoiseSession s i counter ( Vec u ) ad ( Vec u ) ct → ?( Vec u ) {
+@ session_open * NoiseSession s i counter ( Vec u ) ad ( Vec u ) ct → ?( Vec u ) {
     : ( Vec u ) nonce ( noise_nonce counter )
     : !( Vec u ) CryptoErr dr ( chacha20poly1305_decrypt . s recv_key nonce ad ct )
     ( vec_free [u] nonce )

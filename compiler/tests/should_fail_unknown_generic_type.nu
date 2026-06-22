@@ -4,7 +4,8 @@
 // opaque unsized type and clang rejected with "loading unsized types
 // is not allowed" — far from the real cause. Now a hard error at the
 // type's use site naming the missing import.
-: | E { Nil  V ( Vec i ) }
+: | E { Nil V ( Vec i ) }
+
 @ main → i {
     : E e @ E { Nil }
     ?? e {

@@ -24,15 +24,15 @@ $ `stdlib/std/supervisor.nu`
     : Supervisor sup ( supervisor_new 10 100000 )
     ( supervisor_set_strategy sup st )
     ( supervisor_add sup `a` @ RestartPolicy { RTransient }
-        \ → v { ( nurl_poke ca 0 + 1 ( nurl_peek ca 0 ) ) } )
+    \ → v { ( nurl_poke ca 0 + 1 ( nurl_peek ca 0 ) ) } )
     ( supervisor_add sup `b` @ RestartPolicy { RTransient }
-        \ → v {
-            : i n + 1 ( nurl_peek cb 0 )
-            ( nurl_poke cb 0 n )
-            ? == n 1 { ( panic `b first run` ) } {}
-        } )
+    \ → v {
+        : i n + 1 ( nurl_peek cb 0 )
+        ( nurl_poke cb 0 n )
+        ? == n 1 { ( panic `b first run` ) } {}
+    } )
     ( supervisor_add sup `c` @ RestartPolicy { RTransient }
-        \ → v { ( nurl_poke cc 0 + 1 ( nurl_peek cc 0 ) ) } )
+    \ → v { ( nurl_poke cc 0 + 1 ( nurl_peek cc 0 ) ) } )
 
     : b stable ( supervisor_start sup )
 

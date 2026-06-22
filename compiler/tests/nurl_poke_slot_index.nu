@@ -23,7 +23,6 @@
 // regular `./build.sh` run the test is a fast no-op that confirms
 // the slot-indexed accessor pair is consistent.
 
-
 @ main → i {
     : i n 32
     : i bytes * n 8

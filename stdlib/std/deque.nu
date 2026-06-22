@@ -28,7 +28,6 @@
 //   ( deque_free       [A] d )            → v
 //   ( deque_free_with  [A] d drop )       → v   drop : (@ v A)
 
-
 : Deque [A] { s ctl }
 
 // ── Internal ──────────────────────────────────────────────────────────

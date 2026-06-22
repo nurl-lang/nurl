@@ -31,16 +31,16 @@ $ `stdlib/std/supervisor.nu`
     ( supervisor_set_strategy sup @ SupStrategy { OneForAll } )
 
     ( supervisor_add sup `db` @ RestartPolicy { RTransient }
-        \ → v { ( say `db` ) } )
+    \ → v { ( say `db` ) } )
     ( supervisor_add sup `config` @ RestartPolicy { RTransient }
-        \ → v {
-            : i n + 1 ( nurl_peek fails 0 )
-            ( nurl_poke fails 0 n )
-            ? == n 1 { ( nurl_print `  config CRASHED — one-for-all restarts the group\n` ) ( panic `config` ) }
-            { ( say `config` ) }
-        } )
+    \ → v {
+        : i n + 1 ( nurl_peek fails 0 )
+        ( nurl_poke fails 0 n )
+        ? == n 1 { ( nurl_print `  config CRASHED — one-for-all restarts the group\n` ) ( panic `config` ) }
+        { ( say `config` ) }
+    } )
     ( supervisor_add sup `cache` @ RestartPolicy { RTransient }
-        \ → v { ( say `cache` ) } )
+    \ → v { ( say `cache` ) } )
 
     ( nurl_print `bringing up the group (one-for-all)…\n` )
     : b stable ( supervisor_start sup )

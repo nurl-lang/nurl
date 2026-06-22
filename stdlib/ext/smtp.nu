@@ -34,27 +34,29 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/std/net.nu`     // TcpConn, tcp_read_chunk / tcp_write_str / tcp_close_conn
+$ `stdlib/std/net.nu`  // TcpConn, tcp_read_chunk / tcp_write_str / tcp_close_conn
 $ `stdlib/std/encode.nu`  // b64_encode / b64_encode_vec
-$ `stdlib/std/time.nu`    // smtp_date_now
+$ `stdlib/std/time.nu`  // smtp_date_now
 
 // runtime.c §18 exports the client-connect primitives. nurl_tcp_close /
 // nurl_tcp_err_kind are nurlc builtins; the two connect calls and the
 // STARTTLS upgrade need `& `libc`` extern declarations.
 & `libc` @ nurl_tcp_connect s host i port → i
+
 & `libc` @ nurl_tcp_connect_tls s host i port i verify → i
+
 & `libc` @ nurl_tcp_starttls i conn s host i verify → i
 
 : | SmtpErr {
-    SmtpConnect      // TCP connect failed
-    SmtpTls          // TLS handshake / STARTTLS upgrade failed
-    SmtpProtocol     // unexpected reply code
-    SmtpAuth         // authentication rejected
+    SmtpConnect  // TCP connect failed
+    SmtpTls  // TLS handshake / STARTTLS upgrade failed
+    SmtpProtocol  // unexpected reply code
+    SmtpAuth  // authentication rejected
     SmtpWrite
     SmtpRead
     SmtpClosed
     SmtpTimeout
-    SmtpNoStartTls   // STARTTLS requested but the server did not advertise it
+    SmtpNoStartTls  // STARTTLS requested but the server did not advertise it
 }
 
 @ smtp_err_name SmtpErr e → s {
@@ -206,7 +208,7 @@ $ `stdlib/std/time.nu`    // smtp_date_now
 @ __smtp_expect SmtpClient c s text i want SmtpErr onfail → !v SmtpErr {
     : !i SmtpErr r ( __smtp_cmd c text )
     ^ ?? r {
-        T code → ? == code want { @ !v SmtpErr { T 0 } } { @ !v SmtpErr { F onfail } }
+        T code → ?== code want { @ !v SmtpErr { T 0 } } { @ !v SmtpErr { F onfail } }
         F er → @ !v SmtpErr { F er }
     }
 }
@@ -231,7 +233,7 @@ $ `stdlib/std/time.nu`    // smtp_date_now
     : SmtpClient c @ SmtpClient { conn ( vec_new [u] ) ( string_with_cap 128 ) }
     : !i SmtpErr g ( __smtp_read_reply c )
     ^ ?? g {
-        T code → ? == code 220 { @ !SmtpClient SmtpErr { T c } } { ( smtp_close c ) @ !SmtpClient SmtpErr { F # SmtpErr SmtpProtocol } }
+        T code → ?== code 220 { @ !SmtpClient SmtpErr { T c } } { ( smtp_close c ) @ !SmtpClient SmtpErr { F # SmtpErr SmtpProtocol } }
         F er → { ( smtp_close c ) @ !SmtpClient SmtpErr { F er } }
     }
 }
@@ -323,7 +325,7 @@ $ `stdlib/std/time.nu`    // smtp_date_now
     : String line ( string_with_cap + ( nurl_str_len addr ) 16 )
     ( string_push_str line `MAIL FROM:<` )
     ( string_push_str line addr )
-    ( string_push_char line 62 )   // '>'
+    ( string_push_char line 62 )  // '>'
     : !v SmtpErr r ( __smtp_expect c ( string_data line ) 250 # SmtpErr SmtpProtocol )
     ( string_free line )
     ^ r
@@ -337,7 +339,7 @@ $ `stdlib/std/time.nu`    // smtp_date_now
     : !i SmtpErr r ( __smtp_cmd c ( string_data line ) )
     ( string_free line )
     ^ ?? r {
-        T code → ? | == code 250 == code 251 { @ !v SmtpErr { T 0 } } { @ !v SmtpErr { F # SmtpErr SmtpProtocol } }
+        T code → ?| == code 250 == code 251 { @ !v SmtpErr { T 0 } } { @ !v SmtpErr { F # SmtpErr SmtpProtocol } }
         F er → @ !v SmtpErr { F er }
     }
 }
@@ -351,14 +353,14 @@ $ `stdlib/std/time.nu`    // smtp_date_now
     : String ds ( smtp_dotstuff message )
     : i dn ( string_len ds )
     ? | == dn 0 != ( string_get ds - dn 1 ) 10 { ( string_push_char ds 13 ) ( string_push_char ds 10 ) } {}
-    ( string_push_char ds 46 )                              // '.'
+    ( string_push_char ds 46 )  // '.'
     ( string_push_char ds 13 ) ( string_push_char ds 10 )
     : !v NetErr w ( tcp_write_str . c conn ( string_data ds ) )
     ( string_free ds )
     ?? w { T _ → {} F er → { ^ @ !v SmtpErr { F ( __smtp_of_net er ) } } }
     : !i SmtpErr r2 ( __smtp_read_reply c )
     ^ ?? r2 {
-        T code → ? == code 250 { @ !v SmtpErr { T 0 } } { @ !v SmtpErr { F # SmtpErr SmtpProtocol } }
+        T code → ?== code 250 { @ !v SmtpErr { T 0 } } { @ !v SmtpErr { F # SmtpErr SmtpProtocol } }
         F er → @ !v SmtpErr { F er }
     }
 }
@@ -392,7 +394,7 @@ $ `stdlib/std/time.nu`    // smtp_date_now
     ( string_push_str m `MIME-Version: 1.0` ) ( __smtp_crlf m )
     ( string_push_str m `Content-Type: text/plain; charset=utf-8` ) ( __smtp_crlf m )
     ( string_push_str m `Content-Transfer-Encoding: 8bit` ) ( __smtp_crlf m )
-    ( __smtp_crlf m )   // blank line separates headers from body
+    ( __smtp_crlf m )  // blank line separates headers from body
     ( string_push_str m body )
     ^ m
 }
@@ -411,14 +413,14 @@ $ `stdlib/std/time.nu`    // smtp_date_now
             ( string_push_char out 13 ) ( string_push_char out 10 )
             = atbol 1
         } {
-        ? == ch 10 {
-            ( string_push_char out 13 ) ( string_push_char out 10 )
-            = atbol 1
-        } {
-            ? & == atbol 1 == ch 46 { ( string_push_char out 46 ) } {}
-            ( string_push_char out ch )
-            = atbol 0
-        } }
+            ? == ch 10 {
+                ( string_push_char out 13 ) ( string_push_char out 10 )
+                = atbol 1
+            } {
+                ? & == atbol 1 == ch 46 { ( string_push_char out 46 ) } {}
+                ( string_push_char out ch )
+                = atbol 0
+            } }
         = k + k 1
     }
     ^ out

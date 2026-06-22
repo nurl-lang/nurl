@@ -212,7 +212,7 @@ $ `stdlib/core/errors.nu`
     ( bigint_free x ) ( bigint_free y )
     ( bigint_free gx ) ( bigint_free gy ) ( bigint_free three )
     ? == bad 0 { ( nurl_print `  ok   invariant sweep 60 rounds x 2 probes\n` ) }
-              { ( vec_push [i] fails 1 ) }
+    { ( vec_push [i] fails 1 ) }
 
     // ── division by zero panics (and is recoverable) ──
     : BigInt dz ( bigint_from_i 42 )
@@ -243,6 +243,6 @@ $ `stdlib/core/errors.nu`
 @ main → i {
     : i f ( run )
     ? == f 0 { ( nurl_print `bigint_div: all checks passed\n` ) }
-            { ( nurl_print `bigint_div: FAILURES\n` ) }
+    { ( nurl_print `bigint_div: FAILURES\n` ) }
     ^ f
 }

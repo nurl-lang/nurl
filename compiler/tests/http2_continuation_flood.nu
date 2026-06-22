@@ -43,7 +43,7 @@ $ `stdlib/ext/http2_server.nu`
     : H2Frame f @ H2Frame { ftype flags sid payload }
     : !v H2FrameErr r ( h2_write_frame conn f 16384 )
     ( h2_frame_free f )
-    ^ ?? r { T _ → T  F _ → F }
+    ^ ?? r { T _ → T F _ → F }
 }
 
 @ run → i {

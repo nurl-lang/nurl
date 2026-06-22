@@ -153,17 +153,27 @@ $ `stdlib/core/vec.nu`
 // as `s raw`.
 
 & `pq` @ PQconnectdb s conninfo → s
+
 & `pq` @ PQfinish s conn → v
+
 & `pq` @ PQreset s conn → v
+
 & `pq` @ PQstatus s conn → i32
+
 & `pq` @ PQerrorMessage s conn → s
+
 & `pq` @ PQserverVersion s conn → i32
+
 & `pq` @ PQdb s conn → s
+
 & `pq` @ PQuser s conn → s
+
 & `pq` @ PQhost s conn → s
 
 & `pq` @ PQescapeLiteral s conn s str i len → s
+
 & `pq` @ PQescapeIdentifier s conn s str i len → s
+
 & `pq` @ PQfreemem s ptr → v
 
 & `pq` @ PQexec s conn s sql → s
@@ -172,20 +182,33 @@ $ `stdlib/core/vec.nu`
 // a NUL-terminated UTF-8 string and returns text rows). A NULL entry in
 // the values array is sent as SQL NULL.
 & `pq` @ PQexecParams s conn s sql i32 n_params *u types **u values *i32 lens *i32 fmts i32 res_fmt → s
+
 & `pq` @ PQprepare s conn s stmt s query i32 n_params *u types → s
+
 & `pq` @ PQexecPrepared s conn s stmt i32 n_params **u values *i32 lens *i32 fmts i32 res_fmt → s
 
 & `pq` @ PQclear s res → v
+
 & `pq` @ PQresultStatus s res → i32
+
 & `pq` @ PQresultErrorMessage s res → s
+
 & `pq` @ PQcmdStatus s res → s
+
 & `pq` @ PQcmdTuples s res → s
+
 & `pq` @ PQntuples s res → i32
+
 & `pq` @ PQnfields s res → i32
+
 & `pq` @ PQfname s res i32 col → s
+
 & `pq` @ PQfnumber s res s name → i32
+
 & `pq` @ PQftype s res i32 col → u32
+
 & `pq` @ PQgetvalue s res i32 row i32 col → s
+
 & `pq` @ PQgetisnull s res i32 row i32 col → i32
 
 // Binary protocol — request binary result columns (resultFormat = 1) and
@@ -193,6 +216,7 @@ $ `stdlib/core/vec.nu`
 // cell pointer, but for a binary column it points at `PQgetlength` bytes
 // of big-endian binary, not a NUL-terminated text rendering.
 & `pq` @ PQgetlength s res i32 row i32 col → i32
+
 & `pq` @ PQfformat s res i32 col → i32  // 0 = text column, 1 = binary
 & `pq` @ PQbinaryTuples s res → i32
 
@@ -200,14 +224,20 @@ $ `stdlib/core/vec.nu`
 // on its result, then collect results with PQgetResult (NULL = done).
 // PQconsumeInput / PQisBusy let an event loop poll PQsocket for readiness.
 & `pq` @ PQsendQuery s conn s sql → i32
+
 & `pq` @ PQsendQueryParams s conn s sql i32 n_params *u types **u values *i32 lens *i32 fmts i32 res_fmt → i32
+
 & `pq` @ PQsendPrepare s conn s stmt s query i32 n_params *u types → i32
+
 & `pq` @ PQsendQueryPrepared s conn s stmt i32 n_params **u values *i32 lens *i32 fmts i32 res_fmt → i32
+
 & `pq` @ PQgetResult s conn → s  // PGresult* or NULL when no more results
 & `pq` @ PQconsumeInput s conn → i32  // 1 = ok, 0 = error
 & `pq` @ PQisBusy s conn → i32  // 1 = a PQgetResult would block
 & `pq` @ PQsetnonblocking s conn i32 arg → i32
+
 & `pq` @ PQisnonblocking s conn → i32
+
 & `pq` @ PQflush s conn → i32  // 0 = sent, 1 = more queued, -1 = error
 & `pq` @ PQsocket s conn → i32  // file descriptor, -1 if no connection
 
@@ -374,14 +404,14 @@ $ `stdlib/core/vec.nu`
 //   ( vec_push [?String] ps @ ?String { T ( string_from `alice` ) } )
 //   ( vec_push [?String] ps @ ?String { F # String 0 } )   // → SQL NULL
 //   : !PgResult PgErr r ( pg_exec_params_opt c `INSERT … VALUES ($1,$2)` ps )
-@ pg_exec_params_opt Connection c s sql ( Vec ?String ) params → !PgResult PgErr {
-    : i n ( vec_len [?String] params )
+@ pg_exec_params_opt Connection c s sql ( Vec ? String ) params → !PgResult PgErr {
+    : i n ( vec_len [? String] params )
     : s vals ( nurl_alloc * ? > n 0 n 1 8 )
     : ~ i k 0
     ~ < k n {
         // vec_get over a `Vec ?String` yields `??String`: the outer
         // option is the bounds check, the inner is the value-or-NULL.
-        : ??String pk ( vec_get [?String] params k )
+        : ?? String pk ( vec_get [? String] params k )
         ?? pk {
             T inner → {
                 ?? inner {
@@ -395,8 +425,8 @@ $ `stdlib/core/vec.nu`
     }
     : !PgResult PgErr res ( __pg_exec_params_raw c sql n vals )
     ( nurl_free vals )
-    ( vec_free_with [?String] params \ ?String o → v {
-        ?? o { T sv → ( string_free sv )  F _ → {} }
+    ( vec_free_with [? String] params \ ? String o → v {
+        ?? o { T sv → ( string_free sv ) F _ → {} }
     } )
     ^ res
 }
@@ -472,7 +502,7 @@ $ `stdlib/core/vec.nu`
     ~ < k n {
         : ?i fl ( vec_get [i] nulls k )
         : ~ i is_null 0
-        ?? fl { T x → = is_null x  F _ → {} }
+        ?? fl { T x → = is_null x F _ → {} }
         ? != is_null 0 {
             ( nurl_poke vals k 0 )
         } {
@@ -911,7 +941,7 @@ $ `stdlib/core/vec.nu`
 // readable, `pg_consume_input` then loop `pg_notifies` until None. Each
 // PgNotify owns its `relname` / `extra` Strings — free with
 // `pg_notify_free` (or read its fields then free).
-: PgNotify { String relname  i be_pid  String extra }
+: PgNotify { String relname i be_pid String extra }
 
 // Pop the next buffered notification, or None if the queue is empty.
 // Reads libpq's `PGnotify { char *relname; int be_pid; char *extra; }`
@@ -957,7 +987,7 @@ $ `stdlib/core/vec.nu`
     ( pg_bind_text ps payload )
     : !PgResult PgErr rr ( pg_exec_params_b c `SELECT pg_notify($1, $2)` ps )
     ^ ?? rr {
-        T r → { ( pg_clear r )  @ !i PgErr { T 1 } }
+        T r → { ( pg_clear r ) @ !i PgErr { T 1 } }
         F e → @ !i PgErr { F # PgErr e }
     }
 }

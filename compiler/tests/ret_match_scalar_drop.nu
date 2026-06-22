@@ -12,7 +12,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 : Elem { String tag ( Vec Node ) kids }
-: | Node { NText String  NElem Elem }
+: | Node { NText String NElem Elem }
 
 @ mk_text s t → Node { ^ @ Node { NText ( string_from t ) } }
 
@@ -20,7 +20,7 @@ $ `stdlib/core/vec.nu`
 // `owned` is not the returned value, so it must be reclaimed here.
 @ classify_owned → i {
     : Node owned ( mk_text `owned-then-returned-as-scalar` )
-    ^ ?? owned { NText _ → 0  NElem _ → 1 }
+    ^ ?? owned { NText _ → 0 NElem _ → 1 }
 }
 
 @ main → i {

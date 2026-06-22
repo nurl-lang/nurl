@@ -32,7 +32,7 @@ $ `stdlib/ext/postgres.nu`
 
 // ── Small Vec[i] accessor with a 0 default ───────────────────────
 @ veci ( Vec i ) w i idx → i {
-    ?? ( vec_get [i] w idx ) { T x → ^ x  F _ → ^ 0 }
+    ?? ( vec_get [i] w idx ) { T x → ^ x F _ → ^ 0 }
 }
 
 // Print `str` then pad with spaces out to column width `w`.

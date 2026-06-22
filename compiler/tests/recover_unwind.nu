@@ -15,7 +15,8 @@ $ `stdlib/core/string.nu`
 : Resp { s body i code }
 
 // A user `% Drop` type whose typed destructor frees a malloc'd buffer.
-: Handle { *u buf }
+: Handle { * u buf }
+
 % Drop ( Handle ) { @ drop Handle h → v { ( nurl_free # s . h buf ) } }
 
 // Owned raw string scratch, freed by the unwind (not leaked).
@@ -66,7 +67,7 @@ $ `stdlib/core/string.nu`
     ?? r {
         T _ → ( nurl_print `ok\n` )
         F p → { ( nurl_print `caught ` ) ( nurl_print ( string_data . p msg ) ) ( nurl_print `\n` )
-                ( panic_info_free p ) }
+            ( panic_info_free p ) }
     }
 }
 

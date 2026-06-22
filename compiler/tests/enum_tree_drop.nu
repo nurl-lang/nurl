@@ -15,7 +15,7 @@ $ `stdlib/core/vec.nu`
 
 : Attr { String name String value }
 : Elem { String tag ( Vec Attr ) attrs ( Vec Node ) kids }
-: | Node { NText String  NElem Elem }
+: | Node { NText String NElem Elem }
 
 // A struct wrapper so a freshly-built node can be handed around and its
 // inner Node pushed into a parent's `kids` as a field-extract (a

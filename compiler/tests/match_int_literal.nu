@@ -6,7 +6,6 @@
 //   * wildcard catches the residual
 //   * arms returning different kinds of values (string here)
 
-
 @ classify i n → s {
     ^ ?? n {
         0 → `zero`

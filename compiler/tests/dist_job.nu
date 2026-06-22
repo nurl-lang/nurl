@@ -11,8 +11,11 @@ $ `stdlib/dist/ring.nu`
 $ `stdlib/dist/job.nu`
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
+
 @ mkpk i seed → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + seed k ) = k + k 1 } ^ v }
+
 @ bytes4 i a i b i c i d → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) ( vec_push [u] v # u a ) ( vec_push [u] v # u b ) ( vec_push [u] v # u c ) ( vec_push [u] v # u d ) ^ v }
+
 @ veq ( Vec u ) a ( Vec u ) b → b {
     : i n ( vec_len [u] a ) ? != n ( vec_len [u] b ) { ^ F } {}
     : ~ b e T : ~ i k 0
@@ -55,13 +58,13 @@ $ `stdlib/dist/job.nu`
 
     // ── in-process submit → execute → await (node owns the key) ──
     : *Ring ring ( ring_new )
-    ( ring_add_member ring a 32 )          // single member ⇒ owns every key
+    ( ring_add_member ring a 32 )  // single member ⇒ owns every key
     : *JobNode n ( job_node_new # s 0 # s ring a 0 )
     ( job_register n 0 ( sum_handler ) )
     ( pb `owns key (single-member ring): ` ( job_owns n key ) )
-    : i tid ( job_submit n 0 key pl )       // sum(1,2,3,4)=10
+    : i tid ( job_submit n 0 key pl )  // sum(1,2,3,4)=10
     ( pb `result recorded after submit: ` ( job_has n tid ) )
-    : ( Vec u ) want ( bytes4 10 0 0 0 )    // 1-byte [10]; compare just elem 0
+    : ( Vec u ) want ( bytes4 10 0 0 0 )  // 1-byte [10]; compare just elem 0
     ( pb `awaited result is sum=10: ` ?? ( job_await n tid ) { T r → { : b ok == ?? ( vec_get [u] r 0 ) { T x → # i x F → -1 } 10 ( vec_free [u] r ) ok } F → F } )
     ( pb `await unknown task → None: ` ?? ( job_await n 999999 ) { T r → { ( vec_free [u] r ) F } F → T } )
     ( vec_free [u] want )
@@ -72,7 +75,7 @@ $ `stdlib/dist/job.nu`
     : JobMsg m1 ( jobmsg_decode r1 )
     ( job_on_result n m1 )
     ( jobmsg_free m1 ) ( vec_free [u] r1 ) ( vec_free [u] p1 )
-    : ( Vec u ) p2 ( bytes4 2 0 0 0 )   // duplicate task_id, different bytes
+    : ( Vec u ) p2 ( bytes4 2 0 0 0 )  // duplicate task_id, different bytes
     : ( Vec u ) r2 ( job_build_result 555 p2 )
     : JobMsg m2 ( jobmsg_decode r2 )
     ( job_on_result n m2 )
@@ -92,7 +95,7 @@ $ `stdlib/dist/job.nu`
     : ~ ( Vec u ) owner1 ( vec_new [u] )
     ?? ( job_owner_pk n2 k2 ) { T o → { ( vec_free [u] owner1 ) = owner1 o } F → {} }
     ( pb `key has an owner in 3-node ring: ` > ( vec_len [u] owner1 ) 0 )
-    ( ring_remove_member r3 owner1 )       // the owner leaves
+    ( ring_remove_member r3 owner1 )  // the owner leaves
     : ~ ( Vec u ) owner2 ( vec_new [u] )
     ?? ( job_owner_pk n2 k2 ) { T o → { ( vec_free [u] owner2 ) = owner2 o } F → {} }
     ( pb `owner recomputes after removal (re-home): ` ! ( veq owner1 owner2 ) )

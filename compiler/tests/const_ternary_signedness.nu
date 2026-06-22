@@ -15,10 +15,10 @@
 //
 // main returns the number of failed checks (0 = all pass).
 
-: u   GU 200
+: u GU 200
 : u16 GW 50000
 : u32 GD 2147483649
-: i8  GS 200          // signed const, must stay sext
+: i8 GS 200  // signed const, must stay sext
 
 @ chk i got i want s tag → i {
     ? == got want {

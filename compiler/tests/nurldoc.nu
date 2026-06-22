@@ -19,21 +19,21 @@ $ `stdlib/ext/nurldoc.nu`
     ( string_push_str src `\n` )
     ( string_push_str src `// Add two ints.\n` )
     ( string_push_str src `@ add i a i b → i {\n` )
-    ( string_push_str src `    : i sum + a b\n` )       // local `:` at depth 1 — must be ignored
+    ( string_push_str src `    : i sum + a b\n` )  // local `:` at depth 1 — must be ignored
     ( string_push_str src `    ^ sum\n` )
     ( string_push_str src `}\n` )
     ( string_push_str src `\n` )
     ( string_push_str src `// A point.\n` )
     ( string_push_str src `: Point { i x i y }\n` )
     ( string_push_str src `\n` )
-    ( string_push_str src `: | Color { Red Green Blue }\n` )   // no doc comment
+    ( string_push_str src `: | Color { Red Green Blue }\n` )  // no doc comment
     ( string_push_str src `\n` )
     ( string_push_str src `// Process id.\n` )
     ( string_push_str src `& ` ) ( string_push_char src 96 )
     ( string_push_str src `c` ) ( string_push_char src 96 )
     ( string_push_str src ` @ getpid → i\n` )
     ( string_push_str src `\n` )
-    ( string_push_str src `: i MAX 100\n` )                    // const, no doc
+    ( string_push_str src `: i MAX 100\n` )  // const, no doc
 
     : String md ( nurldoc_render ( string_data src ) `demo` )
     ( nurl_print ( string_data md ) )

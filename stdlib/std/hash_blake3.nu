@@ -44,7 +44,7 @@ $ `stdlib/core/vec.nu`
     ( vec_push [u32] v # u32 2773480762 )  // 0xA54FF53A
     ( vec_push [u32] v # u32 1359893119 )  // 0x510E527F
     ( vec_push [u32] v # u32 2600822924 )  // 0x9B05688C
-    ( vec_push [u32] v # u32 528734635 )   // 0x1F83D9AB
+    ( vec_push [u32] v # u32 528734635 )  // 0x1F83D9AB
     ( vec_push [u32] v # u32 1541459225 )  // 0x5BE0CD19
     ^ v
 }

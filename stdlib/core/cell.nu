@@ -58,7 +58,6 @@
 //     via a typed lens. This is the right shape for `pthread_mutex_t`
 //     and friends, whose internal layout we don't want to mirror.
 
-
 // FFI: the runtime-side platform-sizeof thunk. Defined in stdlib/runtime.c.
 // Returns sizeof(<name>) for known C-level types, -1 for unknown.
 // Known names (case-sensitive):

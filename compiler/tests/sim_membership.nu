@@ -10,11 +10,13 @@ $ `stdlib/net/membership.nu`
 $ `stdlib/dist/sim.nu`
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
+
 @ pk i id → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + id k ) = k + k 1 } ^ v }
+
 @ node ( Vec s ) tables i i → *PkMemberTable { ^ # *PkMemberTable ?? ( vec_get [s] tables i ) { T x → x F → # s 0 } }
 
 // build a node's gossip snapshot and submit it to a peer over the bus
-@ send_gossip *SimNet net i src *PkMemberTable t i peer i now → v {
+@ send_gossip * SimNet net i src * PkMemberTable t i peer i now → v {
     : ( Vec s ) g ( pktable_gossip t 16 )
     : PkMsg m @ PkMsg { ( pk_ping ) 0 ( vec_new [u] ) g }
     : ( Vec u ) bytes ( pkmsg_encode m )
@@ -23,7 +25,7 @@ $ `stdlib/dist/sim.nu`
 }
 
 // deliver every due message, applying its gossip to the destination table
-@ deliver_due *SimNet net ( Vec s ) tables i now → v {
+@ deliver_due * SimNet net ( Vec s ) tables i now → v {
     : ( Vec s ) due ( sim_due net now )
     : i dn ( vec_len [s] due )
     : ~ i k 0
@@ -42,7 +44,7 @@ $ `stdlib/dist/sim.nu`
 }
 
 // run `rounds` gossip ticks; node `dead_idx` is gone (never gossips)
-@ run_rounds *SimNet net ( Vec s ) tables i rounds i dead_idx i now0 → i {
+@ run_rounds * SimNet net ( Vec s ) tables i rounds i dead_idx i now0 → i {
     : ~ i now now0
     : ~ i r 0
     ~ < r rounds {
@@ -78,6 +80,7 @@ $ `stdlib/dist/sim.nu`
     }
     ^ tables
 }
+
 @ free_tables ( Vec s ) tables → v {
     : ~ i i 0 ~ < i 4 { ( pktable_free ( node tables i ) ) = i + i 1 }
     ( vec_free [s] tables )
@@ -99,7 +102,7 @@ $ `stdlib/dist/sim.nu`
     ( free_tables tables ) ( sim_net_free net )
 
     // ── (2) partition isolates node 2, heal reconverges ──────────
-    : *SimNet net2 ( sim_net_new 4 777 0 1 0 )      // no random drop; clean partition
+    : *SimNet net2 ( sim_net_new 4 777 0 1 0 )  // no random drop; clean partition
     ( sim_partition net2 2 0 ) ( sim_partition net2 2 1 ) ( sim_partition net2 2 3 )
     : ( Vec s ) tb ( make_tables )
     ( pktable_apply ( node tb 0 ) dead3 ( pk_dead ) 2 0 )

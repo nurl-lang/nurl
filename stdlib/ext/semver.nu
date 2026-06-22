@@ -43,8 +43,8 @@ $ `stdlib/core/vec.nu`
     i major
     i minor
     i patch
-    String prerelease   // without the leading '-'; empty when absent
-    String build        // without the leading '+'; empty when absent
+    String prerelease  // without the leading '-'; empty when absent
+    String build  // without the leading '+'; empty when absent
 }
 
 : VersionReq {
@@ -57,12 +57,12 @@ $ `stdlib/core/vec.nu`
 }
 
 : | SemverErr {
-    SvEmpty         // empty input
-    SvBadFormat     // structural garbage / extra core component
+    SvEmpty  // empty input
+    SvBadFormat  // structural garbage / extra core component
     SvMissingMinor  // core had no minor
     SvMissingPatch  // core had no patch
-    SvBadNumber     // a numeric field was empty or non-numeric
-    SvBadReq        // unparseable requirement operator / version
+    SvBadNumber  // a numeric field was empty or non-numeric
+    SvBadReq  // unparseable requirement operator / version
 }
 
 @ semver_err_name SemverErr e → s {
@@ -137,13 +137,13 @@ $ `stdlib/core/vec.nu`
     ? == n 0 { ^ @ !Semver SemverErr { F # SemverErr SvEmpty } } {}
 
     // Split off +build first, then -prerelease, leaving the numeric core.
-    : i plus ( __sv_index text 0 n 43 )        // '+'
+    : i plus ( __sv_index text 0 n 43 )  // '+'
     : i pr_end ? >= plus 0 plus n
-    : i dash ( __sv_index text 0 pr_end 45 )   // '-' (prerelease) before build
+    : i dash ( __sv_index text 0 pr_end 45 )  // '-' (prerelease) before build
     : i core_end ? >= dash 0 dash pr_end
 
     // Core: major.minor.patch
-    : i d1 ( __sv_index text 0 core_end 46 )   // '.'
+    : i d1 ( __sv_index text 0 core_end 46 )  // '.'
     ? < d1 0 { ^ @ !Semver SemverErr { F # SemverErr SvMissingMinor } } {}
     : i d2 ( __sv_index text + d1 1 core_end 46 )
     ? < d2 0 { ^ @ !Semver SemverErr { F # SemverErr SvMissingPatch } } {}
@@ -245,7 +245,7 @@ $ `stdlib/core/vec.nu`
         ? > av bv { ^ 1 } {}
         ^ 0
     } {}
-    ? != an 0 { ^ -1 } {}    // numeric has lower precedence
+    ? != an 0 { ^ -1 } {}  // numeric has lower precedence
     ? != bn 0 { ^ 1 } {}
     ^ ( __sv_strcmp a b )
 }
@@ -326,7 +326,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ __sv_is_wild i c → b {
-    ^ | == c 42 | == c 120 == c 88    // '*' 'x' 'X'
+    ^ | == c 42 | == c 120 == c 88  // '*' 'x' 'X'
 }
 
 // Parse a partial version starting at text[from, n). Returns a PartialVer;
@@ -402,17 +402,17 @@ $ `stdlib/core/vec.nu`
     } {}
 
     // Operator prefix.
-    : ~ i op 0          // 0 caret(default/bare/^), 1 ~, 2 =, 3 >, 4 >=, 5 <, 6 <=
+    : ~ i op 0  // 0 caret(default/bare/^), 1 ~, 2 =, 3 >, 4 >=, 5 <, 6 <=
     : ~ i vpos start
-    ? == c0 94 { = op 0 = vpos + start 1 } {}                       // '^'
-    ? == c0 126 { = op 1 = vpos + start 1 } {}                      // '~'
-    ? == c0 61 { = op 2 = vpos + start 1 } {}                       // '='
+    ? == c0 94 { = op 0 = vpos + start 1 } {}  // '^'
+    ? == c0 126 { = op 1 = vpos + start 1 } {}  // '~'
+    ? == c0 61 { = op 2 = vpos + start 1 } {}  // '='
     ? == c0 62 {
         ? & < + start 1 n == ( nurl_str_get text + start 1 ) 61 { = op 4 = vpos + start 2 } { = op 3 = vpos + start 1 }
-    } {}                                                           // '>' / '>='
+    } {}  // '>' / '>='
     ? == c0 60 {
         ? & < + start 1 n == ( nurl_str_get text + start 1 ) 61 { = op 6 = vpos + start 2 } { = op 5 = vpos + start 1 }
-    } {}                                                           // '<' / '<='
+    } {}  // '<' / '<='
     // Skip spaces after the operator.
     ~ & < vpos n == ( nurl_str_get text vpos ) 32 { = vpos + vpos 1 }
 

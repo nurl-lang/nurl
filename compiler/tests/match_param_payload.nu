@@ -22,19 +22,19 @@ $ `stdlib/core/vec.nu`
 
 // (1) single-pointer-handle struct payload, returned straight from a
 // result PARAMETER's T-arm.
-@ unwrap_struct !S E r → S {
-    ?? r { T x → ^ x  F e → ^ @ S { `?` } }
+@ unwrap_struct ! S E r → S {
+    ?? r { T x → ^ x F e → ^ @ S { `?` } }
 }
 
 // (2) `( Vec u )` handle payload from a result PARAMETER.
 @ unwrap_vec ! ( Vec u ) E r → ( Vec u ) {
-    ?? r { T x → ^ x  F e → ^ ( vec_new [u] ) }
+    ?? r { T x → ^ x F e → ^ ( vec_new [u] ) }
 }
 
 // (3) unsigned-byte payload from an option PARAMETER — must zext, not
 // sext (0x86 = 134, not -122).
-@ unwrap_opt_u ?u o → i {
-    ?? o { T b → ^ # i b  F _ → ^ -1 }
+@ unwrap_opt_u ? u o → i {
+    ?? o { T b → ^ # i b F _ → ^ -1 }
 }
 
 @ main → i {
@@ -44,7 +44,7 @@ $ `stdlib/core/vec.nu`
     : ( Vec u ) v ( vec_with_cap [u] 3 )
     ( vec_push [u] v # u 0x86 )
     ( vec_push [u] v # u 2 )
-    : ( Vec u ) v2 ( unwrap_vec @ ! ( Vec u ) E { T v } )
+    : ( Vec u ) v2 ( unwrap_vec @ !( Vec u ) E { T v } )
     ( nurl_print `veclen=` ) ( nurl_print ( nurl_str_int ( vec_len [u] v2 ) ) ) ( nurl_print `\n` )
 
     ( nurl_print `optu=` ) ( nurl_print ( nurl_str_int ( unwrap_opt_u @ ?u { T 0x86 } ) ) ) ( nurl_print `\n` )

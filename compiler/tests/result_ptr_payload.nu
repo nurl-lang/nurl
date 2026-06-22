@@ -13,7 +13,7 @@ $ `stdlib/core/string.nu`
 
 : | Boom { Bang }
 
-: Box { i a  i b }
+: Box { i a i b }
 
 @ mk_ok i n → !*Box Boom {
     : *Box p # *Box ( nurl_alloc Z Box )

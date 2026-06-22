@@ -80,8 +80,8 @@ $ `stdlib/ext/http_static.nu`
     : s pubpath ( string_data pubdir )
 
     // Legitimate requests succeed.
-    ( check_eq `GET /ok.txt`   ( status_for pubpath `/ok.txt` )       200 fails )
-    ( check_eq `GET / (index)` ( status_for pubpath `/` )             200 fails )
+    ( check_eq `GET /ok.txt` ( status_for pubpath `/ok.txt` ) 200 fails )
+    ( check_eq `GET / (index)` ( status_for pubpath `/` ) 200 fails )
 
     // ".." traversal → 403.
     ( check_eq `GET /../secret.txt` ( status_for pubpath `/../secret.txt` ) 403 fails )

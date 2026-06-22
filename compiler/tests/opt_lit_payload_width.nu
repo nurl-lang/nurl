@@ -27,7 +27,7 @@
     ?? d { T b → ( nurl_print ( nurl_str_int # i b ) ) F → ( nurl_print `-` ) }
     ( nurl_print `\n` )
     // Result payload slot is always i64 — a sized-int value widens into it.
-    : ! u s r @ ! u s { T 0x86 }
+    : !u s r @ !u s { T 0x86 }
     ?? r { T b → ( nurl_print ( nurl_str_int # i b ) ) F e → ( nurl_print e ) }
     ( nurl_print `\n` )
     ^ 0

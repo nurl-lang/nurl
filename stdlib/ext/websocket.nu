@@ -1005,175 +1005,175 @@ $ `stdlib/ext/compress.nu`
                         = err WsProtocolReservedBit
                         = done T
                     } {
-                    ? ( __ws_opcode_is_control op ) {
-                        // Control frame: handle in-band
-                        ? == op 9 {
-                            // Ping → reply with Pong, same payload. The
-                            // reply MUST be masked when we are the client.
-                            : !v WsErr pr ? client
-                            ( ws_client_send_pong conn pl )
-                            ( ws_send_pong conn pl )
-                            ?? pr {
-                                T _ → {}
-                                F we → { = err we = done T }
-                            }
-                            ( vec_free [u] pl )
-                        } {
-                            ? == op 10 {
-                                // Pong → ignore
+                        ? ( __ws_opcode_is_control op ) {
+                            // Control frame: handle in-band
+                            ? == op 9 {
+                                // Ping → reply with Pong, same payload. The
+                                // reply MUST be masked when we are the client.
+                                : !v WsErr pr ? client
+                                ( ws_client_send_pong conn pl )
+                                ( ws_send_pong conn pl )
+                                ?? pr {
+                                    T _ → {}
+                                    F we → { = err we = done T }
+                                }
                                 ( vec_free [u] pl )
                             } {
-                                ? == op 8 {
-                                    // Close — validate the payload before
-                                    // surfacing the close. RFC 6455 §5.5.1:
-                                    // a Close frame's payload is either
-                                    // empty OR ≥ 2 bytes (a 2-byte status
-                                    // code, optionally followed by a UTF-8
-                                    // reason). §7.4.2: status codes 1004,
-                                    // 1005, 1006, 1015 and any code below
-                                    // 1000 or above 4999 are reserved or
-                                    // MUST NOT appear on the wire. Reason
-                                    // bytes MUST be valid UTF-8.
-                                    : i pln ( vec_len [u] pl )
-                                    ? == pln 1 {
-                                        ( vec_free [u] pl )
-                                        = err WsInvalidCloseCode
-                                        = done T
-                                    } {
-                                        ? >= pln 2 {
-                                            : *u clp ( vec_data [u] pl )
-                                            : i cb0 & # i . clp 0 255
-                                            : i cb1 & # i . clp 1 255
-                                            : i code + << cb0 8 cb1
-                                            : ~ b code_bad | | | |
-                                            < code 1000 > code 4999
-                                            == code 1004 == code 1005
-                                            | == code 1006 == code 1015
-                                            ? & ! code_bad & >= code 1000 < code 3000 {
-                                                // 1000–2999 are reserved
-                                                // for the protocol; only
-                                                // the IANA-registered set
-                                                // below is permitted on
-                                                // the wire (1004/1005/1006/
-                                                // 1015 already filtered).
-                                                ? & & & & & & & & & & &
-                                                != code 1000 != code 1001
-                                                != code 1002 != code 1003
-                                                != code 1007 != code 1008
-                                                != code 1009 != code 1010
-                                                != code 1011 != code 1012
-                                                != code 1013 != code 1014
-                                                { = code_bad T } {}
-                                            } {}
-                                            ? code_bad {
-                                                ( vec_free [u] pl )
-                                                = err WsInvalidCloseCode
-                                                = done T
-                                            } {
-                                                // Validate reason as UTF-8.
-                                                ? > pln 2 {
-                                                    : ( Vec u ) rbytes ( vec_new [u] )
-                                                    : ~ i ck 2
-                                                    ~ < ck pln {
-                                                        ( vec_push [u] rbytes # u . clp ck )
-                                                        = ck + ck 1
-                                                    }
-                                                    : b ru_ok ( ws_validate_utf8 rbytes )
-                                                    ( vec_free [u] rbytes )
-                                                    ? ! ru_ok {
-                                                        ( vec_free [u] pl )
-                                                        = err WsInvalidUtf8
-                                                        = done T
+                                ? == op 10 {
+                                    // Pong → ignore
+                                    ( vec_free [u] pl )
+                                } {
+                                    ? == op 8 {
+                                        // Close — validate the payload before
+                                        // surfacing the close. RFC 6455 §5.5.1:
+                                        // a Close frame's payload is either
+                                        // empty OR ≥ 2 bytes (a 2-byte status
+                                        // code, optionally followed by a UTF-8
+                                        // reason). §7.4.2: status codes 1004,
+                                        // 1005, 1006, 1015 and any code below
+                                        // 1000 or above 4999 are reserved or
+                                        // MUST NOT appear on the wire. Reason
+                                        // bytes MUST be valid UTF-8.
+                                        : i pln ( vec_len [u] pl )
+                                        ? == pln 1 {
+                                            ( vec_free [u] pl )
+                                            = err WsInvalidCloseCode
+                                            = done T
+                                        } {
+                                            ? >= pln 2 {
+                                                : *u clp ( vec_data [u] pl )
+                                                : i cb0 & # i . clp 0 255
+                                                : i cb1 & # i . clp 1 255
+                                                : i code + << cb0 8 cb1
+                                                : ~ b code_bad | | | |
+                                                < code 1000 > code 4999
+                                                == code 1004 == code 1005
+                                                | == code 1006 == code 1015
+                                                ? & ! code_bad & >= code 1000 < code 3000 {
+                                                    // 1000–2999 are reserved
+                                                    // for the protocol; only
+                                                    // the IANA-registered set
+                                                    // below is permitted on
+                                                    // the wire (1004/1005/1006/
+                                                    // 1015 already filtered).
+                                                    ? & & & & & & & & & & &
+                                                    != code 1000 != code 1001
+                                                    != code 1002 != code 1003
+                                                    != code 1007 != code 1008
+                                                    != code 1009 != code 1010
+                                                    != code 1011 != code 1012
+                                                    != code 1013 != code 1014
+                                                    { = code_bad T } {}
+                                                } {}
+                                                ? code_bad {
+                                                    ( vec_free [u] pl )
+                                                    = err WsInvalidCloseCode
+                                                    = done T
+                                                } {
+                                                    // Validate reason as UTF-8.
+                                                    ? > pln 2 {
+                                                        : ( Vec u ) rbytes ( vec_new [u] )
+                                                        : ~ i ck 2
+                                                        ~ < ck pln {
+                                                            ( vec_push [u] rbytes # u . clp ck )
+                                                            = ck + ck 1
+                                                        }
+                                                        : b ru_ok ( ws_validate_utf8 rbytes )
+                                                        ( vec_free [u] rbytes )
+                                                        ? ! ru_ok {
+                                                            ( vec_free [u] pl )
+                                                            = err WsInvalidUtf8
+                                                            = done T
+                                                        } {
+                                                            ( vec_free [u] pl )
+                                                            = err WsClosedByPeer
+                                                            = done T
+                                                        }
                                                     } {
                                                         ( vec_free [u] pl )
                                                         = err WsClosedByPeer
                                                         = done T
                                                     }
-                                                } {
-                                                    ( vec_free [u] pl )
-                                                    = err WsClosedByPeer
-                                                    = done T
                                                 }
+                                            } {
+                                                // pln == 0 → clean close.
+                                                ( vec_free [u] pl )
+                                                = err WsClosedByPeer
+                                                = done T
                                             }
-                                        } {
-                                            // pln == 0 → clean close.
-                                            ( vec_free [u] pl )
-                                            = err WsClosedByPeer
-                                            = done T
                                         }
-                                    }
-                                } { ( vec_free [u] pl ) }
+                                    } { ( vec_free [u] pl ) }
+                                }
                             }
-                        }
-                    } {
-                        // Data frame
-                        ? == op 0 {
-                            // Continuation
-                            ? == kind 0 {
-                                ( vec_free [u] pl )
-                                = err WsProtocolBadContinuation
-                                = done T
-                            } {
-                                ( vec_extend [u] acc pl )
-                                ( vec_free [u] pl )
-                                ? > ( vec_len [u] acc ) . lim max_message_bytes {
-                                    = err WsMessageTooLarge
+                        } {
+                            // Data frame
+                            ? == op 0 {
+                                // Continuation
+                                ? == kind 0 {
+                                    ( vec_free [u] pl )
+                                    = err WsProtocolBadContinuation
                                     = done T
                                 } {
+                                    ( vec_extend [u] acc pl )
+                                    ( vec_free [u] pl )
+                                    ? > ( vec_len [u] acc ) . lim max_message_bytes {
+                                        = err WsMessageTooLarge
+                                        = done T
+                                    } {
+                                        ? fin {
+                                            // Validate UTF-8 if text. Skip when
+                                            // compressed — validation happens
+                                            // after permessage-deflate inflation.
+                                            ? & & == kind 1 ! compressed ! ( ws_validate_utf8 acc ) {
+                                                = err WsInvalidUtf8
+                                                = done T
+                                            } {
+                                                ( vec_free [u] msg_payload )
+                                                = msg_payload acc
+                                                = acc ( vec_new [u] )
+                                                = have_message T
+                                                = done T
+                                            }
+                                        } {}
+                                    }
+                                }
+                            } {
+                                // Text or binary opener — first frame of a
+                                // message carries the RSV1 compressed bit.
+                                ? != kind 0 {
+                                    ( vec_free [u] pl )
+                                    = err WsProtocolBadFragmentation
+                                    = done T
+                                } {
+                                    = compressed rsv1f
                                     ? fin {
-                                        // Validate UTF-8 if text. Skip when
-                                        // compressed — validation happens
-                                        // after permessage-deflate inflation.
-                                        ? & & == kind 1 ! compressed ! ( ws_validate_utf8 acc ) {
+                                        // One-shot complete message. Skip UTF-8
+                                        // validation when compressed (validated
+                                        // post-inflation by the deflate reader).
+                                        ? & & == op 1 ! rsv1f ! ( ws_validate_utf8 pl ) {
+                                            ( vec_free [u] pl )
                                             = err WsInvalidUtf8
                                             = done T
                                         } {
                                             ( vec_free [u] msg_payload )
-                                            = msg_payload acc
-                                            = acc ( vec_new [u] )
+                                            = msg_payload pl
+                                            = kind op
                                             = have_message T
                                             = done T
                                         }
-                                    } {}
-                                }
-                            }
-                        } {
-                            // Text or binary opener — first frame of a
-                            // message carries the RSV1 compressed bit.
-                            ? != kind 0 {
-                                ( vec_free [u] pl )
-                                = err WsProtocolBadFragmentation
-                                = done T
-                            } {
-                                = compressed rsv1f
-                                ? fin {
-                                    // One-shot complete message. Skip UTF-8
-                                    // validation when compressed (validated
-                                    // post-inflation by the deflate reader).
-                                    ? & & == op 1 ! rsv1f ! ( ws_validate_utf8 pl ) {
-                                        ( vec_free [u] pl )
-                                        = err WsInvalidUtf8
-                                        = done T
                                     } {
-                                        ( vec_free [u] msg_payload )
-                                        = msg_payload pl
+                                        // First fragment of a chain
+                                        ( vec_extend [u] acc pl )
+                                        ( vec_free [u] pl )
                                         = kind op
-                                        = have_message T
-                                        = done T
+                                        ? > ( vec_len [u] acc ) . lim max_message_bytes {
+                                            = err WsMessageTooLarge
+                                            = done T
+                                        } {}
                                     }
-                                } {
-                                    // First fragment of a chain
-                                    ( vec_extend [u] acc pl )
-                                    ( vec_free [u] pl )
-                                    = kind op
-                                    ? > ( vec_len [u] acc ) . lim max_message_bytes {
-                                        = err WsMessageTooLarge
-                                        = done T
-                                    } {}
                                 }
                             }
                         }
-                    }
                     }
                 }
                 F we → { = err we = done T }
@@ -1488,7 +1488,7 @@ $ `stdlib/ext/compress.nu`
 
 // True iff line [ls, le) is "<name>:" (case-insensitive name, RFC 7230
 // forbids OWS between field-name and colon).
-@ __ws_line_is_header *u p i ls i le s name i namelen → b {
+@ __ws_line_is_header * u p i ls i le s name i namelen → b {
     ? > + ls + namelen 1 le { ^ F } {}
     : ~ i k 0
     ~ < k namelen {

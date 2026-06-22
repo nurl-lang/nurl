@@ -19,7 +19,7 @@ $ `stdlib/std/random.nu`
 : StunAddr {
     String host
     i port
-    i family    // 1 = IPv4, 2 = IPv6
+    i family  // 1 = IPv4, 2 = IPv6
 }
 
 @ stun_addr_free StunAddr a → v { ( string_free . a host ) }
@@ -27,9 +27,10 @@ $ `stdlib/std/random.nu`
 // 0x2112A442
 @ __stun_cookie → i { ^ 554869826 }
 
-
 @ __u16 ( Vec u ) v i off → i { ^ ?? ( bytes_read_u16_be v off ) { T x → # i x F → -1 } }
+
 @ __u32 ( Vec u ) v i off → i { ^ ?? ( bytes_read_u32_be v off ) { T x → # i x F → -1 } }
+
 @ __b ( Vec u ) v i off → i { ^ ?? ( vec_get [u] v off ) { T x → # i x F → -1 } }
 
 // 12 random transaction-ID bytes.
@@ -54,8 +55,8 @@ $ `stdlib/std/random.nu`
 // Build a Binding request carrying the given 12-byte transaction id.
 @ stun_build_request_with ( Vec u ) txid → ( Vec u ) {
     : ( Vec u ) m ( vec_new [u] )
-    ( bytes_push_u16_be m # u16 1 )           // type: Binding request
-    ( bytes_push_u16_be m # u16 0 )           // length: no attributes
+    ( bytes_push_u16_be m # u16 1 )  // type: Binding request
+    ( bytes_push_u16_be m # u16 0 )  // length: no attributes
     ( bytes_push_u32_be m # u32 ( __stun_cookie ) )
     ( vec_extend [u] m txid )
     ^ m
@@ -72,7 +73,7 @@ $ `stdlib/std/random.nu`
 @ stun_parse ( Vec u ) msg ( Vec u ) txid → ?StunAddr {
     : i len ( vec_len [u] msg )
     ? < len 20 { ^ @ ?StunAddr { F # StunAddr 0 } } {}
-    ? != ( __u16 msg 0 ) 257 { ^ @ ?StunAddr { F # StunAddr 0 } } {}   // 0x0101
+    ? != ( __u16 msg 0 ) 257 { ^ @ ?StunAddr { F # StunAddr 0 } } {}  // 0x0101
     ? != ( __u32 msg 4 ) ( __stun_cookie ) { ^ @ ?StunAddr { F # StunAddr 0 } } {}
     : ~ b txok T
     : ~ i ti 0
@@ -84,7 +85,7 @@ $ `stdlib/std/random.nu`
 
     // walk attributes
     : ~ i off 20
-    : ~ ?StunAddr out @ ?StunAddr { F # StunAddr 0 }
+    : ~ ? StunAddr out @ ?StunAddr { F # StunAddr 0 }
     : ~ b found F
     ~ & ! found < + off 4 len {
         : i atype ( __u16 msg off )
@@ -96,7 +97,7 @@ $ `stdlib/std/random.nu`
             ? == fam 1 {
                 : b is_xor == atype 32
                 : i xport ( __u16 msg + voff 2 )
-                : i port ? is_xor ^^ xport 8466 xport            // 8466 = 0x2112
+                : i port ? is_xor ^^ xport 8466 xport  // 8466 = 0x2112
                 : i a0 ( __b msg + voff 4 )
                 : i a1 ( __b msg + voff 5 )
                 : i a2 ( __b msg + voff 6 )

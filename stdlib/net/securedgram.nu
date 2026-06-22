@@ -51,16 +51,17 @@ $ `stdlib/net/session.nu`
 }
 
 @ __u32 ( Vec u ) v i off → i { ^ ?? ( bytes_read_u32_be v off ) { T x → # i x F → 0 } }
+
 @ __u64 ( Vec u ) v i off → i { ^ ?? ( bytes_read_u64_be v off ) { T x → # i x F → 0 } }
 
 : PeerState {
     ( Vec u ) pubkey
     String ehost
     i eport
-    i local_index    // we assigned; the peer echoes it in datagrams to us
-    i remote_index   // the peer assigned; we put it in datagrams to them
-    s hs             // *Handshake during the handshake, else 0
-    s session        // *NoiseSession once established, else 0
+    i local_index  // we assigned; the peer echoes it in datagrams to us
+    i remote_index  // the peer assigned; we put it in datagrams to them
+    s hs  // *Handshake during the handshake, else 0
+    s session  // *NoiseSession once established, else 0
     i established
 }
 
@@ -91,12 +92,12 @@ $ `stdlib/net/session.nu`
     }
 }
 
-@ __node_kp *SecureNode n → CryptoKeypair { ^ @ CryptoKeypair { . n s_priv . n s_pub } }
+@ __node_kp * SecureNode n → CryptoKeypair { ^ @ CryptoKeypair { . n s_priv . n s_pub } }
 
 // Re-bind the local socket (network change / roaming). Sessions + peer
 // state survive; the peer learns our new source on the next datagram via
 // its own roaming rule.
-@ securedgram_rebind *SecureNode n s host i port → !v NetErr {
+@ securedgram_rebind * SecureNode n s host i port → !v NetErr {
     : !UdpSocket NetErr sr ( udp_bind host port )
     ^ ?? sr {
         T sock → {
@@ -110,9 +111,9 @@ $ `stdlib/net/session.nu`
 }
 
 // Local endpoint ("host:port") — for telling a peer where to reach us.
-@ securedgram_local_addr *SecureNode n → String { ^ ( udp_local_addr . n sock ) }
+@ securedgram_local_addr * SecureNode n → String { ^ ( udp_local_addr . n sock ) }
 
-@ securedgram_add_peer *SecureNode n ( Vec u ) pubkey s host i port → v {
+@ securedgram_add_peer * SecureNode n ( Vec u ) pubkey s host i port → v {
     : *PeerState p # *PeerState ( nurl_alloc Z PeerState )
     = . p pubkey ( __cpy pubkey )
     = . p ehost ( string_from host )
@@ -126,7 +127,7 @@ $ `stdlib/net/session.nu`
     ( vec_push [s] . n peers # s p )
 }
 
-@ __find_pk *SecureNode n ( Vec u ) pk → s {
+@ __find_pk * SecureNode n ( Vec u ) pk → s {
     : i cnt ( vec_len [s] . n peers )
     : ~ s found # s 0
     : ~ i k 0
@@ -141,7 +142,7 @@ $ `stdlib/net/session.nu`
     ^ found
 }
 
-@ __find_idx *SecureNode n i idx → s {
+@ __find_idx * SecureNode n i idx → s {
     : i cnt ( vec_len [s] . n peers )
     : ~ s found # s 0
     : ~ i k 0
@@ -158,7 +159,7 @@ $ `stdlib/net/session.nu`
 
 // Update a peer's endpoint from a "host:port" source string (last ':' is
 // the port separator — fine for IPv4 and "[v6]:port"). The roaming rule.
-@ __roam *PeerState p String src → v {
+@ __roam * PeerState p String src → v {
     : s cs ( string_data src )
     : i n ( string_len src )
     : *u sp # *u cs
@@ -181,13 +182,13 @@ $ `stdlib/net/session.nu`
     = . p eport port
 }
 
-@ __send_pkt *SecureNode n *PeerState p ( Vec u ) pkt → v {
+@ __send_pkt * SecureNode n * PeerState p ( Vec u ) pkt → v {
     : !i NetErr r ( udp_send_to . n sock pkt ( string_data . p ehost ) . p eport )
     ?? r { T _ → {} F _ → {} }
 }
 
 // Initiate a handshake to a known peer (send msg1).
-@ securedgram_connect *SecureNode n ( Vec u ) peer_pk → !v NetErr {
+@ securedgram_connect * SecureNode n ( Vec u ) peer_pk → !v NetErr {
     : s pp ( __find_pk n peer_pk )
     ? == # i pp 0 { ^ @ !v NetErr { F @ NetErr { NetOther } } } {}
     : *PeerState p # *PeerState pp
@@ -204,7 +205,7 @@ $ `stdlib/net/session.nu`
     ^ @ !v NetErr { T 0 }
 }
 
-@ securedgram_send *SecureNode n ( Vec u ) peer_pk ( Vec u ) data → !v NetErr {
+@ securedgram_send * SecureNode n ( Vec u ) peer_pk ( Vec u ) data → !v NetErr {
     : s pp ( __find_pk n peer_pk )
     ? == # i pp 0 { ^ @ !v NetErr { F @ NetErr { NetOther } } } {}
     : *PeerState p # *PeerState pp
@@ -225,7 +226,7 @@ $ `stdlib/net/session.nu`
 }
 
 // Responder side: process a handshake init, reply with msg2, establish.
-@ __handle_init *SecureNode n String src ( Vec u ) buf → v {
+@ __handle_init * SecureNode n String src ( Vec u ) buf → v {
     ? < ( vec_len [u] buf ) 101 { ^ v } {}
     : i sender_index ( __u32 buf 1 )
     : ( Vec u ) msg1 ( __slc buf 5 96 )
@@ -261,7 +262,7 @@ $ `stdlib/net/session.nu`
 }
 
 // Initiator side: process the handshake response, establish.
-@ __handle_resp *SecureNode n String src ( Vec u ) buf → v {
+@ __handle_resp * SecureNode n String src ( Vec u ) buf → v {
     ? < ( vec_len [u] buf ) 57 { ^ v } {}
     : i resp_index ( __u32 buf 1 )
     : i our_index ( __u32 buf 5 )
@@ -301,7 +302,7 @@ $ `stdlib/net/session.nu`
 
 // Transport: decrypt, roam, deliver. None on a non-data / unauthenticated
 // datagram.
-@ __handle_data *SecureNode n String src ( Vec u ) buf → ?RecvData {
+@ __handle_data * SecureNode n String src ( Vec u ) buf → ?RecvData {
     ? < ( vec_len [u] buf ) 13 { ^ @ ?RecvData { F # RecvData 0 } } {}
     : i recv_index ( __u32 buf 1 )
     : i counter ( __u64 buf 5 )
@@ -329,7 +330,7 @@ $ `stdlib/net/session.nu`
 // Receive one datagram and process it. Returns app data (with the sender's
 // pubkey) for a transport packet; None for a handshake packet, a dropped
 // packet, or a recv timeout — callers loop.
-@ securedgram_recv *SecureNode n i max → ?RecvData {
+@ securedgram_recv * SecureNode n i max → ?RecvData {
     : !UdpPacket NetErr rr ( udp_recv_from . n sock max )
     ^ ?? rr {
         T pkt → {
@@ -346,7 +347,7 @@ $ `stdlib/net/session.nu`
     }
 }
 
-@ __peer_free *PeerState p → v {
+@ __peer_free * PeerState p → v {
     ( vec_free [u] . p pubkey )
     ( string_free . p ehost )
     ? != # i . p hs 0 { ( noise_free # *Handshake . p hs ) } {}
@@ -354,7 +355,7 @@ $ `stdlib/net/session.nu`
     ( nurl_free # s p )
 }
 
-@ securedgram_close *SecureNode n → v {
+@ securedgram_close * SecureNode n → v {
     : i cnt ( vec_len [s] . n peers )
     : ~ i k 0
     ~ < k cnt {

@@ -61,6 +61,17 @@ jobs:
         # linking or running anything.
         run: ./tools/check_examples.sh
 
+      - name: nurlfmt --check (canonical-form gate)
+        # Every first-party .nu file must be in canonical nurlfmt
+        # form. build.sh above already produced build/nurlfmt, so
+        # this is a cheap in-memory reformat-and-compare with no
+        # extra compilation. bench/ is excluded — those .nu files are
+        # recorded model outputs from the generation-accuracy study
+        # and must keep the exact bytes the model emitted. The
+        # repo-wide --write pass that made this pass also keeps
+        # nurlfmt IR-transparent (compiler/tests/nurlfmt_idempotent.sh).
+        run: ./compiler/tests/nurlfmt_check.sh
+
   sanitizers:
     name: AddressSanitizer + UndefinedBehaviorSanitizer
     runs-on: ubuntu-latest
@@ -97,14 +108,8 @@ jobs:
         # UBSan signal is what catches actual codegen bugs.
         run: ./compiler/tests/run_san_tests.sh
 
-# nurlfmt --check is deliberately NOT in this workflow yet. The
-# README pins it as "the CI gate", but ~100 .nu files in the current
-# stdlib / tests / examples corpus (and compiler/nurlc.nu itself) are
-# not in canonical form. Wiring nurlfmt --check today would fail
-# every PR with a 100-line diff that has nothing to do with the
-# change. The path forward is one of:
-#   1. land a single repo-wide `nurlfmt --write` pass as its own
-#      formatting commit, then add the job here;
-#   2. or restrict the check to compiler/nurlc.nu first and grow the
-#      scope as files are canonicalised.
-# Tracked as a follow-up to critic v0.9.0 Tier D #2.
+# nurlfmt --check now runs as a step in the build-test job above
+# (after the examples gate). The repo-wide `nurlfmt --write` pass that
+# canonicalised the tree landed alongside it, so the gate the README
+# pins is live: every first-party .nu file must be canonical to merge.
+# Closes critic v0.9.0 Tier D #2.

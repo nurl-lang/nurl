@@ -67,18 +67,21 @@ $ `stdlib/core/vec.nu`
 // ── A normalized source line ──────────────────────────────────────────
 // `indent` = leading-space count; `text` = the content after the
 // indentation, with any trailing comment stripped and right-trimmed.
-: YamlLine { i indent  String text }
+: YamlLine { i indent String text }
 
 // Recursive-descent state over the normalized lines. `err` is set
 // (non-zero YamlErr code) when a nested scalar fails (e.g. a malformed
 // flow collection) so the whole parse fails rather than degrading.
-: YamlParser { ( Vec YamlLine ) lines  i count  i cur  i err }
+: YamlParser { ( Vec YamlLine ) lines i count i cur i err }
 
 // ── Small char / byte helpers ─────────────────────────────────────────
 
 @ __yaml_is_sp i c → b { ^ | == c 32 == c 9 }
+
 @ __yaml_is_digit i c → b { ^ & >= c 48 <= c 57 }
+
 @ __yaml_is_e i c → b { ^ | == c 101 == c 69 }
+
 @ __yaml_is_sign i c → b { ^ | == c 43 == c 45 }
 
 @ __yaml_lower i c → i {
@@ -144,17 +147,17 @@ $ `stdlib/core/vec.nu`
     : i c0 ( nurl_str_get text 0 )
     ? ( __yaml_is_sign c0 ) { = k 1 } {}
     : ~ i digits 0
-    ~ & < k n ( __yaml_is_digit ( nurl_str_get text k ) ) { = k + k 1  = digits + digits 1 }
+    ~ & < k n ( __yaml_is_digit ( nurl_str_get text k ) ) { = k + k 1 = digits + digits 1 }
     ? & < k n == ( nurl_str_get text k ) 46 {
         = k + k 1
-        ~ & < k n ( __yaml_is_digit ( nurl_str_get text k ) ) { = k + k 1  = digits + digits 1 }
+        ~ & < k n ( __yaml_is_digit ( nurl_str_get text k ) ) { = k + k 1 = digits + digits 1 }
     } {}
     ? == digits 0 { ^ F } {}
     ? & < k n ( __yaml_is_e ( nurl_str_get text k ) ) {
         = k + k 1
         ? & < k n ( __yaml_is_sign ( nurl_str_get text k ) ) { = k + k 1 } {}
         : ~ i ed 0
-        ~ & < k n ( __yaml_is_digit ( nurl_str_get text k ) ) { = k + k 1  = ed + ed 1 }
+        ~ & < k n ( __yaml_is_digit ( nurl_str_get text k ) ) { = k + k 1 = ed + ed 1 }
         ? == ed 0 { ^ F } {}
     } {}
     ^ == k n
@@ -182,13 +185,13 @@ $ `stdlib/core/vec.nu`
                 }
             } {
                 ? == c 39 { = insq T } {
-                ? == c 34 { = indq T } {
-                ? == c 35 {
-                    : b atstart == k start
-                    : i prev ( nurl_str_get raw - k 1 )
-                    : b aftersp | == prev 32 == prev 9
-                    ? | atstart aftersp { = res k  = done T } {}
-                } {} }
+                    ? == c 34 { = indq T } {
+                        ? == c 35 {
+                            : b atstart == k start
+                            : i prev ( nurl_str_get raw - k 1 )
+                            : b aftersp | == prev 32 == prev 9
+                            ? | atstart aftersp { = res k = done T } {}
+                        } {} }
                 }
             }
         }
@@ -255,20 +258,20 @@ $ `stdlib/core/vec.nu`
 
 // ── Quoted-scalar scanners (shared by block + flow) ───────────────────
 
-: __YStr { String str  i pos  b ok }
+: __YStr { String str i pos b ok }
 
 @ __yaml_dq_escape String out i e → v {
-    ? == e 110 { ( string_push_char out 10 ) } {       // n
-    ? == e 116 { ( string_push_char out 9 ) } {        // t
-    ? == e 114 { ( string_push_char out 13 ) } {       // r
-    ? == e 48  { ( string_push_char out 0 ) } {        // 0
-    ? == e 92  { ( string_push_char out 92 ) } {       // backslash
-    ? == e 34  { ( string_push_char out 34 ) } {       // "
-    ? == e 47  { ( string_push_char out 47 ) } {       // /
-    ? == e 98  { ( string_push_char out 8 ) } {        // b
-    ? == e 102 { ( string_push_char out 12 ) } {       // f
-        ( string_push_char out e )                     // unknown: literal
-    } } } } } } } } }
+    ? == e 110 { ( string_push_char out 10 ) } {  // n
+        ? == e 116 { ( string_push_char out 9 ) } {  // t
+            ? == e 114 { ( string_push_char out 13 ) } {  // r
+                ? == e 48 { ( string_push_char out 0 ) } {  // 0
+                    ? == e 92 { ( string_push_char out 92 ) } {  // backslash
+                        ? == e 34 { ( string_push_char out 34 ) } {  // "
+                            ? == e 47 { ( string_push_char out 47 ) } {  // /
+                                ? == e 98 { ( string_push_char out 8 ) } {  // b
+                                    ? == e 102 { ( string_push_char out 12 ) } {  // f
+                                        ( string_push_char out e )  // unknown: literal
+                                    } } } } } } } } }
 }
 
 // text[pos] == '"' ; returns content + index after the closing quote.
@@ -279,7 +282,7 @@ $ `stdlib/core/vec.nu`
     : ~ b ok F
     ~ & ! done < k n {
         : i c ( nurl_str_get text k )
-        ? == c 34 { = done T  = ok T  = k + k 1 } {
+        ? == c 34 { = done T = ok T = k + k 1 } {
             ? == c 92 {
                 = k + k 1
                 ? >= k n { = done T } {
@@ -309,7 +312,7 @@ $ `stdlib/core/vec.nu`
                 ( string_push_char out 39 )
                 = k + k 2
             } {
-                = done T  = ok T  = k + k 1
+                = done T = ok T = k + k 1
             }
         } {
             ( string_push_char out c )
@@ -357,7 +360,7 @@ $ `stdlib/core/vec.nu`
         : !Json YamlErr fr ( __yaml_parse_flow text )
         ^ ?? fr {
             T j → j
-            F _ → { = . p err 1  ^ @ Json { JNull } }
+            F _ → { = . p err 1 ^ @ Json { JNull } }
         }
     } {}
     ^ ( __yaml_resolve_plain text )
@@ -365,7 +368,7 @@ $ `stdlib/core/vec.nu`
 
 // ── Flow collections ([..] / {..]}) ───────────────────────────────────
 
-: __YFlow { Json val  i pos  b ok }
+: __YFlow { Json val i pos b ok }
 
 @ __yaml_flow_plain_end s text i n i pos b stop_colon → i {
     : ~ i k pos
@@ -431,14 +434,14 @@ $ `stdlib/core/vec.nu`
     ? & < p n == ( nurl_str_get text p ) 93 { ^ @ __YFlow { arr + p 1 T } } {}
     ~ & ! done ok {
         : __YFlow ev ( __yaml_flow_value text n p )
-        ? ! . ev ok { = ok F  = done T  ( json_free . ev val ) } {
+        ? ! . ev ok { = ok F = done T ( json_free . ev val ) } {
             ( json_arr_push arr . ev val )
             = p ( __yaml_skip_sp text . ev pos n )
-            ? >= p n { = ok F  = done T } {
+            ? >= p n { = ok F = done T } {
                 : i c ( nurl_str_get text p )
                 ? == c 44 { = p ( __yaml_skip_sp text + p 1 n ) } {
-                    ? == c 93 { = p + p 1  = done T } {
-                        = ok F  = done T
+                    ? == c 93 { = p + p 1 = done T } {
+                        = ok F = done T
                     }
                 }
             }
@@ -457,23 +460,23 @@ $ `stdlib/core/vec.nu`
     ~ & ! done ok {
         = p ( __yaml_skip_sp text p n )
         : __YFlow kv ( __yaml_flow_scalar text n p T )
-        ? ! . kv ok { = ok F  = done T  ( json_free . kv val ) } {
+        ? ! . kv ok { = ok F = done T ( json_free . kv val ) } {
             : String keystr ( __yaml_json_as_key . kv val )
             ( json_free . kv val )
             = p ( __yaml_skip_sp text . kv pos n )
             : b nocolon | >= p n != ( nurl_str_get text p ) 58
-            ? nocolon { = ok F  = done T  ( string_free keystr ) } {
+            ? nocolon { = ok F = done T ( string_free keystr ) } {
                 = p ( __yaml_skip_sp text + p 1 n )
                 : __YFlow vv ( __yaml_flow_value text n p )
-                ? ! . vv ok { = ok F  = done T  ( string_free keystr )  ( json_free . vv val ) } {
+                ? ! . vv ok { = ok F = done T ( string_free keystr ) ( json_free . vv val ) } {
                     ( json_obj_set obj ( string_data keystr ) . vv val )
                     ( string_free keystr )
                     = p ( __yaml_skip_sp text . vv pos n )
-                    ? >= p n { = ok F  = done T } {
+                    ? >= p n { = ok F = done T } {
                         : i c ( nurl_str_get text p )
                         ? == c 44 { = p + p 1 } {
-                            ? == c 125 { = p + p 1  = done T } {
-                                = ok F  = done T
+                            ? == c 125 { = p + p 1 = done T } {
+                                = ok F = done T
                             }
                         }
                     }
@@ -508,13 +511,13 @@ $ `stdlib/core/vec.nu`
 @ __yp_indent_at * YamlParser p i idx → i {
     ? | < idx 0 >= idx . p count { ^ -1 } {}
     : ?YamlLine lo ( vec_get [YamlLine] . p lines idx )
-    ^ ?? lo { T l → . l indent  F → -1 }
+    ^ ?? lo { T l → . l indent F → -1 }
 }
 
 @ __yp_text_at * YamlParser p i idx → s {
     ? | < idx 0 >= idx . p count { ^ `` } {}
     : ?YamlLine lo ( vec_get [YamlLine] . p lines idx )
-    ^ ?? lo { T l → ( string_data . l text )  F → `` }
+    ^ ?? lo { T l → ( string_data . l text ) F → `` }
 }
 
 // Replace line `idx` with (newind, newtext); frees the old text.
@@ -559,15 +562,15 @@ $ `stdlib/core/vec.nu`
                 }
             } {
                 ? == c 39 { = insq T } {
-                ? == c 34 { = indq T } {
-                ? | == c 91 == c 123 { = depth + depth 1 } {
-                ? | == c 93 == c 125 { = depth - depth 1 } {
-                ? & == c 58 == depth 0 {
-                    : i nx ( nurl_str_get text + k 1 )
-                    : b atend == + k 1 n
-                    : b spc | == nx 32 == nx 9
-                    ? | atend spc { = res k  = done T } {}
-                } {} } } } }
+                    ? == c 34 { = indq T } {
+                        ? | == c 91 == c 123 { = depth + depth 1 } {
+                            ? | == c 93 == c 125 { = depth - depth 1 } {
+                                ? & == c 58 == depth 0 {
+                                    : i nx ( nurl_str_get text + k 1 )
+                                    : b atend == + k 1 n
+                                    : b spc | == nx 32 == nx 9
+                                    ? | atend spc { = res k = done T } {}
+                                } {} } } } }
             }
         }
         = k + k 1
@@ -685,29 +688,29 @@ $ `stdlib/core/vec.nu`
 
 @ __yaml_indent String out i n → v {
     : ~ i k 0
-    ~ < k n { ( string_push_char out 32 )  = k + k 1 }
+    ~ < k n { ( string_push_char out 32 ) = k + k 1 }
 }
 
 @ __yaml_is_indicator i c → b {
-    ? == c 45 { ^ T } {}    // -
-    ? == c 63 { ^ T } {}    // ?
-    ? == c 58 { ^ T } {}    // :
-    ? == c 44 { ^ T } {}    // ,
-    ? == c 91 { ^ T } {}    // [
-    ? == c 93 { ^ T } {}    // ]
-    ? == c 123 { ^ T } {}   // {
-    ? == c 125 { ^ T } {}   // }
-    ? == c 35 { ^ T } {}    // #
-    ? == c 38 { ^ T } {}    // &
-    ? == c 42 { ^ T } {}    // *
-    ? == c 33 { ^ T } {}    // !
-    ? == c 124 { ^ T } {}   // |
-    ? == c 62 { ^ T } {}    // >
-    ? == c 39 { ^ T } {}    // '
-    ? == c 34 { ^ T } {}    // "
-    ? == c 37 { ^ T } {}    // %
-    ? == c 64 { ^ T } {}    // @
-    ? == c 96 { ^ T } {}    // `
+    ? == c 45 { ^ T } {}  // -
+    ? == c 63 { ^ T } {}  // ?
+    ? == c 58 { ^ T } {}  // :
+    ? == c 44 { ^ T } {}  // ,
+    ? == c 91 { ^ T } {}  // [
+    ? == c 93 { ^ T } {}  // ]
+    ? == c 123 { ^ T } {}  // {
+    ? == c 125 { ^ T } {}  // }
+    ? == c 35 { ^ T } {}  // #
+    ? == c 38 { ^ T } {}  // &
+    ? == c 42 { ^ T } {}  // *
+    ? == c 33 { ^ T } {}  // !
+    ? == c 124 { ^ T } {}  // |
+    ? == c 62 { ^ T } {}  // >
+    ? == c 39 { ^ T } {}  // '
+    ? == c 34 { ^ T } {}  // "
+    ? == c 37 { ^ T } {}  // %
+    ? == c 64 { ^ T } {}  // @
+    ? == c 96 { ^ T } {}  // `
     ^ F
 }
 
@@ -809,11 +812,11 @@ $ `stdlib/core/vec.nu`
     ~ < k n {
         ( __yaml_indent out indent )
         : ?Json ek ( vec_get [Json] v k )
-        ?? ek { T jk → ( __yaml_render_scalar out jk )  F → {} }
+        ?? ek { T jk → ( __yaml_render_scalar out jk ) F → {} }
         ( string_push_char out 58 )
         ? < + k 1 n {
             : ?Json ev ( vec_get [Json] v + k 1 )
-            ?? ev { T jv → ( __yaml_emit_valpart out jv + indent 2 )  F → ( string_push_char out 10 ) }
+            ?? ev { T jv → ( __yaml_emit_valpart out jv + indent 2 ) F → ( string_push_char out 10 ) }
         } {
             ( string_push_char out 10 )
         }
@@ -828,7 +831,7 @@ $ `stdlib/core/vec.nu`
         ( __yaml_indent out indent )
         ( string_push_char out 45 )
         : ?Json e ( vec_get [Json] v k )
-        ?? e { T jv → ( __yaml_emit_valpart out jv + indent 2 )  F → ( string_push_char out 10 ) }
+        ?? e { T jv → ( __yaml_emit_valpart out jv + indent 2 ) F → ( string_push_char out 10 ) }
         = k + k 1
     }
 }

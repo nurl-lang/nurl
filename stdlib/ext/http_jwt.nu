@@ -44,7 +44,7 @@ $ `stdlib/ext/jwt.nu`
     ? > ( nurl_str_len err_code ) 0 {
         ( string_push_str chal ` error="` )
         ( string_push_str chal err_code )
-        ( string_push_char chal 34 )            // '"'
+        ( string_push_char chal 34 )  // '"'
         ? > ( nurl_str_len desc ) 0 {
             ( string_push_str chal `, error_description="` )
             ( string_push_str chal desc )
@@ -72,7 +72,7 @@ $ `stdlib/ext/jwt.nu`
 // the claims-aware handler (freeing the claims afterward) or render the
 // 401. `tok_present` distinguishes a missing credential (no
 // `error=`, per RFC 6750 §3.1) from an invalid one.
-@ __jwt_gate !Json JwtErr vr HttpRequest req ( @ HttpResponse HttpRequest Json ) inner → HttpResponse {
+@ __jwt_gate ! Json JwtErr vr HttpRequest req ( @ HttpResponse HttpRequest Json ) inner → HttpResponse {
     ^ ?? vr {
         T claims → {
             : HttpResponse resp ( inner req claims )

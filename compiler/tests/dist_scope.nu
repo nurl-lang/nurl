@@ -11,13 +11,16 @@ $ `stdlib/dist/crdt.nu`
 $ `stdlib/dist/replicator.nu`
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
+
 @ mkpk i seed → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + seed k ) = k + k 1 } ^ v }
+
 @ mkkey i x → ( Vec u ) {
     : ( Vec u ) v ( vec_new [u] )
     ( vec_push [u] v # u & x 255 ) ( vec_push [u] v # u & >> x 8 255 )
     ( vec_push [u] v # u & >> x 16 255 ) ( vec_push [u] v # u & >> x 24 255 )
     ^ v
 }
+
 @ b2i b x → i { ^ ? x 1 0 }
 
 @ main → i {
@@ -38,7 +41,7 @@ $ `stdlib/dist/replicator.nu`
     // ── exactly R replicas; non-replicas excluded ────────────────
     : i nrep + + + ( b2i ( is_replica r key 2 a ) ) ( b2i ( is_replica r key 2 b ) ) ( b2i ( is_replica r key 2 c ) ) ( b2i ( is_replica r key 2 d ) )
     ( pb `exactly 2 members are replicas: ` == nrep 2 )
-    ( pb `at least one non-replica excluded: ` == nrep 2 )   // 4 members, 2 replicas ⇒ 2 excluded
+    ( pb `at least one non-replica excluded: ` == nrep 2 )  // 4 members, 2 replicas ⇒ 2 excluded
 
     // ── digest detects divergence; anti-entropy converges ────────
     : *PNCounter repA ( pncounter_new )
@@ -74,7 +77,7 @@ $ `stdlib/dist/replicator.nu`
 
     // freshly-promoted replica starts empty, pulls the live state, converges
     : *PNCounter fresh ( pncounter_new )
-    : ( Vec u ) live ( pncounter_encode repA )    // a surviving replica's state
+    : ( Vec u ) live ( pncounter_encode repA )  // a surviving replica's state
     : ( Vec u ) fresh0 ( pncounter_encode fresh )
     ( pb `new replica empty diverges: ` ! ( crdt_in_sync fresh0 live ) )
     ( vec_free [u] fresh0 )

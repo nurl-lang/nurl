@@ -23,6 +23,7 @@ $ `stdlib/net/membership.nu`
 $ `stdlib/net/relay.nu`
 
 & `c` @ nurl_atomic_i64_load *u p → i
+
 & `c` @ nurl_atomic_i64_inc *u p → i
 
 @ __hb_cpy ( Vec u ) v → ( Vec u ) {
@@ -33,7 +34,7 @@ $ `stdlib/net/relay.nu`
 
 // Build the encoded heartbeat payload: a gossip message carrying just this
 // node's Alive self-fact at its current incarnation. Pure.
-@ heartbeat_payload *PkMemberTable t → ( Vec u ) {
+@ heartbeat_payload * PkMemberTable t → ( Vec u ) {
     : ( Vec s ) g ( vec_new [s] )
     ( vec_push [s] g # s ( pktable_self_fact t ) )
     : PkMsg m @ PkMsg { ( pk_ping ) 0 ( vec_new [u] ) g }
@@ -44,8 +45,8 @@ $ `stdlib/net/relay.nu`
 
 : Heartbeat {
     Thread thr
-    *i stop      // atomic flag: 0 = run, >0 = stop
-    s env        // thread closure env, freed after join
+    * i stop  // atomic flag: 0 = run, >0 = stop
+    s env  // thread closure env, freed after join
     i live
 }
 
@@ -53,7 +54,7 @@ $ `stdlib/net/relay.nu`
 // every `interval_ms`, reading the table under `mtx` (the caller must hold the
 // SAME mtx around its own table mutations). `rc` is the heartbeat's own relay
 // connection. Returns a *Heartbeat to stop later.
-@ heartbeat_start *PkMemberTable t RelayClient rc ( Vec u ) group i interval_ms Mutex mtx → *Heartbeat {
+@ heartbeat_start * PkMemberTable t RelayClient rc ( Vec u ) group i interval_ms Mutex mtx → *Heartbeat {
     : *Heartbeat hb # *Heartbeat ( nurl_alloc Z Heartbeat )
     : *i stop # *i ( nurl_alloc 8 )
     = . stop 0 0
@@ -84,9 +85,9 @@ $ `stdlib/net/relay.nu`
 }
 
 // Signal the heartbeat thread to stop, join it, and free its resources.
-@ heartbeat_stop *Heartbeat hb → v {
+@ heartbeat_stop * Heartbeat hb → v {
     ? == . hb live 1 {
-        ( nurl_atomic_i64_inc # *u . hb stop )   // 0 → 1: stop after current sleep
+        ( nurl_atomic_i64_inc # *u . hb stop )  // 0 → 1: stop after current sleep
         ( thread_join . hb thr )
         ? != # i . hb env 0 { ( nurl_free . hb env ) } {}
         = . hb live 0

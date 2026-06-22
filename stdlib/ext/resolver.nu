@@ -29,10 +29,10 @@ $ `stdlib/ext/registry_index.nu`
 $ `stdlib/ext/semver.nu`
 
 : | ResolveErr {
-    ResolveNotFound    // a package has no index (fetch returned empty)
-    ResolveBadIndex    // a fetched index didn't parse
-    ResolveNoMatch     // no published version satisfies the requirement
-    ResolveConflict    // two requirements on one name can't share a version
+    ResolveNotFound  // a package has no index (fetch returned empty)
+    ResolveBadIndex  // a fetched index didn't parse
+    ResolveNoMatch  // no published version satisfies the requirement
+    ResolveConflict  // two requirements on one name can't share a version
 }
 
 @ resolve_err_name ResolveErr e → s {

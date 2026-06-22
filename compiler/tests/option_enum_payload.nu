@@ -18,7 +18,7 @@
     ^ @ ?Color { F }
 }
 
-@ name_of ?Color o → s {
+@ name_of ? Color o → s {
     ?? o {
         T c → ?? c { Red → `red` Green → `green` Blue → `blue` }
         F _ → `none`

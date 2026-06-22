@@ -42,11 +42,17 @@ $ `stdlib/std/bigint.nu`
 : | DecErr { DecDivZero }
 
 @ dec_free Decimal d → v { ( bigint_free . d coeff ) }
+
 @ dec_clone Decimal d → Decimal { ^ @ Decimal { ( bigint_clone . d coeff ) . d scale } }
+
 @ dec_scale Decimal d → i { ^ . d scale }
+
 @ dec_is_zero Decimal d → b { ^ ( bigint_is_zero . d coeff ) }
+
 @ dec_zero → Decimal { ^ @ Decimal { ( bigint_zero ) 0 } }
+
 @ dec_from_i i n → Decimal { ^ @ Decimal { ( bigint_from_i n ) 0 } }
+
 @ dec_neg Decimal d → Decimal { ^ @ Decimal { ( bigint_neg . d coeff ) . d scale } }
 
 // ── internal bigint helpers ─────────────────────────────────────────
@@ -89,7 +95,7 @@ $ `stdlib/std/bigint.nu`
 @ __dec_round_div BigInt num BigInt den → BigInt {
     : BigInt q ( bigint_div num den )
     : BigInt r ( bigint_rem num den )
-    : BigInt twor ( bigint_add r r )           // 2·remainder
+    : BigInt twor ( bigint_add r r )  // 2·remainder
     : i c ( bigint_cmp twor den )
     ( bigint_free r ) ( bigint_free twor )
     // 2r > den → round up; 2r < den → round down (keep q);
@@ -213,7 +219,7 @@ $ `stdlib/std/bigint.nu`
     : s ss ( string_data signed )
     : b neg & > ( nurl_str_len ss ) 0 == ( nurl_str_get ss 0 ) 45
     : i dstart ? neg 1 0
-    : i dlen - ( nurl_str_len ss ) dstart   // count of magnitude digits
+    : i dlen - ( nurl_str_len ss ) dstart  // count of magnitude digits
     : i scale . d scale
     : String out ( string_with_cap + + dlen scale 4 )
     ? neg { ( string_push_char out 45 ) } {}
@@ -228,13 +234,13 @@ $ `stdlib/std/bigint.nu`
         : i split + dstart - dlen scale
         : ~ i k dstart
         ~ < k split { ( string_push_char out ( nurl_str_get ss k ) ) = k + k 1 }
-        ( string_push_char out 46 )            // '.'
+        ( string_push_char out 46 )  // '.'
         = k split
         ~ < k ( nurl_str_len ss ) { ( string_push_char out ( nurl_str_get ss k ) ) = k + k 1 }
     } {
         // |value| < 1 : "0." then (scale - dlen) leading zeros then digits
-        ( string_push_char out 48 )            // '0'
-        ( string_push_char out 46 )            // '.'
+        ( string_push_char out 48 )  // '0'
+        ( string_push_char out 46 )  // '.'
         : ~ i z 0
         ~ < z - scale dlen { ( string_push_char out 48 ) = z + z 1 }
         : ~ i k dstart
@@ -248,7 +254,7 @@ $ `stdlib/std/bigint.nu`
     : i n ( nurl_str_len str )
     ? == n 0 { ^ @ !Decimal ParseErr { F @ ParseErr { Empty } } } {}
     : ~ i pos 0
-    : String digits ( string_with_cap + n 1 )   // sign + all coefficient digits
+    : String digits ( string_with_cap + n 1 )  // sign + all coefficient digits
     : i c0 ( nurl_str_get str 0 )
     ? | == c0 45 == c0 43 {
         ? == c0 45 { ( string_push_char digits 45 ) } {}

@@ -77,7 +77,7 @@ $ `stdlib/std/panic.nu`
 }
 
 @ __strategy_code SupStrategy s → i {
-    ^ ?? s { OneForOne → 0  OneForAll → 1  RestForOne → 2 }
+    ^ ?? s { OneForOne → 0 OneForAll → 1 RestForOne → 2 }
 }
 
 : ChildImpl {
@@ -95,7 +95,7 @@ $ `stdlib/std/panic.nu`
     i window_ms
     i base_backoff_ms
     i max_backoff_ms
-    i strategy           // SupStrategy code (0/1/2); used by supervisor_start
+    i strategy  // SupStrategy code (0/1/2); used by supervisor_start
 }
 
 : Supervisor { s ctl }
@@ -133,7 +133,7 @@ $ `stdlib/std/panic.nu`
     ( vec_push [ChildSpec] . sup children @ ChildSpec { # s child } )
 }
 
-@ __child_at *SupImpl sup i idx → *ChildImpl {
+@ __child_at * SupImpl sup i idx → *ChildImpl {
     ^ ?? ( vec_get [ChildSpec] . sup children idx ) {
         T c → # *ChildImpl . c ctl
         F → # *ChildImpl 0
@@ -160,7 +160,7 @@ $ `stdlib/std/panic.nu`
 
 // Supervise one child: run → on stop, decide restart per policy + intensity.
 // Blocks until the child is no longer restarted.
-@ __supervise_loop *SupImpl sup *ChildImpl child → v {
+@ __supervise_loop * SupImpl sup * ChildImpl child → v {
     : ~ b done F
     : ~ i delay . sup base_backoff_ms
     : ~ i win_start ( monotonic_ns )
@@ -173,8 +173,8 @@ $ `stdlib/std/panic.nu`
             T _ → {}
             F pi → { = crashed T ( panic_info_free pi ) }
         }
-        : b restart_on_crash ?? . child policy { RTemporary → F  _ → T }
-        : b restart_on_exit  ?? . child policy { RPermanent → T  _ → F }
+        : b restart_on_crash ?? . child policy { RTemporary → F _ → T }
+        : b restart_on_exit ?? . child policy { RPermanent → T _ → F }
         : b want_restart ? crashed restart_on_crash restart_on_exit
         ? ! want_restart {
             = done T
@@ -183,7 +183,7 @@ $ `stdlib/std/panic.nu`
             // Restart-intensity window: too many restarts too fast → give up.
             : i now ( monotonic_ns )
             ? > / - now win_start 1000000 . sup window_ms
-            { = win_start now  = win_count 0 } {}
+            { = win_start now = win_count 0 } {}
             = win_count + win_count 1
             ? > win_count . sup max_restarts
             { = done T }
@@ -216,7 +216,7 @@ $ `stdlib/std/panic.nu`
 
 // Run child `idx` once under panic recovery. Returns T on clean return,
 // F on a crash (and bumps the child's restart counter).
-@ __run_child_once *SupImpl sup i idx → b {
+@ __run_child_once * SupImpl sup i idx → b {
     : *ChildImpl child ( __child_at sup idx )
     : ( @ v ) cl . child start
     : !v PanicInfo r ( __sup_recover cl )
@@ -232,10 +232,10 @@ $ `stdlib/std/panic.nu`
 
 @ __min_idx ( Vec i ) v → i {
     : i n ( vec_len [i] v )
-    : ~ i lo ?? ( vec_get [i] v 0 ) { T x → x  F → 0 }
+    : ~ i lo ?? ( vec_get [i] v 0 ) { T x → x F → 0 }
     : ~ i k 1
     ~ < k n {
-        ?? ( vec_get [i] v k ) { T x → ? < x lo { = lo x } {} F → {} }
+        ?? ( vec_get [i] v k ) { T x → ?< x lo { = lo x } {} F → {} }
         = k + k 1
     }
     ^ lo
@@ -244,14 +244,14 @@ $ `stdlib/std/panic.nu`
 // The set of children to (re)run next, given the crashed set + strategy.
 @ __next_runset i st ( Vec i ) crashed i n → ( Vec i ) {
     : ( Vec i ) out ( vec_new [i] )
-    ? == st 1 {                          // OneForAll → whole group
+    ? == st 1 {  // OneForAll → whole group
         : ~ i k 0
         ~ < k n { ( vec_push [i] out k ) = k + k 1 }
     } {
-        ? == st 2 {                      // RestForOne → min(crashed)..n
+        ? == st 2 {  // RestForOne → min(crashed)..n
             : ~ i k ( __min_idx crashed )
             ~ < k n { ( vec_push [i] out k ) = k + k 1 }
-        } {                              // OneForOne → just the crashed
+        } {  // OneForOne → just the crashed
             : i cn ( vec_len [i] crashed )
             : ~ i k 0
             ~ < k cn {
@@ -278,7 +278,7 @@ $ `stdlib/std/panic.nu`
         : ( Vec i ) crashed ( vec_new [i] )
         : ~ i ri 0
         ~ < ri ( vec_len [i] runset ) {
-            : i idx ?? ( vec_get [i] runset ri ) { T x → x  F → 0 }
+            : i idx ?? ( vec_get [i] runset ri ) { T x → x F → 0 }
             ? ! ( __run_child_once sup idx ) { ( vec_push [i] crashed idx ) } {}
             = ri + ri 1
         }

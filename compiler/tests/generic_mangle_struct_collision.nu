@@ -11,18 +11,21 @@
 // `box_size [str]` returned 8 (sizeof Box<i8*>) instead of 24. No diagnostic,
 // valid IR, wrong answer at runtime. `mangle_type` is now injective over LLVM
 // type strings (colliding named-struct slugs are escaped `S__<name>`).
-: str { i a  i b  i c }          // 24-byte struct; collided with s (i8*)
+: str { i a i b i c }  // 24-byte struct; collided with s (i8*)
 
 : Box [T] { T val }
+
 @ box_size [T] → i { ^ Z ( Box T ) }
+
 @ box_make [T] T v → ( Box T ) { ^ @ ( Box T ) { v } }
-@ box_get  [T] ( Box T ) bx → T { ^ . bx val }
+
+@ box_get [T] ( Box T ) bx → T { ^ . bx val }
 
 @ main → i {
     // sizeof must reflect the ACTUAL element type, not whichever instantiation
     // was emitted first.
-    ( nurl_print ( nurl_str_int ( box_size [s]   ) ) ) ( nurl_print `\n` )   // 8
-    ( nurl_print ( nurl_str_int ( box_size [str] ) ) ) ( nurl_print `\n` )   // 24
+    ( nurl_print ( nurl_str_int ( box_size [s] ) ) ) ( nurl_print `\n` )  // 8
+    ( nurl_print ( nurl_str_int ( box_size [str] ) ) ) ( nurl_print `\n` )  // 24
 
     // The struct-typed Box must round-trip its real fields (would read garbage
     // through the 8-byte i8* layout under the old collision).
@@ -33,6 +36,6 @@
 
     // The string-typed Box still works alongside it.
     : ( Box s ) sb ( box_make [s] `hi` )
-    ( nurl_print ( box_get [s] sb ) ) ( nurl_print `\n` )                    // hi
+    ( nurl_print ( box_get [s] sb ) ) ( nurl_print `\n` )  // hi
     ^ 0
 }

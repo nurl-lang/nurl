@@ -47,15 +47,21 @@ $ `stdlib/std/async.nu`
 & `libc` @ nurl_tcp_connect s host i port → i
 
 // ── frame types ──────────────────────────────────────────────────
-@ relay_reg    → i { ^ 1 }
-@ relay_fwd    → i { ^ 2 }
-@ relay_del    → i { ^ 3 }
-@ relay_ka     → i { ^ 4 }
-@ relay_gjoin  → i { ^ 5 }
-@ relay_gleave → i { ^ 6 }
-@ relay_gsend  → i { ^ 7 }
+@ relay_reg → i { ^ 1 }
 
-@ __relay_max → i { ^ 131072 }   // reject frames larger than this (DoS guard)
+@ relay_fwd → i { ^ 2 }
+
+@ relay_del → i { ^ 3 }
+
+@ relay_ka → i { ^ 4 }
+
+@ relay_gjoin → i { ^ 5 }
+
+@ relay_gleave → i { ^ 6 }
+
+@ relay_gsend → i { ^ 7 }
+
+@ __relay_max → i { ^ 131072 }  // reject frames larger than this (DoS guard)
 
 @ __rcpy ( Vec u ) v → ( Vec u ) {
     : ( Vec u ) o ( vec_with_cap [u] ( vec_len [u] v ) )
@@ -82,6 +88,7 @@ $ `stdlib/std/async.nu`
     i ftype
     ( Vec u ) body
 }
+
 @ relay_frame_free RelayFrame fr → v { ( vec_free [u] . fr body ) }
 
 @ __frame i ftype ( Vec u ) body → ( Vec u ) {
@@ -93,6 +100,7 @@ $ `stdlib/std/async.nu`
 }
 
 @ relay_build_register ( Vec u ) pubkey → ( Vec u ) { ^ ( __frame ( relay_reg ) pubkey ) }
+
 @ relay_build_keepalive → ( Vec u ) {
     : ( Vec u ) empty ( vec_new [u] )
     : ( Vec u ) f ( __frame ( relay_ka ) empty )
@@ -108,12 +116,16 @@ $ `stdlib/std/async.nu`
     ( vec_free [u] body )
     ^ f
 }
+
 @ relay_build_forward ( Vec u ) dest_pk ( Vec u ) payload → ( Vec u ) { ^ ( __frame_addressed ( relay_fwd ) dest_pk payload ) }
+
 @ relay_build_deliver ( Vec u ) src_pk ( Vec u ) payload → ( Vec u ) { ^ ( __frame_addressed ( relay_del ) src_pk payload ) }
 
-@ relay_build_group_join  ( Vec u ) group_id → ( Vec u ) { ^ ( __frame ( relay_gjoin ) group_id ) }
+@ relay_build_group_join ( Vec u ) group_id → ( Vec u ) { ^ ( __frame ( relay_gjoin ) group_id ) }
+
 @ relay_build_group_leave ( Vec u ) group_id → ( Vec u ) { ^ ( __frame ( relay_gleave ) group_id ) }
-@ relay_build_group_send  ( Vec u ) group_id ( Vec u ) payload → ( Vec u ) { ^ ( __frame_addressed ( relay_gsend ) group_id payload ) }
+
+@ relay_build_group_send ( Vec u ) group_id ( Vec u ) payload → ( Vec u ) { ^ ( __frame_addressed ( relay_gsend ) group_id payload ) }
 
 // First 32 bytes of a FORWARD/DELIVER body = the peer pubkey.
 @ relay_body_pk ( Vec u ) body → ( Vec u ) {
@@ -167,7 +179,7 @@ $ `stdlib/std/async.nu`
 }
 
 @ relay_read_frame TcpConn c → ?RelayFrame {
-    : ~ ?RelayFrame out @ ?RelayFrame { F # RelayFrame 0 }
+    : ~ ? RelayFrame out @ ?RelayFrame { F # RelayFrame 0 }
     : ?( Vec u ) hdr ( __read_exact c 5 )
     ?? hdr {
         T h → {
@@ -194,19 +206,19 @@ $ `stdlib/std/async.nu`
 : RelayEntry {
     ( Vec u ) pubkey
     TcpConn conn
-    i live       // 1 = registered + connected, 0 = gone
-    i sending    // 1 = a forward write to this conn is in flight (write lock)
+    i live  // 1 = registered + connected, 0 = gone
+    i sending  // 1 = a forward write to this conn is in flight (write lock)
 }
 
 : GroupEntry {
-    ( Vec u ) gid       // 32-byte group id
-    ( Vec s ) members   // *RelayEntry, NON-owning (entries owned via clients)
+    ( Vec u ) gid  // 32-byte group id
+    ( Vec s ) members  // *RelayEntry, NON-owning (entries owned via clients)
 }
 
 : RelayServer {
     TcpListener lst
-    ( Vec s ) clients   // *RelayEntry
-    ( Vec s ) groups    // *GroupEntry
+    ( Vec s ) clients  // *RelayEntry
+    ( Vec s ) groups  // *GroupEntry
 }
 
 @ relay_server_start s host i port → !RelayServer NetErr {
@@ -218,7 +230,7 @@ $ `stdlib/std/async.nu`
     ^ out
 }
 
-@ __relay_register_conn *RelayServer rs TcpConn c ( Vec u ) pk → s {
+@ __relay_register_conn * RelayServer rs TcpConn c ( Vec u ) pk → s {
     : *RelayEntry e # *RelayEntry ( nurl_alloc Z RelayEntry )
     = . e pubkey ( __rcpy pk )
     = . e conn c
@@ -228,7 +240,7 @@ $ `stdlib/std/async.nu`
     ^ # s e
 }
 
-@ __relay_find *RelayServer rs ( Vec u ) pk → s {
+@ __relay_find * RelayServer rs ( Vec u ) pk → s {
     : i n ( vec_len [s] . rs clients )
     : ~ s found # s 0
     : ~ i k 0
@@ -247,7 +259,7 @@ $ `stdlib/std/async.nu`
 // check-and-set is atomic (no yield between), and tcp_write_all may park —
 // other forwarders to the same conn spin-yield until the lock clears, so
 // frames never interleave on a shared destination.
-@ __relay_send_locked *RelayEntry de ( Vec u ) frame → v {
+@ __relay_send_locked * RelayEntry de ( Vec u ) frame → v {
     ~ == . de sending 1 { ( yield ) }
     = . de sending 1
     ?? ( tcp_write_all . de conn frame ) { T _ → {} F _ → { = . de live 0 } }
@@ -256,7 +268,7 @@ $ `stdlib/std/async.nu`
 
 // ── group multicast tables ───────────────────────────────────────
 
-@ __relay_group_find *RelayServer rs ( Vec u ) gid → s {
+@ __relay_group_find * RelayServer rs ( Vec u ) gid → s {
     : i n ( vec_len [s] . rs groups )
     : ~ s found # s 0
     : ~ i k 0
@@ -271,7 +283,7 @@ $ `stdlib/std/async.nu`
     ^ found
 }
 
-@ __relay_group_ensure *RelayServer rs ( Vec u ) gid → s {
+@ __relay_group_ensure * RelayServer rs ( Vec u ) gid → s {
     : s ex ( __relay_group_find rs gid )
     ? != # i ex 0 { ^ ex } {}
     : *GroupEntry g # *GroupEntry ( nurl_alloc Z GroupEntry )
@@ -282,7 +294,7 @@ $ `stdlib/std/async.nu`
 }
 
 // Remove an entry pointer from a group's member list (compacting copy).
-@ __grp_remove_member *GroupEntry g s entry_ptr → v {
+@ __grp_remove_member * GroupEntry g s entry_ptr → v {
     : i n ( vec_len [s] . g members )
     : ( Vec s ) keep ( vec_new [s] )
     : ~ i k 0
@@ -295,7 +307,7 @@ $ `stdlib/std/async.nu`
     = . g members keep
 }
 
-@ __relay_group_join *RelayServer rs s entry_ptr ( Vec u ) gid → v {
+@ __relay_group_join * RelayServer rs s entry_ptr ( Vec u ) gid → v {
     ? == # i entry_ptr 0 { ^ v } {}
     : s gp ( __relay_group_ensure rs gid )
     : *GroupEntry g # *GroupEntry gp
@@ -309,14 +321,14 @@ $ `stdlib/std/async.nu`
     ? ! have { ( vec_push [s] . g members entry_ptr ) } {}
 }
 
-@ __relay_group_leave *RelayServer rs s entry_ptr ( Vec u ) gid → v {
+@ __relay_group_leave * RelayServer rs s entry_ptr ( Vec u ) gid → v {
     : s gp ( __relay_group_find rs gid )
     ? == # i gp 0 { ^ v } {}
     : *GroupEntry g # *GroupEntry gp
     ( __grp_remove_member g entry_ptr )
 }
 
-@ __relay_drop_from_groups *RelayServer rs s entry_ptr → v {
+@ __relay_drop_from_groups * RelayServer rs s entry_ptr → v {
     : i gn ( vec_len [s] . rs groups )
     : ~ i gi 0
     ~ < gi gn {
@@ -328,7 +340,7 @@ $ `stdlib/std/async.nu`
 
 // Fan an opaque payload to every live member of a group except the sender,
 // as a DELIVER carrying the sender's pubkey as src. One uplink → N down.
-@ __relay_group_fanout *RelayServer rs s sender_ptr ( Vec u ) gid ( Vec u ) payload → v {
+@ __relay_group_fanout * RelayServer rs s sender_ptr ( Vec u ) gid ( Vec u ) payload → v {
     ? == # i sender_ptr 0 { ^ v } {}
     : s gp ( __relay_group_find rs gid )
     ? == # i gp 0 { ^ v } {}
@@ -350,7 +362,7 @@ $ `stdlib/std/async.nu`
     }
 }
 
-@ __relay_handle_conn *RelayServer rs TcpConn c → v {
+@ __relay_handle_conn * RelayServer rs TcpConn c → v {
     : ~ s self_entry # s 0
     : ~ b done F
     ~ ! done {
@@ -401,7 +413,7 @@ $ `stdlib/std/async.nu`
     ( tcp_close_conn c )
 }
 
-@ __relay_accept_loop *RelayServer rs → v {
+@ __relay_accept_loop * RelayServer rs → v {
     : TcpListener lst . rs lst
     : ~ b done F
     ~ ! done {
@@ -416,7 +428,7 @@ $ `stdlib/std/async.nu`
 // Run the relay: one accept fiber, a handler fiber per connection. Blocks
 // in runtime_run until the listener is closed (relay_server_stop) and every
 // in-flight conn fiber drains.
-@ relay_server_run *RelayServer rs → v {
+@ relay_server_run * RelayServer rs → v {
     ( tcp_listener_retain . rs lst )
     : ( @ v ) accept_fiber \ → v { ( __relay_accept_loop rs ) }
     ( spawn accept_fiber )
@@ -426,9 +438,9 @@ $ `stdlib/std/async.nu`
     ( nurl_free # s accept_env )
 }
 
-@ relay_server_stop *RelayServer rs → v { ( tcp_close_listener . rs lst ) }
+@ relay_server_stop * RelayServer rs → v { ( tcp_close_listener . rs lst ) }
 
-@ relay_server_free *RelayServer rs → v {
+@ relay_server_free * RelayServer rs → v {
     : i n ( vec_len [s] . rs clients )
     : ~ i k 0
     ~ < k n {
@@ -469,6 +481,7 @@ $ `stdlib/std/async.nu`
     ( Vec u ) src
     ( Vec u ) payload
 }
+
 @ relay_msg_free RelayMsg m → v { ( vec_free [u] . m src ) ( vec_free [u] . m payload ) }
 
 @ relay_dial s host i port → !RelayClient NetErr {
@@ -504,6 +517,7 @@ $ `stdlib/std/async.nu`
     ( vec_free [u] f )
     ^ r
 }
+
 @ relay_group_leave RelayClient rc ( Vec u ) group_id → !v NetErr {
     : ( Vec u ) f ( relay_build_group_leave group_id )
     : !v NetErr r ( tcp_write_all . rc conn f )
@@ -531,7 +545,7 @@ $ `stdlib/std/async.nu`
 // Block until a DELIVER frame arrives; returns its {src_pubkey, payload}.
 // Non-DELIVER frames (keepalive echoes) are skipped. None on disconnect.
 @ relay_recv RelayClient rc → ?RelayMsg {
-    : ~ ?RelayMsg out @ ?RelayMsg { F # RelayMsg 0 }
+    : ~ ? RelayMsg out @ ?RelayMsg { F # RelayMsg 0 }
     : ~ b done F
     ~ ! done {
         : ?RelayFrame fr ( relay_read_frame . rc conn )
@@ -552,4 +566,5 @@ $ `stdlib/std/async.nu`
 }
 
 @ relay_set_timeout RelayClient rc i ms → v { ( tcp_set_timeout . rc conn ms ) }
+
 @ relay_close RelayClient rc → v { ( tcp_close_conn . rc conn ) }

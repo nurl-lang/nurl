@@ -20,7 +20,7 @@ $ `stdlib/std/btree.nu`
     : ~ i k 0
     : ~ i ins_count 0
     ~ < k N {
-        : i key % * + * k 7919 k 104729 N   // deterministic scramble, dupes possible
+        : i key % * + * k 7919 k 104729 N  // deterministic scramble, dupes possible
         : ?i prev ( btree_set [i i] m key * key 7 cmp )
         ?? prev { T _ → {} F _ → { = ins_count + ins_count 1 } }
         = k + k 1
@@ -30,9 +30,9 @@ $ `stdlib/std/btree.nu`
     ~ < k2 N {
         : ?i had ( btree_get [i i] m k2 cmp )
         ?? had { T _ → {} F _ → {
-            : ?i p2 ( btree_set [i i] m k2 * k2 7 cmp )
-            ?? p2 { T _ → {} F _ → { = ins_count + ins_count 1 } }
-        } }
+                : ?i p2 ( btree_set [i i] m k2 * k2 7 cmp )
+                ?? p2 { T _ → {} F _ → { = ins_count + ins_count 1 } }
+            } }
         = k2 + k2 1
     }
     ( nurl_print `len_after_fill=` ) ( nurl_print ( nurl_str_int ( btree_len [i i] m ) ) )
@@ -104,7 +104,7 @@ $ `stdlib/std/btree.nu`
     ( nurl_print ` bad_keyat_after=` ) ( nurl_print ( nurl_str_int bad3 ) ) ( nurl_print `\n` )
 
     // ── in-order each: count + ascending check ──
-    : s asc_state ( nurl_zalloc 24 )   // slot0 prev, slot1 count, slot2 ok
+    : s asc_state ( nurl_zalloc 24 )  // slot0 prev, slot1 count, slot2 ok
     ( nurl_poke asc_state 0 -1 )
     ( nurl_poke asc_state 2 1 )
     : ( @ v i i ) visit \ i kk i vv → v {

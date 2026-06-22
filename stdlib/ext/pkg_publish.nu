@@ -34,18 +34,18 @@ $ `stdlib/ext/compress.nu`
 $ `stdlib/ext/http.nu`
 
 : | PackErr {
-    PackReadFailed   // dir_list / read_file failed
-    PackEmpty        // no files to pack
-    PackTarFailed    // tar_create rejected a path (too long) / failed
-    PackGzipFailed   // gzip_compress failed
+    PackReadFailed  // dir_list / read_file failed
+    PackEmpty  // no files to pack
+    PackTarFailed  // tar_create rejected a path (too long) / failed
+    PackGzipFailed  // gzip_compress failed
 }
 
 : | PublishErr {
-    PubNoToken    // empty auth token
-    PubHttp       // transport failure
-    PubAuth       // 401 / 403
-    PubConflict   // 409 — version already published (immutability)
-    PubRejected   // other non-2xx
+    PubNoToken  // empty auth token
+    PubHttp  // transport failure
+    PubAuth  // 401 / 403
+    PubConflict  // 409 — version already published (immutability)
+    PubRejected  // other non-2xx
 }
 
 @ pack_err_name PackErr e → s {
@@ -74,7 +74,7 @@ $ `stdlib/ext/http.nu`
     ? != 0 ( nurl_str_eq name `target` ) { ^ T } {}
     ? != 0 ( nurl_str_eq name `build` ) { ^ T } {}
     : i n ( nurl_str_len name )
-    ? > n 0 { ? == ( nurl_str_get name 0 ) 46 { ^ T } {} } {}   // leading '.'
+    ? > n 0 { ? == ( nurl_str_get name 0 ) 46 { ^ T } {} } {}  // leading '.'
     ^ F
 }
 

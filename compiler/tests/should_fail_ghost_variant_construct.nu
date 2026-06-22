@@ -5,7 +5,9 @@
 // emitted broken IR (`store  %r14, * %r15` — clang rejected far from
 // the cause). Now a hard error at the literal.
 $ `stdlib/core/string.nu`
-: | E { Nil  V Strng  W i }
+
+: | E { Nil V Strng W i }
+
 @ main → i {
     : E e @ E { V ( string_from `x` ) }
     ?? e {

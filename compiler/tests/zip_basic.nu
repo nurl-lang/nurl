@@ -41,11 +41,11 @@ $ `stdlib/ext/zip.nu`
     ?? a1 { T _ → {} F _ → ( nurl_print `add1 ERR\n` ) }
     ( vec_free [u] d1 )
     : ( Vec u ) d2 ( mkbytes `x` )
-    : !v ZipErr a2 ( zip_add_stored z `tiny.txt` d2 )   // tiny → forced store
+    : !v ZipErr a2 ( zip_add_stored z `tiny.txt` d2 )  // tiny → forced store
     ?? a2 { T _ → {} F _ → ( nurl_print `add2 ERR\n` ) }
     ( vec_free [u] d2 )
     : ( Vec u ) d3 ( big_data )
-    : !v ZipErr a3 ( zip_add z `dir/big.dat` d3 )         // compressible → deflate
+    : !v ZipErr a3 ( zip_add z `dir/big.dat` d3 )  // compressible → deflate
     ?? a3 { T _ → {} F _ → ( nurl_print `add3 ERR\n` ) }
     : i d3len ( vec_len [u] d3 )
     ( vec_free [u] d3 )

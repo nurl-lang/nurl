@@ -32,11 +32,14 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/posix.nu`   // read / write / close / posix_const
+$ `stdlib/core/posix.nu`  // read / write / close / posix_const
 
 & `c` @ isatty i32 fd → i32
+
 & `c` @ tcgetattr i32 fd s buf → i32
+
 & `c` @ tcsetattr i32 fd i32 act s buf → i32
+
 & `c` @ cfmakeraw s buf → v
 
 : TermState { i fd s saved }
@@ -80,7 +83,7 @@ $ `stdlib/core/posix.nu`   // read / write / close / posix_const
 @ __ansi_csi → String {
     : String s ( string_with_cap 8 )
     ( string_push_char s 27 )
-    ( string_push_char s 91 )   // '['
+    ( string_push_char s 91 )  // '['
     ^ s
 }
 
@@ -126,16 +129,16 @@ $ `stdlib/core/posix.nu`   // read / write / close / posix_const
 @ ansi_clear_line → String {
     : String s ( __ansi_csi )
     ( string_push_str s `2K` )
-    ( string_push_char s 13 )   // CR
+    ( string_push_char s 13 )  // CR
     ^ s
 }
 
 @ ansi_cursor_to i row i col → String {
     : String s ( __ansi_csi )
     ( string_push_str s ( nurl_str_int row ) )
-    ( string_push_char s 59 )   // ';'
+    ( string_push_char s 59 )  // ';'
     ( string_push_str s ( nurl_str_int col ) )
-    ( string_push_char s 72 )   // 'H'
+    ( string_push_char s 72 )  // 'H'
     ^ s
 }
 
@@ -146,10 +149,10 @@ $ `stdlib/core/posix.nu`   // read / write / close / posix_const
     ^ s
 }
 
-@ ansi_cursor_up i n → String { ^ ( __ansi_move n 65 ) }     // 'A'
-@ ansi_cursor_down i n → String { ^ ( __ansi_move n 66 ) }   // 'B'
+@ ansi_cursor_up i n → String { ^ ( __ansi_move n 65 ) }  // 'A'
+@ ansi_cursor_down i n → String { ^ ( __ansi_move n 66 ) }  // 'B'
 @ ansi_cursor_right i n → String { ^ ( __ansi_move n 67 ) }  // 'C'
-@ ansi_cursor_left i n → String { ^ ( __ansi_move n 68 ) }   // 'D'
+@ ansi_cursor_left i n → String { ^ ( __ansi_move n 68 ) }  // 'D'
 
 // ── minimal line editor ─────────────────────────────────────────────
 
@@ -231,56 +234,56 @@ $ `stdlib/core/posix.nu`   // read / write / close / posix_const
 @ __term_edit TermState st s prompt ( Vec String ) history → ?String {
     : String buf ( string_with_cap 64 )
     : ~ i pos 0
-    : ~ i hidx ( vec_len [String] history )   // one past newest
-    : ~ i done 0    // 0 = editing, 1 = accepted, 2 = cancelled
+    : ~ i hidx ( vec_len [String] history )  // one past newest
+    : ~ i done 0  // 0 = editing, 1 = accepted, 2 = cancelled
     ( __term_repaint prompt buf pos )
     ~ == done 0 {
         : i c ( __term_getb )
         ? | == c 13 == c 10 { = done 1 } {
-        ? | == c 3 & == c 4 == ( string_len buf ) 0 { = done 2 } {
-        ? | == c 127 == c 8 {
-            ? > pos 0 {
-                ( __term_delete_at buf - pos 1 )
-                = pos - pos 1
-            } {}
-        } {
-        ? == c 1 { = pos 0 } {                  // Ctrl-A
-        ? == c 5 { = pos ( string_len buf ) } { // Ctrl-E
-        ? == c 11 {                              // Ctrl-K
-            ( __term_truncate buf pos )
-        } {
-        ? == c 27 {                              // ESC [ ...
-            : i c1 ( __term_getb )
-            ? == c1 91 {
-                : i c2 ( __term_getb )
-                ? & == c2 68 > pos 0 { = pos - pos 1 } {}                       // left
-                ? & == c2 67 < pos ( string_len buf ) { = pos + pos 1 } {}      // right
-                ? & == c2 65 > hidx 0 {                                          // up
-                    = hidx - hidx 1
-                    ?? ( vec_get [String] history hidx ) {
-                        T h → { ( __term_setbuf buf ( string_data h ) ) = pos ( string_len buf ) ( string_free h ) }
-                        F _ → {}
-                    }
-                } {}
-                ? & == c2 66 < hidx ( vec_len [String] history ) {               // down
-                    = hidx + hidx 1
-                    ? == hidx ( vec_len [String] history ) {
-                        ( __term_setbuf buf `` )
-                        = pos 0
-                    } {
-                        ?? ( vec_get [String] history hidx ) {
-                            T h → { ( __term_setbuf buf ( string_data h ) ) = pos ( string_len buf ) ( string_free h ) }
-                            F _ → {}
-                        }
-                    }
-                } {}
-            } {}
-        } {
-        ? & >= c 32 < c 127 {                    // printable insert
-            ( __term_insert_at buf pos c )
-            = pos + pos 1
-        } {}
-        } } } } } } }
+            ? | == c 3 & == c 4 == ( string_len buf ) 0 { = done 2 } {
+                ? | == c 127 == c 8 {
+                    ? > pos 0 {
+                        ( __term_delete_at buf - pos 1 )
+                        = pos - pos 1
+                    } {}
+                } {
+                    ? == c 1 { = pos 0 } {  // Ctrl-A
+                        ? == c 5 { = pos ( string_len buf ) } {  // Ctrl-E
+                            ? == c 11 {  // Ctrl-K
+                                ( __term_truncate buf pos )
+                            } {
+                                ? == c 27 {  // ESC [ ...
+                                    : i c1 ( __term_getb )
+                                    ? == c1 91 {
+                                        : i c2 ( __term_getb )
+                                        ? & == c2 68 > pos 0 { = pos - pos 1 } {}  // left
+                                        ? & == c2 67 < pos ( string_len buf ) { = pos + pos 1 } {}  // right
+                                        ? & == c2 65 > hidx 0 {  // up
+                                            = hidx - hidx 1
+                                            ?? ( vec_get [String] history hidx ) {
+                                                T h → { ( __term_setbuf buf ( string_data h ) ) = pos ( string_len buf ) ( string_free h ) }
+                                                F _ → {}
+                                            }
+                                        } {}
+                                        ? & == c2 66 < hidx ( vec_len [String] history ) {  // down
+                                            = hidx + hidx 1
+                                            ? == hidx ( vec_len [String] history ) {
+                                                ( __term_setbuf buf `` )
+                                                = pos 0
+                                            } {
+                                                ?? ( vec_get [String] history hidx ) {
+                                                    T h → { ( __term_setbuf buf ( string_data h ) ) = pos ( string_len buf ) ( string_free h ) }
+                                                    F _ → {}
+                                                }
+                                            }
+                                        } {}
+                                    } {}
+                                } {
+                                    ? & >= c 32 < c 127 {  // printable insert
+                                        ( __term_insert_at buf pos c )
+                                        = pos + pos 1
+                                    } {}
+                                } } } } } } }
         ? == done 0 { ( __term_repaint prompt buf pos ) } {}
     }
     ( term_raw_disable st )

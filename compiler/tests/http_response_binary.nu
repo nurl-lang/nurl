@@ -25,12 +25,12 @@ $ `stdlib/ext/env.nu`
 @ bin_handler HttpRequest r → HttpResponse {
     : HttpResponse resp ( response_new 200 )
     : ( Vec u ) body ( vec_new [u] )
-    ( vec_push [u] body # u 65 )   // 'A'
-    ( vec_push [u] body # u 66 )   // 'B'
-    ( vec_push [u] body # u 0 )    // embedded NUL
-    ( vec_push [u] body # u 67 )   // 'C'
-    ( vec_push [u] body # u 68 )   // 'D'
-    ( response_set_body_bytes resp body )   // copies the bytes
+    ( vec_push [u] body # u 65 )  // 'A'
+    ( vec_push [u] body # u 66 )  // 'B'
+    ( vec_push [u] body # u 0 )  // embedded NUL
+    ( vec_push [u] body # u 67 )  // 'C'
+    ( vec_push [u] body # u 68 )  // 'D'
+    ( response_set_body_bytes resp body )  // copies the bytes
     ( vec_free [u] body )
     ^ resp
 }

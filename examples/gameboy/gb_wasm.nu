@@ -12,15 +12,18 @@ $ `examples/gameboy/core.nu`
 
 // ── Canvas FFI (module "canvas") — same shape as the native SDL API ──
 & `canvas` @ canvas_open i w i h → *i
+
 & `canvas` @ canvas_present → v
+
 & `canvas` @ canvas_sleep i ms → v
+
 & `canvas` @ canvas_should_close → i
 
 // ── Host imports wired up by gameboydemo.html ──
-& `canvas` @ host_rom_size → i             // ROM length in bytes
-& `canvas` @ host_rom_byte i idx → i       // ROM[idx]
-& `canvas` @ host_joypad → i            // button bitmask (see g_joyp)
-& `canvas` @ host_audio i ptr i nsamples → v   // drain APU ring → Web Audio
+& `canvas` @ host_rom_size → i  // ROM length in bytes
+& `canvas` @ host_rom_byte i idx → i  // ROM[idx]
+& `canvas` @ host_joypad → i  // button bitmask (see g_joyp)
+& `canvas` @ host_audio i ptr i nsamples → v  // drain APU ring → Web Audio
 
 // GB shade (0=white..3=black) → ARGB8888 0xAARRGGBB (host swaps R/B).
 @ shade_argb i s → i {
@@ -51,7 +54,7 @@ $ `examples/gameboy/core.nu`
     : s buf ( nurl_alloc n )
     : *u bp # *u buf
     : ~ i i 0
-    ~ < i n { = . bp i # u ( host_rom_byte i )  = i + i 1 }
+    ~ < i n { = . bp i # u ( host_rom_byte i ) = i + i 1 }
     ( cart_load bp n )
     ( nurl_free buf )
 
@@ -62,7 +65,7 @@ $ `examples/gameboy/core.nu`
         ( run_one_frame )
         ( blit fb )
         ( canvas_present )
-        ( host_audio # i g_audio g_audio_len )   // hand this frame's samples to Web Audio
+        ( host_audio # i g_audio g_audio_len )  // hand this frame's samples to Web Audio
         = g_audio_len 0
         ( canvas_sleep 16 )
         ? != 0 ( canvas_should_close ) { = running 0 } {}

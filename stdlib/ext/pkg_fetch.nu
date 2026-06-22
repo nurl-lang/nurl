@@ -26,11 +26,11 @@ $ `stdlib/ext/tar.nu`
 $ `stdlib/ext/registry_index.nu`
 
 : | PkgFetchErr {
-    PkgHttp              // non-200 status or transport failure
-    PkgEmpty             // empty tarball body
+    PkgHttp  // non-200 status or transport failure
+    PkgEmpty  // empty tarball body
     PkgChecksumMismatch  // downloaded bytes don't match the recorded sha256
-    PkgDecompress        // gzip_decompress failed
-    PkgUnpack            // tar_unpack failed (bad/unsafe archive, I/O)
+    PkgDecompress  // gzip_decompress failed
+    PkgUnpack  // tar_unpack failed (bad/unsafe archive, I/O)
 }
 
 @ pkg_err_name PkgFetchErr e → s {

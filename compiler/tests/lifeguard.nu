@@ -6,6 +6,7 @@
 $ `stdlib/std/lifeguard.nu`
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
+
 @ pi s label i v → v { ( nurl_print label ) ( nurl_print_int v ) }
 
 @ main → i {

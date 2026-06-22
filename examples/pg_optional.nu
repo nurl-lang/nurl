@@ -20,18 +20,18 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/ext/postgres.nu`
 
 // Push a `T value` (some text) onto a `Vec ?String`.
-@ push_some ( Vec ?String ) ps s text → v {
-    ( vec_push [?String] ps @ ?String { T ( string_from text ) } )
+@ push_some ( Vec ? String ) ps s text → v {
+    ( vec_push [? String] ps @ ?String { T ( string_from text ) } )
 }
 
 // Push an `F` (None) — binds SQL NULL.
-@ push_null ( Vec ?String ) ps → v {
-    ( vec_push [?String] ps @ ?String { F # String 0 } )
+@ push_null ( Vec ? String ) ps → v {
+    ( vec_push [? String] ps @ ?String { F # String 0 } )
 }
 
 // Insert one (name, nickname) row where nickname may be NULL.
 @ insert_person Connection c s name b has_nick s nick → v {
-    : ( Vec ?String ) ps ( vec_with_cap [?String] 2 )
+    : ( Vec ? String ) ps ( vec_with_cap [? String] 2 )
     ( push_some ps name )
     ? has_nick { ( push_some ps nick ) } { ( push_null ps ) }
     : !PgResult PgErr r ( pg_exec_params_opt c `INSERT INTO people (name, nickname) VALUES ($1, $2)` ps )
@@ -48,11 +48,11 @@ $ `stdlib/ext/postgres.nu`
 @ run Connection c → v {
     // Schema — TEMP TABLE auto-drops at session end.
     : !i PgErr ddl ( pg_run c `CREATE TEMP TABLE people (id SERIAL PRIMARY KEY, name TEXT NOT NULL, nickname TEXT)` )
-    ?? ddl { F _ → ( nurl_print `ddl failed\n` )  T _ → {} }
+    ?? ddl { F _ → ( nurl_print `ddl failed\n` ) T _ → {} }
 
-    ( insert_person c `Ada`     T `Countess` )
-    ( insert_person c `Alan`    F `` )
-    ( insert_person c `Grace`   T `Amazing` )
+    ( insert_person c `Ada` T `Countess` )
+    ( insert_person c `Alan` F `` )
+    ( insert_person c `Grace` T `Amazing` )
     ( insert_person c `Dijkstra` F `` )
 
     // Read back, treating nickname as an optional value.
@@ -90,10 +90,10 @@ $ `stdlib/ext/postgres.nu`
     : ~ s conninfo ``
     : ( Vec String ) args ( env_args_list )
     ? > ( vec_len [String] args ) 1 {
-        ?? ( vec_get [String] args 1 ) { T a → = conninfo ( string_data a )  F _ → {} }
+        ?? ( vec_get [String] args 1 ) { T a → = conninfo ( string_data a ) F _ → {} }
     } {}
     ? == 0 ( nurl_str_len conninfo ) {
-        ?? ( env_get `PG_CONNINFO` ) { T ev → = conninfo ( string_data ev )  F _ → {} }
+        ?? ( env_get `PG_CONNINFO` ) { T ev → = conninfo ( string_data ev ) F _ → {} }
     } {}
 
     : Connection c ( pg_connect conninfo )

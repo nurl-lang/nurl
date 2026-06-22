@@ -11,12 +11,13 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/swim.nu`
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `T\n` `F\n` ) }
+
 @ pst s label i st → v {
     ( nurl_print label )
     ( nurl_print ? == st 0 `alive\n` ? == st 1 `suspect\n` ? == st 2 `dead\n` `?\n` )
 }
 
-@ apply_m *MemberTable t s host i port i inc MemberState state s label → v {
+@ apply_m * MemberTable t s host i port i inc MemberState state s label → v {
     : Member up ( member_new host port inc state )
     ( pb label ( mtable_apply t up ) )
     ( member_free up )

@@ -40,14 +40,14 @@ $ `stdlib/net/session.nu`
 }
 
 // open + check accept AND plaintext == expected; frees the result.
-@ open_eq *NoiseSession rx i ctr ( Vec u ) ad Sealed s ( Vec u ) expect → b {
+@ open_eq * NoiseSession rx i ctr ( Vec u ) ad Sealed s ( Vec u ) expect → b {
     : ?( Vec u ) r ( session_open rx ctr ad . s ct )
     ^ ?? r { T pt → { : b ok ( veq pt expect ) ( vec_free [u] pt ) ok } F → F }
 }
 
-@ open_rejected *NoiseSession rx i ctr ( Vec u ) ad ( Vec u ) ct → b {
+@ open_rejected * NoiseSession rx i ctr ( Vec u ) ad ( Vec u ) ct → b {
     : ?( Vec u ) r ( session_open rx ctr ad ct )
-    ^ ?? r { T pt → { ( vec_free [u] pt ) F } F → T }   // T = correctly rejected
+    ^ ?? r { T pt → { ( vec_free [u] pt ) F } F → T }  // T = correctly rejected
 }
 
 @ main → i {
@@ -64,8 +64,8 @@ $ `stdlib/net/session.nu`
     : NoiseKeys ik ( noise_split ih )
     : NoiseKeys rk ( noise_split rh )
 
-    : *NoiseSession tx ( session_new ik )    // initiator sends
-    : *NoiseSession rx ( session_new rk )    // responder receives
+    : *NoiseSession tx ( session_new ik )  // initiator sends
+    : *NoiseSession rx ( session_new rk )  // responder receives
     : ( Vec u ) ad ( vec_new [u] )
 
     : ( Vec u ) p0 ( mkpt `frame-0` )

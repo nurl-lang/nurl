@@ -627,26 +627,26 @@ $ `stdlib/std/async_ffi.nu`
     : i c2 ( nurl_str_get p + off 2 )
     // J: Jan/Jun/Jul · F: Feb · M: Mar/May · A: Apr/Aug · S: Sep · O: Oct
     // N: Nov · D: Dec  (compare the 2nd/3rd letters to disambiguate)
-    ? == c0 74 {                                  // 'J'
-        ? & == c1 97 == c2 110 { ^ 1 } {}         // Jan
-        ? & == c1 117 == c2 110 { ^ 6 } {}        // Jun
-        ? & == c1 117 == c2 108 { ^ 7 } {}        // Jul
+    ? == c0 74 {  // 'J'
+        ? & == c1 97 == c2 110 { ^ 1 } {}  // Jan
+        ? & == c1 117 == c2 110 { ^ 6 } {}  // Jun
+        ? & == c1 117 == c2 108 { ^ 7 } {}  // Jul
         ^ -1
     } {}
     ? & & == c0 70 == c1 101 == c2 98 { ^ 2 } {}  // Feb
-    ? == c0 77 {                                  // 'M'
-        ? & == c1 97 == c2 114 { ^ 3 } {}         // Mar
-        ? & == c1 97 == c2 121 { ^ 5 } {}         // May
+    ? == c0 77 {  // 'M'
+        ? & == c1 97 == c2 114 { ^ 3 } {}  // Mar
+        ? & == c1 97 == c2 121 { ^ 5 } {}  // May
         ^ -1
     } {}
-    ? == c0 65 {                                  // 'A'
-        ? & == c1 112 == c2 114 { ^ 4 } {}        // Apr
-        ? & == c1 117 == c2 103 { ^ 8 } {}        // Aug
+    ? == c0 65 {  // 'A'
+        ? & == c1 112 == c2 114 { ^ 4 } {}  // Apr
+        ? & == c1 117 == c2 103 { ^ 8 } {}  // Aug
         ^ -1
     } {}
     ? & & == c0 83 == c1 101 == c2 112 { ^ 9 } {}  // Sep
     ? & & == c0 79 == c1 99 == c2 116 { ^ 10 } {}  // Oct
-    ? & & == c0 78 == c1 111 == c2 118 { ^ 11 } {} // Nov
+    ? & & == c0 78 == c1 111 == c2 118 { ^ 11 } {}  // Nov
     ? & & == c0 68 == c1 101 == c2 99 { ^ 12 } {}  // Dec
     ^ -1
 }
@@ -791,7 +791,7 @@ $ `stdlib/std/async_ffi.nu`
 // True iff p[st..en) is GMT / UT / UTC / Z / Z-as-+0000 (all = UTC).
 @ __hd_zone_is_utc s p i st i en → b {
     : i len - en st
-    ? & == len 1 == ( nurl_str_get p st ) 90 { ^ T } {}   // Z
+    ? & == len 1 == ( nurl_str_get p st ) 90 { ^ T } {}  // Z
     ? & & == len 2 == ( nurl_str_get p st ) 85 == ( nurl_str_get p + st 1 ) 84 { ^ T } {}  // UT
     ? & & & == len 3 == ( nurl_str_get p st ) 71 == ( nurl_str_get p + st 1 ) 77 == ( nurl_str_get p + st 2 ) 84 { ^ T } {}  // GMT
     ? & & & == len 3 == ( nurl_str_get p st ) 85 == ( nurl_str_get p + st 1 ) 84 == ( nurl_str_get p + st 2 ) 67 { ^ T } {}  // UTC
@@ -838,14 +838,14 @@ $ `stdlib/std/async_ffi.nu`
 // standard-time interpretation.
 
 : TimeZone {
-    i std_off   // seconds east of UTC during standard time
-    i dst_off   // seconds east of UTC during DST (== std_off when no DST)
-    i has_dst   // 0 / 1
-    i s_mon     // DST start rule: month 1..12
-    i s_week    // week 1..5 (5 = last)
-    i s_dow     // weekday 0=Sun..6=Sat
-    i s_time    // seconds after local midnight (default 02:00:00)
-    i e_mon     // DST end rule
+    i std_off  // seconds east of UTC during standard time
+    i dst_off  // seconds east of UTC during DST (== std_off when no DST)
+    i has_dst  // 0 / 1
+    i s_mon  // DST start rule: month 1..12
+    i s_week  // week 1..5 (5 = last)
+    i s_dow  // weekday 0=Sun..6=Sat
+    i s_time  // seconds after local midnight (default 02:00:00)
+    i e_mon  // DST end rule
     i e_week
     i e_dow
     i e_time
@@ -864,7 +864,7 @@ $ `stdlib/std/async_ffi.nu`
 
 // Skip a zone abbreviation: a `<...>` quoted name, or a run of letters.
 @ __tz_skip_name s buf i pos i n → i {
-    ? & < pos n == ( nurl_str_get buf pos ) 60 {   // '<'
+    ? & < pos n == ( nurl_str_get buf pos ) 60 {  // '<'
         : ~ i p + pos 1
         ~ & < p n != ( nurl_str_get buf p ) 62 { = p + p 1 }
         ? & < p n == ( nurl_str_get buf p ) 62 { = p + p 1 } {}
@@ -883,7 +883,7 @@ $ `stdlib/std/async_ffi.nu`
     ~ ( __tz_is_digit ( nurl_str_get buf p ) ) { = hh + * hh 10 - ( nurl_str_get buf p ) 48 = p + p 1 = any T }
     ? ! any { ^ @ __TzOff { 0 pos } } {}
     : ~ i mm 0
-    ? == ( nurl_str_get buf p ) 58 {   // ':'
+    ? == ( nurl_str_get buf p ) 58 {  // ':'
         = p + p 1
         ~ ( __tz_is_digit ( nurl_str_get buf p ) ) { = mm + * mm 10 - ( nurl_str_get buf p ) 48 = p + p 1 }
     } {}
@@ -903,8 +903,8 @@ $ `stdlib/std/async_ffi.nu`
     : ~ i p pos
     : ~ i sign 1
     : i c0 ( nurl_str_get buf p )
-    ? == c0 45 { = sign -1 = p + p 1 } {}   // '-'
-    ? == c0 43 { = p + p 1 } {}             // '+'
+    ? == c0 45 { = sign -1 = p + p 1 } {}  // '-'
+    ? == c0 43 { = p + p 1 } {}  // '+'
     : __TzOff h ( __tz_parse_hms buf p )
     ? == . h endpos p { ^ @ __TzOff { 0 pos } } {}
     : i east * -1 * sign . h secs
@@ -915,24 +915,24 @@ $ `stdlib/std/async_ffi.nu`
 // (including the unsupported Jn / n forms).
 @ __tz_parse_rule s buf i pos i n → __TzRule {
     : ~ i p pos
-    ? | >= p n != ( nurl_str_get buf p ) 77 { ^ @ __TzRule { 0 0 0 7200 p 0 } } {}   // 'M'
+    ? | >= p n != ( nurl_str_get buf p ) 77 { ^ @ __TzRule { 0 0 0 7200 p 0 } } {}  // 'M'
     = p + p 1
     : ~ i mon 0
     : ~ b d1 F
     ~ & < p n ( __tz_is_digit ( nurl_str_get buf p ) ) { = mon + * mon 10 - ( nurl_str_get buf p ) 48 = p + p 1 = d1 T }
-    ? | ! d1 != ( nurl_str_get buf p ) 46 { ^ @ __TzRule { 0 0 0 7200 p 0 } } {}   // '.'
+    ? | ! d1 != ( nurl_str_get buf p ) 46 { ^ @ __TzRule { 0 0 0 7200 p 0 } } {}  // '.'
     = p + p 1
     : ~ i week 0
     : ~ b d2 F
     ~ & < p n ( __tz_is_digit ( nurl_str_get buf p ) ) { = week + * week 10 - ( nurl_str_get buf p ) 48 = p + p 1 = d2 T }
-    ? | ! d2 != ( nurl_str_get buf p ) 46 { ^ @ __TzRule { 0 0 0 7200 p 0 } } {}   // '.'
+    ? | ! d2 != ( nurl_str_get buf p ) 46 { ^ @ __TzRule { 0 0 0 7200 p 0 } } {}  // '.'
     = p + p 1
     : ~ i dow 0
     : ~ b d3 F
     ~ & < p n ( __tz_is_digit ( nurl_str_get buf p ) ) { = dow + * dow 10 - ( nurl_str_get buf p ) 48 = p + p 1 = d3 T }
     ? ! d3 { ^ @ __TzRule { 0 0 0 7200 p 0 } } {}
     : ~ i tsec 7200
-    ? & < p n == ( nurl_str_get buf p ) 47 {   // '/'
+    ? & < p n == ( nurl_str_get buf p ) 47 {  // '/'
         = p + p 1
         : __TzOff th ( __tz_parse_hms buf p )
         ? != . th endpos p { = tsec . th secs = p . th endpos } {}
@@ -962,7 +962,7 @@ $ `stdlib/std/async_ffi.nu`
     = pos . so endpos
     : ~ i has_dst 0
     : ~ i dst_off std_off
-    ? & < pos n != ( nurl_str_get p pos ) 44 {   // not ',' → DST abbrev present
+    ? & < pos n != ( nurl_str_get p pos ) 44 {  // not ',' → DST abbrev present
         = has_dst 1
         = pos ( __tz_skip_name p pos n )
         : __TzOff doff ( __tz_parse_offset p pos )
@@ -1067,7 +1067,7 @@ $ `stdlib/std/async_ffi.nu`
 
 @ __tz_push_offset String out i off → v {
     ? == off 0 {
-        ( string_push_char out 90 )   // 'Z'
+        ( string_push_char out 90 )  // 'Z'
     } {
         : i a ? < off 0 - 0 off off
         : i sign ? < off 0 45 43
@@ -1075,7 +1075,7 @@ $ `stdlib/std/async_ffi.nu`
         : i hh / a 3600
         : i mm / - a * hh 3600 60
         ( __push_2digit out hh )
-        ( string_push_char out 58 )   // ':'
+        ( string_push_char out 58 )  // ':'
         ( __push_2digit out mm )
     }
 }
@@ -1089,7 +1089,7 @@ $ `stdlib/std/async_ffi.nu`
     ( __push_2digit out . t month )
     ( string_push_char out 45 )
     ( __push_2digit out . t day )
-    ( string_push_char out 84 )   // 'T'
+    ( string_push_char out 84 )  // 'T'
     ( __push_2digit out . t hour )
     ( string_push_char out 58 )
     ( __push_2digit out . t min )

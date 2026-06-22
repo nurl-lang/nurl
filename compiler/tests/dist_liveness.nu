@@ -8,7 +8,9 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/net/membership.nu`
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
+
 @ mkpk i seed → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + seed k ) = k + k 1 } ^ v }
+
 @ cpy ( Vec u ) v → ( Vec u ) { : ( Vec u ) o ( vec_new [u] ) ( vec_extend [u] o v ) ^ o }
 
 // a one-member gossip message: {pk, state, inc}
@@ -22,7 +24,7 @@ $ `stdlib/net/membership.nu`
     ^ @ PkMsg { ( pk_ping ) 0 ( vec_new [u] ) g }
 }
 // gossip carrying a node's self-heartbeat fact
-@ heartbeat_of *PkMemberTable t → PkMsg {
+@ heartbeat_of * PkMemberTable t → PkMsg {
     : ( Vec s ) g ( vec_new [s] )
     ( vec_push [s] g # s ( pktable_self_fact t ) )
     ^ @ PkMsg { ( pk_ping ) 0 ( vec_new [u] ) g }

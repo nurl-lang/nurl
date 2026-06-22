@@ -10,16 +10,16 @@
 @ pr s l i v → v { ( nurl_print l ) ( nurl_print `=` ) ( nurl_print ( nurl_str_int v ) ) ( nurl_print `\n` ) }
 
 @ main → i {
-    : u64 m 18446744073709551615        // all-ones
-    ( pr `u64max_mod10` # i % m 10 )    // 5
-    ( pr `u64max_div2`  # i / m 2 )     // 9223372036854775807 (udiv)
-    ( pr `u64max_as_i`  m )             // -1 (signed view of all-ones)
+    : u64 m 18446744073709551615  // all-ones
+    ( pr `u64max_mod10` # i % m 10 )  // 5
+    ( pr `u64max_div2` # i / m 2 )  // 9223372036854775807 (udiv)
+    ( pr `u64max_as_i` m )  // -1 (signed view of all-ones)
 
-    : u64 p 10000000000000000000       // 1e19 > i64max
-    ( pr `e19_mod10` # i % p 10 )       // 0
+    : u64 p 10000000000000000000  // 1e19 > i64max
+    ( pr `e19_mod10` # i % p 10 )  // 0
 
-    : u64 q 9223372036854775808        // 2^63
-    ( pr `pow63_mod10` # i % q 10 )     // 8
+    : u64 q 9223372036854775808  // 2^63
+    ( pr `pow63_mod10` # i % q 10 )  // 8
 
     // boundaries round-trip
     ( pr `i64_min` -9223372036854775808 )

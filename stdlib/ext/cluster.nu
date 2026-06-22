@@ -81,13 +81,13 @@ $ `stdlib/ext/http_server.nu`
 // ── Errors ───────────────────────────────────────────────────────────
 
 : | ClusterErr {
-    ClNet         // transport connect / I/O failure
-    ClTimeout     // request budget exceeded
-    ClNoSuchFn    // remote has no handler registered under that fn_id
-    ClBadResp     // malformed / unexpected response envelope
-    ClRemote      // remote handler returned an error
-    ClSerialize   // local (de)serialization failure
-    ClCircuitOpen // breaker open — call short-circuited, never sent
+    ClNet  // transport connect / I/O failure
+    ClTimeout  // request budget exceeded
+    ClNoSuchFn  // remote has no handler registered under that fn_id
+    ClBadResp  // malformed / unexpected response envelope
+    ClRemote  // remote handler returned an error
+    ClSerialize  // local (de)serialization failure
+    ClCircuitOpen  // breaker open — call short-circuited, never sent
 }
 
 @ cluster_err_name ClusterErr e → s {
@@ -215,7 +215,7 @@ $ `stdlib/ext/http_server.nu`
 @ __rpc_ok_env Json result → Json {
     : Json env ( json_obj_new )
     ( json_obj_set env `ok` ( json_bool T ) )
-    ( json_obj_set env `result` result )   // MOVES result into env
+    ( json_obj_set env `result` result )  // MOVES result into env
     ^ env
 }
 
@@ -242,7 +242,7 @@ $ `stdlib/ext/http_server.nu`
 // ── Dispatch (pure, network-free) ────────────────────────────────────
 
 @ rpc_dispatch Registry r Json req → Json {
-    : ?Json fnj ( json_obj_get req `fn` )      // borrow
+    : ?Json fnj ( json_obj_get req `fn` )  // borrow
     ^ ?? fnj {
         T fj → {
             : s name ( json_as_str fj )
@@ -251,7 +251,7 @@ $ `stdlib/ext/http_server.nu`
                 ( __rpc_err_env `no such fn` )
             } {
                 : ( @ !Json ClusterErr Json ) h ( __registry_handler_at r idx )
-                : ?Json argsj ( json_obj_get req `args` )   // borrow
+                : ?Json argsj ( json_obj_get req `args` )  // borrow
                 ?? argsj {
                     T a → ( __rpc_invoke h a )
                     F → {
@@ -284,12 +284,12 @@ $ `stdlib/ext/http_server.nu`
 @ __req_decode b mp HttpRequest req → ?Json {
     ? mp {
         : !Json MsgpackErr d ( msgpack_decode . req body )
-        ^ ?? d { T j → @ ?Json { T j }  F _ → @ ?Json { F # Json 0 } }
+        ^ ?? d { T j → @ ?Json { T j } F _ → @ ?Json { F # Json 0 } }
     } {}
     : String bs ( bytes_to_str . req body )
     : !Json JsonError d ( json_parse ( string_data bs ) )
     ( string_free bs )
-    ^ ?? d { T j → @ ?Json { T j }  F _ → @ ?Json { F # Json 0 } }
+    ^ ?? d { T j → @ ?Json { T j } F _ → @ ?Json { F # Json 0 } }
 }
 
 // Build a response carrying `env` in the negotiated wire format.
@@ -377,11 +377,11 @@ $ `stdlib/ext/http_server.nu`
 // Only transport errors (cluster_err_retryable) are retried.
 
 : RetryPolicy {
-    i max_attempts     // total tries incl. the first (clamped ≥ 1)
-    i base_delay_ms    // delay before the 1st retry
-    i max_delay_ms     // cap on any single backoff
-    i multiplier_pct   // geometric growth per retry, percent (200 = ×2)
-    b jitter           // full-jitter the slept delay
+    i max_attempts  // total tries incl. the first (clamped ≥ 1)
+    i base_delay_ms  // delay before the 1st retry
+    i max_delay_ms  // cap on any single backoff
+    i multiplier_pct  // geometric growth per retry, percent (200 = ×2)
+    b jitter  // full-jitter the slept delay
 }
 
 @ retry_new i max_attempts i base_delay_ms i max_delay_ms i multiplier_pct b jitter → RetryPolicy {
@@ -436,7 +436,7 @@ $ `stdlib/ext/http_server.nu`
     i threshold
     i cooldown_ms
     i fails
-    i opened_at_ns    // -1 when closed
+    i opened_at_ns  // -1 when closed
 }
 
 : CircuitBreaker { s ctl }
@@ -505,12 +505,13 @@ $ `stdlib/ext/http_server.nu`
 // Per-call total / connect budgets (ms). Retry cadence is the caller's
 // RetryPolicy (see call_remote_with / retry_default).
 @ __cluster_timeout_ms → i { ^ 30000 }
+
 @ __cluster_connect_ms → i { ^ 5000 }
 
 @ __node_url Node n → String {
     : String u ( string_from `http://` )
     ( string_push_str u ( string_data . n host ) )
-    ( string_push_char u 58 )              // ':'
+    ( string_push_char u 58 )  // ':'
     ( string_push_int u . n port )
     ( string_push_str u `/__rpc` )
     ^ u
@@ -519,7 +520,7 @@ $ `stdlib/ext/http_server.nu`
 // Pull a fresh owned `result` Json out of a borrowed response envelope
 // by round-tripping through text (no detach primitive on Json yet).
 @ __rpc_extract_result Json env → !Json ClusterErr {
-    : ?Json okj ( json_obj_get env `ok` )      // borrow
+    : ?Json okj ( json_obj_get env `ok` )  // borrow
     : b ok ?? okj { T b → ( json_bool_val b ) F → F }
     ? ! ok {
         ^ @ !Json ClusterErr { F @ ClusterErr { ClRemote } }
@@ -548,6 +549,7 @@ $ `stdlib/ext/http_server.nu`
 : ~ i g_cluster_wire 0
 
 @ cluster_use_msgpack b on → v { = g_cluster_wire ? on 1 0 }
+
 @ cluster_wire_is_msgpack → b { ^ != g_cluster_wire 0 }
 
 // Build the request headers blob: Content-Type, plus a W3C `traceparent`
@@ -596,17 +598,17 @@ $ `stdlib/ext/http_server.nu`
         : ( Vec u ) bb ( http_body_bytes resp )
         : !Json MsgpackErr d ( msgpack_decode bb )
         ( vec_free [u] bb )
-        ^ ?? d { T j → @ ?Json { T j }  F _ → @ ?Json { F # Json 0 } }
+        ^ ?? d { T j → @ ?Json { T j } F _ → @ ?Json { F # Json 0 } }
     } {}
     : !Json JsonError d ( json_parse ( http_body_str resp ) )
-    ^ ?? d { T j → @ ?Json { T j }  F _ → @ ?Json { F # Json 0 } }
+    ^ ?? d { T j → @ ?Json { T j } F _ → @ ?Json { F # Json 0 } }
 }
 
 // One transport attempt. `req` is BORROWED (re-serialized per retry).
 @ __rpc_attempt s url Json req → !Json ClusterErr {
     : b mp ( cluster_wire_is_msgpack )
     : String jbody ? mp ( string_new ) ( json_stringify req )
-    : ~ !Response HttpErr rr @ !Response HttpErr { F @ HttpErr { HttpOther } }
+    : ~ ! Response HttpErr rr @ !Response HttpErr { F @ HttpErr { HttpOther } }
     ? mp { = rr ( __rpc_send_mp url req ) }
     { = rr ( __rpc_send_json url ( string_data jbody ) ) }
     ( string_free jbody )

@@ -14,8 +14,8 @@ $ `stdlib/std/trace.nu`
     ( string_free hx )
 
     // ── format → parse round trip ────────────────────────────────
-    : i tid 305419896          // 0x12345678
-    : i sid 3203386110         // 0xBEEFCAFE
+    : i tid 305419896  // 0x12345678
+    : i sid 3203386110  // 0xBEEFCAFE
     : String tp ( traceparent_format tid sid )
     ( nurl_print `tp=` ) ( nurl_print ( string_data tp ) ) ( nurl_print `\n` )
     : TraceParsed p ( traceparent_parse ( string_data tp ) )
@@ -34,7 +34,7 @@ $ `stdlib/std/trace.nu`
     ( pb `active (cleared): ` ( trace_active ) )
 
     // ── high-bit-set id (a NEGATIVE i64) must still round-trip ───
-    : i big - 0 1              // 0xffffffffffffffff
+    : i big - 0 1  // 0xffffffffffffffff
     : String tpb ( traceparent_format big big )
     ( nurl_print `tp(big)=` ) ( nurl_print ( string_data tpb ) ) ( nurl_print `\n` )
     : TraceParsed hp ( traceparent_parse ( string_data tpb ) )

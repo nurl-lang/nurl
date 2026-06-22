@@ -9,7 +9,9 @@
 // computed udiv(-7,2) = 9223372036854775804 instead of -3. mangle_src_word now
 // gives unsigned leaves distinct slugs so the monomorphs stay separate.
 @ gdiv [T] T a T b → T { ^ / a b }
+
 @ gmod [T] T a T b → T { ^ % a b }
+
 @ gshr [T] T a → T { ^ >> a 1 }
 
 @ main → i {
@@ -17,11 +19,11 @@
     // the signed bodies below.
     ( nurl_print ( nurl_str_int # i ( gdiv [u64] 200 100 ) ) ) ( nurl_print `\n` )  // 2
     ( nurl_print ( nurl_str_int # i ( gmod [u64] 200 100 ) ) ) ( nurl_print `\n` )  // 0
-    ( nurl_print ( nurl_str_int # i ( gshr [u64] 64 ) ) )      ( nurl_print `\n` )  // 32
+    ( nurl_print ( nurl_str_int # i ( gshr [u64] 64 ) ) ) ( nurl_print `\n` )  // 32
 
     // Signed bodies: must use sdiv / srem / ashr regardless of emit order.
-    ( nurl_print ( nurl_str_int ( gdiv [i] -7 2 ) ) ) ( nurl_print `\n` )           // -3
-    ( nurl_print ( nurl_str_int ( gmod [i] -7 2 ) ) ) ( nurl_print `\n` )           // -1
-    ( nurl_print ( nurl_str_int ( gshr [i] -8 ) ) )   ( nurl_print `\n` )           // -4
+    ( nurl_print ( nurl_str_int ( gdiv [i] -7 2 ) ) ) ( nurl_print `\n` )  // -3
+    ( nurl_print ( nurl_str_int ( gmod [i] -7 2 ) ) ) ( nurl_print `\n` )  // -1
+    ( nurl_print ( nurl_str_int ( gshr [i] -8 ) ) ) ( nurl_print `\n` )  // -4
     ^ 0
 }

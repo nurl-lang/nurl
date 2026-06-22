@@ -9,7 +9,9 @@ $ `stdlib/dist/identity.nu`
 $ `stdlib/dist/crdt.nu`
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
+
 @ mkpk i seed → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + seed k ) = k + k 1 } ^ v }
+
 @ veq ( Vec u ) a ( Vec u ) b → b {
     : i n ( vec_len [u] a ) ? != n ( vec_len [u] b ) { ^ F } {}
     : ~ b e T : ~ i k 0
@@ -64,8 +66,8 @@ $ `stdlib/dist/crdt.nu`
     ( pb `D does NOT inherit B slot: ` & != idd idb == idd 3 )
     : *PNCounter cd ( pncounter_new )
     ( pncounter_inc cd idd 4 )
-    ( pncounter_merge ca cd )          // ca now has A=5, B=7, D=4
-    ( pncounter_merge ca cb )          // re-merge B's old state: idempotent, no clobber
+    ( pncounter_merge ca cd )  // ca now has A=5, B=7, D=4
+    ( pncounter_merge ca cb )  // re-merge B's old state: idempotent, no clobber
     ( pb `no slot corruption after churn (16): ` == ( pncounter_value ca ) 16 )
 
     ( pncounter_free ca ) ( pncounter_free cb ) ( pncounter_free cd )

@@ -88,9 +88,13 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get for strtod ERANGE dete
 & `m` @ atan2 f y f x → f
 
 & `m` @ trunc f x → f
+
 & `m` @ cbrt f x → f
+
 & `m` @ hypot f x f y → f
+
 & `m` @ log2 f x → f
+
 & `m` @ log10 f x → f
 
 // ── float_* wrappers ──────────────────────────────────────────────
@@ -133,6 +137,7 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get for strtod ERANGE dete
 // Base-2 / base-10 logarithms (libm). Domain error (x <= 0) yields the
 // platform libm result (-inf at 0, NaN below) — probe with float_is_*.
 @ float_log2 f x → f { ^ ( log2 x ) }
+
 @ float_log10 f x → f { ^ ( log10 x ) }
 
 // Sign as a float: -1.0 / 0.0 / +1.0. Zero and NaN both map to 0.0

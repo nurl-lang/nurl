@@ -12,7 +12,7 @@ $ `stdlib/ext/tar.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
-@ ignore_io !v IoErr r → v { ?? r { T _ → {} F _ → {} } }
+@ ignore_io ! v IoErr r → v { ?? r { T _ → {} F _ → {} } }
 
 @ wfile s path s content → v { ( ignore_io ( write_file path content ) ) }
 

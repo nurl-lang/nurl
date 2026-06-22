@@ -38,7 +38,7 @@ $ `stdlib/net/relay.nu`
             = . p groups . rs groups
             ( nurl_print `relay listening on ` ) ( nurl_print ( string_data host ) )
             ( nurl_print `:` ) ( nurl_print_int port )
-            ( relay_server_run p )   // blocks until the listener is closed
+            ( relay_server_run p )  // blocks until the listener is closed
             ( relay_server_free p )
         }
         F e → ( nurl_print `relay failed to bind\n` )

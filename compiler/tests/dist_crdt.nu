@@ -12,9 +12,9 @@ $ `stdlib/dist/crdt.nu`
 @ main → i {
     // ── PNCounter ────────────────────────────────────────────────
     : *PNCounter a ( pncounter_new )
-    ( pncounter_inc a 0 5 ) ( pncounter_dec a 0 2 )      // replica 0: +5 -2
+    ( pncounter_inc a 0 5 ) ( pncounter_dec a 0 2 )  // replica 0: +5 -2
     : *PNCounter b ( pncounter_new )
-    ( pncounter_inc b 1 10 )                              // replica 1: +10
+    ( pncounter_inc b 1 10 )  // replica 1: +10
     ( pb `a value = 3: ` == ( pncounter_value a ) 3 )
     ( pb `b value = 10: ` == ( pncounter_value b ) 10 )
     ( pncounter_merge a b )
@@ -36,7 +36,7 @@ $ `stdlib/dist/crdt.nu`
     ( pb `higher ts wins (9): ` == ( lww_value ( lww_merge r1 r2 ) ) 9 )
     ( pb `lww merge commutative: ` == ( lww_value ( lww_merge r2 r1 ) ) 9 )
     : LwwReg t1 ( lww_set ( lww_new ) 7 100 0 )
-    : LwwReg t2 ( lww_set ( lww_new ) 9 100 1 )    // same ts → higher replica wins
+    : LwwReg t2 ( lww_set ( lww_new ) 9 100 1 )  // same ts → higher replica wins
     ( pb `ts tie → higher replica (9): ` == ( lww_value ( lww_merge t1 t2 ) ) 9 )
     ( pb `tie-break commutative: ` == ( lww_value ( lww_merge t2 t1 ) ) 9 )
 
@@ -50,11 +50,11 @@ $ `stdlib/dist/crdt.nu`
 
     // ── OrSet: concurrent add wins over remove ───────────────────
     : *OrSet sa ( orset_new )
-    ( orset_add sa 0 5 )            // A adds 5  (tag 5,0,0)
+    ( orset_add sa 0 5 )  // A adds 5  (tag 5,0,0)
     : *OrSet sb ( orset_new )
-    ( orset_merge sb sa )           // B observes A's add
-    ( orset_remove sa 5 )           // A removes 5 (tombstones 5,0,0)
-    ( orset_add sb 1 5 )            // B concurrently re-adds 5 (tag 5,1,0)
+    ( orset_merge sb sa )  // B observes A's add
+    ( orset_remove sa 5 )  // A removes 5 (tombstones 5,0,0)
+    ( orset_add sb 1 5 )  // B concurrently re-adds 5 (tag 5,1,0)
     // bidirectional merge → converge
     ( orset_merge sa sb )
     ( orset_merge sb sa )

@@ -223,34 +223,34 @@ $ `stdlib/core/vec.nu`
                             = nl_acc 0
                             = i j
                         } {
-                        ~ & < j n ( fmt_is_digit ( nurl_str_get src j ) ) {
-                            = j + j 1
-                        }
-                        : ~ i kind TT_FMT_INT
-                        // FLOAT requires `.` followed by another digit.
-                        ? & == ( nurl_str_get src j ) 46
-                        ( fmt_is_digit ( nurl_str_get src + j 1 ) )
-                        {
-                            = kind TT_FMT_FLOAT
-                            = j + j 1
                             ~ & < j n ( fmt_is_digit ( nurl_str_get src j ) ) {
                                 = j + j 1
                             }
-                            : i ec ( nurl_str_get src j )
-                            ? | == ec 101 == ec 69 {
+                            : ~ i kind TT_FMT_INT
+                            // FLOAT requires `.` followed by another digit.
+                            ? & == ( nurl_str_get src j ) 46
+                            ( fmt_is_digit ( nurl_str_get src + j 1 ) )
+                            {
+                                = kind TT_FMT_FLOAT
                                 = j + j 1
-                                : i es ( nurl_str_get src j )
-                                ? | == es 43 == es 45 {
-                                    = j + j 1
-                                } {}
                                 ~ & < j n ( fmt_is_digit ( nurl_str_get src j ) ) {
                                     = j + j 1
                                 }
+                                : i ec ( nurl_str_get src j )
+                                ? | == ec 101 == ec 69 {
+                                    = j + j 1
+                                    : i es ( nurl_str_get src j )
+                                    ? | == es 43 == es 45 {
+                                        = j + j 1
+                                    } {}
+                                    ~ & < j n ( fmt_is_digit ( nurl_str_get src j ) ) {
+                                        = j + j 1
+                                    }
+                                } {}
                             } {}
-                        } {}
-                        ( __fmt_emit toks src i j kind nl_acc )
-                        = nl_acc 0
-                        = i j
+                            ( __fmt_emit toks src i j kind nl_acc )
+                            = nl_acc 0
+                            = i j
                         }
                     } {
 

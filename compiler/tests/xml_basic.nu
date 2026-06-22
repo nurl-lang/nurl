@@ -7,7 +7,7 @@ $ `stdlib/ext/xml.nu`
 $ `stdlib/core/string.nu`
 
 // Compare an owned ?String to an expected literal; frees the payload.
-@ chk ?String got s want s label → i {
+@ chk ? String got s want s label → i {
     : ~ i bad 1
     ?? got { T s → { ? == 1 ( nurl_str_eq ( string_data s ) want ) { = bad 0 } {} ( string_free s ) } F → {} }
     ? > bad 0 { ( nurl_print `  FAIL ` ) ( nurl_print label ) ( nurl_print `\n` ) } {}

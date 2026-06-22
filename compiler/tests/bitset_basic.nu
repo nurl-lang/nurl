@@ -8,7 +8,7 @@
 $ `stdlib/std/bitset.nu`
 
 @ main → i {
-    : Bitset bs ( bitset_new 130 )            // 3 limbs (64+64+2)
+    : Bitset bs ( bitset_new 130 )  // 3 limbs (64+64+2)
     ( nurl_print `nbits=` ) ( nurl_print ( nurl_str_int ( bitset_nbits bs ) ) )
     ( nurl_print ` words=` ) ( nurl_print ( nurl_str_int ( bitset_words bs ) ) ) ( nurl_print `\n` )
     ( nurl_print `empty_none=` ) ( nurl_print ? ( bitset_none bs ) `T` `F` )
@@ -16,8 +16,8 @@ $ `stdlib/std/bitset.nu`
 
     // set a few across limb boundaries
     ( bitset_set bs 0 ) ( bitset_set bs 63 ) ( bitset_set bs 64 ) ( bitset_set bs 129 )
-    ( bitset_set bs 200 )                     // out of range → no-op
-    ( bitset_set bs -1 )                      // out of range → no-op
+    ( bitset_set bs 200 )  // out of range → no-op
+    ( bitset_set bs -1 )  // out of range → no-op
     ( nurl_print `count=` ) ( nurl_print ( nurl_str_int ( bitset_count bs ) ) ) ( nurl_print `\n` )
     ( nurl_print `t0=` ) ( nurl_print ? ( bitset_test bs 0 ) `T` `F` )
     ( nurl_print ` t63=` ) ( nurl_print ? ( bitset_test bs 63 ) `T` `F` )
@@ -28,8 +28,8 @@ $ `stdlib/std/bitset.nu`
 
     // clear + flip
     ( bitset_clear bs 63 )
-    ( bitset_flip bs 64 )                     // was set → clears
-    ( bitset_flip bs 5 )                      // was clear → sets
+    ( bitset_flip bs 64 )  // was set → clears
+    ( bitset_flip bs 5 )  // was clear → sets
     ( nurl_print `set_idx=` )
     : ( @ v i ) pf \ i bit → v { ( nurl_print ( nurl_str_int bit ) ) ( nurl_print ` ` ) }
     ( bitset_each_set bs pf )
@@ -47,13 +47,13 @@ $ `stdlib/std/bitset.nu`
     // combiners on two 8-bit sets
     : Bitset a ( bitset_new 8 )
     : Bitset b ( bitset_new 8 )
-    ( bitset_set a 0 ) ( bitset_set a 1 ) ( bitset_set a 2 )       // a = 0b00000111
-    ( bitset_set b 1 ) ( bitset_set b 2 ) ( bitset_set b 3 )       // b = 0b00001110
+    ( bitset_set a 0 ) ( bitset_set a 1 ) ( bitset_set a 2 )  // a = 0b00000111
+    ( bitset_set b 1 ) ( bitset_set b 2 ) ( bitset_set b 3 )  // b = 0b00001110
     : Bitset ax ( bitset_clone a )
     : Bitset ao ( bitset_clone a )
-    ( bitset_and_with a b )                                        // 0b00000110 → count 2
-    ( bitset_xor_with ax b )                                       // 0b00001001 → count 2
-    ( bitset_or_with ao b )                                        // 0b00001111 → count 4
+    ( bitset_and_with a b )  // 0b00000110 → count 2
+    ( bitset_xor_with ax b )  // 0b00001001 → count 2
+    ( bitset_or_with ao b )  // 0b00001111 → count 4
     ( nurl_print `and=` ) ( nurl_print ( nurl_str_int ( bitset_count a ) ) )
     ( nurl_print ` xor=` ) ( nurl_print ( nurl_str_int ( bitset_count ax ) ) )
     ( nurl_print ` or=` ) ( nurl_print ( nurl_str_int ( bitset_count ao ) ) ) ( nurl_print `\n` )

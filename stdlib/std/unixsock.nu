@@ -29,26 +29,32 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/posix.nu`   // read / write / close / posix_const / errno
+$ `stdlib/core/posix.nu`  // read / write / close / posix_const / errno
 
 & `c` @ socket i32 domain i32 type i32 proto → i32
+
 & `c` @ bind i32 fd s addr i32 len → i32
+
 & `c` @ listen i32 fd i32 backlog → i32
+
 & `c` @ accept i32 fd s addr s addrlen → i32
+
 & `c` @ connect i32 fd s addr i32 len → i32
+
 & `c` @ socketpair i32 domain i32 type i32 proto s sv → i32
+
 & `c` @ unlink s path → i32
 
 : | UnixErr {
-    UnixSocket      // socket() failed (or AF_UNIX unsupported on this OS)
-    UnixBind        // bind() failed
-    UnixAddrInUse   // bind() failed with EADDRINUSE
-    UnixListen      // listen() failed
-    UnixAccept      // accept() failed
-    UnixConnect     // connect() failed
-    UnixRead        // read() failed
-    UnixWrite       // write() failed
-    UnixClosed      // peer closed mid-write
+    UnixSocket  // socket() failed (or AF_UNIX unsupported on this OS)
+    UnixBind  // bind() failed
+    UnixAddrInUse  // bind() failed with EADDRINUSE
+    UnixListen  // listen() failed
+    UnixAccept  // accept() failed
+    UnixConnect  // connect() failed
+    UnixRead  // read() failed
+    UnixWrite  // write() failed
+    UnixClosed  // peer closed mid-write
     UnixOther
 }
 
@@ -182,7 +188,7 @@ $ `stdlib/core/posix.nu`   // read / write / close / posix_const / errno
         ^ @ !( Vec u ) UnixErr { F UnixRead }
     } {}
     : b _ok ( vec_set_len [u] buf n )
-    ^ @ !( Vec u ) UnixErr { T buf }   // empty Vec ⇒ EOF
+    ^ @ !( Vec u ) UnixErr { T buf }  // empty Vec ⇒ EOF
 }
 
 @ unix_write_all UnixConn c ( Vec u ) bytes → !v UnixErr {

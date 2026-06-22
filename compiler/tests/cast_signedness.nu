@@ -34,13 +34,13 @@
     = f + f ( chk # i64 # i8 200 - 0 56 `i8_sext` )
     = f + f ( chk # i64 # i16 # i8 200 - 0 56 `i8_i16_sext` )
     // Bug 2: signed i8 arithmetic must use SIGNED ops.
-    = f + f ( chk # i64 / # i8 200 # i8 7 - 0 8 `i8_sdiv` )       // -56 / 7 = -8
-    = f + f ( chk # i64 >> # i8 200 # i8 1 - 0 28 `i8_ashr` )     // -56 >> 1 = -28
-    = f + f ( chk # i64 ? < # i8 200 # i8 5 1 0 1 `i8_slt` )      // -56 < 5 = true
+    = f + f ( chk # i64 / # i8 200 # i8 7 - 0 8 `i8_sdiv` )  // -56 / 7 = -8
+    = f + f ( chk # i64 >> # i8 200 # i8 1 - 0 28 `i8_ashr` )  // -56 >> 1 = -28
+    = f + f ( chk # i64 ? < # i8 200 # i8 5 1 0 1 `i8_slt` )  // -56 < 5 = true
     = f + f ( chk # i64 # i16 << + # i8 80 # i8 94 # i8 5 - 0 64 `i8_shl_widen` )
     // Unsigned `u` must still use UNSIGNED ops (no regression).
-    = f + f ( chk # i64 / # u 200 # u 7 28 `u8_udiv` )            // 200 / 7 = 28
-    = f + f ( chk # i64 >> # u 200 # u 1 100 `u8_lshr` )          // 200 >> 1 = 100
-    = f + f ( chk # i64 ? < # u 200 # u 5 1 0 0 `u8_ult` )        // 200 < 5 = false
+    = f + f ( chk # i64 / # u 200 # u 7 28 `u8_udiv` )  // 200 / 7 = 28
+    = f + f ( chk # i64 >> # u 200 # u 1 100 `u8_lshr` )  // 200 >> 1 = 100
+    = f + f ( chk # i64 ? < # u 200 # u 5 1 0 0 `u8_ult` )  // 200 < 5 = false
     ^ f
 }

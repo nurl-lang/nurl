@@ -51,7 +51,7 @@ $ `stdlib/ext/http_jwt.nu`
     ( nurl_print label ) ( nurl_print `: status=` )
     ( nurl_print ( nurl_str_int . resp status ) )
     ( nurl_print ` body=` )
-    : String bs ( bytes_to_str . resp body )   // length-bounded; body Vec[u] isn't NUL-terminated
+    : String bs ( bytes_to_str . resp body )  // length-bounded; body Vec[u] isn't NUL-terminated
     ( nurl_print ( string_data bs ) )
     ( string_free bs )
     : ?String wa ( header_get . resp headers `WWW-Authenticate` )

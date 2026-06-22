@@ -12,21 +12,21 @@
 
 @ main → i {
     // byte slice (u = unsigned i8): high-bit bytes must compare/​widen unsigned
-    : [ u bytes [ u | 65 200 130 10 ]
+    : [u bytes [u | 65 200 130 10]
     : ~ i hi 0
     ~ by bytes { ? > by 127 { = hi + hi 1 } {} }
-    ( pr `high_bytes` hi )                            // 2  (200,130 > 127)
+    ( pr `high_bytes` hi )  // 2  (200,130 > 127)
     : ~ i bsum 0
     ~ by bytes { = bsum + bsum # i by }
-    ( pr `byte_sum` bsum )                            // 405 (zext, not sign-extended)
+    ( pr `byte_sum` bsum )  // 405 (zext, not sign-extended)
 
     // u64 slice with the high bit set
-    : [ u64 xs [ u64 | 18446744073709551615 200 ]
+    : [u64 xs [u64 | 18446744073709551615 200]
     : ~ i big 0
     ~ el xs { ? > el 1000 { = big + big 1 } {} }
-    ( pr `gt1000` big )                               // 1  (all-ones > 1000 unsigned)
+    ( pr `gt1000` big )  // 1  (all-ones > 1000 unsigned)
     : ~ i msum 0
     ~ el xs { = msum + msum # i % el 7 }
-    ( pr `mod7_sum` msum )                            // 5  (urem: 1 + 4)
+    ( pr `mod7_sum` msum )  // 5  (urem: 1 + 4)
     ^ 0
 }

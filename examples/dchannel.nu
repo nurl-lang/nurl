@@ -39,15 +39,15 @@ $ `stdlib/ext/dchannel.nu`
 @ open_int_chan i port → ( DChannel i ) {
     : Node node ( node_new `127.0.0.1` port )
     ^ ( dchan_open [i] node `nums` ( retry_default ) 20
-        \ i x → Json { ^ ( json_int x ) }          // enc: i → Json
-        \ Json j → i { ^ ( json_as_int j ) }       // dec: Json → i
-        \ i x → v {} )                              // drop: scalar, no-op
+    \ i x → Json { ^ ( json_int x ) }  // enc: i → Json
+    \ Json j → i { ^ ( json_as_int j ) }  // dec: Json → i
+    \ i x → v {} )  // drop: scalar, no-op
 }
 
 // ── Server: host the bounded channel ─────────────────────────────────
 @ run_server i port → i {
     : DStore store ( dstore_new 8 )
-    ( dstore_declare store `nums` 4 )       // capacity 4 → backpressure
+    ( dstore_declare store `nums` 4 )  // capacity 4 → backpressure
     : String banner ( string_from `dchannel server on 127.0.0.1:` )
     ( string_push_int banner port )
     ( string_push_str banner ` (channel "nums", cap 4)\n` )

@@ -308,7 +308,7 @@ $ `stdlib/std/bytes.nu`
 // All per-request knobs (timeouts, redirect policy, TLS verification,
 // User-Agent) ride in `opt`. The timeout-only `__libcurl_perform_full_to`
 // below is a thin shim that builds a default-options struct.
-@ __libcurl_perform_full_opts s url s method *u body_ptr i body_len s headers_blob
+@ __libcurl_perform_full_opts s url s method * u body_ptr i body_len s headers_blob
 HttpOptions opt → i {
     : i resp # i ( nurl_zalloc 48 )
     ? == resp 0 { ^ 0 } {}
@@ -432,7 +432,7 @@ HttpOptions opt → i {
 // Timeout-only shim over the orchestrator: builds a default-options
 // struct (follow redirects, verify TLS, stock UA) overriding just the
 // two timeouts. Kept for the existing http_request_to call path.
-@ __libcurl_perform_full_to s url s method *u body_ptr i body_len s headers_blob
+@ __libcurl_perform_full_to s url s method * u body_ptr i body_len s headers_blob
 i timeout_ms i connect_timeout_ms → i {
     : HttpOptions opt @ HttpOptions { timeout_ms connect_timeout_ms 1 -1 1 `` }
     ^ ( __libcurl_perform_full_opts url method body_ptr body_len headers_blob opt )
@@ -796,7 +796,7 @@ i timeout_ms i connect_timeout_ms → !Response HttpErr {
 // nurl_http_stream_open_to in stdlib/runtime.c §14b (now stub-only
 // when libcurl is linked — NURL drives via this path). Returns the
 // i64 heap pointer; 0 only on the state-struct allocation failure.
-@ __http_stream_open_to_libcurl s method s url *u body_ptr i body_len s headers_blob
+@ __http_stream_open_to_libcurl s method s url * u body_ptr i body_len s headers_blob
 i timeout_ms i connect_timeout_ms → i {
     : *u state ( nurl_curl_stream_alloc )
     ? == # i state 0 { ^ 0 } {}

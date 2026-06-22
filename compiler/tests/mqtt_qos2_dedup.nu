@@ -33,7 +33,7 @@ $ `stdlib/ext/mqtt.nu`
     // evicted (so it is no longer recognised).
     : ( Vec i ) s2 ( vec_new [i] )
     : ~ i j 1
-    ~ <= j 256 { ( __mqtt_qos2_seen_or_add s2 j )  = j + j 1 }
+    ~ <= j 256 { ( __mqtt_qos2_seen_or_add s2 j ) = j + j 1 }
     ( nurl_print `cap_len=` ) ( nurl_print ( nurl_str_int ( vec_len [i] s2 ) ) ) ( nurl_print `\n` )
     ( nurl_print `has1=` ) ( nurl_print ( yn ( __mqtt_qos2_seen_or_add s2 1 ) ) ) ( nurl_print `\n` )
     ( __mqtt_qos2_seen_or_add s2 257 )

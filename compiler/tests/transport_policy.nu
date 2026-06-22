@@ -17,6 +17,7 @@ $ `stdlib/net/transport.nu`
     = . p idle 0
     ^ # s p
 }
+
 @ free_path s pp → v { : *PeerPath p # *PeerPath pp ( vec_free [u] . p pubkey ) ( nurl_free # s p ) }
 
 @ main → i {

@@ -52,9 +52,9 @@ $ `stdlib/core/vec.nu`
 
 : BTree [K V] { s ctl }
 
-: i BT_MAXK 15   // 2t-1 keys
-: i BT_MINK 7    // t-1
-: i BT_DEG 8     // t
+: i BT_MAXK 15  // 2t-1 keys
+: i BT_MINK 7  // t-1
+: i BT_DEG 8  // t
 
 // ── node primitives ─────────────────────────────────────────────────
 
@@ -68,12 +68,16 @@ $ `stdlib/core/vec.nu`
 }
 
 @ __bt_nkeys s n → i { ^ ( nurl_peek n 3 ) }
+
 @ __bt_leaf s n → b { ^ == ( nurl_peek n 4 ) 1 }
+
 @ __bt_size s n → i { ^ ( nurl_peek n 5 ) }
+
 @ __bt_kid s n i idx → s {
     : *i kp # *i ( nurl_peek n 2 )
     ^ # s . kp idx
 }
+
 @ __bt_set_kid s n i idx s child → v {
     : *i kp # *i ( nurl_peek n 2 )
     = . kp idx # i child
@@ -106,6 +110,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ btree_len [K V] ( BTree K V ) m → i { ^ ( nurl_peek . m ctl 1 ) }
+
 @ btree_is_empty [K V] ( BTree K V ) m → b { ^ == ( btree_len [K V] m ) 0 }
 
 // ── search ──────────────────────────────────────────────────────────
@@ -325,6 +330,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ btree_min_key [K V] ( BTree K V ) m → ?K { ^ ( btree_key_at [K V] m 0 ) }
+
 @ btree_max_key [K V] ( BTree K V ) m → ?K { ^ ( btree_key_at [K V] m - ( btree_len [K V] m ) 1 ) }
 
 // ── in-order traversal ──────────────────────────────────────────────

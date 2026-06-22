@@ -49,7 +49,7 @@ $ `stdlib/ext/env.nu`
     : !( Vec u ) IoErr rr ( read_file_bytes path )
     ?? rr {
         F _ → { ( nurl_print `cannot read ROM\n` ) ^ 2 }
-        T rom → { ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) )  ( vec_free [u] rom ) }
+        T rom → { ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) ) ( vec_free [u] rom ) }
     }
     : ( Vec u ) pcm ( vec_new [u] )
     : ~ i nz 0
@@ -69,7 +69,7 @@ $ `stdlib/ext/env.nu`
         = g_audio_len 0
         = fi + fi 1
     }
-    ?? ( write_file_bytes outpath pcm ) { T _ → {}  F _ → { ( nurl_print `write failed\n` ) } }
+    ?? ( write_file_bytes outpath pcm ) { T _ → {} F _ → { ( nurl_print `write failed\n` ) } }
     ( nurl_print `wrote ` ) ( nurl_print ( nurl_str_int ( vec_len [u] pcm ) ) )
     ( nurl_print ` PCM bytes, nonzero-L samples: ` ) ( nurl_print ( nurl_str_int nz ) ) ( nurl_print `\n` )
     ( vec_free [u] pcm )
@@ -119,8 +119,8 @@ $ `stdlib/ext/env.nu`
                 = instr + instr 1
                 // Check the captured serial text for a verdict.
                 ? != 0 & instr 0x3FFF {} {
-                    ? ( contains_word g_serial `Passed` ) { = status 0  = done 1 } {}
-                    ? ( contains_word g_serial `Failed` ) { = status 1  = done 1 } {}
+                    ? ( contains_word g_serial `Passed` ) { = status 0 = done 1 } {}
+                    ? ( contains_word g_serial `Failed` ) { = status 1 = done 1 } {}
                 }
             }
             ( nurl_print `--- serial output ---\n` )
@@ -140,7 +140,7 @@ $ `stdlib/ext/env.nu`
         ^ 2
     } {}
     : ~ s path ``
-    ?? ( vec_get [String] args 1 ) { T a → = path ( string_data a )  F _ → {} }
+    ?? ( vec_get [String] args 1 ) { T a → = path ( string_data a ) F _ → {} }
     // PPU dump mode: `gb <rom> --ppu [frames]`.
     : ~ b ppu_mode F
     : ~ i frames 60
@@ -150,7 +150,7 @@ $ `stdlib/ext/env.nu`
                 ? ( nurl_str_eq ( string_data b ) `--ppu` ) {
                     = ppu_mode T
                     ? > ( vec_len [String] args ) 3 {
-                        ?? ( vec_get [String] args 3 ) { T f → = frames ( nurl_str_to_int ( string_data f ) )  F _ → {} }
+                        ?? ( vec_get [String] args 3 ) { T f → = frames ( nurl_str_to_int ( string_data f ) ) F _ → {} }
                     } {}
                 } {}
             }
@@ -160,17 +160,17 @@ $ `stdlib/ext/env.nu`
     ? ppu_mode { ^ ( run_rom_ppu path frames ) } {}
     // Audio dump mode: `gb <rom> --audio <frames> [out.pcm]`.
     : ~ b audio_mode F
-    ?? ( vec_get [String] args 2 ) { T b → ? ( nurl_str_eq ( string_data b ) `--audio` ) { = audio_mode T } {}  F _ → {} }
+    ?? ( vec_get [String] args 2 ) { T b → ?( nurl_str_eq ( string_data b ) `--audio` ) { = audio_mode T } {} F _ → {} }
     ? audio_mode {
         : ~ i af 300
         : ~ s ap `gb_audio.pcm`
-        ?? ( vec_get [String] args 3 ) { T b → = af ( nurl_str_to_int ( string_data b ) )  F _ → {} }
-        ?? ( vec_get [String] args 4 ) { T b → = ap ( string_data b )  F _ → {} }
+        ?? ( vec_get [String] args 3 ) { T b → = af ( nurl_str_to_int ( string_data b ) ) F _ → {} }
+        ?? ( vec_get [String] args 4 ) { T b → = ap ( string_data b ) F _ → {} }
         ^ ( audio_dump path af ap )
     } {}
     : ~ i budget 300000000
     ? > ( vec_len [String] args ) 2 {
-        ?? ( vec_get [String] args 2 ) { T b → = budget ( nurl_str_to_int ( string_data b ) )  F _ → {} }
+        ?? ( vec_get [String] args 2 ) { T b → = budget ( nurl_str_to_int ( string_data b ) ) F _ → {} }
     } {}
     ^ ( run_rom path budget )
 }

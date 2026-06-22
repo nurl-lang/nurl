@@ -29,9 +29,9 @@ $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/ext/crypto.nu`
 
 : | NoiseErr {
-    NoiseBadMsg      // truncated / wrong-length handshake message
-    NoiseAuth        // AEAD authentication failed (tampered / wrong key / wrong psk)
-    NoiseCrypto      // an underlying crypto primitive failed
+    NoiseBadMsg  // truncated / wrong-length handshake message
+    NoiseAuth  // AEAD authentication failed (tampered / wrong key / wrong psk)
+    NoiseCrypto  // an underlying crypto primitive failed
 }
 
 @ noise_err_name NoiseErr e → s {
@@ -76,21 +76,21 @@ $ `stdlib/ext/crypto.nu`
 // Noise HKDF(ck, ikm, num) → num*32 bytes (RFC 5869 with salt=ck, info="").
 @ __noise_hkdf ( Vec u ) ck ( Vec u ) ikm i num → ( Vec u ) {
     : ( Vec u ) info ( vec_new [u] )
-    : ( Vec u ) out ?? ( hkdf_sha256 ikm ck info * num 32 ) { T x → x  F _ → ( vec_new [u] ) }
+    : ( Vec u ) out ?? ( hkdf_sha256 ikm ck info * num 32 ) { T x → x F _ → ( vec_new [u] ) }
     ( vec_free [u] info )
     ^ out
 }
 
 @ __dh ( Vec u ) sk ( Vec u ) pk → ( Vec u ) {
-    ^ ?? ( x25519_derive sk pk ) { T x → x  F _ → ( vec_new [u] ) }
+    ^ ?? ( x25519_derive sk pk ) { T x → x F _ → ( vec_new [u] ) }
 }
 
 // ── SymmetricState (heap; mutated through the handshake) ──────────────
 
 : SymState {
-    ( Vec u ) ck       // chaining key (32)
-    ( Vec u ) h        // handshake hash (32)
-    ( Vec u ) k        // cipher key (32); empty until the first MixKey
+    ( Vec u ) ck  // chaining key (32)
+    ( Vec u ) h  // handshake hash (32)
+    ( Vec u ) k  // cipher key (32); empty until the first MixKey
     i nonce
     i has_key
 }
@@ -110,14 +110,14 @@ $ `stdlib/ext/crypto.nu`
     ^ s
 }
 
-@ __sym_free *SymState s → v {
+@ __sym_free * SymState s → v {
     ( vec_free [u] . s ck )
     ( vec_free [u] . s h )
     ( vec_free [u] . s k )
     ( nurl_free # s s )
 }
 
-@ __sym_mix_hash *SymState s ( Vec u ) data → v {
+@ __sym_mix_hash * SymState s ( Vec u ) data → v {
     : ( Vec u ) cat ( __cat . s h data )
     : ( Vec u ) nh ( sha256_pure cat )
     ( vec_free [u] cat )
@@ -125,7 +125,7 @@ $ `stdlib/ext/crypto.nu`
     = . s h nh
 }
 
-@ __sym_mix_key *SymState s ( Vec u ) ikm → v {
+@ __sym_mix_key * SymState s ( Vec u ) ikm → v {
     : ( Vec u ) out ( __noise_hkdf . s ck ikm 2 )
     ( vec_free [u] . s ck )
     = . s ck ( __slice out 0 32 )
@@ -136,7 +136,7 @@ $ `stdlib/ext/crypto.nu`
     = . s has_key 1
 }
 
-@ __sym_mix_key_and_hash *SymState s ( Vec u ) ikm → v {
+@ __sym_mix_key_and_hash * SymState s ( Vec u ) ikm → v {
     : ( Vec u ) out ( __noise_hkdf . s ck ikm 3 )
     ( vec_free [u] . s ck )
     = . s ck ( __slice out 0 32 )
@@ -151,14 +151,14 @@ $ `stdlib/ext/crypto.nu`
 }
 
 // EncryptAndHash: AEAD(pt) with ad=h (when keyed), then MixHash(ct).
-@ __sym_encrypt *SymState s ( Vec u ) pt → ( Vec u ) {
+@ __sym_encrypt * SymState s ( Vec u ) pt → ( Vec u ) {
     ? == . s has_key 0 {
         ( __sym_mix_hash s pt )
         ^ ( __slice pt 0 ( vec_len [u] pt ) )
     } {}
     : ( Vec u ) nonce ( noise_nonce . s nonce )
     : ( Vec u ) ct ?? ( chacha20poly1305_encrypt . s k nonce . s h pt )
-    { T x → x  F _ → ( vec_new [u] ) }
+    { T x → x F _ → ( vec_new [u] ) }
     ( vec_free [u] nonce )
     = . s nonce + . s nonce 1
     ( __sym_mix_hash s ct )
@@ -166,7 +166,7 @@ $ `stdlib/ext/crypto.nu`
 }
 
 // DecryptAndHash: MixHash(ct) AFTER decrypting under the pre-update h.
-@ __sym_decrypt *SymState s ( Vec u ) ct → !( Vec u ) NoiseErr {
+@ __sym_decrypt * SymState s ( Vec u ) ct → !( Vec u ) NoiseErr {
     ? == . s has_key 0 {
         ( __sym_mix_hash s ct )
         ^ @ !( Vec u ) NoiseErr { T ( __slice ct 0 ( vec_len [u] ct ) ) }
@@ -187,18 +187,18 @@ $ `stdlib/ext/crypto.nu`
 // ── HandshakeState ───────────────────────────────────────────────────
 
 : Handshake {
-    s sym              // *SymState
-    ( Vec u ) s_priv   // our static private
-    ( Vec u ) s_pub    // our static public
-    ( Vec u ) e_priv   // our ephemeral private
-    ( Vec u ) e_pub    // our ephemeral public
-    ( Vec u ) rs       // remote static public
-    ( Vec u ) re       // remote ephemeral public
-    ( Vec u ) psk      // 32-byte pre-shared key
+    s sym  // *SymState
+    ( Vec u ) s_priv  // our static private
+    ( Vec u ) s_pub  // our static public
+    ( Vec u ) e_priv  // our ephemeral private
+    ( Vec u ) e_pub  // our ephemeral public
+    ( Vec u ) rs  // remote static public
+    ( Vec u ) re  // remote ephemeral public
+    ( Vec u ) psk  // 32-byte pre-shared key
     i initiator
 }
 
-@ __hs_sym *Handshake h → *SymState { ^ # *SymState . h sym }
+@ __hs_sym * Handshake h → *SymState { ^ # *SymState . h sym }
 
 // Initialise. `rs` is the remote static public key (required for the
 // initiator; pass the responder's own static public for the responder so
@@ -223,7 +223,7 @@ $ `stdlib/ext/crypto.nu`
     ^ h
 }
 
-@ noise_free *Handshake h → v {
+@ noise_free * Handshake h → v {
     ( __sym_free ( __hs_sym h ) )
     ( vec_free [u] . h s_priv )
     ( vec_free [u] . h s_pub )
@@ -235,7 +235,7 @@ $ `stdlib/ext/crypto.nu`
     ( nurl_free # s h )
 }
 
-@ __hs_gen_ephemeral *Handshake h → v {
+@ __hs_gen_ephemeral * Handshake h → v {
     ?? ( x25519_keygen ) {
         T kp → {
             ( vec_free [u] . h e_priv )
@@ -250,23 +250,23 @@ $ `stdlib/ext/crypto.nu`
 }
 
 // Initiator → message 1: e, es, s, ss + empty payload.
-@ noise_write_msg1 *Handshake h → ( Vec u ) {
+@ noise_write_msg1 * Handshake h → ( Vec u ) {
     : *SymState sym ( __hs_sym h )
     ( __hs_gen_ephemeral h )
-    : ( Vec u ) out ( __slice . h e_pub 0 32 )      // e
+    : ( Vec u ) out ( __slice . h e_pub 0 32 )  // e
     ( __sym_mix_hash sym . h e_pub )
-    : ( Vec u ) es ( __dh . h e_priv . h rs )        // es
+    : ( Vec u ) es ( __dh . h e_priv . h rs )  // es
     ( __sym_mix_key sym es )
     ( vec_free [u] es )
-    : ( Vec u ) enc_s ( __sym_encrypt sym . h s_pub ) // s
+    : ( Vec u ) enc_s ( __sym_encrypt sym . h s_pub )  // s
     : ( Vec u ) out2 ( __cat out enc_s )
     ( vec_free [u] out )
     ( vec_free [u] enc_s )
-    : ( Vec u ) ss ( __dh . h s_priv . h rs )         // ss
+    : ( Vec u ) ss ( __dh . h s_priv . h rs )  // ss
     ( __sym_mix_key sym ss )
     ( vec_free [u] ss )
     : ( Vec u ) empty ( vec_new [u] )
-    : ( Vec u ) tag ( __sym_encrypt sym empty )       // payload (empty)
+    : ( Vec u ) tag ( __sym_encrypt sym empty )  // payload (empty)
     ( vec_free [u] empty )
     : ( Vec u ) msg ( __cat out2 tag )
     ( vec_free [u] out2 )
@@ -275,27 +275,27 @@ $ `stdlib/ext/crypto.nu`
 }
 
 // Responder ← message 1.
-@ noise_read_msg1 *Handshake h ( Vec u ) msg → !v NoiseErr {
+@ noise_read_msg1 * Handshake h ( Vec u ) msg → !v NoiseErr {
     ? < ( vec_len [u] msg ) 96 { ^ @ !v NoiseErr { F @ NoiseErr { NoiseBadMsg } } } {}
     : *SymState sym ( __hs_sym h )
-    : ( Vec u ) re ( __slice msg 0 32 )               // e
+    : ( Vec u ) re ( __slice msg 0 32 )  // e
     ( vec_free [u] . h re )
     = . h re re
     ( __sym_mix_hash sym . h re )
-    : ( Vec u ) es ( __dh . h s_priv . h re )          // es
+    : ( Vec u ) es ( __dh . h s_priv . h re )  // es
     ( __sym_mix_key sym es )
     ( vec_free [u] es )
-    : ( Vec u ) enc_s ( __slice msg 32 48 )            // s (32 + 16 tag)
+    : ( Vec u ) enc_s ( __slice msg 32 48 )  // s (32 + 16 tag)
     : !( Vec u ) NoiseErr ds ( __sym_decrypt sym enc_s )
     ( vec_free [u] enc_s )
     ^ ?? ds {
         T rs → {
             ( vec_free [u] . h rs )
             = . h rs rs
-            : ( Vec u ) ss ( __dh . h s_priv . h rs )   // ss
+            : ( Vec u ) ss ( __dh . h s_priv . h rs )  // ss
             ( __sym_mix_key sym ss )
             ( vec_free [u] ss )
-            : ( Vec u ) tag ( __slice msg 80 16 )       // empty payload
+            : ( Vec u ) tag ( __slice msg 80 16 )  // empty payload
             : !( Vec u ) NoiseErr dp ( __sym_decrypt sym tag )
             ( vec_free [u] tag )
             ?? dp {
@@ -308,20 +308,20 @@ $ `stdlib/ext/crypto.nu`
 }
 
 // Responder → message 2: e, ee, se, psk + empty payload.
-@ noise_write_msg2 *Handshake h → ( Vec u ) {
+@ noise_write_msg2 * Handshake h → ( Vec u ) {
     : *SymState sym ( __hs_sym h )
     ( __hs_gen_ephemeral h )
-    : ( Vec u ) out ( __slice . h e_pub 0 32 )         // e
+    : ( Vec u ) out ( __slice . h e_pub 0 32 )  // e
     ( __sym_mix_hash sym . h e_pub )
-    : ( Vec u ) ee ( __dh . h e_priv . h re )           // ee
+    : ( Vec u ) ee ( __dh . h e_priv . h re )  // ee
     ( __sym_mix_key sym ee )
     ( vec_free [u] ee )
-    : ( Vec u ) se ( __dh . h e_priv . h rs )           // se (resp e × init s)
+    : ( Vec u ) se ( __dh . h e_priv . h rs )  // se (resp e × init s)
     ( __sym_mix_key sym se )
     ( vec_free [u] se )
-    ( __sym_mix_key_and_hash sym . h psk )              // psk
+    ( __sym_mix_key_and_hash sym . h psk )  // psk
     : ( Vec u ) empty ( vec_new [u] )
-    : ( Vec u ) tag ( __sym_encrypt sym empty )         // empty payload
+    : ( Vec u ) tag ( __sym_encrypt sym empty )  // empty payload
     ( vec_free [u] empty )
     : ( Vec u ) msg ( __cat out tag )
     ( vec_free [u] out )
@@ -330,21 +330,21 @@ $ `stdlib/ext/crypto.nu`
 }
 
 // Initiator ← message 2.
-@ noise_read_msg2 *Handshake h ( Vec u ) msg → !v NoiseErr {
+@ noise_read_msg2 * Handshake h ( Vec u ) msg → !v NoiseErr {
     ? < ( vec_len [u] msg ) 48 { ^ @ !v NoiseErr { F @ NoiseErr { NoiseBadMsg } } } {}
     : *SymState sym ( __hs_sym h )
-    : ( Vec u ) re ( __slice msg 0 32 )                 // e
+    : ( Vec u ) re ( __slice msg 0 32 )  // e
     ( vec_free [u] . h re )
     = . h re re
     ( __sym_mix_hash sym . h re )
-    : ( Vec u ) ee ( __dh . h e_priv . h re )            // ee
+    : ( Vec u ) ee ( __dh . h e_priv . h re )  // ee
     ( __sym_mix_key sym ee )
     ( vec_free [u] ee )
-    : ( Vec u ) se ( __dh . h s_priv . h re )            // se (init s × resp e)
+    : ( Vec u ) se ( __dh . h s_priv . h re )  // se (init s × resp e)
     ( __sym_mix_key sym se )
     ( vec_free [u] se )
-    ( __sym_mix_key_and_hash sym . h psk )               // psk
-    : ( Vec u ) tag ( __slice msg 32 16 )                // empty payload
+    ( __sym_mix_key_and_hash sym . h psk )  // psk
+    : ( Vec u ) tag ( __slice msg 32 16 )  // empty payload
     : !( Vec u ) NoiseErr dp ( __sym_decrypt sym tag )
     ( vec_free [u] tag )
     ^ ?? dp {
@@ -365,7 +365,7 @@ $ `stdlib/ext/crypto.nu`
     ( vec_free [u] . k recv )
 }
 
-@ noise_split *Handshake h → NoiseKeys {
+@ noise_split * Handshake h → NoiseKeys {
     : *SymState sym ( __hs_sym h )
     : ( Vec u ) empty ( vec_new [u] )
     : ( Vec u ) out ( __noise_hkdf . sym ck empty 2 )

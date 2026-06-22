@@ -42,14 +42,14 @@ $ `stdlib/ext/toml.nu`
 : LockPkg {
     String name
     String version
-    String source     // "registry+<url>"; empty for path/local
-    String checksum   // hex SHA-256 of the tarball; empty for path/local
+    String source  // "registry+<url>"; empty for path/local
+    String checksum  // hex SHA-256 of the tarball; empty for path/local
 }
 
 : | LockErr {
-    LockParseFailed   // TOML didn't parse
-    LockReadFailed    // file couldn't be read
-    LockBadShape      // `package` present but not an array-of-tables
+    LockParseFailed  // TOML didn't parse
+    LockReadFailed  // file couldn't be read
+    LockBadShape  // `package` present but not an array-of-tables
 }
 
 @ lock_err_name LockErr e → s {
