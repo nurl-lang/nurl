@@ -1,0 +1,27 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- A negotiation ---
+offer_default=permessage-deflate
+offer_params=permessage-deflate; client_no_context_takeover; server_max_window_bits=10
+parse_enabled=T
+parse_snto=T
+parse_cnto=F
+parse_cwb=12
+parse_swb=15
+clamp_swb8=9
+response=permessage-deflate; server_no_context_takeover
+--- B decline ---
+no_pmce=T
+empty_none=T
+--- C round-trip ---
+client_active=T
+m1_round_trip=T
+m1_smaller=T
+m2_round_trip=T
+m2_takeover_shrinks=T
+--- D validation ---
+utf8_text_err=WsInvalidUtf8
+binary_ok=T
+bomb_capped=WsMessageTooLarge

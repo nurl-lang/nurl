@@ -5564,12 +5564,39 @@ void nurl_z_setup(void *zs, void *in, long long avail_in,
 long long nurl_z_total_out(const void *zs) {
     return (long long)((const z_stream*)zs)->total_out;
 }
+
+/* Granular input/output rebinders + counters for a PERSISTENT z_stream
+ * driven across many deflate/inflate calls (the gzip path above is
+ * one-shot; permessage-deflate keeps the stream alive for context
+ * takeover, so the NURL-side loop must repoint next_out into a grown
+ * buffer without disturbing zlib's internally-advanced next_in/avail_in).
+ * Each absorbs the platform field layout in C, mirroring nurl_z_setup. */
+void nurl_z_set_in(void *zs, void *in, long long avail_in) {
+    z_stream *s = (z_stream*)zs;
+    s->next_in  = (Bytef*)in;
+    s->avail_in = (uInt)avail_in;
+}
+void nurl_z_set_out(void *zs, void *out, long long avail_out) {
+    z_stream *s = (z_stream*)zs;
+    s->next_out  = (Bytef*)out;
+    s->avail_out = (uInt)avail_out;
+}
+long long nurl_z_avail_in(const void *zs)  { return (long long)((const z_stream*)zs)->avail_in; }
+long long nurl_z_avail_out(const void *zs) { return (long long)((const z_stream*)zs)->avail_out; }
 #else
 void nurl_z_setup(void *zs, void *in, long long avail_in,
                   void *out, long long avail_out) {
     (void)zs; (void)in; (void)avail_in; (void)out; (void)avail_out;
 }
 long long nurl_z_total_out(const void *zs) { (void)zs; return 0; }
+void nurl_z_set_in(void *zs, void *in, long long avail_in) {
+    (void)zs; (void)in; (void)avail_in;
+}
+void nurl_z_set_out(void *zs, void *out, long long avail_out) {
+    (void)zs; (void)out; (void)avail_out;
+}
+long long nurl_z_avail_in(const void *zs)  { (void)zs; return 0; }
+long long nurl_z_avail_out(const void *zs) { (void)zs; return 0; }
 #endif
 
 

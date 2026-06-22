@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+m1 round_trip=T compressed_smaller=T
+m2 round_trip=T takeover_shrinks=T
+m3 round_trip=T
+no_takeover_identical=T
+empty round_trip=T
+garbage rejected=CompressData

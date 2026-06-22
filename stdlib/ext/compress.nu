@@ -426,3 +426,237 @@ $ `stdlib/core/cell.nu`  // nurl_native_sizeof for z_stream alloc
     : b _r ( vec_set_len [u] out rc )
     ^ @ !( Vec u ) CompressErr { T out }
 }
+
+// ── Raw-DEFLATE streaming codec (RFC 1951, no zlib/gzip wrapper) ────
+//
+// The `zlib_*` / `gzip_*` helpers above are ONE-SHOT: each call spins up
+// a fresh `z_stream`, runs to Z_FINISH, and tears it down. RFC 7692
+// WebSocket permessage-deflate instead needs a PERSISTENT stream that
+// survives across many messages so the LZ77 sliding window carries over
+// ("context takeover"), and each message is flushed with Z_SYNC_FLUSH
+// rather than ended with Z_FINISH. This section exposes exactly that as
+// a reusable raw-DEFLATE codec — raw because permessage-deflate frames
+// carry bare DEFLATE blocks with no 2-byte zlib header / 4-byte Adler-32
+// trailer (achieved via libz's NEGATIVE windowBits).
+//
+//   ( raw_deflate_new   i window_bits i level ) → ! ZDeflate CompressErr
+//   ( raw_deflate_block ZDeflate d ( Vec u ) in ) → ! ( Vec u ) CompressErr
+//   ( raw_deflate_reset ZDeflate d )               → v   // drop the window
+//   ( raw_deflate_free  ZDeflate d )               → v
+//   ( raw_inflate_new   i window_bits )            → ! ZInflate CompressErr
+//   ( raw_inflate_block ZInflate d ( Vec u ) in i max_out )
+//                                                  → ! ( Vec u ) CompressErr
+//   ( raw_inflate_reset ZInflate d )               → v
+//   ( raw_inflate_free  ZInflate d )               → v
+//
+// `window_bits` is clamped to [9, 15]. libz changes a raw-deflate
+// windowBits of 8 to 9 internally (and 8 is unusable for raw inflate),
+// so 8 is treated as 9; callers needing a true 256-byte window are out
+// of scope. A deflater and the matching inflater MUST agree the encoder
+// never exceeds the inflater's window — inflating at 15 (the max) is
+// always safe regardless of the encoder's choice.
+//
+// Memory: ZDeflate / ZInflate own a heap `z_stream`; there is no
+// auto-Drop for the raw `*u` handle, so callers MUST pair every
+// successful `*_new` with a `*_free`.
+
+& `z` @ deflateReset *u zs → i32
+
+& `z` @ inflateReset *u zs → i32
+
+& `c` @ nurl_z_set_in *u zs *u in i avail_in → v
+
+& `c` @ nurl_z_set_out *u zs *u out i avail_out → v
+
+& `c` @ nurl_z_avail_in *u zs → i
+
+& `c` @ nurl_z_avail_out *u zs → i
+
+: ZDeflate {
+    *u zs  // heap z_stream; 0 once freed
+}
+
+: ZInflate {
+    *u zs
+}
+
+@ __raw_clamp_wbits i window_bits → i {
+    ? < window_bits 9 { ^ 9 } {}
+    ? > window_bits 15 { ^ 15 } {}
+    ^ window_bits
+}
+
+// Initialise a persistent raw-DEFLATE compressor. `level` is 0..9
+// (6 is a good default). Z_DEFLATED = 8, memLevel = 8, strategy = 0.
+@ raw_deflate_new i window_bits i level → !ZDeflate CompressErr {
+    : i wb ( __raw_clamp_wbits window_bits )
+    : i zs_size ( nurl_native_sizeof `z_stream` )
+    ? <= zs_size 0 { ^ @ !ZDeflate CompressErr { F CompressOther } } {}
+    : *u zs # *u ( nurl_zalloc zs_size )
+    ? == 0 # i zs { ^ @ !ZDeflate CompressErr { F CompressMemory } } {}
+    : i nwb - 0 wb
+    : i32 rc ( deflateInit2_ zs # i32 level # i32 8 # i32 nwb # i32 8 # i32 0
+    ( zlibVersion ) # i32 zs_size )
+    ? != rc # i32 0 {
+        ( nurl_free # s zs )
+        ^ @ !ZDeflate CompressErr { F ( __zlib_map_err # i rc ) }
+    } {}
+    ^ @ !ZDeflate CompressErr { T @ ZDeflate { zs } }
+}
+
+// Compress one message: feed `input` through the live stream and flush
+// with Z_SYNC_FLUSH, returning every byte produced this round (which
+// always ends with the 4-byte `00 00 FF FF` empty-block marker the
+// sync flush appends — RFC 7692 §7.2.1 strips those before framing).
+// The sliding window is RETAINED for the next call unless raw_deflate_reset
+// is invoked between messages.
+@ raw_deflate_block ZDeflate d ( Vec u ) input → !( Vec u ) CompressErr {
+    : *u zs . d zs
+    ? == 0 # i zs { ^ @ !( Vec u ) CompressErr { F CompressOther } } {}
+    : i n ( vec_len [u] input )
+    : ( Vec u ) out ( vec_new [u] )
+    : *u srcp ( vec_data [u] input )
+    ( nurl_z_set_in zs srcp n )
+    : i chunk 16384
+    : ~ b done F
+    : ~ b ok F
+    : ~ CompressErr last CompressOther
+    ~ ! done {
+        : ( Vec u ) scratch ( vec_with_cap [u] chunk )
+        ( vec_reserve [u] scratch chunk )
+        : *u dp ( vec_data [u] scratch )
+        : i before ( nurl_z_total_out zs )
+        ( nurl_z_set_out zs dp chunk )
+        : i32 rc ( deflate zs # i32 2 )  // Z_SYNC_FLUSH
+        : i after ( nurl_z_total_out zs )
+        : i got - after before
+        ? > got 0 {
+            : b _s ( vec_set_len [u] scratch got )
+            ( vec_extend [u] out scratch )
+        } {}
+        ( vec_free [u] scratch )
+        : i rci # i rc
+        ? == rci 0 {
+            // Z_OK. Free output space remaining ⇒ the flush is complete
+            // (deflate fills avail_out before returning while work remains).
+            ? > ( nurl_z_avail_out zs ) 0 { = ok T = done T } {}
+        } {
+            = last ( __zlib_map_err rci )
+            = done T
+        }
+    }
+    ? ok {
+        ^ @ !( Vec u ) CompressErr { T out }
+    } {
+        ( vec_free [u] out )
+        ^ @ !( Vec u ) CompressErr { F last }
+    }
+}
+
+@ raw_deflate_reset ZDeflate d → v {
+    ? != 0 # i . d zs { : i32 _ ( deflateReset . d zs ) } {}
+}
+
+@ raw_deflate_free ZDeflate d → v {
+    ? != 0 # i . d zs {
+        : i32 _ ( deflateEnd . d zs )
+        ( nurl_free # s . d zs )
+    } {}
+}
+
+// Initialise a persistent raw-INFLATE decompressor. Inflating at the
+// maximum window (15) accepts any encoder window ≤ 15, so passing 15 is
+// always interoperable.
+@ raw_inflate_new i window_bits → !ZInflate CompressErr {
+    : i wb ( __raw_clamp_wbits window_bits )
+    : i zs_size ( nurl_native_sizeof `z_stream` )
+    ? <= zs_size 0 { ^ @ !ZInflate CompressErr { F CompressOther } } {}
+    : *u zs # *u ( nurl_zalloc zs_size )
+    ? == 0 # i zs { ^ @ !ZInflate CompressErr { F CompressMemory } } {}
+    : i nwb - 0 wb
+    : i32 rc ( inflateInit2_ zs # i32 nwb ( zlibVersion ) # i32 zs_size )
+    ? != rc # i32 0 {
+        ( nurl_free # s zs )
+        ^ @ !ZInflate CompressErr { F ( __zlib_map_err # i rc ) }
+    } {}
+    ^ @ !ZInflate CompressErr { T @ ZInflate { zs } }
+}
+
+// Decompress one message. The caller appends the 4-byte `00 00 FF FF`
+// tail RFC 7692 §7.2.2 mandates before calling, so a complete message
+// inflates to Z_OK with all input consumed. Output size is unknown up
+// front, so this grows a result Vec a chunk at a time. `max_out` caps the
+// decompressed size — exceeding it fails with CompressBufTooSmall (a
+// decompression-bomb guard); pass 0 for no limit.
+@ raw_inflate_block ZInflate d ( Vec u ) input i max_out → !( Vec u ) CompressErr {
+    : *u zs . d zs
+    ? == 0 # i zs { ^ @ !( Vec u ) CompressErr { F CompressOther } } {}
+    : i n ( vec_len [u] input )
+    ? <= n 0 { ^ @ !( Vec u ) CompressErr { T ( vec_new [u] ) } } {}
+    : ( Vec u ) out ( vec_new [u] )
+    : *u srcp ( vec_data [u] input )
+    ( nurl_z_set_in zs srcp n )
+    : i chunk 16384
+    : ~ b done F
+    : ~ b ok F
+    : ~ CompressErr last CompressOther
+    ~ ! done {
+        : ( Vec u ) scratch ( vec_with_cap [u] chunk )
+        ( vec_reserve [u] scratch chunk )
+        : *u dp ( vec_data [u] scratch )
+        : i before ( nurl_z_total_out zs )
+        ( nurl_z_set_out zs dp chunk )
+        : i32 rc ( inflate zs # i32 2 )  // Z_SYNC_FLUSH
+        : i after ( nurl_z_total_out zs )
+        : i got - after before
+        ? > got 0 {
+            : b _s ( vec_set_len [u] scratch got )
+            ( vec_extend [u] out scratch )
+        } {}
+        ( vec_free [u] scratch )
+        : i rci # i rc
+        ? & > max_out 0 > ( vec_len [u] out ) max_out {
+            = last CompressBufTooSmall
+            = done T
+        } {
+            ? == rci 1 { = ok T = done T } {  // Z_STREAM_END
+                ? == rci 0 {  // Z_OK
+                    // Output space remaining ⇒ all available input consumed
+                    // and everything flushed (input is a complete message).
+                    ? > ( nurl_z_avail_out zs ) 0 { = ok T = done T } {}
+                } {
+                    ? == rci -5 {  // Z_BUF_ERROR
+                        // No progress: for a complete message this means the
+                        // input is fully consumed (clean end), else truncated.
+                        ? == ( nurl_z_avail_in zs ) 0 {
+                            = ok T = done T
+                        } {
+                            = last CompressData
+                            = done T
+                        }
+                    } {
+                        = last ( __zlib_map_err rci )
+                        = done T
+                    }
+                }
+            }
+        }
+    }
+    ? ok {
+        ^ @ !( Vec u ) CompressErr { T out }
+    } {
+        ( vec_free [u] out )
+        ^ @ !( Vec u ) CompressErr { F last }
+    }
+}
+
+@ raw_inflate_reset ZInflate d → v {
+    ? != 0 # i . d zs { : i32 _ ( inflateReset . d zs ) } {}
+}
+
+@ raw_inflate_free ZInflate d → v {
+    ? != 0 # i . d zs {
+        : i32 _ ( inflateEnd . d zs )
+        ( nurl_free # s . d zs )
+    } {}
+}

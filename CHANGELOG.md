@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **WebSocket `permessage-deflate` (RFC 7692), server and client.** Per-message
+  compression negotiated over `Sec-WebSocket-Extensions`, with both context-
+  takeover directions and peer-imposed window bounds honoured. New surface in
+  `stdlib/ext/websocket.nu`: extension negotiation (`ws_deflate_parse_extensions`,
+  `ws_deflate_offer_header`, `ws_deflate_response_header`), a `WsDeflate` context
+  (`ws_deflate_make` / `ws_deflate_free`), deflate-aware messaging
+  (`ws_send_text_deflate` / `ws_send_binary_deflate` / `ws_read_message_deflate`
+  / `ws_serve_messages_deflate` and their `ws_client_*` mirrors), and one-shot
+  handshake helpers (`ws_perform_handshake_deflate`, `ws_connect_deflate`). The
+  frame reader now surfaces the RSV1 compressed bit (`WsFrame.rsv1`,
+  `WsMessage.compressed`) — still rejected on the non-deflate readers, so the
+  change is fully backward-compatible. Decompression is capped against
+  `WsLimits.max_message_bytes` (a decompression-bomb guard) and text payloads
+  are UTF-8-validated *after* inflation.
+- **Raw-DEFLATE streaming codec in `stdlib/ext/compress.nu`** (the engine the
+  above rides on): `raw_deflate_*` / `raw_inflate_*` drive a *persistent*
+  `z_stream` with raw (header-less) DEFLATE via negative `windowBits`,
+  `Z_SYNC_FLUSH`, sliding-window context takeover, and `*_reset`. Four new
+  layout-absorbing `nurl_z_*` accessors in `runtime.c` let the NURL-side loop
+  rebind input/output across the persistent stream. Regression tests
+  `compress_rawdeflate.nu` and `ws_permessage_deflate.nu`.
+
 ## [0.9.10] — 2026-06-20
 
 The "NURL becomes an ecosystem" release: the toolchain is now installable,
