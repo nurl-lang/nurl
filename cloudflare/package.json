@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "test:recovery": "node --test test-recovery.ts",
     "cf-typegen": "wrangler types"
   },
   "dependencies": {
