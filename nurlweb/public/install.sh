@@ -109,6 +109,40 @@ tar xzf "$tmp/$archive" -C "$PREFIX" --strip-components=1
 
 [ -x "$PREFIX/bin/nurl" ] || err "install looks incomplete: $PREFIX/bin/nurl missing."
 
+# ── Smoke-test: the shipped binaries must at least *load* ───────────────
+# The toolchain binaries are built to depend on libc only, so this should
+# always pass. But if a future build regresses and ships a binary with a
+# stray shared-library dependency (the original failure was a stray
+# libpq.so.5 NEEDED entry that stopped `nurlpkg install` dead on a box with
+# no Postgres client), catch it HERE with an actionable message instead of
+# letting the user hit a cryptic dynamic-loader error at first use.
+smoke() {
+    bin="$1"
+    [ -x "$bin" ] || return 0
+    # Any argument works — the dynamic loader resolves all NEEDED libraries
+    # before main() runs, so a missing .so surfaces regardless of CLI args.
+    out="$("$bin" --version 2>&1 || true)"
+    case "$out" in
+        *"error while loading shared libraries"* | *"cannot open shared object"*)
+            lib="$(printf '%s\n' "$out" | sed -n 's/.*\(lib[A-Za-z0-9._+-]*\.so[.0-9]*\).*/\1/p' | head -n1)"
+            info ""
+            info "ERROR: $(basename "$bin") cannot start — missing shared library: ${lib:-(see below)}"
+            info "$out"
+            info ""
+            info "Install the missing library with your package manager, then re-run this installer:"
+            info "    Debian/Ubuntu:  sudo apt-get install -y <package that provides ${lib:-the library}>"
+            info "    Fedora/RHEL:    sudo dnf install -y     <package that provides ${lib:-the library}>"
+            info "    Alpine:         sudo apk add            <package that provides ${lib:-the library}>"
+            info ""
+            info "Please also report this at https://github.com/nurl-lang/nurl-lang/issues —"
+            info "the shipped toolchain is meant to need only libc."
+            exit 1
+            ;;
+    esac
+}
+smoke "$PREFIX/build/nurlc"
+smoke "$PREFIX/build/nurlpkg"
+
 # ── Done ───────────────────────────────────────────────────────────────
 info ""
 info "NURL $VERSION installed → $PREFIX"
