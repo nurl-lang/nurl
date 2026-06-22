@@ -63,9 +63,15 @@ echo "Relinking nurlpkg → $TARGET"
 "$ZIG" cc -O2 -target "$TARGET" -DNURL_HAVE_ZLIB -DNURL_HAVE_ZSTD \
     -idirafter /usr/include -idirafter "/usr/include/$MULTIARCH" \
     -c "$ROOT/stdlib/runtime.c" -o "$TMP/rt-nurlpkg.o"
+# Search only directories that exist: on arm64 there is no /usr/lib64, and
+# `find` over a missing dir exits non-zero — which under `set -o pipefail`
+# + `set -e` would kill this script *silently* (the bug that made every
+# arm64 attempt die here). `|| true` is a second guard.
 ZA=()
+search_dirs=()
+for d in /usr/lib /usr/lib64 /lib /lib64; do [[ -d "$d" ]] && search_dirs+=("$d"); done
 for n in libz.a libzstd.a; do
-    p="$(find /usr/lib /usr/lib64 /lib -name "$n" 2>/dev/null | head -1)"
+    p="$(find "${search_dirs[@]}" -name "$n" 2>/dev/null | head -1 || true)"
     [[ -n "$p" ]] && ZA+=("$p")
 done
 "$ZIG" cc -O2 -target "$TARGET" -Wl,--as-needed \
