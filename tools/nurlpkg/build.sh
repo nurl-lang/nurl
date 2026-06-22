@@ -43,61 +43,50 @@ mkdir -p "$ROOT_DIR/build"
 echo "[1/2] $SRC → build/nurlpkg.ll"
 "$NURLC" "$SRC" > "$ROOT_DIR/build/nurlpkg.ll"
 
-# Match the central build.sh runtime link line — runtime.o was built
-# with whichever back-ends were detected at build time, and the
-# linker needs the same libraries.
+# Dependency policy for the shipped `nurlpkg` (the whole point of this
+# rewrite): the binary's ONLY dynamic dependency must be libc, so it can
+# never be wedged on a fresh box by a missing shared library (the original
+# bug: a stray libpq.so.5 NEEDED entry stopped `nurlpkg install` dead on a
+# machine with no Postgres client).
+#
+# Two mechanisms get us there:
+#
+#   1. nurlpkg does NOT link libcurl / OpenSSL / sqlite / libpq at all. It
+#      reaches the registry through the system `curl` BINARY
+#      (stdlib/ext/http_cli.nu) — already required by the install
+#      one-liner — and its only crypto is pure-NURL SHA-256. Those backends
+#      still live in the monolithic runtime.o, but nurlpkg references none
+#      of their symbols, so LTO drops the code; we simply never name the
+#      libs here.
+#
+#   2. Its real deps, zlib + zstd (gzip/zstd of package tarballs), are
+#      linked STATICALLY when a static archive is available, so they leave
+#      no DT_NEEDED behind. We fall back to dynamic only if the .a is
+#      absent. `-Wl,--as-needed` on the link line then strips any -lm /
+#      -lpthread that turns out unreferenced.
 EXTRA_LIBS=()
-if [[ -f "$ROOT_DIR/stdlib/runtime.curl" ]]; then
-    if pkg-config --exists libcurl 2>/dev/null; then
+
+# Append a compression lib, preferring its static archive (.a) so the
+# shipped binary keeps no runtime .so dependency. $1 pkg-config name,
+# $2 bare lib name (zlib→z), $3 archive file name (libz.a).
+add_static_lib() {
+    local pcname="$1" lname="$2" aname="$3" apath
+    apath="$("$CLANG" -print-file-name="$aname" 2>/dev/null)"
+    if [[ -n "$apath" && "$apath" != "$aname" && -f "$apath" ]]; then
+        # An explicit path to a .a links it statically regardless of -B mode.
+        EXTRA_LIBS+=( "$apath" )
+    elif pkg-config --exists "$pcname" 2>/dev/null; then
         # shellcheck disable=SC2207
-        EXTRA_LIBS+=( $(pkg-config --libs libcurl) )
+        EXTRA_LIBS+=( $(pkg-config --libs "$pcname") )
     else
-        EXTRA_LIBS+=( -lcurl )
+        EXTRA_LIBS+=( "-l$lname" )
     fi
-fi
-if [[ -f "$ROOT_DIR/stdlib/runtime.openssl" ]]; then
-    if pkg-config --exists openssl 2>/dev/null; then
-        # shellcheck disable=SC2207
-        EXTRA_LIBS+=( $(pkg-config --libs openssl) )
-    else
-        EXTRA_LIBS+=( -lssl -lcrypto )
-    fi
-fi
-if [[ -f "$ROOT_DIR/stdlib/runtime.sqlite3" ]]; then
-    if pkg-config --exists sqlite3 2>/dev/null; then
-        # shellcheck disable=SC2207
-        EXTRA_LIBS+=( $(pkg-config --libs sqlite3) )
-    else
-        EXTRA_LIBS+=( -lsqlite3 )
-    fi
-fi
-if [[ -f "$ROOT_DIR/stdlib/runtime.pq" ]]; then
-    if pkg-config --exists libpq 2>/dev/null; then
-        # shellcheck disable=SC2207
-        EXTRA_LIBS+=( $(pkg-config --libs libpq) )
-    else
-        EXTRA_LIBS+=( -lpq )
-    fi
-fi
-if [[ -f "$ROOT_DIR/stdlib/runtime.z" ]]; then
-    if pkg-config --exists zlib 2>/dev/null; then
-        # shellcheck disable=SC2207
-        EXTRA_LIBS+=( $(pkg-config --libs zlib) )
-    else
-        EXTRA_LIBS+=( -lz )
-    fi
-fi
-if [[ -f "$ROOT_DIR/stdlib/runtime.zstd" ]]; then
-    if pkg-config --exists libzstd 2>/dev/null; then
-        # shellcheck disable=SC2207
-        EXTRA_LIBS+=( $(pkg-config --libs libzstd) )
-    else
-        EXTRA_LIBS+=( -lzstd )
-    fi
-fi
+}
+if [[ -f "$ROOT_DIR/stdlib/runtime.z" ]];    then add_static_lib zlib    z    libz.a;    fi
+if [[ -f "$ROOT_DIR/stdlib/runtime.zstd" ]]; then add_static_lib libzstd zstd libzstd.a; fi
 
 echo "[2/2] build/nurlpkg.ll → build/nurlpkg"
-"$CLANG" -O2 -flto "$ROOT_DIR/build/nurlpkg.ll" "$RUNTIME" -lm -lpthread "${EXTRA_LIBS[@]}" -o "$ROOT_DIR/build/nurlpkg"
+"$CLANG" -O2 -flto -Wl,--as-needed "$ROOT_DIR/build/nurlpkg.ll" "$RUNTIME" -lm -lpthread "${EXTRA_LIBS[@]}" -o "$ROOT_DIR/build/nurlpkg"
 
 echo ""
 echo "Done: $ROOT_DIR/build/nurlpkg"

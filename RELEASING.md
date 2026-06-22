@@ -38,16 +38,36 @@ works wherever it is unpacked.
 
 ## Runtime dependencies (dynamic linking)
 
-The shipped binaries link a few system libraries dynamically. `glibc`
-targets assume a normal desktop/server distro where these are present:
+The toolchain binaries are built to depend on **libc only** — nothing else.
+This is deliberate: a stray dependency on a library a fresh box lacks would
+stop the toolchain dead before `main()` (the original bug: a `libpq.so.5`
+NEEDED entry, inherited from the monolithic `runtime.o`, made `nurlpkg
+install` fail on every machine without a Postgres client).
 
-- **`nurlpkg`** needs **libcurl** + **OpenSSL** for registry HTTPS on Linux
-  (Windows uses WinHTTP, no extra deps).
-- A user program links additional libraries only when it imports the
-  matching module (`nurl.sh`/`nurl.bat` add them on demand from the
-  `stdlib/runtime.<feature>` sentinels shipped in the archive).
+Two mechanisms keep it that way:
 
-A fully self-contained (statically linked) build is a possible follow-up.
+- Every link line passes **`-Wl,--as-needed`**, so a binary keeps a
+  `DT_NEEDED` entry only for a library it actually references a symbol from.
+  `runtime.o` still contains all the FFI back-ends (curl, OpenSSL, sqlite,
+  libpq, zlib, zstd…), but LTO drops the code a given binary doesn't call,
+  and `--as-needed` then drops the unreferenced libs. `nurlc` ends up
+  needing only libc; `nurlpkg` likewise.
+- **`nurlpkg`** reaches the registry through the system **`curl` binary**
+  (`stdlib/ext/http_cli.nu`), not libcurl — the install one-liner already
+  requires `curl`, so this adds no new requirement while removing the
+  libcurl/OpenSSL link. Its only other real deps, **zlib + zstd** (package
+  tarball (de)compression), are linked **statically** when a `.a` is
+  available (`tools/nurlpkg/build.sh`). Net result: `nurlpkg` links libc
+  only. On Windows it uses WinHTTP, no extra deps.
+- A user program still links additional libraries on demand — only when it
+  imports the matching module — via the `stdlib/runtime.<feature>`
+  sentinels and the same `--as-needed` link (`nurl.sh`/`nurl.bat`). A
+  program that imports nothing DB-related never inherits libpq/sqlite.
+
+`tools/get-nurl.sh` smoke-tests the unpacked `nurlc`/`nurlpkg` (they must at
+least load) and, on a missing-shared-library loader error, prints the
+offending `.so` plus a package-manager hint instead of failing cryptically
+at first use.
 
 ## Front-door wiring (nurlweb)
 

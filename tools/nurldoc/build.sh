@@ -97,7 +97,7 @@ if [[ -f "$ROOT_DIR/stdlib/runtime.zstd" ]]; then
 fi
 
 echo "[2/2] build/nurldoc.ll → build/nurldoc"
-"$CLANG" -O2 -flto "$ROOT_DIR/build/nurldoc.ll" "$RUNTIME" -lm -lpthread "${EXTRA_LIBS[@]}" -o "$ROOT_DIR/build/nurldoc"
+"$CLANG" -O2 -flto "$ROOT_DIR/build/nurldoc.ll" "$RUNTIME" -Wl,--as-needed -lm -lpthread "${EXTRA_LIBS[@]}" -o "$ROOT_DIR/build/nurldoc"
 
 echo ""
 echo "Done: $ROOT_DIR/build/nurldoc"

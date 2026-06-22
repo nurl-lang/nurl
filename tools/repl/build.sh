@@ -96,7 +96,7 @@ if [[ -f "$ROOT_DIR/stdlib/runtime.zstd" ]]; then
 fi
 
 echo "[2/2] build/nurl-repl.ll → build/nurl-repl"
-"$CLANG" -O2 -flto "$ROOT_DIR/build/nurl-repl.ll" "$RUNTIME" -lm -lpthread "${EXTRA_LIBS[@]}" -o "$ROOT_DIR/build/nurl-repl"
+"$CLANG" -O2 -flto "$ROOT_DIR/build/nurl-repl.ll" "$RUNTIME" -Wl,--as-needed -lm -lpthread "${EXTRA_LIBS[@]}" -o "$ROOT_DIR/build/nurl-repl"
 
 echo ""
 echo "Done: $ROOT_DIR/build/nurl-repl"

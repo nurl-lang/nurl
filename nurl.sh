@@ -314,7 +314,12 @@ echo "[2/2] $LLFILE → $OUTBASE  ($OPT${LTO_FLAG:+ $LTO_FLAG}${DEBUG_FLAGS[*]:+
 # every vec_data / nurl_peek / nurl_poke / nurl_print across the
 # runtime ↔ user-code boundary.
 # shellcheck disable=SC2086
-clang $OPT $LTO_FLAG "${DEBUG_FLAGS[@]}" "${SAN_LINK_FLAGS[@]}" "$LLFILE" "$RUNTIME_TO_LINK" "${EXTRA_OBJS[@]}" -o "$OUTBASE" -lm -lpthread "${EXTRA_LIBS[@]}"
+# `-Wl,--as-needed` drops DT_NEEDED entries for any auto-linked library
+# the program does not actually reference a symbol from — so a program
+# that imports nothing DB-related never inherits libpq/libsqlite3 just
+# because the build machine had them. Positional: it must precede the
+# `-l` libraries to govern them.
+clang $OPT $LTO_FLAG -Wl,--as-needed "${DEBUG_FLAGS[@]}" "${SAN_LINK_FLAGS[@]}" "$LLFILE" "$RUNTIME_TO_LINK" "${EXTRA_OBJS[@]}" -o "$OUTBASE" -lm -lpthread "${EXTRA_LIBS[@]}"
 
 echo ""
 echo "Done: $OUTBASE"
