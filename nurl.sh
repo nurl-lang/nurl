@@ -248,33 +248,39 @@ if grep -qE '@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mous
     fi
 fi
 
-# Auto-link libcurl / OpenSSL / sqlite3 / libpq / zlib / zstd — but ONLY
-# when *this program* actually references the back-end's symbols (detected
-# in the emitted IR), not merely because the runtime was built with the
-# feature. Two reasons:
-#   * Leanness: a program that imports none of these links against none of
-#     them; with LTO the dead runtime code is stripped anyway, but naming
-#     `-lpq` on the command line still forces the linker to *find* libpq —
-#     so an unconditional `-lpq` made even a hello-world fail to link on a
-#     box without the Postgres client. Gating on use keeps such a program
-#     at libc only.
-#   * Correctness: a program that does use the feature still gets its lib;
-#     one that doesn't never demands a library the target box may lack.
-# Each is also gated on the runtime.<name> sentinel (the runtime must have
-# been built with the back-end for the symbols to resolve at all).
+# Auto-link libcurl / OpenSSL / sqlite3 / libpq / zlib / zstd — for each
+# back-end the runtime was built with (runtime.<name> sentinel), but only
+# if the library is actually AVAILABLE to the compiler on this box (probed
+# with a tiny trial link). Rationale:
+#   * Correctness: a program that uses a feature gets its lib. Detecting use
+#     from the emitted IR is fragile — the back-end symbol may live in
+#     runtime.o behind a wrapper the program calls (this is how an earlier
+#     symbol-grep approach silently dropped `-lssl` and broke nurlapi's TLS
+#     link). Probing availability instead is symbol-pattern-free.
+#   * Leanness: under LTO + `-Wl,--as-needed`, a passed-but-unused library
+#     is dropped from the final NEEDED set, so a feature-free program stays
+#     at libc only even though every available lib was on the link line.
+#   * Portability: a lib the box LACKS is simply not named, so a hello-world
+#     links on a box without (say) the Postgres client — where an
+#     unconditional `-lpq` used to fail with `cannot find -lpq`. A program
+#     that truly needs an absent lib still fails, with a clear
+#     undefined-symbol error.
+__probe_c="$(mktemp "${TMPDIR:-/tmp}/nurl-probe.XXXXXX.c")"
+__probe_o="$(mktemp "${TMPDIR:-/tmp}/nurl-probe.XXXXXX.out")"
+printf 'int main(void){return 0;}\n' > "$__probe_c"
 add_feature_lib() {
-    # $1 sentinel basename, $2 IR symbol regex, $3.. the link flags.
-    local sentinel="$1" sym="$2"; shift 2
+    # $1 sentinel basename, $2.. the link flags (e.g. -lssl -lcrypto).
+    local sentinel="$1"; shift
     [[ -f "$SCRIPT_DIR/stdlib/$sentinel" ]] || return 0
-    grep -qE "$sym" "$LLFILE" || return 0
-    EXTRA_LIBS+=( "$@" )
+    "${CC[@]}" "$__probe_c" "$@" -o "$__probe_o" >/dev/null 2>&1 && EXTRA_LIBS+=( "$@" )
 }
-add_feature_lib runtime.curl    '@nurl_curl_'                                 -lcurl
-add_feature_lib runtime.openssl '@(EVP_|HKDF_|SSL_|HMAC_|RAND_bytes|X25519_)' -lssl -lcrypto
-add_feature_lib runtime.sqlite3 '@sqlite3_'                                   -lsqlite3
-add_feature_lib runtime.pq      '@PQ[A-Za-z]'                                 -lpq
-add_feature_lib runtime.z       '@(deflate|inflate|compress2|uncompress|compressBound)' -lz
-add_feature_lib runtime.zstd    '@ZSTD_'                                      -lzstd
+add_feature_lib runtime.curl    -lcurl
+add_feature_lib runtime.openssl -lssl -lcrypto
+add_feature_lib runtime.sqlite3 -lsqlite3
+add_feature_lib runtime.pq      -lpq
+add_feature_lib runtime.z       -lz
+add_feature_lib runtime.zstd    -lzstd
+rm -f "$__probe_c" "$__probe_o"
 
 # Auto-link libopus / ALSA when the program references their FFI symbols
 # (pttvoice and any audio app). Linked only when actually used, so other
