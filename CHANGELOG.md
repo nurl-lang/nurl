@@ -8,6 +8,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.12] — 2026-06-23
+
+The "bombproof install" release: the toolchain now installs **and builds**
+on old or minimal Linux boxes — a fresh Raspberry Pi / ODROID can run the
+`curl … | sh` one-liner and `nurlpkg install <tool>` straight through,
+with no system compiler and no surprise library requirements.
+
+### Added
+
+- **Bundled `zig` build backend.** The archive ships a self-contained
+  `zig`; `nurl.sh` uses `zig cc` to lower nurlc's LLVM IR to a native
+  binary. zig carries its own modern LLVM (so the opaque-pointer IR just
+  parses), its own `lld` linker, and libc headers — so **building a program
+  (and `nurlpkg install`) needs no system clang at all** and is immune to
+  the box's LLVM version. Falls back to a system clang (with
+  `-opaque-pointers` on clang 13/14) when no bundled zig is present.
+
+### Fixed
+
+- **The shipped binaries run on old distros.** `nurlc`/`nurlpkg` were built
+  on a glibc-2.39 runner and failed to start on e.g. Raspberry Pi OS
+  bullseye (glibc 2.31) with `version 'GLIBC_2.34' not found`. They are now
+  relinked with the bundled zig against an old glibc floor
+  (`tools/relink-toolchain-portable.sh`), landing at **GLIBC_2.25** — which
+  covers the Pi and essentially every Linux since ~2017.
+- **Feature libraries are linked only when available.** `nurl.sh` probes
+  each back-end library (libcurl / OpenSSL / sqlite3 / libpq / zlib / zstd)
+  and links it only if it is present on the box; under LTO + `--as-needed`
+  an unused one is dropped anyway. A feature-free program — the common
+  registry tool — links against **libc only** and never demands a library
+  the box lacks (an unconditional `-lpq` previously broke a hello-world
+  where the Postgres client was absent).
+- **Actionable errors instead of cryptic failures.** A missing compiler
+  prints install guidance rather than `clang: command not found`; the
+  installer smoke-tests the unpacked binaries and, on a missing shared
+  library, names the `.so` with a package-manager hint.
+
 ## [0.9.11] — 2026-06-22
 
 The "dependency-free toolchain + registry programs" release: the installed
@@ -5389,7 +5426,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.11...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.12...HEAD
+[0.9.12]: https://github.com/nurl-lang/nurl/compare/v0.9.11...v0.9.12
 [0.9.11]: https://github.com/nurl-lang/nurl/compare/v0.9.10...v0.9.11
 [0.9.10]: https://github.com/nurl-lang/nurl/compare/v0.9.9...v0.9.10
 [0.9.9]: https://github.com/nurl-lang/nurl/compare/v0.9.8...v0.9.9
