@@ -69,26 +69,44 @@ least load) and, on a missing-shared-library loader error, prints the
 offending `.so` plus a package-manager hint instead of failing cryptically
 at first use.
 
-### Build-time dependency: an LLVM C compiler (clang)
+### Building a program: the bundled zig backend
 
 Running the toolchain (e.g. `nurlc`) needs nothing but libc, but *building*
-a program does: `nurlc` emits LLVM IR (`.ll`), which `clang` lowers to a
-native binary and links against `runtime.o`. gcc/cc cannot consume LLVM IR,
-so this step genuinely requires clang (or another LLVM-based `cc`). Because
-`nurlpkg install <tool>` compiles the package from source, it inherits this
-requirement.
+a program does: `nurlc` emits LLVM IR (`.ll`), which an LLVM compiler lowers
+to a native binary and links against `runtime.o`. gcc/cc cannot consume LLVM
+IR. Because `nurlpkg install <tool>` compiles the package from source, it
+inherits this requirement — and on a fresh box that hit three walls in a
+row: no `clang`; clang too old to parse nurlc's opaque-pointer IR; and clang
+unable to read the release's newer LLVM bitcode.
 
-This is *not* bundled (a full LLVM toolchain would dwarf the install). So:
+The archive therefore **bundles a self-contained `zig`** (`zig cc`) as the
+default backend — it carries its own modern LLVM (opaque pointers just
+work), its own `lld` linker, and libc headers, so building needs **no system
+compiler at all** and is immune to the box's LLVM version. The release
+workflow downloads the per-arch zig (`Fetch bundled zig backend`) and
+`install-toolchain.sh` stages it at `<prefix>/zig/`, exactly where
+`nurl.sh` looks. Keep the bundled zig's LLVM ≥ the clang that built the
+release (zig 0.13 → LLVM 18), so `zig cc -flto` can read the shipped
+`runtime.o` bitcode. (~45 MB compressed per arch — the size cost of "just
+works".)
 
-- `nurl.sh` honours `$CLANG`, otherwise probes `clang` / `clang-<N>` / a
-  clang-flavoured `cc`, and on absence exits with install guidance
-  (`apt install clang` / `dnf install clang` / `apk add clang` / …) instead
-  of a raw `clang: command not found`.
-- `get-nurl.sh` prints the same heads-up at install time when no `clang` is
-  on `PATH`, so the requirement is known before the first `nurlpkg install`.
+`nurl.sh`'s compiler selection:
 
-(A prebuilt-binary package channel — install a tool without a local
-compiler — is the future bombproofing here; see the registry roadmap.)
+- Prefer the bundled zig (`<prefix>/zig/zig`, or `$NURL_ZIG`).
+- Else fall back to a system clang: honour `$CLANG`, probe `clang` /
+  `clang-<N>` / a clang-flavoured `cc`; pass `-Xclang -opaque-pointers` on
+  clang 13/14; reject clang < 13; on no compiler at all, exit with install
+  guidance instead of a raw `clang: command not found`.
+
+`nurl.sh` also links a feature library (`-lcurl` / `-lssl` / `-lsqlite3` /
+`-lpq` / `-lz` / `-lzstd`) **only when the emitted IR actually references
+that back-end's symbols** — so a feature-free program (the common tool)
+links against libc only and never demands a library the box may lack
+(naming `-lpq` unconditionally previously made even a hello-world fail to
+link where libpq was absent).
+
+(A prebuilt-binary package channel — install a tool with no local compile at
+all — remains the future bombproofing; see the registry roadmap.)
 
 ## Front-door wiring (nurlweb)
 

@@ -156,13 +156,15 @@ info ""
 info "Then:  nurlc --version   ·   nurlpkg install argz-demo"
 
 # Building a program (and therefore `nurlpkg install <tool>`, which compiles
-# the package from source) needs an LLVM C compiler — `nurlc` emits LLVM IR
-# that clang lowers to a native binary; gcc/cc cannot. The toolchain itself
-# runs without it, so this is a heads-up, not a failure.
-if ! command -v clang >/dev/null 2>&1; then
+# the package from source) needs an LLVM compiler. The archive bundles a
+# self-contained `zig` for exactly this, so normally nothing is required.
+# Only if that bundle is somehow absent does the toolchain fall back to a
+# system clang — warn about it then, as a heads-up, not a failure.
+if [ ! -x "$PREFIX/zig/zig" ] && ! command -v clang >/dev/null 2>&1; then
     info ""
-    info "Heads-up: to build programs or 'nurlpkg install' a tool you also need"
-    info "clang (an LLVM C compiler) on PATH. Install it with, e.g.:"
+    info "Heads-up: this archive has no bundled zig backend, so to build"
+    info "programs or 'nurlpkg install' a tool you need clang (an LLVM C"
+    info "compiler) on PATH. Install it with, e.g.:"
     info "    Debian/Ubuntu:  sudo apt-get install -y clang"
     info "    Fedora/RHEL:    sudo dnf install -y clang"
     info "    Alpine:         sudo apk add clang"

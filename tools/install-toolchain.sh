@@ -33,7 +33,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PREFIX="${NURL_HOME:-$HOME/.nurl}"
 
 if [[ "${1:-}" == "--uninstall" ]]; then
-    rm -rf "$PREFIX/bin" "$PREFIX/build" "$PREFIX/stdlib" "$PREFIX/nurl.sh" "$PREFIX/env"
+    rm -rf "$PREFIX/bin" "$PREFIX/build" "$PREFIX/stdlib" "$PREFIX/zig" "$PREFIX/nurl.sh" "$PREFIX/env"
     echo "Removed NURL toolchain from $PREFIX"
     echo "(You may want to drop the 'source $PREFIX/env' line from your shell rc.)"
     exit 0
@@ -59,6 +59,27 @@ cp -a "$ROOT/stdlib/." "$PREFIX/stdlib/"
 
 # Build driver (resolves build/nurlc + stdlib/runtime.o relative to itself).
 install -m755 "$ROOT/nurl.sh" "$PREFIX/nurl.sh"
+
+# ── Bundle a self-contained zig backend (optional but recommended) ─────
+# `nurl.sh` prefers a bundled `zig cc` over a system clang: zig carries its
+# own modern LLVM (parses nurlc's opaque-pointer IR), its own lld linker
+# and libc headers, so *building* a program — and therefore
+# `nurlpkg install <tool>` — needs no system compiler and is immune to the
+# box's LLVM version. Point $NURL_BUNDLE_ZIG at an extracted zig dist (the
+# directory containing the `zig` binary and its `lib/`); the release
+# workflow downloads the per-arch dist and sets it. Copied to
+# $PREFIX/zig/, which is exactly where nurl.sh looks ($SCRIPT_DIR/zig/zig).
+ZIG_SRC="${NURL_BUNDLE_ZIG:-$ROOT/vendor/zig}"
+if [[ -x "$ZIG_SRC/zig" ]]; then
+    echo "Bundling zig backend from $ZIG_SRC"
+    rm -rf "$PREFIX/zig"
+    mkdir -p "$PREFIX/zig"
+    cp -a "$ZIG_SRC/." "$PREFIX/zig/"
+    chmod +x "$PREFIX/zig/zig"
+else
+    echo "Note: no bundled zig ($ZIG_SRC/zig absent) — the installed toolchain"
+    echo "      will fall back to a system clang to build programs."
+fi
 
 # ── PATH shims (RELOCATABLE) ───────────────────────────────────────────
 # Each shim resolves the prefix from its OWN location at runtime, so the

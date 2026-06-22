@@ -168,7 +168,39 @@ resolve_clang() {
     } >&2
     exit 1
 }
-resolve_clang
+
+# ── Pick the compiler: bundled zig (preferred) or system clang ──────────
+# A bundled `zig cc` carries its own modern LLVM (so nurlc's opaque-pointer
+# IR just parses), its own lld linker, and libc headers — so building needs
+# no system clang at all and is immune to the system's LLVM version (the
+# two walls a fresh distro hit: `clang: not found`, and clang 14 rejecting
+# opaque pointers / unable to read the shipped bitcode). Point at it with
+# $NURL_ZIG, or ship it at <prefix>/zig/zig. Fall back to a system clang.
+ZIG_BIN="${NURL_ZIG:-$SCRIPT_DIR/zig/zig}"
+OPAQUE_FLAGS=()
+if [[ -x "$ZIG_BIN" ]]; then
+    CC=("$ZIG_BIN" cc)
+else
+    resolve_clang
+    CC=("$CLANG")
+    # nurlc emits LLVM IR with opaque pointers (`ptr`) — the default since
+    # LLVM 15. clang 14 needs `-opaque-pointers`; 13 and earlier can't parse
+    # them. (zig's bundled LLVM never needs this.) 15+/17+ need nothing.
+    CLANG_MAJOR="$("$CLANG" --version 2>/dev/null | sed -nE 's/.*version ([0-9]+).*/\1/p' | head -1)"
+    if [[ -n "$CLANG_MAJOR" && "$CLANG_MAJOR" -lt 15 ]]; then
+        if [[ "$CLANG_MAJOR" -ge 13 ]]; then
+            OPAQUE_FLAGS=(-Xclang -opaque-pointers)
+        else
+            {
+                echo "ERROR: clang $CLANG_MAJOR is too old to build NURL programs."
+                echo "       nurlc emits LLVM IR with opaque pointers (needs LLVM 14+)."
+                echo "       Install a newer clang (e.g. clang-15) and set CLANG=clang-15,"
+                echo "       or use the bundled zig backend (set NURL_ZIG=/path/to/zig)."
+            } >&2
+            exit 1
+        fi
+    fi
+fi
 
 # Debug flag passthrough. Without `!dbg` metadata in the IR, `-g` yields
 # only crude line info from the inlined .ll filename; still useful in
@@ -185,7 +217,7 @@ fi
 # --emit-asm: stop after clang -S, skip linking (no runtime needed for .s).
 if [[ $EMIT_ASM -eq 1 ]]; then
     echo "[2/2] $LLFILE → $SFILE  ($OPT${DEBUG_FLAGS[*]:+ ${DEBUG_FLAGS[*]}} -S)"
-    "$CLANG" $OPT "${DEBUG_FLAGS[@]}" -S "$LLFILE" -o "$SFILE"
+    "${CC[@]}" $OPT "${DEBUG_FLAGS[@]}" "${OPAQUE_FLAGS[@]}" -S "$LLFILE" -o "$SFILE"
     echo ""
     echo "Done: $SFILE"
     exit 0
@@ -216,58 +248,33 @@ if grep -qE '@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mous
     fi
 fi
 
-# Auto-link libcurl / OpenSSL / sqlite3 / libpq when the runtime was
-# built with the matching feature (build.sh drops stdlib/runtime.<name>
-# sentinels). Programs that don't pull those modules still link cleanly
-# without them because the symbols only resolve at link time.
-if [[ -f "$SCRIPT_DIR/stdlib/runtime.curl" ]]; then
-    if pkg-config --exists libcurl 2>/dev/null; then
-        # shellcheck disable=SC2046
-        EXTRA_LIBS+=( $(pkg-config --libs libcurl) )
-    else
-        EXTRA_LIBS+=( -lcurl )
-    fi
-fi
-if [[ -f "$SCRIPT_DIR/stdlib/runtime.openssl" ]]; then
-    if pkg-config --exists openssl 2>/dev/null; then
-        # shellcheck disable=SC2046
-        EXTRA_LIBS+=( $(pkg-config --libs openssl) )
-    else
-        EXTRA_LIBS+=( -lssl -lcrypto )
-    fi
-fi
-if [[ -f "$SCRIPT_DIR/stdlib/runtime.sqlite3" ]]; then
-    if pkg-config --exists sqlite3 2>/dev/null; then
-        # shellcheck disable=SC2046
-        EXTRA_LIBS+=( $(pkg-config --libs sqlite3) )
-    else
-        EXTRA_LIBS+=( -lsqlite3 )
-    fi
-fi
-if [[ -f "$SCRIPT_DIR/stdlib/runtime.pq" ]]; then
-    if pkg-config --exists libpq 2>/dev/null; then
-        # shellcheck disable=SC2046
-        EXTRA_LIBS+=( $(pkg-config --libs libpq) )
-    else
-        EXTRA_LIBS+=( -lpq )
-    fi
-fi
-if [[ -f "$SCRIPT_DIR/stdlib/runtime.z" ]]; then
-    if pkg-config --exists zlib 2>/dev/null; then
-        # shellcheck disable=SC2046
-        EXTRA_LIBS+=( $(pkg-config --libs zlib) )
-    else
-        EXTRA_LIBS+=( -lz )
-    fi
-fi
-if [[ -f "$SCRIPT_DIR/stdlib/runtime.zstd" ]]; then
-    if pkg-config --exists libzstd 2>/dev/null; then
-        # shellcheck disable=SC2046
-        EXTRA_LIBS+=( $(pkg-config --libs libzstd) )
-    else
-        EXTRA_LIBS+=( -lzstd )
-    fi
-fi
+# Auto-link libcurl / OpenSSL / sqlite3 / libpq / zlib / zstd — but ONLY
+# when *this program* actually references the back-end's symbols (detected
+# in the emitted IR), not merely because the runtime was built with the
+# feature. Two reasons:
+#   * Leanness: a program that imports none of these links against none of
+#     them; with LTO the dead runtime code is stripped anyway, but naming
+#     `-lpq` on the command line still forces the linker to *find* libpq —
+#     so an unconditional `-lpq` made even a hello-world fail to link on a
+#     box without the Postgres client. Gating on use keeps such a program
+#     at libc only.
+#   * Correctness: a program that does use the feature still gets its lib;
+#     one that doesn't never demands a library the target box may lack.
+# Each is also gated on the runtime.<name> sentinel (the runtime must have
+# been built with the back-end for the symbols to resolve at all).
+add_feature_lib() {
+    # $1 sentinel basename, $2 IR symbol regex, $3.. the link flags.
+    local sentinel="$1" sym="$2"; shift 2
+    [[ -f "$SCRIPT_DIR/stdlib/$sentinel" ]] || return 0
+    grep -qE "$sym" "$LLFILE" || return 0
+    EXTRA_LIBS+=( "$@" )
+}
+add_feature_lib runtime.curl    '@nurl_curl_'                                 -lcurl
+add_feature_lib runtime.openssl '@(EVP_|HKDF_|SSL_|HMAC_|RAND_bytes|X25519_)' -lssl -lcrypto
+add_feature_lib runtime.sqlite3 '@sqlite3_'                                   -lsqlite3
+add_feature_lib runtime.pq      '@PQ[A-Za-z]'                                 -lpq
+add_feature_lib runtime.z       '@(deflate|inflate|compress2|uncompress|compressBound)' -lz
+add_feature_lib runtime.zstd    '@ZSTD_'                                      -lzstd
 
 # Auto-link libopus / ALSA when the program references their FFI symbols
 # (pttvoice and any audio app). Linked only when actually used, so other
@@ -322,7 +329,7 @@ if [[ "${NURL_SAN:-0}" == "1" ]]; then
             fi
         done
         # shellcheck disable=SC2086
-        "$CLANG" $CFLAGS_SAN -c "$SCRIPT_DIR/stdlib/runtime.c" -o "$SAN_RUNTIME"
+        "${CC[@]}" $CFLAGS_SAN -c "$SCRIPT_DIR/stdlib/runtime.c" -o "$SAN_RUNTIME"
     fi
     RUNTIME_TO_LINK="$SAN_RUNTIME"
 elif [[ $DEBUG_INFO -eq 1 ]]; then
@@ -338,7 +345,7 @@ elif [[ $DEBUG_INFO -eq 1 ]]; then
             fi
         done
         # shellcheck disable=SC2086
-        "$CLANG" $CFLAGS_DBG -c "$SCRIPT_DIR/stdlib/runtime.c" -o "$DBG_RUNTIME"
+        "${CC[@]}" $CFLAGS_DBG -c "$SCRIPT_DIR/stdlib/runtime.c" -o "$DBG_RUNTIME"
     fi
     RUNTIME_TO_LINK="$DBG_RUNTIME"
 fi
@@ -354,7 +361,7 @@ echo "[2/2] $LLFILE → $OUTBASE  ($OPT${LTO_FLAG:+ $LTO_FLAG}${DEBUG_FLAGS[*]:+
 # that imports nothing DB-related never inherits libpq/libsqlite3 just
 # because the build machine had them. Positional: it must precede the
 # `-l` libraries to govern them.
-"$CLANG" $OPT $LTO_FLAG -Wl,--as-needed "${DEBUG_FLAGS[@]}" "${SAN_LINK_FLAGS[@]}" "$LLFILE" "$RUNTIME_TO_LINK" "${EXTRA_OBJS[@]}" -o "$OUTBASE" -lm -lpthread "${EXTRA_LIBS[@]}"
+"${CC[@]}" $OPT $LTO_FLAG -Wl,--as-needed "${OPAQUE_FLAGS[@]}" "${DEBUG_FLAGS[@]}" "${SAN_LINK_FLAGS[@]}" "$LLFILE" "$RUNTIME_TO_LINK" "${EXTRA_OBJS[@]}" -o "$OUTBASE" -lm -lpthread "${EXTRA_LIBS[@]}"
 
 echo ""
 echo "Done: $OUTBASE"

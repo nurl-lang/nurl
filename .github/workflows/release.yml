@@ -59,8 +59,28 @@ jobs:
           ./build.sh --no-tests
           ./tools/nurlpkg/build.sh
 
+      # Bundle a self-contained zig so the installed toolchain can build
+      # programs (and `nurlpkg install`) with no system clang and immune to
+      # the box's LLVM version. zig 0.13 ships LLVM 18; keep it >= the clang
+      # used above so `zig cc -flto` can read the shipped runtime.o bitcode.
+      - name: Fetch bundled zig backend
+        run: |
+          ZIG_VER=0.13.0
+          case "${{ matrix.target }}" in
+            linux-x86_64-glibc) ZA=x86_64 ;;
+            linux-arm64-glibc)  ZA=aarch64 ;;
+            *) echo "no zig mapping for ${{ matrix.target }}" >&2; exit 1 ;;
+          esac
+          url="https://ziglang.org/download/${ZIG_VER}/zig-linux-${ZA}-${ZIG_VER}.tar.xz"
+          echo "Downloading $url"
+          curl -fsSL "$url" -o /tmp/zig.tar.xz
+          mkdir -p vendor
+          tar -xf /tmp/zig.tar.xz -C vendor
+          mv "vendor/zig-linux-${ZA}-${ZIG_VER}" vendor/zig
+          vendor/zig/zig version
+
       - name: Assemble relocatable prefix
-        run: NURL_HOME="$PWD/dist/nurl" ./tools/install-toolchain.sh
+        run: NURL_HOME="$PWD/dist/nurl" NURL_BUNDLE_ZIG="$PWD/vendor/zig" ./tools/install-toolchain.sh
 
       - name: Smoke test the assembled toolchain
         run: |

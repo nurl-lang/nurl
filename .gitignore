@@ -124,3 +124,4 @@ critic.md
 output.txt
 stdlib/runtime.wasm.o.bind
 /dist/
+vendor/
