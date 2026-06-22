@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.13] — 2026-06-23
+
+A one-line follow-up to v0.9.12 that makes the bundled-zig build actually
+work on a fresh box.
+
+### Fixed
+
+- **A failed feature-library probe no longer aborts the build.** v0.9.12
+  installed and ran on a Raspberry Pi 4 / ODROID, but any build — including
+  `nurlpkg install <tool>` — died with a bare `compile failed:`. The
+  feature-lib availability probe ended each check with
+  `probe && EXTRA_LIBS+=(…)`, so a *failed* probe made the helper return
+  non-zero and the build's `set -e` aborted at the first unavailable
+  library. A fresh box typically has the runtime `libcurl.so.4` but not the
+  `-dev` `libcurl.so` linker symlink, so `-lcurl` (and openssl/sqlite/pq/
+  zstd) won't link and every probe failed — killing the build before the
+  link step. The probe now uses an explicit `if` and is total, so an
+  unavailable library is simply skipped. Verified on a real Raspberry Pi 4
+  (glibc 2.31) and ODROID: `nurlpkg install argz-demo && argz-demo --shout
+  hi` → `HELLO, HI!`.
+
 ## [0.9.12] — 2026-06-23
 
 The "bombproof install" release: the toolchain now installs **and builds**
@@ -5426,7 +5447,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.12...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.13...HEAD
+[0.9.13]: https://github.com/nurl-lang/nurl/compare/v0.9.12...v0.9.13
 [0.9.12]: https://github.com/nurl-lang/nurl/compare/v0.9.11...v0.9.12
 [0.9.11]: https://github.com/nurl-lang/nurl/compare/v0.9.10...v0.9.11
 [0.9.10]: https://github.com/nurl-lang/nurl/compare/v0.9.9...v0.9.10
