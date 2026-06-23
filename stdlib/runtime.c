@@ -979,6 +979,43 @@ int  poll(void *fds, unsigned long n, int timeout) {
 #  include <zlib.h>
 #endif
 
+/* z_stream ABI replica. compress.nu FFIs zlib's deflate/inflate directly,
+ * so it can stream gzip whenever libz is LINKED — but it asks runtime.c for
+ * sizeof(z_stream) and for two field accessors (zlib's z_stream layout is
+ * not NURL-portable: uLong is 4 bytes on Win32 LLP64, 8 on POSIX LP64).
+ * Those used to be `#ifdef NURL_HAVE_ZLIB`-gated on whether *this* file was
+ * compiled with zlib.h on hand — the wrong condition. A runtime compiled
+ * without zlib headers yet linked against libz (e.g. a riscv cross-build)
+ * then got sizeof = -1 and no-op accessors, and silently failed to inflate.
+ * Mirror z_stream_s with identical field types so the size and offsets are
+ * correct unconditionally; the static_asserts below pin the replica to the
+ * real struct wherever zlib.h is present, so it can never drift. */
+struct nurl_zs_abi {
+    unsigned char *next_in;
+    unsigned int   avail_in;
+    unsigned long  total_in;
+    unsigned char *next_out;
+    unsigned int   avail_out;
+    unsigned long  total_out;
+    char          *msg;
+    void          *state;
+    void          *zalloc;
+    void          *zfree;
+    void          *opaque;
+    int            data_type;
+    unsigned long  adler;
+    unsigned long  reserved;
+};
+#ifdef NURL_HAVE_ZLIB
+_Static_assert(sizeof(struct nurl_zs_abi) == sizeof(z_stream),
+               "nurl_zs_abi must match zlib z_stream size");
+_Static_assert(offsetof(struct nurl_zs_abi, next_in)   == offsetof(z_stream, next_in),   "z_stream next_in offset");
+_Static_assert(offsetof(struct nurl_zs_abi, avail_in)  == offsetof(z_stream, avail_in),  "z_stream avail_in offset");
+_Static_assert(offsetof(struct nurl_zs_abi, next_out)  == offsetof(z_stream, next_out),  "z_stream next_out offset");
+_Static_assert(offsetof(struct nurl_zs_abi, avail_out) == offsetof(z_stream, avail_out), "z_stream avail_out offset");
+_Static_assert(offsetof(struct nurl_zs_abi, total_out) == offsetof(z_stream, total_out), "z_stream total_out offset");
+#endif
+
 long long nurl_native_sizeof(const char *name) {
     if (!name) return -1;
     /* pthread family — same names on every platform now that Win32
@@ -1013,10 +1050,9 @@ long long nurl_native_sizeof(const char *name) {
     if (strcmp(name, "size_t")              == 0) return (long long)sizeof(size_t);
     if (strcmp(name, "off_t")               == 0) return (long long)sizeof(off_t);
     if (strcmp(name, "time_t")              == 0) return (long long)sizeof(time_t);
-#ifdef NURL_HAVE_ZLIB
-    /* z_stream's uLong is 4 bytes on Win32 LLP64 vs 8 on POSIX LP64. */
-    if (strcmp(name, "z_stream")            == 0) return (long long)sizeof(z_stream);
-#endif
+    /* z_stream: from the ABI replica so the size is correct whenever libz
+     * is linked, even if this file lacked zlib.h at compile time. */
+    if (strcmp(name, "z_stream")            == 0) return (long long)sizeof(struct nurl_zs_abi);
     return -1;
 }
 
@@ -5565,22 +5601,27 @@ void nurl_panic(const char *msg) {
  * deflate loop lives NURL-side over the FFI surface but the two
  * field accessors stay C to absorb the layout difference. */
 
-#ifdef NURL_HAVE_ZLIB
-/* Initialise the four mutable z_stream slots before deflate/inflate.
- * zalloc/zfree/opaque must already be NULL (nurl_zalloc gives that). */
+/* z_stream field accessors. Driven through the ABI replica, so they are
+ * correct whenever libz is linked — independent of whether this file saw
+ * zlib.h (NURL_HAVE_ZLIB). They only touch struct fields, never call zlib,
+ * so they are safe to compile unconditionally; if the program never pulls
+ * compress.nu they are simply unreferenced.
+ *
+ * Initialise the four mutable slots before deflate/inflate. zalloc/zfree/
+ * opaque must already be NULL (nurl_zalloc gives that). */
 void nurl_z_setup(void *zs, void *in, long long avail_in,
                   void *out, long long avail_out) {
-    z_stream *s = (z_stream*)zs;
-    s->next_in   = (Bytef*)in;
-    s->avail_in  = (uInt)avail_in;
-    s->next_out  = (Bytef*)out;
-    s->avail_out = (uInt)avail_out;
+    struct nurl_zs_abi *s = (struct nurl_zs_abi*)zs;
+    s->next_in   = (unsigned char*)in;
+    s->avail_in  = (unsigned int)avail_in;
+    s->next_out  = (unsigned char*)out;
+    s->avail_out = (unsigned int)avail_out;
 }
 
 /* z_stream::total_out — uLong width varies per platform so the offset
  * isn't NURL-portable. */
 long long nurl_z_total_out(const void *zs) {
-    return (long long)((const z_stream*)zs)->total_out;
+    return (long long)((const struct nurl_zs_abi*)zs)->total_out;
 }
 
 /* Granular input/output rebinders + counters for a PERSISTENT z_stream
@@ -5590,32 +5631,17 @@ long long nurl_z_total_out(const void *zs) {
  * buffer without disturbing zlib's internally-advanced next_in/avail_in).
  * Each absorbs the platform field layout in C, mirroring nurl_z_setup. */
 void nurl_z_set_in(void *zs, void *in, long long avail_in) {
-    z_stream *s = (z_stream*)zs;
-    s->next_in  = (Bytef*)in;
-    s->avail_in = (uInt)avail_in;
+    struct nurl_zs_abi *s = (struct nurl_zs_abi*)zs;
+    s->next_in  = (unsigned char*)in;
+    s->avail_in = (unsigned int)avail_in;
 }
 void nurl_z_set_out(void *zs, void *out, long long avail_out) {
-    z_stream *s = (z_stream*)zs;
-    s->next_out  = (Bytef*)out;
-    s->avail_out = (uInt)avail_out;
+    struct nurl_zs_abi *s = (struct nurl_zs_abi*)zs;
+    s->next_out  = (unsigned char*)out;
+    s->avail_out = (unsigned int)avail_out;
 }
-long long nurl_z_avail_in(const void *zs)  { return (long long)((const z_stream*)zs)->avail_in; }
-long long nurl_z_avail_out(const void *zs) { return (long long)((const z_stream*)zs)->avail_out; }
-#else
-void nurl_z_setup(void *zs, void *in, long long avail_in,
-                  void *out, long long avail_out) {
-    (void)zs; (void)in; (void)avail_in; (void)out; (void)avail_out;
-}
-long long nurl_z_total_out(const void *zs) { (void)zs; return 0; }
-void nurl_z_set_in(void *zs, void *in, long long avail_in) {
-    (void)zs; (void)in; (void)avail_in;
-}
-void nurl_z_set_out(void *zs, void *out, long long avail_out) {
-    (void)zs; (void)out; (void)avail_out;
-}
-long long nurl_z_avail_in(const void *zs)  { (void)zs; return 0; }
-long long nurl_z_avail_out(const void *zs) { (void)zs; return 0; }
-#endif
+long long nurl_z_avail_in(const void *zs)  { return (long long)((const struct nurl_zs_abi*)zs)->avail_in; }
+long long nurl_z_avail_out(const void *zs) { return (long long)((const struct nurl_zs_abi*)zs)->avail_out; }
 
 
 /* ── §24  Async runtime — stackful fibers, M:N work-stealing ──── */
