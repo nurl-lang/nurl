@@ -178,7 +178,12 @@ append_capped() {
 }
 
 # Strip the absolute repo-root prefix so records are checkout-portable.
-strip_root() { sed -i "s|$ROOT_DIR/||g" "$1"; }
+# Strip the absolute repo root from a captured file so diagnostics compare
+# path-stable against the golden. `sed -i` is NOT portable — GNU edits in
+# place, but BSD sed (FreeBSD, macOS) requires a backup-suffix argument and
+# otherwise mis-parses the script as the suffix (this silently left paths
+# unstripped on FreeBSD). Write to a temp file and move it back instead.
+strip_root() { sed "s|$ROOT_DIR/||g" "$1" > "$1.sr" && mv -f "$1.sr" "$1"; }
 
 # ── run_one <name> ──────────────────────────────────────────────
 #   Produces $WORKDIR/$name.actual (the record) and prints a single
