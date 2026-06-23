@@ -89,23 +89,26 @@ fi
 # directory, even if the user never sourced env. The nurlpkg shim also
 # points $NURL / $NURLPKG at the installed driver so `nurlpkg install
 # <name>` builds with them. Quoted heredoc → no install-time expansion.
+# POSIX sh shims (not bash) — the installed toolchain must work on a stock
+# FreeBSD / Alpine / busybox box where /bin/sh is not bash. `$0` is the shim
+# path when executed, so the prefix self-locates without ${BASH_SOURCE}.
 cat > "$PREFIX/bin/nurl" <<'EOF'
-#!/usr/bin/env bash
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+#!/bin/sh
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
 export NURL_STDLIB="${NURL_STDLIB:-$HERE}"
 exec "$HERE/nurl.sh" "$@"
 EOF
 
 cat > "$PREFIX/bin/nurlc" <<'EOF'
-#!/usr/bin/env bash
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+#!/bin/sh
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
 export NURL_STDLIB="${NURL_STDLIB:-$HERE}"
 exec "$HERE/build/nurlc" "$@"
 EOF
 
 cat > "$PREFIX/bin/nurlpkg" <<'EOF'
-#!/usr/bin/env bash
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+#!/bin/sh
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
 export NURL_STDLIB="${NURL_STDLIB:-$HERE}"
 export NURL="${NURL:-$HERE/bin/nurl}"
 export NURLPKG="${NURLPKG:-$HERE/bin/nurlpkg}"

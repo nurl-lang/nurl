@@ -46,15 +46,25 @@ done
 # ── Detect target triple ───────────────────────────────────────────────
 os="$(uname -s)"
 arch="$(uname -m)"
+case "$arch" in
+    x86_64|amd64)  cpu="x86_64" ;;
+    aarch64|arm64) cpu="arm64" ;;
+    *) cpu="" ;;
+esac
 case "$os" in
-    Linux) ;;
+    Linux)
+        case "$cpu" in
+            x86_64) target="linux-x86_64-glibc" ;;
+            arm64)  target="linux-arm64-glibc" ;;
+            *) err "unsupported Linux architecture '$arch'." ;;
+        esac ;;
+    FreeBSD)
+        case "$cpu" in
+            x86_64) target="freebsd-x86_64" ;;
+            *) err "FreeBSD packages are published for x86_64 only (got '$arch'); build from source (see README)." ;;
+        esac ;;
     Darwin) err "macOS packages are not published yet; build from source (see README)." ;;
     *) err "unsupported OS '$os'. On Windows use the PowerShell installer (install.ps1)." ;;
-esac
-case "$arch" in
-    x86_64|amd64)  target="linux-x86_64-glibc" ;;
-    aarch64|arm64) target="linux-arm64-glibc" ;;
-    *) err "unsupported architecture '$arch'." ;;
 esac
 
 # ── Downloader ─────────────────────────────────────────────────────────
@@ -122,8 +132,10 @@ smoke() {
     # Any argument works — the dynamic loader resolves all NEEDED libraries
     # before main() runs, so a missing .so surfaces regardless of CLI args.
     out="$("$bin" --version 2>&1 || true)"
+    # glibc ld.so: "error while loading shared libraries: libX.so.N: cannot open…"
+    # FreeBSD rtld:  Shared object "libX.so.N" not found, required by "nurlc"
     case "$out" in
-        *"error while loading shared libraries"* | *"cannot open shared object"*)
+        *"error while loading shared libraries"* | *"cannot open shared object"* | *"Shared object"*"not found"*)
             lib="$(printf '%s\n' "$out" | sed -n 's/.*\(lib[A-Za-z0-9._+-]*\.so[.0-9]*\).*/\1/p' | head -n1)"
             info ""
             info "ERROR: $(basename "$bin") cannot start — missing shared library: ${lib:-(see below)}"
@@ -133,6 +145,7 @@ smoke() {
             info "    Debian/Ubuntu:  sudo apt-get install -y <package that provides ${lib:-the library}>"
             info "    Fedora/RHEL:    sudo dnf install -y     <package that provides ${lib:-the library}>"
             info "    Alpine:         sudo apk add            <package that provides ${lib:-the library}>"
+            info "    FreeBSD:        sudo pkg install -y     <package that provides ${lib:-the library}>"
             info ""
             info "Please also report this at https://github.com/nurl-lang/nurl-lang/issues —"
             info "the shipped toolchain is meant to need only libc."
@@ -147,11 +160,12 @@ smoke "$PREFIX/build/nurlpkg"
 info ""
 info "NURL $VERSION installed → $PREFIX"
 info ""
-info "Add it to your shell (and your ~/.bashrc / ~/.zshrc):"
-info "    source $PREFIX/env"
-info ""
-info "Or just add the bin dir to PATH:"
+info "Put it on your PATH (works in any shell — add the line to your shell rc to persist):"
 info "    export PATH=\"$PREFIX/bin:\$PATH\""
+info ""
+info "The shims self-locate the stdlib, so that one line is all you need —"
+info "no 'source env' required. (bash/zsh users may instead 'source $PREFIX/env',"
+info "which also exports NURL_HOME.)"
 info ""
 info "Then:  nurlc --version   ·   nurlpkg install argz-demo"
 

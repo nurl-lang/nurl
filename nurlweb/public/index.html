@@ -385,9 +385,12 @@
         <div class="step">Step 2 · Install</div>
         <h3>One-line install</h3>
         <p>Download a prebuilt toolchain — compiler, package manager, and stdlib — for Linux (x86_64 / arm64) or Windows. No clang, no build. Then install programs straight from the registry.</p>
-<pre>curl -fsSL https://nurl-lang.org/install.sh | sh
-source ~/.nurl/env
+        <div class="cmd-block">
+          <button class="copy-btn" data-copy-target="#install-cmd">Copy</button>
+<pre id="install-cmd">curl -fsSL https://nurl-lang.org/install.sh | sh
+export PATH="$HOME/.nurl/bin:$PATH"
 nurlpkg install argz-demo && argz-demo --shout hi</pre>
+        </div>
         <a class="btn btn-secondary" href="https://github.com/nurl-lang/nurl/releases/latest" target="_blank" rel="noopener">Latest release</a>
       </div>
 
@@ -518,7 +521,11 @@ cd nurl
 <script>
   document.querySelectorAll('.copy-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const text = btn.getAttribute('data-copy');
+      // Either an inline string (data-copy) or the text of a target
+      // element (data-copy-target), so multi-line code blocks copy too.
+      const target = btn.getAttribute('data-copy-target');
+      const el = target ? document.querySelector(target) : null;
+      const text = el ? el.textContent : btn.getAttribute('data-copy');
       try {
         await navigator.clipboard.writeText(text);
         const orig = btn.textContent;
