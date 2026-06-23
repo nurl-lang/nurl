@@ -72,6 +72,39 @@ jobs:
         # nurlfmt IR-transparent (compiler/tests/nurlfmt_idempotent.sh).
         run: ./compiler/tests/nurlfmt_check.sh
 
+  freebsd:
+    name: FreeBSD (build + bootstrap fixed point + tests, in a VM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # GitHub has no native FreeBSD runners, so run a real FreeBSD VM inside
+    # the Linux runner (QEMU). This builds nurlc/nurlpkg, checks the
+    # self-hosting fixed point, and runs the test corpus on genuine
+    # FreeBSD — the gate that would have caught the fiber-runtime gap
+    # (async fibers silently no-op'd on FreeBSD). The base system ships
+    # clang; only bash (build.sh) + pkgconf are added. Feature dev libs
+    # are NOT installed, so the ext/ FFI tests (curl/openssl/sqlite/pq/
+    # zstd) skip — the core + async + codegen corpus still runs.
+    #
+    # Best-effort (continue-on-error) until a real run is confirmed green;
+    # drop continue-on-error and add `freebsd` to any required-check set
+    # once it is.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build + bootstrap + test on FreeBSD
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.2"
+          usesh: true
+          prepare: |
+            pkg install -y bash pkgconf
+          run: |
+            clang --version
+            ./build.sh
+            ./tools/check_examples.sh
+
   sanitizers:
     name: AddressSanitizer + UndefinedBehaviorSanitizer
     runs-on: ubuntu-latest
