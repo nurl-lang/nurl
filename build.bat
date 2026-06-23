@@ -127,6 +127,18 @@ if defined ZSTD_LIBNAME (
     if defined VCPKG_INC if exist "!VCPKG_INC!\zstd.h" echo [warn] zstd.h at "!VCPKG_INC!" but no zstd*.lib in "!VCPKG_LIBDIR!" - zstd disabled
 )
 
+REM ── version header (mirrors build.sh) ────────────────────────
+REM Bake the toolchain version into runtime.o so `nurlc --version` /
+REM `nurlpkg --version` report the real version instead of "unknown".
+REM Single source of truth: tools\version.bat (git describe / CHANGELOG).
+REM The header is git-ignored and rebuilt every run; it lives in runtime.o,
+REM not nurlc.nu's IR, so the bootstrap fixed point never churns on a bump.
+set "NURL_VER="
+for /f "delims=" %%v in ('call "%SCRIPT_DIR%\tools\version.bat" 2^>nul') do set "NURL_VER=%%v"
+if not defined NURL_VER set "NURL_VER=v0.0.0"
+> stdlib\nurl_version_gen.h echo #define NURL_VERSION "!NURL_VER!"
+echo [info] version: !NURL_VER!
+
 REM ── runtime ──────────────────────────────────────────────────
 set "LABEL=runtime"
 >>"%LOG%" echo.

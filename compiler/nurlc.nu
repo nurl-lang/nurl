@@ -14147,7 +14147,13 @@
         : b in_whitelist | | is_sys is_thr is_brg
         ? in_whitelist {} {
             : s sentinel ( nurl_str_cat `stdlib/runtime.` norm )
-            ? == ( nurl_file_exists sentinel ) 1 {} {
+            // Resolve the sentinel the SAME way as `$`-imports (__norm_import_path):
+            // CWD-relative first — keeps the in-tree build / bootstrap byte-identical —
+            // then $NURL_STDLIB, so an INSTALLED toolchain compiling from an arbitrary
+            // directory (or a registry package) finds the shipped sentinel. A bare
+            // CWD-relative check here meant a user building a compress.nu-importing
+            // program outside the stdlib tree got a bogus "no build-time sentinel" error.
+            ? == ( nurl_file_exists ( __norm_import_path sentinel ) ) 1 {} {
                 : s msg ( nurl_str_cat4
                 `FFI library '` lib `' is required but no build-time sentinel '`
                 ( nurl_str_cat sentinel `' found - install lib` ) )
