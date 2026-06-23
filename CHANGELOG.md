@@ -6,6 +6,45 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.16] — 2026-06-23
+
+Makes the Windows toolchain actually usable. v0.9.15 shipped a Windows
+archive that installed but couldn't build anything; this release makes it
+self-contained and fixes the toolchain bugs that surfaced behind it.
+
+### Fixed
+
+- **Windows toolchain is now self-contained.** The shipped `runtime.o` is
+  built with `-DNURL_HAVE_ZLIB`, so it references zlib and EVERY program link
+  needs it — but `runtime.winlibs` recorded the CI build machine's absolute
+  vcpkg path (`C:\vcpkg\…\zs.lib`), so on a user's box every
+  `nurlpkg install`/build died with `lld-link: could not open 'zs.lib'`.
+  `build.bat` now copies the resolved static libs into `stdlib\winlib\` and
+  records a relocatable fragment that `nurl.bat` resolves against the install
+  prefix — the toolchain links against its own bundled zlib/zstd with no
+  vcpkg on the box.
+- **`nurlpkg install` on Windows.** nurlpkg copied the built binary from
+  `pkgdir/.nurl-bin`, but the Windows driver emits `.nurl-bin.exe`, so the
+  copy silently failed with `failed to install binary`. Fixed by appending
+  `.exe` on Windows.
+- **FFI build-time sentinel resolves like a `$`-import.** `__ffi_lib_check`
+  looked for `stdlib/runtime.<lib>` relative to the current directory, so a
+  program importing `stdlib/ext/compress.nu` failed to compile from any
+  directory other than the stdlib tree with a bogus "no build-time sentinel"
+  error. It now resolves CWD-first then `$NURL_STDLIB`, matching how
+  `$`-imports resolve — so an installed toolchain finds its shipped sentinel
+  from anywhere. (Control-flow only; the self-host bootstrap is unaffected.)
+- **`nurlc --version` / `nurlpkg --version` on Windows** reported `unknown`:
+  `build.bat` never generated `stdlib/nurl_version_gen.h`. Added
+  `tools/version.bat` (Windows counterpart of `tools/version.sh`) and wired
+  it into `build.bat`, so the real version is baked into `runtime.o`.
+
+### Added
+
+- **Windows PowerShell one-line install** on the website install card
+  (`irm https://nurl-lang.org/install.ps1 | iex`), alongside the Linux /
+  FreeBSD `curl | sh` command.
+
 ## [0.9.15] — 2026-06-23
 
 ### Added
