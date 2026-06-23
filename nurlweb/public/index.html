@@ -385,11 +385,19 @@
         <div class="step">Step 2 · Install</div>
         <h3>One-line install</h3>
         <p>Download a prebuilt toolchain — compiler, package manager, and stdlib — for Linux (x86_64 / arm64), FreeBSD (x86_64) or Windows. No clang, no build. Then install programs straight from the registry.</p>
+        <div class="cmd-label">Linux / FreeBSD</div>
         <div class="cmd-block">
           <button class="copy-btn" data-copy-target="#install-cmd">Copy</button>
 <pre id="install-cmd">curl -fsSL https://nurl-lang.org/install.sh | sh
 export PATH="$HOME/.nurl/bin:$PATH"
 nurlpkg install argz-demo && argz-demo --shout hi</pre>
+        </div>
+        <div class="cmd-label">Windows (PowerShell)</div>
+        <div class="cmd-block">
+          <button class="copy-btn" data-copy-target="#install-cmd-win">Copy</button>
+<pre id="install-cmd-win">irm https://nurl-lang.org/install.ps1 | iex
+$env:Path = "$env:USERPROFILE\.nurl\bin;$env:Path"
+nurlpkg install argz-demo; argz-demo --shout hi</pre>
         </div>
         <a class="btn btn-secondary" href="https://github.com/nurl-lang/nurl/releases/latest" target="_blank" rel="noopener">Latest release</a>
       </div>

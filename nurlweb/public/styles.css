@@ -334,6 +334,10 @@ section:last-of-type { border-bottom: none; }
 .cmd-block pre { margin: 0; padding-top: 2.5rem; }
 .cmd-block .copy-btn { position: absolute; top: 0.5rem; right: 0.55rem; margin-left: 0; }
 
+/* Small OS heading above each install command block. */
+.cmd-label { color: var(--fg-faint); font-size: 0.72rem; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase; margin: 0 0 0.4rem; }
+
 /* ── MCP section ──────────────────────────────────────────── */
 .mcp-url {
   display: flex; align-items: center; gap: 0.6rem;
