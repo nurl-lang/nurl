@@ -5671,10 +5671,15 @@ void      nurl_runtime_init(long long worker_count);
 void      nurl_runtime_run(void);
 void      nurl_runtime_shutdown(void);
 
-/* musl omits ucontext (linker errors on include), so gate the stackful
- * implementation on glibc/macOS. Other POSIX-ish targets fall through
- * to the stub block. macOS gates ucontext behind _XOPEN_SOURCE. */
-#if !defined(__wasi__) && !defined(_WIN32) && (defined(__GLIBC__) || defined(__APPLE__))
+/* The stackful fiber runtime needs ucontext (getcontext/makecontext/
+ * swapcontext). musl omits it (linker errors on include) and has no
+ * detection macro, so we ALLOWLIST the libcs that ship a working
+ * ucontext rather than blocklist musl: glibc, macOS, and the BSDs that
+ * keep makecontext/swapcontext (FreeBSD / NetBSD / DragonFly — NOT
+ * OpenBSD, which removed swapcontext). Everything else (musl, wasi,
+ * Win32) falls through to the stub block. macOS gates ucontext behind
+ * _XOPEN_SOURCE. Keep the twin gate below (§reactor) in sync. */
+#if !defined(__wasi__) && !defined(_WIN32) && (defined(__GLIBC__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__))
 #if defined(__APPLE__) && !defined(_XOPEN_SOURCE)
 #  define _XOPEN_SOURCE 600
 #endif
@@ -6260,7 +6265,7 @@ long long nurl_reactor_wait_write(long long fd, long long timeout_ms);
 long long nurl_fiber_sleep_ms(long long ms);
 
 /* Same platform guard as §24 — needs the fiber primitives. */
-#if !defined(__wasi__) && !defined(_WIN32) && (defined(__GLIBC__) || defined(__APPLE__))
+#if !defined(__wasi__) && !defined(_WIN32) && (defined(__GLIBC__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__))
 #include <poll.h>
 #include <fcntl.h>
 #include <errno.h>
