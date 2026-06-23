@@ -6,6 +6,7 @@ name: release
 # Targets:
 #   - linux-x86_64-glibc   (ubuntu-latest, native)
 #   - linux-arm64-glibc    (ubuntu-24.04-arm, native — free for public repos)
+#   - freebsd-x86_64       (FreeBSD 14.x in a vmactions VM)
 #   - windows-x86_64       (windows-latest, native)
 #
 # Each job assembles the prefix with tools/install-toolchain.{sh,bat}
@@ -112,6 +113,67 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
+          path: |
+            ${{ env.PKG }}
+            ${{ env.PKG }}.sha256
+          if-no-files-found: error
+
+  # ── FreeBSD (x86_64, in a VM) ────────────────────────────────────────
+  # GitHub has no native FreeBSD runner, so build the toolchain inside a
+  # real FreeBSD VM (same vmactions harness the CI freebsd job uses, now
+  # proven green). FreeBSD base ships clang, openssl and zlib, so:
+  #   * no bundled zig — install-toolchain.sh falls back to the base clang,
+  #     which is exactly what `nurlpkg install <tool>` needs on the target;
+  #   * no old-glibc relink — that is a glibc-only portability hack.
+  # We add bash (build.sh), pkgconf and sqlite3 (lights up the SQLite FFI
+  # sentinel). The shipped nurlc/nurlpkg stay libc-only via -Wl,--as-needed,
+  # so the archive runs on any FreeBSD 14.x box; the get-nurl.sh smoke test
+  # asserts that on install. Best-effort (continue-on-error) until a
+  # workflow_dispatch dry run confirms the job is green; then drop it and
+  # add `freebsd` to the release job's `needs`.
+  freebsd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build + assemble + package toolchain on FreeBSD
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.2"
+          usesh: true
+          # The bootstrap self-compile peaks near ~9.5 GB RSS; give the VM
+          # most of the 16 GB runner. KVM keeps the guest near-native speed.
+          mem: 13312
+          cpu: 3
+          # Forward the tag so the archive is named to match the others.
+          envs: 'NURL_TAG'
+          prepare: |
+            pkg install -y bash pkgconf sqlite3
+          run: |
+            set -e
+            clang --version
+            ./build.sh --no-tests
+            ./tools/nurlpkg/build.sh
+            NURL_HOME="$PWD/dist/nurl" ./tools/install-toolchain.sh
+            # Smoke: the assembled toolchain must build + run a trivial program.
+            printf '$ `stdlib/core/io.nu`\n@ main \xe2\x86\x92 i { ( nurl_print `ok\\n` ) ^ 0 }\n' > /tmp/s.nu
+            ./dist/nurl/bin/nurl /tmp/s.nu /tmp/s && /tmp/s
+            PKG="nurl-${NURL_TAG}-freebsd-x86_64.tar.gz"
+            tar czf "$PKG" -C dist nurl
+            # FreeBSD base has `sha256 -q` (no coreutils sha256sum). get-nurl.sh
+            # reads only field 1, but write the standard "<hash>  <file>" form.
+            printf '%s  %s\n' "$(sha256 -q "$PKG")" "$PKG" > "$PKG.sha256"
+
+      # The VM step rsyncs the workspace back to the host, so the archive
+      # produced inside the guest is now present here for upload.
+      - name: Resolve package name
+        run: echo "PKG=nurl-${NURL_TAG}-freebsd-x86_64.tar.gz" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: freebsd-x86_64
           path: |
             ${{ env.PKG }}
             ${{ env.PKG }}.sha256
