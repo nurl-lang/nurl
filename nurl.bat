@@ -203,15 +203,22 @@ if not errorlevel 1 (
     )
 )
 
-REM Auto-link the FFI libs build.bat detected (issue #229). The resolved
-REM link fragment (-L"<dir>" -lzlib -lzstd) was recorded in runtime.winlibs.
-REM Programs importing stdlib\ext\compress.nu (gzip/zlib + zstd FFI) —
-REM nurlpkg among them — need these at link time; other programs link fine
-REM since the symbols only resolve when referenced.
-if exist "%SCRIPTDIR%stdlib\runtime.winlibs" (
+REM Auto-link the FFI libs build.bat detected (issue #229). runtime.o is built
+REM with -DNURL_HAVE_ZLIB, so it references zlib's deflate/inflate and EVERY
+REM program needs zlib (zstd too for compress.nu users) at link time.
+REM   - A shipped toolchain carries the static libs in stdlib\winlib\ plus a
+REM     relocatable fragment (winlibs.reloc) whose $NURL_LIB$ placeholder is
+REM     resolved against THIS prefix — self-contained, no vcpkg on the box.
+REM   - An in-repo build with no winlib\ falls back to the build-time
+REM     runtime.winlibs (its vcpkg -L"<dir>" paths are valid locally).
+set "WINLIBS="
+if exist "%SCRIPTDIR%stdlib\winlib\winlibs.reloc" (
+    set /p WINLIBS=<"%SCRIPTDIR%stdlib\winlib\winlibs.reloc"
+    set "WINLIBS=!WINLIBS:$NURL_LIB$=%SCRIPTDIR%stdlib\winlib!"
+) else if exist "%SCRIPTDIR%stdlib\runtime.winlibs" (
     set /p WINLIBS=<"%SCRIPTDIR%stdlib\runtime.winlibs"
-    set "EXTRA_LIBS=!EXTRA_LIBS! !WINLIBS!"
 )
+if defined WINLIBS set "EXTRA_LIBS=!EXTRA_LIBS! !WINLIBS!"
 
 REM The runtime's HTTP client uses WinHTTP on Windows (stdlib/runtime.c §14),
 REM so every program linked against runtime.o needs winhttp.lib even if it

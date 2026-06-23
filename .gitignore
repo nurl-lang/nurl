@@ -34,6 +34,7 @@ stdlib/runtime_debug.o
 stdlib/runtime_san.o
 stdlib/canvas.o
 stdlib/canvas.sdl2
+stdlib/winlib/
 
 # Test runner output. Per-test goldens live in compiler/tests/outputs/
 # and ARE tracked (they are the regression baseline). Everything the
