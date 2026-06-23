@@ -237,12 +237,19 @@ jobs:
 
   # ── Publish the GitHub Release ───────────────────────────────────────
   release:
-    # Publish once Linux succeeds; Windows is best-effort (above) and is
-    # included automatically when it starts producing an archive.
-    needs: [linux]
+    # WAIT for every build job (incl. the slow FreeBSD VM and the best-effort
+    # Windows job) before publishing — listing only `linux` here previously let
+    # this job race ahead and publish before the FreeBSD artifact was uploaded,
+    # so the freebsd archive was silently dropped from the release. With all
+    # three in `needs` + the `if` below, release runs after they all COMPLETE,
+    # then attaches whatever each produced via the artifact glob.
+    needs: [linux, freebsd, windows]
     runs-on: ubuntu-latest
-    # Only publish for a real pushed tag, not a workflow_dispatch dry run.
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Linux is mandatory; freebsd/windows are best-effort (continue-on-error),
+    # so don't require their success — just that they finished. `!cancelled()`
+    # lets us run after a best-effort job fails; still only for a real pushed
+    # tag, not a workflow_dispatch dry run.
+    if: ${{ !cancelled() && needs.linux.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - uses: actions/download-artifact@v4
         with:
