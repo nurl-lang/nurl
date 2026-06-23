@@ -6,6 +6,31 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.15] — 2026-06-23
+
+### Added
+
+- **Prebuilt Windows toolchain.** The release pipeline now publishes
+  `nurl-<tag>-windows-x86_64.zip`, built natively on `windows-latest` in CI, so
+  the one-line installer works on Windows out of the box
+  (`irm https://nurl-lang.org/install.ps1 | iex`). The website install card
+  gains a labelled Windows PowerShell one-liner next to the Linux / FreeBSD
+  `curl | sh` command. The Windows release job is no longer best-effort — with
+  the build fixed below it drops `continue-on-error`, so a future Windows break
+  fails the run instead of being silently swallowed.
+
+### Fixed
+
+- **Windows release build (issue #229).** `build.bat` wrote the `-lzlib` link
+  fragment whenever `zlib.h` was present, without checking that a matching
+  `.lib` actually existed — so `nurlpkg` failed to link with
+  `LNK1181: cannot open input file 'zlib.lib'`. The vcpkg zlib static-lib name
+  is version-dependent (1.3.1 → `zlib.lib`, but 1.3.2 adopted zlib's new CMake
+  and ships `zs.lib`, whose `zlib.pc` is rewritten `-lz` → `-lzs`), which is why
+  the build passed on local boxes yet only broke in CI. `build.bat` now probes
+  the lib directory for the actual file, derives the `-l<name>` from it, and
+  enables zlib only when a linkable lib is present (same name probe for zstd).
+
 ## [0.9.14] — 2026-06-23
 
 ### Added
