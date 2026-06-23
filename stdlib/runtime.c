@@ -54,6 +54,24 @@
 #  define NURL_HAVE_EXECINFO 1
 #endif
 
+/* ── Toolchain version ──────────────────────────────────────────
+ * NURL_VERSION is supplied by stdlib/nurl_version_gen.h, which build.sh
+ * regenerates from tools/version.sh (git describe / CHANGELOG) on every
+ * build. Keeping the string here in runtime.o — not in nurlc.nu's IR —
+ * means the self-hosting fixed point and the committed bootstrap snapshot
+ * never churn on a version bump. `nurlc --version` / `nurlpkg --version`
+ * call nurl_version(). Falls back to "unknown" when the header is absent
+ * (e.g. a source checkout that hasn't run build.sh yet). */
+#if defined(__has_include)
+#  if __has_include("nurl_version_gen.h")
+#    include "nurl_version_gen.h"
+#  endif
+#endif
+#ifndef NURL_VERSION
+#  define NURL_VERSION "unknown"
+#endif
+const char *nurl_version(void) { return NURL_VERSION; }
+
 /* ── Win32 portability shims ────────────────────────────────────
  *
  * The stdlib declares POSIX symbols (`memmem`, `mmap`/`munmap`/

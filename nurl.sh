@@ -54,6 +54,12 @@ if [[ ! -x "$NURLC" ]]; then
     fi
 fi
 
+# ── --version ────────────────────────────────────────────────
+# The version is baked into nurlc (runtime.o), so this needs no stdlib/env.
+if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
+    exec "$NURLC" --version
+fi
+
 # ── Locate runtime.o ─────────────────────────────────────────
 RUNTIME="$SCRIPT_DIR/stdlib/runtime.o"
 if [[ ! -f "$RUNTIME" ]]; then

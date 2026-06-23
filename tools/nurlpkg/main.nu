@@ -111,7 +111,7 @@ $ `stdlib/std/bytes.nu`
 // chars), so a direct build is safe. Empty deps → "[]".
 @ __deps_json Manifest m → String {
     : String out ( string_with_cap 64 )
-    ( string_push_char out 91 )    // [
+    ( string_push_char out 91 )  // [
     : i n ( vec_len [Dep] . m dependencies )
     : ~ i first 1
     : ~ i k 0
@@ -120,7 +120,7 @@ $ `stdlib/std/bytes.nu`
         ?? dk {
             T d → {
                 ? ( dep_is_registry d ) {
-                    ? == first 0 { ( string_push_char out 44 ) } {}    // ,
+                    ? == first 0 { ( string_push_char out 44 ) } {}  // ,
                     = first 0
                     ( string_push_str out `{"name":"` )
                     ( string_push_str out ( string_data . d name ) )
@@ -133,7 +133,7 @@ $ `stdlib/std/bytes.nu`
         }
         = k + k 1
     }
-    ( string_push_char out 93 )    // ]
+    ( string_push_char out 93 )  // ]
     ^ out
 }
 
@@ -1221,10 +1221,10 @@ $ `stdlib/std/bytes.nu`
                                 ( nurl_print ` ` ) ( nurl_print ( string_data . p version ) )
                                 ( nurl_print ` (registry)\n` )
                                 ( vec_push [LockPkg] out ( lock_pkg_new
-                                    ( string_data . p name )
-                                    ( string_data . p version )
-                                    ( string_data . p source )
-                                    ( string_data . p checksum ) ) )
+                                ( string_data . p name )
+                                ( string_data . p version )
+                                ( string_data . p source )
+                                ( string_data . p checksum ) ) )
                             }
                             F fe → {
                                 ( nurl_eprint `  ` ) ( nurl_eprint ( string_data . p name ) )
@@ -1430,45 +1430,45 @@ $ `stdlib/std/bytes.nu`
                 ( nurl_eprintln `nurlpkg: no auth token — run 'nurlpkg login' or set $NURL_TOKEN` )
                 = rc 1
             } {
-                    : !( Vec u ) PackErr pr ( pkg_pack `.` )
-                    ?? pr {
-                        F pe → {
-                            ( nurl_eprint `nurlpkg: packaging failed (` )
-                            ( nurl_eprint ( pack_err_name pe ) )
-                            ( nurl_eprintln `)` )
-                            = rc 1
-                        }
-                        T tarball → {
-                            : ( Vec u ) digest ( sha256_pure tarball )
-                            : String hex ( bytes_to_hex digest )
-                            ( nurl_print `publishing ` )
-                            ( nurl_print ( string_data . m name ) )
-                            ( nurl_print ` ` )
-                            ( nurl_print ( string_data . m version ) )
-                            ( nurl_print ` (` )
-                            ( nurl_print ( nurl_str_int ( vec_len [u] tarball ) ) )
-                            ( nurl_print ` bytes, sha256 ` )
-                            ( nurl_print ( string_data hex ) )
-                            ( nurl_print `)\nto ` )
-                            ( nurl_print ( string_data reg ) )
-                            ( nurl_print `\n` )
-                            : String deps_json ( __deps_json m )
-                            : !i PublishErr ur ( pkg_publish ( string_data reg ) ( string_data token ) tarball ( string_data . m name ) ( string_data . m version ) ( string_data deps_json ) )
-                            ( string_free deps_json )
-                            ?? ur {
-                                T _ → ( nurl_print `published.\n` )
-                                F ue → {
-                                    ( nurl_eprint `nurlpkg: publish failed (` )
-                                    ( nurl_eprint ( publish_err_name ue ) )
-                                    ( nurl_eprintln `)` )
-                                    = rc 1
-                                }
-                            }
-                            ( vec_free [u] digest )
-                            ( string_free hex )
-                            ( vec_free [u] tarball )
-                        }
+                : !( Vec u ) PackErr pr ( pkg_pack `.` )
+                ?? pr {
+                    F pe → {
+                        ( nurl_eprint `nurlpkg: packaging failed (` )
+                        ( nurl_eprint ( pack_err_name pe ) )
+                        ( nurl_eprintln `)` )
+                        = rc 1
                     }
+                    T tarball → {
+                        : ( Vec u ) digest ( sha256_pure tarball )
+                        : String hex ( bytes_to_hex digest )
+                        ( nurl_print `publishing ` )
+                        ( nurl_print ( string_data . m name ) )
+                        ( nurl_print ` ` )
+                        ( nurl_print ( string_data . m version ) )
+                        ( nurl_print ` (` )
+                        ( nurl_print ( nurl_str_int ( vec_len [u] tarball ) ) )
+                        ( nurl_print ` bytes, sha256 ` )
+                        ( nurl_print ( string_data hex ) )
+                        ( nurl_print `)\nto ` )
+                        ( nurl_print ( string_data reg ) )
+                        ( nurl_print `\n` )
+                        : String deps_json ( __deps_json m )
+                        : !i PublishErr ur ( pkg_publish ( string_data reg ) ( string_data token ) tarball ( string_data . m name ) ( string_data . m version ) ( string_data deps_json ) )
+                        ( string_free deps_json )
+                        ?? ur {
+                            T _ → ( nurl_print `published.\n` )
+                            F ue → {
+                                ( nurl_eprint `nurlpkg: publish failed (` )
+                                ( nurl_eprint ( publish_err_name ue ) )
+                                ( nurl_eprintln `)` )
+                                = rc 1
+                            }
+                        }
+                        ( vec_free [u] digest )
+                        ( string_free hex )
+                        ( vec_free [u] tarball )
+                    }
+                }
             }
             ( string_free reg )
             ( string_free token )
@@ -1935,9 +1935,9 @@ $ `stdlib/std/bytes.nu`
     : i n ( nurl_str_len path )
     : ~ i start 0
     : ~ i k 0
-    ~ < k n { ? == ( nurl_str_get path k ) 47 { = start + k 1 } {} = k + k 1 }   // '/'
+    ~ < k n { ? == ( nurl_str_get path k ) 47 { = start + k 1 } {} = k + k 1 }  // '/'
     : ~ i end n
-    ? & >= - n start 3 & == ( nurl_str_get path - n 3 ) 46 & == ( nurl_str_get path - n 2 ) 110 == ( nurl_str_get path - n 1 ) 117 { = end - n 3 } {}   // ".nu"
+    ? & >= - n start 3 & == ( nurl_str_get path - n 3 ) 46 & == ( nurl_str_get path - n 2 ) 110 == ( nurl_str_get path - n 1 ) 117 { = end - n 3 } {}  // ".nu"
     : String out ( string_with_cap + - end start 1 )
     = k start
     ~ < k end { ( string_push_char out ( nurl_str_get path k ) ) = k + k 1 }
@@ -2170,6 +2170,11 @@ $ `stdlib/std/bytes.nu`
     } {}
     : String sub ( env_arg 1 )
     : s s_sub ( string_data sub )
+    ? | != 0 ( nurl_str_eq s_sub `--version` ) != 0 ( nurl_str_eq s_sub `version` ) {
+        ( nurl_print ( nurl_version ) ) ( nurl_print `\n` )
+        ( string_free sub )
+        ^ 0
+    } {}
     ? != 0 ( nurl_str_eq s_sub `init` ) {
         : String name ? >= argc 3 ( env_arg 2 ) ( string_new )
         : i rc ( __cmd_init ( string_data name ) )

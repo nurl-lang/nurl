@@ -274,6 +274,13 @@ fi
 # matching `-flto` on every clang invocation that consumes runtime.o
 # (this script, nurl.sh, compiler/tests/run_tests.sh, tools/*/build.sh)
 # triggers the LTO link pipeline.
+# Bake the toolchain version into runtime.o so `nurlc --version` /
+# `nurlpkg --version` work. tools/version.sh is the single source of truth
+# (git describe / CHANGELOG); the generated header is git-ignored and
+# rebuilt every run. It lives in runtime.o, not nurlc.nu's IR, so the
+# bootstrap fixed point and the committed snapshot never churn on a bump.
+printf '#define NURL_VERSION "%s"\n' "$(bash tools/version.sh 2>/dev/null || echo v0.0.0)" > stdlib/nurl_version_gen.h
+
 step "runtime"       bash -c "'$CLANG' -O2 $LTO_FLAG $SAN_CFLAGS $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $ZLIB_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
 
 # Under `-flto` the `runtime.o` above is LLVM bitcode, which a plain GNU
