@@ -89,6 +89,33 @@ md2html -f README.md --full      # complete styled page
 See [`md2html/README.md`](md2html/README.md) for the supported Markdown and
 the library API.
 
+## `chart/` — terminal charts (installable program **and** library)
+
+Turns a stream of numbers into something you can see: a one-line
+sparkline, labelled horizontal bars, a histogram, or a line/scatter plot —
+all drawn with Unicode block elements at eighth-cell resolution. Ships as
+an installable CLI (`chart`, reading numbers from stdin or `--file`) and as
+a reusable renderer library (`src/chart.nu`). Pure NURL, no FFI; depends on
+`argz` for flags; leak-clean under ASan/LSan.
+
+```
+nurlpkg install chart
+seq 1 20 | chart spark                                   # ▁▁▂▂▂▃▃▄▄▄▅▅▅▆▆▇▇▇██
+ls -l | awk '{print $5}' | chart hist --bins 8           # size distribution
+printf '%s\n' 'apples 8.5' 'pears 6' | chart bar         # labelled bars
+chart line -f temps.txt --height 12                      # line plot from a file
+
+# …or depend on the renderer library:
+#   [dependencies]
+#   chart = "^0.1"
+#   $ `deps/chart/src/chart.nu`
+#   : String spark ( chart_sparkline values )
+```
+
+Modes: `spark` (sparkline), `bar` (one `<label> <value>` per line), `hist`
+(`--bins N`), and `line` (`--width`/`--height`). See
+[`chart/README.md`](chart/README.md) for the full CLI and library API.
+
 ## The full loop
 
 ```bash
