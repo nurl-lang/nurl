@@ -328,10 +328,11 @@ section:last-of-type { border-bottom: none; }
 }
 .start-card .btn { align-self: flex-start; }
 
-/* Code block with a floating Copy button in the top-right corner. */
+/* Code block with a Copy button in a reserved top strip, so even a long
+   non-wrapping command line never runs underneath the button. */
 .cmd-block { position: relative; margin: 0 0 1rem; }
-.cmd-block pre { margin: 0; padding-right: 4.5rem; }
-.cmd-block .copy-btn { position: absolute; top: 0.55rem; right: 0.55rem; margin-left: 0; }
+.cmd-block pre { margin: 0; padding-top: 2.5rem; }
+.cmd-block .copy-btn { position: absolute; top: 0.5rem; right: 0.55rem; margin-left: 0; }
 
 /* ── MCP section ──────────────────────────────────────────── */
 .mcp-url {
