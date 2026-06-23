@@ -151,6 +151,16 @@ http_needs_net() {
 is_skipped() {
     local name="$1"
     case "$name" in *_mod|*_helper|*_lib) echo skip; return ;; esac
+    # FFI tests whose ext/ module needs an optional native library. build.sh
+    # drops a sentinel (stdlib/runtime.<lib>) when pkg-config finds the lib;
+    # without it the program legitimately fails to compile ("FFI library X is
+    # required ..."). Skip such tests when the sentinel is absent so the corpus
+    # self-adapts to a minimal environment (e.g. FreeBSD base, which ships no
+    # sqlite3/libpq) instead of spuriously failing on a missing optional dep.
+    case "$name" in
+        sqlite_*)   [[ -f "$ROOT_DIR/stdlib/runtime.sqlite3" ]] || { echo skip; return; } ;;
+        postgres_*) [[ -f "$ROOT_DIR/stdlib/runtime.pq"      ]] || { echo skip; return; } ;;
+    esac
     if [[ "$name" == http_* ]]; then
         if ! http_runs_by_default "$name" && [[ "$ENABLE_HTTP_TESTS" != "1" ]]; then
             echo skip; return

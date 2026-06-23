@@ -81,9 +81,12 @@ jobs:
     # self-hosting fixed point, and runs the test corpus on genuine
     # FreeBSD — the gate that would have caught the fiber-runtime gap
     # (async fibers silently no-op'd on FreeBSD). The base system ships
-    # clang; only bash (build.sh) + pkgconf are added. Feature dev libs
-    # are NOT installed, so the ext/ FFI tests (curl/openssl/sqlite/pq/
-    # zstd) skip — the core + async + codegen corpus still runs.
+    # clang, openssl and zlib, so those FFI tests build; we add bash
+    # (build.sh), pkgconf and sqlite3 so the SQLite FFI corpus actually
+    # runs natively on FreeBSD. libpq and libcurl are left out — postgres
+    # needs a live server (its live test skips anyway) and the offline
+    # http tests use the no-backend path; both classes self-skip via the
+    # sentinel-aware harness when their lib is absent.
     #
     # Best-effort (continue-on-error) until a real run is confirmed green;
     # drop continue-on-error and add `freebsd` to any required-check set
@@ -104,7 +107,7 @@ jobs:
           mem: 13312
           cpu: 3
           prepare: |
-            pkg install -y bash pkgconf
+            pkg install -y bash pkgconf sqlite3
           run: |
             clang --version
             ./build.sh
