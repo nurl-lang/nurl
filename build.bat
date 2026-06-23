@@ -83,24 +83,46 @@ if not defined ZLIB_INC if exist "C:\zlib\include\zlib.h" (
     set "ZLIB_INC=C:\zlib\include"
     set "ZLIB_LIBDIR=C:\zlib\lib"
 )
+REM Resolve the ACTUAL static-lib basename present in the lib dir. `-l<name>`
+REM needs <name>.lib to exist or the linker dies with LNK1181 "cannot open
+REM input file '<name>.lib'" (issue #229). vcpkg has shipped zlib's release
+REM lib under different names across versions (zlib.lib vs zlibstatic.lib), so
+REM never assume — probe for the file and derive the -l name from it. Enable
+REM zlib ONLY when zlib.h AND a matching .lib are both present; a header with
+REM no linkable lib was exactly the trap behind the failed Windows release.
+set "ZLIB_LIBNAME="
 if defined ZLIB_INC (
-    set "ZLIB_LIBNAME=zlib"
-    if exist "!ZLIB_LIBDIR!\zlibstatic.lib" set "ZLIB_LIBNAME=zlibstatic"
+    for %%N in (zlib zlibstatic z libz) do (
+        if not defined ZLIB_LIBNAME if exist "!ZLIB_LIBDIR!\%%N.lib" set "ZLIB_LIBNAME=%%N"
+    )
+    echo [diag] zlib: ZLIB_LIBDIR="!ZLIB_LIBDIR!" *.lib:
+    dir /b "!ZLIB_LIBDIR!\*.lib" 2>nul
+)
+if defined ZLIB_LIBNAME (
     set ZLIB_CFLAGS=-DNURL_HAVE_ZLIB -I"!ZLIB_INC!"
     > stdlib\runtime.z echo 1
     set WINLIBS=!WINLIBS! -L"!ZLIB_LIBDIR!" -l!ZLIB_LIBNAME!
+    echo [info] zlib enabled: -l!ZLIB_LIBNAME! from "!ZLIB_LIBDIR!"
 ) else (
     if exist stdlib\runtime.z del /q stdlib\runtime.z
+    if defined ZLIB_INC echo [warn] zlib.h at "!ZLIB_INC!" but no zlib*.lib in "!ZLIB_LIBDIR!" - zlib disabled
 )
 
-REM zstd — pure-NURL FFI: sentinel + link only.
-set "HAVE_ZSTD="
-if defined VCPKG_INC if exist "!VCPKG_INC!\zstd.h" set "HAVE_ZSTD=1"
-if defined HAVE_ZSTD (
+REM zstd — pure-NURL FFI: sentinel + link only. Same name-probe discipline as
+REM zlib so a header-without-lib can't sneak a dangling -lzstd into the link.
+set "ZSTD_LIBNAME="
+if defined VCPKG_INC if exist "!VCPKG_INC!\zstd.h" (
+    for %%N in (zstd zstd_static libzstd) do (
+        if not defined ZSTD_LIBNAME if exist "!VCPKG_LIBDIR!\%%N.lib" set "ZSTD_LIBNAME=%%N"
+    )
+)
+if defined ZSTD_LIBNAME (
     > stdlib\runtime.zstd echo 1
-    set WINLIBS=!WINLIBS! -L"!VCPKG_LIBDIR!" -lzstd
+    set WINLIBS=!WINLIBS! -L"!VCPKG_LIBDIR!" -l!ZSTD_LIBNAME!
+    echo [info] zstd enabled: -l!ZSTD_LIBNAME! from "!VCPKG_LIBDIR!"
 ) else (
     if exist stdlib\runtime.zstd del /q stdlib\runtime.zstd
+    if defined VCPKG_INC if exist "!VCPKG_INC!\zstd.h" echo [warn] zstd.h at "!VCPKG_INC!" but no zstd*.lib in "!VCPKG_LIBDIR!" - zstd disabled
 )
 
 REM ── runtime ──────────────────────────────────────────────────
@@ -114,6 +136,7 @@ REM Persist the accumulated link fragment for the FFI consumers.
 if defined WINLIBS (
     > stdlib\runtime.winlibs echo !WINLIBS!
     >>"%LOG%" echo [info] FFI libs detected -!WINLIBS!
+    echo [info] runtime.winlibs =!WINLIBS!
 ) else (
     if exist stdlib\runtime.winlibs del /q stdlib\runtime.winlibs
     >>"%LOG%" echo [info] no vcpkg zlib/zstd - compress.nu / nurlpkg unavailable
