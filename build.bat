@@ -85,14 +85,16 @@ if not defined ZLIB_INC if exist "C:\zlib\include\zlib.h" (
 )
 REM Resolve the ACTUAL static-lib basename present in the lib dir. `-l<name>`
 REM needs <name>.lib to exist or the linker dies with LNK1181 "cannot open
-REM input file '<name>.lib'" (issue #229). vcpkg has shipped zlib's release
-REM lib under different names across versions (zlib.lib vs zlibstatic.lib), so
-REM never assume — probe for the file and derive the -l name from it. Enable
-REM zlib ONLY when zlib.h AND a matching .lib are both present; a header with
-REM no linkable lib was exactly the trap behind the failed Windows release.
+REM input file '<name>.lib'" (issue #229). vcpkg ships zlib's release static
+REM lib under DIFFERENT names across versions: 1.3.1 produced zlib.lib, but
+REM 1.3.2#1 adopted zlib's new CMake (-DZLIB_BUILD_STATIC) and renames the
+REM Windows static lib to zs.lib (its zlib.pc is rewritten -lz -> -lzs) — the
+REM exact mismatch that broke the Windows release. Never assume the name:
+REM probe for the file and derive the -l name from it. Enable zlib ONLY when
+REM zlib.h AND a matching .lib are both present.
 set "ZLIB_LIBNAME="
 if defined ZLIB_INC (
-    for %%N in (zlib zlibstatic z libz) do (
+    for %%N in (zlib zlibstatic zs z libz) do (
         if not defined ZLIB_LIBNAME if exist "!ZLIB_LIBDIR!\%%N.lib" set "ZLIB_LIBNAME=%%N"
     )
     echo [diag] zlib: ZLIB_LIBDIR="!ZLIB_LIBDIR!" *.lib:
