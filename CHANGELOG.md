@@ -6,10 +6,21 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.14] — 2026-06-23
 
 ### Added
 
+- **Prebuilt FreeBSD toolchain.** The release pipeline now publishes
+  `nurl-<tag>-freebsd-x86_64.tar.gz`, built on FreeBSD 14 in CI, so the
+  one-line installer works on FreeBSD out of the box
+  (`curl -fsSL https://nurl-lang.org/install.sh | sh`). The shipped binaries
+  depend on `libc.so.7` only; FreeBSD's base clang drives `nurlpkg install`,
+  so no compiler is bundled. `get-nurl.sh` detects FreeBSD via `uname -s`.
+  Validated end-to-end on real hardware: `nurlpkg install argz-demo &&
+  argz-demo --shout hi`.
+- **FreeBSD CI.** A FreeBSD VM job builds the compiler, checks the
+  self-hosting fixed point, and runs the test corpus on genuine FreeBSD — the
+  gate that caught the two FreeBSD bugs fixed below.
 - **`nurlc --version` / `nurlpkg --version` / `nurl --version`.** The version
   is derived at build time by `tools/version.sh` (`git describe` → `v0.9.14`
   on a release tag, `v0.9.13-2-gabc-dirty` on a dev checkout; falls back to
@@ -19,6 +30,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   local builds. Because the string lives in `runtime.o` and not in
   `nurlc.nu`'s IR, the self-hosting fixed point and the committed bootstrap
   snapshot are unaffected by a version bump.
+
+### Fixed
+
+- **The installed toolchain no longer requires bash.** The shipped wrapper
+  scripts (`nurl.sh` and the `nurl` / `nurlc` / `nurlpkg` shims) were
+  `#!/usr/bin/env bash`, so on a stock FreeBSD / Alpine / busybox box — where
+  the binaries are libc-only but bash is absent — the first build died with
+  `env: bash: No such file or directory`. They are now POSIX `sh`, validated
+  under dash on Linux and end-to-end on a bash-less FreeBSD 14.3 box.
+- **Async fibers run on FreeBSD.** The M:N stackful-fiber runtime was gated to
+  glibc/macOS, so on FreeBSD (which has full `ucontext`) it silently fell back
+  to a no-op stub and fibers never ran. Now enabled on
+  FreeBSD / NetBSD / DragonFly.
+- **Empty URL is `HttpInvalidUrl` on a no-libcurl build** (was `HttpOther`),
+  matching the libcurl and WinHTTP backends — input validation that no longer
+  depends on which HTTP backend is compiled in.
+- **`z_stream` ABI helpers decoupled from the zlib build flag**, so a runtime
+  linked against libz without `zlib.h` at compile time still reports the
+  correct struct size (an ABI replica pinned by `_Static_assert`).
+- **Test/example harness portability.** `run_tests.sh` no longer uses GNU
+  `sed -i` (mis-parsed by BSD sed); FFI-dependent tests and examples now
+  self-skip when their optional library (sqlite3 / libpq / …) is absent
+  instead of failing the suite.
+
+### Changed
+
+- **Setup no longer needs `source ~/.nurl/env`.** The shims self-locate the
+  stdlib, so `export PATH="$HOME/.nurl/bin:$PATH"` is the whole setup and works
+  in any shell. The website one-line install is updated to match and gains a
+  Copy button.
 
 ## [0.9.13] — 2026-06-23
 
@@ -5459,7 +5500,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.13...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.14...HEAD
+[0.9.14]: https://github.com/nurl-lang/nurl/compare/v0.9.13...v0.9.14
 [0.9.13]: https://github.com/nurl-lang/nurl/compare/v0.9.12...v0.9.13
 [0.9.12]: https://github.com/nurl-lang/nurl/compare/v0.9.11...v0.9.12
 [0.9.11]: https://github.com/nurl-lang/nurl/compare/v0.9.10...v0.9.11

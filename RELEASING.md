@@ -24,6 +24,7 @@ git push origin v0.1.0
 |---|---|---|
 | `linux-x86_64-glibc` | `ubuntu-latest` | `nurl-<tag>-linux-x86_64-glibc.tar.gz` |
 | `linux-arm64-glibc`  | `ubuntu-24.04-arm` | `nurl-<tag>-linux-arm64-glibc.tar.gz` |
+| `freebsd-x86_64`     | `ubuntu-latest` (FreeBSD 14 VM) | `nurl-<tag>-freebsd-x86_64.tar.gz` |
 | `windows-x86_64`     | `windows-latest` | `nurl-<tag>-windows-x86_64.zip` |
 
 Each job builds `nurlc` + `nurlpkg`, assembles the prefix with
