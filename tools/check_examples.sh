@@ -33,12 +33,24 @@ fi
 
 pass=0
 fail=0
+skip=0
 failed_files=()
+skipped_files=()
 
 for f in examples/*.nu examples/*/*.nu bench/*.nu duo/*.nu; do
     [[ -f "$f" ]] || continue
     if "$NURLC" "$f" > /dev/null 2>/tmp/check_examples_err.$$; then
         pass=$((pass + 1))
+    elif grep -q "is required but no build-time sentinel" /tmp/check_examples_err.$$; then
+        # The example uses an OPTIONAL native FFI library (libpq, sqlite3,
+        # libcurl, …) that pkg-config did not find at build time, so build.sh
+        # dropped no stdlib/runtime.<lib> sentinel and the frontend refuses
+        # the FFI directive. That is an environment gap, not example rot —
+        # skip it (e.g. FreeBSD base ships no libpq) instead of failing the
+        # gate. Any OTHER frontend error still fails, so parse/type/import
+        # regressions are caught exactly as before.
+        skip=$((skip + 1))
+        skipped_files+=("$f")
     else
         fail=$((fail + 1))
         failed_files+=("$f")
@@ -49,7 +61,10 @@ done
 rm -f /tmp/check_examples_err.$$
 
 echo
-echo "examples gate: PASS $pass · FAIL $fail"
+echo "examples gate: PASS $pass · FAIL $fail · SKIP $skip"
+if [[ $skip -gt 0 ]]; then
+    printf 'skipped (optional FFI lib absent): %s\n' "${skipped_files[@]}"
+fi
 if [[ $fail -gt 0 ]]; then
     printf 'failed: %s\n' "${failed_files[@]}"
     exit 1
