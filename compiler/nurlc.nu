@@ -15132,6 +15132,7 @@
     ( emit `declare i8*  @nurl_argv(i64)` )
     ( emit `declare i64  @nurl_argv_count()` )
     ( emit `declare i8*  @nurl_argv_get(i64)` )
+    ( emit `declare i8*  @nurl_version()` )
     // nurl_lex_* are pure-NURL @-fns in compiler/nurlc.nu (see the
     // §6a Lexer block).
     ( emit `declare void @nurl_print_buf_start()` )
@@ -15296,6 +15297,7 @@
     // pure-NURL @-fns; types come from the @-fn declarations.
     ( nurl_sym_def syms `nurl_argv` `i8*` )
     ( nurl_sym_def syms `nurl_argv_get` `i8*` )
+    ( nurl_sym_def syms `nurl_version` `i8*` )
     ( nurl_sym_def syms `nurl_read_file` `i8*` )
     ( nurl_sym_def syms `nurl_read_line` `i8*` )
     // nurl_str_cat / _cat3 / _cat4 / _slice / _str_int are pure-NURL
@@ -16458,21 +16460,23 @@
     : ~ i ai 1
     ~ < ai ( nurl_argc ) {
         : s a ( nurl_argv ai )
-        ? | ( seq a `--g` ) ( seq a `-g` )
-        { = g_dbg_enabled 1 }
-        { ? ( seq a `--lint` )
-            { = g_lint 1 }
-            { ? ( seq a `--borrowck` )
-                { = g_borrowck 1 }
-                { ? ( seq a `--no-borrowck` )
-                    { = g_borrowck 0 }
-                    { ? ( seq a `--strict-borrowck` )
-                        { = g_borrowck 1 = g_strict_borrowck 1 }
-                        { = path a } } } } }
+        ? ( seq a `--version` )
+        { ( nurl_print ( nurl_version ) ) ( nurl_print `\n` ) ( nurl_exit 0 ) }
+        { ? | ( seq a `--g` ) ( seq a `-g` )
+            { = g_dbg_enabled 1 }
+            { ? ( seq a `--lint` )
+                { = g_lint 1 }
+                { ? ( seq a `--borrowck` )
+                    { = g_borrowck 1 }
+                    { ? ( seq a `--no-borrowck` )
+                        { = g_borrowck 0 }
+                        { ? ( seq a `--strict-borrowck` )
+                            { = g_borrowck 1 = g_strict_borrowck 1 }
+                            { = path a } } } } } }
         = ai + ai 1
     }
     ? == 0 ( nurl_str_len path )
-    { ( nurl_eprintln `usage: nurlc [--g] [--lint] [--no-borrowck | --strict-borrowck] <file.nu>` ) ( nurl_exit 1 ) }
+    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] <file.nu>` ) ( nurl_exit 1 ) }
     {}
     ? != g_lint 0 { ( lint_init path ) } {}
     : s src ( nurl_read_file path )

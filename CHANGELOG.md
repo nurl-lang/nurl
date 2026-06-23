@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`nurlc --version` / `nurlpkg --version` / `nurl --version`.** The version
+  is derived at build time by `tools/version.sh` (`git describe` → `v0.9.14`
+  on a release tag, `v0.9.13-2-gabc-dirty` on a dev checkout; falls back to
+  the top `CHANGELOG.md` entry for a git-less source tree) and baked into
+  `runtime.o` via a generated, git-ignored header (`stdlib/nurl_version_gen.h`).
+  Nothing is hardcoded, and it flows in automatically both in releases and
+  local builds. Because the string lives in `runtime.o` and not in
+  `nurlc.nu`'s IR, the self-hosting fixed point and the committed bootstrap
+  snapshot are unaffected by a version bump.
+
 ## [0.9.13] — 2026-06-23
 
 A one-line follow-up to v0.9.12 that makes the bundled-zig build actually
