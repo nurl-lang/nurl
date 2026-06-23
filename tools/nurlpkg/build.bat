@@ -66,6 +66,7 @@ REM resolved link fragment in stdlib\runtime.winlibs when they were
 REM detected (issue #229).
 set "WINLIBS="
 if exist "%ROOT_DIR%\stdlib\runtime.winlibs" set /p WINLIBS=<"%ROOT_DIR%\stdlib\runtime.winlibs"
+echo [diag] linking with WINLIBS=!WINLIBS!
 
 echo [2/2] build\nurlpkg.ll -^> build\nurlpkg.exe
 "%CLANG%" -O2 "%ROOT_DIR%\build\nurlpkg.ll" "%RUNTIME%" -lwinhttp !WINLIBS! -o "%ROOT_DIR%\build\nurlpkg.exe"

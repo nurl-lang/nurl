@@ -184,14 +184,14 @@ jobs:
   # it up (issue #229) by detecting the vcpkg x64-windows-static install
   # below: it compiles runtime.c with -DNURL_HAVE_ZLIB, drops the
   # stdlib\runtime.z sentinel, and records the link fragment that
-  # tools\nurlpkg\build.bat consumes. Still best-effort (continue-on-error)
-  # until a `workflow_dispatch` dry run confirms the job is green; once it
-  # is, drop continue-on-error here and add `windows` to the release job's
-  # `needs`.
+  # tools\nurlpkg\build.bat consumes. A `workflow_dispatch` dry run on
+  # branch fix/windows-zlib-lib-resolve (run 28044986105) is green — the
+  # vcpkg zlib 1.3.2 static lib is `zs.lib`, now resolved by build.bat's
+  # lib-name probe — so this job is no longer best-effort: a Windows break
+  # now fails the run instead of being silently swallowed.
   windows:
     runs-on: windows-latest
     timeout-minutes: 40
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -237,18 +237,19 @@ jobs:
 
   # ── Publish the GitHub Release ───────────────────────────────────────
   release:
-    # WAIT for every build job (incl. the slow FreeBSD VM and the best-effort
-    # Windows job) before publishing — listing only `linux` here previously let
+    # WAIT for every build job (incl. the slow FreeBSD VM and the Windows
+    # native job) before publishing — listing only `linux` here previously let
     # this job race ahead and publish before the FreeBSD artifact was uploaded,
     # so the freebsd archive was silently dropped from the release. With all
     # three in `needs` + the `if` below, release runs after they all COMPLETE,
     # then attaches whatever each produced via the artifact glob.
     needs: [linux, freebsd, windows]
     runs-on: ubuntu-latest
-    # Linux is mandatory; freebsd/windows are best-effort (continue-on-error),
-    # so don't require their success — just that they finished. `!cancelled()`
-    # lets us run after a best-effort job fails; still only for a real pushed
-    # tag, not a workflow_dispatch dry run.
+    # Linux gates publishing; freebsd stays best-effort (continue-on-error) and
+    # windows is now a required-to-build job (its failure reds the run) but is
+    # not a hard publish gate — don't require their `result`, just that they
+    # finished. `!cancelled()` lets us publish after a best-effort job fails;
+    # still only for a real pushed tag, not a workflow_dispatch dry run.
     if: ${{ !cancelled() && needs.linux.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - uses: actions/download-artifact@v4
