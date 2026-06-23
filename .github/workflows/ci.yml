@@ -72,6 +72,47 @@ jobs:
         # nurlfmt IR-transparent (compiler/tests/nurlfmt_idempotent.sh).
         run: ./compiler/tests/nurlfmt_check.sh
 
+  freebsd:
+    name: FreeBSD (build + bootstrap fixed point + tests, in a VM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # GitHub has no native FreeBSD runners, so run a real FreeBSD VM inside
+    # the Linux runner (QEMU). This builds nurlc/nurlpkg, checks the
+    # self-hosting fixed point, and runs the test corpus on genuine
+    # FreeBSD — the gate that would have caught the fiber-runtime gap
+    # (async fibers silently no-op'd on FreeBSD). The base system ships
+    # clang, openssl and zlib, so those FFI tests build; we add bash
+    # (build.sh), pkgconf and sqlite3 so the SQLite FFI corpus actually
+    # runs natively on FreeBSD. libpq and libcurl are left out — postgres
+    # needs a live server (its live test skips anyway) and the offline
+    # http tests use the no-backend path; both classes self-skip via the
+    # sentinel-aware harness when their lib is absent.
+    #
+    # Best-effort (continue-on-error) until a real run is confirmed green;
+    # drop continue-on-error and add `freebsd` to any required-check set
+    # once it is.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build + bootstrap + test on FreeBSD
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.2"
+          usesh: true
+          # The bootstrap self-compile (nurlc compiling nurlc.nu) peaks at
+          # ~9.5 GB RSS, so the VM needs most of the 16 GB runner. KVM on the
+          # GitHub Linux runner keeps the guest near-native speed.
+          mem: 13312
+          cpu: 3
+          prepare: |
+            pkg install -y bash pkgconf sqlite3
+          run: |
+            clang --version
+            ./build.sh
+            ./tools/check_examples.sh
+
   sanitizers:
     name: AddressSanitizer + UndefinedBehaviorSanitizer
     runs-on: ubuntu-latest

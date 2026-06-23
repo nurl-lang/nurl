@@ -151,6 +151,16 @@ http_needs_net() {
 is_skipped() {
     local name="$1"
     case "$name" in *_mod|*_helper|*_lib) echo skip; return ;; esac
+    # FFI tests whose ext/ module needs an optional native library. build.sh
+    # drops a sentinel (stdlib/runtime.<lib>) when pkg-config finds the lib;
+    # without it the program legitimately fails to compile ("FFI library X is
+    # required ..."). Skip such tests when the sentinel is absent so the corpus
+    # self-adapts to a minimal environment (e.g. FreeBSD base, which ships no
+    # sqlite3/libpq) instead of spuriously failing on a missing optional dep.
+    case "$name" in
+        sqlite_*)   [[ -f "$ROOT_DIR/stdlib/runtime.sqlite3" ]] || { echo skip; return; } ;;
+        postgres_*) [[ -f "$ROOT_DIR/stdlib/runtime.pq"      ]] || { echo skip; return; } ;;
+    esac
     if [[ "$name" == http_* ]]; then
         if ! http_runs_by_default "$name" && [[ "$ENABLE_HTTP_TESTS" != "1" ]]; then
             echo skip; return
@@ -178,7 +188,12 @@ append_capped() {
 }
 
 # Strip the absolute repo-root prefix so records are checkout-portable.
-strip_root() { sed -i "s|$ROOT_DIR/||g" "$1"; }
+# Strip the absolute repo root from a captured file so diagnostics compare
+# path-stable against the golden. `sed -i` is NOT portable — GNU edits in
+# place, but BSD sed (FreeBSD, macOS) requires a backup-suffix argument and
+# otherwise mis-parses the script as the suffix (this silently left paths
+# unstripped on FreeBSD). Write to a temp file and move it back instead.
+strip_root() { sed "s|$ROOT_DIR/||g" "$1" > "$1.sr" && mv -f "$1.sr" "$1"; }
 
 # ── run_one <name> ──────────────────────────────────────────────
 #   Produces $WORKDIR/$name.actual (the record) and prints a single

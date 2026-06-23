@@ -2012,12 +2012,19 @@ long long nurl_http_perform_full_to(const char *url, const char *method,
                                     const char *body, const char *headers_blob,
                                     long long timeout_ms,
                                     long long connect_timeout_ms) {
-    (void)url; (void)method; (void)body; (void)headers_blob;
+    (void)method; (void)body; (void)headers_blob;
     (void)timeout_ms; (void)connect_timeout_ms;
     NurlHttpResponse *r = (NurlHttpResponse*)calloc(1, sizeof(NurlHttpResponse));
     if (!r) return 0;
-    r->err_kind = NURL_HTTP_ERR_OTHER;
-    r->body     = strdup("");
+    r->body = strdup("");
+    /* Pure input validation — an empty/NULL URL is invalid regardless of
+     * which backend (if any) is compiled in. The libcurl NURL path and the
+     * WinHTTP backend both surface this as HttpInvalidUrl before touching
+     * the network; the no-backend stub must agree, or http_request on a
+     * minimal build (e.g. FreeBSD without libcurl) would mis-report an
+     * empty URL as HttpOther. Anything else has no backend → HttpOther. */
+    r->err_kind = (!url || !*url) ? NURL_HTTP_ERR_INVALID
+                                  : NURL_HTTP_ERR_OTHER;
     return (long long)(uintptr_t)r;
 }
 
