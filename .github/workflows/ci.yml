@@ -98,6 +98,11 @@ jobs:
         with:
           release: "14.2"
           usesh: true
+          # The bootstrap self-compile (nurlc compiling nurlc.nu) peaks at
+          # ~9.5 GB RSS, so the VM needs most of the 16 GB runner. KVM on the
+          # GitHub Linux runner keeps the guest near-native speed.
+          mem: 13312
+          cpu: 3
           prepare: |
             pkg install -y bash pkgconf
           run: |
