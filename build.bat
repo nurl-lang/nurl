@@ -144,6 +144,34 @@ if defined WINLIBS (
     >>"%LOG%" echo [info] no vcpkg zlib/zstd - compress.nu / nurlpkg unavailable
 )
 
+REM ── Bundle the FFI libs for a SELF-CONTAINED, relocatable toolchain ───
+REM runtime.winlibs above points at the vcpkg lib dir on THIS machine — fine
+REM for building nurlpkg.exe here, but the shipped runtime.o is compiled with
+REM -DNURL_HAVE_ZLIB so it references deflate/inflate, meaning EVERY user link
+REM needs zlib. If only the build-machine vcpkg path is recorded, every link
+REM on a user box without vcpkg dies with "could not open 'zs.lib'". So copy
+REM the actual .lib files into stdlib\winlib\ and record a relocatable link
+REM fragment ($NURL_LIB$ placeholder) that nurl.bat resolves against the
+REM install prefix at link time. install-toolchain ships stdlib\winlib\
+REM verbatim; the build-time runtime.winlibs stays for build-time consumers
+REM (nurlpkg\build.bat, run_tests.ps1).
+if defined WINLIBS (
+    if not exist stdlib\winlib mkdir stdlib\winlib
+    set "RELOC="
+    if defined ZLIB_LIBNAME if exist "!ZLIB_LIBDIR!\!ZLIB_LIBNAME!.lib" (
+        copy /y "!ZLIB_LIBDIR!\!ZLIB_LIBNAME!.lib" "stdlib\winlib\!ZLIB_LIBNAME!.lib" >nul
+        set "RELOC=!RELOC! -l!ZLIB_LIBNAME!"
+    )
+    if defined ZSTD_LIBNAME if exist "!VCPKG_LIBDIR!\!ZSTD_LIBNAME!.lib" (
+        copy /y "!VCPKG_LIBDIR!\!ZSTD_LIBNAME!.lib" "stdlib\winlib\!ZSTD_LIBNAME!.lib" >nul
+        set "RELOC=!RELOC! -l!ZSTD_LIBNAME!"
+    )
+    > stdlib\winlib\winlibs.reloc echo  -L"$NURL_LIB$"!RELOC!
+    echo [info] bundled FFI libs -^> stdlib\winlib  reloc:!RELOC!
+) else (
+    if exist stdlib\winlib rmdir /s /q stdlib\winlib
+)
+
 REM ── canvas ──────────────────────────────────────────────────
 REM canvas.o is ALWAYS built. When SDL2 dev headers are available we
 REM compile the real SDL2 back-end (-DNURL_HAVE_SDL2); otherwise a

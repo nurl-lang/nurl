@@ -1624,7 +1624,14 @@ $ `stdlib/std/bytes.nu`
     ? == rc 0 {
         // 3. Install the freshly built binary onto $PATH. On Windows an
         //    executable needs the .exe extension to be runnable by name.
-        : String outbin ( string_concat ( string_from pkgdir ) ( string_from `/.nurl-bin` ) )
+        // The build driver names the output `.nurl-bin`, but on Windows
+        // nurl.bat appends `.exe` (EXEFILE=%OUTBASE%.exe) — so the file to
+        // copy is `.nurl-bin.exe` there. Mismatch here silently became
+        // "failed to install binary" on Windows.
+        : String outbin ( string_with_cap 96 )
+        ( string_push_str outbin pkgdir )
+        ( string_push_str outbin `/.nurl-bin` )
+        ? win { ( string_push_str outbin `.exe` ) } {}
         : String dest ( string_with_cap 96 )
         ( string_push_str dest ( string_data bindir ) )
         ( string_push_char dest 47 )
