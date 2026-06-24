@@ -30,7 +30,7 @@ $ `stdlib/std/hkdf.nu`
 $ `stdlib/std/x25519.nu`
 $ `stdlib/std/chacha20poly1305.nu`
 $ `stdlib/std/aes_gcm.nu`
-$ `src/verify.nu`
+$ `verify.nu`
 
 & `libc` @ nurl_tcp_connect s host i port → i
 
