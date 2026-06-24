@@ -108,7 +108,9 @@ PQ_LIBS=$(feature_libs runtime.pq        libpq   "-lpq")
 ZLIB_LIBS=$(feature_libs runtime.z       zlib    "-lz")
 ZSTD_LIBS=$(feature_libs runtime.zstd    libzstd "-lzstd")
 
-LINK_LIBS="$(printf '%s' "-lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS" | tr -s ' ' | sed 's/ *$//')"
+DL_LIB=""
+case "$(uname -s)" in Linux) DL_LIB="-ldl" ;; esac
+LINK_LIBS="$(printf '%s' "-lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS" | tr -s ' ' | sed 's/ *$//')"
 
 ENABLE_HTTP_TESTS="${NURL_HTTP_TESTS:-0}"
 ENABLE_NET_TESTS="${NURL_NET_TESTS:-0}"
