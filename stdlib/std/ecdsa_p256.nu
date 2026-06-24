@@ -217,6 +217,62 @@ $ `stdlib/std/bigint.nu`
     ^ x
 }
 
+// Affine y-coordinate of a Jacobian point: Y / Z^3 mod p.
+@ __jaffine_y Jac q BigInt p → BigInt {
+    : BigInt zsq ( __fsqr . q z p )
+    : BigInt zcb ( __fmul zsq . q z p )
+    : BigInt zinv ( __finv zcb p )
+    : BigInt y ( __fmul . q y zinv p )
+    ( bigint_free zsq )
+    ( bigint_free zcb )
+    ( bigint_free zinv )
+    ^ y
+}
+
+// ── ECDHE over NIST P-256 (secp256r1) ─────────────────────────────
+// The TLS 1.3 secp256r1 group (RFC 8446 §4.2.8.2 / RFC 8422): the
+// public key is an uncompressed point 0x04 || X(32) || Y(32), and the
+// shared secret is the 32-byte big-endian X of scalar·peer. `scalar` is
+// the 32-byte ephemeral private key. Reuses the curve arithmetic above.
+
+// Private scalar → 65-byte uncompressed public point.
+@ p256_ecdh_keygen ( Vec u ) scalar → ( Vec u ) {
+    : BigInt p ( __p256_p )
+    : Jac G @ Jac { ( __p256_gx ) ( __p256_gy ) ( bigint_from_i 1 ) F }
+    : Jac Q ( __jmul scalar G p )
+    : BigInt x ( __jaffine_x Q p )
+    : BigInt y ( __jaffine_y Q p )
+    : ( Vec u ) xb ( bigint_to_bytes_be x 32 )
+    : ( Vec u ) yb ( bigint_to_bytes_be y 32 )
+    : ( Vec u ) out ( vec_with_cap [u] 65 )
+    ( vec_push [u] out # u 4 )
+    : ~ i k 0
+    ~ < k 32 { ( vec_push [u] out ?? ( vec_get [u] xb k ) { T b → b F _ → # u 0 } ) = k + k 1 }
+    = k 0
+    ~ < k 32 { ( vec_push [u] out ?? ( vec_get [u] yb k ) { T b → b F _ → # u 0 } ) = k + k 1 }
+    ( bigint_free p ) ( __jfree G ) ( __jfree Q )
+    ( bigint_free x ) ( bigint_free y ) ( vec_free [u] xb ) ( vec_free [u] yb )
+    ^ out
+}
+
+// scalar · peer-point → 32-byte shared X. Returns [] on a malformed peer.
+@ p256_ecdh_shared ( Vec u ) scalar ( Vec u ) peer → ( Vec u ) {
+    ? != ( vec_len [u] peer ) 65 { ^ ( vec_new [u] ) } {}
+    ? != ?? ( vec_get [u] peer 0 ) { T x → # i x F _ → 0 } 4 { ^ ( vec_new [u] ) } {}
+    : ( Vec u ) qxb ( bytes_slice peer 1 33 )
+    : ( Vec u ) qyb ( bytes_slice peer 33 65 )
+    : BigInt qx ( bigint_from_bytes_be qxb )
+    : BigInt qy ( bigint_from_bytes_be qyb )
+    : BigInt p ( __p256_p )
+    : Jac Q @ Jac { qx qy ( bigint_from_i 1 ) F }
+    : Jac R ( __jmul scalar Q p )
+    : BigInt rx ( __jaffine_x R p )
+    : ( Vec u ) out ( bigint_to_bytes_be rx 32 )
+    ( vec_free [u] qxb ) ( vec_free [u] qyb )
+    ( bigint_free p ) ( __jfree Q ) ( __jfree R ) ( bigint_free rx )
+    ^ out
+}
+
 // ── verify ────────────────────────────────────────────────────────
 // Both NIST P-256 and P-384 use a = -3, so the Jacobian point ops above
 // are curve-independent; this core takes the curve constants and the

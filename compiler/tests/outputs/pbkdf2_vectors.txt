@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+c1: PASS
+c2: PASS
+c4096: PASS
+c2_dk40: PASS
+pbkdf2: all vectors PASS

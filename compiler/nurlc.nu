@@ -14231,9 +14231,20 @@
     // redefinition of function" error, so skip the emit — the symbol is
     // still registered above so callers resolve correctly.
     : b is_prelude_cfn | | | ( seq fname `malloc` ) ( seq fname `free` ) ( seq fname `puts` ) ( seq fname `printf` )
-    ? is_prelude_cfn
+    // Dedupe `declare`s by symbol name across the whole compilation: two
+    // imported modules may legitimately declare the same libc/runtime
+    // extern (e.g. `nurl_rand_fill` in both std/random.nu and tls.nu), and
+    // re-emitting an identical `declare` makes LLVM reject the module with
+    // "invalid redefinition of function". The symbol is still registered
+    // above (the `fname` / `__ffi` entries) so callers in every file
+    // resolve correctly — only the duplicate IR line is suppressed. This
+    // generalises the prelude-symbol skip.
+    : s emitkey ( nurl_str_cat fname `__ffi_emitted` )
+    : b already != 0 ( nurl_str_len ( nurl_sym_get syms emitkey ) )
+    ? | is_prelude_cfn already
     {}
-    { ( nurl_print `declare ` ) ( nurl_print ret_ty )
+    { ( nurl_sym_def syms emitkey `1` )
+        ( nurl_print `declare ` ) ( nurl_print ret_ty )
         ( nurl_print ` @` ) ( nurl_print fname )
         ( nurl_print `(` ) ( nurl_print params_str ) ( nurl_print `)\n\n` )
     }
