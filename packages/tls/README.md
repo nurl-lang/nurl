@@ -1,66 +1,73 @@
 # tls — a pure-NURL TLS 1.3 client
 
 A TLS 1.3 client (RFC 8446) written entirely in NURL, with **no OpenSSL
-and no FFI beyond the libc TCP socket**. Every cryptographic primitive in
-the handshake and record layer is implemented from scratch in pure NURL,
-so an encrypted connection works on a machine that has nothing installed
-— Linux, macOS, the BSDs, Windows.
+and no FFI beyond the libc TCP socket**. Every cryptographic primitive —
+the handshake, the record layer, **and full certificate verification** —
+is implemented from scratch in pure NURL, so an authenticated, encrypted
+connection works on a machine that has nothing installed: Linux, macOS,
+the BSDs, Windows.
 
-It speaks the `TLS_CHACHA20_POLY1305_SHA256` cipher suite with the X25519
-key-exchange group, which is accepted by essentially every modern TLS 1.3
-server (OpenSSL, BoringSSL, nginx, and the large CDNs).
+It speaks both the `TLS_AES_128_GCM_SHA256` and
+`TLS_CHACHA20_POLY1305_SHA256` cipher suites with the X25519 key-exchange
+group — between them accepted by essentially every modern TLS 1.3 server
+(OpenSSL, BoringSSL, nginx, and the big CDNs).
 
 ## What's implemented
 
 * **Key exchange** — X25519 (RFC 7748), constant-time Montgomery ladder.
-* **Record protection** — ChaCha20-Poly1305 AEAD (RFC 8439).
+* **Record protection** — ChaCha20-Poly1305 AEAD (RFC 8439) and
+  AES-128-GCM (NIST SP 800-38D), negotiated per the server's choice.
 * **Key schedule** — HKDF-Extract/Expand + HKDF-Expand-Label / Derive-Secret
   (RFC 5869, RFC 8446 §7.1) over pure HMAC-SHA-256.
 * **Handshake** — ClientHello (SNI, supported_versions, supported_groups,
   signature_algorithms, key_share), ServerHello parsing, the full
-  handshake/application key schedule, decryption of the server flight
-  (EncryptedExtensions, Certificate, CertificateVerify, Finished),
+  handshake/application key schedule, decryption of the server flight,
   verification of the server Finished MAC, and the client Finished.
-* **Application data** — encrypted `tls_write` / `tls_read`, transparently
-  consuming post-handshake messages (session tickets, key updates).
+* **Certificate verification (verify-full, the default)** —
+  * the server's **CertificateVerify** signature over the handshake
+    transcript;
+  * the presented **certificate chain** (each cert signed by the next);
+  * an **anchor** in the system trust store (matched by trusted
+    subject+key, or by issuer with a verified signature);
+  * the **validity window** (notBefore/notAfter);
+  * **hostname** matching against the leaf SANs (RFC 6125 `*.` wildcards).
+  * Signature algorithms: RSA PKCS#1 v1.5 (SHA-256/384/512), RSA-PSS
+    (SHA-256), ECDSA P-256/SHA-256 and P-384/SHA-384 — the algorithms used
+    by essentially all real RSA and ECDSA certificate chains.
+* **Application data** — encrypted `tls_write` / `tls_read`.
 
-Each of the crypto primitives is validated against its RFC's published
-known-answer vectors (`compiler/tests/x25519_vectors`,
-`chacha20poly1305_vectors`, `hkdf_vectors`), and the end-to-end handshake
-has been verified against both an OpenSSL `s_server` and Cloudflare's
-production endpoint.
-
-## ⚠ Security status — read this
-
-This release establishes an **encrypted** channel but does **not yet
-verify the server's certificate chain**. That means it protects against
-passive eavesdropping but **not** against an active man-in-the-middle —
-it is at the level of `sslmode=require`, not `verify-full`.
-
-The handshake captures the server's leaf certificate
-(`conn.server_cert`, DER) so that a certificate-verification layer
-(ASN.1/X.509 parsing, RSA/ECDSA/Ed25519 signature checking, chain
-building against the system trust store, and hostname matching) can be
-added on top. Until that lands, do not rely on this for authenticating a
-remote server over an untrusted network.
+Every crypto primitive is validated against its RFC's published
+known-answer vectors (`x25519_vectors`, `chacha20poly1305_vectors`,
+`hkdf_vectors`, `rsa_verify`, `ecdsa_p256_verify`, `x509_parse`). The
+end-to-end client has been verified against OpenSSL and, with full
+certificate verification, against live `example.com` and `cloudflare.com`
+(accepted) and self-signed / wrong-hostname cases (rejected).
 
 ## API
 
 ```
-( tls_connect host port server_name ) → !*TlsConn TlsErr
-( tls_write conn ( Vec u ) bytes )     → !v TlsErr
-( tls_read conn max )                  → !( Vec u ) TlsErr   // [] at EOF
-( tls_close conn )                     → v
+( tls_connect host port server_name )          → !*TlsConn TlsErr  // verify-full
+( tls_connect_insecure host port server_name ) → !*TlsConn TlsErr  // no cert check
+( tls_write conn ( Vec u ) bytes )             → !v TlsErr
+( tls_read conn max )                          → !( Vec u ) TlsErr // [] at EOF
+( tls_close conn )                             → v
 ```
+
+`tls_connect` is secure by default: it fails with `TlsBadCert` unless the
+chain verifies. `tls_connect_insecure` skips verification (pinned /
+self-signed / testing only) — encrypted but not authenticated.
+
+## Limitations
+
+* **TLS 1.3 only** — no TLS 1.2 fallback (so TLS-1.2-only servers are out
+  of reach).
+* No client certificates, no session resumption / 0-RTT, no OCSP / CRL
+  revocation checking. Ed25519 and P-521 certificate signatures are not
+  yet verified (rare in practice).
 
 ## Demo
 
-`src/https_get.nu` is a minimal HTTPS client:
-
 ```
 ./nurl.sh packages/tls/src/https_get.nu https_get
-./https_get cloudflare.com 443 /
+./https_get example.com 443 /
 ```
-
-It completes the TLS 1.3 handshake and prints the (decrypted) HTTP
-response.

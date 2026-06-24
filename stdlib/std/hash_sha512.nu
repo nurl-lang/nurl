@@ -194,8 +194,6 @@ $ `stdlib/std/bytes.nu`
 // ── Public entry — bytes-in, 64-byte digest out. ──────────────────
 
 @ sha512_pure ( Vec u ) data → ( Vec u ) {
-    : ( Vec u64 ) K ( __sha512_K )
-
     : ( Vec u64 ) state ( vec_with_cap [u64] 8 )
     ( vec_push [u64] state # u64 7640891576956012808 )
     ( vec_push [u64] state # u64 -4942790177534073029 )
@@ -205,7 +203,27 @@ $ `stdlib/std/bytes.nu`
     ( vec_push [u64] state # u64 -7276294671716946913 )
     ( vec_push [u64] state # u64 2270897969802886507 )
     ( vec_push [u64] state # u64 6620516959819538809 )
+    ^ ( __sha512_finish data state 64 )
+}
 
+// SHA-384 — SHA-512 with a distinct IV, truncated to 48 bytes.
+@ sha384_pure ( Vec u ) data → ( Vec u ) {
+    : ( Vec u64 ) state ( vec_with_cap [u64] 8 )
+    ( vec_push [u64] state # u64 -3766243637369397544 )
+    ( vec_push [u64] state # u64 7105036623409894663 )
+    ( vec_push [u64] state # u64 -7973340178411365097 )
+    ( vec_push [u64] state # u64 1526699215303891257 )
+    ( vec_push [u64] state # u64 7436329637833083697 )
+    ( vec_push [u64] state # u64 -8163818279084223215 )
+    ( vec_push [u64] state # u64 -2662702644619276377 )
+    ( vec_push [u64] state # u64 5167115440072839076 )
+    ^ ( __sha512_finish data state 48 )
+}
+
+// Shared SHA-512/384 finaliser: pad, transform, and serialise the state
+// to `outlen` bytes. Consumes `state`.
+@ __sha512_finish ( Vec u ) data ( Vec u64 ) state i outlen → ( Vec u ) {
+    : ( Vec u64 ) K ( __sha512_K )
     : i n ( vec_len [u] data )
 
     // Process complete 128-byte blocks straight from the input.
@@ -278,6 +296,7 @@ $ `stdlib/std/bytes.nu`
 
     ( vec_free [u64] state )
     ( vec_free [u64] K )
+    : b _t ( vec_set_len [u] out outlen )
     ^ out
 }
 
