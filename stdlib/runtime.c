@@ -2897,41 +2897,160 @@ long long nurl_rand_fill(unsigned char *buf, long long n) {
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
-/* SSL I/O behind a lazily-installed vtable.
+/* OpenSSL is resolved entirely at runtime via dlopen/dlsym, so runtime.o
+ * carries ZERO link-time references to libssl/libcrypto. Every NURL program
+ * therefore links libc-only regardless of whether the linker dead-strips
+ * the unused TLS code — LTO dead-code elimination behaves differently
+ * across clang/lld and the bundled-zig cross builds (relying on it left
+ * undefined SSL_* symbols when building, e.g., the pure-NURL `tls` package
+ * on arm64, because importing net.nu pulls in the runtime's TLS server
+ * functions and they were not stripped). libssl is loaded lazily the first
+ * time a TLS connection is created; if it is absent the TLS entry points
+ * fail cleanly with TLS_CTX_INIT instead of the whole program failing to
+ * link or run.
  *
- * nurl_tcp_read / nurl_tcp_write / nurl__tcp_destroy are on every plain-TCP
- * program's hot path, so calling SSL_read/SSL_write/SSL_free directly there
- * planted an undefined libssl symbol in *every* networked binary — even a
- * pure-NURL-TLS client or a program that only ever speaks plaintext TCP.
- * (LTO already drops all the TLS *setup* code when it's unused; these hot-
- * path calls were the last thing pinning libssl.) Routing them through
- * function pointers — populated only when an OpenSSL SSL/SSL_CTX is actually
- * created — means the SSL_* references live solely inside nurl__ssl_install,
- * which is reachable only from the (DCE-able) TLS-setup paths. A program
- * that never opens an OpenSSL connection links libc-only; one that does
- * installs the vtable before any read/write/close touches `h->ssl`.
- *
- * The pointers are `volatile` for a subtle but essential reason: under full
- * LTO the linker can see each pointer is only ever assigned one constant
- * (e.g. &SSL_read) and would constant-fold that address straight back into
- * the live readers, re-pinning libssl even though nurl__ssl_install is dead-
- * stripped. `volatile` forbids that propagation, so the sole SSL_* reference
- * stays inside the DCE-able install routine and a non-OpenSSL binary links
- * libc-only. The extra load is on the cold `h->ssl` branch only. */
-static int  (*volatile nurl__ssl_read_fn)(SSL *, void *, int);
-static int  (*volatile nurl__ssl_write_fn)(SSL *, const void *, int);
-static int  (*volatile nurl__ssl_get_error_fn)(const SSL *, int);
-static int  (*volatile nurl__ssl_shutdown_fn)(SSL *);
-static void (*volatile nurl__ssl_free_fn)(SSL *);
-static void (*volatile nurl__ssl_ctx_free_fn)(SSL_CTX *);
-static void nurl__ssl_install(void) {
-    nurl__ssl_read_fn      = SSL_read;
-    nurl__ssl_write_fn     = SSL_write;
-    nurl__ssl_get_error_fn = SSL_get_error;
-    nurl__ssl_shutdown_fn  = SSL_shutdown;
-    nurl__ssl_free_fn      = SSL_free;
-    nurl__ssl_ctx_free_fn  = SSL_CTX_free;
+ * Each pointer is typed with __typeof__ of the real prototype declared by
+ * the headers above, so the signatures are always exact — including the
+ * functions reached through OpenSSL's own macros (SSL_ctrl, SSL_CTX_ctrl,
+ * SSL_CTX_callback_ctrl, SSL_get1_peer_certificate, CRYPTO_free). The
+ * #define block after the loader redirects each name to its pointer, so the
+ * call sites below stay byte-for-byte unchanged. */
+#include <dlfcn.h>
+
+#define NURL__SSL_PTR(name) static __typeof__(name) *nurl__p_##name = 0;
+NURL__SSL_PTR(SSL_CTX_new)
+NURL__SSL_PTR(SSL_CTX_free)
+NURL__SSL_PTR(SSL_CTX_ctrl)
+NURL__SSL_PTR(SSL_CTX_callback_ctrl)
+NURL__SSL_PTR(SSL_CTX_check_private_key)
+NURL__SSL_PTR(SSL_CTX_load_verify_locations)
+NURL__SSL_PTR(SSL_CTX_set_alpn_select_cb)
+NURL__SSL_PTR(SSL_CTX_set_client_CA_list)
+NURL__SSL_PTR(SSL_CTX_set_default_verify_paths)
+NURL__SSL_PTR(SSL_CTX_set_verify)
+NURL__SSL_PTR(SSL_CTX_use_PrivateKey_file)
+NURL__SSL_PTR(SSL_CTX_use_certificate_chain_file)
+NURL__SSL_PTR(SSL_new)
+NURL__SSL_PTR(SSL_free)
+NURL__SSL_PTR(SSL_ctrl)
+NURL__SSL_PTR(SSL_accept)
+NURL__SSL_PTR(SSL_connect)
+NURL__SSL_PTR(SSL_get0_alpn_selected)
+NURL__SSL_PTR(SSL_get1_peer_certificate)
+NURL__SSL_PTR(SSL_get_error)
+NURL__SSL_PTR(SSL_get_servername)
+NURL__SSL_PTR(SSL_load_client_CA_file)
+NURL__SSL_PTR(SSL_read)
+NURL__SSL_PTR(SSL_write)
+NURL__SSL_PTR(SSL_select_next_proto)
+NURL__SSL_PTR(SSL_set1_host)
+NURL__SSL_PTR(SSL_set_SSL_CTX)
+NURL__SSL_PTR(SSL_set_alpn_protos)
+NURL__SSL_PTR(SSL_set_fd)
+NURL__SSL_PTR(SSL_shutdown)
+NURL__SSL_PTR(TLS_client_method)
+NURL__SSL_PTR(TLS_server_method)
+NURL__SSL_PTR(X509_NAME_oneline)
+NURL__SSL_PTR(X509_free)
+NURL__SSL_PTR(X509_get_subject_name)
+NURL__SSL_PTR(CRYPTO_free)
+#undef NURL__SSL_PTR
+
+static int nurl__ssl_ready = 0;  /* 0 unloaded, 1 loaded, -1 unavailable */
+
+static int nurl__ssl_load(void) {
+    if (nurl__ssl_ready) return nurl__ssl_ready > 0;
+    void *s = dlopen("libssl.so.3", RTLD_NOW | RTLD_GLOBAL);
+    if (!s) s = dlopen("libssl.so", RTLD_NOW | RTLD_GLOBAL);
+    if (!s) s = dlopen("libssl.so.1.1", RTLD_NOW | RTLD_GLOBAL);
+    if (!s) { nurl__ssl_ready = -1; return 0; }
+    void *c = dlopen("libcrypto.so.3", RTLD_NOW | RTLD_GLOBAL);
+    if (!c) c = dlopen("libcrypto.so", RTLD_NOW | RTLD_GLOBAL);
+    if (!c) c = dlopen("libcrypto.so.1.1", RTLD_NOW | RTLD_GLOBAL);
+    if (!c) c = s;  /* libssl pulls libcrypto in; RTLD_GLOBAL exposes it */
+#define NURL__SSL_SYM(name, lib) \
+    nurl__p_##name = (__typeof__(nurl__p_##name))dlsym(lib, #name); \
+    if (!nurl__p_##name) { nurl__ssl_ready = -1; return 0; }
+    NURL__SSL_SYM(SSL_CTX_new, s)
+    NURL__SSL_SYM(SSL_CTX_free, s)
+    NURL__SSL_SYM(SSL_CTX_ctrl, s)
+    NURL__SSL_SYM(SSL_CTX_callback_ctrl, s)
+    NURL__SSL_SYM(SSL_CTX_check_private_key, s)
+    NURL__SSL_SYM(SSL_CTX_load_verify_locations, s)
+    NURL__SSL_SYM(SSL_CTX_set_alpn_select_cb, s)
+    NURL__SSL_SYM(SSL_CTX_set_client_CA_list, s)
+    NURL__SSL_SYM(SSL_CTX_set_default_verify_paths, s)
+    NURL__SSL_SYM(SSL_CTX_set_verify, s)
+    NURL__SSL_SYM(SSL_CTX_use_PrivateKey_file, s)
+    NURL__SSL_SYM(SSL_CTX_use_certificate_chain_file, s)
+    NURL__SSL_SYM(SSL_new, s)
+    NURL__SSL_SYM(SSL_free, s)
+    NURL__SSL_SYM(SSL_ctrl, s)
+    NURL__SSL_SYM(SSL_accept, s)
+    NURL__SSL_SYM(SSL_connect, s)
+    NURL__SSL_SYM(SSL_get0_alpn_selected, s)
+    NURL__SSL_SYM(SSL_get1_peer_certificate, s)
+    NURL__SSL_SYM(SSL_get_error, s)
+    NURL__SSL_SYM(SSL_get_servername, s)
+    NURL__SSL_SYM(SSL_load_client_CA_file, s)
+    NURL__SSL_SYM(SSL_read, s)
+    NURL__SSL_SYM(SSL_write, s)
+    NURL__SSL_SYM(SSL_select_next_proto, s)
+    NURL__SSL_SYM(SSL_set1_host, s)
+    NURL__SSL_SYM(SSL_set_SSL_CTX, s)
+    NURL__SSL_SYM(SSL_set_alpn_protos, s)
+    NURL__SSL_SYM(SSL_set_fd, s)
+    NURL__SSL_SYM(SSL_shutdown, s)
+    NURL__SSL_SYM(TLS_client_method, s)
+    NURL__SSL_SYM(TLS_server_method, s)
+    NURL__SSL_SYM(X509_NAME_oneline, c)
+    NURL__SSL_SYM(X509_free, c)
+    NURL__SSL_SYM(X509_get_subject_name, c)
+    NURL__SSL_SYM(CRYPTO_free, c)
+#undef NURL__SSL_SYM
+    nurl__ssl_ready = 1;
+    return 1;
 }
+
+/* Redirect every OpenSSL name to its dlopen'd pointer. Names reached only
+ * through OpenSSL macros (SSL_set_tlsext_host_name → SSL_ctrl, etc.) work
+ * because the underlying symbol they expand to is redirected here. */
+#define SSL_CTX_new                       nurl__p_SSL_CTX_new
+#define SSL_CTX_free                      nurl__p_SSL_CTX_free
+#define SSL_CTX_ctrl                      nurl__p_SSL_CTX_ctrl
+#define SSL_CTX_callback_ctrl             nurl__p_SSL_CTX_callback_ctrl
+#define SSL_CTX_check_private_key         nurl__p_SSL_CTX_check_private_key
+#define SSL_CTX_load_verify_locations     nurl__p_SSL_CTX_load_verify_locations
+#define SSL_CTX_set_alpn_select_cb        nurl__p_SSL_CTX_set_alpn_select_cb
+#define SSL_CTX_set_client_CA_list        nurl__p_SSL_CTX_set_client_CA_list
+#define SSL_CTX_set_default_verify_paths  nurl__p_SSL_CTX_set_default_verify_paths
+#define SSL_CTX_set_verify                nurl__p_SSL_CTX_set_verify
+#define SSL_CTX_use_PrivateKey_file       nurl__p_SSL_CTX_use_PrivateKey_file
+#define SSL_CTX_use_certificate_chain_file nurl__p_SSL_CTX_use_certificate_chain_file
+#define SSL_new                           nurl__p_SSL_new
+#define SSL_free                          nurl__p_SSL_free
+#define SSL_ctrl                          nurl__p_SSL_ctrl
+#define SSL_accept                        nurl__p_SSL_accept
+#define SSL_connect                       nurl__p_SSL_connect
+#define SSL_get0_alpn_selected            nurl__p_SSL_get0_alpn_selected
+#define SSL_get1_peer_certificate         nurl__p_SSL_get1_peer_certificate
+#define SSL_get_error                     nurl__p_SSL_get_error
+#define SSL_get_servername                nurl__p_SSL_get_servername
+#define SSL_load_client_CA_file           nurl__p_SSL_load_client_CA_file
+#define SSL_read                          nurl__p_SSL_read
+#define SSL_write                         nurl__p_SSL_write
+#define SSL_select_next_proto             nurl__p_SSL_select_next_proto
+#define SSL_set1_host                     nurl__p_SSL_set1_host
+#define SSL_set_SSL_CTX                   nurl__p_SSL_set_SSL_CTX
+#define SSL_set_alpn_protos               nurl__p_SSL_set_alpn_protos
+#define SSL_set_fd                        nurl__p_SSL_set_fd
+#define SSL_shutdown                      nurl__p_SSL_shutdown
+#define TLS_client_method                 nurl__p_TLS_client_method
+#define TLS_server_method                 nurl__p_TLS_server_method
+#define X509_NAME_oneline                 nurl__p_X509_NAME_oneline
+#define X509_free                         nurl__p_X509_free
+#define X509_get_subject_name             nurl__p_X509_get_subject_name
+#define CRYPTO_free                       nurl__p_CRYPTO_free
 #endif
 
 #define NURL_TCP_KIND_LISTENER  0
@@ -3512,8 +3631,7 @@ long long nurl_tcp_listen_tls(const char *host, long long port,
     long long lh = nurl_tcp_listen(host, port, backlog);
     NurlTcp *h = (NurlTcp*)(uintptr_t)lh;
     if (!h || h->err_kind != NURL_NET_ERR_OK) return lh;
-    SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
-    nurl__ssl_install();
+    SSL_CTX *ctx = nurl__ssl_load() ? SSL_CTX_new(TLS_server_method()) : NULL;
     if (!ctx) {
         nurl_close_sock(h->fd);
         h->fd = NURL_INVALID_SOCK;
@@ -3565,8 +3683,7 @@ long long nurl_tcp_connect_tls(const char *host, long long port,
     NurlTcp *h = (NurlTcp*)(uintptr_t)ch;
     if (!h || h->err_kind != NURL_NET_ERR_OK) return ch;
 
-    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
-    nurl__ssl_install();
+    SSL_CTX *ctx = nurl__ssl_load() ? SSL_CTX_new(TLS_client_method()) : NULL;
     if (!ctx) {
         nurl_close_sock(h->fd); h->fd = NURL_INVALID_SOCK;
         h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
@@ -3635,8 +3752,7 @@ long long nurl_tcp_starttls(long long conn, const char *host,
         return conn;
     }
 
-    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
-    nurl__ssl_install();
+    SSL_CTX *ctx = nurl__ssl_load() ? SSL_CTX_new(TLS_client_method()) : NULL;
     if (!ctx) {
         nurl_close_sock(h->fd); h->fd = NURL_INVALID_SOCK;
         h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
@@ -3701,8 +3817,7 @@ long long nurl_tcp_connect_tls_alpn(const char *host, long long port,
     NurlTcp *h = (NurlTcp*)(uintptr_t)ch;
     if (!h || h->err_kind != NURL_NET_ERR_OK) return ch;
 
-    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
-    nurl__ssl_install();
+    SSL_CTX *ctx = nurl__ssl_load() ? SSL_CTX_new(TLS_client_method()) : NULL;
     if (!ctx) {
         nurl_close_sock(h->fd); h->fd = NURL_INVALID_SOCK;
         h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
@@ -3794,8 +3909,7 @@ long long nurl_tcp_listen_tls_alpn(const char *host, long long port,
 #ifdef NURL_HAVE_OPENSSL
 static SSL_CTX *nurl__tls_build_ctx(NurlTcp *h, const char *cert_path,
                                     const char *key_path) {
-    SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
-    nurl__ssl_install();
+    SSL_CTX *ctx = nurl__ssl_load() ? SSL_CTX_new(TLS_server_method()) : NULL;
     if (!ctx) {
         if (h) h->err_kind = NURL_NET_ERR_TLS_CTX_INIT;
         return NULL;
@@ -4030,9 +4144,9 @@ long long nurl_tcp_read(long long handle, const char *buf, long long n) {
 #ifdef NURL_HAVE_OPENSSL
     if (h->ssl) {
         int max = n > 0x40000000 ? 0x40000000 : (int)n;
-        int rd = nurl__ssl_read_fn(h->ssl, (void*)buf, max);
+        int rd = SSL_read(h->ssl, (void*)buf, max);
         if (rd > 0) { h->err_kind = NURL_NET_ERR_OK; return (long long)rd; }
-        int err = nurl__ssl_get_error_fn(h->ssl, rd);
+        int err = SSL_get_error(h->ssl, rd);
         if (err == SSL_ERROR_ZERO_RETURN) {
             /* clean TLS close_notify */
             return 0;
@@ -4088,7 +4202,7 @@ long long nurl_tcp_write(long long handle, const char *buf, long long n) {
         while (total < n) {
             long long want = n - total;
             int chunk = (int)(want > 0x40000000 ? 0x40000000 : want);
-            int wn = nurl__ssl_write_fn(h->ssl, buf + total, chunk);
+            int wn = SSL_write(h->ssl, buf + total, chunk);
             if (wn <= 0) {
                 h->err_kind = NURL_NET_ERR_WRITE;
                 return -1;
@@ -4165,12 +4279,12 @@ static void nurl__tcp_destroy(NurlTcp *h) {
     /* Best-effort one-way SSL_shutdown (skip bidirectional close — keeps
      * workers fast). SSL_free does not close the underlying fd. */
     if (h->ssl) {
-        nurl__ssl_shutdown_fn(h->ssl);
-        nurl__ssl_free_fn(h->ssl);
+        SSL_shutdown(h->ssl);
+        SSL_free(h->ssl);
         h->ssl = NULL;
     }
     if (h->ssl_ctx) {
-        nurl__ssl_ctx_free_fn(h->ssl_ctx);
+        SSL_CTX_free(h->ssl_ctx);
         h->ssl_ctx = NULL;
     }
     free(h->alpn_wire);
@@ -4179,7 +4293,7 @@ static void nurl__tcp_destroy(NurlTcp *h) {
     if (h->sni_entries) {
         for (size_t i = 0; i < h->sni_count; i++) {
             free(h->sni_entries[i].hostname);
-            if (h->sni_entries[i].ctx) nurl__ssl_ctx_free_fn(h->sni_entries[i].ctx);
+            if (h->sni_entries[i].ctx) SSL_CTX_free(h->sni_entries[i].ctx);
         }
         free(h->sni_entries);
         h->sni_entries = NULL;

@@ -350,13 +350,20 @@ step "clean"         rm -f build/nurlc_lastgood.bin \
 # repo. clang picks the host triple automatically; the IR carries
 # no `target triple` directive so the same .ll boots on
 # Linux / macOS / Windows.
-step "stage0 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed compiler/nurlc_lastgood.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_lastgood.bin
+# dlopen/dlsym (runtime TLS resolves OpenSSL at runtime via dlopen) live in
+# libdl on the glibc < 2.34 floor; link -ldl on Linux only (FreeBSD/macOS
+# keep them in libc and have no separate libdl). --as-needed on the link
+# drops it when unreferenced.
+DL_LIB=""
+case "$(uname -s)" in Linux) DL_LIB="-ldl" ;; esac
+
+step "stage0 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed compiler/nurlc_lastgood.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_lastgood.bin
 
 step "stage1 ir"     bash -c './build/nurlc_lastgood.bin compiler/nurlc.nu > build/nurlc_self.ll'
-step "stage1 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed build/nurlc_self.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_self
+step "stage1 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed build/nurlc_self.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_self
 
 step "stage2 ir"     bash -c './build/nurlc_self compiler/nurlc.nu > build/nurlc_self2.ll'
-step "stage2 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed build/nurlc_self2.ll stdlib/runtime.o -lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_self2
+step "stage2 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed build/nurlc_self2.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_self2
 
 # Fixed-point: nurlc_self must match nurlc_self2.
 if ! cmp -s build/nurlc_self.ll build/nurlc_self2.ll; then

@@ -246,6 +246,17 @@ fi
 # canvas_* FFI. Otherwise a plain `clang runtime.o` is enough.
 EXTRA_OBJS=""
 EXTRA_LIBS=""
+
+# Runtime TLS resolves OpenSSL at runtime via dlopen/dlsym, so runtime.o has
+# no link-time libssl reference. dlopen/dlsym live in libdl on the glibc
+# (< 2.34) floor the portable build targets — so on Linux we link -ldl
+# (`--as-needed` drops it on newer glibc where they fold into libc, and when
+# a program never touches TLS). FreeBSD/macOS keep dlopen in libc and ship no
+# separate libdl, so -ldl is omitted there.
+DL_LIB=""
+case "$(uname -s)" in
+    Linux) DL_LIB="-ldl" ;;
+esac
 if grep -qE '@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mouse_btn)\b' "$LLFILE"; then
     CANVAS_O="$SCRIPT_DIR/stdlib/canvas.o"
     if [ ! -f "$CANVAS_O" ]; then
@@ -394,7 +405,7 @@ echo "[2/2] $LLFILE → $OUTBASE  ($OPT${LTO_FLAG:+ $LTO_FLAG}${DEBUG_FLAGS:+ $D
 # because the build machine had them. Positional: it must precede the
 # `-l` libraries to govern them.
 # shellcheck disable=SC2086
-cc_run $OPT $LTO_FLAG -Wl,--as-needed $OPAQUE_FLAGS $DEBUG_FLAGS $SAN_LINK_FLAGS "$LLFILE" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $EXTRA_LIBS
+cc_run $OPT $LTO_FLAG -Wl,--as-needed $OPAQUE_FLAGS $DEBUG_FLAGS $SAN_LINK_FLAGS "$LLFILE" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
 
 echo ""
 echo "Done: $OUTBASE"
