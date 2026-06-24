@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+valid: PASS
+wronghash: PASS
+swapped_rs: PASS
+ecdsa-p256: all checks PASS
