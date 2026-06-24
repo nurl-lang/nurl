@@ -68,7 +68,11 @@ self-signed / testing only) — encrypted but not authenticated.
 
 ## Demo
 
+Built like any registry package, from the package directory (its own
+modules are imported as `src/…`, the stdlib via `$NURL_STDLIB`):
+
 ```
-./nurl.sh packages/tls/src/https_get.nu https_get
+cd packages/tls
+nurlc src/https_get.nu > https_get.ll && cc -O2 -flto https_get.ll "$NURL_STDLIB/stdlib/runtime.o" -lm -lpthread -lssl -lcrypto -o https_get
 ./https_get example.com 443 /
 ```

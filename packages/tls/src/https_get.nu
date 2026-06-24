@@ -5,7 +5,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/env.nu`
-$ `packages/tls/src/tls.nu`
+$ `src/tls.nu`
 
 @ arg ( Vec String ) a i idx s dflt → s {
     ?? ( vec_get [String] a idx ) { T v → ^ ( string_data v ) F _ → ^ dflt }
