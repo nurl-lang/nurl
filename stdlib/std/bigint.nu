@@ -518,3 +518,83 @@ $ `stdlib/core/vec.nu`
     : b fneg & neg > ( vec_len [i] mag ) 0
     ^ @ !BigInt ParseErr { T @ BigInt { fneg mag } }
 }
+
+// ── byte I/O + modular exponentiation (RSA / DH support) ──────────
+// These let BigInt carry cryptographic integers (moduli, signatures)
+// to and from their big-endian wire form and do s^e mod n.
+
+// Big-endian bytes → non-negative BigInt.
+@ bigint_from_bytes_be ( Vec u ) b → BigInt {
+    : i n ( vec_len [u] b )
+    : ( Vec i ) limbs ( vec_new [i] )
+    : ~ i i - n 1
+    ~ >= i 0 {
+        : i lo ?? ( vec_get [u] b i ) { T x → # i x F _ → 0 }
+        : ~ i hi 0
+        ? > i 0 { = hi ?? ( vec_get [u] b - i 1 ) { T x → # i x F _ → 0 } } {}
+        ( vec_push [i] limbs | lo << hi 8 )
+        = i - i 2
+    }
+    ( __norm limbs )
+    ^ @ BigInt { F limbs }
+}
+
+// Non-negative BigInt → big-endian bytes, left-padded with zeros to at
+// least `minlen` (use 0 for the minimal encoding). RSA wants the result
+// padded to the modulus byte-length.
+@ bigint_to_bytes_be BigInt x i minlen → ( Vec u ) {
+    : ( Vec i ) limbs . x limbs
+    : i nl ( vec_len [i] limbs )
+    : ( Vec u ) le ( vec_new [u] )
+    : ~ i k 0
+    ~ < k nl {
+        : i v ( __limb limbs k )
+        ( vec_push [u] le # u & v 255 )
+        ( vec_push [u] le # u & >> v 8 255 )
+        = k + k 1
+    }
+    : ~ i len ( vec_len [u] le )
+    ~ & > len 0 == ?? ( vec_get [u] le - len 1 ) { T b → # i b F _ → 0 } 0 { = len - len 1 }
+    : i outlen ? > minlen len minlen len
+    : ( Vec u ) out ( vec_with_cap [u] ? > outlen 0 outlen 1 )
+    : ~ i pad - outlen len
+    ~ > pad 0 { ( vec_push [u] out # u 0 ) = pad - pad 1 }
+    : ~ i j - len 1
+    ~ >= j 0 {
+        ( vec_push [u] out ?? ( vec_get [u] le j ) { T b → b F _ → # u 0 } )
+        = j - j 1
+    }
+    ( vec_free [u] le )
+    ^ out
+}
+
+// base^exp mod m, all non-negative. Square-and-multiply over exp's bits.
+@ bigint_modpow BigInt base BigInt exp BigInt m → BigInt {
+    : ~ BigInt result ( bigint_from_i 1 )
+    : BigInt two ( bigint_from_i 2 )
+    : ~ BigInt b ( bigint_rem base m )
+    : ~ BigInt e ( bigint_clone exp )
+    ~ ! ( bigint_is_zero e ) {
+        : BigInt r ( bigint_rem e two )
+        ? ! ( bigint_is_zero r ) {
+            : BigInt t ( bigint_mul result b )
+            : BigInt t2 ( bigint_rem t m )
+            ( bigint_free result )
+            ( bigint_free t )
+            = result t2
+        } {}
+        ( bigint_free r )
+        : BigInt bb ( bigint_mul b b )
+        : BigInt bb2 ( bigint_rem bb m )
+        ( bigint_free b )
+        ( bigint_free bb )
+        = b bb2
+        : BigInt e2 ( bigint_div e two )
+        ( bigint_free e )
+        = e e2
+    }
+    ( bigint_free b )
+    ( bigint_free e )
+    ( bigint_free two )
+    ^ result
+}

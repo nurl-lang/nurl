@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+pkcs1_valid: PASS
+pkcs1_wronghash: PASS
+pss_valid: PASS
+pss_wronghash: PASS
+crossuse: PASS
+rsa: all checks PASS
