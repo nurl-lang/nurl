@@ -92,3 +92,20 @@ picks it up transparently — swap `tcp_listen` for `tcp_listen_tls`.
 | **ALPN** (RFC 7301) — `tcp_listen_tls_with_alpn`; `tcp_alpn_protocol conn` | Required by HTTP/2-over-TLS (RFC 9113 §3.3). |
 | **Mutual TLS (mTLS)** — `tcp_tls_require_client_cert listener ca_bundle strict?`; `tcp_peer_cert_subject conn` | Strict (handshake fails without a cert) and opportunistic modes. |
 | **Live cert reload** — `tcp_tls_reload listener hostname cert key` | Hot-swaps the SSL_CTX under a per-listener mutex; in-flight reads/writes on the old ctx survive until close. Standard Let's Encrypt-rotation use case. |
+
+### Pure-NURL TLS (no OpenSSL)
+
+The table above is the runtime's `libssl`-backed TLS. There is also a
+**pure-NURL TLS 1.3 client** — the [`tls`](../packages/tls) package — that
+implements the handshake, the record layer and full certificate
+verification from scratch in NURL, with **no OpenSSL and no FFI beyond the
+libc TCP socket**. It negotiates ChaCha20-Poly1305 / AES-128-GCM over
+X25519 or NIST P-256, verifies the chain against the system trust store by
+default, and runs on a host with nothing installed. `tls_attach` upgrades
+an already-connected socket, which is what STARTTLS-style protocols need.
+
+Because of this, the runtime's `libssl` is now an **optional** dependency:
+a program that never calls `tcp_connect_tls` / `tcp_listen_tls` (a
+pure-NURL-TLS client, or plain TCP) links `libc` only. The
+[`psql`](../packages/psql) package builds on the pure-NURL TLS client to
+reach PostgreSQL securely with no libpq and no OpenSSL.

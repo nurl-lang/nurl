@@ -6,6 +6,85 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.17] — 2026-06-24
+
+A complete **pure-NURL cryptography and TLS stack**, and on top of it a
+**TLS client** and a **PostgreSQL client** that need nothing installed on
+the target — no OpenSSL, no libpq. Every primitive is implemented from
+scratch in NURL and validated against its RFC/NIST known-answer vectors;
+the resulting clients link `libc` only. Also ships the `chart`
+data-visualisation package and makes the runtime's `libssl` an optional
+dependency.
+
+### Added
+
+- **`chart` package** — terminal data-visualisation (sparklines, bar
+  charts, histograms, line plots) as both a CLI and a reusable library.
+- **Pure-NURL cryptography** in `stdlib/std/`, each validated against its
+  RFC/NIST known-answer vectors and ASan-clean:
+  - **X25519** key exchange (RFC 7748) — `x25519.nu`.
+  - **ChaCha20-Poly1305** AEAD (RFC 8439) — `chacha20poly1305.nu`.
+  - **HKDF** + TLS 1.3 key-schedule helpers (RFC 5869 / RFC 8446 §7.1) —
+    `hkdf.nu`.
+  - **RSA** signature verification — PKCS#1 v1.5 and PSS — plus bigint
+    `modpow` / `from_bytes_be` / `to_bytes_be` — `rsa.nu`, `bigint.nu`.
+  - **ECDSA** verification on NIST **P-256** and **P-384** — `ecdsa_p256.nu`.
+  - **AES-128-GCM** AEAD (NIST SP 800-38D) — `aes_gcm.nu`.
+  - **X.509 / DER** certificate parser (TBS, signature algorithm, SPKI,
+    validity, SAN, CA flag) with RFC 6125 hostname matching — `x509.nu`.
+  - **PBKDF2-HMAC-SHA-256** (RFC 8018) — `pbkdf2.nu`.
+  - **P-256 ECDH** (`p256_ecdh_keygen` / `p256_ecdh_shared`) — `ecdsa_p256.nu`.
+- **`tls` package — a pure-NURL TLS 1.3 client (RFC 8446) with TLS 1.2
+  fallback.** No OpenSSL and no FFI beyond the libc TCP socket. Negotiates
+  ChaCha20-Poly1305 and AES-128-GCM over **X25519 and NIST P-256** key
+  exchange. **`verify-full` by default**: the CertificateVerify signature,
+  the certificate chain up to the system trust store, the validity window
+  and the hostname are all checked (`TlsBadCert` otherwise). `tls_attach`
+  runs the handshake over an already-connected socket for STARTTLS-style
+  upgrades. Ships a `tlsget` HTTPS CLI. Verified live against example.com,
+  google.com and cloudflare.com.
+- **`psql` package — a pure-NURL PostgreSQL client.** The version-3 wire
+  protocol, authentication (trust / cleartext / MD5 / **SCRAM-SHA-256**)
+  and an optional **TLS** transport over the pure-NURL stack — **no libpq,
+  no OpenSSL**. A secure, authenticated connection works on a host with
+  nothing installed; the produced binary's `NEEDED` is `libc` only.
+  Installable with `nurlpkg install psql`; usable as a library
+  (`pg_connect` / `pg_query`). Verified against a live PostgreSQL 16.
+
+### Changed
+
+- **Importer-relative import resolution.** A `$`-import now resolves
+  relative to the importing file first (then the working directory, then
+  `$NURL_STDLIB`), so a multi-file package can reference its own modules by
+  bare name and build identically standalone, from the monorepo, and as a
+  `deps/<name>` dependency. Purely additive — the self-host bootstrap is
+  byte-identical.
+- **`libssl` is now an optional runtime dependency.** The OpenSSL hot-path
+  symbols (`SSL_read` / `SSL_write` / …) are routed through a
+  lazily-installed, `volatile` function-pointer vtable, so a program that
+  never opens a runtime OpenSSL connection — a pure-NURL-TLS client or a
+  plaintext-TCP program — links `libc` only. (`volatile` is required:
+  without it, full LTO constant-folds the addresses back into the live
+  readers and re-pins `libssl`.) A program that does use runtime TLS
+  re-links `libssl` correctly.
+- **The compiler dedupes FFI `declare`s by symbol name.** Two imported
+  modules may legitimately declare the same libc/runtime extern (e.g.
+  `nurl_rand_fill` in both `std/random.nu` and the `tls` package); the
+  duplicate IR line is now suppressed instead of failing the build with
+  LLVM's "invalid redefinition of function". Generalises the existing
+  prelude-symbol skip; purely additive — only fires when a duplicate would
+  otherwise error, so the bootstrap is byte-identical.
+
+### Fixed
+
+- **Fiber-scheduler use-after-free on yield.** `nurl_fiber_yield` pushed
+  the fiber onto the run queue *before* `swapcontext` returned, so another
+  worker could steal, run and free it while the worker loop still read
+  `f->state`. The push moved out of `nurl_fiber_yield` into the worker
+  loop's runnable branch, after the context is saved. Surfaced
+  intermittently by the sanitized test suite (`async_chan`); 0 failures
+  under stress after the fix.
+
 ## [0.9.16] — 2026-06-23
 
 Makes the Windows toolchain actually usable. v0.9.15 shipped a Windows
