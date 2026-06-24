@@ -5,7 +5,9 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/ecdsa_p256.nu`
+
 @ hx s raw → ( Vec u ) { ?? ( bytes_from_hex raw ) { T v → ^ v F _ → ^ ( vec_new [u] ) } }
+
 @ main → i {
     : ~ i fails 0
     : ( Vec u ) pt ( hx `045b4078962b22f9395b3dde209c6b9eab16bc66fd8731ab3c62278766225a80a81e169229d9b5b3585e5f3bc38b14e99493d85f69c5d03077112f2cdfa8135cde` )
