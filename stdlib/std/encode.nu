@@ -174,6 +174,27 @@ $ `stdlib/core/errors.nu`
 // as JWT segments are unpadded). The decoded bytes may contain 0x00, so
 // the result is a Vec, not a String — read it with the `. p k` indexed
 // load, never nurl_str_get.
+// Standard base64 → owned byte vector. Unlike `b64_decode` (which yields
+// a String) this is NUL-safe: the decoded bytes may contain any value,
+// including 0, so callers that need raw binary (crypto salts, signatures,
+// the SCRAM wire) must use this rather than reading through a String.
+@ b64_decode_vec s str → !( Vec u ) ParseErr {
+    : !String ParseErr r ( b64_decode str )
+    ?? r {
+        T sv → {
+            : i n ( string_len sv )
+            : ( Vec u ) v ( vec_with_cap [u] ? > n 0 n 1 )
+            ? > n 0 {
+                ( nurl_memcpy ( vec_data [u] v ) # *u ( string_data sv ) n )
+                : b _ok ( vec_set_len [u] v n )
+            } {}
+            ( string_free sv )
+            ^ @ !( Vec u ) ParseErr { T v }
+        }
+        F e → { ^ @ !( Vec u ) ParseErr { F e } }
+    }
+}
+
 @ b64_url_decode_vec s str → !( Vec u ) ParseErr {
     : !String ParseErr r ( b64_url_decode str )
     ?? r {
