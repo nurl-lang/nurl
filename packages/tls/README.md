@@ -15,7 +15,9 @@ HTTPS server in use.
 
 ## What's implemented
 
-* **Key exchange** — X25519 (RFC 7748), constant-time Montgomery ladder.
+* **Key exchange** — X25519 (RFC 7748, constant-time Montgomery ladder)
+  and NIST P-256 (secp256r1) ECDHE, negotiated per the server's choice, in
+  both TLS 1.3 and the TLS 1.2 fallback.
 * **Record protection** — ChaCha20-Poly1305 AEAD (RFC 8439) and
   AES-128-GCM (NIST SP 800-38D), negotiated per the server's choice.
 * **Key schedule** — HKDF-Extract/Expand + HKDF-Expand-Label / Derive-Secret
@@ -61,7 +63,8 @@ self-signed / testing only) — encrypted but not authenticated.
 ## Limitations
 
 * TLS 1.3 and 1.2 only (no SSLv3 / TLS 1.0 / 1.1 — long obsolete).
-* ECDHE key exchange over X25519 only (no static-RSA or P-256/P-384 ECDHE).
+* ECDHE key exchange over X25519 and P-256 only (no static-RSA, no P-384
+  ECDHE).
 * No client certificates, no session resumption / 0-RTT, no OCSP / CRL
   revocation checking. Ed25519 and P-521 certificate signatures are not
   yet verified (rare in practice).

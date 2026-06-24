@@ -1077,6 +1077,7 @@ $ `verify.nu`
 
     // ── server flight 1: Certificate, ServerKeyExchange, ServerHelloDone ──
     : ~ ( Vec u ) spub ( vec_new [u] )
+    : ~ i kx_curve 29  // named_curve from ServerKeyExchange: 29 x25519, 23 secp256r1
     : ~ i err 0
     : ~ i done 0
     ~ & == done 0 == err 0 {
@@ -1091,6 +1092,7 @@ $ `verify.nu`
                 } {}
                 ? == t 12 {
                     // ServerKeyExchange: curve_type(1) curve(2) pklen(1) pk sig_scheme(2) siglen(2) sig
+                    = kx_curve ( __rdint msg 5 2 )
                     : i pklen ( __t_bget msg 7 )
                     ( vec_free [u] spub )
                     = spub ( bytes_slice msg 8 + 8 pklen )
@@ -1121,7 +1123,12 @@ $ `verify.nu`
     } {}
 
     // ── ECDHE + master secret ──
-    : ( Vec u ) pms ( x25519 priv spub )
+    // Curve chosen by the server's ServerKeyExchange: secp256r1 (P-256,
+    // 23) or x25519 (29). Stock TLS-1.2 servers (e.g. OpenSSL with the
+    // default ssl_ecdh_curve=prime256v1) pick P-256, so both are handled.
+    : i is_p256 == kx_curve 23
+    : ( Vec u ) ckpub ? is_p256 ( p256_ecdh_keygen . c kx_p256 ) cpub
+    : ( Vec u ) pms ? is_p256 ( p256_ecdh_shared . c kx_p256 spub ) ( x25519 priv spub )
     : ( Vec u ) cs_seed ( vec_new [u] )
     ( bytes_extend_bytes cs_seed random )
     ( bytes_extend_bytes cs_seed srand )
@@ -1130,11 +1137,16 @@ $ `verify.nu`
     ( __tls12_setkeys c master random srand )
 
     // ── ClientKeyExchange (plaintext handshake) ──
-    : ( Vec u ) cke ( vec_with_cap [u] 38 )
+    // body = pubkey_len(1) || pubkey ; handshake length = 1 + len(pubkey)
+    : i cklen ( vec_len [u] ckpub )
+    : ( Vec u ) cke ( vec_with_cap [u] + cklen 5 )
     ( vec_push [u] cke # u 16 )
-    ( __u24 cke 33 )
-    ( vec_push [u] cke # u 32 )
-    ( __cat cke cpub )
+    ( __u24 cke + cklen 1 )
+    ( vec_push [u] cke # u cklen )
+    ( __cat cke ckpub )
+    // ckpub is a fresh P-256 point we own; the x25519 case aliases cpub
+    // (freed with the other handshake scratch later), so only free P-256.
+    ? is_p256 { ( vec_free [u] ckpub ) } {}
     : !v TlsErr ckw ( __send_plain c 22 cke )
     ?? ckw { T _ → {} F _ → {} }
     ( __cat tr cke )
