@@ -31,7 +31,7 @@ $ `stdlib/core/vec.nu`
     ( vec_set [i] v k val )
 }
 
-@ __bget ( Vec u ) v i k → i {
+@ __x_bget ( Vec u ) v i k → i {
     ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ 0 }
 }
 
@@ -116,8 +116,8 @@ $ `stdlib/core/vec.nu`
     : ( Vec i ) o ( __gf_zero )
     : ~ i i 0
     ~ < i 16 {
-        : i lo ( __bget n * 2 i )
-        : i hi ( __bget n + * 2 i 1 )
+        : i lo ( __x_bget n * 2 i )
+        : i hi ( __x_bget n + * 2 i 1 )
         ( __vset o i + lo << hi 8 )
         = i + i 1
     }
@@ -218,9 +218,9 @@ $ `stdlib/core/vec.nu`
 @ __scalarmult ( Vec u ) scalar ( Vec u ) point → ( Vec u ) {
     : ( Vec u ) z ( __zeros_u 32 )
     : ~ i k 0
-    ~ < k 32 { ( __bset z k ( __bget scalar k ) ) = k + k 1 }
-    ( __bset z 31 | & ( __bget scalar 31 ) 127 64 )
-    ( __bset z 0 & ( __bget scalar 0 ) 248 )
+    ~ < k 32 { ( __bset z k ( __x_bget scalar k ) ) = k + k 1 }
+    ( __bset z 31 | & ( __x_bget scalar 31 ) 127 64 )
+    ( __bset z 0 & ( __x_bget scalar 0 ) 248 )
 
     : ( Vec i ) x ( __unpack25519 point )
     : ( Vec i ) a ( __gf_zero )
@@ -235,7 +235,7 @@ $ `stdlib/core/vec.nu`
 
     : ~ i i 254
     ~ >= i 0 {
-        : i r & >> ( __bget z >> i 3 ) & i 7 1
+        : i r & >> ( __x_bget z >> i 3 ) & i 7 1
         ( __sel25519 a b r )
         ( __sel25519 c d r )
         ( __A e a c )

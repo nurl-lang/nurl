@@ -22,7 +22,7 @@
 $ `stdlib/core/vec.nu`
 
 // ── byte / word helpers ───────────────────────────────────────────
-@ __bget ( Vec u ) v i k → i {
+@ __cc_bget ( Vec u ) v i k → i {
     ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ 0 }
 }
 
@@ -35,7 +35,7 @@ $ `stdlib/core/vec.nu`
 
 // 4 little-endian bytes at offset → i (0 .. 2^32-1).
 @ __ld32 ( Vec u ) v i off → i {
-    ^ | | | ( __bget v off ) << ( __bget v + off 1 ) 8 << ( __bget v + off 2 ) 16 << ( __bget v + off 3 ) 24
+    ^ | | | ( __cc_bget v off ) << ( __cc_bget v + off 1 ) 8 << ( __cc_bget v + off 2 ) 16 << ( __cc_bget v + off 3 ) 24
 }
 
 @ __m32 i x → i { ^ & x 4294967295 }
@@ -120,7 +120,7 @@ $ `stdlib/core/vec.nu`
         : ( Vec u ) ks ( chacha20_block key ctr nonce )
         : ~ i j 0
         ~ & < j 64 < + off j n {
-            ( vec_push [u] out # u ^^ ( __bget data + off j ) ( __bget ks j ) )
+            ( vec_push [u] out # u ^^ ( __cc_bget data + off j ) ( __cc_bget ks j ) )
             = j + j 1
         }
         ( vec_free [u] ks )
@@ -160,7 +160,7 @@ $ `stdlib/core/vec.nu`
         : ( Vec u ) b ( vec_with_cap [u] 17 )
         : ~ i j 0
         ~ < j 16 {
-            ? < j blk { ( vec_push [u] b # u ( __bget msg + off j ) ) } { ( vec_push [u] b # u 0 ) }
+            ? < j blk { ( vec_push [u] b # u ( __cc_bget msg + off j ) ) } { ( vec_push [u] b # u 0 ) }
             = j + j 1
         }
         // high bit: 2^128 for a full block, 2^(8*blk) for the final one.
@@ -171,7 +171,7 @@ $ `stdlib/core/vec.nu`
         = h1 + h1 & >> ( __ld32 b 3 ) 2 67108863
         = h2 + h2 & >> ( __ld32 b 6 ) 4 67108863
         = h3 + h3 & >> ( __ld32 b 9 ) 6 67108863
-        = h4 + h4 | >> ( __ld32 b 12 ) 8 << ( __bget b 16 ) 24
+        = h4 + h4 | >> ( __ld32 b 12 ) 8 << ( __cc_bget b 16 ) 24
 
         // d = h * r mod 2^130-5  (schoolbook with the s_i = 5·r_i fold)
         : i d0 + + + + * h0 r0 * h1 s4 * h2 s3 * h3 s2 * h4 s1
@@ -279,7 +279,7 @@ $ `stdlib/core/vec.nu`
     : ( Vec u ) blk ( chacha20_block key 0 nonce )
     : ( Vec u ) otk ( vec_with_cap [u] 32 )
     : ~ i k 0
-    ~ < k 32 { ( vec_push [u] otk # u ( __bget blk k ) ) = k + k 1 }
+    ~ < k 32 { ( vec_push [u] otk # u ( __cc_bget blk k ) ) = k + k 1 }
     ( vec_free [u] blk )
     ^ otk
 }
@@ -303,10 +303,10 @@ $ `stdlib/core/vec.nu`
     : i cl ( vec_len [u] ct )
     : ( Vec u ) m ( vec_with_cap [u] + + al cl 32 )
     : ~ i i 0
-    ~ < i al { ( vec_push [u] m # u ( __bget aad i ) ) = i + i 1 }
+    ~ < i al { ( vec_push [u] m # u ( __cc_bget aad i ) ) = i + i 1 }
     ( __pad16 m al )
     = i 0
-    ~ < i cl { ( vec_push [u] m # u ( __bget ct i ) ) = i + i 1 }
+    ~ < i cl { ( vec_push [u] m # u ( __cc_bget ct i ) ) = i + i 1 }
     ( __pad16 m cl )
     ( __push_le64 m al )
     ( __push_le64 m cl )
@@ -320,7 +320,7 @@ $ `stdlib/core/vec.nu`
     : ( Vec u ) md ( __mac_data aad ct )
     : ( Vec u ) tag ( poly1305_mac otk md )
     : ~ i k 0
-    ~ < k 16 { ( vec_push [u] ct # u ( __bget tag k ) ) = k + k 1 }
+    ~ < k 16 { ( vec_push [u] ct # u ( __cc_bget tag k ) ) = k + k 1 }
     ( vec_free [u] otk )
     ( vec_free [u] md )
     ( vec_free [u] tag )
@@ -332,7 +332,7 @@ $ `stdlib/core/vec.nu`
     : ~ i diff 0
     : ~ i k 0
     ~ < k 16 {
-        = diff | diff ^^ ( __bget ct_and_tag + ctlen k ) ( __bget want k )
+        = diff | diff ^^ ( __cc_bget ct_and_tag + ctlen k ) ( __cc_bget want k )
         = k + k 1
     }
     ^ == diff 0
@@ -346,7 +346,7 @@ $ `stdlib/core/vec.nu`
     : i ctlen - total 16
     : ( Vec u ) ct ( vec_with_cap [u] ? > ctlen 0 ctlen 1 )
     : ~ i k 0
-    ~ < k ctlen { ( vec_push [u] ct # u ( __bget ct_and_tag k ) ) = k + k 1 }
+    ~ < k ctlen { ( vec_push [u] ct # u ( __cc_bget ct_and_tag k ) ) = k + k 1 }
 
     : ( Vec u ) otk ( __poly_key key nonce )
     : ( Vec u ) md ( __mac_data aad ct )

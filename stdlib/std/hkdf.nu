@@ -15,7 +15,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hash_sha256.nu`
 
-@ __bget ( Vec u ) v i k → i {
+@ __hk_bget ( Vec u ) v i k → i {
     ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ 0 }
 }
 
@@ -39,9 +39,9 @@ $ `stdlib/std/hash_sha256.nu`
     ~ < generated length {
         : ( Vec u ) input ( vec_with_cap [u] + + ( vec_len [u] prev ) ( vec_len [u] info ) 1 )
         : ~ i pi 0
-        ~ < pi ( vec_len [u] prev ) { ( vec_push [u] input # u ( __bget prev pi ) ) = pi + pi 1 }
+        ~ < pi ( vec_len [u] prev ) { ( vec_push [u] input # u ( __hk_bget prev pi ) ) = pi + pi 1 }
         : ~ i ii 0
-        ~ < ii ( vec_len [u] info ) { ( vec_push [u] input # u ( __bget info ii ) ) = ii + ii 1 }
+        ~ < ii ( vec_len [u] info ) { ( vec_push [u] input # u ( __hk_bget info ii ) ) = ii + ii 1 }
         ( vec_push [u] input # u & counter 255 )
         : ( Vec u ) t ( hmac_sha256_pure prk input )
         ( vec_free [u] input )
@@ -49,7 +49,7 @@ $ `stdlib/std/hash_sha256.nu`
         = prev t
         : ~ i j 0
         ~ & < j 32 < generated length {
-            ( vec_push [u] out # u ( __bget t j ) )
+            ( vec_push [u] out # u ( __hk_bget t j ) )
             = generated + generated 1
             = j + j 1
         }
@@ -75,7 +75,7 @@ $ `stdlib/std/hash_sha256.nu`
     // opaque context<0..255>
     ( vec_push [u] hl # u & ctxlen 255 )
     : ~ i ci 0
-    ~ < ci ctxlen { ( vec_push [u] hl # u ( __bget context ci ) ) = ci + ci 1 }
+    ~ < ci ctxlen { ( vec_push [u] hl # u ( __hk_bget context ci ) ) = ci + ci 1 }
     : ( Vec u ) okm ( hkdf_expand secret hl length )
     ( vec_free [u] hl )
     ^ okm
