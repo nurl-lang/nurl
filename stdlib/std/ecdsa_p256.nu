@@ -20,10 +20,22 @@ $ `stdlib/std/bigint.nu`
     ( vec_free [u] v )
     ^ r
 }
+
 @ __p256_p → BigInt { ^ ( __hx `ffffffff00000001000000000000000000000000ffffffffffffffffffffffff` ) }
+
 @ __p256_n → BigInt { ^ ( __hx `ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551` ) }
+
 @ __p256_gx → BigInt { ^ ( __hx `6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296` ) }
+
 @ __p256_gy → BigInt { ^ ( __hx `4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5` ) }
+
+@ __p384_p → BigInt { ^ ( __hx `fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000ffffffff` ) }
+
+@ __p384_n → BigInt { ^ ( __hx `ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973` ) }
+
+@ __p384_gx → BigInt { ^ ( __hx `aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab7` ) }
+
+@ __p384_gy → BigInt { ^ ( __hx `3617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f` ) }
 
 // ── field arithmetic mod p ────────────────────────────────────────
 @ __fmul BigInt a BigInt b BigInt p → BigInt {
@@ -32,12 +44,14 @@ $ `stdlib/std/bigint.nu`
     ( bigint_free t )
     ^ r
 }
+
 @ __fadd BigInt a BigInt b BigInt p → BigInt {
     : BigInt t ( bigint_add a b )
     : BigInt r ( bigint_rem t p )
     ( bigint_free t )
     ^ r
 }
+
 @ __fsub BigInt a BigInt b BigInt p → BigInt {
     : BigInt t1 ( bigint_add a p )
     : BigInt t2 ( bigint_sub t1 b )
@@ -46,20 +60,25 @@ $ `stdlib/std/bigint.nu`
     ( bigint_free t2 )
     ^ r
 }
+
 @ __fsqr BigInt a BigInt p → BigInt { ^ ( __fmul a a p ) }
+
 @ __f2 BigInt a BigInt p → BigInt { ^ ( __fadd a a p ) }
+
 @ __f3 BigInt a BigInt p → BigInt {
     : BigInt d ( __f2 a p )
     : BigInt r ( __fadd d a p )
     ( bigint_free d )
     ^ r
 }
+
 @ __f4 BigInt a BigInt p → BigInt {
     : BigInt d ( __f2 a p )
     : BigInt r ( __f2 d p )
     ( bigint_free d )
     ^ r
 }
+
 @ __f8 BigInt a BigInt p → BigInt {
     : BigInt d ( __f4 a p )
     : BigInt r ( __f2 d p )
@@ -82,11 +101,13 @@ $ `stdlib/std/bigint.nu`
 @ __jinf → Jac {
     ^ @ Jac { ( bigint_from_i 1 ) ( bigint_from_i 1 ) ( bigint_from_i 0 ) T }
 }
+
 @ __jfree Jac q → v {
     ( bigint_free . q x )
     ( bigint_free . q y )
     ( bigint_free . q z )
 }
+
 @ __jclone Jac q → Jac {
     ^ @ Jac { ( bigint_clone . q x ) ( bigint_clone . q y ) ( bigint_clone . q z ) . q inf }
 }
@@ -197,14 +218,21 @@ $ `stdlib/std/bigint.nu`
 }
 
 // ── verify ────────────────────────────────────────────────────────
-@ ecdsa_p256_verify ( Vec u ) point ( Vec u ) r ( Vec u ) s ( Vec u ) hash → b {
-    ? != ( vec_len [u] point ) 65 { ^ F } {}
-    ? != ?? ( vec_get [u] point 0 ) { T x → # i x F _ → 0 } 4 { ^ F } {}
-    : BigInt p ( __p256_p )
-    : BigInt nn ( __p256_n )
+// Both NIST P-256 and P-384 use a = -3, so the Jacobian point ops above
+// are curve-independent; this core takes the curve constants and the
+// coordinate byte length. It consumes p / nn / gx / gy.
+@ __ecdsa_verify BigInt p BigInt nn BigInt gx BigInt gy i clen ( Vec u ) point ( Vec u ) r ( Vec u ) s ( Vec u ) hash → b {
+    ? != ( vec_len [u] point ) + 1 * 2 clen {
+        ( bigint_free p ) ( bigint_free nn ) ( bigint_free gx ) ( bigint_free gy )
+        ^ F
+    } {}
+    ? != ?? ( vec_get [u] point 0 ) { T x → # i x F _ → 0 } 4 {
+        ( bigint_free p ) ( bigint_free nn ) ( bigint_free gx ) ( bigint_free gy )
+        ^ F
+    } {}
 
-    : ( Vec u ) qxb ( bytes_slice point 1 33 )
-    : ( Vec u ) qyb ( bytes_slice point 33 65 )
+    : ( Vec u ) qxb ( bytes_slice point 1 + 1 clen )
+    : ( Vec u ) qyb ( bytes_slice point + 1 clen + 1 * 2 clen )
     : BigInt qx ( bigint_from_bytes_be qxb )
     : BigInt qy ( bigint_from_bytes_be qyb )
     ( vec_free [u] qxb )
@@ -225,7 +253,7 @@ $ `stdlib/std/bigint.nu`
     : ~ b result F
     ? ok {
         : BigInt zr ( bigint_rem z nn )
-        : BigInt w ( __finv bs nn )            // s^-1 mod n
+        : BigInt w ( __finv bs nn )  // s^-1 mod n
         : BigInt u1m ( bigint_mul zr w )
         : BigInt u1 ( bigint_rem u1m nn )
         : BigInt u2m ( bigint_mul br w )
@@ -233,7 +261,7 @@ $ `stdlib/std/bigint.nu`
         : ( Vec u ) u1b ( bigint_to_bytes_be u1 0 )
         : ( Vec u ) u2b ( bigint_to_bytes_be u2 0 )
 
-        : Jac G @ Jac { ( __p256_gx ) ( __p256_gy ) ( bigint_from_i 1 ) F }
+        : Jac G @ Jac { gx gy ( bigint_from_i 1 ) F }
         : Jac Q @ Jac { qx qy ( bigint_from_i 1 ) F }
         : Jac p1 ( __jmul u1b G p )
         : Jac p2 ( __jmul u2b Q p )
@@ -251,8 +279,18 @@ $ `stdlib/std/bigint.nu`
     } {
         ( bigint_free qx )
         ( bigint_free qy )
+        ( bigint_free gx )
+        ( bigint_free gy )
     }
     ( bigint_free p ) ( bigint_free nn ) ( bigint_free br ) ( bigint_free bs )
     ( bigint_free z ) ( bigint_free one )
     ^ result
+}
+
+@ ecdsa_p256_verify ( Vec u ) point ( Vec u ) r ( Vec u ) s ( Vec u ) hash → b {
+    ^ ( __ecdsa_verify ( __p256_p ) ( __p256_n ) ( __p256_gx ) ( __p256_gy ) 32 point r s hash )
+}
+
+@ ecdsa_p384_verify ( Vec u ) point ( Vec u ) r ( Vec u ) s ( Vec u ) hash → b {
+    ^ ( __ecdsa_verify ( __p384_p ) ( __p384_n ) ( __p384_gx ) ( __p384_gy ) 48 point r s hash )
 }

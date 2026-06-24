@@ -19,7 +19,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 
-@ __x_bget ( Vec u ) v i k → i {
+@ __x509_bget ( Vec u ) v i k → i {
     ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ -1 }
 }
 
@@ -30,8 +30,8 @@ $ `stdlib/std/bytes.nu`
 @ der_at ( Vec u ) b i pos → DerTlv {
     : i n ( vec_len [u] b )
     ? > + pos 2 n { ^ @ DerTlv { 0 0 0 0 0 } } {}
-    : i tag ( __x_bget b pos )
-    : i l0 ( __x_bget b + pos 1 )
+    : i tag ( __x509_bget b pos )
+    : i l0 ( __x509_bget b + pos 1 )
     ? < l0 128 {
         : i start + pos 2
         ? > + start l0 n { ^ @ DerTlv { 0 0 0 0 0 } } {}
@@ -41,7 +41,7 @@ $ `stdlib/std/bytes.nu`
     ? | == nb 0 > nb 4 { ^ @ DerTlv { 0 0 0 0 0 } } {}
     : ~ i len 0
     : ~ i k 0
-    ~ < k nb { = len | << len 8 ( __x_bget b + + pos 2 k ) = k + k 1 }
+    ~ < k nb { = len | << len 8 ( __x509_bget b + + pos 2 k ) = k + k 1 }
     : i hdr + 2 nb
     : i start + pos hdr
     ? > + start len n { ^ @ DerTlv { 0 0 0 0 0 } } {}
@@ -69,7 +69,7 @@ $ `stdlib/std/bytes.nu`
 @ __der_uint ( Vec u ) b DerTlv t → ( Vec u ) {
     : ~ i s . t start
     : i end + . t start . t len
-    ~ & < s - end 1 == ( __x_bget b s ) 0 { = s + s 1 }
+    ~ & < s - end 1 == ( __x509_bget b s ) 0 { = s + s 1 }
     ^ ( bytes_slice b s end )
 }
 
@@ -80,7 +80,7 @@ $ `stdlib/std/bytes.nu`
     ? != . t len wl { ( vec_free [u] want ) ^ F } {}
     : ~ b eq T
     : ~ i i 0
-    ~ < i wl { ? != ( __x_bget b + . t start i ) ( __x_bget want i ) { = eq F } {} = i + i 1 }
+    ~ < i wl { ? != ( __x509_bget b + . t start i ) ( __x509_bget want i ) { = eq F } {} = i + i 1 }
     ( vec_free [u] want )
     ^ eq
 }
@@ -130,21 +130,21 @@ $ `stdlib/std/bytes.nu`
     : ~ i year 0
     ? == tag 23 {
         // UTCTime YY -> 2000+YY (or 1900+YY if YY>=50)
-        : i yy + * 10 - ( __x_bget b p ) 48 - ( __x_bget b + p 1 ) 48
+        : i yy + * 10 - ( __x509_bget b p ) 48 - ( __x509_bget b + p 1 ) 48
         = year ? >= yy 50 + 1900 yy + 2000 yy
         = p + p 2
     } {
         // GeneralizedTime YYYY
         : ~ i y 0
         : ~ i k 0
-        ~ < k 4 { = y + * y 10 - ( __x_bget b + p k ) 48 = k + k 1 }
+        ~ < k 4 { = y + * y 10 - ( __x509_bget b + p k ) 48 = k + k 1 }
         = year y
         = p + p 4
     }
     : ~ i acc year
     : ~ i f 0
     ~ < f 5 {
-        : i d + * 10 - ( __x_bget b p ) 48 - ( __x_bget b + p 1 ) 48
+        : i d + * 10 - ( __x509_bget b p ) 48 - ( __x509_bget b + p 1 ) 48
         = acc + * acc 100 d
         = p + p 2
         = f + f 1
@@ -156,7 +156,7 @@ $ `stdlib/std/bytes.nu`
 @ __x509_sans ( Vec u ) b DerTlv san_seq ( Vec String ) out → v {
     : ~ DerTlv e ( __der_child b san_seq )
     ~ == . e ok 1 {
-        ? == . e tag 130 {   // [2] dNSName, IA5String
+        ? == . e tag 130 {  // [2] dNSName, IA5String
             : ( Vec u ) nm ( __der_content b e )
             ( vec_push [String] out ( bytes_to_str nm ) )
             ( vec_free [u] nm )
@@ -177,14 +177,14 @@ $ `stdlib/std/bytes.nu`
         ? | is_san is_bc {
             // value is the last child (OCTET STRING), after optional critical BOOLEAN
             : ~ DerTlv nxt ( __der_next b oid )
-            ? == . nxt tag 1 { = nxt ( __der_next b nxt ) } {}   // skip critical
+            ? == . nxt tag 1 { = nxt ( __der_next b nxt ) } {}  // skip critical
             // nxt = OCTET STRING extnValue; its content is inner DER
             : DerTlv inner ( der_at b . nxt start )
             ? is_san { ( __x509_sans b inner . out sans ) } {}
             ? is_bc {
                 : DerTlv c0 ( __der_child b inner )
                 ? & == . c0 ok 1 == . c0 tag 1 {
-                    ? != ( __x_bget b . c0 start ) 0 { = . out is_ca T } {}
+                    ? != ( __x509_bget b . c0 start ) 0 { = . out is_ca T } {}
                 } {}
             } {}
         } {}
@@ -200,6 +200,7 @@ $ `stdlib/std/bytes.nu`
 
     : DerTlv tbs ( __der_child der cert )
     ? != . tbs ok 1 { ^ out } {}
+    ( vec_free [u] . out tbs )
     = . out tbs ( __der_elem_bytes der tbs )
 
     // signatureAlgorithm + signatureValue (siblings of tbs)
@@ -208,23 +209,26 @@ $ `stdlib/std/bytes.nu`
     : DerTlv sigbits ( __der_next der sigalg )
     ? == . sigbits tag 3 {
         // BIT STRING: skip the leading "unused bits" byte
+        ( vec_free [u] . out sig )
         = . out sig ( bytes_slice der + . sigbits start 1 + . sigbits start . sigbits len )
     } {}
 
     // Walk TBS children.
     : ~ DerTlv c ( __der_child der tbs )
     ? & == . c ok 1 == . c tag 160 { = c ( __der_next der c ) } {}  // skip [0] version
-    = c ( __der_next der c )   // skip serialNumber
-    = c ( __der_next der c )   // skip signature alg
+    = c ( __der_next der c )  // skip serialNumber
+    = c ( __der_next der c )  // skip signature alg
+    ( vec_free [u] . out issuer )
     = . out issuer ( __der_elem_bytes der c )
-    = c ( __der_next der c )   // validity
+    = c ( __der_next der c )  // validity
     : DerTlv nb ( __der_child der c )
     : DerTlv na ( __der_next der nb )
     = . out not_before ( __x509_time der nb )
     = . out not_after ( __x509_time der na )
     = c ( __der_next der c )
+    ( vec_free [u] . out subject )
     = . out subject ( __der_elem_bytes der c )
-    = c ( __der_next der c )   // subjectPublicKeyInfo
+    = c ( __der_next der c )  // subjectPublicKeyInfo
 
     : DerTlv keyalg ( __der_child der c )
     : DerTlv keyoid ( __der_child der keyalg )
@@ -235,7 +239,9 @@ $ `stdlib/std/bytes.nu`
         : DerTlv rsaseq ( der_at der + . keybits start 1 )
         : DerTlv ni ( __der_child der rsaseq )
         : DerTlv ei ( __der_next der ni )
+        ( vec_free [u] . out rsa_n )
         = . out rsa_n ( __der_uint der ni )
+        ( vec_free [u] . out rsa_e )
         = . out rsa_e ( __der_uint der ei )
     } {
         ? ( __der_oid_is der keyoid `2a8648ce3d0201` ) {
@@ -246,10 +252,12 @@ $ `stdlib/std/bytes.nu`
             ? ( __der_oid_is der curve `2a8648ce3d030107` ) { = cc 256 } {}
             ? ( __der_oid_is der curve `2b81040022` ) { = cc 384 } {}
             = . out ec_curve cc
+            ( vec_free [u] . out ec_point )
             = . out ec_point ( bytes_slice der + . keybits start 1 + . keybits start . keybits len )
         } {
             ? ( __der_oid_is der keyoid `2b6570` ) {
                 = . out key_alg 3
+                ( vec_free [u] . out ec_point )
                 = . out ec_point ( bytes_slice der + . keybits start 1 + . keybits start . keybits len )
             } {}
         }
@@ -288,7 +296,7 @@ $ `stdlib/std/bytes.nu`
     ? & > pl 1 == ( nurl_str_get pattern 0 ) 42 {
         // "*.rest" — host must end with ".rest" and have no dot in the
         // matched first label.
-        : s rest ( nurl_str_slice pattern 1 - pl 1 )   // ".example.com"
+        : s rest ( nurl_str_slice pattern 1 - pl 1 )  // ".example.com"
         : i rl - pl 1
         ? <= hl rl { ^ F } {}
         : i off - hl rl

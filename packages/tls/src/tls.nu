@@ -10,14 +10,16 @@
 // server (OpenSSL, BoringSSL, nginx, the big CDNs).
 //
 // Surface:
-//   ( tls_connect host port server_name ) → !*TlsConn TlsErr   (no cert check)
-//   ( tls_write conn bytes )              → !v TlsErr
-//   ( tls_read conn max )                 → !( Vec u ) TlsErr   ([] at EOF)
-//   ( tls_close conn )                    → v
+//   ( tls_connect host port server_name )          → !*TlsConn TlsErr  (verify-full)
+//   ( tls_connect_insecure host port server_name ) → !*TlsConn TlsErr  (no cert check)
+//   ( tls_write conn bytes )                       → !v TlsErr
+//   ( tls_read conn max )                          → !( Vec u ) TlsErr  ([] at EOF)
+//   ( tls_close conn )                             → v
 //
-// Certificate verification is handled by a separate layer (the server's
-// certificate is captured into `conn` for the verifier to inspect); this
-// module establishes the encrypted channel and the handshake transcript.
+// `tls_connect` is secure by default: it completes the handshake and then
+// verifies the server certificate chain (see verify.nu) against the system
+// trust store, failing with TlsBadCert otherwise. `tls_connect_insecure`
+// is the encrypted-but-unauthenticated escape hatch.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -27,10 +29,11 @@ $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/hkdf.nu`
 $ `stdlib/std/x25519.nu`
 $ `stdlib/std/chacha20poly1305.nu`
+$ `packages/tls/src/verify.nu`
 
 & `libc` @ nurl_tcp_connect s host i port → i
-& `c` @ nurl_rand_fill * u buf i n → i
 
+& `c` @ nurl_rand_fill *u buf i n → i
 
 : | TlsErr {
     TlsConnect
@@ -43,6 +46,7 @@ $ `stdlib/std/chacha20poly1305.nu`
     TlsProtocol
     TlsBadCipher
     TlsHRR
+    TlsBadCert
 }
 
 @ tls_err_name TlsErr e → s {
@@ -57,6 +61,7 @@ $ `stdlib/std/chacha20poly1305.nu`
         TlsProtocol → `TlsProtocol`
         TlsBadCipher → `TlsBadCipher`
         TlsHRR → `TlsHRR`
+        TlsBadCert → `TlsBadCert`
     }
 }
 
@@ -64,19 +69,22 @@ $ `stdlib/std/chacha20poly1305.nu`
 // (handshake → application) and as buffers are consumed.
 : TlsConn {
     TcpConn tcp
-    ( Vec u ) rxbuf       // raw socket bytes not yet split into records
-    ( Vec u ) hsbuf       // decrypted handshake bytes not yet a full message
-    ( Vec u ) appbuf      // decrypted application bytes for the caller
+    ( Vec u ) rxbuf  // raw socket bytes not yet split into records
+    ( Vec u ) hsbuf  // decrypted handshake bytes not yet a full message
+    ( Vec u ) appbuf  // decrypted application bytes for the caller
     ( Vec u ) s_key
     ( Vec u ) s_iv
     ( Vec u ) c_key
     ( Vec u ) c_iv
     i s_seq
     i c_seq
-    i enc_read           // 1 once server records are encrypted
+    i enc_read  // 1 once server records are encrypted
     i established
     i closed
-    ( Vec u ) server_cert // first cert in the server's chain (DER), for the verifier
+    ( Vec u ) cert_msg  // raw Certificate handshake message (full chain)
+    ( Vec u ) cv_sig  // CertificateVerify signature
+    ( Vec u ) th_cert  // transcript hash through Certificate (for CertVerify)
+    i cv_scheme  // CertificateVerify SignatureScheme
 }
 
 // ── small helpers ─────────────────────────────────────────────────
@@ -322,8 +330,8 @@ $ `stdlib/std/chacha20poly1305.nu`
 // ── ClientHello ───────────────────────────────────────────────────
 @ __build_client_hello s host ( Vec u ) pubkey ( Vec u ) random ( Vec u ) sessid → ( Vec u ) {
     : ( Vec u ) body ( vec_new [u] )
-    ( __u16 body 771 )            // legacy_version 0x0303
-    ( __cat body random )         // 32-byte random
+    ( __u16 body 771 )  // legacy_version 0x0303
+    ( __cat body random )  // 32-byte random
     ( vec_push [u] body # u 32 )  // session id length
     ( __cat body sessid )
     // cipher_suites: TLS_CHACHA20_POLY1305_SHA256 (0x1303)
@@ -339,8 +347,8 @@ $ `stdlib/std/chacha20poly1305.nu`
     // server_name (0x0000)
     : ( Vec u ) sni ( vec_new [u] )
     : i hl ( nurl_str_len host )
-    ( __u16 sni + hl 3 )          // ServerNameList length
-    ( vec_push [u] sni # u 0 )    // name_type host_name
+    ( __u16 sni + hl 3 )  // ServerNameList length
+    ( vec_push [u] sni # u 0 )  // name_type host_name
     ( __u16 sni hl )
     : ~ i k 0
     ~ < k hl { ( vec_push [u] sni # u ( nurl_str_get host k ) ) = k + k 1 }
@@ -358,15 +366,15 @@ $ `stdlib/std/chacha20poly1305.nu`
 
     // signature_algorithms (0x000d)
     : ( Vec u ) sa ( vec_new [u] )
-    ( __u16 sa 16 )               // list length (8 algs × 2)
-    ( __u16 sa 1027 )             // ecdsa_secp256r1_sha256 0x0403
-    ( __u16 sa 2052 )             // rsa_pss_rsae_sha256    0x0804
-    ( __u16 sa 1025 )             // rsa_pkcs1_sha256       0x0401
-    ( __u16 sa 1283 )             // ecdsa_secp384r1_sha384 0x0503
-    ( __u16 sa 2053 )             // rsa_pss_rsae_sha384    0x0805
-    ( __u16 sa 2054 )             // rsa_pss_rsae_sha512    0x0806
-    ( __u16 sa 2055 )             // ed25519                0x0807
-    ( __u16 sa 1281 )             // rsa_pkcs1_sha384       0x0501
+    ( __u16 sa 16 )  // list length (8 algs × 2)
+    ( __u16 sa 1027 )  // ecdsa_secp256r1_sha256 0x0403
+    ( __u16 sa 2052 )  // rsa_pss_rsae_sha256    0x0804
+    ( __u16 sa 1025 )  // rsa_pkcs1_sha256       0x0401
+    ( __u16 sa 1283 )  // ecdsa_secp384r1_sha384 0x0503
+    ( __u16 sa 2053 )  // rsa_pss_rsae_sha384    0x0805
+    ( __u16 sa 2054 )  // rsa_pss_rsae_sha512    0x0806
+    ( __u16 sa 2055 )  // ed25519                0x0807
+    ( __u16 sa 1281 )  // rsa_pkcs1_sha384       0x0501
     ( __u16 ext 13 )
     ( __blk16 ext sa )
     ( vec_free [u] sa )
@@ -382,8 +390,8 @@ $ `stdlib/std/chacha20poly1305.nu`
     // key_share (0x0033): x25519 + 32-byte pubkey
     : ( Vec u ) ks ( vec_new [u] )
     : ( Vec u ) entry ( vec_new [u] )
-    ( __u16 entry 29 )            // group x25519
-    ( __u16 entry 32 )            // key_exchange length
+    ( __u16 entry 29 )  // group x25519
+    ( __u16 entry 32 )  // key_exchange length
     ( __cat entry pubkey )
     ( __u16 ks ( vec_len [u] entry ) )
     ( __cat ks entry )
@@ -411,14 +419,14 @@ $ `stdlib/std/chacha20poly1305.nu`
     : ~ i p 4
     // HelloRetryRequest detection: random == special constant.
     ? ( __is_hrr msg ) { ^ @ !( Vec u ) TlsErr { F # TlsErr TlsHRR } } {}
-    = p + p 2            // skip legacy_version
-    = p + p 32           // skip random
+    = p + p 2  // skip legacy_version
+    = p + p 32  // skip random
     : i sidlen ( __t_bget msg p )
     = p + + p 1 sidlen
     : i cipher ( __rdint msg p 2 )
     = p + p 2
     ? != cipher 4867 { ^ @ !( Vec u ) TlsErr { F # TlsErr TlsBadCipher } } {}
-    = p + p 1            // skip compression method
+    = p + p 1  // skip compression method
     : i extlen ( __rdint msg p 2 )
     = p + p 2
     : i extend + p extlen
@@ -484,21 +492,13 @@ $ `stdlib/std/chacha20poly1305.nu`
     ^ mac
 }
 
-// Extract the leaf certificate DER from a Certificate handshake message.
-@ __extract_cert ( Vec u ) msg → ( Vec u ) {
-    // type(1) len(3) ctx_len(1) ctx... certlist_len(3) [cert_len(3) cert ext(2)]...
-    : i ctxlen ( __t_bget msg 4 )
-    : ~ i p + 5 ctxlen        // skip context
-    = p + p 3                 // skip certificate_list length
-    : i clen ( __rdint msg p 3 )
-    : ( Vec u ) der ( bytes_slice msg + p 3 + + p 3 clen )
-    ^ der
-}
-
-// Establish a TLS 1.3 connection. `server_name` drives SNI (use the
-// host). Certificate verification is NOT performed here — inspect
-// conn.server_cert afterward. Returns an established TlsConn.
-@ tls_connect s host i port s server_name → !*TlsConn TlsErr {
+// Establish a TLS 1.3 connection WITHOUT verifying the server
+// certificate — encrypted but not authenticated (MITM-able). Use only
+// for pinned/self-signed/testing cases. `tls_connect` (below) is the
+// secure, verifying entry point. The presented chain, CertificateVerify
+// signature and transcript hash are captured on the conn for the
+// verifier.
+@ tls_connect_insecure s host i port s server_name → !*TlsConn TlsErr {
     : i raw ( nurl_tcp_connect host port )
     : i ek ( nurl_tcp_err_kind raw )
     ? != ek 0 { ^ @ !*TlsConn TlsErr { F # TlsErr TlsConnect } } {}
@@ -507,7 +507,7 @@ $ `stdlib/std/chacha20poly1305.nu`
 
     // Heap-allocate the connection so field mutations (key rotation,
     // buffer consumption) in the helpers persist across calls.
-    : * TlsConn c # * TlsConn ( nurl_alloc Z TlsConn )
+    : *TlsConn c # *TlsConn ( nurl_alloc Z TlsConn )
     = . c tcp tcp
     = . c rxbuf ( vec_new [u] )
     = . c hsbuf ( vec_new [u] )
@@ -521,7 +521,10 @@ $ `stdlib/std/chacha20poly1305.nu`
     = . c enc_read 0
     = . c established 0
     = . c closed 0
-    = . c server_cert ( vec_new [u] )
+    = . c cert_msg ( vec_new [u] )
+    = . c cv_sig ( vec_new [u] )
+    = . c th_cert ( vec_new [u] )
+    = . c cv_scheme 0
 
     // ── key share ──
     : ( Vec u ) priv ( __rand_bytes 32 )
@@ -587,9 +590,19 @@ $ `stdlib/std/chacha20poly1305.nu`
                     = done 1
                 } {
                     ? == t 11 {
-                        : ( Vec u ) der ( __extract_cert msg )
-                        ( vec_free [u] . c server_cert )
-                        = . c server_cert der
+                        ( vec_free [u] . c cert_msg )
+                        = . c cert_msg ( bytes_slice msg 0 ( vec_len [u] msg ) )
+                    } {}
+                    ? == t 15 {
+                        // CertificateVerify: capture transcript-through-Certificate
+                        // (before appending this message) and the scheme + signature.
+                        : ( Vec u ) thc ( sha256_pure tr )
+                        ( vec_free [u] . c th_cert )
+                        = . c th_cert thc
+                        = . c cv_scheme ( __rdint msg 4 2 )
+                        : i siglen ( __rdint msg 6 2 )
+                        ( vec_free [u] . c cv_sig )
+                        = . c cv_sig ( bytes_slice msg 8 + 8 siglen )
                     } {}
                     ( __cat tr msg )
                 }
@@ -635,6 +648,27 @@ $ `stdlib/std/chacha20poly1305.nu`
     ( vec_free [u] master ) ( vec_free [u] th_sf ) ( vec_free [u] c_ap ) ( vec_free [u] s_ap )
     ( vec_free [u] cfin ) ( vec_free [u] finmsg )
     ^ @ !*TlsConn TlsErr { T c }
+}
+
+// Establish a verified TLS 1.3 connection (the secure default): complete
+// the handshake, then verify the server's CertificateVerify signature,
+// the certificate chain up to the system trust store, the validity
+// window, and that `server_name` matches the leaf SANs. On any failure
+// the connection is closed and TlsBadCert is returned.
+@ tls_connect s host i port s server_name → !*TlsConn TlsErr {
+    : !*TlsConn TlsErr r ( tls_connect_insecure host port server_name )
+    ?? r {
+        F e → { ^ @ !*TlsConn TlsErr { F e } }
+        T c → {
+            : i rc ( tls_cert_verify . c cert_msg . c cv_scheme . c cv_sig . c th_cert server_name )
+            ? == rc 0 {
+                ^ @ !*TlsConn TlsErr { T c }
+            } {
+                ( tls_close c )
+                ^ @ !*TlsConn TlsErr { F # TlsErr TlsBadCert }
+            }
+        }
+    }
 }
 
 // Compare a Finished message's verify_data (bytes 4..36) against expected.
@@ -735,6 +769,8 @@ $ `stdlib/std/chacha20poly1305.nu`
     ( vec_free [u] . c appbuf )
     ( vec_free [u] . c s_key ) ( vec_free [u] . c s_iv )
     ( vec_free [u] . c c_key ) ( vec_free [u] . c c_iv )
-    ( vec_free [u] . c server_cert )
+    ( vec_free [u] . c cert_msg )
+    ( vec_free [u] . c cv_sig )
+    ( vec_free [u] . c th_cert )
     ( nurl_free # s c )
 }

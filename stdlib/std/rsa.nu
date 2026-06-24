@@ -145,7 +145,7 @@ $ `stdlib/std/hash_sha256.nu`
     : ( Vec u ) em ( bytes_slice emfull - k emlen k )
     ( vec_free [u] emfull )
     : ~ b ok T
-    ? != ( __rsa_bget em - emlen 1 ) 188 { = ok F } {}   // trailer 0xbc
+    ? != ( __rsa_bget em - emlen 1 ) 188 { = ok F } {}  // trailer 0xbc
     : i dblen - - emlen hlen 1
     : ( Vec u ) maskeddb ( bytes_slice em 0 dblen )
     : ( Vec u ) h ( bytes_slice em dblen + dblen hlen )
