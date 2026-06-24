@@ -5997,7 +5997,13 @@ void nurl_fiber_yield(void) {
     NurlFiber *cur = w->current;
     if (!cur) return;
     cur->state = NF_RUNNABLE;
-    nurl__rq_push_local(w, cur);
+    /* Do NOT publish to the run queue here. If we pushed before the
+     * swap-out, another worker could steal this fiber, run it to
+     * completion, and free it — all before the worker loop finishes
+     * reading f->state after swapcontext returns (a heap-use-after-free).
+     * The worker loop re-queues it (see the NF_RUNNABLE branch) only
+     * once it is done inspecting the fiber, keeping it private until its
+     * context is fully saved. */
     swapcontext(&cur->ctx, &w->loop_ctx);
 }
 
@@ -6127,16 +6133,25 @@ static void *nurl__worker_loop(void *arg) {
         } else if (f->state == NF_PARKED) {
             /* Release pending_unlock AFTER swap-out so the waker only
              * observes the fiber once its context is fully saved. Same
-             * race-closer for reactor parks (activate then poke). */
-            pthread_mutex_t *pm = f->pending_unlock;
-            f->pending_unlock = NULL;
-            if (pm) pthread_mutex_unlock(pm);
+             * race-closer for reactor parks (activate then poke). Capture
+             * BOTH handoff fields before releasing the mutex: once pm is
+             * unlocked a sender may unpark (and eventually free) the
+             * fiber, so reading f->pending_reactor_wait afterward would
+             * race. */
             extern void nurl__reactor_activate(struct NurlReactorWait *w);
+            pthread_mutex_t *pm = f->pending_unlock;
             struct NurlReactorWait *prw = f->pending_reactor_wait;
+            f->pending_unlock = NULL;
             f->pending_reactor_wait = NULL;
+            if (pm) pthread_mutex_unlock(pm);
             if (prw) nurl__reactor_activate(prw);
+        } else {
+            /* NF_RUNNABLE — the fiber yielded. Publish it to our local
+             * run queue now, after all reads of f above; before this
+             * point the fiber is private to this worker, which closes the
+             * steal-then-free race against the f->state read. */
+            nurl__rq_push_local(w, f);
         }
-        /* RUNNABLE was already re-queued by yield. */
     }
     nurl__tls_worker = NULL;
     return NULL;

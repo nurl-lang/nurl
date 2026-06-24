@@ -68,7 +68,7 @@ $ `stdlib/core/vec.nu`
 @ __chacha_state ( Vec u ) key i counter ( Vec u ) nonce → ( Vec i ) {
     : ( Vec i ) s ( vec_with_cap [i] 16 )
     ( vec_push [i] s 1634760805 )  // "expa"
-    ( vec_push [i] s 857760878 )   // "nd 3"
+    ( vec_push [i] s 857760878 )  // "nd 3"
     ( vec_push [i] s 2036477234 )  // "2-by"
     ( vec_push [i] s 1797285236 )  // "te k"
     : ~ i k 0
@@ -134,7 +134,7 @@ $ `stdlib/core/vec.nu`
 // otk = 32-byte one-time key (r || s). Returns the 16-byte tag.
 @ poly1305_mac ( Vec u ) otk ( Vec u ) msg → ( Vec u ) {
     // Clamp r into five 26-bit limbs.
-    : i r0 & ( __ld32 otk 0 ) 67108863      // 0x3ffffff
+    : i r0 & ( __ld32 otk 0 ) 67108863  // 0x3ffffff
     : i r1 & >> ( __ld32 otk 3 ) 2 67108611  // 0x3ffff03
     : i r2 & >> ( __ld32 otk 6 ) 4 67092735  // 0x3ffc0ff
     : i r3 & >> ( __ld32 otk 9 ) 6 66076671  // 0x3f03fff
