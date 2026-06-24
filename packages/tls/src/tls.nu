@@ -5,9 +5,9 @@
 // program can open an authenticated, encrypted TLS 1.3 connection on a
 // host with nothing installed — Linux, macOS, the BSDs, Windows.
 //
-// Cipher suite: TLS_CHACHA20_POLY1305_SHA256 with the X25519 group.
-// That single suite is accepted by essentially every modern TLS 1.3
-// server (OpenSSL, BoringSSL, nginx, the big CDNs).
+// Cipher suites: TLS_AES_128_GCM_SHA256 and TLS_CHACHA20_POLY1305_SHA256
+// with the X25519 group — between them accepted by essentially every
+// modern TLS 1.3 server (OpenSSL, BoringSSL, nginx, the big CDNs).
 //
 // Surface:
 //   ( tls_connect host port server_name )          → !*TlsConn TlsErr  (verify-full)
@@ -29,6 +29,7 @@ $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/hkdf.nu`
 $ `stdlib/std/x25519.nu`
 $ `stdlib/std/chacha20poly1305.nu`
+$ `stdlib/std/aes_gcm.nu`
 $ `packages/tls/src/verify.nu`
 
 & `libc` @ nurl_tcp_connect s host i port → i
@@ -85,6 +86,7 @@ $ `packages/tls/src/verify.nu`
     ( Vec u ) cv_sig  // CertificateVerify signature
     ( Vec u ) th_cert  // transcript hash through Certificate (for CertVerify)
     i cv_scheme  // CertificateVerify SignatureScheme
+    i cipher  // 0 = ChaCha20-Poly1305, 1 = AES-128-GCM
 }
 
 // ── small helpers ─────────────────────────────────────────────────
@@ -194,6 +196,17 @@ $ `packages/tls/src/verify.nu`
     ^ n
 }
 
+// AEAD dispatch on the negotiated cipher suite.
+@ __aead_seal i cipher ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) pt → ( Vec u ) {
+    ? == cipher 1 { ^ ( aes128_gcm_encrypt key nonce aad pt ) } {}
+    ^ ( aead_encrypt key nonce aad pt )
+}
+
+@ __aead_open i cipher ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) ct → ?( Vec u ) {
+    ? == cipher 1 { ^ ( aes128_gcm_decrypt key nonce aad ct ) } {}
+    ^ ( aead_decrypt key nonce aad ct )
+}
+
 // AEAD-decrypt one application_data record body (ct‖tag) → inner plaintext.
 @ __decrypt_record * TlsConn c ( Vec u ) body → ?( Vec u ) {
     : i blen ( vec_len [u] body )
@@ -203,7 +216,7 @@ $ `packages/tls/src/verify.nu`
     ( vec_push [u] aad # u 3 )
     ( __u16 aad blen )
     : ( Vec u ) nonce ( __nonce . c s_iv . c s_seq )
-    : ?( Vec u ) pt ( aead_decrypt . c s_key nonce aad body )
+    : ?( Vec u ) pt ( __aead_open . c cipher . c s_key nonce aad body )
     ( vec_free [u] aad )
     ( vec_free [u] nonce )
     = . c s_seq + . c s_seq 1
@@ -233,7 +246,7 @@ $ `packages/tls/src/verify.nu`
     ( vec_push [u] aad # u 3 )
     ( __u16 aad total )
     : ( Vec u ) nonce ( __nonce . c c_iv . c c_seq )
-    : ( Vec u ) sealed ( aead_encrypt . c c_key nonce aad inner )
+    : ( Vec u ) sealed ( __aead_seal . c cipher . c c_key nonce aad inner )
     : ( Vec u ) rec ( vec_with_cap [u] + total 5 )
     ( vec_push [u] rec # u 23 )
     ( vec_push [u] rec # u 3 )
@@ -334,8 +347,11 @@ $ `packages/tls/src/verify.nu`
     ( __cat body random )  // 32-byte random
     ( vec_push [u] body # u 32 )  // session id length
     ( __cat body sessid )
-    // cipher_suites: TLS_CHACHA20_POLY1305_SHA256 (0x1303)
-    ( __u16 body 2 )
+    // cipher_suites: TLS_AES_128_GCM_SHA256 (0x1301) +
+    // TLS_CHACHA20_POLY1305_SHA256 (0x1303) — both use the SHA-256 key
+    // schedule, so either keeps the rest of the handshake unchanged.
+    ( __u16 body 4 )
+    ( __u16 body 4865 )
     ( __u16 body 4867 )
     // compression methods
     ( vec_push [u] body # u 1 )
@@ -425,7 +441,7 @@ $ `packages/tls/src/verify.nu`
     = p + + p 1 sidlen
     : i cipher ( __rdint msg p 2 )
     = p + p 2
-    ? != cipher 4867 { ^ @ !( Vec u ) TlsErr { F # TlsErr TlsBadCipher } } {}
+    ? & != cipher 4867 != cipher 4865 { ^ @ !( Vec u ) TlsErr { F # TlsErr TlsBadCipher } } {}
     = p + p 1  // skip compression method
     : i extlen ( __rdint msg p 2 )
     = p + p 2
@@ -450,6 +466,13 @@ $ `packages/tls/src/verify.nu`
     ^ @ !( Vec u ) TlsErr { T found }
 }
 
+// The cipher the server selected, as our cipher code (0 ChaCha20 / 1 AES).
+@ __sh_cipher ( Vec u ) msg → i {
+    : i sidlen ( __t_bget msg 38 )
+    : i cs ( __rdint msg + 39 sidlen 2 )
+    ^ ? == cs 4865 1 0
+}
+
 @ __is_hrr ( Vec u ) msg → b {
     // SHA-256("HelloRetryRequest") in the ServerHello random field.
     : i a ( __t_bget msg 6 )
@@ -464,7 +487,8 @@ $ `packages/tls/src/verify.nu`
 // given direction. dir 0 = server-read, 1 = client-write.
 @ __set_keys * TlsConn c i dir ( Vec u ) secret → v {
     : ( Vec u ) emptyc ( vec_new [u] )
-    : ( Vec u ) key ( hkdf_expand_label secret `key` emptyc 32 )
+    : i klen ? == . c cipher 1 16 32
+    : ( Vec u ) key ( hkdf_expand_label secret `key` emptyc klen )
     : ( Vec u ) iv ( hkdf_expand_label secret `iv` emptyc 12 )
     ( vec_free [u] emptyc )
     ? == dir 0 {
@@ -525,6 +549,7 @@ $ `packages/tls/src/verify.nu`
     = . c cv_sig ( vec_new [u] )
     = . c th_cert ( vec_new [u] )
     = . c cv_scheme 0
+    = . c cipher 0
 
     // ── key share ──
     : ( Vec u ) priv ( __rand_bytes 32 )
@@ -547,6 +572,7 @@ $ `packages/tls/src/verify.nu`
     ( __cat tr sh )
     : !( Vec u ) TlsErr spkr ( __parse_server_hello sh )
     : ( Vec u ) spub ?? spkr { T k → k F e → { ( vec_free [u] sh ) ^ ( __fail c priv cpub random sessid ch tr e ) } }
+    = . c cipher ( __sh_cipher sh )
 
     // ── key schedule (handshake) ──
     : ( Vec u ) ecdhe ( x25519 priv spub )

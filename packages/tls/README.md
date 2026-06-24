@@ -7,14 +7,16 @@ is implemented from scratch in pure NURL, so an authenticated, encrypted
 connection works on a machine that has nothing installed: Linux, macOS,
 the BSDs, Windows.
 
-It speaks the `TLS_CHACHA20_POLY1305_SHA256` cipher suite with the X25519
-key-exchange group, which is accepted by the large majority of modern
-TLS 1.3 servers (OpenSSL, BoringSSL, nginx, and the big CDNs).
+It speaks both the `TLS_AES_128_GCM_SHA256` and
+`TLS_CHACHA20_POLY1305_SHA256` cipher suites with the X25519 key-exchange
+group — between them accepted by essentially every modern TLS 1.3 server
+(OpenSSL, BoringSSL, nginx, and the big CDNs).
 
 ## What's implemented
 
 * **Key exchange** — X25519 (RFC 7748), constant-time Montgomery ladder.
-* **Record protection** — ChaCha20-Poly1305 AEAD (RFC 8439).
+* **Record protection** — ChaCha20-Poly1305 AEAD (RFC 8439) and
+  AES-128-GCM (NIST SP 800-38D), negotiated per the server's choice.
 * **Key schedule** — HKDF-Extract/Expand + HKDF-Expand-Label / Derive-Secret
   (RFC 5869, RFC 8446 §7.1) over pure HMAC-SHA-256.
 * **Handshake** — ClientHello (SNI, supported_versions, supported_groups,
@@ -57,12 +59,11 @@ self-signed / testing only) — encrypted but not authenticated.
 
 ## Limitations
 
-* **One cipher suite** — `TLS_CHACHA20_POLY1305_SHA256` only. Servers that
-  do not offer ChaCha20 (some AES-only configurations) are not yet
-  supported; AES-128-GCM is the planned next addition.
-* No TLS 1.2, no client certificates, no session resumption, no OCSP /
-  CRL revocation checking. Ed25519 and P-521 certificate signatures are
-  not yet verified (rare in practice).
+* **TLS 1.3 only** — no TLS 1.2 fallback (so TLS-1.2-only servers are out
+  of reach).
+* No client certificates, no session resumption / 0-RTT, no OCSP / CRL
+  revocation checking. Ed25519 and P-521 certificate signatures are not
+  yet verified (rare in practice).
 
 ## Demo
 
