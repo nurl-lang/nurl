@@ -6,6 +6,37 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.18] — 2026-06-24
+
+Portability fixes surfaced by real-world installs of the v0.9.17 toolchain:
+a program built on a non-x86_64 release could fail to link against OpenSSL,
+and the pure-NURL TLS client could not reach TLS-1.2-over-P-256 servers.
+
+### Fixed
+
+- **Every binary now links `libc`-only on every platform — OpenSSL is
+  loaded at runtime via `dlopen`.** The shipped `runtime.o` is built with
+  OpenSSL, so it referenced `SSL_*` / `X509_*` / `CRYPTO_*`. A program that
+  doesn't use runtime TLS only linked `libc`-only if the linker dead-stripped
+  those references — which clang/lld LTO does on x86_64 but the bundled-zig
+  portable builds do not, so `nurlpkg install` of any `net.nu`-importing
+  package (e.g. `tls`) failed on `linux-arm64-glibc` with dozens of
+  `undefined symbol: SSL_new / TLS_server_method / …`. OpenSSL is now
+  resolved entirely through `dlopen`/`dlsym`, so `runtime.o` carries **zero**
+  link-time references to libssl/libcrypto: every program links `libc`-only
+  regardless of dead-code elimination, and libssl is loaded lazily the first
+  time a TLS connection is created (its absence becomes a clean
+  `TLS_CTX_INIT` error rather than a link failure). On Linux the link adds
+  `-ldl` (`dlopen` lives in `libdl` below glibc 2.34; `--as-needed` drops it
+  where unused); FreeBSD/macOS keep `dlopen` in libc, and Windows is
+  unaffected (it uses WinHTTP, not OpenSSL).
+- **Pure-NURL TLS reaches TLS-1.2 servers that use P-256 key exchange.** The
+  TLS 1.2 fallback only did X25519 ECDHE, so a TLS-1.2 server negotiating
+  ECDHE over `prime256v1` (the OpenSSL default `ssl_ecdh_curve`) failed with
+  `TlsHandshake`. The 1.2 handshake now reads the `named_curve` from the
+  `ServerKeyExchange` and does P-256 ECDHE as well, matching the TLS 1.3
+  path. (`tls` package republished as 0.1.1.)
+
 ## [0.9.17] — 2026-06-24
 
 A complete **pure-NURL cryptography and TLS stack**, and on top of it a
