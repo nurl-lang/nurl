@@ -66,9 +66,28 @@ self-signed / testing only) — encrypted but not authenticated.
   revocation checking. Ed25519 and P-521 certificate signatures are not
   yet verified (rare in practice).
 
-## Demo
+## Install / use
+
+As a command (`src/main.nu` → the `tlsget` binary):
 
 ```
-./nurl.sh packages/tls/src/https_get.nu https_get
-./https_get example.com 443 /
+nurlpkg install tls
+tlsget https://example.com/
+tlsget --insecure https://self-signed.example/   # skip cert check
 ```
+
+As a library in your own package — add the dependency, then import it:
+
+```
+nurlpkg add tls
+```
+```
+$ `deps/tls/src/tls.nu`
+…
+( tls_connect host 443 host )
+```
+
+The package's own modules import each other by bare name
+(`` $ `verify.nu` ``); the compiler resolves those relative to the
+importing file, so the package builds standalone, from the monorepo, and
+when consumed as a `deps/<name>` dependency alike.
