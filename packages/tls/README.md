@@ -7,10 +7,11 @@ is implemented from scratch in pure NURL, so an authenticated, encrypted
 connection works on a machine that has nothing installed: Linux, macOS,
 the BSDs, Windows.
 
-It speaks both the `TLS_AES_128_GCM_SHA256` and
-`TLS_CHACHA20_POLY1305_SHA256` cipher suites with the X25519 key-exchange
-group — between them accepted by essentially every modern TLS 1.3 server
-(OpenSSL, BoringSSL, nginx, and the big CDNs).
+It prefers TLS 1.3 (`TLS_AES_128_GCM_SHA256` / `TLS_CHACHA20_POLY1305_SHA256`)
+and **falls back to TLS 1.2** (the ECDHE-RSA / ECDHE-ECDSA AES-128-GCM and
+ChaCha20-Poly1305 suites) when the server doesn't offer 1.3 — all over the
+X25519 key-exchange group. Between them this reaches essentially every
+HTTPS server in use.
 
 ## What's implemented
 
@@ -59,8 +60,8 @@ self-signed / testing only) — encrypted but not authenticated.
 
 ## Limitations
 
-* **TLS 1.3 only** — no TLS 1.2 fallback (so TLS-1.2-only servers are out
-  of reach).
+* TLS 1.3 and 1.2 only (no SSLv3 / TLS 1.0 / 1.1 — long obsolete).
+* ECDHE key exchange over X25519 only (no static-RSA or P-256/P-384 ECDHE).
 * No client certificates, no session resumption / 0-RTT, no OCSP / CRL
   revocation checking. Ed25519 and P-521 certificate signatures are not
   yet verified (rare in practice).

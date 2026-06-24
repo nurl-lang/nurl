@@ -87,6 +87,7 @@ $ `packages/tls/src/verify.nu`
     ( Vec u ) th_cert  // transcript hash through Certificate (for CertVerify)
     i cv_scheme  // CertificateVerify SignatureScheme
     i cipher  // 0 = ChaCha20-Poly1305, 1 = AES-128-GCM
+    i version  // 13 = TLS 1.3, 12 = TLS 1.2
 }
 
 // ── small helpers ─────────────────────────────────────────────────
@@ -350,9 +351,14 @@ $ `packages/tls/src/verify.nu`
     // cipher_suites: TLS_AES_128_GCM_SHA256 (0x1301) +
     // TLS_CHACHA20_POLY1305_SHA256 (0x1303) — both use the SHA-256 key
     // schedule, so either keeps the rest of the handshake unchanged.
-    ( __u16 body 4 )
-    ( __u16 body 4865 )
-    ( __u16 body 4867 )
+    // 1.3 suites first, then the TLS 1.2 ECDHE suites for fallback.
+    ( __u16 body 12 )
+    ( __u16 body 4865 )  // 0x1301 TLS_AES_128_GCM_SHA256
+    ( __u16 body 4867 )  // 0x1303 TLS_CHACHA20_POLY1305_SHA256
+    ( __u16 body 49195 )  // 0xc02b ECDHE-ECDSA-AES128-GCM-SHA256
+    ( __u16 body 49199 )  // 0xc02f ECDHE-RSA-AES128-GCM-SHA256
+    ( __u16 body 52393 )  // 0xcca9 ECDHE-ECDSA-CHACHA20-POLY1305
+    ( __u16 body 52392 )  // 0xcca8 ECDHE-RSA-CHACHA20-POLY1305
     // compression methods
     ( vec_push [u] body # u 1 )
     ( vec_push [u] body # u 0 )
@@ -395,13 +401,22 @@ $ `packages/tls/src/verify.nu`
     ( __blk16 ext sa )
     ( vec_free [u] sa )
 
-    // supported_versions (0x002b): TLS 1.3 (0x0304)
+    // supported_versions (0x002b): TLS 1.3 (0x0304) then TLS 1.2 (0x0303)
     : ( Vec u ) sv ( vec_new [u] )
-    ( vec_push [u] sv # u 2 )
+    ( vec_push [u] sv # u 4 )
     ( __u16 sv 772 )
+    ( __u16 sv 771 )
     ( __u16 ext 43 )
     ( __blk16 ext sv )
     ( vec_free [u] sv )
+
+    // ec_point_formats (0x000b): uncompressed — some TLS 1.2 servers require it
+    : ( Vec u ) epf ( vec_new [u] )
+    ( vec_push [u] epf # u 1 )
+    ( vec_push [u] epf # u 0 )
+    ( __u16 ext 11 )
+    ( __blk16 ext epf )
+    ( vec_free [u] epf )
 
     // key_share (0x0033): x25519 + 32-byte pubkey
     : ( Vec u ) ks ( vec_new [u] )
@@ -466,11 +481,21 @@ $ `packages/tls/src/verify.nu`
     ^ @ !( Vec u ) TlsErr { T found }
 }
 
-// The cipher the server selected, as our cipher code (0 ChaCha20 / 1 AES).
-@ __sh_cipher ( Vec u ) msg → i {
+// The raw cipher suite the server selected (2-byte value).
+@ __sh_suite ( Vec u ) msg → i {
     : i sidlen ( __t_bget msg 38 )
-    : i cs ( __rdint msg + 39 sidlen 2 )
-    ^ ? == cs 4865 1 0
+    ^ ( __rdint msg + 39 sidlen 2 )
+}
+
+// Negotiated TLS version (13/12) from the selected suite: the TLS 1.3
+// suites (0x1301/0x1303) imply 1.3, the ECDHE suites imply 1.2.
+@ __suite_version i suite → i {
+    ^ ? | == suite 4865 == suite 4867 13 12
+}
+
+// Our AEAD code (0 ChaCha20 / 1 AES-128-GCM) for a selected suite.
+@ __suite_cipher i suite → i {
+    ^ ? | | == suite 4865 == suite 49195 == suite 49199 1 0
 }
 
 @ __is_hrr ( Vec u ) msg → b {
@@ -528,6 +553,9 @@ $ `packages/tls/src/verify.nu`
     ? != ek 0 { ^ @ !*TlsConn TlsErr { F # TlsErr TlsConnect } } {}
     : s rp # s raw
     : TcpConn tcp @ TcpConn { rp }
+    // Read timeout so an unresponsive/dead peer fails the handshake
+    // cleanly instead of blocking the client forever.
+    ( tcp_set_timeout tcp 20000 )
 
     // Heap-allocate the connection so field mutations (key rotation,
     // buffer consumption) in the helpers persist across calls.
@@ -550,6 +578,7 @@ $ `packages/tls/src/verify.nu`
     = . c th_cert ( vec_new [u] )
     = . c cv_scheme 0
     = . c cipher 0
+    = . c version 13
 
     // ── key share ──
     : ( Vec u ) priv ( __rand_bytes 32 )
@@ -570,9 +599,17 @@ $ `packages/tls/src/verify.nu`
     : !( Vec u ) TlsErr shr ( __next_hs c )
     : ( Vec u ) sh ?? shr { T m → m F e → { ^ ( __fail c priv cpub random sessid ch tr e ) } }
     ( __cat tr sh )
+    : i suite ( __sh_suite sh )
+    = . c version ( __suite_version suite )
+    = . c cipher ( __suite_cipher suite )
+
+    // ── TLS 1.2 fallback ──
+    ? == . c version 12 {
+        ^ ( __tls12_handshake c sh priv cpub random sessid ch tr )
+    } {}
+
     : !( Vec u ) TlsErr spkr ( __parse_server_hello sh )
     : ( Vec u ) spub ?? spkr { T k → k F e → { ( vec_free [u] sh ) ^ ( __fail c priv cpub random sessid ch tr e ) } }
-    = . c cipher ( __sh_cipher sh )
 
     // ── key schedule (handshake) ──
     : ( Vec u ) ecdhe ( x25519 priv spub )
@@ -681,12 +718,23 @@ $ `packages/tls/src/verify.nu`
 // the certificate chain up to the system trust store, the validity
 // window, and that `server_name` matches the leaf SANs. On any failure
 // the connection is closed and TlsBadCert is returned.
+// TLS 1.2 verification: the ServerKeyExchange signature (authenticating
+// the ephemeral key to the leaf cert) + the certificate chain.
+@ __verify12 * TlsConn c s hostname → i {
+    : X509 leaf ( tls_leaf_cert . c cert_msg 1 )
+    ? ! . leaf ok { ( x509_free leaf ) ^ 2 } {}
+    : i sk ( tls12_ske_verify leaf . c cv_scheme . c cv_sig . c th_cert )
+    ( x509_free leaf )
+    ? != sk 0 { ^ sk } {}
+    ^ ( tls_chain_verify . c cert_msg 1 hostname )
+}
+
 @ tls_connect s host i port s server_name → !*TlsConn TlsErr {
     : !*TlsConn TlsErr r ( tls_connect_insecure host port server_name )
     ?? r {
         F e → { ^ @ !*TlsConn TlsErr { F e } }
         T c → {
-            : i rc ( tls_cert_verify . c cert_msg . c cv_scheme . c cv_sig . c th_cert server_name )
+            : i rc ? == . c version 12 ( __verify12 c server_name ) ( tls_cert_verify . c cert_msg . c cv_scheme . c cv_sig . c th_cert server_name )
             ? == rc 0 {
                 ^ @ !*TlsConn TlsErr { T c }
             } {
@@ -726,6 +774,7 @@ $ `packages/tls/src/verify.nu`
 
 // ── application data ──────────────────────────────────────────────
 @ tls_write * TlsConn c ( Vec u ) data → !v TlsErr {
+    ? == . c version 12 { ^ ( __send_record_12 c 23 data ) } {}
     ^ ( __send_encrypted c 23 data )
 }
 
@@ -746,21 +795,39 @@ $ `packages/tls/src/verify.nu`
                 ? == . rec rtype 20 {
                     ( vec_free [u] . rec body )
                 } {
-                    ?? ( __decrypt_record c . rec body ) {
-                        T inner → {
-                            ( vec_free [u] . rec body )
-                            : i ct ( __inner_type inner )
-                            ? == ct 23 {
-                                ( __cat . c appbuf inner )
-                            } {
-                                ? == ct 21 { = . c closed 1 } {}
-                                // ct == 22 → post-handshake (ticket/key update): ignore
+                    ? == . c version 12 {
+                        // TLS 1.2: the record type is the real content type.
+                        ?? ( __decrypt_record_12 c . rec rtype . rec body ) {
+                            T inner → {
+                                ( vec_free [u] . rec body )
+                                ? == . rec rtype 23 { ( __cat . c appbuf inner ) } {
+                                    ? == . rec rtype 21 { = . c closed 1 } {}
+                                    // type 22 (post-handshake, e.g. tickets): ignore
+                                }
+                                ( vec_free [u] inner )
                             }
-                            ( vec_free [u] inner )
+                            F _ → {
+                                ( vec_free [u] . rec body )
+                                ^ @ !( Vec u ) TlsErr { F # TlsErr TlsDecrypt }
+                            }
                         }
-                        F _ → {
-                            ( vec_free [u] . rec body )
-                            ^ @ !( Vec u ) TlsErr { F # TlsErr TlsDecrypt }
+                    } {
+                        ?? ( __decrypt_record c . rec body ) {
+                            T inner → {
+                                ( vec_free [u] . rec body )
+                                : i ct ( __inner_type inner )
+                                ? == ct 23 {
+                                    ( __cat . c appbuf inner )
+                                } {
+                                    ? == ct 21 { = . c closed 1 } {}
+                                    // ct == 22 → post-handshake (ticket/key update): ignore
+                                }
+                                ( vec_free [u] inner )
+                            }
+                            F _ → {
+                                ( vec_free [u] . rec body )
+                                ^ @ !( Vec u ) TlsErr { F # TlsErr TlsDecrypt }
+                            }
                         }
                     }
                 }
@@ -784,7 +851,7 @@ $ `packages/tls/src/verify.nu`
             : ( Vec u ) alert ( vec_with_cap [u] 2 )
             ( vec_push [u] alert # u 1 )
             ( vec_push [u] alert # u 0 )
-            : !v TlsErr _w ( __send_encrypted c 21 alert )
+            : !v TlsErr _w ? == . c version 12 ( __send_record_12 c 21 alert ) ( __send_encrypted c 21 alert )
             ( vec_free [u] alert )
         } {}
         = . c closed 1
@@ -799,4 +866,292 @@ $ `packages/tls/src/verify.nu`
     ( vec_free [u] . c cv_sig )
     ( vec_free [u] . c th_cert )
     ( nurl_free # s c )
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  TLS 1.2 fallback (RFC 5246 + RFC 5288 GCM + RFC 7905 ChaCha20)
+// ══════════════════════════════════════════════════════════════════
+
+// TLS 1.2 PRF (P_SHA256): PRF(secret, label, seed) over HMAC-SHA-256.
+@ __prf12 ( Vec u ) secret s label ( Vec u ) seed i outlen → ( Vec u ) {
+    : ( Vec u ) fs ( vec_new [u] )
+    ( bytes_extend_str fs label )
+    ( bytes_extend_bytes fs seed )
+    : ( Vec u ) out ( vec_with_cap [u] ? > outlen 0 outlen 1 )
+    : ~ ( Vec u ) a ( bytes_slice fs 0 ( vec_len [u] fs ) )
+    ~ < ( vec_len [u] out ) outlen {
+        : ( Vec u ) anew ( hmac_sha256_pure secret a )
+        ( vec_free [u] a )
+        = a anew
+        : ( Vec u ) cat ( bytes_slice a 0 ( vec_len [u] a ) )
+        ( bytes_extend_bytes cat fs )
+        : ( Vec u ) chunk ( hmac_sha256_pure secret cat )
+        ( vec_free [u] cat )
+        : ~ i j 0
+        ~ & < j 32 < ( vec_len [u] out ) outlen { ( vec_push [u] out # u ( __t_bget chunk j ) ) = j + j 1 }
+        ( vec_free [u] chunk )
+    }
+    ( vec_free [u] a )
+    ( vec_free [u] fs )
+    ^ out
+}
+
+// TLS 1.2 record AAD: seq(8) || type(1) || 0x0303 || plaintext_len(2).
+@ __aad12 i seq i rtype i ptlen → ( Vec u ) {
+    : ( Vec u ) a ( vec_with_cap [u] 13 )
+    : ~ i k 0
+    ~ < k 8 { ( vec_push [u] a # u & >> seq * 8 - 7 k 255 ) = k + k 1 }
+    ( vec_push [u] a # u rtype )
+    ( vec_push [u] a # u 3 )
+    ( vec_push [u] a # u 3 )
+    ( __u16 a ptlen )
+    ^ a
+}
+
+// AES-GCM nonce: 4-byte salt || 8-byte explicit (= seq).
+@ __nonce12_aes ( Vec u ) iv4 i seq → ( Vec u ) {
+    : ( Vec u ) n ( vec_with_cap [u] 12 )
+    : ~ i k 0
+    ~ < k 4 { ( vec_push [u] n # u ( __t_bget iv4 k ) ) = k + k 1 }
+    : ~ i b 0
+    ~ < b 8 { ( vec_push [u] n # u & >> seq * 8 - 7 b 255 ) = b + b 1 }
+    ^ n
+}
+
+// ChaCha20 nonce (RFC 7905): 12-byte IV XOR (0^4 || seq).
+@ __nonce12_chacha ( Vec u ) iv12 i seq → ( Vec u ) {
+    : ( Vec u ) n ( vec_with_cap [u] 12 )
+    : ~ i k 0
+    ~ < k 12 { ( vec_push [u] n # u ( __t_bget iv12 k ) ) = k + k 1 }
+    : ~ i b 0
+    ~ < b 8 {
+        : i sb & >> seq * 8 - 7 b 255
+        ( vec_set [u] n + 4 b # u ^^ ( __t_bget n + 4 b ) sb )
+        = b + b 1
+    }
+    ^ n
+}
+
+// Send one TLS 1.2 record of `content` (real content type `rtype`).
+@ __send_record_12 * TlsConn c i rtype ( Vec u ) content → !v TlsErr {
+    : i ptlen ( vec_len [u] content )
+    : ( Vec u ) aad ( __aad12 . c c_seq rtype ptlen )
+    : ( Vec u ) body ( vec_new [u] )
+    ? == . c cipher 1 {
+        : ( Vec u ) nonce ( __nonce12_aes . c c_iv . c c_seq )
+        : ( Vec u ) sealed ( aes128_gcm_encrypt . c c_key nonce aad content )
+        // explicit nonce (= seq) is prepended on the wire
+        : ~ i b 0
+        ~ < b 8 { ( vec_push [u] body # u & >> . c c_seq * 8 - 7 b 255 ) = b + b 1 }
+        ( __cat body sealed )
+        ( vec_free [u] nonce )
+        ( vec_free [u] sealed )
+    } {
+        : ( Vec u ) nonce ( __nonce12_chacha . c c_iv . c c_seq )
+        : ( Vec u ) sealed ( aead_encrypt . c c_key nonce aad content )
+        ( __cat body sealed )
+        ( vec_free [u] nonce )
+        ( vec_free [u] sealed )
+    }
+    : ( Vec u ) rec ( vec_with_cap [u] + ( vec_len [u] body ) 5 )
+    ( vec_push [u] rec # u rtype )
+    ( vec_push [u] rec # u 3 )
+    ( vec_push [u] rec # u 3 )
+    ( __u16 rec ( vec_len [u] body ) )
+    ( __cat rec body )
+    : !v NetErr w ( tcp_write_all . c tcp rec )
+    ( vec_free [u] aad )
+    ( vec_free [u] body )
+    ( vec_free [u] rec )
+    = . c c_seq + . c c_seq 1
+    ^ ?? w { T _ → @ !v TlsErr { T 0 } F _ → @ !v TlsErr { F # TlsErr TlsWrite } }
+}
+
+// Decrypt a TLS 1.2 record body (real type `rtype`) → plaintext.
+@ __decrypt_record_12 * TlsConn c i rtype ( Vec u ) body → ?( Vec u ) {
+    : ?( Vec u ) pt ? == . c cipher 1 {
+        : i explen 8
+        : ( Vec u ) nonce ( vec_with_cap [u] 12 )
+        : ~ i k 0
+        ~ < k 4 { ( vec_push [u] nonce # u ( __t_bget . c s_iv k ) ) = k + k 1 }
+        : ~ i e 0
+        ~ < e 8 { ( vec_push [u] nonce # u ( __t_bget body e ) ) = e + e 1 }
+        : ( Vec u ) ct ( bytes_slice body 8 ( vec_len [u] body ) )
+        : i ptlen - ( vec_len [u] ct ) 16
+        : ( Vec u ) aad ( __aad12 . c s_seq rtype ptlen )
+        : ?( Vec u ) r ( aes128_gcm_decrypt . c s_key nonce aad ct )
+        ( vec_free [u] nonce )
+        ( vec_free [u] ct )
+        ( vec_free [u] aad )
+        r
+    } {
+        : ( Vec u ) nonce ( __nonce12_chacha . c s_iv . c s_seq )
+        : i ptlen - ( vec_len [u] body ) 16
+        : ( Vec u ) aad ( __aad12 . c s_seq rtype ptlen )
+        : ?( Vec u ) r ( aead_decrypt . c s_key nonce aad body )
+        ( vec_free [u] nonce )
+        ( vec_free [u] aad )
+        r
+    }
+    = . c s_seq + . c s_seq 1
+    ^ pt
+}
+
+// Derive the TLS 1.2 key block and install client/server write keys.
+@ __tls12_setkeys * TlsConn c ( Vec u ) master ( Vec u ) crand ( Vec u ) srand → v {
+    : ( Vec u ) seed ( vec_new [u] )
+    ( bytes_extend_bytes seed srand )
+    ( bytes_extend_bytes seed crand )
+    : i klen ? == . c cipher 1 16 32
+    : i ivlen ? == . c cipher 1 4 12
+    : i need + * 2 klen * 2 ivlen
+    : ( Vec u ) kb ( __prf12 master `key expansion` seed need )
+    ( vec_free [u] seed )
+    : ( Vec u ) ck ( bytes_slice kb 0 klen )
+    : ( Vec u ) sk ( bytes_slice kb klen * 2 klen )
+    : ( Vec u ) civ ( bytes_slice kb * 2 klen + * 2 klen ivlen )
+    : ( Vec u ) siv ( bytes_slice kb + * 2 klen ivlen + * 2 klen * 2 ivlen )
+    ( vec_free [u] . c c_key )
+    ( vec_free [u] . c s_key )
+    ( vec_free [u] . c c_iv )
+    ( vec_free [u] . c s_iv )
+    = . c c_key ck
+    = . c s_key sk
+    = . c c_iv civ
+    = . c s_iv siv
+    = . c c_seq 0
+    = . c s_seq 0
+    ( vec_free [u] kb )
+}
+
+// Drive the TLS 1.2 handshake after ServerHello. Consumes all the passed
+// buffers. On success returns the established (encrypted) connection;
+// the certificate chain + ServerKeyExchange signature material are
+// captured on `c` for the verifier (cv_sig / cv_scheme / th_cert).
+@ __tls12_handshake * TlsConn c ( Vec u ) sh ( Vec u ) priv ( Vec u ) cpub ( Vec u ) random ( Vec u ) sessid ( Vec u ) ch ( Vec u ) tr → !*TlsConn TlsErr {
+    : ( Vec u ) srand ( bytes_slice sh 6 38 )
+
+    // ── server flight 1: Certificate, ServerKeyExchange, ServerHelloDone ──
+    : ~ ( Vec u ) spub ( vec_new [u] )
+    : ~ i err 0
+    : ~ i done 0
+    ~ & == done 0 == err 0 {
+        : !( Vec u ) TlsErr mr ( __next_hs c )
+        ?? mr {
+            F _ → { = err 1 }
+            T msg → {
+                : i t ( __t_bget msg 0 )
+                ? == t 11 {
+                    ( vec_free [u] . c cert_msg )
+                    = . c cert_msg ( bytes_slice msg 0 ( vec_len [u] msg ) )
+                } {}
+                ? == t 12 {
+                    // ServerKeyExchange: curve_type(1) curve(2) pklen(1) pk sig_scheme(2) siglen(2) sig
+                    : i pklen ( __t_bget msg 7 )
+                    ( vec_free [u] spub )
+                    = spub ( bytes_slice msg 8 + 8 pklen )
+                    : i sp + 8 pklen
+                    = . c cv_scheme ( __rdint msg sp 2 )
+                    : i siglen ( __rdint msg + sp 2 2 )
+                    ( vec_free [u] . c cv_sig )
+                    = . c cv_sig ( bytes_slice msg + sp 4 + + sp 4 siglen )
+                    // signed data = client_random || server_random || ecdhe_params
+                    : ( Vec u ) signed ( vec_new [u] )
+                    ( bytes_extend_bytes signed random )
+                    ( bytes_extend_bytes signed srand )
+                    : ( Vec u ) eparams ( bytes_slice msg 4 + 8 pklen )
+                    ( __cat signed eparams )
+                    ( vec_free [u] eparams )
+                    ( vec_free [u] . c th_cert )
+                    = . c th_cert signed
+                } {}
+                ? == t 14 { = done 1 } {}
+                ( __cat tr msg )
+                ( vec_free [u] msg )
+            }
+        }
+    }
+    ? | == err 1 == ( vec_len [u] spub ) 0 {
+        ( vec_free [u] srand ) ( vec_free [u] spub )
+        ^ ( __fail c priv cpub random sessid ch tr # TlsErr TlsHandshake )
+    } {}
+
+    // ── ECDHE + master secret ──
+    : ( Vec u ) pms ( x25519 priv spub )
+    : ( Vec u ) cs_seed ( vec_new [u] )
+    ( bytes_extend_bytes cs_seed random )
+    ( bytes_extend_bytes cs_seed srand )
+    : ( Vec u ) master ( __prf12 pms `master secret` cs_seed 48 )
+    ( vec_free [u] cs_seed )
+    ( __tls12_setkeys c master random srand )
+
+    // ── ClientKeyExchange (plaintext handshake) ──
+    : ( Vec u ) cke ( vec_with_cap [u] 38 )
+    ( vec_push [u] cke # u 16 )
+    ( __u24 cke 33 )
+    ( vec_push [u] cke # u 32 )
+    ( __cat cke cpub )
+    : !v TlsErr ckw ( __send_plain c 22 cke )
+    ?? ckw { T _ → {} F _ → {} }
+    ( __cat tr cke )
+
+    // ── ChangeCipherSpec + client Finished (encrypted) ──
+    : ( Vec u ) ccs ( vec_with_cap [u] 1 )
+    ( vec_push [u] ccs # u 1 )
+    : !v TlsErr cw ( __send_plain c 20 ccs )
+    ?? cw { T _ → {} F _ → {} }
+    ( vec_free [u] ccs )
+
+    : ( Vec u ) th_c ( sha256_pure tr )
+    : ( Vec u ) cfin_vd ( __prf12 master `client finished` th_c 12 )
+    ( vec_free [u] th_c )
+    : ( Vec u ) finmsg ( vec_with_cap [u] 16 )
+    ( vec_push [u] finmsg # u 20 )
+    ( __u24 finmsg 12 )
+    ( __cat finmsg cfin_vd )
+    ( vec_free [u] cfin_vd )
+    : !v TlsErr fw ( __send_record_12 c 22 finmsg )
+    ?? fw { T _ → {} F _ → {} }
+    ( __cat tr finmsg )
+    ( vec_free [u] finmsg )
+
+    // ── server ChangeCipherSpec + Finished ──
+    : ( Vec u ) th_s ( sha256_pure tr )
+    : ( Vec u ) sfin_exp ( __prf12 master `server finished` th_s 12 )
+    ( vec_free [u] th_s )
+    : ~ i serr 0
+    : ~ i sdone 0
+    ~ & == sdone 0 == serr 0 {
+        : !TlsRecord TlsErr rr ( __read_record c )
+        ?? rr {
+            F _ → { = serr 1 }
+            T rec → {
+                ? == . rec rtype 20 {
+                    ( vec_free [u] . rec body )
+                } {
+                    ?? ( __decrypt_record_12 c . rec rtype . rec body ) {
+                        T inner → {
+                            ( vec_free [u] . rec body )
+                            // inner = Finished handshake msg: [20][len3][verify_data]
+                            : ~ b ok ? >= ( vec_len [u] inner ) 16 T F
+                            : ~ i vi 0
+                            ~ & ok < vi 12 { ? != ( __t_bget inner + 4 vi ) ( __t_bget sfin_exp vi ) { = ok F } {} = vi + vi 1 }
+                            ? ok { = sdone 1 } { = serr 1 }
+                            ( vec_free [u] inner )
+                        }
+                        F _ → { ( vec_free [u] . rec body ) = serr 1 }
+                    }
+                }
+            }
+        }
+    }
+    ( vec_free [u] sfin_exp )
+
+    ( vec_free [u] srand ) ( vec_free [u] spub ) ( vec_free [u] pms ) ( vec_free [u] master )
+    ( vec_free [u] priv ) ( vec_free [u] cpub ) ( vec_free [u] random ) ( vec_free [u] sessid )
+    ( vec_free [u] ch ) ( vec_free [u] tr ) ( vec_free [u] sh ) ( vec_free [u] cke )
+
+    ? == serr 1 { ( tls_close c ) ^ @ !*TlsConn TlsErr { F # TlsErr TlsHandshake } } {}
+    = . c established 1
+    ^ @ !*TlsConn TlsErr { T c }
 }
