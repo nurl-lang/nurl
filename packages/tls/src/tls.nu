@@ -28,6 +28,7 @@ $ `stdlib/std/net.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/hkdf.nu`
 $ `stdlib/std/x25519.nu`
+$ `stdlib/std/ecdsa_p256.nu`
 $ `stdlib/std/chacha20poly1305.nu`
 $ `stdlib/std/aes_gcm.nu`
 $ `verify.nu`
@@ -88,6 +89,7 @@ $ `verify.nu`
     i cv_scheme  // CertificateVerify SignatureScheme
     i cipher  // 0 = ChaCha20-Poly1305, 1 = AES-128-GCM
     i version  // 13 = TLS 1.3, 12 = TLS 1.2
+    ( Vec u ) kx_p256  // P-256 ephemeral private key (empty if X25519 chosen)
 }
 
 // ── small helpers ─────────────────────────────────────────────────
@@ -342,7 +344,7 @@ $ `verify.nu`
 }
 
 // ── ClientHello ───────────────────────────────────────────────────
-@ __build_client_hello s host ( Vec u ) pubkey ( Vec u ) random ( Vec u ) sessid → ( Vec u ) {
+@ __build_client_hello s host ( Vec u ) pubkey ( Vec u ) p256pub ( Vec u ) random ( Vec u ) sessid → ( Vec u ) {
     : ( Vec u ) body ( vec_new [u] )
     ( __u16 body 771 )  // legacy_version 0x0303
     ( __cat body random )  // 32-byte random
@@ -378,10 +380,13 @@ $ `verify.nu`
     ( __blk16 ext sni )
     ( vec_free [u] sni )
 
-    // supported_groups (0x000a): x25519 (0x001d)
+    // supported_groups (0x000a): x25519 (0x001d) + secp256r1 (0x0017).
+    // Both are offered so the server can pick whichever it is configured
+    // for — PostgreSQL/OpenSSL servers commonly default to P-256.
     : ( Vec u ) grp ( vec_new [u] )
-    ( __u16 grp 2 )
-    ( __u16 grp 29 )
+    ( __u16 grp 4 )
+    ( __u16 grp 29 )  // x25519
+    ( __u16 grp 23 )  // secp256r1
     ( __u16 ext 10 )
     ( __blk16 ext grp )
     ( vec_free [u] grp )
@@ -418,12 +423,17 @@ $ `verify.nu`
     ( __blk16 ext epf )
     ( vec_free [u] epf )
 
-    // key_share (0x0033): x25519 + 32-byte pubkey
+    // key_share (0x0033): both an x25519 (32-byte) and a secp256r1
+    // (65-byte uncompressed) entry, so whichever group the server selects
+    // we already supplied a matching public key — no HelloRetryRequest.
     : ( Vec u ) ks ( vec_new [u] )
     : ( Vec u ) entry ( vec_new [u] )
     ( __u16 entry 29 )  // group x25519
     ( __u16 entry 32 )  // key_exchange length
     ( __cat entry pubkey )
+    ( __u16 entry 23 )  // group secp256r1
+    ( __u16 entry ( vec_len [u] p256pub ) )  // 65
+    ( __cat entry p256pub )
     ( __u16 ks ( vec_len [u] entry ) )
     ( __cat ks entry )
     ( __u16 ext 51 )
@@ -549,6 +559,16 @@ $ `verify.nu`
 // verifier.
 @ tls_connect_insecure s host i port s server_name → !*TlsConn TlsErr {
     : i raw ( nurl_tcp_connect host port )
+    ^ ( tls_attach raw server_name )
+}
+
+// Run the TLS handshake over a socket that is ALREADY connected (a raw
+// libc fd handle as returned by `nurl_tcp_connect`). This is what
+// STARTTLS-style protocols need — PostgreSQL's SSLRequest, SMTP STARTTLS,
+// IMAP/FTP — where the plaintext leg must exchange a few bytes before the
+// channel is upgraded to TLS on the same socket. No certificate
+// verification (see `tls_attach_verify` for the secure variant).
+@ tls_attach i raw s server_name → !*TlsConn TlsErr {
     : i ek ( nurl_tcp_err_kind raw )
     ? != ek 0 { ^ @ !*TlsConn TlsErr { F # TlsErr TlsConnect } } {}
     : s rp # s raw
@@ -579,10 +599,15 @@ $ `verify.nu`
     = . c cv_scheme 0
     = . c cipher 0
     = . c version 13
+    = . c kx_p256 ( vec_new [u] )
 
     // ── key share ──
     : ( Vec u ) priv ( __rand_bytes 32 )
     : ( Vec u ) cpub ( x25519_base priv )
+    : ( Vec u ) p256priv ( __rand_bytes 32 )
+    : ( Vec u ) p256pub ( p256_ecdh_keygen p256priv )
+    ( vec_free [u] . c kx_p256 )
+    = . c kx_p256 p256priv
     : ( Vec u ) random ( __rand_bytes 32 )
     : ( Vec u ) sessid ( __rand_bytes 32 )
 
@@ -590,7 +615,8 @@ $ `verify.nu`
     : ~ ( Vec u ) tr ( vec_new [u] )
 
     // ── ClientHello ──
-    : ( Vec u ) ch ( __build_client_hello server_name cpub random sessid )
+    : ( Vec u ) ch ( __build_client_hello server_name cpub p256pub random sessid )
+    ( vec_free [u] p256pub )
     ( __cat tr ch )
     : !v TlsErr sw ( __send_plain c 22 ch )
     ?? sw { T _ → {} F e → { ^ ( __fail c priv cpub random sessid ch tr e ) } }
@@ -612,7 +638,9 @@ $ `verify.nu`
     : ( Vec u ) spub ?? spkr { T k → k F e → { ( vec_free [u] sh ) ^ ( __fail c priv cpub random sessid ch tr e ) } }
 
     // ── key schedule (handshake) ──
-    : ( Vec u ) ecdhe ( x25519 priv spub )
+    // Distinguish the negotiated group by the server key-exchange length:
+    // X25519 is 32 bytes, secp256r1 an uncompressed point is 65.
+    : ( Vec u ) ecdhe ? == ( vec_len [u] spub ) 65 ( p256_ecdh_shared . c kx_p256 spub ) ( x25519 priv spub )
     : ( Vec u ) zeros ( __rand_bytes 0 )
     : ( Vec u ) z32 ( vec_with_cap [u] 32 )
     : ~ i zk 0
@@ -731,6 +759,21 @@ $ `verify.nu`
 
 @ tls_connect s host i port s server_name → !*TlsConn TlsErr {
     : !*TlsConn TlsErr r ( tls_connect_insecure host port server_name )
+    ^ ( __verify_conn r server_name )
+}
+
+// Verifying counterpart of `tls_attach`: upgrade an already-connected
+// socket to TLS and verify the chain / hostname against the system trust
+// store (the secure default for STARTTLS-style upgrades).
+@ tls_attach_verify i raw s server_name → !*TlsConn TlsErr {
+    : !*TlsConn TlsErr r ( tls_attach raw server_name )
+    ^ ( __verify_conn r server_name )
+}
+
+// Shared post-handshake verification used by both tls_connect and
+// tls_attach_verify: check the certificate (TLS 1.3 CertificateVerify or
+// TLS 1.2 ServerKeyExchange sig + chain + hostname) and close on failure.
+@ __verify_conn ! * TlsConn TlsErr r s server_name → !*TlsConn TlsErr {
     ?? r {
         F e → { ^ @ !*TlsConn TlsErr { F e } }
         T c → {
@@ -865,6 +908,7 @@ $ `verify.nu`
     ( vec_free [u] . c cert_msg )
     ( vec_free [u] . c cv_sig )
     ( vec_free [u] . c th_cert )
+    ( vec_free [u] . c kx_p256 )
     ( nurl_free # s c )
 }
 
