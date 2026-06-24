@@ -132,8 +132,19 @@ $ `stdlib/std/x509.nu`
 @ __v_scheme_alg i scheme → i {
     ? == scheme 2052 { ^ 6 } {}  // 0x0804 rsa_pss_rsae_sha256
     ? == scheme 1027 { ^ 4 } {}  // 0x0403 ecdsa_secp256r1_sha256
+    ? == scheme 1283 { ^ 5 } {}  // 0x0503 ecdsa_secp384r1_sha384
     ? == scheme 1025 { ^ 1 } {}  // 0x0401 rsa_pkcs1_sha256
+    ? == scheme 1281 { ^ 2 } {}  // 0x0501 rsa_pkcs1_sha384
+    ? == scheme 1537 { ^ 3 } {}  // 0x0601 rsa_pkcs1_sha512
     ^ 0
+}
+
+// An all-zero X509 with .ok = F.
+@ __v_x509_none → X509 {
+    ^ @ X509 {
+        ( vec_new [u] ) 0 ( vec_new [u] ) 0 ( vec_new [u] ) ( vec_new [u] )
+        ( vec_new [u] ) 0 ( vec_new [u] ) ( vec_new [u] ) ( vec_new [String] ) 0 0 F F
+    }
 }
 
 // Current time as YYYYMMDDHHMMSS (matches x509 not_before/not_after).
@@ -155,11 +166,13 @@ $ `stdlib/std/x509.nu`
 }
 
 // Collect (start,len) of each certificate DER inside a Certificate
-// handshake message into parallel arrays. Returns the count.
-@ __v_certlist ( Vec u ) msg ( Vec i ) starts ( Vec i ) lens → i {
-    // [0]type [1..4]len [4]ctxlen ctx... [.]list_len(3) entries
-    : i ctxlen ( __v_bget msg 4 )
-    : ~ i p + 5 ctxlen
+// handshake message into parallel arrays. Returns the count. `is12`
+// selects the TLS 1.2 layout (no request-context byte, no per-cert
+// extensions) vs the TLS 1.3 layout.
+@ __v_certlist ( Vec u ) msg i is12 ( Vec i ) starts ( Vec i ) lens → i {
+    // 1.3: [4]ctxlen ctx... list_len(3) [cert_len(3) cert ext_len(2) ext]
+    // 1.2:               list_len(3) [cert_len(3) cert]
+    : ~ i p ? == is12 1 4 + 5 ( __v_bget msg 4 )
     : i listend + + p 3 ( __v_int msg p 3 )
     = p + p 3
     : ~ i count 0
@@ -168,8 +181,12 @@ $ `stdlib/std/x509.nu`
         ( vec_push [i] starts + p 3 )
         ( vec_push [i] lens clen )
         = count + count 1
-        : i extlen ( __v_int msg + + p 3 clen 2 )
-        = p + + + p 3 clen + 2 extlen
+        ? == is12 1 {
+            = p + + p 3 clen
+        } {
+            : i extlen ( __v_int msg + + p 3 clen 2 )
+            = p + + + p 3 clen + 2 extlen
+        }
     }
     ^ count
 }
@@ -275,36 +292,27 @@ $ `stdlib/std/x509.nu`
 }
 
 // Top-level certificate verification (see header for return codes).
-@ tls_cert_verify ( Vec u ) cert_msg i cv_scheme ( Vec u ) cv_sig ( Vec u ) th_cert s hostname → i {
+// Chain-only verification (no CertificateVerify): hostname + validity +
+// chain links + trust anchor. Shared by the TLS 1.3 and 1.2 paths. Same
+// return codes as tls_cert_verify (0 ok).
+@ tls_chain_verify ( Vec u ) cert_msg i is12 s hostname → i {
     : ( Vec i ) starts ( vec_new [i] )
     : ( Vec i ) lens ( vec_new [i] )
-    : i count ( __v_certlist cert_msg starts lens )
+    : i count ( __v_certlist cert_msg is12 starts lens )
     ? == count 0 { ( vec_free [i] starts ) ( vec_free [i] lens ) ^ 1 } {}
 
     : ~ i rc 0
-
-    // Leaf certificate.
     : i ls ?? ( vec_get [i] starts 0 ) { T x → x F _ → 0 }
     : i ll ?? ( vec_get [i] lens 0 ) { T x → x F _ → 0 }
     : ( Vec u ) leafder ( bytes_slice cert_msg ls + ls ll )
     : X509 leaf ( x509_parse leafder )
     ? ! . leaf ok { = rc 2 } {}
 
-    // 1. CertificateVerify over the leaf public key.
-    ? == rc 0 {
-        : i alg ( __v_scheme_alg cv_scheme )
-        ? == alg 0 { = rc 9 } {
-            : ( Vec u ) content ( __v_cv_content th_cert )
-            ? ! ( __v_sig_check leaf alg cv_sig content ) { = rc 3 } {}
-            ( vec_free [u] content )
-        }
-    } {}
-
-    // 2. Hostname + leaf validity.
+    // Hostname + leaf validity.
     ? == rc 0 { ? ! ( x509_matches_host leaf hostname ) { = rc 7 } {} } {}
     ? == rc 0 { ? ! ( __v_in_validity leaf ) { = rc 8 } {} } {}
 
-    // 3. Chain links: cert[i] signed by cert[i+1].
+    // Chain links: cert[i] signed by cert[i+1].
     : ~ i li 0
     ~ & == rc 0 < li - count 1 {
         : i cs ?? ( vec_get [i] starts li ) { T x → x F _ → 0 }
@@ -324,7 +332,7 @@ $ `stdlib/std/x509.nu`
         = li + li 1
     }
 
-    // 4. Anchor the top cert to the system trust store.
+    // Anchor the top cert to the system trust store.
     ? == rc 0 {
         : i ts ?? ( vec_get [i] starts - count 1 ) { T x → x F _ → 0 }
         : i tl ?? ( vec_get [i] lens - count 1 ) { T x → x F _ → 0 }
@@ -340,4 +348,48 @@ $ `stdlib/std/x509.nu`
     ( vec_free [i] starts )
     ( vec_free [i] lens )
     ^ rc
+}
+
+// Leaf public key (parsed) from a Certificate message — for verifying the
+// TLS 1.2 ServerKeyExchange signature. Caller x509_frees it.
+@ tls_leaf_cert ( Vec u ) cert_msg i is12 → X509 {
+    : ( Vec i ) starts ( vec_new [i] )
+    : ( Vec i ) lens ( vec_new [i] )
+    : i count ( __v_certlist cert_msg is12 starts lens )
+    ? == count 0 {
+        ( vec_free [i] starts ) ( vec_free [i] lens )
+        ^ ( __v_x509_none )
+    } {}
+    : i ls ?? ( vec_get [i] starts 0 ) { T x → x F _ → 0 }
+    : i ll ?? ( vec_get [i] lens 0 ) { T x → x F _ → 0 }
+    : ( Vec u ) der ( bytes_slice cert_msg ls + ls ll )
+    : X509 leaf ( x509_parse der )
+    ( vec_free [u] der )
+    ( vec_free [i] starts )
+    ( vec_free [i] lens )
+    ^ leaf
+}
+
+// Verify a signature with the leaf's public key under a TLS SignatureScheme
+// (the TLS 1.2 ServerKeyExchange check). 0 ok · 9 unsupported · 3 bad sig.
+@ tls12_ske_verify X509 leaf i scheme ( Vec u ) sig ( Vec u ) signed → i {
+    : i alg ( __v_scheme_alg scheme )
+    ? == alg 0 { ^ 9 } {}
+    ? ( __v_sig_check leaf alg sig signed ) { ^ 0 } {}
+    ^ 3
+}
+
+@ tls_cert_verify ( Vec u ) cert_msg i cv_scheme ( Vec u ) cv_sig ( Vec u ) th_cert s hostname → i {
+    : X509 leaf ( tls_leaf_cert cert_msg 0 )
+    ? ! . leaf ok { ( x509_free leaf ) ^ 2 } {}
+    // CertificateVerify over the leaf public key.
+    : i alg ( __v_scheme_alg cv_scheme )
+    ? == alg 0 { ( x509_free leaf ) ^ 9 } {}
+    : ( Vec u ) content ( __v_cv_content th_cert )
+    : b cvok ( __v_sig_check leaf alg cv_sig content )
+    ( vec_free [u] content )
+    ( x509_free leaf )
+    ? ! cvok { ^ 3 } {}
+    // Hostname + chain + anchor.
+    ^ ( tls_chain_verify cert_msg 0 hostname )
 }
