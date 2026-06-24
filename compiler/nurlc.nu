@@ -15254,6 +15254,18 @@
 // Called at every `$`-import path read site (scan_generic_structs,
 // scan_fn_sigs, gen_import_decl) so all three dedup tables key on the
 // same canonical form.
+// Directory portion of a file path (everything before the last '/'), or
+// "" when the path has no '/' (i.e. it lives in the current directory).
+@ __dirname s p → s {
+    : i n ( nurl_str_len p )
+    : ~ i i - n 1
+    ~ >= i 0 {
+        ? == ( nurl_str_get p i ) 47 { ^ ( nurl_str_slice p 0 i ) } {}
+        = i - i 1
+    }
+    ^ ``
+}
+
 @ __norm_import_path s path → s {
     : ~ s cur path
     : ~ b done F
@@ -15263,7 +15275,23 @@
         { = cur ( nurl_str_slice cur 2 - n 2 ) }
         { = done T }
     }
-    // A cwd-relative hit always wins — this is the monorepo / in-tree
+    // Importer-relative first: a path that exists next to the importing
+    // file resolves to THAT file, regardless of cwd. This lets a multi-
+    // file package reference its own modules (`$ `verify.nu``) and have
+    // them resolve whether the package is built standalone, from the
+    // monorepo root, or consumed as a `deps/<name>` dependency. stdlib /
+    // deps / cwd-rooted paths don't exist beside the importer, so they
+    // fall through to the cwd + $NURL_STDLIB lookup below — keeping the
+    // bootstrap and existing imports byte-identical.
+    : s sf ( vis_current_src_file )
+    ? != # i sf 0 {
+        : s dir ( __dirname sf )
+        ? != 0 ( nurl_str_len dir ) {
+            : s rel ( nurl_str_cat3 dir `/` cur )
+            ? == ( nurl_file_exists rel ) 1 { ^ rel } {}
+        } {}
+    } {}
+    // A cwd-relative hit wins next — this is the monorepo / in-tree
     // build, and keeps the bootstrap behaviour byte-identical (every
     // stdlib path resolves cwd-relative during self-host).
     ? == ( nurl_file_exists cur ) 1 { ^ cur } {}
@@ -15990,7 +16018,12 @@
                     ( nurl_sym_def g_generic_struct_syms `__scanned__` new_marker )
                     : s src2 ( nurl_read_file path )
                     : i lex2 ( nurl_lex_new src2 path )
+                    // Track the imported file so its imports resolve
+                    // importer-relative (mirrors the other scan passes).
+                    : s saved_sf ( vis_current_src_file )
+                    ( vis_set_current_src_file path )
                     ( scan_generic_structs lex2 syms )
+                    ( vis_set_current_src_file saved_sf )
                 }
                 = handled T
             } {}
@@ -16377,7 +16410,13 @@
                             }
                             src2
                             : i lex2 ( nurl_lex_new eff_src2 path )
+                            // Track the imported file as current so its own
+                            // `$`-imports resolve importer-relative (mirrors
+                            // scan_fn_sigs / gen_import_decl).
+                            : s saved_sf ( vis_current_src_file )
+                            ( vis_set_current_src_file path )
                             ( scan_type_names lex2 syms )
+                            ( vis_set_current_src_file saved_sf )
                         }
                     }
                     {}
