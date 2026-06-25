@@ -193,24 +193,12 @@ else
     log "[info] sqlite3 not found — stdlib/ext/sqlite.nu will return SqliteUnsupported"
 fi
 
-# ── libpq detection ──────────────────────────────────────────
-# PostgreSQL FFI is PURE NURL — `stdlib/ext/postgres.nu` declares
-# every libpq symbol via `& `pq` @ ...` without any runtime.c bridge.
-# Detection here exists only to (a) extend the default link line with
-# -lpq so `nurlc` itself can build (it doesn't import postgres.nu —
-# safe) and (b) emit the `stdlib/runtime.pq` sentinel that the new
-# compile-time FFI-lib check consults: an attempt to compile a NURL
-# program that uses postgres.nu without libpq-dev installed fails at
-# compile time with a clear diagnostic, not a cryptic linker error.
-PQ_LIBS=""
-if pkg-config --exists libpq 2>/dev/null; then
-    PQ_LIBS="$(pkg-config --libs libpq)"
-    echo 1 > stdlib/runtime.pq
-    log "[info] libpq detected — PostgreSQL FFI enabled"
-else
-    rm -f stdlib/runtime.pq
-    log "[info] libpq not found — stdlib/ext/postgres.nu will fail at compile time"
-fi
+# ── libpq: removed (§8 P5) ───────────────────────────────────
+# PostgreSQL is served by the pure-NURL `psql` package (packages/psql),
+# which needs no libpq and no OpenSSL. The former libpq FFI wrapper
+# (stdlib/ext/postgres.nu) and its -lpq link were dropped; clean up any
+# stale sentinel from an earlier build.
+rm -f stdlib/runtime.pq
 
 # ── zlib detection ──────────────────────────────────────────
 # `stdlib/ext/compress.nu`'s `zlib_*` helpers (RFC 1950 stream format)
@@ -357,13 +345,13 @@ step "clean"         rm -f build/nurlc_lastgood.bin \
 DL_LIB=""
 case "$(uname -s)" in Linux) DL_LIB="-ldl" ;; esac
 
-step "stage0 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed compiler/nurlc_lastgood.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_lastgood.bin
+step "stage0 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed compiler/nurlc_lastgood.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_lastgood.bin
 
 step "stage1 ir"     bash -c './build/nurlc_lastgood.bin compiler/nurlc.nu > build/nurlc_self.ll'
-step "stage1 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed build/nurlc_self.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_self
+step "stage1 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed build/nurlc_self.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_self
 
 step "stage2 ir"     bash -c './build/nurlc_self compiler/nurlc.nu > build/nurlc_self2.ll'
-step "stage2 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed build/nurlc_self2.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_self2
+step "stage2 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed build/nurlc_self2.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_self2
 
 # Fixed-point: nurlc_self must match nurlc_self2.
 if ! cmp -s build/nurlc_self.ll build/nurlc_self2.ll; then

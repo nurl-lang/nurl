@@ -1,5 +1,0 @@
-COMPILE OK
-LINK OK
-EXIT 0
-OUTPUT
-live pg test skipped (set NURL_PG_TESTS=1 + PG_CONNINFO=... to enable)
