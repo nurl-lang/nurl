@@ -10,6 +10,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hash_sha256.nu`
+$ `stdlib/std/hash_sha512.nu`
 
 @ __pb_bget ( Vec u ) v i k → i {
     ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ 0 }
@@ -59,6 +60,57 @@ $ `stdlib/std/hash_sha256.nu`
     ~ < generated dklen {
         : ( Vec u ) blk ( __pb_block password salt iters blockidx )
         : i take ? > - dklen generated 32 32 - dklen generated
+        : ~ i bi 0
+        ~ < bi take { ( vec_push [u] out # u ( __pb_bget blk bi ) ) = bi + bi 1 }
+        ( vec_free [u] blk )
+        = generated + generated take
+        = blockidx + blockidx 1
+    }
+    ^ out
+}
+
+// ── PBKDF2-HMAC-SHA-512 (RFC 8018, 64-byte HMAC blocks) ────────────
+@ __pb_block512 ( Vec u ) password ( Vec u ) salt i iters i blockidx → ( Vec u ) {
+    : i slen ( vec_len [u] salt )
+    : ( Vec u ) seed ( vec_with_cap [u] + slen 4 )
+    : ~ i si 0
+    ~ < si slen { ( vec_push [u] seed # u ( __pb_bget salt si ) ) = si + si 1 }
+    ( vec_push [u] seed # u & >> blockidx 24 255 )
+    ( vec_push [u] seed # u & >> blockidx 16 255 )
+    ( vec_push [u] seed # u & >> blockidx 8 255 )
+    ( vec_push [u] seed # u & blockidx 255 )
+
+    : ~ ( Vec u ) u ( hmac_sha512_pure password seed )
+    ( vec_free [u] seed )
+
+    : ( Vec u ) t ( vec_with_cap [u] 64 )
+    : ~ i ti 0
+    ~ < ti 64 { ( vec_push [u] t # u ( __pb_bget u ti ) ) = ti + ti 1 }
+
+    : ~ i n 1
+    ~ < n iters {
+        : ( Vec u ) un ( hmac_sha512_pure password u )
+        ( vec_free [u] u )
+        = u un
+        : ~ i xi 0
+        ~ < xi 64 {
+            : i cur ?? ( vec_get [u] t xi ) { T x → # i x F _ → 0 }
+            ( vec_set [u] t xi # u & ^^ cur ( __pb_bget u xi ) 255 )
+            = xi + xi 1
+        }
+        = n + n 1
+    }
+    ( vec_free [u] u )
+    ^ t
+}
+
+@ pbkdf2_hmac_sha512 ( Vec u ) password ( Vec u ) salt i iters i dklen → ( Vec u ) {
+    : ( Vec u ) out ( vec_with_cap [u] ? > dklen 0 dklen 1 )
+    : ~ i blockidx 1
+    : ~ i generated 0
+    ~ < generated dklen {
+        : ( Vec u ) blk ( __pb_block512 password salt iters blockidx )
+        : i take ? > - dklen generated 64 64 - dklen generated
         : ~ i bi 0
         ~ < bi take { ( vec_push [u] out # u ( __pb_bget blk bi ) ) = bi + bi 1 }
         ( vec_free [u] blk )
