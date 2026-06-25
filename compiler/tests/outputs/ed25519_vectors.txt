@@ -1,0 +1,17 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+v1: PASS
+v1: PASS
+v1: verify PASS
+v1: tamper PASS
+v2: PASS
+v2: PASS
+v2: verify PASS
+v2: tamper PASS
+v3: PASS
+v3: PASS
+v3: verify PASS
+v3: tamper PASS
+ed25519: all vectors PASS

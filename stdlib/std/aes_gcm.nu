@@ -63,21 +63,75 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Encrypt one 16-byte block `in` at offset `off` → 16-byte ( Vec u ).
-@ __aes_encrypt_block ( Vec u ) inb i off ( Vec u ) rk ( Vec u ) sbox → ( Vec u ) {
+// Encrypt one 16-byte block. `nr` is the round count (10 for AES-128,
+// 14 for AES-256); the final round key sits at offset nr*16.
+@ __aes_encrypt_block ( Vec u ) inb i off ( Vec u ) rk ( Vec u ) sbox i nr → ( Vec u ) {
     : ( Vec u ) s ( vec_with_cap [u] 16 )
     : ~ i i 0
     ~ < i 16 { ( vec_push [u] s # u ^^ ( __aes_bget inb + off i ) ( __aes_bget rk i ) ) = i + i 1 }
     : ~ i round 1
-    ~ < round 10 {
+    ~ < round nr {
         ( __aes_sub_shift s sbox )
         ( __aes_mixcolumns s )
         ( __aes_addroundkey s rk * round 16 )
         = round + round 1
     }
     ( __aes_sub_shift s sbox )
-    ( __aes_addroundkey s rk 160 )
+    ( __aes_addroundkey s rk * nr 16 )
     ^ s
 }
+
+// AES-256 key expansion → 240 bytes (15 round keys). Nk = 8: an extra
+// SubWord every 8th word (the i%8 == 4 case) on top of the 128 schedule.
+@ __aes256_expand ( Vec u ) key ( Vec u ) sbox → ( Vec u ) {
+    : ( Vec u ) w ( vec_with_cap [u] 240 )
+    : ~ i i 0
+    ~ < i 32 { ( vec_push [u] w # u ( __aes_bget key i ) ) = i + i 1 }
+    : ( Vec u ) rcon ?? ( bytes_from_hex `0102040810204080` ) { T v → v F _ → ( vec_new [u] ) }
+    : ~ i n 32
+    : ~ i rc 0
+    ~ < n 240 {
+        : ~ i t0 ( __aes_bget w - n 4 )
+        : ~ i t1 ( __aes_bget w - n 3 )
+        : ~ i t2 ( __aes_bget w - n 2 )
+        : ~ i t3 ( __aes_bget w - n 1 )
+        ? == % n 32 0 {
+            // RotWord + SubWord + Rcon
+            : i a ( __aes_bget sbox t1 )
+            : i b ( __aes_bget sbox t2 )
+            : i c ( __aes_bget sbox t3 )
+            : i d ( __aes_bget sbox t0 )
+            = t0 ^^ a ( __aes_bget rcon rc )
+            = t1 b
+            = t2 c
+            = t3 d
+            = rc + rc 1
+        } {
+            ? == % n 32 16 {
+                // SubWord only (no RotWord, no Rcon)
+                = t0 ( __aes_bget sbox t0 )
+                = t1 ( __aes_bget sbox t1 )
+                = t2 ( __aes_bget sbox t2 )
+                = t3 ( __aes_bget sbox t3 )
+            } {}
+        }
+        ( vec_push [u] w # u ^^ ( __aes_bget w - n 32 ) t0 )
+        ( vec_push [u] w # u ^^ ( __aes_bget w - n 31 ) t1 )
+        ( vec_push [u] w # u ^^ ( __aes_bget w - n 30 ) t2 )
+        ( vec_push [u] w # u ^^ ( __aes_bget w - n 29 ) t3 )
+        = n + n 4
+    }
+    ( vec_free [u] rcon )
+    ^ w
+}
+
+// Pick the expanded round keys for a 16- or 32-byte key.
+@ __aes_expand ( Vec u ) key ( Vec u ) sbox → ( Vec u ) {
+    ? == ( vec_len [u] key ) 32 { ^ ( __aes256_expand key sbox ) } { ^ ( __aes128_expand key sbox ) }
+}
+
+// Round count for a 16- or 32-byte key.
+@ __aes_nr ( Vec u ) key → i { ? == ( vec_len [u] key ) 32 { ^ 14 } { ^ 10 } }
 
 @ __aes_addroundkey ( Vec u ) s ( Vec u ) rk i off → v {
     : ~ i i 0
@@ -176,7 +230,7 @@ $ `stdlib/std/bytes.nu`
     ^ acc
 }
 
-@ __ctr_block ( Vec u ) j0 i counter ( Vec u ) rk ( Vec u ) sbox → ( Vec u ) {
+@ __ctr_block ( Vec u ) j0 i counter ( Vec u ) rk ( Vec u ) sbox i nr → ( Vec u ) {
     : ( Vec u ) cb ( vec_with_cap [u] 16 )
     : ~ i i 0
     ~ < i 12 { ( vec_push [u] cb # u ( __aes_bget j0 i ) ) = i + i 1 }
@@ -184,7 +238,7 @@ $ `stdlib/std/bytes.nu`
     ( vec_push [u] cb # u & >> counter 16 255 )
     ( vec_push [u] cb # u & >> counter 8 255 )
     ( vec_push [u] cb # u & counter 255 )
-    : ( Vec u ) ks ( __aes_encrypt_block cb 0 rk sbox )
+    : ( Vec u ) ks ( __aes_encrypt_block cb 0 rk sbox nr )
     ( vec_free [u] cb )
     ^ ks
 }
@@ -199,11 +253,12 @@ $ `stdlib/std/bytes.nu`
 // serves encrypt and decrypt; the caller compares/produces the tag.
 @ __gcm_core ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) input ( Vec u ) tag_out → ( Vec u ) {
     : ( Vec u ) sbox ( __aes_sbox )
-    : ( Vec u ) rk ( __aes128_expand key sbox )
+    : i nr ( __aes_nr key )
+    : ( Vec u ) rk ( __aes_expand key sbox )
     : ( Vec u ) zero ( vec_with_cap [u] 16 )
     : ~ i zz 0
     ~ < zz 16 { ( vec_push [u] zero # u 0 ) = zz + zz 1 }
-    : ( Vec u ) h ( __aes_encrypt_block zero 0 rk sbox )
+    : ( Vec u ) h ( __aes_encrypt_block zero 0 rk sbox nr )
 
     // J0 = nonce || 0x00000001
     : ( Vec u ) j0 ( vec_with_cap [u] 12 )
@@ -216,7 +271,7 @@ $ `stdlib/std/bytes.nu`
     : ~ i off 0
     : ~ i ctr 2
     ~ < off n {
-        : ( Vec u ) ks ( __ctr_block j0 ctr rk sbox )
+        : ( Vec u ) ks ( __ctr_block j0 ctr rk sbox nr )
         : ~ i j 0
         ~ & < j 16 < + off j n {
             ( vec_push [u] out # u ^^ ( __aes_bget input + off j ) ( __aes_bget ks j ) )
@@ -243,11 +298,12 @@ $ `stdlib/std/bytes.nu`
 // Compute the GCM tag over aad + ciphertext.
 @ __gcm_tag ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) ct → ( Vec u ) {
     : ( Vec u ) sbox ( __aes_sbox )
-    : ( Vec u ) rk ( __aes128_expand key sbox )
+    : i nr ( __aes_nr key )
+    : ( Vec u ) rk ( __aes_expand key sbox )
     : ( Vec u ) zero ( vec_with_cap [u] 16 )
     : ~ i zz 0
     ~ < zz 16 { ( vec_push [u] zero # u 0 ) = zz + zz 1 }
-    : ( Vec u ) h ( __aes_encrypt_block zero 0 rk sbox )
+    : ( Vec u ) h ( __aes_encrypt_block zero 0 rk sbox nr )
     : ( Vec u ) y ( vec_with_cap [u] 16 )
     : ~ i yi 0
     ~ < yi 16 { ( vec_push [u] y # u 0 ) = yi + yi 1 }
@@ -262,7 +318,7 @@ $ `stdlib/std/bytes.nu`
     : ( Vec u ) j0 ( vec_with_cap [u] 12 )
     : ~ i ni 0
     ~ < ni 12 { ( vec_push [u] j0 # u ( __aes_bget nonce ni ) ) = ni + ni 1 }
-    : ( Vec u ) ekj0 ( __ctr_block j0 1 rk sbox )
+    : ( Vec u ) ekj0 ( __ctr_block j0 1 rk sbox nr )
     : ( Vec u ) tag ( vec_with_cap [u] 16 )
     : ~ i ti 0
     ~ < ti 16 { ( vec_push [u] tag # u ^^ ( __aes_bget y3 ti ) ( __aes_bget ekj0 ti ) ) = ti + ti 1 }
@@ -294,6 +350,38 @@ $ `stdlib/std/bytes.nu`
 // AES-128-GCM open: ct_tag is ciphertext followed by its 16-byte tag.
 // None on tag mismatch.
 @ aes128_gcm_decrypt ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) ct_tag → ?( Vec u ) {
+    : i total ( vec_len [u] ct_tag )
+    ? < total 16 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+    : i ctlen - total 16
+    : ( Vec u ) ct ( bytes_slice ct_tag 0 ctlen )
+    : ( Vec u ) tag ( __gcm_tag key nonce aad ct )
+    : b ok ( __ct_eq ct_tag ctlen tag )
+    ( vec_free [u] tag )
+    ? ! ok { ( vec_free [u] ct ) ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+    : ( Vec u ) dummy ( vec_new [u] )
+    : ( Vec u ) pt ( __gcm_core key nonce aad ct dummy )
+    ( vec_free [u] dummy )
+    ( vec_free [u] ct )
+    ^ @ ?( Vec u ) { T pt }
+}
+
+// AES-256-GCM (NIST SP 800-38D) — same GCM construction with a 32-byte key;
+// the block cipher core dispatches on key length (14 rounds). This is the
+// TLS_AES_256_GCM_SHA384 record protection and the AEAD used by ext/crypto.
+// seal: returns ciphertext with the 16-byte tag appended.
+@ aes256_gcm_encrypt ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) pt → ( Vec u ) {
+    : ( Vec u ) dummy ( vec_new [u] )
+    : ( Vec u ) ct ( __gcm_core key nonce aad pt dummy )
+    ( vec_free [u] dummy )
+    : ( Vec u ) tag ( __gcm_tag key nonce aad ct )
+    : ~ i ti 0
+    ~ < ti 16 { ( vec_push [u] ct # u ( __aes_bget tag ti ) ) = ti + ti 1 }
+    ( vec_free [u] tag )
+    ^ ct
+}
+
+// open: ct_tag is ciphertext followed by its 16-byte tag. None on mismatch.
+@ aes256_gcm_decrypt ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) ct_tag → ?( Vec u ) {
     : i total ( vec_len [u] ct_tag )
     ? < total 16 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : i ctlen - total 16
