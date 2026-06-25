@@ -56,6 +56,10 @@ $ `deps/tls/src/tls.nu`
     String lasterr  // last ErrorResponse / failure text
     i be_pid
     i be_key
+    String srv_ver  // server_version from ParameterStatus (for the banner)
+    String db_name  // connection identity, for the banner and \conninfo
+    String user_name
+    String host_name
 }
 
 : PgMsg {
@@ -333,7 +337,21 @@ $ `deps/tls/src/tls.nu`
                     = . c lasterr ( __pg_error_text pl )
                     = done 1 = rc 3
                 } {
-                    ? == t 83 {} {}  // ParameterStatus
+                    ? == t 83 {
+                        // ParameterStatus: key\0 value\0 — keep server_version.
+                        : i pn ( vec_len [u] pl )
+                        : ~ i e 0
+                        ~ & < e pn != ( __bget pl e ) 0 { = e + e 1 }
+                        : String key ( __slice_str pl 0 e )
+                        ? ( nurl_str_eq ( string_data key ) `server_version` ) {
+                            : i vs + e 1
+                            : ~ i ve vs
+                            ~ & < ve pn != ( __bget pl ve ) 0 { = ve + ve 1 }
+                            ( string_free . c srv_ver )
+                            = . c srv_ver ( __slice_str pl vs ve )
+                        } {}
+                        ( string_free key )
+                    } {}
                     ? == t 75 {
                         = . c be_pid ( __rd32 pl 0 )
                         = . c be_key ( __rd32 pl 4 )
@@ -386,6 +404,10 @@ $ `deps/tls/src/tls.nu`
     = . c lasterr ( string_with_cap 0 )
     = . c be_pid 0
     = . c be_key 0
+    = . c srv_ver ( string_with_cap 0 )
+    = . c db_name ( string_from database )
+    = . c user_name ( string_from user )
+    = . c host_name ( string_from host )
 
     // ── optional TLS upgrade (SSLRequest → pure-NURL TLS) ──
     ? > sslmode 0 {
@@ -396,7 +418,10 @@ $ `deps/tls/src/tls.nu`
                 T tc → { = . c tls 1 = . c tc tc }
                 F _ → {
                     ( nurl_tcp_close rawfd )
-                    ( vec_free [u] . c rxbuf ) ( string_free . c lasterr ) ( nurl_free # s c )
+                    ( vec_free [u] . c rxbuf ) ( string_free . c lasterr )
+                ( string_free . c srv_ver ) ( string_free . c db_name )
+                ( string_free . c user_name ) ( string_free . c host_name )
+                ( nurl_free # s c )
                     ^ @ !*PgConn PgErr { F # PgErr PgTls }
                 }
             }
@@ -404,7 +429,10 @@ $ `deps/tls/src/tls.nu`
             // server declined TLS
             ? >= sslmode 2 {
                 ( nurl_tcp_close rawfd )
-                ( vec_free [u] . c rxbuf ) ( string_free . c lasterr ) ( nurl_free # s c )
+                ( vec_free [u] . c rxbuf ) ( string_free . c lasterr )
+                ( string_free . c srv_ver ) ( string_free . c db_name )
+                ( string_free . c user_name ) ( string_free . c host_name )
+                ( nurl_free # s c )
                 ^ @ !*PgConn PgErr { F # PgErr PgTls }
             } {}
         }
@@ -500,6 +528,7 @@ $ `deps/tls/src/tls.nu`
                         // CommandComplete
                         : ~ i e 0
                         ~ != ( __bget pl e ) 0 { = e + e 1 }
+                        ( string_free tag )
                         = tag ( __slice_str pl 0 e )
                     } {
                         ? == t 69 {
@@ -557,5 +586,9 @@ $ `deps/tls/src/tls.nu`
     ? == . c tls 1 { ( tls_close . c tc ) } { ( nurl_tcp_close . c raw ) }
     ( vec_free [u] . c rxbuf )
     ( string_free . c lasterr )
+    ( string_free . c srv_ver )
+    ( string_free . c db_name )
+    ( string_free . c user_name )
+    ( string_free . c host_name )
     ( nurl_free # s c )
 }

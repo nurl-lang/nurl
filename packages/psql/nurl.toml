@@ -1,6 +1,6 @@
 [package]
 name = "psql"
-version = "0.1.0"
+version = "0.2.1"
 description = "Pure-NURL PostgreSQL client — v3 wire protocol, SCRAM-SHA-256 / MD5 auth, and TLS (pure-NURL, X25519 + P-256) with no libpq and no OpenSSL. Connects securely from a host with nothing installed."
 license = "MIT OR Apache-2.0"
 

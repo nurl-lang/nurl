@@ -6,6 +6,30 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`psql` package — a proper psql-style front end.** The command now
+  renders results as aligned tables (numeric columns right-justified, NULLs
+  blank, an `(N rows)` footer), runs a multi-line REPL that accumulates a
+  statement until its `;` terminator, shows prompts and a banner only on a
+  terminal, and supports backslash meta-commands (`\dt`, `\d TABLE`, `\dn`,
+  `\l`, `\du`, `\conninfo`, `\?`, `\q`). It captures the server version and
+  the connection identity for the banner and `\conninfo` (which reports
+  whether the link is TLS-encrypted). All of this stays pure-NURL — the
+  binary still links `libc` only.
+- **`psql`: a `--help` flag** (`--help` / `-?`), also printed when the
+  command is run with no arguments, instead of attempting a default
+  connection and failing with an opaque `PgConnFail`.
+
+### Fixed
+
+- **`psql`: a per-query memory leak.** Each `pg_query` overwrote the
+  result's command-tag string without freeing the previous one, leaking one
+  allocation per statement over a long session. The REPL is now free of
+  per-operation leaks.
+
 ## [0.9.18] — 2026-06-24
 
 Portability fixes surfaced by real-world installs of the v0.9.17 toolchain:

@@ -28,6 +28,10 @@ needs nothing from the host either.
 * **Queries** — the simple query protocol (`Query` → `RowDescription` /
   `DataRow` / `CommandComplete`), with text-format decoding, NULL handling
   and backend `ErrorResponse` surfaced with its SQLSTATE and message.
+* **A psql-style front end** — aligned result tables (numeric columns
+  right-justified, NULLs blank, an `(N rows)` footer), backslash
+  meta-commands, a multi-line REPL that accumulates a statement until its
+  `;` terminator, TTY-only prompts and banner, and one-shot `-c`.
 
 ## sslmode
 
@@ -48,9 +52,25 @@ psql --sslmode require -U me -d mydb -c "select * from t"
 psql "postgres://me:secret@db.example.com:5432/mydb?sslmode=verify-full" -c "select now()"
 ```
 
-The password is read from `$PGPASSWORD`; `-h/-p/-U/-d` fall back to
-`$PGHOST/$PGPORT/$PGUSER/$PGDATABASE`. With no `-c`, statements are read
-one-per-line from stdin.
+Run `psql --help` (or `-?`, or just `psql` with no arguments) for a usage
+summary. The password is read from `$PGPASSWORD`; `-h/-p/-U/-d` fall back to
+`$PGHOST/$PGPORT/$PGUSER/$PGDATABASE`. With no `-c`, it runs an interactive
+REPL: SQL is read across lines until a `;`, prompts (`nurl=>` / `nurl->`)
+and the banner appear only on a terminal, so piping a script through it
+produces clean, prompt-free output.
+
+Backslash meta-commands (when no statement is pending):
+
+| command       | action                          |
+|---------------|---------------------------------|
+| `\dt`         | list tables                     |
+| `\d TABLE`    | describe a table's columns      |
+| `\dn`         | list schemas                    |
+| `\l`          | list databases                  |
+| `\du`         | list roles                      |
+| `\conninfo`   | show the connection (and whether it is TLS-encrypted) |
+| `\?`          | meta-command help               |
+| `\q`          | quit                            |
 
 ## Use as a library
 
