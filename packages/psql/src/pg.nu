@@ -34,6 +34,7 @@ $ `deps/tls/src/tls.nu`
     PgAuth  // authentication failed or unsupported method
     PgServerError  // backend ErrorResponse — see . conn lasterr
     PgQuery  // query-time failure — see . conn lasterr
+    PgNeedPassword  // server asked for a password but none was supplied
 }
 
 @ pg_err_name PgErr e → s {
@@ -44,6 +45,7 @@ $ `deps/tls/src/tls.nu`
         PgAuth → `PgAuth`
         PgServerError → `PgServerError`
         PgQuery → `PgQuery`
+        PgNeedPassword → `PgNeedPassword`
     }
 }
 
@@ -56,6 +58,10 @@ $ `deps/tls/src/tls.nu`
     String lasterr  // last ErrorResponse / failure text
     i be_pid
     i be_key
+    String srv_ver  // server_version from ParameterStatus (for the banner)
+    String db_name  // connection identity, for the banner and \conninfo
+    String user_name
+    String host_name
 }
 
 : PgMsg {
@@ -288,18 +294,24 @@ $ `deps/tls/src/tls.nu`
                 : i sub ( __rd32 pl 0 )
                 ? == sub 0 {} {}  // AuthenticationOk: keep reading until Z
                 ? == sub 3 {
-                    : ( Vec u ) pw ( vec_new [u] )
-                    ( __push_cstr pw password )
-                    : i _o ( __pg_send_typed c 112 pw )
-                    ( vec_free [u] pw )
+                    ? == ( nurl_str_len password ) 0 { = done 1 = rc 4 } {
+                        : ( Vec u ) pw ( vec_new [u] )
+                        ( __push_cstr pw password )
+                        : i _o ( __pg_send_typed c 112 pw )
+                        ( vec_free [u] pw )
+                    }
                 } {}
                 ? == sub 5 {
-                    : ( Vec u ) salt ( bytes_slice pl 4 ( vec_len [u] pl ) )
-                    : i _o ( __pg_md5_auth c user password salt )
-                    ( vec_free [u] salt )
+                    ? == ( nurl_str_len password ) 0 { = done 1 = rc 4 } {
+                        : ( Vec u ) salt ( bytes_slice pl 4 ( vec_len [u] pl ) )
+                        : i _o ( __pg_md5_auth c user password salt )
+                        ( vec_free [u] salt )
+                    }
                 } {}
                 ? == sub 10 {
-                    : i _o ( __pg_scram_init c scram_cfb )
+                    ? == ( nurl_str_len password ) 0 { = done 1 = rc 4 } {
+                        : i _o ( __pg_scram_init c scram_cfb )
+                    }
                 } {}
                 ? == sub 11 {
                     // SASLContinue: payload is the server-first message
@@ -333,7 +345,21 @@ $ `deps/tls/src/tls.nu`
                     = . c lasterr ( __pg_error_text pl )
                     = done 1 = rc 3
                 } {
-                    ? == t 83 {} {}  // ParameterStatus
+                    ? == t 83 {
+                        // ParameterStatus: key\0 value\0 — keep server_version.
+                        : i pn ( vec_len [u] pl )
+                        : ~ i e 0
+                        ~ & < e pn != ( __bget pl e ) 0 { = e + e 1 }
+                        : String key ( __slice_str pl 0 e )
+                        ? ( nurl_str_eq ( string_data key ) `server_version` ) {
+                            : i vs + e 1
+                            : ~ i ve vs
+                            ~ & < ve pn != ( __bget pl ve ) 0 { = ve + ve 1 }
+                            ( string_free . c srv_ver )
+                            = . c srv_ver ( __slice_str pl vs ve )
+                        } {}
+                        ( string_free key )
+                    } {}
                     ? == t 75 {
                         = . c be_pid ( __rd32 pl 0 )
                         = . c be_key ( __rd32 pl 4 )
@@ -348,8 +374,10 @@ $ `deps/tls/src/tls.nu`
     ( vec_free [u] pwbytes )
     ( string_free scram_nonce ) ( string_free scram_cfb ) ( string_free scram_expect )
     ? == rc 0 { ^ @ !v PgErr { T 0 } } {
-        ? == rc 3 { ^ @ !v PgErr { F # PgErr PgServerError } } {
-            ? == rc 1 { ^ @ !v PgErr { F # PgErr PgProtocol } } { ^ @ !v PgErr { F # PgErr PgAuth } }
+        ? == rc 4 { ^ @ !v PgErr { F # PgErr PgNeedPassword } } {
+            ? == rc 3 { ^ @ !v PgErr { F # PgErr PgServerError } } {
+                ? == rc 1 { ^ @ !v PgErr { F # PgErr PgProtocol } } { ^ @ !v PgErr { F # PgErr PgAuth } }
+            }
         }
     }
 }
@@ -386,6 +414,10 @@ $ `deps/tls/src/tls.nu`
     = . c lasterr ( string_with_cap 0 )
     = . c be_pid 0
     = . c be_key 0
+    = . c srv_ver ( string_with_cap 0 )
+    = . c db_name ( string_from database )
+    = . c user_name ( string_from user )
+    = . c host_name ( string_from host )
 
     // ── optional TLS upgrade (SSLRequest → pure-NURL TLS) ──
     ? > sslmode 0 {
@@ -396,7 +428,10 @@ $ `deps/tls/src/tls.nu`
                 T tc → { = . c tls 1 = . c tc tc }
                 F _ → {
                     ( nurl_tcp_close rawfd )
-                    ( vec_free [u] . c rxbuf ) ( string_free . c lasterr ) ( nurl_free # s c )
+                    ( vec_free [u] . c rxbuf ) ( string_free . c lasterr )
+                ( string_free . c srv_ver ) ( string_free . c db_name )
+                ( string_free . c user_name ) ( string_free . c host_name )
+                ( nurl_free # s c )
                     ^ @ !*PgConn PgErr { F # PgErr PgTls }
                 }
             }
@@ -404,7 +439,10 @@ $ `deps/tls/src/tls.nu`
             // server declined TLS
             ? >= sslmode 2 {
                 ( nurl_tcp_close rawfd )
-                ( vec_free [u] . c rxbuf ) ( string_free . c lasterr ) ( nurl_free # s c )
+                ( vec_free [u] . c rxbuf ) ( string_free . c lasterr )
+                ( string_free . c srv_ver ) ( string_free . c db_name )
+                ( string_free . c user_name ) ( string_free . c host_name )
+                ( nurl_free # s c )
                 ^ @ !*PgConn PgErr { F # PgErr PgTls }
             } {}
         }
@@ -433,7 +471,12 @@ $ `deps/tls/src/tls.nu`
     : !v PgErr ar ( __pg_authenticate c user password )
     ?? ar {
         T _ → { ^ @ !*PgConn PgErr { T c } }
-        F e → { ^ @ !*PgConn PgErr { F e } }
+        F e → {
+            // Authentication failed — close the socket and free the conn
+            // (the caller only inspects the PgErr, never c, on failure).
+            ( pg_close c )
+            ^ @ !*PgConn PgErr { F e }
+        }
     }
 }
 
@@ -500,6 +543,7 @@ $ `deps/tls/src/tls.nu`
                         // CommandComplete
                         : ~ i e 0
                         ~ != ( __bget pl e ) 0 { = e + e 1 }
+                        ( string_free tag )
                         = tag ( __slice_str pl 0 e )
                     } {
                         ? == t 69 {
@@ -557,5 +601,9 @@ $ `deps/tls/src/tls.nu`
     ? == . c tls 1 { ( tls_close . c tc ) } { ( nurl_tcp_close . c raw ) }
     ( vec_free [u] . c rxbuf )
     ( string_free . c lasterr )
+    ( string_free . c srv_ver )
+    ( string_free . c db_name )
+    ( string_free . c user_name )
+    ( string_free . c host_name )
     ( nurl_free # s c )
 }

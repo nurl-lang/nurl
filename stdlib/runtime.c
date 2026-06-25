@@ -248,6 +248,49 @@ long long nurl_stdout_isatty(void) { return isatty(fileno(stdout)) ? 1 : 0; }
 void nurl_enable_vt(void) {}
 #endif
 
+/* ── Hidden password prompt ──────────────────────────────────────
+ * Write `prompt` to stderr and read one line from stdin with terminal
+ * echo disabled, the way psql/sudo do, restoring the prior console
+ * state afterwards. The prompt goes to stderr so it never lands in
+ * redirected stdout. Returns a heap-owned string with the trailing
+ * newline stripped (shares nurl_read_line); falls back to an echoed
+ * read when echo cannot be toggled (e.g. stdin is not a console). */
+#ifdef _WIN32
+#  ifndef ENABLE_ECHO_INPUT
+#    define ENABLE_ECHO_INPUT 0x0004
+#  endif
+const char* nurl_read_password(const char *prompt) {
+    if (prompt && *prompt) { fputs(prompt, stderr); fflush(stderr); }
+    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode = 0;
+    int toggled = 0;
+    if (h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &mode)) {
+        if (SetConsoleMode(h, mode & ~(DWORD)ENABLE_ECHO_INPUT)) toggled = 1;
+    }
+    const char *line = nurl_read_line();
+    if (toggled) SetConsoleMode(h, mode);
+    fputs("\n", stderr); fflush(stderr);
+    return line;
+}
+#else
+#  include <termios.h>
+const char* nurl_read_password(const char *prompt) {
+    if (prompt && *prompt) { fputs(prompt, stderr); fflush(stderr); }
+    int fd = fileno(stdin);
+    struct termios oldt, newt;
+    int toggled = 0;
+    if (isatty(fd) && tcgetattr(fd, &oldt) == 0) {
+        newt = oldt;
+        newt.c_lflag &= ~(tcflag_t)ECHO;
+        if (tcsetattr(fd, TCSAFLUSH, &newt) == 0) toggled = 1;
+    }
+    const char *line = nurl_read_line();
+    if (toggled) tcsetattr(fd, TCSAFLUSH, &oldt);
+    fputs("\n", stderr); fflush(stderr);
+    return line;
+}
+#endif
+
 /* Output-buffer stack for deferred emission of closure bodies.
  *
  * `start` pushes a fresh buffering frame; `stop` snapshots it to a
