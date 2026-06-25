@@ -6,6 +6,16 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **WASM build of the runtime.** `nurl_read_password` (added in 0.9.19)
+  included `<termios.h>` on every non-Windows target, which broke the
+  `wasm32-wasi` compile (no termios) used by the playground / API image. It
+  now uses a WASI fallback branch (echoed read) alongside the POSIX termios
+  and Windows console paths; native behaviour is unchanged.
+
 ## [0.9.19] — 2026-06-25
 
 A usability pass on the pure-NURL `psql` client: it gains a real psql-style

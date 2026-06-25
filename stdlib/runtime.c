@@ -254,7 +254,8 @@ void nurl_enable_vt(void) {}
  * state afterwards. The prompt goes to stderr so it never lands in
  * redirected stdout. Returns a heap-owned string with the trailing
  * newline stripped (shares nurl_read_line); falls back to an echoed
- * read when echo cannot be toggled (e.g. stdin is not a console). */
+ * read when echo cannot be toggled (e.g. stdin is not a console, or the
+ * platform has no terminal API — WASI). */
 #ifdef _WIN32
 #  ifndef ENABLE_ECHO_INPUT
 #    define ENABLE_ECHO_INPUT 0x0004
@@ -269,6 +270,15 @@ const char* nurl_read_password(const char *prompt) {
     }
     const char *line = nurl_read_line();
     if (toggled) SetConsoleMode(h, mode);
+    fputs("\n", stderr); fflush(stderr);
+    return line;
+}
+#elif defined(__wasi__)
+/* WASI has no termios / console API — read with echo on (the prompt is
+ * meaningless in the wasm sandbox, but the symbol must exist to link). */
+const char* nurl_read_password(const char *prompt) {
+    if (prompt && *prompt) { fputs(prompt, stderr); fflush(stderr); }
+    const char *line = nurl_read_line();
     fputs("\n", stderr); fflush(stderr);
     return line;
 }
