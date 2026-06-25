@@ -6,4 +6,8 @@ tc3: PASS
 tc4: PASS
 tc4_open: PASS
 tamper: PASS
+tc14: PASS
+tc16: PASS
+tc16_open: PASS
+tamper256: PASS
 aes-gcm: all vectors PASS
