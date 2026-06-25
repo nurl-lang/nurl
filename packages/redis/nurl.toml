@@ -1,0 +1,8 @@
+[package]
+name = "redis"
+version = "0.1.0"
+description = "Pure-NURL Redis client — RESP2 protocol over a libc TCP socket, with an optional pure-NURL TLS upgrade (rediss://, no OpenSSL on the target). A reusable library plus a redis-cli-style command."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+tls = "^0.1"

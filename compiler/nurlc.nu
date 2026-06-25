@@ -6046,6 +6046,23 @@
                         = pr0_eff db_uc
                         = did_reconstruct T
                     } {}
+                    // `b` (bool) source type with an i64 payload slot: the bool
+                    // rode the slot widened to i64, so truncate back to i1 — a
+                    // `! b E` Ok-payload (or `? b` Some-payload) must materialise
+                    // as i1 so the binding and its `!`/`&`/`|` uses type-check.
+                    // Without this the var is stored/loaded as i64 while `! b`
+                    // emits `xor i1`, which clang rejects. The inner NURL type is
+                    // `__res_nurl_T` for results and `__opt_nurl_T` for options.
+                    : s bopt_t ( nurl_sym_get syms ( nurl_str_cat match_var_name `__opt_nurl_T` ) )
+                    ? & ( seq pt0 `i64` ) | ( seq nurl_inner_t `b` ) ( seq bopt_t `b` )
+                    { : s bl_uc ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print bl_uc )
+                        ( nurl_print ` = trunc i64 ` ) ( nurl_print pr0 )
+                        ( nurl_print ` to i1\n` )
+                        = pt0_eff `i1`
+                        = pr0_eff bl_uc
+                        = did_reconstruct T
+                    } {}
                     ? != 0 ( nurl_str_len nurl_inner_t )
                     { : ~ s nurl_inner_llvm ( nurl_sym_get syms nurl_inner_t )
                         // Fallback for paren-compound T (e.g. `( Vec u )`):
