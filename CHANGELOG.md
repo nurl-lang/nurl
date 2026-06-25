@@ -6,7 +6,14 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.19] — 2026-06-25
+
+A usability pass on the pure-NURL `psql` client: it gains a real psql-style
+front end — aligned result tables, a multi-line REPL, and backslash
+meta-commands — and now **prompts for a password** when the server requires
+one, so it connects to password-protected servers out of the box instead of
+failing with an opaque error. The cross-platform hidden password entry is
+provided by a new runtime helper, `nurl_read_password`.
 
 ### Added
 
