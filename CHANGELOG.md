@@ -8,8 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Runtime: `nurl_read_password`** — prompt on stderr and read a line from
+  the terminal with echo disabled (termios on POSIX, `SetConsoleMode` on
+  Windows), restoring the prior console state. The cross-platform home for
+  password entry, so packages need not declare platform-specific console
+  symbols themselves.
+
 ### Changed
 
+- **`psql`: prompt for a password when the server requires one.** Like the
+  real `psql`, it now reads the password interactively (echo disabled) when
+  the server requests authentication and neither `$PGPASSWORD` nor a URL
+  password was supplied — instead of sending an empty password and failing
+  with `PgServerError`. Trust-authenticated servers are still connected
+  without a prompt.
+- **`psql`: a `--help` / `-?` flag.** Bare `psql` again attempts a default
+  (localhost) connection like other psql clients; only an explicit `--help`
+  prints usage.
 - **`psql` package — a proper psql-style front end.** The command now
   renders results as aligned tables (numeric columns right-justified, NULLs
   blank, an `(N rows)` footer), runs a multi-line REPL that accumulates a
@@ -19,9 +36,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the connection identity for the banner and `\conninfo` (which reports
   whether the link is TLS-encrypted). All of this stays pure-NURL — the
   binary still links `libc` only.
-- **`psql`: a `--help` flag** (`--help` / `-?`), also printed when the
-  command is run with no arguments, instead of attempting a default
-  connection and failing with an opaque `PgConnFail`.
 
 ### Fixed
 
@@ -29,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   result's command-tag string without freeing the previous one, leaking one
   allocation per statement over a long session. The REPL is now free of
   per-operation leaks.
+- **`psql`: a connection leak on authentication failure.** `pg_connect`
+  returned the error without closing the socket or freeing the connection;
+  it now closes on the failure path (which the password-retry flow relies
+  on).
 
 ## [0.9.18] — 2026-06-24
 

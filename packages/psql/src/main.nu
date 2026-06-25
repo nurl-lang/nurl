@@ -27,6 +27,7 @@ $ `stdlib/ext/env.nu`
 $ `pg.nu`
 
 & `c` @ isatty i32 fd → i32
+& `c` @ nurl_read_password s prompt → s
 
 @ __sslmode_code s m → i {
     ? ( nurl_str_eq m `disable` ) { ^ 0 } {}
@@ -414,6 +415,27 @@ $ `pg.nu`
     ^ c
 }
 
+// Connect, and if the server demands a password we don't have, prompt for
+// one on the terminal (echo disabled) and retry once — the way psql does.
+@ __connect ConnInfo ci i tty → !*PgConn PgErr {
+    : !*PgConn PgErr cr ( pg_connect ( string_data . ci host ) . ci port ( string_data . ci user ) ( string_data . ci password ) ( string_data . ci database ) . ci sslmode )
+    ?? cr {
+        T c → ^ @ !*PgConn PgErr { T c }
+        F e → {
+            : b need ?? e { PgNeedPassword → T _ → F }
+            ? & need != tty 0 {
+                : String prompt ( string_with_cap 32 )
+                ( string_push_str prompt `Password for user ` )
+                ( string_push_str prompt ( string_data . ci user ) )
+                ( string_push_str prompt `: ` )
+                : s pw ( nurl_read_password ( string_data prompt ) )
+                ( string_free prompt )
+                ^ ( pg_connect ( string_data . ci host ) . ci port ( string_data . ci user ) pw ( string_data . ci database ) . ci sslmode )
+            } { ^ @ !*PgConn PgErr { F e } }
+        }
+    }
+}
+
 @ __usage → v {
     ( nurl_print `psql (NURL) — a pure-NURL PostgreSQL client (no libpq, no OpenSSL)\n\n` )
     ( nurl_print `Usage:\n` )
@@ -471,13 +493,15 @@ $ `pg.nu`
         = ai + ai 1
     }
 
-    // No arguments, or an explicit --help: print usage and exit.
-    ? | want_help == argc 1 { ( __usage ) ^ 0 } {}
+    // Explicit --help: print usage and exit. (Bare `psql` still connects to
+    // the default host, like other psql clients.)
+    ? want_help { ( __usage ) ^ 0 } {}
 
     // database defaults to the user name if unset
     ? == ( string_len . ci database ) 0 { = . ci database . ci user } {}
 
-    : !*PgConn PgErr cr ( pg_connect ( string_data . ci host ) . ci port ( string_data . ci user ) ( string_data . ci password ) ( string_data . ci database ) . ci sslmode )
+    : i tty # i ( isatty # i32 0 )
+    : !*PgConn PgErr cr ( __connect ci tty )
     ?? cr {
         F e → {
             ( nurl_eprint `psql: connection failed: ` ) ( nurl_eprint ( pg_err_name e ) ) ( nurl_eprint `\n` )
@@ -493,7 +517,6 @@ $ `pg.nu`
                 }
                 ( string_free t )
             } {
-                : i tty # i ( isatty # i32 0 )
                 ? != tty 0 { ( __banner c ) } {}
                 ( __repl c tty )
             }

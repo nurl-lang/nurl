@@ -34,6 +34,7 @@ $ `deps/tls/src/tls.nu`
     PgAuth  // authentication failed or unsupported method
     PgServerError  // backend ErrorResponse — see . conn lasterr
     PgQuery  // query-time failure — see . conn lasterr
+    PgNeedPassword  // server asked for a password but none was supplied
 }
 
 @ pg_err_name PgErr e → s {
@@ -44,6 +45,7 @@ $ `deps/tls/src/tls.nu`
         PgAuth → `PgAuth`
         PgServerError → `PgServerError`
         PgQuery → `PgQuery`
+        PgNeedPassword → `PgNeedPassword`
     }
 }
 
@@ -292,18 +294,24 @@ $ `deps/tls/src/tls.nu`
                 : i sub ( __rd32 pl 0 )
                 ? == sub 0 {} {}  // AuthenticationOk: keep reading until Z
                 ? == sub 3 {
-                    : ( Vec u ) pw ( vec_new [u] )
-                    ( __push_cstr pw password )
-                    : i _o ( __pg_send_typed c 112 pw )
-                    ( vec_free [u] pw )
+                    ? == ( nurl_str_len password ) 0 { = done 1 = rc 4 } {
+                        : ( Vec u ) pw ( vec_new [u] )
+                        ( __push_cstr pw password )
+                        : i _o ( __pg_send_typed c 112 pw )
+                        ( vec_free [u] pw )
+                    }
                 } {}
                 ? == sub 5 {
-                    : ( Vec u ) salt ( bytes_slice pl 4 ( vec_len [u] pl ) )
-                    : i _o ( __pg_md5_auth c user password salt )
-                    ( vec_free [u] salt )
+                    ? == ( nurl_str_len password ) 0 { = done 1 = rc 4 } {
+                        : ( Vec u ) salt ( bytes_slice pl 4 ( vec_len [u] pl ) )
+                        : i _o ( __pg_md5_auth c user password salt )
+                        ( vec_free [u] salt )
+                    }
                 } {}
                 ? == sub 10 {
-                    : i _o ( __pg_scram_init c scram_cfb )
+                    ? == ( nurl_str_len password ) 0 { = done 1 = rc 4 } {
+                        : i _o ( __pg_scram_init c scram_cfb )
+                    }
                 } {}
                 ? == sub 11 {
                     // SASLContinue: payload is the server-first message
@@ -366,8 +374,10 @@ $ `deps/tls/src/tls.nu`
     ( vec_free [u] pwbytes )
     ( string_free scram_nonce ) ( string_free scram_cfb ) ( string_free scram_expect )
     ? == rc 0 { ^ @ !v PgErr { T 0 } } {
-        ? == rc 3 { ^ @ !v PgErr { F # PgErr PgServerError } } {
-            ? == rc 1 { ^ @ !v PgErr { F # PgErr PgProtocol } } { ^ @ !v PgErr { F # PgErr PgAuth } }
+        ? == rc 4 { ^ @ !v PgErr { F # PgErr PgNeedPassword } } {
+            ? == rc 3 { ^ @ !v PgErr { F # PgErr PgServerError } } {
+                ? == rc 1 { ^ @ !v PgErr { F # PgErr PgProtocol } } { ^ @ !v PgErr { F # PgErr PgAuth } }
+            }
         }
     }
 }
@@ -461,7 +471,12 @@ $ `deps/tls/src/tls.nu`
     : !v PgErr ar ( __pg_authenticate c user password )
     ?? ar {
         T _ → { ^ @ !*PgConn PgErr { T c } }
-        F e → { ^ @ !*PgConn PgErr { F e } }
+        F e → {
+            // Authentication failed — close the socket and free the conn
+            // (the caller only inspects the PgErr, never c, on failure).
+            ( pg_close c )
+            ^ @ !*PgConn PgErr { F e }
+        }
     }
 }
 
