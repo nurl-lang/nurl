@@ -12,6 +12,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/bigint.nu`
+$ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
 
 // ── curve constants (hex → BigInt) ────────────────────────────────
 @ __hx s h → BigInt {
@@ -349,4 +350,116 @@ $ `stdlib/std/bigint.nu`
 
 @ ecdsa_p384_verify ( Vec u ) point ( Vec u ) r ( Vec u ) s ( Vec u ) hash → b {
     ^ ( __ecdsa_verify ( __p384_p ) ( __p384_n ) ( __p384_gx ) ( __p384_gy ) 48 point r s hash )
+}
+
+// ── ECDSA P-256 signing (RFC 6979 deterministic nonce) ──────────────
+//
+// `ecdsa_p256_sign priv hash` → 64-byte raw signature r‖s (each 32 B BE).
+//   priv = 32-byte big-endian private scalar.
+//   hash = the message digest (SHA-256 → 32 bytes).
+// The nonce k is generated deterministically per RFC 6979 (HMAC-SHA-256),
+// so signing needs no RNG and can never reuse a nonce — and the output is
+// reproducible, hence KAT-testable. Verify with `ecdsa_p256_verify`.
+
+@ __ec_bytes_fill i val i n → ( Vec u ) {
+    : ( Vec u ) v ( vec_with_cap [u] n )
+    : ~ i k 0
+    ~ < k n { ( vec_push [u] v # u val ) = k + k 1 }
+    ^ v
+}
+
+// V ‖ sep ‖ priv32 ‖ b2o32  (the RFC 6979 HMAC input blocks)
+@ __ec_hmac_msg ( Vec u ) V i sep ( Vec u ) priv32 ( Vec u ) b2o → ( Vec u ) {
+    : ( Vec u ) m ( vec_new [u] )
+    ( bytes_extend_bytes m V )
+    ( vec_push [u] m # u sep )
+    ( bytes_extend_bytes m priv32 )
+    ( bytes_extend_bytes m b2o )
+    ^ m
+}
+
+@ ecdsa_p256_sign ( Vec u ) priv ( Vec u ) hash → ( Vec u ) {
+    : BigInt n ( __p256_n )
+    : BigInt p ( __p256_p )
+    : BigInt x ( bigint_from_bytes_be priv )
+    : BigInt z ( bigint_from_bytes_be hash )
+    : BigInt zmod ( bigint_rem z n )
+    : ( Vec u ) priv32 ( bigint_to_bytes_be x 32 )
+    : ( Vec u ) b2o ( bigint_to_bytes_be zmod 32 )
+    ( bigint_free zmod )
+
+    // RFC 6979 §3.2 step b/c/d/e/f: V=0x01.., K=0x00.., two HMAC mixes.
+    : ~ ( Vec u ) V ( __ec_bytes_fill 1 32 )
+    : ~ ( Vec u ) K ( __ec_bytes_fill 0 32 )
+    : ( Vec u ) m1 ( __ec_hmac_msg V 0 priv32 b2o )
+    : ( Vec u ) k1 ( hmac_sha256_pure K m1 )
+    ( vec_free [u] K ) ( vec_free [u] m1 ) = K k1
+    : ( Vec u ) v1 ( hmac_sha256_pure K V ) ( vec_free [u] V ) = V v1
+    : ( Vec u ) m2 ( __ec_hmac_msg V 1 priv32 b2o )
+    : ( Vec u ) k2 ( hmac_sha256_pure K m2 )
+    ( vec_free [u] K ) ( vec_free [u] m2 ) = K k2
+    : ( Vec u ) v2 ( hmac_sha256_pure K V ) ( vec_free [u] V ) = V v2
+
+    : BigInt one ( bigint_from_i 1 )
+    : ~ ( Vec u ) sig ( vec_new [u] )
+    : ~ b done F
+    ~ ! done {
+        // T = HMAC(K, V); qlen == hlen == 256 so one block IS the candidate.
+        : ( Vec u ) vt ( hmac_sha256_pure K V ) ( vec_free [u] V ) = V vt
+        : BigInt k ( bigint_from_bytes_be V )
+        : ~ b valid T
+        ? < ( bigint_cmp k one ) 0 { = valid F } {}
+        ? >= ( bigint_cmp k n ) 0 { = valid F } {}
+        ? valid {
+            : Jac G @ Jac { ( __p256_gx ) ( __p256_gy ) ( bigint_from_i 1 ) F }
+            : Jac R ( __jmul V G p )
+            ? . R inf {
+                = valid F
+            } {
+                : BigInt rx ( __jaffine_x R p )
+                : BigInt r ( bigint_rem rx n )
+                ( bigint_free rx )
+                ? ( bigint_is_zero r ) {
+                    = valid F
+                    ( bigint_free r )
+                } {
+                    : BigInt kinv ( __finv k n )
+                    : BigInt rx2 ( bigint_mul r x )
+                    : BigInt zrx ( bigint_add z rx2 )
+                    : BigInt zrxm ( bigint_rem zrx n )
+                    : BigInt sm ( bigint_mul kinv zrxm )
+                    : BigInt s ( bigint_rem sm n )
+                    ( bigint_free kinv ) ( bigint_free rx2 ) ( bigint_free zrx )
+                    ( bigint_free zrxm ) ( bigint_free sm )
+                    ? ( bigint_is_zero s ) {
+                        = valid F
+                        ( bigint_free r ) ( bigint_free s )
+                    } {
+                        : ( Vec u ) rb ( bigint_to_bytes_be r 32 )
+                        : ( Vec u ) sb ( bigint_to_bytes_be s 32 )
+                        ( bigint_free r ) ( bigint_free s )
+                        ( bytes_extend_bytes sig rb ) ( bytes_extend_bytes sig sb )
+                        ( vec_free [u] rb ) ( vec_free [u] sb )
+                        = done T
+                    }
+                }
+            }
+            ( __jfree G ) ( __jfree R )
+        } {}
+        ? ! done {
+            // K = HMAC(K, V‖0x00); V = HMAC(K, V) — advance the generator.
+            : ( Vec u ) mz ( vec_new [u] )
+            ( bytes_extend_bytes mz V )
+            ( vec_push [u] mz # u 0 )
+            : ( Vec u ) kn ( hmac_sha256_pure K mz )
+            ( vec_free [u] K ) ( vec_free [u] mz ) = K kn
+            : ( Vec u ) vn ( hmac_sha256_pure K V ) ( vec_free [u] V ) = V vn
+        } {}
+        ( bigint_free k )
+    }
+
+    ( bigint_free n ) ( bigint_free p ) ( bigint_free x ) ( bigint_free z )
+    ( bigint_free one )
+    ( vec_free [u] V ) ( vec_free [u] K ) ( vec_free [u] priv32 ) ( vec_free [u] b2o )
+    ^ sig
 }

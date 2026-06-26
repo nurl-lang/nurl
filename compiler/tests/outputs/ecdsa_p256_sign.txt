@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+rfc6979_r: PASS
+rfc6979_s: PASS
+roundtrip: PASS
+tamper: PASS
+ALL PASS
