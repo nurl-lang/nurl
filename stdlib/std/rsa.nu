@@ -16,8 +16,37 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/bigint.nu`
 $ `stdlib/std/hash_sha256.nu`
 
+// OS CSPRNG bridge (same runtime entry std/random.nu uses) — for the RSA
+// blinding nonce. Returns 1 on success, 0 on total entropy failure.
+& `c` @ nurl_rand_fill *u buf i n → i
+
 @ __rsa_bget ( Vec u ) v i k → i {
     ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ -1 }
+}
+
+// A fresh random BigInt in [0, n) for blinding: fill `k` bytes from the OS
+// CSPRNG and reduce mod n. (Whole-modulus width so the reduction is ~uniform.)
+@ __rsa_rand_mod BigInt bn i k → BigInt {
+    : ( Vec u ) buf ( vec_with_cap [u] ? > k 0 k 1 )
+    : ~ i z 0
+    ~ < z k { ( vec_push [u] buf # u 0 ) = z + z 1 }
+    : i r ( nurl_rand_fill # *u ( vec_data [u] buf ) k )
+    ? == r 0 { ( nurl_panic `rsa: CSPRNG (nurl_rand_fill) failed` ) } {}
+    : BigInt rb ( bigint_from_bytes_be buf )
+    : BigInt rm ( bigint_rem rb bn )
+    ( vec_free [u] buf ) ( bigint_free rb )
+    ^ rm
+}
+
+// L1: a well-formed signature representative is exactly k bytes and < n.
+// Rejecting otherwise removes the sig / sig+n malleability (RFC 8017 §8).
+@ __rsa_sig_inrange ( Vec u ) n ( Vec u ) sig → b {
+    ? != ( vec_len [u] sig ) ( vec_len [u] n ) { ^ F } {}
+    : BigInt bn ( bigint_from_bytes_be n )
+    : BigInt bs ( bigint_from_bytes_be sig )
+    : b ok < ( bigint_cmp bs bn ) 0
+    ( bigint_free bn ) ( bigint_free bs )
+    ^ ok
 }
 
 // Recover the encoded message EM = sig^e mod n, padded to the modulus
@@ -54,6 +83,7 @@ $ `stdlib/std/hash_sha256.nu`
 @ rsa_pkcs1_verify ( Vec u ) n ( Vec u ) e ( Vec u ) sig ( Vec u ) di_prefix ( Vec u ) digest → b {
     : i k ( vec_len [u] n )
     ? < k 11 { ^ F } {}
+    ? ! ( __rsa_sig_inrange n sig ) { ^ F } {}
     : ( Vec u ) em ( __rsa_em n e sig )
     : i tlen + ( vec_len [u] di_prefix ) ( vec_len [u] digest )
     // PS length = k - tlen - 3, must be >= 8
@@ -141,6 +171,7 @@ $ `stdlib/std/hash_sha256.nu`
     : i embits - ( __rsa_bitlen n ) 1
     : i emlen / + embits 7 8
     ? < emlen + + hlen slen 2 { ^ F } {}
+    ? ! ( __rsa_sig_inrange n sig ) { ^ F } {}
     : ( Vec u ) emfull ( __rsa_em n e sig )
     // emfull is k bytes; EM is its low emLen bytes (right-aligned).
     : ( Vec u ) em ( bytes_slice emfull - k emlen k )
@@ -149,6 +180,12 @@ $ `stdlib/std/hash_sha256.nu`
     ? != ( __rsa_bget em - emlen 1 ) 188 { = ok F } {}  // trailer 0xbc
     : i dblen - - emlen hlen 1
     : ( Vec u ) maskeddb ( bytes_slice em 0 dblen )
+    // L2 (RFC 8017 §9.1.2 step 5): the leftmost (8·emLen − emBits) bits of
+    // maskedDB MUST be zero — reject non-canonical encodings.
+    : i __clr - * 8 emlen embits
+    : i __m0 & >> 255 __clr 255
+    : i __topmask & 255 ^^ 255 __m0
+    ? != 0 & ( __rsa_bget maskeddb 0 ) __topmask { = ok F } {}
     : ( Vec u ) h ( bytes_slice em dblen + dblen hlen )
     : ( Vec u ) dbmask ( __mgf1_sha256 h dblen )
     : ( Vec u ) db ( vec_with_cap [u] dblen )
@@ -182,13 +219,18 @@ $ `stdlib/std/hash_sha256.nu`
 
 // RSASSA-PSS-SIGN with SHA-256 (RFC 8017 §8.1.1 + §9.1.1), specialised to
 // the TLS 1.3 rsa_pss_rsae_sha256 parameters (MGF1-SHA-256, salt length =
-// hash length). `n`/`d` are the modulus and PRIVATE exponent (big-endian);
-// `mhash` is SHA-256 of the signed data; `salt` is the random salt (32
-// bytes for TLS 1.3) — passed in so the caller owns the RNG and tests can
-// pin it. Returns the k-byte big-endian signature. The inverse of
-// rsa_pss_verify_sha256; a signature produced here verifies there and in
-// OpenSSL.
-@ rsa_pss_sign_sha256 ( Vec u ) n ( Vec u ) d ( Vec u ) mhash ( Vec u ) salt → ( Vec u ) {
+// hash length). `n`/`e`/`d` are the modulus, PUBLIC exponent and PRIVATE
+// exponent (big-endian); `mhash` is SHA-256 of the signed data; `salt` is
+// the random salt (32 bytes for TLS 1.3) — passed in so the caller owns the
+// RNG and tests can pin it. Returns the k-byte big-endian signature.
+//
+// H1 (base blinding): the private-key exponentiation s = EM^d mod n is
+// computed as s = ((EM · r^e)^d · r^{-1}) mod n for a fresh random r per
+// signature. r^{ed} ≡ r mod n, so this unblinds to the same signature, but
+// the value actually fed to the (variable-time) modexp is randomized, so its
+// timing no longer correlates with EM or d — defeating remote/cache timing
+// recovery of the key (the standard OpenSSL defense). `e` is public.
+@ rsa_pss_sign_sha256 ( Vec u ) n ( Vec u ) e ( Vec u ) d ( Vec u ) mhash ( Vec u ) salt → ( Vec u ) {
     : i hlen 32
     : i slen ( vec_len [u] salt )
     : i k ( vec_len [u] n )
@@ -224,13 +266,32 @@ $ `stdlib/std/hash_sha256.nu`
     : ~ i hi 0
     ~ < hi hlen { ( vec_push [u] em # u ( __rsa_bget h hi ) ) = hi + hi 1 }
     ( vec_push [u] em # u 188 )  // trailer 0xbc
-    // s = EM^d mod n, encoded big-endian to k bytes.
+    // s = EM^d mod n, with base blinding, encoded big-endian to k bytes.
     : BigInt bm ( bigint_from_bytes_be em )
     : BigInt bd ( bigint_from_bytes_be d )
+    : BigInt be ( bigint_from_bytes_be e )
     : BigInt bn ( bigint_from_bytes_be n )
-    : BigInt bsig ( bigint_modpow bm bd bn )
+    : BigInt r ( __rsa_rand_mod bn k )
+    : BigInt rinv ( bigint_modinv r bn )
+    : ~ BigInt bsig ( bigint_zero )
+    ? ( bigint_is_zero rinv ) {
+        // r not invertible (astronomically rare for n=pq) → sign unblinded.
+        ( bigint_free bsig )
+        = bsig ( bigint_modpow bm bd bn )
+    } {
+        : BigInt re ( bigint_modpow r be bn )       // r^e mod n (public exp, fast)
+        : BigInt mb ( bigint_mul bm re )
+        : BigInt mbr ( bigint_rem mb bn )           // EM·r^e mod n
+        : BigInt sb ( bigint_modpow mbr bd bn )     // (EM·r^e)^d = EM^d·r mod n
+        : BigInt su ( bigint_mul sb rinv )
+        ( bigint_free bsig )
+        = bsig ( bigint_rem su bn )                 // ·r^{-1} → EM^d mod n
+        ( bigint_free re ) ( bigint_free mb ) ( bigint_free mbr )
+        ( bigint_free sb ) ( bigint_free su )
+    }
     : ( Vec u ) sig ( bigint_to_bytes_be bsig k )
-    ( bigint_free bm ) ( bigint_free bd ) ( bigint_free bn ) ( bigint_free bsig )
+    ( bigint_free bm ) ( bigint_free bd ) ( bigint_free be ) ( bigint_free bn )
+    ( bigint_free r ) ( bigint_free rinv ) ( bigint_free bsig )
     ( vec_free [u] mprime ) ( vec_free [u] h ) ( vec_free [u] db )
     ( vec_free [u] dbmask ) ( vec_free [u] em )
     ^ sig
