@@ -49,7 +49,9 @@ $ `stdlib/ext/env.nu`
             ?? ( tcp_accept lst ) {
                 F _ → { ( nurl_print `accept failed\n` ) }
                 T conn → {
-                    ?? ( tls_accept # i . conn raw cert priv ) {
+                    // cert_chain is a framed CertificateEntry list — one leaf here.
+                    : ( Vec u ) chain ( tls_cert_entry cert )
+                    ?? ( tls_accept # i . conn raw chain priv ) {
                         F e → { ( nurl_print `handshake failed: ` ) ( nurl_print ( tls_err_name e ) ) ( nurl_print `\n` ) }
                         T c → {
                             ?? ( tls_server_read c 8192 ) { T req → ( vec_free [u] req ) F _ → {} }
@@ -59,6 +61,7 @@ $ `stdlib/ext/env.nu`
                             ( tls_close c )
                         }
                     }
+                    ( vec_free [u] chain )
                 }
             }
             ( tcp_close_listener lst )

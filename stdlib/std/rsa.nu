@@ -1,10 +1,11 @@
-// stdlib/std/rsa.nu — pure-NURL RSA signature verification (RSASSA
-// PKCS#1 v1.5 and PSS), built on the BigInt modular exponentiation.
-// No OpenSSL. Verification only — enough to check X.509 / TLS 1.3
-// certificate signatures.
+// stdlib/std/rsa.nu — pure-NURL RSA signatures (RSASSA PKCS#1 v1.5 and
+// PSS), built on the BigInt modular exponentiation. No OpenSSL. Verify
+// (X.509 / TLS 1.3 cert signatures) plus PSS signing (the pure TLS 1.3
+// server's CertificateVerify with an RSA leaf cert).
 //
 //   ( rsa_pkcs1_verify n e sig di_prefix digest ) → b
 //   ( rsa_pss_verify_sha256 n e sig mhash )        → b
+//   ( rsa_pss_sign_sha256 n d mhash salt )         → sig  (k-byte BE)
 //
 // n / e / sig are big-endian byte vectors (the modulus, public exponent,
 // and signature). `digest` is the raw hash of the signed data; di_prefix
@@ -177,4 +178,60 @@ $ `stdlib/std/hash_sha256.nu`
     ( vec_free [u] em ) ( vec_free [u] maskeddb ) ( vec_free [u] h ) ( vec_free [u] dbmask )
     ( vec_free [u] db ) ( vec_free [u] salt ) ( vec_free [u] mprime ) ( vec_free [u] hprime )
     ^ ok
+}
+
+// RSASSA-PSS-SIGN with SHA-256 (RFC 8017 §8.1.1 + §9.1.1), specialised to
+// the TLS 1.3 rsa_pss_rsae_sha256 parameters (MGF1-SHA-256, salt length =
+// hash length). `n`/`d` are the modulus and PRIVATE exponent (big-endian);
+// `mhash` is SHA-256 of the signed data; `salt` is the random salt (32
+// bytes for TLS 1.3) — passed in so the caller owns the RNG and tests can
+// pin it. Returns the k-byte big-endian signature. The inverse of
+// rsa_pss_verify_sha256; a signature produced here verifies there and in
+// OpenSSL.
+@ rsa_pss_sign_sha256 ( Vec u ) n ( Vec u ) d ( Vec u ) mhash ( Vec u ) salt → ( Vec u ) {
+    : i hlen 32
+    : i slen ( vec_len [u] salt )
+    : i k ( vec_len [u] n )
+    : i embits - ( __rsa_bitlen n ) 1
+    : i emlen / + embits 7 8
+    // M' = 0x00*8 || mHash || salt ;  H = SHA-256(M')
+    : ( Vec u ) mprime ( vec_with_cap [u] + + 8 hlen slen )
+    : ~ i z 0
+    ~ < z 8 { ( vec_push [u] mprime # u 0 ) = z + z 1 }
+    : ~ i mi 0
+    ~ < mi hlen { ( vec_push [u] mprime # u ( __rsa_bget mhash mi ) ) = mi + mi 1 }
+    : ~ i sj 0
+    ~ < sj slen { ( vec_push [u] mprime # u ( __rsa_bget salt sj ) ) = sj + sj 1 }
+    : ( Vec u ) h ( sha256_pure mprime )
+    // DB = PS(0x00…) || 0x01 || salt ;  len = emLen - hLen - 1
+    : i dblen - - emlen hlen 1
+    : i psend - - dblen slen 1
+    : ( Vec u ) db ( vec_with_cap [u] dblen )
+    : ~ i pi 0
+    ~ < pi psend { ( vec_push [u] db # u 0 ) = pi + pi 1 }
+    ( vec_push [u] db # u 1 )
+    : ~ i si 0
+    ~ < si slen { ( vec_push [u] db # u ( __rsa_bget salt si ) ) = si + si 1 }
+    // maskedDB = DB XOR MGF1(H, dbLen) ; then EM = maskedDB || H || 0xbc
+    : ( Vec u ) dbmask ( __mgf1_sha256 h dblen )
+    : ( Vec u ) em ( vec_with_cap [u] emlen )
+    : ~ i di 0
+    ~ < di dblen { ( vec_push [u] em # u ^^ ( __rsa_bget db di ) ( __rsa_bget dbmask di ) ) = di + di 1 }
+    // Clear the leftmost (8*emLen - emBits) bits of maskedDB[0].
+    : i clearbits - * 8 emlen embits
+    : i mask0 & >> 255 clearbits 255
+    ( vec_set [u] em 0 # u & ( __rsa_bget em 0 ) mask0 )
+    : ~ i hi 0
+    ~ < hi hlen { ( vec_push [u] em # u ( __rsa_bget h hi ) ) = hi + hi 1 }
+    ( vec_push [u] em # u 188 )  // trailer 0xbc
+    // s = EM^d mod n, encoded big-endian to k bytes.
+    : BigInt bm ( bigint_from_bytes_be em )
+    : BigInt bd ( bigint_from_bytes_be d )
+    : BigInt bn ( bigint_from_bytes_be n )
+    : BigInt bsig ( bigint_modpow bm bd bn )
+    : ( Vec u ) sig ( bigint_to_bytes_be bsig k )
+    ( bigint_free bm ) ( bigint_free bd ) ( bigint_free bn ) ( bigint_free bsig )
+    ( vec_free [u] mprime ) ( vec_free [u] h ) ( vec_free [u] db )
+    ( vec_free [u] dbmask ) ( vec_free [u] em )
+    ^ sig
 }
