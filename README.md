@@ -80,7 +80,7 @@ clang -c stdlib/runtime.c -o stdlib/runtime.o   # once (already checked in)
 ./nurl.sh examples/fizzbuzz.nu && ./fizzbuzz     # compile & run a program
 ```
 
-The only build-time dependency is **clang / LLVM 14+**. `./install.sh` also
+The only build-time dependency is **clang / LLVM 15+**. `./install.sh` also
 sets up the editor extension and language server in one step. Full instructions
 — prerequisites per OS, manual bootstrap, DWARF debugging — are in
 [`docs/BUILDING.md`](docs/BUILDING.md); editor/LSP/formatter setup is in

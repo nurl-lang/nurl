@@ -113,7 +113,7 @@ clang -c stdlib/runtime.c -o stdlib/runtime.o
 ./build.sh
 ```
 
-Requirements: clang/LLVM 14+. Nothing else — Python was removed
+Requirements: clang/LLVM 15+. Nothing else — Python was removed
 from the build path 2026-05-23; the bootstrap snapshot now lives
 as committed LLVM IR (`compiler/nurlc_lastgood.ll`) that clang
 links directly into a working boot compiler. Windows users have

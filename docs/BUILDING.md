@@ -1,6 +1,6 @@
 # Building NURL
 
-The only build-time dependency is **clang / LLVM 14+**. No Python, no make,
+The only build-time dependency is **clang / LLVM 15+**. No Python, no make,
 no language-specific package manager. Clone the repo and run `./build.sh`
 (or `build.bat` on Windows). The committed `compiler/nurlc_lastgood.ll`
 snapshot is the only thing that boots the self-hosted chain.
@@ -14,7 +14,7 @@ degrades with a clear diagnostic when absent. See
 
 | Tool | Purpose |
 |---|---|
-| clang / LLVM 14+ | Compile LLVM IR (`.ll`) to a native binary; the only required build-time dependency |
+| clang / LLVM 15+ | Compile LLVM IR (`.ll`) to a native binary; the only required build-time dependency |
 
 **Windows** — install LLVM from [llvm.org/releases](https://llvm.org/releases/)
 (the Windows installer adds `clang.exe` to `PATH`). Command Prompt,

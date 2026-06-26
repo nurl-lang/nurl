@@ -202,21 +202,18 @@ else
     resolve_clang
     cc_run() { "$CLANG" "$@"; }
     # nurlc emits LLVM IR with opaque pointers (`ptr`) — the default since
-    # LLVM 15. clang 14 needs `-opaque-pointers`; 13 and earlier can't parse
-    # them. (zig's bundled LLVM never needs this.) 15+/17+ need nothing.
+    # LLVM 15, which is NURL's minimum supported clang. Older clangs (13/14
+    # behind `-opaque-pointers`) are no longer supported. (zig's bundled
+    # LLVM never needs this.)
     CLANG_MAJOR="$("$CLANG" --version 2>/dev/null | sed -nE 's/.*version ([0-9]+).*/\1/p' | head -1)"
     if [ -n "$CLANG_MAJOR" ] && [ "$CLANG_MAJOR" -lt 15 ]; then
-        if [ "$CLANG_MAJOR" -ge 13 ]; then
-            OPAQUE_FLAGS="-Xclang -opaque-pointers"
-        else
-            {
-                echo "ERROR: clang $CLANG_MAJOR is too old to build NURL programs."
-                echo "       nurlc emits LLVM IR with opaque pointers (needs LLVM 14+)."
-                echo "       Install a newer clang (e.g. clang-15) and set CLANG=clang-15,"
-                echo "       or use the bundled zig backend (set NURL_ZIG=/path/to/zig)."
-            } >&2
-            exit 1
-        fi
+        {
+            echo "ERROR: clang $CLANG_MAJOR is too old to build NURL programs."
+            echo "       nurlc emits LLVM IR with opaque pointers (needs clang/LLVM 15+)."
+            echo "       Install a newer clang (e.g. clang-15) and set CLANG=clang-15,"
+            echo "       or use the bundled zig backend (set NURL_ZIG=/path/to/zig)."
+        } >&2
+        exit 1
     fi
 fi
 

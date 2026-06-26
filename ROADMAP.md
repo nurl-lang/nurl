@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-06-22 · Current release: **0.9.10** · Language: **Grammar
+_Last reviewed: 2026-06-26 · Current release: **0.10.0** · Language: **Grammar
 v2.2** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -17,7 +17,7 @@ v2.2** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 NURL is a small systems language with a regular prefix-arity grammar, a
 self-hosted compiler written in NURL, and an LLVM backend. The compiler
 bootstraps to a **byte-identical fixed point** on its own source (stage1 ≡
-stage2). The only build dependency is clang / LLVM 14+.
+stage2). The only build dependency is clang / LLVM 15+.
 
 What is solid today:
 
