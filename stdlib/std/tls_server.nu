@@ -24,7 +24,6 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
-$ `stdlib/std/net.nu`
 $ `stdlib/std/tls.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/hkdf.nu`
@@ -56,14 +55,14 @@ $ `stdlib/std/aes_gcm.nu`
     ( vec_push [u] rec # u 3 )
     ( __u16 rec total )
     ( __cat rec sealed )
-    : !v NetErr w ( tcp_write_all . c tcp rec )
+    : b w ( __tls_sock_write . c fd rec )
     ( vec_free [u] inner )
     ( vec_free [u] aad )
     ( vec_free [u] nonce )
     ( vec_free [u] sealed )
     ( vec_free [u] rec )
     = . c s_seq + . c s_seq 1
-    ^ ?? w { T _ → @ !v TlsErr { T 0 } F _ → @ !v TlsErr { F # TlsErr TlsWrite } }
+    ^ ? w @ !v TlsErr { T 0 } @ !v TlsErr { F # TlsErr TlsWrite }
 }
 
 // AEAD-decrypt one record body under the CLIENT write keys (c_key/c_iv/c_seq).
@@ -218,7 +217,7 @@ $ `stdlib/std/aes_gcm.nu`
 @ tls_accept i raw ( Vec u ) cert_chain ( Vec u ) priv → !*TlsConn TlsErr {
     ? <= raw 0 { ^ @ !*TlsConn TlsErr { F # TlsErr TlsConnect } } {}
     : *TlsConn c ( nurl_alloc Z TlsConn )
-    = . c tcp @ TcpConn { # s raw }
+    = . c fd raw
     = . c rxbuf ( vec_new [u] )
     = . c hsbuf ( vec_new [u] )
     = . c appbuf ( vec_new [u] )

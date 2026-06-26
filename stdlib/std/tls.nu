@@ -24,7 +24,6 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
-$ `stdlib/std/net.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/hkdf.nu`
 $ `stdlib/std/x25519.nu`
@@ -34,6 +33,23 @@ $ `stdlib/std/aes_gcm.nu`
 $ `stdlib/std/tls_verify.nu`
 
 & `libc` @ nurl_tcp_connect s host i port → i
+
+// Write all of `data` to the raw socket fd. Returns F on any error. tls.nu
+// is deliberately self-contained over the libc socket (nurl_tcp_* are
+// compiler builtins) so it carries no dependency on stdlib/std/net.nu —
+// that lets net.nu import THIS module and dispatch its polymorphic TcpConn
+// reads/writes to the pure TLS stack without an import cycle.
+@ __tls_sock_write i fd ( Vec u ) data → b {
+    : *u dp ( vec_data [u] data )
+    : i n ( vec_len [u] data )
+    : ~ i off 0
+    ~ < off n {
+        : i wn ( nurl_tcp_write fd # s + # i dp off - n off )
+        ? <= wn 0 { ^ F } {}
+        = off + off wn
+    }
+    ^ T
+}
 
 & `c` @ nurl_rand_fill *u buf i n → i
 
@@ -70,7 +86,7 @@ $ `stdlib/std/tls_verify.nu`
 // Live connection state. Vec fields are reassigned as keys rotate
 // (handshake → application) and as buffers are consumed.
 : TlsConn {
-    TcpConn tcp
+    i fd
     ( Vec u ) rxbuf  // raw socket bytes not yet split into records
     ( Vec u ) hsbuf  // decrypted handshake bytes not yet a full message
     ( Vec u ) appbuf  // decrypted application bytes for the caller
@@ -143,8 +159,7 @@ $ `stdlib/std/tls_verify.nu`
 // parks with no reactor to wake it in a plain program; the raw blocking
 // read is what a synchronous client wants.
 @ __fill * TlsConn c i n → !i TlsErr {
-    : TcpConn tc . c tcp
-    : i raw # i . tc raw
+    : i raw . c fd
     ~ < ( vec_len [u] . c rxbuf ) n {
         : ( Vec u ) tmp ( vec_with_cap [u] 16384 )
         : *u p ( vec_data [u] tmp )
@@ -256,14 +271,14 @@ $ `stdlib/std/tls_verify.nu`
     ( vec_push [u] rec # u 3 )
     ( __u16 rec total )
     ( __cat rec sealed )
-    : !v NetErr w ( tcp_write_all . c tcp rec )
+    : b w ( __tls_sock_write . c fd rec )
     ( vec_free [u] inner )
     ( vec_free [u] aad )
     ( vec_free [u] nonce )
     ( vec_free [u] sealed )
     ( vec_free [u] rec )
     = . c c_seq + . c c_seq 1
-    ^ ?? w { T _ → @ !v TlsErr { T 0 } F _ → @ !v TlsErr { F # TlsErr TlsWrite } }
+    ^ ? w @ !v TlsErr { T 0 } @ !v TlsErr { F # TlsErr TlsWrite }
 }
 
 // Write a plaintext record straight to the socket.
@@ -276,9 +291,9 @@ $ `stdlib/std/tls_verify.nu`
     ( vec_push [u] rec # u 3 )
     ( __u16 rec ( vec_len [u] body ) )
     ( __cat rec body )
-    : !v NetErr w ( tcp_write_all . c tcp rec )
+    : b w ( __tls_sock_write . c fd rec )
     ( vec_free [u] rec )
-    ^ ?? w { T _ → @ !v TlsErr { T 0 } F _ → @ !v TlsErr { F # TlsErr TlsWrite } }
+    ^ ? w @ !v TlsErr { T 0 } @ !v TlsErr { F # TlsErr TlsWrite }
 }
 
 // ── handshake-message reader ──────────────────────────────────────
@@ -571,16 +586,14 @@ $ `stdlib/std/tls_verify.nu`
 @ tls_attach i raw s server_name → !*TlsConn TlsErr {
     : i ek ( nurl_tcp_err_kind raw )
     ? != ek 0 { ^ @ !*TlsConn TlsErr { F # TlsErr TlsConnect } } {}
-    : s rp # s raw
-    : TcpConn tcp @ TcpConn { rp }
     // Read timeout so an unresponsive/dead peer fails the handshake
     // cleanly instead of blocking the client forever.
-    ( tcp_set_timeout tcp 20000 )
+    ( nurl_tcp_set_timeout raw 20000 )
 
     // Heap-allocate the connection so field mutations (key rotation,
     // buffer consumption) in the helpers persist across calls.
     : *TlsConn c # *TlsConn ( nurl_alloc Z TlsConn )
-    = . c tcp tcp
+    = . c fd raw
     = . c rxbuf ( vec_new [u] )
     = . c hsbuf ( vec_new [u] )
     = . c appbuf ( vec_new [u] )
@@ -899,7 +912,7 @@ $ `stdlib/std/tls_verify.nu`
         } {}
         = . c closed 1
     } {}
-    ( tcp_close_conn . c tcp )
+    ( nurl_tcp_close . c fd )
     ( vec_free [u] . c rxbuf )
     ( vec_free [u] . c hsbuf )
     ( vec_free [u] . c appbuf )
@@ -1003,12 +1016,12 @@ $ `stdlib/std/tls_verify.nu`
     ( vec_push [u] rec # u 3 )
     ( __u16 rec ( vec_len [u] body ) )
     ( __cat rec body )
-    : !v NetErr w ( tcp_write_all . c tcp rec )
+    : b w ( __tls_sock_write . c fd rec )
     ( vec_free [u] aad )
     ( vec_free [u] body )
     ( vec_free [u] rec )
     = . c c_seq + . c c_seq 1
-    ^ ?? w { T _ → @ !v TlsErr { T 0 } F _ → @ !v TlsErr { F # TlsErr TlsWrite } }
+    ^ ? w @ !v TlsErr { T 0 } @ !v TlsErr { F # TlsErr TlsWrite }
 }
 
 // Decrypt a TLS 1.2 record body (real type `rtype`) → plaintext.
