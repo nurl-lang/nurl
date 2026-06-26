@@ -9310,6 +9310,17 @@
         : s bck_rhs_val ( nurl_lex_val lex )
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         : s val ( gen_operand lex syms cg )
+        : s __asn_rt ( nurl_get_last_type )
+        // Type-agreement on reassignment (the store dual of the let-binding
+        // / call-arg checks): a never-legal clash (float-vs-non-float, a
+        // different named struct by value, or String vs raw C-string) would
+        // otherwise emit a mismatched `store` clang rejects. Width / sign /
+        // pointer coercions stay legal and are not flagged.
+        ? ( __store_type_clash __asn_rt vt )
+        { ( die lex ( nurl_str_cat
+            ( nurl_str_cat4 `cannot assign a value of type '` __asn_rt `' to '` name )
+            ( nurl_str_cat3 `' of type '` vt `' — NURL has no implicit conversions` ) ) ) }
+        {}
         // Borrow checker: record this assignment.
         ( bck_record `assign` name bck_line )
         // Escape analysis: re-target `name`. If the RHS is a stack
@@ -9537,6 +9548,11 @@
                             : s ftype ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__type` ) ) ) )
                             : i fidx ( nurl_str_to_int fidx_s )
                             : s rhs ( gen_expr lex syms cg )
+                            ? ( __store_type_clash ( nurl_get_last_type ) ftype )
+                            { ( die lex ( nurl_str_cat ( nurl_str_cat4
+                                `cannot store a value of type '` ( nurl_get_last_type ) `' into field '` fname )
+                                ( nurl_str_cat3 `' of type '` ftype `' — NURL has no implicit conversions` ) ) ) }
+                            {}
                             : s gep ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print gep )
                             ( nurl_print ` = getelementptr ` ) ( nurl_print st )
@@ -9597,6 +9613,11 @@
                 : s ftype ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__type` ) ) ) )
                 : i fidx ( nurl_str_to_int fidx_s )
                 : s rhs ( gen_expr lex syms cg )
+                ? ( __store_type_clash ( nurl_get_last_type ) ftype )
+                { ( die lex ( nurl_str_cat ( nurl_str_cat4
+                    `cannot store a value of type '` ( nurl_get_last_type ) `' into field '` fname )
+                    ( nurl_str_cat3 `' of type '` ftype `' — NURL has no implicit conversions` ) ) ) }
+                {}
                 : s gep ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print gep )
                 ( nurl_print ` = getelementptr ` ) ( nurl_print pt )
@@ -9637,6 +9658,17 @@
 
 // True iff an LLVM type string is a float type (`double` or f32 `float`).
 @ is_float_ty s ty → b { ^ | ( seq ty `double` ) ( seq ty `float` ) }
+
+// A never-legal store/assign type clash between a value's LLVM type `vt`
+// and the declared destination type `dt`: float-vs-non-float, a different
+// named struct by value, or String vs raw C-string. Integer width /
+// signedness / pointer-stash coercions are legal and NOT flagged. Shared
+// by gen_assign (reassignment) and gen_field_store (field writes).
+@ __store_type_clash s vt s dt → b {
+    ? | == 0 ( nurl_str_len vt ) == 0 ( nurl_str_len dt ) { ^ F } {}
+    ^ | | != ( is_float_ty vt ) ( is_float_ty dt )
+    ( __arg_named_struct_mismatch vt dt ) ( __arg_str_cstr_mismatch vt dt )
+}
 
 @ int_width s ty → i {
     ? ( seq ty `i1` ) 1
