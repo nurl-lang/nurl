@@ -139,29 +139,21 @@ $ `stdlib/ext/websocket.nu`
     ^ # MqttErr MqttRefused
 }
 
-// ── client-side connect (runtime.c §18b/§18c) ────────────────────────
+// ── client-side connect ──────────────────────────────────────────────
 //
-// runtime.o exports `nurl_tcp_connect` / `nurl_tcp_connect_tls` (both
-// return a CONN-kind handle as i64; err_kind != 0 means the connect /
-// TLS handshake failed). Their `& `libc`` extern declarations come in
-// via the websocket.nu import above — declaring them again here would be
-// a duplicate symbol in the merged module, so we rely on that one copy.
+// Plaintext connect uses runtime.o's `nurl_tcp_connect` (declared via the
+// websocket.nu import above). TLS goes through net.nu's pure
+// `tcp_connect_tls` — no runtime SSL.
 
 // Open a TLS client connection. `verify` T = check the broker cert
 // chain + hostname against the system trust store; F = encrypt but
 // don't validate the chain (an MQTT client's `--insecure`).
 @ __mqtt_connect_tls s host i port b verify → !TcpConn MqttErr {
-    : i vflag ? verify 1 0
-    : i craw ( nurl_tcp_connect_tls host port vflag )
-    ? == craw 0 { ^ @ !TcpConn MqttErr { F # MqttErr MqttTransport } } {}
-    : i ek ( nurl_tcp_err_kind craw )
-    ? != ek 0 {
-        ( nurl_tcp_close craw )
-        ^ @ !TcpConn MqttErr { F ( __mqtt_of_net ( __net_err_of ek ) ) }
-    } {}
-    : s crp # s craw
-    : TcpConn c @ TcpConn { crp 0 0 }
-    ^ @ !TcpConn MqttErr { T c }
+    // Pure TLS via net.nu (SNI = host); cert verification on unless verify=F.
+    ?? ( tcp_connect_tls host port host ? verify 1 0 ) {
+        F e → ^ @ !TcpConn MqttErr { F ( __mqtt_of_net e ) }
+        T c → ^ @ !TcpConn MqttErr { T c }
+    }
 }
 
 // Open a plain (unencrypted) TCP client connection — port 1883.

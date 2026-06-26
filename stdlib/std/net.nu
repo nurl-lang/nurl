@@ -245,10 +245,13 @@ $ `stdlib/std/pkey.nu`
     ^ ( tcp_listen_tls_with_backlog host port backlog cert_path key_path )
 }
 
-// Read the negotiated ALPN protocol off an accepted TLS conn. The pure
-// stack does not negotiate ALPN yet, so this returns "".
+// Read the negotiated ALPN protocol off a TLS conn (client kind 1 or a
+// STARTTLS upgrade). Returns "" for plaintext conns or when no ALPN was
+// negotiated. Server-side ALPN is not parsed yet.
 @ tcp_alpn_protocol TcpConn c → String {
-    ^ ( string_new )
+    : i tp ( __conn_tlsptr c )
+    ? == tp 0 { ^ ( string_new ) } {}
+    ^ ( tls_alpn_selected # *TlsConn tp )
 }
 
 // Open a verified (or, with verify = 0, encrypted-only) pure-TLS client
@@ -264,58 +267,45 @@ $ `stdlib/std/pkey.nu`
     }
 }
 
+// As tcp_connect_tls, but offers a single ALPN protocol (e.g. "h2").
+// After connecting, the negotiated protocol is read with
+// tcp_alpn_protocol — empty if the server declined ALPN. With verify the
+// chain is validated AND the ALPN handshake runs; on TLS 1.2 servers the
+// pure stack does not parse ALPN, so callers requiring h2 should check.
+@ tcp_connect_tls_alpn s host i port s server_name i verify s alpn → !TcpConn NetErr {
+    : i raw ( nurl_tcp_connect host port )
+    ? <= raw 0 { ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake } } {}
+    : !*TlsConn TlsErr r ? != verify 0 ( tls_attach_alpn_verify raw server_name alpn ) ( tls_attach_alpn raw server_name alpn )
+    ?? r {
+        F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
+        T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 1 # i tc } }
+    }
+}
+
 // Register a per-hostname cert/key pair on a TLS listener for Server
-// Name Indication (RFC 6066 §3). The cert presented to the client is
-// selected at handshake time based on the client's SNI extension:
-// matching hostname → its dedicated SSL_CTX; no match → falls through
-// to the listener's default cert. May be called repeatedly; in-flight
-// connections are unaffected. Idempotent on re-add (replaces the
-// stored cert/key for an existing hostname). Required for multi-tenant
-// HTTPS where one listener serves several virtual hosts.
+// Name Indication (RFC 6066 §3). NOT YET SUPPORTED on the pure-NURL TLS
+// server (tls_server.nu serves a single default cert) — returns NetOther
+// so callers can detect the gap rather than silently serving the wrong
+// cert. (The old OpenSSL-backed multi-cert SNI path was removed with
+// libssl.) TODO: per-SNI cert selection in tls_accept.
 @ tcp_tls_add_sni TcpListener l s hostname s cert_path s key_path → !v NetErr {
-    : s rp . l raw
-    : i raw # i rp
-    : i rc ( nurl_tcp_tls_add_sni raw hostname cert_path key_path )
-    ? != 0 rc {
-        ^ @ !v NetErr { F ( __net_err_of rc ) }
-    } {}
-    ^ @ !v NetErr { T 0 }
+    ^ @ !v NetErr { F # NetErr NetOther }
 }
 
-// Reload the cert/key on a live TLS listener without dropping pending
-// connections. `hostname` selects the target:
-//   * empty string → the listener's DEFAULT cert (set at listen time)
-//   * any other value → the matching SNI entry (Err if not registered)
-// Implementation: build a fresh SSL_CTX from the new cert/key, swap
-// it in atomically under a per-listener mutex, and SSL_CTX_free the
-// old one. OpenSSL refcounts SSL_CTX internally, so any in-flight
-// SSL_read / SSL_write on the old ctx survives until close. Standard
-// use case: Let's Encrypt cert rotation triggered from a control
-// endpoint or SIGHUP handler.
+// Reload the cert/key on a live TLS listener. NOT YET SUPPORTED on the
+// pure-NURL TLS server — returns NetOther. (Was OpenSSL SSL_CTX hot-swap;
+// removed with libssl.) TODO: atomic cert reload for the pure listener.
 @ tcp_tls_reload TcpListener l s hostname s cert_path s key_path → !v NetErr {
-    : s rp . l raw
-    : i raw # i rp
-    : i rc ( nurl_tcp_tls_reload raw hostname cert_path key_path )
-    ? != 0 rc {
-        ^ @ !v NetErr { F ( __net_err_of rc ) }
-    } {}
-    ^ @ !v NetErr { T 0 }
+    ^ @ !v NetErr { F # NetErr NetOther }
 }
 
-// Require (mTLS) or request (opportunistic) client-cert authentication.
-// `ca_bundle_path` points to a PEM file with the trust roots used to
-// verify peer certificates. When `strict` is true, the handshake fails
-// outright if the client doesn't present a cert; when false, the
-// handshake completes regardless and the application reads
-// `tcp_peer_cert_subject` to decide what to do.
+// Require/request client-cert (mTLS) authentication. NOT YET SUPPORTED on
+// the pure-NURL TLS server — returns NetOther DELIBERATELY: silently
+// returning Ok would let a caller believe mTLS is enforced when it is not
+// (a security footgun). (Was OpenSSL client-cert verification; removed
+// with libssl.) TODO: client-cert request + verify in tls_accept.
 @ tcp_tls_require_client_cert TcpListener l s ca_bundle_path b strict → !v NetErr {
-    : s rp . l raw
-    : i raw # i rp
-    : i rc ( nurl_tcp_tls_require_client_cert raw ca_bundle_path ? strict 1 0 )
-    ? != 0 rc {
-        ^ @ !v NetErr { F ( __net_err_of rc ) }
-    } {}
-    ^ @ !v NetErr { T 0 }
+    ^ @ !v NetErr { F # NetErr NetOther }
 }
 
 // Read the peer's certificate Distinguished Name (OpenSSL one-line
@@ -354,11 +344,85 @@ $ `stdlib/std/pkey.nu`
 
 // ── Connection acceptance ──────────────────────────────────────────
 
+// ── STARTTLS registry ──────────────────────────────────────────────
+//
+// An in-place TLS upgrade (tcp_starttls) attaches a *TlsConn to an
+// ALREADY-connected fd (SMTP STARTTLS, etc). A TcpConn is passed BY
+// VALUE, so the upgraded `tlsh`/`kind` can't be written back into the
+// caller's copy. Because the fd is the stable identity across the
+// upgrade, the fd→*TlsConn mapping lives here instead and is consulted
+// by the read/write/close dispatch. The whole thing is gated on
+// g_st_n: a process that never calls tcp_starttls does ZERO lookups.
+//
+// Storage is a malloc'd i64 array of (fd, ptr) pairs (2 words each),
+// grown by doubling. nurl_peek/poke are word-indexed (8-byte cells).
+: ~ i g_st_base 0
+: ~ i g_st_cap 0
+: ~ i g_st_n 0
+
+@ __starttls_grow → v {
+    : i newcap ? == g_st_cap 0 8 * g_st_cap 2
+    : s nb # s ( malloc * newcap 16 )
+    ? != g_st_base 0 {
+        ( nurl_memcpy # *u nb # *u g_st_base * g_st_n 16 )
+        ( nurl_free # s g_st_base )
+    } {}
+    = g_st_base # i nb
+    = g_st_cap newcap
+}
+
+@ __starttls_register i fd i ptr → v {
+    ? >= g_st_n g_st_cap { ( __starttls_grow ) } {}
+    : s b # s g_st_base
+    ( nurl_poke b * g_st_n 2 fd )
+    ( nurl_poke b + * g_st_n 2 1 ptr )
+    = g_st_n + g_st_n 1
+}
+
+@ __starttls_lookup i fd → i {
+    ? == g_st_n 0 { ^ 0 } {}
+    : s b # s g_st_base
+    : ~ i k 0
+    ~ < k g_st_n {
+        ? == ( nurl_peek b * k 2 ) fd { ^ ( nurl_peek b + * k 2 1 ) } {}
+        = k + k 1
+    }
+    ^ 0
+}
+
+@ __starttls_unregister i fd → v {
+    ? != g_st_n 0 {
+        : s b # s g_st_base
+        : ~ i k 0
+        : ~ i found 0
+        ~ & == found 0 < k g_st_n {
+            ? == ( nurl_peek b * k 2 ) fd {
+                : i last - g_st_n 1
+                ( nurl_poke b * k 2 ( nurl_peek b * last 2 ) )
+                ( nurl_poke b + * k 2 1 ( nurl_peek b + * last 2 1 ) )
+                = g_st_n last
+                = found 1
+            } {}
+            = k + k 1
+        }
+    } {}
+}
+
+// Resolve a TcpConn's *TlsConn (as i64), or 0 if the conn is plaintext.
+// kinds 1/2 carry it inline in `tlsh`; a STARTTLS-upgraded kind-0 conn
+// is found via the fd registry.
+@ __conn_tlsptr TcpConn c → i {
+    ? != . c tlsh 0 { ^ . c tlsh } {}
+    ? == . c kind 0 { ^ ( __starttls_lookup # i . c raw ) } {}
+    ^ 0
+}
+
 // The fd backing a TcpConn — the runtime handle for plaintext, or the
-// pure TLS conn's socket fd for kinds 1/2.
+// pure TLS conn's socket fd for TLS (kinds 1/2 or STARTTLS-upgraded).
 @ __conn_fd TcpConn c → i {
-    ? != . c kind 0 {
-        : *TlsConn tc # *TlsConn . c tlsh
+    : i tp ( __conn_tlsptr c )
+    ? != tp 0 {
+        : *TlsConn tc # *TlsConn tp
         ^ . tc fd
     } {}
     ^ # i . c raw
@@ -396,7 +460,32 @@ $ `stdlib/std/pkey.nu`
 }
 
 @ tcp_close_conn TcpConn c → v {
-    ? != . c kind 0 { ( tls_close # *TlsConn . c tlsh ) } { ( nurl_tcp_close # i . c raw ) }
+    : i tp ( __conn_tlsptr c )
+    ? != tp 0 {
+        ( __starttls_unregister # i . c raw )
+        ( tls_close # *TlsConn tp )
+    } { ( nurl_tcp_close # i . c raw ) }
+}
+
+// In-place STARTTLS upgrade: run a pure TLS 1.3 handshake over an
+// already-connected plaintext TcpConn's fd, registering the resulting
+// *TlsConn against that fd so subsequent read/write/close on the SAME
+// (by-value) conn transparently go through TLS. `server_name` drives
+// SNI + (when verify) certificate validation. Used by SMTP STARTTLS,
+// IMAP/POP STLS, etc. The conn keeps its identity — no new TcpConn is
+// returned, so callers holding the conn by value see the upgrade.
+@ tcp_starttls TcpConn c s server_name b verify → !v NetErr {
+    : i tp ( __conn_tlsptr c )
+    ? != tp 0 { ^ @ !v NetErr { T 0 } } {}
+    : i fd # i . c raw
+    : !*TlsConn TlsErr r ? verify ( tls_attach_verify fd server_name ) ( tls_attach fd server_name )
+    ?? r {
+        F _ → ^ @ !v NetErr { F # NetErr NetTlsHandshake }
+        T tc → {
+            ( __starttls_register fd # i tc )
+            ^ @ !v NetErr { T 0 }
+        }
+    }
 }
 
 @ tcp_peer_addr TcpConn c → s {
@@ -414,7 +503,7 @@ $ `stdlib/std/pkey.nu`
 // Pure-TLS read dispatch (kind 1 = client, kind 2 = server). Clean EOF
 // (tls_read returns []) is surfaced as NetClosed to match the plain path.
 @ __tls_read_net TcpConn c i max → !( Vec u ) NetErr {
-    : *TlsConn tc # *TlsConn . c tlsh
+    : *TlsConn tc # *TlsConn ( __conn_tlsptr c )
     : !( Vec u ) TlsErr r ? == . c kind 2 ( tls_server_read tc max ) ( tls_read tc max )
     ?? r {
         F e → {
@@ -432,14 +521,14 @@ $ `stdlib/std/pkey.nu`
 }
 
 @ __tls_write_net TcpConn c ( Vec u ) bytes → !v NetErr {
-    : *TlsConn tc # *TlsConn . c tlsh
+    : *TlsConn tc # *TlsConn ( __conn_tlsptr c )
     : !v TlsErr r ? == . c kind 2 ( tls_server_write tc bytes ) ( tls_write tc bytes )
     ?? r { T _ → ^ @ !v NetErr { T 0 } F _ → ^ @ !v NetErr { F # NetErr NetWrite } }
 }
 
 // with a clean peer shutdown. Caller frees the Vec on the Ok path.
 @ tcp_read_chunk TcpConn c i max → !( Vec u ) NetErr {
-    ? != . c kind 0 { ^ ( __tls_read_net c max ) } {}
+    ? != ( __conn_tlsptr c ) 0 { ^ ( __tls_read_net c max ) } {}
     // Context-aware dispatch — see tcp_accept's note.
     : i fcur ( nurl_fiber_current )
     ? != fcur 0 { ^ ( tcp_read_chunk_async c max ) } {}
@@ -469,7 +558,7 @@ $ `stdlib/std/pkey.nu`
 // ── Writing ────────────────────────────────────────────────────────
 
 @ tcp_write_all TcpConn c ( Vec u ) bytes → !v NetErr {
-    ? != . c kind 0 { ^ ( __tls_write_net c bytes ) } {}
+    ? != ( __conn_tlsptr c ) 0 { ^ ( __tls_write_net c bytes ) } {}
     // Context-aware dispatch — see tcp_accept's note.
     : i fcur ( nurl_fiber_current )
     ? != fcur 0 { ^ ( tcp_write_all_async c bytes ) } {}
@@ -491,7 +580,7 @@ $ `stdlib/std/pkey.nu`
 // status-line case). The bytes [0..len) are sent — the trailing NUL is
 // NOT transmitted.
 @ tcp_write_str TcpConn c s text → !v NetErr {
-    ? != . c kind 0 {
+    ? != ( __conn_tlsptr c ) 0 {
         : ( Vec u ) b ( bytes_from_str text )
         : !v NetErr r ( __tls_write_net c b )
         ( vec_free [u] b )

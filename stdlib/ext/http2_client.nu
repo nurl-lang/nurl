@@ -67,14 +67,10 @@ $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http2_frame.nu`
 $ `stdlib/ext/http2_hpack.nu`
 
-// Client-side connect primitives. nurl_tcp_connect / *_tls_alpn are NOT
-// in the compiler's runtime symbol table (unlike nurl_tcp_close /
-// nurl_tcp_err_kind / nurl_tcp_alpn_selected), so we declare them here
-// the same way websocket.nu does. nurl_tcp_connect_tls_alpn was added
-// to stdlib/runtime.c alongside the existing connect helpers.
+// Plaintext connect primitive (nurl_tcp_connect is not in the compiler's
+// runtime symbol table, so declare it here). TLS-with-ALPN now goes
+// through net.nu's pure tcp_connect_tls_alpn — no runtime SSL.
 & `libc` @ nurl_tcp_connect s host i port → i
-
-& `libc` @ nurl_tcp_connect_tls_alpn s host i port i verify s alpn → i
 
 // ── Errors ────────────────────────────────────────────────────────────
 
@@ -475,18 +471,10 @@ $ `stdlib/ext/http2_hpack.nu`
 
 @ h2_client_connect_tls s host i port b verify → !H2Client H2ClientErr {
     : i v ? verify 1 0
-    : i craw ( nurl_tcp_connect_tls_alpn host port v `h2` )
-    ? == craw 0 {
-        ^ @ !H2Client H2ClientErr { F # H2ClientErr H2CConnect }
-    } {}
-    : i ek ( nurl_tcp_err_kind craw )
-    ? != ek 0 {
-        ( nurl_tcp_close craw )
-        : H2ClientErr e ? == ek 12 # H2ClientErr H2CTls # H2ClientErr H2CConnect
-        ^ @ !H2Client H2ClientErr { F e }
-    } {}
-    : s rp # s craw
-    : TcpConn conn @ TcpConn { rp 0 0 }
+    : TcpConn conn ?? ( tcp_connect_tls_alpn host port host v `h2` ) {
+        F e → ^ @ !H2Client H2ClientErr { F ?? e { NetTlsHandshake → # H2ClientErr H2CTls _ → # H2ClientErr H2CConnect } }
+        T c → c
+    }
     // Confirm ALPN actually selected h2 — otherwise the peer would speak
     // HTTP/1.1 and our framing would be garbage.
     : String proto ( tcp_alpn_protocol conn )

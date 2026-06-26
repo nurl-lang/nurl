@@ -106,6 +106,7 @@ $ `stdlib/std/tls_verify.nu`
     i cipher  // 0 = ChaCha20-Poly1305, 1 = AES-128-GCM
     i version  // 13 = TLS 1.3, 12 = TLS 1.2
     ( Vec u ) kx_p256  // P-256 ephemeral private key (empty if X25519 chosen)
+    ( Vec u ) alpn_sel  // ALPN protocol the server selected (empty if none)
 }
 
 // ── small helpers ─────────────────────────────────────────────────
@@ -359,7 +360,7 @@ $ `stdlib/std/tls_verify.nu`
 }
 
 // ── ClientHello ───────────────────────────────────────────────────
-@ __build_client_hello s host ( Vec u ) pubkey ( Vec u ) p256pub ( Vec u ) random ( Vec u ) sessid → ( Vec u ) {
+@ __build_client_hello s host ( Vec u ) pubkey ( Vec u ) p256pub ( Vec u ) random ( Vec u ) sessid s alpn → ( Vec u ) {
     : ( Vec u ) body ( vec_new [u] )
     ( __tls_u16 body 771 )  // legacy_version 0x0303
     ( __tls_cat body random )  // 32-byte random
@@ -455,6 +456,21 @@ $ `stdlib/std/tls_verify.nu`
     ( __blk16 ext ks )
     ( vec_free [u] entry )
     ( vec_free [u] ks )
+
+    // application_layer_protocol_negotiation (0x0010), one protocol
+    // (RFC 7301). Only emitted when a protocol was requested (e.g. "h2");
+    // otherwise the ext is omitted and the connect behaves exactly as before.
+    : i al ( nurl_str_len alpn )
+    ? > al 0 {
+        : ( Vec u ) alp ( vec_new [u] )
+        ( __tls_u16 alp + al 1 )  // ProtocolNameList length
+        ( vec_push [u] alp # u al )  // protocol name length
+        : ~ i ak 0
+        ~ < ak al { ( vec_push [u] alp # u ( nurl_str_get alpn ak ) ) = ak + ak 1 }
+        ( __tls_u16 ext 16 )
+        ( __blk16 ext alp )
+        ( vec_free [u] alp )
+    } {}
 
     ( __blk16 body ext )
     ( vec_free [u] ext )
@@ -583,7 +599,43 @@ $ `stdlib/std/tls_verify.nu`
 // IMAP/FTP — where the plaintext leg must exchange a few bytes before the
 // channel is upgraded to TLS on the same socket. No certificate
 // verification (see `tls_attach_verify` for the secure variant).
-@ tls_attach i raw s server_name → !*TlsConn TlsErr {
+// Extract the server-selected ALPN protocol from an EncryptedExtensions
+// handshake message (type 8). Returns the protocol bytes (e.g. "h2"), or
+// an empty Vec if the server sent no ALPN extension. Message layout:
+// [type:1][len:3][exts_len:2] then exts; ALPN ext (0x0010) data is
+// [list_len:2][name_len:1][name…].
+@ __ee_alpn ( Vec u ) msg → ( Vec u ) {
+    : ( Vec u ) out ( vec_new [u] )
+    : i n ( vec_len [u] msg )
+    ? < n 6 { ^ out } {}
+    : i extlen ( __rdint msg 4 2 )
+    : i end ? > + 6 extlen n n + 6 extlen
+    : ~ i p 6
+    ~ < p end {
+        ? > + p 4 end { ^ out } {}
+        : i et ( __rdint msg p 2 )
+        : i elen ( __rdint msg + p 2 2 )
+        : i edata + p 4
+        ? == et 16 {
+            ? >= elen 3 {
+                : i nl ( __t_bget msg + edata 2 )
+                : ~ i j 0
+                ~ < j nl {
+                    ( vec_push [u] out # u ( __t_bget msg + + edata 3 j ) )
+                    = j + j 1
+                }
+            } {}
+            ^ out
+        } {}
+        = p + + p 4 elen
+    }
+    ^ out
+}
+
+// Core client handshake. `alpn` is a single ALPN protocol to offer (e.g.
+// "h2"); empty means no ALPN extension is sent. The negotiated protocol
+// (from the server's EncryptedExtensions) is stored in `c.alpn_sel`.
+@ __tls_handshake i raw s server_name s alpn → !*TlsConn TlsErr {
     : i ek ( nurl_tcp_err_kind raw )
     ? != ek 0 { ^ @ !*TlsConn TlsErr { F # TlsErr TlsConnect } } {}
     // Read timeout so an unresponsive/dead peer fails the handshake
@@ -613,6 +665,7 @@ $ `stdlib/std/tls_verify.nu`
     = . c cipher 0
     = . c version 13
     = . c kx_p256 ( vec_new [u] )
+    = . c alpn_sel ( vec_new [u] )
 
     // ── key share ──
     : ( Vec u ) priv ( __rand_bytes 32 )
@@ -628,7 +681,7 @@ $ `stdlib/std/tls_verify.nu`
     : ~ ( Vec u ) tr ( vec_new [u] )
 
     // ── ClientHello ──
-    : ( Vec u ) ch ( __build_client_hello server_name cpub p256pub random sessid )
+    : ( Vec u ) ch ( __build_client_hello server_name cpub p256pub random sessid alpn )
     ( vec_free [u] p256pub )
     ( __tls_cat tr ch )
     : !v TlsErr sw ( __send_plain c 22 ch )
@@ -708,6 +761,14 @@ $ `stdlib/std/tls_verify.nu`
                         ( vec_free [u] . c cv_sig )
                         = . c cv_sig ( bytes_slice msg 8 + 8 siglen )
                     } {}
+                    ? == t 8 {
+                        // EncryptedExtensions — pick up the negotiated ALPN.
+                        : ( Vec u ) sel ( __ee_alpn msg )
+                        ? > ( vec_len [u] sel ) 0 {
+                            ( vec_free [u] . c alpn_sel )
+                            = . c alpn_sel sel
+                        } { ( vec_free [u] sel ) }
+                    } {}
                     ( __tls_cat tr msg )
                 }
                 ( vec_free [u] msg )
@@ -754,6 +815,31 @@ $ `stdlib/std/tls_verify.nu`
     ^ @ !*TlsConn TlsErr { T c }
 }
 
+// Upgrade an already-connected fd to TLS (no ALPN). Insecure: does not
+// verify the certificate (see tls_attach_verify).
+@ tls_attach i raw s server_name → !*TlsConn TlsErr {
+    ^ ( __tls_handshake raw server_name `` )
+}
+
+// Like tls_attach but offers a single ALPN protocol (e.g. "h2"). After a
+// successful handshake the negotiated protocol is readable via
+// tls_alpn_selected (empty if the server declined ALPN). Insecure variant.
+@ tls_attach_alpn i raw s server_name s alpn → !*TlsConn TlsErr {
+    ^ ( __tls_handshake raw server_name alpn )
+}
+
+// The ALPN protocol the server selected, as an owned String ("" if none).
+@ tls_alpn_selected * TlsConn c → String {
+    : String s ( string_new )
+    : i n ( vec_len [u] . c alpn_sel )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [u] . c alpn_sel k ) { T b → ( string_push_char s # i b ) F _ → {} }
+        = k + k 1
+    }
+    ^ s
+}
+
 // Establish a verified TLS 1.3 connection (the secure default): complete
 // the handshake, then verify the server's CertificateVerify signature,
 // the certificate chain up to the system trust store, the validity
@@ -780,6 +866,14 @@ $ `stdlib/std/tls_verify.nu`
 // store (the secure default for STARTTLS-style upgrades).
 @ tls_attach_verify i raw s server_name → !*TlsConn TlsErr {
     : !*TlsConn TlsErr r ( tls_attach raw server_name )
+    ^ ( __verify_conn r server_name )
+}
+
+// Verifying counterpart of tls_attach_alpn: offer an ALPN protocol AND
+// verify the chain / hostname. The negotiated protocol is then readable
+// with tls_alpn_selected.
+@ tls_attach_alpn_verify i raw s server_name s alpn → !*TlsConn TlsErr {
+    : !*TlsConn TlsErr r ( tls_attach_alpn raw server_name alpn )
     ^ ( __verify_conn r server_name )
 }
 
@@ -922,6 +1016,7 @@ $ `stdlib/std/tls_verify.nu`
     ( vec_free [u] . c cv_sig )
     ( vec_free [u] . c th_cert )
     ( vec_free [u] . c kx_p256 )
+    ( vec_free [u] . c alpn_sel )
     ( nurl_free # s c )
 }
 
