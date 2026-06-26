@@ -271,7 +271,7 @@ $ `stdlib/std/bytes.nu`
                 ~ == . ku ok 1 {
                     ? == . ku tag 6 {
                         ? ( __der_oid_is b ku `2b06010505070301` ) { = . ei eku_server T } {}  // serverAuth
-                        ? ( __der_oid_is b ku `551d2500` ) { = . ei eku_server T } {}            // anyExtendedKeyUsage
+                        ? ( __der_oid_is b ku `551d2500` ) { = . ei eku_server T } {}  // anyExtendedKeyUsage
                     } {}
                     = ku ( __der_next b ku )
                 }
@@ -467,11 +467,11 @@ $ `stdlib/std/bytes.nu`
         // leftmost label (so partial-label "*foo.com" is rejected) and the
         // remainder must span at least two labels (so "*.com" / a wildcard
         // in the public-suffix position is rejected) — RFC 6125 §6.4.3.
-        ? != ( nurl_str_get pattern 1 ) 46 { ^ F } {}   // require "*."
+        ? != ( nurl_str_get pattern 1 ) 46 { ^ F } {}  // require "*."
         : ~ i dots 0
         : ~ i di 2
         ~ < di pl { ? == ( nurl_str_get pattern di ) 46 { = dots + dots 1 } {} = di + di 1 }
-        ? < dots 1 { ^ F } {}                            // need ≥2 labels after "*."
+        ? < dots 1 { ^ F } {}  // need ≥2 labels after "*."
         // "*.rest" — host must end with ".rest" and have no dot in the
         // matched first label.
         : s rest ( nurl_str_slice pattern 1 - pl 1 )  // ".example.com"

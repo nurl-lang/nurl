@@ -31,7 +31,7 @@ $ `stdlib/std/bytes.nu`
     : ~ i k 0
     ~ < k 8 {
         : i m & 1 bb
-        = p ^^ p & aa - 0 m            // add aa iff low bit of bb set (mask)
+        = p ^^ p & aa - 0 m  // add aa iff low bit of bb set (mask)
         : i hi & 1 >> aa 7
         = aa & 255 ^^ << aa 1 & 27 - 0 hi  // xtime(aa), branchless reduction
         = bb >> bb 1

@@ -175,13 +175,13 @@ $ `stdlib/std/tls_verify.nu`
 @ __downgrade_sentinel ( Vec u ) srand → b {
     ? < ( vec_len [u] srand ) 32 { ^ F } {}
     : ~ b m T
-    ? != ( __t_bget srand 24 ) 68 { = m F } {}   // 'D'
-    ? != ( __t_bget srand 25 ) 79 { = m F } {}   // 'O'
-    ? != ( __t_bget srand 26 ) 87 { = m F } {}   // 'W'
-    ? != ( __t_bget srand 27 ) 78 { = m F } {}   // 'N'
-    ? != ( __t_bget srand 28 ) 71 { = m F } {}   // 'G'
-    ? != ( __t_bget srand 29 ) 82 { = m F } {}   // 'R'
-    ? != ( __t_bget srand 30 ) 68 { = m F } {}   // 'D'
+    ? != ( __t_bget srand 24 ) 68 { = m F } {}  // 'D'
+    ? != ( __t_bget srand 25 ) 79 { = m F } {}  // 'O'
+    ? != ( __t_bget srand 26 ) 87 { = m F } {}  // 'W'
+    ? != ( __t_bget srand 27 ) 78 { = m F } {}  // 'N'
+    ? != ( __t_bget srand 28 ) 71 { = m F } {}  // 'G'
+    ? != ( __t_bget srand 29 ) 82 { = m F } {}  // 'R'
+    ? != ( __t_bget srand 30 ) 68 { = m F } {}  // 'D'
     : i last ( __t_bget srand 31 )
     ? & != last 0 != last 1 { = m F } {}
     ^ m

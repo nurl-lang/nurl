@@ -279,13 +279,13 @@ $ `stdlib/std/hash_sha256.nu`
         ( bigint_free bsig )
         = bsig ( bigint_modpow bm bd bn )
     } {
-        : BigInt re ( bigint_modpow r be bn )       // r^e mod n (public exp, fast)
+        : BigInt re ( bigint_modpow r be bn )  // r^e mod n (public exp, fast)
         : BigInt mb ( bigint_mul bm re )
-        : BigInt mbr ( bigint_rem mb bn )           // EM·r^e mod n
-        : BigInt sb ( bigint_modpow mbr bd bn )     // (EM·r^e)^d = EM^d·r mod n
+        : BigInt mbr ( bigint_rem mb bn )  // EM·r^e mod n
+        : BigInt sb ( bigint_modpow mbr bd bn )  // (EM·r^e)^d = EM^d·r mod n
         : BigInt su ( bigint_mul sb rinv )
         ( bigint_free bsig )
-        = bsig ( bigint_rem su bn )                 // ·r^{-1} → EM^d mod n
+        = bsig ( bigint_rem su bn )  // ·r^{-1} → EM^d mod n
         ( bigint_free re ) ( bigint_free mb ) ( bigint_free mbr )
         ( bigint_free sb ) ( bigint_free su )
     }
