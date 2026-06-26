@@ -6162,9 +6162,11 @@
                                 //       heap-box pointer — inttoptr → %T* →
                                 //       load → free.
                                 : s ni_f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname_r `__idx_0` `__type` ) )
+                                : s ni_fc ( nurl_sym_get syms ( nurl_str_cat sname_r `__field_count` ) )
+                                : b ni_single & != 0 ( nurl_str_len ni_fc ) == ( nurl_str_to_int ni_fc ) 1
                                 : b ni_f0_is_ptr & != 0 ( nurl_str_len ni_f0_ty )
                                 == ( nurl_str_get ni_f0_ty - ( nurl_str_len ni_f0_ty ) 1 ) 42
-                                ? ni_f0_is_ptr
+                                ? & ni_single ni_f0_is_ptr
                                 { : s pcv_r ( nurl_cg_reg cg )
                                     ( nurl_print `  ` ) ( nurl_print pcv_r )
                                     ( nurl_print ` = inttoptr i64 ` ) ( nurl_print pr0 )
@@ -10480,9 +10482,16 @@
                         : s vlist_a ( nurl_sym_get syms ( nurl_str_cat sname2 `__variants` ) )
                         ? == 0 ( nurl_str_len vlist_a ) {
                             : s f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname2 `__idx_0` `__type` ) )
+                            // Inline-f0 is correct ONLY for a SINGLE-field
+                            // pointer-handle struct (Vec/String/Response). A
+                            // multi-field struct whose f0 happens to be a
+                            // pointer (e.g. TcpListener { s raw i is_tls … })
+                            // must be heap-boxed, or fields 1.. are dropped.
+                            : s fc_a ( nurl_sym_get syms ( nurl_str_cat sname2 `__field_count` ) )
+                            : b single_a & != 0 ( nurl_str_len fc_a ) == ( nurl_str_to_int fc_a ) 1
                             : b f0_is_ptr & != 0 ( nurl_str_len f0_ty )
                             == ( nurl_str_get f0_ty - ( nurl_str_len f0_ty ) 1 ) 42
-                            ? f0_is_ptr
+                            ? & single_a f0_is_ptr
                             {  // Single-pointer-handle struct (Vec, String,
                                 // Response, ...): extract f0 + ptrtoint into
                                 // the i64 payload slot.

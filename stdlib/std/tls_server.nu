@@ -39,22 +39,22 @@ $ `stdlib/std/aes_gcm.nu`
 // Encrypt + send one record under the SERVER write keys (s_key/s_iv/s_seq).
 @ __srv_send_enc * TlsConn c i content_type ( Vec u ) content → !v TlsErr {
     : ( Vec u ) inner ( vec_with_cap [u] + ( vec_len [u] content ) 1 )
-    ( __cat inner content )
+    ( __tls_cat inner content )
     ( vec_push [u] inner # u content_type )
     : i total + ( vec_len [u] inner ) 16
     : ( Vec u ) aad ( vec_with_cap [u] 5 )
     ( vec_push [u] aad # u 23 )
     ( vec_push [u] aad # u 3 )
     ( vec_push [u] aad # u 3 )
-    ( __u16 aad total )
+    ( __tls_u16 aad total )
     : ( Vec u ) nonce ( __nonce . c s_iv . c s_seq )
     : ( Vec u ) sealed ( __aead_seal . c cipher . c s_key nonce aad inner )
     : ( Vec u ) rec ( vec_with_cap [u] + total 5 )
     ( vec_push [u] rec # u 23 )
     ( vec_push [u] rec # u 3 )
     ( vec_push [u] rec # u 3 )
-    ( __u16 rec total )
-    ( __cat rec sealed )
+    ( __tls_u16 rec total )
+    ( __tls_cat rec sealed )
     : b w ( __tls_sock_write . c fd rec )
     ( vec_free [u] inner )
     ( vec_free [u] aad )
@@ -72,7 +72,7 @@ $ `stdlib/std/aes_gcm.nu`
     ( vec_push [u] aad # u 23 )
     ( vec_push [u] aad # u 3 )
     ( vec_push [u] aad # u 3 )
-    ( __u16 aad blen )
+    ( __tls_u16 aad blen )
     : ( Vec u ) nonce ( __nonce . c c_iv . c c_seq )
     : ?( Vec u ) pt ( __aead_open . c cipher . c c_key nonce aad body )
     ( vec_free [u] aad )
@@ -111,7 +111,7 @@ $ `stdlib/std/aes_gcm.nu`
                                 ( vec_free [u] . rec body )
                                 : i ct ( __inner_type inner )
                                 ? == ct 22 {
-                                    ( __cat . c hsbuf inner )
+                                    ( __tls_cat . c hsbuf inner )
                                     ( vec_free [u] inner )
                                 } {
                                     ( vec_free [u] inner )
@@ -126,7 +126,7 @@ $ `stdlib/std/aes_gcm.nu`
                         }
                     } {
                         ? == . rec rtype 22 {
-                            ( __cat . c hsbuf . rec body )
+                            ( __tls_cat . c hsbuf . rec body )
                             ( vec_free [u] . rec body )
                         } {
                             ( vec_free [u] . rec body )
@@ -162,7 +162,7 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) hs ( vec_with_cap [u] + ( vec_len [u] body ) 4 )
     ( vec_push [u] hs # u htype )
     ( __u24 hs ( vec_len [u] body ) )
-    ( __cat hs body )
+    ( __tls_cat hs body )
     ^ hs
 }
 
@@ -190,7 +190,7 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) out ( vec_with_cap [u] + ( vec_len [u] inner ) 2 )
     ( vec_push [u] out # u 48 )
     ( vec_push [u] out # u ( vec_len [u] inner ) )
-    ( __cat out inner )
+    ( __tls_cat out inner )
     ( vec_free [u] r ) ( vec_free [u] sv ) ( vec_free [u] inner )
     ^ out
 }
@@ -203,7 +203,7 @@ $ `stdlib/std/aes_gcm.nu`
     ~ < k 64 { ( vec_push [u] m # u 32 ) = k + k 1 }
     ( bytes_extend_str m `TLS 1.3, server CertificateVerify` )
     ( vec_push [u] m # u 0 )
-    ( __cat m th )
+    ( __tls_cat m th )
     ^ m
 }
 
@@ -238,7 +238,7 @@ $ `stdlib/std/aes_gcm.nu`
         ( vec_free [u] ch ) ( vec_free [u] tr ) ( nurl_free # s c )
         ^ ( __srv_fail raw )
     } {}
-    ( __cat tr ch )
+    ( __tls_cat tr ch )
 
     : ( Vec u ) crand ( bytes_slice ch 6 38 )
     : i sidlen ( __t_bget ch 38 )
@@ -296,7 +296,7 @@ $ `stdlib/std/aes_gcm.nu`
     // ── ServerHello ──
     : ( Vec u ) srand ( __srv_rand 32 )
     : ( Vec u ) sh ( __srv_build_sh srand ch sidlen suite grp spub )
-    ( __cat tr sh )
+    ( __tls_cat tr sh )
     : !v TlsErr shw ( __send_plain c 22 sh )
     ?? shw { T _ → {} F _ → {
             ( __srv_cleanup_accept ch crand cpub eph spub ecdhe srand sh tr )
@@ -328,9 +328,9 @@ $ `stdlib/std/aes_gcm.nu`
 
     // ── EncryptedExtensions (empty) ──
     : ( Vec u ) eebody ( vec_new [u] )
-    ( __u16 eebody 0 )
+    ( __tls_u16 eebody 0 )
     : ( Vec u ) ee ( __srv_hs_wrap 8 eebody )
-    ( __cat tr ee )
+    ( __tls_cat tr ee )
     : !v TlsErr eew ( __srv_send_enc c 22 ee )
     ?? eew { T _ → {} F _ → {} }
     ( vec_free [u] eebody )
@@ -340,12 +340,12 @@ $ `stdlib/std/aes_gcm.nu`
     ( vec_push [u] certbody # u 0 )  // certificate_request_context = empty
     : ( Vec u ) clist ( vec_new [u] )
     ( __u24 clist ( vec_len [u] cert_chain ) )
-    ( __cat clist cert_chain )
-    ( __u16 clist 0 )  // per-cert extensions = empty
+    ( __tls_cat clist cert_chain )
+    ( __tls_u16 clist 0 )  // per-cert extensions = empty
     ( __u24 certbody ( vec_len [u] clist ) )
-    ( __cat certbody clist )
+    ( __tls_cat certbody clist )
     : ( Vec u ) certmsg ( __srv_hs_wrap 11 certbody )
-    ( __cat tr certmsg )
+    ( __tls_cat tr certmsg )
     : !v TlsErr cw ( __srv_send_enc c 22 certmsg )
     ?? cw { T _ → {} F _ → {} }
     ( vec_free [u] clist ) ( vec_free [u] certbody )
@@ -357,11 +357,11 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) rs ( ecdsa_p256_sign priv cvdig )
     : ( Vec u ) der ( __srv_der_ecdsa rs )
     : ( Vec u ) cvbody ( vec_new [u] )
-    ( __u16 cvbody 1027 )  // ecdsa_secp256r1_sha256 = 0x0403
-    ( __u16 cvbody ( vec_len [u] der ) )
-    ( __cat cvbody der )
+    ( __tls_u16 cvbody 1027 )  // ecdsa_secp256r1_sha256 = 0x0403
+    ( __tls_u16 cvbody ( vec_len [u] der ) )
+    ( __tls_cat cvbody der )
     : ( Vec u ) cvmsg ( __srv_hs_wrap 15 cvbody )
-    ( __cat tr cvmsg )
+    ( __tls_cat tr cvmsg )
     : !v TlsErr cvw ( __srv_send_enc c 22 cvmsg )
     ?? cvw { T _ → {} F _ → {} }
     ( vec_free [u] th_cert ) ( vec_free [u] cvc ) ( vec_free [u] cvdig )
@@ -371,7 +371,7 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) th_cv ( sha256_pure tr )
     : ( Vec u ) sfin ( __finished_mac s_hs th_cv )
     : ( Vec u ) sfmsg ( __srv_hs_wrap 20 sfin )
-    ( __cat tr sfmsg )
+    ( __tls_cat tr sfmsg )
     : !v TlsErr sfw ( __srv_send_enc c 22 sfmsg )
     ?? sfw { T _ → {} F _ → {} }
     ( vec_free [u] th_cv )
@@ -437,23 +437,23 @@ $ `stdlib/std/aes_gcm.nu`
 // Build the ServerHello handshake message.
 @ __srv_build_sh ( Vec u ) srand ( Vec u ) ch i sidlen i suite i grp ( Vec u ) spub → ( Vec u ) {
     : ( Vec u ) body ( vec_new [u] )
-    ( __u16 body 771 )  // legacy_version 0x0303
-    ( __cat body srand )  // 32-byte random
+    ( __tls_u16 body 771 )  // legacy_version 0x0303
+    ( __tls_cat body srand )  // 32-byte random
     ( vec_push [u] body # u sidlen )  // echo legacy session id
     : ~ i k 0
     ~ < k sidlen { ( vec_push [u] body # u ( __t_bget ch + 39 k ) ) = k + k 1 }
-    ( __u16 body suite )  // cipher suite
+    ( __tls_u16 body suite )  // cipher suite
     ( vec_push [u] body # u 0 )  // compression = null
     // extensions: supported_versions (0x002b)=0x0304 + key_share (0x0033)
     : ( Vec u ) ext ( vec_new [u] )
-    ( __u16 ext 43 )
-    ( __u16 ext 2 )
-    ( __u16 ext 772 )  // 0x0304 TLS 1.3
-    ( __u16 ext 51 )
-    ( __u16 ext + 4 ( vec_len [u] spub ) )
-    ( __u16 ext grp )
-    ( __u16 ext ( vec_len [u] spub ) )
-    ( __cat ext spub )
+    ( __tls_u16 ext 43 )
+    ( __tls_u16 ext 2 )
+    ( __tls_u16 ext 772 )  // 0x0304 TLS 1.3
+    ( __tls_u16 ext 51 )
+    ( __tls_u16 ext + 4 ( vec_len [u] spub ) )
+    ( __tls_u16 ext grp )
+    ( __tls_u16 ext ( vec_len [u] spub ) )
+    ( __tls_cat ext spub )
     ( __blk16 body ext )
     ( vec_free [u] ext )
     : ( Vec u ) hs ( __srv_hs_wrap 2 body )
@@ -485,7 +485,7 @@ $ `stdlib/std/aes_gcm.nu`
                         T inner → {
                             ( vec_free [u] . rec body )
                             : i ct ( __inner_type inner )
-                            ? == ct 23 { ( __cat . c appbuf inner ) } {
+                            ? == ct 23 { ( __tls_cat . c appbuf inner ) } {
                                 ? == ct 21 { = . c closed 1 } {}
                             }
                             ( vec_free [u] inner )

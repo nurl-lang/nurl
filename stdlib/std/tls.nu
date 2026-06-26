@@ -113,7 +113,7 @@ $ `stdlib/std/tls_verify.nu`
     ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ 0 }
 }
 
-@ __u16 ( Vec u ) v i n → v {
+@ __tls_u16 ( Vec u ) v i n → v {
     ( vec_push [u] v # u & >> n 8 255 )
     ( vec_push [u] v # u & n 255 )
 }
@@ -124,7 +124,7 @@ $ `stdlib/std/tls_verify.nu`
     ( vec_push [u] v # u & n 255 )
 }
 
-@ __cat ( Vec u ) dst ( Vec u ) src → v {
+@ __tls_cat ( Vec u ) dst ( Vec u ) src → v {
     : i n ( vec_len [u] src )
     : ~ i k 0
     ~ < k n { ( vec_push [u] dst # u ( __t_bget src k ) ) = k + k 1 }
@@ -132,8 +132,8 @@ $ `stdlib/std/tls_verify.nu`
 
 // Append a 2-byte length prefix + the block bytes.
 @ __blk16 ( Vec u ) dst ( Vec u ) sub → v {
-    ( __u16 dst ( vec_len [u] sub ) )
-    ( __cat dst sub )
+    ( __tls_u16 dst ( vec_len [u] sub ) )
+    ( __tls_cat dst sub )
 }
 
 // Read a big-endian integer of `n` bytes from `v` at `off`.
@@ -168,7 +168,7 @@ $ `stdlib/std/tls_verify.nu`
         ? < got 0 { ( vec_free [u] tmp ) ^ @ !i TlsErr { F # TlsErr TlsRead } } {}
         ? == got 0 { ( vec_free [u] tmp ) ^ @ !i TlsErr { F # TlsErr TlsClosed } } {}
         : b _ok ( vec_set_len [u] tmp got )
-        ( __cat . c rxbuf tmp )
+        ( __tls_cat . c rxbuf tmp )
         ( vec_free [u] tmp )
     }
     ^ @ !i TlsErr { T 1 }
@@ -232,7 +232,7 @@ $ `stdlib/std/tls_verify.nu`
     ( vec_push [u] aad # u 23 )
     ( vec_push [u] aad # u 3 )
     ( vec_push [u] aad # u 3 )
-    ( __u16 aad blen )
+    ( __tls_u16 aad blen )
     : ( Vec u ) nonce ( __nonce . c s_iv . c s_seq )
     : ?( Vec u ) pt ( __aead_open . c cipher . c s_key nonce aad body )
     ( vec_free [u] aad )
@@ -255,22 +255,22 @@ $ `stdlib/std/tls_verify.nu`
 // Encrypt + send one record of `content` under the client keys.
 @ __send_encrypted * TlsConn c i content_type ( Vec u ) content → !v TlsErr {
     : ( Vec u ) inner ( vec_with_cap [u] + ( vec_len [u] content ) 1 )
-    ( __cat inner content )
+    ( __tls_cat inner content )
     ( vec_push [u] inner # u content_type )
     : i total + ( vec_len [u] inner ) 16
     : ( Vec u ) aad ( vec_with_cap [u] 5 )
     ( vec_push [u] aad # u 23 )
     ( vec_push [u] aad # u 3 )
     ( vec_push [u] aad # u 3 )
-    ( __u16 aad total )
+    ( __tls_u16 aad total )
     : ( Vec u ) nonce ( __nonce . c c_iv . c c_seq )
     : ( Vec u ) sealed ( __aead_seal . c cipher . c c_key nonce aad inner )
     : ( Vec u ) rec ( vec_with_cap [u] + total 5 )
     ( vec_push [u] rec # u 23 )
     ( vec_push [u] rec # u 3 )
     ( vec_push [u] rec # u 3 )
-    ( __u16 rec total )
-    ( __cat rec sealed )
+    ( __tls_u16 rec total )
+    ( __tls_cat rec sealed )
     : b w ( __tls_sock_write . c fd rec )
     ( vec_free [u] inner )
     ( vec_free [u] aad )
@@ -289,8 +289,8 @@ $ `stdlib/std/tls_verify.nu`
     // record except the initial ClientHello, where 0x0303 is also valid).
     ( vec_push [u] rec # u 3 )
     ( vec_push [u] rec # u 3 )
-    ( __u16 rec ( vec_len [u] body ) )
-    ( __cat rec body )
+    ( __tls_u16 rec ( vec_len [u] body ) )
+    ( __tls_cat rec body )
     : b w ( __tls_sock_write . c fd rec )
     ( vec_free [u] rec )
     ^ ? w @ !v TlsErr { T 0 } @ !v TlsErr { F # TlsErr TlsWrite }
@@ -328,7 +328,7 @@ $ `stdlib/std/tls_verify.nu`
                                 ( vec_free [u] . rec body )
                                 : i ct ( __inner_type inner )
                                 ? == ct 22 {
-                                    ( __cat . c hsbuf inner )
+                                    ( __tls_cat . c hsbuf inner )
                                     ( vec_free [u] inner )
                                 } {
                                     ( vec_free [u] inner )
@@ -344,7 +344,7 @@ $ `stdlib/std/tls_verify.nu`
                     } {
                         // plaintext handshake (ServerHello stage) or alert
                         ? == . rec rtype 22 {
-                            ( __cat . c hsbuf . rec body )
+                            ( __tls_cat . c hsbuf . rec body )
                             ( vec_free [u] . rec body )
                         } {
                             ( vec_free [u] . rec body )
@@ -361,21 +361,21 @@ $ `stdlib/std/tls_verify.nu`
 // ── ClientHello ───────────────────────────────────────────────────
 @ __build_client_hello s host ( Vec u ) pubkey ( Vec u ) p256pub ( Vec u ) random ( Vec u ) sessid → ( Vec u ) {
     : ( Vec u ) body ( vec_new [u] )
-    ( __u16 body 771 )  // legacy_version 0x0303
-    ( __cat body random )  // 32-byte random
+    ( __tls_u16 body 771 )  // legacy_version 0x0303
+    ( __tls_cat body random )  // 32-byte random
     ( vec_push [u] body # u 32 )  // session id length
-    ( __cat body sessid )
+    ( __tls_cat body sessid )
     // cipher_suites: TLS_AES_128_GCM_SHA256 (0x1301) +
     // TLS_CHACHA20_POLY1305_SHA256 (0x1303) — both use the SHA-256 key
     // schedule, so either keeps the rest of the handshake unchanged.
     // 1.3 suites first, then the TLS 1.2 ECDHE suites for fallback.
-    ( __u16 body 12 )
-    ( __u16 body 4865 )  // 0x1301 TLS_AES_128_GCM_SHA256
-    ( __u16 body 4867 )  // 0x1303 TLS_CHACHA20_POLY1305_SHA256
-    ( __u16 body 49195 )  // 0xc02b ECDHE-ECDSA-AES128-GCM-SHA256
-    ( __u16 body 49199 )  // 0xc02f ECDHE-RSA-AES128-GCM-SHA256
-    ( __u16 body 52393 )  // 0xcca9 ECDHE-ECDSA-CHACHA20-POLY1305
-    ( __u16 body 52392 )  // 0xcca8 ECDHE-RSA-CHACHA20-POLY1305
+    ( __tls_u16 body 12 )
+    ( __tls_u16 body 4865 )  // 0x1301 TLS_AES_128_GCM_SHA256
+    ( __tls_u16 body 4867 )  // 0x1303 TLS_CHACHA20_POLY1305_SHA256
+    ( __tls_u16 body 49195 )  // 0xc02b ECDHE-ECDSA-AES128-GCM-SHA256
+    ( __tls_u16 body 49199 )  // 0xc02f ECDHE-RSA-AES128-GCM-SHA256
+    ( __tls_u16 body 52393 )  // 0xcca9 ECDHE-ECDSA-CHACHA20-POLY1305
+    ( __tls_u16 body 52392 )  // 0xcca8 ECDHE-RSA-CHACHA20-POLY1305
     // compression methods
     ( vec_push [u] body # u 1 )
     ( vec_push [u] body # u 0 )
@@ -386,12 +386,12 @@ $ `stdlib/std/tls_verify.nu`
     // server_name (0x0000)
     : ( Vec u ) sni ( vec_new [u] )
     : i hl ( nurl_str_len host )
-    ( __u16 sni + hl 3 )  // ServerNameList length
+    ( __tls_u16 sni + hl 3 )  // ServerNameList length
     ( vec_push [u] sni # u 0 )  // name_type host_name
-    ( __u16 sni hl )
+    ( __tls_u16 sni hl )
     : ~ i k 0
     ~ < k hl { ( vec_push [u] sni # u ( nurl_str_get host k ) ) = k + k 1 }
-    ( __u16 ext 0 )
+    ( __tls_u16 ext 0 )
     ( __blk16 ext sni )
     ( vec_free [u] sni )
 
@@ -399,34 +399,34 @@ $ `stdlib/std/tls_verify.nu`
     // Both are offered so the server can pick whichever it is configured
     // for — PostgreSQL/OpenSSL servers commonly default to P-256.
     : ( Vec u ) grp ( vec_new [u] )
-    ( __u16 grp 4 )
-    ( __u16 grp 29 )  // x25519
-    ( __u16 grp 23 )  // secp256r1
-    ( __u16 ext 10 )
+    ( __tls_u16 grp 4 )
+    ( __tls_u16 grp 29 )  // x25519
+    ( __tls_u16 grp 23 )  // secp256r1
+    ( __tls_u16 ext 10 )
     ( __blk16 ext grp )
     ( vec_free [u] grp )
 
     // signature_algorithms (0x000d)
     : ( Vec u ) sa ( vec_new [u] )
-    ( __u16 sa 16 )  // list length (8 algs × 2)
-    ( __u16 sa 1027 )  // ecdsa_secp256r1_sha256 0x0403
-    ( __u16 sa 2052 )  // rsa_pss_rsae_sha256    0x0804
-    ( __u16 sa 1025 )  // rsa_pkcs1_sha256       0x0401
-    ( __u16 sa 1283 )  // ecdsa_secp384r1_sha384 0x0503
-    ( __u16 sa 2053 )  // rsa_pss_rsae_sha384    0x0805
-    ( __u16 sa 2054 )  // rsa_pss_rsae_sha512    0x0806
-    ( __u16 sa 2055 )  // ed25519                0x0807
-    ( __u16 sa 1281 )  // rsa_pkcs1_sha384       0x0501
-    ( __u16 ext 13 )
+    ( __tls_u16 sa 16 )  // list length (8 algs × 2)
+    ( __tls_u16 sa 1027 )  // ecdsa_secp256r1_sha256 0x0403
+    ( __tls_u16 sa 2052 )  // rsa_pss_rsae_sha256    0x0804
+    ( __tls_u16 sa 1025 )  // rsa_pkcs1_sha256       0x0401
+    ( __tls_u16 sa 1283 )  // ecdsa_secp384r1_sha384 0x0503
+    ( __tls_u16 sa 2053 )  // rsa_pss_rsae_sha384    0x0805
+    ( __tls_u16 sa 2054 )  // rsa_pss_rsae_sha512    0x0806
+    ( __tls_u16 sa 2055 )  // ed25519                0x0807
+    ( __tls_u16 sa 1281 )  // rsa_pkcs1_sha384       0x0501
+    ( __tls_u16 ext 13 )
     ( __blk16 ext sa )
     ( vec_free [u] sa )
 
     // supported_versions (0x002b): TLS 1.3 (0x0304) then TLS 1.2 (0x0303)
     : ( Vec u ) sv ( vec_new [u] )
     ( vec_push [u] sv # u 4 )
-    ( __u16 sv 772 )
-    ( __u16 sv 771 )
-    ( __u16 ext 43 )
+    ( __tls_u16 sv 772 )
+    ( __tls_u16 sv 771 )
+    ( __tls_u16 ext 43 )
     ( __blk16 ext sv )
     ( vec_free [u] sv )
 
@@ -434,7 +434,7 @@ $ `stdlib/std/tls_verify.nu`
     : ( Vec u ) epf ( vec_new [u] )
     ( vec_push [u] epf # u 1 )
     ( vec_push [u] epf # u 0 )
-    ( __u16 ext 11 )
+    ( __tls_u16 ext 11 )
     ( __blk16 ext epf )
     ( vec_free [u] epf )
 
@@ -443,15 +443,15 @@ $ `stdlib/std/tls_verify.nu`
     // we already supplied a matching public key — no HelloRetryRequest.
     : ( Vec u ) ks ( vec_new [u] )
     : ( Vec u ) entry ( vec_new [u] )
-    ( __u16 entry 29 )  // group x25519
-    ( __u16 entry 32 )  // key_exchange length
-    ( __cat entry pubkey )
-    ( __u16 entry 23 )  // group secp256r1
-    ( __u16 entry ( vec_len [u] p256pub ) )  // 65
-    ( __cat entry p256pub )
-    ( __u16 ks ( vec_len [u] entry ) )
-    ( __cat ks entry )
-    ( __u16 ext 51 )
+    ( __tls_u16 entry 29 )  // group x25519
+    ( __tls_u16 entry 32 )  // key_exchange length
+    ( __tls_cat entry pubkey )
+    ( __tls_u16 entry 23 )  // group secp256r1
+    ( __tls_u16 entry ( vec_len [u] p256pub ) )  // 65
+    ( __tls_cat entry p256pub )
+    ( __tls_u16 ks ( vec_len [u] entry ) )
+    ( __tls_cat ks entry )
+    ( __tls_u16 ext 51 )
     ( __blk16 ext ks )
     ( vec_free [u] entry )
     ( vec_free [u] ks )
@@ -463,7 +463,7 @@ $ `stdlib/std/tls_verify.nu`
     : ( Vec u ) hs ( vec_with_cap [u] + ( vec_len [u] body ) 4 )
     ( vec_push [u] hs # u 1 )
     ( __u24 hs ( vec_len [u] body ) )
-    ( __cat hs body )
+    ( __tls_cat hs body )
     ( vec_free [u] body )
     ^ hs
 }
@@ -630,14 +630,14 @@ $ `stdlib/std/tls_verify.nu`
     // ── ClientHello ──
     : ( Vec u ) ch ( __build_client_hello server_name cpub p256pub random sessid )
     ( vec_free [u] p256pub )
-    ( __cat tr ch )
+    ( __tls_cat tr ch )
     : !v TlsErr sw ( __send_plain c 22 ch )
     ?? sw { T _ → {} F e → { ^ ( __fail c priv cpub random sessid ch tr e ) } }
 
     // ── ServerHello ──
     : !( Vec u ) TlsErr shr ( __next_hs c )
     : ( Vec u ) sh ?? shr { T m → m F e → { ^ ( __fail c priv cpub random sessid ch tr e ) } }
-    ( __cat tr sh )
+    ( __tls_cat tr sh )
     : i suite ( __sh_suite sh )
     = . c version ( __suite_version suite )
     = . c cipher ( __suite_cipher suite )
@@ -689,7 +689,7 @@ $ `stdlib/std/tls_verify.nu`
                     : b okfin ( __cmp_finished msg expect )
                     ( vec_free [u] th_cv )
                     ( vec_free [u] expect )
-                    ( __cat tr msg )
+                    ( __tls_cat tr msg )
                     ? okfin {} { = flighterr 1 }
                     = done 1
                 } {
@@ -708,7 +708,7 @@ $ `stdlib/std/tls_verify.nu`
                         ( vec_free [u] . c cv_sig )
                         = . c cv_sig ( bytes_slice msg 8 + 8 siglen )
                     } {}
-                    ( __cat tr msg )
+                    ( __tls_cat tr msg )
                 }
                 ( vec_free [u] msg )
             }
@@ -728,7 +728,7 @@ $ `stdlib/std/tls_verify.nu`
     : ( Vec u ) finmsg ( vec_with_cap [u] 36 )
     ( vec_push [u] finmsg # u 20 )
     ( __u24 finmsg 32 )
-    ( __cat finmsg cfin )
+    ( __tls_cat finmsg cfin )
     // change_cipher_spec for middlebox compatibility
     : ( Vec u ) ccs ( vec_with_cap [u] 1 )
     ( vec_push [u] ccs # u 1 )
@@ -856,7 +856,7 @@ $ `stdlib/std/tls_verify.nu`
                         ?? ( __decrypt_record_12 c . rec rtype . rec body ) {
                             T inner → {
                                 ( vec_free [u] . rec body )
-                                ? == . rec rtype 23 { ( __cat . c appbuf inner ) } {
+                                ? == . rec rtype 23 { ( __tls_cat . c appbuf inner ) } {
                                     ? == . rec rtype 21 { = . c closed 1 } {}
                                     // type 22 (post-handshake, e.g. tickets): ignore
                                 }
@@ -873,7 +873,7 @@ $ `stdlib/std/tls_verify.nu`
                                 ( vec_free [u] . rec body )
                                 : i ct ( __inner_type inner )
                                 ? == ct 23 {
-                                    ( __cat . c appbuf inner )
+                                    ( __tls_cat . c appbuf inner )
                                 } {
                                     ? == ct 21 { = . c closed 1 } {}
                                     // ct == 22 → post-handshake (ticket/key update): ignore
@@ -961,7 +961,7 @@ $ `stdlib/std/tls_verify.nu`
     ( vec_push [u] a # u rtype )
     ( vec_push [u] a # u 3 )
     ( vec_push [u] a # u 3 )
-    ( __u16 a ptlen )
+    ( __tls_u16 a ptlen )
     ^ a
 }
 
@@ -1000,13 +1000,13 @@ $ `stdlib/std/tls_verify.nu`
         // explicit nonce (= seq) is prepended on the wire
         : ~ i b 0
         ~ < b 8 { ( vec_push [u] body # u & >> . c c_seq * 8 - 7 b 255 ) = b + b 1 }
-        ( __cat body sealed )
+        ( __tls_cat body sealed )
         ( vec_free [u] nonce )
         ( vec_free [u] sealed )
     } {
         : ( Vec u ) nonce ( __nonce12_chacha . c c_iv . c c_seq )
         : ( Vec u ) sealed ( aead_encrypt . c c_key nonce aad content )
-        ( __cat body sealed )
+        ( __tls_cat body sealed )
         ( vec_free [u] nonce )
         ( vec_free [u] sealed )
     }
@@ -1014,8 +1014,8 @@ $ `stdlib/std/tls_verify.nu`
     ( vec_push [u] rec # u rtype )
     ( vec_push [u] rec # u 3 )
     ( vec_push [u] rec # u 3 )
-    ( __u16 rec ( vec_len [u] body ) )
-    ( __cat rec body )
+    ( __tls_u16 rec ( vec_len [u] body ) )
+    ( __tls_cat rec body )
     : b w ( __tls_sock_write . c fd rec )
     ( vec_free [u] aad )
     ( vec_free [u] body )
@@ -1119,13 +1119,13 @@ $ `stdlib/std/tls_verify.nu`
                     ( bytes_extend_bytes signed random )
                     ( bytes_extend_bytes signed srand )
                     : ( Vec u ) eparams ( bytes_slice msg 4 + 8 pklen )
-                    ( __cat signed eparams )
+                    ( __tls_cat signed eparams )
                     ( vec_free [u] eparams )
                     ( vec_free [u] . c th_cert )
                     = . c th_cert signed
                 } {}
                 ? == t 14 { = done 1 } {}
-                ( __cat tr msg )
+                ( __tls_cat tr msg )
                 ( vec_free [u] msg )
             }
         }
@@ -1156,13 +1156,13 @@ $ `stdlib/std/tls_verify.nu`
     ( vec_push [u] cke # u 16 )
     ( __u24 cke + cklen 1 )
     ( vec_push [u] cke # u cklen )
-    ( __cat cke ckpub )
+    ( __tls_cat cke ckpub )
     // ckpub is a fresh P-256 point we own; the x25519 case aliases cpub
     // (freed with the other handshake scratch later), so only free P-256.
     ? is_p256 { ( vec_free [u] ckpub ) } {}
     : !v TlsErr ckw ( __send_plain c 22 cke )
     ?? ckw { T _ → {} F _ → {} }
-    ( __cat tr cke )
+    ( __tls_cat tr cke )
 
     // ── ChangeCipherSpec + client Finished (encrypted) ──
     : ( Vec u ) ccs ( vec_with_cap [u] 1 )
@@ -1177,11 +1177,11 @@ $ `stdlib/std/tls_verify.nu`
     : ( Vec u ) finmsg ( vec_with_cap [u] 16 )
     ( vec_push [u] finmsg # u 20 )
     ( __u24 finmsg 12 )
-    ( __cat finmsg cfin_vd )
+    ( __tls_cat finmsg cfin_vd )
     ( vec_free [u] cfin_vd )
     : !v TlsErr fw ( __send_record_12 c 22 finmsg )
     ?? fw { T _ → {} F _ → {} }
-    ( __cat tr finmsg )
+    ( __tls_cat tr finmsg )
     ( vec_free [u] finmsg )
 
     // ── server ChangeCipherSpec + Finished ──

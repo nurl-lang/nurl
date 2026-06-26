@@ -461,7 +461,7 @@ $ `stdlib/ext/http2_hpack.nu`
         ^ @ !H2Client H2ClientErr { F # H2ClientErr H2CConnect }
     } {}
     : s rp # s craw
-    : TcpConn conn @ TcpConn { rp }
+    : TcpConn conn @ TcpConn { rp 0 0 }
     ( tcp_set_timeout conn 30000 )
     : !H2Client H2ClientErr hr ( __h2_client_handshake conn )
     ?? hr {
@@ -486,7 +486,7 @@ $ `stdlib/ext/http2_hpack.nu`
         ^ @ !H2Client H2ClientErr { F e }
     } {}
     : s rp # s craw
-    : TcpConn conn @ TcpConn { rp }
+    : TcpConn conn @ TcpConn { rp 0 0 }
     // Confirm ALPN actually selected h2 — otherwise the peer would speak
     // HTTP/1.1 and our framing would be garbage.
     : String proto ( tcp_alpn_protocol conn )

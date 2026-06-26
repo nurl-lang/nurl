@@ -150,7 +150,7 @@ $ `stdlib/ext/websocket.nu`
 // Open a TLS client connection. `verify` T = check the broker cert
 // chain + hostname against the system trust store; F = encrypt but
 // don't validate the chain (an MQTT client's `--insecure`).
-@ tcp_connect_tls s host i port b verify → !TcpConn MqttErr {
+@ __mqtt_connect_tls s host i port b verify → !TcpConn MqttErr {
     : i vflag ? verify 1 0
     : i craw ( nurl_tcp_connect_tls host port vflag )
     ? == craw 0 { ^ @ !TcpConn MqttErr { F # MqttErr MqttTransport } } {}
@@ -160,7 +160,7 @@ $ `stdlib/ext/websocket.nu`
         ^ @ !TcpConn MqttErr { F ( __mqtt_of_net ( __net_err_of ek ) ) }
     } {}
     : s crp # s craw
-    : TcpConn c @ TcpConn { crp }
+    : TcpConn c @ TcpConn { crp 0 0 }
     ^ @ !TcpConn MqttErr { T c }
 }
 
@@ -174,7 +174,7 @@ $ `stdlib/ext/websocket.nu`
         ^ @ !TcpConn MqttErr { F ( __mqtt_of_net ( __net_err_of ek ) ) }
     } {}
     : s crp # s craw
-    : TcpConn c @ TcpConn { crp }
+    : TcpConn c @ TcpConn { crp 0 0 }
     ^ @ !TcpConn MqttErr { T c }
 }
 
@@ -597,7 +597,7 @@ $ `stdlib/ext/websocket.nu`
 // (MqttBadAuth / MqttNotAuthorized / MqttRefused); the Ok value is a
 // live, authenticated client.
 @ mqtt_connect_cfg s host i port MqttConfig cfg → !MqttClient MqttErr {
-    : !TcpConn MqttErr cr ( tcp_connect_tls host port . cfg tls_verify )
+    : !TcpConn MqttErr cr ( __mqtt_connect_tls host port . cfg tls_verify )
     ?? cr {
         T conn → {
             ( tcp_set_timeout conn 15000 )
@@ -1021,7 +1021,7 @@ $ `stdlib/ext/websocket.nu`
 @ mqtt_reconnect MqttClient cl s host i port MqttConfig cfg → !v MqttErr {
     ? . cl ws { ^ @ !v MqttErr { F # MqttErr MqttTransport } } {}
     ( tcp_close_conn . cl conn )
-    : !TcpConn MqttErr cr ( tcp_connect_tls host port . cfg tls_verify )
+    : !TcpConn MqttErr cr ( __mqtt_connect_tls host port . cfg tls_verify )
     ?? cr {
         T nc → {
             ( tcp_set_timeout nc 15000 )

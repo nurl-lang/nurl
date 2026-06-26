@@ -1736,7 +1736,7 @@ $ `stdlib/ext/compress.nu`
                 ^ @ !WsClient WsErr { F WsConnectFailed }
             } {}
             : s crp # s craw
-            : TcpConn conn @ TcpConn { crp }
+            : TcpConn conn @ TcpConn { crp 0 0 }
             : !v WsErr hsr ( ws_client_handshake conn ( string_data . u host ) ( string_data . u path ) subprotocol )
             ( ws_url_free u )
             ?? hsr {
@@ -2391,7 +2391,7 @@ $ `stdlib/ext/compress.nu`
                 ^ @ !WsDeflateConn WsErr { F WsConnectFailed }
             } {}
             : s crp # s craw
-            : TcpConn conn @ TcpConn { crp }
+            : TcpConn conn @ TcpConn { crp 0 0 }
             : !WsDeflateConfig WsErr hsr ( ws_client_handshake_deflate conn ( string_data . u host ) ( string_data . u path ) subprotocol cfg )
             ( ws_url_free u )
             ?? hsr {

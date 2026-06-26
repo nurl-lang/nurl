@@ -26,12 +26,12 @@ $ `deps/tls/src/tls.nu`
 $ `resp.nu`
 
 : | RedisErr {
-    RedisConnFail     // could not open the TCP socket
-    RedisTls          // TLS upgrade failed (handshake / cert error)
-    RedisProtocol     // malformed RESP from the server
-    RedisIo           // socket read/write failure or unexpected EOF
+    RedisConnFail  // could not open the TCP socket
+    RedisTls  // TLS upgrade failed (handshake / cert error)
+    RedisProtocol  // malformed RESP from the server
+    RedisIo  // socket read/write failure or unexpected EOF
     RedisServerError  // server returned a RESP error — see conn.lasterr
-    RedisType         // reply was not the type the helper expected
+    RedisType  // reply was not the type the helper expected
 }
 
 @ redis_err_name RedisErr e → s {
@@ -54,7 +54,9 @@ $ `resp.nu`
 }
 
 @ redis_str_is_nil RedisStr s → b { ^ == . s found 0 }
+
 @ redis_str_val RedisStr s → s { ^ ( string_data . s val ) }
+
 @ redis_str_free RedisStr s → v { ( string_free . s val ) }
 
 // A pub/sub frame. kind: 0 message · 1 subscribe · 2 unsubscribe ·
@@ -70,24 +72,29 @@ $ `resp.nu`
 }
 
 @ redis_message_kind RedisMessage m → i { ^ . m kind }
+
 @ redis_message_channel RedisMessage m → s { ^ ( string_data . m channel ) }
+
 @ redis_message_pattern RedisMessage m → s { ^ ( string_data . m pattern ) }
+
 @ redis_message_payload RedisMessage m → s { ^ ( string_data . m payload ) }
+
 @ redis_message_count RedisMessage m → i { ^ . m count }
 // True for an actual published message (message / pmessage), false for a
 // subscribe/unsubscribe control frame.
 @ redis_message_is_payload RedisMessage m → b { ^ | == . m kind 0 == . m kind 3 }
+
 @ redis_message_free RedisMessage m → v {
     ( string_free . m channel ) ( string_free . m pattern ) ( string_free . m payload )
 }
 
 : RedisConn {
-    i tls          // 0 plaintext, 1 TLS
-    i raw          // raw socket fd (plaintext reads / fd the TLS layer took over)
-    TcpConn tcp    // plaintext transport (writes via tcp_write_all)
-    * TlsConn tc   // TLS transport (when tls = 1)
-    ( Vec u ) rxbuf // bytes read but not yet parsed into a reply
-    String lasterr // last server error text
+    i tls  // 0 plaintext, 1 TLS
+    i raw  // raw socket fd (plaintext reads / fd the TLS layer took over)
+    TcpConn tcp  // plaintext transport (writes via tcp_write_all)
+    * TlsConn tc  // TLS transport (when tls = 1)
+    ( Vec u ) rxbuf  // bytes read but not yet parsed into a reply
+    String lasterr  // last server error text
     String host_name
     i port_num
     i db_index
@@ -95,7 +102,7 @@ $ `resp.nu`
 
 // ── transport ─────────────────────────────────────────────────────
 
-@ __r_write *RedisConn c ( Vec u ) bytes → i {
+@ __r_write * RedisConn c ( Vec u ) bytes → i {
     ? == . c tls 1 {
         ?? ( tls_write . c tc bytes ) { T _ → ^ 1 F _ → ^ 0 }
     } {
@@ -104,7 +111,7 @@ $ `resp.nu`
 }
 
 // Read one chunk into rxbuf. Returns 1 on progress, 0 on EOF/error.
-@ __r_fill *RedisConn c → i {
+@ __r_fill * RedisConn c → i {
     ? == . c tls 1 {
         ?? ( tls_read . c tc 16384 ) {
             T v → {
@@ -135,7 +142,7 @@ $ `resp.nu`
 
 // Read exactly one full reply from the socket. Reads more bytes whenever the
 // buffered prefix is an incomplete RESP value, then drops the consumed bytes.
-@ __r_read_reply *RedisConn c → !RedisReply RedisErr {
+@ __r_read_reply * RedisConn c → !RedisReply RedisErr {
     : ~ b spin T
     ~ spin {
         : RespParse p ( resp_parse . c rxbuf 0 )
@@ -164,7 +171,7 @@ $ `resp.nu`
 // reply is surfaced as RedisServerError with the text in conn.lasterr. The
 // caller still owns `args` (free with redis_args_free) and owns the returned
 // reply (free with resp_reply_free).
-@ redis_command *RedisConn c ( Vec String ) args → !RedisReply RedisErr {
+@ redis_command * RedisConn c ( Vec String ) args → !RedisReply RedisErr {
     : ( Vec u ) req ( resp_encode args )
     : i ok ( __r_write c req )
     ( vec_free [u] req )
@@ -205,15 +212,17 @@ $ `resp.nu`
 @ __args1 s a → ( Vec String ) {
     : ( Vec String ) v ( vec_new [String] ) ( redis_arg v a ) ^ v
 }
+
 @ __args2 s a s b → ( Vec String ) {
     : ( Vec String ) v ( __args1 a ) ( redis_arg v b ) ^ v
 }
+
 @ __args3 s a s b s d → ( Vec String ) {
     : ( Vec String ) v ( __args2 a b ) ( redis_arg v d ) ^ v
 }
 
 // Build, send, and free args in one shot.
-@ __cmd_reply *RedisConn c ( Vec String ) args → !RedisReply RedisErr {
+@ __cmd_reply * RedisConn c ( Vec String ) args → !RedisReply RedisErr {
     : !RedisReply RedisErr rr ( redis_command c args )
     ( redis_args_free args )
     ^ rr
@@ -222,7 +231,7 @@ $ `resp.nu`
 // ── typed reply extractors ─────────────────────────────────────────
 
 // Integer reply (e.g. DEL, INCR, EXISTS count).
-@ __reply_int *RedisConn c ( Vec String ) args → !i RedisErr {
+@ __reply_int * RedisConn c ( Vec String ) args → !i RedisErr {
     ?? ( __cmd_reply c args ) {
         F e → ^ @ !i RedisErr { F e }
         T rep → {
@@ -236,7 +245,7 @@ $ `resp.nu`
 }
 
 // Integer reply interpreted as a boolean (1 → true).
-@ __reply_bool *RedisConn c ( Vec String ) args → !b RedisErr {
+@ __reply_bool * RedisConn c ( Vec String ) args → !b RedisErr {
     ?? ( __reply_int c args ) {
         F e → ^ @ !b RedisErr { F e }
         T n → ^ @ !b RedisErr { T == n 1 }
@@ -244,7 +253,7 @@ $ `resp.nu`
 }
 
 // Status reply (+OK and friends); we only care that it wasn't an error.
-@ __reply_ok *RedisConn c ( Vec String ) args → !v RedisErr {
+@ __reply_ok * RedisConn c ( Vec String ) args → !v RedisErr {
     ?? ( __cmd_reply c args ) {
         F e → ^ @ !v RedisErr { F e }
         T rep → { ( resp_reply_free rep ) ^ @ !v RedisErr { T 0 } }
@@ -253,7 +262,7 @@ $ `resp.nu`
 
 // Bulk-string reply, nil-aware. Integers are rendered to text so commands
 // that may answer either way still produce a value.
-@ __reply_str *RedisConn c ( Vec String ) args → !RedisStr RedisErr {
+@ __reply_str * RedisConn c ( Vec String ) args → !RedisStr RedisErr {
     ?? ( __cmd_reply c args ) {
         F e → ^ @ !RedisStr RedisErr { F e }
         T rep → {
@@ -275,7 +284,7 @@ $ `resp.nu`
 
 // Array reply flattened to a Vec of owned Strings (bulk elements; integer
 // elements rendered; nils → empty string). Nil array → empty Vec.
-@ __reply_strvec *RedisConn c ( Vec String ) args → !( Vec String ) RedisErr {
+@ __reply_strvec * RedisConn c ( Vec String ) args → !( Vec String ) RedisErr {
     ?? ( __cmd_reply c args ) {
         F e → ^ @ !( Vec String ) RedisErr { F e }
         T rep → {
@@ -312,7 +321,7 @@ $ `resp.nu`
     : *RedisConn c # *RedisConn ( nurl_alloc Z RedisConn )
     = . c tls 0
     = . c raw rawfd
-    = . c tcp @ TcpConn { # s rawfd }
+    = . c tcp @ TcpConn { # s rawfd 0 0 }
     = . c tc # *TlsConn 0
     = . c rxbuf ( vec_new [u] )
     = . c lasterr ( string_new )
@@ -344,7 +353,7 @@ $ `resp.nu`
     ^ ( __redis_open host port ? != verify 0 2 1 server_name )
 }
 
-@ redis_close *RedisConn c → v {
+@ redis_close * RedisConn c → v {
     ? == . c tls 1 { ( tls_close . c tc ) } { ( nurl_tcp_close . c raw ) }
     ( vec_free [u] . c rxbuf )
     ( string_free . c lasterr )
@@ -352,25 +361,26 @@ $ `resp.nu`
     ( nurl_free # s c )
 }
 
-@ redis_last_error *RedisConn c → s { ^ ( string_data . c lasterr ) }
-@ redis_is_tls *RedisConn c → b { ^ == . c tls 1 }
+@ redis_last_error * RedisConn c → s { ^ ( string_data . c lasterr ) }
+
+@ redis_is_tls * RedisConn c → b { ^ == . c tls 1 }
 
 // ── connection commands ────────────────────────────────────────────
 
 // AUTH: one-arg (password only) or two-arg (ACL user + password). Pass an
 // empty user for the legacy single-argument form.
-@ redis_auth *RedisConn c s user s password → !v RedisErr {
+@ redis_auth * RedisConn c s user s password → !v RedisErr {
     ? == ( nurl_str_len user ) 0 { ^ ( __reply_ok c ( __args2 `AUTH` password ) ) } {}
     ^ ( __reply_ok c ( __args3 `AUTH` user password ) )
 }
 
-@ redis_select *RedisConn c i db → !v RedisErr {
+@ redis_select * RedisConn c i db → !v RedisErr {
     : ( Vec String ) a ( __args1 `SELECT` ) ( redis_arg_i a db )
     : !v RedisErr r ( __reply_ok c a )
     ?? r { T _ → { = . c db_index db ^ @ !v RedisErr { T 0 } } F e → ^ @ !v RedisErr { F e } }
 }
 
-@ redis_ping *RedisConn c → !b RedisErr {
+@ redis_ping * RedisConn c → !b RedisErr {
     ?? ( __cmd_reply c ( __args1 `PING` ) ) {
         F e → ^ @ !b RedisErr { F e }
         T rep → {
@@ -382,102 +392,102 @@ $ `resp.nu`
     }
 }
 
-@ redis_echo *RedisConn c s msg → !RedisStr RedisErr {
+@ redis_echo * RedisConn c s msg → !RedisStr RedisErr {
     ^ ( __reply_str c ( __args2 `ECHO` msg ) )
 }
 
 // ── strings / keys ─────────────────────────────────────────────────
 
-@ redis_set *RedisConn c s key s val → !v RedisErr {
+@ redis_set * RedisConn c s key s val → !v RedisErr {
     ^ ( __reply_ok c ( __args3 `SET` key val ) )
 }
 
-@ redis_get *RedisConn c s key → !RedisStr RedisErr {
+@ redis_get * RedisConn c s key → !RedisStr RedisErr {
     ^ ( __reply_str c ( __args2 `GET` key ) )
 }
 
-@ redis_del *RedisConn c s key → !i RedisErr {
+@ redis_del * RedisConn c s key → !i RedisErr {
     ^ ( __reply_int c ( __args2 `DEL` key ) )
 }
 
-@ redis_exists *RedisConn c s key → !b RedisErr {
+@ redis_exists * RedisConn c s key → !b RedisErr {
     ^ ( __reply_bool c ( __args2 `EXISTS` key ) )
 }
 
-@ redis_incr *RedisConn c s key → !i RedisErr {
+@ redis_incr * RedisConn c s key → !i RedisErr {
     ^ ( __reply_int c ( __args2 `INCR` key ) )
 }
 
-@ redis_decr *RedisConn c s key → !i RedisErr {
+@ redis_decr * RedisConn c s key → !i RedisErr {
     ^ ( __reply_int c ( __args2 `DECR` key ) )
 }
 
-@ redis_incrby *RedisConn c s key i n → !i RedisErr {
+@ redis_incrby * RedisConn c s key i n → !i RedisErr {
     : ( Vec String ) a ( __args2 `INCRBY` key ) ( redis_arg_i a n )
     ^ ( __reply_int c a )
 }
 
-@ redis_expire *RedisConn c s key i secs → !b RedisErr {
+@ redis_expire * RedisConn c s key i secs → !b RedisErr {
     : ( Vec String ) a ( __args2 `EXPIRE` key ) ( redis_arg_i a secs )
     ^ ( __reply_bool c a )
 }
 
-@ redis_ttl *RedisConn c s key → !i RedisErr {
+@ redis_ttl * RedisConn c s key → !i RedisErr {
     ^ ( __reply_int c ( __args2 `TTL` key ) )
 }
 
-@ redis_keys *RedisConn c s pattern → !( Vec String ) RedisErr {
+@ redis_keys * RedisConn c s pattern → !( Vec String ) RedisErr {
     ^ ( __reply_strvec c ( __args2 `KEYS` pattern ) )
 }
 
 // ── lists ──────────────────────────────────────────────────────────
 
-@ redis_lpush *RedisConn c s key s val → !i RedisErr {
+@ redis_lpush * RedisConn c s key s val → !i RedisErr {
     ^ ( __reply_int c ( __args3 `LPUSH` key val ) )
 }
 
-@ redis_rpush *RedisConn c s key s val → !i RedisErr {
+@ redis_rpush * RedisConn c s key s val → !i RedisErr {
     ^ ( __reply_int c ( __args3 `RPUSH` key val ) )
 }
 
-@ redis_llen *RedisConn c s key → !i RedisErr {
+@ redis_llen * RedisConn c s key → !i RedisErr {
     ^ ( __reply_int c ( __args2 `LLEN` key ) )
 }
 
-@ redis_lrange *RedisConn c s key i start i stop → !( Vec String ) RedisErr {
+@ redis_lrange * RedisConn c s key i start i stop → !( Vec String ) RedisErr {
     : ( Vec String ) a ( __args2 `LRANGE` key ) ( redis_arg_i a start ) ( redis_arg_i a stop )
     ^ ( __reply_strvec c a )
 }
 
 // ── hashes ─────────────────────────────────────────────────────────
 
-@ redis_hset *RedisConn c s key s field s val → !i RedisErr {
+@ redis_hset * RedisConn c s key s field s val → !i RedisErr {
     : ( Vec String ) a ( __args3 `HSET` key field ) ( redis_arg a val )
     ^ ( __reply_int c a )
 }
 
-@ redis_hget *RedisConn c s key s field → !RedisStr RedisErr {
+@ redis_hget * RedisConn c s key s field → !RedisStr RedisErr {
     ^ ( __reply_str c ( __args3 `HGET` key field ) )
 }
 
 // Flat [field, value, field, value, …] of the whole hash.
-@ redis_hgetall *RedisConn c s key → !( Vec String ) RedisErr {
+@ redis_hgetall * RedisConn c s key → !( Vec String ) RedisErr {
     ^ ( __reply_strvec c ( __args2 `HGETALL` key ) )
 }
 
 // ── sets ───────────────────────────────────────────────────────────
 
-@ redis_sadd *RedisConn c s key s member → !i RedisErr {
+@ redis_sadd * RedisConn c s key s member → !i RedisErr {
     ^ ( __reply_int c ( __args3 `SADD` key member ) )
 }
 
-@ redis_smembers *RedisConn c s key → !( Vec String ) RedisErr {
+@ redis_smembers * RedisConn c s key → !( Vec String ) RedisErr {
     ^ ( __reply_strvec c ( __args2 `SMEMBERS` key ) )
 }
 
 // ── pub/sub ────────────────────────────────────────────────────────
 
-@ redis_publish *RedisConn c s channel s msg → !i RedisErr {
+@ redis_publish * RedisConn c s channel s msg → !i RedisErr {
     ^ ( __reply_int c ( __args3 `PUBLISH` channel msg ) )
 }
 
@@ -500,31 +510,31 @@ $ `resp.nu`
                 ( string_free payload ) = payload ( string_from ( resp_node_str rep ( resp_node_arr_at rep root 2 ) ) )
             } {}
         } {
-        ? != ( nurl_str_eq verb `pmessage` ) 0 {
-            = kind 3
-            ? >= n 4 {
-                ( string_free pattern ) = pattern ( string_from ( resp_node_str rep ( resp_node_arr_at rep root 1 ) ) )
-                ( string_free channel ) = channel ( string_from ( resp_node_str rep ( resp_node_arr_at rep root 2 ) ) )
-                ( string_free payload ) = payload ( string_from ( resp_node_str rep ( resp_node_arr_at rep root 3 ) ) )
-            } {}
-        } {
-            // (p)subscribe / (p)unsubscribe confirmation: [verb, name, count]
-            ? != ( nurl_str_eq verb `subscribe` ) 0 { = kind 1 } {
-            ? != ( nurl_str_eq verb `unsubscribe` ) 0 { = kind 2 } {
-            ? != ( nurl_str_eq verb `psubscribe` ) 0 { = kind 4 } {
-            ? != ( nurl_str_eq verb `punsubscribe` ) 0 { = kind 5 } {} } } }
-            ? >= n 3 {
-                : i is_pat | == kind 4 == kind 5
-                : String name ( string_from ( resp_node_str rep ( resp_node_arr_at rep root 1 ) ) )
-                ? is_pat { ( string_free pattern ) = pattern name } { ( string_free channel ) = channel name }
-                = count ( resp_node_int rep ( resp_node_arr_at rep root 2 ) )
-            } {}
-        } }
+            ? != ( nurl_str_eq verb `pmessage` ) 0 {
+                = kind 3
+                ? >= n 4 {
+                    ( string_free pattern ) = pattern ( string_from ( resp_node_str rep ( resp_node_arr_at rep root 1 ) ) )
+                    ( string_free channel ) = channel ( string_from ( resp_node_str rep ( resp_node_arr_at rep root 2 ) ) )
+                    ( string_free payload ) = payload ( string_from ( resp_node_str rep ( resp_node_arr_at rep root 3 ) ) )
+                } {}
+            } {
+                // (p)subscribe / (p)unsubscribe confirmation: [verb, name, count]
+                ? != ( nurl_str_eq verb `subscribe` ) 0 { = kind 1 } {
+                    ? != ( nurl_str_eq verb `unsubscribe` ) 0 { = kind 2 } {
+                        ? != ( nurl_str_eq verb `psubscribe` ) 0 { = kind 4 } {
+                            ? != ( nurl_str_eq verb `punsubscribe` ) 0 { = kind 5 } {} } } }
+                ? >= n 3 {
+                    : i is_pat | == kind 4 == kind 5
+                    : String name ( string_from ( resp_node_str rep ( resp_node_arr_at rep root 1 ) ) )
+                    ? is_pat { ( string_free pattern ) = pattern name } { ( string_free channel ) = channel name }
+                    = count ( resp_node_int rep ( resp_node_arr_at rep root 2 ) )
+                } {}
+            } }
     } {}
     ^ @ RedisMessage { kind channel pattern payload count }
 }
 
-@ __sub_cmd *RedisConn c s verb s arg → !RedisMessage RedisErr {
+@ __sub_cmd * RedisConn c s verb s arg → !RedisMessage RedisErr {
     ?? ( __cmd_reply c ( __args2 verb arg ) ) {
         F e → ^ @ !RedisMessage RedisErr { F e }
         T rep → {
@@ -538,23 +548,26 @@ $ `resp.nu`
 // Subscribe to a channel (or pattern). Returns the subscription confirmation;
 // thereafter call redis_next_message to receive published messages. While
 // subscribed only (P)SUBSCRIBE / (P)UNSUBSCRIBE / PING are valid commands.
-@ redis_subscribe *RedisConn c s channel → !RedisMessage RedisErr {
+@ redis_subscribe * RedisConn c s channel → !RedisMessage RedisErr {
     ^ ( __sub_cmd c `SUBSCRIBE` channel )
 }
-@ redis_unsubscribe *RedisConn c s channel → !RedisMessage RedisErr {
+
+@ redis_unsubscribe * RedisConn c s channel → !RedisMessage RedisErr {
     ^ ( __sub_cmd c `UNSUBSCRIBE` channel )
 }
-@ redis_psubscribe *RedisConn c s pattern → !RedisMessage RedisErr {
+
+@ redis_psubscribe * RedisConn c s pattern → !RedisMessage RedisErr {
     ^ ( __sub_cmd c `PSUBSCRIBE` pattern )
 }
-@ redis_punsubscribe *RedisConn c s pattern → !RedisMessage RedisErr {
+
+@ redis_punsubscribe * RedisConn c s pattern → !RedisMessage RedisErr {
     ^ ( __sub_cmd c `PUNSUBSCRIBE` pattern )
 }
 
 // Block until the next pub/sub frame arrives, then decode it. Returns a
 // `message` / `pmessage` for delivered payloads, or a (un)subscribe control
 // frame; RedisIo on a closed connection.
-@ redis_next_message *RedisConn c → !RedisMessage RedisErr {
+@ redis_next_message * RedisConn c → !RedisMessage RedisErr {
     ?? ( __r_read_reply c ) {
         F e → ^ @ !RedisMessage RedisErr { F e }
         T rep → {
@@ -567,6 +580,6 @@ $ `resp.nu`
 
 // ── admin ──────────────────────────────────────────────────────────
 
-@ redis_flushdb *RedisConn c → !v RedisErr {
+@ redis_flushdb * RedisConn c → !v RedisErr {
     ^ ( __reply_ok c ( __args1 `FLUSHDB` ) )
 }

@@ -229,7 +229,7 @@ $ `stdlib/std/time.nu`  // smtp_date_now
         ^ @ !SmtpClient SmtpErr { F # SmtpErr SmtpConnect }
     } {}
     : s crp # s craw
-    : TcpConn conn @ TcpConn { crp }
+    : TcpConn conn @ TcpConn { crp 0 0 }
     : SmtpClient c @ SmtpClient { conn ( vec_new [u] ) ( string_with_cap 128 ) }
     : !i SmtpErr g ( __smtp_read_reply c )
     ^ ?? g {

@@ -70,6 +70,11 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/std/bytes.nu`
+$ `stdlib/std/fs.nu`
+$ `stdlib/std/tls.nu`
+$ `stdlib/std/tls_server.nu`
+$ `stdlib/std/pkey.nu`
 
 : | NetErr {
     NetBind
@@ -89,8 +94,17 @@ $ `stdlib/core/vec.nu`
 // Listener and connection are intentionally distinct types — the
 // compiler refuses to mix them at call sites, which catches the
 // classic "passed listener to read" mistake at type-check time.
-: TcpListener { s raw }
-: TcpConn { s raw }
+// A TLS listener carries the loaded leaf-cert DER + EC P-256 private
+// scalar so each accept can run the pure handshake (is_tls = 1). They are
+// held as raw malloc'd (ptr, len) pairs — NOT Vec fields — because a
+// value struct returned with owned-Vec fields is auto-dropped at the
+// constructing function's exit (a borrowck escape gap), which would free
+// the buffers out from under the listener.
+: TcpListener { s raw i is_tls i certp i certlen i privp i privlen }
+// kind: 0 = plaintext (raw is the runtime socket handle), 1 = pure TLS
+// client, 2 = pure TLS server. For kinds 1/2 `tlsh` is the *TlsConn (as
+// i64) and reads/writes dispatch to the pure stack.
+: TcpConn { s raw i kind i tlsh }
 
 // Render a NetErr variant name as a raw `s` for log lines.
 @ net_err_name NetErr e → s {
@@ -141,8 +155,24 @@ $ `stdlib/core/vec.nu`
         ^ @ !TcpListener NetErr { F ( __net_err_of ek ) }
     } {}
     : s rp # s raw
-    : TcpListener l @ TcpListener { rp }
+    : TcpListener l @ TcpListener { rp 0 0 0 0 0 }
     ^ @ !TcpListener NetErr { T l }
+}
+
+// malloc a copy of `v`'s bytes; returns the pointer as i64 (0 if empty).
+@ __net_dup ( Vec u ) v → i {
+    : i n ( vec_len [u] v )
+    ? <= n 0 { ^ 0 } {}
+    : s buf # s ( malloc n )
+    ( nurl_memcpy # *u buf ( vec_data [u] v ) n )
+    ^ # i buf
+}
+
+// Build a fresh Vec view over a raw (ptr, len) cert/key blob.
+@ __net_vecview i ptr i len → ( Vec u ) {
+    : ( Vec u ) v ( vec_new [u] )
+    ? > len 0 { ( bytes_extend_raw v # s ptr len ) } {}
+    ^ v
 }
 
 // Convenience: same as tcp_listen_with_backlog with backlog = 128.
@@ -161,50 +191,77 @@ $ `stdlib/core/vec.nu`
 //
 // Build-time dependency: openssl detected via pkg-config in build.sh.
 // When absent, every call here returns NetTlsCtxInit unconditionally.
+// Load the leaf-cert DER + EC P-256 private scalar from PEM files for a
+// pure-TLS listener. The cert PEM's first block is taken as the leaf.
+@ __load_tls_creds s cert_path s key_path ( Vec u ) cert_out ( Vec u ) priv_out → i {
+    : !( Vec u ) ParseErr cr ?? ( read_file cert_path ) {
+        T pem → ( pem_to_der ( string_data pem ) )
+        F _ → @ !( Vec u ) ParseErr { F @ ParseErr { BadFormat } }
+    }
+    ?? cr { T der → { ( bytes_extend_bytes cert_out der ) ( vec_free [u] der ) } F _ → ^ 10 }
+    : !( Vec u ) ParseErr kr ?? ( read_file key_path ) {
+        T pem → ( ec_p256_priv_from_pem ( string_data pem ) )
+        F _ → @ !( Vec u ) ParseErr { F @ ParseErr { BadFormat } }
+    }
+    ?? kr { T sc → { ( bytes_extend_bytes priv_out sc ) ( vec_free [u] sc ) } F _ → ^ 11 }
+    ^ 0
+}
+
 @ tcp_listen_tls_with_backlog s host i port i backlog s cert_path s key_path → !TcpListener NetErr {
-    : i raw ( nurl_tcp_listen_tls host port backlog cert_path key_path )
-    ? == raw 0 { ^ @ !TcpListener NetErr { F # NetErr NetOther } } {}
+    : ( Vec u ) cert ( vec_new [u] )
+    : ( Vec u ) priv ( vec_new [u] )
+    : i lr ( __load_tls_creds cert_path key_path cert priv )
+    ? != lr 0 {
+        ( vec_free [u] cert ) ( vec_free [u] priv )
+        ^ @ !TcpListener NetErr { F ( __net_err_of lr ) }
+    } {}
+    : i raw ( nurl_tcp_listen host port backlog )
+    ? == raw 0 { ( vec_free [u] cert ) ( vec_free [u] priv ) ^ @ !TcpListener NetErr { F # NetErr NetOther } } {}
     : i ek ( nurl_tcp_err_kind raw )
     ? != ek 0 {
-        ( nurl_tcp_close raw )
+        ( nurl_tcp_close raw ) ( vec_free [u] cert ) ( vec_free [u] priv )
         ^ @ !TcpListener NetErr { F ( __net_err_of ek ) }
     } {}
+    // Copy cert/key into raw heap buffers, then drop the Vecs.
+    : i certp ( __net_dup cert )
+    : i certlen ( vec_len [u] cert )
+    : i privp ( __net_dup priv )
+    : i privlen ( vec_len [u] priv )
+    ( vec_free [u] cert )
+    ( vec_free [u] priv )
     : s rp # s raw
-    : TcpListener l @ TcpListener { rp }
-    ^ @ !TcpListener NetErr { T l }
+    ^ @ !TcpListener NetErr { T @ TcpListener { rp 1 certp certlen privp privlen } }
 }
 
 @ tcp_listen_tls s host i port s cert_path s key_path → !TcpListener NetErr {
     ^ ( tcp_listen_tls_with_backlog host port 128 cert_path key_path )
 }
 
-// TLS listener WITH ALPN (Application-Layer Protocol Negotiation, RFC 7301).
-// `alpn_protocols` is a space-separated list in server-preference order,
-// e.g. "h2 http/1.1". HTTP/2 over TLS (h2) REQUIRES ALPN per RFC 9113
-// §3.3 — without it h2-aware clients (curl, Chrome, …) fall back to
-// HTTP/1.1 silently. Pair with `tcp_alpn_protocol` post-accept to learn
-// what the peer agreed to.
+// TLS listener with ALPN. The pure handshake does not yet advertise ALPN,
+// so the protocol list is accepted for source compatibility but ignored
+// (clients negotiate nothing → fall back to HTTP/1.1). ALPN is a planned
+// addition to the pure stack.
 @ tcp_listen_tls_with_alpn s host i port i backlog s cert_path s key_path s alpn_protocols → !TcpListener NetErr {
-    : i raw ( nurl_tcp_listen_tls_alpn host port backlog cert_path key_path alpn_protocols )
-    : i ek ( nurl_tcp_err_kind raw )
-    ? != 0 ek {
-        ( nurl_tcp_close raw )
-        ^ @ !TcpListener NetErr { F ( __net_err_of ek ) }
-    } {}
-    : TcpListener l @ TcpListener { # s raw }
-    ^ @ !TcpListener NetErr { T l }
+    ^ ( tcp_listen_tls_with_backlog host port backlog cert_path key_path )
 }
 
-// Read the negotiated ALPN protocol off an accepted TLS conn. Returns
-// the empty string for non-TLS conns or when ALPN was not negotiated
-// (peer didn't offer any protocol from the listener's list).
+// Read the negotiated ALPN protocol off an accepted TLS conn. The pure
+// stack does not negotiate ALPN yet, so this returns "".
 @ tcp_alpn_protocol TcpConn c → String {
-    : s rp . c raw
-    : i raw # i rp
-    : s sel ( nurl_tcp_alpn_selected raw )
-    : String out ( string_from sel )
-    ( nurl_free sel )
-    ^ out
+    ^ ( string_new )
+}
+
+// Open a verified (or, with verify = 0, encrypted-only) pure-TLS client
+// connection. Returns a polymorphic TcpConn (kind 1) whose reads/writes
+// dispatch to the pure client stack.
+@ tcp_connect_tls s host i port s server_name i verify → !TcpConn NetErr {
+    : i raw ( nurl_tcp_connect host port )
+    ? <= raw 0 { ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake } } {}
+    : !*TlsConn TlsErr r ? != verify 0 ( tls_attach_verify raw server_name ) ( tls_attach raw server_name )
+    ?? r {
+        F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
+        T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 1 # i tc } }
+    }
 }
 
 // Register a per-hostname cert/key pair on a TLS listener for Server
@@ -266,19 +323,19 @@ $ `stdlib/core/vec.nu`
 // TLS conn. Empty when no cert was presented OR the conn is non-TLS.
 // Caller compares against an expected allow-list — this is the
 // primary identity hook for mTLS-authenticated requests.
+// Peer certificate subject. The pure TLS stack verifies the chain during
+// the handshake but does not expose the subject string, so this returns
+// "" (client-cert inspection is not supported on the pure path).
 @ tcp_peer_cert_subject TcpConn c → String {
-    : s rp . c raw
-    : i raw # i rp
-    : s sub ( nurl_tcp_peer_cert_subject raw )
-    : String out ( string_from sub )
-    ( nurl_free sub )
-    ^ out
+    ^ ( string_new )
 }
 
 @ tcp_close_listener TcpListener l → v {
-    : s rp . l raw
-    : i raw # i rp
-    ( nurl_tcp_close raw )
+    ( nurl_tcp_close # i . l raw )
+    ? != . l is_tls 0 {
+        ? != . l certp 0 { ( nurl_free # s . l certp ) } {}
+        ? != . l privp 0 { ( nurl_free # s . l privp ) } {}
+    } {}
 }
 
 // Soft-shutdown: close the underlying socket but KEEP the handle's
@@ -297,15 +354,25 @@ $ `stdlib/core/vec.nu`
 
 // ── Connection acceptance ──────────────────────────────────────────
 
+// The fd backing a TcpConn — the runtime handle for plaintext, or the
+// pure TLS conn's socket fd for kinds 1/2.
+@ __conn_fd TcpConn c → i {
+    ? != . c kind 0 {
+        : *TlsConn tc # *TlsConn . c tlsh
+        ^ . tc fd
+    } {}
+    ^ # i . c raw
+}
+
 @ tcp_accept TcpListener l → !TcpConn NetErr {
-    // Context-aware: on a fiber, dispatch to the async path so the
-    // worker pthread stays free while we wait for an incoming
-    // connection. From outside any fiber, fall through to the
-    // blocking POSIX accept.
-    : i fcur ( nurl_fiber_current )
-    ? != fcur 0 { ^ ( tcp_accept_async l ) } {}
-    : s lrp . l raw
-    : i lraw # i lrp
+    // Context-aware: on a fiber, dispatch to the async path so the worker
+    // pthread stays free while we wait. TLS listeners take the blocking
+    // path (the pure handshake is synchronous).
+    ? == . l is_tls 0 {
+        : i fcur ( nurl_fiber_current )
+        ? != fcur 0 { ^ ( tcp_accept_async l ) } {}
+    } {}
+    : i lraw # i . l raw
     : i craw ( nurl_tcp_accept lraw )
     ? == craw 0 { ^ @ !TcpConn NetErr { F # NetErr NetOther } } {}
     : i ek ( nurl_tcp_err_kind craw )
@@ -313,35 +380,66 @@ $ `stdlib/core/vec.nu`
         ( nurl_tcp_close craw )
         ^ @ !TcpConn NetErr { F ( __net_err_of ek ) }
     } {}
-    : s crp # s craw
-    : TcpConn c @ TcpConn { crp }
+    ? != . l is_tls 0 {
+        : ( Vec u ) cert ( __net_vecview . l certp . l certlen )
+        : ( Vec u ) priv ( __net_vecview . l privp . l privlen )
+        : !*TlsConn TlsErr r ( tls_accept craw cert priv )
+        ( vec_free [u] cert )
+        ( vec_free [u] priv )
+        ?? r {
+            F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
+            T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 2 # i tc } }
+        }
+    } {}
+    : TcpConn c @ TcpConn { # s craw 0 0 }
     ^ @ !TcpConn NetErr { T c }
 }
 
 @ tcp_close_conn TcpConn c → v {
-    : s rp . c raw
-    : i raw # i rp
-    ( nurl_tcp_close raw )
+    ? != . c kind 0 { ( tls_close # *TlsConn . c tlsh ) } { ( nurl_tcp_close # i . c raw ) }
 }
 
 @ tcp_peer_addr TcpConn c → s {
-    : s rp . c raw
-    : i raw # i rp
-    ^ ( nurl_tcp_peer_addr raw )
+    ^ ( nurl_tcp_peer_addr ( __conn_fd c ) )
 }
 
 @ tcp_set_timeout TcpConn c i ms → v {
-    : s rp . c raw
-    : i raw # i rp
-    ( nurl_tcp_set_timeout raw ms )
+    ( nurl_tcp_set_timeout ( __conn_fd c ) ms )
 }
 
 // ── Reading ────────────────────────────────────────────────────────
 
 // Issue ONE recv(2). The returned Vec[u] holds 0..max bytes. EOF is
 // surfaced as `Err(NetClosed)` so empty Ok-vectors are never confused
+// Pure-TLS read dispatch (kind 1 = client, kind 2 = server). Clean EOF
+// (tls_read returns []) is surfaced as NetClosed to match the plain path.
+@ __tls_read_net TcpConn c i max → !( Vec u ) NetErr {
+    : *TlsConn tc # *TlsConn . c tlsh
+    : !( Vec u ) TlsErr r ? == . c kind 2 ( tls_server_read tc max ) ( tls_read tc max )
+    ?? r {
+        F e → {
+            : NetErr ne ?? e { TlsClosed → # NetErr NetClosed _ → # NetErr NetRead }
+            ^ @ !( Vec u ) NetErr { F ne }
+        }
+        T v → {
+            ? == ( vec_len [u] v ) 0 {
+                ( vec_free [u] v )
+                ^ @ !( Vec u ) NetErr { F # NetErr NetClosed }
+            } {}
+            ^ @ !( Vec u ) NetErr { T v }
+        }
+    }
+}
+
+@ __tls_write_net TcpConn c ( Vec u ) bytes → !v NetErr {
+    : *TlsConn tc # *TlsConn . c tlsh
+    : !v TlsErr r ? == . c kind 2 ( tls_server_write tc bytes ) ( tls_write tc bytes )
+    ?? r { T _ → ^ @ !v NetErr { T 0 } F _ → ^ @ !v NetErr { F # NetErr NetWrite } }
+}
+
 // with a clean peer shutdown. Caller frees the Vec on the Ok path.
 @ tcp_read_chunk TcpConn c i max → !( Vec u ) NetErr {
+    ? != . c kind 0 { ^ ( __tls_read_net c max ) } {}
     // Context-aware dispatch — see tcp_accept's note.
     : i fcur ( nurl_fiber_current )
     ? != fcur 0 { ^ ( tcp_read_chunk_async c max ) } {}
@@ -371,6 +469,7 @@ $ `stdlib/core/vec.nu`
 // ── Writing ────────────────────────────────────────────────────────
 
 @ tcp_write_all TcpConn c ( Vec u ) bytes → !v NetErr {
+    ? != . c kind 0 { ^ ( __tls_write_net c bytes ) } {}
     // Context-aware dispatch — see tcp_accept's note.
     : i fcur ( nurl_fiber_current )
     ? != fcur 0 { ^ ( tcp_write_all_async c bytes ) } {}
@@ -392,6 +491,12 @@ $ `stdlib/core/vec.nu`
 // status-line case). The bytes [0..len) are sent — the trailing NUL is
 // NOT transmitted.
 @ tcp_write_str TcpConn c s text → !v NetErr {
+    ? != . c kind 0 {
+        : ( Vec u ) b ( bytes_from_str text )
+        : !v NetErr r ( __tls_write_net c b )
+        ( vec_free [u] b )
+        ^ r
+    } {}
     : s rp . c raw
     : i raw # i rp
     : i n ( nurl_str_len text )
@@ -475,7 +580,7 @@ $ `stdlib/std/async_ffi.nu`
         : i ek ( nurl_tcp_err_kind craw )
         ? == ek 0 {
             : s crp # s craw
-            : TcpConn c @ TcpConn { crp }
+            : TcpConn c @ TcpConn { crp 0 0 }
             ^ @ !TcpConn NetErr { T c }
         } {
             ( nurl_tcp_close craw )
