@@ -51,6 +51,42 @@ $ `stdlib/std/hash_sha512.nu`
     ^ ?? ( bytes_from_hex `edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010` ) { T v → v F _ → ( vec_new [u] ) }
 }
 
+// Strict little-endian "less than" on two 32-byte arrays (scan MSB→LSB).
+@ __ed_lt32 ( Vec u ) aa ( Vec u ) bb → b {
+    : ~ i k 31
+    : ~ i res 0
+    ~ & == res 0 >= k 0 {
+        : i ak ( __x_bget aa k )
+        : i bk ( __x_bget bb k )
+        ? < ak bk { = res 1 } {}
+        ? > ak bk { = res -1 } {}
+        = k - k 1
+    }
+    ^ == res 1
+}
+
+// M6: a signature scalar S must satisfy 0 ≤ S < L. Otherwise (R, S+L)
+// re-verifies as a second valid signature for the same message (Ed25519
+// malleability / SUF-CMA break). `cap_S` is the 32-byte little-endian S.
+@ __ed_s_canonical ( Vec u ) cap_S → b {
+    : ( Vec u ) Lc ( __ed_L )
+    : b ok ( __ed_lt32 cap_S Lc )
+    ( vec_free [u] Lc )
+    ^ ok
+}
+
+// M7: an encoded point's y-coordinate must be canonical — the 255-bit value
+// (sign bit cleared) must be < p = 2^255−19. Non-canonical encodings let
+// distinct byte strings map to the same point (libsodium / ZIP-215 class).
+@ __ed_y_canonical ( Vec u ) enc → b {
+    : ( Vec u ) m ( __ed_b32 enc 0 )
+    ( __bset m 31 & ( __x_bget m 31 ) 127 )  // clear the sign bit
+    : ( Vec u ) pc ?? ( bytes_from_hex `edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f` ) { T v → v F _ → ( vec_new [u] ) }
+    : b ok ( __ed_lt32 m pc )
+    ( vec_free [u] m ) ( vec_free [u] pc )
+    ^ ok
+}
+
 // ── byte helpers ───────────────────────────────────────────────────
 // Copy 32 bytes of `src` starting at `off`.
 @ __ed_b32 ( Vec u ) src i off → ( Vec u ) {
@@ -356,6 +392,14 @@ $ `stdlib/std/hash_sha512.nu`
     } {}
     : ( Vec u ) cap_R ( __ed_b32 sig 0 )
     : ( Vec u ) cap_S ( __ed_b32 sig 32 )
+    // M6 (S < L) + M7 (canonical y encodings of A and R). Reject otherwise:
+    // a non-canonical S enables (R, S+L) malleability; non-canonical A/R
+    // break point-uniqueness. Conformant signers always satisfy both.
+    ? | | ! ( __ed_s_canonical cap_S ) ! ( __ed_y_canonical cap_A ) ! ( __ed_y_canonical cap_R ) {
+        ( __ed_pt_free negA ) ( vec_free [i] d2 )
+        ( vec_free [u] cap_A ) ( vec_free [u] cap_R ) ( vec_free [u] cap_S )
+        ^ F
+    } {}
 
     // k = SHA512(R || A || msg) mod L
     : ( Vec u ) kin ( vec_new [u] )
