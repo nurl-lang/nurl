@@ -14,6 +14,10 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/bigint.nu`
 $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
 
+// OS CSPRNG bridge (std/random.nu's runtime entry) — for the scalar-blinding
+// factor and projective-coordinate randomization.
+& `c` @ nurl_rand_fill *u buf i n → i
+
 // ── curve constants (hex → BigInt) ────────────────────────────────
 @ __hx s h → BigInt {
     : ( Vec u ) v ?? ( bytes_from_hex h ) { T x → x F _ → ( vec_new [u] ) }
@@ -37,6 +41,11 @@ $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
 @ __p384_gx → BigInt { ^ ( __hx `aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab7` ) }
 
 @ __p384_gy → BigInt { ^ ( __hx `3617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f` ) }
+
+// Curve b coefficients (y² = x³ − 3x + b), for on-curve validation (M3).
+@ __p256_b → BigInt { ^ ( __hx `5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b` ) }
+
+@ __p384_b → BigInt { ^ ( __hx `b3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120314088f5013875ac656398d8a2ed19d2a85c8edd3ec2aef` ) }
 
 // ── field arithmetic mod p ────────────────────────────────────────
 @ __fmul BigInt a BigInt b BigInt p → BigInt {
@@ -208,6 +217,88 @@ $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
     ^ acc
 }
 
+// A fresh random BigInt of `nbytes` bytes from the OS CSPRNG.
+@ __ec_rand_bigint i nbytes → BigInt {
+    : ( Vec u ) buf ( vec_with_cap [u] ? > nbytes 0 nbytes 1 )
+    : ~ i z 0
+    ~ < z nbytes { ( vec_push [u] buf # u 0 ) = z + z 1 }
+    : i r ( nurl_rand_fill # *u ( vec_data [u] buf ) nbytes )
+    ? == r 0 { ( nurl_panic `ecdsa: CSPRNG (nurl_rand_fill) failed` ) } {}
+    : BigInt b ( bigint_from_bytes_be buf )
+    ( vec_free [u] buf )
+    ^ b
+}
+
+// Projective-coordinate randomization (Coron CHES'99 #3): (X,Y,Z) →
+// (λ²X, λ³Y, λZ) mod p for random λ ∈ [1, p). Same affine point, but every
+// intermediate coordinate in the subsequent ladder is randomized, so the
+// (operand-value-dependent) field-op timing is decorrelated from the secret.
+@ __jrandomize Jac q BigInt p → Jac {
+    ? . q inf { ^ ( __jclone q ) } {}
+    : BigInt lam0 ( __ec_rand_bigint 32 )
+    : ~ BigInt l ( bigint_rem lam0 p )
+    ? ( bigint_is_zero l ) { ( bigint_free l ) = l ( bigint_from_i 1 ) } {}
+    : BigInt l2 ( __fsqr l p )
+    : BigInt l3 ( __fmul l2 l p )
+    : BigInt nx ( __fmul . q x l2 p )
+    : BigInt ny ( __fmul . q y l3 p )
+    : BigInt nz ( __fmul . q z l p )
+    ( bigint_free lam0 ) ( bigint_free l ) ( bigint_free l2 ) ( bigint_free l3 )
+    ^ @ Jac { nx ny nz F }
+}
+
+// Secret-scalar multiply, hardened against remote/cache timing recovery of
+// the scalar (H2). Two established countermeasures (Coron CHES'99):
+//   #1 scalar blinding: ladder over k' = k + r·n (random r) instead of k.
+//      n·P = O so k'·P = k·P, but the bit pattern actually walked is
+//      randomized per call — decorrelating the across-trace timing/cache
+//      signal that an HNP/lattice attack would aggregate.
+//   #3 projective randomization of the base (above).
+// `width` fixes the byte length of k' so the loop count does not depend on k.
+// NOTE: the underlying BigInt field ops are still variable-time; these
+// countermeasures defeat the multi-trace remote attacker (the network threat
+// model) — see docs/CRYPTO.md. Used for the signing nonce and ECDH scalars,
+// never for the public scalars in verify (which need no protection).
+@ __jmul_secret ( Vec u ) k Jac base BigInt p BigInt n i width → Jac {
+    : BigInt bk ( bigint_from_bytes_be k )
+    : BigInt r ( __ec_rand_bigint 16 )
+    : BigInt rn ( bigint_mul r n )
+    : BigInt kb ( bigint_add bk rn )
+    : ( Vec u ) kbytes ( bigint_to_bytes_be kb width )
+    : Jac rbase ( __jrandomize base p )
+    : Jac acc ( __jmul kbytes rbase p )
+    ( bigint_free bk ) ( bigint_free r ) ( bigint_free rn ) ( bigint_free kb )
+    ( vec_free [u] kbytes ) ( __jfree rbase )
+    ^ acc
+}
+
+// On-curve + in-field validation of an affine point (M3): 0 ≤ x,y < p,
+// (x,y) ≠ O, and y² ≡ x³ − 3x + b (mod p). P-256/P-384 have cofactor 1, so
+// this is a full subgroup membership check.
+@ __on_curve BigInt x BigInt y BigInt p BigInt b → b {
+    : BigInt zero ( bigint_zero )
+    : ~ b ok T
+    ? >= ( bigint_cmp x p ) 0 { = ok F } {}
+    ? >= ( bigint_cmp y p ) 0 { = ok F } {}
+    ? < ( bigint_cmp x zero ) 0 { = ok F } {}
+    ? < ( bigint_cmp y zero ) 0 { = ok F } {}
+    ? & ( bigint_is_zero x ) ( bigint_is_zero y ) { = ok F } {}
+    ? ok {
+        : BigInt x2 ( __fsqr x p )
+        : BigInt x3 ( __fmul x2 x p )
+        : BigInt three ( bigint_from_i 3 )
+        : BigInt tx ( __fmul three x p )
+        : BigInt rhs0 ( __fsub x3 tx p )
+        : BigInt rhs ( __fadd rhs0 b p )
+        : BigInt lhs ( __fsqr y p )
+        = ok == ( bigint_cmp lhs rhs ) 0
+        ( bigint_free x2 ) ( bigint_free x3 ) ( bigint_free three )
+        ( bigint_free tx ) ( bigint_free rhs0 ) ( bigint_free rhs ) ( bigint_free lhs )
+    } {}
+    ( bigint_free zero )
+    ^ ok
+}
+
 // Affine x-coordinate of a Jacobian point: X / Z^2 mod p.
 @ __jaffine_x Jac q BigInt p → BigInt {
     : BigInt zsq ( __fsqr . q z p )
@@ -239,8 +330,9 @@ $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
 // Private scalar → 65-byte uncompressed public point.
 @ p256_ecdh_keygen ( Vec u ) scalar → ( Vec u ) {
     : BigInt p ( __p256_p )
+    : BigInt n ( __p256_n )
     : Jac G @ Jac { ( __p256_gx ) ( __p256_gy ) ( bigint_from_i 1 ) F }
-    : Jac Q ( __jmul scalar G p )
+    : Jac Q ( __jmul_secret scalar G p n 48 )
     : BigInt x ( __jaffine_x Q p )
     : BigInt y ( __jaffine_y Q p )
     : ( Vec u ) xb ( bigint_to_bytes_be x 32 )
@@ -251,7 +343,7 @@ $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
     ~ < k 32 { ( vec_push [u] out ?? ( vec_get [u] xb k ) { T b → b F _ → # u 0 } ) = k + k 1 }
     = k 0
     ~ < k 32 { ( vec_push [u] out ?? ( vec_get [u] yb k ) { T b → b F _ → # u 0 } ) = k + k 1 }
-    ( bigint_free p ) ( __jfree G ) ( __jfree Q )
+    ( bigint_free p ) ( bigint_free n ) ( __jfree G ) ( __jfree Q )
     ( bigint_free x ) ( bigint_free y ) ( vec_free [u] xb ) ( vec_free [u] yb )
     ^ out
 }
@@ -265,12 +357,22 @@ $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
     : BigInt qx ( bigint_from_bytes_be qxb )
     : BigInt qy ( bigint_from_bytes_be qyb )
     : BigInt p ( __p256_p )
+    : BigInt n ( __p256_n )
+    : BigInt b ( __p256_b )
+    // M3: reject an off-curve / out-of-field peer point (invalid-curve attack)
+    // before scalar-multiplying our private key into it.
+    ? ! ( __on_curve qx qy p b ) {
+        ( vec_free [u] qxb ) ( vec_free [u] qyb )
+        ( bigint_free qx ) ( bigint_free qy )
+        ( bigint_free p ) ( bigint_free n ) ( bigint_free b )
+        ^ ( vec_new [u] )
+    } {}
     : Jac Q @ Jac { qx qy ( bigint_from_i 1 ) F }
-    : Jac R ( __jmul scalar Q p )
+    : Jac R ( __jmul_secret scalar Q p n 48 )
     : BigInt rx ( __jaffine_x R p )
     : ( Vec u ) out ( bigint_to_bytes_be rx 32 )
     ( vec_free [u] qxb ) ( vec_free [u] qyb )
-    ( bigint_free p ) ( __jfree Q ) ( __jfree R ) ( bigint_free rx )
+    ( bigint_free p ) ( bigint_free n ) ( bigint_free b ) ( __jfree Q ) ( __jfree R ) ( bigint_free rx )
     ^ out
 }
 
@@ -278,13 +380,13 @@ $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
 // Both NIST P-256 and P-384 use a = -3, so the Jacobian point ops above
 // are curve-independent; this core takes the curve constants and the
 // coordinate byte length. It consumes p / nn / gx / gy.
-@ __ecdsa_verify BigInt p BigInt nn BigInt gx BigInt gy i clen ( Vec u ) point ( Vec u ) r ( Vec u ) s ( Vec u ) hash → b {
+@ __ecdsa_verify BigInt p BigInt nn BigInt gx BigInt gy BigInt cb i clen ( Vec u ) point ( Vec u ) r ( Vec u ) s ( Vec u ) hash → b {
     ? != ( vec_len [u] point ) + 1 * 2 clen {
-        ( bigint_free p ) ( bigint_free nn ) ( bigint_free gx ) ( bigint_free gy )
+        ( bigint_free p ) ( bigint_free nn ) ( bigint_free gx ) ( bigint_free gy ) ( bigint_free cb )
         ^ F
     } {}
     ? != ?? ( vec_get [u] point 0 ) { T x → # i x F _ → 0 } 4 {
-        ( bigint_free p ) ( bigint_free nn ) ( bigint_free gx ) ( bigint_free gy )
+        ( bigint_free p ) ( bigint_free nn ) ( bigint_free gx ) ( bigint_free gy ) ( bigint_free cb )
         ^ F
     } {}
 
@@ -294,6 +396,12 @@ $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
     : BigInt qy ( bigint_from_bytes_be qyb )
     ( vec_free [u] qxb )
     ( vec_free [u] qyb )
+    // M3: reject a public key that is off-curve or out of field range.
+    ? ! ( __on_curve qx qy p cb ) {
+        ( bigint_free qx ) ( bigint_free qy )
+        ( bigint_free p ) ( bigint_free nn ) ( bigint_free gx ) ( bigint_free gy ) ( bigint_free cb )
+        ^ F
+    } {}
 
     : BigInt br ( bigint_from_bytes_be r )
     : BigInt bs ( bigint_from_bytes_be s )
@@ -340,16 +448,16 @@ $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
         ( bigint_free gy )
     }
     ( bigint_free p ) ( bigint_free nn ) ( bigint_free br ) ( bigint_free bs )
-    ( bigint_free z ) ( bigint_free one )
+    ( bigint_free z ) ( bigint_free one ) ( bigint_free cb )
     ^ result
 }
 
 @ ecdsa_p256_verify ( Vec u ) point ( Vec u ) r ( Vec u ) s ( Vec u ) hash → b {
-    ^ ( __ecdsa_verify ( __p256_p ) ( __p256_n ) ( __p256_gx ) ( __p256_gy ) 32 point r s hash )
+    ^ ( __ecdsa_verify ( __p256_p ) ( __p256_n ) ( __p256_gx ) ( __p256_gy ) ( __p256_b ) 32 point r s hash )
 }
 
 @ ecdsa_p384_verify ( Vec u ) point ( Vec u ) r ( Vec u ) s ( Vec u ) hash → b {
-    ^ ( __ecdsa_verify ( __p384_p ) ( __p384_n ) ( __p384_gx ) ( __p384_gy ) 48 point r s hash )
+    ^ ( __ecdsa_verify ( __p384_p ) ( __p384_n ) ( __p384_gx ) ( __p384_gy ) ( __p384_b ) 48 point r s hash )
 }
 
 // ── ECDSA P-256 signing (RFC 6979 deterministic nonce) ──────────────
@@ -412,7 +520,7 @@ $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
         ? >= ( bigint_cmp k n ) 0 { = valid F } {}
         ? valid {
             : Jac G @ Jac { ( __p256_gx ) ( __p256_gy ) ( bigint_from_i 1 ) F }
-            : Jac R ( __jmul V G p )
+            : Jac R ( __jmul_secret V G p n 48 )
             ? . R inf {
                 = valid F
             } {
