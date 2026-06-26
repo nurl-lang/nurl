@@ -1972,6 +1972,13 @@
             `return value type '` lt `' does not match the declared return type '` fn_rt )
             `' — NURL has no implicit conversions; return a value of the declared type or convert with '# T expr'` ) ) }
         {}
+        // Return the wrong named struct by value (the return-position dual of
+        // the call-site struct check): `^ b` from a `→ A` fn where b is a B.
+        ? ( __arg_named_struct_mismatch lt fn_rt )
+        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+            `return value type '` lt `' does not match the declared return type '` fn_rt )
+            `' — wrong struct type returned by value (the fields would be silently reinterpreted)` ) ) }
+        {}
     }
     {}
     // Determine which owned-slice binding (if any) is escaping as the return value.
@@ -10453,6 +10460,40 @@
         : s fld_first_val ( nurl_lex_val lex )
         : s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
+        // Struct-literal field checks. PLAIN structs only — enum / option /
+        // result variant literals reach here too but use the enum_paycount
+        // path (overflow) + zeroinitializer for omitted payload slots, so
+        // they are excluded (enum_paycount set OR a `__variants` registry).
+        ? & & != 0 ( nurl_str_len cur_sname ) == enum_paycount -1
+        == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat cur_sname `__variants` ) ) )
+        { : s __slfc ( nurl_sym_get syms ( nurl_str_cat cur_sname `__field_count` ) )
+            ? != 0 ( nurl_str_len __slfc )
+            {  // (a) more values than the struct has fields — the surplus
+                // would insertvalue into a non-existent slot (invalid IR).
+                ? >= idx ( nurl_str_to_int __slfc )
+                { ( die lex ( nurl_str_cat
+                    ( nurl_str_cat4 `struct literal '` cur_sname `' has more field values than its ` __slfc )
+                    ` field(s) — the extra value has no slot` ) ) }
+                {}
+                // (b) never-legal field-type clash: float-vs-non-float, or a
+                // different named struct by value. Int width / signedness /
+                // pointer-stash coercions stay legal and are NOT flagged.
+                : s __sldft ( nurl_sym_get syms ( nurl_str_cat3 cur_sname `__idx_` ( nurl_str_cat ( nurl_str_int idx ) `__type` ) ) )
+                ? != 0 ( nurl_str_len __sldft )
+                { : b __slvf | ( seq fty `double` ) ( seq fty `float` )
+                    : b __sldf | ( seq __sldft `double` ) ( seq __sldft `float` )
+                    ? | != __slvf __sldf ( __arg_named_struct_mismatch fty __sldft )
+                    { ( die lex ( nurl_str_cat3
+                        ( nurl_str_cat4 `field ` ( nurl_str_int idx ) ` of struct literal '` cur_sname )
+                        ( nurl_str_cat4 `' expects type '` __sldft `' but the value has type '` fty )
+                        `' — NURL has no implicit conversions` ) ) }
+                    {}
+                }
+                {}
+            }
+            {}
+        }
+        {}
         // §2.8: record a field that is exactly a bare parameter of the
         // enclosing function, so `^ @ T { … param … }` propagates that
         // parameter's reference out through the returned aggregate.

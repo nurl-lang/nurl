@@ -298,6 +298,14 @@ coerce the call and reinterpret the foreign struct's leading fields).
 Scalars (including enums, which are `i64`) and pointers are untouched by
 the struct check.
 
+The same never-legal clashes are rejected at the other type boundaries:
+returning the wrong type from a function (`^ b` of type `B` from a `→ A`
+function — the float/pointer/struct dual of the argument check), and
+**struct-literal fields** — `@ A { 3.5 }` into an `i` field, or more
+field values than the struct declares. Omitting trailing fields stays
+legal (they zero-initialise), and integer width / signedness narrowing
+into sized or unsigned fields is a legal coercion, not flagged.
+
 ### 4.2 Pointer types
 
 `*T` is a raw pointer to T. `*void` is rewritten to `i8*` in the IR
