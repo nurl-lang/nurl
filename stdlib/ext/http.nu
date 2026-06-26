@@ -175,7 +175,6 @@ $ `stdlib/ext/http_pure.nu`
     ^ b
 }
 
-
 // Internal: dispatch the perform result onto a NURL ! Response HttpErr.
 // `raw` is the i64 returned by `hp_perform` (stdlib/ext/http_pure.nu) —
 // 0 means the response struct could not be allocated; non-zero is a heap
@@ -517,7 +516,7 @@ i timeout_ms i connect_timeout_ms → !Response HttpErr {
 @ http_stream_open_to s method s url s body s headers_blob
 i timeout_ms i connect_timeout_ms
 → !HttpStream HttpErr {
-    : * HttpStreamState st ( hp_stream_open method url # *u body ( nurl_str_len body ) headers_blob 1 -1 1 `nurl-http/0.1` )
+    : *HttpStreamState st ( hp_stream_open method url # *u body ( nurl_str_len body ) headers_blob 1 -1 1 `nurl-http/0.1` )
     ^ ( __http_stream_dispatch_open # i st )
 }
 
@@ -527,7 +526,7 @@ i timeout_ms i connect_timeout_ms
 @ http_stream_open_bytes_to s method s url ( Vec u ) body s headers_blob
 i timeout_ms i connect_timeout_ms
 → !HttpStream HttpErr {
-    : * HttpStreamState st ( hp_stream_open method url ( vec_data [u] body ) ( vec_len [u] body ) headers_blob 1 -1 1 `nurl-http/0.1` )
+    : *HttpStreamState st ( hp_stream_open method url ( vec_data [u] body ) ( vec_len [u] body ) headers_blob 1 -1 1 `nurl-http/0.1` )
     ^ ( __http_stream_dispatch_open # i st )
 }
 

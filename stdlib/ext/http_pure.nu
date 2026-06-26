@@ -47,11 +47,11 @@ $ `stdlib/std/url.nu`
     // TlsErr tag order in tls.nu: TlsConnect(0) TlsHandshake(1) TlsDecrypt(2)
     // TlsRead(3) TlsWrite(4) TlsClosed(5) TlsAlert(6) TlsProtocol(7)
     // TlsBadCipher(8) TlsHRR(9) TlsBadCert(10).
-    ? == e 0 { ^ 1 } {}   // connect failure
-    ? == e 3 { ^ 6 } {}   // read
-    ? == e 4 { ^ 6 } {}   // write
-    ? == e 5 { ^ 6 } {}   // closed
-    ^ 3                    // everything else → TLS handshake / cert / protocol
+    ? == e 0 { ^ 1 } {}  // connect failure
+    ? == e 3 { ^ 6 } {}  // read
+    ? == e 4 { ^ 6 } {}  // write
+    ? == e 5 { ^ 6 } {}  // closed
+    ^ 3  // everything else → TLS handshake / cert / protocol
 }
 
 // Open a transport to host:port. is_https selects the TLS stack; verify
@@ -59,8 +59,8 @@ $ `stdlib/std/url.nu`
 @ hp_conn_open i is_https s host i port s sni i verify → !HttpConn i {
     ? != is_https 0 {
         : !*TlsConn TlsErr r ? != verify 0
-            ( tls_connect host port sni )
-            ( tls_connect_insecure host port sni )
+        ( tls_connect host port sni )
+        ( tls_connect_insecure host port sni )
         ?? r {
             F e → ^ @ !HttpConn i { F ( __hp_tls_err # i e ) }
             T tc → ^ @ !HttpConn i { T @ HttpConn { 1 0 tc } }
@@ -130,19 +130,19 @@ $ `stdlib/std/url.nu`
 
 : HttpStreamState {
     HttpConn conn
-    ( Vec u ) raw            // bytes read from socket, not yet decoded
-    i rawpos                 // decode cursor into `raw`
-    ( Vec u ) body           // decoded body bytes available to hand out
-    ( Vec String ) hnames    // response header names
-    ( Vec String ) hvalues   // response header values (parallel to hnames)
+    ( Vec u ) raw  // bytes read from socket, not yet decoded
+    i rawpos  // decode cursor into `raw`
+    ( Vec u ) body  // decoded body bytes available to hand out
+    ( Vec String ) hnames  // response header names
+    ( Vec String ) hvalues  // response header values (parallel to hnames)
     i headers_done
-    i chunked                // 1 = Transfer-Encoding: chunked
-    i chunk_state            // 0 need-size, 1 in-body, 3 need-crlf, 2 done
+    i chunked  // 1 = Transfer-Encoding: chunked
+    i chunk_state  // 0 need-size, 1 in-body, 3 need-crlf, 2 done
     i chunk_remaining
-    i has_clen               // 1 = a Content-Length header was present
-    i content_remaining      // bytes of body still expected (Content-Length)
-    i eof                    // transport hit EOF
-    i finished               // body fully decoded
+    i has_clen  // 1 = a Content-Length header was present
+    i content_remaining  // bytes of body still expected (Content-Length)
+    i eof  // transport hit EOF
+    i finished  // body fully decoded
     i status
     i err_kind
 }
@@ -155,9 +155,9 @@ $ `stdlib/std/url.nu`
 }
 
 @ __hp_hexval i c → i {
-    ? & >= c 48 <= c 57 { ^ - c 48 } {}        // 0-9
+    ? & >= c 48 <= c 57 { ^ - c 48 } {}  // 0-9
     ? & >= c 97 <= c 102 { ^ + 10 - c 97 } {}  // a-f
-    ? & >= c 65 <= c 70 { ^ + 10 - c 65 } {}   // A-F
+    ? & >= c 65 <= c 70 { ^ + 10 - c 65 } {}  // A-F
     ^ -1
 }
 
@@ -237,7 +237,7 @@ $ `stdlib/std/url.nu`
     : ~ i k 0
     ~ <= k - n 4 {
         ? & & == # i . d k 13 == # i . d + k 1 10
-              & == # i . d + k 2 13 == # i . d + k 3 10 {
+        & == # i . d + k 2 13 == # i . d + k 3 10 {
             ^ + k 4
         } {}
         = k + k 1
@@ -367,38 +367,38 @@ $ `stdlib/std/url.nu`
         : i n ( vec_len [u] . st raw )
         : i state . st chunk_state
         ? == state 2 { = . st finished 1 = looping F } {
-        ? == state 0 {
-            // Need a full "size[;ext]\r\n" line.
-            : i nl ( __hp_find_crlf . st raw . st rawpos )
-            ? < nl 0 { = looping F } {
-                : i size ( __hp_parse_chunk_size st . st rawpos nl )
-                = . st rawpos + nl 2
-                ? == size 0 {
-                    = . st chunk_state 2
-                } {
-                    = . st chunk_remaining size
-                    = . st chunk_state 1
+            ? == state 0 {
+                // Need a full "size[;ext]\r\n" line.
+                : i nl ( __hp_find_crlf . st raw . st rawpos )
+                ? < nl 0 { = looping F } {
+                    : i size ( __hp_parse_chunk_size st . st rawpos nl )
+                    = . st rawpos + nl 2
+                    ? == size 0 {
+                        = . st chunk_state 2
+                    } {
+                        = . st chunk_remaining size
+                        = . st chunk_state 1
+                    }
                 }
-            }
-        } {
-        ? == state 1 {
-            : i avail - n . st rawpos
-            ? <= avail 0 { = looping F } {
-                : i take ? < avail . st chunk_remaining avail . st chunk_remaining
-                : *u d ( vec_data [u] . st raw )
-                ( bytes_extend_raw . st body # s + # i d . st rawpos take )
-                = . st rawpos + . st rawpos take
-                = . st chunk_remaining - . st chunk_remaining take
-                ? <= . st chunk_remaining 0 { = . st chunk_state 3 } {}
-            }
-        } {
-            // state 3: consume the CRLF that terminates a chunk body.
-            : i avail - n . st rawpos
-            ? < avail 2 { = looping F } {
-                = . st rawpos + . st rawpos 2
-                = . st chunk_state 0
-            }
-        } } }
+            } {
+                ? == state 1 {
+                    : i avail - n . st rawpos
+                    ? <= avail 0 { = looping F } {
+                        : i take ? < avail . st chunk_remaining avail . st chunk_remaining
+                        : *u d ( vec_data [u] . st raw )
+                        ( bytes_extend_raw . st body # s + # i d . st rawpos take )
+                        = . st rawpos + . st rawpos take
+                        = . st chunk_remaining - . st chunk_remaining take
+                        ? <= . st chunk_remaining 0 { = . st chunk_state 3 } {}
+                    }
+                } {
+                    // state 3: consume the CRLF that terminates a chunk body.
+                    : i avail - n . st rawpos
+                    ? < avail 2 { = looping F } {
+                        = . st rawpos + . st rawpos 2
+                        = . st chunk_state 0
+                    }
+                } } }
     }
 }
 
@@ -423,7 +423,7 @@ $ `stdlib/std/url.nu`
     : ~ b stop F
     ~ & < k crlf ! stop {
         : i ch # i . d k
-        ? == ch 59 { = stop T } {           // ';' begins chunk extensions
+        ? == ch 59 { = stop T } {  // ';' begins chunk extensions
             : i hv ( __hp_hexval ch )
             ? >= hv 0 { = size + * size 16 hv } { = stop T }
         }
@@ -477,8 +477,8 @@ $ `stdlib/std/url.nu`
     ^ 0
 }
 
-@ __hp_state_new HttpConn c → * HttpStreamState {
-    : * HttpStreamState st ( nurl_alloc Z HttpStreamState )
+@ __hp_state_new HttpConn c → *HttpStreamState {
+    : *HttpStreamState st ( nurl_alloc Z HttpStreamState )
     = . st conn c
     = . st raw ( vec_new [u] )
     = . st rawpos 0
@@ -503,7 +503,7 @@ $ `stdlib/std/url.nu`
 // heap *HttpStreamState (never null); transport failures are recorded in
 // the state's err_kind with finished=1.
 @ hp_stream_open s method s url * u body_ptr i body_len s headers_blob
-i follow i maxredir i verify s ua → * HttpStreamState {
+i follow i maxredir i verify s ua → *HttpStreamState {
     : ~ String cur_url ( string_from url )
     : ~ i redirects 0
     : ~ i result_p 0
@@ -513,7 +513,7 @@ i follow i maxredir i verify s ua → * HttpStreamState {
         : ?Url maybe ( url_parse ( string_data cur_url ) )
         ?? maybe {
             F _ → {
-                : * HttpStreamState st ( __hp_state_new @ HttpConn { 0 0 # *TlsConn 0 } )
+                : *HttpStreamState st ( __hp_state_new @ HttpConn { 0 0 # *TlsConn 0 } )
                 = . st err_kind 5
                 = . st finished 1
                 = result_p # i st
@@ -526,14 +526,14 @@ i follow i maxredir i verify s ua → * HttpStreamState {
                 : !HttpConn i co ( hp_conn_open is_https ( string_data . u host ) port ( string_data . u host ) verify )
                 ?? co {
                     F e → {
-                        : * HttpStreamState st ( __hp_state_new @ HttpConn { 0 0 # *TlsConn 0 } )
+                        : *HttpStreamState st ( __hp_state_new @ HttpConn { 0 0 # *TlsConn 0 } )
                         = . st err_kind e
                         = . st finished 1
                         = result_p # i st
                         = looping F
                     }
                     T conn → {
-                        : * HttpStreamState st ( __hp_state_new conn )
+                        : *HttpStreamState st ( __hp_state_new conn )
                         : ( Vec u ) req ( __hp_build_request method ( string_data . u host ) port is_https ( string_data tgt ) body_ptr body_len headers_blob ua )
                         : i werr ( hp_conn_write conn req )
                         ( vec_free [u] req )
@@ -625,10 +625,10 @@ i follow i maxredir i verify s ua → * HttpStreamState {
         ( string_push_str out ( nurl_str_int port ) )
     } {}
     ? == ( nurl_str_get loc 0 ) 47 {
-        ( string_push_str out loc )                // root-relative
+        ( string_push_str out loc )  // root-relative
     } {
         ( string_push_str out `/` )
-        ( string_push_str out loc )                // best-effort relative
+        ( string_push_str out loc )  // best-effort relative
     }
     ^ @ ?String { T out }
 }
@@ -655,7 +655,7 @@ i follow i maxredir i verify s ua → i {
     ? == resp 0 { ^ 0 } {}
     : *u rp # *u resp
 
-    : * HttpStreamState st ( hp_stream_open method url body_ptr body_len headers_blob follow maxredir verify ua )
+    : *HttpStreamState st ( hp_stream_open method url body_ptr body_len headers_blob follow maxredir verify ua )
 
     // Pump body to completion.
     ~ == . st finished 0 { ( hp_stream_pump st ) }

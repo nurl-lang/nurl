@@ -43,7 +43,7 @@ $ `stdlib/std/bytes.nu`
 // precomputed table (small + dependency-free; the inner 8-iter loop is
 // fine for the tarball / gzip sizes this serves).
 @ crc32_update i crc0 ( Vec u ) data → i {
-    : ~ i crc ^^ crc0 4294967295        // crc ^ 0xFFFFFFFF
+    : ~ i crc ^^ crc0 4294967295  // crc ^ 0xFFFFFFFF
     : i n ( vec_len [u] data )
     : *u d ( vec_data [u] data )
     : ~ i i 0
@@ -51,13 +51,13 @@ $ `stdlib/std/bytes.nu`
         = crc ^^ crc # i . d i
         : ~ i k 0
         ~ < k 8 {
-            : i mask - 0 & crc 1            // -(crc & 1) → all-ones when low bit set
-            = crc ^^ >> crc 1 & 3988292384 mask   // 0xEDB88320
+            : i mask - 0 & crc 1  // -(crc & 1) → all-ones when low bit set
+            = crc ^^ >> crc 1 & 3988292384 mask  // 0xEDB88320
             = k + k 1
         }
         = i + i 1
     }
-    ^ & ^^ crc 4294967295 4294967295       // (crc ^ 0xFFFFFFFF) & 0xFFFFFFFF
+    ^ & ^^ crc 4294967295 4294967295  // (crc ^ 0xFFFFFFFF) & 0xFFFFFFFF
 }
 
 @ crc32 ( Vec u ) data → i {
@@ -100,7 +100,7 @@ $ `stdlib/std/bytes.nu`
 // ── inflate ─────────────────────────────────────────────────────────
 
 : InflState {
-    *u data
+    * u data
     i len
     i pos
     i bitbuf
@@ -110,8 +110,8 @@ $ `stdlib/std/bytes.nu`
 }
 
 : Huff {
-    ( Vec i ) count    // count[len] = number of codes of that length (0..15)
-    ( Vec i ) symbol   // symbols sorted by (length, value)
+    ( Vec i ) count  // count[len] = number of codes of that length (0..15)
+    ( Vec i ) symbol  // symbols sorted by (length, value)
 }
 
 // Read `need` bits LSB-first. Sets st.err on input underflow.
@@ -194,6 +194,7 @@ $ `stdlib/std/bytes.nu`
     ( __df_push_list v 67 83 99 115 131 163 195 227 258 0 )
     ^ v
 }
+
 @ __infl_lenext → ( Vec i ) {
     : ( Vec i ) v ( vec_new [i] )
     ( __df_push_list v 0 0 0 0 0 0 0 0 1 1 )
@@ -201,6 +202,7 @@ $ `stdlib/std/bytes.nu`
     ( __df_push_list v 4 4 4 4 5 5 5 5 0 0 )
     ^ v
 }
+
 @ __infl_distbase → ( Vec i ) {
     : ( Vec i ) v ( vec_new [i] )
     ( __df_push_list v 1 2 3 4 5 7 9 13 17 25 )
@@ -208,6 +210,7 @@ $ `stdlib/std/bytes.nu`
     ( __df_push_list v 1025 1537 2049 3073 4097 6145 8193 12289 16385 24577 )
     ^ v
 }
+
 @ __infl_distext → ( Vec i ) {
     : ( Vec i ) v ( vec_new [i] )
     ( __df_push_list v 0 0 0 0 1 1 2 2 3 3 )
@@ -229,30 +232,30 @@ $ `stdlib/std/bytes.nu`
     ~ & ! done == . st err 0 {
         : i sym ( __infl_decode st lencode )
         ? < sym 0 { = . st err 2 } {
-        ? == sym 256 { = done T } {
-        ? < sym 256 {
-            ( vec_push [u] . st out # u sym )
-        } {
-            // length/distance back-reference
-            : i li - sym 257
-            ? >= li 29 { = . st err 2 } {
-                : i length + ( __df_get lenbase li ) ( __infl_bits st ( __df_get lenext li ) )
-                : i dsym ( __infl_decode st distcode )
-                ? | < dsym 0 >= dsym 30 { = . st err 4 } {
-                    : i dist + ( __df_get distbase dsym ) ( __infl_bits st ( __df_get distext dsym ) )
-                    : i outlen ( vec_len [u] . st out )
-                    ? > dist outlen { = . st err 4 } {
-                        : ~ i k 0
-                        ~ < k length {
-                            : i srcidx - ( vec_len [u] . st out ) dist
-                            : *u op ( vec_data [u] . st out )
-                            ( vec_push [u] . st out # u . op srcidx )
-                            = k + k 1
+            ? == sym 256 { = done T } {
+                ? < sym 256 {
+                    ( vec_push [u] . st out # u sym )
+                } {
+                    // length/distance back-reference
+                    : i li - sym 257
+                    ? >= li 29 { = . st err 2 } {
+                        : i length + ( __df_get lenbase li ) ( __infl_bits st ( __df_get lenext li ) )
+                        : i dsym ( __infl_decode st distcode )
+                        ? | < dsym 0 >= dsym 30 { = . st err 4 } {
+                            : i dist + ( __df_get distbase dsym ) ( __infl_bits st ( __df_get distext dsym ) )
+                            : i outlen ( vec_len [u] . st out )
+                            ? > dist outlen { = . st err 4 } {
+                                : ~ i k 0
+                                ~ < k length {
+                                    : i srcidx - ( vec_len [u] . st out ) dist
+                                    : *u op ( vec_data [u] . st out )
+                                    ( vec_push [u] . st out # u . op srcidx )
+                                    = k + k 1
+                                }
+                            }
                         }
                     }
-                }
-            }
-        } } }
+                } } }
     }
 }
 
@@ -268,6 +271,7 @@ $ `stdlib/std/bytes.nu`
     ( vec_free [i] lengths )
     ^ h
 }
+
 @ __infl_fixed_dist → Huff {
     : ( Vec i ) lengths ( vec_with_cap [i] 30 )
     : ~ i k 0
@@ -288,7 +292,7 @@ $ `stdlib/std/bytes.nu`
     // Code-length code lengths in the spec's permuted order.
     : ( Vec i ) order ( vec_new [i] )
     ( __df_push_list order 16 17 18 0 8 7 9 6 10 5 )
-    ( __df_push_list order 11 4 12 3 13 2 14 1 15 0 )   // last 0 is padding (19 entries used)
+    ( __df_push_list order 11 4 12 3 13 2 14 1 15 0 )  // last 0 is padding (19 entries used)
     : ( Vec i ) cllen ( __df_zeros 19 )
     : ~ i i 0
     ~ < i hclen {
@@ -304,26 +308,26 @@ $ `stdlib/std/bytes.nu`
     ~ & < idx total == . st err 0 {
         : i sym ( __infl_decode st clcode )
         ? < sym 0 { = . st err 2 } {
-        ? < sym 16 {
-            ( __df_set lengths idx sym )
-            = idx + idx 1
-        } {
-            : ~ i rep 0
-            : ~ i val 0
-            ? == sym 16 {
-                ? == idx 0 { = . st err 2 } { = val ( __df_get lengths - idx 1 ) }
-                = rep + 3 ( __infl_bits st 2 )
-            } {
-            ? == sym 17 { = rep + 3 ( __infl_bits st 3 ) } {
-                = rep + 11 ( __infl_bits st 7 )
-            } }
-            : ~ i r 0
-            ~ & < r rep < idx total {
-                ( __df_set lengths idx val )
+            ? < sym 16 {
+                ( __df_set lengths idx sym )
                 = idx + idx 1
-                = r + r 1
-            }
-        } }
+            } {
+                : ~ i rep 0
+                : ~ i val 0
+                ? == sym 16 {
+                    ? == idx 0 { = . st err 2 } { = val ( __df_get lengths - idx 1 ) }
+                    = rep + 3 ( __infl_bits st 2 )
+                } {
+                    ? == sym 17 { = rep + 3 ( __infl_bits st 3 ) } {
+                        = rep + 11 ( __infl_bits st 7 )
+                    } }
+                : ~ i r 0
+                ~ & < r rep < idx total {
+                    ( __df_set lengths idx val )
+                    = idx + idx 1
+                    = r + r 1
+                }
+            } }
     }
 
     ? == . st err 0 {
@@ -368,37 +372,37 @@ $ `stdlib/std/bytes.nu`
             : i btype ( __infl_bits st 2 )
             = last != bfinal 0
             ? != . st err 0 {} {
-            ? == btype 0 {
-                // Stored: align to byte, read LEN/NLEN, copy.
-                = . st bitbuf 0
-                = . st bitcnt 0
-                ? > + . st pos 4 . st len { = . st err 5 } {
-                    : *u d . st data
-                    : i lo # i . d . st pos
-                    : i hi # i . d + . st pos 1
-                    : i blen | lo << hi 8
-                    = . st pos + . st pos 4
-                    ? > + . st pos blen . st len { = . st err 5 } {
-                        : ~ i k 0
-                        ~ < k blen {
-                            ( vec_push [u] . st out # u . d + . st pos k )
-                            = k + k 1
+                ? == btype 0 {
+                    // Stored: align to byte, read LEN/NLEN, copy.
+                    = . st bitbuf 0
+                    = . st bitcnt 0
+                    ? > + . st pos 4 . st len { = . st err 5 } {
+                        : *u d . st data
+                        : i lo # i . d . st pos
+                        : i hi # i . d + . st pos 1
+                        : i blen | lo << hi 8
+                        = . st pos + . st pos 4
+                        ? > + . st pos blen . st len { = . st err 5 } {
+                            : ~ i k 0
+                            ~ < k blen {
+                                ( vec_push [u] . st out # u . d + . st pos k )
+                                = k + k 1
+                            }
+                            = . st pos + . st pos blen
                         }
-                        = . st pos + . st pos blen
                     }
-                }
-            } {
-            ? == btype 1 {
-                : Huff lc ( __infl_fixed_lit )
-                : Huff dc ( __infl_fixed_dist )
-                ( __infl_codes st lc dc lenbase lenext distbase distext )
-                ( __df_huff_free lc ) ( __df_huff_free dc )
-            } {
-            ? == btype 2 {
-                ( __infl_dynamic st lenbase lenext distbase distext )
-            } {
-                = . st err 1
-            } } } }
+                } {
+                    ? == btype 1 {
+                        : Huff lc ( __infl_fixed_lit )
+                        : Huff dc ( __infl_fixed_dist )
+                        ( __infl_codes st lc dc lenbase lenext distbase distext )
+                        ( __df_huff_free lc ) ( __df_huff_free dc )
+                    } {
+                        ? == btype 2 {
+                            ( __infl_dynamic st lenbase lenext distbase distext )
+                        } {
+                            = . st err 1
+                        } } } }
         }
     }
 
@@ -408,7 +412,7 @@ $ `stdlib/std/bytes.nu`
 
 // Inflate a complete raw DEFLATE stream into bytes.
 @ inflate ( Vec u ) src → !( Vec u ) DeflateErr {
-    : * InflState st ( nurl_alloc Z InflState )
+    : *InflState st ( nurl_alloc Z InflState )
     = . st data ( vec_data [u] src )
     = . st len ( vec_len [u] src )
     = . st pos 0
@@ -438,7 +442,7 @@ $ `stdlib/std/bytes.nu`
 // connection stays bounded. max_out (>0) caps the per-message output.
 @ inflate_stream ( Vec u ) history ( Vec u ) input i max_out → !( Vec u ) DeflateErr {
     : i oldlen ( vec_len [u] history )
-    : * InflState st ( nurl_alloc Z InflState )
+    : *InflState st ( nurl_alloc Z InflState )
     = . st data ( vec_data [u] input )
     = . st len ( vec_len [u] input )
     = . st pos 0
@@ -522,10 +526,10 @@ $ `stdlib/std/bytes.nu`
 // Emit a literal byte or a fixed-Huffman lit/len symbol (incl. EOB 256).
 @ __df_emit_sym * BitW w i sym → v {
     ? <= sym 143 { ( __df_huff w + 48 sym 8 ) } {
-    ? <= sym 255 { ( __df_huff w + 400 - sym 144 9 ) } {
-    ? <= sym 279 { ( __df_huff w - sym 256 7 ) } {
-        ( __df_huff w + 192 - sym 280 8 )
-    } } }
+        ? <= sym 255 { ( __df_huff w + 400 - sym 144 9 ) } {
+            ? <= sym 279 { ( __df_huff w - sym 256 7 ) } {
+                ( __df_huff w + 192 - sym 280 8 )
+            } } }
 }
 
 @ __df_fill i val i n → ( Vec i ) {
@@ -535,11 +539,11 @@ $ `stdlib/std/bytes.nu`
     ^ v
 }
 
-@ __df_hash *u d i i → i {
+@ __df_hash * u d i i → i {
     ^ & ^^ ^^ << # i . d i 10 << # i . d + i 1 5 # i . d + i 2 32767
 }
 
-@ __df_matchlen *u d i pos i cur i n → i {
+@ __df_matchlen * u d i pos i cur i n → i {
     : i maxlen ? < - n pos 258 - n pos 258
     : ~ i l 0
     ~ & < l maxlen == # i . d + cur l # i . d + pos l { = l + l 1 }
@@ -600,7 +604,7 @@ $ `stdlib/std/bytes.nu`
     : ( Vec i ) distext ( __infl_distext )
 
     ( __df_bits w bfinal 1 )
-    ( __df_bits w 1 2 )         // BTYPE=01 (fixed Huffman)
+    ( __df_bits w 1 2 )  // BTYPE=01 (fixed Huffman)
 
     : ( Vec i ) head ( __df_fill -1 32768 )
     : ( Vec i ) prev ( __df_fill -1 ? > n 1 n 1 )
@@ -656,7 +660,7 @@ $ `stdlib/std/bytes.nu`
         }
     }
 
-    ( __df_emit_sym w 256 )   // end of block
+    ( __df_emit_sym w 256 )  // end of block
     ( vec_free [i] lenbase ) ( vec_free [i] lenext )
     ( vec_free [i] distbase ) ( vec_free [i] distext )
     ( vec_free [i] head ) ( vec_free [i] prev )
@@ -664,7 +668,7 @@ $ `stdlib/std/bytes.nu`
 
 // Compress bytes into a complete raw DEFLATE stream (single final block).
 @ deflate ( Vec u ) src → ( Vec u ) {
-    : * BitW w ( nurl_alloc Z BitW )
+    : *BitW w ( nurl_alloc Z BitW )
     = . w out ( vec_new [u] )
     = . w bitbuf 0
     = . w bitcnt 0
@@ -686,7 +690,7 @@ $ `stdlib/std/bytes.nu`
     ? > dlen 0 { ( bytes_extend_bytes combined dict ) } {}
     ( bytes_extend_bytes combined msg )
 
-    : * BitW w ( nurl_alloc Z BitW )
+    : *BitW w ( nurl_alloc Z BitW )
     = . w out ( vec_new [u] )
     = . w bitbuf 0
     = . w bitcnt 0

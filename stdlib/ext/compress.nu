@@ -136,8 +136,8 @@ $ `stdlib/std/deflate.nu`  // pure-NURL DEFLATE/inflate + crc32/adler32
     } {}
     : ( Vec u ) body ( deflate src )
     : ( Vec u ) out ( vec_with_cap [u] + ( vec_len [u] body ) 6 )
-    ( vec_push [u] out # u 120 )   // CMF 0x78
-    ( vec_push [u] out # u 156 )   // FLG 0x9C
+    ( vec_push [u] out # u 120 )  // CMF 0x78
+    ( vec_push [u] out # u 156 )  // FLG 0x9C
     ( vec_extend [u] out body )
     ( __df_be32 out ( adler32 src ) )
     ( vec_free [u] body )
@@ -177,14 +177,14 @@ $ `stdlib/std/deflate.nu`  // pure-NURL DEFLATE/inflate + crc32/adler32
     } {}
     : ( Vec u ) body ( deflate src )
     : ( Vec u ) out ( vec_with_cap [u] + ( vec_len [u] body ) 18 )
-    ( vec_push [u] out # u 31 )    // ID1 0x1f
-    ( vec_push [u] out # u 139 )   // ID2 0x8b
-    ( vec_push [u] out # u 8 )     // CM = deflate
-    ( vec_push [u] out # u 0 )     // FLG
+    ( vec_push [u] out # u 31 )  // ID1 0x1f
+    ( vec_push [u] out # u 139 )  // ID2 0x8b
+    ( vec_push [u] out # u 8 )  // CM = deflate
+    ( vec_push [u] out # u 0 )  // FLG
     ( vec_push [u] out # u 0 ) ( vec_push [u] out # u 0 )
-    ( vec_push [u] out # u 0 ) ( vec_push [u] out # u 0 )   // MTIME = 0
-    ( vec_push [u] out # u 0 )     // XFL
-    ( vec_push [u] out # u 255 )   // OS = unknown
+    ( vec_push [u] out # u 0 ) ( vec_push [u] out # u 0 )  // MTIME = 0
+    ( vec_push [u] out # u 0 )  // XFL
+    ( vec_push [u] out # u 255 )  // OS = unknown
     ( vec_extend [u] out body )
     ( __df_le32 out ( crc32 src ) )
     ( __df_le32 out & n 4294967295 )
