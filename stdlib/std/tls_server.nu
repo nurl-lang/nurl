@@ -7,16 +7,22 @@
 // and server-direction record I/O (write under the server keys, read under
 // the client keys; tls.nu's client functions are hardwired the other way).
 //
-// Scope: TLS 1.3 only, an ECDSA P-256 leaf certificate (CertificateVerify
-// signed with ecdsa_secp256r1_sha256), the X25519 and secp256r1 groups,
-// and the AES-128-GCM / ChaCha20-Poly1305 cipher suites — i.e. exactly what
-// tls.nu's client offers, so the two interoperate.
+// Scope: TLS 1.3 only; an EC P-256 leaf (CertificateVerify signed with
+// ecdsa_secp256r1_sha256) OR an RSA leaf (rsa_pss_rsae_sha256); the X25519
+// and secp256r1 groups; the AES-128-GCM / ChaCha20-Poly1305 cipher suites
+// — i.e. exactly what tls.nu's client offers, so the two interoperate. A
+// full certificate chain (leaf + intermediates) is supported via the
+// tls_cert_entry-framed cert_chain argument.
 //
-//   ( tls_accept i raw ( Vec u ) cert_chain ( Vec u ) priv )
+//   ( tls_accept     i raw ( Vec u ) cert_chain ( Vec u ) priv )
+//   ( tls_accept_rsa i raw ( Vec u ) cert_chain ( Vec u ) n ( Vec u ) d )
 //                                              → !*TlsConn TlsErr
 //       raw        = an accepted libc socket fd (from nurl_tcp_accept)
-//       cert_chain = the leaf certificate DER (single cert; chain TODO)
+//       cert_chain = the certificate_list: tls_cert_entry blobs
+//                    concatenated, leaf first (a single leaf is fine)
 //       priv       = 32-byte EC P-256 private scalar (see std/pkey.nu)
+//       n / d      = RSA modulus / private exponent, big-endian
+//                    (std/pkey.nu rsa_priv_from_pem → RsaPriv)
 //   ( tls_server_read  *TlsConn c i max )      → !( Vec u ) TlsErr
 //   ( tls_server_write *TlsConn c ( Vec u ) )  → !v TlsErr
 //   ( tls_close *TlsConn c )                   → v   (reused from tls.nu)
@@ -29,6 +35,7 @@ $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/hkdf.nu`
 $ `stdlib/std/x25519.nu`
 $ `stdlib/std/ecdsa_p256.nu`
+$ `stdlib/std/rsa.nu`
 $ `stdlib/std/chacha20poly1305.nu`
 $ `stdlib/std/aes_gcm.nu`
 
@@ -207,6 +214,42 @@ $ `stdlib/std/aes_gcm.nu`
     ^ m
 }
 
+// Build the CertificateVerify body (SignatureScheme + signature) over the
+// SHA-256 digest `cvdig` of the signed content. keytype 1 = RSA-PSS
+// (rsa_pss_rsae_sha256, 0x0804) — PSS hashes with SHA-256 so the message
+// digest IS cvdig; otherwise EC P-256 (ecdsa_secp256r1_sha256, 0x0403).
+@ __srv_cv_body i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_d ( Vec u ) cvdig → ( Vec u ) {
+    : ( Vec u ) cvbody ( vec_new [u] )
+    ? == keytype 1 {
+        : ( Vec u ) salt ( __rand_bytes 32 )
+        : ( Vec u ) sig ( rsa_pss_sign_sha256 rsa_n rsa_d cvdig salt )
+        ( __tls_u16 cvbody 2052 )  // rsa_pss_rsae_sha256 = 0x0804
+        ( __tls_u16 cvbody ( vec_len [u] sig ) )
+        ( __tls_cat cvbody sig )
+        ( vec_free [u] salt ) ( vec_free [u] sig )
+    } {
+        : ( Vec u ) rs ( ecdsa_p256_sign ec_priv cvdig )
+        : ( Vec u ) der ( __srv_der_ecdsa rs )
+        ( __tls_u16 cvbody 1027 )  // ecdsa_secp256r1_sha256 = 0x0403
+        ( __tls_u16 cvbody ( vec_len [u] der ) )
+        ( __tls_cat cvbody der )
+        ( vec_free [u] rs ) ( vec_free [u] der )
+    }
+    ^ cvbody
+}
+
+// Frame one DER certificate as a TLS 1.3 CertificateEntry:
+// [u24 cert_len][DER][u16 extensions_len = 0]. Concatenate these (leaf
+// first, then intermediates) to form the cert_chain argument of
+// tls_accept / tls_accept_rsa.
+@ tls_cert_entry ( Vec u ) der → ( Vec u ) {
+    : ( Vec u ) e ( vec_new [u] )
+    ( __u24 e ( vec_len [u] der ) )
+    ( __tls_cat e der )
+    ( __tls_u16 e 0 )  // per-cert extensions = empty
+    ^ e
+}
+
 // ── accept ──────────────────────────────────────────────────────────
 
 @ __srv_fail i raw → !*TlsConn TlsErr {
@@ -214,7 +257,13 @@ $ `stdlib/std/aes_gcm.nu`
     ^ @ !*TlsConn TlsErr { F # TlsErr TlsHandshake }
 }
 
-@ tls_accept i raw ( Vec u ) cert_chain ( Vec u ) priv → !*TlsConn TlsErr {
+// Core server handshake. `keytype` selects the CertificateVerify signature
+// algorithm: 0 = EC P-256 (ec_priv = 32-byte scalar), 1 = RSA (rsa_n /
+// rsa_d = modulus / private exponent, big-endian). The unused key
+// arguments are ignored. `cert_chain` is the pre-framed certificate_list
+// body — a concatenation of `tls_cert_entry` blobs (leaf first, then any
+// intermediates).
+@ __tls_accept_impl i raw ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_d → !*TlsConn TlsErr {
     ? <= raw 0 { ^ @ !*TlsConn TlsErr { F # TlsErr TlsConnect } } {}
     : *TlsConn c ( nurl_alloc Z TlsConn )
     = . c fd raw
@@ -337,36 +386,30 @@ $ `stdlib/std/aes_gcm.nu`
     ( vec_free [u] eebody )
 
     // ── Certificate ──
+    // cert_chain is the certificate_list body: one or more CertificateEntry
+    // structs (each [u24 cert_len][DER][u16 ext_len]) already concatenated
+    // by the caller via tls_cert_entry — leaf first, then intermediates.
     : ( Vec u ) certbody ( vec_new [u] )
     ( vec_push [u] certbody # u 0 )  // certificate_request_context = empty
-    : ( Vec u ) clist ( vec_new [u] )
-    ( __u24 clist ( vec_len [u] cert_chain ) )
-    ( __tls_cat clist cert_chain )
-    ( __tls_u16 clist 0 )  // per-cert extensions = empty
-    ( __u24 certbody ( vec_len [u] clist ) )
-    ( __tls_cat certbody clist )
+    ( __u24 certbody ( vec_len [u] cert_chain ) )  // certificate_list length
+    ( __tls_cat certbody cert_chain )
     : ( Vec u ) certmsg ( __srv_hs_wrap 11 certbody )
     ( __tls_cat tr certmsg )
     : !v TlsErr cw ( __srv_send_enc c 22 certmsg )
     ?? cw { T _ → {} F _ → {} }
-    ( vec_free [u] clist ) ( vec_free [u] certbody )
+    ( vec_free [u] certbody )
 
     // ── CertificateVerify ──
     : ( Vec u ) th_cert ( sha256_pure tr )
     : ( Vec u ) cvc ( __srv_cv_content th_cert )
     : ( Vec u ) cvdig ( sha256_pure cvc )
-    : ( Vec u ) rs ( ecdsa_p256_sign priv cvdig )
-    : ( Vec u ) der ( __srv_der_ecdsa rs )
-    : ( Vec u ) cvbody ( vec_new [u] )
-    ( __tls_u16 cvbody 1027 )  // ecdsa_secp256r1_sha256 = 0x0403
-    ( __tls_u16 cvbody ( vec_len [u] der ) )
-    ( __tls_cat cvbody der )
+    : ( Vec u ) cvbody ( __srv_cv_body keytype ec_priv rsa_n rsa_d cvdig )
     : ( Vec u ) cvmsg ( __srv_hs_wrap 15 cvbody )
     ( __tls_cat tr cvmsg )
     : !v TlsErr cvw ( __srv_send_enc c 22 cvmsg )
     ?? cvw { T _ → {} F _ → {} }
     ( vec_free [u] th_cert ) ( vec_free [u] cvc ) ( vec_free [u] cvdig )
-    ( vec_free [u] rs ) ( vec_free [u] der ) ( vec_free [u] cvbody )
+    ( vec_free [u] cvbody )
 
     // ── server Finished ──
     : ( Vec u ) th_cv ( sha256_pure tr )
@@ -412,6 +455,30 @@ $ `stdlib/std/aes_gcm.nu`
 
     ? == finok 0 { ( tls_close c ) ^ @ !*TlsConn TlsErr { F # TlsErr TlsHandshake } } {}
     ^ @ !*TlsConn TlsErr { T c }
+}
+
+// Accept a TLS 1.3 connection with an EC P-256 leaf certificate. `priv`
+// is the 32-byte P-256 private scalar (see std/pkey.nu). `cert_chain` is
+// a tls_cert_entry-framed certificate_list (leaf first, then any
+// intermediates). The original single-cert entry point.
+@ tls_accept i raw ( Vec u ) cert_chain ( Vec u ) priv → !*TlsConn TlsErr {
+    : ( Vec u ) en ( vec_new [u] )
+    : ( Vec u ) ed ( vec_new [u] )
+    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 0 priv en ed )
+    ( vec_free [u] en ) ( vec_free [u] ed )
+    ^ r
+}
+
+// Accept a TLS 1.3 connection with an RSA leaf certificate, signing the
+// CertificateVerify with RSASSA-PSS (rsa_pss_rsae_sha256). `rsa_n` /
+// `rsa_d` are the modulus / private exponent, big-endian (see
+// std/pkey.nu `rsa_priv_from_pem` → RsaPriv). `cert_chain` is a
+// tls_cert_entry-framed certificate_list.
+@ tls_accept_rsa i raw ( Vec u ) cert_chain ( Vec u ) rsa_n ( Vec u ) rsa_d → !*TlsConn TlsErr {
+    : ( Vec u ) ee ( vec_new [u] )
+    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 1 ee rsa_n rsa_d )
+    ( vec_free [u] ee )
+    ^ r
 }
 
 @ __srv_cleanup_accept ( Vec u ) ch ( Vec u ) crand ( Vec u ) cpub ( Vec u ) eph ( Vec u ) spub ( Vec u ) ecdhe ( Vec u ) srand ( Vec u ) sh ( Vec u ) tr → v {

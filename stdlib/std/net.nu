@@ -94,13 +94,16 @@ $ `stdlib/std/pkey.nu`
 // Listener and connection are intentionally distinct types — the
 // compiler refuses to mix them at call sites, which catches the
 // classic "passed listener to read" mistake at type-check time.
-// A TLS listener carries the loaded leaf-cert DER + EC P-256 private
-// scalar so each accept can run the pure handshake (is_tls = 1). They are
+// A TLS listener carries the loaded certificate_list (already framed as
+// CertificateEntry blobs, leaf first) + the leaf's private key, so each
+// accept can run the pure handshake (is_tls = 1). keytype selects the
+// key form: 0 = EC P-256 (kp1 = 32-byte scalar, kp2 unused), 1 = RSA
+// (kp1 = modulus n, kp2 = private exponent d), both big-endian. All are
 // held as raw malloc'd (ptr, len) pairs — NOT Vec fields — because a
 // value struct returned with owned-Vec fields is auto-dropped at the
 // constructing function's exit (a borrowck escape gap), which would free
 // the buffers out from under the listener.
-: TcpListener { s raw i is_tls i certp i certlen i privp i privlen }
+: TcpListener { s raw i is_tls i keytype i certp i certlen i kp1 i kl1 i kp2 i kl2 }
 // kind: 0 = plaintext (raw is the runtime socket handle), 1 = pure TLS
 // client, 2 = pure TLS server. For kinds 1/2 `tlsh` is the *TlsConn (as
 // i64) and reads/writes dispatch to the pure stack.
@@ -155,7 +158,7 @@ $ `stdlib/std/pkey.nu`
         ^ @ !TcpListener NetErr { F ( __net_err_of ek ) }
     } {}
     : s rp # s raw
-    : TcpListener l @ TcpListener { rp 0 0 0 0 0 }
+    : TcpListener l @ TcpListener { rp 0 0 0 0 0 0 0 0 }
     ^ @ !TcpListener NetErr { T l }
 }
 
@@ -193,44 +196,101 @@ $ `stdlib/std/pkey.nu`
 // When absent, every call here returns NetTlsCtxInit unconditionally.
 // Load the leaf-cert DER + EC P-256 private scalar from PEM files for a
 // pure-TLS listener. The cert PEM's first block is taken as the leaf.
-@ __load_tls_creds s cert_path s key_path ( Vec u ) cert_out ( Vec u ) priv_out → i {
-    : !( Vec u ) ParseErr cr ?? ( read_file cert_path ) {
-        T pem → ( pem_to_der ( string_data pem ) )
-        F _ → @ !( Vec u ) ParseErr { F @ ParseErr { BadFormat } }
+// Frame every `-----BEGIN CERTIFICATE-----` block in `pem` as a TLS 1.3
+// CertificateEntry (tls_cert_entry) and concatenate them, leaf first —
+// the certificate_list the server sends. Supports a single leaf or a
+// full chain (fullchain.pem: leaf + intermediates). Returns an empty Vec
+// if no cert block parses.
+@ __net_cert_chain String pem → ( Vec u ) {
+    : ( Vec u ) list ( vec_new [u] )
+    : i total ( string_len pem )
+    : ~ i pos 0
+    : ~ i guard 0
+    ~ & < pos total < guard 64 {
+        = guard + guard 1
+        : String suf ( string_substr pem pos - total pos )
+        : i rel ( nurl_str_find ( string_data suf ) `-----BEGIN CERTIFICATE-----` )
+        ( string_free suf )
+        ? < rel 0 { = pos total } {
+            : i bi + pos rel
+            : String suf2 ( string_substr pem bi - total bi )
+            : i erel ( nurl_str_find ( string_data suf2 ) `-----END CERTIFICATE-----` )
+            ( string_free suf2 )
+            ? < erel 0 { = pos total } {
+                : i blen + erel 25  // through the END marker (25 chars)
+                : String block ( string_substr pem bi blen )
+                ?? ( pem_to_der ( string_data block ) ) {
+                    T der → {
+                        : ( Vec u ) e ( tls_cert_entry der )
+                        ( bytes_extend_bytes list e )
+                        ( vec_free [u] e ) ( vec_free [u] der )
+                    }
+                    F _ → {}
+                }
+                ( string_free block )
+                = pos + bi blen
+            }
+        }
     }
-    ?? cr { T der → { ( bytes_extend_bytes cert_out der ) ( vec_free [u] der ) } F _ → ^ 10 }
-    : !( Vec u ) ParseErr kr ?? ( read_file key_path ) {
-        T pem → ( ec_p256_priv_from_pem ( string_data pem ) )
-        F _ → @ !( Vec u ) ParseErr { F @ ParseErr { BadFormat } }
+    ^ list
+}
+
+// Load cert chain + private key from PEM files into a TLS listener. Fills
+// `cert_out` with the framed certificate_list and `k1`/`k2` with the key
+// material; returns the keytype (0 = EC P-256 scalar in k1; 1 = RSA with
+// modulus in k1, private exponent in k2), or a NEGATIVE NetErr-style code
+// on failure (-10 cert, -11 key). The key form is auto-detected: EC and
+// RSA parsers each cleanly reject the other's encoding.
+@ __load_tls_creds s cert_path s key_path ( Vec u ) cert_out ( Vec u ) k1 ( Vec u ) k2 → i {
+    : String certpem ?? ( read_file cert_path ) { T p → p F _ → ( string_new ) }
+    : ( Vec u ) chain ( __net_cert_chain certpem )
+    ( string_free certpem )
+    ? == ( vec_len [u] chain ) 0 { ( vec_free [u] chain ) ^ -10 } {}
+    ( bytes_extend_bytes cert_out chain )
+    ( vec_free [u] chain )
+    : String keypem ?? ( read_file key_path ) { T p → p F _ → ( string_new ) }
+    // EC first; on failure try RSA (the parsers reject foreign encodings).
+    : ?( Vec u ) ec ?? ( ec_p256_priv_from_pem ( string_data keypem ) ) {
+        T sc → @ ?( Vec u ) { T sc } F _ → @ ?( Vec u ) { F # ( Vec u ) 0 }
     }
-    ?? kr { T sc → { ( bytes_extend_bytes priv_out sc ) ( vec_free [u] sc ) } F _ → ^ 11 }
-    ^ 0
+    ?? ec {
+        T sc → { ( bytes_extend_bytes k1 sc ) ( vec_free [u] sc ) ( string_free keypem ) ^ 0 }
+        F _ → {}
+    }
+    : i kt ?? ( rsa_priv_from_pem ( string_data keypem ) ) {
+        T k → { ( bytes_extend_bytes k1 . k n ) ( bytes_extend_bytes k2 . k d ) ( rsa_priv_free k ) 1 }
+        F _ → -11
+    }
+    ( string_free keypem )
+    ^ kt
 }
 
 @ tcp_listen_tls_with_backlog s host i port i backlog s cert_path s key_path → !TcpListener NetErr {
     : ( Vec u ) cert ( vec_new [u] )
-    : ( Vec u ) priv ( vec_new [u] )
-    : i lr ( __load_tls_creds cert_path key_path cert priv )
-    ? != lr 0 {
-        ( vec_free [u] cert ) ( vec_free [u] priv )
-        ^ @ !TcpListener NetErr { F ( __net_err_of lr ) }
+    : ( Vec u ) k1 ( vec_new [u] )
+    : ( Vec u ) k2 ( vec_new [u] )
+    : i keytype ( __load_tls_creds cert_path key_path cert k1 k2 )
+    ? < keytype 0 {
+        ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 )
+        ^ @ !TcpListener NetErr { F ( __net_err_of - 0 keytype ) }
     } {}
     : i raw ( nurl_tcp_listen host port backlog )
-    ? == raw 0 { ( vec_free [u] cert ) ( vec_free [u] priv ) ^ @ !TcpListener NetErr { F # NetErr NetOther } } {}
+    ? == raw 0 { ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ^ @ !TcpListener NetErr { F # NetErr NetOther } } {}
     : i ek ( nurl_tcp_err_kind raw )
     ? != ek 0 {
-        ( nurl_tcp_close raw ) ( vec_free [u] cert ) ( vec_free [u] priv )
+        ( nurl_tcp_close raw ) ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 )
         ^ @ !TcpListener NetErr { F ( __net_err_of ek ) }
     } {}
-    // Copy cert/key into raw heap buffers, then drop the Vecs.
+    // Copy cert list / key material into raw heap buffers, then drop the Vecs.
     : i certp ( __net_dup cert )
     : i certlen ( vec_len [u] cert )
-    : i privp ( __net_dup priv )
-    : i privlen ( vec_len [u] priv )
-    ( vec_free [u] cert )
-    ( vec_free [u] priv )
+    : i kp1 ( __net_dup k1 )
+    : i kl1 ( vec_len [u] k1 )
+    : i kp2 ( __net_dup k2 )
+    : i kl2 ( vec_len [u] k2 )
+    ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 )
     : s rp # s raw
-    ^ @ !TcpListener NetErr { T @ TcpListener { rp 1 certp certlen privp privlen } }
+    ^ @ !TcpListener NetErr { T @ TcpListener { rp 1 keytype certp certlen kp1 kl1 kp2 kl2 } }
 }
 
 @ tcp_listen_tls s host i port s cert_path s key_path → !TcpListener NetErr {
@@ -324,7 +384,8 @@ $ `stdlib/std/pkey.nu`
     ( nurl_tcp_close # i . l raw )
     ? != . l is_tls 0 {
         ? != . l certp 0 { ( nurl_free # s . l certp ) } {}
-        ? != . l privp 0 { ( nurl_free # s . l privp ) } {}
+        ? != . l kp1 0 { ( nurl_free # s . l kp1 ) } {}
+        ? != . l kp2 0 { ( nurl_free # s . l kp2 ) } {}
     } {}
 }
 
@@ -446,10 +507,16 @@ $ `stdlib/std/pkey.nu`
     } {}
     ? != . l is_tls 0 {
         : ( Vec u ) cert ( __net_vecview . l certp . l certlen )
-        : ( Vec u ) priv ( __net_vecview . l privp . l privlen )
-        : !*TlsConn TlsErr r ( tls_accept craw cert priv )
+        : ( Vec u ) k1 ( __net_vecview . l kp1 . l kl1 )
+        // keytype 1 = RSA (k1 = n, k2 = d); else EC P-256 (k1 = scalar).
+        : !*TlsConn TlsErr r ? == . l keytype 1
+        { : ( Vec u ) k2 ( __net_vecview . l kp2 . l kl2 )
+            : !*TlsConn TlsErr rr ( tls_accept_rsa craw cert k1 k2 )
+            ( vec_free [u] k2 )
+            rr }
+        ( tls_accept craw cert k1 )
         ( vec_free [u] cert )
-        ( vec_free [u] priv )
+        ( vec_free [u] k1 )
         ?? r {
             F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
             T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 2 # i tc } }

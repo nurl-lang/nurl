@@ -117,3 +117,60 @@ $ `stdlib/std/ecdsa_p256.nu`
 @ ec_p256_pub_from_priv ( Vec u ) scalar → ( Vec u ) {
     ^ ( p256_ecdh_keygen scalar )
 }
+
+// ── RSA private keys ───────────────────────────────────────────────
+//
+// Parsed RSA private key, big-endian magnitudes with the sign byte
+// stripped (so `n`'s length is the true modulus size — RSASSA-PSS uses
+// it as the signature length). Only n / e / d are kept; the CRT params
+// (p, q, dP, dQ, qInv) are ignored — signing uses the plain `m^d mod n`
+// path, which needs only d and n.
+: RsaPriv { ( Vec u ) n ( Vec u ) e ( Vec u ) d }
+
+@ rsa_priv_free RsaPriv k → v {
+    ( vec_free [u] . k n ) ( vec_free [u] . k e ) ( vec_free [u] . k d )
+}
+
+// Parse a PKCS#1 `RSAPrivateKey` DER: SEQUENCE { version, n, e, d, … }.
+@ __pk_rsa_pkcs1 ( Vec u ) der → ?RsaPriv {
+    : DerTlv seq ( der_at der 0 )
+    ? | == . seq ok 0 != . seq tag 48 { ^ @ ?RsaPriv { F # RsaPriv 0 } } {}
+    : DerTlv v ( __der_child der seq )  // version INTEGER
+    ? == . v ok 0 { ^ @ ?RsaPriv { F # RsaPriv 0 } } {}
+    : DerTlv tn ( __der_next der v )  // modulus
+    : DerTlv te ( __der_next der tn )  // publicExponent
+    : DerTlv td ( __der_next der te )  // privateExponent
+    ? | | == . tn ok 0 == . te ok 0 == . td ok 0 { ^ @ ?RsaPriv { F # RsaPriv 0 } } {}
+    ? | | != . tn tag 2 != . te tag 2 != . td tag 2 { ^ @ ?RsaPriv { F # RsaPriv 0 } } {}
+    ^ @ ?RsaPriv { T @ RsaPriv { ( __der_uint der tn ) ( __der_uint der te ) ( __der_uint der td ) } }
+}
+
+// Load an RSA private key from a PEM file. Accepts both PKCS#1
+// (`-----BEGIN RSA PRIVATE KEY-----`) and PKCS#8
+// (`-----BEGIN PRIVATE KEY-----`, rsaEncryption) wrappers.
+@ rsa_priv_from_pem s pem → !RsaPriv ParseErr {
+    : !( Vec u ) ParseErr dr ( pem_to_der pem )
+    ?? dr {
+        F e → ^ @ !RsaPriv ParseErr { F e }
+        T der → {
+            : DerTlv seq ( der_at der 0 )
+            ? == . seq ok 0 { ( vec_free [u] der ) ^ @ !RsaPriv ParseErr { F @ ParseErr { BadFormat } } } {}
+            : DerTlv c0 ( __der_child der seq )  // version
+            : DerTlv c1 ( __der_next der c0 )
+            // PKCS#8: { version, AlgorithmIdentifier SEQUENCE, OCTET STRING }.
+            ? & == . c1 ok 1 == . c1 tag 48 {
+                : DerTlv c2 ( __der_next der c1 )  // privateKey OCTET STRING
+                ? | == . c2 ok 0 != . c2 tag 4 { ( vec_free [u] der ) ^ @ !RsaPriv ParseErr { F @ ParseErr { BadFormat } } } {}
+                : ( Vec u ) inner ( __der_content der c2 )
+                : ?RsaPriv rp ( __pk_rsa_pkcs1 inner )
+                ( vec_free [u] inner )
+                ( vec_free [u] der )
+                ^ ?? rp { T k → @ !RsaPriv ParseErr { T k } F _ → @ !RsaPriv ParseErr { F @ ParseErr { BadFormat } } }
+            } {}
+            // PKCS#1 RSAPrivateKey directly.
+            : ?RsaPriv rp ( __pk_rsa_pkcs1 der )
+            ( vec_free [u] der )
+            ^ ?? rp { T k → @ !RsaPriv ParseErr { T k } F _ → @ !RsaPriv ParseErr { F @ ParseErr { BadFormat } } }
+        }
+    }
+}
