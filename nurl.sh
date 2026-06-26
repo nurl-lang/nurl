@@ -278,7 +278,7 @@ if grep -qE '@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mous
     fi
 fi
 
-# Auto-link libcurl / OpenSSL / sqlite3 / libpq / zlib / zstd — for each
+# Auto-link OpenSSL / sqlite3 / libpq / zlib / zstd — for each
 # back-end the runtime was built with (runtime.<name> sentinel), but only
 # if the library is actually AVAILABLE to the compiler on this box (probed
 # with a tiny trial link). Rationale:
@@ -313,7 +313,6 @@ add_feature_lib() {
     fi
     return 0
 }
-add_feature_lib runtime.curl    -lcurl
 add_feature_lib runtime.openssl -lssl -lcrypto
 add_feature_lib runtime.sqlite3 -lsqlite3
 add_feature_lib runtime.pq      -lpq
@@ -365,7 +364,7 @@ if [ "${NURL_SAN:-0}" = "1" ]; then
     if [ ! -f "$SAN_RUNTIME" ] || [ "$SCRIPT_DIR/stdlib/runtime.c" -nt "$SAN_RUNTIME" ]; then
         echo "[runtime-san] rebuilding stdlib/runtime_san.o (non-LTO, with ASan+UBSan)"
         CFLAGS_SAN="-O1 -g -fsanitize=address,undefined -fsanitize-address-use-after-scope -fno-omit-frame-pointer -fno-sanitize-recover=all"
-        for sentinel_flag in NURL_HAVE_LIBCURL:libcurl NURL_HAVE_OPENSSL:openssl NURL_HAVE_SQLITE3:sqlite3 NURL_HAVE_ZLIB:zlib; do
+        for sentinel_flag in NURL_HAVE_OPENSSL:openssl NURL_HAVE_SQLITE3:sqlite3 NURL_HAVE_ZLIB:zlib; do
             d="${sentinel_flag%%:*}"; p="${sentinel_flag##*:}"
             if pkg-config --exists "$p" 2>/dev/null; then
                 CFLAGS_SAN="$CFLAGS_SAN -D$d $(pkg-config --cflags "$p")"
@@ -381,7 +380,7 @@ elif [ $DEBUG_INFO -eq 1 ]; then
     if [ ! -f "$DBG_RUNTIME" ] || [ "$SCRIPT_DIR/stdlib/runtime.c" -nt "$DBG_RUNTIME" ]; then
         echo "[runtime-debug] rebuilding stdlib/runtime_debug.o (non-LTO, with -g)"
         CFLAGS_DBG="-O0 -g"
-        for sentinel_flag in NURL_HAVE_LIBCURL:libcurl NURL_HAVE_OPENSSL:openssl NURL_HAVE_SQLITE3:sqlite3 NURL_HAVE_ZLIB:zlib; do
+        for sentinel_flag in NURL_HAVE_OPENSSL:openssl NURL_HAVE_SQLITE3:sqlite3 NURL_HAVE_ZLIB:zlib; do
             d="${sentinel_flag%%:*}"; p="${sentinel_flag##*:}"
             if pkg-config --exists "$p" 2>/dev/null; then
                 CFLAGS_DBG="$CFLAGS_DBG -D$d $(pkg-config --cflags "$p")"

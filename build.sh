@@ -141,22 +141,12 @@ fi
 
 mkdir -p build
 
-# ── libcurl detection ────────────────────────────────────────
-# When pkg-config knows about libcurl, build the runtime with the
-# real HTTP transport. Otherwise the symbols still exist but every
-# call returns HttpErr::Other(-1), and the link line below skips
-# -lcurl.
+# ── HTTP transport ───────────────────────────────────────────
+# The HTTP client is pure NURL now (stdlib/ext/http_pure.nu over the
+# libc TCP socket + the pure TLS stack); no libcurl, no link flag.
+rm -f stdlib/runtime.curl
 CURL_CFLAGS=""
 CURL_LIBS=""
-if pkg-config --exists libcurl 2>/dev/null; then
-    CURL_CFLAGS="-DNURL_HAVE_LIBCURL $(pkg-config --cflags libcurl)"
-    CURL_LIBS="$(pkg-config --libs libcurl)"
-    echo 1 > stdlib/runtime.curl
-    log "[info] libcurl detected — HTTP transport enabled"
-else
-    rm -f stdlib/runtime.curl
-    log "[info] libcurl not found — http_get/http_post will return HttpErr::Other"
-fi
 
 # ── libssl detection ─────────────────────────────────────────
 # Same pattern as libcurl. With openssl present, the runtime's
