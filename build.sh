@@ -148,23 +148,16 @@ rm -f stdlib/runtime.curl
 CURL_CFLAGS=""
 CURL_LIBS=""
 
-# ── libssl detection ─────────────────────────────────────────
-# Same pattern as libcurl. With openssl present, the runtime's
-# tcp_listen_tls / accept-with-handshake / SSL_read / SSL_write
-# paths compile in; without it, the symbols still exist but every
-# call returns NetErr::TLS_CONTEXT_INIT and the link line skips
-# -lssl -lcrypto.
+# ── libssl: REMOVED (§8 P4) ──────────────────────────────────
+# All TLS — client AND server, handshake + record layer + X.509 — is
+# now pure NURL (stdlib/std/tls.nu, tls_server.nu, and the crypto in
+# stdlib/std/*). The runtime no longer touches OpenSSL, so the default
+# build links neither -lssl nor -lcrypto and NURL_HAVE_OPENSSL is never
+# defined. The dead #ifdef NURL_HAVE_OPENSSL blocks in runtime.c are
+# retained only as historical reference and compile out unconditionally.
 OPENSSL_CFLAGS=""
 OPENSSL_LIBS=""
-if pkg-config --exists openssl 2>/dev/null; then
-    OPENSSL_CFLAGS="-DNURL_HAVE_OPENSSL $(pkg-config --cflags openssl)"
-    OPENSSL_LIBS="$(pkg-config --libs openssl)"
-    echo 1 > stdlib/runtime.openssl
-    log "[info] openssl detected — TLS transport enabled (server-side)"
-else
-    rm -f stdlib/runtime.openssl
-    log "[info] openssl not found — tcp_listen_tls will return NetErr::TLS_CONTEXT_INIT"
-fi
+rm -f stdlib/runtime.openssl
 
 # ── libsqlite3 detection ─────────────────────────────────────
 # Same pattern as libcurl / openssl. With sqlite3 present, the

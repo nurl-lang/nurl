@@ -1293,8 +1293,6 @@ $ `stdlib/ext/compress.nu`
 
 & `libc` @ nurl_tcp_connect s host i port → i
 
-& `libc` @ nurl_tcp_connect_tls s host i port i verify → i
-
 // A connected, handshaken client. Wraps the underlying TcpConn so the
 // frame API can be reached via `( ws_client_conn c )` and the link torn
 // down with `ws_client_close`.
@@ -1718,32 +1716,38 @@ $ `stdlib/ext/compress.nu`
     ^ ( ws_connect_with url @ ?String { F } )
 }
 
+// Open the WS transport: pure TLS (wss) via net.nu's tcp_connect_tls, or
+// a plain TCP conn (ws). Returns a polymorphic TcpConn or None on failure.
+@ __ws_open_conn WsUrl u → ?TcpConn {
+    ? . u tls {
+        ?? ( tcp_connect_tls ( string_data . u host ) . u port ( string_data . u host ) 1 ) {
+            F _ → ^ @ ?TcpConn { F # TcpConn 0 }
+            T c → ^ @ ?TcpConn { T c }
+        }
+    } {}
+    : i craw ( nurl_tcp_connect ( string_data . u host ) . u port )
+    ? == craw 0 { ^ @ ?TcpConn { F # TcpConn 0 } } {}
+    : i ek ( nurl_tcp_err_kind craw )
+    ? != ek 0 { ( nurl_tcp_close craw ) ^ @ ?TcpConn { F # TcpConn 0 } } {}
+    ^ @ ?TcpConn { T @ TcpConn { # s craw 0 0 } }
+}
+
 @ ws_connect_with s url ? String subprotocol → !WsClient WsErr {
     : ?WsUrl pu ( __ws_parse_url url )
     ?? pu {
         T u → {
-            : i craw ? . u tls
-            ( nurl_tcp_connect_tls ( string_data . u host ) . u port 1 )
-            ( nurl_tcp_connect ( string_data . u host ) . u port )
-            ? == craw 0 {
-                ( ws_url_free u )
-                ^ @ !WsClient WsErr { F WsConnectFailed }
-            } {}
-            : i ek ( nurl_tcp_err_kind craw )
-            ? != ek 0 {
-                ( nurl_tcp_close craw )
-                ( ws_url_free u )
-                ^ @ !WsClient WsErr { F WsConnectFailed }
-            } {}
-            : s crp # s craw
-            : TcpConn conn @ TcpConn { crp 0 0 }
-            : !v WsErr hsr ( ws_client_handshake conn ( string_data . u host ) ( string_data . u path ) subprotocol )
-            ( ws_url_free u )
-            ?? hsr {
-                T _ → { ^ @ !WsClient WsErr { T @ WsClient { conn } } }
-                F e → {
-                    ( tcp_close_conn conn )
-                    ^ @ !WsClient WsErr { F e }
+            ?? ( __ws_open_conn u ) {
+                F _ → { ( ws_url_free u ) ^ @ !WsClient WsErr { F WsConnectFailed } }
+                T conn → {
+                    : !v WsErr hsr ( ws_client_handshake conn ( string_data . u host ) ( string_data . u path ) subprotocol )
+                    ( ws_url_free u )
+                    ?? hsr {
+                        T _ → { ^ @ !WsClient WsErr { T @ WsClient { conn } } }
+                        F e → {
+                            ( tcp_close_conn conn )
+                            ^ @ !WsClient WsErr { F e }
+                        }
+                    }
                 }
             }
         }
@@ -2377,21 +2381,12 @@ $ `stdlib/ext/compress.nu`
     ?? pu {
         F _ → { ^ @ !WsDeflateConn WsErr { F WsBadUrl } }
         T u → {
-            : i craw ? . u tls
-            ( nurl_tcp_connect_tls ( string_data . u host ) . u port 1 )
-            ( nurl_tcp_connect ( string_data . u host ) . u port )
-            ? == craw 0 {
+            : ?TcpConn copt ( __ws_open_conn u )
+            ? ?? copt { T _ → 0 F _ → 1 } {
                 ( ws_url_free u )
                 ^ @ !WsDeflateConn WsErr { F WsConnectFailed }
             } {}
-            : i ek ( nurl_tcp_err_kind craw )
-            ? != ek 0 {
-                ( nurl_tcp_close craw )
-                ( ws_url_free u )
-                ^ @ !WsDeflateConn WsErr { F WsConnectFailed }
-            } {}
-            : s crp # s craw
-            : TcpConn conn @ TcpConn { crp 0 0 }
+            : TcpConn conn ?? copt { T c → c F _ → @ TcpConn { # s 0 0 0 } }
             : !WsDeflateConfig WsErr hsr ( ws_client_handshake_deflate conn ( string_data . u host ) ( string_data . u path ) subprotocol cfg )
             ( ws_url_free u )
             ?? hsr {

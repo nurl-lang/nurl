@@ -3,9 +3,10 @@
 // A submission client: dial a mail server, optionally upgrade the
 // plaintext connection to TLS with STARTTLS (RFC 3207), authenticate
 // (AUTH PLAIN / AUTH LOGIN, RFC 4954), and submit a message. Built on
-// the runtime's client-side TCP/TLS connect (net.nu's TcpConn for
-// read/write) plus a new `nurl_tcp_starttls` that upgrades an
-// already-open fd in place. A minimal MIME builder (`mime_build`)
+// net.nu's polymorphic TcpConn for read/write, with the pure-NURL TLS
+// stack underneath: `tcp_connect_tls` for implicit TLS and
+// `tcp_starttls` to upgrade an already-open fd in place (no OpenSSL).
+// A minimal MIME builder (`mime_build`)
 // produces a well-formed text/plain message; `smtp_dotstuff` applies
 // the transparency rules (RFC 5321 §4.5.2) the DATA phase requires.
 //
@@ -42,10 +43,6 @@ $ `stdlib/std/time.nu`  // smtp_date_now
 // nurl_tcp_err_kind are nurlc builtins; the two connect calls and the
 // STARTTLS upgrade need `& `libc`` extern declarations.
 & `libc` @ nurl_tcp_connect s host i port → i
-
-& `libc` @ nurl_tcp_connect_tls s host i port i verify → i
-
-& `libc` @ nurl_tcp_starttls i conn s host i verify → i
 
 : | SmtpErr {
     SmtpConnect  // TCP connect failed
@@ -221,15 +218,9 @@ $ `stdlib/std/time.nu`  // smtp_date_now
     ( string_free . c last_reply )
 }
 
-@ __smtp_after_connect i craw → !SmtpClient SmtpErr {
-    ? == craw 0 { ^ @ !SmtpClient SmtpErr { F # SmtpErr SmtpConnect } } {}
-    : i ek ( nurl_tcp_err_kind craw )
-    ? != ek 0 {
-        ( nurl_tcp_close craw )
-        ^ @ !SmtpClient SmtpErr { F # SmtpErr SmtpConnect }
-    } {}
-    : s crp # s craw
-    : TcpConn conn @ TcpConn { crp 0 0 }
+// Wrap a connected (plain or TLS) TcpConn into an SmtpClient and read
+// the server's 220 greeting.
+@ __smtp_greet TcpConn conn → !SmtpClient SmtpErr {
     : SmtpClient c @ SmtpClient { conn ( vec_new [u] ) ( string_with_cap 128 ) }
     : !i SmtpErr g ( __smtp_read_reply c )
     ^ ?? g {
@@ -239,11 +230,21 @@ $ `stdlib/std/time.nu`  // smtp_date_now
 }
 
 @ smtp_connect s host i port → !SmtpClient SmtpErr {
-    ^ ( __smtp_after_connect ( nurl_tcp_connect host port ) )
+    : i craw ( nurl_tcp_connect host port )
+    ? == craw 0 { ^ @ !SmtpClient SmtpErr { F # SmtpErr SmtpConnect } } {}
+    : i ek ( nurl_tcp_err_kind craw )
+    ? != ek 0 {
+        ( nurl_tcp_close craw )
+        ^ @ !SmtpClient SmtpErr { F # SmtpErr SmtpConnect }
+    } {}
+    ^ ( __smtp_greet @ TcpConn { # s craw 0 0 } )
 }
 
 @ smtp_connect_tls s host i port b verify → !SmtpClient SmtpErr {
-    ^ ( __smtp_after_connect ( nurl_tcp_connect_tls host port ? verify 1 0 ) )
+    ?? ( tcp_connect_tls host port host ? verify 1 0 ) {
+        F _ → ^ @ !SmtpClient SmtpErr { F # SmtpErr SmtpConnect }
+        T conn → ^ ( __smtp_greet conn )
+    }
 }
 
 @ smtp_ehlo SmtpClient c s domain → !v SmtpErr {
@@ -268,11 +269,10 @@ $ `stdlib/std/time.nu`  // smtp_date_now
     ? ( smtp_has_cap c `STARTTLS` ) {} { ^ @ !v SmtpErr { F # SmtpErr SmtpNoStartTls } }
     : !v SmtpErr r ( __smtp_expect c `STARTTLS` 220 # SmtpErr SmtpProtocol )
     ?? r { T _ → {} F er → { ^ @ !v SmtpErr { F er } } }
-    : TcpConn cn . c conn
-    : i raw # i . cn raw
-    : i _h ( nurl_tcp_starttls raw host ? verify 1 0 )
-    : i ek ( nurl_tcp_err_kind raw )
-    ? != ek 0 { ^ @ !v SmtpErr { F # SmtpErr SmtpTls } } {}
+    ?? ( tcp_starttls . c conn host verify ) {
+        F _ → ^ @ !v SmtpErr { F # SmtpErr SmtpTls }
+        T _ → {}
+    }
     ^ ( smtp_ehlo c host )
 }
 

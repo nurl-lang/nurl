@@ -228,6 +228,7 @@ $ `stdlib/std/aes_gcm.nu`
     = . c cert_msg ( vec_new [u] ) = . c cv_sig ( vec_new [u] ) = . c th_cert ( vec_new [u] )
     = . c cv_scheme 0 = . c version 13
     = . c kx_p256 ( vec_new [u] )
+    = . c alpn_sel ( vec_new [u] )
 
     : ( Vec u ) tr ( vec_new [u] )
 
