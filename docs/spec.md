@@ -676,6 +676,13 @@ semantics*, §9).
 `^` is the **return** operator and is strictly unary: `^ expr` returns
 `expr` from the enclosing function.
 
+In a function declared `→ v` (returns nothing) a **bare `^`** — with no
+following value expression — is a valid early return (it emits
+`ret void`). The converse is rejected: giving `^` a value in a `→ v`
+function (`^ 0`) is a compile error, as is a bare `^` in a
+value-returning function (`^` with no expr where a return value is
+required). `^ ( void_call )` is permitted — it tail-returns a `v` call.
+
 `^^` (two adjacent carets, no whitespace) is the **XOR** operator and
 is strictly binary: `^^ a b`. On integer operands it is bitwise XOR; on
 `b` (i1) operands it is logical XOR (no short-circuit — `xor` cannot).

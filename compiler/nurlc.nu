@@ -1749,6 +1749,44 @@
     r1
 }
 
+// Emit the `ret` terminator (or branch to the defer chain) after owned-
+// resource drops. Shared by the normal return path and the bare-`^`
+// void early-return. A function declared `→ v` ALWAYS emits `ret void`;
+// `lt`/`val` are the returned value's LLVM type / SSA name (both empty
+// for a bare void return). Keeps the void/non-void `ret` choice keyed on
+// the FUNCTION's return type, not just the value type — so a stray value
+// can never lower to `ret i64 …` out of a `void` function.
+@ gen_ret_term i lex i syms i cg s lt s val s skip s skip_str_ptr s skip_user_ptr s skip_struct_ptr s ret_ident → v {
+    : s dtop ( nurl_sym_get syms `__defer_top__` )
+    : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
+    ? != 0 ( nurl_str_len dtop )
+    {  // defers active: store return value then branch to defer chain
+        ? ! ( seq lt `void` )
+        { : s rvp ( nurl_sym_get syms `__ret_val__` )
+            ( nurl_print `  store ` ) ( nurl_print lt ) ( nurl_print ` ` )
+            ( nurl_print val ) ( nurl_print `, ` ) ( nurl_print lt )
+            ( nurl_print `* ` ) ( nurl_print rvp ) ( nurl_print `\n` )
+        }
+        {}
+        ( nurl_print `  br label %` ) ( nurl_print dtop ) ( emit_dbg_eol )
+    }
+    {  // no defers: drop owned slices then direct return
+        ( mem_drop_owned syms cg skip )
+        ? != 0 g_auto_drop_strings
+        { ( mem_drop_owned_strings syms cg skip_str_ptr )
+            ( mem_drop_owned_struct_fields syms cg skip_struct_ptr )
+            ( mem_drop_user_drops syms cg skip_user_ptr )
+        }
+        {}
+        ( mem_own_closure_remove syms ret_ident )
+        ( mem_drop_closure_envs syms cg )
+        ? | ( seq lt `void` ) ( seq fn_rt `void` )
+        { ( emit_call_term `ret void` ) }
+        { ( nurl_print `  ret ` ) ( nurl_print lt )
+            ( nurl_print ` ` ) ( nurl_print val ) ( emit_dbg_eol ) }
+    }
+}
+
 @ gen_ret i lex i syms i cg → s {
     // Cascade guard: a `^` reached here while parsing a value operand
     // (g_ret_forbidden set by gen_operand / a `?`-condition / `??`-
@@ -1765,6 +1803,26 @@
     // Borrow checker: source line of the `^` token.
     : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
+    // Bare `^` — a return with no value expression (the next token ends
+    // the statement/block). Legal ONLY in a `→ v` function, where it is
+    // an early return that emits `ret void`. In a value-returning
+    // function it is an error (the caller would get garbage), and is
+    // reported here rather than letting gen_operand fail with the
+    // generic "value expression required" cascade message.
+    : i __ret_nt ( nurl_lex_type lex )
+    ? | | == __ret_nt TT_RBRACE == __ret_nt TT_EOF == __ret_nt TT_SEMICOL
+    { : s __ret_frt ( nurl_sym_get syms `__fn_ret_ty__` )
+        ? ( seq __ret_frt `void` )
+        { ( bck_record `ret` `` bck_line )
+            ( gen_ret_term lex syms cg `void` `` `` `` `` `` `` )
+            ( nurl_set_last_type `void` )
+            = g_did_ret 1
+            ^ `` }
+        { ( die lex ( nurl_str_cat ( nurl_str_cat
+            `bare '^' (return) but this function returns '` ( llvm_to_nurl __ret_frt ) )
+            `' — a '^' here must be followed by a return value of that type` ) ) }
+    }
+    {}
     // The `^ ?? value { F e → {…} T m → {…} }` shape looks
     // like "return a match expression", but when ANY arm contains its
     // own `^`, the `??` becomes statement-form and yields `void`, so
@@ -1888,6 +1946,16 @@
         ( die lex ( nurl_str_cat `return expression has no value (expected `
         ( nurl_str_cat ( llvm_to_nurl fn_rt ) hint ) ) ) }
     {}
+    // Inverse of the above: the function is declared `→ v` (returns
+    // nothing) but `^` was handed a real value. Lowering it would emit
+    // `ret <ty> <val>` out of a `void` LLVM function — invalid IR that
+    // historically only clang caught (`ret i64 0` from `→ v`). Reject it
+    // here; the cure is a bare `^` (early return) or a non-void type.
+    ? & ! ( seq lt `void` ) ( seq fn_rt `void` )
+    { ( die lex ( nurl_str_cat ( nurl_str_cat
+        `this function is declared '→ v' (returns nothing) but '^' is given a value of type '` ( llvm_to_nurl lt ) )
+        `' to return — use a bare '^' to return early, or declare a return type` ) ) }
+    {}
     // Return-type agreement (narrow, never-valid clashes only — mirrors the
     // binary-operator check). NURL has no implicit conversions, so returning a
     // float where a non-float is declared (or vice versa), or a pointer/string
@@ -1906,7 +1974,6 @@
         {}
     }
     {}
-    : s dtop ( nurl_sym_get syms `__defer_top__` )
     // Determine which owned-slice binding (if any) is escaping as the return value.
     // Ownership transfers only when the return type is itself a slice AND the
     // returned expression resolved to a simple identifier load.
@@ -1956,34 +2023,7 @@
     ? != 0 ( nurl_str_len ( nurl_sym_get syms `__last_value_borrow__` ) )
     { ( nurl_sym_def syms `__fn_ret_borrow__` `1` ) }
     {}
-    ? != 0 ( nurl_str_len dtop )
-    {  // defers active: store return value then branch to defer chain
-        ? ! ( seq lt `void` )
-        { : s rvp ( nurl_sym_get syms `__ret_val__` )
-            ( nurl_print `  store ` ) ( nurl_print lt ) ( nurl_print ` ` )
-            ( nurl_print val ) ( nurl_print `, ` ) ( nurl_print lt )
-            ( nurl_print `* ` ) ( nurl_print rvp ) ( nurl_print `\n` )
-        }
-        {}
-        ( nurl_print `  br label %` ) ( nurl_print dtop ) ( emit_dbg_eol )
-    }
-    {  // no defers: drop owned slices then direct return
-        ( mem_drop_owned syms cg skip )
-        ? != 0 g_auto_drop_strings
-        { ( mem_drop_owned_strings syms cg skip_str_ptr )
-            ( mem_drop_owned_struct_fields syms cg skip_struct_ptr )
-            ( mem_drop_user_drops syms cg skip_user_ptr )
-        }
-        {}
-        // Return-escape: `^ f` hands f's closure (and its env) to the
-        // caller — do not free it here.
-        ( mem_own_closure_remove syms ret_ident )
-        ( mem_drop_closure_envs syms cg )
-        ? ( seq lt `void` )
-        { ( emit_call_term `ret void` ) }
-        { ( nurl_print `  ret ` ) ( nurl_print lt )
-            ( nurl_print ` ` ) ( nurl_print val ) ( emit_dbg_eol ) }
-    }
+    ( gen_ret_term lex syms cg lt val skip skip_str_ptr skip_user_ptr skip_struct_ptr ret_ident )
     ( nurl_set_last_type `void` )
     = g_did_ret 1
     val
