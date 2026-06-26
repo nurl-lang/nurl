@@ -342,6 +342,12 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) eph ( __srv_rand 32 )
     : ( Vec u ) spub ? == grp 29 ( x25519_base eph ) ( p256_ecdh_keygen eph )
     : ( Vec u ) ecdhe ? == grp 29 ( x25519 eph cpub ) ( p256_ecdh_shared eph cpub )
+    // H3: RFC 8446 §7.4.2 — reject a degenerate (all-zero) ECDHE secret from a
+    // low-order client key_share before it can seed the key schedule.
+    ? ( __all_zero ecdhe ) {
+        ( __srv_cleanup_accept ch crand cpub eph spub ecdhe ( vec_new [u] ) ( vec_new [u] ) tr )
+        ( nurl_free # s c ) ^ ( __srv_fail raw )
+    } {}
 
     // ── ServerHello ──
     : ( Vec u ) srand ( __srv_rand 32 )
@@ -491,7 +497,10 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) v ( vec_with_cap [u] ? > n 0 n 1 )
     : ~ i k 0
     ~ < k n { ( vec_push [u] v # u 0 ) = k + k 1 }
-    : i _r ( nurl_rand_fill # *u ( vec_data [u] v ) n )
+    : i r ( nurl_rand_fill # *u ( vec_data [u] v ) n )
+    // L4: fail closed on CSPRNG failure — these bytes are the server random
+    // and the ECDHE private scalar.
+    ? & > n 0 == r 0 { ( nurl_panic `tls server: CSPRNG (nurl_rand_fill) failed` ) } {}
     ^ v
 }
 

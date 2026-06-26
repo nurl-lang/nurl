@@ -149,8 +149,42 @@ $ `stdlib/std/tls_verify.nu`
     : ( Vec u ) v ( vec_with_cap [u] ? > n 0 n 1 )
     : ~ i k 0
     ~ < k n { ( vec_push [u] v # u 0 ) = k + k 1 }
-    : i _r ( nurl_rand_fill # *u ( vec_data [u] v ) n )
+    : i r ( nurl_rand_fill # *u ( vec_data [u] v ) n )
+    // L4: never proceed with non-CSPRNG bytes. nurl_rand_fill returns 0 only on
+    // total entropy failure; these bytes seed ephemeral keys and nonces, so
+    // fail closed rather than emit predictable key material.
+    ? & > n 0 == r 0 { ( nurl_panic `tls: CSPRNG (nurl_rand_fill) failed` ) } {}
     ^ v
+}
+
+// Constant-time all-zero test (OR-accumulate every byte; no early exit). An
+// empty vector counts as zero. Used to reject a degenerate ECDHE secret.
+@ __all_zero ( Vec u ) v → b {
+    : i n ( vec_len [u] v )
+    ? == n 0 { ^ T } {}
+    : ~ i acc 0
+    : ~ i k 0
+    ~ < k n { = acc | acc ( __t_bget v k ) = k + k 1 }
+    ^ == acc 0
+}
+
+// RFC 8446 §4.1.3 downgrade sentinel: a TLS 1.3-capable client that ends up
+// on TLS 1.2 must abort if the last 8 bytes of the 32-byte server random are
+// "DOWNGRD" + 0x01 (1.2) or + 0x00 (1.1/below) — the server is signalling a
+// forced downgrade by an active attacker.
+@ __downgrade_sentinel ( Vec u ) srand → b {
+    ? < ( vec_len [u] srand ) 32 { ^ F } {}
+    : ~ b m T
+    ? != ( __t_bget srand 24 ) 68 { = m F } {}   // 'D'
+    ? != ( __t_bget srand 25 ) 79 { = m F } {}   // 'O'
+    ? != ( __t_bget srand 26 ) 87 { = m F } {}   // 'W'
+    ? != ( __t_bget srand 27 ) 78 { = m F } {}   // 'N'
+    ? != ( __t_bget srand 28 ) 71 { = m F } {}   // 'G'
+    ? != ( __t_bget srand 29 ) 82 { = m F } {}   // 'R'
+    ? != ( __t_bget srand 30 ) 68 { = m F } {}   // 'D'
+    : i last ( __t_bget srand 31 )
+    ? & != last 0 != last 1 { = m F } {}
+    ^ m
 }
 
 // ── socket record I/O ─────────────────────────────────────────────
@@ -707,6 +741,12 @@ $ `stdlib/std/tls_verify.nu`
     // Distinguish the negotiated group by the server key-exchange length:
     // X25519 is 32 bytes, secp256r1 an uncompressed point is 65.
     : ( Vec u ) ecdhe ? == ( vec_len [u] spub ) 65 ( p256_ecdh_shared . c kx_p256 spub ) ( x25519 priv spub )
+    // H3: RFC 8446 §7.4.2 — abort if the ECDHE output is all-zero (peer sent a
+    // low-order / small-subgroup point forcing a known shared secret).
+    ? ( __all_zero ecdhe ) {
+        ( vec_free [u] sh ) ( vec_free [u] spub ) ( vec_free [u] ecdhe )
+        ^ ( __fail c priv cpub random sessid ch tr # TlsErr TlsProtocol )
+    } {}
     : ( Vec u ) zeros ( __rand_bytes 0 )
     : ( Vec u ) z32 ( vec_with_cap [u] 32 )
     : ~ i zk 0
@@ -1182,6 +1222,12 @@ $ `stdlib/std/tls_verify.nu`
 // captured on `c` for the verifier (cv_sig / cv_scheme / th_cert).
 @ __tls12_handshake * TlsConn c ( Vec u ) sh ( Vec u ) priv ( Vec u ) cpub ( Vec u ) random ( Vec u ) sessid ( Vec u ) ch ( Vec u ) tr → !*TlsConn TlsErr {
     : ( Vec u ) srand ( bytes_slice sh 6 38 )
+    // M1: we always offer TLS 1.3 in supported_versions, so negotiating 1.2
+    // here means a possible forced downgrade — abort on the RFC 8446 sentinel.
+    ? ( __downgrade_sentinel srand ) {
+        ( vec_free [u] srand ) ( vec_free [u] sh )
+        ^ ( __fail c priv cpub random sessid ch tr # TlsErr TlsProtocol )
+    } {}
 
     // ── server flight 1: Certificate, ServerKeyExchange, ServerHelloDone ──
     : ~ ( Vec u ) spub ( vec_new [u] )
@@ -1297,10 +1343,12 @@ $ `stdlib/std/tls_verify.nu`
                         T inner → {
                             ( vec_free [u] . rec body )
                             // inner = Finished handshake msg: [20][len3][verify_data]
-                            : ~ b ok ? >= ( vec_len [u] inner ) 16 T F
+                            // L5: compare the 12-byte verify_data in constant
+                            // time (OR-accumulate XOR diffs, no early exit).
+                            : ~ i diff ? >= ( vec_len [u] inner ) 16 0 1
                             : ~ i vi 0
-                            ~ & ok < vi 12 { ? != ( __t_bget inner + 4 vi ) ( __t_bget sfin_exp vi ) { = ok F } {} = vi + vi 1 }
-                            ? ok { = sdone 1 } { = serr 1 }
+                            ~ < vi 12 { = diff | diff ^^ ( __t_bget inner + 4 vi ) ( __t_bget sfin_exp vi ) = vi + vi 1 }
+                            ? == diff 0 { = sdone 1 } { = serr 1 }
                             ( vec_free [u] inner )
                         }
                         F _ → { ( vec_free [u] . rec body ) = serr 1 }
