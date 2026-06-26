@@ -280,6 +280,15 @@ Variadic FFI calls auto-promote `f32 → double` via `fpext` and narrow
 integers (`i1` / `i8` / `i16`, sign-aware) → `i32` via `sext` / `zext`
 per ISO C §6.5.2.2 (grammar v1.9).
 
+`s` (a raw `i8*` C-string) and the stdlib `String` (a managed,
+length-headered string, LLVM `%String`) are **distinct types** despite
+both being pointer-shaped. They are ABI-compatible enough that a call
+passing one where the other is declared would assemble and link, but
+reinterpreting one representation as the other is silent
+wild-pointer UB — so the compiler **rejects it at the call site**
+(in either direction). Convert explicitly: `string_data` (`String → s`)
+or `string_from` (`s → String`).
+
 ### 4.2 Pointer types
 
 `*T` is a raw pointer to T. `*void` is rewritten to `i8*` in the IR

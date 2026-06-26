@@ -4356,6 +4356,18 @@
     ^ | ( seq at ( nurl_str_cat pt `*` ) ) ( seq pt ( nurl_str_cat at `*` ) )
 }
 
+// A `String` value (`%String`, a headered/managed string) and a raw
+// C-string (`s`, i8* — the bare char data pointer, e.g. from string_data)
+// are DISTINCT types. They are ABI-compatible enough that clang accepts a
+// call passing one where the other is declared, but reinterpreting a
+// String's payload pointer as a managed String (or vice versa) is silent
+// UB — a wild-pointer crash the moment the callee reads the "other"
+// representation. Flag the confusion in either direction at call time.
+@ __arg_str_cstr_mismatch s at s pt → b {
+    ^ | & ( seq at `i8*` ) ( seq pt `%String` )
+    & ( seq at `%String` ) ( seq pt `i8*` )
+}
+
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
@@ -4786,7 +4798,7 @@
             : b __at_ptr & > ( nurl_str_len at ) 0
             == ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42
             : b __ps_ptr & > ( nurl_str_len __psrc ) 0 == ( nurl_str_get __psrc 0 ) 42
-            ? & != 0 ( nurl_str_len __psrc ) | __at_ptr __ps_ptr
+            ? & != 0 ( nurl_str_len __psrc ) | | __at_ptr __ps_ptr ( seq at `%String` )
             { : i __plx ( nurl_lex_new __psrc `<param>` )
                 : s __pllvm ( parse_type __plx )
                 ? ( __arg_ptr_depth_mismatch at __pllvm )
@@ -4794,6 +4806,12 @@
                     ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
                     ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
                     `' — pointer-vs-value mismatch (a '*T' was passed where a 'T' value is expected, or vice versa)` ) ) }
+                {}
+                ? ( __arg_str_cstr_mismatch at __pllvm )
+                { ( die lex ( nurl_str_cat3
+                    ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                    ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
+                    `' — String vs raw C-string mismatch: 'String' is a managed string, 's' (i8*) a bare char pointer; convert with 'string_data' (String→s) or 'string_from' (s→String)` ) ) }
                 {} }
             {} }
         {}
