@@ -8,8 +8,130 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-06-26
+
+The **self-sufficiency** release. NURL no longer depends on any third-party
+C library at its core: the entire external-library surface — `libcurl`,
+`libssl`/`libcrypto`, `libpq`, and `libz` — has been removed from the
+runtime and replaced with pure-NURL implementations in the standard library.
+A default `./build.sh` now links **`libc` only** (plus `libm`). The same
+self-contained stdlib provides TLS 1.3 (client *and* server), cryptography,
+HTTP/1.1, and DEFLATE/gzip/zlib — written in NURL, byte-for-byte verified
+against the libraries they replace, and clean under AddressSanitizer.
+
+Alongside the dependency purge: a new pure-NURL `redis` client, a compiler
+type-checking sweep that converts several silent miscompiles into clear
+compile-time errors, and an `O(n²) → O(1)` symbol-table speedup that keeps
+whole-program compilation fast now that HTTP pulls in the full TLS+crypto
+closure.
+
+**Toolchain requirement:** the minimum supported compiler is now
+**clang / LLVM 15+** (was 14+). LLVM 15 emits opaque-pointer IR by default,
+so the build no longer needs the `-opaque-pointers` shim for older clangs.
+
+### Added
+
+- **Pure-NURL TLS 1.3 client in the stdlib** (`std/tls.nu`,
+  `std/tls_verify.nu`) — promoted from the `tls` package so stdlib HTTP/TLS
+  consumers (`anthropic`, `mcp_http`/`mcp_client`, `cluster`, `http_json`,
+  `http2_client`) can build on it. The `tls` package is now a thin
+  re-export facade for backward compatibility. (§8 P0)
+- **Pure-NURL TLS 1.3 server** (`std/tls_server.nu`) — full
+  ServerHello / EncryptedExtensions / Certificate /
+  CertificateVerify (ECDSA P-256) / Finished handshake over `tcp_accept`,
+  EC P-256 private-key PEM loading, ALPN (`h2`) negotiation, and an
+  in-place STARTTLS upgrade. `net.nu`'s `TcpConn` is now polymorphic
+  (plain / TLS-client / TLS-server) so `http_server` gets clean HTTPS.
+  (§8 P4)
+- **RSA leaf-certificate support for the pure TLS server** — RSA-PSS
+  signing (`rsa_pss_sign_sha256`), PKCS#1/#8 key parsing
+  (`rsa_priv_from_pem`), cert-chain transmission, and `tls_accept_rsa`;
+  `net.nu` auto-detects EC vs RSA and frames `fullchain.pem`. (PR #289)
+- **Pure-NURL crypto** filling the gaps left by the OpenSSL removal:
+  AES-256-GCM (`std/aes_gcm.nu`), **Ed25519** sign/verify
+  (`std/ed25519.nu`, a TweetNaCl port reusing the x25519 field
+  arithmetic), **scrypt** (`std/scrypt.nu`, RFC 7914), PBKDF2-HMAC-SHA512,
+  and ECDSA P-256 signing (RFC 6979). All KAT-verified, ASan/LSan-clean.
+  (§8 P1/P2/P4)
+- **Pure-NURL HTTP/1.1 client** (`ext/http_pure.nu`) over the stdlib TLS —
+  one transport+parser driving both the buffered `http_request`/`http_get`
+  family and the pull-based `http_stream_*` API: incremental chunked
+  decoder (live SSE streaming), Content-Length, redirects (301/302/303/
+  307/308), all methods, binary bodies. (§8 P3)
+- **Pure-NURL DEFLATE/inflate/gzip/zlib** (`std/deflate.nu`) — RFC 1951
+  inflate (puff.c port) + greedy-LZ77 deflate, `crc32`/`adler32`, and
+  streaming `inflate_stream` / `deflate_block_dict` for permessage-deflate
+  context takeover. `ext/compress.nu` is rewritten over it
+  (`zlib_*`/`gzip_*`/`raw_deflate_*`). (§8 P6)
+- **`redis` package** — a pure-NURL Redis client speaking RESP2 over a
+  libc TCP socket, with optional TLS (`rediss://`) via the pure `tls`
+  package, so the binary links `libc` only. Flat-arena RESP2 codec
+  (`src/resp.nu`), a typed surface (strings/lists/hashes/sets, `INCR`/
+  `EXPIRE`/`TTL`/`KEYS`, full pub/sub), and a `redis-cli`-style CLI with a
+  REPL and `SUBSCRIBE`/`PSUBSCRIBE` streaming. Validated live against
+  redis:7 (20/20, ASan-clean).
+
+### Changed
+
+- **`ext/crypto.nu` is now a thin facade** over the pure crypto modules —
+  the OpenSSL EVP FFI layer (~35 bindings) is gone; the public API and
+  `CryptoErr`/`CryptoKeypair` types are unchanged, so `noise`/`session`/
+  `jwt`/`http_jwt` consumers compile untouched. (§8 P2)
+- **All client-TLS consumers** (`mqtt`, `websocket`, `http2`, `smtp`) now
+  route through `net.nu`'s pure `tcp_connect_tls[_alpn]` / `tcp_starttls`
+  instead of the OpenSSL-backed runtime helpers. (§8 P4)
+- **Compiler: the symbol table is hash-indexed** (FNV-1a buckets) —
+  `nurl_sym_get` was a backward linear scan over an append-only table, so
+  whole-program compilation was `O(n²)`. Now `O(1)` average lookups with
+  identical semantics (byte-identical IR, bootstrap fixed point holds).
+  Effect: compiling `examples/http_basic.nu` 11.0s → 0.59s, the examples
+  sweep 8m11s → 25s, the corpus stage 7m13s → 1m11s.
+- **Minimum toolchain is clang / LLVM 15+** (was 14+). The build scripts
+  reject older clangs with install guidance; the `-opaque-pointers` shim
+  for clang 13/14 is removed.
+
+### Removed
+
+- **`libcurl`** — the entire C HTTP-client backend (libcurl bridge +
+  WinHTTP + stubs, ~850 lines) is deleted from `runtime.c`; `-lcurl` and
+  its detection are gone from the build. (§8 P3)
+- **`libssl` / `libcrypto`** — all SSL code (the dlopen vtable + ~250
+  `SSL_*` call sites, −801 lines) is deleted from `runtime.c`; `-lssl
+  -lcrypto` and `NURL_HAVE_OPENSSL` are gone from the build. (§8 P4)
+- **`libpq`** — `ext/postgres.nu` (47 FFI bindings) and its examples/test
+  are removed; the pure-NURL `psql` package is the replacement. (§8 P5)
+- **`libz`** — `nurl_z_*` + the `z_stream` ABI are deleted from
+  `runtime.c`; `-lz` and `NURL_HAVE_ZLIB` are gone from the build. (§8 P6)
+- Net effect: the default `./build.sh` produces binaries whose `NEEDED` is
+  `libc.so.6` only (plus `libm`). `libzstd` and `libsqlite3` remain
+  **optional**, behind runtime sentinels and `-Wl,--as-needed`, so a
+  program that does not use them still links `libc` only. (§8 P7)
+
 ### Fixed
 
+- **Compiler type-check sweep** — a focused pass that turns a class of
+  "`nurlc` accepts → `clang` rejects late (or silently miscompiles)" gaps
+  into clear compile-time errors. Diagnostic-only: IR for valid programs is
+  byte-identical and the bootstrap fixed point holds.
+  - **`String` vs `s` (`i8*`) argument mismatch** — passing a raw C-string
+    where a `String` parameter is declared (or vice versa) was silent
+    wild-pointer UB (it surfaced as a SEGV in `net.nu`'s cert-chain code).
+    Now rejected at the call site with a fix-it (`string_data` / `string_from`).
+  - **Wrong named struct by value** — passing a `B` where an `A` is
+    declared by value type-checked clean and let the callee read the
+    foreign struct's leading fields. Now rejected at the call site, in
+    return position (`^ b` from a `→ A` fn), and in struct literals (bad
+    field type or too many fields).
+  - **`^ value` from a `→ v` (void) function** — silently lowered to
+    `ret i64 …` out of a `void` LLVM function. Now a clear error, and a
+    **bare `^`** is supported as an early return in void functions.
+  - **Reassignment and field stores** (`= name v`, `= . obj field v`) — a
+    float-into-`i`, wrong-struct, or `String`-vs-`s` store emitted a
+    type-mismatched `store` that only clang caught. Now rejected (integer
+    width / signedness / pointer-stash coercions stay legal).
+  - **`!b` / `?b` bool payloads** in result/option matches were extracted
+    as `i64` but used as `i1` (`clang` rejected the IR); a `b` branch now
+    truncates the payload back to `i1`.
 - **WASM build of the runtime.** `nurl_read_password` (added in 0.9.19)
   included `<termios.h>` on every non-Windows target, which broke the
   `wasm32-wasi` compile (no termios) used by the playground / API image. It
@@ -5733,7 +5855,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.9.14...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/nurl-lang/nurl/compare/v0.9.19...v0.10.0
 [0.9.14]: https://github.com/nurl-lang/nurl/compare/v0.9.13...v0.9.14
 [0.9.13]: https://github.com/nurl-lang/nurl/compare/v0.9.12...v0.9.13
 [0.9.12]: https://github.com/nurl-lang/nurl/compare/v0.9.11...v0.9.12

@@ -1258,7 +1258,7 @@ build is a three-stage fixed point:
 1. **Stage 0.** `clang` links the committed
    `compiler/nurlc_lastgood.ll` (target-triple-agnostic LLVM IR text)
    plus `stdlib/runtime.o` into a `nurlc_lastgood.bin`. Only build-time
-   dependency is `clang/LLVM 14+`.
+   dependency is `clang/LLVM 15+`.
 2. **Stage 1.** `nurlc_lastgood.bin` compiles `compiler/nurlc.nu` →
    `build/nurlc_self.ll` → `build/nurlc_self`.
 3. **Stage 2.** `nurlc_self` compiles `compiler/nurlc.nu` again →

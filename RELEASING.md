@@ -95,9 +95,9 @@ works".)
 
 - Prefer the bundled zig (`<prefix>/zig/zig`, or `$NURL_ZIG`).
 - Else fall back to a system clang: honour `$CLANG`, probe `clang` /
-  `clang-<N>` / a clang-flavoured `cc`; pass `-Xclang -opaque-pointers` on
-  clang 13/14; reject clang < 13; on no compiler at all, exit with install
-  guidance instead of a raw `clang: command not found`.
+  `clang-<N>` / a clang-flavoured `cc`; reject clang < 15 (the minimum —
+  LLVM 15 emits opaque-pointer IR by default); on no compiler at all, exit
+  with install guidance instead of a raw `clang: command not found`.
 
 `nurl.sh` also links a feature library (`-lcurl` / `-lssl` / `-lsqlite3` /
 `-lpq` / `-lz` / `-lzstd`) **only when the emitted IR actually references
