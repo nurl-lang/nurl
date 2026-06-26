@@ -2257,8 +2257,8 @@ $ `stdlib/ext/compress.nu`
                     ? negotiated {
                         ^ ( ws_deflate_make agreed T )
                     } {
-                        : ZDeflate nd @ ZDeflate { # *u 0 }
-                        : ZInflate ni @ ZInflate { # *u 0 }
+                        : ZDeflate nd @ ZDeflate { ( vec_new [u] ) }
+                        : ZInflate ni @ ZInflate { ( vec_new [u] ) }
                         ^ @ !WsDeflate WsErr { T @ WsDeflate { nd ni F F 64 F } }
                     }
                 }
@@ -2416,8 +2416,8 @@ $ `stdlib/ext/compress.nu`
                         // Server declined: carry a null context. Its streams
                         // are 0, so ws_deflate_free is a safe no-op and the
                         // caller need not special-case it.
-                        : ZDeflate nd @ ZDeflate { # *u 0 }
-                        : ZInflate ni @ ZInflate { # *u 0 }
+                        : ZDeflate nd @ ZDeflate { ( vec_new [u] ) }
+                        : ZInflate ni @ ZInflate { ( vec_new [u] ) }
                         ^ @ !WsDeflateConn WsErr { T @ WsDeflateConn { client F @ WsDeflate { nd ni F F 64 F } } }
                     }
                 }

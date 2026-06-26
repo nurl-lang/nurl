@@ -52,7 +52,7 @@
 //   * zstd: -22 (fast negative levels) … 22 (max). Default 3.
 
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/cell.nu`  // nurl_native_sizeof for z_stream alloc
+$ `stdlib/std/deflate.nu`  // pure-NURL DEFLATE/inflate + crc32/adler32
 
 : | CompressErr {
     CompressBufTooSmall  // dst buffer overflow on grow-and-retry
@@ -70,102 +70,31 @@ $ `stdlib/core/cell.nu`  // nurl_native_sizeof for z_stream alloc
     }
 }
 
-// ── zlib FFI ───────────────────────────────────────────────────────
-//
-// `compress2(dest, &destLen, source, sourceLen, level)`:
-//   dest:      destination buffer (writable)
-//   destLen:   in/out — caller sets to dest capacity, libz updates to
-//              actual compressed length
-//   source:    input buffer
-//   sourceLen: input length
-//   level:     0..9
-// Returns 0 (Z_OK) on success, negative on error.
-//
-// `uncompress(dest, &destLen, source, sourceLen)`:
-//   destLen:   in/out — caller sets to dest capacity, libz updates to
-//              decompressed length. -5 (Z_BUF_ERROR) when dest is too
-//              small — we grow and retry.
-//
-// `compressBound(sourceLen)` returns the maximum size compress2 will
-// produce. Add a small constant safety margin (libz documents this).
+// ── DEFLATE framing helpers (over stdlib/std/deflate.nu) ────────────
 
-& `z` @ compress2 *u dest *i destLen *u source i sourceLen i32 level → i32
-
-& `z` @ uncompress *u dest *i destLen *u source i sourceLen → i32
-
-& `z` @ compressBound i sourceLen → i
-
-// Gzip wire format (RFC 1952) — pure-NURL FFI over libz's streaming
-// `deflateInit2_(windowBits=15+16)` / `inflateInit2_(windowBits=15+32)`.
-// PURIFY 2026-05-24: the C-side `nurl_gzip_compress` /
-// `nurl_gzip_decompress` thunks moved into NURL. `z_stream`'s
-// platform-varying field layout (LP64 vs LLP64 `uLong` size) is
-// bridged through two tiny runtime accessors — `nurl_z_setup` writes
-// the four mutable pointer/length fields, `nurl_z_total_out` reads
-// `total_out` after the call. The struct is opaquely sized via
-// `nurl_native_sizeof "z_stream"`.
-
-& `z` @ deflateInit2_ *u zs i32 level i32 method i32 windowBits i32 memLevel i32 strategy s version i32 streamSize → i32
-
-& `z` @ deflate *u zs i32 flush → i32
-
-& `z` @ deflateEnd *u zs → i32
-
-& `z` @ inflateInit2_ *u zs i32 windowBits s version i32 streamSize → i32
-
-& `z` @ inflate *u zs i32 flush → i32
-
-& `z` @ inflateEnd *u zs → i32
-
-& `z` @ zlibVersion → s
-
-& `c` @ nurl_z_setup *u zs *u in i avail_in *u out i avail_out → v
-
-& `c` @ nurl_z_total_out *u zs → i
-
-// Returns 0 on success or libz error code (-5 = Z_BUF_ERROR ⇒ caller
-// grows dst; -98 = NURL_GZIP_ERR_UNSUPPORTED ⇒ build lacked zlib).
-// Z_DEFLATED = 8, Z_DEFAULT_STRATEGY = 0, Z_FINISH = 4, Z_STREAM_END = 1.
-@ __gzip_compress_pure * u dst * i dst_len * u src i src_len i32 level → i32 {
-    : i zs_size ( nurl_native_sizeof `z_stream` )
-    ? <= zs_size 0 { ^ # i32 -98 } {}
-    : *u zs # *u ( nurl_zalloc zs_size )
-    ? == 0 # i zs { ^ # i32 -4 } {}  // Z_MEM_ERROR
-    ( nurl_z_setup zs src src_len dst ( nurl_peek # s dst_len 0 ) )
-    : i32 rc1 ( deflateInit2_ zs level # i32 8 # i32 31 # i32 8 # i32 0
-    ( zlibVersion ) # i32 zs_size )
-    ? != rc1 # i32 0 { ( nurl_free # s zs ) ^ rc1 } {}
-    : i32 rc2 ( deflate zs # i32 4 )
-    ? != rc2 # i32 1 {
-        : i32 _ ( deflateEnd zs )
-        ( nurl_free # s zs )
-        ^ ? == rc2 # i32 0 # i32 -5 rc2
-    } {}
-    ( nurl_poke # s dst_len 0 ( nurl_z_total_out zs ) )
-    : i32 rc3 ( deflateEnd zs )
-    ( nurl_free # s zs )
-    ^ rc3
+@ __df_to_compress_err DeflateErr e → CompressErr {
+    ^ ?? e {
+        DeflateBadBlock → # CompressErr CompressData
+        DeflateBadCode → # CompressErr CompressData
+        DeflateBadLength → # CompressErr CompressData
+        DeflateBadDist → # CompressErr CompressData
+        DeflateTruncated → # CompressErr CompressData
+        DeflateOther → # CompressErr CompressOther
+    }
 }
 
-@ __gzip_decompress_pure * u dst * i dst_len * u src i src_len → i32 {
-    : i zs_size ( nurl_native_sizeof `z_stream` )
-    ? <= zs_size 0 { ^ # i32 -98 } {}
-    : *u zs # *u ( nurl_zalloc zs_size )
-    ? == 0 # i zs { ^ # i32 -4 } {}
-    ( nurl_z_setup zs src src_len dst ( nurl_peek # s dst_len 0 ) )
-    // windowBits 15 + 32 → auto-detect gzip OR zlib.
-    : i32 rc1 ( inflateInit2_ zs # i32 47 ( zlibVersion ) # i32 zs_size )
-    ? != rc1 # i32 0 { ( nurl_free # s zs ) ^ rc1 } {}
-    : i32 rc2 ( inflate zs # i32 4 )
-    ? != rc2 # i32 1 {
-        : i32 _ ( inflateEnd zs )
-        ( nurl_free # s zs )
-        ^ ? == rc2 # i32 0 # i32 -5 rc2
-    } {}
-    ( nurl_poke # s dst_len 0 ( nurl_z_total_out zs ) )
-    : i32 rc3 ( inflateEnd zs )
-    ( nurl_free # s zs )
-    ^ rc3
+@ __df_be32 ( Vec u ) v i x → v {
+    ( vec_push [u] v # u & >> x 24 255 )
+    ( vec_push [u] v # u & >> x 16 255 )
+    ( vec_push [u] v # u & >> x 8 255 )
+    ( vec_push [u] v # u & x 255 )
+}
+
+@ __df_le32 ( Vec u ) v i x → v {
+    ( vec_push [u] v # u & x 255 )
+    ( vec_push [u] v # u & >> x 8 255 )
+    ( vec_push [u] v # u & >> x 16 255 )
+    ( vec_push [u] v # u & >> x 24 255 )
 }
 
 // ── zstd FFI ───────────────────────────────────────────────────────
@@ -197,26 +126,21 @@ $ `stdlib/core/cell.nu`  // nurl_native_sizeof for z_stream alloc
     ^ ( zlib_compress_at src 6 )
 }
 
+// zlib stream (RFC 1950): 2-byte header (0x78 0x9C) + raw DEFLATE +
+// 4-byte big-endian Adler-32. `level` is accepted for API compatibility;
+// the pure encoder has a single mode.
 @ zlib_compress_at ( Vec u ) src i level → !( Vec u ) CompressErr {
     : i n ( vec_len [u] src )
     ? <= n 0 {
         ^ @ !( Vec u ) CompressErr { T ( vec_new [u] ) }
     } {}
-    : i bound ( compressBound n )
-    : ( Vec u ) out ( vec_with_cap [u] bound )
-    ( vec_reserve [u] out bound )
-    : *u dst ( vec_data [u] out )
-    : *u srcp ( vec_data [u] src )
-    : s dst_len_p ( nurl_alloc 8 )
-    ( nurl_poke dst_len_p 0 bound )
-    : i ri ( compress2 dst # *i dst_len_p srcp n level )
-    : i actual_len ( nurl_peek dst_len_p 0 )
-    ( nurl_free dst_len_p )
-    ? != ri 0 {
-        ( vec_free [u] out )
-        ^ @ !( Vec u ) CompressErr { F ( __zlib_map_err ri ) }
-    } {}
-    : b _r ( vec_set_len [u] out actual_len )
+    : ( Vec u ) body ( deflate src )
+    : ( Vec u ) out ( vec_with_cap [u] + ( vec_len [u] body ) 6 )
+    ( vec_push [u] out # u 120 )  // CMF 0x78
+    ( vec_push [u] out # u 156 )  // FLG 0x9C
+    ( vec_extend [u] out body )
+    ( __df_be32 out ( adler32 src ) )
+    ( vec_free [u] body )
     ^ @ !( Vec u ) CompressErr { T out }
 }
 
@@ -225,56 +149,17 @@ $ `stdlib/core/cell.nu`  // nurl_native_sizeof for z_stream alloc
     ? <= n 0 {
         ^ @ !( Vec u ) CompressErr { T ( vec_new [u] ) }
     } {}
-    // Decompressed size is not embedded in zlib stream format — guess
-    // 4x input as a starting point, double on Z_BUF_ERROR (-5).
-    : ~ i guess * n 4
-    ? < guess 4096 { = guess 4096 } {}
-    : ~ b done F
-    : ~ b ok F
-    : ( Vec u ) out ( vec_with_cap [u] guess )
-    : ~ i actual 0
-    : ~ CompressErr last CompressOther
-    ~ ! done {
-        ( vec_reserve [u] out guess )
-        : *u dst ( vec_data [u] out )
-        : *u srcp ( vec_data [u] src )
-        : s dst_len_p ( nurl_alloc 8 )
-        ( nurl_poke dst_len_p 0 guess )
-        : i ri ( uncompress dst # *i dst_len_p srcp n )
-        : i actual_len ( nurl_peek dst_len_p 0 )
-        ( nurl_free dst_len_p )
-        ? == ri 0 {
-            = actual actual_len
-            = ok T
-            = done T
-        } {
-            ? == ri -5 {
-                // Z_BUF_ERROR — dst was too small; grow + retry.
-                = guess * guess 2
-                ? > guess 1073741824 {
-                    = last CompressBufTooSmall
-                    = done T
-                } {}
-            } {
-                = last ( __zlib_map_err ri )
-                = done T
-            }
-        }
+    ? < n 6 { ^ @ !( Vec u ) CompressErr { F CompressData } } {}
+    // Strip the 2-byte header and 4-byte Adler-32 trailer.
+    : ( Vec u ) raw ( vec_new [u] )
+    : *u sp ( vec_data [u] src )
+    ( bytes_extend_raw raw # s + # i sp 2 - n 6 )
+    : !( Vec u ) DeflateErr r ( inflate raw )
+    ( vec_free [u] raw )
+    ?? r {
+        F e → ^ @ !( Vec u ) CompressErr { F ( __df_to_compress_err e ) }
+        T out → ^ @ !( Vec u ) CompressErr { T out }
     }
-    ? ok {
-        : b _r ( vec_set_len [u] out actual )
-        ^ @ !( Vec u ) CompressErr { T out }
-    } {
-        ( vec_free [u] out )
-        ^ @ !( Vec u ) CompressErr { F last }
-    }
-}
-
-@ __zlib_map_err i ri → CompressErr {
-    // Z_DATA_ERROR = -3, Z_MEM_ERROR = -4
-    ? == ri -3 { ^ @ CompressErr { CompressData } } {}
-    ? == ri -4 { ^ @ CompressErr { CompressMemory } } {}
-    ^ @ CompressErr { CompressOther }
 }
 
 // ── gzip public API ───────────────────────────────────────────────
@@ -283,29 +168,27 @@ $ `stdlib/core/cell.nu`  // nurl_native_sizeof for z_stream alloc
     ^ ( gzip_compress_at src 6 )
 }
 
+// gzip stream (RFC 1952): 10-byte header + raw DEFLATE + CRC-32 (LE) +
+// ISIZE (LE, length mod 2^32). `level` accepted for API compatibility.
 @ gzip_compress_at ( Vec u ) src i level → !( Vec u ) CompressErr {
     : i n ( vec_len [u] src )
     ? <= n 0 {
         ^ @ !( Vec u ) CompressErr { T ( vec_new [u] ) }
     } {}
-    // compressBound covers zlib-stream worst case; gzip adds 18 bytes
-    // of framing (10-byte header + 8-byte trailer) vs zlib's 6 bytes
-    // (2-byte header + 4-byte Adler-32), so reserve +64 for slack.
-    : i bound + ( compressBound n ) 64
-    : ( Vec u ) out ( vec_with_cap [u] bound )
-    ( vec_reserve [u] out bound )
-    : *u dst ( vec_data [u] out )
-    : *u srcp ( vec_data [u] src )
-    : s dst_len_p ( nurl_alloc 8 )
-    ( nurl_poke dst_len_p 0 bound )
-    : i ri # i ( __gzip_compress_pure dst # *i dst_len_p srcp n # i32 level )
-    : i actual_len ( nurl_peek dst_len_p 0 )
-    ( nurl_free dst_len_p )
-    ? != ri 0 {
-        ( vec_free [u] out )
-        ^ @ !( Vec u ) CompressErr { F ( __zlib_map_err ri ) }
-    } {}
-    : b _r ( vec_set_len [u] out actual_len )
+    : ( Vec u ) body ( deflate src )
+    : ( Vec u ) out ( vec_with_cap [u] + ( vec_len [u] body ) 18 )
+    ( vec_push [u] out # u 31 )  // ID1 0x1f
+    ( vec_push [u] out # u 139 )  // ID2 0x8b
+    ( vec_push [u] out # u 8 )  // CM = deflate
+    ( vec_push [u] out # u 0 )  // FLG
+    ( vec_push [u] out # u 0 ) ( vec_push [u] out # u 0 )
+    ( vec_push [u] out # u 0 ) ( vec_push [u] out # u 0 )  // MTIME = 0
+    ( vec_push [u] out # u 0 )  // XFL
+    ( vec_push [u] out # u 255 )  // OS = unknown
+    ( vec_extend [u] out body )
+    ( __df_le32 out ( crc32 src ) )
+    ( __df_le32 out & n 4294967295 )
+    ( vec_free [u] body )
     ^ @ !( Vec u ) CompressErr { T out }
 }
 
@@ -314,63 +197,36 @@ $ `stdlib/core/cell.nu`  // nurl_native_sizeof for z_stream alloc
     ? <= n 0 {
         ^ @ !( Vec u ) CompressErr { T ( vec_new [u] ) }
     } {}
-    // Gzip's ISIZE trailer is the mod-2^32 decompressed length in
-    // little-endian. For inputs under 4 GB this is exact, so we can
-    // pre-size the output and skip the grow-and-retry loop in the
-    // common case. For oversized payloads ISIZE wraps and the grow
-    // loop below kicks in via Z_BUF_ERROR (-5).
-    : ~ i isize 0
-    ? >= n 18 {
-        : *u sp ( vec_data [u] src )
-        : i b0 # i . sp - n 4
-        : i b1 # i . sp - n 3
-        : i b2 # i . sp - n 2
-        : i b3 # i . sp - n 1
-        : i hi + << b3 24 << b2 16
-        : i lo + << b1 8 b0
-        = isize + hi lo
+    ? < n 2 { ^ @ !( Vec u ) CompressErr { F CompressData } } {}
+    : *u sp ( vec_data [u] src )
+    // Accept a zlib stream too (matches zlib's inflateInit2(15+32) auto-
+    // detect): non-gzip-magic input is routed to zlib_decompress.
+    ? | != # i . sp 0 31 != # i . sp 1 139 {
+        ^ ( zlib_decompress src )
     } {}
-    : ~ i guess isize
-    ? <= guess 0 { = guess * n 4 } {}
-    ? < guess 4096 { = guess 4096 } {}
-    : ~ b done F
-    : ~ b ok F
-    : ( Vec u ) out ( vec_with_cap [u] guess )
-    : ~ i actual 0
-    : ~ CompressErr last CompressOther
-    ~ ! done {
-        ( vec_reserve [u] out guess )
-        : *u dst ( vec_data [u] out )
-        : *u srcp ( vec_data [u] src )
-        : s dst_len_p ( nurl_alloc 8 )
-        ( nurl_poke dst_len_p 0 guess )
-        : i ri # i ( __gzip_decompress_pure dst # *i dst_len_p srcp n )
-        : i actual_len ( nurl_peek dst_len_p 0 )
-        ( nurl_free dst_len_p )
-        ? == ri 0 {
-            = actual actual_len
-            = ok T
-            = done T
-        } {
-            ? == ri -5 {
-                // Z_BUF_ERROR — dst too small; grow + retry.
-                = guess * guess 2
-                ? > guess 1073741824 {
-                    = last CompressBufTooSmall
-                    = done T
-                } {}
-            } {
-                = last ( __zlib_map_err ri )
-                = done T
-            }
-        }
-    }
-    ? ok {
-        : b _r ( vec_set_len [u] out actual )
-        ^ @ !( Vec u ) CompressErr { T out }
-    } {
-        ( vec_free [u] out )
-        ^ @ !( Vec u ) CompressErr { F last }
+    ? < n 18 { ^ @ !( Vec u ) CompressErr { F CompressData } } {}
+    : i flg # i . sp 3
+    : ~ i p 10
+    // FEXTRA (4): 2-byte XLEN + XLEN bytes.
+    ? != & flg 4 0 {
+        ? > + p 2 n { ^ @ !( Vec u ) CompressErr { F CompressData } } {}
+        : i xlen + # i . sp p << # i . sp + p 1 8
+        = p + + p 2 xlen
+    } {}
+    // FNAME (8): NUL-terminated.
+    ? != & flg 8 0 { ~ & < p n != # i . sp p 0 { = p + p 1 } = p + p 1 } {}
+    // FCOMMENT (16): NUL-terminated.
+    ? != & flg 16 0 { ~ & < p n != # i . sp p 0 { = p + p 1 } = p + p 1 } {}
+    // FHCRC (2): 2 bytes.
+    ? != & flg 2 0 { = p + p 2 } {}
+    ? >= p - n 8 { ^ @ !( Vec u ) CompressErr { F CompressData } } {}
+    : ( Vec u ) raw ( vec_new [u] )
+    ( bytes_extend_raw raw # s + # i sp p - - n 8 p )
+    : !( Vec u ) DeflateErr r ( inflate raw )
+    ( vec_free [u] raw )
+    ?? r {
+        F e → ^ @ !( Vec u ) CompressErr { F ( __df_to_compress_err e ) }
+        T out → ^ @ !( Vec u ) CompressErr { T out }
     }
 }
 
@@ -460,203 +316,75 @@ $ `stdlib/core/cell.nu`  // nurl_native_sizeof for z_stream alloc
 // auto-Drop for the raw `*u` handle, so callers MUST pair every
 // successful `*_new` with a `*_free`.
 
-& `z` @ deflateReset *u zs → i32
+// A persistent raw-DEFLATE compressor. `history` is the uncompressed
+// window carried across messages so emitted matches can back-reference
+// prior messages (context takeover). raw_deflate_reset drops it.
+: ZDeflate { ( Vec u ) history }
 
-& `z` @ inflateReset *u zs → i32
+// A persistent raw-INFLATE decompressor. `history` is the LZ77 window
+// carried across messages so context-takeover streams (a peer that
+// back-references prior messages) decode correctly.
+: ZInflate { ( Vec u ) history }
 
-& `c` @ nurl_z_set_in *u zs *u in i avail_in → v
-
-& `c` @ nurl_z_set_out *u zs *u out i avail_out → v
-
-& `c` @ nurl_z_avail_in *u zs → i
-
-& `c` @ nurl_z_avail_out *u zs → i
-
-: ZDeflate {
-    * u zs  // heap z_stream; 0 once freed
-}
-
-: ZInflate {
-    * u zs
-}
-
-@ __raw_clamp_wbits i window_bits → i {
-    ? < window_bits 9 { ^ 9 } {}
-    ? > window_bits 15 { ^ 15 } {}
-    ^ window_bits
-}
-
-// Initialise a persistent raw-DEFLATE compressor. `level` is 0..9
-// (6 is a good default). Z_DEFLATED = 8, memLevel = 8, strategy = 0.
 @ raw_deflate_new i window_bits i level → !ZDeflate CompressErr {
-    : i wb ( __raw_clamp_wbits window_bits )
-    : i zs_size ( nurl_native_sizeof `z_stream` )
-    ? <= zs_size 0 { ^ @ !ZDeflate CompressErr { F CompressOther } } {}
-    : *u zs # *u ( nurl_zalloc zs_size )
-    ? == 0 # i zs { ^ @ !ZDeflate CompressErr { F CompressMemory } } {}
-    : i nwb - 0 wb
-    : i32 rc ( deflateInit2_ zs # i32 level # i32 8 # i32 nwb # i32 8 # i32 0
-    ( zlibVersion ) # i32 zs_size )
-    ? != rc # i32 0 {
-        ( nurl_free # s zs )
-        ^ @ !ZDeflate CompressErr { F ( __zlib_map_err # i rc ) }
-    } {}
-    ^ @ !ZDeflate CompressErr { T @ ZDeflate { zs } }
+    ^ @ !ZDeflate CompressErr { T @ ZDeflate { ( vec_new [u] ) } }
 }
 
-// Compress one message: feed `input` through the live stream and flush
-// with Z_SYNC_FLUSH, returning every byte produced this round (which
-// always ends with the 4-byte `00 00 FF FF` empty-block marker the
-// sync flush appends — RFC 7692 §7.2.1 strips those before framing).
-// The sliding window is RETAINED for the next call unless raw_deflate_reset
-// is invoked between messages.
+// Compress one message into a non-final fixed block + sync-flush; the
+// output ends with the 00 00 FF FF marker (RFC 7692 §7.2.1 strips it
+// before framing). The sliding window is RETAINED across calls (context
+// takeover) unless raw_deflate_reset is invoked.
 @ raw_deflate_block ZDeflate d ( Vec u ) input → !( Vec u ) CompressErr {
-    : *u zs . d zs
-    ? == 0 # i zs { ^ @ !( Vec u ) CompressErr { F CompressOther } } {}
-    : i n ( vec_len [u] input )
-    : ( Vec u ) out ( vec_new [u] )
-    : *u srcp ( vec_data [u] input )
-    ( nurl_z_set_in zs srcp n )
-    : i chunk 16384
-    : ~ b done F
-    : ~ b ok F
-    : ~ CompressErr last CompressOther
-    ~ ! done {
-        : ( Vec u ) scratch ( vec_with_cap [u] chunk )
-        ( vec_reserve [u] scratch chunk )
-        : *u dp ( vec_data [u] scratch )
-        : i before ( nurl_z_total_out zs )
-        ( nurl_z_set_out zs dp chunk )
-        : i32 rc ( deflate zs # i32 2 )  // Z_SYNC_FLUSH
-        : i after ( nurl_z_total_out zs )
-        : i got - after before
-        ? > got 0 {
-            : b _s ( vec_set_len [u] scratch got )
-            ( vec_extend [u] out scratch )
-        } {}
-        ( vec_free [u] scratch )
-        : i rci # i rc
-        ? == rci 0 {
-            // Z_OK. Free output space remaining ⇒ the flush is complete
-            // (deflate fills avail_out before returning while work remains).
-            ? > ( nurl_z_avail_out zs ) 0 { = ok T = done T } {}
-        } {
-            = last ( __zlib_map_err rci )
-            = done T
-        }
-    }
-    ? ok {
-        ^ @ !( Vec u ) CompressErr { T out }
-    } {
-        ( vec_free [u] out )
-        ^ @ !( Vec u ) CompressErr { F last }
-    }
+    : ( Vec u ) out ( deflate_block_dict . d history input )
+    // Extend the window with this message, trimmed to the last 32 KiB.
+    ( bytes_extend_bytes . d history input )
+    : i hl ( vec_len [u] . d history )
+    ? > hl 32768 {
+        : *u hp ( vec_data [u] . d history )
+        ( nurl_memmove hp # *u + # i hp - hl 32768 32768 )
+        : b _t ( vec_set_len [u] . d history 32768 )
+    } {}
+    ^ @ !( Vec u ) CompressErr { T out }
 }
 
 @ raw_deflate_reset ZDeflate d → v {
-    ? != 0 # i . d zs { : i32 _ ( deflateReset . d zs ) } {}
+    : b _r ( vec_set_len [u] . d history 0 )
 }
 
 @ raw_deflate_free ZDeflate d → v {
-    ? != 0 # i . d zs {
-        : i32 _ ( deflateEnd . d zs )
-        ( nurl_free # s . d zs )
-    } {}
+    ( vec_free [u] . d history )
 }
 
-// Initialise a persistent raw-INFLATE decompressor. Inflating at the
-// maximum window (15) accepts any encoder window ≤ 15, so passing 15 is
-// always interoperable.
 @ raw_inflate_new i window_bits → !ZInflate CompressErr {
-    : i wb ( __raw_clamp_wbits window_bits )
-    : i zs_size ( nurl_native_sizeof `z_stream` )
-    ? <= zs_size 0 { ^ @ !ZInflate CompressErr { F CompressOther } } {}
-    : *u zs # *u ( nurl_zalloc zs_size )
-    ? == 0 # i zs { ^ @ !ZInflate CompressErr { F CompressMemory } } {}
-    : i nwb - 0 wb
-    : i32 rc ( inflateInit2_ zs # i32 nwb ( zlibVersion ) # i32 zs_size )
-    ? != rc # i32 0 {
-        ( nurl_free # s zs )
-        ^ @ !ZInflate CompressErr { F ( __zlib_map_err # i rc ) }
-    } {}
-    ^ @ !ZInflate CompressErr { T @ ZInflate { zs } }
+    ^ @ !ZInflate CompressErr { T @ ZInflate { ( vec_new [u] ) } }
 }
 
-// Decompress one message. The caller appends the 4-byte `00 00 FF FF`
-// tail RFC 7692 §7.2.2 mandates before calling, so a complete message
-// inflates to Z_OK with all input consumed. Output size is unknown up
-// front, so this grows a result Vec a chunk at a time. `max_out` caps the
-// decompressed size — exceeding it fails with CompressBufTooSmall (a
-// decompression-bomb guard); pass 0 for no limit.
+// Decompress one message. The caller appends the 4-byte 00 00 FF FF tail
+// (RFC 7692 §7.2.2) before calling. The sliding window is RETAINED across
+// calls unless raw_inflate_reset is invoked. `max_out` (>0) caps the
+// per-message output as a decompression-bomb guard.
 @ raw_inflate_block ZInflate d ( Vec u ) input i max_out → !( Vec u ) CompressErr {
-    : *u zs . d zs
-    ? == 0 # i zs { ^ @ !( Vec u ) CompressErr { F CompressOther } } {}
     : i n ( vec_len [u] input )
     ? <= n 0 { ^ @ !( Vec u ) CompressErr { T ( vec_new [u] ) } } {}
-    : ( Vec u ) out ( vec_new [u] )
-    : *u srcp ( vec_data [u] input )
-    ( nurl_z_set_in zs srcp n )
-    : i chunk 16384
-    : ~ b done F
-    : ~ b ok F
-    : ~ CompressErr last CompressOther
-    ~ ! done {
-        : ( Vec u ) scratch ( vec_with_cap [u] chunk )
-        ( vec_reserve [u] scratch chunk )
-        : *u dp ( vec_data [u] scratch )
-        : i before ( nurl_z_total_out zs )
-        ( nurl_z_set_out zs dp chunk )
-        : i32 rc ( inflate zs # i32 2 )  // Z_SYNC_FLUSH
-        : i after ( nurl_z_total_out zs )
-        : i got - after before
-        ? > got 0 {
-            : b _s ( vec_set_len [u] scratch got )
-            ( vec_extend [u] out scratch )
-        } {}
-        ( vec_free [u] scratch )
-        : i rci # i rc
-        ? & > max_out 0 > ( vec_len [u] out ) max_out {
-            = last CompressBufTooSmall
-            = done T
-        } {
-            ? == rci 1 { = ok T = done T } {  // Z_STREAM_END
-                ? == rci 0 {  // Z_OK
-                    // Output space remaining ⇒ all available input consumed
-                    // and everything flushed (input is a complete message).
-                    ? > ( nurl_z_avail_out zs ) 0 { = ok T = done T } {}
-                } {
-                    ? == rci -5 {  // Z_BUF_ERROR
-                        // No progress: for a complete message this means the
-                        // input is fully consumed (clean end), else truncated.
-                        ? == ( nurl_z_avail_in zs ) 0 {
-                            = ok T = done T
-                        } {
-                            = last CompressData
-                            = done T
-                        }
-                    } {
-                        = last ( __zlib_map_err rci )
-                        = done T
-                    }
-                }
+    : !( Vec u ) DeflateErr r ( inflate_stream . d history input max_out )
+    ?? r {
+        F e → {
+            // inflate_stream signals the max_out (decompression-bomb) cap
+            // with DeflateBadLength → surface it as CompressBufTooSmall.
+            : CompressErr ce ?? e {
+                DeflateBadLength → # CompressErr CompressBufTooSmall
+                _ → ( __df_to_compress_err e )
             }
+            ^ @ !( Vec u ) CompressErr { F ce }
         }
-    }
-    ? ok {
-        ^ @ !( Vec u ) CompressErr { T out }
-    } {
-        ( vec_free [u] out )
-        ^ @ !( Vec u ) CompressErr { F last }
+        T out → ^ @ !( Vec u ) CompressErr { T out }
     }
 }
 
 @ raw_inflate_reset ZInflate d → v {
-    ? != 0 # i . d zs { : i32 _ ( inflateReset . d zs ) } {}
+    : b _r ( vec_set_len [u] . d history 0 )
 }
 
 @ raw_inflate_free ZInflate d → v {
-    ? != 0 # i . d zs {
-        : i32 _ ( inflateEnd . d zs )
-        ( nurl_free # s . d zs )
-    } {}
+    ( vec_free [u] . d history )
 }

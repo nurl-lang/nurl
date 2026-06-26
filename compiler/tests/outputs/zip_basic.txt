@@ -2,7 +2,7 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-archive_bytes=356
+archive_bytes=368
 magic_PK=T
 count=3
 entry 0: greeting.txt size=16 extract_ok=T crc_len=16
