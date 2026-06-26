@@ -492,7 +492,7 @@ $ `stdlib/std/async.nu`
         ( nurl_tcp_close raw )
         ^ @ !RelayClient NetErr { F ( __net_err_of ek ) }
     } {}
-    : TcpConn c @ TcpConn { # s raw }
+    : TcpConn c @ TcpConn { # s raw 0 0 }
     ^ @ !RelayClient NetErr { T @ RelayClient { c } }
 }
 

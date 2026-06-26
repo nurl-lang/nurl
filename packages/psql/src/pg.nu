@@ -152,7 +152,7 @@ $ `deps/tls/src/tls.nu`
         ?? ( tls_read . c tc 16384 ) {
             T v → {
                 ? == ( vec_len [u] v ) 0 { ( vec_free [u] v ) ^ 0 } {}
-                ( __cat . c rxbuf v )
+                ( bytes_extend_bytes . c rxbuf v )
                 ( vec_free [u] v )
                 ^ 1
             }
@@ -163,7 +163,7 @@ $ `deps/tls/src/tls.nu`
         : i got ( nurl_tcp_read . c raw # s ( vec_data [u] tmp ) 16384 )
         ? <= got 0 { ( vec_free [u] tmp ) ^ 0 } {}
         : b _ok ( vec_set_len [u] tmp got )
-        ( __cat . c rxbuf tmp )
+        ( bytes_extend_bytes . c rxbuf tmp )
         ( vec_free [u] tmp )
         ^ 1
     }
@@ -196,7 +196,7 @@ $ `deps/tls/src/tls.nu`
     : ( Vec u ) msg ( vec_with_cap [u] + ( vec_len [u] payload ) 5 )
     ( vec_push [u] msg # u mtype )
     ( __push32 msg + 4 ( vec_len [u] payload ) )
-    ( __cat msg payload )
+    ( bytes_extend_bytes msg payload )
     : i ok ( __pg_write c msg )
     ( vec_free [u] msg )
     ^ ok
@@ -241,7 +241,7 @@ $ `deps/tls/src/tls.nu`
 
     : ( Vec u ) outer ( vec_new [u] )
     ( __push_strv outer inner_hex )
-    ( __cat outer salt )
+    ( bytes_extend_bytes outer salt )
     : ( Vec u ) outer_d ( md5_pure outer )
     : String outer_hex ( bytes_to_hex outer_d )
 
@@ -389,7 +389,7 @@ $ `deps/tls/src/tls.nu`
     : ( Vec u ) req ( vec_new [u] )
     ( __push32 req 8 )
     ( __push32 req 80877103 )
-    : TcpConn t @ TcpConn { # s raw }
+    : TcpConn t @ TcpConn { # s raw 0 0 }
     ?? ( tcp_write_all t req ) { T _ → {} F _ → { ( vec_free [u] req ) ^ -1 } }
     ( vec_free [u] req )
     : ( Vec u ) one ( vec_with_cap [u] 1 )
@@ -408,7 +408,7 @@ $ `deps/tls/src/tls.nu`
     : *PgConn c # *PgConn ( nurl_alloc Z PgConn )
     = . c tls 0
     = . c raw rawfd
-    = . c tcp @ TcpConn { # s rawfd }
+    = . c tcp @ TcpConn { # s rawfd 0 0 }
     = . c tc # *TlsConn 0
     = . c rxbuf ( vec_new [u] )
     = . c lasterr ( string_with_cap 0 )
@@ -429,9 +429,9 @@ $ `deps/tls/src/tls.nu`
                 F _ → {
                     ( nurl_tcp_close rawfd )
                     ( vec_free [u] . c rxbuf ) ( string_free . c lasterr )
-                ( string_free . c srv_ver ) ( string_free . c db_name )
-                ( string_free . c user_name ) ( string_free . c host_name )
-                ( nurl_free # s c )
+                    ( string_free . c srv_ver ) ( string_free . c db_name )
+                    ( string_free . c user_name ) ( string_free . c host_name )
+                    ( nurl_free # s c )
                     ^ @ !*PgConn PgErr { F # PgErr PgTls }
                 }
             }
@@ -463,7 +463,7 @@ $ `deps/tls/src/tls.nu`
 
     : ( Vec u ) frame ( vec_new [u] )
     ( __push32 frame + 4 ( vec_len [u] startup ) )
-    ( __cat frame startup )
+    ( bytes_extend_bytes frame startup )
     : i wok ( __pg_write c frame )
     ( vec_free [u] startup ) ( vec_free [u] frame )
     ? == wok 0 { ( pg_close c ) ^ @ !*PgConn PgErr { F # PgErr PgConnFail } } {}
