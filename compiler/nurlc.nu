@@ -3147,6 +3147,20 @@
 // function per slot, which LTO didn't fully inline; the wall-clock
 // hit was ~1 s per stage2 compile of nurlc.nu itself.
 
+// FNV-1a (32-bit) over the key, reduced into [0, nb). Used by the hashed
+// symbol table below so lookup is O(1) amortised instead of O(table).
+@ __sym_hash s name i nb → i {
+    : i n ( nurl_str_len name )
+    : ~ i hsh 2166136261
+    : ~ i k 0
+    ~ < k n {
+        = hsh & ^^ hsh ( nurl_str_get name k ) 4294967295
+        = hsh & * hsh 16777619 4294967295
+        = k + k 1
+    }
+    ^ % hsh nb
+}
+
 @ __sym_grow i h → v {
     : s t # s h
     : i cap ( nurl_peek t 2 )
@@ -3155,28 +3169,40 @@
     : s names_old # s ( nurl_peek t 3 )
     : s types_old # s ( nurl_peek t 4 )
     : s depths_old # s ( nurl_peek t 5 )
+    : s prev_old # s ( nurl_peek t 8 )
     : s names_new # s ( malloc * newcap 8 )
     : s types_new # s ( malloc * newcap 8 )
     : s depths_new # s ( malloc * newcap 8 )
+    : s prev_new # s ( malloc * newcap 8 )
     : i nbytes * count 8
     ( memcpy names_new names_old nbytes )
     ( memcpy types_new types_old nbytes )
     ( memcpy depths_new depths_old nbytes )
+    ( memcpy prev_new prev_old nbytes )
     ( free names_old )
     ( free types_old )
     ( free depths_old )
+    ( free prev_old )
     ( nurl_poke t 2 newcap )
     ( nurl_poke t 3 # i names_new )
     ( nurl_poke t 4 # i types_new )
     ( nurl_poke t 5 # i depths_new )
+    ( nurl_poke t 8 # i prev_new )
 }
 
 @ nurl_sym_new → i {
-    : s t # s ( nurl_zalloc 48 )
+    // 9 slots: 0 count, 1 depth, 2 cap, 3 names, 4 types, 5 depths,
+    // 6 nbuckets, 7 buckets (head index+1 per bucket; 0 = empty),
+    // 8 prev (per-entry link to the previous entry in the same bucket).
+    : i nb 4096
+    : s t # s ( nurl_zalloc 72 )
     ( nurl_poke t 2 64 )
     ( nurl_poke t 3 # i # s ( malloc * 64 8 ) )
     ( nurl_poke t 4 # i # s ( malloc * 64 8 ) )
     ( nurl_poke t 5 # i # s ( malloc * 64 8 ) )
+    ( nurl_poke t 6 nb )
+    ( nurl_poke t 7 # i # s ( nurl_zalloc * nb 8 ) )
+    ( nurl_poke t 8 # i # s ( malloc * 64 8 ) )
     ^ # i t
 }
 
@@ -3191,26 +3217,38 @@
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
     : *i depths # *i # s ( nurl_peek t 5 )
+    : *i buckets # *i # s ( nurl_peek t 7 )
+    : *i prev # *i # s ( nurl_peek t 8 )
+    : i bh ( __sym_hash name ( nurl_peek t 6 ) )
     = . names count # s ( strdup name )
     = . types count # s ( strdup type )
     = . depths count ( nurl_peek t 1 )
+    // Push onto the front of the bucket chain — newest-first, so a
+    // later definition of the same name shadows the earlier one, exactly
+    // like the old backward linear scan.
+    = . prev count . buckets bh
+    = . buckets bh + count 1
     ( nurl_poke t 0 + count 1 )
 }
 
 @ nurl_sym_get i h s name → s {
     : s t # s h
     : i count ( nurl_peek t 0 )
-    // Inner loop body is now `strcmp` + load + branch — one C-call,
-    // no `nurl_peek` indirection. Matches the original C version's
-    // `entries[i].name` shape byte-for-byte.
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
-    : ~ i k - count 1
-    ~ >= k 0 {
-        ? == 0 # i ( strcmp name . names k )
-        { ^ # s ( strdup . types k ) }
-        {}
-        = k - k 1
+    : *i buckets # *i # s ( nurl_peek t 7 )
+    : *i prev # *i # s ( nurl_peek t 8 )
+    : i bh ( __sym_hash name ( nurl_peek t 6 ) )
+    // Walk this name's bucket chain newest-first. Entries are stored as
+    // index+1 (0 = chain end); pop unlinks, so every chained index is < count.
+    : ~ i cur . buckets bh
+    ~ != cur 0 {
+        : i idx - cur 1
+        ? >= idx count { = cur 0 } {
+            ? == 0 # i ( strcmp name . names idx )
+            { ^ # s ( strdup . types idx ) }
+            { = cur . prev idx }
+        }
     }
     ^ # s ( strdup `` )
 }
@@ -3227,8 +3265,15 @@
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
     : *i depths # *i # s ( nurl_peek t 5 )
+    : *i buckets # *i # s ( nurl_peek t 7 )
+    : *i prev # *i # s ( nurl_peek t 8 )
+    : i nb ( nurl_peek t 6 )
     ~ & > count 0 == . depths - count 1 depth {
         : i idx - count 1
+        // The top entry is the newest def for its name, hence the head of
+        // its bucket chain — unlink it so the chain stays consistent.
+        : i bh ( __sym_hash . names idx nb )
+        = . buckets bh . prev idx
         ( free . names idx )
         ( free . types idx )
         = count - count 1
