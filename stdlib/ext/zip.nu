@@ -2,9 +2,9 @@
 //
 // THE interchange container (xlsx / docx / epub / jar are all zip).
 // In-memory archives over ( Vec u ) — pair with read_file_bytes /
-// write_file_bytes for files. Compression rides the same `& `z``
-// zlib FFI ext/compress.nu declares, with raw windows (windowBits
-// −15: zip stores bare deflate streams, no zlib/gzip wrapper).
+// write_file_bytes for files. Compression uses the pure-NURL DEFLATE
+// codec (stdlib/std/deflate.nu via ext/compress.nu) — zip stores bare
+// raw deflate streams, so `deflate`/`inflate` are used directly.
 //
 // Writer (builder):
 //   ( zip_new )                            → Zip
@@ -33,9 +33,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
-$ `stdlib/ext/compress.nu`  // & `z` deflate/inflate FFI + zlibVersion
-
-& `z` @ crc32 i crc *u buf i len → i
+$ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
 
 : | ZipErr {
     ZipBadArchive  // no/garbled end-of-central-directory or headers
@@ -83,45 +81,29 @@ $ `stdlib/ext/compress.nu`  // & `z` deflate/inflate FFI + zlibVersion
 
 // ── raw deflate / inflate (windowBits −15) ──────────────────────────
 
-// Compress src → fresh Vec. None when deflate failed OR produced no
-// gain (caller stores instead).
+// Compress src → fresh Vec of raw DEFLATE. None when it produced no gain
+// (caller stores instead).
 @ __zip_deflate ( Vec u ) src → ?( Vec u ) {
     : i srclen ( vec_len [u] src )
-    : i zs_size ( nurl_native_sizeof `z_stream` )
-    ? <= zs_size 0 { ^ @ ?( Vec u ) { F } } {}
-    : i bound ( compressBound srclen )
-    : ( Vec u ) out ( vec_with_cap [u] + bound 1 )
-    : *u zs # *u ( nurl_zalloc zs_size )
-    ( nurl_z_setup zs ( vec_data [u] src ) srclen ( vec_data [u] out ) + bound 1 )
-    // level 6, method 8 (deflate), windowBits −15 (raw), memLevel 8
-    : i32 rc1 ( deflateInit2_ zs # i32 6 # i32 8 # i32 -15 # i32 8 # i32 0 ( zlibVersion ) # i32 zs_size )
-    ? != rc1 # i32 0 { ( nurl_free # s zs ) ( vec_free [u] out ) ^ @ ?( Vec u ) { F } } {}
-    : i32 rc2 ( deflate zs # i32 4 )  // Z_FINISH
-    : i produced ( nurl_z_total_out zs )
-    : i32 _e ( deflateEnd zs )
-    ( nurl_free # s zs )
-    ? != rc2 # i32 1 { ( vec_free [u] out ) ^ @ ?( Vec u ) { F } } {}  // != Z_STREAM_END
-    ? >= produced srclen { ( vec_free [u] out ) ^ @ ?( Vec u ) { F } } {}  // no gain → store
-    : b _ok ( vec_set_len [u] out produced )
+    ? <= srclen 0 { ^ @ ?( Vec u ) { F } } {}
+    : ( Vec u ) out ( deflate src )
+    ? >= ( vec_len [u] out ) srclen { ( vec_free [u] out ) ^ @ ?( Vec u ) { F } } {}  // no gain → store
     ^ @ ?( Vec u ) { T out }
 }
 
 // Inflate exactly `usize` bytes out of src[off .. off+csize).
 @ __zip_inflate * u srcp i off i csize i usize → ?( Vec u ) {
-    : i zs_size ( nurl_native_sizeof `z_stream` )
-    ? <= zs_size 0 { ^ @ ?( Vec u ) { F } } {}
-    : ( Vec u ) out ( vec_with_cap [u] ? > usize 0 usize 1 )
-    : *u zs # *u ( nurl_zalloc zs_size )
-    ( nurl_z_setup zs # *u + # i srcp off csize ( vec_data [u] out ) ? > usize 0 usize 1 )
-    : i32 rc1 ( inflateInit2_ zs # i32 -15 ( zlibVersion ) # i32 zs_size )
-    ? != rc1 # i32 0 { ( nurl_free # s zs ) ( vec_free [u] out ) ^ @ ?( Vec u ) { F } } {}
-    : i32 rc2 ( inflate zs # i32 4 )
-    : i produced ( nurl_z_total_out zs )
-    : i32 _e ( inflateEnd zs )
-    ( nurl_free # s zs )
-    ? | != rc2 # i32 1 != produced usize { ( vec_free [u] out ) ^ @ ?( Vec u ) { F } } {}
-    : b _ok ( vec_set_len [u] out usize )
-    ^ @ ?( Vec u ) { T out }
+    : ( Vec u ) raw ( vec_new [u] )
+    ( bytes_extend_raw raw # s + # i srcp off csize )
+    : !( Vec u ) DeflateErr r ( inflate raw )
+    ( vec_free [u] raw )
+    ?? r {
+        F _ → ^ @ ?( Vec u ) { F }
+        T out → {
+            ? != ( vec_len [u] out ) usize { ( vec_free [u] out ) ^ @ ?( Vec u ) { F } } {}
+            ^ @ ?( Vec u ) { T out }
+        }
+    }
 }
 
 // ── writer ──────────────────────────────────────────────────────────
@@ -143,7 +125,7 @@ $ `stdlib/ext/compress.nu`  // & `z` deflate/inflate FFI + zlibVersion
     : i namelen ( nurl_str_len name )
     : i usize ( vec_len [u] data )
     ? | > usize 4294967295 > namelen 65535 { ^ @ !v ZipErr { F ZipTooLarge } } {}
-    : i crc ( crc32 0 ( vec_data [u] data ) usize )
+    : i crc ( crc32 data )
     : i offset ( vec_len [u] . z body )
     ? > offset 4294967295 { ^ @ !v ZipErr { F ZipTooLarge } } {}
     : ~ i method 0
@@ -351,7 +333,7 @@ $ `stdlib/ext/compress.nu`  // & `z` deflate/inflate FFI + zlibVersion
     }
     ?? got {
         T out → {
-            : i have_crc ( crc32 0 ( vec_data [u] out ) ( vec_len [u] out ) )
+            : i have_crc ( crc32 out )
             ? != have_crc want_crc {
                 ( vec_free [u] out )
                 ^ @ !( Vec u ) ZipErr { F ZipCrc }

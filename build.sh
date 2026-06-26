@@ -190,27 +190,13 @@ fi
 # stale sentinel from an earlier build.
 rm -f stdlib/runtime.pq
 
-# ── zlib detection ──────────────────────────────────────────
-# `stdlib/ext/compress.nu`'s `zlib_*` helpers (RFC 1950 stream format)
-# are pure-NURL `& `z` @ compress2 / uncompress` calls. The `gzip_*`
-# helpers (RFC 1952 file format) need libz's streaming API whose
-# `z_stream` layout is platform-specific, so they go through the thin
-# `nurl_gzip_compress` / `nurl_gzip_decompress` bridge in runtime.c §22
-# — that path is enabled by `-DNURL_HAVE_ZLIB`. The sentinel below
-# also satisfies the compile-time FFI-lib check so a NURL program that
-# imports compress.nu without zlib1g-dev installed fails with a clear
-# diagnostic rather than a cryptic linker error.
+# ── DEFLATE / gzip / zlib ───────────────────────────────────
+# stdlib/ext/compress.nu (zlib_*, gzip_*, raw_deflate/inflate_*) and
+# zip/tar are pure NURL over stdlib/std/deflate.nu now — no libz, no link
+# flag.
+rm -f stdlib/runtime.z
 ZLIB_CFLAGS=""
 ZLIB_LIBS=""
-if pkg-config --exists zlib 2>/dev/null; then
-    ZLIB_CFLAGS="-DNURL_HAVE_ZLIB $(pkg-config --cflags zlib)"
-    ZLIB_LIBS="$(pkg-config --libs zlib)"
-    echo 1 > stdlib/runtime.z
-    log "[info] zlib detected — Gzip FFI enabled"
-else
-    rm -f stdlib/runtime.z
-    log "[info] zlib not found — stdlib/ext/compress.nu's gzip_* will return CompressOther"
-fi
 
 # ── libzstd detection ──────────────────────────────────────
 ZSTD_LIBS=""
