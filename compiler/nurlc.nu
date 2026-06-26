@@ -4368,6 +4368,23 @@
     & ( seq at `%String` ) ( seq pt `i8*` )
 }
 
+// A NAMED aggregate LLVM type: `%Name` (a struct / enum handle), NOT a
+// pointer (`…*`) and NOT a bare scalar (i64/double/i1/i8 carry no `%`).
+@ __is_named_agg s t → b {
+    ? == 0 ( nurl_str_len t ) { ^ F } {}
+    ? != ( nurl_str_get t 0 ) 37 { ^ F } {}  // leading '%'
+    ^ != ( nurl_str_get t - ( nurl_str_len t ) 1 ) 42  // not a pointer
+}
+
+// Two DIFFERENT named aggregates passed by value — e.g. a `B` value where
+// an `A` is declared. clang silently coerces the call (reads the foreign
+// struct's leading fields as the declared type), a silent miscompile.
+// Both sides must be `%`-named aggregates so scalars/pointers and the
+// enum↔i64 / numeric-width coercions are never touched.
+@ __arg_named_struct_mismatch s at s pt → b {
+    ^ & & ( __is_named_agg at ) ( __is_named_agg pt ) ! ( seq at pt )
+}
+
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
@@ -4798,7 +4815,7 @@
             : b __at_ptr & > ( nurl_str_len at ) 0
             == ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42
             : b __ps_ptr & > ( nurl_str_len __psrc ) 0 == ( nurl_str_get __psrc 0 ) 42
-            ? & != 0 ( nurl_str_len __psrc ) | | __at_ptr __ps_ptr ( seq at `%String` )
+            ? & != 0 ( nurl_str_len __psrc ) | | | __at_ptr __ps_ptr ( seq at `%String` ) ( __is_named_agg at )
             { : i __plx ( nurl_lex_new __psrc `<param>` )
                 : s __pllvm ( parse_type __plx )
                 ? ( __arg_ptr_depth_mismatch at __pllvm )
@@ -4812,6 +4829,12 @@
                     ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
                     ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
                     `' — String vs raw C-string mismatch: 'String' is a managed string, 's' (i8*) a bare char pointer; convert with 'string_data' (String→s) or 'string_from' (s→String)` ) ) }
+                {}
+                ? ( __arg_named_struct_mismatch at __pllvm )
+                { ( die lex ( nurl_str_cat3
+                    ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                    ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
+                    `' — wrong struct type passed by value (a value of one named type where a different one is declared); the call would silently reinterpret its fields` ) ) }
                 {} }
             {} }
         {}

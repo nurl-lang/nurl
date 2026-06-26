@@ -289,6 +289,15 @@ wild-pointer UB — so the compiler **rejects it at the call site**
 (in either direction). Convert explicitly: `string_data` (`String → s`)
 or `string_from` (`s → String`).
 
+More generally, the call-site argument check rejects three silent-coercion
+classes for calls to non-generic functions: a pointer-vs-value mismatch
+(`*T` where a `T` value is declared, or vice versa), the `String`/`s`
+confusion above, and **passing one named struct value where a different
+named struct is declared** (`%A` vs `%B` by value — clang would otherwise
+coerce the call and reinterpret the foreign struct's leading fields).
+Scalars (including enums, which are `i64`) and pointers are untouched by
+the struct check.
+
 ### 4.2 Pointer types
 
 `*T` is a raw pointer to T. `*void` is rewritten to `i8*` in the IR
