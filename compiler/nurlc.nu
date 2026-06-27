@@ -420,22 +420,37 @@
     }
 }
 
-// compound_field_type: return LLVM type of field idx in a compound aggregate type string.
-// Handles { i1, T } (opt/res) and { T*, i64 } (slice). Falls back to i64 for others.
+// compound_field_type: return LLVM type of field idx in an inline aggregate
+// type string `{ f0, f1, ... }`. Depth-aware: nested `{ }` / `( )` in a field
+// (an option/slice/result payload, a closure type) don't split the field. This
+// indexes opt `{ i1, T }` (0/1), res `{ i1, T, E }` (0/1/2), and slice
+// `{ T*, i64 }` (0/1) uniformly. Falls back to i64 for a non-`{` type.
 @ compound_field_type s agg_ty i idx → s {
     : i len ( nurl_str_len agg_ty )
-    // Opt or res type: starts with "{ i1, "
-    ? & >= len 6 ( seq ( nurl_str_slice agg_ty 0 6 ) `{ i1, ` )
-    { ? == idx 0 ^ `i1` {}
-        ^ ( nurl_str_slice agg_ty 6 - - len 6 2 )
+    ? | < len 4 != ( nurl_str_get agg_ty 0 ) 123 { ^ `i64` } {}
+    : ~ i depth 0
+    : ~ i cur 0  // index of the field currently being scanned
+    : ~ i fstart 2  // first field begins just after the leading "{ "
+    : ~ i i 0
+    ~ < i len {
+        : i c ( nurl_str_get agg_ty i )
+        ? | == c 123 == c 40 { = depth + depth 1 } {}
+        ? | == c 125 == c 41
+        { = depth - depth 1
+            // Closing the outer aggregate: the last field ends at " }".
+            ? == depth 0
+            { ? == cur idx { ^ ( nurl_str_slice agg_ty fstart - - i 1 fstart ) } {}
+                = cur + cur 1 }
+            {} }
+        {}
+        // A top-level comma ends field `cur`; the next begins after ", ".
+        ? & == depth 1 == c 44
+        { ? == cur idx { ^ ( nurl_str_slice agg_ty fstart - i fstart ) } {}
+            = cur + cur 1
+            = fstart + i 2 }
+        {}
+        = i + i 1
     }
-    {}
-    // Slice type: ends with ", i64 }"
-    ? & >= len 7 ( seq ( nurl_str_slice agg_ty - len 7 7 ) `, i64 }` )
-    { ? == idx 1 ^ `i64` {}
-        ^ ( nurl_str_slice agg_ty 2 - - len 2 7 )
-    }
-    {}
     `i64`
 }
 
@@ -552,9 +567,9 @@
     ( nurl_str_cat `{ ` ( nurl_str_cat inner `*, i64 }` ) )
 }
 
-// ! T E  →  { i1, i64 }
-// Payload field is always i64: integers stored directly, pointers via ptrtoint,
-// enums via extractvalue of their i64 tag field.
+// ! T E  →  { i1, T, E }
+// Ok payload lives by value in field 1 (type T), Err payload by value in
+// field 2 (type E); the i1 tag in field 0 selects the live slot (1 = Ok).
 // NURL source types are stored in g_res_type_syms under keys:
 //   "__last_res_nurl__"     → e.g. "! i s"
 //   "__last_res_err_llvm__" → LLVM type of E
@@ -573,7 +588,14 @@
     ( nurl_sym_def g_res_type_syms `__last_res_nurl__` ( nurl_str_cat4 `! ` lt_tok ` ` le_tok ) )
     ( nurl_sym_def g_res_type_syms `__last_res_err_llvm__` le )
     ( nurl_sym_def g_res_type_syms `__last_res_t_llvm__` lt )
-    `{ i1, i64 }`
+    // Result is `{ i1, T, E }` — Ok payload by value in field 1, Err payload
+    // by value in field 2 (the tag in field 0 selects which slot is live).
+    // A `void` payload cannot sit in an LLVM struct, so a `!v E` Ok slot
+    // lowers to a 1-byte `i1` placeholder that the Ok arm never reads (no
+    // `!T v` form occurs in-tree, but the Err slot is guarded symmetrically).
+    : s f1 ? ( seq lt `void` ) `i1` lt
+    : s f2 ? ( seq le `void` ) `i1` le
+    ^ ( nurl_str_cat `{ i1, ` ( nurl_str_cat3 f1 `, ` ( nurl_str_cat f2 ` }` ) ) )
 }
 
 // ── Emit helpers ──────────────────────────────────────────────────
@@ -6197,17 +6219,28 @@
                 // whose payload is stored as opaque ptr, opt/res field 1 is already
                 // stored at its real type, so no ptr→X conversion is required.
                 : ~ b pt0_is_opt_bool F
+                // Result (`{ i1, T, E }`, 3-field): the Ok arm (`T`) binds field
+                // 1 (type T), the Err arm (`F`) binds field 2 (type E), each BY
+                // VALUE at its real type — no i64 reconstruction. Option
+                // (`{ i1, T }`, 2-field) keeps field-1-by-value.
+                : b match_is_res & & >= ( nurl_str_len match_type ) 6
+                ( seq ( nurl_str_slice match_type 0 6 ) `{ i1, ` )
+                == ( agg_field_count syms match_type ) 3
+                : i res_fidx ? & match_is_res ( seq pattern_name `F` ) 2 1
                 ? & == 0 ( nurl_str_len pt0 )
                 & | ( seq pattern_name `T` ) ( seq pattern_name `F` )
                 & >= ( nurl_str_len match_type ) 6
                 ( seq ( nurl_str_slice match_type 0 6 ) `{ i1, ` )
-                { = pt0 ( nurl_str_slice match_type 6 - ( nurl_str_len match_type ) 8 )
+                { ? match_is_res
+                    { = pt0 ( compound_field_type match_type res_fidx ) }
+                    { = pt0 ( nurl_str_slice match_type 6 - ( nurl_str_len match_type ) 8 ) }
                     = pt0_is_opt_bool T }
                 {}
                 : s pr0 ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print pr0 )
                 ( nurl_print ` = extractvalue ` ) ( nurl_print match_type )
-                ( nurl_print ` ` ) ( nurl_print match_val ) ( nurl_print `, 1\n` )
+                ( nurl_print ` ` ) ( nurl_print match_val )
+                ( nurl_print `, ` ) ( nurl_print ( nurl_str_int res_fidx ) ) ( nurl_print `\n` )
                 // Opt/res-bool fallback path: pt0 is the inner LLVM type of the
                 // `{ i1, X }` aggregate (e.g. `i64` for `! Json ParseErr`). When
                 // the source-level NURL T names a struct handle (Json, String, …)
@@ -6218,7 +6251,11 @@
                 : ~ s pt0_eff pt0
                 : ~ s pr0_eff pr0
                 : ~ b did_reconstruct F
-                ? & pt0_is_opt_bool != 0 ( nurl_str_len match_var_name )
+                // The legacy i64-unbox reconstruction only applies to the old
+                // `{ i1, i64 }` result squeeze; a wide `{ i1, T, E }` result is
+                // already extracted by value above, so skip it (`! match_is_res`).
+                // Option still needs the f→bitcast / b→trunc / handle-rebuild here.
+                ? & & pt0_is_opt_bool ! match_is_res != 0 ( nurl_str_len match_var_name )
                 { : s nurl_key ( nurl_str_cat match_var_name
                     ? ( seq pattern_name `T` ) `__res_nurl_T` `__res_nurl_E` )
                     : s nurl_inner_t ( nurl_sym_get syms nurl_key )
@@ -10481,6 +10518,15 @@
     // UBSan/ASan when a defensive read touches it.
     : ~ s result `zeroinitializer`
     : ~ i idx 0
+    // Result construction (`{ i1, T, E }`): a result literal is a 3-field
+    // `{ i1, ... }` aggregate. Its two source values are the tag (idx 0) and a
+    // single payload (idx 1) which routes BY VALUE to field 1 (Ok) or field 2
+    // (Err) per the tag — never the i64-squeeze the legacy `{ i1, i64 }` layout
+    // forced. `res_is_ok` is captured from the tag literal at idx 0.
+    : b agg_is_res & & >= ( nurl_str_len agg_ty ) 6
+    ( seq ( nurl_str_slice agg_ty 0 6 ) `{ i1, ` )
+    == ( agg_field_count syms agg_ty ) 3
+    : ~ b res_is_ok F
     // Phase 2C/2D: collect indices of fields populated by a fresh allocating
     // call (i8* via nurl_str_cat et al, or slice via `[T | ...]` literal /
     // slice-returning call), AND nested owned subfields from inner struct
@@ -10551,6 +10597,8 @@
         // a direct parameter embed (`{ cb }`) from a derived value.
         : i fld_first_tt ( nurl_lex_type lex )
         : s fld_first_val ( nurl_lex_val lex )
+        // Result tag (idx 0): `T` ⇒ Ok (payload→field 1), `F` ⇒ Err (→field 2).
+        ? & agg_is_res == idx 0 { = res_is_ok ( seq fld_first_val `T` ) } {}
         : s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
         // Struct-literal field checks. PLAIN structs only — enum / option /
@@ -10646,7 +10694,21 @@
         // opt/res types ({ i1, ... }) need i64 coercion; enum types need ptr coercion.
         : ~ s actual_fval fval
         : ~ s actual_fty fty
-        ? > idx 0
+        // The insertvalue index: normally the literal position, but a result
+        // payload (idx 1) routes to field 1 (Ok) or field 2 (Err) by tag.
+        : ~ i ins_idx idx
+        // Result payload (`{ i1, T, E }`, idx 1): store BY VALUE into the Ok/Err
+        // slot, coercing only width/i1/enum-wrap via coerce_store_val. The other
+        // slot stays zeroinitialized. A void Ok slot (`!v E`) is an i1 placeholder
+        // the Ok arm never reads, so the (harmless) literal value is dropped in.
+        ? & agg_is_res == idx 1
+        { : i res_tgt ? res_is_ok 1 2
+            : s res_tgt_ty ( compound_field_type agg_ty res_tgt )
+            = actual_fval ( coerce_store_val lex fval fty res_tgt_ty syms cg )
+            = actual_fty res_tgt_ty
+            = ins_idx res_tgt }
+        {}
+        ? & > idx 0 ! agg_is_res
         {  // Detect opt/res aggregate: starts with "{ i1, " (6 chars).
             // For opt types the payload field type = T (may be struct %Foo or i64 or i8*).
             // For res types the payload field type is always i64.
@@ -11121,7 +11183,7 @@
         ( nurl_print ` ` ) ( nurl_print result )
         ( nurl_print `, ` ) ( nurl_print actual_fty )
         ( nurl_print ` ` ) ( nurl_print actual_fval )
-        ( nurl_print `, ` ) ( nurl_print ( nurl_str_int idx ) ) ( nurl_print `\n` )
+        ( nurl_print `, ` ) ( nurl_print ( nurl_str_int ins_idx ) ) ( nurl_print `\n` )
         = result r
         = idx + idx 1
     }
@@ -12480,7 +12542,29 @@
     : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
     : s dtop ( nurl_sym_get syms `__defer_top__` )
     // Use the original val if types match (res propagation), else zeroinitializer
-    : s fail_val ? ( seq fn_rt vt ) val `zeroinitializer`
+    : ~ s fail_val ? ( seq fn_rt vt ) val `zeroinitializer`
+    // Result propagation where the caller's Ok type T differs from the callee's
+    // (same E, enforced by T8 above): the whole-struct types disagree, so rebuild
+    // the caller result `{ i1, Tc, E }` with tag 0 (Err) and the Err payload
+    // (field 2) carried across by value. Without this the mismatch falls to
+    // `zeroinitializer`, silently dropping the propagated error. Options (2-field)
+    // and same-type results keep the cheap `val` / `zeroinitializer` path.
+    ? & & ! ( seq fn_rt vt )
+    & >= ( nurl_str_len fn_rt ) 6 ( seq ( nurl_str_slice fn_rt 0 6 ) `{ i1, ` )
+    & == ( agg_field_count syms fn_rt ) 3 == ( agg_field_count syms vt ) 3
+    { : s ev_ty ( compound_field_type vt 2 )
+        : s ev ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print ev )
+        ( nurl_print ` = extractvalue ` ) ( nurl_print vt )
+        ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 2\n` )
+        : s fe_ty ( compound_field_type fn_rt 2 )
+        : s rb ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print rb )
+        ( nurl_print ` = insertvalue ` ) ( nurl_print fn_rt )
+        ( nurl_print ` zeroinitializer, ` ) ( nurl_print fe_ty )
+        ( nurl_print ` ` ) ( nurl_print ev ) ( nurl_print `, 2\n` )
+        = fail_val rb }
+    {}
     ? != 0 ( nurl_str_len dtop )
     { ? ! ( seq fn_rt `void` )
         { : s rvp ( nurl_sym_get syms `__ret_val__` )
@@ -12497,7 +12581,10 @@
             ( nurl_print ` ` ) ( nurl_print fail_val ) ( emit_dbg_eol )
         }
     }
-    // Ok path: extract inner value (field 1)
+    // Ok path: extract the Ok value from field 1 BY VALUE. With the wide
+    // `{ i1, T, E }` layout the payload already sits at its real type T — no
+    // i64 unbox / heap-load reconstruction is needed (the legacy squeeze that
+    // boxed struct-handle / multi-field / wide-enum payloads is gone).
     ( emit ( nurl_str_cat lok `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lok )
     = g_did_ret 0
@@ -12506,71 +12593,6 @@
     ( nurl_print `  ` ) ( nurl_print res )
     ( nurl_print ` = extractvalue ` ) ( nurl_print vt )
     ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
-    // For `! T E` whose T is a struct handle (e.g. %String), the payload
-    // slot stores the struct's field-0 pointer as i64. Reconstruct the
-    // struct here so let_stmt can bind it to the declared type without a
-    // separate cast. Only fires for res types (! T E lowers to { i1, i64 }).
-    : s call_nurl2 ( nurl_sym_get syms `__last_nurl_call__` )
-    : ~ s inner_nurl ``
-    : b is_res & >= ( nurl_str_len call_nurl2 ) 2
-    ( seq ( nurl_str_slice call_nurl2 0 2 ) `! ` )
-    ? is_res
-    { = inner_nurl ( str_first_word ( str_skip_word call_nurl2 ) ) } {}
-    : s struct_ty ( nurl_sym_get syms inner_nurl )
-    // Three reconstruction shapes when inner is i64 and T resolves to %X:
-    //   (a) X is a struct whose f0 is a pointer (Vec / String / opaque-handle):
-    //       i64 IS f0 — inttoptr + insertvalue at field 0.
-    //   (b) X is a struct whose f0 is NOT a pointer (multi-field like ParsedHead,
-    //       Pt2, Tagged): i64 is a heap-box %X* — inttoptr + load + nurl_free.
-    //   (c) X is a wide enum (max_payloads > 0): same heap-box unbox as (b).
-    // Mirrors gen_match's match-arm reconstruction at lines ~1442–1502.
-    : ~ b is_struct_handle F
-    : ~ b is_heapbox_struct F
-    : ~ b is_heapbox_enum F
-    : ~ s f0_ty ``
-    ? & ( seq inner_ty `i64` ) & != 0 ( nurl_str_len struct_ty ) == ( nurl_str_get struct_ty 0 ) 37
-    { : s sname ( nurl_str_slice struct_ty 1 - ( nurl_str_len struct_ty ) 1 )
-        : s vlist ( nurl_sym_get syms ( nurl_str_cat sname `__variants` ) )
-        ? == 0 ( nurl_str_len vlist )
-        { = f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_0` `__type` ) )
-            ? & != 0 ( nurl_str_len f0_ty )
-            == ( nurl_str_get f0_ty - ( nurl_str_len f0_ty ) 1 ) 42
-            { = is_struct_handle T }
-            { ? != 0 ( nurl_str_len f0_ty )
-                { = is_heapbox_struct T } {} } }
-        { : s mp_r ( nurl_sym_get syms ( nurl_str_cat sname `__max_payloads` ) )
-            : i mp_rn ? != 0 ( nurl_str_len mp_r ) ( nurl_str_to_int mp_r ) 0
-            ? > mp_rn 0 { = is_heapbox_enum T } {} } }
-    {}
-    ? is_struct_handle
-    { : s pcv ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print pcv )
-        ( nurl_print ` = inttoptr i64 ` ) ( nurl_print res )
-        ( nurl_print ` to ` ) ( nurl_print f0_ty ) ( nurl_print `\n` )
-        : s sv ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print sv )
-        ( nurl_print ` = insertvalue ` ) ( nurl_print struct_ty )
-        ( nurl_print ` undef, ` ) ( nurl_print f0_ty )
-        ( nurl_print ` ` ) ( nurl_print pcv ) ( nurl_print `, 0\n` )
-        ( nurl_set_last_type struct_ty )
-        ^ sv } {}
-    ? | is_heapbox_struct is_heapbox_enum
-    { : s ubp ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print ubp )
-        ( nurl_print ` = inttoptr i64 ` ) ( nurl_print res )
-        ( nurl_print ` to ` ) ( nurl_print struct_ty ) ( nurl_print `*\n` )
-        : s ubv ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print ubv )
-        ( nurl_print ` = load ` ) ( nurl_print struct_ty )
-        ( nurl_print `, ` ) ( nurl_print struct_ty )
-        ( nurl_print `* ` ) ( nurl_print ubp ) ( nurl_print `\n` )
-        : s ubraw ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print ubraw )
-        ( nurl_print ` = bitcast ` ) ( nurl_print struct_ty )
-        ( nurl_print `* ` ) ( nurl_print ubp ) ( nurl_print ` to i8*\n` )
-        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print ubraw ) ( nurl_print `)` ) ( emit_dbg_eol )
-        ( nurl_set_last_type struct_ty )
-        ^ ubv } {}
     ( nurl_set_last_type inner_ty )
     res
 }

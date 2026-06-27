@@ -9,7 +9,7 @@ $ `stdlib/core/result.nu`
         ( nurl_print `\n` )
     } {
         ( nurl_print `err=` )
-        ( nurl_print ( parse_err_msg # ParseErr . r 1 ) )
+        ( nurl_print ( parse_err_msg # ParseErr . r 2 ) )
         ( nurl_print `\n` )
     }
 }

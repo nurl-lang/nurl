@@ -337,11 +337,16 @@ auto-drop (§8).
 
 ### 4.5 Result `!T E`
 
-`!T E` lowers to `{ i1, i64 }`: the tag (1 = Ok, 0 = Err) and a single
-i64 slot holding either T or E (integers direct, pointers via
-`ptrtoint`, enums via their i64 tag, multi-field T heap-boxed). The
-source-level NURL types of T and E are preserved separately for
-compile-time `\` try-propagation checking.
+`!T E` lowers to `{ i1, T, E }`: the tag (1 = Ok, 0 = Err) in field 0,
+the Ok payload **by value** in field 1 (type T), and the Err payload
+**by value** in field 2 (type E). The tag selects which slot is live;
+the other is left zero. There is no heap-box or `i64` squeeze — a
+multi-field struct Ok payload rides field 1 directly, mirroring the
+`?T` → `{ i1, T }` symmetry. A `void` payload (`!v E`) lowers its slot
+to a one-byte `i1` placeholder that is never read. Direct field access
+is `. r 0` (tag, via `??`), `. r 1` (Ok payload), `. r 2` (Err
+payload). The source-level NURL types of T and E are also preserved
+separately for compile-time `\` try-propagation checking.
 
 ### 4.6 Function / closure types `(@ R P*)`
 

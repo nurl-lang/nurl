@@ -11,7 +11,7 @@
 // Example:
 //   : ! i ParseErr r ( string_to_int s )
 //   ? . r 0 { ( nurl_print_int . r 1 ) }
-//           { ( nurl_print ( parse_err_msg # ParseErr . r 1 ) ) }
+//           { ( nurl_print ( parse_err_msg # ParseErr . r 2 ) ) }
 
 : | ParseErr { BadFormat Overflow Underflow Empty TrailingGarbage }
 

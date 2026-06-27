@@ -12,7 +12,7 @@ $ `stdlib/core/errors.nu`
     ( nurl_print ? ( res_is_err [i ParseErr] err1 ) `err1_is_err\n` `err1_bad\n` )
 
     // render error with parse_err_msg
-    ( nurl_print ( parse_err_msg # ParseErr . err1 1 ) ) ( nurl_print `\n` )
+    ( nurl_print ( parse_err_msg # ParseErr . err1 2 ) ) ( nurl_print `\n` )
 
     // works with string error type too
     : !i s ok2 @ !i s { T 5 }
@@ -42,7 +42,7 @@ $ `stdlib/core/errors.nu`
     : ( @ ParseErr s ) str_to_parse_err \ s _e → ParseErr { ^ @ ParseErr { Overflow } }
     : !i ParseErr me1 ( res_map_err [i s ParseErr] err2 str_to_parse_err )
     ( nurl_print ? ( res_is_err [i ParseErr] me1 ) `map_err_is_err\n` `map_err_bad\n` )
-    ( nurl_print ( parse_err_msg # ParseErr . me1 1 ) ) ( nurl_print `\n` )
+    ( nurl_print ( parse_err_msg # ParseErr . me1 2 ) ) ( nurl_print `\n` )
 
     ^ 0
 }
