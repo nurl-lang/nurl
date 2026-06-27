@@ -103,9 +103,11 @@ nurlpkg install nurl-mcp
 claude mcp add nurl -- nurl-mcp     # wire into an MCP client (spawned over stdio)
 ```
 
-`nurl_run` is real code execution with no sandbox, which is why the server is
-stdio-only (only its spawner can reach it); a token-authenticated `--http` mode
-is deferred. See [`nurl-mcp/README.md`](nurl-mcp/README.md).
+Stdio by default; an optional `--http` transport adds bearer-token auth
+(`--token`), a `--read-only` mode, and gates code execution behind `--allow-run`
+(a non-loopback bind refuses to start without a token). `nurl_run` is real code
+execution with no sandbox — hence those guards. See
+[`nurl-mcp/README.md`](nurl-mcp/README.md).
 
 ## The full loop
 

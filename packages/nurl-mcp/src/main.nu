@@ -23,6 +23,26 @@ $ `stdlib/std/process.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/core/posix.nu`
+$ `stdlib/std/args.nu`
+$ `stdlib/std/net.nu`
+$ `stdlib/std/bytes.nu`
+$ `stdlib/ext/http_request.nu`
+$ `stdlib/ext/http_response.nu`
+$ `stdlib/ext/http_server.nu`
+
+// ── Policy (set once in main, read by the dispatcher) ───────────────
+//
+// g_read_only : 1 ⇒ expose only the read/analysis tools (check, fmt,
+//               list_stdlib, read_stdlib) — no build, no run.
+// g_run_allowed : 1 ⇒ nurl_run is available. Defaults to 1 over stdio
+//               (only the spawning process can reach the server); over
+//               HTTP it is 0 unless --allow-run is passed, because run
+//               is unsandboxed code execution.
+// g_token     : non-empty ⇒ HTTP requests must carry
+//               `Authorization: Bearer <g_token>`.
+: ~ i g_read_only 0
+: ~ i g_run_allowed 1
+: ~ s g_token ``
 
 // ── Temp-file plumbing ──────────────────────────────────────────────
 //
@@ -31,8 +51,21 @@ $ `stdlib/core/posix.nu`
 // such a temp (so we delete it afterward) vs. a user-supplied `path` (left
 // untouched). Single-threaded stdio server ⇒ the global is race-free.
 
-: ~ i nm_input_temp 0
 : ~ i nm_seq 0
+
+// A resolved input path is a temp we own iff it sits under the
+// "<tmpdir>/nurl-mcp-" prefix nm_tmp_path mints. Path-based (not a shared
+// mutable flag) so it stays correct if requests are ever served on
+// concurrent fibers.
+@ nm_is_temp s path → b {
+    : String dir ( env_var_or `TMPDIR` `/tmp` )
+    : String pref ( string_from ( string_data dir ) )
+    ( string_push_str pref `/nurl-mcp-` )
+    : b r ? != ( nurl_str_starts path ( string_data pref ) ) 0 T F
+    ( string_free dir )
+    ( string_free pref )
+    ^ r
+}
 
 @ nm_tmp_path s suffix → String {
     : String dir ( env_var_or `TMPDIR` `/tmp` )
@@ -70,7 +103,6 @@ $ `stdlib/core/posix.nu`
 // read. Prefers an explicit `path`; otherwise writes inline `source` to a
 // temp file. Returns None when neither argument is present.
 @ nm_input_path Json args → ?String {
-    = nm_input_temp 0
     : ?Json pj ( json_obj_get args `path` )
     ?? pj {
         T pv → { ^ @ ?String { T ( string_from ( json_str_data pv ) ) } }
@@ -82,7 +114,7 @@ $ `stdlib/core/posix.nu`
             : String tmp ( nm_tmp_path `.nu` )
             : !v IoErr wr ( write_file ( string_data tmp ) ( json_str_data sv ) )
             ?? wr {
-                T → { = nm_input_temp 1 ^ @ ?String { T tmp } }
+                T → { ^ @ ?String { T tmp } }
                 F e → { ( string_free tmp ) ^ @ ?String { F } }
             }
         }
@@ -135,9 +167,8 @@ $ `stdlib/core/posix.nu`
     : ?String po ( nm_input_path args )
     ?? po {
         T p → {
-            : i temp nm_input_temp
             : !Output ProcessErr r ( process_run1 `nurlc` ( string_data p ) )
-            ? != temp 0 { ( nm_unlink ( string_data p ) ) } {}
+            ? ( nm_is_temp ( string_data p ) ) { ( nm_unlink ( string_data p ) ) } {}
             ( string_free p )
             ?? r {
                 T o → {
@@ -164,10 +195,9 @@ $ `stdlib/core/posix.nu`
     : ?String po ( nm_input_path args )
     ?? po {
         T p → {
-            : i temp nm_input_temp
             : String outp ( nm_tmp_path `-bin` )
             : !Output ProcessErr r ( process_run2 `nurl` ( string_data p ) ( string_data outp ) )
-            ? != temp 0 { ( nm_unlink ( string_data p ) ) } {}
+            ? ( nm_is_temp ( string_data p ) ) { ( nm_unlink ( string_data p ) ) } {}
             ( string_free p )
             ( nm_unlink_artifacts ( string_data outp ) )
             ( string_free outp )
@@ -211,10 +241,9 @@ $ `stdlib/core/posix.nu`
     : ?String po ( nm_input_path args )
     ?? po {
         T p → {
-            : i temp nm_input_temp
             : String outp ( nm_tmp_path `-bin` )
             : !Output ProcessErr br ( process_run2 `nurl` ( string_data p ) ( string_data outp ) )
-            ? != temp 0 { ( nm_unlink ( string_data p ) ) } {}
+            ? ( nm_is_temp ( string_data p ) ) { ( nm_unlink ( string_data p ) ) } {}
             ( string_free p )
             ?? br {
                 T bo → {
@@ -420,14 +449,22 @@ $ `stdlib/core/posix.nu`
     ^ schema
 }
 
+// Policy predicates (read the globals set in main).
+@ nm_build_ok → b { ^ ? == g_read_only 0 T F }
+@ nm_run_ok → b { ^ ? & == g_read_only 0 != g_run_allowed 0 T F }
+
 @ build_tools_list → ( Vec Json ) {
     : ( Vec Json ) tools ( vec_new [Json] )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_build`
-    `Compile NURL (inline "source" or a "path") with the local toolchain; reports success or compiler diagnostics. Does not run the program.`
-    ( nm_schema_src_path ) ) )
-    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_run`
-    `Compile AND run NURL with the local toolchain; returns the program's exit code, stdout, and stderr.`
-    ( nm_schema_src_path ) ) )
+    ? ( nm_build_ok ) {
+        ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_build`
+        `Compile NURL (inline "source" or a "path") with the local toolchain; reports success or compiler diagnostics. Does not run the program.`
+        ( nm_schema_src_path ) ) )
+    } {}
+    ? ( nm_run_ok ) {
+        ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_run`
+        `Compile AND run NURL with the local toolchain; returns the program's exit code, stdout, and stderr.`
+        ( nm_schema_src_path ) ) )
+    } {}
     ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_check`
     `Front-end only: type-check and borrow-check NURL without producing a binary. Fast. Reports diagnostics.`
     ( nm_schema_src_path ) ) )
@@ -444,8 +481,14 @@ $ `stdlib/core/posix.nu`
 }
 
 @ dispatch_tool s name Json args → Json {
-    ? != ( nurl_str_eq name `nurl_build` ) 0 { ^ ( nm_tool_build args ) } {}
-    ? != ( nurl_str_eq name `nurl_run` ) 0 { ^ ( nm_tool_run args ) } {}
+    ? != ( nurl_str_eq name `nurl_build` ) 0 {
+        ? ( nm_build_ok ) { ^ ( nm_tool_build args ) }
+        { ^ ( mcp_tool_result_error `nurl_build is disabled (--read-only)` ) }
+    } {}
+    ? != ( nurl_str_eq name `nurl_run` ) 0 {
+        ? ( nm_run_ok ) { ^ ( nm_tool_run args ) }
+        { ^ ( mcp_tool_result_error `nurl_run is disabled — it is unsandboxed code execution; over HTTP pass --allow-run to enable it (and it is off entirely under --read-only)` ) }
+    } {}
     ? != ( nurl_str_eq name `nurl_check` ) 0 { ^ ( nm_tool_check args ) } {}
     ? != ( nurl_str_eq name `nurl_fmt` ) 0 { ^ ( nm_tool_fmt args ) } {}
     ? != ( nurl_str_eq name `nurl_list_stdlib` ) 0 { ^ ( nm_tool_list_stdlib args ) } {}
@@ -453,25 +496,26 @@ $ `stdlib/core/posix.nu`
     ^ ( mcp_tool_result_error `unknown tool` )
 }
 
-// ── JSON-RPC method handlers (shape from examples/mcp_echo_server.nu) ─
+// ── JSON-RPC method handlers (return-style: shape from
+// examples/mcp_echo_server_http.nu, used by both transports) ─────────
 
-@ handle_initialize Json id → v {
-    : Json result ( mcp_initialize_result `nurl-mcp` `0.1.0` )
-    ( mcp_send_message ( mcp_response_result id result ) )
+@ handle_initialize Json id → Json {
+    : Json result ( mcp_initialize_result `nurl-mcp` `0.2.0` )
+    ^ ( mcp_response_result id result )
 }
 
-@ handle_ping Json id → v {
+@ handle_ping Json id → Json {
     : Json empty ( json_obj_new )
-    ( mcp_send_message ( mcp_response_result id empty ) )
+    ^ ( mcp_response_result id empty )
 }
 
-@ handle_tools_list Json id → v {
+@ handle_tools_list Json id → Json {
     : ( Vec Json ) tools ( build_tools_list )
     : Json result ( mcp_tools_list_result tools )
-    ( mcp_send_message ( mcp_response_result id result ) )
+    ^ ( mcp_response_result id result )
 }
 
-@ handle_tools_call Json id Json params → v {
+@ handle_tools_call Json id Json params → Json {
     : ?Json name_j ( json_obj_get params `name` )
     ?? name_j {
         T nv → {
@@ -483,27 +527,28 @@ $ `stdlib/core/posix.nu`
             }
             : Json result ( dispatch_tool name args )
             ( json_free args )
-            ( mcp_send_message ( mcp_response_result id result ) )
+            ^ ( mcp_response_result id result )
         }
         F → {
-            ( mcp_send_message
-            ( mcp_response_error id mcp_err_invalid_params
-            `tools/call requires a "name" parameter` ) )
+            ^ ( mcp_response_error id mcp_err_invalid_params
+            `tools/call requires a "name" parameter` )
         }
     }
 }
 
-@ handle_unknown_method Json id s method → v {
+@ handle_unknown_method Json id s method → Json {
     : i mlen ( nurl_str_len method )
     : String msg ( string_with_cap + 32 mlen )
     ( string_push_str msg `unknown method: ` )
     ( string_push_str msg method )
-    ( mcp_send_message
-    ( mcp_response_error id mcp_err_method_not_found ( string_data msg ) ) )
+    : Json err ( mcp_response_error id mcp_err_method_not_found ( string_data msg ) )
     ( string_free msg )
+    ^ err
 }
 
-@ handle Json req → v {
+// Transport-agnostic dispatcher: request Json → Some(response) for a
+// request, or None for a notification (the caller drops it / replies 202).
+@ dispatch Json req → ?Json {
     : ?Json method_j ( json_obj_get req `method` )
     ?? method_j {
         T mv → {
@@ -512,54 +557,240 @@ $ `stdlib/core/posix.nu`
             ?? id_opt {
                 T id → {
                     ? != ( nurl_str_eq method `initialize` ) 0 {
-                        ( handle_initialize id )
-                    } {
-                        ? != ( nurl_str_eq method `ping` ) 0 {
-                            ( handle_ping id )
-                        } {
-                            ? != ( nurl_str_eq method `tools/list` ) 0 {
-                                ( handle_tools_list id )
-                            } {
-                                ? != ( nurl_str_eq method `tools/call` ) 0 {
-                                    : ?Json params_j ( json_obj_get req `params` )
-                                    : Json params ?? params_j {
-                                        T pv → ( json_clone pv )
-                                        F → ( json_obj_new )
-                                    }
-                                    ( handle_tools_call id params )
-                                    ( json_free params )
-                                } {
-                                    ( handle_unknown_method id method )
-                                } } } }
+                        ^ @ ?Json { T ( handle_initialize id ) }
+                    } {}
+                    ? != ( nurl_str_eq method `ping` ) 0 {
+                        ^ @ ?Json { T ( handle_ping id ) }
+                    } {}
+                    ? != ( nurl_str_eq method `tools/list` ) 0 {
+                        ^ @ ?Json { T ( handle_tools_list id ) }
+                    } {}
+                    ? != ( nurl_str_eq method `tools/call` ) 0 {
+                        : ?Json params_j ( json_obj_get req `params` )
+                        : Json params ?? params_j {
+                            T pv → ( json_clone pv )
+                            F → ( json_obj_new )
+                        }
+                        : Json out ( handle_tools_call id params )
+                        ( json_free params )
+                        ^ @ ?Json { T out }
+                    } {}
+                    ^ @ ?Json { T ( handle_unknown_method id method ) }
                 }
                 F → {
                     ? != ( nurl_str_eq method `notifications/initialized` ) 0 {
                         ( mcp_log `client initialized` )
                     } {}
+                    ^ @ ?Json { F }
                 }
             }
         }
         F → {
             ( mcp_log `request without method, ignoring` )
+            ^ @ ?Json { F }
         }
     }
 }
 
-@ main → i {
-    ( mcp_log `nurl-mcp 0.1.0 ready (stdio)` )
+// ── stdio transport ─────────────────────────────────────────────────
+
+@ stdio_loop → v {
     : ~ b running T
     ~ running {
         : ?Json msg ( mcp_read_request )
         ?? msg {
             T req → {
-                ( handle req )
+                : ?Json reply ( dispatch req )
                 ( json_free req )
+                ?? reply {
+                    T resp → ( mcp_send_message resp )
+                    F empty → ( json_free empty )
+                }
             }
-            F → {
-                = running F
-            }
+            F → { = running F }
         }
     }
-    ( mcp_log `bye` )
-    ^ 0
+}
+
+// ── HTTP transport (POST /mcp, bearer-token auth, permissive CORS) ───
+
+@ nm_cors HttpResponse r → v {
+    ( response_set_header r `Access-Control-Allow-Origin` `*` )
+    ( response_set_header r `Access-Control-Allow-Headers` `Content-Type, Authorization, Mcp-Session-Id` )
+    ( response_set_header r `Access-Control-Allow-Methods` `POST, OPTIONS` )
+}
+
+@ nm_authed HttpRequest req → b {
+    ? == ( nurl_str_len g_token ) 0 { ^ T } {}
+    : ?String av ( header_get . req headers `Authorization` )
+    ?? av {
+        T s → {
+            : String expect ( string_from `Bearer ` )
+            ( string_push_str expect g_token )
+            : b ok ? != ( nurl_str_eq ( string_data s ) ( string_data expect ) ) 0 T F
+            ( string_free expect )
+            ( string_free s )
+            ^ ok
+        }
+        F → { ^ F }
+    }
+    ^ F
+}
+
+@ http_handler HttpRequest req → HttpResponse {
+    : s rm ( string_data . req method )
+    ? != ( nurl_str_eq rm `OPTIONS` ) 0 {
+        : HttpResponse pre ( response_status_only 204 )
+        ( nm_cors pre )
+        ^ pre
+    } {}
+    ? != ( nurl_str_eq rm `POST` ) 0 {} {
+        : HttpResponse r ( response_text 405 `Method Not Allowed\n` )
+        ( response_set_header r `Allow` `POST, OPTIONS` )
+        ( nm_cors r )
+        ^ r
+    }
+    ? ! ( nm_authed req ) {
+        : HttpResponse r ( response_text 401 `Unauthorized\n` )
+        ( response_set_header r `WWW-Authenticate` `Bearer` )
+        ( nm_cors r )
+        ^ r
+    } {}
+    : i bn ( vec_len [u] . req body )
+    ? <= bn 0 {
+        : HttpResponse r ( response_text 400 `empty request body\n` )
+        ( nm_cors r )
+        ^ r
+    } {}
+    : String body_str ( bytes_to_str . req body )
+    : !Json JsonError pj ( json_parse ( string_data body_str ) )
+    ( string_free body_str )
+    ?? pj {
+        T jreq → {
+            : ?Json reply ( dispatch jreq )
+            ( json_free jreq )
+            ?? reply {
+                T resp → {
+                    : HttpResponse r ( response_json 200 resp )
+                    ( json_free resp )
+                    ( nm_cors r )
+                    ^ r
+                }
+                F empty → {
+                    ( json_free empty )
+                    : HttpResponse r ( response_status_only 202 )
+                    ( nm_cors r )
+                    ^ r
+                }
+            }
+        }
+        F e → {
+            : HttpResponse r ( response_text 400 `request body is not valid JSON\n` )
+            ( nm_cors r )
+            ^ r
+        }
+    }
+    : HttpResponse r ( response_text 500 `internal\n` )
+    ( nm_cors r )
+    ^ r
+}
+
+@ nm_is_loopback s host → b {
+    ? != ( nurl_str_eq host `127.0.0.1` ) 0 { ^ T } {}
+    ? != ( nurl_str_eq host `::1` ) 0 { ^ T } {}
+    ? != ( nurl_str_eq host `localhost` ) 0 { ^ T } {}
+    ^ F
+}
+
+@ run_http s host i port → i {
+    : !TcpListener NetErr lr ( tcp_listen host port )
+    ?? lr {
+        T listener → {
+            : ( @ HttpResponse HttpRequest ) h \ HttpRequest req → HttpResponse { ^ ( http_handler req ) }
+            : HttpServer srv ( server_new listener h )
+            : !v NetErr rr ( server_run srv )
+            ( server_stop srv )
+            ?? rr {
+                T → { ^ 0 }
+                F e → {
+                    ( nurl_eprint `[mcp] server error: ` )
+                    ( nurl_eprint ( net_err_name e ) )
+                    ( nurl_eprint `\n` )
+                    ^ 1
+                }
+            }
+        }
+        F e → {
+            ( nurl_eprint `[mcp] cannot bind ` )
+            ( nurl_eprint host )
+            ( nurl_eprint `: ` )
+            ( nurl_eprint ( net_err_name e ) )
+            ( nurl_eprint `\n` )
+            ^ 1
+        }
+    }
+    ^ 1
+}
+
+@ main → i {
+    : ArgParser p ( args_new `nurl-mcp` `Local MCP server for the NURL toolchain (stdio by default; --http to serve over HTTP).` )
+    ( args_flag p `http` 0 `Serve over HTTP instead of stdio` )
+    ( args_opt p `host` 0 `ADDR` `HTTP bind address (default 127.0.0.1)` )
+    ( args_opt p `port` 0 `N` `HTTP port (default 8080)` )
+    ( args_opt p `token` 0 `TOK` `Require "Authorization: Bearer TOK" on HTTP requests` )
+    ( args_flag p `read-only` 0 `Expose only read/check/fmt tools (no build, no run)` )
+    ( args_flag p `allow-run` 0 `Allow nurl_run over HTTP (off by default; stdio always allows it)` )
+    : b ok ( args_parse_argv p )
+    ? ! ok {
+        : String u ( args_usage p )
+        ( nurl_eprint ( string_data u ) )
+        ( string_free u )
+        ( args_free p )
+        ^ 2
+    } {}
+
+    : b want_http ( args_present p `http` )
+    : b read_only ( args_present p `read-only` )
+    : b allow_run ( args_present p `allow-run` )
+    : String host ( args_value_or p `host` `127.0.0.1` )
+    : String ports ( args_value_or p `port` `8080` )
+    : String token ( args_value_or p `token` `` )
+    : i port ( nurl_str_to_int ( string_data ports ) )
+
+    = g_read_only ? read_only 1 0
+    ? want_http {
+        = g_run_allowed ? & ! read_only allow_run 1 0
+    } {
+        = g_run_allowed ? read_only 0 1
+    }
+    = g_token ( string_data token )
+
+    : ~ i rc 0
+    ? want_http {
+        ? & ! ( nm_is_loopback ( string_data host ) ) == ( string_len token ) 0 {
+            ( nurl_eprint `[mcp] refusing to bind a non-loopback address without --token (HTTP build/run is unsandboxed code execution)\n` )
+            = rc 2
+        } {
+            ? == ( string_len token ) 0 {
+                ( mcp_log `WARNING: serving HTTP with no --token — any local client can drive the toolchain` )
+            } {}
+            ? ( nm_run_ok ) {
+                ( mcp_log `nurl-mcp 0.2.0 ready (http) — nurl_run ENABLED` )
+            } {
+                ( mcp_log `nurl-mcp 0.2.0 ready (http) — nurl_run disabled (pass --allow-run to enable)` )
+            }
+            = rc ( run_http ( string_data host ) port )
+        }
+    } {
+        ( mcp_log `nurl-mcp 0.2.0 ready (stdio)` )
+        ( stdio_loop )
+        ( mcp_log `bye` )
+        = rc 0
+    }
+
+    ( args_free p )
+    ( string_free host )
+    ( string_free ports )
+    ( string_free token )
+    ^ rc
 }
