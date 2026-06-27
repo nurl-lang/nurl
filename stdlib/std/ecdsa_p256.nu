@@ -13,10 +13,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/bigint.nu`
 $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
-
-// OS CSPRNG bridge (std/random.nu's runtime entry) — for the scalar-blinding
-// factor and projective-coordinate randomization.
-& `c` @ nurl_rand_fill *u buf i n → i
+$ `stdlib/std/p256_field.nu`  // fully constant-time scalar mult (secret path)
 
 // ── curve constants (hex → BigInt) ────────────────────────────────
 @ __hx s h → BigInt {
@@ -206,13 +203,11 @@ $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
 
 // k · P over the bits of k (big-endian byte view), MSB to LSB. Branchless
 // (Coron always-add): every bit performs BOTH a double and an add, then a
-// constant-time point select keeps the add iff the bit was set — so the
-// scalar bit drives no branch and the per-bit operation sequence is uniform.
-// Combined with the scalar blinding + projective randomization in
-// __jmul_secret, this removes the secret-bit control-flow leak the audit
-// flagged. (The underlying field ops remain operand-time-dependent — see
-// docs/CRYPTO.md §3.) Verify's scalars are public, so it shares this path
-// harmlessly.
+// constant-time point select keeps the add iff the bit was set. This is the
+// PUBLIC-scalar path used only by ECDSA verify (P-256/P-384) — its scalars
+// are public, so the operand-time-dependent BigInt field ops are harmless.
+// The SECRET path (signing nonce, ECDHE) uses the fully constant-time
+// std/p256_field scalar multiply instead (see __p256_mul_affine).
 @ __jmul ( Vec u ) k Jac base BigInt p → Jac {
     : ~ Jac acc ( __jinf )
     : i n ( vec_len [u] k )
@@ -234,61 +229,6 @@ $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
         }
         = bi + bi 1
     }
-    ^ acc
-}
-
-// A fresh random BigInt of `nbytes` bytes from the OS CSPRNG.
-@ __ec_rand_bigint i nbytes → BigInt {
-    : ( Vec u ) buf ( vec_with_cap [u] ? > nbytes 0 nbytes 1 )
-    : ~ i z 0
-    ~ < z nbytes { ( vec_push [u] buf # u 0 ) = z + z 1 }
-    : i r ( nurl_rand_fill # *u ( vec_data [u] buf ) nbytes )
-    ? == r 0 { ( nurl_panic `ecdsa: CSPRNG (nurl_rand_fill) failed` ) } {}
-    : BigInt b ( bigint_from_bytes_be buf )
-    ( vec_free [u] buf )
-    ^ b
-}
-
-// Projective-coordinate randomization (Coron CHES'99 #3): (X,Y,Z) →
-// (λ²X, λ³Y, λZ) mod p for random λ ∈ [1, p). Same affine point, but every
-// intermediate coordinate in the subsequent ladder is randomized, so the
-// (operand-value-dependent) field-op timing is decorrelated from the secret.
-@ __jrandomize Jac q BigInt p → Jac {
-    ? . q inf { ^ ( __jclone q ) } {}
-    : BigInt lam0 ( __ec_rand_bigint 32 )
-    : ~ BigInt l ( bigint_rem lam0 p )
-    ? ( bigint_is_zero l ) { ( bigint_free l ) = l ( bigint_from_i 1 ) } {}
-    : BigInt l2 ( __fsqr l p )
-    : BigInt l3 ( __fmul l2 l p )
-    : BigInt nx ( __fmul . q x l2 p )
-    : BigInt ny ( __fmul . q y l3 p )
-    : BigInt nz ( __fmul . q z l p )
-    ( bigint_free lam0 ) ( bigint_free l ) ( bigint_free l2 ) ( bigint_free l3 )
-    ^ @ Jac { nx ny nz F }
-}
-
-// Secret-scalar multiply, hardened against remote/cache timing recovery of
-// the scalar (H2). Two established countermeasures (Coron CHES'99):
-//   #1 scalar blinding: ladder over k' = k + r·n (random r) instead of k.
-//      n·P = O so k'·P = k·P, but the bit pattern actually walked is
-//      randomized per call — decorrelating the across-trace timing/cache
-//      signal that an HNP/lattice attack would aggregate.
-//   #3 projective randomization of the base (above).
-// `width` fixes the byte length of k' so the loop count does not depend on k.
-// NOTE: the underlying BigInt field ops are still variable-time; these
-// countermeasures defeat the multi-trace remote attacker (the network threat
-// model) — see docs/CRYPTO.md. Used for the signing nonce and ECDH scalars,
-// never for the public scalars in verify (which need no protection).
-@ __jmul_secret ( Vec u ) k Jac base BigInt p BigInt n i width → Jac {
-    : BigInt bk ( bigint_from_bytes_be k )
-    : BigInt r ( __ec_rand_bigint 16 )
-    : BigInt rn ( bigint_mul r n )
-    : BigInt kb ( bigint_add bk rn )
-    : ( Vec u ) kbytes ( bigint_to_bytes_be kb width )
-    : Jac rbase ( __jrandomize base p )
-    : Jac acc ( __jmul kbytes rbase p )
-    ( bigint_free bk ) ( bigint_free r ) ( bigint_free rn ) ( bigint_free kb )
-    ( vec_free [u] kbytes ) ( __jfree rbase )
     ^ acc
 }
 
@@ -341,6 +281,35 @@ $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
     ^ y
 }
 
+// bigint (0 ≤ x < p, ≤ 256 bits) → 16 little-endian 16-bit plain limbs.
+@ __big_to_limbs16 BigInt x → ( Vec i ) {
+    : ( Vec u ) be ( bigint_to_bytes_be x 32 )
+    : ( Vec i ) out ( vec_with_cap [i] 16 )
+    : ~ i k 0
+    ~ < k 16 {
+        : i lo ?? ( vec_get [u] be - 31 * 2 k ) { T b → # i b F _ → 0 }
+        : i hi ?? ( vec_get [u] be - 30 * 2 k ) { T b → # i b F _ → 0 }
+        ( vec_push [i] out | lo << hi 8 )
+        = k + k 1
+    }
+    ( vec_free [u] be )
+    ^ out
+}
+
+// scalar · (affine base) → 64 bytes X‖Y, FULLY constant-time: the dedicated
+// fixed-limb Montgomery field (std/p256_field) + RCB complete addition +
+// branchless always-add ladder. This is the secret-path scalar multiply
+// (ECDSA signing nonce, ECDHE private scalar) — no operand-time-dependent
+// BigInt, no secret-dependent branch, so no scalar blinding is needed (the
+// op is leak-free by construction). Identity result → 64 zero bytes.
+@ __p256_mul_affine ( Vec u ) scalar BigInt bx BigInt by → ( Vec u ) {
+    : ( Vec i ) bxl ( __big_to_limbs16 bx )
+    : ( Vec i ) byl ( __big_to_limbs16 by )
+    : ( Vec u ) out ( p256ct_scalarmult scalar bxl byl )
+    ( vec_free [i] bxl ) ( vec_free [i] byl )
+    ^ out
+}
+
 // ── ECDHE over NIST P-256 (secp256r1) ─────────────────────────────
 // The TLS 1.3 secp256r1 group (RFC 8446 §4.2.8.2 / RFC 8422): the
 // public key is an uncompressed point 0x04 || X(32) || Y(32), and the
@@ -349,22 +318,13 @@ $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
 
 // Private scalar → 65-byte uncompressed public point.
 @ p256_ecdh_keygen ( Vec u ) scalar → ( Vec u ) {
-    : BigInt p ( __p256_p )
-    : BigInt n ( __p256_n )
-    : Jac G @ Jac { ( __p256_gx ) ( __p256_gy ) ( bigint_from_i 1 ) F }
-    : Jac Q ( __jmul_secret scalar G p n 48 )
-    : BigInt x ( __jaffine_x Q p )
-    : BigInt y ( __jaffine_y Q p )
-    : ( Vec u ) xb ( bigint_to_bytes_be x 32 )
-    : ( Vec u ) yb ( bigint_to_bytes_be y 32 )
+    : BigInt gx ( __p256_gx )
+    : BigInt gy ( __p256_gy )
+    : ( Vec u ) xy ( __p256_mul_affine scalar gx gy )
     : ( Vec u ) out ( vec_with_cap [u] 65 )
     ( vec_push [u] out # u 4 )
-    : ~ i k 0
-    ~ < k 32 { ( vec_push [u] out ?? ( vec_get [u] xb k ) { T b → b F _ → # u 0 } ) = k + k 1 }
-    = k 0
-    ~ < k 32 { ( vec_push [u] out ?? ( vec_get [u] yb k ) { T b → b F _ → # u 0 } ) = k + k 1 }
-    ( bigint_free p ) ( bigint_free n ) ( __jfree G ) ( __jfree Q )
-    ( bigint_free x ) ( bigint_free y ) ( vec_free [u] xb ) ( vec_free [u] yb )
+    ( bytes_extend_bytes out xy )
+    ( bigint_free gx ) ( bigint_free gy ) ( vec_free [u] xy )
     ^ out
 }
 
@@ -387,12 +347,12 @@ $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
         ( bigint_free p ) ( bigint_free n ) ( bigint_free b )
         ^ ( vec_new [u] )
     } {}
-    : Jac Q @ Jac { qx qy ( bigint_from_i 1 ) F }
-    : Jac R ( __jmul_secret scalar Q p n 48 )
-    : BigInt rx ( __jaffine_x R p )
-    : ( Vec u ) out ( bigint_to_bytes_be rx 32 )
+    // Constant-time scalar · peer; take the 32-byte X (first half of X‖Y).
+    : ( Vec u ) xy ( __p256_mul_affine scalar qx qy )
+    : ( Vec u ) out ( bytes_slice xy 0 32 )
     ( vec_free [u] qxb ) ( vec_free [u] qyb )
-    ( bigint_free p ) ( bigint_free n ) ( bigint_free b ) ( __jfree Q ) ( __jfree R ) ( bigint_free rx )
+    ( bigint_free qx ) ( bigint_free qy )
+    ( bigint_free p ) ( bigint_free n ) ( bigint_free b ) ( vec_free [u] xy )
     ^ out
 }
 
@@ -539,40 +499,39 @@ $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
         ? < ( bigint_cmp k one ) 0 { = valid F } {}
         ? >= ( bigint_cmp k n ) 0 { = valid F } {}
         ? valid {
-            : Jac G @ Jac { ( __p256_gx ) ( __p256_gy ) ( bigint_from_i 1 ) F }
-            : Jac R ( __jmul_secret V G p n 48 )
-            ? . R inf {
+            : BigInt gx ( __p256_gx )
+            : BigInt gy ( __p256_gy )
+            : ( Vec u ) Rxy ( __p256_mul_affine V gx gy )
+            : ( Vec u ) Rxb ( bytes_slice Rxy 0 32 )
+            : BigInt rx ( bigint_from_bytes_be Rxb )
+            : BigInt r ( bigint_rem rx n )
+            ( bigint_free gx ) ( bigint_free gy ) ( bigint_free rx )
+            ( vec_free [u] Rxy ) ( vec_free [u] Rxb )
+            // identity result → X = 0 → r ≡ 0, retried below (no inf branch).
+            ? ( bigint_is_zero r ) {
                 = valid F
+                ( bigint_free r )
             } {
-                : BigInt rx ( __jaffine_x R p )
-                : BigInt r ( bigint_rem rx n )
-                ( bigint_free rx )
-                ? ( bigint_is_zero r ) {
+                : BigInt kinv ( __finv k n )
+                : BigInt rx2 ( bigint_mul r x )
+                : BigInt zrx ( bigint_add z rx2 )
+                : BigInt zrxm ( bigint_rem zrx n )
+                : BigInt sm ( bigint_mul kinv zrxm )
+                : BigInt s ( bigint_rem sm n )
+                ( bigint_free kinv ) ( bigint_free rx2 ) ( bigint_free zrx )
+                ( bigint_free zrxm ) ( bigint_free sm )
+                ? ( bigint_is_zero s ) {
                     = valid F
-                    ( bigint_free r )
+                    ( bigint_free r ) ( bigint_free s )
                 } {
-                    : BigInt kinv ( __finv k n )
-                    : BigInt rx2 ( bigint_mul r x )
-                    : BigInt zrx ( bigint_add z rx2 )
-                    : BigInt zrxm ( bigint_rem zrx n )
-                    : BigInt sm ( bigint_mul kinv zrxm )
-                    : BigInt s ( bigint_rem sm n )
-                    ( bigint_free kinv ) ( bigint_free rx2 ) ( bigint_free zrx )
-                    ( bigint_free zrxm ) ( bigint_free sm )
-                    ? ( bigint_is_zero s ) {
-                        = valid F
-                        ( bigint_free r ) ( bigint_free s )
-                    } {
-                        : ( Vec u ) rb ( bigint_to_bytes_be r 32 )
-                        : ( Vec u ) sb ( bigint_to_bytes_be s 32 )
-                        ( bigint_free r ) ( bigint_free s )
-                        ( bytes_extend_bytes sig rb ) ( bytes_extend_bytes sig sb )
-                        ( vec_free [u] rb ) ( vec_free [u] sb )
-                        = done T
-                    }
+                    : ( Vec u ) rb ( bigint_to_bytes_be r 32 )
+                    : ( Vec u ) sb ( bigint_to_bytes_be s 32 )
+                    ( bigint_free r ) ( bigint_free s )
+                    ( bytes_extend_bytes sig rb ) ( bytes_extend_bytes sig sb )
+                    ( vec_free [u] rb ) ( vec_free [u] sb )
+                    = done T
                 }
             }
-            ( __jfree G ) ( __jfree R )
         } {}
         ? ! done {
             // K = HMAC(K, V‖0x00); V = HMAC(K, V) — advance the generator.
