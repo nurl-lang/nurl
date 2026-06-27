@@ -97,6 +97,16 @@
     ( nurl_exit 1 )
 }
 
+// die_at: a fatal diagnostic for a deferred (post-scan) check that has only a
+// stored "file:line" location, not a live lexer — so no column, caret, or
+// source-line echo, but the same parseable "loc: msg" prefix. Used by the
+// supertrait-obligation sweep, which runs after every impl in the program has
+// been registered and so cannot point at a single lexer position.
+@ die_at s loc s msg → v {
+    ( nurl_eprintln ( nurl_str_cat3 loc `: ` msg ) )
+    ( nurl_exit 1 )
+}
+
 // Soft diagnostic — same format as `die` but does not exit. Used for
 // non-fatal compiler-detected pitfalls (shadowing, escaping by-ref
 // closure captures) so the user sees the gotcha during compile rather
@@ -618,6 +628,15 @@
 //   <Trait>__tparam           → trait's generic type-var name (e.g. "T")
 //   <Trait>__defaults         → space-separated method names with defaults
 //   <Trait>__<method>__src    → raw source "params → ret { body }"
+//   <Trait>__istrait          → "1" once the trait header is seen (a definite
+//                               existence marker — __tparam is "" for the
+//                               common untyped trait, indistinguishable from
+//                               absent, so supertrait checks key on this)
+//   <Trait>__supers           → space-separated supertrait names (% Sub : A B)
+: ~ s g_super_obligations ``  // one "<Sub> <impl_llvm> <nurl_type> <file:line>\n"
+//   record per impl block, verified after scan_fn_sigs once every impl across
+//   the program (incl. imports) is registered: a supertrait of an implemented
+//   trait must itself be implemented for that same type (T: Sub ⇒ T: Super).
 : ~ i g_closure_defs 0  // Deferred closure function definitions
 : ~ i g_closure_types 0  // Deferred closure type definitions
 : ~ i g_type_count 0  // Count of closure types stored
@@ -15998,19 +16017,61 @@
         ( expect lex TT_RBRACK )  // ']'
     }
     {}
+    // Optional supertrait clause `% Sub : Super…` — a ':' here (never legal
+    // before a trait body or an impl type) introduces one or more supertrait
+    // names, read until the body's '{'. Implies: any type implementing Sub
+    // must also implement each Super (enforced after scan_fn_sigs).
+    : ~ s supers ``
+    ? == ( nurl_lex_type lex ) TT_COLON
+    { ( nurl_lex_advance lex )  // skip ':'
+        // Supertrait names are user-defined trait identifiers (TT_IDENT) — never
+        // a built-in type keyword. Stopping at non-IDENT means `% A : B i {` (a
+        // bogus supertrait clause on an impl) leaves `i` for the impl path,
+        // whose guard rejects it, rather than silently eating the impl type.
+        ~ & == ( nurl_lex_type lex ) TT_IDENT != ( nurl_lex_type lex ) TT_EOF {
+            = supers ? == 0 ( nurl_str_len supers )
+            ( nurl_lex_val lex )
+            ( nurl_str_cat supers ( nurl_str_cat ` ` ( nurl_lex_val lex ) ) )
+            ( nurl_lex_advance lex )
+        }
+        ? == 0 ( nurl_str_len supers )
+        { ( die lex `supertrait clause ':' must be followed by at least one trait name` ) }
+        {}
+    }
+    {}
     // Disambiguate: '{' → trait_decl, else → impl_decl
     ? == ( nurl_lex_type lex ) TT_LBRACE
     {  // trait: remember its type param and scan for default methods
         ( nurl_sym_def g_trait_syms ( nurl_str_cat tname `__tparam` ) tparam )
+        ( nurl_sym_def g_trait_syms ( nurl_str_cat tname `__istrait` ) `1` )
+        ? != 0 ( nurl_str_len supers )
+        { ( nurl_sym_def g_trait_syms ( nurl_str_cat tname `__supers` ) supers ) }
+        {}
         ( scan_trait_body lex tname )
     }
     {  // impl_decl: read implementing type, then scan methods
+        ? != 0 ( nurl_str_len supers )
+        { ( die lex `':' supertrait clause is only valid on a trait declaration, not an impl` ) }
+        {}
         : s impl_nurl ( capture_impl_nurl_name lex )
         : s impl_llvm ( parse_type lex )  // e.g. "i64", "i8*", "%Point"
         : s impl_mangle ( mangle_type impl_llvm )
         // Record that `tname` is implemented for this LLVM type, so a
         // generic bound `A: tname` can be verified at instantiation.
         ( nurl_sym_def g_trait_syms ( nurl_str_cat3 tname `##` impl_llvm ) `1` )
+        // Park a supertrait obligation: after every impl in the program is
+        // registered, each supertrait of `tname` must also be implemented for
+        // this type. Recorded unconditionally (the trait's supers may not be
+        // parsed yet); the deferred pass skips impls whose trait has none.
+        : s spos ( nurl_str_cat ( nurl_lex_filename lex )
+            ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
+        // Four space-separated fields per record (none contains a space):
+        // "<Sub> <impl_llvm> <nurl_type> <file:line> ".
+        = g_super_obligations ( nurl_str_cat g_super_obligations
+            ( nurl_str_cat tname ( nurl_str_cat ` `
+            ( nurl_str_cat impl_llvm ( nurl_str_cat ` `
+            ( nurl_str_cat impl_nurl ( nurl_str_cat ` `
+            ( nurl_str_cat spos ` ` ) ) ) ) ) ) ) )
         ( expect lex TT_LBRACE )
         : ~ s provided ``
         ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
@@ -16053,6 +16114,42 @@
         ? != 0 ( nurl_str_len impl_nurl )
         { ( register_missing_defaults lex tname impl_nurl impl_llvm impl_mangle provided syms ) }
         {}
+    }
+}
+
+// verify_super_obligations: the supertrait soundness sweep. Runs once, after
+// scan_fn_sigs has registered every impl in the program (the main file and all
+// `$`-imports), so it sees the full set of (trait, type) impls regardless of
+// declaration or import order. For each impl block parked in
+// g_super_obligations, look up its trait's supertraits and require each one to
+// be implemented for the SAME type — the static guarantee that backs `T: Sub ⇒
+// T: Super`, so a bound `[A: Sub]` may freely call any supertrait method on A
+// (dispatch resolves through the supertrait impl that this check proves exists).
+@ verify_super_obligations → v {
+    : ~ s rest g_super_obligations
+    ~ != 0 ( nurl_str_len rest ) {
+        : s sub ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s llvm ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s nty ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s pos ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        // Each supertrait of `sub` must be implemented for `llvm`.
+        : ~ s sup_rest ( nurl_sym_get g_trait_syms ( nurl_str_cat sub `__supers` ) )
+        ~ != 0 ( nurl_str_len sup_rest ) {
+            : s sup ( str_first_word sup_rest )
+            = sup_rest ( str_skip_word sup_rest )
+            ? == 0 ( nurl_str_len ( nurl_sym_get g_trait_syms
+                ( nurl_str_cat3 sup `##` llvm ) ) )
+            { ( die_at pos ( nurl_str_cat
+                ( nurl_str_cat3 `type '` nty `' implements trait '` )
+                ( nurl_str_cat ( nurl_str_cat3 sub `' but not its supertrait '` sup )
+                    ( nurl_str_cat3 `' — every '` sub
+                    ( nurl_str_cat3 `' type must also implement '` sup `'` ) ) ) ) ) }
+            {}
+        }
     }
 }
 
@@ -16101,6 +16198,13 @@
     { ( nurl_lex_advance lex )
         ~ & != ( nurl_lex_type lex ) TT_RBRACK != ( nurl_lex_type lex ) TT_EOF { ( nurl_lex_advance lex ) }
         ( expect lex TT_RBRACK )  // ']'
+    }
+    {}
+    // Skip optional supertrait clause `: Super…` (captured during scan); its
+    // names are TT_IDENT trait names running until the body's '{'.
+    ? == ( nurl_lex_type lex ) TT_COLON
+    { ( nurl_lex_advance lex )
+        ~ & == ( nurl_lex_type lex ) TT_IDENT != ( nurl_lex_type lex ) TT_EOF { ( nurl_lex_advance lex ) }
     }
     {}
     // Disambiguate: '{' → trait_decl (no IR), else → impl_decl
@@ -16844,6 +16948,9 @@
     ( scan_generic_structs lex0 syms )
     : i lex1 ( nurl_lex_new src path )
     ( scan_fn_sigs lex1 syms )
+    // Every impl across the program is now registered — enforce that each
+    // implemented subtrait's supertraits are implemented for the same type.
+    ( verify_super_obligations )
     : i lex_tn ( nurl_lex_new src path )
     ( scan_type_names lex_tn syms )
     : i lex ( nurl_lex_new src path )
