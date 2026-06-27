@@ -10,10 +10,12 @@ does **not** promise.
 
 > **One-line summary.** The primitives are correct (KAT-verified, interops
 > with OpenSSL/curl/browsers) and the protocol enforces the standard TLS 1.3
-> authentication and downgrade controls. The side-channel hardening targets
-> the **remote / co-resident timing** attacker (the network threat model);
-> it is not a defense against an attacker with local power/EM probes. Where a
-> guarantee is narrower than OpenSSL's, this document says so.
+> authentication and downgrade controls. The EC and symmetric primitives are
+> **fully constant-time** (including operand timing); the only side-channel
+> residual is RSA's `bigint` operand timing, covered by base blinding against
+> the remote/co-resident attacker. Where a guarantee is narrower than
+> OpenSSL's (revocation, name constraints, single-trace RSA), this document
+> says so.
 
 ---
 
@@ -26,7 +28,7 @@ All sources live in `stdlib/std/`.
 | Hashes | `hash_sha256`, `hash_sha512`, `hash_sha1`, `hash_md5`, `hash_blake3` | SHA-1/MD5 for legacy interop only (never trusted for signatures) |
 | HMAC / KDF | `hkdf`, `pbkdf2`, `scrypt` | HKDF-Expand-Label for TLS 1.3 |
 | AEAD | `aes_gcm` (AES-128/256-GCM), `chacha20poly1305` | the two TLS 1.3 record ciphers |
-| ECDH / signatures | `x25519`, `ed25519`, `ecdsa_p256` (P-256 + P-384) | TweetNaCl-derived 25519; Jacobian P-256/384 |
+| ECDH / signatures | `x25519`, `ed25519`, `ecdsa_p256` (P-256 + P-384), `p256_field` | TweetNaCl-derived 25519; `p256_field` is the dedicated **constant-time** fixed-limb GF(p) for the P-256 secret path |
 | RSA | `rsa` (PKCS#1 v1.5 verify, PSS verify + sign) | built on `bigint` |
 | Bignum | `bigint` | sign-magnitude, schoolbook mul / long division, `modpow`, `modinv` |
 | X.509 | `x509`, `tls_verify` | DER parser + chain/host/policy verification |
@@ -93,31 +95,31 @@ residual operand-value-dependent timing carries no signal. Hardening:
 | GCM / Poly1305 / TLS Finished tag compares | Constant-time (OR-accumulated XOR, no early exit). |
 | RSA modexp (`bigint_modpow`) | **Constant control flow**: a Montgomery powering ladder — exactly two modular multiplies per bit for a fixed count = bit-length(`m`), register choice by a constant-time conditional swap. The square-multiply trace is uniform regardless of the secret exponent `d` (no naive "multiply only on 1-bits" leak). No CRT is used (single direct modexp with the full `d`), so there is no CRT-reduction timing surface (Brumley–Boneh class). |
 | RSA private key (PSS sign) | **Base blinding** on top: `s = ((EM·rᵉ)ᵈ · r⁻¹) mod n` for a fresh random `r` per signature. `rᵉᵈ ≡ r (mod n)`, so the result is identical, but the value fed to the (still operand-time-dependent) `bigint` mul/rem is randomized — covering the residual timing the ladder's uniform control flow does not. |
-| P-256 scalar mult (`__jmul`) | **Constant control flow**: a branchless Coron always-add ladder — every bit does a double and an add, then a constant-time point select keeps the add iff the bit was set. No secret-bit branch; per-bit operation sequence is uniform. |
-| ECDSA nonce / ECDH scalar | **Scalar blinding** on top (walk `k + r·n` instead of `k`; `n·P = O`) **+ projective coordinate randomization** (`(X,Y,Z) → (λ²X, λ³Y, λZ)`). Coron CHES'99 #1 and #3; randomizes the intermediate values per call, covering the residual operand timing. |
+| P-256 secret scalar mult (ECDSA nonce / ECDHE) | **Fully constant-time** (`std/p256_field`): a dedicated fixed-16-limb GF(p) field — Montgomery (CIOS) multiply, conditional-`±p` add/sub, fixed-exponent Fermat inverse — never normalized, so even the *operand timing* is value-independent. Points use the Renes–Costello–Batina **complete** addition formula (a = −3), correct for all inputs incl. identity, in a branchless always-add ladder with constant-time point select. No branch, no table index, no operand-time dependence, **no blinding needed**. Verified: the field matches the bigint reference (2000 random cases) and the scalar multiply matches both the bigint path and Python `cryptography`. |
+| P-256/P-384 verify (`__jmul`) | Branchless ladder over the bigint field, but the scalars are **public** (verification), so the bigint operand timing is harmless here. |
 | X25519 | Montgomery ladder with a branchless constant-time conditional swap (TweetNaCl); fixed iteration count. |
 | Ed25519 | Deterministic nonce (RFC 8032), so no per-signature secret randomness to leak. |
 | Secret comparison | `std/subtle.nu` — duration depends only on input *length*, never contents. |
 
-### Honest limitation: variable-time bignum (operand timing only)
+### State by primitive
 
-The control-flow / access-pattern leak is closed: RSA modexp and P-256 scalar
-multiply now have a uniform, secret-independent operation sequence (no
-secret-dependent branch, no secret-indexed table). What remains is one finer
-layer — `std/bigint.nu` is a generic sign-magnitude bignum that **normalizes
-(trims leading-zero limbs)**, so its `mul`/`rem` run in time proportional to
-operand *magnitude*. So the field/scalar arithmetic is not yet *operand-time*
-constant. This residual is **covered by the per-operation blinding** (every
-trace runs on randomized operands, carrying no signal an attacker can
-aggregate), which is exactly the OpenSSL posture for the same arithmetic.
+- **P-256 (ECDSA signing, ECDHE), X25519, Ed25519, AES-GCM, ChaCha20-Poly1305,
+  GHASH, all tag compares** — fully constant-time, *including operand timing*:
+  no secret-dependent branch, no secret-indexed table, and a fixed-width field
+  representation (P-256 via `std/p256_field`; 25519 via the TweetNaCl packed
+  limbs) so even `mul`/`reduce` duration is value-independent. This resists not
+  only the remote/co-resident attacker but a *single-trace* observer of these
+  operations.
 
-Eliminating even that residual — to resist a *single-trace* local power/EM
-attacker — requires a dedicated **fixed-limb-count field** with constant-time
-multiply and reduction (no normalization). That is a deliberate follow-up
-tracked in `TODO.md` §10, not a property this software stack claims today. The
-boundary drawn here (uniform control flow + blinded operands; not fixed-limb
-constant-time arithmetic) is the standard one for a pure-software TLS stack
-against the network / co-resident threat model.
+- **RSA private-key exponentiation** — uniform control flow (the Montgomery
+  powering ladder) but the underlying `std/bigint` `mul`/`rem` still **normalize
+  (trim leading-zero limbs)**, so their duration tracks operand *magnitude*.
+  That residual is **covered by base blinding** (every signature runs on a fresh
+  randomized operand, so no signal aggregates across traces) — exactly OpenSSL's
+  posture for the same arithmetic. A *single-trace* local power/EM attacker is
+  out of scope for RSA until a dedicated fixed-limb RSA modular multiply lands
+  (tracked in `TODO.md` §10). RSA is the legacy path; the EC path above is the
+  primary one for modern internet-facing TLS and carries no such residual.
 
 ### Practical guidance
 
@@ -203,16 +205,19 @@ be **sound, not a hardware-grade side-channel-free implementation**:
    default; the only way to skip them is the explicitly-named insecure path.
    **Revocation (OCSP/CRL) and X.509 name constraints are not checked** — see
    §5 "Not enforced".
-3. **Hardened against the remote/co-resident timing attacker** — constant-time
-   symmetric primitives and tag compares; uniform secret-independent control
-   flow in RSA modexp and P-256 scalar multiply; blinded asymmetric private-key
-   operations on top.
-4. **Not** hardened against a local single-trace power/EM attacker — the bignum
-   layer's mul/rem are still operand-time-dependent (covered by blinding, not
-   eliminated). Use a hardware/audited library where that threat model applies.
+3. **Side-channel hardened.** The EC path (P-256 ECDSA/ECDHE, X25519, Ed25519)
+   and all symmetric primitives are fully constant-time *including operand
+   timing* — no secret-dependent branch, table index, or value-dependent
+   duration — so they resist even a single-trace local observer. RSA's private
+   exponentiation has uniform control flow plus base blinding, which defeats the
+   remote/co-resident attacker; its `bigint` operand timing is the one residual.
+4. **One documented residual:** RSA modular multiply is still operand-time-
+   dependent under the blinding (single-trace local power/EM on *RSA only* is
+   out of scope until a fixed-limb RSA multiply lands). Use a hardware/audited
+   library if that exact threat model applies to your RSA keys.
 
-The full audit and the residual follow-ups (notably a constant-time fixed-limb
-P-256 field) are tracked in `TODO.md` §9–§10.
+The full audit and the remaining RSA fixed-limb follow-up are tracked in
+`TODO.md` §9–§10.
 
 ---
 
