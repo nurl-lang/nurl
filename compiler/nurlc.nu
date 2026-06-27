@@ -606,6 +606,14 @@
 : ~ i g_struct_inst_syms 0  // dedupe marker — <mangled>__done → "1" once emitted
 : ~ i g_impl_ret_syms 0  // Group F: method##llvm_type → ret_type string
 : ~ i g_impl_name_syms 0  // Group F: method##llvm_type → mangle_suffix string
+: ~ i g_impl_trait_syms 0  // coherence: method##llvm_type → owning trait name
+: ~ i g_impl_pos_syms 0  // coherence: method##llvm_type → "file:line" of the
+//   first registration. A `$`-imported impl is scanned once per importer, so
+//   the SAME (method, type) is registered from the SAME source location more
+//   than once — those re-scans are idempotent (allowed). A registration from a
+//   DIFFERENT location is a genuine duplicate impl, or two traits sharing a
+//   method name for one type (incl. alias types like i / i64 that share an
+//   LLVM type) — reported as a clean diagnostic, not an LLVM redefinition.
 : ~ i g_trait_syms 0  // Trait default implementations.
 //   <Trait>__tparam           → trait's generic type-var name (e.g. "T")
 //   <Trait>__defaults         → space-separated method names with defaults
@@ -15897,7 +15905,7 @@
 // register_missing_defaults: for each of a trait's default methods that the
 // impl did NOT override, register a dispatch entry (method##ImplLLVM →
 // ret_ty) so that call sites resolve. Called during impl scan.
-@ register_missing_defaults s tname s impl_nurl s impl_llvm s impl_mangle s provided i syms → v {
+@ register_missing_defaults i lex s tname s impl_nurl s impl_llvm s impl_mangle s provided i syms → v {
     : s tparam ( nurl_sym_get g_trait_syms ( nurl_str_cat tname `__tparam` ) )
     : ~ s defaults ( nurl_sym_get g_trait_syms ( nurl_str_cat tname `__defaults` ) )
     ~ != 0 ( nurl_str_len defaults ) {
@@ -15912,6 +15920,7 @@
             src
             : s ret_ty ( trait_default_ret subst )
             : s key ( nurl_str_cat mname ( nurl_str_cat `##` impl_llvm ) )
+            ( __coherence_register lex mname impl_llvm impl_nurl tname )
             ( nurl_sym_def g_impl_ret_syms key ret_ty )
             ( nurl_sym_def g_impl_name_syms key impl_mangle )
             // Mark the bare method name as impl-backed so gen_call's
@@ -15936,6 +15945,40 @@
 
 // scan_impl_decl: pre-scan a % trait/impl declaration, registering impl methods.
 // Registers in g_impl_ret_syms and g_impl_name_syms so gen_call can dispatch.
+// Coherence guard for trait-method dispatch. Each (method, LLVM-type) pair may
+// be registered by exactly ONE impl. A second registration is either a
+// duplicate impl of the same trait, or two different traits sharing a method
+// name for one type — both ambiguous for NURL's bare-name dispatch. Type
+// aliases that share an LLVM lowering (i / i64, u / u8, f / f64) collide here
+// and are reported as duplicate impls rather than reaching LLVM as a function
+// redefinition. Call BEFORE the g_impl_name_syms registration; it records the
+// owning trait so a later collision's diagnostic can name both traits.
+@ __coherence_register i lex s mname s impl_llvm s impl_nurl s tname → v {
+    : s key ( nurl_str_cat mname ( nurl_str_cat `##` impl_llvm ) )
+    : s pos ( nurl_str_cat ( nurl_lex_filename lex )
+        ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
+    : s prior ( nurl_sym_get g_impl_name_syms key )
+    ? != 0 ( nurl_str_len prior ) {
+        : s prior_pos ( nurl_sym_get g_impl_pos_syms key )
+        ? ( seq prior_pos pos )
+        {}  // same source location → idempotent re-scan of the same impl
+        {   // a different location → a genuine duplicate or cross-trait clash
+            : s pt ( nurl_sym_get g_impl_trait_syms key )
+            : s ty ? != 0 ( nurl_str_len impl_nurl ) impl_nurl impl_llvm
+            ? ( seq pt tname )
+            { ( die lex ( nurl_str_cat
+                ( nurl_str_cat3 `duplicate impl of trait '` tname `' for type '` )
+                ( nurl_str_cat ( nurl_str_cat3 ty `' (method '` mname ) `') — each trait may be implemented once per type` ) ) ) }
+            { ( die lex ( nurl_str_cat
+                ( nurl_str_cat3 `method '` mname `' for type '` )
+                ( nurl_str_cat ( nurl_str_cat3 ty `' is provided by both trait '` pt )
+                    ( nurl_str_cat3 `' and trait '` tname `' — bare-name dispatch cannot disambiguate` ) ) ) ) }
+        }
+    } {}
+    ( nurl_sym_def g_impl_trait_syms key tname )
+    ( nurl_sym_def g_impl_pos_syms key pos )
+}
+
 // For trait_decl: stores default-method templates in g_trait_syms.
 // For impl_decl: after scanning explicit methods, fills in dispatch entries
 // for any of the trait's defaults that the impl did not override.
@@ -15987,6 +16030,7 @@
                     { ( nurl_lex_advance lex )
                         : s ret_ty ( parse_type lex )
                         : s key ( nurl_str_cat mname ( nurl_str_cat `##` impl_llvm ) )
+                        ( __coherence_register lex mname impl_llvm impl_nurl tname )
                         ( nurl_sym_def g_impl_ret_syms key ret_ty )
                         ( nurl_sym_def g_impl_name_syms key impl_mangle )
                         // Mark the bare method name as impl-backed so
@@ -16007,7 +16051,7 @@
         // After the impl's explicit methods, synthesize dispatch entries for
         // any of the trait's defaults that this impl did not override.
         ? != 0 ( nurl_str_len impl_nurl )
-        { ( register_missing_defaults tname impl_nurl impl_llvm impl_mangle provided syms ) }
+        { ( register_missing_defaults lex tname impl_nurl impl_llvm impl_mangle provided syms ) }
         {}
     }
 }
@@ -16774,6 +16818,8 @@
     ( nurl_sym_def g_generic_syms `__deferred_count__` `0` )
     = g_impl_ret_syms ( nurl_sym_new )
     = g_impl_name_syms ( nurl_sym_new )
+    = g_impl_trait_syms ( nurl_sym_new )
+    = g_impl_pos_syms ( nurl_sym_new )
     = g_trait_syms ( nurl_sym_new )
     = g_res_type_syms ( nurl_sym_new )
     = g_closure_defs ( nurl_sym_new )
