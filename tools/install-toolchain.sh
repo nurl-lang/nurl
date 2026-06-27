@@ -142,4 +142,4 @@ echo "    source $PREFIX/env"
 echo "    # and add that line to your ~/.bashrc / ~/.zshrc"
 echo
 echo "Then, from anywhere:"
-echo "    nurlpkg install argz-demo     # fetch + build + install a registry program"
+echo "    nurlpkg install nq             # fetch + build + install a registry program"

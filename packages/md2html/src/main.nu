@@ -8,7 +8,7 @@
 //   md2html -f README.md --full         # full styled page
 //   md2html -f doc.md -t "My Doc" -F    # full page with a custom title
 //
-// Built on the `argz` registry package (flags) and this package's own
+// Built on the stdlib `std/args` parser (flags) and this package's own
 // `markdown` renderer library.
 
 $ `stdlib/core/io.nu`
@@ -16,7 +16,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
-$ `deps/argz/src/argz.nu`
+$ `stdlib/std/args.nu`
 $ `src/markdown.nu`
 
 // Wrap a rendered HTML body in a complete, self-contained document with a
@@ -47,11 +47,11 @@ $ `src/markdown.nu`
 }
 
 @ main → i {
-    : Argz p ( argz_new `md2html` `render Markdown to HTML` )
-    ( argz_flag p `full`  `F` `emit a complete styled HTML document (not just a fragment)` )
-    ( argz_flag p `help`  `h` `show this help` )
-    ( argz_opt  p `file`  `f` `read Markdown from FILE instead of stdin` )
-    ( argz_opt  p `title` `t` `document <title> when used with --full (default "Document")` )
+    : ArgParser p ( args_new `md2html` `render Markdown to HTML` )
+    ( args_flag p `full`  70  `emit a complete styled HTML document (not just a fragment)` )  // -F
+    ( args_flag p `help`  104 `show this help` )  // -h
+    ( args_opt  p `file`  102 `FILE`  `read Markdown from FILE instead of stdin` )  // -f
+    ( args_opt  p `title` 116 `TITLE` `document <title> when used with --full (default "Document")` )  // -t
 
     : ( Vec String ) argv ( vec_new [String] )
     : i ac ( env_args_count )
@@ -62,64 +62,61 @@ $ `src/markdown.nu`
     }
 
     : ~ i rc 0
-    : !ArgzMatch ArgzErr r ( argz_parse p argv )
-    ?? r {
-        F e → {
-            ( nurl_eprint `md2html: ` ) ( nurl_eprintln ( argz_err_name e ) )
-            ( nurl_eprintln `try 'md2html --help'` )
-            = rc 2
-        }
-        T m → {
-            ? ( argz_has m `help` ) {
-                : String h ( argz_help p )
-                ( nurl_print `md2html — render Markdown to HTML\n\nUsage: md2html [OPTIONS]\n\n` )
-                ( nurl_print `Reads Markdown from stdin unless --file is given.\n\n` )
-                ( nurl_print ( string_data h ) )
-                ( string_free h )
-            } {
-                : b full ( argz_has m `full` )
+    ? ( args_parse p argv ) {
+        ? ( args_present p `help` ) {
+            : String h ( args_usage p )
+            ( nurl_print `md2html — render Markdown to HTML\n\nUsage: md2html [OPTIONS]\n\n` )
+            ( nurl_print `Reads Markdown from stdin unless --file is given.\n\n` )
+            ( nurl_print ( string_data h ) )
+            ( string_free h )
+        } {
+            : b full ( args_present p `full` )
 
-                // Input: --file, else stdin.
-                : ~ String input ( string_new )
-                : ~ b have_input T
-                ?? ( argz_value m `file` ) {
-                    T fv → {
-                        ?? ( read_file ( string_data fv ) ) {
-                            T txt → { ( string_free input ) = input txt }
-                            F _ → {
-                                ( nurl_eprint `md2html: cannot read file: ` )
-                                ( nurl_eprintln ( string_data fv ) )
-                                = rc 1
-                                = have_input F
-                            }
+            // Input: --file, else stdin.
+            : ~ String input ( string_new )
+            : ~ b have_input T
+            ?? ( args_value p `file` ) {
+                T fv → {
+                    ?? ( read_file ( string_data fv ) ) {
+                        T txt → { ( string_free input ) = input txt }
+                        F _ → {
+                            ( nurl_eprint `md2html: cannot read file: ` )
+                            ( nurl_eprintln ( string_data fv ) )
+                            = rc 1
+                            = have_input F
                         }
                     }
-                    F _ → {
-                        ( string_free input )
-                        = input ( read_all_stdin )
-                    }
+                    ( string_free fv )
                 }
-
-                ? have_input {
-                    : String body ( md_to_html ( string_data input ) )
-                    ? full {
-                        : ~ s title `Document`
-                        ?? ( argz_value m `title` ) { T tv → { = title ( string_data tv ) } F _ → {} }
-                        : String page ( __full_page title body )
-                        ( nurl_print ( string_data page ) )
-                        ( string_free page )
-                    } {
-                        ( nurl_print ( string_data body ) )
-                    }
-                    ( string_free body )
-                } {}
-                ( string_free input )
+                F _ → {
+                    ( string_free input )
+                    = input ( read_all_stdin )
+                }
             }
-            ( argz_match_free m )
+
+            ? have_input {
+                : String body ( md_to_html ( string_data input ) )
+                ? full {
+                    : ~ String titlestr ( string_from `Document` )
+                    ?? ( args_value p `title` ) { T tv → { ( string_free titlestr ) = titlestr tv } F _ → {} }
+                    : String page ( __full_page ( string_data titlestr ) body )
+                    ( nurl_print ( string_data page ) )
+                    ( string_free page )
+                    ( string_free titlestr )
+                } {
+                    ( nurl_print ( string_data body ) )
+                }
+                ( string_free body )
+            } {}
+            ( string_free input )
         }
+    } {
+        ( nurl_eprint `md2html: ` ) ( nurl_eprintln ( args_error p ) )
+        ( nurl_eprintln `try 'md2html --help'` )
+        = rc 2
     }
 
-    ( argz_free p )
+    ( args_free p )
     ( vec_free_with [String] argv \ String x → v { ( string_free x ) } )
     ^ rc
 }

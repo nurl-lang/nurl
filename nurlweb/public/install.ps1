@@ -74,7 +74,7 @@ try {
     Write-Host "    setx PATH `"$Prefix\bin;%PATH%`""
     Write-Host "    setx NURL_STDLIB `"$Prefix`""
     Write-Host ""
-    Write-Host "Then:  nurlc --version   ·   nurlpkg install argz-demo"
+    Write-Host "Then:  nurlc --version   ·   nurlpkg install nq"
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

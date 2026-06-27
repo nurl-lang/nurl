@@ -109,7 +109,7 @@ echo     setx NURL_STDLIB "%PREFIX%"
 echo     setx PATH "%PREFIX%\bin;%%PATH%%"
 echo.
 echo Then, from anywhere:
-echo     nurlpkg install argz-demo
+echo     nurlpkg install nq
 exit /b 0
 
 :uninstall

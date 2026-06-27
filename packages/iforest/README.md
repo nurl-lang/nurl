@@ -60,8 +60,8 @@ build.
 
 ## Using the trainer as a library
 
-The library depends only on the standard library (`vec`, `float`, `rng`),
-not on `argz` — declare the dependency and import the module:
+The library depends only on the standard library (`vec`, `float`, `rng`) —
+declare the dependency and import the module:
 
 ```toml
 [dependencies]

@@ -7,7 +7,7 @@ with **no libpq and no OpenSSL**. A secure, authenticated connection works
 on a machine that has nothing installed — the produced binary links
 `libc` only, on Linux, macOS, the BSDs and Windows.
 
-It builds on the [`tls`](../tls) package (a pure-NURL TLS 1.3 / 1.2 client)
+It uses the stdlib's pure-NURL TLS 1.3 / 1.2 client (`std/tls.nu`)
 and the stdlib crypto, so the TLS handshake — X25519 **and** NIST P-256
 key exchange, ChaCha20-Poly1305 / AES-GCM, the certificate verification —
 needs nothing from the host either.

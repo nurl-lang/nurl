@@ -17,8 +17,8 @@ cherries ███████▋ 2.1
 It lives in the NURL **registry**, not the core stdlib: charting is
 opinionated (which glyphs, which scaling, which layout) in a way the
 language proper should stay out of, but it is exactly the everyday utility
-an ecosystem exists to provide. It depends on `argz` for flag parsing and
-on the shipped stdlib for everything else.
+an ecosystem exists to provide. It parses flags with the stdlib `std/args`
+and leans on the shipped stdlib for everything else.
 
 ## Install
 
@@ -122,7 +122,6 @@ range. An empty series yields an empty string rather than trapping.
 From the package directory, with the in-tree toolchain:
 
 ```bash
-ln -s ../../argz deps/argz                       # materialise the dep
 NURL_STDLIB=/path/to/nurl-lang \
   /path/to/nurl-lang/nurl.sh src/main.nu chart   # build the CLI
 echo 1 2 3 4 5 | ./chart spark

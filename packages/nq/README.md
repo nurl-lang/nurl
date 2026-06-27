@@ -5,9 +5,8 @@ JSON from stdin (or a file), applies a small jq-like filter, and prints
 the result — pretty by default, compact or raw on request.
 
 It lives in the NURL **registry** (it is *not* part of the core stdlib).
-It also doubles as a worked example of the ecosystem: `nq` declares the
-[`argz`](../argz) registry package as a dependency for its flag parsing,
-and leans on the shipped `stdlib/ext/json` for parsing and printing.
+`nq` parses flags with the stdlib `std/args` and leans on the shipped
+`stdlib/ext/json` for parsing and printing.
 
 ```
 nurlpkg install nq

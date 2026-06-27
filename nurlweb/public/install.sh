@@ -167,7 +167,7 @@ info "The shims self-locate the stdlib, so that one line is all you need —"
 info "no 'source env' required. (bash/zsh users may instead 'source $PREFIX/env',"
 info "which also exports NURL_HOME.)"
 info ""
-info "Then:  nurlc --version   ·   nurlpkg install argz-demo"
+info "Then:  nurlc --version   ·   nurlpkg install nq"
 
 # Building a program (and therefore `nurlpkg install <tool>`, which compiles
 # the package from source) needs an LLVM compiler. The archive bundles a

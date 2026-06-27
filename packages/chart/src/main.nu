@@ -19,7 +19,7 @@
 // last token is the value, the rest is the label), or a bare number whose
 // label is its position. Every other mode reads a flat stream of numbers.
 //
-// Flags (parsed by the `argz` registry package):
+// Flags (parsed by the stdlib `std/args` parser):
 //   -w / --width N     chart width in cells   (bar/hist/line; default 40)
 //        --height N    plot height in rows     (line; default 10)
 //   -b / --bins N      histogram buckets       (hist; default 10)
@@ -28,8 +28,8 @@
 //   -h / --help        show this help
 //
 // Like the rest of the registry packages it leans on the ecosystem: the
-// `chart` library does the drawing, `argz` parses the flags, and the
-// shipped stdlib does everything else. Leak-clean under ASan/LSan on
+// `chart` library does the drawing, the stdlib `std/args` parses the flags,
+// and the shipped stdlib does everything else. Leak-clean under ASan/LSan on
 // every path.
 
 $ `stdlib/core/io.nu`
@@ -39,7 +39,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/ext/env.nu`
-$ `deps/argz/src/argz.nu`
+$ `stdlib/std/args.nu`
 $ `src/chart.nu`
 
 // ── Input parsing ─────────────────────────────────────────────────────
@@ -152,16 +152,19 @@ $ `src/chart.nu`
 // ── Flag helpers ──────────────────────────────────────────────────────
 
 // Integer value of flag `long`, or `dflt` if absent / unparseable.
-@ __opt_int ArgzMatch m s long i dflt → i {
-    ?? ( argz_value m long ) {
+@ __opt_int ArgParser p s long i dflt → i {
+    : ~ i out dflt
+    ?? ( args_value p long ) {
         T v → {
             ?? ( string_to_int v ) {
-                T n → { ^ n }
-                F _ → { ^ dflt }
+                T n → { = out n }
+                F _ → {}
             }
+            ( string_free v )
         }
-        F _ → { ^ dflt }
+        F _ → {}
     }
+    ^ out
 }
 
 @ __emit String out → v {
@@ -171,14 +174,14 @@ $ `src/chart.nu`
 
 // ── Help ──────────────────────────────────────────────────────────────
 
-@ __usage Argz p → v {
+@ __usage ArgParser p → v {
     ( nurl_print `chart — draw charts in your terminal\n\n` )
     ( nurl_print `usage: chart <spark|bar|hist|line> [options]\n\n` )
     ( nurl_print `  spark   one-line sparkline\n` )
     ( nurl_print `  bar     labelled horizontal bars ('<label> <value>' per line)\n` )
     ( nurl_print `  hist    histogram of the numbers (--bins)\n` )
     ( nurl_print `  line    line/scatter plot (--width/--height)\n\n` )
-    : String h ( argz_help p )
+    : String h ( args_usage p )
     ( nurl_print ( string_data h ) )
     ( string_free h )
     ( nurl_print `\nNumbers are read whitespace-separated from stdin (or --file).\n` )
@@ -187,13 +190,13 @@ $ `src/chart.nu`
 // ── Main ──────────────────────────────────────────────────────────────
 
 @ main → i {
-    : Argz p ( argz_new `chart` `draw charts in your terminal` )
-    ( argz_opt  p `width`  `w` `chart width in cells (default 40)` )
-    ( argz_opt  p `height` `H` `plot height in rows (default 10)` )
-    ( argz_opt  p `bins`   `b` `histogram buckets (default 10)` )
-    ( argz_opt  p `file`   `f` `read numbers from FILE instead of stdin` )
-    ( argz_opt  p `title`  `t` `print TITLE above the chart` )
-    ( argz_flag p `help`   `h` `show this help` )
+    : ArgParser p ( args_new `chart` `draw charts in your terminal` )
+    ( args_opt  p `width`  119 `COLS` `chart width in cells (default 40)` )  // -w
+    ( args_opt  p `height` 72  `ROWS` `plot height in rows (default 10)` )  // -H
+    ( args_opt  p `bins`   98  `N`    `histogram buckets (default 10)` )  // -b
+    ( args_opt  p `file`   102 `FILE` `read numbers from FILE instead of stdin` )  // -f
+    ( args_opt  p `title`  116 `TEXT` `print TITLE above the chart` )  // -t
+    ( args_flag p `help`   104 `show this help` )  // -h
 
     : ( Vec String ) argv ( vec_new [String] )
     : i ac ( env_args_count )
@@ -204,19 +207,12 @@ $ `src/chart.nu`
     }
 
     : ~ i rc 0
-    : !ArgzMatch ArgzErr r ( argz_parse p argv )
-    ?? r {
-        F e → {
-            ( nurl_eprint `chart: ` ) ( nurl_eprintln ( argz_err_name e ) )
-            ( nurl_eprintln `try 'chart --help'` )
-            = rc 2
-        }
-        T m → {
-            ? ( argz_has m `help` ) {
-                ( __usage p )
-            } {
+    ? ( args_parse p argv ) {
+        ? ( args_present p `help` ) {
+            ( __usage p )
+        } {
                 // Mode = first positional (default "spark").
-                : ( Vec String ) ps ( argz_positionals m )
+                : ( Vec String ) ps ( args_positionals p )
                 : ~ s mode `spark`
                 ? > ( vec_len [String] ps ) 0 {
                     ?? ( vec_get [String] ps 0 ) {
@@ -228,7 +224,7 @@ $ `src/chart.nu`
                 // Read input: --file or stdin.
                 : ~ String input ( string_new )
                 : ~ b ok T
-                ?? ( argz_value m `file` ) {
+                ?? ( args_value p `file` ) {
                     T fv → {
                         ?? ( read_file ( string_data fv ) ) {
                             T txt → { ( string_free input ) = input txt }
@@ -238,6 +234,7 @@ $ `src/chart.nu`
                                 = rc 1 = ok F
                             }
                         }
+                        ( string_free fv )
                     }
                     F _ → {
                         ( string_free input )
@@ -246,14 +243,15 @@ $ `src/chart.nu`
                 }
 
                 ? ok {
-                    : i width  ( __opt_int m `width`  40 )
-                    : i height ( __opt_int m `height` 10 )
-                    : i bins   ( __opt_int m `bins`   10 )
+                    : i width  ( __opt_int p `width`  40 )
+                    : i height ( __opt_int p `height` 10 )
+                    : i bins   ( __opt_int p `bins`   10 )
 
                     // Optional title line.
-                    ?? ( argz_value m `title` ) {
+                    ?? ( args_value p `title` ) {
                         T tv → {
                             ( nurl_print ( string_data tv ) ) ( nurl_print `\n` )
+                            ( string_free tv )
                         }
                         F _ → {}
                     }
@@ -298,11 +296,13 @@ $ `src/chart.nu`
                 } {}
                 ( string_free input )
             }
-            ( argz_match_free m )
-        }
+    } {
+        ( nurl_eprint `chart: ` ) ( nurl_eprintln ( args_error p ) )
+        ( nurl_eprintln `try 'chart --help'` )
+        = rc 2
     }
 
-    ( argz_free p )
+    ( args_free p )
     ( vec_free_with [String] argv \ String x → v { ( string_free x ) } )
     ^ rc
 }

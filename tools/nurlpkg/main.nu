@@ -1487,7 +1487,7 @@ $ `stdlib/std/bytes.nu`
 // resulting binary on $PATH (under $NURL_HOME/bin, default ~/.nurl/bin).
 //
 // This is the payoff of the installable toolchain: an outside user runs
-// `nurlpkg install argz-demo` and gets a working program built from
+// `nurlpkg install nq` and gets a working program built from
 // registry sources against the shipped stdlib (resolved via $NURL_STDLIB),
 // no monorepo checkout required.
 
