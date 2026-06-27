@@ -15,16 +15,59 @@ $ `stdlib/std/bytes.nu`
     ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ 0 }
 }
 
-@ __aes_sbox → ( Vec u ) {
-    ^ ?? ( bytes_from_hex `637c777bf26b6fc53001672bfed7ab76ca82c97dfa5947f0add4a2af9ca472c0b7fd9326363ff7cc34a5e5f171d8311504c723c31896059a071280e2eb27b27509832c1a1b6e5aa0523bd6b329e32f8453d100ed20fcb15b6acbbe394a4c58cfd0efaafb434d338545f9027f503c9fa851a3408f929d38f5bcb6da2110fff3d2cd0c13ec5f974417c4a77e3d645d197360814fdc222a908846eeb814de5e0bdbe0323a0a4906245cc2d3ac629195e479e7c8376d8dd54ea96c56f4ea657aae08ba78252e1ca6b4c6e8dd741f4bbd8b8a703eb5664803f60e613557b986c11d9ee1f8981169d98e949b1e87e9ce5528df8ca1890dbfe6426841992d0fb054bb16` ) {
-        T v → v
-        F _ → ( vec_new [u] )
+// C2: the AES S-box is computed CONSTANT-TIME, not read from a table indexed
+// by secret bytes (which leaks the key via cache-timing — the reason hardware
+// ships AES-NI / bitsliced AES). SubBytes(x) = Affine(x^{-1} in GF(2^8)).
+// Both the GF multiply and the fixed-exponent inversion are branchless in the
+// data, so duration is independent of key/plaintext. Verified to match the
+// reference S-box on all 256 inputs. (Slower than a table — ChaCha20-Poly1305
+// is the faster constant-time default; AES is the fallback for AES-only peers.)
+
+// Constant-time GF(2^8) multiply (AES field, reduction polynomial 0x11b).
+@ __gf_mul i a i b → i {
+    : ~ i p 0
+    : ~ i aa & a 255
+    : ~ i bb & b 255
+    : ~ i k 0
+    ~ < k 8 {
+        : i m & 1 bb
+        = p ^^ p & aa - 0 m  // add aa iff low bit of bb set (mask)
+        : i hi & 1 >> aa 7
+        = aa & 255 ^^ << aa 1 & 27 - 0 hi  // xtime(aa), branchless reduction
+        = bb >> bb 1
+        = k + k 1
     }
+    ^ & p 255
 }
 
+// Multiplicative inverse in GF(2^8): x^254 (= x^{-1}; 0 maps to 0). The
+// exponent 254 is a constant, so the square/multiply pattern is fixed and
+// independent of the secret x.
+@ __gf_inv i x → i {
+    : i xx & x 255
+    : ~ i r 1
+    : ~ i bit 7
+    ~ >= bit 0 {
+        = r ( __gf_mul r r )
+        ? != 0 & 1 >> 254 bit { = r ( __gf_mul r xx ) } {}
+        = bit - bit 1
+    }
+    ^ r
+}
+
+@ __rotl8 i x i n → i { ^ & 255 | << x n >> & 255 x - 8 n }
+
+// SubBytes(x) — constant-time. s = inv ⊕ rotl(inv,1..4) ⊕ 0x63.
+@ __aes_sbox_ct i x → i {
+    : i b0 ( __gf_inv & x 255 )
+    ^ & 255 ^^ ^^ ^^ ^^ ^^ b0 ( __rotl8 b0 1 ) ( __rotl8 b0 2 ) ( __rotl8 b0 3 ) ( __rotl8 b0 4 ) 99
+}
+
+// xtime (·2 in GF(2^8)), branchless: reduce by 0x1b iff the high bit was set.
 @ __xtime i x → i {
     : i s << x 1
-    ^ & ? != 0 & x 128 ^^ s 27 s 255
+    : i hi & 1 >> & x 255 7
+    ^ & 255 ^^ s & 27 - 0 hi
 }
 
 // AES-128 key expansion → 176 bytes (11 round keys).
@@ -42,10 +85,10 @@ $ `stdlib/std/bytes.nu`
         : ~ i t3 ( __aes_bget w - n 1 )
         ? == % n 16 0 {
             // RotWord + SubWord + Rcon
-            : i a ( __aes_bget sbox t1 )
-            : i b ( __aes_bget sbox t2 )
-            : i c ( __aes_bget sbox t3 )
-            : i d ( __aes_bget sbox t0 )
+            : i a ( __aes_sbox_ct t1 )
+            : i b ( __aes_sbox_ct t2 )
+            : i c ( __aes_sbox_ct t3 )
+            : i d ( __aes_sbox_ct t0 )
             = t0 ^^ a ( __aes_bget rcon rc )
             = t1 b
             = t2 c
@@ -97,10 +140,10 @@ $ `stdlib/std/bytes.nu`
         : ~ i t3 ( __aes_bget w - n 1 )
         ? == % n 32 0 {
             // RotWord + SubWord + Rcon
-            : i a ( __aes_bget sbox t1 )
-            : i b ( __aes_bget sbox t2 )
-            : i c ( __aes_bget sbox t3 )
-            : i d ( __aes_bget sbox t0 )
+            : i a ( __aes_sbox_ct t1 )
+            : i b ( __aes_sbox_ct t2 )
+            : i c ( __aes_sbox_ct t3 )
+            : i d ( __aes_sbox_ct t0 )
             = t0 ^^ a ( __aes_bget rcon rc )
             = t1 b
             = t2 c
@@ -109,10 +152,10 @@ $ `stdlib/std/bytes.nu`
         } {
             ? == % n 32 16 {
                 // SubWord only (no RotWord, no Rcon)
-                = t0 ( __aes_bget sbox t0 )
-                = t1 ( __aes_bget sbox t1 )
-                = t2 ( __aes_bget sbox t2 )
-                = t3 ( __aes_bget sbox t3 )
+                = t0 ( __aes_sbox_ct t0 )
+                = t1 ( __aes_sbox_ct t1 )
+                = t2 ( __aes_sbox_ct t2 )
+                = t3 ( __aes_sbox_ct t3 )
             } {}
         }
         ( vec_push [u] w # u ^^ ( __aes_bget w - n 32 ) t0 )
@@ -149,7 +192,7 @@ $ `stdlib/std/bytes.nu`
         ~ < r 4 {
             // ShiftRows: row r takes element from column (c+r)
             : i src + r * 4 % + c r 4
-            ( vec_set [u] s + r * 4 c # u ( __aes_bget sbox ( __aes_bget t src ) ) )
+            ( vec_set [u] s + r * 4 c # u ( __aes_sbox_ct ( __aes_bget t src ) ) )
             = r + r 1
         }
         = c + c 1
@@ -184,11 +227,13 @@ $ `stdlib/std/bytes.nu`
     : ~ i bit 0
     ~ < bit 128 {
         : i byte >> bit 3
-        : i mask >> 128 & bit 7
-        ? != 0 & ( __aes_bget x byte ) mask {
-            : ~ i k 0
-            ~ < k 16 { ( vec_set [u] z k # u ^^ ( __aes_bget z k ) ( __aes_bget v k ) ) = k + k 1 }
-        } {}
+        // M4: branchless. xbit ∈ {0,1}; mx = 0 or 0xFF. z ^= mx & v with no
+        // data-dependent branch (the old `if x_bit` / `if lsb` leaked the
+        // input bits and — via V — the auth key H through timing).
+        : i xbit & 1 >> ( __aes_bget x byte ) - 7 & bit 7
+        : i mx - 0 xbit
+        : ~ i k 0
+        ~ < k 16 { ( vec_set [u] z k # u & 255 ^^ ( __aes_bget z k ) & mx ( __aes_bget v k ) ) = k + k 1 }
         // V >>= 1 (across 16 bytes); if LSB was set, XOR R = 0xe1||0^120.
         : i lsb & ( __aes_bget v 15 ) 1
         : ~ i j 15
@@ -197,7 +242,8 @@ $ `stdlib/std/bytes.nu`
             = j - j 1
         }
         ( vec_set [u] v 0 # u >> ( __aes_bget v 0 ) 1 )
-        ? != 0 lsb { ( vec_set [u] v 0 # u ^^ ( __aes_bget v 0 ) 225 ) } {}
+        : i ml - 0 lsb
+        ( vec_set [u] v 0 # u & 255 ^^ ( __aes_bget v 0 ) & ml 225 )
         = bit + bit 1
     }
     ( vec_free [u] v )
@@ -252,7 +298,7 @@ $ `stdlib/std/bytes.nu`
 // 16-byte tag into `tag_out`. CTR mode is symmetric, so the same routine
 // serves encrypt and decrypt; the caller compares/produces the tag.
 @ __gcm_core ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) input ( Vec u ) tag_out → ( Vec u ) {
-    : ( Vec u ) sbox ( __aes_sbox )
+    : ( Vec u ) sbox ( vec_new [u] )
     : i nr ( __aes_nr key )
     : ( Vec u ) rk ( __aes_expand key sbox )
     : ( Vec u ) zero ( vec_with_cap [u] 16 )
@@ -297,7 +343,7 @@ $ `stdlib/std/bytes.nu`
 
 // Compute the GCM tag over aad + ciphertext.
 @ __gcm_tag ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) ct → ( Vec u ) {
-    : ( Vec u ) sbox ( __aes_sbox )
+    : ( Vec u ) sbox ( vec_new [u] )
     : i nr ( __aes_nr key )
     : ( Vec u ) rk ( __aes_expand key sbox )
     : ( Vec u ) zero ( vec_with_cap [u] 16 )
@@ -330,6 +376,11 @@ $ `stdlib/std/bytes.nu`
 
 // AES-128-GCM seal: returns ciphertext with the 16-byte tag appended.
 @ aes128_gcm_encrypt ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) pt → ( Vec u ) {
+    // M5/L6: validate key (16 B) / nonce (12 B) and the GCM plaintext cap
+    // (2^39−256 bits = 2^36−32 bytes). A wrong nonce length would otherwise
+    // silently produce a malformed-but-accepted nonce → catastrophic reuse.
+    ? | != ( vec_len [u] key ) 16 != ( vec_len [u] nonce ) 12 { ^ ( vec_new [u] ) } {}
+    ? > ( vec_len [u] pt ) 68719476704 { ^ ( vec_new [u] ) } {}
     : ( Vec u ) dummy ( vec_new [u] )
     : ( Vec u ) ct ( __gcm_core key nonce aad pt dummy )
     ( vec_free [u] dummy )
@@ -350,6 +401,7 @@ $ `stdlib/std/bytes.nu`
 // AES-128-GCM open: ct_tag is ciphertext followed by its 16-byte tag.
 // None on tag mismatch.
 @ aes128_gcm_decrypt ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) ct_tag → ?( Vec u ) {
+    ? | != ( vec_len [u] key ) 16 != ( vec_len [u] nonce ) 12 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : i total ( vec_len [u] ct_tag )
     ? < total 16 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : i ctlen - total 16
@@ -370,6 +422,8 @@ $ `stdlib/std/bytes.nu`
 // TLS_AES_256_GCM_SHA384 record protection and the AEAD used by ext/crypto.
 // seal: returns ciphertext with the 16-byte tag appended.
 @ aes256_gcm_encrypt ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) pt → ( Vec u ) {
+    ? | != ( vec_len [u] key ) 32 != ( vec_len [u] nonce ) 12 { ^ ( vec_new [u] ) } {}
+    ? > ( vec_len [u] pt ) 68719476704 { ^ ( vec_new [u] ) } {}
     : ( Vec u ) dummy ( vec_new [u] )
     : ( Vec u ) ct ( __gcm_core key nonce aad pt dummy )
     ( vec_free [u] dummy )
@@ -382,6 +436,7 @@ $ `stdlib/std/bytes.nu`
 
 // open: ct_tag is ciphertext followed by its 16-byte tag. None on mismatch.
 @ aes256_gcm_decrypt ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) ct_tag → ?( Vec u ) {
+    ? | != ( vec_len [u] key ) 32 != ( vec_len [u] nonce ) 12 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : i total ( vec_len [u] ct_tag )
     ? < total 16 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : i ctlen - total 16

@@ -100,13 +100,26 @@ $ `stdlib/std/bytes.nu`
     i not_before
     i not_after
     b is_ca
+    // BasicConstraints pathLenConstraint: -1 = absent (unbounded), else the
+    // max number of intermediate certs that may follow this CA toward the leaf.
+    i path_len
+    // keyUsage: has_ku = extension present; ku_cert_sign = keyCertSign bit set.
+    b has_ku
+    b ku_cert_sign
+    // extendedKeyUsage: has_eku = present; eku_server = serverAuth or anyEKU.
+    b has_eku
+    b eku_server
+    // iPAddress SANs (context tag [7]), each stored as a lowercase-hex string
+    // of the raw 4- or 16-byte address.
+    ( Vec String ) ip_sans
     b ok
 }
 
 @ __x509_empty → X509 {
     ^ @ X509 {
         ( vec_new [u] ) 0 ( vec_new [u] ) 0 ( vec_new [u] ) ( vec_new [u] )
-        ( vec_new [u] ) 0 ( vec_new [u] ) ( vec_new [u] ) ( vec_new [String] ) 0 0 F F
+        ( vec_new [u] ) 0 ( vec_new [u] ) ( vec_new [u] ) ( vec_new [String] ) 0 0 F
+        -1 F F F F ( vec_new [String] ) F
     }
 }
 
@@ -152,21 +165,66 @@ $ `stdlib/std/bytes.nu`
     ^ acc
 }
 
-// Pull dNSName entries (context tag 0x82) out of a SAN extnValue.
-@ __x509_sans ( Vec u ) b DerTlv san_seq ( Vec String ) out → v {
+// True if the SAN content bytes contain an embedded NUL (0x00). A dNSName
+// like "victim.com\0.attacker.com" would otherwise be truncated to
+// "victim.com" by every strlen-based comparison — the classic embedded-NUL
+// SAN spoof. Such names are rejected outright (never added to the match set).
+@ __x509_has_nul ( Vec u ) b DerTlv e → b {
+    : i end + . e start . e len
+    : ~ i k . e start
+    ~ < k end { ? == ( __x509_bget b k ) 0 { ^ T } {} = k + k 1 }
+    ^ F
+}
+
+// Lowercase-hex of a SAN element's raw content (used for iPAddress).
+@ __x509_hex_content ( Vec u ) b DerTlv e → String {
+    : String s ( string_new )
+    : i end + . e start . e len
+    : ~ i k . e start
+    ~ < k end {
+        : i byte ( __x509_bget b k )
+        ( string_push_char s ( __rand_nibble >> byte 4 ) )
+        ( string_push_char s ( __rand_nibble & byte 15 ) )
+        = k + k 1
+    }
+    ^ s
+}
+
+@ __rand_nibble i n → i { ^ ? < n 10 + 48 n + 87 n }
+
+// Pull dNSName ([2], 0x82) and iPAddress ([7], 0x87) entries out of a SAN
+// extnValue. dNSNames with an embedded NUL are dropped (spoof guard).
+@ __x509_sans ( Vec u ) b DerTlv san_seq X509 out → v {
     : ~ DerTlv e ( __der_child b san_seq )
     ~ == . e ok 1 {
         ? == . e tag 130 {  // [2] dNSName, IA5String
-            : ( Vec u ) nm ( __der_content b e )
-            ( vec_push [String] out ( bytes_to_str nm ) )
-            ( vec_free [u] nm )
+            ? ! ( __x509_has_nul b e ) {
+                : ( Vec u ) nm ( __der_content b e )
+                ( vec_push [String] . out sans ( bytes_to_str nm ) )
+                ( vec_free [u] nm )
+            } {}
+        } {}
+        ? == . e tag 135 {  // [7] iPAddress, OCTET STRING (4 or 16 bytes)
+            ? | == . e len 4 == . e len 16 {
+                ( vec_push [String] . out ip_sans ( __x509_hex_content b e ) )
+            } {}
         } {}
         = e ( __der_next b e )
     }
 }
 
-// Walk extensions to capture SANs and the CA flag.
-@ __x509_extensions ( Vec u ) b DerTlv exts X509 out → v {
+// Scalar results of the extension walk. The SAN / iPAddress lists are
+// pushed directly into the X509's vec handles (those are shared by
+// reference even though the struct itself is passed by value); the scalar
+// flags below CANNOT be set that way — a by-value `= . out is_ca T` would
+// mutate a copy and be lost — so they are returned here and merged by the
+// caller, which holds the authoritative `out`.
+: ExtInfo { b is_ca i path_len b has_ku b ku_cert_sign b has_eku b eku_server }
+
+// Walk extensions to capture SANs (into `out`'s vec handles) and the CA
+// flag + pathLen + keyUsage + EKU (returned in ExtInfo).
+@ __x509_extensions ( Vec u ) b DerTlv exts X509 out → ExtInfo {
+    : ~ ExtInfo ei @ ExtInfo { F -1 F F F F }
     // exts is [3] EXPLICIT; its child is the SEQUENCE OF Extension.
     : DerTlv seq ( __der_child b exts )
     : ~ DerTlv ext ( __der_child b seq )
@@ -174,22 +232,63 @@ $ `stdlib/std/bytes.nu`
         : DerTlv oid ( __der_child b ext )
         : b is_san ( __der_oid_is b oid `551d11` )
         : b is_bc ( __der_oid_is b oid `551d13` )
-        ? | is_san is_bc {
+        : b is_ku ( __der_oid_is b oid `551d0f` )
+        : b is_eku ( __der_oid_is b oid `551d25` )
+        ? | | | is_san is_bc is_ku is_eku {
             // value is the last child (OCTET STRING), after optional critical BOOLEAN
             : ~ DerTlv nxt ( __der_next b oid )
             ? == . nxt tag 1 { = nxt ( __der_next b nxt ) } {}  // skip critical
             // nxt = OCTET STRING extnValue; its content is inner DER
             : DerTlv inner ( der_at b . nxt start )
-            ? is_san { ( __x509_sans b inner . out sans ) } {}
+            ? is_san { ( __x509_sans b inner out ) } {}
             ? is_bc {
+                // BasicConstraints ::= SEQ { cA BOOLEAN DEFAULT FALSE,
+                //                            pathLenConstraint INTEGER OPTIONAL }
                 : DerTlv c0 ( __der_child b inner )
                 ? & == . c0 ok 1 == . c0 tag 1 {
-                    ? != ( __x509_bget b . c0 start ) 0 { = . out is_ca T } {}
+                    ? != ( __x509_bget b . c0 start ) 0 { = . ei is_ca T } {}
+                    // pathLenConstraint, if present, is the next INTEGER sibling.
+                    : DerTlv pl ( __der_next b c0 )
+                    ? & == . pl ok 1 == . pl tag 2 {
+                        = . ei path_len ( __x509_int_val b pl )
+                    } {}
                 } {}
+            } {}
+            ? is_ku {
+                // keyUsage extnValue IS a BIT STRING (inner, not a wrapper):
+                // content = [unused-bits-count][data…]. keyCertSign is bit 5,
+                // i.e. mask 0x04 of the first data byte.
+                = . ei has_ku T
+                ? & == . inner ok 1 == . inner tag 3 {
+                    : i b0 ( __x509_bget b + . inner start 1 )
+                    ? != 0 & b0 4 { = . ei ku_cert_sign T } {}
+                } {}
+            } {}
+            ? is_eku {
+                // extendedKeyUsage ::= SEQUENCE OF KeyPurposeId (OID).
+                = . ei has_eku T
+                : ~ DerTlv ku ( __der_child b inner )
+                ~ == . ku ok 1 {
+                    ? == . ku tag 6 {
+                        ? ( __der_oid_is b ku `2b06010505070301` ) { = . ei eku_server T } {}  // serverAuth
+                        ? ( __der_oid_is b ku `551d2500` ) { = . ei eku_server T } {}  // anyExtendedKeyUsage
+                    } {}
+                    = ku ( __der_next b ku )
+                }
             } {}
         } {}
         = ext ( __der_next b ext )
     }
+    ^ ei
+}
+
+// Value of a small (≤ i63) INTEGER element as a non-negative int.
+@ __x509_int_val ( Vec u ) b DerTlv t → i {
+    : ~ i v 0
+    : i end + . t start . t len
+    : ~ i k . t start
+    ~ < k end { = v | << v 8 & 255 ( __x509_bget b k ) = k + k 1 }
+    ^ v
 }
 
 @ x509_parse ( Vec u ) der → X509 {
@@ -218,17 +317,22 @@ $ `stdlib/std/bytes.nu`
     ? & == . c ok 1 == . c tag 160 { = c ( __der_next der c ) } {}  // skip [0] version
     = c ( __der_next der c )  // skip serialNumber
     = c ( __der_next der c )  // skip signature alg
+    ? != . c ok 1 { ^ out } {}
     ( vec_free [u] . out issuer )
     = . out issuer ( __der_elem_bytes der c )
     = c ( __der_next der c )  // validity
+    ? != . c ok 1 { ^ out } {}
     : DerTlv nb ( __der_child der c )
     : DerTlv na ( __der_next der nb )
+    ? | != . nb ok 1 != . na ok 1 { ^ out } {}
     = . out not_before ( __x509_time der nb )
     = . out not_after ( __x509_time der na )
     = c ( __der_next der c )
+    ? != . c ok 1 { ^ out } {}
     ( vec_free [u] . out subject )
     = . out subject ( __der_elem_bytes der c )
     = c ( __der_next der c )  // subjectPublicKeyInfo
+    ? != . c ok 1 { ^ out } {}
 
     : DerTlv keyalg ( __der_child der c )
     : DerTlv keyoid ( __der_child der keyalg )
@@ -265,15 +369,44 @@ $ `stdlib/std/bytes.nu`
 
     // optional extensions [3]
     = c ( __der_next der c )
-    ? & == . c ok 1 == . c tag 163 { ( __x509_extensions der c out ) } {}
+    ? & == . c ok 1 == . c tag 163 {
+        : ExtInfo ei ( __x509_extensions der c out )
+        = . out is_ca . ei is_ca
+        = . out path_len . ei path_len
+        = . out has_ku . ei has_ku
+        = . out ku_cert_sign . ei ku_cert_sign
+        = . out has_eku . ei has_eku
+        = . out eku_server . ei eku_server
+    } {}
 
     = . out ok T
     ^ out
 }
 
 // Case-insensitive hostname match against the certificate SANs, honoring
-// a single leading "*." wildcard label (RFC 6125).
+// a single leading "*." wildcard label (RFC 6125). An IP-literal host is
+// matched ONLY against iPAddress SANs (never against dNSNames — so a
+// dNSName "192.0.2.1" cannot spoof a connection made to that IP); a
+// DNS-name host is matched only against dNSName SANs.
 @ x509_matches_host X509 cert s host → b {
+    // IP-literal host → compare against iPAddress SANs only.
+    : String iphex ( __ipv4_hex host )
+    ? > ( string_len iphex ) 0 {
+        : ( Vec String ) ips . cert ip_sans
+        : i ni ( vec_len [String] ips )
+        : ~ i j 0
+        : ~ b ipok F
+        ~ & ! ipok < j ni {
+            ?? ( vec_get [String] ips j ) {
+                T sv → { ? ( __ci_eq ( string_data sv ) ( string_data iphex ) ) { = ipok T } {} }
+                F _ → {}
+            }
+            = j + j 1
+        }
+        ( string_free iphex )
+        ^ ipok
+    } {}
+    ( string_free iphex )
     : ( Vec String ) sans . cert sans
     : i n ( vec_len [String] sans )
     : ~ i i 0
@@ -288,12 +421,57 @@ $ `stdlib/std/bytes.nu`
     ^ ok
 }
 
+// If `host` is a dotted-quad IPv4 literal, return its 8-char lowercase-hex
+// (e.g. "192.0.2.1" → "c0000201"); otherwise return "". Pure ASCII, no libc.
+@ __ipv4_hex s host → String {
+    : i hl ( nurl_str_len host )
+    : ~ i octets 0
+    : ~ i cur 0
+    : ~ i digits 0
+    : ~ b okfmt T
+    : String out ( string_new )
+    : ~ i k 0
+    ~ & okfmt < k hl {
+        : i ch ( nurl_str_get host k )
+        ? & >= ch 48 <= ch 57 {
+            = cur + * cur 10 - ch 48
+            = digits + digits 1
+            ? | > cur 255 > digits 3 { = okfmt F } {}
+        } {
+            ? == ch 46 {
+                ? == digits 0 { = okfmt F } {}
+                ( __hex_byte out cur )
+                = octets + octets 1
+                = cur 0 = digits 0
+            } { = okfmt F }
+        }
+        = k + k 1
+    }
+    ? | | ! okfmt == digits 0 != octets 3 { ( string_free out ) ^ ( string_new ) } {}
+    ( __hex_byte out cur )
+    ^ out
+}
+
+@ __hex_byte String out i byte → v {
+    ( string_push_char out ( __rand_nibble >> & byte 255 4 ) )
+    ( string_push_char out ( __rand_nibble & byte 15 ) )
+}
+
 // Match `pattern` (a SAN dNSName, possibly "*.example.com") against host,
 // ASCII-case-insensitively. The wildcard matches exactly one left label.
 @ __host_match s pattern s host → b {
     : i pl ( nurl_str_len pattern )
     : i hl ( nurl_str_len host )
     ? & > pl 1 == ( nurl_str_get pattern 0 ) 42 {
+        // Only "*.rest" is a valid wildcard: the '*' must be the entire
+        // leftmost label (so partial-label "*foo.com" is rejected) and the
+        // remainder must span at least two labels (so "*.com" / a wildcard
+        // in the public-suffix position is rejected) — RFC 6125 §6.4.3.
+        ? != ( nurl_str_get pattern 1 ) 46 { ^ F } {}  // require "*."
+        : ~ i dots 0
+        : ~ i di 2
+        ~ < di pl { ? == ( nurl_str_get pattern di ) 46 { = dots + dots 1 } {} = di + di 1 }
+        ? < dots 1 { ^ F } {}  // need ≥2 labels after "*."
         // "*.rest" — host must end with ".rest" and have no dot in the
         // matched first label.
         : s rest ( nurl_str_slice pattern 1 - pl 1 )  // ".example.com"
@@ -331,4 +509,5 @@ $ `stdlib/std/bytes.nu`
     ( vec_free [u] . c subject )
     ( vec_free [u] . c issuer )
     ( vec_free_with [String] . c sans \ String s → v { ( string_free s ) } )
+    ( vec_free_with [String] . c ip_sans \ String s → v { ( string_free s ) } )
 }

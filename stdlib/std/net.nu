@@ -103,7 +103,7 @@ $ `stdlib/std/pkey.nu`
 // value struct returned with owned-Vec fields is auto-dropped at the
 // constructing function's exit (a borrowck escape gap), which would free
 // the buffers out from under the listener.
-: TcpListener { s raw i is_tls i keytype i certp i certlen i kp1 i kl1 i kp2 i kl2 }
+: TcpListener { s raw i is_tls i keytype i certp i certlen i kp1 i kl1 i kp2 i kl2 i kp3 i kl3 }
 // kind: 0 = plaintext (raw is the runtime socket handle), 1 = pure TLS
 // client, 2 = pure TLS server. For kinds 1/2 `tlsh` is the *TlsConn (as
 // i64) and reads/writes dispatch to the pure stack.
@@ -158,7 +158,7 @@ $ `stdlib/std/pkey.nu`
         ^ @ !TcpListener NetErr { F ( __net_err_of ek ) }
     } {}
     : s rp # s raw
-    : TcpListener l @ TcpListener { rp 0 0 0 0 0 0 0 0 }
+    : TcpListener l @ TcpListener { rp 0 0 0 0 0 0 0 0 0 0 }
     ^ @ !TcpListener NetErr { T l }
 }
 
@@ -241,7 +241,7 @@ $ `stdlib/std/pkey.nu`
 // modulus in k1, private exponent in k2), or a NEGATIVE NetErr-style code
 // on failure (-10 cert, -11 key). The key form is auto-detected: EC and
 // RSA parsers each cleanly reject the other's encoding.
-@ __load_tls_creds s cert_path s key_path ( Vec u ) cert_out ( Vec u ) k1 ( Vec u ) k2 → i {
+@ __load_tls_creds s cert_path s key_path ( Vec u ) cert_out ( Vec u ) k1 ( Vec u ) k2 ( Vec u ) k3 → i {
     : String certpem ?? ( read_file cert_path ) { T p → p F _ → ( string_new ) }
     : ( Vec u ) chain ( __net_cert_chain certpem )
     ( string_free certpem )
@@ -258,7 +258,11 @@ $ `stdlib/std/pkey.nu`
         F _ → {}
     }
     : i kt ?? ( rsa_priv_from_pem ( string_data keypem ) ) {
-        T k → { ( bytes_extend_bytes k1 . k n ) ( bytes_extend_bytes k2 . k d ) ( rsa_priv_free k ) 1 }
+        T k → {
+            ( bytes_extend_bytes k1 . k n ) ( bytes_extend_bytes k2 . k d )
+            ( bytes_extend_bytes k3 . k e )  // public exponent — for sign-time blinding
+            ( rsa_priv_free k ) 1
+        }
         F _ → -11
     }
     ( string_free keypem )
@@ -269,16 +273,17 @@ $ `stdlib/std/pkey.nu`
     : ( Vec u ) cert ( vec_new [u] )
     : ( Vec u ) k1 ( vec_new [u] )
     : ( Vec u ) k2 ( vec_new [u] )
-    : i keytype ( __load_tls_creds cert_path key_path cert k1 k2 )
+    : ( Vec u ) k3 ( vec_new [u] )
+    : i keytype ( __load_tls_creds cert_path key_path cert k1 k2 k3 )
     ? < keytype 0 {
-        ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 )
+        ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
         ^ @ !TcpListener NetErr { F ( __net_err_of - 0 keytype ) }
     } {}
     : i raw ( nurl_tcp_listen host port backlog )
-    ? == raw 0 { ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ^ @ !TcpListener NetErr { F # NetErr NetOther } } {}
+    ? == raw 0 { ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 ) ^ @ !TcpListener NetErr { F # NetErr NetOther } } {}
     : i ek ( nurl_tcp_err_kind raw )
     ? != ek 0 {
-        ( nurl_tcp_close raw ) ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 )
+        ( nurl_tcp_close raw ) ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
         ^ @ !TcpListener NetErr { F ( __net_err_of ek ) }
     } {}
     // Copy cert list / key material into raw heap buffers, then drop the Vecs.
@@ -288,9 +293,11 @@ $ `stdlib/std/pkey.nu`
     : i kl1 ( vec_len [u] k1 )
     : i kp2 ( __net_dup k2 )
     : i kl2 ( vec_len [u] k2 )
-    ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 )
+    : i kp3 ( __net_dup k3 )
+    : i kl3 ( vec_len [u] k3 )
+    ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
     : s rp # s raw
-    ^ @ !TcpListener NetErr { T @ TcpListener { rp 1 keytype certp certlen kp1 kl1 kp2 kl2 } }
+    ^ @ !TcpListener NetErr { T @ TcpListener { rp 1 keytype certp certlen kp1 kl1 kp2 kl2 kp3 kl3 } }
 }
 
 @ tcp_listen_tls s host i port s cert_path s key_path → !TcpListener NetErr {
@@ -386,6 +393,7 @@ $ `stdlib/std/pkey.nu`
         ? != . l certp 0 { ( nurl_free # s . l certp ) } {}
         ? != . l kp1 0 { ( nurl_free # s . l kp1 ) } {}
         ? != . l kp2 0 { ( nurl_free # s . l kp2 ) } {}
+        ? != . l kp3 0 { ( nurl_free # s . l kp3 ) } {}
     } {}
 }
 
@@ -508,11 +516,12 @@ $ `stdlib/std/pkey.nu`
     ? != . l is_tls 0 {
         : ( Vec u ) cert ( __net_vecview . l certp . l certlen )
         : ( Vec u ) k1 ( __net_vecview . l kp1 . l kl1 )
-        // keytype 1 = RSA (k1 = n, k2 = d); else EC P-256 (k1 = scalar).
+        // keytype 1 = RSA (k1 = n, k2 = d, k3 = e); else EC P-256 (k1 = scalar).
         : !*TlsConn TlsErr r ? == . l keytype 1
         { : ( Vec u ) k2 ( __net_vecview . l kp2 . l kl2 )
-            : !*TlsConn TlsErr rr ( tls_accept_rsa craw cert k1 k2 )
-            ( vec_free [u] k2 )
+            : ( Vec u ) k3 ( __net_vecview . l kp3 . l kl3 )
+            : !*TlsConn TlsErr rr ( tls_accept_rsa craw cert k1 k3 k2 )
+            ( vec_free [u] k2 ) ( vec_free [u] k3 )
             rr }
         ( tls_accept craw cert k1 )
         ( vec_free [u] cert )

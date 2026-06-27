@@ -315,6 +315,11 @@ $ `stdlib/core/vec.nu`
 
 // Encrypt: returns ciphertext with the 16-byte tag appended.
 @ aead_encrypt ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) plaintext → ( Vec u ) {
+    // M5/L6: 32-byte key, 12-byte nonce, and the ChaCha20 keystream limit
+    // (2^32 blocks × 64 B); past it the 32-bit block counter wraps and
+    // reuses keystream. A wrong nonce length would otherwise risk reuse.
+    ? | != ( vec_len [u] key ) 32 != ( vec_len [u] nonce ) 12 { ^ ( vec_new [u] ) } {}
+    ? > ( vec_len [u] plaintext ) 274877906880 { ^ ( vec_new [u] ) } {}
     : ( Vec u ) otk ( __poly_key key nonce )
     : ( Vec u ) ct ( chacha20_xor key 1 nonce plaintext )
     : ( Vec u ) md ( __mac_data aad ct )
@@ -341,6 +346,7 @@ $ `stdlib/core/vec.nu`
 // Decrypt + verify. ct_and_tag is ciphertext followed by its 16-byte
 // tag. Returns None on any tampering (wrong tag), the plaintext on success.
 @ aead_decrypt ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) ct_and_tag → ?( Vec u ) {
+    ? | != ( vec_len [u] key ) 32 != ( vec_len [u] nonce ) 12 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : i total ( vec_len [u] ct_and_tag )
     ? < total 16 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : i ctlen - total 16

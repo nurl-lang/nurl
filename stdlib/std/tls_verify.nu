@@ -9,7 +9,10 @@
 //   ( tls_cert_verify cert_msg cv_scheme cv_sig th_cert hostname ) → i
 //     0 ok · 1 no certs · 2 parse · 3 CertVerify · 4 chain link
 //     5 no trust anchor · 6 anchor sig · 7 hostname · 8 expired
-//     9 unsupported algorithm
+//     9 unsupported algorithm · 10 chain too long / issuer not a CA
+//     11 leaf EKU not serverAuth · 12 CA lacks keyCertSign
+//     13 pathLenConstraint exceeded · 14 name-chaining mismatch
+//   (callers treat any non-zero as failure; codes are for diagnostics.)
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -78,6 +81,9 @@ $ `stdlib/std/x509.nu`
 // · 4 ecdsa_p256_sha256 · 5 ecdsa_p384_sha384 · 6 rsa_pss_sha256.
 @ __v_sig_check X509 iss i alg ( Vec u ) sig ( Vec u ) msg → b {
     : ~ b ok F
+    // L1/L3: refuse RSA keys below 2048 bits (256-byte modulus). A 512/768-bit
+    // CA or leaf is forgeable and has no place in a modern chain.
+    ? & == . iss key_alg 1 < ( vec_len [u] . iss rsa_n ) 256 { ^ F } {}
     // RSA PKCS#1 v1.5, hash per alg.
     ? & == . iss key_alg 1 == alg 1 {
         : ( Vec u ) h ( sha256_pure msg )
@@ -143,7 +149,8 @@ $ `stdlib/std/x509.nu`
 @ __v_x509_none → X509 {
     ^ @ X509 {
         ( vec_new [u] ) 0 ( vec_new [u] ) 0 ( vec_new [u] ) ( vec_new [u] )
-        ( vec_new [u] ) 0 ( vec_new [u] ) ( vec_new [u] ) ( vec_new [String] ) 0 0 F F
+        ( vec_new [u] ) 0 ( vec_new [u] ) ( vec_new [u] ) ( vec_new [String] ) 0 0 F
+        -1 F F F F ( vec_new [String] ) F
     }
 }
 
@@ -225,7 +232,9 @@ $ `stdlib/std/x509.nu`
                     ? & ( bytes_eq . c subject . top subject ) ( __v_pubkey_eq c top ) {
                         = ok T = done T
                     } {
-                        ? & ( bytes_eq . c subject . top issuer ) ( __v_in_validity c ) {
+                        // Case (b): the store cert signs `top`, so it acts as a
+                        // CA and MUST itself be one (basicConstraints cA:TRUE).
+                        ? & ( bytes_eq . c subject . top issuer ) & . c is_ca ( __v_in_validity c ) {
                             ? ( __v_sig_check c . top sig_alg . top sig . top tbs ) { = ok T = done T } {}
                         } {}
                     }
@@ -300,6 +309,8 @@ $ `stdlib/std/x509.nu`
     : ( Vec i ) lens ( vec_new [i] )
     : i count ( __v_certlist cert_msg is12 starts lens )
     ? == count 0 { ( vec_free [i] starts ) ( vec_free [i] lens ) ^ 1 } {}
+    // Bound the presented chain length (defence against pathological inputs).
+    ? > count 16 { ( vec_free [i] starts ) ( vec_free [i] lens ) ^ 10 } {}
 
     : ~ i rc 0
     : i ls ?? ( vec_get [i] starts 0 ) { T x → x F _ → 0 }
@@ -311,6 +322,10 @@ $ `stdlib/std/x509.nu`
     // Hostname + leaf validity.
     ? == rc 0 { ? ! ( x509_matches_host leaf hostname ) { = rc 7 } {} } {}
     ? == rc 0 { ? ! ( __v_in_validity leaf ) { = rc 8 } {} } {}
+    // If the leaf carries an EKU, it MUST assert serverAuth (or anyEKU): a
+    // cert issued for clientAuth / e-mail / code-signing must not be accepted
+    // as a TLS server certificate.
+    ? == rc 0 { ? & . leaf has_eku ! . leaf eku_server { = rc 11 } {} } {}
 
     // Chain links: cert[i] signed by cert[i+1].
     : ~ i li 0
@@ -325,6 +340,16 @@ $ `stdlib/std/x509.nu`
         : X509 issuer ( x509_parse ider )
         ? | ! . child ok ! . issuer ok { = rc 2 } {
             ? ! ( __v_in_validity issuer ) { = rc 8 } {}
+            // C1: every signing (issuer) cert MUST be a CA — basicConstraints
+            // cA:TRUE. Without this, any leaf cert can mint certs for any host.
+            ? & == rc 0 ! . issuer is_ca { = rc 10 } {}
+            // H4: if the CA declares a keyUsage, it MUST assert keyCertSign.
+            ? & == rc 0 & . issuer has_ku ! . issuer ku_cert_sign { = rc 12 } {}
+            // M2: pathLenConstraint — `li` intermediate CAs sit below `issuer`
+            // (cert[1..li]); a present constraint must allow at least that many.
+            ? & == rc 0 & >= . issuer path_len 0 < . issuer path_len li { = rc 13 } {}
+            // L9: name chaining — child.issuer DN must equal issuer.subject DN.
+            ? & == rc 0 ! ( bytes_eq . child issuer . issuer subject ) { = rc 14 } {}
             ? & == rc 0 ! ( __v_sig_check issuer . child sig_alg . child sig . child tbs ) { = rc 4 } {}
         }
         ( x509_free child ) ( x509_free issuer )

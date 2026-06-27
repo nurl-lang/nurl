@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+leaf: ok=yes is_ca=no path_len=-1 has_ku=yes certSign=no has_eku=yes serverAuth=yes sans=2 ipsans=1
+match: localhost=yes a.example.com=yes example.com=no ip=yes ip2=no
+ca: ok=yes is_ca=yes path_len=0 certSign=yes
+client: has_eku=yes serverAuth=no

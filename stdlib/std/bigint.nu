@@ -598,3 +598,41 @@ $ `stdlib/core/vec.nu`
     ( bigint_free two )
     ^ result
 }
+
+// Modular inverse a^{-1} mod m via the iterative extended Euclidean
+// algorithm. Returns 0 (the zero BigInt) when a is not invertible mod m
+// (gcd(a, m) != 1). `m` must be positive; `a` is reduced into [0, m) first.
+// Used for RSA blinding (unblinding by r^{-1}), where m = n is composite so
+// Fermat inversion does not apply.
+@ bigint_modinv BigInt a BigInt m → BigInt {
+    : BigInt one ( bigint_from_i 1 )
+    // old_r = a mod m, normalized non-negative; r = m.
+    : ~ BigInt old_r ( bigint_rem a m )
+    ? . old_r neg { : BigInt t ( bigint_add old_r m ) ( bigint_free old_r ) = old_r t } {}
+    : ~ BigInt r ( bigint_clone m )
+    : ~ BigInt old_s ( bigint_from_i 1 )
+    : ~ BigInt s ( bigint_zero )
+    ~ ! ( bigint_is_zero r ) {
+        : BigInt q ( bigint_div old_r r )
+        // (old_r, r) ← (r, old_r − q·r)
+        : BigInt qr ( bigint_mul q r )
+        : BigInt nr ( bigint_sub old_r qr )
+        ( bigint_free old_r ) = old_r r = r nr
+        ( bigint_free qr )
+        // (old_s, s) ← (s, old_s − q·s)
+        : BigInt qs ( bigint_mul q s )
+        : BigInt ns ( bigint_sub old_s qs )
+        ( bigint_free old_s ) = old_s s = s ns
+        ( bigint_free qs ) ( bigint_free q )
+    }
+    : ~ BigInt res ( bigint_zero )
+    ? == ( bigint_cmp old_r one ) 0 {
+        ( bigint_free res )
+        // res = old_s mod m, normalized into [0, m).
+        : BigInt sm ( bigint_rem old_s m )
+        ? . sm neg { = res ( bigint_add sm m ) ( bigint_free sm ) } { = res sm }
+    } {}
+    ( bigint_free old_r ) ( bigint_free r ) ( bigint_free old_s ) ( bigint_free s )
+    ( bigint_free one )
+    ^ res
+}
