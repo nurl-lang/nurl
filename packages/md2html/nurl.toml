@@ -1,8 +1,7 @@
 [package]
 name = "md2html"
-version = "0.1.0"
+version = "0.1.1"
 description = "Render Markdown to HTML — a small CLI and reusable renderer library."
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-argz = "^0.1"

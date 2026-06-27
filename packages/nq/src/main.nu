@@ -4,8 +4,8 @@
 // jq-lite filter, and print the result pretty (default), compact, or
 // raw. It is the kind of thing every developer reaches for daily, which
 // is exactly why it belongs in the NURL registry rather than the core
-// stdlib — it stitches the ecosystem together: the `argz` registry
-// package parses its flags, and the shipped `stdlib/ext/json` does the
+// stdlib — it stitches the ecosystem together: the `std/args` parser
+// handles its flags, and the shipped `stdlib/ext/json` does the
 // parsing/printing.
 //
 //   nq                      pretty-print stdin
@@ -37,7 +37,7 @@ $ `stdlib/std/cmp.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
-$ `deps/argz/src/argz.nu`
+$ `stdlib/std/args.nu`
 
 // ── Output ────────────────────────────────────────────────────────────
 
@@ -280,7 +280,7 @@ $ `deps/argz/src/argz.nu`
 
 // ── Help ──────────────────────────────────────────────────────────────
 
-@ __nq_usage Argz p → v {
+@ __nq_usage ArgParser p → v {
     ( nurl_print `nq — a tiny JSON query tool (jq-lite)\n\n` )
     ( nurl_print `Usage: nq [OPTIONS] [FILTER]\n\n` )
     ( nurl_print `FILTER is a jq-lite path; the default is '.', the whole document:\n` )
@@ -291,7 +291,7 @@ $ `deps/argz/src/argz.nu`
     ( nurl_print `  . | keys         object keys (or array indices)\n` )
     ( nurl_print `  . | length       length of an array / object / string\n\n` )
     ( nurl_print `Reads JSON from stdin unless --file is given.\n\n` )
-    : String h ( argz_help p )
+    : String h ( args_usage p )
     ( nurl_print ( string_data h ) )
     ( string_free h )
 }
@@ -299,11 +299,11 @@ $ `deps/argz/src/argz.nu`
 // ── Entry point ───────────────────────────────────────────────────────
 
 @ main → i {
-    : Argz p ( argz_new `nq` `a tiny JSON query tool (jq-lite)` )
-    ( argz_flag p `compact` `c` `compact single-line output` )
-    ( argz_flag p `raw`     `r` `raw output for string results (no quotes)` )
-    ( argz_flag p `help`    `h` `show this help` )
-    ( argz_opt  p `file`    `f` `read JSON from FILE instead of stdin` )
+    : ArgParser p ( args_new `nq` `a tiny JSON query tool (jq-lite)` )
+    ( args_flag p `compact` 99  `compact single-line output` )  // -c
+    ( args_flag p `raw`     114 `raw output for string results (no quotes)` )  // -r
+    ( args_flag p `help`    104 `show this help` )  // -h
+    ( args_opt  p `file`    102 `FILE` `read JSON from FILE instead of stdin` )  // -f
 
     : ( Vec String ) argv ( vec_new [String] )
     : i ac ( env_args_count )
@@ -314,72 +314,68 @@ $ `deps/argz/src/argz.nu`
     }
 
     : ~ i rc 0
-    : !ArgzMatch ArgzErr r ( argz_parse p argv )
-    ?? r {
-        F e → {
-            ( nurl_eprint `nq: ` ) ( nurl_eprintln ( argz_err_name e ) )
-            ( nurl_eprintln `try 'nq --help'` )
-            = rc 2
-        }
-        T m → {
-            ? ( argz_has m `help` ) {
-                ( __nq_usage p )
-            } {
-                : b compact ( argz_has m `compact` )
-                : b raw ( argz_has m `raw` )
+    ? ( args_parse p argv ) {
+        ? ( args_present p `help` ) {
+            ( __nq_usage p )
+        } {
+            : b compact ( args_present p `compact` )
+            : b raw ( args_present p `raw` )
 
-                // Filter: first positional, default ".".
-                : ( Vec String ) ps ( argz_positionals m )
-                : ~ s filter `.`
-                ? > ( vec_len [String] ps ) 0 {
-                    ?? ( vec_get [String] ps 0 ) {
-                        T f0 → { = filter ( string_data f0 ) }
-                        F _ → {}
-                    }
-                } {}
+            // Filter: first positional, default ".".
+            : ( Vec String ) ps ( args_positionals p )
+            : ~ s filter `.`
+            ? > ( vec_len [String] ps ) 0 {
+                ?? ( vec_get [String] ps 0 ) {
+                    T f0 → { = filter ( string_data f0 ) }
+                    F _ → {}
+                }
+            } {}
 
-                // Input: --file, else stdin.
-                : ~ String input ( string_new )
-                : ~ b have_input T
-                ?? ( argz_value m `file` ) {
-                    T fv → {
-                        ?? ( read_file ( string_data fv ) ) {
-                            T txt → { ( string_free input ) = input txt }
-                            F _ → {
-                                ( nurl_eprint `nq: cannot read file: ` )
-                                ( nurl_eprintln ( string_data fv ) )
-                                = rc 1
-                                = have_input F
-                            }
+            // Input: --file, else stdin.
+            : ~ String input ( string_new )
+            : ~ b have_input T
+            ?? ( args_value p `file` ) {
+                T fv → {
+                    ?? ( read_file ( string_data fv ) ) {
+                        T txt → { ( string_free input ) = input txt }
+                        F _ → {
+                            ( nurl_eprint `nq: cannot read file: ` )
+                            ( nurl_eprintln ( string_data fv ) )
+                            = rc 1
+                            = have_input F
                         }
                     }
-                    F _ → {
-                        ( string_free input )
-                        = input ( read_all_stdin )
+                    ( string_free fv )
+                }
+                F _ → {
+                    ( string_free input )
+                    = input ( read_all_stdin )
+                }
+            }
+
+            ? have_input {
+                ?? ( json_parse ( string_data input ) ) {
+                    F je → {
+                        : String em ( json_format_error je )
+                        ( nurl_eprint `nq: ` ) ( nurl_eprintln ( string_data em ) )
+                        ( string_free em )
+                        = rc 1
+                    }
+                    T doc → {
+                        = rc ( __nq_eval doc filter compact raw )
+                        ( json_free doc )
                     }
                 }
-
-                ? have_input {
-                    ?? ( json_parse ( string_data input ) ) {
-                        F je → {
-                            : String em ( json_format_error je )
-                            ( nurl_eprint `nq: ` ) ( nurl_eprintln ( string_data em ) )
-                            ( string_free em )
-                            = rc 1
-                        }
-                        T doc → {
-                            = rc ( __nq_eval doc filter compact raw )
-                            ( json_free doc )
-                        }
-                    }
-                } {}
-                ( string_free input )
-            }
-            ( argz_match_free m )
+            } {}
+            ( string_free input )
         }
+    } {
+        ( nurl_eprint `nq: ` ) ( nurl_eprintln ( args_error p ) )
+        ( nurl_eprintln `try 'nq --help'` )
+        = rc 2
     }
 
-    ( argz_free p )
+    ( args_free p )
     ( vec_free_with [String] argv \ String x → v { ( string_free x ) } )
     ^ rc
 }

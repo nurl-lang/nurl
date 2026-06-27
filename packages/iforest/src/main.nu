@@ -10,7 +10,7 @@
 //   iforest -f data.csv --top 10        # 10 most anomalous rows
 //   iforest -f data.csv -H -t 200 -S 7  # skip header, 200 trees, seed 7
 //
-// Built on the `argz` registry package (flags) and this package's own
+// Built on the standard library's `args` parser and this package's own
 // `iforest` library.
 
 $ `stdlib/core/io.nu`
@@ -19,7 +19,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/ext/env.nu`
-$ `deps/argz/src/argz.nu`
+$ `stdlib/std/args.nu`
 $ `src/iforest.nu`
 
 // A parsed numeric matrix: `data` is row-major (rows*cols), owned by caller.
@@ -41,9 +41,10 @@ $ `src/iforest.nu`
 // ── Helpers ───────────────────────────────────────────────────────────
 
 // Value of an integer option, or `dflt` if it was not supplied.
-@ __opt_int ArgzMatch m s name i dflt → i {
-    ?? ( argz_value m name ) {
-        T v → { ^ ( nurl_str_to_int ( string_data v ) ) }
+// args_value returns an OWNED ?String, so free it before returning.
+@ __opt_int ArgParser p s name i dflt → i {
+    ?? ( args_value p name ) {
+        T v → { : i n ( nurl_str_to_int ( string_data v ) ) ( string_free v ) ^ n }
         F _ → { ^ dflt }
     }
 }
@@ -180,15 +181,15 @@ $ `src/iforest.nu`
 // ── Entry point ───────────────────────────────────────────────────────
 
 @ main → i {
-    : Argz p ( argz_new `iforest` `Isolation Forest anomaly detection over a numeric CSV` )
-    ( argz_flag p `help`   `h` `show this help` )
-    ( argz_flag p `header` `H` `skip the first line (treat it as a header)` )
-    ( argz_opt  p `file`   `f` `read CSV from FILE instead of stdin` )
-    ( argz_opt  p `trees`  `t` `number of trees in the forest (default 100)` )
-    ( argz_opt  p `sample` `s` `subsample size per tree (default 256)` )
-    ( argz_opt  p `seed`   `S` `PRNG seed for reproducible forests (default 42)` )
-    ( argz_opt  p `top`    `k` `print only the K most anomalous rows (index<TAB>score, desc)` )
-    ( argz_opt  p `delim`  `d` `field delimiter (default ",")` )
+    : ArgParser p ( args_new `iforest` `Isolation Forest anomaly detection over a numeric CSV` )
+    ( args_flag p `help`   104 `show this help` )  // -h
+    ( args_flag p `header` 72  `skip the first line (treat it as a header)` )  // -H
+    ( args_opt  p `file`   102 `FILE` `read CSV from FILE instead of stdin` )  // -f
+    ( args_opt  p `trees`  116 `N`    `number of trees in the forest (default 100)` )  // -t
+    ( args_opt  p `sample` 115 `N`    `subsample size per tree (default 256)` )  // -s
+    ( args_opt  p `seed`   83  `SEED` `PRNG seed for reproducible forests (default 42)` )  // -S
+    ( args_opt  p `top`    107 `K`    `print only the K most anomalous rows (index<TAB>score, desc)` )  // -k
+    ( args_opt  p `delim`  100 `C`    `field delimiter (default ",")` )  // -d
 
     : ( Vec String ) argv ( vec_new [String] )
     : i ac ( env_args_count )
@@ -199,76 +200,76 @@ $ `src/iforest.nu`
     }
 
     : ~ i rc 0
-    : !ArgzMatch ArgzErr r ( argz_parse p argv )
-    ?? r {
-        F e → {
-            ( nurl_eprint `iforest: ` ) ( nurl_eprintln ( argz_err_name e ) )
-            ( nurl_eprintln `try 'iforest --help'` )
-            = rc 2
-        }
-        T m → {
-            ? ( argz_has m `help` ) {
-                : String h ( argz_help p )
-                ( nurl_print `iforest — Isolation Forest anomaly detection\n\n` )
-                ( nurl_print `Reads a numeric CSV (rows = samples, columns = features) from stdin\n` )
-                ( nurl_print `unless --file is given, and prints an anomaly score in (0, 1] per row\n` )
-                ( nurl_print `(higher = more anomalous).\n\n` )
-                ( nurl_print ( string_data h ) )
-                ( string_free h )
-            } {
-                : i trees  ( __opt_int m `trees`  100 )
-                : i sample ( __opt_int m `sample` 256 )
-                : i seed   ( __opt_int m `seed`   42 )
-                : ~ i topk -1
-                ? ( argz_has m `top` ) { = topk ( __opt_int m `top` 10 ) } {}
-                : ~ s delim `,`
-                ?? ( argz_value m `delim` ) { T dv → { = delim ( string_data dv ) } F _ → {} }
-                : b skip_header ( argz_has m `header` )
+    ? ( args_parse p argv ) {
+        ? ( args_present p `help` ) {
+            : String h ( args_usage p )
+            ( nurl_print `iforest — Isolation Forest anomaly detection\n\n` )
+            ( nurl_print `Reads a numeric CSV (rows = samples, columns = features) from stdin\n` )
+            ( nurl_print `unless --file is given, and prints an anomaly score in (0, 1] per row\n` )
+            ( nurl_print `(higher = more anomalous).\n\n` )
+            ( nurl_print ( string_data h ) )
+            ( string_free h )
+        } {
+            : i trees  ( __opt_int p `trees`  100 )
+            : i sample ( __opt_int p `sample` 256 )
+            : i seed   ( __opt_int p `seed`   42 )
+            : ~ i topk -1
+            ? ( args_present p `top` ) { = topk ( __opt_int p `top` 10 ) } {}
+            // args_value returns an owned ?String; keep it alive so `delim`
+            // (a borrowed view into it) stays valid through __parse_csv.
+            : ~ String delimstr ( string_from `,` )
+            ?? ( args_value p `delim` ) { T dv → { ( string_free delimstr ) = delimstr dv } F _ → {} }
+            : s delim ( string_data delimstr )
+            : b skip_header ( args_present p `header` )
 
-                // Input: --file, else stdin.
-                : ~ String input ( string_new )
-                : ~ b have_input T
-                ?? ( argz_value m `file` ) {
-                    T fv → {
-                        ?? ( read_file ( string_data fv ) ) {
-                            T txt → { ( string_free input ) = input txt }
-                            F _ → {
-                                ( nurl_eprint `iforest: cannot read file: ` )
-                                ( nurl_eprintln ( string_data fv ) )
-                                = rc 1
-                                = have_input F
-                            }
+            // Input: --file, else stdin.
+            : ~ String input ( string_new )
+            : ~ b have_input T
+            ?? ( args_value p `file` ) {
+                T fv → {
+                    ?? ( read_file ( string_data fv ) ) {
+                        T txt → { ( string_free input ) = input txt }
+                        F _ → {
+                            ( nurl_eprint `iforest: cannot read file: ` )
+                            ( nurl_eprintln ( string_data fv ) )
+                            = rc 1
+                            = have_input F
                         }
                     }
-                    F _ → {
-                        ( string_free input )
-                        = input ( read_all_stdin )
-                    }
+                    ( string_free fv )
                 }
-
-                ? have_input {
-                    : Dataset ds ( __parse_csv ( string_data input ) delim skip_header )
-                    ? || <= . ds rows 0 <= . ds cols 0 {
-                        ( nurl_eprintln `iforest: no numeric rows found in input` )
-                        = rc 1
-                    } {
-                        : IForest fo ( iforest_train . ds data . ds rows . ds cols trees sample seed )
-                        ? < topk 0 {
-                            ( __emit_all fo ds )
-                        } {
-                            ( __emit_top fo ds topk )
-                        }
-                        ( iforest_free fo )
-                    }
-                    ( vec_free [f] . ds data )
-                } {}
-                ( string_free input )
+                F _ → {
+                    ( string_free input )
+                    = input ( read_all_stdin )
+                }
             }
-            ( argz_match_free m )
+
+            ? have_input {
+                : Dataset ds ( __parse_csv ( string_data input ) delim skip_header )
+                ? || <= . ds rows 0 <= . ds cols 0 {
+                    ( nurl_eprintln `iforest: no numeric rows found in input` )
+                    = rc 1
+                } {
+                    : IForest fo ( iforest_train . ds data . ds rows . ds cols trees sample seed )
+                    ? < topk 0 {
+                        ( __emit_all fo ds )
+                    } {
+                        ( __emit_top fo ds topk )
+                    }
+                    ( iforest_free fo )
+                }
+                ( vec_free [f] . ds data )
+            } {}
+            ( string_free input )
+            ( string_free delimstr )
         }
+    } {
+        ( nurl_eprint `iforest: ` ) ( nurl_eprintln ( args_error p ) )
+        ( nurl_eprintln `try 'iforest --help'` )
+        = rc 2
     }
 
-    ( argz_free p )
+    ( args_free p )
     ( vec_free_with [String] argv \ String x → v { ( string_free x ) } )
     ^ rc
 }
