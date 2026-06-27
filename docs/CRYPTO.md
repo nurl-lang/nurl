@@ -10,12 +10,14 @@ does **not** promise.
 
 > **One-line summary.** The primitives are correct (KAT-verified, interops
 > with OpenSSL/curl/browsers) and the protocol enforces the standard TLS 1.3
-> authentication and downgrade controls. The EC and symmetric primitives are
-> **fully constant-time** (including operand timing); the only side-channel
-> residual is RSA's `bigint` operand timing, covered by base blinding against
-> the remote/co-resident attacker. Where a guarantee is narrower than
-> OpenSSL's (revocation, name constraints, single-trace RSA), this document
-> says so.
+> authentication and downgrade controls. On the **timing/cache** side-channel
+> axis the EC and symmetric primitives are constant-time including operand
+> timing (by construction + code review, not yet statistically measured); RSA's
+> `bigint` operand timing is the one residual, covered by base blinding.
+> **Power/EM (DPA/template) side-channels are out of scope for the whole
+> software stack** — that needs hardware. Where a guarantee is narrower than
+> OpenSSL's (revocation, name constraints, single-trace RSA timing, all
+> power/EM), this document says so.
 
 ---
 
@@ -79,47 +81,71 @@ per signature: the *nonce* is deterministic, the *blinding factor* is random.
 ## 3. Side-channel posture
 
 This is where a pure-software stack differs most from a hardware-accelerated
-one, and where the 2026-06 security sweep (§9–§10 of `TODO.md`) focused. The
-**threat model is a remote or co-resident attacker observing timing and cache
-access patterns across many operations** — the realistic threat for a
-network-facing TLS server. The hardening has two layers: every secret-driven
-**control flow / memory-access pattern is uniform** (no branch or table index
-on secret data — this is what defeats the cache / SPA *sequence* attack), and
-on top of that the asymmetric private-key operations are **blinded** so the
-residual operand-value-dependent timing carries no signal. Hardening:
+one, and where the 2026-06 security sweep (§9–§10 of `TODO.md`) focused.
+
+**Threat model — in scope:** a remote or co-resident attacker observing
+**timing and cache access patterns** across one or many operations (the
+realistic threat for a network-facing TLS server). The hardening has two
+layers: every secret-driven **control flow / memory-access pattern is uniform**
+(no branch or table index on secret data — this defeats the cache / SPA
+*sequence* attack), and on top of that the asymmetric private-key operations
+are **blinded** so any residual operand-value-dependent timing carries no
+signal.
+
+**Threat model — OUT of scope for the entire software stack:** physical
+**power / electromagnetic (DPA, SPA-power, template) side-channels.** Software
+constant-time code is *not* a defense against these: a constant-time table-free
+AES S-box still leaks the Hamming weight of the byte it processes through power
+consumption, branchless or not, and the same is true of the P-256 field
+arithmetic. Defending power/EM requires masking / hiding and ultimately
+hardware countermeasures, which are not in this (or any pure-software) library.
+Everything below concerns the **timing/cache** axis only.
+
+**Caveat on the word "constant-time":** the constant-time properties claimed
+here are **by construction and code review** — no secret-dependent branch, no
+secret-indexed table, and (where stated) a fixed-width representation so
+operand timing is value-independent. They have **not** yet been measured
+statistically (e.g. dudect / ctgrind / ctverif). The cross-checks cited below
+prove *correctness* (the code computes the right answer), which is a separate
+axis from constant-timeness; an empirical leakage measurement is tracked as a
+follow-up in `TODO.md` §11. Hardening (timing/cache axis):
 
 | Primitive | Countermeasure |
 |---|---|
 | AES S-box | **Constant-time**: `SubBytes(x) = Affine(x⁻¹ in GF(2⁸))` computed with a branchless GF multiply and a fixed-exponent (x²⁵⁴) inversion — no table lookup or branch indexed by secret data. Verified equal to the reference S-box on all 256 inputs. `xtime` (MixColumns) is likewise branchless. |
 | GHASH | Branchless: the GF(2¹²⁸) multiply uses mask arithmetic, so its timing does not leak the authentication key H. |
 | GCM / Poly1305 / TLS Finished tag compares | Constant-time (OR-accumulated XOR, no early exit). |
-| RSA modexp (`bigint_modpow`) | **Constant control flow**: a Montgomery powering ladder — exactly two modular multiplies per bit for a fixed count = bit-length(`m`), register choice by a constant-time conditional swap. The square-multiply trace is uniform regardless of the secret exponent `d` (no naive "multiply only on 1-bits" leak). No CRT is used (single direct modexp with the full `d`), so there is no CRT-reduction timing surface (Brumley–Boneh class). |
-| RSA private key (PSS sign) | **Base blinding** on top: `s = ((EM·rᵉ)ᵈ · r⁻¹) mod n` for a fresh random `r` per signature. `rᵉᵈ ≡ r (mod n)`, so the result is identical, but the value fed to the (still operand-time-dependent) `bigint` mul/rem is randomized — covering the residual timing the ladder's uniform control flow does not. |
-| P-256 secret scalar mult (ECDSA nonce / ECDHE) | **Fully constant-time** (`std/p256_field`): a dedicated fixed-16-limb GF(p) field — Montgomery (CIOS) multiply, conditional-`±p` add/sub, fixed-exponent Fermat inverse — never normalized, so even the *operand timing* is value-independent. Points use the Renes–Costello–Batina **complete** addition formula (a = −3), correct for all inputs incl. identity, in a branchless always-add ladder with constant-time point select. No branch, no table index, no operand-time dependence, **no blinding needed**. Verified: the field matches the bigint reference (2000 random cases) and the scalar multiply matches both the bigint path and Python `cryptography`. |
+| RSA modexp (`bigint_modpow`) | **Constant control flow**: a Montgomery powering ladder — exactly two modular multiplies per iteration for a fixed iteration count = bit-length of the **modulus `n`** (a public value), register choice by a constant-time conditional swap. The count depends only on the public modulus, **never on the secret exponent `d`** (no naive "multiply only on 1-bits" leak, and the loop length does not reveal `d`'s bit length). No CRT is used (single direct modexp with the full `d`), so there is no CRT-reduction timing surface (Brumley–Boneh class). |
+| RSA private key (PSS sign) | **Base blinding** on top: `s = ((EM·rᵉ)ᵈ · r⁻¹) mod n` for a fresh random `r` per signature. `rᵉᵈ ≡ r (mod n)`, so the result is identical, but the value fed to the (still operand-time-dependent) `bigint` mul/rem is randomized — covering the residual timing the ladder's uniform control flow does not. The setup inverse `r⁻¹ mod n` is computed with the variable-time `bigint_modinv`, but its timing is **not security-relevant**: `r` is a fresh per-signature ephemeral that is discarded, so its magnitude leaks nothing about the key. |
+| P-256 secret scalar mult (ECDSA nonce / ECDHE) | **Constant-time on the timing/cache axis** (`std/p256_field`): a dedicated fixed-16-limb GF(p) field — Montgomery (CIOS) multiply, conditional-`±p` add/sub, fixed-exponent Fermat inverse — never normalized, so even the *operand timing* is value-independent. Points use the Renes–Costello–Batina **complete** addition formula (a = −3), correct for all inputs incl. identity, in a branchless always-add ladder with a constant-time point select. The ladder runs a **fixed number of steps = 8·len(scalar bytes)** (256 for a 32-byte nonce) regardless of the scalar's value, so the top bits do not change the trace. No branch, no table index, no operand-time dependence — **no blinding needed**. Verified for *correctness* (a separate axis from constant-timeness — see the caveat above): the field matches the bigint reference (2000 random cases) and the scalar multiply matches both the bigint path and Python `cryptography` (500/300 cases). |
 | P-256/P-384 verify (`__jmul`) | Branchless ladder over the bigint field, but the scalars are **public** (verification), so the bigint operand timing is harmless here. |
 | X25519 | Montgomery ladder with a branchless constant-time conditional swap (TweetNaCl); fixed iteration count. |
 | Ed25519 | Deterministic nonce (RFC 8032), so no per-signature secret randomness to leak. |
 | Secret comparison | `std/subtle.nu` — duration depends only on input *length*, never contents. |
 
-### State by primitive
+### State by primitive (timing/cache axis; power/EM is out of scope for all — see above)
 
 - **P-256 (ECDSA signing, ECDHE), X25519, Ed25519, AES-GCM, ChaCha20-Poly1305,
-  GHASH, all tag compares** — fully constant-time, *including operand timing*:
-  no secret-dependent branch, no secret-indexed table, and a fixed-width field
+  GHASH, all tag compares** — constant-time *including operand timing*: no
+  secret-dependent branch, no secret-indexed table, and a fixed-width field
   representation (P-256 via `std/p256_field`; 25519 via the TweetNaCl packed
-  limbs) so even `mul`/`reduce` duration is value-independent. This resists not
-  only the remote/co-resident attacker but a *single-trace* observer of these
-  operations.
+  limbs) so even `mul`/`reduce` duration is value-independent. This resists a
+  *single-trace* **timing/cache** observer (not just the multi-trace remote
+  attacker) — but, like all software constant-time code, it does **not** resist
+  a power/EM (DPA/template) attacker, which is out of scope stack-wide.
 
 - **RSA private-key exponentiation** — uniform control flow (the Montgomery
   powering ladder) but the underlying `std/bigint` `mul`/`rem` still **normalize
   (trim leading-zero limbs)**, so their duration tracks operand *magnitude*.
-  That residual is **covered by base blinding** (every signature runs on a fresh
-  randomized operand, so no signal aggregates across traces) — exactly OpenSSL's
-  posture for the same arithmetic. A *single-trace* local power/EM attacker is
-  out of scope for RSA until a dedicated fixed-limb RSA modular multiply lands
-  (tracked in `TODO.md` §10). RSA is the legacy path; the EC path above is the
-  primary one for modern internet-facing TLS and carries no such residual.
+  That operand-**timing** residual is **covered by base blinding** (every
+  signature runs on a fresh randomized operand, so no signal aggregates across
+  traces) — exactly OpenSSL's posture for the same arithmetic. So RSA is robust
+  against the multi-trace remote attacker but, unlike the EC path, is **not**
+  hardened against a *single-trace timing/cache* observer of one signature; a
+  dedicated fixed-limb RSA modular multiply (tracked in `TODO.md` §10) would
+  close that. (Power/EM remains out of scope for RSA too — and for everything.)
+  RSA is the legacy path; the EC path above is the primary one for modern
+  internet-facing TLS and carries no such timing residual.
 
 ### Practical guidance
 
@@ -205,19 +231,26 @@ be **sound, not a hardware-grade side-channel-free implementation**:
    default; the only way to skip them is the explicitly-named insecure path.
    **Revocation (OCSP/CRL) and X.509 name constraints are not checked** — see
    §5 "Not enforced".
-3. **Side-channel hardened.** The EC path (P-256 ECDSA/ECDHE, X25519, Ed25519)
-   and all symmetric primitives are fully constant-time *including operand
-   timing* — no secret-dependent branch, table index, or value-dependent
-   duration — so they resist even a single-trace local observer. RSA's private
-   exponentiation has uniform control flow plus base blinding, which defeats the
-   remote/co-resident attacker; its `bigint` operand timing is the one residual.
-4. **One documented residual:** RSA modular multiply is still operand-time-
-   dependent under the blinding (single-trace local power/EM on *RSA only* is
-   out of scope until a fixed-limb RSA multiply lands). Use a hardware/audited
-   library if that exact threat model applies to your RSA keys.
+3. **Side-channel hardened on the timing/cache axis.** The EC path (P-256
+   ECDSA/ECDHE, X25519, Ed25519) and all symmetric primitives are constant-time
+   *including operand timing* — no secret-dependent branch, table index, or
+   value-dependent duration — so they resist a single-trace **timing/cache**
+   observer. RSA's private exponentiation has uniform control flow plus base
+   blinding, which defeats the multi-trace remote/co-resident attacker; its
+   `bigint` operand **timing** is the one residual on this axis (single-trace
+   timing/cache on one RSA signature is not covered until a fixed-limb RSA
+   multiply lands). These properties are by-construction and code-reviewed, not
+   yet measured statistically (dudect/ctgrind — `TODO.md` §11).
+4. **Power / EM (DPA, SPA-power, template) side-channels are OUT of scope for
+   the entire software stack.** Software constant-time code does not defend
+   them — a table-free AES S-box still leaks the processed byte's Hamming weight
+   through power draw, and so does the P-256 field. Defending power/EM needs
+   masking/hiding and ultimately hardware; use a hardware-backed / audited
+   library (HSM, secure element, AES-NI + a vetted bignum) where that threat
+   model applies.
 
-The full audit and the remaining RSA fixed-limb follow-up are tracked in
-`TODO.md` §9–§10.
+The full audit, the RSA fixed-limb follow-up, the doc-taxonomy fixes and the
+planned dudect measurement are tracked in `TODO.md` §9–§11.
 
 ---
 
