@@ -390,14 +390,14 @@
           <button class="copy-btn" data-copy-target="#install-cmd">Copy</button>
 <pre id="install-cmd">curl -fsSL https://nurl-lang.org/install.sh | sh
 export PATH="$HOME/.nurl/bin:$PATH"
-nurlpkg install argz-demo && argz-demo --shout hi</pre>
+nurlpkg install nq &amp;&amp; echo '{"a":1}' | nq .a</pre>
         </div>
         <div class="cmd-label">Windows (PowerShell)</div>
         <div class="cmd-block">
           <button class="copy-btn" data-copy-target="#install-cmd-win">Copy</button>
 <pre id="install-cmd-win">irm https://nurl-lang.org/install.ps1 | iex
 $env:Path = "$env:USERPROFILE\.nurl\bin;$env:Path"
-nurlpkg install argz-demo; argz-demo --shout hi</pre>
+nurlpkg install nq; echo '{"a":1}' | nq .a</pre>
         </div>
         <a class="btn btn-secondary" href="https://github.com/nurl-lang/nurl/releases/latest" target="_blank" rel="noopener">Latest release</a>
       </div>
@@ -405,7 +405,7 @@ nurlpkg install argz-demo; argz-demo --shout hi</pre>
       <div class="start-card">
         <div class="step">Step 3 · Local build</div>
         <h3>Clone and bootstrap</h3>
-        <p>The only build dependency is clang (LLVM 14+) — no Python, no make, no cmake. The build script bootstraps the self-hosting compiler twice and verifies byte-identical IR.</p>
+        <p>The only build dependency is clang (LLVM 15+) — no Python, no make, no cmake. The build script bootstraps the self-hosting compiler twice and verifies byte-identical IR.</p>
 <pre>git clone https://github.com/nurl-lang/nurl
 cd nurl
 ./build.sh

@@ -6,7 +6,7 @@ package ownership, versions). The NURL client (`nurlpkg install` /
 `nurlpkg publish`) drives this exact contract.
 
 **Status: LIVE in production at https://reg.nurl-lang.org.** It serves real
-packages today (e.g. `argz` and `argz-demo`, published 2026-06-20), and the
+packages today (e.g. `nq` and `md2html`, published 2026-06-20), and the
 default `nurlpkg install <name>` resolves against it. The sections below are
 the reference for *reproducing* or re-provisioning that deployment — the
 production instance is already wired.
