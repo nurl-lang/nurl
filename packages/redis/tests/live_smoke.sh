@@ -6,7 +6,7 @@
 #   ./tests/live_smoke.sh
 #
 # Run from the package root (packages/redis). Expects the monorepo layout so
-# NURL_STDLIB and deps/tls resolve.
+# NURL_STDLIB resolves (TLS now comes from the stdlib, no deps/tls).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"          # packages/redis

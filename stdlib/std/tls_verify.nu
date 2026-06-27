@@ -1,4 +1,4 @@
-// packages/tls/src/verify.nu — TLS 1.3 certificate verification.
+// stdlib/std/tls_verify.nu — TLS 1.3 certificate verification.
 //
 // Ties the pure-NURL X.509 parser and RSA/ECDSA verifiers into a real
 // "verify-full": it checks the server's CertificateVerify signature,
