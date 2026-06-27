@@ -97,6 +97,16 @@
     ( nurl_exit 1 )
 }
 
+// die_at: a fatal diagnostic for a deferred (post-scan) check that has only a
+// stored "file:line" location, not a live lexer — so no column, caret, or
+// source-line echo, but the same parseable "loc: msg" prefix. Used by the
+// supertrait-obligation sweep, which runs after every impl in the program has
+// been registered and so cannot point at a single lexer position.
+@ die_at s loc s msg → v {
+    ( nurl_eprintln ( nurl_str_cat3 loc `: ` msg ) )
+    ( nurl_exit 1 )
+}
+
 // Soft diagnostic — same format as `die` but does not exit. Used for
 // non-fatal compiler-detected pitfalls (shadowing, escaping by-ref
 // closure captures) so the user sees the gotcha during compile rather
@@ -606,10 +616,37 @@
 : ~ i g_struct_inst_syms 0  // dedupe marker — <mangled>__done → "1" once emitted
 : ~ i g_impl_ret_syms 0  // Group F: method##llvm_type → ret_type string
 : ~ i g_impl_name_syms 0  // Group F: method##llvm_type → mangle_suffix string
+: ~ i g_impl_trait_syms 0  // coherence: method##llvm_type → owning trait name
+: ~ i g_impl_pos_syms 0  // coherence: method##llvm_type → "file:line" of the
+//   first registration. A `$`-imported impl is scanned once per importer, so
+//   the SAME (method, type) is registered from the SAME source location more
+//   than once — those re-scans are idempotent (allowed). A registration from a
+//   DIFFERENT location is a genuine duplicate impl, or two traits sharing a
+//   method name for one type (incl. alias types like i / i64 that share an
+//   LLVM type) — reported as a clean diagnostic, not an LLVM redefinition.
 : ~ i g_trait_syms 0  // Trait default implementations.
 //   <Trait>__tparam           → trait's generic type-var name (e.g. "T")
 //   <Trait>__defaults         → space-separated method names with defaults
 //   <Trait>__<method>__src    → raw source "params → ret { body }"
+//   <Trait>__istrait          → "1" once the trait header is seen (a definite
+//                               existence marker — __tparam is "" for the
+//                               common untyped trait, indistinguishable from
+//                               absent, so supertrait checks key on this)
+//   <Trait>__supers           → space-separated supertrait names (% Sub : A B)
+//   <Trait>__assoc            → space-separated associated-type names (type Item)
+//   <Trait>__methods          → method names in declaration order (dyn seam)
+//   <Trait>__<method>__sig    → that method's "params → ret" signature (dyn seam)
+: ~ s g_super_obligations ``  // one "<Sub> <impl_llvm> <nurl_type> <file:line>\n"
+//   record per impl block, verified after scan_fn_sigs once every impl across
+//   the program (incl. imports) is registered: a supertrait of an implemented
+//   trait must itself be implemented for that same type (T: Sub ⇒ T: Super).
+// Thread-safety: name of a non-Send capture (an Rc) of the most recently built
+// closure, or "" if it had none. A real global (not a `syms` side-channel) so
+// it survives across the differing symbol tables of closure-build vs the
+// thread_spawn call site. Cleared at each closure build; the enclosing `:`
+// binding copies it to `<name>__closure_nonsend`; the thread_spawn call site
+// reads it (inline closure) or that per-binding key (named closure).
+: ~ s g_last_closure_nonsend ``
 : ~ i g_closure_defs 0  // Deferred closure function definitions
 : ~ i g_closure_types 0  // Deferred closure type definitions
 : ~ i g_type_count 0  // Count of closure types stored
@@ -1749,6 +1786,44 @@
     r1
 }
 
+// Emit the `ret` terminator (or branch to the defer chain) after owned-
+// resource drops. Shared by the normal return path and the bare-`^`
+// void early-return. A function declared `→ v` ALWAYS emits `ret void`;
+// `lt`/`val` are the returned value's LLVM type / SSA name (both empty
+// for a bare void return). Keeps the void/non-void `ret` choice keyed on
+// the FUNCTION's return type, not just the value type — so a stray value
+// can never lower to `ret i64 …` out of a `void` function.
+@ gen_ret_term i lex i syms i cg s lt s val s skip s skip_str_ptr s skip_user_ptr s skip_struct_ptr s ret_ident → v {
+    : s dtop ( nurl_sym_get syms `__defer_top__` )
+    : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
+    ? != 0 ( nurl_str_len dtop )
+    {  // defers active: store return value then branch to defer chain
+        ? ! ( seq lt `void` )
+        { : s rvp ( nurl_sym_get syms `__ret_val__` )
+            ( nurl_print `  store ` ) ( nurl_print lt ) ( nurl_print ` ` )
+            ( nurl_print val ) ( nurl_print `, ` ) ( nurl_print lt )
+            ( nurl_print `* ` ) ( nurl_print rvp ) ( nurl_print `\n` )
+        }
+        {}
+        ( nurl_print `  br label %` ) ( nurl_print dtop ) ( emit_dbg_eol )
+    }
+    {  // no defers: drop owned slices then direct return
+        ( mem_drop_owned syms cg skip )
+        ? != 0 g_auto_drop_strings
+        { ( mem_drop_owned_strings syms cg skip_str_ptr )
+            ( mem_drop_owned_struct_fields syms cg skip_struct_ptr )
+            ( mem_drop_user_drops syms cg skip_user_ptr )
+        }
+        {}
+        ( mem_own_closure_remove syms ret_ident )
+        ( mem_drop_closure_envs syms cg )
+        ? | ( seq lt `void` ) ( seq fn_rt `void` )
+        { ( emit_call_term `ret void` ) }
+        { ( nurl_print `  ret ` ) ( nurl_print lt )
+            ( nurl_print ` ` ) ( nurl_print val ) ( emit_dbg_eol ) }
+    }
+}
+
 @ gen_ret i lex i syms i cg → s {
     // Cascade guard: a `^` reached here while parsing a value operand
     // (g_ret_forbidden set by gen_operand / a `?`-condition / `??`-
@@ -1765,6 +1840,26 @@
     // Borrow checker: source line of the `^` token.
     : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
+    // Bare `^` — a return with no value expression (the next token ends
+    // the statement/block). Legal ONLY in a `→ v` function, where it is
+    // an early return that emits `ret void`. In a value-returning
+    // function it is an error (the caller would get garbage), and is
+    // reported here rather than letting gen_operand fail with the
+    // generic "value expression required" cascade message.
+    : i __ret_nt ( nurl_lex_type lex )
+    ? | | == __ret_nt TT_RBRACE == __ret_nt TT_EOF == __ret_nt TT_SEMICOL
+    { : s __ret_frt ( nurl_sym_get syms `__fn_ret_ty__` )
+        ? ( seq __ret_frt `void` )
+        { ( bck_record `ret` `` bck_line )
+            ( gen_ret_term lex syms cg `void` `` `` `` `` `` `` )
+            ( nurl_set_last_type `void` )
+            = g_did_ret 1
+            ^ `` }
+        { ( die lex ( nurl_str_cat ( nurl_str_cat
+            `bare '^' (return) but this function returns '` ( llvm_to_nurl __ret_frt ) )
+            `' — a '^' here must be followed by a return value of that type` ) ) }
+    }
+    {}
     // The `^ ?? value { F e → {…} T m → {…} }` shape looks
     // like "return a match expression", but when ANY arm contains its
     // own `^`, the `??` becomes statement-form and yields `void`, so
@@ -1888,6 +1983,16 @@
         ( die lex ( nurl_str_cat `return expression has no value (expected `
         ( nurl_str_cat ( llvm_to_nurl fn_rt ) hint ) ) ) }
     {}
+    // Inverse of the above: the function is declared `→ v` (returns
+    // nothing) but `^` was handed a real value. Lowering it would emit
+    // `ret <ty> <val>` out of a `void` LLVM function — invalid IR that
+    // historically only clang caught (`ret i64 0` from `→ v`). Reject it
+    // here; the cure is a bare `^` (early return) or a non-void type.
+    ? & ! ( seq lt `void` ) ( seq fn_rt `void` )
+    { ( die lex ( nurl_str_cat ( nurl_str_cat
+        `this function is declared '→ v' (returns nothing) but '^' is given a value of type '` ( llvm_to_nurl lt ) )
+        `' to return — use a bare '^' to return early, or declare a return type` ) ) }
+    {}
     // Return-type agreement (narrow, never-valid clashes only — mirrors the
     // binary-operator check). NURL has no implicit conversions, so returning a
     // float where a non-float is declared (or vice versa), or a pointer/string
@@ -1904,9 +2009,15 @@
             `return value type '` lt `' does not match the declared return type '` fn_rt )
             `' — NURL has no implicit conversions; return a value of the declared type or convert with '# T expr'` ) ) }
         {}
+        // Return the wrong named struct by value (the return-position dual of
+        // the call-site struct check): `^ b` from a `→ A` fn where b is a B.
+        ? ( __arg_named_struct_mismatch lt fn_rt )
+        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+            `return value type '` lt `' does not match the declared return type '` fn_rt )
+            `' — wrong struct type returned by value (the fields would be silently reinterpreted)` ) ) }
+        {}
     }
     {}
-    : s dtop ( nurl_sym_get syms `__defer_top__` )
     // Determine which owned-slice binding (if any) is escaping as the return value.
     // Ownership transfers only when the return type is itself a slice AND the
     // returned expression resolved to a simple identifier load.
@@ -1956,34 +2067,7 @@
     ? != 0 ( nurl_str_len ( nurl_sym_get syms `__last_value_borrow__` ) )
     { ( nurl_sym_def syms `__fn_ret_borrow__` `1` ) }
     {}
-    ? != 0 ( nurl_str_len dtop )
-    {  // defers active: store return value then branch to defer chain
-        ? ! ( seq lt `void` )
-        { : s rvp ( nurl_sym_get syms `__ret_val__` )
-            ( nurl_print `  store ` ) ( nurl_print lt ) ( nurl_print ` ` )
-            ( nurl_print val ) ( nurl_print `, ` ) ( nurl_print lt )
-            ( nurl_print `* ` ) ( nurl_print rvp ) ( nurl_print `\n` )
-        }
-        {}
-        ( nurl_print `  br label %` ) ( nurl_print dtop ) ( emit_dbg_eol )
-    }
-    {  // no defers: drop owned slices then direct return
-        ( mem_drop_owned syms cg skip )
-        ? != 0 g_auto_drop_strings
-        { ( mem_drop_owned_strings syms cg skip_str_ptr )
-            ( mem_drop_owned_struct_fields syms cg skip_struct_ptr )
-            ( mem_drop_user_drops syms cg skip_user_ptr )
-        }
-        {}
-        // Return-escape: `^ f` hands f's closure (and its env) to the
-        // caller — do not free it here.
-        ( mem_own_closure_remove syms ret_ident )
-        ( mem_drop_closure_envs syms cg )
-        ? ( seq lt `void` )
-        { ( emit_call_term `ret void` ) }
-        { ( nurl_print `  ret ` ) ( nurl_print lt )
-            ( nurl_print ` ` ) ( nurl_print val ) ( emit_dbg_eol ) }
-    }
+    ( gen_ret_term lex syms cg lt val skip skip_str_ptr skip_user_ptr skip_struct_ptr ret_ident )
     ( nurl_set_last_type `void` )
     = g_did_ret 1
     val
@@ -3147,6 +3231,20 @@
 // function per slot, which LTO didn't fully inline; the wall-clock
 // hit was ~1 s per stage2 compile of nurlc.nu itself.
 
+// FNV-1a (32-bit) over the key, reduced into [0, nb). Used by the hashed
+// symbol table below so lookup is O(1) amortised instead of O(table).
+@ __sym_hash s name i nb → i {
+    : i n ( nurl_str_len name )
+    : ~ i hsh 2166136261
+    : ~ i k 0
+    ~ < k n {
+        = hsh & ^^ hsh ( nurl_str_get name k ) 4294967295
+        = hsh & * hsh 16777619 4294967295
+        = k + k 1
+    }
+    ^ % hsh nb
+}
+
 @ __sym_grow i h → v {
     : s t # s h
     : i cap ( nurl_peek t 2 )
@@ -3155,28 +3253,40 @@
     : s names_old # s ( nurl_peek t 3 )
     : s types_old # s ( nurl_peek t 4 )
     : s depths_old # s ( nurl_peek t 5 )
+    : s prev_old # s ( nurl_peek t 8 )
     : s names_new # s ( malloc * newcap 8 )
     : s types_new # s ( malloc * newcap 8 )
     : s depths_new # s ( malloc * newcap 8 )
+    : s prev_new # s ( malloc * newcap 8 )
     : i nbytes * count 8
     ( memcpy names_new names_old nbytes )
     ( memcpy types_new types_old nbytes )
     ( memcpy depths_new depths_old nbytes )
+    ( memcpy prev_new prev_old nbytes )
     ( free names_old )
     ( free types_old )
     ( free depths_old )
+    ( free prev_old )
     ( nurl_poke t 2 newcap )
     ( nurl_poke t 3 # i names_new )
     ( nurl_poke t 4 # i types_new )
     ( nurl_poke t 5 # i depths_new )
+    ( nurl_poke t 8 # i prev_new )
 }
 
 @ nurl_sym_new → i {
-    : s t # s ( nurl_zalloc 48 )
+    // 9 slots: 0 count, 1 depth, 2 cap, 3 names, 4 types, 5 depths,
+    // 6 nbuckets, 7 buckets (head index+1 per bucket; 0 = empty),
+    // 8 prev (per-entry link to the previous entry in the same bucket).
+    : i nb 4096
+    : s t # s ( nurl_zalloc 72 )
     ( nurl_poke t 2 64 )
     ( nurl_poke t 3 # i # s ( malloc * 64 8 ) )
     ( nurl_poke t 4 # i # s ( malloc * 64 8 ) )
     ( nurl_poke t 5 # i # s ( malloc * 64 8 ) )
+    ( nurl_poke t 6 nb )
+    ( nurl_poke t 7 # i # s ( nurl_zalloc * nb 8 ) )
+    ( nurl_poke t 8 # i # s ( malloc * 64 8 ) )
     ^ # i t
 }
 
@@ -3191,26 +3301,38 @@
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
     : *i depths # *i # s ( nurl_peek t 5 )
+    : *i buckets # *i # s ( nurl_peek t 7 )
+    : *i prev # *i # s ( nurl_peek t 8 )
+    : i bh ( __sym_hash name ( nurl_peek t 6 ) )
     = . names count # s ( strdup name )
     = . types count # s ( strdup type )
     = . depths count ( nurl_peek t 1 )
+    // Push onto the front of the bucket chain — newest-first, so a
+    // later definition of the same name shadows the earlier one, exactly
+    // like the old backward linear scan.
+    = . prev count . buckets bh
+    = . buckets bh + count 1
     ( nurl_poke t 0 + count 1 )
 }
 
 @ nurl_sym_get i h s name → s {
     : s t # s h
     : i count ( nurl_peek t 0 )
-    // Inner loop body is now `strcmp` + load + branch — one C-call,
-    // no `nurl_peek` indirection. Matches the original C version's
-    // `entries[i].name` shape byte-for-byte.
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
-    : ~ i k - count 1
-    ~ >= k 0 {
-        ? == 0 # i ( strcmp name . names k )
-        { ^ # s ( strdup . types k ) }
-        {}
-        = k - k 1
+    : *i buckets # *i # s ( nurl_peek t 7 )
+    : *i prev # *i # s ( nurl_peek t 8 )
+    : i bh ( __sym_hash name ( nurl_peek t 6 ) )
+    // Walk this name's bucket chain newest-first. Entries are stored as
+    // index+1 (0 = chain end); pop unlinks, so every chained index is < count.
+    : ~ i cur . buckets bh
+    ~ != cur 0 {
+        : i idx - cur 1
+        ? >= idx count { = cur 0 } {
+            ? == 0 # i ( strcmp name . names idx )
+            { ^ # s ( strdup . types idx ) }
+            { = cur . prev idx }
+        }
     }
     ^ # s ( strdup `` )
 }
@@ -3227,8 +3349,15 @@
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
     : *i depths # *i # s ( nurl_peek t 5 )
+    : *i buckets # *i # s ( nurl_peek t 7 )
+    : *i prev # *i # s ( nurl_peek t 8 )
+    : i nb ( nurl_peek t 6 )
     ~ & > count 0 == . depths - count 1 depth {
         : i idx - count 1
+        // The top entry is the newest def for its name, hence the head of
+        // its bucket chain — unlink it so the chain stays consistent.
+        : i bh ( __sym_hash . names idx nb )
+        = . buckets bh . prev idx
         ( free . names idx )
         ( free . types idx )
         = count - count 1
@@ -4271,6 +4400,35 @@
     ^ | ( seq at ( nurl_str_cat pt `*` ) ) ( seq pt ( nurl_str_cat at `*` ) )
 }
 
+// A `String` value (`%String`, a headered/managed string) and a raw
+// C-string (`s`, i8* — the bare char data pointer, e.g. from string_data)
+// are DISTINCT types. They are ABI-compatible enough that clang accepts a
+// call passing one where the other is declared, but reinterpreting a
+// String's payload pointer as a managed String (or vice versa) is silent
+// UB — a wild-pointer crash the moment the callee reads the "other"
+// representation. Flag the confusion in either direction at call time.
+@ __arg_str_cstr_mismatch s at s pt → b {
+    ^ | & ( seq at `i8*` ) ( seq pt `%String` )
+    & ( seq at `%String` ) ( seq pt `i8*` )
+}
+
+// A NAMED aggregate LLVM type: `%Name` (a struct / enum handle), NOT a
+// pointer (`…*`) and NOT a bare scalar (i64/double/i1/i8 carry no `%`).
+@ __is_named_agg s t → b {
+    ? == 0 ( nurl_str_len t ) { ^ F } {}
+    ? != ( nurl_str_get t 0 ) 37 { ^ F } {}  // leading '%'
+    ^ != ( nurl_str_get t - ( nurl_str_len t ) 1 ) 42  // not a pointer
+}
+
+// Two DIFFERENT named aggregates passed by value — e.g. a `B` value where
+// an `A` is declared. clang silently coerces the call (reads the foreign
+// struct's leading fields as the declared type), a silent miscompile.
+// Both sides must be `%`-named aggregates so scalars/pointers and the
+// enum↔i64 / numeric-width coercions are never touched.
+@ __arg_named_struct_mismatch s at s pt → b {
+    ^ & & ( __is_named_agg at ) ( __is_named_agg pt ) ! ( seq at pt )
+}
+
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
@@ -4701,7 +4859,7 @@
             : b __at_ptr & > ( nurl_str_len at ) 0
             == ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42
             : b __ps_ptr & > ( nurl_str_len __psrc ) 0 == ( nurl_str_get __psrc 0 ) 42
-            ? & != 0 ( nurl_str_len __psrc ) | __at_ptr __ps_ptr
+            ? & != 0 ( nurl_str_len __psrc ) | | | __at_ptr __ps_ptr ( seq at `%String` ) ( __is_named_agg at )
             { : i __plx ( nurl_lex_new __psrc `<param>` )
                 : s __pllvm ( parse_type __plx )
                 ? ( __arg_ptr_depth_mismatch at __pllvm )
@@ -4709,6 +4867,18 @@
                     ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
                     ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
                     `' — pointer-vs-value mismatch (a '*T' was passed where a 'T' value is expected, or vice versa)` ) ) }
+                {}
+                ? ( __arg_str_cstr_mismatch at __pllvm )
+                { ( die lex ( nurl_str_cat3
+                    ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                    ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
+                    `' — String vs raw C-string mismatch: 'String' is a managed string, 's' (i8*) a bare char pointer; convert with 'string_data' (String→s) or 'string_from' (s→String)` ) ) }
+                {}
+                ? ( __arg_named_struct_mismatch at __pllvm )
+                { ( die lex ( nurl_str_cat3
+                    ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                    ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
+                    `' — wrong struct type passed by value (a value of one named type where a different one is declared); the call would silently reinterpret its fields` ) ) }
                 {} }
             {} }
         {}
@@ -4740,6 +4910,23 @@
             ? ( is_ident_tok bck_arg_tt )
             { ( bck_record_inferred_escape syms bck_arg_val ) } {} }
         {}
+        // Thread-safety: the thread_spawn closure (arg 0) detaches onto a
+        // worker thread. If it captures a non-Send value (an Rc — non-atomic
+        // refcount), two threads racing on the control-block count is undefined
+        // behaviour. Reject it and point at the thread-safe Arc. A named-binding
+        // argument carries the flag via `<name>__closure_nonsend`; an inline
+        // closure literal sets the `__last_closure_nonsend__` side-channel as it
+        // is built just above.
+        ? & ( seq fname `thread_spawn` ) builtin_escape_slot {
+            : s __ts_ns ? ( is_ident_tok bck_arg_tt )
+            ( nurl_sym_get syms ( nurl_str_cat bck_arg_val `__closure_nonsend` ) )
+            g_last_closure_nonsend
+            ? != 0 ( nurl_str_len __ts_ns )
+            { ( die lex ( nurl_str_cat
+                ( nurl_str_cat3 `thread_spawn closure captures '` __ts_ns `' which is an Rc — ` )
+                `a non-atomic refcount is not safe to send across threads (two threads racing on the count is UB); use Arc (atomic) for a handle that crosses a thread boundary` ) ) }
+            {}
+        } {}
         // Record this argument's referent depth (for §2.8 return-escape
         // propagation below). Read the same side-channels the escape
         // check above consults — `__last_expr_refdepth__` (set by a
@@ -6046,6 +6233,23 @@
                         = pr0_eff db_uc
                         = did_reconstruct T
                     } {}
+                    // `b` (bool) source type with an i64 payload slot: the bool
+                    // rode the slot widened to i64, so truncate back to i1 — a
+                    // `! b E` Ok-payload (or `? b` Some-payload) must materialise
+                    // as i1 so the binding and its `!`/`&`/`|` uses type-check.
+                    // Without this the var is stored/loaded as i64 while `! b`
+                    // emits `xor i1`, which clang rejects. The inner NURL type is
+                    // `__res_nurl_T` for results and `__opt_nurl_T` for options.
+                    : s bopt_t ( nurl_sym_get syms ( nurl_str_cat match_var_name `__opt_nurl_T` ) )
+                    ? & ( seq pt0 `i64` ) | ( seq nurl_inner_t `b` ) ( seq bopt_t `b` )
+                    { : s bl_uc ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print bl_uc )
+                        ( nurl_print ` = trunc i64 ` ) ( nurl_print pr0 )
+                        ( nurl_print ` to i1\n` )
+                        = pt0_eff `i1`
+                        = pr0_eff bl_uc
+                        = did_reconstruct T
+                    } {}
                     ? != 0 ( nurl_str_len nurl_inner_t )
                     { : ~ s nurl_inner_llvm ( nurl_sym_get syms nurl_inner_t )
                         // Fallback for paren-compound T (e.g. `( Vec u )`):
@@ -6100,9 +6304,11 @@
                                 //       heap-box pointer — inttoptr → %T* →
                                 //       load → free.
                                 : s ni_f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname_r `__idx_0` `__type` ) )
+                                : s ni_fc ( nurl_sym_get syms ( nurl_str_cat sname_r `__field_count` ) )
+                                : b ni_single & != 0 ( nurl_str_len ni_fc ) == ( nurl_str_to_int ni_fc ) 1
                                 : b ni_f0_is_ptr & != 0 ( nurl_str_len ni_f0_ty )
                                 == ( nurl_str_get ni_f0_ty - ( nurl_str_len ni_f0_ty ) 1 ) 42
-                                ? ni_f0_is_ptr
+                                ? & ni_single ni_f0_is_ptr
                                 { : s pcv_r ( nurl_cg_reg cg )
                                     ( nurl_print `  ` ) ( nurl_print pcv_r )
                                     ( nurl_print ` = inttoptr i64 ` ) ( nurl_print pr0 )
@@ -8995,6 +9201,13 @@
                 : s val ( gen_expr lex syms cg )
                 : s vt ( nurl_get_last_type )
                 : s rhs_closure_env ( nurl_sym_get syms `__last_closure_env__` )
+                // Thread-safety: when the RHS is a closure that captured a
+                // non-Send value (an Rc), carry it onto this binding so a later
+                // `( thread_spawn name )` can reject it. Gated on the RHS being
+                // a closure so a non-closure binding never inherits a stale flag.
+                ? & != 0 ( nurl_str_len rhs_closure_env ) != 0 ( nurl_str_len g_last_closure_nonsend )
+                { ( nurl_sym_def syms ( nurl_str_cat name `__closure_nonsend` ) g_last_closure_nonsend ) }
+                {}
                 // A `String` binding cannot be initialised from a raw
                 // string literal / i8* — a String OWNS a heap control
                 // block + buffer, whereas a literal is a borrowed i8*.
@@ -9158,6 +9371,17 @@
         : s bck_rhs_val ( nurl_lex_val lex )
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         : s val ( gen_operand lex syms cg )
+        : s __asn_rt ( nurl_get_last_type )
+        // Type-agreement on reassignment (the store dual of the let-binding
+        // / call-arg checks): a never-legal clash (float-vs-non-float, a
+        // different named struct by value, or String vs raw C-string) would
+        // otherwise emit a mismatched `store` clang rejects. Width / sign /
+        // pointer coercions stay legal and are not flagged.
+        ? ( __store_type_clash __asn_rt vt )
+        { ( die lex ( nurl_str_cat
+            ( nurl_str_cat4 `cannot assign a value of type '` __asn_rt `' to '` name )
+            ( nurl_str_cat3 `' of type '` vt `' — NURL has no implicit conversions` ) ) ) }
+        {}
         // Borrow checker: record this assignment.
         ( bck_record `assign` name bck_line )
         // Escape analysis: re-target `name`. If the RHS is a stack
@@ -9385,6 +9609,11 @@
                             : s ftype ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__type` ) ) ) )
                             : i fidx ( nurl_str_to_int fidx_s )
                             : s rhs ( gen_expr lex syms cg )
+                            ? ( __store_type_clash ( nurl_get_last_type ) ftype )
+                            { ( die lex ( nurl_str_cat ( nurl_str_cat4
+                                `cannot store a value of type '` ( nurl_get_last_type ) `' into field '` fname )
+                                ( nurl_str_cat3 `' of type '` ftype `' — NURL has no implicit conversions` ) ) ) }
+                            {}
                             : s gep ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print gep )
                             ( nurl_print ` = getelementptr ` ) ( nurl_print st )
@@ -9445,6 +9674,11 @@
                 : s ftype ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__type` ) ) ) )
                 : i fidx ( nurl_str_to_int fidx_s )
                 : s rhs ( gen_expr lex syms cg )
+                ? ( __store_type_clash ( nurl_get_last_type ) ftype )
+                { ( die lex ( nurl_str_cat ( nurl_str_cat4
+                    `cannot store a value of type '` ( nurl_get_last_type ) `' into field '` fname )
+                    ( nurl_str_cat3 `' of type '` ftype `' — NURL has no implicit conversions` ) ) ) }
+                {}
                 : s gep ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print gep )
                 ( nurl_print ` = getelementptr ` ) ( nurl_print pt )
@@ -9485,6 +9719,17 @@
 
 // True iff an LLVM type string is a float type (`double` or f32 `float`).
 @ is_float_ty s ty → b { ^ | ( seq ty `double` ) ( seq ty `float` ) }
+
+// A never-legal store/assign type clash between a value's LLVM type `vt`
+// and the declared destination type `dt`: float-vs-non-float, a different
+// named struct by value, or String vs raw C-string. Integer width /
+// signedness / pointer-stash coercions are legal and NOT flagged. Shared
+// by gen_assign (reassignment) and gen_field_store (field writes).
+@ __store_type_clash s vt s dt → b {
+    ? | == 0 ( nurl_str_len vt ) == 0 ( nurl_str_len dt ) { ^ F } {}
+    ^ | | != ( is_float_ty vt ) ( is_float_ty dt )
+    ( __arg_named_struct_mismatch vt dt ) ( __arg_str_cstr_mismatch vt dt )
+}
 
 @ int_width s ty → i {
     ? ( seq ty `i1` ) 1
@@ -10308,6 +10553,40 @@
         : s fld_first_val ( nurl_lex_val lex )
         : s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
+        // Struct-literal field checks. PLAIN structs only — enum / option /
+        // result variant literals reach here too but use the enum_paycount
+        // path (overflow) + zeroinitializer for omitted payload slots, so
+        // they are excluded (enum_paycount set OR a `__variants` registry).
+        ? & & != 0 ( nurl_str_len cur_sname ) == enum_paycount -1
+        == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat cur_sname `__variants` ) ) )
+        { : s __slfc ( nurl_sym_get syms ( nurl_str_cat cur_sname `__field_count` ) )
+            ? != 0 ( nurl_str_len __slfc )
+            {  // (a) more values than the struct has fields — the surplus
+                // would insertvalue into a non-existent slot (invalid IR).
+                ? >= idx ( nurl_str_to_int __slfc )
+                { ( die lex ( nurl_str_cat
+                    ( nurl_str_cat4 `struct literal '` cur_sname `' has more field values than its ` __slfc )
+                    ` field(s) — the extra value has no slot` ) ) }
+                {}
+                // (b) never-legal field-type clash: float-vs-non-float, or a
+                // different named struct by value. Int width / signedness /
+                // pointer-stash coercions stay legal and are NOT flagged.
+                : s __sldft ( nurl_sym_get syms ( nurl_str_cat3 cur_sname `__idx_` ( nurl_str_cat ( nurl_str_int idx ) `__type` ) ) )
+                ? != 0 ( nurl_str_len __sldft )
+                { : b __slvf | ( seq fty `double` ) ( seq fty `float` )
+                    : b __sldf | ( seq __sldft `double` ) ( seq __sldft `float` )
+                    ? | != __slvf __sldf ( __arg_named_struct_mismatch fty __sldft )
+                    { ( die lex ( nurl_str_cat3
+                        ( nurl_str_cat4 `field ` ( nurl_str_int idx ) ` of struct literal '` cur_sname )
+                        ( nurl_str_cat4 `' expects type '` __sldft `' but the value has type '` fty )
+                        `' — NURL has no implicit conversions` ) ) }
+                    {}
+                }
+                {}
+            }
+            {}
+        }
+        {}
         // §2.8: record a field that is exactly a bare parameter of the
         // enclosing function, so `^ @ T { … param … }` propagates that
         // parameter's reference out through the returned aggregate.
@@ -10418,9 +10697,16 @@
                         : s vlist_a ( nurl_sym_get syms ( nurl_str_cat sname2 `__variants` ) )
                         ? == 0 ( nurl_str_len vlist_a ) {
                             : s f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname2 `__idx_0` `__type` ) )
+                            // Inline-f0 is correct ONLY for a SINGLE-field
+                            // pointer-handle struct (Vec/String/Response). A
+                            // multi-field struct whose f0 happens to be a
+                            // pointer (e.g. TcpListener { s raw i is_tls … })
+                            // must be heap-boxed, or fields 1.. are dropped.
+                            : s fc_a ( nurl_sym_get syms ( nurl_str_cat sname2 `__field_count` ) )
+                            : b single_a & != 0 ( nurl_str_len fc_a ) == ( nurl_str_to_int fc_a ) 1
                             : b f0_is_ptr & != 0 ( nurl_str_len f0_ty )
                             == ( nurl_str_get f0_ty - ( nurl_str_len f0_ty ) 1 ) 42
-                            ? f0_is_ptr
+                            ? & single_a f0_is_ptr
                             {  // Single-pointer-handle struct (Vec, String,
                                 // Response, ...): extract f0 + ptrtoint into
                                 // the i64 payload slot.
@@ -11453,7 +11739,40 @@
 // ── Closure expression \ param* → type { ... } ───────────────────
 // Generates a function pointer value that captures local variables
 // NOTE: Expects backslash to already be consumed by disambiguation function
+// __lty_base_name: the base type name of an LLVM type, with a leading '%'
+// stripped and a monomorphisation suffix (`__…`) cut off — `%Rc__i64` → "Rc",
+// `%Arc__i64` → "Arc", `%RcImpl__i64` → "RcImpl", `i64` → "i64".
+@ __lty_base_name s lty → s {
+    : i n ( nurl_str_len lty )
+    : i start ? & > n 0 == ( nurl_str_get lty 0 ) 37 1 0  // '%' == 37
+    : ~ i i start
+    : ~ b found F
+    ~ & < + i 1 n ! found {
+        ? & == ( nurl_str_get lty i ) 95 == ( nurl_str_get lty + i 1 ) 95  // "__"
+        { = found T } { = i + i 1 }
+    }
+    ? ! found { = i n } {}
+    ^ ( nurl_str_slice lty start - i start )
+}
+
+// __lty_is_nonsend: true if an LLVM type is a value that is NOT safe to send
+// across a thread boundary. Currently `Rc` (non-atomic refcount) — cloning or
+// dropping the same Rc from two threads races on its control-block count. Its
+// thread-safe counterpart is `Arc` (SEQ_CST atomic count). The check is by the
+// generic base name, so every `Rc T` monomorphisation is covered while `Arc T`
+// and the internal `RcImpl` are not.
+@ __lty_is_nonsend s lty → b {
+    ^ ( seq ( __lty_base_name lty ) `Rc` )
+}
+
 @ gen_closure_expr i lex i syms i cg → s {
+    // Thread-safety side-channel (mirrors __last_closure_env__): cleared at
+    // every closure build, set to a captured variable's name if that capture
+    // is a non-Send value (an Rc). The enclosing `:` binding copies it to
+    // `<name>__closure_nonsend`, and the thread_spawn call site reads either —
+    // so capturing an Rc into a closure that is detached onto a thread is a
+    // compile error, inline or via a named binding.
+    = g_last_closure_nonsend ``
 
     // Parse parameters: type name pairs before arrow
     : ~ s param_types ``
@@ -11647,6 +11966,11 @@
             : s cap_name ( str_first_word caps )
             : ~ s cap_type ( nurl_sym_get syms cap_name )
             ? == 0 ( nurl_str_len cap_type ) { = cap_type `i64` } {}
+            // Thread-safety: a captured non-Send value (an Rc) makes this
+            // closure unsafe to send across threads. Record the offending
+            // capture; the thread_spawn call site turns it into an error.
+            ? ( __lty_is_nonsend cap_type )
+            { = g_last_closure_nonsend cap_name } {}
             : b cap_byref ( __is_capture_byref cap_name syms )
             // Escape analysis: a by-pointer capture references
             // `cap_name`'s stack slot — its declaration depth
@@ -12628,6 +12952,40 @@
     }
     {}
     result
+}
+
+// __assoc_val: look up an associated-type binding by name in an impl's
+// "name1 val1 name2 val2 …" binding string. Returns the bound NURL type name,
+// or "" if `name` is not bound (binding values are never empty, so "" is an
+// unambiguous "absent"). No early `^` inside the loop — accumulate.
+@ __assoc_val s bindings s name → s {
+    : ~ s found ``
+    : ~ s rest bindings
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s vl ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ( seq nm name ) { = found vl } {}
+    }
+    ^ found
+}
+
+// subst_assoc: apply every associated-type binding to a default-method source,
+// replacing each associated-type NAME with its impl's concrete NURL type. Run
+// AFTER the trait type-param (T) substitution so a default body / signature that
+// names an associated type lowers to the impl's choice (e.g. `→ Elem` → `→ i`).
+@ subst_assoc s src s bindings → s {
+    : ~ s result src
+    : ~ s rest bindings
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s vl ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        = result ( subst_source_raw result nm vl )
+    }
+    ^ result
 }
 
 // __tok_src_text: faithful SOURCE text of the current token, for
@@ -14147,7 +14505,13 @@
         : b in_whitelist | | is_sys is_thr is_brg
         ? in_whitelist {} {
             : s sentinel ( nurl_str_cat `stdlib/runtime.` norm )
-            ? == ( nurl_file_exists sentinel ) 1 {} {
+            // Resolve the sentinel the SAME way as `$`-imports (__norm_import_path):
+            // CWD-relative first — keeps the in-tree build / bootstrap byte-identical —
+            // then $NURL_STDLIB, so an INSTALLED toolchain compiling from an arbitrary
+            // directory (or a registry package) finds the shipped sentinel. A bare
+            // CWD-relative check here meant a user building a compress.nu-importing
+            // program outside the stdlib tree got a bogus "no build-time sentinel" error.
+            ? == ( nurl_file_exists ( __norm_import_path sentinel ) ) 1 {} {
                 : s msg ( nurl_str_cat4
                 `FFI library '` lib `' is required but no build-time sentinel '`
                 ( nurl_str_cat sentinel `' found - install lib` ) )
@@ -14225,9 +14589,20 @@
     // redefinition of function" error, so skip the emit — the symbol is
     // still registered above so callers resolve correctly.
     : b is_prelude_cfn | | | ( seq fname `malloc` ) ( seq fname `free` ) ( seq fname `puts` ) ( seq fname `printf` )
-    ? is_prelude_cfn
+    // Dedupe `declare`s by symbol name across the whole compilation: two
+    // imported modules may legitimately declare the same libc/runtime
+    // extern (e.g. `nurl_rand_fill` in both std/random.nu and tls.nu), and
+    // re-emitting an identical `declare` makes LLVM reject the module with
+    // "invalid redefinition of function". The symbol is still registered
+    // above (the `fname` / `__ffi` entries) so callers in every file
+    // resolve correctly — only the duplicate IR line is suppressed. This
+    // generalises the prelude-symbol skip.
+    : s emitkey ( nurl_str_cat fname `__ffi_emitted` )
+    : b already != 0 ( nurl_str_len ( nurl_sym_get syms emitkey ) )
+    ? | is_prelude_cfn already
     {}
-    { ( nurl_print `declare ` ) ( nurl_print ret_ty )
+    { ( nurl_sym_def syms emitkey `1` )
+        ( nurl_print `declare ` ) ( nurl_print ret_ty )
         ( nurl_print ` @` ) ( nurl_print fname )
         ( nurl_print `(` ) ( nurl_print params_str ) ( nurl_print `)\n\n` )
     }
@@ -15248,6 +15623,18 @@
 // Called at every `$`-import path read site (scan_generic_structs,
 // scan_fn_sigs, gen_import_decl) so all three dedup tables key on the
 // same canonical form.
+// Directory portion of a file path (everything before the last '/'), or
+// "" when the path has no '/' (i.e. it lives in the current directory).
+@ __dirname s p → s {
+    : i n ( nurl_str_len p )
+    : ~ i i - n 1
+    ~ >= i 0 {
+        ? == ( nurl_str_get p i ) 47 { ^ ( nurl_str_slice p 0 i ) } {}
+        = i - i 1
+    }
+    ^ ``
+}
+
 @ __norm_import_path s path → s {
     : ~ s cur path
     : ~ b done F
@@ -15257,7 +15644,23 @@
         { = cur ( nurl_str_slice cur 2 - n 2 ) }
         { = done T }
     }
-    // A cwd-relative hit always wins — this is the monorepo / in-tree
+    // Importer-relative first: a path that exists next to the importing
+    // file resolves to THAT file, regardless of cwd. This lets a multi-
+    // file package reference its own modules (`$ `verify.nu``) and have
+    // them resolve whether the package is built standalone, from the
+    // monorepo root, or consumed as a `deps/<name>` dependency. stdlib /
+    // deps / cwd-rooted paths don't exist beside the importer, so they
+    // fall through to the cwd + $NURL_STDLIB lookup below — keeping the
+    // bootstrap and existing imports byte-identical.
+    : s sf ( vis_current_src_file )
+    ? != # i sf 0 {
+        : s dir ( __dirname sf )
+        ? != 0 ( nurl_str_len dir ) {
+            : s rel ( nurl_str_cat3 dir `/` cur )
+            ? == ( nurl_file_exists rel ) 1 { ^ rel } {}
+        } {}
+    } {}
+    // A cwd-relative hit wins next — this is the monorepo / in-tree
     // build, and keeps the bootstrap behaviour byte-identical (every
     // stdlib path resolves cwd-relative during self-host).
     ? == ( nurl_file_exists cur ) 1 { ^ cur } {}
@@ -15569,41 +15972,82 @@
     // method header with no following `{`/`@`/`}` at EOF) otherwise spins on
     // no-op `nurl_lex_advance` forever — nurlc hung instead of erroring.
     ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
-        ? == ( nurl_lex_type lex ) TT_AT
-        { ( nurl_lex_advance lex )  // skip '@'
-            ? ( is_ident_tok ( nurl_lex_type lex ) )
-            { : s mname ( nurl_lex_val lex )
-                ( lint_note_def mname )
-                ( nurl_lex_advance lex )  // consume method name
-                : i sig_start ( nurl_lex_cur_start lex )
-                // Skip params / → / ret_ty until we hit '{' (body), next '@',
-                // or '}' (end of trait).
-                ~ & & & != ( nurl_lex_type lex ) TT_LBRACE
-                != ( nurl_lex_type lex ) TT_AT
-                != ( nurl_lex_type lex ) TT_RBRACE
-                != ( nurl_lex_type lex ) TT_EOF {
-                    ( nurl_lex_advance lex )
-                }
-                ? == ( nurl_lex_type lex ) TT_LBRACE
-                {  // Default method: consume the body block and capture raw source.
-                    ( skip_balanced lex )
-                    : i end_pos ( nurl_lex_cur_start lex )
-                    : s src ( nurl_lex_src_slice lex sig_start - end_pos sig_start )
-                    ( nurl_sym_def g_trait_syms
-                    ( nurl_str_cat tname ( nurl_str_cat `__` ( nurl_str_cat mname `__src` ) ) )
-                    src )
-                    : s defaults_key ( nurl_str_cat tname `__defaults` )
-                    : s cur ( nurl_sym_get g_trait_syms defaults_key )
-                    ( nurl_sym_def g_trait_syms defaults_key
-                    ? == 0 ( nurl_str_len cur )
-                    mname
-                    ( nurl_str_cat cur ( nurl_str_cat ` ` mname ) ) )
-                }
-                {}  // header only — required method, no template to store
-            }
-            { ( nurl_lex_advance lex ) }
+        // Associated-type declaration `type Name` — a per-impl type the trait's
+        // methods may name. Record the name; each impl must bind it.
+        ? & == ( nurl_lex_type lex ) TT_IDENT ( seq ( nurl_lex_val lex ) `type` )
+        { ( nurl_lex_advance lex )  // skip 'type'
+            ? ! ( is_ident_tok ( nurl_lex_type lex ) )
+            { ( die lex `'type' in a trait body must be followed by an associated-type name` ) }
+            {}
+            : s aname ( nurl_lex_val lex )
+            ( nurl_lex_advance lex )  // consume the associated-type name
+            : s akey ( nurl_str_cat tname `__assoc` )
+            : s acur ( nurl_sym_get g_trait_syms akey )
+            // Idempotent append (same double-scan reason as __defaults).
+            ? ! ( str_contains_word acur aname )
+            { ( nurl_sym_def g_trait_syms akey
+                ? == 0 ( nurl_str_len acur ) aname ( nurl_str_cat acur ( nurl_str_cat ` ` aname ) ) ) }
+            {}
         }
-        { ( nurl_lex_advance lex ) }
+        { ? == ( nurl_lex_type lex ) TT_AT
+            { ( nurl_lex_advance lex )  // skip '@'
+                ? ( is_ident_tok ( nurl_lex_type lex ) )
+                { : s mname ( nurl_lex_val lex )
+                    ( lint_note_def mname )
+                    ( nurl_lex_advance lex )  // consume method name
+                    : i sig_start ( nurl_lex_cur_start lex )
+                    // Skip params / → / ret_ty until we hit '{' (body), next '@',
+                    // or '}' (end of trait).
+                    ~ & & & != ( nurl_lex_type lex ) TT_LBRACE
+                    != ( nurl_lex_type lex ) TT_AT
+                    != ( nurl_lex_type lex ) TT_RBRACE
+                    != ( nurl_lex_type lex ) TT_EOF {
+                        ( nurl_lex_advance lex )
+                    }
+                    // Dynamic-dispatch seam (docs/spec.md §4.9): record the trait's
+                    // method set in declaration order plus each method's signature
+                    // ("params → ret") — the vtable layout a future `dyn Trait` would
+                    // index. The static dispatch path never reads it; it materialises
+                    // the data so the extension is a localised addition, not a rescan.
+                    // Required AND default methods, idempotent (twice-scanned imports).
+                    : i msig_end ( nurl_lex_cur_start lex )
+                    : s msig ( nurl_lex_src_slice lex sig_start - msig_end sig_start )
+                    ( nurl_sym_def g_trait_syms
+                    ( nurl_str_cat tname ( nurl_str_cat `__` ( nurl_str_cat mname `__sig` ) ) ) msig )
+                    : s methods_key ( nurl_str_cat tname `__methods` )
+                    : s mcur ( nurl_sym_get g_trait_syms methods_key )
+                    ? ! ( str_contains_word mcur mname )
+                    { ( nurl_sym_def g_trait_syms methods_key
+                        ? == 0 ( nurl_str_len mcur ) mname ( nurl_str_cat mcur ( nurl_str_cat ` ` mname ) ) ) }
+                    {}
+                    ? == ( nurl_lex_type lex ) TT_LBRACE
+                    {  // Default method: consume the body block and capture raw source.
+                        ( skip_balanced lex )
+                        : i end_pos ( nurl_lex_cur_start lex )
+                        : s src ( nurl_lex_src_slice lex sig_start - end_pos sig_start )
+                        ( nurl_sym_def g_trait_syms
+                        ( nurl_str_cat tname ( nurl_str_cat `__` ( nurl_str_cat mname `__src` ) ) )
+                        src )
+                        : s defaults_key ( nurl_str_cat tname `__defaults` )
+                        : s cur ( nurl_sym_get g_trait_syms defaults_key )
+                        // Idempotent append: a `$`-imported trait body is scanned
+                        // twice (driver scan_fn_sigs + gen_import_decl's re-scan), so
+                        // re-adding the same method must not grow the list — else
+                        // emit_missing_defaults emits the default twice → an LLVM
+                        // "invalid redefinition". (The __src store above is a plain
+                        // overwrite, already idempotent.)
+                        ? ! ( str_contains_word cur mname )
+                        { ( nurl_sym_def g_trait_syms defaults_key
+                            ? == 0 ( nurl_str_len cur )
+                            mname
+                            ( nurl_str_cat cur ( nurl_str_cat ` ` mname ) ) ) }
+                        {}
+                    }
+                    {}  // header only — required method, no template to store
+                }
+                { ( nurl_lex_advance lex ) }
+            }
+            { ( nurl_lex_advance lex ) } }
     }
     ( expect lex TT_RBRACE )  // consume '}' — clean error if unterminated at EOF
 }
@@ -15627,7 +16071,7 @@
 // register_missing_defaults: for each of a trait's default methods that the
 // impl did NOT override, register a dispatch entry (method##ImplLLVM →
 // ret_ty) so that call sites resolve. Called during impl scan.
-@ register_missing_defaults s tname s impl_nurl s impl_llvm s impl_mangle s provided i syms → v {
+@ register_missing_defaults i lex s tname s impl_nurl s impl_llvm s impl_mangle s provided s bindings i syms → v {
     : s tparam ( nurl_sym_get g_trait_syms ( nurl_str_cat tname `__tparam` ) )
     : ~ s defaults ( nurl_sym_get g_trait_syms ( nurl_str_cat tname `__defaults` ) )
     ~ != 0 ( nurl_str_len defaults ) {
@@ -15637,11 +16081,15 @@
         {}  // explicitly overridden by impl
         { : s src ( nurl_sym_get g_trait_syms
             ( nurl_str_cat tname ( nurl_str_cat `__` ( nurl_str_cat mname `__src` ) ) ) )
-            : s subst ? != 0 ( nurl_str_len tparam )
+            : s subst0 ? != 0 ( nurl_str_len tparam )
             ( subst_source_raw src tparam impl_nurl )
             src
+            // Substitute the trait's associated types to this impl's bindings,
+            // so a default that returns/uses one lowers to the impl's choice.
+            : s subst ( subst_assoc subst0 bindings )
             : s ret_ty ( trait_default_ret subst )
             : s key ( nurl_str_cat mname ( nurl_str_cat `##` impl_llvm ) )
+            ( __coherence_register lex mname impl_llvm impl_nurl tname )
             ( nurl_sym_def g_impl_ret_syms key ret_ty )
             ( nurl_sym_def g_impl_name_syms key impl_mangle )
             // Mark the bare method name as impl-backed so gen_call's
@@ -15664,8 +16112,63 @@
     ``
 }
 
+// __parse_assoc_binding: at a `type Name Concrete` line inside an IMPL body
+// (lexer on the `type` keyword), consume all three tokens and return the
+// "Name Concrete" pair (Concrete a single simple NURL type name). Used by both
+// the scan and the IR-emit passes to collect an impl's associated-type
+// bindings. A compound binding type (`* T`, `Vec T`) is rejected — the same
+// simple-type restriction trait-default substitution already carries.
+@ __parse_assoc_binding i lex → s {
+    ( nurl_lex_advance lex )  // skip 'type'
+    ? ! ( is_ident_tok ( nurl_lex_type lex ) )
+    { ( die lex `'type' in an impl body must be followed by an associated-type name` ) }
+    {}
+    : s aname ( nurl_lex_val lex )
+    ( nurl_lex_advance lex )  // consume the name
+    : s aval ( capture_impl_nurl_name lex )
+    ? == 0 ( nurl_str_len aval )
+    { ( die lex ( nurl_str_cat3 `associated type '` aname `' must be bound to a simple type name` ) ) }
+    {}
+    ( nurl_lex_advance lex )  // consume the bound type
+    ^ ( nurl_str_cat aname ( nurl_str_cat ` ` aval ) )
+}
+
 // scan_impl_decl: pre-scan a % trait/impl declaration, registering impl methods.
 // Registers in g_impl_ret_syms and g_impl_name_syms so gen_call can dispatch.
+// Coherence guard for trait-method dispatch. Each (method, LLVM-type) pair may
+// be registered by exactly ONE impl. A second registration is either a
+// duplicate impl of the same trait, or two different traits sharing a method
+// name for one type — both ambiguous for NURL's bare-name dispatch. Type
+// aliases that share an LLVM lowering (i / i64, u / u8, f / f64) collide here
+// and are reported as duplicate impls rather than reaching LLVM as a function
+// redefinition. Call BEFORE the g_impl_name_syms registration; it records the
+// owning trait so a later collision's diagnostic can name both traits.
+@ __coherence_register i lex s mname s impl_llvm s impl_nurl s tname → v {
+    : s key ( nurl_str_cat mname ( nurl_str_cat `##` impl_llvm ) )
+    : s pos ( nurl_str_cat ( nurl_lex_filename lex )
+    ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
+    : s prior ( nurl_sym_get g_impl_name_syms key )
+    ? != 0 ( nurl_str_len prior ) {
+        : s prior_pos ( nurl_sym_get g_impl_pos_syms key )
+        ? ( seq prior_pos pos )
+        {}  // same source location → idempotent re-scan of the same impl
+        {  // a different location → a genuine duplicate or cross-trait clash
+            : s pt ( nurl_sym_get g_impl_trait_syms key )
+            : s ty ? != 0 ( nurl_str_len impl_nurl ) impl_nurl impl_llvm
+            ? ( seq pt tname )
+            { ( die lex ( nurl_str_cat
+                ( nurl_str_cat3 `duplicate impl of trait '` tname `' for type '` )
+                ( nurl_str_cat ( nurl_str_cat3 ty `' (method '` mname ) `') — each trait may be implemented once per type` ) ) ) }
+            { ( die lex ( nurl_str_cat
+                ( nurl_str_cat3 `method '` mname `' for type '` )
+                ( nurl_str_cat ( nurl_str_cat3 ty `' is provided by both trait '` pt )
+                ( nurl_str_cat3 `' and trait '` tname `' — bare-name dispatch cannot disambiguate` ) ) ) ) }
+        }
+    } {}
+    ( nurl_sym_def g_impl_trait_syms key tname )
+    ( nurl_sym_def g_impl_pos_syms key pos )
+}
+
 // For trait_decl: stores default-method templates in g_trait_syms.
 // For impl_decl: after scanning explicit methods, fills in dispatch entries
 // for any of the trait's defaults that the impl did not override.
@@ -15685,67 +16188,192 @@
         ( expect lex TT_RBRACK )  // ']'
     }
     {}
+    // Optional supertrait clause `% Sub : Super…` — a ':' here (never legal
+    // before a trait body or an impl type) introduces one or more supertrait
+    // names, read until the body's '{'. Implies: any type implementing Sub
+    // must also implement each Super (enforced after scan_fn_sigs).
+    : ~ s supers ``
+    ? == ( nurl_lex_type lex ) TT_COLON
+    { ( nurl_lex_advance lex )  // skip ':'
+        // Supertrait names are user-defined trait identifiers (TT_IDENT) — never
+        // a built-in type keyword. Stopping at non-IDENT means `% A : B i {` (a
+        // bogus supertrait clause on an impl) leaves `i` for the impl path,
+        // whose guard rejects it, rather than silently eating the impl type.
+        ~ & == ( nurl_lex_type lex ) TT_IDENT != ( nurl_lex_type lex ) TT_EOF {
+            = supers ? == 0 ( nurl_str_len supers )
+            ( nurl_lex_val lex )
+            ( nurl_str_cat supers ( nurl_str_cat ` ` ( nurl_lex_val lex ) ) )
+            ( nurl_lex_advance lex )
+        }
+        ? == 0 ( nurl_str_len supers )
+        { ( die lex `supertrait clause ':' must be followed by at least one trait name` ) }
+        {}
+    }
+    {}
     // Disambiguate: '{' → trait_decl, else → impl_decl
     ? == ( nurl_lex_type lex ) TT_LBRACE
     {  // trait: remember its type param and scan for default methods
         ( nurl_sym_def g_trait_syms ( nurl_str_cat tname `__tparam` ) tparam )
+        ( nurl_sym_def g_trait_syms ( nurl_str_cat tname `__istrait` ) `1` )
+        ? != 0 ( nurl_str_len supers )
+        { ( nurl_sym_def g_trait_syms ( nurl_str_cat tname `__supers` ) supers ) }
+        {}
         ( scan_trait_body lex tname )
     }
     {  // impl_decl: read implementing type, then scan methods
+        ? != 0 ( nurl_str_len supers )
+        { ( die lex `':' supertrait clause is only valid on a trait declaration, not an impl` ) }
+        {}
         : s impl_nurl ( capture_impl_nurl_name lex )
         : s impl_llvm ( parse_type lex )  // e.g. "i64", "i8*", "%Point"
         : s impl_mangle ( mangle_type impl_llvm )
         // Record that `tname` is implemented for this LLVM type, so a
         // generic bound `A: tname` can be verified at instantiation.
         ( nurl_sym_def g_trait_syms ( nurl_str_cat3 tname `##` impl_llvm ) `1` )
+        // Park a supertrait obligation: after every impl in the program is
+        // registered, each supertrait of `tname` must also be implemented for
+        // this type. Recorded unconditionally (the trait's supers may not be
+        // parsed yet); the deferred pass skips impls whose trait has none.
+        : s spos ( nurl_str_cat ( nurl_lex_filename lex )
+        ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
+        // Four space-separated fields per record (none contains a space):
+        // "<Sub> <impl_llvm> <nurl_type> <file:line> ".
+        = g_super_obligations ( nurl_str_cat g_super_obligations
+        ( nurl_str_cat tname ( nurl_str_cat ` `
+        ( nurl_str_cat impl_llvm ( nurl_str_cat ` `
+        ( nurl_str_cat impl_nurl ( nurl_str_cat ` `
+        ( nurl_str_cat spos ` ` ) ) ) ) ) ) ) )
         ( expect lex TT_LBRACE )
         : ~ s provided ``
+        : ~ s bindings ``  // "name val …" associated-type bindings of this impl
         ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
-            ? == ( nurl_lex_type lex ) TT_AT
-            { ( nurl_lex_advance lex )  // skip '@'
-                ? ( is_ident_tok ( nurl_lex_type lex ) )
-                { : s mname ( nurl_lex_val lex )
-                    ( nurl_lex_advance lex )  // skip method name
-                    = provided ? == 0 ( nurl_str_len provided )
-                    mname
-                    ( nurl_str_cat provided ( nurl_str_cat ` ` mname ) )
-                    // Skip params until →
-                    ~ & != ( nurl_lex_type lex ) TT_ARROW
-                    != ( nurl_lex_type lex ) TT_EOF
-                    { ( nurl_lex_advance lex ) }
-                    ? == ( nurl_lex_type lex ) TT_ARROW
-                    { ( nurl_lex_advance lex )
-                        : s ret_ty ( parse_type lex )
-                        : s key ( nurl_str_cat mname ( nurl_str_cat `##` impl_llvm ) )
-                        ( nurl_sym_def g_impl_ret_syms key ret_ty )
-                        ( nurl_sym_def g_impl_name_syms key impl_mangle )
-                        // Mark the bare method name as impl-backed so
-                        // gen_call's unknown-callee check lets it
-                        // through to impl dispatch.
-                        ( nurl_sym_def g_impl_name_syms ( nurl_str_cat mname `__impl_seen` ) `1` )
-                        : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
-                        ( nurl_sym_def syms mangled ret_ty )
+            ? & == ( nurl_lex_type lex ) TT_IDENT ( seq ( nurl_lex_val lex ) `type` )
+            { : s pair ( __parse_assoc_binding lex )
+                = bindings ? == 0 ( nurl_str_len bindings )
+                pair ( nurl_str_cat bindings ( nurl_str_cat ` ` pair ) ) }
+            { ? == ( nurl_lex_type lex ) TT_AT
+                { ( nurl_lex_advance lex )  // skip '@'
+                    ? ( is_ident_tok ( nurl_lex_type lex ) )
+                    { : s mname ( nurl_lex_val lex )
+                        ( nurl_lex_advance lex )  // skip method name
+                        = provided ? == 0 ( nurl_str_len provided )
+                        mname
+                        ( nurl_str_cat provided ( nurl_str_cat ` ` mname ) )
+                        // Skip params until →
+                        ~ & != ( nurl_lex_type lex ) TT_ARROW
+                        != ( nurl_lex_type lex ) TT_EOF
+                        { ( nurl_lex_advance lex ) }
+                        ? == ( nurl_lex_type lex ) TT_ARROW
+                        { ( nurl_lex_advance lex )
+                            : s ret_ty ( parse_type lex )
+                            : s key ( nurl_str_cat mname ( nurl_str_cat `##` impl_llvm ) )
+                            ( __coherence_register lex mname impl_llvm impl_nurl tname )
+                            ( nurl_sym_def g_impl_ret_syms key ret_ty )
+                            ( nurl_sym_def g_impl_name_syms key impl_mangle )
+                            // Mark the bare method name as impl-backed so
+                            // gen_call's unknown-callee check lets it
+                            // through to impl dispatch.
+                            ( nurl_sym_def g_impl_name_syms ( nurl_str_cat mname `__impl_seen` ) `1` )
+                            : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
+                            ( nurl_sym_def syms mangled ret_ty )
+                        }
+                        {}
+                        ( skip_balanced lex )  // skip method body
                     }
-                    {}
-                    ( skip_balanced lex )  // skip method body
+                    { ( nurl_lex_advance lex ) }
                 }
-                { ( nurl_lex_advance lex ) }
-            }
-            { ( nurl_lex_advance lex ) }
+                { ( nurl_lex_advance lex ) } }
         }
         ( expect lex TT_RBRACE )  // consume '}' — clean error if unterminated at EOF
+        // Associated-type coherence: the impl must bind exactly the trait's
+        // declared associated types — every one, and no unknown name. (The
+        // trait, like its defaults, must be scanned before the impl for its
+        // __assoc list to be visible; the substitution below relies on it too.)
+        ( verify_assoc_bindings lex tname impl_nurl bindings )
         // After the impl's explicit methods, synthesize dispatch entries for
-        // any of the trait's defaults that this impl did not override.
+        // any of the trait's defaults that this impl did not override, with the
+        // trait's associated types substituted to this impl's bindings.
         ? != 0 ( nurl_str_len impl_nurl )
-        { ( register_missing_defaults tname impl_nurl impl_llvm impl_mangle provided syms ) }
+        { ( register_missing_defaults lex tname impl_nurl impl_llvm impl_mangle provided bindings syms ) }
         {}
+    }
+}
+
+// verify_assoc_bindings: associated-type coherence for one impl block. Every
+// associated type the trait declares must be bound by the impl, and every
+// `type` line in the impl must name a declared associated type — so an impl is
+// total over the trait's associated types and a typo'd binding is rejected at
+// its definition rather than surfacing as an unsubstituted name in LLVM IR.
+@ verify_assoc_bindings i lex s tname s impl_nurl s bindings → v {
+    : s declared ( nurl_sym_get g_trait_syms ( nurl_str_cat tname `__assoc` ) )
+    // (a) every binding names a declared associated type — checked first so a
+    // typo'd `type Elment i` is reported as the unknown name, not as the (also
+    // true, but less precise) "Elem unbound".
+    : ~ s brest bindings
+    ~ != 0 ( nurl_str_len brest ) {
+        : s bn ( str_first_word brest )
+        = brest ( str_skip_word brest )
+        = brest ( str_skip_word brest )  // skip the bound value
+        ? ! ( str_contains_word declared bn )
+        { ( die lex ( nurl_str_cat
+            ( nurl_str_cat3 `trait '` tname `' has no associated type '` )
+            ( nurl_str_cat3 bn `' to bind for type '` ( nurl_str_cat impl_nurl `'` ) ) ) ) }
+        {}
+    }
+    // (b) every declared associated type is bound
+    : ~ s drest declared
+    ~ != 0 ( nurl_str_len drest ) {
+        : s an ( str_first_word drest )
+        = drest ( str_skip_word drest )
+        ? == 0 ( nurl_str_len ( __assoc_val bindings an ) )
+        { ( die lex ( nurl_str_cat
+            ( nurl_str_cat3 `impl of trait '` tname `' for type '` )
+            ( nurl_str_cat ( nurl_str_cat3 impl_nurl `' must bind associated type '` an )
+            `' (add a 'type' line)` ) ) ) }
+        {}
+    }
+}
+
+// verify_super_obligations: the supertrait soundness sweep. Runs once, after
+// scan_fn_sigs has registered every impl in the program (the main file and all
+// `$`-imports), so it sees the full set of (trait, type) impls regardless of
+// declaration or import order. For each impl block parked in
+// g_super_obligations, look up its trait's supertraits and require each one to
+// be implemented for the SAME type — the static guarantee that backs `T: Sub ⇒
+// T: Super`, so a bound `[A: Sub]` may freely call any supertrait method on A
+// (dispatch resolves through the supertrait impl that this check proves exists).
+@ verify_super_obligations → v {
+    : ~ s rest g_super_obligations
+    ~ != 0 ( nurl_str_len rest ) {
+        : s sub ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s llvm ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s nty ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s pos ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        // Each supertrait of `sub` must be implemented for `llvm`.
+        : ~ s sup_rest ( nurl_sym_get g_trait_syms ( nurl_str_cat sub `__supers` ) )
+        ~ != 0 ( nurl_str_len sup_rest ) {
+            : s sup ( str_first_word sup_rest )
+            = sup_rest ( str_skip_word sup_rest )
+            ? == 0 ( nurl_str_len ( nurl_sym_get g_trait_syms
+            ( nurl_str_cat3 sup `##` llvm ) ) )
+            { ( die_at pos ( nurl_str_cat
+                ( nurl_str_cat3 `type '` nty `' implements trait '` )
+                ( nurl_str_cat ( nurl_str_cat3 sub `' but not its supertrait '` sup )
+                ( nurl_str_cat3 `' — every '` sub
+                ( nurl_str_cat3 `' type must also implement '` sup `'` ) ) ) ) ) }
+            {}
+        }
     }
 }
 
 // emit_missing_defaults: for each trait default not overridden by the impl,
 // splice "T" → impl's NURL type name into the stored template, prepend
 // "@ mname__ImplMangle", and re-lex/emit via gen_fn_decl.
-@ emit_missing_defaults s tname s impl_nurl s impl_mangle s provided i syms i cg → v {
+@ emit_missing_defaults s tname s impl_nurl s impl_mangle s provided s bindings i syms i cg → v {
     : s tparam ( nurl_sym_get g_trait_syms ( nurl_str_cat tname `__tparam` ) )
     : ~ s defaults ( nurl_sym_get g_trait_syms ( nurl_str_cat tname `__defaults` ) )
     ~ != 0 ( nurl_str_len defaults ) {
@@ -15755,9 +16383,10 @@
         {}  // overridden: impl's concrete method already emitted
         { : s src ( nurl_sym_get g_trait_syms
             ( nurl_str_cat tname ( nurl_str_cat `__` ( nurl_str_cat mname `__src` ) ) ) )
-            : s subst ? != 0 ( nurl_str_len tparam )
+            : s subst0 ? != 0 ( nurl_str_len tparam )
             ( subst_source_raw src tparam impl_nurl )
             src
+            : s subst ( subst_assoc subst0 bindings )  // associated types → impl bindings
             : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
             : s full_src ( nurl_str_cat `@ ` ( nurl_str_cat mangled ( nurl_str_cat ` ` subst ) ) )
             : i lex2 ( nurl_lex_new full_src `<trait_default>` )
@@ -15789,6 +16418,13 @@
         ( expect lex TT_RBRACK )  // ']'
     }
     {}
+    // Skip optional supertrait clause `: Super…` (captured during scan); its
+    // names are TT_IDENT trait names running until the body's '{'.
+    ? == ( nurl_lex_type lex ) TT_COLON
+    { ( nurl_lex_advance lex )
+        ~ & == ( nurl_lex_type lex ) TT_IDENT != ( nurl_lex_type lex ) TT_EOF { ( nurl_lex_advance lex ) }
+    }
+    {}
     // Disambiguate: '{' → trait_decl (no IR), else → impl_decl
     ? == ( nurl_lex_type lex ) TT_LBRACE
     { ( skip_balanced lex ) }  // trait: skip whole block, no IR
@@ -15798,54 +16434,60 @@
         : s impl_mangle ( mangle_type impl_llvm )
         ( expect lex TT_LBRACE )
         : ~ s provided ``
+        : ~ s bindings ``  // associated-type bindings (re-collected for emit subst)
         ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
-            ? == ( nurl_lex_type lex ) TT_AT
-            { ( nurl_lex_advance lex )  // skip '@'
-                ? ( is_ident_tok ( nurl_lex_type lex ) )
-                { : s mname ( nurl_lex_val lex )
-                    ( nurl_lex_advance lex )  // skip method name
-                    = provided ? == 0 ( nurl_str_len provided )
-                    mname
-                    ( nurl_str_cat provided ( nurl_str_cat ` ` mname ) )
-                    : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
-                    // gen_fn_decl_concrete reads params, →, ret, body from lex
-                    ( gen_fn_decl_concrete mangled lex syms cg )
-                    // Panic-unwind journal: for the `Drop` trait, emit a
-                    // `void(i8*)` thunk that loads the value from its alloca
-                    // and runs the just-emitted destructor, so a panic can
-                    // replay the typed drop the longjmp skips (§7). One per
-                    // Drop impl — naturally deduped (an impl block appears
-                    // once). Emitted at module scope right after the impl fn.
-                    ? & ( seq tname `Drop` ) ( seq mname `drop` )
-                    { ( emit_jdrop_thunk impl_llvm impl_mangle ) }
-                    {}
-                    // gen_fn_decl_concrete recorded the inout/sink parameter
-                    // sets under the MANGLED name (`bump__Counter`), but a
-                    // call site dispatches by the BARE method name
-                    // (`( bump c )` → call_name `bump`) and looks the sets up
-                    // there. Mirror them onto the bare name so an `inout` /
-                    // `sink` impl-method argument is passed by address /
-                    // moved — without this the receiver was passed BY VALUE
-                    // into a `T*` parameter, corrupting memory (segfault).
-                    // All impls of a trait method share the trait's parameter
-                    // conventions, so the bare-name entry is consistent across
-                    // implementing types. Only mirror non-empty sets so an
-                    // impl with no inout/sink can't clobber another's entry.
-                    : s __impl_io ( nurl_sym_get g_fn_inout mangled )
-                    : s __impl_sk ( nurl_sym_get g_fn_sink mangled )
-                    ? != 0 ( nurl_str_len __impl_io )
-                    { ( nurl_sym_def g_fn_inout mname __impl_io ) } {}
-                    ? != 0 ( nurl_str_len __impl_sk )
-                    { ( nurl_sym_def g_fn_sink mname __impl_sk ) } {}
+            ? & == ( nurl_lex_type lex ) TT_IDENT ( seq ( nurl_lex_val lex ) `type` )
+            { : s pair ( __parse_assoc_binding lex )
+                = bindings ? == 0 ( nurl_str_len bindings )
+                pair ( nurl_str_cat bindings ( nurl_str_cat ` ` pair ) ) }
+            { ? == ( nurl_lex_type lex ) TT_AT
+                { ( nurl_lex_advance lex )  // skip '@'
+                    ? ( is_ident_tok ( nurl_lex_type lex ) )
+                    { : s mname ( nurl_lex_val lex )
+                        ( nurl_lex_advance lex )  // skip method name
+                        = provided ? == 0 ( nurl_str_len provided )
+                        mname
+                        ( nurl_str_cat provided ( nurl_str_cat ` ` mname ) )
+                        : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
+                        // gen_fn_decl_concrete reads params, →, ret, body from lex
+                        ( gen_fn_decl_concrete mangled lex syms cg )
+                        // Panic-unwind journal: for the `Drop` trait, emit a
+                        // `void(i8*)` thunk that loads the value from its alloca
+                        // and runs the just-emitted destructor, so a panic can
+                        // replay the typed drop the longjmp skips (§7). One per
+                        // Drop impl — naturally deduped (an impl block appears
+                        // once). Emitted at module scope right after the impl fn.
+                        ? & ( seq tname `Drop` ) ( seq mname `drop` )
+                        { ( emit_jdrop_thunk impl_llvm impl_mangle ) }
+                        {}
+                        // gen_fn_decl_concrete recorded the inout/sink parameter
+                        // sets under the MANGLED name (`bump__Counter`), but a
+                        // call site dispatches by the BARE method name
+                        // (`( bump c )` → call_name `bump`) and looks the sets up
+                        // there. Mirror them onto the bare name so an `inout` /
+                        // `sink` impl-method argument is passed by address /
+                        // moved — without this the receiver was passed BY VALUE
+                        // into a `T*` parameter, corrupting memory (segfault).
+                        // All impls of a trait method share the trait's parameter
+                        // conventions, so the bare-name entry is consistent across
+                        // implementing types. Only mirror non-empty sets so an
+                        // impl with no inout/sink can't clobber another's entry.
+                        : s __impl_io ( nurl_sym_get g_fn_inout mangled )
+                        : s __impl_sk ( nurl_sym_get g_fn_sink mangled )
+                        ? != 0 ( nurl_str_len __impl_io )
+                        { ( nurl_sym_def g_fn_inout mname __impl_io ) } {}
+                        ? != 0 ( nurl_str_len __impl_sk )
+                        { ( nurl_sym_def g_fn_sink mname __impl_sk ) } {}
+                    }
+                    { ( die lex `expected method name in impl` ) }
                 }
-                { ( die lex `expected method name in impl` ) }
-            }
-            { ( nurl_lex_advance lex ) }
+                { ( nurl_lex_advance lex ) } }
         }
         ( expect lex TT_RBRACE )  // consume '}' — clean error if unterminated at EOF
-        // Synthesize trait-default copies for any method the impl omitted.
+        // Synthesize trait-default copies for any method the impl omitted, with
+        // the trait's associated types substituted to this impl's bindings.
         ? != 0 ( nurl_str_len impl_nurl )
-        { ( emit_missing_defaults tname impl_nurl impl_mangle provided syms cg ) }
+        { ( emit_missing_defaults tname impl_nurl impl_mangle provided bindings syms cg ) }
         {}
     }
 }
@@ -15984,7 +16626,12 @@
                     ( nurl_sym_def g_generic_struct_syms `__scanned__` new_marker )
                     : s src2 ( nurl_read_file path )
                     : i lex2 ( nurl_lex_new src2 path )
+                    // Track the imported file so its imports resolve
+                    // importer-relative (mirrors the other scan passes).
+                    : s saved_sf ( vis_current_src_file )
+                    ( vis_set_current_src_file path )
                     ( scan_generic_structs lex2 syms )
+                    ( vis_set_current_src_file saved_sf )
                 }
                 = handled T
             } {}
@@ -16371,7 +17018,13 @@
                             }
                             src2
                             : i lex2 ( nurl_lex_new eff_src2 path )
+                            // Track the imported file as current so its own
+                            // `$`-imports resolve importer-relative (mirrors
+                            // scan_fn_sigs / gen_import_decl).
+                            : s saved_sf ( vis_current_src_file )
+                            ( vis_set_current_src_file path )
                             ( scan_type_names lex2 syms )
+                            ( vis_set_current_src_file saved_sf )
                         }
                     }
                     {}
@@ -16493,6 +17146,8 @@
     ( nurl_sym_def g_generic_syms `__deferred_count__` `0` )
     = g_impl_ret_syms ( nurl_sym_new )
     = g_impl_name_syms ( nurl_sym_new )
+    = g_impl_trait_syms ( nurl_sym_new )
+    = g_impl_pos_syms ( nurl_sym_new )
     = g_trait_syms ( nurl_sym_new )
     = g_res_type_syms ( nurl_sym_new )
     = g_closure_defs ( nurl_sym_new )
@@ -16517,6 +17172,9 @@
     ( scan_generic_structs lex0 syms )
     : i lex1 ( nurl_lex_new src path )
     ( scan_fn_sigs lex1 syms )
+    // Every impl across the program is now registered — enforce that each
+    // implemented subtrait's supertraits are implemented for the same type.
+    ( verify_super_obligations )
     : i lex_tn ( nurl_lex_new src path )
     ( scan_type_names lex_tn syms )
     : i lex ( nurl_lex_new src path )
