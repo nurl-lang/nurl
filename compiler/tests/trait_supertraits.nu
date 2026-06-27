@@ -12,7 +12,7 @@
 }
 
 % Ord [T] : Eq {
-    @ cmp T a T b → i   // -1 / 0 / 1
+    @ cmp T a T b → i  // -1 / 0 / 1
 }
 
 % Eq Nat {
@@ -29,12 +29,12 @@
 
 // Generic over Ord — calls BOTH the Ord method (cmp) and, because Ord : Eq,
 // the supertrait method (eq).
-@ describe [A: Ord] A a A b → i {
+@ describe [A : Ord] A a A b → i {
     ? ( eq a b )
     { ( nurl_print `equal\n` ) ^ 0 }
     { : i c ( cmp a b )
-      ? < c 0 { ( nurl_print `less\n` ) } { ( nurl_print `greater\n` ) }
-      ^ c }
+        ? < c 0 { ( nurl_print `less\n` ) } { ( nurl_print `greater\n` ) }
+        ^ c }
 }
 
 @ main → i {
@@ -42,11 +42,11 @@
     : Nat y @ Nat { 7 }
     : Nat z @ Nat { 3 }
 
-    : i r1 ( describe [Nat] x y )   // less  → -1
-    : i r2 ( describe [Nat] y x )   // greater → 1
-    : i r3 ( describe [Nat] x z )   // equal → 0
+    : i r1 ( describe [Nat] x y )  // less  → -1
+    : i r2 ( describe [Nat] y x )  // greater → 1
+    : i r3 ( describe [Nat] x z )  // equal → 0
 
-    : i total + r1 + r2 r3          // -1 + 1 + 0 = 0
+    : i total + r1 + r2 r3  // -1 + 1 + 0 = 0
     ( nurl_print `total: ` )
     ( nurl_print ( nurl_str_int total ) )
     ( nurl_print `\n` )

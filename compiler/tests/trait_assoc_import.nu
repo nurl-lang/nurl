@@ -14,7 +14,7 @@ $ `compiler/tests/trait_assoc_import_mod.nu`
 
 @ main → i {
     : IB a @ IB { 8 }
-    : i r ( first a 0 )      // → 8 via the imported default, dispatching to unwrap##IB
+    : i r ( first a 0 )  // → 8 via the imported default, dispatching to unwrap##IB
     ( nurl_print `r: ` )
     ( nurl_print ( nurl_str_int r ) )
     ( nurl_print `\n` )

@@ -6,14 +6,14 @@
 // specialised copies have return type i and f respectively (the float copy
 // must really return a double — an unsubstituted `Elem` would not compile).
 
-: IntBox   { i v }
+: IntBox { i v }
 : FloatBox { f v }
 
 % Boxed [T] {
     type Elem
-    @ unwrap T self → Elem              // required, returns the associated type
-    @ first T self Elem d → Elem {      // default: signature names Elem twice
-        ^ ( unwrap self )               // dispatches to the impl's unwrap
+    @ unwrap T self → Elem  // required, returns the associated type
+    @ first T self Elem d → Elem {  // default: signature names Elem twice
+        ^ ( unwrap self )  // dispatches to the impl's unwrap
     }
 }
 
@@ -30,14 +30,14 @@
 }
 
 @ main → i {
-    : IntBox   a @ IntBox   { 7 }
+    : IntBox a @ IntBox { 7 }
     : FloatBox b @ FloatBox { 2.5 }
 
-    : i x ( first a 0 )         // → i 7   (default specialised to i)
-    : f y ( first b 0.0 )       // → f 2.5 (default specialised to f — real double)
+    : i x ( first a 0 )  // → i 7   (default specialised to i)
+    : f y ( first b 0.0 )  // → f 2.5 (default specialised to f — real double)
 
-    : i yi # i * y 2.0          // 2.5 * 2.0 = 5.0 → 5
-    : i total + x yi            // 7 + 5 = 12
+    : i yi # i * y 2.0  // 2.5 * 2.0 = 5.0 → 5
+    : i total + x yi  // 7 + 5 = 12
 
     ( nurl_print `total: ` )
     ( nurl_print ( nurl_str_int total ) )
