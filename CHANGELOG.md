@@ -8,6 +8,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-06-27
+
+A **security-hardening** release for the pure-NURL cryptography and TLS stack
+introduced in 0.10.0. A full adversarial audit of the OpenSSL-replacement code
+(documented in the new `docs/CRYPTO.md`) drove fixes across certificate-chain
+validation, the TLS 1.3 protocol guards, and the side-channel posture of every
+asymmetric and symmetric primitive. The elliptic-curve secret path is now
+**constant-time including operand timing** via a dedicated fixed-limb P-256
+field, and the certificate chain now enforces Basic Constraints — closing an
+"any leaf certificate can sign for any host" authentication bypass.
+
+### Security
+
+- **Certificate-chain policy hardened (X.509).** The chain now enforces
+  BasicConstraints `cA:TRUE` on every signing certificate — closing a complete
+  authentication bypass where any leaf certificate could mint a forged cert for
+  any host (the classic Moxie Marlinspike break; `is_ca` was parsed but never
+  read, and was in fact written to a by-value copy and discarded). Adds
+  keyUsage `keyCertSign` / EKU `serverAuth` enforcement, `pathLenConstraint`,
+  embedded-NUL dNSName rejection, tightened wildcard matching (`*.com` /
+  `*foo.com` now rejected), iPAddress-SAN matching, a ≥2048-bit RSA-key floor,
+  a presented-chain length cap, and issuer/subject DN name-chaining.
+- **TLS 1.3 protocol guards.** Reject an all-zero X25519 / P-256 ECDHE shared
+  secret (RFC 8446 §7.4.2) on both client and server; check the §4.1.3
+  downgrade sentinel when a 1.3-capable client negotiates 1.2; fail closed on a
+  CSPRNG failure; constant-time TLS 1.2 server-Finished comparison.
+- **Constant-time symmetric primitives.** AES computes its S-box in constant
+  time (`Affine(x⁻¹ in GF(2⁸))`, no secret-indexed table — closing the
+  cache-timing key-recovery leak); GHASH is branchless; the GCM and
+  ChaCha20-Poly1305 entry points validate key/nonce lengths and enforce
+  plaintext caps. Tag comparisons were already constant-time.
+- **Constant-time asymmetric primitives.** `bigint_modpow` is now a Montgomery
+  powering ladder with a uniform square-multiply trace independent of the
+  secret exponent. The P-256 secret scalar multiply (ECDSA nonce, ECDHE) runs
+  on a new dedicated **fixed-limb constant-time GF(p256) field**
+  (`std/p256_field`), so it is constant-time *including operand timing*. RSA
+  private-key signing adds base blinding (plus a signature range check and the
+  PSS maskedDB check). Ed25519 verify rejects non-canonical encodings and
+  `S ≥ L` (malleability); ECDSA verify and P-256 ECDH validate that peer
+  points are on-curve (invalid-curve guard).
+- **Side-channel scope, stated honestly** (`docs/CRYPTO.md`): on the
+  timing/cache axis the EC and symmetric primitives are constant-time including
+  operand timing, and RSA's residual operand timing is covered by base
+  blinding. Physical **power/EM (DPA/template) side-channels are out of scope**
+  for any pure-software stack. Revocation (OCSP/CRL) and X.509 name constraints
+  are not checked.
+
+### Added
+
+- **`std/p256_field.nu`** — a dedicated fixed-16-limb constant-time GF(p256)
+  field (Montgomery CIOS multiply, conditional-±p add/sub, Fermat inverse) and
+  constant-time P-256 point arithmetic via the Renes–Costello–Batina complete
+  addition formula. Cross-checked against the bigint reference (2000 cases) and
+  Python `cryptography` (500/300 cases); new corpus test `p256_ct_field`.
+- **`docs/CRYPTO.md`** — documents the pure-NURL crypto/TLS stack: implemented
+  primitives, the side-channel taxonomy, TLS 1.3 controls, X.509 verification,
+  and the soundness contract. Linked from the README.
+- `bigint_modinv` (modular inverse) and `bigint_cselect` (constant-time select)
+  in `std/bigint.nu`.
+
+### Changed
+
+- `tls_accept_rsa` now takes the RSA public exponent (argument order `n e d`)
+  so the server's CertificateVerify signature can be base-blinded; `net.nu`'s
+  TLS listener threads the exponent through. Other public TLS APIs are
+  unchanged.
+
+### Fixed
+
+- The CHANGELOG's DEFLATE interop claim is now "round-trip / KAT verified"
+  rather than "byte-for-byte" — a greedy LZ77 encoder produces a valid but not
+  bit-identical stream versus zlib.
+
 ## [0.10.0] — 2026-06-26
 
 The **self-sufficiency** release. NURL no longer depends on any third-party
@@ -5858,6 +5931,7 @@ releases are measured.
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
 [Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.10.0...HEAD
+[0.10.1]: https://github.com/nurl-lang/nurl/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/nurl-lang/nurl/compare/v0.9.19...v0.10.0
 [0.9.14]: https://github.com/nurl-lang/nurl/compare/v0.9.13...v0.9.14
 [0.9.13]: https://github.com/nurl-lang/nurl/compare/v0.9.12...v0.9.13
