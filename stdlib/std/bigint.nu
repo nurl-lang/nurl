@@ -617,6 +617,28 @@ $ `stdlib/core/vec.nu`
     }
 }
 
+// Constant-time select of one of two NON-NEGATIVE BigInts: returns a fresh
+// copy of `a` if bit == 1, else of `b`, with no branch on `bit` (per-limb
+// masked merge over a common zero-padded length). Used by the branchless
+// P-256 scalar-multiply point select.
+@ bigint_cselect i bit BigInt a BigInt b → BigInt {
+    : ( Vec i ) la . a limbs
+    : ( Vec i ) lb . b limbs
+    : i na ( vec_len [i] la )
+    : i nb ( vec_len [i] lb )
+    : i L ? > na nb na nb
+    : i mask & 65535 - 0 bit          // bit=1 → 0xffff
+    : i imask & 65535 - 0 - 1 bit     // bit=0 → 0xffff
+    : ( Vec i ) out ( vec_with_cap [i] ? > L 0 L 1 )
+    : ~ i k 0
+    ~ < k L {
+        ( vec_push [i] out | & mask ( __limb la k ) & imask ( __limb lb k ) )
+        = k + k 1
+    }
+    ( __norm out )
+    ^ @ BigInt { F out }
+}
+
 // base^exp mod m (all non-negative), via the Montgomery powering ladder.
 // Unlike textbook square-and-multiply — which multiplies only on 1-bits and
 // runs for bit-length(exp) iterations — this performs EXACTLY two modular

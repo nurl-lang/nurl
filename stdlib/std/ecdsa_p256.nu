@@ -193,7 +193,26 @@ $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
     ^ @ Jac { X3 Y3 Z3 F }
 }
 
-// k · P over the bits of k (big-endian byte view), MSB to LSB.
+// Constant-time select of one of two Jacobian points: `a` if bit==1 else `b`,
+// with no branch on `bit` (each coordinate via bigint_cselect; the inf flag
+// is a plain conditional move). Returns a fresh point.
+@ __jcselect i bit Jac a Jac b → Jac {
+    : BigInt nx ( bigint_cselect bit . a x . b x )
+    : BigInt ny ( bigint_cselect bit . a y . b y )
+    : BigInt nz ( bigint_cselect bit . a z . b z )
+    : b ninf ? != 0 bit . a inf . b inf
+    ^ @ Jac { nx ny nz ninf }
+}
+
+// k · P over the bits of k (big-endian byte view), MSB to LSB. Branchless
+// (Coron always-add): every bit performs BOTH a double and an add, then a
+// constant-time point select keeps the add iff the bit was set — so the
+// scalar bit drives no branch and the per-bit operation sequence is uniform.
+// Combined with the scalar blinding + projective randomization in
+// __jmul_secret, this removes the secret-bit control-flow leak the audit
+// flagged. (The underlying field ops remain operand-time-dependent — see
+// docs/CRYPTO.md §3.) Verify's scalars are public, so it shares this path
+// harmlessly.
 @ __jmul ( Vec u ) k Jac base BigInt p → Jac {
     : ~ Jac acc ( __jinf )
     : i n ( vec_len [u] k )
@@ -205,11 +224,12 @@ $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
             : Jac d ( __jdouble acc p )
             ( __jfree acc )
             = acc d
-            ? != 0 & >> byte bit 1 {
-                : Jac a ( __jadd acc base p )
-                ( __jfree acc )
-                = acc a
-            } {}
+            : i b1 & 1 >> byte bit
+            : Jac t ( __jadd acc base p )
+            : Jac sel ( __jcselect b1 t acc )
+            ( __jfree t )
+            ( __jfree acc )
+            = acc sel
             = bit - bit 1
         }
         = bi + bi 1
