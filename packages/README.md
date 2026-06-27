@@ -88,6 +88,27 @@ Modes: `spark` (sparkline), `bar` (one `<label> <value>` per line), `hist`
 (`--bins N`), and `line` (`--width`/`--height`). See
 [`chart/README.md`](chart/README.md) for the full CLI and library API.
 
+## `nurl-mcp/` — a local MCP server for the toolchain (installable program)
+
+The LLM-facing counterpart of `nurl-lsp`: a [Model Context
+Protocol](https://modelcontextprotocol.io) server (newline-delimited JSON-RPC
+over stdio) that exposes the *locally installed* compiler to an agent, so it can
+`nurl_build` / `nurl_run` / `nurl_check` / `nurl_fmt` NURL against the host's
+real files and read the installed stdlib (`nurl_list_stdlib` / `nurl_read_stdlib`).
+Unlike the cloud playground MCP, it drives *your* toolchain over *your* files,
+offline. Built on the `stdlib/ext/mcp.nu` primitives; libc-only.
+
+```
+nurlpkg install nurl-mcp
+claude mcp add nurl -- nurl-mcp     # wire into an MCP client (spawned over stdio)
+```
+
+Stdio by default; an optional `--http` transport adds bearer-token auth
+(`--token`), a `--read-only` mode, and gates code execution behind `--allow-run`
+(a non-loopback bind refuses to start without a token). `nurl_run` is real code
+execution with no sandbox — hence those guards. See
+[`nurl-mcp/README.md`](nurl-mcp/README.md).
+
 ## The full loop
 
 ```bash
