@@ -568,35 +568,88 @@ $ `stdlib/core/vec.nu`
     ^ out
 }
 
-// base^exp mod m, all non-negative. Square-and-multiply over exp's bits.
-@ bigint_modpow BigInt base BigInt exp BigInt m → BigInt {
-    : ~ BigInt result ( bigint_from_i 1 )
-    : BigInt two ( bigint_from_i 2 )
-    : ~ BigInt b ( bigint_rem base m )
-    : ~ BigInt e ( bigint_clone exp )
-    ~ ! ( bigint_is_zero e ) {
-        : BigInt r ( bigint_rem e two )
-        ? ! ( bigint_is_zero r ) {
-            : BigInt t ( bigint_mul result b )
-            : BigInt t2 ( bigint_rem t m )
-            ( bigint_free result )
-            ( bigint_free t )
-            = result t2
-        } {}
-        ( bigint_free r )
-        : BigInt bb ( bigint_mul b b )
-        : BigInt bb2 ( bigint_rem bb m )
-        ( bigint_free b )
-        ( bigint_free bb )
-        = b bb2
-        : BigInt e2 ( bigint_div e two )
-        ( bigint_free e )
-        = e e2
+// Bit length of a non-negative BigInt (0 → 0). Scans for the highest
+// non-zero 16-bit limb, so it is correct even if `x` is not normalized.
+@ __bigint_bitlen BigInt x → i {
+    : ( Vec i ) L . x limbs
+    : i nl ( vec_len [i] L )
+    : ~ i hi -1
+    : ~ i k 0
+    ~ < k nl { ? != ( __limb L k ) 0 { = hi k } {} = k + k 1 }
+    ? < hi 0 { ^ 0 } {}
+    : i top ( __limb L hi )
+    : ~ i bits * 16 hi
+    : ~ i t top
+    ~ > t 0 { = bits + bits 1 = t >> t 1 }
+    ^ bits
+}
+
+// (a * b) mod m.
+@ __mulmod BigInt a BigInt b BigInt m → BigInt {
+    : BigInt t ( bigint_mul a b )
+    : BigInt r ( bigint_rem t m )
+    ( bigint_free t )
+    ^ r
+}
+
+// Constant-time conditional swap of two NON-NEGATIVE BigInts' magnitudes.
+// `bit` ∈ {0,1}: swap the limb contents iff bit == 1, with no branch on the
+// bit (masked XOR swap). Both limb vectors are first zero-padded to a common
+// length so the per-limb merge is uniform. Magnitude-only — the sign field is
+// a by-value struct member and is not touched (modpow keeps everything ≥ 0).
+@ __bigint_cswap BigInt a BigInt b i bit → v {
+    : ( Vec i ) la . a limbs
+    : ( Vec i ) lb . b limbs
+    : i na ( vec_len [i] la )
+    : i nb ( vec_len [i] lb )
+    : i L ? > na nb na nb
+    ~ < ( vec_len [i] la ) L { ( vec_push [i] la 0 ) }
+    ~ < ( vec_len [i] lb ) L { ( vec_push [i] lb 0 ) }
+    : i mask & 65535 - 0 bit          // bit=1 → 0xffff, bit=0 → 0
+    : ~ i k 0
+    ~ < k L {
+        : i av ( __limb la k )
+        : i bv ( __limb lb k )
+        : i t & mask ^^ av bv
+        ( vec_set [i] la k ^^ av t )
+        ( vec_set [i] lb k ^^ bv t )
+        = k + k 1
     }
-    ( bigint_free b )
-    ( bigint_free e )
-    ( bigint_free two )
-    ^ result
+}
+
+// base^exp mod m (all non-negative), via the Montgomery powering ladder.
+// Unlike textbook square-and-multiply — which multiplies only on 1-bits and
+// runs for bit-length(exp) iterations — this performs EXACTLY two modular
+// multiplies every iteration for a FIXED count = bit-length(m), selecting
+// registers with a constant-time swap. So neither the per-bit operation
+// sequence nor the loop count depends on the secret exponent: a co-resident
+// cache / SPA observer sees a uniform square-multiply trace regardless of the
+// RSA private exponent d. (The underlying BigInt mul/rem are still operand-
+// value-dependent in time — RSA base blinding covers that residual; see
+// docs/CRYPTO.md §3.) The exponent here may be public (ECDSA Fermat inverse,
+// r^e) or secret (RSA d); the ladder is correct and CT-control-flow for both.
+@ bigint_modpow BigInt base BigInt exp BigInt m → BigInt {
+    : ~ BigInt R0 ( bigint_from_i 1 )
+    : ~ BigInt R1 ( bigint_rem base m )
+    : i bl ( __bigint_bitlen m )
+    : ( Vec i ) elimbs . exp limbs
+    : i enl ( vec_len [i] elimbs )
+    : ~ i i - bl 1
+    ~ >= i 0 {
+        : i li / i 16
+        : i bp % i 16
+        : i lv ? < li enl ( __limb elimbs li ) 0
+        : i bit & 1 >> lv bp
+        ( __bigint_cswap R0 R1 bit )
+        : BigInt t1 ( __mulmod R0 R1 m )    // R1 ← R0·R1
+        : BigInt t0 ( __mulmod R0 R0 m )    // R0 ← R0²
+        ( bigint_free R1 ) = R1 t1
+        ( bigint_free R0 ) = R0 t0
+        ( __bigint_cswap R0 R1 bit )
+        = i - i 1
+    }
+    ( bigint_free R1 )
+    ^ R0
 }
 
 // Modular inverse a^{-1} mod m via the iterative extended Euclidean
