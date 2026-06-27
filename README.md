@@ -134,6 +134,19 @@ product types via structs), with no subtyping and no implicit conversions.
 
 ---
 
+## Testing & CI
+
+Every push and PR runs the bootstrap fixed point and the full test corpus on
+**Linux and FreeBSD** (a real 14.2 VM), an `examples/` frontend gate, a
+`nurlfmt` canonical-format gate, and the whole corpus under AddressSanitizer +
+UndefinedBehaviorSanitizer. The second OS keeps the toolchain honest — the
+shipped `nurlc` / `nurlpkg` binaries link only libc and `nurl.sh` is POSIX
+`sh`, so the toolchain runs unmodified on glibc, musl / Alpine, and BSD. Gate
+list and how to reproduce each locally:
+[`docs/BUILDING.md`](docs/BUILDING.md#continuous-integration).
+
+---
+
 ## Documentation
 
 | Topic | Document |
@@ -149,7 +162,7 @@ product types via structs), with no subtyping and no implicit conversions.
 | Cryptography & TLS (pure-NURL, no OpenSSL) | [`docs/CRYPTO.md`](docs/CRYPTO.md) |
 | Distributed stack (NAT traversal, overlay, SWIM, CRDTs) | [`docs/DISTRIBUTED.md`](docs/DISTRIBUTED.md) |
 | HTTP API, playground & MCP server | [`docs/PLAYGROUND.md`](docs/PLAYGROUND.md) |
-| Target platforms | [`docs/PLATFORMS.md`](docs/PLATFORMS.md) |
+| Platforms — codegen targets & host OSes (incl. FreeBSD) | [`docs/PLATFORMS.md`](docs/PLATFORMS.md) |
 | Known limitations | [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) |
 | Gotchas (compiler-diagnosed) | [`docs/GOTCHAS.md`](docs/GOTCHAS.md) |
 | Examples catalogue | [`examples/README.md`](examples/README.md) |

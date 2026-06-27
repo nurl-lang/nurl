@@ -1,4 +1,9 @@
-# Target platforms
+# Platforms
+
+Two distinct axes: where compiled NURL programs **run** (codegen targets) and
+where the **toolchain itself** builds and runs (host platforms).
+
+## Codegen targets (where compiled programs run)
 
 The compiler emits LLVM IR and delegates native codegen to `clang`, so any
 target clang supports is reachable in principle. NURL's IR carries no target
@@ -23,3 +28,23 @@ build scripts; the rest are produced through the
 
 Unsigned macOS binaries: clear the Gatekeeper quarantine attribute with
 `xattr -d com.apple.quarantine <bin>` before running.
+
+## Host platforms (where the toolchain runs)
+
+The shipped `nurlc` / `nurlpkg` binaries link **libc only** (optional FFI
+libraries are pulled in `--as-needed`, so a program that uses none stays
+libc-only), and the `nurl.sh` wrapper is POSIX `sh` — no bash, no make, no
+Python. The toolchain therefore runs unmodified on glibc, musl (Alpine), and
+BSD libc.
+
+| Host | Status |
+|---|---|
+| Linux x86_64 (glibc) | primary dev host — `build.sh` + full corpus + sanitizers, every push/PR |
+| Windows x86_64 | `build.bat` runs the same bootstrap + snapshot suite |
+| FreeBSD x86_64 | built + bootstrapped + corpus run on a real FreeBSD 14.2 VM in CI (`.github/workflows/ci.yml`) — a **hard gate**: a FreeBSD failure fails CI. The base system's clang/openssl/zlib cover those FFI tests; `build.sh` needs `bash`. |
+| Alpine / musl | libc-only binaries run; exercised via the static-`musl` cross builds above |
+| macOS | host build works with Homebrew LLVM on `PATH` (see [`BUILDING.md`](BUILDING.md)) |
+
+The FreeBSD job exists because it once caught a real regression the Linux gate
+could not — async fibers silently no-op'd on FreeBSD. CI detail:
+[`BUILDING.md`](BUILDING.md#continuous-integration).

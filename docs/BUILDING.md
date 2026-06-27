@@ -29,6 +29,11 @@ PowerShell, or Git Bash all work.
 export PATH="$(brew --prefix llvm)/bin:$PATH"   # add to ~/.zshrc to persist
 ```
 
+**FreeBSD** — the base system already ships `clang`; `build.sh` needs `bash`
+(`pkg install -y bash`), plus `pkgconf` + `sqlite3` for the SQLite FFI tests.
+The toolchain binaries themselves link only libc, so they also run on
+musl/Alpine without extra packages (see [`PLATFORMS.md`](PLATFORMS.md)).
+
 ## Step 1 — Build the C runtime (once)
 
 ```sh
@@ -133,3 +138,19 @@ no other-language toolchain is required.
 Snapshot refresh: `./build.sh --refresh-bootstrap` (re-runs the existing
 `build/nurlc` on the current `nurlc.nu` and overwrites both `.nu` and `.ll`;
 commit them together).
+
+## Continuous integration
+
+Every push and pull request runs [`.github/workflows/ci.yml`](../.github/workflows/ci.yml):
+
+| Job | What it checks |
+|---|---|
+| build + bootstrap fixed point + test corpus | `build.sh` on Linux x86_64 — stage1 ≡ stage2 byte-identical IR, then the snapshot test suite |
+| examples corpus frontend gate | every program under `examples/` compiles (`tools/check_examples.sh`) |
+| `nurlfmt --check` | the whole tree is in canonical format (no drift) |
+| AddressSanitizer + UndefinedBehaviorSanitizer | `build.sh --san` + the corpus under ASan/UBSan/LSan |
+| FreeBSD (VM) | full build + bootstrap + corpus on a real FreeBSD 14.2 guest (`vmactions/freebsd-vm`); the second OS that keeps libc/`sh`-portability honest — it once caught a regression Linux could not (async fibers silently no-op'd on FreeBSD). A hard gate: a FreeBSD failure fails CI. |
+
+A local `./build.sh` reproduces the first two gates; `./build.sh --san` then
+`./compiler/tests/run_san_tests.sh` reproduces the sanitizer gate; and
+`./compiler/tests/nurlfmt_check.sh` reproduces the format gate.

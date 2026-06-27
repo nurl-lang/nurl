@@ -88,10 +88,9 @@ jobs:
     # http tests use the no-backend path; both classes self-skip via the
     # sentinel-aware harness when their lib is absent.
     #
-    # Best-effort (continue-on-error) until a real run is confirmed green;
-    # drop continue-on-error and add `freebsd` to any required-check set
-    # once it is.
-    continue-on-error: true
+    # Promoted to a hard gate 2026-06-27 after a confirmed-green run on main
+    # (run 28295173147): a FreeBSD failure now fails CI. Add `freebsd` to the
+    # branch-protection required-check set so it blocks merges too.
     steps:
       - name: Checkout
         uses: actions/checkout@v4
