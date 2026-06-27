@@ -32,6 +32,13 @@ and the borrow checker's not-yet-checked list live in
 | A trait must be scanned **before** its impls (defaults, supertrait names, and associated types are read from the trait when an impl is processed) | Declare the trait — or place its `$`-import — above the impl (the natural order) |
 | Two type aliases that share an LLVM lowering (`i`/`i64`, `u`/`u8`, `f`/`f64`) cannot both implement the same trait method — they collide on one dispatch key and are reported as a duplicate impl | Pick one spelling per impl; the alias is the same runtime type |
 
+## Concurrency / thread safety
+
+| Limitation | Workaround |
+|---|---|
+| Sending a non-thread-safe value across a thread boundary is **partially** checked at compile time: a `thread_spawn` closure that captures an **`Rc`** (non-atomic refcount) is rejected, since two threads racing on its control-block count is UB. This is the concrete, documented footgun. There is **no general `Send`/`Sync` auto-derive** yet — a *user* type that is internally non-thread-safe is not automatically flagged when captured | Use **`Arc`** (atomic refcount) for any handle that crosses a thread boundary, exactly as `stdlib/std/arc.nu` documents; keep shared mutable state behind `Arc[Mutex]` |
+| `thread_spawn` takes a `( @ v )` closure; the captured environment is copied to the worker. The check above covers `Rc`; a raw `*T` pointer into the parent stack is covered separately by the borrow checker's escape analysis (`docs/MEMORY.md` §2.3) | Move shared state to a heap-backed, thread-safe handle (`Arc`, `Channel`) before spawning |
+
 ## Functions and calls
 
 | Limitation | Workaround |
