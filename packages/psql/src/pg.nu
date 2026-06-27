@@ -24,7 +24,7 @@ $ `stdlib/std/encode.nu`
 $ `stdlib/std/hash_md5.nu`
 $ `stdlib/std/random.nu`
 $ `scram.nu`
-$ `deps/tls/src/tls.nu`
+$ `stdlib/std/tls.nu`
 
 // SSLRequest magic (1234 << 16 | 5679) and the protocol-3.0 version word.
 : | PgErr {

@@ -38,7 +38,7 @@ All sources live in `stdlib/std/`.
 | Randomness | `random` (CSPRNG), `rng` (xoshiro256\*\*, **not** crypto) | |
 | Constant-time | `subtle` | length-independent secret comparison |
 
-The TLS package (`packages/tls`) and `std/net.nu`'s `tcp_listen_tls` /
+`std/tls.nu` / `std/tls_server.nu` and `std/net.nu`'s `tcp_listen_tls` /
 `tls_connect` are thin layers over these. `tls_connect` does **verify-full by
 default** (chain + hostname + validity); the no-verification path is a
 separate, explicitly-named `tls_connect_insecure`.

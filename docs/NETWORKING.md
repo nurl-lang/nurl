@@ -95,10 +95,11 @@ picks it up transparently — swap `tcp_listen` for `tcp_listen_tls`.
 
 ### Pure-NURL TLS (no OpenSSL)
 
-The table above is the runtime's `libssl`-backed TLS. There is also a
-**pure-NURL TLS 1.3 client** — the [`tls`](../packages/tls) package — that
-implements the handshake, the record layer and full certificate
-verification from scratch in NURL, with **no OpenSSL and no FFI beyond the
+TLS is a **pure-NURL TLS 1.3 client and server** in the standard library
+([`std/tls.nu`](../stdlib/std/tls.nu) / `std/tls_server.nu`; full design in
+[`docs/CRYPTO.md`](CRYPTO.md)) — no `libssl`/OpenSSL anywhere. It implements
+the handshake, the record layer and full certificate verification from scratch
+in NURL, with **no FFI beyond the
 libc TCP socket**. It negotiates ChaCha20-Poly1305 / AES-128-GCM over
 X25519 or NIST P-256, verifies the chain against the system trust store by
 default, and runs on a host with nothing installed. `tls_attach` upgrades

@@ -1,4 +1,4 @@
-// packages/tls/src/tls.nu — a pure-NURL TLS 1.3 client (RFC 8446).
+// stdlib/std/tls.nu — a pure-NURL TLS 1.3 client (RFC 8446).
 //
 // No OpenSSL, no FFI beyond the libc TCP socket: the handshake crypto
 // (X25519, ChaCha20-Poly1305, HKDF, SHA-256) is all pure NURL, so a

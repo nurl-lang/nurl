@@ -22,7 +22,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/net.nu`
-$ `deps/tls/src/tls.nu`
+$ `stdlib/std/tls.nu`
 $ `resp.nu`
 
 : | RedisErr {

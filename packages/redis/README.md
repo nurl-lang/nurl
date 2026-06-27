@@ -22,7 +22,7 @@ This puts a `redis` binary on your `PATH`. Or build from a checkout:
 
 ```sh
 cd packages/redis
-nurlpkg install                 # resolve deps/ (the tls package)
+# no external deps — TLS comes from the NURL standard library (std/tls.nu)
 ../../nurl.sh src/main.nu redis
 ```
 
