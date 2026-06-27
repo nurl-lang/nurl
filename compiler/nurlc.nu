@@ -640,6 +640,13 @@
 //   record per impl block, verified after scan_fn_sigs once every impl across
 //   the program (incl. imports) is registered: a supertrait of an implemented
 //   trait must itself be implemented for that same type (T: Sub ⇒ T: Super).
+// Thread-safety: name of a non-Send capture (an Rc) of the most recently built
+// closure, or "" if it had none. A real global (not a `syms` side-channel) so
+// it survives across the differing symbol tables of closure-build vs the
+// thread_spawn call site. Cleared at each closure build; the enclosing `:`
+// binding copies it to `<name>__closure_nonsend`; the thread_spawn call site
+// reads it (inline closure) or that per-binding key (named closure).
+: ~ s g_last_closure_nonsend ``
 : ~ i g_closure_defs 0  // Deferred closure function definitions
 : ~ i g_closure_types 0  // Deferred closure type definitions
 : ~ i g_type_count 0  // Count of closure types stored
@@ -4903,6 +4910,23 @@
             ? ( is_ident_tok bck_arg_tt )
             { ( bck_record_inferred_escape syms bck_arg_val ) } {} }
         {}
+        // Thread-safety: the thread_spawn closure (arg 0) detaches onto a
+        // worker thread. If it captures a non-Send value (an Rc — non-atomic
+        // refcount), two threads racing on the control-block count is undefined
+        // behaviour. Reject it and point at the thread-safe Arc. A named-binding
+        // argument carries the flag via `<name>__closure_nonsend`; an inline
+        // closure literal sets the `__last_closure_nonsend__` side-channel as it
+        // is built just above.
+        ? & ( seq fname `thread_spawn` ) builtin_escape_slot {
+            : s __ts_ns ? ( is_ident_tok bck_arg_tt )
+            ( nurl_sym_get syms ( nurl_str_cat bck_arg_val `__closure_nonsend` ) )
+            g_last_closure_nonsend
+            ? != 0 ( nurl_str_len __ts_ns )
+            { ( die lex ( nurl_str_cat
+                ( nurl_str_cat3 `thread_spawn closure captures '` __ts_ns `' which is an Rc — ` )
+                `a non-atomic refcount is not safe to send across threads (two threads racing on the count is UB); use Arc (atomic) for a handle that crosses a thread boundary` ) ) }
+            {}
+        } {}
         // Record this argument's referent depth (for §2.8 return-escape
         // propagation below). Read the same side-channels the escape
         // check above consults — `__last_expr_refdepth__` (set by a
@@ -9177,6 +9201,13 @@
                 : s val ( gen_expr lex syms cg )
                 : s vt ( nurl_get_last_type )
                 : s rhs_closure_env ( nurl_sym_get syms `__last_closure_env__` )
+                // Thread-safety: when the RHS is a closure that captured a
+                // non-Send value (an Rc), carry it onto this binding so a later
+                // `( thread_spawn name )` can reject it. Gated on the RHS being
+                // a closure so a non-closure binding never inherits a stale flag.
+                ? & != 0 ( nurl_str_len rhs_closure_env ) != 0 ( nurl_str_len g_last_closure_nonsend )
+                { ( nurl_sym_def syms ( nurl_str_cat name `__closure_nonsend` ) g_last_closure_nonsend ) }
+                {}
                 // A `String` binding cannot be initialised from a raw
                 // string literal / i8* — a String OWNS a heap control
                 // block + buffer, whereas a literal is a borrowed i8*.
@@ -11708,7 +11739,40 @@
 // ── Closure expression \ param* → type { ... } ───────────────────
 // Generates a function pointer value that captures local variables
 // NOTE: Expects backslash to already be consumed by disambiguation function
+// __lty_base_name: the base type name of an LLVM type, with a leading '%'
+// stripped and a monomorphisation suffix (`__…`) cut off — `%Rc__i64` → "Rc",
+// `%Arc__i64` → "Arc", `%RcImpl__i64` → "RcImpl", `i64` → "i64".
+@ __lty_base_name s lty → s {
+    : i n ( nurl_str_len lty )
+    : i start ? & > n 0 == ( nurl_str_get lty 0 ) 37 1 0  // '%' == 37
+    : ~ i i start
+    : ~ b found F
+    ~ & < + i 1 n ! found {
+        ? & == ( nurl_str_get lty i ) 95 == ( nurl_str_get lty + i 1 ) 95  // "__"
+        { = found T } { = i + i 1 }
+    }
+    ? ! found { = i n } {}
+    ^ ( nurl_str_slice lty start - i start )
+}
+
+// __lty_is_nonsend: true if an LLVM type is a value that is NOT safe to send
+// across a thread boundary. Currently `Rc` (non-atomic refcount) — cloning or
+// dropping the same Rc from two threads races on its control-block count. Its
+// thread-safe counterpart is `Arc` (SEQ_CST atomic count). The check is by the
+// generic base name, so every `Rc T` monomorphisation is covered while `Arc T`
+// and the internal `RcImpl` are not.
+@ __lty_is_nonsend s lty → b {
+    ^ ( seq ( __lty_base_name lty ) `Rc` )
+}
+
 @ gen_closure_expr i lex i syms i cg → s {
+    // Thread-safety side-channel (mirrors __last_closure_env__): cleared at
+    // every closure build, set to a captured variable's name if that capture
+    // is a non-Send value (an Rc). The enclosing `:` binding copies it to
+    // `<name>__closure_nonsend`, and the thread_spawn call site reads either —
+    // so capturing an Rc into a closure that is detached onto a thread is a
+    // compile error, inline or via a named binding.
+    = g_last_closure_nonsend ``
 
     // Parse parameters: type name pairs before arrow
     : ~ s param_types ``
@@ -11902,6 +11966,11 @@
             : s cap_name ( str_first_word caps )
             : ~ s cap_type ( nurl_sym_get syms cap_name )
             ? == 0 ( nurl_str_len cap_type ) { = cap_type `i64` } {}
+            // Thread-safety: a captured non-Send value (an Rc) makes this
+            // closure unsafe to send across threads. Record the offending
+            // capture; the thread_spawn call site turns it into an error.
+            ? ( __lty_is_nonsend cap_type )
+            { = g_last_closure_nonsend cap_name } {}
             : b cap_byref ( __is_capture_byref cap_name syms )
             // Escape analysis: a by-pointer capture references
             // `cap_name`'s stack slot — its declaration depth
