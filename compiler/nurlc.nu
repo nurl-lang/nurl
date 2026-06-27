@@ -12882,6 +12882,40 @@
     result
 }
 
+// __assoc_val: look up an associated-type binding by name in an impl's
+// "name1 val1 name2 val2 …" binding string. Returns the bound NURL type name,
+// or "" if `name` is not bound (binding values are never empty, so "" is an
+// unambiguous "absent"). No early `^` inside the loop — accumulate.
+@ __assoc_val s bindings s name → s {
+    : ~ s found ``
+    : ~ s rest bindings
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s vl ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ( seq nm name ) { = found vl } {}
+    }
+    ^ found
+}
+
+// subst_assoc: apply every associated-type binding to a default-method source,
+// replacing each associated-type NAME with its impl's concrete NURL type. Run
+// AFTER the trait type-param (T) substitution so a default body / signature that
+// names an associated type lowers to the impl's choice (e.g. `→ Elem` → `→ i`).
+@ subst_assoc s src s bindings → s {
+    : ~ s result src
+    : ~ s rest bindings
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s vl ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        = result ( subst_source_raw result nm vl )
+    }
+    ^ result
+}
+
 // __tok_src_text: faithful SOURCE text of the current token, for
 // reconstructing a generic template that will be re-lexed at each
 // instantiation. `nurl_lex_val` strips a string literal's surrounding
@@ -15866,7 +15900,24 @@
     // method header with no following `{`/`@`/`}` at EOF) otherwise spins on
     // no-op `nurl_lex_advance` forever — nurlc hung instead of erroring.
     ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
-        ? == ( nurl_lex_type lex ) TT_AT
+        // Associated-type declaration `type Name` — a per-impl type the trait's
+        // methods may name. Record the name; each impl must bind it.
+        ? & == ( nurl_lex_type lex ) TT_IDENT ( seq ( nurl_lex_val lex ) `type` )
+        { ( nurl_lex_advance lex )  // skip 'type'
+            ? ! ( is_ident_tok ( nurl_lex_type lex ) )
+            { ( die lex `'type' in a trait body must be followed by an associated-type name` ) }
+            {}
+            : s aname ( nurl_lex_val lex )
+            ( nurl_lex_advance lex )  // consume the associated-type name
+            : s akey ( nurl_str_cat tname `__assoc` )
+            : s acur ( nurl_sym_get g_trait_syms akey )
+            // Idempotent append (same double-scan reason as __defaults).
+            ? ! ( str_contains_word acur aname )
+            { ( nurl_sym_def g_trait_syms akey
+                ? == 0 ( nurl_str_len acur ) aname ( nurl_str_cat acur ( nurl_str_cat ` ` aname ) ) ) }
+            {}
+        }
+        { ? == ( nurl_lex_type lex ) TT_AT
         { ( nurl_lex_advance lex )  // skip '@'
             ? ( is_ident_tok ( nurl_lex_type lex ) )
             { : s mname ( nurl_lex_val lex )
@@ -15891,16 +15942,24 @@
                     src )
                     : s defaults_key ( nurl_str_cat tname `__defaults` )
                     : s cur ( nurl_sym_get g_trait_syms defaults_key )
-                    ( nurl_sym_def g_trait_syms defaults_key
-                    ? == 0 ( nurl_str_len cur )
-                    mname
-                    ( nurl_str_cat cur ( nurl_str_cat ` ` mname ) ) )
+                    // Idempotent append: a `$`-imported trait body is scanned
+                    // twice (driver scan_fn_sigs + gen_import_decl's re-scan), so
+                    // re-adding the same method must not grow the list — else
+                    // emit_missing_defaults emits the default twice → an LLVM
+                    // "invalid redefinition". (The __src store above is a plain
+                    // overwrite, already idempotent.)
+                    ? ! ( str_contains_word cur mname )
+                    { ( nurl_sym_def g_trait_syms defaults_key
+                        ? == 0 ( nurl_str_len cur )
+                        mname
+                        ( nurl_str_cat cur ( nurl_str_cat ` ` mname ) ) ) }
+                    {}
                 }
                 {}  // header only — required method, no template to store
             }
             { ( nurl_lex_advance lex ) }
         }
-        { ( nurl_lex_advance lex ) }
+        { ( nurl_lex_advance lex ) } }
     }
     ( expect lex TT_RBRACE )  // consume '}' — clean error if unterminated at EOF
 }
@@ -15924,7 +15983,7 @@
 // register_missing_defaults: for each of a trait's default methods that the
 // impl did NOT override, register a dispatch entry (method##ImplLLVM →
 // ret_ty) so that call sites resolve. Called during impl scan.
-@ register_missing_defaults i lex s tname s impl_nurl s impl_llvm s impl_mangle s provided i syms → v {
+@ register_missing_defaults i lex s tname s impl_nurl s impl_llvm s impl_mangle s provided s bindings i syms → v {
     : s tparam ( nurl_sym_get g_trait_syms ( nurl_str_cat tname `__tparam` ) )
     : ~ s defaults ( nurl_sym_get g_trait_syms ( nurl_str_cat tname `__defaults` ) )
     ~ != 0 ( nurl_str_len defaults ) {
@@ -15934,9 +15993,12 @@
         {}  // explicitly overridden by impl
         { : s src ( nurl_sym_get g_trait_syms
             ( nurl_str_cat tname ( nurl_str_cat `__` ( nurl_str_cat mname `__src` ) ) ) )
-            : s subst ? != 0 ( nurl_str_len tparam )
+            : s subst0 ? != 0 ( nurl_str_len tparam )
             ( subst_source_raw src tparam impl_nurl )
             src
+            // Substitute the trait's associated types to this impl's bindings,
+            // so a default that returns/uses one lowers to the impl's choice.
+            : s subst ( subst_assoc subst0 bindings )
             : s ret_ty ( trait_default_ret subst )
             : s key ( nurl_str_cat mname ( nurl_str_cat `##` impl_llvm ) )
             ( __coherence_register lex mname impl_llvm impl_nurl tname )
@@ -15960,6 +16022,27 @@
     ? | ( is_ident_tok tt ) == tt TT_TYPE_KW
     ( nurl_lex_val lex )
     ``
+}
+
+// __parse_assoc_binding: at a `type Name Concrete` line inside an IMPL body
+// (lexer on the `type` keyword), consume all three tokens and return the
+// "Name Concrete" pair (Concrete a single simple NURL type name). Used by both
+// the scan and the IR-emit passes to collect an impl's associated-type
+// bindings. A compound binding type (`* T`, `Vec T`) is rejected — the same
+// simple-type restriction trait-default substitution already carries.
+@ __parse_assoc_binding i lex → s {
+    ( nurl_lex_advance lex )  // skip 'type'
+    ? ! ( is_ident_tok ( nurl_lex_type lex ) )
+    { ( die lex `'type' in an impl body must be followed by an associated-type name` ) }
+    {}
+    : s aname ( nurl_lex_val lex )
+    ( nurl_lex_advance lex )  // consume the name
+    : s aval ( capture_impl_nurl_name lex )
+    ? == 0 ( nurl_str_len aval )
+    { ( die lex ( nurl_str_cat3 `associated type '` aname `' must be bound to a simple type name` ) ) }
+    {}
+    ( nurl_lex_advance lex )  // consume the bound type
+    ^ ( nurl_str_cat aname ( nurl_str_cat ` ` aval ) )
 }
 
 // scan_impl_decl: pre-scan a % trait/impl declaration, registering impl methods.
@@ -16074,8 +16157,13 @@
             ( nurl_str_cat spos ` ` ) ) ) ) ) ) ) )
         ( expect lex TT_LBRACE )
         : ~ s provided ``
+        : ~ s bindings ``  // "name val …" associated-type bindings of this impl
         ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
-            ? == ( nurl_lex_type lex ) TT_AT
+            ? & == ( nurl_lex_type lex ) TT_IDENT ( seq ( nurl_lex_val lex ) `type` )
+            { : s pair ( __parse_assoc_binding lex )
+                = bindings ? == 0 ( nurl_str_len bindings )
+                pair ( nurl_str_cat bindings ( nurl_str_cat ` ` pair ) ) }
+            { ? == ( nurl_lex_type lex ) TT_AT
             { ( nurl_lex_advance lex )  // skip '@'
                 ? ( is_ident_tok ( nurl_lex_type lex ) )
                 { : s mname ( nurl_lex_val lex )
@@ -16106,13 +16194,54 @@
                 }
                 { ( nurl_lex_advance lex ) }
             }
-            { ( nurl_lex_advance lex ) }
+            { ( nurl_lex_advance lex ) } }
         }
         ( expect lex TT_RBRACE )  // consume '}' — clean error if unterminated at EOF
+        // Associated-type coherence: the impl must bind exactly the trait's
+        // declared associated types — every one, and no unknown name. (The
+        // trait, like its defaults, must be scanned before the impl for its
+        // __assoc list to be visible; the substitution below relies on it too.)
+        ( verify_assoc_bindings lex tname impl_nurl bindings )
         // After the impl's explicit methods, synthesize dispatch entries for
-        // any of the trait's defaults that this impl did not override.
+        // any of the trait's defaults that this impl did not override, with the
+        // trait's associated types substituted to this impl's bindings.
         ? != 0 ( nurl_str_len impl_nurl )
-        { ( register_missing_defaults lex tname impl_nurl impl_llvm impl_mangle provided syms ) }
+        { ( register_missing_defaults lex tname impl_nurl impl_llvm impl_mangle provided bindings syms ) }
+        {}
+    }
+}
+
+// verify_assoc_bindings: associated-type coherence for one impl block. Every
+// associated type the trait declares must be bound by the impl, and every
+// `type` line in the impl must name a declared associated type — so an impl is
+// total over the trait's associated types and a typo'd binding is rejected at
+// its definition rather than surfacing as an unsubstituted name in LLVM IR.
+@ verify_assoc_bindings i lex s tname s impl_nurl s bindings → v {
+    : s declared ( nurl_sym_get g_trait_syms ( nurl_str_cat tname `__assoc` ) )
+    // (a) every binding names a declared associated type — checked first so a
+    // typo'd `type Elment i` is reported as the unknown name, not as the (also
+    // true, but less precise) "Elem unbound".
+    : ~ s brest bindings
+    ~ != 0 ( nurl_str_len brest ) {
+        : s bn ( str_first_word brest )
+        = brest ( str_skip_word brest )
+        = brest ( str_skip_word brest )  // skip the bound value
+        ? ! ( str_contains_word declared bn )
+        { ( die lex ( nurl_str_cat
+            ( nurl_str_cat3 `trait '` tname `' has no associated type '` )
+            ( nurl_str_cat3 bn `' to bind for type '` ( nurl_str_cat impl_nurl `'` ) ) ) ) }
+        {}
+    }
+    // (b) every declared associated type is bound
+    : ~ s drest declared
+    ~ != 0 ( nurl_str_len drest ) {
+        : s an ( str_first_word drest )
+        = drest ( str_skip_word drest )
+        ? == 0 ( nurl_str_len ( __assoc_val bindings an ) )
+        { ( die lex ( nurl_str_cat
+            ( nurl_str_cat3 `impl of trait '` tname `' for type '` )
+            ( nurl_str_cat ( nurl_str_cat3 impl_nurl `' must bind associated type '` an )
+                `' (add a 'type' line)` ) ) ) }
         {}
     }
 }
@@ -16156,7 +16285,7 @@
 // emit_missing_defaults: for each trait default not overridden by the impl,
 // splice "T" → impl's NURL type name into the stored template, prepend
 // "@ mname__ImplMangle", and re-lex/emit via gen_fn_decl.
-@ emit_missing_defaults s tname s impl_nurl s impl_mangle s provided i syms i cg → v {
+@ emit_missing_defaults s tname s impl_nurl s impl_mangle s provided s bindings i syms i cg → v {
     : s tparam ( nurl_sym_get g_trait_syms ( nurl_str_cat tname `__tparam` ) )
     : ~ s defaults ( nurl_sym_get g_trait_syms ( nurl_str_cat tname `__defaults` ) )
     ~ != 0 ( nurl_str_len defaults ) {
@@ -16166,9 +16295,10 @@
         {}  // overridden: impl's concrete method already emitted
         { : s src ( nurl_sym_get g_trait_syms
             ( nurl_str_cat tname ( nurl_str_cat `__` ( nurl_str_cat mname `__src` ) ) ) )
-            : s subst ? != 0 ( nurl_str_len tparam )
+            : s subst0 ? != 0 ( nurl_str_len tparam )
             ( subst_source_raw src tparam impl_nurl )
             src
+            : s subst ( subst_assoc subst0 bindings )  // associated types → impl bindings
             : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
             : s full_src ( nurl_str_cat `@ ` ( nurl_str_cat mangled ( nurl_str_cat ` ` subst ) ) )
             : i lex2 ( nurl_lex_new full_src `<trait_default>` )
@@ -16216,8 +16346,13 @@
         : s impl_mangle ( mangle_type impl_llvm )
         ( expect lex TT_LBRACE )
         : ~ s provided ``
+        : ~ s bindings ``  // associated-type bindings (re-collected for emit subst)
         ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
-            ? == ( nurl_lex_type lex ) TT_AT
+            ? & == ( nurl_lex_type lex ) TT_IDENT ( seq ( nurl_lex_val lex ) `type` )
+            { : s pair ( __parse_assoc_binding lex )
+                = bindings ? == 0 ( nurl_str_len bindings )
+                pair ( nurl_str_cat bindings ( nurl_str_cat ` ` pair ) ) }
+            { ? == ( nurl_lex_type lex ) TT_AT
             { ( nurl_lex_advance lex )  // skip '@'
                 ? ( is_ident_tok ( nurl_lex_type lex ) )
                 { : s mname ( nurl_lex_val lex )
@@ -16258,12 +16393,13 @@
                 }
                 { ( die lex `expected method name in impl` ) }
             }
-            { ( nurl_lex_advance lex ) }
+            { ( nurl_lex_advance lex ) } }
         }
         ( expect lex TT_RBRACE )  // consume '}' — clean error if unterminated at EOF
-        // Synthesize trait-default copies for any method the impl omitted.
+        // Synthesize trait-default copies for any method the impl omitted, with
+        // the trait's associated types substituted to this impl's bindings.
         ? != 0 ( nurl_str_len impl_nurl )
-        { ( emit_missing_defaults tname impl_nurl impl_mangle provided syms cg ) }
+        { ( emit_missing_defaults tname impl_nurl impl_mangle provided bindings syms cg ) }
         {}
     }
 }
