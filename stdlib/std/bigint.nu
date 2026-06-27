@@ -605,7 +605,7 @@ $ `stdlib/core/vec.nu`
     : i L ? > na nb na nb
     ~ < ( vec_len [i] la ) L { ( vec_push [i] la 0 ) }
     ~ < ( vec_len [i] lb ) L { ( vec_push [i] lb 0 ) }
-    : i mask & 65535 - 0 bit          // bit=1 → 0xffff, bit=0 → 0
+    : i mask & 65535 - 0 bit  // bit=1 → 0xffff, bit=0 → 0
     : ~ i k 0
     ~ < k L {
         : i av ( __limb la k )
@@ -627,8 +627,8 @@ $ `stdlib/core/vec.nu`
     : i na ( vec_len [i] la )
     : i nb ( vec_len [i] lb )
     : i L ? > na nb na nb
-    : i mask & 65535 - 0 bit          // bit=1 → 0xffff
-    : i imask & 65535 - 0 - 1 bit     // bit=0 → 0xffff
+    : i mask & 65535 - 0 bit  // bit=1 → 0xffff
+    : i imask & 65535 - 0 - 1 bit  // bit=0 → 0xffff
     : ( Vec i ) out ( vec_with_cap [i] ? > L 0 L 1 )
     : ~ i k 0
     ~ < k L {
@@ -663,8 +663,8 @@ $ `stdlib/core/vec.nu`
         : i lv ? < li enl ( __limb elimbs li ) 0
         : i bit & 1 >> lv bp
         ( __bigint_cswap R0 R1 bit )
-        : BigInt t1 ( __mulmod R0 R1 m )    // R1 ← R0·R1
-        : BigInt t0 ( __mulmod R0 R0 m )    // R0 ← R0²
+        : BigInt t1 ( __mulmod R0 R1 m )  // R1 ← R0·R1
+        : BigInt t0 ( __mulmod R0 R0 m )  // R0 ← R0²
         ( bigint_free R1 ) = R1 t1
         ( bigint_free R0 ) = R0 t0
         ( __bigint_cswap R0 R1 bit )
