@@ -633,6 +633,9 @@
 //                               common untyped trait, indistinguishable from
 //                               absent, so supertrait checks key on this)
 //   <Trait>__supers           → space-separated supertrait names (% Sub : A B)
+//   <Trait>__assoc            → space-separated associated-type names (type Item)
+//   <Trait>__methods          → method names in declaration order (dyn seam)
+//   <Trait>__<method>__sig    → that method's "params → ret" signature (dyn seam)
 : ~ s g_super_obligations ``  // one "<Sub> <impl_llvm> <nurl_type> <file:line>\n"
 //   record per impl block, verified after scan_fn_sigs once every impl across
 //   the program (incl. imports) is registered: a supertrait of an implemented
@@ -15932,6 +15935,22 @@
                 != ( nurl_lex_type lex ) TT_EOF {
                     ( nurl_lex_advance lex )
                 }
+                // Dynamic-dispatch seam (docs/spec.md §4.9): record the trait's
+                // method set in declaration order plus each method's signature
+                // ("params → ret") — the vtable layout a future `dyn Trait` would
+                // index. The static dispatch path never reads it; it materialises
+                // the data so the extension is a localised addition, not a rescan.
+                // Required AND default methods, idempotent (twice-scanned imports).
+                : i msig_end ( nurl_lex_cur_start lex )
+                : s msig ( nurl_lex_src_slice lex sig_start - msig_end sig_start )
+                ( nurl_sym_def g_trait_syms
+                ( nurl_str_cat tname ( nurl_str_cat `__` ( nurl_str_cat mname `__sig` ) ) ) msig )
+                : s methods_key ( nurl_str_cat tname `__methods` )
+                : s mcur ( nurl_sym_get g_trait_syms methods_key )
+                ? ! ( str_contains_word mcur mname )
+                { ( nurl_sym_def g_trait_syms methods_key
+                    ? == 0 ( nurl_str_len mcur ) mname ( nurl_str_cat mcur ( nurl_str_cat ` ` mname ) ) ) }
+                {}
                 ? == ( nurl_lex_type lex ) TT_LBRACE
                 {  // Default method: consume the body block and capture raw source.
                     ( skip_balanced lex )

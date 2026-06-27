@@ -152,8 +152,8 @@ declaration is one of:
 | `('pub')? : Name [T]? { fields }` | struct |
 | `('pub')? : | Name { variants }` | enum |
 | `('pub')? : type IDENT value` | const / global |
-| `('pub')? % Name [T]? { ... }` | trait |
-| `('pub')? % Trait [T]? type { methods }` | impl |
+| `('pub')? % Name [T]? (: Super+)? { ... }` | trait (`: Super` = supertraits; body may hold `type Item` assoc-type decls) |
+| `('pub')? % Trait [T]? type { methods }` | impl (body may hold `type Item Concrete` assoc-type bindings) |
 
 There is exactly one entry point, `main`. It returns either `i` — the
 value becomes the process exit code, truncated to 32 bits — or `v`, in
@@ -416,6 +416,109 @@ after the main parse pass. Diagnostics emitted while re-parsing a
 substituted body use the synthetic filename
 `<generic Name__T1[__T2...] from caller.nu:line>` so an error points at
 the user's call site (v2.1, 2026-05-25).
+
+### 4.9 Traits
+
+A **trait** names a set of methods a type can implement; an **impl** supplies
+them for one type. Both use the `%` sigil:
+
+```
+% Show [T] {                       // trait declaration; [T] is the Self type
+    @ fmt T self → String          // required method (header only)
+    @ println T self → v {         // default method (has a body)
+        ( puts ( fmt self ) )
+    }
+}
+% Show Point {                     // impl of Show for Point
+    @ fmt Point self → String { … }
+    // println is inherited from the default, specialised to Point
+}
+```
+
+**Dispatch model — static, monomorphised, no runtime identity.** A bare-name
+method call `( fmt p )` dispatches on the *first argument's type*: at emission
+each `(method, type)` pair is a distinct function `method__<mangled-type>`
+(`fmt__Point`), and the call is rewritten to it. There is **no vtable, no type
+tag, no `Self` pointer** — a trait/impl has no runtime representation, and a
+value carries no trait identity. This is a locked 1.0 decision (§3.3): trait
+dispatch is resolved by the type-mangled method name, not the trait's name.
+
+**Default methods.** A method with a body in the trait is a default. An impl
+that omits it gets a specialised copy with the trait's Self parameter `T`
+substituted to the implementing type. An impl that provides the method
+overrides the default.
+
+**Coherence.** Each `(method, first-arg type)` pair may be registered by exactly
+one impl. The compiler rejects, as a clear diagnostic rather than an LLVM
+redefinition:
+
+- a duplicate impl of the same trait for the same type;
+- two type aliases that share an LLVM lowering (e.g. `i` and `i64`, `u` and
+  `u8`) implementing the same method — they collide on one dispatch key;
+- two *different* traits each providing a same-named method for one type —
+  bare-name dispatch cannot disambiguate, and the error names both traits.
+
+**Bounds** (§4.8): a generic type parameter constrains its argument to impl a
+trait via `[A: Ord]`; the bound is checked at each instantiation. Because
+dispatch is by concrete type after monomorphisation, the bound is an up-front
+guarantee, not a dispatch mechanism.
+
+**Supertraits.** A trait may require other traits with a `:` clause:
+
+```
+% Ord [T] : Eq { @ cmp T a T b → i }
+```
+
+`Ord : Eq` means *every type implementing `Ord` must also implement `Eq`* for
+that same type. The obligation is enforced across the whole program (all
+`$`-imports, any order) after signatures are collected; a missing supertrait
+impl is a compile error naming it. It composes transitively (`C : B`, `B : A`).
+Because the supertrait impl is guaranteed to exist, a function bounded `[A:
+Ord]` may freely call any supertrait method on `A` — dispatch resolves through
+the supertrait impl the check proves present.
+
+**Associated types.** A trait may declare per-impl type members; each impl binds
+them, and the trait's methods may name them:
+
+```
+% Boxed [T] {
+    type Elem                       // associated type
+    @ unwrap T self → Elem
+    @ first  T self Elem d → Elem { ^ ( unwrap self ) }   // default names Elem
+}
+% Boxed IntBox { type Elem i  @ unwrap IntBox self → i { … } }   // Elem = i
+```
+
+In a default method the associated type is substituted to the impl's binding
+(so `first`'s specialised copy for `IntBox` returns `i`). An impl must bind
+exactly the trait's declared associated types — an unbound one, or a `type`
+line naming an associated type the trait does not declare, is a compile error
+at the impl. A binding is a single simple type name (the same restriction
+trait-default substitution carries). There is **no projection** yet: an
+associated type cannot be named as `A::Elem` at a generic call site; it is only
+usable inside the trait's own method bodies/signatures.
+
+**Ordering.** A trait must be scanned before its impls — defaults, supertrait
+names, and associated types are read from the trait when an impl is processed.
+In practice this means the trait declaration (or its `$`-import) precedes the
+impl, which is the natural order.
+
+**Reserved extension — dynamic dispatch (`dyn Trait`).** The 1.0 model is
+deliberately fully static. Dynamic dispatch is a *forward-compatible
+extension*, not part of 1.0: it would introduce a `dyn Trait` type carrying a
+data pointer plus a per-impl vtable of the trait's methods, layered *beside*
+the static path without changing it (static `( fmt p )` would still lower to
+`fmt__Point`). The trait declaration already records the data a vtable needs —
+the ordered method set and each method's signature — so the seam is the `dyn
+Trait` type and its vtable construction, with the "no runtime identity"
+guarantee scoped to static dispatch. It is left unimplemented until there is a
+concrete need (e.g. heterogeneous collections).
+
+The static surface is pinned by tests: `trait_bounds` / `should_fail_trait_
+bound` (bounds), `test_09_trait_defaults` (defaults), `should_fail_duplicate_
+impl` / `should_fail_ambiguous_method` (coherence), `trait_supertraits` /
+`should_fail_missing_supertrait` (supertraits), and `trait_assoc` / `trait_
+assoc_import` / `should_fail_missing_assoc` (associated types).
 
 ## 5. Statements
 
