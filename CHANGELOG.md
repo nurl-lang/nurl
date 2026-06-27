@@ -16,8 +16,10 @@ C library at its core: the entire external-library surface — `libcurl`,
 runtime and replaced with pure-NURL implementations in the standard library.
 A default `./build.sh` now links **`libc` only** (plus `libm`). The same
 self-contained stdlib provides TLS 1.3 (client *and* server), cryptography,
-HTTP/1.1, and DEFLATE/gzip/zlib — written in NURL, byte-for-byte verified
-against the libraries they replace, and clean under AddressSanitizer.
+HTTP/1.1, and DEFLATE/gzip/zlib — written in NURL, verified against the
+libraries they replace by known-answer vectors and round-trip interop (our
+DEFLATE output is a valid, if not byte-identical, stream — a greedy LZ77
+encoder compresses differently from zlib), and clean under AddressSanitizer.
 
 Alongside the dependency purge: a new pure-NURL `redis` client, a compiler
 type-checking sweep that converts several silent miscompiles into clear

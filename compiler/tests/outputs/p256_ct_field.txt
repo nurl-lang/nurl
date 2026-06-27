@@ -1,0 +1,6 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+field 400 trials, scalarmult 60 trials
+p256 ct: PASS
