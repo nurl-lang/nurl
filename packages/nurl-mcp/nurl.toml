@@ -1,0 +1,7 @@
+[package]
+name = "nurl-mcp"
+version = "0.1.0"
+description = "Local MCP server for the NURL toolchain — exposes the installed compiler over Model Context Protocol (stdio) so an LLM agent on the host can build, run, type-check, and format NURL, and read the installed stdlib. The editor-facing counterpart of nurl-lsp, for LLMs."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
