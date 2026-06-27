@@ -130,6 +130,11 @@ $ `tools/nurlfmt/tokenize.nu`
     // type position.
     : ~ b prev_is_type_prefix F  // prev token was *,?,[,! in type pos
     : ~ b prev_was_pub F  // prev token at bd=0/pd=0 was the `pub` keyword
+    // True between a depth-0 `%` (trait/impl sigil) and the body `{` that
+    // follows. A `:` in this span is a supertrait clause (`% Sub : Super`),
+    // part of the trait header — NOT a new top-level decl, so it must not get
+    // the inter-decl blank line that would split the header across lines.
+    : ~ b in_trait_header F
 
     : ~ i idx 0
     ~ < idx n {
@@ -159,11 +164,17 @@ $ `tools/nurlfmt/tokenize.nu`
                     // the source (or a prior bad format) put before it.
                     : b ffi_at & & & == bd 0 == pd 0
                     ( __pp_text_eq text `@` ) ffi_pending
+                    // The `:` of a supertrait clause (`% Sub : Super`) is part
+                    // of the trait header, like the FFI `@` — glue it inline and
+                    // collapse any newline a prior format put before it, so the
+                    // header stays on one line.
+                    : b super_colon & & & == bd 0 == pd 0
+                    ( __pp_text_eq text `:` ) in_trait_header
                     ? ! emitted_any {
                         // First token in the file. Drop any leading
                         // blank lines but keep the token at column 0.
                         = pre_newlines 0
-                    } { ? ffi_at {
+                    } { ? | ffi_at super_colon {
                             = pre_newlines 0
                         } {
                             // Top-level decl boundary forces a blank line
@@ -184,7 +195,9 @@ $ `tools/nurlfmt/tokenize.nu`
                             & == pd 0
                             & ( __pp_starts_top_decl text )
                             & ! prev_was_pub
-                            ! == prev_kind TT_FMT_COMMENT
+                            & ! == prev_kind TT_FMT_COMMENT
+                            // supertrait `:` is part of the trait header, not a boundary
+                            ! & in_trait_header ( __pp_text_eq text `:` )
                             // A "compact chain" is two consecutive top-
                             // level decls of the same one-byte starter
                             // (`$` imports, `&` ffi decls, repeated `:`
@@ -285,7 +298,7 @@ $ `tools/nurlfmt/tokenize.nu`
 
                     // Update brace/paren depth AFTER emitting so the
                     // next iteration sees the post-token state.
-                    ? ( __pp_text_eq text `{` ) { = bd + bd 1 } {}
+                    ? ( __pp_text_eq text `{` ) { = bd + bd 1 = in_trait_header F } {}
                     ? ( __pp_text_eq text `}` ) {
                         ? > bd 0 { = bd - bd 1 } {}
                     } {}
@@ -342,6 +355,9 @@ $ `tools/nurlfmt/tokenize.nu`
                         // decl-starter (incl. the FFI's own `@`, which
                         // consumes the flag here) disarms it.
                         = ffi_pending ( __pp_text_eq text `&` )
+                        // A depth-0 `%` opens a trait/impl header; a `:` before
+                        // its body `{` is then a supertrait clause, not a decl.
+                        = in_trait_header ( __pp_text_eq text `%` )
                     } {}
 
                     // FFI param-type region: opens at the FFI `@`, closes

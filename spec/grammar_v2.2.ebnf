@@ -53,7 +53,7 @@ program = decl* EOF ;
 
 decl = import_decl                 (*  $                             *)
      | ('pub')? ffi_decl           (*  &                             *)
-     | ('pub')? trait_decl         (*  %  IDENT  {                   *)
+     | ('pub')? trait_decl         (*  %  IDENT  (: Super)?  {        *)
      | ('pub')? impl_decl          (*  %  IDENT  type                *)
      | ('pub')? fn_decl            (*  @  (only kind enforced in v2.0)*)
      | ('pub')? struct_decl        (*  :  IDENT   {                  *)
@@ -210,30 +210,40 @@ const_int_expr = INT
                 const_int_expr const_int_expr ;
 
 
-(* % Name [T]? { ( fn_header | fn_decl )* }
+(* % Name [T]? (: Super+)? { ( assoc_decl | fn_header | fn_decl )* }
    Interface definition. Produces no IR directly; registers method signatures.
    Methods may be required (fn_header — just signature) or may provide a
    DEFAULT implementation (fn_decl — header + body). An impl_decl that omits
    a method with a default gets a monomorphised copy of the default body,
    with the trait's type parameter substituted by the impl's type.
    Required methods are a compile error if an impl doesn't provide them.
-   Example:  % Shape [T] {
-                 @ area T obj → i                  — required
-                 @ print_info T obj → i {          — default
-                   ( nurl_print ( nurl_str_int ( area obj ) ) )
-                   ^ ( area obj )
-                 }
+
+   supertrait_clause (`: Super …`, trait-system ext 2026-06): every type
+   implementing this trait must also implement each named supertrait for the
+   same type (enforced program-wide; transitive).
+   assoc_decl (`type Item`): a per-impl associated type each impl must bind and
+   the trait's methods may name. No projection (`A::Item`) in 1.0.
+   Example:  % Ord [T] : Eq {
+                 type Key                          — associated type
+                 @ cmp T a T b → i                 — required
+                 @ max  T a T b → T { … }          — default
              } *)
-trait_decl = '%' IDENT type_params? '{' ( fn_header | fn_decl )* '}' ;
-fn_header  = '@' IDENT type_params? param* '→' type ;
+trait_decl        = '%' IDENT type_params? supertrait_clause?
+                    '{' ( assoc_decl | fn_header | fn_decl )* '}' ;
+supertrait_clause = ':' IDENT+ ;
+assoc_decl        = 'type' IDENT ;
+fn_header         = '@' IDENT type_params? param* '→' type ;
 
 
-(* % TraitName [T]? impl_type { fn_decl* }
+(* % TraitName [T]? impl_type { ( assoc_bind | fn_decl )* }
    Monomorphised dispatch: each method is emitted as  method__TypeMangle.
    Dispatch at call sites is based on the first argument's LLVM type.
+   assoc_bind (`type Item Concrete`): binds an associated type to a simple type
+   name; the impl must bind exactly the trait's declared associated types.
    Example:  % Stringify i { @ stringify i n → s { ^ ( nurl_str_int n ) } }
              ( stringify 42 )  →  call @stringify__i64  *)
-impl_decl = '%' IDENT type_params? type '{' fn_decl* '}' ;
+impl_decl  = '%' IDENT type_params? type '{' ( assoc_bind | fn_decl )* '}' ;
+assoc_bind = 'type' IDENT type ;
 
 
 (* ── BLOCK & STATEMENTS ───────────────────────────────────────── *)
