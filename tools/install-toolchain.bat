@@ -57,6 +57,16 @@ REM Compiler + package manager.
 copy /y "%ROOT%\build\nurlc.exe"   "%PREFIX%\build\nurlc.exe"   >nul
 copy /y "%ROOT%\build\nurlpkg.exe" "%PREFIX%\build\nurlpkg.exe" >nul
 
+REM Formatter (best-effort: installed when present; without it nurlfmt and the
+REM nurl-mcp nurl_fmt tool are unavailable).
+set "HAVE_NURLFMT=0"
+if exist "%ROOT%\build\nurlfmt.exe" (
+  copy /y "%ROOT%\build\nurlfmt.exe" "%PREFIX%\build\nurlfmt.exe" >nul
+  set "HAVE_NURLFMT=1"
+) else (
+  echo Note: build\nurlfmt.exe absent - skipping ^(run build.bat to build it^).
+)
+
 REM Stdlib tree (incl. runtime.o, runtime.<feature> link sentinels, canvas.o).
 xcopy /e /i /y /q "%ROOT%\stdlib" "%PREFIX%\stdlib" >nul
 
@@ -87,6 +97,14 @@ REM from any directory. The nurlpkg shim also points NURL at the driver.
   echo if not defined NURL set "NURL=%%NURL_PREFIX%%\bin\nurl.bat"
   echo "%%NURL_PREFIX%%\build\nurlpkg.exe" %%*
 )
+if "%HAVE_NURLFMT%"=="1" (
+  > "%PREFIX%\bin\nurlfmt.bat" (
+    echo @echo off
+    echo for %%%%I in ^("%%~dp0.."^) do set "NURL_PREFIX=%%%%~fI"
+    echo if not defined NURL_STDLIB set "NURL_STDLIB=%%NURL_PREFIX%%"
+    echo "%%NURL_PREFIX%%\build\nurlfmt.exe" %%*
+  )
+)
 
 REM ── Sourceable session env (RELOCATABLE) ──────────────────────
 > "%PREFIX%\env.bat" (
@@ -98,7 +116,11 @@ REM ── Sourceable session env (RELOCATABLE) ──────────�
 
 echo Done.
 echo.
-echo   installed:  nurl, nurlc, nurlpkg  -^> %PREFIX%\bin
+if "%HAVE_NURLFMT%"=="1" (
+  echo   installed:  nurl, nurlc, nurlpkg, nurlfmt  -^> %PREFIX%\bin
+) else (
+  echo   installed:  nurl, nurlc, nurlpkg  -^> %PREFIX%\bin
+)
 echo   stdlib:     %%NURL_STDLIB%%        -^> %PREFIX%\stdlib
 echo.
 echo Activate it in this shell:

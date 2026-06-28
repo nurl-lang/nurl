@@ -78,9 +78,29 @@ done
     "$ROOT/build/nurlpkg.ll" "$TMP/rt-nurlpkg.o" -lm -lpthread "${ZA[@]}" \
     -o "$ROOT/build/nurlpkg"
 
+# nurlfmt is libc-only like nurlc (a source formatter, no FFI back-ends).
+# Best-effort: build.sh builds it best-effort, so it may be absent — only
+# relink it when its IR is present, otherwise install-toolchain.sh ships
+# whatever build/nurlfmt exists (or nothing). Without this, a nurlfmt shipped
+# in the release tarball would carry the CI runner's high glibc floor and fail
+# on the same old distros the relink exists to support.
+HAVE_NURLFMT=0
+if [[ -f "$ROOT/build/nurlfmt.ll" ]]; then
+    echo "Relinking nurlfmt → $TARGET"
+    "$ZIG" cc -O2 -target "$TARGET" -c "$ROOT/stdlib/runtime.c" -o "$TMP/rt-nurlfmt.o"
+    "$ZIG" cc -O2 -target "$TARGET" -Wl,--as-needed \
+        "$ROOT/build/nurlfmt.ll" "$TMP/rt-nurlfmt.o" -lm -lpthread \
+        -o "$ROOT/build/nurlfmt"
+    HAVE_NURLFMT=1
+else
+    echo "Note: build/nurlfmt.ll absent — not relinking nurlfmt."
+fi
+
 # Report the resulting glibc floor (highest versioned symbol referenced).
 echo "Resulting glibc floors:"
-for b in nurlc nurlpkg; do
+RELINKED="nurlc nurlpkg"
+[[ "$HAVE_NURLFMT" == "1" ]] && RELINKED="$RELINKED nurlfmt"
+for b in $RELINKED; do
     v="$(readelf -V "$ROOT/build/$b" 2>/dev/null | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -V | tail -1)"
     echo "  $b: ${v:-none}"
 done

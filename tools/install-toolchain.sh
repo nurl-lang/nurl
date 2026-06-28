@@ -52,6 +52,17 @@ mkdir -p "$PREFIX/bin" "$PREFIX/build" "$PREFIX/stdlib"
 install -m755 "$ROOT/build/nurlc"   "$PREFIX/build/nurlc"
 install -m755 "$ROOT/build/nurlpkg" "$PREFIX/build/nurlpkg"
 
+# Formatter. build.sh builds nurlfmt best-effort, so install it when present
+# (a box where it didn't build still gets the rest of the toolchain). Without
+# it, `nurlfmt` and the nurl-mcp `nurl_fmt` tool are unavailable.
+HAVE_NURLFMT=0
+if [[ -x "$ROOT/build/nurlfmt" ]]; then
+    install -m755 "$ROOT/build/nurlfmt" "$PREFIX/build/nurlfmt"
+    HAVE_NURLFMT=1
+else
+    echo "Note: build/nurlfmt absent — skipping (run ./build.sh to build it; nurl_fmt tooling will be unavailable)."
+fi
+
 # Stdlib tree — including runtime.o, the runtime.<feature> link sentinels
 # nurl.sh consults, and any canvas.o. Copy the whole directory so the
 # installed driver links exactly like the in-tree one.
@@ -117,25 +128,54 @@ EOF
 
 chmod +x "$PREFIX/bin/nurl" "$PREFIX/bin/nurlc" "$PREFIX/bin/nurlpkg"
 
-# ── Sourceable env (RELOCATABLE) ───────────────────────────────────────
-# Resolves its own directory when sourced, so a moved/extracted tree still
-# points NURL_HOME / NURL_STDLIB / PATH at the right place.
-cat > "$PREFIX/env" <<'EOF'
-# NURL toolchain environment — source this from your shell rc.
-__nurl_here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+if [[ "$HAVE_NURLFMT" == "1" ]]; then
+    cat > "$PREFIX/bin/nurlfmt" <<'EOF'
+#!/bin/sh
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+export NURL_STDLIB="${NURL_STDLIB:-$HERE}"
+exec "$HERE/build/nurlfmt" "$@"
+EOF
+    chmod +x "$PREFIX/bin/nurlfmt"
+fi
+
+# ── Sourceable env (bash / zsh / POSIX sh) ─────────────────────────────
+# bash and zsh can self-locate the sourced file (so a moved/extracted tree
+# still resolves) — but POSIX sh (dash/ash, FreeBSD /bin/sh) has no portable
+# way to find a sourced file's path, and the old `${BASH_SOURCE[0]}` form is a
+# bash-array reference that makes those shells abort with "Bad substitution".
+# So: bash/zsh resolve dynamically; every other shell falls back to the path
+# baked in at install time. The relocatable PATH shims (nurl/nurlc/…) self-
+# locate regardless, so a moved tree still works from the shims even when this
+# fallback is stale. Baked line written unquoted; the rest is a quoted heredoc.
+{
+    printf '# NURL toolchain environment — source from your shell rc (bash/zsh/sh).\n'
+    printf '__nurl_default=%s\n' "$PREFIX"
+    cat <<'EOF'
+if [ -n "${BASH_SOURCE:-}" ]; then
+    __nurl_here="$(cd "$(dirname "$BASH_SOURCE")" && pwd)"
+elif [ -n "${ZSH_VERSION:-}" ]; then
+    __nurl_here="$(cd "$(dirname "$0")" && pwd)"
+else
+    __nurl_here="$__nurl_default"
+fi
 export NURL_HOME="$__nurl_here"
 export NURL_STDLIB="$__nurl_here"
 case ":$PATH:" in
     *":$__nurl_here/bin:"*) ;;
     *) export PATH="$__nurl_here/bin:$PATH" ;;
 esac
-unset __nurl_here
+unset __nurl_here __nurl_default
 EOF
+} > "$PREFIX/env"
 
 echo "Done."
 echo
-echo "  installed:  nurl, nurlc, nurlpkg  → $PREFIX/bin"
-echo "  stdlib:     \$NURL_STDLIB          → $PREFIX/stdlib"
+if [[ "$HAVE_NURLFMT" == "1" ]]; then
+    echo "  installed:  nurl, nurlc, nurlpkg, nurlfmt  → $PREFIX/bin"
+else
+    echo "  installed:  nurl, nurlc, nurlpkg  → $PREFIX/bin"
+fi
+echo "  stdlib:     \$NURL_STDLIB                  → $PREFIX/stdlib"
 echo
 echo "Activate it in this shell and future ones:"
 echo "    source $PREFIX/env"
