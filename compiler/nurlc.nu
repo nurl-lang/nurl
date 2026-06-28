@@ -9590,24 +9590,15 @@
             {  // pt ends with '*': pointer to struct OR raw pointer
                 : s st ( nurl_str_slice pt 0 - ptlen 1 )
                 ? == ( nurl_str_get st 0 ) 37
-                {  // Struct pointer "%T*": next token is either a field
-                    // name or a variable used as array index (e.g.
-                    // `= . data idx x` where data: *Match, idx is the
-                    // index var). When an IDENT is BOTH a local int var
-                    // AND a struct field name, the array-store path is
-                    // the default — this matches how `stdlib/core/vec.nu`
-                    // writes elements with index vars whose names (`len`,
-                    // `idx`, `i`) happen to coincide with struct fields.
-                    //
-                    // EXCEPTION: when the IDENT is a function PARAMETER
-                    // that shadows a field of the same name, the user
-                    // almost certainly meant the field — the "store the
-                    // `cap` argument into `impl.cap`" pattern in
-                    // `stdlib/std/arena.nu` is the canonical case. Pre-
-                    // 2026-05-17 the param branch silently took the
-                    // array-store path and emitted `getelementptr %S, %S*
-                    // %impl, i64 %cap` (value-as-index, no field offset).
-                    // Closes a value-as-index field-offset codegen quirk.
+                {  // Struct pointer "%T*": the next token is either a field
+                    // name or a variable used as an array index (e.g.
+                    // `= . data idx x` where data: *Match and idx is the index
+                    // var). The rule (see `field_wins` below) mirrors the read
+                    // path: a name that IS a field of this concrete struct wins
+                    // and stores into that field; the value-as-index array store
+                    // is taken only when the name is NOT a field — raw pointers,
+                    // or a tparam element type whose field lookup is suppressed
+                    // (how `stdlib/core/vec.nu` writes its elements).
                     : i stlen ( nurl_str_len st )
                     : s sname ( nurl_str_slice st 1 - stlen 1 )
                     : s fname ( nurl_lex_val lex )
@@ -9618,8 +9609,19 @@
                     : s fidx_s ? ( str_contains_word g_mono_tparam_tys sname ) `` ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__idx` ) ) ) )
                     : b is_field_ident ( is_ident_tok ( nurl_lex_type lex ) )
                     : b is_field_match & is_field_ident != 0 ( nurl_str_len fidx_s )
-                    : s is_param ( nurl_sym_get syms ( nurl_str_cat fname `__param` ) )
-                    : b field_wins & is_field_match != 0 ( nurl_str_len is_param )
+                    // A concrete struct field ALWAYS wins over a same-named
+                    // in-scope variable — param OR local — symmetric with the
+                    // read path in gen_member ("a struct field ALWAYS wins").
+                    // Array-indexing a struct pointer BY a field name is never
+                    // the intent; the value-as-index store below is reached only
+                    // when the IDENT is NOT a field of this struct: raw pointers,
+                    // or a tparam element type whose field lookup is suppressed
+                    // above (stdlib/core/vec.nu's element writes). Previously the
+                    // field only won when it was ALSO shadowed by a parameter, so
+                    // `= . t lo lo` with a non-param local `lo` matching field
+                    // `lo` silently compiled to `t[lo] = lo` (value-as-index) —
+                    // a struct-corrupting miscompile with no diagnostic.
+                    : b field_wins is_field_match
                     : s var_t ( nurl_sym_get syms fname )
                     ? & ! field_wins > ( int_width var_t ) 0
                     {  // IDENT is an integer variable (and not a param

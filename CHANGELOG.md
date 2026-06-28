@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Field store into a struct pointer silently miscompiled when the value name
+  was a non-parameter local shadowing the field.** `= . t lo lo`, where `lo` is
+  an in-scope local that also names a field of `t`'s struct, compiled to a
+  value-as-index array store (`t[lo] = lo`, `getelementptr %T, %T* t, i64 %lo`)
+  — an out-of-bounds, struct-corrupting write with no diagnostic. The read path
+  already let a concrete struct field always win over a same-named variable;
+  the store path only did so when the name was a *parameter*. The two are now
+  symmetric: a name that is a field of the (non-generic) struct stores into that
+  field whether it is a parameter or a local. The value-as-index array store is
+  still taken when the name is not a field of the struct — raw pointers, and the
+  tparam element types `stdlib/core/vec.nu` writes through (unaffected;
+  full bootstrap + corpus green). Regression test `field_store_shadow`.
+
 ## [0.10.3] — 2026-06-28
 
 A **portability + distributed-stack** release. The runtime drops its last
