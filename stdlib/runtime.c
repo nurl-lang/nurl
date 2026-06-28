@@ -171,10 +171,25 @@ void nurl_print_int(long long n)  { printf("%lld\n", n); }
 void nurl_print_str(const char *s){ puts(s); }
 void nurl_print_bool(int b)       { puts(b ? "true" : "false"); }
 
+/* Read an integer from stdin, equivalent to scanf("%lld") but built from
+ * getchar/ungetc so it does not pull in scanf — whose glibc >= 2.38 C23
+ * redirect (__isoc23_scanf) is undefined when the LTO runtime bitcode is
+ * linked against an older-glibc target (see nurl__parse_ul). Skips leading
+ * whitespace, takes an optional sign, accumulates digits, and pushes the
+ * first non-digit back so the next read sees it — exactly as scanf leaves it.
+ * Returns 0 when no digits are present. */
 long long nurl_read_int(void) {
+    int c;
+    do { c = getchar(); } while (c == ' ' || c == '\t' || c == '\n' ||
+                                 c == '\r' || c == '\f' || c == '\v');
+    int neg = 0;
+    if (c == '+' || c == '-') { neg = (c == '-'); c = getchar(); }
     long long n = 0;
-    if (scanf("%lld", &n) != 1) n = 0;
-    return n;
+    int any = 0;
+    while (c >= '0' && c <= '9') { n = n * 10 + (c - '0'); c = getchar(); any = 1; }
+    if (c != EOF) ungetc(c, stdin);
+    if (!any) return 0;
+    return neg ? -n : n;
 }
 
 /* Read a line from stdin, strip trailing '\n'. Always returns a heap-owned
@@ -3341,6 +3356,23 @@ static int nurl__parse_numeric_addr(const char *s, int *out_family,
     return 0;
 }
 
+/* Portable non-negative decimal parser. Deliberately avoids strtoul/strtol/
+ * atoi: on glibc >= 2.38 those resolve (in C23 translation mode) to the
+ * versioned symbols __isoc23_strtoul / __isoc23_strtol, which are baked into
+ * the shipped, LTO-distributed runtime bitcode and then fail to link against
+ * an OLDER-glibc target (e.g. Raspberry Pi OS aarch64: "undefined symbol:
+ * __isoc23_strtoul"). Parsing digits by hand keeps the runtime libc-only and
+ * portable across every glibc/musl version and target. Leading blanks are
+ * skipped; *end (if non-NULL) points past the last digit consumed, so callers
+ * can detect trailing garbage exactly as strtoul's `end` did. */
+static unsigned long nurl__parse_ul(const char *s, const char **end) {
+    while (*s == ' ' || *s == '\t') s++;
+    unsigned long v = 0;
+    while (*s >= '0' && *s <= '9') { v = v * 10UL + (unsigned long)(*s - '0'); s++; }
+    if (end) *end = s;
+    return v;
+}
+
 /* iface argument convention (intentionally minimal — no if_nametoindex
  * to keep Win32 builds free of -liphlpapi):
  *   ""                           default interface (INADDR_ANY / 0)
@@ -3386,9 +3418,9 @@ static long long nurl__udp_mcast_op(long long handle, const char *group,
         mr.ipv6mr_multiaddr = ((struct sockaddr_in6*)&gsa)->sin6_addr;
         unsigned ifidx = 0;
         if (iface && *iface) {
-            char *end = NULL;
-            unsigned long v = strtoul(iface, &end, 10);
-            if (!end || *end != 0) {
+            const char *end = NULL;
+            unsigned long v = nurl__parse_ul(iface, &end);
+            if (!end || end == iface || *end != 0) {
                 h->err_kind = NURL_NET_ERR_OTHER;
                 return -1;
             }
@@ -4706,7 +4738,7 @@ void nurl_runtime_init(long long worker_count) {
     int wc = (int)worker_count;
     if (wc <= 0) {
         const char *env = getenv("NURL_WORKERS");
-        if (env && *env) wc = atoi(env);
+        if (env && *env) wc = (int)nurl__parse_ul(env, NULL);
         if (wc <= 0) {
             long n = sysconf(_SC_NPROCESSORS_ONLN);
             wc = (n > 0) ? (int)n : 2;

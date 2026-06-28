@@ -125,7 +125,40 @@ $ `stdlib/std/async.nu`
 
 @ relay_build_group_leave ( Vec u ) group_id → ( Vec u ) { ^ ( __frame ( relay_gleave ) group_id ) }
 
-@ relay_build_group_send ( Vec u ) group_id ( Vec u ) payload → ( Vec u ) { ^ ( __frame_addressed ( relay_gsend ) group_id payload ) }
+// A GROUP-SEND body is length-delimited: [gidlen:2 BE][gid][payload]. Group
+// ids are variable length — GJOIN/GLEAVE carry the raw id as the whole body —
+// so unlike a FORWARD/DELIVER pubkey (a fixed 32 bytes), the gid here must be
+// framed explicitly. The previous encoding reused the 32-byte pubkey split,
+// which silently dropped the fanout for any gid that was not exactly 32 bytes.
+@ relay_build_group_send ( Vec u ) group_id ( Vec u ) payload → ( Vec u ) {
+    : ( Vec u ) body ( vec_new [u] )
+    ( bytes_push_u16_be body # u16 ( vec_len [u] group_id ) )
+    ( vec_extend [u] body group_id )
+    ( vec_extend [u] body payload )
+    : ( Vec u ) f ( __frame ( relay_gsend ) body )
+    ( vec_free [u] body )
+    ^ f
+}
+
+// gid of a length-delimited GROUP-SEND body.
+@ relay_gsend_gid ( Vec u ) body → ( Vec u ) {
+    : i glen ?? ( bytes_read_u16_be body 0 ) { T x → # i x F → 0 }
+    : ( Vec u ) gid ( vec_with_cap [u] glen )
+    : ~ i k 0
+    ~ < k glen { ?? ( vec_get [u] body + 2 k ) { T b → ( vec_push [u] gid b ) F → {} } = k + k 1 }
+    ^ gid
+}
+
+// payload of a length-delimited GROUP-SEND body (everything past the gid).
+@ relay_gsend_payload ( Vec u ) body → ( Vec u ) {
+    : i glen ?? ( bytes_read_u16_be body 0 ) { T x → # i x F → 0 }
+    : i start + 2 glen
+    : i n ( vec_len [u] body )
+    : ( Vec u ) pl ( vec_new [u] )
+    : ~ i k start
+    ~ < k n { ?? ( vec_get [u] body k ) { T b → ( vec_push [u] pl b ) F → {} } = k + k 1 }
+    ^ pl
+}
 
 // First 32 bytes of a FORWARD/DELIVER body = the peer pubkey.
 @ relay_body_pk ( Vec u ) body → ( Vec u ) {
@@ -219,15 +252,30 @@ $ `stdlib/std/async.nu`
     TcpListener lst
     ( Vec s ) clients  // *RelayEntry
     ( Vec s ) groups  // *GroupEntry
+    i verbose  // 1 = log peer connect/disconnect to stdout
 }
 
 @ relay_server_start s host i port → !RelayServer NetErr {
     : !TcpListener NetErr lr ( tcp_listen host port )
     : !RelayServer NetErr out ?? lr {
-        T l → @ !RelayServer NetErr { T @ RelayServer { l ( vec_new [s] ) ( vec_new [s] ) } }
+        T l → @ !RelayServer NetErr { T @ RelayServer { l ( vec_new [s] ) ( vec_new [s] ) 0 } }
         F e → @ !RelayServer NetErr { F e }
     }
     ^ out
+}
+
+// Enable/disable connect/disconnect logging (off by default).
+@ relay_server_set_verbose * RelayServer rs i v → v { = . rs verbose v }
+
+// Log a short, readable peer id (first 4 pubkey bytes as hex) with a sign.
+@ __relay_log s sign ( Vec u ) pk → v {
+    : i n ? < ( vec_len [u] pk ) 4 ( vec_len [u] pk ) 4
+    : ( Vec u ) head ( bytes_slice pk 0 n )
+    : String hex ( bytes_to_hex head )
+    ( nurl_print `relay: ` ) ( nurl_print sign ) ( nurl_print ` peer ` )
+    ( nurl_print ( string_data hex ) ) ( nurl_print `\n` )
+    ( string_free hex )
+    ( vec_free [u] head )
 }
 
 @ __relay_register_conn * RelayServer rs TcpConn c ( Vec u ) pk → s {
@@ -372,6 +420,7 @@ $ `stdlib/std/async.nu`
                 : i ft . f ftype
                 ? == ft ( relay_reg ) {
                     = self_entry ( __relay_register_conn rs c . f body )
+                    ? == . rs verbose 1 { ( __relay_log `+` . f body ) } {}
                 } {}
                 ? == ft ( relay_fwd ) {
                     ? != # i self_entry 0 {
@@ -393,8 +442,8 @@ $ `stdlib/std/async.nu`
                 ? == ft ( relay_gleave ) { ( __relay_group_leave rs self_entry . f body ) } {}
                 ? == ft ( relay_gsend ) {
                     ? != # i self_entry 0 {
-                        : ( Vec u ) gid ( relay_body_pk . f body )
-                        : ( Vec u ) pl ( relay_body_payload . f body )
+                        : ( Vec u ) gid ( relay_gsend_gid . f body )
+                        : ( Vec u ) pl ( relay_gsend_payload . f body )
                         ( __relay_group_fanout rs self_entry gid pl )
                         ( vec_free [u] gid )
                         ( vec_free [u] pl )
@@ -409,6 +458,7 @@ $ `stdlib/std/async.nu`
         : *RelayEntry se # *RelayEntry self_entry
         = . se live 0
         ( __relay_drop_from_groups rs self_entry )
+        ? == . rs verbose 1 { ( __relay_log `-` . se pubkey ) } {}
     } {}
     ( tcp_close_conn c )
 }
