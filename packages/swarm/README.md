@@ -9,6 +9,12 @@ nurlpkg install swarm           # drops the `swarm` binary on $PATH
 swarm worker <relay-host> <port>   # ← that's the join. it now takes work.
 ```
 
+> **Requires NURL ≥ v0.10.3.** `swarm` is built from source against your
+> installed stdlib at install time, and the verbose relay uses a relay-server
+> field added in v0.10.3 (`RelayServer.verbose`). On an older toolchain that
+> field does not exist, so `swarm relay` would miscompile — update with
+> `get-nurl.sh` (or rebuild the toolchain from source) before installing.
+
 It is built entirely on NURL's standard distributed stack (see
 [`docs/DISTRIBUTED.md`](../../docs/DISTRIBUTED.md)): `net/relay` for reach
 through NATs, `net/transport` for the pubkey-addressed seam, `dist/ring` for
@@ -21,7 +27,7 @@ real workloads, and a CLI.
 One machine runs a relay (the meeting point — one per cluster):
 
 ```sh
-swarm relay 0.0.0.0 47700
+swarm relay 0.0.0.0 47700            # add --verbose to log peers joining/leaving
 ```
 
 Any number of machines join as workers (this is the whole "add a node" story):
