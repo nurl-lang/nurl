@@ -8,6 +8,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Runtime failed to link on older-glibc targets (e.g. Raspberry Pi OS
+  aarch64): `undefined symbol: __isoc23_strtoul` / `__isoc23_strtol`.** When the
+  runtime is compiled with glibc ≥ 2.38 headers in C23 mode, `strtoul` /
+  `strtol` / `atoi` / `scanf` resolve to the versioned symbols
+  `__isoc23_strtoul` etc., which are baked into the shipped LTO runtime bitcode
+  and then undefined when linked against a target with an older glibc. The
+  runtime no longer calls any of them: a hand-rolled decimal parser
+  (`nurl__parse_ul`) replaces `strtoul`/`atoi`, and `nurl_read_int` is rebuilt
+  on `getchar`/`ungetc` instead of `scanf`. The runtime bitcode now references
+  none of the `__isoc23_*` symbols, so it links cleanly across every glibc/musl
+  version and target (verified by cross-linking for aarch64 against glibc 2.28).
+- **`net/relay` group multicast silently dropped any non-32-byte group id.**
+  `GJOIN`/`GLEAVE` carried the group id as a raw, variable-length body, but
+  `GSEND` reused the fixed 32-byte pubkey split — so a group id that was not
+  exactly 32 bytes was mis-parsed on the server (aliasing the payload) and the
+  fanout was silently skipped. Group sends are now length-delimited
+  (`[gidlen:2][gid][payload]`) via `relay_gsend_gid` / `relay_gsend_payload`, so
+  a group id of any length round-trips. Regression test added in
+  `relay_codec` (a 5-byte gid). Existing 32-byte users (`replicated_counter`,
+  `pttvoice`) are unaffected.
+
+### Added
+
+- **`net/relay` server verbose mode.** `relay_server_set_verbose(rs, 1)` (and a
+  new `RelayServer.verbose` field) logs each peer connect/disconnect as
+  `relay: + peer <id>` / `relay: - peer <id>`. `packages/swarm`'s relay exposes
+  it as `swarm relay <host> <port> --v` / `--verbose`, so cluster membership is
+  visible as workers come and go.
+- **`packages/swarm` — a distributed compute cluster you join by installing it.**
+  `nurlpkg install swarm` then `swarm worker <relay> <port>` makes a machine a
+  live compute node: it announces itself over the relay group (HELLO census),
+  every node folds it into the consistent-hash ring, and it takes its share of
+  work. `swarm submit … primes <lo> <hi>` / `sumsq <lo> <hi>` shards a real
+  numeric workload across the live workers (by key, via `dist/ring` + `dist/job`)
+  and sums the partial results — verified live (π(10⁶) = 78498) and by an
+  ASan-clean offline suite that pins exact sharding.
+
 ## [0.10.2] — 2026-06-28
 
 A **language-maturity** release. The static trait system reaches v1.0

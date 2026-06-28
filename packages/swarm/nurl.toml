@@ -1,0 +1,7 @@
+[package]
+name = "swarm"
+version = "0.1.0"
+description = "A distributed compute cluster you join by installing it. Run `swarm worker <relay> <port>` on any machine and it announces itself over the relay group, every node folds it into the consistent-hash ring, and it starts taking its share of real work. `swarm submit` shards a genuine numeric workload (prime counting, sum-of-squares) across the live workers and sums the partial results. Built entirely on the standard distributed stack (net/relay, net/transport, dist/ring, dist/job) — no external frameworks."
+license = "MIT OR Apache-2.0"
+
+[dependencies]

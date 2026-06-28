@@ -94,8 +94,8 @@ $ `stdlib/net/relay.nu`
     ?? fg {
         T f → {
             ( pb `gsend type: ` == . f ftype ( relay_gsend ) )
-            : ( Vec u ) ggid ( relay_body_pk . f body )
-            : ( Vec u ) gpl ( relay_body_payload . f body )
+            : ( Vec u ) ggid ( relay_gsend_gid . f body )
+            : ( Vec u ) gpl ( relay_gsend_payload . f body )
             ( pb `gsend gid split: ` ( veq ggid gid ) )
             ( pb `gsend payload split: ` ( veq gpl data ) )
             ( vec_free [u] ggid ) ( vec_free [u] gpl )
@@ -103,6 +103,25 @@ $ `stdlib/net/relay.nu`
         }
         F → ( nurl_print `gsend parse failed\n` )
     }
+
+    // A group id that is NOT 32 bytes must still round-trip — the gid is
+    // length-delimited, not split at a fixed pubkey width. (Regression: a
+    // short gid used to alias the payload and silently drop the fanout.)
+    : ( Vec u ) sgid ( bytes 7 5 )  // "swarm"-sized 5-byte group id
+    : ( Vec u ) gs2 ( relay_build_group_send sgid data )
+    : ?RelayFrame fg2 ( relay_parse gs2 )
+    ?? fg2 {
+        T f → {
+            : ( Vec u ) ggid ( relay_gsend_gid . f body )
+            : ( Vec u ) gpl ( relay_gsend_payload . f body )
+            ( pb `gsend short gid: ` ( veq ggid sgid ) )
+            ( pb `gsend short payload: ` ( veq gpl data ) )
+            ( vec_free [u] ggid ) ( vec_free [u] gpl )
+            ( relay_frame_free f )
+        }
+        F → ( nurl_print `gsend short parse failed\n` )
+    }
+    ( vec_free [u] sgid ) ( vec_free [u] gs2 )
 
     // ── incomplete buffer ────────────────────────────────────────
     : ( Vec u ) partial ( vec_new [u] )
