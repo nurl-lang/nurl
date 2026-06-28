@@ -8,6 +8,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-06-28
+
+A **language-maturity** release. The static trait system reaches v1.0
+(coherence, supertraits, associated types, a dyn-dispatch seam); `Result` gains
+a by-value representation; the toolchain gains first-class **FreeBSD** support
+(now a CI gate) and a local **MCP server** that exposes the compiler to LLM
+agents. The standard library absorbs argument parsing, letting the registry
+shed its `argz` and `tls` packages.
+
+### Added
+
+- **Trait system v1.0.** Sound bare-name method dispatch (coherence:
+  `method##type` registered once, position-idempotent re-scan, `i`/`i64`
+  collisions resolved); **supertraits** (`% Sub : Super`, whole-program-enforced
+  and transitive); **associated types** (`type Item` in a trait, bound per impl
+  and substituted into defaults); and a recorded **dyn-dispatch vtable seam**.
+  Documented in spec §4.9 and the EBNF.
+- **`std/utf8` — a validating UTF-8 codepoint layer** over NURL's byte strings
+  (rejects overlong / surrogate / out-of-range encodings, with U+FFFD recovery):
+  `utf8_valid` / `utf8_len` / `utf8_nth` / `codepoints` / `encode_cp` /
+  `utf8_substr` / … The byte-level `core/string` stays the fast default; the
+  codepoint layer is opt-in.
+- **Send check.** Capturing a non-atomic `Rc` in a `thread_spawn` closure is now
+  a **compile error** (use `Arc`), catching that data race at compile time.
+- **`nurl-mcp` — a local MCP server for the toolchain** (registry package:
+  `nurlpkg install nurl-mcp`). Exposes the *locally installed* compiler to an
+  LLM agent over the Model Context Protocol so it can build / run / type-check /
+  format NURL against the host's real files and read the installed stdlib. Stdio
+  by default; an optional **token-authenticated HTTP** transport gates code
+  execution behind `--allow-run` and refuses a non-loopback bind without
+  `--token`. The LLM-facing counterpart of `nurl-lsp`.
+- **FreeBSD support.** Documented as a first-class **host platform** (the
+  toolchain binaries are libc-only and the wrappers POSIX `sh`); CI now builds,
+  bootstraps, and runs the full test corpus on a real **FreeBSD 14 VM** as a
+  hard gate. `docs/PLATFORMS.md` is split into codegen targets vs. host
+  platforms, and `docs/BUILDING.md` documents every CI gate.
+
+### Changed
+
+- **`Result` `!T E` now lowers to `{ i1, T, E }`.** The Ok payload rides field 1
+  and the Err payload field 2, both **by value**, mirroring `?T` → `{ i1, T }`.
+  A multi-field-struct success payload is no longer heap-boxed — the Ok path
+  emits no `nurl_alloc`. Note: direct numeric access to the *error* payload
+  moves from `. r 1` to `. r 2` (`??` / `\` matching constructs are unaffected).
+- **Argument parsing is now a stdlib facility, `std/args`** (flags, value
+  options, clustered shorts, `--`, positionals, an auto-generated `--help`); the
+  registry CLIs (`nq`, `md2html`, `chart`, `iforest`) migrated onto it.
+- **`install-toolchain` now installs `nurlfmt`**, and its sourceable `env` file
+  is POSIX-`sh`-safe — the old `${BASH_SOURCE[0]}` form aborted FreeBSD / Alpine
+  `/bin/sh` with "Bad substitution". The release relinks `nurlfmt` against the
+  old-glibc floor like the other shipped binaries.
+
+### Removed
+
+- The **`tls`** registry package — pure-NURL TLS now lives in the stdlib, and
+  `psql` / `redis` depend on it directly.
+- The **`argz`** and **`argz-demo`** packages — argument parsing is now
+  `std/args`.
+
 ## [0.10.1] — 2026-06-27
 
 A **security-hardening** release for the pure-NURL cryptography and TLS stack
