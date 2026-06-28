@@ -144,25 +144,26 @@ Example (either tool): a prime-counting kernel — a real trial-division loop,
 impossible as an expression — over `[1, 1000000)` with `reduce: "sum"` returns
 `78498` = π(10⁶), sharded across the workers.
 
+With `compute_submit_kernel` the model writes **only the per-element kernel** —
+no argv reading, no loop, no print. The server generates that boilerplate
+(reading `lo`/`hi`, folding `kernel(x)` over the range with the reduce op,
+printing the partial) around it:
+
+```
+@ is_prime i n → b { /* trial division */ }
+@ kernel i x → i { ? ( is_prime x ) 1 0 }
+// submit with reduce: "sum" → counts primes in [lo, hi)
+```
+
 ```sh
-# manual CLI equivalent (a pre-compiled module):
+# manual CLI equivalent (a pre-compiled full module):
 swarm-mcp runwasm <relay-host> 47700 sum 1 1000000 prime_counter.wasm
 # → sum (wasm kernel) over [1,1000000) = 78498
 ```
 
-The kernel module is a NURL program like:
-
-```
-$ `stdlib/core/string.nu`
-@ is_prime i n → b { /* trial division */ }
-@ main → i {
-    : i lo ( nurl_str_to_int ( nurl_argv_get 1 ) )
-    : i hi ( nurl_str_to_int ( nurl_argv_get 2 ) )
-    : ~ i c 0 : ~ i x lo
-    ~ < x hi { ? ( is_prime x ) { = c + c 1 } {} = x + x 1 }
-    ( nurl_print_int c ) ^ 0
-}
-```
+`compute_run_wasm` (and the `runwasm` CLI) take a **complete** module instead,
+whose `main` reads `lo`/`hi` from argv and prints the partial itself — full
+control, for when you compiled the module yourself.
 
 ## Tests
 
