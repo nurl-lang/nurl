@@ -13,16 +13,18 @@ It is built on the [`swarm`](../swarm) distributed stack: `net/relay` for reach,
 `swarm-mcp worker`; the MCP server is a cluster coordinator that exposes the
 control surface.
 
-> **Requires NURL ≥ v0.10.3** (the relay verbose field; built from source
-> against your installed stdlib at install time).
+> **Requires NURL ≥ v0.10.4** (built from source against your installed stdlib
+> at install time). **wasm kernels additionally require `wasmtime`** on each
+> worker.
 
 ## The control surface (what the LLM sees)
 
-Three tools, with self-describing schemas so a model uses them without docs:
+Four tools, with self-describing schemas so a model uses them without docs:
 
 | tool | arguments | does |
 |------|-----------|------|
-| `compute_submit` | `expr` (string), `lo` (int), `hi` (int), `reduce` (string, default `sum`) | shard + run the kernel over `[lo,hi)`; returns a `task_id` immediately |
+| `compute_submit` | `expr` (string), `lo` (int), `hi` (int), `reduce` (string, default `sum`) | shard + run an **expression** kernel over `[lo,hi)`; returns a `task_id` |
+| `compute_run_wasm` | `wasm_base64` (string), `lo`, `hi`, `reduce` | run an **arbitrary NURL kernel compiled to wasm** over `[lo,hi)` — anything the expression language can't express (loops, helpers) |
 | `compute_list` | — | every task with status (`running`/`done`), kernel, range, reduce, result |
 | `compute_result` | `task_id` (int) | one task's status and, once finished, the reduced value |
 
@@ -113,13 +115,44 @@ swarm-mcp submit <relay-host> 47700 sum 1 1000000 'x*x'
 The coordinator drains cluster traffic on every tool call, so tasks make
 progress as the model polls — no background thread, single-process, robust.
 
-## Roadmap
+## Phase 2 — arbitrary NURL kernels, compiled to wasm
 
-This is **phase 1**: the kernel is an interpreted integer expression — enough
-for any "normal-operations" workload. **Phase 2** keeps the exact same MCP
-surface but lets the model supply the kernel as **arbitrary NURL code compiled
-to a wasm module** shipped to the workers, so a task can be a full program, not
-just an expression.
+`compute_submit`'s expression language can't loop or call helpers. **Phase 2**
+lifts that: the model writes a kernel as **ordinary NURL** and compiles it to a
+`wasm32-wasi` module, which the cluster ships to the workers and runs under
+`wasmtime` — exactly the same shard / run / combine pipeline, just with a real
+program per element instead of an interpreted expression.
+
+The kernel module's `main` reads `lo` and `hi` from argv, folds the kernel over
+`x` in `[lo, hi)`, and prints the partial as a decimal integer. The cluster
+shards the range, runs the module on each worker with its sub-range, and
+combines the partials with the reduce op. Workers cache the module by content
+hash, so it is written once per worker.
+
+A model already has the `nurl_build_wasm` tool (from the NURL MCP server) to
+compile NURL → wasm; it passes the base64 module to `compute_run_wasm`. Example:
+a prime-counting kernel (impossible as an expression) over `[1, 1000000)` with
+`reduce: "sum"` returns `78498` = π(10⁶), sharded across the workers.
+
+```sh
+# manual CLI equivalent (a pre-compiled module):
+swarm-mcp runwasm <relay-host> 47700 sum 1 1000000 prime_counter.wasm
+# → sum (wasm kernel) over [1,1000000) = 78498
+```
+
+The kernel module is a NURL program like:
+
+```
+$ `stdlib/core/string.nu`
+@ is_prime i n → b { /* trial division */ }
+@ main → i {
+    : i lo ( nurl_str_to_int ( nurl_argv_get 1 ) )
+    : i hi ( nurl_str_to_int ( nurl_argv_get 2 ) )
+    : ~ i c 0 : ~ i x lo
+    ~ < x hi { ? ( is_prime x ) { = c + c 1 } {} = x + x 1 }
+    ( nurl_print_int c ) ^ 0
+}
+```
 
 ## Tests
 
@@ -130,15 +163,19 @@ NURL_STDLIB=<repo> ../../nurl.sh tests/work_test.nu /tmp/wt && /tmp/wt
 
 # end-to-end: relay + workers + a CLI submit + a full MCP session
 ./tests/live_smoke.sh
+
+# phase 2 (needs wasmtime): compile a kernel to module.wasm, then
+swarm-mcp runwasm 127.0.0.1 47700 sum 1 1000000 module.wasm
 ```
 
 ## Layout
 
 ```
-src/expr.nu     the kernel language: tokenizer, parser (flat arena), evaluator
-src/work.nu     map-reduce: reduce ops, the kernel handler, sharding
-src/census.nu   HELLO membership gossip → consistent-hash ring
-src/main.nu     roles (relay | worker | submit | mcp) + the MCP server
+src/expr.nu        the expression kernel language: tokenizer, parser, evaluator
+src/work.nu        map-reduce: reduce ops, the expression handler, sharding
+src/wasmkernel.nu  phase 2: ship + run a compiled wasm kernel under wasmtime
+src/census.nu      HELLO membership gossip → consistent-hash ring
+src/main.nu        roles (relay | worker | submit | runwasm | mcp) + MCP server
 ```
 
 ## License

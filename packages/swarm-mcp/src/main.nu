@@ -18,6 +18,8 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/random.nu`
+$ `stdlib/std/fs.nu`
+$ `stdlib/std/encode.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
@@ -28,6 +30,7 @@ $ `stdlib/dist/job.nu`
 $ `census.nu`
 $ `expr.nu`
 $ `work.nu`
+$ `wasmkernel.nu`
 
 @ swarm_vnodes → i { ^ 64 }
 
@@ -177,6 +180,7 @@ $ `work.nu`
             ( relay_set_timeout rc 250 )
             : *Swarm sw ( swarm_new rc id ( role_worker ) )
             ( job_register # *JobNode . sw job ( kind_kernel ) ( kernel_handler ) )
+            ( job_register # *JobNode . sw job ( kind_wasm ) ( wasm_handler ) )
             ( swarm_join_group sw )
             ( swarm_announce sw 1 )
             ( nurl_print `swarm-mcp worker ` ) ( nurl_print_int id ) ( nurl_print ` ready\n` )
@@ -204,6 +208,26 @@ $ `work.nu`
         : ( Vec u ) key ( chunk_key i )
         : ( Vec u ) payload ( chunk_payload op . c lo . c hi expr )
         ( vec_push [i] tids ( job_submit # *JobNode . sw job ( kind_kernel ) key payload ) )
+        ( vec_free [u] key ) ( vec_free [u] payload )
+        = i + i 1
+    }
+    ( shard_free chunks )
+    ^ tids
+}
+
+// Shard a wasm-kernel task: ship the compiled module + each sub-range to its
+// ring owner under kind_wasm. The module bytes ride every chunk (workers cache
+// by content hash, so it is written once per worker).
+@ cluster_submit_wasm * Swarm sw i lo i hi ( Vec u ) wasm i nchunks → ( Vec i ) {
+    : ( Vec s ) chunks ( shard lo hi nchunks )
+    : ( Vec i ) tids ( vec_new [i] )
+    : ~ i i 0
+    ~ < i nchunks {
+        : s cp ?? ( vec_get [s] chunks i ) { T x → x F → # s 0 }
+        : *Chunk c # *Chunk cp
+        : ( Vec u ) key ( chunk_key i )
+        : ( Vec u ) payload ( wasm_chunk_payload . c lo . c hi wasm )
+        ( vec_push [i] tids ( job_submit # *JobNode . sw job ( kind_wasm ) key payload ) )
         ( vec_free [u] key ) ( vec_free [u] payload )
         = i + i 1
     }
@@ -274,6 +298,56 @@ $ `work.nu`
     }
 }
 
+// Chunk count for a wasm task: fewer chunks than the expression path (each
+// chunk ships the module and spawns a wasmtime process), but enough to spread
+// across the ring.
+@ nchunks_wasm i nworkers → i { ^ ? > nworkers 0 * nworkers 2 2 }
+
+// ── runwasm role (manual CLI testing of a compiled .wasm kernel) ──
+
+@ run_runwasm s host i port i op i lo i hi s wasmpath → i {
+    : !( Vec u ) IoErr wr ( read_file_bytes wasmpath )
+    : ~ i rc 0
+    ?? wr {
+        F e → { ( nurl_print `swarm-mcp: cannot read wasm file\n` ) = rc 1 }
+        T wasm → {
+            ?? ( relay_dial host port ) {
+                T relc → {
+                    : i myid ( rand_u64 )
+                    : ( Vec u ) reg ( pk_from_id myid )
+                    ?? ( relay_register relc reg ) { T _ → {} F _ → {} }
+                    ( vec_free [u] reg )
+                    ( relay_set_timeout relc 250 )
+                    : *Swarm sw ( swarm_new relc myid ( role_client ) )
+                    ( swarm_join_group sw )
+                    ( swarm_discover sw 8 )
+                    : i nworkers ( roster_count # *Roster . sw roster )
+                    ? == nworkers 0 {
+                        ( nurl_print `swarm-mcp: no workers found\n` ) = rc 1
+                        ( swarm_free sw ) ( relay_close relc )
+                    } {
+                        : i nchunks ( nchunks_wasm nworkers )
+                        ( nurl_print `swarm-mcp: ` ) ( nurl_print_int nworkers ) ( nurl_print ` worker(s), ` )
+                        ( nurl_print_int nchunks ) ( nurl_print ` wasm chunk(s)\n` )
+                        : ( Vec i ) tids ( cluster_submit_wasm sw lo hi wasm nchunks )
+                        : ~ i rnd 0
+                        ~ & ! ( tids_ready sw tids ) < rnd 600 { ( swarm_pump sw 200 ) = rnd + rnd 1 }
+                        : i total ( tids_combine sw op tids )
+                        ( nurl_print ( reduce_op_name op ) ) ( nurl_print ` (wasm kernel) over [` )
+                        ( nurl_print_int lo ) ( nurl_print `,` ) ( nurl_print_int hi )
+                        ( nurl_print `) = ` ) ( nurl_print_int total ) ( nurl_print `\n` )
+                        ( vec_free [i] tids )
+                        ( swarm_free sw ) ( relay_close relc )
+                    }
+                }
+                F e → { ( nurl_print `swarm-mcp: runwasm could not dial relay\n` ) = rc 1 }
+            }
+            ( vec_free [u] wasm )
+        }
+    }
+    ^ rc
+}
+
 // ══════════════════════════════════════════════════════════════════
 //  MCP server — the LLM-facing control surface
 // ══════════════════════════════════════════════════════════════════
@@ -296,18 +370,18 @@ $ `work.nu`
     i next_id
 }
 
-// Constructor: param names deliberately differ from the field names — a store
-// LHS `. t lo` whose value-name also matched the field would compile to an
-// array-index store, not a field store.
-@ task_new i tid ( Vec u ) ex i a i b i o i nc ( Vec i ) ts → *Task {
+// Constructor. The params share the field names (`lo`, `hi`, …); `= . t lo lo`
+// is a field store — the field-store/local-shadow miscompile this used to work
+// around was fixed in the compiler (NURL v0.10.4).
+@ task_new i id ( Vec u ) expr i lo i hi i op i nchunks ( Vec i ) tids → *Task {
     : *Task t # *Task ( nurl_alloc Z Task )
-    = . t id tid
-    = . t expr ex
-    = . t lo a
-    = . t hi b
-    = . t op o
-    = . t nchunks nc
-    = . t tids ts
+    = . t id id
+    = . t expr expr
+    = . t lo lo
+    = . t hi hi
+    = . t op op
+    = . t nchunks nchunks
+    = . t tids tids
     = . t done 0
     = . t result 0
     ^ t
@@ -418,6 +492,47 @@ $ `work.nu`
     ^ ( tool_result_json ( task_to_json t ) )
 }
 
+// ── tool: compute_run_wasm (phase 2 — arbitrary NURL kernel as wasm) ──
+
+@ tool_run_wasm Json args → Json {
+    : ?Json wj ( json_obj_get args `wasm_base64` )
+    : ?Json lj ( json_obj_get args `lo` )
+    : ?Json hj ( json_obj_get args `hi` )
+    ? | ! ?? wj { T _ → T F → F } | ! ?? lj { T _ → T F → F } ! ?? hj { T _ → T F → F } {
+        ^ ( mcp_tool_result_error `compute_run_wasm needs "wasm_base64" (string), "lo" (int), "hi" (int); "reduce" optional` )
+    } {}
+    : s w64 ?? wj { T v → ( json_str_data v ) F → `` }
+    : i lo ?? lj { T v → ( json_as_int v ) F → 0 }
+    : i hi ?? hj { T v → ( json_as_int v ) F → 0 }
+    : i op ?? ( json_obj_get args `reduce` ) { T v → ( reduce_op_of ( json_str_data v ) 0 ) F → 0 }
+    ? >= lo hi { ^ ( mcp_tool_result_error `empty range: need lo < hi` ) } {}
+
+    : !( Vec u ) ParseErr dr ( b64_decode_vec w64 )
+    ?? dr {
+        F e → { ^ ( mcp_tool_result_error `wasm_base64 is not valid base64` ) }
+        T wasm → {
+            ? == ( vec_len [u] wasm ) 0 { ( vec_free [u] wasm ) ^ ( mcp_tool_result_error `empty wasm module` ) } {}
+            : *Swarm sw ( mcp_swarm )
+            ( swarm_discover sw 6 )
+            : i nworkers ( roster_count # *Roster . sw roster )
+            ? == nworkers 0 {
+                ( vec_free [u] wasm )
+                ^ ( mcp_tool_result_error `no workers in the cluster — start some with 'swarm-mcp worker'` )
+            } {}
+            : i nchunks ( nchunks_wasm nworkers )
+            : ( Vec i ) tids ( cluster_submit_wasm sw lo hi wasm nchunks )
+            ( vec_free [u] wasm )
+            : *McpState st # *McpState g_mcp
+            : *Task t ( task_new . st next_id ( bytes_from_str `<wasm kernel>` ) lo hi op nchunks tids )
+            = . st next_id + . st next_id 1
+            ( vec_push [s] . st tasks # s t )
+            ( mcp_pump 8 )
+            ( task_refresh t )
+            ^ ( tool_result_json ( task_to_json t ) )
+        }
+    }
+}
+
 // ── tool: compute_list ───────────────────────────────────────────
 
 @ tool_list Json args → Json {
@@ -498,11 +613,31 @@ $ `work.nu`
     ^ schema
 }
 
+@ ms_schema_run_wasm → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( ms_prop props `wasm_base64` `string` `A base64-encoded wasm32-wasi module — the compiled kernel. Build it from NURL with the nurl_build_wasm tool. The module's main must read two integers lo and hi from argv, fold your kernel over x in [lo, hi), and print the partial result as a decimal integer to stdout. The cluster shards [lo, hi), runs the module on each worker with its sub-range, and combines the partials with the reduce op.` )
+    ( ms_prop props `lo` `integer` `Range start (inclusive).` )
+    ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
+    ( ms_prop props `reduce` `string` `How to combine the per-worker partials: "sum" (default), "product", "min", "max", or "count". Must match what the module's main reduces with.` )
+    ( json_obj_set schema `properties` props )
+    : Json req ( json_arr_new )
+    ( json_arr_push req ( json_str_lit `wasm_base64` ) )
+    ( json_arr_push req ( json_str_lit `lo` ) )
+    ( json_arr_push req ( json_str_lit `hi` ) )
+    ( json_obj_set schema `required` req )
+    ^ schema
+}
+
 @ build_tools_list → ( Vec Json ) {
     : ( Vec Json ) tools ( vec_new [Json] )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_submit`
     `Run a distributed map-reduce on the cluster: evaluate the expression kernel for every integer x in [lo, hi) and fold the results with the reduce op. Sharded across all live workers and computed in parallel. Returns a task_id immediately; poll compute_result for the value. Example: {"expr":"x*x","lo":1,"hi":1000000,"reduce":"sum"} gives the sum of squares.`
     ( ms_schema_submit ) ) )
+    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_run_wasm`
+    `Run an arbitrary NURL kernel on the cluster, compiled to wasm — for workloads the expression language of compute_submit cannot express (loops, helper functions, anything). Provide the compiled wasm32-wasi module (base64); build it from NURL source with the nurl_build_wasm tool. The module's main reads lo and hi from argv, folds the kernel over [lo, hi), and prints the partial. The cluster shards the range, runs the module on each worker, and combines the partials with the reduce op. Returns a task_id; poll compute_result.`
+    ( ms_schema_run_wasm ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_list`
     `List every submitted task with its status (running|done), kernel, range, reduce op, and result if finished.`
     ( ms_schema_empty ) ) )
@@ -514,6 +649,7 @@ $ `work.nu`
 
 @ dispatch_tool s name Json args → Json {
     ? != ( nurl_str_eq name `compute_submit` ) 0 { ^ ( tool_submit args ) } {}
+    ? != ( nurl_str_eq name `compute_run_wasm` ) 0 { ^ ( tool_run_wasm args ) } {}
     ? != ( nurl_str_eq name `compute_list` ) 0 { ^ ( tool_list args ) } {}
     ? != ( nurl_str_eq name `compute_result` ) 0 { ^ ( tool_result args ) } {}
     ^ ( mcp_tool_result_error `unknown tool` )
@@ -638,9 +774,10 @@ $ `work.nu`
     ( nurl_print `  swarm-mcp relay  <host> <port> [--v]\n` )
     ( nurl_print `  swarm-mcp worker <host> <port> [id] [rounds]\n` )
     ( nurl_print `  swarm-mcp mcp    <host> <port>            (MCP server over stdio)\n` )
-    ( nurl_print `  swarm-mcp submit <host> <port> <reduce> <lo> <hi> <expr>\n\n` )
-    ( nurl_print `The MCP server exposes compute_submit / compute_list / compute_result.\n` )
-    ( nurl_print `Kernel = an integer expression in x; reduce = sum|product|min|max|count.\n` )
+    ( nurl_print `  swarm-mcp submit  <host> <port> <reduce> <lo> <hi> <expr>\n` )
+    ( nurl_print `  swarm-mcp runwasm <host> <port> <reduce> <lo> <hi> <module.wasm>\n\n` )
+    ( nurl_print `MCP tools: compute_submit (expression kernel), compute_run_wasm (NURL→wasm\n` )
+    ( nurl_print `kernel), compute_list, compute_result. reduce = sum|product|min|max|count.\n` )
 }
 
 @ arg_int i idx → i {
@@ -695,7 +832,18 @@ $ `work.nu`
                         ( string_free host ) ( string_free rs ) ( string_free es )
                     }
                 } {
-                    ( usage ) = rc 1
+                    ? ( arg_eq 1 `runwasm` ) {
+                        ? < argc 8 { ( nurl_print `usage: swarm-mcp runwasm <host> <port> <reduce> <lo> <hi> <module.wasm>\n` ) = rc 1 } {
+                            : String host ( env_arg 2 )
+                            : String rs ( env_arg 4 )
+                            : i op ( reduce_op_of ( string_data rs ) 0 )
+                            : String wp ( env_arg 7 )
+                            = rc ( run_runwasm ( string_data host ) ( arg_int 3 ) op ( arg_int 5 ) ( arg_int 6 ) ( string_data wp ) )
+                            ( string_free host ) ( string_free rs ) ( string_free wp )
+                        }
+                    } {
+                        ( usage ) = rc 1
+                    }
                 }
             }
         }

@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`net/relay` frame limit raised from 128 KiB to 16 MiB.** A relayed message
+  may now be up to 16 MiB, large enough to forward a compiled wasm compute
+  kernel (a NURL→wasm module bundles the runtime, ~250 KB–1 MB) in one frame.
+  It is only an upper bound, so small gossip / audio / unicast frames are
+  unaffected.
+
 ### Fixed
 
 - **Field store into a struct pointer silently miscompiled when the value name
