@@ -27,10 +27,12 @@ $ `stdlib/net/relay.nu`
 $ `stdlib/net/transport.nu`
 $ `stdlib/dist/ring.nu`
 $ `stdlib/dist/job.nu`
+$ `stdlib/ext/http_cli.nu`
 $ `census.nu`
 $ `expr.nu`
 $ `work.nu`
 $ `wasmkernel.nu`
+$ `buildwasm.nu`
 
 @ swarm_vnodes → i { ^ 64 }
 
@@ -492,7 +494,30 @@ $ `wasmkernel.nu`
     ^ ( tool_result_json ( task_to_json t ) )
 }
 
-// ── tool: compute_run_wasm (phase 2 — arbitrary NURL kernel as wasm) ──
+// ── tool: compute_run_wasm / compute_submit_kernel (phase 2) ─────────
+// Ship a compiled wasm module to the cluster as a task (takes ownership of
+// `wasm`, frees it). Shared by both phase-2 tools.
+
+@ __ship_wasm ( Vec u ) wasm i lo i hi i op → Json {
+    ? == ( vec_len [u] wasm ) 0 { ( vec_free [u] wasm ) ^ ( mcp_tool_result_error `empty wasm module` ) } {}
+    : *Swarm sw ( mcp_swarm )
+    ( swarm_discover sw 6 )
+    : i nworkers ( roster_count # *Roster . sw roster )
+    ? == nworkers 0 {
+        ( vec_free [u] wasm )
+        ^ ( mcp_tool_result_error `no workers in the cluster — start some with 'swarm-mcp worker'` )
+    } {}
+    : i nchunks ( nchunks_wasm nworkers )
+    : ( Vec i ) tids ( cluster_submit_wasm sw lo hi wasm nchunks )
+    ( vec_free [u] wasm )
+    : *McpState st # *McpState g_mcp
+    : *Task t ( task_new . st next_id ( bytes_from_str `<wasm kernel>` ) lo hi op nchunks tids )
+    = . st next_id + . st next_id 1
+    ( vec_push [s] . st tasks # s t )
+    ( mcp_pump 8 )
+    ( task_refresh t )
+    ^ ( tool_result_json ( task_to_json t ) )
+}
 
 @ tool_run_wasm Json args → Json {
     : ?Json wj ( json_obj_get args `wasm_base64` )
@@ -506,30 +531,36 @@ $ `wasmkernel.nu`
     : i hi ?? hj { T v → ( json_as_int v ) F → 0 }
     : i op ?? ( json_obj_get args `reduce` ) { T v → ( reduce_op_of ( json_str_data v ) 0 ) F → 0 }
     ? >= lo hi { ^ ( mcp_tool_result_error `empty range: need lo < hi` ) } {}
-
     : !( Vec u ) ParseErr dr ( b64_decode_vec w64 )
     ?? dr {
         F e → { ^ ( mcp_tool_result_error `wasm_base64 is not valid base64` ) }
-        T wasm → {
-            ? == ( vec_len [u] wasm ) 0 { ( vec_free [u] wasm ) ^ ( mcp_tool_result_error `empty wasm module` ) } {}
-            : *Swarm sw ( mcp_swarm )
-            ( swarm_discover sw 6 )
-            : i nworkers ( roster_count # *Roster . sw roster )
-            ? == nworkers 0 {
-                ( vec_free [u] wasm )
-                ^ ( mcp_tool_result_error `no workers in the cluster — start some with 'swarm-mcp worker'` )
-            } {}
-            : i nchunks ( nchunks_wasm nworkers )
-            : ( Vec i ) tids ( cluster_submit_wasm sw lo hi wasm nchunks )
-            ( vec_free [u] wasm )
-            : *McpState st # *McpState g_mcp
-            : *Task t ( task_new . st next_id ( bytes_from_str `<wasm kernel>` ) lo hi op nchunks tids )
-            = . st next_id + . st next_id 1
-            ( vec_push [s] . st tasks # s t )
-            ( mcp_pump 8 )
-            ( task_refresh t )
-            ^ ( tool_result_json ( task_to_json t ) )
+        T wasm → { ^ ( __ship_wasm wasm lo hi op ) }
+    }
+}
+
+// compute_submit_kernel: the server compiles NURL source → wasm itself (via the
+// build API), then runs it — the model hands over a kernel as plain NURL.
+@ tool_submit_kernel Json args → Json {
+    : ?Json sj ( json_obj_get args `source` )
+    : ?Json lj ( json_obj_get args `lo` )
+    : ?Json hj ( json_obj_get args `hi` )
+    ? | ! ?? sj { T _ → T F → F } | ! ?? lj { T _ → T F → F } ! ?? hj { T _ → T F → F } {
+        ^ ( mcp_tool_result_error `compute_submit_kernel needs "source" (NURL program), "lo" (int), "hi" (int); "reduce" optional` )
+    } {}
+    : s source ?? sj { T v → ( json_str_data v ) F → `` }
+    : i lo ?? lj { T v → ( json_as_int v ) F → 0 }
+    : i hi ?? hj { T v → ( json_as_int v ) F → 0 }
+    : i op ?? ( json_obj_get args `reduce` ) { T v → ( reduce_op_of ( json_str_data v ) 0 ) F → 0 }
+    ? >= lo hi { ^ ( mcp_tool_result_error `empty range: need lo < hi` ) } {}
+    : !( Vec u ) String cr ( compile_to_wasm source )
+    ?? cr {
+        F msg → {
+            : String em ( string_concat ( string_from `kernel did not compile: ` ) msg )
+            : Json e ( mcp_tool_result_error ( string_data em ) )
+            ( string_free em ) ( string_free msg )
+            ^ e
         }
+        T wasm → { ^ ( __ship_wasm wasm lo hi op ) }
     }
 }
 
@@ -630,13 +661,33 @@ $ `wasmkernel.nu`
     ^ schema
 }
 
+@ ms_schema_submit_kernel → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( ms_prop props `source` `string` `A complete NURL program. Its main reads two integers lo and hi from argv (nurl_argv_get 1 / 2), folds your kernel over x in [lo, hi), and prints the partial result as a decimal integer. You may import stdlib, define helpers, loop — anything NURL can do. Example: a program whose main counts primes in [lo, hi) by trial division and prints the count. The server compiles this to wasm and runs it on the cluster.` )
+    ( ms_prop props `lo` `integer` `Range start (inclusive).` )
+    ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
+    ( ms_prop props `reduce` `string` `How to combine the per-worker partials: "sum" (default), "product", "min", "max", or "count". Must match what your main reduces with.` )
+    ( json_obj_set schema `properties` props )
+    : Json req ( json_arr_new )
+    ( json_arr_push req ( json_str_lit `source` ) )
+    ( json_arr_push req ( json_str_lit `lo` ) )
+    ( json_arr_push req ( json_str_lit `hi` ) )
+    ( json_obj_set schema `required` req )
+    ^ schema
+}
+
 @ build_tools_list → ( Vec Json ) {
     : ( Vec Json ) tools ( vec_new [Json] )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_submit`
     `Run a distributed map-reduce on the cluster: evaluate the expression kernel for every integer x in [lo, hi) and fold the results with the reduce op. Sharded across all live workers and computed in parallel. Returns a task_id immediately; poll compute_result for the value. Example: {"expr":"x*x","lo":1,"hi":1000000,"reduce":"sum"} gives the sum of squares.`
     ( ms_schema_submit ) ) )
+    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_submit_kernel`
+    `Run an arbitrary NURL kernel on the cluster for workloads the compute_submit expression language cannot express (loops, helper functions, anything). Provide the kernel as NURL SOURCE — a complete program whose main reads lo and hi from argv, folds the kernel over [lo, hi), and prints the partial. The server compiles it to wasm itself (via the NURL build service) and runs it sharded across the workers, combining the partials with the reduce op. Compile errors are returned to you. Returns a task_id; poll compute_result. (Use compute_run_wasm instead if you already have a compiled module.)`
+    ( ms_schema_submit_kernel ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_run_wasm`
-    `Run an arbitrary NURL kernel on the cluster, compiled to wasm — for workloads the expression language of compute_submit cannot express (loops, helper functions, anything). Provide the compiled wasm32-wasi module (base64); build it from NURL source with the nurl_build_wasm tool. The module's main reads lo and hi from argv, folds the kernel over [lo, hi), and prints the partial. The cluster shards the range, runs the module on each worker, and combines the partials with the reduce op. Returns a task_id; poll compute_result.`
+    `Like compute_submit_kernel but you provide an already-compiled wasm32-wasi module (base64) instead of NURL source — e.g. one built with the nurl_build_wasm tool. The module's main reads lo and hi from argv, folds the kernel over [lo, hi), and prints the partial. Returns a task_id; poll compute_result.`
     ( ms_schema_run_wasm ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_list`
     `List every submitted task with its status (running|done), kernel, range, reduce op, and result if finished.`
@@ -649,6 +700,7 @@ $ `wasmkernel.nu`
 
 @ dispatch_tool s name Json args → Json {
     ? != ( nurl_str_eq name `compute_submit` ) 0 { ^ ( tool_submit args ) } {}
+    ? != ( nurl_str_eq name `compute_submit_kernel` ) 0 { ^ ( tool_submit_kernel args ) } {}
     ? != ( nurl_str_eq name `compute_run_wasm` ) 0 { ^ ( tool_run_wasm args ) } {}
     ? != ( nurl_str_eq name `compute_list` ) 0 { ^ ( tool_list args ) } {}
     ? != ( nurl_str_eq name `compute_result` ) 0 { ^ ( tool_result args ) } {}

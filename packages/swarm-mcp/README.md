@@ -19,12 +19,13 @@ control surface.
 
 ## The control surface (what the LLM sees)
 
-Four tools, with self-describing schemas so a model uses them without docs:
+Five tools, with self-describing schemas so a model uses them without docs:
 
 | tool | arguments | does |
 |------|-----------|------|
 | `compute_submit` | `expr` (string), `lo` (int), `hi` (int), `reduce` (string, default `sum`) | shard + run an **expression** kernel over `[lo,hi)`; returns a `task_id` |
-| `compute_run_wasm` | `wasm_base64` (string), `lo`, `hi`, `reduce` | run an **arbitrary NURL kernel compiled to wasm** over `[lo,hi)` — anything the expression language can't express (loops, helpers) |
+| `compute_submit_kernel` | `source` (NURL program), `lo`, `hi`, `reduce` | run an **arbitrary NURL kernel given as source** — the server compiles it to wasm and runs it; for anything the expression language can't express (loops, helpers) |
+| `compute_run_wasm` | `wasm_base64` (string), `lo`, `hi`, `reduce` | like `compute_submit_kernel` but you pass an **already-compiled** wasm module |
 | `compute_list` | — | every task with status (`running`/`done`), kernel, range, reduce, result |
 | `compute_result` | `task_id` (int) | one task's status and, once finished, the reduced value |
 
@@ -123,16 +124,25 @@ lifts that: the model writes a kernel as **ordinary NURL** and compiles it to a
 `wasmtime` — exactly the same shard / run / combine pipeline, just with a real
 program per element instead of an interpreted expression.
 
-The kernel module's `main` reads `lo` and `hi` from argv, folds the kernel over
+The kernel program's `main` reads `lo` and `hi` from argv, folds the kernel over
 `x` in `[lo, hi)`, and prints the partial as a decimal integer. The cluster
 shards the range, runs the module on each worker with its sub-range, and
 combines the partials with the reduce op. Workers cache the module by content
 hash, so it is written once per worker.
 
-A model already has the `nurl_build_wasm` tool (from the NURL MCP server) to
-compile NURL → wasm; it passes the base64 module to `compute_run_wasm`. Example:
-a prime-counting kernel (impossible as an expression) over `[1, 1000000)` with
-`reduce: "sum"` returns `78498` = π(10⁶), sharded across the workers.
+Two ways to get there:
+
+- **`compute_submit_kernel`** — hand over the kernel as **NURL source**; the
+  server compiles it to wasm itself by POSTing to a NURL build service
+  (`$NURL_BUILD_API`, default `https://play.nurl-lang.org`), then runs it.
+  Compile errors come straight back to the model. (Needs `curl` and a reachable
+  build API on the host running `swarm-mcp mcp`.)
+- **`compute_run_wasm`** — pass an **already-compiled** base64 module, e.g. one
+  built with the `nurl_build_wasm` tool. No build service needed.
+
+Example (either tool): a prime-counting kernel — a real trial-division loop,
+impossible as an expression — over `[1, 1000000)` with `reduce: "sum"` returns
+`78498` = π(10⁶), sharded across the workers.
 
 ```sh
 # manual CLI equivalent (a pre-compiled module):
@@ -174,6 +184,7 @@ swarm-mcp runwasm 127.0.0.1 47700 sum 1 1000000 module.wasm
 src/expr.nu        the expression kernel language: tokenizer, parser, evaluator
 src/work.nu        map-reduce: reduce ops, the expression handler, sharding
 src/wasmkernel.nu  phase 2: ship + run a compiled wasm kernel under wasmtime
+src/buildwasm.nu   phase 2: compile NURL source → wasm via the NURL build API
 src/census.nu      HELLO membership gossip → consistent-hash ring
 src/main.nu        roles (relay | worker | submit | runwasm | mcp) + MCP server
 ```
