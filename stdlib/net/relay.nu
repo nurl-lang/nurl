@@ -61,7 +61,11 @@ $ `stdlib/std/async.nu`
 
 @ relay_gsend → i { ^ 7 }
 
-@ __relay_max → i { ^ 131072 }  // reject frames larger than this (DoS guard)
+@ __relay_max → i { ^ 16777216 }  // reject frames larger than this (DoS guard).
+// 16 MiB: large enough to forward a compiled wasm compute kernel (a NURL→wasm
+// module bundles the runtime, ~250 KB–1 MB) in one frame, while still bounding a
+// single relayed message. Group/unicast audio and gossip frames are tiny; this
+// is only an upper bound, so they are unaffected.
 
 @ __rcpy ( Vec u ) v → ( Vec u ) {
     : ( Vec u ) o ( vec_with_cap [u] ( vec_len [u] v ) )

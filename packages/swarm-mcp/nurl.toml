@@ -1,7 +1,7 @@
 [package]
 name = "swarm-mcp"
-version = "0.1.0"
-description = "An MCP-controlled distributed compute engine. A language model sets a workload over Model Context Protocol — an integer expression kernel in the variable x, plus a range and a reduce op (sum/product/min/max/count) — and the cluster evaluates it map-reduce style across every live worker; the model reads running tasks and finished results back. Built on the swarm distributed stack (relay/transport/ring/job): join a machine with `swarm-mcp worker`, drive it with `swarm-mcp mcp`. Phase 1 of an LLM-programmable compute mesh. Requires NURL >= v0.10.3."
+version = "0.2.0"
+description = "An MCP-controlled distributed compute engine. A language model sets a workload over Model Context Protocol — an integer expression kernel in the variable x, or (phase 2) an arbitrary NURL kernel either as source (the server compiles it to wasm via the NURL build API) or as a pre-compiled wasm32-wasi module — plus a range and a reduce op (sum/product/min/max/count). The cluster shards the range across every live worker, runs the kernel (the expression interpreter, or the wasm module under wasmtime), and combines the partials; the model reads running tasks and finished results back. Built on the swarm distributed stack (relay/transport/ring/job): join a machine with `swarm-mcp worker`, drive it with `swarm-mcp mcp`. Requires NURL >= v0.10.4; wasm kernels require wasmtime on the workers, and compute_submit_kernel needs curl + a reachable NURL build API (default https://play.nurl-lang.org, override with $NURL_BUILD_API)."
 license = "MIT OR Apache-2.0"
 
 [dependencies]
