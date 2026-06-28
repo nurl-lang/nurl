@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.3] — 2026-06-28
+
+A **portability + distributed-stack** release. The runtime drops its last
+glibc-version-specific symbols so the toolchain builds and links on older-glibc
+targets again (notably **Raspberry Pi OS aarch64**), a silent `net/relay`
+group-multicast bug is fixed, and the new **`packages/swarm`** package turns the
+distributed stack into a compute cluster you join by installing it.
+
 ### Fixed
 
 - **Runtime failed to link on older-glibc targets (e.g. Raspberry Pi OS
