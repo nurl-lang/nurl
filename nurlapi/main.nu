@@ -341,7 +341,12 @@ $ `nurlapi/pptws.nu`
                                 // renamed `declare` survives and would conflict with an
                                 // `internal`-linkage define.
                                 ( string_push_str shims `)\ndefine ` )
-                                ( string_push_str shims ? == r_char 112 `i8*` ? == r_char 118 `void` `i64` )
+                                // Return type must match nurlc's call sites: `int`-returning
+                                // libc fns (ret char 'i') are declared i32 by nurlc, so the
+                                // shim must return i32 — only size_t-like 's' widens to i64.
+                                // (A i64 shim vs an i32 call site is a wasm signature mismatch
+                                // → `unreachable` trap; nurl_str_eq→strcmp hits this.)
+                                ( string_push_str shims ? == r_char 112 `i8*` ? == r_char 118 `void` ? == r_char 105 `i32` `i64` )
                                 ( string_push_str shims ` @__nurl_` ) ( string_push_str shims ( string_data name ) ) ( string_push_str shims `_shim(` )
                                 : ~ i k2 0 ~ < k2 ( string_len pms ) { ? > k2 0 { ( string_push_str shims `, ` ) } {} : i p ( string_get pms k2 ) ( string_push_str shims ? == p 112 `i8* %a` `i64 %a` ) ( string_push_int shims k2 ) = k2 + k2 1 }
                                 ( string_push_str shims `) {\n` )
@@ -355,7 +360,7 @@ $ `nurlapi/pptws.nu`
                                     = k4 + k4 1
                                 }
                                 ( string_push_str shims `)\n` )
-                                ? == r_char 118 { ( string_push_str shims `  ret void\n` ) } { ? == r_char 112 { ( string_push_str shims `  ret i8* %r\n` ) } { : s op ? == r_char 115 `zext` `sext` ( string_push_str shims `  %rw = ` ) ( string_push_str shims op ) ( string_push_str shims ` i32 %r to i64\n  ret i64 %rw\n` ) } }
+                                ? == r_char 118 { ( string_push_str shims `  ret void\n` ) } { ? == r_char 112 { ( string_push_str shims `  ret i8* %r\n` ) } { ? == r_char 105 { ( string_push_str shims `  ret i32 %r\n` ) } { ( string_push_str shims `  %rw = zext i32 %r to i64\n  ret i64 %rw\n` ) } } }
                                 ( string_push_str shims `}\n` )
                             } {}
                             ( string_free sname_def )
