@@ -14,6 +14,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `expr.nu`
+$ `token.nu`
 
 @ red_sum → i { ^ 0 }
 
@@ -70,26 +71,46 @@ $ `expr.nu`
 @ result_decode ( Vec u ) p → i { ^ ?? ( bytes_read_u64_be p 0 ) { T x → # i x F → 0 } }
 
 // ── the generic kernel handler (opaque bytes → bytes) ────────────
-// Parses [op][lo][hi][expr], evaluates the kernel over [lo,hi), folds. A
-// malformed kernel yields the reduce identity (a no-op partial) rather than a
-// crash, so one bad task can't take a worker down.
+// The chunk payload arrives HMAC-tagged (token authenticity). The handler
+// verifies the tag, parses [op][lo][hi][expr], evaluates the kernel over
+// [lo,hi), folds, and returns the partial HMAC-tagged for the coordinator. A
+// payload that fails the tag check (a stranger without the cluster token, or a
+// corrupted frame) yields a tagged zero partial — never a crash, so one bad or
+// hostile task can't take a worker down. A malformed-but-authentic kernel folds
+// to the reduce identity for the same reason.
+//
+// `key` is the cluster HMAC key (token_key), captured by the handler closure.
 
-@ kernel_handler → ( @ ( Vec u ) ( Vec u ) ) {
+@ kernel_handler ( Vec u ) key → ( @ ( Vec u ) ( Vec u ) ) {
     ^ \ ( Vec u ) p → ( Vec u ) {
-        : i op ?? ( vec_get [u] p 0 ) { T x → # i x F → 0 }
-        : i lo ?? ( bytes_read_u64_be p 1 ) { T x → # i x F → 0 }
-        : i hi ?? ( bytes_read_u64_be p 9 ) { T x → # i x F → 0 }
-        : ( Vec u ) src ( bytes_slice p 17 ( vec_len [u] p ) )
-        : *EParser ep # *EParser ( nurl_alloc Z EParser )
-        : i root ( expr_parse src ep )
-        : ~ i acc ( red_id op )
-        ? . ep ok {
-            : ~ i xx lo
-            ~ < xx hi { = acc ( red_fold op acc ( expr_eval ep root xx ) ) = xx + xx 1 }
-        } {}
-        ( eparser_free ep )
-        ( vec_free [u] src )
-        ^ ( result_encode acc )
+        ?? ( token_untag key p ) {
+            F → {
+                : ( Vec u ) z ( result_encode 0 )
+                : ( Vec u ) out ( token_tag key z )
+                ( vec_free [u] z )
+                ^ out
+            }
+            T body → {
+                : i op ?? ( vec_get [u] body 0 ) { T x → # i x F → 0 }
+                : i lo ?? ( bytes_read_u64_be body 1 ) { T x → # i x F → 0 }
+                : i hi ?? ( bytes_read_u64_be body 9 ) { T x → # i x F → 0 }
+                : ( Vec u ) src ( bytes_slice body 17 ( vec_len [u] body ) )
+                : *EParser ep # *EParser ( nurl_alloc Z EParser )
+                : i root ( expr_parse src ep )
+                : ~ i acc ( red_id op )
+                ? . ep ok {
+                    : ~ i xx lo
+                    ~ < xx hi { = acc ( red_fold op acc ( expr_eval ep root xx ) ) = xx + xx 1 }
+                } {}
+                ( eparser_free ep )
+                ( vec_free [u] src )
+                ( vec_free [u] body )
+                : ( Vec u ) res ( result_encode acc )
+                : ( Vec u ) out ( token_tag key res )
+                ( vec_free [u] res )
+                ^ out
+            }
+        }
     }
 }
 

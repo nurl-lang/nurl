@@ -6,12 +6,15 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
+$ `src/token.nu`
 $ `src/expr.nu`
 $ `src/work.nu`
 
-// Shard [lo,hi) into n, run the kernel handler on each chunk, combine.
+// Shard [lo,hi) into n, run the kernel handler on each chunk, combine. Payloads
+// and results are HMAC-tagged with the cluster key exactly as on the wire.
 @ shard_run i op i lo i hi s expr i n → i {
-    : ( @ ( Vec u ) ( Vec u ) ) h ( kernel_handler )
+    : ( Vec u ) key ( token_key `test-token` )
+    : ( @ ( Vec u ) ( Vec u ) ) h ( kernel_handler key )
     : ( Vec u ) eb ( bytes_from_str expr )
     : ( Vec s ) cs ( shard lo hi n )
     : ~ i acc ( red_id op )
@@ -19,12 +22,16 @@ $ `src/work.nu`
     ~ < k n {
         : *Chunk c # *Chunk ?? ( vec_get [s] cs k ) { T x → x F → # s 0 }
         : ( Vec u ) pl ( chunk_payload op . c lo . c hi eb )
-        : ( Vec u ) r ( h pl )
-        = acc ( red_combine op acc ( result_decode r ) )
-        ( vec_free [u] r ) ( vec_free [u] pl )
+        : ( Vec u ) tagged ( token_tag key pl )
+        : ( Vec u ) r ( h tagged )
+        ?? ( token_untag key r ) {
+            T body → { = acc ( red_combine op acc ( result_decode body ) ) ( vec_free [u] body ) }
+            F → {}
+        }
+        ( vec_free [u] r ) ( vec_free [u] tagged ) ( vec_free [u] pl )
         = k + k 1
     }
-    ( shard_free cs ) ( vec_free [u] eb )
+    ( shard_free cs ) ( vec_free [u] eb ) ( vec_free [u] key )
     : *u env # *u h 1
     ? != # i env 0 { ( nurl_free # s env ) } {}
     ^ acc

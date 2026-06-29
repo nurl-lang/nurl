@@ -20,6 +20,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/ext/env.nu`
+$ `token.nu`
 
 @ kind_wasm → i { ^ 2 }
 
@@ -85,21 +86,36 @@ $ `stdlib/ext/env.nu`
     ^ v
 }
 
-// The worker handler for a wasm chunk: cache the module by hash, run it.
-@ wasm_handler → ( @ ( Vec u ) ( Vec u ) ) {
+// The worker handler for a wasm chunk: verify the cluster HMAC tag, cache the
+// module by content hash, run it under wasmtime, return the partial tagged for
+// the coordinator. An untrusted/forged payload yields a tagged zero — a
+// stranger can't make a worker fetch-and-run an arbitrary module. `key` is the
+// cluster HMAC key (token_key), captured by the handler closure.
+@ wasm_handler ( Vec u ) key → ( @ ( Vec u ) ( Vec u ) ) {
     ^ \ ( Vec u ) p → ( Vec u ) {
-        : i lo ?? ( bytes_read_u64_be p 0 ) { T x → # i x F → 0 }
-        : i hi ?? ( bytes_read_u64_be p 8 ) { T x → # i x F → 0 }
-        : ( Vec u ) wasm ( bytes_slice p 16 ( vec_len [u] p ) )
-        : String hex ( __wasm_hash wasm )
-        : String path ( __wasm_cache_path hex )
-        ? ! ( file_exists ( string_data path ) ) {
-            ?? ( write_file_bytes ( string_data path ) wasm ) { T _ → {} F _ → {} }
-        } {}
-        : i partial ( __wasm_run path lo hi )
+        : ~ i partial 0
+        : ~ b ok F
+        ?? ( token_untag key p ) {
+            F → {}
+            T body → {
+                = ok T
+                : i lo ?? ( bytes_read_u64_be body 0 ) { T x → # i x F → 0 }
+                : i hi ?? ( bytes_read_u64_be body 8 ) { T x → # i x F → 0 }
+                : ( Vec u ) wasm ( bytes_slice body 16 ( vec_len [u] body ) )
+                : String hex ( __wasm_hash wasm )
+                : String path ( __wasm_cache_path hex )
+                ? ! ( file_exists ( string_data path ) ) {
+                    ?? ( write_file_bytes ( string_data path ) wasm ) { T _ → {} F _ → {} }
+                } {}
+                = partial ( __wasm_run path lo hi )
+                ( string_free hex ) ( string_free path ) ( vec_free [u] wasm )
+                ( vec_free [u] body )
+            }
+        }
         : ( Vec u ) r ( vec_new [u] )
         ( bytes_push_u64_be r # u64 partial )
-        ( string_free hex ) ( string_free path ) ( vec_free [u] wasm )
-        ^ r
+        : ( Vec u ) out ( token_tag key r )
+        ( vec_free [u] r )
+        ^ out
     }
 }
