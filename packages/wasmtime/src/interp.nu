@@ -23,21 +23,53 @@ $ `module.nu`
 : Interp {
     s mod  // *Module
     ( Vec i ) vs  // value stack
+    ( Vec u ) mem  // linear memory (bytes)
+    i mem_pages  // current size in 64 KiB pages
     b trap
     ( Vec u ) trapmsg
 }
+
+@ __page → i { ^ 65536 }
 
 @ interp_new * Module m → *Interp {
     : *Interp it # *Interp ( nurl_alloc Z Interp )
     = . it mod # s m
     = . it vs ( vec_new [i] )
+    = . it mem ( vec_new [u] )
+    = . it mem_pages 0
     = . it trap F
     = . it trapmsg ( vec_new [u] )
+    ? == . m has_mem 1 {
+        : i bytes * . m mem_min ( __page )
+        : ~ i k 0
+        ~ < k bytes { ( vec_push [u] . it mem # u 0 ) = k + k 1 }
+        = . it mem_pages . m mem_min
+        // copy active data segments into memory
+        : i nd ( vec_len [s] . m datas )
+        : ~ i di 0
+        ~ < di nd {
+            : s dp ?? ( vec_get [s] . m datas di ) { T x → x F → # s 0 }
+            ? != # i dp 0 {
+                : *DataSeg ds # *DataSeg dp
+                : i dn ( vec_len [u] . ds bytes )
+                : ~ i bi 0
+                ~ < bi dn {
+                    : i tgt + . ds offset bi
+                    ? < tgt ( vec_len [u] . it mem ) {
+                        ( vec_set [u] . it mem tgt ?? ( vec_get [u] . ds bytes bi ) { T x → x F → # u 0 } )
+                    } {}
+                    = bi + bi 1
+                }
+            } {}
+            = di + di 1
+        }
+    } {}
     ^ it
 }
 
 @ interp_free * Interp it → v {
     ( vec_free [i] . it vs )
+    ( vec_free [u] . it mem )
     ( vec_free [u] . it trapmsg )
     ( nurl_free # s it )
 }
@@ -136,6 +168,79 @@ $ `module.nu`
 @ __idiv i a i b → i { ^ ? == b 0 0 / a b }
 
 @ __irem i a i b → i { ^ ? == b 0 0 % a b }
+
+// ── linear memory ────────────────────────────────────────────────
+// Read n bytes little-endian from mem[ea]; sign-extend when `signed` and n<8.
+@ __mem_load * Interp it i ea i n i signed → i {
+    ? | < ea 0 > + ea n ( vec_len [u] . it mem ) {
+        = . it trap T = . it trapmsg ( bytes_from_str `memory load out of bounds` ) ^ 0
+    } {}
+    : ~ i v 0
+    : ~ i k 0
+    ~ < k n {
+        : i byte ?? ( vec_get [u] . it mem + ea k ) { T x → # i x F → 0 }
+        = v | v << byte * 8 k
+        = k + k 1
+    }
+    ? & == signed 1 < n 8 {
+        : i bits * 8 n
+        ? != 0 & v << 1 - bits 1 { = v - v << 1 bits } {}
+    } {}
+    ^ v
+}
+
+// Write the low n bytes of val little-endian to mem[ea].
+@ __mem_store * Interp it i ea i n i val → v {
+    ? | < ea 0 > + ea n ( vec_len [u] . it mem ) {
+        = . it trap T = . it trapmsg ( bytes_from_str `memory store out of bounds` ) ^ v
+    } {}
+    : ~ i k 0
+    ~ < k n {
+        ( vec_set [u] . it mem + ea k # u & >> val * 8 k 255 )
+        = k + k 1
+    }
+}
+
+@ __mem_grow * Interp it i delta → v {
+    ? <= delta 0 { ^ v } {}
+    : i add * delta ( __page )
+    : ~ i k 0
+    ~ < k add { ( vec_push [u] . it mem # u 0 ) = k + k 1 }
+    = . it mem_pages + . it mem_pages delta
+}
+
+// Execute a memory instruction (0x28..0x40). memarg = align + offset ulebs.
+@ __exec_mem * Interp it * Wc c i op → v {
+    ? == op 63 { ( wc_u8 c ) ( __push it . it mem_pages ) ^ v } {}  // memory.size
+    ? == op 64 { ( wc_u8 c ) : i d ( __pop it ) : i old . it mem_pages ( __mem_grow it d ) ( __push it old ) ^ v } {}  // memory.grow
+    : i align ( wc_uleb c )
+    : i off ( wc_uleb c )
+    ? & >= op 54 <= op 62 {  // stores: pop value, then addr
+        : i val ( __pop it )
+        : i ea + & ( __pop it ) 4294967295 off
+        ? == op 54 { ( __mem_store it ea 4 val ) } {}  // i32.store
+        ? == op 55 { ( __mem_store it ea 8 val ) } {}  // i64.store
+        ? == op 58 { ( __mem_store it ea 1 val ) } {}  // i32.store8
+        ? == op 59 { ( __mem_store it ea 2 val ) } {}  // i32.store16
+        ? == op 60 { ( __mem_store it ea 1 val ) } {}  // i64.store8
+        ? == op 61 { ( __mem_store it ea 2 val ) } {}  // i64.store16
+        ? == op 62 { ( __mem_store it ea 4 val ) } {}  // i64.store32
+        ^ v
+    } {}
+    : i ea + & ( __pop it ) 4294967295 off
+    ? == op 40 { ( __push it ( __w32 ( __mem_load it ea 4 0 ) ) ) } {}  // i32.load
+    ? == op 41 { ( __push it ( __mem_load it ea 8 0 ) ) } {}  // i64.load
+    ? == op 44 { ( __push it ( __w32 ( __mem_load it ea 1 1 ) ) ) } {}  // i32.load8_s
+    ? == op 45 { ( __push it ( __mem_load it ea 1 0 ) ) } {}  // i32.load8_u
+    ? == op 46 { ( __push it ( __w32 ( __mem_load it ea 2 1 ) ) ) } {}  // i32.load16_s
+    ? == op 47 { ( __push it ( __mem_load it ea 2 0 ) ) } {}  // i32.load16_u
+    ? == op 48 { ( __push it ( __mem_load it ea 1 1 ) ) } {}  // i64.load8_s
+    ? == op 49 { ( __push it ( __mem_load it ea 1 0 ) ) } {}  // i64.load8_u
+    ? == op 50 { ( __push it ( __mem_load it ea 2 1 ) ) } {}  // i64.load16_s
+    ? == op 51 { ( __push it ( __mem_load it ea 2 0 ) ) } {}  // i64.load16_u
+    ? == op 52 { ( __push it ( __mem_load it ea 4 1 ) ) } {}  // i64.load32_s
+    ? == op 53 { ( __push it ( __mem_load it ea 4 0 ) ) } {}  // i64.load32_u
+}
 
 // ── control-stack helpers ────────────────────────────────────────
 
@@ -267,6 +372,8 @@ $ `module.nu`
     // ── constants ──
     ? == op 65 { ( __push it ( __w32 ( wc_sleb c ) ) ) ^ v } {}  // i32.const
     ? == op 66 { ( __push it ( wc_sleb c ) ) ^ v } {}  // i64.const
+    // ── linear memory (loads/stores, size/grow) ──
+    ? & >= op 40 <= op 64 { ( __exec_mem it c op ) ^ v } {}
     // ── the rest: numeric ops ──
     ( __exec_num it c op )
 }

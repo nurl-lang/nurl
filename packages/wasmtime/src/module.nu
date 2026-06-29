@@ -79,12 +79,19 @@ $ `stdlib/std/bytes.nu`
 
 : WExport { ( Vec u ) name i kind i index }
 
+// An active data segment: raw bytes to copy into linear memory at `offset`.
+: DataSeg { i offset ( Vec u ) bytes }
+
 : Module {
     ( Vec s ) types  // *FuncType
     ( Vec i ) functypes  // type index per defined function
     ( Vec s ) funcs  // *WFunc
     ( Vec s ) exports  // *WExport
     ( Vec u ) code  // the whole module byte image (functions index into it)
+    i has_mem
+    i mem_min  // initial pages (64 KiB each)
+    i mem_max  // 0 if unbounded
+    ( Vec s ) datas  // *DataSeg
     b ok
     ( Vec u ) err
 }
@@ -105,6 +112,10 @@ $ `stdlib/std/bytes.nu`
     : ~ i e 0
     ~ < e en { ?? ( vec_get [s] . m exports e ) { T pp → ?!= # i pp 0 { : *WExport x # *WExport pp ( vec_free [u] . x name ) ( nurl_free # s x ) } {} F → {} } = e + e 1 }
     ( vec_free [s] . m exports )
+    : i dn ( vec_len [s] . m datas )
+    : ~ i d 0
+    ~ < d dn { ?? ( vec_get [s] . m datas d ) { T pp → ?!= # i pp 0 { : *DataSeg ds # *DataSeg pp ( vec_free [u] . ds bytes ) ( nurl_free # s ds ) } {} F → {} } = d + d 1 }
+    ( vec_free [s] . m datas )
     ( vec_free [u] . m code )
     ( vec_free [u] . m err )
     ( nurl_free # s m )
@@ -159,6 +170,45 @@ $ `stdlib/std/bytes.nu`
     }
 }
 
+// Memory section: limits (flag, min [, max]). Records the first memory.
+@ __decode_mem_sec * Wc c * Module m → v {
+    : i n ( wc_uleb c )
+    : ~ i k 0
+    ~ < k n {
+        : i flag ( wc_u8 c )
+        : i mn ( wc_uleb c )
+        : i mx ? == flag 1 ( wc_uleb c ) 0
+        ? == k 0 { = . m has_mem 1 = . m mem_min mn = . m mem_max mx } {}
+        = k + k 1
+    }
+}
+
+// Data section: active segments (flag 0/2) carry an i32.const offset expr then
+// raw bytes; passive segments (flag 1) carry bytes only (offset 0, ignored).
+@ __decode_data_sec * Wc c * Module m → v {
+    : i n ( wc_uleb c )
+    : ~ i k 0
+    ~ < k n {
+        : i flag ( wc_uleb c )
+        ? == flag 2 { ( wc_uleb c ) } {}  // explicit memidx
+        : ~ i offset 0
+        ? != flag 1 {
+            : i op0 ( wc_u8 c )
+            ? == op0 65 { = offset ( wc_sleb c ) } {}  // i32.const
+            ~ != ( wc_u8 c ) 11 {}  // consume the rest of the const expr up to `end`
+        } {}
+        : i blen ( wc_uleb c )
+        : ( Vec u ) bytes ( vec_with_cap [u] blen )
+        : ~ i bi 0
+        ~ < bi blen { ( vec_push [u] bytes ( wc_u8 c ) ) = bi + bi 1 }
+        : *DataSeg ds # *DataSeg ( nurl_alloc Z DataSeg )
+        = . ds offset offset
+        = . ds bytes bytes
+        ( vec_push [s] . m datas ds )
+        = k + k 1
+    }
+}
+
 // Code section: for each function, parse local declarations and record the
 // [start,end) byte range of its instruction stream (ending at the final `end`).
 @ __decode_code_sec * Wc c * Module m → v {
@@ -197,6 +247,10 @@ $ `stdlib/std/bytes.nu`
     = . m funcs ( vec_new [s] )
     = . m exports ( vec_new [s] )
     = . m code bytes
+    = . m has_mem 0
+    = . m mem_min 0
+    = . m mem_max 0
+    = . m datas ( vec_new [s] )
     = . m ok T
     = . m err ( vec_new [u] )
     : *Wc c ( wc_new bytes )
@@ -212,8 +266,10 @@ $ `stdlib/std/bytes.nu`
         : i sec_end + . c pos size
         ? == id 1 { ( __decode_type_sec c m ) } {
             ? == id 3 { ( __decode_func_sec c m ) } {
-                ? == id 7 { ( __decode_export_sec c m ) } {
-                    ? == id 10 { ( __decode_code_sec c m ) } {} } } }
+                ? == id 5 { ( __decode_mem_sec c m ) } {
+                    ? == id 7 { ( __decode_export_sec c m ) } {
+                        ? == id 10 { ( __decode_code_sec c m ) } {
+                            ? == id 11 { ( __decode_data_sec c m ) } {} } } } } }
         = . c pos sec_end  // robust against partially-read / skipped sections
     }
     ( wc_free c )
