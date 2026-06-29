@@ -11,9 +11,31 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/std/floatbits.nu`
 $ `stdlib/ext/env.nu`
 $ `module.nu`
 $ `interp.nu`
+
+// FuncType of an exported function (or #s 0 if unavailable).
+@ __functype * Module m i fidx → s {
+    : s fp ?? ( vec_get [s] . m funcs fidx ) { T x → x F → # s 0 }
+    ? == # i fp 0 { ^ # s 0 } {}
+    : *WFunc f # *WFunc fp
+    ^ ?? ( vec_get [s] . m types . f typeidx ) { T x → x F → # s 0 }
+}
+
+// valtype of parameter k / the single result (127 = i32 default if unknown).
+@ __param_ty s ftp i k → i {
+    ? == # i ftp 0 { ^ 127 } {}
+    : *FuncType ft # *FuncType ftp
+    ^ ?? ( vec_get [i] . ft params k ) { T x → x F → 127 }
+}
+
+@ __result_ty s ftp → i {
+    ? == # i ftp 0 { ^ 127 } {}
+    : *FuncType ft # *FuncType ftp
+    ^ ?? ( vec_get [i] . ft results 0 ) { T x → x F → 127 }
+}
 
 @ usage → v {
     ( nurl_print `wasmtime — a WebAssembly runtime in pure NURL\n\n` )
@@ -52,11 +74,15 @@ $ `interp.nu`
                     ( module_free m ) = rc 1
                 } {
                     : *Interp it ( interp_new m )
-                    // push integer args in order
+                    : s ftp ( __functype m fidx )
+                    // push args, parsed per parameter type (i32/i64 decimal,
+                    // f32/f64 floating-point → stored as their bit pattern)
                     : ~ i k first_arg
                     ~ < k argc {
                         : String a ( env_arg k )
-                        ( vec_push [i] . it vs ( nurl_str_to_int ( string_data a ) ) )
+                        : i pty ( __param_ty ftp - k first_arg )
+                        : i val ? == pty 124 ( f64_to_bits ( nurl_str_to_float ( string_data a ) ) ) ? == pty 125 ( f32_to_bits # f32 ( nurl_str_to_float ( string_data a ) ) ) ( nurl_str_to_int ( string_data a ) )
+                        ( vec_push [i] . it vs val )
                         ( string_free a )
                         = k + k 1
                     }
@@ -67,7 +93,11 @@ $ `interp.nu`
                     } {
                         : i n ( vec_len [i] . it vs )
                         ? > n 0 {
-                            ( nurl_print_int ?? ( vec_get [i] . it vs - n 1 ) { T x → x F → 0 } )
+                            : i top ?? ( vec_get [i] . it vs - n 1 ) { T x → x F → 0 }
+                            : i rty ( __result_ty ftp )
+                            ? == rty 124 { ( nurl_print ( nurl_str_float ( bits_to_f64 top ) ) ) } {
+                                ? == rty 125 { ( nurl_print ( nurl_str_float # f ( bits_to_f32 top ) ) ) } {
+                                    ( nurl_print_int top ) } }
                             ( nurl_print `\n` )
                         } { ( nurl_print `(no result)\n` ) }
                     }

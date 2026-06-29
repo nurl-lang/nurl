@@ -1,11 +1,13 @@
 // packages/wasmtime/src/interp.nu — a small WebAssembly interpreter (pure NURL).
 //
-// Executes the integer core of wasm: i32/i64 const, locals, the integer
-// arithmetic/comparison/bitwise ops, the structured control flow (block / loop
-// / if / else / br / br_if / return), drop / select, and direct call. Values
-// are held as 64-bit ints; i32 ops wrap + sign-extend to 32 bits. Floats,
-// linear memory, globals, tables and imports (WASI) are future milestones — so
-// this runs self-contained integer compute modules (add, loop-sum, …) today.
+// Executes wasm: i32/i64/f32/f64 const, locals, globals, the integer and float
+// arithmetic/comparison/bitwise ops, all int↔float conversions, structured
+// control flow (block / loop / if / else / br / br_if / return), drop / select,
+// direct and indirect calls, and linear memory load/store. Each value occupies
+// one 64-bit cell; i32 wraps + sign-extends to 32 bits, and floats are held as
+// their IEEE-754 bit pattern (reinterpreted via std/floatbits for arithmetic).
+// Imports (the WASI surface) are the remaining milestone — so this runs
+// self-contained compute modules today.
 //
 // Control flow uses an explicit control stack. Entering a block/if computes its
 // matching `end` by a one-pass immediate-skipping scan; `br` to a loop re-enters
@@ -14,7 +16,12 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/std/float.nu`
+$ `stdlib/std/floatbits.nu`
 $ `module.nu`
+
+// round-to-nearest-even (wasm f*.nearest) — libm rint honours the default mode.
+& `m` @ rint f x → f
 
 // ── value + control stacks ───────────────────────────────────────
 
@@ -100,6 +107,14 @@ $ `module.nu`
 
 // Sign-extend the low 32 bits (i32 value semantics in a 64-bit cell).
 @ __w32 i v → i { : i lo & v 4294967295 ^ ? != 0 & lo 2147483648 | lo -4294967296 lo }
+
+// Read n little-endian bytes from the cursor into an i (zero-extended).
+@ __read_le * Wc c i n → i {
+    : ~ i bits 0
+    : ~ i k 0
+    ~ < k n { = bits | bits << ( wc_u8 c ) * 8 k = k + k 1 }
+    ^ bits
+}
 
 // ── immediate skipping (for matching `end`) ──────────────────────
 // Advance `c` past the immediates of the instruction whose opcode is `op`.
@@ -227,6 +242,8 @@ $ `module.nu`
         : i ea + & ( __pop it ) 4294967295 off
         ? == op 54 { ( __mem_store it ea 4 val ) } {}  // i32.store
         ? == op 55 { ( __mem_store it ea 8 val ) } {}  // i64.store
+        ? == op 56 { ( __mem_store it ea 4 val ) } {}  // f32.store
+        ? == op 57 { ( __mem_store it ea 8 val ) } {}  // f64.store
         ? == op 58 { ( __mem_store it ea 1 val ) } {}  // i32.store8
         ? == op 59 { ( __mem_store it ea 2 val ) } {}  // i32.store16
         ? == op 60 { ( __mem_store it ea 1 val ) } {}  // i64.store8
@@ -237,6 +254,8 @@ $ `module.nu`
     : i ea + & ( __pop it ) 4294967295 off
     ? == op 40 { ( __push it ( __w32 ( __mem_load it ea 4 0 ) ) ) } {}  // i32.load
     ? == op 41 { ( __push it ( __mem_load it ea 8 0 ) ) } {}  // i64.load
+    ? == op 42 { ( __push it ( __mem_load it ea 4 0 ) ) } {}  // f32.load (raw 4-byte pattern)
+    ? == op 43 { ( __push it ( __mem_load it ea 8 0 ) ) } {}  // f64.load
     ? == op 44 { ( __push it ( __w32 ( __mem_load it ea 1 1 ) ) ) } {}  // i32.load8_s
     ? == op 45 { ( __push it ( __mem_load it ea 1 0 ) ) } {}  // i32.load8_u
     ? == op 46 { ( __push it ( __w32 ( __mem_load it ea 2 1 ) ) ) } {}  // i32.load16_s
@@ -394,9 +413,13 @@ $ `module.nu`
     // ── constants ──
     ? == op 65 { ( __push it ( __w32 ( wc_sleb c ) ) ) ^ v } {}  // i32.const
     ? == op 66 { ( __push it ( wc_sleb c ) ) ^ v } {}  // i64.const
+    ? == op 67 { ( __push it ( __read_le c 4 ) ) ^ v } {}  // f32.const (raw 4-byte pattern)
+    ? == op 68 { ( __push it ( __read_le c 8 ) ) ^ v } {}  // f64.const (raw 8-byte pattern)
     // ── linear memory (loads/stores, size/grow) ──
     ? & >= op 40 <= op 64 { ( __exec_mem it c op ) ^ v } {}
-    // ── the rest: numeric ops ──
+    // ── floats: cmp (91..102), unary/binary (139..166), conversions (167..191) ──
+    ? | & >= op 91 <= op 102 | & >= op 139 <= op 166 & >= op 167 <= op 191 { ( __exec_float it op ) ^ v } {}
+    // ── the rest: integer numeric ops ──
     ( __exec_num it c op )
 }
 
@@ -407,12 +430,7 @@ $ `module.nu`
     ? == op 69 { ( __push it ? == ( __pop it ) 0 1 0 ) ^ v } {}
     // i64 unary: eqz
     ? == op 80 { ( __push it ? == ( __pop it ) 0 1 0 ) ^ v } {}
-    // i32.wrap_i64
-    ? == op 167 { ( __push it ( __w32 ( __pop it ) ) ) ^ v } {}
-    // i64.extend_i32_s
-    ? == op 172 { ( __push it ( __w32 ( __pop it ) ) ) ^ v } {}
-    // i64.extend_i32_u
-    ? == op 173 { ( __push it & ( __pop it ) 4294967295 ) ^ v } {}
+    // (i32.wrap_i64 / i64.extend_i32_* live in __exec_float's conversion block)
     // binary ops: pop b, a
     : i b ( __pop it )
     : i a ( __pop it )
@@ -455,4 +473,113 @@ $ `module.nu`
     // unsupported opcode → trap
     = . it trap T
     = . it trapmsg ( bytes_from_str `unsupported opcode` )
+}
+
+// ── floats (values held as their IEEE-754 bit pattern in the i64 cell) ──
+// abs/neg/copysign are done on the bits (NaN-sign correct); the rest reinterpret
+// via std/floatbits, compute with libm / native float arithmetic, and re-encode.
+
+@ __f64_unary * Interp it i op → v {
+    : i ab ( __pop it )
+    ? == op 153 { ( __push it & ab 9223372036854775807 ) ^ v } {}  // f64.abs (clear sign)
+    ? == op 154 { ( __push it ^^ ab -9223372036854775808 ) ^ v } {}  // f64.neg (flip sign)
+    : f x ( bits_to_f64 ab )
+    ? == op 155 { ( __push it ( f64_to_bits ( ceil x ) ) ) ^ v } {}  // f64.ceil
+    ? == op 156 { ( __push it ( f64_to_bits ( floor x ) ) ) ^ v } {}  // f64.floor
+    ? == op 157 { ( __push it ( f64_to_bits ( trunc x ) ) ) ^ v } {}  // f64.trunc
+    ? == op 158 { ( __push it ( f64_to_bits ( rint x ) ) ) ^ v } {}  // f64.nearest
+    ? == op 159 { ( __push it ( f64_to_bits ( sqrt x ) ) ) ^ v } {}  // f64.sqrt
+}
+
+@ __f64_binary * Interp it i op → v {
+    : i bb ( __pop it )
+    : i ab ( __pop it )
+    ? == op 166 { ( __push it | & ab 9223372036854775807 & bb -9223372036854775808 ) ^ v } {}  // copysign
+    : f a ( bits_to_f64 ab )
+    : f b ( bits_to_f64 bb )
+    ? == op 160 { ( __push it ( f64_to_bits + a b ) ) ^ v } {}
+    ? == op 161 { ( __push it ( f64_to_bits - a b ) ) ^ v } {}
+    ? == op 162 { ( __push it ( f64_to_bits * a b ) ) ^ v } {}
+    ? == op 163 { ( __push it ( f64_to_bits / a b ) ) ^ v } {}
+    ? == op 164 { ( __push it ( f64_to_bits ? < a b a b ) ) ^ v } {}  // min (NaN-naive)
+    ? == op 165 { ( __push it ( f64_to_bits ? > a b a b ) ) ^ v } {}  // max
+}
+
+@ __f64_cmp * Interp it i op → v {
+    : f b ( bits_to_f64 ( __pop it ) )
+    : f a ( bits_to_f64 ( __pop it ) )
+    ? == op 97 { ( __push it ? == a b 1 0 ) ^ v } {}
+    ? == op 98 { ( __push it ? != a b 1 0 ) ^ v } {}
+    ? == op 99 { ( __push it ? < a b 1 0 ) ^ v } {}
+    ? == op 100 { ( __push it ? > a b 1 0 ) ^ v } {}
+    ? == op 101 { ( __push it ? <= a b 1 0 ) ^ v } {}
+    ? == op 102 { ( __push it ? >= a b 1 0 ) ^ v } {}
+}
+
+@ __f32_unary * Interp it i op → v {
+    : i ab ( __pop it )
+    ? == op 139 { ( __push it & ab 2147483647 ) ^ v } {}  // f32.abs
+    ? == op 140 { ( __push it & ^^ ab 2147483648 4294967295 ) ^ v } {}  // f32.neg
+    : f x # f ( bits_to_f32 ab )
+    ? == op 141 { ( __push it ( f32_to_bits # f32 ( ceil x ) ) ) ^ v } {}
+    ? == op 142 { ( __push it ( f32_to_bits # f32 ( floor x ) ) ) ^ v } {}
+    ? == op 143 { ( __push it ( f32_to_bits # f32 ( trunc x ) ) ) ^ v } {}
+    ? == op 144 { ( __push it ( f32_to_bits # f32 ( rint x ) ) ) ^ v } {}
+    ? == op 145 { ( __push it ( f32_to_bits # f32 ( sqrt x ) ) ) ^ v } {}
+}
+
+@ __f32_binary * Interp it i op → v {
+    : i bb ( __pop it )
+    : i ab ( __pop it )
+    ? == op 152 { ( __push it & | & ab 2147483647 & bb 2147483648 4294967295 ) ^ v } {}  // copysign
+    : f32 a ( bits_to_f32 ab )
+    : f32 b ( bits_to_f32 bb )
+    ? == op 146 { ( __push it ( f32_to_bits + a b ) ) ^ v } {}
+    ? == op 147 { ( __push it ( f32_to_bits - a b ) ) ^ v } {}
+    ? == op 148 { ( __push it ( f32_to_bits * a b ) ) ^ v } {}
+    ? == op 149 { ( __push it ( f32_to_bits / a b ) ) ^ v } {}
+    ? == op 150 { ( __push it ( f32_to_bits ? < a b a b ) ) ^ v } {}
+    ? == op 151 { ( __push it ( f32_to_bits ? > a b a b ) ) ^ v } {}
+}
+
+@ __f32_cmp * Interp it i op → v {
+    : f32 b ( bits_to_f32 ( __pop it ) )
+    : f32 a ( bits_to_f32 ( __pop it ) )
+    ? == op 91 { ( __push it ? == a b 1 0 ) ^ v } {}
+    ? == op 92 { ( __push it ? != a b 1 0 ) ^ v } {}
+    ? == op 93 { ( __push it ? < a b 1 0 ) ^ v } {}
+    ? == op 94 { ( __push it ? > a b 1 0 ) ^ v } {}
+    ? == op 95 { ( __push it ? <= a b 1 0 ) ^ v } {}
+    ? == op 96 { ( __push it ? >= a b 1 0 ) ^ v } {}
+}
+
+// Float ops + all int/float conversions. Reinterpret (0xbc..0xbf) is a no-op
+// because values already live as their bit pattern.
+@ __exec_float * Interp it i op → v {
+    ? == op 167 { ( __push it ( __w32 ( __pop it ) ) ) ^ v } {}  // i32.wrap_i64
+    ? == op 172 { ( __push it ( __w32 ( __pop it ) ) ) ^ v } {}  // i64.extend_i32_s
+    ? == op 173 { ( __push it & ( __pop it ) 4294967295 ) ^ v } {}  // i64.extend_i32_u
+    ? & >= op 188 <= op 191 { ^ v } {}  // *.reinterpret_* : no-op
+    ? == op 168 { ( __push it ( __w32 # i # f ( bits_to_f32 ( __pop it ) ) ) ) ^ v } {}  // i32.trunc_f32_s
+    ? == op 169 { ( __push it ( __w32 # i # f ( bits_to_f32 ( __pop it ) ) ) ) ^ v } {}  // i32.trunc_f32_u (approx)
+    ? == op 170 { ( __push it ( __w32 # i ( bits_to_f64 ( __pop it ) ) ) ) ^ v } {}  // i32.trunc_f64_s
+    ? == op 171 { ( __push it ( __w32 # i ( bits_to_f64 ( __pop it ) ) ) ) ^ v } {}  // i32.trunc_f64_u (approx)
+    ? | == op 174 == op 175 { ( __push it # i # f ( bits_to_f32 ( __pop it ) ) ) ^ v } {}  // i64.trunc_f32_*
+    ? | == op 176 == op 177 { ( __push it # i ( bits_to_f64 ( __pop it ) ) ) ^ v } {}  // i64.trunc_f64_*
+    ? == op 178 { ( __push it ( f32_to_bits # f32 ( __w32 ( __pop it ) ) ) ) ^ v } {}  // f32.convert_i32_s
+    ? == op 179 { ( __push it ( f32_to_bits # f32 & ( __pop it ) 4294967295 ) ) ^ v } {}  // f32.convert_i32_u
+    ? | == op 180 == op 181 { ( __push it ( f32_to_bits # f32 ( __pop it ) ) ) ^ v } {}  // f32.convert_i64_*
+    ? == op 182 { ( __push it ( f32_to_bits # f32 ( bits_to_f64 ( __pop it ) ) ) ) ^ v } {}  // f32.demote_f64
+    ? == op 183 { ( __push it ( f64_to_bits # f ( __w32 ( __pop it ) ) ) ) ^ v } {}  // f64.convert_i32_s
+    ? == op 184 { ( __push it ( f64_to_bits # f & ( __pop it ) 4294967295 ) ) ^ v } {}  // f64.convert_i32_u
+    ? | == op 185 == op 186 { ( __push it ( f64_to_bits # f ( __pop it ) ) ) ^ v } {}  // f64.convert_i64_*
+    ? == op 187 { ( __push it ( f64_to_bits # f # f ( bits_to_f32 ( __pop it ) ) ) ) ^ v } {}  // f64.promote_f32
+    ? & >= op 153 <= op 159 { ( __f64_unary it op ) ^ v } {}
+    ? & >= op 160 <= op 166 { ( __f64_binary it op ) ^ v } {}
+    ? & >= op 97 <= op 102 { ( __f64_cmp it op ) ^ v } {}
+    ? & >= op 139 <= op 145 { ( __f32_unary it op ) ^ v } {}
+    ? & >= op 146 <= op 152 { ( __f32_binary it op ) ^ v } {}
+    ? & >= op 91 <= op 96 { ( __f32_cmp it op ) ^ v } {}
+    = . it trap T
+    = . it trapmsg ( bytes_from_str `unsupported float opcode` )
 }
