@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`std/floatbits` — IEEE-754 bit reinterpretation + binary float I/O.** NURL's
+  `#` cast converts a float's *value*; this new module reinterprets its *bit
+  pattern* — the operation binary formats need, and previously impossible in the
+  stdlib (`bytes_push_float` only writes `%g` text). Backed by a zero-allocation
+  runtime bitcast (`memcpy`, correct for NaN/±Inf/subnormals): `f64_to_bits` /
+  `bits_to_f64`, `f32_to_bits` / `bits_to_f32`, and explicit-endian binary
+  helpers `bytes_push_f64_le/_be` · `bytes_read_f64_le/_be → ?f` (and `f32`
+  variants). For serialization (msgpack/protobuf/wasm/audio), float hashing,
+  random→float, and the pure-NURL wasm runtime. KAT-tested (`floatbits`).
+
 ### Changed
 
 - **`net/relay` frame limit raised from 128 KiB to 16 MiB.** A relayed message
