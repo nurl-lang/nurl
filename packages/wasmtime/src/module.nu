@@ -82,6 +82,10 @@ $ `stdlib/std/bytes.nu`
 // An active data segment: raw bytes to copy into linear memory at `offset`.
 : DataSeg { i offset ( Vec u ) bytes }
 
+// An imported function (the only import kind this runtime resolves): its field
+// name selects the host (WASI) implementation; typeidx gives its signature.
+: WImport { ( Vec u ) field i typeidx }
+
 : Module {
     ( Vec s ) types  // *FuncType
     ( Vec i ) functypes  // type index per defined function
@@ -96,6 +100,8 @@ $ `stdlib/std/bytes.nu`
     ( Vec i ) global_mut  // 1 if mutable
     i has_table
     ( Vec i ) table  // function indices (−1 = empty slot)
+    ( Vec s ) imports  // *WImport (imported functions, in index order)
+    i num_import_funcs  // imported funcs occupy func indices 0..n-1
     b ok
     ( Vec u ) err
 }
@@ -123,6 +129,10 @@ $ `stdlib/std/bytes.nu`
     ( vec_free [i] . m global_init )
     ( vec_free [i] . m global_mut )
     ( vec_free [i] . m table )
+    : i in ( vec_len [s] . m imports )
+    : ~ i ii 0
+    ~ < ii in { ?? ( vec_get [s] . m imports ii ) { T pp → ?!= # i pp 0 { : *WImport w # *WImport pp ( vec_free [u] . w field ) ( nurl_free # s w ) } {} F → {} } = ii + ii 1 }
+    ( vec_free [s] . m imports )
     ( vec_free [u] . m code )
     ( vec_free [u] . m err )
     ( nurl_free # s m )
@@ -218,6 +228,36 @@ $ `stdlib/std/bytes.nu`
         = . ds offset offset
         = . ds bytes bytes
         ( vec_push [s] . m datas ds )
+        = k + k 1
+    }
+}
+
+// Import section: record imported FUNCTIONS (the only kind resolved — by their
+// field name, to a host/WASI implementation). Other import kinds are skipped.
+@ __decode_import_sec * Wc c * Module m → v {
+    : i n ( wc_uleb c )
+    : ~ i k 0
+    ~ < k n {
+        : i mlen ( wc_uleb c )
+        ( wc_skip c mlen )  // module name (ignored; WASI assumed)
+        : i flen ( wc_uleb c )
+        : ( Vec u ) fld ( vec_with_cap [u] flen )
+        : ~ i a 0
+        ~ < a flen { ( vec_push [u] fld ( wc_u8 c ) ) = a + a 1 }
+        : i kind ( wc_u8 c )
+        ? == kind 0 {
+            : i ti ( wc_uleb c )
+            : *WImport w # *WImport ( nurl_alloc Z WImport )
+            = . w field fld
+            = . w typeidx ti
+            ( vec_push [s] . m imports # s w )
+            = . m num_import_funcs + . m num_import_funcs 1
+        } {
+            ( vec_free [u] fld )
+            ? == kind 1 { ( wc_u8 c ) : i fl ( wc_u8 c ) ( wc_uleb c ) ? == fl 1 { ( wc_uleb c ) } {} } {
+                ? == kind 2 { : i fl ( wc_u8 c ) ( wc_uleb c ) ? == fl 1 { ( wc_uleb c ) } {} } {
+                    ? == kind 3 { ( wc_u8 c ) ( wc_u8 c ) } {} } }
+        }
         = k + k 1
     }
 }
@@ -321,6 +361,8 @@ $ `stdlib/std/bytes.nu`
     = . m global_mut ( vec_new [i] )
     = . m has_table 0
     = . m table ( vec_new [i] )
+    = . m imports ( vec_new [s] )
+    = . m num_import_funcs 0
     = . m ok T
     = . m err ( vec_new [u] )
     : *Wc c ( wc_new bytes )
@@ -335,6 +377,7 @@ $ `stdlib/std/bytes.nu`
         : i size ( wc_uleb c )
         : i sec_end + . c pos size
         ? == id 1 { ( __decode_type_sec c m ) } {
+            ? == id 2 { ( __decode_import_sec c m ) } {
             ? == id 3 { ( __decode_func_sec c m ) } {
                 ? == id 4 { ( __decode_table_sec c m ) } {
                     ? == id 5 { ( __decode_mem_sec c m ) } {
@@ -342,7 +385,7 @@ $ `stdlib/std/bytes.nu`
                             ? == id 7 { ( __decode_export_sec c m ) } {
                                 ? == id 9 { ( __decode_elem_sec c m ) } {
                                     ? == id 10 { ( __decode_code_sec c m ) } {
-                                        ? == id 11 { ( __decode_data_sec c m ) } {} } } } } } } } }
+                                        ? == id 11 { ( __decode_data_sec c m ) } {} } } } } } } } } }
         = . c pos sec_end  // robust against partially-read / skipped sections
     }
     ( wc_free c )
