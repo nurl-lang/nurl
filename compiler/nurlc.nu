@@ -13510,6 +13510,74 @@
     }
 }
 
+// ── Entry-block alloca hoisting ─────────────────────────────────────
+// NURL emits each `:` binding's `alloca` at its lexical position. LLVM
+// alloca lifetime is the WHOLE function (the slot is freed only at
+// `ret`), so an alloca inside a loop allocates a FRESH slot every
+// iteration and never reclaims it — a hot loop over N items leaks N
+// stack slots and overflows the stack. clang's mem2reg/SROA promotes
+// these (single-store) allocas to SSA values and silently hides the
+// leak; other LLVM front-ends (notably the zig-bundled toolchain used
+// by the installed releases) keep the dynamic stack adjustment and
+// crash with a stack overflow on large inputs (e.g. gzip/deflate over a
+// multi-KB buffer). The fix is the canonical LLVM idiom: emit every
+// alloca in the entry block. All NURL allocas are static-size with no
+// SSA operands, so hoisting is always valid and semantically identical
+// — the slot's lifetime is already function-wide either way; we only
+// stop re-issuing it per iteration.
+
+// Index of the '\n' ending the line starting at `p`, or `flen` if the
+// text has no further newline.
+@ __ha_line_end s text i p i flen → i {
+    : ~ i q p
+    ~ < q flen {
+        ? == ( nurl_str_get text q ) 10 { ^ q } {}
+        = q + q 1
+    }
+    ^ flen
+}
+
+// True when `line` is an alloca INSTRUCTION (`  %reg = alloca <ty>`).
+// Guards on the `  %` register-define prefix so a stray ` = alloca ` in
+// some other context cannot match; the type is always static (no count
+// operand, no SSA reference), which is what makes hoisting sound.
+@ __ha_is_alloca s line → b {
+    ? < ( strlen line ) 3 { ^ F } {}
+    ? != ( nurl_str_get line 0 ) 32 { ^ F } {}
+    ? != ( nurl_str_get line 1 ) 32 { ^ F } {}
+    ? != ( nurl_str_get line 2 ) 37 { ^ F } {}
+    ^ ? >= ( nurl_str_find line ` = alloca ` ) 0 T F
+}
+
+// Re-print a complete `define … { entry: … }` IR string with every
+// alloca instruction moved to the top of the entry block (original
+// relative order preserved); all other instructions — including each
+// alloca's matching `store` — stay exactly where they were. A function
+// with no `entry:` label (should not happen) is emitted verbatim.
+@ emit_hoisted s funcdef → v {
+    : i flen ( strlen funcdef )
+    : i ei ( nurl_str_find funcdef `\nentry:\n` )
+    ? < ei 0 { ( nurl_print funcdef ) ^ v } {}
+    : i hdr_end + ei 8  // past "\nentry:\n"
+    ( nurl_print ( nurl_str_slice funcdef 0 hdr_end ) )
+    // Pass 1: the alloca instructions, hoisted into the entry block.
+    : ~ i p hdr_end
+    ~ < p flen {
+        : i le ( __ha_line_end funcdef p flen )
+        : s line ( nurl_str_slice funcdef p - le p )
+        ? ( __ha_is_alloca line ) { ( nurl_print line ) ( nurl_print `\n` ) } {}
+        = p + le 1
+    }
+    // Pass 2: everything else, in original order.
+    = p hdr_end
+    ~ < p flen {
+        : i le ( __ha_line_end funcdef p flen )
+        : s line ( nurl_str_slice funcdef p - le p )
+        ? ! ( __ha_is_alloca line ) { ( nurl_print line ) ( nurl_print `\n` ) } {}
+        = p + le 1
+    }
+}
+
 // emit_closure_globals: emit only NEW deferred closure definitions since last call
 @ emit_closure_globals → v {
     // Emit new closure function definitions (from watermark to current)
@@ -13518,7 +13586,7 @@
     ~ < idx g_func_count {
         : s funcdef ( nurl_sym_get defs_syms ( nurl_str_int idx ) )
         ? != 0 ( nurl_str_len funcdef )
-        { ( nurl_print funcdef ) }
+        { ( emit_hoisted funcdef ) }
         {}
         = idx + idx 1
     }
@@ -13686,6 +13754,12 @@
     ( nurl_sym_def syms ( nurl_str_cat fname `__res_e_llvm` ) res_e_llvm )
     ( nurl_sym_def syms ( nurl_str_cat fname `__opt_nurl_t` ) opt_nurl_t )
     : s lname ? ( seq fname `main` ) `_nurl_main` fname
+    // Capture the whole function definition into the output buffer so its
+    // allocas can be hoisted into the entry block before emission (see
+    // emit_hoisted). Closures created mid-body buffer separately (nested
+    // print_buf frames) and string/debug globals are deferred, so only
+    // this function's own IR lands in the buffer.
+    ( nurl_print_buf_start )
     ( nurl_print `define ` ) ( nurl_print ret_ty )
     ( nurl_print ` @` ) ( nurl_print lname )
     ( nurl_print `(` ) ( nurl_print params_str ) ( nurl_print `)` )
@@ -13918,6 +13992,9 @@
     }
     {}
     ( emit `}` ) ( emit `` )
+    // Stop capturing and re-emit with allocas hoisted into the entry block.
+    : s __fn_ir ( nurl_print_buf_stop )
+    ( emit_hoisted __fn_ir )
     // Clear DWARF state — subsequent module-scope code (string globals,
     // closure defs, the next function's metadata) must not inherit
     // this function's DILocation, or its calls would attach `!dbg !N`

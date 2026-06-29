@@ -420,22 +420,37 @@
     }
 }
 
-// compound_field_type: return LLVM type of field idx in a compound aggregate type string.
-// Handles { i1, T } (opt/res) and { T*, i64 } (slice). Falls back to i64 for others.
+// compound_field_type: return LLVM type of field idx in an inline aggregate
+// type string `{ f0, f1, ... }`. Depth-aware: nested `{ }` / `( )` in a field
+// (an option/slice/result payload, a closure type) don't split the field. This
+// indexes opt `{ i1, T }` (0/1), res `{ i1, T, E }` (0/1/2), and slice
+// `{ T*, i64 }` (0/1) uniformly. Falls back to i64 for a non-`{` type.
 @ compound_field_type s agg_ty i idx → s {
     : i len ( nurl_str_len agg_ty )
-    // Opt or res type: starts with "{ i1, "
-    ? & >= len 6 ( seq ( nurl_str_slice agg_ty 0 6 ) `{ i1, ` )
-    { ? == idx 0 ^ `i1` {}
-        ^ ( nurl_str_slice agg_ty 6 - - len 6 2 )
+    ? | < len 4 != ( nurl_str_get agg_ty 0 ) 123 { ^ `i64` } {}
+    : ~ i depth 0
+    : ~ i cur 0  // index of the field currently being scanned
+    : ~ i fstart 2  // first field begins just after the leading "{ "
+    : ~ i i 0
+    ~ < i len {
+        : i c ( nurl_str_get agg_ty i )
+        ? | == c 123 == c 40 { = depth + depth 1 } {}
+        ? | == c 125 == c 41
+        { = depth - depth 1
+            // Closing the outer aggregate: the last field ends at " }".
+            ? == depth 0
+            { ? == cur idx { ^ ( nurl_str_slice agg_ty fstart - - i 1 fstart ) } {}
+                = cur + cur 1 }
+            {} }
+        {}
+        // A top-level comma ends field `cur`; the next begins after ", ".
+        ? & == depth 1 == c 44
+        { ? == cur idx { ^ ( nurl_str_slice agg_ty fstart - i fstart ) } {}
+            = cur + cur 1
+            = fstart + i 2 }
+        {}
+        = i + i 1
     }
-    {}
-    // Slice type: ends with ", i64 }"
-    ? & >= len 7 ( seq ( nurl_str_slice agg_ty - len 7 7 ) `, i64 }` )
-    { ? == idx 1 ^ `i64` {}
-        ^ ( nurl_str_slice agg_ty 2 - - len 2 7 )
-    }
-    {}
     `i64`
 }
 
@@ -552,9 +567,9 @@
     ( nurl_str_cat `{ ` ( nurl_str_cat inner `*, i64 }` ) )
 }
 
-// ! T E  →  { i1, i64 }
-// Payload field is always i64: integers stored directly, pointers via ptrtoint,
-// enums via extractvalue of their i64 tag field.
+// ! T E  →  { i1, T, E }
+// Ok payload lives by value in field 1 (type T), Err payload by value in
+// field 2 (type E); the i1 tag in field 0 selects the live slot (1 = Ok).
 // NURL source types are stored in g_res_type_syms under keys:
 //   "__last_res_nurl__"     → e.g. "! i s"
 //   "__last_res_err_llvm__" → LLVM type of E
@@ -573,7 +588,14 @@
     ( nurl_sym_def g_res_type_syms `__last_res_nurl__` ( nurl_str_cat4 `! ` lt_tok ` ` le_tok ) )
     ( nurl_sym_def g_res_type_syms `__last_res_err_llvm__` le )
     ( nurl_sym_def g_res_type_syms `__last_res_t_llvm__` lt )
-    `{ i1, i64 }`
+    // Result is `{ i1, T, E }` — Ok payload by value in field 1, Err payload
+    // by value in field 2 (the tag in field 0 selects which slot is live).
+    // A `void` payload cannot sit in an LLVM struct, so a `!v E` Ok slot
+    // lowers to a 1-byte `i1` placeholder that the Ok arm never reads (no
+    // `!T v` form occurs in-tree, but the Err slot is guarded symmetrically).
+    : s f1 ? ( seq lt `void` ) `i1` lt
+    : s f2 ? ( seq le `void` ) `i1` le
+    ^ ( nurl_str_cat `{ i1, ` ( nurl_str_cat3 f1 `, ` ( nurl_str_cat f2 ` }` ) ) )
 }
 
 // ── Emit helpers ──────────────────────────────────────────────────
@@ -3536,7 +3558,7 @@
 
     // ── EOF ──
     ? >= pos len {
-        ( __tok_write lex base TT_EOF # i ( strdup `` ) 0 line start )
+        ( __tok_write lex base TT_EOF ( strdup `` ) 0 line start )
         = done T
     } {}
 
@@ -3547,7 +3569,7 @@
         == & # i . src + pos 1 255 134
         == & # i . src + pos 2 255 146 {
             = pos + pos 3
-            ( __tok_write lex base TT_ARROW # i ( strdup `→` ) 0 line start )
+            ( __tok_write lex base TT_ARROW ( strdup `→` ) 0 line start )
             = done T
         } {}
     } {}
@@ -3837,7 +3859,7 @@
         & == & # i . src + pos 1 255 46
         == & # i . src + pos 2 255 46 {
             = pos + pos 3
-            ( __tok_write lex base TT_ELLIPSIS # i ( strdup `...` ) 0 line start )
+            ( __tok_write lex base TT_ELLIPSIS ( strdup `...` ) 0 line start )
             = done T
         } {}
     } {}
@@ -3847,16 +3869,16 @@
         ? < + pos 1 len {
             : i c1 & # i . src pos 255
             : i c2 & # i . src + pos 1 255
-            ? & == c1 61 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_EQEQ # i ( strdup `==` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 33 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_NE # i ( strdup `!=` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 60 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_LE # i ( strdup `<=` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 62 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_GE # i ( strdup `>=` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 60 == c2 60 { = pos + pos 2 ( __tok_write lex base TT_SHL # i ( strdup `<<` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 62 == c2 62 { = pos + pos 2 ( __tok_write lex base TT_SHR # i ( strdup `>>` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 63 == c2 63 { = pos + pos 2 ( __tok_write lex base TT_QUESTQUEST # i ( strdup `??` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 94 == c2 94 { = pos + pos 2 ( __tok_write lex base TT_CARETCARET # i ( strdup `^^` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 124 == c2 124 { = pos + pos 2 ( __tok_write lex base TT_OROR # i ( strdup `||` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 38 == c2 38 { = pos + pos 2 ( __tok_write lex base TT_ANDAND # i ( strdup `&&` ) 0 line start ) = done T } {}
+            ? & == c1 61 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_EQEQ ( strdup `==` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 33 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_NE ( strdup `!=` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 60 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_LE ( strdup `<=` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 62 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_GE ( strdup `>=` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 60 == c2 60 { = pos + pos 2 ( __tok_write lex base TT_SHL ( strdup `<<` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 62 == c2 62 { = pos + pos 2 ( __tok_write lex base TT_SHR ( strdup `>>` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 63 == c2 63 { = pos + pos 2 ( __tok_write lex base TT_QUESTQUEST ( strdup `??` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 94 == c2 94 { = pos + pos 2 ( __tok_write lex base TT_CARETCARET ( strdup `^^` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 124 == c2 124 { = pos + pos 2 ( __tok_write lex base TT_OROR ( strdup `||` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 38 == c2 38 { = pos + pos 2 ( __tok_write lex base TT_ANDAND ( strdup `&&` ) 0 line start ) = done T } {}
         } {}
     } {}
 
@@ -3864,33 +3886,33 @@
     ? ! done {
         : i c & # i . src pos 255
         = pos + pos 1
-        ? == c 64 { ( __tok_write lex base TT_AT # i ( strdup `@` ) 0 line start ) = done T } {}
-        ? & ! done == c 58 { ( __tok_write lex base TT_COLON # i ( strdup `:` ) 0 line start ) = done T } {}
-        ? & ! done == c 61 { ( __tok_write lex base TT_EQ # i ( strdup `=` ) 0 line start ) = done T } {}
-        ? & ! done == c 94 { ( __tok_write lex base TT_CARET # i ( strdup `^` ) 0 line start ) = done T } {}
-        ? & ! done == c 63 { ( __tok_write lex base TT_QUEST # i ( strdup `?` ) 0 line start ) = done T } {}
-        ? & ! done == c 126 { ( __tok_write lex base TT_TILDE # i ( strdup `~` ) 0 line start ) = done T } {}
-        ? & ! done == c 40 { ( __tok_write lex base TT_LPAREN # i ( strdup `(` ) 0 line start ) = done T } {}
-        ? & ! done == c 41 { ( __tok_write lex base TT_RPAREN # i ( strdup `)` ) 0 line start ) = done T } {}
-        ? & ! done == c 123 { ( __tok_write lex base TT_LBRACE # i ( strdup `{` ) 0 line start ) = done T } {}
-        ? & ! done == c 125 { ( __tok_write lex base TT_RBRACE # i ( strdup `}` ) 0 line start ) = done T } {}
-        ? & ! done == c 46 { ( __tok_write lex base TT_DOT # i ( strdup `.` ) 0 line start ) = done T } {}
-        ? & ! done == c 35 { ( __tok_write lex base TT_HASH # i ( strdup `#` ) 0 line start ) = done T } {}
-        ? & ! done == c 33 { ( __tok_write lex base TT_BANG # i ( strdup `!` ) 0 line start ) = done T } {}
-        ? & ! done == c 43 { ( __tok_write lex base TT_PLUS # i ( strdup `+` ) 0 line start ) = done T } {}
-        ? & ! done == c 45 { ( __tok_write lex base TT_MINUS # i ( strdup `-` ) 0 line start ) = done T } {}
-        ? & ! done == c 42 { ( __tok_write lex base TT_STAR # i ( strdup `*` ) 0 line start ) = done T } {}
-        ? & ! done == c 47 { ( __tok_write lex base TT_SLASH # i ( strdup `/` ) 0 line start ) = done T } {}
-        ? & ! done == c 37 { ( __tok_write lex base TT_PERCENT # i ( strdup `%` ) 0 line start ) = done T } {}
-        ? & ! done == c 38 { ( __tok_write lex base TT_AMP # i ( strdup `&` ) 0 line start ) = done T } {}
-        ? & ! done == c 124 { ( __tok_write lex base TT_PIPE # i ( strdup `|` ) 0 line start ) = done T } {}
-        ? & ! done == c 60 { ( __tok_write lex base TT_LT # i ( strdup `<` ) 0 line start ) = done T } {}
-        ? & ! done == c 62 { ( __tok_write lex base TT_GT # i ( strdup `>` ) 0 line start ) = done T } {}
-        ? & ! done == c 91 { ( __tok_write lex base TT_LBRACK # i ( strdup `[` ) 0 line start ) = done T } {}
-        ? & ! done == c 93 { ( __tok_write lex base TT_RBRACK # i ( strdup `]` ) 0 line start ) = done T } {}
-        ? & ! done == c 59 { ( __tok_write lex base TT_SEMICOL # i ( strdup `;` ) 0 line start ) = done T } {}
-        ? & ! done == c 92 { ( __tok_write lex base TT_BACKSLASH # i ( strdup `\\` ) 0 line start ) = done T } {}
-        ? & ! done == c 36 { ( __tok_write lex base TT_DOLLAR # i ( strdup `$` ) 0 line start ) = done T } {}
+        ? == c 64 { ( __tok_write lex base TT_AT ( strdup `@` ) 0 line start ) = done T } {}
+        ? & ! done == c 58 { ( __tok_write lex base TT_COLON ( strdup `:` ) 0 line start ) = done T } {}
+        ? & ! done == c 61 { ( __tok_write lex base TT_EQ ( strdup `=` ) 0 line start ) = done T } {}
+        ? & ! done == c 94 { ( __tok_write lex base TT_CARET ( strdup `^` ) 0 line start ) = done T } {}
+        ? & ! done == c 63 { ( __tok_write lex base TT_QUEST ( strdup `?` ) 0 line start ) = done T } {}
+        ? & ! done == c 126 { ( __tok_write lex base TT_TILDE ( strdup `~` ) 0 line start ) = done T } {}
+        ? & ! done == c 40 { ( __tok_write lex base TT_LPAREN ( strdup `(` ) 0 line start ) = done T } {}
+        ? & ! done == c 41 { ( __tok_write lex base TT_RPAREN ( strdup `)` ) 0 line start ) = done T } {}
+        ? & ! done == c 123 { ( __tok_write lex base TT_LBRACE ( strdup `{` ) 0 line start ) = done T } {}
+        ? & ! done == c 125 { ( __tok_write lex base TT_RBRACE ( strdup `}` ) 0 line start ) = done T } {}
+        ? & ! done == c 46 { ( __tok_write lex base TT_DOT ( strdup `.` ) 0 line start ) = done T } {}
+        ? & ! done == c 35 { ( __tok_write lex base TT_HASH ( strdup `#` ) 0 line start ) = done T } {}
+        ? & ! done == c 33 { ( __tok_write lex base TT_BANG ( strdup `!` ) 0 line start ) = done T } {}
+        ? & ! done == c 43 { ( __tok_write lex base TT_PLUS ( strdup `+` ) 0 line start ) = done T } {}
+        ? & ! done == c 45 { ( __tok_write lex base TT_MINUS ( strdup `-` ) 0 line start ) = done T } {}
+        ? & ! done == c 42 { ( __tok_write lex base TT_STAR ( strdup `*` ) 0 line start ) = done T } {}
+        ? & ! done == c 47 { ( __tok_write lex base TT_SLASH ( strdup `/` ) 0 line start ) = done T } {}
+        ? & ! done == c 37 { ( __tok_write lex base TT_PERCENT ( strdup `%` ) 0 line start ) = done T } {}
+        ? & ! done == c 38 { ( __tok_write lex base TT_AMP ( strdup `&` ) 0 line start ) = done T } {}
+        ? & ! done == c 124 { ( __tok_write lex base TT_PIPE ( strdup `|` ) 0 line start ) = done T } {}
+        ? & ! done == c 60 { ( __tok_write lex base TT_LT ( strdup `<` ) 0 line start ) = done T } {}
+        ? & ! done == c 62 { ( __tok_write lex base TT_GT ( strdup `>` ) 0 line start ) = done T } {}
+        ? & ! done == c 91 { ( __tok_write lex base TT_LBRACK ( strdup `[` ) 0 line start ) = done T } {}
+        ? & ! done == c 93 { ( __tok_write lex base TT_RBRACK ( strdup `]` ) 0 line start ) = done T } {}
+        ? & ! done == c 59 { ( __tok_write lex base TT_SEMICOL ( strdup `;` ) 0 line start ) = done T } {}
+        ? & ! done == c 92 { ( __tok_write lex base TT_BACKSLASH ( strdup `\\` ) 0 line start ) = done T } {}
+        ? & ! done == c 36 { ( __tok_write lex base TT_DOLLAR ( strdup `$` ) 0 line start ) = done T } {}
         // Unknown byte — emit IDENT "?XX" so caller can diagnose.
         ? ! done {
             : s buf # s ( malloc 4 )
@@ -6197,17 +6219,28 @@
                 // whose payload is stored as opaque ptr, opt/res field 1 is already
                 // stored at its real type, so no ptr→X conversion is required.
                 : ~ b pt0_is_opt_bool F
+                // Result (`{ i1, T, E }`, 3-field): the Ok arm (`T`) binds field
+                // 1 (type T), the Err arm (`F`) binds field 2 (type E), each BY
+                // VALUE at its real type — no i64 reconstruction. Option
+                // (`{ i1, T }`, 2-field) keeps field-1-by-value.
+                : b match_is_res & & >= ( nurl_str_len match_type ) 6
+                ( seq ( nurl_str_slice match_type 0 6 ) `{ i1, ` )
+                == ( agg_field_count syms match_type ) 3
+                : i res_fidx ? & match_is_res ( seq pattern_name `F` ) 2 1
                 ? & == 0 ( nurl_str_len pt0 )
                 & | ( seq pattern_name `T` ) ( seq pattern_name `F` )
                 & >= ( nurl_str_len match_type ) 6
                 ( seq ( nurl_str_slice match_type 0 6 ) `{ i1, ` )
-                { = pt0 ( nurl_str_slice match_type 6 - ( nurl_str_len match_type ) 8 )
+                { ? match_is_res
+                    { = pt0 ( compound_field_type match_type res_fidx ) }
+                    { = pt0 ( nurl_str_slice match_type 6 - ( nurl_str_len match_type ) 8 ) }
                     = pt0_is_opt_bool T }
                 {}
                 : s pr0 ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print pr0 )
                 ( nurl_print ` = extractvalue ` ) ( nurl_print match_type )
-                ( nurl_print ` ` ) ( nurl_print match_val ) ( nurl_print `, 1\n` )
+                ( nurl_print ` ` ) ( nurl_print match_val )
+                ( nurl_print `, ` ) ( nurl_print ( nurl_str_int res_fidx ) ) ( nurl_print `\n` )
                 // Opt/res-bool fallback path: pt0 is the inner LLVM type of the
                 // `{ i1, X }` aggregate (e.g. `i64` for `! Json ParseErr`). When
                 // the source-level NURL T names a struct handle (Json, String, …)
@@ -6218,7 +6251,11 @@
                 : ~ s pt0_eff pt0
                 : ~ s pr0_eff pr0
                 : ~ b did_reconstruct F
-                ? & pt0_is_opt_bool != 0 ( nurl_str_len match_var_name )
+                // The legacy i64-unbox reconstruction only applies to the old
+                // `{ i1, i64 }` result squeeze; a wide `{ i1, T, E }` result is
+                // already extracted by value above, so skip it (`! match_is_res`).
+                // Option still needs the f→bitcast / b→trunc / handle-rebuild here.
+                ? & & pt0_is_opt_bool ! match_is_res != 0 ( nurl_str_len match_var_name )
                 { : s nurl_key ( nurl_str_cat match_var_name
                     ? ( seq pattern_name `T` ) `__res_nurl_T` `__res_nurl_E` )
                     : s nurl_inner_t ( nurl_sym_get syms nurl_key )
@@ -9553,24 +9590,15 @@
             {  // pt ends with '*': pointer to struct OR raw pointer
                 : s st ( nurl_str_slice pt 0 - ptlen 1 )
                 ? == ( nurl_str_get st 0 ) 37
-                {  // Struct pointer "%T*": next token is either a field
-                    // name or a variable used as array index (e.g.
-                    // `= . data idx x` where data: *Match, idx is the
-                    // index var). When an IDENT is BOTH a local int var
-                    // AND a struct field name, the array-store path is
-                    // the default — this matches how `stdlib/core/vec.nu`
-                    // writes elements with index vars whose names (`len`,
-                    // `idx`, `i`) happen to coincide with struct fields.
-                    //
-                    // EXCEPTION: when the IDENT is a function PARAMETER
-                    // that shadows a field of the same name, the user
-                    // almost certainly meant the field — the "store the
-                    // `cap` argument into `impl.cap`" pattern in
-                    // `stdlib/std/arena.nu` is the canonical case. Pre-
-                    // 2026-05-17 the param branch silently took the
-                    // array-store path and emitted `getelementptr %S, %S*
-                    // %impl, i64 %cap` (value-as-index, no field offset).
-                    // Closes a value-as-index field-offset codegen quirk.
+                {  // Struct pointer "%T*": the next token is either a field
+                    // name or a variable used as an array index (e.g.
+                    // `= . data idx x` where data: *Match and idx is the index
+                    // var). The rule (see `field_wins` below) mirrors the read
+                    // path: a name that IS a field of this concrete struct wins
+                    // and stores into that field; the value-as-index array store
+                    // is taken only when the name is NOT a field — raw pointers,
+                    // or a tparam element type whose field lookup is suppressed
+                    // (how `stdlib/core/vec.nu` writes its elements).
                     : i stlen ( nurl_str_len st )
                     : s sname ( nurl_str_slice st 1 - stlen 1 )
                     : s fname ( nurl_lex_val lex )
@@ -9581,8 +9609,19 @@
                     : s fidx_s ? ( str_contains_word g_mono_tparam_tys sname ) `` ( nurl_sym_get syms ( nurl_str_cat sname ( nurl_str_cat `__` ( nurl_str_cat fname `__idx` ) ) ) )
                     : b is_field_ident ( is_ident_tok ( nurl_lex_type lex ) )
                     : b is_field_match & is_field_ident != 0 ( nurl_str_len fidx_s )
-                    : s is_param ( nurl_sym_get syms ( nurl_str_cat fname `__param` ) )
-                    : b field_wins & is_field_match != 0 ( nurl_str_len is_param )
+                    // A concrete struct field ALWAYS wins over a same-named
+                    // in-scope variable — param OR local — symmetric with the
+                    // read path in gen_member ("a struct field ALWAYS wins").
+                    // Array-indexing a struct pointer BY a field name is never
+                    // the intent; the value-as-index store below is reached only
+                    // when the IDENT is NOT a field of this struct: raw pointers,
+                    // or a tparam element type whose field lookup is suppressed
+                    // above (stdlib/core/vec.nu's element writes). Previously the
+                    // field only won when it was ALSO shadowed by a parameter, so
+                    // `= . t lo lo` with a non-param local `lo` matching field
+                    // `lo` silently compiled to `t[lo] = lo` (value-as-index) —
+                    // a struct-corrupting miscompile with no diagnostic.
+                    : b field_wins is_field_match
                     : s var_t ( nurl_sym_get syms fname )
                     ? & ! field_wins > ( int_width var_t ) 0
                     {  // IDENT is an integer variable (and not a param
@@ -10481,6 +10520,15 @@
     // UBSan/ASan when a defensive read touches it.
     : ~ s result `zeroinitializer`
     : ~ i idx 0
+    // Result construction (`{ i1, T, E }`): a result literal is a 3-field
+    // `{ i1, ... }` aggregate. Its two source values are the tag (idx 0) and a
+    // single payload (idx 1) which routes BY VALUE to field 1 (Ok) or field 2
+    // (Err) per the tag — never the i64-squeeze the legacy `{ i1, i64 }` layout
+    // forced. `res_is_ok` is captured from the tag literal at idx 0.
+    : b agg_is_res & & >= ( nurl_str_len agg_ty ) 6
+    ( seq ( nurl_str_slice agg_ty 0 6 ) `{ i1, ` )
+    == ( agg_field_count syms agg_ty ) 3
+    : ~ b res_is_ok F
     // Phase 2C/2D: collect indices of fields populated by a fresh allocating
     // call (i8* via nurl_str_cat et al, or slice via `[T | ...]` literal /
     // slice-returning call), AND nested owned subfields from inner struct
@@ -10551,6 +10599,8 @@
         // a direct parameter embed (`{ cb }`) from a derived value.
         : i fld_first_tt ( nurl_lex_type lex )
         : s fld_first_val ( nurl_lex_val lex )
+        // Result tag (idx 0): `T` ⇒ Ok (payload→field 1), `F` ⇒ Err (→field 2).
+        ? & agg_is_res == idx 0 { = res_is_ok ( seq fld_first_val `T` ) } {}
         : s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
         // Struct-literal field checks. PLAIN structs only — enum / option /
@@ -10646,7 +10696,21 @@
         // opt/res types ({ i1, ... }) need i64 coercion; enum types need ptr coercion.
         : ~ s actual_fval fval
         : ~ s actual_fty fty
-        ? > idx 0
+        // The insertvalue index: normally the literal position, but a result
+        // payload (idx 1) routes to field 1 (Ok) or field 2 (Err) by tag.
+        : ~ i ins_idx idx
+        // Result payload (`{ i1, T, E }`, idx 1): store BY VALUE into the Ok/Err
+        // slot, coercing only width/i1/enum-wrap via coerce_store_val. The other
+        // slot stays zeroinitialized. A void Ok slot (`!v E`) is an i1 placeholder
+        // the Ok arm never reads, so the (harmless) literal value is dropped in.
+        ? & agg_is_res == idx 1
+        { : i res_tgt ? res_is_ok 1 2
+            : s res_tgt_ty ( compound_field_type agg_ty res_tgt )
+            = actual_fval ( coerce_store_val lex fval fty res_tgt_ty syms cg )
+            = actual_fty res_tgt_ty
+            = ins_idx res_tgt }
+        {}
+        ? & > idx 0 ! agg_is_res
         {  // Detect opt/res aggregate: starts with "{ i1, " (6 chars).
             // For opt types the payload field type = T (may be struct %Foo or i64 or i8*).
             // For res types the payload field type is always i64.
@@ -11121,7 +11185,7 @@
         ( nurl_print ` ` ) ( nurl_print result )
         ( nurl_print `, ` ) ( nurl_print actual_fty )
         ( nurl_print ` ` ) ( nurl_print actual_fval )
-        ( nurl_print `, ` ) ( nurl_print ( nurl_str_int idx ) ) ( nurl_print `\n` )
+        ( nurl_print `, ` ) ( nurl_print ( nurl_str_int ins_idx ) ) ( nurl_print `\n` )
         = result r
         = idx + idx 1
     }
@@ -12480,7 +12544,29 @@
     : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
     : s dtop ( nurl_sym_get syms `__defer_top__` )
     // Use the original val if types match (res propagation), else zeroinitializer
-    : s fail_val ? ( seq fn_rt vt ) val `zeroinitializer`
+    : ~ s fail_val ? ( seq fn_rt vt ) val `zeroinitializer`
+    // Result propagation where the caller's Ok type T differs from the callee's
+    // (same E, enforced by T8 above): the whole-struct types disagree, so rebuild
+    // the caller result `{ i1, Tc, E }` with tag 0 (Err) and the Err payload
+    // (field 2) carried across by value. Without this the mismatch falls to
+    // `zeroinitializer`, silently dropping the propagated error. Options (2-field)
+    // and same-type results keep the cheap `val` / `zeroinitializer` path.
+    ? & & ! ( seq fn_rt vt )
+    & >= ( nurl_str_len fn_rt ) 6 ( seq ( nurl_str_slice fn_rt 0 6 ) `{ i1, ` )
+    & == ( agg_field_count syms fn_rt ) 3 == ( agg_field_count syms vt ) 3
+    { : s ev_ty ( compound_field_type vt 2 )
+        : s ev ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print ev )
+        ( nurl_print ` = extractvalue ` ) ( nurl_print vt )
+        ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 2\n` )
+        : s fe_ty ( compound_field_type fn_rt 2 )
+        : s rb ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print rb )
+        ( nurl_print ` = insertvalue ` ) ( nurl_print fn_rt )
+        ( nurl_print ` zeroinitializer, ` ) ( nurl_print fe_ty )
+        ( nurl_print ` ` ) ( nurl_print ev ) ( nurl_print `, 2\n` )
+        = fail_val rb }
+    {}
     ? != 0 ( nurl_str_len dtop )
     { ? ! ( seq fn_rt `void` )
         { : s rvp ( nurl_sym_get syms `__ret_val__` )
@@ -12497,7 +12583,10 @@
             ( nurl_print ` ` ) ( nurl_print fail_val ) ( emit_dbg_eol )
         }
     }
-    // Ok path: extract inner value (field 1)
+    // Ok path: extract the Ok value from field 1 BY VALUE. With the wide
+    // `{ i1, T, E }` layout the payload already sits at its real type T — no
+    // i64 unbox / heap-load reconstruction is needed (the legacy squeeze that
+    // boxed struct-handle / multi-field / wide-enum payloads is gone).
     ( emit ( nurl_str_cat lok `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lok )
     = g_did_ret 0
@@ -12506,71 +12595,6 @@
     ( nurl_print `  ` ) ( nurl_print res )
     ( nurl_print ` = extractvalue ` ) ( nurl_print vt )
     ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
-    // For `! T E` whose T is a struct handle (e.g. %String), the payload
-    // slot stores the struct's field-0 pointer as i64. Reconstruct the
-    // struct here so let_stmt can bind it to the declared type without a
-    // separate cast. Only fires for res types (! T E lowers to { i1, i64 }).
-    : s call_nurl2 ( nurl_sym_get syms `__last_nurl_call__` )
-    : ~ s inner_nurl ``
-    : b is_res & >= ( nurl_str_len call_nurl2 ) 2
-    ( seq ( nurl_str_slice call_nurl2 0 2 ) `! ` )
-    ? is_res
-    { = inner_nurl ( str_first_word ( str_skip_word call_nurl2 ) ) } {}
-    : s struct_ty ( nurl_sym_get syms inner_nurl )
-    // Three reconstruction shapes when inner is i64 and T resolves to %X:
-    //   (a) X is a struct whose f0 is a pointer (Vec / String / opaque-handle):
-    //       i64 IS f0 — inttoptr + insertvalue at field 0.
-    //   (b) X is a struct whose f0 is NOT a pointer (multi-field like ParsedHead,
-    //       Pt2, Tagged): i64 is a heap-box %X* — inttoptr + load + nurl_free.
-    //   (c) X is a wide enum (max_payloads > 0): same heap-box unbox as (b).
-    // Mirrors gen_match's match-arm reconstruction at lines ~1442–1502.
-    : ~ b is_struct_handle F
-    : ~ b is_heapbox_struct F
-    : ~ b is_heapbox_enum F
-    : ~ s f0_ty ``
-    ? & ( seq inner_ty `i64` ) & != 0 ( nurl_str_len struct_ty ) == ( nurl_str_get struct_ty 0 ) 37
-    { : s sname ( nurl_str_slice struct_ty 1 - ( nurl_str_len struct_ty ) 1 )
-        : s vlist ( nurl_sym_get syms ( nurl_str_cat sname `__variants` ) )
-        ? == 0 ( nurl_str_len vlist )
-        { = f0_ty ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_0` `__type` ) )
-            ? & != 0 ( nurl_str_len f0_ty )
-            == ( nurl_str_get f0_ty - ( nurl_str_len f0_ty ) 1 ) 42
-            { = is_struct_handle T }
-            { ? != 0 ( nurl_str_len f0_ty )
-                { = is_heapbox_struct T } {} } }
-        { : s mp_r ( nurl_sym_get syms ( nurl_str_cat sname `__max_payloads` ) )
-            : i mp_rn ? != 0 ( nurl_str_len mp_r ) ( nurl_str_to_int mp_r ) 0
-            ? > mp_rn 0 { = is_heapbox_enum T } {} } }
-    {}
-    ? is_struct_handle
-    { : s pcv ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print pcv )
-        ( nurl_print ` = inttoptr i64 ` ) ( nurl_print res )
-        ( nurl_print ` to ` ) ( nurl_print f0_ty ) ( nurl_print `\n` )
-        : s sv ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print sv )
-        ( nurl_print ` = insertvalue ` ) ( nurl_print struct_ty )
-        ( nurl_print ` undef, ` ) ( nurl_print f0_ty )
-        ( nurl_print ` ` ) ( nurl_print pcv ) ( nurl_print `, 0\n` )
-        ( nurl_set_last_type struct_ty )
-        ^ sv } {}
-    ? | is_heapbox_struct is_heapbox_enum
-    { : s ubp ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print ubp )
-        ( nurl_print ` = inttoptr i64 ` ) ( nurl_print res )
-        ( nurl_print ` to ` ) ( nurl_print struct_ty ) ( nurl_print `*\n` )
-        : s ubv ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print ubv )
-        ( nurl_print ` = load ` ) ( nurl_print struct_ty )
-        ( nurl_print `, ` ) ( nurl_print struct_ty )
-        ( nurl_print `* ` ) ( nurl_print ubp ) ( nurl_print `\n` )
-        : s ubraw ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print ubraw )
-        ( nurl_print ` = bitcast ` ) ( nurl_print struct_ty )
-        ( nurl_print `* ` ) ( nurl_print ubp ) ( nurl_print ` to i8*\n` )
-        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print ubraw ) ( nurl_print `)` ) ( emit_dbg_eol )
-        ( nurl_set_last_type struct_ty )
-        ^ ubv } {}
     ( nurl_set_last_type inner_ty )
     res
 }
@@ -13486,6 +13510,74 @@
     }
 }
 
+// ── Entry-block alloca hoisting ─────────────────────────────────────
+// NURL emits each `:` binding's `alloca` at its lexical position. LLVM
+// alloca lifetime is the WHOLE function (the slot is freed only at
+// `ret`), so an alloca inside a loop allocates a FRESH slot every
+// iteration and never reclaims it — a hot loop over N items leaks N
+// stack slots and overflows the stack. clang's mem2reg/SROA promotes
+// these (single-store) allocas to SSA values and silently hides the
+// leak; other LLVM front-ends (notably the zig-bundled toolchain used
+// by the installed releases) keep the dynamic stack adjustment and
+// crash with a stack overflow on large inputs (e.g. gzip/deflate over a
+// multi-KB buffer). The fix is the canonical LLVM idiom: emit every
+// alloca in the entry block. All NURL allocas are static-size with no
+// SSA operands, so hoisting is always valid and semantically identical
+// — the slot's lifetime is already function-wide either way; we only
+// stop re-issuing it per iteration.
+
+// Index of the '\n' ending the line starting at `p`, or `flen` if the
+// text has no further newline.
+@ __ha_line_end s text i p i flen → i {
+    : ~ i q p
+    ~ < q flen {
+        ? == ( nurl_str_get text q ) 10 { ^ q } {}
+        = q + q 1
+    }
+    ^ flen
+}
+
+// True when `line` is an alloca INSTRUCTION (`  %reg = alloca <ty>`).
+// Guards on the `  %` register-define prefix so a stray ` = alloca ` in
+// some other context cannot match; the type is always static (no count
+// operand, no SSA reference), which is what makes hoisting sound.
+@ __ha_is_alloca s line → b {
+    ? < ( strlen line ) 3 { ^ F } {}
+    ? != ( nurl_str_get line 0 ) 32 { ^ F } {}
+    ? != ( nurl_str_get line 1 ) 32 { ^ F } {}
+    ? != ( nurl_str_get line 2 ) 37 { ^ F } {}
+    ^ ? >= ( nurl_str_find line ` = alloca ` ) 0 T F
+}
+
+// Re-print a complete `define … { entry: … }` IR string with every
+// alloca instruction moved to the top of the entry block (original
+// relative order preserved); all other instructions — including each
+// alloca's matching `store` — stay exactly where they were. A function
+// with no `entry:` label (should not happen) is emitted verbatim.
+@ emit_hoisted s funcdef → v {
+    : i flen ( strlen funcdef )
+    : i ei ( nurl_str_find funcdef `\nentry:\n` )
+    ? < ei 0 { ( nurl_print funcdef ) ^ v } {}
+    : i hdr_end + ei 8  // past "\nentry:\n"
+    ( nurl_print ( nurl_str_slice funcdef 0 hdr_end ) )
+    // Pass 1: the alloca instructions, hoisted into the entry block.
+    : ~ i p hdr_end
+    ~ < p flen {
+        : i le ( __ha_line_end funcdef p flen )
+        : s line ( nurl_str_slice funcdef p - le p )
+        ? ( __ha_is_alloca line ) { ( nurl_print line ) ( nurl_print `\n` ) } {}
+        = p + le 1
+    }
+    // Pass 2: everything else, in original order.
+    = p hdr_end
+    ~ < p flen {
+        : i le ( __ha_line_end funcdef p flen )
+        : s line ( nurl_str_slice funcdef p - le p )
+        ? ! ( __ha_is_alloca line ) { ( nurl_print line ) ( nurl_print `\n` ) } {}
+        = p + le 1
+    }
+}
+
 // emit_closure_globals: emit only NEW deferred closure definitions since last call
 @ emit_closure_globals → v {
     // Emit new closure function definitions (from watermark to current)
@@ -13494,7 +13586,7 @@
     ~ < idx g_func_count {
         : s funcdef ( nurl_sym_get defs_syms ( nurl_str_int idx ) )
         ? != 0 ( nurl_str_len funcdef )
-        { ( nurl_print funcdef ) }
+        { ( emit_hoisted funcdef ) }
         {}
         = idx + idx 1
     }
@@ -13662,6 +13754,12 @@
     ( nurl_sym_def syms ( nurl_str_cat fname `__res_e_llvm` ) res_e_llvm )
     ( nurl_sym_def syms ( nurl_str_cat fname `__opt_nurl_t` ) opt_nurl_t )
     : s lname ? ( seq fname `main` ) `_nurl_main` fname
+    // Capture the whole function definition into the output buffer so its
+    // allocas can be hoisted into the entry block before emission (see
+    // emit_hoisted). Closures created mid-body buffer separately (nested
+    // print_buf frames) and string/debug globals are deferred, so only
+    // this function's own IR lands in the buffer.
+    ( nurl_print_buf_start )
     ( nurl_print `define ` ) ( nurl_print ret_ty )
     ( nurl_print ` @` ) ( nurl_print lname )
     ( nurl_print `(` ) ( nurl_print params_str ) ( nurl_print `)` )
@@ -13894,6 +13992,9 @@
     }
     {}
     ( emit `}` ) ( emit `` )
+    // Stop capturing and re-emit with allocas hoisted into the entry block.
+    : s __fn_ir ( nurl_print_buf_stop )
+    ( emit_hoisted __fn_ir )
     // Clear DWARF state — subsequent module-scope code (string globals,
     // closure defs, the next function's metadata) must not inherit
     // this function's DILocation, or its calls would attach `!dbg !N`
