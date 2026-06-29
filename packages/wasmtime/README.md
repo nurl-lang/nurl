@@ -33,6 +33,10 @@ wasmtime run --invoke <export> <module.wasm> [int args…]
     section** (active segments copied into memory at load time)
   - **globals** (`global.get`/`global.set`, const-initialised) and **tables**
     + **`call_indirect`** (element segments populate the function table)
+  - **floats** — `f32`/`f64` `const`/`load`/`store`, arithmetic (`add` … `div`,
+    `min`/`max`/`copysign`), `sqrt`/`abs`/`neg`/`ceil`/`floor`/`trunc`/`nearest`,
+    comparisons, and every int↔float conversion (`trunc`/`convert`/`demote`/
+    `promote`/`reinterpret`). Held as IEEE-754 bits via `std/floatbits`.
 
 ```sh
 # add(i32,i32) → i32
@@ -55,7 +59,7 @@ the swarm-mcp kernels) needs, roughly in order:
 1. ~~**Linear memory** + `i32`/`i64` load/store (and `memory.size`/`grow`), plus
    the data section.~~ **Done.**
 2. ~~**Globals**, **tables** + `call_indirect`.~~ **Done.**
-3. **Floats** (`f32`/`f64`) and the numeric conversions.
+3. ~~**Floats** (`f32`/`f64`) and the numeric conversions.~~ **Done.**
 4. **Imports + the WASI surface**, starting with **`--dir`**: `proc_exit`,
    `fd_write` (stdout), `args_*`, `environ_*`, and the preopened-directory file
    ops (`path_open`, `fd_read`, `fd_write`, `fd_seek`, `fd_close`). With `--dir`
