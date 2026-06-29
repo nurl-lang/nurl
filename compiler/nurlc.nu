@@ -3558,7 +3558,7 @@
 
     // ── EOF ──
     ? >= pos len {
-        ( __tok_write lex base TT_EOF # i ( strdup `` ) 0 line start )
+        ( __tok_write lex base TT_EOF ( strdup `` ) 0 line start )
         = done T
     } {}
 
@@ -3569,7 +3569,7 @@
         == & # i . src + pos 1 255 134
         == & # i . src + pos 2 255 146 {
             = pos + pos 3
-            ( __tok_write lex base TT_ARROW # i ( strdup `→` ) 0 line start )
+            ( __tok_write lex base TT_ARROW ( strdup `→` ) 0 line start )
             = done T
         } {}
     } {}
@@ -3859,7 +3859,7 @@
         & == & # i . src + pos 1 255 46
         == & # i . src + pos 2 255 46 {
             = pos + pos 3
-            ( __tok_write lex base TT_ELLIPSIS # i ( strdup `...` ) 0 line start )
+            ( __tok_write lex base TT_ELLIPSIS ( strdup `...` ) 0 line start )
             = done T
         } {}
     } {}
@@ -3869,16 +3869,16 @@
         ? < + pos 1 len {
             : i c1 & # i . src pos 255
             : i c2 & # i . src + pos 1 255
-            ? & == c1 61 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_EQEQ # i ( strdup `==` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 33 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_NE # i ( strdup `!=` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 60 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_LE # i ( strdup `<=` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 62 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_GE # i ( strdup `>=` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 60 == c2 60 { = pos + pos 2 ( __tok_write lex base TT_SHL # i ( strdup `<<` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 62 == c2 62 { = pos + pos 2 ( __tok_write lex base TT_SHR # i ( strdup `>>` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 63 == c2 63 { = pos + pos 2 ( __tok_write lex base TT_QUESTQUEST # i ( strdup `??` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 94 == c2 94 { = pos + pos 2 ( __tok_write lex base TT_CARETCARET # i ( strdup `^^` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 124 == c2 124 { = pos + pos 2 ( __tok_write lex base TT_OROR # i ( strdup `||` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 38 == c2 38 { = pos + pos 2 ( __tok_write lex base TT_ANDAND # i ( strdup `&&` ) 0 line start ) = done T } {}
+            ? & == c1 61 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_EQEQ ( strdup `==` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 33 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_NE ( strdup `!=` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 60 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_LE ( strdup `<=` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 62 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_GE ( strdup `>=` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 60 == c2 60 { = pos + pos 2 ( __tok_write lex base TT_SHL ( strdup `<<` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 62 == c2 62 { = pos + pos 2 ( __tok_write lex base TT_SHR ( strdup `>>` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 63 == c2 63 { = pos + pos 2 ( __tok_write lex base TT_QUESTQUEST ( strdup `??` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 94 == c2 94 { = pos + pos 2 ( __tok_write lex base TT_CARETCARET ( strdup `^^` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 124 == c2 124 { = pos + pos 2 ( __tok_write lex base TT_OROR ( strdup `||` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 38 == c2 38 { = pos + pos 2 ( __tok_write lex base TT_ANDAND ( strdup `&&` ) 0 line start ) = done T } {}
         } {}
     } {}
 
@@ -3886,33 +3886,33 @@
     ? ! done {
         : i c & # i . src pos 255
         = pos + pos 1
-        ? == c 64 { ( __tok_write lex base TT_AT # i ( strdup `@` ) 0 line start ) = done T } {}
-        ? & ! done == c 58 { ( __tok_write lex base TT_COLON # i ( strdup `:` ) 0 line start ) = done T } {}
-        ? & ! done == c 61 { ( __tok_write lex base TT_EQ # i ( strdup `=` ) 0 line start ) = done T } {}
-        ? & ! done == c 94 { ( __tok_write lex base TT_CARET # i ( strdup `^` ) 0 line start ) = done T } {}
-        ? & ! done == c 63 { ( __tok_write lex base TT_QUEST # i ( strdup `?` ) 0 line start ) = done T } {}
-        ? & ! done == c 126 { ( __tok_write lex base TT_TILDE # i ( strdup `~` ) 0 line start ) = done T } {}
-        ? & ! done == c 40 { ( __tok_write lex base TT_LPAREN # i ( strdup `(` ) 0 line start ) = done T } {}
-        ? & ! done == c 41 { ( __tok_write lex base TT_RPAREN # i ( strdup `)` ) 0 line start ) = done T } {}
-        ? & ! done == c 123 { ( __tok_write lex base TT_LBRACE # i ( strdup `{` ) 0 line start ) = done T } {}
-        ? & ! done == c 125 { ( __tok_write lex base TT_RBRACE # i ( strdup `}` ) 0 line start ) = done T } {}
-        ? & ! done == c 46 { ( __tok_write lex base TT_DOT # i ( strdup `.` ) 0 line start ) = done T } {}
-        ? & ! done == c 35 { ( __tok_write lex base TT_HASH # i ( strdup `#` ) 0 line start ) = done T } {}
-        ? & ! done == c 33 { ( __tok_write lex base TT_BANG # i ( strdup `!` ) 0 line start ) = done T } {}
-        ? & ! done == c 43 { ( __tok_write lex base TT_PLUS # i ( strdup `+` ) 0 line start ) = done T } {}
-        ? & ! done == c 45 { ( __tok_write lex base TT_MINUS # i ( strdup `-` ) 0 line start ) = done T } {}
-        ? & ! done == c 42 { ( __tok_write lex base TT_STAR # i ( strdup `*` ) 0 line start ) = done T } {}
-        ? & ! done == c 47 { ( __tok_write lex base TT_SLASH # i ( strdup `/` ) 0 line start ) = done T } {}
-        ? & ! done == c 37 { ( __tok_write lex base TT_PERCENT # i ( strdup `%` ) 0 line start ) = done T } {}
-        ? & ! done == c 38 { ( __tok_write lex base TT_AMP # i ( strdup `&` ) 0 line start ) = done T } {}
-        ? & ! done == c 124 { ( __tok_write lex base TT_PIPE # i ( strdup `|` ) 0 line start ) = done T } {}
-        ? & ! done == c 60 { ( __tok_write lex base TT_LT # i ( strdup `<` ) 0 line start ) = done T } {}
-        ? & ! done == c 62 { ( __tok_write lex base TT_GT # i ( strdup `>` ) 0 line start ) = done T } {}
-        ? & ! done == c 91 { ( __tok_write lex base TT_LBRACK # i ( strdup `[` ) 0 line start ) = done T } {}
-        ? & ! done == c 93 { ( __tok_write lex base TT_RBRACK # i ( strdup `]` ) 0 line start ) = done T } {}
-        ? & ! done == c 59 { ( __tok_write lex base TT_SEMICOL # i ( strdup `;` ) 0 line start ) = done T } {}
-        ? & ! done == c 92 { ( __tok_write lex base TT_BACKSLASH # i ( strdup `\\` ) 0 line start ) = done T } {}
-        ? & ! done == c 36 { ( __tok_write lex base TT_DOLLAR # i ( strdup `$` ) 0 line start ) = done T } {}
+        ? == c 64 { ( __tok_write lex base TT_AT ( strdup `@` ) 0 line start ) = done T } {}
+        ? & ! done == c 58 { ( __tok_write lex base TT_COLON ( strdup `:` ) 0 line start ) = done T } {}
+        ? & ! done == c 61 { ( __tok_write lex base TT_EQ ( strdup `=` ) 0 line start ) = done T } {}
+        ? & ! done == c 94 { ( __tok_write lex base TT_CARET ( strdup `^` ) 0 line start ) = done T } {}
+        ? & ! done == c 63 { ( __tok_write lex base TT_QUEST ( strdup `?` ) 0 line start ) = done T } {}
+        ? & ! done == c 126 { ( __tok_write lex base TT_TILDE ( strdup `~` ) 0 line start ) = done T } {}
+        ? & ! done == c 40 { ( __tok_write lex base TT_LPAREN ( strdup `(` ) 0 line start ) = done T } {}
+        ? & ! done == c 41 { ( __tok_write lex base TT_RPAREN ( strdup `)` ) 0 line start ) = done T } {}
+        ? & ! done == c 123 { ( __tok_write lex base TT_LBRACE ( strdup `{` ) 0 line start ) = done T } {}
+        ? & ! done == c 125 { ( __tok_write lex base TT_RBRACE ( strdup `}` ) 0 line start ) = done T } {}
+        ? & ! done == c 46 { ( __tok_write lex base TT_DOT ( strdup `.` ) 0 line start ) = done T } {}
+        ? & ! done == c 35 { ( __tok_write lex base TT_HASH ( strdup `#` ) 0 line start ) = done T } {}
+        ? & ! done == c 33 { ( __tok_write lex base TT_BANG ( strdup `!` ) 0 line start ) = done T } {}
+        ? & ! done == c 43 { ( __tok_write lex base TT_PLUS ( strdup `+` ) 0 line start ) = done T } {}
+        ? & ! done == c 45 { ( __tok_write lex base TT_MINUS ( strdup `-` ) 0 line start ) = done T } {}
+        ? & ! done == c 42 { ( __tok_write lex base TT_STAR ( strdup `*` ) 0 line start ) = done T } {}
+        ? & ! done == c 47 { ( __tok_write lex base TT_SLASH ( strdup `/` ) 0 line start ) = done T } {}
+        ? & ! done == c 37 { ( __tok_write lex base TT_PERCENT ( strdup `%` ) 0 line start ) = done T } {}
+        ? & ! done == c 38 { ( __tok_write lex base TT_AMP ( strdup `&` ) 0 line start ) = done T } {}
+        ? & ! done == c 124 { ( __tok_write lex base TT_PIPE ( strdup `|` ) 0 line start ) = done T } {}
+        ? & ! done == c 60 { ( __tok_write lex base TT_LT ( strdup `<` ) 0 line start ) = done T } {}
+        ? & ! done == c 62 { ( __tok_write lex base TT_GT ( strdup `>` ) 0 line start ) = done T } {}
+        ? & ! done == c 91 { ( __tok_write lex base TT_LBRACK ( strdup `[` ) 0 line start ) = done T } {}
+        ? & ! done == c 93 { ( __tok_write lex base TT_RBRACK ( strdup `]` ) 0 line start ) = done T } {}
+        ? & ! done == c 59 { ( __tok_write lex base TT_SEMICOL ( strdup `;` ) 0 line start ) = done T } {}
+        ? & ! done == c 92 { ( __tok_write lex base TT_BACKSLASH ( strdup `\\` ) 0 line start ) = done T } {}
+        ? & ! done == c 36 { ( __tok_write lex base TT_DOLLAR ( strdup `$` ) 0 line start ) = done T } {}
         // Unknown byte — emit IDENT "?XX" so caller can diagnose.
         ? ! done {
             : s buf # s ( malloc 4 )
