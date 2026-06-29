@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.5] — 2026-06-29
+
+A **compiler correctness** release: a single codegen fix that stops the
+toolchain from overflowing the stack on hot loops.
+
+### Fixed
+
+- **`nurlc` now emits every `alloca` in the function entry block.**
+  Previously each `:` binding's stack slot was allocated at its lexical
+  position, so a binding inside a loop re-allocated a fresh slot on every
+  iteration (LLVM only reclaims allocas at `ret`) — a loop over N items
+  leaked N stack slots and eventually overflowed the stack. clang's
+  `mem2reg` promoted those slots away and hid the leak, but the released
+  toolchain (relinked with the bundled `zig cc -O2 -flto` for
+  portability) kept the per-iteration stack growth and crashed. The most
+  visible symptom was `nurlpkg publish` segfaulting inside the pure-NURL
+  gzip/deflate path while packing a multi-kilobyte tarball. All NURL
+  allocas are static-size, so hoisting them to the entry block is the
+  canonical LLVM idiom and semantically identical — the slot lifetime is
+  already function-wide; the compiler just stops re-issuing it per
+  iteration. The bootstrap snapshot (`nurlc_lastgood.{nu,ll}`) was
+  refreshed accordingly.
+
 ## [0.10.4] — 2026-06-29
 
 A **WebAssembly + self-hosting** release. NURL gains a from-scratch WebAssembly
