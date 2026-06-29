@@ -926,7 +926,15 @@ s combined_stdout s combined_stderr → v {
                                 ?? re_aud { T ra → { = uses_audio ( regex_test ra ( string_data ir_fixed ) ) ( regex_free ra ) } F _ → {} }
 
                                 : ( Vec s ) clang_args ( vec_new [s] )
-                                ( vec_push [s] clang_args `--target=wasm32-wasi` ) ( vec_push [s] clang_args opt ) ( vec_push [s] clang_args `-Wno-override-module` ) ( vec_push [s] clang_args ( string_data ll_path ) )
+                                ( vec_push [s] clang_args `--target=wasm32-wasi` ) ( vec_push [s] clang_args opt ) ( vec_push [s] clang_args `-Wno-override-module` )
+                                // Keep dead-code elimination off: NURL closures take function
+                                // addresses (→ wasm function-table indices). --gc-sections
+                                // prunes/renumbers the table so a stored call_indirect index no
+                                // longer maps to its function, trapping at scale (e.g. nurlc.wasm
+                                // compiling >150-function programs). --no-gc-sections keeps the
+                                // table stable so indices stay valid.
+                                ( vec_push [s] clang_args `-Wl,--no-gc-sections` )
+                                ( vec_push [s] clang_args ( string_data ll_path ) )
                                 ( vec_push [s] clang_args ( string_data ( get_runtime_wasm_o ) ) )
                                 ? uses_canvas { ( vec_push [s] clang_args ( string_data ( get_canvas_wasm_o ) ) ) } {}
                                 ? uses_audio { ( vec_push [s] clang_args ( string_data ( get_audio_wasm_o ) ) ) } {}
