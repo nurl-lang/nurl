@@ -40,9 +40,12 @@ deterministically (no coordination):
   accepts token-authentic results.
 
 > **Requires NURL ≥ v0.10.4** (built from source against your installed stdlib
-> at install time). **wasm kernels additionally require `wasmtime`** on each
-> worker; **`--mcp` needs `openssl`** on first run to auto-mint a self-signed
-> TLS cert (or pass your own with `--tls-cert`/`--tls-key`).
+> at install time). **wasm kernels additionally need a `wasmtime` on each
+> worker** — the toolchain's own pure-NURL runtime (`packages/wasmtime`) is a
+> drop-in (put it on `PATH` as `wasmtime` or set `$WASMTIME`), so no external
+> runtime is required; the Bytecode-Alliance `wasmtime` works too. **`--mcp`
+> needs `openssl`** on first run to auto-mint a self-signed TLS cert (or pass
+> your own with `--tls-cert`/`--tls-key`).
 
 ## The control surface (what the LLM sees)
 
@@ -50,7 +53,7 @@ Five tools, with self-describing schemas so a model uses them without docs:
 
 | tool | arguments | does |
 |------|-----------|------|
-| `compute_submit` | `expr` (string), `lo` (int), `hi` (int), `reduce` (string, default `sum`) | shard + run an **expression** kernel over `[lo,hi)`; returns a `task_id` |
+| `compute_submit` | `expr` (string), `lo` (int), `hi` (int), `reduce` (string, default `sum`), `dtype` (string, `int` default or `float`) | shard + run an **expression** kernel over `[lo,hi)`; returns a `task_id`. `dtype:"float"` evaluates the same kernel in **f64** (`x` is the index as a double, float literals like `0.5` allowed) |
 | `compute_submit_kernel` | `source` (NURL program), `lo`, `hi`, `reduce` | run an **arbitrary NURL kernel given as source** — the server compiles it to wasm and runs it; for anything the expression language can't express (loops, helpers) |
 | `compute_run_wasm` | `wasm_base64` (string), `lo`, `hi`, `reduce` | like `compute_submit_kernel` but you pass an **already-compiled** wasm module |
 | `compute_list` | — | every task with status (`running`/`done`), kernel, range, reduce, result |
@@ -69,17 +72,28 @@ the model polls `compute_result` until it is `done`. Example exchange:
 
 ## The kernel language
 
-A workload's *map* step is an integer expression in one variable `x`,
+A workload's *map* step is an expression in one variable `x`,
 deliberately small and regular:
 
 ```
 operators   + - * / %          (truncated division; ÷0 and %0 yield 0)
-comparisons < <= > >= == !=     (yield 0 or 1)
+comparisons < <= > >= == !=     (yield 1 or 0)
 logical     & |                 (operate on 0/1; non-zero is "true")
 ternary     cond ? a : b
 functions   min(a,b)  max(a,b)  abs(a)
-variable    x        literals   integers
+variable    x        literals   integers or floats ("0.5")
 ```
+
+The same grammar runs in one of two numeric domains, picked per task by
+`dtype` (default `int`):
+
+- **`int`** — all arithmetic is i64; `x` is the integer index. *(Unchanged: the
+  integer path is byte-for-byte what it always was — `dtype:"float"` adds a
+  parallel f64 evaluator, it does **not** slow integer tasks down.)*
+- **`float`** — all arithmetic is f64; `x` is the integer index cast to a
+  double; the result is a float. The integer range `[lo, hi)` is the same in
+  both. Use it for real-valued kernels, e.g. `{"expr":"1.0/(x*x)","lo":1,
+  "hi":1000000,"reduce":"sum","dtype":"float"}` ≈ π²/6.
 
 The *reduce* step folds the mapped values over the whole range:
 
@@ -99,6 +113,7 @@ Examples the model can write directly:
 | count in a sub-interval | `x>1000 & x<2000` | `count` |
 | largest value of a polynomial | `x*x-7*x` | `max` |
 | sum only where a condition holds | `x>100 ? x : 0` | `sum` |
+| Basel sum ≈ π²/6 (`dtype:"float"`) | `1.0/(x*x)` | `sum` |
 
 Every reduce op is associative, so sharding the range across workers and
 combining the partial folds is exact — the answer never depends on the worker

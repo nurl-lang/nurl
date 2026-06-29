@@ -19,9 +19,29 @@ $ `src/expr.nu`
     ^ r
 }
 
+// Float evaluate `src` at x (x cast to double inside).
+@ evf s src f x → f {
+    : ( Vec u ) b ( bytes_from_str src )
+    : *EParser p # *EParser ( nurl_alloc Z EParser )
+    : i root ( expr_parse b p )
+    : b okp . p ok
+    : ~ f r -999.0
+    ? okp { = r ( expr_eval_f p root x ) } {}
+    ( eparser_free p ) ( vec_free [u] b )
+    ^ r
+}
+
 @ pi s label i a i b → v {
     ( nurl_print label ) ( nurl_print_int a )
     ( nurl_print ? == a b ` == ` ` != ` ) ( nurl_print_int b ) ( nurl_print `\n` )
+}
+
+// Float assert: pass if |a-b| < 1e-9.
+@ pf s label f a f b → v {
+    : f d - a b
+    : f ad ? < d 0.0 - 0.0 d d
+    ( nurl_print label ) ( nurl_print ( nurl_str_float a ) )
+    ( nurl_print ? < ad 0.000000001 ` ~= ` ` != ` ) ( nurl_print ( nurl_str_float b ) ) ( nurl_print `\n` )
 }
 
 @ main → i {
@@ -49,5 +69,16 @@ $ `src/expr.nu`
     ( pi `err 'x*':      ` ( ev `x*` 0 ) -999999 )
     ( pi `err 'x y':     ` ( ev `x y` 0 ) -999999 )
     ( pi `err 'foo(x)':  ` ( ev `foo(x)` 0 ) -999999 )
+    // float-domain evaluation (expr_eval_f)
+    ( pf `f x*0.5 @5:    ` ( evf `x*0.5` 5.0 ) 2.5 )
+    ( pf `f 1.0/(x*x)@2: ` ( evf `1.0/(x*x)` 2.0 ) 0.25 )
+    ( pf `f x+0.25 @3:   ` ( evf `x+0.25` 3.0 ) 3.25 )
+    ( pf `f 0.1+0.2 @0:  ` ( evf `0.1+0.2` 0.0 ) 0.3 )
+    ( pf `f x/0.0 @5:    ` ( evf `x/0.0` 5.0 ) 0.0 )
+    ( pf `f x>2.5?1.5:0 @3:` ( evf `x>2.5 ? 1.5 : 0.0` 3.0 ) 1.5 )
+    ( pf `f abs(-x)@4:   ` ( evf `abs(-x)` 4.0 ) 4.0 )
+    ( pf `f min(x,2.5)@9:` ( evf `min(x,2.5)` 9.0 ) 2.5 )
+    // int-mode sees a float literal as truncated
+    ( pi `i 3.9 trunc:   ` ( ev `3.9` 0 ) 3 )
     ^ 0
 }

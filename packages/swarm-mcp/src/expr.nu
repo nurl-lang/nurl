@@ -15,29 +15,39 @@
 //   addsub  := muldiv ( ('+'|'-') muldiv )*
 //   muldiv  := unary  ( ('*'|'/'|'%') unary )*
 //   unary   := '-' unary | primary
-//   primary := INT | 'x' | '(' expr ')' | ('min'|'max') '(' expr ',' expr ')'
+//   primary := NUM | 'x' | '(' expr ')' | ('min'|'max') '(' expr ',' expr ')'
 //            | 'abs' '(' expr ')'
+//   NUM     := DIGIT+ ( '.' DIGIT+ )?
 //
-// All arithmetic is i64 (truncated division; division/mod by zero yields 0).
-// Comparisons and '&' '|' yield 0/1; any non-zero is "true".
+// The same grammar evaluates in one of two numeric domains, chosen per task by
+// the caller (see work.nu `dtype`):
+//   • int   — all arithmetic is i64 (truncated division; div/mod by zero → 0).
+//   • float — all arithmetic is f64, `x` is the integer index cast to double,
+//             div/mod by zero → 0.0. A literal with a '.' (e.g. `0.5`) is a
+//             float literal in either mode (truncated toward zero in int mode).
+// Comparisons and '&' '|' yield 1/0 (1.0/0.0 in float); any non-zero is "true".
 //
 // Tokens are kept in two parallel int vectors; the parser builds a flat
 // stride-4 node arena (tag,a,b,c) and returns the root index — the resp.nu
-// arena pattern, so nesting needs no per-node allocation.
+// arena pattern, so nesting needs no per-node allocation. Float literals carry
+// the f64 bit pattern (via floatbits) in the value slot, so the all-int arena
+// holds them losslessly; the float evaluator reinterprets them back.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/std/floatbits.nu`
 
 // ── token kinds ──────────────────────────────────────────────────
 // 0 END · 1 INT(val) · 2 X · 3 + · 4 - · 5 * · 6 / · 7 % · 8 < · 9 <= ·
 // 10 > · 11 >= · 12 == · 13 != · 14 & · 15 | · 16 ? · 17 : · 18 ( · 19 ) ·
-// 20 , · 21 min · 22 max · 23 abs · 99 ERROR
+// 20 , · 21 min · 22 max · 23 abs · 24 FLT(f64 bits) · 99 ERROR
 // Binary-operator kinds 3..15 are chosen to equal their node tags below.
 
 // ── node tags ────────────────────────────────────────────────────
 // 0 INT(a=value) · 1 X · 2 NEG(a) · 3 ADD · 4 SUB · 5 MUL · 6 DIV · 7 MOD ·
 // 8 LT · 9 LE · 10 GT · 11 GE · 12 EQ · 13 NE · 14 AND · 15 OR ·
-// 16 TERN(a=cond,b=then,c=else) · 17 MIN(a,b) · 18 MAX(a,b) · 19 ABS(a)
+// 16 TERN(a=cond,b=then,c=else) · 17 MIN(a,b) · 18 MAX(a,b) · 19 ABS(a) ·
+// 20 FLT(a=f64 bit pattern)
 
 @ __is_digit i c → b { ^ & >= c 48 <= c 57 }
 
@@ -62,7 +72,25 @@ $ `stdlib/core/vec.nu`
                     = v + * v 10 - d 48
                     = i + i 1
                 }
-                ( vec_push [i] tk 1 ) ( vec_push [i] tv v )
+                // A '.' followed by a digit makes it a float literal; otherwise
+                // the '.' is left for the (error) operator path. Float literals
+                // carry the f64 bit pattern in tv, tagged as token kind 24.
+                : i dot ? < i n ?? ( vec_get [u] src i ) { T x → # i x F → 0 } 0
+                : b frac & == dot 46 & < + i 1 n ( __is_digit ?? ( vec_get [u] src + i 1 ) { T x → # i x F → 0 } )
+                ? frac {
+                    = i + i 1  // consume '.'
+                    : ~ f fv # f v
+                    : ~ f scale 1.0
+                    ~ & < i n ( __is_digit ?? ( vec_get [u] src i ) { T x → # i x F → 0 } ) {
+                        : i d ?? ( vec_get [u] src i ) { T x → # i x F → 0 }
+                        = scale * scale 10.0
+                        = fv + fv / # f - d 48 scale
+                        = i + i 1
+                    }
+                    ( vec_push [i] tk 24 ) ( vec_push [i] tv ( f64_to_bits fv ) )
+                } {
+                    ( vec_push [i] tk 1 ) ( vec_push [i] tv v )
+                }
             } {
                 ? ( __is_alpha c ) {
                     : ( Vec u ) word ( vec_new [u] )
@@ -144,6 +172,7 @@ $ `stdlib/core/vec.nu`
 @ __ep_primary * EParser p → i {
     : i k ( __ep_kind p )
     ? == k 1 { : i v ( __ep_val p ) ( __ep_adv p ) ^ ( __ep_node p 0 v 0 0 ) } {}  // INT
+    ? == k 24 { : i bits ( __ep_val p ) ( __ep_adv p ) ^ ( __ep_node p 20 bits 0 0 ) } {}  // FLT (f64 bits)
     ? == k 2 { ( __ep_adv p ) ^ ( __ep_node p 1 0 0 0 ) } {}  // X
     ? == k 18 {  // ( expr )
         ( __ep_adv p )
@@ -269,6 +298,7 @@ $ `stdlib/core/vec.nu`
     : i b ( __ar p node 2 )
     : i c ( __ar p node 3 )
     ? == tag 0 { ^ a } {}
+    ? == tag 20 { ^ # i ( bits_to_f64 a ) } {}  // FLT literal in int mode → truncate
     ? == tag 1 { ^ x } {}
     ? == tag 2 { ^ - 0 ( expr_eval p a x ) } {}
     ? == tag 3 { ^ + ( expr_eval p a x ) ( expr_eval p b x ) } {}
@@ -289,4 +319,39 @@ $ `stdlib/core/vec.nu`
     ? == tag 18 { : i va ( expr_eval p a x ) : i vb ( expr_eval p b x ) ^ ? > va vb va vb } {}
     ? == tag 19 { : i va ( expr_eval p a x ) ^ ? < va 0 - 0 va va } {}
     ^ 0
+}
+
+// ── float evaluator ──────────────────────────────────────────────
+// The f64 dual of expr_eval. Same arena, same tags; `x` arrives already cast to
+// double. INT-literal nodes are widened with sitofp; FLT-literal nodes carry the
+// f64 bit pattern and are reinterpreted back. Div/mod by zero → 0.0; mod is the
+// truncated remainder (a − b·trunc(a/b)), matching the int evaluator's rule.
+
+@ expr_eval_f * EParser p i node f x → f {
+    : i tag ( __ar p node 0 )
+    : i a ( __ar p node 1 )
+    : i b ( __ar p node 2 )
+    : i c ( __ar p node 3 )
+    ? == tag 0 { ^ # f a } {}                // INT literal → double
+    ? == tag 20 { ^ ( bits_to_f64 a ) } {}   // FLT literal
+    ? == tag 1 { ^ x } {}
+    ? == tag 2 { ^ - 0.0 ( expr_eval_f p a x ) } {}
+    ? == tag 3 { ^ + ( expr_eval_f p a x ) ( expr_eval_f p b x ) } {}
+    ? == tag 4 { ^ - ( expr_eval_f p a x ) ( expr_eval_f p b x ) } {}
+    ? == tag 5 { ^ * ( expr_eval_f p a x ) ( expr_eval_f p b x ) } {}
+    ? == tag 6 { : f d ( expr_eval_f p b x ) ? == d 0.0 { ^ 0.0 } { ^ / ( expr_eval_f p a x ) d } } {}
+    ? == tag 7 { : f d ( expr_eval_f p b x ) ? == d 0.0 { ^ 0.0 } { : f aa ( expr_eval_f p a x ) ^ - aa * d # f # i / aa d } } {}
+    ? == tag 8 { ^ ? < ( expr_eval_f p a x ) ( expr_eval_f p b x ) 1.0 0.0 } {}
+    ? == tag 9 { ^ ? <= ( expr_eval_f p a x ) ( expr_eval_f p b x ) 1.0 0.0 } {}
+    ? == tag 10 { ^ ? > ( expr_eval_f p a x ) ( expr_eval_f p b x ) 1.0 0.0 } {}
+    ? == tag 11 { ^ ? >= ( expr_eval_f p a x ) ( expr_eval_f p b x ) 1.0 0.0 } {}
+    ? == tag 12 { ^ ? == ( expr_eval_f p a x ) ( expr_eval_f p b x ) 1.0 0.0 } {}
+    ? == tag 13 { ^ ? != ( expr_eval_f p a x ) ( expr_eval_f p b x ) 1.0 0.0 } {}
+    ? == tag 14 { ^ ? & != ( expr_eval_f p a x ) 0.0 != ( expr_eval_f p b x ) 0.0 1.0 0.0 } {}
+    ? == tag 15 { ^ ? | != ( expr_eval_f p a x ) 0.0 != ( expr_eval_f p b x ) 0.0 1.0 0.0 } {}
+    ? == tag 16 { ? != ( expr_eval_f p a x ) 0.0 { ^ ( expr_eval_f p b x ) } { ^ ( expr_eval_f p c x ) } } {}
+    ? == tag 17 { : f va ( expr_eval_f p a x ) : f vb ( expr_eval_f p b x ) ^ ? < va vb va vb } {}
+    ? == tag 18 { : f va ( expr_eval_f p a x ) : f vb ( expr_eval_f p b x ) ^ ? > va vb va vb } {}
+    ? == tag 19 { : f va ( expr_eval_f p a x ) ^ ? < va 0.0 - 0.0 va va } {}
+    ^ 0.0
 }

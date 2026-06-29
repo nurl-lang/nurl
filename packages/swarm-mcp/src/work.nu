@@ -7,12 +7,18 @@
 // partial folds. Every reduce op is associative, so sharding is exact.
 //
 //   reduce op : 0 sum · 1 product · 2 min · 3 max · 4 count (of truthy map)
-//   chunk     : [op:1][lo:8 BE][hi:8 BE][expr bytes…]
-//   result    : [value:8 BE]
+//   dtype     : 0 int (i64) · 1 float (f64)
+//   chunk     : [op:1][dtype:1][lo:8 BE][hi:8 BE][expr bytes…]
+//   result    : [value:8 BE]  — i64, or an f64 bit pattern when dtype=float
+//
+// Float tasks fold in f64 over the same integer range (x is the index cast to
+// double) and ship the partial as its f64 bit pattern through the same 8-byte
+// result codec; the coordinator reinterprets it (see main.nu tids_combine).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/std/floatbits.nu`
 $ `expr.nu`
 $ `token.nu`
 
@@ -51,11 +57,37 @@ $ `token.nu`
     ^ ( red_fold op a b )
 }
 
+// ── float (f64) reduce — the dtype=1 dual of the three above ──────
+// +∞ / −∞ identities for min/max come from their f64 bit patterns (0x7FF0…/
+// 0xFFF0… = ±(2⁶³−2⁵²) signed): coordination-free and exact.
+
+@ red_id_f i op → f {
+    ? == op 1 { ^ 1.0 } {}                                  // product
+    ? == op 2 { ^ ( bits_to_f64 9218868437227405312 ) } {}  // min → +∞
+    ? == op 3 { ^ ( bits_to_f64 -4503599627370496 ) } {}    // max → −∞
+    ^ 0.0  // sum, count
+}
+
+@ red_fold_f i op f acc f v → f {
+    ? == op 0 { ^ + acc v } {}                       // sum
+    ? == op 1 { ^ * acc v } {}                       // product
+    ? == op 2 { ^ ? < v acc v acc } {}               // min
+    ? == op 3 { ^ ? > v acc v acc } {}               // max
+    ? == op 4 { ^ ? != v 0.0 + acc 1.0 acc } {}      // count of truthy
+    ^ acc
+}
+
+@ red_combine_f i op f a f b → f {
+    ? == op 4 { ^ + a b } {}
+    ^ ( red_fold_f op a b )
+}
+
 // ── chunk + result codec ─────────────────────────────────────────
 
-@ chunk_payload i op i lo i hi ( Vec u ) expr → ( Vec u ) {
+@ chunk_payload i op i dtype i lo i hi ( Vec u ) expr → ( Vec u ) {
     : ( Vec u ) b ( vec_new [u] )
     ( vec_push [u] b # u op )
+    ( vec_push [u] b # u dtype )
     ( bytes_push_u64_be b # u64 lo )
     ( bytes_push_u64_be b # u64 hi )
     ( vec_extend [u] b expr )
@@ -92,16 +124,29 @@ $ `token.nu`
             }
             T body → {
                 : i op ?? ( vec_get [u] body 0 ) { T x → # i x F → 0 }
-                : i lo ?? ( bytes_read_u64_be body 1 ) { T x → # i x F → 0 }
-                : i hi ?? ( bytes_read_u64_be body 9 ) { T x → # i x F → 0 }
-                : ( Vec u ) src ( bytes_slice body 17 ( vec_len [u] body ) )
+                : i dtype ?? ( vec_get [u] body 1 ) { T x → # i x F → 0 }
+                : i lo ?? ( bytes_read_u64_be body 2 ) { T x → # i x F → 0 }
+                : i hi ?? ( bytes_read_u64_be body 10 ) { T x → # i x F → 0 }
+                : ( Vec u ) src ( bytes_slice body 18 ( vec_len [u] body ) )
                 : *EParser ep # *EParser ( nurl_alloc Z EParser )
                 : i root ( expr_parse src ep )
-                : ~ i acc ( red_id op )
-                ? . ep ok {
-                    : ~ i xx lo
-                    ~ < xx hi { = acc ( red_fold op acc ( expr_eval ep root xx ) ) = xx + xx 1 }
-                } {}
+                : ~ i acc 0
+                ? == dtype 1 {
+                    // float (f64) fold: x is the integer index cast to double;
+                    // the partial rides the wire as its f64 bit pattern.
+                    : ~ f facc ( red_id_f op )
+                    ? . ep ok {
+                        : ~ i xx lo
+                        ~ < xx hi { = facc ( red_fold_f op facc ( expr_eval_f ep root # f xx ) ) = xx + xx 1 }
+                    } {}
+                    = acc ( f64_to_bits facc )
+                } {
+                    = acc ( red_id op )
+                    ? . ep ok {
+                        : ~ i xx lo
+                        ~ < xx hi { = acc ( red_fold op acc ( expr_eval ep root xx ) ) = xx + xx 1 }
+                    } {}
+                }
                 ( eparser_free ep )
                 ( vec_free [u] src )
                 ( vec_free [u] body )
