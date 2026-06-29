@@ -434,6 +434,14 @@ const char* nurl_str_float(double d) {
     return strdup(buf);
 }
 
+/* IEEE-754 bit reinterpretation (memcpy = strict-aliasing-safe, zero-alloc).
+ * Exposed to NURL via stdlib/std/floatbits.nu. f32 patterns are returned
+ * zero-extended into the low 32 bits so they serialise as a plain u32. */
+long long nurl_f64_to_bits(double x) { long long b; memcpy(&b, &x, 8); return b; }
+double    nurl_bits_to_f64(long long b) { double x; memcpy(&x, &b, 8); return x; }
+long long nurl_f32_to_bits(float x) { unsigned int b; memcpy(&b, &x, 4); return (long long)b; }
+float     nurl_bits_to_f32(long long b) { unsigned int u = (unsigned int)b; float x; memcpy(&x, &u, 4); return x; }
+
 /* Fast decimal-float parser over a byte range (no NUL needed).
  * Recognises `-?digits(.digits)?(eE[+-]?digits)?`. Returns 0.0 for
  * empty/non-numeric. No locale, no NaN/Inf — use strtod when those

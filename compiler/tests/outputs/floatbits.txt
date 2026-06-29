@@ -1,0 +1,19 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+f64 0.0  bits==0:   YES
+f64 1.0  bits:      YES
+f64 2.0  bits:      YES
+f64 0.5  bits:      YES
+f64 -2.0 bits:      YES
+f64 roundtrip:      YES
+bits_to_f64 arith:  YES
+f32 1.0  bits:      YES
+f32 2.0  bits:      YES
+f32 roundtrip:      YES
+f64_be first byte:  YES
+f64_be read-back:   YES
+f64_le last byte:   YES
+f64_le read-back:   YES
+f32_le read-back:   YES
