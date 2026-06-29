@@ -58,6 +58,19 @@ done
 if [ "$ok" = 1 ]; then echo "[smoke] PASS mcp compute count even = 500000"; else
     echo "[smoke] FAIL mcp compute — last: $res"; fail=1; fi
 
+# 3b. float compute_submit: Basel sum Σ 1/x² over [1,1000000) ≈ 1.64493 (π²/6)
+fsub="$(MCP '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"compute_submit","arguments":{"expr":"1.0/(x*x)","lo":1,"hi":1000000,"reduce":"sum","dtype":"float"}}}')"
+ftid="$(printf '%s' "$fsub" | grep -oE 'task_id..[0-9]+' | grep -oE '[0-9]+' | head -1)"
+[ -z "$ftid" ] && ftid=2
+fok=0
+for _ in 1 2 3 4 5 6 7 8; do
+    fres="$(MCP "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"compute_result\",\"arguments\":{\"task_id\":$ftid}}}")"
+    if printf '%s' "$fres" | grep -q 'float' && printf '%s' "$fres" | grep -q '1.64493'; then fok=1; break; fi
+    sleep 0.7
+done
+if [ "$fok" = 1 ]; then echo "[smoke] PASS mcp float compute Basel ≈ 1.64493 (π²/6)"; else
+    echo "[smoke] FAIL mcp float compute — last: $fres"; fail=1; fi
+
 # 4. dev CLI submit: sum of x*x over [1,1000) = 332833500
 cli="$("$BIN" submit 127.0.0.1 "$PORT" sum 1 1000 'x*x' --token "$TOKEN" 2>&1 | tr -d '\n')"
 if printf '%s' "$cli" | grep -q '332833500'; then echo "[smoke] PASS cli submit x*x = 332833500"; else

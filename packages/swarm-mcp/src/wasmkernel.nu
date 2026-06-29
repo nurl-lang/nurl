@@ -8,8 +8,21 @@
 // each worker; the worker runs it under `wasmtime` and returns the partial,
 // which the coordinator combines with the reduce op exactly as in phase 1.
 //
+// The `wasmtime` here is just a CLI contract — `wasmtime run <module> <lo> <hi>`,
+// partial on stdout. The toolchain's own pure-NURL runtime (packages/wasmtime)
+// satisfies it exactly, so a worker needs NO external runtime: put that binary
+// on PATH as `wasmtime`, or point $WASMTIME at it. The Bytecode-Alliance
+// wasmtime works too — whichever $WASMTIME resolves to is used.
+//
 //   chunk : [lo:8 BE][hi:8 BE][wasm module bytes…]   (the reduce op is baked
 //           into the module by the wrapper, so the partial is final per chunk)
+//
+// The module prints its partial as a decimal integer on stdout; __wasm_run reads
+// it back with nurl_str_to_int. For a float task (dtype=1) the module prints the
+// partial's f64 BIT PATTERN as that decimal integer (see buildwasm.nu), so the
+// same int wire carries it unchanged — the coordinator reinterprets it in
+// tids_combine's float path. This file is dtype-agnostic: it ships and runs the
+// module and returns whatever integer it printed.
 //
 // The module is cached on each worker by a content hash, so re-running the same
 // kernel (every chunk of a task, and across tasks) writes the .wasm only once.
@@ -63,6 +76,9 @@ $ `token.nu`
     ^ p
 }
 
+// The runtime binary: $WASMTIME, else `wasmtime` on PATH. The pure-NURL
+// packages/wasmtime is a drop-in here (no external dependency); the
+// Bytecode-Alliance wasmtime works equally well.
 @ __wasmtime → String { ^ ( env_var_or `WASMTIME` `wasmtime` ) }
 
 // Run a cached module over [lo, hi); returns the printed partial (0 on any

@@ -17,6 +17,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/std/floatbits.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/encode.nu`
@@ -220,7 +221,7 @@ $ `buildwasm.nu`
 // Submits the kernel to the ring and returns the chunk task-ids. `expr` is the
 // raw kernel bytes; the caller owns it.
 
-@ cluster_submit * Swarm sw i op i lo i hi ( Vec u ) expr i nchunks → ( Vec i ) {
+@ cluster_submit * Swarm sw i op i dtype i lo i hi ( Vec u ) expr i nchunks → ( Vec i ) {
     : ( Vec s ) chunks ( shard lo hi nchunks )
     : ( Vec i ) tids ( vec_new [i] )
     : ~ i i 0
@@ -228,7 +229,7 @@ $ `buildwasm.nu`
         : s cp ?? ( vec_get [s] chunks i ) { T x → x F → # s 0 }
         : *Chunk c # *Chunk cp
         : ( Vec u ) rkey ( chunk_key i )
-        : ( Vec u ) payload ( chunk_payload op . c lo . c hi expr )
+        : ( Vec u ) payload ( chunk_payload op dtype . c lo . c hi expr )
         : ( Vec u ) tagged ( token_tag . sw key payload )
         ( vec_push [i] tids ( job_submit # *JobNode . sw job ( kind_kernel ) rkey tagged ) )
         ( vec_free [u] rkey ) ( vec_free [u] payload ) ( vec_free [u] tagged )
@@ -270,16 +271,26 @@ $ `buildwasm.nu`
     ^ all
 }
 
-// Combine all chunk results with the reduce op (assumes ready).
-@ tids_combine * Swarm sw i op ( Vec i ) tids → i {
+// Combine all chunk results with the reduce op (assumes ready). For a float
+// task each partial is an f64 bit pattern: decode→f64, combine in f64, and
+// return the combined f64 re-encoded as its bit pattern (the Task stores it
+// that way; task_to_json reinterprets it for the model).
+@ tids_combine * Swarm sw i dtype i op ( Vec i ) tids → i {
     : i n ( vec_len [i] tids )
-    : ~ i acc ( red_id op )
+    : ~ i acc ? == dtype 1 ( f64_to_bits ( red_id_f op ) ) ( red_id op )
     : ~ i k 0
     ~ < k n {
         ?? ( job_await # *JobNode . sw job ?? ( vec_get [i] tids k ) { T x → x F → 0 } ) {
             T r → {
                 ?? ( token_untag . sw key r ) {
-                    T body → { = acc ( red_combine op acc ( result_decode body ) ) ( vec_free [u] body ) }
+                    T body → {
+                        ? == dtype 1 {
+                            = acc ( f64_to_bits ( red_combine_f op ( bits_to_f64 acc ) ( bits_to_f64 ( result_decode body ) ) ) )
+                        } {
+                            = acc ( red_combine op acc ( result_decode body ) )
+                        }
+                        ( vec_free [u] body )
+                    }
                     F → {}
                 }
                 ( vec_free [u] r )
@@ -313,10 +324,10 @@ $ `buildwasm.nu`
             } {}
             : ( Vec u ) eb ( bytes_from_str expr )
             : i nchunks ( nchunks_for nworkers )
-            : ( Vec i ) tids ( cluster_submit sw op lo hi eb nchunks )
+            : ( Vec i ) tids ( cluster_submit sw op 0 lo hi eb nchunks )
             : ~ i rnd 0
             ~ & ! ( tids_ready sw tids ) < rnd 400 { ( swarm_pump sw 200 ) = rnd + rnd 1 }
-            : i total ( tids_combine sw op tids )
+            : i total ( tids_combine sw 0 op tids )
             ( nurl_print ( reduce_op_name op ) ) ( nurl_print ` of (` ) ( nurl_print expr )
             ( nurl_print `) over [` ) ( nurl_print_int lo ) ( nurl_print `,` ) ( nurl_print_int hi )
             ( nurl_print `) = ` ) ( nurl_print_int total ) ( nurl_print `\n` )
@@ -362,7 +373,7 @@ $ `buildwasm.nu`
                         : ( Vec i ) tids ( cluster_submit_wasm sw lo hi wasm nchunks )
                         : ~ i rnd 0
                         ~ & ! ( tids_ready sw tids ) < rnd 600 { ( swarm_pump sw 200 ) = rnd + rnd 1 }
-                        : i total ( tids_combine sw op tids )
+                        : i total ( tids_combine sw 0 op tids )
                         ( nurl_print ( reduce_op_name op ) ) ( nurl_print ` (wasm kernel) over [` )
                         ( nurl_print_int lo ) ( nurl_print `,` ) ( nurl_print_int hi )
                         ( nurl_print `) = ` ) ( nurl_print_int total ) ( nurl_print `\n` )
@@ -385,6 +396,7 @@ $ `buildwasm.nu`
 : Task {
     i id
     ( Vec u ) expr  // kernel bytes
+    i dtype  // 0 int · 1 float (result holds an f64 bit pattern)
     i lo
     i hi
     i op
@@ -403,10 +415,11 @@ $ `buildwasm.nu`
 // Constructor. The params share the field names (`lo`, `hi`, …); `= . t lo lo`
 // is a field store — the field-store/local-shadow miscompile this used to work
 // around was fixed in the compiler (NURL v0.10.4).
-@ task_new i id ( Vec u ) expr i lo i hi i op i nchunks ( Vec i ) tids → *Task {
+@ task_new i id ( Vec u ) expr i dtype i lo i hi i op i nchunks ( Vec i ) tids → *Task {
     : *Task t # *Task ( nurl_alloc Z Task )
     = . t id id
     = . t expr expr
+    = . t dtype dtype
     = . t lo lo
     = . t hi hi
     = . t op op
@@ -432,7 +445,7 @@ $ `buildwasm.nu`
     ? == . t done 1 { ^ v } {}
     : *Swarm sw ( mcp_swarm )
     ? ( tids_ready sw . t tids ) {
-        = . t result ( tids_combine sw . t op . t tids )
+        = . t result ( tids_combine sw . t dtype . t op . t tids )
         = . t done 1
     } {}
 }
@@ -459,10 +472,14 @@ $ `buildwasm.nu`
     ( json_obj_set o `kernel` ( json_str_lit ( string_data es ) ) )
     ( string_free es )
     ( json_obj_set o `reduce` ( json_str_lit ( reduce_op_name . t op ) ) )
+    ( json_obj_set o `dtype` ( json_str_lit ? == . t dtype 1 `float` `int` ) )
     ( json_obj_set o `lo` ( json_int . t lo ) )
     ( json_obj_set o `hi` ( json_int . t hi ) )
     ( json_obj_set o `chunks` ( json_int . t nchunks ) )
-    ? == . t done 1 { ( json_obj_set o `result` ( json_int . t result ) ) } {}
+    ? == . t done 1 {
+        ? == . t dtype 1 { ( json_obj_set o `result` ( json_float ( bits_to_f64 . t result ) ) ) }
+                         { ( json_obj_set o `result` ( json_int . t result ) ) }
+    } {}
     ^ o
 }
 
@@ -487,6 +504,7 @@ $ `buildwasm.nu`
     : i lo ?? lj { T v → ( json_as_int v ) F → 0 }
     : i hi ?? hj { T v → ( json_as_int v ) F → 0 }
     : i op ?? ( json_obj_get args `reduce` ) { T v → ( reduce_op_of ( json_str_data v ) 0 ) F → 0 }
+    : i dtype ?? ( json_obj_get args `dtype` ) { T v → ? != 0 ( nurl_str_eq ( json_str_data v ) `float` ) 1 0 F → 0 }
     ? >= lo hi { ^ ( mcp_tool_result_error `empty range: need lo < hi` ) } {}
 
     // Validate the kernel parses before shipping it to workers.
@@ -509,10 +527,10 @@ $ `buildwasm.nu`
         ^ ( mcp_tool_result_error `no workers in the cluster — start some with 'swarm-mcp worker'` )
     } {}
     : i nchunks ( nchunks_for nworkers )
-    : ( Vec i ) tids ( cluster_submit sw op lo hi eb nchunks )
+    : ( Vec i ) tids ( cluster_submit sw op dtype lo hi eb nchunks )
 
     : *McpState st # *McpState g_mcp
-    : *Task t ( task_new . st next_id eb lo hi op nchunks tids )
+    : *Task t ( task_new . st next_id eb dtype lo hi op nchunks tids )
     = . st next_id + . st next_id 1
     ( vec_push [s] . st tasks # s t )
 
@@ -526,7 +544,7 @@ $ `buildwasm.nu`
 // Ship a compiled wasm module to the cluster as a task (takes ownership of
 // `wasm`, frees it). Shared by both phase-2 tools.
 
-@ __ship_wasm ( Vec u ) wasm i lo i hi i op → Json {
+@ __ship_wasm ( Vec u ) wasm i lo i hi i op i dtype → Json {
     ? == ( vec_len [u] wasm ) 0 { ( vec_free [u] wasm ) ^ ( mcp_tool_result_error `empty wasm module` ) } {}
     : *Swarm sw ( mcp_swarm )
     ( swarm_discover sw 6 )
@@ -539,7 +557,7 @@ $ `buildwasm.nu`
     : ( Vec i ) tids ( cluster_submit_wasm sw lo hi wasm nchunks )
     ( vec_free [u] wasm )
     : *McpState st # *McpState g_mcp
-    : *Task t ( task_new . st next_id ( bytes_from_str `<wasm kernel>` ) lo hi op nchunks tids )
+    : *Task t ( task_new . st next_id ( bytes_from_str `<wasm kernel>` ) dtype lo hi op nchunks tids )
     = . st next_id + . st next_id 1
     ( vec_push [s] . st tasks # s t )
     ( mcp_pump 8 )
@@ -558,11 +576,12 @@ $ `buildwasm.nu`
     : i lo ?? lj { T v → ( json_as_int v ) F → 0 }
     : i hi ?? hj { T v → ( json_as_int v ) F → 0 }
     : i op ?? ( json_obj_get args `reduce` ) { T v → ( reduce_op_of ( json_str_data v ) 0 ) F → 0 }
+    : i dtype ?? ( json_obj_get args `dtype` ) { T v → ? != 0 ( nurl_str_eq ( json_str_data v ) `float` ) 1 0 F → 0 }
     ? >= lo hi { ^ ( mcp_tool_result_error `empty range: need lo < hi` ) } {}
     : !( Vec u ) ParseErr dr ( b64_decode_vec w64 )
     ?? dr {
         F e → { ^ ( mcp_tool_result_error `wasm_base64 is not valid base64` ) }
-        T wasm → { ^ ( __ship_wasm wasm lo hi op ) }
+        T wasm → { ^ ( __ship_wasm wasm lo hi op dtype ) }
     }
 }
 
@@ -579,10 +598,12 @@ $ `buildwasm.nu`
     : i lo ?? lj { T v → ( json_as_int v ) F → 0 }
     : i hi ?? hj { T v → ( json_as_int v ) F → 0 }
     : i op ?? ( json_obj_get args `reduce` ) { T v → ( reduce_op_of ( json_str_data v ) 0 ) F → 0 }
+    : i dtype ?? ( json_obj_get args `dtype` ) { T v → ? != 0 ( nurl_str_eq ( json_str_data v ) `float` ) 1 0 F → 0 }
     ? >= lo hi { ^ ( mcp_tool_result_error `empty range: need lo < hi` ) } {}
-    // Wrap the bare kernel (`@ kernel i x → i`) into a full program: a main that
-    // reads lo/hi from argv and folds kernel(x) over the range with the op.
-    : String wrapped ( wrap_kernel source op )
+    // Wrap the bare kernel (`@ kernel i x → i`, or `→ f` for dtype "float") into
+    // a full program: a main that reads lo/hi from argv and folds kernel(x) over
+    // the range with the op, printing the partial (an f64 bit pattern in float).
+    : String wrapped ( wrap_kernel source op dtype )
     : !( Vec u ) String cr ( compile_to_wasm ( string_data wrapped ) )
     ( string_free wrapped )
     ?? cr {
@@ -592,7 +613,7 @@ $ `buildwasm.nu`
             ( string_free em ) ( string_free msg )
             ^ e
         }
-        T wasm → { ^ ( __ship_wasm wasm lo hi op ) }
+        T wasm → { ^ ( __ship_wasm wasm lo hi op dtype ) }
     }
 }
 
@@ -645,10 +666,11 @@ $ `buildwasm.nu`
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
-    ( ms_prop props `expr` `string` `Kernel: an integer expression in the variable x. Operators + - * / % (truncated div), comparisons < <= > >= == != (yield 0/1), logical & | , ternary cond ? a : b ; functions min(a,b) max(a,b) abs(a). Examples: "x*x" · "x%2==0" · "x>1 & x<100" · "x>5 ? x : 0".` )
+    ( ms_prop props `expr` `string` `Kernel: an expression in the variable x. Operators + - * / % (truncated div), comparisons < <= > >= == != (yield 1/0), logical & | , ternary cond ? a : b ; functions min(a,b) max(a,b) abs(a). Numeric literals may be integer ("3") or float ("0.5"). Examples: "x*x" · "x%2==0" · "x>1 & x<100" · "x>5 ? x : 0" · (with dtype "float") "1.0/(x*x)".` )
     ( ms_prop props `lo` `integer` `Range start (inclusive).` )
     ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
     ( ms_prop props `reduce` `string` `How to fold the mapped values across the whole range: "sum" (default) · "product" · "min" · "max" · "count" (how many x make the kernel non-zero).` )
+    ( ms_prop props `dtype` `string` `Numeric domain: "int" (default, all arithmetic is i64) or "float" (all arithmetic is f64; x is the integer index cast to double; result is a float). The integer range [lo, hi) is unchanged in both. Use "float" for real-valued kernels, e.g. {"expr":"1.0/(x*x)","lo":1,"hi":1000000,"reduce":"sum","dtype":"float"} ≈ π²/6.` )
     ( json_obj_set schema `properties` props )
     : Json req ( json_arr_new )
     ( json_arr_push req ( json_str_lit `expr` ) )
@@ -684,6 +706,7 @@ $ `buildwasm.nu`
     ( ms_prop props `lo` `integer` `Range start (inclusive).` )
     ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
     ( ms_prop props `reduce` `string` `How to combine the per-worker partials: "sum" (default), "product", "min", "max", or "count". Must match what the module's main reduces with.` )
+    ( ms_prop props `dtype` `string` `Partial domain: "int" (default) or "float". With "float" the module must print its partial as the f64 bit pattern (a decimal integer — e.g. via floatbits f64_to_bits) and the coordinator combines the partials in f64. With "int" it prints a plain decimal integer.` )
     ( json_obj_set schema `properties` props )
     : Json req ( json_arr_new )
     ( json_arr_push req ( json_str_lit `wasm_base64` ) )
@@ -697,10 +720,11 @@ $ `buildwasm.nu`
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
-    ( ms_prop props `source` `string` `NURL source defining a per-element kernel: @ kernel i x → i { … } — it takes one integer x and returns one integer. You may also import stdlib and define helper functions; do NOT define main (the server generates it). The cluster evaluates kernel(x) for every x in [lo, hi) and folds the results with the reduce op. Example (counts primes): @ is_prime i n → b { … }  @ kernel i x → i { ? ( is_prime x ) 1 0 }. The server compiles this to wasm and runs it sharded across the workers.` )
+    ( ms_prop props `source` `string` `NURL source defining a per-element kernel: @ kernel i x → i { … } — it takes one integer x and returns one integer. You may also import stdlib and define helper functions; do NOT define main (the server generates it). The cluster evaluates kernel(x) for every x in [lo, hi) and folds the results with the reduce op. Example (counts primes): @ is_prime i n → b { … }  @ kernel i x → i { ? ( is_prime x ) 1 0 }. The server compiles this to wasm and runs it sharded across the workers. For dtype "float", write @ kernel i x → f { … } (takes the integer index x, returns a double); the result is a float.` )
     ( ms_prop props `lo` `integer` `Range start (inclusive).` )
     ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
     ( ms_prop props `reduce` `string` `How to combine the per-worker partials: "sum" (default), "product", "min", "max", or "count". Must match what your main reduces with.` )
+    ( ms_prop props `dtype` `string` `Numeric domain: "int" (default; kernel returns i) or "float" (kernel returns f, folded in f64, result is a float). The server generates all argv/loop/fold/print boilerplate either way.` )
     ( json_obj_set schema `properties` props )
     : Json req ( json_arr_new )
     ( json_arr_push req ( json_str_lit `source` ) )
@@ -742,7 +766,7 @@ $ `buildwasm.nu`
 // ── JSON-RPC method handlers ─────────────────────────────────────
 
 @ handle_initialize Json id → Json {
-    : Json result ( mcp_initialize_result `swarm-mcp` `0.3.0` )
+    : Json result ( mcp_initialize_result `swarm-mcp` `0.4.0` )
     ^ ( mcp_response_result id result )
 }
 

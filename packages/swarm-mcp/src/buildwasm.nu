@@ -41,8 +41,32 @@ $ `stdlib/ext/http_cli.nu`
     ^ `+ acc kv`  // sum
 }
 
+// Float (f64) duals — must match work.nu's red_id_f / red_fold_f. ±∞ identities
+// come from their f64 bit patterns (see work.nu).
+@ __red_identity_src_f i op → s {
+    ? == op 1 { ^ `1.0` } {}                                  // product
+    ? == op 2 { ^ `( bits_to_f64 9218868437227405312 )` } {}  // min → +∞
+    ? == op 3 { ^ `( bits_to_f64 -4503599627370496 )` } {}    // max → −∞
+    ^ `0.0`  // sum, count
+}
+
+@ __red_combine_src_f i op → s {
+    ? == op 1 { ^ `* acc kv` } {}  // product
+    ? == op 2 { ^ `? < kv acc kv acc` } {}  // min
+    ? == op 3 { ^ `? > kv acc kv acc` } {}  // max
+    ? == op 4 { ^ `? != kv 0.0 + acc 1.0 acc` } {}  // count of truthy
+    ^ `+ acc kv`  // sum
+}
+
 // Wrap a bare kernel into a complete wasm-ready program for reduce op `op`.
-@ wrap_kernel s source i op → String {
+// dtype 0 (int): kernel is `@ kernel i x → i`; the module folds in i64 and
+// prints the partial as a decimal integer. dtype 1 (float): kernel is
+// `@ kernel i x → f` (x is the integer index, returns a double); the module
+// folds in f64 and prints the partial's f64 BIT PATTERN as a decimal integer —
+// so it rides the same stdout→int wire, and the coordinator reinterprets it
+// (work.nu tids_combine float path).
+@ wrap_kernel s source i op i dtype → String {
+    ? == dtype 1 { ^ ( __wrap_kernel_f source op ) } {}
     : String w ( string_new )
     // `$ `stdlib/core/string.nu`` — backticks emitted by code (can't nest in a
     // backtick literal). nurlc dedups this if the kernel imports it too.
@@ -59,6 +83,29 @@ $ `stdlib/ext/http_cli.nu`
     ( string_push_str w `  : ~ i x lo\n` )
     ( string_push_str w `  ~ < x hi { : i kv ( kernel x ) = acc ` ) ( string_push_str w ( __red_combine_src op ) ) ( string_push_str w ` = x + x 1 }\n` )
     ( string_push_str w `  ( nurl_print_int acc )\n  ^ 0\n}\n` )
+    ( string_push_str w `@ main → i { ^ ( __swarmk_main ) }\n` )
+    ^ w
+}
+
+// The dtype=1 (f64) program. Imports floatbits so the module can print the
+// partial as an f64 bit pattern (and synthesize the ±∞ identities).
+@ __wrap_kernel_f s source i op → String {
+    : String w ( string_new )
+    ( string_push_str w `$ ` ) ( string_push_char w 96 )
+    ( string_push_str w `stdlib/core/string.nu` ) ( string_push_char w 96 )
+    ( string_push_str w `\n$ ` ) ( string_push_char w 96 )
+    ( string_push_str w `stdlib/std/floatbits.nu` ) ( string_push_char w 96 )
+    ( string_push_str w `\n` )
+    ( string_push_str w source )
+    ( string_push_str w `\n@ __swarmk_main → i {\n` )
+    ( string_push_str w `  : i argc ( nurl_argv_count )\n` )
+    ( string_push_str w `  ? < argc 3 { ^ 1 } {}\n` )
+    ( string_push_str w `  : i lo ( nurl_str_to_int ( nurl_argv_get 1 ) )\n` )
+    ( string_push_str w `  : i hi ( nurl_str_to_int ( nurl_argv_get 2 ) )\n` )
+    ( string_push_str w `  : ~ f acc ` ) ( string_push_str w ( __red_identity_src_f op ) ) ( string_push_str w `\n` )
+    ( string_push_str w `  : ~ i x lo\n` )
+    ( string_push_str w `  ~ < x hi { : f kv ( kernel x ) = acc ` ) ( string_push_str w ( __red_combine_src_f op ) ) ( string_push_str w ` = x + x 1 }\n` )
+    ( string_push_str w `  ( nurl_print_int ( f64_to_bits acc ) )\n  ^ 0\n}\n` )
     ( string_push_str w `@ main → i { ^ ( __swarmk_main ) }\n` )
     ^ w
 }
