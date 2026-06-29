@@ -795,6 +795,30 @@ void nurl_poke(void *base, long long idx, long long val) {
     ((long long*)base)[(size_t)idx] = val;
 }
 
+/* 4-byte-stride typed accessors for packed binary buffers (e.g. the
+ * float32 / int32 arrays that GPU kernels, image data, and wire formats
+ * use). The 8-byte nurl_peek/poke above can't address a 4-byte array at
+ * its natural stride; these can. Pure, dependency-free — they ship to
+ * every target (no GPU required). i32 reads sign-extend; f32 round-trips
+ * through the platform float so NURL's `f` (double) sees the widened
+ * value and stores narrow it back. NULL base is a safe no-op / 0. */
+int  nurl_peek_i32(const void *base, long long idx) {
+    if (!base) return 0;
+    return ((const int*)base)[(size_t)idx];
+}
+void nurl_poke_i32(void *base, long long idx, int val) {
+    if (!base) return;
+    ((int*)base)[(size_t)idx] = val;
+}
+double nurl_peek_f32(const void *base, long long idx) {
+    if (!base) return 0.0;
+    return (double)((const float*)base)[(size_t)idx];
+}
+void nurl_poke_f32(void *base, long long idx, double val) {
+    if (!base) return;
+    ((float*)base)[(size_t)idx] = (float)val;
+}
+
 /* Recursively reclaim a Vec/String backing store. `ctl` is the Vec
  * control block (slot 0 = data ptr, slot 1 = len, slot 2 = cap). When
  * `elem_drop` is non-NULL it is invoked on a POINTER to each live
