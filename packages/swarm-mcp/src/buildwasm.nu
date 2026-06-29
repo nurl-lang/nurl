@@ -18,6 +18,51 @@ $ `stdlib/ext/http_cli.nu`
 
 @ build_api_url → String { ^ ( env_var_or `NURL_BUILD_API` `https://play.nurl-lang.org` ) }
 
+// ── kernel wrapping ──────────────────────────────────────────────
+// The caller supplies just a per-element kernel `@ kernel i x → i { … }`
+// (plus any imports/helpers). wrap_kernel generates the rest of the program:
+// a main that reads lo/hi from argv, folds `kernel(x)` over [lo, hi) with the
+// reduce op, and prints the partial — the same map-reduce shape as the
+// expression path, so the model never writes argv/loop/print boilerplate.
+
+@ __red_identity_src i op → s {
+    ? == op 1 { ^ `1` } {}  // product
+    ? == op 2 { ^ `9223372036854775807` } {}  // min → +∞
+    ? == op 3 { ^ `- 0 9223372036854775807` } {}  // max → −∞
+    ^ `0`  // sum, count
+}
+
+// acc-update for one mapped value `kv` (must match work.nu's red_fold).
+@ __red_combine_src i op → s {
+    ? == op 1 { ^ `* acc kv` } {}  // product
+    ? == op 2 { ^ `? < kv acc kv acc` } {}  // min
+    ? == op 3 { ^ `? > kv acc kv acc` } {}  // max
+    ? == op 4 { ^ `? != kv 0 + acc 1 acc` } {}  // count of truthy
+    ^ `+ acc kv`  // sum
+}
+
+// Wrap a bare kernel into a complete wasm-ready program for reduce op `op`.
+@ wrap_kernel s source i op → String {
+    : String w ( string_new )
+    // `$ `stdlib/core/string.nu`` — backticks emitted by code (can't nest in a
+    // backtick literal). nurlc dedups this if the kernel imports it too.
+    ( string_push_str w `$ ` ) ( string_push_char w 96 )
+    ( string_push_str w `stdlib/core/string.nu` ) ( string_push_char w 96 )
+    ( string_push_str w `\n` )
+    ( string_push_str w source )
+    ( string_push_str w `\n@ __swarmk_main → i {\n` )
+    ( string_push_str w `  : i argc ( nurl_argv_count )\n` )
+    ( string_push_str w `  ? < argc 3 { ^ 1 } {}\n` )
+    ( string_push_str w `  : i lo ( nurl_str_to_int ( nurl_argv_get 1 ) )\n` )
+    ( string_push_str w `  : i hi ( nurl_str_to_int ( nurl_argv_get 2 ) )\n` )
+    ( string_push_str w `  : ~ i acc ` ) ( string_push_str w ( __red_identity_src op ) ) ( string_push_str w `\n` )
+    ( string_push_str w `  : ~ i x lo\n` )
+    ( string_push_str w `  ~ < x hi { : i kv ( kernel x ) = acc ` ) ( string_push_str w ( __red_combine_src op ) ) ( string_push_str w ` = x + x 1 }\n` )
+    ( string_push_str w `  ( nurl_print_int acc )\n  ^ 0\n}\n` )
+    ( string_push_str w `@ main → i { ^ ( __swarmk_main ) }\n` )
+    ^ w
+}
+
 // wasm magic: 00 61 73 6d
 @ __is_wasm ( Vec u ) v → b {
     ? < ( vec_len [u] v ) 4 { ^ F } {}

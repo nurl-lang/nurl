@@ -552,7 +552,11 @@ $ `buildwasm.nu`
     : i hi ?? hj { T v → ( json_as_int v ) F → 0 }
     : i op ?? ( json_obj_get args `reduce` ) { T v → ( reduce_op_of ( json_str_data v ) 0 ) F → 0 }
     ? >= lo hi { ^ ( mcp_tool_result_error `empty range: need lo < hi` ) } {}
-    : !( Vec u ) String cr ( compile_to_wasm source )
+    // Wrap the bare kernel (`@ kernel i x → i`) into a full program: a main that
+    // reads lo/hi from argv and folds kernel(x) over the range with the op.
+    : String wrapped ( wrap_kernel source op )
+    : !( Vec u ) String cr ( compile_to_wasm ( string_data wrapped ) )
+    ( string_free wrapped )
     ?? cr {
         F msg → {
             : String em ( string_concat ( string_from `kernel did not compile: ` ) msg )
@@ -665,7 +669,7 @@ $ `buildwasm.nu`
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
-    ( ms_prop props `source` `string` `A complete NURL program. Its main reads two integers lo and hi from argv (nurl_argv_get 1 / 2), folds your kernel over x in [lo, hi), and prints the partial result as a decimal integer. You may import stdlib, define helpers, loop — anything NURL can do. Example: a program whose main counts primes in [lo, hi) by trial division and prints the count. The server compiles this to wasm and runs it on the cluster.` )
+    ( ms_prop props `source` `string` `NURL source defining a per-element kernel: @ kernel i x → i { … } — it takes one integer x and returns one integer. You may also import stdlib and define helper functions; do NOT define main (the server generates it). The cluster evaluates kernel(x) for every x in [lo, hi) and folds the results with the reduce op. Example (counts primes): @ is_prime i n → b { … }  @ kernel i x → i { ? ( is_prime x ) 1 0 }. The server compiles this to wasm and runs it sharded across the workers.` )
     ( ms_prop props `lo` `integer` `Range start (inclusive).` )
     ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
     ( ms_prop props `reduce` `string` `How to combine the per-worker partials: "sum" (default), "product", "min", "max", or "count". Must match what your main reduces with.` )
@@ -684,7 +688,7 @@ $ `buildwasm.nu`
     `Run a distributed map-reduce on the cluster: evaluate the expression kernel for every integer x in [lo, hi) and fold the results with the reduce op. Sharded across all live workers and computed in parallel. Returns a task_id immediately; poll compute_result for the value. Example: {"expr":"x*x","lo":1,"hi":1000000,"reduce":"sum"} gives the sum of squares.`
     ( ms_schema_submit ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_submit_kernel`
-    `Run an arbitrary NURL kernel on the cluster for workloads the compute_submit expression language cannot express (loops, helper functions, anything). Provide the kernel as NURL SOURCE — a complete program whose main reads lo and hi from argv, folds the kernel over [lo, hi), and prints the partial. The server compiles it to wasm itself (via the NURL build service) and runs it sharded across the workers, combining the partials with the reduce op. Compile errors are returned to you. Returns a task_id; poll compute_result. (Use compute_run_wasm instead if you already have a compiled module.)`
+    `Run an arbitrary NURL kernel on the cluster for workloads the compute_submit expression language cannot express (loops, helper functions, anything). Provide just the per-element kernel as NURL source — @ kernel i x → i { … } plus any imports/helpers; no main needed, the server generates the argv-reading, fold, and print boilerplate. The server compiles the wrapped program to wasm itself (via the NURL build service) and runs it sharded across the workers, folding kernel(x) over [lo, hi) with the reduce op. Compile errors are returned to you. Returns a task_id; poll compute_result. (Use compute_run_wasm if you already have a compiled module.)`
     ( ms_schema_submit_kernel ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_run_wasm`
     `Like compute_submit_kernel but you provide an already-compiled wasm32-wasi module (base64) instead of NURL source — e.g. one built with the nurl_build_wasm tool. The module's main reads lo and hi from argv, folds the kernel over [lo, hi), and prints the partial. Returns a task_id; poll compute_result.`
