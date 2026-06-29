@@ -25,6 +25,7 @@ $ `module.nu`
     ( Vec i ) vs  // value stack
     ( Vec u ) mem  // linear memory (bytes)
     i mem_pages  // current size in 64 KiB pages
+    ( Vec i ) globals  // mutable global values
     b trap
     ( Vec u ) trapmsg
 }
@@ -37,8 +38,13 @@ $ `module.nu`
     = . it vs ( vec_new [i] )
     = . it mem ( vec_new [u] )
     = . it mem_pages 0
+    = . it globals ( vec_new [i] )
     = . it trap F
     = . it trapmsg ( vec_new [u] )
+    // copy global initial values
+    : i ng ( vec_len [i] . m global_init )
+    : ~ i gi 0
+    ~ < gi ng { ( vec_push [i] . it globals ?? ( vec_get [i] . m global_init gi ) { T x → x F → 0 } ) = gi + gi 1 }
     ? == . m has_mem 1 {
         : i bytes * . m mem_min ( __page )
         : ~ i k 0
@@ -70,6 +76,7 @@ $ `module.nu`
 @ interp_free * Interp it → v {
     ( vec_free [i] . it vs )
     ( vec_free [u] . it mem )
+    ( vec_free [i] . it globals )
     ( vec_free [u] . it trapmsg )
     ( nurl_free # s it )
 }
@@ -363,12 +370,27 @@ $ `module.nu`
     ? == op 13 { : i lbl ( wc_uleb c ) : i cond ( __pop it ) ? != cond 0 { ( __do_branch it ctrl c lbl ) } {} ^ v } {}  // br_if
     ? == op 15 { ^ v } {}  // return (handled by caller loop)
     ? == op 16 { : i fi ( wc_uleb c ) ( exec_func it fi ) ^ v } {}  // call
+    ? == op 17 {  // call_indirect typeidx tableidx
+        : i typeidx ( wc_uleb c )
+        : i tblidx ( wc_uleb c )
+        : i ei & ( __pop it ) 4294967295
+        ? | < ei 0 >= ei ( vec_len [i] . m table ) {
+            = . it trap T = . it trapmsg ( bytes_from_str `call_indirect: index out of range` ) ^ v
+        } {}
+        : i fi ?? ( vec_get [i] . m table ei ) { T x → x F → -1 }
+        ? < fi 0 { = . it trap T = . it trapmsg ( bytes_from_str `call_indirect: null table element` ) ^ v } {}
+        ( exec_func it fi )
+        ^ v
+    } {}
     ? == op 26 { ( __pop it ) ^ v } {}  // drop
     ? == op 27 { : i cc ( __pop it ) : i b2 ( __pop it ) : i a2 ( __pop it ) ( __push it ? != cc 0 a2 b2 ) ^ v } {}  // select
     // ── locals ──
     ? == op 32 { : i li ( wc_uleb c ) ( __push it ?? ( vec_get [i] locals li ) { T x → x F → 0 } ) ^ v } {}
     ? == op 33 { : i li ( wc_uleb c ) ( vec_set [i] locals li ( __pop it ) ) ^ v } {}
     ? == op 34 { : i li ( wc_uleb c ) : i tv ?? ( vec_get [i] . it vs - ( vec_len [i] . it vs ) 1 ) { T x → x F → 0 } ( vec_set [i] locals li tv ) ^ v } {}  // local.tee
+    // ── globals ──
+    ? == op 35 { : i gi ( wc_uleb c ) ( __push it ?? ( vec_get [i] . it globals gi ) { T x → x F → 0 } ) ^ v } {}  // global.get
+    ? == op 36 { : i gi ( wc_uleb c ) ( vec_set [i] . it globals gi ( __pop it ) ) ^ v } {}  // global.set
     // ── constants ──
     ? == op 65 { ( __push it ( __w32 ( wc_sleb c ) ) ) ^ v } {}  // i32.const
     ? == op 66 { ( __push it ( wc_sleb c ) ) ^ v } {}  // i64.const

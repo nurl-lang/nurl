@@ -1,10 +1,10 @@
 // packages/wasmtime/src/module.nu — WebAssembly binary decoder (pure NURL).
 //
 // Decodes a wasm32 module's structure: the magic/version header and the
-// sections this runtime understands so far (type, function, export, code).
-// Imports, tables, globals, data, etc. are skipped for now — enough to load
-// and run a self-contained compute module. The byte cursor + LEB128 readers
-// here are reused by the interpreter (interp.nu) to walk instruction streams.
+// sections this runtime understands (type, function, table, memory, global,
+// export, element, code, data). Imports and the custom/start sections are
+// skipped. The byte cursor + LEB128 readers here are reused by the interpreter
+// (interp.nu) to walk instruction streams.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -92,6 +92,10 @@ $ `stdlib/std/bytes.nu`
     i mem_min  // initial pages (64 KiB each)
     i mem_max  // 0 if unbounded
     ( Vec s ) datas  // *DataSeg
+    ( Vec i ) global_init  // initial value per global
+    ( Vec i ) global_mut  // 1 if mutable
+    i has_table
+    ( Vec i ) table  // function indices (−1 = empty slot)
     b ok
     ( Vec u ) err
 }
@@ -116,9 +120,23 @@ $ `stdlib/std/bytes.nu`
     : ~ i d 0
     ~ < d dn { ?? ( vec_get [s] . m datas d ) { T pp → ?!= # i pp 0 { : *DataSeg ds # *DataSeg pp ( vec_free [u] . ds bytes ) ( nurl_free # s ds ) } {} F → {} } = d + d 1 }
     ( vec_free [s] . m datas )
+    ( vec_free [i] . m global_init )
+    ( vec_free [i] . m global_mut )
+    ( vec_free [i] . m table )
     ( vec_free [u] . m code )
     ( vec_free [u] . m err )
     ( nurl_free # s m )
+}
+
+// Evaluate a constant init expr (i32/i64.const N … end); global.get is treated
+// as 0 (imported globals unsupported). Consumes through the trailing `end`.
+@ __const_expr * Wc c → i {
+    : i op0 ( wc_u8 c )
+    : ~ i val 0
+    ? | == op0 65 == op0 66 { = val ( wc_sleb c ) } {
+        ? == op0 35 { ( wc_uleb c ) } {} }
+    ~ != ( wc_u8 c ) 11 {}
+    ^ val
 }
 
 // ── section decoders ─────────────────────────────────────────────
@@ -191,12 +209,7 @@ $ `stdlib/std/bytes.nu`
     ~ < k n {
         : i flag ( wc_uleb c )
         ? == flag 2 { ( wc_uleb c ) } {}  // explicit memidx
-        : ~ i offset 0
-        ? != flag 1 {
-            : i op0 ( wc_u8 c )
-            ? == op0 65 { = offset ( wc_sleb c ) } {}  // i32.const
-            ~ != ( wc_u8 c ) 11 {}  // consume the rest of the const expr up to `end`
-        } {}
+        : i offset ? != flag 1 ( __const_expr c ) 0
         : i blen ( wc_uleb c )
         : ( Vec u ) bytes ( vec_with_cap [u] blen )
         : ~ i bi 0
@@ -205,6 +218,59 @@ $ `stdlib/std/bytes.nu`
         = . ds offset offset
         = . ds bytes bytes
         ( vec_push [s] . m datas ds )
+        = k + k 1
+    }
+}
+
+// Global section: each global = valtype, mutability, const init expr.
+@ __decode_global_sec * Wc c * Module m → v {
+    : i n ( wc_uleb c )
+    : ~ i k 0
+    ~ < k n {
+        ( wc_u8 c )  // valtype
+        : i mut ( wc_u8 c )
+        ( vec_push [i] . m global_init ( __const_expr c ) )
+        ( vec_push [i] . m global_mut mut )
+        = k + k 1
+    }
+}
+
+// Table section: allocate the first table (size = min, slots empty = −1).
+@ __decode_table_sec * Wc c * Module m → v {
+    : i n ( wc_uleb c )
+    : ~ i k 0
+    ~ < k n {
+        ( wc_u8 c )  // elemtype (0x70 funcref)
+        : i flag ( wc_u8 c )
+        : i mn ( wc_uleb c )
+        ? == flag 1 { ( wc_uleb c ) } {}  // max
+        ? == k 0 {
+            = . m has_table 1
+            : ~ i j 0
+            ~ < j mn { ( vec_push [i] . m table -1 ) = j + j 1 }
+        } {}
+        = k + k 1
+    }
+}
+
+// Element section: active segments (flag 0) fill the table with function indices
+// at a const offset.
+@ __decode_elem_sec * Wc c * Module m → v {
+    : i n ( wc_uleb c )
+    : ~ i k 0
+    ~ < k n {
+        : i flag ( wc_uleb c )
+        ? == flag 0 {
+            : i off ( __const_expr c )
+            : i cnt ( wc_uleb c )
+            : ~ i j 0
+            ~ < j cnt {
+                : i fi ( wc_uleb c )
+                : i tgt + off j
+                ? & >= tgt 0 < tgt ( vec_len [i] . m table ) { ( vec_set [i] . m table tgt fi ) } {}
+                = j + j 1
+            }
+        } {}
         = k + k 1
     }
 }
@@ -251,6 +317,10 @@ $ `stdlib/std/bytes.nu`
     = . m mem_min 0
     = . m mem_max 0
     = . m datas ( vec_new [s] )
+    = . m global_init ( vec_new [i] )
+    = . m global_mut ( vec_new [i] )
+    = . m has_table 0
+    = . m table ( vec_new [i] )
     = . m ok T
     = . m err ( vec_new [u] )
     : *Wc c ( wc_new bytes )
@@ -266,10 +336,13 @@ $ `stdlib/std/bytes.nu`
         : i sec_end + . c pos size
         ? == id 1 { ( __decode_type_sec c m ) } {
             ? == id 3 { ( __decode_func_sec c m ) } {
-                ? == id 5 { ( __decode_mem_sec c m ) } {
-                    ? == id 7 { ( __decode_export_sec c m ) } {
-                        ? == id 10 { ( __decode_code_sec c m ) } {
-                            ? == id 11 { ( __decode_data_sec c m ) } {} } } } } }
+                ? == id 4 { ( __decode_table_sec c m ) } {
+                    ? == id 5 { ( __decode_mem_sec c m ) } {
+                        ? == id 6 { ( __decode_global_sec c m ) } {
+                            ? == id 7 { ( __decode_export_sec c m ) } {
+                                ? == id 9 { ( __decode_elem_sec c m ) } {
+                                    ? == id 10 { ( __decode_code_sec c m ) } {
+                                        ? == id 11 { ( __decode_data_sec c m ) } {} } } } } } } } }
         = . c pos sec_end  // robust against partially-read / skipped sections
     }
     ( wc_free c )
