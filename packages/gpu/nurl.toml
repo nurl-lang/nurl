@@ -1,0 +1,7 @@
+[package]
+name = "gpu"
+version = "0.1.0"
+description = "GPU compute for NURL — a backend-neutral interface (Gpu / GpuKernel / GpuBuffer: open, compile, alloc, upload/download, launch, sync) with one backend in v0.1.0: CUDA. Kernels are written in CUDA-C and compiled to PTX at runtime via NVRTC, then run on the device through the CUDA Driver API — all bound directly from pure NURL with no runtime.c bridge, so only this package pulls a GPU dependency and a GPU-less target (e.g. MILK-V Duo) is unaffected. The toolchain auto-links -lcuda / -lnvrtc only when a program references those symbols. Requires the NVIDIA driver (libcuda); runtime kernel compilation needs NVRTC (libnvrtc, CUDA toolkit) — programs that embed pre-built PTX need only the driver. v0.1.0 is a proof-of-concept: the demo runs and CPU-verifies vector-add and SAXPY (1e6 elements) on the GPU."
+license = "MIT OR Apache-2.0"
+
+[dependencies]

@@ -225,6 +225,30 @@ else
     log "[info] ALSA not found — pttvoice audio I/O unavailable"
 fi
 
+# ── CUDA driver + NVRTC detection ──────────────────────────
+# packages/gpu binds the CUDA Driver API (& `cuda` @ cu…) and NVRTC
+# (& `nvrtc` @ nvrtc…) directly — NO runtime.c bridge, so a GPU-less
+# build (e.g. MILK-V Duo) never grows a CUDA dependency. Drop the
+# sentinels the nurlc FFI-lib check looks for; nurl.sh auto-links
+# -lcuda / -lnvrtc only when those symbols actually appear AND the lib
+# probes link-able. libcuda ships with the NVIDIA driver (no toolkit
+# needed); libnvrtc ships with the CUDA toolkit and is optional — a
+# program that embeds pre-compiled PTX needs only -lcuda.
+if [ -e /usr/lib/x86_64-linux-gnu/libcuda.so ] || ldconfig -p 2>/dev/null | grep -q 'libcuda\.so '; then
+    echo 1 > stdlib/runtime.cuda
+    log "[info] CUDA driver (libcuda) detected — GPU compute FFI enabled"
+else
+    rm -f stdlib/runtime.cuda
+    log "[info] CUDA driver not found — packages/gpu unavailable"
+fi
+if pkg-config --exists nvrtc 2>/dev/null || [ -e /usr/lib/x86_64-linux-gnu/libnvrtc.so ] || ldconfig -p 2>/dev/null | grep -q 'libnvrtc\.so '; then
+    echo 1 > stdlib/runtime.nvrtc
+    log "[info] NVRTC detected — runtime CUDA-C→PTX kernel compilation enabled"
+else
+    rm -f stdlib/runtime.nvrtc
+    log "[info] NVRTC not found — runtime kernel compilation unavailable (embed PTX instead)"
+fi
+
 # ── Build stages ─────────────────────────────────────────────
 # `-flto` makes runtime.o emit LLVM bitcode so vec/string/io FFI calls
 # inline across the runtime ↔ user-code boundary at link time. The

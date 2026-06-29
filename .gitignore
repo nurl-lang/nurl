@@ -127,3 +127,5 @@ stdlib/runtime.wasm.o.bind
 /dist/
 vendor/
 stdlib/nurl_version_gen.h
+stdlib/runtime.cuda
+stdlib/runtime.nvrtc

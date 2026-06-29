@@ -336,6 +336,28 @@ if grep -qE '@snd_pcm_[A-Za-z_]+\b' "$LLFILE"; then
     fi
 fi
 
+# Auto-link the CUDA Driver API (libcuda) and NVRTC (libnvrtc) when the
+# program references their FFI symbols (packages/gpu). Linked only when
+# actually used, so a non-GPU program never grows the dependency. The
+# Driver API exports `cu<Upper>` (cuInit, cuMemAlloc, cuLaunchKernel, …);
+# NVRTC exports `nvrtc<Upper>`. libcuda ships with the NVIDIA driver and
+# normally has an unversioned .so; fall back to the .so.1 soname (the
+# driver package ships that even when the -dev symlink is absent).
+if grep -qE '@cu[A-Z][A-Za-z0-9_]*\b' "$LLFILE"; then
+    if [ -e /usr/lib/x86_64-linux-gnu/libcuda.so ] || [ -e /usr/lib/libcuda.so ]; then
+        EXTRA_LIBS="$EXTRA_LIBS -lcuda"
+    else
+        EXTRA_LIBS="$EXTRA_LIBS -l:libcuda.so.1"
+    fi
+fi
+if grep -qE '@nvrtc[A-Z][A-Za-z0-9_]*\b' "$LLFILE"; then
+    if pkg-config --exists nvrtc 2>/dev/null; then
+        EXTRA_LIBS="$EXTRA_LIBS $(pkg-config --libs nvrtc)"
+    else
+        EXTRA_LIBS="$EXTRA_LIBS -lnvrtc"
+    fi
+fi
+
 # In --debug mode, drop -flto: the LTO link pipeline strips DWARF
 # debug info from .ll input when the matching runtime.o bitcode has
 # no DI counterpart (current build.sh compiles runtime.o without -g).
