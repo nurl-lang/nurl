@@ -1,0 +1,7 @@
+[package]
+name = "wasmtime"
+version = "0.1.0"
+description = "A WebAssembly runtime written in pure NURL — load a wasm module and run it, with no external runtime. This first milestone is the integer core: a wasm binary decoder (LEB128, type/function/export/code sections) and an interpreter covering structured control flow (block/loop/if/else/br/br_if/return), i32/i64 arithmetic, comparison and bitwise ops, locals, drop/select, and direct calls. Results are cross-checked against the reference wasmtime. Roadmap: linear memory + load/store, globals/tables/indirect calls, floats, and the WASI surface (starting with --dir) so the runtime can host real wasm32-wasi programs. No dependencies."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
