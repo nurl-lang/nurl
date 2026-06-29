@@ -31,6 +31,8 @@ wasmtime run --invoke <export> <module.wasm> [int args…]
   - **linear memory**: `i32`/`i64` `load`/`store` incl. sized 8/16/32-bit
     signed/unsigned variants, `memory.size`/`memory.grow`, and the **data
     section** (active segments copied into memory at load time)
+  - **globals** (`global.get`/`global.set`, const-initialised) and **tables**
+    + **`call_indirect`** (element segments populate the function table)
 
 ```sh
 # add(i32,i32) → i32
@@ -52,7 +54,7 @@ the swarm-mcp kernels) needs, roughly in order:
 
 1. ~~**Linear memory** + `i32`/`i64` load/store (and `memory.size`/`grow`), plus
    the data section.~~ **Done.**
-2. **Globals**, **tables** + `call_indirect`.
+2. ~~**Globals**, **tables** + `call_indirect`.~~ **Done.**
 3. **Floats** (`f32`/`f64`) and the numeric conversions.
 4. **Imports + the WASI surface**, starting with **`--dir`**: `proc_exit`,
    `fd_write` (stdout), `args_*`, `environ_*`, and the preopened-directory file
