@@ -28,6 +28,9 @@ wasmtime run --invoke <export> <module.wasm> [int args…]
     (`add` … `shr_s`, `eq` … `ge_s`, `eqz`), with i32 results wrapped to 32 bits
   - `local.get/set/tee`, `drop`, `select`, `i32.wrap_i64`, `i64.extend_i32_*`
   - direct `call` (recursive frames; one shared value stack)
+  - **linear memory**: `i32`/`i64` `load`/`store` incl. sized 8/16/32-bit
+    signed/unsigned variants, `memory.size`/`memory.grow`, and the **data
+    section** (active segments copied into memory at load time)
 
 ```sh
 # add(i32,i32) → i32
@@ -47,8 +50,8 @@ verified against the real thing, and is ASan-clean.
 The integer core is the foundation; hosting real `wasm32-wasi` programs (such as
 the swarm-mcp kernels) needs, roughly in order:
 
-1. **Linear memory** + `i32`/`i64` load/store (and `memory.size`/`grow`), plus
-   the data section — most non-trivial modules touch memory.
+1. ~~**Linear memory** + `i32`/`i64` load/store (and `memory.size`/`grow`), plus
+   the data section.~~ **Done.**
 2. **Globals**, **tables** + `call_indirect`.
 3. **Floats** (`f32`/`f64`) and the numeric conversions.
 4. **Imports + the WASI surface**, starting with **`--dir`**: `proc_exit`,
