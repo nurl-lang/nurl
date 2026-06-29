@@ -138,6 +138,12 @@ platform-specific shims.
 - Native: Linux x86_64, Windows x86_64, macOS x86_64/ARM64.
 - WebAssembly `wasm32-wasi` (WASI SDK), including the compiler itself running
   in the browser playground.
+- A **WebAssembly runtime written in pure NURL** (`packages/wasmtime`) that
+  decodes and executes real `wasm32-wasi` modules (full int/float instruction
+  set, linear/bulk memory, tables + `call_indirect`, WASI + `--dir` file ops),
+  with no external runtime — and the compiler **self-hosts on wasm**: `nurlc`
+  compiled to `wasm32-wasi` recompiles `nurlc.nu` to byte-identical IR, both
+  under the reference `wasmtime` and under this pure-NURL runtime.
 - Static cross-compiles: Linux ARM64 / RISC-V64 (musl). Milk-V Duo (RISC-V
   C906) validated on-device.
 - `nurlfmt` canonical formatter (idempotent, IR-preserving), `nurl-lsp`

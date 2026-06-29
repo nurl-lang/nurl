@@ -8,8 +8,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.4] — 2026-06-29
+
+A **WebAssembly + self-hosting** release. NURL gains a from-scratch WebAssembly
+runtime written entirely in NURL, the compiler now **self-hosts on wasm** — the
+compiler compiled to `wasm32-wasi` recompiles its own source to byte-identical
+IR — and the `swarm-mcp` engine can compile arbitrary NURL kernels to wasm and
+run them across the cluster.
+
 ### Added
 
+- **`packages/wasmtime` — a WebAssembly runtime written in pure NURL.** No
+  libwasm, no embedded interpreter, no external `wasmtime` binary: it decodes a
+  wasm binary (LEB128, every standard section) and interprets the full integer +
+  float instruction set — structured control flow (`block`/`loop`/`if`/`else`/
+  `br`/`br_if`/`br_table`/`return`), `i32`/`i64` arithmetic / comparison /
+  bitwise ops (signed **and** unsigned, rotates, `clz`/`ctz`/`popcnt`,
+  sign-extension), `f32`/`f64` ops and every int↔float conversion, linear memory
+  (load/store, `memory.size`/`grow`, bulk `memory.copy`/`fill`, the data
+  section), globals, tables + `call_indirect`, and the element section. It hosts
+  real `wasm32-wasi` command modules via the WASI snapshot-preview1 surface
+  (`proc_exit`, `fd_write`, `args_*`/`environ_*`, `clock_time_get`,
+  `random_get`) plus a file-descriptor table with **`--dir` preopen** and file
+  ops (`path_open`/`fd_read`/`fd_seek`/`fd_write`/`fd_close`/`fd_filestat_get`),
+  so a module can read host files. Cross-checked byte-for-byte against the
+  reference `wasmtime` and ASan-clean; floats held as IEEE-754 bits via
+  `std/floatbits`.
+- **NURL self-hosts on WebAssembly.** The compiler compiled to `wasm32-wasi`
+  (`nurlc.wasm`) compiles NURL source — up to and including the full compiler
+  `nurlc.nu` itself — to IR **byte-identical to the native `nurlc`**, under both
+  the reference `wasmtime` and the pure-NURL `packages/wasmtime` runtime above
+  (the 2.4 MB / 65530-line self-compile is md5-verified). The borrow-checker
+  analysis is skipped for the wasm self-compile (`--no-borrowck`); it emits no
+  IR, so the output is identical. Reaching this required the three `wasm32` ABI
+  fixes listed under *Fixed*.
+- **`packages/swarm-mcp` — an MCP-driven distributed compute engine.** A model
+  sets a workload over MCP and the cluster map-reduces it. Two kernel forms:
+  `compute_submit` takes a small integer-expression kernel (in `x`, over a
+  range, with a `sum`/`product`/`min`/`max`/`count` reduce); `compute_submit_kernel`
+  takes an arbitrary **per-element NURL kernel** (`@ kernel i x → i { … }` plus
+  any imports/helpers — no `main` needed), which the server wraps into a full
+  program, compiles to wasm via the build service, and shards across the live
+  workers. `compute_run_wasm` runs an already-compiled `wasm32-wasi` module.
+  Tools: `compute_submit` / `compute_submit_kernel` / `compute_run_wasm` /
+  `compute_list` / `compute_result`.
+- **`packages/swarm` 0.2.0 — real distributed compute workloads.** The
+  install-to-join cluster now runs genuine sharded workloads (e.g. prime
+  counting and sum-of-squares) across the ring via `dist/job` — `π(10⁶)=78498`
+  computed across four workers — not just a membership demo.
 - **`std/floatbits` — IEEE-754 bit reinterpretation + binary float I/O.** NURL's
   `#` cast converts a float's *value*; this new module reinterprets its *bit
   pattern* — the operation binary formats need, and previously impossible in the
@@ -42,6 +88,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still taken when the name is not a field of the struct — raw pointers, and the
   tparam element types `stdlib/core/vec.nu` writes through (unaffected;
   full bootstrap + corpus green). Regression test `field_store_shadow`.
+- **`nurlc.wasm` trapped on the first token compiled — `int`-returning libc
+  shim ABI.** The `wasm32` build's shim layer widened every non-pointer libc
+  return to `i64`, correct for `size_t` (which `nurlc` declares `i64`) but wrong
+  for `int` (`strcmp`/`memcmp`/`atoi`/…, which `nurlc` declares `i32`): a
+  `call i32 @__nurl_<fn>_shim` against a `define i64` shim is a wasm
+  signature mismatch, so `wasm-ld` replaced the call with a trap stub and the
+  compiled `nurlc` trapped on its first `strcmp` (the first lexed token). The
+  shim now returns `i32` for `int`-returning functions.
+- **`__tok_write` passed a token pointer as `i64` to an `i8*` parameter.** The
+  lexer cast each strdup'd token spelling to `# i` (i64) for `__tok_write`'s
+  `s` (i8\*) `val` parameter — a no-op on 64-bit, but on `wasm32` (4-byte
+  pointers) an `i64`-for-`i8*` signature mismatch that trapped on the first
+  token. The spurious cast is removed (the value is a string; `__tok_write`
+  already narrows it internally).
+- **`wasm32` link dropped functions referenced only through the call-table.**
+  NURL closures take function addresses, which become wasm function-table
+  indices; `wasm-ld`'s default `--gc-sections` pruned/renumbered the table so a
+  stored `call_indirect` index no longer mapped to its function — fine for small
+  programs, but `nurlc.wasm` compiling a >150-function program trapped
+  (`call_indirect: index out of range`). The wasm link now passes
+  `-Wl,--no-gc-sections` to keep the table stable.
 
 ## [0.10.3] — 2026-06-28
 
