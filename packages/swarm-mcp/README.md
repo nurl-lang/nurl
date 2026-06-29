@@ -2,20 +2,47 @@
 
 `swarm-mcp` lets a **language model** drive a distributed compute cluster over
 the [Model Context Protocol](https://modelcontextprotocol.io). The model sets a
-workload — an integer **expression kernel** in the variable `x`, plus a range
-and a reduce op — and the cluster evaluates it map-reduce style across every
-live worker. The model submits tasks, lists running ones, and reads finished
-results, all through three MCP tools.
+workload — an integer **expression kernel** in the variable `x`, or an arbitrary
+**NURL→wasm kernel**, plus a range and a reduce op — and the cluster evaluates
+it map-reduce style across every live worker. The model submits tasks, lists
+running ones, and reads finished results, all through MCP tools served over
+**HTTPS JSON-RPC** (the standard MCP "Streamable HTTP" transport).
 
 It is built on the [`swarm`](../swarm) distributed stack: `net/relay` for reach,
 `net/transport` for the pubkey seam, `dist/ring` for key ownership, and
-`dist/job` for dispatch. A machine joins the cluster just by running
-`swarm-mcp worker`; the MCP server is a cluster coordinator that exposes the
-control surface.
+`dist/job` for dispatch.
+
+## One command, composable roles
+
+Every node runs the **same command**; what it *does* is set by composable role
+flags. Roles are not exclusive — a single node can be a relay **and** a worker
+**and** the MCP server at once:
+
+```sh
+swarm-mcp --token <secret> [--relay] [--worker] [--mcp] [options]
+```
+
+| role | flag | what it does |
+|------|------|--------------|
+| relay | `--relay` | the rendezvous point nodes meet through (one per cluster) |
+| worker | `--worker` | runs compute here — **every worker executes both expression and wasm kernels** |
+| mcp | `--mcp` | serves the MCP control surface over **HTTPS JSON-RPC** |
+
+A cluster is defined and secured by **`--token`**: every node launched with the
+same token forms one cluster, and nodes with different tokens are mutually
+invisible even on a shared relay. The token does two things, both derived
+deterministically (no coordination):
+
+* **isolation** — it hashes into the relay multicast group id, so a node without
+  the token can't even see the cluster's gossip; and
+* **authenticity** — it keys an HMAC-SHA256 tag on every compute payload and
+  result, so a worker only runs token-authentic jobs and a coordinator only
+  accepts token-authentic results.
 
 > **Requires NURL ≥ v0.10.4** (built from source against your installed stdlib
 > at install time). **wasm kernels additionally require `wasmtime`** on each
-> worker.
+> worker; **`--mcp` needs `openssl`** on first run to auto-mint a self-signed
+> TLS cert (or pass your own with `--tls-cert`/`--tls-key`).
 
 ## The control surface (what the LLM sees)
 
@@ -82,28 +109,52 @@ count.
 ```sh
 nurlpkg install swarm-mcp
 
-# one relay (the meeting point), one per cluster
-swarm-mcp relay 0.0.0.0 47700           # add --v to log workers joining/leaving
+# An all-in-one node: relay + worker + MCP server, in one process.
+# Point your LLM client at https://127.0.0.1:8443/mcp .
+swarm-mcp --token mysecret --relay --worker --mcp
 
-# any number of compute nodes — joining is just running this
-swarm-mcp worker <relay-host> 47700
+# Scale out: more compute nodes join the cluster by running the same command
+# with the same --token, pointed at the relay. (No --relay → must --connect.)
+swarm-mcp --token mysecret --worker --connect <relay-host>:47700
 
-# the MCP server (stdio) — point your LLM client at this command
-swarm-mcp mcp <relay-host> 47700
+# A dedicated relay, or a dedicated MCP gateway, are just role subsets:
+swarm-mcp --token mysecret --relay --listen 0.0.0.0:47700
+swarm-mcp --token mysecret --mcp   --connect <relay-host>:47700 --mcp-listen 0.0.0.0:8443
 ```
+
+Options: `--listen HOST:PORT` (relay bind, default `0.0.0.0:47700`),
+`--connect HOST:PORT` (relay to join when this node has no `--relay`),
+`--mcp-listen HOST:PORT` (MCP HTTPS bind, default `127.0.0.1:8443`),
+`--tls-cert FILE --tls-key FILE` (PEM cert+key; default: self-signed under
+`~/.swarm-mcp`), `--workers N` (worker threads, default 1), `-v`.
 
 A manual CLI submit (no MCP) is handy for testing:
 
 ```sh
-swarm-mcp submit <relay-host> 47700 sum 1 1000000 'x*x'
+swarm-mcp submit <relay-host> 47700 sum 1 1000000 'x*x' --token mysecret
 # → sum of (x*x) over [1,1000000) = 333332833333500000
+```
+
+Point an MCP client at the HTTPS endpoint (self-signed cert → trust it / `-k`):
+
+```sh
+curl -k https://127.0.0.1:8443/mcp -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"compute_submit",
+       "arguments":{"expr":"x*x","lo":1,"hi":1000000,"reduce":"sum"}}}'
 ```
 
 ## How it works
 
+Each enabled role runs its own event loop on its own OS thread, talking to the
+rest of the cluster over the relay (loopback when the relay is co-located) — the
+same topology you'd get from separate processes, presented as one command. Only
+the relay drives the fiber reactor; worker and MCP roles do ordinary blocking
+I/O, so heavy compute or a slow TLS handshake never stalls the relay.
+
 1. **Join = announce.** A worker broadcasts a HELLO to the relay group
    (`census.nu`); every node folds it into the consistent-hash ring. Each worker
-   registers one generic **kernel handler** (`work.nu`).
+   registers a generic **kernel handler** and a **wasm handler** (`work.nu`,
+   `wasmkernel.nu`).
 2. **Submit = shard by key.** The MCP coordinator discovers the live workers,
    splits `[lo,hi)` into chunks, and keys each so `dist/ring` routes it to its
    owner; `dist/job` carries it over the transport.
@@ -114,7 +165,9 @@ swarm-mcp submit <relay-host> 47700 sum 1 1000000 'x*x'
    and reports the value back through the MCP tool.
 
 The coordinator drains cluster traffic on every tool call, so tasks make
-progress as the model polls — no background thread, single-process, robust.
+progress as the model polls. Every payload and result carries an HMAC-SHA256 tag
+keyed by the cluster token, verified on receipt — work is mutually authenticated
+over the dumb (opaque) relay.
 
 ## Phase 2 — arbitrary NURL kernels, compiled to wasm
 
@@ -136,7 +189,7 @@ Two ways to get there:
   server compiles it to wasm itself by POSTing to a NURL build service
   (`$NURL_BUILD_API`, default `https://play.nurl-lang.org`), then runs it.
   Compile errors come straight back to the model. (Needs `curl` and a reachable
-  build API on the host running `swarm-mcp mcp`.)
+  build API on the host running the `--mcp` role.)
 - **`compute_run_wasm`** — pass an **already-compiled** base64 module, e.g. one
   built with the `nurl_build_wasm` tool. No build service needed.
 
@@ -157,7 +210,7 @@ printing the partial) around it:
 
 ```sh
 # manual CLI equivalent (a pre-compiled full module):
-swarm-mcp runwasm <relay-host> 47700 sum 1 1000000 prime_counter.wasm
+swarm-mcp runwasm <relay-host> 47700 sum 1 1000000 prime_counter.wasm --token mysecret
 # → sum (wasm kernel) over [1,1000000) = 78498
 ```
 
@@ -168,26 +221,29 @@ control, for when you compiled the module yourself.
 ## Tests
 
 ```sh
-# kernel language (parse + eval) and map-reduce + sharding — ASan-clean
-NURL_STDLIB=<repo> ../../nurl.sh tests/expr_test.nu /tmp/et && /tmp/et
-NURL_STDLIB=<repo> ../../nurl.sh tests/work_test.nu /tmp/wt && /tmp/wt
+# kernel language (parse + eval), map-reduce + sharding (HMAC round-trip),
+# and the cluster token (group isolation + HMAC auth) — ASan-clean
+NURL_STDLIB=<repo> ../../nurl.sh tests/expr_test.nu  /tmp/et && /tmp/et
+NURL_STDLIB=<repo> ../../nurl.sh tests/work_test.nu  /tmp/wt && /tmp/wt
+NURL_STDLIB=<repo> ../../nurl.sh tests/token_test.nu /tmp/tt && /tmp/tt
 
-# end-to-end: relay + workers + a CLI submit + a full MCP session
+# end-to-end: an all-in-one node + MCP over HTTPS + CLI submit + token isolation
 ./tests/live_smoke.sh
 
-# phase 2 (needs wasmtime): compile a kernel to module.wasm, then
-swarm-mcp runwasm 127.0.0.1 47700 sum 1 1000000 module.wasm
+# wasm path (needs wasmtime): compile a kernel to module.wasm, then
+swarm-mcp runwasm 127.0.0.1 47700 sum 1 1000000 module.wasm --token mysecret
 ```
 
 ## Layout
 
 ```
+src/token.nu       cluster token → group-id isolation + HMAC payload/result auth
 src/expr.nu        the expression kernel language: tokenizer, parser, evaluator
 src/work.nu        map-reduce: reduce ops, the expression handler, sharding
-src/wasmkernel.nu  phase 2: ship + run a compiled wasm kernel under wasmtime
-src/buildwasm.nu   phase 2: compile NURL source → wasm via the NURL build API
+src/wasmkernel.nu  ship + run a compiled wasm kernel under wasmtime
+src/buildwasm.nu   compile NURL source → wasm via the NURL build API
 src/census.nu      HELLO membership gossip → consistent-hash ring
-src/main.nu        roles (relay | worker | submit | runwasm | mcp) + MCP server
+src/main.nu        composable roles (--relay/--worker/--mcp) + HTTPS MCP server
 ```
 
 ## License

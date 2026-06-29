@@ -20,14 +20,19 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/encode.nu`
+$ `stdlib/std/time.nu`
+$ `stdlib/std/thread.nu`
+$ `stdlib/std/net.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
+$ `stdlib/ext/mcp_http.nu`
 $ `stdlib/net/relay.nu`
 $ `stdlib/net/transport.nu`
 $ `stdlib/dist/ring.nu`
 $ `stdlib/dist/job.nu`
 $ `stdlib/ext/http_cli.nu`
+$ `token.nu`
 $ `census.nu`
 $ `expr.nu`
 $ `work.nu`
@@ -37,13 +42,6 @@ $ `buildwasm.nu`
 @ swarm_vnodes → i { ^ 64 }
 
 @ kind_kernel → i { ^ 1 }
-
-// Fixed 32-byte multicast group (the relay's documented contract).
-@ swarm_group_id → ( Vec u ) {
-    : ( Vec u ) g ( bytes_from_str `swarmc` )
-    ~ < ( vec_len [u] g ) 32 { ( vec_push [u] g # u 0 ) }
-    ^ g
-}
 
 // A 32-byte opaque routing pubkey derived deterministically from a node id.
 @ pk_from_id i id → ( Vec u ) {
@@ -68,10 +66,11 @@ $ `buildwasm.nu`
     ( Vec u ) self_pk
     i self_id
     i role
-    ( Vec u ) group
+    ( Vec u ) group  // token-derived 32-byte relay multicast group (cluster isolation)
+    ( Vec u ) key  // token-derived HMAC key (compute authenticity)
 }
 
-@ swarm_new RelayClient rc i id i role → *Swarm {
+@ swarm_new RelayClient rc i id i role s token → *Swarm {
     : ( Vec u ) me ( pk_from_id id )
     : *Transport tr # *Transport ( transport_open # s 0 rc 1 )
     : *Ring ring ( ring_new )
@@ -85,7 +84,8 @@ $ `buildwasm.nu`
     = . sw self_pk me
     = . sw self_id id
     = . sw role role
-    = . sw group ( swarm_group_id )
+    = . sw group ( token_group_id token )
+    = . sw key ( token_key token )
     ? == role ( role_worker ) { ( roster_add roster ring me id ( swarm_vnodes ) ) } {}
     ^ sw
 }
@@ -97,6 +97,7 @@ $ `buildwasm.nu`
     ( transport_free # *Transport . sw transport )
     ( vec_free [u] . sw self_pk )
     ( vec_free [u] . sw group )
+    ( vec_free [u] . sw key )
     ( nurl_free # s sw )
 }
 
@@ -151,9 +152,29 @@ $ `buildwasm.nu`
     ~ < t rounds { ( swarm_pump sw 200 ) = t + t 1 }
 }
 
-// ── relay + worker roles ─────────────────────────────────────────
+// ── role threads ─────────────────────────────────────────────────
+// Each enabled role runs its own blocking event loop on its own OS thread,
+// talking to the rest of the cluster over the relay (loopback when the relay is
+// co-located). This mirrors the proven separate-process topology while
+// presenting a single command. Only the relay role drives the fiber reactor
+// (runtime_run); worker/coordinator roles do ordinary blocking I/O off the
+// reactor, so heavy compute or a TLS handshake never stalls the relay.
 
-@ run_relay s host i port i vflag → i {
+// Dial the relay, retrying briefly so a co-located relay that is still binding
+// (or a relay that restarts) doesn't lose its local roles to a startup race.
+@ relay_dial_retry s host i port i tries → !RelayClient NetErr {
+    ?? ( relay_dial host port ) {
+        T rc → { ^ @ !RelayClient NetErr { T rc } }
+        F e → {
+            ? <= tries 1 { ^ @ !RelayClient NetErr { F e } } {}
+            ( sleep_ms 150 )
+            ^ ( relay_dial_retry host port - tries 1 )
+        }
+    }
+}
+
+// RELAY role: the dumb rendezvous point. Owns the fiber reactor on this thread.
+@ node_relay s host i port i vflag → v {
     ?? ( relay_server_start host port ) {
         T rs → {
             : *RelayServer p # *RelayServer ( nurl_alloc Z RelayServer )
@@ -161,38 +182,37 @@ $ `buildwasm.nu`
             = . p clients . rs clients
             = . p groups . rs groups
             = . p verbose vflag
-            ( nurl_print `swarm-mcp relay listening on ` ) ( nurl_print host )
-            ( nurl_print `:` ) ( nurl_print_int port )
-            ? == vflag 1 { ( nurl_print ` (verbose)` ) } {}
-            ( nurl_print `\n` )
             ( relay_server_run p )
             ( relay_server_free p )
-            ^ 0
         }
-        F e → { ( nurl_print `swarm-mcp: relay failed to bind\n` ) ^ 1 }
+        F e → { ( nurl_eprintln `swarm-mcp: relay failed to bind (port in use?)` ) }
     }
 }
 
-@ run_worker s host i port i id i rounds → i {
-    ?? ( relay_dial host port ) {
+// WORKER role: join the cluster, register the kernel + wasm handlers (every
+// worker can run wasm modules), and drain cluster traffic forever. Each worker
+// thread takes a fresh random identity, so `--workers N` spins up N independent
+// ring members in one process.
+@ node_worker s host i port s token i vflag → v {
+    : i id ( rand_u64 )
+    ?? ( relay_dial_retry host port 60 ) {
         T rc → {
             : ( Vec u ) reg ( pk_from_id id )
             ?? ( relay_register rc reg ) { T _ → {} F _ → {} }
             ( vec_free [u] reg )
             ( relay_set_timeout rc 250 )
-            : *Swarm sw ( swarm_new rc id ( role_worker ) )
-            ( job_register # *JobNode . sw job ( kind_kernel ) ( kernel_handler ) )
-            ( job_register # *JobNode . sw job ( kind_wasm ) ( wasm_handler ) )
+            : *Swarm sw ( swarm_new rc id ( role_worker ) token )
+            ( job_register # *JobNode . sw job ( kind_kernel ) ( kernel_handler . sw key ) )
+            ( job_register # *JobNode . sw job ( kind_wasm ) ( wasm_handler . sw key ) )
             ( swarm_join_group sw )
             ( swarm_announce sw 1 )
-            ( nurl_print `swarm-mcp worker ` ) ( nurl_print_int id ) ( nurl_print ` ready\n` )
-            : ~ i t 0
-            ~ | <= rounds 0 < t rounds { ( swarm_pump sw 200 ) = t + t 1 }
+            ? == vflag 1 { ( nurl_print `swarm-mcp worker ` ) ( nurl_print ( nurl_str_int id ) ) ( nurl_print ` ready\n` ) } {}
+            : ~ b run T
+            ~ run { ( swarm_pump sw 200 ) }
             ( swarm_free sw )
             ( relay_close rc )
-            ^ 0
         }
-        F e → { ( nurl_print `swarm-mcp: worker could not dial relay\n` ) ^ 1 }
+        F e → { ( nurl_eprintln `swarm-mcp: worker could not reach the relay` ) }
     }
 }
 
@@ -207,10 +227,11 @@ $ `buildwasm.nu`
     ~ < i nchunks {
         : s cp ?? ( vec_get [s] chunks i ) { T x → x F → # s 0 }
         : *Chunk c # *Chunk cp
-        : ( Vec u ) key ( chunk_key i )
+        : ( Vec u ) rkey ( chunk_key i )
         : ( Vec u ) payload ( chunk_payload op . c lo . c hi expr )
-        ( vec_push [i] tids ( job_submit # *JobNode . sw job ( kind_kernel ) key payload ) )
-        ( vec_free [u] key ) ( vec_free [u] payload )
+        : ( Vec u ) tagged ( token_tag . sw key payload )
+        ( vec_push [i] tids ( job_submit # *JobNode . sw job ( kind_kernel ) rkey tagged ) )
+        ( vec_free [u] rkey ) ( vec_free [u] payload ) ( vec_free [u] tagged )
         = i + i 1
     }
     ( shard_free chunks )
@@ -227,10 +248,11 @@ $ `buildwasm.nu`
     ~ < i nchunks {
         : s cp ?? ( vec_get [s] chunks i ) { T x → x F → # s 0 }
         : *Chunk c # *Chunk cp
-        : ( Vec u ) key ( chunk_key i )
+        : ( Vec u ) rkey ( chunk_key i )
         : ( Vec u ) payload ( wasm_chunk_payload . c lo . c hi wasm )
-        ( vec_push [i] tids ( job_submit # *JobNode . sw job ( kind_wasm ) key payload ) )
-        ( vec_free [u] key ) ( vec_free [u] payload )
+        : ( Vec u ) tagged ( token_tag . sw key payload )
+        ( vec_push [i] tids ( job_submit # *JobNode . sw job ( kind_wasm ) rkey tagged ) )
+        ( vec_free [u] rkey ) ( vec_free [u] payload ) ( vec_free [u] tagged )
         = i + i 1
     }
     ( shard_free chunks )
@@ -255,7 +277,13 @@ $ `buildwasm.nu`
     : ~ i k 0
     ~ < k n {
         ?? ( job_await # *JobNode . sw job ?? ( vec_get [i] tids k ) { T x → x F → 0 } ) {
-            T r → { = acc ( red_combine op acc ( result_decode r ) ) ( vec_free [u] r ) }
+            T r → {
+                ?? ( token_untag . sw key r ) {
+                    T body → { = acc ( red_combine op acc ( result_decode body ) ) ( vec_free [u] body ) }
+                    F → {}
+                }
+                ( vec_free [u] r )
+            }
             F → {}
         }
         = k + k 1
@@ -267,7 +295,7 @@ $ `buildwasm.nu`
 
 // ── submit role (manual CLI testing, no MCP) ─────────────────────
 
-@ run_submit s host i port i op i lo i hi s expr → i {
+@ run_submit s host i port i op i lo i hi s expr s token → i {
     ?? ( relay_dial host port ) {
         T rc → {
             : i myid ( rand_u64 )
@@ -275,7 +303,7 @@ $ `buildwasm.nu`
             ?? ( relay_register rc reg ) { T _ → {} F _ → {} }
             ( vec_free [u] reg )
             ( relay_set_timeout rc 250 )
-            : *Swarm sw ( swarm_new rc myid ( role_client ) )
+            : *Swarm sw ( swarm_new rc myid ( role_client ) token )
             ( swarm_join_group sw )
             ( swarm_discover sw 8 )
             : i nworkers ( roster_count # *Roster . sw roster )
@@ -307,7 +335,7 @@ $ `buildwasm.nu`
 
 // ── runwasm role (manual CLI testing of a compiled .wasm kernel) ──
 
-@ run_runwasm s host i port i op i lo i hi s wasmpath → i {
+@ run_runwasm s host i port i op i lo i hi s wasmpath s token → i {
     : !( Vec u ) IoErr wr ( read_file_bytes wasmpath )
     : ~ i rc 0
     ?? wr {
@@ -320,7 +348,7 @@ $ `buildwasm.nu`
                     ?? ( relay_register relc reg ) { T _ → {} F _ → {} }
                     ( vec_free [u] reg )
                     ( relay_set_timeout relc 250 )
-                    : *Swarm sw ( swarm_new relc myid ( role_client ) )
+                    : *Swarm sw ( swarm_new relc myid ( role_client ) token )
                     ( swarm_join_group sw )
                     ( swarm_discover sw 8 )
                     : i nworkers ( roster_count # *Roster . sw roster )
@@ -714,7 +742,7 @@ $ `buildwasm.nu`
 // ── JSON-RPC method handlers ─────────────────────────────────────
 
 @ handle_initialize Json id → Json {
-    : Json result ( mcp_initialize_result `swarm-mcp` `0.1.0` )
+    : Json result ( mcp_initialize_result `swarm-mcp` `0.3.0` )
     ^ ( mcp_response_result id result )
 }
 
@@ -779,33 +807,21 @@ $ `buildwasm.nu`
     }
 }
 
-@ stdio_loop → v {
-    : ~ b running T
-    ~ running {
-        : ?Json msg ( mcp_read_request )
-        ?? msg {
-            T req → {
-                : ?Json reply ( dispatch req )
-                ( json_free req )
-                ?? reply {
-                    T resp → ( mcp_send_message resp )
-                    F empty → {}
-                }
-            }
-            F → { = running F }
-        }
-    }
-}
+// ── MCP role: the LLM control surface over HTTPS JSON-RPC ─────────
+// A coordinator (role_client) that submits work to the ring and serves the MCP
+// tools over a TLS HTTP/1.1 endpoint (the standard MCP "Streamable HTTP"
+// transport). Runs the blocking HTTP server off the reactor on its own thread,
+// so a slow TLS handshake never stalls a co-located relay or worker.
 
-@ run_mcp s host i port → i {
-    ?? ( relay_dial host port ) {
+@ node_mcp s rhost i rport s mcp_host i mcp_port s cert s key s token → v {
+    ?? ( relay_dial_retry rhost rport 60 ) {
         T rc → {
             : i myid ( rand_u64 )
             : ( Vec u ) reg ( pk_from_id myid )
             ?? ( relay_register rc reg ) { T _ → {} F _ → {} }
             ( vec_free [u] reg )
             ( relay_set_timeout rc 150 )
-            : *Swarm sw ( swarm_new rc myid ( role_client ) )
+            : *Swarm sw ( swarm_new rc myid ( role_client ) token )
             ( swarm_join_group sw )
             ( swarm_discover sw 6 )
             : *McpState st # *McpState ( nurl_alloc Z McpState )
@@ -813,28 +829,23 @@ $ `buildwasm.nu`
             = . st tasks ( vec_new [s] )
             = . st next_id 1
             = g_mcp # i st
-            ( mcp_log `swarm-mcp ready (cluster coordinator over relay)` )
-            ( stdio_loop )
+            : ( @ HttpResponse HttpRequest ) handler ( mcp_http_handler \ Json req → ?Json { ^ ( dispatch req ) } )
+            ?? ( tcp_listen_tls mcp_host mcp_port cert key ) {
+                T lst → {
+                    : HttpServer srv ( server_new lst handler )
+                    ?? ( server_run srv ) { T _ → {} F e → {} }
+                    ( server_stop srv )
+                }
+                F e → { ( nurl_eprintln `swarm-mcp: MCP HTTPS listener failed to start (check --tls-cert/--tls-key and that the port is free)` ) }
+            }
             ( swarm_free sw )
             ( relay_close rc )
-            ^ 0
         }
-        F e → { ( nurl_eprintln `swarm-mcp: mcp could not dial relay` ) ^ 1 }
+        F e → { ( nurl_eprintln `swarm-mcp: MCP could not reach the relay` ) }
     }
 }
 
-// ── CLI ──────────────────────────────────────────────────────────
-
-@ usage → v {
-    ( nurl_print `swarm-mcp — MCP-controlled distributed compute engine\n\n` )
-    ( nurl_print `  swarm-mcp relay  <host> <port> [--v]\n` )
-    ( nurl_print `  swarm-mcp worker <host> <port> [id] [rounds]\n` )
-    ( nurl_print `  swarm-mcp mcp    <host> <port>            (MCP server over stdio)\n` )
-    ( nurl_print `  swarm-mcp submit  <host> <port> <reduce> <lo> <hi> <expr>\n` )
-    ( nurl_print `  swarm-mcp runwasm <host> <port> <reduce> <lo> <hi> <module.wasm>\n\n` )
-    ( nurl_print `MCP tools: compute_submit (expression kernel), compute_run_wasm (NURL→wasm\n` )
-    ( nurl_print `kernel), compute_list, compute_result. reduce = sum|product|min|max|count.\n` )
-}
+// ── CLI: flag parsing ────────────────────────────────────────────
 
 @ arg_int i idx → i {
     : String s ( env_arg idx )
@@ -850,59 +861,234 @@ $ `buildwasm.nu`
     ^ eq
 }
 
+// True if `name` appears anywhere in argv (a boolean role/verbose flag).
+@ has_flag s name → b {
+    : i argc ( env_args_count )
+    : ~ b found F
+    : ~ i i 1
+    ~ & ! found < i argc {
+        : String a ( env_arg i )
+        ? != 0 ( nurl_str_eq ( string_data a ) name ) { = found T } {}
+        ( string_free a )
+        = i + i 1
+    }
+    ^ found
+}
+
+// The token following `--name` in argv, or a copy of `deflt`. Owned String.
+@ flag_val s name s deflt → String {
+    : i argc ( env_args_count )
+    : ~ String out ( string_from deflt )
+    : ~ b done F
+    : ~ i i 1
+    ~ & ! done < i argc {
+        : String a ( env_arg i )
+        : b match ? != 0 ( nurl_str_eq ( string_data a ) name ) T F
+        ? & match < + i 1 argc {
+            ( string_free out )
+            = out ( env_arg + i 1 )
+            = done T
+        } {}
+        ( string_free a )
+        = i + i 1
+    }
+    ^ out
+}
+
+@ flag_int s name i deflt → i {
+    : String v ( flag_val name `` )
+    : i out ? > ( string_len v ) 0 ( nurl_str_to_int ( string_data v ) ) deflt
+    ( string_free v )
+    ^ out
+}
+
+: HostPort { String host i port }
+
+// Parse "host:port", "host", ":port", or "" with host/port defaults.
+@ parse_hostport String hp s dhost i dport → HostPort {
+    : i n ( string_len hp )
+    : i ci ( nurl_str_find ( string_data hp ) `:` )
+    ? | == n 0 < ci 0 {
+        : String h ? == n 0 ( string_from dhost ) ( string_from ( string_data hp ) )
+        ^ @ HostPort { h dport }
+    } {}
+    : String h0 ( string_substr hp 0 ci )
+    : String ps ( string_substr hp + ci 1 - n + ci 1 )
+    : i p ( nurl_str_to_int ( string_data ps ) )
+    ( string_free ps )
+    : String h ? == 0 ( string_len h0 ) { ( string_free h0 ) ( string_from dhost ) } { h0 }
+    ^ @ HostPort { h ? > p 0 p dport }
+}
+
+// Ensure a TLS cert+key exist at the given paths, auto-minting a self-signed EC
+// P-256 pair with openssl if absent (so `--mcp` works out of the box; pass
+// --tls-cert/--tls-key for a real cert). Returns T once both files exist.
+@ ensure_cert s cert_path s key_path → b {
+    ? & ( file_exists cert_path ) ( file_exists key_path ) { ^ T } {}
+    : String cmd ( string_new )
+    ( string_push_str cmd `mkdir -p "$(dirname '` ) ( string_push_str cmd cert_path ) ( string_push_str cmd `')" && ` )
+    ( string_push_str cmd `openssl ecparam -genkey -name prime256v1 -noout -out '` ) ( string_push_str cmd key_path ) ( string_push_str cmd `' && ` )
+    ( string_push_str cmd `openssl req -new -x509 -key '` ) ( string_push_str cmd key_path )
+    ( string_push_str cmd `' -out '` ) ( string_push_str cmd cert_path )
+    ( string_push_str cmd `' -days 3650 -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"` )
+    : ( Vec s ) args ( vec_new [s] )
+    ( vec_push [s] args `-c` )
+    ( vec_push [s] args ( string_data cmd ) )
+    : ~ b ok F
+    ?? ( process_run `sh` args `` ) {
+        T out → { ? == ( output_exit_code out ) 0 { = ok T } {} ( output_free out ) }
+        F e → {}
+    }
+    ( vec_free [s] args )
+    ( string_free cmd )
+    ^ & ok & ( file_exists cert_path ) ( file_exists key_path )
+}
+
+// ── dev CLI subcommands (manual testing, no MCP) ─────────────────
+
+@ cli_submit → i {
+    : i argc ( env_args_count )
+    ? < argc 8 { ( nurl_print `usage: swarm-mcp submit <host> <port> <reduce> <lo> <hi> <expr> --token <secret>\n` ) ^ 1 } {}
+    : String host ( env_arg 2 )
+    : String rs ( env_arg 4 )
+    : i op ( reduce_op_of ( string_data rs ) 0 )
+    : String es ( env_arg 7 )
+    : String tok ( flag_val `--token` ( string_data ( env_var_or `SWARM_MCP_TOKEN` `` ) ) )
+    : i rc ( run_submit ( string_data host ) ( arg_int 3 ) op ( arg_int 5 ) ( arg_int 6 ) ( string_data es ) ( string_data tok ) )
+    ( string_free host ) ( string_free rs ) ( string_free es ) ( string_free tok )
+    ^ rc
+}
+
+@ cli_runwasm → i {
+    : i argc ( env_args_count )
+    ? < argc 8 { ( nurl_print `usage: swarm-mcp runwasm <host> <port> <reduce> <lo> <hi> <module.wasm> --token <secret>\n` ) ^ 1 } {}
+    : String host ( env_arg 2 )
+    : String rs ( env_arg 4 )
+    : i op ( reduce_op_of ( string_data rs ) 0 )
+    : String wp ( env_arg 7 )
+    : String tok ( flag_val `--token` ( string_data ( env_var_or `SWARM_MCP_TOKEN` `` ) ) )
+    : i rc ( run_runwasm ( string_data host ) ( arg_int 3 ) op ( arg_int 5 ) ( arg_int 6 ) ( string_data wp ) ( string_data tok ) )
+    ( string_free host ) ( string_free rs ) ( string_free wp ) ( string_free tok )
+    ^ rc
+}
+
+@ usage → v {
+    ( nurl_print `swarm-mcp — a distributed compute cluster driven over MCP (HTTPS JSON-RPC).\n\n` )
+    ( nurl_print `Every node runs the same command; roles combine freely:\n` )
+    ( nurl_print `  swarm-mcp --token <secret> [--relay] [--worker] [--mcp] [options]\n\n` )
+    ( nurl_print `Roles (any combination):\n` )
+    ( nurl_print `  --relay              run a rendezvous relay on this node\n` )
+    ( nurl_print `  --worker             run compute worker(s) here (runs expression + wasm kernels)\n` )
+    ( nurl_print `  --mcp                serve the MCP control surface over HTTPS JSON-RPC\n\n` )
+    ( nurl_print `Cluster:\n` )
+    ( nurl_print `  --token <secret>     shared cluster secret — same token = same cluster (required)\n` )
+    ( nurl_print `  --connect HOST:PORT  relay to join (when this node has no --relay)\n\n` )
+    ( nurl_print `Bind addresses & tuning:\n` )
+    ( nurl_print `  --listen HOST:PORT       relay bind        (default 0.0.0.0:47700)\n` )
+    ( nurl_print `  --mcp-listen HOST:PORT   MCP HTTPS bind    (default 127.0.0.1:8443)\n` )
+    ( nurl_print `  --tls-cert FILE --tls-key FILE  PEM cert+key (default: self-signed in ~/.swarm-mcp)\n` )
+    ( nurl_print `  --workers N              worker threads   (default 1)\n` )
+    ( nurl_print `  -v, --verbose\n\n` )
+    ( nurl_print `Examples:\n` )
+    ( nurl_print `  swarm-mcp --token sekret --relay --worker --mcp              # all-in-one node\n` )
+    ( nurl_print `  swarm-mcp --token sekret --worker --connect 10.0.0.1:47700  # join as a worker\n\n` )
+    ( nurl_print `MCP tools: compute_submit, compute_submit_kernel, compute_run_wasm, compute_list, compute_result.\n` )
+    ( nurl_print `Dev CLI:   swarm-mcp submit|runwasm <host> <port> <reduce> <lo> <hi> <expr|module> --token <secret>\n` )
+}
+
+// ── the unified node launcher ────────────────────────────────────
+// Parse the role flags and spawn one OS thread per enabled role, each running
+// its own blocking event loop and talking over the relay. Block on the threads
+// (a node runs until killed).
+
+@ run_node → i {
+    : b relay_on ( has_flag `--relay` )
+    : b worker_on ( has_flag `--worker` )
+    : b mcp_on ( has_flag `--mcp` )
+    ? & ! relay_on & ! worker_on ! mcp_on {
+        ( nurl_eprintln `swarm-mcp: pick at least one role — --relay, --worker, --mcp (combine freely)` )
+        ( usage ) ^ 1
+    } {}
+
+    : String tok ( flag_val `--token` ( string_data ( env_var_or `SWARM_MCP_TOKEN` `` ) ) )
+    ? & | worker_on mcp_on == 0 ( string_len tok ) {
+        ( nurl_eprintln `swarm-mcp: --token <secret> is required (all nodes with the same token form one cluster)` )
+        ^ 1
+    } {}
+
+    : String ls ( flag_val `--listen` `0.0.0.0:47700` )
+    : HostPort lhp ( parse_hostport ls `0.0.0.0` 47700 )
+    : String cs ( flag_val `--connect` `` )
+    : b have_connect ? > ( string_len cs ) 0 T F
+    : HostPort chp ( parse_hostport cs `127.0.0.1` 47700 )
+    : String mls ( flag_val `--mcp-listen` `127.0.0.1:8443` )
+    : HostPort mhp ( parse_hostport mls `127.0.0.1` 8443 )
+    : i vflag ? | ( has_flag `-v` ) ( has_flag `--verbose` ) 1 0
+    : i nworkers0 ( flag_int `--workers` 1 )
+    : i nworkers ? > nworkers0 0 nworkers0 1
+
+    // Where this node's local worker/mcp roles reach the relay: a co-located
+    // relay over loopback, otherwise the explicit --connect endpoint.
+    : String drh ? relay_on ( string_from `127.0.0.1` ) ( string_from ( string_data . chp host ) )
+    : i drp ? relay_on . lhp port . chp port
+    ? & | worker_on mcp_on & ! relay_on ! have_connect {
+        ( nurl_eprintln `swarm-mcp: --connect HOST:PORT is required for --worker/--mcp when this node has no --relay` )
+        ^ 1
+    } {}
+
+    // TLS material for the MCP HTTPS endpoint.
+    : String home ( env_var_or `HOME` `/tmp` )
+    : String defcert ( string_new ) ( string_push_str defcert ( string_data home ) ) ( string_push_str defcert `/.swarm-mcp/cert.pem` )
+    : String defkey ( string_new ) ( string_push_str defkey ( string_data home ) ) ( string_push_str defkey `/.swarm-mcp/key.pem` )
+    : String certp ( flag_val `--tls-cert` ( string_data defcert ) )
+    : String keyp ( flag_val `--tls-key` ( string_data defkey ) )
+    ? mcp_on {
+        ? ! ( ensure_cert ( string_data certp ) ( string_data keyp ) ) {
+            ( nurl_eprintln `swarm-mcp: no TLS cert/key and could not auto-generate one (needs openssl). Pass --tls-cert FILE --tls-key FILE.` )
+            ^ 1
+        } {}
+    } {}
+
+    // Startup banner.
+    ( nurl_print `swarm-mcp node starting — roles:` )
+    ? relay_on { ( nurl_print ` relay` ) } {}
+    ? worker_on { ( nurl_print ` worker` ) } {}
+    ? mcp_on { ( nurl_print ` mcp` ) } {}
+    ( nurl_print `\n` )
+    ? relay_on { ( nurl_print `  relay   listening ` ) ( nurl_print ( string_data . lhp host ) ) ( nurl_print `:` ) ( nurl_print ( nurl_str_int . lhp port ) ) ( nurl_print `\n` ) } {}
+    ? worker_on { ( nurl_print `  worker  x` ) ( nurl_print ( nurl_str_int nworkers ) ) ( nurl_print ` -> relay ` ) ( nurl_print ( string_data drh ) ) ( nurl_print `:` ) ( nurl_print ( nurl_str_int drp ) ) ( nurl_print `\n` ) } {}
+    ? mcp_on { ( nurl_print `  mcp     https://` ) ( nurl_print ( string_data . mhp host ) ) ( nurl_print `:` ) ( nurl_print ( nurl_str_int . mhp port ) ) ( nurl_print `/  -> relay ` ) ( nurl_print ( string_data drh ) ) ( nurl_print `:` ) ( nurl_print ( nurl_str_int drp ) ) ( nurl_print `\n` ) } {}
+
+    // One closure per role (held alive for the process; worker threads share
+    // one closure and each takes a fresh identity inside node_worker).
+    : ( @ v ) relay_body \ → v { ( node_relay ( string_data . lhp host ) . lhp port vflag ) }
+    : ( @ v ) worker_body \ → v { ( node_worker ( string_data drh ) drp ( string_data tok ) vflag ) }
+    : ( @ v ) mcp_body \ → v { ( node_mcp ( string_data drh ) drp ( string_data . mhp host ) . mhp port ( string_data certp ) ( string_data keyp ) ( string_data tok ) ) }
+
+    : ( Vec s ) ths ( vec_new [s] )
+    ? relay_on { ?? ( thread_spawn relay_body ) { T t → ( vec_push [s] ths . t raw ) F _ → {} } } {}
+    ? worker_on {
+        : ~ i wi 0
+        ~ < wi nworkers { ?? ( thread_spawn worker_body ) { T t → ( vec_push [s] ths . t raw ) F _ → {} } = wi + wi 1 }
+    } {}
+    ? mcp_on { ?? ( thread_spawn mcp_body ) { T t → ( vec_push [s] ths . t raw ) F _ → {} } } {}
+
+    : i nth ( vec_len [s] ths )
+    ? == nth 0 { ( nurl_eprintln `swarm-mcp: failed to start any role thread` ) ^ 1 } {}
+    : ~ i ji 0
+    ~ < ji nth {
+        : s raw ?? ( vec_get [s] ths ji ) { T x → x F → # s 0 }
+        ? != # i raw 0 { ( thread_join @ Thread { raw } ) } {}
+        = ji + ji 1
+    }
+    ^ 0
+}
+
 @ main → i {
     : i argc ( env_args_count )
     ? < argc 2 { ( usage ) ^ 1 } {}
-    : ~ i rc 0
-    ? ( arg_eq 1 `relay` ) {
-        ? < argc 4 { ( nurl_print `usage: swarm-mcp relay <host> <port> [--v]\n` ) = rc 1 } {
-            : String host ( env_arg 2 )
-            : i vflag ? & > argc 5 ( arg_eq 4 `--v` ) 1 ? & > argc 5 ( arg_eq 4 `--verbose` ) 1 0
-            = rc ( run_relay ( string_data host ) ( arg_int 3 ) vflag )
-            ( string_free host )
-        }
-    } {
-        ? ( arg_eq 1 `worker` ) {
-            ? < argc 4 { ( nurl_print `usage: swarm-mcp worker <host> <port> [id] [rounds]\n` ) = rc 1 } {
-                : String host ( env_arg 2 )
-                : i id ? > argc 4 ( arg_int 4 ) ( rand_u64 )
-                : i rounds ? > argc 5 ( arg_int 5 ) 0
-                = rc ( run_worker ( string_data host ) ( arg_int 3 ) id rounds )
-                ( string_free host )
-            }
-        } {
-            ? ( arg_eq 1 `mcp` ) {
-                ? < argc 4 { ( nurl_print `usage: swarm-mcp mcp <host> <port>\n` ) = rc 1 } {
-                    : String host ( env_arg 2 )
-                    = rc ( run_mcp ( string_data host ) ( arg_int 3 ) )
-                    ( string_free host )
-                }
-            } {
-                ? ( arg_eq 1 `submit` ) {
-                    ? < argc 8 { ( nurl_print `usage: swarm-mcp submit <host> <port> <reduce> <lo> <hi> <expr>\n` ) = rc 1 } {
-                        : String host ( env_arg 2 )
-                        : String rs ( env_arg 4 )
-                        : i op ( reduce_op_of ( string_data rs ) 0 )
-                        : String es ( env_arg 7 )
-                        = rc ( run_submit ( string_data host ) ( arg_int 3 ) op ( arg_int 5 ) ( arg_int 6 ) ( string_data es ) )
-                        ( string_free host ) ( string_free rs ) ( string_free es )
-                    }
-                } {
-                    ? ( arg_eq 1 `runwasm` ) {
-                        ? < argc 8 { ( nurl_print `usage: swarm-mcp runwasm <host> <port> <reduce> <lo> <hi> <module.wasm>\n` ) = rc 1 } {
-                            : String host ( env_arg 2 )
-                            : String rs ( env_arg 4 )
-                            : i op ( reduce_op_of ( string_data rs ) 0 )
-                            : String wp ( env_arg 7 )
-                            = rc ( run_runwasm ( string_data host ) ( arg_int 3 ) op ( arg_int 5 ) ( arg_int 6 ) ( string_data wp ) )
-                            ( string_free host ) ( string_free rs ) ( string_free wp )
-                        }
-                    } {
-                        ( usage ) = rc 1
-                    }
-                }
-            }
-        }
-    }
-    ^ rc
+    ? ( arg_eq 1 `submit` ) { ^ ( cli_submit ) } {}
+    ? ( arg_eq 1 `runwasm` ) { ^ ( cli_runwasm ) } {}
+    ? | ( arg_eq 1 `-h` ) | ( arg_eq 1 `--help` ) ( arg_eq 1 `help` ) { ( usage ) ^ 0 } {}
+    ^ ( run_node )
 }
