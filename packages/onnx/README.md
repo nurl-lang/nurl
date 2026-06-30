@@ -58,9 +58,19 @@ host never pulls it in. This package only knows the neutral
 | `Gemm` | `Y = α·A·B(ᵀ) + β·C`, bias `C` broadcast; `alpha`/`beta`/`transA`/`transB` |
 | `Relu` / `LeakyRelu` | elementwise; `LeakyRelu` honours `alpha` |
 | `Conv` | NCHW, 2-D, `group=1`; `auto_pad` (SAME_UPPER/LOWER) or explicit `pads`, `strides`, optional bias |
-| `MaxPool` | NCHW, 2-D; `kernel_shape`, `strides`, `auto_pad` (−∞ padding) |
+| `MaxPool` | NCHW, 2-D; `kernel_shape`, `strides`, `auto_pad` or explicit `pads` (−∞ padding) |
 | `BatchNormalization` | inference form, per channel, `epsilon` |
-| `Mul` / `Add` | broadcast operand (scalar, per-channel, or full); operands in either order |
+| `Mul` / `Add` / `Sub` / `Div` | broadcast operand (scalar, per-channel, per-inner, or full); Mul/Add either order |
+| `Sigmoid` | elementwise (SiLU = `Sigmoid`·`Mul`) |
+| `Concat` / `Split` | along any axis; Split aliases contiguous slices, multi-output |
+| `Reshape` / `Transpose` | reinterpret (alias) / general N-D permute |
+| `Resize` | nearest-neighbour integer upscale (`scales`) |
+| `Softmax` | along any axis |
+
+Initializers may be `FLOAT` (GPU weights) or `INT64` (host-side shape /
+size / anchor tensors). The op set is enough to run a full **YOLOv8 /
+YOLOE** backbone, neck, and anchor-free DFL detection head — verified
+end-to-end against onnxruntime (see `packages/yoloe`).
 
 Tensors are float32, N-D (dense 2-D and NCHW 4-D). Enough to run a
 multi-layer perceptron **and a tiny-YOLO-class CNN detector** end-to-end —

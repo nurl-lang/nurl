@@ -8,11 +8,15 @@ fixed label set. The detector runs on the GPU through
 via NVRTC — no external inference engine), and promptability comes from
 YOLOE's **region-text contrastive head**.
 
-> **Status: foundation (M1) in place.** The model export, the ONNX op
-> inventory, and the onnxruntime reference are done and reproducible (see
-> `tools/`). The op set, the detector, and the promptable head are the
-> roadmap below. This is the crown-jewel milestone for the NURL GPU/ONNX
-> stack (`gpu` → `onnx` → `yoloe`) and is being built in stages.
+> **Status: M2 done — the full network runs.** The complete 267-node
+> YOLOE forward pass (YOLOv8 backbone + neck + DFL box head + region-text
+> contrastive class head) runs on the GPU in pure NURL and **matches
+> onnxruntime** (max abs error ~0.02 over `[1,46,8400]` on the dog photo).
+> M1 (export + op inventory + reference) and M2 (the op set in
+> `packages/onnx`, verified) are complete; the detector (M3, decode + NMS),
+> runtime promptability (M4), and the in-NURL text encoder (M5) are next.
+> This is the crown-jewel milestone for the NURL GPU/ONNX stack
+> (`gpu` → `onnx` → `yoloe`), built in stages.
 
 ## Why this is the crown jewel
 

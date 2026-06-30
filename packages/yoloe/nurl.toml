@@ -5,4 +5,4 @@ description = "Promptable, open-vocabulary object detection from pure NURL on th
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-onnx = { path = "../onnx", version = "0.2.0" }
+onnx = { path = "../onnx", version = "0.3.0" }
