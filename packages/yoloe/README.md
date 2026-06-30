@@ -168,10 +168,10 @@ prompts: person dog cat car bicycle truck backpack bottle chair bird
     turns a `names.txt` into the `tokens.i64` the text encoder consumes;
     `tools/tokenize_cli.nu` prints ids for ad-hoc inspection.
 
-  Pure-NURL `prompt-words → tpe` is thus two robust steps — tokenize
-  (`gen_tokens.nu`) then encode (the text-encoder ONNX via the runtime,
-  as in `tests/text_fwd.nu`) — no Python. `tools/gen_tpe.py` (Python
-  MobileCLIP) remains as a cross-check.
+  `tools/gen_tpe.nu` does the whole `prompt-words → tpe` in one pure-NURL
+  binary — tokenize (`src/bpe.nu`) then encode (the text-encoder ONNX via the
+  runtime) — no Python. It matches PyTorch MobileCLIP to ~5e-6 across multiple
+  prompts. `tools/gen_tpe.py` (Python MobileCLIP) remains as a cross-check.
 
 ## Reproducing the reference (`tools/`)
 

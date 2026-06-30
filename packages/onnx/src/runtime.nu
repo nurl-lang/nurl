@@ -18,7 +18,7 @@ $ `ops.nu`
 // A device-resident tensor: name, CUdeviceptr (i64), shape, element count.
 : RTensor { String name  i dptr  ( Vec i ) shape  i nelem }
 
-: Engine { Gpu g  Kernels ks  ( Vec RTensor ) vals  OGraph graph  b ok }
+: Engine { Gpu g  Kernels ks  ( Vec RTensor ) vals  OGraph graph  b ok  ( Vec i ) owned }
 
 @ streq2 s a s b → b { ^ != ( nurl_str_eq a b ) 0 }
 @ ceil_div i a i b → i { ^ / + a - b 1 b }
@@ -60,7 +60,39 @@ $ `ops.nu`
     = . e vals ( vec_new [RTensor] )
     = . e graph @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) }
     = . e ok & ( gpu_ok g ) . ks ok
+    = . e owned ( vec_new [i] )
     ^ e
+}
+
+// Record a device allocation so rt_reset can free it. Aliased tensors
+// (Reshape/Split share or offset an existing buffer) are NOT recorded — only
+// the real gpu_alloc base pointers, so reset frees each allocation exactly
+// once with no double-free / free-of-non-base.
+@ rt_own *Engine e i dptr → i {
+    ( vec_push [i] . e owned dptr )
+    ^ dptr
+}
+
+// Free every device buffer allocated during the previous run and clear the
+// value map. Lets one Engine serve many forward passes (e.g. one text prompt
+// per call) without leaking the model's weights + activations each time.
+@ rt_reset *Engine e → v {
+    : ( Vec i ) own . e owned
+    : ~ i k 0
+    ~ < k ( vec_len [i] own ) {
+        ?? ( vec_get [i] own k ) { T d → ? > d 0 { ( cuda_free d ) } {} F _ → {} }
+        = k + k 1
+    }
+    ( vec_free [i] own )
+    = . e owned ( vec_new [i] )
+    : ( Vec RTensor ) vs . e vals
+    : ~ i j 0
+    ~ < j ( vec_len [RTensor] vs ) {
+        ?? ( vec_get [RTensor] vs j ) { T t → ( string_free . t name ) F _ → {} }
+        = j + j 1
+    }
+    ( vec_free [RTensor] vs )
+    = . e vals ( vec_new [RTensor] )
 }
 
 @ rt_ok *Engine e → b { ^ . e ok }
@@ -110,6 +142,7 @@ $ `ops.nu`
                 ? & != . t dtype 7 != . t host 0 {
                     : i n . t nelem
                     : GpuBuffer buf ( gpu_alloc . e g * n 4 )
+                    ( rt_own e . buf dptr )
                     ( gpu_upload buf # *u . t host )
                     ( rt_put e ( string_data . t name ) . buf dptr . t dims )
                 } {}
@@ -123,6 +156,7 @@ $ `ops.nu`
 // return its dptr.
 @ rt_alloc_out *Engine e s name ( Vec i ) shape → i {
     : GpuBuffer buf ( gpu_alloc . e g * ( __prod shape ) 4 )
+    ( rt_own e . buf dptr )
     ( rt_put e name . buf dptr shape )
     ^ . buf dptr
 }
@@ -256,6 +290,9 @@ $ `ops.nu`
     ? == . B nelem . X nelem { = bmode 2 }
     ? == . B nelem inner { = bmode 3 = per inner }
     ? == . B nelem C { = bmode 1 = per / . X nelem C }
+    // B is a trailing sub-block tiled over the leading dims (e.g. a [.,1,S,S]
+    // attention mask added to [.,H,S,S] scores): out[i] = X[i] op B[i % |B|].
+    ? & > . B nelem 0 == 0 % . X nelem . B nelem { = bmode 3 = per . B nelem }
     { = bmode 2 }
     : i yd ( rt_alloc_out e ( __out_name n ) . X shape )
     ( op_eltwise . e g . e ks . X dptr . B dptr yd . X nelem per op bmode )
@@ -332,7 +369,12 @@ $ `ops.nu`
 // Softmax over `axis`, viewing the tensor as (outer, axis, inner).
 @ rt_softmax *Engine e ONode n → v {
     : RTensor X ( __in e n 0 )
-    : i ax ( node_attr_i n `axis` - ( rt_ndim X ) 1 )
+    // ONNX permits a negative `axis` (counts from the end). Normalise it to
+    // a non-negative index before deriving outer/axis-length/inner, or the
+    // softmax runs over a phantom size-1 axis (axn=1) and silently produces a
+    // degenerate distribution — which poisons attention with NaN downstream.
+    : ~ i ax ( node_attr_i n `axis` - ( rt_ndim X ) 1 )
+    ? < ax 0 { = ax + ax ( rt_ndim X ) } {}
     : ~ i outer 1
     : ~ i j 0
     ~ < j ax { = outer * outer ( rt_dim X j ) = j + j 1 }
@@ -592,10 +634,12 @@ $ `ops.nu`
 // Run the graph on a host input buffer (raw f32). `shape` is the input
 // tensor shape (e.g. [1,3,416,416]). Returns the output device tensor.
 @ rt_run_shaped *Engine e OGraph g *u input_host ( Vec i ) shape → RTensor {
+    ( rt_reset e )
     = . e graph g
     ( rt_load_inits e g )
     : i n ( __prod shape )
     : GpuBuffer ib ( gpu_alloc . e g * n 4 )
+    ( rt_own e . ib dptr )
     ( gpu_upload ib input_host )
     ( rt_put e ( string_data . g input_name ) . ib dptr shape )
     ^ ( __rt_run_nodes e g )
@@ -604,9 +648,11 @@ $ `ops.nu`
 // Token run: the single input is an INT64 token matrix [nrow, ncol] already
 // laid out in `tokhost` (8-byte LE). Uploaded as-is for the embedding Gather.
 @ rt_run_tokens *Engine e OGraph g *u tokhost i nrow i ncol → RTensor {
+    ( rt_reset e )
     = . e graph g
     ( rt_load_inits e g )
     : GpuBuffer ib ( gpu_alloc . e g * * nrow ncol 8 )
+    ( rt_own e . ib dptr )
     ( gpu_upload ib tokhost )
     ( rt_put e ( string_data . g input_name ) . ib dptr ( __shape2 nrow ncol ) )
     ^ ( __rt_run_nodes e g )
@@ -614,11 +660,14 @@ $ `ops.nu`
 
 // Two-input run (e.g. image + text embeddings for a promptable model).
 @ rt_run_two *Engine e OGraph g s n1 *u h1 ( Vec i ) s1 s n2 *u h2 ( Vec i ) s2 → RTensor {
+    ( rt_reset e )
     = . e graph g
     ( rt_load_inits e g )
     : GpuBuffer b1 ( gpu_alloc . e g * ( __prod s1 ) 4 )
+    ( rt_own e . b1 dptr )
     ( gpu_upload b1 h1 ) ( rt_put e n1 . b1 dptr s1 )
     : GpuBuffer b2 ( gpu_alloc . e g * ( __prod s2 ) 4 )
+    ( rt_own e . b2 dptr )
     ( gpu_upload b2 h2 ) ( rt_put e n2 . b2 dptr s2 )
     ^ ( __rt_run_nodes e g )
 }
