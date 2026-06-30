@@ -8,15 +8,33 @@ fixed label set. The detector runs on the GPU through
 via NVRTC — no external inference engine), and promptability comes from
 YOLOE's **region-text contrastive head**.
 
-> **Status: M2 done — the full network runs.** The complete 267-node
-> YOLOE forward pass (YOLOv8 backbone + neck + DFL box head + region-text
-> contrastive class head) runs on the GPU in pure NURL and **matches
-> onnxruntime** (max abs error ~0.02 over `[1,46,8400]` on the dog photo).
-> M1 (export + op inventory + reference) and M2 (the op set in
-> `packages/onnx`, verified) are complete; the detector (M3, decode + NMS),
-> runtime promptability (M4), and the in-NURL text encoder (M5) are next.
-> This is the crown-jewel milestone for the NURL GPU/ONNX stack
-> (`gpu` → `onnx` → `yoloe`), built in stages.
+> **Status: M3 done — end-to-end detection works.** The full 267-node
+> YOLOE network runs on the GPU in pure NURL (M2, matches onnxruntime to
+> ~0.02), and the detector now decodes the output, suppresses overlaps, and
+> draws labelled boxes (M3). On the classic dog photo it detects
+> **dog 0.91, bicycle 0.78, truck 0.36** — open-vocabulary, from text
+> prompts. Remaining: runtime promptability (M4 — swap the prompt set
+> without re-export) and the in-NURL MobileCLIP text encoder (M5).
+>
+> ![dog + bicycle + truck detected](docs/demo.png)
+
+## Usage
+
+```
+yoloe <model.onnx> <image.ppm> [out.ppm]
+```
+
+Prints the labelled detections and writes an annotated PPM. Images are
+binary PPM (P6) — `convert photo.jpg photo.ppm`. The model is produced by
+`tools/export.py`; its prompt vocabulary is fixed at export time and must
+match the `class_name` list in `src/main.nu` (runtime-swappable prompts are
+M4). Build from the package root:
+
+```
+nurlpkg install
+NURL_STDLIB=<repo> ../../nurl.sh src/main.nu
+./src/main yoloe-v8s-seg.onnx dog.ppm dog-out.ppm
+```
 
 ## Why this is the crown jewel
 
