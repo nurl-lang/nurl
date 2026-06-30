@@ -48,17 +48,24 @@ $ `deps/onnx/src/runtime.nu`
     : *u gref ( load_f32 ( string_data fp ) gc )
     : i gn ( nurl_peek gc 0 )
     : ~ i bad 0
+    : ~ i nan 0
     : ~ f maxerr 0.0
     : ~ i j 0
     ~ < j gn {
-        : ~ f d - ( nurl_peek_f32 host j ) ( nurl_peek_f32 gref j )
-        ? < d 0.0 { = d - 0.0 d } {}
-        ? > d maxerr { = maxerr d } {}
-        ? > d 0.01 { = bad + bad 1 } {}
+        : f hv ( nurl_peek_f32 host j )
+        // A NaN comparison is silently false for every `>`/`<`, so count NaN
+        // explicitly — otherwise an all-NaN output passes as a perfect match.
+        ? ! == hv hv { = nan + nan 1 = bad + bad 1 } {
+            : ~ f d - hv ( nurl_peek_f32 gref j )
+            ? < d 0.0 { = d - 0.0 d } {}
+            ? > d maxerr { = maxerr d } {}
+            ? > d 0.01 { = bad + bad 1 } {}
+        }
         = j + j 1
     }
     ( nurl_print `compared ` ) ( nurl_print ( nurl_str_int gn ) )
     ( nurl_print ` max abs err ` ) ( nurl_print ( nurl_str_float maxerr ) )
+    ( nurl_print ` NaN ` ) ( nurl_print ( nurl_str_int nan ) )
     ( nurl_print ` bad ` ) ( nurl_print ( nurl_str_int bad ) ) ( nurl_print `\n` )
     ? == bad 0 { ( nurl_print `TEXT FORWARD MATCH\n` ) ^ 0 } { ( nurl_print `MISMATCH\n` ) ^ 1 }
 }
