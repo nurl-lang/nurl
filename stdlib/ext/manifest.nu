@@ -96,6 +96,16 @@ $ `stdlib/ext/toml.nu`
     ^ == ( string_len . d path ) 0
 }
 
+// A dependency carries a registry version requirement. Cargo-style
+// `{ path = "...", version = "..." }` hybrids set BOTH: `path` is a
+// local-development override, `version` is the requirement used when the
+// package is published or installed from the registry (i.e. when the
+// local path is unavailable). Such hybrids are `dep_is_path` (a path is
+// set) yet still registry-publishable / registry-resolvable.
+@ dep_has_version Dep d → b {
+    ^ > ( string_len . d version ) 0
+}
+
 @ manifest_free Manifest m → v {
     ( string_free . m name )
     ( string_free . m version )

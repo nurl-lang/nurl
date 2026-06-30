@@ -93,22 +93,69 @@ $ `stdlib/std/bytes.nu`
     ^ ( creds_get registry )
 }
 
-@ __count_registry ( Vec Dep ) deps → i {
-    : i n ( vec_len [Dep] deps )
-    : ~ i c 0
+// Free a Dep vector built by __registry_roots (each Dep + the vector).
+@ __deps_free_vec ( Vec Dep ) v → v {
+    : i n ( vec_len [Dep] v )
     : ~ i k 0
     ~ < k n {
-        : ?Dep dk ( vec_get [Dep] deps k )
-        ?? dk { T d → { ? ( dep_is_registry d ) { = c + c 1 } {} } F → {} }
+        : ?Dep dk ( vec_get [Dep] v k )
+        ?? dk { T d → ( dep_free d ) F _ → {} }
         = k + k 1
     }
-    ^ c
+    ( vec_free [Dep] v )
+}
+
+// Dependencies that must be resolved from the registry at install time:
+//   * pure registry deps (no path), and
+//   * `{ path, version }` hybrids whose local path target is ABSENT — e.g.
+//     a registry install (`nurlpkg install <name>`) extracts the package
+//     into a temp dir where the sibling `../onnx` path doesn't exist, so
+//     the dep falls back to its registry `version`.
+// Hybrids whose path IS present on disk are left to the path-dep BFS and
+// excluded here (no double install). Returned hybrids have their `path`
+// cleared so `resolve_registry` seeds them as registry roots. Caller owns
+// the returned vector (free each Dep).
+@ __registry_roots Manifest m s cwd → ( Vec Dep ) {
+    : ( Vec Dep ) out ( vec_new [Dep] )
+    : i n ( vec_len [Dep] . m dependencies )
+    : ~ i k 0
+    ~ < k n {
+        : ?Dep dk ( vec_get [Dep] . m dependencies k )
+        ?? dk {
+            T d → {
+                : ~ b take F
+                : ~ b clearpath F
+                ? ( dep_is_registry d ) { = take T } {
+                    ? ( dep_has_version d ) {
+                        : String tgt ( __abs_join cwd ( string_data . d path ) )
+                        ? ! ( __dep_has_manifest ( string_data tgt ) ) { = take T = clearpath T } {}
+                        ( string_free tgt )
+                    } {}
+                }
+                ? take {
+                    : String p ? clearpath ( string_new ) ( string_from ( string_data . d path ) )
+                    ( vec_push [Dep] out @ Dep {
+                        ( string_from ( string_data . d name ) )
+                        p
+                        ( string_from ( string_data . d version ) )
+                        ( string_from ( string_data . d registry ) )
+                    } )
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ out
 }
 
 // Build the X-Nurl-Deps JSON array of { name, req } from a manifest's
-// REGISTRY dependencies (path deps are local and not part of the published
-// package's index entry). Names/reqs are simple tokens (no JSON-special
-// chars), so a direct build is safe. Empty deps → "[]".
+// dependencies that carry a registry version requirement. A Cargo-style
+// `{ path = "...", version = "..." }` hybrid IS published (its `version`
+// is the requirement a downstream consumer resolves from the registry —
+// the `path` is only a local-dev override). Pure path deps (no version)
+// are local-only and excluded. Names/reqs are simple tokens (no
+// JSON-special chars), so a direct build is safe. Empty deps → "[]".
 @ __deps_json Manifest m → String {
     : String out ( string_with_cap 64 )
     ( string_push_char out 91 )  // [
@@ -119,7 +166,7 @@ $ `stdlib/std/bytes.nu`
         : ?Dep dk ( vec_get [Dep] . m dependencies k )
         ?? dk {
             T d → {
-                ? ( dep_is_registry d ) {
+                ? ( dep_has_version d ) {
                     ? == first 0 { ( string_push_char out 44 ) } {}  // ,
                     = first 0
                     ( string_push_str out `{"name":"` )
@@ -717,6 +764,15 @@ $ `stdlib/std/bytes.nu`
         ^ 0
     } {}
     ? ! ( __dep_has_manifest target_s ) {
+        // Local path absent. If the dep also carries a registry version
+        // (`{ path, version }` hybrid), the registry pass will fetch it —
+        // not an error. Otherwise it's a genuinely missing local dep.
+        ? ( dep_has_version d ) {
+            ( nurl_print `  ` ) ( nurl_print name )
+            ( nurl_print ` (local path absent; resolving from registry)\n` )
+            ( string_free target )
+            ^ 0
+        } {}
         ( nurl_eprint `  ` )
         ( nurl_eprint name )
         ( nurl_eprint `: skip (no nurl.toml at ` )
@@ -1191,15 +1247,19 @@ $ `stdlib/std/bytes.nu`
 // `out` for each SUCCESSFULLY installed package, so the lockfile reflects
 // exactly what landed on disk. Returns 0 on full success, 1 if resolution
 // or any package install failed (so `nurlpkg install` exits non-zero).
-@ __install_registry Manifest m ( Vec LockPkg ) out → i {
-    ? == ( __count_registry . m dependencies ) 0 { ^ 0 } {}
+@ __install_registry Manifest m s cwd ( Vec LockPkg ) out → i {
+    : ( Vec Dep ) roots ( __registry_roots m cwd )
+    ? == ( vec_len [Dep] roots ) 0 {
+        ( __deps_free_vec roots )
+        ^ 0
+    } {}
     : String reg ( __registry_url m )
     ( nurl_print `resolving registry dependencies against ` )
     ( nurl_print ( string_data reg ) )
     ( nurl_print `\n` )
     : ( @ String s ) fetch \ s nm → String { ^ ( pkg_fetch_index ( string_data reg ) nm ) }
     : ~ i rc 0
-    : !( Vec LockPkg ) ResolveErr rr ( resolve_registry . m dependencies ( string_data reg ) fetch )
+    : !( Vec LockPkg ) ResolveErr rr ( resolve_registry roots ( string_data reg ) fetch )
     ?? rr {
         F e → {
             ( nurl_eprint `nurlpkg: registry resolution failed (` )
@@ -1241,6 +1301,7 @@ $ `stdlib/std/bytes.nu`
         }
     }
     ( string_free reg )
+    ( __deps_free_vec roots )
     ^ rc
 }
 
@@ -1866,7 +1927,7 @@ $ `stdlib/std/bytes.nu`
             // Registry pass: resolve + download + verify + unpack the
             // registry deps (path deps were handled by the BFS above).
             : ( Vec LockPkg ) regpkgs ( vec_new [LockPkg] )
-            : i reg_rc ( __install_registry root regpkgs )
+            : i reg_rc ( __install_registry root cwd_s regpkgs )
             ? != reg_rc 0 { = rc 1 } {}
             ( manifest_free root )
             // Regenerate the lockfile from the resulting deps/ tree. We do
