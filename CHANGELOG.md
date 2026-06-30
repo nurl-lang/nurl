@@ -8,6 +8,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.6] — 2026-06-30
+
+A **GPU compute + ML inference** release. NURL gains the ability to run real
+neural networks — CNNs, vision-language transformers, and end-to-end object
+detection *and instance segmentation* — entirely in pure NURL on the GPU,
+through a new stack of registry packages (`gpu` → `onnx` → `objdet` /
+`yoloe`). The crown jewel is `yoloe`: promptable open-vocabulary detection
+with per-object masks, **live off a webcam**, captured in pure NURL via
+Video4Linux2 — no ffmpeg, no OpenCV, no external inference engine. The
+toolchain changes here are the thin layer that makes that possible plus a
+`nurlpkg` dependency-resolution fix; the heavy lifting lives in the packages.
+
+### Added
+
+- **Typed 4-byte buffer accessors in the runtime.** `stdlib/runtime.c` gains
+  `nurl_peek_i32` / `nurl_poke_i32` / `nurl_peek_f32` / `nurl_poke_f32` —
+  natural-stride reads/writes for the packed `float32` / `int32` arrays that
+  GPU kernels, image data, and binary wire formats use (the 8-byte
+  `nurl_peek`/`poke` can't address a 4-byte array at its stride). Pure and
+  dependency-free; they ship to every target, no GPU required.
+- **Automatic GPU linking, opt-in by symbol.** `nurl.sh` and `build.sh` now
+  link `-lcuda` / `-lnvrtc` **only** when a program references `cu*` / `nvrtc*`
+  symbols (detected via sentinels). A GPU-less host — or any program that
+  never touches the `gpu` package — is completely unaffected; the CUDA
+  dependency lives entirely in `packages/gpu`.
+- **New registry packages — a pure-NURL GPU/ML stack:**
+  - **`gpu` 0.1.0** — backend-neutral GPU compute (`Gpu` / `GpuKernel` /
+    `GpuBuffer`: open, compile, alloc, upload/download, launch, sync). One
+    backend: CUDA, with kernels written in CUDA-C and compiled to PTX at
+    runtime via NVRTC, run over the CUDA Driver API — all bound from pure
+    NURL with no `runtime.c` bridge.
+  - **`onnx` 0.1.0 → 0.4.0** — run ONNX models on the GPU: a pure-NURL
+    protobuf decoder (no protoc) builds an in-memory graph, and a
+    GPU-resident executor dispatches each operator to a CUDA-C kernel. Grew
+    from MLPs (`Gemm`/`Relu`) to CNNs (`Conv`/`MaxPool`/`BatchNormalization`/
+    `LeakyRelu`/N-D tensors) to the transformer set (`LayerNormalization`/
+    `Erf`/`Gather`/batched `MatMul`/N-D `Transpose`/`Softmax`) to the
+    **segmentation mask-prototype branch** — a new `ConvTranspose` op plus a
+    model's second graph output reachable via `rt_output1`. Verified
+    end-to-end against onnxruntime at every step.
+  - **`objdet` 0.1.0 / 0.2.0** — object detection (tiny-yolov2) from pure
+    NURL on the GPU: image I/O, YOLO decode, NMS; matches onnxruntime
+    pixel-for-pixel and supports a frame-sequence video mode.
+  - **`yoloe` 0.1.0 / 0.2.0** — promptable open-vocabulary detection **and
+    instance segmentation**, a NURL port of YOLOE (ICCV 2025). Names the
+    classes you want at runtime; the whole YOLOv8/YOLOE network (backbone,
+    neck, DFL head, region-text contrastive head) runs on the GPU. The
+    MobileCLIP text path is pure NURL too — a 12-layer CLIP text transformer
+    (bit-exact vs onnxruntime) and a CLIP byte-level BPE tokenizer
+    (byte-identical to open_clip). 0.2.0 adds **per-object masks** and a
+    pure-NURL **Video4Linux2** capture path (`open`/`ioctl`/`mmap`, YUYV→RGB)
+    for **live segmentation off a webcam** — no ffmpeg, no OpenCV.
+  - **`swarm-mcp` 0.3.0 / 0.4.0** — a unified node with composable,
+    non-exclusive roles (`--relay` / `--worker` / `--mcp`), `--token`
+    cluster security (group-id + HMAC), MCP served over HTTPS JSON-RPC, and
+    floating-point (`f64`) distributed compute kernels.
+- **Registry renders package READMEs.** The registry Worker now turns a
+  published package's README into HTML (Markdown → HTML in TypeScript,
+  XSS-safe), including images served straight from the package tarball.
+
+### Fixed
+
+- **`nurlpkg` resolves `{ path, version }` hybrid dependencies correctly.** A
+  Cargo-style hybrid dep (a local `path` override that also carries a
+  registry `version`) is now (a) **published** with its `version` in the
+  registry index — so a downstream consumer can resolve it — and (b)
+  **installed** by falling back to the registry version when the local path
+  is absent, resolved transitively across the whole dependency tree. Before
+  this, publishing such a package dropped the dependency from the index and a
+  registry `install` of it silently skipped the dep. This is what lets the
+  layered `gpu` ← `onnx` ← `yoloe` packages install from the registry.
+- **`onnx` text-encoder forward correctness.** Three real runtime bugs —
+  `Softmax` with a negative axis, `Add` mask broadcasting, and an `Engine`
+  value-map that wasn't reset between runs — were producing all-`NaN`
+  outputs hidden by a NaN-blind comparison. Fixed; the MobileCLIP text
+  encoder now matches PyTorch to ~5e-6.
+- **Registry README links.** Links that wrap across source lines, and
+  monorepo sibling-package references, now render correctly.
+
 ## [0.10.5] — 2026-06-29
 
 A **compiler correctness** release: a single codegen fix that stops the
