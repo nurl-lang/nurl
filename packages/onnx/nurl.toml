@@ -1,6 +1,6 @@
 [package]
 name = "onnx"
-version = "0.4.0"
+version = "0.4.1"
 description = "Run ONNX neural-network models from pure NURL, GPU-accelerated. The model's protobuf is decoded by a pure-NURL wire-format reader (no protoc, no external protobuf library) into an in-memory graph; inference runs on the GPU through the `gpu` package — each operator is a CUDA-C kernel compiled to PTX at runtime via NVRTC and launched over the CUDA Driver API, with every weight and activation resident on the device. v0.1.0 is a proof-of-concept covering feed-forward MLPs (Gemm + Relu); the demo loads a model and input, runs it on the GPU, and matches onnxruntime's output (max abs error ~1e-6). Requires the NVIDIA driver (libcuda) and NVRTC (libnvrtc); a GPU-less host is unaffected since the CUDA dependency lives entirely in the `gpu` package."
 license = "MIT OR Apache-2.0"
 
