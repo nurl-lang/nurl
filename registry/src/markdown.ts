@@ -120,16 +120,23 @@ export function renderMarkdown(src: string, resolve: UrlResolver = identity): st
   const lines = src.replace(/\r\n?/g, "\n").split("\n");
   const out: string[] = [];
   let open: Block = null;
+  // Raw lines of the current paragraph / blockquote. Inline formatting is
+  // applied to the JOINED text, so links and other spans that wrap across
+  // source lines (`[text\n](url)`) are reassembled before parsing.
+  let buf: string[] = [];
 
   const close = () => {
-    if (open === "p") out.push("</p>\n");
+    if (open === "p") out.push(`<p>${inline(buf.join(" "), resolve)}</p>\n`);
+    else if (open === "bq") out.push(`<blockquote>${inline(buf.join(" "), resolve)}</blockquote>\n`);
     else if (open === "ul") out.push("</ul>\n");
     else if (open === "ol") out.push("</ol>\n");
-    else if (open === "bq") out.push("</blockquote>\n");
+    buf = [];
     open = null;
   };
+  // openTag is emitted immediately for list blocks; paragraph / blockquote
+  // text is buffered and rendered on close(), so pass "" for those.
   const ensure = (b: Block, openTag: string) => {
-    if (open !== b) { close(); out.push(openTag); open = b; }
+    if (open !== b) { close(); if (openTag) out.push(openTag); open = b; }
   };
 
   for (let i = 0; i < lines.length; i++) {
@@ -160,7 +167,7 @@ export function renderMarkdown(src: string, resolve: UrlResolver = identity): st
 
     // Blockquote.
     const bq = line.match(/^>\s?(.*)$/);
-    if (bq) { ensure("bq", "<blockquote>"); out.push(inline(bq[1], resolve) + " "); continue; }
+    if (bq) { ensure("bq", ""); buf.push(bq[1]); continue; }
 
     // GFM table (current line has a pipe, next line is a delimiter row).
     if (line.includes("|") && i + 1 < lines.length && isDelimRow(lines[i + 1])) {
@@ -177,9 +184,9 @@ export function renderMarkdown(src: string, resolve: UrlResolver = identity): st
     const ol = line.match(/^\s*\d+\.\s+(.*)$/);
     if (ol) { ensure("ol", "<ol>\n"); out.push(`<li>${inline(ol[1], resolve)}</li>\n`); continue; }
 
-    // Paragraph (consecutive plain lines join with a space).
-    ensure("p", "<p>");
-    out.push(inline(line.trim(), resolve) + " ");
+    // Paragraph (consecutive plain lines join with a space, then inline).
+    ensure("p", "");
+    buf.push(line.trim());
   }
 
   close();

@@ -21,9 +21,9 @@ has(renderMarkdown("# Title"), "<h1>Title</h1>", "h1");
 has(renderMarkdown("### Sub"), "<h3>Sub</h3>", "h3");
 has(renderMarkdown("- a\n- b"), "<ul>\n<li>a</li>\n<li>b</li>\n</ul>", "ul");
 has(renderMarkdown("1. x\n2. y"), "<ol>\n<li>x</li>\n<li>y</li>\n</ol>", "ol");
-has(renderMarkdown("> quoted"), "<blockquote>quoted </blockquote>", "blockquote");
+has(renderMarkdown("> quoted"), "<blockquote>quoted</blockquote>", "blockquote");
 has(renderMarkdown("---"), "<hr />", "hr");
-has(renderMarkdown("one\ntwo"), "<p>one two </p>", "paragraph join");
+has(renderMarkdown("one\ntwo"), "<p>one two</p>", "paragraph join");
 has(renderMarkdown("```sh\nls -l\n```"), `<pre><code class="language-sh">ls -l</code></pre>`, "fenced code w/ lang");
 has(renderMarkdown("```\nx<y\n```"), "x&lt;y", "code block escapes html");
 
@@ -34,6 +34,10 @@ has(renderMarkdown("see [docs](https://x.io)"), `<a href="https://x.io" rel="noo
 // code span content must not be re-processed as emphasis
 has(renderMarkdown("`a*b*c`"), "<code>a*b*c</code>", "no emphasis inside code");
 absent(renderMarkdown("`a*b*c`"), "<em>", "no <em> inside code span");
+
+// ── inline spans that wrap across source lines (paragraph re-join) ─────
+has(renderMarkdown("see [the\ndocs](https://x.io)"), `<a href="https://x.io" rel="noopener nofollow">the docs</a>`, "link wrapped across two lines");
+has(renderMarkdown("a **bo\nld** word"), "<strong>bo ld</strong>", "bold wrapped across two lines");
 
 // ── images ────────────────────────────────────────────────────────────
 const idResolve = (u: string) =>

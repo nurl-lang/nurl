@@ -285,6 +285,10 @@ async function handlePackageDetail(env: Env, name: string): Promise<Response> {
         const base = `/files/${name}/${latest.version}/`;
         const resolve = (u: string): string => {
           if (/^[a-z][a-z0-9+.-]*:/i.test(u) || u.startsWith("/") || u.startsWith("#")) return u;
+          // A monorepo sibling-package reference (`../onnx`, common in these
+          // READMEs) maps to that package's page, not a file in the tarball.
+          const sib = u.match(/^\.\.\/([a-z0-9][a-z0-9_-]*)\/?$/i);
+          if (sib) return `/packages/${sib[1].toLowerCase()}`;
           const norm = normalizeRelPath(u);
           return norm ? base + norm : u;
         };
