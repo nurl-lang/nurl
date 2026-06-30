@@ -304,21 +304,29 @@ $ `ops.nu`
     ( op_resize . e g . e ks . X dptr yd C H W OH OW sh sw )
 }
 
+// General transpose (≤6-D). Pad missing trailing dims to size 1 with an
+// identity perm so the 6-D kernel handles any rank.
 @ rt_transpose *Engine e ONode n → v {
     : RTensor X ( __in e n 0 )
-    : i p0 ( node_attr_int_at n `perm` 0 0 )
-    : i p1 ( node_attr_int_at n `perm` 1 1 )
-    : i p2 ( node_attr_int_at n `perm` 2 2 )
-    : i p3 ( node_attr_int_at n `perm` 3 3 )
-    : i d0 ( rt_dim X 0 )
-    : i d1 ( rt_dim X 1 )
-    : i d2 ( rt_dim X 2 )
-    : i d3 ( rt_dim X 3 )
+    : i nd ( rt_ndim X )
+    // perm[k] = attr perm or identity; dims padded to 1 past nd
+    : i p0 ? < 0 nd ( node_attr_int_at n `perm` 0 0 ) 0
+    : i p1 ? < 1 nd ( node_attr_int_at n `perm` 1 1 ) 1
+    : i p2 ? < 2 nd ( node_attr_int_at n `perm` 2 2 ) 2
+    : i p3 ? < 3 nd ( node_attr_int_at n `perm` 3 3 ) 3
+    : i p4 ? < 4 nd ( node_attr_int_at n `perm` 4 4 ) 4
+    : i p5 ? < 5 nd ( node_attr_int_at n `perm` 5 5 ) 5
+    : i d0 ? < 0 nd ( rt_dim X 0 ) 1
+    : i d1 ? < 1 nd ( rt_dim X 1 ) 1
+    : i d2 ? < 2 nd ( rt_dim X 2 ) 1
+    : i d3 ? < 3 nd ( rt_dim X 3 ) 1
+    : i d4 ? < 4 nd ( rt_dim X 4 ) 1
+    : i d5 ? < 5 nd ( rt_dim X 5 ) 1
     : ( Vec i ) os ( vec_new [i] )
-    ( vec_push [i] os ( rt_dim X p0 ) ) ( vec_push [i] os ( rt_dim X p1 ) )
-    ( vec_push [i] os ( rt_dim X p2 ) ) ( vec_push [i] os ( rt_dim X p3 ) )
+    : ~ i k 0
+    ~ < k nd { ( vec_push [i] os ( rt_dim X ( node_attr_int_at n `perm` k k ) ) ) = k + k 1 }
     : i yd ( rt_alloc_out e ( __out_name n ) os )
-    ( op_perm4 . e g . e ks . X dptr yd d0 d1 d2 d3 p0 p1 p2 p3 )
+    ( op_perm6 . e g . e ks . X dptr yd d0 d1 d2 d3 d4 d5 p0 p1 p2 p3 p4 p5 )
 }
 
 // Softmax over `axis`, viewing the tensor as (outer, axis, inner).
@@ -455,6 +463,60 @@ $ `ops.nu`
     ( op_erf . e g . e ks . X dptr yd . X nelem )
 }
 
+// GatherND — specialised for the CLIP EOS read-out: data [B,L,D] and an
+// index built from (arange, argmax(tokens)) selecting each row's EOS token.
+// Rather than materialise the int64 index chain, gather directly from the
+// graph's token input: out[b,:] = data[b, argmax(tokens[b]), :].
+@ rt_gathernd *Engine e ONode n → v {
+    : RTensor data ( __in e n 0 )
+    : i B ( rt_dim data 0 )
+    : i L ( rt_dim data 1 )
+    : i D ( rt_dim data 2 )
+    : OGraph gr . e graph
+    : RTensor tok ( rt_at e ( rt_find e ( string_data . gr input_name ) ) )
+    : i yd ( rt_alloc_out e ( __out_name n ) ( __shape2 B D ) )
+    ( op_eos_gather . e g . e ks . data dptr . tok dptr yd B L D )
+}
+
+// Gather along `axis`. Two index sources: a device tensor (e.g. the token
+// matrix → embedding lookup) gathers nidx rows; a host scalar initializer
+// (e.g. the QKV split index) selects one slice and drops the axis.
+@ rt_gather *Engine e ONode n → v {
+    : RTensor data ( __in e n 0 )
+    : i axis ( node_attr_i n `axis` 0 )
+    : i axis_in ( rt_dim data axis )
+    : ~ i outer 1
+    : ~ i j 0
+    ~ < j axis { = outer * outer ( rt_dim data j ) = j + j 1 }
+    : ~ i inner 1
+    : ~ i m + axis 1
+    ~ < m ( rt_ndim data ) { = inner * inner ( rt_dim data m ) = m + m 1 }
+    : s idx_name ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } )
+    : i idx_in_map ( rt_find e idx_name )
+    ? >= idx_in_map 0 {
+        // device int64 indices → out shape = data[:axis] ++ idx.shape ++ data[axis+1:]
+        : RTensor idxt ( rt_at e idx_in_map )
+        : i nidx . idxt nelem
+        : ( Vec i ) os ( vec_new [i] )
+        : ~ i d 0
+        ~ < d axis { ( vec_push [i] os ( rt_dim data d ) ) = d + d 1 }
+        : ~ i q 0
+        ~ < q ( rt_ndim idxt ) { ( vec_push [i] os ( rt_dim idxt q ) ) = q + q 1 }
+        : ~ i r + axis 1
+        ~ < r ( rt_ndim data ) { ( vec_push [i] os ( rt_dim data r ) ) = r + r 1 }
+        : i yd ( rt_alloc_out e ( __out_name n ) os )
+        ( op_gather . e g . e ks . data dptr . idxt dptr yd outer axis_in inner nidx )
+    } {
+        // host scalar index → slice one element along axis (axis removed)
+        : i s ( __init_i64 e idx_name 0 )
+        : ( Vec i ) os ( vec_new [i] )
+        : ~ i d 0
+        ~ < d ( rt_ndim data ) { ? != d axis { ( vec_push [i] os ( rt_dim data d ) ) } {} = d + d 1 }
+        : i yd ( rt_alloc_out e ( __out_name n ) os )
+        ( op_slice_ax . e g . e ks . data dptr yd outer 1 inner axis_in s )
+    }
+}
+
 // Einsum "bchw,bkc->bkhw": region[1,C,H,W] · text[1,K,C] -> [1,K,H,W].
 // = Gemm(text[K,C], region[C,HW]) -> [K,HW].
 @ rt_einsum *Engine e ONode n → v {
@@ -539,6 +601,17 @@ $ `ops.nu`
     ^ ( __rt_run_nodes e g )
 }
 
+// Token run: the single input is an INT64 token matrix [nrow, ncol] already
+// laid out in `tokhost` (8-byte LE). Uploaded as-is for the embedding Gather.
+@ rt_run_tokens *Engine e OGraph g *u tokhost i nrow i ncol → RTensor {
+    = . e graph g
+    ( rt_load_inits e g )
+    : GpuBuffer ib ( gpu_alloc . e g * * nrow ncol 8 )
+    ( gpu_upload ib tokhost )
+    ( rt_put e ( string_data . g input_name ) . ib dptr ( __shape2 nrow ncol ) )
+    ^ ( __rt_run_nodes e g )
+}
+
 // Two-input run (e.g. image + text embeddings for a promptable model).
 @ rt_run_two *Engine e OGraph g s n1 *u h1 ( Vec i ) s1 s n2 *u h2 ( Vec i ) s2 → RTensor {
     = . e graph g
@@ -590,6 +663,12 @@ $ `ops.nu`
                 ? ( streq2 op `Unsqueeze` ) { ( rt_unsqueeze e nd ) }
                 ? ( streq2 op `LayerNormalization` ) { ( rt_layernorm e nd ) }
                 ? ( streq2 op `Erf` ) { ( rt_erf e nd ) }
+                ? ( streq2 op `Gather` ) { ( rt_gather e nd ) }
+                ? ( streq2 op `GatherND` ) { ( rt_gathernd e nd ) }
+                ? ( streq2 op `ArgMax` ) { }
+                ? ( streq2 op `Shape` ) { }
+                ? ( streq2 op `Range` ) { }
+                ? ( streq2 op `Squeeze` ) { }
                 { ( nurl_eprint `[onnx] unsupported op: ` ) ( nurl_eprint op ) ( nurl_eprint `\n` ) }
                 }
             } F _ → {}
