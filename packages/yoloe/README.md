@@ -28,78 +28,81 @@ YOLOE's **region-text contrastive head**.
 > Same model, prompts supplied at runtime (`skateboard frisbee … tree wheel
 > … dog bicycle`): ![runtime-prompted](docs/demo_promptable.png)
 
-## Two ways to run
-
-**Runtime-promptable** (`src/prompt.nu`, model from `tools/export_promptable.py`):
+## Install & usage
 
 ```
-yoloe-prompt <model.onnx> <tpe.f32> <classes.txt> <image.ppm> [out.ppm]
+nurlpkg install yoloe          # builds the `yoloe` command on your PATH
+yoloe                          # prints the full help
 ```
 
-`tpe.f32` is `K×512` raw MobileCLIP text features and `classes.txt` the K
-prompt words — both produced by `tools/gen_tpe.py "dog,bicycle,tree,…"`.
-Swap them (no re-export) to detect different objects. The model has two
-inputs (`images`, `tpe`); K is fixed at export but the *meaning* of each
-slot is set by the embeddings.
-
-## Instance segmentation
+The `yoloe` command has three sub-commands:
 
 ```
-yoloe-seg <model.onnx> <classes.txt> <image.ppm> [out.ppm]
+yoloe detect <model.onnx> <classes.txt> <image.ppm> [out.ppm]
+      draw boxes for the prompted classes
+yoloe seg    <model.onnx> <classes.txt> <image.ppm> [out.ppm]
+      boxes + a per-object segmentation mask
+yoloe cam    <model.onnx> <classes.txt> <out_dir> [nframes] [device]
+      LIVE segmentation from a webcam (default /dev/video0, 30 frames)
 ```
 
-`src/seg.nu` adds per-object **masks** on top of the boxes. The exported
-YOLOE-seg model (`tools/export.py`) has two outputs: `output0`
-`[1, 4+nc+32, 8400]` (boxes + class scores + 32 mask coefficients) and
-`output1` `[1, 32, 160, 160]` (the mask prototypes). For each surviving
-detection the prototypes are combined by its coefficients, thresholded
-(`sigmoid > 0.5`), cropped to the box, bilinearly upsampled, and blended as a
-translucent colour — exactly `ops.process_mask(..., upsample=True)` in the
-reference. The proto branch (a `ConvTranspose` 2× upsample, added to
-`packages/onnx`) is verified element-wise against onnxruntime
-(`tests/seg_fwd.nu`: max abs err ~6e-5 over all 819 200 proto floats).
-
-## Live segmentation from a webcam
+- `<model.onnx>` is a YOLOE-seg export — produce it with `tools/export.py`
+  (→ `yoloe-v8s-seg.onnx`); it isn't bundled (~45 MB).
+- `<classes.txt>` is the prompt vocabulary, **one word per line**. The
+  detector is vocabulary-agnostic and infers the class count from it; the
+  names must match what the model was exported with. Swap both the model and
+  the class file to detect a **different** set of objects — open-vocabulary.
+- Images are binary PPM (P6): `convert photo.jpg photo.ppm`.
 
 ```
-yoloe-segcam <model.onnx> <classes.txt> <out_dir> [nframes] [device]
-```
-
-`src/segcam.nu` captures frames straight off a V4L2 webcam — **in pure
-NURL** (`src/v4l2.nu`: `open`/`ioctl`/`mmap` on the kernel's video ABI, YUYV
-→ RGB with the BT.601 integer transform, memory-mapped streaming buffers —
-no ffmpeg, no OpenCV) — runs the seg network on each, and writes
-`<out_dir>/frameNNNNN.ppm` with the masks painted on. One GPU engine and one
-camera stream are reused across all frames. Reassemble to a clip with e.g.
-`ffmpeg -framerate 10 -i out/frame%05d.ppm seg.mp4`.
-
-## Usage
-
-```
-yoloe <model.onnx> <classes.txt> <image.ppm> [out.ppm]
-```
-
-`classes.txt` is the prompt vocabulary, one class per line; the detector is
-vocabulary-agnostic and infers the class count from it. The vocabulary must
-match the names the model was exported with (`tools/export.py`) — swap both
-the model and the class file to detect a **different** set of objects. On
-the dog photo, exporting with `tree wheel window … dog bicycle` and the
-matching `classes.txt` finds **dog 0.91, bicycle 0.78, tree 0.31** instead
-of the truck — open-vocabulary, by changing the prompt words.
-
-(Today the vocabulary is chosen at *export* time; M4 makes the text
-embeddings a runtime input so prompts can be swapped without re-exporting.)
-
-Images are binary PPM (P6) — `convert photo.jpg photo.ppm`. Build from the
-package root:
-
-```
-nurlpkg install
-NURL_STDLIB=<repo> ../../nurl.sh src/main.nu
-./src/main yoloe-v8s-seg.onnx classes.txt dog.ppm dog-out.ppm
+yoloe seg yoloe-v8s-seg.onnx example/classes.txt dog.ppm dog-out.ppm
+yoloe cam yoloe-v8s-seg.onnx example/classes.txt frames/ 60 /dev/video0
+ffmpeg -framerate 10 -i frames/frame%05d.ppm seg.mp4    # webcam → video
 ```
 
 `example/classes.txt` holds the default vocabulary from `tools/export.py`.
+
+### How the masks work
+
+The exported YOLOE-seg model has two outputs: `output0` `[1, 4+nc+32, 8400]`
+(boxes + class scores + 32 mask coefficients) and `output1` `[1, 32, 160,
+160]` (the mask prototypes). For each surviving detection the prototypes are
+combined by its coefficients, thresholded (`sigmoid > 0.5`), cropped to the
+box, bilinearly upsampled, and blended as a translucent colour — exactly
+`ops.process_mask(..., upsample=True)` in the reference. The proto branch (a
+`ConvTranspose` 2× upsample, added to `packages/onnx`) is verified
+element-wise against onnxruntime (`tests/seg_fwd.nu`: max abs err ~6e-5 over
+all 819 200 proto floats).
+
+### The webcam path is pure NURL
+
+`yoloe cam` captures frames straight off a V4L2 webcam — **no ffmpeg, no
+OpenCV**. `src/v4l2.nu` does `open`/`ioctl`/`mmap` on the kernel's video ABI,
+converts YUYV → RGB with the BT.601 integer transform, and uses memory-mapped
+streaming buffers; one GPU engine and one camera stream are reused across all
+frames. (Needs read access to the device — `ls -l /dev/video0`.)
+
+### Runtime-promptable variant
+
+`src/prompt.nu` (model from `tools/export_promptable.py`) takes the prompt
+**text embeddings** as a runtime input instead of baking the vocabulary in:
+
+```
+NURL_STDLIB=<repo> ../../nurl.sh src/prompt.nu
+./src/prompt <model.onnx> <tpe.f32> <classes.txt> <image.ppm> [out.ppm]
+```
+
+`tpe.f32` is `K×512` raw MobileCLIP text features and `classes.txt` the K
+prompt words — both produced by `tools/gen_tpe.nu` / `tools/gen_tpe.py`. Swap
+them (no re-export) to detect different objects with the *same* model.
+
+### Building from source
+
+```
+nurlpkg install                                   # symlink deps/
+NURL_STDLIB=<repo> ../../nurl.sh src/main.nu      # build the `yoloe` command
+./src/main seg yoloe-v8s-seg.onnx example/classes.txt dog.ppm dog-out.ppm
+```
 
 ## Why this is the crown jewel
 
@@ -216,14 +219,15 @@ prompts: person dog cat car bicycle truck backpack bottle chair bird
     onnxruntime to **max abs err ~6e-5** over all 819 200 floats
     (`tests/seg_fwd.nu`).
   - **Mask decode** (done): `src/mask.nu` — coefficients · prototypes →
-    threshold → crop → bilinear overlay (`ops.process_mask` equivalent).
-    `src/seg.nu` is the still-image CLI; detections + masks match the
-    onnxruntime reference (`tools/gen_seg_ref.py`).
+    threshold → crop → bilinear overlay (`ops.process_mask` equivalent),
+    exposed as `yoloe seg`; detections + masks match the onnxruntime
+    reference (`tools/gen_seg_ref.py`).
   - **Webcam** (done): `src/v4l2.nu` captures frames from `/dev/videoN` in
     pure NURL (Video4Linux2 `open`/`ioctl`/`mmap`, YUYV→RGB, mmap streaming
-    buffers — no ffmpeg/OpenCV). `src/segcam.nu` ties it together: live
+    buffers — no ffmpeg/OpenCV); `yoloe cam` ties it together into live
     instance segmentation off the camera, one GPU engine + camera stream
-    reused across frames.
+    reused across frames. `detect`/`seg`/`cam` are one unified `yoloe`
+    command (`src/main.nu`).
 
 ## Reproducing the reference (`tools/`)
 
