@@ -385,21 +385,114 @@ $ `ops.nu`
         = sz_name ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } )
         ? > ( __init_i64_len e sz_name ) 0 { = have_sizes T } {}
     } {}
-    : i eq / ( rt_dim X axis ) nout
+    : i src_ax ( rt_dim X axis )
+    : i eq / src_ax nout
     : ~ i off 0
     : ~ i k 0
     ~ < k nout {
         : i sz ? have_sizes ( __init_i64 e sz_name k ) eq
-        // byte offset into X for this axis slice (outer==1 ⇒ contiguous)
-        : i sd + . X dptr * * off inner 4
         : ( Vec i ) os ( vec_new [i] )
         : ~ i d 0
         ~ < d ( rt_ndim X ) { ( vec_push [i] os ? == d axis sz ( rt_dim X d ) ) = d + d 1 }
         : s onm ( string_data ?? ( vec_get [String] . n outputs k ) { T x → x F _ → ( string_new ) } )
-        ( rt_put e onm sd os )
+        ? == outer 1 {
+            // contiguous slice — alias the input buffer at the byte offset
+            ( rt_put e onm + . X dptr * * off inner 4 os )
+        } {
+            // interleaved slice (outer>1) — must copy into a fresh buffer
+            : i od ( rt_alloc_out e onm os )
+            ( op_slice_ax . e g . e ks . X dptr od outer sz inner src_ax off )
+        }
         = off + off sz
         = k + k 1
     }
+}
+
+// MatMul: A[...,M,K] @ B[K,N] (B 2-D). Batch dims collapse into M. Via Gemm.
+@ rt_matmul *Engine e ONode n → v {
+    : RTensor A ( __in e n 0 )
+    : RTensor B ( __in e n 1 )
+    : i Kd ( rt_last A )
+    : i N ( rt_last B )
+    : i M / . A nelem Kd
+    : ( Vec i ) os ( vec_new [i] )
+    : ~ i d 0
+    ~ < d - ( rt_ndim A ) 1 { ( vec_push [i] os ( rt_dim A d ) ) = d + d 1 }
+    ( vec_push [i] os N )
+    : i yd ( rt_alloc_out e ( __out_name n ) os )
+    ( op_gemm . e g . e ks . A dptr . B dptr 0 yd M N Kd 1.0 0.0 0 )
+}
+
+// Einsum "bchw,bkc->bkhw": region[1,C,H,W] · text[1,K,C] -> [1,K,H,W].
+// = Gemm(text[K,C], region[C,HW]) -> [K,HW].
+@ rt_einsum *Engine e ONode n → v {
+    : s eq ( node_attr_s n `equation` `` )
+    : RTensor region ( __in e n 0 )
+    : RTensor text ( __in e n 1 )
+    : i C ( rt_dim region 1 )
+    : i H ( rt_dim region 2 )
+    : i Wd ( rt_dim region 3 )
+    : i HW * H Wd
+    : i Kk ( rt_dim text 1 )
+    : i yd ( rt_alloc_out e ( __out_name n ) ( __shape4 1 Kk H Wd ) )
+    ( op_gemm . e g . e ks . text dptr . region dptr 0 yd Kk HW C 1.0 0.0 0 )
+}
+
+@ rt_reducel2 *Engine e ONode n → v {
+    : RTensor X ( __in e n 0 )
+    : i ax ( rt_last X )
+    : i outer / . X nelem ax
+    : ( Vec i ) os ( vec_new [i] )
+    : ~ i d 0
+    ~ < d - ( rt_ndim X ) 1 { ( vec_push [i] os ( rt_dim X d ) ) = d + d 1 }
+    ( vec_push [i] os 1 )
+    : i yd ( rt_alloc_out e ( __out_name n ) os )
+    ( op_reducel2 . e g . e ks . X dptr yd outer ax )
+}
+
+@ rt_clip *Engine e ONode n → v {
+    : RTensor X ( __in e n 0 )
+    : ~ f lo - 0.0 1000000000.0
+    : ~ f hi 1000000000.0
+    ? > ( vec_len [String] . n inputs ) 1 {
+        = lo ( __init_f32 e ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } ) 0 )
+    } {}
+    ? > ( vec_len [String] . n inputs ) 2 {
+        = hi ( __init_f32 e ( string_data ?? ( vec_get [String] . n inputs 2 ) { T x → x F _ → ( string_new ) } ) 0 )
+    } {}
+    : i yd ( rt_alloc_out e ( __out_name n ) . X shape )
+    ( op_clip . e g . e ks . X dptr yd . X nelem lo hi )
+}
+
+// Expand the last axis (broadcast a (...,1) tensor to the target shape).
+@ rt_expand *Engine e ONode n → v {
+    : RTensor X ( __in e n 0 )
+    : s shp_name ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } )
+    : i nd ( __init_i64_len e shp_name )
+    : i rep ( __init_i64 e shp_name - nd 1 )
+    : i outer . X nelem
+    : ( Vec i ) os ( vec_new [i] )
+    : ~ i d 0
+    ~ < d nd { ( vec_push [i] os ( __init_i64 e shp_name d ) ) = d + d 1 }
+    : i yd ( rt_alloc_out e ( __out_name n ) os )
+    ( op_expand . e g . e ks . X dptr yd outer rep )
+}
+
+// Unsqueeze: insert size-1 axes — pure reshape (alias). New shape from the
+// input's shape with 1s inserted at the `axes` positions.
+@ rt_unsqueeze *Engine e ONode n → v {
+    : RTensor X ( __in e n 0 )
+    : s ax_name ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } )
+    : i a0 ( __init_i64 e ax_name 0 )
+    : ( Vec i ) os ( vec_new [i] )
+    : i nd ( rt_ndim X )
+    : ~ i d 0
+    ~ <= d nd {
+        ? == d a0 { ( vec_push [i] os 1 ) } {}
+        ? < d nd { ( vec_push [i] os ( rt_dim X d ) ) } {}
+        = d + d 1
+    }
+    ( rt_put e ( __out_name n ) . X dptr os )
 }
 
 // Run the graph on a host input buffer (raw f32). `shape` is the input
@@ -411,7 +504,21 @@ $ `ops.nu`
     : GpuBuffer ib ( gpu_alloc . e g * n 4 )
     ( gpu_upload ib input_host )
     ( rt_put e ( string_data . g input_name ) . ib dptr shape )
+    ^ ( __rt_run_nodes e g )
+}
 
+// Two-input run (e.g. image + text embeddings for a promptable model).
+@ rt_run_two *Engine e OGraph g s n1 *u h1 ( Vec i ) s1 s n2 *u h2 ( Vec i ) s2 → RTensor {
+    = . e graph g
+    ( rt_load_inits e g )
+    : GpuBuffer b1 ( gpu_alloc . e g * ( __prod s1 ) 4 )
+    ( gpu_upload b1 h1 ) ( rt_put e n1 . b1 dptr s1 )
+    : GpuBuffer b2 ( gpu_alloc . e g * ( __prod s2 ) 4 )
+    ( gpu_upload b2 h2 ) ( rt_put e n2 . b2 dptr s2 )
+    ^ ( __rt_run_nodes e g )
+}
+
+@ __rt_run_nodes *Engine e OGraph g → RTensor {
     : ( Vec ONode ) nodes . g nodes
     : ~ i k 0
     ~ < k ( vec_len [ONode] nodes ) {
@@ -443,6 +550,12 @@ $ `ops.nu`
                 ? ( streq2 op `Resize` ) { ( rt_resize e nd ) }
                 ? ( streq2 op `Transpose` ) { ( rt_transpose e nd ) }
                 ? ( streq2 op `Softmax` ) { ( rt_softmax e nd ) }
+                ? ( streq2 op `MatMul` ) { ( rt_matmul e nd ) }
+                ? ( streq2 op `Einsum` ) { ( rt_einsum e nd ) }
+                ? ( streq2 op `ReduceL2` ) { ( rt_reducel2 e nd ) }
+                ? ( streq2 op `Clip` ) { ( rt_clip e nd ) }
+                ? ( streq2 op `Expand` ) { ( rt_expand e nd ) }
+                ? ( streq2 op `Unsqueeze` ) { ( rt_unsqueeze e nd ) }
                 { ( nurl_eprint `[onnx] unsupported op: ` ) ( nurl_eprint op ) ( nurl_eprint `\n` ) }
                 }
             } F _ → {}

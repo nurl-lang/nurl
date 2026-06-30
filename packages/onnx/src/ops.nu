@@ -19,6 +19,7 @@ $ `deps/gpu/src/gpu.nu`
     GpuKernel bn     GpuKernel lrelu  GpuKernel elt
     GpuKernel sig    GpuKernel resize GpuKernel perm
     GpuKernel softm  GpuKernel cpyax
+    GpuKernel rl2    GpuKernel clip   GpuKernel expand  GpuKernel slice
     b ok
 }
 
@@ -214,6 +215,45 @@ $ `deps/gpu/src/gpu.nu`
     }`
 }
 
+// Extract a contiguous axis slice into a fresh tensor: viewing src as
+// (outer, src_ax, inner), D[o,a,i] = S[o, soff+a, i] for a in [0,sz).
+// (Split where outer>1 — the slices interleave and can't be aliased.)
+@ __k_slice → s {
+    ^ `extern "C" __global__ void slice_ax(const float* S, float* D,
+        int outer, int sz, int inner, int src_ax, int soff) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        if (idx >= outer*sz*inner) return;
+        int ii = idx % inner; int t = idx / inner;
+        int a = t % sz; int o = t / sz;
+        D[idx] = S[(o*src_ax + (soff+a))*inner + ii];
+    }`
+}
+// L2 norm along the last axis: input viewed as (outer, ax) → (outer, 1).
+@ __k_rl2 → s {
+    ^ `extern "C" __global__ void reducel2(const float* X, float* Y, int outer, int ax) {
+        int o = blockIdx.x*blockDim.x + threadIdx.x;
+        if (o >= outer) return;
+        const float* p = X + o*ax;
+        float s = 0.f;
+        for (int a=0;a<ax;a++) s += p[a]*p[a];
+        Y[o] = sqrtf(s);
+    }`
+}
+// Clip / clamp to [lo, hi].
+@ __k_clip → s {
+    ^ `extern "C" __global__ void clipk(const float* X, float* Y, int n, float lo, float hi) {
+        int i = blockIdx.x*blockDim.x + threadIdx.x;
+        if (i < n) { float v = X[i]; Y[i] = v < lo ? lo : (v > hi ? hi : v); }
+    }`
+}
+// Expand the last axis: input (outer,1) → (outer,rep), Y[o,r] = X[o].
+@ __k_expand → s {
+    ^ `extern "C" __global__ void expandlast(const float* X, float* Y, int outer, int rep) {
+        int i = blockIdx.x*blockDim.x + threadIdx.x;
+        if (i < outer*rep) Y[i] = X[i/rep];
+    }`
+}
+
 @ ops_compile Gpu g → Kernels {
     : GpuKernel kg ( gpu_compile g ( __k_gemm ) `gemm` )
     : GpuKernel kr ( gpu_compile g ( __k_relu ) `relu` )
@@ -227,11 +267,16 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel kpm ( gpu_compile g ( __k_perm ) `perm4` )
     : GpuKernel ksm ( gpu_compile g ( __k_softmax ) `softmax_ax` )
     : GpuKernel kcp ( gpu_compile g ( __k_cpyax ) `copy_ax` )
+    : GpuKernel krl ( gpu_compile g ( __k_rl2 ) `reducel2` )
+    : GpuKernel kcl ( gpu_compile g ( __k_clip ) `clipk` )
+    : GpuKernel kex ( gpu_compile g ( __k_expand ) `expandlast` )
+    : GpuKernel ksl ( gpu_compile g ( __k_slice ) `slice_ax` )
     : b ok1 & & & ( gpu_kernel_ok kg ) ( gpu_kernel_ok kr ) & ( gpu_kernel_ok kc ) ( gpu_kernel_ok kp )
             & & ( gpu_kernel_ok kb ) ( gpu_kernel_ok kl ) ( gpu_kernel_ok ke )
     : b ok2 & & ( gpu_kernel_ok ksg ) ( gpu_kernel_ok krz )
             & & ( gpu_kernel_ok kpm ) ( gpu_kernel_ok ksm ) ( gpu_kernel_ok kcp )
-    ^ @ Kernels { kg kr kc kp kb kl ke ksg krz kpm ksm kcp & ok1 ok2 }
+    : b ok3 & & & ( gpu_kernel_ok krl ) ( gpu_kernel_ok kcl ) ( gpu_kernel_ok kex ) ( gpu_kernel_ok ksl )
+    ^ @ Kernels { kg kr kc kp kb kl ke ksg krz kpm ksm kcp krl kcl kex ksl & & ok1 ok2 ok3 }
 }
 
 @ ops_free Kernels ks → v {
@@ -240,6 +285,41 @@ $ `deps/gpu/src/gpu.nu`
     ( gpu_kernel_free . ks bn ) ( gpu_kernel_free . ks lrelu ) ( gpu_kernel_free . ks elt )
     ( gpu_kernel_free . ks sig ) ( gpu_kernel_free . ks resize ) ( gpu_kernel_free . ks perm )
     ( gpu_kernel_free . ks softm ) ( gpu_kernel_free . ks cpyax )
+    ( gpu_kernel_free . ks rl2 ) ( gpu_kernel_free . ks clip ) ( gpu_kernel_free . ks expand )
+    ( gpu_kernel_free . ks slice )
+}
+
+@ op_slice_ax Gpu g Kernels ks i sd i dd i outer i sz i inner i src_ax i soff → i {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 sd ) ) ( vec_push [i] a ( gpu_arg_i64 dd ) )
+    ( vec_push [i] a ( gpu_arg_i32 outer ) ) ( vec_push [i] a ( gpu_arg_i32 sz ) ) ( vec_push [i] a ( gpu_arg_i32 inner ) )
+    ( vec_push [i] a ( gpu_arg_i32 src_ax ) ) ( vec_push [i] a ( gpu_arg_i32 soff ) )
+    : i total * * outer sz inner
+    ( gpu_launch . ks slice ( gpu_grid total 256 ) 256 a )
+    ( vec_free [i] a ) ^ dd
+}
+
+@ op_reducel2 Gpu g Kernels ks i xd i yd i outer i ax → i {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 xd ) ) ( vec_push [i] a ( gpu_arg_i64 yd ) )
+    ( vec_push [i] a ( gpu_arg_i32 outer ) ) ( vec_push [i] a ( gpu_arg_i32 ax ) )
+    ( gpu_launch . ks rl2 ( gpu_grid outer 256 ) 256 a )
+    ( vec_free [i] a ) ^ yd
+}
+@ op_clip Gpu g Kernels ks i xd i yd i n f lo f hi → i {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 xd ) ) ( vec_push [i] a ( gpu_arg_i64 yd ) ) ( vec_push [i] a ( gpu_arg_i32 n ) )
+    ( vec_push [i] a ( gpu_arg_f32 lo ) ) ( vec_push [i] a ( gpu_arg_f32 hi ) )
+    ( gpu_launch . ks clip ( gpu_grid n 256 ) 256 a )
+    ( vec_free [i] a ) ^ yd
+}
+@ op_expand Gpu g Kernels ks i xd i yd i outer i rep → i {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 xd ) ) ( vec_push [i] a ( gpu_arg_i64 yd ) )
+    ( vec_push [i] a ( gpu_arg_i32 outer ) ) ( vec_push [i] a ( gpu_arg_i32 rep ) )
+    : i total * outer rep
+    ( gpu_launch . ks expand ( gpu_grid total 256 ) 256 a )
+    ( vec_free [i] a ) ^ yd
 }
 
 // ── launches (dptrs are raw device addresses, i64) ────────────────
