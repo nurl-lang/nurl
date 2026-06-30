@@ -408,19 +408,51 @@ $ `ops.nu`
     }
 }
 
-// MatMul: A[...,M,K] @ B[K,N] (B 2-D). Batch dims collapse into M. Via Gemm.
+// MatMul. Two cases: A[...,M,K] @ B[K,N] (2-D B) collapses leading dims
+// into M and uses Gemm; A[...,M,K] @ B[...,K,N] (matching batch dims, the
+// attention case) uses a batched matmul.
 @ rt_matmul *Engine e ONode n → v {
     : RTensor A ( __in e n 0 )
     : RTensor B ( __in e n 1 )
     : i Kd ( rt_last A )
     : i N ( rt_last B )
-    : i M / . A nelem Kd
-    : ( Vec i ) os ( vec_new [i] )
-    : ~ i d 0
-    ~ < d - ( rt_ndim A ) 1 { ( vec_push [i] os ( rt_dim A d ) ) = d + d 1 }
-    ( vec_push [i] os N )
-    : i yd ( rt_alloc_out e ( __out_name n ) os )
-    ( op_gemm . e g . e ks . A dptr . B dptr 0 yd M N Kd 1.0 0.0 0 )
+    ? > ( rt_ndim B ) 2 {
+        // batched: A[batch,M,K] @ B[batch,K,N] -> [batch,M,N]
+        : i M ( rt_dim A - ( rt_ndim A ) 2 )
+        : i batch / . A nelem * M Kd
+        : ( Vec i ) os ( vec_new [i] )
+        : ~ i d 0
+        ~ < d - ( rt_ndim A ) 1 { ( vec_push [i] os ( rt_dim A d ) ) = d + d 1 }
+        ( vec_push [i] os N )
+        : i yd ( rt_alloc_out e ( __out_name n ) os )
+        ( op_bmm . e g . e ks . A dptr . B dptr yd batch M N Kd )
+    } {
+        : i M / . A nelem Kd
+        : ( Vec i ) os ( vec_new [i] )
+        : ~ i d 0
+        ~ < d - ( rt_ndim A ) 1 { ( vec_push [i] os ( rt_dim A d ) ) = d + d 1 }
+        ( vec_push [i] os N )
+        : i yd ( rt_alloc_out e ( __out_name n ) os )
+        ( op_gemm . e g . e ks . A dptr . B dptr 0 yd M N Kd 1.0 0.0 0 )
+    }
+}
+
+// LayerNormalization over the last axis (scale = in1, bias = in2).
+@ rt_layernorm *Engine e ONode n → v {
+    : RTensor X ( __in e n 0 )
+    : RTensor sc ( __in e n 1 )
+    : RTensor bi ( __in e n 2 )
+    : i ax ( rt_last X )
+    : i outer / . X nelem ax
+    : f eps ( node_attr_f n `epsilon` 0.00001 )
+    : i yd ( rt_alloc_out e ( __out_name n ) . X shape )
+    ( op_layernorm . e g . e ks . X dptr . sc dptr . bi dptr yd outer ax eps )
+}
+
+@ rt_erf *Engine e ONode n → v {
+    : RTensor X ( __in e n 0 )
+    : i yd ( rt_alloc_out e ( __out_name n ) . X shape )
+    ( op_erf . e g . e ks . X dptr yd . X nelem )
 }
 
 // Einsum "bchw,bkc->bkhw": region[1,C,H,W] · text[1,K,C] -> [1,K,H,W].
@@ -556,6 +588,8 @@ $ `ops.nu`
                 ? ( streq2 op `Clip` ) { ( rt_clip e nd ) }
                 ? ( streq2 op `Expand` ) { ( rt_expand e nd ) }
                 ? ( streq2 op `Unsqueeze` ) { ( rt_unsqueeze e nd ) }
+                ? ( streq2 op `LayerNormalization` ) { ( rt_layernorm e nd ) }
+                ? ( streq2 op `Erf` ) { ( rt_erf e nd ) }
                 { ( nurl_eprint `[onnx] unsupported op: ` ) ( nurl_eprint op ) ( nurl_eprint `\n` ) }
                 }
             } F _ → {}
