@@ -159,7 +159,7 @@ $ `display.nu`
 }
 
 // ── still-image modes (detect / seg) ──────────────────────────────
-@ run_still b want_masks String mp String np String ip String op → i {
+@ run_still b want_masks String mp String np String ip String op i gpu → i {
     ? == ( string_len mp ) 0 { ( p `missing --model <model.onnx>\n` ) ^ 1 } {}
     ? == ( string_len ip ) 0 { ( p `missing --image <image.ppm>\n` ) ^ 1 } {}
     : *b okc # *b ( nurl_alloc 8 )
@@ -172,8 +172,8 @@ $ `display.nu`
     ?? ( ppm_read ( string_data ip ) ) {
         T im → {
             ( p `image ` ) ( pn ( img_w im ) ) ( p `x` ) ( pn ( img_h im ) ) ( p `\n` )
-            : *Engine e ( rt_open 0 )
-            ? ! ( rt_ok e ) { ( p `GPU init / kernel compile failed\n` ) ^ 1 } {}
+            : *Engine e ( rt_open gpu )
+            ? ! ( rt_ok e ) { ( p `GPU ` ) ( pn gpu ) ( p ` init / kernel compile failed (try --gpu 0)\n` ) ^ 1 } {}
             ( p `device: ` ) ( p ( rt_name e ) ) ( p `\n` )
             ( p `detections:\n` )
             : i nd ( process_frame im g e names nc want_masks T )
@@ -189,7 +189,7 @@ $ `display.nu`
 }
 
 // ── webcam mode (cam): live terminal display and/or save frames ───
-@ run_cam String mp String np String dev i nframes String od b show b want_masks → i {
+@ run_cam String mp String np String dev i nframes String od b show b want_masks i gpu → i {
     ? == ( string_len mp ) 0 { ( p `missing --model <model.onnx>\n` ) ^ 1 } {}
     : *b okc # *b ( nurl_alloc 8 )
     : OGraph g ( load_model ( string_data mp ) okc )
@@ -210,8 +210,8 @@ $ `display.nu`
     : i cw ( cam_w cam )
     : i ch ( cam_h cam )
 
-    : *Engine e ( rt_open 0 )
-    ? ! ( rt_ok e ) { ( p `GPU init / kernel compile failed\n` ) ( cam_close cam ) ^ 1 } {}
+    : *Engine e ( rt_open gpu )
+    ? ! ( rt_ok e ) { ( p `GPU ` ) ( pn gpu ) ( p ` init / kernel compile failed (try --gpu 0)\n` ) ( cam_close cam ) ^ 1 } {}
     ? ! show {
         ( p `webcam ` ) ( p ( string_data dev ) ) ( p ` ` ) ( pn cw ) ( p `x` ) ( pn ch )
         ( p ` on ` ) ( p ( rt_name e ) ) ( p `\n` )
@@ -271,7 +271,8 @@ $ `display.nu`
     ( p `  --device  <dev>          cam webcam device (default /dev/video0).\n` )
     ( p `  --frames  <N>            cam: stop after N frames (default: run until Ctrl-C).\n` )
     ( p `  --no-show                cam: don't draw to the terminal (e.g. only --out).\n` )
-    ( p `  --boxes                  draw boxes only, skip the masks.\n\n` )
+    ( p `  --boxes                  draw boxes only, skip the masks.\n` )
+    ( p `  --gpu     <N>            CUDA device ordinal to run on (default 0).\n\n` )
     ( p `examples:\n` )
     ( p `  yoloe seg --model yoloe-v8s-seg.onnx --classes classes.txt --image photo.ppm --out out.ppm\n` )
     ( p `  yoloe cam --model yoloe-v8s-seg.onnx --classes classes.txt          # live, in the terminal\n` )
@@ -287,12 +288,13 @@ $ `display.nu`
     : String mp ( flag_str av `--model` )
     : String np ( flag_str av `--classes` )
     : b boxes ( flag_set av `--boxes` )
+    : i gpu ( flag_int av `--gpu` 0 )
 
     ? | != 0 ( nurl_str_eq c `detect` ) != 0 ( nurl_str_eq c `seg` ) {
         : b want_masks & != 0 ( nurl_str_eq c `seg` ) ! boxes
         : String ip ( flag_str av `--image` )
         : String op ( flag_str av `--out` )
-        ^ ( run_still want_masks mp np ip op )
+        ^ ( run_still want_masks mp np ip op gpu )
     } {}
 
     ? != 0 ( nurl_str_eq c `cam` ) {
@@ -301,7 +303,7 @@ $ `display.nu`
         : i nframes ? ( flag_set av `--frames` ) ( flag_int av `--frames` 30 ) - 0 1
         : String od ( flag_str av `--out` )
         : b show ! ( flag_set av `--no-show` )
-        ^ ( run_cam mp np dev nframes od show ! boxes )
+        ^ ( run_cam mp np dev nframes od show ! boxes gpu )
     } {}
 
     ? | != 0 ( nurl_str_eq c `help` ) | != 0 ( nurl_str_eq c `-h` ) != 0 ( nurl_str_eq c `--help` ) { ( usage ) ^ 0 } {}

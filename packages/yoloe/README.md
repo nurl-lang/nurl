@@ -53,11 +53,16 @@ yoloe cam    --model M --classes C [options]                 live webcam
 | `--frames <N>` | `cam`: stop after N frames — **omit to run until Ctrl-C** |
 | `--no-show` | `cam`: don't draw to the terminal (e.g. when only `--out`-saving) |
 | `--boxes` | draw boxes only, skip the masks |
+| `--gpu <N>` | CUDA device ordinal to run on (default `0`) — pick the card on a multi-GPU box |
 
 **`yoloe cam` shows the segmented feed live in your terminal** — true-colour
-half-blocks, so it works in any modern terminal (and over SSH) with no X11,
-no window toolkit. With no `--frames` it streams until you press Ctrl-C; add
-`--out frames/` to also save each frame as a PPM.
+half-blocks (two area-averaged pixels per character cell), sized to the full
+terminal, so it works in any modern terminal (and over SSH) with no X11, no
+window toolkit. With no `--frames` it streams until you press Ctrl-C; add
+`--out frames/` to also save each frame as a PPM. A half-block cell holds two
+independently-coloured pixels — the most a colour terminal can show — so the
+preview's resolution is the terminal's cell grid: a bigger window (or smaller
+font) gives a sharper picture.
 
 ```
 yoloe seg --model yoloe-v8s-seg.onnx --classes classes.txt --image dog.ppm --out out.ppm

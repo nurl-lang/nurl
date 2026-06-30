@@ -37,6 +37,35 @@ $ `image.nu`
 // Push the decimal digits of n (0..255) onto a String.
 @ __push_num String s i n → v { ( string_push_str s ( nurl_str_int n ) ) }
 
+// Average a source rectangle [x0,x1)×[y0,y1) of `im` into out[0..2] (R,G,B),
+// 4-byte slots. This box filter (area average) is what makes the downscaled
+// preview look smooth instead of the aliased mess that point-sampling a
+// 640-wide frame into ~100 cells produces. At least one pixel is sampled.
+@ __avg3 Image im i x0 i x1 i y0 i y1 *u out → v {
+    : i xb ? > x1 + x0 1 x1 + x0 1
+    : i yb ? > y1 + y0 1 y1 + y0 1
+    : ~ i sr 0
+    : ~ i sg 0
+    : ~ i sb 0
+    : ~ i cnt 0
+    : ~ i y y0
+    ~ < y yb {
+        : ~ i x x0
+        ~ < x xb {
+            = sr + sr ( img_get im x y 0 )
+            = sg + sg ( img_get im x y 1 )
+            = sb + sb ( img_get im x y 2 )
+            = cnt + cnt 1
+            = x + x 1
+        }
+        = y + y 1
+    }
+    ? == cnt 0 { = cnt 1 } {}
+    ( nurl_poke_i32 out 0 / sr cnt )
+    ( nurl_poke_i32 out 1 / sg cnt )
+    ( nurl_poke_i32 out 2 / sb cnt )
+}
+
 // Clear the screen and hide the cursor (call once before a live loop).
 @ term_enter → v {
     : String s ( string_with_cap 16 )
@@ -61,11 +90,12 @@ $ `image.nu`
     : i rows ( nurl_peek # *u rc 0 )
     ( nurl_free # *u rc )
 
-    // output: out_w cells wide, out_rows cells tall (each cell = 2 px high).
-    : ~ i out_w ? < cols 160 cols 160
+    // Use the FULL terminal width (each cell = 1 px wide × 2 px tall), then
+    // pick the row count that preserves aspect, capped to the window height.
+    : ~ i out_w cols
     : i out_h_px0 / * out_w H W
     : ~ i out_rows / out_h_px0 2
-    : i max_rows - rows 2                 // leave a line for status
+    : i max_rows - rows 2                 // leave a line for the status
     ? > out_rows max_rows {
         = out_rows max_rows
         = out_w / * * 2 out_rows W H
@@ -75,26 +105,30 @@ $ `image.nu`
     ? < out_rows 1 { = out_rows 1 } {}
     : i out_h_px * 2 out_rows
 
-    : String s ( string_with_cap + 64 * * out_w out_rows 40 )
+    : *u tcell ( nurl_alloc 16 )
+    : *u bcell ( nurl_alloc 16 )
+    : String s ( string_with_cap + 64 * * out_w out_rows 44 )
     ( string_push_char s 27 ) ( string_push_str s `[H` )    // cursor home
     : ~ i ry 0
     ~ < ry out_rows {
-        : i syt / * * 2 ry H out_h_px
-        : i syb / * + * 2 ry 1 H out_h_px
+        : i syt0 / * * 2 ry H out_h_px
+        : i syt1 / * + * 2 ry 1 H out_h_px
+        : i syb1 / * + * 2 ry 2 H out_h_px
         : ~ i cx 0
         ~ < cx out_w {
-            : i sx / * cx W out_w
-            : i tr ( img_get im sx syt 0 )
-            : i tg ( img_get im sx syt 1 )
-            : i tb ( img_get im sx syt 2 )
-            : i br ( img_get im sx syb 0 )
-            : i bg ( img_get im sx syb 1 )
-            : i bb ( img_get im sx syb 2 )
+            : i sx0 / * cx W out_w
+            : i sx1 / * + cx 1 W out_w
+            ( __avg3 im sx0 sx1 syt0 syt1 tcell )    // top pixel (foreground)
+            ( __avg3 im sx0 sx1 syt1 syb1 bcell )    // bottom pixel (background)
             // ESC [ 38;2;tr;tg;tb;48;2;br;bg;bb m  ▀(U+2580 = 226 150 128)
             ( string_push_char s 27 ) ( string_push_str s `[38;2;` )
-            ( __push_num s tr ) ( string_push_char s 59 ) ( __push_num s tg ) ( string_push_char s 59 ) ( __push_num s tb )
+            ( __push_num s ( nurl_peek_i32 tcell 0 ) ) ( string_push_char s 59 )
+            ( __push_num s ( nurl_peek_i32 tcell 1 ) ) ( string_push_char s 59 )
+            ( __push_num s ( nurl_peek_i32 tcell 2 ) )
             ( string_push_str s `;48;2;` )
-            ( __push_num s br ) ( string_push_char s 59 ) ( __push_num s bg ) ( string_push_char s 59 ) ( __push_num s bb )
+            ( __push_num s ( nurl_peek_i32 bcell 0 ) ) ( string_push_char s 59 )
+            ( __push_num s ( nurl_peek_i32 bcell 1 ) ) ( string_push_char s 59 )
+            ( __push_num s ( nurl_peek_i32 bcell 2 ) )
             ( string_push_char s 109 )   // 'm'
             ( string_push_char s 226 ) ( string_push_char s 150 ) ( string_push_char s 128 )
             = cx + cx 1
@@ -105,4 +139,5 @@ $ `image.nu`
     }
     ( nurl_print ( string_data s ) )
     ( string_free s )
+    ( nurl_free tcell ) ( nurl_free bcell )
 }
