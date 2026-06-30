@@ -21,6 +21,7 @@ $ `deps/gpu/src/gpu.nu`
     GpuKernel softm  GpuKernel cpyax
     GpuKernel rl2    GpuKernel clip   GpuKernel expand  GpuKernel slice
     GpuKernel lnorm  GpuKernel erf    GpuKernel gather  GpuKernel bmm  GpuKernel amax
+    GpuKernel eos
     b ok
 }
 
@@ -161,26 +162,22 @@ $ `deps/gpu/src/gpu.nu`
     }`
 }
 
-// General 4-D transpose. d* = input dims, p* = perm (output axis k reads
-// input axis p[k]). One thread per output element.
+// General N-D (≤6) transpose. d* = input dims (size-1 padded), p* = perm
+// (output axis k reads input axis p[k]). One thread per output element.
 @ __k_perm → s {
-    ^ `extern "C" __global__ void perm4(const float* X, float* Y,
-        int d0,int d1,int d2,int d3, int p0,int p1,int p2,int p3) {
+    ^ `extern "C" __global__ void perm6(const float* X, float* Y,
+        int d0,int d1,int d2,int d3,int d4,int d5,
+        int p0,int p1,int p2,int p3,int p4,int p5) {
+        int D[6] = {d0,d1,d2,d3,d4,d5};
+        int P[6] = {p0,p1,p2,p3,p4,p5};
+        int O[6]; for (int i=0;i<6;i++) O[i] = D[P[i]];
+        int tot = O[0]*O[1]*O[2]*O[3]*O[4]*O[5];
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        int od[4];
-        int o0 = d0, o1, o2, o3;
-        int D[4] = {d0,d1,d2,d3};
-        int o[4] = {D[p0],D[p1],D[p2],D[p3]};
-        int tot = o[0]*o[1]*o[2]*o[3];
         if (idx >= tot) return;
-        int t = idx;
-        od[3] = t % o[3]; t /= o[3];
-        od[2] = t % o[2]; t /= o[2];
-        od[1] = t % o[1]; t /= o[1];
-        od[0] = t;
-        int in[4];
-        in[p0]=od[0]; in[p1]=od[1]; in[p2]=od[2]; in[p3]=od[3];
-        int si = ((in[0]*d1 + in[1])*d2 + in[2])*d3 + in[3];
+        int oc[6]; int t = idx;
+        for (int i=5;i>=0;i--){ oc[i] = t % O[i]; t /= O[i]; }
+        int in[6]; for (int i=0;i<6;i++) in[P[i]] = oc[i];
+        int si = ((((in[0]*d1 + in[1])*d2 + in[2])*d3 + in[3])*d4 + in[4])*d5 + in[5];
         Y[idx] = X[si];
     }`
 }
@@ -289,6 +286,22 @@ $ `deps/gpu/src/gpu.nu`
     }`
 }
 
+// CLIP EOS read-out: given per-row sequences `tok` [B,L] (int64) and the
+// transformer output `data` [B,L,D], select each row's EOS token (the
+// argmax token id) features → Y [B,D]. One thread per output element.
+@ __k_eosgather → s {
+    ^ `extern "C" __global__ void eos_gather(const float* data, const long long* tok,
+        float* Y, int B, int L, int D) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        if (idx >= B*D) return;
+        int d = idx % D; int b = idx / D;
+        const long long* t = tok + b*L;
+        int pos = 0; long long mx = t[0];
+        for (int j=1;j<L;j++){ if (t[j]>mx){ mx=t[j]; pos=j; } }
+        Y[idx] = data[(b*L + pos)*D + d];
+    }`
+}
+
 // L2 norm along the last axis: input viewed as (outer, ax) → (outer, 1).
 @ __k_rl2 → s {
     ^ `extern "C" __global__ void reducel2(const float* X, float* Y, int outer, int ax) {
@@ -325,7 +338,7 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel ke ( gpu_compile g ( __k_elt ) `eltwise` )
     : GpuKernel ksg ( gpu_compile g ( __k_sig ) `osigmoid` )
     : GpuKernel krz ( gpu_compile g ( __k_resize ) `resize_nn` )
-    : GpuKernel kpm ( gpu_compile g ( __k_perm ) `perm4` )
+    : GpuKernel kpm ( gpu_compile g ( __k_perm ) `perm6` )
     : GpuKernel ksm ( gpu_compile g ( __k_softmax ) `softmax_ax` )
     : GpuKernel kcp ( gpu_compile g ( __k_cpyax ) `copy_ax` )
     : GpuKernel krl ( gpu_compile g ( __k_rl2 ) `reducel2` )
@@ -337,13 +350,14 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel kga ( gpu_compile g ( __k_gather ) `gather` )
     : GpuKernel kbm ( gpu_compile g ( __k_bmm ) `bmm` )
     : GpuKernel kam ( gpu_compile g ( __k_amax ) `argmaxk` )
+    : GpuKernel keo ( gpu_compile g ( __k_eosgather ) `eos_gather` )
     : b ok1 & & & ( gpu_kernel_ok kg ) ( gpu_kernel_ok kr ) & ( gpu_kernel_ok kc ) ( gpu_kernel_ok kp )
             & & ( gpu_kernel_ok kb ) ( gpu_kernel_ok kl ) ( gpu_kernel_ok ke )
     : b ok2 & & ( gpu_kernel_ok ksg ) ( gpu_kernel_ok krz )
             & & ( gpu_kernel_ok kpm ) ( gpu_kernel_ok ksm ) ( gpu_kernel_ok kcp )
     : b ok3 & & & ( gpu_kernel_ok krl ) ( gpu_kernel_ok kcl ) ( gpu_kernel_ok kex ) ( gpu_kernel_ok ksl )
-    : b ok4 & & & & ( gpu_kernel_ok kln ) ( gpu_kernel_ok ker ) ( gpu_kernel_ok kga ) ( gpu_kernel_ok kbm ) ( gpu_kernel_ok kam )
-    ^ @ Kernels { kg kr kc kp kb kl ke ksg krz kpm ksm kcp krl kcl kex ksl kln ker kga kbm kam & & & ok1 ok2 ok3 ok4 }
+    : b ok4 & & & & & ( gpu_kernel_ok kln ) ( gpu_kernel_ok ker ) ( gpu_kernel_ok kga ) ( gpu_kernel_ok kbm ) ( gpu_kernel_ok kam ) ( gpu_kernel_ok keo )
+    ^ @ Kernels { kg kr kc kp kb kl ke ksg krz kpm ksm kcp krl kcl kex ksl kln ker kga kbm kam keo & & & ok1 ok2 ok3 ok4 }
 }
 
 @ ops_free Kernels ks → v {
@@ -355,7 +369,16 @@ $ `deps/gpu/src/gpu.nu`
     ( gpu_kernel_free . ks rl2 ) ( gpu_kernel_free . ks clip ) ( gpu_kernel_free . ks expand )
     ( gpu_kernel_free . ks slice )
     ( gpu_kernel_free . ks lnorm ) ( gpu_kernel_free . ks erf ) ( gpu_kernel_free . ks gather )
-    ( gpu_kernel_free . ks bmm ) ( gpu_kernel_free . ks amax )
+    ( gpu_kernel_free . ks bmm ) ( gpu_kernel_free . ks amax ) ( gpu_kernel_free . ks eos )
+}
+
+@ op_eos_gather Gpu g Kernels ks i datad i tokd i yd i B i L i D → i {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 datad ) ) ( vec_push [i] a ( gpu_arg_i64 tokd ) ) ( vec_push [i] a ( gpu_arg_i64 yd ) )
+    ( vec_push [i] a ( gpu_arg_i32 B ) ) ( vec_push [i] a ( gpu_arg_i32 L ) ) ( vec_push [i] a ( gpu_arg_i32 D ) )
+    : i total * B D
+    ( gpu_launch . ks eos ( gpu_grid total 256 ) 256 a )
+    ( vec_free [i] a ) ^ yd
 }
 
 @ op_layernorm Gpu g Kernels ks i xd i scd i bd i yd i outer i ax f eps → i {
@@ -520,12 +543,14 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_free [i] a ) ^ yd
 }
 
-@ op_perm4 Gpu g Kernels ks i xd i yd i d0 i d1 i d2 i d3 i p0 i p1 i p2 i p3 → i {
+@ op_perm6 Gpu g Kernels ks i xd i yd i d0 i d1 i d2 i d3 i d4 i d5 i p0 i p1 i p2 i p3 i p4 i p5 → i {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 xd ) ) ( vec_push [i] a ( gpu_arg_i64 yd ) )
-    ( vec_push [i] a ( gpu_arg_i32 d0 ) ) ( vec_push [i] a ( gpu_arg_i32 d1 ) ) ( vec_push [i] a ( gpu_arg_i32 d2 ) ) ( vec_push [i] a ( gpu_arg_i32 d3 ) )
-    ( vec_push [i] a ( gpu_arg_i32 p0 ) ) ( vec_push [i] a ( gpu_arg_i32 p1 ) ) ( vec_push [i] a ( gpu_arg_i32 p2 ) ) ( vec_push [i] a ( gpu_arg_i32 p3 ) )
-    : i total * * * d0 d1 d2 d3
+    ( vec_push [i] a ( gpu_arg_i32 d0 ) ) ( vec_push [i] a ( gpu_arg_i32 d1 ) ) ( vec_push [i] a ( gpu_arg_i32 d2 ) )
+    ( vec_push [i] a ( gpu_arg_i32 d3 ) ) ( vec_push [i] a ( gpu_arg_i32 d4 ) ) ( vec_push [i] a ( gpu_arg_i32 d5 ) )
+    ( vec_push [i] a ( gpu_arg_i32 p0 ) ) ( vec_push [i] a ( gpu_arg_i32 p1 ) ) ( vec_push [i] a ( gpu_arg_i32 p2 ) )
+    ( vec_push [i] a ( gpu_arg_i32 p3 ) ) ( vec_push [i] a ( gpu_arg_i32 p4 ) ) ( vec_push [i] a ( gpu_arg_i32 p5 ) )
+    : i total * * * * * d0 d1 d2 d3 d4 d5
     ( gpu_launch . ks perm ( gpu_grid total 256 ) 256 a )
     ( vec_free [i] a ) ^ yd
 }
