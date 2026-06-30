@@ -25,6 +25,7 @@ $ `decode.nu`
 $ `mask.nu`
 $ `v4l2.nu`
 $ `display.nu`
+$ `window.nu`
 
 @ p s m → v { ( nurl_print m ) }
 @ pf f x → v { ( nurl_print ( nurl_str_float x ) ) }
@@ -102,7 +103,7 @@ $ `display.nu`
 // Run the network on one image, drawing boxes (and, when `want_masks`, the
 // per-object segmentation mask) onto `im`. When `verbose`, prints one line per
 // detection. Returns the detection count.
-@ process_frame Image im OGraph g *Engine e ( Vec String ) names i nc b want_masks b verbose → i {
+@ process_frame Image im OGraph g *Engine e ( Vec String ) names i nc b want_boxes b want_masks b verbose → i {
     : Letterbox lb ( letterbox im 640 )
     : *u host ( img_to_nchw_norm . lb img )
     : RTensor out ( rt_run_shaped e g host ( shape4 1 3 640 640 ) )
@@ -136,7 +137,7 @@ $ `display.nu`
                     ( mask_overlay im L lb 640 x0 y0 ow oh ( pal_r k ) ( pal_g k ) ( pal_b k ) 128 )
                     ( nurl_free coeff ) ( nurl_free L )
                 } {}
-                ( img_draw_rect im x0 y0 + x0 ow + y0 oh ( pal_r k ) ( pal_g k ) ( pal_b k ) )
+                ? want_boxes { ( img_draw_rect im x0 y0 + x0 ow + y0 oh ( pal_r k ) ( pal_g k ) ( pal_b k ) ) } {}
                 ? verbose {
                     ( p `  ` ) ( p ( name_at names . d cls ) ) ( p ` ` ) ( pf . d score )
                     ( p `  box[x=` ) ( pn x0 ) ( p ` y=` ) ( pn y0 ) ( p ` w=` ) ( pn ow ) ( p ` h=` ) ( pn oh ) ( p `]\n` )
@@ -159,7 +160,7 @@ $ `display.nu`
 }
 
 // ── still-image modes (detect / seg) ──────────────────────────────
-@ run_still b want_masks String mp String np String ip String op i gpu → i {
+@ run_still b want_boxes b want_masks String mp String np String ip String op i gpu → i {
     ? == ( string_len mp ) 0 { ( p `missing --model <model.onnx>\n` ) ^ 1 } {}
     ? == ( string_len ip ) 0 { ( p `missing --image <image.ppm>\n` ) ^ 1 } {}
     : *b okc # *b ( nurl_alloc 8 )
@@ -176,7 +177,7 @@ $ `display.nu`
             ? ! ( rt_ok e ) { ( p `GPU ` ) ( pn gpu ) ( p ` init / kernel compile failed (try --gpu 0)\n` ) ^ 1 } {}
             ( p `device: ` ) ( p ( rt_name e ) ) ( p `\n` )
             ( p `detections:\n` )
-            : i nd ( process_frame im g e names nc want_masks T )
+            : i nd ( process_frame im g e names nc want_boxes want_masks T )
             ? == nd 0 { ( p `  (none above threshold)\n` ) } {}
             ( rt_close e )
             ? > ( string_len op ) 0 {
@@ -189,7 +190,7 @@ $ `display.nu`
 }
 
 // ── webcam mode (cam): live terminal display and/or save frames ───
-@ run_cam String mp String np String dev i nframes String od b show b want_masks i gpu → i {
+@ run_cam String mp String np String dev i nframes String od i mode b want_boxes b want_masks i gpu → i {
     ? == ( string_len mp ) 0 { ( p `missing --model <model.onnx>\n` ) ^ 1 } {}
     : *b okc # *b ( nurl_alloc 8 )
     : OGraph g ( load_model ( string_data mp ) okc )
@@ -212,10 +213,23 @@ $ `display.nu`
 
     : *Engine e ( rt_open gpu )
     ? ! ( rt_ok e ) { ( p `GPU ` ) ( pn gpu ) ( p ` init / kernel compile failed (try --gpu 0)\n` ) ( cam_close cam ) ^ 1 } {}
-    ? ! show {
+
+    // display mode: 2=window, 1=terminal, 0=none. A window that fails to open
+    // (no X) falls back to the terminal.
+    : ~ i disp mode
+    : ~ XWin win @ XWin { 0 0 0 0 0 cw ch 0 }
+    ? == disp 2 {
+        = win ( xwin_open cw ch `yoloe — live segmentation (any key/close to quit)` )
+        ? ! ( xwin_ok win ) { ( p `no X display — falling back to the terminal (use --no-show to disable)\n` ) = disp 1 } {
+            ( p `webcam ` ) ( p ( string_data dev ) ) ( p ` ` ) ( pn cw ) ( p `x` ) ( pn ch )
+            ( p ` in a window on ` ) ( p ( rt_name e ) ) ( p ` — any key or the close button quits\n` )
+        }
+    } {}
+    ? == disp 1 { ( term_enter ) } {}
+    ? == disp 0 {
         ( p `webcam ` ) ( p ( string_data dev ) ) ( p ` ` ) ( pn cw ) ( p `x` ) ( pn ch )
         ( p ` on ` ) ( p ( rt_name e ) ) ( p `\n` )
-    } { ( term_enter ) }
+    } {}
 
     : ~ i f 0
     : ~ i fails 0
@@ -227,15 +241,19 @@ $ `display.nu`
         ? ( cam_grab cam rgb ) {
             = fails 0
             : Image im @ Image { cw ch rgb 0 }
-            : i nd ( process_frame im g e names nc want_masks F )
-            ? show {
+            : i nd ( process_frame im g e names nc want_boxes want_masks F )
+            ? == disp 2 {
+                ( xwin_show win im )
+                ? ( xwin_should_close win ) { = stop T } {}
+            } {}
+            ? == disp 1 {
                 ( img_show im )
                 ( p `frame ` ) ( pn f ) ( p ` · ` ) ( pn nd ) ( p ` objects · ` ) ( p ( string_data dev ) ) ( p ` · Ctrl-C to quit    \n` )
             } {}
             ? save {
                 : String fp ( frame_path ( string_data od ) f )
                 ? ( ppm_write ( string_data fp ) im ) {
-                    ? ! show { ( p `frame ` ) ( pn f ) ( p `: ` ) ( pn nd ) ( p ` objects -> ` ) ( p ( string_data fp ) ) ( p `\n` ) } {}
+                    ? == disp 0 { ( p `frame ` ) ( pn f ) ( p `: ` ) ( pn nd ) ( p ` objects -> ` ) ( p ( string_data fp ) ) ( p `\n` ) } {}
                 } { ( p `frame ` ) ( pn f ) ( p ` write failed\n` ) }
             } {}
         } {
@@ -244,10 +262,11 @@ $ `display.nu`
         }
         = f + f 1
     }
-    ? show { ( term_leave ) } {}
+    ? == disp 2 { ( xwin_close win ) } {}
+    ? == disp 1 { ( term_leave ) } {}
     ( rt_close e )
     ( cam_close cam )
-    ? & save ! show {
+    ? & save == disp 0 {
         ( p `done — make a video with: ffmpeg -framerate 10 -i ` ) ( p ( string_data od ) ) ( p `/frame%05d.ppm seg.mp4\n` )
     } {}
     ^ 0
@@ -270,13 +289,19 @@ $ `display.nu`
     ( p `  --out     <path>         detect/seg: output image; cam: dir to save frames.\n` )
     ( p `  --device  <dev>          cam webcam device (default /dev/video0).\n` )
     ( p `  --frames  <N>            cam: stop after N frames (default: run until Ctrl-C).\n` )
-    ( p `  --no-show                cam: don't draw to the terminal (e.g. only --out).\n` )
-    ( p `  --boxes                  draw boxes only, skip the masks.\n` )
+    ( p `  --boxes                  draw bounding boxes.\n` )
+    ( p `  --mask                   draw the segmentation masks (alias --segment).\n` )
+    ( p `                           (neither flag = draw both; pick one for just that.)\n` )
+    ( p `  --window                 cam: show in a real GUI window (X11).\n` )
+    ( p `  --terminal               cam: show in the terminal (truecolor half-blocks).\n` )
+    ( p `  --no-show                cam: don't display (e.g. only --out). Default: window\n` )
+    ( p `                           if $DISPLAY is set, else terminal.\n` )
     ( p `  --gpu     <N>            CUDA device ordinal to run on (default 0).\n\n` )
     ( p `examples:\n` )
     ( p `  yoloe seg --model yoloe-v8s-seg.onnx --classes classes.txt --image photo.ppm --out out.ppm\n` )
-    ( p `  yoloe cam --model yoloe-v8s-seg.onnx --classes classes.txt          # live, in the terminal\n` )
-    ( p `  yoloe cam --model yoloe-v8s-seg.onnx --classes classes.txt --frames 60 --out frames/\n` )
+    ( p `  yoloe cam --model yoloe-v8s-seg.onnx --classes classes.txt              # live GUI window\n` )
+    ( p `  yoloe cam --model yoloe-v8s-seg.onnx --classes classes.txt --mask --terminal\n` )
+    ( p `  yoloe cam --model yoloe-v8s-seg.onnx --classes classes.txt --frames 60 --out frames/ --no-show\n` )
 }
 
 @ main → i {
@@ -287,14 +312,19 @@ $ `display.nu`
 
     : String mp ( flag_str av `--model` )
     : String np ( flag_str av `--classes` )
-    : b boxes ( flag_set av `--boxes` )
     : i gpu ( flag_int av `--gpu` 0 )
+    // What to draw: --boxes and/or --mask (alias --segment). Neither → both.
+    : b fb ( flag_set av `--boxes` )
+    : b fm | ( flag_set av `--mask` ) ( flag_set av `--segment` )
+    : b want_boxes | fb ! fm
+    : b want_masks | fm ! fb
 
     ? | != 0 ( nurl_str_eq c `detect` ) != 0 ( nurl_str_eq c `seg` ) {
-        : b want_masks & != 0 ( nurl_str_eq c `seg` ) ! boxes
+        // `detect` is boxes-only unless the user explicitly asked for a mask.
+        : b dmask & want_masks ! & != 0 ( nurl_str_eq c `detect` ) ! fm
         : String ip ( flag_str av `--image` )
         : String op ( flag_str av `--out` )
-        ^ ( run_still want_masks mp np ip op gpu )
+        ^ ( run_still want_boxes dmask mp np ip op gpu )
     } {}
 
     ? != 0 ( nurl_str_eq c `cam` ) {
@@ -302,8 +332,13 @@ $ `display.nu`
         : String dev ? > ( string_len dev0 ) 0 dev0 ( string_from `/dev/video0` )
         : i nframes ? ( flag_set av `--frames` ) ( flag_int av `--frames` 30 ) - 0 1
         : String od ( flag_str av `--out` )
-        : b show ! ( flag_set av `--no-show` )
-        ^ ( run_cam mp np dev nframes od show ! boxes gpu )
+        // display mode: --no-show → 0; --terminal → 1; --window → 2;
+        // default → window if $DISPLAY is set, else terminal.
+        : ~ i mode ? > ( string_len ( env_var_or `DISPLAY` `` ) ) 0 2 1
+        ? ( flag_set av `--terminal` ) { = mode 1 } {}
+        ? ( flag_set av `--window` ) { = mode 2 } {}
+        ? ( flag_set av `--no-show` ) { = mode 0 } {}
+        ^ ( run_cam mp np dev nframes od mode want_boxes want_masks gpu )
     } {}
 
     ? | != 0 ( nurl_str_eq c `help` ) | != 0 ( nurl_str_eq c `-h` ) != 0 ( nurl_str_eq c `--help` ) { ( usage ) ^ 0 } {}

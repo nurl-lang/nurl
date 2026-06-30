@@ -358,6 +358,19 @@ if grep -qE '@nvrtc[A-Z][A-Za-z0-9_]*\b' "$LLFILE"; then
     fi
 fi
 
+# Auto-link Xlib (libX11) when the program opens an X display (a GUI window —
+# e.g. packages/yoloe's window preview). Linked only when `@XOpenDisplay`
+# actually appears, so headless programs never grow an X dependency.
+if grep -qE '@XOpenDisplay\b' "$LLFILE"; then
+    if pkg-config --exists x11 2>/dev/null; then
+        EXTRA_LIBS="$EXTRA_LIBS $(pkg-config --libs x11)"
+    elif [ -e /usr/lib/x86_64-linux-gnu/libX11.so ] || [ -e /usr/lib/libX11.so ]; then
+        EXTRA_LIBS="$EXTRA_LIBS -lX11"
+    else
+        EXTRA_LIBS="$EXTRA_LIBS -l:libX11.so.6"
+    fi
+fi
+
 # In --debug mode, drop -flto: the LTO link pipeline strips DWARF
 # debug info from .ll input when the matching runtime.o bitcode has
 # no DI counterpart (current build.sh compiles runtime.o without -g).

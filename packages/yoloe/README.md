@@ -51,16 +51,22 @@ yoloe cam    --model M --classes C [options]                 live webcam
 | `--out <path>` | `detect`/`seg`: the annotated output image; `cam`: a directory to save frames to (created if missing) |
 | `--device <dev>` | `cam` webcam device (default `/dev/video0`) |
 | `--frames <N>` | `cam`: stop after N frames — **omit to run until Ctrl-C** |
-| `--no-show` | `cam`: don't draw to the terminal (e.g. when only `--out`-saving) |
-| `--boxes` | draw boxes only, skip the masks |
+| `--boxes` | draw bounding boxes |
+| `--mask` | draw the segmentation masks (alias `--segment`) — **neither flag ⇒ both; pick one for just that** |
+| `--window` | `cam`: show in a real GUI window (X11) |
+| `--terminal` | `cam`: show in the terminal (truecolor half-blocks) |
+| `--no-show` | `cam`: don't display (e.g. when only `--out`-saving) |
 | `--gpu <N>` | CUDA device ordinal to run on (default `0`) — pick the card on a multi-GPU box |
 
-**`yoloe cam` shows the segmented feed live in your terminal** — true-colour
-half-blocks (two area-averaged pixels per character cell), sized to the full
-terminal, so it works in any modern terminal (and over SSH) with no X11, no
-window toolkit. With no `--frames` it streams until you press Ctrl-C; add
-`--out frames/` to also save each frame as a PPM. A half-block cell holds two
-independently-coloured pixels — the most a colour terminal can show — so the
+**`yoloe cam` shows the segmented feed live.** By default it opens a **real
+GUI window** (X11, full webcam resolution) when `$DISPLAY` is set, and
+otherwise draws into the **terminal** as true-colour half-blocks (two
+area-averaged pixels per character cell) — which also works over SSH, with no
+X11. Force either with `--window` / `--terminal`. With no `--frames` it
+streams until you quit (any key / the window's close button, or Ctrl-C in the
+terminal); add `--out frames/` to also save each frame as a PPM. A half-block
+cell holds two independently-coloured pixels — the most a colour terminal can
+show — so the
 preview's resolution is the terminal's cell grid: a bigger window (or smaller
 font) gives a sharper picture.
 
@@ -264,4 +270,9 @@ reference detections used to verify the NURL implementation.
 ## Requirements
 
 - NVIDIA driver (`libcuda.so`) + NVRTC (`libnvrtc.so`) — via `onnx` → `gpu`.
+- **`libX11`** for the GUI window (`yoloe cam --window`). The toolchain links
+  it only when the window code is used, but it must be present at build time
+  (`libX11.so.6`, on every Linux desktop; `apt install libx11-6`). The
+  terminal preview (`--terminal`) needs no X11 and works over SSH.
+- A V4L2 webcam at `/dev/videoN` for `yoloe cam`.
 - The exported model (≈45 MB) is not bundled; produce it with `tools/`.

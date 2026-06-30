@@ -249,6 +249,20 @@ else
     log "[info] NVRTC not found — runtime kernel compilation unavailable (embed PTX instead)"
 fi
 
+# ── Xlib detection ─────────────────────────────────────────
+# Programs that open a real GUI window bind libX11 directly (& `X11` @ X…,
+# no runtime.c bridge — e.g. packages/yoloe's window preview). Drop the
+# sentinel the nurlc FFI-lib check looks for; nurl.sh auto-links -lX11 only
+# when an `@XOpenDisplay` reference appears AND libX11 probes link-able, so a
+# headless/server build never grows an X dependency.
+if pkg-config --exists x11 2>/dev/null || [ -e /usr/lib/x86_64-linux-gnu/libX11.so ] || ldconfig -p 2>/dev/null | grep -q 'libX11\.so '; then
+    echo 1 > stdlib/runtime.X11
+    log "[info] libX11 detected — GUI window FFI enabled"
+else
+    rm -f stdlib/runtime.X11
+    log "[info] libX11 not found — GUI window display unavailable (terminal preview still works)"
+fi
+
 # ── Build stages ─────────────────────────────────────────────
 # `-flto` makes runtime.o emit LLVM bitcode so vec/string/io FFI calls
 # inline across the runtime ↔ user-code boundary at link time. The
