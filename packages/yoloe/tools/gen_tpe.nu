@@ -63,7 +63,7 @@ $ `../src/bpe.nu`
     : Tokenizer tk ( tokenizer_load ( string_data mp ) )
     ? < . tk sot 0 { ( p `failed to load merges (` ) ( p ( string_data mp ) ) ( p `)\n` ) ^ 1 } {}
 
-    : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) }
+    : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
     ?? ( read_file_bytes ( string_data modp ) ) { T mb → = g ( onnx_parse mb ) F _ → { ( p `model read fail\n` ) ^ 1 } }
 
     : ( Vec String ) names ( read_lines ( string_data np ) )

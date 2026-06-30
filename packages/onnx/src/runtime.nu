@@ -58,7 +58,7 @@ $ `ops.nu`
     : Kernels ks ( ops_compile g )
     = . e ks ks
     = . e vals ( vec_new [RTensor] )
-    = . e graph @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) }
+    = . e graph @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
     = . e ok & ( gpu_ok g ) . ks ok
     = . e owned ( vec_new [i] )
     ^ e
@@ -215,6 +215,35 @@ $ `ops.nu`
     ? > ( vec_len [String] . n inputs ) 2 { : RTensor B ( __in e n 2 ) = bd . B dptr = hasB 1 } {}
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape4 1 Cout OH OW ) )
     ( op_conv . e g . e ks . X dptr . W dptr bd yd Cin H Wd Cout kh kw OH OW ph pw sh sw hasB )
+}
+
+// Transposed convolution (ConvTranspose). Weight is [Cin, Cout, kh, kw].
+// Output size per ONNX: O = stride·(I−1) + output_padding + (k−1)·dil+1
+//   − pad_begin − pad_end. The seg Proto upsample is k2/s2/p0 → O = 2·I.
+@ rt_convtranspose *Engine e ONode n → v {
+    : RTensor X ( __in e n 0 )
+    : RTensor W ( __in e n 1 )
+    : i Cin ( rt_dim X 1 )
+    : i H ( rt_dim X 2 )
+    : i Wd ( rt_dim X 3 )
+    : i Cout ( rt_dim W 1 )
+    : i kh ( rt_dim W 2 )
+    : i kw ( rt_dim W 3 )
+    : i sh ( node_attr_int_at n `strides` 0 1 )
+    : i sw ( node_attr_int_at n `strides` 1 1 )
+    : i phb ( node_attr_int_at n `pads` 0 0 )
+    : i pwb ( node_attr_int_at n `pads` 1 0 )
+    : i phe ( node_attr_int_at n `pads` 2 0 )
+    : i pwe ( node_attr_int_at n `pads` 3 0 )
+    : i oph ( node_attr_int_at n `output_padding` 0 0 )
+    : i opw ( node_attr_int_at n `output_padding` 1 0 )
+    : i OH - - + + * sh - H 1 oph kh phb phe
+    : i OW - - + + * sw - Wd 1 opw kw pwb pwe
+    : ~ i bd 0
+    : ~ i hasB 0
+    ? > ( vec_len [String] . n inputs ) 2 { : RTensor B ( __in e n 2 ) = bd . B dptr = hasB 1 } {}
+    : i yd ( rt_alloc_out e ( __out_name n ) ( __shape4 1 Cout OH OW ) )
+    ( op_convtranspose . e g . e ks . X dptr . W dptr bd yd Cin H Wd Cout kh kw OH OW phb pwb sh sw hasB )
 }
 
 @ rt_maxpool *Engine e ONode n → v {
@@ -690,6 +719,7 @@ $ `ops.nu`
                 ? ( streq2 op `Gemm` ) { ( rt_gemm e nd ) }
                 ? ( streq2 op `Relu` ) { ( rt_relu e nd ) }
                 ? ( streq2 op `Conv` ) { ( rt_conv e nd ) }
+                ? ( streq2 op `ConvTranspose` ) { ( rt_convtranspose e nd ) }
                 ? ( streq2 op `MaxPool` ) { ( rt_maxpool e nd ) }
                 ? ( streq2 op `BatchNormalization` ) { ( rt_batchnorm e nd ) }
                 ? ( streq2 op `LeakyRelu` ) { ( rt_leakyrelu e nd ) }
@@ -741,6 +771,16 @@ $ `ops.nu`
     : GpuBuffer b @ GpuBuffer { . t dptr * n 4 }
     ( gpu_download host b )
     ^ host
+}
+
+// The model's SECOND output (segmentation proto) after a run — valid until
+// the next rt_reset. nelem 0 if the model has no second output. The value
+// map still holds it because reset only happens at the start of a run.
+@ rt_output1 *Engine e → RTensor {
+    : s nm ( string_data . . e graph output1_name )
+    ? == ( nurl_str_len nm ) 0 { ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 } } {}
+    : i oi ( rt_find e nm )
+    ? < oi 0 { ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 } } { ^ ( rt_at e oi ) }
 }
 
 @ rt_close *Engine e → v {

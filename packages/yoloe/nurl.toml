@@ -1,8 +1,8 @@
 [package]
 name = "yoloe"
-version = "0.1.0"
-description = "Promptable, open-vocabulary object detection from pure NURL on the GPU — a NURL port of YOLOE (THU-MIG, 'Real-Time Seeing Anything', ICCV 2025). You name the classes you want ('dog', 'bicycle', 'a person on a bike') and the model finds them, without a fixed label set. The detector runs on the GPU through the onnx package (every layer a CUDA-C kernel compiled at runtime via NVRTC — no external inference engine); promptability comes from YOLOE's region-text contrastive head, which scores each region's visual embedding against the text embeddings of the prompt words. Work in progress (see README): the model export + ONNX op inventory + onnxruntime reference are in place; the YOLOv8/YOLOE op set (SiLU/Concat/Split/Resize/Softmax/Transpose + DFL box decode), the detector, and the contrastive/text-embedding promptable head are the roadmap. Requires the NVIDIA driver + NVRTC (via the gpu package); a GPU-less host is unaffected."
+version = "0.2.0"
+description = "Promptable, open-vocabulary object detection AND instance segmentation from pure NURL on the GPU — a NURL port of YOLOE (THU-MIG, 'Real-Time Seeing Anything', ICCV 2025), including live masking straight off a webcam. You name the classes you want ('dog', 'bicycle', 'a person on a bike') and the model finds them — drawing both boxes and per-object segmentation masks — without a fixed label set. The whole network runs on the GPU through the onnx package (every layer a CUDA-C kernel compiled at runtime via NVRTC — no external inference engine), including the YOLOE-seg mask-prototype branch (ConvTranspose 2× upsample) and the mask decode (coefficients · prototypes → threshold → overlay), all verified numerically against onnxruntime (proto max abs err ~6e-5). Promptability comes from YOLOE's region-text contrastive head, which scores each region's visual embedding against the text embeddings of the prompt words, with the MobileCLIP text path also in pure NURL. The webcam feed is captured in pure NURL via Video4Linux2 (open/ioctl/mmap, YUYV→RGB) — no ffmpeg, no OpenCV. Requires the NVIDIA driver + NVRTC (via the gpu package); a GPU-less host is unaffected."
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-onnx = { path = "../onnx", version = "0.3.0" }
+onnx = { path = "../onnx", version = "0.4.0" }

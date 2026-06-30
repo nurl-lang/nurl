@@ -51,7 +51,7 @@ $ `runtime.nu`
 
     // parse model
     : ~ b have_model F
-    : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) }
+    : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
     ?? ( read_file_bytes ( string_data model_path ) ) {
         T mb → { = g ( onnx_parse mb ) = have_model T } F _ → {}
     }

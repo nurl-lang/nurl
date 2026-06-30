@@ -8,18 +8,22 @@ fixed label set. The detector runs on the GPU through
 via NVRTC — no external inference engine), and promptability comes from
 YOLOE's **region-text contrastive head**.
 
-> **Status: M4 done — runtime-promptable.** The full YOLOE network runs on
-> the GPU in pure NURL and matches onnxruntime (M2). The detector decodes,
-> NMS-es, and draws boxes (M3). And the **prompt vocabulary is now a runtime
-> input** (M4): an un-fused export takes the image *and* the text embeddings
-> `tpe [1,K,512]`, so you swap a small embeddings file to detect a different
-> set of objects with the same model — no re-export. The promptable forward
-> matches onnxruntime to ~0.02. And the **MobileCLIP text path is now pure
-> NURL** (M5): the text encoder is bit-exact vs onnxruntime and the CLIP BPE
-> tokenizer (`src/bpe.nu`) is byte-identical to open_clip — so prompt-words →
-> embeddings needs no Python.
+> **Status: M6 done — instance segmentation, live from a webcam.** The full
+> YOLOE network runs on the GPU in pure NURL and matches onnxruntime (M2).
+> The detector decodes, NMS-es, and draws boxes (M3). The **prompt vocabulary
+> is a runtime input** (M4) and the **MobileCLIP text path is pure NURL** (M5,
+> bit-exact). And now **instance masks** (M6): the segmentation
+> mask-prototype branch (`ConvTranspose` 2× upsample) runs on the GPU — the
+> proto tensor matches onnxruntime to **max abs err ~6e-5** — and the mask
+> decode (coefficients · prototypes → threshold → crop → bilinear overlay)
+> paints each object's silhouette. The frames can come **straight off a
+> webcam**, captured in pure NURL via Video4Linux2 (`open`/`ioctl`/`mmap`,
+> YUYV→RGB) — no ffmpeg, no OpenCV.
 >
-> ![dog + bicycle + truck detected](docs/demo.png)
+> Instance segmentation on the bus photo (input → masks), pure NURL on the GPU:
+> ![segmentation](docs/demo_seg.png)
+>
+> Boxes only: ![dog + bicycle + truck detected](docs/demo.png)
 >
 > Same model, prompts supplied at runtime (`skateboard frisbee … tree wheel
 > … dog bicycle`): ![runtime-prompted](docs/demo_promptable.png)
@@ -37,6 +41,37 @@ prompt words — both produced by `tools/gen_tpe.py "dog,bicycle,tree,…"`.
 Swap them (no re-export) to detect different objects. The model has two
 inputs (`images`, `tpe`); K is fixed at export but the *meaning* of each
 slot is set by the embeddings.
+
+## Instance segmentation
+
+```
+yoloe-seg <model.onnx> <classes.txt> <image.ppm> [out.ppm]
+```
+
+`src/seg.nu` adds per-object **masks** on top of the boxes. The exported
+YOLOE-seg model (`tools/export.py`) has two outputs: `output0`
+`[1, 4+nc+32, 8400]` (boxes + class scores + 32 mask coefficients) and
+`output1` `[1, 32, 160, 160]` (the mask prototypes). For each surviving
+detection the prototypes are combined by its coefficients, thresholded
+(`sigmoid > 0.5`), cropped to the box, bilinearly upsampled, and blended as a
+translucent colour — exactly `ops.process_mask(..., upsample=True)` in the
+reference. The proto branch (a `ConvTranspose` 2× upsample, added to
+`packages/onnx`) is verified element-wise against onnxruntime
+(`tests/seg_fwd.nu`: max abs err ~6e-5 over all 819 200 proto floats).
+
+## Live segmentation from a webcam
+
+```
+yoloe-segcam <model.onnx> <classes.txt> <out_dir> [nframes] [device]
+```
+
+`src/segcam.nu` captures frames straight off a V4L2 webcam — **in pure
+NURL** (`src/v4l2.nu`: `open`/`ioctl`/`mmap` on the kernel's video ABI, YUYV
+→ RGB with the BT.601 integer transform, memory-mapped streaming buffers —
+no ffmpeg, no OpenCV) — runs the seg network on each, and writes
+`<out_dir>/frameNNNNN.ppm` with the masks painted on. One GPU engine and one
+camera stream are reused across all frames. Reassemble to a clip with e.g.
+`ffmpeg -framerate 10 -i out/frame%05d.ppm seg.mp4`.
 
 ## Usage
 
@@ -172,6 +207,23 @@ prompts: person dog cat car bicycle truck backpack bottle chair bird
   binary — tokenize (`src/bpe.nu`) then encode (the text-encoder ONNX via the
   runtime) — no Python. It matches PyTorch MobileCLIP to ~5e-6 across multiple
   prompts. `tools/gen_tpe.py` (Python MobileCLIP) remains as a cross-check.
+
+- **M6 — instance segmentation + webcam** ✅ — per-object masks, live.
+  - **Proto branch** (done): the YOLOE-seg mask-prototype head needs a
+    `ConvTranspose` (2× upsample, weight `[Cin,Cout,kh,kw]`), added to
+    `packages/onnx` as a CUDA-C kernel + the runtime now exposes a model's
+    second output (`rt_output1`). `output1` `[1,32,160,160]` matches
+    onnxruntime to **max abs err ~6e-5** over all 819 200 floats
+    (`tests/seg_fwd.nu`).
+  - **Mask decode** (done): `src/mask.nu` — coefficients · prototypes →
+    threshold → crop → bilinear overlay (`ops.process_mask` equivalent).
+    `src/seg.nu` is the still-image CLI; detections + masks match the
+    onnxruntime reference (`tools/gen_seg_ref.py`).
+  - **Webcam** (done): `src/v4l2.nu` captures frames from `/dev/videoN` in
+    pure NURL (Video4Linux2 `open`/`ioctl`/`mmap`, YUYV→RGB, mmap streaming
+    buffers — no ffmpeg/OpenCV). `src/segcam.nu` ties it together: live
+    instance segmentation off the camera, one GPU engine + camera stream
+    reused across frames.
 
 ## Reproducing the reference (`tools/`)
 

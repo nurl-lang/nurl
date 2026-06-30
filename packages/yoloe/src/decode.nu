@@ -9,8 +9,10 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 
-// A detection in letterboxed-pixel centre/size coordinates.
-: Detection { i cls  f score  f cx  f cy  f w  f h }
+// A detection in letterboxed-pixel centre/size coordinates. `ai` is the
+// anchor index it came from — needed to read the 32 mask coefficients
+// (output0 channels 4+nc..4+nc+nm at that anchor) for segmentation.
+: Detection { i cls  f score  f cx  f cy  f w  f h  i ai }
 
 // value at (channel, anchor) for a [1, C, na] tensor flattened row-major.
 @ __at *u o i na i ch i a → f { ^ ( nurl_peek_f32 o + * ch na a ) }
@@ -35,7 +37,7 @@ $ `stdlib/core/string.nu`
             : f cy ( __at out na 1 a )
             : f w ( __at out na 2 a )
             : f h ( __at out na 3 a )
-            ( vec_push [Detection] dets @ Detection { bi best cx cy w h } )
+            ( vec_push [Detection] dets @ Detection { bi best cx cy w h a } )
         } {}
         = a + a 1
     }
@@ -83,7 +85,7 @@ $ `stdlib/core/string.nu`
         }
         ? < best 0 { = picked n } {
             ( vec_set [i] used best 1 )
-            : Detection bd ?? ( vec_get [Detection] dets best ) { T d → d F _ → @ Detection { 0 0.0 0.0 0.0 0.0 0.0 } }
+            : Detection bd ?? ( vec_get [Detection] dets best ) { T d → d F _ → @ Detection { 0 0.0 0.0 0.0 0.0 0.0 0 } }
             ( vec_push [Detection] keep bd )
             : ~ i m 0
             ~ < m n {
