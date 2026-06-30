@@ -51,16 +51,26 @@ The CUDA dependency lives **entirely in the `gpu` package** — a GPU-less
 host never pulls it in. This package only knows the neutral
 `gpu_open / gpu_compile / gpu_alloc / gpu_upload / gpu_launch / …` surface.
 
-## Operators (v0.1.0)
+## Operators
 
 | op | notes |
 |---|---|
-| `Gemm` | `Y = α·A·B(ᵀ) + β·C`, bias `C` broadcast; `alpha`/`beta`/`transA`/`transB` attributes |
-| `Relu` | elementwise `max(0, x)` |
+| `Gemm` | `Y = α·A·B(ᵀ) + β·C`, bias `C` broadcast; `alpha`/`beta`/`transA`/`transB` |
+| `Relu` / `LeakyRelu` | elementwise; `LeakyRelu` honours `alpha` |
+| `Conv` | NCHW, 2-D, `group=1`; `auto_pad` (SAME_UPPER/LOWER) or explicit `pads`, `strides`, optional bias |
+| `MaxPool` | NCHW, 2-D; `kernel_shape`, `strides`, `auto_pad` (−∞ padding) |
+| `BatchNormalization` | inference form, per channel, `epsilon` |
+| `Mul` / `Add` | broadcast operand (scalar, per-channel, or full); operands in either order |
 
-Tensors are float32. Enough for a multi-layer perceptron; convolutions,
-pooling, softmax, normalization, and dynamic shapes are future work — the
-executor and kernel-dispatch shape are built to extend.
+Tensors are float32, N-D (dense 2-D and NCHW 4-D). Enough to run a
+multi-layer perceptron **and a tiny-YOLO-class CNN detector** end-to-end —
+the full tiny-yolov2 forward pass matches onnxruntime to ~2e-5. Grouped/
+dilated convolutions, softmax, concat/reshape/transpose, and dynamic shapes
+are future work; the executor and kernel dispatch are built to extend.
+
+The `packages/onnx` tensor + op layer is consumed by
+[`packages/objdet`](../objdet), which adds image I/O, YOLO decoding, and NMS
+for real object detection.
 
 ## Building & running
 

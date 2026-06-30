@@ -12,9 +12,11 @@ $ `stdlib/std/floatbits.nu`
 $ `pb.nu`
 
 // ── in-memory graph ───────────────────────────────────────────────
-// Scalar attribute (ONNX AttributeType: 1=FLOAT, 2=INT). Gemm's
-// alpha/beta/transA/transB are all scalar — enough for the PoC.
-: OAttr { String name  i kind  f f  i i }
+// One attribute. Captures the value forms used by the ops we run:
+// f (FLOAT, e.g. alpha/epsilon), i (INT, e.g. group), s (STRING, e.g.
+// auto_pad), and ints (INTS, e.g. kernel_shape/strides). `kind` is unused
+// (the consumer asks by name + form via node_attr_*).
+: OAttr { String name  i kind  f f  i i  String s  ( Vec i ) ints }
 
 : ONode {
     String op_type
@@ -68,21 +70,61 @@ $ `pb.nu`
     ^ r
 }
 
+// Find the named attribute and return its OAttr (kind=-1 sentinel if absent).
+@ __find_attr ONode n s name → OAttr {
+    : ( Vec OAttr ) as . n attrs
+    : ~ i k 0
+    ~ < k ( vec_len [OAttr] as ) {
+        ?? ( vec_get [OAttr] as k ) {
+            T a → ? ( streq ( string_data . a name ) name ) { ^ a } {} F _ → {}
+        }
+        = k + k 1
+    }
+    ^ @ OAttr { ( string_new ) - 0 1 0.0 0 ( string_new ) ( vec_new [i] ) }
+}
+
+// The k-th element of an INTS attribute (dflt if attr/element absent).
+@ node_attr_int_at ONode n s name i k i dflt → i {
+    : OAttr a ( __find_attr n name )
+    ?? ( vec_get [i] . a ints k ) { T v → ^ v F _ → ^ dflt }
+}
+
+@ node_attr_ints_len ONode n s name → i {
+    : OAttr a ( __find_attr n name )
+    ^ ( vec_len [i] . a ints )
+}
+
+// A STRING attribute's value (dflt if absent/empty).
+@ node_attr_s ONode n s name s dflt → s {
+    : OAttr a ( __find_attr n name )
+    ? == ( string_len . a s ) 0 { ^ dflt } { ^ ( string_data . a s ) }
+}
+
 // ── AttributeProto ────────────────────────────────────────────────
 @ __parse_attr *PbR r → OAttr {
     : ~ String name ( string_new )
     : ~ f fv 0.0
     : ~ i iv 0
+    : ~ String sv ( string_new )
+    : ( Vec i ) ints ( vec_new [i] )
     ~ ( pb_more r ) {
         : i tag ( pb_tag r )
         : i fld ( pb_field tag )
         : i wt ( pb_wire tag )
-        ? == fld 1 { = name ( pb_string r ) }             // name
+        ? == fld 1 { = name ( pb_string r ) }                 // name
         ? == fld 2 { = fv # f ( bits_to_f32 ( pb_i32 r ) ) }  // f (float, wire 5)
-        ? == fld 3 { = iv ( pb_varint r ) }               // i (int, varint)
+        ? == fld 3 { = iv ( pb_varint r ) }                   // i (int, varint)
+        ? == fld 4 { = sv ( pb_string r ) }                   // s (string/bytes)
+        ? == fld 8 {                                          // ints: packed or single
+            ? == wt 2 {
+                : *PbR is ( pb_submsg r )
+                ~ ( pb_more is ) { ( vec_push [i] ints ( pb_varint is ) ) }
+                ( pb_free is )
+            } { ( vec_push [i] ints ( pb_varint r ) ) }
+        }
         { ( pb_skip r wt ) }
     }
-    ^ @ OAttr { name 0 fv iv }
+    ^ @ OAttr { name 0 fv iv sv ints }
 }
 
 // ── NodeProto ─────────────────────────────────────────────────────
@@ -124,7 +166,15 @@ $ `pb.nu`
         }
         ? == fld 2 { = dtype ( pb_varint r ) }         // data_type
         ? == fld 8 { = name ( pb_string r ) }          // name
-        ? == fld 9 {                                   // raw_data
+        ? == fld 4 {                                   // float_data (packed f32)
+            ? == wt 2 {
+                : i len ( pb_varint r )
+                = raw_start ( pb_pos r )
+                = raw_len len
+                ( pb_set_pos r + ( pb_pos r ) len )
+            } { ( pb_skip r wt ) }
+        }
+        ? == fld 9 {                                   // raw_data (LE f32 bytes)
             : i len ( pb_varint r )
             = raw_start ( pb_pos r )
             = raw_len len
@@ -177,7 +227,14 @@ $ `pb.nu`
         : i wt ( pb_wire tag )
         ? == fld 1 { : *PbR s ( pb_submsg r ) ( vec_push [ONode] nodes ( __parse_node s ) ) ( pb_free s ) }
         ? == fld 5 { : *PbR s ( pb_submsg r ) ( vec_push [OTensor] inits ( __parse_tensor s ) ) ( pb_free s ) }
-        ? == fld 11 { : *PbR s ( pb_submsg r ) = inp ( __parse_valueinfo_name s ) ( pb_free s ) }
+        ? == fld 11 {
+            // graph.input often also lists every initializer (older exporters).
+            // The real model input is the FIRST entry; keep it, ignore the rest.
+            : *PbR s ( pb_submsg r )
+            : String nm ( __parse_valueinfo_name s )
+            ? == ( string_len inp ) 0 { = inp nm } {}
+            ( pb_free s )
+        }
         ? == fld 12 { : *PbR s ( pb_submsg r ) = outp ( __parse_valueinfo_name s ) ( pb_free s ) }
         { ( pb_skip r wt ) }
     }

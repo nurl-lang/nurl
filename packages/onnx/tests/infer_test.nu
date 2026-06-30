@@ -68,7 +68,7 @@ $ `src/runtime.nu`
     : i in_n ( nurl_peek ncell 0 )
     : RTensor out ( rt_run e g input 1 in_n )
     : *u host ( rt_download e out )
-    : i out_n * . out rows . out cols
+    : i out_n . out nelem
     ( check == out_n 3 `output is length 3` )
 
     : *u ecell ( nurl_alloc 8 )

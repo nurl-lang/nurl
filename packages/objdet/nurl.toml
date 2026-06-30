@@ -1,0 +1,8 @@
+[package]
+name = "objdet"
+version = "0.1.0"
+description = "Object detection from pure NURL, GPU-accelerated, using any tiny-YOLOv2-style ONNX model. Reads an image or a sequence of video frames (binary PPM), runs the detector on the GPU through the onnx package (every Conv/BatchNorm/MaxPool/LeakyRelu kernel compiled to PTX at runtime via NVRTC, no external inference engine), decodes the YOLO grid into labelled boxes (anchors, sigmoid/softmax, non-max suppression), prints the detections, and writes an annotated image. Verified against onnxruntime on the ONNX model-zoo tinyyolov2-8.onnx: identical class scores and boxes (dog 0.76, car 0.76 on the classic dog photo). Pure NURL end to end — protobuf parsing, the CNN, image I/O, decoding, and drawing; the only native dependency (the CUDA driver + NVRTC) lives in the gpu package, so a GPU-less host is unaffected. ffmpeg/ImageMagick convert to/from PPM for arbitrary formats and video."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+onnx = { path = "../onnx", version = "0.2.0" }
