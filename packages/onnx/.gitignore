@@ -1,0 +1,8 @@
+# dependency symlinks created by `nurlpkg install`
+deps/
+src/deps/
+tests/deps/
+
+# compiled NURL binaries
+/src/main
+/tests/infer_test

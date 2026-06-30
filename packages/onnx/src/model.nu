@@ -41,6 +41,7 @@ $ `pb.nu`
     ( Vec OTensor ) inits
     String input_name
     String output_name
+    String output1_name
 }
 
 // String equality as a bool (nurl_str_eq returns i).
@@ -230,6 +231,7 @@ $ `pb.nu`
     : ( Vec OTensor ) inits ( vec_new [OTensor] )
     : ~ String inp ( string_new )
     : ~ String outp ( string_new )
+    : ~ String outp1 ( string_new )
     ~ ( pb_more r ) {
         : i tag ( pb_tag r )
         : i fld ( pb_field tag )
@@ -245,22 +247,23 @@ $ `pb.nu`
             ( pb_free s )
         }
         ? == fld 12 {
-            // first graph.output is the primary head (e.g. detection output0);
-            // later ones (segmentation proto) are computed but not returned here.
+            // first graph.output is the primary head (detection output0); the
+            // second is the segmentation proto (output1) — both are kept so a
+            // seg model can return its mask prototypes.
             : *PbR s ( pb_submsg r )
             : String onm ( __parse_valueinfo_name s )
-            ? == ( string_len outp ) 0 { = outp onm } {}
+            ? == ( string_len outp ) 0 { = outp onm } { ? == ( string_len outp1 ) 0 { = outp1 onm } {} }
             ( pb_free s )
         }
         { ( pb_skip r wt ) }
     }
-    ^ @ OGraph { nodes inits inp outp }
+    ^ @ OGraph { nodes inits inp outp outp1 }
 }
 
 // ── ModelProto (top level) ────────────────────────────────────────
 @ onnx_parse ( Vec u ) bytes → OGraph {
     : *PbR r ( pb_new bytes )
-    : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) }
+    : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
     ~ ( pb_more r ) {
         : i tag ( pb_tag r )
         : i fld ( pb_field tag )

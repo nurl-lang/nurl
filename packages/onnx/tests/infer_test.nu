@@ -41,7 +41,7 @@ $ `src/runtime.nu`
 
 @ main → i {
     : ~ b have_model F
-    : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) }
+    : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
     ?? ( read_file_bytes `tests/data/tiny.onnx` ) {
         T mb → { = g ( onnx_parse mb ) = have_model T } F _ → {}
     }

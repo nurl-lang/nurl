@@ -26,7 +26,7 @@ $ `deps/onnx/src/runtime.nu`
     : i ncol ?? ( vec_get [String] av 4 ) { T x → ( nurl_str_to_int ( string_data x ) ) F _ → 77 }
     : String fp ?? ( vec_get [String] av 5 ) { T x → x F _ → ( string_new ) }
 
-    : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) }
+    : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
     ?? ( read_file_bytes ( string_data mp ) ) { T mb → = g ( onnx_parse mb ) F _ → { ( nurl_print `model fail\n` ) ^ 1 } }
     ( nurl_print `nodes ` ) ( nurl_print ( nurl_str_int ( vec_len [ONode] . g nodes ) ) )
     ( nurl_print ` input=` ) ( nurl_print ( string_data . g input_name ) ) ( nurl_print `\n` )

@@ -58,6 +58,7 @@ host never pulls it in. This package only knows the neutral
 | `Gemm` | `Y = α·A·B(ᵀ) + β·C`, bias `C` broadcast; `alpha`/`beta`/`transA`/`transB` |
 | `Relu` / `LeakyRelu` | elementwise; `LeakyRelu` honours `alpha` |
 | `Conv` | NCHW, 2-D, `group=1`; `auto_pad` (SAME_UPPER/LOWER) or explicit `pads`, `strides`, optional bias |
+| `ConvTranspose` | NCHW, 2-D, `group=1`; weight `[Cin,Cout,kh,kw]`, `strides`/`pads`/`output_padding`, optional bias (2× mask-proto upsample) |
 | `MaxPool` | NCHW, 2-D; `kernel_shape`, `strides`, `auto_pad` or explicit `pads` (−∞ padding) |
 | `BatchNormalization` | inference form, per channel, `epsilon` |
 | `Mul` / `Add` / `Sub` / `Div` | broadcast operand (scalar, per-channel, per-inner, or full); Mul/Add either order |
@@ -69,8 +70,10 @@ host never pulls it in. This package only knows the neutral
 
 Initializers may be `FLOAT` (GPU weights) or `INT64` (host-side shape /
 size / anchor tensors). The op set is enough to run a full **YOLOv8 /
-YOLOE** backbone, neck, and anchor-free DFL detection head — verified
-end-to-end against onnxruntime (see `packages/yoloe`).
+YOLOE** backbone, neck, anchor-free DFL detection head, **and the
+segmentation mask-prototype branch** (`ConvTranspose` upsample) — verified
+end-to-end against onnxruntime (see `packages/yoloe`). A model's second
+graph output (e.g. the seg proto tensor) is reachable via `rt_output1`.
 
 Tensors are float32, N-D (dense 2-D and NCHW 4-D). Enough to run a
 multi-layer perceptron **and a tiny-YOLO-class CNN detector** end-to-end —

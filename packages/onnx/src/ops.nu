@@ -21,7 +21,7 @@ $ `deps/gpu/src/gpu.nu`
     GpuKernel softm  GpuKernel cpyax
     GpuKernel rl2    GpuKernel clip   GpuKernel expand  GpuKernel slice
     GpuKernel lnorm  GpuKernel erf    GpuKernel gather  GpuKernel bmm  GpuKernel amax
-    GpuKernel eos
+    GpuKernel eos    GpuKernel convt
     b ok
 }
 
@@ -77,6 +77,43 @@ $ `deps/gpu/src/gpu.nu`
             }
         }
         Y[(oc*OH + oh)*OW + ow] = acc;
+    }`
+}
+
+// 2-D transposed convolution (a.k.a. deconv), NCHW, batch 1, group 1. Used
+// by the YOLOE segmentation Proto module to 2× upsample the mask prototypes
+// (256ch, 2×2 kernel, stride 2: 80²→160²). The PyTorch weight layout for
+// ConvTranspose2d is [Cin, Cout, kh, kw] (note: Cin first, unlike Conv).
+// Gather form, one thread per output element: Y[oc,oy,ox] = bias +
+// Σ_{ic,ky,kx} X[ic,iy,ix]·W[ic,oc,ky,kx] where oy = iy·sh − ph + ky (so
+// iy = (oy + ph − ky)/sh, taken only when it divides evenly and is in range).
+@ __k_convt → s {
+    ^ `extern "C" __global__ void convtranspose2d(
+        const float* X, const float* Wt, const float* B, float* Y,
+        int Cin, int H, int W, int Cout, int kh, int kw,
+        int OH, int OW, int ph, int pw, int sh, int sw, int hasB) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        int total = Cout*OH*OW;
+        if (idx >= total) return;
+        int ox = idx % OW, oy = (idx / OW) % OH, oc = idx / (OW*OH);
+        float acc = hasB ? B[oc] : 0.f;
+        for (int ic = 0; ic < Cin; ++ic) {
+            const float* xp = X + ic*H*W;
+            for (int ky = 0; ky < kh; ++ky) {
+                int ty = oy + ph - ky;
+                if (ty % sh != 0) continue;
+                int iy = ty / sh;
+                if (iy < 0 || iy >= H) continue;
+                for (int kx = 0; kx < kw; ++kx) {
+                    int tx = ox + pw - kx;
+                    if (tx % sw != 0) continue;
+                    int ix = tx / sw;
+                    if (ix < 0 || ix >= W) continue;
+                    acc += xp[iy*W + ix] * Wt[(((ic*Cout)+oc)*kh + ky)*kw + kx];
+                }
+            }
+        }
+        Y[(oc*OH + oy)*OW + ox] = acc;
     }`
 }
 
@@ -351,13 +388,14 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel kbm ( gpu_compile g ( __k_bmm ) `bmm` )
     : GpuKernel kam ( gpu_compile g ( __k_amax ) `argmaxk` )
     : GpuKernel keo ( gpu_compile g ( __k_eosgather ) `eos_gather` )
+    : GpuKernel kct ( gpu_compile g ( __k_convt ) `convtranspose2d` )
     : b ok1 & & & ( gpu_kernel_ok kg ) ( gpu_kernel_ok kr ) & ( gpu_kernel_ok kc ) ( gpu_kernel_ok kp )
             & & ( gpu_kernel_ok kb ) ( gpu_kernel_ok kl ) ( gpu_kernel_ok ke )
     : b ok2 & & ( gpu_kernel_ok ksg ) ( gpu_kernel_ok krz )
             & & ( gpu_kernel_ok kpm ) ( gpu_kernel_ok ksm ) ( gpu_kernel_ok kcp )
     : b ok3 & & & ( gpu_kernel_ok krl ) ( gpu_kernel_ok kcl ) ( gpu_kernel_ok kex ) ( gpu_kernel_ok ksl )
-    : b ok4 & & & & & ( gpu_kernel_ok kln ) ( gpu_kernel_ok ker ) ( gpu_kernel_ok kga ) ( gpu_kernel_ok kbm ) ( gpu_kernel_ok kam ) ( gpu_kernel_ok keo )
-    ^ @ Kernels { kg kr kc kp kb kl ke ksg krz kpm ksm kcp krl kcl kex ksl kln ker kga kbm kam keo & & & ok1 ok2 ok3 ok4 }
+    : b ok4 & & & & & & ( gpu_kernel_ok kln ) ( gpu_kernel_ok ker ) ( gpu_kernel_ok kga ) ( gpu_kernel_ok kbm ) ( gpu_kernel_ok kam ) ( gpu_kernel_ok keo ) ( gpu_kernel_ok kct )
+    ^ @ Kernels { kg kr kc kp kb kl ke ksg krz kpm ksm kcp krl kcl kex ksl kln ker kga kbm kam keo kct & & & ok1 ok2 ok3 ok4 }
 }
 
 @ ops_free Kernels ks → v {
@@ -370,6 +408,7 @@ $ `deps/gpu/src/gpu.nu`
     ( gpu_kernel_free . ks slice )
     ( gpu_kernel_free . ks lnorm ) ( gpu_kernel_free . ks erf ) ( gpu_kernel_free . ks gather )
     ( gpu_kernel_free . ks bmm ) ( gpu_kernel_free . ks amax ) ( gpu_kernel_free . ks eos )
+    ( gpu_kernel_free . ks convt )
 }
 
 @ op_eos_gather Gpu g Kernels ks i datad i tokd i yd i B i L i D → i {
@@ -482,6 +521,20 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 sh ) ) ( vec_push [i] a ( gpu_arg_i32 sw ) ) ( vec_push [i] a ( gpu_arg_i32 hasB ) )
     : i total * * Cout OH OW
     ( gpu_launch . ks conv ( gpu_grid total 256 ) 256 a )
+    ( vec_free [i] a ) ^ yd
+}
+
+@ op_convtranspose Gpu g Kernels ks i xd i wd i bd i yd i Cin i H i W i Cout i kh i kw i OH i OW i ph i pw i sh i sw i hasB → i {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 xd ) ) ( vec_push [i] a ( gpu_arg_i64 wd ) )
+    ( vec_push [i] a ( gpu_arg_i64 bd ) ) ( vec_push [i] a ( gpu_arg_i64 yd ) )
+    ( vec_push [i] a ( gpu_arg_i32 Cin ) ) ( vec_push [i] a ( gpu_arg_i32 H ) ) ( vec_push [i] a ( gpu_arg_i32 W ) )
+    ( vec_push [i] a ( gpu_arg_i32 Cout ) ) ( vec_push [i] a ( gpu_arg_i32 kh ) ) ( vec_push [i] a ( gpu_arg_i32 kw ) )
+    ( vec_push [i] a ( gpu_arg_i32 OH ) ) ( vec_push [i] a ( gpu_arg_i32 OW ) )
+    ( vec_push [i] a ( gpu_arg_i32 ph ) ) ( vec_push [i] a ( gpu_arg_i32 pw ) )
+    ( vec_push [i] a ( gpu_arg_i32 sh ) ) ( vec_push [i] a ( gpu_arg_i32 sw ) ) ( vec_push [i] a ( gpu_arg_i32 hasB ) )
+    : i total * * Cout OH OW
+    ( gpu_launch . ks convt ( gpu_grid total 256 ) 256 a )
     ( vec_free [i] a ) ^ yd
 }
 

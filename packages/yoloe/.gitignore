@@ -1,0 +1,19 @@
+# dependency symlinks created by `nurlpkg install`
+deps/
+src/deps/
+tests/deps/
+tools/deps/
+
+# compiled NURL binaries (same name as the .nu, no extension)
+/src/main
+/src/prompt
+/src/seg
+/src/segcam
+/tests/fwd
+/tests/fwd2
+/tests/text_fwd
+/tests/seg_fwd
+/tests/camtest
+/tools/gen_tpe
+/tools/gen_tokens
+/tools/tokenize_cli

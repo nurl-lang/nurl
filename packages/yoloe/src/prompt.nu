@@ -79,7 +79,7 @@ $ `decode.nu`
     ? != / ( nurl_peek tc 0 ) 512 nc { ( p `tpe size mismatch (expected ` ) ( pn * nc 512 ) ( p ` floats)\n` ) ^ 1 } {}
 
     : ~ b have F
-    : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) }
+    : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
     ?? ( read_file_bytes ( string_data mp ) ) { T mb → { = g ( onnx_parse mb ) = have T } F _ → {} }
     ? ! have { ( p `cannot read model\n` ) ^ 1 } {}
 
