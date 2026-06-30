@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { renderMarkdown } from "./src/markdown.ts";
-import { findReadmeInTar } from "./src/readme.ts";
+import { findReadmeInTar, normalizeRelPath } from "./src/readme.ts";
 
 let pass = 0, fail = 0;
 function ok(cond: boolean, msg: string) {
@@ -34,6 +34,26 @@ has(renderMarkdown("see [docs](https://x.io)"), `<a href="https://x.io" rel="noo
 // code span content must not be re-processed as emphasis
 has(renderMarkdown("`a*b*c`"), "<code>a*b*c</code>", "no emphasis inside code");
 absent(renderMarkdown("`a*b*c`"), "<em>", "no <em> inside code span");
+
+// ── images ────────────────────────────────────────────────────────────
+const idResolve = (u: string) =>
+  /^[a-z]+:/i.test(u) || u.startsWith("/") || u.startsWith("#") ? u : "/files/yoloe/0.1.0/" + u;
+has(renderMarkdown("![dog](docs/demo.png)"), `<img src="docs/demo.png" alt="dog" loading="lazy" />`, "image renders as <img>");
+has(renderMarkdown("![dog](docs/demo.png)", idResolve), `<img src="/files/yoloe/0.1.0/docs/demo.png"`, "relative image src rewritten");
+has(renderMarkdown("![x](https://e.org/a.png)", idResolve), `src="https://e.org/a.png"`, "absolute image src untouched");
+has(renderMarkdown("![a](x.png) then [b](https://y.io)"), `<img src="x.png"`, "image beside link: image ok");
+has(renderMarkdown("![a](x.png) then [b](https://y.io)"), `<a href="https://y.io"`, "image beside link: link ok");
+absent(renderMarkdown("![x](javascript:alert(1))"), "<img", "javascript: image rejected");
+absent(renderMarkdown("![x](javascript:alert(1))"), 'src="javascript', "javascript: not emitted as an image src");
+// underscores in a filename must not be italicised
+has(renderMarkdown("![p](docs/demo_promptable.png)"), `src="docs/demo_promptable.png"`, "underscores in image path survive");
+
+// ── relative-path normalisation (asset route safety) ──────────────────
+ok(normalizeRelPath("docs/demo.png") === "docs/demo.png", "normalize keeps clean path");
+ok(normalizeRelPath("./docs/x.png") === "docs/x.png", "normalize strips leading ./");
+ok(normalizeRelPath("../secret") === null, "normalize rejects ..");
+ok(normalizeRelPath("a/../../b") === null, "normalize rejects embedded ..");
+ok(normalizeRelPath("/etc/passwd") === null, "normalize rejects absolute");
 
 // ── GFM table (with escaped pipes, like nq's README) ──────────────────
 const tbl = renderMarkdown("| A | B |\n| - | - |\n| 1 | x \\| y |");

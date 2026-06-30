@@ -35,8 +35,15 @@ function safeUrl(url: string): string | null {
 // used as a collision-free placeholder for already-rendered code spans.
 const SENTINEL = String.fromCharCode(0xe000);
 
+// A URL rewriter for relative targets (e.g. a README's `docs/demo.png`):
+// given a validated target, returns the URL to actually use. Default:
+// identity. The package page passes one that points relative paths at the
+// tarball-asset route so images and intra-package links resolve.
+export type UrlResolver = (url: string) => string;
+const identity: UrlResolver = (u) => u;
+
 // Inline formatting for a single run of text.
-function inline(raw: string): string {
+function inline(raw: string, resolve: UrlResolver = identity): string {
   let s = esc(raw);
 
   // Pull code spans out first so their contents are never re-processed by
@@ -52,10 +59,18 @@ function inline(raw: string): string {
   s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
   s = s.replace(/(^|[^_\w])_([^_\n]+)_/g, "$1<em>$2</em>");
 
+  // Images first (`![alt](src)`) so the link pass below doesn't swallow the
+  // inner `[alt](src)`. Relative `src` is resolved (e.g. to the tarball-asset
+  // route); the scheme allowlist still rejects `javascript:` / `data:`.
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt: string, url: string) => {
+    const safe = safeUrl(url);
+    return safe ? `<img src="${resolve(safe)}" alt="${alt}" loading="lazy" />` : m;
+  });
+
   s = s.replace(/\[([^\]]*)\]\(([^)\s]+)\)/g, (_m, text: string, url: string) => {
     const safe = safeUrl(url);
     return safe
-      ? `<a href="${safe}" rel="noopener nofollow">${text}</a>`
+      ? `<a href="${resolve(safe)}" rel="noopener nofollow">${text}</a>`
       : `[${text}](${url})`;
   });
 
@@ -82,14 +97,14 @@ function isDelimRow(line: string): boolean {
   return t.split(/(?<!\\)\|/).every((c) => /^\s*:?-+:?\s*$/.test(c));
 }
 
-function renderTable(lines: string[], start: number, out: string[]): number {
+function renderTable(lines: string[], start: number, out: string[], resolve: UrlResolver = identity): number {
   out.push("<table>\n<thead>\n<tr>");
-  for (const c of splitRow(lines[start])) out.push(`<th>${inline(c)}</th>`);
+  for (const c of splitRow(lines[start])) out.push(`<th>${inline(c, resolve)}</th>`);
   out.push("</tr>\n</thead>\n<tbody>\n");
   let i = start + 2; // skip header + delimiter row
   while (i < lines.length && lines[i].includes("|") && lines[i].trim() !== "") {
     out.push("<tr>");
-    for (const c of splitRow(lines[i])) out.push(`<td>${inline(c)}</td>`);
+    for (const c of splitRow(lines[i])) out.push(`<td>${inline(c, resolve)}</td>`);
     out.push("</tr>\n");
     i++;
   }
@@ -101,7 +116,7 @@ function renderTable(lines: string[], start: number, out: string[]): number {
 
 type Block = "p" | "ul" | "ol" | "bq" | null;
 
-export function renderMarkdown(src: string): string {
+export function renderMarkdown(src: string, resolve: UrlResolver = identity): string {
   const lines = src.replace(/\r\n?/g, "\n").split("\n");
   const out: string[] = [];
   let open: Block = null;
@@ -138,33 +153,33 @@ export function renderMarkdown(src: string): string {
 
     // ATX heading.
     const h = line.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/);
-    if (h) { close(); const n = h[1].length; out.push(`<h${n}>${inline(h[2])}</h${n}>\n`); continue; }
+    if (h) { close(); const n = h[1].length; out.push(`<h${n}>${inline(h[2], resolve)}</h${n}>\n`); continue; }
 
     // Horizontal rule.
     if (/^ {0,3}([-*_])\s*(\1\s*){2,}$/.test(line)) { close(); out.push("<hr />\n"); continue; }
 
     // Blockquote.
     const bq = line.match(/^>\s?(.*)$/);
-    if (bq) { ensure("bq", "<blockquote>"); out.push(inline(bq[1]) + " "); continue; }
+    if (bq) { ensure("bq", "<blockquote>"); out.push(inline(bq[1], resolve) + " "); continue; }
 
     // GFM table (current line has a pipe, next line is a delimiter row).
     if (line.includes("|") && i + 1 < lines.length && isDelimRow(lines[i + 1])) {
       close();
-      i = renderTable(lines, i, out);
+      i = renderTable(lines, i, out, resolve);
       continue;
     }
 
     // Unordered list item.
     const ul = line.match(/^\s*[-*+]\s+(.*)$/);
-    if (ul) { ensure("ul", "<ul>\n"); out.push(`<li>${inline(ul[1])}</li>\n`); continue; }
+    if (ul) { ensure("ul", "<ul>\n"); out.push(`<li>${inline(ul[1], resolve)}</li>\n`); continue; }
 
     // Ordered list item.
     const ol = line.match(/^\s*\d+\.\s+(.*)$/);
-    if (ol) { ensure("ol", "<ol>\n"); out.push(`<li>${inline(ol[1])}</li>\n`); continue; }
+    if (ol) { ensure("ol", "<ol>\n"); out.push(`<li>${inline(ol[1], resolve)}</li>\n`); continue; }
 
     // Paragraph (consecutive plain lines join with a space).
     ensure("p", "<p>");
-    out.push(inline(line.trim()) + " ");
+    out.push(inline(line.trim(), resolve) + " ");
   }
 
   close();
