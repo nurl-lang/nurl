@@ -1,0 +1,10 @@
+person
+dog
+cat
+car
+bicycle
+truck
+backpack
+bottle
+chair
+bird

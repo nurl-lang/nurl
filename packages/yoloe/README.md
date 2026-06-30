@@ -21,20 +21,30 @@ YOLOE's **region-text contrastive head**.
 ## Usage
 
 ```
-yoloe <model.onnx> <image.ppm> [out.ppm]
+yoloe <model.onnx> <classes.txt> <image.ppm> [out.ppm]
 ```
 
-Prints the labelled detections and writes an annotated PPM. Images are
-binary PPM (P6) — `convert photo.jpg photo.ppm`. The model is produced by
-`tools/export.py`; its prompt vocabulary is fixed at export time and must
-match the `class_name` list in `src/main.nu` (runtime-swappable prompts are
-M4). Build from the package root:
+`classes.txt` is the prompt vocabulary, one class per line; the detector is
+vocabulary-agnostic and infers the class count from it. The vocabulary must
+match the names the model was exported with (`tools/export.py`) — swap both
+the model and the class file to detect a **different** set of objects. On
+the dog photo, exporting with `tree wheel window … dog bicycle` and the
+matching `classes.txt` finds **dog 0.91, bicycle 0.78, tree 0.31** instead
+of the truck — open-vocabulary, by changing the prompt words.
+
+(Today the vocabulary is chosen at *export* time; M4 makes the text
+embeddings a runtime input so prompts can be swapped without re-exporting.)
+
+Images are binary PPM (P6) — `convert photo.jpg photo.ppm`. Build from the
+package root:
 
 ```
 nurlpkg install
 NURL_STDLIB=<repo> ../../nurl.sh src/main.nu
-./src/main yoloe-v8s-seg.onnx dog.ppm dog-out.ppm
+./src/main yoloe-v8s-seg.onnx classes.txt dog.ppm dog-out.ppm
 ```
+
+`example/classes.txt` holds the default vocabulary from `tools/export.py`.
 
 ## Why this is the crown jewel
 
