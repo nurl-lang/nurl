@@ -25,12 +25,14 @@ $ `pb.nu`
     ( Vec OAttr ) attrs
 }
 
-// A tensor: name, shape, element count, and host f32 data (raw 32-bit
-// patterns, 4-byte stride) — or host == 0 for graph value placeholders.
+// A tensor: name, shape, element count, ONNX data_type, and host data —
+// f32 (4-byte) for FLOAT(1) weights, or i64 (8-byte) for INT64(7) shape /
+// size / anchor tensors. host == 0 for a graph value placeholder.
 : OTensor {
     String name
     ( Vec i ) dims
     i nelem
+    i dtype       // ONNX DataType: 1=FLOAT, 7=INT64
     i host        // *u as i64 (0 = no data)
 }
 
@@ -185,12 +187,19 @@ $ `pb.nu`
     : i nelem ( __nelem dims )
     : ~ i host 0
     ? & >= raw_start 0 > raw_len 0 {
-        : *u h ( nurl_alloc * nelem 4 )
-        ( pb_set_pos r raw_start )
-        ( pb_read_f32_into r h nelem )
-        = host # i h
+        ? == dtype 7 {                          // INT64: 8-byte LE values
+            : *u h ( nurl_alloc * nelem 8 )
+            ( pb_set_pos r raw_start )
+            ( pb_read_i64_into r h nelem )
+            = host # i h
+        } {                                     // FLOAT (default): f32
+            : *u h ( nurl_alloc * nelem 4 )
+            ( pb_set_pos r raw_start )
+            ( pb_read_f32_into r h nelem )
+            = host # i h
+        }
     } {}
-    ^ @ OTensor { name dims nelem host }
+    ^ @ OTensor { name dims nelem dtype host }
 }
 
 @ __nelem ( Vec i ) dims → i {
@@ -235,7 +244,14 @@ $ `pb.nu`
             ? == ( string_len inp ) 0 { = inp nm } {}
             ( pb_free s )
         }
-        ? == fld 12 { : *PbR s ( pb_submsg r ) = outp ( __parse_valueinfo_name s ) ( pb_free s ) }
+        ? == fld 12 {
+            // first graph.output is the primary head (e.g. detection output0);
+            // later ones (segmentation proto) are computed but not returned here.
+            : *PbR s ( pb_submsg r )
+            : String onm ( __parse_valueinfo_name s )
+            ? == ( string_len outp ) 0 { = outp onm } {}
+            ( pb_free s )
+        }
         { ( pb_skip r wt ) }
     }
     ^ @ OGraph { nodes inits inp outp }

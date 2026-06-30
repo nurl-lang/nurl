@@ -153,5 +153,27 @@ $ `stdlib/std/bytes.nu`
     = . r pos + base * n 4
 }
 
+// Read `n` little-endian int64 values from the byte region at the cursor
+// into `dst` (8-byte stride). For TensorProto raw_data of an INT64 tensor
+// (shape tensors, split sizes, anchor grids). Advances the cursor by n*8.
+@ pb_read_i64_into *PbR r *u dst i n → v {
+    : ( Vec u ) buf . r buf
+    : i base . r pos
+    : ~ i k 0
+    ~ < k n {
+        : i off + base * k 8
+        : ~ i v 0
+        : ~ i b 0
+        ~ < b 8 {
+            : i byte ?? ( vec_get [u] buf + off b ) { T x → # i x F _ → 0 }
+            = v | v << byte * b 8
+            = b + b 1
+        }
+        ( nurl_poke dst k v )
+        = k + k 1
+    }
+    = . r pos + base * n 8
+}
+
 // 4-byte typed store (runtime.c accessor; runtime.o is always linked).
 & `c` @ nurl_poke_i32 *u base i idx i val → v
