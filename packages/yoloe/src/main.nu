@@ -173,6 +173,11 @@ $ `v4l2.nu`
     ? == nc 0 { ( p `no class names (empty classes.txt): ` ) ( p ( string_data np ) ) ( p `\n` ) ^ 1 } {}
     ( p `prompts: ` ) ( pn nc ) ( p ` classes\n` )
 
+    // create the output directory (and any missing parents) up front
+    ?? ( dir_create_all ( string_data od ) ) { T _ → {} F _ → {
+        ( p `cannot create output dir ` ) ( p ( string_data od ) ) ( p ` (permission?)\n` ) ^ 1
+    } }
+
     : Camera cam ( cam_open ( string_data dev ) 640 480 4 )
     ? ! ( cam_ok cam ) {
         ( p `cannot open webcam ` ) ( p ( string_data dev ) ) ( p `\n` )
