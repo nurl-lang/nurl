@@ -22,7 +22,7 @@
 // (miniflare simulates R2 + D1) — no Cloudflare account needed to test.
 
 import { renderMarkdown } from "./markdown.ts";
-import { extractReadme } from "./readme.ts";
+import { extractReadme, extractFile, normalizeRelPath } from "./readme.ts";
 
 export interface Env {
   REG_BUCKET: R2Bucket;
@@ -118,6 +118,36 @@ async function serveR2(env: Env, key: string, contentType: string): Promise<Resp
   // Tarballs are content-addressed + immutable; index is small + mutable.
   headers.set("cache-control", key.startsWith("pkgs/") ? "public, max-age=31536000, immutable" : "public, max-age=60");
   return new Response(obj.body, { headers });
+}
+
+// Image MIME types we serve from package tarballs (README assets). Limiting
+// to images keeps the asset route from doubling as a general file host.
+const ASSET_MIME: Record<string, string> = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
+  webp: "image/webp", svg: "image/svg+xml", ico: "image/x-icon",
+  bmp: "image/bmp", avif: "image/avif",
+};
+
+// GET /files/<name>/<version>/<relpath> — extract a README-referenced image
+// straight from the published tarball. Version-pinned, so immutable-cacheable.
+async function handleFile(env: Env, name: string, version: string, rel: string): Promise<Response> {
+  if (!NAME_RE.test(name) || !VERSION_RE.test(version)) return json({ error: "bad_path" }, 400);
+  const safe = normalizeRelPath(rel);
+  if (!safe) return json({ error: "bad_path" }, 400);
+  const ext = safe.includes(".") ? safe.split(".").pop()!.toLowerCase() : "";
+  const mime = ASSET_MIME[ext];
+  if (!mime) return json({ error: "unsupported_type" }, 415);
+  let data: Uint8Array | null = null;
+  try { data = await extractFile(env.REG_BUCKET, name, version, safe); }
+  catch { return json({ error: "extract_failed" }, 500); }
+  if (!data) return json({ error: "not_found" }, 404);
+  const headers = new Headers();
+  headers.set("content-type", mime);
+  headers.set("cache-control", "public, max-age=31536000, immutable");
+  headers.set("x-content-type-options", "nosniff");
+  // Neutralise any script an SVG might carry, even on direct navigation.
+  headers.set("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+  return new Response(data, { headers });
 }
 
 async function handlePublish(req: Request, env: Env): Promise<Response> {
@@ -249,7 +279,16 @@ async function handlePackageDetail(env: Env, name: string): Promise<Response> {
     try {
       const md = await extractReadme(env.REG_BUCKET, name, latest.version);
       if (md && md.length <= 512 * 1024) {
-        readmeHtml = `<div class="readme">${renderMarkdown(md)}</div>`;
+        // Point the README's relative targets (e.g. `docs/demo.png`) at the
+        // tarball-asset route so embedded images resolve; leave absolute /
+        // scheme / fragment URLs untouched.
+        const base = `/files/${name}/${latest.version}/`;
+        const resolve = (u: string): string => {
+          if (/^[a-z][a-z0-9+.-]*:/i.test(u) || u.startsWith("/") || u.startsWith("#")) return u;
+          const norm = normalizeRelPath(u);
+          return norm ? base + norm : u;
+        };
+        readmeHtml = `<div class="readme">${renderMarkdown(md, resolve)}</div>`;
       }
     } catch { /* fall through with no README */ }
   }
@@ -386,6 +425,17 @@ export default {
         const name = path.slice("/index/".length, -".json".length).toLowerCase();
         if (!NAME_RE.test(name)) return json({ error: "invalid_name" }, 400);
         return serveR2(env, `index/${name}.json`, "application/json");
+      }
+      if (path.startsWith("/files/")) {
+        // /files/<name>/<version>/<relpath> — a README image from the tarball.
+        const rest = path.slice("/files/".length);
+        const s1 = rest.indexOf("/");
+        const s2 = s1 < 0 ? -1 : rest.indexOf("/", s1 + 1);
+        if (s1 < 0 || s2 < 0) return json({ error: "bad_path" }, 400);
+        const fname = decodeURIComponent(rest.slice(0, s1)).toLowerCase();
+        const fver = decodeURIComponent(rest.slice(s1 + 1, s2));
+        const frel = decodeURIComponent(rest.slice(s2 + 1));
+        return handleFile(env, fname, fver, frel);
       }
       if (path.startsWith("/pkgs/")) {
         // pkgs/<name>/<file>.tar.gz — reject traversal.

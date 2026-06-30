@@ -25,9 +25,12 @@ function isReadmeName(path: string): boolean {
   return base === "readme.md" || base === "readme.markdown" || base === "readme";
 }
 
-// Find and decode the README in an uncompressed tar image. Returns the
-// file's text, or null if the archive has no README member.
-export function findReadmeInTar(buf: Uint8Array): string | null {
+// Walk an uncompressed tar image, returning the first regular-file member
+// whose path satisfies `match`, as a view into `buf` (no copy). null if none.
+function findInTar(
+  buf: Uint8Array,
+  match: (path: string) => boolean,
+): { path: string; data: Uint8Array } | null {
   let pos = 0;
   while (pos + BLOCK <= buf.length) {
     if (isZeroBlock(buf, pos)) break; // end-of-archive marker
@@ -38,12 +41,28 @@ export function findReadmeInTar(buf: Uint8Array): string | null {
     const typeflag = buf[pos + 156];
     const dataStart = pos + BLOCK;
     // typeflag '0' (0x30) or NUL (0) is a regular file.
-    if ((typeflag === 0x30 || typeflag === 0) && name && isReadmeName(name)) {
-      return new TextDecoder().decode(buf.subarray(dataStart, dataStart + size));
+    if ((typeflag === 0x30 || typeflag === 0) && name && match(name)) {
+      return { path: name, data: buf.subarray(dataStart, dataStart + size) };
     }
     pos = dataStart + Math.ceil(size / BLOCK) * BLOCK;
   }
   return null;
+}
+
+// Find and decode the README in an uncompressed tar image. Returns the
+// file's text, or null if the archive has no README member.
+export function findReadmeInTar(buf: Uint8Array): string | null {
+  const hit = findInTar(buf, isReadmeName);
+  return hit ? new TextDecoder().decode(hit.data) : null;
+}
+
+// Normalise a README-relative path to a tar member path: drop a leading
+// `./`, collapse repeated slashes, and reject traversal / absolute paths.
+// Returns null if the path is unsafe.
+export function normalizeRelPath(rel: string): string | null {
+  const p = rel.replace(/^\.\//, "").replace(/\/{2,}/g, "/");
+  if (p === "" || p.startsWith("/") || p.split("/").some((seg) => seg === "..")) return null;
+  return p;
 }
 
 // Fetch + gunzip + extract the README for one published version. Returns
@@ -59,4 +78,20 @@ export async function extractReadme(
   if (!obj || !obj.body) return null;
   const ab = await new Response(obj.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
   return findReadmeInTar(new Uint8Array(ab));
+}
+
+// Fetch + gunzip a published tarball and return the bytes of the member at
+// the exact relative path `rel` (e.g. `docs/demo.png`), or null if missing.
+// Used to serve README-referenced assets (images) straight from the tarball.
+export async function extractFile(
+  bucket: R2Bucket,
+  name: string,
+  version: string,
+  rel: string,
+): Promise<Uint8Array | null> {
+  const obj = await bucket.get(`pkgs/${name}/${name}-${version}.tar.gz`);
+  if (!obj || !obj.body) return null;
+  const ab = await new Response(obj.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+  const hit = findInTar(new Uint8Array(ab), (p) => p.replace(/^\.\//, "") === rel);
+  return hit ? hit.data : null;
 }
