@@ -35,29 +35,35 @@ nurlpkg install yoloe          # builds the `yoloe` command on your PATH
 yoloe                          # prints the full help
 ```
 
-The `yoloe` command has three sub-commands:
+The `yoloe` command has three flag-driven sub-commands:
 
 ```
-yoloe detect <model.onnx> <classes.txt> <image.ppm> [out.ppm]
-      draw boxes for the prompted classes
-yoloe seg    <model.onnx> <classes.txt> <image.ppm> [out.ppm]
-      boxes + a per-object segmentation mask
-yoloe cam    <model.onnx> <classes.txt> <out_dir> [nframes] [device]
-      LIVE segmentation from a webcam (default /dev/video0, 30 frames)
+yoloe detect --model M --classes C --image IMG [--out OUT]    boxes
+yoloe seg    --model M --classes C --image IMG [--out OUT]    boxes + masks
+yoloe cam    --model M --classes C [options]                 live webcam
 ```
 
-- `<model.onnx>` is a YOLOE-seg export — produce it with `tools/export.py`
-  (→ `yoloe-v8s-seg.onnx`); it isn't bundled (~45 MB).
-- `<classes.txt>` is the prompt vocabulary, **one word per line**. The
-  detector is vocabulary-agnostic and infers the class count from it; the
-  names must match what the model was exported with. Swap both the model and
-  the class file to detect a **different** set of objects — open-vocabulary.
-- Images are binary PPM (P6): `convert photo.jpg photo.ppm`.
+| flag | meaning |
+|---|---|
+| `--model <model.onnx>` | a YOLOE-seg export from `tools/export.py` (→ `yoloe-v8s-seg.onnx`); not bundled (~45 MB) |
+| `--classes <classes.txt>` | the vocabulary, **one prompt word per line** — swap it (and the model) to detect a different set of objects |
+| `--image <image.ppm>` | input for `detect`/`seg`, a binary PPM (P6): `convert photo.jpg photo.ppm` |
+| `--out <path>` | `detect`/`seg`: the annotated output image; `cam`: a directory to save frames to (created if missing) |
+| `--device <dev>` | `cam` webcam device (default `/dev/video0`) |
+| `--frames <N>` | `cam`: stop after N frames — **omit to run until Ctrl-C** |
+| `--no-show` | `cam`: don't draw to the terminal (e.g. when only `--out`-saving) |
+| `--boxes` | draw boxes only, skip the masks |
+
+**`yoloe cam` shows the segmented feed live in your terminal** — true-colour
+half-blocks, so it works in any modern terminal (and over SSH) with no X11,
+no window toolkit. With no `--frames` it streams until you press Ctrl-C; add
+`--out frames/` to also save each frame as a PPM.
 
 ```
-yoloe seg yoloe-v8s-seg.onnx example/classes.txt dog.ppm dog-out.ppm
-yoloe cam yoloe-v8s-seg.onnx example/classes.txt frames/ 60 /dev/video0
-ffmpeg -framerate 10 -i frames/frame%05d.ppm seg.mp4    # webcam → video
+yoloe seg --model yoloe-v8s-seg.onnx --classes classes.txt --image dog.ppm --out out.ppm
+yoloe cam --model yoloe-v8s-seg.onnx --classes classes.txt              # live, in the terminal
+yoloe cam --model yoloe-v8s-seg.onnx --classes classes.txt --frames 60 --out frames/
+ffmpeg -framerate 10 -i frames/frame%05d.ppm seg.mp4                    # saved frames → video
 ```
 
 `example/classes.txt` holds the default vocabulary from `tools/export.py`.
@@ -76,10 +82,14 @@ all 819 200 proto floats).
 
 ### The webcam path is pure NURL
 
-`yoloe cam` captures frames straight off a V4L2 webcam — **no ffmpeg, no
-OpenCV**. `src/v4l2.nu` does `open`/`ioctl`/`mmap` on the kernel's video ABI,
-converts YUYV → RGB with the BT.601 integer transform, and uses memory-mapped
-streaming buffers; one GPU engine and one camera stream are reused across all
+`yoloe cam` captures frames straight off a V4L2 webcam **and draws them in the
+terminal** — **no ffmpeg, no OpenCV, no X11**. `src/v4l2.nu` does
+`open`/`ioctl`/`mmap` on the kernel's video ABI, converts YUYV → RGB with the
+BT.601 integer transform, and uses memory-mapped streaming buffers;
+`src/display.nu` renders each segmented frame as 24-bit-colour half-blocks
+(`▀`, two pixels per cell), sized to the terminal via `TIOCGWINSZ` and homed
+each frame so the feed updates in place like a video. One GPU engine and one
+camera stream are reused across all
 frames. (Needs read access to the device — `ls -l /dev/video0`.)
 
 ### Runtime-promptable variant
@@ -224,10 +234,11 @@ prompts: person dog cat car bicycle truck backpack bottle chair bird
     reference (`tools/gen_seg_ref.py`).
   - **Webcam** (done): `src/v4l2.nu` captures frames from `/dev/videoN` in
     pure NURL (Video4Linux2 `open`/`ioctl`/`mmap`, YUYV→RGB, mmap streaming
-    buffers — no ffmpeg/OpenCV); `yoloe cam` ties it together into live
-    instance segmentation off the camera, one GPU engine + camera stream
-    reused across frames. `detect`/`seg`/`cam` are one unified `yoloe`
-    command (`src/main.nu`).
+    buffers — no ffmpeg/OpenCV) and `src/display.nu` draws the segmented feed
+    live in the terminal (true-colour half-blocks via `TIOCGWINSZ`, no X11);
+    `yoloe cam` ties it together (continuous until Ctrl-C, optional `--out`
+    save), one GPU engine + camera stream reused across frames. `detect` /
+    `seg` / `cam` are one flag-driven `yoloe` command (`src/main.nu`).
 
 ## Reproducing the reference (`tools/`)
 

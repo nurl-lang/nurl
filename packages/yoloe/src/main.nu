@@ -1,15 +1,15 @@
 // packages/yoloe/src/main.nu — the `yoloe` command: promptable open-vocabulary
 // object detection AND instance segmentation, pure NURL on the GPU, with a
-// live webcam mode. This is the single binary `nurlpkg install yoloe` drops on
-// your PATH; it dispatches three sub-commands:
+// live webcam mode that draws straight to the terminal. Single binary, three
+// flag-driven sub-commands (see `yoloe help`):
 //
-//   yoloe detect <model.onnx> <classes.txt> <image.ppm> [out.ppm]
-//   yoloe seg    <model.onnx> <classes.txt> <image.ppm> [out.ppm]
-//   yoloe cam    <model.onnx> <classes.txt> <out_dir> [nframes] [device]
+//   yoloe detect --model M --classes C --image IMG [--out OUT]
+//   yoloe seg    --model M --classes C --image IMG [--out OUT]
+//   yoloe cam    --model M --classes C [--device DEV] [--frames N]
+//                [--out DIR] [--no-show] [--boxes]
 //
-// `detect` draws boxes; `seg` adds a per-object segmentation mask; `cam`
-// streams frames off a V4L2 webcam (pure NURL — no ffmpeg/OpenCV) and writes
-// each segmented frame to <out_dir>/frameNNNNN.ppm. See `yoloe help`.
+// `cam` shows the segmented feed live in the terminal (truecolor half-blocks);
+// with no --frames it runs until Ctrl-C, and --out also saves the frames.
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
@@ -24,10 +24,33 @@ $ `image.nu`
 $ `decode.nu`
 $ `mask.nu`
 $ `v4l2.nu`
+$ `display.nu`
 
 @ p s m → v { ( nurl_print m ) }
 @ pf f x → v { ( nurl_print ( nurl_str_float x ) ) }
 @ pn i n → v { ( nurl_print ( nurl_str_int n ) ) }
+
+// ── flag parsing ──────────────────────────────────────────────────
+@ __arg_index ( Vec String ) av s name → i {
+    : i n ( vec_len [String] av )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] av k ) { T x → ? != 0 ( nurl_str_eq ( string_data x ) name ) { ^ k } {} F _ → {} }
+        = k + k 1
+    }
+    ^ - 0 1
+}
+@ flag_set ( Vec String ) av s name → b { ^ >= ( __arg_index av name ) 0 }
+@ flag_str ( Vec String ) av s name → String {
+    : i i ( __arg_index av name )
+    ? < i 0 { ^ ( string_new ) } {}
+    ?? ( vec_get [String] av + i 1 ) { T x → ^ x F _ → ^ ( string_new ) }
+}
+@ flag_int ( Vec String ) av s name i dflt → i {
+    : i i ( __arg_index av name )
+    ? < i 0 { ^ dflt } {}
+    ?? ( vec_get [String] av + i 1 ) { T x → ^ ( nurl_str_to_int ( string_data x ) ) F _ → ^ dflt }
+}
 
 // Read the prompt vocabulary from a text file (one class per line); the line
 // count is the class count nc. Must match the names the model was exported
@@ -137,12 +160,14 @@ $ `v4l2.nu`
 
 // ── still-image modes (detect / seg) ──────────────────────────────
 @ run_still b want_masks String mp String np String ip String op → i {
+    ? == ( string_len mp ) 0 { ( p `missing --model <model.onnx>\n` ) ^ 1 } {}
+    ? == ( string_len ip ) 0 { ( p `missing --image <image.ppm>\n` ) ^ 1 } {}
     : *b okc # *b ( nurl_alloc 8 )
     : OGraph g ( load_model ( string_data mp ) okc )
     ? == ( nurl_peek # *u okc 0 ) 0 { ( p `cannot read model: ` ) ( p ( string_data mp ) ) ( p `\n` ) ^ 1 } {}
     : ( Vec String ) names ( read_names ( string_data np ) )
     : i nc ( vec_len [String] names )
-    ? == nc 0 { ( p `no class names (empty classes.txt): ` ) ( p ( string_data np ) ) ( p `\n` ) ^ 1 } {}
+    ? == nc 0 { ( p `missing/empty --classes <classes.txt>\n` ) ^ 1 } {}
     ( p `prompts: ` ) ( pn nc ) ( p ` classes\n` )
     ?? ( ppm_read ( string_data ip ) ) {
         T im → {
@@ -163,78 +188,94 @@ $ `v4l2.nu`
     }
 }
 
-// ── webcam mode (cam) ─────────────────────────────────────────────
-@ run_cam String mp String np String od i nframes String dev → i {
+// ── webcam mode (cam): live terminal display and/or save frames ───
+@ run_cam String mp String np String dev i nframes String od b show b want_masks → i {
+    ? == ( string_len mp ) 0 { ( p `missing --model <model.onnx>\n` ) ^ 1 } {}
     : *b okc # *b ( nurl_alloc 8 )
     : OGraph g ( load_model ( string_data mp ) okc )
     ? == ( nurl_peek # *u okc 0 ) 0 { ( p `cannot read model: ` ) ( p ( string_data mp ) ) ( p `\n` ) ^ 1 } {}
     : ( Vec String ) names ( read_names ( string_data np ) )
     : i nc ( vec_len [String] names )
-    ? == nc 0 { ( p `no class names (empty classes.txt): ` ) ( p ( string_data np ) ) ( p `\n` ) ^ 1 } {}
-    ( p `prompts: ` ) ( pn nc ) ( p ` classes\n` )
-
-    // create the output directory (and any missing parents) up front
-    ?? ( dir_create_all ( string_data od ) ) { T _ → {} F _ → {
-        ( p `cannot create output dir ` ) ( p ( string_data od ) ) ( p ` (permission?)\n` ) ^ 1
-    } }
+    ? == nc 0 { ( p `missing/empty --classes <classes.txt>\n` ) ^ 1 } {}
+    : b save > ( string_len od ) 0
+    ? save { ?? ( dir_create_all ( string_data od ) ) { T _ → {} F _ → { ( p `cannot create output dir ` ) ( p ( string_data od ) ) ( p `\n` ) ^ 1 } } } {}
 
     : Camera cam ( cam_open ( string_data dev ) 640 480 4 )
     ? ! ( cam_ok cam ) {
         ( p `cannot open webcam ` ) ( p ( string_data dev ) ) ( p `\n` )
-        ( p `  is a camera plugged in? try another device (e.g. /dev/video1),\n` )
+        ( p `  is a camera plugged in? try another device (e.g. --device /dev/video1),\n` )
         ( p `  and check access:  ls -l ` ) ( p ( string_data dev ) ) ( p `\n` )
         ^ 1
     } {}
     : i cw ( cam_w cam )
     : i ch ( cam_h cam )
-    ( p `webcam ` ) ( p ( string_data dev ) ) ( p ` ` ) ( pn cw ) ( p `x` ) ( pn ch ) ( p ` -> ` ) ( p ( string_data od ) ) ( p `/frameNNNNN.ppm\n` )
 
     : *Engine e ( rt_open 0 )
     ? ! ( rt_ok e ) { ( p `GPU init / kernel compile failed\n` ) ( cam_close cam ) ^ 1 } {}
-    ( p `device: ` ) ( p ( rt_name e ) ) ( p `\n` )
+    ? ! show {
+        ( p `webcam ` ) ( p ( string_data dev ) ) ( p ` ` ) ( pn cw ) ( p `x` ) ( pn ch )
+        ( p ` on ` ) ( p ( rt_name e ) ) ( p `\n` )
+    } { ( term_enter ) }
 
     : ~ i f 0
-    ~ < f nframes {
+    : ~ i fails 0
+    : ~ b stop F
+    ~ & ! stop | < nframes 0 < f nframes {
         : ( Vec u ) rgb ( vec_new [u] )
         : ~ i z 0
         ~ < z * * cw ch 3 { ( vec_push [u] rgb 0 ) = z + z 1 }
         ? ( cam_grab cam rgb ) {
+            = fails 0
             : Image im @ Image { cw ch rgb 0 }
-            : i nd ( process_frame im g e names nc T F )
-            : String fp ( frame_path ( string_data od ) f )
-            ? ( ppm_write ( string_data fp ) im ) {
-                ( p `frame ` ) ( pn f ) ( p `: ` ) ( pn nd ) ( p ` objects -> ` ) ( p ( string_data fp ) ) ( p `\n` )
-            } { ( p `frame ` ) ( pn f ) ( p ` write failed (is ` ) ( p ( string_data od ) ) ( p ` an existing, writable dir?)\n` ) }
-        } { ( p `frame ` ) ( pn f ) ( p ` grab failed\n` ) }
+            : i nd ( process_frame im g e names nc want_masks F )
+            ? show {
+                ( img_show im )
+                ( p `frame ` ) ( pn f ) ( p ` · ` ) ( pn nd ) ( p ` objects · ` ) ( p ( string_data dev ) ) ( p ` · Ctrl-C to quit    \n` )
+            } {}
+            ? save {
+                : String fp ( frame_path ( string_data od ) f )
+                ? ( ppm_write ( string_data fp ) im ) {
+                    ? ! show { ( p `frame ` ) ( pn f ) ( p `: ` ) ( pn nd ) ( p ` objects -> ` ) ( p ( string_data fp ) ) ( p `\n` ) } {}
+                } { ( p `frame ` ) ( pn f ) ( p ` write failed\n` ) }
+            } {}
+        } {
+            = fails + fails 1
+            ? > fails 30 { ( p `webcam stopped delivering frames\n` ) = stop T } {}
+        }
         = f + f 1
     }
+    ? show { ( term_leave ) } {}
     ( rt_close e )
     ( cam_close cam )
-    ( p `done — make a video with: ffmpeg -framerate 10 -i ` ) ( p ( string_data od ) ) ( p `/frame%05d.ppm seg.mp4\n` )
+    ? & save ! show {
+        ( p `done — make a video with: ffmpeg -framerate 10 -i ` ) ( p ( string_data od ) ) ( p `/frame%05d.ppm seg.mp4\n` )
+    } {}
     ^ 0
 }
 
 @ usage → v {
     ( p `yoloe — promptable open-vocabulary detection & instance segmentation (pure NURL, GPU)\n\n` )
     ( p `usage:\n` )
-    ( p `  yoloe detect <model.onnx> <classes.txt> <image.ppm> [out.ppm]\n` )
-    ( p `      draw boxes for the prompted classes\n` )
-    ( p `  yoloe seg    <model.onnx> <classes.txt> <image.ppm> [out.ppm]\n` )
-    ( p `      boxes + a per-object segmentation mask\n` )
-    ( p `  yoloe cam    <model.onnx> <classes.txt> <out_dir> [nframes] [device]\n` )
-    ( p `      LIVE segmentation from a webcam (V4L2 — no ffmpeg/OpenCV).\n` )
-    ( p `      nframes default 30; device default /dev/video0. Writes\n` )
-    ( p `      <out_dir>/frameNNNNN.ppm; turn them into a clip with\n` )
-    ( p `      ffmpeg -framerate 10 -i <out_dir>/frame%05d.ppm seg.mp4\n\n` )
-    ( p `arguments:\n` )
-    ( p `  <model.onnx>   a YOLOE-seg export. Produce it with the package's\n` )
-    ( p `                 tools/export.py (-> yoloe-v8s-seg.onnx); not bundled (~45 MB).\n` )
-    ( p `  <classes.txt>  the vocabulary, one prompt word per line (e.g. person / dog / car).\n` )
-    ( p `                 Must match the names the model was exported with.\n` )
-    ( p `  <image.ppm>    a binary PPM (P6):  convert photo.jpg photo.ppm\n\n` )
+    ( p `  yoloe detect --model M --classes C --image IMG [--out OUT]\n` )
+    ( p `        draw boxes for the prompted classes\n` )
+    ( p `  yoloe seg    --model M --classes C --image IMG [--out OUT]\n` )
+    ( p `        boxes + a per-object segmentation mask\n` )
+    ( p `  yoloe cam    --model M --classes C [options]\n` )
+    ( p `        LIVE segmentation from a webcam, drawn in the terminal\n\n` )
+    ( p `flags:\n` )
+    ( p `  --model   <model.onnx>   a YOLOE-seg export from tools/export.py\n` )
+    ( p `                           (-> yoloe-v8s-seg.onnx); not bundled (~45 MB).\n` )
+    ( p `  --classes <classes.txt>  vocabulary, one prompt word per line.\n` )
+    ( p `  --image   <image.ppm>    input for detect/seg (binary PPM P6).\n` )
+    ( p `  --out     <path>         detect/seg: output image; cam: dir to save frames.\n` )
+    ( p `  --device  <dev>          cam webcam device (default /dev/video0).\n` )
+    ( p `  --frames  <N>            cam: stop after N frames (default: run until Ctrl-C).\n` )
+    ( p `  --no-show                cam: don't draw to the terminal (e.g. only --out).\n` )
+    ( p `  --boxes                  draw boxes only, skip the masks.\n\n` )
     ( p `examples:\n` )
-    ( p `  yoloe seg yoloe-v8s-seg.onnx classes.txt photo.ppm out.ppm\n` )
-    ( p `  yoloe cam yoloe-v8s-seg.onnx classes.txt frames/ 60 /dev/video0\n` )
+    ( p `  yoloe seg --model yoloe-v8s-seg.onnx --classes classes.txt --image photo.ppm --out out.ppm\n` )
+    ( p `  yoloe cam --model yoloe-v8s-seg.onnx --classes classes.txt          # live, in the terminal\n` )
+    ( p `  yoloe cam --model yoloe-v8s-seg.onnx --classes classes.txt --frames 60 --out frames/\n` )
 }
 
 @ main → i {
@@ -243,24 +284,24 @@ $ `v4l2.nu`
     : String cmd ?? ( vec_get [String] av 1 ) { T x → x F _ → ( string_new ) }
     : s c ( string_data cmd )
 
+    : String mp ( flag_str av `--model` )
+    : String np ( flag_str av `--classes` )
+    : b boxes ( flag_set av `--boxes` )
+
     ? | != 0 ( nurl_str_eq c `detect` ) != 0 ( nurl_str_eq c `seg` ) {
-        : b want_masks != 0 ( nurl_str_eq c `seg` )
-        ? < ( vec_len [String] av ) 5 { ( p `usage: yoloe ` ) ( p c ) ( p ` <model.onnx> <classes.txt> <image.ppm> [out.ppm]\n` ) ^ 2 } {}
-        : String mp ?? ( vec_get [String] av 2 ) { T x → x F _ → ( string_new ) }
-        : String np ?? ( vec_get [String] av 3 ) { T x → x F _ → ( string_new ) }
-        : String ip ?? ( vec_get [String] av 4 ) { T x → x F _ → ( string_new ) }
-        : String op ? > ( vec_len [String] av ) 5 ?? ( vec_get [String] av 5 ) { T x → x F _ → ( string_new ) } ( string_new )
+        : b want_masks & != 0 ( nurl_str_eq c `seg` ) ! boxes
+        : String ip ( flag_str av `--image` )
+        : String op ( flag_str av `--out` )
         ^ ( run_still want_masks mp np ip op )
     } {}
 
     ? != 0 ( nurl_str_eq c `cam` ) {
-        ? < ( vec_len [String] av ) 5 { ( p `usage: yoloe cam <model.onnx> <classes.txt> <out_dir> [nframes] [device]\n` ) ^ 2 } {}
-        : String mp ?? ( vec_get [String] av 2 ) { T x → x F _ → ( string_new ) }
-        : String np ?? ( vec_get [String] av 3 ) { T x → x F _ → ( string_new ) }
-        : String od ?? ( vec_get [String] av 4 ) { T x → x F _ → ( string_new ) }
-        : i nframes ? > ( vec_len [String] av ) 5 ( nurl_str_to_int ?? ( vec_get [String] av 5 ) { T x → ( string_data x ) F _ → `30` } ) 30
-        : String dev ? > ( vec_len [String] av ) 6 ?? ( vec_get [String] av 6 ) { T x → x F _ → ( string_new ) } ( string_from `/dev/video0` )
-        ^ ( run_cam mp np od nframes dev )
+        : String dev0 ( flag_str av `--device` )
+        : String dev ? > ( string_len dev0 ) 0 dev0 ( string_from `/dev/video0` )
+        : i nframes ? ( flag_set av `--frames` ) ( flag_int av `--frames` 30 ) - 0 1
+        : String od ( flag_str av `--out` )
+        : b show ! ( flag_set av `--no-show` )
+        ^ ( run_cam mp np dev nframes od show ! boxes )
     } {}
 
     ? | != 0 ( nurl_str_eq c `help` ) | != 0 ( nurl_str_eq c `-h` ) != 0 ( nurl_str_eq c `--help` ) { ( usage ) ^ 0 } {}
