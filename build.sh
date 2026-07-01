@@ -292,6 +292,13 @@ else
     step "runtime-native" cp stdlib/runtime.o stdlib/runtime.native.o
 fi
 
+# CUDA / NVRTC fallback stubs. Plain ELF objects (no LTO) that nurl.sh links
+# in place of -lcuda / -lnvrtc when those libraries are absent, so a program
+# referencing packages/gpu still links + loads on a driverless host and falls
+# back to the CPU backend. Cheap to always build; only linked when needed.
+step "cuda-stubs"    "$CLANG" -O2 -fPIC -c stdlib/cuda_stubs.c  -o stdlib/cuda_stubs.o
+step "nvrtc-stubs"   "$CLANG" -O2 -fPIC -c stdlib/nvrtc_stubs.c -o stdlib/nvrtc_stubs.o
+
 # Always build canvas.o. With SDL2 headers present we get the real
 # native back-end (-DNURL_HAVE_SDL2); otherwise we compile a stub that
 # prints a clear diagnostic and exits if the program actually calls

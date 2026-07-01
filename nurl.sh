@@ -343,18 +343,37 @@ fi
 # NVRTC exports `nvrtc<Upper>`. libcuda ships with the NVIDIA driver and
 # normally has an unversioned .so; fall back to the .so.1 soname (the
 # driver package ships that even when the -dev symlink is absent).
+# When libcuda / libnvrtc are ABSENT (a machine with no NVIDIA driver), link
+# the fallback stub objects (stdlib/{cuda,nvrtc}_stubs.o) instead: the program
+# still LINKS and LOADS, every CUDA call returns an error, and packages/gpu
+# falls back to its CPU backend. NURL_GPU_STUBS=1 forces the stubs even on a
+# GPU host — to build a portable CPU-only binary. Never both (duplicate syms).
+CUDA_PRESENT=0
+if ldconfig -p 2>/dev/null | grep -q 'libcuda\.so' || [ -e /usr/lib/x86_64-linux-gnu/libcuda.so.1 ] || [ -e /usr/lib/x86_64-linux-gnu/libcuda.so ] || [ -e /usr/lib/libcuda.so ]; then
+    CUDA_PRESENT=1
+fi
+NVRTC_PRESENT=0
+if pkg-config --exists nvrtc 2>/dev/null || ldconfig -p 2>/dev/null | grep -q 'libnvrtc\.so' || [ -e /usr/lib/x86_64-linux-gnu/libnvrtc.so ]; then
+    NVRTC_PRESENT=1
+fi
 if grep -qE '@cu[A-Z][A-Za-z0-9_]*\b' "$LLFILE"; then
-    if [ -e /usr/lib/x86_64-linux-gnu/libcuda.so ] || [ -e /usr/lib/libcuda.so ]; then
+    if [ -n "${NURL_GPU_STUBS:-}" ] || [ "$CUDA_PRESENT" = 0 ]; then
+        EXTRA_LIBS="$EXTRA_LIBS $SCRIPT_DIR/stdlib/cuda_stubs.o"
+    elif [ -e /usr/lib/x86_64-linux-gnu/libcuda.so ] || [ -e /usr/lib/libcuda.so ]; then
         EXTRA_LIBS="$EXTRA_LIBS -lcuda"
     else
         EXTRA_LIBS="$EXTRA_LIBS -l:libcuda.so.1"
     fi
 fi
 if grep -qE '@nvrtc[A-Z][A-Za-z0-9_]*\b' "$LLFILE"; then
-    if pkg-config --exists nvrtc 2>/dev/null; then
+    if [ -n "${NURL_GPU_STUBS:-}" ] || [ "$NVRTC_PRESENT" = 0 ]; then
+        EXTRA_LIBS="$EXTRA_LIBS $SCRIPT_DIR/stdlib/nvrtc_stubs.o"
+    elif pkg-config --exists nvrtc 2>/dev/null; then
         EXTRA_LIBS="$EXTRA_LIBS $(pkg-config --libs nvrtc)"
-    else
+    elif [ -e /usr/lib/x86_64-linux-gnu/libnvrtc.so ]; then
         EXTRA_LIBS="$EXTRA_LIBS -lnvrtc"
+    else
+        EXTRA_LIBS="$EXTRA_LIBS -l:libnvrtc.so.12"
     fi
 fi
 
