@@ -1,0 +1,8 @@
+deps/
+src/deps/
+tests/deps/
+tests/src
+/src/main
+/tests/gpu_test
+*.ll
+*.so

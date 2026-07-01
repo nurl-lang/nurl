@@ -819,6 +819,17 @@ void nurl_poke_f32(void *base, long long idx, double val) {
     ((float*)base)[(size_t)idx] = (float)val;
 }
 
+/* Indirect-call trampoline for the packages/gpu CPU backend. A CUDA-C kernel
+ * compiled for the host (by cpu.nu, via the system C++ compiler) exposes a
+ * fixed entry `void __cpu_launch(void** params, long long grid, long long
+ * block)`; cpu.nu dlopen/dlsym's it into `fn` and calls it here — NURL's FFI
+ * binds symbols by name and can't call an arbitrary function pointer, so this
+ * tiny generic thunk (1 pointer + params + two i64 dims) bridges the gap. No
+ * CUDA/GPU dependency; pure and always available. */
+void nurl_cpu_launch(void *fn, void *params, long long grid, long long block) {
+    if (fn) ((void (*)(void **, long long, long long))fn)((void **)params, grid, block);
+}
+
 /* Recursively reclaim a Vec/String backing store. `ctl` is the Vec
  * control block (slot 0 = data ptr, slot 1 = len, slot 2 = cap). When
  * `elem_drop` is non-NULL it is invoked on a POINTER to each live
