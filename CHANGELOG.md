@@ -8,6 +8,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.7] — 2026-07-01
+
+A **CPU inference + GUI** release. The GPU/ML stack from 0.10.6 gains two big
+things: models now run **with no GPU at all** (a CPU backend in `packages/gpu`
+that runs the same CUDA-C kernels on the host), and the `yoloe` webcam demo can
+draw its live segmentation into a **real X11 window** — or the terminal.
+
+### Added
+
+- **CPU backend for `packages/gpu` (0.1.0 → 0.2.0).** `gpu_open` uses CUDA when
+  a device is present and otherwise falls back to a CPU backend that runs the
+  *same* CUDA-C kernels on the host: each kernel is wrapped in a small
+  CUDA-compatibility shim (`blockIdx`/`threadIdx`/`blockDim`/`gridDim` as
+  thread-locals, `__global__` etc. as no-op macros) plus a generated grid-loop,
+  compiled by the system C++ compiler, `dlopen`'d, and run with **OpenMP**
+  across cores. `gpu_launch`'s `void**` argument array is byte-for-byte what
+  CUDA passes, so the neutral surface is unchanged and every caller (`onnx`,
+  `objdet`, `yoloe`) gets the fallback for free. `NURL_GPU=cpu` forces it.
+  Verified identical CPU vs GPU on the onnx MLP and the full 267-node YOLOE-seg
+  forward.
+- **Driverless linking.** A program that references `packages/gpu` no longer
+  hard-requires libcuda/libnvrtc to load: `nurl.sh` links small stub objects
+  (`stdlib/{cuda,nvrtc}_stubs.o`, built by `build.sh`) in place of `-lcuda` /
+  `-lnvrtc` when those libraries are absent — the binary links, loads, and
+  auto-falls-back to the CPU backend. `NURL_GPU_STUBS=1` forces the stubs to
+  build a portable CPU-only binary on a GPU host. `runtime.c` gains one tiny
+  generic thunk, `nurl_cpu_launch`, so the backend can call the `dlsym`'d
+  kernel entry.
+- **X11 GUI-window support.** `build.sh` writes a `runtime.X11` sentinel when
+  libX11 is present and `nurl.sh` auto-links `-lX11` only when `@XOpenDisplay`
+  appears — the same opt-in-by-symbol pattern as libcuda/libopus, so headless
+  programs are unaffected. Used by `packages/yoloe`'s new window preview.
+- **`yoloe` — a real webcam segmentation tool.** The `yoloe` command is now a
+  flag-driven, self-documenting CLI with three sub-commands — `detect`, `seg`,
+  and `cam` — and `cam` shows the **live** segmented feed either in a **real
+  X11 window** (full webcam resolution, pure NURL via libX11) or in the
+  terminal (area-averaged 24-bit half-blocks, works over SSH). `--boxes` /
+  `--mask` pick what to draw, `--frames` bounds the run (omit ⇒ until Ctrl-C),
+  `--out` saves frames, `--device` / `--gpu` select the camera / CUDA device.
+
+### Fixed
+
+- **`nurlpkg` `{ path, version }` hybrid dependencies** are published + resolved
+  correctly end-to-end (carried over from 0.10.6); the `gpu`/`onnx`/`yoloe`
+  packages were republished with the correct dependency edges so a registry
+  install resolves the whole chain.
+
 ## [0.10.6] — 2026-06-30
 
 A **GPU compute + ML inference** release. NURL gains the ability to run real
