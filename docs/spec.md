@@ -508,22 +508,70 @@ names, and associated types are read from the trait when an impl is processed.
 In practice this means the trait declaration (or its `$`-import) precedes the
 impl, which is the natural order.
 
-**Reserved extension — dynamic dispatch (`dyn Trait`).** The 1.0 model is
-deliberately fully static. Dynamic dispatch is a *forward-compatible
-extension*, not part of 1.0: it would introduce a `dyn Trait` type carrying a
-data pointer plus a per-impl vtable of the trait's methods, layered *beside*
-the static path without changing it (static `( fmt p )` would still lower to
-`fmt__Point`). The trait declaration already records the data a vtable needs —
-the ordered method set and each method's signature — so the seam is the `dyn
-Trait` type and its vtable construction, with the "no runtime identity"
-guarantee scoped to static dispatch. It is left unimplemented until there is a
-concrete need (e.g. heterogeneous collections).
+**Dynamic dispatch — `%Trait` trait objects.** Alongside the static path a trait
+may be used as a **dynamic object** so that values of *different* concrete types
+can be handled uniformly (e.g. a heterogeneous collection). This is layered
+*beside* static dispatch without changing it: a static `( fmt p )` on a concrete
+`Point` still lowers to `fmt__Point`, and a trait/impl still has no runtime
+identity for concrete values — the runtime representation exists only for the
+`%Trait` object type.
+
+```
+% Speaker [T] { @ speak T self i vol → i }
+% Speaker Dog   { @ speak Dog d   i vol → i { … } }
+% Speaker Robot { @ speak Robot r i vol → i { … } }
+
+@ announce %Speaker s i vol → i { ^ ( speak s vol ) }   // dispatches via vtable
+
+: %Speaker sd ( dyn Speaker d )     // construct: box a Dog as a Speaker object
+( announce sd 5 )                    // reaches Dog.speak with no static type known
+```
+
+- **Type `%Trait`** (type position) is a **fat pointer** lowered to
+  `%dyn.<Trait> = type { i8*, i8* }`: a heap-boxed copy of the concrete value
+  (field 0) paired with a per-impl **vtable** pointer (field 1). The vtable is a
+  `[K x i8*]` constant whose slot 0 is the concrete destructor and slots 1..K are
+  one thunk per method; each thunk adapts the uniform ABI `<ret>(i8* self, …)` to
+  the concrete static method.
+- **Construction `( dyn Trait value )`** boxes `value` (which must implement
+  `Trait`) and pairs it with that impl's vtable.
+- **Dispatch** is a bare-name call `( method obj )` whose first argument is a
+  `%Trait`: the method's vtable slot is loaded and called indirectly. `Self`
+  appears only as the erased `i8*` receiver; the other arguments are concrete.
+- **Diamond upcasting.** A sub-trait object dispatches its supertraits' methods
+  too: the vtable flattens the transitive supertrait method set (an override on
+  the sub keeps the first slot), so a `%Pet` object can call the `Animal` methods
+  `Pet : Animal` requires, including inherited **default** methods (which
+  themselves call back through the object's dynamic dispatch).
+- **Object safety.** A trait is usable as `%Trait` only if every method — and
+  every supertrait's method — can be dispatched from an `i8*` self plus the
+  signature: the trait has a `[T]` Self parameter, and no method (a) lacks a Self
+  receiver, (b) names Self beyond the receiver, (c) consumes self by value
+  (`sink`), or (d) mentions an associated type. Otherwise it is a compile error
+  naming the offending method and reason (so an associated-type trait like
+  `Boxed` is rejected as an object, not miscompiled).
+- **Memory safety.** A `%Trait` binding is an owned value: it participates in the
+  ordinary auto-drop / panic-unwind machinery via a synthesized `Drop` for
+  `%dyn.<Trait>`, which runs the vtable's slot-0 destructor on the boxed value
+  (freeing *its* owned resources transitively) and then frees the box. No leak
+  and no double-free — verified under AddressSanitizer.
+- **Return ownership through dyn.** A method that returns owned data should return
+  `String`, not a raw `s`. Ownership of a raw `s` result is impl-dependent (one
+  impl may return a `.rodata` literal, another a heap allocation), and the vtable
+  erases which impl ran, so an `s` result crossing the dynamic boundary is treated
+  as **borrowed** and never auto-freed — the conservative choice that can never
+  free a literal. (Static dispatch knows the concrete impl and *does* auto-free an
+  owned `s` result, same as any function; the asymmetry is inherent to type
+  erasure. Use `String` for owned returns you want dropped through a `%Trait`.)
 
 The static surface is pinned by tests: `trait_bounds` / `should_fail_trait_
 bound` (bounds), `test_09_trait_defaults` (defaults), `should_fail_duplicate_
 impl` / `should_fail_ambiguous_method` (coherence), `trait_supertraits` /
 `should_fail_missing_supertrait` (supertraits), and `trait_assoc` / `trait_
-assoc_import` / `should_fail_missing_assoc` (associated types).
+assoc_import` / `should_fail_missing_assoc` (associated types). The dynamic
+surface is pinned by `dyn_dispatch` (object construction + vtable dispatch with a
+value parameter), `dyn_diamond` (supertrait upcast + inherited default +
+override), and `should_fail_dyn_not_object_safe` (object-safety rejection).
 
 ## 5. Statements
 

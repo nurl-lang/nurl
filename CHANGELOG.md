@@ -8,6 +8,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Dynamic trait objects — `%Trait` (docs/spec.md §4.9).** A trait can now be
+  used as a runtime-dispatched *object* so values of different concrete types are
+  handled uniformly, layered *beside* the existing static path (a concrete
+  `( fmt p )` still lowers to `fmt__Point`; concrete values carry no trait
+  identity). `%Trait` is a fat pointer `%dyn.<Trait> = { i8* data, i8* vtable }`:
+  a heap-boxed copy of the value plus a per-impl vtable (slot 0 = destructor,
+  slots 1..K = one uniform-ABI thunk per method). `( dyn Trait value )` boxes a
+  value that implements `Trait`; a bare-name call `( method obj )` on a `%Trait`
+  receiver loads the vtable slot and dispatches indirectly. **Diamond upcasting**:
+  the vtable flattens the transitive supertrait method set, so a `%Pet` object
+  (`Pet : Animal`) dispatches Animal's methods too — including inherited
+  **default** methods, which call back through the object's own dynamic dispatch.
+  **Object safety** is enforced with a precise diagnostic: a trait is usable as
+  `%Trait` only if every method (and every supertrait's) is dispatchable from an
+  `i8*` self plus its signature (has a `[T]` Self parameter; no method lacks a
+  Self receiver, names Self beyond the receiver, consumes self by value, or
+  mentions an associated type). **Memory safety**: a `%Trait` binding is an owned
+  value with a synthesized `Drop` that runs the vtable's slot-0 destructor on the
+  boxed value (freeing its owned resources transitively) then frees the box — no
+  leak, no double-free, verified under AddressSanitizer. Tests: `dyn_dispatch`,
+  `dyn_diamond`, `should_fail_dyn_not_object_safe`.
+- **`nurl_free_count()` runtime primitive.** A symmetric companion to
+  `nurl_alloc_count()` (counts every `nurl_free` of a non-NULL pointer), so a
+  program can bracket a scope and assert leak-freedom deterministically without a
+  sanitizer. Used by the new `trait_owned_ret_no_leak` regression test.
+
+### Fixed
+
+- **Owned-string temporaries from trait-method calls leaked.** A trait method
+  returning an owned `s` (e.g. via `nurl_str_cat`) whose result was passed
+  straight to another call — `( nurl_print ( label d ) )` — leaked the temporary;
+  plain-function composition already freed it. The impl-method dispatch path
+  (Group F in `gen_call`) emitted its call and returned **without publishing any
+  of the `__last_call_*` return side-channels** the caller reads, so the callee's
+  owned-string / borrow / signedness / `??`-propagation markers were all lost —
+  not just a leak but a latent borrow double-free and a `u`/`!T E` mis-handling.
+  Fixed by factoring the marker propagation into one helper
+  (`mem_propagate_call_ret_markers`) shared by both the impl-method and
+  regular-call paths, so no dispatch path can silently omit a marker.
+
 ## [0.10.7] — 2026-07-01
 
 A **CPU inference + GUI** release. The GPU/ML stack from 0.10.6 gains two big
