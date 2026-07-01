@@ -39,6 +39,15 @@
         {
           "match": "(?<![A-Za-z0-9_])(inout|sink|in)(?![A-Za-z0-9_])",
           "name": "storage.modifier.param.nurl"
+        },
+        {
+          "comment": "Dynamic trait object construction `( dyn Trait value )` (grammar v2.3). `dyn` is a contextual keyword — special only as a call head followed by a trait name (PascalCase by convention) — so it must be matched before #function-call would colour it as an ordinary call.",
+          "match": "(\\()\\s*(dyn)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.nurl" },
+            "2": { "name": "keyword.other.dyn.nurl" },
+            "3": { "name": "entity.name.type.trait.nurl" }
+          }
         }
       ]
     },

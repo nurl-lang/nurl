@@ -1,6 +1,6 @@
 # NURL Language Reference
 
-**Status:** language specification, grammar v2.2. This document is the
+**Status:** language specification, grammar v2.3. This document is the
 normative reference for the NURL — Neural Unified Representation Language —
 source language as implemented by `compiler/nurlc.nu`.
 
@@ -508,7 +508,7 @@ names, and associated types are read from the trait when an impl is processed.
 In practice this means the trait declaration (or its `$`-import) precedes the
 impl, which is the natural order.
 
-**Dynamic dispatch — `%Trait` trait objects.** Alongside the static path a trait
+**Dynamic dispatch — `%Trait` trait objects (grammar v2.3).** Alongside the static path a trait
 may be used as a **dynamic object** so that values of *different* concrete types
 can be handled uniformly (e.g. a heterogeneous collection). This is layered
 *beside* static dispatch without changing it: a static `( fmt p )` on a concrete
@@ -1394,10 +1394,10 @@ Four new diagnostics shipped 2026-05-25 closing the remaining
 
 ### 11.1 Grammar version
 
-This document corresponds to **grammar v2.2** (keyword arguments —
-default parameter values + named call arguments). The authoritative
-grammar lives in [`spec/grammar.ebnf`](../spec/grammar.ebnf); changes
-since v1.x are tracked in that file's prelude.
+This document corresponds to **grammar v2.3** (dynamic trait objects —
+`%Trait` object type + `( dyn Trait value )` construction, §4.9). The
+authoritative grammar lives in [`spec/grammar.ebnf`](../spec/grammar.ebnf);
+changes since v1.x are tracked in that file's prelude.
 
 A compiler is "v2.2 conformant" if it accepts every program the EBNF
 generates and rejects every program the EBNF does not generate, with

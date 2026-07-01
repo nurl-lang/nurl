@@ -4,6 +4,15 @@ All notable changes to the "nurl" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.5.1] — 2026-07-01
+
+### Added
+
+- **Syntax highlighting for dynamic trait objects (grammar v2.3).** A
+  `%Trait` object type is highlighted like a trait, and the contextual
+  keyword in `( dyn Trait value )` is now recognised — `dyn` followed by a
+  trait name is coloured as a keyword rather than an ordinary function call.
+
 ## [0.5.0] — 2026-05-29
 
 ### Added
