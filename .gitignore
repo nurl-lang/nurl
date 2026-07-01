@@ -32,6 +32,7 @@ stdlib/runtime.asound
 stdlib/runtime.wasm.o
 stdlib/runtime_debug.o
 stdlib/runtime_san.o
+stdlib/runtime.X11
 stdlib/canvas.o
 stdlib/canvas.sdl2
 stdlib/winlib/
