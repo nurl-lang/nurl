@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   boxed value (freeing its owned resources transitively) then frees the box — no
   leak, no double-free, verified under AddressSanitizer. Tests: `dyn_dispatch`,
   `dyn_diamond`, `should_fail_dyn_not_object_safe`.
+- **`nurlfmt` understands `%Trait` type sigils.** The formatter now distinguishes
+  the three uses of `%` — trait/impl declaration sigil, `%Trait` object type, and
+  the modulo operator — using prefix-notation context (an operand never precedes
+  an operator). A `%Trait` in a signature, binding, or return type glues to the
+  trait name (`%Pet`) and no longer opens a spurious top-level declaration that
+  split the signature across lines.
 - **`nurl_free_count()` runtime primitive.** A symmetric companion to
   `nurl_alloc_count()` (counts every `nurl_free` of a non-NULL pointer), so a
   program can bracket a scope and assert leak-freedom deterministically without a

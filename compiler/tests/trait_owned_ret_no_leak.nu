@@ -13,20 +13,23 @@
 // method dispatch never marked the result owned, the temp was never freed, and
 // the delta was 0.
 $ `stdlib/core/string.nu`
+
 & `libc` @ nurl_free_count → i
 
-% Name [T] { @ label T self → s }
+%Name [T] { @ label T self → s }
+
 : Dog { i id }
+
 % Name Dog { @ label Dog d → s { ^ ( nurl_str_cat `dog-` `rex` ) } }
 
-@ sink_s s x → i { ^ 0 }   // consumes the owned-string temp, does nothing else
+@ sink_s s x → i { ^ 0 }  // consumes the owned-string temp, does nothing else
 
 @ main → i {
     : Dog d @ Dog { 1 }
     : i f0 ( nurl_free_count )
     : ~ i i 0
     ~ < i 100 {
-        ( sink_s ( label d ) )   // label → owned s; must be freed after the call
+        ( sink_s ( label d ) )  // label → owned s; must be freed after the call
         = i + i 1
     }
     : i freed - ( nurl_free_count ) f0

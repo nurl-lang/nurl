@@ -9,10 +9,11 @@ $ `stdlib/core/string.nu`
 
 % Animal [T] {
     @ sound T self → s
-    @ describe T self → s {                    // DEFAULT: calls sound
+    @ describe T self → s {  // DEFAULT: calls sound
         ^ ( nurl_str_cat `makes sound: ` ( sound self ) )
     }
 }
+
 % Pet [T] : Animal {
     @ pet_name T self → s
 }
@@ -21,12 +22,15 @@ $ `stdlib/core/string.nu`
 : Cat { i id }
 
 % Animal Dog { @ sound Dog d → s { ^ `woof` } }
-% Pet    Dog { @ pet_name Dog d → s { ^ `Rex` } }
+
+% Pet Dog { @ pet_name Dog d → s { ^ `Rex` } }
+
 % Animal Cat {
     @ sound Cat c → s { ^ `meow` }
-    @ describe Cat c → s { ^ `a quiet cat` }   // OVERRIDE the default
+    @ describe Cat c → s { ^ `a quiet cat` }  // OVERRIDE the default
 }
-% Pet    Cat { @ pet_name Cat c → s { ^ `Whiskers` } }
+
+% Pet Cat { @ pet_name Cat c → s { ^ `Whiskers` } }
 
 @ show_pet %Pet p → v {
     ( nurl_print ( pet_name p ) ) ( nurl_print `: ` )

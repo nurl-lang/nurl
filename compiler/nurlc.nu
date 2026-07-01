@@ -13424,23 +13424,23 @@
             { = j + j 1
                 ~ & < j n ( __is_ident_char ( nurl_str_get llvm_ty j ) ) { = j + j 1 } }
             { ? != 0 ( nurl_str_len name )
-            { ? ( is_tparam_like name ) {}
-                { ? ( __has_dunder name ) {}
-                    {  // A declared struct/enum maps to `%Name` in syms (set by
-                        // the pre-scan + gen_struct/enum_decl). A bare non-empty
-                        // value that does NOT start with '%' means the name is in
-                        // scope as something else — an @-fn / FFI symbol / const
-                        // whose value is its return/value type — and is NOT a
-                        // type. Require the `%`-type form so `@ f rand x → i`
-                        // (using the FFI symbol `rand` as a parameter type) is
-                        // rejected too, not just a wholly-unknown name.
-                        : s sv ( nurl_sym_get syms name )
-                        ? & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37
-                        {}
-                        { ( die lex ( nurl_str_cat
-                            ( nurl_str_cat3 `unknown type '` name `' in ` )
-                            ( nurl_str_cat ctx ` — no struct or enum with this name is declared (a typo, or a missing '$' import?)` ) ) ) } } } }
-            {} }
+                { ? ( is_tparam_like name ) {}
+                    { ? ( __has_dunder name ) {}
+                        {  // A declared struct/enum maps to `%Name` in syms (set by
+                            // the pre-scan + gen_struct/enum_decl). A bare non-empty
+                            // value that does NOT start with '%' means the name is in
+                            // scope as something else — an @-fn / FFI symbol / const
+                            // whose value is its return/value type — and is NOT a
+                            // type. Require the `%`-type form so `@ f rand x → i`
+                            // (using the FFI symbol `rand` as a parameter type) is
+                            // rejected too, not just a wholly-unknown name.
+                            : s sv ( nurl_sym_get syms name )
+                            ? & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37
+                            {}
+                            { ( die lex ( nurl_str_cat
+                                ( nurl_str_cat3 `unknown type '` name `' in ` )
+                                ( nurl_str_cat ctx ` — no struct or enum with this name is declared (a typo, or a missing '$' import?)` ) ) ) } } } }
+                {} }
             = i j
         }
         { = i + i 1 }
@@ -16637,6 +16637,7 @@
     ~ & < i n != ( nurl_str_get str i ) 124 { = i + i 1 }
     ^ ( nurl_str_slice str 0 i )
 }
+
 @ pipe_rest s str → s {
     : i n ( nurl_str_len str )
     : ~ i i 0
@@ -16709,7 +16710,9 @@
     }
     ^ g_dyn_flat_out
 }
+
 @ __dyn_flat_reset → v { = g_dyn_flat_out `` = g_dyn_flat_seen `` }
+
 @ __dyn_flat_add s vtTrait s declTrait → v {
     : ~ s ms ( nurl_sym_get g_trait_syms ( nurl_str_cat declTrait `__methods` ) )
     ~ != 0 ( nurl_str_len ms ) {
@@ -16805,8 +16808,8 @@
 // seen at a call site — `<ret> (i8*, p1, p2, …)*`. Self is erased to i8*.
 @ dyn_call_fnty s parts → s {
     : s ret ( pipe_first parts )
-    : s r1 ( pipe_rest parts )      // recvmode|recv_llvm|params…
-    : s rest ( pipe_rest ( pipe_rest r1 ) )   // params… (drop recvmode + recv_llvm)
+    : s r1 ( pipe_rest parts )  // recvmode|recv_llvm|params…
+    : s rest ( pipe_rest ( pipe_rest r1 ) )  // params… (drop recvmode + recv_llvm)
     : ~ s out ( nurl_str_cat ret ` (i8*` )
     : ~ s pr rest
     ~ != 0 ( nurl_str_len pr ) {
@@ -16842,6 +16845,7 @@
         { ( dyn_check_object_safe lex s1 ) } {}
     }
 }
+
 @ dyn_check_method_safe i lex s tname s m s sig s tparam s assoc → v {
     : i sx ( nurl_lex_new sig `<objsafe>` )
     ? ( seq ( nurl_lex_val sx ) `sink` )

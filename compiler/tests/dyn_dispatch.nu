@@ -12,8 +12,9 @@
 : Dog { i pitch }
 : Robot { i serial }
 
-% Speaker Dog   { @ speak Dog d   i volume → i { : i p . d pitch    ^ + p volume } }
-% Speaker Robot { @ speak Robot r i volume → i { : i sn . r serial  ^ * sn volume } }
+% Speaker Dog { @ speak Dog d i volume → i { : i p . d pitch ^ + p volume } }
+
+% Speaker Robot { @ speak Robot r i volume → i { : i sn . r serial ^ * sn volume } }
 
 // Static-dispatch-free: `s` is only known to be *some* Speaker.
 @ announce %Speaker s i volume → i { ^ ( speak s volume ) }
@@ -23,8 +24,8 @@
     : Robot r @ Robot { 3 }
     : %Speaker sd ( dyn Speaker d )
     : %Speaker sr ( dyn Speaker r )
-    : i a ( announce sd 5 )   // Dog.speak: 10 + 5 = 15
-    : i b ( announce sr 4 )   // Robot.speak: 3 * 4 = 12
+    : i a ( announce sd 5 )  // Dog.speak: 10 + 5 = 15
+    : i b ( announce sr 4 )  // Robot.speak: 3 * 4 = 12
     ( nurl_print_int a )
     ( nurl_print_int b )
     ( nurl_print_int + a b )  // 27

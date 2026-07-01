@@ -9,8 +9,10 @@ $ `stdlib/core/string.nu`
     type Elem
     @ unwrap T self → Elem
 }
+
 : IB { i v }
-% Boxed IB { type Elem i  @ unwrap IB self → i { ^ . self v } }
+
+% Boxed IB { type Elem i @ unwrap IB self → i { ^ . self v } }
 
 @ take %Boxed b → i { ^ 0 }
 
