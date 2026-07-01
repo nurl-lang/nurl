@@ -1,5 +1,5 @@
 // nurlc.nu — NURL compiler written in NURL.
-// Grammar: v2.2
+// Grammar: v2.3
 //
 // Copyright (c) 2026 The NURL Project Developers
 // SPDX-License-Identifier: MIT OR Apache-2.0

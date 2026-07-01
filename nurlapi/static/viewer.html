@@ -160,7 +160,13 @@ const NURL_MONARCH = {
       [/\$(?=\s*`)/, "keyword.control.import"],
       [/&(?=\s*`)/,  "keyword.control.ffi"],
       [/(@)(\s+)([a-z_][\w]*)/, ["keyword.other.func", "white", "entity.name.function"]],
-      [/(%)(\s+)([A-Za-z_][\w]*)/, ["keyword.other.trait", "white", "type.identifier"]],
+      // dynamic trait object construction `( dyn Trait … )` (grammar v2.3) —
+      // `dyn` is a contextual keyword, matched before the `(`/identifier fallback.
+      [/(\()(\s*)(\bdyn\b)(\s+)([A-Z][\w]*)/,
+        ["@brackets", "white", "keyword", "white", "type.identifier"]],
+      // trait decl `% <Name>` AND `%Trait` object type (grammar v2.3), possibly
+      // glued (`%Pet`) — so `\s*`, not `\s+`.
+      [/(%)(\s*)([A-Za-z_][\w]*)/, ["keyword.other.trait", "white", "type.identifier"]],
       [/(:)(\s*)(\|)(\s*)([A-Za-z_][\w]*)/,
         ["keyword", "white", "keyword", "white", "type.identifier"]],
       [/(:)(\s+)([A-Z][\w]*)(\s*)(\{)/,

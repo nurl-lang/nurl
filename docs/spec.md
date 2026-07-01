@@ -1399,9 +1399,9 @@ This document corresponds to **grammar v2.3** (dynamic trait objects —
 authoritative grammar lives in [`spec/grammar.ebnf`](../spec/grammar.ebnf);
 changes since v1.x are tracked in that file's prelude.
 
-A compiler is "v2.2 conformant" if it accepts every program the EBNF
+A compiler is "v2.3 conformant" if it accepts every program the EBNF
 generates and rejects every program the EBNF does not generate, with
-the semantics defined here. A program is "v2.2 portable" if it relies
+the semantics defined here. A program is "v2.3 portable" if it relies
 only on features documented in this spec or in
 [`spec/grammar.ebnf`](../spec/grammar.ebnf) — not on
 compiler-internal accidents.
