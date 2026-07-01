@@ -1,10 +1,34 @@
 # gpu — GPU compute for NURL
 
-A backend-neutral GPU compute interface for NURL. **v0.1.0 is a
-proof-of-concept** with a single backend: **CUDA**. You write a kernel in
-CUDA-C, it is compiled to PTX *at runtime* (NVRTC) and run on the device
-through the CUDA **Driver API** — all bound directly from pure NURL, with
-no C bridge in the core runtime.
+A backend-neutral GPU compute interface for NURL, with **two backends: CUDA
+and CPU**. You write a kernel in CUDA-C, and it runs either on the GPU (NVRTC
+compiles it to PTX at runtime; the CUDA Driver API launches it — bound
+directly from pure NURL, no C bridge in the core runtime) **or on the CPU**
+when no GPU is available.
+
+## CPU backend (v0.2.0) — run with no GPU
+
+`gpu_open` selects CUDA when a device is present, and otherwise **falls back
+to the CPU backend** (`NURL_GPU=cpu` forces it). The CPU backend runs the
+*same* CUDA-C kernels: each is wrapped in a small CUDA-compatibility shim
+(`blockIdx` / `threadIdx` / `blockDim` / `gridDim` as thread-locals,
+`__global__` / `__device__` as no-op macros) plus a generated grid-loop entry
+point, compiled to a shared object by the system C++ compiler, `dlopen`'d, and
+run — with **OpenMP parallelising the grid across cores**. `gpu_launch`'s
+`void**` argument array is byte-for-byte what CUDA passes, so the neutral
+`Gpu` / `GpuKernel` / `GpuBuffer` surface is unchanged and every caller
+(`onnx`, `objdet`, `yoloe`) gets the fallback for free. The only host
+requirement is a **C++ compiler on `PATH`** — the CPU analogue of NVRTC.
+
+Verified identical results CPU vs GPU: the onnx tiny MLP matches the
+onnxruntime reference, and the full **267-node YOLOE-seg forward** gives the
+same detections on the CPU as on an RTX 4090.
+
+On a machine with **no NVIDIA driver at all**, the toolchain links small
+stub objects (`stdlib/{cuda,nvrtc}_stubs.o`) in place of `-lcuda` / `-lnvrtc`,
+so a `packages/gpu` program still **links and loads** and auto-falls-back to
+the CPU. Build a portable CPU-only binary even on a GPU host with
+`NURL_GPU_STUBS=1`.
 
 ```
 gpu            # run the PoC demo on device 0
