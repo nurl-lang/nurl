@@ -898,7 +898,11 @@ s combined_stdout s combined_stderr → v {
                     : b uses_canvas >= ( nurl_str_find source `stdlib/ext/canvas.nu` ) 0
                     : b uses_audio >= ( nurl_str_find source `stdlib/ext/audio.nu` ) 0
 
-                    : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
+                    // --ffi-host-imports: external `&`-FFI libraries (e.g. the
+                    // GPU package's cuda/nvrtc symbols) are resolved as wasm
+                    // IMPORTS by the host runtime, not linked natively — so the
+                    // native build-time sentinel gate must be skipped here.
+                    : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( vec_push [s] nurlc_args `--ffi-host-imports` )
                     : !Output ProcessErr nurlc_res ( process_run ( string_data ( get_nurlc_path ) ) nurlc_args `` ) ( vec_free [s] nurlc_args )
 
                     ?? nurlc_res {
@@ -934,11 +938,16 @@ s combined_stdout s combined_stderr → v {
                                 // compiling >150-function programs). --no-gc-sections keeps the
                                 // table stable so indices stay valid.
                                 ( vec_push [s] clang_args `-Wl,--no-gc-sections` )
+                                // Undefined symbols become wasm IMPORTS the host
+                                // runtime resolves (WASI, and — via the GPU
+                                // package's cuda/nvrtc FFI — a CUDA host bridge).
+                                // A genuinely missing symbol then traps at run
+                                // time with its name, under our wasmtime.
+                                ( vec_push [s] clang_args `-Wl,--allow-undefined` )
                                 ( vec_push [s] clang_args ( string_data ll_path ) )
                                 ( vec_push [s] clang_args ( string_data ( get_runtime_wasm_o ) ) )
                                 ? uses_canvas { ( vec_push [s] clang_args ( string_data ( get_canvas_wasm_o ) ) ) } {}
                                 ? uses_audio { ( vec_push [s] clang_args ( string_data ( get_audio_wasm_o ) ) ) } {}
-                                ? | uses_canvas uses_audio { ( vec_push [s] clang_args `-Wl,--allow-undefined` ) } {}
                                 ( vec_push [s] clang_args `-o` ) ( vec_push [s] clang_args ( string_data wasm_path ) ) ( vec_push [s] clang_args `-lm` )
 
                                 : !Output ProcessErr clang_res ( process_run ( string_data ( get_wasi_clang ) ) clang_args `` ) ( vec_free [s] clang_args )

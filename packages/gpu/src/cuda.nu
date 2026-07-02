@@ -24,16 +24,16 @@ $ `stdlib/core/string.nu`
 & `cuda` @ cuDeviceGet *u device i32 ordinal → i32
 & `cuda` @ cuDeviceGetName *u name i32 len i32 dev → i32
 & `cuda` @ cuCtxCreate *u pctx i32 flags i32 dev → i32
-& `cuda` @ cuCtxDestroy *u ctx → i32
+& `cuda` @ cuCtxDestroy i ctx → i32
 & `cuda` @ cuCtxSynchronize → i32
 & `cuda` @ cuModuleLoadData *u module *u image → i32
-& `cuda` @ cuModuleUnload *u module → i32
-& `cuda` @ cuModuleGetFunction *u hfunc *u hmod s name → i32
+& `cuda` @ cuModuleUnload i module → i32
+& `cuda` @ cuModuleGetFunction *u hfunc i hmod s name → i32
 & `cuda` @ cuMemAlloc *u dptr i bytesize → i32
 & `cuda` @ cuMemFree i dptr → i32
 & `cuda` @ cuMemcpyHtoD i dst *u src i n → i32
 & `cuda` @ cuMemcpyDtoH *u dst i src i n → i32
-& `cuda` @ cuLaunchKernel *u f i32 gx i32 gy i32 gz i32 bx i32 by i32 bz i32 sh *u stream *u params *u extra → i32
+& `cuda` @ cuLaunchKernel i f i32 gx i32 gy i32 gz i32 bx i32 by i32 bz i32 sh i stream *u params i extra → i32
 & `cuda` @ cuGetErrorName i32 err *u pstr → i32
 
 // ── NVRTC (runtime CUDA-C → PTX) ──────────────────────────────────
@@ -95,7 +95,7 @@ $ `stdlib/core/string.nu`
     ^ ( nurl_peek s 0 )
 }
 
-@ cuda_ctx_destroy i ctx → i { ^ # i ( cuCtxDestroy # *u ctx ) }
+@ cuda_ctx_destroy i ctx → i { ^ # i ( cuCtxDestroy ctx ) }
 
 @ cuda_sync → i { ^ # i ( cuCtxSynchronize ) }
 
@@ -138,11 +138,11 @@ $ `stdlib/core/string.nu`
     ^ ( nurl_peek s 0 )
 }
 
-@ cuda_module_unload i module → i { ^ # i ( cuModuleUnload # *u module ) }
+@ cuda_module_unload i module → i { ^ # i ( cuModuleUnload module ) }
 
 @ cuda_function i module s name → i {
     : *u s ( __outslot )
-    ? != # i ( cuModuleGetFunction s # *u module name ) 0 { ^ 0 } {}
+    ? != # i ( cuModuleGetFunction s module name ) 0 { ^ 0 } {}
     ^ ( nurl_peek s 0 )
 }
 
@@ -163,7 +163,7 @@ $ `stdlib/core/string.nu`
 // `params` is a void** array of pointers to the argument values (built
 // by gpu.nu from a Vec of i64-encoded args). 1-D grid/block for now.
 @ cuda_launch i func i grid i block *u params → i {
-    ^ # i ( cuLaunchKernel # *u func # i32 grid 1 1 # i32 block 1 1 0 0 params 0 )
+    ^ # i ( cuLaunchKernel func # i32 grid 1 1 # i32 block 1 1 0 0 params 0 )
 }
 
 // CUresult code → driver error-name string (e.g. "CUDA_ERROR_INVALID_VALUE").

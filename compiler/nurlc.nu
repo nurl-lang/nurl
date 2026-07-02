@@ -704,6 +704,13 @@
 // unaffected). All borrowck_* state below is untouched when the flag
 // is 0.
 : ~ i g_borrowck 1  // 0 when --no-borrowck passed on the CLI
+// g_ffi_host_imports is 1 when `--ffi-host-imports` is passed: external
+// `&`-FFI libraries are then satisfied by the RUN-TIME host (wasm imports
+// resolved by the embedder) rather than by a native link line, so the
+// build-time `stdlib/runtime.<lib>` sentinel gate is skipped. Set by the
+// wasm build path (nurlapi) — a wasm module's undefined FFI symbols become
+// imports the host runtime (e.g. packages/wasmtime) provides.
+: ~ i g_ffi_host_imports 0
 // `--strict-borrowck` (off by default) enables two additional checks:
 // (1) aliased mutation through `. obj field` arguments at the same
 // call site — a generalisation of the bare-identifier-only check, and
@@ -14691,6 +14698,9 @@
 // `libc` / `m` / `pthread` / `dl` are always linked (default link
 // line in `build.sh` / `run_tests.sh`) and skip the check.
 @ __ffi_lib_check i lex s lib → v {
+    // Host-imports mode (wasm): external FFI libs are resolved by the run-time
+    // embedder as imports, not linked natively — skip the native sentinel gate.
+    ? != g_ffi_host_imports 0 { ^ v } {}
     : i llen ( nurl_str_len lib )
     ? > llen 0 {
         // Strip a leading `lib` prefix if present (`libcurl` → `curl`).
@@ -17823,11 +17833,13 @@
                         { = g_borrowck 0 }
                         { ? ( seq a `--strict-borrowck` )
                             { = g_borrowck 1 = g_strict_borrowck 1 }
-                            { = path a } } } } } }
+                            { ? ( seq a `--ffi-host-imports` )
+                                { = g_ffi_host_imports 1 }
+                                { = path a } } } } } } }
         = ai + ai 1
     }
     ? == 0 ( nurl_str_len path )
-    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] <file.nu>` ) ( nurl_exit 1 ) }
+    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--ffi-host-imports] <file.nu>` ) ( nurl_exit 1 ) }
     {}
     ? != g_lint 0 { ( lint_init path ) } {}
     : s src ( nurl_read_file path )
