@@ -276,6 +276,10 @@ fi
 # bootstrap fixed point and the committed snapshot never churn on a bump.
 printf '#define NURL_VERSION "%s"\n' "$(bash tools/version.sh 2>/dev/null || echo v0.0.0)" > stdlib/nurl_version_gen.h
 
+# stdlib/runtime.c is a thin aggregator (A9 split): it #includes
+# stdlib/runtime_core.c (bootstrap core) then stdlib/runtime_ffi.c (stdlib
+# FFI shims) into one translation unit, so this stays a single runtime.o.
+# A bootstrap/no_std profile compiles stdlib/runtime_core.c on its own.
 step "runtime"       bash -c "'$CLANG' -O2 $LTO_FLAG $SAN_CFLAGS $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $ZLIB_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
 
 # Under `-flto` the `runtime.o` above is LLVM bitcode, which a plain GNU

@@ -213,10 +213,11 @@ Not blocking 1.0; ordered roughly by likely value.
 - **Mobile & embedded targets** — Android (NDK), iOS, and a `no_std`-style
   embedded profile. The RISC-V / ARM64 static cross-compiles already prove the
   shape; these extend it.
-- **Runtime split (organisational)** — separate `stdlib/runtime.c` into
-  bootstrap-internal helpers vs. stdlib FFI shims. The PURIFY effort already
-  moved most platform code into pure-NURL `& \`c\`` FFI; the file-level split
-  itself remains.
+- ~~**Runtime split (organisational)**~~ — *done.* `stdlib/runtime.c` is
+  split into `stdlib/runtime_core.c` (bootstrap core) and
+  `stdlib/runtime_ffi.c` (stdlib FFI shims), stitched by a thin aggregator
+  so the single `runtime.o` build is unchanged. The core compiles
+  standalone and defines the symbol set the `no_std` profile links.
 
 ---
 

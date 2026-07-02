@@ -406,11 +406,23 @@ fi
 LTO_FLAG="-flto"
 RUNTIME_TO_LINK="$RUNTIME"
 SAN_LINK_FLAGS=""
+# The runtime is split across three files (A9): stdlib/runtime.c is a thin
+# aggregator that #includes runtime_core.c + runtime_ffi.c. The side-by-side
+# san/debug objects are compiled from the aggregator, so they go stale when
+# ANY of the three changes — not just when runtime.c's mtime moves.
+runtime_stale() {
+    _target="$1"
+    [ ! -f "$_target" ] && return 0
+    for _src in runtime.c runtime_core.c runtime_ffi.c; do
+        [ "$SCRIPT_DIR/stdlib/$_src" -nt "$_target" ] && return 0
+    done
+    return 1
+}
 if [ "${NURL_SAN:-0}" = "1" ]; then
     LTO_FLAG=""
     SAN_LINK_FLAGS="-fsanitize=address,undefined -fsanitize-address-use-after-scope -fno-omit-frame-pointer -fno-sanitize-recover=all"
     SAN_RUNTIME="$SCRIPT_DIR/stdlib/runtime_san.o"
-    if [ ! -f "$SAN_RUNTIME" ] || [ "$SCRIPT_DIR/stdlib/runtime.c" -nt "$SAN_RUNTIME" ]; then
+    if runtime_stale "$SAN_RUNTIME"; then
         echo "[runtime-san] rebuilding stdlib/runtime_san.o (non-LTO, with ASan+UBSan)"
         CFLAGS_SAN="-O1 -g -fsanitize=address,undefined -fsanitize-address-use-after-scope -fno-omit-frame-pointer -fno-sanitize-recover=all"
         for sentinel_flag in NURL_HAVE_SQLITE3:sqlite3; do
@@ -426,7 +438,7 @@ if [ "${NURL_SAN:-0}" = "1" ]; then
 elif [ $DEBUG_INFO -eq 1 ]; then
     LTO_FLAG=""
     DBG_RUNTIME="$SCRIPT_DIR/stdlib/runtime_debug.o"
-    if [ ! -f "$DBG_RUNTIME" ] || [ "$SCRIPT_DIR/stdlib/runtime.c" -nt "$DBG_RUNTIME" ]; then
+    if runtime_stale "$DBG_RUNTIME"; then
         echo "[runtime-debug] rebuilding stdlib/runtime_debug.o (non-LTO, with -g)"
         CFLAGS_DBG="-O0 -g"
         for sentinel_flag in NURL_HAVE_SQLITE3:sqlite3; do
