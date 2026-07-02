@@ -37,12 +37,16 @@ $ `stdlib/core/string.nu`
 & `cuda` @ cuGetErrorName i32 err *u pstr → i32
 
 // ── NVRTC (runtime CUDA-C → PTX) ──────────────────────────────────
+// nvrtcCreateProgram / nvrtcDestroyProgram take nvrtcProgram* (a pointer to
+// the handle slot) → *u out-slot offset. The rest take the nvrtcProgram
+// handle BY VALUE → i (i64), portable across native/wasm (see the driver
+// handles above); their remaining *u are genuine out/data offsets.
 & `nvrtc` @ nvrtcCreateProgram *u prog s src s name i32 nh *u headers *u incs → i32
-& `nvrtc` @ nvrtcCompileProgram *u prog i32 nopt *u opts → i32
-& `nvrtc` @ nvrtcGetPTXSize *u prog *u sz → i32
-& `nvrtc` @ nvrtcGetPTX *u prog *u ptx → i32
-& `nvrtc` @ nvrtcGetProgramLogSize *u prog *u sz → i32
-& `nvrtc` @ nvrtcGetProgramLog *u prog *u log → i32
+& `nvrtc` @ nvrtcCompileProgram i prog i32 nopt *u opts → i32
+& `nvrtc` @ nvrtcGetPTXSize i prog *u sz → i32
+& `nvrtc` @ nvrtcGetPTX i prog *u ptx → i32
+& `nvrtc` @ nvrtcGetProgramLogSize i prog *u sz → i32
+& `nvrtc` @ nvrtcGetProgramLog i prog *u log → i32
 & `nvrtc` @ nvrtcDestroyProgram *u prog → i32
 
 // ── typed 4-byte buffer accessors (runtime.c, always linked) ──────
@@ -108,7 +112,7 @@ $ `stdlib/core/string.nu`
         ( nurl_eprint `[gpu/cuda] nvrtcCreateProgram failed\n` )
         ^ # *u 0
     } {}
-    : *u prog # *u ( nurl_peek ps 0 )
+    : i prog ( nurl_peek ps 0 )
     : i cr # i ( nvrtcCompileProgram prog 0 0 )
     ? != cr 0 {
         : *u ls ( __outslot )

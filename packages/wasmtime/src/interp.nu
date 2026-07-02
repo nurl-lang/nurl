@@ -31,6 +31,37 @@ $ `module.nu`
 // unlink(2): path_unlink_file must NOT remove directories (remove(3) would).
 & `c` @ unlink s path → i32
 
+// ── CUDA driver + NVRTC (the GPU host-import bridge) ──────────────
+// A wasm module built from a GPU-using NURL package (packages/gpu →
+// onnx → objdet) imports these under module "env"; wasmtime resolves them
+// to the real libcuda/libnvrtc here, marshalling guest linear memory ↔
+// host. nurl.sh auto-links libcuda/libnvrtc when these symbols appear, and
+// links stub objects on a GPU-less host (so wasmtime always builds; the
+// guest then just sees nonzero CUresult codes). Handle types match the
+// portable i64 model in packages/gpu/src/cuda.nu.
+& `cuda` @ cuInit i32 flags → i32
+& `cuda` @ cuDeviceGetCount *u count → i32
+& `cuda` @ cuDeviceGet *u device i32 ordinal → i32
+& `cuda` @ cuDeviceGetName *u name i32 len i32 dev → i32
+& `cuda` @ cuCtxCreate *u pctx i32 flags i32 dev → i32
+& `cuda` @ cuCtxDestroy i ctx → i32
+& `cuda` @ cuCtxSynchronize → i32
+& `cuda` @ cuModuleLoadData *u module *u image → i32
+& `cuda` @ cuModuleUnload i module → i32
+& `cuda` @ cuModuleGetFunction *u hfunc i hmod s name → i32
+& `cuda` @ cuMemAlloc *u dptr i bytesize → i32
+& `cuda` @ cuMemFree i dptr → i32
+& `cuda` @ cuMemcpyHtoD i dst *u src i n → i32
+& `cuda` @ cuMemcpyDtoH *u dst i src i n → i32
+& `cuda` @ cuLaunchKernel i f i32 gx i32 gy i32 gz i32 bx i32 by i32 bz i32 sh i stream *u params i extra → i32
+& `nvrtc` @ nvrtcCreateProgram *u prog s src s name i32 nh *u headers *u incs → i32
+& `nvrtc` @ nvrtcCompileProgram i prog i32 nopt *u opts → i32
+& `nvrtc` @ nvrtcGetPTXSize i prog *u sz → i32
+& `nvrtc` @ nvrtcGetPTX i prog *u ptx → i32
+& `nvrtc` @ nvrtcGetProgramLogSize i prog *u sz → i32
+& `nvrtc` @ nvrtcGetProgramLog i prog *u log → i32
+& `nvrtc` @ nvrtcDestroyProgram *u prog → i32
+
 // ── value + control stacks ───────────────────────────────────────
 
 : Arg { ( Vec u ) bytes }
@@ -1817,7 +1848,221 @@ $ `module.nu`
     = . it trapmsg msg
 }
 
+// ── GPU host bridge (CUDA driver + NVRTC) ─────────────────────────
+// Guest imports (module "env") are hand-bridged to the real libcuda /
+// libnvrtc. Marshalling rule, matching packages/gpu/src/cuda.nu's ABI:
+//   • a `*u` parameter is a GUEST linear-memory OFFSET → host address is
+//     (host base of guest memory) + offset; NULL(0) stays NULL. libcuda
+//     reads/writes guest memory in place — data copies are zero-copy.
+//   • an `i` handle (CUcontext/CUmodule/CUfunction/nvrtcProgram) or a
+//     CUdeviceptr is a raw 64-bit value → passed straight through.
+// NOTE: raw host handles/device pointers are visible to the guest, exactly
+// as in native NURL. Safe for trusted compute (our own kernels); an
+// untrusted-guest deployment would add an id↔pointer handle table here.
+
+// Host base address of the guest linear memory (recomputed per call — a
+// memory.grow between host calls may relocate the backing).
+@ __gpu_base * Interp it → i { ^ # i ( vec_data [u] . it mem ) }
+
+// Guest offset → host pointer (NULL stays NULL).
+@ __gpu_ptr * Interp it i off → *u {
+    : i o & off 4294967295
+    ? == o 0 { ^ # *u 0 } {}
+    ^ # *u + ( __gpu_base it ) o
+}
+
+@ __cu_init * Interp it → v {
+    : i flags ( __pop it )
+    ( __push it # i ( cuInit # i32 flags ) )
+}
+@ __cu_device_get_count * Interp it → v {
+    : i count ( __pop it )
+    ( __push it # i ( cuDeviceGetCount ( __gpu_ptr it count ) ) )
+}
+@ __cu_device_get * Interp it → v {
+    : i ordinal ( __pop it )
+    : i device ( __pop it )
+    ( __push it # i ( cuDeviceGet ( __gpu_ptr it device ) # i32 ordinal ) )
+}
+@ __cu_device_get_name * Interp it → v {
+    : i dev ( __pop it )
+    : i len ( __pop it )
+    : i name ( __pop it )
+    ( __push it # i ( cuDeviceGetName ( __gpu_ptr it name ) # i32 len # i32 dev ) )
+}
+@ __cu_ctx_create * Interp it → v {
+    : i dev ( __pop it )
+    : i flags ( __pop it )
+    : i pctx ( __pop it )
+    ( __push it # i ( cuCtxCreate ( __gpu_ptr it pctx ) # i32 flags # i32 dev ) )
+}
+@ __cu_ctx_destroy * Interp it → v {
+    : i ctx ( __pop it )
+    ( __push it # i ( cuCtxDestroy ctx ) )
+}
+@ __cu_ctx_sync * Interp it → v { ( __push it # i ( cuCtxSynchronize ) ) }
+@ __cu_module_load * Interp it → v {
+    : i image ( __pop it )
+    : i module ( __pop it )
+    ( __push it # i ( cuModuleLoadData ( __gpu_ptr it module ) ( __gpu_ptr it image ) ) )
+}
+@ __cu_module_unload * Interp it → v {
+    : i module ( __pop it )
+    ( __push it # i ( cuModuleUnload module ) )
+}
+@ __cu_module_get_function * Interp it → v {
+    : i name ( __pop it )
+    : i hmod ( __pop it )
+    : i hfunc ( __pop it )
+    ( __push it # i ( cuModuleGetFunction ( __gpu_ptr it hfunc ) hmod # s ( __gpu_ptr it name ) ) )
+}
+@ __cu_mem_alloc * Interp it → v {
+    : i bytesize ( __pop it )
+    : i dptr ( __pop it )
+    ( __push it # i ( cuMemAlloc ( __gpu_ptr it dptr ) bytesize ) )
+}
+@ __cu_mem_free * Interp it → v {
+    : i dptr ( __pop it )
+    ( __push it # i ( cuMemFree dptr ) )
+}
+@ __cu_memcpy_htod * Interp it → v {
+    : i n ( __pop it )
+    : i src ( __pop it )
+    : i dst ( __pop it )
+    ( __push it # i ( cuMemcpyHtoD dst ( __gpu_ptr it src ) n ) )
+}
+@ __cu_memcpy_dtoh * Interp it → v {
+    : i n ( __pop it )
+    : i src ( __pop it )
+    : i dst ( __pop it )
+    ( __push it # i ( cuMemcpyDtoH ( __gpu_ptr it dst ) src n ) )
+}
+// cuLaunchKernel's `params` is a guest void** — an array of guest pointers,
+// each addressing an 8-byte argument cell in guest memory. CUDA needs a
+// HOST void** whose entries are host addresses. Since the arg cells live in
+// guest memory, translate each entry to (base + entry). The kernel's own
+// parameter count bounds how many entries CUDA reads; the guest builds the
+// array contiguously and each entry points at base_args + i*8, so the region
+// is contiguous — reconstruct a host copy the same length as the guest array
+// implies. We don't know the exact count here, so we translate a bounded run
+// (up to __GPU_MAX_ARGS) of entries; CUDA reads only the real count and
+// ignores the rest, and each translated entry is a valid host address.
+@ __GPU_MAX_ARGS → i { ^ 64 }
+@ __cu_launch_kernel * Interp it → v {
+    : i extra ( __pop it )
+    : i params ( __pop it )
+    : i stream ( __pop it )
+    : i sh ( __pop it )
+    : i bz ( __pop it )
+    : i by ( __pop it )
+    : i bx ( __pop it )
+    : i gz ( __pop it )
+    : i gy ( __pop it )
+    : i gx ( __pop it )
+    : i f ( __pop it )
+    : i base ( __gpu_base it )
+    : i poff & params 4294967295
+    // Build a host void** by translating each guest entry (guest ptr → host
+    // ptr) into a fresh host buffer. Entry i lives at guest offset poff+i*8.
+    : *u hostp ( nurl_alloc * ( __GPU_MAX_ARGS ) 8 )
+    : i memlen ( vec_len [u] . it mem )
+    : ~ i k 0
+    ~ & < k ( __GPU_MAX_ARGS ) <= + + poff * k 8 8 memlen {
+        : i ent & ( __mem_load it + poff * k 8 8 0 ) 4294967295
+        ( nurl_poke hostp k ? == ent 0 0 + base ent )
+        = k + k 1
+    }
+    : i rc # i ( cuLaunchKernel f # i32 gx # i32 gy # i32 gz # i32 bx # i32 by # i32 bz # i32 sh stream hostp extra )
+    ( nurl_free # s hostp )
+    ( __push it rc )
+}
+@ __cu_get_error_name * Interp it → v {
+    // Writes a HOST const char* into the guest out-slot — unusable as a guest
+    // offset. Write NULL so cuda_error_name falls back to a static string;
+    // diagnostics only, never on the compute path.
+    : i pstr ( __pop it )
+    : i err ( __pop it )
+    ( __mem_store it & pstr 4294967295 8 0 )
+    ( __push it 0 )
+}
+@ __nvrtc_create * Interp it → v {
+    : i incs ( __pop it )
+    : i headers ( __pop it )
+    : i nh ( __pop it )
+    : i name ( __pop it )
+    : i src ( __pop it )
+    : i prog ( __pop it )
+    ( __push it # i ( nvrtcCreateProgram ( __gpu_ptr it prog ) # s ( __gpu_ptr it src ) # s ( __gpu_ptr it name ) # i32 nh ( __gpu_ptr it headers ) ( __gpu_ptr it incs ) ) )
+}
+@ __nvrtc_compile * Interp it → v {
+    : i opts ( __pop it )
+    : i nopt ( __pop it )
+    : i prog ( __pop it )
+    ( __push it # i ( nvrtcCompileProgram prog # i32 nopt ( __gpu_ptr it opts ) ) )
+}
+@ __nvrtc_ptx_size * Interp it → v {
+    : i sz ( __pop it )
+    : i prog ( __pop it )
+    ( __push it # i ( nvrtcGetPTXSize prog ( __gpu_ptr it sz ) ) )
+}
+@ __nvrtc_get_ptx * Interp it → v {
+    : i ptx ( __pop it )
+    : i prog ( __pop it )
+    ( __push it # i ( nvrtcGetPTX prog ( __gpu_ptr it ptx ) ) )
+}
+@ __nvrtc_log_size * Interp it → v {
+    : i sz ( __pop it )
+    : i prog ( __pop it )
+    ( __push it # i ( nvrtcGetProgramLogSize prog ( __gpu_ptr it sz ) ) )
+}
+@ __nvrtc_get_log * Interp it → v {
+    : i log ( __pop it )
+    : i prog ( __pop it )
+    ( __push it # i ( nvrtcGetProgramLog prog ( __gpu_ptr it log ) ) )
+}
+@ __nvrtc_destroy * Interp it → v {
+    : i prog ( __pop it )
+    ( __push it # i ( nvrtcDestroyProgram ( __gpu_ptr it prog ) ) )
+}
+
+// GPU host-import dispatch (module "env"). Returns T if handled.
+@ __gpu_dispatch * Interp it ( Vec u ) field → b {
+    ? ( __feq field `cuInit` ) { ( __cu_init it ) ^ T } {}
+    ? ( __feq field `cuDeviceGetCount` ) { ( __cu_device_get_count it ) ^ T } {}
+    ? ( __feq field `cuDeviceGet` ) { ( __cu_device_get it ) ^ T } {}
+    ? ( __feq field `cuDeviceGetName` ) { ( __cu_device_get_name it ) ^ T } {}
+    ? ( __feq field `cuCtxCreate` ) { ( __cu_ctx_create it ) ^ T } {}
+    ? ( __feq field `cuCtxCreate_v2` ) { ( __cu_ctx_create it ) ^ T } {}
+    ? ( __feq field `cuCtxDestroy` ) { ( __cu_ctx_destroy it ) ^ T } {}
+    ? ( __feq field `cuCtxSynchronize` ) { ( __cu_ctx_sync it ) ^ T } {}
+    ? ( __feq field `cuModuleLoadData` ) { ( __cu_module_load it ) ^ T } {}
+    ? ( __feq field `cuModuleUnload` ) { ( __cu_module_unload it ) ^ T } {}
+    ? ( __feq field `cuModuleGetFunction` ) { ( __cu_module_get_function it ) ^ T } {}
+    ? ( __feq field `cuMemAlloc` ) { ( __cu_mem_alloc it ) ^ T } {}
+    ? ( __feq field `cuMemAlloc_v2` ) { ( __cu_mem_alloc it ) ^ T } {}
+    ? ( __feq field `cuMemFree` ) { ( __cu_mem_free it ) ^ T } {}
+    ? ( __feq field `cuMemFree_v2` ) { ( __cu_mem_free it ) ^ T } {}
+    ? ( __feq field `cuMemcpyHtoD` ) { ( __cu_memcpy_htod it ) ^ T } {}
+    ? ( __feq field `cuMemcpyHtoD_v2` ) { ( __cu_memcpy_htod it ) ^ T } {}
+    ? ( __feq field `cuMemcpyDtoH` ) { ( __cu_memcpy_dtoh it ) ^ T } {}
+    ? ( __feq field `cuMemcpyDtoH_v2` ) { ( __cu_memcpy_dtoh it ) ^ T } {}
+    ? ( __feq field `cuLaunchKernel` ) { ( __cu_launch_kernel it ) ^ T } {}
+    ? ( __feq field `cuGetErrorName` ) { ( __cu_get_error_name it ) ^ T } {}
+    ? ( __feq field `nvrtcCreateProgram` ) { ( __nvrtc_create it ) ^ T } {}
+    ? ( __feq field `nvrtcCompileProgram` ) { ( __nvrtc_compile it ) ^ T } {}
+    ? ( __feq field `nvrtcGetPTXSize` ) { ( __nvrtc_ptx_size it ) ^ T } {}
+    ? ( __feq field `nvrtcGetPTX` ) { ( __nvrtc_get_ptx it ) ^ T } {}
+    ? ( __feq field `nvrtcGetProgramLogSize` ) { ( __nvrtc_log_size it ) ^ T } {}
+    ? ( __feq field `nvrtcGetProgramLog` ) { ( __nvrtc_get_log it ) ^ T } {}
+    ? ( __feq field `nvrtcDestroyProgram` ) { ( __nvrtc_destroy it ) ^ T } {}
+    ^ F
+}
+
 @ __wasi_dispatch * Interp it ( Vec u ) mod ( Vec u ) field → v {
+    ? ( __feq mod `env` ) {
+        ? ( __gpu_dispatch it field ) { ^ v } {}
+        ( __trap_named it `unsupported env import: ` field ) ^ v
+    } {}
     ? ! ( __feq mod `wasi_snapshot_preview1` ) {
         ( __trap_named it `unsupported import module: ` mod ) ^ v } {}
     ? ( __feq field `proc_exit` ) { ( __wasi_proc_exit it ) ^ v } {}
