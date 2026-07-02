@@ -102,6 +102,36 @@ $ `stdlib/dist/job.nu`
     ( pb `new owner is a surviving member: ` > ( vec_len [u] owner2 ) 0 )
     ( vec_free [u] owner1 ) ( vec_free [u] owner2 ) ( vec_free [u] k2 )
     ( job_node_free n2 ) ( ring_free r3 )
+
+    // ── per-kind routing rings (capability domains) ──────────────
+    // Main ring has 3 members; find a key this node does NOT own there. Scope
+    // kind 7 to a self-only ring: the same key then executes locally under
+    // kind 7 (capability domain owns it) while the main ring still routes it
+    // to the other member — the two domains are independent.
+    : *Ring r4 ( ring_new )
+    ( ring_add_member r4 a 32 ) ( ring_add_member r4 b 32 ) ( ring_add_member r4 c 32 )
+    : *JobNode n3 ( job_node_new # s 0 # s r4 a 2 )
+    ( job_register n3 7 ( sum_handler ) )
+    : ~ ( Vec u ) k3 ( bytes4 0 0 0 0 )
+    : ~ i probe 0
+    ~ & ( job_owns n3 k3 ) < probe 300 {
+        ( vec_free [u] k3 )
+        = probe + probe 1
+        = k3 ( bytes4 probe 42 42 42 )
+    }
+    ( pb `found a key not owned on the main ring: ` ! ( job_owns n3 k3 ) )
+    : *Ring gring ( ring_new )
+    ( ring_add_member gring a 32 )  // the capability domain: just this node
+    // Set kind 7 to the main ring first, then REPLACE with the domain ring —
+    // the local execute below proves replacement took effect.
+    ( job_set_ring n3 7 # s r4 )
+    ( job_set_ring n3 7 # s gring )
+    : i tid3 ( job_submit n3 7 k3 pl )  // scoped ring: self owns → runs locally
+    ( pb `kind-scoped submit executes locally: ` ( job_has n3 tid3 ) )
+    ( pb `kind-scoped result is sum=10: ` ?? ( job_await n3 tid3 ) { T r → { : b ok == ?? ( vec_get [u] r 0 ) { T x → # i x F → -1 } 10 ( vec_free [u] r ) ok } F → F } )
+    ( pb `main-ring ownership unchanged by the domain: ` ! ( job_owns n3 k3 ) )
+    ( vec_free [u] k3 )
+    ( job_node_free n3 ) ( ring_free r4 ) ( ring_free gring )
     ( vec_free [u] b ) ( vec_free [u] c )
 
     ( vec_free [u] a ) ( vec_free [u] key ) ( vec_free [u] pl )

@@ -28,6 +28,12 @@ swarm-mcp --token <secret> [--relay] [--worker] [--mcp] [options]
 | worker | `--worker` | runs compute here — **every worker executes both expression and wasm kernels** |
 | mcp | `--mcp` | serves the MCP control surface over **HTTPS JSON-RPC** |
 
+Add **`--gpu`** to a worker and it also advertises the **GPU capability**: it
+registers the GPU wasm handler and runs those chunks with GPU host imports
+live (`wt --allow-gpu`), so CUDA/NVRTC calls inside a kernel module execute on
+the node's real GPU. GPU tasks are routed **only** to `--gpu` workers — a mixed
+CPU/GPU cluster just works (see *GPU compute* below).
+
 A cluster is defined and secured by **`--token`**: every node launched with the
 same token forms one cluster, and nodes with different tokens are mutually
 invisible even on a shared relay. The token does two things, both derived
@@ -49,18 +55,22 @@ deterministically (no coordination):
 
 ## The control surface (what the LLM sees)
 
-Five tools, with self-describing schemas so a model uses them without docs:
+Six tools, with self-describing schemas so a model uses them without docs:
 
 | tool | arguments | does |
 |------|-----------|------|
 | `compute_submit` | `expr` (string), `lo` (int), `hi` (int), `reduce` (string, default `sum`), `dtype` (string, `int` default or `float`) | shard + run an **expression** kernel over `[lo,hi)`; returns a `task_id`. `dtype:"float"` evaluates the same kernel in **f64** (`x` is the index as a double, float literals like `0.5` allowed) |
-| `compute_submit_kernel` | `source` (NURL program), `lo`, `hi`, `reduce` | run an **arbitrary NURL kernel given as source** — the server compiles it to wasm and runs it; for anything the expression language can't express (loops, helpers) |
-| `compute_run_wasm` | `wasm_base64` (string), `lo`, `hi`, `reduce` | like `compute_submit_kernel` but you pass an **already-compiled** wasm module |
-| `compute_list` | — | every task with status (`running`/`done`), kernel, range, reduce, result |
+| `compute_submit_kernel` | `source` (NURL program), `lo`, `hi`, `reduce`, `kind` (`element` default or `chunk`), `gpu` (bool) | run an **arbitrary NURL kernel given as source** — the server compiles it to wasm and runs it; for anything the expression language can't express (loops, helpers) |
+| `compute_submit_cuda` | `cuda` (a `__device__ double f(long long x)` function), `lo`, `hi`, `reduce` | distributed **GPU** map-reduce: the model writes only the CUDA-C math; the server generates the whole kernel program and the `--gpu` workers run it on real GPUs |
+| `compute_run_wasm` | `wasm_base64` (string), `lo`, `hi`, `reduce`, `gpu` (bool) | like `compute_submit_kernel` but you pass an **already-compiled** wasm module |
+| `compute_list` | — | every task with status (`running`/`done`/`error`), kernel, range, reduce, result |
 | `compute_result` | `task_id` (int) | one task's status and, once finished, the reduced value |
 
 A submit returns at once with `status: running` (or `done` for tiny tasks);
-the model polls `compute_result` until it is `done`. Example exchange:
+the model polls `compute_result` until it is `done`. A task whose chunks
+failed (module trap, missing runtime, GPU error) finishes as `status:"error"`
+with a `failed_chunks` count — a failed chunk is **counted, never silently
+folded as zero** into the answer. Example exchange:
 
 ```jsonc
 // → compute_submit
@@ -141,7 +151,8 @@ Options: `--listen HOST:PORT` (relay bind, default `0.0.0.0:47700`),
 `--connect HOST:PORT` (relay to join when this node has no `--relay`),
 `--mcp-listen HOST:PORT` (MCP HTTPS bind, default `127.0.0.1:8443`),
 `--tls-cert FILE --tls-key FILE` (PEM cert+key; default: self-signed under
-`~/.swarm-mcp`), `--workers N` (worker threads, default 1), `-v`.
+`~/.swarm-mcp`), `--workers N` (worker threads, default 1), `--gpu` (workers
+run GPU wasm kernels — see *GPU compute*), `-v`.
 
 A manual CLI submit (no MCP) is handy for testing:
 
@@ -233,6 +244,74 @@ swarm-mcp runwasm <relay-host> 47700 sum 1 1000000 prime_counter.wasm --token my
 whose `main` reads `lo`/`hi` from argv and prints the partial itself — full
 control, for when you compiled the module yourself.
 
+### Chunk kernels
+
+By default the generated program calls `kernel(x)` **per element**. Pass
+`kind:"chunk"` and the kernel is `@ kernel i lo i hi → i` (or `→ f`) instead,
+called **once with the worker's whole sub-range** — the kernel owns the loop
+and returns the chunk partial; the reduce op still combines partials across
+chunks. This is the right granularity when the kernel has per-invocation setup
+cost (open a device, JIT something, allocate buffers) or wants to vectorise
+the range itself — it is what the GPU path is built on.
+
+## GPU compute
+
+The cluster runs **real GPU workloads** end-to-end: kernels execute on each
+worker's NVIDIA GPU via CUDA, JIT-compiled at run time with NVRTC — while the
+work unit that travels the cluster stays an ordinary, HMAC-tagged **wasm
+module**. No CUDA toolkit is needed on any node (only the driver's `libcuda` +
+`libnvrtc`), and non-GPU nodes need nothing at all.
+
+```sh
+# a GPU compute node: the pure-NURL wasmtime as the runtime + --gpu
+swarm-mcp --token mysecret --worker --gpu --connect <relay-host>:47700
+```
+
+The model then writes **only the math** — `compute_submit_cuda` takes a CUDA-C
+map function and the server generates everything else (the NVRTC JIT harness,
+a grid-stride map over the range, on-device block reduction, the host fold):
+
+```jsonc
+// → compute_submit_cuda: ∫₀¹ 4/(1+t²) dt · 1e9  =  π·1e9, on the GPUs
+{"cuda": "__device__ double f(long long x) { double t = (double)x * 1e-9; return 4.0 / (1.0 + t*t); }",
+ "lo": 0, "hi": 1000000000, "reduce": "sum"}
+// ← {"task_id":1, "status":"done", ..., "result":3.14159e+09}
+```
+
+On an RTX 4090 one 250-million-element chunk completes in ~0.3 s **including**
+process spawn and the NVRTC JIT — around three orders of magnitude faster than
+the interpreted expression path on the same machine. Ranges in the billions
+are practical.
+
+How the pieces fit (each is independently reusable):
+
+* **Capability routing.** A `--gpu` worker advertises a capability bit in its
+  HELLO (a trailing byte older nodes ignore). Every node folds GPU-capable
+  workers into a second, GPU-only consistent-hash ring, and the GPU task kind
+  is scoped to that ring (`dist/job`'s per-kind routing rings) — ownership,
+  dispatch and mid-flight re-homing all stay inside the capability domain, so
+  a GPU chunk can never land on (or be forwarded to) a CPU-only worker.
+* **FFI as imports.** The generated kernel program declares the CUDA/NVRTC FFI
+  directly (the same ABI as `packages/gpu`); built with `--ffi-host-imports`
+  those symbols become wasm `env` imports.
+* **The GPU bridge.** The pure-NURL `wasmtime` resolves those imports against
+  the worker's real `libcuda`/`libnvrtc` — but only under `--allow-gpu`, which
+  is exactly what a `--gpu` worker passes for GPU chunks (and *only* for GPU
+  chunks; plain wasm kernels keep the sealed sandbox).
+
+`compute_submit_kernel` (with `gpu:true`, usually `kind:"chunk"`) and
+`compute_run_wasm` (with `gpu:true`) expose the same machinery for hand-written
+GPU kernels: any NURL source with `cuda`/`nvrtc` FFI declarations compiles to
+a module whose GPU calls run on the workers' hardware.
+
+> **Trust note:** GPU host imports pierce the wasm sandbox by design (device
+> pointers are raw host handles), which is why they are per-worker opt-in
+> (`--gpu`) and per-task opt-in (`gpu:true`), on top of the cluster token —
+> only token-authentic tasks reach a worker at all. Turn `--gpu` on only for
+> clusters whose token holders you trust, same as any compute you'd accept
+> from them natively. Pick the device with `CUDA_VISIBLE_DEVICES` in the
+> worker's environment (the kernel program binds device ordinal 0).
+
 ## Tests
 
 ```sh
@@ -242,8 +321,16 @@ NURL_STDLIB=<repo> ../../nurl.sh tests/expr_test.nu  /tmp/et && /tmp/et
 NURL_STDLIB=<repo> ../../nurl.sh tests/work_test.nu  /tmp/wt && /tmp/wt
 NURL_STDLIB=<repo> ../../nurl.sh tests/token_test.nu /tmp/tt && /tmp/tt
 
+# HELLO capability byte + roster, CUDA kernel generator + result frames
+NURL_STDLIB=<repo> ../../nurl.sh tests/caps_test.nu       /tmp/ct && /tmp/ct
+NURL_STDLIB=<repo> ../../nurl.sh tests/cudakernel_test.nu /tmp/ck && /tmp/ck
+
 # end-to-end: an all-in-one node + MCP over HTTPS + CLI submit + token isolation
 ./tests/live_smoke.sh
+
+# live GPU end-to-end (skips cleanly without an NVIDIA GPU): compute_submit_cuda
+# on real hardware + mixed CPU/GPU cluster routing
+./tests/gpu_smoke.sh
 
 # wasm path (needs wasmtime): compile a kernel to module.wasm, then
 swarm-mcp runwasm 127.0.0.1 47700 sum 1 1000000 module.wasm --token mysecret
@@ -255,10 +342,11 @@ swarm-mcp runwasm 127.0.0.1 47700 sum 1 1000000 module.wasm --token mysecret
 src/token.nu       cluster token → group-id isolation + HMAC payload/result auth
 src/expr.nu        the expression kernel language: tokenizer, parser, evaluator
 src/work.nu        map-reduce: reduce ops, the expression handler, sharding
-src/wasmkernel.nu  ship + run a compiled wasm kernel under wasmtime
-src/buildwasm.nu   compile NURL source → wasm via the NURL build API
-src/census.nu      HELLO membership gossip → consistent-hash ring
-src/main.nu        composable roles (--relay/--worker/--mcp) + HTTPS MCP server
+src/wasmkernel.nu  ship + run a compiled wasm kernel under wasmtime (± --allow-gpu)
+src/buildwasm.nu   compile NURL source → wasm via the NURL build API; kernel wrappers
+src/cudakernel.nu  CUDA-C map fn → a complete generated GPU chunk-kernel program
+src/census.nu      HELLO membership gossip (+ capability bits) → consistent-hash rings
+src/main.nu        composable roles (--relay/--worker[--gpu]/--mcp) + HTTPS MCP server
 ```
 
 ## License

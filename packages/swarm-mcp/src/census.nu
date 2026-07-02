@@ -28,8 +28,15 @@ $ `stdlib/dist/ring.nu`
 
 @ role_worker → i { ^ 1 }
 
-// HELLO wire: [3][id:8][role:1][want:1][pklen:2][pubkey…]
-@ hello_build i id i role i want ( Vec u ) pubkey → ( Vec u ) {
+// Capability bits a worker advertises in HELLO. cap_gpu: the worker runs wasm
+// chunks with GPU host imports enabled (wt --allow-gpu on real hardware).
+@ cap_gpu → i { ^ 1 }
+
+// HELLO wire: [3][id:8][role:1][want:1][pklen:2][pubkey…][caps:1]
+// The caps byte TRAILS the pubkey so a pre-caps decoder (fixed prefix +
+// pklen-delimited pubkey) reads the same fields and ignores the tail; a caps
+// decoder treats a missing tail as caps=0. Mixed-version clusters stay sound.
+@ hello_build i id i role i want ( Vec u ) pubkey i caps → ( Vec u ) {
     : ( Vec u ) b ( vec_new [u] )
     ( vec_push [u] b # u ( census_hello_t ) )
     ( bytes_push_u64_be b # u64 id )
@@ -37,10 +44,11 @@ $ `stdlib/dist/ring.nu`
     ( vec_push [u] b # u want )
     ( bytes_push_u16_be b # u16 ( vec_len [u] pubkey ) )
     ( vec_extend [u] b pubkey )
+    ( vec_push [u] b # u caps )
     ^ b
 }
 
-: Hello { i id i role i want ( Vec u ) pubkey }
+: Hello { i id i role i want ( Vec u ) pubkey i caps }
 
 @ hello_free Hello h → v { ( vec_free [u] . h pubkey ) }
 
@@ -52,14 +60,15 @@ $ `stdlib/dist/ring.nu`
     : ( Vec u ) pk ( vec_with_cap [u] pklen )
     : ~ i k 0
     ~ < k pklen { ?? ( vec_get [u] buf + 13 k ) { T x → ( vec_push [u] pk x ) F → {} } = k + k 1 }
-    ^ @ Hello { id role want pk }
+    : i caps ?? ( vec_get [u] buf + 13 pklen ) { T x → # i x F → 0 }
+    ^ @ Hello { id role want pk caps }
 }
 
 // ── membership set: the pubkeys currently in the ring ──────────────
 // A node tracks the pubkeys it has folded into its ring so a re-heard HELLO is
 // idempotent (adding a member twice would double its ring points and skew load).
 
-: Member { ( Vec u ) pubkey i id }
+: Member { ( Vec u ) pubkey i id i caps }
 
 : Roster { ( Vec s ) members }  // *Member
 
@@ -94,14 +103,27 @@ $ `stdlib/dist/ring.nu`
 
 @ roster_count * Roster r → i { ^ ( vec_len [s] . r members ) }
 
+// How many members advertise every capability bit in `mask`.
+@ roster_count_caps * Roster r i mask → i {
+    : i n ( vec_len [s] . r members )
+    : ~ i c 0 : ~ i k 0
+    ~ < k n {
+        : s pp ?? ( vec_get [s] . r members k ) { T x → x F → # s 0 }
+        ? != # i pp 0 { : *Member m # *Member pp ? == & . m caps mask mask { = c + c 1 } {} } {}
+        = k + k 1
+    }
+    ^ c
+}
+
 // Fold a worker into the roster + ring, once. Returns T if newly added.
-@ roster_add * Roster r * Ring ring ( Vec u ) pubkey i id i vnodes → b {
+@ roster_add * Roster r * Ring ring ( Vec u ) pubkey i id i vnodes i caps → b {
     ? ( roster_has r pubkey ) { ^ F } {}
     : *Member m # *Member ( nurl_alloc Z Member )
     : ( Vec u ) cp ( vec_with_cap [u] ( vec_len [u] pubkey ) )
     ( vec_extend [u] cp pubkey )
     = . m pubkey cp
     = . m id id
+    = . m caps caps
     ( vec_push [s] . r members # s m )
     ( ring_add_member ring pubkey vnodes )
     ^ T

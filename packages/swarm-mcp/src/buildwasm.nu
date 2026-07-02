@@ -65,7 +65,15 @@ $ `stdlib/ext/http_cli.nu`
 // folds in f64 and prints the partial's f64 BIT PATTERN as a decimal integer —
 // so it rides the same stdout→int wire, and the coordinator reinterprets it
 // (work.nu tids_combine float path).
-@ wrap_kernel s source i op i dtype → String {
+//
+// kkind 0 (element): the generated main folds kernel(x) over [lo, hi).
+// kkind 1 (chunk):   the kernel is `@ kernel i lo i hi → i` (or `→ f`) and the
+// main calls it ONCE with the whole sub-range — the kernel owns the loop. This
+// is the right granularity for kernels with per-invocation setup cost (open a
+// CUDA context, JIT a device kernel, allocate buffers): one setup per CHUNK
+// instead of one per element. The reduce op still combines the chunk partials.
+@ wrap_kernel s source i op i dtype i kkind → String {
+    ? == kkind 1 { ^ ( __wrap_kernel_chunk source dtype ) } {}
     ? == dtype 1 { ^ ( __wrap_kernel_f source op ) } {}
     : String w ( string_new )
     // `$ `stdlib/core/string.nu`` — backticks emitted by code (can't nest in a
@@ -83,6 +91,35 @@ $ `stdlib/ext/http_cli.nu`
     ( string_push_str w `  : ~ i x lo\n` )
     ( string_push_str w `  ~ < x hi { : i kv ( kernel x ) = acc ` ) ( string_push_str w ( __red_combine_src op ) ) ( string_push_str w ` = x + x 1 }\n` )
     ( string_push_str w `  ( nurl_print_int acc )\n  ^ 0\n}\n` )
+    ( string_push_str w `@ main → i { ^ ( __swarmk_main ) }\n` )
+    ^ w
+}
+
+// The chunk-kind program: main hands the whole sub-range to the kernel in one
+// call. dtype 0: `@ kernel i lo i hi → i`, partial printed as a decimal
+// integer. dtype 1: `@ kernel i lo i hi → f`, partial printed as its f64 bit
+// pattern (same int wire; the coordinator reinterprets).
+@ __wrap_kernel_chunk s source i dtype → String {
+    : String w ( string_new )
+    ( string_push_str w `$ ` ) ( string_push_char w 96 )
+    ( string_push_str w `stdlib/core/string.nu` ) ( string_push_char w 96 )
+    ? == dtype 1 {
+        ( string_push_str w `\n$ ` ) ( string_push_char w 96 )
+        ( string_push_str w `stdlib/std/floatbits.nu` ) ( string_push_char w 96 )
+    } {}
+    ( string_push_str w `\n` )
+    ( string_push_str w source )
+    ( string_push_str w `\n@ __swarmk_main → i {\n` )
+    ( string_push_str w `  : i argc ( nurl_argv_count )\n` )
+    ( string_push_str w `  ? < argc 3 { ^ 1 } {}\n` )
+    ( string_push_str w `  : i lo ( nurl_str_to_int ( nurl_argv_get 1 ) )\n` )
+    ( string_push_str w `  : i hi ( nurl_str_to_int ( nurl_argv_get 2 ) )\n` )
+    ? == dtype 1 {
+        ( string_push_str w `  ( nurl_print_int ( f64_to_bits ( kernel lo hi ) ) )\n` )
+    } {
+        ( string_push_str w `  ( nurl_print_int ( kernel lo hi ) )\n` )
+    }
+    ( string_push_str w `  ^ 0\n}\n` )
     ( string_push_str w `@ main → i { ^ ( __swarmk_main ) }\n` )
     ^ w
 }

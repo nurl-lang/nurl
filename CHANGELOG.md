@@ -8,6 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`stdlib/dist/job.nu`: per-kind routing rings (capability domains).**
+  `job_set_ring(node, kind, ring)` scopes a task kind to its own consistent-hash
+  ring — submit, ownership, and mid-flight forwarding for that kind all resolve
+  against the scoped ring, so a task can never land on (or re-home to) a node
+  outside its capability domain. Kinds without a scoped ring use the main ring,
+  unchanged. New golden coverage in `compiler/tests/dist_job.nu`.
+- **`packages/swarm-mcp` v0.5.0 — distributed GPU compute over MCP.**
+  Workers started with `--gpu` advertise a capability bit in the HELLO gossip
+  (a trailing byte older nodes ignore); every node folds GPU workers into a
+  GPU-only ring and the GPU wasm task kind routes on it, so mixed CPU/GPU
+  clusters just work. GPU chunks run under the pure-NURL wasmtime with
+  `--allow-gpu`, executing CUDA/NVRTC host imports on the worker's real GPU.
+  New MCP tool **`compute_submit_cuda`**: the model writes only a CUDA-C
+  `__device__ double f(long long x)`; the server generates the complete kernel
+  program (NVRTC JIT, grid-stride map, on-device block reduction, host fold),
+  compiles it to wasm, and shards it across the GPU workers — verified live on
+  an RTX 4090 (π·10⁹ integral; a 250M-element chunk in ~0.3 s including the
+  JIT). `compute_submit_kernel` gains `kind:"chunk"` (one kernel call per
+  sub-range) and `gpu:true`; `compute_run_wasm` gains `gpu:true`.
+
+### Changed
+
+- **swarm-mcp wasm results are failure-visible.** The wasm result frame is now
+  `[ok:1][partial:8]`; a chunk that fails (module trap, missing runtime, GPU
+  error) is counted and the task finishes as `status:"error"` with
+  `failed_chunks` — never silently folded into the reduce as a zero. Legacy
+  8-byte frames are still accepted.
+
 ## [0.10.9] — 2026-07-02
 
 A **wasm toolchain** release. The pure-NURL `packages/wasmtime` runtime grows
