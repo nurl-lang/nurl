@@ -61,7 +61,7 @@ $ `interp.nu`
     ^ found
 }
 
-@ run_invoke s export s path i first_arg i argc → i {
+@ run_invoke s export s path i first_arg i argc i allow_gpu → i {
     : !( Vec u ) IoErr fr ( read_file_bytes path )
     : ~ i rc 0
     ?? fr {
@@ -78,6 +78,7 @@ $ `interp.nu`
                     ( module_free m ) = rc 1
                 } {
                     : *Interp it ( interp_new m )
+                    ? != allow_gpu 0 { ( interp_allow_gpu it ) } {}
                     : s ftp ( __functype m fidx )
                     // push args, parsed per parameter type (i32/i64 decimal,
                     // f32/f64 floating-point → stored as their bit pattern)
@@ -117,7 +118,7 @@ $ `interp.nu`
 
 // WASI command: run the module's `_start` with argv = [module, prog args…],
 // the given preopened directories and environment entries.
-@ run_command s path i prog_start i argc ( Vec String ) dirs ( Vec String ) envs i fuel → i {
+@ run_command s path i prog_start i argc ( Vec String ) dirs ( Vec String ) envs i fuel i allow_gpu → i {
     : !( Vec u ) IoErr fr ( read_file_bytes path )
     : ~ i rc 0
     ?? fr {
@@ -135,6 +136,7 @@ $ `interp.nu`
                 } {
                     : *Interp it ( interp_new m )
                     ? > fuel 0 { = . it fuel fuel } {}
+                    ? != allow_gpu 0 { ( interp_allow_gpu it ) } {}
                     : i nd ( vec_len [String] dirs )
                     : ~ i d 0
                     ~ < d nd { ?? ( vec_get [String] dirs d ) { T ds → ( interp_set_preopen it ( string_data ds ) ( string_data ds ) ) F → {} } = d + d 1 }
@@ -164,12 +166,13 @@ $ `interp.nu`
     : i argc ( env_args_count )
     ? < argc 2 { ( usage ) ^ 1 } {}
     // Direct-call mode: `[run] --invoke <export> <module> [args]`.
+    : i allow_gpu ? >= ( __arg_index argc `--allow-gpu` ) 0 1 0
     : i ii ( __arg_index argc `--invoke` )
     ? >= ii 0 {
         ? < argc + ii 3 { ( nurl_print `usage: wasmtime run --invoke <export> <module.wasm> [args…]\n` ) ^ 1 } {}
         : String export ( env_arg + ii 1 )
         : String path ( env_arg + ii 2 )
-        : i rc ( run_invoke ( string_data export ) ( string_data path ) + ii 3 argc )
+        : i rc ( run_invoke ( string_data export ) ( string_data path ) + ii 3 argc allow_gpu )
         ( string_free export ) ( string_free path )
         ^ rc
     } {}
@@ -201,7 +204,7 @@ $ `interp.nu`
     : ~ i rc 1
     ? < mi 0 { ( usage ) } {
         : String path ( env_arg mi )
-        = rc ( run_command ( string_data path ) + mi 1 argc dirs envs fuel )
+        = rc ( run_command ( string_data path ) + mi 1 argc dirs envs fuel allow_gpu )
         ( string_free path )
     }
     : i nd ( vec_len [String] dirs )

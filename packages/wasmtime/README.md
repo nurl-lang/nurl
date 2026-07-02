@@ -20,7 +20,7 @@ exit code matching the reference wasmtime.
 
 ```sh
 # WASI command mode: run a wasm32-wasi module's _start (argv = module + args)
-wasmtime run [--dir <path>]… [--env NAME=VALUE]… [--fuel N] hello.wasm [args…]
+wasmtime run [--dir <path>]… [--env NAME=VALUE]… [--fuel N] [--allow-gpu] hello.wasm [args…]
 
 # Direct mode: invoke an exported function with integer / float args
 wasmtime run --invoke <export> <module.wasm> [args…]
@@ -91,6 +91,30 @@ thing, and is ASan-clean. `tests/wasi_test.nu` covers the import path: a module
 that writes via `fd_write` and exits via `proc_exit`, matching reference output
 and exit code.
 
+## Robustness against hostile input
+
+The decoder and interpreter are hardened against malformed / adversarial
+modules: **every input is memory-safe and terminates** — no input hangs the
+decoder or corrupts memory. Concretely:
+
+- every vector length / count is validated against the bytes physically
+  remaining before anything is allocated (a 10-byte module can no longer
+  request a 2³²-element buffer), and `mem.min` / `table.min` / per-function
+  locals are capped to architectural limits;
+- section sizes and constant-init expressions are bounded — an over-long LEB
+  size (which decodes to a negative offset) or an unterminated init expression
+  is a clean decode error, not an infinite loop;
+- memarg offsets are masked to `u32` so an out-of-bounds access traps rather
+  than silently wrapping past the bounds check, and WASI iovec counts / buffer
+  lengths are clamped to memory size;
+- the `env`/GPU import surface is opt-in (`--allow-gpu`), off by default.
+
+This was validated by an ASan-instrumented mutation fuzzer plus an exhaustive
+prefix (truncation) sweep of the whole corpus — **zero crashes, zero hangs** —
+and locked in by `tests/hardening_test.nu`. (Note: `--fuel N` still bounds
+runaway *valid* guests; an unbounded `loop` runs forever exactly as it does on
+the reference runtime.)
+
 ## GPU host imports (CUDA / NVRTC)
 
 A wasm module built from a GPU-using NURL package (`packages/gpu` →
@@ -111,9 +135,14 @@ symbols under module `env`. This runtime resolves them to the real
 stub objects on a GPU-less host, so `wasmtime` always builds; a guest then
 just sees non-zero `CUresult` codes.
 
+The `env`/GPU import surface is **off by default** — those imports hand the
+guest raw host pointers into linear memory and forward them to `libcuda`, so
+they are only safe for trusted compute. Pass `--allow-gpu` to enable them (the
+embedder API is `interp_allow_gpu`); without it, an `env` import traps cleanly.
+
 ```sh
 # a GPU wasm module runs its kernels on the real device through this runtime
-wasmtime run --dir . infer.wasm          # onnx forward pass on the GPU
+wasmtime run --allow-gpu --dir . infer.wasm   # onnx forward pass on the GPU
 ```
 
 Verified on an RTX 4090: a self-contained vector-add (NVRTC compile → module
@@ -123,10 +152,12 @@ load → alloc → HtoD → launch → DtoH) and the `onnx` package's inference 
 reference. See the top-level PR for the toolchain path (compile a GPU package
 to wasm with FFI symbols as host imports).
 
-> Security note: raw host handles / device pointers are visible to the guest,
-> exactly as in native NURL — safe for trusted compute (your own kernels). An
-> untrusted-guest deployment would add an id↔pointer handle table in the
-> bridge; the seam is a single `__gpu_ptr` / handle-passthrough boundary.
+> Security note: this surface is **off by default** and only enabled with
+> `--allow-gpu`, because raw host handles / device pointers are visible to the
+> guest exactly as in native NURL — safe for trusted compute (your own
+> kernels), not for untrusted guests. A hardened untrusted-guest deployment
+> would additionally add an id↔pointer handle table in the bridge; the seam is
+> a single `__gpu_ptr` / handle-passthrough boundary.
 
 ## Roadmap
 
