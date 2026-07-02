@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`packages/swarm-mcp` v0.7.0 — datasets: distributed GPU compute over real
+  data.** `compute_upload_data` uploads a flat f64 array (base64 raw LE, or a
+  file on the MCP host; ≤ 256 MiB) and returns a `dataset_id` + stats; the
+  three CUDA tools take `dataset: id` and the device functions receive each
+  element as a second argument — `f(long long x, double v)`, `bin/val(x, v)`,
+  with runtime params as a trailing `const double* p`. Without `lo`/`hi` the
+  whole dataset is processed. Sharding follows the map-reduce split rule: each
+  chunk's payload (v3) carries exactly its own data slice (≤ 12 MB per chunk
+  under the relay's 16 MB frame cap), HMAC-tagged like everything else; the
+  worker hands it to the module through a sandbox-preopened file and the
+  generated program uploads it to the GPU. Verified live against Python
+  references: sum / max / variance-with-param over 100k gaussians exact,
+  pointwise normalisation exact, 10-bin `floor(v)` distribution exact.
+  `compute_list_data` lists uploads.
+
 - **`packages/swarm-mcp` v0.6.0 — dynamic, versatile GPU compute.** Three
   upgrades to the distributed GPU engine:
   - **Runtime kernel params, no recompiles.** `params: [numbers]` reach the

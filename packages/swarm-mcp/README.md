@@ -55,15 +55,17 @@ deterministically (no coordination):
 
 ## The control surface (what the LLM sees)
 
-Eight tools, with self-describing schemas so a model uses them without docs:
+Ten tools, with self-describing schemas so a model uses them without docs:
 
 | tool | arguments | does |
 |------|-----------|------|
 | `compute_submit` | `expr` (string), `lo` (int), `hi` (int), `reduce` (string, default `sum`), `dtype` (string, `int` default or `float`) | shard + run an **expression** kernel over `[lo,hi)`; returns a `task_id`. `dtype:"float"` evaluates the same kernel in **f64** (`x` is the index as a double, float literals like `0.5` allowed) |
 | `compute_submit_kernel` | `source` (NURL program), `lo`, `hi`, `reduce`, `kind` (`element` default or `chunk`), `gpu` (bool) | run an **arbitrary NURL kernel given as source** — the server compiles it to wasm and runs it; for anything the expression language can't express (loops, helpers) |
-| `compute_submit_cuda` | `cuda` (a `__device__ double f(long long x)` function), `lo`, `hi`, `reduce`, `params` (numbers) | distributed **GPU** map-reduce: the model writes only the CUDA-C math; the server generates the whole kernel program and the `--gpu` workers run it on real GPUs |
-| `compute_sample_cuda` | `cuda`, `lo`, `hi`, `params`, `out_file` | distributed GPU map that returns **every value** in order — curves, fields, tables (JSON ≤ 1024 values, base64 ≤ 65536, `out_file` beyond) |
-| `compute_histogram_cuda` | `cuda` (`bin(x)` + optional `val(x)`), `lo`, `hi`, `bins`, `params`, `out_file` | distributed GPU **binned aggregation**: a whole distribution in one pass over billions of x |
+| `compute_submit_cuda` | `cuda` (a `__device__ double f(long long x)` function), `lo`, `hi`, `reduce`, `params` (numbers), `dataset` | distributed **GPU** map-reduce: the model writes only the CUDA-C math; the server generates the whole kernel program and the `--gpu` workers run it on real GPUs |
+| `compute_sample_cuda` | `cuda`, `lo`, `hi`, `params`, `out_file`, `dataset` | distributed GPU map that returns **every value** in order — curves, fields, tables (JSON ≤ 1024 values, base64 ≤ 65536, `out_file` beyond) |
+| `compute_histogram_cuda` | `cuda` (`bin(x)` + optional `val(x)`), `lo`, `hi`, `bins`, `params`, `out_file`, `dataset` | distributed GPU **binned aggregation**: a whole distribution in one pass over billions of x |
+| `compute_upload_data` | `data_base64` or `file`, `name` | upload a **dataset** (flat f64 array) the GPU tools map over — returns a `dataset_id` + stats |
+| `compute_list_data` | — | every uploaded dataset: id, name, count |
 | `compute_run_wasm` | `wasm_base64` (string), `lo`, `hi`, `reduce`, `gpu` (bool) | like `compute_submit_kernel` but you pass an **already-compiled** wasm module |
 | `compute_list` | — | every task with status (`running`/`done`/`error`), kernel, range, reduce, result |
 | `compute_result` | `task_id` (int) | one task's status and, once finished, the reduced value |
@@ -318,6 +320,33 @@ Under the hood the vector modes skip stdout entirely: the module writes raw
 little-endian f64s to a sandbox-preopened file in one `fwrite`, the worker
 validates the byte count, and the chunk result frame `[ok][count][f64…]`
 carries it home over the same HMAC-tagged wire.
+
+### Real data: datasets
+
+`compute_upload_data` brings **your data** to the cluster — a flat f64 array,
+as base64 (raw little-endian) or a file on the MCP host, up to 256 MiB. The
+CUDA tools then take `dataset: id`, and the device functions receive each
+element as a second argument:
+
+```jsonc
+// → compute_upload_data {"file": "/data/readings.bin", "name": "sensor-a"}
+// ← {"dataset_id": 1, "count": 100000, "min": -4.27, "max": 14.54, "mean": 5.0}
+
+// GPU variance numerator over the data, mean passed as a runtime param:
+{"cuda": "__device__ double f(long long x, double v, const double* p) { double d = v - p[0]; return d * d; }",
+ "dataset": 1, "reduce": "sum", "params": [5.00452]}
+
+// pointwise transform (sample), value distribution (histogram) — same shape:
+{"cuda": "__device__ long long bin(long long x, double v) { return (long long)floor(v); }",
+ "dataset": 1, "bins": 10}
+```
+
+Without `lo`/`hi` the whole dataset is processed. Sharding follows the
+map-reduce split rule — each chunk's payload carries exactly its own slice of
+the data (capped ~12 MB per chunk, under the relay's 16 MB frame limit), so a
+worker needs no separate fetch and the HMAC tag covers data and work alike.
+Mean / variance / extrema / distributions / normalisations over ~10⁷-element
+arrays run in a couple of seconds end to end.
 
 How the pieces fit (each is independently reusable):
 

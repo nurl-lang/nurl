@@ -85,10 +85,20 @@ $ `wasmkernel.nu`
     ^ `0.0`                             // sum, count
 }
 
-// One mapped value: count folds 1.0 per truthy f(x), the rest fold f(x).
-@ __cu_mapval i op i has_params → s {
-    ? == op 4 { ^ ? != has_params 0 `(f(x, p) != 0.0 ? 1.0 : 0.0)` `(f(x) != 0.0 ? 1.0 : 0.0)` } {}
-    ^ ? != has_params 0 `f(x, p)` `f(x)`
+// One mapped value: count folds 1.0 per truthy f(…), the rest fold f(…).
+@ __cu_mapval i op i has_params i has_data → String {
+    : String pc ( __cu_pcall has_params has_data )
+    : String o ( string_new )
+    ? == op 4 {
+        ( string_push_str o `(f` )
+        ( string_push_str o ( string_data pc ) )
+        ( string_push_str o ` != 0.0 ? 1.0 : 0.0)` )
+    } {
+        ( string_push_str o `f` )
+        ( string_push_str o ( string_data pc ) )
+    }
+    ( string_free pc )
+    ^ o
 }
 
 // combine(a, b) in CUDA-C. count combines by summing (like sum).
@@ -119,28 +129,51 @@ $ `wasmkernel.nu`
     ( string_push_str w `\n` )
 }
 
-// The device-fn parameter tail, by has_params: `, const double* p` or ``.
-@ __cu_ptail i has_params → s { ^ ? != has_params 0 `, const double* p` `` }
+// The device-fn signature tail: `, double v` when a dataset feeds the kernel
+// (v = data[x]), `, const double* p` with runtime params — in that order.
+@ __cu_ptail i has_params i has_data → String {
+    : String o ( string_new )
+    ? != has_data 0 { ( string_push_str o `, double v` ) } {}
+    ? != has_params 0 { ( string_push_str o `, const double* p` ) } {}
+    ^ o
+}
 
-@ __cu_pcall i has_params → s { ^ ? != has_params 0 `(x, p)` `(x)` }
+// The matching call site (inside the generated kernel, x and in in scope).
+@ __cu_pcall i has_params i has_data → String {
+    : String o ( string_from `(x` )
+    ? != has_data 0 { ( string_push_str o `, in[x - lo]` ) } {}
+    ? != has_params 0 { ( string_push_str o `, p` ) } {}
+    ( string_push_str o `)` )
+    ^ o
+}
+
+// The generated KERNEL's extra formal parameters (device buffers), appended
+// after the mode's fixed ones: the dataset slice, then the runtime params.
+@ __cu_ktail i has_params i has_data → String {
+    : String o ( string_new )
+    ? != has_data 0 { ( string_push_str o `, const double* in` ) } {}
+    ? != has_params 0 { ( string_push_str o `, const double* p` ) } {}
+    ^ o
+}
 
 // ── the CUDA-C kernel source, by mode ─────────────────────────────
 // Emitted INTO the generated program as one escaped backtick literal (NVRTC
 // wants a single char*): user source + the generated swarm_map kernel.
-@ __emit_cuda_src String w s user i op i mode i has_params → v {
+@ __emit_cuda_src String w s user i op i mode i has_params i has_data → v {
     ( __pl w `@ __cuda_src → String {` )
     ( string_push_str w `    : String c ( string_from ` )
     ( string_push_char w 96 )
     ( __cuda_escape w user )
     ( string_push_char w 92 ) ( string_push_char w 110 )  // `\n` escape in the generated literal
     : String cu ( string_new )
-    : s pt ( __cu_ptail has_params )
-    : s pc ( __cu_pcall has_params )
+    : String pt ( __cu_ptail has_params has_data )
+    : String pc ( __cu_pcall has_params has_data )
+    : String kt ( __cu_ktail has_params has_data )
     ? == mode ( gpu_mode_hist ) {
         // default val() when the user only wrote bin(): count per bin
         ? < ( nurl_str_find user `double val` ) 0 {
             ( string_push_str cu `__device__ double val(long long x` )
-            ( string_push_str cu pt )
+            ( string_push_str cu ( string_data pt ) )
             ( string_push_str cu `) { return 1.0; }\n` )
         } {}
         // portable double atomicAdd (CAS loop — valid on NVRTC's default arch)
@@ -153,39 +186,40 @@ $ `wasmkernel.nu`
         ( string_push_str cu `    return __longlong_as_double(old);\n` )
         ( string_push_str cu `}\n` )
         ( string_push_str cu `extern "C" __global__ void swarm_map(long long lo, long long hi, double* out, long long K` )
-        ( string_push_str cu pt )
+        ( string_push_str cu ( string_data kt ) )
         ( string_push_str cu `) {\n` )
         ( string_push_str cu `    long long stride = (long long)gridDim.x * blockDim.x;\n` )
         ( string_push_str cu `    for (long long x = lo + (long long)blockIdx.x * blockDim.x + threadIdx.x; x < hi; x += stride) {\n` )
         ( string_push_str cu `        long long b = bin` )
-        ( string_push_str cu pc )
+        ( string_push_str cu ( string_data pc ) )
         ( string_push_str cu `;\n` )
         ( string_push_str cu `        if (b >= 0 && b < K) swarm_atomic_add(&out[b], val` )
-        ( string_push_str cu pc )
+        ( string_push_str cu ( string_data pc ) )
         ( string_push_str cu `);\n    }\n}\n` )
     } {
     ? == mode ( gpu_mode_sample ) {
         ( string_push_str cu `extern "C" __global__ void swarm_map(long long lo, long long hi, double* out` )
-        ( string_push_str cu pt )
+        ( string_push_str cu ( string_data kt ) )
         ( string_push_str cu `) {\n` )
         ( string_push_str cu `    long long stride = (long long)gridDim.x * blockDim.x;\n` )
         ( string_push_str cu `    for (long long x = lo + (long long)blockIdx.x * blockDim.x + threadIdx.x; x < hi; x += stride)\n` )
         ( string_push_str cu `        out[x - lo] = f` )
-        ( string_push_str cu pc )
+        ( string_push_str cu ( string_data pc ) )
         ( string_push_str cu `;\n}\n` )
     } {
         // scalar reduce
         : String comb ( __cu_combine `acc` `v` op )
         : String comb2 ( __cu_combine `sh[t]` `sh[t + s]` op )
+        : String mv ( __cu_mapval op has_params has_data )
         ( string_push_str cu `extern "C" __global__ void swarm_map(long long lo, long long hi, double* out` )
-        ( string_push_str cu pt )
+        ( string_push_str cu ( string_data kt ) )
         ( string_push_str cu `) {\n` )
         ( string_push_str cu `    __shared__ double sh[256];\n` )
         ( string_push_str cu `    long long stride = (long long)gridDim.x * blockDim.x;\n` )
         ( string_push_str cu `    long long first = lo + (long long)blockIdx.x * blockDim.x + threadIdx.x;\n` )
         ( string_push_str cu `    double acc = ` ) ( string_push_str cu ( __cu_ident op ) ) ( string_push_str cu `;\n` )
         ( string_push_str cu `    for (long long x = first; x < hi; x += stride) { double v = ` )
-        ( string_push_str cu ( __cu_mapval op has_params ) ) ( string_push_str cu `; acc = ` )
+        ( string_push_str cu ( string_data mv ) ) ( string_push_str cu `; acc = ` )
         ( string_push_str cu ( string_data comb ) ) ( string_push_str cu `; }\n` )
         ( string_push_str cu `    int t = threadIdx.x;\n` )
         ( string_push_str cu `    sh[t] = acc;\n` )
@@ -196,8 +230,9 @@ $ `wasmkernel.nu`
         ( string_push_str cu `    }\n` )
         ( string_push_str cu `    if (t == 0) out[blockIdx.x] = sh[0];\n` )
         ( string_push_str cu `}\n` )
-        ( string_free comb ) ( string_free comb2 )
+        ( string_free comb ) ( string_free comb2 ) ( string_free mv )
     } }
+    ( string_free pt ) ( string_free pc ) ( string_free kt )
     ( __cuda_escape w ( string_data cu ) )
     ( string_free cu )
     ( string_push_char w 96 )
@@ -225,9 +260,12 @@ $ `wasmkernel.nu`
 
 // ── the wrapper ───────────────────────────────────────────────────
 // CUDA map function + reduce op + output mode (+ params flag) → complete NURL
-// chunk-kernel program. The caller validates cuda_src_ok first.
-@ cuda_wrap s user i op i mode i has_params → String {
+// chunk-kernel program. The caller validates cuda_src_ok first. has_data:
+// the chunk carries a dataset slice — argv gains an in-file path right after
+// hi, and the device functions receive v = data[x] as their second argument.
+@ cuda_wrap s user i op i mode i has_params i has_data → String {
     : b vecmode | == mode ( gpu_mode_sample ) == mode ( gpu_mode_hist )
+    : i hd ? != has_data 0 1 0
     : String w ( string_new )
     ( __pimport w `stdlib/core/io.nu` )
     ( __pimport w `stdlib/core/string.nu` )
@@ -254,17 +292,26 @@ $ `wasmkernel.nu`
     ( __pl w `` )
     ( __pl w `@ __slot → *u { : *u p ( nurl_alloc 8 ) ( nurl_poke p 0 0 ) ^ p }` )
     ( __pl w `` )
-    ( __emit_cuda_src w user op mode has_params )
+    ( __emit_cuda_src w user op mode has_params has_data )
     ( __pl w `` )
     ( __pl w `@ __swarmc_main → i {` )
     ( __pl w `    : i argc ( nurl_argv_count )` )
-    // fixed argv arity by mode; params are everything after
-    : s minargc ? == mode ( gpu_mode_hist ) `5` ? vecmode `4` `3`
+    // fixed argv arity by mode (+1 for the in-file with a dataset); params
+    // are everything after: lo hi [inpath] [outpath] [K] [p…]
+    : i base0 ? == mode ( gpu_mode_hist ) 5 ? vecmode 4 3
+    : s minargc ( nurl_str_int + base0 hd )
     ( string_push_str w `    ? < argc ` ) ( string_push_str w minargc ) ( __pl w ` { ^ 1 } {}` )
     ( __pl w `    : i lo ( nurl_str_to_int ( nurl_argv_get 1 ) )` )
     ( __pl w `    : i hi ( nurl_str_to_int ( nurl_argv_get 2 ) )` )
-    ? vecmode { ( __pl w `    : s outp ( nurl_argv_get 3 )` ) } {}
-    ? == mode ( gpu_mode_hist ) { ( __pl w `    : i kbins ( nurl_str_to_int ( nurl_argv_get 4 ) )` ) } {}
+    ? != hd 0 { ( __pl w `    : s inpath ( nurl_argv_get 3 )` ) } {}
+    ? vecmode {
+        ( string_push_str w `    : s outp ( nurl_argv_get ` )
+        ( string_push_str w ( nurl_str_int + 3 hd ) ) ( __pl w ` )` )
+    } {}
+    ? == mode ( gpu_mode_hist ) {
+        ( string_push_str w `    : i kbins ( nurl_str_to_int ( nurl_argv_get ` )
+        ( string_push_str w ( nurl_str_int + 4 hd ) ) ( __pl w ` ) )` )
+    } {}
     ( string_push_str w `    : i pbase ` ) ( __pl w minargc )
     ( __pl w `    ? != # i ( cuInit 0 ) 0 { ^ 2 } {}` )
     ( __pl w `    : *u ds ( __slot )` )
@@ -311,6 +358,22 @@ $ `wasmkernel.nu`
         ( __pl w `    = dp ( nurl_peek dps 0 )` )
         ( __pl w `    ? != # i ( cuMemcpyHtoD dp ph pbytes ) 0 { ^ 2 } {}` )
     } {}
+    // dataset slice: read the in-file (exactly 8·(hi−lo) bytes) → device
+    ( __pl w `    : ~ i din 0` )
+    ? != hd 0 {
+        ( __pl w `    ? <= hi lo { ^ 2 } {}` )
+        ( __pl w `    : i ibytes * - hi lo 8` )
+        ( string_push_str w `    : s ifh ( fopen inpath ` ) ( __pq w `rb` ) ( __pl w ` )` )
+        ( __pl w `    ? == # i ifh 0 { ^ 2 } {}` )
+        ( __pl w `    : *u ih ( nurl_alloc ibytes )` )
+        ( __pl w `    : i igot ( fread # s ih 1 ibytes ifh )` )
+        ( __pl w `    ( fclose ifh )` )
+        ( __pl w `    ? != igot ibytes { ^ 2 } {}` )
+        ( __pl w `    : *u dis ( __slot )` )
+        ( __pl w `    ? != # i ( cuMemAlloc dis ibytes ) 0 { ^ 2 } {}` )
+        ( __pl w `    = din ( nurl_peek dis 0 )` )
+        ( __pl w `    ? != # i ( cuMemcpyHtoD din ih ibytes ) 0 { ^ 2 } {}` )
+    } {}
     // output device buffer, by mode
     ? == mode ( gpu_mode_hist ) {
         ( __pl w `    ? < kbins 1 { ^ 2 } {}` )
@@ -336,15 +399,17 @@ $ `wasmkernel.nu`
         ( __pl w `    : i dout ( nurl_peek os 0 )` )
     } }
     // kernel argument cells + the void** layer (identical layout to
-    // packages/gpu gpu_launch — the wt bridge translates each guest entry)
+    // packages/gpu gpu_launch — the wt bridge translates each guest entry).
+    // Cell order mirrors the kernel signature: lo, hi, out, [K], [in], [p].
     : b hist == mode ( gpu_mode_hist )
-    : i ncells + 3 + ? hist 1 0 ? != has_params 0 1 0
+    : i ncells + 3 + ? hist 1 0 + hd ? != has_params 0 1 0
     ( string_push_str w `    : *u vals ( nurl_alloc ` ) ( string_push_str w ( nurl_str_int * ncells 8 ) ) ( __pl w ` )` )
     ( __pl w `    ( nurl_poke vals 0 lo )` )
     ( __pl w `    ( nurl_poke vals 1 hi )` )
     ( __pl w `    ( nurl_poke vals 2 dout )` )
     : ~ i cell 3
     ? hist { ( string_push_str w `    ( nurl_poke vals ` ) ( string_push_str w ( nurl_str_int cell ) ) ( __pl w ` kbins )` ) = cell + cell 1 } {}
+    ? != hd 0 { ( string_push_str w `    ( nurl_poke vals ` ) ( string_push_str w ( nurl_str_int cell ) ) ( __pl w ` din )` ) = cell + cell 1 } {}
     ? != has_params 0 { ( string_push_str w `    ( nurl_poke vals ` ) ( string_push_str w ( nurl_str_int cell ) ) ( __pl w ` dp )` ) = cell + cell 1 } {}
     ( string_push_str w `    : *u params ( nurl_alloc ` ) ( string_push_str w ( nurl_str_int * ncells 8 ) ) ( __pl w ` )` )
     : ~ i pc 0
