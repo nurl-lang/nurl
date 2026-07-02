@@ -57,7 +57,14 @@ $ `module.nu`
     i exit_code
     b trap
     ( Vec u ) trapmsg
+    i pending_call  // callee set by call/call_indirect for the driver (-1 none)
+    i max_depth  // frame-stack depth limit (trap when exceeded)
+    i fuel  // remaining instruction budget (-1 = unlimited)
 }
+
+// One activation record on the explicit call stack: the function, its locals,
+// its control stack, and the instruction cursor [pos, end).
+: Frame { i fidx ( Vec i ) locals ( Vec s ) ctrl i pos i end i code_start }
 
 @ __page → i { ^ 65536 }
 
@@ -78,6 +85,9 @@ $ `module.nu`
     = . it exit_code 0
     = . it trap F
     = . it trapmsg ( vec_new [u] )
+    = . it pending_call -1
+    = . it max_depth 65536
+    = . it fuel -1
     // copy global initial values
     : i ng ( vec_len [i] . m global_init )
     : ~ i gi 0
@@ -576,47 +586,141 @@ $ `module.nu`
 // Execute function `fidx`. Arguments are already on the value stack; on return
 // the function's results are left on top. Recurses for `call`.
 
-@ exec_func * Interp it i fidx → v {
-    ? | . it trap . it exited { ^ v } {}
-    : *Module m # *Module . it mod
-    // Imported functions occupy the low indices → dispatch to the host (WASI).
-    ? < fidx . m num_import_funcs {
-        : s wp ?? ( vec_get [s] . m imports fidx ) { T x → x F → # s 0 }
-        ? != # i wp 0 { : *WImport w # *WImport wp ( __wasi_dispatch it . w module . w field ) } { ( __trap it `bad import index` ) }
-        ^ v
-    } {}
+// Dispatch an imported function to the WASI host layer (no frame needed).
+@ __call_import * Interp it * Module m i fidx → v {
+    : s wp ?? ( vec_get [s] . m imports fidx ) { T x → x F → # s 0 }
+    ? != # i wp 0 { : *WImport w # *WImport wp ( __wasi_dispatch it . w module . w field ) } { ( __trap it `bad import index` ) }
+}
+
+// Build a frame for defined function `fidx`: locals = params (popped from the
+// value stack, in order) ++ declared locals (zeroed). #s 0 on a bad index.
+@ __frame_new * Interp it * Module m i fidx → s {
     : s fp ?? ( vec_get [s] . m funcs - fidx . m num_import_funcs ) { T x → x F → # s 0 }
-    ? == # i fp 0 { ( __trap it `bad function index` ) ^ v } {}
+    ? == # i fp 0 { ( __trap it `bad function index` ) ^ # s 0 } {}
     : *WFunc f # *WFunc fp
     : s tp ?? ( vec_get [s] . m types . f typeidx ) { T x → x F → # s 0 }
+    ? == # i tp 0 { ( __trap it `bad type index` ) ^ # s 0 } {}
     : *FuncType ft # *FuncType tp
     : i nparams ( vec_len [i] . ft params )
     : i nlocals_decl ( vec_len [i] . f locals )
-
-    // frame locals = params (popped in order) ++ declared locals (zeroed)
     : ( Vec i ) locals ( vec_new [i] )
     : ~ i k 0
     ~ < k + nparams nlocals_decl { ( vec_push [i] locals 0 ) = k + k 1 }
     : ~ i p nparams
     ~ > p 0 { = p - p 1 ( vec_set [i] locals p ( __pop it ) ) }
+    : *Frame fr # *Frame ( nurl_alloc Z Frame )
+    = . fr fidx fidx
+    = . fr locals locals
+    = . fr ctrl ( vec_new [s] )
+    = . fr pos . f code_start
+    = . fr end . f code_end
+    = . fr code_start . f code_start
+    ^ # s fr
+}
 
-    : ( Vec s ) ctrl ( vec_new [s] )
-    : *Wc c ( wc_new . m code )
-    = . c pos . f code_start
-    = . c len . f code_end
-    : ~ b ret F
-
-    ~ & & ! ret ! . it exited & ! . it trap < . c pos . f code_end {
-        : i op ( wc_u8 c )
-        ( __exec_op it m c ctrl locals op )
-        ? == op 15 { = ret T } {}  // return
-    }
-
-    : i cn ( vec_len [s] ctrl )
+@ __frame_free s pp → v {
+    ? == # i pp 0 { ^ v } {}
+    : *Frame fr # *Frame pp
+    : i cn ( vec_len [s] . fr ctrl )
     : ~ i ci 0
-    ~ < ci cn { ?? ( vec_get [s] ctrl ci ) { T pp → ?!= # i pp 0 { ( nurl_free pp ) } {} F → {} } = ci + ci 1 }
-    ( vec_free [s] ctrl )
-    ( vec_free [i] locals )
+    ~ < ci cn { ?? ( vec_get [s] . fr ctrl ci ) { T cp → ?!= # i cp 0 { ( nurl_free cp ) } {} F → {} } = ci + ci 1 }
+    ( vec_free [s] . fr ctrl )
+    ( vec_free [i] . fr locals )
+    ( nurl_free # s fr )
+}
+
+// On trap: append a wasm backtrace (innermost first) to the trap message,
+// naming frames from the module's name section when present.
+@ __trap_backtrace * Interp it * Module m ( Vec s ) frames → v {
+    : ( Vec u ) msg . it trapmsg
+    : i n ( vec_len [s] frames )
+    : ~ i k - n 1
+    : ~ i shown 0
+    ~ & >= k 0 < shown 16 {
+        : s pp ?? ( vec_get [s] frames k ) { T x → x F → # s 0 }
+        ? != # i pp 0 {
+            : *Frame fr # *Frame pp
+            ( __msg_push_str msg `\n  at ` )
+            : ( Vec u ) nm ( module_func_name m . fr fidx )
+            ? > ( vec_len [u] nm ) 0 { ( __msg_push_vec msg nm ) } { ( __msg_push_str msg `<unknown>` ) }
+            ( vec_free [u] nm )
+            ( __msg_push_str msg ` (func ` )
+            ( __msg_push_int msg . fr fidx )
+            ( __msg_push_str msg `, +` )
+            ( __msg_push_int msg - . fr pos . fr code_start )
+            ( __msg_push_str msg `)` )
+        } {}
+        = shown + shown 1
+        = k - k 1
+    }
+    ? >= k 0 { ( __msg_push_str msg `\n  …` ) } {}
+    = . it trapmsg msg
+}
+
+@ __msg_push_str ( Vec u ) msg s str → v {
+    : i n ( nurl_str_len str )
+    : ~ i k 0
+    ~ < k n { ( vec_push [u] msg # u ( nurl_str_get str k ) ) = k + k 1 }
+}
+
+@ __msg_push_vec ( Vec u ) msg ( Vec u ) src → v {
+    : i n ( vec_len [u] src )
+    : ~ i k 0
+    ~ < k n { ( vec_push [u] msg ?? ( vec_get [u] src k ) { T x → x F → # u 0 } ) = k + k 1 }
+}
+
+@ __msg_push_int ( Vec u ) msg i x → v {
+    ? < x 0 { ( vec_push [u] msg # u 45 ) ( __msg_push_int msg - 0 x ) ^ v } {}
+    ? >= x 10 { ( __msg_push_int msg / x 10 ) } {}
+    ( vec_push [u] msg # u + 48 % x 10 )
+}
+
+// Execute function `fidx` to completion on an EXPLICIT frame stack — guest
+// recursion depth is bounded by max_depth, not by the host's native stack.
+// Arguments are already on the value stack; results are left on top.
+@ exec_func * Interp it i fidx → v {
+    ? | . it trap . it exited { ^ v } {}
+    : *Module m # *Module . it mod
+    // Imported functions occupy the low indices → dispatch to the host (WASI).
+    ? < fidx . m num_import_funcs { ( __call_import it m fidx ) ^ v } {}
+    : ( Vec s ) frames ( vec_new [s] )
+    : s fr0 ( __frame_new it m fidx )
+    ? != # i fr0 0 { ( vec_push [s] frames fr0 ) } {}
+    : *Wc c ( wc_new . m code )
+    ~ & & > ( vec_len [s] frames ) 0 ! . it exited ! . it trap {
+        : i depth ( vec_len [s] frames )
+        : s tp ?? ( vec_get [s] frames - depth 1 ) { T x → x F → # s 0 }
+        : *Frame fr # *Frame tp
+        ? >= . fr pos . fr end {  // fell off the end of the body → return
+            ( __frame_free tp ) ( vec_pop [s] frames )
+        } {
+            ? == . it fuel 0 { ( __trap it `fuel exhausted` ) } {
+                ? > . it fuel 0 { = . it fuel - . it fuel 1 } {}
+                = . c pos . fr pos
+                = . c len . fr end
+                : i op ( wc_u8 c )
+                ( __exec_op it m c . fr ctrl . fr locals op )
+                = . fr pos . c pos
+                ? == op 15 { ( __frame_free tp ) ( vec_pop [s] frames ) } {  // return
+                    ? >= . it pending_call 0 {  // call / call_indirect
+                        : i callee . it pending_call
+                        = . it pending_call -1
+                        ? < callee . m num_import_funcs { ( __call_import it m callee ) } {
+                            ? >= ( vec_len [s] frames ) . it max_depth { ( __trap it `call stack exhausted` ) } {
+                                : s nf ( __frame_new it m callee )
+                                ? != # i nf 0 { ( vec_push [s] frames nf ) } {}
+                            }
+                        }
+                    } {}
+                }
+            }
+        }
+    }
+    ? . it trap { ( __trap_backtrace it m frames ) } {}
+    : i fn ( vec_len [s] frames )
+    : ~ i fi 0
+    ~ < fi fn { ?? ( vec_get [s] frames fi ) { T pp → ( __frame_free pp ) F → {} } = fi + fi 1 }
+    ( vec_free [s] frames )
     ( wc_free c )
 }
 
@@ -663,8 +767,8 @@ $ `module.nu`
         ( __do_branch it ctrl c chosen )
         ^ v
     } {}
-    ? == op 15 { ^ v } {}  // return (handled by caller loop)
-    ? == op 16 { : i fi ( wc_uleb c ) ( exec_func it fi ) ^ v } {}  // call
+    ? == op 15 { ^ v } {}  // return (handled by the driver)
+    ? == op 16 { : i fi ( wc_uleb c ) = . it pending_call fi ^ v } {}  // call → driver pushes the frame
     ? == op 17 {  // call_indirect typeidx tableidx
         : i typeidx ( wc_uleb c )
         : i tblidx ( wc_uleb c )
@@ -682,7 +786,7 @@ $ `module.nu`
             ( __trap it `call_indirect: bad type index` ) ^ v } {}
         ? ! ( functype_eq # *FuncType want # *FuncType have ) {
             ( __trap it `call_indirect: signature mismatch` ) ^ v } {}
-        ( exec_func it fi )
+        = . it pending_call fi
         ^ v
     } {}
     ? == op 26 { ( __pop it ) ^ v } {}  // drop

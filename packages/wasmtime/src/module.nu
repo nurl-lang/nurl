@@ -82,6 +82,9 @@ $ `stdlib/std/bytes.nu`
 // An active data segment: raw bytes to copy into linear memory at `offset`.
 : DataSeg { i offset ( Vec u ) bytes }
 
+// An owned byte buffer behind an opaque pointer (name-section entries).
+: NameBuf { ( Vec u ) bytes }
+
 // An imported function (the only import kind this runtime resolves): module +
 // field name select the host (WASI) implementation; typeidx gives its
 // signature. Non-function imports are a decode error (nothing satisfies them).
@@ -104,6 +107,8 @@ $ `stdlib/std/bytes.nu`
     ( Vec s ) imports  // *WImport (imported functions, in index order)
     i num_import_funcs  // imported funcs occupy func indices 0..n-1
     i start_func  // start-section function index (-1 = none)
+    ( Vec i ) name_idx  // function indices with a "name"-section entry…
+    ( Vec s ) name_str  // …and their names (*( Vec u )), parallel (sparse)
     b ok
     ( Vec u ) err
 }
@@ -135,6 +140,11 @@ $ `stdlib/std/bytes.nu`
     : ~ i ii 0
     ~ < ii in { ?? ( vec_get [s] . m imports ii ) { T pp → ?!= # i pp 0 { : *WImport w # *WImport pp ( vec_free [u] . w module ) ( vec_free [u] . w field ) ( nurl_free # s w ) } {} F → {} } = ii + ii 1 }
     ( vec_free [s] . m imports )
+    ( vec_free [i] . m name_idx )
+    : i nn ( vec_len [s] . m name_str )
+    : ~ i ni 0
+    ~ < ni nn { ?? ( vec_get [s] . m name_str ni ) { T pp → ?!= # i pp 0 { : *NameBuf nb # *NameBuf pp ( vec_free [u] . nb bytes ) ( nurl_free # s nb ) } {} F → {} } = ni + ni 1 }
+    ( vec_free [s] . m name_str )
     ( vec_free [u] . m code )
     ( vec_free [u] . m err )
     ( nurl_free # s m )
@@ -368,6 +378,59 @@ $ `stdlib/std/bytes.nu`
     }
 }
 
+// Custom section: if it is the "name" section, harvest subsection 1
+// (function names) for diagnostics; anything else is skipped.
+@ __decode_custom_sec * Wc c * Module m i sec_end → v {
+    : i nlen ( wc_uleb c )
+    ? != nlen 4 { ^ v } {}
+    : b isname & & & == ( wc_u8 c ) 110 == ( wc_u8 c ) 97 == ( wc_u8 c ) 109 == ( wc_u8 c ) 101
+    ? ! isname { ^ v } {}
+    ~ < . c pos sec_end {
+        : i sub ( wc_u8 c )
+        : i ssize ( wc_uleb c )
+        : i sub_end + . c pos ssize
+        ? == sub 1 {  // function names: count, then (funcidx, name) pairs
+            : i n ( wc_uleb c )
+            : ~ i k 0
+            ~ < k n {
+                : i fi ( wc_uleb c )
+                : i ln ( wc_uleb c )
+                : ( Vec u ) nm ( vec_with_cap [u] ln )
+                : ~ i a 0
+                ~ < a ln { ( vec_push [u] nm ( wc_u8 c ) ) = a + a 1 }
+                : *NameBuf nb # *NameBuf ( nurl_alloc Z NameBuf )
+                = . nb bytes nm
+                ( vec_push [i] . m name_idx fi )
+                ( vec_push [s] . m name_str # s nb )
+                = k + k 1
+            }
+        } {}
+        = . c pos sub_end
+    }
+}
+
+// The name-section name of function `fidx` as a fresh byte vector (empty if
+// unknown). Cold path — linear scan is fine (used only for trap backtraces).
+@ module_func_name * Module m i fidx → ( Vec u ) {
+    : i n ( vec_len [i] . m name_idx )
+    : ~ i k 0
+    ~ < k n {
+        ? == ?? ( vec_get [i] . m name_idx k ) { T x → x F → -1 } fidx {
+            : s pp ?? ( vec_get [s] . m name_str k ) { T x → x F → # s 0 }
+            ? != # i pp 0 {
+                : *NameBuf nb # *NameBuf pp
+                : ( Vec u ) out ( vec_with_cap [u] ( vec_len [u] . nb bytes ) )
+                : i bn ( vec_len [u] . nb bytes )
+                : ~ i b 0
+                ~ < b bn { ( vec_push [u] out ?? ( vec_get [u] . nb bytes b ) { T x → x F → # u 0 } ) = b + b 1 }
+                ^ out
+            } {}
+        } {}
+        = k + k 1
+    }
+    ^ ( vec_new [u] )
+}
+
 // Decode a whole module. On error, .ok is F and .err carries a message.
 @ module_decode ( Vec u ) bytes → *Module {
     : *Module m # *Module ( nurl_alloc Z Module )
@@ -387,6 +450,8 @@ $ `stdlib/std/bytes.nu`
     = . m imports ( vec_new [s] )
     = . m num_import_funcs 0
     = . m start_func -1
+    = . m name_idx ( vec_new [i] )
+    = . m name_str ( vec_new [s] )
     = . m ok T
     = . m err ( vec_new [u] )
     : *Wc c ( wc_new bytes )
@@ -400,6 +465,7 @@ $ `stdlib/std/bytes.nu`
         : i id ( wc_u8 c )
         : i size ( wc_uleb c )
         : i sec_end + . c pos size
+        ? == id 0 { ( __decode_custom_sec c m sec_end ) } {}
         ? == id 1 { ( __decode_type_sec c m ) } {
             ? == id 2 { ( __decode_import_sec c m ) } {
             ? == id 3 { ( __decode_func_sec c m ) } {

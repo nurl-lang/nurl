@@ -117,7 +117,7 @@ $ `interp.nu`
 
 // WASI command: run the module's `_start` with argv = [module, prog args…],
 // the given preopened directories and environment entries.
-@ run_command s path i prog_start i argc ( Vec String ) dirs ( Vec String ) envs → i {
+@ run_command s path i prog_start i argc ( Vec String ) dirs ( Vec String ) envs i fuel → i {
     : !( Vec u ) IoErr fr ( read_file_bytes path )
     : ~ i rc 0
     ?? fr {
@@ -134,6 +134,7 @@ $ `interp.nu`
                     ( module_free m ) = rc 1
                 } {
                     : *Interp it ( interp_new m )
+                    ? > fuel 0 { = . it fuel fuel } {}
                     : i nd ( vec_len [String] dirs )
                     : ~ i d 0
                     ~ < d nd { ?? ( vec_get [String] dirs d ) { T ds → ( interp_set_preopen it ( string_data ds ) ( string_data ds ) ) F → {} } = d + d 1 }
@@ -176,6 +177,7 @@ $ `interp.nu`
     //   `[run] [--dir <path>]… [--env NAME=VALUE]… <module.wasm> [args…]`
     : ( Vec String ) dirs ( vec_new [String] )
     : ( Vec String ) envs ( vec_new [String] )
+    : ~ i fuel -1
     : ~ i mi -1
     : ~ i k 1
     ~ & == mi -1 < k argc {
@@ -187,7 +189,11 @@ $ `interp.nu`
             ? != 0 ( nurl_str_eq str `--env` ) {
                 ? < + k 1 argc { ( vec_push [String] envs ( env_arg + k 1 ) ) = k + k 2 } { = k + k 1 }
             } {
-                ? & == 0 ( nurl_str_eq str `run` ) != 45 ( nurl_str_get str 0 ) { = mi k } { = k + k 1 }
+                ? != 0 ( nurl_str_eq str `--fuel` ) {
+                    ? < + k 1 argc { : String fa ( env_arg + k 1 ) = fuel ( nurl_str_to_int ( string_data fa ) ) ( string_free fa ) = k + k 2 } { = k + k 1 }
+                } {
+                    ? & == 0 ( nurl_str_eq str `run` ) != 45 ( nurl_str_get str 0 ) { = mi k } { = k + k 1 }
+                }
             }
         }
         ( string_free a )
@@ -195,7 +201,7 @@ $ `interp.nu`
     : ~ i rc 1
     ? < mi 0 { ( usage ) } {
         : String path ( env_arg mi )
-        = rc ( run_command ( string_data path ) + mi 1 argc dirs envs )
+        = rc ( run_command ( string_data path ) + mi 1 argc dirs envs fuel )
         ( string_free path )
     }
     : i nd ( vec_len [String] dirs )
