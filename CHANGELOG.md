@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.8] — 2026-07-02
+
+A **dynamic trait objects** release. NURL's trait system gains a second,
+opt-in dispatch path alongside the existing static one: `%Trait` boxes a
+concrete implementer behind a vtable fat pointer, so heterogeneous
+collections and plugin-style APIs can dispatch on the trait rather than the
+concrete type — no GC, and the existing monomorphised `impl` dispatch is
+unchanged. Diamond supertraits upcast through the same object, object safety
+is checked at compile time, and the box's `Drop` is synthesized so the
+single-owner memory model holds. A real leak in the (unrelated) static
+impl-method dispatch path, found while adding the feature, is fixed
+alongside it.
+
 ### Added
 
 - **Dynamic trait objects — `%Trait` (docs/spec.md §4.9).** A trait can now be
