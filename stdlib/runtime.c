@@ -54,6 +54,46 @@
 #  define NURL_HAVE_EXECINFO 1
 #endif
 
+/* ── OOM is fatal, loudly — runtime-wide ────────────────────────
+ * Returning NULL into NURL code would be UB-ish on every target, but on
+ * wasm32 it is INSIDIOUS: address 0 is ordinary writable linear memory,
+ * so a NULL-backed string/vec silently corrupts state instead of
+ * faulting — observed as nurlc.wasm "hanging" forever in borrowck once
+ * the 4 GiB linear-memory ceiling was hit. Every allocation in this file
+ * funnels through these checked wrappers (the macros below rebind the
+ * libc names for the rest of the file). A site that genuinely wants to
+ * observe OOM calls the libc function parenthesised: `(realloc)(p, n)`.
+ * fprintf only on the failure path — no allocation. */
+static void nurl__oom(unsigned long long bytes) {
+    fprintf(stderr, "nurl: out of memory (requested %llu bytes)\n", bytes);
+    fflush(stderr);
+    abort();
+}
+static void *nurl__xmalloc(size_t n) {
+    void *p = malloc(n);
+    if (!p && n) nurl__oom((unsigned long long)n);
+    return p;
+}
+static void *nurl__xcalloc(size_t a, size_t b) {
+    void *p = calloc(a, b);
+    if (!p && a && b) nurl__oom((unsigned long long)a * b);
+    return p;
+}
+static void *nurl__xrealloc(void *q, size_t n) {
+    void *p = realloc(q, n);
+    if (!p && n) nurl__oom((unsigned long long)n);
+    return p;
+}
+static char *nurl__xstrdup(const char *s) {
+    char *p = strdup(s);
+    if (!p && s) nurl__oom((unsigned long long)strlen(s) + 1);
+    return p;
+}
+#define malloc(n)     nurl__xmalloc(n)
+#define calloc(a, b)  nurl__xcalloc(a, b)
+#define realloc(p, n) nurl__xrealloc(p, n)
+#define strdup(s)     nurl__xstrdup(s)
+
 /* ── Toolchain version ──────────────────────────────────────────
  * NURL_VERSION is supplied by stdlib/nurl_version_gen.h, which build.sh
  * regenerates from tools/version.sh (git describe / CHANGELOG) on every
@@ -645,23 +685,11 @@ long long nurl_path_type(const char *path) {
  * threads while costing nothing measurable next to the malloc itself. */
 static unsigned long long g_nurl_alloc_count = 0;
 
-/* OOM is fatal, loudly. Returning NULL into NURL code would be UB-ish on
- * every target, but on wasm32 it is INSIDIOUS: address 0 is ordinary
- * writable linear memory, so a NULL-backed string/vec silently corrupts
- * state instead of faulting — observed as nurlc.wasm "hanging" forever in
- * borrowck once the 4 GiB linear-memory ceiling was hit. Abort with a
- * message instead (fprintf only — no allocation on this path). */
-static void *nurl__alloc_ck(void *p, long long bytes) {
-    if (p == NULL && bytes > 0) {
-        fprintf(stderr, "nurl: out of memory (requested %lld bytes)\n", bytes);
-        fflush(stderr);
-        abort();
-    }
-    return p;
-}
-
-void* nurl_alloc(long long bytes)              { __atomic_fetch_add(&g_nurl_alloc_count, 1, __ATOMIC_RELAXED); return nurl__alloc_ck(malloc((size_t)bytes), bytes); }
-void* nurl_zalloc(long long bytes)             { __atomic_fetch_add(&g_nurl_alloc_count, 1, __ATOMIC_RELAXED); return nurl__alloc_ck(calloc(1, (size_t)bytes), bytes); }
+/* OOM aborts inside the checked wrappers at the top of this file (see
+ * "OOM is fatal, loudly") — malloc/calloc here are already the checked
+ * forms via the file-wide macros. */
+void* nurl_alloc(long long bytes)              { __atomic_fetch_add(&g_nurl_alloc_count, 1, __ATOMIC_RELAXED); return malloc((size_t)bytes); }
+void* nurl_zalloc(long long bytes)             { __atomic_fetch_add(&g_nurl_alloc_count, 1, __ATOMIC_RELAXED); return calloc(1, (size_t)bytes); }
 long long nurl_alloc_count(void)               { return (long long)__atomic_load_n(&g_nurl_alloc_count, __ATOMIC_RELAXED); }
 /* Symmetric free counter: every nurl_free of a non-NULL pointer. Together with
  * nurl_alloc_count() the difference (alloc - free) is the live-allocation count,
@@ -669,7 +697,7 @@ long long nurl_alloc_count(void)               { return (long long)__atomic_load
  * (no sanitizer needed) — see compiler/tests/trait_owned_ret_no_leak.nu. */
 static unsigned long long g_nurl_free_count = 0;
 long long nurl_free_count(void)                { return (long long)__atomic_load_n(&g_nurl_free_count, __ATOMIC_RELAXED); }
-void* nurl_realloc(void *ptr, long long bytes) { return nurl__alloc_ck(realloc(ptr, (size_t)bytes), bytes); }
+void* nurl_realloc(void *ptr, long long bytes) { return realloc(ptr, (size_t)bytes); }
 
 /* ── §9b  Panic-unwind allocation journal ──────────────────────────
  *
@@ -717,10 +745,12 @@ static __thread int             nurl__jrnl_active = 0;   /* recover-extent depth
 static int nurl__jrnl_grow(void) {
     if (nurl__jrnl_len != nurl__jrnl_cap) return 1;
     long long nc = nurl__jrnl_cap ? nurl__jrnl_cap * 2 : 32;
-    void **nb = (void**)realloc(nurl__jrnl, (size_t)nc * sizeof(void*));
+    /* raw (realloc): this path deliberately degrades to a leak on OOM
+     * rather than aborting — the journal is best-effort cleanup. */
+    void **nb = (void**)(realloc)(nurl__jrnl, (size_t)nc * sizeof(void*));
     if (!nb) return 0;               /* OOM: degrade to a leak, never crash */
-    void (**nf)(void*) = (void(**)(void*))realloc(nurl__jrnl_fn,
-                                                  (size_t)nc * sizeof(void(*)(void*)));
+    void (**nf)(void*) = (void(**)(void*))(realloc)(nurl__jrnl_fn,
+                                                    (size_t)nc * sizeof(void(*)(void*)));
     if (!nf) { nurl__jrnl = nb; return 0; }
     nurl__jrnl = nb; nurl__jrnl_fn = nf; nurl__jrnl_cap = nc;
     return 1;
