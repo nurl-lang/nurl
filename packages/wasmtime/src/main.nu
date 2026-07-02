@@ -41,9 +41,11 @@ $ `interp.nu`
 
 @ usage → v {
     ( nurl_print `wasmtime — a WebAssembly runtime in pure NURL\n\n` )
-    ( nurl_print `  wasmtime run --invoke <export> <module.wasm> [int args…]\n\n` )
-    ( nurl_print `Loads the module and calls the exported function with the integer\n` )
-    ( nurl_print `arguments, printing the integer result. (Integer core; WASI/--dir WIP.)\n` )
+    ( nurl_print `  wasmtime run [--dir <path>]… [--env NAME=VALUE]… <module.wasm> [args…]\n` )
+    ( nurl_print `  wasmtime run --invoke <export> <module.wasm> [args…]\n\n` )
+    ( nurl_print `Command mode runs a wasm32-wasi module's _start with the given preopened\n` )
+    ( nurl_print `directories and environment. Invoke mode calls an exported function with\n` )
+    ( nurl_print `integer / floating-point arguments and prints the result.\n` )
 }
 
 // Find the index of `flag` in argv (after position 1); -1 if absent.
@@ -113,36 +115,9 @@ $ `interp.nu`
     ^ rc
 }
 
-// Index of the `--dir` VALUE argument (`--dir <path>`), or -1 if absent.
-@ __dir_arg i argc → i {
-    : ~ i found -1
-    : ~ i k 1
-    ~ & == found -1 < k argc {
-        : String a ( env_arg k )
-        ? & != 0 ( nurl_str_eq ( string_data a ) `--dir` ) < + k 1 argc { = found + k 1 } {}
-        ( string_free a )
-        = k + k 1
-    }
-    ^ found
-}
-
-// Index of the first non-flag, non-`run` argument (the module path) other than
-// `skip` (the consumed --dir value), or -1.
-@ __module_index i argc i skip → i {
-    : ~ i found -1
-    : ~ i k 1
-    ~ & == found -1 < k argc {
-        : String a ( env_arg k )
-        : s str ( string_data a )
-        ? & & != k skip == 0 ( nurl_str_eq str `run` ) != 45 ( nurl_str_get str 0 ) { = found k } {}
-        ( string_free a )
-        = k + k 1
-    }
-    ^ found
-}
-
-// WASI command: run the module's `_start` with argv = [module, prog args…].
-@ run_command s path i prog_start i argc s dir → i {
+// WASI command: run the module's `_start` with argv = [module, prog args…],
+// the given preopened directories and environment entries.
+@ run_command s path i prog_start i argc ( Vec String ) dirs ( Vec String ) envs → i {
     : !( Vec u ) IoErr fr ( read_file_bytes path )
     : ~ i rc 0
     ?? fr {
@@ -150,7 +125,8 @@ $ `interp.nu`
         T bytes → {
             : *Module m ( module_decode bytes )
             ? ! . m ok {
-                ( nurl_eprintln `wasmtime: malformed module` ) ( module_free m ) = rc 1
+                ( nurl_eprint `wasmtime: ` ) ( nurl_eprintln ( string_data ( bytes_to_str . m err ) ) )
+                ( module_free m ) = rc 1
             } {
                 : i fidx ( module_export_func m `_start` )
                 ? < fidx 0 {
@@ -158,12 +134,18 @@ $ `interp.nu`
                     ( module_free m ) = rc 1
                 } {
                     : *Interp it ( interp_new m )
-                    ? != 0 ( nurl_str_len dir ) { ( interp_set_preopen it dir dir ) } {}
+                    : i nd ( vec_len [String] dirs )
+                    : ~ i d 0
+                    ~ < d nd { ?? ( vec_get [String] dirs d ) { T ds → ( interp_set_preopen it ( string_data ds ) ( string_data ds ) ) F → {} } = d + d 1 }
+                    : i ne ( vec_len [String] envs )
+                    : ~ i e 0
+                    ~ < e ne { ?? ( vec_get [String] envs e ) { T es → ( interp_push_env it ( string_data es ) ) F → {} } = e + e 1 }
                     ( interp_push_arg it path )
                     : ~ i k prog_start
                     ~ < k argc { : String a ( env_arg k ) ( interp_push_arg it ( string_data a ) ) ( string_free a ) = k + k 1 }
                     ( interp_run_start it )
                     ( exec_func it fidx )
+                    ( interp_flush it )  // _start may return without proc_exit
                     ? . it trap {
                         ( nurl_eprint `wasmtime: trap: ` ) ( nurl_eprintln ( string_data ( bytes_to_str . it trapmsg ) ) )
                         = rc 1
@@ -190,19 +172,39 @@ $ `interp.nu`
         ( string_free export ) ( string_free path )
         ^ rc
     } {}
-    // WASI command mode: `[run] [--dir <path>] <module.wasm> [args…]`.
-    : i di ( __dir_arg argc )
-    : i mi ( __module_index argc di )
-    ? < mi 0 { ( usage ) ^ 1 } {}
-    : String path ( env_arg mi )
-    : ~ i rc 0
-    ? >= di 0 {
-        : String dir ( env_arg di )
-        = rc ( run_command ( string_data path ) + mi 1 argc ( string_data dir ) )
-        ( string_free dir )
-    } {
-        = rc ( run_command ( string_data path ) + mi 1 argc `` )
+    // WASI command mode:
+    //   `[run] [--dir <path>]… [--env NAME=VALUE]… <module.wasm> [args…]`
+    : ( Vec String ) dirs ( vec_new [String] )
+    : ( Vec String ) envs ( vec_new [String] )
+    : ~ i mi -1
+    : ~ i k 1
+    ~ & == mi -1 < k argc {
+        : String a ( env_arg k )
+        : s str ( string_data a )
+        ? != 0 ( nurl_str_eq str `--dir` ) {
+            ? < + k 1 argc { ( vec_push [String] dirs ( env_arg + k 1 ) ) = k + k 2 } { = k + k 1 }
+        } {
+            ? != 0 ( nurl_str_eq str `--env` ) {
+                ? < + k 1 argc { ( vec_push [String] envs ( env_arg + k 1 ) ) = k + k 2 } { = k + k 1 }
+            } {
+                ? & == 0 ( nurl_str_eq str `run` ) != 45 ( nurl_str_get str 0 ) { = mi k } { = k + k 1 }
+            }
+        }
+        ( string_free a )
     }
-    ( string_free path )
+    : ~ i rc 1
+    ? < mi 0 { ( usage ) } {
+        : String path ( env_arg mi )
+        = rc ( run_command ( string_data path ) + mi 1 argc dirs envs )
+        ( string_free path )
+    }
+    : i nd ( vec_len [String] dirs )
+    : ~ i fd 0
+    ~ < fd nd { ?? ( vec_get [String] dirs fd ) { T ds → ( string_free ds ) F → {} } = fd + fd 1 }
+    ( vec_free [String] dirs )
+    : i ne ( vec_len [String] envs )
+    : ~ i fe 0
+    ~ < fe ne { ?? ( vec_get [String] envs fe ) { T es → ( string_free es ) F → {} } = fe + fe 1 }
+    ( vec_free [String] envs )
     ^ rc
 }

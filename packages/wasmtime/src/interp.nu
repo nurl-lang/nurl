@@ -19,10 +19,17 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/std/time.nu`
 $ `module.nu`
 
 // round-to-nearest-even (wasm f*.nearest) — libm rint honours the default mode.
 & `m` @ rint f x → f
+
+// OS entropy (runtime helper; getrandom/urandom under the hood).
+& `c` @ nurl_rand_fill *u buf i n → i
+
+// unlink(2): path_unlink_file must NOT remove directories (remove(3) would).
+& `c` @ unlink s path → i32
 
 // ── value + control stacks ───────────────────────────────────────
 
@@ -30,11 +37,12 @@ $ `module.nu`
 
 : Ctrl { i is_loop i start_pc i end_pc i height i arity }
 
-// A WASI file descriptor. kind: 0 closed, 1 stdio, 2 preopened dir, 3 file.
-// For a file, `data` holds the contents (read) or the bytes written so far,
+// A WASI file descriptor. kind: 0 closed, 1 stdio, 2 preopened dir, 3 file,
+// 4 opened (non-preopen) directory. For a file, `data` holds the contents,
 // `pos` the read/write offset, `host` the on-disk path (for open/flush), and
 // `name` (a dir) the guest-visible preopen name reported by fd_prestat_*.
-: WFd { i kind ( Vec u ) data i pos ( Vec u ) host ( Vec u ) name b writable b dirty }
+// `append` = O_APPEND: every write lands at the end regardless of pos.
+: WFd { i kind ( Vec u ) data i pos ( Vec u ) host ( Vec u ) name b writable b dirty b append }
 
 : Interp {
     s mod  // *Module
@@ -42,7 +50,8 @@ $ `module.nu`
     ( Vec u ) mem  // linear memory (bytes)
     i mem_pages  // current size in 64 KiB pages
     ( Vec i ) globals  // mutable global values
-    ( Vec s ) argv  // *( Vec u ) — WASI program arguments (argv[0] = program)
+    ( Vec s ) argv  // *Arg — WASI program arguments (argv[0] = program)
+    ( Vec s ) envp  // *Arg — WASI environment entries ("NAME=VALUE")
     ( Vec s ) fds  // *WFd — file-descriptor table (0/1/2 stdio, 3 preopen, …)
     b exited  // set after proc_exit
     i exit_code
@@ -60,6 +69,7 @@ $ `module.nu`
     = . it mem_pages 0
     = . it globals ( vec_new [i] )
     = . it argv ( vec_new [s] )
+    = . it envp ( vec_new [s] )
     = . it fds ( vec_new [s] )
     // fds 0/1/2 = stdin/stdout/stderr (kind 1); higher slots filled by preopen.
     : ~ i sfd 0
@@ -110,6 +120,7 @@ $ `module.nu`
     = . f name ( vec_new [u] )
     = . f writable F
     = . f dirty F
+    = . f append F
     ^ # s f
 }
 
@@ -128,6 +139,10 @@ $ `module.nu`
     : ~ i ai 0
     ~ < ai an { ?? ( vec_get [s] . it argv ai ) { T pp → ?!= # i pp 0 { : *Arg a # *Arg pp ( vec_free [u] . a bytes ) ( nurl_free # s a ) } {} F → {} } = ai + ai 1 }
     ( vec_free [s] . it argv )
+    : i en ( vec_len [s] . it envp )
+    : ~ i ei 0
+    ~ < ei en { ?? ( vec_get [s] . it envp ei ) { T pp → ?!= # i pp 0 { : *Arg a # *Arg pp ( vec_free [u] . a bytes ) ( nurl_free # s a ) } {} F → {} } = ei + ei 1 }
+    ( vec_free [s] . it envp )
     : i fn ( vec_len [s] . it fds )
     : ~ i fi 0
     ~ < fi fn { ?? ( vec_get [s] . it fds fi ) { T pp → ( __freefd pp ) F → {} } = fi + fi 1 }
@@ -141,6 +156,13 @@ $ `module.nu`
     : *Arg a # *Arg ( nurl_alloc Z Arg )
     = . a bytes ( bytes_from_str str )
     ( vec_push [s] . it argv # s a )
+}
+
+// Append an environment entry ("NAME=VALUE", copied).
+@ interp_push_env * Interp it s str → v {
+    : *Arg a # *Arg ( nurl_alloc Z Arg )
+    = . a bytes ( bytes_from_str str )
+    ( vec_push [s] . it envp # s a )
 }
 
 // Grant the module one preopened host directory, visible to it as `guest_name`
@@ -951,8 +973,18 @@ $ `module.nu`
 
 @ __m_put_u32 * Interp it i a i val → v { ( __mem_store it a 4 val ) }
 
+// Overwrite/extend a file fd's buffer at byte offset `at` (gap zero-filled —
+// the file-semantics core shared by fd_write and fd_pwrite).
+@ __fd_put_at * WFd f i at ( Vec u ) buf → v {
+    = . f dirty T
+    : i bn ( vec_len [u] buf )
+    ~ < ( vec_len [u] . f data ) + at bn { ( vec_push [u] . f data # u 0 ) }
+    : ~ i bi 0
+    ~ < bi bn { ( vec_set [u] . f data + at bi ?? ( vec_get [u] buf bi ) { T x → x F → # u 0 } ) = bi + bi 1 }
+}
+
 // Write `len` bytes of memory at `ptr` to fd: 1 stdout, 2 stderr, else a file
-// descriptor's buffer (flushed to disk on close).
+// descriptor's buffer at its current position (flushed to disk on close/sync).
 @ __wasi_write_bytes * Interp it i fd i ptr i len → v {
     ? <= len 0 { ^ v } {}
     : ( Vec u ) buf ( vec_with_cap [u] len )
@@ -964,7 +996,12 @@ $ `module.nu`
         ( string_free s )
     } {
         : s fp ( __fd_at it fd )
-        ? != # i fp 0 { : *WFd f # *WFd fp = . f dirty T : i bn ( vec_len [u] buf ) : ~ i bi 0 ~ < bi bn { ( vec_push [u] . f data ?? ( vec_get [u] buf bi ) { T x → # i x F → 0 } ) = bi + bi 1 } } {}
+        ? != # i fp 0 {
+            : *WFd f # *WFd fp
+            : i at ? . f append ( vec_len [u] . f data ) . f pos
+            ( __fd_put_at f at buf )
+            = . f pos + at len
+        } {}
     }
     ( vec_free [u] buf )
 }
@@ -972,6 +1009,7 @@ $ `module.nu`
 @ __wasi_proc_exit * Interp it → v {
     = . it exit_code ( __pop it )
     = . it exited T
+    ( interp_flush it )
 }
 
 @ __wasi_fd_write * Interp it → v {
@@ -1006,12 +1044,67 @@ $ `module.nu`
     ^ b
 }
 
+// IoErr → WASI errno (2 EACCES, 20 EEXIST, 29 EIO, 44 ENOENT).
+@ __ioerr_errno IoErr e → i {
+    ^ ?? e {
+        NotFound → 44
+        PermissionDenied → 2
+        AlreadyExists → 20
+        _ → 29
+    }
+}
+
+// Is `path` a directory on the host? (opendir succeeds ⇔ directory.)
+@ __is_dir s path → b {
+    : !( Vec String ) IoErr r ( dir_list path )
+    ^ ?? r {
+        T names → {
+            : i n ( vec_len [String] names )
+            : ~ i k 0
+            ~ < k n { ?? ( vec_get [String] names k ) { T nm → ( string_free nm ) F → {} } = k + k 1 }
+            ( vec_free [String] names )
+            ^ T
+        }
+        F e → F
+    }
+}
+
+// Join a dir fd's host path + "/" + `len` guest bytes at `ptr` into an owned
+// String; #s 0 (as String data) is never returned — the caller checked the fd.
+@ __join_path * Interp it * WFd d i ptr i len → String {
+    : ( Vec u ) full ( vec_new [u] )
+    : i hn ( vec_len [u] . d host )
+    : ~ i k 0
+    ~ < k hn { ( vec_push [u] full ?? ( vec_get [u] . d host k ) { T x → x F → # u 0 } ) = k + k 1 }
+    ? & > hn 0 != ?? ( vec_get [u] . d host - hn 1 ) { T x → # i x F → 0 } 47 { ( vec_push [u] full # u 47 ) } {}
+    : ( Vec u ) rel ( __mem_slice it ptr len )
+    : i rn ( vec_len [u] rel )
+    : ~ i j 0
+    ~ < j rn { ( vec_push [u] full ?? ( vec_get [u] rel j ) { T x → x F → # u 0 } ) = j + j 1 }
+    ( vec_free [u] rel )
+    : String hs ( bytes_to_str full )
+    ( vec_free [u] full )
+    ^ hs
+}
+
+// The dir fd record for `fd`, or #s 0 unless it is a directory (preopen or
+// opened) — the base every path_* call resolves against.
+@ __dirfd_at * Interp it i fd → s {
+    : s dp ( __fd_at it fd )
+    ? == # i dp 0 { ^ # s 0 } {}
+    : *WFd d # *WFd dp
+    ? | == . d kind 2 == . d kind 4 { ^ dp } {}
+    ^ # s 0
+}
+
 // path_open(dirfd, dirflags, path_ptr, path_len, oflags, rights_base,
-//   rights_inheriting, fdflags, opened_fd_ptr) → errno. Opens a file under the
-// preopened directory by slurping it into a new file descriptor.
+//   rights_inheriting, fdflags, opened_fd_ptr) → errno.
+// oflags: 1 CREAT, 2 DIRECTORY, 4 EXCL, 8 TRUNC. fdflags: 1 APPEND.
+// rights bit 6 (fd_write) makes the fd writable. Files are slurped into a
+// buffer; writes are flushed on close/sync/exit.
 @ __wasi_path_open * Interp it → v {
     : i ofd_p ( __pop it )
-    ( __pop it )  // fdflags
+    : i fdflags ( __pop it )
     ( __pop it )  // fs_rights_inheriting (i64 cell)
     : i rights ( __pop it )  // fs_rights_base (i64 cell)
     : i oflags ( __pop it )
@@ -1019,46 +1112,287 @@ $ `module.nu`
     : i path_p ( __pop it )
     ( __pop it )  // dirflags
     : i dirfd ( __pop it )
-    : s dp ( __fd_at it dirfd )
+    : s dp ( __dirfd_at it dirfd )
     ? == # i dp 0 { ( __push it 8 ) ^ v } {}  // EBADF
     : *WFd d # *WFd dp
-    ? != . d kind 2 { ( __push it 8 ) ^ v } {}  // not a preopen dir
-    // join host dir + "/" + requested relative path
-    : ( Vec u ) full ( vec_new [u] )
-    : i hn ( vec_len [u] . d host )
-    : ~ i k 0
-    ~ < k hn { ( vec_push [u] full ?? ( vec_get [u] . d host k ) { T x → # i x F → 0 } ) = k + k 1 }
-    ? & > hn 0 != ?? ( vec_get [u] . d host - hn 1 ) { T x → # i x F → 0 } 47 { ( vec_push [u] full # u 47 ) } {}
-    : ( Vec u ) rel ( __mem_slice it path_p path_len )
-    : i rn ( vec_len [u] rel )
-    : ~ i j 0
-    ~ < j rn { ( vec_push [u] full ?? ( vec_get [u] rel j ) { T x → # i x F → 0 } ) = j + j 1 }
-    ( vec_free [u] rel )
-    : i writing & oflags 9  // bit0 creat | bit3 trunc → opening to write
-    : String hs ( bytes_to_str full )
+    : String hs ( __join_path it d path_p path_len )
+    : i creat & oflags 1
+    : i wantdir & oflags 2
+    : i excl & oflags 4
+    : i trunc & oflags 8
+    : i want_write | | != & rights 64 0 != creat 0 != trunc 0
     : ~ i rc 0
-    ? != writing 0 {
-        // create/truncate: start an empty writable buffer
-        : *WFd nf # *WFd ( __mkfd 3 )
+    ? != wantdir 0 {
+        // open a directory: it must exist and be a directory
+        ? ( __is_dir ( string_data hs ) ) {
+            : *WFd nf # *WFd ( __mkfd 4 )
+            ( vec_free [u] . nf host ) = . nf host ( bytes_from_str ( string_data hs ) )
+            ( __m_put_u32 it ofd_p ( vec_len [s] . it fds ) )
+            ( vec_push [s] . it fds # s nf )
+        } { = rc ? != 0 ( nurl_file_exists ( string_data hs ) ) 54 44 }  // ENOTDIR / ENOENT
+        ( string_free hs )
+        ( __push it rc )
+        ^ v
+    } {}
+    : i exists ( nurl_file_exists ( string_data hs ) )
+    ? & & != creat 0 != excl 0 != exists 0 { ( string_free hs ) ( __push it 20 ) ^ v } {}  // EEXIST
+    ? & != exists 0 ( __is_dir ( string_data hs ) ) {
+        // an existing directory opened without O_DIRECTORY: readable as a dir fd
+        : *WFd nf # *WFd ( __mkfd 4 )
         ( vec_free [u] . nf host ) = . nf host ( bytes_from_str ( string_data hs ) )
-        = . nf writable T
         ( __m_put_u32 it ofd_p ( vec_len [s] . it fds ) )
         ( vec_push [s] . it fds # s nf )
-    } {
+        ( string_free hs )
+        ( __push it 0 )
+        ^ v
+    } {}
+    ? & == exists 0 == creat 0 { ( string_free hs ) ( __push it 44 ) ^ v } {}  // ENOENT
+    : *WFd nf # *WFd ( __mkfd 3 )
+    ( vec_free [u] . nf host ) = . nf host ( bytes_from_str ( string_data hs ) )
+    ? & != exists 0 == trunc 0 {
+        // keep existing contents (read, or write without truncation)
         : !( Vec u ) IoErr fr ( read_file_bytes ( string_data hs ) )
         ?? fr {
-            T bytes → {
-                : *WFd nf # *WFd ( __mkfd 3 )
-                ( vec_free [u] . nf data ) = . nf data bytes
-                ( vec_free [u] . nf host ) = . nf host ( bytes_from_str ( string_data hs ) )
-                ( __m_put_u32 it ofd_p ( vec_len [s] . it fds ) )
-                ( vec_push [s] . it fds # s nf )
+            T bytes → { ( vec_free [u] . nf data ) = . nf data bytes }
+            F e → { = rc ( __ioerr_errno e ) }
+        }
+    } {}
+    ? != rc 0 { ( __freefd # s nf ) ( string_free hs ) ( __push it rc ) ^ v } {}
+    = . nf writable ? != want_write 0 T F
+    = . nf append ? != & fdflags 1 0 T F
+    ? & != creat 0 == exists 0 { = . nf dirty T } {}  // a created empty file must exist on disk
+    ( __m_put_u32 it ofd_p ( vec_len [s] . it fds ) )
+    ( vec_push [s] . it fds # s nf )
+    ( string_free hs )
+    ( __push it 0 )
+}
+
+// fd_pread / fd_pwrite: positioned I/O that leaves the fd offset untouched.
+@ __wasi_fd_pread * Interp it → v {
+    : i nread_p ( __pop it )
+    : i offset ( __pop it )
+    : i iovs_len ( __pop it )
+    : i iovs ( __pop it )
+    : i fd ( __pop it )
+    : s fp ( __fd_at it fd )
+    ? == # i fp 0 { ( __push it 8 ) ^ v } {}
+    : *WFd f # *WFd fp
+    ? != . f kind 3 { ( __m_put_u32 it nread_p 0 ) ( __push it 0 ) ^ v } {}
+    : i dn ( vec_len [u] . f data )
+    : ~ i at offset
+    : ~ i total 0
+    : ~ i iv 0
+    ~ < iv iovs_len {
+        : i bufp ( __m_get_u32 it + iovs * iv 8 )
+        : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
+        : ~ i c 0
+        ~ & < c buflen < at dn {
+            ( __mem_store it + bufp c 1 ?? ( vec_get [u] . f data at ) { T x → # i x F → 0 } )
+            = at + at 1
+            = c + c 1
+        }
+        = total + total c
+        = iv + iv 1
+    }
+    ( __m_put_u32 it nread_p total )
+    ( __push it 0 )
+}
+
+@ __wasi_fd_pwrite * Interp it → v {
+    : i nwritten_p ( __pop it )
+    : i offset ( __pop it )
+    : i iovs_len ( __pop it )
+    : i iovs ( __pop it )
+    : i fd ( __pop it )
+    : s fp ( __fd_at it fd )
+    ? == # i fp 0 { ( __push it 8 ) ^ v } {}
+    : *WFd f # *WFd fp
+    ? ! . f writable { ( __push it 8 ) ^ v } {}
+    : ~ i at offset
+    : ~ i total 0
+    : ~ i iv 0
+    ~ < iv iovs_len {
+        : i bufp ( __m_get_u32 it + iovs * iv 8 )
+        : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
+        : ( Vec u ) chunk ( __mem_slice it bufp buflen )
+        ( __fd_put_at f at chunk )
+        ( vec_free [u] chunk )
+        = at + at buflen
+        = total + total buflen
+        = iv + iv 1
+    }
+    ( __m_put_u32 it nwritten_p total )
+    ( __push it 0 )
+}
+
+// path_create_directory / path_remove_directory / path_unlink_file /
+// path_rename / path_filestat_get — the host-directory mutations, resolved
+// against a dir fd exactly like path_open.
+@ __wasi_path_create_directory * Interp it → v {
+    : i path_len ( __pop it )
+    : i path_p ( __pop it )
+    : i dirfd ( __pop it )
+    : s dp ( __dirfd_at it dirfd )
+    ? == # i dp 0 { ( __push it 8 ) ^ v } {}
+    : String hs ( __join_path it # *WFd dp path_p path_len )
+    : !v IoErr r ( dir_create ( string_data hs ) )
+    ( string_free hs )
+    ( __push it ?? r { T x → 0 F e → ( __ioerr_errno e ) } )
+}
+
+@ __wasi_path_remove_directory * Interp it → v {
+    : i path_len ( __pop it )
+    : i path_p ( __pop it )
+    : i dirfd ( __pop it )
+    : s dp ( __dirfd_at it dirfd )
+    ? == # i dp 0 { ( __push it 8 ) ^ v } {}
+    : String hs ( __join_path it # *WFd dp path_p path_len )
+    : i rc ( nurl_dir_remove ( string_data hs ) )
+    ( string_free hs )
+    ( __push it ? == rc 0 0 ( __ioerr_errno ( __io_err_of_kind ( errno_kind ) ) ) )
+}
+
+@ __wasi_path_unlink_file * Interp it → v {
+    : i path_len ( __pop it )
+    : i path_p ( __pop it )
+    : i dirfd ( __pop it )
+    : s dp ( __dirfd_at it dirfd )
+    ? == # i dp 0 { ( __push it 8 ) ^ v } {}
+    : String hs ( __join_path it # *WFd dp path_p path_len )
+    : i32 rc ( unlink ( string_data hs ) )
+    ( string_free hs )
+    ( __push it ? == # i rc 0 0 ( __ioerr_errno ( __io_err_of_kind ( errno_kind ) ) ) )
+}
+
+@ __wasi_path_rename * Interp it → v {
+    : i new_len ( __pop it )
+    : i new_p ( __pop it )
+    : i new_dirfd ( __pop it )
+    : i old_len ( __pop it )
+    : i old_p ( __pop it )
+    : i old_dirfd ( __pop it )
+    : s odp ( __dirfd_at it old_dirfd )
+    : s ndp ( __dirfd_at it new_dirfd )
+    ? | == # i odp 0 == # i ndp 0 { ( __push it 8 ) ^ v } {}
+    : String os ( __join_path it # *WFd odp old_p old_len )
+    : String ns ( __join_path it # *WFd ndp new_p new_len )
+    : !v IoErr r ( fs_rename ( string_data os ) ( string_data ns ) )
+    ( string_free os ) ( string_free ns )
+    ( __push it ?? r { T x → 0 F e → ( __ioerr_errno e ) } )
+}
+
+// path_filestat_get(dirfd, flags, path_ptr, path_len, st_p): 64-byte filestat —
+// filetype at +16, size at +32 (the fields programs actually read).
+@ __wasi_path_filestat_get * Interp it → v {
+    : i st_p ( __pop it )
+    : i path_len ( __pop it )
+    : i path_p ( __pop it )
+    ( __pop it )  // lookup flags
+    : i dirfd ( __pop it )
+    : s dp ( __dirfd_at it dirfd )
+    ? == # i dp 0 { ( __push it 8 ) ^ v } {}
+    : String hs ( __join_path it # *WFd dp path_p path_len )
+    : ~ i rc 0
+    : ~ i k 0
+    ~ < k 64 { ( __mem_store it + st_p k 1 0 ) = k + k 1 }
+    ? ( __is_dir ( string_data hs ) ) {
+        ( __mem_store it + st_p 16 1 3 )  // directory
+    } {
+        : !i IoErr szr ( file_size ( string_data hs ) )
+        ?? szr {
+            T sz → {
+                ( __mem_store it + st_p 16 1 4 )  // regular file
+                ( __mem_store it + st_p 32 8 sz )
             }
-            F e → { = rc 44 }  // ENOENT
+            F e → { = rc ( __ioerr_errno e ) }
         }
     }
-    ( string_free hs ) ( vec_free [u] full )
+    ( string_free hs )
     ( __push it rc )
+}
+
+// fd_readdir(fd, buf, buf_len, cookie, bufused_p): WASI dirent stream. Each
+// entry = 24-byte header (d_next u64, d_ino u64, d_namlen u32, d_type u8+pad)
+// + name. A partially-written final entry with bufused == buf_len tells libc
+// to enlarge and retry, per the ABI.
+@ __wasi_fd_readdir * Interp it → v {
+    : i bufused_p ( __pop it )
+    : i cookie ( __pop it )
+    : i buf_len ( __pop it )
+    : i buf ( __pop it )
+    : i fd ( __pop it )
+    : s fp ( __fd_at it fd )
+    ? == # i fp 0 { ( __push it 8 ) ^ v } {}
+    : *WFd f # *WFd fp
+    ? ! | == . f kind 2 == . f kind 4 { ( __push it 54 ) ^ v } {}  // ENOTDIR
+    : String hostdir ( bytes_to_str . f host )
+    : !( Vec String ) IoErr lr ( dir_list ( string_data hostdir ) )
+    : ~ i rc 0
+    : ~ i used 0
+    ?? lr {
+        F e → { = rc ( __ioerr_errno e ) }
+        T names → {
+            : i n ( vec_len [String] names )
+            : ~ i idx cookie
+            : ~ b full F
+            ~ & ! full < idx n {
+                : String nm ?? ( vec_get [String] names idx ) { T x → x F → # String 0 }
+                : i nlen ( nurl_str_len ( string_data nm ) )
+                // d_type: probe the joined path (3 dir / 4 regular)
+                : String sub ( __join_path2 hostdir ( string_data nm ) )
+                : i dtype ? ( __is_dir ( string_data sub ) ) 3 4
+                ( string_free sub )
+                // serialize header + name, truncating at buf_len
+                : ( Vec u ) ent ( vec_with_cap [u] + 24 nlen )
+                ( __ent_put64 ent + idx 1 )  // d_next
+                ( __ent_put64 ent + idx 1 )  // d_ino (nonzero, stable per entry)
+                ( __ent_put32 ent nlen )
+                ( vec_push [u] ent # u dtype )
+                ( vec_push [u] ent # u 0 ) ( vec_push [u] ent # u 0 ) ( vec_push [u] ent # u 0 )
+                : ~ i c 0
+                ~ < c nlen { ( vec_push [u] ent # u ( nurl_str_get ( string_data nm ) c ) ) = c + c 1 }
+                : i en ( vec_len [u] ent )
+                : ~ i w 0
+                ~ & < w en < used buf_len {
+                    ( __mem_store it + buf used 1 ?? ( vec_get [u] ent w ) { T x → # i x F → 0 } )
+                    = used + used 1
+                    = w + w 1
+                }
+                ( vec_free [u] ent )
+                ? < w en { = full T } {}  // buffer exhausted mid-entry
+                = idx + idx 1
+            }
+            : ~ i fi 0
+            ~ < fi n { ?? ( vec_get [String] names fi ) { T nm → ( string_free nm ) F → {} } = fi + fi 1 }
+            ( vec_free [String] names )
+        }
+    }
+    ( string_free hostdir )
+    ( __m_put_u32 it bufused_p used )
+    ( __push it rc )
+}
+
+// Little-endian u64/u32 pushes for dirent serialization.
+@ __ent_put64 ( Vec u ) v i x → v {
+    : ~ i k 0
+    ~ < k 8 { ( vec_push [u] v # u & ( __lshr64 x * 8 k ) 255 ) = k + k 1 }
+}
+@ __ent_put32 ( Vec u ) v i x → v {
+    : ~ i k 0
+    ~ < k 4 { ( vec_push [u] v # u & >> x * 8 k 255 ) = k + k 1 }
+}
+
+// hostdir + "/" + name as an owned String (host-side join for readdir probes).
+@ __join_path2 String dir s name → String {
+    : ( Vec u ) full ( bytes_from_str ( string_data dir ) )
+    : i hn ( vec_len [u] full )
+    ? & > hn 0 != ?? ( vec_get [u] full - hn 1 ) { T x → # i x F → 0 } 47 { ( vec_push [u] full # u 47 ) } {}
+    : i nl ( nurl_str_len name )
+    : ~ i k 0
+    ~ < k nl { ( vec_push [u] full # u ( nurl_str_get name k ) ) = k + k 1 }
+    : String out ( bytes_to_str full )
+    ( vec_free [u] full )
+    ^ out
 }
 
 @ __wasi_fd_read * Interp it → v {
@@ -1166,8 +1500,9 @@ $ `module.nu`
     ( __push it 0 )
 }
 
-// filetype byte for a fd kind: stdio→char device(2), dir→directory(3), file→regular(4).
-@ __filetype_of i kind → i { ^ ? == kind 2 3 ? == kind 3 4 2 }
+// filetype byte for a fd kind: stdio→char device(2), dir (preopened 2 or
+// opened 4)→directory(3), file→regular(4).
+@ __filetype_of i kind → i { ^ ? | == kind 2 == kind 4 3 ? == kind 3 4 2 }
 
 @ __wasi_fd_fdstat_get * Interp it → v {
     : i stat_p ( __pop it )
@@ -1198,43 +1533,116 @@ $ `module.nu`
     ( __push it 0 )
 }
 
+// Flush a dirty written file to disk (fd_close / fd_sync / proc_exit / normal
+// program exit all funnel through here).
+@ __fd_flush * WFd f → v {
+    ? & . f writable . f dirty {
+        : String hs ( bytes_to_str . f host )
+        : !v IoErr wr ( write_file_bytes ( string_data hs ) . f data )
+        ?? wr { T x → { = . f dirty F } F e → {} }
+        ( string_free hs )
+    } {}
+}
+
+// Flush every open dirty file — called on proc_exit and when _start returns,
+// so buffered writes are never lost to a missing fd_close.
+@ interp_flush * Interp it → v {
+    : i n ( vec_len [s] . it fds )
+    : ~ i k 3
+    ~ < k n { ?? ( vec_get [s] . it fds k ) { T pp → ?!= # i pp 0 { ( __fd_flush # *WFd pp ) } {} F → {} } = k + k 1 }
+}
+
 @ __wasi_fd_close * Interp it → v {
     : i fd ( __pop it )
     : s fp ( __fd_at it fd )
     ? != # i fp 0 {
         : *WFd f # *WFd fp
-        ? & . f writable . f dirty {  // flush a written file to disk
-            : String hs ( bytes_to_str . f host )
-            : !v IoErr wr ( write_file_bytes ( string_data hs ) . f data )
-            ?? wr { T x → {} F e → {} }
-            ( string_free hs )
-        } {}
+        ( __fd_flush f )
         ? >= fd 3 { ( __freefd fp ) ( vec_set [s] . it fds fd # s 0 ) } {}  // keep stdio
     } {}
     ( __push it 0 )
 }
 
-// environ_sizes_get / environ_get: no environment is exposed.
+@ __wasi_fd_sync * Interp it → v {
+    : i fd ( __pop it )
+    : s fp ( __fd_at it fd )
+    ? == # i fp 0 { ( __push it 8 ) ^ v } {}  // EBADF
+    ( __fd_flush # *WFd fp )
+    ( __push it 0 )
+}
+
+// fd_tell(fd, off_p): current offset as u64.
+@ __wasi_fd_tell * Interp it → v {
+    : i off_p ( __pop it )
+    : i fd ( __pop it )
+    : s fp ( __fd_at it fd )
+    ? == # i fp 0 { ( __push it 8 ) ^ v } {}
+    : *WFd f # *WFd fp
+    ( __mem_store it off_p 8 . f pos )
+    ( __push it 0 )
+}
+
+// environ_sizes_get / environ_get: the entries pushed via interp_push_env
+// (the host environment is NOT inherited — capability-style, like --env).
 @ __wasi_environ_sizes_get * Interp it → v {
     : i bufsz_p ( __pop it )
     : i cnt_p ( __pop it )
-    ( __m_put_u32 it cnt_p 0 ) ( __m_put_u32 it bufsz_p 0 )
+    : i n ( vec_len [s] . it envp )
+    : ~ i bufsz 0
+    : ~ i k 0
+    ~ < k n {
+        : *Arg a # *Arg ?? ( vec_get [s] . it envp k ) { T x → x F → # s 0 }
+        = bufsz + bufsz + ( vec_len [u] . a bytes ) 1
+        = k + k 1
+    }
+    ( __m_put_u32 it cnt_p n )
+    ( __m_put_u32 it bufsz_p bufsz )
     ( __push it 0 )
 }
 
-// clock_time_get(id, precision, time_ptr) → write 0; random_get(buf,len) → zeros.
+@ __wasi_environ_get * Interp it → v {
+    : i buf_p ( __pop it )
+    : i envv_p ( __pop it )
+    : i n ( vec_len [s] . it envp )
+    : ~ i cur buf_p
+    : ~ i k 0
+    ~ < k n {
+        : *Arg a # *Arg ?? ( vec_get [s] . it envp k ) { T x → x F → # s 0 }
+        ( __m_put_u32 it + envv_p * k 4 cur )
+        : i blen ( vec_len [u] . a bytes )
+        : ~ i j 0
+        ~ < j blen { ( __mem_store it + cur j 1 ?? ( vec_get [u] . a bytes j ) { T x → # i x F → 0 } ) = j + j 1 }
+        ( __mem_store it + cur blen 1 0 )  // NUL terminator
+        = cur + cur + blen 1
+        = k + k 1
+    }
+    ( __push it 0 )
+}
+
+// clock_time_get(id, precision, time_ptr): realtime (0) from the wall clock,
+// everything else from the monotonic clock. Nanoseconds.
 @ __wasi_clock_time_get * Interp it → v {
     : i t_p ( __pop it )
-    ( __pop it ) ( __pop it )  // precision (i64), clock id
-    ( __mem_store it t_p 8 0 )
+    ( __pop it )  // precision (i64)
+    : i id ( __pop it )
+    : i ns ? == id 0 * ( now_ms ) 1000000 ( monotonic_ns )
+    ( __mem_store it t_p 8 ns )
     ( __push it 0 )
 }
 
+// random_get(buf, len): real OS entropy via the runtime CSPRNG.
 @ __wasi_random_get * Interp it → v {
     : i len ( __pop it )
     : i buf ( __pop it )
-    : ~ i k 0
-    ~ < k len { ( __mem_store it + buf k 1 0 ) = k + k 1 }
+    ? > len 0 {
+        : ( Vec u ) tmp ( vec_with_cap [u] len )
+        : ~ i z 0
+        ~ < z len { ( vec_push [u] tmp # u 0 ) = z + z 1 }
+        ( nurl_rand_fill # *u ( vec_data [u] tmp ) len )
+        : ~ i k 0
+        ~ < k len { ( __mem_store it + buf k 1 ?? ( vec_get [u] tmp k ) { T x → # i x F → 0 } ) = k + k 1 }
+        ( vec_free [u] tmp )
+    } {}
     ( __push it 0 )
 }
 
@@ -1256,8 +1664,19 @@ $ `module.nu`
     ? ( __feq field `fd_write` ) { ( __wasi_fd_write it ) ^ v } {}
     ? ( __feq field `fd_read` ) { ( __wasi_fd_read it ) ^ v } {}
     ? ( __feq field `fd_seek` ) { ( __wasi_fd_seek it ) ^ v } {}
+    ? ( __feq field `fd_tell` ) { ( __wasi_fd_tell it ) ^ v } {}
+    ? ( __feq field `fd_pread` ) { ( __wasi_fd_pread it ) ^ v } {}
+    ? ( __feq field `fd_pwrite` ) { ( __wasi_fd_pwrite it ) ^ v } {}
+    ? ( __feq field `fd_sync` ) { ( __wasi_fd_sync it ) ^ v } {}
+    ? ( __feq field `fd_datasync` ) { ( __wasi_fd_sync it ) ^ v } {}
     ? ( __feq field `fd_close` ) { ( __wasi_fd_close it ) ^ v } {}
+    ? ( __feq field `fd_readdir` ) { ( __wasi_fd_readdir it ) ^ v } {}
     ? ( __feq field `path_open` ) { ( __wasi_path_open it ) ^ v } {}
+    ? ( __feq field `path_create_directory` ) { ( __wasi_path_create_directory it ) ^ v } {}
+    ? ( __feq field `path_remove_directory` ) { ( __wasi_path_remove_directory it ) ^ v } {}
+    ? ( __feq field `path_unlink_file` ) { ( __wasi_path_unlink_file it ) ^ v } {}
+    ? ( __feq field `path_rename` ) { ( __wasi_path_rename it ) ^ v } {}
+    ? ( __feq field `path_filestat_get` ) { ( __wasi_path_filestat_get it ) ^ v } {}
     ? ( __feq field `args_sizes_get` ) { ( __wasi_args_sizes_get it ) ^ v } {}
     ? ( __feq field `args_get` ) { ( __wasi_args_get it ) ^ v } {}
     ? ( __feq field `fd_prestat_get` ) { ( __wasi_fd_prestat_get it ) ^ v } {}
@@ -1265,7 +1684,7 @@ $ `module.nu`
     ? ( __feq field `fd_fdstat_get` ) { ( __wasi_fd_fdstat_get it ) ^ v } {}
     ? ( __feq field `fd_filestat_get` ) { ( __wasi_fd_filestat_get it ) ^ v } {}
     ? ( __feq field `environ_sizes_get` ) { ( __wasi_environ_sizes_get it ) ^ v } {}
-    ? ( __feq field `environ_get` ) { ( __pop it ) ( __pop it ) ( __push it 0 ) ^ v } {}
+    ? ( __feq field `environ_get` ) { ( __wasi_environ_get it ) ^ v } {}
     ? ( __feq field `clock_time_get` ) { ( __wasi_clock_time_get it ) ^ v } {}
     ? ( __feq field `random_get` ) { ( __wasi_random_get it ) ^ v } {}
     ? ( __feq field `fd_fdstat_set_flags` ) { ( __pop it ) ( __pop it ) ( __push it 0 ) ^ v } {}
