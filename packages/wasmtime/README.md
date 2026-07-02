@@ -91,6 +91,43 @@ thing, and is ASan-clean. `tests/wasi_test.nu` covers the import path: a module
 that writes via `fd_write` and exits via `proc_exit`, matching reference output
 and exit code.
 
+## GPU host imports (CUDA / NVRTC)
+
+A wasm module built from a GPU-using NURL package (`packages/gpu` →
+[`onnx`](../onnx) → [`objdet`](../objdet)) imports the CUDA driver + NVRTC
+symbols under module `env`. This runtime resolves them to the real
+`libcuda` / `libnvrtc` on the host, marshalling guest linear memory ↔ host:
+
+- a `*u` (pointer) FFI parameter is a guest linear-memory offset → the host
+  address is `vec_data(mem) + offset`; libcuda reads/writes guest memory in
+  place, so `cuMemcpyHtoD` / `cuMemcpyDtoH` and every out-slot are zero-copy;
+- opaque handles (`CUcontext` / `CUmodule` / `CUfunction` / `nvrtcProgram`)
+  and `CUdeviceptr` travel as raw `i64` values (the portable handle model in
+  `packages/gpu`, so nothing truncates on wasm's 32-bit pointers);
+- `cuLaunchKernel`'s guest `void**` argument array is reconstructed as a host
+  `void**` with each entry translated to its host address.
+
+`nurl.sh` auto-links `libcuda`/`libnvrtc` when these symbols appear and links
+stub objects on a GPU-less host, so `wasmtime` always builds; a guest then
+just sees non-zero `CUresult` codes.
+
+```sh
+# a GPU wasm module runs its kernels on the real device through this runtime
+wasmtime run --dir . infer.wasm          # onnx forward pass on the GPU
+```
+
+Verified on an RTX 4090: a self-contained vector-add (NVRTC compile → module
+load → alloc → HtoD → launch → DtoH) and the `onnx` package's inference test
+(a full GPU forward pass) both run through this runtime with output
+**identical to native** — the `onnx` test even matches its onnxruntime
+reference. See the top-level PR for the toolchain path (compile a GPU package
+to wasm with FFI symbols as host imports).
+
+> Security note: raw host handles / device pointers are visible to the guest,
+> exactly as in native NURL — safe for trusted compute (your own kernels). An
+> untrusted-guest deployment would add an id↔pointer handle table in the
+> bridge; the seam is a single `__gpu_ptr` / handle-passthrough boundary.
+
 ## Roadmap
 
 The integer + float core and the WASI command surface are done; hosting larger
