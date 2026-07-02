@@ -1,6 +1,6 @@
 [package]
 name = "wasmtime"
-version = "0.5.0"
+version = "0.6.0"
 description = "A WebAssembly runtime written in pure NURL — load a wasm module and run it, with no external runtime. It decodes a wasm binary (all standard sections incl. the name section) and interprets the full MVP instruction set with spec-correct semantics — trapping division/truncation, NaN-correct comparisons and min/max, checked call_indirect — plus the multi-value, bulk-memory (memory.init/copy/fill, passive segments), reference-types (table.*, ref.null/func, typed select) and sign-extension proposals. Execution runs on an explicit frame stack (guest recursion never grows the host stack; 1M-deep recursion verified), with optional --fuel metering and wasm backtraces on trap. It hosts real wasm32-wasi command modules: proc_exit, fd_write/read/seek/tell/pread/pwrite/sync/readdir, args_*/environ_* (--env), real clock/random, repeatable --dir preopens with path_open/create/remove/unlink/rename/filestat. The NURL compiler itself runs on it: nurlc.wasm self-compiles byte-identically to the native compiler. 33 edge-case semantics tests, every expectation produced by the reference wasmtime. No dependencies."
 license = "MIT OR Apache-2.0"
 

@@ -94,6 +94,7 @@ $ `module.nu`
     i pending_call  // callee set by call/call_indirect for the driver (-1 none)
     i max_depth  // frame-stack depth limit (trap when exceeded)
     i fuel  // remaining instruction budget (-1 = unlimited)
+    b gpu_ok  // env/CUDA host imports enabled (opt-in; default off)
 }
 
 // One activation record on the explicit call stack: the function, its locals,
@@ -122,6 +123,7 @@ $ `module.nu`
     = . it pending_call -1
     = . it max_depth 65536
     = . it fuel -1
+    = . it gpu_ok F
     // copy global initial values
     : i ng ( vec_len [i] . m global_init )
     : ~ i gi 0
@@ -238,6 +240,12 @@ $ `module.nu`
     ( vec_push [s] . it envp # s a )
 }
 
+// Enable the module "env" GPU/CUDA host-import bridge. Off by default: those
+// imports hand the guest raw host pointers into linear memory and forward them
+// to libcuda, so they are only safe for trusted compute — the embedder must
+// opt in explicitly (the CLI does so with --allow-gpu).
+@ interp_allow_gpu * Interp it → v { = . it gpu_ok T }
+
 // Grant the module one preopened host directory, visible to it as `guest_name`
 // (the path it resolves opens against). Installed as fd 3.
 @ interp_set_preopen * Interp it s host_path s guest_name → v {
@@ -317,6 +325,24 @@ $ `module.nu`
                             ? == sub 13 { ( wc_uleb c ) } {  // elem.drop
                                 ? == sub 14 { ( wc_uleb c ) ( wc_uleb c ) } {  // table.copy: 2 tableidx
                                     ? | == sub 15 | == sub 16 == sub 17 { ( wc_uleb c ) } {} } } } } } } }  // table.grow/size/fill
+        ^ v
+    } {}
+    // 0xfd prefix (SIMD / v128). These are unsupported at execution, but their
+    // immediates must still be skipped correctly here so block/`end`/`else`
+    // scanning is not thrown off by a 0x0b/0x05 byte living inside them.
+    ? == op 253 {
+        : i sub ( wc_uleb c )
+        ? | == sub 12 == sub 13 { ( wc_skip c 16 ) } {          // v128.const / i8x16.shuffle
+            ? & >= sub 84 <= sub 91 { ( wc_uleb c ) ( wc_uleb c ) ( wc_u8 c ) } {  // load/store lane: memarg + lane
+                ? | & >= sub 0 <= sub 11 | == sub 92 == sub 93 { ( wc_uleb c ) ( wc_uleb c ) } {  // memory ops: memarg
+                    ? & >= sub 21 <= sub 34 { ( wc_u8 c ) } {} } } }              // extract/replace lane: 1 byte
+        ^ v
+    } {}
+    // 0xfe prefix (threads / atomics). atomic.fence carries a single reserved
+    // byte; every other atomic op carries a memarg (two ulebs).
+    ? == op 254 {
+        : i sub ( wc_uleb c )
+        ? == sub 3 { ( wc_u8 c ) } { ( wc_uleb c ) ( wc_uleb c ) }
         ^ v
     } {}
     // sign-extension ops (0xc0..0xc4): no immediates (fall through)
@@ -565,7 +591,9 @@ $ `module.nu`
     ? == op 63 { ( wc_u8 c ) ( __push it . it mem_pages ) ^ v } {}  // memory.size
     ? == op 64 { ( wc_u8 c ) : i d ( __u32 ( __pop it ) ) ( __push it ( __mem_grow it d ) ) ^ v } {}  // memory.grow
     : i align ( wc_uleb c )
-    : i off ( wc_uleb c )
+    // wasm32 memarg offset is a u32; mask it so a huge offset cannot make the
+    // effective address wrap negative and slip past the load/store bounds check.
+    : i off & ( wc_uleb c ) 4294967295
     ? & >= op 54 <= op 62 {  // stores: pop value, then addr
         : i val ( __pop it )
         : i ea + & ( __pop it ) 4294967295 off
@@ -1178,6 +1206,9 @@ $ `module.nu`
 // descriptor's buffer at its current position (flushed to disk on close/sync).
 @ __wasi_write_bytes * Interp it i fd i ptr i len → v {
     ? <= len 0 { ^ v } {}
+    // A write cannot cover more bytes than linear memory holds; a larger length
+    // is a hostile iovec — trap rather than pre-allocate gigabytes for it.
+    ? > len ( vec_len [u] . it mem ) { ( __trap it `fd_write length exceeds memory` ) ^ v } {}
     : ( Vec u ) buf ( vec_with_cap [u] len )
     : ~ i k 0
     ~ < k len { ( vec_push [u] buf # u & ( __mem_load it + ptr k 1 0 ) 255 ) = k + k 1 }
@@ -1208,9 +1239,13 @@ $ `module.nu`
     : i iovs_len ( __pop it )
     : i iovs ( __pop it )
     : i fd ( __pop it )
+    // The iovec array cannot hold more entries than linear memory has bytes;
+    // clamp so a bogus iovs_len can neither loop unboundedly nor over-read. The
+    // trap guard stops the loop the moment an iovec header is out of bounds.
+    : i maxio ( vec_len [u] . it mem )
     : ~ i total 0
     : ~ i i 0
-    ~ < i iovs_len {
+    ~ & & ! . it trap < i iovs_len <= i maxio {
         : i bufp ( __m_get_u32 it + iovs * i 8 )
         : i buflen ( __m_get_u32 it + + iovs * i 8 4 )
         ( __wasi_write_bytes it fd bufp buflen )
@@ -1229,9 +1264,15 @@ $ `module.nu`
 
 // Read `len` bytes of linear memory at `ptr` into a fresh byte vector.
 @ __mem_slice * Interp it i ptr i len → ( Vec u ) {
-    : ( Vec u ) b ( vec_with_cap [u] ? > len 0 len 1 )
+    // Clamp to memory size: a slice can never be longer than linear memory, so
+    // a bogus guest length cannot force a multi-gigabyte allocation. Bytes past
+    // the end still trap in __mem_load, so this only bounds the up-front cap.
+    : ~ i n len
+    ? < n 0 { = n 0 } {}
+    ? > n ( vec_len [u] . it mem ) { = n ( vec_len [u] . it mem ) } {}
+    : ( Vec u ) b ( vec_with_cap [u] ? > n 0 n 1 )
     : ~ i k 0
-    ~ < k len { ( vec_push [u] b # u & ( __mem_load it + ptr k 1 0 ) 255 ) = k + k 1 }
+    ~ < k n { ( vec_push [u] b # u & ( __mem_load it + ptr k 1 0 ) 255 ) = k + k 1 }
     ^ b
 }
 
@@ -1370,10 +1411,11 @@ $ `module.nu`
     : *WFd f # *WFd fp
     ? != . f kind 3 { ( __m_put_u32 it nread_p 0 ) ( __push it 0 ) ^ v } {}
     : i dn ( vec_len [u] . f data )
+    : i maxio ( vec_len [u] . it mem )
     : ~ i at offset
     : ~ i total 0
     : ~ i iv 0
-    ~ < iv iovs_len {
+    ~ & & ! . it trap < iv iovs_len <= iv maxio {
         : i bufp ( __m_get_u32 it + iovs * iv 8 )
         : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
         : ~ i c 0
@@ -1399,10 +1441,11 @@ $ `module.nu`
     ? == # i fp 0 { ( __push it 8 ) ^ v } {}
     : *WFd f # *WFd fp
     ? ! . f writable { ( __push it 8 ) ^ v } {}
+    : i maxio ( vec_len [u] . it mem )
     : ~ i at offset
     : ~ i total 0
     : ~ i iv 0
-    ~ < iv iovs_len {
+    ~ & & ! . it trap < iv iovs_len <= iv maxio {
         : i bufp ( __m_get_u32 it + iovs * iv 8 )
         : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
         : ( Vec u ) chunk ( __mem_slice it bufp buflen )
@@ -1596,9 +1639,10 @@ $ `module.nu`
     : *WFd f # *WFd fp
     ? != . f kind 3 { ( __m_put_u32 it nread_p 0 ) ( __push it 0 ) ^ v } {}  // stdin/dir → EOF
     : i dn ( vec_len [u] . f data )
+    : i maxio ( vec_len [u] . it mem )
     : ~ i total 0
     : ~ i iv 0
-    ~ < iv iovs_len {
+    ~ & & ! . it trap < iv iovs_len <= iv maxio {
         : i bufp ( __m_get_u32 it + iovs * iv 8 )
         : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
         : ~ i c 0
@@ -1825,6 +1869,9 @@ $ `module.nu`
 @ __wasi_random_get * Interp it → v {
     : i len ( __pop it )
     : i buf ( __pop it )
+    // The destination buffer lives in linear memory, so a length larger than
+    // memory is bogus — trap instead of allocating it.
+    ? > len ( vec_len [u] . it mem ) { ( __trap it `random_get length exceeds memory` ) ( __push it 0 ) ^ v } {}
     ? > len 0 {
         : ( Vec u ) tmp ( vec_with_cap [u] len )
         : ~ i z 0
@@ -2060,6 +2107,7 @@ $ `module.nu`
 
 @ __wasi_dispatch * Interp it ( Vec u ) mod ( Vec u ) field → v {
     ? ( __feq mod `env` ) {
+        ? ! . it gpu_ok { ( __trap it `env/GPU host imports are disabled (pass --allow-gpu to enable)` ) ^ v } {}
         ? ( __gpu_dispatch it field ) { ^ v } {}
         ( __trap_named it `unsupported env import: ` field ) ^ v
     } {}

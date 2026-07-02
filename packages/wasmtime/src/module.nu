@@ -69,6 +69,9 @@ $ `stdlib/std/bytes.nu`
 // Skip n bytes.
 @ wc_skip * Wc c i n → v { = . c pos + . c pos n }
 
+// Bytes physically remaining in the input (never negative).
+@ wc_avail * Wc c → i { : i r - . c len . c pos ? < r 0 { ^ 0 } {} ^ r }
+
 // ── module model ─────────────────────────────────────────────────
 
 : FuncType { ( Vec i ) params ( Vec i ) results }
@@ -170,6 +173,22 @@ $ `stdlib/std/bytes.nu`
     = . m err ( bytes_from_str msg )
 }
 
+// Validate a decoded count/length against the bytes physically remaining.
+// A vector of `cnt` items needs at least `cnt` bytes (every element occupies
+// ≥ 1 byte on the wire); a raw byte-length needs exactly `cnt` bytes. Anything
+// larger than the remaining input is a hostile / truncated count — reject the
+// module (recording the first error) and return 0 so the caller's loop does
+// not allocate or iterate on it. This single discipline bounds every
+// decode-time allocation and loop to the size of the input, closing the
+// unbounded-allocation / count-overflow class.
+@ __chk_count * Wc c * Module m i cnt s what → i {
+    ? | < cnt 0 > cnt ( wc_avail c ) {
+        ( __mod_err m what )
+        ^ 0
+    } {}
+    ^ cnt
+}
+
 // Evaluate a constant init expr (i32/i64.const N … end). `global.get` in a
 // constant expression may only reference an imported global (spec), and those
 // are rejected at decode — so hitting one here is itself a decode error.
@@ -179,19 +198,24 @@ $ `stdlib/std/bytes.nu`
     : ~ i val 0
     ? | == op0 65 == op0 66 { = val ( wc_sleb c ) } {
         ? == op0 35 { ( wc_uleb c ) ( __mod_err m `constant expression uses global.get (imported globals unsupported)` ) } {} }
-    ~ != ( wc_u8 c ) 11 {}
+    // Consume through the terminating 0x0b `end`. Bounded by EOF: past the end
+    // of input wc_u8 returns 0 forever, so an unterminated expression must not
+    // spin — a truncated global/data/elem offset expr is a decode error.
+    : ~ b done F
+    ~ & ! done ! ( wc_eof c ) { ? == ( wc_u8 c ) 11 { = done T } {} }
+    ? ! done { ( __mod_err m `truncated constant expression (no end)` ) } {}
     ^ val
 }
 
 // ── section decoders ─────────────────────────────────────────────
 
-@ __read_functype * Wc c → *FuncType {
+@ __read_functype * Wc c * Module m → *FuncType {
     ( wc_u8 c )  // 0x60 form byte (assumed)
-    : i np ( wc_uleb c )
+    : i np ( __chk_count c m ( wc_uleb c ) `bad param count` )
     : ( Vec i ) params ( vec_new [i] )
     : ~ i a 0
     ~ < a np { ( vec_push [i] params ( wc_u8 c ) ) = a + a 1 }
-    : i nr ( wc_uleb c )
+    : i nr ( __chk_count c m ( wc_uleb c ) `bad result count` )
     : ( Vec i ) results ( vec_new [i] )
     : ~ i b 0
     ~ < b nr { ( vec_push [i] results ( wc_u8 c ) ) = b + b 1 }
@@ -202,22 +226,22 @@ $ `stdlib/std/bytes.nu`
 }
 
 @ __decode_type_sec * Wc c * Module m → v {
-    : i n ( wc_uleb c )
+    : i n ( __chk_count c m ( wc_uleb c ) `bad type count` )
     : ~ i k 0
-    ~ < k n { ( vec_push [s] . m types # s ( __read_functype c ) ) = k + k 1 }
+    ~ < k n { ( vec_push [s] . m types # s ( __read_functype c m ) ) = k + k 1 }
 }
 
 @ __decode_func_sec * Wc c * Module m → v {
-    : i n ( wc_uleb c )
+    : i n ( __chk_count c m ( wc_uleb c ) `bad function count` )
     : ~ i k 0
     ~ < k n { ( vec_push [i] . m functypes ( wc_uleb c ) ) = k + k 1 }
 }
 
 @ __decode_export_sec * Wc c * Module m → v {
-    : i n ( wc_uleb c )
+    : i n ( __chk_count c m ( wc_uleb c ) `bad export count` )
     : ~ i k 0
     ~ < k n {
-        : i nl ( wc_uleb c )
+        : i nl ( __chk_count c m ( wc_uleb c ) `bad export name length` )
         : ( Vec u ) nm ( vec_new [u] )
         : ~ i a 0
         ~ < a nl { ( vec_push [u] nm ( wc_u8 c ) ) = a + a 1 }
@@ -234,12 +258,16 @@ $ `stdlib/std/bytes.nu`
 
 // Memory section: limits (flag, min [, max]). Records the first memory.
 @ __decode_mem_sec * Wc c * Module m → v {
-    : i n ( wc_uleb c )
+    : i n ( __chk_count c m ( wc_uleb c ) `bad memory count` )
     : ~ i k 0
     ~ < k n {
         : i flag ( wc_u8 c )
-        : i mn ( wc_uleb c )
+        : ~ i mn ( wc_uleb c )
         : i mx ? == flag 1 ( wc_uleb c ) 0
+        // wasm32 caps a memory at 65536 pages (4 GiB). A larger declared
+        // minimum would make instantiation allocate past the address space —
+        // reject it here rather than OOM/hang trying to zero-fill it.
+        ? | < mn 0 > mn 65536 { ( __mod_err m `memory minimum exceeds wasm32 limit` ) = mn 0 } {}
         ? == k 0 { = . m has_mem 1 = . m mem_min mn = . m mem_max mx } {}
         = k + k 1
     }
@@ -248,13 +276,13 @@ $ `stdlib/std/bytes.nu`
 // Data section: active segments (flag 0/2) carry an i32.const offset expr then
 // raw bytes; passive segments (flag 1) carry bytes only (memory.init source).
 @ __decode_data_sec * Wc c * Module m → v {
-    : i n ( wc_uleb c )
+    : i n ( __chk_count c m ( wc_uleb c ) `bad data count` )
     : ~ i k 0
     ~ < k n {
         : i flag ( wc_uleb c )
         ? == flag 2 { ( wc_uleb c ) } {}  // explicit memidx
         : i offset ? != flag 1 ( __const_expr c m ) 0
-        : i blen ( wc_uleb c )
+        : i blen ( __chk_count c m ( wc_uleb c ) `bad data segment length` )
         : ( Vec u ) bytes ( vec_with_cap [u] blen )
         : ~ i bi 0
         ~ < bi blen { ( vec_push [u] bytes ( wc_u8 c ) ) = bi + bi 1 }
@@ -272,14 +300,14 @@ $ `stdlib/std/bytes.nu`
 // a hard decode error — this runtime has nothing to satisfy it with, and
 // running anyway would silently corrupt the module's own state.
 @ __decode_import_sec * Wc c * Module m → v {
-    : i n ( wc_uleb c )
+    : i n ( __chk_count c m ( wc_uleb c ) `bad import count` )
     : ~ i k 0
     ~ < k n {
-        : i mlen ( wc_uleb c )
+        : i mlen ( __chk_count c m ( wc_uleb c ) `bad import module length` )
         : ( Vec u ) mnm ( vec_with_cap [u] mlen )
         : ~ i b 0
         ~ < b mlen { ( vec_push [u] mnm ( wc_u8 c ) ) = b + b 1 }
-        : i flen ( wc_uleb c )
+        : i flen ( __chk_count c m ( wc_uleb c ) `bad import field length` )
         : ( Vec u ) fld ( vec_with_cap [u] flen )
         : ~ i a 0
         ~ < a flen { ( vec_push [u] fld ( wc_u8 c ) ) = a + a 1 }
@@ -310,7 +338,7 @@ $ `stdlib/std/bytes.nu`
 
 // Global section: each global = valtype, mutability, const init expr.
 @ __decode_global_sec * Wc c * Module m → v {
-    : i n ( wc_uleb c )
+    : i n ( __chk_count c m ( wc_uleb c ) `bad global count` )
     : ~ i k 0
     ~ < k n {
         ( wc_u8 c )  // valtype
@@ -325,14 +353,18 @@ $ `stdlib/std/bytes.nu`
 // recording its declared maximum for table.grow. Only funcref tables are
 // supported — an externref table is a decode error.
 @ __decode_table_sec * Wc c * Module m → v {
-    : i n ( wc_uleb c )
+    : i n ( __chk_count c m ( wc_uleb c ) `bad table count` )
     : ~ i k 0
     ~ < k n {
         : i et ( wc_u8 c )  // elemtype: 0x70 funcref / 0x6f externref
         ? != et 112 { ( __mod_err m `unsupported table element type (externref)` ) } {}
         : i flag ( wc_u8 c )
-        : i mn ( wc_uleb c )
+        : ~ i mn ( wc_uleb c )
         : i mx ? == flag 1 ( wc_uleb c ) 0
+        // A table's initial size is materialised as a null-filled image; cap it
+        // to the same 10M-slot ceiling table.grow enforces so a bogus minimum
+        // cannot exhaust memory at decode.
+        ? | < mn 0 > mn 10000000 { ( __mod_err m `table minimum exceeds limit` ) = mn 0 } {}
         ? == k 0 {
             = . m has_table 1
             = . m table_max mx
@@ -349,7 +381,9 @@ $ `stdlib/std/bytes.nu`
     : ~ i val -1
     ? == op 210 { = val ( wc_uleb c ) } {  // ref.func
         ? == op 208 { ( wc_u8 c ) } {} }  // ref.null: heap type byte
-    ~ != ( wc_u8 c ) 11 {}
+    // Consume through the terminating 0x0b; bounded by EOF (see __const_expr).
+    : ~ b done F
+    ~ & ! done ! ( wc_eof c ) { ? == ( wc_u8 c ) 11 { = done T } {} }
     ^ val
 }
 
@@ -359,7 +393,7 @@ $ `stdlib/std/bytes.nu`
 // Active segments are applied to the table image here and then count as
 // dropped; passive ones are stored for table.init.
 @ __decode_elem_sec * Wc c * Module m → v {
-    : i n ( wc_uleb c )
+    : i n ( __chk_count c m ( wc_uleb c ) `bad element count` )
     : ~ i k 0
     ~ < k n {
         : i flag ( wc_uleb c )
@@ -371,7 +405,7 @@ $ `stdlib/std/bytes.nu`
         } {}
         // elemkind / reftype byte is present unless flag is 0 or 4
         ? & != flag 0 != flag 4 { ( wc_u8 c ) } {}
-        : i cnt ( wc_uleb c )
+        : i cnt ( __chk_count c m ( wc_uleb c ) `bad element entry count` )
         : ( Vec i ) funcs ( vec_with_cap [i] cnt )
         : ~ i j 0
         ~ < j cnt {
@@ -400,17 +434,20 @@ $ `stdlib/std/bytes.nu`
 // Code section: for each function, parse local declarations and record the
 // [start,end) byte range of its instruction stream (ending at the final `end`).
 @ __decode_code_sec * Wc c * Module m → v {
-    : i n ( wc_uleb c )
+    : i n ( __chk_count c m ( wc_uleb c ) `bad code count` )
     : ~ i k 0
     ~ < k n {
-        : i bodysize ( wc_uleb c )
+        : i bodysize ( __chk_count c m ( wc_uleb c ) `bad function body size` )
         : i body_end + . c pos bodysize
-        : i ndecl ( wc_uleb c )
+        : i ndecl ( __chk_count c m ( wc_uleb c ) `bad local-declaration count` )
         : ( Vec i ) locals ( vec_new [i] )
         : ~ i d 0
         ~ < d ndecl {
-            : i cnt ( wc_uleb c )
+            : ~ i cnt ( wc_uleb c )
             : i ty ( wc_u8 c )
+            // A local run expands to `cnt` slots; cap the running total so a
+            // huge count cannot exhaust memory building the locals vector.
+            ? | < cnt 0 > + ( vec_len [i] locals ) cnt 1000000 { ( __mod_err m `too many locals` ) = cnt 0 } {}
             : ~ i j 0
             ~ < j cnt { ( vec_push [i] locals ty ) = j + j 1 }
             = d + d 1
@@ -437,13 +474,16 @@ $ `stdlib/std/bytes.nu`
     ~ < . c pos sec_end {
         : i sub ( wc_u8 c )
         : i ssize ( wc_uleb c )
+        // A negative (overlong-LEB) or over-long subsection size would drive
+        // sub_end before pos and spin this loop; abandon the name section then.
+        ? | < ssize 0 > ssize ( wc_avail c ) { = . c pos sec_end } {
         : i sub_end + . c pos ssize
         ? == sub 1 {  // function names: count, then (funcidx, name) pairs
-            : i n ( wc_uleb c )
+            : i n ( __chk_count c m ( wc_uleb c ) `bad name count` )
             : ~ i k 0
             ~ < k n {
                 : i fi ( wc_uleb c )
-                : i ln ( wc_uleb c )
+                : i ln ( __chk_count c m ( wc_uleb c ) `bad name length` )
                 : ( Vec u ) nm ( vec_with_cap [u] ln )
                 : ~ i a 0
                 ~ < a ln { ( vec_push [u] nm ( wc_u8 c ) ) = a + a 1 }
@@ -454,7 +494,7 @@ $ `stdlib/std/bytes.nu`
                 = k + k 1
             }
         } {}
-        = . c pos sub_end
+        = . c pos sub_end }
     }
 }
 
@@ -512,9 +552,14 @@ $ `stdlib/std/bytes.nu`
         ( __mod_err m `bad wasm magic` ) ( wc_free c ) ^ m
     } {}
     ( wc_skip c 4 )  // version
-    ~ ! ( wc_eof c ) {
+    ~ & . m ok ! ( wc_eof c ) {
         : i id ( wc_u8 c )
         : i size ( wc_uleb c )
+        // A section can be no larger than the input that remains, and never
+        // negative. An over-long LEB (10 bytes, high bit set) decodes to a
+        // negative i64; without the `< size 0` guard `pos + size` lands before
+        // pos and the outer loop re-decodes earlier bytes forever.
+        ? | < size 0 > size ( wc_avail c ) { ( __mod_err m `bad section size` ) = . c pos . c len } {}
         : i sec_end + . c pos size
         ? == id 0 { ( __decode_custom_sec c m sec_end ) } {}
         ? == id 1 { ( __decode_type_sec c m ) } {
