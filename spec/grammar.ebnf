@@ -1,5 +1,5 @@
 (* NURL — Neural Unified Representation Language
-   Grammar v2.2 — complete language specification
+   Grammar v2.3 — complete language specification
    File extension: .nu
 
    All expressions use PREFIX NOTATION.
@@ -323,6 +323,7 @@ expr = literal
      | slice_literal
      | cond_expr
      | block_expr
+     | dyn_construct
      | call_expr
      | member_expr
      | cast_expr
@@ -502,6 +503,14 @@ block_expr = '{' stmt* '}' ;
 call_arg  = ( IDENT ':' )? expr ;
 call_expr = '(' IDENT ( '[' generic_arg+ ']' )? call_arg* ')' ;
 
+(* dyn_construct: `( dyn Trait value )` (grammar v2.3, docs/spec.md §4.9) boxes
+   `value` — whose concrete type must impl `Trait` — into a `%Trait` object
+   (see dyn_type). `dyn` is a CONTEXTUAL keyword: it is only special as the head
+   of a call immediately followed by a known trait name, so an ordinary function
+   named `dyn` still calls through.
+   Example:  : %Speaker s ( dyn Speaker d )   — d : Dog, Dog impls Speaker *)
+dyn_construct = '(' 'dyn' IDENT expr ')' ;
+
 (* [ type | expr* ]  — slice literal
    Allocates a heap array, stores values, returns { T*, i64 } slice struct.
    Layout: field 0 = T* ptr, field 1 = i64 length.
@@ -631,6 +640,7 @@ type = base_type     (*  i u f b s v                                  *)
      | slice_type    (*  [ T           →  { T*, i64 }                 *)
      | res_type      (*  ! T E         →  { i1, i64 }                 *)
      | fn_type       (*  (@ R P*)      →  { R (i8*, P…)*, i8* }       *)
+     | dyn_type      (*  % Trait       →  { i8*, i8* } (trait object)  *)
      | generic_inst  (*  ( Name IDENT+ )  — generic type application   *)
      | IDENT         (*  named struct, enum, or type variable         *)
      ;
@@ -643,6 +653,15 @@ base_type = 'i'  (*  signed 64-bit integer  →  i64    *)
           | 'v'  (*  void                            *)
           ;
 
+(* dyn_type: a DYNAMIC trait object (grammar v2.3, docs/spec.md §4.9). The '%'
+   sigil — otherwise the trait/impl declaration sigil and the modulo operator —
+   in a TYPE position names a fat pointer `%dyn.<Trait> = { i8*, i8* }` (a
+   heap-boxed value + a per-impl vtable). The named trait must be object-safe:
+   it has a Self type parameter and no method (a) lacks a Self receiver,
+   (b) names Self beyond the receiver, (c) consumes self by value, or
+   (d) mentions an associated type. Constructed with `dyn_construct`; a bare-name
+   call whose first argument is a `%Trait` dispatches through the vtable. *)
+dyn_type     = '%' IDENT ;
 (* '* void' is rewritten to 'i8*' in the IR (LLVM forbids void*). *)
 ptr_type     = '*' type ;
 opt_type     = '?' type ;

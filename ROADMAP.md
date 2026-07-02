@@ -8,7 +8,7 @@ Anything marked done here has a regression test in
 point.
 
 _Last reviewed: 2026-06-27 · Current release: **0.10.1** · Language: **Grammar
-v2.2** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
+v2.3** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
 
@@ -21,7 +21,7 @@ stage2). The only build dependency is clang / LLVM 15+.
 
 What is solid today:
 
-- **Language (Grammar v2.2).** Sum types (`|`) and product types (structs),
+- **Language (Grammar v2.3).** Sum types (`|`) and product types (structs),
   generics over structs and functions (incl. generics over option/result
   types), pattern matching with **match guards**, **or-patterns**, and
   **N-ary payloads**, **trait bounds** on type parameters (`[A: Ord]`), **compile-time constant
@@ -67,10 +67,11 @@ A high-level map of what exists. Dates and per-feature detail are in
 - Self-hosted compiler (`compiler/nurlc.nu`) with a deterministic, byte-identical
   bootstrap; stage-0 links the committed `nurlc_lastgood.ll` snapshot (no
   Python in the toolchain).
-- Grammar evolved v0.1 → **v2.2** (snapshots in [`spec/`](spec/)). v2.x added:
+- Grammar evolved v0.1 → **v2.3** (snapshots in [`spec/`](spec/)). v2.x added:
   visibility (`pub`) enforcement across functions, types, consts, and enum
   variants; trait bounds; match guards + or-patterns; const folding; channel
-  select; and locked the prefix-arity grouping decision.
+  select; **dynamic trait objects** (`%Trait` + `( dyn Trait v )`, v2.3); and
+  locked the prefix-arity grouping decision.
 - Type system: strong, static, inferred, algebraic; no subtyping, no implicit
   conversions. Sized integer/float types with signedness tracking; explicit
   `#` casts with correct `sext`/`zext`/`trunc`/`fpext`/`fptrunc`.

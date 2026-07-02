@@ -648,6 +648,12 @@ static unsigned long long g_nurl_alloc_count = 0;
 void* nurl_alloc(long long bytes)              { __atomic_fetch_add(&g_nurl_alloc_count, 1, __ATOMIC_RELAXED); return malloc((size_t)bytes); }
 void* nurl_zalloc(long long bytes)             { __atomic_fetch_add(&g_nurl_alloc_count, 1, __ATOMIC_RELAXED); return calloc(1, (size_t)bytes); }
 long long nurl_alloc_count(void)               { return (long long)__atomic_load_n(&g_nurl_alloc_count, __ATOMIC_RELAXED); }
+/* Symmetric free counter: every nurl_free of a non-NULL pointer. Together with
+ * nurl_alloc_count() the difference (alloc - free) is the live-allocation count,
+ * which a test can bracket around a scope to assert leak-freedom deterministically
+ * (no sanitizer needed) — see compiler/tests/trait_owned_ret_no_leak.nu. */
+static unsigned long long g_nurl_free_count = 0;
+long long nurl_free_count(void)                { return (long long)__atomic_load_n(&g_nurl_free_count, __ATOMIC_RELAXED); }
 void* nurl_realloc(void *ptr, long long bytes) { return realloc(ptr, (size_t)bytes); }
 
 /* ── §9b  Panic-unwind allocation journal ──────────────────────────
@@ -768,7 +774,7 @@ static void nurl__jrnl_drain(long long mark) {
     nurl__jrnl_len = mark;
 }
 
-void  nurl_free(void *ptr)                     { if (nurl__jrnl_len) nurl__jrnl_remove(ptr); free(ptr); }
+void  nurl_free(void *ptr)                     { if (!ptr) return; __atomic_fetch_add(&g_nurl_free_count, 1, __ATOMIC_RELAXED); if (nurl__jrnl_len) nurl__jrnl_remove(ptr); free(ptr); }
 void  nurl_memcpy(void *dst, const void *src, long long bytes) {
     memcpy(dst, src, (size_t)bytes);
 }

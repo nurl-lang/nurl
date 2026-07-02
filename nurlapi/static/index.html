@@ -1202,8 +1202,15 @@ const NURL_MONARCH = {
       // function definition:  @ <lowercase_ident>
       [/(@)(\s+)([a-z_][\w]*)/, ["keyword.other.func", "white", "entity.name.function"]],
 
-      // trait decl:  % <Name>
-      [/(%)(\s+)([A-Za-z_][\w]*)/, ["keyword.other.trait", "white", "type.identifier"]],
+      // dynamic trait object construction:  ( dyn <Trait> …   (grammar v2.3)
+      // `dyn` is a contextual keyword — special only as a call head before a
+      // trait name — so match it before the general `(`/identifier fallback.
+      [/(\()(\s*)(\bdyn\b)(\s+)([A-Z][\w]*)/,
+        ["@brackets", "white", "keyword", "white", "type.identifier"]],
+
+      // trait decl `% <Name> …` AND `%Trait` object type (grammar v2.3), which
+      // may be glued (`%Pet`) — so `\s*`, not `\s+`, between the sigil and name.
+      [/(%)(\s*)([A-Za-z_][\w]*)/, ["keyword.other.trait", "white", "type.identifier"]],
 
       // enum decl:  : | <Name>
       [/(:)(\s*)(\|)(\s*)([A-Za-z_][\w]*)/,

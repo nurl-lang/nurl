@@ -144,6 +144,25 @@ $ `tools/nurlfmt/tokenize.nu`
                 : s text . t text
                 : i nl . t nl_before
 
+                // A `%` here is a `%Trait` object TYPE sigil (docs/spec.md §4.9),
+                // not the trait/impl DECLARATION sigil and not the modulo
+                // operator, when it stands in a type position. NURL is prefix
+                // notation, so an operand (ident/literal) never precedes an
+                // operator — thus `%` after an identifier is never modulo. That,
+                // plus brace/paren depth, disambiguates all three uses of `%`:
+                //   * prev `:`  → a binding / field / const type (`: %Pet p`) —
+                //                 modulo can never follow `:`;
+                //   * prev `→`  → a return type (`→ %Pet`);
+                //   * prev IDENT at depth 0 → a parameter type after the fn name
+                //                 or a previous param name (`@ f %Pet p`); a
+                //                 top-level modulo const does not exist
+                //                 (const-folding excludes `%`), so it is exact.
+                // As a type sigil it glues to the trait name (`%Pet`, like
+                // `*T`/`?T`) and does NOT open a new top-level declaration.
+                : b pct_type & ( __pp_text_eq text `%` )
+                | | ( __pp_text_eq prev_text `:` ) ( __pp_text_eq prev_text `→` )
+                & & == prev_kind TT_FMT_IDENT == bd 0 == pd 0
+
                 ? == kind TT_FMT_EOF {
                     // Ensure exactly one trailing newline at end of
                     // file: if we already finished a line, do
@@ -191,7 +210,7 @@ $ `tools/nurlfmt/tokenize.nu`
                             // top-boundary blank line that would normally
                             // appear here. The user's original nl_before is
                             // respected (typically 0 → single space).
-                            : b at_top_boundary & == bd 0
+                            : b at_top_boundary & ! pct_type & == bd 0
                             & == pd 0
                             & ( __pp_starts_top_decl text )
                             & ! prev_was_pub
@@ -345,11 +364,13 @@ $ `tools/nurlfmt/tokenize.nu`
                     } {
                         = prev_is_type_prefix F
                     }
+                    // A `%Trait` type sigil glues to the following trait name.
+                    ? pct_type { = prev_is_type_prefix T } {}
 
                     // If this token started a top-level decl (it is a
                     // top-decl-starter at bd==0), remember it so the
                     // next boundary can identify `$`-only chains.
-                    ? & ( __pp_starts_top_decl text ) == bd 0 {
+                    ? & & ( __pp_starts_top_decl text ) == bd 0 ! pct_type {
                         = prev_top_starter text
                         // Arm FFI-glue only for `&`; any other depth-0
                         // decl-starter (incl. the FFI's own `@`, which
@@ -357,6 +378,7 @@ $ `tools/nurlfmt/tokenize.nu`
                         = ffi_pending ( __pp_text_eq text `&` )
                         // A depth-0 `%` opens a trait/impl header; a `:` before
                         // its body `{` is then a supertrait clause, not a decl.
+                        // (A `%Trait` TYPE sigil is excluded via `! pct_type`.)
                         = in_trait_header ( __pp_text_eq text `%` )
                     } {}
 
