@@ -2041,11 +2041,35 @@ $ `module.nu`
     : i prog ( __pop it )
     ( __push it # i ( nvrtcCreateProgram ( __gpu_ptr it prog ) # s ( __gpu_ptr it src ) # s ( __gpu_ptr it name ) # i32 nh ( __gpu_ptr it headers ) ( __gpu_ptr it incs ) ) )
 }
+// nvrtcCompileProgram's `opts` is a guest char** — like cuLaunchKernel's
+// params, each ENTRY is itself a guest pointer libnvrtc would dereference, so
+// a host copy of the array is built with every entry translated (guest offset
+// → host address). nopt bounds the array exactly; entries past guest memory
+// (a hostile/broken module) become NULL rather than wild host pointers.
 @ __nvrtc_compile * Interp it → v {
     : i opts ( __pop it )
     : i nopt ( __pop it )
     : i prog ( __pop it )
-    ( __push it # i ( nvrtcCompileProgram prog # i32 nopt ( __gpu_ptr it opts ) ) )
+    : i n & nopt 4294967295
+    : i poff & opts 4294967295
+    ? | <= n 0 == poff 0 {
+        ( __push it # i ( nvrtcCompileProgram prog # i32 nopt # *u 0 ) )
+        ^ v
+    } {}
+    ? > n 256 { ( __trap it `nvrtcCompileProgram: too many options` ) ^ v } {}
+    : i base ( __gpu_base it )
+    : *u hostp ( nurl_alloc * n 8 )
+    : i memlen ( vec_len [u] . it mem )
+    : ~ i k 0
+    ~ < k n {
+        : ~ i ent 0
+        ? <= + + poff * k 8 8 memlen { = ent & ( __mem_load it + poff * k 8 8 0 ) 4294967295 } {}
+        ( nurl_poke hostp k ? == ent 0 0 + base ent )
+        = k + k 1
+    }
+    : i rc # i ( nvrtcCompileProgram prog # i32 nopt hostp )
+    ( nurl_free # s hostp )
+    ( __push it rc )
 }
 @ __nvrtc_ptx_size * Interp it → v {
     : i sz ( __pop it )

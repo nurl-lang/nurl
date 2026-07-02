@@ -27,7 +27,7 @@ $ `src/wasmkernel.nu`
     ( string_free tick )
 
     // ── generated program shape (sum) ─────────────────────────────
-    : String p ( cuda_wrap `__device__ double f(long long x) { return (double)x; }` 0 )
+    : String p ( cuda_wrap `__device__ double f(long long x) { return (double)x; }` 0 ( gpu_mode_scalar ) 0 )
     ( pb `program declares cuInit:         ` ( has p `@ cuInit i32 flags` ) )
     ( pb `program embeds swarm_map kernel: ` ( has p `swarm_map(long long lo, long long hi, double* out)` ) )
     ( pb `program has a main:              ` ( has p `@ main → i` ) )
@@ -37,14 +37,56 @@ $ `src/wasmkernel.nu`
     ( string_free p )
 
     // ── op splices ────────────────────────────────────────────────
-    : String pmin ( cuda_wrap `__device__ double f(long long x) { return (double)x; }` 2 )
+    : String pmin ( cuda_wrap `__device__ double f(long long x) { return (double)x; }` 2 ( gpu_mode_scalar ) 0 )
     ( pb `min combines with fmin:          ` ( has pmin `fmin(acc, v)` ) )
     ( pb `min identity +inf (CUDA):        ` ( has pmin `(1.0/0.0)` ) )
     ( pb `min identity +inf (host bits):   ` ( has pmin `bits_to_f64 9218868437227405312` ) )
     ( string_free pmin )
-    : String pcnt ( cuda_wrap `__device__ double f(long long x) { return (double)x; }` 4 )
+    : String pcnt ( cuda_wrap `__device__ double f(long long x) { return (double)x; }` 4 ( gpu_mode_scalar ) 0 )
     ( pb `count maps truthiness to 1.0:    ` ( has pcnt `(f(x) != 0.0 ? 1.0 : 0.0)` ) )
     ( string_free pcnt )
+
+    // ── mode + params splices ─────────────────────────────────────
+    : String psam ( cuda_wrap `__device__ double f(long long x) { return (double)x; }` 0 ( gpu_mode_sample ) 0 )
+    ( pb `sample kernel writes out[x-lo]:  ` ( has psam `out[x - lo] = f(x)` ) )
+    ( pb `sample main takes an outpath:    ` ( has psam `nurl_argv_get 3` ) )
+    ( pb `sample writes via fwrite:        ` ( has psam `fwrite # s host 1 obytes fh` ) )
+    ( string_free psam )
+    : String phist ( cuda_wrap `__device__ long long bin(long long x) { return x % 4; }` 0 ( gpu_mode_hist ) 0 )
+    ( pb `hist default val emitted:        ` ( has phist `__device__ double val(long long x) { return 1.0; }` ) )
+    ( pb `hist uses CAS atomic add:        ` ( has phist `atomicCAS(a, assumed,` ) )
+    ( pb `hist guards the bucket range:    ` ( has phist `if (b >= 0 && b < K)` ) )
+    ( pb `hist K rides argv:               ` ( has phist `nurl_argv_get 4` ) )
+    ( string_free phist )
+    : String phv ( cuda_wrap `__device__ long long bin(long long x) { return 0; } __device__ double val(long long x) { return 2.0; }` 0 ( gpu_mode_hist ) 0 )
+    ( pb `user val suppresses the default: ` ? ( has phv `val(long long x) { return 1.0; }` ) F T )
+    ( string_free phv )
+    : String ppar ( cuda_wrap `__device__ double f(long long x, const double* p) { return p[0]; }` 0 ( gpu_mode_scalar ) 1 )
+    ( pb `params: kernel takes double* p:  ` ( has ppar `double* out, const double* p` ) )
+    ( pb `params: f called as f(x, p):     ` ( has ppar `double v = f(x, p)` ) )
+    ( pb `params: argv tail parsed:        ` ( has ppar `nurl_argv_get + pbase pk` ) )
+    ( pb `params: uploaded with HtoD:      ` ( has ppar `cuMemcpyHtoD dp ph pbytes` ) )
+    ( string_free ppar )
+
+    // ── GPU chunk payload v2 codec round-trip ─────────────────────
+    : ( Vec i ) prm ( vec_new [i] )
+    ( vec_push [i] prm 4611686018427387904 )  // 2.0
+    ( vec_push [i] prm -4616189618054758400 ) // -1.0
+    : ( Vec u ) modbytes ( vec_new [u] )
+    ( vec_push [u] modbytes 1 ) ( vec_push [u] modbytes 2 ) ( vec_push [u] modbytes 3 )
+    : ( Vec u ) pay ( wasm_gpu_chunk_payload ( gpu_mode_hist ) 100 200 16 prm modbytes )
+    : GpuChunk gc ( wasm_gpu_chunk_decode pay )
+    ( pb `payload v2 decodes ok:           ` ? == . gc ok 1 T F )
+    ( pb `payload v2 mode/lo/hi/K:         ` & & == . gc mode ( gpu_mode_hist ) & == . gc lo 100 == . gc hi 200 == . gc kbins 16 )
+    ( pb `payload v2 params round-trip:    ` & == ( vec_len [i] . gc params ) 2 & == ?? ( vec_get [i] . gc params 0 ) { T x → x F → 0 } 4611686018427387904 == ?? ( vec_get [i] . gc params 1 ) { T x → x F → 0 } -4616189618054758400 )
+    ( pb `payload v2 module bytes intact:  ` & == ( vec_len [u] . gc wasm ) 3 == ?? ( vec_get [u] . gc wasm 2 ) { T x → # i x F → 0 } 3 )
+    ( gpu_chunk_free gc ) ( vec_free [u] pay ) ( vec_free [u] modbytes ) ( vec_free [i] prm )
+    // truncated payload → ok=0
+    : ( Vec u ) bad ( vec_new [u] )
+    ( vec_push [u] bad 2 ) ( vec_push [u] bad 0 ) ( vec_push [u] bad 9 )
+    : GpuChunk gb ( wasm_gpu_chunk_decode bad )
+    ( pb `truncated payload rejected:      ` ? == . gb ok 1 F T )
+    ( gpu_chunk_free gb ) ( vec_free [u] bad )
 
     // ── escaping: user text lands escaped inside the literal ──────
     // A user source with a backslash escape and a newline: the generated
@@ -57,7 +99,7 @@ $ `src/wasmkernel.nu`
     ( string_push_str esc `bs:` )
     ( string_push_char esc 92 )   // real backslash
     ( string_push_str esc ` double f ` )
-    : String pe ( cuda_wrap ( string_data esc ) 0 )
+    : String pe ( cuda_wrap ( string_data esc ) 0 ( gpu_mode_scalar ) 0 )
     // expected two-char sequences in the generated TEXT
     : String want_nl ( string_new ) ( string_push_char want_nl 92 ) ( string_push_char want_nl 110 )
     : String want_tab ( string_new ) ( string_push_char want_tab 92 ) ( string_push_char want_tab 116 )
@@ -79,7 +121,7 @@ $ `src/wasmkernel.nu`
     // A forged (untagged) payload must yield a TAGGED ok=0 frame — the
     // coordinator counts it as a failed chunk, never folds it.
     : ( Vec u ) key ( token_key `caps-test` )
-    : ( @ ( Vec u ) ( Vec u ) ) h ( wasm_handler key 0 )
+    : ( @ ( Vec u ) ( Vec u ) ) h ( wasm_handler key )
     : ( Vec u ) forged ( vec_new [u] )
     ( vec_push [u] forged 1 ) ( vec_push [u] forged 2 ) ( vec_push [u] forged 3 )
     : ( Vec u ) res ( h forged )
@@ -97,5 +139,25 @@ $ `src/wasmkernel.nu`
     // release the handler closure's env (job_node_free does this in the node)
     : *u henv # *u h 1
     ? != # i henv 0 { ( nurl_free # s henv ) } {}
+
+    // ── GPU handler: forged payload → tagged scalar ok=0 frame ────
+    : ( Vec u ) gkey ( token_key `caps-test-gpu` )
+    : ( @ ( Vec u ) ( Vec u ) ) gh ( wasm_gpu_handler gkey )
+    : ( Vec u ) gforged ( vec_new [u] )
+    ( vec_push [u] gforged 7 )
+    : ( Vec u ) gres ( gh gforged )
+    : ~ b gframe_ok F
+    ?? ( token_untag gkey gres ) {
+        T body → {
+            : i b0 ?? ( vec_get [u] body 0 ) { T x → # i x F → 9 }
+            = gframe_ok & == ( vec_len [u] body ) 9 == b0 0
+            ( vec_free [u] body )
+        }
+        F → {}
+    }
+    ( pb `gpu forged payload → ok=0 frame: ` gframe_ok )
+    ( vec_free [u] gres ) ( vec_free [u] gforged ) ( vec_free [u] gkey )
+    : *u ghenv # *u gh 1
+    ? != # i ghenv 0 { ( nurl_free # s ghenv ) } {}
     ^ 0
 }

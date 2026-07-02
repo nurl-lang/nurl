@@ -10,6 +10,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`packages/swarm-mcp` v0.6.0 — dynamic, versatile GPU compute.** Three
+  upgrades to the distributed GPU engine:
+  - **Runtime kernel params, no recompiles.** `params: [numbers]` reach the
+    CUDA device functions as `const double* p` via each chunk's argv — the
+    generated source (and so the module hash) never changes. Together with a
+    new coordinator-side compiled-module cache (keyed by generated source) and
+    the existing worker-side content-hash cache, a parameter scan pays the
+    build API once and then resubmits in seconds.
+  - **`compute_sample_cuda`** — a GPU map that returns *every* value: `f(x)`
+    for each `x` in order (curves, fields, tables). Inline as JSON (≤ 1024) or
+    base64 f64 LE (≤ 65536), or written to `out_file` (≤ 1M values);
+    min/max/mean always included.
+  - **`compute_histogram_cuda`** — binned aggregation in one pass: `bin(x)`
+    picks one of K buckets, `val(x)` (default 1.0) is accumulated with a
+    portable CAS-based double `atomicAdd`; chunks combine elementwise. K rides
+    argv, so one module serves any bin count.
+
+  GPU chunks now use payload v2 (`[ver][mode][lo][hi][K][params][wasm]`);
+  vector modes return results through a sandbox-preopened binary file (one
+  `fwrite`) instead of stdout, and the result frame `[ok][count][f64…]` keeps
+  chunk failures visible. All-in-one nodes with `--gpu` require a same-version
+  cluster for GPU tasks (CPU task wires are unchanged).
+- **`packages/wasmtime` v0.6.1**: `nvrtcCompileProgram`'s options array is now
+  marshalled correctly — each guest `char*` entry is translated to a host
+  pointer (bounded, NULL for out-of-range), mirroring `cuLaunchKernel`'s
+  void** handling. Previously any nonzero option count handed libnvrtc guest
+  offsets as host pointers.
+
 - **`stdlib/dist/job.nu`: per-kind routing rings (capability domains).**
   `job_set_ring(node, kind, ring)` scopes a task kind to its own consistent-hash
   ring — submit, ownership, and mid-flight forwarding for that kind all resolve

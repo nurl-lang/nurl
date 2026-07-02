@@ -224,8 +224,8 @@ $ `cudakernel.nu`
             : i caps ? != gpu 0 ( cap_gpu ) 0
             : *Swarm sw ( swarm_new rc id ( role_worker ) caps token )
             ( job_register # *JobNode . sw job ( kind_kernel ) ( kernel_handler . sw key ) )
-            ( job_register # *JobNode . sw job ( kind_wasm ) ( wasm_handler . sw key 0 ) )
-            ? != gpu 0 { ( job_register # *JobNode . sw job ( kind_wasm_gpu ) ( wasm_handler . sw key 1 ) ) } {}
+            ( job_register # *JobNode . sw job ( kind_wasm ) ( wasm_handler . sw key ) )
+            ? != gpu 0 { ( job_register # *JobNode . sw job ( kind_wasm_gpu ) ( wasm_gpu_handler . sw key ) ) } {}
             ( swarm_join_group sw )
             ( swarm_announce sw 1 )
             ? == vflag 1 { ( nurl_print `swarm-mcp worker ` ) ( nurl_print ( nurl_str_int id ) ) ( nurl_print ? != gpu 0 ` ready (gpu)\n` ` ready\n` ) } {}
@@ -275,6 +275,26 @@ $ `cudakernel.nu`
         : ( Vec u ) payload ( wasm_chunk_payload . c lo . c hi wasm )
         : ( Vec u ) tagged ( token_tag . sw key payload )
         ( vec_push [i] tids ( job_submit # *JobNode . sw job kind rkey tagged ) )
+        ( vec_free [u] rkey ) ( vec_free [u] payload ) ( vec_free [u] tagged )
+        = i + i 1
+    }
+    ( shard_free chunks )
+    ^ tids
+}
+
+// Shard a GPU task (payload v2): mode, K, runtime params and the module ride
+// every chunk under kind_wasm_gpu — routed on the GPU capability ring.
+@ cluster_submit_wasm_gpu * Swarm sw i mode i lo i hi i kbins ( Vec i ) params ( Vec u ) wasm i nchunks → ( Vec i ) {
+    : ( Vec s ) chunks ( shard lo hi nchunks )
+    : ( Vec i ) tids ( vec_new [i] )
+    : ~ i i 0
+    ~ < i nchunks {
+        : s cp ?? ( vec_get [s] chunks i ) { T x → x F → # s 0 }
+        : *Chunk c # *Chunk cp
+        : ( Vec u ) rkey ( chunk_key i )
+        : ( Vec u ) payload ( wasm_gpu_chunk_payload mode . c lo . c hi kbins params wasm )
+        : ( Vec u ) tagged ( token_tag . sw key payload )
+        ( vec_push [i] tids ( job_submit # *JobNode . sw job ( kind_wasm_gpu ) rkey tagged ) )
         ( vec_free [u] rkey ) ( vec_free [u] payload ) ( vec_free [u] tagged )
         = i + i 1
     }
@@ -339,6 +359,67 @@ $ `cudakernel.nu`
         = k + k 1
     }
     ^ @ Combined { acc nfail }
+}
+
+// Combine VECTOR results (sample / hist). Frame: [ok:1][count:4 BE][f64 LE ×
+// count]. Sample chunks CONCATENATE in shard order (tids order = chunk order);
+// hist chunks add ELEMENTWISE into K bins. A failed or malformed chunk counts
+// toward nfail and contributes nothing.
+: CombinedV { ( Vec u ) bytes i nfail }
+
+// read/write one LE f64 (as its bit pattern) inside a byte vector
+@ __f64le_get ( Vec u ) v i off → i { ^ ?? ( bytes_read_u64_le v off ) { T x → x F → 0 } }
+
+@ __f64le_put ( Vec u ) v i off i bits → v {
+    : ~ i k 0
+    ~ < k 8 { ( vec_set [u] v + off k # u & >> bits * k 8 255 ) = k + k 1 }
+}
+
+@ tids_combine_vec * Swarm sw i mode i kbins ( Vec i ) tids → CombinedV {
+    : ( Vec u ) acc ( vec_new [u] )
+    ? == mode ( gpu_mode_hist ) {
+        : ~ i z 0
+        ~ < z * kbins 8 { ( vec_push [u] acc 0 ) = z + z 1 }
+    } {}
+    : ~ i nfail 0
+    : i n ( vec_len [i] tids )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( job_await # *JobNode . sw job ?? ( vec_get [i] tids k ) { T x → x F → 0 } ) {
+            T r → {
+                ?? ( token_untag . sw key r ) {
+                    T body → {
+                        : i ok ?? ( vec_get [u] body 0 ) { T x → # i x F → 0 }
+                        : i cnt ?? ( bytes_read_u32_be body 1 ) { T x → # i x F → 0 }
+                        : b sane == ( vec_len [u] body ) + 5 * cnt 8
+                        ? & == ok 1 sane {
+                            ? == mode ( gpu_mode_hist ) {
+                                ? == cnt kbins {
+                                    : ~ i b 0
+                                    ~ < b kbins {
+                                        : f cur ( bits_to_f64 ( __f64le_get acc * b 8 ) )
+                                        : f add ( bits_to_f64 ( __f64le_get body + 5 * b 8 ) )
+                                        ( __f64le_put acc * b 8 ( f64_to_bits + cur add ) )
+                                        = b + b 1
+                                    }
+                                } { = nfail + nfail 1 }
+                            } {
+                                : ( Vec u ) part ( bytes_slice body 5 ( vec_len [u] body ) )
+                                ( vec_extend [u] acc part )
+                                ( vec_free [u] part )
+                            }
+                        } { = nfail + nfail 1 }
+                        ( vec_free [u] body )
+                    }
+                    F → { = nfail + nfail 1 }
+                }
+                ( vec_free [u] r )
+            }
+            F → { = nfail + nfail 1 }
+        }
+        = k + k 1
+    }
+    ^ @ CombinedV { acc nfail }
 }
 
 @ nchunks_for i nworkers → i { ^ ? > * nworkers 4 256 256 ? > nworkers 0 * nworkers 4 4 }
@@ -448,12 +529,17 @@ $ `cudakernel.nu`
     i done
     i result
     i failed  // chunks that reported ok=0 (task status "error" when > 0)
+    i mode  // gpu_mode_scalar/sample/hist (scalar for every non-GPU task)
+    i kbins  // histogram bin count (hist mode)
+    ( Vec u ) vres  // vector result bytes (raw LE f64s; sample/hist modes)
+    String out_file  // when set, the finished vector result is written here
 }
 
 : McpState {
     s swarm  // *Swarm coordinator
     ( Vec s ) tasks  // *Task
     i next_id
+    ( Vec s ) wcache  // *WasmCached — compiled kernel modules by source hash
 }
 
 // Constructor. The params share the field names (`lo`, `hi`, …); `= . t lo lo`
@@ -472,10 +558,71 @@ $ `cudakernel.nu`
     = . t done 0
     = . t result 0
     = . t failed 0
+    = . t mode ( gpu_mode_scalar )
+    = . t kbins 0
+    = . t vres ( vec_new [u] )
+    = . t out_file ( string_new )
     ^ t
 }
 
 : ~ i g_mcp 0
+
+// ── the coordinator's compiled-module cache ──────────────────────
+// Keyed by the FNV hash of the GENERATED source: resubmitting the same kernel
+// (a parameter scan, a new range, a re-run) skips the build API entirely —
+// the module comes back in microseconds instead of a 5-15 s remote compile.
+// Runtime params ride argv, so they never perturb the hash.
+
+: WasmCached { String hash ( Vec u ) wasm }
+
+@ __wcache_max → i { ^ 32 }
+
+@ __wcache_get s hex → ?( Vec u ) {
+    : *McpState st # *McpState g_mcp
+    : i n ( vec_len [s] . st wcache )
+    : ~ s found # s 0
+    : ~ i k 0
+    ~ & == # i found 0 < k n {
+        : s pp ?? ( vec_get [s] . st wcache k ) { T x → x F → # s 0 }
+        ? != # i pp 0 {
+            : *WasmCached wc # *WasmCached pp
+            ? != 0 ( nurl_str_eq ( string_data . wc hash ) hex ) { = found pp } {}
+        } {}
+        = k + k 1
+    }
+    ? == # i found 0 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+    : *WasmCached wc # *WasmCached found
+    : ( Vec u ) cp ( vec_with_cap [u] ( vec_len [u] . wc wasm ) )
+    ( vec_extend [u] cp . wc wasm )
+    ^ @ ?( Vec u ) { T cp }
+}
+
+// Insert a copy. At capacity the whole cache resets — a parameter scan lives
+// in one entry, so simplicity beats an eviction policy here.
+@ __wcache_put s hex ( Vec u ) wasm → v {
+    : *McpState st # *McpState g_mcp
+    ? >= ( vec_len [s] . st wcache ) ( __wcache_max ) {
+        : i n ( vec_len [s] . st wcache )
+        : ~ i k 0
+        ~ < k n {
+            : s pp ?? ( vec_get [s] . st wcache k ) { T x → x F → # s 0 }
+            ? != # i pp 0 {
+                : *WasmCached wc # *WasmCached pp
+                ( string_free . wc hash ) ( vec_free [u] . wc wasm )
+                ( nurl_free pp )
+            } {}
+            = k + k 1
+        }
+        ( vec_free [s] . st wcache )
+        = . st wcache ( vec_new [s] )
+    } {}
+    : *WasmCached wc # *WasmCached ( nurl_alloc Z WasmCached )
+    = . wc hash ( string_from hex )
+    : ( Vec u ) cp ( vec_with_cap [u] ( vec_len [u] wasm ) )
+    ( vec_extend [u] cp wasm )
+    = . wc wasm cp
+    ( vec_push [s] . st wcache # s wc )
+}
 
 @ mcp_swarm → *Swarm { : *McpState st # *McpState g_mcp ^ # *Swarm . st swarm }
 
@@ -485,14 +632,28 @@ $ `cudakernel.nu`
     ~ < k rounds { ( swarm_pump sw 150 ) = k + k 1 }
 }
 
-// Refresh one task's status; combine if every chunk has landed.
+// Refresh one task's status; combine if every chunk has landed. A finished
+// vector task with an out_file writes the raw LE f64s there (once).
 @ task_refresh * Task t → v {
     ? == . t done 1 { ^ v } {}
     : *Swarm sw ( mcp_swarm )
     ? ( tids_ready sw . t tids ) {
-        : Combined cb ( tids_combine sw . t dtype . t op . t tids )
-        = . t result . cb value
-        = . t failed . cb nfail
+        ? == . t mode ( gpu_mode_scalar ) {
+            : Combined cb ( tids_combine sw . t dtype . t op . t tids )
+            = . t result . cb value
+            = . t failed . cb nfail
+        } {
+            : CombinedV cv ( tids_combine_vec sw . t mode . t kbins . t tids )
+            ( vec_free [u] . t vres )
+            = . t vres . cv bytes
+            = . t failed . cv nfail
+            ? & == . t failed 0 > ( string_len . t out_file ) 0 {
+                ?? ( write_file_bytes ( string_data . t out_file ) . t vres ) {
+                    T _ → {}
+                    F e → { = . t failed 1 }
+                }
+            } {}
+        }
         = . t done 1
     } {}
 }
@@ -525,10 +686,58 @@ $ `cudakernel.nu`
     ( json_obj_set o `hi` ( json_int . t hi ) )
     ( json_obj_set o `chunks` ( json_int . t nchunks ) )
     ? & == . t done 1 == . t failed 0 {
-        ? == . t dtype 1 { ( json_obj_set o `result` ( json_float ( bits_to_f64 . t result ) ) ) }
-                         { ( json_obj_set o `result` ( json_int . t result ) ) }
+        ? == . t mode ( gpu_mode_scalar ) {
+            ? == . t dtype 1 { ( json_obj_set o `result` ( json_float ( bits_to_f64 . t result ) ) ) }
+                             { ( json_obj_set o `result` ( json_int . t result ) ) }
+        } {
+            ( __task_vres_json o t )
+        }
     } {}
     ^ o
+}
+
+// Attach a finished vector result: always count + min/max/mean stats; the
+// values themselves inline as a JSON array when small, as base64 (raw
+// little-endian f64s) when moderate, and only in out_file beyond that —
+// an MCP text result must stay readable by a language model.
+@ __vres_json_max → i { ^ 1024 }
+
+@ __vres_b64_max → i { ^ 65536 }
+
+@ __task_vres_json Json o * Task t → v {
+    : i cnt / ( vec_len [u] . t vres ) 8
+    ( json_obj_set o `count` ( json_int cnt ) )
+    ? > ( string_len . t out_file ) 0 {
+        ( json_obj_set o `saved_to` ( json_str_lit ( string_data . t out_file ) ) )
+    } {}
+    ? == cnt 0 { ^ v } {}
+    // stats in one pass
+    : ~ f mn ( bits_to_f64 ( __f64le_get . t vres 0 ) )
+    : ~ f mx mn
+    : ~ f sum 0.0
+    : ~ i k 0
+    ~ < k cnt {
+        : f v ( bits_to_f64 ( __f64le_get . t vres * k 8 ) )
+        ? < v mn { = mn v } {}
+        ? > v mx { = mx v } {}
+        = sum + sum v
+        = k + k 1
+    }
+    ( json_obj_set o `min` ( json_float mn ) )
+    ( json_obj_set o `max` ( json_float mx ) )
+    ( json_obj_set o `mean` ( json_float / sum # f cnt ) )
+    ? <= cnt ( __vres_json_max ) {
+        : Json arr ( json_arr_new )
+        : ~ i j 0
+        ~ < j cnt { ( json_arr_push arr ( json_float ( bits_to_f64 ( __f64le_get . t vres * j 8 ) ) ) ) = j + j 1 }
+        ( json_obj_set o `values` arr )
+    } {
+        ? <= cnt ( __vres_b64_max ) {
+            : String b64 ( b64_encode_vec . t vres )
+            ( json_obj_set o `values_base64_f64le` ( json_str_lit ( string_data b64 ) ) )
+            ( string_free b64 )
+        } {}
+    }
 }
 
 @ tool_result_json Json o → Json {
@@ -674,40 +883,178 @@ $ `cudakernel.nu`
     }
 }
 
-// compute_submit_cuda: the model hands over ONLY a CUDA-C map function
-// `__device__ double f(long long x) { … }`; the server generates the whole
-// GPU chunk kernel around it (NVRTC JIT + grid-stride map + block reduce +
-// host fold — cudakernel.nu), compiles it to wasm, and ships it to the GPU
-// capability domain. Results combine in f64 (dtype float).
+// ── the CUDA tool family (scalar reduce / sample / histogram) ────
+// The model hands over ONLY CUDA-C device functions; the server generates the
+// whole GPU chunk-kernel program around them (cudakernel.nu), compiles it to
+// wasm — through the coordinator's module cache, so a repeat submit (a
+// parameter scan, a new range) skips the build API — and ships it to the GPU
+// capability domain. Results combine in f64.
+
+// "params" (JSON array of numbers) → their f64 bit patterns. Missing key →
+// empty vec (T); a present-but-malformed value → F.
+@ __parse_params Json args → ?( Vec i ) {
+    : ( Vec i ) out ( vec_new [i] )
+    : ?Json pj ( json_obj_get args `params` )
+    : ~ b ok T
+    ?? pj {
+        F → {}
+        T arr → {
+            : i n ( json_arr_len arr )
+            : ~ i k 0
+            ~ & ok < k n {
+                ?? ( json_arr_get arr k ) {
+                    T el → {
+                        ?? ( json_num_as_f el ) {
+                            T fv → { ( vec_push [i] out ( f64_to_bits fv ) ) }
+                            F → { = ok F }
+                        }
+                    }
+                    F → { = ok F }
+                }
+                = k + k 1
+            }
+        }
+    }
+    ? ! ok { ( vec_free [i] out ) ^ @ ?( Vec i ) { F # ( Vec i ) 0 } } {}
+    ^ @ ?( Vec i ) { T out }
+}
+
+// Shared CUDA submit: validate → wrap → cached-or-remote compile → shard to
+// the GPU ring → record the task. Frees `params`; borrows `cuda`/`out_file`.
+@ __submit_cuda_task s cuda i op i mode i lo i hi i kbins ( Vec i ) params s out_file → Json {
+    ? ! ( cuda_src_ok cuda ) {
+        ( vec_free [i] params )
+        ^ ( mcp_tool_result_error `the CUDA source may not contain a backtick character` )
+    } {}
+    : s entry ? == mode ( gpu_mode_hist ) `long long bin` `double f`
+    ? < ( nurl_str_find cuda entry ) 0 {
+        ( vec_free [i] params )
+        ^ ? == mode ( gpu_mode_hist )
+            ( mcp_tool_result_error `the CUDA source must define __device__ long long bin(long long x) { ... } (and may define __device__ double val(long long x); with params, both take (long long x, const double* p))` )
+            ( mcp_tool_result_error `the CUDA source must define __device__ double f(long long x) { ... } (or f(long long x, const double* p) when params are given; helpers are fine, f is the entry the generated kernel calls)` )
+    } {}
+    : i has_params ? > ( vec_len [i] params ) 0 1 0
+    : String wrapped ( cuda_wrap cuda op mode has_params )
+    // module cache: keyed by the generated source (params ride argv → the
+    // hash — and the worker-side module cache — survive parameter changes)
+    : ( Vec u ) srcb ( bytes_from_str ( string_data wrapped ) )
+    : String hex ( __wasm_hash srcb )
+    ( vec_free [u] srcb )
+    : ~ ( Vec u ) wasm ( vec_new [u] )
+    : ~ b have F
+    ?? ( __wcache_get ( string_data hex ) ) {
+        T hitw → { ( vec_free [u] wasm ) = wasm hitw = have T }
+        F → {}
+    }
+    ? ! have {
+        : !( Vec u ) String cr ( compile_to_wasm ( string_data wrapped ) )
+        ?? cr {
+            F msg → {
+                : String em ( string_concat ( string_from `CUDA kernel program did not compile: ` ) msg )
+                : Json e ( mcp_tool_result_error ( string_data em ) )
+                ( string_free em ) ( string_free msg )
+                ( string_free wrapped ) ( string_free hex ) ( vec_free [i] params ) ( vec_free [u] wasm )
+                ^ e
+            }
+            T builtw → {
+                ( vec_free [u] wasm )
+                = wasm builtw
+                ( __wcache_put ( string_data hex ) wasm )
+            }
+        }
+    } {}
+    ( string_free wrapped ) ( string_free hex )
+    : *Swarm sw ( mcp_swarm )
+    ( swarm_discover sw 6 )
+    : i ngpu ( roster_count_caps # *Roster . sw roster ( cap_gpu ) )
+    ? == ngpu 0 {
+        ( vec_free [i] params ) ( vec_free [u] wasm )
+        ^ ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu' (needs the pure-NURL wasmtime and an NVIDIA GPU)` )
+    } {}
+    // never shard an empty sub-range to a device kernel
+    : i nchunks0 ( nchunks_wasm ngpu )
+    : i span - hi lo
+    : i nchunks ? > nchunks0 span span nchunks0
+    : ( Vec i ) tids ( cluster_submit_wasm_gpu sw mode lo hi kbins params wasm nchunks )
+    ( vec_free [i] params ) ( vec_free [u] wasm )
+    : *McpState st # *McpState g_mcp
+    : *Task t ( task_new . st next_id ( bytes_from_str cuda ) 1 lo hi op nchunks tids )
+    = . t mode mode
+    = . t kbins kbins
+    ? > ( nurl_str_len out_file ) 0 { ( string_push_str . t out_file out_file ) } {}
+    = . st next_id + . st next_id 1
+    ( vec_push [s] . st tasks # s t )
+    ( mcp_pump 8 )
+    ( task_refresh t )
+    ^ ( tool_result_json ( task_to_json t ) )
+}
+
 @ tool_submit_cuda Json args → Json {
     : ?Json cj ( json_obj_get args `cuda` )
     : ?Json lj ( json_obj_get args `lo` )
     : ?Json hj ( json_obj_get args `hi` )
     ? | ! ?? cj { T _ → T F → F } | ! ?? lj { T _ → T F → F } ! ?? hj { T _ → T F → F } {
-        ^ ( mcp_tool_result_error `compute_submit_cuda needs "cuda" (a __device__ double f(long long x) function), "lo" (int), "hi" (int); "reduce" optional` )
+        ^ ( mcp_tool_result_error `compute_submit_cuda needs "cuda" (a __device__ double f(long long x) function), "lo" (int), "hi" (int); "reduce"/"params" optional` )
     } {}
     : s cuda ?? cj { T v → ( json_str_data v ) F → `` }
     : i lo ?? lj { T v → ( json_as_int v ) F → 0 }
     : i hi ?? hj { T v → ( json_as_int v ) F → 0 }
     : i op ?? ( json_obj_get args `reduce` ) { T v → ( reduce_op_of ( json_str_data v ) 0 ) F → 0 }
     ? >= lo hi { ^ ( mcp_tool_result_error `empty range: need lo < hi` ) } {}
-    ? ! ( cuda_src_ok cuda ) {
-        ^ ( mcp_tool_result_error `the CUDA source may not contain a backtick character` )
+    ?? ( __parse_params args ) {
+        F → { ^ ( mcp_tool_result_error `"params" must be an array of numbers` ) }
+        T params → { ^ ( __submit_cuda_task cuda op ( gpu_mode_scalar ) lo hi 0 params `` ) }
+    }
+}
+
+// compute_sample_cuda: every f(x) comes back — the cluster gathers the range
+// into one array (curves, fields, images).
+@ tool_sample_cuda Json args → Json {
+    : ?Json cj ( json_obj_get args `cuda` )
+    : ?Json lj ( json_obj_get args `lo` )
+    : ?Json hj ( json_obj_get args `hi` )
+    ? | ! ?? cj { T _ → T F → F } | ! ?? lj { T _ → T F → F } ! ?? hj { T _ → T F → F } {
+        ^ ( mcp_tool_result_error `compute_sample_cuda needs "cuda" (a __device__ double f(long long x) function), "lo" (int), "hi" (int); "params"/"out_file" optional` )
     } {}
-    ? < ( nurl_str_find cuda `double f` ) 0 {
-        ^ ( mcp_tool_result_error `the CUDA source must define __device__ double f(long long x) { ... } (helpers are fine, but f is the entry the generated kernel calls)` )
+    : s cuda ?? cj { T v → ( json_str_data v ) F → `` }
+    : i lo ?? lj { T v → ( json_as_int v ) F → 0 }
+    : i hi ?? hj { T v → ( json_as_int v ) F → 0 }
+    : s out_file ?? ( json_obj_get args `out_file` ) { T v → ( json_str_data v ) F → `` }
+    ? >= lo hi { ^ ( mcp_tool_result_error `empty range: need lo < hi` ) } {}
+    : i n - hi lo
+    ? > n 1048576 { ^ ( mcp_tool_result_error `sample range too large: hi - lo must be <= 1048576 (use compute_submit_cuda to reduce, or compute_histogram_cuda to bin)` ) } {}
+    ? & > n ( __vres_b64_max ) == ( nurl_str_len out_file ) 0 {
+        ^ ( mcp_tool_result_error `a sample larger than 65536 values needs "out_file" (an absolute path on the MCP host) — the values cannot ride a text result` )
     } {}
-    : String wrapped ( cuda_wrap cuda op )
-    : !( Vec u ) String cr ( compile_to_wasm ( string_data wrapped ) )
-    ( string_free wrapped )
-    ?? cr {
-        F msg → {
-            : String em ( string_concat ( string_from `CUDA kernel program did not compile: ` ) msg )
-            : Json e ( mcp_tool_result_error ( string_data em ) )
-            ( string_free em ) ( string_free msg )
-            ^ e
-        }
-        T wasm → { ^ ( __ship_wasm wasm lo hi op 1 1 ) }  // dtype float, gpu
+    ?? ( __parse_params args ) {
+        F → { ^ ( mcp_tool_result_error `"params" must be an array of numbers` ) }
+        T params → { ^ ( __submit_cuda_task cuda 0 ( gpu_mode_sample ) lo hi 0 params out_file ) }
+    }
+}
+
+// compute_histogram_cuda: bin(x) picks a bucket, val(x) the weight (default
+// 1.0); K bin sums come back — a whole distribution in one pass.
+@ tool_hist_cuda Json args → Json {
+    : ?Json cj ( json_obj_get args `cuda` )
+    : ?Json lj ( json_obj_get args `lo` )
+    : ?Json hj ( json_obj_get args `hi` )
+    : ?Json kj ( json_obj_get args `bins` )
+    ? | | ! ?? cj { T _ → T F → F } ! ?? kj { T _ → T F → F } | ! ?? lj { T _ → T F → F } ! ?? hj { T _ → T F → F } {
+        ^ ( mcp_tool_result_error `compute_histogram_cuda needs "cuda" (a __device__ long long bin(long long x) function), "lo" (int), "hi" (int), "bins" (int); "params"/"out_file" optional` )
+    } {}
+    : s cuda ?? cj { T v → ( json_str_data v ) F → `` }
+    : i lo ?? lj { T v → ( json_as_int v ) F → 0 }
+    : i hi ?? hj { T v → ( json_as_int v ) F → 0 }
+    : i kbins ?? kj { T v → ( json_as_int v ) F → 0 }
+    : s out_file ?? ( json_obj_get args `out_file` ) { T v → ( json_str_data v ) F → `` }
+    ? >= lo hi { ^ ( mcp_tool_result_error `empty range: need lo < hi` ) } {}
+    ? | < kbins 1 > kbins 1048576 { ^ ( mcp_tool_result_error `"bins" must be between 1 and 1048576` ) } {}
+    ? & > kbins ( __vres_b64_max ) == ( nurl_str_len out_file ) 0 {
+        ^ ( mcp_tool_result_error `more than 65536 bins needs "out_file" (an absolute path on the MCP host) — the bins cannot ride a text result` )
+    } {}
+    ?? ( __parse_params args ) {
+        F → { ^ ( mcp_tool_result_error `"params" must be an array of numbers` ) }
+        T params → { ^ ( __submit_cuda_task cuda 0 ( gpu_mode_hist ) lo hi kbins params out_file ) }
     }
 }
 
@@ -831,19 +1178,63 @@ $ `cudakernel.nu`
     ^ schema
 }
 
+// The params property text is shared by all three CUDA tools.
+@ __ms_params_desc → s {
+    ^ `Optional runtime parameters: an array of numbers available to your device function(s) as a second argument — write f(long long x, const double* p) (or bin/val(long long x, const double* p)) and read p[0], p[1], …. Parameter VALUES do not recompile anything: resubmitting the same cuda source with different params reuses the compiled module (coordinator + worker caches), so parameter scans run at interactive speed.`
+}
+
 @ ms_schema_submit_cuda → Json {
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
-    ( ms_prop props `cuda` `string` `A CUDA-C map function: __device__ double f(long long x) { ... } — pure math from the 64-bit index x to a double. You may add __device__ helpers; no __global__ kernel, no host code, no #includes (NVRTC builtins like sin, cos, exp, sqrt, fmin, fmax are available). Backtick characters are not allowed. Example: "__device__ double f(long long x) { double t = (double)x * 1e-9; return 4.0 / (1.0 + t*t); }"` )
+    ( ms_prop props `cuda` `string` `A CUDA-C map function: __device__ double f(long long x) { ... } — pure math from the 64-bit index x to a double (with params: f(long long x, const double* p)). You may add __device__ helpers; no __global__ kernel, no host code, no #includes (NVRTC builtins like sin, cos, exp, sqrt, fmin, fmax are available). Backtick characters are not allowed. Example: "__device__ double f(long long x) { double t = (double)x * 1e-9; return 4.0 / (1.0 + t*t); }"` )
     ( ms_prop props `lo` `integer` `Range start (inclusive).` )
     ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
     ( ms_prop props `reduce` `string` `How to fold f(x) over the range: "sum" (default) · "product" · "min" · "max" · "count" (how many x give f(x) != 0). Applied on-device per block, per chunk on the worker, and across chunks on the coordinator — the op must be associative, which these all are.` )
+    ( ms_prop props `params` `array` ( __ms_params_desc ) )
     ( json_obj_set schema `properties` props )
     : Json req ( json_arr_new )
     ( json_arr_push req ( json_str_lit `cuda` ) )
     ( json_arr_push req ( json_str_lit `lo` ) )
     ( json_arr_push req ( json_str_lit `hi` ) )
+    ( json_obj_set schema `required` req )
+    ^ schema
+}
+
+@ ms_schema_sample_cuda → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( ms_prop props `cuda` `string` `A CUDA-C map function: __device__ double f(long long x) { ... } (with params: f(long long x, const double* p)). Same rules as compute_submit_cuda; here every value comes back instead of being reduced.` )
+    ( ms_prop props `lo` `integer` `Range start (inclusive).` )
+    ( ms_prop props `hi` `integer` `Range end (exclusive). hi - lo values are returned; at most 1048576 (and at most 65536 without out_file).` )
+    ( ms_prop props `params` `array` ( __ms_params_desc ) )
+    ( ms_prop props `out_file` `string` `Optional absolute path ON THE MCP HOST: the finished values are written there as raw little-endian f64s (count = hi - lo) and the text result carries only count + min/max/mean. Required beyond 65536 values.` )
+    ( json_obj_set schema `properties` props )
+    : Json req ( json_arr_new )
+    ( json_arr_push req ( json_str_lit `cuda` ) )
+    ( json_arr_push req ( json_str_lit `lo` ) )
+    ( json_arr_push req ( json_str_lit `hi` ) )
+    ( json_obj_set schema `required` req )
+    ^ schema
+}
+
+@ ms_schema_hist_cuda → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( ms_prop props `cuda` `string` `CUDA-C device functions: __device__ long long bin(long long x) { ... } picks the bucket for x (out-of-range buckets are skipped), and optionally __device__ double val(long long x) { ... } gives the weight added to that bucket (omit it for plain counting, weight 1.0). With params both take (long long x, const double* p). Same source rules as compute_submit_cuda.` )
+    ( ms_prop props `lo` `integer` `Range start (inclusive).` )
+    ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
+    ( ms_prop props `bins` `integer` `The bucket count K (1..1048576; at most 65536 without out_file). The result is K sums.` )
+    ( ms_prop props `params` `array` ( __ms_params_desc ) )
+    ( ms_prop props `out_file` `string` `Optional absolute path ON THE MCP HOST: the finished bins are written there as raw little-endian f64s and the text result carries only count + min/max/mean. Required beyond 65536 bins.` )
+    ( json_obj_set schema `properties` props )
+    : Json req ( json_arr_new )
+    ( json_arr_push req ( json_str_lit `cuda` ) )
+    ( json_arr_push req ( json_str_lit `lo` ) )
+    ( json_arr_push req ( json_str_lit `hi` ) )
+    ( json_arr_push req ( json_str_lit `bins` ) )
     ( json_obj_set schema `required` req )
     ^ schema
 }
@@ -859,6 +1250,12 @@ $ `cudakernel.nu`
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_submit_cuda`
     `Run a distributed GPU map-reduce: you write ONLY the math — a CUDA-C __device__ double f(long long x) — and the cluster does everything else. The server generates a complete GPU kernel around it (NVRTC JIT, grid-stride map over the range, on-device block reduction), compiles it to wasm, and shards [lo, hi) across every GPU-capable worker (started with --gpu); each worker JIT-compiles and runs the kernel on its real GPU and returns its chunk partial; the reduce op combines them. Use this for heavy numeric ranges (millions to billions of x) — integrals, Monte-Carlo-style sums with a hash of x as the noise source, parameter scans. The result is a float (f64). Needs at least one --gpu worker; returns a task_id, poll compute_result.`
     ( ms_schema_submit_cuda ) ) )
+    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_sample_cuda`
+    `Distributed GPU map that returns EVERY value: the cluster evaluates your CUDA-C f(x) for each x in [lo, hi) on the GPU workers and gathers the results into one array, in order — sample a function, render a field or an image row block, tabulate a curve. Results come back inline (JSON array up to 1024 values, base64 raw f64 LE up to 65536) or are written to out_file on the MCP host for anything bigger; min/max/mean always included. Supports runtime params (no recompile between calls). Needs a --gpu worker; returns a task_id, poll compute_result.`
+    ( ms_schema_sample_cuda ) ) )
+    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_histogram_cuda`
+    `Distributed GPU histogram / binned aggregation: for each x in [lo, hi) your CUDA-C bin(x) picks one of K buckets and val(x) (default 1.0) is added to it — the whole distribution of a computation in ONE pass over billions of x (value distributions, Monte-Carlo densities, class counts, binned integrals). The K bin sums come back (JSON up to 1024 bins, base64 up to 65536, out_file beyond). Supports runtime params (no recompile between calls). Needs a --gpu worker; returns a task_id, poll compute_result.`
+    ( ms_schema_hist_cuda ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_run_wasm`
     `Like compute_submit_kernel but you provide an already-compiled wasm32-wasi module (base64) instead of NURL source — e.g. one built with the nurl_build_wasm tool. The module's main reads lo and hi from argv, folds the kernel over [lo, hi), and prints the partial. Returns a task_id; poll compute_result.`
     ( ms_schema_run_wasm ) ) )
@@ -875,6 +1272,8 @@ $ `cudakernel.nu`
     ? != ( nurl_str_eq name `compute_submit` ) 0 { ^ ( tool_submit args ) } {}
     ? != ( nurl_str_eq name `compute_submit_kernel` ) 0 { ^ ( tool_submit_kernel args ) } {}
     ? != ( nurl_str_eq name `compute_submit_cuda` ) 0 { ^ ( tool_submit_cuda args ) } {}
+    ? != ( nurl_str_eq name `compute_sample_cuda` ) 0 { ^ ( tool_sample_cuda args ) } {}
+    ? != ( nurl_str_eq name `compute_histogram_cuda` ) 0 { ^ ( tool_hist_cuda args ) } {}
     ? != ( nurl_str_eq name `compute_run_wasm` ) 0 { ^ ( tool_run_wasm args ) } {}
     ? != ( nurl_str_eq name `compute_list` ) 0 { ^ ( tool_list args ) } {}
     ? != ( nurl_str_eq name `compute_result` ) 0 { ^ ( tool_result args ) } {}
@@ -884,7 +1283,7 @@ $ `cudakernel.nu`
 // ── JSON-RPC method handlers ─────────────────────────────────────
 
 @ handle_initialize Json id → Json {
-    : Json result ( mcp_initialize_result `swarm-mcp` `0.5.0` )
+    : Json result ( mcp_initialize_result `swarm-mcp` `0.6.0` )
     ^ ( mcp_response_result id result )
 }
 
@@ -969,6 +1368,7 @@ $ `cudakernel.nu`
             : *McpState st # *McpState ( nurl_alloc Z McpState )
             = . st swarm # s sw
             = . st tasks ( vec_new [s] )
+            = . st wcache ( vec_new [s] )
             = . st next_id 1
             = g_mcp # i st
             : ( @ HttpResponse HttpRequest ) handler ( mcp_http_handler \ Json req → ?Json { ^ ( dispatch req ) } )

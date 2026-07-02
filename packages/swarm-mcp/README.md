@@ -55,13 +55,15 @@ deterministically (no coordination):
 
 ## The control surface (what the LLM sees)
 
-Six tools, with self-describing schemas so a model uses them without docs:
+Eight tools, with self-describing schemas so a model uses them without docs:
 
 | tool | arguments | does |
 |------|-----------|------|
 | `compute_submit` | `expr` (string), `lo` (int), `hi` (int), `reduce` (string, default `sum`), `dtype` (string, `int` default or `float`) | shard + run an **expression** kernel over `[lo,hi)`; returns a `task_id`. `dtype:"float"` evaluates the same kernel in **f64** (`x` is the index as a double, float literals like `0.5` allowed) |
 | `compute_submit_kernel` | `source` (NURL program), `lo`, `hi`, `reduce`, `kind` (`element` default or `chunk`), `gpu` (bool) | run an **arbitrary NURL kernel given as source** — the server compiles it to wasm and runs it; for anything the expression language can't express (loops, helpers) |
-| `compute_submit_cuda` | `cuda` (a `__device__ double f(long long x)` function), `lo`, `hi`, `reduce` | distributed **GPU** map-reduce: the model writes only the CUDA-C math; the server generates the whole kernel program and the `--gpu` workers run it on real GPUs |
+| `compute_submit_cuda` | `cuda` (a `__device__ double f(long long x)` function), `lo`, `hi`, `reduce`, `params` (numbers) | distributed **GPU** map-reduce: the model writes only the CUDA-C math; the server generates the whole kernel program and the `--gpu` workers run it on real GPUs |
+| `compute_sample_cuda` | `cuda`, `lo`, `hi`, `params`, `out_file` | distributed GPU map that returns **every value** in order — curves, fields, tables (JSON ≤ 1024 values, base64 ≤ 65536, `out_file` beyond) |
+| `compute_histogram_cuda` | `cuda` (`bin(x)` + optional `val(x)`), `lo`, `hi`, `bins`, `params`, `out_file` | distributed GPU **binned aggregation**: a whole distribution in one pass over billions of x |
 | `compute_run_wasm` | `wasm_base64` (string), `lo`, `hi`, `reduce`, `gpu` (bool) | like `compute_submit_kernel` but you pass an **already-compiled** wasm module |
 | `compute_list` | — | every task with status (`running`/`done`/`error`), kernel, range, reduce, result |
 | `compute_result` | `task_id` (int) | one task's status and, once finished, the reduced value |
@@ -282,6 +284,40 @@ On an RTX 4090 one 250-million-element chunk completes in ~0.3 s **including**
 process spawn and the NVRTC JIT — around three orders of magnitude faster than
 the interpreted expression path on the same machine. Ranges in the billions
 are practical.
+
+### Dynamic: runtime params + module caches
+
+`params` makes kernels **parameterised without recompiling**: pass an array of
+numbers and write `f(long long x, const double* p)` — the values ride each
+chunk's argv into a device buffer, never touching the generated source. The
+coordinator caches compiled modules by generated-source hash and each worker
+caches them by content hash, so a parameter scan pays the build API once
+(~5–15 s) and then re-runs at interactive speed (seconds per submit):
+
+```jsonc
+{"cuda": "__device__ double f(long long x, const double* p) { return pow(sin((double)x * p[0]), p[1]); }",
+ "lo": 0, "hi": 100000000, "reduce": "sum", "params": [0.001, 2.0]}
+// … resubmit with "params": [0.002, 2.0], [0.001, 4.0], … — no rebuild
+```
+
+### Arrays back: sample and histogram
+
+Two more GPU tools return **vectors**, not just one number:
+
+* **`compute_sample_cuda`** gathers `f(x)` for every `x` in `[lo, hi)` in
+  order — sample a curve, tabulate a function, render a field. Small results
+  come back inline (JSON array ≤ 1024 values, base64 raw f64 LE ≤ 65536);
+  bigger ones (≤ 1M values) are written to `out_file` on the MCP host.
+  `min`/`max`/`mean` ride along either way.
+* **`compute_histogram_cuda`** turns a full pass over the range into K bin
+  sums: `bin(x)` picks the bucket, `val(x)` (default 1.0 — plain counting)
+  the weight, accumulated with an on-device atomic add and combined
+  elementwise across chunks. A value distribution over 10⁹ x is one call.
+
+Under the hood the vector modes skip stdout entirely: the module writes raw
+little-endian f64s to a sandbox-preopened file in one `fwrite`, the worker
+validates the byte count, and the chunk result frame `[ok][count][f64…]`
+carries it home over the same HMAC-tagged wire.
 
 How the pieces fit (each is independently reusable):
 
