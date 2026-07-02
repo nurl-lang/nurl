@@ -22,8 +22,8 @@ $ `stdlib/core/string.nu`
 & `c` @ ioctl i fd i req *u argp → i
 & `c` @ mmap *u addr i length i prot i flags i fd i offset → *u
 & `c` @ munmap *u addr i length → i
-& `c` @ nurl_peek_i32 *u base i idx → i
-& `c` @ nurl_poke_i32 *u base i idx i val → v
+& `c` @ nurl_peek_i32 *u base i idx → i32
+& `c` @ nurl_poke_i32 *u base i idx i32 val → v
 
 // A streaming webcam: fd, frame geometry, and the mmap'd buffer ring.
 : Camera { i fd  i w  i h  i nbuf  ( Vec i ) bufptr  ( Vec i ) buflen  i ok }

@@ -21,8 +21,8 @@ $ `stdlib/std/fs.nu`
 & `c` @ dlsym *u handle s name → *u
 & `c` @ dlclose *u handle → i
 & `c` @ system s cmd → i
-& `c` @ nurl_peek_i32 *u base i idx → i
-& `c` @ nurl_poke_i32 *u base i idx i val → v
+& `c` @ nurl_peek_i32 *u base i idx → i32
+& `c` @ nurl_poke_i32 *u base i idx i32 val → v
 & `c` @ nurl_cpu_launch *u fn *u params i grid i block → v
 
 // ── CUDA-C → host source generation ───────────────────────────────

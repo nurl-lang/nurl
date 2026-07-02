@@ -176,4 +176,4 @@ $ `stdlib/std/bytes.nu`
 }
 
 // 4-byte typed store (runtime.c accessor; runtime.o is always linked).
-& `c` @ nurl_poke_i32 *u base i idx i val → v
+& `c` @ nurl_poke_i32 *u base i idx i32 val → v

@@ -115,7 +115,7 @@ $ `cpu.nu`
 @ gpu_host_set_f32 *u buf i idx f v → v { ( nurl_poke_f32 buf idx v ) }
 @ gpu_host_get_f32 *u buf i idx → f { ^ ( nurl_peek_f32 buf idx ) }
 @ gpu_host_set_i32 *u buf i idx i v → v { ( nurl_poke_i32 buf idx v ) }
-@ gpu_host_get_i32 *u buf i idx → i { ^ ( nurl_peek_i32 buf idx ) }
+@ gpu_host_get_i32 *u buf i idx → i { ^ # i ( nurl_peek_i32 buf idx ) }
 
 // ── device memory ─────────────────────────────────────────────────
 

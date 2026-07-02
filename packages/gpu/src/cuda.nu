@@ -54,8 +54,12 @@ $ `stdlib/core/string.nu`
 // nurl_peek/poke can't address them at their natural stride.
 & `c` @ nurl_peek_f32 *u base i idx → f
 & `c` @ nurl_poke_f32 *u base i idx f val → v
-& `c` @ nurl_peek_i32 *u base i idx → i
-& `c` @ nurl_poke_i32 *u base i idx i val → v
+// nurl_peek_i32 returns a C `int` and nurl_poke_i32 takes a C `int` value —
+// both 32-bit. Declaring them with i64 (`i`) worked on LP64 native (the ABI
+// register ignores the high bits) but is a hard signature mismatch on wasm,
+// where wasm-ld then replaces the caller with an `unreachable` stub.
+& `c` @ nurl_peek_i32 *u base i idx → i32
+& `c` @ nurl_poke_i32 *u base i idx i32 val → v
 
 // ── out-param helper ──────────────────────────────────────────────
 // Allocate a zeroed 8-byte slot for a `*` out-parameter. Zeroing matters
