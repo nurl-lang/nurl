@@ -560,7 +560,7 @@ $ `module.nu`
     // Imported functions occupy the low indices → dispatch to the host (WASI).
     ? < fidx . m num_import_funcs {
         : s wp ?? ( vec_get [s] . m imports fidx ) { T x → x F → # s 0 }
-        ? != # i wp 0 { : *WImport w # *WImport wp ( __wasi_dispatch it . w field ) } { ( __trap it `bad import index` ) }
+        ? != # i wp 0 { : *WImport w # *WImport wp ( __wasi_dispatch it . w module . w field ) } { ( __trap it `bad import index` ) }
         ^ v
     } {}
     : s fp ?? ( vec_get [s] . m funcs - fidx . m num_import_funcs ) { T x → x F → # s 0 }
@@ -1238,7 +1238,20 @@ $ `module.nu`
     ( __push it 0 )
 }
 
-@ __wasi_dispatch * Interp it ( Vec u ) field → v {
+// Trap with a message that carries a dynamic name (import module/field).
+@ __trap_named * Interp it s prefix ( Vec u ) name → v {
+    = . it trap T
+    ( vec_free [u] . it trapmsg )
+    : ( Vec u ) msg ( bytes_from_str prefix )
+    : i n ( vec_len [u] name )
+    : ~ i k 0
+    ~ < k n { ( vec_push [u] msg ?? ( vec_get [u] name k ) { T x → x F → # u 0 } ) = k + k 1 }
+    = . it trapmsg msg
+}
+
+@ __wasi_dispatch * Interp it ( Vec u ) mod ( Vec u ) field → v {
+    ? ! ( __feq mod `wasi_snapshot_preview1` ) {
+        ( __trap_named it `unsupported import module: ` mod ) ^ v } {}
     ? ( __feq field `proc_exit` ) { ( __wasi_proc_exit it ) ^ v } {}
     ? ( __feq field `fd_write` ) { ( __wasi_fd_write it ) ^ v } {}
     ? ( __feq field `fd_read` ) { ( __wasi_fd_read it ) ^ v } {}
@@ -1257,7 +1270,7 @@ $ `module.nu`
     ? ( __feq field `random_get` ) { ( __wasi_random_get it ) ^ v } {}
     ? ( __feq field `fd_fdstat_set_flags` ) { ( __pop it ) ( __pop it ) ( __push it 0 ) ^ v } {}
     ? ( __feq field `sched_yield` ) { ( __push it 0 ) ^ v } {}
-    ( __trap it `unsupported wasi import` )
+    ( __trap_named it `unsupported wasi import: ` field )
 }
 
 // ── sign-extension ops + 0xfc-prefixed bulk memory / saturating trunc ──

@@ -82,9 +82,10 @@ $ `stdlib/std/bytes.nu`
 // An active data segment: raw bytes to copy into linear memory at `offset`.
 : DataSeg { i offset ( Vec u ) bytes }
 
-// An imported function (the only import kind this runtime resolves): its field
-// name selects the host (WASI) implementation; typeidx gives its signature.
-: WImport { ( Vec u ) field i typeidx }
+// An imported function (the only import kind this runtime resolves): module +
+// field name select the host (WASI) implementation; typeidx gives its
+// signature. Non-function imports are a decode error (nothing satisfies them).
+: WImport { ( Vec u ) module ( Vec u ) field i typeidx }
 
 : Module {
     ( Vec s ) types  // *FuncType
@@ -132,20 +133,30 @@ $ `stdlib/std/bytes.nu`
     ( vec_free [i] . m table )
     : i in ( vec_len [s] . m imports )
     : ~ i ii 0
-    ~ < ii in { ?? ( vec_get [s] . m imports ii ) { T pp → ?!= # i pp 0 { : *WImport w # *WImport pp ( vec_free [u] . w field ) ( nurl_free # s w ) } {} F → {} } = ii + ii 1 }
+    ~ < ii in { ?? ( vec_get [s] . m imports ii ) { T pp → ?!= # i pp 0 { : *WImport w # *WImport pp ( vec_free [u] . w module ) ( vec_free [u] . w field ) ( nurl_free # s w ) } {} F → {} } = ii + ii 1 }
     ( vec_free [s] . m imports )
     ( vec_free [u] . m code )
     ( vec_free [u] . m err )
     ( nurl_free # s m )
 }
 
-// Evaluate a constant init expr (i32/i64.const N … end); global.get is treated
-// as 0 (imported globals unsupported). Consumes through the trailing `end`.
-@ __const_expr * Wc c → i {
+// Record a decode error (first error wins; frees the previous message).
+@ __mod_err * Module m s msg → v {
+    ? ! . m ok { ^ v } {}
+    = . m ok F
+    ( vec_free [u] . m err )
+    = . m err ( bytes_from_str msg )
+}
+
+// Evaluate a constant init expr (i32/i64.const N … end). `global.get` in a
+// constant expression may only reference an imported global (spec), and those
+// are rejected at decode — so hitting one here is itself a decode error.
+// Consumes through the trailing `end`.
+@ __const_expr * Wc c * Module m → i {
     : i op0 ( wc_u8 c )
     : ~ i val 0
     ? | == op0 65 == op0 66 { = val ( wc_sleb c ) } {
-        ? == op0 35 { ( wc_uleb c ) } {} }
+        ? == op0 35 { ( wc_uleb c ) ( __mod_err m `constant expression uses global.get (imported globals unsupported)` ) } {} }
     ~ != ( wc_u8 c ) 11 {}
     ^ val
 }
@@ -220,7 +231,7 @@ $ `stdlib/std/bytes.nu`
     ~ < k n {
         : i flag ( wc_uleb c )
         ? == flag 2 { ( wc_uleb c ) } {}  // explicit memidx
-        : i offset ? != flag 1 ( __const_expr c ) 0
+        : i offset ? != flag 1 ( __const_expr c m ) 0
         : i blen ( wc_uleb c )
         : ( Vec u ) bytes ( vec_with_cap [u] blen )
         : ~ i bi 0
@@ -233,14 +244,18 @@ $ `stdlib/std/bytes.nu`
     }
 }
 
-// Import section: record imported FUNCTIONS (the only kind resolved — by their
-// field name, to a host/WASI implementation). Other import kinds are skipped.
+// Import section: record imported FUNCTIONS (module + field name resolve to a
+// host/WASI implementation at call time). A table / memory / global import is
+// a hard decode error — this runtime has nothing to satisfy it with, and
+// running anyway would silently corrupt the module's own state.
 @ __decode_import_sec * Wc c * Module m → v {
     : i n ( wc_uleb c )
     : ~ i k 0
     ~ < k n {
         : i mlen ( wc_uleb c )
-        ( wc_skip c mlen )  // module name (ignored; WASI assumed)
+        : ( Vec u ) mnm ( vec_with_cap [u] mlen )
+        : ~ i b 0
+        ~ < b mlen { ( vec_push [u] mnm ( wc_u8 c ) ) = b + b 1 }
         : i flen ( wc_uleb c )
         : ( Vec u ) fld ( vec_with_cap [u] flen )
         : ~ i a 0
@@ -249,12 +264,19 @@ $ `stdlib/std/bytes.nu`
         ? == kind 0 {
             : i ti ( wc_uleb c )
             : *WImport w # *WImport ( nurl_alloc Z WImport )
+            = . w module mnm
             = . w field fld
             = . w typeidx ti
             ( vec_push [s] . m imports # s w )
             = . m num_import_funcs + . m num_import_funcs 1
         } {
+            ( vec_free [u] mnm )
             ( vec_free [u] fld )
+            ? . m ok {
+                = . m ok F
+                = . m err ( bytes_from_str ? == kind 1 `unsupported import: table` ? == kind 2 `unsupported import: memory` ? == kind 3 `unsupported import: global` `unsupported import kind` )
+            } {}
+            // consume the entry's immediates so the cursor stays coherent
             ? == kind 1 { ( wc_u8 c ) : i fl ( wc_u8 c ) ( wc_uleb c ) ? == fl 1 { ( wc_uleb c ) } {} } {
                 ? == kind 2 { : i fl ( wc_u8 c ) ( wc_uleb c ) ? == fl 1 { ( wc_uleb c ) } {} } {
                     ? == kind 3 { ( wc_u8 c ) ( wc_u8 c ) } {} } }
@@ -270,7 +292,7 @@ $ `stdlib/std/bytes.nu`
     ~ < k n {
         ( wc_u8 c )  // valtype
         : i mut ( wc_u8 c )
-        ( vec_push [i] . m global_init ( __const_expr c ) )
+        ( vec_push [i] . m global_init ( __const_expr c m ) )
         ( vec_push [i] . m global_mut mut )
         = k + k 1
     }
@@ -302,7 +324,7 @@ $ `stdlib/std/bytes.nu`
     ~ < k n {
         : i flag ( wc_uleb c )
         ? == flag 0 {
-            : i off ( __const_expr c )
+            : i off ( __const_expr c m )
             : i cnt ( wc_uleb c )
             : ~ i j 0
             ~ < j cnt {
@@ -369,9 +391,9 @@ $ `stdlib/std/bytes.nu`
     = . m err ( vec_new [u] )
     : *Wc c ( wc_new bytes )
     // header: 00 61 73 6d 01 00 00 00
-    ? < . c len 8 { = . m ok F = . m err ( bytes_from_str `not a wasm module` ) ( wc_free c ) ^ m } {}
+    ? < . c len 8 { ( __mod_err m `not a wasm module` ) ( wc_free c ) ^ m } {}
     ? ! & == ( wc_u8 c ) 0 & == ( wc_u8 c ) 97 & == ( wc_u8 c ) 115 == ( wc_u8 c ) 109 {
-        = . m ok F = . m err ( bytes_from_str `bad wasm magic` ) ( wc_free c ) ^ m
+        ( __mod_err m `bad wasm magic` ) ( wc_free c ) ^ m
     } {}
     ( wc_skip c 4 )  // version
     ~ ! ( wc_eof c ) {
