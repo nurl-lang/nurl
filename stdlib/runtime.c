@@ -645,8 +645,23 @@ long long nurl_path_type(const char *path) {
  * threads while costing nothing measurable next to the malloc itself. */
 static unsigned long long g_nurl_alloc_count = 0;
 
-void* nurl_alloc(long long bytes)              { __atomic_fetch_add(&g_nurl_alloc_count, 1, __ATOMIC_RELAXED); return malloc((size_t)bytes); }
-void* nurl_zalloc(long long bytes)             { __atomic_fetch_add(&g_nurl_alloc_count, 1, __ATOMIC_RELAXED); return calloc(1, (size_t)bytes); }
+/* OOM is fatal, loudly. Returning NULL into NURL code would be UB-ish on
+ * every target, but on wasm32 it is INSIDIOUS: address 0 is ordinary
+ * writable linear memory, so a NULL-backed string/vec silently corrupts
+ * state instead of faulting — observed as nurlc.wasm "hanging" forever in
+ * borrowck once the 4 GiB linear-memory ceiling was hit. Abort with a
+ * message instead (fprintf only — no allocation on this path). */
+static void *nurl__alloc_ck(void *p, long long bytes) {
+    if (p == NULL && bytes > 0) {
+        fprintf(stderr, "nurl: out of memory (requested %lld bytes)\n", bytes);
+        fflush(stderr);
+        abort();
+    }
+    return p;
+}
+
+void* nurl_alloc(long long bytes)              { __atomic_fetch_add(&g_nurl_alloc_count, 1, __ATOMIC_RELAXED); return nurl__alloc_ck(malloc((size_t)bytes), bytes); }
+void* nurl_zalloc(long long bytes)             { __atomic_fetch_add(&g_nurl_alloc_count, 1, __ATOMIC_RELAXED); return nurl__alloc_ck(calloc(1, (size_t)bytes), bytes); }
 long long nurl_alloc_count(void)               { return (long long)__atomic_load_n(&g_nurl_alloc_count, __ATOMIC_RELAXED); }
 /* Symmetric free counter: every nurl_free of a non-NULL pointer. Together with
  * nurl_alloc_count() the difference (alloc - free) is the live-allocation count,
@@ -654,7 +669,7 @@ long long nurl_alloc_count(void)               { return (long long)__atomic_load
  * (no sanitizer needed) — see compiler/tests/trait_owned_ret_no_leak.nu. */
 static unsigned long long g_nurl_free_count = 0;
 long long nurl_free_count(void)                { return (long long)__atomic_load_n(&g_nurl_free_count, __ATOMIC_RELAXED); }
-void* nurl_realloc(void *ptr, long long bytes) { return realloc(ptr, (size_t)bytes); }
+void* nurl_realloc(void *ptr, long long bytes) { return nurl__alloc_ck(realloc(ptr, (size_t)bytes), bytes); }
 
 /* ── §9b  Panic-unwind allocation journal ──────────────────────────
  *
