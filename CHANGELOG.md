@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Runtime source split (A9) — `stdlib/runtime.c` → bootstrap core + FFI
+  shims.** The 5.2k-line runtime is separated into
+  `stdlib/runtime_core.c` (bootstrap core: OOM policy, version, Win32
+  shims, basic stdio I/O, string ops, file/dir, the allocator +
+  panic-unwind journal, IEEE-754/math, and panic/recover) and
+  `stdlib/runtime_ffi.c` (stdlib FFI shims: HTTP, process, TCP/TLS + UDP
+  sockets, DNS, thread trampolines, signals, and the async fiber runtime +
+  I/O reactor). `stdlib/runtime.c` becomes a thin aggregator that
+  `#include`s both into one translation unit, so the default build still
+  emits a single `stdlib/runtime.o` with a byte-identical symbol set and
+  link surface — no build-script or bootstrap changes. `runtime_core.c`
+  has zero references into the FFI half and compiles standalone, so it
+  now *defines the core symbol set* a bootstrap/`no_std` target must
+  provide (unblocks ROADMAP D2). Organisational only: no behavioural
+  change, self-host fixed point held, full corpus + sanitizer suite green.
+
 ## [0.10.8] — 2026-07-02
 
 A **dynamic trait objects** release. NURL's trait system gains a second,

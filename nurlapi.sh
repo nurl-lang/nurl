@@ -116,12 +116,19 @@ EOF
     # to flow in to avoid `wasm-ld: undefined symbol: nurl_*` at link
     # time. We compile inside a throwaway container that already has
     # wasi-sdk so the host doesn't need its own toolchain.
+    # stdlib/runtime.c is the A9 aggregator — it #includes runtime_core.c +
+    # runtime_ffi.c (resolved relative to /src/), so all three must be
+    # mounted and any of them being newer forces a rebuild.
     RUNTIME_C="$SCRIPT_DIR/stdlib/runtime.c"
+    RUNTIME_CORE_C="$SCRIPT_DIR/stdlib/runtime_core.c"
+    RUNTIME_FFI_C="$SCRIPT_DIR/stdlib/runtime_ffi.c"
     RUNTIME_WASM="$SCRIPT_DIR/stdlib/runtime.wasm.o.bind"
-    if [[ "$RUNTIME_C" -nt "$RUNTIME_WASM" ]]; then
+    if [[ "$RUNTIME_C" -nt "$RUNTIME_WASM" || "$RUNTIME_CORE_C" -nt "$RUNTIME_WASM" || "$RUNTIME_FFI_C" -nt "$RUNTIME_WASM" ]]; then
         echo "[nurlapi/bind] rebuilding stdlib/runtime.wasm.o (wasi target)…"
         docker run --rm \
             -v "$RUNTIME_C:/src/runtime.c:ro" \
+            -v "$RUNTIME_CORE_C:/src/runtime_core.c:ro" \
+            -v "$RUNTIME_FFI_C:/src/runtime_ffi.c:ro" \
             -v "$SCRIPT_DIR/stdlib:/dst" \
             --entrypoint /opt/wasi-sdk/bin/clang \
             "$IMAGE" \
